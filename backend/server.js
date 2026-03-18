@@ -223,7 +223,11 @@ async function runSync(salon, syncType, userId) {
         // Сразу сохраняем в БД
         const fullName = [ycc.name, ycc.surname, ycc.patronymic]
           .filter(Boolean).join(' ').trim() || ycc.display_name || ycc.phone || 'Клиент';
-        const phone = ycc.phone || null;
+        const phone        = ycc.phone || null;
+        const totalSpent   = parseFloat(ycc.spent || ycc.paid || 0);
+        const visitsCount  = parseInt(ycc.visits || 0);
+        // last_change_date — дата последнего визита из YClients
+        const lastVisitAt  = ycc.last_change_date ? new Date(ycc.last_change_date) : null;
 
         const ex = await db.one(
           'SELECT id FROM clients WHERE salon_id=$1 AND yclients_client_id=$2',
@@ -231,16 +235,23 @@ async function runSync(salon, syncType, userId) {
         );
         if (ex) {
           await db.query(
-            `UPDATE clients SET name=$1,phone=$2,email=$3,birthday=$4,
-             yclients_data=$5,synced_at=NOW(),updated_at=NOW() WHERE id=$6`,
-            [fullName, phone, ycc.email||null, ycc.birth_date||null, JSON.stringify(ycc), ex.id]
+            `UPDATE clients SET
+               name=$1, phone=$2, email=$3, birthday=$4, yclients_data=$5,
+               total_spent=$6, visits_count=$7, last_visit_at=$8,
+               synced_at=NOW(), updated_at=NOW()
+             WHERE id=$9`,
+            [fullName, phone, ycc.email||null, ycc.birth_date||null, JSON.stringify(ycc),
+             totalSpent, visitsCount, lastVisitAt, ex.id]
           );
         } else {
           await db.query(
             `INSERT INTO clients
-               (salon_id,yclients_client_id,name,phone,email,birthday,yclients_data,synced_at)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,NOW()) ON CONFLICT DO NOTHING`,
-            [salon.id, ycc.id, fullName, phone, ycc.email||null, ycc.birth_date||null, JSON.stringify(ycc)]
+               (salon_id, yclients_client_id, name, phone, email, birthday,
+                total_spent, visits_count, last_visit_at, yclients_data, synced_at)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,NOW())
+             ON CONFLICT DO NOTHING`,
+            [salon.id, ycc.id, fullName, phone, ycc.email||null, ycc.birth_date||null,
+             totalSpent, visitsCount, lastVisitAt, JSON.stringify(ycc)]
           );
           nc++;
         }
@@ -248,12 +259,17 @@ async function runSync(salon, syncType, userId) {
         if (cs % 25 === 0) console.log(`[Sync] Saved ${cs}/${allIds.length} clients to DB`);
 
       } catch (e) {
-        if (e.message.includes('429')) {
-          console.log(`[Sync] 429, waiting 10s...`);
-          await sleep(10000);
-          idx--; // повторить этого клиента
+        const msg = e.message || '';
+        if (msg.includes('429')) {
+          console.log(`[Sync] 429 rate limit, waiting 15s...`);
+          await sleep(15000);
+          idx--;
+        } else if (msg.includes('socket hang up') || msg.includes('ECONNRESET') || msg.includes('ETIMEDOUT') || msg.includes('Network Error')) {
+          console.log(`[Sync] Network error (client ${clientId}): ${msg} — retrying in 5s`);
+          await sleep(5000);
+          idx--;
         } else {
-          console.log(`[Sync] Skip ${clientId}: ${e.message}`);
+          console.log(`[Sync] Skip ${clientId}: ${msg}`);
         }
       }
     }
@@ -323,6 +339,27 @@ async function runSync(salon, syncType, userId) {
        bonuses_accrued=$3,new_clients=$4,finished_at=NOW() WHERE id=$5`,
       [cs, rs, ba, nc, log.id]
     );
+    
+    // ── 3. Обновляем last_visit_at из реальных записей ──
+    console.log('[Sync] Updating last_visit_at from records...');
+    await db.query(`
+      UPDATE clients c
+      SET last_visit_at = sub.last_visit,
+          updated_at    = NOW()
+      FROM (
+        SELECT client_id,
+               MAX(visit_datetime) AS last_visit
+        FROM   records
+        WHERE  salon_id = $1
+          AND  status   = 'completed'
+          AND  client_id IS NOT NULL
+        GROUP  BY client_id
+      ) sub
+      WHERE c.id       = sub.client_id
+        AND c.salon_id = $1
+    `, [salon.id]);
+    console.log('[Sync] last_visit_at updated');
+    
     console.log(`[Sync] Done: clients=${cs} records=${rs} bonuses=${ba} new=${nc}`);
     return { ok: true, clientsSynced: cs, recordsSynced: rs, bonusesAccrued: ba, newClients: nc };
 
