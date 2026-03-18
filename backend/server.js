@@ -116,37 +116,143 @@ async function ycGetClientCards(salon, yclClientsId) {
   }
 }
 
-// Получить транзакции по карте — пробуем несколько вариантов endpoint
-async function ycGetCardTransactions(salon, cardId, page = 1, count = 200) {
-  const endpoints = [
-    `${YC}/company/${salon.yclients_company_id}/loyalty/cards/${cardId}/transactions`,
-    `${YC}/loyalty/cards/${cardId}/transactions`,
-    `${YC}/loyalty/client_card_transactions/${cardId}`,
-    `${YC}/company/${salon.yclients_company_id}/loyalty/card_transactions/${cardId}`,
-  ];
+// Транзакции карты YClients недоступны через API.
+// История берётся из таблицы bonus_transactions нашей БД.
+// Эта функция оставлена как заглушка для совместимости.
+// ── YClients Web Session (для истории транзакций карты) ────────
+// Кэш куки по salonId — чтобы не логиниться при каждом запросе
+const ycWebSessions = {};
 
-  for (const url of endpoints) {
-    try {
-      const { data } = await axios.get(url,
-        { headers: ycHeaders(salon), params: { page, count }, timeout: 15000 }
-      );
-      console.log(`[CardTxns] url=${url} success=${data.success} count=${Array.isArray(data.data)?data.data.length:'n/a'}`);
-      if (data.success) {
-        if (Array.isArray(data.data) && data.data.length > 0) {
-          console.log(`[CardTxns] ✓ WORKS! keys:`, Object.keys(data.data[0]).join(','));
-          console.log(`[CardTxns] sample:`, JSON.stringify(data.data[0]).slice(0,400));
-        } else {
-          console.log(`[CardTxns] success but empty. raw:`, JSON.stringify(data).slice(0,200));
-        }
-        return data.data || [];
+async function ycWebLogin(salon) {
+  const cached = ycWebSessions[salon.id];
+  if (cached && Date.now() - cached.ts < 4 * 60 * 60 * 1000) return cached.cookie;
+
+  if (!salon.yclients_web_cookie)
+    throw new Error('Куки YClients не заданы. Вставьте куки браузера в Настройках.');
+
+  // Просто используем куки как есть — без проверки (YClients блокирует серверные IP)
+  console.log(`[WebLogin] Using manual cookie for salon ${salon.id} (len=${salon.yclients_web_cookie.length})`);
+  ycWebSessions[salon.id] = { cookie: salon.yclients_web_cookie, ts: Date.now() };
+  return salon.yclients_web_cookie;
+}
+
+// Получить историю транзакций карты через веб-интерфейс YClients
+async function ycGetCardTransactions(salon, clientYcId, phone, chainId) {
+  try {
+    const cookie = await ycWebLogin(salon);
+    const companyId = salon.yclients_company_id;
+    const groupId   = chainId || salon.yclients_chain_id || companyId;
+
+    // Убираем + из телефона
+    const phoneClean = String(phone || '').replace(/\D/g, '');
+
+    const url = `https://yclients.com/loyalty_cards/get_client_loyalty_cards_json/${groupId}/${companyId}/${clientYcId}/${phoneClean}?show_redesign_view=false&_=${Date.now()}`;
+    console.log(`[WebTxns] GET ${url}`);
+    console.log(`[WebTxns] groupId=${groupId} companyId=${companyId} clientYcId=${clientYcId} phoneClean=${phoneClean}`);
+
+    const UA2 = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36';
+    const resp = await axios.get(url, {
+      headers: {
+        'Cookie':            cookie,
+        'User-Agent':        UA2,
+        'X-Requested-With':  'XMLHttpRequest',
+        'Accept':            'application/json, text/javascript, */*; q=0.01',
+        'Referer':           `https://yclients.com/company/${companyId}/clients/`,
+        'Accept-Language':   'ru-RU,ru;q=0.9',
+      },
+      validateStatus: s => s < 500,
+      timeout: 15000,
+    });
+    console.log(`[WebTxns] Response status: ${resp.status}`);
+    if (resp.status === 404) {
+      console.log(`[WebTxns] 404 — possibly wrong URL format or client not found`);
+      // Пробуем без номера телефона (иногда достаточно client_id)
+      const url2 = `https://yclients.com/loyalty_cards/get_client_loyalty_cards_json/${groupId}/${companyId}/${clientYcId}?show_redesign_view=false&_=${Date.now()}`;
+      console.log(`[WebTxns] Trying without phone: ${url2}`);
+      const resp2 = await axios.get(url2, {
+        headers: { 'Cookie': cookie, 'User-Agent': UA2, 'X-Requested-With': 'XMLHttpRequest', 'Referer': `https://yclients.com/company/${companyId}/clients/` },
+        validateStatus: s => s < 500,
+        timeout: 15000,
+      });
+      console.log(`[WebTxns] Without phone status: ${resp2.status}`);
+      if (resp2.data?.success) {
+        const html2 = resp2.data.html || '';
+        console.log(`[WebTxns] Got HTML (no phone), length=${html2.length}`);
+        return parseCardTransactionsHtml(html2);
       }
-    } catch (e) {
-      console.log(`[CardTxns] ${url} → ${e.response?.status||e.message}`);
+      return [];
+    }
+
+    if (!resp.data?.success) {
+      console.log(`[WebTxns] Not success:`, JSON.stringify(resp.data).slice(0,200));
+      return [];
+    }
+
+    const html = resp.data.html || '';
+    console.log(`[WebTxns] Got HTML, length=${html.length}`);
+
+    // Парсим транзакции из HTML
+    const txns = parseCardTransactionsHtml(html);
+    console.log(`[WebTxns] Parsed ${txns.length} transactions`);
+    return txns;
+
+  } catch (e) {
+    console.error(`[WebTxns] Error:`, e.message);
+    // Сбрасываем кэш сессии при ошибке
+    delete ycWebSessions[salon.id];
+    return [];
+  }
+}
+
+// Парсер транзакций из HTML YClients
+function parseCardTransactionsHtml(html) {
+  const txns = [];
+  // Находим все блоки транзакций: data-locator="transaction_row"
+  const rowRegex = /data-locator="transaction_row">([\s\S]*?)(?=data-locator="transaction_row"|<\/div>\s*<\/div>\s*<\/div>\s*<div id="card-expiration)/g;
+  let match;
+  let idx = 0;
+
+  // Более простой подход — ищем паттерны дата/сумма
+  const dateRegex   = /data-locator="tr_data">\s*([\d.]+)\s*<\/div>/g;
+  const amountRegex = /col-xs-2 text-right">\s*([-\d.]+)\s*<\/div>/g;
+  const titleRegex  = /(?:data-locator="tr_amount"|<span>)([^<]{3,100})<\/span>/g;
+
+  const dates   = [];
+  const amounts = [];
+  const titles  = [];
+
+  let m;
+  while ((m = dateRegex.exec(html))   !== null) dates.push(m[1].trim());
+  while ((m = amountRegex.exec(html)) !== null) amounts.push(parseFloat(m[1].trim()));
+  while ((m = titleRegex.exec(html))  !== null) {
+    const t = m[1].trim();
+    if (t && !t.includes('показать') && !t.includes('Показать') && t.length > 2) {
+      titles.push(t);
     }
   }
 
-  console.log(`[CardTxns] All endpoints failed for card ${cardId}`);
-  return [];
+  const len = Math.min(dates.length, amounts.length);
+  for (let i = 0; i < len; i++) {
+    // Конвертируем дату DD.MM.YYYY → ISO
+    let txnDate = null;
+    try {
+      const parts = dates[i].split('.');
+      if (parts.length === 3) {
+        txnDate = new Date(`${parts[2]}-${parts[1]}-${parts[0]}`).toISOString();
+      }
+    } catch {}
+
+    txns.push({
+      id:         null,  // нет ID из веб-интерфейса
+      date:       dates[i],
+      txn_date:   txnDate,
+      amount:     amounts[i],
+      title:      titles[i] || (amounts[i] >= 0 ? 'Начисление' : 'Списание'),
+      type:       amounts[i] >= 0 ? 'accrual' : 'redemption',
+    });
+  }
+
+  return txns;
 }
 
 // Начислить/списать бонусы на карту
@@ -840,25 +946,39 @@ app.put('/api/salon', auth, async (req, res) => {
   try {
     const { name, city, timezone, yclients_company_id,
             yclients_card_type_id, yclients_card_type_name } = req.body;
+    const { yclients_web_cookie } = req.body;
     await db.query(
       `UPDATE salons SET name=$1,city=$2,timezone=$3,yclients_company_id=$4,
-       yclients_card_type_id=$5,yclients_card_type_name=$6,updated_at=NOW() WHERE id=$7`,
+       yclients_card_type_id=$5,yclients_card_type_name=$6,
+       yclients_web_cookie=COALESCE($7,yclients_web_cookie),
+       updated_at=NOW() WHERE id=$8`,
       [name, city, timezone, yclients_company_id,
        yclients_card_type_id || null, yclients_card_type_name || null,
+       yclients_web_cookie || null,
        req.user.salonId]
     );
+    // Сбросить кэш сессии при обновлении куки
+    if (yclients_web_cookie) delete ycWebSessions[req.user.salonId];
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 app.post('/api/salon/yclients-auth', auth, async (req, res) => {
   try {
-    const { partnerToken, login, password } = req.body;
+    const { partnerToken, login, password, chainId } = req.body;
     const d = await ycAuth(partnerToken, login, password);
     await db.query(
-      'UPDATE salons SET yclients_partner_token=$1,yclients_user_token=$2,updated_at=NOW() WHERE id=$3',
-      [partnerToken, d.user_token, req.user.salonId]
+      `UPDATE salons SET
+         yclients_partner_token=$1, yclients_user_token=$2,
+         yclients_login=$3, yclients_password=$4,
+         yclients_chain_id=$5,
+         updated_at=NOW()
+       WHERE id=$6`,
+      [partnerToken, d.user_token, login, password,
+       chainId || null, req.user.salonId]
     );
+    // Сбросить кэш веб-сессии
+    delete ycWebSessions[req.user.salonId];
     res.json({ ok: true, userToken: d.user_token });
   } catch (e) {
     console.error('[YC Auth error]', e.message, e.response?.data);
@@ -1116,7 +1236,7 @@ app.get('/api/yclients/card-types', auth, async (req, res) => {
   } catch (e) { res.status(400).json({ error: e.message }); }
 });
 
-// Получить историю транзакций карты клиента
+// Получить историю транзакций клиента — из bonus_transactions нашей БД
 app.get('/api/clients/:id/card-transactions', auth, async (req, res) => {
   try {
     const client = await db.one(
@@ -1125,24 +1245,41 @@ app.get('/api/clients/:id/card-transactions', auth, async (req, res) => {
     );
     if (!client) return res.status(404).json({ error: 'Клиент не найден' });
 
-    // Из нашей БД
-    const localTxns = await db.many(
-      'SELECT * FROM loyalty_card_transactions WHERE client_id=$1 ORDER BY txn_date DESC LIMIT 100',
+    // История из loyalty_card_transactions (импорт из YClients)
+    const lct = await db.many(
+      `SELECT id, txn_date as created_at, amount, title, balance_after, type
+       FROM loyalty_card_transactions
+       WHERE client_id=$1
+       ORDER BY txn_date DESC NULLS LAST
+       LIMIT 500`,
       [client.id]
     );
 
-    // Если карта есть — подгружаем свежие из YClients
-    let ycTxns = [];
-    if (client.yclients_card_id) {
-      const salon = await db.one('SELECT * FROM salons WHERE id=$1', [req.user.salonId]);
-      ycTxns = await ycGetCardTransactions(salon, client.yclients_card_id);
-    }
+    // История из bonus_transactions (операции нашей системы)
+    const bonus = await db.many(
+      `SELECT id, created_at, amount, description as title, balance_after, type
+       FROM bonus_transactions
+       WHERE client_id=$1
+       ORDER BY created_at DESC
+       LIMIT 200`,
+      [client.id]
+    );
 
-    res.json({ local: localTxns, yclients: ycTxns, card: {
-      id:      client.yclients_card_id,
-      number:  client.yclients_card_number,
-      balance: client.yclients_card_balance,
-    }});
+    res.json({
+      local: lct,        // loyalty_card_transactions — для фронтенда
+      bonus: bonus,      // bonus_transactions — для фронтенда
+      transactions: lct, // обратная совместимость
+      card: {
+        id:      client.yclients_card_id,
+        number:  client.yclients_card_number,
+        balance: client.yclients_card_balance || client.bonus_balance,
+      },
+      summary: {
+        totalTransactions: lct.length + bonus.length,
+        totalAccrued:  [...lct,...bonus].filter(t=>parseFloat(t.amount)>0).reduce((s,t)=>s+parseFloat(t.amount),0),
+        totalRedeemed: [...lct,...bonus].filter(t=>parseFloat(t.amount)<0).reduce((s,t)=>s+Math.abs(parseFloat(t.amount)),0),
+      }
+    });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -1175,43 +1312,276 @@ app.post('/api/clients/:id/sync-card', auth, async (req, res) => {
     }
     console.log(`[SyncCard] matched card: id=${card.id} balance=${card.balance}`);
 
-    // Обновить данные карты
+    // Данные из карты YClients (paid_amount, visits_count уже есть в объекте карты)
+    const cardBalance  = parseFloat(card.balance || 0);
+    const paidAmount   = parseFloat(card.paid_amount || card.sold_amount || client.total_spent || 0);
+    const visitsCount  = parseInt(card.visits_count || client.visits_count || 0);
+    const cardNumber   = card.number || card.loyalty_card_number || null;
+
+    // Определяем уровень лояльности по сумме оплат
+    const lsData = await getLoyaltySettings(salon.id);
+    const level  = lsData?.levels ? getLevel(paidAmount, lsData.levels) : null;
+
     await db.query(
       `UPDATE clients SET
-         yclients_card_id=$1, yclients_card_number=$2, yclients_card_balance=$3,
-         bonus_balance=$4, updated_at=NOW()
-       WHERE id=$5`,
-      [card.id, card.number || card.loyalty_card_number || null,
-       parseFloat(card.balance || 0), parseFloat(card.balance || 0), client.id]
+         yclients_card_id=$1,
+         yclients_card_number=$2,
+         yclients_card_balance=$3,
+         bonus_balance=$4,
+         total_spent=$5,
+         visits_count=$6,
+         loyalty_level=$7,
+         updated_at=NOW()
+       WHERE id=$8`,
+      [card.id, cardNumber, cardBalance, cardBalance,
+       paidAmount, visitsCount,
+       level?.key || client.loyalty_level,
+       client.id]
     );
 
-    // Загрузить историю транзакций
-    let page = 1, imported = 0;
-    for (;;) {
-      const txns = await ycGetCardTransactions(salon, card.id, page, 200);
-      if (!txns?.length) break;
-      for (const t of txns) {
-        await db.query(
-          `INSERT INTO loyalty_card_transactions
-             (salon_id,client_id,yclients_card_id,yclients_txn_id,type,amount,
-              balance_after,title,record_id,txn_date)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
-           ON CONFLICT (yclients_txn_id) DO NOTHING`,
-          [salon.id, client.id, card.id, t.id,
-           parseFloat(t.amount || 0) >= 0 ? 'accrual' : 'redemption',
-           parseFloat(t.amount || 0), parseFloat(t.balance_after || 0),
-           t.title || t.comment || null,
-           t.record_id || null,
-           t.created_at || t.date || null]
-        );
-        imported++;
+    console.log(`[SyncCard] Updated: balance=${cardBalance} paid=${paidAmount} visits=${visitsCount} level=${level?.key}`);
+
+    // Загружаем историю транзакций через веб-интерфейс YClients
+    let txnsImported = 0;
+    try {
+      const webTxns = await ycGetCardTransactions(
+        salon,
+        client.yclients_client_id,
+        client.phone,
+        salon.yclients_chain_id
+      );
+
+      for (const t of webTxns) {
+        // Сохраняем в loyalty_card_transactions (без уникального ID — используем дату+сумму)
+        try {
+          await db.query(
+            `INSERT INTO loyalty_card_transactions
+               (salon_id, client_id, yclients_card_id, type, amount,
+                title, txn_date, created_at)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,NOW())
+             ON CONFLICT DO NOTHING`,
+            [salon.id, client.id, card.id,
+             t.type, t.amount, t.title,
+             t.txn_date || null]
+          );
+          txnsImported++;
+        } catch (dbErr) {
+          // Игнорируем дубли
+        }
       }
-      if (txns.length < 200) break;
-      page++;
+      console.log(`[SyncCard] Imported ${txnsImported} transactions from web`);
+    } catch (txnErr) {
+      console.log(`[SyncCard] Web transactions unavailable: ${txnErr.message}`);
     }
 
-    res.json({ ok: true, cardId: card.id, balance: card.balance, transactionsImported: imported });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+    const txnsCount = await db.one(
+      'SELECT COUNT(*) FROM bonus_transactions WHERE client_id=$1',
+      [client.id]
+    );
+
+    res.json({
+      ok: true,
+      cardId:     card.id,
+      cardNumber,
+      balance:    cardBalance,
+      paidAmount,
+      visitsCount,
+      level:      level?.key || client.loyalty_level,
+      transactionsInDb:      parseInt(txnsCount.count),
+      transactionsImported:  txnsImported,
+      message:    `Карта синхронизирована. Баланс: ${cardBalance.toLocaleString('ru')} ₽ · Оплачено: ${paidAmount.toLocaleString('ru')} ₽ · Визитов: ${visitsCount} · История: ${txnsImported} операций загружено`
+    });
+  } catch (e) {
+    console.error('[SyncCard error]', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ============================================================
+// BULK IMPORT: История транзакций всех карт (разовая операция)
+// ============================================================
+
+// Статус текущего импорта (в памяти)
+const bulkImportStatus = {};
+
+app.post('/api/bulk-import-card-history', auth, async (req, res) => {
+  const salonId = req.user.salonId;
+
+  // Не запускать если уже идёт
+  if (bulkImportStatus[salonId]?.running) {
+    return res.json({ ok: false, message: 'Импорт уже запущен', status: bulkImportStatus[salonId] });
+  }
+
+  const salon = await db.one('SELECT * FROM salons WHERE id=$1', [salonId]);
+  if (!salon.yclients_login) {
+    return res.status(400).json({ error: 'Логин YClients не сохранён. Переподключите YClients в Настройках.' });
+  }
+  if (!salon.yclients_card_type_id) {
+    return res.status(400).json({ error: 'Карта лояльности не выбрана в Настройках.' });
+  }
+
+  // Ответить сразу, запустить в фоне
+  bulkImportStatus[salonId] = {
+    running: true, started: new Date(),
+    total: 0, done: 0, imported: 0, errors: 0, currentClient: ''
+  };
+  res.json({ ok: true, message: 'Импорт запущен' });
+
+  // Фоновая задача
+  (async () => {
+    try {
+      // Клиенты у которых есть карта YClients
+      const clients = await db.many(
+        `SELECT id, name, phone, yclients_client_id, yclients_card_id
+         FROM clients
+         WHERE salon_id=$1
+           AND yclients_card_id IS NOT NULL
+           AND yclients_client_id IS NOT NULL
+         ORDER BY id`,
+        [salonId]
+      );
+
+      bulkImportStatus[salonId].total = clients.length;
+      console.log(`[BulkImport] Starting for ${clients.length} clients with cards`);
+
+      // Один раз логинимся
+      let cookie;
+      try {
+        cookie = await ycWebLogin(salon);
+      } catch (e) {
+        bulkImportStatus[salonId].running = false;
+        bulkImportStatus[salonId].error = `Ошибка входа: ${e.message}`;
+        return;
+      }
+
+      for (let i = 0; i < clients.length; i++) {
+        const c = clients[i];
+        bulkImportStatus[salonId].done = i;
+        bulkImportStatus[salonId].currentClient = c.name;
+
+        try {
+          const txns = await ycGetCardTransactions(
+            salon, c.yclients_client_id, c.phone, salon.yclients_chain_id
+          );
+
+          for (const t of txns) {
+            try {
+              // 1. Сохраняем в loyalty_card_transactions
+              await db.query(
+                `INSERT INTO loyalty_card_transactions
+                   (salon_id, client_id, yclients_card_id, type, amount,
+                    title, txn_date, created_at)
+                 VALUES ($1,$2,$3,$4,$5,$6,$7,NOW())
+                 ON CONFLICT DO NOTHING`,
+                [salonId, c.id, c.yclients_card_id,
+                 t.type, t.amount, t.title, t.txn_date || null]
+              );
+
+              // 2. Дублируем в bonus_transactions для отображения в карточке клиента
+              const prevBal = await db.one(
+                'SELECT bonus_balance FROM clients WHERE id=$1', [c.id]
+              );
+              const balBefore = parseFloat(prevBal?.bonus_balance || 0);
+              const txnAmt    = parseFloat(t.amount || 0);
+              const balAfter  = Math.max(0, balBefore + txnAmt);
+              // Проверяем дубль по дате+сумме перед вставкой
+              const txnDate = t.txn_date || null;
+              if (txnDate) {
+                const dup = await db.one(
+                  `SELECT id FROM bonus_transactions
+                   WHERE client_id=$1 AND amount=$2
+                   AND created_at::date = $3::date
+                   LIMIT 1`,
+                  [c.id, txnAmt, txnDate]
+                );
+                if (dup) {
+                  // Уже есть — пропускаем
+                } else {
+                  await db.query(
+                    `INSERT INTO bonus_transactions
+                       (salon_id, client_id, type, amount,
+                        balance_before, balance_after, description, created_at)
+                     VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+                    [salonId, c.id,
+                     txnAmt >= 0 ? 'accrual' : 'redemption',
+                     txnAmt, balBefore, balAfter,
+                     t.title || (txnAmt >= 0 ? 'Начисление (импорт)' : 'Списание (импорт)'),
+                     txnDate]
+                  );
+                }
+              } else {
+                await db.query(
+                  `INSERT INTO bonus_transactions
+                     (salon_id, client_id, type, amount,
+                      balance_before, balance_after, description, created_at)
+                   VALUES ($1,$2,$3,$4,$5,$6,$7,NOW())`,
+                  [salonId, c.id,
+                   txnAmt >= 0 ? 'accrual' : 'redemption',
+                   txnAmt, balBefore, balAfter,
+                   t.title || (txnAmt >= 0 ? 'Начисление (импорт)' : 'Списание (импорт)')]
+                );
+              }
+
+              bulkImportStatus[salonId].imported++;
+            } catch (e) {
+              console.log(`[BulkImport] txn error client=${c.id}: ${e.message}`);
+            }
+          }
+
+          // Также обновляем баланс клиента из карты
+          const cards = await ycGetClientCards(salon, c.yclients_client_id);
+          const card = cards.find(cd =>
+            String(cd.type?.id) === String(salon.yclients_card_type_id)
+          );
+          if (card) {
+            const paidAmount = parseFloat(card.paid_amount || card.sold_amount || 0);
+            const lsData = await getLoyaltySettings(salonId);
+            const level  = lsData?.levels ? getLevel(paidAmount, lsData.levels) : null;
+            await db.query(
+              `UPDATE clients SET
+                 yclients_card_balance=$1, bonus_balance=$2,
+                 total_spent=GREATEST(total_spent,$3),
+                 visits_count=GREATEST(visits_count,$4),
+                 loyalty_level=COALESCE($5,loyalty_level),
+                 updated_at=NOW()
+               WHERE id=$6`,
+              [parseFloat(card.balance||0), parseFloat(card.balance||0),
+               paidAmount, parseInt(card.visits_count||0),
+               level?.key||null, c.id]
+            );
+          }
+
+        } catch (e) {
+          console.error(`[BulkImport] Error for client ${c.id}:`, e.message);
+          bulkImportStatus[salonId].errors++;
+          // Сбросить сессию если проблема с авторизацией
+          if (e.message.includes('авторизац') || e.message.includes('login')) {
+            delete ycWebSessions[salonId];
+          }
+        }
+
+        // Пауза между клиентами чтобы не перегрузить YClients
+        await sleep(500);
+      }
+
+      bulkImportStatus[salonId].running = false;
+      bulkImportStatus[salonId].done = clients.length;
+      bulkImportStatus[salonId].finished = new Date();
+      console.log(`[BulkImport] Done. imported=${bulkImportStatus[salonId].imported} errors=${bulkImportStatus[salonId].errors}`);
+
+    } catch (e) {
+      bulkImportStatus[salonId].running = false;
+      bulkImportStatus[salonId].error = e.message;
+      console.error('[BulkImport] Fatal:', e.message);
+    }
+  })();
+});
+
+// Статус импорта (polling с фронтенда)
+app.get('/api/bulk-import-card-history/status', auth, async (req, res) => {
+  const status = bulkImportStatus[req.user.salonId];
+  if (!status) return res.json({ running: false, notStarted: true });
+  res.json(status);
 });
 
 // Лог финансовых операций

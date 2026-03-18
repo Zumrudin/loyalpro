@@ -379,10 +379,31 @@ tbody tr:hover{background:var(--bg);cursor:pointer}
             <div class="fg"><label class="fl">Partner Token</label><input type="password" id="st-pt" placeholder="Partner Token из раздела API"></div>
             <div class="fg"><label class="fl">Логин YClients</label><input type="text" id="st-login" placeholder="email или телефон"></div>
             <div class="fg"><label class="fl">Пароль YClients</label><input type="password" id="st-pass"></div>
+            <div class="fg"><label class="fl">Chain ID <span class="fh">salon_group_id из карты, напр. 652414</span></label><input type="text" id="st-chain-id" placeholder="652414"></div>
             <div style="display:flex;gap:8px">
               <button class="btn btn-pri" onclick="connectYC()">Подключить YClients</button>
               <button class="btn btn-sec" onclick="saveSalon()">Сохранить</button>
             </div>
+          </div>
+
+          <!-- КУКИ БРАУЗЕРА для истории карт -->
+          <div class="card mb">
+            <div class="ct">🍪 Куки браузера YClients <span style="font-size:11px;font-weight:400;color:var(--t3)">(для разового импорта истории карт)</span></div>
+            <div style="font-size:12.5px;color:var(--t2);margin-bottom:12px;line-height:1.7">
+              <strong>Как получить:</strong> войдите на <a href="https://yclients.com" target="_blank" style="color:var(--a)">yclients.com</a> в браузере → F12 → Network → любой запрос → Request Headers → скопируйте строку <code style="background:var(--bg);padding:1px 4px;border-radius:3px">Cookie:</code> целиком.
+            </div>
+            <div class="fg">
+              <label class="fl">Cookie строка из браузера</label>
+              <textarea id="st-web-cookie" rows="3" placeholder="XSRF-TOKEN=...; laravel_session=...; remember_web_...=..." style="resize:vertical;font-size:11px;font-family:monospace"></textarea>
+            </div>
+            <div style="display:flex;gap:8px;align-items:center">
+              <button class="btn btn-pri" onclick="saveWebCookie()">Сохранить куки</button>
+              <span style="font-size:11.5px;color:var(--t3)">Куки действуют ~30 дней. После импорта истории их можно не обновлять.</span>
+            </div>
+            <div id="cookieSt" style="margin-top:8px;font-size:12px"></div>
+          </div>
+
+          <div style="display:none"><!-- hidden closing div placeholder -->
             <div id="ycSt" style="margin-top:10px;font-size:12px"></div>
           </div>
 
@@ -435,6 +456,36 @@ tbody tr:hover{background:var(--bg);cursor:pointer}
           <div class="card">
             <div class="ct">Логи синхронизации <button class="btn btn-sec btn-sm" onclick="loadSyncLogs()">Обновить</button></div>
             <div id="syncLogs"><div class="empty">Загрузка...</div></div>
+          </div>
+
+          <!-- РАЗОВЫЙ ИМПОРТ ИСТОРИИ КАРТ -->
+          <div class="card" style="border:2px solid var(--a)">
+            <div class="ct" style="color:var(--a)">
+              📥 Разовый импорт истории карт лояльности
+            </div>
+            <div style="font-size:12.5px;color:var(--t2);margin-bottom:14px;line-height:1.7">
+              Запустите <strong>один раз</strong> при внедрении — загрузит историю транзакций по картам YClients для всех клиентов. После завершения вся история будет в базе. Дальнейшие операции фиксируются автоматически через webhook.
+            </div>
+            <div id="bulkImportStatus" style="margin-bottom:12px;display:none">
+              <div style="background:var(--bg);border-radius:8px;padding:12px;font-size:13px">
+                <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+                  <span class="spinner" id="bulkSpinner"></span>
+                  <strong id="bulkStatusText">Подготовка...</strong>
+                </div>
+                <div class="pb" style="margin-bottom:6px"><div class="pf" id="bulkProgress" style="width:0%;transition:width .3s"></div></div>
+                <div style="font-size:12px;color:var(--t3)">
+                  Клиентов: <span id="bulkDone">0</span> / <span id="bulkTotal">0</span> · 
+                  Транзакций: <span id="bulkImported">0</span> · 
+                  Ошибок: <span id="bulkErrors">0</span>
+                </div>
+                <div style="font-size:11.5px;color:var(--t3);margin-top:4px">Текущий: <span id="bulkCurrent">—</span></div>
+              </div>
+            </div>
+            <div id="bulkImportResult" style="display:none;margin-bottom:12px;font-size:13px;padding:10px 12px;border-radius:8px"></div>
+            <button class="btn btn-pri" id="bulkImportBtn" onclick="startBulkImport()">
+              📥 Запустить импорт истории
+            </button>
+            <span style="font-size:11px;color:var(--t3);margin-left:10px">Займёт несколько минут в зависимости от количества клиентов</span>
           </div>
         </div>
       </div>
@@ -582,6 +633,109 @@ async function syncClientCard(clientId) {
     if (r.ok) notify(`Карта синхронизирована. Баланс: ${r.balance} бонусов, транзакций: ${r.transactionsImported}`, 'ok');
     else notify(r.message || 'Карта не найдена', 'err');
   } catch(e) { notify(e.message, 'err'); }
+}
+
+// ── BULK IMPORT ──────────────────────────────────────────────
+let bulkPollInterval = null;
+
+async function startBulkImport() {
+  const btn = document.getElementById('bulkImportBtn');
+  const statusEl = document.getElementById('bulkImportStatus');
+  const resultEl = document.getElementById('bulkImportResult');
+
+  // Сброс UI
+  resultEl.style.display = 'none';
+  statusEl.style.display = 'block';
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> Импорт идёт...';
+  document.getElementById('bulkSpinner').style.display = 'inline-block';
+  document.getElementById('bulkStatusText').textContent = 'Запуск...';
+
+  try {
+    await api('POST', '/api/bulk-import-card-history');
+    notify('Импорт запущен! Прогресс отображается ниже.', 'ok');
+    // Начать polling статуса каждые 2 сек
+    bulkPollInterval = setInterval(pollBulkStatus, 2000);
+    pollBulkStatus();
+  } catch(e) {
+    btn.disabled = false;
+    btn.innerHTML = '📥 Запустить импорт истории';
+    statusEl.style.display = 'none';
+    notify('Ошибка: ' + e.message, 'err');
+  }
+}
+
+async function pollBulkStatus() {
+  try {
+    const s = await api('GET', '/api/bulk-import-card-history/status');
+    const statusEl  = document.getElementById('bulkImportStatus');
+    const resultEl  = document.getElementById('bulkImportResult');
+    const btn       = document.getElementById('bulkImportBtn');
+
+    if (s.notStarted) return;
+
+    // Обновить прогресс
+    document.getElementById('bulkDone').textContent     = s.done || 0;
+    document.getElementById('bulkTotal').textContent    = s.total || 0;
+    document.getElementById('bulkImported').textContent = s.imported || 0;
+    document.getElementById('bulkErrors').textContent   = s.errors || 0;
+    document.getElementById('bulkCurrent').textContent  = s.currentClient || '—';
+
+    const pct = s.total > 0 ? Math.round((s.done / s.total) * 100) : 0;
+    document.getElementById('bulkProgress').style.width = pct + '%';
+    document.getElementById('bulkStatusText').textContent =
+      s.running ? `Обрабатывается ${s.done} из ${s.total} клиентов...` : 'Завершено!';
+
+    if (!s.running) {
+      clearInterval(bulkPollInterval);
+      bulkPollInterval = null;
+
+      // Скрыть спиннер
+      document.getElementById('bulkSpinner').style.display = 'none';
+      btn.disabled = false;
+      btn.innerHTML = '✅ Импорт завершён (повторить)';
+
+      // Показать итог
+      resultEl.style.display = 'block';
+      if (s.error) {
+        resultEl.style.background = '#fef2f2';
+        resultEl.style.color = 'var(--danger)';
+        resultEl.innerHTML = `❌ Ошибка: ${s.error}`;
+      } else {
+        resultEl.style.background = '#f0fdf4';
+        resultEl.style.color = '#166534';
+        resultEl.innerHTML = `
+          ✅ <strong>Импорт завершён!</strong><br>
+          Клиентов обработано: <strong>${s.done}</strong> · 
+          Транзакций загружено: <strong>${s.imported}</strong> · 
+          Ошибок: <strong>${s.errors}</strong>
+        `;
+      }
+      notify(`Импорт завершён! Загружено ${s.imported} транзакций`, 'ok');
+    }
+  } catch(e) {
+    console.error('Poll error:', e.message);
+  }
+}
+
+async function saveWebCookie() {
+  const val = document.getElementById('st-web-cookie')?.value?.trim();
+  const el  = document.getElementById('cookieSt');
+  if (!val) { el.innerHTML='<span style="color:var(--danger)">Вставьте куки</span>'; return; }
+  el.innerHTML = '<span class="spinner"></span> Сохранение...';
+  try {
+    await api('PUT', '/api/salon', {
+      name:                document.getElementById('st-name')?.value,
+      city:                document.getElementById('st-city')?.value,
+      timezone:            document.getElementById('st-tz')?.value,
+      yclients_company_id: document.getElementById('st-yid')?.value,
+      yclients_web_cookie: val,
+    });
+    el.innerHTML = '<span style="color:var(--a)">✓ Куки сохранены! Теперь запустите импорт истории.</span>';
+    notify('Куки YClients сохранены!', 'ok');
+  } catch(e) {
+    el.innerHTML = `<span style="color:var(--danger)">Ошибка: ${e.message}</span>`;
+  }
 }
 
 async function doLogout() {
@@ -737,15 +891,45 @@ async function loadClients() {
 
 async function openCD(id) {
   try {
-    const {client:c,history,records} = await api('GET','/api/clients/'+id);
+    const [{client:c,history,records}, cardTxnsResp] = await Promise.all([
+      api('GET','/api/clients/'+id),
+      api('GET','/api/clients/'+id+'/card-transactions').catch(()=>({local:[],yclients:[]})),
+    ]);
     document.getElementById('cmTitle').textContent = c.name;
 
-    const rows = history.slice(0,15).map(t=>`
+    // Объединяем loyalty_card_transactions + bonus_transactions, убираем дубли по дате+сумме
+    const lctRows = (cardTxnsResp.local || []).map(t => ({
+      created_at:  t.txn_date || t.created_at,
+      amount:      parseFloat(t.amount || 0),
+      description: t.title || (parseFloat(t.amount||0) >= 0 ? 'Начисление' : 'Списание'),
+      balance_after: parseFloat(t.balance_after || 0),
+      _src: 'card'
+    }));
+    const bonusRows = (history || []).map(t => ({
+      created_at:  t.created_at,
+      amount:      parseFloat(t.amount || 0),
+      description: t.description || t.type,
+      balance_after: parseFloat(t.balance_after || 0),
+      _src: 'bonus'
+    }));
+
+    // Объединяем — если есть записи из карты, показываем их; дополняем bonus_transactions
+    const allTxns = lctRows.length > 0
+      ? [...lctRows, ...bonusRows.filter(b => !lctRows.some(l =>
+          Math.abs(new Date(l.created_at) - new Date(b.created_at)) < 86400000 &&
+          Math.abs(l.amount - b.amount) < 0.01
+        ))]
+      : bonusRows;
+
+    // Сортируем по дате DESC
+    allTxns.sort((a,b) => new Date(b.created_at) - new Date(a.created_at));
+
+    const rows = allTxns.slice(0,50).map(t=>`
       <tr>
-        <td style="color:var(--t3)">${new Date(t.created_at).toLocaleDateString('ru',{day:'numeric',month:'short'})}</td>
-        <td style="color:${t.amount>0?'var(--a)':'var(--danger)'};font-weight:600">${t.amount>0?'+':''}${t.amount}</td>
-        <td style="color:var(--t2);font-size:12px">${t.description||t.type}</td>
-        <td style="font-weight:600">${(t.balance_after||0).toLocaleString('ru')}</td>
+        <td style="color:var(--t3)">${t.created_at ? new Date(t.created_at).toLocaleDateString('ru',{day:'numeric',month:'short',year:'2-digit'}) : '—'}</td>
+        <td style="color:${t.amount>0?'var(--a)':'var(--danger)'};font-weight:600">${t.amount>0?'+':''}${parseFloat(t.amount).toLocaleString('ru')}</td>
+        <td style="color:var(--t2);font-size:12px">${t.description||'—'}</td>
+        <td style="font-weight:600">${t.balance_after ? parseFloat(t.balance_after).toLocaleString('ru') : '—'}</td>
       </tr>`).join('');
 
     const cardBlock = c.yclients_card_id
@@ -789,10 +973,10 @@ async function openCD(id) {
       </div>
       <div class="div"></div>
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
-        <div style="font-size:13px;font-weight:700">История операций (наша БД)</div>
-        ${c.yclients_card_id?`<button class="btn btn-sec btn-sm" onclick="loadCardTxns(${c.id})">История карты YClients</button>`:''}
+        <div style="font-size:13px;font-weight:700">История операций</div>
+        <span style="font-size:11px;color:var(--t3)">${allTxns.length} операций</span>
       </div>
-      ${rows?`<table><thead><tr><th>Дата</th><th>Сумма</th><th>Описание</th><th>Баланс</th></tr></thead><tbody>${rows}</tbody></table>`:'<div class="empty">Нет операций</div>'}
+      ${rows?`<div style="max-height:280px;overflow-y:auto"><table><thead><tr><th>Дата</th><th>Сумма</th><th>Описание</th><th>Баланс</th></tr></thead><tbody>${rows}</tbody></table></div>`:'<div class="empty">Нет операций</div>'}
       <div id="cardTxnsBlock_${c.id}"></div>`;
 
     openModal('clientModal');
@@ -816,31 +1000,42 @@ async function doSyncCard(clientId) {
   finally { if(btn){btn.disabled=false;btn.innerHTML='🔄 Синхронизировать карту';} }
 }
 
-// Загрузить историю транзакций карты YClients
+// Загрузить полную историю транзакций из нашей БД
 async function loadCardTxns(clientId) {
   const el = document.getElementById(`cardTxnsBlock_${clientId}`);
   if (!el) return;
-  el.innerHTML = '<div style="margin-top:14px;font-size:13px;color:var(--t3)"><span class="spinner"></span> Загрузка истории карты из YClients...</div>';
+  el.innerHTML = '<div style="margin-top:14px;font-size:13px;color:var(--t3)"><span class="spinner"></span> Загрузка полной истории...</div>';
   try {
     const r = await api('GET', `/api/clients/${clientId}/card-transactions`);
-    const txns = r.yclients || r.local || [];
-    if (!txns.length) { el.innerHTML='<div class="empty" style="margin-top:10px">История карты пуста</div>'; return; }
-    const rows = txns.slice(0,50).map(t => {
-      const amt   = parseFloat(t.amount||t.Amount||0);
-      const date  = t.created_at||t.date||t.txn_date||'';
-      const title = t.title||t.comment||t.Comment||t.type||'—';
-      const bal   = parseFloat(t.balance_after||t.Balance||0);
+    const txns = r.transactions || [];
+    if (!txns.length) { el.innerHTML='<div class="empty" style="margin-top:10px">История операций пуста</div>'; return; }
+
+    const TYPE_LBL = {accrual:'Начисление',redemption:'Списание',birthday:'День рождения',referral:'Реферал',manual:'Вручную',cancellation:'Отмена',expiry:'Сгорание'};
+    const rows = txns.map(t => {
+      const amt  = parseFloat(t.amount||0);
+      const date = t.created_at ? new Date(t.created_at).toLocaleDateString('ru',{day:'numeric',month:'short',year:'2-digit'}) : '—';
+      const desc = t.description || TYPE_LBL[t.type] || t.type || '—';
+      const bal  = parseFloat(t.balance_after||0);
+      const svc  = Array.isArray(t.record_services) ? t.record_services.map(s=>s.title||s).join(', ') : '';
       return `<tr>
-        <td style="color:var(--t3)">${date?new Date(date).toLocaleDateString('ru',{day:'numeric',month:'short',year:'2-digit'}):'-'}</td>
+        <td style="color:var(--t3)">${date}</td>
         <td style="color:${amt>=0?'var(--a)':'var(--danger)'};font-weight:600">${amt>=0?'+':''}${amt.toLocaleString('ru')}</td>
-        <td style="color:var(--t2);font-size:12px">${title}</td>
+        <td style="color:var(--t2);font-size:12px">${desc}${svc?'<br><span style="color:var(--t3)">'+svc+'</span>':''}</td>
         <td style="font-weight:600">${bal.toLocaleString('ru')}</td>
       </tr>`;
     }).join('');
+
+    const s = r.summary||{};
     el.innerHTML = `
       <div class="div"></div>
-      <div style="font-size:13px;font-weight:700;margin-bottom:8px">История карты YClients (${txns.length} операций)</div>
-      <div style="max-height:280px;overflow-y:auto">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+        <div style="font-size:13px;font-weight:700">Полная история операций (${txns.length})</div>
+        <div style="font-size:12px;color:var(--t3)">
+          Начислено: <span style="color:var(--a);font-weight:600">+${parseFloat(s.totalAccrued||0).toLocaleString('ru')}</span> ·
+          Списано: <span style="color:var(--danger);font-weight:600">-${parseFloat(s.totalRedeemed||0).toLocaleString('ru')}</span>
+        </div>
+      </div>
+      <div style="max-height:300px;overflow-y:auto">
         <table><thead><tr><th>Дата</th><th>Сумма</th><th>Описание</th><th>Баланс</th></tr></thead><tbody>${rows}</tbody></table>
       </div>`;
   } catch(e) { el.innerHTML=`<div style="margin-top:10px;font-size:12.5px;color:var(--danger)">Ошибка: ${e.message}</div>`; }
@@ -1034,6 +1229,13 @@ async function loadSettings() {
           info.textContent=`✓ Активна: ${salon.yclients_card_type_name||salon.yclients_card_type_id}`;}
       }
     }
+    const ci = document.getElementById('st-chain-id');
+    if (ci) ci.value = salon.yclients_chain_id || '';
+    // Показать статус куки
+    const cookieSt = document.getElementById('cookieSt');
+    if (cookieSt && salon.yclients_web_cookie) {
+      cookieSt.innerHTML = '<span style="color:var(--a)">✓ Куки сохранены (' + String(salon.yclients_web_cookie).slice(0,30) + '...)</span>';
+    }
     loadSyncLogs();
   } catch(e){notify(e.message,'err');}
 }
@@ -1056,8 +1258,13 @@ async function connectYC() {
   const el=document.getElementById('ycSt');
   el.innerHTML='<span class="spinner"></span> Подключение...';
   try {
-    await api('POST','/api/salon/yclients-auth',{partnerToken:document.getElementById('st-pt')?.value,login:document.getElementById('st-login')?.value,password:document.getElementById('st-pass')?.value});
-    el.innerHTML='<span style="color:var(--a)">✓ YClients подключён!</span>';
+    await api('POST','/api/salon/yclients-auth',{
+      partnerToken: document.getElementById('st-pt')?.value,
+      login:        document.getElementById('st-login')?.value,
+      password:     document.getElementById('st-pass')?.value,
+      chainId:      document.getElementById('st-chain-id')?.value || null,
+    });
+    el.innerHTML='<span style="color:var(--a)">✓ YClients подключён! Логин и Chain ID сохранены.</span>';
     notify('YClients подключён!','ok');
   } catch(e){el.innerHTML=`<span style="color:var(--danger)">Ошибка: ${e.message}</span>`;}
 }
