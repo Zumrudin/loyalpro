@@ -7,103 +7,117 @@
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 <style>
 :root{
-  --accent:#00c896;--adim:#00a87c;--asoft:rgba(0,200,150,.10);
-  --sb:#0d1117;--st:#8b949e;
-  --bg:#f6f8fa;--card:#fff;--bdr:#e2e8f0;
-  --tx:#0d1117;--tx2:#57606a;--tx3:#8b949e;
+  --a:#00c896;--ad:#00a87c;--as:rgba(0,200,150,.10);
+  --sb:#0d1117;
+  --bg:#f6f8fa;--card:#fff;--bd:#e2e8f0;
+  --t1:#0d1117;--t2:#57606a;--t3:#8b949e;
   --danger:#e85454;--warn:#f59e0b;--info:#3b82f6;
   --r:10px;--sh:0 1px 3px rgba(0,0,0,.07);
 }
 *{margin:0;padding:0;box-sizing:border-box}
-body{font-family:-apple-system,'Segoe UI',system-ui,sans-serif;background:var(--bg);color:var(--tx);font-size:14px}
-/* LOGIN */
-#loginScreen{display:flex;align-items:center;justify-content:center;min-height:100vh;background:linear-gradient(135deg,#0d1117 0%,#1a2535 100%)}
-.lbox{background:#fff;border-radius:16px;padding:36px;width:420px;max-width:95vw;box-shadow:0 20px 60px rgba(0,0,0,.3)}
-.l-logo{display:flex;align-items:center;gap:10px;margin-bottom:24px}
-.l-icon{width:36px;height:36px;background:var(--accent);border-radius:9px;display:flex;align-items:center;justify-content:center}
-.l-icon svg{width:20px;height:20px;fill:#fff}
-.l-name{font-size:20px;font-weight:800;color:var(--tx)}
-.l-sub{font-size:11px;color:var(--tx3);margin-top:1px}
-.ltabs{display:flex;gap:3px;background:var(--bg);padding:3px;border-radius:9px;margin-bottom:20px}
-.ltab{flex:1;padding:8px;border-radius:6px;font-size:13px;font-weight:600;cursor:pointer;text-align:center;color:var(--tx3);border:none;background:transparent;transition:all .15s}
-.ltab.active{background:#fff;color:var(--tx);box-shadow:var(--sh)}
+body{font-family:-apple-system,'Segoe UI',system-ui,sans-serif;background:var(--bg);color:var(--t1);font-size:14px}
+
+/* ─── LOGIN ─── */
+.lw{min-height:100vh;display:flex;align-items:center;justify-content:center;background:linear-gradient(135deg,#0d1117 0%,#1a2535 100%)}
+.lb{background:#fff;border-radius:16px;padding:36px;width:420px;max-width:95vw;box-shadow:0 20px 60px rgba(0,0,0,.3)}
+.ll{display:flex;align-items:center;gap:10px;margin-bottom:24px}
+.li{width:34px;height:34px;background:var(--a);border-radius:8px;display:flex;align-items:center;justify-content:center}
+.li svg{width:18px;height:18px;fill:#fff}
+.ln{font-size:18px;font-weight:800;color:var(--t1)}
+.ls{font-size:11px;color:var(--t3)}
+
+/* Tabs on login */
+.lt{display:flex;gap:3px;background:var(--bg);padding:3px;border-radius:9px;margin-bottom:20px}
+.lt-t{flex:1;padding:7px;border-radius:6px;font-size:13px;font-weight:600;cursor:pointer;text-align:center;color:var(--t3);border:none;background:transparent;transition:.15s;font-family:inherit}
+.lt-t.active{background:#fff;color:var(--t1);box-shadow:var(--sh)}
+
+.fl{display:block;font-size:12px;font-weight:600;margin-bottom:5px;color:var(--t1)}
+.fh{font-weight:400;color:var(--t3);font-size:11px;margin-left:4px}
+input,select,textarea{width:100%;padding:9px 12px;border:1px solid var(--bd);border-radius:8px;font-size:13px;color:var(--t1);background:#fff;outline:none;transition:border-color .15s;font-family:inherit}
+input:focus,select:focus,textarea:focus{border-color:var(--a);box-shadow:0 0 0 3px rgba(0,200,150,.10)}
+input[readonly]{background:var(--bg);color:var(--t2)}
 .fg{margin-bottom:14px}
-.fl{display:block;font-size:12px;font-weight:600;margin-bottom:5px}
-.fh{font-weight:400;color:var(--tx3);font-size:11px;margin-left:4px}
-input,select,textarea{width:100%;padding:9px 12px;border:1px solid var(--bdr);border-radius:8px;font-size:13px;color:var(--tx);background:#fff;outline:none;transition:border-color .15s;font-family:inherit}
-input:focus,select:focus{border-color:var(--accent);box-shadow:0 0 0 3px rgba(0,200,150,.10)}
-input[readonly]{background:var(--bg);color:var(--tx2)}
-/* APP */
-#appScreen{display:none;height:100vh;overflow:hidden;flex-direction:column}
-#appScreen.show{display:flex}
-.topbar{background:var(--card);border-bottom:1px solid var(--bdr);height:52px;display:flex;align-items:center;padding:0 20px;gap:12px;flex-shrink:0}
-.tb-logo{display:flex;align-items:center;gap:8px;margin-right:4px}
-.tbl-icon{width:26px;height:26px;background:var(--accent);border-radius:6px;display:flex;align-items:center;justify-content:center}
-.tbl-icon svg{width:14px;height:14px;fill:#fff}
-.tbl-name{font-size:14px;font-weight:800}
-.tb-nav{display:flex;gap:2px;flex:1}
-.tn{padding:6px 12px;border-radius:7px;font-size:13px;font-weight:500;color:var(--tx2);cursor:pointer;transition:all .15s;white-space:nowrap}
-.tn:hover{background:var(--bg)}
-.tn.active{background:var(--asoft);color:var(--accent);font-weight:600}
-.tb-right{margin-left:auto;display:flex;align-items:center;gap:8px}
-.tu{display:flex;align-items:center;gap:7px;cursor:pointer;padding:5px 8px;border-radius:7px}
-.tu:hover{background:var(--bg)}
-.tu-av{width:28px;height:28px;border-radius:50%;background:var(--accent);display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;color:#fff;flex-shrink:0}
+.err{background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:9px 12px;font-size:12.5px;color:#b91c1c;margin-bottom:12px;display:none}
+
+/* ─── BUTTONS ─── */
+.btn{display:inline-flex;align-items:center;gap:5px;padding:7px 14px;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;border:none;transition:.15s;font-family:inherit}
+.btn svg{width:13px;height:13px;stroke:currentColor;fill:none;stroke-width:2.5;stroke-linecap:round;stroke-linejoin:round}
+.btn-pri{background:var(--a);color:#fff}.btn-pri:hover{background:var(--ad)}
+.btn-sec{background:transparent;color:var(--t2);border:1px solid var(--bd)}.btn-sec:hover{background:var(--bg)}
+.btn-dng{color:var(--danger);border-color:var(--danger)}
+.btn-sm{padding:5px 10px;font-size:12px}
+.btn-full{width:100%;justify-content:center;padding:11px;font-size:14px}
+.btn:disabled{opacity:.5;cursor:not-allowed}
+
+/* ─── APP ─── */
+#app{display:none;height:100vh;overflow:hidden;flex-direction:column}
+#app.show{display:flex}
+.topbar{background:var(--card);border-bottom:1px solid var(--bd);height:52px;display:flex;align-items:center;padding:0 20px;gap:10px;flex-shrink:0}
+.tb-logo{display:flex;align-items:center;gap:8px}
+.tb-li{width:26px;height:26px;background:var(--a);border-radius:6px;display:flex;align-items:center;justify-content:center}
+.tb-li svg{width:14px;height:14px;fill:#fff}
+.tb-ln{font-size:14px;font-weight:800}
+.tb-nav{display:flex;gap:2px;flex:1;margin-left:6px}
+.tn{padding:6px 11px;border-radius:7px;font-size:13px;font-weight:500;color:var(--t2);cursor:pointer;transition:.15s;white-space:nowrap}
+.tn:hover{background:var(--bg);color:var(--t1)}
+.tn.active{background:var(--as);color:var(--a);font-weight:600}
+.tb-right{display:flex;align-items:center;gap:8px;margin-left:auto}
+.t-av{width:28px;height:28px;border-radius:50%;background:var(--a);display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;color:#fff;flex-shrink:0}
 .content{flex:1;overflow-y:auto;padding:22px}
 .page{display:none}.page.active{display:block}
-/* BUTTONS */
-.btn{display:inline-flex;align-items:center;gap:5px;padding:7px 14px;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;border:none;transition:all .15s;font-family:inherit}
-.btn svg{width:13px;height:13px;stroke:currentColor;fill:none;stroke-width:2.5;stroke-linecap:round;stroke-linejoin:round}
-.btn-pri{background:var(--accent);color:#fff}.btn-pri:hover{background:var(--adim)}
-.btn-sec{background:transparent;color:var(--tx2);border:1px solid var(--bdr)}.btn-sec:hover{background:var(--bg)}
-.btn-dng{color:var(--danger)!important;border-color:var(--danger)!important}
-.btn-sm{padding:5px 10px;font-size:12px}
-.btn-full{width:100%;justify-content:center;padding:10px}
-.btn:disabled{opacity:.5;cursor:not-allowed}
-/* CARDS */
-.card{background:var(--card);border-radius:var(--r);border:1px solid var(--bdr);padding:18px;box-shadow:var(--sh)}
+
+/* ─── CARDS/STATS ─── */
+.card{background:var(--card);border-radius:var(--r);border:1px solid var(--bd);padding:18px;box-shadow:var(--sh)}
 .ct{font-size:13.5px;font-weight:700;margin-bottom:14px;display:flex;align-items:center;justify-content:space-between;gap:8px}
-/* STATS */
 .sg{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:18px}
-.sc{background:var(--card);border-radius:var(--r);border:1px solid var(--bdr);padding:16px 18px;box-shadow:var(--sh)}
-.sl{font-size:11px;color:var(--tx3);font-weight:500;margin-bottom:6px}
+.sc{background:var(--card);border-radius:var(--r);border:1px solid var(--bd);padding:16px 18px;box-shadow:var(--sh)}
+.sl{font-size:11px;color:var(--t3);font-weight:500;margin-bottom:6px}
 .sv{font-size:24px;font-weight:800;letter-spacing:-.5px;line-height:1}
-.sd{font-size:11px;margin-top:5px;font-weight:500;color:var(--tx3)}
-.sd.up{color:var(--accent)}.sd.dn{color:var(--danger)}
-/* GRIDS */
-.g2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
-.g3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px}
-.g32{display:grid;grid-template-columns:2fr 1fr;gap:16px}
-.mb14{margin-bottom:14px}.mb18{margin-bottom:18px}
-/* TABLE */
+.sd{font-size:11px;margin-top:5px;color:var(--t3)}.sd.up{color:var(--a)}.sd.dn{color:var(--danger)}
+.g2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.g3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px}
+.g32{display:grid;grid-template-columns:2fr 1fr;gap:14px}
+.mb{margin-bottom:14px}
+
+/* ─── TABLE ─── */
 .tw{overflow-x:auto}
 table{width:100%;border-collapse:collapse}
-thead th{font-size:11px;font-weight:600;color:var(--tx3);text-transform:uppercase;letter-spacing:.4px;padding:9px 12px;text-align:left;border-bottom:1px solid var(--bdr)}
-tbody td{padding:11px 12px;border-bottom:1px solid var(--bdr);font-size:13px}
+thead th{font-size:11px;font-weight:600;color:var(--t3);text-transform:uppercase;letter-spacing:.4px;padding:9px 12px;text-align:left;border-bottom:1px solid var(--bd)}
+tbody td{padding:11px 12px;border-bottom:1px solid var(--bd);font-size:13px}
 tbody tr:last-child td{border-bottom:none}
 tbody tr:hover{background:var(--bg);cursor:pointer}
-/* BADGES */
+
+/* ─── BADGES ─── */
 .badge{display:inline-flex;align-items:center;padding:2px 9px;border-radius:20px;font-size:11px;font-weight:600}
 .bg{background:rgba(0,200,150,.12);color:#008f6a}
 .bb{background:rgba(59,130,246,.1);color:#1d4ed8}
 .bo{background:rgba(245,158,11,.12);color:#d97706}
 .br{background:rgba(232,84,84,.1);color:#c53030}
-.bgr{background:var(--bg);color:var(--tx3);border:1px solid var(--bdr)}
-/* MISC */
-.pb{height:5px;background:var(--bg);border-radius:3px;overflow:hidden}
-.pf{height:100%;border-radius:3px;background:var(--accent)}
+.bgr{background:var(--bg);color:var(--t3);border:1px solid var(--bd)}
+
+/* ─── MISC ─── */
+.pb{height:5px;background:var(--bg);border-radius:3px;overflow:hidden}.pf{height:100%;border-radius:3px;background:var(--a)}
 .av{width:32px;height:32px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;flex-shrink:0}
-.div{height:1px;background:var(--bdr);margin:16px 0}
+.div{height:1px;background:var(--bd);margin:16px 0}
 .tgl{position:relative;display:inline-block;width:38px;height:21px}
 .tgl input{opacity:0;width:0;height:0}
 .ts{position:absolute;cursor:pointer;inset:0;background:#d1d5db;border-radius:21px;transition:.3s}
 .ts:before{position:absolute;content:"";height:15px;width:15px;left:3px;bottom:3px;background:#fff;border-radius:50%;transition:.3s}
-.tgl input:checked+.ts{background:var(--accent)}
+.tgl input:checked+.ts{background:var(--a)}
 .tgl input:checked+.ts:before{transform:translateX(17px)}
 .tabs{display:flex;gap:3px;background:var(--bg);padding:3px;border-radius:9px;margin-bottom:16px}
-.tab{flex:1;padding:6px 12px;border-radius:6px;font-size:12.5px;font-weight:600;cursor:pointer;text-align:center;color:var(--tx3);border:none;background:transparent;transition:all .15s}
-.tab.active{background:#fff;color:var(--tx);box-shadow:var(--sh)}
-/* MODAL */
+.tab{flex:1;padding:6px 12px;border-radius:6px;font-size:12.5px;font-weight:600;cursor:pointer;text-align:center;color:var(--t3);border:none;background:transparent;transition:.15s;font-family:inherit}
+.tab.active{background:#fff;color:var(--t1);box-shadow:var(--sh)}
+.srow{display:flex;align-items:center;justify-content:space-between;padding:11px 0;border-bottom:1px solid var(--bd)}
+.srow:last-child{border-bottom:none}
+.srow-l{font-size:13.5px;font-weight:500}
+.srow-h{font-size:11.5px;color:var(--t3);margin-top:2px}
+.empty{text-align:center;padding:36px 0;color:var(--t3);font-size:13px}
+.pb-btns{display:flex;gap:4px}
+.pb-btn{padding:4px 10px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;border:1px solid var(--bd);background:transparent;color:var(--t2);transition:.15s;font-family:inherit}
+.pb-btn.active{background:var(--a);color:#fff;border-color:var(--a)}
+
+/* ─── MODAL ─── */
 .ov{position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:1000;display:flex;align-items:center;justify-content:center;opacity:0;pointer-events:none;transition:opacity .2s}
 .ov.open{opacity:1;pointer-events:all}
 .modal{background:#fff;border-radius:14px;padding:24px;width:520px;max-width:95vw;max-height:90vh;overflow-y:auto;transform:scale(.95);transition:transform .2s}
@@ -111,33 +125,20 @@ tbody tr:hover{background:var(--bg);cursor:pointer}
 .mh{display:flex;align-items:center;justify-content:space-between;margin-bottom:18px}
 .mt{font-size:15px;font-weight:700}
 .mc{width:26px;height:26px;border-radius:6px;background:var(--bg);border:none;cursor:pointer;font-size:15px;display:flex;align-items:center;justify-content:center}
-/* NOTIF */
+
+/* ─── NOTIF ─── */
 .notif{position:fixed;top:16px;right:16px;background:#0d1117;color:#fff;padding:11px 16px;border-radius:9px;font-size:12.5px;font-weight:500;z-index:3000;transform:translateX(120%);transition:transform .3s;display:flex;align-items:center;gap:7px;max-width:360px;box-shadow:0 4px 20px rgba(0,0,0,.25)}
 .notif.show{transform:translateX(0)}
-.notif.ok::before{content:'';width:7px;height:7px;border-radius:50%;background:var(--accent);flex-shrink:0}
+.notif.ok::before{content:'';width:7px;height:7px;border-radius:50%;background:var(--a);flex-shrink:0}
 .notif.err::before{content:'';width:7px;height:7px;border-radius:50%;background:var(--danger);flex-shrink:0}
-/* LBAR */
-.lbar{height:3px;background:linear-gradient(90deg,var(--accent),#00e6b0);position:fixed;top:0;left:0;right:0;z-index:9999;animation:lba 1.2s ease-in-out infinite;transform-origin:left;display:none}
+.lbar{height:3px;background:linear-gradient(90deg,var(--a),#00e6b0);position:fixed;top:0;left:0;right:0;z-index:9999;animation:lba 1.2s ease-in-out infinite;transform-origin:left;display:none}
 @keyframes lba{0%{transform:scaleX(0)}60%{transform:scaleX(.7)}100%{transform:scaleX(1);opacity:0}}
-.spinner{display:inline-block;width:14px;height:14px;border:2px solid rgba(0,200,150,.3);border-top-color:var(--accent);border-radius:50%;animation:spin .7s linear infinite}
+.spinner{display:inline-block;width:14px;height:14px;border:2px solid rgba(0,200,150,.3);border-top-color:var(--a);border-radius:50%;animation:spin .7s linear infinite}
 @keyframes spin{to{transform:rotate(360deg)}}
-/* ACTIVITY */
-.ai{display:flex;align-items:flex-start;gap:10px;padding:9px 0;border-bottom:1px solid var(--bdr)}
+.ai{display:flex;align-items:flex-start;gap:10px;padding:9px 0;border-bottom:1px solid var(--bd)}
 .ai:last-child{border-bottom:none}
 .ai-ic{width:30px;height:30px;border-radius:7px;display:flex;align-items:center;justify-content:center;font-size:13px;flex-shrink:0}
-/* PERIOD */
-.pbns{display:flex;gap:4px}
-.pbn{padding:4px 10px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;border:1px solid var(--bdr);background:transparent;color:var(--tx2);transition:all .15s}
-.pbn.active{background:var(--accent);color:#fff;border-color:var(--accent)}
-/* SETTINGS ROW */
-.srow{display:flex;align-items:center;justify-content:space-between;padding:11px 0;border-bottom:1px solid var(--bdr)}
-.srow:last-child{border-bottom:none}
-.srow-label{font-size:13.5px;font-weight:500}
-.srow-hint{font-size:11.5px;color:var(--tx3);margin-top:2px}
-.level-row{border:1px solid var(--bdr);border-radius:8px;padding:12px;margin-bottom:8px}
-.empty{text-align:center;padding:30px 0;color:var(--tx3);font-size:13px}
-.sync-banner{display:flex;align-items:center;gap:8px;padding:10px 14px;background:var(--asoft);border:1px solid rgba(0,200,150,.25);border-radius:8px;margin-bottom:14px;font-size:12.5px}
-.err-msg{color:var(--danger);font-size:12px;margin-bottom:10px;display:none}
+.sync-banner{display:flex;align-items:center;gap:8px;padding:10px 14px;background:var(--as);border:1px solid rgba(0,200,150,.25);border-radius:8px;margin-bottom:14px;font-size:12.5px}
 ::-webkit-scrollbar{width:4px}::-webkit-scrollbar-thumb{background:#d1d5db;border-radius:10px}
 @media(max-width:1100px){.sg{grid-template-columns:repeat(2,1fr)}.g3{grid-template-columns:1fr 1fr}.g32{grid-template-columns:1fr}}
 @media(max-width:700px){.tb-nav{display:none}.g2{grid-template-columns:1fr}}
@@ -145,45 +146,45 @@ tbody tr:hover{background:var(--bg);cursor:pointer}
 </head>
 <body>
 
-<!-- ===================== LOGIN ===================== -->
-<div id="loginScreen">
-  <div class="lbox">
-    <div class="l-logo">
-      <div class="l-icon"><svg viewBox="0 0 24 24"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg></div>
-      <div><div class="l-name">LoyalPro</div><div class="l-sub">Программа лояльности для YClients</div></div>
+<!-- ═══════════════ LOGIN / REGISTER ═══════════════ -->
+<div id="loginScreen" class="lw">
+  <div class="lb">
+    <div class="ll">
+      <div class="li"><svg viewBox="0 0 24 24"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg></div>
+      <div><div class="ln">LoyalPro</div><div class="ls">Программа лояльности для YClients</div></div>
     </div>
 
-    <div class="ltabs">
-      <button class="ltab active" onclick="switchLoginTab('login',this)">Войти</button>
-      <button class="ltab" onclick="switchLoginTab('register',this)">Регистрация</button>
+    <div class="lt">
+      <button class="lt-t active" id="tabLoginBtn" onclick="switchAuthTab('login')">Войти</button>
+      <button class="lt-t" id="tabRegBtn" onclick="switchAuthTab('register')">Регистрация</button>
     </div>
 
-    <!-- ВХОД -->
+    <!-- LOGIN -->
     <div id="formLogin">
-      <div class="fg"><label class="fl">Email</label><input type="email" id="lEmail" placeholder="admin@salon.ru" onkeydown="if(event.key==='Enter')doLogin()"></div>
+      <div class="err" id="loginErr"></div>
+      <div class="fg"><label class="fl">Email</label><input type="email" id="lEmail" placeholder="admin@salon.ru" autocomplete="email"></div>
       <div class="fg"><label class="fl">Пароль</label><input type="password" id="lPass" placeholder="••••••••" onkeydown="if(event.key==='Enter')doLogin()"></div>
-      <div class="err-msg" id="loginErr"></div>
-      <button class="btn btn-pri btn-full" id="loginBtn" onclick="doLogin()">Войти</button>
+      <button class="btn btn-pri btn-full" id="loginBtn" onclick="doLogin()">Войти в личный кабинет</button>
     </div>
 
-    <!-- РЕГИСТРАЦИЯ -->
+    <!-- REGISTER -->
     <div id="formRegister" style="display:none">
+      <div class="err" id="regErr"></div>
       <div class="fg"><label class="fl">Название салона</label><input type="text" id="rSalon" placeholder="Салон Аура"></div>
-      <div class="fg"><label class="fl">Город <span class="fh">необязательно</span></label><input type="text" id="rCity" placeholder="Москва"></div>
-      <div class="fg"><label class="fl">Email</label><input type="email" id="rEmail" placeholder="admin@salon.ru"></div>
+      <div class="fg"><label class="fl">Город</label><input type="text" id="rCity" placeholder="Москва"></div>
+      <div class="fg"><label class="fl">Email администратора</label><input type="email" id="rEmail" placeholder="admin@salon.ru"></div>
       <div class="fg"><label class="fl">Пароль <span class="fh">минимум 6 символов</span></label><input type="password" id="rPass" placeholder="••••••••" onkeydown="if(event.key==='Enter')doRegister()"></div>
-      <div class="err-msg" id="regErr"></div>
       <button class="btn btn-pri btn-full" id="regBtn" onclick="doRegister()">Создать аккаунт</button>
     </div>
   </div>
 </div>
 
-<!-- ===================== APP ===================== -->
-<div id="appScreen">
+<!-- ═══════════════ APP ═══════════════ -->
+<div id="app">
   <div class="topbar">
     <div class="tb-logo">
-      <div class="tbl-icon"><svg viewBox="0 0 24 24"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg></div>
-      <div class="tbl-name">LoyalPro</div>
+      <div class="tb-li"><svg viewBox="0 0 24 24"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg></div>
+      <div class="tb-ln">LoyalPro</div>
     </div>
     <nav class="tb-nav">
       <div class="tn active" data-p="dashboard" onclick="nav(this)">Дашборд</div>
@@ -194,80 +195,76 @@ tbody tr:hover{background:var(--bg);cursor:pointer}
       <div class="tn" data-p="settings" onclick="nav(this)">Настройки</div>
     </nav>
     <div class="tb-right">
-      <div id="syncStatusEl" style="font-size:11.5px;color:var(--tx3)"></div>
+      <div id="syncSt" style="font-size:11.5px;color:var(--t3)"></div>
       <button class="btn btn-sec btn-sm" onclick="triggerSync()">
         <svg viewBox="0 0 24 24"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>Синхронизировать
       </button>
-      <div class="tu" onclick="nav(document.querySelector('[data-p=settings]'))">
-        <div class="tu-av" id="topAvatar">?</div>
-        <span style="font-size:12.5px;font-weight:600" id="topUserName">—</span>
-      </div>
-      <button class="btn btn-sm btn-sec" onclick="doLogout()">Выйти</button>
+      <div class="t-av" id="topAv">?</div>
+      <span id="topName" style="font-size:12.5px;font-weight:600;color:var(--t2)"></span>
+      <button class="btn btn-sm" style="color:var(--t3);border:1px solid var(--bd)" onclick="doLogout()">Выйти</button>
     </div>
   </div>
 
   <div class="content">
 
-    <!-- DASHBOARD -->
+    <!-- ── DASHBOARD ── -->
     <div class="page active" id="page-dashboard">
       <div id="syncBanner" class="sync-banner" style="display:none">
         <span class="spinner"></span><span id="syncBannerText">Синхронизация...</span>
       </div>
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
         <div style="font-size:16px;font-weight:700">Обзор</div>
-        <div class="pbns">
-          <button class="pbn active" onclick="setPeriod(7,this)">7 дней</button>
-          <button class="pbn" onclick="setPeriod(30,this)">30 дней</button>
-          <button class="pbn" onclick="setPeriod(90,this)">90 дней</button>
+        <div class="pb-btns">
+          <button class="pb-btn active" onclick="setPeriod(7,this)">7 дней</button>
+          <button class="pb-btn" onclick="setPeriod(30,this)">30 дней</button>
+          <button class="pb-btn" onclick="setPeriod(90,this)">90 дней</button>
         </div>
       </div>
       <div class="sg">
-        <div class="sc"><div class="sl">Клиентов в базе</div><div class="sv" id="ds-clients">—</div><div class="sd up" id="ds-clients-sub"></div></div>
-        <div class="sc"><div class="sl">Активных бонусов (₽)</div><div class="sv" id="ds-bonuses">—</div><div class="sd" id="ds-bonuses-sub"></div></div>
-        <div class="sc"><div class="sl">Выручка за период</div><div class="sv" id="ds-revenue">—</div><div class="sd" id="ds-revenue-sub"></div></div>
-        <div class="sc"><div class="sl">Спящих клиентов</div><div class="sv" id="ds-sleeping" style="color:var(--warn)">—</div><div class="sd dn">60+ дней не приходили</div></div>
+        <div class="sc"><div class="sl">Клиентов в базе</div><div class="sv" id="ds1">—</div><div class="sd up" id="ds1s"></div></div>
+        <div class="sc"><div class="sl">Активных бонусов</div><div class="sv" id="ds2">—</div><div class="sd" id="ds2s"></div></div>
+        <div class="sc"><div class="sl">Выручка за период</div><div class="sv" id="ds3">—</div><div class="sd" id="ds3s"></div></div>
+        <div class="sc"><div class="sl">Спящих клиентов</div><div class="sv" id="ds4" style="color:var(--warn)">—</div><div class="sd dn">не приходили 60+ дней</div></div>
       </div>
-      <div class="g32 mb18">
-        <div class="card"><div class="ct">Выручка по дням</div><div style="height:220px"><canvas id="revenueChart"></canvas></div></div>
-        <div class="card"><div class="ct">Уровни клиентов</div><div id="levelsDash" style="display:flex;flex-direction:column;gap:10px;padding-top:4px"></div></div>
+      <div class="g32 mb">
+        <div class="card"><div class="ct">Выручка по дням</div><div style="height:220px"><canvas id="revChart"></canvas></div></div>
+        <div class="card"><div class="ct">Уровни клиентов</div><div id="lvlDash" style="display:flex;flex-direction:column;gap:10px;padding-top:4px"></div></div>
       </div>
       <div class="g3">
-        <div class="card"><div class="ct">Последние начисления</div><div id="recentTxns"><div class="empty">Нет данных</div></div></div>
-        <div class="card"><div class="ct">Топ услуг</div><div id="topSvcs"><div class="empty">Нет данных</div></div></div>
-        <div class="card"><div class="ct">Бонусная экономика</div><div style="height:160px"><canvas id="bonusChart"></canvas></div></div>
+        <div class="card"><div class="ct">Последние начисления</div><div id="recentTx"><div class="empty">Нет данных</div></div></div>
+        <div class="card"><div class="ct">Топ услуг</div><div id="topSvc"><div class="empty">Нет данных</div></div></div>
+        <div class="card"><div class="ct">Бонусная экономика</div><div style="height:160px"><canvas id="bonChart"></canvas></div></div>
       </div>
     </div>
 
-    <!-- CLIENTS -->
+    <!-- ── CLIENTS ── -->
     <div class="page" id="page-clients">
       <div style="display:flex;gap:10px;margin-bottom:14px;flex-wrap:wrap">
-        <div style="position:relative;flex:1;min-width:220px;max-width:340px">
-          <svg style="position:absolute;left:9px;top:50%;transform:translateY(-50%);width:13px;height:13px;stroke:var(--tx3);fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-          <input type="text" placeholder="Имя, телефон..." style="padding-left:32px" id="clientSearch" oninput="dbSearch()">
+        <div style="position:relative;flex:1;min-width:200px;max-width:320px">
+          <svg style="position:absolute;left:9px;top:50%;transform:translateY(-50%);width:13px;height:13px;stroke:var(--t3);fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+          <input type="text" placeholder="Имя, телефон..." style="padding-left:32px" id="csearch" oninput="dbc(loadClients,400)()">
         </div>
-        <select style="width:140px" id="clientLevel" onchange="loadClients()">
+        <select style="width:140px" id="clvl" onchange="loadClients()">
           <option value="">Все уровни</option>
           <option value="bronze">🥉 Бронза</option>
           <option value="silver">🥈 Серебро</option>
           <option value="gold">🥇 Золото</option>
           <option value="platinum">💎 Платина</option>
         </select>
-        <select style="width:165px" id="clientStatus" onchange="loadClients()">
+        <select style="width:160px" id="cstat" onchange="loadClients()">
           <option value="">Все статусы</option>
           <option value="sleeping">😴 Спящие (60+ дней)</option>
           <option value="risk">⚠️ В зоне риска</option>
-          <option value="new">🆕 Новые (&lt; 30 дней)</option>
+          <option value="new">🆕 Новые</option>
         </select>
         <button class="btn btn-pri" onclick="openModal('bonusModal')">+ Начислить / Списать</button>
       </div>
-      <div class="card" style="padding:0">
-        <div class="tw"><table>
-          <thead><tr><th>Клиент</th><th>Телефон</th><th>Уровень</th><th>Бонусы</th><th>Потрачено</th><th>Визитов</th><th>Последний визит</th><th></th></tr></thead>
-          <tbody id="clientsBody"><tr><td colspan="8" class="empty">Загрузка...</td></tr></tbody>
-        </table></div>
-      </div>
-      <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 2px">
-        <div style="font-size:12px;color:var(--tx3)" id="clientsPager"></div>
+      <div class="card" style="padding:0"><div class="tw"><table>
+        <thead><tr><th>Клиент</th><th>Телефон</th><th>Уровень</th><th>Бонусы</th><th>Потрачено</th><th>Визитов</th><th>Последний визит</th><th></th></tr></thead>
+        <tbody id="cBody"><tr><td colspan="8" class="empty">Загрузка...</td></tr></tbody>
+      </table></div></div>
+      <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 2px">
+        <div style="font-size:12px;color:var(--t3)" id="cPager"></div>
         <div style="display:flex;gap:6px">
           <button class="btn btn-sec btn-sm" onclick="cPage(-1)">← Назад</button>
           <button class="btn btn-sec btn-sm" onclick="cPage(1)">Далее →</button>
@@ -275,13 +272,13 @@ tbody tr:hover{background:var(--bg);cursor:pointer}
       </div>
     </div>
 
-    <!-- RECORDS -->
+    <!-- ── RECORDS ── -->
     <div class="page" id="page-records">
       <div style="display:flex;gap:10px;margin-bottom:14px;flex-wrap:wrap;align-items:center">
-        <input type="date" id="recFrom" style="width:148px">
-        <span style="color:var(--tx3)">—</span>
-        <input type="date" id="recTo" style="width:148px">
-        <select style="width:145px" id="recStatus" onchange="loadRecords()">
+        <input type="date" id="rFrom" style="width:148px">
+        <span style="color:var(--t3)">—</span>
+        <input type="date" id="rTo" style="width:148px">
+        <select style="width:145px" id="rStat" onchange="loadRecords()">
           <option value="">Все статусы</option>
           <option value="completed">Завершённые</option>
           <option value="cancelled">Отменённые</option>
@@ -289,118 +286,138 @@ tbody tr:hover{background:var(--bg);cursor:pointer}
         </select>
         <button class="btn btn-sec" onclick="loadRecords()">Применить</button>
       </div>
-      <div class="card" style="padding:0">
-        <div class="tw"><table>
-          <thead><tr><th>Дата</th><th>Клиент</th><th>Услуги</th><th>Мастер</th><th>Сумма</th><th>Бонусы</th><th>Кэшбэк</th><th>Статус</th><th>Источник</th></tr></thead>
-          <tbody id="recordsBody"><tr><td colspan="9" class="empty">Выберите период</td></tr></tbody>
-        </table></div>
-      </div>
-      <div style="font-size:12px;color:var(--tx3);padding:8px 2px" id="recordsPager"></div>
+      <div class="card" style="padding:0"><div class="tw"><table>
+        <thead><tr><th>Дата</th><th>Клиент</th><th>Услуги</th><th>Мастер</th><th>Сумма</th><th>Бонусы</th><th>Кэшбэк %</th><th>Статус</th><th>Источник</th></tr></thead>
+        <tbody id="rBody"><tr><td colspan="9" class="empty">Выберите период</td></tr></tbody>
+      </table></div></div>
+      <div style="font-size:12px;color:var(--t3);padding:8px 2px" id="rPager"></div>
     </div>
 
-    <!-- LOYALTY -->
+    <!-- ── LOYALTY ── -->
     <div class="page" id="page-loyalty">
-      <div class="tabs" id="loyaltyTabs">
-        <button class="tab active" onclick="ltab('levels',this)">Уровни и кэшбэк</button>
+      <div class="tabs" id="ltabs">
+        <button class="tab active" onclick="ltab('levels',this)">Уровни</button>
         <button class="tab" onclick="ltab('services',this)">По услугам</button>
         <button class="tab" onclick="ltab('birthday',this)">День рождения</button>
         <button class="tab" onclick="ltab('referral',this)">Реферальная</button>
       </div>
       <div id="lt-levels">
         <div class="g2">
-          <div class="card"><div class="ct">Уровни<button class="btn btn-sm btn-pri" onclick="saveLoyalty()">Сохранить</button></div><div id="levelsEditor"></div></div>
-          <div class="card"><div class="ct">Правила программы</div>
-            <div class="srow"><div><div class="srow-label">Срок действия бонусов (дней)</div><div class="srow-hint">0 = бессрочно</div></div><input type="number" id="ls-expiry" value="0" style="width:80px"></div>
+          <div class="card"><div class="ct">Уровни и кэшбэк <button class="btn btn-pri btn-sm" onclick="saveLs()">Сохранить</button></div><div id="lvlEditor"></div></div>
+          <div class="card"><div class="ct">Правила</div>
+            <div class="srow"><div><div class="srow-l">Срок действия бонусов (дней)</div><div class="srow-h">0 = бессрочно</div></div><input type="number" id="ls-exp" value="0" style="width:80px"></div>
             <div class="div"></div>
-            <div style="font-size:12.5px;color:var(--tx2);line-height:1.7">При оплате визита YClients отправляет webhook → система начисляет бонусы. При отмене — автоматически аннулирует.</div>
+            <div style="font-size:12.5px;color:var(--t2);line-height:1.7">При оплате визита — webhook от YClients → начисление бонусов. При отмене — автоматическое аннулирование.</div>
           </div>
         </div>
       </div>
       <div id="lt-services" style="display:none">
-        <div class="card"><div class="ct">Кэшбэк по услугам из YClients<button class="btn btn-sm btn-pri" onclick="saveLoyalty()">Сохранить</button></div>
-          <div style="font-size:12.5px;color:var(--tx2);margin-bottom:14px">Переопределяет базовый кэшбэк для конкретных услуг.</div>
-          <div id="svcCashback"><div class="empty"><span class="spinner"></span> Загрузка...</div></div>
+        <div class="card"><div class="ct">Кэшбэк по услугам <button class="btn btn-pri btn-sm" onclick="saveLs()">Сохранить</button></div>
+          <div style="font-size:12.5px;color:var(--t2);margin-bottom:12px">Переопределяет базовый кэшбэк для конкретных услуг.</div>
+          <div id="svcCb"><div class="empty"><span class="spinner"></span> Загрузка из YClients...</div></div>
         </div>
       </div>
       <div id="lt-birthday" style="display:none">
         <div class="g2">
-          <div class="card"><div class="ct">Настройки поздравления</div>
-            <div class="srow"><div><div class="srow-label">Включить поздравления</div></div><label class="tgl"><input type="checkbox" id="ls-bd-on" checked><span class="ts"></span></label></div>
+          <div class="card"><div class="ct">Подарок на день рождения</div>
+            <div class="srow"><div><div class="srow-l">Включить</div></div><label class="tgl"><input type="checkbox" id="ls-bd-on" checked><span class="ts"></span></label></div>
             <div class="fg" style="margin-top:12px"><label class="fl">Бонусов в подарок</label><input type="number" id="ls-bd-bonus" value="500"></div>
-            <div class="fg"><label class="fl">За сколько дней до ДР</label><input type="number" id="ls-bd-days" value="3" min="0" max="30"></div>
-            <button class="btn btn-pri" onclick="saveLoyalty()">Сохранить</button>
+            <div class="fg"><label class="fl">За сколько дней до ДР</label><input type="number" id="ls-bd-days" value="3"></div>
+            <button class="btn btn-pri" onclick="saveLs()">Сохранить</button>
           </div>
-          <div class="card"><div class="ct">Именинники (7 дней)</div><div id="bdList"><div class="empty">Загрузка...</div></div></div>
+          <div class="card"><div class="ct">Именинники (±7 дней)</div><div id="bdList"><div class="empty">Загрузка...</div></div></div>
         </div>
       </div>
       <div id="lt-referral" style="display:none">
         <div class="card"><div class="ct">Реферальная программа</div>
           <div class="g2">
             <div>
-              <div class="srow"><div><div class="srow-label">Программа активна</div></div><label class="tgl"><input type="checkbox" id="ls-ref-on" checked><span class="ts"></span></label></div>
+              <div class="srow"><div><div class="srow-l">Программа активна</div></div><label class="tgl"><input type="checkbox" id="ls-ref-on" checked><span class="ts"></span></label></div>
               <div class="fg" style="margin-top:12px"><label class="fl">Бонус пригласившему</label><input type="number" id="ls-ref-s" value="200"></div>
               <div class="fg"><label class="fl">Бонус приглашённому</label><input type="number" id="ls-ref-r" value="150"></div>
-              <button class="btn btn-pri" onclick="saveLoyalty()">Сохранить</button>
+              <button class="btn btn-pri" onclick="saveLs()">Сохранить</button>
             </div>
-            <div class="sc"><div class="sl">Реф. регистраций</div><div class="sv">—</div></div>
+            <div class="sc"><div class="sl">Реферальных регистраций</div><div class="sv">—</div><div class="sd">за всё время</div></div>
           </div>
         </div>
       </div>
     </div>
 
-    <!-- ANALYTICS -->
+    <!-- ── ANALYTICS ── -->
     <div class="page" id="page-analytics">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:18px">
         <div style="font-size:16px;font-weight:700">Аналитика</div>
-        <div class="pbns">
-          <button class="pbn active" onclick="setAnPeriod(30,this)">30 дней</button>
-          <button class="pbn" onclick="setAnPeriod(60,this)">60 дней</button>
-          <button class="pbn" onclick="setAnPeriod(90,this)">90 дней</button>
+        <div class="pb-btns">
+          <button class="pb-btn active" onclick="setAP(30,this)">30 дней</button>
+          <button class="pb-btn" onclick="setAP(60,this)">60 дней</button>
+          <button class="pb-btn" onclick="setAP(90,this)">90 дней</button>
         </div>
       </div>
-      <div class="sg mb18">
-        <div class="sc"><div class="sl">Средний чек</div><div class="sv" id="an-avg">—</div></div>
-        <div class="sc"><div class="sl">Бонусов начислено</div><div class="sv" id="an-bon">—</div></div>
-        <div class="sc"><div class="sl">ROI программы</div><div class="sv" id="an-roi" style="color:var(--accent)">—</div></div>
-        <div class="sc"><div class="sl">Новых клиентов</div><div class="sv" id="an-new">—</div></div>
+      <div class="sg mb">
+        <div class="sc"><div class="sl">Средний чек</div><div class="sv" id="an1">—</div></div>
+        <div class="sc"><div class="sl">Начислено бонусов</div><div class="sv" id="an2">—</div></div>
+        <div class="sc"><div class="sl">ROI программы</div><div class="sv" id="an3" style="color:var(--a)">—</div></div>
+        <div class="sc"><div class="sl">Новых клиентов</div><div class="sv" id="an4">—</div></div>
       </div>
-      <div class="g2 mb18">
-        <div class="card"><div class="ct">Бонусы: начислено vs списано</div><div style="height:220px"><canvas id="bfChart"></canvas></div></div>
-        <div class="card"><div class="ct">Удержание клиентов</div><div style="height:220px"><canvas id="retChart"></canvas></div></div>
+      <div class="g2 mb">
+        <div class="card"><div class="ct">Бонусы: начислено vs потрачено</div><div style="height:210px"><canvas id="bfChart"></canvas></div></div>
+        <div class="card"><div class="ct">Удержание клиентов</div><div style="height:210px"><canvas id="retChart"></canvas></div></div>
       </div>
       <div class="g2">
-        <div class="card"><div class="ct">Активность по дням</div><div style="height:200px"><canvas id="grwChart"></canvas></div></div>
-        <div class="card"><div class="ct">Распределение по уровням</div><div style="height:200px"><canvas id="lvlChart"></canvas></div></div>
+        <div class="card"><div class="ct">Активность по дням</div><div style="height:190px"><canvas id="grwChart"></canvas></div></div>
+        <div class="card"><div class="ct">Распределение по уровням</div><div style="height:190px"><canvas id="lvlChart"></canvas></div></div>
       </div>
     </div>
 
-    <!-- SETTINGS -->
+    <!-- ── SETTINGS ── -->
     <div class="page" id="page-settings">
       <div class="g2">
         <div>
-          <div class="card mb14">
+          <div class="card mb">
             <div class="ct">Интеграция YClients</div>
-            <div class="fg"><label class="fl">ID компании <span class="fh">из URL кабинета</span></label><input type="text" id="st-yc-id" placeholder="123456"></div>
-            <div class="fg"><label class="fl">Partner Token</label><input type="password" id="st-yc-pt" placeholder="Partner Token из раздела API"></div>
-            <div class="fg"><label class="fl">Логин YClients</label><input type="text" id="st-yc-login" placeholder="email или телефон"></div>
-            <div class="fg"><label class="fl">Пароль YClients</label><input type="password" id="st-yc-pass"></div>
+            <div class="fg"><label class="fl">ID компании <span class="fh">из URL кабинета YClients</span></label><input type="text" id="st-yid" placeholder="123456"></div>
+            <div class="fg"><label class="fl">Partner Token</label><input type="password" id="st-pt" placeholder="Partner Token из раздела API"></div>
+            <div class="fg"><label class="fl">Логин YClients</label><input type="text" id="st-login" placeholder="email или телефон"></div>
+            <div class="fg"><label class="fl">Пароль YClients</label><input type="password" id="st-pass"></div>
             <div style="display:flex;gap:8px">
-              <button class="btn btn-pri" onclick="connectYC()">Подключить</button>
+              <button class="btn btn-pri" onclick="connectYC()">Подключить YClients</button>
               <button class="btn btn-sec" onclick="saveSalon()">Сохранить</button>
             </div>
-            <div id="ycStatus" style="margin-top:10px;font-size:12px"></div>
+            <div id="ycSt" style="margin-top:10px;font-size:12px"></div>
           </div>
-          <div class="card">
-            <div class="ct">Webhook URL для YClients</div>
-            <div style="font-size:12.5px;color:var(--tx2);margin-bottom:10px">Вставьте в YClients → Настройки → Интеграции → Webhook</div>
-            <div style="display:flex;gap:6px">
-              <input type="text" id="webhookUrl" readonly>
-              <button class="btn btn-sec" onclick="copyWebhook()">Копировать</button>
+
+          <!-- КАРТА ЛОЯЛЬНОСТИ -->
+          <div class="card mb">
+            <div class="ct">
+              Карта лояльности YClients
+              <button class="btn btn-sec btn-sm" onclick="loadCardTypes()">Загрузить типы карт</button>
             </div>
+            <div style="font-size:12.5px;color:var(--t2);margin-bottom:12px;line-height:1.6">
+              Выберите тип карты лояльности из YClients. Все начисления кэшбэка будут идти на карты этого типа.
+              Webhook <strong>finances_operation</strong> отслеживает оплаты и автоматически начисляет кэшбэк.
+            </div>
+            <div class="fg">
+              <label class="fl">Тип карты лояльности</label>
+              <select id="st-card-type" onchange="onCardTypeChange(this)">
+                <option value="">— Не выбрана (сначала загрузите типы) —</option>
+              </select>
+            </div>
+            <div id="cardTypeInfo" style="font-size:12px;color:var(--t3);margin-bottom:10px;display:none"></div>
+            <button class="btn btn-pri" onclick="saveSalon()">Сохранить выбор карты</button>
+          </div>
+
+          <div class="card">
+            <div class="ct">Webhook URL</div>
+            <div style="font-size:12.5px;color:var(--t2);margin-bottom:10px">Вставьте в YClients → Настройки → Интеграции → Webhook</div>
+            <div style="display:flex;gap:6px">
+              <input type="text" id="whUrl" readonly>
+              <button class="btn btn-sec" onclick="copyWh()">Копировать</button>
+            </div>
+            <div style="margin-top:8px;font-size:12px;color:var(--t3)">События: <strong>record</strong>, <strong>client</strong>, <strong>finances_operation</strong></div>
           </div>
         </div>
         <div>
-          <div class="card mb14">
+          <div class="card mb">
             <div class="ct">Настройки салона</div>
             <div class="fg"><label class="fl">Название</label><input type="text" id="st-name"></div>
             <div class="fg"><label class="fl">Город</label><input type="text" id="st-city"></div>
@@ -423,8 +440,8 @@ tbody tr:hover{background:var(--bg);cursor:pointer}
       </div>
     </div>
 
-  </div>
-</div>
+  </div><!-- /content -->
+</div><!-- /app -->
 
 <!-- MODALS -->
 <div class="ov" id="clientModal" onclick="if(event.target===this)closeModal('clientModal')">
@@ -436,10 +453,10 @@ tbody tr:hover{background:var(--bg);cursor:pointer}
 <div class="ov" id="bonusModal" onclick="if(event.target===this)closeModal('bonusModal')">
   <div class="modal">
     <div class="mh"><div class="mt">Начислить / Списать бонусы</div><button class="mc" onclick="closeModal('bonusModal')">✕</button></div>
-    <div class="fg"><label class="fl">Клиент (имя или телефон)</label><input type="text" id="bm-s" oninput="searchBC(this.value)" placeholder="Начните вводить..."></div>
-    <div id="bm-res" style="margin-bottom:12px"></div>
-    <div class="fg"><label class="fl">Количество бонусов</label><input type="number" id="bm-amt" placeholder="500" min="1"></div>
-    <div class="fg"><label class="fl">Комментарий</label><input type="text" id="bm-cmt" value="Ручная корректировка"></div>
+    <div class="fg"><label class="fl">Клиент (имя или телефон)</label><input type="text" id="bms" oninput="searchBonusC(this.value)" placeholder="Начните вводить..."></div>
+    <div id="bmr" style="margin-bottom:12px"></div>
+    <div class="fg"><label class="fl">Количество бонусов</label><input type="number" id="bma" placeholder="500" min="1"></div>
+    <div class="fg"><label class="fl">Комментарий</label><input type="text" id="bmc" value="Ручная корректировка"></div>
     <div style="display:flex;gap:8px">
       <button class="btn btn-pri" onclick="submitBonus(1)">+ Начислить</button>
       <button class="btn btn-sec btn-dng" onclick="submitBonus(-1)">− Списать</button>
@@ -452,600 +469,657 @@ tbody tr:hover{background:var(--bg);cursor:pointer}
 <div id="lbar" class="lbar"></div>
 
 <script>
-const API='';
-let TOKEN=localStorage.getItem('lp_token');
-let ME=null;
-let dashPeriod=7, anPeriod=30, cPage_=1;
-let bonusTarget=null, loyaltyData={}, ycSvcs=[];
-let revC,bonC,bfC,retC,grwC,lvlC;
+// ── CONFIG ──
+const API = '';
+let TOKEN = localStorage.getItem('lp_tk');
+let ME = null;
+let dashP = 7, anaP = 30, cPage_ = 1;
+let bonusTarget = null, lsData = {}, ycSvcs = [];
+let rCh, bCh, bfCh, retCh, grwCh, lvlCh;
+const LVL_L = {bronze:'🥉 Бронза',silver:'🥈 Серебро',gold:'🥇 Золото',platinum:'💎 Платина'};
+const LVL_B = {bronze:'bgr',silver:'bb',gold:'bo',platinum:'bg'};
 
-// ——— HTTP ———
-async function api(method,path,body){
+// ── HTTP ──
+async function api(method, path, body) {
   showLbar(true);
-  try{
-    const opts={method,headers:{'Content-Type':'application/json'}};
-    if(TOKEN) opts.headers['Authorization']='Bearer '+TOKEN;
-    if(body) opts.body=JSON.stringify(body);
-    const r=await fetch(API+path,opts);
-    const j=await r.json();
-    if(!r.ok) throw new Error(j.error||'HTTP '+r.status);
+  try {
+    const o = { method, headers: {'Content-Type':'application/json'} };
+    if (TOKEN) o.headers['Authorization'] = 'Bearer ' + TOKEN;
+    if (body) o.body = JSON.stringify(body);
+    const r = await fetch(API + path, o);
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || 'HTTP ' + r.status);
     return j;
-  }finally{showLbar(false);}
+  } finally { showLbar(false); }
 }
 
-// ——— AUTH ———
-function switchLoginTab(tab,el){
-  document.getElementById('formLogin').style.display=tab==='login'?'block':'none';
-  document.getElementById('formRegister').style.display=tab==='register'?'block':'none';
-  document.querySelectorAll('.ltab').forEach(t=>t.classList.remove('active'));
-  el.classList.add('active');
+// ── AUTH TAB SWITCH ──
+function switchAuthTab(tab) {
+  document.getElementById('formLogin').style.display    = tab === 'login'    ? 'block' : 'none';
+  document.getElementById('formRegister').style.display = tab === 'register' ? 'block' : 'none';
+  document.getElementById('tabLoginBtn').classList.toggle('active', tab === 'login');
+  document.getElementById('tabRegBtn').classList.toggle('active',   tab === 'register');
 }
-async function doLogin(){
-  const email=document.getElementById('lEmail').value.trim();
-  const pass=document.getElementById('lPass').value;
-  const err=document.getElementById('loginErr');
-  const btn=document.getElementById('loginBtn');
-  err.style.display='none';
-  btn.disabled=true;btn.innerHTML='<span class="spinner"></span> Входим...';
-  try{
-    const d=await api('POST','/api/auth/login',{email,password:pass});
-    TOKEN=d.token;ME=d.user;
-    localStorage.setItem('lp_token',TOKEN);
+
+// ── LOGIN ──
+async function doLogin() {
+  const email = document.getElementById('lEmail').value.trim();
+  const password = document.getElementById('lPass').value;
+  const errEl = document.getElementById('loginErr');
+  const btn = document.getElementById('loginBtn');
+  errEl.style.display = 'none';
+  btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Входим...';
+  try {
+    const d = await api('POST', '/api/auth/login', { email, password });
+    TOKEN = d.token; ME = d.user;
+    localStorage.setItem('lp_tk', TOKEN);
     launchApp();
-  }catch(e){
-    err.textContent=e.message;err.style.display='block';
-  }finally{btn.disabled=false;btn.textContent='Войти';}
+  } catch(e) {
+    errEl.textContent = e.message; errEl.style.display = 'block';
+  } finally { btn.disabled = false; btn.textContent = 'Войти в личный кабинет'; }
 }
-async function doRegister(){
-  const salonName=document.getElementById('rSalon').value.trim();
-  const city=document.getElementById('rCity').value.trim();
-  const email=document.getElementById('rEmail').value.trim();
-  const pass=document.getElementById('rPass').value;
-  const err=document.getElementById('regErr');
-  const btn=document.getElementById('regBtn');
-  err.style.display='none';
-  if(!salonName||!email||!pass){err.textContent='Заполните все обязательные поля';err.style.display='block';return;}
-  if(pass.length<6){err.textContent='Пароль минимум 6 символов';err.style.display='block';return;}
-  btn.disabled=true;btn.innerHTML='<span class="spinner"></span>';
-  try{
-    const d=await api('POST','/api/auth/register',{salonName,city,email,password:pass});
-    TOKEN=d.token;ME=d.user;
-    localStorage.setItem('lp_token',TOKEN);
+
+// ── REGISTER ──
+async function doRegister() {
+  const salonName = document.getElementById('rSalon').value.trim();
+  const city      = document.getElementById('rCity').value.trim();
+  const email     = document.getElementById('rEmail').value.trim();
+  const password  = document.getElementById('rPass').value;
+  const errEl = document.getElementById('regErr');
+  const btn = document.getElementById('regBtn');
+  errEl.style.display = 'none';
+  if (!salonName || !email || !password) { errEl.textContent = 'Заполните все обязательные поля'; errEl.style.display = 'block'; return; }
+  if (password.length < 6) { errEl.textContent = 'Пароль минимум 6 символов'; errEl.style.display = 'block'; return; }
+  btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>';
+  try {
+    const d = await api('POST', '/api/auth/register', { salonName, city, email, password });
+    TOKEN = d.token; ME = d.user;
+    localStorage.setItem('lp_tk', TOKEN);
     launchApp();
-  }catch(e){
-    err.textContent=e.message;err.style.display='block';
-  }finally{btn.disabled=false;btn.textContent='Создать аккаунт';}
+  } catch(e) {
+    errEl.textContent = e.message; errEl.style.display = 'block';
+  } finally { btn.disabled = false; btn.textContent = 'Создать аккаунт'; }
 }
-async function doLogout(){
-  try{await api('POST','/api/auth/logout');}catch{}
-  localStorage.removeItem('lp_token');
+
+async function loadCardTypes() {
+  const sel = document.getElementById('st-card-type');
+  if (!sel) return;
+  sel.innerHTML = '<option value="">Загрузка...</option>';
+  try {
+    const types = await api('GET', '/api/yclients/card-types');
+    if (!types?.length) {
+      sel.innerHTML = '<option value="">Типы карт не найдены</option>';
+      return;
+    }
+    sel.innerHTML = '<option value="">— Выберите карту —</option>';
+    types.forEach(t => {
+      const opt = document.createElement('option');
+      opt.value = t.id;
+      opt.textContent = `${t.title} (ID: ${t.id})`;
+      sel.appendChild(opt);
+    });
+    notify(`Загружено ${types.length} типов карт`, 'ok');
+  } catch(e) { notify('Ошибка загрузки карт: '+e.message, 'err'); }
+}
+
+function onCardTypeChange(sel) {
+  const info = document.getElementById('cardTypeInfo');
+  if (!info) return;
+  if (sel.value) {
+    const name = sel.options[sel.selectedIndex]?.textContent || '';
+    info.style.display = 'block';
+    info.textContent = `Выбрана: ${name}. Нажмите «Сохранить».`;
+    info.style.color = 'var(--a)';
+  } else {
+    info.style.display = 'none';
+  }
+}
+
+// Синхронизировать карту конкретного клиента
+async function syncClientCard(clientId) {
+  try {
+    const r = await api('POST', `/api/clients/${clientId}/sync-card`);
+    if (r.ok) notify(`Карта синхронизирована. Баланс: ${r.balance} бонусов, транзакций: ${r.transactionsImported}`, 'ok');
+    else notify(r.message || 'Карта не найдена', 'err');
+  } catch(e) { notify(e.message, 'err'); }
+}
+
+async function doLogout() {
+  try { await api('POST', '/api/auth/logout'); } catch {}
+  localStorage.removeItem('lp_tk');
   location.reload();
 }
 
-// ——— LAUNCH ———
-async function launchApp(){
-  if(!ME){
-    try{ME=await api('GET','/api/auth/me');}catch{showLogin();return;}
+// ── LAUNCH ──
+async function launchApp() {
+  if (!ME) {
+    try { ME = await api('GET', '/api/auth/me'); } catch { showLogin(); return; }
   }
-  document.getElementById('loginScreen').style.display='none';
-  document.getElementById('appScreen').classList.add('show');
-  document.getElementById('topUserName').textContent=ME.name||ME.email;
-  document.getElementById('topAvatar').textContent=(ME.name||ME.email||'?').slice(0,2).toUpperCase();
-  loadDashboard();loadLoyalty();
-}
-function showLogin(){
-  localStorage.removeItem('lp_token');
-  document.getElementById('loginScreen').style.display='flex';
-  document.getElementById('appScreen').classList.remove('show');
+  document.getElementById('loginScreen').style.display = 'none';
+  document.getElementById('app').style.display = 'flex';
+  document.getElementById('topAv').textContent  = (ME.name||ME.email||'?').slice(0,2).toUpperCase();
+  document.getElementById('topName').textContent = ME.name || ME.email;
+  loadDashboard();
+  loadLs();
 }
 
-// ——— NAV ———
-function nav(el){
+function showLogin() {
+  localStorage.removeItem('lp_tk');
+  document.getElementById('loginScreen').style.display = 'flex';
+  document.getElementById('app').style.display = 'none';
+}
+
+// ── NAV ──
+function nav(el) {
   document.querySelectorAll('.tn').forEach(n=>n.classList.remove('active'));
   el.classList.add('active');
-  const p=el.dataset.p;
+  const p = el.dataset.p;
   document.querySelectorAll('.page').forEach(x=>x.classList.remove('active'));
   document.getElementById('page-'+p)?.classList.add('active');
-  if(p==='clients'){cPage_=1;loadClients();}
-  if(p==='records'){setDefDates();loadRecords();}
-  if(p==='loyalty'){loadLoyalty();loadBdList();}
-  if(p==='analytics') loadAnalytics();
-  if(p==='settings') loadSettings();
+  if (p==='clients')   loadClients();
+  if (p==='records')   { setDefDates(); loadRecords(); }
+  if (p==='loyalty')   { loadLs(); loadBdList(); }
+  if (p==='analytics') loadAnalytics();
+  if (p==='settings')  loadSettings();
 }
 
-// ——— DASHBOARD ———
-function setPeriod(d,el){
-  dashPeriod=d;
-  document.querySelectorAll('#page-dashboard .pbns .pbn').forEach(b=>b.classList.remove('active'));
+// ── DASHBOARD ──
+function setPeriod(d,el) {
+  dashP = d;
+  document.querySelectorAll('#page-dashboard .pb-btns .pb-btn').forEach(b=>b.classList.remove('active'));
   el.classList.add('active');
   loadDashboard();
 }
-async function loadDashboard(){
-  try{
-    const data=await api('GET','/api/analytics/dashboard?period='+dashPeriod);
-    const s=data.stats;
-    document.getElementById('ds-clients').textContent=s.totalClients.toLocaleString('ru');
-    document.getElementById('ds-clients-sub').textContent='+'+s.newClients+' новых за период';
-    document.getElementById('ds-bonuses').textContent=s.totalBonusBalance.toLocaleString('ru');
-    document.getElementById('ds-bonuses-sub').textContent='начислено '+s.periodBonuses.toLocaleString('ru')+' ₽';
-    document.getElementById('ds-revenue').textContent=s.periodRevenue.toLocaleString('ru')+' ₽';
-    document.getElementById('ds-revenue-sub').textContent='за '+dashPeriod+' дней · '+s.periodRecords+' записей';
-    document.getElementById('ds-sleeping').textContent=s.sleepingClients.toLocaleString('ru');
-    buildRevChart(data.dailyRevenue);
-    buildLevelsDash(data.levelDist,s.totalClients);
-    buildRecentTxns(data.recentTxns);
-    buildTopSvcs(data.topServices);
-    buildBonChart(data.recentTxns);
-    if(data.syncStatus&&data.syncStatus.finished_at){
-      document.getElementById('syncStatusEl').textContent='Синхр.: '+timeSince(data.syncStatus.finished_at);
-    }
-  }catch(e){notify('Ошибка дашборда: '+e.message,'err');}
+async function loadDashboard() {
+  try {
+    const d = await api('GET', '/api/analytics/dashboard?period='+dashP);
+    const s = d.stats;
+    document.getElementById('ds1').textContent = s.totalClients.toLocaleString('ru');
+    document.getElementById('ds1s').textContent = '+' + s.newClients + ' новых за период';
+    document.getElementById('ds2').textContent = s.totalBonusBalance.toLocaleString('ru');
+    document.getElementById('ds2s').textContent = 'начислено ' + s.periodBonuses.toLocaleString('ru') + ' ₽';
+    document.getElementById('ds3').textContent = s.periodRevenue.toLocaleString('ru') + ' ₽';
+    document.getElementById('ds3s').textContent = 'за ' + dashP + ' дней · ' + s.periodRecords + ' записей';
+    document.getElementById('ds4').textContent = s.sleepingClients.toLocaleString('ru');
+    buildRevChart(d.dailyRevenue);
+    buildLvlDash(d.levelDist, s.totalClients);
+    buildRecentTx(d.recentTxns);
+    buildTopSvc(d.topServices);
+    buildBonChart(d.recentTxns);
+    if (d.syncStatus?.finished_at) document.getElementById('syncSt').textContent = 'Синхр.: ' + timeSince(d.syncStatus.finished_at);
+  } catch(e) { notify('Ошибка дашборда: '+e.message,'err'); }
 }
-function buildRevChart(data){
-  const ctx=document.getElementById('revenueChart').getContext('2d');
-  if(revC)revC.destroy();
-  revC=new Chart(ctx,{type:'line',data:{
-    labels:data.map(d=>{const dt=new Date(d.visit_date);return dt.getDate()+'.'+(dt.getMonth()+1)}),
+
+function buildRevChart(data) {
+  const ctx = document.getElementById('revChart').getContext('2d');
+  if (rCh) rCh.destroy();
+  rCh = new Chart(ctx, { type:'line', data:{
+    labels: data.map(d=>{const dt=new Date(d.visit_date);return dt.getDate()+'.'+(dt.getMonth()+1)}),
     datasets:[
-      {label:'Выручка ₽',data:data.map(d=>parseFloat(d.revenue)||0),borderColor:'#00c896',backgroundColor:'rgba(0,200,150,0.07)',fill:true,tension:.4,borderWidth:2,pointRadius:2,yAxisID:'y'},
-      {label:'Бонусы',data:data.map(d=>parseFloat(d.bonuses)||0),borderColor:'#3b82f6',borderDash:[4,3],fill:false,tension:.4,borderWidth:1.5,pointRadius:0,yAxisID:'y1'},
+      {label:'Выручка ₽',data:data.map(d=>parseFloat(d.revenue||0)),borderColor:'#00c896',backgroundColor:'rgba(0,200,150,0.07)',fill:true,tension:.4,borderWidth:2,pointRadius:2,yAxisID:'y'},
+      {label:'Бонусы',data:data.map(d=>parseFloat(d.bonuses||0)),borderColor:'#3b82f6',borderDash:[4,3],fill:false,tension:.4,borderWidth:1.5,pointRadius:0,yAxisID:'y1'},
     ]},
-    options:{responsive:true,maintainAspectRatio:false,interaction:{mode:'index'},
-      plugins:{legend:{labels:{font:{size:11},boxWidth:10}}},
+    options:{responsive:true,maintainAspectRatio:false,interaction:{mode:'index'},plugins:{legend:{labels:{font:{size:11},boxWidth:10}}},
       scales:{x:{grid:{display:false},ticks:{maxTicksLimit:10,font:{size:10}}},y:{grid:{color:'rgba(0,0,0,0.04)'},ticks:{callback:v=>v.toLocaleString('ru')+'₽',font:{size:10}}},y1:{position:'right',grid:{display:false},ticks:{font:{size:10}}}}}
   });
 }
-function buildLevelsDash(dist,total){
-  const LVL=[{k:'platinum',l:'💎 Платина'},{k:'gold',l:'🥇 Золото'},{k:'silver',l:'🥈 Серебро'},{k:'bronze',l:'🥉 Бронза'}];
-  const map={};dist.forEach(d=>map[d.loyalty_level]=parseInt(d.cnt)||0);
-  document.getElementById('levelsDash').innerHTML=LVL.map(l=>`
+
+function buildLvlDash(dist, total) {
+  const LVL = [{key:'platinum',l:'💎 Платина'},{key:'gold',l:'🥇 Золото'},{key:'silver',l:'🥈 Серебро'},{key:'bronze',l:'🥉 Бронза'}];
+  const map = {}; dist.forEach(d=>map[d.loyalty_level]=parseInt(d.cnt)||0);
+  document.getElementById('lvlDash').innerHTML = LVL.map(l=>`
     <div>
       <div style="display:flex;justify-content:space-between;font-size:12.5px;margin-bottom:3px">
-        <span>${l.l}</span><strong>${map[l.k]||0} <span style="color:var(--tx3)">(${total?Math.round((map[l.k]||0)/total*100):0}%)</span></strong>
+        <span>${l.l}</span><strong>${map[l.key]||0} <span style="color:var(--t3)">(${total?Math.round((map[l.key]||0)/total*100):0}%)</span></strong>
       </div>
-      <div class="pb"><div class="pf" style="width:${total?Math.round((map[l.k]||0)/total*100):0}%"></div></div>
-    </div>
-  `).join('');
+      <div class="pb"><div class="pf" style="width:${total?Math.round((map[l.key]||0)/total*100):0}%"></div></div>
+    </div>`).join('');
 }
-function buildRecentTxns(txns){
-  const el=document.getElementById('recentTxns');
-  if(!txns?.length){el.innerHTML='<div class="empty">Нет транзакций</div>';return;}
-  const ic={accrual:'💳',birthday:'🎂',referral:'👥',manual:'✏️',redemption:'💸',cancellation:'❌'};
-  el.innerHTML=txns.slice(0,8).map(t=>`
+
+function buildRecentTx(txns) {
+  const el = document.getElementById('recentTx');
+  if (!txns?.length) { el.innerHTML='<div class="empty">Нет транзакций</div>'; return; }
+  const ic = {accrual:'💳',birthday:'🎂',referral:'👥',manual:'✏️',redemption:'💸',cancellation:'❌'};
+  el.innerHTML = txns.slice(0,8).map(t=>`
     <div class="ai">
       <div class="ai-ic" style="background:${t.amount>0?'#e6f9f3':'#fce8e8'}">${ic[t.type]||'💰'}</div>
       <div>
-        <div style="font-size:12.5px"><strong>${t.client_name||'Клиент'}</strong> — <strong style="color:${t.amount>0?'var(--accent)':'var(--danger)'}">${t.amount>0?'+':''}${t.amount}</strong> бонусов</div>
-        <div style="font-size:11px;color:var(--tx3)">${t.description||''} · ${new Date(t.created_at).toLocaleDateString('ru',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'})}</div>
+        <div style="font-size:12.5px"><strong>${t.client_name||'Клиент'}</strong> — <strong style="color:${t.amount>0?'var(--a)':'var(--danger)'}">${t.amount>0?'+':''}${t.amount}</strong> бонусов</div>
+        <div style="font-size:11px;color:var(--t3)">${t.description||''} · ${new Date(t.created_at).toLocaleDateString('ru',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'})}</div>
       </div>
-    </div>
-  `).join('');
-}
-function buildTopSvcs(svcs){
-  const el=document.getElementById('topSvcs');
-  if(!svcs?.length){el.innerHTML='<div class="empty">Нет данных</div>';return;}
-  const mx=Math.max(...svcs.map(s=>parseInt(s.cnt)||0),1);
-  el.innerHTML=svcs.map(s=>`
-    <div style="margin-bottom:9px">
-      <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:3px">
-        <span>${s.service_name||'—'}</span><strong>${s.cnt} <span style="color:var(--tx3)">· ${parseFloat(s.total_amount||0).toLocaleString('ru')} ₽</span></strong>
-      </div>
-      <div class="pb"><div class="pf" style="width:${Math.round((s.cnt||0)/mx*100)}%"></div></div>
-    </div>
-  `).join('');
-}
-function buildBonChart(txns){
-  if(!txns?.length)return;
-  const map={};
-  txns.forEach(t=>{map[t.type]=(map[t.type]||0)+Math.abs(t.amount);});
-  const lbls={accrual:'Начислено',birthday:'ДР',referral:'Реферал',manual:'Вручную',redemption:'Списано',cancellation:'Отменено'};
-  const ctx=document.getElementById('bonusChart').getContext('2d');
-  if(bonC)bonC.destroy();
-  bonC=new Chart(ctx,{type:'doughnut',data:{
-    labels:Object.keys(map).map(k=>lbls[k]||k),
-    datasets:[{data:Object.values(map),backgroundColor:['#00c896','#f59e0b','#8b5cf6','#3b82f6','#e85454','#aaa'],borderWidth:0}]
-  },options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{position:'right',labels:{font:{size:10},boxWidth:8}}}}});
+    </div>`).join('');
 }
 
-// ——— CLIENTS ———
-const LVL_LBL={bronze:'🥉 Бронза',silver:'🥈 Серебро',gold:'🥇 Золото',platinum:'💎 Платина'};
-const LVL_B={bronze:'bgr',silver:'bb',gold:'bo',platinum:'bg'};
-let dbTimer;
-function dbSearch(){clearTimeout(dbTimer);dbTimer=setTimeout(()=>{cPage_=1;loadClients();},400);}
-function cPage(d){cPage_=Math.max(1,cPage_+d);loadClients();}
-async function loadClients(){
-  const search=document.getElementById('clientSearch')?.value||'';
-  const level=document.getElementById('clientLevel')?.value||'';
-  const status=document.getElementById('clientStatus')?.value||'';
-  try{
-    const q=new URLSearchParams({search,level,status,page:cPage_,limit:50});
-    const data=await api('GET','/api/clients?'+q);
-    const tbody=document.getElementById('clientsBody');
-    if(!data.clients?.length){tbody.innerHTML='<tr><td colspan="8" class="empty">Клиенты не найдены</td></tr>';return;}
-    tbody.innerHTML=data.clients.map(c=>`
+function buildTopSvc(svcs) {
+  const el = document.getElementById('topSvc');
+  if (!svcs?.length) { el.innerHTML='<div class="empty">Нет данных</div>'; return; }
+  const mx = Math.max(...svcs.map(s=>parseInt(s.cnt)||0),1);
+  el.innerHTML = svcs.map(s=>`
+    <div style="margin-bottom:9px">
+      <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:3px">
+        <span>${s.service_name||'—'}</span><strong>${s.cnt}</strong>
+      </div>
+      <div class="pb"><div class="pf" style="width:${Math.round((s.cnt||0)/mx*100)}%"></div></div>
+    </div>`).join('');
+}
+
+function buildBonChart(txns) {
+  if (!txns?.length) return;
+  const bt = {}; txns.forEach(t=>{bt[t.type]=(bt[t.type]||0)+Math.abs(t.amount);});
+  const ctx = document.getElementById('bonChart').getContext('2d');
+  if (bCh) bCh.destroy();
+  const labels = Object.keys(bt).map(k=>({accrual:'Начислено',birthday:'ДР',referral:'Реферал',manual:'Вручную',redemption:'Списано',cancellation:'Отменено'})[k]||k);
+  bCh = new Chart(ctx,{type:'doughnut',data:{labels,datasets:[{data:Object.values(bt),backgroundColor:['#00c896','#f59e0b','#8b5cf6','#3b82f6','#e85454','#aaa'],borderWidth:0}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{position:'right',labels:{font:{size:10},boxWidth:8}}}}});
+}
+
+// ── CLIENTS ──
+function cPage(d) { cPage_ = Math.max(1, cPage_+d); loadClients(); }
+async function loadClients() {
+  try {
+    const q = new URLSearchParams({search:document.getElementById('csearch')?.value||'',level:document.getElementById('clvl')?.value||'',status:document.getElementById('cstat')?.value||'',page:cPage_,limit:50});
+    const d = await api('GET', '/api/clients?'+q);
+    const tb = document.getElementById('cBody');
+    if (!d.clients?.length) { tb.innerHTML='<tr><td colspan="8" class="empty">Клиенты не найдены</td></tr>'; return; }
+    tb.innerHTML = d.clients.map(c=>`
       <tr onclick="openCD(${c.id})">
-        <td><div style="display:flex;align-items:center;gap:9px"><div class="av" style="background:${avc(c.name)};color:#fff;font-size:10px">${avi(c.name)}</div><strong>${c.name}</strong></div></td>
-        <td style="color:var(--tx2)">${c.phone||'—'}</td>
-        <td><span class="badge ${LVL_B[c.loyalty_level]||'bgr'}">${LVL_LBL[c.loyalty_level]||'—'}</span></td>
-        <td style="font-weight:700;color:var(--accent)">${(c.bonus_balance||0).toLocaleString('ru')}</td>
+        <td><div style="display:flex;align-items:center;gap:9px"><div class="av" style="background:${avc(c.name)};color:#fff;font-size:10px">${avi(c.name)}</div><div style="font-weight:600">${c.name}</div></div></td>
+        <td style="color:var(--t2)">${c.phone||'—'}</td>
+        <td><span class="badge ${LVL_B[c.loyalty_level]||'bgr'}">${LVL_L[c.loyalty_level]||'—'}</span></td>
+        <td style="font-weight:700;color:var(--a)">${(c.bonus_balance||0).toLocaleString('ru')}</td>
         <td>${parseFloat(c.total_spent||0).toLocaleString('ru')} ₽</td>
         <td>${c.visits_count||0}</td>
-        <td style="color:var(--tx3)">${c.last_visit_at?new Date(c.last_visit_at).toLocaleDateString('ru',{day:'numeric',month:'short',year:'numeric'}):'—'}</td>
+        <td style="color:var(--t3)">${c.last_visit_at?new Date(c.last_visit_at).toLocaleDateString('ru',{day:'numeric',month:'short',year:'numeric'}):'—'}</td>
         <td><button class="btn btn-sec btn-sm" onclick="event.stopPropagation();openCD(${c.id})">→</button></td>
-      </tr>
-    `).join('');
-    document.getElementById('clientsPager').textContent=`Показано ${(cPage_-1)*50+1}–${Math.min(cPage_*50,data.total)} из ${data.total}`;
-  }catch(e){notify(e.message,'err');}
+      </tr>`).join('');
+    document.getElementById('cPager').textContent = `Показано ${(cPage_-1)*50+1}–${Math.min(cPage_*50,d.total)} из ${d.total}`;
+  } catch(e) { notify(e.message,'err'); }
 }
-async function openCD(id){
-  try{
-    const {client,history}=await api('GET','/api/clients/'+id);
-    document.getElementById('cmTitle').textContent=client.name;
-    const txns=(history||[]).slice(0,10).map(t=>`<tr>
-      <td>${new Date(t.created_at).toLocaleDateString('ru',{day:'numeric',month:'short'})}</td>
-      <td style="color:${t.amount>0?'var(--accent)':'var(--danger)'};font-weight:600">${t.amount>0?'+':''}${t.amount}</td>
-      <td style="color:var(--tx2)">${t.description||t.type}</td>
-      <td style="font-weight:600">${(t.balance_after||0).toLocaleString('ru')}</td>
-    </tr>`).join('');
+
+async function openCD(id) {
+  try {
+    const {client:c,history,records} = await api('GET','/api/clients/'+id);
+    document.getElementById('cmTitle').textContent = c.name;
+
+    const rows = history.slice(0,15).map(t=>`
+      <tr>
+        <td style="color:var(--t3)">${new Date(t.created_at).toLocaleDateString('ru',{day:'numeric',month:'short'})}</td>
+        <td style="color:${t.amount>0?'var(--a)':'var(--danger)'};font-weight:600">${t.amount>0?'+':''}${t.amount}</td>
+        <td style="color:var(--t2);font-size:12px">${t.description||t.type}</td>
+        <td style="font-weight:600">${(t.balance_after||0).toLocaleString('ru')}</td>
+      </tr>`).join('');
+
+    const cardBlock = c.yclients_card_id
+      ? `<div style="display:flex;align-items:center;justify-content:space-between;padding:10px 12px;background:var(--as);border-radius:8px;margin-bottom:14px">
+           <div>
+             <div style="font-size:12px;color:var(--t3)">Карта YClients</div>
+             <div style="font-size:13px;font-weight:600">№${c.yclients_card_number||c.yclients_card_id} · Баланс: <span style="color:var(--a)">${parseFloat(c.yclients_card_balance||0).toLocaleString('ru')} бонусов</span></div>
+           </div>
+           <button class="btn btn-sec btn-sm" id="syncCardBtn_${c.id}" onclick="doSyncCard(${c.id})">
+             🔄 Синхронизировать карту
+           </button>
+         </div>`
+      : `<div style="padding:10px 12px;background:var(--bg);border-radius:8px;margin-bottom:14px;font-size:12.5px;color:var(--t3)">
+           Карта лояльности YClients не привязана.
+           <button class="btn btn-sec btn-sm" style="margin-left:8px" onclick="doSyncCard(${c.id})">Найти и привязать</button>
+         </div>`;
+
     document.getElementById('cmBody').innerHTML=`
-      <div style="display:flex;align-items:center;gap:12px;margin-bottom:18px">
-        <div class="av" style="width:48px;height:48px;font-size:15px;background:${avc(client.name)};color:#fff">${avi(client.name)}</div>
-        <div><div style="font-size:17px;font-weight:700">${client.name}</div><div style="color:var(--tx2)">${client.phone||'—'} · ${client.email||'—'}</div></div>
-        <span class="badge ${LVL_B[client.loyalty_level]||'bgr'}" style="margin-left:auto">${LVL_LBL[client.loyalty_level]||'—'}</span>
+      <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px">
+        <div class="av" style="width:48px;height:48px;font-size:15px;background:${avc(c.name)};color:#fff">${avi(c.name)}</div>
+        <div>
+          <div style="font-size:17px;font-weight:700">${c.name}</div>
+          <div style="color:var(--t2);font-size:13px">${c.phone||'—'}${c.email?' · '+c.email:''}</div>
+        </div>
+        <span class="badge ${LVL_B[c.loyalty_level]||'bgr'}" style="margin-left:auto">${LVL_L[c.loyalty_level]||'—'}</span>
       </div>
-      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:18px">
-        <div class="sc"><div class="sl">Бонусы</div><div class="sv" style="font-size:20px;color:var(--accent)">${(client.bonus_balance||0).toLocaleString('ru')}</div></div>
-        <div class="sc"><div class="sl">Потрачено</div><div class="sv" style="font-size:20px">${parseFloat(client.total_spent||0).toLocaleString('ru')} ₽</div></div>
-        <div class="sc"><div class="sl">Визитов</div><div class="sv" style="font-size:20px">${client.visits_count||0}</div></div>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:14px">
+        <div class="sc"><div class="sl">Бонусы (наша БД)</div><div class="sv" style="font-size:20px;color:var(--a)">${(c.bonus_balance||0).toLocaleString('ru')}</div></div>
+        <div class="sc"><div class="sl">Потрачено</div><div class="sv" style="font-size:20px">${parseFloat(c.total_spent||0).toLocaleString('ru')} ₽</div></div>
+        <div class="sc"><div class="sl">Визитов</div><div class="sv" style="font-size:20px">${c.visits_count||0}</div></div>
       </div>
+      ${cardBlock}
       <div class="div"></div>
       <div class="fg"><label class="fl">Ручная корректировка</label>
         <div style="display:flex;gap:7px">
-          <input type="number" id="qAmt" placeholder="Бонусы" style="flex:1" min="1">
+          <input type="number" id="qAmt" placeholder="Бонусы" style="flex:1">
           <input type="text" id="qCmt" placeholder="Причина" style="flex:1">
-          <button class="btn btn-pri btn-sm" onclick="quickB(${client.id},1)">+ Начислить</button>
-          <button class="btn btn-sec btn-sm btn-dng" onclick="quickB(${client.id},-1)">− Списать</button>
+          <button class="btn btn-pri btn-sm" onclick="quickB(${c.id},1)">+ Начислить</button>
+          <button class="btn btn-sec btn-sm btn-dng" onclick="quickB(${c.id},-1)">− Списать</button>
         </div>
       </div>
       <div class="div"></div>
-      <div style="font-size:13px;font-weight:700;margin-bottom:8px">История транзакций</div>
-      ${txns?`<table><thead><tr><th>Дата</th><th>Сумма</th><th>Описание</th><th>Баланс</th></tr></thead><tbody>${txns}</tbody></table>`:'<div class="empty">Нет транзакций</div>'}
-    `;
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+        <div style="font-size:13px;font-weight:700">История операций (наша БД)</div>
+        ${c.yclients_card_id?`<button class="btn btn-sec btn-sm" onclick="loadCardTxns(${c.id})">История карты YClients</button>`:''}
+      </div>
+      ${rows?`<table><thead><tr><th>Дата</th><th>Сумма</th><th>Описание</th><th>Баланс</th></tr></thead><tbody>${rows}</tbody></table>`:'<div class="empty">Нет операций</div>'}
+      <div id="cardTxnsBlock_${c.id}"></div>`;
+
     openModal('clientModal');
-  }catch(e){notify(e.message,'err');}
+  } catch(e) { notify(e.message,'err'); }
 }
-async function quickB(id,sign){
+
+// Синхронизация карты клиента
+async function doSyncCard(clientId) {
+  const btn = document.getElementById(`syncCardBtn_${clientId}`);
+  if (btn) { btn.disabled=true; btn.innerHTML='<span class="spinner"></span> Загрузка...'; }
+  try {
+    const r = await api('POST', `/api/clients/${clientId}/sync-card`);
+    if (r.ok) {
+      notify(`✓ Карта синхронизирована. Баланс: ${parseFloat(r.balance||0).toLocaleString('ru')} бонусов. Транзакций загружено: ${r.transactionsImported}`, 'ok');
+      // Перезагрузить карточку клиента
+      setTimeout(() => openCD(clientId), 500);
+    } else {
+      notify(r.message || 'Карта не найдена у клиента', 'err');
+    }
+  } catch(e) { notify('Ошибка синхронизации: '+e.message, 'err'); }
+  finally { if(btn){btn.disabled=false;btn.innerHTML='🔄 Синхронизировать карту';} }
+}
+
+// Загрузить историю транзакций карты YClients
+async function loadCardTxns(clientId) {
+  const el = document.getElementById(`cardTxnsBlock_${clientId}`);
+  if (!el) return;
+  el.innerHTML = '<div style="margin-top:14px;font-size:13px;color:var(--t3)"><span class="spinner"></span> Загрузка истории карты из YClients...</div>';
+  try {
+    const r = await api('GET', `/api/clients/${clientId}/card-transactions`);
+    const txns = r.yclients || r.local || [];
+    if (!txns.length) { el.innerHTML='<div class="empty" style="margin-top:10px">История карты пуста</div>'; return; }
+    const rows = txns.slice(0,50).map(t => {
+      const amt   = parseFloat(t.amount||t.Amount||0);
+      const date  = t.created_at||t.date||t.txn_date||'';
+      const title = t.title||t.comment||t.Comment||t.type||'—';
+      const bal   = parseFloat(t.balance_after||t.Balance||0);
+      return `<tr>
+        <td style="color:var(--t3)">${date?new Date(date).toLocaleDateString('ru',{day:'numeric',month:'short',year:'2-digit'}):'-'}</td>
+        <td style="color:${amt>=0?'var(--a)':'var(--danger)'};font-weight:600">${amt>=0?'+':''}${amt.toLocaleString('ru')}</td>
+        <td style="color:var(--t2);font-size:12px">${title}</td>
+        <td style="font-weight:600">${bal.toLocaleString('ru')}</td>
+      </tr>`;
+    }).join('');
+    el.innerHTML = `
+      <div class="div"></div>
+      <div style="font-size:13px;font-weight:700;margin-bottom:8px">История карты YClients (${txns.length} операций)</div>
+      <div style="max-height:280px;overflow-y:auto">
+        <table><thead><tr><th>Дата</th><th>Сумма</th><th>Описание</th><th>Баланс</th></tr></thead><tbody>${rows}</tbody></table>
+      </div>`;
+  } catch(e) { el.innerHTML=`<div style="margin-top:10px;font-size:12.5px;color:var(--danger)">Ошибка: ${e.message}</div>`; }
+}
+
+async function quickB(id,sign) {
   const amt=parseInt(document.getElementById('qAmt')?.value)||0;
   const cmt=document.getElementById('qCmt')?.value||'Ручная корректировка';
   if(!amt){notify('Введите количество','err');return;}
-  try{
-    await api('POST','/api/clients/'+id+'/bonus',{amount:sign*amt,description:cmt});
-    notify(sign>0?'+'+amt+' начислено':'-'+amt+' списано','ok');
-    closeModal('clientModal');loadClients();
-  }catch(e){notify(e.message,'err');}
+  try { await api('POST','/api/clients/'+id+'/bonus',{amount:sign*amt,description:cmt}); notify(sign>0?'+'+amt+' начислено':'-'+amt+' списано','ok'); closeModal('clientModal'); loadClients(); } catch(e){notify(e.message,'err');}
 }
 
-// ——— RECORDS ———
-function setDefDates(){
-  const to=new Date(),from=new Date(Date.now()-30*864e5);
+// ── RECORDS ──
+function setDefDates() {
   const fmt=d=>d.toISOString().split('T')[0];
-  document.getElementById('recFrom').value=fmt(from);
-  document.getElementById('recTo').value=fmt(to);
+  document.getElementById('rFrom').value=fmt(new Date(Date.now()-30*864e5));
+  document.getElementById('rTo').value=fmt(new Date());
 }
-async function loadRecords(){
-  const from=document.getElementById('recFrom')?.value;
-  const to=document.getElementById('recTo')?.value;
-  const status=document.getElementById('recStatus')?.value||'';
-  try{
-    const q=new URLSearchParams({dateFrom:from,dateTo:to,status,limit:200});
-    const data=await api('GET','/api/records?'+q);
-    const tbody=document.getElementById('recordsBody');
-    if(!data.records?.length){tbody.innerHTML='<tr><td colspan="9" class="empty">Нет записей</td></tr>';return;}
-    const SL={completed:'bg',cancelled:'br',pending:'bo'};
-    const SN={completed:'Завершён',cancelled:'Отменён',pending:'Запланирован'};
-    tbody.innerHTML=data.records.map(r=>{
-      const svcs=Array.isArray(r.services)?r.services.map(s=>s.title||s).join(', '):'—';
-      const staff=Array.isArray(r.staff)?r.staff.map(s=>s.name||s).join(', '):'—';
-      return`<tr>
-        <td style="color:var(--tx2)">${r.visit_date||'—'}</td>
-        <td><strong>${r.client_name||'—'}</strong><div style="font-size:11px;color:var(--tx3)">${r.client_phone||''}</div></td>
-        <td style="color:var(--tx2)">${svcs}</td>
-        <td style="color:var(--tx2)">${staff}</td>
-        <td style="font-weight:600">${parseFloat(r.amount||0).toLocaleString('ru')} ₽</td>
-        <td style="color:var(--accent);font-weight:600">${r.bonus_accrued>0?'+'+r.bonus_accrued:r.bonus_processed?'0':'—'}</td>
-        <td style="color:var(--tx3)">${r.cashback_pct>0?parseFloat(r.cashback_pct)+'%':'—'}</td>
-        <td><span class="badge ${SL[r.status]||'bgr'}">${SN[r.status]||r.status}</span></td>
-        <td><span class="badge bgr">${r.source==='webhook'?'Webhook':'Синхр.'}</span></td>
-      </tr>`;
+async function loadRecords() {
+  try {
+    const q=new URLSearchParams({dateFrom:document.getElementById('rFrom')?.value||'',dateTo:document.getElementById('rTo')?.value||'',status:document.getElementById('rStat')?.value||'',limit:200});
+    const d=await api('GET','/api/records?'+q);
+    const SL={completed:'Завершён',cancelled:'Отменён',pending:'Запланирован'};
+    const SB={completed:'bg',cancelled:'br',pending:'bo'};
+    const tb=document.getElementById('rBody');
+    if(!d.records?.length){tb.innerHTML='<tr><td colspan="9" class="empty">Записей нет</td></tr>';return;}
+    tb.innerHTML=d.records.map(r=>{
+      const svc=Array.isArray(r.services)?r.services.map(s=>s.title||s).join(', '):'—';
+      const st=Array.isArray(r.staff)?r.staff.map(s=>s.name||s).join(', '):'—';
+      return `<tr><td style="color:var(--t2)">${r.visit_date||'—'}</td><td><strong>${r.client_name||'—'}</strong></td><td style="color:var(--t2)">${svc}</td><td style="color:var(--t2)">${st}</td><td style="font-weight:600">${parseFloat(r.amount||0).toLocaleString('ru')} ₽</td><td style="color:var(--a);font-weight:600">${r.bonus_accrued>0?'+'+r.bonus_accrued:r.bonus_processed?'0':'—'}</td><td style="color:var(--t3)">${r.cashback_pct>0?parseFloat(r.cashback_pct)+'%':'—'}</td><td><span class="badge ${SB[r.status]||'bgr'}">${SL[r.status]||r.status}</span></td><td><span class="badge bgr">${{sync:'Синхр.',webhook:'Webhook'}[r.source]||r.source||'—'}</span></td></tr>`;
     }).join('');
-    document.getElementById('recordsPager').textContent='Записей: '+data.total;
-  }catch(e){notify(e.message,'err');}
+    document.getElementById('rPager').textContent='Записей: '+d.total;
+  } catch(e){notify(e.message,'err');}
 }
 
-// ——— LOYALTY ———
-async function loadLoyalty(){
-  try{
-    loyaltyData=await api('GET','/api/loyalty-settings');
-    renderLevelsEditor();
-    populateLoyaltyForm();
-  }catch(e){console.error(e);}
+// ── LOYALTY SETTINGS ──
+async function loadLs() {
+  try { lsData=await api('GET','/api/loyalty-settings'); renderLvlEditor(); populateLsForm(); } catch{}
 }
-function renderLevelsEditor(){
-  const lvls=loyaltyData.levels||[];
-  const el=document.getElementById('levelsEditor');if(!el)return;
-  el.innerHTML=lvls.map((l,i)=>`
-    <div class="level-row">
+function renderLvlEditor() {
+  const el=document.getElementById('lvlEditor'); if(!el)return;
+  el.innerHTML=(lsData.levels||[]).map((l,i)=>`
+    <div style="border:1px solid var(--bd);border-radius:8px;padding:12px;margin-bottom:8px">
       <div style="display:flex;gap:8px;margin-bottom:9px">
         <input type="text" value="${l.emoji||''}" style="width:42px;font-size:17px;text-align:center" id="le_${i}">
         <input type="text" value="${l.name||''}" style="flex:1;font-weight:600" id="ln_${i}">
       </div>
       <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px">
         <div><label class="fl" style="font-size:10px">Мин. покупки ₽</label><input type="number" value="${l.minSpent||0}" id="lm_${i}"></div>
-        <div><label class="fl" style="font-size:10px">Кэшбэк %</label><input type="number" value="${l.cashback||0}" min="0" max="50" id="lc_${i}"></div>
-        <div><label class="fl" style="font-size:10px">Макс. списание %</label><input type="number" value="${l.maxRedemptionPct||30}" min="0" max="100" id="lx_${i}"></div>
+        <div><label class="fl" style="font-size:10px">Кэшбэк %</label><input type="number" value="${l.cashback||0}" id="lc_${i}"></div>
+        <div><label class="fl" style="font-size:10px">Макс. списание %</label><input type="number" value="${l.maxRedemptionPct||30}" id="lx_${i}"></div>
       </div>
-    </div>
-  `).join('');
+    </div>`).join('');
 }
-function populateLoyaltyForm(){
-  const d=loyaltyData;
-  const sv=(id,val)=>{const e=document.getElementById(id);if(e){if(e.type==='checkbox')e.checked=!!val;else e.value=val!==undefined?val:'';}};
-  sv('ls-expiry',d.bonus_expiry_days||0);
-  sv('ls-bd-on',d.birthday_enabled!==false);
-  sv('ls-bd-bonus',d.birthday_bonus||500);
-  sv('ls-bd-days',d.birthday_days_before||3);
-  sv('ls-ref-on',d.referral_enabled!==false);
-  sv('ls-ref-s',d.referral_bonus_sender||200);
-  sv('ls-ref-r',d.referral_bonus_receiver||150);
+function populateLsForm() {
+  const g=id=>{const e=document.getElementById(id);return e;};
+  const s=(id,v)=>{const e=g(id);if(e){if(e.type==='checkbox')e.checked=!!v;else e.value=v!==undefined?v:'';}};
+  s('ls-exp',lsData.bonus_expiry_days||0);
+  s('ls-bd-on',lsData.birthday_enabled!==false);
+  s('ls-bd-bonus',lsData.birthday_bonus||500);
+  s('ls-bd-days',lsData.birthday_days_before||3);
+  s('ls-ref-on',lsData.referral_enabled!==false);
+  s('ls-ref-s',lsData.referral_bonus_sender||200);
+  s('ls-ref-r',lsData.referral_bonus_receiver||150);
 }
-function ltab(t,el){
+function ltab(t,el) {
   ['levels','services','birthday','referral'].forEach(x=>{const e=document.getElementById('lt-'+x);if(e)e.style.display=x===t?'block':'none';});
-  document.querySelectorAll('#loyaltyTabs .tab').forEach(t=>t.classList.remove('active'));
+  document.querySelectorAll('#ltabs .tab').forEach(e=>e.classList.remove('active'));
   el.classList.add('active');
-  if(t==='services')loadSvcCashback();
-  if(t==='birthday')loadBdList();
+  if(t==='services') loadSvcCb();
+  if(t==='birthday') loadBdList();
 }
-async function loadSvcCashback(){
-  const el=document.getElementById('svcCashback');
-  try{
-    if(!ycSvcs.length)ycSvcs=await api('GET','/api/yclients/services');
-    const sv=loyaltyData.service_cashback||{};
-    const def=(loyaltyData.levels?.[0]?.cashback)||5;
+async function loadSvcCb() {
+  const el=document.getElementById('svcCb');
+  try {
+    if(!ycSvcs.length) ycSvcs=await api('GET','/api/yclients/services');
+    const sv=lsData.service_cashback||{};
+    const def=(lsData.levels?.[0]?.cashback)||5;
     el.innerHTML=ycSvcs.slice(0,40).map(s=>`
-      <div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--bdr)">
+      <div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--bd)">
         <div style="flex:1;font-size:13px">${s.title}</div>
-        <input type="number" value="${sv[s.id]||def}" min="0" max="50" style="width:65px" id="svc_${s.id}">
-        <span style="font-size:12px;color:var(--tx3)">%</span>
-      </div>
-    `).join('');
-  }catch(e){el.innerHTML=`<div class="empty" style="color:var(--danger)">${e.message}</div>`;}
+        <input type="number" value="${sv[s.id]||def}" min="0" max="50" style="width:65px" id="sc_${s.id}">
+        <span style="font-size:12px;color:var(--t3)">%</span>
+      </div>`).join('');
+  } catch(e){el.innerHTML=`<div class="empty" style="color:var(--danger)">${e.message}</div>`;}
 }
-async function loadBdList(){
-  const el=document.getElementById('bdList');if(!el)return;
-  try{
+async function loadBdList() {
+  const el=document.getElementById('bdList'); if(!el)return;
+  try {
     const all=await api('GET','/api/clients?limit=500');
     const now=new Date();
     const ups=(all.clients||[]).filter(c=>{
       if(!c.birthday)return false;
-      const bd=new Date(c.birthday);if(isNaN(bd))return false;
+      const bd=new Date(c.birthday); if(isNaN(bd))return false;
       const ty=new Date(now.getFullYear(),bd.getMonth(),bd.getDate());
       const diff=(ty-now)/864e5;
       return diff>=-1&&diff<=7;
     });
     if(!ups.length){el.innerHTML='<div class="empty">Нет именинников в ближайшие 7 дней</div>';return;}
     el.innerHTML=ups.map(c=>`
-      <div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--bdr)">
+      <div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--bd)">
         <div class="av" style="background:${avc(c.name)};color:#fff;font-size:10px">${avi(c.name)}</div>
-        <div style="flex:1"><div style="font-weight:600;font-size:13px">${c.name}</div><div style="font-size:11px;color:var(--tx3)">${c.phone||'—'}</div></div>
-        <button class="btn btn-pri btn-sm" onclick="sendBdBonus(${c.id})">🎁 Начислить</button>
-      </div>
-    `).join('');
-  }catch(e){el.innerHTML=`<div class="empty" style="color:var(--danger)">${e.message}</div>`;}
+        <div style="flex:1"><div style="font-weight:600;font-size:13px">${c.name}</div><div style="font-size:11px;color:var(--t3)">${c.phone||'—'}</div></div>
+        <button class="btn btn-pri btn-sm" onclick="sendBdB(${c.id})">🎁 Начислить</button>
+      </div>`).join('');
+  } catch(e){el.innerHTML=`<div class="empty" style="color:var(--danger)">${e.message}</div>`;}
 }
-async function sendBdBonus(id){
+async function sendBdB(id) {
   const bonus=parseInt(document.getElementById('ls-bd-bonus')?.value)||500;
-  try{await api('POST','/api/clients/'+id+'/bonus',{amount:bonus,description:'🎂 Подарок на день рождения'});notify('+'+bonus+' бонусов именинику!','ok');loadBdList();}
-  catch(e){notify(e.message,'err');}
+  try { await api('POST','/api/clients/'+id+'/bonus',{amount:bonus,description:'🎂 Подарок на день рождения'}); notify('+'+bonus+' бонусов!','ok'); loadBdList(); } catch(e){notify(e.message,'err');}
 }
-async function saveLoyalty(){
-  const lvls=(loyaltyData.levels||[]).map((l,i)=>({...l,
+async function saveLs() {
+  const levels=(lsData.levels||[]).map((l,i)=>({...l,
     emoji:document.getElementById('le_'+i)?.value||l.emoji,
     name:document.getElementById('ln_'+i)?.value||l.name,
     minSpent:parseInt(document.getElementById('lm_'+i)?.value)||l.minSpent,
     cashback:parseInt(document.getElementById('lc_'+i)?.value)||l.cashback,
     maxRedemptionPct:parseInt(document.getElementById('lx_'+i)?.value)||l.maxRedemptionPct,
   }));
-  const svc={};ycSvcs.forEach(s=>{const e=document.getElementById('svc_'+s.id);if(e)svc[s.id]=parseInt(e.value)||5;});
+  const sc={}; ycSvcs.forEach(s=>{const e=document.getElementById('sc_'+s.id);if(e)sc[s.id]=parseInt(e.value)||5;});
   const g=id=>document.getElementById(id);
-  const payload={levels,service_cashback:svc,
-    birthday_enabled:g('ls-bd-on')?.checked,birthday_bonus:parseInt(g('ls-bd-bonus')?.value)||500,birthday_days_before:parseInt(g('ls-bd-days')?.value)||3,
-    referral_enabled:g('ls-ref-on')?.checked,referral_bonus_sender:parseInt(g('ls-ref-s')?.value)||200,referral_bonus_receiver:parseInt(g('ls-ref-r')?.value)||150,
-    bonus_expiry_days:parseInt(g('ls-expiry')?.value)||0};
-  try{await api('PUT','/api/loyalty-settings',payload);loyaltyData={...loyaltyData,...payload};notify('Сохранено!','ok');}
-  catch(e){notify(e.message,'err');}
+  const payload={levels,service_cashback:sc,birthday_enabled:g('ls-bd-on')?.checked,birthday_bonus:parseInt(g('ls-bd-bonus')?.value)||500,birthday_days_before:parseInt(g('ls-bd-days')?.value)||3,referral_enabled:g('ls-ref-on')?.checked,referral_bonus_sender:parseInt(g('ls-ref-s')?.value)||200,referral_bonus_receiver:parseInt(g('ls-ref-r')?.value)||150,bonus_expiry_days:parseInt(g('ls-exp')?.value)||0};
+  try { await api('PUT','/api/loyalty-settings',payload); lsData={...lsData,...payload}; notify('Сохранено!','ok'); } catch(e){notify(e.message,'err');}
 }
 
-// ——— ANALYTICS ———
-function setAnPeriod(d,el){
-  anPeriod=d;
-  document.querySelectorAll('#page-analytics .pbns .pbn').forEach(b=>b.classList.remove('active'));
-  el.classList.add('active');loadAnalytics();
-}
-async function loadAnalytics(){
-  try{
-    const[dash,bons,ret]=await Promise.all([
-      api('GET','/api/analytics/dashboard?period='+anPeriod),
-      api('GET','/api/analytics/bonuses?period='+anPeriod),
-      api('GET','/api/analytics/retention'),
-    ]);
+// ── ANALYTICS ──
+function setAP(d,el) { anaP=d; document.querySelectorAll('#page-analytics .pb-btns .pb-btn').forEach(b=>b.classList.remove('active')); el.classList.add('active'); loadAnalytics(); }
+async function loadAnalytics() {
+  try {
+    const [dash,bon,ret]=await Promise.all([api('GET','/api/analytics/dashboard?period='+anaP),api('GET','/api/analytics/bonuses?period='+anaP),api('GET','/api/analytics/retention')]);
     const s=dash.stats;
-    document.getElementById('an-avg').textContent=s.periodRecords>0?Math.round(s.periodRevenue/s.periodRecords).toLocaleString('ru')+' ₽':'—';
-    document.getElementById('an-bon').textContent=s.periodBonuses.toLocaleString('ru')+' ₽';
-    document.getElementById('an-roi').textContent=s.periodBonuses>0?Math.round(s.periodRevenue/s.periodBonuses)+'x':'—';
-    document.getElementById('an-new').textContent=s.newClients;
-    buildBFChart(bons);buildRetChart(ret);buildGrwChart(dash.dailyRevenue);buildLvlChart(dash.levelDist);
-  }catch(e){notify('Ошибка: '+e.message,'err');}
+    document.getElementById('an1').textContent=s.periodRecords>0?Math.round(s.periodRevenue/s.periodRecords).toLocaleString('ru')+' ₽':'—';
+    document.getElementById('an2').textContent=s.periodBonuses.toLocaleString('ru')+' ₽';
+    document.getElementById('an3').textContent=s.periodBonuses>0?Math.round(s.periodRevenue/s.periodBonuses)+'x':'—';
+    document.getElementById('an4').textContent=s.newClients;
+    buildBfChart(bon); buildRetChart(ret); buildGrwChart(dash.dailyRevenue); buildLvlChart(dash.levelDist);
+  } catch(e){notify('Ошибка аналитики: '+e.message,'err');}
 }
-function buildBFChart(data){
-  const days={};data.forEach(r=>{const d=r.day;if(!days[d])days[d]={a:0,r:0};days[d].a+=parseFloat(r.accrued||0);days[d].r+=parseFloat(r.redeemed||0);});
+function buildBfChart(data) {
+  const days={};
+  data.forEach(r=>{const d=r.day;if(!days[d])days[d]={a:0,r:0};days[d].a+=parseFloat(r.accrued||0);days[d].r+=parseFloat(r.redeemed||0);});
   const keys=Object.keys(days).sort().slice(-30);
-  const labels=keys.map(d=>{const dt=new Date(d);return dt.getDate()+'.'+(dt.getMonth()+1)});
   const ctx=document.getElementById('bfChart').getContext('2d');
-  if(bfC)bfC.destroy();
-  bfC=new Chart(ctx,{type:'bar',data:{labels,datasets:[
-    {label:'Начислено',data:keys.map(k=>days[k].a),backgroundColor:'rgba(0,200,150,0.6)',borderRadius:3},
-    {label:'Списано',data:keys.map(k=>days[k].r),backgroundColor:'rgba(232,84,84,0.5)',borderRadius:3},
-  ]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{labels:{font:{size:11},boxWidth:10}}},scales:{x:{grid:{display:false},ticks:{maxTicksLimit:10,font:{size:10}}},y:{grid:{color:'rgba(0,0,0,0.04)'},ticks:{font:{size:10}}}}}});
+  if(bfCh)bfCh.destroy();
+  bfCh=new Chart(ctx,{type:'bar',data:{labels:keys.map(d=>{const dt=new Date(d);return dt.getDate()+'.'+(dt.getMonth()+1)}),datasets:[{label:'Начислено',data:keys.map(k=>days[k].a),backgroundColor:'rgba(0,200,150,0.6)',borderRadius:3},{label:'Списано',data:keys.map(k=>days[k].r),backgroundColor:'rgba(232,84,84,0.5)',borderRadius:3}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{labels:{font:{size:11},boxWidth:10}}},scales:{x:{grid:{display:false},ticks:{maxTicksLimit:10,font:{size:10}}},y:{grid:{color:'rgba(0,0,0,0.04)'},ticks:{font:{size:10}}}}}});
 }
-function buildRetChart(data){
+function buildRetChart(data) {
   const ctx=document.getElementById('retChart').getContext('2d');
-  if(retC)retC.destroy();
+  if(retCh)retCh.destroy();
   if(!data?.length)return;
   const labels=data.map(d=>new Date(d.cohort_month).toLocaleDateString('ru',{month:'short',year:'2-digit'}));
-  retC=new Chart(ctx,{type:'line',data:{labels,datasets:[
-    {label:'Через 1 мес',data:data.map(d=>d.total>0?Math.round(d.m1/d.total*100):0),borderColor:'#00c896',tension:.3,borderWidth:2,fill:false},
-    {label:'Через 3 мес',data:data.map(d=>d.total>0?Math.round(d.m3/d.total*100):0),borderColor:'#3b82f6',tension:.3,borderWidth:2,fill:false,borderDash:[4,3]},
-  ]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{labels:{font:{size:11},boxWidth:10}}},scales:{y:{min:0,max:100,ticks:{callback:v=>v+'%',font:{size:10}}},x:{grid:{display:false},ticks:{font:{size:10}}}}}});
+  retCh=new Chart(ctx,{type:'line',data:{labels,datasets:[{label:'Через 1 мес',data:data.map(d=>d.total>0?Math.round(d.m1/d.total*100):0),borderColor:'#00c896',tension:.3,borderWidth:2,fill:false},{label:'Через 3 мес',data:data.map(d=>d.total>0?Math.round(d.m3/d.total*100):0),borderColor:'#3b82f6',tension:.3,borderWidth:2,fill:false,borderDash:[4,3]}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{labels:{font:{size:11},boxWidth:10}}},scales:{y:{min:0,max:100,ticks:{callback:v=>v+'%',font:{size:10}}},x:{grid:{display:false},ticks:{font:{size:10}}}}}});
 }
-function buildGrwChart(data){
+function buildGrwChart(data) {
   const ctx=document.getElementById('grwChart').getContext('2d');
-  if(grwC)grwC.destroy();
-  grwC=new Chart(ctx,{type:'bar',data:{
-    labels:data.map(d=>{const dt=new Date(d.visit_date);return dt.getDate()+'.'+(dt.getMonth()+1)}),
-    datasets:[{label:'Записей',data:data.map(d=>parseInt(d.records||0)),backgroundColor:'rgba(0,200,150,0.6)',borderRadius:3}]
-  },options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{x:{grid:{display:false},ticks:{maxTicksLimit:10,font:{size:10}}},y:{grid:{color:'rgba(0,0,0,0.04)'},ticks:{font:{size:10}}}}}});
+  if(grwCh)grwCh.destroy();
+  grwCh=new Chart(ctx,{type:'bar',data:{labels:data.map(d=>{const dt=new Date(d.visit_date);return dt.getDate()+'.'+(dt.getMonth()+1)}),datasets:[{label:'Записей',data:data.map(d=>parseInt(d.records||0)),backgroundColor:'rgba(0,200,150,0.6)',borderRadius:3}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{x:{grid:{display:false},ticks:{maxTicksLimit:10,font:{size:10}}},y:{grid:{color:'rgba(0,0,0,0.04)'},ticks:{font:{size:10}}}}}});
 }
-function buildLvlChart(dist){
-  const LVL=['platinum','gold','silver','bronze'];
-  const CLR=['#00c896','#f59e0b','#9e9e9e','#cd7f32'];
-  const map={};dist.forEach(d=>map[d.loyalty_level]=parseInt(d.cnt)||0);
+function buildLvlChart(dist) {
   const ctx=document.getElementById('lvlChart').getContext('2d');
-  if(lvlC)lvlC.destroy();
-  lvlC=new Chart(ctx,{type:'doughnut',data:{labels:['💎 Платина','🥇 Золото','🥈 Серебро','🥉 Бронза'],datasets:[{data:LVL.map(k=>map[k]||0),backgroundColor:CLR,borderWidth:0}]},
-    options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{position:'right',labels:{font:{size:11},boxWidth:9}}}}});
+  if(lvlCh)lvlCh.destroy();
+  const K=['platinum','gold','silver','bronze'],C=['#00c896','#f59e0b','#9e9e9e','#cd7f32'];
+  const map={}; dist.forEach(d=>map[d.loyalty_level]=parseInt(d.cnt)||0);
+  lvlCh=new Chart(ctx,{type:'doughnut',data:{labels:['💎 Платина','🥇 Золото','🥈 Серебро','🥉 Бронза'],datasets:[{data:K.map(k=>map[k]||0),backgroundColor:C,borderWidth:0}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{position:'right',labels:{font:{size:11},boxWidth:9}}}}});
 }
 
-// ——— SETTINGS ———
-async function loadSettings(){
-  try{
+// ── SETTINGS ──
+async function loadSettings() {
+  try {
     const salon=await api('GET','/api/salon');
-    const sv=(id,val)=>{const e=document.getElementById(id);if(e)e.value=val||'';};
-    sv('st-name',salon.name);sv('st-city',salon.city);sv('st-tz',salon.timezone||'Europe/Moscow');
-    sv('st-yc-id',salon.yclients_company_id);sv('st-yc-pt',salon.yclients_partner_token);
-    const whUrl=window.location.origin+'/api/webhook/yclients/'+(salon.yclients_company_id||'YOUR_COMPANY_ID');
-    document.getElementById('webhookUrl').value=whUrl;
+    const s=(id,v)=>{const e=document.getElementById(id);if(e)e.value=v||'';};
+    s('st-name',salon.name); s('st-city',salon.city); s('st-yid',salon.yclients_company_id);
+    s('st-pt',salon.yclients_partner_token);
+    const tz=document.getElementById('st-tz'); if(tz)tz.value=salon.timezone||'Europe/Moscow';
+    const wh=`${window.location.origin}/api/webhook/yclients/${salon.yclients_company_id||'YOUR_ID'}`;
+    const we=document.getElementById('whUrl'); if(we)we.value=wh;
+    // Показать сохранённую карту лояльности
+    if (salon.yclients_card_type_id) {
+      const sel = document.getElementById('st-card-type');
+      if (sel) {
+        const exists = Array.from(sel.options).some(o=>String(o.value)===String(salon.yclients_card_type_id));
+        if (!exists) {
+          const opt=document.createElement('option');
+          opt.value=salon.yclients_card_type_id;
+          opt.textContent=salon.yclients_card_type_name||`Карта ID ${salon.yclients_card_type_id}`;
+          opt.selected=true;
+          sel.appendChild(opt);
+        } else { sel.value=String(salon.yclients_card_type_id); }
+        const info=document.getElementById('cardTypeInfo');
+        if(info){info.style.display='block';info.style.color='var(--a)';
+          info.textContent=`✓ Активна: ${salon.yclients_card_type_name||salon.yclients_card_type_id}`;}
+      }
+    }
     loadSyncLogs();
-  }catch(e){notify(e.message,'err');}
+  } catch(e){notify(e.message,'err');}
 }
-async function saveSalon(){
-  try{
+async function saveSalon() {
+  try {
+    const sel = document.getElementById('st-card-type');
+    const selOpt = sel?.options[sel.selectedIndex];
     await api('PUT','/api/salon',{
-      name:document.getElementById('st-name')?.value,
-      city:document.getElementById('st-city')?.value,
-      timezone:document.getElementById('st-tz')?.value,
-      yclients_company_id:document.getElementById('st-yc-id')?.value,
+      name:                 document.getElementById('st-name')?.value,
+      city:                 document.getElementById('st-city')?.value,
+      timezone:             document.getElementById('st-tz')?.value,
+      yclients_company_id:  document.getElementById('st-yid')?.value,
+      yclients_card_type_id:   sel?.value ? parseInt(sel.value) : null,
+      yclients_card_type_name: selOpt?.value ? (selOpt.textContent || null) : null,
     });
     notify('Сохранено!','ok');
-  }catch(e){notify(e.message,'err');}
+  } catch(e){notify(e.message,'err');}
 }
-async function connectYC(){
-  const el=document.getElementById('ycStatus');
+async function connectYC() {
+  const el=document.getElementById('ycSt');
   el.innerHTML='<span class="spinner"></span> Подключение...';
-  try{
-    await api('POST','/api/salon/yclients-auth',{
-      partnerToken:document.getElementById('st-yc-pt')?.value,
-      login:document.getElementById('st-yc-login')?.value,
-      password:document.getElementById('st-yc-pass')?.value,
-    });
-    el.innerHTML='<span style="color:var(--accent)">✓ YClients подключён!</span>';
+  try {
+    await api('POST','/api/salon/yclients-auth',{partnerToken:document.getElementById('st-pt')?.value,login:document.getElementById('st-login')?.value,password:document.getElementById('st-pass')?.value});
+    el.innerHTML='<span style="color:var(--a)">✓ YClients подключён!</span>';
     notify('YClients подключён!','ok');
-  }catch(e){el.innerHTML='<span style="color:var(--danger)">'+e.message+'</span>';}
+  } catch(e){el.innerHTML=`<span style="color:var(--danger)">Ошибка: ${e.message}</span>`;}
 }
-function copyWebhook(){
-  const val=document.getElementById('webhookUrl')?.value;
-  navigator.clipboard.writeText(val).then(()=>notify('Webhook URL скопирован!','ok'));
-}
-async function loadSyncLogs(){
-  try{
+function copyWh() { const v=document.getElementById('whUrl')?.value; navigator.clipboard.writeText(v).then(()=>notify('Скопировано!','ok')); }
+async function loadSyncLogs() {
+  try {
     const logs=await api('GET','/api/sync/logs');
-    const el=document.getElementById('syncLogs');if(!el)return;
+    const el=document.getElementById('syncLogs'); if(!el)return;
     if(!logs?.length){el.innerHTML='<div class="empty">Нет логов</div>';return;}
-    const ic={success:'✅',error:'❌',running:'⏳'};
+    const si={success:'✅',error:'❌',running:'⏳'};
     el.innerHTML=`<table><thead><tr><th>Тип</th><th>Статус</th><th>Клиентов</th><th>Записей</th><th>Бонусов</th><th>Время</th></tr></thead><tbody>
-      ${logs.map(l=>`<tr>
-        <td>${l.sync_type}</td>
-        <td>${ic[l.status]||'?'} ${l.status}</td>
-        <td>${l.clients_synced||0}</td>
-        <td>${l.records_synced||0}</td>
-        <td style="color:var(--accent)">${l.bonuses_accrued||0}</td>
-        <td style="color:var(--tx3);font-size:12px">${new Date(l.started_at).toLocaleString('ru')}</td>
-      </tr>`).join('')}
+      ${logs.map(l=>`<tr><td>${l.sync_type}</td><td>${si[l.status]||'?'} ${l.status}</td><td>${l.clients_synced||0}</td><td>${l.records_synced||0}</td><td style="color:var(--a)">${l.bonuses_accrued||0}</td><td style="color:var(--t3);font-size:12px">${new Date(l.started_at).toLocaleString('ru')}</td></tr>`).join('')}
     </tbody></table>`;
-  }catch(e){console.error(e);}
+  } catch{}
 }
 
-// ——— SYNC ———
-async function triggerSync(){
+// ── SYNC ──
+async function triggerSync() {
   const banner=document.getElementById('syncBanner');
   if(banner){banner.style.display='flex';document.getElementById('syncBannerText').textContent='Синхронизация запущена...';}
-  try{
+  try {
     await api('POST','/api/sync');
     notify('Синхронизация запущена! Данные обновятся через несколько минут.','ok');
     setTimeout(()=>{loadDashboard();if(banner)banner.style.display='none';},6000);
-  }catch(e){notify(e.message,'err');if(banner)banner.style.display='none';}
+  } catch(e){notify(e.message,'err');if(banner)banner.style.display='none';}
 }
 
-// ——— MANUAL BONUS MODAL ———
-async function searchBC(q){
-  const el=document.getElementById('bm-res');bonusTarget=null;
+// ── BONUS MODAL ──
+async function searchBonusC(q) {
+  const el=document.getElementById('bmr'); bonusTarget=null;
   if(!q){el.innerHTML='';return;}
-  try{
-    const data=await api('GET','/api/clients?search='+encodeURIComponent(q)+'&limit=5');
-    if(!data.clients?.length){el.innerHTML='<div style="font-size:12px;color:var(--tx3)">Не найдено</div>';return;}
-    el.innerHTML=data.clients.map(c=>`
-      <div onclick="selBC(${c.id},'${c.name.replace(/'/g,"\\'")}',${c.bonus_balance})"
-           style="padding:7px 10px;border:1px solid var(--bdr);border-radius:7px;cursor:pointer;margin-bottom:4px;font-size:12.5px">
-        <strong>${c.name}</strong> · ${c.phone||'—'} · <span style="color:var(--accent)">${c.bonus_balance||0} бонусов</span>
-      </div>
-    `).join('');
-  }catch{}
+  try {
+    const d=await api('GET','/api/clients?search='+encodeURIComponent(q)+'&limit=5');
+    if(!d.clients?.length){el.innerHTML='<div style="font-size:12px;color:var(--t3)">Не найдено</div>';return;}
+    el.innerHTML=d.clients.map(c=>`
+      <div onclick="selBC(${c.id},'${c.name.replace(/'/g,"\\'")}',${c.bonus_balance})" style="padding:7px 10px;border:1px solid var(--bd);border-radius:7px;cursor:pointer;margin-bottom:4px;font-size:12.5px">
+        <strong>${c.name}</strong> · ${c.phone||'—'} · <span style="color:var(--a)">${c.bonus_balance||0} бонусов</span>
+      </div>`).join('');
+  } catch{}
 }
-function selBC(id,name){
-  bonusTarget=id;
-  document.getElementById('bm-s').value=name;
-  document.getElementById('bm-res').innerHTML='<div style="font-size:12px;color:var(--accent)">✓ '+name+'</div>';
-}
-async function submitBonus(sign){
+function selBC(id,name) { bonusTarget=id; document.getElementById('bms').value=name; document.getElementById('bmr').innerHTML=`<div style="font-size:12px;color:var(--a)">✓ ${name}</div>`; }
+async function submitBonus(sign) {
   if(!bonusTarget){notify('Выберите клиента','err');return;}
-  const amt=parseInt(document.getElementById('bm-amt')?.value)||0;
-  const cmt=document.getElementById('bm-cmt')?.value||'Ручная корректировка';
+  const amt=parseInt(document.getElementById('bma')?.value)||0;
+  const cmt=document.getElementById('bmc')?.value||'Ручная корректировка';
   if(!amt){notify('Введите количество','err');return;}
-  try{
-    await api('POST','/api/clients/'+bonusTarget+'/bonus',{amount:sign*amt,description:cmt});
-    notify(sign>0?'+'+amt+' начислено':'-'+amt+' списано','ok');
-    closeModal('bonusModal');loadClients();
-  }catch(e){notify(e.message,'err');}
+  try { await api('POST','/api/clients/'+bonusTarget+'/bonus',{amount:sign*amt,description:cmt}); notify(sign>0?'+'+amt+' начислено':'-'+amt+' списано','ok'); closeModal('bonusModal'); loadClients(); } catch(e){notify(e.message,'err');}
 }
 
-// ——— UTILS ———
+// ── UTILS ──
 function openModal(id){document.getElementById(id).classList.add('open');}
 function closeModal(id){document.getElementById(id).classList.remove('open');}
 let nt;
-function notify(msg,type='ok'){
-  const n=document.getElementById('notif');
-  n.textContent=msg;n.className='notif show '+type;
-  clearTimeout(nt);nt=setTimeout(()=>n.classList.remove('show'),3500);
-}
+function notify(msg,type='ok'){const n=document.getElementById('notif');n.textContent=msg;n.className='notif show '+type;clearTimeout(nt);nt=setTimeout(()=>n.classList.remove('show'),3500);}
 function showLbar(on){document.getElementById('lbar').style.display=on?'block':'none';}
-function avc(name=''){const c=['#3b82f6','#8b5cf6','#ec4899','#f59e0b','#10b981','#06b6d4','#ef4444','#84cc16'];return c[(name||'').charCodeAt(0)%c.length];}
-function avi(name='?'){return(name||'?').split(' ').slice(0,2).map(w=>w[0]||'').join('').toUpperCase();}
-function timeSince(date){
-  const s=Math.floor((Date.now()-new Date(date))/1000);
-  if(s<60)return s+'с назад';if(s<3600)return Math.floor(s/60)+'м назад';
-  if(s<86400)return Math.floor(s/3600)+'ч назад';return Math.floor(s/86400)+'д назад';
-}
+function avc(n=''){const c=['#3b82f6','#8b5cf6','#ec4899','#f59e0b','#10b981','#06b6d4','#ef4444','#84cc16'];return c[(n||'').charCodeAt(0)%c.length];}
+function avi(n='?'){return(n||'?').split(' ').slice(0,2).map(w=>w[0]||'').join('').toUpperCase();}
+function timeSince(d){const s=Math.floor((Date.now()-new Date(d))/1000);if(s<60)return s+'с';if(s<3600)return Math.floor(s/60)+'м';if(s<86400)return Math.floor(s/3600)+'ч';return Math.floor(s/86400)+'д';}
+const _dbc={};
+function dbc(fn,ms){return function(...a){clearTimeout(_dbc[fn]);_dbc[fn]=setTimeout(()=>fn(...a),ms);};}
 
-// ——— BOOT ———
+// ── BOOT ──
 document.addEventListener('DOMContentLoaded',async()=>{
   if(TOKEN){try{await launchApp();}catch{showLogin();}}
 });
