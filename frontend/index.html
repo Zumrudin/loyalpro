@@ -278,16 +278,20 @@ tbody tr:hover{background:var(--bg);cursor:pointer}
         <input type="date" id="rFrom" style="width:148px">
         <span style="color:var(--t3)">—</span>
         <input type="date" id="rTo" style="width:148px">
-        <select style="width:145px" id="rStat" onchange="loadRecords()">
+        <select style="width:145px" id="rStat" onchange="loadRecords(1)">
           <option value="">Все статусы</option>
-          <option value="completed">Завершённые</option>
-          <option value="cancelled">Отменённые</option>
-          <option value="pending">Запланированные</option>
+          <option value="completed">Оказана</option>
+          <option value="arrived">Пришёл</option>
+          <option value="confirmed">Подтверждена</option>
+          <option value="waiting">Ожидание</option>
+          <option value="no_show">Не пришёл</option>
+          <option value="cancelled">Отменена</option>
+          <option value="deleted">Удалена</option>
         </select>
-        <button class="btn btn-sec" onclick="loadRecords()">Применить</button>
+        <button class="btn btn-sec" onclick="loadRecords(1)">Применить</button>
       </div>
       <div class="card" style="padding:0"><div class="tw"><table>
-        <thead><tr><th>Дата</th><th>Клиент</th><th>Услуги</th><th>Мастер</th><th>Сумма</th><th>Бонусы</th><th>Кэшбэк %</th><th>Статус</th><th>Источник</th></tr></thead>
+        <thead><tr><th>Дата</th><th>Клиент</th><th>Услуги</th><th>Мастер</th><th style="text-align:right">Сумма</th><th style="text-align:right">Начислено</th><th style="text-align:right">Списано</th><th>Статус</th><th>Источник</th></tr></thead>
         <tbody id="rBody"><tr><td colspan="9" class="empty">Выберите период</td></tr></tbody>
       </table></div></div>
       <div style="font-size:12px;color:var(--t3);padding:8px 2px" id="rPager"></div>
@@ -302,9 +306,15 @@ tbody tr:hover{background:var(--bg);cursor:pointer}
         <button class="tab" onclick="ltab('referral',this)">Реферальная</button>
       </div>
       <div id="lt-levels">
+        <div id="bonuses-disabled-banner" style="display:none;background:#fef3c7;border:1px solid #f59e0b;border-radius:10px;padding:12px 16px;margin-bottom:14px;align-items:center;gap:10px">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#d97706" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+          <div style="font-size:13px;font-weight:600;color:#92400e">Начисление бонусов отключено — вебхуки принимаются, транзакции логируются, но бонусы не начисляются</div>
+        </div>
         <div class="g2">
           <div class="card"><div class="ct">Уровни и кэшбэк <button class="btn btn-pri btn-sm" onclick="saveLs()">Сохранить</button></div><div id="lvlEditor"></div></div>
           <div class="card"><div class="ct">Правила</div>
+            <div class="srow"><div><div class="srow-l" style="font-weight:600">🔴 Начисление бонусов</div><div class="srow-h">Глобальное включение / отключение</div></div><label class="tgl"><input type="checkbox" id="ls-bonuses-on" checked onchange="updateBonusBanner()"><span class="ts"></span></label></div>
+            <div class="div" style="margin:10px 0"></div>
             <div class="srow"><div><div class="srow-l">Срок действия бонусов (дней)</div><div class="srow-h">0 = бессрочно</div></div><input type="number" id="ls-exp" value="0" style="width:80px"></div>
             <div class="div"></div>
             <div style="font-size:12.5px;color:var(--t2);line-height:1.7">При оплате визита — webhook от YClients → начисление бонусов. При отмене — автоматическое аннулирование.</div>
@@ -353,11 +363,12 @@ tbody tr:hover{background:var(--bg);cursor:pointer}
           <button class="pb-btn" onclick="setAP(90,this)">90 дней</button>
         </div>
       </div>
-      <div class="sg mb">
-        <div class="sc"><div class="sl">Средний чек</div><div class="sv" id="an1">—</div></div>
-        <div class="sc"><div class="sl">Начислено бонусов</div><div class="sv" id="an2">—</div></div>
-        <div class="sc"><div class="sl">ROI программы</div><div class="sv" id="an3" style="color:var(--a)">—</div></div>
-        <div class="sc"><div class="sl">Новых клиентов</div><div class="sv" id="an4">—</div></div>
+      <div class="sg mb" style="grid-template-columns:repeat(5,1fr)">
+        <div class="sc"><div class="sl">Средний чек</div><div class="sv" id="an1">—</div><div class="sd" id="an1s"></div></div>
+        <div class="sc"><div class="sl">Начислено бонусов</div><div class="sv" id="an2" style="color:var(--a)">—</div><div class="sd up" id="an2s"></div></div>
+        <div class="sc"><div class="sl">Списано бонусов</div><div class="sv" id="an5" style="color:var(--danger)">—</div><div class="sd dn" id="an5s"></div></div>
+        <div class="sc"><div class="sl">ROI программы</div><div class="sv" id="an3" style="color:var(--a)">—</div><div class="sd" id="an3s">выручка / начисления</div></div>
+        <div class="sc"><div class="sl">Новых клиентов</div><div class="sv" id="an4">—</div><div class="sd" id="an4s"></div></div>
       </div>
       <div class="g2 mb">
         <div class="card"><div class="ct">Бонусы: начислено vs потрачено</div><div style="height:210px"><canvas id="bfChart"></canvas></div></div>
@@ -456,6 +467,30 @@ tbody tr:hover{background:var(--bg);cursor:pointer}
           <div class="card">
             <div class="ct">Логи синхронизации <button class="btn btn-sec btn-sm" onclick="loadSyncLogs()">Обновить</button></div>
             <div id="syncLogs"><div class="empty">Загрузка...</div></div>
+          </div>
+
+          <!-- ИМПОРТ ИЗ XLS ФАЙЛА YCLIENTS -->
+          <div class="card mb" style="border:2px solid #6366f1">
+            <div class="ct" style="color:#6366f1">
+              📊 Импорт истории транзакций из CSV (YClients)
+            </div>
+            <div style="font-size:12.5px;color:var(--t2);margin-bottom:14px;line-height:1.7">
+              Выгрузите отчёты из YClients: <strong>Лояльность → Транзакции → Экспорт XLS</strong>,
+              затем откройте в Excel и сохраните как <strong>CSV UTF-8</strong>.<br>
+              Загружайте каждый тип файла отдельно: пополнения, списания с карты, ручные списания.
+              Дубли пропускаются автоматически.
+            </div>
+            <div class="fg">
+              <label class="fl">Выберите XLS файл</label>
+              <input type="file" id="xlsFile" accept=".csv,.txt" style="padding:6px;background:var(--bg);border:1px solid var(--brd);border-radius:6px;width:100%">
+            </div>
+            <div id="xlsImportResult" style="display:none;margin:10px 0;font-size:13px;padding:10px 12px;border-radius:8px"></div>
+            <div style="display:flex;gap:8px;align-items:center">
+              <button class="btn btn-pri" id="xlsImportBtn" onclick="startXlsImport()">
+                📊 Импортировать CSV
+              </button>
+              <span id="xlsImportProgress" style="font-size:12px;color:var(--t3)"></span>
+            </div>
           </div>
 
           <!-- РАЗОВЫЙ ИМПОРТ ИСТОРИИ КАРТ -->
@@ -738,6 +773,64 @@ async function saveWebCookie() {
   }
 }
 
+async function startXlsImport() {
+  const fileInput = document.getElementById('xlsFile');
+  const btn       = document.getElementById('xlsImportBtn');
+  const progress  = document.getElementById('xlsImportProgress');
+  const result    = document.getElementById('xlsImportResult');
+
+  if (!fileInput.files.length) { notify('Выберите XLS файл', 'err'); return; }
+
+  const file = fileInput.files[0];
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> Обработка...';
+  progress.textContent = `Загружаем ${file.name}...`;
+  result.style.display = 'none';
+
+  try {
+    // Читаем файл как бинарные данные и отправляем напрямую
+    const arrayBuffer = await file.arrayBuffer();
+
+    const resp = await fetch('/api/import/csv-transactions', {
+      method: 'POST',
+      headers: {
+        'Authorization': 'Bearer ' + localStorage.getItem('lp_token'),
+        'Content-Type': 'application/octet-stream',
+        'X-Filename': encodeURIComponent(file.name),
+      },
+      body: arrayBuffer,
+    });
+    const data = await resp.json();
+
+    if (data.ok) {
+      result.style.display = 'block';
+      result.style.background = '#f0fdf4';
+      result.style.color = '#166534';
+      result.innerHTML = `
+        ✅ <strong>Файл импортирован!</strong><br>
+        Строк в файле: <strong>${data.totalRows}</strong> · 
+        Загружено: <strong>${data.imported}</strong> · 
+        Пропущено (дубли/не найден клиент): <strong>${data.skipped}</strong> · 
+        Ошибок: <strong>${data.errors}</strong>
+      `;
+      notify(`Импортировано ${data.imported} транзакций из ${file.name}`, 'ok');
+      fileInput.value = '';
+    } else {
+      throw new Error(data.error || 'Ошибка импорта');
+    }
+  } catch(e) {
+    result.style.display = 'block';
+    result.style.background = '#fef2f2';
+    result.style.color = 'var(--danger)';
+    result.innerHTML = `❌ Ошибка: ${e.message}`;
+    notify('Ошибка импорта: ' + e.message, 'err');
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = '📊 Импортировать CSV';
+    progress.textContent = '';
+  }
+}
+
 async function doLogout() {
   try { await api('POST', '/api/auth/logout'); } catch {}
   localStorage.removeItem('lp_tk');
@@ -771,7 +864,7 @@ function nav(el) {
   document.querySelectorAll('.page').forEach(x=>x.classList.remove('active'));
   document.getElementById('page-'+p)?.classList.add('active');
   if (p==='clients')   loadClients();
-  if (p==='records')   { setDefDates(); loadRecords(); }
+  if (p==='records')   { setDefDates(); loadRecords(1); }
   if (p==='loyalty')   { loadLs(); loadBdList(); }
   if (p==='analytics') loadAnalytics();
   if (p==='settings')  loadSettings();
@@ -791,7 +884,7 @@ async function loadDashboard() {
     document.getElementById('ds1').textContent = s.totalClients.toLocaleString('ru');
     document.getElementById('ds1s').textContent = '+' + s.newClients + ' новых за период';
     document.getElementById('ds2').textContent = s.totalBonusBalance.toLocaleString('ru');
-    document.getElementById('ds2s').textContent = 'начислено ' + s.periodBonuses.toLocaleString('ru') + ' ₽';
+    document.getElementById('ds2s').textContent = 'начислено ' + parseFloat(s.periodBonuses||0).toLocaleString('ru') + ' ₽ · списано ' + parseFloat(s.periodRedeemed||0).toLocaleString('ru') + ' ₽';
     document.getElementById('ds3').textContent = s.periodRevenue.toLocaleString('ru') + ' ₽';
     document.getElementById('ds3s').textContent = 'за ' + dashP + ' дней · ' + s.periodRecords + ' записей';
     document.getElementById('ds4').textContent = s.sleepingClients.toLocaleString('ru');
@@ -1049,26 +1142,129 @@ async function quickB(id,sign) {
 }
 
 // ── RECORDS ──
+let recordsPage = 1;
+const RECORDS_PER_PAGE = 50;
+
 function setDefDates() {
-  const fmt=d=>d.toISOString().split('T')[0];
+  const fmt=d=>`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
   document.getElementById('rFrom').value=fmt(new Date(Date.now()-30*864e5));
   document.getElementById('rTo').value=fmt(new Date());
 }
-async function loadRecords() {
+function formatVisitDate(raw) {
+  if (!raw) return '—';
+  // Берём только дату (YYYY-MM-DD), игнорируя timezone сдвиг
+  const s = String(raw);
+  let ymd = s;
+  if (s.includes('T')) ymd = s.split('T')[0];
+  const parts = ymd.split('-');
+  if (parts.length !== 3) return s;
+  return `${parts[2]}.${parts[1]}.${parts[0]}`;  // DD.MM.YYYY
+}
+async function loadRecords(page) {
+  if (page !== undefined) recordsPage = page;
   try {
-    const q=new URLSearchParams({dateFrom:document.getElementById('rFrom')?.value||'',dateTo:document.getElementById('rTo')?.value||'',status:document.getElementById('rStat')?.value||'',limit:200});
+    const q=new URLSearchParams({
+      dateFrom: document.getElementById('rFrom')?.value||'',
+      dateTo:   document.getElementById('rTo')?.value||'',
+      status:   document.getElementById('rStat')?.value||'',
+      page:     recordsPage,
+      limit:    RECORDS_PER_PAGE
+    });
     const d=await api('GET','/api/records?'+q);
-    const SL={completed:'Завершён',cancelled:'Отменён',pending:'Запланирован'};
-    const SB={completed:'bg',cancelled:'br',pending:'bo'};
+    // Метки статусов
+    const SL={
+      completed:'Оказана', arrived:'Пришёл', confirmed:'Подтверждена',
+      waiting:'Ожидание', pending:'Ожидание', cancelled:'Отменена',
+      no_show:'Не пришёл', deleted:'Удалена'
+    };
+    // Цвета: inline-стили вместо классов для гибкости
+    const SStyle={
+      completed: 'background:rgba(0,200,150,.15);color:#007a5a',          // зелёный — оплачен+пришёл
+      arrived:   'background:rgba(245,158,11,.15);color:#b45309',         // жёлтый  — пришёл, не оплачен
+      confirmed: 'background:rgba(59,130,246,.12);color:#1d4ed8',         // синий   — подтверждён
+      waiting:   'background:rgba(59,130,246,.12);color:#1d4ed8',         // синий   — ожидание
+      pending:   'background:rgba(59,130,246,.12);color:#1d4ed8',         // синий
+      cancelled: 'background:rgba(232,84,84,.12);color:#c53030',          // красный — отменён
+      no_show:   'background:rgba(232,84,84,.12);color:#c53030',          // красный — не пришёл
+      deleted:   'background:rgba(232,84,84,.12);color:#c53030',          // красный — удалён
+    };
     const tb=document.getElementById('rBody');
-    if(!d.records?.length){tb.innerHTML='<tr><td colspan="9" class="empty">Записей нет</td></tr>';return;}
+    if(!d.records?.length){tb.innerHTML='<tr><td colspan="9" class="empty">Записей нет</td></tr>';renderRecordsPager(d);return;}
     tb.innerHTML=d.records.map(r=>{
-      const svc=Array.isArray(r.services)?r.services.map(s=>s.title||s).join(', '):'—';
-      const st=Array.isArray(r.staff)?r.staff.map(s=>s.name||s).join(', '):'—';
-      return `<tr><td style="color:var(--t2)">${r.visit_date||'—'}</td><td><strong>${r.client_name||'—'}</strong></td><td style="color:var(--t2)">${svc}</td><td style="color:var(--t2)">${st}</td><td style="font-weight:600">${parseFloat(r.amount||0).toLocaleString('ru')} ₽</td><td style="color:var(--a);font-weight:600">${r.bonus_accrued>0?'+'+r.bonus_accrued:r.bonus_processed?'0':'—'}</td><td style="color:var(--t3)">${r.cashback_pct>0?parseFloat(r.cashback_pct)+'%':'—'}</td><td><span class="badge ${SB[r.status]||'bgr'}">${SL[r.status]||r.status}</span></td><td><span class="badge bgr">${{sync:'Синхр.',webhook:'Webhook'}[r.source]||r.source||'—'}</span></td></tr>`;
+      // Парсим услуги и сотрудников из JSON
+      let services = r.services;
+      if (typeof services === 'string') try { services = JSON.parse(services); } catch { services = []; }
+      const svc = Array.isArray(services) ? services.map(s=>s.title||s.name||s).filter(Boolean).join(', ')||'—' : '—';
+      let staff = r.staff;
+      if (typeof staff === 'string') try { staff = JSON.parse(staff); } catch { staff = []; }
+      const st = Array.isArray(staff) ? staff.map(s=>s.name||s).filter(Boolean).join(', ')||'—' : (staff?.name||'—');
+
+      const amt     = parseFloat(r.real_amount||r.amount||0);
+      const accrued = parseFloat(r.bonus_accrued||r.real_bonus_accrued||0);
+      const redeemed= parseFloat(r.bonus_redeemed||r.real_bonus_redeemed||0);
+      const status  = r.yclients_status || r.status || 'pending';
+
+      // Время визита из visit_datetime
+      let timeStr = '';
+      if (r.visit_datetime) {
+        const dt = new Date(r.visit_datetime);
+        if (!isNaN(dt)) {
+          timeStr = dt.toLocaleTimeString('ru', {hour:'2-digit', minute:'2-digit', timeZone:'Europe/Moscow'});
+        }
+      }
+
+      // Определяем итоговый статус для цвета:
+      // arrived + paid = completed (зелёный), arrived + not paid = arrived (жёлтый)
+      let displayStatus = status;
+      // Только arrived + полностью оплачен = Оказана (зелёный)
+      if (status === 'arrived' && r.is_paid_full) displayStatus = 'completed';
+
+      const badgeStyle = SStyle[displayStatus] || SStyle['pending'];
+
+      // Галочка оплаты
+      const paidMark = r.is_paid_full
+        ? `<span title="Оплачен" style="color:#00c896;margin-left:5px;font-size:14px">✓</span>`
+        : '';
+
+      return `<tr>
+        <td style="color:var(--t2);white-space:nowrap">
+          ${formatVisitDate(r.visit_date_msk || r.visit_date)}
+          ${timeStr ? `<br><span style="font-size:11px;color:var(--t3)">${timeStr}</span>` : ''}
+        </td>
+        <td><strong>${r.client_name||'—'}</strong><br><span style="font-size:11px;color:var(--t3)">${r.client_phone||''}</span></td>
+        <td style="color:var(--t2);font-size:12px">${svc}</td>
+        <td style="color:var(--t2);font-size:12px">${st}</td>
+        <td style="font-weight:600;text-align:right">${amt>0?amt.toLocaleString('ru')+' ₽':'—'}</td>
+        <td style="color:var(--a);font-weight:600;text-align:right">${accrued>0?'+'+accrued.toLocaleString('ru'):'—'}</td>
+        <td style="color:var(--danger);font-weight:600;text-align:right">${redeemed>0?'-'+redeemed.toLocaleString('ru'):'—'}</td>
+        <td style="white-space:nowrap"><span class="badge" style="${badgeStyle}">${SL[displayStatus]||SL[status]||status}</span>${paidMark}</td>
+        <td><span class="badge bgr" style="font-size:10px">${{sync:'Синхр.',webhook:'Hook'}[r.source]||r.source||'—'}</span></td>
+      </tr>`;
     }).join('');
-    document.getElementById('rPager').textContent='Записей: '+d.total;
+    renderRecordsPager(d);
   } catch(e){notify(e.message,'err');}
+}
+function renderRecordsPager(d) {
+  const el = document.getElementById('rPager');
+  const total = d.total || 0;
+  const totalPages = d.totalPages || 1;
+  const curPage = d.page || recordsPage;
+  if (total === 0) { el.innerHTML = ''; return; }
+  let html = `<span>Записей: ${total}</span>`;
+  if (totalPages > 1) {
+    html += ` &nbsp;|&nbsp; Стр. ${curPage} из ${totalPages} &nbsp;`;
+    html += `<button class="btn btn-sec" style="padding:2px 10px;font-size:12px;margin:0 3px" ${curPage<=1?'disabled':''} onclick="loadRecords(${curPage-1})">←</button>`;
+    // Показываем до 7 страниц вокруг текущей
+    let start = Math.max(1, curPage - 3);
+    let end   = Math.min(totalPages, start + 6);
+    start = Math.max(1, end - 6);
+    for (let p = start; p <= end; p++) {
+      if (p === curPage) html += `<button class="btn" style="padding:2px 10px;font-size:12px;margin:0 2px">${p}</button>`;
+      else html += `<button class="btn btn-sec" style="padding:2px 10px;font-size:12px;margin:0 2px" onclick="loadRecords(${p})">${p}</button>`;
+    }
+    html += `<button class="btn btn-sec" style="padding:2px 10px;font-size:12px;margin:0 3px" ${curPage>=totalPages?'disabled':''} onclick="loadRecords(${curPage+1})">→</button>`;
+  }
+  el.innerHTML = html;
 }
 
 // ── LOYALTY SETTINGS ──
@@ -1093,6 +1289,7 @@ function renderLvlEditor() {
 function populateLsForm() {
   const g=id=>{const e=document.getElementById(id);return e;};
   const s=(id,v)=>{const e=g(id);if(e){if(e.type==='checkbox')e.checked=!!v;else e.value=v!==undefined?v:'';}};
+  s('ls-bonuses-on', lsData.bonuses_enabled !== false);
   s('ls-exp',lsData.bonus_expiry_days||0);
   s('ls-bd-on',lsData.birthday_enabled!==false);
   s('ls-bd-bonus',lsData.birthday_bonus||500);
@@ -1100,6 +1297,7 @@ function populateLsForm() {
   s('ls-ref-on',lsData.referral_enabled!==false);
   s('ls-ref-s',lsData.referral_bonus_sender||200);
   s('ls-ref-r',lsData.referral_bonus_receiver||150);
+  updateBonusBanner();
 }
 function ltab(t,el) {
   ['levels','services','birthday','referral'].forEach(x=>{const e=document.getElementById('lt-'+x);if(e)e.style.display=x===t?'block':'none';});
@@ -1157,8 +1355,13 @@ async function saveLs() {
   }));
   const sc={}; ycSvcs.forEach(s=>{const e=document.getElementById('sc_'+s.id);if(e)sc[s.id]=parseInt(e.value)||5;});
   const g=id=>document.getElementById(id);
-  const payload={levels,service_cashback:sc,birthday_enabled:g('ls-bd-on')?.checked,birthday_bonus:parseInt(g('ls-bd-bonus')?.value)||500,birthday_days_before:parseInt(g('ls-bd-days')?.value)||3,referral_enabled:g('ls-ref-on')?.checked,referral_bonus_sender:parseInt(g('ls-ref-s')?.value)||200,referral_bonus_receiver:parseInt(g('ls-ref-r')?.value)||150,bonus_expiry_days:parseInt(g('ls-exp')?.value)||0};
-  try { await api('PUT','/api/loyalty-settings',payload); lsData={...lsData,...payload}; notify('Сохранено!','ok'); } catch(e){notify(e.message,'err');}
+  const payload={levels,service_cashback:sc,bonuses_enabled:g('ls-bonuses-on')?.checked!==false,birthday_enabled:g('ls-bd-on')?.checked,birthday_bonus:parseInt(g('ls-bd-bonus')?.value)||500,birthday_days_before:parseInt(g('ls-bd-days')?.value)||3,referral_enabled:g('ls-ref-on')?.checked,referral_bonus_sender:parseInt(g('ls-ref-s')?.value)||200,referral_bonus_receiver:parseInt(g('ls-ref-r')?.value)||150,bonus_expiry_days:parseInt(g('ls-exp')?.value)||0};
+  try { await api('PUT','/api/loyalty-settings',payload); lsData={...lsData,...payload}; updateBonusBanner(); notify('Сохранено!','ok'); } catch(e){notify(e.message,'err');}
+}
+function updateBonusBanner() {
+  const on = document.getElementById('ls-bonuses-on')?.checked !== false;
+  const banner = document.getElementById('bonuses-disabled-banner');
+  if (banner) banner.style.display = on ? 'none' : 'flex';
 }
 
 // ── ANALYTICS ──
@@ -1167,10 +1370,17 @@ async function loadAnalytics() {
   try {
     const [dash,bon,ret]=await Promise.all([api('GET','/api/analytics/dashboard?period='+anaP),api('GET','/api/analytics/bonuses?period='+anaP),api('GET','/api/analytics/retention')]);
     const s=dash.stats;
-    document.getElementById('an1').textContent=s.periodRecords>0?Math.round(s.periodRevenue/s.periodRecords).toLocaleString('ru')+' ₽':'—';
-    document.getElementById('an2').textContent=s.periodBonuses.toLocaleString('ru')+' ₽';
-    document.getElementById('an3').textContent=s.periodBonuses>0?Math.round(s.periodRevenue/s.periodBonuses)+'x':'—';
-    document.getElementById('an4').textContent=s.newClients;
+    const periodBonuses  = parseFloat(s.periodBonuses || 0);
+    const periodRedeemed = parseFloat(s.periodRedeemed || 0);
+    document.getElementById('an1').textContent = s.periodRecords>0 ? Math.round(s.periodRevenue/s.periodRecords).toLocaleString('ru')+' ₽' : '—';
+    document.getElementById('an1s').textContent = s.periodRecords + ' записей за период';
+    document.getElementById('an2').textContent = periodBonuses.toLocaleString('ru') + ' ₽';
+    document.getElementById('an2s').textContent = 'за ' + anaP + ' дней';
+    document.getElementById('an5').textContent = periodRedeemed.toLocaleString('ru') + ' ₽';
+    document.getElementById('an5s').textContent = 'за ' + anaP + ' дней';
+    document.getElementById('an3').textContent = periodBonuses>0 ? Math.round(s.periodRevenue/periodBonuses)+'x' : '—';
+    document.getElementById('an4').textContent = s.newClients;
+    document.getElementById('an4s').textContent = 'за ' + anaP + ' дней';
     buildBfChart(bon); buildRetChart(ret); buildGrwChart(dash.dailyRevenue); buildLvlChart(dash.levelDist);
   } catch(e){notify('Ошибка аналитики: '+e.message,'err');}
 }

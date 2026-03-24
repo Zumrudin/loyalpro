@@ -139,47 +139,52 @@ async function ycWebLogin(salon) {
 // Получить историю транзакций карты через веб-интерфейс YClients
 async function ycGetCardTransactions(salon, clientYcId, phone, chainId) {
   try {
-    const cookie = await ycWebLogin(salon);
+    const cookie    = await ycWebLogin(salon);
     const companyId = salon.yclients_company_id;
+    // Приоритет: явный chainId → salon.yclients_chain_id → companyId
     const groupId   = chainId || salon.yclients_chain_id || companyId;
-
-    // Убираем + из телефона
     const phoneClean = String(phone || '').replace(/\D/g, '');
 
-    const url = `https://yclients.com/loyalty_cards/get_client_loyalty_cards_json/${groupId}/${companyId}/${clientYcId}/${phoneClean}?show_redesign_view=false&_=${Date.now()}`;
+    if (groupId === companyId) {
+      console.warn(`[WebTxns] WARNING: groupId == companyId (${companyId}). Chain ID не настроен! Установите yclients_chain_id в БД.`);
+    }
+    console.log(`[WebTxns] groupId=${groupId} companyId=${companyId} clientYcId=${clientYcId} phone=${phoneClean}`);
+
+    // Пробуем с телефоном и без (некоторые клиенты без телефона)
+    const urlsToTry = phoneClean
+      ? [
+          `https://yclients.com/loyalty_cards/get_client_loyalty_cards_json/${groupId}/${companyId}/${clientYcId}/${phoneClean}?show_redesign_view=false&_=${Date.now()}`,
+          `https://yclients.com/loyalty_cards/get_client_loyalty_cards_json/${groupId}/${companyId}/${clientYcId}?show_redesign_view=false&_=${Date.now()}`,
+        ]
+      : [
+          `https://yclients.com/loyalty_cards/get_client_loyalty_cards_json/${groupId}/${companyId}/${clientYcId}?show_redesign_view=false&_=${Date.now()}`,
+        ];
+
+    const url = urlsToTry[0];
     console.log(`[WebTxns] GET ${url}`);
-    console.log(`[WebTxns] groupId=${groupId} companyId=${companyId} clientYcId=${clientYcId} phoneClean=${phoneClean}`);
 
     const UA2 = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36';
-    const resp = await axios.get(url, {
-      headers: {
-        'Cookie':            cookie,
-        'User-Agent':        UA2,
-        'X-Requested-With':  'XMLHttpRequest',
-        'Accept':            'application/json, text/javascript, */*; q=0.01',
-        'Referer':           `https://yclients.com/company/${companyId}/clients/`,
-        'Accept-Language':   'ru-RU,ru;q=0.9',
-      },
-      validateStatus: s => s < 500,
-      timeout: 15000,
-    });
-    console.log(`[WebTxns] Response status: ${resp.status}`);
+    const reqHeaders = {
+      'Cookie':           cookie,
+      'User-Agent':       UA2,
+      'X-Requested-With': 'XMLHttpRequest',
+      'Accept':           'application/json, text/javascript, */*; q=0.01',
+      'Referer':          `https://yclients.com/company/${companyId}/clients/`,
+      'Accept-Language':  'ru-RU,ru;q=0.9',
+    };
+
+    let resp = await axios.get(url, { headers: reqHeaders, validateStatus: s=>s<500, timeout:15000 });
+    console.log(`[WebTxns] status=${resp.status} success=${resp.data?.success}`);
+
+    // Если 403/404 или не success — пробуем запасной URL (без телефона)
+    if (!resp.data?.success && urlsToTry.length > 1) {
+      console.log(`[WebTxns] Trying fallback URL (without phone)`);
+      resp = await axios.get(urlsToTry[1], { headers: reqHeaders, validateStatus: s=>s<500, timeout:15000 });
+      console.log(`[WebTxns] Fallback status=${resp.status} success=${resp.data?.success}`);
+    }
+
     if (resp.status === 404) {
-      console.log(`[WebTxns] 404 — possibly wrong URL format or client not found`);
-      // Пробуем без номера телефона (иногда достаточно client_id)
-      const url2 = `https://yclients.com/loyalty_cards/get_client_loyalty_cards_json/${groupId}/${companyId}/${clientYcId}?show_redesign_view=false&_=${Date.now()}`;
-      console.log(`[WebTxns] Trying without phone: ${url2}`);
-      const resp2 = await axios.get(url2, {
-        headers: { 'Cookie': cookie, 'User-Agent': UA2, 'X-Requested-With': 'XMLHttpRequest', 'Referer': `https://yclients.com/company/${companyId}/clients/` },
-        validateStatus: s => s < 500,
-        timeout: 15000,
-      });
-      console.log(`[WebTxns] Without phone status: ${resp2.status}`);
-      if (resp2.data?.success) {
-        const html2 = resp2.data.html || '';
-        console.log(`[WebTxns] Got HTML (no phone), length=${html2.length}`);
-        return parseCardTransactionsHtml(html2);
-      }
+      console.log(`[WebTxns] 404 — client not found, skipping`);
       return [];
     }
 
@@ -291,6 +296,19 @@ function calcBonus(visitAmount, serviceIds, level, serviceCashback) {
   return { pct, bonus: Math.floor(visitAmount * pct / 100) };
 }
 
+// ── Вычислить сумму записи из services (API /records не возвращает cost на верхнем уровне) ──
+function getRecordCost(ycr) {
+  // Прямое поле cost (webhook формат)
+  if (ycr.cost !== undefined && ycr.cost !== null) return parseFloat(ycr.cost) || 0;
+  // Суммируем из services
+  if (Array.isArray(ycr.services) && ycr.services.length > 0) {
+    return ycr.services.reduce((sum, s) => {
+      return sum + parseFloat(s.cost_to_pay ?? s.cost ?? s.amount ?? 0);
+    }, 0);
+  }
+  return 0;
+}
+
 // ── Process completed visit ───────────────────────────────────
 async function processCompletedRecord(recordId, clientId, ycRec, salonId, settings) {
   const pg = await pool.connect();
@@ -299,11 +317,12 @@ async function processCompletedRecord(recordId, clientId, ycRec, salonId, settin
     const client = (await pg.query('SELECT * FROM clients WHERE id=$1 FOR UPDATE', [clientId])).rows[0];
     if (!client) { await pg.query('ROLLBACK'); return 0; }
 
-    const cost     = parseFloat(ycRec.cost || 0);
+    const cost     = getRecordCost(ycRec);
     const newSpent = parseFloat(client.total_spent || 0) + cost;
     const level    = getLevel(newSpent, settings.levels);
     const svcIds   = (ycRec.services || []).map(s => s.id);
     const { pct, bonus } = calcBonus(cost, svcIds, level, settings.service_cashback);
+    const accrual  = settings.bonuses_enabled === false ? 0 : bonus;
 
     await pg.query(
       `UPDATE clients SET
@@ -314,26 +333,31 @@ async function processCompletedRecord(recordId, clientId, ycRec, salonId, settin
          last_visit_at = $4,
          updated_at    = NOW()
        WHERE id = $5`,
-      [bonus, cost, level.key, ycRec.date || new Date(), clientId]
+      [accrual, cost, level.key, ycRec.date || new Date(), clientId]
     );
 
-    await pg.query(
-      `INSERT INTO bonus_transactions
-         (salon_id,client_id,record_id,type,amount,balance_before,balance_after,
-          visit_amount,cashback_pct,description,created_at)
-       VALUES ($1,$2,$3,'accrual',$4,$5,$6,$7,$8,$9,NOW())`,
-      [salonId, clientId, recordId, bonus,
-       client.bonus_balance, client.bonus_balance + bonus,
-       cost, pct, `Начисление за визит ${String(ycRec.date || '').split(' ')[0]}`]
-    );
+    if (accrual > 0) {
+      await pg.query(
+        `INSERT INTO loyalty_card_transactions
+           (salon_id,client_id,yclients_card_id,type,amount,
+            balance_after,title,record_id,txn_date,created_at)
+         VALUES ($1,$2,
+           (SELECT yclients_card_id FROM clients WHERE id=$3),
+           'accrual',$4,$5,$6,$7,NOW(),NOW())`,
+        [salonId, clientId, clientId, accrual,
+         client.bonus_balance + accrual,
+         `Кэшбэк ${pct}% за визит ${String(ycRec.date || '').split(' ')[0]}`,
+         recordId]
+      );
+    }
 
     await pg.query(
       'UPDATE records SET bonus_accrued=$1,cashback_pct=$2,bonus_processed=TRUE WHERE id=$3',
-      [bonus, pct, recordId]
+      [accrual, accrual > 0 ? pct : 0, recordId]
     );
 
     await pg.query('COMMIT');
-    return bonus;
+    return accrual;
   } catch (e) {
     await pg.query('ROLLBACK');
     console.error('[processRecord]', e.message);
@@ -352,16 +376,50 @@ async function cancelRecordBonuses(recordId, clientId, salonId) {
   const deduct = Math.min(record.bonus_accrued, client.bonus_balance);
   await db.query('UPDATE clients SET bonus_balance=bonus_balance-$1,updated_at=NOW() WHERE id=$2', [deduct, clientId]);
   await db.query(
-    `INSERT INTO bonus_transactions
-       (salon_id,client_id,record_id,type,amount,balance_before,balance_after,description,created_at)
-     VALUES ($1,$2,$3,'cancellation',$4,$5,$6,$7,NOW())`,
-    [salonId, clientId, recordId, -deduct,
-     client.bonus_balance, client.bonus_balance - deduct, 'Отмена начисления']
+    `INSERT INTO loyalty_card_transactions
+       (salon_id,client_id,yclients_card_id,type,amount,
+        balance_after,title,record_id,txn_date,created_at)
+     VALUES ($1,$2,
+       (SELECT yclients_card_id FROM clients WHERE id=$3),
+       'redemption',$4,$5,$6,$7,NOW(),NOW())`,
+    [salonId, clientId, clientId, -deduct,
+     client.bonus_balance - deduct,
+     'Отмена начисления', recordId]
   );
   await db.query(
     'UPDATE records SET bonus_processed=FALSE,bonus_accrued=0,status=$1 WHERE id=$2',
     ['cancelled', recordId]
   );
+}
+
+// ── Определение статуса записи (универсально для API и webhook) ──
+function getRecordStatus(ycr) {
+  // Формат webhook: status_id (1-7)
+  if (ycr.status_id !== undefined && ycr.status_id !== null) {
+    const sid = parseInt(ycr.status_id);
+    if (sid === 4) return 'completed';   // Оказана
+    if (sid === 3) return 'completed';   // Пришёл
+    if (sid === 2) return 'confirmed';   // Подтверждена
+    if (sid === 5) return 'cancelled';   // Отменена
+    if (sid === 6) return 'no_show';     // Не пришёл
+    if (sid === 7) return 'deleted';     // Удалена
+    return 'waiting';                     // 1 = Ожидание
+  }
+
+  // Формат GET /records: attendance + deleted
+  if (ycr.deleted) return 'deleted';
+
+  const att = ycr.attendance !== undefined ? parseInt(ycr.attendance) : undefined;
+  if (att === 2) return 'completed';   // Оказана (услуга оказана)
+  if (att === 1) return 'confirmed';   // Клиент пришёл / подтвердил
+  if (att === -1) return 'no_show';    // Не пришёл
+  if (att === 0) return 'waiting';     // Ожидание
+
+  // Fallback: проверяем visit_attendance (некоторые версии API)
+  if (ycr.visit_attendance === 1) return 'completed';
+  if (ycr.confirmed === 1) return 'confirmed';
+
+  return 'waiting';
 }
 
 // ── SYNC ──────────────────────────────────────────────────────
@@ -374,49 +432,126 @@ async function runSync(salon, syncType, userId) {
   let cs = 0, rs = 0, ba = 0, nc = 0;
 
   try {
-    // ── 1. Клиенты: сначала все ID, потом детали с задержкой ──
-    let page = 1, allIds = [];
+    const settings = await getLoyaltySettings(salon.id);
 
-    // Шаг 1: собираем все ID (быстро, без лимитов)
+    // ══════════════════════════════════════════════════════════════
+    // ШАГ 1: Загружаем ВСЕ записи из YClients (быстро, bulk)
+    // ══════════════════════════════════════════════════════════════
+    const endDate   = new Date().toISOString().split('T')[0];
+    const syncDays  = parseInt(process.env.SYNC_DAYS || '730');
+    const startDate = new Date(Date.now() - syncDays * 86400000).toISOString().split('T')[0];
+    console.log(`[Sync] ── Step 1: Fetching ALL records ${startDate} → ${endDate} ──`);
+
+    let allRecs = [], rPage = 1;
     for (;;) {
-      const ids = await ycPost(salon, `/company/${salon.yclients_company_id}/clients/search`, {
-        page, count: 25, filters: []
-      });
-      const chunk = Array.isArray(ids) ? ids : [];
-      const pageIds = chunk.map(i => i.id);
-      console.log(`[Sync] IDs page ${page}: ${chunk.length} → ${pageIds.slice(0,3).join(',')}`);
+      let chunk = null;
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        try {
+          chunk = await ycGet(salon, `/records/${salon.yclients_company_id}`, {
+            start_date: startDate, end_date: endDate, page: rPage, count: 200
+          });
+          break; // успех
+        } catch (e) {
+          console.log(`[Sync] Records page ${rPage} attempt ${attempt} failed: ${e.message}`);
+          if (attempt < 3) await sleep(3000 * attempt);
+          else throw e;
+        }
+      }
+      if (!chunk?.length) break;
+      allRecs = allRecs.concat(chunk);
+      console.log(`[Sync] Records page ${rPage}: ${chunk.length} (total: ${allRecs.length})`);
+      if (chunk.length < 200) break;
+      rPage++;
+      await sleep(300); // чуть больше паузы для 10k+ записей
+    }
+    console.log(`[Sync] Total records fetched: ${allRecs.length}`);
+
+    // Диагностика: выводим ключи и статусные поля первой записи
+    if (allRecs.length > 0) {
+      const sample = allRecs[0];
+      console.log(`[Sync] Sample record keys: ${Object.keys(sample).join(', ')}`);
+      console.log(`[Sync] Sample record status fields: status_id=${sample.status_id} attendance=${sample.attendance} visit_attendance=${sample.visit_attendance} deleted=${sample.deleted} confirmed=${sample.confirmed}`);
+      console.log(`[Sync] Sample record → getRecordStatus = "${getRecordStatus(sample)}" | date="${sample.date}" cost=${sample.cost} computed_cost=${getRecordCost(sample)} services=${Array.isArray(sample.services)?sample.services.length:'none'}`);
+    }
+
+    // Индексируем записи по yclients_client_id
+    const recordsByClient = {};
+    const orphanRecords = []; // записи без клиента
+    for (const rec of allRecs) {
+      const cid = rec.client?.id;
+      if (cid) {
+        if (!recordsByClient[cid]) recordsByClient[cid] = [];
+        recordsByClient[cid].push(rec);
+      } else {
+        orphanRecords.push(rec);
+      }
+    }
+    console.log(`[Sync] Records indexed: ${Object.keys(recordsByClient).length} clients, ${orphanRecords.length} without client`);
+
+    // Пауза перед следующим шагом чтобы не перегрузить API
+    await sleep(2000);
+
+    // ══════════════════════════════════════════════════════════════
+    // ШАГ 2: Собираем все ID клиентов (быстро)
+    // ══════════════════════════════════════════════════════════════
+    console.log(`[Sync] ── Step 2: Collecting client IDs ──`);
+    let page = 1, allIds = [];
+    for (;;) {
+      let chunk = null;
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        try {
+          const ids = await ycPost(salon, `/company/${salon.yclients_company_id}/clients/search`, {
+            page, count: 25, filters: []
+          });
+          chunk = Array.isArray(ids) ? ids : [];
+          break;
+        } catch (e) {
+          console.log(`[Sync] Client IDs page ${page} attempt ${attempt} failed: ${e.message}`);
+          if (attempt < 3) await sleep(3000 * attempt);
+          else throw e;
+        }
+      }
       if (!chunk.length) break;
-      allIds = allIds.concat(pageIds);
+      allIds = allIds.concat(chunk.map(i => i.id));
       if (chunk.length < 25) break;
       page++;
-      await sleep(200);
+      await sleep(300);
     }
-    console.log(`[Sync] Total IDs collected: ${allIds.length}`);
+    console.log(`[Sync] Total client IDs: ${allIds.length}`);
 
-// Шаг 2: загружаем детали и сразу сохраняем в БД
-    let allClients = [];
+    // ══════════════════════════════════════════════════════════════
+    // ШАГ 3: Обрабатываем каждого клиента ЦЕЛИКОМ
+    // (детали → БД → карта → записи → бонусы)
+    // ══════════════════════════════════════════════════════════════
+    console.log(`[Sync] ── Step 3: Processing clients one-by-one ──`);
+
+    let retryCount = 0;
+    const MAX_RETRIES = 3;
+
     for (let idx = 0; idx < allIds.length; idx++) {
-      const clientId = allIds[idx];
+      const ycClientId = allIds[idx];
       await sleep(400);
-      try {
-        const ycc = await ycGet(salon, `/client/${salon.yclients_company_id}/${clientId}`);
-        if (!ycc) continue;
-        allClients.push(ycc);
 
-        // Сразу сохраняем в БД
+      try {
+        // ── 3a. Загружаем детали клиента ──
+        const ycc = await ycGet(salon, `/client/${salon.yclients_company_id}/${ycClientId}`);
+        if (!ycc) continue;
+
         const fullName = [ycc.name, ycc.surname, ycc.patronymic]
           .filter(Boolean).join(' ').trim() || ycc.display_name || ycc.phone || 'Клиент';
         const phone        = ycc.phone || null;
         const totalSpent   = parseFloat(ycc.spent || ycc.paid || 0);
         const visitsCount  = parseInt(ycc.visits || 0);
-        // last_change_date — дата последнего визита из YClients
         const lastVisitAt  = ycc.last_change_date ? new Date(ycc.last_change_date) : null;
 
+        // ── 3b. Сохраняем / обновляем клиента в БД ──
         const ex = await db.one(
           'SELECT id FROM clients WHERE salon_id=$1 AND yclients_client_id=$2',
           [salon.id, ycc.id]
         );
+        let dbClientId;
         if (ex) {
+          dbClientId = ex.id;
           await db.query(
             `UPDATE clients SET
                name=$1, phone=$2, email=$3, birthday=$4, yclients_data=$5,
@@ -427,134 +562,187 @@ async function runSync(salon, syncType, userId) {
              totalSpent, visitsCount, lastVisitAt, ex.id]
           );
         } else {
-          await db.query(
+          const ins = await db.one(
             `INSERT INTO clients
                (salon_id, yclients_client_id, name, phone, email, birthday,
                 total_spent, visits_count, last_visit_at, yclients_data, synced_at)
              VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,NOW())
-             ON CONFLICT DO NOTHING`,
+             ON CONFLICT (salon_id, yclients_client_id) DO UPDATE SET synced_at=NOW()
+             RETURNING id`,
             [salon.id, ycc.id, fullName, phone, ycc.email||null, ycc.birth_date||null,
              totalSpent, visitsCount, lastVisitAt, JSON.stringify(ycc)]
           );
+          dbClientId = ins?.id;
+          if (!dbClientId) {
+            const found = await db.one('SELECT id FROM clients WHERE salon_id=$1 AND yclients_client_id=$2', [salon.id, ycc.id]);
+            dbClientId = found?.id;
+          }
           nc++;
         }
         cs++;
-        if (cs % 25 === 0) console.log(`[Sync] Saved ${cs}/${allIds.length} clients to DB`);
 
-        // ── Загружаем карту лояльности клиента ──
-        if (salon.yclients_card_type_id) {
+        // ── 3c. Загружаем карту лояльности ──
+        if (salon.yclients_card_type_id && dbClientId) {
           try {
             const cards = await ycGetClientCards(salon, ycc.id);
             const card = cards.find(c => c.type?.id === salon.yclients_card_type_id
                                       || String(c.type?.id) === String(salon.yclients_card_type_id));
             if (card) {
-              const dbClient = await db.one(
-                'SELECT id FROM clients WHERE salon_id=$1 AND yclients_client_id=$2',
-                [salon.id, ycc.id]
+              const cardBalance = parseFloat(card.balance || 0);
+              const paidAmount  = parseFloat(card.paid_amount || card.sold_amount || totalSpent || 0);
+              await db.query(
+                `UPDATE clients SET
+                   yclients_card_id=$1, yclients_card_number=$2, yclients_card_balance=$3,
+                   bonus_balance=$4, updated_at=NOW()
+                 WHERE id=$5`,
+                [card.id, card.number || card.loyalty_card_number || null,
+                 cardBalance, cardBalance, dbClientId]
               );
-              if (dbClient) {
-                await db.query(
-                  `UPDATE clients SET
-                     yclients_card_id=$1, yclients_card_number=$2, yclients_card_balance=$3,
-                     bonus_balance=$4, updated_at=NOW()
-                   WHERE id=$5`,
-                  [card.id, card.number || card.loyalty_card_number || null,
-                   parseFloat(card.balance || 0), parseFloat(card.balance || 0), dbClient.id]
-                );
-                // Определяем уровень по сумме трат
-                const lsData = await getLoyaltySettings(salon.id);
-                if (lsData?.levels && totalSpent > 0) {
-                  const lvl = getLevel(totalSpent, lsData.levels);
-                  await db.query(
-                    'UPDATE clients SET loyalty_level=$1 WHERE id=$2',
-                    [lvl.key, dbClient.id]
-                  );
-                }
+              // Уровень лояльности
+              if (settings?.levels && paidAmount > 0) {
+                const lvl = getLevel(paidAmount, settings.levels);
+                await db.query('UPDATE clients SET loyalty_level=$1 WHERE id=$2', [lvl.key, dbClientId]);
               }
             }
           } catch (cardErr) {
-            // Не критично — пропускаем
+            // Не критично
           }
+        }
+
+        // ── 3d. Обрабатываем записи этого клиента ──
+        const clientRecords = recordsByClient[ycc.id] || [];
+        let clientRecs = 0, clientBonus = 0;
+
+        for (const ycr of clientRecords) {
+          const status = getRecordStatus(ycr);
+
+          const exRec = await db.one(
+            'SELECT id,status,bonus_processed FROM records WHERE salon_id=$1 AND yclients_record_id=$2',
+            [salon.id, ycr.id]
+          );
+
+          if (exRec) {
+            // Обновляем всегда (raw_payload, сумма, статус)
+            const recCost = getRecordCost(ycr);
+            await db.query(
+              `UPDATE records SET status=$1, raw_payload=$2, amount=$3,
+               services=$4, staff=$5, client_id=$6, updated_at=NOW() WHERE id=$7`,
+              [status, JSON.stringify(ycr), recCost,
+               JSON.stringify(ycr.services || []), JSON.stringify(ycr.staff || []),
+               dbClientId, exRec.id]
+            );
+            if (status === 'completed' && exRec.status !== 'completed' && !exRec.bonus_processed
+                && dbClientId && settings && recCost > 0) {
+              clientBonus += await processCompletedRecord(exRec.id, dbClientId, ycr, salon.id, settings);
+            }
+            if (status === 'cancelled' && exRec.bonus_processed && dbClientId) {
+              await cancelRecordBonuses(exRec.id, dbClientId, salon.id);
+            }
+          } else {
+            const recCost = getRecordCost(ycr);
+            const ins = await db.one(
+              `INSERT INTO records
+                 (salon_id,yclients_record_id,client_id,yclients_client_id,
+                  visit_date,visit_datetime,amount,services,staff,status,source,raw_payload)
+               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'sync',$11) RETURNING id`,
+              [salon.id, ycr.id, dbClientId || null, ycr.client?.id || null,
+               String(ycr.date || '').split(' ')[0] || null, ycr.date || null,
+               recCost, JSON.stringify(ycr.services || []),
+               JSON.stringify(ycr.staff || []), status, JSON.stringify(ycr)]
+            );
+            if (ins && status === 'completed' && dbClientId && settings && recCost > 0) {
+              clientBonus += await processCompletedRecord(ins.id, dbClientId, ycr, salon.id, settings);
+            }
+            clientRecs++;
+          }
+        }
+
+        rs += clientRecs;
+        ba += clientBonus;
+
+        // ── 3e. Привязываем бесхозные транзакции этого клиента к записям ──
+        if (dbClientId) {
+          await db.query(`
+            UPDATE loyalty_card_transactions lct
+            SET record_id = sub.record_id
+            FROM (
+              SELECT DISTINCT ON (lct2.id)
+                     lct2.id AS txn_id,
+                     r.id    AS record_id
+              FROM   loyalty_card_transactions lct2
+              JOIN   records r
+                ON   r.client_id  = lct2.client_id
+                AND  r.salon_id   = lct2.salon_id
+                AND  r.visit_date  = lct2.txn_date::date
+              WHERE  lct2.client_id  = $1
+                AND  lct2.record_id  IS NULL
+                AND  lct2.txn_date   IS NOT NULL
+                AND  r.visit_date    IS NOT NULL
+                AND  r.status        IN ('completed','confirmed')
+              ORDER BY lct2.id, r.visit_datetime DESC
+            ) sub
+            WHERE lct.id = sub.txn_id
+          `, [dbClientId]);
+        }
+
+        // ── Лог по клиенту ──
+        retryCount = 0; // сброс счётчика при успехе
+        if (cs % 25 === 0 || clientRecs > 0 || clientBonus > 0) {
+          console.log(`[Sync] ${cs}/${allIds.length} ${fullName}: records=${clientRecs} bonus=${clientBonus} (total: r=${rs} b=${ba})`);
         }
 
       } catch (e) {
-        if (e.message.includes('429')) {
-          console.log(`[Sync] 429, waiting 10s...`);
+        const msg = e.message || '';
+        if (msg.includes('429')) {
+          console.log(`[Sync] 429 rate limit, waiting 10s...`);
           await sleep(10000);
-          idx--; // повторить этого клиента
+          if (retryCount < MAX_RETRIES) { retryCount++; idx--; } else { retryCount = 0; console.log(`[Sync] Max retries for ${ycClientId}, skipping`); }
+        } else if (msg.includes('socket hang up') || msg.includes('ECONNRESET')
+                || msg.includes('ETIMEDOUT') || msg.includes('ECONNREFUSED')) {
+          console.log(`[Sync] Network error for ${ycClientId}: ${msg}, retrying in 5s...`);
+          await sleep(5000);
+          if (retryCount < MAX_RETRIES) { retryCount++; idx--; } else { retryCount = 0; console.log(`[Sync] Max retries for ${ycClientId}, skipping`); }
         } else {
-          console.log(`[Sync] Skip ${clientId}: ${e.message}`);
+          retryCount = 0;
+          console.log(`[Sync] Skip client ${ycClientId}: ${msg}`);
         }
       }
     }
-    console.log(`[Sync] Clients done: total=${cs} new=${nc}`);
 
-    console.log(`[Sync] DB save done: ${cs} clients, ${nc} new`);
-
-    // ── 2. Записи: последние 90 дней ──
-    const endDate   = new Date().toISOString().split('T')[0];
-    const startDate = new Date(Date.now() - 90 * 86400000).toISOString().split('T')[0];
-    const settings  = await getLoyaltySettings(salon.id);
-    let allRecs = [], rPage = 1;
-
-    for (;;) {
-      const chunk = await ycGet(salon, `/records/${salon.yclients_company_id}`, {
-        start_date: startDate, end_date: endDate, page: rPage, count: 200
-      });
-      if (!chunk?.length) break;
-      allRecs = allRecs.concat(chunk);
-      console.log(`[Sync] Records page ${rPage}: ${chunk.length} records`);
-      if (chunk.length < 200) break;
-      rPage++;
-    }
-    console.log(`[Sync] Total records: ${allRecs.length}`);
-
-    for (const ycr of allRecs) {
-      const status = ycr.status_id === 1 ? 'completed'
-                   : ycr.status_id === 3 ? 'cancelled' : 'pending';
-      const client = ycr.client?.id
-        ? await db.one('SELECT id FROM clients WHERE salon_id=$1 AND yclients_client_id=$2', [salon.id, ycr.client.id])
-        : null;
-      const ex = await db.one(
-        'SELECT id,status,bonus_processed FROM records WHERE salon_id=$1 AND yclients_record_id=$2',
-        [salon.id, ycr.id]
-      );
-
-      if (ex) {
-        if (ex.status !== status) {
-          await db.query('UPDATE records SET status=$1,updated_at=NOW() WHERE id=$2', [status, ex.id]);
-          if (status === 'completed' && !ex.bonus_processed && client && settings && parseFloat(ycr.cost || 0) > 0) {
-            ba += await processCompletedRecord(ex.id, client.id, ycr, salon.id, settings);
-          }
-          if (status === 'cancelled' && ex.bonus_processed && client) {
-            await cancelRecordBonuses(ex.id, client.id, salon.id);
-          }
-        }
-      } else {
-        const ins = await db.one(
-          `INSERT INTO records
-             (salon_id,yclients_record_id,client_id,yclients_client_id,
-              visit_date,visit_datetime,amount,services,staff,status,source,raw_payload)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'sync',$11) RETURNING id`,
-          [salon.id, ycr.id, client?.id || null, ycr.client?.id || null,
-           String(ycr.date || '').split(' ')[0] || null, ycr.date || null,
-           ycr.cost || 0, JSON.stringify(ycr.services || []),
-           JSON.stringify(ycr.staff || []), status, JSON.stringify(ycr)]
+    // ── Сохраняем записи-сироты (без клиента) ──
+    if (orphanRecords.length > 0) {
+      console.log(`[Sync] Processing ${orphanRecords.length} orphan records (no client)...`);
+      for (const ycr of orphanRecords) {
+        const status = getRecordStatus(ycr);
+        const recCost = getRecordCost(ycr);
+        const exRec = await db.one(
+          'SELECT id FROM records WHERE salon_id=$1 AND yclients_record_id=$2',
+          [salon.id, ycr.id]
         );
-        if (ins && status === 'completed' && client && settings && parseFloat(ycr.cost || 0) > 0) {
-          ba += await processCompletedRecord(ins.id, client.id, ycr, salon.id, settings);
+        if (exRec) {
+          await db.query(
+            `UPDATE records SET status=$1, raw_payload=$2, amount=$3,
+             services=$4, staff=$5, updated_at=NOW() WHERE id=$6`,
+            [status, JSON.stringify(ycr), recCost,
+             JSON.stringify(ycr.services || []), JSON.stringify(ycr.staff || []), exRec.id]
+          );
+        } else {
+          await db.query(
+            `INSERT INTO records
+               (salon_id,yclients_record_id,client_id,yclients_client_id,
+                visit_date,visit_datetime,amount,services,staff,status,source,raw_payload)
+             VALUES ($1,$2,NULL,$3,$4,$5,$6,$7,$8,$9,'sync',$10)`,
+            [salon.id, ycr.id, ycr.client?.id || null,
+             String(ycr.date || '').split(' ')[0] || null, ycr.date || null,
+             recCost, JSON.stringify(ycr.services || []),
+             JSON.stringify(ycr.staff || []), status, JSON.stringify(ycr)]
+          );
+          rs++;
         }
-        rs++;
       }
     }
 
-    await db.query(
-      `UPDATE sync_logs SET status='success',clients_synced=$1,records_synced=$2,
-       bonuses_accrued=$3,new_clients=$4,finished_at=NOW() WHERE id=$5`,
-      [cs, rs, ba, nc, log.id]
-    );
-    
-    // ── 3. Обновляем last_visit_at из реальных записей ──
+    // ── Обновляем last_visit_at из реальных записей ──
     console.log('[Sync] Updating last_visit_at from records...');
     await db.query(`
       UPDATE clients c
@@ -572,9 +760,14 @@ async function runSync(salon, syncType, userId) {
       WHERE c.id       = sub.client_id
         AND c.salon_id = $1
     `, [salon.id]);
-    console.log('[Sync] last_visit_at updated');
-    
-    console.log(`[Sync] Done: clients=${cs} records=${rs} bonuses=${ba} new=${nc}`);
+
+    await db.query(
+      `UPDATE sync_logs SET status='success',clients_synced=$1,records_synced=$2,
+       bonuses_accrued=$3,new_clients=$4,finished_at=NOW() WHERE id=$5`,
+      [cs, rs, ba, nc, log.id]
+    );
+
+    console.log(`[Sync] ✓ Done: clients=${cs} records=${rs} bonuses=${ba} new=${nc}`);
     return { ok: true, clientsSynced: cs, recordsSynced: rs, bonusesAccrued: ba, newClients: nc };
 
   } catch (e) {
@@ -588,258 +781,445 @@ async function runSync(salon, syncType, userId) {
 
 
 // ============================================================
-// FINANCES OPERATION — обработка оплаты через карту YClients
+// FINANCES OPERATION & RECORD — логика начисления/отмены бонусов
 // ============================================================
-async function processFinancesOperation(payload, salon) {
-  const data     = payload.data || {};
-  const status   = payload.status; // create | delete
-  const clientId = data.client?.id;
-  const recordId = data.record_id || data.record?.id;
+//
+// СХЕМА (по образцу рабочей Python-интеграции):
+//   resource=record, paid_full=1, attendance=1 → начисляем (один раз, атомарно)
+//   resource=record, status=delete             → откатываем если было начисление
+//   resource=finances_operation, status=delete → откатываем если было начисление
+//   resource=finances_operation, status=create/update → ИГНОРИРУЕМ (иначе задвоение)
+//
+// Идемпотентность: INSERT INTO finances_log ON CONFLICT DO NOTHING + проверка rowcount
 
-  if (!clientId || !recordId) return;
+// Атомарно "забронировать" record_id — вернёт true только у первого вызова
+async function claimRecordProcessing(salonId, ycRecordId, clientId) {
+  const r = await db.query(
+    `INSERT INTO finances_log (salon_id, yclients_record_id, client_id, event_status, cashback_amount, processed)
+     VALUES ($1, $2, $3, 'create', -1, FALSE)
+     ON CONFLICT (yclients_record_id) DO NOTHING`,
+    [salonId, ycRecordId, clientId]
+  );
+  return r.rowCount === 1;
+}
 
-  const settings = await getLoyaltySettings(salon.id);
-  if (!settings) return;
+// Атомарно "забрать" сумму из лога — вернёт число или null (только один вызов получит значение)
+async function popCashbackAmount(ycRecordId) {
+  const r = await db.query(
+    `DELETE FROM finances_log WHERE yclients_record_id=$1 RETURNING cashback_amount, client_id, salon_id`,
+    [ycRecordId]
+  );
+  if (!r.rows.length) return null;
+  return r.rows[0];
+}
+
+// Проверить есть ли уже запись (для диагностики)
+async function getCashbackByRecord(ycRecordId) {
+  return db.one(`SELECT cashback_amount FROM finances_log WHERE yclients_record_id=$1`, [ycRecordId]);
+}
+
+// ── Откат начисления (общий для record-delete и finances_operation-delete) ──
+async function revertCashback(ycRecordId, salon, clientYcId) {
+  const popped = await popCashbackAmount(ycRecordId);
+  if (!popped) {
+    console.log(`[Revert] nothing to revert for record=${ycRecordId}`);
+    return;
+  }
+  const cashbackAmount = parseFloat(popped.cashback_amount);
+  if (cashbackAmount <= 0) {
+    console.log(`[Revert] skip revert record=${ycRecordId} amount=${cashbackAmount} (zero or denied)`);
+    return;
+  }
 
   // Найти клиента в нашей БД
   const client = await db.one(
     'SELECT * FROM clients WHERE salon_id=$1 AND yclients_client_id=$2',
-    [salon.id, clientId]
+    [salon.id, clientYcId]
   );
-  if (!client) return;
+  if (!client) { console.log(`[Revert] client not found yclients_id=${clientYcId}`); return; }
 
-  // ── СОЗДАНИЕ ОПЛАТЫ → начисляем кэшбэк ──
-  if (status === 'create') {
-    // Проверяем что оплата полная
-    const record = data.record || {};
-    if (record.paid_full !== 1) return;
+  const deduct = Math.min(cashbackAmount, parseFloat(client.bonus_balance || 0));
 
-    // Проверка на дубль
-    const dup = await db.one(
-      "SELECT id FROM finances_log WHERE yclients_record_id=$1 AND event_status='create'",
-      [recordId]
-    );
-    if (dup) return;
-
-    // Получаем полные данные записи из YC
-    let ycRecord = {};
+  // Снимаем с карты YClients
+  if (client.yclients_card_id && deduct > 0) {
     try {
-      ycRecord = await ycGet(salon, `/record/${salon.yclients_company_id}/${recordId}`);
-    } catch { return; }
+      await ycAccrueCard(salon, client.yclients_card_id, -deduct,
+        `Отмена кэшбэка по записи #${ycRecordId}`);
+    } catch (e) {
+      console.error(`[Revert] Card deduct error: ${e.message}`);
+    }
+  }
 
-    const services = ycRecord.services || [];
-    // Проверяем что нет скидок и оплата полная
+  // Обновляем БД
+  await db.query(
+    'UPDATE clients SET bonus_balance=GREATEST(0,bonus_balance-$1),updated_at=NOW() WHERE id=$2',
+    [deduct, client.id]
+  );
+
+  const dbRecord = await db.one('SELECT id FROM records WHERE salon_id=$1 AND yclients_record_id=$2', [salon.id, ycRecordId]);
+  await db.query(
+    `INSERT INTO loyalty_card_transactions
+       (salon_id,client_id,yclients_card_id,type,amount,balance_after,title,record_id,txn_date,created_at)
+     VALUES ($1,$2,(SELECT yclients_card_id FROM clients WHERE id=$3),'redemption',$4,$5,$6,$7,NOW(),NOW())`,
+    [salon.id, client.id, client.id, -deduct,
+     Math.max(0, client.bonus_balance - deduct),
+     `Отмена кэшбэка за визит #${ycRecordId}`,
+     dbRecord?.id || ycRecordId]
+  );
+
+  console.log(`[Revert] reverted ${deduct} for client ${client.name}, record #${ycRecordId}`);
+}
+
+// ── Обработка resource=record ──
+async function processRecordEvent(payload, salon, settings) {
+  const data = payload.data || {};
+  const status = payload.status;
+  const ycRecordId = data.id;
+  const clientYcId = data.client?.id;
+
+  if (!ycRecordId || !clientYcId) return;
+
+  // Обновляем запись в нашей БД
+  const recStatus = getRecordStatus(data);
+  let client = await db.one(
+    'SELECT * FROM clients WHERE salon_id=$1 AND yclients_client_id=$2',
+    [salon.id, clientYcId]
+  );
+
+  // Создаём клиента если нет
+  if (!client) {
+    await db.query(
+      `INSERT INTO clients (salon_id,yclients_client_id,name,phone,synced_at)
+       VALUES ($1,$2,$3,$4,NOW()) ON CONFLICT DO NOTHING`,
+      [salon.id, clientYcId, data.client?.name || 'Клиент', data.client?.phone || null]
+    );
+    client = await db.one('SELECT * FROM clients WHERE salon_id=$1 AND yclients_client_id=$2', [salon.id, clientYcId]);
+  }
+
+  // Сохраняем/обновляем запись
+  let record = await db.one('SELECT * FROM records WHERE salon_id=$1 AND yclients_record_id=$2', [salon.id, ycRecordId]);
+  if (!record) {
+    record = await db.one(
+      `INSERT INTO records
+         (salon_id,yclients_record_id,client_id,yclients_client_id,
+          visit_date,visit_datetime,amount,services,staff,status,source,raw_payload)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'webhook',$11) RETURNING *`,
+      [salon.id, ycRecordId, client?.id||null, clientYcId,
+       String(data.date||'').split(' ')[0]||null, data.date||null,
+       getRecordCost(data), JSON.stringify(data.services||[]),
+       JSON.stringify(data.staff||[]), recStatus, JSON.stringify(data)]
+    );
+  } else {
+    await db.query(
+      'UPDATE records SET status=$1,raw_payload=$2,updated_at=NOW() WHERE id=$3',
+      [recStatus, JSON.stringify(data), record.id]
+    );
+  }
+
+  // DELETE записи → откат кэшбэка (если было начисление)
+  if (status === 'delete' || data.deleted === true) {
+    await revertCashback(ycRecordId, salon, clientYcId);
+    return;
+  }
+
+  // Начисляем только когда визит полностью оплачен и клиент пришёл
+  if (data.paid_full !== 1 || data.attendance !== 1) {
+    console.log(`[Record] skip accrual record=${ycRecordId} paid_full=${data.paid_full} attendance=${data.attendance}`);
+    return;
+  }
+
+  // Идемпотентность: атомарно "бронируем" record_id
+  const claimed = await claimRecordProcessing(salon.id, ycRecordId, client?.id);
+  if (!claimed) {
+    const existing = await getCashbackByRecord(ycRecordId);
+    console.log(`[Record] duplicate record=${ycRecordId} existing_cashback=${existing?.cashback_amount}`);
+    return;
+  }
+
+  try {
+    // Берём услуги из payload или из YClients API
+    let services = data.services || [];
+    if (!services.length) {
+      try {
+        const ycRecord = await ycGet(salon, `/record/${salon.yclients_company_id}/${ycRecordId}`);
+        services = ycRecord.services || [];
+      } catch(e) {
+        console.log(`[Record] ycGet failed: ${e.message}`);
+      }
+    }
+
+    // Проверяем скидки и считаем сумму
     let paidAmount = 0;
     let hasDiscount = false;
     for (const s of services) {
-      const cost     = parseFloat(s.cost || 0);
-      const costPay  = parseFloat(s.cost_to_pay ?? cost);
-      const discount = parseFloat(s.discount || 0);
-      if (discount > 0 || costPay < cost) { hasDiscount = true; break; }
+      const cost    = parseFloat(s.cost || 0);
+      const costPay = parseFloat(s.cost_to_pay ?? cost);
+      const disc    = parseFloat(s.discount || 0);
+      if (disc > 0 || costPay < cost) { hasDiscount = true; break; }
       paidAmount += costPay;
     }
 
+    console.log(`[Record] record=${ycRecordId} hasDiscount=${hasDiscount} paidAmount=${paidAmount}`);
+
     if (hasDiscount || paidAmount <= 0) {
-      await db.query(
-        `INSERT INTO finances_log (salon_id,yclients_record_id,client_id,event_status,
-         paid_amount,cashback_pct,cashback_amount,raw_payload)
-         VALUES ($1,$2,$3,'create',$4,0,0,$5) ON CONFLICT DO NOTHING`,
-        [salon.id, recordId, client.id, paidAmount, JSON.stringify(payload)]
-      );
+      // Обновляем бронь на 0 (кэшбэк не начисляется)
+      await db.query('UPDATE finances_log SET cashback_amount=0,processed=TRUE WHERE yclients_record_id=$1', [ycRecordId]);
+      console.log(`[Record] denied record=${ycRecordId} (hasDiscount=${hasDiscount} paidAmount=${paidAmount})`);
+
+      // Списание бонусов будет зафиксировано через finances_operation create
+      // (приходит позже когда YClients уже обновил карту — без гонки)
       return;
     }
 
-    // Определяем % кэшбэка по уровню клиента
-    const level     = getLevel(parseFloat(client.total_spent || 0), settings.levels);
-    const cashbackPct = level.cashback || 5;
-    const cashback  = Math.floor(paidAmount * cashbackPct / 100);
+    // Тоггл начисления
+    if (settings && settings.bonuses_enabled === false) {
+      await db.query('UPDATE finances_log SET cashback_amount=0,processed=FALSE WHERE yclients_record_id=$1', [ycRecordId]);
+      console.log(`[Record] bonuses DISABLED — logged only for record=${ycRecordId}`);
+      return;
+    }
 
-    if (cashback <= 0) return;
+    // Вычисляем кэшбэк
+    const level = getLevel(parseFloat(client.total_spent || 0), settings.levels);
+    const { pct, bonus: cashback } = calcBonus(paidAmount, services.map(s=>s.id), level, settings.service_cashback);
+
+    if (cashback <= 0) {
+      await db.query('UPDATE finances_log SET cashback_amount=0,processed=TRUE WHERE yclients_record_id=$1', [ycRecordId]);
+      return;
+    }
 
     // Начисляем на карту YClients
     if (client.yclients_card_id && salon.yclients_card_type_id) {
       try {
-        await ycAccrueCard(salon, client.yclients_card_id, cashback,
-          `Кэшбэк ${cashbackPct}% по записи #${recordId}`);
-      } catch (e) {
-        console.error('[FinOp] Card accrual error:', e.message);
-      }
+        await ycAccrueCard(salon, client.yclients_card_id, cashback, `Кэшбэк ${pct}% по записи #${ycRecordId}`);
+      } catch(e) { console.error(`[Record] Card accrual error: ${e.message}`); }
     }
 
-    // Обновляем баланс в нашей БД
+    // Обновляем баланс клиента
     await db.query(
-      'UPDATE clients SET bonus_balance=bonus_balance+$1, updated_at=NOW() WHERE id=$2',
-      [cashback, client.id]
-    );
-    await db.query(
-      `INSERT INTO bonus_transactions
-         (salon_id,client_id,type,amount,balance_before,balance_after,
-          visit_amount,cashback_pct,description,created_at)
-       VALUES ($1,$2,'accrual',$3,$4,$5,$6,$7,$8,NOW())`,
-      [salon.id, client.id, cashback,
-       client.bonus_balance, client.bonus_balance + cashback,
-       paidAmount, cashbackPct,
-       `Кэшбэк за визит #${recordId}`]
-    );
-
-    // Логируем
-    await db.query(
-      `INSERT INTO finances_log
-         (salon_id,yclients_record_id,client_id,event_status,
-          paid_amount,cashback_pct,cashback_amount,card_id,processed,raw_payload)
-       VALUES ($1,$2,$3,'create',$4,$5,$6,$7,TRUE,$8) ON CONFLICT DO NOTHING`,
-      [salon.id, recordId, client.id, paidAmount, cashbackPct, cashback,
-       client.yclients_card_id, JSON.stringify(payload)]
-    );
-    console.log(`[FinOp] Accrued ${cashback} (${cashbackPct}%) for client ${client.name}, record #${recordId}`);
-  }
-
-  // ── УДАЛЕНИЕ ОПЛАТЫ → отменяем кэшбэк ──
-  if (status === 'delete') {
-    const log = await db.one(
-      "SELECT * FROM finances_log WHERE yclients_record_id=$1 AND event_status='create'",
-      [recordId]
-    );
-    if (!log || !log.cashback_amount || log.cashback_amount <= 0) return;
-
-    const deduct = Math.min(parseFloat(log.cashback_amount), parseFloat(client.bonus_balance || 0));
-
-    // Снимаем с карты YClients
-    if (client.yclients_card_id && deduct > 0) {
-      try {
-        await ycAccrueCard(salon, client.yclients_card_id, -deduct,
-          `Отмена кэшбэка по записи #${recordId}`);
-      } catch (e) {
-        console.error('[FinOp] Card deduct error:', e.message);
-      }
-    }
-
-    // Обновляем баланс в нашей БД
-    await db.query(
-      'UPDATE clients SET bonus_balance=GREATEST(0,bonus_balance-$1),updated_at=NOW() WHERE id=$2',
-      [deduct, client.id]
-    );
-    await db.query(
-      `INSERT INTO bonus_transactions
-         (salon_id,client_id,type,amount,balance_before,balance_after,description,created_at)
-       VALUES ($1,$2,'cancellation',$3,$4,$5,$6,NOW())`,
-      [salon.id, client.id, -deduct,
-       client.bonus_balance, Math.max(0, client.bonus_balance - deduct),
-       `Отмена кэшбэка за визит #${recordId}`]
+      `UPDATE clients SET bonus_balance=bonus_balance+$1, total_spent=total_spent+$2,
+       visits_count=visits_count+1, loyalty_level=$3, last_visit_at=$4, updated_at=NOW() WHERE id=$5`,
+      [cashback, paidAmount, level.key, data.date || new Date(), client.id]
     );
 
     await db.query(
-      "DELETE FROM finances_log WHERE yclients_record_id=$1 AND event_status='create'",
-      [recordId]
+      `INSERT INTO loyalty_card_transactions
+         (salon_id,client_id,yclients_card_id,type,amount,balance_after,title,record_id,txn_date,created_at)
+       VALUES ($1,$2,(SELECT yclients_card_id FROM clients WHERE id=$3),'accrual',$4,$5,$6,$7,NOW(),NOW())`,
+      [salon.id, client.id, client.id, cashback,
+       client.bonus_balance + cashback,
+       `Кэшбэк ${pct}% за визит #${ycRecordId}`, record.id]
     );
-    console.log(`[FinOp] Reverted ${deduct} for client ${client.name}, record #${recordId}`);
+
+    // Фиксируем сумму начисления в finances_log (для возможного отката)
+    await db.query(
+      'UPDATE finances_log SET cashback_amount=$1, cashback_pct=$2, paid_amount=$3, processed=TRUE WHERE yclients_record_id=$4',
+      [cashback, pct, paidAmount, ycRecordId]
+    );
+
+    console.log(`[Record] Accrued ${cashback} (${pct}%) for client ${client.name}, record #${ycRecordId}`);
+
+  } catch(e) {
+    // Снимаем бронь чтобы можно было повторить
+    await db.query('DELETE FROM finances_log WHERE yclients_record_id=$1 AND cashback_amount=-1', [ycRecordId]);
+    throw e;
   }
 }
+
+// ── Обработка resource=finances_operation ──
+async function processFinancesOperation(payload, salon) {
+  const status = payload.status;
+  const data = payload.data || {};
+  const ycRecordId = data.record_id || data.record?.id;
+  const clientYcId = data.client?.id;
+
+  if (!ycRecordId || !clientYcId) return;
+
+  console.log(`[FinOp] status=${status} clientYcId=${clientYcId} ycRecordId=${ycRecordId}`);
+
+  // DELETE оплаты → откат начисления (если было) + синхронизация баланса карты
+  if (status === 'delete') {
+    // 1. Откатываем начисление кэшбэка (если было)
+    await revertCashback(ycRecordId, salon, clientYcId);
+
+    // 2. Синхронизируем баланс карты — YClients мог вернуть списанные бонусы
+    const client = await db.one(
+      'SELECT * FROM clients WHERE salon_id=$1 AND yclients_client_id=$2',
+      [salon.id, clientYcId]
+    );
+    if (!client || !client.yclients_card_id) return;
+
+    try {
+      const cards = await ycGetClientCards(salon, clientYcId);
+      const card = cards.find(c => String(c.id) === String(client.yclients_card_id));
+      if (!card) return;
+
+      const newBalance = parseFloat(card.balance || 0);
+      const oldBalance = parseFloat(client.bonus_balance || 0);
+      const delta = newBalance - oldBalance;
+
+      console.log(`[FinOp] delete: card balance old=${oldBalance} new=${newBalance} delta=${delta}`);
+
+      if (Math.abs(delta) < 1) return;
+
+      await db.query(
+        'UPDATE clients SET bonus_balance=$1::numeric, yclients_card_balance=$1::numeric, updated_at=NOW() WHERE id=$2',
+        [newBalance, client.id]
+      );
+
+      const dbRecord = await db.one(
+        'SELECT id FROM records WHERE salon_id=$1 AND yclients_record_id=$2',
+        [salon.id, ycRecordId]
+      );
+      const txnType = delta >= 0 ? 'accrual' : 'redemption';
+      const txnTitle = delta > 0
+        ? `Возврат бонусов при отмене оплаты визита #${ycRecordId}`
+        : `Списание бонусов при отмене визита #${ycRecordId}`;
+
+      await db.query(
+        `INSERT INTO loyalty_card_transactions
+           (salon_id,client_id,yclients_card_id,type,amount,balance_after,title,record_id,txn_date,created_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,NOW(),NOW())`,
+        [salon.id, client.id, client.yclients_card_id,
+         txnType, delta, newBalance, txnTitle, dbRecord?.id || null]
+      );
+
+      console.log(`[FinOp] delete: synced balance ${oldBalance} → ${newBalance} (${txnType} ${delta}) for client ${client.name}`);
+    } catch(e) {
+      console.log(`[FinOp] delete: card sync error: ${e.message}`);
+    }
+    return;
+  }
+
+  // CREATE — начисление кэшбэка игнорируем (идёт через resource=record),
+  // но синхронизируем баланс карты чтобы зафиксировать списание бонусов клиентом.
+  // finances_operation приходит ПОСЛЕ того как YClients обновил карту — нет гонки.
+  if (status === 'create') {
+    const client = await db.one(
+      'SELECT * FROM clients WHERE salon_id=$1 AND yclients_client_id=$2',
+      [salon.id, clientYcId]
+    );
+    if (!client || !client.yclients_card_id) {
+      console.log(`[FinOp] create: no client or card, skip sync`);
+      return;
+    }
+
+    try {
+      const cards = await ycGetClientCards(salon, clientYcId);
+      const card = cards.find(c => String(c.id) === String(client.yclients_card_id));
+      if (!card) { console.log(`[FinOp] create: card not found`); return; }
+
+      const newBalance = parseFloat(card.balance || 0);
+      const oldBalance = parseFloat(client.bonus_balance || 0);
+      const delta = newBalance - oldBalance;
+
+      console.log(`[FinOp] create: card balance old=${oldBalance} new=${newBalance} delta=${delta}`);
+
+      if (Math.abs(delta) < 1) {
+        console.log(`[FinOp] create: balance unchanged, skip`);
+        return;
+      }
+
+      // Обновляем баланс в БД
+      await db.query(
+        'UPDATE clients SET bonus_balance=$1::numeric, yclients_card_balance=$1::numeric, updated_at=NOW() WHERE id=$2',
+        [newBalance, client.id]
+      );
+
+      // Записываем транзакцию
+      const dbRecord = await db.one(
+        'SELECT id FROM records WHERE salon_id=$1 AND yclients_record_id=$2',
+        [salon.id, ycRecordId]
+      );
+      const txnType = delta >= 0 ? 'accrual' : 'redemption';
+      const txnTitle = delta < 0
+        ? `Списание бонусов при оплате визита #${ycRecordId}`
+        : `Начисление бонусов (YClients) #${ycRecordId}`;
+
+      await db.query(
+        `INSERT INTO loyalty_card_transactions
+           (salon_id,client_id,yclients_card_id,type,amount,balance_after,title,record_id,txn_date,created_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,NOW(),NOW())`,
+        [salon.id, client.id, client.yclients_card_id,
+         txnType, delta, newBalance, txnTitle, dbRecord?.id || null]
+      );
+
+      console.log(`[FinOp] create: synced balance ${oldBalance} → ${newBalance} (${txnType} ${delta}) for client ${client.name}`);
+    } catch(e) {
+      console.log(`[FinOp] create: card sync error: ${e.message}`);
+    }
+    return;
+  }
+
+  // UPDATE — игнорируем
+  console.log(`[FinOp] status=${status} — ignored`);
+}
+
 
 // ============================================================
 // WEBHOOK
 // ============================================================
-app.post('/api/webhook/yclients/:companyId', async (req, res) => {
+app.post('/yclients/webhook.v2/:companyId', async (req, res) => {
   res.json({ ok: true });
   const t0 = Date.now();
-  const salon = await db.one(
-    'SELECT * FROM salons WHERE yclients_company_id=$1 AND is_active=TRUE',
-    [req.params.companyId]
-  );
-  if (!salon) return;
-
-  const payload = req.body;
-  const wlog = await db.one(
-    `INSERT INTO webhook_logs (salon_id,event_type,resource_id,payload)
-     VALUES ($1,$2,$3,$4) RETURNING id`,
-    [salon.id, payload.resource_type, payload.data?.id || null, JSON.stringify(payload)]
-  );
-
+  console.log(`[WH] hit companyId=${req.params.companyId} resource=${req.body?.resource||req.body?.resource_type}`);
+  let wlog = null;
   try {
+    const salon = await db.one(
+      'SELECT * FROM salons WHERE yclients_company_id=$1 AND is_active=TRUE',
+      [req.params.companyId]
+    );
+    if (!salon) { console.warn(`[WH] salon not found companyId=${req.params.companyId}`); return; }
+
+    const payload = req.body;
+    const resourceType = payload.resource || payload.resource_type;
+    console.log(`[WH] salon=${salon.id} resource=${resourceType} data_id=${payload.data?.id}`);
+
+    wlog = await db.one(
+      `INSERT INTO webhook_logs (salon_id,event_type,resource_id,payload)
+       VALUES ($1,$2,$3,$4) RETURNING id`,
+      [salon.id, resourceType, payload.data?.id || null, JSON.stringify(payload)]
+    );
+
     const settings = await getLoyaltySettings(salon.id);
-    const ycRec = payload.data;
+    console.log(`[WH] bonuses_enabled=${settings?.bonuses_enabled} levels=${settings?.levels?.length}`);
 
-    if (payload.resource_type === 'record' && ycRec) {
-      const status = ycRec.status_id === 1 ? 'completed'
-                   : ycRec.status_id === 3 ? 'cancelled' : 'pending';
-
-      let client = null;
-      if (ycRec.client?.id) {
-        client = await db.one(
-          'SELECT * FROM clients WHERE salon_id=$1 AND yclients_client_id=$2',
-          [salon.id, ycRec.client.id]
-        );
-        if (!client) {
-          await db.query(
-            `INSERT INTO clients (salon_id,yclients_client_id,name,phone,synced_at)
-             VALUES ($1,$2,$3,$4,NOW()) ON CONFLICT DO NOTHING`,
-            [salon.id, ycRec.client.id, ycRec.client.name || 'Клиент', ycRec.client.phone || null]
-          );
-          client = await db.one(
-            'SELECT * FROM clients WHERE salon_id=$1 AND yclients_client_id=$2',
-            [salon.id, ycRec.client.id]
-          );
-        }
-      }
-
-      let record = await db.one(
-        'SELECT * FROM records WHERE salon_id=$1 AND yclients_record_id=$2',
-        [salon.id, ycRec.id]
-      );
-      if (!record) {
-        record = await db.one(
-          `INSERT INTO records
-             (salon_id,yclients_record_id,client_id,yclients_client_id,
-              visit_date,visit_datetime,amount,services,staff,status,source,raw_payload)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'webhook',$11) RETURNING *`,
-          [salon.id, ycRec.id, client?.id || null, ycRec.client?.id || null,
-           String(ycRec.date || '').split(' ')[0] || null, ycRec.date || null,
-           ycRec.cost || 0, JSON.stringify(ycRec.services || []),
-           JSON.stringify(ycRec.staff || []), status, JSON.stringify(ycRec)]
-        );
-      } else {
-        await db.query(
-          'UPDATE records SET status=$1,raw_payload=$2,updated_at=NOW() WHERE id=$3',
-          [status, JSON.stringify(ycRec), record.id]
-        );
-        if (status === 'cancelled' && record.bonus_processed && client) {
-          await cancelRecordBonuses(record.id, client.id, salon.id);
-        }
-      }
-
-      if (status === 'completed' && !record.bonus_processed && client && settings && parseFloat(ycRec.cost || 0) > 0) {
-        await processCompletedRecord(record.id, client.id, ycRec, salon.id, settings);
-      }
+    if (resourceType === 'record') {
+      await processRecordEvent(payload, salon, settings);
     }
 
-    if (payload.resource_type === 'client' && ycRec) {
+    if (resourceType === 'client' && payload.data) {
+      const ycRec = payload.data;
       await db.query(
         `INSERT INTO clients (salon_id,yclients_client_id,name,phone,email,birthday,synced_at)
          VALUES ($1,$2,$3,$4,$5,$6,NOW())
          ON CONFLICT (salon_id,yclients_client_id)
          DO UPDATE SET name=$3,phone=$4,email=$5,birthday=$6,synced_at=NOW()`,
-        [salon.id, ycRec.id, ycRec.name || 'Клиент', ycRec.phone,
-         ycRec.email || null, ycRec.birth_date || null]
+        [salon.id, ycRec.id, ycRec.name||'Клиент', ycRec.phone,
+         ycRec.email||null, ycRec.birth_date||null]
       );
     }
 
-    // ── finances_operation — оплата/отмена оплаты через карту YClients ──
-    if (payload.resource === 'finances_operation' && payload.data) {
+    if (resourceType === 'finances_operation') {
       await processFinancesOperation(payload, salon);
     }
 
-    await db.query(
-      'UPDATE webhook_logs SET processed=TRUE,processing_ms=$1 WHERE id=$2',
-      [Date.now() - t0, wlog.id]
-    );
+    if (wlog) {
+      await db.query(
+        'UPDATE webhook_logs SET processed=TRUE,processing_ms=$1 WHERE id=$2',
+        [Date.now() - t0, wlog.id]
+      );
+    }
   } catch (e) {
-    console.error('[Webhook]', e.message);
-    await db.query(
-      'UPDATE webhook_logs SET error_message=$1,processing_ms=$2 WHERE id=$3',
-      [e.message, Date.now() - t0, wlog.id]
-    );
+    console.error('[Webhook] ERROR:', e.message);
+    try {
+      if (wlog?.id) await db.query(
+        'UPDATE webhook_logs SET error_message=$1,processing_ms=$2 WHERE id=$3',
+        [e.message, Date.now() - t0, wlog.id]
+      );
+    } catch {}
   }
 });
+
 
 // ============================================================
 // AUTH
@@ -997,19 +1377,22 @@ app.get('/api/loyalty-settings', auth, async (req, res) => {
 app.put('/api/loyalty-settings', auth, async (req, res) => {
   try {
     const { levels, service_cashback, birthday_bonus, birthday_days_before, birthday_enabled,
-            referral_enabled, referral_bonus_sender, referral_bonus_receiver, bonus_expiry_days } = req.body;
+            referral_enabled, referral_bonus_sender, referral_bonus_receiver, bonus_expiry_days,
+            bonuses_enabled } = req.body;
     await db.query(
       `INSERT INTO loyalty_settings
          (salon_id,levels,service_cashback,birthday_bonus,birthday_days_before,birthday_enabled,
-          referral_enabled,referral_bonus_sender,referral_bonus_receiver,bonus_expiry_days,updated_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,NOW())
+          referral_enabled,referral_bonus_sender,referral_bonus_receiver,bonus_expiry_days,
+          bonuses_enabled,updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,NOW())
        ON CONFLICT (salon_id) DO UPDATE SET
          levels=$2,service_cashback=$3,birthday_bonus=$4,birthday_days_before=$5,
          birthday_enabled=$6,referral_enabled=$7,referral_bonus_sender=$8,
-         referral_bonus_receiver=$9,bonus_expiry_days=$10,updated_at=NOW()`,
+         referral_bonus_receiver=$9,bonus_expiry_days=$10,bonuses_enabled=$11,updated_at=NOW()`,
       [req.user.salonId, JSON.stringify(levels), JSON.stringify(service_cashback || {}),
        birthday_bonus, birthday_days_before, birthday_enabled,
-       referral_enabled, referral_bonus_sender, referral_bonus_receiver, bonus_expiry_days || 0]
+       referral_enabled, referral_bonus_sender, referral_bonus_receiver, bonus_expiry_days || 0,
+       bonuses_enabled !== false]
     );
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
@@ -1050,8 +1433,22 @@ app.get('/api/clients/:id', auth, async (req, res) => {
       [req.params.id, req.user.salonId]
     );
     if (!client) return res.status(404).json({ error: 'Клиент не найден' });
+    // Объединяем loyalty_card_transactions (история карты) + bonus_transactions (ручные операции)
     const history = await db.many(
-      'SELECT * FROM bonus_transactions WHERE client_id=$1 ORDER BY created_at DESC LIMIT 30',
+      `SELECT id,
+              COALESCE(txn_date, created_at) as created_at,
+              amount,
+              title as description,
+              type,
+              balance_after,
+              'card' as source
+       FROM loyalty_card_transactions
+       WHERE client_id=$1
+       UNION ALL
+       SELECT id, created_at, amount, description, type, balance_after, 'manual' as source
+       FROM bonus_transactions
+       WHERE client_id=$1 AND description NOT LIKE '%импорт%'
+       ORDER BY created_at DESC LIMIT 50`,
       [req.params.id]
     );
     const records = await db.many(
@@ -1076,12 +1473,16 @@ app.post('/api/clients/:id/bonus', auth, async (req, res) => {
     const newBal = Math.max(0, client.bonus_balance + amount);
     await pg.query('UPDATE clients SET bonus_balance=$1,updated_at=NOW() WHERE id=$2', [newBal, client.id]);
     await pg.query(
-      `INSERT INTO bonus_transactions
-         (salon_id,client_id,type,amount,balance_before,balance_after,description,created_by_user,created_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,NOW())`,
-      [req.user.salonId, client.id, amount > 0 ? 'manual' : 'redemption',
-       amount, client.bonus_balance, newBal,
-       description || 'Ручная корректировка', req.user.userId]
+      `INSERT INTO loyalty_card_transactions
+         (salon_id,client_id,yclients_card_id,type,amount,
+          balance_after,title,txn_date,created_at)
+       VALUES ($1,$2,
+         (SELECT yclients_card_id FROM clients WHERE id=$3),
+         $4,$5,$6,$7,NOW(),NOW())`,
+      [req.user.salonId, client.id, client.id,
+       amount > 0 ? 'accrual' : 'redemption',
+       amount, newBal,
+       description || 'Ручная корректировка']
     );
     await pg.query('COMMIT');
     res.json({ ok: true, newBalance: newBal });
@@ -1095,21 +1496,176 @@ app.post('/api/clients/:id/bonus', auth, async (req, res) => {
 // RECORDS
 // ============================================================
 app.get('/api/records', auth, async (req, res) => {
+  res.set('Cache-Control', 'no-store, no-cache, must-revalidate');
+  res.set('Pragma', 'no-cache');
   try {
-    const { dateFrom, dateTo, status, limit = 200 } = req.query;
+    const { dateFrom, dateTo, status, page = 1, limit = 50 } = req.query;
+    const pageNum  = Math.max(1, parseInt(page));
+    const pageSize = Math.min(200, Math.max(10, parseInt(limit)));
+    const offset   = (pageNum - 1) * pageSize;
+
     let where = ['r.salon_id=$1'], params = [req.user.salonId], i = 2;
-    if (dateFrom) { where.push(`r.visit_date>=$${i}`); params.push(dateFrom); i++; }
-    if (dateTo)   { where.push(`r.visit_date<=$${i}`); params.push(dateTo); i++; }
-    if (status)   { where.push(`r.status=$${i}`); params.push(status); i++; }
+    if (dateFrom) {
+      where.push(`COALESCE((r.visit_datetime AT TIME ZONE 'Europe/Moscow')::date, r.visit_date::date) >= $${i}::date`);
+      params.push(dateFrom); i++;
+    }
+    if (dateTo) {
+      where.push(`COALESCE((r.visit_datetime AT TIME ZONE 'Europe/Moscow')::date, r.visit_date::date) <= $${i}::date`);
+      params.push(dateTo); i++;
+    }
+    if (status) {
+      // Маппинг фильтра → stored status + raw_payload status_id + raw_payload attendance
+      // Фильтрация по вычисляемому статусу (из raw_payload) — не по stored status
+      // attendance: 2=оказана, 1=пришёл, 0=ожидание, -1=не пришёл
+      // status_id: 4=оказана, 3=пришёл, 2=подтверждена, 1=ожидание, 5=отменена, 6=не пришёл, 7=удалена
+      const statusMap = {
+        completed:  { stored: ['completed'],                sids: [4],     atts: [2] },
+        arrived:    { stored: ['arrived'],                  sids: [3],     atts: [1] },
+        confirmed:  { stored: ['confirmed', 'waiting'],     sids: [2],     atts: [] },
+        waiting:    { stored: ['waiting', 'pending'],       sids: [1],     atts: [0] },
+        cancelled:  { stored: ['cancelled'],                sids: [5],     atts: [] },
+        no_show:    { stored: ['no_show'],                  sids: [6],     atts: [-1] },
+        deleted:    { stored: ['deleted'],                  sids: [7],     atts: [] },
+      };
+      const map = statusMap[status];
+      if (map) {
+        where.push(`(
+          (r.raw_payload->>'attendance')::int = ANY($${i+2}::int[])
+          OR (r.raw_payload->>'status_id')::int = ANY($${i+1}::int[])
+          OR (r.status = ANY($${i}::text[])
+              AND (r.raw_payload->>'attendance') IS NULL
+              AND (r.raw_payload->>'status_id') IS NULL)
+        )`);
+        params.push(map.stored, map.sids, map.atts);
+        i += 3;
+      } else {
+        where.push(`r.status=$${i}`); params.push(status); i++;
+      }
+    }
     const w = where.join(' AND ');
     const total = (await db.one(`SELECT COUNT(*) FROM records r WHERE ${w}`, params)).count;
     const records = await db.many(
-      `SELECT r.*,c.name as client_name,c.phone as client_phone
+      `SELECT r.*,
+              c.name as client_name, c.phone as client_phone,
+              -- Реальная оплаченная сумма из raw_payload (services[].cost_to_pay)
+              COALESCE(
+                (SELECT SUM((svc->>'cost_to_pay')::numeric)
+                 FROM jsonb_array_elements(COALESCE(r.raw_payload->'services','[]'::jsonb)) svc
+                 WHERE (svc->>'cost_to_pay') IS NOT NULL),
+                (SELECT SUM((svc->>'cost')::numeric)
+                 FROM jsonb_array_elements(COALESCE(r.services,'[]'::jsonb)) svc
+                 WHERE (svc->>'cost') IS NOT NULL),
+                r.amount
+              ) as real_amount,
+              -- Начисленные бонусы из loyalty_card_transactions
+              -- Ищем по record_id (может быть internal id ИЛИ yclients_record_id)
+              -- + fallback по client_id + дате визита
+              (SELECT SUM(lct.amount)
+               FROM loyalty_card_transactions lct
+               WHERE lct.salon_id = r.salon_id
+               AND lct.amount > 0
+               AND (
+                 lct.record_id = r.id
+                 OR lct.record_id = r.yclients_record_id
+                 OR (lct.record_id IS NULL AND lct.client_id = r.client_id
+                     AND r.visit_date IS NOT NULL
+                     AND lct.txn_date::date = r.visit_date::date)
+               )
+              ) as real_bonus_accrued,
+              -- Списанные бонусы (аналогичный поиск)
+              (SELECT ABS(SUM(lct.amount))
+               FROM loyalty_card_transactions lct
+               WHERE lct.salon_id = r.salon_id
+               AND lct.amount < 0
+               AND (
+                 lct.record_id = r.id
+                 OR lct.record_id = r.yclients_record_id
+                 OR (lct.record_id IS NULL AND lct.client_id = r.client_id
+                     AND r.visit_date IS NOT NULL
+                     AND lct.txn_date::date = r.visit_date::date)
+               )
+              ) as real_bonus_redeemed,
+              -- Списанные бонусы из raw_payload (скидки из услуг = возможное списание)
+              COALESCE(
+                (SELECT SUM(GREATEST(0,
+                  (svc->>'cost')::numeric - COALESCE((svc->>'cost_to_pay')::numeric, (svc->>'cost')::numeric)
+                ))
+                 FROM jsonb_array_elements(COALESCE(r.raw_payload->'services','[]'::jsonb)) svc
+                 WHERE (svc->>'cost') IS NOT NULL
+                   AND (svc->>'discount')::numeric > 0),
+                0
+              ) as discount_from_payload,
+              -- Статус из raw_payload
+              COALESCE(
+                CASE
+                  WHEN (r.raw_payload->>'deleted')::boolean = true THEN 'deleted'
+                  -- API формат: attendance (приоритет — точнее чем status_id)
+                  WHEN (r.raw_payload->>'attendance') IS NOT NULL THEN
+                    CASE (r.raw_payload->>'attendance')::int
+                      WHEN  2 THEN 'completed'
+                      WHEN  1 THEN 'arrived'
+                      WHEN -1 THEN 'no_show'
+                      WHEN  0 THEN 'waiting'
+                      ELSE r.status
+                    END
+                  -- Webhook формат: status_id
+                  WHEN (r.raw_payload->>'status_id') IS NOT NULL THEN
+                    CASE (r.raw_payload->>'status_id')::int
+                      WHEN 4 THEN 'completed'
+                      WHEN 3 THEN 'arrived'
+                      WHEN 2 THEN 'confirmed'
+                      WHEN 5 THEN 'cancelled'
+                      WHEN 7 THEN 'cancelled'
+                      WHEN 6 THEN 'no_show'
+                      WHEN 1 THEN 'waiting'
+                      ELSE r.status
+                    END
+                  ELSE r.status
+                END,
+                r.status
+              ) as yclients_status,
+              -- Оплачен ли визит полностью (только paid_full=1 — точный признак)
+              CASE
+                WHEN (r.raw_payload->>'paid_full')::int = 1 THEN true
+                ELSE false
+              END as is_paid_full,
+              -- Дата визита в московском часовом поясе (как строка YYYY-MM-DD, без UTC-сдвига)
+              to_char(
+                CASE
+                  WHEN r.visit_datetime IS NOT NULL
+                  THEN (r.visit_datetime AT TIME ZONE 'Europe/Moscow')::date
+                  ELSE r.visit_date
+                END,
+                'YYYY-MM-DD'
+              ) as visit_date_msk
        FROM records r LEFT JOIN clients c ON c.id=r.client_id
-       WHERE ${w} ORDER BY r.visit_date DESC,r.id DESC LIMIT $${i}`,
-      [...params, limit]
+       WHERE ${w} ORDER BY r.visit_datetime DESC NULLS LAST, r.visit_date DESC, r.id DESC
+       LIMIT $${i} OFFSET $${i+1}`,
+      [...params, pageSize, offset]
     );
-    res.json({ records, total: parseInt(total) });
+
+    // Обогащаем данные
+    const enriched = records.map(r => {
+      const bonusRedeemed = parseFloat(r.real_bonus_redeemed || 0);
+      const discountPayload = parseFloat(r.discount_from_payload || 0);
+      return {
+        ...r,
+        amount:        parseFloat(r.real_amount || r.amount || 0),
+        bonus_accrued: parseFloat(r.real_bonus_accrued || r.bonus_accrued || 0),
+        bonus_redeemed: bonusRedeemed > 0 ? bonusRedeemed : discountPayload,
+        status:        r.yclients_status || r.status,
+      };
+    });
+
+    const totalNum = parseInt(total);
+    const totalPages = Math.ceil(totalNum / pageSize);
+    res.json({
+      records: enriched,
+      total: totalNum,
+      page: pageNum,
+      limit: pageSize,
+      totalPages,
+    });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -1120,19 +1676,57 @@ app.get('/api/analytics/dashboard', auth, async (req, res) => {
   try {
     const sid  = req.user.salonId;
     const days = parseInt(req.query.period || 30);
-    const [tc, ac, slp, nc, bs, rev, topSvc, lvlDist, daily, recentTx, lastSync] = await Promise.all([
+
+    // Бонусная статистика из loyalty_card_transactions + bonus_transactions
+    // loyalty_card_transactions — история из YClients (импорт + новые через вебхук)
+    // bonus_transactions — ручные операции нашей системы
+    const bonusStatsSql = `
+      SELECT
+        COALESCE(SUM(CASE WHEN amount > 0 THEN amount ELSE 0 END), 0) as accrued,
+        COALESCE(SUM(CASE WHEN amount < 0 THEN ABS(amount) ELSE 0 END), 0) as redeemed
+      FROM (
+        -- Из loyalty_card_transactions
+        SELECT amount
+        FROM loyalty_card_transactions lct
+        JOIN clients c ON c.id = lct.client_id
+        WHERE c.salon_id = $1
+          AND COALESCE(lct.txn_date, lct.created_at) >= NOW() - INTERVAL '${days} days'
+        UNION ALL
+        -- Из bonus_transactions (только операции НЕ из импорта чтобы не дублировать)
+        SELECT amount
+        FROM bonus_transactions bt
+        WHERE bt.salon_id = $1
+          AND bt.created_at >= NOW() - INTERVAL '${days} days'
+          AND bt.description NOT LIKE '%импорт%'
+      ) combined
+    `;
+
+    const [tc, ac, slp, nc, bs, rev, bonusStat, topSvc, lvlDist, daily, recentTx, lastSync] = await Promise.all([
       db.one('SELECT COUNT(*) FROM clients WHERE salon_id=$1', [sid]),
       db.one(`SELECT COUNT(*) FROM clients WHERE salon_id=$1 AND last_visit_at>NOW()-INTERVAL '${days} days'`, [sid]),
       db.one(`SELECT COUNT(*) FROM clients WHERE salon_id=$1 AND last_visit_at<NOW()-INTERVAL '60 days' AND visits_count>0`, [sid]),
       db.one(`SELECT COUNT(*) FROM clients WHERE salon_id=$1 AND created_at>NOW()-INTERVAL '${days} days'`, [sid]),
-      db.one(`SELECT COALESCE(SUM(bonus_balance),0) as tb,COALESCE(SUM(total_spent),0) as ts FROM clients WHERE salon_id=$1`, [sid]),
-      db.one(`SELECT COUNT(*) as rc,COALESCE(SUM(amount),0) as rv,COALESCE(SUM(bonus_accrued),0) as ba FROM records WHERE salon_id=$1 AND status='completed' AND visit_date>=NOW()-INTERVAL '${days} days'`, [sid]),
-      db.many(`SELECT svc->>'title' as service_name,COUNT(*) as cnt,SUM(r.amount) as total_amount FROM records r,jsonb_array_elements(COALESCE(r.services,'[]'::jsonb)) svc WHERE r.salon_id=$1 AND r.status='completed' AND r.visit_date>=NOW()-INTERVAL '${days} days' GROUP BY svc->>'title' ORDER BY cnt DESC LIMIT 8`, [sid]),
-      db.many(`SELECT loyalty_level,COUNT(*) as cnt FROM clients WHERE salon_id=$1 GROUP BY loyalty_level`, [sid]),
-      db.many(`SELECT visit_date::text,COUNT(*) as records,COALESCE(SUM(amount),0) as revenue,COALESCE(SUM(bonus_accrued),0) as bonuses FROM records WHERE salon_id=$1 AND status='completed' AND visit_date>=NOW()-INTERVAL '${days} days' GROUP BY visit_date ORDER BY visit_date`, [sid]),
-      db.many(`SELECT bt.*,c.name as client_name FROM bonus_transactions bt JOIN clients c ON c.id=bt.client_id WHERE bt.salon_id=$1 ORDER BY bt.created_at DESC LIMIT 15`, [sid]),
+      db.one(`SELECT COALESCE(SUM(bonus_balance),0) as tb, COALESCE(SUM(total_spent),0) as ts FROM clients WHERE salon_id=$1`, [sid]),
+      db.one(`SELECT COUNT(*) as rc, COALESCE(SUM(amount),0) as rv FROM records WHERE salon_id=$1 AND status='completed' AND visit_date>=NOW()-INTERVAL '${days} days'`, [sid]),
+      db.one(bonusStatsSql, [sid]),
+      db.many(`SELECT svc->>'title' as service_name, COUNT(*) as cnt, SUM(r.amount) as total_amount FROM records r, jsonb_array_elements(COALESCE(r.services,'[]'::jsonb)) svc WHERE r.salon_id=$1 AND r.status='completed' AND r.visit_date>=NOW()-INTERVAL '${days} days' GROUP BY svc->>'title' ORDER BY cnt DESC LIMIT 8`, [sid]),
+      db.many(`SELECT loyalty_level, COUNT(*) as cnt FROM clients WHERE salon_id=$1 GROUP BY loyalty_level`, [sid]),
+      db.many(`SELECT visit_date::text, COUNT(*) as records, COALESCE(SUM(amount),0) as revenue FROM records WHERE salon_id=$1 AND status='completed' AND visit_date>=NOW()-INTERVAL '${days} days' GROUP BY visit_date ORDER BY visit_date`, [sid]),
+      // Последние транзакции — из loyalty_card_transactions + bonus_transactions
+      db.many(`
+        SELECT sub.*, c.name as client_name FROM (
+          SELECT lct.id, lct.txn_date as created_at, lct.amount, lct.title as description,
+                 lct.client_id, 'card' as source
+          FROM loyalty_card_transactions lct
+          JOIN clients c2 ON c2.id=lct.client_id
+          WHERE c2.salon_id=$1
+          ORDER BY lct.txn_date DESC NULLS LAST LIMIT 15
+        ) sub JOIN clients c ON c.id=sub.client_id
+        ORDER BY sub.created_at DESC LIMIT 15
+      `, [sid]),
       db.one(`SELECT * FROM sync_logs WHERE salon_id=$1 ORDER BY started_at DESC LIMIT 1`, [sid]),
     ]);
+
     res.json({
       stats: {
         totalClients:      parseInt(tc.count),
@@ -1143,7 +1737,8 @@ app.get('/api/analytics/dashboard', auth, async (req, res) => {
         totalSpent:        parseFloat(bs.ts),
         periodRevenue:     parseFloat(rev.rv),
         periodRecords:     parseInt(rev.rc),
-        periodBonuses:     parseFloat(rev.ba),
+        periodBonuses:     parseFloat(bonusStat.accrued),   // начислено за период
+        periodRedeemed:    parseFloat(bonusStat.redeemed),  // списано за период
       },
       levelDist: lvlDist, topServices: topSvc, dailyRevenue: daily,
       recentTxns: recentTx, syncStatus: lastSync,
@@ -1153,14 +1748,30 @@ app.get('/api/analytics/dashboard', auth, async (req, res) => {
 
 app.get('/api/analytics/bonuses', auth, async (req, res) => {
   try {
+    const sid  = req.user.salonId;
     const days = parseInt(req.query.period || 30);
     const rows = await db.many(
-      `SELECT DATE_TRUNC('day',created_at)::date as day,type,
-         SUM(CASE WHEN amount>0 THEN amount ELSE 0 END) as accrued,
-         SUM(CASE WHEN amount<0 THEN ABS(amount) ELSE 0 END) as redeemed
-       FROM bonus_transactions WHERE salon_id=$1 AND created_at>=NOW()-INTERVAL '${days} days'
-       GROUP BY day,type ORDER BY day`,
-      [req.user.salonId]
+      `SELECT day::text, SUM(accrued) as accrued, SUM(redeemed) as redeemed FROM (
+        -- loyalty_card_transactions
+        SELECT DATE_TRUNC('day', COALESCE(lct.txn_date, lct.created_at))::date as day,
+          CASE WHEN lct.amount > 0 THEN lct.amount ELSE 0 END as accrued,
+          CASE WHEN lct.amount < 0 THEN ABS(lct.amount) ELSE 0 END as redeemed
+        FROM loyalty_card_transactions lct
+        JOIN clients c ON c.id=lct.client_id
+        WHERE c.salon_id=$1
+          AND COALESCE(lct.txn_date, lct.created_at) >= NOW()-INTERVAL '${days} days'
+        UNION ALL
+        -- bonus_transactions (без импорта)
+        SELECT DATE_TRUNC('day', bt.created_at)::date as day,
+          CASE WHEN bt.amount > 0 THEN bt.amount ELSE 0 END as accrued,
+          CASE WHEN bt.amount < 0 THEN ABS(bt.amount) ELSE 0 END as redeemed
+        FROM bonus_transactions bt
+        WHERE bt.salon_id=$1
+          AND bt.created_at >= NOW()-INTERVAL '${days} days'
+          AND bt.description NOT LIKE '%импорт%'
+      ) combined
+      GROUP BY day ORDER BY day`,
+      [sid]
     );
     res.json(rows);
   } catch (e) { res.status(500).json({ error: e.message }); }
@@ -1206,6 +1817,37 @@ app.get('/api/sync/logs', auth, async (req, res) => {
        WHERE sl.salon_id=$1 ORDER BY sl.started_at DESC LIMIT 20`,
       [req.user.salonId]
     ));
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Привязать «бесхозные» транзакции к записям по клиенту + дате
+app.post('/api/sync/link-transactions', auth, async (req, res) => {
+  try {
+    const salonId = req.user.salonId;
+    const result = await db.query(`
+      UPDATE loyalty_card_transactions lct
+      SET record_id = sub.record_id
+      FROM (
+        SELECT DISTINCT ON (lct2.id)
+               lct2.id AS txn_id,
+               r.id    AS record_id
+        FROM   loyalty_card_transactions lct2
+        JOIN   records r
+          ON   r.client_id  = lct2.client_id
+          AND  r.salon_id   = lct2.salon_id
+          AND  r.visit_date  = lct2.txn_date::date
+        WHERE  lct2.salon_id   = $1
+          AND  lct2.record_id  IS NULL
+          AND  lct2.txn_date   IS NOT NULL
+          AND  r.visit_date    IS NOT NULL
+          AND  r.status        IN ('completed','confirmed')
+        ORDER BY lct2.id, r.visit_datetime DESC
+      ) sub
+      WHERE lct.id = sub.txn_id
+    `, [salonId]);
+    const linked = result.rowCount || 0;
+    console.log(`[LinkTxns] Linked ${linked} orphan transactions for salon ${salonId}`);
+    res.json({ ok: true, linked });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -1341,41 +1983,10 @@ app.post('/api/clients/:id/sync-card', auth, async (req, res) => {
 
     console.log(`[SyncCard] Updated: balance=${cardBalance} paid=${paidAmount} visits=${visitsCount} level=${level?.key}`);
 
-    // Загружаем историю транзакций через веб-интерфейс YClients
-    let txnsImported = 0;
-    try {
-      const webTxns = await ycGetCardTransactions(
-        salon,
-        client.yclients_client_id,
-        client.phone,
-        salon.yclients_chain_id
-      );
-
-      for (const t of webTxns) {
-        // Сохраняем в loyalty_card_transactions (без уникального ID — используем дату+сумму)
-        try {
-          await db.query(
-            `INSERT INTO loyalty_card_transactions
-               (salon_id, client_id, yclients_card_id, type, amount,
-                title, txn_date, created_at)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,NOW())
-             ON CONFLICT DO NOTHING`,
-            [salon.id, client.id, card.id,
-             t.type, t.amount, t.title,
-             t.txn_date || null]
-          );
-          txnsImported++;
-        } catch (dbErr) {
-          // Игнорируем дубли
-        }
-      }
-      console.log(`[SyncCard] Imported ${txnsImported} transactions from web`);
-    } catch (txnErr) {
-      console.log(`[SyncCard] Web transactions unavailable: ${txnErr.message}`);
-    }
-
+    // История транзакций берётся из CSV-импорта, не из веба
+    // Кнопка "Синхронизировать карту" только обновляет баланс и уровень
     const txnsCount = await db.one(
-      'SELECT COUNT(*) FROM bonus_transactions WHERE client_id=$1',
+      'SELECT COUNT(*) FROM loyalty_card_transactions WHERE client_id=$1',
       [client.id]
     );
 
@@ -1387,9 +1998,8 @@ app.post('/api/clients/:id/sync-card', auth, async (req, res) => {
       paidAmount,
       visitsCount,
       level:      level?.key || client.loyalty_level,
-      transactionsInDb:      parseInt(txnsCount.count),
-      transactionsImported:  txnsImported,
-      message:    `Карта синхронизирована. Баланс: ${cardBalance.toLocaleString('ru')} ₽ · Оплачено: ${paidAmount.toLocaleString('ru')} ₽ · Визитов: ${visitsCount} · История: ${txnsImported} операций загружено`
+      transactionsInDb: parseInt(txnsCount.count),
+      message: `Карта синхронизирована. Баланс: ${cardBalance.toLocaleString('ru')} ₽ · Визитов: ${visitsCount} · Транзакций в БД: ${txnsCount.count}`
     });
   } catch (e) {
     console.error('[SyncCard error]', e.message);
@@ -1460,69 +2070,47 @@ app.post('/api/bulk-import-card-history', auth, async (req, res) => {
         bulkImportStatus[salonId].currentClient = c.name;
 
         try {
+          // Перечитываем salon каждые 50 клиентов чтобы подхватить изменения chain_id
+          if (i % 50 === 0) {
+            salon = await db.one('SELECT * FROM salons WHERE id=$1', [salonId]);
+            console.log(`[BulkImport] Refreshed salon: chain_id=${salon.yclients_chain_id}`);
+          }
           const txns = await ycGetCardTransactions(
             salon, c.yclients_client_id, c.phone, salon.yclients_chain_id
           );
 
           for (const t of txns) {
             try {
-              // 1. Сохраняем в loyalty_card_transactions
-              await db.query(
-                `INSERT INTO loyalty_card_transactions
-                   (salon_id, client_id, yclients_card_id, type, amount,
-                    title, txn_date, created_at)
-                 VALUES ($1,$2,$3,$4,$5,$6,$7,NOW())
-                 ON CONFLICT DO NOTHING`,
-                [salonId, c.id, c.yclients_card_id,
-                 t.type, t.amount, t.title, t.txn_date || null]
-              );
-
-              // 2. Дублируем в bonus_transactions для отображения в карточке клиента
-              const prevBal = await db.one(
-                'SELECT bonus_balance FROM clients WHERE id=$1', [c.id]
-              );
-              const balBefore = parseFloat(prevBal?.bonus_balance || 0);
-              const txnAmt    = parseFloat(t.amount || 0);
-              const balAfter  = Math.max(0, balBefore + txnAmt);
-              // Проверяем дубль по дате+сумме перед вставкой
+              const txnAmt  = parseFloat(t.amount || 0);
               const txnDate = t.txn_date || null;
+
+              // Единая таблица для всей истории карт
+              // Проверка дубля по (client_id, txn_date, amount)
+              let isDup = false;
               if (txnDate) {
                 const dup = await db.one(
-                  `SELECT id FROM bonus_transactions
+                  `SELECT id FROM loyalty_card_transactions
                    WHERE client_id=$1 AND amount=$2
-                   AND created_at::date = $3::date
-                   LIMIT 1`,
+                   AND txn_date::date = $3::date LIMIT 1`,
                   [c.id, txnAmt, txnDate]
                 );
-                if (dup) {
-                  // Уже есть — пропускаем
-                } else {
-                  await db.query(
-                    `INSERT INTO bonus_transactions
-                       (salon_id, client_id, type, amount,
-                        balance_before, balance_after, description, created_at)
-                     VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
-                    [salonId, c.id,
-                     txnAmt >= 0 ? 'accrual' : 'redemption',
-                     txnAmt, balBefore, balAfter,
-                     t.title || (txnAmt >= 0 ? 'Начисление (импорт)' : 'Списание (импорт)'),
-                     txnDate]
-                  );
-                }
-              } else {
-                await db.query(
-                  `INSERT INTO bonus_transactions
-                     (salon_id, client_id, type, amount,
-                      balance_before, balance_after, description, created_at)
-                   VALUES ($1,$2,$3,$4,$5,$6,$7,NOW())`,
-                  [salonId, c.id,
-                   txnAmt >= 0 ? 'accrual' : 'redemption',
-                   txnAmt, balBefore, balAfter,
-                   t.title || (txnAmt >= 0 ? 'Начисление (импорт)' : 'Списание (импорт)')]
-                );
+                isDup = !!dup;
               }
 
-              bulkImportStatus[salonId].imported++;
+              if (!isDup) {
+                await db.query(
+                  `INSERT INTO loyalty_card_transactions
+                     (salon_id, client_id, yclients_card_id, type, amount,
+                      title, txn_date, created_at)
+                   VALUES ($1,$2,$3,$4,$5,$6,$7,NOW())`,
+                  [salonId, c.id, c.yclients_card_id,
+                   txnAmt >= 0 ? 'accrual' : 'redemption',
+                   txnAmt,
+                   t.title || (txnAmt >= 0 ? 'Начисление' : 'Списание'),
+                   txnDate]
+                );
+                bulkImportStatus[salonId].imported++;
+              }
             } catch (e) {
               console.log(`[BulkImport] txn error client=${c.id}: ${e.message}`);
             }
@@ -1597,6 +2185,210 @@ app.get('/api/finances-log', auth, async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+
+// ============================================================
+// CSV IMPORT — импорт истории транзакций из CSV файла YClients
+// ============================================================
+
+// Парсер CSV с поддержкой кавычек и разных кодировок
+function parseCsvBuffer(buf) {
+  // Определяем кодировку по BOM
+  let str;
+  if (buf[0] === 0xEF && buf[1] === 0xBB && buf[2] === 0xBF) {
+    str = buf.slice(3).toString('utf8'); // UTF-8 BOM
+  } else if (buf[0] === 0xFF && buf[1] === 0xFE) {
+    str = buf.slice(2).toString('utf16le'); // UTF-16 LE
+  } else {
+    // Пробуем UTF-8, если не получается — latin1
+    try {
+      str = buf.toString('utf8');
+      if (str.includes('�')) str = buf.toString('latin1');
+    } catch { str = buf.toString('latin1'); }
+  }
+
+  // Определяем разделитель (;  или ,)
+  const firstLine = str.split('\n')[0];
+  const sep = firstLine.includes(';') ? ';' : ',';
+
+  const rows = [];
+  const lines = str.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
+
+  for (const line of lines) {
+    if (!line.trim()) continue;
+    // Парсим с учётом кавычек
+    const cells = [];
+    let cur = '', inQ = false;
+    for (let ci = 0; ci < line.length; ci++) {
+      const ch = line[ci];
+      if (ch === '"') { inQ = !inQ; }
+      else if (ch === sep && !inQ) { cells.push(cur.trim()); cur = ''; }
+      else { cur += ch; }
+    }
+    cells.push(cur.trim());
+    rows.push(cells);
+  }
+  return rows;
+}
+
+app.post('/api/import/csv-transactions', auth,
+  express.raw({ type: '*/*', limit: '20mb' }),
+  async (req, res) => {
+  try {
+    let fileBuffer = req.body;
+    if (!fileBuffer) return res.status(400).json({ error: 'Файл не получен' });
+    if (!Buffer.isBuffer(fileBuffer)) fileBuffer = Buffer.from(fileBuffer);
+
+    // Если multipart — извлекаем файл
+    if (fileBuffer[0] === 0x2D && fileBuffer[1] === 0x2D) {
+      const ct = req.headers['content-type'] || '';
+      const bm = ct.match(/boundary=([^;\s]+)/);
+      if (bm) {
+        const sep = Buffer.from('--' + bm[1].trim());
+        let found = false;
+        for (let si = 0; si < fileBuffer.length - sep.length; si++) {
+          if (fileBuffer.slice(si, si + sep.length).equals(sep)) {
+            const hEnd = fileBuffer.indexOf(Buffer.from('\r\n\r\n'), si + sep.length);
+            if (hEnd < 0) continue;
+            const hdr = fileBuffer.slice(si + sep.length + 2, hEnd).toString();
+            if (hdr.includes('filename=')) {
+              let end = fileBuffer.indexOf(Buffer.from('\r\n--' + bm[1].trim()), hEnd + 4);
+              fileBuffer = end > 0 ? fileBuffer.slice(hEnd + 4, end) : fileBuffer.slice(hEnd + 4);
+              found = true; break;
+            }
+          }
+        }
+        if (!found) return res.status(400).json({ error: 'Файл не найден в запросе' });
+      }
+    }
+
+    const rows = parseCsvBuffer(fileBuffer);
+    if (rows.length < 2) return res.status(400).json({ error: 'CSV пустой или нечитаемый' });
+
+    // Определяем индексы колонок по заголовку
+    const header = rows[0].map(h => h.replace(/['"\s]/g, '').toLowerCase());
+    console.log('[CsvImport] header:', header.join('|'));
+
+    // Колонки YClients: Дата|ID филиала|Название|Тип|Акция|Тип карты|Номер карты|Клиент|Сумма|Баланс
+    const colDate   = header.findIndex(h => h.includes('дат'));
+    const colType   = header.findIndex(h => h.includes('тип') && !h.includes('карт'));
+    const colCard   = header.findIndex(h => h.includes('номер') || h.includes('карт') && h.includes('номер') || (h.includes('карт') && !h.includes('тип')));
+    const colClient = header.findIndex(h => h.includes('клиент'));
+    const colAmt    = header.findIndex(h => h.includes('сумм'));
+    const colBal    = header.findIndex(h => h.includes('баланс'));
+    const colComment= header.findIndex(h => h.includes('акци') || h.includes('коммент'));
+
+    // Запасной поиск номера карты
+    const colCardFinal = colCard >= 0 ? colCard : header.findIndex(h => h.includes('карт'));
+
+    console.log('[CsvImport] cols: date=' + colDate + ' card=' + colCardFinal + ' client=' + colClient + ' amt=' + colAmt + ' bal=' + colBal);
+
+    const salonId = req.user.salonId;
+    let imported = 0, skipped = 0, errors = 0;
+
+    for (let ri = 1; ri < rows.length; ri++) {
+      const row = rows[ri];
+      if (!row || row.length < 3) continue;
+
+      try {
+        const dateStr  = colDate >= 0 ? String(row[colDate] || '').trim() : '';
+        const txnType  = colType >= 0 ? String(row[colType] || '').trim() : '';
+        const cardNum  = colCardFinal >= 0 ? String(row[colCardFinal] || '').replace(/['"]/g,'').trim() : '';
+        const clientRaw= colClient >= 0 ? String(row[colClient] || '').trim() : '';
+        const amtRaw   = colAmt >= 0 ? String(row[colAmt] || '').replace(/[^\d.\-]/g,'') : '';
+        const balRaw   = colBal >= 0 ? String(row[colBal] || '').replace(/[^\d.\-]/g,'') : '';
+        const comment  = colComment >= 0 ? String(row[colComment] || '').trim() : txnType;
+
+        if (!dateStr) continue;
+
+        const amount  = parseFloat(amtRaw) || 0;
+        const balance = parseFloat(balRaw) || 0;
+        if (!amount) { skipped++; continue; }
+
+        const type = amount >= 0 ? 'accrual' : 'redemption';
+
+        let txnDate = null;
+        try { txnDate = new Date(dateStr); if (isNaN(txnDate)) txnDate = null; } catch {}
+
+        // Извлекаем телефон из поля клиента (+7...)
+        const phoneMatch = clientRaw.match(/[\d]{10,11}/);
+        const phone = phoneMatch ? phoneMatch[0].slice(-10) : '';
+
+        // Ищем клиента по номеру карты
+        let client = null;
+        if (cardNum) {
+          const cardStripped = cardNum.replace(/^0+/, '');
+          client = await db.one(
+            `SELECT id, yclients_card_id FROM clients
+             WHERE salon_id=$1 AND yclients_card_number IS NOT NULL
+             AND (yclients_card_number=$2 OR yclients_card_number=$3
+                  OR yclients_card_number LIKE $4)
+             LIMIT 1`,
+            [salonId, cardNum, cardStripped, '%' + cardStripped]
+          );
+        }
+        // По телефону
+        if (!client && phone) {
+          client = await db.one(
+            `SELECT id, yclients_card_id FROM clients
+             WHERE salon_id=$1 AND regexp_replace(phone,'[^0-9]','','g') LIKE $2 LIMIT 1`,
+            [salonId, '%' + phone]
+          );
+        }
+
+        if (!client) {
+          if (skipped < 3) console.log('[CsvImport] Not found: card=' + cardNum + ' phone=' + phone);
+          skipped++; continue;
+        }
+
+        // Дедупликация — точно по дате+времени и сумме
+        if (txnDate) {
+          const dup = await db.one(
+            `SELECT id FROM loyalty_card_transactions
+             WHERE client_id=$1 AND amount=$2
+             AND txn_date BETWEEN $3::timestamptz - INTERVAL '30 seconds'
+                              AND $3::timestamptz + INTERVAL '30 seconds'
+             LIMIT 1`,
+            [client.id, amount, txnDate]
+          );
+          if (dup) { skipped++; continue; }
+        } else {
+          // Без даты — по сумме+балансу
+          const dup = await db.one(
+            `SELECT id FROM loyalty_card_transactions
+             WHERE client_id=$1 AND amount=$2 AND balance_after=$3
+             AND txn_date IS NULL LIMIT 1`,
+            [client.id, amount, balance]
+          );
+          if (dup) { skipped++; continue; }
+        }
+
+        await db.query(
+          `INSERT INTO loyalty_card_transactions
+             (salon_id,client_id,yclients_card_id,type,amount,
+              balance_after,title,txn_date,created_at)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,NOW())`,
+          [salonId, client.id, client.yclients_card_id,
+           type, amount, balance,
+           comment || txnType || (amount >= 0 ? 'Начисление' : 'Списание'),
+           txnDate]
+        );
+        imported++;
+
+      } catch(e) {
+        errors++;
+        if (errors <= 3) console.log('[CsvImport] row ' + ri + ' error: ' + e.message);
+      }
+    }
+
+    console.log('[CsvImport] Done: imported=' + imported + ' skipped=' + skipped + ' errors=' + errors + ' total=' + (rows.length-1));
+    res.json({ ok: true, imported, skipped, errors, totalRows: rows.length - 1 });
+
+  } catch(e) {
+    console.error('[CsvImport]', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // ============================================================
 // CRON
 // ============================================================
@@ -1626,10 +2418,13 @@ cron.schedule('0 10 * * *', async () => {
         const bonus = salon.birthday_bonus || 500;
         await db.query('UPDATE clients SET bonus_balance=bonus_balance+$1 WHERE id=$2', [bonus, c.id]);
         await db.query(
-          `INSERT INTO bonus_transactions
-             (salon_id,client_id,type,amount,balance_before,balance_after,description,created_at)
-           VALUES ($1,$2,'birthday',$3,$4,$5,'🎂 Подарок на день рождения',NOW())`,
-          [salon.id, c.id, bonus, c.bonus_balance, c.bonus_balance + bonus]
+          `INSERT INTO loyalty_card_transactions
+             (salon_id,client_id,yclients_card_id,type,amount,
+              balance_after,title,txn_date,created_at)
+           VALUES ($1,$2,
+             (SELECT yclients_card_id FROM clients WHERE id=$3),
+             'accrual',$4,$5,'🎂 Подарок на день рождения',NOW(),NOW())`,
+          [salon.id, c.id, c.id, bonus, c.bonus_balance + bonus]
         );
         console.log(`[Birthday] ${c.name} +${bonus}`);
       }
@@ -1655,11 +2450,24 @@ cron.schedule('0 */3 * * *', async () => {
 // ============================================================
 const PORT = process.env.PORT || 3001;
 pool.connect()
-  .then(client => {
+  .then(async client => {
+    // ── Migrations ────────────────────────────────────────────
+    await client.query(`
+      ALTER TABLE loyalty_settings
+        ADD COLUMN IF NOT EXISTS bonuses_enabled BOOLEAN NOT NULL DEFAULT TRUE
+    `).catch(() => {});
+    await client.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS finances_log_record_id_unique
+      ON finances_log (yclients_record_id)
+    `).catch(() => {});
+    await client.query(`
+      ALTER TABLE finances_log
+        ADD COLUMN IF NOT EXISTS cashback_amount NUMERIC DEFAULT 0
+    `).catch(() => {});
     client.release();
     app.listen(PORT, () => {
       console.log(`✓ LoyalPro server running on port ${PORT}`);
-      console.log(`  Webhook endpoint: POST /api/webhook/yclients/:companyId`);
+      console.log(`  Webhook endpoint: POST /yclients/webhook.v2/:companyId`);
       console.log(`  Register: POST /api/auth/register`);
     });
   })
