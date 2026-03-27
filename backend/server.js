@@ -2187,6 +2187,351 @@ app.get('/api/finances-log', auth, async (req, res) => {
 
 
 // ============================================================
+// STAFF ANALYTICS MODULE
+// ============================================================
+
+function calcWorkMinutes(from, to) {
+  if (!from || !to) return 0;
+  const [fh, fm] = (from + ':00').split(':').map(Number);
+  const [th, tm] = (to + ':00').split(':').map(Number);
+  return Math.max(0, (th * 60 + tm) - (fh * 60 + fm));
+}
+
+async function syncStaffData(salon) {
+  try {
+    const staffList = await ycGet(salon, `/staff/${salon.yclients_company_id}`, { is_fired: 0 });
+    if (!Array.isArray(staffList)) return;
+
+    for (const s of staffList) {
+      await db.query(`
+        INSERT INTO staff_members (salon_id, yclients_staff_id, name, specialization, avatar_url, is_active, synced_at)
+        VALUES ($1, $2, $3, $4, $5, TRUE, NOW())
+        ON CONFLICT (salon_id, yclients_staff_id) DO UPDATE
+          SET name=$3, specialization=$4, avatar_url=$5, is_active=TRUE, synced_at=NOW()
+      `, [salon.id, s.id, s.name || 'Сотрудник', s.specialization || null, s.avatar || null]);
+    }
+
+    const now = new Date();
+    for (let mo = -1; mo <= 0; mo++) {
+      const d = new Date(now.getFullYear(), now.getMonth() + mo, 1);
+      const lastDay = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate();
+      const startDate = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-01`;
+
+      for (const s of staffList) {
+        try {
+          const sched = await ycGet(salon, `/schedule/${salon.yclients_company_id}/${s.id}`, {
+            date: startDate, count: lastDay
+          });
+          if (!Array.isArray(sched)) continue;
+          for (const day of sched) {
+            if (!day.date) continue;
+            const wm = day.is_off ? 0 : calcWorkMinutes(day.from, day.to);
+            await db.query(`
+              INSERT INTO staff_schedule (salon_id, yclients_staff_id, date, from_time, to_time, work_minutes)
+              VALUES ($1, $2, $3, $4, $5, $6)
+              ON CONFLICT (salon_id, yclients_staff_id, date)
+              DO UPDATE SET from_time=$4, to_time=$5, work_minutes=$6
+            `, [salon.id, s.id, day.date, day.from || null, day.to || null, wm]);
+          }
+          await new Promise(r => setTimeout(r, 150));
+        } catch { /* schedule endpoint may vary by plan */ }
+      }
+    }
+    console.log(`[StaffSync] Salon ${salon.id}: ${staffList.length} staff synced`);
+  } catch(e) {
+    console.error(`[StaffSync] Error salon ${salon.id}:`, e.message);
+  }
+}
+
+async function getStaffList(salonId) {
+  const fromTable = await db.many(
+    `SELECT yclients_staff_id AS id, name, specialization, avatar_url
+     FROM staff_members WHERE salon_id=$1 AND is_active=TRUE ORDER BY name`,
+    [salonId]
+  );
+  if (fromTable.length > 0) return fromTable;
+
+  return db.many(`
+    SELECT DISTINCT
+      (se->>'id')::int AS id,
+      (se->>'name') AS name,
+      (se->>'specialization') AS specialization,
+      NULL AS avatar_url
+    FROM records r, jsonb_array_elements(r.staff::jsonb) se
+    WHERE r.salon_id=$1 AND r.staff IS NOT NULL AND r.staff != '[]'
+      AND (se->>'name') IS NOT NULL
+    ORDER BY name
+  `, [salonId]);
+}
+
+async function computeStaffMetrics(salonId, ycStaffId, fromDate, toDate) {
+  const sid = parseInt(ycStaffId);
+  // В YClients подтверждённые визиты хранятся со статусом 'confirmed'
+  const DONE = `status IN ('completed','confirmed')`;
+  const CANCELLED = `status IN ('no_show','deleted','cancelled')`;
+  const [basic, ret, reapp, sched, svcMins, consult] = await Promise.all([
+    db.one(`
+      SELECT
+        COUNT(*) FILTER (WHERE ${DONE}) AS visits,
+        COALESCE(SUM(amount) FILTER (WHERE ${DONE}), 0) AS revenue,
+        COALESCE(AVG(amount) FILTER (WHERE ${DONE}), 0) AS avg_check,
+        COUNT(*) FILTER (WHERE ${CANCELLED}) AS cancelled,
+        COALESCE(SUM(amount) FILTER (WHERE ${CANCELLED}), 0) AS cancelled_rev
+      FROM records WHERE salon_id=$1 AND (staff->>'id')::int = $2
+        AND visit_date BETWEEN $3 AND $4
+    `, [salonId, sid, fromDate, toDate]),
+
+    db.one(`
+      WITH
+      period_clients AS (
+        SELECT DISTINCT yclients_client_id
+        FROM records
+        WHERE salon_id=$1 AND (staff->>'id')::int = $2
+          AND ${DONE} AND visit_date BETWEEN $3 AND $4
+          AND yclients_client_id IS NOT NULL
+      ),
+      new_clients AS (
+        SELECT DISTINCT r.yclients_client_id
+        FROM records r
+        WHERE r.salon_id=$1 AND (r.staff->>'id')::int = $2
+          AND ${DONE} AND r.visit_date BETWEEN $3 AND $4
+          AND r.yclients_client_id IS NOT NULL
+          AND NOT EXISTS (
+            SELECT 1 FROM records r2
+            WHERE r2.salon_id=$1 AND (r2.staff->>'id')::int = $2
+              AND ${DONE} AND r2.visit_date < $3
+              AND r2.yclients_client_id = r.yclients_client_id
+          )
+      ),
+      base_45 AS (
+        SELECT DISTINCT yclients_client_id
+        FROM records
+        WHERE salon_id=$1 AND (staff->>'id')::int = $2
+          AND ${DONE}
+          AND visit_date BETWEEN ($3::date - INTERVAL '45 days')::date
+                              AND ($3::date - INTERVAL '1 day')::date
+          AND yclients_client_id IS NOT NULL
+      ),
+      returned AS (
+        SELECT b.yclients_client_id FROM base_45 b
+        JOIN period_clients p USING (yclients_client_id)
+      )
+      SELECT
+        (SELECT COUNT(*) FROM period_clients) AS total,
+        (SELECT COUNT(*) FROM new_clients)    AS new_clients,
+        (SELECT COUNT(*) FROM base_45)        AS base_45_days,
+        (SELECT COUNT(*) FROM returned)       AS returned_count
+    `, [salonId, sid, fromDate, toDate]),
+
+    db.one(`
+      WITH vis AS (
+        SELECT r.id, r.yclients_client_id, r.visit_datetime,
+          EXISTS (
+            SELECT 1 FROM records r2
+            WHERE r2.salon_id=r.salon_id AND r2.yclients_client_id=r.yclients_client_id
+              AND r2.id != r.id
+              AND (r2.raw_payload::jsonb->>'create_date') IS NOT NULL
+              AND (r2.raw_payload::jsonb->>'create_date')::timestamptz
+                  BETWEEN r.visit_datetime::timestamptz
+                      AND r.visit_datetime::timestamptz + INTERVAL '24 hours'
+          ) AS reapp
+        FROM records r
+        WHERE r.salon_id=$1 AND (r.staff->>'id')::int = $2
+          AND ${DONE} AND r.visit_date BETWEEN $3 AND $4
+          AND r.visit_datetime IS NOT NULL
+      )
+      SELECT COUNT(*) AS total, COUNT(*) FILTER (WHERE reapp) AS with_reapp FROM vis
+    `, [salonId, sid, fromDate, toDate]),
+
+    db.one(`
+      SELECT COALESCE(SUM(work_minutes), 0) AS mins
+      FROM staff_schedule WHERE salon_id=$1 AND yclients_staff_id=$2
+        AND date BETWEEN $3 AND $4
+    `, [salonId, sid, fromDate, toDate]),
+
+    db.one(`
+      SELECT COALESCE(SUM(
+        (SELECT COALESCE(SUM(
+          CASE WHEN (s->>'seance_length') ~ '^[0-9]+$'
+               THEN (s->>'seance_length')::int ELSE 0 END
+        ), 0) FROM jsonb_array_elements(r.services::jsonb) s)
+      ), 0) AS mins
+      FROM records r WHERE r.salon_id=$1 AND (r.staff->>'id')::int = $2
+        AND ${DONE} AND r.visit_date BETWEEN $3 AND $4
+    `, [salonId, sid, fromDate, toDate]),
+
+    db.one(`
+      WITH con AS (
+        SELECT DISTINCT r.yclients_client_id, r.visit_date
+        FROM records r
+        CROSS JOIN LATERAL jsonb_array_elements(r.services::jsonb) sv
+        JOIN services_config sc ON sc.salon_id=r.salon_id
+          AND sc.yclients_service_id=(sv->>'id')::int AND sc.tag='consultation'
+        WHERE r.salon_id=$1 AND (r.staff->>'id')::int = $2
+          AND ${DONE} AND r.visit_date BETWEEN $3 AND $4
+      ),
+      conv AS (
+        SELECT DISTINCT c.yclients_client_id
+        FROM con c WHERE EXISTS (
+          SELECT 1 FROM records r2
+          WHERE r2.salon_id=$1 AND r2.yclients_client_id=c.yclients_client_id
+            AND ${DONE.replace(/r\./g,'')}
+            AND r2.visit_date > c.visit_date AND r2.visit_date <= c.visit_date + 30
+            AND NOT EXISTS (
+              SELECT 1 FROM jsonb_array_elements(r2.services::jsonb) s2
+              CROSS JOIN LATERAL (
+                SELECT 1 FROM services_config sc2
+                WHERE sc2.salon_id=r2.salon_id
+                  AND sc2.yclients_service_id=(s2->>'id')::int AND sc2.tag='consultation'
+              ) x
+            )
+        )
+      )
+      SELECT COUNT(DISTINCT c.yclients_client_id) AS total,
+             COUNT(DISTINCT cv.yclients_client_id) AS converted
+      FROM con c LEFT JOIN conv cv ON cv.yclients_client_id=c.yclients_client_id
+    `, [salonId, sid, fromDate, toDate]),
+  ]);
+
+  const visits = parseInt(basic.visits) || 0;
+  const schedMins = parseInt(sched.mins) || 0;
+  const svcM = parseInt(svcMins.mins) || 0;
+
+  const retTotal    = parseInt(ret.total) || 0;
+  const retNew      = parseInt(ret.new_clients) || 0;
+  const retBase45   = parseInt(ret.base_45_days) || 0;
+  const retReturned = parseInt(ret.returned_count) || 0;
+
+  return {
+    totalVisits:        visits,
+    totalRevenue:       parseFloat(basic.revenue) || 0,
+    avgCheck:           parseFloat(basic.avg_check) || 0,
+    cancelledCount:     parseInt(basic.cancelled) || 0,
+    cancelledRevenue:   parseFloat(basic.cancelled_rev) || 0,
+    // Возвращаемость по методике YClients:
+    // % клиентов из базы 45 дней до периода, которые вернулись в период
+    clientsTotal:       retTotal,
+    newClients:         retNew,
+    returningClients:   retTotal - retNew,
+    base45days:         retBase45,
+    returnedFrom45:     retReturned,
+    retentionRate:      retBase45 > 0 ? parseFloat((retReturned / retBase45 * 100).toFixed(1)) : null,
+    reappointmentRate:  reapp.total > 0 ? parseFloat((reapp.with_reapp / reapp.total * 100).toFixed(1)) : 0,
+    goodsSalesRate:     null, // данные о товарах не передаются через YClients API
+    utilizationRate:    schedMins > 0 ? parseFloat(Math.min(100, svcM / schedMins * 100).toFixed(1)) : null,
+    consultConversion:  consult.total > 0 ? parseFloat((consult.converted / consult.total * 100).toFixed(1)) : null,
+    totalConsults:      parseInt(consult.total) || 0,
+  };
+}
+
+async function computeStaffSparklines(salonId, ycStaffId) {
+  return db.many(`
+    SELECT
+      TO_CHAR(DATE_TRUNC('month', visit_date::date), 'YYYY-MM') AS month,
+      COUNT(*) FILTER (WHERE status IN ('completed','confirmed')) AS visits,
+      COALESCE(AVG(amount) FILTER (WHERE status IN ('completed','confirmed')), 0) AS avg_check,
+      COALESCE(SUM(amount) FILTER (WHERE status IN ('completed','confirmed')), 0) AS revenue
+    FROM records
+    WHERE salon_id=$1 AND (staff->>'id')::int = $2
+      AND visit_date >= (CURRENT_DATE - INTERVAL '6 months')::date
+    GROUP BY 1 ORDER BY 1
+  `, [salonId, parseInt(ycStaffId)]);
+}
+
+// ── GET /api/staff-analytics/staff ───────────────────────────
+app.get('/api/staff-analytics/staff', auth, async (req, res) => {
+  try {
+    const staff = await getStaffList(req.user.salonId);
+    res.json({ staff });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── GET /api/staff-analytics/metrics ─────────────────────────
+app.get('/api/staff-analytics/metrics', auth, async (req, res) => {
+  try {
+    const { staffId, from, to } = req.query;
+    if (!staffId || !from || !to) return res.status(400).json({ error: 'staffId, from, to required' });
+
+    const days = Math.ceil((new Date(to) - new Date(from)) / 86400000);
+    const prevTo   = new Date(new Date(from) - 86400000).toISOString().split('T')[0];
+    const prevFrom = new Date(new Date(from) - days * 86400000).toISOString().split('T')[0];
+
+    const [metrics, sparklines, prevMetrics] = await Promise.all([
+      computeStaffMetrics(req.user.salonId, staffId, from, to),
+      computeStaffSparklines(req.user.salonId, staffId),
+      computeStaffMetrics(req.user.salonId, staffId, prevFrom, prevTo),
+    ]);
+    res.json({ metrics, sparklines, prevMetrics });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── GET /api/staff-analytics/salon-avg ───────────────────────
+app.get('/api/staff-analytics/salon-avg', auth, async (req, res) => {
+  try {
+    const { from, to } = req.query;
+    const staff = await getStaffList(req.user.salonId);
+    if (!staff.length) return res.json({ avg: null });
+
+    const all = await Promise.all(
+      staff.map(s => computeStaffMetrics(req.user.salonId, s.id, from, to).catch(() => null))
+    );
+    const valid = all.filter(m => m && m.totalVisits > 0);
+    if (!valid.length) return res.json({ avg: null });
+
+    const avg = key => valid.reduce((s, m) => s + (parseFloat(m[key]) || 0), 0) / valid.length;
+    res.json({ avg: {
+      avgCheck:          avg('avgCheck'),
+      retentionRate:     avg('retentionRate'),
+      goodsSalesRate:    avg('goodsSalesRate'),
+      reappointmentRate: avg('reappointmentRate'),
+      utilizationRate:   avg('utilizationRate'),
+    }});
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── POST /api/staff-analytics/sync ───────────────────────────
+app.post('/api/staff-analytics/sync', auth, async (req, res) => {
+  try {
+    const salon = await db.one('SELECT * FROM salons WHERE id=$1', [req.user.salonId]);
+    if (!salon?.yclients_company_id) return res.status(400).json({ error: 'YClients не настроен' });
+    syncStaffData(salon).catch(e => console.error('[StaffSync manual]', e.message));
+    res.json({ ok: true, message: 'Синхронизация запущена' });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── GET /api/services-config ──────────────────────────────────
+app.get('/api/services-config', auth, async (req, res) => {
+  try {
+    const rows = await db.many(
+      'SELECT * FROM services_config WHERE salon_id=$1 ORDER BY service_title',
+      [req.user.salonId]
+    );
+    res.json({ services: rows });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── PUT /api/services-config ──────────────────────────────────
+app.put('/api/services-config', auth, async (req, res) => {
+  try {
+    const { yclients_service_id, service_title, tag } = req.body;
+    if (!yclients_service_id) return res.status(400).json({ error: 'yclients_service_id required' });
+    if (tag) {
+      await db.query(`
+        INSERT INTO services_config (salon_id, yclients_service_id, service_title, tag)
+        VALUES ($1, $2, $3, $4)
+        ON CONFLICT (salon_id, yclients_service_id) DO UPDATE SET service_title=$3, tag=$4
+      `, [req.user.salonId, yclients_service_id, service_title || null, tag]);
+    } else {
+      await db.query(
+        'DELETE FROM services_config WHERE salon_id=$1 AND yclients_service_id=$2',
+        [req.user.salonId, yclients_service_id]
+      );
+    }
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ============================================================
 // CSV IMPORT — импорт истории транзакций из CSV файла YClients
 // ============================================================
 
@@ -2445,6 +2790,18 @@ cron.schedule('0 */3 * * *', async () => {
   } catch (e) { console.error('[Cron sync]', e.message); }
 });
 
+cron.schedule('0 * * * *', async () => {
+  try {
+    const salons = await db.many(
+      `SELECT * FROM salons WHERE is_active=TRUE
+       AND yclients_company_id IS NOT NULL AND yclients_user_token IS NOT NULL`
+    );
+    for (const salon of salons) {
+      syncStaffData(salon).catch(e => console.error(`[StaffSync cron ${salon.id}]`, e.message));
+    }
+  } catch(e) { console.error('[StaffSync cron]', e.message); }
+});
+
 // ============================================================
 // START
 // ============================================================
@@ -2463,6 +2820,42 @@ pool.connect()
     await client.query(`
       ALTER TABLE finances_log
         ADD COLUMN IF NOT EXISTS cashback_amount NUMERIC DEFAULT 0
+    `).catch(() => {});
+    // ── Staff analytics tables ─────────────────────────────────
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS staff_members (
+        id SERIAL PRIMARY KEY,
+        salon_id INTEGER REFERENCES salons(id) ON DELETE CASCADE,
+        yclients_staff_id INTEGER NOT NULL,
+        name VARCHAR(255),
+        specialization VARCHAR(255),
+        avatar_url TEXT,
+        is_active BOOLEAN DEFAULT TRUE,
+        synced_at TIMESTAMP,
+        UNIQUE(salon_id, yclients_staff_id)
+      )
+    `).catch(() => {});
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS staff_schedule (
+        id SERIAL PRIMARY KEY,
+        salon_id INTEGER REFERENCES salons(id) ON DELETE CASCADE,
+        yclients_staff_id INTEGER NOT NULL,
+        date DATE NOT NULL,
+        from_time VARCHAR(10),
+        to_time VARCHAR(10),
+        work_minutes INTEGER DEFAULT 0,
+        UNIQUE(salon_id, yclients_staff_id, date)
+      )
+    `).catch(() => {});
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS services_config (
+        id SERIAL PRIMARY KEY,
+        salon_id INTEGER REFERENCES salons(id) ON DELETE CASCADE,
+        yclients_service_id INTEGER NOT NULL,
+        service_title VARCHAR(255),
+        tag VARCHAR(50),
+        UNIQUE(salon_id, yclients_service_id)
+      )
     `).catch(() => {});
     client.release();
     app.listen(PORT, () => {
