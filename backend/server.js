@@ -2243,6 +2243,88 @@ async function syncStaffData(salon) {
   }
 }
 
+// ── GOODS SALES SYNC ──────────────────────────────────────────
+// Извлекает goods_transactions из raw_payload всех записей салона
+// и сохраняет в goods_sales + goods_sale_items.
+// Атрибуция продажи — по master_id позиции (кому записана, не кто провёл).
+async function syncGoodsSales(salonId) {
+  console.log(`[GoodsSync] Salon ${salonId}: starting...`);
+
+  // Берём все записи у которых goods_transactions не пустые
+  const records = await db.many(`
+    SELECT id, yclients_record_id, client_id, yclients_client_id, visit_date,
+           raw_payload->'goods_transactions' AS goods_transactions
+    FROM records
+    WHERE salon_id = $1
+      AND raw_payload->'goods_transactions' IS NOT NULL
+      AND raw_payload->'goods_transactions' != 'null'::jsonb
+      AND jsonb_array_length(raw_payload->'goods_transactions') > 0
+  `, [salonId]);
+
+  console.log(`[GoodsSync] Found ${records.length} records with goods`);
+
+  let inserted = 0, updated = 0;
+
+  for (const rec of records) {
+    const items = rec.goods_transactions;
+    if (!Array.isArray(items) || !items.length) continue;
+
+    // Сумма всех позиций записи
+    const totalAmount = items.reduce((sum, it) => sum + (parseFloat(it.cost_to_pay) || 0), 0);
+
+    // Upsert заголовка продажи
+    const sale = await db.one(`
+      INSERT INTO goods_sales
+        (salon_id, yclients_record_id, source, yclients_client_id, client_id, sale_date, total_amount)
+      VALUES ($1, $2, 'record', $3, $4, $5, $6)
+      ON CONFLICT (salon_id, yclients_record_id) DO UPDATE
+        SET total_amount = EXCLUDED.total_amount,
+            synced_at    = NOW()
+      RETURNING id, (xmax = 0) AS is_insert
+    `, [salonId, rec.yclients_record_id, rec.yclients_client_id,
+        rec.client_id, rec.visit_date, totalAmount]);
+
+    if (sale.is_insert) inserted++; else updated++;
+
+    // Upsert позиций
+    for (const it of items) {
+      await db.query(`
+        INSERT INTO goods_sale_items
+          (sale_id, yclients_transaction_id, yclients_goods_id, title, article,
+           quantity, price_per_unit, total_price, discount,
+           assigned_staff_yclients_id, storage_id)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+        ON CONFLICT (yclients_transaction_id) DO UPDATE
+          SET sale_id                    = EXCLUDED.sale_id,
+              yclients_goods_id          = EXCLUDED.yclients_goods_id,
+              title                      = EXCLUDED.title,
+              article                    = EXCLUDED.article,
+              quantity                   = EXCLUDED.quantity,
+              price_per_unit             = EXCLUDED.price_per_unit,
+              total_price                = EXCLUDED.total_price,
+              discount                   = EXCLUDED.discount,
+              assigned_staff_yclients_id = EXCLUDED.assigned_staff_yclients_id,
+              storage_id                 = EXCLUDED.storage_id
+      `, [
+        sale.id,
+        it.id,
+        it.good_id || null,
+        it.title || '',
+        it.article || null,
+        Math.abs(parseFloat(it.amount) || 1),
+        parseFloat(it.cost_per_unit) || 0,
+        parseFloat(it.cost_to_pay) || 0,
+        parseFloat(it.discount) || 0,
+        it.master_id || null,
+        it.storage_id || null,
+      ]);
+    }
+  }
+
+  console.log(`[GoodsSync] Done: inserted=${inserted} updated=${updated}`);
+  return { inserted, updated, total: records.length };
+}
+
 async function getStaffList(salonId) {
   const fromTable = await db.many(
     `SELECT yclients_staff_id AS id, name, specialization, avatar_url
@@ -2269,7 +2351,7 @@ async function computeStaffMetrics(salonId, ycStaffId, fromDate, toDate) {
   // В YClients подтверждённые визиты хранятся со статусом 'confirmed'
   const DONE = `status IN ('completed','confirmed')`;
   const CANCELLED = `status IN ('no_show','deleted','cancelled')`;
-  const [basic, ret, reapp, sched, svcMins, consult] = await Promise.all([
+  const [basic, ret, reapp, sched, consult, goods] = await Promise.all([
     db.one(`
       SELECT
         COUNT(*) FILTER (WHERE ${DONE}) AS visits,
@@ -2343,21 +2425,19 @@ async function computeStaffMetrics(salonId, ycStaffId, fromDate, toDate) {
       SELECT COUNT(*) AS total, COUNT(*) FILTER (WHERE reapp) AS with_reapp FROM vis
     `, [salonId, sid, fromDate, toDate]),
 
+    // Загрузка: рабочие дни и занятые минуты из raw_payload.seance_length (секунды)
     db.one(`
-      SELECT COALESCE(SUM(work_minutes), 0) AS mins
-      FROM staff_schedule WHERE salon_id=$1 AND yclients_staff_id=$2
-        AND date BETWEEN $3 AND $4
-    `, [salonId, sid, fromDate, toDate]),
-
-    db.one(`
-      SELECT COALESCE(SUM(
-        (SELECT COALESCE(SUM(
-          CASE WHEN (s->>'seance_length') ~ '^[0-9]+$'
-               THEN (s->>'seance_length')::int ELSE 0 END
-        ), 0) FROM jsonb_array_elements(r.services::jsonb) s)
-      ), 0) AS mins
-      FROM records r WHERE r.salon_id=$1 AND (r.staff->>'id')::int = $2
-        AND ${DONE} AND r.visit_date BETWEEN $3 AND $4
+      SELECT
+        COUNT(DISTINCT visit_date) AS working_days,
+        COALESCE(SUM(
+          CASE WHEN raw_payload IS NOT NULL
+                    AND (raw_payload::jsonb->>'seance_length') ~ '^[0-9]+$'
+               THEN (raw_payload::jsonb->>'seance_length')::int / 60
+               ELSE 0 END
+        ), 0) AS booked_mins
+      FROM records
+      WHERE salon_id=$1 AND (staff->>'id')::int = $2
+        AND ${DONE} AND visit_date BETWEEN $3 AND $4
     `, [salonId, sid, fromDate, toDate]),
 
     db.one(`
@@ -2391,11 +2471,25 @@ async function computeStaffMetrics(salonId, ycStaffId, fromDate, toDate) {
              COUNT(DISTINCT cv.yclients_client_id) AS converted
       FROM con c LEFT JOIN conv cv ON cv.yclients_client_id=c.yclients_client_id
     `, [salonId, sid, fromDate, toDate]),
+
+    // Продажи товаров по сотруднику за период (атрибуция по master_id позиции)
+    db.one(`
+      SELECT
+        COALESCE(COUNT(gsi.id), 0)        AS count,
+        COALESCE(SUM(gsi.total_price), 0) AS revenue
+      FROM goods_sale_items gsi
+      JOIN goods_sales gs ON gs.id = gsi.sale_id
+      WHERE gs.salon_id = $1
+        AND gsi.assigned_staff_yclients_id = $2
+        AND gs.sale_date BETWEEN $3 AND $4
+    `, [salonId, sid, fromDate, toDate]),
   ]);
 
-  const visits = parseInt(basic.visits) || 0;
-  const schedMins = parseInt(sched.mins) || 0;
-  const svcM = parseInt(svcMins.mins) || 0;
+  const visits       = parseInt(basic.visits) || 0;
+  const workingDays  = parseInt(sched.working_days) || 0;
+  const bookedMins   = parseInt(sched.booked_mins) || 0;
+  // 8-часовой рабочий день = 480 мин — стандарт для медклиники
+  const availMins    = workingDays * 480;
 
   const retTotal    = parseInt(ret.total) || 0;
   const retNew      = parseInt(ret.new_clients) || 0;
@@ -2408,8 +2502,7 @@ async function computeStaffMetrics(salonId, ycStaffId, fromDate, toDate) {
     avgCheck:           parseFloat(basic.avg_check) || 0,
     cancelledCount:     parseInt(basic.cancelled) || 0,
     cancelledRevenue:   parseFloat(basic.cancelled_rev) || 0,
-    // Возвращаемость по методике YClients:
-    // % клиентов из базы 45 дней до периода, которые вернулись в период
+    // Возвращаемость по методике YClients
     clientsTotal:       retTotal,
     newClients:         retNew,
     returningClients:   retTotal - retNew,
@@ -2417,8 +2510,12 @@ async function computeStaffMetrics(salonId, ycStaffId, fromDate, toDate) {
     returnedFrom45:     retReturned,
     retentionRate:      retBase45 > 0 ? parseFloat((retReturned / retBase45 * 100).toFixed(1)) : null,
     reappointmentRate:  reapp.total > 0 ? parseFloat((reapp.with_reapp / reapp.total * 100).toFixed(1)) : 0,
-    goodsSalesRate:     null, // данные о товарах не передаются через YClients API
-    utilizationRate:    schedMins > 0 ? parseFloat(Math.min(100, svcM / schedMins * 100).toFixed(1)) : null,
+    goodsCount:         parseInt(goods.count) || 0,
+    goodsRevenue:       parseFloat(goods.revenue) || 0,
+    // Загрузка: занятые минуты / (рабочих дней × 480 мин)
+    bookedMins,
+    workingDays,
+    utilizationRate:    availMins > 0 ? parseFloat(Math.min(100, bookedMins / availMins * 100).toFixed(1)) : null,
     consultConversion:  consult.total > 0 ? parseFloat((consult.converted / consult.total * 100).toFixed(1)) : null,
     totalConsults:      parseInt(consult.total) || 0,
   };
@@ -2478,11 +2575,16 @@ app.get('/api/staff-analytics/salon-avg', auth, async (req, res) => {
     const valid = all.filter(m => m && m.totalVisits > 0);
     if (!valid.length) return res.json({ avg: null });
 
-    const avg = key => valid.reduce((s, m) => s + (parseFloat(m[key]) || 0), 0) / valid.length;
+    const avg = key => {
+      const nonNull = valid.filter(m => m[key] !== null && m[key] !== undefined);
+      if (!nonNull.length) return null;
+      return nonNull.reduce((s, m) => s + (parseFloat(m[key]) || 0), 0) / nonNull.length;
+    };
     res.json({ avg: {
       avgCheck:          avg('avgCheck'),
       retentionRate:     avg('retentionRate'),
-      goodsSalesRate:    avg('goodsSalesRate'),
+      goodsCount:        avg('goodsCount'),
+      goodsRevenue:      avg('goodsRevenue'),
       reappointmentRate: avg('reappointmentRate'),
       utilizationRate:   avg('utilizationRate'),
     }});
@@ -2496,6 +2598,40 @@ app.post('/api/staff-analytics/sync', auth, async (req, res) => {
     if (!salon?.yclients_company_id) return res.status(400).json({ error: 'YClients не настроен' });
     syncStaffData(salon).catch(e => console.error('[StaffSync manual]', e.message));
     res.json({ ok: true, message: 'Синхронизация запущена' });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── POST /api/goods-sales/sync ────────────────────────────────
+app.post('/api/goods-sales/sync', auth, async (req, res) => {
+  try {
+    const result = await syncGoodsSales(req.user.salonId);
+    res.json({ ok: true, ...result });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── GET /api/goods-sales/stats ────────────────────────────────
+// Быстрая сводка по продажам для проверки данных
+app.get('/api/goods-sales/stats', auth, async (req, res) => {
+  try {
+    const { from, to } = req.query;
+    if (!from || !to) return res.status(400).json({ error: 'from, to required' });
+    const rows = await db.many(`
+      SELECT
+        sm.name AS staff_name,
+        COUNT(gsi.id)        AS items_count,
+        SUM(gsi.quantity)    AS total_qty,
+        SUM(gsi.total_price) AS total_revenue
+      FROM goods_sale_items gsi
+      JOIN goods_sales gs ON gs.id = gsi.sale_id
+      LEFT JOIN staff_members sm
+        ON sm.salon_id = gs.salon_id
+       AND sm.yclients_staff_id = gsi.assigned_staff_yclients_id
+      WHERE gs.salon_id = $1
+        AND gs.sale_date BETWEEN $2 AND $3
+      GROUP BY gsi.assigned_staff_yclients_id, sm.name
+      ORDER BY total_revenue DESC NULLS LAST
+    `, [req.user.salonId, from, to]);
+    res.json({ stats: rows });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 

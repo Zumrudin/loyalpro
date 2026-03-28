@@ -473,11 +473,13 @@ tbody tr:hover{background:var(--bg);cursor:pointer}
           <div class="card sa-card">
             <div class="sa-card-label">Продажи товаров</div>
             <div class="sa-card-val" id="sa-v-goods">—</div>
+            <div style="font-size:11px;color:var(--t2);margin:2px 0 4px;min-height:14px" id="sa-goods-detail"></div>
             <div class="sa-card-footer"><span class="sa-badge" id="sa-b-goods"></span><canvas class="sa-sparkline" id="sa-spark-goods"></canvas></div>
           </div>
           <div class="card sa-card">
             <div class="sa-card-label">Загрузка</div>
             <div class="sa-card-val" id="sa-v-util">—</div>
+            <div style="font-size:11px;color:var(--t2);margin:2px 0 4px;min-height:14px" id="sa-util-detail"></div>
             <div class="sa-card-footer"><span class="sa-badge" id="sa-b-util"></span><canvas class="sa-sparkline" id="sa-spark-util"></canvas></div>
           </div>
         </div>
@@ -1738,8 +1740,22 @@ async function buildStaffDashboard() {
       }
     }
     saRenderCard('reapp',   saFmt(metrics.reappointmentRate,'%'),      metrics.reappointmentRate, prevMetrics.reappointmentRate);
-    saRenderCard('goods',   metrics.goodsSalesRate!==null?saFmt(metrics.goodsSalesRate,'%'):'Нет данных', metrics.goodsSalesRate, prevMetrics?.goodsSalesRate);
-    saRenderCard('util',    metrics.utilizationRate!==null?saFmt(metrics.utilizationRate,'%'):'Нет данных', metrics.utilizationRate, prevMetrics.utilizationRate);
+    const goodsVal = metrics.goodsRevenue > 0 ? metrics.goodsRevenue.toLocaleString('ru') + ' ₽' : 'Нет данных';
+    saRenderCard('goods', goodsVal, metrics.goodsRevenue, prevMetrics?.goodsRevenue);
+    const goodsDetailEl = document.getElementById('sa-goods-detail');
+    if (goodsDetailEl) {
+      goodsDetailEl.textContent = metrics.goodsCount > 0 ? `${metrics.goodsCount} позиций` : '';
+    }
+    saRenderCard('util', metrics.utilizationRate !== null ? saFmt(metrics.utilizationRate, '%') : '—', metrics.utilizationRate, prevMetrics.utilizationRate);
+    const utilDetailEl = document.getElementById('sa-util-detail');
+    if (utilDetailEl) {
+      if (metrics.workingDays > 0) {
+        const hrs = Math.round(metrics.bookedMins / 60 * 10) / 10;
+        utilDetailEl.textContent = `${hrs} ч из ${metrics.workingDays * 8} ч · ${metrics.workingDays} раб. дн.`;
+      } else {
+        utilDetailEl.textContent = '';
+      }
+    }
 
     saRenderSparklines(sparklines);
     saRenderRadar(metrics, ar.avg);
@@ -1797,14 +1813,16 @@ function saRenderRadar(m, avg) {
   if(saRadarChart){saRadarChart.destroy();saRadarChart=null;}
   const labels=['Выручка\n(ср.чек)','Возвращаемость','Продажи\nтоваров','Перезапись','Загрузка'];
   const revNorm = avg&&avg.avgCheck>0 ? Math.min(100,m.avgCheck/avg.avgCheck*100) : Math.min(100,m.avgCheck/5000*100);
-  const staffData=[revNorm, m.retentionRate, m.goodsSalesRate, m.reappointmentRate, m.utilizationRate||0];
+  const goodsNorm = avg&&avg.goodsRevenue>0 ? Math.min(100,m.goodsRevenue/avg.goodsRevenue*100) : Math.min(100,(m.goodsRevenue||0)/50000*100);
+  const staffData=[revNorm, m.retentionRate??0, goodsNorm, m.reappointmentRate??0, m.utilizationRate??0];
   const datasets=[{label:'Сотрудник',data:staffData,
     backgroundColor:'rgba(0,200,150,0.2)',borderColor:'rgba(0,200,150,0.85)',
     borderWidth:2,pointBackgroundColor:'#00c896',pointRadius:4}];
   if(avg){
-    const avgRev=50;
+    const avgRev=avg.avgCheck>0&&m.avgCheck>0 ? Math.min(100,avg.avgCheck/avg.avgCheck*100) : 50;
+    const avgGoodsNorm=avg.goodsRevenue>0 ? Math.min(100,avg.goodsRevenue/avg.goodsRevenue*100) : 0;
     datasets.push({label:'Ср. по клинике',
-      data:[avgRev,avg.retentionRate,avg.goodsSalesRate,avg.reappointmentRate,avg.utilizationRate||0],
+      data:[avgRev,avg.retentionRate??0,avgGoodsNorm,avg.reappointmentRate??0,avg.utilizationRate??0],
       backgroundColor:'rgba(59,130,246,0.12)',borderColor:'rgba(59,130,246,0.6)',
       borderWidth:2,pointBackgroundColor:'#3b82f6',pointRadius:3,borderDash:[4,4]});
     document.getElementById('sa-avg-legend').style.display='';
@@ -1850,10 +1868,14 @@ function saRenderInsights(m) {
     items.push({icon:'📅',type:'warn',
       title:`Низкая перезапись: ${m.reappointmentRate}%`,
       body:`Только ${m.reappointmentRate}% клиентов записываются повторно в течение 24ч после визита. Требуется обучение технике записи у стойки.`});
-  if(m.goodsSalesRate<20&&m.totalVisits>=5)
+  if(m.goodsCount===0&&m.totalVisits>=5)
     items.push({icon:'🛍️',type:'warn',
-      title:`Низкие продажи товаров: ${m.goodsSalesRate}%`,
-      body:`Только ${m.goodsSalesRate}% чеков содержат сопутствующие товары. Повышение до среднего по клинике увеличит выручку и KPI.`});
+      title:'Нет продаж косметики за период',
+      body:'За выбранный период не зафиксировано ни одной продажи товаров. Обратите внимание на работу с рекомендацией домашнего ухода.'});
+  else if(m.goodsCount>0&&m.goodsRevenue>0&&m.totalVisits>=5&&m.goodsRevenue/m.totalVisits<3000)
+    items.push({icon:'🛍️',type:'warn',
+      title:`Низкие продажи товаров: ${m.goodsRevenue.toLocaleString('ru')} ₽`,
+      body:`${m.goodsCount} позиций за период — в среднем менее 3 000 ₽ на визит. Рекомендуем усилить работу с рекомендацией домашнего ухода.`});
   if(m.retentionRate!==null&&m.retentionRate<40&&m.base45days>=5)
     items.push({icon:'🔄',type:'warn',
       title:`Возвращаемость ниже нормы: ${m.retentionRate}%`,
