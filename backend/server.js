@@ -2565,8 +2565,12 @@ app.get('/api/staff-analytics/metrics', auth, async (req, res) => {
 // ── GET /api/staff-analytics/salon-avg ───────────────────────
 app.get('/api/staff-analytics/salon-avg', auth, async (req, res) => {
   try {
-    const { from, to } = req.query;
-    const staff = await getStaffList(req.user.salonId);
+    const { from, to, excludeStaffId } = req.query;
+    let staff = await getStaffList(req.user.salonId);
+    // Исключаем текущего сотрудника — сравниваем его с остальными
+    if (excludeStaffId) {
+      staff = staff.filter(s => String(s.id) !== String(excludeStaffId));
+    }
     if (!staff.length) return res.json({ avg: null });
 
     const all = await Promise.all(
@@ -2580,11 +2584,18 @@ app.get('/api/staff-analytics/salon-avg', auth, async (req, res) => {
       if (!nonNull.length) return null;
       return nonNull.reduce((s, m) => s + (parseFloat(m[key]) || 0), 0) / nonNull.length;
     };
+
+    // Для товаров: суммарная выручка / суммарное количество позиций по остальным сотрудникам
+    const totalGoodsRevenue = valid.reduce((s, m) => s + (parseFloat(m.goodsRevenue) || 0), 0);
+    const totalGoodsCount   = valid.reduce((s, m) => s + (parseFloat(m.goodsCount)   || 0), 0);
+    const goodsAvgPerItem   = totalGoodsCount > 0 ? totalGoodsRevenue / totalGoodsCount : 0;
+
     res.json({ avg: {
       avgCheck:          avg('avgCheck'),
       retentionRate:     avg('retentionRate'),
       goodsCount:        avg('goodsCount'),
       goodsRevenue:      avg('goodsRevenue'),
+      goodsAvgPerItem,
       reappointmentRate: avg('reappointmentRate'),
       utilizationRate:   avg('utilizationRate'),
     }});
