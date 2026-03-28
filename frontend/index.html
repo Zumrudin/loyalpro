@@ -1813,26 +1813,37 @@ function saRenderRadar(m, avg) {
   if(saRadarChart){saRadarChart.destroy();saRadarChart=null;}
   const labels=['Выручка\n(ср.чек)','Возвращаемость','Продажи\nтоваров','Перезапись','Загрузка'];
 
-  // Нормализация: значение сотрудника как % от среднего по остальным (100 = уровень клиники)
-  const normOf = (val, base, fallback) => base > 0 ? Math.min(150, (val || 0) / base * 100) : fallback;
-
-  // Для товаров: выручка на проданную позицию (ср. чек по товарам)
+  // Для товаров: ср. чек по товарам (выручка / кол-во позиций)
   const staffGoodsPerItem = m.goodsCount > 0 ? m.goodsRevenue / m.goodsCount : 0;
+  const avgGoodsPerItem   = avg ? (avg.goodsAvgPerItem || 0) : 0;
 
-  const revNorm   = avg ? normOf(m.avgCheck,      avg.avgCheck,          Math.min(150, m.avgCheck / 5000 * 100))  : Math.min(150, m.avgCheck / 5000 * 100);
-  const goodsNorm = avg ? normOf(staffGoodsPerItem, avg.goodsAvgPerItem,  Math.min(150, staffGoodsPerItem / 3000 * 100)) : Math.min(150, staffGoodsPerItem / 3000 * 100);
-  const retNorm   = avg ? normOf(m.retentionRate,  avg.retentionRate,     m.retentionRate ?? 0) : (m.retentionRate ?? 0);
-  const reappNorm = avg ? normOf(m.reappointmentRate, avg.reappointmentRate, m.reappointmentRate ?? 0) : (m.reappointmentRate ?? 0);
-  const utilNorm  = avg ? normOf(m.utilizationRate, avg.utilizationRate,  m.utilizationRate ?? 0) : (m.utilizationRate ?? 0);
+  // Нормализация денежных метрик: берём максимум из двух значений как 100
+  // Процентные метрики (0-100%) используются напрямую — они уже на одной шкале
+  const normMoney = (staffVal, avgVal) => {
+    const mx = Math.max(staffVal || 0, avgVal || 0, 1);
+    return [
+      Math.round((staffVal || 0) / mx * 100),
+      Math.round((avgVal   || 0) / mx * 100),
+    ];
+  };
 
-  const staffData = [revNorm, retNorm, goodsNorm, reappNorm, utilNorm];
+  const [revS,   revA]   = avg ? normMoney(m.avgCheck, avg.avgCheck)             : [Math.min(100, Math.round(m.avgCheck / 5000 * 100)), null];
+  const [goodsS, goodsA] = avg ? normMoney(staffGoodsPerItem, avgGoodsPerItem)   : [Math.min(100, Math.round(staffGoodsPerItem / 3000 * 100)), null];
+
+  const retS   = Math.round(m.retentionRate     ?? 0);
+  const reappS = Math.round(m.reappointmentRate ?? 0);
+  const utilS  = Math.round(m.utilizationRate   ?? 0);
+  const retA   = avg ? Math.round(avg.retentionRate     ?? 0) : null;
+  const reappA = avg ? Math.round(avg.reappointmentRate ?? 0) : null;
+  const utilA  = avg ? Math.round(avg.utilizationRate   ?? 0) : null;
+
+  const staffData = [revS, retS, goodsS, reappS, utilS];
   const datasets=[{label:'Сотрудник',data:staffData,
     backgroundColor:'rgba(0,200,150,0.2)',borderColor:'rgba(0,200,150,0.85)',
     borderWidth:2,pointBackgroundColor:'#00c896',pointRadius:4}];
   if(avg){
-    // Линия клиники всегда на 100 — это эталон, с которым сравниваем сотрудника
     datasets.push({label:'Ср. по клинике',
-      data:[100,100,100,100,100],
+      data:[revA, retA, goodsA, reappA, utilA],
       backgroundColor:'rgba(59,130,246,0.12)',borderColor:'rgba(59,130,246,0.6)',
       borderWidth:2,pointBackgroundColor:'#3b82f6',pointRadius:3,borderDash:[4,4]});
     document.getElementById('sa-avg-legend').style.display='';
@@ -1840,7 +1851,7 @@ function saRenderRadar(m, avg) {
   saRadarChart=new Chart(canvas,{type:'radar',data:{labels,datasets},
     options:{responsive:true,maintainAspectRatio:false,
       plugins:{legend:{display:false}},
-      scales:{r:{min:0,max:150,ticks:{stepSize:25,font:{size:10},color:'#8b949e'},
+      scales:{r:{min:0,max:100,ticks:{stepSize:25,font:{size:10},color:'#8b949e'},
         grid:{color:'rgba(0,0,0,0.06)'},angleLines:{color:'rgba(0,0,0,0.06)'},
         pointLabels:{font:{size:11},color:'#57606a'}}}}});
 }
