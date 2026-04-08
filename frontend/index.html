@@ -50,7 +50,7 @@ input[readonly]{background:var(--bg);color:var(--t2)}
 .btn:disabled{opacity:.5;cursor:not-allowed}
 
 /* ─── APP ─── */
-#app{display:none;height:100vh;overflow:hidden;flex-direction:column}
+#app{display:none;height:100vh;overflow:clip;flex-direction:column}
 #app.show{display:flex}
 .topbar{background:var(--card);border-bottom:1px solid var(--bd);height:52px;display:flex;align-items:center;padding:0 20px;gap:10px;flex-shrink:0}
 .tb-logo{display:flex;align-items:center;gap:8px}
@@ -69,7 +69,7 @@ input[readonly]{background:var(--bg);color:var(--t2)}
 /* ─── CARDS/STATS ─── */
 .card{background:var(--card);border-radius:var(--r);border:1px solid var(--bd);padding:18px;box-shadow:var(--sh)}
 .ct{font-size:13.5px;font-weight:700;margin-bottom:14px;display:flex;align-items:center;justify-content:space-between;gap:8px}
-.sg{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:18px}
+.sg{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:18px}
 .sc{background:var(--card);border-radius:var(--r);border:1px solid var(--bd);padding:16px 18px;box-shadow:var(--sh)}
 .sl{font-size:11px;color:var(--t3);font-weight:500;margin-bottom:6px}
 .sv{font-size:24px;font-weight:800;letter-spacing:-.5px;line-height:1}
@@ -86,6 +86,21 @@ thead th{font-size:11px;font-weight:600;color:var(--t3);text-transform:uppercase
 tbody td{padding:11px 12px;border-bottom:1px solid var(--bd);font-size:13px}
 tbody tr:last-child td{border-bottom:none}
 tbody tr:hover{background:var(--bg);cursor:pointer}
+
+/* ─── SORTABLE / FILTER TABLE ─── */
+.th-sort{cursor:pointer;user-select:none;white-space:nowrap}
+.th-sort:hover{color:var(--t1)}
+.th-sort .sort-icon{display:inline-block;margin-left:4px;opacity:.35;font-style:normal;font-size:10px}
+.th-sort.asc .sort-icon::after{content:'▲';opacity:1}
+.th-sort.desc .sort-icon::after{content:'▼';opacity:1}
+.th-sort:not(.asc):not(.desc) .sort-icon::after{content:'⇅'}
+.filter-row th{padding:4px 6px;border-bottom:2px solid var(--bd);background:var(--bg)}
+.filter-row input,.filter-row select{width:100%;padding:4px 7px;font-size:11px;border:1px solid var(--bd);border-radius:6px;background:#fff;color:var(--t1);outline:none;font-family:inherit}
+.filter-row input:focus,.filter-row select:focus{border-color:var(--a)}
+.filter-row input[type=number]{-moz-appearance:textfield}
+.filter-row input[type=number]::-webkit-outer-spin-button,.filter-row input[type=number]::-webkit-inner-spin-button{-webkit-appearance:none}
+.cf-range{display:flex;gap:3px}
+.cf-range input{min-width:0}
 
 /* ─── BADGES ─── */
 .badge{display:inline-flex;align-items:center;padding:2px 9px;border-radius:20px;font-size:11px;font-weight:600}
@@ -117,6 +132,23 @@ tbody tr:hover{background:var(--bg);cursor:pointer}
 .pb-btn{padding:4px 10px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;border:1px solid var(--bd);background:transparent;color:var(--t2);transition:.15s;font-family:inherit}
 .pb-btn.active{background:var(--a);color:#fff;border-color:var(--a)}
 
+/* ─── SETTINGS SIDEBAR ─── */
+#page-settings{margin:-22px}
+#page-settings.active{display:flex;min-height:calc(100vh - 52px)}
+.stg-sidebar{width:224px;flex-shrink:0;background:var(--card);border-right:1px solid var(--bd);padding:12px 0;overflow-y:auto;position:sticky;top:0;max-height:calc(100vh - 52px)}
+.stg-content{flex:1;padding:24px 28px;overflow-y:auto;max-width:900px}
+.stg-group{margin-bottom:2px}
+.stg-sep{height:1px;background:var(--bd);margin:8px 12px}
+.stg-group-lbl{font-size:10.5px;font-weight:700;color:var(--t3);text-transform:uppercase;letter-spacing:.7px;padding:10px 16px 3px;pointer-events:none}
+.stg-item{padding:8px 12px 8px 16px;font-size:13px;color:var(--t2);cursor:pointer;border-radius:7px;margin:1px 8px;transition:background .12s,color .12s;display:flex;align-items:center;gap:8px;line-height:1.3}
+.stg-item .stg-ic{font-size:14px;flex-shrink:0;width:18px;text-align:center}
+.stg-item:hover{background:var(--bg);color:var(--t1)}
+.stg-item.active{background:var(--as);color:var(--a);font-weight:600}
+.stg-section{display:none}
+.stg-section.active{display:block}
+.stg-hdr{font-size:17px;font-weight:700;margin-bottom:20px;color:var(--t1);display:flex;align-items:center;gap:10px}
+.stg-hdr span{font-size:20px}
+
 /* ─── MODAL ─── */
 .ov{position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:1000;display:flex;align-items:center;justify-content:center;opacity:0;pointer-events:none;transition:opacity .2s}
 .ov.open{opacity:1;pointer-events:all}
@@ -141,6 +173,7 @@ tbody tr:hover{background:var(--bg);cursor:pointer}
 .sync-banner{display:flex;align-items:center;gap:8px;padding:10px 14px;background:var(--as);border:1px solid rgba(0,200,150,.25);border-radius:8px;margin-bottom:14px;font-size:12.5px}
 ::-webkit-scrollbar{width:4px}::-webkit-scrollbar-thumb{background:#d1d5db;border-radius:10px}
 @media(max-width:1100px){.sg{grid-template-columns:repeat(2,1fr)}.g3{grid-template-columns:1fr 1fr}.g32{grid-template-columns:1fr}}
+@media(max-width:700px){.sg{grid-template-columns:1fr 1fr}}
 @media(max-width:700px){.tb-nav{display:none}.g2{grid-template-columns:1fr}}
 
 /* ─── STAFF ANALYTICS ─── */
@@ -165,6 +198,109 @@ tbody tr:hover{background:var(--bg);cursor:pointer}
 .sa-insight-icon{font-size:18px;line-height:1;flex-shrink:0;margin-top:1px}
 .sa-insight-title{font-size:13px;font-weight:600;color:var(--t1);margin-bottom:3px}
 .sa-insight-body{font-size:12.5px;color:var(--t2);line-height:1.5}
+
+/* ─── SEGMENTS ─── */
+.seg-toolbar{display:flex;align-items:center;justify-content:space-between;margin-bottom:20px;flex-wrap:wrap;gap:10px}
+.seg-meta{font-size:12px;color:var(--t3)}
+.seg-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:12px}
+.seg-card{background:var(--card);border:1.5px solid var(--bd);border-radius:12px;padding:16px;cursor:pointer;transition:box-shadow .15s,transform .1s;position:relative;overflow:visible}
+.seg-card:hover{box-shadow:0 4px 18px rgba(0,0,0,.1);transform:translateY(-1px)}
+.seg-card-bar{position:absolute;top:0;left:0;right:0;height:3px;border-radius:12px 12px 0 0}
+.seg-card-top{display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:10px}
+.seg-card-emoji{font-size:22px;line-height:1}
+.seg-card-pct{font-size:12px;font-weight:700;color:var(--t3)}
+.seg-card-label{font-size:13px;font-weight:700;color:var(--t1);margin-bottom:4px;line-height:1.3}
+.seg-card-count{font-size:26px;font-weight:800;color:var(--t1);line-height:1;margin-bottom:8px}
+.seg-card-stats{display:flex;gap:10px;flex-wrap:wrap}
+.seg-card-stat{font-size:11px;color:var(--t3)}
+.seg-card-stat b{color:var(--t2);font-weight:600}
+.seg-empty-card{opacity:.4}
+.seg-zone-label{font-size:11px;font-weight:700;color:var(--t3);text-transform:uppercase;letter-spacing:.6px;margin:20px 0 8px;padding-bottom:6px;border-bottom:1px solid var(--bd)}
+/* Segment card tooltip — shown above card, needs overflow:visible on card */
+.seg-tooltip{display:none;position:absolute;bottom:calc(100% + 10px);left:0;right:0;margin:0 auto;width:220px;background:#1e293b;color:#f1f5f9;font-size:11.5px;line-height:1.5;padding:8px 11px;border-radius:8px;z-index:600;pointer-events:none;box-shadow:0 4px 14px rgba(0,0,0,.3);white-space:normal;text-align:left}
+.seg-tooltip::after{content:'';position:absolute;top:100%;left:50%;transform:translateX(-50%);border:5px solid transparent;border-top-color:#1e293b}
+.seg-card:hover .seg-tooltip{display:block}
+/* Segment client drawer */
+.seg-drawer-ov{position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:2000;display:none;align-items:stretch;justify-content:flex-end}
+.seg-drawer-ov.open{display:flex}
+.seg-drawer{width:460px;max-width:100vw;background:var(--card);height:100vh;overflow-y:auto;overflow-x:hidden;box-shadow:-4px 0 30px rgba(0,0,0,.15);display:flex;flex-direction:column;flex-shrink:0}
+@media(max-width:600px){.seg-drawer{width:100vw}}
+.seg-drawer-hdr{padding:16px 20px 14px;border-bottom:1px solid var(--bd);display:flex;align-items:center;gap:10px;position:sticky;top:0;background:var(--card);z-index:1;flex-wrap:wrap}
+.seg-drawer-title{font-size:14px;font-weight:700;flex:1;min-width:0}
+.seg-drawer-body{padding:14px 20px;flex:1}
+.seg-client-row{display:flex;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid var(--bd);cursor:pointer}
+.seg-client-row:last-child{border-bottom:none}
+.seg-client-row:hover{background:var(--bg);margin:0 -24px;padding:10px 24px}
+.seg-client-avatar{width:36px;height:36px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:700;color:#fff;flex-shrink:0}
+.seg-client-name{font-size:13px;font-weight:600;color:var(--t1)}
+.seg-client-phone{font-size:12px;color:var(--t3)}
+.seg-client-info{margin-left:auto;text-align:right}
+.seg-client-spent{font-size:12px;font-weight:600;color:var(--t2)}
+.seg-client-visits{font-size:11px;color:var(--t3)}
+
+/* ─── HOME CARE ─── */
+:root{--hc-cream:#faf4ec;--hc-gold:#c9a96e;--hc-gold-light:rgba(201,169,110,.15);--hc-brown:#2c2416;--hc-brown2:#7a6a55;--hc-border:#e8dcc8}
+.hc-form-ov{position:fixed;inset:0;background:rgba(44,36,22,.55);z-index:1000;display:none;align-items:flex-start;justify-content:center;padding:20px;overflow-y:auto}
+.hc-form-ov.open{display:flex}
+.hc-form-box{background:var(--hc-cream);border-radius:14px;width:860px;max-width:100%;padding:28px 32px;position:relative;margin:auto;border:1px solid var(--hc-border);box-shadow:0 20px 60px rgba(44,36,22,.2)}
+.hc-form-header{text-align:center;margin-bottom:20px;padding-bottom:16px;border-bottom:1.5px solid var(--hc-gold)}
+.hc-form-logo{font-size:18px;font-weight:800;color:var(--hc-brown);letter-spacing:4px;text-transform:uppercase;display:flex;align-items:center;justify-content:center;gap:10px}
+.hc-form-logo-leaf{color:var(--hc-gold);font-size:22px}
+.hc-form-sub{font-size:10.5px;color:var(--hc-brown2);letter-spacing:2px;margin-top:2px}
+.hc-form-title-row{margin-top:10px;font-size:20px;font-weight:600;color:var(--hc-brown);font-family:Georgia,serif}
+.hc-form-divider{width:60px;height:2px;background:var(--hc-gold);margin:8px auto 0}
+.hc-section{background:#fff;border:1px solid var(--hc-border);border-radius:10px;margin-bottom:12px;box-shadow:0 1px 4px rgba(201,169,110,.08)}
+.hc-section-hd{display:flex;align-items:center;justify-content:space-between;padding:11px 16px;background:linear-gradient(135deg,#fdf8f0,#f5ece0);border-bottom:1px solid var(--hc-border);cursor:pointer;user-select:none}
+.hc-section-title{font-size:13px;font-weight:700;color:var(--hc-brown);display:flex;align-items:center;gap:7px}
+.hc-section-body{padding:14px 16px;background:#fff}
+.hc-cat{margin-bottom:14px;padding-bottom:14px;border-bottom:1px dashed var(--hc-border)}
+.hc-cat:last-child{margin-bottom:0;padding-bottom:0;border-bottom:none}
+.hc-cat-label{font-size:11px;font-weight:700;color:var(--hc-gold);text-transform:uppercase;letter-spacing:.6px;margin-bottom:8px;display:flex;align-items:center;justify-content:space-between}
+.hc-cat-label span:first-child::before{content:'✓ ';color:var(--hc-gold)}
+.hc-item{display:grid;grid-template-columns:1fr 1fr auto;gap:8px;align-items:start;margin-bottom:7px}
+.hc-item input{padding:7px 10px;font-size:12.5px;border-color:var(--hc-border);background:#fdfaf5}
+.hc-item input:focus{border-color:var(--hc-gold);box-shadow:0 0 0 3px rgba(201,169,110,.15)}
+.hc-item-del{width:28px;height:32px;border-radius:6px;background:transparent;border:1px solid var(--hc-border);color:var(--hc-brown2);cursor:pointer;font-size:13px;display:flex;align-items:center;justify-content:center;flex-shrink:0;transition:.15s;margin-top:1px}
+.hc-item-del:hover{background:#fef2f2;border-color:#fecaca;color:var(--danger)}
+.hc-add-btn{font-size:12px;color:var(--hc-gold);background:transparent;border:1px dashed var(--hc-gold);border-radius:6px;padding:4px 10px;cursor:pointer;font-family:inherit;font-weight:600;transition:.15s;white-space:nowrap}
+.hc-add-btn:hover{background:var(--hc-gold-light)}
+.hc-client-drop{position:absolute;top:100%;left:0;right:0;background:#fff;border:1px solid var(--hc-border);border-radius:8px;box-shadow:0 4px 16px rgba(44,36,22,.12);z-index:100;max-height:220px;overflow-y:auto;margin-top:3px}
+.hc-client-opt{padding:9px 12px;font-size:13px;cursor:pointer;border-bottom:1px solid var(--hc-border)}
+.hc-client-opt:last-child{border-bottom:none}
+.hc-client-opt:hover{background:var(--hc-gold-light)}
+.hc-client-wrap{position:relative}
+.hc-ac-wrap{position:relative;flex:1}
+.hc-ac-drop{position:fixed;background:#fff;border:1px solid var(--hc-border);border-radius:8px;box-shadow:0 4px 20px rgba(44,36,22,.18);z-index:3000;max-height:220px;overflow-y:auto;display:none}
+.hc-ac-opt{padding:8px 12px;font-size:12.5px;cursor:pointer;border-bottom:1px solid var(--hc-border)}
+.hc-ac-opt:last-child{border-bottom:none}
+.hc-ac-opt:hover{background:var(--hc-gold-light)}
+.hc-tabs{display:flex;gap:3px;background:rgba(201,169,110,.12);padding:3px;border-radius:9px;margin-bottom:18px;border:1px solid var(--hc-border)}
+.hc-tab{flex:1;padding:7px 10px;border-radius:7px;font-size:13px;font-weight:600;cursor:pointer;text-align:center;color:var(--hc-brown2);border:none;background:transparent;transition:.15s;font-family:inherit}
+.hc-tab.active{background:#fff;color:var(--hc-brown);box-shadow:0 1px 4px rgba(201,169,110,.2);border:1px solid var(--hc-border)}
+.hc-tab-panel{display:none}
+.hc-tab-panel.active{display:block}
+.hc-client-input-wrap{background:#fff;border:1px solid var(--hc-border);border-radius:8px;padding:14px 16px;margin-bottom:18px}
+.hc-client-input-wrap .fl{color:var(--hc-gold);font-weight:700;letter-spacing:.3px}
+.hc-client-wrap input{border-color:var(--hc-border);background:#fdfaf5}
+.hc-save-row{display:flex;gap:8px;margin-top:16px;padding-top:16px;border-top:1px solid var(--hc-border)}
+.hc-btn-save{background:var(--hc-gold);color:#fff;border:none;padding:9px 20px;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;transition:.15s}
+.hc-btn-save:hover{background:#b8935a}
+.hc-btn-print{background:transparent;color:var(--hc-brown);border:1px solid var(--hc-border);padding:9px 16px;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;display:inline-flex;align-items:center;gap:6px;transition:.15s}
+.hc-btn-print:hover{background:var(--hc-gold-light);border-color:var(--hc-gold)}
+.hc-btn-cancel{background:transparent;color:var(--hc-brown2);border:1px solid var(--hc-border);padding:9px 16px;border-radius:8px;font-size:13px;cursor:pointer;font-family:inherit;transition:.15s}
+.hc-btn-cancel:hover{background:rgba(0,0,0,.04)}
+@media(max-width:700px){.hc-item{grid-template-columns:1fr auto}}
+.hc-pick-btn{background:transparent;border:1px solid var(--hc-border);border-radius:6px;padding:0 8px;cursor:pointer;font-size:14px;color:var(--hc-brown2);height:32px;transition:.15s;flex-shrink:0;white-space:nowrap}
+.hc-pick-btn:hover{background:var(--hc-gold-light);border-color:var(--hc-gold);color:var(--hc-brown)}
+.hc-picker-ov{display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:2500;align-items:center;justify-content:center}
+.hc-picker-ov.open{display:flex}
+.hc-picker-box{background:#fff;border-radius:12px;width:520px;max-width:96vw;max-height:82vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,.25)}
+.hc-picker-hdr{padding:14px 18px;border-bottom:1px solid var(--bd);display:flex;align-items:center;gap:10px}
+.hc-picker-body{flex:1;overflow-y:auto}
+.hc-picker-cat-hdr{padding:8px 18px;background:#f6f4f1;cursor:pointer;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--bd);border-top:1px solid var(--bd);margin-top:4px;user-select:none}
+.hc-picker-cat-hdr:first-child{margin-top:0}
+.hc-picker-item{padding:9px 30px;font-size:13px;cursor:pointer;border-bottom:1px solid #f0f0f0;color:var(--t1)}
+.hc-picker-item:hover{background:#fdf8f0}
 </style>
 </head>
 <body>
@@ -202,6 +338,29 @@ tbody tr:hover{background:var(--bg);cursor:pointer}
   </div>
 </div>
 
+<!-- ═══════════════ CHANGE PASSWORD SCREEN ═══════════════ -->
+<div id="changePwScreen" class="lw" style="display:none">
+  <div class="lb">
+    <div class="ll">
+      <div class="li"><svg viewBox="0 0 24 24"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg></div>
+      <div><div class="ln">LoyalPro</div><div class="ls">Смена пароля</div></div>
+    </div>
+    <div style="margin-bottom:16px;padding:12px 14px;background:#fffbeb;border:1px solid #fde68a;border-radius:8px;font-size:13px;color:#92400e">
+      Для продолжения работы установите личный пароль.
+    </div>
+    <div class="err" id="cpErr"></div>
+    <div class="fg">
+      <label class="fl">Новый пароль <span class="fh">минимум 6 символов</span></label>
+      <input type="password" id="cpNew" placeholder="••••••••">
+    </div>
+    <div class="fg">
+      <label class="fl">Повторите пароль</label>
+      <input type="password" id="cpNew2" placeholder="••••••••" onkeydown="if(event.key==='Enter')doChangePw()">
+    </div>
+    <button class="btn btn-pri btn-full" id="cpBtn" onclick="doChangePw()">Сохранить пароль и войти</button>
+  </div>
+</div>
+
 <!-- ═══════════════ APP ═══════════════ -->
 <div id="app">
   <div class="topbar">
@@ -209,14 +368,15 @@ tbody tr:hover{background:var(--bg);cursor:pointer}
       <div class="tb-li"><svg viewBox="0 0 24 24"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg></div>
       <div class="tb-ln">LoyalPro</div>
     </div>
-    <nav class="tb-nav">
-      <div class="tn active" data-p="dashboard" onclick="nav(this)">Дашборд</div>
-      <div class="tn" data-p="clients" onclick="nav(this)">Клиенты</div>
-      <div class="tn" data-p="records" onclick="nav(this)">Записи</div>
-      <div class="tn" data-p="loyalty" onclick="nav(this)">Лояльность</div>
-      <div class="tn" data-p="analytics" onclick="nav(this)">Аналитика</div>
-      <div class="tn" data-p="staff-analytics" onclick="nav(this)">Сотрудники</div>
-      <div class="tn" data-p="settings" onclick="nav(this)">Настройки</div>
+    <nav class="tb-nav" id="mainNav">
+      <div class="tn active" data-p="dashboard" data-roles="owner,admin" onclick="nav(this)">Дашборд</div>
+      <div class="tn" data-p="clients" data-roles="owner,admin" onclick="nav(this)">Клиенты</div>
+      <div class="tn" data-p="records" data-roles="owner,admin" onclick="nav(this)">Записи</div>
+      <div class="tn" data-p="staff-analytics" data-roles="owner,admin" onclick="nav(this)">Сотрудники</div>
+      <div class="tn" data-p="segments" data-roles="owner,admin" onclick="nav(this)">Сегменты</div>
+      <div class="tn" data-p="home-care" data-roles="owner,admin,specialist" onclick="nav(this)">Уход</div>
+      <div class="tn" data-p="settings" data-roles="owner,admin" onclick="nav(this)">Настройки</div>
+      <div class="tn" data-p="users" data-roles="owner" onclick="nav(this)">Пользователи</div>
     </nav>
     <div class="tb-right">
       <div id="syncSt" style="font-size:11.5px;color:var(--t3)"></div>
@@ -244,47 +404,77 @@ tbody tr:hover{background:var(--bg);cursor:pointer}
           <button class="pb-btn" onclick="setPeriod(90,this)">90 дней</button>
         </div>
       </div>
-      <div class="sg">
+      <div class="sg" style="grid-template-columns:repeat(5,1fr)">
         <div class="sc"><div class="sl">Клиентов в базе</div><div class="sv" id="ds1">—</div><div class="sd up" id="ds1s"></div></div>
-        <div class="sc"><div class="sl">Активных бонусов</div><div class="sv" id="ds2">—</div><div class="sd" id="ds2s"></div></div>
         <div class="sc"><div class="sl">Выручка за период</div><div class="sv" id="ds3">—</div><div class="sd" id="ds3s"></div></div>
-        <div class="sc"><div class="sl">Спящих клиентов</div><div class="sv" id="ds4" style="color:var(--warn)">—</div><div class="sd dn">не приходили 60+ дней</div></div>
+        <div class="sc"><div class="sl">Клиентов с картой лояльности</div><div class="sv" id="ds5">—</div><div class="sd" id="ds5s"></div></div>
+        <div class="sc"><div class="sl">Активных бонусов</div><div class="sv" id="ds2">—</div><div class="sd" id="ds2s"></div></div>
+        <div class="sc"><div class="sl">Подписаны в Telegram</div><div class="sv" id="ds6">—</div><div class="sd" id="ds6s"></div></div>
+      </div>
+      <div class="sg mb" style="grid-template-columns:repeat(5,1fr)">
+        <div class="sc"><div class="sl">Средний чек</div><div class="sv" id="an1">—</div><div class="sd" id="an1s"></div></div>
+        <div class="sc"><div class="sl">Начислено бонусов</div><div class="sv" id="an2" style="color:var(--a)">—</div><div class="sd up" id="an2s"></div></div>
+        <div class="sc"><div class="sl">Списано бонусов</div><div class="sv" id="an5" style="color:var(--danger)">—</div><div class="sd dn" id="an5s"></div></div>
+        <div class="sc"><div class="sl">ROI программы</div><div class="sv" id="an3" style="color:var(--a)">—</div><div class="sd" id="an3s">выручка / начисления</div></div>
+        <div class="sc"><div class="sl">Новых клиентов</div><div class="sv" id="an4">—</div><div class="sd" id="an4s"></div></div>
       </div>
       <div class="g32 mb">
         <div class="card"><div class="ct">Выручка по дням</div><div style="height:220px"><canvas id="revChart"></canvas></div></div>
         <div class="card"><div class="ct">Уровни клиентов</div><div id="lvlDash" style="display:flex;flex-direction:column;gap:10px;padding-top:4px"></div></div>
       </div>
-      <div class="g3">
+      <div class="g2 mb">
         <div class="card"><div class="ct">Последние начисления</div><div id="recentTx"><div class="empty">Нет данных</div></div></div>
         <div class="card"><div class="ct">Топ услуг</div><div id="topSvc"><div class="empty">Нет данных</div></div></div>
-        <div class="card"><div class="ct">Бонусная экономика</div><div style="height:160px"><canvas id="bonChart"></canvas></div></div>
+      </div>
+      <div class="g2">
+        <div class="card"><div class="ct">Бонусы: начислено vs потрачено</div><div style="height:200px"><canvas id="bfChart"></canvas></div></div>
+        <div class="card"><div class="ct">Распределение по уровням</div><div style="height:200px"><canvas id="lvlChart"></canvas></div></div>
       </div>
     </div>
 
     <!-- ── CLIENTS ── -->
     <div class="page" id="page-clients">
-      <div style="display:flex;gap:10px;margin-bottom:14px;flex-wrap:wrap">
-        <div style="position:relative;flex:1;min-width:200px;max-width:320px">
-          <svg style="position:absolute;left:9px;top:50%;transform:translateY(-50%);width:13px;height:13px;stroke:var(--t3);fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-          <input type="text" placeholder="Имя, телефон..." style="padding-left:32px" id="csearch" oninput="dbc(loadClients,400)()">
-        </div>
-        <select style="width:140px" id="clvl" onchange="loadClients()">
-          <option value="">Все уровни</option>
-          <option value="bronze">🥉 Бронза</option>
-          <option value="silver">🥈 Серебро</option>
-          <option value="gold">🥇 Золото</option>
-          <option value="platinum">💎 Платина</option>
-        </select>
-        <select style="width:160px" id="cstat" onchange="loadClients()">
+      <div style="display:flex;gap:10px;margin-bottom:14px;flex-wrap:wrap;align-items:center">
+        <select style="width:160px" id="cstat" onchange="cFilter()">
           <option value="">Все статусы</option>
           <option value="sleeping">😴 Спящие (60+ дней)</option>
           <option value="risk">⚠️ В зоне риска</option>
           <option value="new">🆕 Новые</option>
         </select>
-        <button class="btn btn-pri" onclick="openModal('bonusModal')">+ Начислить / Списать</button>
+        <button class="btn btn-sec btn-sm" onclick="cResetFilters()" title="Сбросить все фильтры">✕ Сбросить</button>
+        <button class="btn btn-pri" onclick="openModal('bonusModal')" style="margin-left:auto">+ Начислить / Списать</button>
       </div>
       <div class="card" style="padding:0"><div class="tw"><table>
-        <thead><tr><th>Клиент</th><th>Телефон</th><th>Уровень</th><th>Бонусы</th><th>Потрачено</th><th>Визитов</th><th>Последний визит</th><th></th></tr></thead>
+        <thead>
+          <tr>
+            <th class="th-sort" onclick="cSort('name')" data-col="name"><span>Клиент</span><i class="sort-icon"></i></th>
+            <th class="th-sort" onclick="cSort('phone')" data-col="phone"><span>Телефон</span><i class="sort-icon"></i></th>
+            <th class="th-sort" onclick="cSort('loyalty_level')" data-col="loyalty_level"><span>Уровень</span><i class="sort-icon"></i></th>
+            <th class="th-sort" onclick="cSort('bonus_balance')" data-col="bonus_balance"><span>Бонусы</span><i class="sort-icon"></i></th>
+            <th class="th-sort" onclick="cSort('total_spent')" data-col="total_spent"><span>Потрачено</span><i class="sort-icon"></i></th>
+            <th class="th-sort" onclick="cSort('visits_count')" data-col="visits_count"><span>Визитов</span><i class="sort-icon"></i></th>
+            <th class="th-sort" onclick="cSort('last_visit_at')" data-col="last_visit_at"><span>Последний визит</span><i class="sort-icon"></i></th>
+            <th></th>
+          </tr>
+          <tr class="filter-row">
+            <th><input type="text" id="cf-name" placeholder="Имя..." oninput="dbc(cFilter,400)()"></th>
+            <th><input type="text" id="cf-phone" placeholder="Телефон..." oninput="dbc(cFilter,400)()"></th>
+            <th>
+              <select id="cf-level" onchange="cFilter()">
+                <option value="">Все</option>
+                <option value="bronze">🥉 Бронза</option>
+                <option value="silver">🥈 Серебро</option>
+                <option value="gold">🥇 Золото</option>
+                <option value="platinum">💎 Платина</option>
+              </select>
+            </th>
+            <th><div class="cf-range"><input type="number" id="cf-bonus-min" placeholder="от" oninput="dbc(cFilter,400)()"><input type="number" id="cf-bonus-max" placeholder="до" oninput="dbc(cFilter,400)()"></div></th>
+            <th><div class="cf-range"><input type="number" id="cf-spent-min" placeholder="от" oninput="dbc(cFilter,400)()"><input type="number" id="cf-spent-max" placeholder="до" oninput="dbc(cFilter,400)()"></div></th>
+            <th><div class="cf-range"><input type="number" id="cf-visits-min" placeholder="от" oninput="dbc(cFilter,400)()"><input type="number" id="cf-visits-max" placeholder="до" oninput="dbc(cFilter,400)()"></div></th>
+            <th><div class="cf-range"><input type="date" id="cf-visit-from" oninput="cFilter()" onchange="cFilter()"><input type="date" id="cf-visit-to" oninput="cFilter()" onchange="cFilter()"></div></th>
+            <th></th>
+          </tr>
+        </thead>
         <tbody id="cBody"><tr><td colspan="8" class="empty">Загрузка...</td></tr></tbody>
       </table></div></div>
       <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 2px">
@@ -319,89 +509,6 @@ tbody tr:hover{background:var(--bg);cursor:pointer}
         <tbody id="rBody"><tr><td colspan="9" class="empty">Выберите период</td></tr></tbody>
       </table></div></div>
       <div style="font-size:12px;color:var(--t3);padding:8px 2px" id="rPager"></div>
-    </div>
-
-    <!-- ── LOYALTY ── -->
-    <div class="page" id="page-loyalty">
-      <div class="tabs" id="ltabs">
-        <button class="tab active" onclick="ltab('levels',this)">Уровни</button>
-        <button class="tab" onclick="ltab('services',this)">По услугам</button>
-        <button class="tab" onclick="ltab('birthday',this)">День рождения</button>
-        <button class="tab" onclick="ltab('referral',this)">Реферальная</button>
-      </div>
-      <div id="lt-levels">
-        <div id="bonuses-disabled-banner" style="display:none;background:#fef3c7;border:1px solid #f59e0b;border-radius:10px;padding:12px 16px;margin-bottom:14px;align-items:center;gap:10px">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#d97706" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
-          <div style="font-size:13px;font-weight:600;color:#92400e">Начисление бонусов отключено — вебхуки принимаются, транзакции логируются, но бонусы не начисляются</div>
-        </div>
-        <div class="g2">
-          <div class="card"><div class="ct">Уровни и кэшбэк <button class="btn btn-pri btn-sm" onclick="saveLs()">Сохранить</button></div><div id="lvlEditor"></div></div>
-          <div class="card"><div class="ct">Правила</div>
-            <div class="srow"><div><div class="srow-l" style="font-weight:600">🔴 Начисление бонусов</div><div class="srow-h">Глобальное включение / отключение</div></div><label class="tgl"><input type="checkbox" id="ls-bonuses-on" checked onchange="updateBonusBanner()"><span class="ts"></span></label></div>
-            <div class="div" style="margin:10px 0"></div>
-            <div class="srow"><div><div class="srow-l">Срок действия бонусов (дней)</div><div class="srow-h">0 = бессрочно</div></div><input type="number" id="ls-exp" value="0" style="width:80px"></div>
-            <div class="div"></div>
-            <div style="font-size:12.5px;color:var(--t2);line-height:1.7">При оплате визита — webhook от YClients → начисление бонусов. При отмене — автоматическое аннулирование.</div>
-          </div>
-        </div>
-      </div>
-      <div id="lt-services" style="display:none">
-        <div class="card"><div class="ct">Кэшбэк по услугам <button class="btn btn-pri btn-sm" onclick="saveLs()">Сохранить</button></div>
-          <div style="font-size:12.5px;color:var(--t2);margin-bottom:12px">Переопределяет базовый кэшбэк для конкретных услуг.</div>
-          <div id="svcCb"><div class="empty"><span class="spinner"></span> Загрузка из YClients...</div></div>
-        </div>
-      </div>
-      <div id="lt-birthday" style="display:none">
-        <div class="g2">
-          <div class="card"><div class="ct">Подарок на день рождения</div>
-            <div class="srow"><div><div class="srow-l">Включить</div></div><label class="tgl"><input type="checkbox" id="ls-bd-on" checked><span class="ts"></span></label></div>
-            <div class="fg" style="margin-top:12px"><label class="fl">Бонусов в подарок</label><input type="number" id="ls-bd-bonus" value="500"></div>
-            <div class="fg"><label class="fl">За сколько дней до ДР</label><input type="number" id="ls-bd-days" value="3"></div>
-            <button class="btn btn-pri" onclick="saveLs()">Сохранить</button>
-          </div>
-          <div class="card"><div class="ct">Именинники (±7 дней)</div><div id="bdList"><div class="empty">Загрузка...</div></div></div>
-        </div>
-      </div>
-      <div id="lt-referral" style="display:none">
-        <div class="card"><div class="ct">Реферальная программа</div>
-          <div class="g2">
-            <div>
-              <div class="srow"><div><div class="srow-l">Программа активна</div></div><label class="tgl"><input type="checkbox" id="ls-ref-on" checked><span class="ts"></span></label></div>
-              <div class="fg" style="margin-top:12px"><label class="fl">Бонус пригласившему</label><input type="number" id="ls-ref-s" value="200"></div>
-              <div class="fg"><label class="fl">Бонус приглашённому</label><input type="number" id="ls-ref-r" value="150"></div>
-              <button class="btn btn-pri" onclick="saveLs()">Сохранить</button>
-            </div>
-            <div class="sc"><div class="sl">Реферальных регистраций</div><div class="sv">—</div><div class="sd">за всё время</div></div>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <!-- ── ANALYTICS ── -->
-    <div class="page" id="page-analytics">
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:18px">
-        <div style="font-size:16px;font-weight:700">Аналитика</div>
-        <div class="pb-btns">
-          <button class="pb-btn active" onclick="setAP(30,this)">30 дней</button>
-          <button class="pb-btn" onclick="setAP(60,this)">60 дней</button>
-          <button class="pb-btn" onclick="setAP(90,this)">90 дней</button>
-        </div>
-      </div>
-      <div class="sg mb" style="grid-template-columns:repeat(5,1fr)">
-        <div class="sc"><div class="sl">Средний чек</div><div class="sv" id="an1">—</div><div class="sd" id="an1s"></div></div>
-        <div class="sc"><div class="sl">Начислено бонусов</div><div class="sv" id="an2" style="color:var(--a)">—</div><div class="sd up" id="an2s"></div></div>
-        <div class="sc"><div class="sl">Списано бонусов</div><div class="sv" id="an5" style="color:var(--danger)">—</div><div class="sd dn" id="an5s"></div></div>
-        <div class="sc"><div class="sl">ROI программы</div><div class="sv" id="an3" style="color:var(--a)">—</div><div class="sd" id="an3s">выручка / начисления</div></div>
-        <div class="sc"><div class="sl">Новых клиентов</div><div class="sv" id="an4">—</div><div class="sd" id="an4s"></div></div>
-      </div>
-      <div class="g2 mb">
-        <div class="card"><div class="ct">Бонусы: начислено vs потрачено</div><div style="height:210px"><canvas id="bfChart"></canvas></div></div>
-        <div class="card"><div class="ct">Удержание клиентов</div><div style="height:210px"><canvas id="retChart"></canvas></div></div>
-      </div>
-      <div class="g2">
-        <div class="card"><div class="ct">Активность по дням</div><div style="height:190px"><canvas id="grwChart"></canvas></div></div>
-        <div class="card"><div class="ct">Распределение по уровням</div><div style="height:190px"><canvas id="lvlChart"></canvas></div></div>
-      </div>
     </div>
 
     <!-- ── STAFF ANALYTICS ── -->
@@ -510,76 +617,115 @@ tbody tr:hover{background:var(--bg);cursor:pointer}
 
     <!-- ── SETTINGS ── -->
     <div class="page" id="page-settings">
-      <div class="g2">
-        <div>
-          <div class="card mb">
-            <div class="ct">Интеграция YClients</div>
-            <div class="fg"><label class="fl">ID компании <span class="fh">из URL кабинета YClients</span></label><input type="text" id="st-yid" placeholder="123456"></div>
-            <div class="fg"><label class="fl">Partner Token</label><input type="password" id="st-pt" placeholder="Partner Token из раздела API"></div>
-            <div class="fg"><label class="fl">Логин YClients</label><input type="text" id="st-login" placeholder="email или телефон"></div>
-            <div class="fg"><label class="fl">Пароль YClients</label><input type="password" id="st-pass"></div>
-            <div class="fg"><label class="fl">Chain ID <span class="fh">salon_group_id из карты, напр. 652414</span></label><input type="text" id="st-chain-id" placeholder="652414"></div>
-            <div style="display:flex;gap:8px">
-              <button class="btn btn-pri" onclick="connectYC()">Подключить YClients</button>
-              <button class="btn btn-sec" onclick="saveSalon()">Сохранить</button>
-            </div>
-          </div>
 
-          <!-- КУКИ БРАУЗЕРА для истории карт -->
-          <div class="card mb">
-            <div class="ct">🍪 Куки браузера YClients <span style="font-size:11px;font-weight:400;color:var(--t3)">(для разового импорта истории карт)</span></div>
-            <div style="font-size:12.5px;color:var(--t2);margin-bottom:12px;line-height:1.7">
-              <strong>Как получить:</strong> войдите на <a href="https://yclients.com" target="_blank" style="color:var(--a)">yclients.com</a> в браузере → F12 → Network → любой запрос → Request Headers → скопируйте строку <code style="background:var(--bg);padding:1px 4px;border-radius:3px">Cookie:</code> целиком.
-            </div>
-            <div class="fg">
-              <label class="fl">Cookie строка из браузера</label>
-              <textarea id="st-web-cookie" rows="3" placeholder="XSRF-TOKEN=...; laravel_session=...; remember_web_...=..." style="resize:vertical;font-size:11px;font-family:monospace"></textarea>
-            </div>
-            <div style="display:flex;gap:8px;align-items:center">
-              <button class="btn btn-pri" onclick="saveWebCookie()">Сохранить куки</button>
-              <span style="font-size:11.5px;color:var(--t3)">Куки действуют ~30 дней. После импорта истории их можно не обновлять.</span>
-            </div>
-            <div id="cookieSt" style="margin-top:8px;font-size:12px"></div>
-          </div>
+      <!-- ═══ SIDEBAR ═══ -->
+      <div class="stg-sidebar">
+        <div class="stg-group">
+          <div class="stg-group-lbl">🏆 Лояльность</div>
+          <div class="stg-item active" data-sec="loyalty-levels" onclick="navStg('loyalty-levels',this)"><span class="stg-ic">⭐</span>Уровни и кэшбэк</div>
+          <div class="stg-item" data-sec="loyalty-services" onclick="navStg('loyalty-services',this)"><span class="stg-ic">✂️</span>По услугам</div>
+          <div class="stg-item" data-sec="loyalty-birthday" onclick="navStg('loyalty-birthday',this)"><span class="stg-ic">🎂</span>День рождения</div>
+          <div class="stg-item" data-sec="loyalty-referral" onclick="navStg('loyalty-referral',this)"><span class="stg-ic">🤝</span>Реферальная</div>
+        </div>
+        <div class="stg-sep"></div>
+        <div class="stg-group">
+          <div class="stg-group-lbl">🏠 Салон</div>
+          <div class="stg-item" data-sec="salon" onclick="navStg('salon',this)"><span class="stg-ic">⚙️</span>Основные настройки</div>
+        </div>
+        <div class="stg-sep"></div>
+        <div class="stg-group">
+          <div class="stg-group-lbl">🔗 Интеграция</div>
+          <div class="stg-item" data-sec="yclients" onclick="navStg('yclients',this)"><span class="stg-ic">🔌</span>Подключение YClients</div>
+          <div class="stg-item" data-sec="loyalty-card" onclick="navStg('loyalty-card',this)"><span class="stg-ic">💳</span>Карта лояльности</div>
+          <div class="stg-item" data-sec="webhook" onclick="navStg('webhook',this)"><span class="stg-ic">🔔</span>Webhook URL</div>
+          <div class="stg-item" data-sec="cookies" onclick="navStg('cookies',this)"><span class="stg-ic">🍪</span>Куки браузера</div>
+        </div>
+        <div class="stg-sep"></div>
+        <div class="stg-group">
+          <div class="stg-group-lbl">📊 Импорт данных</div>
+          <div class="stg-item" data-sec="import-csv" onclick="navStg('import-csv',this)"><span class="stg-ic">📋</span>CSV транзакций</div>
+          <div class="stg-item" data-sec="import-bulk" onclick="navStg('import-bulk',this)"><span class="stg-ic">📥</span>История карт</div>
+          <div class="stg-item" data-sec="sync-logs" onclick="navStg('sync-logs',this)"><span class="stg-ic">📜</span>Логи синхронизации</div>
+        </div>
+        <div class="stg-sep"></div>
+        <div class="stg-group">
+          <div class="stg-group-lbl">📄 Документы</div>
+          <div class="stg-item" data-sec="template" onclick="navStg('template',this)"><span class="stg-ic">🎨</span>Шаблон «Домашний уход»</div>
+        </div>
+      </div>
 
-          <div style="display:none"><!-- hidden closing div placeholder -->
-            <div id="ycSt" style="margin-top:10px;font-size:12px"></div>
-          </div>
+      <!-- ═══ CONTENT ═══ -->
+      <div class="stg-content">
 
-          <!-- КАРТА ЛОЯЛЬНОСТИ -->
-          <div class="card mb">
-            <div class="ct">
-              Карта лояльности YClients
-              <button class="btn btn-sec btn-sm" onclick="loadCardTypes()">Загрузить типы карт</button>
-            </div>
-            <div style="font-size:12.5px;color:var(--t2);margin-bottom:12px;line-height:1.6">
-              Выберите тип карты лояльности из YClients. Все начисления кэшбэка будут идти на карты этого типа.
-              Webhook <strong>finances_operation</strong> отслеживает оплаты и автоматически начисляет кэшбэк.
-            </div>
-            <div class="fg">
-              <label class="fl">Тип карты лояльности</label>
-              <select id="st-card-type" onchange="onCardTypeChange(this)">
-                <option value="">— Не выбрана (сначала загрузите типы) —</option>
-              </select>
-            </div>
-            <div id="cardTypeInfo" style="font-size:12px;color:var(--t3);margin-bottom:10px;display:none"></div>
-            <button class="btn btn-pri" onclick="saveSalon()">Сохранить выбор карты</button>
+        <!-- ── Уровни и кэшбэк ── -->
+        <div class="stg-section active" id="stg-loyalty-levels">
+          <div class="stg-hdr"><span>⭐</span>Уровни и кэшбэк</div>
+          <div id="bonuses-disabled-banner" style="display:none;background:#fef3c7;border:1px solid #f59e0b;border-radius:10px;padding:12px 16px;margin-bottom:16px;align-items:center;gap:10px">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#d97706" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+            <div style="font-size:13px;font-weight:600;color:#92400e">Начисление бонусов отключено — вебхуки принимаются, транзакции логируются, но бонусы не начисляются</div>
           </div>
-
-          <div class="card">
-            <div class="ct">Webhook URL</div>
-            <div style="font-size:12.5px;color:var(--t2);margin-bottom:10px">Вставьте в YClients → Настройки → Интеграции → Webhook</div>
-            <div style="display:flex;gap:6px">
-              <input type="text" id="whUrl" readonly>
-              <button class="btn btn-sec" onclick="copyWh()">Копировать</button>
+          <div class="g2">
+            <div class="card"><div class="ct">Уровни лояльности <button class="btn btn-pri btn-sm" onclick="saveLs()">Сохранить</button></div><div id="lvlEditor"></div></div>
+            <div class="card">
+              <div class="ct">Правила начисления</div>
+              <div class="srow"><div><div class="srow-l" style="font-weight:600">🔴 Начисление бонусов</div><div class="srow-h">Глобальное включение / отключение</div></div><label class="tgl"><input type="checkbox" id="ls-bonuses-on" checked onchange="updateBonusBanner()"><span class="ts"></span></label></div>
+              <div class="div" style="margin:10px 0"></div>
+              <div class="srow"><div><div class="srow-l">Срок действия бонусов (дней)</div><div class="srow-h">0 = бессрочно</div></div><input type="number" id="ls-exp" value="0" style="width:80px"></div>
+              <div class="div"></div>
+              <div style="font-size:12.5px;color:var(--t2);line-height:1.7;margin-top:10px">При оплате визита — webhook от YClients → начисление бонусов. При отмене — автоматическое аннулирование.</div>
+              <div style="margin-top:14px"><button class="btn btn-pri" onclick="saveLs()">Сохранить правила</button></div>
             </div>
-            <div style="margin-top:8px;font-size:12px;color:var(--t3)">События: <strong>record</strong>, <strong>client</strong>, <strong>finances_operation</strong></div>
           </div>
         </div>
-        <div>
-          <div class="card mb">
-            <div class="ct">Настройки салона</div>
-            <div class="fg"><label class="fl">Название</label><input type="text" id="st-name"></div>
+
+        <!-- ── По услугам ── -->
+        <div class="stg-section" id="stg-loyalty-services">
+          <div class="stg-hdr"><span>✂️</span>Кэшбэк по услугам</div>
+          <div class="card">
+            <div class="ct">Индивидуальный кэшбэк <button class="btn btn-pri btn-sm" onclick="saveLs()">Сохранить</button></div>
+            <div style="font-size:12.5px;color:var(--t2);margin-bottom:12px">Переопределяет базовый кэшбэк уровня для конкретных услуг. Оставьте поле пустым чтобы использовать базовый процент.</div>
+            <div id="svcCb"><div class="empty"><span class="spinner"></span> Загрузка из YClients...</div></div>
+          </div>
+        </div>
+
+        <!-- ── День рождения ── -->
+        <div class="stg-section" id="stg-loyalty-birthday">
+          <div class="stg-hdr"><span>🎂</span>День рождения</div>
+          <div class="g2">
+            <div class="card">
+              <div class="ct">Подарок на день рождения</div>
+              <div class="srow"><div><div class="srow-l">Включить программу</div><div class="srow-h">Автоматически начислять бонусы именинникам</div></div><label class="tgl"><input type="checkbox" id="ls-bd-on" checked><span class="ts"></span></label></div>
+              <div class="fg" style="margin-top:14px"><label class="fl">Бонусов в подарок</label><input type="number" id="ls-bd-bonus" value="500"></div>
+              <div class="fg"><label class="fl">За сколько дней до дня рождения</label><input type="number" id="ls-bd-days" value="3"></div>
+              <button class="btn btn-pri" onclick="saveLs()">Сохранить</button>
+            </div>
+            <div class="card">
+              <div class="ct">Именинники (ближайшие 7 дней)</div>
+              <div id="bdList"><div class="empty">Загрузка...</div></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- ── Реферальная ── -->
+        <div class="stg-section" id="stg-loyalty-referral">
+          <div class="stg-hdr"><span>🤝</span>Реферальная программа</div>
+          <div class="g2">
+            <div class="card">
+              <div class="ct">Настройки программы</div>
+              <div class="srow"><div><div class="srow-l">Программа активна</div><div class="srow-h">Клиенты могут приглашать друзей</div></div><label class="tgl"><input type="checkbox" id="ls-ref-on" checked><span class="ts"></span></label></div>
+              <div class="fg" style="margin-top:14px"><label class="fl">Бонус пригласившему</label><input type="number" id="ls-ref-s" value="200"></div>
+              <div class="fg"><label class="fl">Бонус приглашённому</label><input type="number" id="ls-ref-r" value="150"></div>
+              <button class="btn btn-pri" onclick="saveLs()">Сохранить</button>
+            </div>
+            <div class="sc" style="height:fit-content"><div class="sl">Реферальных регистраций</div><div class="sv">—</div><div class="sd">за всё время</div></div>
+          </div>
+        </div>
+
+        <!-- ── Настройки салона ── -->
+        <div class="stg-section" id="stg-salon">
+          <div class="stg-hdr"><span>⚙️</span>Настройки салона</div>
+          <div class="card" style="max-width:480px">
+            <div class="fg"><label class="fl">Название салона</label><input type="text" id="st-name"></div>
             <div class="fg"><label class="fl">Город</label><input type="text" id="st-city"></div>
             <div class="fg"><label class="fl">Часовой пояс</label>
               <select id="st-tz">
@@ -592,42 +738,109 @@ tbody tr:hover{background:var(--bg);cursor:pointer}
             </div>
             <button class="btn btn-pri" onclick="saveSalon()">Сохранить</button>
           </div>
-          <div class="card">
-            <div class="ct">Логи синхронизации <button class="btn btn-sec btn-sm" onclick="loadSyncLogs()">Обновить</button></div>
-            <div id="syncLogs"><div class="empty">Загрузка...</div></div>
-          </div>
+        </div>
 
-          <!-- ИМПОРТ ИЗ XLS ФАЙЛА YCLIENTS -->
-          <div class="card mb" style="border:2px solid #6366f1">
-            <div class="ct" style="color:#6366f1">
-              📊 Импорт истории транзакций из CSV (YClients)
+        <!-- ── Подключение YClients ── -->
+        <div class="stg-section" id="stg-yclients">
+          <div class="stg-hdr"><span>🔌</span>Подключение YClients</div>
+          <div class="card" style="max-width:560px">
+            <div class="fg"><label class="fl">ID компании <span class="fh">из URL кабинета YClients</span></label><input type="text" id="st-yid" placeholder="123456"></div>
+            <div class="fg"><label class="fl">Partner Token</label><input type="password" id="st-pt" placeholder="Partner Token из раздела API"></div>
+            <div class="fg"><label class="fl">Логин YClients</label><input type="text" id="st-login" placeholder="email или телефон"></div>
+            <div class="fg"><label class="fl">Пароль YClients</label><input type="password" id="st-pass"></div>
+            <div class="fg"><label class="fl">Chain ID <span class="fh">salon_group_id из карты лояльности</span></label><input type="text" id="st-chain-id" placeholder="652414"></div>
+            <div style="display:flex;gap:8px">
+              <button class="btn btn-pri" onclick="connectYC()">Подключить YClients</button>
+              <button class="btn btn-sec" onclick="saveSalon()">Сохранить</button>
             </div>
+            <div id="ycSt" style="margin-top:10px;font-size:12px"></div>
+          </div>
+        </div>
+
+        <!-- ── Карта лояльности ── -->
+        <div class="stg-section" id="stg-loyalty-card">
+          <div class="stg-hdr"><span>💳</span>Карта лояльности YClients</div>
+          <div class="card" style="max-width:560px">
+            <div style="font-size:12.5px;color:var(--t2);margin-bottom:14px;line-height:1.7">
+              Выберите тип карты лояльности из YClients. Все начисления кэшбэка будут идти на карты этого типа.
+              Webhook <strong>finances_operation</strong> отслеживает оплаты и автоматически начисляет кэшбэк.
+            </div>
+            <div class="fg">
+              <label class="fl">Тип карты лояльности</label>
+              <select id="st-card-type" onchange="onCardTypeChange(this)">
+                <option value="">— Не выбрана (сначала загрузите типы) —</option>
+              </select>
+            </div>
+            <div id="cardTypeInfo" style="font-size:12px;color:var(--t3);margin-bottom:10px;display:none"></div>
+            <div style="display:flex;gap:8px">
+              <button class="btn btn-pri" onclick="saveSalon()">Сохранить выбор</button>
+              <button class="btn btn-sec" onclick="loadCardTypes()">Загрузить типы карт</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- ── Webhook URL ── -->
+        <div class="stg-section" id="stg-webhook">
+          <div class="stg-hdr"><span>🔔</span>Webhook URL</div>
+          <div class="card" style="max-width:560px">
+            <div style="font-size:12.5px;color:var(--t2);margin-bottom:12px;line-height:1.7">
+              Вставьте этот URL в <strong>YClients → Настройки → Интеграции → Webhook</strong>.<br>
+              Включите события: <strong>record</strong>, <strong>client</strong>, <strong>finances_operation</strong>.
+            </div>
+            <div style="display:flex;gap:6px">
+              <input type="text" id="whUrl" readonly>
+              <button class="btn btn-sec" onclick="copyWh()">Копировать</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- ── Куки браузера ── -->
+        <div class="stg-section" id="stg-cookies">
+          <div class="stg-hdr"><span>🍪</span>Куки браузера YClients</div>
+          <div class="card" style="max-width:560px">
+            <div style="font-size:12.5px;color:var(--t2);margin-bottom:12px;line-height:1.7">
+              Используются для разового импорта истории карт. <strong>Как получить:</strong> войдите на
+              <a href="https://yclients.com" target="_blank" style="color:var(--a)">yclients.com</a> в браузере → F12 → Network → любой запрос → Request Headers → скопируйте строку <code style="background:var(--bg);padding:1px 4px;border-radius:3px">Cookie:</code> целиком.
+            </div>
+            <div class="fg">
+              <label class="fl">Cookie строка из браузера</label>
+              <textarea id="st-web-cookie" rows="4" placeholder="XSRF-TOKEN=...; laravel_session=...; remember_web_...=..." style="resize:vertical;font-size:11px;font-family:monospace"></textarea>
+            </div>
+            <div style="display:flex;gap:8px;align-items:center">
+              <button class="btn btn-pri" onclick="saveWebCookie()">Сохранить куки</button>
+              <span style="font-size:11.5px;color:var(--t3)">Куки действуют ~30 дней</span>
+            </div>
+            <div id="cookieSt" style="margin-top:8px;font-size:12px"></div>
+          </div>
+        </div>
+
+        <!-- ── Импорт CSV ── -->
+        <div class="stg-section" id="stg-import-csv">
+          <div class="stg-hdr"><span>📋</span>Импорт CSV транзакций</div>
+          <div class="card" style="max-width:600px;border:2px solid #6366f1">
             <div style="font-size:12.5px;color:var(--t2);margin-bottom:14px;line-height:1.7">
               Выгрузите отчёты из YClients: <strong>Лояльность → Транзакции → Экспорт XLS</strong>,
               затем откройте в Excel и сохраните как <strong>CSV UTF-8</strong>.<br>
-              Загружайте каждый тип файла отдельно: пополнения, списания с карты, ручные списания.
-              Дубли пропускаются автоматически.
+              Загружайте каждый тип файла отдельно. Дубли пропускаются автоматически.
             </div>
             <div class="fg">
-              <label class="fl">Выберите XLS файл</label>
-              <input type="file" id="xlsFile" accept=".csv,.txt" style="padding:6px;background:var(--bg);border:1px solid var(--brd);border-radius:6px;width:100%">
+              <label class="fl">Выберите CSV файл</label>
+              <input type="file" id="xlsFile" accept=".csv,.txt" style="padding:6px;background:var(--bg);border:1px solid var(--bd);border-radius:6px;width:100%">
             </div>
             <div id="xlsImportResult" style="display:none;margin:10px 0;font-size:13px;padding:10px 12px;border-radius:8px"></div>
             <div style="display:flex;gap:8px;align-items:center">
-              <button class="btn btn-pri" id="xlsImportBtn" onclick="startXlsImport()">
-                📊 Импортировать CSV
-              </button>
+              <button class="btn btn-pri" id="xlsImportBtn" onclick="startXlsImport()">📊 Импортировать CSV</button>
               <span id="xlsImportProgress" style="font-size:12px;color:var(--t3)"></span>
             </div>
           </div>
+        </div>
 
-          <!-- РАЗОВЫЙ ИМПОРТ ИСТОРИИ КАРТ -->
-          <div class="card" style="border:2px solid var(--a)">
-            <div class="ct" style="color:var(--a)">
-              📥 Разовый импорт истории карт лояльности
-            </div>
+        <!-- ── История карт ── -->
+        <div class="stg-section" id="stg-import-bulk">
+          <div class="stg-hdr"><span>📥</span>Разовый импорт истории карт</div>
+          <div class="card" style="max-width:600px;border:2px solid var(--a)">
             <div style="font-size:12.5px;color:var(--t2);margin-bottom:14px;line-height:1.7">
-              Запустите <strong>один раз</strong> при внедрении — загрузит историю транзакций по картам YClients для всех клиентов. После завершения вся история будет в базе. Дальнейшие операции фиксируются автоматически через webhook.
+              Запустите <strong>один раз</strong> при внедрении — загрузит полную историю транзакций по картам YClients для всех клиентов. Дальнейшие операции фиксируются автоматически через webhook.
             </div>
             <div id="bulkImportStatus" style="margin-bottom:12px;display:none">
               <div style="background:var(--bg);border-radius:8px;padding:12px;font-size:13px">
@@ -637,25 +850,333 @@ tbody tr:hover{background:var(--bg);cursor:pointer}
                 </div>
                 <div class="pb" style="margin-bottom:6px"><div class="pf" id="bulkProgress" style="width:0%;transition:width .3s"></div></div>
                 <div style="font-size:12px;color:var(--t3)">
-                  Клиентов: <span id="bulkDone">0</span> / <span id="bulkTotal">0</span> · 
-                  Транзакций: <span id="bulkImported">0</span> · 
+                  Клиентов: <span id="bulkDone">0</span> / <span id="bulkTotal">0</span> ·
+                  Транзакций: <span id="bulkImported">0</span> ·
                   Ошибок: <span id="bulkErrors">0</span>
                 </div>
                 <div style="font-size:11.5px;color:var(--t3);margin-top:4px">Текущий: <span id="bulkCurrent">—</span></div>
               </div>
             </div>
             <div id="bulkImportResult" style="display:none;margin-bottom:12px;font-size:13px;padding:10px 12px;border-radius:8px"></div>
-            <button class="btn btn-pri" id="bulkImportBtn" onclick="startBulkImport()">
-              📥 Запустить импорт истории
-            </button>
-            <span style="font-size:11px;color:var(--t3);margin-left:10px">Займёт несколько минут в зависимости от количества клиентов</span>
+            <div style="display:flex;align-items:center;gap:10px">
+              <button class="btn btn-pri" id="bulkImportBtn" onclick="startBulkImport()">📥 Запустить импорт истории</button>
+              <span style="font-size:11px;color:var(--t3)">Займёт несколько минут</span>
+            </div>
           </div>
         </div>
+
+        <!-- ── Логи синхронизации ── -->
+        <div class="stg-section" id="stg-sync-logs">
+          <div class="stg-hdr"><span>📜</span>Логи синхронизации</div>
+          <div class="card">
+            <div class="ct">История синхронизаций <button class="btn btn-sec btn-sm" onclick="loadSyncLogs()">Обновить</button></div>
+            <div id="syncLogs"><div class="empty">Загрузка...</div></div>
+          </div>
+        </div>
+
+        <!-- ── Шаблон документов ── -->
+        <div class="stg-section" id="stg-template">
+          <div class="stg-hdr"><span>🎨</span>Шаблон «Домашний уход»</div>
+          <div class="card" style="border:2px solid #c9a96e">
+            <div style="font-size:12.5px;color:var(--t2);margin-bottom:16px;line-height:1.7">
+              Настройте внешний вид PDF-документа «Домашний уход»: загрузите логотип и фоновый рисунок, выберите цвета и заполните контактные данные.
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px">
+              <div>
+                <div style="font-size:12px;font-weight:600;color:var(--t2);margin-bottom:8px">Логотип (замена текста)</div>
+                <div id="tmplLogoPreview" style="width:100%;height:80px;border:1px dashed var(--bd);border-radius:8px;display:flex;align-items:center;justify-content:center;margin-bottom:8px;overflow:hidden;background:var(--bg)">
+                  <span style="font-size:12px;color:var(--t3)">Нет изображения</span>
+                </div>
+                <label class="btn btn-sec" style="cursor:pointer;display:block;text-align:center;font-size:12px">Загрузить логотип<input type="file" accept="image/*" style="display:none" onchange="uploadTemplateImage('logo', this)"></label>
+              </div>
+              <div>
+                <div style="font-size:12px;font-weight:600;color:var(--t2);margin-bottom:8px">Фоновый рисунок</div>
+                <div id="tmplWmPreview" style="width:100%;height:80px;border:1px dashed var(--bd);border-radius:8px;display:flex;align-items:center;justify-content:center;margin-bottom:8px;overflow:hidden;background:var(--bg)">
+                  <span style="font-size:12px;color:var(--t3)">Нет изображения</span>
+                </div>
+                <label class="btn btn-sec" style="cursor:pointer;display:block;text-align:center;font-size:12px">Загрузить фон<input type="file" accept="image/*" style="display:none" onchange="uploadTemplateImage('wm', this)"></label>
+              </div>
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr 2fr;gap:10px;margin-bottom:12px">
+              <div class="fg" style="margin:0"><label class="fl" style="font-size:11.5px">Название (строка 1)</label><input type="text" id="tmpl-line1" placeholder="PERI"></div>
+              <div class="fg" style="margin:0"><label class="fl" style="font-size:11.5px">Название (строка 2)</label><input type="text" id="tmpl-line2" placeholder="CLINIC"></div>
+              <div class="fg" style="margin:0"><label class="fl" style="font-size:11.5px">Подзаголовок</label><input type="text" id="tmpl-subtitle" placeholder="МЕДИЦИНСКИЙ КОСМЕТОЛОГИЧЕСКИЙ ЦЕНТР"></div>
+            </div>
+            <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:12px">
+              <div class="fg" style="margin:0"><label class="fl" style="font-size:11.5px">Акцентный цвет</label><div style="display:flex;gap:6px;align-items:center"><input type="color" id="tmpl-accent" value="#b8943e" style="width:38px;height:32px;padding:2px;border-radius:4px;border:1px solid var(--bd);cursor:pointer"><input type="text" id="tmpl-accent-txt" placeholder="#b8943e" style="flex:1;font-size:12px" oninput="syncColor('accent')"></div></div>
+              <div class="fg" style="margin:0"><label class="fl" style="font-size:11.5px">Цвет фона</label><div style="display:flex;gap:6px;align-items:center"><input type="color" id="tmpl-bg" value="#faf0e6" style="width:38px;height:32px;padding:2px;border-radius:4px;border:1px solid var(--bd);cursor:pointer"><input type="text" id="tmpl-bg-txt" placeholder="#faf0e6" style="flex:1;font-size:12px" oninput="syncColor('bg')"></div></div>
+              <div class="fg" style="margin:0"><label class="fl" style="font-size:11.5px">Цвет текста</label><div style="display:flex;gap:6px;align-items:center"><input type="color" id="tmpl-text" value="#2c2020" style="width:38px;height:32px;padding:2px;border-radius:4px;border:1px solid var(--bd);cursor:pointer"><input type="text" id="tmpl-text-txt" placeholder="#2c2020" style="flex:1;font-size:12px" oninput="syncColor('text')"></div></div>
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:16px">
+              <div class="fg" style="margin:0"><label class="fl" style="font-size:11.5px">Телефон</label><input type="text" id="tmpl-phone" placeholder="+7 (999) 000-00-00"></div>
+              <div class="fg" style="margin:0"><label class="fl" style="font-size:11.5px">Сайт</label><input type="text" id="tmpl-web" placeholder="www.clinic.ru"></div>
+              <div class="fg" style="margin:0"><label class="fl" style="font-size:11.5px">Соцсети</label><input type="text" id="tmpl-social" placeholder="@clinic"></div>
+            </div>
+            <div style="display:flex;gap:8px">
+              <button class="btn btn-pri" onclick="saveTemplateSettings()">Сохранить настройки</button>
+              <button class="btn btn-sec" onclick="previewTemplateSettings()">Предпросмотр</button>
+            </div>
+            <div id="tmplSaveStatus" style="margin-top:8px;font-size:12px"></div>
+          </div>
+        </div>
+
+      </div><!-- /stg-content -->
+    </div><!-- /page-settings -->
+
+    <!-- ═══ SEGMENTS PAGE ═══ -->
+    <div class="page" id="page-segments">
+      <div class="seg-toolbar">
+        <div>
+          <div style="font-size:16px;font-weight:700;margin-bottom:2px">Сегменты клиентской базы</div>
+          <div class="seg-meta" id="segMeta"></div>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center">
+          <button class="btn btn-sec btn-sm" onclick="refreshSegments()">↻ Обновить</button>
+        </div>
+      </div>
+
+      <!-- Totals bar -->
+      <div style="display:flex;gap:12px;margin-bottom:24px;flex-wrap:wrap">
+        <div class="card" style="flex:1;min-width:160px;padding:14px 18px">
+          <div style="font-size:11px;color:var(--t3);margin-bottom:4px">Всего клиентов</div>
+          <div style="font-size:22px;font-weight:800" id="segTotalAll">—</div>
+        </div>
+        <div class="card" style="flex:1;min-width:160px;padding:14px 18px">
+          <div style="font-size:11px;color:var(--t3);margin-bottom:4px">С визитами</div>
+          <div style="font-size:22px;font-weight:800" id="segTotalVisits">—</div>
+        </div>
+        <div class="card" style="flex:1;min-width:160px;padding:14px 18px">
+          <div style="font-size:11px;color:var(--t3);margin-bottom:4px">Общая выручка</div>
+          <div style="font-size:22px;font-weight:800" id="segTotalRevenue">—</div>
+        </div>
+        <div class="card" style="flex:1;min-width:160px;padding:14px 18px">
+          <div style="font-size:11px;color:var(--t3);margin-bottom:4px">Окно возврата</div>
+          <div style="font-size:22px;font-weight:800" id="segReturnWindow">—</div>
+          <div style="font-size:11px;color:var(--t3)">дней (среднее)</div>
+        </div>
+      </div>
+
+      <div id="segBody"></div>
+    </div>
+
+    <!-- Segment clients drawer -->
+    <div class="seg-drawer-ov" id="segDrawerOv" onclick="if(event.target===this)segDrawerClose()">
+      <div class="seg-drawer">
+        <div class="seg-drawer-hdr">
+          <span id="segDrawerEmoji" style="font-size:20px;flex-shrink:0"></span>
+          <div class="seg-drawer-title" id="segDrawerTitle"></div>
+          <button class="btn btn-sec btn-sm" onclick="segExport()" title="Выгрузить в Excel">↓ CSV</button>
+          <button onclick="segDrawerClose()" style="background:none;border:none;font-size:18px;cursor:pointer;color:var(--t2);padding:2px 4px;line-height:1;flex-shrink:0">✕</button>
+        </div>
+        <div class="seg-drawer-body">
+          <div style="margin-bottom:12px">
+            <input type="text" class="finp" placeholder="Поиск по имени или телефону..." oninput="segDrawerSearch(this.value)"
+              style="width:100%;box-sizing:border-box" id="segDrawerSearchInp">
+          </div>
+          <div id="segDrawerList"></div>
+          <div id="segDrawerPager" style="text-align:center;margin-top:12px"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══ HOME CARE PAGE ═══ -->
+    <div class="page" id="page-home-care">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:18px;flex-wrap:wrap;gap:10px">
+        <div style="font-size:16px;font-weight:700">Домашний уход</div>
+        <button class="btn btn-pri" onclick="hcOpenNew()">
+          <svg viewBox="0 0 24 24"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+          Новое назначение
+        </button>
+      </div>
+      <div class="card mb" style="padding:12px 16px">
+        <input id="hcSearch" type="text" placeholder="Поиск по клиенту или телефону..." style="max-width:320px" oninput="hcSearchDebounce()">
+      </div>
+      <div class="card" style="padding:0">
+        <div class="tw">
+          <table id="hcTable">
+            <thead><tr>
+              <th>Дата</th><th>Клиент</th><th>Телефон</th><th>Специалист</th><th>Заметка</th><th></th>
+            </tr></thead>
+            <tbody id="hcTbody"><tr><td colspan="6" class="empty">Загрузка...</td></tr></tbody>
+          </table>
+        </div>
+        <div id="hcPager" style="padding:12px 16px;display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--t3);border-top:1px solid var(--bd)"></div>
+      </div>
+    </div>
+
+    <!-- ═══ USERS PAGE ═══ -->
+    <div class="page" id="page-users">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px">
+        <div>
+          <div style="font-size:16px;font-weight:700">Пользователи</div>
+          <div id="usersQuota" style="font-size:12.5px;color:var(--t3);margin-top:2px"></div>
+        </div>
+        <button class="btn btn-pri" onclick="usersOpenCreate()">+ Добавить пользователя</button>
+      </div>
+      <div class="card" style="padding:0;overflow:hidden">
+        <table class="tbl" id="usersTbl">
+          <thead><tr><th>Имя</th><th>Email</th><th>Роль</th><th>Статус</th><th>Последний вход</th><th></th></tr></thead>
+          <tbody id="usersTbody"><tr><td colspan="6" class="empty">Загрузка...</td></tr></tbody>
+        </table>
       </div>
     </div>
 
   </div><!-- /content -->
 </div><!-- /app -->
+
+<!-- HOME CARE FORM OVERLAY -->
+<div class="hc-form-ov" id="hcFormOv" onclick="if(event.target===this)hcCloseForm()">
+  <div class="hc-form-box" id="hcFormBox">
+    <!-- Шапка в стиле документа -->
+    <div class="hc-form-header" id="hcFormHeader">
+      <img id="hcFormLogoImg" style="display:none;max-height:60px;max-width:220px;object-fit:contain;margin-bottom:4px" alt="">
+      <div class="hc-form-logo" id="hcFormLogoText">
+        <span id="hcFormLogoLeft">PERI</span>
+        <span class="hc-form-logo-leaf" id="hcFormLogoSep">✿</span>
+        <span id="hcFormLogoRight">CLINIC</span>
+      </div>
+      <div class="hc-form-sub" id="hcFormSub">Клиника Эстетической медицины</div>
+      <div class="hc-form-title-row" id="hcFormTitle">Домашний уход</div>
+      <div class="hc-form-divider" id="hcFormDivider"></div>
+    </div>
+    <button class="mc" onclick="hcCloseForm()" style="position:absolute;top:16px;right:16px">✕</button>
+
+    <!-- Client selector -->
+    <div class="hc-client-input-wrap">
+      <label class="fl" style="font-family:inherit;margin-bottom:6px;display:block">Клиент</label>
+      <div class="hc-client-wrap">
+        <input type="text" id="hcClientSearch" placeholder="Имя или телефон..." autocomplete="off"
+               oninput="hcSearchClient(this.value)" onfocus="hcSearchClient(this.value)"
+               style="border-color:#e8dcc8;background:#fdfaf5">
+        <div id="hcClientDrop" class="hc-client-drop" style="display:none"></div>
+      </div>
+      <input type="hidden" id="hcClientId">
+    </div>
+
+    <!-- 3 TABS -->
+    <div class="hc-tabs">
+      <button class="hc-tab active" onclick="hcSwitchTab('care',this)">🌿 Домашний уход</button>
+      <button class="hc-tab" onclick="hcSwitchTab('sheet',this)">📋 Лист назначения</button>
+      <button class="hc-tab" onclick="hcSwitchTab('vitamins',this)">💊 Витамины</button>
+    </div>
+
+    <!-- TAB: ДОМАШНИЙ УХОД -->
+    <div class="hc-tab-panel active" id="hcPanel-care">
+      <!-- УТРО -->
+      <div class="hc-section">
+        <div class="hc-section-hd" onclick="hcToggleSection(this)">
+          <div class="hc-section-title">🌅 Утро</div>
+          <svg viewBox="0 0 24 24" style="width:14px;height:14px;stroke:var(--t3);fill:none;stroke-width:2.5;transition:.2s" class="hc-chevron"><polyline points="6 9 12 15 18 9"/></svg>
+        </div>
+        <div class="hc-section-body" id="hcSec-morning">
+          <div id="hcCat-morning-Очищение" class="hc-cat"><div class="hc-cat-label"><span>Очищение</span><button class="hc-add-btn" onclick="hcAddItem('morning','Очищение')">+ добавить</button></div><div class="hc-items"></div></div>
+          <div id="hcCat-morning-Демакияж" class="hc-cat"><div class="hc-cat-label"><span>Демакияж</span><button class="hc-add-btn" onclick="hcAddItem('morning','Демакияж')">+ добавить</button></div><div class="hc-items"></div></div>
+          <div id="hcCat-morning-Тонизация" class="hc-cat"><div class="hc-cat-label"><span>Тонизация</span><button class="hc-add-btn" onclick="hcAddItem('morning','Тонизация')">+ добавить</button></div><div class="hc-items"></div></div>
+          <div id="hcCat-morning-Сыворотка" class="hc-cat"><div class="hc-cat-label"><span>Сыворотка</span><button class="hc-add-btn" onclick="hcAddItem('morning','Сыворотка')">+ добавить</button></div><div class="hc-items"></div></div>
+          <div id="hcCat-morning-Крем для лица" class="hc-cat"><div class="hc-cat-label"><span>Крем для лица</span><button class="hc-add-btn" onclick="hcAddItem('morning','Крем для лица')">+ добавить</button></div><div class="hc-items"></div></div>
+          <div id="hcCat-morning-Крем для век" class="hc-cat"><div class="hc-cat-label"><span>Крем для век</span><button class="hc-add-btn" onclick="hcAddItem('morning','Крем для век')">+ добавить</button></div><div class="hc-items"></div></div>
+          <div id="hcCat-morning-SPF" class="hc-cat"><div class="hc-cat-label"><span>SPF (защита от солнца)</span><button class="hc-add-btn" onclick="hcAddItem('morning','SPF')">+ добавить</button></div><div class="hc-items"></div></div>
+        </div>
+      </div>
+      <!-- ВЕЧЕР -->
+      <div class="hc-section">
+        <div class="hc-section-hd" onclick="hcToggleSection(this)">
+          <div class="hc-section-title">🌙 Вечер</div>
+          <svg viewBox="0 0 24 24" style="width:14px;height:14px;stroke:var(--t3);fill:none;stroke-width:2.5;transition:.2s" class="hc-chevron"><polyline points="6 9 12 15 18 9"/></svg>
+        </div>
+        <div class="hc-section-body" id="hcSec-evening">
+          <div id="hcCat-evening-Очищение" class="hc-cat"><div class="hc-cat-label"><span>Очищение</span><button class="hc-add-btn" onclick="hcAddItem('evening','Очищение')">+ добавить</button></div><div class="hc-items"></div></div>
+          <div id="hcCat-evening-Тонизация" class="hc-cat"><div class="hc-cat-label"><span>Тонизация</span><button class="hc-add-btn" onclick="hcAddItem('evening','Тонизация')">+ добавить</button></div><div class="hc-items"></div></div>
+          <div id="hcCat-evening-Сыворотка" class="hc-cat"><div class="hc-cat-label"><span>Сыворотка</span><button class="hc-add-btn" onclick="hcAddItem('evening','Сыворотка')">+ добавить</button></div><div class="hc-items"></div></div>
+          <div id="hcCat-evening-Крем для лица" class="hc-cat"><div class="hc-cat-label"><span>Крем для лица</span><button class="hc-add-btn" onclick="hcAddItem('evening','Крем для лица')">+ добавить</button></div><div class="hc-items"></div></div>
+          <div id="hcCat-evening-Крем для век" class="hc-cat"><div class="hc-cat-label"><span>Крем для век</span><button class="hc-add-btn" onclick="hcAddItem('evening','Крем для век')">+ добавить</button></div><div class="hc-items"></div></div>
+        </div>
+      </div>
+      <!-- ДОП. УХОД -->
+      <div class="hc-section">
+        <div class="hc-section-hd" onclick="hcToggleSection(this)">
+          <div class="hc-section-title">✨ Дополнительный уход</div>
+          <svg viewBox="0 0 24 24" style="width:14px;height:14px;stroke:var(--t3);fill:none;stroke-width:2.5;transition:.2s" class="hc-chevron"><polyline points="6 9 12 15 18 9"/></svg>
+        </div>
+        <div class="hc-section-body" id="hcSec-additional">
+          <div id="hcCat-additional-Маски" class="hc-cat"><div class="hc-cat-label"><span>Маски</span><button class="hc-add-btn" onclick="hcAddItem('additional','Маски')">+ добавить</button></div><div class="hc-items"></div></div>
+          <div id="hcCat-additional-Пилинги" class="hc-cat"><div class="hc-cat-label"><span>Пилинги</span><button class="hc-add-btn" onclick="hcAddItem('additional','Пилинги')">+ добавить</button></div><div class="hc-items"></div></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- TAB: ЛИСТ НАЗНАЧЕНИЯ -->
+    <div class="hc-tab-panel" id="hcPanel-sheet">
+      <div class="hc-section">
+        <div class="hc-section-hd" onclick="hcToggleSection(this)">
+          <div class="hc-section-title">👤 Лицо</div>
+          <svg viewBox="0 0 24 24" style="width:14px;height:14px;stroke:var(--t3);fill:none;stroke-width:2.5;transition:.2s" class="hc-chevron"><polyline points="6 9 12 15 18 9"/></svg>
+        </div>
+        <div class="hc-section-body">
+          <div id="hcCat-sheet_face-Процедуры" class="hc-cat"><div class="hc-cat-label"><span>Процедуры</span><button class="hc-add-btn" onclick="hcAddItem('sheet_face','Процедуры','','',true)">+ добавить</button></div><div class="hc-items"></div></div>
+        </div>
+      </div>
+      <div class="hc-section">
+        <div class="hc-section-hd" onclick="hcToggleSection(this)">
+          <div class="hc-section-title">💪 Тело</div>
+          <svg viewBox="0 0 24 24" style="width:14px;height:14px;stroke:var(--t3);fill:none;stroke-width:2.5;transition:.2s" class="hc-chevron"><polyline points="6 9 12 15 18 9"/></svg>
+        </div>
+        <div class="hc-section-body">
+          <div id="hcCat-sheet_body-Процедуры" class="hc-cat"><div class="hc-cat-label"><span>Процедуры</span><button class="hc-add-btn" onclick="hcAddItem('sheet_body','Процедуры','','',true)">+ добавить</button></div><div class="hc-items"></div></div>
+        </div>
+      </div>
+      <div class="hc-section">
+        <div class="hc-section-hd" onclick="hcToggleSection(this)">
+          <div class="hc-section-title">💇 Волосы</div>
+          <svg viewBox="0 0 24 24" style="width:14px;height:14px;stroke:var(--t3);fill:none;stroke-width:2.5;transition:.2s" class="hc-chevron"><polyline points="6 9 12 15 18 9"/></svg>
+        </div>
+        <div class="hc-section-body">
+          <div id="hcCat-sheet_hair-Процедуры" class="hc-cat"><div class="hc-cat-label"><span>Процедуры</span><button class="hc-add-btn" onclick="hcAddItem('sheet_hair','Процедуры','','',true)">+ добавить</button></div><div class="hc-items"></div></div>
+        </div>
+      </div>
+      <div class="fg" style="margin-top:4px"><label class="fl">Дополнительные заметки</label><textarea id="hcNotes" rows="2" placeholder="Общие рекомендации..."></textarea></div>
+    </div>
+
+    <!-- TAB: ВИТАМИНЫ -->
+    <div class="hc-tab-panel" id="hcPanel-vitamins">
+      <div class="hc-section">
+        <div class="hc-section-hd" onclick="hcToggleSection(this)">
+          <div class="hc-section-title">💊 Витамины и добавки</div>
+          <svg viewBox="0 0 24 24" style="width:14px;height:14px;stroke:var(--t3);fill:none;stroke-width:2.5;transition:.2s" class="hc-chevron"><polyline points="6 9 12 15 18 9"/></svg>
+        </div>
+        <div class="hc-section-body">
+          <div id="hcCat-vitamins-Препарат" class="hc-cat"><div class="hc-cat-label"><span>Препараты</span><button class="hc-add-btn" onclick="hcAddItem('vitamins','Препарат')">+ добавить</button></div><div class="hc-items"></div></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="hc-save-row">
+      <button class="hc-btn-save" onclick="hcSave()">Сохранить</button>
+      <button class="hc-btn-print" onclick="hcPrint()">
+        <svg viewBox="0 0 24 24" style="width:13px;height:13px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>
+        Печать / PDF
+      </button>
+      <button class="hc-btn-cancel" onclick="hcCloseForm()">Отмена</button>
+    </div>
+  </div>
+</div>
+
+<!-- CATALOG PICKER -->
+<div class="hc-picker-ov" id="hcPickerOv" onclick="if(event.target===this)hcPickerClose()">
+  <div class="hc-picker-box">
+    <div class="hc-picker-hdr">
+      <div id="hcPickerTitle" style="font-weight:700;font-size:14px;flex:1">Выберите</div>
+      <button id="hcPickerSyncBtn" onclick="hcSyncGoodsCategories()" title="Синхронизировать категории из YClients" style="background:none;border:1px solid var(--hc-border);border-radius:6px;font-size:12px;cursor:pointer;color:var(--hc-brown2);padding:2px 8px;margin-right:6px;display:none">↻ Категории</button>
+      <button onclick="hcPickerClose()" style="background:none;border:none;font-size:18px;cursor:pointer;color:var(--t2);line-height:1">✕</button>
+    </div>
+    <div style="padding:10px 18px;border-bottom:1px solid var(--bd)">
+      <input id="hcPickerSearch" type="text" placeholder="Поиск..." oninput="hcPickerSearchFn(this.value)" style="width:100%">
+    </div>
+    <div class="hc-picker-body" id="hcPickerBody">
+      <div style="padding:20px;text-align:center;color:var(--t3)">Загрузка...</div>
+    </div>
+  </div>
+</div>
 
 <!-- MODALS -->
 <div class="ov" id="clientModal" onclick="if(event.target===this)closeModal('clientModal')">
@@ -687,9 +1208,9 @@ tbody tr:hover{background:var(--bg);cursor:pointer}
 const API = '';
 let TOKEN = localStorage.getItem('lp_tk');
 let ME = null;
-let dashP = 7, anaP = 30, cPage_ = 1;
+let dashP = 7, cPage_ = 1, cSortCol = 'last_visit_at', cSortDir = 'desc';
 let bonusTarget = null, lsData = {}, ycSvcs = [];
-let rCh, bCh, bfCh, retCh, grwCh, lvlCh;
+let rCh, bfCh, lvlCh;
 const LVL_L = {bronze:'🥉 Бронза',silver:'🥈 Серебро',gold:'🥇 Золото',platinum:'💎 Платина'};
 const LVL_B = {bronze:'bgr',silver:'bb',gold:'bo',platinum:'bg'};
 
@@ -922,7 +1443,7 @@ async function startXlsImport() {
     const resp = await fetch('/api/import/csv-transactions', {
       method: 'POST',
       headers: {
-        'Authorization': 'Bearer ' + localStorage.getItem('lp_token'),
+        'Authorization': 'Bearer ' + localStorage.getItem('lp_tk'),
         'Content-Type': 'application/octet-stream',
         'X-Filename': encodeURIComponent(file.name),
       },
@@ -971,11 +1492,28 @@ async function launchApp() {
     try { ME = await api('GET', '/api/auth/me'); } catch { showLogin(); return; }
   }
   document.getElementById('loginScreen').style.display = 'none';
-  document.getElementById('app').style.display = 'flex';
   document.getElementById('topAv').textContent  = (ME.name||ME.email||'?').slice(0,2).toUpperCase();
   document.getElementById('topName').textContent = ME.name || ME.email;
-  loadDashboard();
-  loadLs();
+
+  // Must change password on first login
+  if (ME.must_change_password) {
+    document.getElementById('changePwScreen').style.display = 'flex';
+    document.getElementById('app').style.display = 'none';
+    return;
+  }
+
+  document.getElementById('app').style.display = 'flex';
+
+  // Apply role-based navigation
+  const startPage = applyRoleNav(ME.role);
+  // Activate start page
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  document.getElementById('page-' + startPage)?.classList.add('active');
+
+  // Load initial data for start page
+  if (startPage === 'dashboard') { loadDashboard(); loadLs(); }
+  else if (startPage === 'home-care') { loadHomeCare(); }
+  else { loadDashboard(); loadLs(); }
 }
 
 function showLogin() {
@@ -993,10 +1531,23 @@ function nav(el) {
   document.getElementById('page-'+p)?.classList.add('active');
   if (p==='clients')   loadClients();
   if (p==='records')   { setDefDates(); loadRecords(1); }
-  if (p==='loyalty')   { loadLs(); loadBdList(); }
-  if (p==='analytics')       loadAnalytics();
   if (p==='staff-analytics') loadStaffAnalytics();
+  if (p==='segments')        loadSegments();
+  if (p==='home-care')       loadHomeCare();
   if (p==='settings')        loadSettings();
+  if (p==='users')           loadUsers();
+}
+
+// ── SETTINGS SIDEBAR ──
+function navStg(id, el) {
+  document.querySelectorAll('.stg-item').forEach(e => e.classList.remove('active'));
+  if (el) el.classList.add('active');
+  document.querySelectorAll('.stg-section').forEach(e => e.classList.remove('active'));
+  const sec = document.getElementById('stg-' + id);
+  if (sec) sec.classList.add('active');
+  if (id === 'loyalty-services') loadSvcCb();
+  if (id === 'loyalty-birthday') loadBdList();
+  if (id === 'sync-logs') loadSyncLogs();
 }
 
 // ── DASHBOARD ──
@@ -1008,20 +1559,38 @@ function setPeriod(d,el) {
 }
 async function loadDashboard() {
   try {
-    const d = await api('GET', '/api/analytics/dashboard?period='+dashP);
+    const [d, bon] = await Promise.all([
+      api('GET', '/api/analytics/dashboard?period='+dashP),
+      api('GET', '/api/analytics/bonuses?period='+dashP)
+    ]);
     const s = d.stats;
     document.getElementById('ds1').textContent = s.totalClients.toLocaleString('ru');
     document.getElementById('ds1s').textContent = '+' + s.newClients + ' новых за период';
     document.getElementById('ds2').textContent = s.totalBonusBalance.toLocaleString('ru');
-    document.getElementById('ds2s').textContent = 'начислено ' + parseFloat(s.periodBonuses||0).toLocaleString('ru') + ' ₽ · списано ' + parseFloat(s.periodRedeemed||0).toLocaleString('ru') + ' ₽';
+    document.getElementById('ds2s').textContent = 'начислено ' + parseFloat(s.periodBonuses||0).toLocaleString('ru') + ' · списано ' + parseFloat(s.periodRedeemed||0).toLocaleString('ru');
     document.getElementById('ds3').textContent = s.periodRevenue.toLocaleString('ru') + ' ₽';
-    document.getElementById('ds3s').textContent = 'за ' + dashP + ' дней · ' + s.periodRecords + ' записей';
-    document.getElementById('ds4').textContent = s.sleepingClients.toLocaleString('ru');
+    document.getElementById('ds3s').textContent = 'за ' + dashP + ' дней · ' + s.periodRecords + ' визитов';
+    document.getElementById('ds5').textContent = s.cardClients.toLocaleString('ru');
+    document.getElementById('ds5s').textContent = s.totalClients ? Math.round(s.cardClients/s.totalClients*100)+'% от всех клиентов' : '';
+    document.getElementById('ds6').textContent = s.telegramClients.toLocaleString('ru');
+    document.getElementById('ds6s').textContent = s.totalClients ? Math.round(s.telegramClients/s.totalClients*100)+'% от всех клиентов' : '';
+    const periodBonuses = parseFloat(s.periodBonuses || 0);
+    const periodRedeemed = parseFloat(s.periodRedeemed || 0);
+    document.getElementById('an1').textContent = s.periodRecords>0 ? Math.round(s.periodRevenue/s.periodRecords).toLocaleString('ru')+' ₽' : '—';
+    document.getElementById('an1s').textContent = s.periodRecords + ' записей за период';
+    document.getElementById('an2').textContent = periodBonuses.toLocaleString('ru') + ' ₽';
+    document.getElementById('an2s').textContent = 'за ' + dashP + ' дней';
+    document.getElementById('an5').textContent = periodRedeemed.toLocaleString('ru') + ' ₽';
+    document.getElementById('an5s').textContent = 'за ' + dashP + ' дней';
+    document.getElementById('an3').textContent = periodBonuses>0 ? Math.round(s.periodRevenue/periodBonuses)+'x' : '—';
+    document.getElementById('an4').textContent = s.newClients;
+    document.getElementById('an4s').textContent = 'за ' + dashP + ' дней';
     buildRevChart(d.dailyRevenue);
     buildLvlDash(d.levelDist, s.totalClients);
     buildRecentTx(d.recentTxns);
     buildTopSvc(d.topServices);
-    buildBonChart(d.recentTxns);
+    buildBfChart(bon);
+    buildLvlChart(d.levelDist);
     if (d.syncStatus?.finished_at) document.getElementById('syncSt').textContent = 'Синхр.: ' + timeSince(d.syncStatus.finished_at);
   } catch(e) { notify('Ошибка дашборда: '+e.message,'err'); }
 }
@@ -1029,14 +1598,20 @@ async function loadDashboard() {
 function buildRevChart(data) {
   const ctx = document.getElementById('revChart').getContext('2d');
   if (rCh) rCh.destroy();
-  rCh = new Chart(ctx, { type:'line', data:{
-    labels: data.map(d=>{const dt=new Date(d.visit_date);return dt.getDate()+'.'+(dt.getMonth()+1)}),
+  const labels = data.map(d=>{const dt=new Date(d.visit_date+'T00:00:00');return dt.getDate()+'.'+(dt.getMonth()+1)});
+  rCh = new Chart(ctx, { type:'bar', data:{
+    labels,
     datasets:[
-      {label:'Выручка ₽',data:data.map(d=>parseFloat(d.revenue||0)),borderColor:'#00c896',backgroundColor:'rgba(0,200,150,0.07)',fill:true,tension:.4,borderWidth:2,pointRadius:2,yAxisID:'y'},
-      {label:'Бонусы',data:data.map(d=>parseFloat(d.bonuses||0)),borderColor:'#3b82f6',borderDash:[4,3],fill:false,tension:.4,borderWidth:1.5,pointRadius:0,yAxisID:'y1'},
+      {label:'Выручка ₽',data:data.map(d=>parseFloat(d.revenue||0)),backgroundColor:'rgba(0,200,150,0.75)',borderRadius:3},
+      {label:'Начислено бонусов',data:data.map(d=>parseFloat(d.bonuses_accrued||0)),backgroundColor:'rgba(59,130,246,0.65)',borderRadius:3},
+      {label:'Списано бонусов',data:data.map(d=>parseFloat(d.bonuses_redeemed||0)),backgroundColor:'rgba(232,84,84,0.55)',borderRadius:3},
     ]},
-    options:{responsive:true,maintainAspectRatio:false,interaction:{mode:'index'},plugins:{legend:{labels:{font:{size:11},boxWidth:10}}},
-      scales:{x:{grid:{display:false},ticks:{maxTicksLimit:10,font:{size:10}}},y:{grid:{color:'rgba(0,0,0,0.04)'},ticks:{callback:v=>v.toLocaleString('ru')+'₽',font:{size:10}}},y1:{position:'right',grid:{display:false},ticks:{font:{size:10}}}}}
+    options:{responsive:true,maintainAspectRatio:false,interaction:{mode:'index'},
+      plugins:{legend:{labels:{font:{size:11},boxWidth:10}}},
+      scales:{
+        x:{grid:{display:false},ticks:{maxTicksLimit:15,font:{size:10}}},
+        y:{grid:{color:'rgba(0,0,0,0.04)'},ticks:{callback:v=>v>=1000?(v/1000).toFixed(0)+'к':v,font:{size:10}},title:{display:true,text:'₽',font:{size:10}}}
+      }}
   });
 }
 
@@ -1079,20 +1654,72 @@ function buildTopSvc(svcs) {
     </div>`).join('');
 }
 
-function buildBonChart(txns) {
-  if (!txns?.length) return;
-  const bt = {}; txns.forEach(t=>{bt[t.type]=(bt[t.type]||0)+Math.abs(t.amount);});
-  const ctx = document.getElementById('bonChart').getContext('2d');
-  if (bCh) bCh.destroy();
-  const labels = Object.keys(bt).map(k=>({accrual:'Начислено',birthday:'ДР',referral:'Реферал',manual:'Вручную',redemption:'Списано',cancellation:'Отменено'})[k]||k);
-  bCh = new Chart(ctx,{type:'doughnut',data:{labels,datasets:[{data:Object.values(bt),backgroundColor:['#00c896','#f59e0b','#8b5cf6','#3b82f6','#e85454','#aaa'],borderWidth:0}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{position:'right',labels:{font:{size:10},boxWidth:8}}}}});
-}
+
 
 // ── CLIENTS ──
 function cPage(d) { cPage_ = Math.max(1, cPage_+d); loadClients(); }
+
+function cFilter() { cPage_ = 1; loadClients(); }
+
+function cSort(col) {
+  if (cSortCol === col) {
+    cSortDir = cSortDir === 'asc' ? 'desc' : 'asc';
+  } else {
+    cSortCol = col;
+    cSortDir = col === 'name' || col === 'phone' ? 'asc' : 'desc';
+  }
+  cUpdateSortUI();
+  cPage_ = 1;
+  loadClients();
+}
+
+function cUpdateSortUI() {
+  document.querySelectorAll('#page-clients .th-sort').forEach(th => {
+    th.classList.remove('asc', 'desc');
+    if (th.dataset.col === cSortCol) th.classList.add(cSortDir);
+  });
+}
+
+function cResetFilters() {
+  ['cf-name','cf-phone','cf-bonus-min','cf-bonus-max','cf-spent-min','cf-spent-max',
+   'cf-visits-min','cf-visits-max','cf-visit-from','cf-visit-to'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.value = '';
+  });
+  const lvl = document.getElementById('cf-level');
+  if (lvl) lvl.value = '';
+  const stat = document.getElementById('cstat');
+  if (stat) stat.value = '';
+  cSortCol = 'last_visit_at'; cSortDir = 'desc';
+  cUpdateSortUI();
+  cPage_ = 1;
+  loadClients();
+}
+
+function cGetFilters() {
+  const g = id => document.getElementById(id)?.value || '';
+  return {
+    name:           g('cf-name'),
+    phone:          g('cf-phone'),
+    level:          g('cf-level'),
+    status:         g('cstat'),
+    bonus_min:      g('cf-bonus-min'),
+    bonus_max:      g('cf-bonus-max'),
+    spent_min:      g('cf-spent-min'),
+    spent_max:      g('cf-spent-max'),
+    visits_min:     g('cf-visits-min'),
+    visits_max:     g('cf-visits-max'),
+    last_visit_from:g('cf-visit-from'),
+    last_visit_to:  g('cf-visit-to'),
+  };
+}
+
 async function loadClients() {
   try {
-    const q = new URLSearchParams({search:document.getElementById('csearch')?.value||'',level:document.getElementById('clvl')?.value||'',status:document.getElementById('cstat')?.value||'',page:cPage_,limit:50});
+    const f = cGetFilters();
+    const params = { page: cPage_, limit: 50, sort: cSortCol, sort_dir: cSortDir };
+    Object.entries(f).forEach(([k,v]) => { if (v) params[k] = v; });
+    const q = new URLSearchParams(params);
     const d = await api('GET', '/api/clients?'+q);
     const tb = document.getElementById('cBody');
     if (!d.clients?.length) { tb.innerHTML='<tr><td colspan="8" class="empty">Клиенты не найдены</td></tr>'; return; }
@@ -1107,7 +1734,10 @@ async function loadClients() {
         <td style="color:var(--t3)">${c.last_visit_at?new Date(c.last_visit_at).toLocaleDateString('ru',{day:'numeric',month:'short',year:'numeric'}):'—'}</td>
         <td><button class="btn btn-sec btn-sm" onclick="event.stopPropagation();openCD(${c.id})">→</button></td>
       </tr>`).join('');
-    document.getElementById('cPager').textContent = `Показано ${(cPage_-1)*50+1}–${Math.min(cPage_*50,d.total)} из ${d.total}`;
+    const shown = Math.min(cPage_*50, d.total);
+    const from  = d.total === 0 ? 0 : (cPage_-1)*50+1;
+    document.getElementById('cPager').textContent = `Показано ${from}–${shown} из ${d.total}`;
+    cUpdateSortUI();
   } catch(e) { notify(e.message,'err'); }
 }
 
@@ -1268,6 +1898,194 @@ async function quickB(id,sign) {
   const cmt=document.getElementById('qCmt')?.value||'Ручная корректировка';
   if(!amt){notify('Введите количество','err');return;}
   try { await api('POST','/api/clients/'+id+'/bonus',{amount:sign*amt,description:cmt}); notify(sign>0?'+'+amt+' начислено':'-'+amt+' списано','ok'); closeModal('clientModal'); loadClients(); } catch(e){notify(e.message,'err');}
+}
+
+// ── SEGMENTS ──
+const ZONE_ORDER = ['waiting','post_visit','active','risk','sleeping','no_visit','blacklist'];
+const ZONE_LABELS = {
+  waiting:    'Зона ожидания — запись на будущее',
+  post_visit: 'Сразу после визита',
+  active:     'Горячие клиенты — активная база',
+  risk:       'Зона риска — начинают остывать',
+  sleeping:   'Спящие клиенты',
+  no_visit:   'Без визитов',
+  blacklist:  'Чёрный список',
+};
+const SEG_HINTS = {
+  blacklist:          'Клиенты, помеченные как нежелательные. Исключены из всех акций.',
+  waiting_champion:   '5+ визитов. Записался на будущий визит. Ваши лучшие клиенты — в ожидании.',
+  waiting_growing:    '3–4 визита. Есть предстоящая запись. Формирует постоянную привычку.',
+  waiting_newcomer:   '1–2 визита. Записался снова — хороший знак для удержания.',
+  post_visit:         'Был в салоне в последние 7 дней. Самый горячий момент для обратной связи.',
+  champion:           '5+ визитов. Пришёл в пределах окна возврата. Ядро клиентской базы.',
+  growing:            '3–4 визита. Активен в пределах окна возврата. Формирует привычку.',
+  newcomer:           '1–2 визита. Новый, но вернулся в срок. Важно удержать на этом этапе.',
+  champion_risk:      '5+ визитов, но прошло больше окна возврата. Риск потерять чемпиона.',
+  growing_risk:       '3–4 визита. Давно не был — есть риск уйти до того, как стал постоянным.',
+  newcomer_risk:      '1–2 визита. Попробовал, но затянул. Нужен стимул вернуться.',
+  sleeping_champion:  '5+ визитов, но прошло более 2.5× окна. Когда-то был лучшим — стоит реактивировать.',
+  sleeping_growing:   '3–4 визита. Давно не появлялся. Ещё помнит салон — можно вернуть.',
+  sleeping_newcomer:  '1–2 визита. Попробовал и пропал. Самая большая группа потерь.',
+  no_visit:           'Зарегистрирован, но ни разу не пришёл. Потенциальные клиенты.',
+};
+
+let _segData = null;
+let segDrawerKey = null, segDrawerPage = 1, segDrawerQ = '';
+let _segYcCompanyId = null;
+
+async function loadSegments() {
+  document.getElementById('segBody').innerHTML = '<div class="empty">Загрузка сегментов...</div>';
+  try {
+    const d = await api('GET', '/api/segments');
+    _segData = d;
+    _segYcCompanyId = d.totals?.yclients_company_id || null;
+    renderSegments(d);
+  } catch(e) {
+    document.getElementById('segBody').innerHTML = `<div class="empty" style="color:var(--danger)">Ошибка: ${esc(e.message)}</div>`;
+  }
+}
+
+function renderSegments(d) {
+  // Totals bar
+  document.getElementById('segTotalAll').textContent     = d.totals.all_clients.toLocaleString('ru');
+  document.getElementById('segTotalVisits').textContent  = d.totals.with_visits.toLocaleString('ru');
+  document.getElementById('segTotalRevenue').textContent = d.totals.total_revenue.toLocaleString('ru') + ' ₽';
+  document.getElementById('segReturnWindow').textContent = d.totals.return_window;
+  if (d.totals.last_updated) {
+    const dt = new Date(d.totals.last_updated);
+    document.getElementById('segMeta').textContent = 'Обновлено: ' + dt.toLocaleString('ru', {day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'});
+  }
+
+  // Group segments by zone
+  const byZone = {};
+  for (const s of d.segments) {
+    if (!byZone[s.zone]) byZone[s.zone] = [];
+    byZone[s.zone].push(s);
+  }
+
+  let html = '';
+  for (const zone of ZONE_ORDER) {
+    const segs = byZone[zone];
+    if (!segs) continue;
+    // Skip empty zones except active/risk/sleeping
+    const hasAny = segs.some(s => s.client_count > 0);
+    if (!hasAny && !['active','risk','sleeping'].includes(zone)) continue;
+
+    html += `<div class="seg-zone-label">${ZONE_LABELS[zone] || zone}</div>`;
+    html += '<div class="seg-grid">';
+    for (const s of segs) {
+      const empty = s.client_count === 0;
+      const hint = SEG_HINTS[s.key] || '';
+      html += `
+        <div class="seg-card ${empty ? 'seg-empty-card' : ''}"
+             style="--seg-color:${s.color};border-color:${empty?'var(--bd)':s.color+'44'}"
+             onclick="${empty ? '' : `segOpenDrawer('${s.key}')`}">
+          <div class="seg-card-bar" style="background:${s.color}"></div>
+          ${hint ? `<div class="seg-tooltip">${esc(hint)}</div>` : ''}
+          <div class="seg-card-top">
+            <span class="seg-card-emoji">${s.emoji}</span>
+            ${s.client_count > 0 ? `<span class="seg-card-pct">${s.pct}%</span>` : ''}
+          </div>
+          <div class="seg-card-label">${esc(s.label)}</div>
+          <div class="seg-card-count">${s.client_count.toLocaleString('ru')}</div>
+          ${s.client_count > 0 ? `
+          <div class="seg-card-stats">
+            ${s.avg_check > 0 ? `<div class="seg-card-stat">Ср. чек <b>${s.avg_check.toLocaleString('ru')} ₽</b></div>` : ''}
+            ${s.avg_visits > 0 ? `<div class="seg-card-stat">Визитов <b>${s.avg_visits}</b></div>` : ''}
+          </div>` : '<div style="font-size:11px;color:var(--t3)">нет клиентов</div>'}
+        </div>`;
+    }
+    html += '</div>';
+  }
+
+  document.getElementById('segBody').innerHTML = html || '<div class="empty">Нет данных</div>';
+}
+
+async function refreshSegments() {
+  document.getElementById('segMeta').textContent = 'Обновление...';
+  try {
+    await api('POST', '/api/segments/refresh');
+    await loadSegments();
+  } catch(e) { alert('Ошибка: ' + e.message); }
+}
+
+// ── Segment drawer ──
+function segOpenDrawer(key) {
+  segDrawerKey = key;
+  segDrawerPage = 1;
+  segDrawerQ = '';
+  document.getElementById('segDrawerSearchInp').value = '';
+  const seg = _segData?.segments?.find(s => s.key === key);
+  document.getElementById('segDrawerEmoji').textContent = seg?.emoji || '';
+  document.getElementById('segDrawerTitle').textContent = (seg?.label || key) + ' · ' + (seg?.client_count || 0).toLocaleString('ru');
+  document.getElementById('segDrawerOv').classList.add('open');
+  loadSegDrawer();
+}
+function segDrawerClose() {
+  document.getElementById('segDrawerOv').classList.remove('open');
+  segDrawerKey = null;
+}
+function segDrawerSearch(q) {
+  segDrawerQ = q;
+  segDrawerPage = 1;
+  loadSegDrawer();
+}
+async function loadSegDrawer() {
+  if (!segDrawerKey) return;
+  document.getElementById('segDrawerList').innerHTML = '<div class="empty">Загрузка...</div>';
+  try {
+    const d = await api('GET', `/api/segments/${segDrawerKey}/clients?page=${segDrawerPage}&limit=30&search=${encodeURIComponent(segDrawerQ)}`);
+    const el = document.getElementById('segDrawerList');
+    if (!d.clients.length) { el.innerHTML = '<div class="empty">Нет клиентов</div>'; return; }
+
+    el.innerHTML = d.clients.map(c => {
+      const initials = (c.name||'?').split(' ').map(w=>w[0]||'').join('').toUpperCase().slice(0,2);
+      const daysAgo = c.days_since_visit != null ? `${Math.round(c.days_since_visit)} дн. назад` : '—';
+      const ycUrl = (_segYcCompanyId && c.phone)
+        ? `https://yclients.com/clients/${_segYcCompanyId}/base/?fields%5B0%5D=name&fields%5B1%5D=phone&fields%5B2%5D=visits_count&fields%5B3%5D=sold_amount&fields%5B4%5D=last_visit_date&order_by=id&order_by_direction=desc&page=1&page_size=25&filters%5B0%5D%5Boperation%5D=OR&filters%5B0%5D%5Bfilters%5D%5B0%5D%5Boperation%5D=AND&filters%5B0%5D%5Bfilters%5D%5B0%5D%5Bfilters%5D%5B0%5D%5Boperation%5D=AND&filters%5B1%5D%5Btype%5D=quick_search&filters%5B1%5D%5Bstate%5D%5Bvalue%5D=${encodeURIComponent(c.phone)}`
+        : null;
+      return `
+        <div class="seg-client-row">
+          <div class="seg-client-avatar" style="background:var(--a);cursor:default">${esc(initials)}</div>
+          <div style="flex:1;min-width:0">
+            <div class="seg-client-name">${esc(c.name || '—')}</div>
+            <div class="seg-client-phone">${esc(c.phone || '')} · ${daysAgo}</div>
+          </div>
+          <div class="seg-client-info" style="display:flex;flex-direction:column;align-items:flex-end;gap:4px">
+            <div class="seg-client-spent">${Math.round(parseFloat(c.total_spent||0)).toLocaleString('ru')} ₽</div>
+            <div class="seg-client-visits">${c.visits_count} визит.</div>
+            ${ycUrl ? `<a href="${ycUrl}" target="_blank" rel="noopener"
+              onclick="event.stopPropagation()"
+              style="font-size:10px;color:var(--a);text-decoration:none;white-space:nowrap" title="Открыть в YClients">↗ YClients</a>` : ''}
+          </div>
+        </div>`;
+    }).join('');
+
+    // Pager
+    const total = d.total, pages = Math.ceil(total / 30);
+    const pg = document.getElementById('segDrawerPager');
+    if (pages > 1) {
+      pg.innerHTML = `
+        <span style="font-size:12px;color:var(--t3)">${d.page} / ${pages} стр. · ${total} клиентов</span><br>
+        ${d.page > 1 ? `<button class="btn btn-sec btn-sm" style="margin:4px" onclick="segDrawerGo(${d.page-1})">← Назад</button>` : ''}
+        ${d.page < pages ? `<button class="btn btn-sec btn-sm" style="margin:4px" onclick="segDrawerGo(${d.page+1})">Вперёд →</button>` : ''}`;
+    } else {
+      pg.innerHTML = `<span style="font-size:12px;color:var(--t3)">${total} клиентов</span>`;
+    }
+  } catch(e) {
+    document.getElementById('segDrawerList').innerHTML = `<div class="empty" style="color:var(--danger)">Ошибка: ${esc(e.message)}</div>`;
+  }
+}
+function segDrawerGo(p) { segDrawerPage = p; loadSegDrawer(); }
+
+function segExport() {
+  if (!segDrawerKey) return;
+  const search = segDrawerQ ? `&search=${encodeURIComponent(segDrawerQ)}` : '';
+  const tok = localStorage.getItem('lp_tk');
+  // Create a temporary link with auth token in query (server checks it)
+  const url = `/api/segments/${segDrawerKey}/export?token=${encodeURIComponent(tok)}${search}`;
+  const a = document.createElement('a');
+  a.href = url; a.download = ''; a.click();
 }
 
 // ── RECORDS ──
@@ -1493,26 +2311,6 @@ function updateBonusBanner() {
   if (banner) banner.style.display = on ? 'none' : 'flex';
 }
 
-// ── ANALYTICS ──
-function setAP(d,el) { anaP=d; document.querySelectorAll('#page-analytics .pb-btns .pb-btn').forEach(b=>b.classList.remove('active')); el.classList.add('active'); loadAnalytics(); }
-async function loadAnalytics() {
-  try {
-    const [dash,bon,ret]=await Promise.all([api('GET','/api/analytics/dashboard?period='+anaP),api('GET','/api/analytics/bonuses?period='+anaP),api('GET','/api/analytics/retention')]);
-    const s=dash.stats;
-    const periodBonuses  = parseFloat(s.periodBonuses || 0);
-    const periodRedeemed = parseFloat(s.periodRedeemed || 0);
-    document.getElementById('an1').textContent = s.periodRecords>0 ? Math.round(s.periodRevenue/s.periodRecords).toLocaleString('ru')+' ₽' : '—';
-    document.getElementById('an1s').textContent = s.periodRecords + ' записей за период';
-    document.getElementById('an2').textContent = periodBonuses.toLocaleString('ru') + ' ₽';
-    document.getElementById('an2s').textContent = 'за ' + anaP + ' дней';
-    document.getElementById('an5').textContent = periodRedeemed.toLocaleString('ru') + ' ₽';
-    document.getElementById('an5s').textContent = 'за ' + anaP + ' дней';
-    document.getElementById('an3').textContent = periodBonuses>0 ? Math.round(s.periodRevenue/periodBonuses)+'x' : '—';
-    document.getElementById('an4').textContent = s.newClients;
-    document.getElementById('an4s').textContent = 'за ' + anaP + ' дней';
-    buildBfChart(bon); buildRetChart(ret); buildGrwChart(dash.dailyRevenue); buildLvlChart(dash.levelDist);
-  } catch(e){notify('Ошибка аналитики: '+e.message,'err');}
-}
 function buildBfChart(data) {
   const days={};
   data.forEach(r=>{const d=r.day;if(!days[d])days[d]={a:0,r:0};days[d].a+=parseFloat(r.accrued||0);days[d].r+=parseFloat(r.redeemed||0);});
@@ -1521,24 +2319,107 @@ function buildBfChart(data) {
   if(bfCh)bfCh.destroy();
   bfCh=new Chart(ctx,{type:'bar',data:{labels:keys.map(d=>{const dt=new Date(d);return dt.getDate()+'.'+(dt.getMonth()+1)}),datasets:[{label:'Начислено',data:keys.map(k=>days[k].a),backgroundColor:'rgba(0,200,150,0.6)',borderRadius:3},{label:'Списано',data:keys.map(k=>days[k].r),backgroundColor:'rgba(232,84,84,0.5)',borderRadius:3}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{labels:{font:{size:11},boxWidth:10}}},scales:{x:{grid:{display:false},ticks:{maxTicksLimit:10,font:{size:10}}},y:{grid:{color:'rgba(0,0,0,0.04)'},ticks:{font:{size:10}}}}}});
 }
-function buildRetChart(data) {
-  const ctx=document.getElementById('retChart').getContext('2d');
-  if(retCh)retCh.destroy();
-  if(!data?.length)return;
-  const labels=data.map(d=>new Date(d.cohort_month).toLocaleDateString('ru',{month:'short',year:'2-digit'}));
-  retCh=new Chart(ctx,{type:'line',data:{labels,datasets:[{label:'Через 1 мес',data:data.map(d=>d.total>0?Math.round(d.m1/d.total*100):0),borderColor:'#00c896',tension:.3,borderWidth:2,fill:false},{label:'Через 3 мес',data:data.map(d=>d.total>0?Math.round(d.m3/d.total*100):0),borderColor:'#3b82f6',tension:.3,borderWidth:2,fill:false,borderDash:[4,3]}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{labels:{font:{size:11},boxWidth:10}}},scales:{y:{min:0,max:100,ticks:{callback:v=>v+'%',font:{size:10}}},x:{grid:{display:false},ticks:{font:{size:10}}}}}});
-}
-function buildGrwChart(data) {
-  const ctx=document.getElementById('grwChart').getContext('2d');
-  if(grwCh)grwCh.destroy();
-  grwCh=new Chart(ctx,{type:'bar',data:{labels:data.map(d=>{const dt=new Date(d.visit_date);return dt.getDate()+'.'+(dt.getMonth()+1)}),datasets:[{label:'Записей',data:data.map(d=>parseInt(d.records||0)),backgroundColor:'rgba(0,200,150,0.6)',borderRadius:3}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{x:{grid:{display:false},ticks:{maxTicksLimit:10,font:{size:10}}},y:{grid:{color:'rgba(0,0,0,0.04)'},ticks:{font:{size:10}}}}}});
-}
 function buildLvlChart(dist) {
   const ctx=document.getElementById('lvlChart').getContext('2d');
   if(lvlCh)lvlCh.destroy();
   const K=['platinum','gold','silver','bronze'],C=['#00c896','#f59e0b','#9e9e9e','#cd7f32'];
   const map={}; dist.forEach(d=>map[d.loyalty_level]=parseInt(d.cnt)||0);
   lvlCh=new Chart(ctx,{type:'doughnut',data:{labels:['💎 Платина','🥇 Золото','🥈 Серебро','🥉 Бронза'],datasets:[{data:K.map(k=>map[k]||0),backgroundColor:C,borderWidth:0}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{position:'right',labels:{font:{size:11},boxWidth:9}}}}});
+}
+
+// ── TEMPLATE SETTINGS ──
+function syncColor(key) {
+  const txt = document.getElementById(`tmpl-${key}-txt`);
+  const picker = document.getElementById(`tmpl-${key}`);
+  if (!txt || !picker) return;
+  const v = txt.value.trim();
+  if (/^#[0-9a-f]{6}$/i.test(v)) picker.value = v;
+}
+function setColorPair(key, value) {
+  const picker = document.getElementById(`tmpl-${key}`);
+  const txt = document.getElementById(`tmpl-${key}-txt`);
+  if (picker) picker.value = value || picker.value;
+  if (txt) txt.value = value || '';
+  // sync picker → txt on change
+  if (picker && !picker._synced) {
+    picker._synced = true;
+    picker.addEventListener('input', () => { if (txt) txt.value = picker.value; });
+  }
+}
+async function loadTemplateSettings() {
+  try {
+    const d = await api('GET', '/api/template-settings');
+    const s = (id, v) => { const e = document.getElementById(id); if (e && v) e.value = v; };
+    s('tmpl-line1',   d.template_logo_line1);
+    s('tmpl-line2',   d.template_logo_line2);
+    s('tmpl-subtitle',d.template_subtitle);
+    s('tmpl-phone',   d.template_contact_phone);
+    s('tmpl-web',     d.template_contact_web);
+    s('tmpl-social',  d.template_contact_social);
+    setColorPair('accent', d.template_accent_color || '#b8943e');
+    setColorPair('bg',     d.template_bg_color     || '#faf0e6');
+    setColorPair('text',   d.template_text_color   || '#2c2020');
+    if (d.template_logo_url) {
+      const el = document.getElementById('tmplLogoPreview');
+      if (el) el.innerHTML = `<img src="${d.template_logo_url}" style="max-height:76px;max-width:100%;object-fit:contain">`;
+    }
+    if (d.template_wm_url) {
+      const el = document.getElementById('tmplWmPreview');
+      if (el) el.innerHTML = `<img src="${d.template_wm_url}" style="max-height:76px;max-width:100%;object-fit:contain">`;
+    }
+    // wire color pickers
+    ['accent','bg','text'].forEach(k => setColorPair(k, null));
+  } catch(e) { /* silent */ }
+}
+async function saveTemplateSettings() {
+  try {
+    await api('PUT', '/api/template-settings', {
+      template_logo_line1:     document.getElementById('tmpl-line1')?.value || null,
+      template_logo_line2:     document.getElementById('tmpl-line2')?.value || null,
+      template_subtitle:       document.getElementById('tmpl-subtitle')?.value || null,
+      template_accent_color:   document.getElementById('tmpl-accent')?.value || null,
+      template_bg_color:       document.getElementById('tmpl-bg')?.value || null,
+      template_text_color:     document.getElementById('tmpl-text')?.value || null,
+      template_contact_phone:  document.getElementById('tmpl-phone')?.value || null,
+      template_contact_web:    document.getElementById('tmpl-web')?.value || null,
+      template_contact_social: document.getElementById('tmpl-social')?.value || null,
+    });
+    const st = document.getElementById('tmplSaveStatus');
+    if (st) { st.style.color = 'var(--a)'; st.textContent = '✓ Настройки сохранены'; setTimeout(() => st.textContent='', 3000); }
+  } catch(e) { notify(e.message, 'err'); }
+}
+async function uploadTemplateImage(type, input) {
+  if (!input.files[0]) return;
+  const fd = new FormData();
+  fd.append('file', input.files[0]);
+  const tok = localStorage.getItem('lp_tk');
+  const st = document.getElementById('tmplSaveStatus');
+  if (st) { st.style.color = 'var(--t3)'; st.textContent = 'Загрузка...'; }
+  try {
+    const r = await fetch(`/api/template-settings/upload/${type}`, {
+      method: 'POST', headers: { 'Authorization': `Bearer ${tok}` }, body: fd,
+    });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error || 'Ошибка');
+    const previewId = type === 'logo' ? 'tmplLogoPreview' : 'tmplWmPreview';
+    const el = document.getElementById(previewId);
+    if (el) el.innerHTML = `<img src="${d.url}?t=${Date.now()}" style="max-height:76px;max-width:100%;object-fit:contain">`;
+    if (st) { st.style.color = 'var(--a)'; st.textContent = '✓ Изображение загружено'; setTimeout(() => st.textContent='', 3000); }
+  } catch(e) { notify(e.message, 'err'); if (st) st.textContent = ''; }
+}
+async function previewTemplateSettings() {
+  try {
+    const list = await api('GET', '/api/home-care?limit=1');
+    const first = list.rows?.[0] || list[0];
+    if (!first) { notify('Нет назначений для предпросмотра. Создайте хотя бы одно.', 'err'); return; }
+    const tok = localStorage.getItem('lp_tk');
+    const r = await fetch(`/api/home-care/${first.id}/preview`, { headers: { 'Authorization': `Bearer ${tok}` } });
+    if (!r.ok) throw new Error('Ошибка предпросмотра');
+    const html = await r.text();
+    const blob = new Blob([html], { type: 'text/html' });
+    const url = URL.createObjectURL(blob);
+    window.open(url, '_blank');
+  } catch(e) { notify(e.message, 'err'); }
 }
 
 // ── SETTINGS ──
@@ -1575,7 +2456,9 @@ async function loadSettings() {
     if (cookieSt && salon.yclients_web_cookie) {
       cookieSt.innerHTML = '<span style="color:var(--a)">✓ Куки сохранены (' + String(salon.yclients_web_cookie).slice(0,30) + '...)</span>';
     }
+    loadLs();
     loadSyncLogs();
+    loadTemplateSettings();
   } catch(e){notify(e.message,'err');}
 }
 async function saveSalon() {
@@ -1961,6 +2844,849 @@ async function saExportPDF() {
 document.addEventListener('DOMContentLoaded',async()=>{
   if(TOKEN){try{await launchApp();}catch{showLogin();}}
 });
+
+// ═══════════════════════════════════════════════════════
+// HOME CARE MODULE
+// ═══════════════════════════════════════════════════════
+let hcPage = 1, hcSearchTimer = null, hcEditId = null;
+
+const HC_SECTIONS = {
+  morning:    { label: '🌅 Утро',    cats: ['Очищение','Демакияж','Тонизация','Сыворотка','Крем для лица','Крем для век','SPF'] },
+  evening:    { label: '🌙 Вечер',   cats: ['Очищение','Тонизация','Сыворотка','Крем для лица','Крем для век'] },
+  additional: { label: '✨ Дополнительный уход', cats: ['Маски','Пилинги'] },
+  sheet_face: { label: '👤 Лицо',    cats: ['Процедуры'] },
+  sheet_body: { label: '💪 Тело',    cats: ['Процедуры'] },
+  sheet_hair: { label: '💇 Волосы',  cats: ['Процедуры'] },
+  vitamins:   { label: '💊 Витамины', cats: ['Препарат'] },
+};
+
+let HC_TEMPLATE = null;
+async function loadHcTemplate() {
+  try { HC_TEMPLATE = await api('GET', '/api/template-settings'); } catch(_) {}
+}
+async function loadHomeCare() { hcPage = 1; await Promise.all([hcFetch(), loadHcTemplate()]); }
+
+async function hcFetch() {
+  const search = document.getElementById('hcSearch')?.value || '';
+  try {
+    const d = await api('GET', `/api/home-care?search=${encodeURIComponent(search)}&page=${hcPage}&limit=20`);
+    const tbody = document.getElementById('hcTbody');
+    if (!d.rows.length) {
+      tbody.innerHTML = '<tr><td colspan="6" class="empty">Назначений не найдено</td></tr>';
+    } else {
+      tbody.innerHTML = d.rows.map(r => `
+        <tr onclick="hcOpenEdit(${r.id})">
+          <td>${new Date(r.created_at).toLocaleDateString('ru')}</td>
+          <td><b>${esc(r.client_name||'—')}</b></td>
+          <td style="color:var(--t3)">${esc(r.client_phone||'—')}</td>
+          <td style="color:var(--t2)">${esc(r.specialist_name||'—')}</td>
+          <td style="color:var(--t3);max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(r.notes||'')}</td>
+          <td onclick="event.stopPropagation()" style="text-align:right;white-space:nowrap">
+            <button class="btn btn-sec btn-sm" onclick="hcPrintById(${r.id})" title="Открыть превью">👁</button>
+            <button class="btn btn-sec btn-sm" style="margin-left:4px" onclick="hcDownloadPdf(${r.id})" title="Скачать PDF">PDF</button>
+            <button class="btn btn-sec btn-sm" style="margin-left:4px" onclick="hcOpenEdit(${r.id})">Изм.</button>
+            <button class="btn btn-sec btn-sm btn-dng" style="margin-left:4px" onclick="hcDelete(${r.id})">Удалить</button>
+          </td>
+        </tr>`).join('');
+    }
+    const pager = document.getElementById('hcPager');
+    const pages = Math.ceil(d.total / 20);
+    pager.innerHTML = pages > 1
+      ? `<span>Страница ${hcPage} из ${pages}</span>
+         <button class="btn btn-sec btn-sm" ${hcPage<=1?'disabled':''} onclick="hcPage--;hcFetch()">←</button>
+         <button class="btn btn-sec btn-sm" ${hcPage>=pages?'disabled':''} onclick="hcPage++;hcFetch()">→</button>
+         <span style="margin-left:auto">Всего: ${d.total}</span>`
+      : `<span style="margin-left:auto">Всего: ${d.total}</span>`;
+  } catch(e) { notify('Ошибка: '+e.message,'err'); }
+}
+
+function hcSearchDebounce() {
+  clearTimeout(hcSearchTimer);
+  hcSearchTimer = setTimeout(() => { hcPage=1; hcFetch(); }, 350);
+}
+
+function hcSwitchTab(tab, el) {
+  document.querySelectorAll('.hc-tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.hc-tab-panel').forEach(p => p.classList.remove('active'));
+  el.classList.add('active');
+  document.getElementById('hcPanel-'+tab)?.classList.add('active');
+}
+
+function hcOpenNew() {
+  hcEditId = null;
+  hcFillFormHeader(null);
+  hcResetForm();
+  document.querySelectorAll('.hc-tab')[0]?.click();
+  document.getElementById('hcFormOv').classList.add('open');
+}
+
+function hcFillFormHeader(d) {
+  const T = HC_TEMPLATE || {};
+  const name = (d?.salon_name || ME?.salonName || '');
+  const parts = name.trim().split(/\s+/);
+
+  // Logo: image overrides text
+  const logoImg  = document.getElementById('hcFormLogoImg');
+  const logoText = document.getElementById('hcFormLogoText');
+  if (T.template_logo_url && logoImg && logoText) {
+    logoImg.src = T.template_logo_url;
+    logoImg.style.display = 'inline-block';
+    logoText.style.display = 'none';
+  } else {
+    if (logoImg)  logoImg.style.display = 'none';
+    if (logoText) logoText.style.display = '';
+    const line1 = T.template_logo_line1 || parts[0] || 'PERI';
+    const line2 = T.template_logo_line2 !== undefined ? T.template_logo_line2 : (parts.slice(1).join(' ') || 'CLINIC');
+    document.getElementById('hcFormLogoLeft').textContent  = line1;
+    document.getElementById('hcFormLogoRight').textContent = line2;
+  }
+
+  // Subtitle
+  const sub = document.getElementById('hcFormSub');
+  if (sub) sub.textContent = T.template_subtitle || d?.salon_name || 'Клиника Эстетической медицины';
+
+  // Apply template colors to the form box via CSS variables
+  const box = document.getElementById('hcFormBox');
+  if (box) {
+    const accent = T.template_accent_color || '#c9a96e';
+    const bg     = T.template_bg_color     || '#faf4ec';
+    box.style.setProperty('--hc-gold',  accent);
+    box.style.setProperty('--hc-cream', bg);
+    box.style.background = bg;
+    // divider and border-bottom color
+    const divider = document.getElementById('hcFormDivider');
+    if (divider) divider.style.background = accent;
+    const header = document.getElementById('hcFormHeader');
+    if (header) header.style.borderBottomColor = accent;
+  }
+}
+
+async function hcOpenEdit(id) {
+  try {
+    const d = await api('GET', `/api/home-care/${id}`);
+    hcEditId = id;
+    document.getElementById('hcFormTitle').textContent = 'Редактировать назначение';
+    hcResetForm();
+    hcFillFormHeader(d);
+    document.getElementById('hcClientSearch').value = d.client_name || '';
+    document.getElementById('hcClientId').value = d.client_id || '';
+    (d.items || []).forEach(it => {
+      const isService = it.time_of_day.startsWith('sheet_');
+      hcAddItem(it.time_of_day, it.category, it.product_name, it.instructions, isService);
+    });
+    document.getElementById('hcNotes').value = d.notes || '';
+    document.getElementById('hcFormOv').classList.add('open');
+  } catch(e) { notify('Ошибка загрузки: '+e.message,'err'); }
+}
+
+function hcCloseForm() {
+  document.getElementById('hcFormOv').classList.remove('open');
+  const d = document.getElementById('hcClientDrop');
+  if (d) d.style.display = 'none';
+}
+
+function hcResetForm() {
+  document.getElementById('hcClientSearch').value = '';
+  document.getElementById('hcClientId').value = '';
+  document.getElementById('hcNotes').value = '';
+  document.querySelectorAll('#hcFormBox .hc-items').forEach(c => c.innerHTML = '');
+}
+
+function hcAddItem(timeOfDay, category, product='', instructions='', isService=false) {
+  const catId = `hcCat-${timeOfDay}-${category}`;
+  const catEl = document.getElementById(catId);
+  if (!catEl) return;
+  const container = catEl.querySelector('.hc-items');
+  const uid = 'hcac_' + Date.now() + '_' + Math.random().toString(36).slice(2);
+  const row = document.createElement('div');
+  row.className = 'hc-item';
+  row.innerHTML = `
+    <div class="hc-ac-wrap">
+      <div style="display:flex;gap:4px">
+        <input type="text" class="hc-ac-inp" placeholder="${isService ? 'Услуга / процедура...' : 'Название продукта...'}" value="${esc(product)}"
+               autocomplete="off" data-field="product" data-uid="${uid}" data-service="${isService?'1':'0'}"
+               oninput="hcAcSearch(this)" onfocus="hcAcSearch(this)" style="flex:1">
+        <button type="button" class="hc-pick-btn" onclick="hcOpenPicker('${uid}',${isService})" title="Выбрать из каталога">☰</button>
+      </div>
+      <div class="hc-ac-drop" id="drop_${uid}"></div>
+    </div>
+    <input type="text" placeholder="Как применять, частота..." value="${esc(instructions)}" data-field="instructions">
+    <button class="hc-item-del" onclick="this.closest('.hc-item').remove()" title="Удалить">✕</button>`;
+  container.appendChild(row);
+  row.querySelector('[data-field="product"]').focus();
+}
+
+async function hcAcSearch(inp) {
+  const uid = inp.dataset.uid;
+  const isService = inp.dataset.service === '1';
+  const q = inp.value.trim();
+  const drop = document.getElementById('drop_'+uid);
+  if (!drop) return;
+  try {
+    const endpoint = isService
+      ? `/api/home-care/services?search=${encodeURIComponent(q)}&limit=10`
+      : `/api/home-care/products?search=${encodeURIComponent(q)}&limit=10`;
+    const rows = await fetch(endpoint, {headers:{'Authorization':'Bearer '+TOKEN}}).then(r=>r.json());
+    if (!Array.isArray(rows) || !rows.length) { drop.style.display='none'; return; }
+    const rect = inp.getBoundingClientRect();
+    drop.style.top    = (rect.bottom + 2) + 'px';
+    drop.style.left   = rect.left + 'px';
+    drop.style.width  = rect.width + 'px';
+    drop.innerHTML = rows.map(r =>
+      `<div class="hc-ac-opt" onmousedown="hcAcSelect(event,'${uid}','${escAttr(r.title)}')">${esc(r.title)}</div>`
+    ).join('');
+    drop.style.display = 'block';
+  } catch { drop.style.display = 'none'; }
+}
+
+function hcAcSelect(e, uid, title) {
+  e.preventDefault();
+  const inp = document.querySelector(`[data-uid="${uid}"]`);
+  if (inp) inp.value = title;
+  const drop = document.getElementById('drop_'+uid);
+  if (drop) drop.style.display = 'none';
+}
+
+function escAttr(s) { return (s||'').replace(/'/g,"&#39;").replace(/"/g,'&quot;'); }
+
+// ── CATALOG PICKER ──
+let hcPickerUid = null, hcPickerIsService = false, hcPickerData = [];
+
+async function hcOpenPicker(uid, isService) {
+  hcPickerUid = uid;
+  hcPickerIsService = isService;
+  document.getElementById('hcPickerTitle').textContent = isService ? 'Выберите услугу' : 'Выберите продукт';
+  document.getElementById('hcPickerSearch').value = '';
+  document.getElementById('hcPickerSyncBtn').style.display = isService ? 'none' : '';
+  const body = document.getElementById('hcPickerBody');
+  body.innerHTML = '<div style="padding:20px;text-align:center;color:var(--t3)">Загрузка...</div>';
+  document.getElementById('hcPickerOv').classList.add('open');
+  try {
+    const ep = isService ? '/api/home-care/service-tree' : '/api/home-care/product-tree';
+    hcPickerData = await api('GET', ep);
+    hcPickerRender(hcPickerData);
+  } catch(e) {
+    body.innerHTML = `<div style="padding:20px;color:var(--danger)">Ошибка: ${esc(e.message)}</div>`;
+  }
+}
+
+async function hcSyncGoodsCategories() {
+  const btn = document.getElementById('hcPickerSyncBtn');
+  btn.disabled = true;
+  btn.textContent = '↻ Синхронизация...';
+  try {
+    const r = await api('POST', '/api/home-care/sync-goods-categories');
+    btn.textContent = `✓ ${r.updated} обновлено`;
+    // Reload product tree
+    hcPickerData = await api('GET', '/api/home-care/product-tree');
+    hcPickerRender(hcPickerData);
+  } catch(e) {
+    btn.textContent = 'Ошибка';
+    alert('Ошибка синхронизации: ' + e.message);
+  } finally {
+    setTimeout(() => { btn.disabled = false; btn.textContent = '↻ Категории'; }, 3000);
+  }
+}
+
+function hcPickerClose() {
+  document.getElementById('hcPickerOv').classList.remove('open');
+  hcPickerUid = null;
+}
+
+function hcPickerSearchFn(q) {
+  if (!q) { hcPickerRender(hcPickerData); return; }
+  const lq = q.toLowerCase();
+  const filtered = hcPickerData
+    .map(g => ({ cat: g.cat, items: g.items.filter(t => t.toLowerCase().includes(lq)), open: true }))
+    .filter(g => g.items.length > 0);
+  hcPickerRender(filtered);
+}
+
+function hcPickerRender(groups) {
+  const body = document.getElementById('hcPickerBody');
+  if (!groups || !groups.length) {
+    body.innerHTML = '<div style="padding:20px;text-align:center;color:var(--t3)">Ничего не найдено</div>';
+    return;
+  }
+  body.innerHTML = groups.map((g, gi) => `
+    <div>
+      <div class="hc-picker-cat-hdr" onclick="hcPickerToggle(${gi})">
+        <span style="font-size:12px;font-weight:700;color:var(--t2);letter-spacing:.4px">${esc(g.cat)}</span>
+        <span id="hcPickChev-${gi}" style="font-size:11px;color:var(--t3)">${g.open===true?'▼':'▶'}</span>
+      </div>
+      <div id="hcPickGrp-${gi}" style="display:${g.open===true?'':'none'}">
+        ${g.items.map(t => `<div class="hc-picker-item" onmousedown="hcPickerSelect('${escAttr(t)}')">${esc(t)}</div>`).join('')}
+      </div>
+    </div>`).join('');
+}
+
+function hcPickerToggle(gi) {
+  const grp = document.getElementById('hcPickGrp-'+gi);
+  const chev = document.getElementById('hcPickChev-'+gi);
+  if (!grp) return;
+  const collapsed = grp.style.display === 'none';
+  grp.style.display = collapsed ? '' : 'none';
+  chev.textContent = collapsed ? '▼' : '▶';
+}
+
+function hcPickerSelect(title) {
+  if (hcPickerUid) {
+    const inp = document.querySelector(`[data-uid="${hcPickerUid}"]`);
+    if (inp) inp.value = title;
+  }
+  hcPickerClose();
+}
+
+document.addEventListener('click', e => {
+  if (!e.target.closest('.hc-ac-wrap')) {
+    document.querySelectorAll('.hc-ac-drop').forEach(d => d.style.display='none');
+  }
+  if (!e.target.closest('.hc-client-wrap')) {
+    const d = document.getElementById('hcClientDrop');
+    if (d) d.style.display = 'none';
+  }
+});
+
+function hcToggleSection(hd) {
+  const body = hd.nextElementSibling;
+  const chevron = hd.querySelector('.hc-chevron');
+  const collapsed = body.style.display === 'none';
+  body.style.display = collapsed ? '' : 'none';
+  chevron.style.transform = collapsed ? '' : 'rotate(-90deg)';
+}
+
+async function hcSearchClient(q) {
+  const drop = document.getElementById('hcClientDrop');
+  if (!q || q.length < 2) { drop.style.display='none'; return; }
+  try {
+    const d = await api('GET', `/api/clients?search=${encodeURIComponent(q)}&limit=6`);
+    if (!d.clients?.length) { drop.style.display='none'; return; }
+    drop.innerHTML = d.clients.map(c =>
+      `<div class="hc-client-opt" onclick="hcSelectClient(${c.id},'${escAttr(c.name)}')">
+        <b>${esc(c.name)}</b> <span style="color:var(--t3);font-size:12px">${esc(c.phone||'')}</span>
+      </div>`).join('');
+    drop.style.display = 'block';
+  } catch { drop.style.display='none'; }
+}
+
+function hcSelectClient(id, name) {
+  document.getElementById('hcClientId').value = id;
+  document.getElementById('hcClientSearch').value = name;
+  document.getElementById('hcClientDrop').style.display = 'none';
+}
+
+function hcCollectItems() {
+  const items = [];
+  document.querySelectorAll('#hcFormBox .hc-cat').forEach(catEl => {
+    const raw = catEl.id.replace('hcCat-','');
+    const dashIdx = raw.indexOf('-');
+    const timeOfDay = raw.slice(0, dashIdx);
+    const category  = raw.slice(dashIdx + 1);
+    catEl.querySelectorAll('.hc-item').forEach(row => {
+      const product = row.querySelector('[data-field="product"]').value.trim();
+      if (!product) return;
+      items.push({ time_of_day: timeOfDay, category, product_name: product,
+                   instructions: row.querySelector('[data-field="instructions"]').value.trim() });
+    });
+  });
+  return items;
+}
+
+async function hcSave() {
+  const clientId = document.getElementById('hcClientId').value;
+  const body = {
+    client_id: clientId ? parseInt(clientId) : null,
+    notes:     document.getElementById('hcNotes').value.trim() || null,
+    items:     hcCollectItems(),
+  };
+  try {
+    if (hcEditId) {
+      await api('PUT', `/api/home-care/${hcEditId}`, body);
+    } else {
+      const r = await api('POST', '/api/home-care', body);
+      hcEditId = r.id;
+    }
+    notify(hcEditId ? 'Назначение сохранено' : 'Назначение создано', 'ok');
+    hcFetch();
+  } catch(e) { notify('Ошибка сохранения: '+e.message, 'err'); }
+}
+
+async function hcDelete(id) {
+  if (!confirm('Удалить назначение?')) return;
+  try {
+    await api('DELETE', `/api/home-care/${id}`);
+    notify('Удалено', 'ok');
+    hcFetch();
+  } catch(e) { notify('Ошибка: '+e.message, 'err'); }
+}
+
+async function hcPrint() {
+  let id = hcEditId;
+  if (!id) {
+    try {
+      const r = await api('POST', '/api/home-care', {
+        client_id: document.getElementById('hcClientId').value ? parseInt(document.getElementById('hcClientId').value) : null,
+        notes: document.getElementById('hcNotes').value.trim() || null,
+        items: hcCollectItems(),
+      });
+      id = r.id; hcEditId = id;
+      hcFetch();
+    } catch(e) { notify('Ошибка сохранения: '+e.message,'err'); return; }
+  } else {
+    try { await hcSave(); } catch(e) { notify('Ошибка сохранения: '+e.message,'err'); return; }
+  }
+  await hcPrintById(id);
+}
+
+async function hcPrintById(id) {
+  // Открываем серверный HTML-превью в новой вкладке
+  const w = window.open(`/api/home-care/${id}/preview`, '_blank');
+  if (!w) {
+    // Если popup заблокирован — добавляем токен в URL через fetch + blob
+    try {
+      const resp = await fetch(`/api/home-care/${id}/preview`, {
+        headers: { 'Authorization': 'Bearer ' + TOKEN }
+      });
+      const html = await resp.text();
+      const blob = new Blob([html], { type:'text/html' });
+      const url  = URL.createObjectURL(blob);
+      window.open(url, '_blank');
+    } catch(e) { notify('Ошибка превью: '+e.message,'err'); }
+    return;
+  }
+  // Новая вкладка открыта, но нужен auth-заголовок — делаем через fetch
+  w.close();
+  try {
+    const resp = await fetch(`/api/home-care/${id}/preview`, {
+      headers: { 'Authorization': 'Bearer ' + TOKEN }
+    });
+    const html = await resp.text();
+    const blob = new Blob([html], { type:'text/html; charset=utf-8' });
+    const url  = URL.createObjectURL(blob);
+    window.open(url, '_blank');
+  } catch(e) { notify('Ошибка превью: '+e.message,'err'); }
+}
+
+async function hcDownloadPdf(id) {
+  // Скачиваем PDF сгенерированный сервером через puppeteer
+  try {
+    notify('Генерируем PDF…', 'ok');
+    const resp = await fetch(`/api/home-care/${id}/pdf`, {
+      headers: { 'Authorization': 'Bearer ' + TOKEN }
+    });
+    if (!resp.ok) {
+      const err = await resp.json().catch(()=>({error:'Ошибка сервера'}));
+      throw new Error(err.error || 'HTTP ' + resp.status);
+    }
+    const blob = await resp.blob();
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement('a');
+    a.href     = url;
+    a.download = `Домашний уход.pdf`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  } catch(e) { notify('Ошибка PDF: '+e.message,'err'); }
+}
+
+function hcOpenPrintWindow(d) {
+  const grouped = {};
+  (d.items||[]).forEach(it => {
+    const k = it.time_of_day;
+    if (!grouped[k]) grouped[k] = {};
+    if (!grouped[k][it.category]) grouped[k][it.category] = [];
+    grouped[k][it.category].push(it);
+  });
+
+  // Одна категория — строки с продуктами и инструкцией
+  const catBlock = (catName, items) => {
+    const rows = (items||[]).map(it => `
+      <div class="item-row">
+        <div class="item-name">${esc(it.product_name)}</div>
+        ${it.instructions ? `<div class="item-instr">${esc(it.instructions)}</div>` : ''}
+      </div>`).join('') || '<div class="empty-slot"></div>';
+    return `<div class="cat-block">
+      <div class="cat-name"><span class="check">✓</span>${esc(catName)}</div>
+      ${rows}
+    </div>`;
+  };
+
+  // Секция из одного time_of_day, показывает все категории подряд
+  const colSection = (timeOfDay, cats) => {
+    return cats.map(cat => {
+      const items = (grouped[timeOfDay]||{})[cat] || [];
+      return catBlock(cat, items);
+    }).join('');
+  };
+
+  // Блок витаминов/добавок — просто список
+  const vitBlock = () => {
+    const items = Object.values(grouped['vitamins']||{}).flat();
+    if (!items.length) return '';
+    return `<div class="vit-section">
+      <div class="section-title">Витамины и добавки</div>
+      ${items.map(it=>`<div class="item-row"><div class="item-name">${esc(it.product_name)}</div>${it.instructions?`<div class="item-instr">${esc(it.instructions)}</div>`:''}</div>`).join('')}
+    </div>`;
+  };
+
+  // Лист назначения
+  const sheetBlock = () => {
+    const areas = [
+      { key:'sheet_face', label:'Лицо' },
+      { key:'sheet_body', label:'Тело' },
+      { key:'sheet_hair', label:'Волосы' },
+    ];
+    const filled = areas.filter(a => Object.keys(grouped[a.key]||{}).length > 0);
+    if (!filled.length) return '';
+    return `<div class="sheet-section">
+      <div class="section-title">Лист назначения</div>
+      <div class="sheet-grid">
+        ${filled.map(a => {
+          const items = Object.values(grouped[a.key]).flat();
+          return `<div class="sheet-col">
+            <div class="sheet-col-title">${esc(a.label)}</div>
+            ${items.map(it=>`<div class="item-row"><div class="item-name">${esc(it.product_name)}</div>${it.instructions?`<div class="item-instr">${esc(it.instructions)}</div>`:''}</div>`).join('')}
+          </div>`;
+        }).join('')}
+      </div>
+    </div>`;
+  };
+
+  // Доп. уход
+  const addBlock = () => {
+    const cats = ['Маски','Пилинги'];
+    const hasSome = cats.some(c => (grouped['additional']||{})[c]?.length);
+    if (!hasSome) return '';
+    return `<div class="add-section">
+      <div class="add-title">Дополнительный уход</div>
+      <div class="add-grid">
+        ${cats.map(cat => {
+          const items = (grouped['additional']||{})[cat]||[];
+          return `<div>
+            <div class="add-col-title">${esc(cat)}</div>
+            ${items.map(it=>`<div class="item-row"><div class="item-name">${esc(it.product_name)}</div>${it.instructions?`<div class="item-instr">${esc(it.instructions)}</div>`:''}</div>`).join('') || '<div class="empty-slot"></div>'}
+          </div>`;
+        }).join('')}
+      </div>
+    </div>`;
+  };
+
+  const salonName  = esc(d.salon_name  || 'PERI CLINIC');
+  const clientName = esc(d.client_name || '—');
+  const specialist = esc(d.specialist_name || '—');
+  const date = new Date(d.created_at).toLocaleDateString('ru',{day:'2-digit',month:'long',year:'numeric'});
+
+  const morningCats = ['Очищение','Демакияж','Тонизация','Сыворотка','Крем для лица','Крем для век','SPF'];
+  const eveningCats = ['Демакияж','Очищение','Тонизация','Сыворотка','Крем для лица','Крем для век'];
+
+  const hasMorning = morningCats.some(c => (grouped['morning']||{})[c]?.length);
+  const hasEvening = eveningCats.some(c => (grouped['evening']||{})[c]?.length);
+
+  // Водяной знак — лотос SVG
+  const lotusSvg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" style="width:100%;height:100%;opacity:1">
+    <g fill="#c9a96e" fill-opacity="0.18">
+      <ellipse cx="100" cy="120" rx="15" ry="50" transform="rotate(-30 100 100)"/>
+      <ellipse cx="100" cy="120" rx="15" ry="50" transform="rotate(0 100 100)"/>
+      <ellipse cx="100" cy="120" rx="15" ry="50" transform="rotate(30 100 100)"/>
+      <ellipse cx="100" cy="120" rx="15" ry="50" transform="rotate(60 100 100)"/>
+      <ellipse cx="100" cy="120" rx="15" ry="50" transform="rotate(-60 100 100)"/>
+      <ellipse cx="100" cy="120" rx="15" ry="50" transform="rotate(90 100 100)"/>
+      <ellipse cx="100" cy="120" rx="15" ry="50" transform="rotate(-90 100 100)"/>
+      <ellipse cx="100" cy="120" rx="15" ry="50" transform="rotate(120 100 100)"/>
+      <ellipse cx="100" cy="120" rx="15" ry="50" transform="rotate(-120 100 100)"/>
+      <ellipse cx="100" cy="120" rx="15" ry="50" transform="rotate(150 100 100)"/>
+      <ellipse cx="100" cy="120" rx="15" ry="50" transform="rotate(-150 100 100)"/>
+      <ellipse cx="100" cy="120" rx="15" ry="50" transform="rotate(180 100 100)"/>
+      <circle cx="100" cy="100" r="12"/>
+    </g>
+  </svg>`;
+
+  const html = `<!DOCTYPE html><html lang="ru"><head>
+<meta charset="UTF-8">
+<title>Домашний уход — ${clientName}</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,600;0,700;1,400&family=Lora:ital,wght@0,400;0,500;1,400&display=swap" rel="stylesheet">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+@page{size:A4;margin:10mm 12mm}
+body{font-family:'Lora',Georgia,serif;background:#faf4ec;color:#2c2416;font-size:9.5pt;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+.page{background:#faf4ec;min-height:100vh;padding:22px 26px;position:relative;overflow:hidden}
+.watermark{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);width:420px;height:420px;pointer-events:none;z-index:0}
+.content{position:relative;z-index:1}
+/* Header */
+.header{text-align:center;margin-bottom:14px;padding-bottom:12px;border-bottom:1.5px solid #c9a96e}
+.logo-row{display:flex;align-items:center;justify-content:center;gap:10px;margin-bottom:3px}
+.logo-word{font-family:'Playfair Display',serif;font-size:15pt;font-weight:700;color:#2c2416;letter-spacing:5px;text-transform:uppercase}
+.logo-leaf{color:#c9a96e;font-size:18pt;line-height:1}
+.clinic-sub{font-size:8pt;color:#9a8a6a;letter-spacing:2px;margin-bottom:10px;text-transform:uppercase}
+.doc-title{font-family:'Playfair Display',serif;font-size:20pt;font-weight:400;color:#2c2416;font-style:italic;margin-bottom:6px}
+.gold-bar{width:50px;height:2px;background:#c9a96e;margin:0 auto 10px}
+.client-line{font-size:10.5pt;color:#5a4a32;margin-bottom:4px}
+.client-line b{font-style:italic}
+/* Two columns: Утро / Вечер */
+.two-col{display:grid;grid-template-columns:1fr 1fr;gap:28px;margin-bottom:16px}
+.col-title{font-family:'Playfair Display',serif;font-size:14pt;font-weight:600;color:#2c2416;border-bottom:1.5px solid #c9a96e;padding-bottom:4px;margin-bottom:12px}
+/* Categories */
+.cat-block{margin-bottom:12px}
+.cat-name{font-size:9pt;font-weight:700;color:#c9a96e;text-transform:uppercase;letter-spacing:.5px;margin-bottom:3px;display:flex;align-items:baseline;gap:5px}
+.check{color:#c9a96e;font-weight:700;font-size:9.5pt}
+.item-row{padding-left:14px;margin-bottom:2px}
+.item-name{font-size:9pt;color:#2c2416;line-height:1.5;font-weight:500}
+.item-instr{font-size:8pt;color:#7a6a55;font-style:italic;line-height:1.4}
+.empty-slot{border-bottom:1px dashed rgba(201,169,110,.5);height:1px;margin:8px 0 10px 14px}
+/* Дополнительный уход */
+.add-section{padding-top:10px;border-top:1px solid #e8dcc8;margin-bottom:14px}
+.add-title{font-family:'Playfair Display',serif;font-size:11pt;font-weight:600;color:#2c2416;margin-bottom:8px}
+.add-grid{display:grid;grid-template-columns:1fr 1fr;gap:28px}
+.add-col-title{font-size:9pt;font-weight:700;color:#c9a96e;text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px}
+/* Лист назначения */
+.sheet-section{padding-top:12px;border-top:1.5px solid #c9a96e;margin-top:14px;margin-bottom:14px}
+.section-title{font-family:'Playfair Display',serif;font-size:13pt;font-weight:600;color:#2c2416;margin-bottom:10px}
+.sheet-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:20px}
+.sheet-col-title{font-size:9pt;font-weight:700;color:#c9a96e;text-transform:uppercase;letter-spacing:.5px;border-bottom:1px solid #e8dcc8;padding-bottom:3px;margin-bottom:6px}
+/* Витамины */
+.vit-section{padding-top:12px;border-top:1px solid #e8dcc8;margin-top:10px;margin-bottom:14px}
+/* Notes */
+.notes-block{padding:8px 12px;background:rgba(201,169,110,.08);border-left:3px solid #c9a96e;border-radius:3px;font-size:8.5pt;color:#5a4a32;margin-top:10px;font-style:italic}
+/* Footer */
+.footer{margin-top:20px;padding-top:10px;border-top:1px solid #e8dcc8;display:flex;justify-content:space-between;align-items:flex-end;font-size:8pt;color:#a0907a}
+.footer-sign{font-size:8.5pt;color:#5a4a32}
+.footer-sign-line{border-bottom:1px solid #5a4a32;width:160px;display:inline-block;margin-left:6px;vertical-align:middle}
+/* No-print controls */
+.no-print{position:fixed;bottom:20px;right:20px;display:flex;gap:8px;z-index:999}
+@media print{.no-print{display:none!important}body{background:#faf4ec}}
+</style>
+</head><body>
+<div class="page">
+  <div class="watermark">${lotusSvg}</div>
+  <div class="content">
+
+    <!-- HEADER -->
+    <div class="header">
+      <div class="logo-row">
+        <span class="logo-word">${salonName.includes(' ') ? salonName.split(' ')[0] : salonName}</span>
+        <span class="logo-leaf">✿</span>
+        <span class="logo-word">${salonName.includes(' ') ? salonName.split(' ').slice(1).join(' ') : 'CLINIC'}</span>
+      </div>
+      <div class="clinic-sub">Клиника Эстетической медицины</div>
+      <div class="doc-title">Домашний уход</div>
+      <div class="gold-bar"></div>
+      <div class="client-line">Имя: <b>${clientName}</b></div>
+    </div>
+
+    <!-- УТРО + ВЕЧЕР -->
+    ${(hasMorning || hasEvening) ? `<div class="two-col">
+      <div>
+        <div class="col-title">Утро</div>
+        ${colSection('morning', morningCats)}
+      </div>
+      <div>
+        <div class="col-title">Вечер</div>
+        ${colSection('evening', eveningCats)}
+      </div>
+    </div>` : ''}
+
+    <!-- ДОПОЛНИТЕЛЬНЫЙ УХОД -->
+    ${addBlock()}
+
+    <!-- ЛИСТ НАЗНАЧЕНИЯ -->
+    ${sheetBlock()}
+
+    <!-- ВИТАМИНЫ -->
+    ${vitBlock()}
+
+    <!-- NOTES -->
+    ${d.notes ? `<div class="notes-block">${esc(d.notes)}</div>` : ''}
+
+    <!-- FOOTER -->
+    <div class="footer">
+      <div>${salonName}</div>
+      <div class="footer-sign">Подпись специалиста:<span class="footer-sign-line"></span></div>
+    </div>
+  </div>
+</div>
+<div class="no-print">
+  <button onclick="window.print()" style="background:#c9a96e;color:#fff;border:none;padding:10px 22px;border-radius:8px;font-size:13px;cursor:pointer;font-weight:600;font-family:Georgia,serif">Печать / PDF</button>
+  <button onclick="window.close()" style="background:#f5ece0;color:#5a4a32;border:1px solid #e8dcc8;padding:10px 16px;border-radius:8px;font-size:13px;cursor:pointer">Закрыть</button>
+</div>
+</body></html>`;
+
+  const w = window.open('','_blank','width=900,height=750');
+  if (w) { w.document.write(html); w.document.close(); }
+  else notify('Разрешите всплывающие окна в браузере', 'err');
+}
+
+function esc(s){ const d=document.createElement('div');d.textContent=s||'';return d.innerHTML; }
+
+// ── ROLE-BASED NAV ────────────────────────────────────────────
+function applyRoleNav(role) {
+  const navItems = document.querySelectorAll('#mainNav .tn');
+  let firstVisible = null;
+  navItems.forEach(item => {
+    const roles = (item.dataset.roles || '').split(',').map(r => r.trim());
+    if (roles.includes(role)) {
+      item.style.display = '';
+      if (!firstVisible) firstVisible = item;
+    } else {
+      item.style.display = 'none';
+    }
+  });
+  // Remove active from hidden items, activate first visible
+  navItems.forEach(n => n.classList.remove('active'));
+  if (firstVisible) firstVisible.classList.add('active');
+  return firstVisible?.dataset?.p || 'home-care';
+}
+
+// ── CHANGE PASSWORD ───────────────────────────────────────────
+async function doChangePw() {
+  const np = document.getElementById('cpNew').value;
+  const np2 = document.getElementById('cpNew2').value;
+  const err = document.getElementById('cpErr');
+  const btn = document.getElementById('cpBtn');
+  err.style.display = 'none';
+  if (np !== np2) { err.textContent = 'Пароли не совпадают'; err.style.display = 'block'; return; }
+  if (np.length < 6) { err.textContent = 'Пароль минимум 6 символов'; err.style.display = 'block'; return; }
+  btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>';
+  try {
+    await api('POST', '/api/auth/change-password', { new_password: np });
+    document.getElementById('changePwScreen').style.display = 'none';
+    document.getElementById('app').style.display = 'flex';
+    applyRoleNav(ME.role);
+    loadDashboard(); loadLs();
+  } catch(e) {
+    err.textContent = e.message; err.style.display = 'block';
+  } finally { btn.disabled = false; btn.textContent = 'Сохранить пароль и войти'; }
+}
+
+// ── USERS PAGE ────────────────────────────────────────────────
+let _usersData = [];
+
+async function loadUsers() {
+  try {
+    const d = await api('GET', '/api/users');
+    _usersData = d.users;
+    document.getElementById('usersQuota').textContent =
+      `Активных: ${d.active_count} из ${d.max_users} (тариф ${d.plan})`;
+    renderUsers(d.users);
+  } catch(e) { notify('Ошибка загрузки: '+e.message, 'err'); }
+}
+
+const ROLE_LABEL = { owner: 'Владелец', admin: 'Администратор', specialist: 'Специалист' };
+const ROLE_COLOR = { owner: '#6d28d9', admin: '#1d4ed8', specialist: '#065f46' };
+const ROLE_BG    = { owner: '#ede9fe', admin: '#dbeafe', specialist: '#d1fae5' };
+
+function renderUsers(users) {
+  const tbody = document.getElementById('usersTbody');
+  if (!users.length) { tbody.innerHTML = '<tr><td colspan="6" class="empty">Нет пользователей</td></tr>'; return; }
+  tbody.innerHTML = users.map(u => `
+    <tr style="${u.is_active ? '' : 'opacity:.5'}">
+      <td><b>${esc(u.name)}</b>${u.must_change_password ? ' <span style="font-size:11px;color:#92400e;background:#fffbeb;padding:1px 6px;border-radius:4px;border:1px solid #fde68a">Не активирован</span>' : ''}</td>
+      <td style="color:var(--t3)">${esc(u.email)}</td>
+      <td><span style="font-size:11.5px;font-weight:600;color:${ROLE_COLOR[u.role]||'#333'};background:${ROLE_BG[u.role]||'#f3f4f6'};padding:2px 8px;border-radius:4px">${ROLE_LABEL[u.role]||u.role}</span></td>
+      <td>${u.is_active ? '<span style="color:#059669">Активен</span>' : '<span style="color:var(--t3)">Отключён</span>'}</td>
+      <td style="color:var(--t3);font-size:12px">${u.last_login_at ? new Date(u.last_login_at).toLocaleDateString('ru') : '—'}</td>
+      <td style="text-align:right">
+        <button class="btn btn-sec btn-sm" onclick="usersOpenEdit(${u.id})">Изменить</button>
+        ${u.is_active && u.role!=='owner' ? `<button class="btn btn-sm" style="color:var(--danger);border:1px solid var(--bd);margin-left:4px" onclick="usersDeactivate(${u.id},'${esc(u.name)}')">Отключить</button>` : ''}
+      </td>
+    </tr>
+  `).join('');
+}
+
+function usersOpenCreate() {
+  const u = { id: null, name: '', email: '', role: 'admin', is_active: true };
+  usersShowModal(u, true);
+}
+
+function usersOpenEdit(id) {
+  const u = _usersData.find(x => x.id === id);
+  if (u) usersShowModal(u, false);
+}
+
+function usersShowModal(u, isNew) {
+  const isOwner = ME.role === 'owner';
+  const title = isNew ? 'Новый пользователь' : 'Редактировать пользователя';
+  const html = `
+    <div class="seg-drawer-ov open" id="usersMod" onclick="if(event.target===this)usersCloseModal()">
+      <div class="seg-drawer" style="width:420px;padding:24px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px">
+          <b style="font-size:15px">${title}</b>
+          <button class="btn btn-sec btn-sm" onclick="usersCloseModal()">✕</button>
+        </div>
+        <div class="err" id="usersModErr"></div>
+        <div class="fg"><label class="fl">Имя</label><input type="text" id="umName" value="${esc(u.name)}" placeholder="Иван Иванов"></div>
+        <div class="fg"><label class="fl">Email</label><input type="email" id="umEmail" value="${esc(u.email)}" placeholder="user@salon.ru" ${isNew ? '' : 'disabled'}></div>
+        <div class="fg">
+          <label class="fl">Роль</label>
+          <select id="umRole" ${!isOwner ? 'disabled' : ''}>
+            ${isOwner ? '<option value="admin">Администратор</option>' : ''}
+            <option value="specialist">Специалист</option>
+          </select>
+        </div>
+        <div class="fg">
+          <label class="fl">${isNew ? 'Временный пароль' : 'Новый пароль'} <span class="fh">${isNew ? 'обязательно' : 'оставьте пустым чтобы не менять'}</span></label>
+          <input type="password" id="umPw" placeholder="••••••••">
+        </div>
+        ${!isNew ? `<div class="fg" style="display:flex;align-items:center;gap:10px">
+          <input type="checkbox" id="umActive" ${u.is_active ? 'checked' : ''} style="width:16px;height:16px">
+          <label for="umActive" class="fl" style="margin:0;cursor:pointer">Пользователь активен</label>
+        </div>` : ''}
+        <div style="display:flex;gap:8px;margin-top:20px">
+          <button class="btn btn-pri" style="flex:1" onclick="usersSave(${u.id || 'null'},${isNew})">${isNew ? 'Создать' : 'Сохранить'}</button>
+          <button class="btn btn-sec" onclick="usersCloseModal()">Отмена</button>
+        </div>
+      </div>
+    </div>
+  `;
+  const el = document.createElement('div');
+  el.id = 'usersModWrap';
+  el.innerHTML = html;
+  document.body.appendChild(el);
+  // Set role value after render
+  const sel = document.getElementById('umRole');
+  if (sel && !isNew) sel.value = u.role;
+}
+
+function usersCloseModal() {
+  document.getElementById('usersModWrap')?.remove();
+}
+
+async function usersSave(id, isNew) {
+  const err = document.getElementById('usersModErr');
+  err.style.display = 'none';
+  const name  = document.getElementById('umName')?.value.trim();
+  const email = document.getElementById('umEmail')?.value.trim();
+  const role  = document.getElementById('umRole')?.value;
+  const pw    = document.getElementById('umPw')?.value;
+  const active = document.getElementById('umActive');
+
+  try {
+    if (isNew) {
+      await api('POST', '/api/users', { name, email, role, password: pw });
+      notify('Пользователь создан', 'ok');
+    } else {
+      const body = { name, role };
+      if (pw) body.password = pw;
+      if (active) body.is_active = active.checked;
+      await api('PATCH', `/api/users/${id}`, body);
+      notify('Изменения сохранены', 'ok');
+    }
+    usersCloseModal();
+    loadUsers();
+  } catch(e) {
+    err.textContent = e.message; err.style.display = 'block';
+  }
+}
+
+async function usersDeactivate(id, name) {
+  if (!confirm(`Отключить пользователя "${name}"? Он не сможет войти в систему.`)) return;
+  try {
+    await api('DELETE', `/api/users/${id}`);
+    notify('Пользователь отключён', 'ok');
+    loadUsers();
+  } catch(e) { notify(e.message, 'err'); }
+}
 </script>
 </body>
 </html>

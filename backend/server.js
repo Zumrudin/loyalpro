@@ -10,6 +10,33 @@ const axios    = require('axios');
 const cors     = require('cors');
 const cron     = require('node-cron');
 const path     = require('path');
+const fs       = require('fs');
+const multer   = require('multer');
+const puppeteer = require('puppeteer');
+const { buildHomeCareHtml, BRAND_CONFIG } = require('./homecare-template');
+const { buildClientsQuery } = require('./clients-query');
+
+// ── Multer for template image uploads ─────────────────────────
+const uploadStorage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    const dir = path.join(__dirname, '../frontend/uploads');
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    cb(null, dir);
+  },
+  filename: (req, file, cb) => {
+    const ext = path.extname(file.originalname).toLowerCase() || '.jpg';
+    const type = req.params.type || 'file';
+    cb(null, `salon_${req.user?.salonId}_${type}${ext}`);
+  },
+});
+const upload = multer({
+  storage: uploadStorage,
+  limits: { fileSize: 5 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    if (/^image\/(jpeg|png|gif|webp|svg\+xml)$/.test(file.mimetype)) cb(null, true);
+    else cb(new Error('Разрешены только изображения'));
+  },
+});
 
 const app  = express();
 const pool = new Pool({
@@ -42,6 +69,24 @@ function auth(req, res, next) {
   } catch {
     res.status(401).json({ error: 'Token expired or invalid' });
   }
+}
+
+// Roles: owner > admin > specialist
+function requireRole(...roles) {
+  return (req, res, next) => {
+    if (!roles.includes(req.user?.role))
+      return res.status(403).json({ error: 'Нет доступа' });
+    next();
+  };
+}
+
+// Auth supporting both Bearer header and ?token= query param (for direct downloads)
+function authOrQuery(req, res, next) {
+  const h = req.headers.authorization;
+  const t = h?.startsWith('Bearer ') ? h.slice(7) : (req.query.token || '');
+  if (!t) return res.status(401).json({ error: 'Unauthorized' });
+  try { req.user = jwt.verify(t, JWT_SECRET); next(); }
+  catch { res.status(401).json({ error: 'Token expired' }); }
 }
 
 // ── YClients API ──────────────────────────────────────────────
@@ -83,6 +128,16 @@ async function ycAuth(partnerToken, login, password) {
   if (!data.success) throw new Error(data.meta?.message || 'Неверный логин или пароль');
   return data.data;
 }
+
+// ── In-memory cache for product/service trees (per salonId) ──
+const _treeCache = {}; // { [salonId]: { products: [...], services: [...], ts: Date } }
+function getTreeCache(salonId) { return _treeCache[salonId] || null; }
+function setTreeCache(salonId, key, data) {
+  if (!_treeCache[salonId]) _treeCache[salonId] = {};
+  _treeCache[salonId][key] = data;
+  _treeCache[salonId].ts = Date.now();
+}
+function clearTreeCache(salonId) { delete _treeCache[salonId]; }
 
 // ── YClients Loyalty Card API ─────────────────────────────────
 
@@ -1222,6 +1277,38 @@ app.post('/yclients/webhook.v2/:companyId', async (req, res) => {
 
 
 // ============================================================
+// GLOBAL API AUTH + ROLE MIDDLEWARE
+// ============================================================
+// Public paths that don't need authentication
+const API_PUBLIC = ['/api/auth/login', '/api/auth/register'];
+// Paths accessible to 'specialist' role (prefix match)
+const SPECIALIST_ALLOWED_PREFIXES = ['/api/home-care', '/api/auth', '/api/template-settings'];
+
+app.use('/api', (req, res, next) => {
+  const fullPath = '/api' + req.path;
+  // Skip public routes
+  if (API_PUBLIC.includes(fullPath)) return next();
+  // Skip webhook (has its own auth)
+  if (fullPath.startsWith('/api/yclients/')) return next();
+
+  // Verify JWT if not already done
+  if (!req.user) {
+    const h = req.headers.authorization;
+    const t = h?.startsWith('Bearer ') ? h.slice(7) : (req.query.token || '');
+    if (!t) return res.status(401).json({ error: 'Unauthorized' });
+    try { req.user = jwt.verify(t, JWT_SECRET); }
+    catch { return res.status(401).json({ error: 'Token expired or invalid' }); }
+  }
+
+  // Role-based access: specialist may only access allowed prefixes
+  if (req.user.role === 'specialist') {
+    const allowed = SPECIALIST_ALLOWED_PREFIXES.some(p => fullPath.startsWith(p));
+    if (!allowed) return res.status(403).json({ error: 'Нет доступа' });
+  }
+  next();
+});
+
+// ============================================================
 // AUTH
 // ============================================================
 app.post('/api/auth/register', async (req, res) => {
@@ -1292,8 +1379,31 @@ app.post('/api/auth/login', async (req, res) => {
     );
     res.json({ token, user: {
       id: user.id, name: user.name, email: user.email,
-      role: user.role, salonName: user.salon_name
+      role: user.role, salonName: user.salon_name,
+      must_change_password: user.must_change_password || false,
     }});
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/auth/change-password', auth, async (req, res) => {
+  try {
+    const { current_password, new_password } = req.body;
+    if (!new_password || new_password.length < 6)
+      return res.status(400).json({ error: 'Новый пароль минимум 6 символов' });
+    const user = await db.one('SELECT * FROM users WHERE id=$1', [req.user.userId]);
+    if (!user) return res.status(404).json({ error: 'Пользователь не найден' });
+    // If must_change_password — skip current_password check (first login)
+    if (!user.must_change_password) {
+      if (!current_password) return res.status(400).json({ error: 'Укажите текущий пароль' });
+      const ok = await bcrypt.compare(current_password, user.password_hash);
+      if (!ok) return res.status(401).json({ error: 'Текущий пароль неверный' });
+    }
+    const hash = await bcrypt.hash(new_password, 12);
+    await db.query(
+      'UPDATE users SET password_hash=$1, must_change_password=FALSE WHERE id=$2',
+      [hash, req.user.userId]
+    );
+    res.json({ ok: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -1306,11 +1416,112 @@ app.post('/api/auth/logout', auth, async (req, res) => {
 app.get('/api/auth/me', auth, async (req, res) => {
   try {
     const user = await db.one(
-      `SELECT u.id,u.name,u.email,u.role,s.name as salon_name,s.yclients_company_id
+      `SELECT u.id,u.name,u.email,u.role,u.must_change_password,
+              s.name as salon_name,s.yclients_company_id
        FROM users u JOIN salons s ON s.id=u.salon_id WHERE u.id=$1`,
       [req.user.userId]
     );
     res.json(user);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ============================================================
+// USER MANAGEMENT (owner only)
+// ============================================================
+app.get('/api/users', auth, requireRole('owner', 'admin'), async (req, res) => {
+  try {
+    const users = await db.many(
+      `SELECT u.id,u.name,u.email,u.role,u.is_active,u.must_change_password,
+              u.created_at,u.last_login_at
+       FROM users u WHERE u.salon_id=$1 ORDER BY u.created_at`,
+      [req.user.salonId]
+    );
+    const salon = await db.one('SELECT plan,max_users FROM salons WHERE id=$1', [req.user.salonId]);
+    const activeCount = users.filter(u => u.is_active).length;
+    res.json({ users, plan: salon.plan, max_users: salon.max_users, active_count: activeCount });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/users', auth, requireRole('owner'), async (req, res) => {
+  try {
+    const { name, email, role, password } = req.body;
+    if (!name || !email || !role || !password)
+      return res.status(400).json({ error: 'Заполните все поля' });
+    if (!['admin', 'specialist'].includes(role))
+      return res.status(400).json({ error: 'Недопустимая роль' });
+    if (password.length < 6)
+      return res.status(400).json({ error: 'Пароль минимум 6 символов' });
+
+    const salon = await db.one('SELECT max_users FROM salons WHERE id=$1', [req.user.salonId]);
+    const { rows: [{ count }] } = await db.query(
+      'SELECT COUNT(*) FROM users WHERE salon_id=$1 AND is_active=TRUE', [req.user.salonId]
+    );
+    if (parseInt(count) >= salon.max_users)
+      return res.status(403).json({ error: `Достигнут лимит пользователей (${salon.max_users}). Обратитесь в поддержку для увеличения лимита.` });
+
+    const hash = await bcrypt.hash(password, 12);
+    const user = await db.one(
+      `INSERT INTO users (salon_id,email,password_hash,name,role,is_active,must_change_password,created_by)
+       VALUES ($1,$2,$3,$4,$5,TRUE,TRUE,$6) RETURNING id,name,email,role,is_active,must_change_password,created_at`,
+      [req.user.salonId, email.toLowerCase().trim(), hash, name, role, req.user.userId]
+    );
+    res.json(user);
+  } catch (e) {
+    if (e.code === '23505') return res.status(409).json({ error: 'Пользователь с таким email уже существует' });
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.patch('/api/users/:id', auth, requireRole('owner'), async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { name, role, is_active, password } = req.body;
+    // Cannot deactivate yourself
+    if (parseInt(id) === req.user.userId && is_active === false)
+      return res.status(400).json({ error: 'Нельзя деактивировать свой аккаунт' });
+    // Cannot change own role
+    if (parseInt(id) === req.user.userId && role && role !== req.user.role)
+      return res.status(400).json({ error: 'Нельзя изменить свою роль' });
+
+    const updates = [];
+    const vals = [];
+    let i = 1;
+    if (name !== undefined) { updates.push(`name=$${i++}`); vals.push(name); }
+    if (role !== undefined) {
+      if (!['owner','admin','specialist'].includes(role))
+        return res.status(400).json({ error: 'Недопустимая роль' });
+      updates.push(`role=$${i++}`); vals.push(role);
+    }
+    if (is_active !== undefined) { updates.push(`is_active=$${i++}`); vals.push(is_active); }
+    if (password) {
+      if (password.length < 6) return res.status(400).json({ error: 'Пароль минимум 6 символов' });
+      const hash = await bcrypt.hash(password, 12);
+      updates.push(`password_hash=$${i++}`, `must_change_password=$${i++}`);
+      vals.push(hash, true);
+    }
+    if (!updates.length) return res.status(400).json({ error: 'Нечего обновлять' });
+
+    vals.push(id, req.user.salonId);
+    const user = await db.one(
+      `UPDATE users SET ${updates.join(',')} WHERE id=$${i++} AND salon_id=$${i}
+       RETURNING id,name,email,role,is_active,must_change_password`,
+      vals
+    );
+    if (!user) return res.status(404).json({ error: 'Пользователь не найден' });
+    res.json(user);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.delete('/api/users/:id', auth, requireRole('owner'), async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (parseInt(id) === req.user.userId)
+      return res.status(400).json({ error: 'Нельзя удалить свой аккаунт' });
+    await db.query(
+      'UPDATE users SET is_active=FALSE WHERE id=$1 AND salon_id=$2',
+      [id, req.user.salonId]
+    );
+    res.json({ ok: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -1403,26 +1614,20 @@ app.put('/api/loyalty-settings', auth, async (req, res) => {
 // ============================================================
 app.get('/api/clients', auth, async (req, res) => {
   try {
-    const { search, level, status, page = 1, limit = 50 } = req.query;
+    const page  = parseInt(req.query.page  || 1);
+    const limit = parseInt(req.query.limit || 50);
     const offset = (page - 1) * limit;
-    let where = ['c.salon_id=$1'], params = [req.user.salonId], i = 2;
-    if (search) {
-      where.push(`(c.name ILIKE $${i} OR c.phone ILIKE $${i})`);
-      params.push('%' + search + '%'); i++;
-    }
-    if (level) { where.push(`c.loyalty_level=$${i}`); params.push(level); i++; }
-    if (status === 'sleeping') where.push(`c.last_visit_at < NOW()-INTERVAL '60 days' AND c.visits_count>0`);
-    if (status === 'risk')     where.push(`c.last_visit_at < NOW()-INTERVAL '30 days' AND c.last_visit_at > NOW()-INTERVAL '60 days'`);
-    if (status === 'new')      where.push(`c.created_at > NOW()-INTERVAL '30 days'`);
-    const w = where.join(' AND ');
-    const total = (await db.one(`SELECT COUNT(*) FROM clients c WHERE ${w}`, params)).count;
+    const { orderCol, orderDir, whereSql, params, nextIdx } =
+      buildClientsQuery(req.query, req.user.salonId);
+
+    const total = (await db.one(`SELECT COUNT(*) FROM clients c WHERE ${whereSql}`, params)).count;
     const clients = await db.many(
-      `SELECT * FROM clients c WHERE ${w}
-       ORDER BY c.last_visit_at DESC NULLS LAST
-       LIMIT $${i} OFFSET $${i + 1}`,
+      `SELECT * FROM clients c WHERE ${whereSql}
+       ORDER BY ${orderCol} ${orderDir} NULLS LAST
+       LIMIT $${nextIdx} OFFSET $${nextIdx + 1}`,
       [...params, limit, offset]
     );
-    res.json({ clients, total: parseInt(total), page: parseInt(page) });
+    res.json({ clients, total: parseInt(total), page });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -1701,30 +1906,72 @@ app.get('/api/analytics/dashboard', auth, async (req, res) => {
       ) combined
     `;
 
-    const [tc, ac, slp, nc, bs, rev, bonusStat, topSvc, lvlDist, daily, recentTx, lastSync] = await Promise.all([
+    const [tc, ac, slp, nc, bs, rev, bonusStat, topSvc, lvlDist, daily, recentTx, lastSync, tgCount, cardCount, bonEconomy] = await Promise.all([
       db.one('SELECT COUNT(*) FROM clients WHERE salon_id=$1', [sid]),
       db.one(`SELECT COUNT(*) FROM clients WHERE salon_id=$1 AND last_visit_at>NOW()-INTERVAL '${days} days'`, [sid]),
       db.one(`SELECT COUNT(*) FROM clients WHERE salon_id=$1 AND last_visit_at<NOW()-INTERVAL '60 days' AND visits_count>0`, [sid]),
       db.one(`SELECT COUNT(*) FROM clients WHERE salon_id=$1 AND created_at>NOW()-INTERVAL '${days} days'`, [sid]),
       db.one(`SELECT COALESCE(SUM(bonus_balance),0) as tb, COALESCE(SUM(total_spent),0) as ts FROM clients WHERE salon_id=$1`, [sid]),
-      db.one(`SELECT COUNT(*) as rc, COALESCE(SUM(amount),0) as rv FROM records WHERE salon_id=$1 AND status='completed' AND visit_date>=NOW()-INTERVAL '${days} days'`, [sid]),
+      db.one(`SELECT COUNT(*) as rc, COALESCE(SUM(amount),0) as rv FROM records WHERE salon_id=$1 AND status IN ('completed','confirmed') AND visit_date>=NOW()-INTERVAL '${days} days'`, [sid]),
       db.one(bonusStatsSql, [sid]),
-      db.many(`SELECT svc->>'title' as service_name, COUNT(*) as cnt, SUM(r.amount) as total_amount FROM records r, jsonb_array_elements(COALESCE(r.services,'[]'::jsonb)) svc WHERE r.salon_id=$1 AND r.status='completed' AND r.visit_date>=NOW()-INTERVAL '${days} days' GROUP BY svc->>'title' ORDER BY cnt DESC LIMIT 8`, [sid]),
+      db.many(`SELECT svc->>'title' as service_name, COUNT(*) as cnt, SUM((svc->>'cost_to_pay')::numeric) as total_amount FROM records r, jsonb_array_elements(COALESCE(r.services,'[]'::jsonb)) svc WHERE r.salon_id=$1 AND r.status IN ('completed','confirmed') AND r.visit_date>=NOW()-INTERVAL '${days} days' AND svc->>'title' IS NOT NULL GROUP BY svc->>'title' ORDER BY cnt DESC LIMIT 8`, [sid]),
       db.many(`SELECT loyalty_level, COUNT(*) as cnt FROM clients WHERE salon_id=$1 GROUP BY loyalty_level`, [sid]),
-      db.many(`SELECT visit_date::text, COUNT(*) as records, COALESCE(SUM(amount),0) as revenue FROM records WHERE salon_id=$1 AND status='completed' AND visit_date>=NOW()-INTERVAL '${days} days' GROUP BY visit_date ORDER BY visit_date`, [sid]),
-      // Последние транзакции — из loyalty_card_transactions + bonus_transactions
+      // Выручка по дням + бонусы начислено/списано за день
+      db.many(`
+        WITH rev AS (
+          SELECT visit_date::date as d, COUNT(*) as records, COALESCE(SUM(amount),0) as revenue
+          FROM records WHERE salon_id=$1 AND status IN ('completed','confirmed')
+            AND visit_date >= NOW()-INTERVAL '${days} days'
+          GROUP BY visit_date
+        ), bon AS (
+          SELECT DATE(COALESCE(lct.txn_date, lct.created_at)) as d,
+            COALESCE(SUM(CASE WHEN lct.amount > 0 THEN lct.amount ELSE 0 END),0) as bonuses_accrued,
+            COALESCE(SUM(CASE WHEN lct.amount < 0 THEN ABS(lct.amount) ELSE 0 END),0) as bonuses_redeemed
+          FROM loyalty_card_transactions lct
+          JOIN clients c ON c.id=lct.client_id
+          WHERE c.salon_id=$1 AND COALESCE(lct.txn_date, lct.created_at) >= NOW()-INTERVAL '${days} days'
+          GROUP BY DATE(COALESCE(lct.txn_date, lct.created_at))
+        )
+        SELECT rev.d::text as visit_date, rev.records, rev.revenue,
+          COALESCE(bon.bonuses_accrued, 0) as bonuses_accrued,
+          COALESCE(bon.bonuses_redeemed, 0) as bonuses_redeemed
+        FROM rev LEFT JOIN bon ON bon.d = rev.d ORDER BY rev.d
+      `, [sid]),
+      // Последние транзакции — дедупликация по клиент+дата+сумма+заголовок
       db.many(`
         SELECT sub.*, c.name as client_name FROM (
-          SELECT lct.id, lct.txn_date as created_at, lct.amount, lct.title as description,
-                 lct.client_id, 'card' as source
+          SELECT DISTINCT ON (client_id, title, txn_date::date, amount)
+            lct.id, lct.txn_date as created_at, lct.amount, lct.title as description, lct.client_id
           FROM loyalty_card_transactions lct
           JOIN clients c2 ON c2.id=lct.client_id
           WHERE c2.salon_id=$1
-          ORDER BY lct.txn_date DESC NULLS LAST LIMIT 15
-        ) sub JOIN clients c ON c.id=sub.client_id
-        ORDER BY sub.created_at DESC LIMIT 15
+          ORDER BY client_id, title, txn_date::date, amount, lct.txn_date DESC NULLS LAST
+        ) sub
+        JOIN clients c ON c.id=sub.client_id
+        ORDER BY sub.created_at DESC NULLS LAST
+        LIMIT 15
       `, [sid]),
       db.one(`SELECT * FROM sync_logs WHERE salon_id=$1 ORDER BY started_at DESC LIMIT 1`, [sid]),
+      // Клиенты с Telegram
+      db.one(`SELECT COUNT(*) FROM clients WHERE salon_id=$1 AND telegram_id IS NOT NULL AND telegram_id!=''`, [sid]),
+      // Клиенты с картой лояльности
+      db.one(`SELECT COUNT(*) FROM clients WHERE salon_id=$1 AND yclients_card_id IS NOT NULL`, [sid]),
+      // Бонусная экономика — разбивка по типу за период
+      db.many(`
+        SELECT
+          CASE
+            WHEN lct.title ILIKE '%день рождения%' OR lct.title ILIKE '%ДР%' OR lct.title ILIKE '%подарок%' THEN 'birthday'
+            WHEN lct.type = 'redemption' AND lct.title ILIKE '%отмена%' THEN 'cancellation'
+            WHEN lct.type = 'redemption' THEN 'redemption'
+            ELSE 'accrual'
+          END as type,
+          COALESCE(SUM(ABS(lct.amount)), 0) as total
+        FROM loyalty_card_transactions lct
+        JOIN clients c ON c.id=lct.client_id
+        WHERE c.salon_id=$1 AND COALESCE(lct.txn_date, lct.created_at) >= NOW()-INTERVAL '${days} days'
+        GROUP BY 1
+        ORDER BY total DESC
+      `, [sid]),
     ]);
 
     res.json({
@@ -1739,9 +1986,11 @@ app.get('/api/analytics/dashboard', auth, async (req, res) => {
         periodRecords:     parseInt(rev.rc),
         periodBonuses:     parseFloat(bonusStat.accrued),   // начислено за период
         periodRedeemed:    parseFloat(bonusStat.redeemed),  // списано за период
+        telegramClients:   parseInt(tgCount.count),
+        cardClients:       parseInt(cardCount.count),
       },
       levelDist: lvlDist, topServices: topSvc, dailyRevenue: daily,
-      recentTxns: recentTx, syncStatus: lastSync,
+      recentTxns: recentTx, syncStatus: lastSync, bonusEconomy: bonEconomy,
     });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -1780,15 +2029,20 @@ app.get('/api/analytics/bonuses', auth, async (req, res) => {
 app.get('/api/analytics/retention', auth, async (req, res) => {
   try {
     const rows = await db.many(
-      `SELECT DATE_TRUNC('month',first_visit) as cohort_month,COUNT(DISTINCT client_id) as total,
-         COUNT(DISTINCT CASE WHEN months_since>=1 THEN client_id END) as m1,
-         COUNT(DISTINCT CASE WHEN months_since>=2 THEN client_id END) as m2,
-         COUNT(DISTINCT CASE WHEN months_since>=3 THEN client_id END) as m3
-       FROM (
-         SELECT client_id,MIN(visit_date) OVER (PARTITION BY client_id) as first_visit,
-                EXTRACT(MONTH FROM AGE(visit_date,MIN(visit_date) OVER (PARTITION BY client_id))) as months_since
-         FROM records WHERE salon_id=$1 AND status='completed' AND client_id IS NOT NULL
-       ) t GROUP BY cohort_month ORDER BY cohort_month DESC LIMIT 6`,
+      `SELECT cohort_month,total,m1,m2,m3 FROM (
+         SELECT DATE_TRUNC('month',first_visit) as cohort_month,COUNT(DISTINCT client_id) as total,
+           COUNT(DISTINCT CASE WHEN months_since>=1 THEN client_id END) as m1,
+           COUNT(DISTINCT CASE WHEN months_since>=2 THEN client_id END) as m2,
+           COUNT(DISTINCT CASE WHEN months_since>=3 THEN client_id END) as m3
+         FROM (
+           SELECT client_id,MIN(visit_date) OVER (PARTITION BY client_id) as first_visit,
+                  EXTRACT(YEAR FROM AGE(visit_date,MIN(visit_date) OVER (PARTITION BY client_id)))*12
+                    + EXTRACT(MONTH FROM AGE(visit_date,MIN(visit_date) OVER (PARTITION BY client_id))) as months_since
+           FROM records WHERE salon_id=$1 AND status='completed' AND client_id IS NOT NULL
+         ) t GROUP BY cohort_month
+       ) agg
+       WHERE cohort_month <= DATE_TRUNC('month', NOW()) - INTERVAL '3 months'
+       ORDER BY cohort_month ASC LIMIT 6`,
       [req.user.salonId]
     );
     res.json(rows);
@@ -2933,6 +3187,7 @@ cron.schedule('0 */3 * * *', async () => {
     );
     for (const salon of salons) {
       runSync(salon, 'auto').catch(e => console.error(`[AutoSync ${salon.id}]`, e.message));
+      syncGoodsCategories(salon).catch(e => console.error(`[GoodsCatSync ${salon.id}]`, e.message));
     }
   } catch (e) { console.error('[Cron sync]', e.message); }
 });
@@ -2947,6 +3202,872 @@ cron.schedule('0 * * * *', async () => {
       syncStaffData(salon).catch(e => console.error(`[StaffSync cron ${salon.id}]`, e.message));
     }
   } catch(e) { console.error('[StaffSync cron]', e.message); }
+});
+
+// ============================================================
+// SEGMENTS ENGINE
+// ============================================================
+
+// Segment definitions — order matters for priority
+const SEGMENT_DEFS = [
+  // blacklist first
+  { key: 'blacklist',         zone: 'blacklist',  rank: null, label: 'Чёрный список',      emoji: '🚫', color: '#6b7280' },
+  // waiting zone (future appointment)
+  { key: 'waiting_champion',  zone: 'waiting',    rank: 3,    label: 'Ожидаем чемпиона',  emoji: '⏳', color: '#8b5cf6' },
+  { key: 'waiting_growing',   zone: 'waiting',    rank: 2,    label: 'Ожидаем растущего', emoji: '⏳', color: '#7c3aed' },
+  { key: 'waiting_newcomer',  zone: 'waiting',    rank: 1,    label: 'Ожидаем новичка',   emoji: '⏳', color: '#6d28d9' },
+  // post-visit (< 7 days since last visit)
+  { key: 'post_visit',        zone: 'post_visit', rank: null, label: 'После визита',       emoji: '✅', color: '#10b981' },
+  // active zone
+  { key: 'champion',          zone: 'active',     rank: 3,    label: 'Чемпион',            emoji: '🏆', color: '#f59e0b' },
+  { key: 'growing',           zone: 'active',     rank: 2,    label: 'Растущий',           emoji: '📈', color: '#3b82f6' },
+  { key: 'newcomer',          zone: 'active',     rank: 1,    label: 'Новичок',            emoji: '🌱', color: '#06b6d4' },
+  // risk zone
+  { key: 'champion_risk',     zone: 'risk',       rank: 3,    label: 'Чемпион в риске',   emoji: '⚠️', color: '#f97316' },
+  { key: 'growing_risk',      zone: 'risk',       rank: 2,    label: 'Растущий в риске',  emoji: '⚠️', color: '#fb923c' },
+  { key: 'newcomer_risk',     zone: 'risk',       rank: 1,    label: 'Новичок в риске',   emoji: '⚠️', color: '#fbbf24' },
+  // sleeping zone
+  { key: 'sleeping_champion', zone: 'sleeping',   rank: 3,    label: 'Спящий чемпион',    emoji: '💤', color: '#6366f1' },
+  { key: 'sleeping_growing',  zone: 'sleeping',   rank: 2,    label: 'Спящий растущий',   emoji: '💤', color: '#818cf8' },
+  { key: 'sleeping_newcomer', zone: 'sleeping',   rank: 1,    label: 'Спящий новичок',    emoji: '💤', color: '#a5b4fc' },
+  // no visits
+  { key: 'no_visit',          zone: 'no_visit',   rank: 0,    label: 'Без визитов',        emoji: '👤', color: '#9ca3af' },
+];
+const SEG_MAP = Object.fromEntries(SEGMENT_DEFS.map(s => [s.key, s]));
+
+// Calculate the return window (avg days between visits) for a salon
+async function calcReturnWindow(salonId) {
+  const { rows } = await db.query(`
+    SELECT ROUND(AVG(gap_days))::int AS w FROM (
+      SELECT client_id,
+        (visit_date - LAG(visit_date) OVER (PARTITION BY client_id ORDER BY visit_date)) AS gap_days
+      FROM records
+      WHERE salon_id = $1
+        AND status IN ('completed','confirmed')
+        AND visit_date < CURRENT_DATE
+        AND visit_date IS NOT NULL
+    ) t
+    WHERE gap_days > 1 AND gap_days < 365
+  `, [salonId]);
+  const w = rows[0]?.w;
+  return (w && w > 7) ? w : 45; // default 45 days if not enough data
+}
+
+// Classify a single client row into a segment key
+function classifyClient(c, returnWindow) {
+  if (c.is_blacklisted) return 'blacklist';
+
+  const rank = c.visits_count >= 5 ? 3 : c.visits_count >= 3 ? 2 : c.visits_count >= 1 ? 1 : 0;
+  if (rank === 0) return 'no_visit';
+
+  // Future appointment?
+  if (c.has_future_appointment) {
+    return rank === 3 ? 'waiting_champion' : rank === 2 ? 'waiting_growing' : 'waiting_newcomer';
+  }
+
+  const daysSince = c.days_since_visit ?? 9999;
+
+  // Post-visit: < 7 days
+  if (daysSince <= 7) return 'post_visit';
+
+  // Active: within return window
+  if (daysSince <= returnWindow) {
+    return rank === 3 ? 'champion' : rank === 2 ? 'growing' : 'newcomer';
+  }
+
+  // Risk: returnWindow < daysSince <= returnWindow * 2.5
+  if (daysSince <= returnWindow * 2.5) {
+    return rank === 3 ? 'champion_risk' : rank === 2 ? 'growing_risk' : 'newcomer_risk';
+  }
+
+  // Sleeping
+  return rank === 3 ? 'sleeping_champion' : rank === 2 ? 'sleeping_growing' : 'sleeping_newcomer';
+}
+
+// Full segment refresh for one salon — writes to client_segments table
+async function refreshSegments(salonId) {
+  const returnWindow = await calcReturnWindow(salonId);
+
+  // Fetch all clients with derived fields.
+  // IMPORTANT: clients.last_visit_at is only updated for 'completed' records,
+  // but many salons never move records to completed (stay as 'confirmed').
+  // So we compute actual_last_visit from the records table directly.
+  const { rows: clients } = await db.query(`
+    SELECT
+      c.id,
+      c.name,
+      c.phone,
+      c.visits_count,
+      c.total_spent,
+      c.bonus_balance,
+      c.loyalty_level,
+      COALESCE(c.is_blacklisted, FALSE) AS is_blacklisted,
+      -- Actual last past visit: max visit_date for past records (any non-deleted status)
+      -- Falls back to clients.last_visit_at for clients with no records in DB
+      COALESCE(
+        MAX(r.visit_date) FILTER (
+          WHERE r.visit_date < CURRENT_DATE
+            AND r.status IN ('completed','confirmed','no_show')
+        ),
+        c.last_visit_at
+      ) AS actual_last_visit,
+      -- Days since last past visit (DATE subtraction gives integer days)
+      CASE
+        WHEN MAX(r.visit_date) FILTER (WHERE r.visit_date < CURRENT_DATE AND r.status IN ('completed','confirmed','no_show')) IS NOT NULL
+          THEN (CURRENT_DATE - MAX(r.visit_date) FILTER (WHERE r.visit_date < CURRENT_DATE AND r.status IN ('completed','confirmed','no_show')))::float
+        WHEN c.last_visit_at IS NOT NULL
+          THEN EXTRACT(EPOCH FROM (NOW() - c.last_visit_at))/86400
+        ELSE NULL
+      END AS days_since_visit,
+      -- Future appointment: any record with visit_date >= today
+      -- 'waiting' = not yet confirmed, 'confirmed' = confirmed by client
+      -- 'completed' with future date = pre-paid booking
+      BOOL_OR(
+        r.visit_date >= CURRENT_DATE
+        AND r.status IN ('waiting','confirmed','completed')
+      ) AS has_future_appointment,
+      COALESCE(c.visits_count, 0) AS visits_count
+    FROM clients c
+    LEFT JOIN records r ON r.client_id = c.id AND r.salon_id = $1
+    WHERE c.salon_id = $1
+    GROUP BY c.id, c.name, c.phone, c.visits_count, c.last_visit_at,
+             c.total_spent, c.bonus_balance, c.loyalty_level, c.is_blacklisted
+  `, [salonId]);
+
+  if (!clients.length) return { total: 0, returnWindow };
+
+  // Classify each client
+  const values = clients.map(c => {
+    const segKey = classifyClient(c, returnWindow);
+    const def = SEG_MAP[segKey];
+    return {
+      salon_id: salonId,
+      client_id: c.id,
+      segment_key: segKey,
+      rank: def?.rank ?? null,
+      zone: def?.zone ?? 'unknown',
+      days_since_visit: c.days_since_visit != null ? Math.round(c.days_since_visit) : null,
+      return_window: returnWindow,
+    };
+  });
+
+  // Upsert in batches of 500
+  const BATCH = 500;
+  for (let i = 0; i < values.length; i += BATCH) {
+    const batch = values.slice(i, i + BATCH);
+    const placeholders = batch.map((_, j) => {
+      const base = j * 7;
+      return `($${base+1},$${base+2},$${base+3},$${base+4},$${base+5},$${base+6},$${base+7},NOW())`;
+    }).join(',');
+    const params = batch.flatMap(v => [v.salon_id, v.client_id, v.segment_key, v.rank, v.zone, v.days_since_visit, v.return_window]);
+    await db.query(`
+      INSERT INTO client_segments
+        (salon_id, client_id, segment_key, rank, zone, days_since_visit, return_window, updated_at)
+      VALUES ${placeholders}
+      ON CONFLICT (salon_id, client_id) DO UPDATE SET
+        segment_key      = EXCLUDED.segment_key,
+        rank             = EXCLUDED.rank,
+        zone             = EXCLUDED.zone,
+        days_since_visit = EXCLUDED.days_since_visit,
+        return_window    = EXCLUDED.return_window,
+        updated_at       = NOW()
+    `, params);
+  }
+
+  // Remove stale rows (clients no longer in salon)
+  await db.query(`
+    DELETE FROM client_segments
+    WHERE salon_id = $1
+      AND client_id NOT IN (SELECT id FROM clients WHERE salon_id = $1)
+  `, [salonId]);
+
+  return { total: values.length, returnWindow };
+}
+
+// Add segment refresh to cron (every hour alongside staff sync)
+cron.schedule('30 * * * *', async () => {
+  try {
+    const salons = await db.many(
+      `SELECT id FROM salons WHERE is_active=TRUE`
+    );
+    for (const s of salons) {
+      refreshSegments(s.id).catch(e => console.error(`[Segments cron ${s.id}]`, e.message));
+    }
+  } catch(e) { console.error('[Segments cron]', e.message); }
+});
+
+// ── GET /api/segments — summary grid ──────────────────────────
+app.get('/api/segments', auth, async (req, res) => {
+  try {
+    const salonId = req.user.salonId;
+
+    // Trigger refresh if data is stale (> 1 hour) or missing
+    const { rows: [meta] } = await db.query(
+      `SELECT MAX(updated_at) AS last_updated, COUNT(*) AS total FROM client_segments WHERE salon_id=$1`,
+      [salonId]
+    );
+    const staleMinutes = meta?.last_updated
+      ? (Date.now() - new Date(meta.last_updated).getTime()) / 60000
+      : Infinity;
+
+    if (staleMinutes > 60 || !meta?.total) {
+      await refreshSegments(salonId);
+    }
+
+    // Get stats per segment
+    const { rows: stats } = await db.query(`
+      SELECT
+        cs.segment_key,
+        COUNT(*)                                        AS client_count,
+        COALESCE(SUM(c.total_spent), 0)                AS total_spent,
+        COALESCE(AVG(c.total_spent), 0)                AS avg_spent,
+        COALESCE(AVG(c.visits_count), 0)               AS avg_visits,
+        MAX(cs.return_window)                          AS return_window
+      FROM client_segments cs
+      JOIN clients c ON c.id = cs.client_id AND c.salon_id = cs.salon_id
+      WHERE cs.salon_id = $1
+      GROUP BY cs.segment_key
+    `, [salonId]);
+
+    // Total with visits (for percentage calculations)
+    const { rows: [totals] } = await db.query(`
+      SELECT
+        COUNT(*) FILTER (WHERE visits_count > 0)  AS with_visits,
+        COUNT(*)                                   AS all_clients,
+        COALESCE(SUM(total_spent), 0)              AS total_revenue
+      FROM clients WHERE salon_id = $1
+    `, [salonId]);
+
+    const statsMap = Object.fromEntries(stats.map(s => [s.segment_key, s]));
+
+    const segments = SEGMENT_DEFS.map(def => {
+      const s = statsMap[def.key] || {};
+      const count = parseInt(s.client_count || 0);
+      const withVisits = parseInt(totals.with_visits || 1);
+      return {
+        key: def.key,
+        label: def.label,
+        emoji: def.emoji,
+        color: def.color,
+        zone: def.zone,
+        rank: def.rank,
+        client_count: count,
+        pct: withVisits > 0 ? Math.round(count / parseInt(totals.all_clients || 1) * 100 * 10) / 10 : 0,
+        total_spent: Math.round(parseFloat(s.total_spent || 0)),
+        avg_check: Math.round(parseFloat(s.avg_spent || 0)),
+        avg_visits: Math.round(parseFloat(s.avg_visits || 0) * 10) / 10,
+        return_window: parseInt(s.return_window || 0),
+      };
+    });
+
+    const salon = await db.one('SELECT yclients_company_id FROM salons WHERE id=$1', [salonId]);
+    res.json({
+      segments,
+      totals: {
+        all_clients:         parseInt(totals.all_clients || 0),
+        with_visits:         parseInt(totals.with_visits || 0),
+        total_revenue:       Math.round(parseFloat(totals.total_revenue || 0)),
+        return_window:       segments.find(s => s.return_window > 0)?.return_window || 45,
+        last_updated:        meta?.last_updated || null,
+        yclients_company_id: salon?.yclients_company_id || null,
+      }
+    });
+  } catch(e) { console.error('[Segments]', e.message); res.status(500).json({ error: e.message }); }
+});
+
+// ── GET /api/segments/:key/clients — clients in a segment ──────
+const SEG_CLIENTS_SQL = `
+  SELECT
+    c.id, c.yclients_client_id, c.name, c.phone, c.email,
+    c.visits_count, c.total_spent, c.bonus_balance, c.loyalty_level, c.last_visit_at,
+    cs.days_since_visit, cs.zone
+  FROM client_segments cs
+  JOIN clients c ON c.id = cs.client_id AND c.salon_id = cs.salon_id
+  WHERE cs.salon_id = $1
+    AND cs.segment_key = $2
+    AND ($3 = '' OR c.name ILIKE '%'||$3||'%' OR c.phone ILIKE '%'||$3||'%')
+  ORDER BY c.total_spent DESC NULLS LAST
+`;
+
+app.get('/api/segments/:key/clients', auth, async (req, res) => {
+  try {
+    const { key } = req.params;
+    const { page = 1, limit = 30, search = '' } = req.query;
+    const salonId = req.user.salonId;
+    const offset = (parseInt(page) - 1) * parseInt(limit);
+
+    const { rows: clients } = await db.query(
+      SEG_CLIENTS_SQL + ' LIMIT $4 OFFSET $5',
+      [salonId, key, search, limit, offset]
+    );
+    const { rows: [cnt] } = await db.query(`
+      SELECT COUNT(*) AS total
+      FROM client_segments cs
+      JOIN clients c ON c.id = cs.client_id AND c.salon_id = cs.salon_id
+      WHERE cs.salon_id = $1 AND cs.segment_key = $2
+        AND ($3 = '' OR c.name ILIKE '%'||$3||'%' OR c.phone ILIKE '%'||$3||'%')
+    `, [salonId, key, search]);
+
+    res.json({ clients, total: parseInt(cnt.total), page: parseInt(page), limit: parseInt(limit) });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── GET /api/segments/:key/export — CSV export (token via query param for direct download) ──
+function authOrQuery(req, res, next) {
+  const h = req.headers.authorization;
+  const t = h?.startsWith('Bearer ') ? h.slice(7) : (req.query.token || '');
+  if (!t) return res.status(401).json({ error: 'Unauthorized' });
+  try { req.user = jwt.verify(t, JWT_SECRET); next(); } catch { res.status(401).json({ error: 'Token expired' }); }
+}
+app.get('/api/segments/:key/export', authOrQuery, async (req, res) => {
+  try {
+    const { key } = req.params;
+    const { search = '' } = req.query;
+    const salonId = req.user.salonId;
+    const seg = SEG_MAP[key];
+    const label = seg?.label || key;
+
+    const { rows } = await db.query(SEG_CLIENTS_SQL, [salonId, key, search]);
+
+    const cols = ['Имя','Телефон','Email','Визитов','Сумма (₽)','Дней с последнего визита','Уровень лояльности','Последний визит'];
+    const toCsv = (v) => {
+      const s = v == null ? '' : String(v);
+      return s.includes(',') || s.includes('"') || s.includes('\n') ? `"${s.replace(/"/g, '""')}"` : s;
+    };
+    const lines = [cols.join(',')];
+    for (const c of rows) {
+      lines.push([
+        c.name || '',
+        c.phone || '',
+        c.email || '',
+        c.visits_count || 0,
+        Math.round(parseFloat(c.total_spent || 0)),
+        c.days_since_visit != null ? Math.round(c.days_since_visit) : '',
+        c.loyalty_level || '',
+        c.last_visit_at ? new Date(c.last_visit_at).toLocaleDateString('ru') : '',
+      ].map(toCsv).join(','));
+    }
+
+    const bom = '\uFEFF';
+    const csv = bom + lines.join('\r\n');
+    const filename = encodeURIComponent(`segment_${label}_${new Date().toISOString().slice(0,10)}.csv`);
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${filename}`);
+    res.send(csv);
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── POST /api/segments/refresh — manual refresh ────────────────
+app.post('/api/segments/refresh', auth, async (req, res) => {
+  try {
+    const result = await refreshSegments(req.user.salonId);
+    res.json({ ok: true, ...result });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── PUT /api/clients/:id/blacklist — toggle blacklist ──────────
+app.put('/api/clients/:id/blacklist', auth, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { blacklisted } = req.body;
+    await db.query(
+      `UPDATE clients SET is_blacklisted = $1 WHERE id = $2 AND salon_id = $3`,
+      [blacklisted, id, req.user.salonId]
+    );
+    res.json({ ok: true });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// ── Home Care catalog helpers ──────────────────────────────────
+app.get('/api/home-care/products', auth, async (req, res) => {
+  try {
+    const { search = '', limit = 10 } = req.query;
+    const rows = await db.many(
+      `SELECT DISTINCT ON (lower(trim(title))) title, yclients_goods_id as id
+       FROM goods_sale_items gsi
+       JOIN goods_sales gs ON gs.id = gsi.sale_id
+       WHERE gs.salon_id = $1
+         AND ($2 = '' OR title ILIKE '%' || $2 || '%')
+         AND title IS NOT NULL AND trim(title) != ''
+       ORDER BY lower(trim(title)), title
+       LIMIT $3`,
+      [req.user.salonId, search, parseInt(limit)]
+    );
+    res.json(rows);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get('/api/home-care/services', auth, async (req, res) => {
+  try {
+    const { search = '', limit = 10 } = req.query;
+    const rows = await db.many(
+      `SELECT DISTINCT ON (lower(trim(svc->>'title'))) svc->>'title' AS title, (svc->>'id')::text AS id
+       FROM records r, jsonb_array_elements(COALESCE(r.services, '[]'::jsonb)) svc
+       WHERE r.salon_id = $1
+         AND svc->>'title' IS NOT NULL AND trim(svc->>'title') != ''
+         AND ($2 = '' OR svc->>'title' ILIKE '%' || $2 || '%')
+       ORDER BY lower(trim(svc->>'title')), svc->>'title'
+       LIMIT $3`,
+      [req.user.salonId, search, parseInt(limit)]
+    );
+    res.json(rows);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Service tree: services grouped by category (from visit records)
+// Service tree: categories + services from YClients (with fallback to local records)
+app.get('/api/home-care/service-tree', auth, async (req, res) => {
+  try {
+    const { search = '' } = req.query;
+    const salonId = req.user.salonId;
+
+    // Use cache for full (no search) requests
+    if (!search) {
+      const cached = getTreeCache(salonId);
+      if (cached && cached.services) return res.json(cached.services);
+    }
+
+    const salon = await db.one('SELECT * FROM salons WHERE id=$1', [salonId]);
+    let grouped = {};
+
+    if (salon.yclients_company_id && salon.yclients_user_token) {
+      const cats = await ycGet(salon, `/service_categories/${salon.yclients_company_id}`);
+      const catMap = {};
+      for (const c of (cats || [])) catMap[c.id] = c.title;
+
+      const services = await ycGet(salon, `/services/${salon.yclients_company_id}`);
+      for (const s of (services || [])) {
+        if (!s.title) continue;
+        if (search && !s.title.toLowerCase().includes(search.toLowerCase())) continue;
+        const cat = catMap[s.category_id] || 'Без категории';
+        if (!grouped[cat]) grouped[cat] = [];
+        grouped[cat].push(s.title);
+      }
+    } else {
+      const { rows } = await db.query(
+        `SELECT DISTINCT ON (lower(trim(svc->>'title'))) svc->>'title' AS title
+         FROM records r, jsonb_array_elements(COALESCE(r.services,'[]'::jsonb)) svc
+         WHERE r.salon_id=$1 AND svc->>'title' IS NOT NULL AND trim(svc->>'title')!=''
+           AND ($2='' OR svc->>'title' ILIKE '%'||$2||'%')
+         ORDER BY lower(trim(svc->>'title'))`,
+        [salonId, search]
+      );
+      grouped['Услуги'] = rows.map(r => r.title);
+    }
+
+    const result = Object.entries(grouped).sort(([a],[b])=>a.localeCompare(b,'ru')).map(([cat,items])=>({cat,items}));
+    if (!search) setTreeCache(salonId, 'services', result);
+    res.json(result);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Reusable: sync goods categories for a salon object
+async function syncGoodsCategories(salon) {
+  const cid = salon.yclients_company_id;
+  if (!cid || !salon.yclients_user_token) return { updated: 0, failed: 0, total: 0 };
+
+  // Step 1: category id → title
+  let catMap = {};
+  try {
+    const cats = await ycGet(salon, `/good_categories/${cid}`);
+    if (Array.isArray(cats)) for (const c of cats) if (c.id != null && c.title) catMap[c.id] = c.title;
+  } catch (_) {}
+
+  // Step 2: bulk goods → goodId → categoryTitle
+  let goodCatMap = {};
+  try {
+    let page = 1;
+    while (true) {
+      const goods = await ycGet(salon, `/goods/${cid}`, { count: 200, page });
+      if (!Array.isArray(goods) || !goods.length) break;
+      for (const g of goods) {
+        if (g.id == null) continue;
+        if (g.category && typeof g.category === 'object' && g.category.title) goodCatMap[g.id] = g.category.title;
+        else if (g.category && typeof g.category === 'string') goodCatMap[g.id] = g.category;
+        else if (g.category_id != null && catMap[g.category_id]) goodCatMap[g.id] = catMap[g.category_id];
+      }
+      if (goods.length < 200) break;
+      page++;
+      await new Promise(r => setTimeout(r, 200));
+    }
+  } catch (_) {}
+
+  // Step 3: update DB
+  const { rows } = await db.query(
+    `SELECT DISTINCT yclients_goods_id FROM goods_sale_items gsi
+     JOIN goods_sales gs ON gs.id = gsi.sale_id
+     WHERE gs.salon_id = $1 AND yclients_goods_id IS NOT NULL`,
+    [salon.id]
+  );
+  if (!rows.length) return { updated: 0, failed: 0, total: 0 };
+
+  let updated = 0, failed = 0;
+  for (let i = 0; i < rows.length; i++) {
+    const goodId = rows[i].yclients_goods_id;
+    try {
+      let category = goodCatMap[goodId];
+      if (!category) {
+        const data = await ycGet(salon, `/goods/${cid}/${goodId}`);
+        if (data.category && typeof data.category === 'object') category = data.category.title;
+        else if (data.category && typeof data.category === 'string') category = data.category;
+        else if (data.category_id != null && catMap[data.category_id]) category = catMap[data.category_id];
+        if (i > 0 && i % 10 === 0) await new Promise(r => setTimeout(r, 300));
+      }
+      if (category) {
+        await db.query(
+          `UPDATE goods_sale_items SET yclients_category = $1 WHERE yclients_goods_id = $2 AND yclients_category IS DISTINCT FROM $1`,
+          [category, goodId]
+        );
+        updated++;
+      }
+    } catch (_) { failed++; }
+  }
+
+  clearTreeCache(salon.id);
+  return { updated, failed, total: rows.length, categories: Object.keys(catMap).length };
+}
+
+app.post('/api/home-care/sync-goods-categories', auth, async (req, res) => {
+  try {
+    const salon = await db.one('SELECT * FROM salons WHERE id=$1', [req.user.salonId]);
+    if (!salon.yclients_company_id || !salon.yclients_user_token)
+      return res.status(400).json({ error: 'YClients не подключён' });
+    const result = await syncGoodsCategories(salon);
+    res.json(result);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Product tree: goods grouped by real YClients category (in-memory cache, no search param needed for full tree)
+app.get('/api/home-care/product-tree', auth, async (req, res) => {
+  try {
+    const { search = '' } = req.query;
+    const salonId = req.user.salonId;
+
+    // Use cache for full (no search) requests
+    if (!search) {
+      const cached = getTreeCache(salonId);
+      if (cached && cached.products) return res.json(cached.products);
+    }
+
+    // Fetch goods with their synced YClients category
+    const { rows } = await db.query(
+      `SELECT DISTINCT ON (lower(trim(title))) title, yclients_category
+       FROM goods_sale_items gsi
+       JOIN goods_sales gs ON gs.id = gsi.sale_id
+       WHERE gs.salon_id = $1
+         AND title IS NOT NULL AND trim(title) != ''
+         AND ($2 = '' OR lower(title) LIKE '%' || lower($2) || '%')
+       ORDER BY lower(trim(title)) LIMIT 600`,
+      [salonId, search]
+    );
+
+    // Group by category (null/empty → 'Без категории' — run sync to fix)
+    const grouped = {};
+    for (const r of rows) {
+      const cat = (r.yclients_category || '').trim() || 'Без категории';
+      if (!grouped[cat]) grouped[cat] = [];
+      grouped[cat].push(r.title);
+    }
+
+    const result = Object.entries(grouped).sort(([a],[b])=>a.localeCompare(b,'ru')).map(([cat,items])=>({cat,items}));
+    if (!search) setTreeCache(salonId, 'products', result);
+    res.json(result);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ============================================================
+// HOME CARE
+// ============================================================
+
+// List
+app.get('/api/home-care', auth, async (req, res) => {
+  try {
+    const { search = '', page = 1, limit = 20 } = req.query;
+    const offset = (parseInt(page) - 1) * parseInt(limit);
+    const rows = await db.many(
+      `SELECT p.id, p.created_at, p.updated_at, p.notes,
+              c.id as client_id, c.name as client_name, c.phone as client_phone,
+              u.name as specialist_name
+       FROM home_care_prescriptions p
+       LEFT JOIN clients c ON c.id = p.client_id
+       LEFT JOIN users u ON u.id = p.specialist_id
+       WHERE p.salon_id = $1
+         AND ($2 = '' OR c.name ILIKE '%' || $2 || '%' OR c.phone ILIKE '%' || $2 || '%')
+       ORDER BY p.created_at DESC
+       LIMIT $3 OFFSET $4`,
+      [req.user.salonId, search, parseInt(limit), offset]
+    );
+    const total = await db.one(
+      `SELECT COUNT(*) FROM home_care_prescriptions p
+       LEFT JOIN clients c ON c.id = p.client_id
+       WHERE p.salon_id = $1
+         AND ($2 = '' OR c.name ILIKE '%' || $2 || '%' OR c.phone ILIKE '%' || $2 || '%')`,
+      [req.user.salonId, search]
+    );
+    res.json({ rows, total: parseInt(total.count) });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Get single
+app.get('/api/home-care/:id', auth, async (req, res) => {
+  try {
+    const p = await db.one(
+      `SELECT p.*, c.name as client_name, c.phone as client_phone, u.name as specialist_name, s.name as salon_name
+       FROM home_care_prescriptions p
+       LEFT JOIN clients c ON c.id = p.client_id
+       LEFT JOIN users u ON u.id = p.specialist_id
+       LEFT JOIN salons s ON s.id = p.salon_id
+       WHERE p.id = $1 AND p.salon_id = $2`,
+      [req.params.id, req.user.salonId]
+    );
+    if (!p) return res.status(404).json({ error: 'Not found' });
+    const items = await db.many(
+      `SELECT * FROM home_care_items WHERE prescription_id = $1 ORDER BY time_of_day, sort_order`,
+      [req.params.id]
+    );
+    res.json({ ...p, items });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Create
+app.post('/api/home-care', auth, async (req, res) => {
+  try {
+    const { client_id, face_procedures, body_procedures, hair_procedures, vitamins, notes, items = [] } = req.body;
+    const p = await db.one(
+      `INSERT INTO home_care_prescriptions
+         (salon_id, client_id, specialist_id, face_procedures, body_procedures, hair_procedures, vitamins, notes)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id`,
+      [req.user.salonId, client_id || null, req.user.userId,
+       face_procedures || null, body_procedures || null, hair_procedures || null,
+       vitamins || null, notes || null]
+    );
+    for (let i = 0; i < items.length; i++) {
+      const it = items[i];
+      await db.query(
+        `INSERT INTO home_care_items (prescription_id, time_of_day, category, product_name, instructions, sort_order)
+         VALUES ($1,$2,$3,$4,$5,$6)`,
+        [p.id, it.time_of_day, it.category, it.product_name, it.instructions || null, i]
+      );
+    }
+    res.json({ id: p.id });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Update
+app.put('/api/home-care/:id', auth, async (req, res) => {
+  try {
+    const { client_id, face_procedures, body_procedures, hair_procedures, vitamins, notes, items = [] } = req.body;
+    const existing = await db.one(
+      `SELECT id FROM home_care_prescriptions WHERE id=$1 AND salon_id=$2`,
+      [req.params.id, req.user.salonId]
+    );
+    if (!existing) return res.status(404).json({ error: 'Not found' });
+    await db.query(
+      `UPDATE home_care_prescriptions SET client_id=$1, face_procedures=$2, body_procedures=$3,
+         hair_procedures=$4, vitamins=$5, notes=$6, updated_at=NOW()
+       WHERE id=$7`,
+      [client_id || null, face_procedures || null, body_procedures || null,
+       hair_procedures || null, vitamins || null, notes || null, req.params.id]
+    );
+    await db.query(`DELETE FROM home_care_items WHERE prescription_id=$1`, [req.params.id]);
+    for (let i = 0; i < items.length; i++) {
+      const it = items[i];
+      await db.query(
+        `INSERT INTO home_care_items (prescription_id, time_of_day, category, product_name, instructions, sort_order)
+         VALUES ($1,$2,$3,$4,$5,$6)`,
+        [req.params.id, it.time_of_day, it.category, it.product_name, it.instructions || null, i]
+      );
+    }
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Delete
+app.delete('/api/home-care/:id', auth, async (req, res) => {
+  try {
+    await db.query(
+      `DELETE FROM home_care_prescriptions WHERE id=$1 AND salon_id=$2`,
+      [req.params.id, req.user.salonId]
+    );
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ============================================================
+// ── Template Settings ──────────────────────────────────────
+// ============================================================
+
+app.get('/api/template-settings', auth, async (req, res) => {
+  try {
+    const row = await db.one(
+      `SELECT template_logo_url, template_wm_url, template_accent_color, template_bg_color,
+              template_text_color, template_logo_line1, template_logo_line2, template_subtitle,
+              template_contact_phone, template_contact_web, template_contact_social
+       FROM salons WHERE id=$1`, [req.user.salonId]
+    );
+    res.json(row || {});
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.put('/api/template-settings', auth, async (req, res) => {
+  try {
+    const {
+      template_accent_color, template_bg_color, template_text_color,
+      template_logo_line1, template_logo_line2, template_subtitle,
+      template_contact_phone, template_contact_web, template_contact_social,
+    } = req.body;
+    await db.query(
+      `UPDATE salons SET
+        template_accent_color=$1, template_bg_color=$2, template_text_color=$3,
+        template_logo_line1=$4, template_logo_line2=$5, template_subtitle=$6,
+        template_contact_phone=$7, template_contact_web=$8, template_contact_social=$9
+       WHERE id=$10`,
+      [template_accent_color, template_bg_color, template_text_color,
+       template_logo_line1, template_logo_line2, template_subtitle,
+       template_contact_phone, template_contact_web, template_contact_social,
+       req.user.salonId]
+    );
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/template-settings/upload/:type', auth, (req, res, next) => {
+  upload.single('file')(req, res, async (err) => {
+    if (err) return res.status(400).json({ error: err.message });
+    if (!req.file) return res.status(400).json({ error: 'Файл не загружен' });
+    const type = req.params.type; // 'logo' or 'wm'
+    if (!['logo', 'wm'].includes(type)) return res.status(400).json({ error: 'Invalid type' });
+    const col = type === 'logo' ? 'template_logo_url' : 'template_wm_url';
+    const url = `/uploads/${req.file.filename}`;
+    try {
+      await db.query(`UPDATE salons SET ${col}=$1 WHERE id=$2`, [url, req.user.salonId]);
+      res.json({ ok: true, url });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+});
+
+// Helper: convert a relative /uploads/... URL to an absolute one for embedding in HTML
+function toAbsUrl(relUrl) {
+  if (!relUrl) return null;
+  if (/^https?:\/\//.test(relUrl)) return relUrl;
+  // Convert to base64 data URL by reading the file from disk
+  try {
+    const filePath = path.join(__dirname, '../frontend', relUrl);
+    if (fs.existsSync(filePath)) {
+      const data = fs.readFileSync(filePath);
+      const ext = path.extname(filePath).slice(1).toLowerCase();
+      const mime = ext === 'svg' ? 'image/svg+xml' : `image/${ext === 'jpg' ? 'jpeg' : ext}`;
+      return `data:${mime};base64,${data.toString('base64')}`;
+    }
+  } catch (_) {}
+  return `http://localhost:${process.env.PORT || 3001}${relUrl}`;
+}
+
+// Helper: load template config from DB, merged with defaults
+async function loadTemplateConfig(salonId, salonName) {
+  const row = await db.one(
+    `SELECT template_logo_url, template_wm_url, template_accent_color, template_bg_color,
+            template_text_color, template_logo_line1, template_logo_line2, template_subtitle,
+            template_contact_phone, template_contact_web, template_contact_social
+     FROM salons WHERE id=$1`, [salonId]
+  ).catch(() => null);
+  const parts = (salonName || '').trim().split(/\s+/);
+  const base = {
+    ...BRAND_CONFIG,
+    logoLine1: parts[0] || 'PERI',
+    logoLine2: parts.slice(1).join(' ') || 'CLINIC',
+  };
+  if (!row) return base;
+  return {
+    ...base,
+    ...(row.template_logo_line1 && { logoLine1: row.template_logo_line1 }),
+    ...(row.template_logo_line2 !== null && row.template_logo_line2 !== undefined && { logoLine2: row.template_logo_line2 }),
+    ...(row.template_subtitle   && { subtitle: row.template_subtitle }),
+    ...(row.template_accent_color && { accentColor: row.template_accent_color }),
+    ...(row.template_bg_color   && { bgColor: row.template_bg_color }),
+    ...(row.template_text_color && { textColor: row.template_text_color }),
+    ...(row.template_logo_url   && { logoImageUrl: toAbsUrl(row.template_logo_url) }),
+    ...(row.template_wm_url     && { wmImageUrl:   toAbsUrl(row.template_wm_url) }),
+    ...(row.template_contact_phone  && { contactPhone: row.template_contact_phone }),
+    ...(row.template_contact_web    && { contactWeb: row.template_contact_web }),
+    ...(row.template_contact_social && { contactSocial: row.template_contact_social }),
+  };
+}
+
+// HTML-превью (тот же шаблон, без puppeteer — быстро открывается в браузере)
+app.get('/api/home-care/:id/preview', auth, async (req, res) => {
+  try {
+    const p = await db.one(
+      `SELECT p.*, c.name as client_name, c.phone as client_phone,
+              u.name as specialist_name, s.name as salon_name
+       FROM home_care_prescriptions p
+       LEFT JOIN clients c ON c.id = p.client_id
+       LEFT JOIN users u ON u.id = p.specialist_id
+       LEFT JOIN salons s ON s.id = p.salon_id
+       WHERE p.id = $1 AND p.salon_id = $2`,
+      [req.params.id, req.user.salonId]
+    );
+    if (!p) return res.status(404).json({ error: 'Not found' });
+    const items = await db.many(
+      `SELECT * FROM home_care_items WHERE prescription_id=$1 ORDER BY time_of_day, sort_order`,
+      [req.params.id]
+    );
+    const config = await loadTemplateConfig(req.user.salonId, p.salon_name);
+    const html = buildHomeCareHtml({ ...p, items }, config);
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    res.send(html);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// PDF — генерация через puppeteer
+app.get('/api/home-care/:id/pdf', auth, async (req, res) => {
+  let browser;
+  try {
+    const p = await db.one(
+      `SELECT p.*, c.name as client_name, c.phone as client_phone,
+              u.name as specialist_name, s.name as salon_name
+       FROM home_care_prescriptions p
+       LEFT JOIN clients c ON c.id = p.client_id
+       LEFT JOIN users u ON u.id = p.specialist_id
+       LEFT JOIN salons s ON s.id = p.salon_id
+       WHERE p.id = $1 AND p.salon_id = $2`,
+      [req.params.id, req.user.salonId]
+    );
+    if (!p) return res.status(404).json({ error: 'Not found' });
+    const items = await db.many(
+      `SELECT * FROM home_care_items WHERE prescription_id=$1 ORDER BY time_of_day, sort_order`,
+      [req.params.id]
+    );
+    const prescription = { ...p, items };
+    const config = await loadTemplateConfig(req.user.salonId, prescription.salon_name);
+    const html = buildHomeCareHtml(prescription, config);
+
+    browser = await puppeteer.launch({
+      args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-gpu'],
+      headless: true,
+    });
+    const page = await browser.newPage();
+    await page.setContent(html, { waitUntil: 'load', timeout: 30000 });
+    // Give web fonts (Google Fonts) a moment to finish loading
+    await page.evaluate(() => new Promise(r => setTimeout(r, 1200)));
+    const pdfData = await page.pdf({
+      format: 'A4',
+      printBackground: true,
+      margin: { top:'10mm', bottom:'12mm', left:'13mm', right:'13mm' },
+    });
+    await browser.close();
+    // puppeteer ≥22 returns Uint8Array; convert to Buffer for Express
+    const pdf = Buffer.isBuffer(pdfData) ? pdfData : Buffer.from(pdfData);
+
+    const clientName = (prescription.client_name || 'назначение').replace(/[^а-яёa-z0-9_\- ]/gi,'').slice(0,30);
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent('Домашний уход — ' + clientName)}.pdf`);
+    res.send(pdf);
+  } catch (e) {
+    if (browser) await browser.close().catch(()=>{});
+    console.error('[PDF]', e.message);
+    res.status(500).json({ error: e.message });
+  }
 });
 
 // ============================================================
@@ -3004,6 +4125,82 @@ pool.connect()
         UNIQUE(salon_id, yclients_service_id)
       )
     `).catch(() => {});
+    // ── Home Care tables ──────────────────────────────────────
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS home_care_prescriptions (
+        id SERIAL PRIMARY KEY,
+        salon_id INTEGER REFERENCES salons(id) ON DELETE CASCADE,
+        client_id INTEGER REFERENCES clients(id) ON DELETE SET NULL,
+        specialist_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        face_procedures TEXT,
+        body_procedures TEXT,
+        hair_procedures TEXT,
+        vitamins TEXT,
+        notes TEXT,
+        created_at TIMESTAMP DEFAULT NOW(),
+        updated_at TIMESTAMP DEFAULT NOW()
+      )
+    `).catch(() => {});
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS home_care_items (
+        id SERIAL PRIMARY KEY,
+        prescription_id INTEGER REFERENCES home_care_prescriptions(id) ON DELETE CASCADE,
+        time_of_day VARCHAR(20) NOT NULL,
+        category VARCHAR(100) NOT NULL,
+        product_name TEXT NOT NULL,
+        instructions TEXT,
+        sort_order INTEGER DEFAULT 0
+      )
+    `).catch(() => {});
+    // ── Goods category column ─────────────────────────────────
+    await client.query(`
+      ALTER TABLE goods_sale_items ADD COLUMN IF NOT EXISTS yclients_category VARCHAR(200)
+    `).catch(() => {});
+    // ── Client blacklist flag ──────────────────────────────────
+    await client.query(`
+      ALTER TABLE clients ADD COLUMN IF NOT EXISTS is_blacklisted BOOLEAN NOT NULL DEFAULT FALSE
+    `).catch(() => {});
+    // ── Client segments table ──────────────────────────────────
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS client_segments (
+        salon_id         INTEGER NOT NULL,
+        client_id        INTEGER NOT NULL,
+        segment_key      VARCHAR(40) NOT NULL,
+        rank             SMALLINT,
+        zone             VARCHAR(20),
+        days_since_visit INTEGER,
+        return_window    INTEGER,
+        updated_at       TIMESTAMPTZ DEFAULT NOW(),
+        PRIMARY KEY (salon_id, client_id)
+      )
+    `).catch(() => {});
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_client_segments_salon_key
+        ON client_segments (salon_id, segment_key)
+    `).catch(() => {});
+    // ── Role-based access: user management columns ────────────
+    await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT TRUE`).catch(() => {});
+    await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS must_change_password BOOLEAN NOT NULL DEFAULT FALSE`).catch(() => {});
+    await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS created_by INTEGER REFERENCES users(id)`).catch(() => {});
+    await client.query(`ALTER TABLE salons ADD COLUMN IF NOT EXISTS plan VARCHAR(20) NOT NULL DEFAULT 'basic'`).catch(() => {});
+    await client.query(`ALTER TABLE salons ADD COLUMN IF NOT EXISTS max_users INTEGER NOT NULL DEFAULT 5`).catch(() => {});
+    // ── Template settings columns ──────────────────────────────
+    const tmplCols = [
+      'template_logo_url TEXT',
+      'template_wm_url TEXT',
+      'template_accent_color VARCHAR(20)',
+      'template_bg_color VARCHAR(20)',
+      'template_text_color VARCHAR(20)',
+      'template_logo_line1 VARCHAR(100)',
+      'template_logo_line2 VARCHAR(100)',
+      'template_subtitle VARCHAR(200)',
+      'template_contact_phone VARCHAR(100)',
+      'template_contact_web VARCHAR(200)',
+      'template_contact_social VARCHAR(200)',
+    ];
+    for (const col of tmplCols) {
+      await client.query(`ALTER TABLE salons ADD COLUMN IF NOT EXISTS ${col}`).catch(() => {});
+    }
     client.release();
     app.listen(PORT, () => {
       console.log(`✓ LoyalPro server running on port ${PORT}`);
