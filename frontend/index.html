@@ -6,6 +6,11 @@
 <title>LoyalPro — Программа лояльности</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.9.2/dist/confetti.browser.min.js"></script>
+<script src="js/core/utils.js"></script>
+<script src="js/core/api.js"></script>
+<script src="js/core/theme.js"></script>
+<script src="js/core/auth.js"></script>
+<script src="js/core/nav.js"></script>
 <link rel="stylesheet" href="css/base.css">
 <link rel="stylesheet" href="css/features.css">
 </head>
@@ -914,77 +919,12 @@
 <div id="lbar" class="lbar"></div>
 
 <script>
-// ── CONFIG ──
-const API = '';
-let TOKEN = localStorage.getItem('lp_tk');
-let ME = null;
-let dashP = 7, cPage_ = 1, cSortCol = 'last_visit_at', cSortDir = 'desc';
-let bonusTarget = null, lsData = {}, ycSvcs = [];
-let rCh, bfCh, lvlCh;
+// ── PAGE-LEVEL STATE (остаётся в index.html) ──
+// dashP, rCh, bfCh, lvlCh → js/pages/dashboard.js
+// cPage_, cSortCol, cSortDir, bonusTarget → js/pages/clients.js
+let lsData = {}, ycSvcs = [];
 const LVL_L = {bronze:'🥉 Бронза',silver:'🥈 Серебро',gold:'🥇 Золото',platinum:'💎 Платина'};
 const LVL_B = {bronze:'bgr',silver:'bb',gold:'bo',platinum:'bg'};
-
-// ── HTTP ──
-async function api(method, path, body) {
-  showLbar(true);
-  try {
-    const o = { method, headers: {'Content-Type':'application/json'} };
-    if (TOKEN) o.headers['Authorization'] = 'Bearer ' + TOKEN;
-    if (body) o.body = JSON.stringify(body);
-    const r = await fetch(API + path, o);
-    const j = await r.json();
-    if (!r.ok) throw new Error(j.error || 'HTTP ' + r.status);
-    return j;
-  } finally { showLbar(false); }
-}
-
-// ── AUTH TAB SWITCH ──
-function switchAuthTab(tab) {
-  document.getElementById('formLogin').style.display    = tab === 'login'    ? 'block' : 'none';
-  document.getElementById('formRegister').style.display = tab === 'register' ? 'block' : 'none';
-  document.getElementById('tabLoginBtn').classList.toggle('active', tab === 'login');
-  document.getElementById('tabRegBtn').classList.toggle('active',   tab === 'register');
-}
-
-// ── LOGIN ──
-async function doLogin() {
-  const email = document.getElementById('lEmail').value.trim();
-  const password = document.getElementById('lPass').value;
-  const errEl = document.getElementById('loginErr');
-  const btn = document.getElementById('loginBtn');
-  errEl.style.display = 'none';
-  btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Входим...';
-  try {
-    const d = await api('POST', '/api/auth/login', { email, password });
-    TOKEN = d.token; ME = d.user;
-    localStorage.setItem('lp_tk', TOKEN);
-    launchApp();
-  } catch(e) {
-    errEl.textContent = e.message; errEl.style.display = 'block';
-  } finally { btn.disabled = false; btn.textContent = 'Войти в личный кабинет'; }
-}
-
-// ── REGISTER ──
-async function doRegister() {
-  const salonName = document.getElementById('rSalon').value.trim();
-  const city      = document.getElementById('rCity').value.trim();
-  const email     = document.getElementById('rEmail').value.trim();
-  const password  = document.getElementById('rPass').value;
-  const errEl = document.getElementById('regErr');
-  const btn = document.getElementById('regBtn');
-  errEl.style.display = 'none';
-  if (!salonName || !email || !password) { errEl.textContent = 'Заполните все обязательные поля'; errEl.style.display = 'block'; return; }
-  if (password.length < 6) { errEl.textContent = 'Пароль минимум 6 символов'; errEl.style.display = 'block'; return; }
-  btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>';
-  try {
-    const d = await api('POST', '/api/auth/register', { salonName, city, email, password });
-    TOKEN = d.token; ME = d.user;
-    localStorage.setItem('lp_tk', TOKEN);
-    launchApp();
-  } catch(e) {
-    errEl.textContent = e.message; errEl.style.display = 'block';
-  } finally { btn.disabled = false; btn.textContent = 'Создать аккаунт'; }
-}
 
 async function loadCardTypes() {
   const sel = document.getElementById('st-card-type');
@@ -1020,14 +960,7 @@ function onCardTypeChange(sel) {
   }
 }
 
-// Синхронизировать карту конкретного клиента
-async function syncClientCard(clientId) {
-  try {
-    const r = await api('POST', `/api/clients/${clientId}/sync-card`);
-    if (r.ok) notify(`Карта синхронизирована. Баланс: ${r.balance} бонусов, транзакций: ${r.transactionsImported}`, 'ok');
-    else notify(r.message || 'Карта не найдена', 'err');
-  } catch(e) { notify(e.message, 'err'); }
-}
+// syncClientCard → js/pages/clients.js
 
 // ── BULK IMPORT ──────────────────────────────────────────────
 let bulkPollInterval = null;
@@ -1190,362 +1123,11 @@ async function startXlsImport() {
   }
 }
 
-async function doLogout() {
-  try { await api('POST', '/api/auth/logout'); } catch {}
-  localStorage.removeItem('lp_tk');
-  location.reload();
-}
+// doLogout, launchApp, showLogin, navStg → js/core/nav.js + js/core/auth.js
 
-// ── LAUNCH ──
-async function launchApp() {
-  if (!ME) {
-    try { ME = await api('GET', '/api/auth/me'); } catch { showLogin(); return; }
-  }
-  document.getElementById('loginScreen').style.display = 'none';
-  document.getElementById('topAv').textContent  = (ME.name||ME.email||'?').slice(0,2).toUpperCase();
-  document.getElementById('topName').textContent = ME.name || ME.email;
+// setPeriod, buildRevChart, buildRecentTx, buildTopSvc → js/pages/dashboard.js
 
-  // Must change password on first login
-  if (ME.must_change_password) {
-    document.getElementById('changePwScreen').style.display = 'flex';
-    document.getElementById('app').style.display = 'none';
-    return;
-  }
-
-  document.getElementById('app').style.display = 'flex';
-
-  // Apply role-based navigation
-  const startPage = applyRoleNav(ME.role);
-  // Activate start page
-  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
-  document.getElementById('page-' + startPage)?.classList.add('active');
-
-  // Load initial data for start page
-  if (startPage === 'dashboard') { loadDashboard(); loadLs(); }
-  else if (startPage === 'home-care') { loadHomeCare(); }
-  else { loadDashboard(); loadLs(); }
-}
-
-function showLogin() {
-  localStorage.removeItem('lp_tk');
-  document.getElementById('loginScreen').style.display = 'flex';
-  document.getElementById('app').style.display = 'none';
-}
-
-// ── NAV ──
-
-// ── SETTINGS SIDEBAR ──
-function navStg(id, el) {
-  document.querySelectorAll('.stg-item').forEach(e => e.classList.remove('active'));
-  if (el) el.classList.add('active');
-  document.querySelectorAll('.stg-section').forEach(e => e.classList.remove('active'));
-  const sec = document.getElementById('stg-' + id);
-  if (sec) sec.classList.add('active');
-  if (id === 'loyalty-services') loadSvcCb();
-  if (id === 'loyalty-birthday') loadBdList();
-  if (id === 'sync-logs') loadSyncLogs();
-}
-
-// ── DASHBOARD ──
-function setPeriod(d,el) {
-  dashP = d;
-  document.querySelectorAll('#page-dashboard .pb-btns .pb-btn').forEach(b=>b.classList.remove('active'));
-  el.classList.add('active');
-  loadDashboard();
-}
-
-function buildRevChart(data) {
-  const ctx = document.getElementById('revChart').getContext('2d');
-  if (rCh) rCh.destroy();
-  const labels = data.map(d=>{const dt=new Date(d.visit_date+'T00:00:00');return dt.getDate()+'.'+(dt.getMonth()+1)});
-  rCh = new Chart(ctx, { type:'bar', data:{
-    labels,
-    datasets:[
-      {label:'Выручка ₽',data:data.map(d=>parseFloat(d.revenue||0)),backgroundColor:'rgba(0,200,150,0.75)',borderRadius:3},
-      {label:'Начислено бонусов',data:data.map(d=>parseFloat(d.bonuses_accrued||0)),backgroundColor:'rgba(59,130,246,0.65)',borderRadius:3},
-      {label:'Списано бонусов',data:data.map(d=>parseFloat(d.bonuses_redeemed||0)),backgroundColor:'rgba(232,84,84,0.55)',borderRadius:3},
-    ]},
-    options:{responsive:true,maintainAspectRatio:false,interaction:{mode:'index'},
-      plugins:{legend:{labels:{font:{size:11},boxWidth:10}}},
-      scales:{
-        x:{grid:{display:false},ticks:{maxTicksLimit:15,font:{size:10}}},
-        y:{grid:{color:'rgba(0,0,0,0.04)'},ticks:{callback:v=>v>=1000?(v/1000).toFixed(0)+'к':v,font:{size:10}},title:{display:true,text:'₽',font:{size:10}}}
-      }}
-  });
-}
-
-function buildRecentTx(txns) {
-  const el = document.getElementById('recentTx');
-  if (!txns?.length) { el.innerHTML='<div class="empty">Нет транзакций</div>'; return; }
-  const ic = {accrual:'💳',birthday:'🎂',referral:'👥',manual:'✏️',redemption:'💸',cancellation:'❌'};
-  el.innerHTML = txns.slice(0,8).map(t=>`
-    <div class="ai">
-      <div class="ai-ic" style="background:${t.amount>0?'#e6f9f3':'#fce8e8'}">${ic[t.type]||'💰'}</div>
-      <div>
-        <div style="font-size:12.5px"><strong>${t.client_name||'Клиент'}</strong> — <strong style="color:${t.amount>0?'var(--a)':'var(--danger)'}">${t.amount>0?'+':''}${t.amount}</strong> бонусов</div>
-        <div style="font-size:11px;color:var(--t3)">${t.description||''} · ${new Date(t.created_at).toLocaleDateString('ru',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'})}</div>
-      </div>
-    </div>`).join('');
-}
-
-function buildTopSvc(svcs) {
-  const el = document.getElementById('topSvc');
-  if (!svcs?.length) { el.innerHTML='<div class="empty">Нет данных</div>'; return; }
-  const mx = Math.max(...svcs.map(s=>parseInt(s.cnt)||0),1);
-  el.innerHTML = svcs.map(s=>`
-    <div style="margin-bottom:9px">
-      <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:3px">
-        <span>${s.service_name||'—'}</span><strong>${s.cnt}</strong>
-      </div>
-      <div class="pb"><div class="pf" style="width:${Math.round((s.cnt||0)/mx*100)}%"></div></div>
-    </div>`).join('');
-}
-
-
-
-// ── CLIENTS ──
-function cPage(d) { cPage_ = Math.max(1, cPage_+d); loadClients(); }
-
-function cFilter() { cPage_ = 1; loadClients(); }
-
-function cSort(col) {
-  if (cSortCol === col) {
-    cSortDir = cSortDir === 'asc' ? 'desc' : 'asc';
-  } else {
-    cSortCol = col;
-    cSortDir = col === 'name' || col === 'phone' ? 'asc' : 'desc';
-  }
-  cUpdateSortUI();
-  cPage_ = 1;
-  loadClients();
-}
-
-function cUpdateSortUI() {
-  document.querySelectorAll('#page-clients .th-sort').forEach(th => {
-    th.classList.remove('asc', 'desc');
-    if (th.dataset.col === cSortCol) th.classList.add(cSortDir);
-  });
-}
-
-function cResetFilters() {
-  ['cf-name','cf-phone','cf-bonus-min','cf-bonus-max','cf-spent-min','cf-spent-max',
-   'cf-visits-min','cf-visits-max','cf-visit-from','cf-visit-to'].forEach(id => {
-    const el = document.getElementById(id);
-    if (el) el.value = '';
-  });
-  const lvl = document.getElementById('cf-level');
-  if (lvl) lvl.value = '';
-  const stat = document.getElementById('cstat');
-  if (stat) stat.value = '';
-  cSortCol = 'last_visit_at'; cSortDir = 'desc';
-  cUpdateSortUI();
-  cPage_ = 1;
-  loadClients();
-}
-
-function cGetFilters() {
-  const g = id => document.getElementById(id)?.value || '';
-  return {
-    name:           g('cf-name'),
-    phone:          g('cf-phone'),
-    level:          g('cf-level'),
-    status:         g('cstat'),
-    bonus_min:      g('cf-bonus-min'),
-    bonus_max:      g('cf-bonus-max'),
-    spent_min:      g('cf-spent-min'),
-    spent_max:      g('cf-spent-max'),
-    visits_min:     g('cf-visits-min'),
-    visits_max:     g('cf-visits-max'),
-    last_visit_from:g('cf-visit-from'),
-    last_visit_to:  g('cf-visit-to'),
-  };
-}
-
-async function loadClients() {
-  try {
-    const f = cGetFilters();
-    const params = { page: cPage_, limit: 50, sort: cSortCol, sort_dir: cSortDir };
-    Object.entries(f).forEach(([k,v]) => { if (v) params[k] = v; });
-    const q = new URLSearchParams(params);
-    const d = await api('GET', '/api/clients?'+q);
-    const tb = document.getElementById('cBody');
-    if (!d.clients?.length) { tb.innerHTML='<tr><td colspan="8" class="empty">Клиенты не найдены</td></tr>'; return; }
-    tb.innerHTML = d.clients.map(c=>`
-      <tr onclick="openCD(${c.id})">
-        <td><div style="display:flex;align-items:center;gap:9px"><div class="av" style="background:${avc(c.name)};color:#fff;font-size:10px">${avi(c.name)}</div><div style="font-weight:600">${c.name}</div></div></td>
-        <td style="color:var(--t2)">${c.phone||'—'}</td>
-        <td><span class="badge ${LVL_B[c.loyalty_level]||'bgr'}">${LVL_L[c.loyalty_level]||'—'}</span></td>
-        <td style="font-weight:700;color:var(--a)">${(c.bonus_balance||0).toLocaleString('ru')}</td>
-        <td>${parseFloat(c.total_spent||0).toLocaleString('ru')} ₽</td>
-        <td>${c.visits_count||0}</td>
-        <td style="color:var(--t3)">${c.last_visit_at?new Date(c.last_visit_at).toLocaleDateString('ru',{day:'numeric',month:'short',year:'numeric'}):'—'}</td>
-        <td><button class="btn btn-sec btn-sm" onclick="event.stopPropagation();openCD(${c.id})">→</button></td>
-      </tr>`).join('');
-    const shown = Math.min(cPage_*50, d.total);
-    const from  = d.total === 0 ? 0 : (cPage_-1)*50+1;
-    document.getElementById('cPager').textContent = `Показано ${from}–${shown} из ${d.total}`;
-    cUpdateSortUI();
-  } catch(e) { notify(e.message,'err'); }
-}
-
-async function openCD(id) {
-  try {
-    const [{client:c,history,records}, cardTxnsResp] = await Promise.all([
-      api('GET','/api/clients/'+id),
-      api('GET','/api/clients/'+id+'/card-transactions').catch(()=>({local:[],yclients:[]})),
-    ]);
-    document.getElementById('cmTitle').textContent = c.name;
-
-    // Объединяем loyalty_card_transactions + bonus_transactions, убираем дубли по дате+сумме
-    const lctRows = (cardTxnsResp.local || []).map(t => ({
-      created_at:  t.txn_date || t.created_at,
-      amount:      parseFloat(t.amount || 0),
-      description: t.title || (parseFloat(t.amount||0) >= 0 ? 'Начисление' : 'Списание'),
-      balance_after: parseFloat(t.balance_after || 0),
-      _src: 'card'
-    }));
-    const bonusRows = (history || []).map(t => ({
-      created_at:  t.created_at,
-      amount:      parseFloat(t.amount || 0),
-      description: t.description || t.type,
-      balance_after: parseFloat(t.balance_after || 0),
-      _src: 'bonus'
-    }));
-
-    // Объединяем — если есть записи из карты, показываем их; дополняем bonus_transactions
-    const allTxns = lctRows.length > 0
-      ? [...lctRows, ...bonusRows.filter(b => !lctRows.some(l =>
-          Math.abs(new Date(l.created_at) - new Date(b.created_at)) < 86400000 &&
-          Math.abs(l.amount - b.amount) < 0.01
-        ))]
-      : bonusRows;
-
-    // Сортируем по дате DESC
-    allTxns.sort((a,b) => new Date(b.created_at) - new Date(a.created_at));
-
-    const rows = allTxns.slice(0,50).map(t=>`
-      <tr>
-        <td style="color:var(--t3)">${t.created_at ? new Date(t.created_at).toLocaleDateString('ru',{day:'numeric',month:'short',year:'2-digit'}) : '—'}</td>
-        <td style="color:${t.amount>0?'var(--a)':'var(--danger)'};font-weight:600">${t.amount>0?'+':''}${parseFloat(t.amount).toLocaleString('ru')}</td>
-        <td style="color:var(--t2);font-size:12px">${t.description||'—'}</td>
-        <td style="font-weight:600">${t.balance_after ? parseFloat(t.balance_after).toLocaleString('ru') : '—'}</td>
-      </tr>`).join('');
-
-    const cardBlock = c.yclients_card_id
-      ? `<div style="display:flex;align-items:center;justify-content:space-between;padding:10px 12px;background:var(--as);border-radius:8px;margin-bottom:14px">
-           <div>
-             <div style="font-size:12px;color:var(--t3)">Карта YClients</div>
-             <div style="font-size:13px;font-weight:600">№${c.yclients_card_number||c.yclients_card_id} · Баланс: <span style="color:var(--a)">${parseFloat(c.yclients_card_balance||0).toLocaleString('ru')} бонусов</span></div>
-           </div>
-           <button class="btn btn-sec btn-sm" id="syncCardBtn_${c.id}" onclick="doSyncCard(${c.id})">
-             🔄 Синхронизировать карту
-           </button>
-         </div>`
-      : `<div style="padding:10px 12px;background:var(--bg);border-radius:8px;margin-bottom:14px;font-size:12.5px;color:var(--t3)">
-           Карта лояльности YClients не привязана.
-           <button class="btn btn-sec btn-sm" style="margin-left:8px" onclick="doSyncCard(${c.id})">Найти и привязать</button>
-         </div>`;
-
-    document.getElementById('cmBody').innerHTML=`
-      <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px">
-        <div class="av" style="width:48px;height:48px;font-size:15px;background:${avc(c.name)};color:#fff">${avi(c.name)}</div>
-        <div>
-          <div style="font-size:17px;font-weight:700">${c.name}</div>
-          <div style="color:var(--t2);font-size:13px">${c.phone||'—'}${c.email?' · '+c.email:''}</div>
-        </div>
-        <span class="badge ${LVL_B[c.loyalty_level]||'bgr'}" style="margin-left:auto">${LVL_L[c.loyalty_level]||'—'}</span>
-      </div>
-      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:14px">
-        <div class="sc"><div class="sl">Бонусы (наша БД)</div><div class="sv" style="font-size:20px;color:var(--a)">${(c.bonus_balance||0).toLocaleString('ru')}</div></div>
-        <div class="sc"><div class="sl">Потрачено</div><div class="sv" style="font-size:20px">${parseFloat(c.total_spent||0).toLocaleString('ru')} ₽</div></div>
-        <div class="sc"><div class="sl">Визитов</div><div class="sv" style="font-size:20px">${c.visits_count||0}</div></div>
-      </div>
-      ${cardBlock}
-      <div class="div"></div>
-      <div class="fg"><label class="fl">Ручная корректировка</label>
-        <div style="display:flex;gap:7px">
-          <input type="number" id="qAmt" placeholder="Бонусы" style="flex:1">
-          <input type="text" id="qCmt" placeholder="Причина" style="flex:1">
-          <button class="btn btn-pri btn-sm" onclick="quickB(${c.id},1)">+ Начислить</button>
-          <button class="btn btn-sec btn-sm btn-dng" onclick="quickB(${c.id},-1)">− Списать</button>
-        </div>
-      </div>
-      <div class="div"></div>
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
-        <div style="font-size:13px;font-weight:700">История операций</div>
-        <span style="font-size:11px;color:var(--t3)">${allTxns.length} операций</span>
-      </div>
-      ${rows?`<div style="max-height:280px;overflow-y:auto"><table><thead><tr><th>Дата</th><th>Сумма</th><th>Описание</th><th>Баланс</th></tr></thead><tbody>${rows}</tbody></table></div>`:'<div class="empty">Нет операций</div>'}
-      <div id="cardTxnsBlock_${c.id}"></div>`;
-
-    openModal('clientModal');
-  } catch(e) { notify(e.message,'err'); }
-}
-
-// Синхронизация карты клиента
-async function doSyncCard(clientId) {
-  const btn = document.getElementById(`syncCardBtn_${clientId}`);
-  if (btn) { btn.disabled=true; btn.innerHTML='<span class="spinner"></span> Загрузка...'; }
-  try {
-    const r = await api('POST', `/api/clients/${clientId}/sync-card`);
-    if (r.ok) {
-      notify(`✓ Карта синхронизирована. Баланс: ${parseFloat(r.balance||0).toLocaleString('ru')} бонусов. Транзакций загружено: ${r.transactionsImported}`, 'ok');
-      // Перезагрузить карточку клиента
-      setTimeout(() => openCD(clientId), 500);
-    } else {
-      notify(r.message || 'Карта не найдена у клиента', 'err');
-    }
-  } catch(e) { notify('Ошибка синхронизации: '+e.message, 'err'); }
-  finally { if(btn){btn.disabled=false;btn.innerHTML='🔄 Синхронизировать карту';} }
-}
-
-// Загрузить полную историю транзакций из нашей БД
-async function loadCardTxns(clientId) {
-  const el = document.getElementById(`cardTxnsBlock_${clientId}`);
-  if (!el) return;
-  el.innerHTML = '<div style="margin-top:14px;font-size:13px;color:var(--t3)"><span class="spinner"></span> Загрузка полной истории...</div>';
-  try {
-    const r = await api('GET', `/api/clients/${clientId}/card-transactions`);
-    const txns = r.transactions || [];
-    if (!txns.length) { el.innerHTML='<div class="empty" style="margin-top:10px">История операций пуста</div>'; return; }
-
-    const TYPE_LBL = {accrual:'Начисление',redemption:'Списание',birthday:'День рождения',referral:'Реферал',manual:'Вручную',cancellation:'Отмена',expiry:'Сгорание'};
-    const rows = txns.map(t => {
-      const amt  = parseFloat(t.amount||0);
-      const date = t.created_at ? new Date(t.created_at).toLocaleDateString('ru',{day:'numeric',month:'short',year:'2-digit'}) : '—';
-      const desc = t.description || TYPE_LBL[t.type] || t.type || '—';
-      const bal  = parseFloat(t.balance_after||0);
-      const svc  = Array.isArray(t.record_services) ? t.record_services.map(s=>s.title||s).join(', ') : '';
-      return `<tr>
-        <td style="color:var(--t3)">${date}</td>
-        <td style="color:${amt>=0?'var(--a)':'var(--danger)'};font-weight:600">${amt>=0?'+':''}${amt.toLocaleString('ru')}</td>
-        <td style="color:var(--t2);font-size:12px">${desc}${svc?'<br><span style="color:var(--t3)">'+svc+'</span>':''}</td>
-        <td style="font-weight:600">${bal.toLocaleString('ru')}</td>
-      </tr>`;
-    }).join('');
-
-    const s = r.summary||{};
-    el.innerHTML = `
-      <div class="div"></div>
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
-        <div style="font-size:13px;font-weight:700">Полная история операций (${txns.length})</div>
-        <div style="font-size:12px;color:var(--t3)">
-          Начислено: <span style="color:var(--a);font-weight:600">+${parseFloat(s.totalAccrued||0).toLocaleString('ru')}</span> ·
-          Списано: <span style="color:var(--danger);font-weight:600">-${parseFloat(s.totalRedeemed||0).toLocaleString('ru')}</span>
-        </div>
-      </div>
-      <div style="max-height:300px;overflow-y:auto">
-        <table><thead><tr><th>Дата</th><th>Сумма</th><th>Описание</th><th>Баланс</th></tr></thead><tbody>${rows}</tbody></table>
-      </div>`;
-  } catch(e) { el.innerHTML=`<div style="margin-top:10px;font-size:12.5px;color:var(--danger)">Ошибка: ${e.message}</div>`; }
-}
-
-async function quickB(id,sign) {
-  const amt=parseInt(document.getElementById('qAmt')?.value)||0;
-  const cmt=document.getElementById('qCmt')?.value||'Ручная корректировка';
-  if(!amt){notify('Введите количество','err');return;}
-  try { await api('POST','/api/clients/'+id+'/bonus',{amount:sign*amt,description:cmt}); notify(sign>0?'+'+amt+' начислено':'-'+amt+' списано','ok'); closeModal('clientModal'); loadClients(); } catch(e){notify(e.message,'err');}
-}
+// cPage…quickB, openCD, doSyncCard, loadCardTxns → js/pages/clients.js
 
 // ── SEGMENTS ──
 const ZONE_ORDER = ['waiting','post_visit','active','risk','sleeping','no_visit','blacklist'];
@@ -1958,21 +1540,7 @@ function updateBonusBanner() {
   if (banner) banner.style.display = on ? 'none' : 'flex';
 }
 
-function buildBfChart(data) {
-  const days={};
-  data.forEach(r=>{const d=r.day;if(!days[d])days[d]={a:0,r:0};days[d].a+=parseFloat(r.accrued||0);days[d].r+=parseFloat(r.redeemed||0);});
-  const keys=Object.keys(days).sort().slice(-30);
-  const ctx=document.getElementById('bfChart').getContext('2d');
-  if(bfCh)bfCh.destroy();
-  bfCh=new Chart(ctx,{type:'bar',data:{labels:keys.map(d=>{const dt=new Date(d);return dt.getDate()+'.'+(dt.getMonth()+1)}),datasets:[{label:'Начислено',data:keys.map(k=>days[k].a),backgroundColor:'rgba(0,200,150,0.6)',borderRadius:3},{label:'Списано',data:keys.map(k=>days[k].r),backgroundColor:'rgba(232,84,84,0.5)',borderRadius:3}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{labels:{font:{size:11},boxWidth:10}}},scales:{x:{grid:{display:false},ticks:{maxTicksLimit:10,font:{size:10}}},y:{grid:{color:'rgba(0,0,0,0.04)'},ticks:{font:{size:10}}}}}});
-}
-function buildLvlChart(dist) {
-  const ctx=document.getElementById('lvlChart').getContext('2d');
-  if(lvlCh)lvlCh.destroy();
-  const K=['platinum','gold','silver','bronze'],C=['#00c896','#f59e0b','#9e9e9e','#cd7f32'];
-  const map={}; dist.forEach(d=>map[d.loyalty_level]=parseInt(d.cnt)||0);
-  lvlCh=new Chart(ctx,{type:'doughnut',data:{labels:['💎 Платина','🥇 Золото','🥈 Серебро','🥉 Бронза'],datasets:[{data:K.map(k=>map[k]||0),backgroundColor:C,borderWidth:0}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{position:'right',labels:{font:{size:11},boxWidth:9}}}}});
-}
+// buildBfChart, buildLvlChart → js/pages/dashboard.js
 
 // ── TEMPLATE SETTINGS ──
 function syncColor(key) {
@@ -2161,27 +1729,12 @@ async function triggerSync() {
   } catch(e){notify(e.message,'err');if(banner)banner.style.display='none';}
 }
 
-// ── BONUS MODAL ──
-async function searchBonusC(q) {
-  const el=document.getElementById('bmr'); bonusTarget=null;
-  if(!q){el.innerHTML='';return;}
-  try {
-    const d=await api('GET','/api/clients?search='+encodeURIComponent(q)+'&limit=5');
-    if(!d.clients?.length){el.innerHTML='<div style="font-size:12px;color:var(--t3)">Не найдено</div>';return;}
-    el.innerHTML=d.clients.map(c=>`
-      <div onclick="selBC(${c.id},'${c.name.replace(/'/g,"\\'")}',${c.bonus_balance})" style="padding:7px 10px;border:1px solid var(--bd);border-radius:7px;cursor:pointer;margin-bottom:4px;font-size:12.5px">
-        <strong>${c.name}</strong> · ${c.phone||'—'} · <span style="color:var(--a)">${c.bonus_balance||0} бонусов</span>
-      </div>`).join('');
-  } catch{}
-}
-function selBC(id,name) { bonusTarget=id; document.getElementById('bms').value=name; document.getElementById('bmr').innerHTML=`<div style="font-size:12px;color:var(--a)">✓ ${name}</div>`; }
+// searchBonusC, selBC → js/pages/clients.js
 
 // ── UTILS ──
 function openModal(id){document.getElementById(id).classList.add('open');}
 function closeModal(id){document.getElementById(id).classList.remove('open');}
-let nt;
-function notify(msg,type='ok'){const n=document.getElementById('notif');n.textContent=msg;n.className='notif show '+type;clearTimeout(nt);nt=setTimeout(()=>n.classList.remove('show'),3500);}
-function showLbar(on){document.getElementById('lbar').style.display=on?'block':'none';}
+// notify, showLbar → js/core/utils.js
 function avc(n=''){const c=['#3b82f6','#8b5cf6','#ec4899','#f59e0b','#10b981','#06b6d4','#ef4444','#84cc16'];return c[(n||'').charCodeAt(0)%c.length];}
 function avi(n='?'){return(n||'?').split(' ').slice(0,2).map(w=>w[0]||'').join('').toUpperCase();}
 function timeSince(d){const s=Math.floor((Date.now()-new Date(d))/1000);if(s<60)return s+'с';if(s<3600)return Math.floor(s/60)+'м';if(s<86400)return Math.floor(s/3600)+'ч';return Math.floor(s/86400)+'д';}
@@ -2480,10 +2033,7 @@ async function saExportPDF() {
   }
 }
 
-// ── BOOT ──
-document.addEventListener('DOMContentLoaded',async()=>{
-  if(TOKEN){try{await launchApp();}catch{showLogin();}}
-});
+// BOOT → js/app.js
 
 // ═══════════════════════════════════════════════════════
 // HOME CARE MODULE
@@ -2687,7 +2237,7 @@ function hcAcSelect(e, uid, title) {
   if (drop) drop.style.display = 'none';
 }
 
-function escAttr(s) { return (s||'').replace(/'/g,"&#39;").replace(/"/g,'&quot;'); }
+// escAttr → js/core/utils.js
 
 // ── CATALOG PICKER ──
 let hcPickerUid = null, hcPickerIsService = false, hcPickerData = [];
@@ -3157,47 +2707,9 @@ body{font-family:'Lora',Georgia,serif;background:#faf4ec;color:#2c2416;font-size
   else notify('Разрешите всплывающие окна в браузере', 'err');
 }
 
-function esc(s){ const d=document.createElement('div');d.textContent=s||'';return d.innerHTML; }
-
-// ── ROLE-BASED NAV ────────────────────────────────────────────
-function applyRoleNav(role) {
-  const navItems = document.querySelectorAll('#mainNav .tn');
-  let firstVisible = null;
-  navItems.forEach(item => {
-    const roles = (item.dataset.roles || '').split(',').map(r => r.trim());
-    if (roles.includes(role)) {
-      item.style.display = '';
-      if (!firstVisible) firstVisible = item;
-    } else {
-      item.style.display = 'none';
-    }
-  });
-  // Remove active from hidden items, activate first visible
-  navItems.forEach(n => n.classList.remove('active'));
-  if (firstVisible) firstVisible.classList.add('active');
-  return firstVisible?.dataset?.p || 'home-care';
-}
-
-// ── CHANGE PASSWORD ───────────────────────────────────────────
-async function doChangePw() {
-  const np = document.getElementById('cpNew').value;
-  const np2 = document.getElementById('cpNew2').value;
-  const err = document.getElementById('cpErr');
-  const btn = document.getElementById('cpBtn');
-  err.style.display = 'none';
-  if (np !== np2) { err.textContent = 'Пароли не совпадают'; err.style.display = 'block'; return; }
-  if (np.length < 6) { err.textContent = 'Пароль минимум 6 символов'; err.style.display = 'block'; return; }
-  btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>';
-  try {
-    await api('POST', '/api/auth/change-password', { new_password: np });
-    document.getElementById('changePwScreen').style.display = 'none';
-    document.getElementById('app').style.display = 'flex';
-    applyRoleNav(ME.role);
-    loadDashboard(); loadLs();
-  } catch(e) {
-    err.textContent = e.message; err.style.display = 'block';
-  } finally { btn.disabled = false; btn.textContent = 'Сохранить пароль и войти'; }
-}
+// esc → js/core/utils.js
+// applyRoleNav → js/core/nav.js
+// doChangePw → js/core/auth.js
 
 // ── USERS PAGE ────────────────────────────────────────────────
 let _usersData = [];
@@ -3332,122 +2844,12 @@ async function usersDeactivate(id, name) {
 // ── VISUAL ENHANCEMENTS ──────────────────────────────────────
 // ══════════════════════════════════════════════════════════════
 
-// ── Dark Mode ────────────────────────────────────────────────
-function initDarkMode() {
-  const dark = localStorage.getItem('lp_dark') === '1';
-  if (dark) document.documentElement.setAttribute('data-theme','dark');
-  updateDmLabel(dark);
-}
-function toggleDarkMode() {
-  const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
-  if (isDark) {
-    document.documentElement.removeAttribute('data-theme');
-    localStorage.setItem('lp_dark','0');
-    updateDmLabel(false);
-  } else {
-    document.documentElement.setAttribute('data-theme','dark');
-    localStorage.setItem('lp_dark','1');
-    updateDmLabel(true);
-  }
-}
-function updateDmLabel(dark) {
-  const lbl = document.getElementById('dmLabel');
-  if (lbl) lbl.textContent = dark ? '☀️' : '🌙';
-}
-initDarkMode();
+// initDarkMode, toggleDarkMode, updateDmLabel → js/core/theme.js
+// animateCount, cascadeCards → js/core/utils.js
 
-// ── Counter Animation ─────────────────────────────────────────
-function animateCount(el, toRaw, opts = {}) {
-  if (!el) return;
-  const { duration = 1100, prefix = '', suffix = '', isFloat = false } = opts;
-  const to = parseFloat(toRaw) || 0;
-  if (to === 0) return;
-  const start = performance.now();
-  function update(ts) {
-    const p = Math.min((ts - start) / duration, 1);
-    const ease = 1 - Math.pow(1 - p, 3);
-    const val = to * ease;
-    el.textContent = prefix + (isFloat ? val.toLocaleString('ru',{maximumFractionDigits:1}) : Math.round(val).toLocaleString('ru')) + suffix;
-    if (p < 1) requestAnimationFrame(update);
-  }
-  requestAnimationFrame(update);
-}
+// buildLvlDash, showDashSkeleton → js/pages/dashboard.js
 
-// ── Cascade Card Animation ───────────────────────────────────
-function cascadeCards(selector, delay = 60) {
-  const cards = document.querySelectorAll(selector);
-  cards.forEach((c, i) => {
-    c.style.opacity = '0';
-    c.style.transform = 'translateY(24px)';
-    c.style.transition = 'none';
-    setTimeout(() => {
-      c.style.transition = 'opacity .45s cubic-bezier(.22,.68,0,1.2), transform .45s cubic-bezier(.22,.68,0,1.2)';
-      c.style.opacity = '1';
-      c.style.transform = '';
-    }, i * delay + 10);
-  });
-}
-
-// ── Animated Progress Bars (replaces original via later declaration) ──
-function buildLvlDash(dist, total) {
-  const LVL = [{key:'platinum',l:'💎 Платина',c:'#6366f1'},{key:'gold',l:'🥇 Золото',c:'#eab308'},{key:'silver',l:'🥈 Серебро',c:'#94a3b8'},{key:'bronze',l:'🥉 Бронза',c:'#c9a96e'}];
-  const map = {}; dist.forEach(d=>map[d.loyalty_level]=parseInt(d.cnt)||0);
-  document.getElementById('lvlDash').innerHTML = LVL.map(l=>{
-    const pct = total ? Math.round((map[l.key]||0)/total*100) : 0;
-    const isGold = l.key === 'gold' || l.key === 'platinum';
-    return `
-    <div>
-      <div style="display:flex;justify-content:space-between;font-size:12.5px;margin-bottom:4px">
-        <span style="font-weight:600">${l.l}</span>
-        <strong style="color:${l.c}">${map[l.key]||0} <span style="color:var(--t3);font-weight:400">(${pct}%)</span></strong>
-      </div>
-      <div class="pb"><div class="pf lvl-bar" data-pct="${pct}" style="width:0%;background:${l.c}"></div></div>
-    </div>`;
-  }).join('');
-  // Trigger bar animations after DOM paint
-  requestAnimationFrame(()=>{
-    document.querySelectorAll('.lvl-bar').forEach(bar=>{
-      const pct = bar.dataset.pct;
-      setTimeout(()=>{ bar.style.width = pct + '%'; }, 80);
-    });
-  });
-}
-
-// ── Page Transitions (replaces original via later declaration) ──
-function nav(el) {
-  document.querySelectorAll('.tn').forEach(n=>n.classList.remove('active'));
-  el.classList.add('active');
-  const p = el.dataset.p;
-  document.querySelectorAll('.page').forEach(x=>{
-    x.classList.remove('active','page-enter');
-  });
-  const page = document.getElementById('page-'+p);
-  if (page) {
-    page.classList.add('active');
-    void page.offsetWidth; // force reflow
-    page.classList.add('page-enter');
-  }
-  if (p==='clients')   loadClients();
-  if (p==='records')   { setDefDates(); loadRecords(1); }
-  if (p==='staff-analytics') loadStaffAnalytics();
-  if (p==='segments')        loadSegments();
-  if (p==='home-care')       loadHomeCare();
-  if (p==='settings')        loadSettings();
-  if (p==='users')           loadUsers();
-}
-
-// ── Skeleton Dashboard ────────────────────────────────────────
-function showDashSkeleton() {
-  const ids = ['ds1','ds2','ds3','ds5','ds6','an1','an2','an3','an4','an5'];
-  ids.forEach(id => {
-    const el = document.getElementById(id);
-    if (el) el.innerHTML = '<span class="sk sk-val"></span>';
-  });
-  ['ds1s','ds2s','ds3s','ds5s','ds6s','an1s','an2s','an3s','an4s','an5s'].forEach(id=>{
-    const el = document.getElementById(id);
-    if (el) el.innerHTML = '<span class="sk sk-sub"></span>';
-  });
-}
+// nav → js/core/nav.js
 
 // ── Confetti ──────────────────────────────────────────────────
 function fireConfetti() {
@@ -3511,81 +2913,12 @@ function fireConfetti() {
   };
 })();
 
-// ── Enhanced loadDashboard (replaces original via later declaration) ──
-async function loadDashboard() {
-  showDashSkeleton();
-  try {
-    const [d, bon] = await Promise.all([
-      api('GET', '/api/analytics/dashboard?period='+dashP),
-      api('GET', '/api/analytics/bonuses?period='+dashP)
-    ]);
-    const s = d.stats;
+// loadDashboard → js/pages/dashboard.js
 
-    // Animate counters
-    animateCount(document.getElementById('ds1'), s.totalClients);
-    document.getElementById('ds1s').textContent = '+' + s.newClients + ' новых за период';
-
-    animateCount(document.getElementById('ds2'), s.totalBonusBalance);
-    document.getElementById('ds2s').textContent = 'начислено ' + parseFloat(s.periodBonuses||0).toLocaleString('ru') + ' · списано ' + parseFloat(s.periodRedeemed||0).toLocaleString('ru');
-
-    const rev = parseFloat(s.periodRevenue||0);
-    animateCount(document.getElementById('ds3'), rev, {suffix:' ₽'});
-    document.getElementById('ds3s').textContent = 'за ' + dashP + ' дней · ' + s.periodRecords + ' визитов';
-
-    animateCount(document.getElementById('ds5'), s.cardClients);
-    document.getElementById('ds5s').textContent = s.totalClients ? Math.round(s.cardClients/s.totalClients*100)+'% от всех клиентов' : '';
-
-    animateCount(document.getElementById('ds6'), s.telegramClients);
-    document.getElementById('ds6s').textContent = s.totalClients ? Math.round(s.telegramClients/s.totalClients*100)+'% от всех клиентов' : '';
-
-    const periodBonuses  = parseFloat(s.periodBonuses  || 0);
-    const periodRedeemed = parseFloat(s.periodRedeemed || 0);
-    const avgCheck = s.periodRecords > 0 ? Math.round(s.periodRevenue/s.periodRecords) : 0;
-
-    animateCount(document.getElementById('an1'), avgCheck, {suffix:' ₽'});
-    document.getElementById('an1s').textContent = s.periodRecords + ' записей за период';
-
-    animateCount(document.getElementById('an2'), periodBonuses, {suffix:' ₽'});
-    document.getElementById('an2s').textContent = 'за ' + dashP + ' дней';
-
-    animateCount(document.getElementById('an5'), periodRedeemed, {suffix:' ₽'});
-    document.getElementById('an5s').textContent = 'за ' + dashP + ' дней';
-
-    const roi = periodBonuses > 0 ? Math.round(s.periodRevenue/periodBonuses) : 0;
-    if (roi > 0) animateCount(document.getElementById('an3'), roi, {suffix:'x'});
-    else document.getElementById('an3').textContent = '—';
-
-    animateCount(document.getElementById('an4'), s.newClients);
-    document.getElementById('an4s').textContent = 'за ' + dashP + ' дней';
-
-    buildRevChart(d.dailyRevenue);
-    buildLvlDash(d.levelDist, s.totalClients);
-    buildRecentTx(d.recentTxns);
-    buildTopSvc(d.topServices);
-    buildBfChart(bon);
-    buildLvlChart(d.levelDist);
-    if (d.syncStatus?.finished_at) document.getElementById('syncSt').textContent = 'Синхр.: ' + timeSince(d.syncStatus.finished_at);
-
-    // Cascade cards after data loaded
-    cascadeCards('#page-dashboard .sc', 50);
-
-  } catch(e) { notify('Ошибка дашборда: '+e.message,'err'); }
-}
-
-// ── Confetti on bonus accrual (replaces original via later declaration) ──
-async function submitBonus(sign) {
-  if(!bonusTarget){notify('Выберите клиента','err');return;}
-  const amt=parseInt(document.getElementById('bma')?.value)||0;
-  const cmt=document.getElementById('bmc')?.value||'Ручная корректировка';
-  if(!amt){notify('Введите количество','err');return;}
-  try {
-    await api('POST','/api/clients/'+bonusTarget+'/bonus',{amount:sign*amt,description:cmt});
-    notify(sign>0?'+'+amt+' начислено':'-'+amt+' списано','ok');
-    closeModal('bonusModal');
-    if (sign > 0) fireConfetti();
-    loadClients();
-  } catch(e){notify(e.message,'err');}
-}
+// submitBonus → js/pages/clients.js
 </script>
+<script src="js/pages/clients.js"></script>
+<script src="js/pages/dashboard.js"></script>
+<script src="js/app.js"></script>
 </body>
 </html>
