@@ -9,6 +9,7 @@ const { syncGoodsCategories } = require('./services/home-care');
 const { syncStaffData }     = require('./services/staff');
 const { refreshSegments }   = require('./services/segments');
 const mountRoutes = require('./routes/index');
+const { initBot } = require('./services/telegram');
 
 const express = require('express');
 const cors    = require('cors');
@@ -17,12 +18,51 @@ const path    = require('path');
 
 const app = express();
 
-app.use(cors({ origin: config.FRONTEND_URL, credentials: true }));
+const allowedOrigins = [
+  config.FRONTEND_URL,
+  'http://89.22.233.73',
+  'http://89.22.233.73:8081',
+  'http://89.125.92.223',
+  'http://89.125.92.223:3001',
+  'http://localhost:8081',
+  'http://localhost:3000',
+  'http://localhost:3001',
+  'http://127.0.0.1:8081',
+  'http://127.0.0.1:3001',
+  'http://127.0.0.1',
+];
+app.use(cors({
+  origin: (origin, callback) => {
+    if (!origin || allowedOrigins.includes(origin)) {
+      callback(null, true);
+    } else {
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
+  credentials: true,
+}));
 app.use(express.json({ limit: '2mb' }));
 app.use(express.static(path.join(__dirname, '../frontend')));
 
+// Global OPTIONS handler for CORS preflight requests
+app.options('*', (req, res) => {
+  res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  res.header('Access-Control-Allow-Credentials', 'true');
+  res.sendStatus(200);
+});
+
+// Explicit route for index.html
+app.get('/', (req, res) => {
+  res.sendFile(path.join(__dirname, '../frontend/index.html'));
+});
+
 // Mount all routes (webhook + API)
 mountRoutes(app);
+
+// Init Telegram bot
+initBot(db);
 
 // ============================================================
 // CRON JOBS
