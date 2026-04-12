@@ -78,7 +78,7 @@ async function loadTemplateConfig(salonId, salonName) {
 router.get('/products', auth, async (req, res) => {
   try {
     const { search = '', limit = 10 } = req.query;
-    res.json(await db.many(
+    res.json(await db.any(
       `SELECT DISTINCT ON (lower(trim(title))) title, yclients_goods_id as id
        FROM goods_sale_items gsi JOIN goods_sales gs ON gs.id=gsi.sale_id
        WHERE gs.salon_id=$1 AND ($2='' OR title ILIKE '%'||$2||'%')
@@ -92,7 +92,7 @@ router.get('/products', auth, async (req, res) => {
 router.get('/services', auth, async (req, res) => {
   try {
     const { search = '', limit = 10 } = req.query;
-    res.json(await db.many(
+    res.json(await db.any(
       `SELECT DISTINCT ON (lower(trim(svc->>'title'))) svc->>'title' AS title, (svc->>'id')::text AS id
        FROM records r, jsonb_array_elements(COALESCE(r.services,'[]'::jsonb)) svc
        WHERE r.salon_id=$1 AND svc->>'title' IS NOT NULL AND trim(svc->>'title')!=''
@@ -184,7 +184,7 @@ router.get('/', auth, async (req, res) => {
   try {
     const { search = '', page = 1, limit = 20 } = req.query;
     const offset = (parseInt(page) - 1) * parseInt(limit);
-    const rows = await db.many(
+    const rows = await db.any(
       `SELECT p.id, p.created_at, p.updated_at, p.notes,
               c.id as client_id, c.name as client_name, c.phone as client_phone,
               u.name as specialist_name
@@ -206,14 +206,14 @@ router.get('/', auth, async (req, res) => {
 
 router.get('/:id/preview', auth, async (req, res) => {
   try {
-    const p = await db.one(
+    const p = await db.oneOrNone(
       `SELECT p.*, c.name as client_name, c.phone as client_phone, u.name as specialist_name, s.name as salon_name
        FROM home_care_prescriptions p LEFT JOIN clients c ON c.id=p.client_id
        LEFT JOIN users u ON u.id=p.specialist_id LEFT JOIN salons s ON s.id=p.salon_id
        WHERE p.id=$1 AND p.salon_id=$2`, [req.params.id, req.user.salonId]
     );
     if (!p) return res.status(404).json({ error: 'Not found' });
-    const items = await db.many('SELECT * FROM home_care_items WHERE prescription_id=$1 ORDER BY time_of_day, sort_order', [req.params.id]);
+    const items = await db.any('SELECT * FROM home_care_items WHERE prescription_id=$1 ORDER BY time_of_day, sort_order', [req.params.id]);
     const tmpl = await loadTemplateConfig(req.user.salonId, p.salon_name);
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
     res.send(buildHomeCareHtml({ ...p, items }, tmpl));
@@ -223,14 +223,14 @@ router.get('/:id/preview', auth, async (req, res) => {
 router.get('/:id/pdf', auth, async (req, res) => {
   let browser;
   try {
-    const p = await db.one(
+    const p = await db.oneOrNone(
       `SELECT p.*, c.name as client_name, c.phone as client_phone, u.name as specialist_name, s.name as salon_name
        FROM home_care_prescriptions p LEFT JOIN clients c ON c.id=p.client_id
        LEFT JOIN users u ON u.id=p.specialist_id LEFT JOIN salons s ON s.id=p.salon_id
        WHERE p.id=$1 AND p.salon_id=$2`, [req.params.id, req.user.salonId]
     );
     if (!p) return res.status(404).json({ error: 'Not found' });
-    const items = await db.many('SELECT * FROM home_care_items WHERE prescription_id=$1 ORDER BY time_of_day, sort_order', [req.params.id]);
+    const items = await db.any('SELECT * FROM home_care_items WHERE prescription_id=$1 ORDER BY time_of_day, sort_order', [req.params.id]);
     const prescription = { ...p, items };
     const tmpl = await loadTemplateConfig(req.user.salonId, prescription.salon_name);
     const html = buildHomeCareHtml(prescription, tmpl);
@@ -254,14 +254,14 @@ router.get('/:id/pdf', auth, async (req, res) => {
 
 router.get('/:id', auth, async (req, res) => {
   try {
-    const p = await db.one(
+    const p = await db.oneOrNone(
       `SELECT p.*, c.name as client_name, c.phone as client_phone, u.name as specialist_name, s.name as salon_name
        FROM home_care_prescriptions p LEFT JOIN clients c ON c.id=p.client_id
        LEFT JOIN users u ON u.id=p.specialist_id LEFT JOIN salons s ON s.id=p.salon_id
        WHERE p.id=$1 AND p.salon_id=$2`, [req.params.id, req.user.salonId]
     );
     if (!p) return res.status(404).json({ error: 'Not found' });
-    const items = await db.many('SELECT * FROM home_care_items WHERE prescription_id=$1 ORDER BY time_of_day, sort_order', [req.params.id]);
+    const items = await db.any('SELECT * FROM home_care_items WHERE prescription_id=$1 ORDER BY time_of_day, sort_order', [req.params.id]);
     res.json({ ...p, items });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -288,7 +288,7 @@ router.post('/', auth, async (req, res) => {
 router.put('/:id', auth, async (req, res) => {
   try {
     const { client_id, face_procedures, body_procedures, hair_procedures, vitamins, notes, items = [] } = req.body;
-    const existing = await db.one('SELECT id FROM home_care_prescriptions WHERE id=$1 AND salon_id=$2', [req.params.id, req.user.salonId]);
+    const existing = await db.oneOrNone('SELECT id FROM home_care_prescriptions WHERE id=$1 AND salon_id=$2', [req.params.id, req.user.salonId]);
     if (!existing) return res.status(404).json({ error: 'Not found' });
     await db.query(
       `UPDATE home_care_prescriptions SET client_id=$1,face_procedures=$2,body_procedures=$3,
@@ -317,7 +317,7 @@ router.delete('/:id', auth, async (req, res) => {
 // ── Template Settings ─────────────────────────────────────────
 router.get('/template-settings', auth, async (req, res) => {
   try {
-    res.json(await db.one(
+    res.json(await db.oneOrNone(
       `SELECT template_logo_url, template_wm_url, template_accent_color, template_bg_color,
               template_text_color, template_logo_line1, template_logo_line2, template_subtitle,
               template_contact_phone, template_contact_web, template_contact_social
