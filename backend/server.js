@@ -11,14 +11,18 @@ const { refreshSegments }   = require('./services/segments');
 const mountRoutes = require('./routes/index');
 const { initBot } = require('./services/telegram');
 
-const express = require('express');
-const cors    = require('cors');
-const cron    = require('node-cron');
-const path    = require('path');
+const express  = require('express');
+const cors     = require('cors');
+const cron     = require('node-cron');
+const path     = require('path');
+const helmet   = require('helmet');
 
 const app = express();
 
-const allowedOrigins = [
+// Security headers
+app.use(helmet());
+
+const defaultOrigins = [
   config.FRONTEND_URL,
   'http://89.22.233.73',
   'http://89.22.233.73:8081',
@@ -31,6 +35,9 @@ const allowedOrigins = [
   'http://127.0.0.1:3001',
   'http://127.0.0.1',
 ];
+// Use ALLOWED_ORIGINS env var if provided (comma-separated), otherwise fall back to defaults
+const allowedOrigins = config.ALLOWED_ORIGINS || defaultOrigins;
+
 app.use(cors({
   origin: (origin, callback) => {
     if (!origin || allowedOrigins.includes(origin)) {
@@ -41,17 +48,9 @@ app.use(cors({
   },
   credentials: true,
 }));
+// NOTE: No manual app.options('*', ...) handler — cors() middleware handles OPTIONS preflight correctly.
 app.use(express.json({ limit: '2mb' }));
 app.use(express.static(path.join(__dirname, '../frontend')));
-
-// Global OPTIONS handler for CORS preflight requests
-app.options('*', (req, res) => {
-  res.header('Access-Control-Allow-Origin', '*');
-  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-  res.header('Access-Control-Allow-Credentials', 'true');
-  res.sendStatus(200);
-});
 
 // Explicit route for index.html
 app.get('/', (req, res) => {

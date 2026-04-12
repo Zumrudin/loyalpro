@@ -1,10 +1,19 @@
-const router  = require('express').Router();
-const bcrypt  = require('bcryptjs');
-const jwt     = require('jsonwebtoken');
+const router    = require('express').Router();
+const bcrypt    = require('bcryptjs');
+const jwt       = require('jsonwebtoken');
+const rateLimit = require('express-rate-limit');
 const { pool, db } = require('../db');
 const { auth } = require('../middleware/auth');
 const config  = require('../config');
 const JWT_SECRET = config.JWT_SECRET;
+
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Слишком много попыток входа. Повторите через 15 минут.' },
+});
 
 router.post('/register', async (req, res) => {
   const pg = await pool.connect();
@@ -47,7 +56,7 @@ router.post('/register', async (req, res) => {
   } finally { pg.release(); }
 });
 
-router.post('/login', async (req, res) => {
+router.post('/login', loginLimiter, async (req, res) => {
   try {
     const { email, password } = req.body;
     if (!email || !password)
