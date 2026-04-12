@@ -70,7 +70,8 @@ router.get('/goods-sales/stats', auth, async (req, res) => {
   try {
     const { from, to } = req.query;
     if (!from || !to) return res.status(400).json({ error: 'from, to required' });
-    const rows = await db.many(`
+    // db.any() — may be empty if no goods sales in the given date range
+    const rows = await db.any(`
       SELECT sm.name AS staff_name, COUNT(gsi.id) AS items_count,
              SUM(gsi.quantity) AS total_qty, SUM(gsi.total_price) AS total_revenue
       FROM goods_sale_items gsi JOIN goods_sales gs ON gs.id=gsi.sale_id
@@ -83,7 +84,8 @@ router.get('/goods-sales/stats', auth, async (req, res) => {
 });
 
 router.get('/services-config', auth, async (req, res) => {
-  try { res.json({ services: await db.many('SELECT * FROM services_config WHERE salon_id=$1 ORDER BY service_title', [req.user.salonId]) }); }
+  // db.any() — may be empty if no services configured yet
+  try { res.json({ services: await db.any('SELECT * FROM services_config WHERE salon_id=$1 ORDER BY service_title', [req.user.salonId]) }); }
   catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -179,17 +181,21 @@ router.post('/import/csv-transactions', auth, express.raw({ type: '*/*', limit: 
         let client = null;
         if (cardNum) {
           const cardStripped = cardNum.replace(/^0+/, '');
-          client = await db.one(`SELECT id,yclients_card_id FROM clients WHERE salon_id=$1 AND yclients_card_number IS NOT NULL AND (yclients_card_number=$2 OR yclients_card_number=$3 OR yclients_card_number LIKE $4) LIMIT 1`, [salonId, cardNum, cardStripped, '%' + cardStripped]);
+          // db.oneOrNone() — client may not exist in DB; db.one() would throw on 0 rows
+          client = await db.oneOrNone(`SELECT id,yclients_card_id FROM clients WHERE salon_id=$1 AND yclients_card_number IS NOT NULL AND (yclients_card_number=$2 OR yclients_card_number=$3 OR yclients_card_number LIKE $4) LIMIT 1`, [salonId, cardNum, cardStripped, '%' + cardStripped]);
         }
         if (!client && phone) {
-          client = await db.one(`SELECT id,yclients_card_id FROM clients WHERE salon_id=$1 AND regexp_replace(phone,'[^0-9]','','g') LIKE $2 LIMIT 1`, [salonId, '%' + phone]);
+          // db.oneOrNone() — client may not exist in DB
+          client = await db.oneOrNone(`SELECT id,yclients_card_id FROM clients WHERE salon_id=$1 AND regexp_replace(phone,'[^0-9]','','g') LIKE $2 LIMIT 1`, [salonId, '%' + phone]);
         }
         if (!client) { skipped++; continue; }
         if (txnDate) {
-          const dup = await db.one(`SELECT id FROM loyalty_card_transactions WHERE client_id=$1 AND amount=$2 AND txn_date BETWEEN $3::timestamptz - INTERVAL '30 seconds' AND $3::timestamptz + INTERVAL '30 seconds' LIMIT 1`, [client.id, amount, txnDate]);
+          // db.oneOrNone() — 0 rows means not a duplicate; db.one() would throw
+          const dup = await db.oneOrNone(`SELECT id FROM loyalty_card_transactions WHERE client_id=$1 AND amount=$2 AND txn_date BETWEEN $3::timestamptz - INTERVAL '30 seconds' AND $3::timestamptz + INTERVAL '30 seconds' LIMIT 1`, [client.id, amount, txnDate]);
           if (dup) { skipped++; continue; }
         } else {
-          const dup = await db.one(`SELECT id FROM loyalty_card_transactions WHERE client_id=$1 AND amount=$2 AND balance_after=$3 AND txn_date IS NULL LIMIT 1`, [client.id, amount, balance]);
+          // db.oneOrNone() — 0 rows means not a duplicate
+          const dup = await db.oneOrNone(`SELECT id FROM loyalty_card_transactions WHERE client_id=$1 AND amount=$2 AND balance_after=$3 AND txn_date IS NULL LIMIT 1`, [client.id, amount, balance]);
           if (dup) { skipped++; continue; }
         }
         await db.query(`INSERT INTO loyalty_card_transactions (salon_id,client_id,yclients_card_id,type,amount,balance_after,title,txn_date,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,NOW())`, [salonId, client.id, client.yclients_card_id, amount >= 0 ? 'accrual' : 'redemption', amount, balance, comment || txnType || (amount >= 0 ? 'Начисление' : 'Списание'), txnDate]);
