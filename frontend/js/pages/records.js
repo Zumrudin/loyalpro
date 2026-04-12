@@ -79,14 +79,14 @@ async function loadRecords(page) {
           ${formatVisitDate(r.visit_date_msk || r.visit_date)}
           ${timeStr ? `<br><span style="font-size:11px;color:var(--t3)">${timeStr}</span>` : ''}
         </td>
-        <td><strong>${r.client_name || '—'}</strong><br><span style="font-size:11px;color:var(--t3)">${r.client_phone || ''}</span></td>
-        <td style="color:var(--t2);font-size:12px">${svc}</td>
-        <td style="color:var(--t2);font-size:12px">${st}</td>
+        <td><strong>${esc(r.client_name || '—')}</strong><br><span style="font-size:11px;color:var(--t3)">${esc(r.client_phone || '')}</span></td>
+        <td style="color:var(--t2);font-size:12px">${esc(svc)}</td>
+        <td style="color:var(--t2);font-size:12px">${esc(st)}</td>
         <td style="font-weight:600;text-align:right">${amt > 0 ? amt.toLocaleString('ru') + ' ₽' : '—'}</td>
         <td style="color:var(--a);font-weight:600;text-align:right">${accrued > 0 ? '+' + accrued.toLocaleString('ru') : '—'}</td>
         <td style="color:var(--danger);font-weight:600;text-align:right">${redeemed > 0 ? '-' + redeemed.toLocaleString('ru') : '—'}</td>
-        <td style="white-space:nowrap"><span class="badge" style="${badgeStyle}">${SL[displayStatus] || SL[status] || status}</span>${paidMark}</td>
-        <td><span class="badge bgr" style="font-size:10px">${{sync:'Синхр.',webhook:'Hook'}[r.source] || r.source || '—'}</span></td>
+        <td style="white-space:nowrap"><span class="badge" style="${badgeStyle}">${esc(SL[displayStatus] || SL[status] || status)}</span>${paidMark}</td>
+        <td><span class="badge bgr" style="font-size:10px">${esc({sync:'Синхр.',webhook:'Hook'}[r.source] || r.source || '—')}</span></td>
       </tr>`;
     }).join('');
     renderRecordsPager(d);

@@ -12,8 +12,8 @@ function renderLvlEditor() {
   el.innerHTML = (lsData.levels || []).map((l, i) => `
     <div style="border:1px solid var(--bd);border-radius:8px;padding:12px;margin-bottom:8px">
       <div style="display:flex;gap:8px;margin-bottom:9px">
-        <input type="text" value="${l.emoji || ''}" style="width:42px;font-size:17px;text-align:center" id="le_${i}">
-        <input type="text" value="${l.name || ''}" style="flex:1;font-weight:600" id="ln_${i}">
+        <input type="text" value="${escAttr(l.emoji || '')}" style="width:42px;font-size:17px;text-align:center" id="le_${i}">
+        <input type="text" value="${escAttr(l.name || '')}" style="flex:1;font-weight:600" id="ln_${i}">
       </div>
       <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px">
         <div><label class="fl" style="font-size:10px">Мин. покупки ₽</label><input type="number" value="${l.minSpent || 0}" id="lm_${i}"></div>
@@ -55,11 +55,11 @@ async function loadSvcCb() {
     const def = (lsData.levels?.[0]?.cashback) || 5;
     el.innerHTML = ycSvcs.slice(0, 40).map(s => `
       <div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--bd)">
-        <div style="flex:1;font-size:13px">${s.title}</div>
+        <div style="flex:1;font-size:13px">${esc(s.title)}</div>
         <input type="number" value="${sv[s.id] || def}" min="0" max="50" style="width:65px" id="sc_${s.id}">
         <span style="font-size:12px;color:var(--t3)">%</span>
       </div>`).join('');
-  } catch(e) { el.innerHTML = `<div class="empty" style="color:var(--danger)">${e.message}</div>`; }
+  } catch(e) { el.innerHTML = `<div class="empty" style="color:var(--danger)">${esc(e.message)}</div>`; }
 }
 
 async function loadBdList() {
@@ -78,10 +78,10 @@ async function loadBdList() {
     el.innerHTML = ups.map(c => `
       <div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--bd)">
         <div class="av" style="background:${avc(c.name)};color:#fff;font-size:10px">${avi(c.name)}</div>
-        <div style="flex:1"><div style="font-weight:600;font-size:13px">${c.name}</div><div style="font-size:11px;color:var(--t3)">${c.phone || '—'}</div></div>
+        <div style="flex:1"><div style="font-weight:600;font-size:13px">${esc(c.name)}</div><div style="font-size:11px;color:var(--t3)">${esc(c.phone || '—')}</div></div>
         <button class="btn btn-pri btn-sm" onclick="sendBdB(${c.id})">🎁 Начислить</button>
       </div>`).join('');
-  } catch(e) { el.innerHTML = `<div class="empty" style="color:var(--danger)">${e.message}</div>`; }
+  } catch(e) { el.innerHTML = `<div class="empty" style="color:var(--danger)">${esc(e.message)}</div>`; }
 }
 
 async function sendBdB(id) {

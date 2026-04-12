@@ -83,8 +83,8 @@ async function loadClients() {
     if (!d.clients?.length) { tb.innerHTML = '<tr><td colspan="8" class="empty">Клиенты не найдены</td></tr>'; return; }
     tb.innerHTML = d.clients.map(c => `
       <tr onclick="openCD(${c.id})">
-        <td><div style="display:flex;align-items:center;gap:9px"><div class="av" style="background:${avc(c.name)};color:#fff;font-size:10px">${avi(c.name)}</div><div style="font-weight:600">${c.name}</div></div></td>
-        <td style="color:var(--t2)">${c.phone || '—'}</td>
+        <td><div style="display:flex;align-items:center;gap:9px"><div class="av" style="background:${avc(c.name)};color:#fff;font-size:10px">${avi(c.name)}</div><div style="font-weight:600">${esc(c.name)}</div></div></td>
+        <td style="color:var(--t2)">${esc(c.phone || '—')}</td>
         <td><span class="badge ${LVL_B[c.loyalty_level] || 'bgr'}">${LVL_L[c.loyalty_level] || '—'}</span></td>
         <td style="font-weight:700;color:var(--a)">${(c.bonus_balance || 0).toLocaleString('ru')}</td>
         <td>${parseFloat(c.total_spent || 0).toLocaleString('ru')} ₽</td>
@@ -159,8 +159,8 @@ async function openCD(id) {
       <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px">
         <div class="av" style="width:48px;height:48px;font-size:15px;background:${avc(c.name)};color:#fff">${avi(c.name)}</div>
         <div>
-          <div style="font-size:17px;font-weight:700">${c.name}</div>
-          <div style="color:var(--t2);font-size:13px">${c.phone || '—'}${c.email ? ' · ' + c.email : ''}</div>
+          <div style="font-size:17px;font-weight:700">${esc(c.name)}</div>
+          <div style="color:var(--t2);font-size:13px">${esc(c.phone || '—')}${c.email ? ' · ' + esc(c.email) : ''}</div>
         </div>
         <span class="badge ${LVL_B[c.loyalty_level] || 'bgr'}" style="margin-left:auto">${LVL_L[c.loyalty_level] || '—'}</span>
       </div>
@@ -225,7 +225,7 @@ async function loadCardTxns(clientId) {
       return `<tr>
         <td style="color:var(--t3)">${date}</td>
         <td style="color:${amt >= 0 ? 'var(--a)' : 'var(--danger)'};font-weight:600">${amt >= 0 ? '+' : ''}${amt.toLocaleString('ru')}</td>
-        <td style="color:var(--t2);font-size:12px">${desc}${svc ? '<br><span style="color:var(--t3)">' + svc + '</span>' : ''}</td>
+        <td style="color:var(--t2);font-size:12px">${esc(desc)}${svc ? '<br><span style="color:var(--t3)">' + esc(svc) + '</span>' : ''}</td>
         <td style="font-weight:600">${bal.toLocaleString('ru')}</td>
       </tr>`;
     }).join('');
@@ -243,7 +243,7 @@ async function loadCardTxns(clientId) {
       <div style="max-height:300px;overflow-y:auto">
         <table><thead><tr><th>Дата</th><th>Сумма</th><th>Описание</th><th>Баланс</th></tr></thead><tbody>${rows}</tbody></table>
       </div>`;
-  } catch(e) { el.innerHTML = `<div style="margin-top:10px;font-size:12.5px;color:var(--danger)">Ошибка: ${e.message}</div>`; }
+  } catch(e) { el.innerHTML = `<div style="margin-top:10px;font-size:12.5px;color:var(--danger)">Ошибка: ${esc(e.message)}</div>`; }
 }
 
 async function quickB(id, sign) {
@@ -266,16 +266,16 @@ async function searchBonusC(q) {
     const d = await api('GET', '/api/clients?search=' + encodeURIComponent(q) + '&limit=5');
     if (!d.clients?.length) { el.innerHTML = '<div style="font-size:12px;color:var(--t3)">Не найдено</div>'; return; }
     el.innerHTML = d.clients.map(c => `
-      <div onclick="selBC(${c.id},'${c.name.replace(/'/g, "\\'")}',${c.bonus_balance})" style="padding:7px 10px;border:1px solid var(--bd);border-radius:7px;cursor:pointer;margin-bottom:4px;font-size:12.5px">
-        <strong>${c.name}</strong> · ${c.phone || '—'} · <span style="color:var(--a)">${c.bonus_balance || 0} бонусов</span>
+      <div onclick="selBC(${c.id},'${escAttr(c.name)}',${c.bonus_balance})" style="padding:7px 10px;border:1px solid var(--bd);border-radius:7px;cursor:pointer;margin-bottom:4px;font-size:12.5px">
+        <strong>${esc(c.name)}</strong> · ${esc(c.phone || '—')} · <span style="color:var(--a)">${c.bonus_balance || 0} бонусов</span>
       </div>`).join('');
-  } catch {}
+  } catch(e) { console.error('searchBonusC:', e); }
 }
 
 function selBC(id, name) {
   bonusTarget = id;
   document.getElementById('bms').value = name;
-  document.getElementById('bmr').innerHTML = `<div style="font-size:12px;color:var(--a)">✓ ${name}</div>`;
+  document.getElementById('bmr').innerHTML = `<div style="font-size:12px;color:var(--a)">✓ ${esc(name)}</div>`;
 }
 
 async function submitBonus(sign) {

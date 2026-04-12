@@ -11,7 +11,7 @@ async function loadStaffAnalytics() {
     const sel = document.getElementById('sa-staff');
     const prev = sel.value;
     sel.innerHTML = '<option value="">— Сотрудник —</option>' +
-      (d.staff || []).map(s => `<option value="${s.id}">${s.name || 'Без имени'}${s.specialization ? ' · ' + s.specialization : ''}</option>`).join('');
+      (d.staff || []).map(s => `<option value="${s.id}">${esc(s.name || 'Без имени')}${s.specialization ? ' · ' + esc(s.specialization) : ''}</option>`).join('');
     if (prev) sel.value = prev;
   } catch(e) { /* staff not yet synced */ }
 }

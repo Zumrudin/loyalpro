@@ -3,6 +3,10 @@
 
 let dashP = 7;
 let rCh, bfCh, lvlCh;
+let svcData = [];
+let svcSortCol = 'cnt';
+let svcSortDir = 'desc';
+let svcExpanded = false;
 
 function setPeriod(d, el) {
   dashP = d;
@@ -44,23 +48,81 @@ function buildRecentTx(txns) {
     <div class="ai">
       <div class="ai-ic" style="background:${t.amount > 0 ? '#e6f9f3' : '#fce8e8'}">${ic[t.type] || '💰'}</div>
       <div>
-        <div style="font-size:12.5px"><strong>${t.client_name || 'Клиент'}</strong> — <strong style="color:${t.amount > 0 ? 'var(--a)' : 'var(--danger)'}">${t.amount > 0 ? '+' : ''}${t.amount}</strong> бонусов</div>
-        <div style="font-size:11px;color:var(--t3)">${t.description || ''} · ${new Date(t.created_at).toLocaleDateString('ru', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</div>
+        <div style="font-size:12.5px"><strong>${esc(t.client_name || 'Клиент')}</strong> — <strong style="color:${t.amount > 0 ? 'var(--a)' : 'var(--danger)'}">${t.amount > 0 ? '+' : ''}${t.amount}</strong> бонусов</div>
+        <div style="font-size:11px;color:var(--t3)">${esc(t.description || '')} · ${new Date(t.created_at).toLocaleDateString('ru', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</div>
       </div>
     </div>`).join('');
 }
 
 function buildTopSvc(svcs) {
-  const el = document.getElementById('topSvc');
-  if (!svcs?.length) { el.innerHTML = '<div class="empty">Нет данных</div>'; return; }
-  const mx = Math.max(...svcs.map(s => parseInt(s.cnt) || 0), 1);
-  el.innerHTML = svcs.map(s => `
-    <div style="margin-bottom:9px">
-      <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:3px">
-        <span>${s.service_name || '—'}</span><strong>${s.cnt}</strong>
-      </div>
-      <div class="pb"><div class="pf" style="width:${Math.round((s.cnt || 0) / mx * 100)}%"></div></div>
-    </div>`).join('');
+  if (!svcs?.length) {
+    document.getElementById('svcBody').innerHTML = '<tr><td colspan="3" class="empty">Нет данных</td></tr>';
+    return;
+  }
+  svcData = svcs.slice();
+  svcSortCol = 'cnt';
+  svcSortDir = 'desc';
+  renderSvcTable();
+}
+
+function svcSort(column) {
+  const headers = document.querySelectorAll('#page-dashboard table th.th-sort');
+  headers.forEach(h => h.classList.remove('asc', 'desc'));
+
+  if (svcSortCol === column) {
+    svcSortDir = svcSortDir === 'asc' ? 'desc' : 'asc';
+  } else {
+    svcSortCol = column;
+    svcSortDir = column === 'service_name' ? 'asc' : 'desc';
+  }
+
+  const header = document.querySelector(`[data-col="${svcSortCol}"]`);
+  if (header) header.classList.add(svcSortDir);
+
+  renderSvcTable();
+}
+
+function renderSvcTable() {
+  const sorted = svcData.slice().sort((a, b) => {
+    let aVal = a[svcSortCol];
+    let bVal = b[svcSortCol];
+
+    if (svcSortCol !== 'service_name') {
+      aVal = parseFloat(aVal) || 0;
+      bVal = parseFloat(bVal) || 0;
+    }
+
+    return svcSortDir === 'asc' ?
+      (typeof aVal === 'string' ? aVal.localeCompare(bVal) : aVal - bVal) :
+      (typeof aVal === 'string' ? bVal.localeCompare(aVal) : bVal - aVal);
+  });
+
+  const tbody = document.getElementById('svcBody');
+  const displayed = svcExpanded ? sorted : sorted.slice(0, 10);
+
+  tbody.innerHTML = displayed.map(s => `
+    <tr>
+      <td>${esc(s.service_name || '—')}</td>
+      <td><strong>${s.cnt}</strong></td>
+      <td>${parseFloat(s.total_amount || 0).toLocaleString('ru')} ₽</td>
+    </tr>
+  `).join('');
+
+  // Показываем/скрываем кнопку развертывания
+  const btn = document.getElementById('svcToggleBtn');
+  if (btn) {
+    if (sorted.length > 10) {
+      btn.style.display = 'block';
+      btn.textContent = svcExpanded ? 'Свернуть ▲' : 'Показать все ▼';
+    } else {
+      btn.style.display = 'none';
+    }
+  }
+}
+
+function toggleSvc() {
+  svcExpanded = !svcExpanded;
+  renderSvcTable();
 }
 
 function buildBfChart(data) {
