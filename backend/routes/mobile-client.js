@@ -1,7 +1,7 @@
 const router = require('express').Router();
 const { db } = require('../db');
 const { mobileAuth } = require('../middleware/mobile-auth');
-const { ycGet, ycGetClientCards } = require('../services/yclients');
+const { ycGet, ycGetClientCards, ycGetCardTransactions } = require('../services/yclients');
 
 // Get client profile
 router.get('/profile', mobileAuth, async (req, res) => {
@@ -213,25 +213,23 @@ router.get('/bonuses', mobileAuth, async (req, res) => {
 // Get bonus history
 router.get('/bonus-history', mobileAuth, async (req, res) => {
   try {
-    const transactions = await db.many(
-      `SELECT
-        id,
-        created_at,
-        amount,
-        description as title,
-        type,
-        balance_after
-       FROM bonus_transactions
-       WHERE client_id=$1
-       ORDER BY created_at DESC
-       LIMIT 50`,
+    const client = await db.one(
+      'SELECT yclients_client_id, phone, salon_id FROM clients WHERE id=$1',
       [req.client.clientId]
     );
+    const salon = await db.one('SELECT * FROM salons WHERE id=$1', [client.salon_id]);
 
-    res.json({
-      success: true,
-      transactions: transactions || []
-    });
+    const txns = await ycGetCardTransactions(salon, client.yclients_client_id, client.phone);
+
+    const transactions = txns.map((t) => ({
+      id: t.id,
+      createdAt: t.txn_date || t.date,
+      amount: Math.abs(t.amount),
+      description: t.title,
+      type: t.type, // 'accrual' or 'redemption'
+    }));
+
+    res.json({ success: true, transactions });
 
   } catch (e) {
     console.error('[Get bonus history error]', e.message);
