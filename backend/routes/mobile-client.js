@@ -62,14 +62,14 @@ router.get('/bookings', mobileAuth, async (req, res) => {
     const bookings = await db.any(
       `SELECT
         id,
-        visit_date as "dateTime",
+        visit_datetime as "dateTime",
         services->0->>'title'  as "serviceName",
         staff->0->>'name'      as "specialistName",
         status,
         amount as price
        FROM records
        WHERE ${whereSql}
-       ORDER BY visit_date DESC
+       ORDER BY visit_datetime DESC
        LIMIT 50`,
       [req.client.clientId]
     );
@@ -91,14 +91,15 @@ router.get('/bookings/:bookingId', mobileAuth, async (req, res) => {
     const booking = await db.oneOrNone(
       `SELECT
         id,
-        visit_date as "dateTime",
+        visit_datetime as "dateTime",
         services->0->>'title'  as "serviceName",
         staff->0->>'name'      as "specialistName",
         status,
         amount as price,
         services,
         staff,
-        client_id
+        client_id,
+        bonus_accrued as "bonusAccrued"
        FROM records
        WHERE id=$1 AND client_id=$2`,
       [req.params.bookingId, req.client.clientId]
