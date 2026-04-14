@@ -51,7 +51,7 @@ router.get('/bookings', mobileAuth, async (req, res) => {
   try {
     const { type = 'all' } = req.query; // 'upcoming' | 'past' | 'all'
 
-    let whereSql = 'client_id=$1';
+    let whereSql = "client_id=$1 AND status != 'deleted'";
 
     if (type === 'upcoming') {
       whereSql += ' AND visit_date > NOW()';
@@ -59,12 +59,12 @@ router.get('/bookings', mobileAuth, async (req, res) => {
       whereSql += ' AND visit_date <= NOW()';
     }
 
-    const bookings = await db.many(
+    const bookings = await db.any(
       `SELECT
         id,
-        visit_date as dateTime,
-        service_name as serviceName,
-        specialist_name as specialistName,
+        visit_date as "dateTime",
+        services->0->>'title'  as "serviceName",
+        staff->0->>'name'      as "specialistName",
         status,
         amount as price
        FROM records
@@ -76,7 +76,7 @@ router.get('/bookings', mobileAuth, async (req, res) => {
 
     res.json({
       success: true,
-      bookings: bookings || []
+      bookings: bookings
     });
 
   } catch (e) {
@@ -88,14 +88,16 @@ router.get('/bookings', mobileAuth, async (req, res) => {
 // Get single booking
 router.get('/bookings/:bookingId', mobileAuth, async (req, res) => {
   try {
-    const booking = await db.one(
+    const booking = await db.oneOrNone(
       `SELECT
         id,
-        visit_date as dateTime,
-        service_name as serviceName,
-        specialist_name as specialistName,
+        visit_date as "dateTime",
+        services->0->>'title'  as "serviceName",
+        staff->0->>'name'      as "specialistName",
         status,
         amount as price,
+        services,
+        staff,
         client_id
        FROM records
        WHERE id=$1 AND client_id=$2`,
@@ -133,8 +135,8 @@ router.post('/bookings/:bookingId/cancel', mobileAuth, async (req, res) => {
 
     // Cancel in our DB
     await db.query(
-      'UPDATE records SET status=$1, notes=$2, updated_at=NOW() WHERE id=$3',
-      ['cancelled', `Отменено клиентом${reason ? ': ' + reason : ''}`, booking.id]
+      'UPDATE records SET status=$1, updated_at=NOW() WHERE id=$2',
+      ['cancelled', booking.id]
     );
 
     res.json({
