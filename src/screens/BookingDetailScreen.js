@@ -86,17 +86,17 @@ function StatusBadge({ status }) {
 
 // ─── Service row ──────────────────────────────────────────────────────────────
 function ServiceRow({ service, isLast }) {
-  const cost    = Number(service.cost     ?? 0);
-  const payable = Number(service.cost_to_pay ?? cost);
-  const hasDiscount = payable < cost && cost > 0;
-  const discountPct = hasDiscount ? Math.round((cost - payable) / cost * 100) : 0;
+  const origCost = Number(service.first_cost ?? service.cost ?? 0);
+  const payable  = Number(service.cost_to_pay ?? origCost);
+  const hasDiscount = payable < origCost && origCost > 0;
+  const discountPct = hasDiscount ? Math.round((origCost - payable) / origCost * 100) : 0;
 
   return (
     <View style={[styles.serviceRow, !isLast && styles.serviceRowBorder]}>
       <View style={styles.serviceRowTop}>
         <Text style={styles.serviceTitle} numberOfLines={2}>{service.title || '—'}</Text>
         {hasDiscount ? (
-          <Text style={styles.serviceOrigPrice}>{cost.toLocaleString('ru-RU')} ₽</Text>
+          <Text style={styles.serviceOrigPrice}>{origCost.toLocaleString('ru-RU')} ₽</Text>
         ) : (
           <Text style={styles.serviceFinalPrice}>{payable.toLocaleString('ru-RU')} ₽</Text>
         )}
@@ -207,6 +207,19 @@ export default function BookingDetailScreen({ route, navigation }) {
               </View>
             </Reveal>
           )}
+
+          {/* Bonuses card */}
+          {(Number(booking.bonusAccrued) > 0) && (
+            <Reveal delay={160}>
+              <View style={styles.card}>
+                <Text style={styles.sectionTitle}>Бонусы</Text>
+                <View style={styles.bonusRow}>
+                  <Text style={styles.bonusLabel}>Начислено</Text>
+                  <Text style={styles.bonusAccrued}>+{Number(booking.bonusAccrued).toLocaleString('ru-RU')} ₽</Text>
+                </View>
+              </View>
+            </Reveal>
+          )}
         </ScrollView>
       )}
     </View>
@@ -259,4 +272,8 @@ const styles = StyleSheet.create({
   totalRow:   { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 10, paddingTop: 10, borderTopWidth: 1, borderTopColor: 'rgba(212,175,55,0.2)' },
   totalLabel: { fontSize: 14, color: T.stone, fontFamily: 'serif' },
   totalAmount:{ fontSize: 20, color: T.champagne, fontFamily: 'serif', fontWeight: '600' },
+
+  bonusRow:    { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 4 },
+  bonusLabel:  { fontSize: 13, color: T.stoneMid },
+  bonusAccrued:{ fontSize: 13, color: '#4CAF50', fontWeight: '600' },
 });

@@ -165,7 +165,11 @@ function BookingCard({ booking, index, onPress }) {
                 </Text>
               )}
               <Text style={styles.cardDate}>
-                {safeFmt(booking.dateTime, 'd MMMM, EEEE', { locale: ru })}
+                {(() => {
+                  const d = parseDate(booking.dateTime);
+                  const isOtherYear = !isNaN(d.getTime()) && d.getFullYear() !== new Date().getFullYear();
+                  return safeFmt(booking.dateTime, isOtherYear ? 'd MMMM yyyy, EEEE' : 'd MMMM, EEEE', { locale: ru });
+                })()}
               </Text>
               <Text style={styles.cardTime}>
                 {safeFmt(booking.dateTime, 'HH:mm')}
