@@ -10,6 +10,7 @@ const axios    = require('axios');
 const cors     = require('cors');
 const cron     = require('node-cron');
 const path     = require('path');
+const mountRoutes = require('./backend/routes');
 
 const app  = express();
 const pool = new Pool({
@@ -21,7 +22,7 @@ const pool = new Pool({
 
 app.use(cors({ origin: process.env.FRONTEND_URL || '*', credentials: true }));
 app.use(express.json({ limit: '2mb' }));
-app.use(express.static(path.join(__dirname, '../frontend')));
+app.use(express.static(path.join(__dirname, './frontend')));
 
 // ── DB helpers ────────────────────────────────────────────────
 const db = {
@@ -586,11 +587,11 @@ app.put('/api/salon', auth, async (req, res) => {
 
 app.post('/api/salon/yclients-auth', auth, async (req, res) => {
   try {
-    const { partnerToken, login, password } = req.body;
+    const { partnerToken, login, password, yclients_company_id } = req.body;
     const d = await ycAuth(partnerToken, login, password);
     await db.query(
-      'UPDATE salons SET yclients_partner_token=$1,yclients_user_token=$2,updated_at=NOW() WHERE id=$3',
-      [partnerToken, d.user_token, req.user.salonId]
+      'UPDATE salons SET yclients_partner_token=$1,yclients_user_token=$2,yclients_company_id=$3,updated_at=NOW() WHERE id=$4',
+      [partnerToken, d.user_token, yclients_company_id, req.user.salonId]
     );
     res.json({ ok: true, userToken: d.user_token });
   } catch (e) {
@@ -838,6 +839,11 @@ app.get('/api/yclients/services', auth, async (req, res) => {
     res.json(await ycGet(salon, `/services/${salon.yclients_company_id}`));
   } catch (e) { res.status(400).json({ error: e.message }); }
 });
+
+// ============================================================
+// MOUNT ALL BACKEND ROUTES
+// ============================================================
+mountRoutes(app);
 
 // ============================================================
 // CRON

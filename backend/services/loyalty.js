@@ -7,7 +7,7 @@ const { ycGet, ycPost, ycGetClientCards, ycAccrueCard } = require('./yclients');
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 async function getLoyaltySettings(salonId) {
-  const row = await db.one('SELECT * FROM loyalty_settings WHERE salon_id=$1', [salonId]);
+  const row = await db.oneOrNone('SELECT * FROM loyalty_settings WHERE salon_id=$1', [salonId]);
   if (!row) return null;
   if (typeof row.levels === 'string') row.levels = JSON.parse(row.levels);
   if (typeof row.service_cashback === 'string') row.service_cashback = JSON.parse(row.service_cashback);
@@ -116,9 +116,9 @@ async function processCompletedRecord(recordId, clientId, ycRec, salonId, settin
 }
 
 async function cancelRecordBonuses(recordId, clientId, salonId) {
-  const record = await db.one('SELECT * FROM records WHERE id=$1', [recordId]);
+  const record = await db.oneOrNone('SELECT * FROM records WHERE id=$1', [recordId]);
   if (!record?.bonus_accrued || record.bonus_accrued <= 0) return;
-  const client = await db.one('SELECT * FROM clients WHERE id=$1', [clientId]);
+  const client = await db.oneOrNone('SELECT * FROM clients WHERE id=$1', [clientId]);
   if (!client) return;
   const deduct = Math.min(record.bonus_accrued, client.bonus_balance);
   await db.query('UPDATE clients SET bonus_balance=bonus_balance-$1,updated_at=NOW() WHERE id=$2', [deduct, clientId]);
@@ -243,7 +243,7 @@ async function runSync(salon, syncType, userId) {
         const visitsCount  = parseInt(ycc.visits || 0);
         const lastVisitAt  = ycc.last_change_date ? new Date(ycc.last_change_date) : null;
 
-        const ex = await db.one(
+        const ex = await db.oneOrNone(
           'SELECT id FROM clients WHERE salon_id=$1 AND yclients_client_id=$2',
           [salon.id, ycc.id]
         );
@@ -272,7 +272,7 @@ async function runSync(salon, syncType, userId) {
           );
           dbClientId = ins?.id;
           if (!dbClientId) {
-            const found = await db.one('SELECT id FROM clients WHERE salon_id=$1 AND yclients_client_id=$2', [salon.id, ycc.id]);
+            const found = await db.oneOrNone('SELECT id FROM clients WHERE salon_id=$1 AND yclients_client_id=$2', [salon.id, ycc.id]);
             dbClientId = found?.id;
           }
           nc++;
@@ -308,7 +308,7 @@ async function runSync(salon, syncType, userId) {
 
         for (const ycr of clientRecords) {
           const status = getRecordStatus(ycr);
-          const exRec = await db.one(
+          const exRec = await db.oneOrNone(
             'SELECT id,status,bonus_processed FROM records WHERE salon_id=$1 AND yclients_record_id=$2',
             [salon.id, ycr.id]
           );
@@ -403,7 +403,7 @@ async function runSync(salon, syncType, userId) {
       for (const ycr of orphanRecords) {
         const status = getRecordStatus(ycr);
         const recCost = getRecordCost(ycr);
-        const exRec = await db.one(
+        const exRec = await db.oneOrNone(
           'SELECT id FROM records WHERE salon_id=$1 AND yclients_record_id=$2',
           [salon.id, ycr.id]
         );
@@ -480,7 +480,7 @@ async function popCashbackAmount(ycRecordId) {
 }
 
 async function getCashbackByRecord(ycRecordId) {
-  return db.one(`SELECT cashback_amount FROM finances_log WHERE yclients_record_id=$1`, [ycRecordId]);
+  return db.oneOrNone(`SELECT cashback_amount FROM finances_log WHERE yclients_record_id=$1`, [ycRecordId]);
 }
 
 async function revertCashback(ycRecordId, salon, clientYcId) {
@@ -489,7 +489,7 @@ async function revertCashback(ycRecordId, salon, clientYcId) {
   const cashbackAmount = parseFloat(popped.cashback_amount);
   if (cashbackAmount <= 0) { console.log(`[Revert] skip revert record=${ycRecordId} amount=${cashbackAmount}`); return; }
 
-  const client = await db.one(
+  const client = await db.oneOrNone(
     'SELECT * FROM clients WHERE salon_id=$1 AND yclients_client_id=$2',
     [salon.id, clientYcId]
   );
@@ -508,7 +508,7 @@ async function revertCashback(ycRecordId, salon, clientYcId) {
     [deduct, client.id]
   );
 
-  const dbRecord = await db.one('SELECT id FROM records WHERE salon_id=$1 AND yclients_record_id=$2', [salon.id, ycRecordId]);
+  const dbRecord = await db.oneOrNone('SELECT id FROM records WHERE salon_id=$1 AND yclients_record_id=$2', [salon.id, ycRecordId]);
   await db.query(
     `INSERT INTO loyalty_card_transactions
        (salon_id,client_id,yclients_card_id,type,amount,balance_after,title,record_id,txn_date,created_at)
@@ -530,7 +530,7 @@ async function processRecordEvent(payload, salon, settings) {
   if (!ycRecordId || !clientYcId) return;
 
   const recStatus = getRecordStatus(data);
-  let client = await db.one(
+  let client = await db.oneOrNone(
     'SELECT * FROM clients WHERE salon_id=$1 AND yclients_client_id=$2',
     [salon.id, clientYcId]
   );
@@ -541,10 +541,10 @@ async function processRecordEvent(payload, salon, settings) {
        VALUES ($1,$2,$3,$4,NOW()) ON CONFLICT DO NOTHING`,
       [salon.id, clientYcId, data.client?.name || 'Клиент', data.client?.phone || null]
     );
-    client = await db.one('SELECT * FROM clients WHERE salon_id=$1 AND yclients_client_id=$2', [salon.id, clientYcId]);
+    client = await db.oneOrNone('SELECT * FROM clients WHERE salon_id=$1 AND yclients_client_id=$2', [salon.id, clientYcId]);
   }
 
-  let record = await db.one('SELECT * FROM records WHERE salon_id=$1 AND yclients_record_id=$2', [salon.id, ycRecordId]);
+  let record = await db.oneOrNone('SELECT * FROM records WHERE salon_id=$1 AND yclients_record_id=$2', [salon.id, ycRecordId]);
   if (!record) {
     record = await db.one(
       `INSERT INTO records
@@ -683,7 +683,7 @@ async function processFinancesOperation(payload, salon) {
         'UPDATE clients SET bonus_balance=$1::numeric, yclients_card_balance=$1::numeric, updated_at=NOW() WHERE id=$2',
         [newBalance, client.id]
       );
-      const dbRecord = await db.one('SELECT id FROM records WHERE salon_id=$1 AND yclients_record_id=$2', [salon.id, ycRecordId]);
+      const dbRecord = await db.oneOrNone('SELECT id FROM records WHERE salon_id=$1 AND yclients_record_id=$2', [salon.id, ycRecordId]);
       const txnType = delta >= 0 ? 'accrual' : 'redemption';
       await db.query(
         `INSERT INTO loyalty_card_transactions
@@ -717,7 +717,7 @@ async function processFinancesOperation(payload, salon) {
         'UPDATE clients SET bonus_balance=$1::numeric, yclients_card_balance=$1::numeric, updated_at=NOW() WHERE id=$2',
         [newBalance, client.id]
       );
-      const dbRecord = await db.one('SELECT id FROM records WHERE salon_id=$1 AND yclients_record_id=$2', [salon.id, ycRecordId]);
+      const dbRecord = await db.oneOrNone('SELECT id FROM records WHERE salon_id=$1 AND yclients_record_id=$2', [salon.id, ycRecordId]);
       const txnType = delta >= 0 ? 'accrual' : 'redemption';
       await db.query(
         `INSERT INTO loyalty_card_transactions

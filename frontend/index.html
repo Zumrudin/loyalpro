@@ -139,7 +139,28 @@
       </div>
       <div class="g2 mb">
         <div class="card"><div class="ct">Последние начисления</div><div id="recentTx"><div class="empty">Нет данных</div></div></div>
-        <div class="card"><div class="ct">Топ услуг</div><div id="topSvc"><div class="empty">Нет данных</div></div></div>
+        <div class="card" style="padding:0">
+          <div class="ct" style="padding:18px 18px 0 18px">Топ услуг</div>
+          <div class="tw"><table>
+            <thead>
+              <tr>
+                <th class="th-sort asc" onclick="svcSort('service_name')" data-col="service_name">
+                  <span>Услуга</span><i class="sort-icon"></i>
+                </th>
+                <th class="th-sort" onclick="svcSort('cnt')" data-col="cnt">
+                  <span>Количество</span><i class="sort-icon"></i>
+                </th>
+                <th class="th-sort" onclick="svcSort('total_amount')" data-col="total_amount">
+                  <span>Сумма ₽</span><i class="sort-icon"></i>
+                </th>
+              </tr>
+            </thead>
+            <tbody id="svcBody"><tr><td colspan="3" class="empty">Нет данных</td></tr></tbody>
+          </table>
+          <div style="padding:12px 18px 18px 18px;text-align:center">
+            <button id="svcToggleBtn" onclick="toggleSvc()" style="background:none;border:1px solid var(--b3);padding:8px 16px;border-radius:4px;cursor:pointer;font-size:12px;color:var(--t2);display:none">Показать все ▼</button>
+          </div></div>
+        </div>
       </div>
       <div class="g2">
         <div class="card"><div class="ct">Бонусы: начислено vs потрачено</div><div style="height:200px"><canvas id="bfChart"></canvas></div></div>
@@ -1189,17 +1210,74 @@ async function saveSalon() {
 }
 async function connectYC() {
   const el=document.getElementById('ycSt');
-  el.innerHTML='<span class="spinner"></span> Подключение...';
+
+  // Валидация полей
+  const pt = document.getElementById('st-pt')?.value?.trim();
+  const login = document.getElementById('st-login')?.value?.trim();
+  const pass = document.getElementById('st-pass')?.value?.trim();
+  const yid = document.getElementById('st-yid')?.value?.trim();
+
+  if (!pt || !login || !pass || !yid) {
+    el.innerHTML='<span style="color:var(--danger)">❌ Заполните все поля: ID компании, Partner Token, Email, Пароль</span>';
+    return;
+  }
+
+  el.innerHTML='<span class="spinner"></span> Подключение к YClients (может занять до 10 сек)...';
   try {
-    await api('POST','/api/salon/yclients-auth',{
-      partnerToken: document.getElementById('st-pt')?.value,
-      login:        document.getElementById('st-login')?.value,
-      password:     document.getElementById('st-pass')?.value,
-      chainId:      document.getElementById('st-chain-id')?.value || null,
+    console.log('📡 Отправка данных на сервер...');
+    const res = await api('POST','/api/salon/yclients-auth',{
+      partnerToken: pt,
+      login: login,
+      password: pass,
+      yclients_company_id: yid,
+      chainId: document.getElementById('st-chain-id')?.value || null,
     });
-    el.innerHTML='<span style="color:var(--a)">✓ YClients подключён! Логин и Chain ID сохранены.</span>';
+
+    console.log('✅ Ответ сервера:', res);
+
+    el.innerHTML=`
+      <div style="background:#ecfdf5;border:1px solid #86efac;border-radius:6px;padding:12px;color:#15803d">
+        <div style="font-weight:600;margin-bottom:6px">✅ YClients успешно подключен!</div>
+        <div style="font-size:12px;line-height:1.5">
+          • Partner Token: сохранён<br>
+          • User Token: ${res.userToken ? res.userToken.slice(0,20)+'...' : 'получен'}<br>
+          • Теперь вы можете запустить синхронизацию
+        </div>
+      </div>
+    `;
     notify('YClients подключён!','ok');
-  } catch(e){el.innerHTML=`<span style="color:var(--danger)">Ошибка: ${e.message}</span>`;}
+
+    // Автоматически загрузить типы карт
+    setTimeout(() => { loadCardTypes(); }, 500);
+  } catch(e){
+    console.error('❌ Ошибка подключения:', e);
+
+    let errorMsg = e.message;
+    let helpText = '';
+
+    // Подробная справка для разных ошибок
+    if (errorMsg.includes('Неверный логин или пароль')) {
+      helpText = '<br><strong>Совет:</strong> Проверьте email и пароль вашего профиля YClients';
+    } else if (errorMsg.includes('401') || errorMsg.includes('Unauthorized')) {
+      helpText = '<br><strong>Совет:</strong> Partner Token неверный или истёк. Обновите его в YClients → Настройки → API';
+    } else if (errorMsg.includes('404')) {
+      helpText = '<br><strong>Совет:</strong> ID компании неверный. Проверьте в URL: yclients.com/cabinet/**ID**/...';
+    } else if (errorMsg.includes('timeout') || errorMsg.includes('ETIMEDOUT')) {
+      helpText = '<br><strong>Совет:</strong> Сервер YClients не отвечает. Попробуйте ещё раз через минуту.';
+    }
+
+    el.innerHTML=`
+      <div style="background:#fef2f2;border:1px solid #fca5a5;border-radius:6px;padding:12px;color:#991b1b">
+        <div style="font-weight:600;margin-bottom:6px">❌ Ошибка подключения</div>
+        <div style="font-size:12px;line-height:1.5;margin-bottom:8px">
+          ${errorMsg}${helpText}
+        </div>
+        <div style="font-size:11px;color:#7f1d1d;margin-top:8px">
+          Если проблема не решена, используйте скрипт восстановления (см. RECOVERY_GUIDE.md)
+        </div>
+      </div>
+    `;
+  }
 }
 function copyWh() { const v=document.getElementById('whUrl')?.value; navigator.clipboard.writeText(v).then(()=>notify('Скопировано!','ok')); }
 async function loadSyncLogs() {

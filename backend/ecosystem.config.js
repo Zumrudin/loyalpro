@@ -9,8 +9,9 @@ module.exports = {
       DATABASE_URL: 'postgresql://loyalpro:1!Nky8A4T*bY@googugiherie.beget.app:5432/loyalpro',
       DB_SSL: 'true',
       JWT_SECRET: '8c9abeb04b7f3743183191c748a0b554eabd40ec02827f538d7a2ff8729ebbf1ba5054eeb8882d6c7eb4d89311dd598a0e0dbff9d5ce3685ded93f2231da2449',
-      FRONTEND_URL: 'http://89.22.233.73',
-      TZ: 'Europe/Moscow'
+      FRONTEND_URL: 'http://89.22.233.73:8081',
+      TZ: 'Europe/Moscow',
+      TELEGRAM_BOT_TOKEN: '8294987984:AAHiq84mUAxTrjmDcURGF5vXp2QqfZFa06g'
     }
   }]
 }

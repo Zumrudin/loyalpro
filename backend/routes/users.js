@@ -5,7 +5,7 @@ const { auth, requireRole } = require('../middleware/auth');
 
 router.get('/', auth, requireRole('owner', 'admin'), async (req, res) => {
   try {
-    const users = await db.many(
+    const users = await db.any(
       `SELECT u.id,u.name,u.email,u.role,u.is_active,u.must_change_password,
               u.created_at,u.last_login_at
        FROM users u WHERE u.salon_id=$1 ORDER BY u.created_at`,
@@ -74,7 +74,7 @@ router.patch('/:id', auth, requireRole('owner'), async (req, res) => {
     if (!updates.length) return res.status(400).json({ error: 'Нечего обновлять' });
 
     vals.push(id, req.user.salonId);
-    const user = await db.one(
+    const user = await db.oneOrNone(
       `UPDATE users SET ${updates.join(',')} WHERE id=$${i++} AND salon_id=$${i}
        RETURNING id,name,email,role,is_active,must_change_password`,
       vals

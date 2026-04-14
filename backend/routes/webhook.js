@@ -8,7 +8,7 @@ router.post('/webhook.v2/:companyId', async (req, res) => {
   console.log(`[WH] hit companyId=${req.params.companyId} resource=${req.body?.resource||req.body?.resource_type}`);
   let wlog = null;
   try {
-    const salon = await db.one(
+    const salon = await db.oneOrNone(
       'SELECT * FROM salons WHERE yclients_company_id=$1 AND is_active=TRUE',
       [req.params.companyId]
     );

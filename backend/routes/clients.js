@@ -16,7 +16,7 @@ router.get('/', auth, async (req, res) => {
       buildClientsQuery(req.query, req.user.salonId);
 
     const total = (await db.one(`SELECT COUNT(*) FROM clients c WHERE ${whereSql}`, params)).count;
-    const clients = await db.many(
+    const clients = await db.any(
       `SELECT * FROM clients c WHERE ${whereSql}
        ORDER BY ${orderCol} ${orderDir} NULLS LAST
        LIMIT $${nextIdx} OFFSET $${nextIdx + 1}`,
@@ -28,12 +28,12 @@ router.get('/', auth, async (req, res) => {
 
 router.get('/:id', auth, async (req, res) => {
   try {
-    const client = await db.one(
+    const client = await db.oneOrNone(
       'SELECT * FROM clients WHERE id=$1 AND salon_id=$2',
       [req.params.id, req.user.salonId]
     );
     if (!client) return res.status(404).json({ error: 'Клиент не найден' });
-    const history = await db.many(
+    const history = await db.any(
       `SELECT id,
               COALESCE(txn_date, created_at) as created_at,
               amount, title as description, type, balance_after, 'card' as source
@@ -44,7 +44,7 @@ router.get('/:id', auth, async (req, res) => {
        ORDER BY created_at DESC LIMIT 50`,
       [req.params.id]
     );
-    const records = await db.many(
+    const records = await db.any(
       'SELECT * FROM records WHERE client_id=$1 ORDER BY visit_date DESC LIMIT 20',
       [req.params.id]
     );
@@ -83,18 +83,18 @@ router.post('/:id/bonus', auth, async (req, res) => {
 
 router.get('/:id/card-transactions', auth, async (req, res) => {
   try {
-    const client = await db.one(
+    const client = await db.oneOrNone(
       'SELECT * FROM clients WHERE id=$1 AND salon_id=$2',
       [req.params.id, req.user.salonId]
     );
     if (!client) return res.status(404).json({ error: 'Клиент не найден' });
-    const lct = await db.many(
+    const lct = await db.any(
       `SELECT id, txn_date as created_at, amount, title, balance_after, type
        FROM loyalty_card_transactions WHERE client_id=$1
        ORDER BY txn_date DESC NULLS LAST LIMIT 500`,
       [client.id]
     );
-    const bonus = await db.many(
+    const bonus = await db.any(
       `SELECT id, created_at, amount, description as title, balance_after, type
        FROM bonus_transactions WHERE client_id=$1
        ORDER BY created_at DESC LIMIT 200`,
@@ -114,7 +114,7 @@ router.get('/:id/card-transactions', auth, async (req, res) => {
 
 router.post('/:id/sync-card', auth, async (req, res) => {
   try {
-    const client = await db.one('SELECT * FROM clients WHERE id=$1 AND salon_id=$2', [req.params.id, req.user.salonId]);
+    const client = await db.oneOrNone('SELECT * FROM clients WHERE id=$1 AND salon_id=$2', [req.params.id, req.user.salonId]);
     if (!client) return res.status(404).json({ error: 'Клиент не найден' });
     if (!client.yclients_client_id) return res.status(400).json({ error: 'Нет yclients_client_id' });
     const salon = await db.one('SELECT * FROM salons WHERE id=$1', [req.user.salonId]);

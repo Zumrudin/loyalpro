@@ -20,7 +20,20 @@ const helmet   = require('helmet');
 const app = express();
 
 // Security headers
-app.use(helmet());
+app.use(helmet({
+  contentSecurityPolicy: {
+    useDefaults: false,
+    directives: {
+      defaultSrc: ["'self'"],
+      scriptSrc: ["'self'", "'unsafe-inline'", "cdn.jsdelivr.net"],
+      styleSrc:  ["'self'", "'unsafe-inline'"],
+      imgSrc:    ["'self'", "data:", "blob:"],
+      connectSrc: ["'self'"],
+      fontSrc:   ["'self'", "data:"],
+    },
+  },
+  hsts: false,
+}));
 
 const defaultOrigins = [
   config.FRONTEND_URL,

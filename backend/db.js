@@ -12,9 +12,11 @@ const pool = new Pool({
 });
 
 const db = {
-  query: (sql, p) => pool.query(sql, p),
-  one:   async (sql, p) => { const r = await pool.query(sql, p); return r.rows[0] || null; },
-  many:  async (sql, p) => { const r = await pool.query(sql, p); return r.rows; },
+  query:      (sql, p) => pool.query(sql, p),
+  one:        async (sql, p) => { const r = await pool.query(sql, p); return r.rows[0] || null; },
+  oneOrNone:  async (sql, p) => { const r = await pool.query(sql, p); return r.rows[0] || null; },
+  many:       async (sql, p) => { const r = await pool.query(sql, p); return r.rows; },
+  any:        async (sql, p) => { const r = await pool.query(sql, p); return r.rows; },
 };
 
 module.exports = { pool, db };

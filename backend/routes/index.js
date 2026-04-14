@@ -8,6 +8,10 @@ module.exports = function mountRoutes(app) {
   // ── Webhook (no JWT required) ───────────────────────────────
   app.use('/yclients', require('./webhook'));
 
+  // ── Mobile App API (separate auth) ────────────────────────
+  app.use('/api/mobile/auth', require('./mobile-auth'));
+  app.use('/api/mobile/client', require('./mobile-client'));
+
   // ── Global API auth + role middleware ──────────────────────
   app.use('/api', (req, res, next) => {
     const fullPath = '/api' + req.path;

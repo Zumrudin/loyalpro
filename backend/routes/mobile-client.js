@@ -1,0 +1,319 @@
+const router = require('express').Router();
+const { db } = require('../db');
+const { mobileAuth } = require('../middleware/mobile-auth');
+const { ycGet, ycGetClientCards } = require('../services/yclients');
+
+// Get client profile
+router.get('/profile', mobileAuth, async (req, res) => {
+  try {
+    const client = await db.one(
+      `SELECT
+        id, name, phone, email, birthday, gender,
+        bonus_balance, yclients_card_balance, loyalty_level,
+        visits_count, total_spent, created_at,
+        yclients_client_id
+       FROM clients WHERE id=$1`,
+      [req.client.clientId]
+    );
+
+    if (!client) {
+      return res.status(404).json({ error: 'Клиент не найден' });
+    }
+
+    // Get clinic info
+    const clinic = await db.one(
+      `SELECT id, name, city, template_contact_phone, template_contact_web
+       FROM salons WHERE id=(SELECT salon_id FROM clients WHERE id=$1)`,
+      [client.id]
+    );
+
+    res.json({
+      success: true,
+      profile: {
+        ...client,
+        clinicName: clinic?.name,
+        clinicPhone: clinic?.template_contact_phone,
+        clinicEmail: clinic?.template_contact_web,
+        clinicAddress: clinic?.city,
+        clinicHours: null,
+        registeredAt: client.created_at,
+      }
+    });
+
+  } catch (e) {
+    console.error('[Get profile error]', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Get client bookings
+router.get('/bookings', mobileAuth, async (req, res) => {
+  try {
+    const { type = 'all' } = req.query; // 'upcoming' | 'past' | 'all'
+
+    let whereSql = 'client_id=$1';
+
+    if (type === 'upcoming') {
+      whereSql += ' AND visit_date > NOW()';
+    } else if (type === 'past') {
+      whereSql += ' AND visit_date <= NOW()';
+    }
+
+    const bookings = await db.many(
+      `SELECT
+        id,
+        visit_date as dateTime,
+        service_name as serviceName,
+        specialist_name as specialistName,
+        status,
+        amount as price
+       FROM records
+       WHERE ${whereSql}
+       ORDER BY visit_date DESC
+       LIMIT 50`,
+      [req.client.clientId]
+    );
+
+    res.json({
+      success: true,
+      bookings: bookings || []
+    });
+
+  } catch (e) {
+    console.error('[Get bookings error]', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Get single booking
+router.get('/bookings/:bookingId', mobileAuth, async (req, res) => {
+  try {
+    const booking = await db.one(
+      `SELECT
+        id,
+        visit_date as dateTime,
+        service_name as serviceName,
+        specialist_name as specialistName,
+        status,
+        amount as price,
+        client_id
+       FROM records
+       WHERE id=$1 AND client_id=$2`,
+      [req.params.bookingId, req.client.clientId]
+    );
+
+    if (!booking) {
+      return res.status(404).json({ error: 'Запись не найдена' });
+    }
+
+    res.json({
+      success: true,
+      booking
+    });
+
+  } catch (e) {
+    console.error('[Get booking error]', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Cancel booking
+router.post('/bookings/:bookingId/cancel', mobileAuth, async (req, res) => {
+  try {
+    const { reason = '' } = req.body;
+
+    const booking = await db.one(
+      'SELECT * FROM records WHERE id=$1 AND client_id=$2',
+      [req.params.bookingId, req.client.clientId]
+    );
+
+    if (!booking) {
+      return res.status(404).json({ error: 'Запись не найдена' });
+    }
+
+    // Cancel in our DB
+    await db.query(
+      'UPDATE records SET status=$1, notes=$2, updated_at=NOW() WHERE id=$3',
+      ['cancelled', `Отменено клиентом${reason ? ': ' + reason : ''}`, booking.id]
+    );
+
+    res.json({
+      success: true,
+      message: 'Запись отменена'
+    });
+
+  } catch (e) {
+    console.error('[Cancel booking error]', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Reschedule booking
+router.post('/bookings/:bookingId/reschedule', mobileAuth, async (req, res) => {
+  try {
+    const { newDateTime } = req.body;
+
+    if (!newDateTime) {
+      return res.status(400).json({ error: 'Укажите новую дату и время' });
+    }
+
+    const booking = await db.one(
+      'SELECT * FROM records WHERE id=$1 AND client_id=$2',
+      [req.params.bookingId, req.client.clientId]
+    );
+
+    if (!booking) {
+      return res.status(404).json({ error: 'Запись не найдена' });
+    }
+
+    // Update booking date
+    await db.query(
+      'UPDATE records SET visit_date=$1, updated_at=NOW() WHERE id=$2',
+      [newDateTime, booking.id]
+    );
+
+    res.json({
+      success: true,
+      message: 'Запись перенесена'
+    });
+
+  } catch (e) {
+    console.error('[Reschedule booking error]', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Get bonuses
+router.get('/bonuses', mobileAuth, async (req, res) => {
+  try {
+    const client = await db.one(
+      'SELECT bonus_balance, loyalty_level FROM clients WHERE id=$1',
+      [req.client.clientId]
+    );
+
+    if (!client) {
+      return res.status(404).json({ error: 'Клиент не найден' });
+    }
+
+    res.json({
+      success: true,
+      balance: client.bonus_balance || 0,
+      level: client.loyalty_level || 'Новичок'
+    });
+
+  } catch (e) {
+    console.error('[Get bonuses error]', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Get bonus history
+router.get('/bonus-history', mobileAuth, async (req, res) => {
+  try {
+    const transactions = await db.many(
+      `SELECT
+        id,
+        created_at,
+        amount,
+        description as title,
+        type,
+        balance_after
+       FROM bonus_transactions
+       WHERE client_id=$1
+       ORDER BY created_at DESC
+       LIMIT 50`,
+      [req.client.clientId]
+    );
+
+    res.json({
+      success: true,
+      transactions: transactions || []
+    });
+
+  } catch (e) {
+    console.error('[Get bonus history error]', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Get notifications
+router.get('/notifications', mobileAuth, async (req, res) => {
+  try {
+    const { limit = 20, offset = 0 } = req.query;
+
+    const notifications = await db.many(
+      `SELECT
+        id,
+        title,
+        message,
+        type,
+        read,
+        created_at as createdAt
+       FROM mobile_notifications
+       WHERE client_id=$1
+       ORDER BY created_at DESC
+       LIMIT $2 OFFSET $3`,
+      [req.client.clientId, parseInt(limit), parseInt(offset)]
+    );
+
+    res.json({
+      success: true,
+      notifications: notifications || []
+    });
+
+  } catch (e) {
+    console.error('[Get notifications error]', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Mark notification as read
+router.post('/notifications/:notificationId/read', mobileAuth, async (req, res) => {
+  try {
+    const notification = await db.one(
+      'SELECT * FROM mobile_notifications WHERE id=$1 AND client_id=$2',
+      [req.params.notificationId, req.client.clientId]
+    );
+
+    if (!notification) {
+      return res.status(404).json({ error: 'Уведомление не найдено' });
+    }
+
+    await db.query(
+      'UPDATE mobile_notifications SET read=TRUE WHERE id=$1',
+      [req.params.notificationId]
+    );
+
+    res.json({ success: true });
+
+  } catch (e) {
+    console.error('[Mark notification read error]', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Register FCM token for push notifications
+router.post('/fcm-token', mobileAuth, async (req, res) => {
+  try {
+    const { fcmToken } = req.body;
+
+    if (!fcmToken) {
+      return res.status(400).json({ error: 'Укажите FCM token' });
+    }
+
+    await db.query(
+      `INSERT INTO mobile_fcm_tokens (client_id, token, created_at)
+       VALUES ($1, $2, NOW())
+       ON CONFLICT (client_id) DO UPDATE SET token=$2`,
+      [req.client.clientId, fcmToken]
+    );
+
+    res.json({ success: true });
+
+  } catch (e) {
+    console.error('[Register FCM token error]', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+module.exports = router;
