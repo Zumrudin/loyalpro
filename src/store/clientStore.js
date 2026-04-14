@@ -67,6 +67,31 @@ export const useClientStore = create((set, get) => ({
     }
   },
 
+  fetchBookingDetailGroup: async (ids) => {
+    set({ bookingDetailLoading: true, bookingDetail: null });
+    try {
+      const results = await Promise.all(ids.map((id) => clientDataAPI.getBooking(id)));
+      const bookings = results.map((r) => r.booking || r);
+      const first = bookings[0];
+      // Merge services from all records in the group
+      const allServices = bookings.flatMap((b) => {
+        if (!b.services) return [];
+        if (Array.isArray(b.services)) return b.services;
+        try { return JSON.parse(b.services); } catch { return []; }
+      });
+      const totalPrice   = bookings.reduce((sum, b) => sum + Number(b.price        || 0), 0);
+      const totalBonus   = bookings.reduce((sum, b) => sum + Number(b.bonusAccrued || 0), 0);
+      set({
+        bookingDetail: { ...first, services: allServices, price: totalPrice, bonusAccrued: totalBonus },
+        error: null,
+      });
+    } catch (error) {
+      set({ error: error.message });
+    } finally {
+      set({ bookingDetailLoading: false });
+    }
+  },
+
   cancelBooking: async (bookingId, reason) => {
     set({ bookingsLoading: true });
     try {

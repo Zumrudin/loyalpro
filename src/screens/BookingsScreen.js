@@ -198,6 +198,40 @@ function BookingCard({ booking, index, onPress }) {
   );
 }
 
+// ─── Group records from the same visit (≤4 h apart on same day) ───────────────
+function groupVisits(bookings) {
+  if (!bookings || bookings.length === 0) return [];
+  const sorted = [...bookings].sort((a, b) => parseDate(a.dateTime) - parseDate(b.dateTime));
+  const groups = [];
+  let cur = null;
+  for (const b of sorted) {
+    const d = parseDate(b.dateTime);
+    if (!cur) {
+      cur = { ids: [b.id], items: [b] };
+    } else {
+      const prev = parseDate(cur.items[cur.items.length - 1].dateTime);
+      const diffH = (d - prev) / 3600000;
+      if (d.toDateString() === prev.toDateString() && diffH <= 4) {
+        cur.ids.push(b.id);
+        cur.items.push(b);
+      } else {
+        groups.push(cur);
+        cur = { ids: [b.id], items: [b] };
+      }
+    }
+  }
+  if (cur) groups.push(cur);
+  groups.reverse(); // newest first
+
+  return groups.map(({ ids, items }) => {
+    const first = items[0];
+    const totalPrice = items.reduce((s, x) => s + Number(x.price || 0), 0);
+    const names = items.map((x) => x.serviceName).filter(Boolean);
+    const serviceName = names.length > 1 ? `${names[0]} +${names.length - 1}` : (names[0] || '—');
+    return { id: first.id, ids, dateTime: first.dateTime, serviceName, specialistName: first.specialistName, status: first.status, price: totalPrice || null };
+  });
+}
+
 // ─── Main screen ──────────────────────────────────────────────────────────────
 export default function BookingsScreen({ navigation }) {
   const insets = useSafeAreaInsets();
@@ -211,8 +245,10 @@ export default function BookingsScreen({ navigation }) {
 
   const onRefresh = useCallback(() => fetchBookings(filter), [filter]);
 
+  const grouped = React.useMemo(() => groupVisits(bookings), [bookings]);
+
   const handleCardPress = (booking) => {
-    navigation.navigate('BookingDetail', { bookingId: booking.id });
+    navigation.navigate('BookingDetail', { bookingId: booking.id, bookingIds: booking.ids });
   };
 
   return (
@@ -278,7 +314,7 @@ export default function BookingsScreen({ navigation }) {
             </Text>
           </View>
         ) : (
-          bookings.map((booking, i) => (
+          grouped.map((booking, i) => (
             <BookingCard
               key={booking.id}
               booking={booking}

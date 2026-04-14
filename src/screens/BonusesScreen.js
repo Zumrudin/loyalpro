@@ -1,447 +1,264 @@
-import React, { useEffect, useState } from 'react';
+/**
+ * BonusesScreen — "Liquid Glass & Silk" redesign
+ * Aura Aesthetics Premium Clinic
+ */
+import React, { useEffect, useCallback } from 'react';
 import {
   View,
   ScrollView,
   Text,
   StyleSheet,
-  ActivityIndicator,
-  TouchableOpacity,
   RefreshControl,
-  Dimensions,
+  StatusBar,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import Animated, {
+  useSharedValue,
+  useAnimatedStyle,
+  withTiming,
+  withDelay,
+  withSpring,
+  withRepeat,
+  withSequence,
+  Easing,
+  interpolate,
+  cancelAnimation,
+} from 'react-native-reanimated';
+import { LinearGradient } from 'expo-linear-gradient';
+import { BlurView } from 'expo-blur';
 import { useClientStore } from '../store/clientStore';
 import { format } from 'date-fns';
 import { ru } from 'date-fns/locale';
-import { Ionicons } from '@expo/vector-icons';
-import { LinearGradient } from 'expo-linear-gradient';
-import { BlurView } from 'expo-blur';
 
-const { width } = Dimensions.get('window');
-
-// Design tokens (matching HomeScreen aesthetic)
+// ─── Design tokens ────────────────────────────────────────────────────────────
 const T = {
-  pearl: '#F5F3F0',
-  silk: '#EDE9E3',
-  glass: 'rgba(255,252,248,0.72)',
-  glassBorder: 'rgba(255,255,255,0.85)',
-  champagne: '#D4AF37',
-  champLight: '#F0D882',
-  champDark: '#A8881C',
-  champGlow: 'rgba(212,175,55,0.18)',
-  stone: '#4A4540',
-  stoneMid: '#7A736B',
+  pearl:      '#F5F3F0',
+  silk:       '#EDE9E3',
+  glass:      'rgba(255,252,248,0.88)',
+  champagne:  '#D4AF37',
+  champGlow:  'rgba(212,175,55,0.18)',
+  stone:      '#4A4540',
+  stoneMid:   '#7A736B',
   stoneFaint: 'rgba(74,69,64,0.40)',
-  stoneMuted: 'rgba(74,69,64,0.60)',
-  shadow: 'rgba(100,90,70,0.12)',
-  shadowDeep: 'rgba(100,90,70,0.20)',
 };
 
-export default function BonusesScreen({ navigation }) {
-  const insets = useSafeAreaInsets();
-  const [refreshing, setRefreshing] = useState(false);
-
-  const bonuses = useClientStore((state) => state.bonuses);
-  const bonusHistory = useClientStore((state) => state.bonusHistory);
-  const bonusLoading = useClientStore((state) => state.bonusLoading);
-  const fetchBonuses = useClientStore((state) => state.fetchBonuses);
-
+// ─── Shimmer skeleton ─────────────────────────────────────────────────────────
+function Skeleton({ width: w, height: h, radius = 12, style }) {
+  const shimmer = useSharedValue(0);
   useEffect(() => {
-    loadBonuses();
+    shimmer.value = withRepeat(
+      withSequence(
+        withTiming(1, { duration: 900, easing: Easing.inOut(Easing.sin) }),
+        withTiming(0, { duration: 900, easing: Easing.inOut(Easing.sin) }),
+      ),
+      -1,
+    );
+    return () => cancelAnimation(shimmer);
   }, []);
+  const animStyle = useAnimatedStyle(() => ({
+    opacity: interpolate(shimmer.value, [0, 1], [0.45, 0.85]),
+  }));
+  return (
+    <Animated.View style={[{ width: w, height: h, borderRadius: radius, overflow: 'hidden' }, style, animStyle]}>
+      <LinearGradient colors={[T.silk, '#E8E2DA', T.silk]} start={{ x: 0, y: 0.5 }} end={{ x: 1, y: 0.5 }} style={{ flex: 1 }} />
+    </Animated.View>
+  );
+}
 
-  const loadBonuses = async () => {
-    await fetchBonuses();
-    setRefreshing(false);
-  };
+// ─── Fade + slide entry ───────────────────────────────────────────────────────
+function Reveal({ delay = 0, children }) {
+  const opacity = useSharedValue(0);
+  const ty = useSharedValue(24);
+  const scale = useSharedValue(0.97);
+  useEffect(() => {
+    opacity.value = withDelay(delay, withTiming(1, { duration: 500, easing: Easing.out(Easing.cubic) }));
+    ty.value      = withDelay(delay, withSpring(0, { damping: 20, stiffness: 100 }));
+    scale.value   = withDelay(delay, withSpring(1, { damping: 20, stiffness: 100 }));
+  }, []);
+  const style = useAnimatedStyle(() => ({
+    opacity: opacity.value,
+    transform: [{ translateY: ty.value }, { scale: scale.value }],
+  }));
+  return <Animated.View style={style}>{children}</Animated.View>;
+}
 
-  const handleRefresh = async () => {
-    setRefreshing(true);
-    await loadBonuses();
-  };
+function safeDateFmt(value) {
+  try {
+    const d = value ? new Date(value) : null;
+    if (!d || isNaN(d.getTime())) return '—';
+    return format(d, 'd MMM yyyy', { locale: ru });
+  } catch {
+    return '—';
+  }
+}
 
-  const getTransactionColor = (type) => {
-    switch (type) {
-      case 'earned':
-      case 'accrual':
-        return T.champagne;
-      case 'spent':
-      case 'redeemed':
-        return T.stone;
-      default:
-        return T.stoneMid;
-    }
-  };
+// ─── Transaction row ──────────────────────────────────────────────────────────
+function TxnRow({ txn, isLast }) {
+  const isAccrual = txn.type === 'accrual' || txn.type === 'earned';
+  return (
+    <View style={[styles.txnRow, !isLast && styles.txnRowBorder]}>
+      <View style={styles.txnLeft}>
+        <View style={[styles.txnDot, { backgroundColor: isAccrual ? 'rgba(76,175,80,0.18)' : 'rgba(229,57,53,0.14)' }]}>
+          <Text style={{ fontSize: 14 }}>{isAccrual ? '＋' : '－'}</Text>
+        </View>
+        <View style={styles.txnInfo}>
+          <Text style={styles.txnTitle} numberOfLines={2}>{txn.description || (isAccrual ? 'Начисление' : 'Списание')}</Text>
+          <Text style={styles.txnDate}>{safeDateFmt(txn.createdAt)}</Text>
+        </View>
+      </View>
+      <Text style={[styles.txnAmount, { color: isAccrual ? '#4CAF50' : '#E53935' }]}>
+        {isAccrual ? '+' : '−'}{Number(txn.amount).toLocaleString('ru-RU')} ₽
+      </Text>
+    </View>
+  );
+}
 
-  const getTransactionIcon = (type) => {
-    switch (type) {
-      case 'earned':
-      case 'accrual':
-        return 'add-circle-outline';
-      case 'spent':
-      case 'redeemed':
-        return 'remove-circle-outline';
-      default:
-        return 'help-circle-outline';
-    }
-  };
+// ─── Main screen ──────────────────────────────────────────────────────────────
+export default function BonusesScreen() {
+  const insets = useSafeAreaInsets();
 
-  const getTransactionLabel = (type) => {
-    switch (type) {
-      case 'earned':
-      case 'accrual':
-        return 'Начислено';
-      case 'spent':
-      case 'redeemed':
-        return 'Потрачено';
-      default:
-        return 'Транзакция';
-    }
-  };
+  const bonuses      = useClientStore((s) => s.bonuses);
+  const bonusHistory = useClientStore((s) => s.bonusHistory);
+  const bonusLoading = useClientStore((s) => s.bonusLoading);
+  const fetchBonuses = useClientStore((s) => s.fetchBonuses);
+
+  useEffect(() => { fetchBonuses(); }, []);
+
+  const onRefresh = useCallback(() => fetchBonuses(), []);
 
   return (
-    <View style={[styles.root, { paddingTop: insets.top }]}>
-      {/* Header */}
-      <View style={styles.header}>
-        <TouchableOpacity
-          onPress={() => navigation.goBack()}
-          style={styles.backButton}
-        >
-          <Ionicons name="chevron-back" size={24} color={T.stone} />
-        </TouchableOpacity>
+    <View style={styles.root}>
+      <StatusBar barStyle="dark-content" backgroundColor={T.pearl} />
+      <LinearGradient colors={[T.pearl, T.silk]} style={StyleSheet.absoluteFill} />
+
+      {/* Blur header */}
+      <View style={[styles.header, { paddingTop: insets.top + 10 }]}>
+        <BlurView intensity={60} tint="light" style={StyleSheet.absoluteFill} />
+        <LinearGradient
+          colors={['rgba(245,243,240,0.92)', 'rgba(237,233,227,0.88)']}
+          style={StyleSheet.absoluteFill}
+        />
+        <View style={styles.headerBorder} />
+        <Text style={styles.headerSub}>Аура Эстетик</Text>
         <Text style={styles.headerTitle}>Бонусы</Text>
-        <View style={{ width: 40 }} />
       </View>
 
-      {bonusLoading && !bonuses ? (
-        <View style={styles.loadingContainer}>
-          <ActivityIndicator size="large" color={T.champagne} />
-        </View>
-      ) : (
-        <ScrollView
-          style={styles.content}
-          showsVerticalScrollIndicator={false}
-          refreshControl={
-            <RefreshControl
-              refreshing={refreshing}
-              onRefresh={handleRefresh}
-              tintColor={T.champagne}
-            />
-          }
-        >
-          {/* Balance Card */}
-          {bonuses && (
-            <View style={styles.balanceCardContainer}>
-              <LinearGradient
-                colors={[T.champagne + '28', T.champLight + '10']}
-                style={StyleSheet.absoluteFill}
-                start={{ x: 0, y: 0 }}
-                end={{ x: 1, y: 1 }}
-              />
-              <BlurView intensity={40} style={StyleSheet.absoluteFill} tint="light" />
-
-              <View style={styles.balanceCard}>
-                <View style={styles.balanceTop}>
-                  <View style={styles.balanceIconWrap}>
-                    <Ionicons name="diamond" size={28} color={T.champagne} />
-                  </View>
-                  <Text style={styles.balanceLabel}>Бонусный баланс</Text>
-                </View>
-
-                <View style={styles.balanceDivider} />
-
-                <View style={styles.balanceBottom}>
-                  <Text style={styles.balanceValue}>
-                    {bonuses.balance ?? 0}
-                  </Text>
-                  <Text style={styles.balanceCurrency}>₽</Text>
-                </View>
-
-                <View style={styles.balanceMeta}>
-                  <View style={styles.metaItem}>
-                    <Text style={styles.metaLabel}>Уровень</Text>
-                    <Text style={styles.metaValue}>{bonuses.level || 'Новичок'}</Text>
-                  </View>
-                  {bonuses.nextLevelPoints && (
-                    <View style={styles.metaItem}>
-                      <Text style={styles.metaLabel}>До следующего уровня</Text>
-                      <Text style={styles.metaValue}>{bonuses.nextLevelPoints}</Text>
-                    </View>
-                  )}
-                </View>
+      <ScrollView
+        style={styles.scroll}
+        contentContainerStyle={[styles.list, { paddingBottom: insets.bottom + 90 }]}
+        refreshControl={
+          <RefreshControl refreshing={bonusLoading} onRefresh={onRefresh} tintColor={T.champagne} />
+        }
+        showsVerticalScrollIndicator={false}
+      >
+        {bonusLoading && !bonuses ? (
+          // Skeleton
+          <View style={{ gap: 10, padding: 12 }}>
+            <View style={[styles.card, { padding: 20, gap: 14 }]}>
+              <Skeleton width="50%" height={12} />
+              <Skeleton width="40%" height={38} />
+              <Skeleton width="100%" height={1} />
+              <Skeleton width="60%" height={12} />
+            </View>
+            {[0, 1, 2].map((i) => (
+              <View key={i} style={[styles.card, { padding: 16, gap: 10 }]}>
+                <Skeleton width="70%" height={13} />
+                <Skeleton width="40%" height={11} />
               </View>
-            </View>
-          )}
-
-          {/* History Section */}
-          {bonusHistory && bonusHistory.length > 0 ? (
-            <View style={styles.historySection}>
-              <Text style={styles.historyTitle}>История операций</Text>
-
-              {bonusHistory.map((transaction, index) => (
-                <View
-                  key={transaction.id || index}
-                  style={[
-                    styles.transactionCard,
-                    index === bonusHistory.length - 1 && { marginBottom: 32 },
-                  ]}
-                >
-                  <View style={styles.transactionLeft}>
-                    <View
-                      style={[
-                        styles.transactionIcon,
-                        { backgroundColor: getTransactionColor(transaction.type) + '20' },
-                      ]}
-                    >
-                      <Ionicons
-                        name={getTransactionIcon(transaction.type)}
-                        size={18}
-                        color={getTransactionColor(transaction.type)}
-                      />
-                    </View>
-                    <View style={styles.transactionInfo}>
-                      <Text style={styles.transactionLabel}>
-                        {transaction.description || getTransactionLabel(transaction.type)}
-                      </Text>
-                      <Text style={styles.transactionDate}>
-                        {transaction.createdAt
-                          ? format(new Date(transaction.createdAt), 'd MMM, HH:mm', {
-                              locale: ru,
-                            })
-                          : '—'}
-                      </Text>
-                    </View>
-                  </View>
-
-                  <View style={styles.transactionRight}>
-                    <Text
-                      style={[
-                        styles.transactionAmount,
-                        { color: getTransactionColor(transaction.type) },
-                      ]}
-                    >
-                      {transaction.type === 'spent' || transaction.type === 'redeemed'
-                        ? '−'
-                        : '+'}
-                      {transaction.amount}
+            ))}
+          </View>
+        ) : (
+          <View style={styles.inner}>
+            {/* Balance card */}
+            {bonuses && (
+              <Reveal delay={0}>
+                <View style={[styles.card, styles.balanceCard]}>
+                  <Text style={styles.balanceLabel}>Бонусный баланс</Text>
+                  <View style={styles.balanceRow}>
+                    <Text style={styles.balanceValue}>
+                      {Number(bonuses.balance ?? 0).toLocaleString('ru-RU')}
                     </Text>
-                    <Text style={styles.transactionCurrency}>₽</Text>
+                    <Text style={styles.balanceCur}> ₽</Text>
+                  </View>
+                  <View style={styles.divider} />
+                  <View style={styles.levelRow}>
+                    <Text style={styles.levelLabel}>Уровень лояльности</Text>
+                    <Text style={styles.levelValue}>{bonuses.level || 'Новичок'}</Text>
                   </View>
                 </View>
-              ))}
-            </View>
-          ) : (
-            <View style={styles.emptyHistoryContainer}>
-              <Ionicons name="document-text-outline" size={48} color={T.stoneFaint} />
-              <Text style={styles.emptyHistoryText}>История операций пуста</Text>
-              <Text style={styles.emptyHistorySub}>
-                Бонусы будут начисляться за ваши покупки
-              </Text>
-            </View>
-          )}
-        </ScrollView>
-      )}
+              </Reveal>
+            )}
+
+            {/* History */}
+            {bonusHistory && bonusHistory.length > 0 ? (
+              <Reveal delay={80}>
+                <View style={styles.card}>
+                  <Text style={styles.sectionTitle}>История операций</Text>
+                  {bonusHistory.map((txn, i) => (
+                    <TxnRow key={txn.id ?? i} txn={txn} isLast={i === bonusHistory.length - 1} />
+                  ))}
+                </View>
+              </Reveal>
+            ) : (
+              !bonusLoading && (
+                <View style={styles.empty}>
+                  <Text style={styles.emptyIcon}>📋</Text>
+                  <Text style={styles.emptyText}>История операций пуста</Text>
+                </View>
+              )
+            )}
+          </View>
+        )}
+      </ScrollView>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  root: {
-    flex: 1,
-    backgroundColor: T.pearl,
-  },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: 'rgba(212,175,55,0.15)',
-  },
-  backButton: {
-    width: 40,
-    height: 40,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  headerTitle: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: T.stone,
-    letterSpacing: 0.5,
-  },
-  content: {
-    flex: 1,
-    paddingHorizontal: 16,
-  },
-  loadingContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  balanceCardContainer: {
-    marginTop: 24,
-    marginBottom: 32,
-    borderRadius: 24,
-    overflow: 'hidden',
+  root:   { flex: 1, backgroundColor: T.pearl },
+  header: { paddingHorizontal: 20, paddingBottom: 12, zIndex: 10, overflow: 'hidden' },
+  headerBorder: { position: 'absolute', bottom: 0, left: 0, right: 0, height: 1, backgroundColor: 'rgba(212,175,55,0.22)' },
+  headerSub:  { fontSize: 11, color: T.stoneMid, letterSpacing: 1.2, textTransform: 'uppercase', marginBottom: 2 },
+  headerTitle:{ fontSize: 26, color: T.stone, fontFamily: 'serif' },
+
+  scroll: { flex: 1 },
+  list:   { flexGrow: 1 },
+  inner:  { padding: 12, gap: 10 },
+
+  card: {
     backgroundColor: T.glass,
+    borderRadius: 20,
     borderWidth: 1,
-    borderColor: T.glassBorder,
-    shadowColor: T.shadow,
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.12,
-    shadowRadius: 16,
-    elevation: 4,
-  },
-  balanceCard: {
-    paddingVertical: 28,
-    paddingHorizontal: 20,
-  },
-  balanceTop: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 20,
-  },
-  balanceIconWrap: {
-    width: 48,
-    height: 48,
-    borderRadius: 12,
-    backgroundColor: T.champGlow,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginRight: 16,
-  },
-  balanceLabel: {
-    fontSize: 13,
-    color: T.stoneMid,
-    fontWeight: '500',
-    letterSpacing: 0.3,
-  },
-  balanceDivider: {
-    height: 1,
-    backgroundColor: 'rgba(212,175,55,0.2)',
-    marginVertical: 16,
-  },
-  balanceBottom: {
-    flexDirection: 'row',
-    alignItems: 'baseline',
-    marginBottom: 20,
-  },
-  balanceValue: {
-    fontSize: 40,
-    fontWeight: '700',
-    color: T.champagne,
-    letterSpacing: -1,
-  },
-  balanceCurrency: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: T.champagne,
-    marginLeft: 8,
-  },
-  balanceMeta: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    paddingTop: 16,
-  },
-  metaItem: {
-    flex: 1,
-  },
-  metaLabel: {
-    fontSize: 11,
-    color: T.stoneFaint,
-    fontWeight: '500',
-    letterSpacing: 0.3,
-    marginBottom: 4,
-  },
-  metaValue: {
-    fontSize: 14,
-    color: T.stone,
-    fontWeight: '600',
-  },
-  historySection: {
-    marginBottom: 32,
-  },
-  historyTitle: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: T.stone,
-    marginBottom: 16,
-    letterSpacing: 0.4,
-  },
-  transactionCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    backgroundColor: T.glass,
-    borderRadius: 16,
-    paddingVertical: 12,
-    paddingHorizontal: 14,
-    marginBottom: 12,
-    borderWidth: 1,
-    borderColor: 'rgba(212,175,55,0.1)',
-    shadowColor: T.shadow,
-    shadowOffset: { width: 0, height: 2 },
+    borderColor: 'rgba(212,175,55,0.3)',
+    padding: 16,
+    shadowColor: 'rgba(100,90,70,1)',
+    shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.08,
-    shadowRadius: 8,
-    elevation: 2,
+    shadowRadius: 12,
+    elevation: 3,
   },
-  transactionLeft: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  transactionIcon: {
-    width: 40,
-    height: 40,
-    borderRadius: 10,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginRight: 12,
-  },
-  transactionInfo: {
-    flex: 1,
-  },
-  transactionLabel: {
-    fontSize: 13,
-    fontWeight: '500',
-    color: T.stone,
-    marginBottom: 4,
-  },
-  transactionDate: {
-    fontSize: 11,
-    color: T.stoneFaint,
-  },
-  transactionRight: {
-    alignItems: 'flex-end',
-    marginLeft: 12,
-  },
-  transactionAmount: {
-    fontSize: 14,
-    fontWeight: '600',
-    marginBottom: 2,
-  },
-  transactionCurrency: {
-    fontSize: 11,
-    color: T.stoneMid,
-    fontWeight: '500',
-  },
-  emptyHistoryContainer: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 64,
-  },
-  emptyHistoryText: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: T.stone,
-    marginTop: 16,
-  },
-  emptyHistorySub: {
-    fontSize: 13,
-    color: T.stoneMuted,
-    marginTop: 8,
-    textAlign: 'center',
-  },
+  balanceCard:  { borderColor: 'rgba(212,175,55,0.45)', shadowOpacity: 0.14 },
+  balanceLabel: { fontSize: 11, color: T.stoneMid, letterSpacing: 1, textTransform: 'uppercase', marginBottom: 8 },
+  balanceRow:   { flexDirection: 'row', alignItems: 'baseline', marginBottom: 14 },
+  balanceValue: { fontSize: 44, color: T.champagne, fontFamily: 'serif', fontWeight: '600' },
+  balanceCur:   { fontSize: 20, color: T.champagne, fontFamily: 'serif' },
+  divider:      { height: 1, backgroundColor: 'rgba(212,175,55,0.22)', marginBottom: 12 },
+  levelRow:     { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  levelLabel:   { fontSize: 12, color: T.stoneMid },
+  levelValue:   { fontSize: 13, color: T.stone, fontWeight: '600' },
+
+  sectionTitle: { fontSize: 15, color: T.stone, fontFamily: 'serif', marginBottom: 8 },
+
+  txnRow:       { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 10 },
+  txnRowBorder: { borderBottomWidth: 1, borderBottomColor: 'rgba(212,175,55,0.15)' },
+  txnLeft:      { flex: 1, flexDirection: 'row', alignItems: 'center', marginRight: 8 },
+  txnDot:       { width: 34, height: 34, borderRadius: 10, justifyContent: 'center', alignItems: 'center', marginRight: 10 },
+  txnInfo:      { flex: 1 },
+  txnTitle:     { fontSize: 13, color: T.stone, fontWeight: '500', marginBottom: 2 },
+  txnDate:      { fontSize: 11, color: T.stoneFaint },
+  txnAmount:    { fontSize: 13, fontWeight: '600' },
+
+  empty:     { alignItems: 'center', paddingVertical: 60 },
+  emptyIcon: { fontSize: 44, marginBottom: 12 },
+  emptyText: { fontSize: 16, color: T.stoneMid },
 });

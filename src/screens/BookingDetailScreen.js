@@ -118,11 +118,19 @@ export default function BookingDetailScreen({ route, navigation }) {
   const insets = useSafeAreaInsets();
   const { bookingId } = route.params;
 
-  const booking              = useClientStore((s) => s.bookingDetail);
-  const bookingDetailLoading = useClientStore((s) => s.bookingDetailLoading);
-  const fetchBookingDetail   = useClientStore((s) => s.fetchBookingDetail);
+  const booking                  = useClientStore((s) => s.bookingDetail);
+  const bookingDetailLoading     = useClientStore((s) => s.bookingDetailLoading);
+  const fetchBookingDetail       = useClientStore((s) => s.fetchBookingDetail);
+  const fetchBookingDetailGroup  = useClientStore((s) => s.fetchBookingDetailGroup);
 
-  useEffect(() => { fetchBookingDetail(bookingId); }, [bookingId]);
+  const { bookingIds } = route.params;
+  useEffect(() => {
+    if (bookingIds && bookingIds.length > 1) {
+      fetchBookingDetailGroup(bookingIds);
+    } else {
+      fetchBookingDetail(bookingId);
+    }
+  }, [bookingId]);
 
   // Parse services — backend returns JSONB; may come as string or array
   const services = React.useMemo(() => {
