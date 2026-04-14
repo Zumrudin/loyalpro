@@ -92,11 +92,11 @@ router.get('/bookings/:bookingId', mobileAuth, async (req, res) => {
       `SELECT
         id,
         visit_datetime as "dateTime",
-        services->0->>'title'  as "serviceName",
+        COALESCE(raw_payload->'services', services)->0->>'title' as "serviceName",
         staff->0->>'name'      as "specialistName",
         status,
         amount as price,
-        services,
+        COALESCE(raw_payload->'services', services) as services,
         staff,
         client_id,
         bonus_accrued as "bonusAccrued"
