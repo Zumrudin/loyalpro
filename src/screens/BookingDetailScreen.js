@@ -88,14 +88,18 @@ function StatusBadge({ status }) {
 function ServiceRow({ service, isLast }) {
   const origCost = Number(service.first_cost ?? service.cost ?? 0);
   const payable  = Number(service.cost_to_pay ?? origCost);
-  const hasDiscount = payable < origCost && origCost > 0;
-  const discountPct = hasDiscount ? Math.round((origCost - payable) / origCost * 100) : 0;
+  const priceDiff = origCost > 0 && payable < origCost;
+  // discount > 0 means explicit % discount; discount === 0 with price diff means bonus redemption
+  const discountPct = Number(service.discount ?? 0);
+  const hasDiscount = priceDiff && discountPct > 0;
+  const hasBonusSpend = priceDiff && discountPct === 0;
+  const bonusSpent = hasBonusSpend ? origCost - payable : 0;
 
   return (
     <View style={[styles.serviceRow, !isLast && styles.serviceRowBorder]}>
       <View style={styles.serviceRowTop}>
         <Text style={styles.serviceTitle} numberOfLines={2}>{service.title || '—'}</Text>
-        {hasDiscount ? (
+        {priceDiff ? (
           <Text style={styles.serviceOrigPrice}>{origCost.toLocaleString('ru-RU')} ₽</Text>
         ) : (
           <Text style={styles.serviceFinalPrice}>{payable.toLocaleString('ru-RU')} ₽</Text>
@@ -105,6 +109,14 @@ function ServiceRow({ service, isLast }) {
         <View style={styles.serviceRowBottom}>
           <View style={styles.discountBadge}>
             <Text style={styles.discountText}>Скидка {discountPct}%</Text>
+          </View>
+          <Text style={styles.serviceFinalPrice}>{payable.toLocaleString('ru-RU')} ₽</Text>
+        </View>
+      )}
+      {hasBonusSpend && (
+        <View style={styles.serviceRowBottom}>
+          <View style={styles.bonusSpendBadge}>
+            <Text style={styles.bonusSpendText}>−{bonusSpent.toLocaleString('ru-RU')} бонусов</Text>
           </View>
           <Text style={styles.serviceFinalPrice}>{payable.toLocaleString('ru-RU')} ₽</Text>
         </View>
@@ -217,17 +229,35 @@ export default function BookingDetailScreen({ route, navigation }) {
           )}
 
           {/* Bonuses card */}
-          {(Number(booking.bonusAccrued) > 0) && (
-            <Reveal delay={160}>
-              <View style={styles.card}>
-                <Text style={styles.sectionTitle}>Бонусы</Text>
-                <View style={styles.bonusRow}>
-                  <Text style={styles.bonusLabel}>Начислено</Text>
-                  <Text style={styles.bonusAccrued}>+{Number(booking.bonusAccrued).toLocaleString('ru-RU')} ₽</Text>
+          {(() => {
+            const accrued = Number(booking.bonusAccrued) || 0;
+            const spent = services.reduce((sum, s) => {
+              const orig = Number(s.first_cost ?? s.cost ?? 0);
+              const pay  = Number(s.cost_to_pay ?? orig);
+              const disc = Number(s.discount ?? 0);
+              return (disc === 0 && pay < orig) ? sum + (orig - pay) : sum;
+            }, 0);
+            if (!accrued && !spent) return null;
+            return (
+              <Reveal delay={160}>
+                <View style={styles.card}>
+                  <Text style={styles.sectionTitle}>Бонусы</Text>
+                  {spent > 0 && (
+                    <View style={styles.bonusRow}>
+                      <Text style={styles.bonusLabel}>Списано</Text>
+                      <Text style={styles.bonusSpent}>−{spent.toLocaleString('ru-RU')} ₽</Text>
+                    </View>
+                  )}
+                  {accrued > 0 && (
+                    <View style={styles.bonusRow}>
+                      <Text style={styles.bonusLabel}>Начислено</Text>
+                      <Text style={styles.bonusAccrued}>+{accrued.toLocaleString('ru-RU')} ₽</Text>
+                    </View>
+                  )}
                 </View>
-              </View>
-            </Reveal>
-          )}
+              </Reveal>
+            );
+          })()}
         </ScrollView>
       )}
     </View>
@@ -276,6 +306,8 @@ const styles = StyleSheet.create({
   serviceRowBottom: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   discountBadge:    { backgroundColor: 'rgba(123,198,122,0.15)', borderRadius: 8, paddingHorizontal: 7, paddingVertical: 2 },
   discountText:     { fontSize: 11, color: '#5A9A59', fontWeight: '500' },
+  bonusSpendBadge:  { backgroundColor: 'rgba(212,175,55,0.15)', borderRadius: 8, paddingHorizontal: 7, paddingVertical: 2 },
+  bonusSpendText:   { fontSize: 11, color: '#B8942A', fontWeight: '500' },
 
   totalRow:   { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 10, paddingTop: 10, borderTopWidth: 1, borderTopColor: 'rgba(212,175,55,0.2)' },
   totalLabel: { fontSize: 14, color: T.stone, fontFamily: 'serif' },
@@ -284,4 +316,5 @@ const styles = StyleSheet.create({
   bonusRow:    { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 4 },
   bonusLabel:  { fontSize: 13, color: T.stoneMid },
   bonusAccrued:{ fontSize: 13, color: '#4CAF50', fontWeight: '600' },
+  bonusSpent:  { fontSize: 13, color: '#E53935', fontWeight: '600' },
 });
