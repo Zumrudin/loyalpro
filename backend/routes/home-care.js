@@ -268,11 +268,11 @@ router.get('/:id', auth, async (req, res) => {
 
 router.post('/', auth, async (req, res) => {
   try {
-    const { client_id, face_procedures, body_procedures, hair_procedures, vitamins, notes, items = [] } = req.body;
+    const { client_id, face_procedures, body_procedures, hair_procedures, vitamins, notes, items = [], record_id } = req.body;
     const p = await db.one(
-      `INSERT INTO home_care_prescriptions (salon_id,client_id,specialist_id,face_procedures,body_procedures,hair_procedures,vitamins,notes)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id`,
-      [req.user.salonId, client_id||null, req.user.userId, face_procedures||null, body_procedures||null, hair_procedures||null, vitamins||null, notes||null]
+      `INSERT INTO home_care_prescriptions (salon_id,client_id,specialist_id,face_procedures,body_procedures,hair_procedures,vitamins,notes,record_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`,
+      [req.user.salonId, client_id||null, req.user.userId, face_procedures||null, body_procedures||null, hair_procedures||null, vitamins||null, notes||null, record_id||null]
     );
     for (let i = 0; i < items.length; i++) {
       const it = items[i];
@@ -287,13 +287,13 @@ router.post('/', auth, async (req, res) => {
 
 router.put('/:id', auth, async (req, res) => {
   try {
-    const { client_id, face_procedures, body_procedures, hair_procedures, vitamins, notes, items = [] } = req.body;
+    const { client_id, face_procedures, body_procedures, hair_procedures, vitamins, notes, items = [], record_id } = req.body;
     const existing = await db.oneOrNone('SELECT id FROM home_care_prescriptions WHERE id=$1 AND salon_id=$2', [req.params.id, req.user.salonId]);
     if (!existing) return res.status(404).json({ error: 'Not found' });
     await db.query(
       `UPDATE home_care_prescriptions SET client_id=$1,face_procedures=$2,body_procedures=$3,
-       hair_procedures=$4,vitamins=$5,notes=$6,updated_at=NOW() WHERE id=$7`,
-      [client_id||null, face_procedures||null, body_procedures||null, hair_procedures||null, vitamins||null, notes||null, req.params.id]
+       hair_procedures=$4,vitamins=$5,notes=$6,record_id=$7,updated_at=NOW() WHERE id=$8`,
+      [client_id||null, face_procedures||null, body_procedures||null, hair_procedures||null, vitamins||null, notes||null, record_id||null, req.params.id]
     );
     await db.query('DELETE FROM home_care_items WHERE prescription_id=$1', [req.params.id]);
     for (let i = 0; i < items.length; i++) {
