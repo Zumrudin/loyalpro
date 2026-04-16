@@ -39,6 +39,7 @@ import { useAuthStore } from '../store/authStore';
 import { useClientStore } from '../store/clientStore';
 import { format } from 'date-fns';
 import { ru } from 'date-fns/locale';
+import LoyaltyRing from '../components/LoyaltyRing';
 
 function parseDate(value) {
   if (!value) return new Date(NaN);
@@ -434,8 +435,13 @@ export default function HomeScreen({ navigation }) {
                 </View>
               </View>
               <View style={s.bonusRight}>
-                <Text style={s.bonusLevel}>{bonuses?.level || 'Новичок'}</Text>
-                <Ionicons name="chevron-forward" size={14} color={T.champagne} />
+                <LoyaltyRing
+                  totalSpent={bonuses?.totalSpent || 0}
+                  currentLevel={bonuses?.currentLevel}
+                  nextLevel={bonuses?.nextLevel}
+                  compact
+                />
+                <Ionicons name="chevron-forward" size={14} color={T.champagne} style={{ marginLeft: 6 }} />
               </View>
             </PressCard>
           )}
@@ -602,7 +608,6 @@ const s = StyleSheet.create({
   bonusLabel: { fontSize: 11, color: T.stoneMid, fontFamily: undefined, letterSpacing: 0.5, marginBottom: 2 },
   bonusValue: { fontSize: 18, color: T.stone, fontFamily: 'serif' },
   bonusRight: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  bonusLevel: { fontSize: 12, color: T.champagne, fontFamily: undefined, letterSpacing: 0.5 },
 
   // Section
   sectionHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 16 },
