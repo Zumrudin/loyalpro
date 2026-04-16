@@ -78,4 +78,16 @@ export const clientDataAPI = {
     const res = await apiClient.post('/mobile/client/fcm-token', { fcmToken });
     return res.data;
   },
+
+  // Get prescriptions list
+  getPrescriptions: async () => {
+    const res = await apiClient.get('/mobile/client/prescriptions');
+    return res.data;
+  },
+
+  // Get single prescription detail
+  getPrescriptionDetail: async (id) => {
+    const res = await apiClient.get(`/mobile/client/prescriptions/${id}`);
+    return res.data;
+  },
 };

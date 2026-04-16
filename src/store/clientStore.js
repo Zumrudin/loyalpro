@@ -27,6 +27,12 @@ export const useClientStore = create((set, get) => ({
   recommendations: [],
   recommendationsLoading: false,
 
+  // Prescriptions
+  prescriptions: [],
+  prescriptionsLoading: false,
+  prescriptionDetail: null,
+  prescriptionDetailLoading: false,
+
   // Errors
   error: null,
 
@@ -196,6 +202,30 @@ export const useClientStore = create((set, get) => ({
       await clientDataAPI.registerFcmToken(fcmToken);
     } catch (error) {
       console.error('Failed to register FCM token:', error);
+    }
+  },
+
+  fetchPrescriptions: async () => {
+    set({ prescriptionsLoading: true });
+    try {
+      const response = await clientDataAPI.getPrescriptions();
+      set({ prescriptions: response.prescriptions || [], error: null });
+    } catch (error) {
+      set({ error: error.message });
+    } finally {
+      set({ prescriptionsLoading: false });
+    }
+  },
+
+  fetchPrescriptionDetail: async (id) => {
+    set({ prescriptionDetailLoading: true, prescriptionDetail: null });
+    try {
+      const response = await clientDataAPI.getPrescriptionDetail(id);
+      set({ prescriptionDetail: response.prescription || null, error: null });
+    } catch (error) {
+      set({ error: error.message });
+    } finally {
+      set({ prescriptionDetailLoading: false });
     }
   },
 
