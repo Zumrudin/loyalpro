@@ -129,8 +129,13 @@ export const useClientStore = create((set, get) => ({
       const historyData = await clientDataAPI.getBonusHistory();
       set({
         bonuses: {
-          balance: bonusData.balance || 0,
-          level: bonusData.level || 'Новичок'
+          balance:      bonusData.balance      || 0,
+          level:        bonusData.level        || 'Новичок',
+          totalSpent:   bonusData.totalSpent   || 0,
+          levels:       bonusData.levels       || [],
+          currentLevel: bonusData.currentLevel || null,
+          nextLevel:    bonusData.nextLevel     || null,
+          amountToNext: bonusData.amountToNext || 0,
         },
         bonusHistory: historyData.transactions || historyData || [],
         error: null,
