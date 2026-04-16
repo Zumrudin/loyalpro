@@ -155,6 +155,16 @@ async function runMigrations(client) {
   for (const col of tmplCols) {
     await client.query(`ALTER TABLE salons ADD COLUMN IF NOT EXISTS ${col}`).catch(() => {});
   }
+
+  // ── Prescriptions: link to records ─────────────────────────
+  await client.query(`
+    ALTER TABLE home_care_prescriptions
+      ADD COLUMN IF NOT EXISTS record_id INTEGER REFERENCES records(id) ON DELETE SET NULL
+  `).catch(() => {});
+
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS idx_hcp_record_id ON home_care_prescriptions(record_id)
+  `).catch(() => {});
 }
 
 module.exports = { runMigrations };
