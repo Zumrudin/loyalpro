@@ -29,6 +29,7 @@ import { BlurView } from 'expo-blur';
 import { useClientStore } from '../store/clientStore';
 import { format } from 'date-fns';
 import { ru } from 'date-fns/locale';
+import LoyaltyRing from '../components/LoyaltyRing';
 
 // ─── Design tokens ────────────────────────────────────────────────────────────
 const T = {
@@ -181,9 +182,12 @@ export default function BonusesScreen() {
                     <Text style={styles.balanceCur}> ₽</Text>
                   </View>
                   <View style={styles.divider} />
-                  <View style={styles.levelRow}>
-                    <Text style={styles.levelLabel}>Уровень лояльности</Text>
-                    <Text style={styles.levelValue}>{bonuses.level || 'Новичок'}</Text>
+                  <View style={styles.ringWrap}>
+                    <LoyaltyRing
+                      totalSpent={bonuses.totalSpent || 0}
+                      currentLevel={bonuses.currentLevel}
+                      nextLevel={bonuses.nextLevel}
+                    />
                   </View>
                 </View>
               </Reveal>
@@ -243,9 +247,7 @@ const styles = StyleSheet.create({
   balanceValue: { fontSize: 44, color: T.champagne, fontFamily: 'serif', fontWeight: '600' },
   balanceCur:   { fontSize: 20, color: T.champagne, fontFamily: 'serif' },
   divider:      { height: 1, backgroundColor: 'rgba(212,175,55,0.22)', marginBottom: 12 },
-  levelRow:     { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  levelLabel:   { fontSize: 12, color: T.stoneMid },
-  levelValue:   { fontSize: 13, color: T.stone, fontWeight: '600' },
+  ringWrap:     { paddingTop: 16, paddingBottom: 4, alignItems: 'center' },
 
   sectionTitle: { fontSize: 15, color: T.stone, fontFamily: 'serif', marginBottom: 8 },
 
