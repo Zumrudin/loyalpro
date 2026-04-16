@@ -70,11 +70,15 @@ router.get('/bookings', mobileAuth, async (req, res) => {
         CASE WHEN p.id IS NOT NULL THEN true ELSE false END as "hasPrescription",
         p.id as "prescriptionId"
        FROM records r
-       LEFT JOIN home_care_prescriptions p
-         ON (p.record_id = r.id
-             OR (p.record_id IS NULL AND p.client_id = r.client_id
-                 AND DATE(p.created_at) = DATE(r.visit_datetime)))
-         AND p.client_id = $1
+       LEFT JOIN LATERAL (
+         SELECT id FROM home_care_prescriptions
+         WHERE client_id = $1
+           AND (record_id = r.id
+                OR (record_id IS NULL
+                    AND DATE(created_at) = DATE(r.visit_datetime)))
+         ORDER BY record_id DESC NULLS LAST, created_at DESC
+         LIMIT 1
+       ) p ON true
        WHERE ${whereSql}
        ORDER BY r.visit_datetime DESC
        LIMIT 50`,
@@ -109,11 +113,15 @@ router.get('/bookings/:bookingId', mobileAuth, async (req, res) => {
         r.bonus_accrued as "bonusAccrued",
         p.id as "prescriptionId"
        FROM records r
-       LEFT JOIN home_care_prescriptions p
-         ON (p.record_id = r.id
-             OR (p.record_id IS NULL AND p.client_id = r.client_id
-                 AND DATE(p.created_at) = DATE(r.visit_datetime)))
-         AND p.client_id = $2
+       LEFT JOIN LATERAL (
+         SELECT id FROM home_care_prescriptions
+         WHERE client_id = $2
+           AND (record_id = r.id
+                OR (record_id IS NULL
+                    AND DATE(created_at) = DATE(r.visit_datetime)))
+         ORDER BY record_id DESC NULLS LAST, created_at DESC
+         LIMIT 1
+       ) p ON true
        WHERE r.id=$1 AND r.client_id=$2`,
       [req.params.bookingId, req.client.clientId]
     );
@@ -383,7 +391,7 @@ router.get('/prescriptions', mobileAuth, async (req, res) => {
        LEFT JOIN users u ON u.id = p.specialist_id
        LEFT JOIN home_care_items i ON i.prescription_id = p.id
        WHERE p.client_id = $1
-       GROUP BY p.id, u.name, u.role
+       GROUP BY p.id
        ORDER BY p.created_at DESC`,
       [req.client.clientId]
     );
