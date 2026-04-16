@@ -51,25 +51,32 @@ router.get('/bookings', mobileAuth, async (req, res) => {
   try {
     const { type = 'all' } = req.query; // 'upcoming' | 'past' | 'all'
 
-    let whereSql = "client_id=$1 AND status != 'deleted'";
+    let whereSql = "r.client_id=$1 AND r.status != 'deleted'";
 
     if (type === 'upcoming') {
-      whereSql += ' AND visit_date > NOW()';
+      whereSql += ' AND r.visit_date > NOW()';
     } else if (type === 'past') {
-      whereSql += ' AND visit_date <= NOW()';
+      whereSql += ' AND r.visit_date <= NOW()';
     }
 
     const bookings = await db.any(
       `SELECT
-        id,
-        visit_datetime as "dateTime",
-        services->0->>'title'  as "serviceName",
-        staff->0->>'name'      as "specialistName",
-        status,
-        amount as price
-       FROM records
+        r.id,
+        r.visit_datetime as "dateTime",
+        r.services->0->>'title'  as "serviceName",
+        r.staff->0->>'name'      as "specialistName",
+        r.status,
+        r.amount as price,
+        CASE WHEN p.id IS NOT NULL THEN true ELSE false END as "hasPrescription",
+        p.id as "prescriptionId"
+       FROM records r
+       LEFT JOIN home_care_prescriptions p
+         ON (p.record_id = r.id
+             OR (p.record_id IS NULL AND p.client_id = r.client_id
+                 AND DATE(p.created_at) = DATE(r.visit_datetime)))
+         AND p.client_id = $1
        WHERE ${whereSql}
-       ORDER BY visit_datetime DESC
+       ORDER BY r.visit_datetime DESC
        LIMIT 50`,
       [req.client.clientId]
     );
@@ -90,18 +97,24 @@ router.get('/bookings/:bookingId', mobileAuth, async (req, res) => {
   try {
     const booking = await db.oneOrNone(
       `SELECT
-        id,
-        visit_datetime as "dateTime",
-        COALESCE(raw_payload->'services', services)->0->>'title' as "serviceName",
-        staff->0->>'name'      as "specialistName",
-        status,
-        amount as price,
-        COALESCE(raw_payload->'services', services) as services,
-        staff,
-        client_id,
-        bonus_accrued as "bonusAccrued"
-       FROM records
-       WHERE id=$1 AND client_id=$2`,
+        r.id,
+        r.visit_datetime as "dateTime",
+        COALESCE(r.raw_payload->'services', r.services)->0->>'title' as "serviceName",
+        r.staff->0->>'name'      as "specialistName",
+        r.status,
+        r.amount as price,
+        COALESCE(r.raw_payload->'services', r.services) as services,
+        r.staff,
+        r.client_id,
+        r.bonus_accrued as "bonusAccrued",
+        p.id as "prescriptionId"
+       FROM records r
+       LEFT JOIN home_care_prescriptions p
+         ON (p.record_id = r.id
+             OR (p.record_id IS NULL AND p.client_id = r.client_id
+                 AND DATE(p.created_at) = DATE(r.visit_datetime)))
+         AND p.client_id = $2
+       WHERE r.id=$1 AND r.client_id=$2`,
       [req.params.bookingId, req.client.clientId]
     );
 
@@ -351,6 +364,64 @@ router.post('/fcm-token', mobileAuth, async (req, res) => {
 
   } catch (e) {
     console.error('[Register FCM token error]', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Get client prescriptions list
+router.get('/prescriptions', mobileAuth, async (req, res) => {
+  try {
+    const rows = await db.any(
+      `SELECT
+        p.id,
+        p.created_at as "createdAt",
+        p.notes,
+        u.name as "specialistName",
+        u.role as "specialistRole",
+        COUNT(i.id)::int as "itemsCount"
+       FROM home_care_prescriptions p
+       LEFT JOIN users u ON u.id = p.specialist_id
+       LEFT JOIN home_care_items i ON i.prescription_id = p.id
+       WHERE p.client_id = $1
+       GROUP BY p.id, u.name, u.role
+       ORDER BY p.created_at DESC`,
+      [req.client.clientId]
+    );
+    res.json({ success: true, prescriptions: rows });
+  } catch (e) {
+    console.error('[Get prescriptions error]', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Get single prescription detail
+router.get('/prescriptions/:id', mobileAuth, async (req, res) => {
+  try {
+    const p = await db.oneOrNone(
+      `SELECT
+        p.id,
+        p.created_at as "createdAt",
+        p.notes,
+        u.name as "specialistName",
+        u.role as "specialistRole"
+       FROM home_care_prescriptions p
+       LEFT JOIN users u ON u.id = p.specialist_id
+       WHERE p.id = $1 AND p.client_id = $2`,
+      [req.params.id, req.client.clientId]
+    );
+    if (!p) return res.status(404).json({ error: 'Назначение не найдено' });
+
+    const items = await db.any(
+      `SELECT time_of_day as "timeOfDay", category, product_name as "productName",
+              instructions, sort_order as "sortOrder"
+       FROM home_care_items
+       WHERE prescription_id = $1
+       ORDER BY sort_order`,
+      [req.params.id]
+    );
+    res.json({ success: true, prescription: { ...p, items } });
+  } catch (e) {
+    console.error('[Get prescription detail error]', e.message);
     res.status(500).json({ error: e.message });
   }
 });
