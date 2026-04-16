@@ -391,6 +391,7 @@ router.get('/prescriptions', mobileAuth, async (req, res) => {
        LEFT JOIN users u ON u.id = p.specialist_id
        LEFT JOIN home_care_items i ON i.prescription_id = p.id
        WHERE p.client_id = $1
+         AND p.salon_id = (SELECT salon_id FROM clients WHERE id = $1)
        GROUP BY p.id
        ORDER BY p.created_at DESC`,
       [req.client.clientId]
@@ -405,6 +406,9 @@ router.get('/prescriptions', mobileAuth, async (req, res) => {
 // Get single prescription detail
 router.get('/prescriptions/:id', mobileAuth, async (req, res) => {
   try {
+    const prescriptionId = parseInt(req.params.id, 10);
+    if (isNaN(prescriptionId)) return res.status(400).json({ error: 'Invalid id' });
+
     const p = await db.oneOrNone(
       `SELECT
         p.id,
@@ -414,8 +418,9 @@ router.get('/prescriptions/:id', mobileAuth, async (req, res) => {
         u.role as "specialistRole"
        FROM home_care_prescriptions p
        LEFT JOIN users u ON u.id = p.specialist_id
-       WHERE p.id = $1 AND p.client_id = $2`,
-      [req.params.id, req.client.clientId]
+       WHERE p.id = $1 AND p.client_id = $2
+         AND p.salon_id = (SELECT salon_id FROM clients WHERE id = $2)`,
+      [prescriptionId, req.client.clientId]
     );
     if (!p) return res.status(404).json({ error: 'Назначение не найдено' });
 
@@ -425,7 +430,7 @@ router.get('/prescriptions/:id', mobileAuth, async (req, res) => {
        FROM home_care_items
        WHERE prescription_id = $1
        ORDER BY sort_order`,
-      [req.params.id]
+      [prescriptionId]
     );
     res.json({ success: true, prescription: { ...p, items } });
   } catch (e) {
