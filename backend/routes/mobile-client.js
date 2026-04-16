@@ -190,7 +190,7 @@ router.post('/bookings/:bookingId/reschedule', mobileAuth, async (req, res) => {
 router.get('/bonuses', mobileAuth, async (req, res) => {
   try {
     const client = await db.one(
-      'SELECT bonus_balance, loyalty_level FROM clients WHERE id=$1',
+      'SELECT bonus_balance, loyalty_level, total_spent, salon_id FROM clients WHERE id=$1',
       [req.client.clientId]
     );
 
@@ -198,10 +198,48 @@ router.get('/bonuses', mobileAuth, async (req, res) => {
       return res.status(404).json({ error: 'Клиент не найден' });
     }
 
+    // Load loyalty levels from settings
+    let levels = [];
+    try {
+      const settings = await db.oneOrNone(
+        'SELECT levels FROM loyalty_settings WHERE salon_id=$1',
+        [client.salon_id]
+      );
+      if (settings?.levels) {
+        levels = typeof settings.levels === 'string'
+          ? JSON.parse(settings.levels)
+          : settings.levels;
+        levels = levels
+          .filter(l => l && typeof l.minSpent === 'number')
+          .sort((a, b) => a.minSpent - b.minSpent);
+      }
+    } catch (_) { /* non-critical: levels stays [] */ }
+
+    const totalSpent = parseFloat(client.total_spent || 0);
+
+    // Find current level object and next level object
+    let currentLevel = levels.length > 0 ? levels[0] : null;
+    let nextLevel = null;
+    for (let i = 0; i < levels.length; i++) {
+      if (totalSpent >= levels[i].minSpent) {
+        currentLevel = levels[i];
+        nextLevel = levels[i + 1] || null;
+      }
+    }
+
+    const amountToNext = nextLevel
+      ? Math.max(0, nextLevel.minSpent - totalSpent)
+      : 0;
+
     res.json({
       success: true,
       balance: client.bonus_balance || 0,
-      level: client.loyalty_level || 'Новичок'
+      level: client.loyalty_level || 'Новичок',
+      totalSpent,
+      levels,
+      currentLevel,
+      nextLevel: nextLevel || null,
+      amountToNext,
     });
 
   } catch (e) {
