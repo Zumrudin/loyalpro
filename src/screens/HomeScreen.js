@@ -482,6 +482,7 @@ export default function HomeScreen({ navigation }) {
             { icon: 'person-outline',          label: 'Профиль',     nav: 'Profile',       delay: 580 },
             { icon: 'notifications-outline',   label: 'Уведомления', nav: 'Notifications', delay: 620 },
             { icon: 'gift-outline',            label: 'Бонусы',      nav: 'Bonuses',       delay: 660 },
+            { icon: 'medical-outline',         label: 'Назначения',  nav: 'Prescriptions', delay: 700 },
           ].map(({ icon, label, nav, delay }) => (
             <Reveal key={label} delay={delay}>
               <PressCard style={s.quickCard} onPress={() => navigation.navigate(nav)}>
