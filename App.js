@@ -19,6 +19,8 @@ import BonusesScreen from './src/screens/BonusesScreen';
 import ProfileScreen from './src/screens/ProfileScreen';
 import NotificationsScreen from './src/screens/NotificationsScreen';
 import BookingDetailScreen from './src/screens/BookingDetailScreen';
+import PrescriptionsScreen from './src/screens/PrescriptionsScreen';
+import PrescriptionDetailScreen from './src/screens/PrescriptionDetailScreen';
 
 const RootStack = createNativeStackNavigator();
 const AuthStack = createNativeStackNavigator();
@@ -133,6 +135,16 @@ function MainNavigator() {
         name="BookingDetail"
         component={BookingDetailScreen}
         options={{ animation: 'slide_from_right' }}
+      />
+      <RootStack.Screen
+        name="Prescriptions"
+        component={PrescriptionsScreen}
+        options={{ headerShown: false }}
+      />
+      <RootStack.Screen
+        name="PrescriptionDetail"
+        component={PrescriptionDetailScreen}
+        options={{ headerShown: false }}
       />
     </RootStack.Navigator>
   );
