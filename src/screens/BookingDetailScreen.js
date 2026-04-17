@@ -134,6 +134,8 @@ export default function BookingDetailScreen({ route, navigation }) {
   const bookingDetailLoading     = useClientStore((s) => s.bookingDetailLoading);
   const fetchBookingDetail       = useClientStore((s) => s.fetchBookingDetail);
   const fetchBookingDetailGroup  = useClientStore((s) => s.fetchBookingDetailGroup);
+  const bonusHistory             = useClientStore((s) => s.bonusHistory);
+  const fetchBonuses             = useClientStore((s) => s.fetchBonuses);
 
   const { bookingIds } = route.params;
   useEffect(() => {
@@ -141,6 +143,10 @@ export default function BookingDetailScreen({ route, navigation }) {
       fetchBookingDetailGroup(bookingIds);
     } else {
       fetchBookingDetail(bookingId);
+    }
+    // Load bonus history to detect cashback accruals from external loyalty system
+    if (!bonusHistory || bonusHistory.length === 0) {
+      fetchBonuses();
     }
   }, [bookingId]);
 
@@ -230,7 +236,20 @@ export default function BookingDetailScreen({ route, navigation }) {
 
           {/* Bonuses card */}
           {(() => {
-            const accrued = Number(booking.bonusAccrued) || 0;
+            // bonus_accrued from our DB (populated when our system processes it)
+            let accrued = Number(booking.bonusAccrued) || 0;
+
+            // If our DB has no accrual recorded, check YClients bonus history by visit date
+            if (!accrued && booking.dateTime && bonusHistory && bonusHistory.length > 0) {
+              const visitDateStr = safeFmt(booking.dateTime, 'yyyy-MM-dd');
+              const matchedAccrual = bonusHistory.find((t) => {
+                if (t.type !== 'accrual') return false;
+                const tDate = t.createdAt ? safeFmt(t.createdAt, 'yyyy-MM-dd') : null;
+                return tDate === visitDateStr;
+              });
+              if (matchedAccrual) accrued = Number(matchedAccrual.amount) || 0;
+            }
+
             const spent = services.reduce((sum, s) => {
               const orig = Number(s.first_cost ?? s.cost ?? 0);
               const pay  = Number(s.cost_to_pay ?? orig);
@@ -258,6 +277,34 @@ export default function BookingDetailScreen({ route, navigation }) {
               </Reveal>
             );
           })()}
+
+          {/* Prescription card */}
+          {booking.prescriptionId && (
+            <Reveal delay={200}>
+              <TouchableOpacity
+                style={[styles.card, { borderColor: 'rgba(212,175,55,0.35)' }]}
+                activeOpacity={0.82}
+                onPress={() => navigation.navigate('PrescriptionDetail', { prescriptionId: booking.prescriptionId })}
+              >
+                <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                    <View style={{
+                      width: 36, height: 36, borderRadius: 18,
+                      backgroundColor: 'rgba(212,175,55,0.15)',
+                      justifyContent: 'center', alignItems: 'center',
+                    }}>
+                      <Text style={{ fontSize: 18 }}>💊</Text>
+                    </View>
+                    <View>
+                      <Text style={[styles.sectionTitle, { marginBottom: 2 }]}>Назначения по визиту</Text>
+                      <Text style={{ fontSize: 12, color: T.stoneMid }}>Домашний уход · Витамины</Text>
+                    </View>
+                  </View>
+                  <Text style={{ fontSize: 20, color: T.champagne }}>›</Text>
+                </View>
+              </TouchableOpacity>
+            </Reveal>
+          )}
         </ScrollView>
       )}
     </View>
