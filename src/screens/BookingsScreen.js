@@ -175,7 +175,20 @@ function BookingCard({ booking, index, onPress }) {
                 {safeFmt(booking.dateTime, 'HH:mm')}
               </Text>
             </View>
-            <StatusBadge status={booking.status} />
+            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+              <StatusBadge status={booking.status} />
+              {booking.hasPrescription && (
+                <View style={{
+                  backgroundColor: 'rgba(212,175,55,0.15)',
+                  borderRadius: 8, paddingHorizontal: 8, paddingVertical: 3,
+                  marginLeft: 6,
+                }}>
+                  <Text style={{ fontSize: 10, color: '#D4AF37', fontWeight: '600' }}>
+                    Назначения
+                  </Text>
+                </View>
+              )}
+            </View>
           </View>
 
           {/* Divider */}
