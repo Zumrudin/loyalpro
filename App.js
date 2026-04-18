@@ -1,5 +1,5 @@
-import React, { useEffect, useState } from 'react';
-import { ActivityIndicator, View, StyleSheet, StatusBar } from 'react-native';
+import React, { useEffect, useState, useRef } from 'react';
+import { ActivityIndicator, View, StyleSheet, StatusBar, Platform } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { BlurView } from 'expo-blur';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -8,8 +8,19 @@ import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
+import * as Notifications from 'expo-notifications';
 
 import { useAuthStore } from './src/store/authStore';
+import { useClientStore } from './src/store/clientStore';
+import { useAppSettingsStore } from './src/store/appSettingsStore';
+
+Notifications.setNotificationHandler({
+  handleNotification: async () => ({
+    shouldShowAlert: true,
+    shouldPlaySound: true,
+    shouldSetBadge: false,
+  }),
+});
 
 // Screens
 import LoginScreen from './src/screens/LoginScreen';
@@ -21,10 +32,41 @@ import NotificationsScreen from './src/screens/NotificationsScreen';
 import BookingDetailScreen from './src/screens/BookingDetailScreen';
 import PrescriptionsScreen from './src/screens/PrescriptionsScreen';
 import PrescriptionDetailScreen from './src/screens/PrescriptionDetailScreen';
+import PriceListScreen from './src/screens/PriceListScreen';
+import PriceListDetailScreen from './src/screens/PriceListDetailScreen';
 
-const RootStack = createNativeStackNavigator();
+const HomeStackNav = createNativeStackNavigator();
+const BookingsStackNav = createNativeStackNavigator();
 const AuthStack = createNativeStackNavigator();
 const Tab = createBottomTabNavigator();
+
+// Per-tab stacks — keep bottom tab bar visible on nested screens
+function HomeStack() {
+  return (
+    <HomeStackNav.Navigator
+      screenOptions={{ headerShown: false, animation: 'slide_from_right' }}
+    >
+      <HomeStackNav.Screen name="HomeRoot" component={HomeScreen} />
+      <HomeStackNav.Screen name="PriceList" component={PriceListScreen} />
+      <HomeStackNav.Screen name="PriceListDetail" component={PriceListDetailScreen} />
+      <HomeStackNav.Screen name="Prescriptions" component={PrescriptionsScreen} />
+      <HomeStackNav.Screen name="PrescriptionDetail" component={PrescriptionDetailScreen} />
+      <HomeStackNav.Screen name="BookingDetail" component={BookingDetailScreen} />
+    </HomeStackNav.Navigator>
+  );
+}
+
+function BookingsStack() {
+  return (
+    <BookingsStackNav.Navigator
+      screenOptions={{ headerShown: false, animation: 'slide_from_right' }}
+    >
+      <BookingsStackNav.Screen name="BookingsRoot" component={BookingsScreen} />
+      <BookingsStackNav.Screen name="BookingDetail" component={BookingDetailScreen} />
+      <BookingsStackNav.Screen name="PrescriptionDetail" component={PrescriptionDetailScreen} />
+    </BookingsStackNav.Navigator>
+  );
+}
 
 // Tab Navigator
 function TabNavigator() {
@@ -62,7 +104,7 @@ function TabNavigator() {
     >
       <Tab.Screen
         name="Home"
-        component={HomeScreen}
+        component={HomeStack}
         options={{
           tabBarLabel: 'Главная',
           tabBarIcon: ({ color }) => (
@@ -72,7 +114,7 @@ function TabNavigator() {
       />
       <Tab.Screen
         name="Bookings"
-        component={BookingsScreen}
+        component={BookingsStack}
         options={{
           tabBarLabel: 'Записи',
           tabBarIcon: ({ color }) => (
@@ -128,46 +170,69 @@ function AuthNavigator() {
 }
 
 function MainNavigator() {
-  return (
-    <RootStack.Navigator screenOptions={{ headerShown: false }}>
-      <RootStack.Screen name="Tabs" component={TabNavigator} />
-      <RootStack.Screen
-        name="BookingDetail"
-        component={BookingDetailScreen}
-        options={{ animation: 'slide_from_right' }}
-      />
-      <RootStack.Screen
-        name="Prescriptions"
-        component={PrescriptionsScreen}
-        options={{ headerShown: false }}
-      />
-      <RootStack.Screen
-        name="PrescriptionDetail"
-        component={PrescriptionDetailScreen}
-        options={{ headerShown: false }}
-      />
-    </RootStack.Navigator>
-  );
+  return <TabNavigator />;
+}
+
+async function registerForPushNotifications() {
+  if (Platform.OS === 'web') return null;
+  const { status: existing } = await Notifications.getPermissionsAsync();
+  let finalStatus = existing;
+  if (existing !== 'granted') {
+    const { status } = await Notifications.requestPermissionsAsync();
+    finalStatus = status;
+  }
+  if (finalStatus !== 'granted') return null;
+  try {
+    const tokenData = await Notifications.getExpoPushTokenAsync();
+    return tokenData.data;
+  } catch (e) {
+    console.warn('[Push] Could not get push token:', e.message);
+    return null;
+  }
 }
 
 export default function App() {
   const [isLoading, setIsLoading] = useState(true);
   const token = useAuthStore((state) => state.token);
   const restoreToken = useAuthStore((state) => state.restoreToken);
+  const fetchAppSettings = useAppSettingsStore((state) => state.fetchAppSettings);
+  const registerFcmToken = useClientStore((state) => state.registerFcmToken);
+  const navigationRef = useRef(null);
 
   useEffect(() => {
     const bootstrapAsync = async () => {
       try {
-        // Restore token from secure storage
         await restoreToken();
+        await fetchAppSettings();
       } catch (e) {
         console.error('Error restoring token:', e);
       } finally {
         setIsLoading(false);
       }
     };
-
     bootstrapAsync();
+  }, []);
+
+  // Register push token when authenticated
+  useEffect(() => {
+    if (!token) return;
+    registerForPushNotifications().then((pushToken) => {
+      if (pushToken) registerFcmToken(pushToken);
+    });
+  }, [token]);
+
+  // Handle notification tap → navigate to prescription
+  useEffect(() => {
+    const sub = Notifications.addNotificationResponseReceivedListener((response) => {
+      const data = response.notification.request.content.data;
+      if (data?.prescriptionId && navigationRef.current) {
+        navigationRef.current.navigate('Home', {
+          screen: 'PrescriptionDetail',
+          params: { prescriptionId: data.prescriptionId },
+        });
+      }
+    });
+    return () => sub.remove();
   }, []);
 
   if (isLoading) {
@@ -182,7 +247,7 @@ export default function App() {
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
       <SafeAreaProvider>
-        <NavigationContainer>
+        <NavigationContainer ref={navigationRef}>
           {token ? <MainNavigator /> : <AuthNavigator />}
         </NavigationContainer>
       </SafeAreaProvider>
