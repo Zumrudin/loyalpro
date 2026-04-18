@@ -32,7 +32,7 @@ module.exports = {
     : null,
 
   // API Access Control
-  API_PUBLIC: ['/api/auth/login', '/api/auth/register'],
+  API_PUBLIC: ['/api/auth/login', '/api/auth/register', '/api/app-settings'],
   SPECIALIST_ALLOWED_PREFIXES: ['/api/home-care', '/api/auth', '/api/template-settings'],
 
   // Sync
