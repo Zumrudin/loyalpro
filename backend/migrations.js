@@ -165,6 +165,23 @@ async function runMigrations(client) {
   await client.query(`
     CREATE INDEX IF NOT EXISTS idx_hcp_record_id ON home_care_prescriptions(record_id)
   `).catch(() => {});
+
+  // ── App Settings ───────────────────────────────────────────
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS app_settings (
+      id           SERIAL PRIMARY KEY,
+      clinic_name  TEXT NOT NULL DEFAULT '',
+      logo_url     TEXT,
+      phone        TEXT,
+      whatsapp     TEXT,
+      telegram     TEXT,
+      instagram    TEXT,
+      maps_url     TEXT,
+      email        TEXT,
+      created_at   TIMESTAMPTZ DEFAULT NOW(),
+      updated_at   TIMESTAMPTZ DEFAULT NOW()
+    )
+  `).catch(() => {});
 }
 
 module.exports = { runMigrations };
