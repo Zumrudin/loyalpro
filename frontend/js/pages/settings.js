@@ -206,6 +206,61 @@ async function uploadTemplateImage(type, input) {
   } catch(e) { notify(e.message, 'err'); if (st) st.textContent = ''; }
 }
 
+// ── App Settings ───────────────────────────────────────────────
+async function loadAppSettings() {
+  try {
+    const d = await api('GET', '/api/app-settings');
+    const s = (id, v) => { const e = document.getElementById(id); if (e) e.value = v || ''; };
+    s('app-clinic-name', d.clinicName);
+    s('app-phone',       d.phone);
+    s('app-whatsapp',    d.whatsapp);
+    s('app-telegram',    d.telegram);
+    s('app-instagram',   d.instagram);
+    s('app-maps-url',    d.mapsUrl);
+    s('app-email',       d.email);
+    if (d.logoUrl) {
+      const el = document.getElementById('appLogoPreview');
+      if (el) el.innerHTML = `<img src="${d.logoUrl}?t=${Date.now()}" style="max-height:76px;max-width:100%;object-fit:contain">`;
+    }
+  } catch {}
+}
+
+async function saveAppSettings() {
+  const g = id => document.getElementById(id)?.value || null;
+  try {
+    await api('PUT', '/api/app-settings', {
+      clinicName: g('app-clinic-name'),
+      phone:      g('app-phone'),
+      whatsapp:   g('app-whatsapp'),
+      telegram:   g('app-telegram'),
+      instagram:  g('app-instagram'),
+      mapsUrl:    g('app-maps-url'),
+      email:      g('app-email'),
+    });
+    const st = document.getElementById('appStgStatus');
+    if (st) { st.style.color = 'var(--a)'; st.textContent = '✓ Сохранено'; setTimeout(() => st.textContent = '', 3000); }
+  } catch(e) { notify(e.message, 'err'); }
+}
+
+async function uploadAppLogo(input) {
+  if (!input.files[0]) return;
+  const fd = new FormData();
+  fd.append('file', input.files[0]);
+  const tok = localStorage.getItem('lp_tk');
+  const st  = document.getElementById('appStgStatus');
+  if (st) { st.style.color = 'var(--t3)'; st.textContent = 'Загрузка...'; }
+  try {
+    const r = await fetch('/api/app-settings/logo', {
+      method: 'POST', headers: { 'Authorization': `Bearer ${tok}` }, body: fd,
+    });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error || 'Ошибка');
+    const el = document.getElementById('appLogoPreview');
+    if (el) el.innerHTML = `<img src="${d.logoUrl}?t=${Date.now()}" style="max-height:76px;max-width:100%;object-fit:contain">`;
+    if (st) { st.style.color = 'var(--a)'; st.textContent = '✓ Логотип загружен'; setTimeout(() => st.textContent = '', 3000); }
+  } catch(e) { notify(e.message, 'err'); if (st) st.textContent = ''; }
+}
+
 async function previewTemplateSettings() {
   try {
     const list  = await api('GET', '/api/home-care?limit=1');

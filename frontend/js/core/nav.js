@@ -50,6 +50,7 @@ function navStg(id, el) {
   if (id === 'loyalty-services') loadSvcCb();
   if (id === 'loyalty-birthday') loadBdList();
   if (id === 'sync-logs') loadSyncLogs();
+  if (id === 'app-settings') loadAppSettings();
 }
 
 // ── LAUNCH APP ──

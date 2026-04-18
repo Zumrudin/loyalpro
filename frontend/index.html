@@ -238,6 +238,8 @@
           <option value="cancelled">Отменена</option>
           <option value="deleted">Удалена</option>
         </select>
+        <input type="text" id="rPhone" placeholder="Телефон" style="width:140px" onkeydown="if(event.key==='Enter')loadRecords(1)">
+        <input type="text" id="rClient" placeholder="ФИО клиента" style="width:160px" onkeydown="if(event.key==='Enter')loadRecords(1)">
         <button class="btn btn-sec" onclick="loadRecords(1)">Применить</button>
       </div>
       <div class="card" style="padding:0"><div class="tw"><table>
@@ -387,6 +389,11 @@
         <div class="stg-group">
           <div class="stg-group-lbl">📄 Документы</div>
           <div class="stg-item" data-sec="template" onclick="navStg('template',this)"><span class="stg-ic">🎨</span>Шаблон «Домашний уход»</div>
+        </div>
+        <div class="stg-sep"></div>
+        <div class="stg-group">
+          <div class="stg-group-lbl">📱 Мобильное приложение</div>
+          <div class="stg-item" data-sec="app-settings" onclick="navStg('app-settings',this)"><span class="stg-ic">⚙️</span>Настройки приложения</div>
         </div>
       </div>
 
@@ -607,6 +614,36 @@
           <div class="card">
             <div class="ct">История синхронизаций <button class="btn btn-sec btn-sm" onclick="loadSyncLogs()">Обновить</button></div>
             <div id="syncLogs"><div class="empty">Загрузка...</div></div>
+          </div>
+        </div>
+
+        <!-- ── Настройки мобильного приложения ── -->
+        <div class="stg-section" id="stg-app-settings">
+          <div class="stg-hdr"><span>📱</span>Настройки приложения</div>
+          <div class="card">
+            <div style="font-size:12.5px;color:var(--t2);margin-bottom:16px;line-height:1.7">
+              Эти данные отображаются в мобильном приложении: название клиники, логотип и контакты.
+            </div>
+            <div style="margin-bottom:16px">
+              <div style="font-size:12px;font-weight:600;color:var(--t2);margin-bottom:8px">Логотип клиники</div>
+              <div id="appLogoPreview" style="width:100%;height:80px;border:1px dashed var(--bd);border-radius:8px;display:flex;align-items:center;justify-content:center;margin-bottom:8px;overflow:hidden;background:var(--bg)">
+                <span style="font-size:12px;color:var(--t3)">Нет изображения</span>
+              </div>
+              <label class="btn btn-sec" style="cursor:pointer;display:inline-block;font-size:12px">Загрузить логотип<input type="file" accept="image/*" style="display:none" onchange="uploadAppLogo(this)"></label>
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px">
+              <div class="fg" style="margin:0;grid-column:1/-1"><label class="fl" style="font-size:11.5px">Название клиники</label><input type="text" id="app-clinic-name" placeholder="Aura Aesthetics"></div>
+              <div class="fg" style="margin:0"><label class="fl" style="font-size:11.5px">Телефон</label><input type="text" id="app-phone" placeholder="+7 (999) 000-00-00"></div>
+              <div class="fg" style="margin:0"><label class="fl" style="font-size:11.5px">WhatsApp</label><input type="text" id="app-whatsapp" placeholder="+7 (999) 000-00-00"></div>
+              <div class="fg" style="margin:0"><label class="fl" style="font-size:11.5px">Telegram</label><input type="text" id="app-telegram" placeholder="@clinic"></div>
+              <div class="fg" style="margin:0"><label class="fl" style="font-size:11.5px">Instagram</label><input type="text" id="app-instagram" placeholder="@clinic"></div>
+              <div class="fg" style="margin:0;grid-column:1/-1"><label class="fl" style="font-size:11.5px">Ссылка на карту (2GIS / Google Maps)</label><input type="text" id="app-maps-url" placeholder="https://maps.app.goo.gl/..."></div>
+              <div class="fg" style="margin:0;grid-column:1/-1"><label class="fl" style="font-size:11.5px">Email</label><input type="text" id="app-email" placeholder="info@clinic.ru"></div>
+            </div>
+            <div style="display:flex;gap:8px;align-items:center">
+              <button class="btn btn-pri" onclick="saveAppSettings()">Сохранить</button>
+              <div id="appStgStatus" style="font-size:12px"></div>
+            </div>
           </div>
         </div>
 
