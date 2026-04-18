@@ -29,6 +29,7 @@ import BookingsScreen from './src/screens/BookingsScreen';
 import BonusesScreen from './src/screens/BonusesScreen';
 import ProfileScreen from './src/screens/ProfileScreen';
 import NotificationsScreen from './src/screens/NotificationsScreen';
+import ContactsScreen from './src/screens/ContactsScreen';
 import BookingDetailScreen from './src/screens/BookingDetailScreen';
 import PrescriptionsScreen from './src/screens/PrescriptionsScreen';
 import PrescriptionDetailScreen from './src/screens/PrescriptionDetailScreen';
@@ -52,6 +53,7 @@ function HomeStack() {
       <HomeStackNav.Screen name="Prescriptions" component={PrescriptionsScreen} />
       <HomeStackNav.Screen name="PrescriptionDetail" component={PrescriptionDetailScreen} />
       <HomeStackNav.Screen name="BookingDetail" component={BookingDetailScreen} />
+      <HomeStackNav.Screen name="Notifications" component={NotificationsScreen} />
     </HomeStackNav.Navigator>
   );
 }
@@ -133,12 +135,12 @@ function TabNavigator() {
         }}
       />
       <Tab.Screen
-        name="Notifications"
-        component={NotificationsScreen}
+        name="Contacts"
+        component={ContactsScreen}
         options={{
-          tabBarLabel: 'Уведомления',
+          tabBarLabel: 'Контакты',
           tabBarIcon: ({ color }) => (
-            <Ionicons name="notifications-outline" size={22} color={color} />
+            <Ionicons name="call-outline" size={22} color={color} />
           ),
         }}
       />

@@ -12,6 +12,7 @@ import {
   View,
   ScrollView,
   Text,
+  Image,
   StyleSheet,
   TouchableOpacity,
   Dimensions,
@@ -335,8 +336,8 @@ export default function HomeScreen({ navigation }) {
       {/* Parallax ambient orbs */}
       <ParallaxGlow />
 
-      {/* Sticky blur header that content scrolls under */}
-      <Animated.View style={[s.stickyHeader, { paddingTop: insets.top }]} pointerEvents="none">
+      {/* Sticky header with clinic branding + notification bell */}
+      <Animated.View style={[s.stickyHeader, { paddingTop: insets.top }]} pointerEvents="box-none">
         <BlurView intensity={60} tint="light" style={StyleSheet.absoluteFill} />
         <LinearGradient
           colors={[T.pearl + 'EE', T.pearl + '00']}
@@ -344,6 +345,25 @@ export default function HomeScreen({ navigation }) {
           start={{ x: 0, y: 0 }}
           end={{ x: 0, y: 1 }}
         />
+        <View style={s.headerRow} pointerEvents="box-none">
+          <View style={s.headerBrand}>
+            {logoUrl ? (
+              <Image source={{ uri: logoUrl }} style={s.headerLogo} resizeMode="contain" />
+            ) : (
+              <View style={s.headerLogoPlaceholder}>
+                <Ionicons name="flower-outline" size={16} color={T.champagne} />
+              </View>
+            )}
+            {!!clinicName && <Text style={s.headerClinicName} numberOfLines={1}>{clinicName}</Text>}
+          </View>
+          <TouchableOpacity
+            style={s.bellBtn}
+            onPress={() => navigation.navigate('Notifications')}
+            activeOpacity={0.75}
+          >
+            <Ionicons name="notifications-outline" size={20} color={T.stone} />
+          </TouchableOpacity>
+        </View>
       </Animated.View>
 
       <ScrollView
@@ -542,9 +562,28 @@ const s = StyleSheet.create({
   root: { flex: 1, backgroundColor: T.pearl },
   scroll: { paddingHorizontal: 20, paddingBottom: 24 },
 
-  // Sticky blur header (visual only — no content)
   stickyHeader: {
     position: 'absolute', top: 0, left: 0, right: 0, height: 110, zIndex: 10, overflow: 'hidden',
+  },
+  headerRow: {
+    position: 'absolute', bottom: 12, left: 20, right: 20,
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+  },
+  headerBrand: { flexDirection: 'row', alignItems: 'center', flex: 1, marginRight: 12 },
+  headerLogo: { width: 32, height: 32, borderRadius: 8, marginRight: 8 },
+  headerLogoPlaceholder: {
+    width: 32, height: 32, borderRadius: 8, marginRight: 8,
+    backgroundColor: T.champGlow, borderWidth: 1, borderColor: T.champagne + '40',
+    justifyContent: 'center', alignItems: 'center',
+  },
+  headerClinicName: {
+    fontSize: 14, color: T.stone, fontFamily: 'serif', letterSpacing: 0.3,
+    flex: 1,
+  },
+  bellBtn: {
+    width: 36, height: 36, borderRadius: 18,
+    backgroundColor: T.glass, borderWidth: 1, borderColor: T.glassBorder,
+    justifyContent: 'center', alignItems: 'center',
   },
 
   // Hero
