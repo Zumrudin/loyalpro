@@ -7,6 +7,7 @@
  *        @expo-google-fonts/playfair-display · @expo-google-fonts/inter
  */
 import React, { useEffect, useCallback, useRef, useState } from 'react';
+import { useFocusEffect } from '@react-navigation/native';
 import {
   View,
   ScrollView,
@@ -37,6 +38,7 @@ import { Gyroscope } from 'expo-sensors';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuthStore } from '../store/authStore';
 import { useClientStore } from '../store/clientStore';
+import { useAppSettingsStore } from '../store/appSettingsStore';
 import { format } from 'date-fns';
 import { ru } from 'date-fns/locale';
 import LoyaltyRing from '../components/LoyaltyRing';
@@ -297,14 +299,22 @@ export default function HomeScreen({ navigation }) {
   const fetchBonuses  = useClientStore((st) => st.fetchBonuses);
   const fetchBookings = useClientStore((st) => st.fetchBookings);
 
+  const clinicName = useAppSettingsStore((state) => state.clinicName);
+  const logoUrl = useAppSettingsStore((state) => state.logoUrl);
+
   const loadData = useCallback(() =>
     Promise.all([fetchProfile(), fetchBonuses(), fetchBookings('upcoming')]),
   [fetchProfile, fetchBonuses, fetchBookings]);
 
   useEffect(() => { loadData(); }, [loadData]);
 
+  useFocusEffect(useCallback(() => {
+    fetchBookings('upcoming');
+  }, [fetchBookings]));
+
   const isLoading   = profileLoading || bonusLoading || bookingsLoading;
-  const nextBooking = bookings?.length > 0 ? bookings[0] : null;
+  const now = new Date();
+  const nextBooking = bookings?.find(b => parseDate(b.dateTime) > now) ?? null;
   const name        = profile?.name || user?.name || 'Клиент';
   const firstName   = name.split(' ')[0];
 
@@ -483,6 +493,7 @@ export default function HomeScreen({ navigation }) {
             { icon: 'notifications-outline',   label: 'Уведомления', nav: 'Notifications', delay: 620 },
             { icon: 'gift-outline',            label: 'Бонусы',      nav: 'Bonuses',       delay: 660 },
             { icon: 'medical-outline',         label: 'Назначения',  nav: 'Prescriptions', delay: 700 },
+            { icon: 'pricetag-outline',        label: 'Прайс',       nav: 'PriceList',     delay: 740 },
           ].map(({ icon, label, nav, delay }) => (
             <Reveal key={label} delay={delay}>
               <PressCard style={s.quickCard} onPress={() => navigation.navigate(nav)}>
