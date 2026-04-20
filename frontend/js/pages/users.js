@@ -17,11 +17,12 @@ async function loadUsers() {
 
 function renderUsers(users) {
   const tbody = document.getElementById('usersTbody');
-  if (!users.length) { tbody.innerHTML = '<tr><td colspan="6" class="empty">Нет пользователей</td></tr>'; return; }
+  if (!users.length) { tbody.innerHTML = '<tr><td colspan="7" class="empty">Нет пользователей</td></tr>'; return; }
   tbody.innerHTML = users.map(u => `
     <tr style="${u.is_active ? '' : 'opacity:.5'}">
       <td><b>${esc(u.name)}</b>${u.must_change_password ? ' <span style="font-size:11px;color:#92400e;background:#fffbeb;padding:1px 6px;border-radius:4px;border:1px solid #fde68a">Не активирован</span>' : ''}</td>
       <td style="color:var(--t3)">${esc(u.email)}</td>
+      <td style="color:var(--t2)">${esc(u.position || '—')}</td>
       <td><span style="font-size:11.5px;font-weight:600;color:${ROLE_COLOR[u.role]||'#333'};background:${ROLE_BG[u.role]||'#f3f4f6'};padding:2px 8px;border-radius:4px">${ROLE_LABEL[u.role]||u.role}</span></td>
       <td>${u.is_active ? '<span style="color:#059669">Активен</span>' : '<span style="color:var(--t3)">Отключён</span>'}</td>
       <td style="color:var(--t3);font-size:12px">${u.last_login_at ? new Date(u.last_login_at).toLocaleDateString('ru') : '—'}</td>
@@ -56,6 +57,7 @@ function usersShowModal(u, isNew) {
         <div class="err" id="usersModErr"></div>
         <div class="fg"><label class="fl">Имя</label><input type="text" id="umName" value="${esc(u.name)}" placeholder="Иван Иванов"></div>
         <div class="fg"><label class="fl">Email</label><input type="email" id="umEmail" value="${esc(u.email)}" placeholder="user@salon.ru" ${isNew ? '' : 'disabled'}></div>
+        <div class="fg"><label class="fl">Должность <span class="fh">необязательно</span></label><input type="text" id="umPosition" value="${esc(u.position||'')}" placeholder="Косметолог, Трихолог…"></div>
         <div class="fg">
           <label class="fl">Роль</label>
           <select id="umRole" ${!isOwner ? 'disabled' : ''}>
@@ -97,15 +99,16 @@ async function usersSave(id, isNew) {
   const name  = document.getElementById('umName')?.value.trim();
   const email = document.getElementById('umEmail')?.value.trim();
   const role  = document.getElementById('umRole')?.value;
+  const position = document.getElementById('umPosition')?.value.trim() || null;
   const pw    = document.getElementById('umPw')?.value;
   const active = document.getElementById('umActive');
 
   try {
     if (isNew) {
-      await api('POST', '/api/users', { name, email, role, password: pw });
+      await api('POST', '/api/users', { name, email, role, position, password: pw });
       notify('Пользователь создан', 'ok');
     } else {
-      const body = { name, role };
+      const body = { name, role, position };
       if (pw) body.password = pw;
       if (active) body.is_active = active.checked;
       await api('PATCH', `/api/users/${id}`, body);
