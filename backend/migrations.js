@@ -131,6 +131,10 @@ async function runMigrations(client) {
   `).catch(() => {});
 
   await client.query(`
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS position VARCHAR(100)
+  `).catch(() => {});
+
+  await client.query(`
     ALTER TABLE salons ADD COLUMN IF NOT EXISTS plan VARCHAR(20) NOT NULL DEFAULT 'basic'
   `).catch(() => {});
 
