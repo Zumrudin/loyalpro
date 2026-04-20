@@ -54,9 +54,9 @@ router.get('/bookings', mobileAuth, async (req, res) => {
     let whereSql = "r.client_id=$1 AND r.status != 'deleted'";
 
     if (type === 'upcoming') {
-      whereSql += ' AND r.visit_date > NOW()';
+      whereSql += ' AND r.visit_datetime > NOW()';
     } else if (type === 'past') {
-      whereSql += ' AND r.visit_date <= NOW()';
+      whereSql += ' AND r.visit_datetime <= NOW()';
     }
 
     const bookings = await db.any(
@@ -80,7 +80,7 @@ router.get('/bookings', mobileAuth, async (req, res) => {
          LIMIT 1
        ) p ON true
        WHERE ${whereSql}
-       ORDER BY r.visit_datetime DESC
+       ORDER BY r.visit_datetime ${type === 'upcoming' ? 'ASC' : 'DESC'}
        LIMIT 50`,
       [req.client.clientId]
     );
@@ -385,14 +385,14 @@ router.get('/prescriptions', mobileAuth, async (req, res) => {
         p.created_at as "createdAt",
         p.notes,
         u.name as "specialistName",
-        u.role as "specialistRole",
+        u.position as "specialistPosition",
         COUNT(i.id)::int as "itemsCount"
        FROM home_care_prescriptions p
        LEFT JOIN users u ON u.id = p.specialist_id
        LEFT JOIN home_care_items i ON i.prescription_id = p.id
        WHERE p.client_id = $1
          AND p.salon_id = (SELECT salon_id FROM clients WHERE id = $1)
-       GROUP BY p.id
+       GROUP BY p.id, u.name, u.position
        ORDER BY p.created_at DESC`,
       [req.client.clientId]
     );
@@ -415,7 +415,7 @@ router.get('/prescriptions/:id', mobileAuth, async (req, res) => {
         p.created_at as "createdAt",
         p.notes,
         u.name as "specialistName",
-        u.role as "specialistRole"
+        u.position as "specialistPosition"
        FROM home_care_prescriptions p
        LEFT JOIN users u ON u.id = p.specialist_id
        WHERE p.id = $1 AND p.client_id = $2
@@ -436,6 +436,34 @@ router.get('/prescriptions/:id', mobileAuth, async (req, res) => {
   } catch (e) {
     console.error('[Get prescription detail error]', e.message);
     res.status(500).json({ error: e.message });
+  }
+});
+
+// Get price list
+const PRICE_LIST_URL = 'https://raw.githubusercontent.com/Zumrudin/peri-clinic/main/price-list.json';
+let priceListCache = null;
+let priceListCachedAt = null;
+const CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
+
+router.get('/price-list', mobileAuth, async (req, res) => {
+  try {
+    const now = Date.now();
+    if (priceListCache && priceListCachedAt && (now - priceListCachedAt) < CACHE_TTL_MS) {
+      return res.json({ success: true, ...priceListCache });
+    }
+
+    const response = await fetch(PRICE_LIST_URL);
+    if (!response.ok) throw new Error(`GitHub fetch failed: ${response.status}`);
+
+    const data = await response.json();
+    priceListCache = data;
+    priceListCachedAt = now;
+
+    res.json({ success: true, ...data });
+  } catch (e) {
+    console.error('[Get price list error]', e.message);
+    if (priceListCache) return res.json({ success: true, ...priceListCache });
+    res.status(500).json({ error: 'Не удалось загрузить прайс-лист' });
   }
 });
 
