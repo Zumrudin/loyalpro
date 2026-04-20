@@ -3,6 +3,8 @@
 // ============================================================
 const { pool, db } = require('../db');
 const { ycGet, ycPost, ycGetClientCards, ycAccrueCard } = require('./yclients');
+const { createLogger } = require('../logger');
+const logger = createLogger('Sync');
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
@@ -49,7 +51,7 @@ function getRecordStatus(ycr) {
   }
   if (ycr.deleted) return 'deleted';
   const att = ycr.attendance !== undefined ? parseInt(ycr.attendance) : undefined;
-  if (att === 2) return 'completed';
+  if (att === 2) return 'arrived';
   if (att === 1) return 'confirmed';
   if (att === -1) return 'no_show';
   if (att === 0) return 'waiting';
@@ -108,7 +110,7 @@ async function processCompletedRecord(recordId, clientId, ycRec, salonId, settin
     return accrual;
   } catch (e) {
     await pg.query('ROLLBACK');
-    console.error('[processRecord]', e.message);
+    logger.error(`processRecord: ${e.message}`);
     return 0;
   } finally {
     pg.release();
@@ -152,7 +154,7 @@ async function runSync(salon, syncType, userId) {
     const endDate   = new Date().toISOString().split('T')[0];
     const syncDays  = parseInt(process.env.SYNC_DAYS || '730');
     const startDate = new Date(Date.now() - syncDays * 86400000).toISOString().split('T')[0];
-    console.log(`[Sync] ── Step 1: Fetching ALL records ${startDate} → ${endDate} ──`);
+    logger.info(`── Step 1: Fetching ALL records ${startDate} → ${endDate} ──`);
 
     let allRecs = [], rPage = 1;
     for (;;) {
@@ -164,25 +166,25 @@ async function runSync(salon, syncType, userId) {
           });
           break;
         } catch (e) {
-          console.log(`[Sync] Records page ${rPage} attempt ${attempt} failed: ${e.message}`);
+          logger.info(`Records page ${rPage} attempt ${attempt} failed: ${e.message}`);
           if (attempt < 3) await sleep(3000 * attempt);
           else throw e;
         }
       }
       if (!chunk?.length) break;
       allRecs = allRecs.concat(chunk);
-      console.log(`[Sync] Records page ${rPage}: ${chunk.length} (total: ${allRecs.length})`);
+      logger.info(`Records page ${rPage}: ${chunk.length} (total: ${allRecs.length})`);
       if (chunk.length < 200) break;
       rPage++;
       await sleep(300);
     }
-    console.log(`[Sync] Total records fetched: ${allRecs.length}`);
+    logger.info(`Total records fetched: ${allRecs.length}`);
 
     if (allRecs.length > 0) {
       const sample = allRecs[0];
-      console.log(`[Sync] Sample record keys: ${Object.keys(sample).join(', ')}`);
-      console.log(`[Sync] Sample record status fields: status_id=${sample.status_id} attendance=${sample.attendance} visit_attendance=${sample.visit_attendance} deleted=${sample.deleted} confirmed=${sample.confirmed}`);
-      console.log(`[Sync] Sample record → getRecordStatus = "${getRecordStatus(sample)}" | date="${sample.date}" cost=${sample.cost} computed_cost=${getRecordCost(sample)} services=${Array.isArray(sample.services)?sample.services.length:'none'}`);
+      logger.info(`Sample record keys: ${Object.keys(sample).join(', ')}`);
+      logger.info(`Sample record status fields: status_id=${sample.status_id} attendance=${sample.attendance} visit_attendance=${sample.visit_attendance} deleted=${sample.deleted} confirmed=${sample.confirmed}`);
+      logger.info(`Sample record → getRecordStatus = "${getRecordStatus(sample)}" | date="${sample.date}" cost=${sample.cost} computed_cost=${getRecordCost(sample)} services=${Array.isArray(sample.services)?sample.services.length:'none'}`);
     }
 
     const recordsByClient = {};
@@ -196,10 +198,10 @@ async function runSync(salon, syncType, userId) {
         orphanRecords.push(rec);
       }
     }
-    console.log(`[Sync] Records indexed: ${Object.keys(recordsByClient).length} clients, ${orphanRecords.length} without client`);
+    logger.info(`Records indexed: ${Object.keys(recordsByClient).length} clients, ${orphanRecords.length} without client`);
     await sleep(2000);
 
-    console.log(`[Sync] ── Step 2: Collecting client IDs ──`);
+    logger.info(`── Step 2: Collecting client IDs ──`);
     let page = 1, allIds = [];
     for (;;) {
       let chunk = null;
@@ -211,7 +213,7 @@ async function runSync(salon, syncType, userId) {
           chunk = Array.isArray(ids) ? ids : [];
           break;
         } catch (e) {
-          console.log(`[Sync] Client IDs page ${page} attempt ${attempt} failed: ${e.message}`);
+          logger.info(`Client IDs page ${page} attempt ${attempt} failed: ${e.message}`);
           if (attempt < 3) await sleep(3000 * attempt);
           else throw e;
         }
@@ -222,9 +224,9 @@ async function runSync(salon, syncType, userId) {
       page++;
       await sleep(300);
     }
-    console.log(`[Sync] Total client IDs: ${allIds.length}`);
+    logger.info(`Total client IDs: ${allIds.length}`);
 
-    console.log(`[Sync] ── Step 3: Processing clients one-by-one ──`);
+    logger.info(`── Step 3: Processing clients one-by-one ──`);
     let retryCount = 0;
     const MAX_RETRIES = 3;
 
@@ -317,8 +319,11 @@ async function runSync(salon, syncType, userId) {
             const recCost = getRecordCost(ycr);
             await db.query(
               `UPDATE records SET status=$1, raw_payload=$2, amount=$3,
-               services=$4, staff=$5, client_id=$6, updated_at=NOW() WHERE id=$7`,
+               visit_datetime=$4, visit_date=$5,
+               services=$6, staff=$7, client_id=$8, updated_at=NOW() WHERE id=$9`,
               [status, JSON.stringify(ycr), recCost,
+               ycr.date || null,
+               String(ycr.date || '').split(' ')[0] || null,
                JSON.stringify(ycr.services || []), JSON.stringify(ycr.staff || []),
                dbClientId, exRec.id]
             );
@@ -377,29 +382,29 @@ async function runSync(salon, syncType, userId) {
 
         retryCount = 0;
         if (cs % 25 === 0 || clientRecs > 0 || clientBonus > 0) {
-          console.log(`[Sync] ${cs}/${allIds.length} ${fullName}: records=${clientRecs} bonus=${clientBonus} (total: r=${rs} b=${ba})`);
+          logger.info(`${cs}/${allIds.length} ${fullName}: records=${clientRecs} bonus=${clientBonus} (total: r=${rs} b=${ba})`);
         }
 
       } catch (e) {
         const msg = e.message || '';
         if (msg.includes('429')) {
-          console.log(`[Sync] 429 rate limit, waiting 10s...`);
+          logger.warn(`429 rate limit, waiting 10s...`);
           await sleep(10000);
-          if (retryCount < MAX_RETRIES) { retryCount++; idx--; } else { retryCount = 0; console.log(`[Sync] Max retries for ${ycClientId}, skipping`); }
+          if (retryCount < MAX_RETRIES) { retryCount++; idx--; } else { retryCount = 0; logger.warn(`Max retries for ${ycClientId}, skipping`); }
         } else if (msg.includes('socket hang up') || msg.includes('ECONNRESET')
                 || msg.includes('ETIMEDOUT') || msg.includes('ECONNREFUSED')) {
-          console.log(`[Sync] Network error for ${ycClientId}: ${msg}, retrying in 5s...`);
+          logger.warn(`Network error for ${ycClientId}: ${msg}, retrying in 5s...`);
           await sleep(5000);
-          if (retryCount < MAX_RETRIES) { retryCount++; idx--; } else { retryCount = 0; console.log(`[Sync] Max retries for ${ycClientId}, skipping`); }
+          if (retryCount < MAX_RETRIES) { retryCount++; idx--; } else { retryCount = 0; logger.warn(`Max retries for ${ycClientId}, skipping`); }
         } else {
           retryCount = 0;
-          console.log(`[Sync] Skip client ${ycClientId}: ${msg}`);
+          logger.info(`Skip client ${ycClientId}: ${msg}`);
         }
       }
     }
 
     if (orphanRecords.length > 0) {
-      console.log(`[Sync] Processing ${orphanRecords.length} orphan records (no client)...`);
+      logger.info(`Processing ${orphanRecords.length} orphan records (no client)...`);
       for (const ycr of orphanRecords) {
         const status = getRecordStatus(ycr);
         const recCost = getRecordCost(ycr);
@@ -430,7 +435,7 @@ async function runSync(salon, syncType, userId) {
       }
     }
 
-    console.log('[Sync] Updating last_visit_at from records...');
+    logger.info('Updating last_visit_at from records...');
     await db.query(`
       UPDATE clients c
       SET last_visit_at = sub.last_visit, updated_at = NOW()
@@ -448,7 +453,7 @@ async function runSync(salon, syncType, userId) {
        bonuses_accrued=$3,new_clients=$4,finished_at=NOW() WHERE id=$5`,
       [cs, rs, ba, nc, log.id]
     );
-    console.log(`[Sync] ✓ Done: clients=${cs} records=${rs} bonuses=${ba} new=${nc}`);
+    logger.info(`✓ Done: clients=${cs} records=${rs} bonuses=${ba} new=${nc}`);
     return { ok: true, clientsSynced: cs, recordsSynced: rs, bonusesAccrued: ba, newClients: nc };
 
   } catch (e) {
@@ -485,22 +490,22 @@ async function getCashbackByRecord(ycRecordId) {
 
 async function revertCashback(ycRecordId, salon, clientYcId) {
   const popped = await popCashbackAmount(ycRecordId);
-  if (!popped) { console.log(`[Revert] nothing to revert for record=${ycRecordId}`); return; }
+  if (!popped) { logger.info(`nothing to revert for record=${ycRecordId}`); return; }
   const cashbackAmount = parseFloat(popped.cashback_amount);
-  if (cashbackAmount <= 0) { console.log(`[Revert] skip revert record=${ycRecordId} amount=${cashbackAmount}`); return; }
+  if (cashbackAmount <= 0) { logger.info(`skip revert record=${ycRecordId} amount=${cashbackAmount}`); return; }
 
   const client = await db.oneOrNone(
     'SELECT * FROM clients WHERE salon_id=$1 AND yclients_client_id=$2',
     [salon.id, clientYcId]
   );
-  if (!client) { console.log(`[Revert] client not found yclients_id=${clientYcId}`); return; }
+  if (!client) { logger.info(`client not found yclients_id=${clientYcId}`); return; }
 
   const deduct = Math.min(cashbackAmount, parseFloat(client.bonus_balance || 0));
   if (client.yclients_card_id && deduct > 0) {
     try {
       await ycAccrueCard(salon, client.yclients_card_id, -deduct,
         `Отмена кэшбэка по записи #${ycRecordId}`);
-    } catch (e) { console.error(`[Revert] Card deduct error: ${e.message}`); }
+    } catch (e) { logger.error(`Revert card deduct error: ${e.message}`); }
   }
 
   await db.query(
@@ -518,7 +523,7 @@ async function revertCashback(ycRecordId, salon, clientYcId) {
      `Отмена кэшбэка за визит #${ycRecordId}`,
      dbRecord?.id || ycRecordId]
   );
-  console.log(`[Revert] reverted ${deduct} for client ${client.name}, record #${ycRecordId}`);
+  logger.info(`reverted ${deduct} for client ${client.name}, record #${ycRecordId}`);
 }
 
 async function processRecordEvent(payload, salon, settings) {
@@ -569,7 +574,7 @@ async function processRecordEvent(payload, salon, settings) {
   }
 
   if (data.paid_full !== 1 || data.attendance !== 1) {
-    console.log(`[Record] skip accrual record=${ycRecordId} paid_full=${data.paid_full} attendance=${data.attendance}`);
+    logger.info(`skip accrual record=${ycRecordId} paid_full=${data.paid_full} attendance=${data.attendance}`);
     return;
   }
 
@@ -593,11 +598,11 @@ async function processRecordEvent(payload, salon, settings) {
         [client?.id, record?.id, ycRecordId, String(data.date||'').split(' ')[0]||null]
       );
       if (hasDiscountNow || hasRedemption) {
-        console.log(`[Record] update detected discount/redemption — reverting cashback record=${ycRecordId}`);
+        logger.info(`update detected discount/redemption — reverting cashback record=${ycRecordId}`);
         await revertCashback(ycRecordId, salon, clientYcId);
       }
     }
-    console.log(`[Record] duplicate record=${ycRecordId} existing_cashback=${existing?.cashback_amount}`);
+    logger.info(`duplicate record=${ycRecordId} existing_cashback=${existing?.cashback_amount}`);
     return;
   }
 
@@ -607,7 +612,7 @@ async function processRecordEvent(payload, salon, settings) {
       try {
         const ycRecord = await ycGet(salon, `/record/${salon.yclients_company_id}/${ycRecordId}`);
         services = ycRecord.services || [];
-      } catch(e) { console.log(`[Record] ycGet failed: ${e.message}`); }
+      } catch(e) { logger.info(`ycGet failed: ${e.message}`); }
     }
 
     // Check for redemption transactions linked to this visit
@@ -627,17 +632,17 @@ async function processRecordEvent(payload, salon, settings) {
       paidAmount += costPay;
     }
 
-    console.log(`[Record] record=${ycRecordId} hasDiscount=${hasDiscount} hasRedemption=${!!hasRedemptionTx} paidAmount=${paidAmount}`);
+    logger.info(`record=${ycRecordId} hasDiscount=${hasDiscount} hasRedemption=${!!hasRedemptionTx} paidAmount=${paidAmount}`);
 
     if (hasDiscount || hasRedemptionTx || paidAmount <= 0) {
       await db.query('UPDATE finances_log SET cashback_amount=0,processed=TRUE WHERE yclients_record_id=$1', [ycRecordId]);
-      console.log(`[Record] denied record=${ycRecordId} (hasDiscount=${hasDiscount} hasRedemption=${!!hasRedemptionTx} paidAmount=${paidAmount})`);
+      logger.info(`denied record=${ycRecordId} (hasDiscount=${hasDiscount} hasRedemption=${!!hasRedemptionTx} paidAmount=${paidAmount})`);
       return;
     }
 
     if (settings && settings.bonuses_enabled === false) {
       await db.query('UPDATE finances_log SET cashback_amount=0,processed=FALSE WHERE yclients_record_id=$1', [ycRecordId]);
-      console.log(`[Record] bonuses DISABLED — logged only for record=${ycRecordId}`);
+      logger.info(`bonuses DISABLED — logged only for record=${ycRecordId}`);
       return;
     }
 
@@ -652,7 +657,7 @@ async function processRecordEvent(payload, salon, settings) {
     if (client.yclients_card_id && salon.yclients_card_type_id) {
       try {
         await ycAccrueCard(salon, client.yclients_card_id, cashback, `Кэшбэк ${pct}% по записи #${ycRecordId}`);
-      } catch(e) { console.error(`[Record] Card accrual error: ${e.message}`); }
+      } catch(e) { logger.error(`Card accrual error: ${e.message}`); }
     }
 
     await db.query(
@@ -674,7 +679,7 @@ async function processRecordEvent(payload, salon, settings) {
       'UPDATE finances_log SET cashback_amount=$1, cashback_pct=$2, paid_amount=$3, processed=TRUE WHERE yclients_record_id=$4',
       [cashback, pct, paidAmount, ycRecordId]
     );
-    console.log(`[Record] Accrued ${cashback} (${pct}%) for client ${client.name}, record #${ycRecordId}`);
+    logger.info(`Accrued ${cashback} (${pct}%) for client ${client.name}, record #${ycRecordId}`);
 
   } catch(e) {
     await db.query('DELETE FROM finances_log WHERE yclients_record_id=$1 AND cashback_amount=-1', [ycRecordId]);
@@ -689,7 +694,7 @@ async function processFinancesOperation(payload, salon) {
   const clientYcId = data.client?.id;
 
   if (!ycRecordId || !clientYcId) return;
-  console.log(`[FinOp] status=${status} clientYcId=${clientYcId} ycRecordId=${ycRecordId}`);
+  logger.info(`FinOp status=${status} clientYcId=${clientYcId} ycRecordId=${ycRecordId}`);
 
   if (status === 'delete') {
     await revertCashback(ycRecordId, salon, clientYcId);
@@ -705,7 +710,7 @@ async function processFinancesOperation(payload, salon) {
       const newBalance = parseFloat(card.balance || 0);
       const oldBalance = parseFloat(client.bonus_balance || 0);
       const delta = newBalance - oldBalance;
-      console.log(`[FinOp] delete: card balance old=${oldBalance} new=${newBalance} delta=${delta}`);
+      logger.info(`FinOp delete: card balance old=${oldBalance} new=${newBalance} delta=${delta}`);
       if (Math.abs(delta) < 1) return;
       await db.query(
         'UPDATE clients SET bonus_balance=$1::numeric, yclients_card_balance=$1::numeric, updated_at=NOW() WHERE id=$2',
@@ -721,8 +726,8 @@ async function processFinancesOperation(payload, salon) {
          delta > 0 ? `Возврат бонусов при отмене оплаты визита #${ycRecordId}` : `Списание бонусов при отмене визита #${ycRecordId}`,
          dbRecord?.id || null]
       );
-      console.log(`[FinOp] delete: synced balance ${oldBalance} → ${newBalance} for client ${client.name}`);
-    } catch(e) { console.log(`[FinOp] delete: card sync error: ${e.message}`); }
+      logger.info(`FinOp delete: synced balance ${oldBalance} → ${newBalance} for client ${client.name}`);
+    } catch(e) { logger.error(`FinOp delete: card sync error: ${e.message}`); }
     return;
   }
 
@@ -731,16 +736,16 @@ async function processFinancesOperation(payload, salon) {
       'SELECT * FROM clients WHERE salon_id=$1 AND yclients_client_id=$2',
       [salon.id, clientYcId]
     );
-    if (!client || !client.yclients_card_id) { console.log(`[FinOp] create: no client or card`); return; }
+    if (!client || !client.yclients_card_id) { logger.info(`FinOp create: no client or card`); return; }
     try {
       const cards = await ycGetClientCards(salon, clientYcId);
       const card = cards.find(c => String(c.id) === String(client.yclients_card_id));
-      if (!card) { console.log(`[FinOp] create: card not found`); return; }
+      if (!card) { logger.info(`FinOp create: card not found`); return; }
       const newBalance = parseFloat(card.balance || 0);
       const oldBalance = parseFloat(client.bonus_balance || 0);
       const delta = newBalance - oldBalance;
-      console.log(`[FinOp] create: card balance old=${oldBalance} new=${newBalance} delta=${delta}`);
-      if (Math.abs(delta) < 1) { console.log(`[FinOp] create: balance unchanged, skip`); return; }
+      logger.info(`FinOp create: card balance old=${oldBalance} new=${newBalance} delta=${delta}`);
+      if (Math.abs(delta) < 1) { logger.info(`FinOp create: balance unchanged, skip`); return; }
 
       const dbRecord = await db.oneOrNone('SELECT id, raw_payload FROM records WHERE salon_id=$1 AND yclients_record_id=$2', [salon.id, ycRecordId]);
 
@@ -749,7 +754,7 @@ async function processFinancesOperation(payload, salon) {
         const services = dbRecord?.raw_payload?.services || [];
         const hasDiscount = services.some(s => parseFloat(s.discount || 0) > 0 || parseFloat(s.cost_to_pay ?? s.cost ?? 0) < parseFloat(s.cost || 0));
         if (hasDiscount) {
-          console.log(`[FinOp] create: record=${ycRecordId} has manual discount — skipping accrual sync (delta=${delta})`);
+          logger.info(`FinOp create: record=${ycRecordId} has manual discount — skipping accrual sync (delta=${delta})`);
           return;
         }
       }
@@ -767,12 +772,12 @@ async function processFinancesOperation(payload, salon) {
          delta < 0 ? `Списание бонусов при оплате визита #${ycRecordId}` : `Начисление бонусов (YClients) #${ycRecordId}`,
          dbRecord?.id || null]
       );
-      console.log(`[FinOp] create: synced balance ${oldBalance} → ${newBalance} for client ${client.name}`);
-    } catch(e) { console.log(`[FinOp] create: card sync error: ${e.message}`); }
+      logger.info(`FinOp create: synced balance ${oldBalance} → ${newBalance} for client ${client.name}`);
+    } catch(e) { logger.error(`FinOp create: card sync error: ${e.message}`); }
     return;
   }
 
-  console.log(`[FinOp] status=${status} — ignored`);
+  logger.info(`FinOp status=${status} — ignored`);
 }
 
 module.exports = {
