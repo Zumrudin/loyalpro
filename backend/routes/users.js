@@ -6,7 +6,7 @@ const { auth, requireRole } = require('../middleware/auth');
 router.get('/', auth, requireRole('owner', 'admin'), async (req, res) => {
   try {
     const users = await db.any(
-      `SELECT u.id,u.name,u.email,u.role,u.is_active,u.must_change_password,
+      `SELECT u.id,u.name,u.email,u.role,u.position,u.is_active,u.must_change_password,
               u.created_at,u.last_login_at
        FROM users u WHERE u.salon_id=$1 ORDER BY u.created_at`,
       [req.user.salonId]
@@ -19,7 +19,7 @@ router.get('/', auth, requireRole('owner', 'admin'), async (req, res) => {
 
 router.post('/', auth, requireRole('owner'), async (req, res) => {
   try {
-    const { name, email, role, password } = req.body;
+    const { name, email, role, password, position } = req.body;
     if (!name || !email || !role || !password)
       return res.status(400).json({ error: 'Заполните все поля' });
     if (!['admin', 'specialist'].includes(role))
@@ -36,9 +36,9 @@ router.post('/', auth, requireRole('owner'), async (req, res) => {
 
     const hash = await bcrypt.hash(password, 12);
     const user = await db.one(
-      `INSERT INTO users (salon_id,email,password_hash,name,role,is_active,must_change_password,created_by)
-       VALUES ($1,$2,$3,$4,$5,TRUE,TRUE,$6) RETURNING id,name,email,role,is_active,must_change_password,created_at`,
-      [req.user.salonId, email.toLowerCase().trim(), hash, name, role, req.user.userId]
+      `INSERT INTO users (salon_id,email,password_hash,name,role,position,is_active,must_change_password,created_by)
+       VALUES ($1,$2,$3,$4,$5,$6,TRUE,TRUE,$7) RETURNING id,name,email,role,position,is_active,must_change_password,created_at`,
+      [req.user.salonId, email.toLowerCase().trim(), hash, name, role, position||null, req.user.userId]
     );
     res.json(user);
   } catch (e) {
@@ -50,7 +50,7 @@ router.post('/', auth, requireRole('owner'), async (req, res) => {
 router.patch('/:id', auth, requireRole('owner'), async (req, res) => {
   try {
     const { id } = req.params;
-    const { name, role, is_active, password } = req.body;
+    const { name, role, position, is_active, password } = req.body;
     if (parseInt(id) === req.user.userId && is_active === false)
       return res.status(400).json({ error: 'Нельзя деактивировать свой аккаунт' });
     if (parseInt(id) === req.user.userId && role && role !== req.user.role)
@@ -65,6 +65,7 @@ router.patch('/:id', auth, requireRole('owner'), async (req, res) => {
       updates.push(`role=$${i++}`); vals.push(role);
     }
     if (is_active !== undefined) { updates.push(`is_active=$${i++}`); vals.push(is_active); }
+    if (position !== undefined) { updates.push(`position=$${i++}`); vals.push(position || null); }
     if (password) {
       if (password.length < 6) return res.status(400).json({ error: 'Пароль минимум 6 символов' });
       const hash = await bcrypt.hash(password, 12);
@@ -76,7 +77,7 @@ router.patch('/:id', auth, requireRole('owner'), async (req, res) => {
     vals.push(id, req.user.salonId);
     const user = await db.oneOrNone(
       `UPDATE users SET ${updates.join(',')} WHERE id=$${i++} AND salon_id=$${i}
-       RETURNING id,name,email,role,is_active,must_change_password`,
+       RETURNING id,name,email,role,position,is_active,must_change_password`,
       vals
     );
     if (!user) return res.status(404).json({ error: 'Пользователь не найден' });
