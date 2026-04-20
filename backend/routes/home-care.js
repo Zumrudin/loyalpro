@@ -11,6 +11,8 @@ const { getTreeCache, setTreeCache } = require('../services/yclients');
 const { syncGoodsCategories }        = require('../services/home-care');
 const { buildHomeCareHtml, BRAND_CONFIG } = require('../homecare-template');
 const config = require('../config');
+const { createLogger } = require('../logger');
+const logger = createLogger('HomeCare');
 
 async function sendPrescriptionPush(clientId, prescriptionId) {
   try {
@@ -27,7 +29,7 @@ async function sendPrescriptionPush(clientId, prescriptionId) {
       sound: 'default',
     }, { headers: { 'Content-Type': 'application/json' } });
   } catch (e) {
-    console.error('[Push] Failed to send prescription push:', e.message);
+    logger.error('Failed to send prescription push:', e.message);
   }
 }
 
@@ -267,7 +269,7 @@ router.get('/:id/pdf', auth, async (req, res) => {
     res.send(pdf);
   } catch (e) {
     if (browser) await browser.close().catch(()=>{});
-    console.error('[PDF]', e.message);
+    logger.error('PDF generation failed:', e.message);
     res.status(500).json({ error: e.message });
   }
 });

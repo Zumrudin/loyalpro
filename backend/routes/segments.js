@@ -2,6 +2,8 @@ const router = require('express').Router();
 const { db } = require('../db');
 const { auth, authOrQuery } = require('../middleware/auth');
 const { SEGMENT_DEFS, SEG_MAP, SEG_CLIENTS_SQL, refreshSegments } = require('../services/segments');
+const { createLogger } = require('../logger');
+const logger = createLogger('Segments');
 
 router.get('/', auth, async (req, res) => {
   try {
@@ -56,7 +58,7 @@ router.get('/', auth, async (req, res) => {
       last_updated: meta?.last_updated || null,
       yclients_company_id: salon?.yclients_company_id || null,
     }});
-  } catch(e) { console.error('[Segments]', e.message); res.status(500).json({ error: e.message }); }
+  } catch(e) { logger.error(e.message); res.status(500).json({ error: e.message }); }
 });
 
 router.get('/:key/clients', auth, async (req, res) => {

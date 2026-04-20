@@ -6,6 +6,8 @@ const { getBotLink } = require('../services/telegram');
 const config = require('../config');
 
 const JWT_SECRET = config.JWT_SECRET;
+const { createLogger } = require('../logger');
+const logger = createLogger('MobileAuth');
 
 // Login by phone - send OTP
 router.post('/login', async (req, res) => {
@@ -36,7 +38,7 @@ router.post('/login', async (req, res) => {
 
     // Generate 4-digit OTP
     const otp = Math.floor(1000 + Math.random() * 9000).toString();
-    console.log(`[OTP] Phone: ${normalizedPhone}, Code: ${otp}`);
+    logger.info(`Phone: ${normalizedPhone}, Code: ${otp}`);
 
     // Store OTP with 5 min TTL
     await db.query(
@@ -57,7 +59,7 @@ router.post('/login', async (req, res) => {
     });
 
   } catch (e) {
-    console.error('[Login error]', e.message);
+    logger.error('Login error', e.message);
     res.status(500).json({ error: e.message });
   }
 });
@@ -129,7 +131,7 @@ router.post('/verify-otp', async (req, res) => {
     });
 
   } catch (e) {
-    console.error('[Verify OTP error]', e.message);
+    logger.error('Verify OTP error', e.message);
     res.status(500).json({ error: e.message });
   }
 });
@@ -152,7 +154,7 @@ router.get('/me', mobileAuth, async (req, res) => {
     });
 
   } catch (e) {
-    console.error('[Get me error]', e.message);
+    logger.error('Get me error', e.message);
     res.status(500).json({ error: e.message });
   }
 });
@@ -168,7 +170,7 @@ router.post('/logout', mobileAuth, async (req, res) => {
     res.json({ success: true });
 
   } catch (e) {
-    console.error('[Logout error]', e.message);
+    logger.error('Logout error', e.message);
     res.status(500).json({ error: e.message });
   }
 });

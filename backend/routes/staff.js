@@ -3,6 +3,8 @@ const express = require('express');
 const { db }  = require('../db');
 const { auth } = require('../middleware/auth');
 const { getStaffList, computeStaffMetrics, computeStaffSparklines, syncStaffData, syncGoodsSales } = require('../services/staff');
+const { createLogger } = require('../logger');
+const logger = createLogger('Staff');
 
 router.get('/staff-analytics/staff', auth, async (req, res) => {
   try { res.json({ staff: await getStaffList(req.user.salonId) }); }
@@ -56,7 +58,7 @@ router.post('/staff-analytics/sync', auth, async (req, res) => {
   try {
     const salon = await db.one('SELECT * FROM salons WHERE id=$1', [req.user.salonId]);
     if (!salon?.yclients_company_id) return res.status(400).json({ error: 'YClients не настроен' });
-    syncStaffData(salon).catch(e => console.error('[StaffSync manual]', e.message));
+    syncStaffData(salon).catch(e => logger.error('StaffSync manual', e.message));
     res.json({ ok: true, message: 'Синхронизация запущена' });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
