@@ -3,6 +3,7 @@ const path      = require('path');
 const fs        = require('fs');
 const multer    = require('multer');
 const puppeteer = require('puppeteer');
+const axios     = require('axios');
 const { db }    = require('../db');
 const { auth }  = require('../middleware/auth');
 const { ycGet } = require('../services/yclients');
@@ -10,6 +11,25 @@ const { getTreeCache, setTreeCache } = require('../services/yclients');
 const { syncGoodsCategories }        = require('../services/home-care');
 const { buildHomeCareHtml, BRAND_CONFIG } = require('../homecare-template');
 const config = require('../config');
+
+async function sendPrescriptionPush(clientId, prescriptionId) {
+  try {
+    const row = await db.oneOrNone(
+      'SELECT token FROM mobile_fcm_tokens WHERE client_id=$1',
+      [clientId]
+    );
+    if (!row?.token) return;
+    await axios.post('https://exp.host/--/api/v2/push/send', {
+      to: row.token,
+      title: 'Новое назначение',
+      body: 'Врач добавил назначения по вашему визиту. Нажмите, чтобы открыть.',
+      data: { prescriptionId },
+      sound: 'default',
+    }, { headers: { 'Content-Type': 'application/json' } });
+  } catch (e) {
+    console.error('[Push] Failed to send prescription push:', e.message);
+  }
+}
 
 // ── Multer upload (for template images) ──────────────────────
 const uploadStorage = multer.diskStorage({
@@ -187,7 +207,7 @@ router.get('/', auth, async (req, res) => {
     const rows = await db.any(
       `SELECT p.id, p.created_at, p.updated_at, p.notes,
               c.id as client_id, c.name as client_name, c.phone as client_phone,
-              u.name as specialist_name
+              u.name as specialist_name, u.position as specialist_position
        FROM home_care_prescriptions p
        LEFT JOIN clients c ON c.id=p.client_id
        LEFT JOIN users u ON u.id=p.specialist_id
@@ -207,7 +227,7 @@ router.get('/', auth, async (req, res) => {
 router.get('/:id/preview', auth, async (req, res) => {
   try {
     const p = await db.oneOrNone(
-      `SELECT p.*, c.name as client_name, c.phone as client_phone, u.name as specialist_name, s.name as salon_name
+      `SELECT p.*, c.name as client_name, c.phone as client_phone, u.name as specialist_name, u.position as specialist_position, s.name as salon_name
        FROM home_care_prescriptions p LEFT JOIN clients c ON c.id=p.client_id
        LEFT JOIN users u ON u.id=p.specialist_id LEFT JOIN salons s ON s.id=p.salon_id
        WHERE p.id=$1 AND p.salon_id=$2`, [req.params.id, req.user.salonId]
@@ -224,7 +244,7 @@ router.get('/:id/pdf', auth, async (req, res) => {
   let browser;
   try {
     const p = await db.oneOrNone(
-      `SELECT p.*, c.name as client_name, c.phone as client_phone, u.name as specialist_name, s.name as salon_name
+      `SELECT p.*, c.name as client_name, c.phone as client_phone, u.name as specialist_name, u.position as specialist_position, s.name as salon_name
        FROM home_care_prescriptions p LEFT JOIN clients c ON c.id=p.client_id
        LEFT JOIN users u ON u.id=p.specialist_id LEFT JOIN salons s ON s.id=p.salon_id
        WHERE p.id=$1 AND p.salon_id=$2`, [req.params.id, req.user.salonId]
@@ -255,7 +275,7 @@ router.get('/:id/pdf', auth, async (req, res) => {
 router.get('/:id', auth, async (req, res) => {
   try {
     const p = await db.oneOrNone(
-      `SELECT p.*, c.name as client_name, c.phone as client_phone, u.name as specialist_name, s.name as salon_name
+      `SELECT p.*, c.name as client_name, c.phone as client_phone, u.name as specialist_name, u.position as specialist_position, s.name as salon_name
        FROM home_care_prescriptions p LEFT JOIN clients c ON c.id=p.client_id
        LEFT JOIN users u ON u.id=p.specialist_id LEFT JOIN salons s ON s.id=p.salon_id
        WHERE p.id=$1 AND p.salon_id=$2`, [req.params.id, req.user.salonId]
@@ -281,6 +301,7 @@ router.post('/', auth, async (req, res) => {
         [p.id, it.time_of_day, it.category, it.product_name, it.instructions||null, i]
       );
     }
+    if (client_id) sendPrescriptionPush(client_id, p.id);
     res.json({ id: p.id });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
