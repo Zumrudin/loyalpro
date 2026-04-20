@@ -3,6 +3,8 @@
 // ============================================================
 const { db } = require('../db');
 const { ycGet } = require('./yclients');
+const { createLogger } = require('../logger');
+const logger = createLogger('Staff');
 
 function calcWorkMinutes(from, to) {
   if (!from || !to) return 0;
@@ -51,14 +53,14 @@ async function syncStaffData(salon) {
         } catch { /* schedule endpoint may vary by plan */ }
       }
     }
-    console.log(`[StaffSync] Salon ${salon.id}: ${staffList.length} staff synced`);
+    logger.info(`Salon ${salon.id}: ${staffList.length} staff synced`);
   } catch(e) {
-    console.error(`[StaffSync] Error salon ${salon.id}:`, e.message);
+    logger.error(`Error salon ${salon.id}: ${e.message}`);
   }
 }
 
 async function syncGoodsSales(salonId) {
-  console.log(`[GoodsSync] Salon ${salonId}: starting...`);
+  logger.info(`Salon ${salonId}: starting goods sync...`);
 
   const records = await db.many(`
     SELECT id, yclients_record_id, client_id, yclients_client_id, visit_date,
@@ -70,7 +72,7 @@ async function syncGoodsSales(salonId) {
       AND jsonb_array_length(raw_payload->'goods_transactions') > 0
   `, [salonId]);
 
-  console.log(`[GoodsSync] Found ${records.length} records with goods`);
+  logger.info(`Found ${records.length} records with goods`);
 
   let inserted = 0, updated = 0;
 
@@ -119,7 +121,7 @@ async function syncGoodsSales(salonId) {
     }
   }
 
-  console.log(`[GoodsSync] Done: inserted=${inserted} updated=${updated}`);
+  logger.info(`Done: inserted=${inserted} updated=${updated}`);
   return { inserted, updated, total: records.length };
 }
 
