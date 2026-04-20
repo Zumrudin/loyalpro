@@ -131,7 +131,8 @@ function buildHomeCareHtml(prescription, config = {}) {
                        'Крем для лица','Крем для век'];
 
   const clientName  = escHtml(prescription.client_name  || '—');
-  const specialist  = escHtml(prescription.specialist_name || '');
+  const specialist         = escHtml(prescription.specialist_name || '');
+  const specialistPosition = escHtml(prescription.specialist_position || '');
   const salonName   = escHtml(prescription.salon_name   || C.logoLine1 + ' ' + C.logoLine2);
   const dateStr     = prescription.created_at
     ? new Date(prescription.created_at)
@@ -568,7 +569,7 @@ html, body {
     <div class="footer">
       <div class="footer-contacts">${footerContacts || escHtml(salonName)}</div>
       <div class="footer-sign">
-        Специалист: ${escHtml(specialist || '—')}
+        Специалист: ${specialist || '—'}${specialistPosition ? ` <span style="font-size:10px;opacity:0.75">(${specialistPosition})</span>` : ''}
         <span class="footer-sign-line"></span>
       </div>
     </div>
