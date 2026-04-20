@@ -3,6 +3,8 @@
 // ============================================================
 const axios = require('axios');
 const config = require('../config');
+const { createLogger } = require('../logger');
+const logger = createLogger('YClients');
 
 const YC = config.YC;
 
@@ -71,15 +73,15 @@ async function ycGetClientCards(salon, yclClientsId) {
       `${YC}/loyalty/client_cards/${yclClientsId}`,
       { headers: ycHeaders(salon), timeout: 15000 }
     );
-    console.log(`[Cards] client=${yclClientsId} success=${data.success} count=${Array.isArray(data.data)?data.data.length:'n/a'}`);
+    logger.info(`client=${yclClientsId} success=${data.success} count=${Array.isArray(data.data)?data.data.length:'n/a'}`);
     if (Array.isArray(data.data) && data.data.length > 0) {
-      console.log(`[Cards] first card keys:`, Object.keys(data.data[0]).join(','));
-      console.log(`[Cards] first card sample:`, JSON.stringify(data.data[0]).slice(0,400));
+      logger.info(`first card keys: ${Object.keys(data.data[0]).join(',')}`);
+      logger.info(`first card sample: ${JSON.stringify(data.data[0]).slice(0,400)}`);
     }
     if (!data.success) return [];
     return data.data || [];
   } catch (e) {
-    console.error(`[Cards] error for client ${yclClientsId}:`, e.message);
+    logger.error(`error for client ${yclClientsId}: ${e.message}`);
     return [];
   }
 }
@@ -91,7 +93,7 @@ async function ycWebLogin(salon) {
   if (!salon.yclients_web_cookie)
     throw new Error('Куки YClients не заданы. Вставьте куки браузера в Настройках.');
 
-  console.log(`[WebLogin] Using manual cookie for salon ${salon.id} (len=${salon.yclients_web_cookie.length})`);
+  logger.info(`Using manual cookie for salon ${salon.id} (len=${salon.yclients_web_cookie.length})`);
   ycWebSessions[salon.id] = { cookie: salon.yclients_web_cookie, ts: Date.now() };
   return salon.yclients_web_cookie;
 }
@@ -104,9 +106,9 @@ async function ycGetCardTransactions(salon, clientYcId, phone, chainId) {
     const phoneClean = String(phone || '').replace(/\D/g, '');
 
     if (groupId === companyId) {
-      console.warn(`[WebTxns] WARNING: groupId == companyId (${companyId}). Chain ID не настроен!`);
+      logger.warn(`WARNING: groupId == companyId (${companyId}). Chain ID не настроен!`);
     }
-    console.log(`[WebTxns] groupId=${groupId} companyId=${companyId} clientYcId=${clientYcId} phone=${phoneClean}`);
+    logger.info(`groupId=${groupId} companyId=${companyId} clientYcId=${clientYcId} phone=${phoneClean}`);
 
     const urlsToTry = phoneClean
       ? [
@@ -118,7 +120,7 @@ async function ycGetCardTransactions(salon, clientYcId, phone, chainId) {
         ];
 
     const url = urlsToTry[0];
-    console.log(`[WebTxns] GET ${url}`);
+    logger.info(`GET ${url}`);
 
     const UA2 = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36';
     const reqHeaders = {
@@ -131,25 +133,25 @@ async function ycGetCardTransactions(salon, clientYcId, phone, chainId) {
     };
 
     let resp = await axios.get(url, { headers: reqHeaders, validateStatus: s=>s<500, timeout:15000 });
-    console.log(`[WebTxns] status=${resp.status} success=${resp.data?.success}`);
+    logger.info(`status=${resp.status} success=${resp.data?.success}`);
 
     if (!resp.data?.success && urlsToTry.length > 1) {
-      console.log(`[WebTxns] Trying fallback URL (without phone)`);
+      logger.info(`Trying fallback URL (without phone)`);
       resp = await axios.get(urlsToTry[1], { headers: reqHeaders, validateStatus: s=>s<500, timeout:15000 });
-      console.log(`[WebTxns] Fallback status=${resp.status} success=${resp.data?.success}`);
+      logger.info(`Fallback status=${resp.status} success=${resp.data?.success}`);
     }
 
-    if (resp.status === 404) { console.log(`[WebTxns] 404 — client not found`); return []; }
-    if (!resp.data?.success) { console.log(`[WebTxns] Not success:`, JSON.stringify(resp.data).slice(0,200)); return []; }
+    if (resp.status === 404) { logger.info(`404 — client not found`); return []; }
+    if (!resp.data?.success) { logger.info(`Not success: ${JSON.stringify(resp.data).slice(0,200)}`); return []; }
 
     const html = resp.data.html || '';
-    console.log(`[WebTxns] Got HTML, length=${html.length}`);
+    logger.info(`Got HTML, length=${html.length}`);
     const txns = parseCardTransactionsHtml(html);
-    console.log(`[WebTxns] Parsed ${txns.length} transactions`);
+    logger.info(`Parsed ${txns.length} transactions`);
     return txns;
 
   } catch (e) {
-    console.error(`[WebTxns] Error:`, e.message);
+    logger.error(`WebTxns error: ${e.message}`);
     delete ycWebSessions[salon.id];
     return [];
   }
