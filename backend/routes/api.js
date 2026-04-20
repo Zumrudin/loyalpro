@@ -4,13 +4,15 @@ const { auth } = require('../middleware/auth');
 const { buildClientsQuery } = require('../clients-query');
 const { ycGet, ycGetClientCards, ycGetCardTransactions, ycWebSessions } = require('../services/yclients');
 const { getLoyaltySettings, getLevel, runSync, sleep } = require('../services/loyalty');
+const { createLogger } = require('../logger');
+const logger = createLogger('API');
 
 // ── Records ──────────────────────────────────────────────────
 router.get('/records', auth, async (req, res) => {
   res.set('Cache-Control', 'no-store, no-cache, must-revalidate');
   res.set('Pragma', 'no-cache');
   try {
-    const { dateFrom, dateTo, status, page = 1, limit = 50 } = req.query;
+    const { dateFrom, dateTo, status, phone, client: clientName, page = 1, limit = 50 } = req.query;
     const pageNum  = Math.max(1, parseInt(page));
     const pageSize = Math.min(200, Math.max(10, parseInt(limit)));
     const offset   = (pageNum - 1) * pageSize;
@@ -18,6 +20,8 @@ router.get('/records', auth, async (req, res) => {
     let where = ['r.salon_id=$1'], params = [req.user.salonId], i = 2;
     if (dateFrom) { where.push(`COALESCE((r.visit_datetime AT TIME ZONE 'Europe/Moscow')::date, r.visit_date::date) >= $${i}::date`); params.push(dateFrom); i++; }
     if (dateTo)   { where.push(`COALESCE((r.visit_datetime AT TIME ZONE 'Europe/Moscow')::date, r.visit_date::date) <= $${i}::date`); params.push(dateTo); i++; }
+    if (phone)      { where.push(`c.phone ILIKE $${i}`); params.push('%' + phone.replace(/\D/g,'').slice(-10) + '%'); i++; }
+    if (clientName) { where.push(`c.name ILIKE $${i}`); params.push('%' + clientName + '%'); i++; }
     if (status) {
       const statusMap = {
         completed:  { stored: ['completed'],                sids: [4],     atts: [2] },
@@ -41,7 +45,7 @@ router.get('/records', auth, async (req, res) => {
       } else { where.push(`r.status=$${i}`); params.push(status); i++; }
     }
     const w = where.join(' AND ');
-    const total = (await db.one(`SELECT COUNT(*) FROM records r WHERE ${w}`, params)).count;
+    const total = (await db.one(`SELECT COUNT(*) FROM records r LEFT JOIN clients c ON c.id=r.client_id WHERE ${w}`, params)).count;
     // db.any() instead of db.many() — empty result set is valid (no records in range)
     const records = await db.any(
       `SELECT r.*,
@@ -63,9 +67,9 @@ router.get('/records', auth, async (req, res) => {
               COALESCE(CASE
                 WHEN (r.raw_payload->>'deleted')::boolean = true THEN 'deleted'
                 WHEN (r.raw_payload->>'attendance') IS NOT NULL THEN
-                  CASE (r.raw_payload->>'attendance')::int WHEN 2 THEN 'completed' WHEN 1 THEN 'arrived' WHEN -1 THEN 'no_show' WHEN 0 THEN 'waiting' ELSE r.status END
+                  CASE (r.raw_payload->>'attendance')::int WHEN 2 THEN 'arrived' WHEN 1 THEN 'confirmed' WHEN -1 THEN 'no_show' WHEN 0 THEN 'waiting' ELSE r.status END
                 WHEN (r.raw_payload->>'status_id') IS NOT NULL THEN
-                  CASE (r.raw_payload->>'status_id')::int WHEN 4 THEN 'completed' WHEN 3 THEN 'arrived' WHEN 2 THEN 'confirmed' WHEN 5 THEN 'cancelled' WHEN 7 THEN 'cancelled' WHEN 6 THEN 'no_show' WHEN 1 THEN 'waiting' ELSE r.status END
+                  CASE (r.raw_payload->>'status_id')::int WHEN 4 THEN 'completed' WHEN 3 THEN 'arrived' WHEN 2 THEN 'confirmed' WHEN 5 THEN 'cancelled' WHEN 7 THEN 'deleted' WHEN 6 THEN 'no_show' WHEN 1 THEN 'waiting' ELSE r.status END
                 ELSE r.status
               END, r.status) as yclients_status,
               CASE WHEN (r.raw_payload->>'paid_full')::int = 1 THEN true ELSE false END as is_paid_full,
@@ -98,30 +102,30 @@ router.get('/analytics/dashboard', auth, async (req, res) => {
       FROM (
         SELECT amount FROM loyalty_card_transactions lct JOIN clients c ON c.id=lct.client_id
         WHERE c.salon_id=$1 AND COALESCE(lct.txn_date,lct.created_at) >= NOW()-INTERVAL '${days} days'
-        UNION
+        UNION ALL
         SELECT amount FROM bonus_transactions bt WHERE bt.salon_id=$1
           AND bt.created_at >= NOW()-INTERVAL '${days} days' AND bt.description NOT LIKE '%импорт%'
       ) combined`;
     const [tc,ac,slp,nc,bs,rev,bonusStat,topSvc,lvlDist,daily,recentTx,lastSync,tgCount,cardCount,bonEconomy] = await Promise.all([
       db.one('SELECT COUNT(*) FROM clients WHERE salon_id=$1',[sid]),
-      db.one(`SELECT COUNT(*) FROM clients WHERE salon_id=$1 AND last_visit_at>NOW()-INTERVAL '${days} days'`,[sid]),
+      db.one(`SELECT COUNT(*) FROM clients WHERE salon_id=$1 AND last_visit_at>NOW()-INTERVAL '${days} days' AND last_visit_at<=NOW()`,[sid]),
       db.one(`SELECT COUNT(*) FROM clients WHERE salon_id=$1 AND last_visit_at<NOW()-INTERVAL '60 days' AND visits_count>0`,[sid]),
       db.one(`SELECT COUNT(*) FROM clients WHERE salon_id=$1 AND created_at>NOW()-INTERVAL '${days} days'`,[sid]),
       db.one(`SELECT COALESCE(SUM(bonus_balance),0) as tb, COALESCE(SUM(total_spent),0) as ts FROM clients WHERE salon_id=$1`,[sid]),
-      db.one(`SELECT COUNT(*) as rc, COALESCE(SUM(amount),0) as rv FROM records WHERE salon_id=$1 AND status IN ('completed','confirmed') AND visit_date>=NOW()-INTERVAL '${days} days'`,[sid]),
+      db.one(`SELECT COUNT(*) as rc, COALESCE(SUM(amount),0) as rv FROM records WHERE salon_id=$1 AND status IN ('completed','confirmed') AND COALESCE((visit_datetime AT TIME ZONE 'Europe/Moscow')::date, visit_date::date)>=(NOW() AT TIME ZONE 'Europe/Moscow')::date - INTERVAL '${days} days'`,[sid]),
       db.one(bonusStatsSql,[sid]),
       // db.any() — may be empty if no completed records in period
-      db.any(`SELECT svc->>'title' as service_name, COUNT(DISTINCT r.id) as cnt, SUM((svc->>'cost_to_pay')::numeric) as total_amount FROM records r, jsonb_array_elements(COALESCE(r.services,'[]'::jsonb)) svc WHERE r.salon_id=$1 AND r.status IN ('completed','confirmed') AND COALESCE((r.visit_datetime AT TIME ZONE 'Europe/Moscow')::date, r.visit_date::date)>=NOW()-INTERVAL '${days} days' AND svc->>'title' IS NOT NULL GROUP BY svc->>'title' ORDER BY svc->>'title' ASC LIMIT 100000`,[sid]),
+      db.any(`SELECT svc->>'title' as service_name, COUNT(DISTINCT r.id) as cnt, SUM((svc->>'cost_to_pay')::numeric) as total_amount FROM records r, jsonb_array_elements(COALESCE(r.services,'[]'::jsonb)) svc WHERE r.salon_id=$1 AND r.status IN ('completed','confirmed') AND COALESCE((r.visit_datetime AT TIME ZONE 'Europe/Moscow')::date, r.visit_date::date)>=(NOW() AT TIME ZONE 'Europe/Moscow')::date - INTERVAL '${days} days' AND svc->>'title' IS NOT NULL GROUP BY svc->>'title' ORDER BY svc->>'title' ASC LIMIT 100000`,[sid]),
       // db.any() — may be empty if no clients yet
       db.any(`SELECT loyalty_level, COUNT(*) as cnt FROM clients WHERE salon_id=$1 GROUP BY loyalty_level`,[sid]),
       // db.any() — may be empty if no revenue data in period
-      db.any(`WITH rev AS (SELECT COALESCE((visit_datetime AT TIME ZONE 'Europe/Moscow')::date, visit_date::date)::date as d, COUNT(*) as records, COALESCE(SUM(amount),0) as revenue FROM records WHERE salon_id=$1 AND status IN ('completed','confirmed') AND COALESCE((visit_datetime AT TIME ZONE 'Europe/Moscow')::date, visit_date::date)>=NOW()-INTERVAL '${days} days' GROUP BY COALESCE((visit_datetime AT TIME ZONE 'Europe/Moscow')::date, visit_date::date)), bon AS (SELECT DATE(COALESCE(lct.txn_date,lct.created_at)) as d, COALESCE(SUM(CASE WHEN lct.amount>0 THEN lct.amount ELSE 0 END),0) as bonuses_accrued, COALESCE(SUM(CASE WHEN lct.amount<0 THEN ABS(lct.amount) ELSE 0 END),0) as bonuses_redeemed FROM loyalty_card_transactions lct JOIN clients c ON c.id=lct.client_id WHERE c.salon_id=$1 AND COALESCE(lct.txn_date,lct.created_at)>=NOW()-INTERVAL '${days} days' GROUP BY DATE(COALESCE(lct.txn_date,lct.created_at))) SELECT rev.d::text as visit_date, rev.records, rev.revenue, COALESCE(bon.bonuses_accrued,0) as bonuses_accrued, COALESCE(bon.bonuses_redeemed,0) as bonuses_redeemed FROM rev LEFT JOIN bon ON bon.d=rev.d ORDER BY rev.d`,[sid]),
+      db.any(`WITH rev AS (SELECT COALESCE((visit_datetime AT TIME ZONE 'Europe/Moscow')::date, visit_date::date)::date as d, COUNT(*) as records, COALESCE(SUM(amount),0) as revenue FROM records WHERE salon_id=$1 AND status IN ('completed','confirmed') AND COALESCE((visit_datetime AT TIME ZONE 'Europe/Moscow')::date, visit_date::date)>=(NOW() AT TIME ZONE 'Europe/Moscow')::date - INTERVAL '${days} days' GROUP BY COALESCE((visit_datetime AT TIME ZONE 'Europe/Moscow')::date, visit_date::date)), bon AS (SELECT DATE(COALESCE(lct.txn_date,lct.created_at)) as d, COALESCE(SUM(CASE WHEN lct.amount>0 THEN lct.amount ELSE 0 END),0) as bonuses_accrued, COALESCE(SUM(CASE WHEN lct.amount<0 THEN ABS(lct.amount) ELSE 0 END),0) as bonuses_redeemed FROM loyalty_card_transactions lct JOIN clients c ON c.id=lct.client_id WHERE c.salon_id=$1 AND COALESCE(lct.txn_date,lct.created_at)>=NOW()-INTERVAL '${days} days' GROUP BY DATE(COALESCE(lct.txn_date,lct.created_at))) SELECT rev.d::text as visit_date, rev.records, rev.revenue, COALESCE(bon.bonuses_accrued,0) as bonuses_accrued, COALESCE(bon.bonuses_redeemed,0) as bonuses_redeemed FROM rev LEFT JOIN bon ON bon.d=rev.d ORDER BY rev.d`,[sid]),
       // db.any() — may be empty if no transactions yet
       db.any(`SELECT sub.*, c.name as client_name FROM (SELECT DISTINCT ON (client_id, title, txn_date::date, amount) lct.id, lct.txn_date as created_at, lct.amount, lct.title as description, lct.client_id FROM loyalty_card_transactions lct JOIN clients c2 ON c2.id=lct.client_id WHERE c2.salon_id=$1 ORDER BY client_id, title, txn_date::date, amount, lct.txn_date DESC NULLS LAST) sub JOIN clients c ON c.id=sub.client_id ORDER BY sub.created_at DESC NULLS LAST LIMIT 15`,[sid]),
       // db.oneOrNone() — sync may never have run; db.one() would throw on 0 rows
       db.oneOrNone(`SELECT * FROM sync_logs WHERE salon_id=$1 ORDER BY started_at DESC LIMIT 1`,[sid]),
       db.one(`SELECT COUNT(*) FROM clients WHERE salon_id=$1 AND telegram_id IS NOT NULL AND telegram_id!=''`,[sid]),
-      db.one(`SELECT COUNT(*) FROM clients WHERE salon_id=$1 AND yclients_card_id IS NOT NULL AND created_at >= NOW()-INTERVAL '${days} days'`,[sid]),
+      db.one(`SELECT COUNT(*) FROM clients WHERE salon_id=$1 AND yclients_card_id IS NOT NULL`,[sid]),
       // db.any() — may be empty if no transactions in period
       db.any(`SELECT CASE WHEN lct.title ILIKE '%день рождения%' OR lct.title ILIKE '%ДР%' OR lct.title ILIKE '%подарок%' THEN 'birthday' WHEN lct.type='redemption' AND lct.title ILIKE '%отмена%' THEN 'cancellation' WHEN lct.type='redemption' THEN 'redemption' ELSE 'accrual' END as type, COALESCE(SUM(ABS(lct.amount)),0) as total FROM loyalty_card_transactions lct JOIN clients c ON c.id=lct.client_id WHERE c.salon_id=$1 AND COALESCE(lct.txn_date,lct.created_at)>=NOW()-INTERVAL '${days} days' GROUP BY 1 ORDER BY total DESC`,[sid]),
     ]);
@@ -165,7 +169,7 @@ router.get('/analytics/retention', auth, async (req, res) => {
            SELECT client_id,MIN(visit_date) OVER (PARTITION BY client_id) as first_visit,
                   EXTRACT(YEAR FROM AGE(visit_date,MIN(visit_date) OVER (PARTITION BY client_id)))*12
                     + EXTRACT(MONTH FROM AGE(visit_date,MIN(visit_date) OVER (PARTITION BY client_id))) as months_since
-           FROM records WHERE salon_id=$1 AND status='completed' AND client_id IS NOT NULL
+           FROM records WHERE salon_id=$1 AND status IN ('completed','confirmed') AND client_id IS NOT NULL
          ) t GROUP BY cohort_month
        ) agg
        WHERE cohort_month <= DATE_TRUNC('month',NOW()) - INTERVAL '3 months'
@@ -182,7 +186,7 @@ router.post('/sync', auth, async (req, res) => {
     if (!salon.yclients_company_id || !salon.yclients_user_token)
       return res.status(400).json({ error: 'YClients не настроен. Укажите токены в Настройках.' });
     res.json({ ok: true, message: 'Синхронизация запущена' });
-    runSync(salon, 'manual', req.user.userId).catch(e => console.error('[Sync]', e.message));
+    runSync(salon, 'manual', req.user.userId).catch(e => logger.error(`Sync trigger: ${e.message}`));
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 

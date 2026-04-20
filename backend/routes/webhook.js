@@ -1,22 +1,24 @@
 const router = require('express').Router();
 const { db } = require('../db');
 const { getLoyaltySettings, processRecordEvent, processFinancesOperation } = require('../services/loyalty');
+const { createLogger } = require('../logger');
+const logger = createLogger('Webhook');
 
 router.post('/webhook.v2/:companyId', async (req, res) => {
   res.json({ ok: true });
   const t0 = Date.now();
-  console.log(`[WH] hit companyId=${req.params.companyId} resource=${req.body?.resource||req.body?.resource_type}`);
+  logger.info(`hit companyId=${req.params.companyId} resource=${req.body?.resource||req.body?.resource_type}`);
   let wlog = null;
   try {
     const salon = await db.oneOrNone(
       'SELECT * FROM salons WHERE yclients_company_id=$1 AND is_active=TRUE',
       [req.params.companyId]
     );
-    if (!salon) { console.warn(`[WH] salon not found companyId=${req.params.companyId}`); return; }
+    if (!salon) { logger.warn(`salon not found companyId=${req.params.companyId}`); return; }
 
     const payload = req.body;
     const resourceType = payload.resource || payload.resource_type;
-    console.log(`[WH] salon=${salon.id} resource=${resourceType} data_id=${payload.data?.id}`);
+    logger.info(`salon=${salon.id} resource=${resourceType} data_id=${payload.data?.id}`);
 
     wlog = await db.one(
       `INSERT INTO webhook_logs (salon_id,event_type,resource_id,payload) VALUES ($1,$2,$3,$4) RETURNING id`,
@@ -48,7 +50,7 @@ router.post('/webhook.v2/:companyId', async (req, res) => {
       await db.query('UPDATE webhook_logs SET processed=TRUE,processing_ms=$1 WHERE id=$2', [Date.now() - t0, wlog.id]);
     }
   } catch (e) {
-    console.error('[Webhook] ERROR:', e.message);
+    logger.error(`ERROR: ${e.message}`);
     try {
       if (wlog?.id) await db.query('UPDATE webhook_logs SET error_message=$1,processing_ms=$2 WHERE id=$3', [e.message, Date.now() - t0, wlog.id]);
     } catch {}

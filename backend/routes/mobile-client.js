@@ -2,6 +2,8 @@ const router = require('express').Router();
 const { db } = require('../db');
 const { mobileAuth } = require('../middleware/mobile-auth');
 const { ycGet, ycGetClientCards, ycGetCardTransactions } = require('../services/yclients');
+const { createLogger } = require('../logger');
+const logger = createLogger('Mobile');
 
 // Get client profile
 router.get('/profile', mobileAuth, async (req, res) => {
@@ -41,7 +43,7 @@ router.get('/profile', mobileAuth, async (req, res) => {
     });
 
   } catch (e) {
-    console.error('[Get profile error]', e.message);
+    logger.error(`Get profile error: ${e.message}`);
     res.status(500).json({ error: e.message });
   }
 });
@@ -91,7 +93,7 @@ router.get('/bookings', mobileAuth, async (req, res) => {
     });
 
   } catch (e) {
-    console.error('[Get bookings error]', e.message);
+    logger.error(`Get bookings error: ${e.message}`);
     res.status(500).json({ error: e.message });
   }
 });
@@ -136,7 +138,7 @@ router.get('/bookings/:bookingId', mobileAuth, async (req, res) => {
     });
 
   } catch (e) {
-    console.error('[Get booking error]', e.message);
+    logger.error(`Get booking error: ${e.message}`);
     res.status(500).json({ error: e.message });
   }
 });
@@ -167,7 +169,7 @@ router.post('/bookings/:bookingId/cancel', mobileAuth, async (req, res) => {
     });
 
   } catch (e) {
-    console.error('[Cancel booking error]', e.message);
+    logger.error(`Cancel booking error: ${e.message}`);
     res.status(500).json({ error: e.message });
   }
 });
@@ -202,7 +204,7 @@ router.post('/bookings/:bookingId/reschedule', mobileAuth, async (req, res) => {
     });
 
   } catch (e) {
-    console.error('[Reschedule booking error]', e.message);
+    logger.error(`Reschedule booking error: ${e.message}`);
     res.status(500).json({ error: e.message });
   }
 });
@@ -264,7 +266,7 @@ router.get('/bonuses', mobileAuth, async (req, res) => {
     });
 
   } catch (e) {
-    console.error('[Get bonuses error]', e.message);
+    logger.error(`Get bonuses error: ${e.message}`);
     res.status(500).json({ error: e.message });
   }
 });
@@ -291,7 +293,7 @@ router.get('/bonus-history', mobileAuth, async (req, res) => {
     res.json({ success: true, transactions });
 
   } catch (e) {
-    console.error('[Get bonus history error]', e.message);
+    logger.error(`Get bonus history error: ${e.message}`);
     res.status(500).json({ error: e.message });
   }
 });
@@ -322,7 +324,7 @@ router.get('/notifications', mobileAuth, async (req, res) => {
     });
 
   } catch (e) {
-    console.error('[Get notifications error]', e.message);
+    logger.error(`Get notifications error: ${e.message}`);
     res.status(500).json({ error: e.message });
   }
 });
@@ -347,7 +349,7 @@ router.post('/notifications/:notificationId/read', mobileAuth, async (req, res) 
     res.json({ success: true });
 
   } catch (e) {
-    console.error('[Mark notification read error]', e.message);
+    logger.error(`Mark notification read error: ${e.message}`);
     res.status(500).json({ error: e.message });
   }
 });
@@ -371,7 +373,7 @@ router.post('/fcm-token', mobileAuth, async (req, res) => {
     res.json({ success: true });
 
   } catch (e) {
-    console.error('[Register FCM token error]', e.message);
+    logger.error(`Register FCM token error: ${e.message}`);
     res.status(500).json({ error: e.message });
   }
 });
@@ -398,7 +400,7 @@ router.get('/prescriptions', mobileAuth, async (req, res) => {
     );
     res.json({ success: true, prescriptions: rows });
   } catch (e) {
-    console.error('[Get prescriptions error]', e.message);
+    logger.error(`Get prescriptions error: ${e.message}`);
     res.status(500).json({ error: e.message });
   }
 });
@@ -434,7 +436,7 @@ router.get('/prescriptions/:id', mobileAuth, async (req, res) => {
     );
     res.json({ success: true, prescription: { ...p, items } });
   } catch (e) {
-    console.error('[Get prescription detail error]', e.message);
+    logger.error(`Get prescription detail error: ${e.message}`);
     res.status(500).json({ error: e.message });
   }
 });
@@ -461,7 +463,7 @@ router.get('/price-list', mobileAuth, async (req, res) => {
 
     res.json({ success: true, ...data });
   } catch (e) {
-    console.error('[Get price list error]', e.message);
+    logger.error(`Get price list error: ${e.message}`);
     if (priceListCache) return res.json({ success: true, ...priceListCache });
     res.status(500).json({ error: 'Не удалось загрузить прайс-лист' });
   }

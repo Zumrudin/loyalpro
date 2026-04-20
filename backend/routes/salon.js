@@ -3,6 +3,8 @@ const { db } = require('../db');
 const { auth } = require('../middleware/auth');
 const { ycAuth, ycWebSessions } = require('../services/yclients');
 const { getLoyaltySettings } = require('../services/loyalty');
+const { createLogger } = require('../logger');
+const logger = createLogger('Salon');
 
 router.get('/', auth, async (req, res) => {
   try { res.json(await db.one('SELECT * FROM salons WHERE id=$1', [req.user.salonId])); }
@@ -24,7 +26,11 @@ router.put('/', auth, async (req, res) => {
     );
     if (yclients_web_cookie) delete ycWebSessions[req.user.salonId];
     res.json({ ok: true });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) {
+    if (e.code === '23505' && e.constraint === 'salons_yclients_company_id_key')
+      return res.status(409).json({ error: 'Салон с таким ID филиала YClients уже зарегистрирован в системе. Обратитесь в поддержку.' });
+    res.status(500).json({ error: e.message });
+  }
 });
 
 router.post('/yclients-auth', auth, async (req, res) => {
@@ -42,7 +48,7 @@ router.post('/yclients-auth', auth, async (req, res) => {
     delete ycWebSessions[req.user.salonId];
     res.json({ ok: true, userToken: d.user_token });
   } catch (e) {
-    console.error('[YC Auth error]', e.message);
+    logger.error(`YC Auth error: ${e.message}`);
     res.status(400).json({ error: e.message });
   }
 });
