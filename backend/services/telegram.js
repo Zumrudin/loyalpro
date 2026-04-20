@@ -1,4 +1,6 @@
 const TelegramBot = require('node-telegram-bot-api');
+const { createLogger } = require('../logger');
+const logger = createLogger('Telegram');
 
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const BOT_USERNAME = 'sms_activator_peri_clinic_bot';
@@ -7,7 +9,7 @@ let bot = null;
 
 function initBot(db) {
   if (!BOT_TOKEN) {
-    console.warn('[Telegram] TELEGRAM_BOT_TOKEN не установлен');
+    logger.warn('TELEGRAM_BOT_TOKEN не установлен');
     return;
   }
 
@@ -34,7 +36,7 @@ function initBot(db) {
       });
 
     } catch (e) {
-      console.error('[Telegram] Ошибка:', e.message);
+      logger.error(`Ошибка: ${e.message}`);
       await bot.sendMessage(chatId, 'Произошла ошибка. Попробуйте позже.');
     }
   });
@@ -44,10 +46,10 @@ function initBot(db) {
   });
 
   bot.on('polling_error', (err) => {
-    console.error('[Telegram] Polling error:', err.message);
+    logger.error(`Polling error: ${err.message}`);
   });
 
-  console.log('[Telegram] Бот запущен:', BOT_USERNAME);
+  logger.info(`Бот запущен: ${BOT_USERNAME}`);
 }
 
 function getBotLink(phone) {

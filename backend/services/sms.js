@@ -1,4 +1,6 @@
 const axios = require('axios');
+const { createLogger } = require('../logger');
+const logger = createLogger('SMS');
 
 const SMSC_URL = 'https://smsc.ru/sys/send.php';
 
@@ -15,7 +17,7 @@ async function sendOtpSms(phone, otp) {
   const password = process.env.SMSC_PASSWORD;
 
   if (!login || !password) {
-    console.warn(`[SMS] SMSC_LOGIN/SMSC_PASSWORD не установлены. OTP для ${phone}: ${otp}`);
+    logger.warn(`SMSC_LOGIN/SMSC_PASSWORD не установлены. OTP для ${phone}: ${otp}`);
     return true;
   }
 
@@ -37,14 +39,14 @@ async function sendOtpSms(phone, otp) {
     const data = response.data;
 
     if (data.error_code) {
-      console.error(`[SMS] Ошибка SMSC: ${data.error} (код ${data.error_code})`);
+      logger.error(`Ошибка SMSC: ${data.error} (код ${data.error_code})`);
       return false;
     }
 
-    console.log(`[SMS] OTP отправлена на ${normalizedPhone}, id: ${data.id}, cost: ${data.cost}`);
+    logger.info(`OTP отправлена на ${normalizedPhone}, id: ${data.id}, cost: ${data.cost}`);
     return true;
   } catch (e) {
-    console.error('[SMS] Ошибка запроса:', e.message);
+    logger.error(`Ошибка запроса: ${e.message}`);
     return false;
   }
 }
@@ -62,7 +64,7 @@ async function getBalance() {
     if (response.data.balance !== undefined) return response.data.balance;
     return null;
   } catch (e) {
-    console.error('[SMS] Ошибка получения баланса:', e.message);
+    logger.error(`Ошибка получения баланса: ${e.message}`);
     return null;
   }
 }
