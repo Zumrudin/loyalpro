@@ -10,6 +10,9 @@ const { syncStaffData }     = require('./services/staff');
 const { refreshSegments }   = require('./services/segments');
 const mountRoutes = require('./routes/index');
 const { initBot } = require('./services/telegram');
+const { createLogger } = require('./logger');
+const logger = createLogger('Server');
+const cronLogger = createLogger('Cron');
 
 const express  = require('express');
 const cors     = require('cors');
@@ -80,7 +83,7 @@ initBot(db);
 // CRON JOBS
 // ============================================================
 cron.schedule('0 10 * * *', async () => {
-  console.log('[Cron] Birthday bonuses...');
+  cronLogger.info('Birthday bonuses...');
   try {
     const salons = await db.many(
       `SELECT s.*,ls.birthday_bonus,ls.birthday_days_before
@@ -110,23 +113,23 @@ cron.schedule('0 10 * * *', async () => {
            VALUES ($1,$2,(SELECT yclients_card_id FROM clients WHERE id=$3),'accrual',$4,$5,'🎂 Подарок на день рождения',NOW(),NOW())`,
           [salon.id, c.id, c.id, bonus, c.bonus_balance + bonus]
         );
-        console.log(`[Birthday] ${c.name} +${bonus}`);
+        cronLogger.info(`Birthday: ${c.name} +${bonus}`);
       }
     }
-  } catch (e) { console.error('[Cron birthday]', e.message); }
+  } catch (e) { cronLogger.error(`Birthday cron: ${e.message}`); }
 }, { timezone: 'Europe/Moscow' });
 
 cron.schedule('0 */3 * * *', async () => {
-  console.log('[Cron] Auto-sync...');
+  cronLogger.info('Auto-sync...');
   try {
     const salons = await db.many(
       `SELECT * FROM salons WHERE is_active=TRUE AND yclients_company_id IS NOT NULL AND yclients_user_token IS NOT NULL`
     );
     for (const salon of salons) {
-      runSync(salon, 'auto').catch(e => console.error(`[AutoSync ${salon.id}]`, e.message));
-      syncGoodsCategories(salon).catch(e => console.error(`[GoodsCatSync ${salon.id}]`, e.message));
+      runSync(salon, 'auto').catch(e => cronLogger.error(`AutoSync salon=${salon.id}: ${e.message}`));
+      syncGoodsCategories(salon).catch(e => cronLogger.error(`GoodsCatSync salon=${salon.id}: ${e.message}`));
     }
-  } catch (e) { console.error('[Cron sync]', e.message); }
+  } catch (e) { cronLogger.error(`AutoSync cron: ${e.message}`); }
 });
 
 cron.schedule('0 * * * *', async () => {
@@ -135,18 +138,18 @@ cron.schedule('0 * * * *', async () => {
       `SELECT * FROM salons WHERE is_active=TRUE AND yclients_company_id IS NOT NULL AND yclients_user_token IS NOT NULL`
     );
     for (const salon of salons) {
-      syncStaffData(salon).catch(e => console.error(`[StaffSync cron ${salon.id}]`, e.message));
+      syncStaffData(salon).catch(e => cronLogger.error(`StaffSync salon=${salon.id}: ${e.message}`));
     }
-  } catch (e) { console.error('[StaffSync cron]', e.message); }
+  } catch (e) { cronLogger.error(`StaffSync cron: ${e.message}`); }
 });
 
 cron.schedule('30 * * * *', async () => {
   try {
     const salons = await db.many(`SELECT id FROM salons WHERE is_active=TRUE`);
     for (const s of salons) {
-      refreshSegments(s.id).catch(e => console.error(`[Segments cron ${s.id}]`, e.message));
+      refreshSegments(s.id).catch(e => cronLogger.error(`Segments cron salon=${s.id}: ${e.message}`));
     }
-  } catch (e) { console.error('[Segments cron]', e.message); }
+  } catch (e) { cronLogger.error(`Segments cron: ${e.message}`); }
 });
 
 // ============================================================
@@ -158,12 +161,12 @@ pool.connect()
     await runMigrations(client);
     client.release();
     app.listen(PORT, () => {
-      console.log(`✓ LoyalPro server running on port ${PORT}`);
-      console.log(`  Webhook: POST /yclients/webhook.v2/:companyId`);
-      console.log(`  Register: POST /api/auth/register`);
+      logger.info(`Server running on port ${PORT}`);
+      logger.info('Webhook: POST /yclients/webhook.v2/:companyId');
+      logger.info('Register: POST /api/auth/register');
     });
   })
   .catch(e => {
-    console.error('✗ PostgreSQL error:', e.message);
-    app.listen(PORT, () => console.log(`⚠ Server started WITHOUT DB on port ${PORT}`));
+    logger.error(`PostgreSQL error: ${e.message}`);
+    app.listen(PORT, () => logger.warn(`Server started WITHOUT DB on port ${PORT}`));
   });
