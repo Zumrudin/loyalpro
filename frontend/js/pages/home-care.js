@@ -32,7 +32,7 @@ async function hcFetch() {
           <td>${new Date(r.created_at).toLocaleDateString('ru')}</td>
           <td><b>${esc(r.client_name || '—')}</b></td>
           <td style="color:var(--t3)">${esc(r.client_phone || '—')}</td>
-          <td style="color:var(--t2)">${esc(r.specialist_name || '—')}</td>
+          <td style="color:var(--t2)">${esc(r.specialist_name || '—')}${r.specialist_position ? `<br><span style="font-size:11px;color:var(--t3)">${esc(r.specialist_position)}</span>` : ''}</td>
           <td style="color:var(--t3);max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(r.notes || '')}</td>
           <td onclick="event.stopPropagation()" style="text-align:right;white-space:nowrap">
             <button class="btn btn-sec btn-sm" onclick="hcPrintById(${r.id})" title="Открыть превью">👁</button>
