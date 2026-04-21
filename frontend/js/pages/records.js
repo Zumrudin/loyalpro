@@ -27,6 +27,8 @@ async function loadRecords(page) {
       dateFrom: document.getElementById('rFrom')?.value || '',
       dateTo:   document.getElementById('rTo')?.value   || '',
       status:   document.getElementById('rStat')?.value || '',
+      phone:    document.getElementById('rPhone')?.value.trim() || '',
+      client:   document.getElementById('rClient')?.value.trim() || '',
       page:     recordsPage,
       limit:    RECORDS_PER_PAGE
     });
@@ -38,7 +40,7 @@ async function loadRecords(page) {
     };
     const SStyle = {
       completed: 'background:rgba(0,200,150,.15);color:#007a5a',
-      arrived:   'background:rgba(245,158,11,.15);color:#b45309',
+      arrived:   'background:rgba(0,200,150,.15);color:#007a5a',
       confirmed: 'background:rgba(59,130,246,.12);color:#1d4ed8',
       waiting:   'background:rgba(59,130,246,.12);color:#1d4ed8',
       pending:   'background:rgba(59,130,246,.12);color:#1d4ed8',

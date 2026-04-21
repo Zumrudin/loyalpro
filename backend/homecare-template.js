@@ -569,7 +569,7 @@ html, body {
     <div class="footer">
       <div class="footer-contacts">${footerContacts || escHtml(salonName)}</div>
       <div class="footer-sign">
-        Специалист: ${specialist || '—'}${specialistPosition ? ` <span style="font-size:10px;opacity:0.75">(${specialistPosition})</span>` : ''}
+        ${specialistPosition ? `${escHtml(specialistPosition)} ` : 'Специалист: '}${specialist || '—'}
         <span class="footer-sign-line"></span>
       </div>
     </div>

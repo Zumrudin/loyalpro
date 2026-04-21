@@ -51,8 +51,8 @@ function getRecordStatus(ycr) {
   }
   if (ycr.deleted) return 'deleted';
   const att = ycr.attendance !== undefined ? parseInt(ycr.attendance) : undefined;
-  if (att === 2) return 'arrived';
-  if (att === 1) return 'confirmed';
+  if (att === 1) return 'arrived';
+  if (att === 2) return 'confirmed';
   if (att === -1) return 'no_show';
   if (att === 0) return 'waiting';
   if (ycr.visit_attendance === 1) return 'completed';
@@ -327,7 +327,7 @@ async function runSync(salon, syncType, userId) {
                JSON.stringify(ycr.services || []), JSON.stringify(ycr.staff || []),
                dbClientId, exRec.id]
             );
-            if (status === 'completed' && exRec.status !== 'completed' && !exRec.bonus_processed
+            if (status === 'completed' && !exRec.bonus_processed
                 && dbClientId && settings && recCost > 0) {
               clientBonus += await processCompletedRecord(exRec.id, dbClientId, ycr, salon.id, settings);
             }
@@ -573,7 +573,7 @@ async function processRecordEvent(payload, salon, settings) {
     return;
   }
 
-  if (data.paid_full !== 1 || data.attendance !== 1) {
+  if (data.paid_full !== 1 || (data.attendance !== 1 && data.attendance !== 2)) {
     logger.info(`skip accrual record=${ycRecordId} paid_full=${data.paid_full} attendance=${data.attendance}`);
     return;
   }
@@ -583,7 +583,7 @@ async function processRecordEvent(payload, salon, settings) {
     // Record already processed — on update events re-check if discount appeared and revert cashback if needed
     const existing = await getCashbackByRecord(ycRecordId);
     const alreadyGiven = parseFloat(existing?.cashback_amount || 0);
-    if (alreadyGiven > 0 && (data.paid_full === 1 || data.attendance === 1)) {
+    if (alreadyGiven > 0) {
       let services = data.services || [];
       if (!services.length) {
         try {
@@ -592,18 +592,26 @@ async function processRecordEvent(payload, salon, settings) {
         } catch(e) { /* ignore */ }
       }
       const hasDiscountNow = services.some(s => parseFloat(s.discount||0) > 0 || parseFloat(s.cost_to_pay ?? s.cost ?? 0) < parseFloat(s.cost||0));
+      // Only check redemption tied to this specific record (not date-based — too broad)
       const hasRedemption = await db.oneOrNone(
-        `SELECT 1 FROM loyalty_card_transactions WHERE client_id=$1 AND amount<0
-         AND (record_id=$2 OR record_id=$3 OR txn_date::date=$4::date) LIMIT 1`,
-        [client?.id, record?.id, ycRecordId, String(data.date||'').split(' ')[0]||null]
+        `SELECT 1 FROM loyalty_card_transactions WHERE client_id=$1 AND amount<0 AND record_id=$2 LIMIT 1`,
+        [client?.id, record?.id]
       );
       if (hasDiscountNow || hasRedemption) {
         logger.info(`update detected discount/redemption — reverting cashback record=${ycRecordId}`);
         await revertCashback(ycRecordId, salon, clientYcId);
       }
+    } else if (existing && existing.cashback_amount === 0) {
+      // Previous attempt denied — delete stale lock so this event can be re-evaluated
+      await db.query('DELETE FROM finances_log WHERE yclients_record_id=$1', [ycRecordId]);
+      logger.info(`retry: removed stale denial lock for record=${ycRecordId}`);
+      // Re-claim so we fall through to accrual logic below
+      const reClaimed = await claimRecordProcessing(salon.id, ycRecordId, client?.id);
+      if (!reClaimed) { logger.info(`retry claim failed record=${ycRecordId}`); return; }
+    } else {
+      logger.info(`duplicate record=${ycRecordId} existing_cashback=${existing?.cashback_amount}`);
+      return;
     }
-    logger.info(`duplicate record=${ycRecordId} existing_cashback=${existing?.cashback_amount}`);
-    return;
   }
 
   try {
@@ -615,11 +623,10 @@ async function processRecordEvent(payload, salon, settings) {
       } catch(e) { logger.info(`ycGet failed: ${e.message}`); }
     }
 
-    // Check for redemption transactions linked to this visit
+    // Check for redemption tied specifically to this record (date-based match is too broad)
     const hasRedemptionTx = await db.oneOrNone(
-      `SELECT 1 FROM loyalty_card_transactions WHERE client_id=$1 AND amount<0
-       AND (record_id=$2 OR record_id=$3 OR txn_date::date=$4::date) LIMIT 1`,
-      [client?.id, record?.id, ycRecordId, String(data.date||'').split(' ')[0]||null]
+      `SELECT 1 FROM loyalty_card_transactions WHERE client_id=$1 AND amount<0 AND record_id=$2 LIMIT 1`,
+      [client?.id, record?.id]
     );
 
     let paidAmount = 0;
@@ -630,6 +637,13 @@ async function processRecordEvent(payload, salon, settings) {
       const disc    = parseFloat(s.discount || 0);
       if (disc > 0 || costPay < cost) { hasDiscount = true; break; }
       paidAmount += costPay;
+    }
+
+    // Fallback: if services array is empty (missing from payload and ycGet failed),
+    // use the record-level cost so we don't silently deny a full-price visit
+    if (!hasDiscount && paidAmount === 0 && services.length === 0) {
+      paidAmount = getRecordCost(data);
+      logger.info(`record=${ycRecordId} services unavailable — using record-level cost=${paidAmount}`);
     }
 
     logger.info(`record=${ycRecordId} hasDiscount=${hasDiscount} hasRedemption=${!!hasRedemptionTx} paidAmount=${paidAmount}`);

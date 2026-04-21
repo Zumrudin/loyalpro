@@ -397,8 +397,24 @@ app.post('/api/webhook/yclients/:companyId', async (req, res) => {
     const ycRec = payload.data;
 
     if (payload.resource_type === 'record' && ycRec) {
-      const status = ycRec.status_id === 1 ? 'completed'
-                   : ycRec.status_id === 3 ? 'cancelled' : 'pending';
+      const status = (() => {
+        if (ycRec.deleted) return 'deleted';
+        const sid = ycRec.status_id !== undefined && ycRec.status_id !== null ? parseInt(ycRec.status_id) : undefined;
+        if (sid !== undefined) {
+          if (sid === 4) return 'completed';
+          if (sid === 3) return 'arrived';
+          if (sid === 2) return 'confirmed';
+          if (sid === 5) return 'cancelled';
+          if (sid === 6) return 'no_show';
+          if (sid === 7) return 'deleted';
+          return 'waiting';
+        }
+        const att = ycRec.attendance !== undefined ? parseInt(ycRec.attendance) : undefined;
+        if (att === 2) return 'arrived';
+        if (att === 1) return 'confirmed';
+        if (att === -1) return 'no_show';
+        return 'waiting';
+      })();
 
       let client = null;
       if (ycRec.client?.id) {
@@ -436,8 +452,16 @@ app.post('/api/webhook/yclients/:companyId', async (req, res) => {
         );
       } else {
         await db.query(
-          'UPDATE records SET status=$1,raw_payload=$2,updated_at=NOW() WHERE id=$3',
-          [status, JSON.stringify(ycRec), record.id]
+          `UPDATE records SET status=$1, raw_payload=$2,
+           visit_datetime=$3, visit_date=$4, amount=$5,
+           services=$6, staff=$7, updated_at=NOW() WHERE id=$8`,
+          [status, JSON.stringify(ycRec),
+           ycRec.date || null,
+           String(ycRec.date || '').split(' ')[0] || null,
+           ycRec.cost || 0,
+           JSON.stringify(ycRec.services || []),
+           JSON.stringify(ycRec.staff || []),
+           record.id]
         );
         if (status === 'cancelled' && record.bonus_processed && client) {
           await cancelRecordBonuses(record.id, client.id, salon.id);
@@ -705,27 +729,7 @@ app.post('/api/clients/:id/bonus', auth, async (req, res) => {
   } finally { pg.release(); }
 });
 
-// ============================================================
-// RECORDS
-// ============================================================
-app.get('/api/records', auth, async (req, res) => {
-  try {
-    const { dateFrom, dateTo, status, limit = 200 } = req.query;
-    let where = ['r.salon_id=$1'], params = [req.user.salonId], i = 2;
-    if (dateFrom) { where.push(`r.visit_date>=$${i}`); params.push(dateFrom); i++; }
-    if (dateTo)   { where.push(`r.visit_date<=$${i}`); params.push(dateTo); i++; }
-    if (status)   { where.push(`r.status=$${i}`); params.push(status); i++; }
-    const w = where.join(' AND ');
-    const total = (await db.one(`SELECT COUNT(*) FROM records r WHERE ${w}`, params)).count;
-    const records = await db.many(
-      `SELECT r.*,c.name as client_name,c.phone as client_phone
-       FROM records r LEFT JOIN clients c ON c.id=r.client_id
-       WHERE ${w} ORDER BY r.visit_date DESC,r.id DESC LIMIT $${i}`,
-      [...params, limit]
-    );
-    res.json({ records, total: parseInt(total) });
-  } catch (e) { res.status(500).json({ error: e.message }); }
-});
+// /api/records is handled by backend/routes/api.js (mounted via mountRoutes)
 
 // ============================================================
 // ANALYTICS
@@ -740,10 +744,10 @@ app.get('/api/analytics/dashboard', auth, async (req, res) => {
       db.one(`SELECT COUNT(*) FROM clients WHERE salon_id=$1 AND last_visit_at<NOW()-INTERVAL '60 days' AND visits_count>0`, [sid]),
       db.one(`SELECT COUNT(*) FROM clients WHERE salon_id=$1 AND created_at>NOW()-INTERVAL '${days} days'`, [sid]),
       db.one(`SELECT COALESCE(SUM(bonus_balance),0) as tb,COALESCE(SUM(total_spent),0) as ts FROM clients WHERE salon_id=$1`, [sid]),
-      db.one(`SELECT COUNT(*) as rc,COALESCE(SUM(amount),0) as rv,COALESCE(SUM(bonus_accrued),0) as ba FROM records WHERE salon_id=$1 AND status='completed' AND visit_date>=NOW()-INTERVAL '${days} days'`, [sid]),
-      db.many(`SELECT svc->>'title' as service_name,COUNT(*) as cnt,SUM(r.amount) as total_amount FROM records r,jsonb_array_elements(COALESCE(r.services,'[]'::jsonb)) svc WHERE r.salon_id=$1 AND r.status='completed' AND r.visit_date>=NOW()-INTERVAL '${days} days' GROUP BY svc->>'title' ORDER BY cnt DESC LIMIT 8`, [sid]),
+      db.one(`SELECT COUNT(*) as rc,COALESCE(SUM(amount),0) as rv,COALESCE(SUM(bonus_accrued),0) as ba FROM records WHERE salon_id=$1 AND status IN ('completed','confirmed') AND visit_date>=NOW()-INTERVAL '${days} days'`, [sid]),
+      db.many(`SELECT svc->>'title' as service_name,COUNT(*) as cnt,SUM(r.amount) as total_amount FROM records r,jsonb_array_elements(COALESCE(r.services,'[]'::jsonb)) svc WHERE r.salon_id=$1 AND r.status IN ('completed','confirmed') AND r.visit_date>=NOW()-INTERVAL '${days} days' GROUP BY svc->>'title' ORDER BY cnt DESC LIMIT 8`, [sid]),
       db.many(`SELECT loyalty_level,COUNT(*) as cnt FROM clients WHERE salon_id=$1 GROUP BY loyalty_level`, [sid]),
-      db.many(`SELECT visit_date::text,COUNT(*) as records,COALESCE(SUM(amount),0) as revenue,COALESCE(SUM(bonus_accrued),0) as bonuses FROM records WHERE salon_id=$1 AND status='completed' AND visit_date>=NOW()-INTERVAL '${days} days' GROUP BY visit_date ORDER BY visit_date`, [sid]),
+      db.many(`SELECT visit_date::text,COUNT(*) as records,COALESCE(SUM(amount),0) as revenue,COALESCE(SUM(bonus_accrued),0) as bonuses FROM records WHERE salon_id=$1 AND status IN ('completed','confirmed') AND visit_date>=NOW()-INTERVAL '${days} days' GROUP BY visit_date ORDER BY visit_date`, [sid]),
       db.many(`SELECT bt.*,c.name as client_name FROM bonus_transactions bt JOIN clients c ON c.id=bt.client_id WHERE bt.salon_id=$1 ORDER BY bt.created_at DESC LIMIT 15`, [sid]),
       db.one(`SELECT * FROM sync_logs WHERE salon_id=$1 ORDER BY started_at DESC LIMIT 1`, [sid]),
     ]);
@@ -790,7 +794,7 @@ app.get('/api/analytics/retention', auth, async (req, res) => {
        FROM (
          SELECT client_id,MIN(visit_date) OVER (PARTITION BY client_id) as first_visit,
                 EXTRACT(MONTH FROM AGE(visit_date,MIN(visit_date) OVER (PARTITION BY client_id))) as months_since
-         FROM records WHERE salon_id=$1 AND status='completed' AND client_id IS NOT NULL
+         FROM records WHERE salon_id=$1 AND status IN ('completed','confirmed') AND client_id IS NOT NULL
        ) t GROUP BY cohort_month ORDER BY cohort_month DESC LIMIT 6`,
       [req.user.salonId]
     );

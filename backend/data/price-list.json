@@ -1,0 +1,1388 @@
+{
+  "updated_at": "2026-04-17",
+  "sections": [
+    {
+      "id": "consultation",
+      "name": "Консультация и диагностика",
+      "subcategories": [
+        {
+          "id": "dermatology-consultation",
+          "name": "Дерматология / Косметология",
+          "services": [
+            {
+              "name": "Косметологическая консультация первичная",
+              "note": "В день выполнения процедуры в подарок",
+              "price_doctor": 3000,
+              "price_chief": 5000
+            },
+            {
+              "name": "Косметологическая консультация повторная",
+              "note": "В день выполнения процедуры в подарок",
+              "price_doctor": 2000,
+              "price_chief": 3000
+            }
+          ]
+        },
+        {
+          "id": "trichology-consultation",
+          "name": "Трихологическая консультация",
+          "services": [
+            {
+              "name": "Трихологическая консультация первичная",
+              "price_doctor": 3000,
+              "price_chief": 4000
+            },
+            {
+              "name": "Трихологическая консультация повторная",
+              "price_doctor": null,
+              "price_chief": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "hardware-cosmetology",
+      "name": "Аппаратная косметология",
+      "subcategories": [
+        {
+          "id": "volnewmer",
+          "name": "RF-лифтинг VOLNEWMER",
+          "services": [
+            {
+              "name": "300 импульсов",
+              "price_doctor": 67500,
+              "price_chief": 75000
+            },
+            {
+              "name": "400 импульсов",
+              "price_doctor": 81000,
+              "price_chief": 90000
+            },
+            {
+              "name": "500 импульсов",
+              "price_doctor": 108000,
+              "price_chief": 120000
+            },
+            {
+              "name": "600 импульсов",
+              "price_doctor": 130500,
+              "price_chief": 145000
+            },
+            {
+              "name": "800 импульсов",
+              "price_doctor": 162000,
+              "price_chief": 180000
+            },
+            {
+              "name": "1200 импульсов",
+              "price_doctor": 252000,
+              "price_chief": 280000
+            },
+            {
+              "name": "1 доп. импульс",
+              "price_doctor": 270,
+              "price_chief": 270
+            }
+          ]
+        },
+        {
+          "id": "pladou",
+          "name": "PLADOU",
+          "services": [
+            {
+              "name": "Зона глаз 300 импульсов",
+              "price_doctor": 15000,
+              "price_chief": 18000
+            },
+            {
+              "name": "Лицо (лечение) 600 импульсов",
+              "price_doctor": 20000,
+              "price_chief": 23000
+            },
+            {
+              "name": "Лицо (лечение и омоложение) 800 импульсов",
+              "price_doctor": 25000,
+              "price_chief": 28000
+            },
+            {
+              "name": "Лицо и шея (лечение) 1000 импульсов",
+              "price_doctor": 30000,
+              "price_chief": 33000
+            },
+            {
+              "name": "Лицо и шея (лечение, омоложение) 1200 импульсов",
+              "price_doctor": 35000,
+              "price_chief": 38000
+            },
+            {
+              "name": "Лицо и шея (шлифовка, лифтинг) 1400 импульсов",
+              "price_doctor": 45000,
+              "price_chief": 48000
+            },
+            {
+              "name": "Тело (лечение) 1600 импульсов",
+              "price_doctor": 50000,
+              "price_chief": 53000
+            },
+            {
+              "name": "Тело и спина (шлифовка) 2000 импульсов",
+              "price_doctor": 60000,
+              "price_chief": 63000
+            },
+            {
+              "name": "1 доп. импульс",
+              "price_doctor": 60,
+              "price_chief": 60
+            }
+          ]
+        },
+        {
+          "id": "lumecca",
+          "name": "Фотоомоложение с LUMECCA",
+          "services": [
+            {
+              "name": "Лицо",
+              "price_doctor": 15000,
+              "price_chief": 17500
+            },
+            {
+              "name": "Шея",
+              "price_doctor": 7000,
+              "price_chief": 9000
+            },
+            {
+              "name": "Область декольте",
+              "price_doctor": 9500,
+              "price_chief": 11500
+            },
+            {
+              "name": "Лицо + шея",
+              "price_doctor": 20000,
+              "price_chief": 23000
+            },
+            {
+              "name": "Лицо + шея + декольте",
+              "price_doctor": 23000,
+              "price_chief": 25000
+            },
+            {
+              "name": "Кисти рук (обе руки)",
+              "price_doctor": 10000,
+              "price_chief": 13000
+            },
+            {
+              "name": "Щеки",
+              "price_doctor": 10000,
+              "price_chief": 12500
+            },
+            {
+              "name": "Подбородок",
+              "price_doctor": 4000,
+              "price_chief": 6000
+            },
+            {
+              "name": "Крылья носа",
+              "price_doctor": 5000,
+              "price_chief": 7000
+            },
+            {
+              "name": "Минимальная зона",
+              "price_doctor": 4500,
+              "price_chief": 6000
+            }
+          ]
+        },
+        {
+          "id": "tesla-former",
+          "name": "TESLA FORMER",
+          "services": [
+            {
+              "name": "Первая процедура-знакомство",
+              "price_doctor": 4500,
+              "price_chief": null
+            },
+            {
+              "name": "Одна зона 30 мин",
+              "price_doctor": 6000,
+              "price_chief": null
+            },
+            {
+              "name": "Курс 10 процедур",
+              "price_doctor": 45000,
+              "price_chief": null
+            },
+            {
+              "name": "Курс 5 процедур",
+              "price_doctor": 23900,
+              "price_chief": null
+            }
+          ]
+        },
+        {
+          "id": "morpheus8",
+          "name": "Микроигольчатый RF-лифтинг Morpheus 8",
+          "services": [
+            {
+              "name": "Лицо",
+              "price_doctor": 55000,
+              "price_chief": 60500
+            },
+            {
+              "name": "Шея",
+              "price_doctor": 40000,
+              "price_chief": 44500
+            },
+            {
+              "name": "Лицо, шея",
+              "price_doctor": 68000,
+              "price_chief": 75000
+            },
+            {
+              "name": "Лицо, шея, декольте",
+              "price_doctor": 89000,
+              "price_chief": 98000
+            },
+            {
+              "name": "Шея, декольте",
+              "price_doctor": 60000,
+              "price_chief": 66000
+            },
+            {
+              "name": "Декольте",
+              "price_doctor": 45000,
+              "price_chief": 50000
+            },
+            {
+              "name": "Глаза",
+              "price_doctor": 35000,
+              "price_chief": 38500
+            },
+            {
+              "name": "Живот",
+              "price_doctor": 50000,
+              "price_chief": 55000
+            },
+            {
+              "name": "Колени",
+              "price_doctor": 45000,
+              "price_chief": 49500
+            },
+            {
+              "name": "Локти",
+              "price_doctor": 32000,
+              "price_chief": 35000
+            },
+            {
+              "name": "Руки до локтей",
+              "price_doctor": 40000,
+              "price_chief": 44000
+            },
+            {
+              "name": "Кисти рук",
+              "price_doctor": 35000,
+              "price_chief": 38500
+            },
+            {
+              "name": "Ягодицы",
+              "price_doctor": 65000,
+              "price_chief": 71500
+            },
+            {
+              "name": "Область бедер",
+              "price_doctor": 75000,
+              "price_chief": 82500
+            }
+          ]
+        },
+        {
+          "id": "laser-epilation",
+          "name": "Лазерная эпиляция",
+          "services": [
+            {
+              "name": "Лицо полностью",
+              "price_doctor": 2500,
+              "price_chief": null
+            },
+            {
+              "name": "Лоб",
+              "price_doctor": 800,
+              "price_chief": null
+            },
+            {
+              "name": "Щеки",
+              "price_doctor": 800,
+              "price_chief": null
+            },
+            {
+              "name": "Виски или бакенбарды или нос",
+              "price_doctor": 700,
+              "price_chief": null
+            },
+            {
+              "name": "Малая зона (верхняя губа / подбородок / межбровье)",
+              "price_doctor": 1000,
+              "price_chief": null
+            },
+            {
+              "name": "Шея (передняя и задняя поверхность)",
+              "price_doctor": 700,
+              "price_chief": null
+            },
+            {
+              "name": "Руки полностью",
+              "price_doctor": 3000,
+              "price_chief": null
+            },
+            {
+              "name": "Руки до локтя",
+              "price_doctor": 2000,
+              "price_chief": null
+            },
+            {
+              "name": "Подмышки",
+              "price_doctor": 1100,
+              "price_chief": null
+            },
+            {
+              "name": "Пальцы рук",
+              "price_doctor": 550,
+              "price_chief": null
+            },
+            {
+              "name": "Кисти рук с пальцами",
+              "price_doctor": 1000,
+              "price_chief": null
+            },
+            {
+              "name": "Кисти рук",
+              "price_doctor": 550,
+              "price_chief": null
+            },
+            {
+              "name": "Белая линия живота",
+              "price_doctor": 900,
+              "price_chief": null
+            },
+            {
+              "name": "Плечи",
+              "price_doctor": 1500,
+              "price_chief": null
+            },
+            {
+              "name": "Спина нижняя треть (поясница / крестец)",
+              "price_doctor": 2500,
+              "price_chief": null
+            },
+            {
+              "name": "Спина полностью",
+              "price_doctor": 3500,
+              "price_chief": null
+            },
+            {
+              "name": "Живот полностью",
+              "price_doctor": 2500,
+              "price_chief": null
+            },
+            {
+              "name": "Ореолы",
+              "price_doctor": 550,
+              "price_chief": null
+            },
+            {
+              "name": "Грудь полностью",
+              "price_doctor": 2500,
+              "price_chief": null
+            },
+            {
+              "name": "Декольте",
+              "price_doctor": 1800,
+              "price_chief": null
+            },
+            {
+              "name": "Бедра 1 зона",
+              "price_doctor": 2000,
+              "price_chief": null
+            },
+            {
+              "name": "Бедра полностью",
+              "price_doctor": 3500,
+              "price_chief": null
+            },
+            {
+              "name": "Голени с коленями",
+              "price_doctor": 2500,
+              "price_chief": null
+            },
+            {
+              "name": "Колени",
+              "price_doctor": 550,
+              "price_chief": null
+            },
+            {
+              "name": "Стопа",
+              "price_doctor": 550,
+              "price_chief": null
+            },
+            {
+              "name": "Пальцы ног",
+              "price_doctor": 550,
+              "price_chief": null
+            },
+            {
+              "name": "Стопа с пальцами ног",
+              "price_doctor": 1000,
+              "price_chief": null
+            },
+            {
+              "name": "Ноги полностью",
+              "price_doctor": 5000,
+              "price_chief": null
+            },
+            {
+              "name": "Классическое бикини",
+              "price_doctor": 1100,
+              "price_chief": null
+            },
+            {
+              "name": "Тотальное бикини",
+              "price_doctor": 2500,
+              "price_chief": null
+            },
+            {
+              "name": "Межъягодичная зона",
+              "price_doctor": 1100,
+              "price_chief": null
+            },
+            {
+              "name": "Ягодицы",
+              "price_doctor": 2500,
+              "price_chief": null
+            },
+            {
+              "name": "No1: Ноги полностью + руки полностью + тотальное бикини + подмышки",
+              "price_doctor": 7000,
+              "price_chief": null
+            },
+            {
+              "name": "No2: Ноги полностью + бикини тотальное + подмышки",
+              "price_doctor": 5000,
+              "price_chief": null
+            },
+            {
+              "name": "No3: Голень с коленями + бикини тотальное + подмышки",
+              "price_doctor": 2900,
+              "price_chief": null
+            },
+            {
+              "name": "No4: Бикини тотальное + подмышки",
+              "note": "+30% к базовой зоне",
+              "price_doctor": null,
+              "price_chief": null
+            },
+            {
+              "name": "Мужская эпиляция",
+              "note": "+30% к основному прайсу",
+              "price_doctor": 8500,
+              "price_chief": null
+            }
+          ]
+        },
+        {
+          "id": "beautylizer",
+          "name": "RSL массаж тела на аппарате Beautylizer",
+          "services": [
+            {
+              "name": "1 процедура",
+              "price_doctor": 5500,
+              "price_chief": null
+            },
+            {
+              "name": "Абонемент 6 процедур",
+              "price_doctor": 29000,
+              "price_chief": null
+            },
+            {
+              "name": "Абонемент 10 процедур",
+              "price_doctor": 46000,
+              "price_chief": null
+            },
+            {
+              "name": "Абонемент 12 процедур",
+              "price_doctor": 54000,
+              "price_chief": null
+            }
+          ]
+        },
+        {
+          "id": "microcurrent",
+          "name": "Микротоковая терапия",
+          "services": [
+            {
+              "name": "Лимфодренаж 20 минут (малая зона)",
+              "price_doctor": 3000,
+              "price_chief": null
+            },
+            {
+              "name": "Лицо 40 минут",
+              "price_doctor": 5500,
+              "price_chief": null
+            },
+            {
+              "name": "«Лифтинг» лицо + шея с маской",
+              "price_doctor": 7000,
+              "price_chief": null
+            },
+            {
+              "name": "Абонемент «Лифтинг» лицо + шея с уходом 6 процедур",
+              "price_doctor": 25000,
+              "price_chief": null
+            },
+            {
+              "name": "Абонемент «Лифтинг» лицо + шея с уходом 10 процедур",
+              "price_doctor": 40000,
+              "price_chief": null
+            }
+          ]
+        },
+        {
+          "id": "profacial",
+          "name": "ProFacial",
+          "services": [
+            {
+              "name": "ProFacial «Голливуд» лицо",
+              "price_doctor": 7000,
+              "price_chief": null
+            },
+            {
+              "name": "ProFacial «Голливуд» лицо, шея, декольте",
+              "price_doctor": 10000,
+              "price_chief": null
+            },
+            {
+              "name": "Аквапилинг лицо (HydraFacial)",
+              "price_doctor": 5500,
+              "price_chief": null
+            },
+            {
+              "name": "Аквапилинг лицо, шея, декольте (HydraFacial)",
+              "price_doctor": 8500,
+              "price_chief": null
+            },
+            {
+              "name": "Аквапилинг Peach Peel + Пилинг (HydraFacial)",
+              "price_doctor": 9000,
+              "price_chief": null
+            },
+            {
+              "name": "RF-лифтинг лицо",
+              "price_doctor": 4000,
+              "price_chief": null
+            },
+            {
+              "name": "RF-лифтинг лицо, шея, декольте",
+              "price_doctor": 6000,
+              "price_chief": null
+            },
+            {
+              "name": "RF-лифтинг шея, декольте",
+              "price_doctor": 3000,
+              "price_chief": null
+            }
+          ]
+        },
+        {
+          "id": "heleo",
+          "name": "HELEO",
+          "services": [
+            {
+              "name": "Лицо",
+              "price_doctor": 6500,
+              "price_chief": null
+            },
+            {
+              "name": "Шея",
+              "price_doctor": 9000,
+              "price_chief": null
+            },
+            {
+              "name": "Лицо, шея, декольте",
+              "price_doctor": 11000,
+              "price_chief": null
+            },
+            {
+              "name": "Кисти рук",
+              "price_doctor": 7000,
+              "price_chief": null
+            },
+            {
+              "name": "LED",
+              "price_doctor": 3000,
+              "price_chief": null
+            }
+          ]
+        },
+        {
+          "id": "heleo-complexes",
+          "name": "HELEO — Комплексы",
+          "services": [
+            {
+              "name": "Лицо (4 процедуры)",
+              "price_doctor": 21900,
+              "price_chief": null
+            },
+            {
+              "name": "Лицо (6 процедур)",
+              "price_doctor": 30700,
+              "price_chief": null
+            },
+            {
+              "name": "Лицо (8 процедур)",
+              "price_doctor": 38500,
+              "price_chief": null
+            },
+            {
+              "name": "Лицо (10 процедур)",
+              "price_doctor": 45000,
+              "price_chief": null
+            },
+            {
+              "name": "Лицо, шея, декольте (4 процедуры)",
+              "price_doctor": 31500,
+              "price_chief": null
+            },
+            {
+              "name": "Лицо, шея, декольте (6 процедур)",
+              "price_doctor": 44200,
+              "price_chief": null
+            },
+            {
+              "name": "Лицо, шея, декольте (8 процедур)",
+              "price_doctor": 55400,
+              "price_chief": null
+            },
+            {
+              "name": "Лицо, шея, декольте (10 процедур)",
+              "price_doctor": 65000,
+              "price_chief": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "injection-cosmetology",
+      "name": "Инъекционная косметология",
+      "subcategories": [
+        {
+          "id": "biorevitalization",
+          "name": "Биоревитализация",
+          "services": [
+            {
+              "name": "REVI EYE",
+              "price_doctor": 15500,
+              "price_chief": 18500
+            },
+            {
+              "name": "REVI STYLE 1 ml",
+              "price_doctor": 16500,
+              "price_chief": 19500
+            },
+            {
+              "name": "REVI STYLE 2 ml",
+              "price_doctor": 19000,
+              "price_chief": 22000
+            },
+            {
+              "name": "REVI SILK 1 ml",
+              "price_doctor": 16500,
+              "price_chief": 19500
+            },
+            {
+              "name": "REVI SILK 2 ml",
+              "price_doctor": 19000,
+              "price_chief": 22000
+            },
+            {
+              "name": "REVI STRONG 1 ml",
+              "price_doctor": 17500,
+              "price_chief": 20500
+            },
+            {
+              "name": "REVI STRONG 2 ml",
+              "price_doctor": 21000,
+              "price_chief": 24000
+            },
+            {
+              "name": "MESOXANTIN 1,5 ml",
+              "price_doctor": 20000,
+              "price_chief": 23000
+            },
+            {
+              "name": "MESOEYE 1 ml",
+              "price_doctor": 19000,
+              "price_chief": 22000
+            },
+            {
+              "name": "MESOWHARTON 1,5 ml",
+              "price_doctor": 20000,
+              "price_chief": 23000
+            },
+            {
+              "name": "NOVACUTAN Sbio 2 ml",
+              "price_doctor": 20000,
+              "price_chief": 23000
+            },
+            {
+              "name": "NOVACUTAN Ybio 2 ml",
+              "price_doctor": 20000,
+              "price_chief": 23000
+            },
+            {
+              "name": "PROFHILO 2 ml",
+              "price_doctor": 23000,
+              "price_chief": 26000
+            },
+            {
+              "name": "STYLAGE HYDRA 1 ml",
+              "price_doctor": 17000,
+              "price_chief": 20000
+            },
+            {
+              "name": "JALUPRO 3 ml",
+              "price_doctor": 19500,
+              "price_chief": 22500
+            },
+            {
+              "name": "PLINEST FAST 2 ml",
+              "price_doctor": 20000,
+              "price_chief": 23000
+            },
+            {
+              "name": "PLINEST 2 ml",
+              "price_doctor": 20000,
+              "price_chief": 23000
+            },
+            {
+              "name": "Belotero Hydro 1 ml",
+              "price_doctor": 17500,
+              "price_chief": 20000
+            },
+            {
+              "name": "Viscoderm Hydrobooster 1,1 ml",
+              "price_doctor": 23000,
+              "price_chief": 26000
+            },
+            {
+              "name": "IALEST 2 ml",
+              "price_doctor": 20000,
+              "price_chief": 23000
+            }
+          ]
+        },
+        {
+          "id": "lip-augmentation",
+          "name": "Увеличение губ",
+          "services": [
+            {
+              "name": "Belotero lips contur 0,6 ml",
+              "price_doctor": 19500,
+              "price_chief": 22500
+            },
+            {
+              "name": "Belotero Intense 1 ml",
+              "price_doctor": 23500,
+              "price_chief": 26500
+            },
+            {
+              "name": "Stylage M Lidocaine 1 ml",
+              "price_doctor": 23500,
+              "price_chief": 26500
+            },
+            {
+              "name": "Stylage M 1 ml",
+              "price_doctor": 23500,
+              "price_chief": 26000
+            },
+            {
+              "name": "Stylage S 0,8 ml",
+              "price_doctor": 23000,
+              "price_chief": 26000
+            },
+            {
+              "name": "Stylage Special lips",
+              "price_doctor": 24500,
+              "price_chief": 27500
+            },
+            {
+              "name": "Увлажнение губ Stylage Hydro max",
+              "price_doctor": 21000,
+              "price_chief": 24000
+            },
+            {
+              "name": "Aliaxin Lv 1 ml",
+              "price_doctor": 23500,
+              "price_chief": 26500
+            },
+            {
+              "name": "Лонгидаза 1 доза",
+              "price_doctor": 13000,
+              "price_chief": 15000
+            },
+            {
+              "name": "Лонгидаза 2 дозы",
+              "price_doctor": 18000,
+              "price_chief": 20000
+            }
+          ]
+        },
+        {
+          "id": "contour-plastic",
+          "name": "Контурная пластика",
+          "services": [
+            {
+              "name": "Коррекция носогубной складки 1 ml",
+              "price_doctor": 23000,
+              "price_chief": 26000
+            },
+            {
+              "name": "Коррекция носослезной борозды",
+              "price_doctor": 25000,
+              "price_chief": 28000
+            },
+            {
+              "name": "Яблочки молодости / лифтинг средней трети 1 ml",
+              "price_doctor": 23000,
+              "price_chief": 26000
+            },
+            {
+              "name": "3D моделирование подбородка 1 ml",
+              "price_doctor": 23000,
+              "price_chief": 26000
+            },
+            {
+              "name": "Заполнение височной области 1 ml",
+              "price_doctor": 25000,
+              "price_chief": 28000
+            },
+            {
+              "name": "Бланширование лба 1 ml",
+              "price_doctor": 25000,
+              "price_chief": 28000
+            },
+            {
+              "name": "Нехирургическая ринопластика",
+              "price_doctor": 25000,
+              "price_chief": 28000
+            },
+            {
+              "name": "Омоложение шеи / кольца Венеры 1 ml",
+              "price_doctor": 23000,
+              "price_chief": 26000
+            },
+            {
+              "name": "Коррекция мочек уха",
+              "price_doctor": 23000,
+              "price_chief": 26000
+            },
+            {
+              "name": "Full face 3 ml",
+              "price_doctor": 60000,
+              "price_chief": 70000
+            },
+            {
+              "name": "Full face 4 ml",
+              "price_doctor": 80000,
+              "price_chief": 90000
+            },
+            {
+              "name": "Full face 5 ml",
+              "price_doctor": 90000,
+              "price_chief": 100000
+            },
+            {
+              "name": "Full face 6 ml",
+              "price_doctor": 110000,
+              "price_chief": 120000
+            }
+          ]
+        },
+        {
+          "id": "botulinum",
+          "name": "Ботулинотерапия",
+          "services": [
+            {
+              "name": "Межбровье",
+              "price_doctor": 7000,
+              "price_chief": 8000
+            },
+            {
+              "name": "Лоб + межбровье",
+              "price_doctor": 14000,
+              "price_chief": 16000
+            },
+            {
+              "name": "Уголки глаз «гусиные лапки»",
+              "price_doctor": 6000,
+              "price_chief": 7000
+            },
+            {
+              "name": "Спинка носа",
+              "price_doctor": 4000,
+              "price_chief": 5000
+            },
+            {
+              "name": "5в1: Лоб + брови + межбровье + глаза + нос",
+              "price_doctor": 19000,
+              "price_chief": 23000
+            },
+            {
+              "name": "Крылья носа",
+              "price_doctor": 3000,
+              "price_chief": 4000
+            },
+            {
+              "name": "Подбородок",
+              "price_doctor": 4000,
+              "price_chief": 5000
+            },
+            {
+              "name": "Лечение десневой (гингивальной) улыбки",
+              "price_doctor": 4500,
+              "price_chief": 6000
+            },
+            {
+              "name": "Поднятие уголков рта",
+              "price_doctor": 4000,
+              "price_chief": 5000
+            },
+            {
+              "name": "Кончик носа",
+              "price_doctor": 4000,
+              "price_chief": 5000
+            },
+            {
+              "name": "Лифтинг бровей",
+              "price_doctor": 9000,
+              "price_chief": 10000
+            },
+            {
+              "name": "Шея (тяжи платизмы)",
+              "price_doctor": 19000,
+              "price_chief": 21000
+            },
+            {
+              "name": "Коррекция нижней челюсти (бруксизм)",
+              "price_doctor": 23000,
+              "price_chief": 25000
+            },
+            {
+              "name": "Коррекция через 2 недели 1 ед (миотокс)",
+              "price_doctor": 370,
+              "price_chief": 370
+            },
+            {
+              "name": "Коррекция через 2 недели 1 ед (диспорт)",
+              "price_doctor": 200,
+              "price_chief": 200
+            },
+            {
+              "name": "Лечение гипергидроза (подмышки / стопы / ладони)",
+              "price_doctor": 30000,
+              "price_chief": 35000
+            },
+            {
+              "name": "Мужская ботулинотерапия",
+              "note": "+30% к основному прайсу",
+              "price_doctor": null,
+              "price_chief": null
+            }
+          ]
+        },
+        {
+          "id": "collagen-therapy",
+          "name": "Коллагенотерапия",
+          "services": [
+            {
+              "name": "Linerase",
+              "price_doctor": 28000,
+              "price_chief": 30000
+            },
+            {
+              "name": "Nithya",
+              "price_doctor": 25000,
+              "price_chief": 28000
+            },
+            {
+              "name": "Collost micro 5 ml",
+              "price_doctor": 23000,
+              "price_chief": 26000
+            },
+            {
+              "name": "Collost micro 5 ml + плазма",
+              "price_doctor": 25000,
+              "price_chief": 28000
+            },
+            {
+              "name": "Collost micro 5 ml + NCTF/Scinco E",
+              "price_doctor": 30000,
+              "price_chief": 34000
+            }
+          ]
+        },
+        {
+          "id": "stimulators",
+          "name": "Стимуляторы коллагена",
+          "services": [
+            {
+              "name": "AestheFill 10 ml",
+              "price_doctor": 50000,
+              "price_chief": 60000
+            },
+            {
+              "name": "Sculptra 10 ml",
+              "price_doctor": 60000,
+              "price_chief": 70000
+            },
+            {
+              "name": "Juvelook / Lenisna 10 ml",
+              "price_doctor": 50000,
+              "price_chief": 60000
+            }
+          ]
+        },
+        {
+          "id": "plasmotherapy",
+          "name": "Плазмолифтинг / плазмотерапия",
+          "services": [
+            {
+              "name": "Лицо",
+              "price_doctor": 10000,
+              "price_chief": 15000
+            },
+            {
+              "name": "Шея + декольте",
+              "price_doctor": 10000,
+              "price_chief": 15000
+            },
+            {
+              "name": "Волосистая часть головы",
+              "price_doctor": 6000,
+              "price_chief": 10000
+            },
+            {
+              "name": "Кисти рук (обе руки)",
+              "price_doctor": 10000,
+              "price_chief": 13000
+            }
+          ]
+        },
+        {
+          "id": "mesotherapy",
+          "name": "Мезотерапия",
+          "services": [
+            {
+              "name": "Viscoderm Skinko E 5 ml",
+              "price_doctor": 15000,
+              "price_chief": 18000
+            },
+            {
+              "name": "Viscoderm Skinko 5 ml",
+              "price_doctor": 11000,
+              "price_chief": 14000
+            },
+            {
+              "name": "NCTF 135 3 ml",
+              "price_doctor": 14000,
+              "price_chief": 17000
+            },
+            {
+              "name": "NCTF 135HA 3 ml",
+              "price_doctor": 16000,
+              "price_chief": 19000
+            },
+            {
+              "name": "NCTF 135HA+ 3 ml",
+              "price_doctor": 16000,
+              "price_chief": 19000
+            },
+            {
+              "name": "Hyalrepair-06 5 ml анти акне",
+              "price_doctor": 11000,
+              "price_chief": 14000
+            },
+            {
+              "name": "Укрепление/рост волос 2 ml",
+              "price_doctor": 6000,
+              "price_chief": 9000
+            },
+            {
+              "name": "Hair Filler 1 ml",
+              "price_doctor": 12000,
+              "price_chief": 15000
+            },
+            {
+              "name": "ASCE",
+              "price_doctor": 40000,
+              "price_chief": 43000
+            }
+          ]
+        },
+        {
+          "id": "lipolytics",
+          "name": "Липолитики",
+          "services": [
+            {
+              "name": "SLIM BODY / MPX 5 мл",
+              "price_doctor": 4000,
+              "price_chief": 5000
+            },
+            {
+              "name": "LIGHTFIT 2 мл",
+              "price_doctor": 5000,
+              "price_chief": 7000
+            }
+          ]
+        },
+        {
+          "id": "injection-extra",
+          "name": "Дополнительно (инъекции)",
+          "services": [
+            {
+              "name": "Анестезия 1 зона",
+              "price_doctor": 1500,
+              "price_chief": 1500
+            },
+            {
+              "name": "Канюля 1 шт",
+              "price_doctor": 1500,
+              "price_chief": 1500
+            }
+          ]
+        },
+        {
+          "id": "iv-therapy",
+          "name": "IV терапия",
+          "services": [
+            {
+              "name": "Стройное тело",
+              "price_doctor": 7200,
+              "price_chief": null
+            },
+            {
+              "name": "Стройное тело (5 капельниц)",
+              "price_doctor": 32400,
+              "price_chief": null
+            },
+            {
+              "name": "Красивые волосы",
+              "price_doctor": 6000,
+              "price_chief": null
+            },
+            {
+              "name": "Красивые волосы (5 капельниц)",
+              "price_doctor": 27500,
+              "price_chief": null
+            },
+            {
+              "name": "Золушка",
+              "price_doctor": 7000,
+              "price_chief": null
+            },
+            {
+              "name": "Золушка (5 капельниц)",
+              "price_doctor": 31500,
+              "price_chief": null
+            },
+            {
+              "name": "Бодрость",
+              "price_doctor": 5000,
+              "price_chief": null
+            },
+            {
+              "name": "Бодрость (5 капельниц)",
+              "price_doctor": 22000,
+              "price_chief": null
+            },
+            {
+              "name": "Антистресс",
+              "price_doctor": 6400,
+              "price_chief": null
+            },
+            {
+              "name": "Антистресс (5 капельниц)",
+              "price_doctor": 28800,
+              "price_chief": null
+            },
+            {
+              "name": "Детокс",
+              "price_doctor": 7500,
+              "price_chief": null
+            },
+            {
+              "name": "Детокс (5 капельниц)",
+              "price_doctor": 33750,
+              "price_chief": null
+            },
+            {
+              "name": "Железная леди",
+              "price_doctor": 7500,
+              "price_chief": null
+            },
+            {
+              "name": "Железная леди (5 капельниц)",
+              "price_doctor": 30000,
+              "price_chief": null
+            },
+            {
+              "name": "Лаеннек 2 ml",
+              "price_doctor": 5000,
+              "price_chief": null
+            },
+            {
+              "name": "Лаеннек 2 ml (5 капельниц)",
+              "price_doctor": 22500,
+              "price_chief": null
+            },
+            {
+              "name": "Лаеннек 4 ml",
+              "price_doctor": 8000,
+              "price_chief": null
+            },
+            {
+              "name": "Лаеннек 4 ml (5 капельниц)",
+              "price_doctor": 36000,
+              "price_chief": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "aesthetic-cosmetology",
+      "name": "Эстетическая косметология",
+      "subcategories": [
+        {
+          "id": "care-procedures",
+          "name": "Уходовые процедуры",
+          "services": [
+            {
+              "name": "Экспресс-уход «Sparkling» PRXT33",
+              "price_doctor": 8500,
+              "price_chief": null
+            },
+            {
+              "name": "Моделирующая процедура с королевской маской",
+              "price_doctor": 12500,
+              "price_chief": null
+            },
+            {
+              "name": "Лифтинг программа объемного 3D моделирования",
+              "price_doctor": 13500,
+              "price_chief": null
+            }
+          ]
+        },
+        {
+          "id": "peelings",
+          "name": "Косметологические пилинги",
+          "services": [
+            {
+              "name": "BIOREPEEL",
+              "price_doctor": 6000,
+              "price_chief": null
+            },
+            {
+              "name": "PRXT33",
+              "price_doctor": 6500,
+              "price_chief": null
+            },
+            {
+              "name": "PEECH PEEL",
+              "price_doctor": 6000,
+              "price_chief": null
+            },
+            {
+              "name": "Миндальный Enerpeel",
+              "price_doctor": 5500,
+              "price_chief": null
+            },
+            {
+              "name": "Джесснера Enerpeel",
+              "price_doctor": 7000,
+              "price_chief": null
+            },
+            {
+              "name": "Салициловый Enerpeel",
+              "price_doctor": 6000,
+              "price_chief": null
+            },
+            {
+              "name": "Желтый пилинг Tizo (США)",
+              "price_doctor": 7500,
+              "price_chief": null
+            }
+          ]
+        },
+        {
+          "id": "milain",
+          "name": "МИЛАЙН",
+          "services": [
+            {
+              "name": "От пигментаций — лицо",
+              "price_doctor": 9000,
+              "price_chief": null
+            },
+            {
+              "name": "Осветление вокруг глаз",
+              "price_doctor": 8000,
+              "price_chief": null
+            },
+            {
+              "name": "Отбеливание подмышечных впадин",
+              "price_doctor": 9500,
+              "price_chief": null
+            },
+            {
+              "name": "Отбеливание интимных зон",
+              "price_doctor": 12000,
+              "price_chief": null
+            }
+          ]
+        },
+        {
+          "id": "cleaning",
+          "name": "Чистки",
+          "services": [
+            {
+              "name": "Комбинированная чистка лица",
+              "price_doctor": 6500,
+              "price_chief": null
+            },
+            {
+              "name": "Чистка спины 1 степень",
+              "price_doctor": 9000,
+              "price_chief": null
+            },
+            {
+              "name": "Чистка спины 2 степень",
+              "price_doctor": 11000,
+              "price_chief": null
+            }
+          ]
+        },
+        {
+          "id": "aesthetic-extra",
+          "name": "Дополнительно (эстетика)",
+          "services": [
+            {
+              "name": "Прокалывание ушей (с серьгами)",
+              "price_doctor": 2500,
+              "price_chief": null
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

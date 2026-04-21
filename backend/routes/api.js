@@ -24,9 +24,9 @@ router.get('/records', auth, async (req, res) => {
     if (clientName) { where.push(`c.name ILIKE $${i}`); params.push('%' + clientName + '%'); i++; }
     if (status) {
       const statusMap = {
-        completed:  { stored: ['completed'],                sids: [4],     atts: [2] },
+        completed:  { stored: ['completed'],                sids: [4],     atts: [] },
         arrived:    { stored: ['arrived'],                  sids: [3],     atts: [1] },
-        confirmed:  { stored: ['confirmed', 'waiting'],     sids: [2],     atts: [] },
+        confirmed:  { stored: ['confirmed', 'waiting'],     sids: [2],     atts: [2] },
         waiting:    { stored: ['waiting', 'pending'],       sids: [1],     atts: [0] },
         cancelled:  { stored: ['cancelled'],                sids: [5],     atts: [] },
         no_show:    { stored: ['no_show'],                  sids: [6],     atts: [-1] },
@@ -67,7 +67,7 @@ router.get('/records', auth, async (req, res) => {
               COALESCE(CASE
                 WHEN (r.raw_payload->>'deleted')::boolean = true THEN 'deleted'
                 WHEN (r.raw_payload->>'attendance') IS NOT NULL THEN
-                  CASE (r.raw_payload->>'attendance')::int WHEN 2 THEN 'arrived' WHEN 1 THEN 'confirmed' WHEN -1 THEN 'no_show' WHEN 0 THEN 'waiting' ELSE r.status END
+                  CASE (r.raw_payload->>'attendance')::int WHEN 1 THEN 'arrived' WHEN 2 THEN 'confirmed' WHEN -1 THEN 'no_show' WHEN 0 THEN 'waiting' ELSE r.status END
                 WHEN (r.raw_payload->>'status_id') IS NOT NULL THEN
                   CASE (r.raw_payload->>'status_id')::int WHEN 4 THEN 'completed' WHEN 3 THEN 'arrived' WHEN 2 THEN 'confirmed' WHEN 5 THEN 'cancelled' WHEN 7 THEN 'deleted' WHEN 6 THEN 'no_show' WHEN 1 THEN 'waiting' ELSE r.status END
                 ELSE r.status

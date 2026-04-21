@@ -1,0 +1,39 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pm2 restart:*)",
+      "Bash(systemctl restart:*)",
+      "Bash(ls /root/loyalpro/*.docx)",
+      "Read(//root/**)",
+      "Bash(python3:*)",
+      "Bash(pm2 logs:*)",
+      "Bash(find /root/loyalpro -name *.jpg -o -name *.jpeg -o -name *.png -o -name *.webp)",
+      "Bash(npm install:*)",
+      "Bash(apt-get install:*)",
+      "Bash(node:*)",
+      "Bash(pdftoppm -r 150 -jpeg /tmp/test-homecare.pdf /tmp/test-homecare-pg)",
+      "Bash(ls -la /tmp/test-homecare-pg*.jpg)",
+      "Bash(pdftoppm -r 150 -jpeg /tmp/test2.pdf /tmp/pg)",
+      "Bash(ls /tmp/pg*.jpg)",
+      "Bash(pdftoppm -r 150 -jpeg /tmp/final.pdf /tmp/final-pg)",
+      "Bash(ls /tmp/final-pg*.jpg)",
+      "Bash(curl -s http://localhost:3001/)",
+      "Bash(pm2 list:*)",
+      "Bash(curl:*)",
+      "Bash(ls /root/loyalpro/backend/*.env /root/loyalpro/backend/env* /root/loyalpro/.env)",
+      "Bash(pm2 env:*)",
+      "Bash(PGPASSWORD='1!Nky8A4T*bY' psql \"postgresql://loyalpro:1\\\\!Nky8A4T*bY@googugiherie.beget.app:5432/loyalpro\" -c \"SELECT id, name, yclients_company_id, yclients_partner_token, yclients_user_token FROM salons LIMIT 5;\" 2>/dev/null)",
+      "WebSearch",
+      "WebFetch(domain:www.forlleduk.com)",
+      "WebFetch(domain:shop-forlled.ru)",
+      "WebFetch(domain:forlle-d.com)",
+      "WebFetch(domain:www.profcosmetology.ru)",
+      "Bash(ls /root/loyalpro/backend/*.env*)",
+      "Bash(ls /root/loyalpro/*.env*)",
+      "Bash(pm2 show:*)",
+      "Bash(DB_URL=\"postgresql://loyalpro:1\\\\!Nky8A4T*bY@googugiherie.beget.app:5432/loyalpro\")",
+      "Bash(JWT_S=\"8c9abeb04b7f3743183191c748a0b554eabd40ec02827f538d7a2ff8729ebbf1ba5054eeb8882d6c7eb4d89311dd598a0e0dbff9d5ce3685ded93f2231da2449\")",
+      "Bash(TOKEN=\"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOjEsInNhbG9uSWQiOjEsImlhdCI6MTc3NDgwODMyNywiZXhwIjoxNzc0ODExOTI3fQ.AC6cTbokxFDU4N0YOGhZ2cgnZVZ9UU1Pcd4kT_b40Gw\")"
+    ]
+  }
+}
