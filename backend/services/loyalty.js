@@ -712,7 +712,16 @@ async function processFinancesOperation(payload, salon) {
   logger.info(`FinOp status=${status} clientYcId=${clientYcId} ycRecordId=${ycRecordId}`);
 
   if (status === 'delete') {
-    await revertCashback(ycRecordId, salon, clientYcId);
+    const existingLog = await db.oneOrNone(
+      'SELECT id FROM finances_log WHERE yclients_record_id=$1',
+      [ycRecordId]
+    );
+    if (existingLog) {
+      // Our cashback exists — revert it (handles card deduction + balance update + transaction)
+      await revertCashback(ycRecordId, salon, clientYcId);
+      return;
+    }
+    // No cashback in our system — fall through to card balance sync only
     const client = await db.one(
       'SELECT * FROM clients WHERE salon_id=$1 AND yclients_client_id=$2',
       [salon.id, clientYcId]
