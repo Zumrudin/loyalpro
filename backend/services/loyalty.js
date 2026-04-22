@@ -797,6 +797,21 @@ async function processFinancesOperation(payload, salon) {
         }
       }
 
+      if (delta < 0) {
+        const existingRedemption = await db.oneOrNone(
+          `SELECT id FROM loyalty_card_transactions WHERE client_id=$1 AND title=$2`,
+          [client.id, `Списание бонусов при оплате визита #${ycRecordId}`]
+        );
+        if (existingRedemption) {
+          logger.info(`FinOp create: redemption for record=${ycRecordId} already processed — syncing balance only`);
+          await db.query(
+            'UPDATE clients SET bonus_balance=$1::numeric, yclients_card_balance=$1::numeric, updated_at=NOW() WHERE id=$2',
+            [newBalance, client.id]
+          );
+          return;
+        }
+      }
+
       await db.query(
         'UPDATE clients SET bonus_balance=$1::numeric, yclients_card_balance=$1::numeric, updated_at=NOW() WHERE id=$2',
         [newBalance, client.id]
