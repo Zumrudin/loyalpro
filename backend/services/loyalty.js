@@ -601,6 +601,7 @@ async function processRecordEvent(payload, salon, settings) {
         logger.info(`update detected discount/redemption — reverting cashback record=${ycRecordId}`);
         await revertCashback(ycRecordId, salon, clientYcId);
       }
+      return;
     } else if (existing && existing.cashback_amount === 0) {
       // Previous attempt denied — delete stale lock so this event can be re-evaluated
       await db.query('DELETE FROM finances_log WHERE yclients_record_id=$1', [ycRecordId]);
