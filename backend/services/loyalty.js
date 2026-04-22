@@ -772,6 +772,20 @@ async function processFinancesOperation(payload, salon) {
           logger.info(`FinOp create: record=${ycRecordId} has manual discount — skipping accrual sync (delta=${delta})`);
           return;
         }
+
+        // Skip duplicate accrual if processRecordEvent already handled this record
+        const alreadyProcessed = await db.oneOrNone(
+          'SELECT id FROM finances_log WHERE yclients_record_id=$1 AND cashback_amount > 0',
+          [ycRecordId]
+        );
+        if (alreadyProcessed) {
+          logger.info(`FinOp create: record=${ycRecordId} already processed by record webhook — syncing balance only`);
+          await db.query(
+            'UPDATE clients SET bonus_balance=$1::numeric, yclients_card_balance=$1::numeric, updated_at=NOW() WHERE id=$2',
+            [newBalance, client.id]
+          );
+          return;
+        }
       }
 
       await db.query(
