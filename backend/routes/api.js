@@ -1,5 +1,5 @@
 const router = require('express').Router();
-const { pool, db } = require('../db');
+const { pool, db, botDb } = require('../db');
 const { auth } = require('../middleware/auth');
 const { buildClientsQuery } = require('../clients-query');
 const { ycGet, ycGetClientCards, ycGetCardTransactions, ycWebSessions } = require('../services/yclients');
@@ -124,7 +124,7 @@ router.get('/analytics/dashboard', auth, async (req, res) => {
       db.any(`SELECT sub.*, c.name as client_name FROM (SELECT DISTINCT ON (client_id, title, txn_date::date, amount) lct.id, lct.txn_date as created_at, lct.amount, lct.title as description, lct.client_id FROM loyalty_card_transactions lct JOIN clients c2 ON c2.id=lct.client_id WHERE c2.salon_id=$1 ORDER BY client_id, title, txn_date::date, amount, lct.txn_date DESC NULLS LAST) sub JOIN clients c ON c.id=sub.client_id ORDER BY sub.created_at DESC NULLS LAST LIMIT 15`,[sid]),
       // db.oneOrNone() — sync may never have run; db.one() would throw on 0 rows
       db.oneOrNone(`SELECT * FROM sync_logs WHERE salon_id=$1 ORDER BY started_at DESC LIMIT 1`,[sid]),
-      db.one(`SELECT COUNT(*) FROM clients WHERE salon_id=$1 AND telegram_id IS NOT NULL AND telegram_id!=''`,[sid]),
+      botDb.one(`SELECT COUNT(*) FROM clients_peri WHERE tg_id IS NOT NULL`),
       db.one(`SELECT COUNT(*) FROM clients WHERE salon_id=$1 AND yclients_card_id IS NOT NULL`,[sid]),
       // db.any() — may be empty if no transactions in period
       db.any(`SELECT CASE WHEN lct.title ILIKE '%день рождения%' OR lct.title ILIKE '%ДР%' OR lct.title ILIKE '%подарок%' THEN 'birthday' WHEN lct.type='redemption' AND lct.title ILIKE '%отмена%' THEN 'cancellation' WHEN lct.type='redemption' THEN 'redemption' ELSE 'accrual' END as type, COALESCE(SUM(ABS(lct.amount)),0) as total FROM loyalty_card_transactions lct JOIN clients c ON c.id=lct.client_id WHERE c.salon_id=$1 AND COALESCE(lct.txn_date,lct.created_at)>=NOW()-INTERVAL '${days} days' GROUP BY 1 ORDER BY total DESC`,[sid]),

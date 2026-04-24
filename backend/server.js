@@ -9,7 +9,6 @@ const { syncGoodsCategories } = require('./services/home-care');
 const { syncStaffData }     = require('./services/staff');
 const { refreshSegments }   = require('./services/segments');
 const mountRoutes = require('./routes/index');
-const { initBot } = require('./services/telegram');
 const { createLogger } = require('./logger');
 const logger = createLogger('Server');
 const cronLogger = createLogger('Cron');
@@ -75,9 +74,6 @@ app.get('/', (req, res) => {
 
 // Mount all routes (webhook + API)
 mountRoutes(app);
-
-// Init Telegram bot
-initBot(db);
 
 // ============================================================
 // CRON JOBS
