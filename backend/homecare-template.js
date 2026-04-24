@@ -130,11 +130,11 @@ function buildHomeCareHtml(prescription, config = {}) {
   const eveningCats = ['Демакияж','Очищение','Тонизация','Сыворотка',
                        'Крем для лица','Крем для век'];
 
-  const clientName  = escHtml(prescription.client_name  || '—');
+  const clientName         = escHtml(prescription.client_name  || '—');
   const specialist         = escHtml(prescription.specialist_name || '');
   const specialistPosition = escHtml(prescription.specialist_position || '');
-  const salonName   = escHtml(prescription.salon_name   || C.logoLine1 + ' ' + C.logoLine2);
-  const dateStr     = prescription.created_at
+  const salonName          = escHtml(prescription.salon_name || C.logoLine1 + ' ' + C.logoLine2);
+  const dateStr            = prescription.created_at
     ? new Date(prescription.created_at)
         .toLocaleDateString('ru', {day:'2-digit',month:'long',year:'numeric'})
     : '';
@@ -154,9 +154,58 @@ function buildHomeCareHtml(prescription, config = {}) {
          <span class="logo-word">${escHtml(C.logoLine2)}</span>
        </div>`;
 
-  // Дополнительный уход
-  const addSec = bySection['additional'] || {};
-  const addHtml = (Object.keys(addSec).length) ? `
+  // Подвал контакты
+  const footerContacts = [
+    C.contactPhone  && `<span>📞 ${escHtml(C.contactPhone)}</span>`,
+    C.contactWeb    && `<span>🌐 ${escHtml(C.contactWeb)}</span>`,
+    C.contactSocial && `<span>📱 ${escHtml(C.contactSocial)}</span>`,
+  ].filter(Boolean).join('<span class="footer-dot">·</span>');
+
+  // ─── Переиспользуемые блоки ──────────────────────────────────────────────
+
+  function buildPageHeader(docTitle) {
+    return `
+    <div class="header">
+      ${logoHtml}
+      <div class="subtitle">${escHtml(C.subtitle)}</div>
+      <div class="doc-title">${escHtml(docTitle)}</div>
+      <div class="gold-bar"></div>
+      <div class="client-line">Имя: <b>${clientName}</b></div>
+    </div>`;
+  }
+
+  function buildPageFooter() {
+    return `
+    <div class="footer">
+      <div class="footer-contacts">${footerContacts || salonName}</div>
+      <div class="footer-sign">
+        ${specialistPosition ? `${specialistPosition} ` : 'Специалист: '}${specialist || '—'}
+        <span class="footer-sign-line"></span>
+      </div>
+    </div>`;
+  }
+
+  function buildPage(docTitle, bodyHtml) {
+    return `
+  <div class="page">
+    ${wmHtml}
+    <div class="content">
+      ${buildPageHeader(docTitle)}
+      ${bodyHtml}
+      ${buildPageFooter()}
+    </div>
+  </div>`;
+  }
+
+  // ─── Страница 1: Домашний уход (Утро / Вечер + доп. уход) ───────────────
+
+  const morningItems = Object.values(bySection['morning'] || {}).flat();
+  const eveningItems = Object.values(bySection['evening'] || {}).flat();
+  const addSec       = bySection['additional'] || {};
+  const addItems     = Object.values(addSec).flat();
+  const hasHomeCarePage = morningItems.length > 0 || eveningItems.length > 0 || addItems.length > 0;
+
+  const addHtml = addItems.length ? `
     <div class="add-section">
       <div class="add-title">Дополнительный уход</div>
       <div class="add-grid">
@@ -166,7 +215,18 @@ function buildHomeCareHtml(prescription, config = {}) {
       </div>
     </div>` : '';
 
-  // Лист назначения
+  const homeCarePage = hasHomeCarePage ? buildPage(C.docTitle, `
+    <div class="two-col">
+      ${renderColumn('Утро',  morningCats, bySection['morning'] || {})}
+      ${renderColumn('Вечер', eveningCats, bySection['evening'] || {})}
+    </div>
+    ${addHtml}
+    ${prescription.notes
+      ? `<div class="notes-block">${escHtml(prescription.notes)}</div>` : ''}
+  `) : '';
+
+  // ─── Страница 2: Лист назначения ────────────────────────────────────────
+
   const sheetAreas = [
     { key:'sheet_face', label:'Лицо' },
     { key:'sheet_body', label:'Тело' },
@@ -176,42 +236,42 @@ function buildHomeCareHtml(prescription, config = {}) {
     const s = bySection[a.key] || {};
     return Object.values(s).some(arr => arr.length > 0);
   });
-  const sheetHtml = sheetFilled.length ? `
+
+  const sheetPage = sheetFilled.length ? buildPage('Лист назначения', `
     <div class="sheet-section">
-      <div class="section-title">Лист назначения</div>
       <div class="sheet-grid">
         ${sheetFilled.map(area => {
           const items = Object.values(bySection[area.key] || {}).flat();
           return `<div class="sheet-col">
             <div class="sheet-col-title">${escHtml(area.label)}</div>
-            ${items.map(it=>`
+            ${items.map(it => `
               <div class="item-name">${escHtml(it.product_name)}</div>
-              ${it.instructions?`<div class="item-instr">${escHtml(it.instructions)}</div>`:''}`
+              ${it.instructions ? `<div class="item-instr">${escHtml(it.instructions)}</div>` : ''}`
             ).join('')}
           </div>`;
         }).join('')}
       </div>
-    </div>` : '';
+    </div>
+  `) : '';
 
-  // Витамины
+  // ─── Страница 3: Витамины ────────────────────────────────────────────────
+
   const vitItems = Object.values(bySection['vitamins'] || {}).flat();
-  const vitHtml = vitItems.length ? `
+
+  const vitaminsPage = vitItems.length ? buildPage('Витамины и добавки', `
     <div class="vit-section">
-      <div class="section-title">Витамины и добавки</div>
-      ${vitItems.map(it=>`
+      ${vitItems.map(it => `
         <div class="vit-item">
           <span class="cat-check">✓</span>
           <span class="item-name">${escHtml(it.product_name)}</span>
-          ${it.instructions?`<span class="item-instr"> — ${escHtml(it.instructions)}</span>`:''}
+          ${it.instructions ? `<span class="item-instr"> — ${escHtml(it.instructions)}</span>` : ''}
         </div>`).join('')}
-    </div>` : '';
+    </div>
+  `) : '';
 
-  // Подвал контакты
-  const footerContacts = [
-    C.contactPhone  && `<span>📞 ${escHtml(C.contactPhone)}</span>`,
-    C.contactWeb    && `<span>🌐 ${escHtml(C.contactWeb)}</span>`,
-    C.contactSocial && `<span>📱 ${escHtml(C.contactSocial)}</span>`,
-  ].filter(Boolean).join('<span class="footer-dot">·</span>');
+  // Собираем только непустые страницы, разделяя разрывом
+  const pages = [homeCarePage, sheetPage, vitaminsPage].filter(Boolean);
+  const pagesHtml = pages.join('<div class="page-break"></div>');
 
   return `<!DOCTYPE html>
 <html lang="ru">
@@ -257,11 +317,12 @@ html, body {
   padding: 20px 24px 16px;
   position: relative;
 }
+.page-break {
+  page-break-after: always;
+  break-after: always;
+}
 
-/* ─── WATERMARK ───────────────────────────────────────────────────────────
-   Чтобы заменить водяной знак: замените src в теге <img class="watermark">
-   на путь к вашему файлу. Размер и позицию регулируйте через .watermark.
-   ─────────────────────────────────────────────────────────────────────── */
+/* ─── WATERMARK ─── */
 .watermark {
   position: fixed;
   top: 50%;
@@ -271,19 +332,14 @@ html, body {
   height: 440px;
   pointer-events: none;
   z-index: 0;
-  opacity: 1; /* SVG управляет opacity внутри себя */
+  opacity: 1;
 }
 .watermark img { width:100%; height:100%; object-fit:contain; opacity:0.10; }
 
 /* ─── CONTENT ─── */
 .content { position: relative; z-index: 1; }
 
-/* ─── HEADER ──────────────────────────────────────────────────────────────
-   Чтобы заменить текстовый логотип изображением:
-   1. Поместите файл logo.png в папку frontend/
-   2. В BRAND_CONFIG укажите logoImageUrl: '/logo.png'
-   3. CSS .logo-image задаёт размер, меняйте max-height при необходимости.
-   ─────────────────────────────────────────────────────────────────────── */
+/* ─── HEADER ─── */
 .header {
   text-align: center;
   margin-bottom: 12px;
@@ -379,7 +435,6 @@ html, body {
   line-height: 1.4;
   margin-bottom: 2px;
 }
-/* Пустой слот — пунктирная линия */
 .empty-slot {
   border-bottom: 1px dashed rgba(184,148,62,0.45);
   height: 1px;
@@ -407,8 +462,6 @@ html, body {
 
 /* ─── ЛИСТ НАЗНАЧЕНИЯ ─── */
 .sheet-section {
-  border-top: 1.5px solid var(--accent);
-  padding-top: 10px;
   margin-bottom: 12px;
 }
 .section-title {
@@ -436,8 +489,6 @@ html, body {
 
 /* ─── ВИТАМИНЫ ─── */
 .vit-section {
-  border-top: 1px solid rgba(184,148,62,0.3);
-  padding-top: 9px;
   margin-bottom: 12px;
 }
 .vit-item {
@@ -461,9 +512,7 @@ html, body {
   margin-bottom: 10px;
 }
 
-/* ─── FOOTER ──────────────────────────────────────────────────────────────
-   Для другой организации: замените contactPhone/Web/Social в BRAND_CONFIG
-   ─────────────────────────────────────────────────────────────────────── */
+/* ─── FOOTER ─── */
 .footer {
   margin-top: 12px;
   padding-top: 6px;
@@ -525,57 +574,13 @@ html, body {
 @media print {
   .no-print { display: none !important; }
   html, body { background: var(--bg); }
-  .watermark { position: fixed; } /* фиксируем водяной знак на всех страницах */
+  .watermark { position: fixed; }
 }
 </style>
 </head>
 <body>
-<div class="page">
 
-  <!-- ══ ВОДЯНОЙ ЗНАК ══ -->
-  ${wmHtml}
-
-  <div class="content">
-
-    <!-- ══ ШАПКА ══ -->
-    <div class="header">
-      ${logoHtml}
-      <div class="subtitle">${escHtml(C.subtitle)}</div>
-      <div class="doc-title">${escHtml(C.docTitle)}</div>
-      <div class="gold-bar"></div>
-      <div class="client-line">Имя: <b>${clientName}</b></div>
-    </div>
-
-    <!-- ══ УТРО + ВЕЧЕР ══ -->
-    <div class="two-col">
-      ${renderColumn('Утро',    morningCats, bySection['morning'] || {})}
-      ${renderColumn('Вечер',   eveningCats, bySection['evening'] || {})}
-    </div>
-
-    <!-- ══ ДОПОЛНИТЕЛЬНЫЙ УХОД ══ -->
-    ${addHtml}
-
-    <!-- ══ ЛИСТ НАЗНАЧЕНИЯ ══ -->
-    ${sheetHtml}
-
-    <!-- ══ ВИТАМИНЫ ══ -->
-    ${vitHtml}
-
-    <!-- ══ ЗАМЕТКИ ══ -->
-    ${prescription.notes
-      ? `<div class="notes-block">${escHtml(prescription.notes)}</div>` : ''}
-
-    <!-- ══ ПОДВАЛ ══ -->
-    <div class="footer">
-      <div class="footer-contacts">${footerContacts || escHtml(salonName)}</div>
-      <div class="footer-sign">
-        ${specialistPosition ? `${escHtml(specialistPosition)} ` : 'Специалист: '}${specialist || '—'}
-        <span class="footer-sign-line"></span>
-      </div>
-    </div>
-
-  </div><!-- /content -->
-</div><!-- /page -->
+${pagesHtml}
 
 <div class="no-print">
   <button class="btn-print-go" onclick="window.print()">🖨 Печать / PDF</button>

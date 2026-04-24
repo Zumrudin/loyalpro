@@ -261,7 +261,7 @@ function hcPickerRender(groups) {
         <span id="hcPickChev-${gi}" style="font-size:11px;color:var(--t3)">${g.open === true ? '▼' : '▶'}</span>
       </div>
       <div id="hcPickGrp-${gi}" style="display:${g.open === true ? '' : 'none'}">
-        ${g.items.map(t => `<div class="hc-picker-item" onmousedown="hcPickerSelect('${escAttr(t)}')">${esc(t)}</div>`).join('')}
+        ${g.items.map(t => `<div class="hc-picker-item" onclick="event.stopPropagation();hcPickerSelect('${escAttr(t)}')">${esc(t)}</div>`).join('')}
       </div>
     </div>`).join('');
 }
