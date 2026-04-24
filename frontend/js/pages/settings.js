@@ -279,6 +279,7 @@ async function previewTemplateSettings() {
 let _staffProfiles = [];
 let _staffEditingId = null;
 let _staffShowFired = false;
+let _staffWasDragging = false;
 
 async function loadStaffProfiles(includeFired) {
   if (includeFired !== undefined) _staffShowFired = includeFired;
@@ -311,15 +312,18 @@ function renderStaffProfiles() {
     : '';
 
   const display = _staffShowFired ? _staffProfiles : active;
+  display.sort((a, b) => (a.display_order ?? 0) - (b.display_order ?? 0));
 
   if (!display.length) {
     list.innerHTML = toggleBtn + '<div style="color:#9ca3af;font-size:13px">Нет сотрудников. Выполните синхронизацию с YClients в разделе аналитики персонала.</div>';
     return;
   }
   list.innerHTML = toggleBtn + `
-    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:14px">
+    <div id="staff-cards-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:14px">
       ${display.map(s => staffProfileCard(s)).join('')}
     </div>`;
+
+  initStaffDragDrop();
 }
 
 function staffProfileCard(s) {
@@ -331,7 +335,8 @@ function staffProfileCard(s) {
   const firedBadge = !s.is_active ? `<div style="font-size:10px;color:#ef4444;margin-bottom:4px">Уволен</div>` : '';
   const appBadge = s.is_active && !s.show_in_app ? `<div style="font-size:10px;color:#f59e0b">Скрыт в приложении</div>` : '';
   return `
-    <div style="border:1px solid ${s.is_active ? '#e5e7eb' : '#fecaca'};border-radius:12px;padding:16px;text-align:center;background:${s.is_active ? '#fff' : '#fff5f5'};cursor:pointer;transition:box-shadow .15s" onclick="openStaffModal(${s.id})" onmouseover="this.style.boxShadow='0 4px 16px rgba(0,0,0,.10)'" onmouseout="this.style.boxShadow=''">
+    <div draggable="true" data-staff-id="${s.id}" style="border:1px solid ${s.is_active ? '#e5e7eb' : '#fecaca'};border-radius:12px;padding:16px;text-align:center;background:${s.is_active ? '#fff' : '#fff5f5'};cursor:pointer;transition:box-shadow .15s,opacity .15s;position:relative" onclick="openStaffModal(${s.id})" onmouseover="this.style.boxShadow='0 4px 16px rgba(0,0,0,.10)'" onmouseout="this.style.boxShadow=''">
+      <div style="position:absolute;top:8px;left:8px;cursor:grab;color:#d1d5db;font-size:14px;line-height:1;user-select:none" title="Перетащите для изменения порядка">⠿</div>
       <div style="display:flex;justify-content:center;margin-bottom:10px">${photoHtml}</div>
       <div style="font-weight:600;font-size:13px;margin-bottom:3px">${esc(s.name || '—')}</div>
       <div style="font-size:11px;color:#9ca3af;margin-bottom:6px">${esc(s.specialization || '')}</div>
@@ -341,7 +346,74 @@ function staffProfileCard(s) {
     </div>`;
 }
 
+function initStaffDragDrop() {
+  const grid = document.getElementById('staff-cards-grid');
+  if (!grid) return;
+  let dragSrc = null;
+
+  grid.querySelectorAll('[data-staff-id]').forEach(card => {
+    card.addEventListener('dragstart', e => {
+      dragSrc = card;
+      _staffWasDragging = true;
+      card.style.opacity = '0.4';
+      e.dataTransfer.effectAllowed = 'move';
+    });
+    card.addEventListener('dragend', () => {
+      card.style.opacity = '';
+      grid.querySelectorAll('[data-staff-id]').forEach(c => c.classList.remove('drag-over'));
+      // click fires after dragend — clear flag after the event loop tick
+      setTimeout(() => { _staffWasDragging = false; }, 50);
+    });
+    card.addEventListener('dragover', e => {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+    });
+    card.addEventListener('dragenter', e => {
+      e.preventDefault();
+      if (card !== dragSrc) card.style.outline = '2px dashed #6366f1';
+    });
+    card.addEventListener('dragleave', () => {
+      card.style.outline = '';
+    });
+    card.addEventListener('drop', e => {
+      e.preventDefault();
+      e.stopPropagation();
+      card.style.outline = '';
+      if (!dragSrc || dragSrc === card) return;
+
+      const cards = [...grid.querySelectorAll('[data-staff-id]')];
+      const srcIdx = cards.indexOf(dragSrc);
+      const dstIdx = cards.indexOf(card);
+      if (srcIdx < dstIdx) grid.insertBefore(dragSrc, card.nextSibling);
+      else grid.insertBefore(dragSrc, card);
+
+      saveStaffOrder();
+    });
+  });
+}
+
+async function saveStaffOrder() {
+  const grid = document.getElementById('staff-cards-grid');
+  if (!grid) return;
+  const order = [...grid.querySelectorAll('[data-staff-id]')].map((el, i) => ({
+    id: parseInt(el.dataset.staffId),
+    display_order: i
+  }));
+  order.forEach(({ id, display_order }) => {
+    const s = _staffProfiles.find(x => x.id === id);
+    if (s) s.display_order = display_order;
+  });
+  try {
+    await api('PUT', '/api/staff-profiles/reorder', { order });
+    notify('Порядок сотрудников сохранён', 'ok');
+  } catch(e) {
+    console.error('Ошибка сохранения порядка:', e.message);
+    notify('Ошибка сохранения порядка: ' + e.message, 'err');
+  }
+}
+
 function openStaffModal(staffId) {
+  if (_staffWasDragging) return;
   const s = _staffProfiles.find(x => x.id === staffId);
   if (!s) return;
   _staffEditingId = staffId;

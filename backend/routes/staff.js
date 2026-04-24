@@ -43,6 +43,19 @@ router.get('/staff-profiles', auth, async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// PUT /api/staff-profiles/reorder — batch update display_order
+router.put('/staff-profiles/reorder', auth, async (req, res) => {
+  try {
+    const { order } = req.body; // [{id, display_order}]
+    if (!Array.isArray(order) || !order.length) return res.status(400).json({ error: 'order required' });
+    for (const { id, display_order } of order) {
+      await db.query('UPDATE staff_members SET display_order=$1 WHERE id=$2 AND salon_id=$3',
+        [display_order, id, req.user.salonId]);
+    }
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // PUT /api/staff-profiles/:staffId — обновить bio, display_order, show_in_app
 router.put('/staff-profiles/:staffId', auth, async (req, res) => {
   try {
