@@ -51,6 +51,7 @@ function navStg(id, el) {
   if (id === 'loyalty-birthday') loadBdList();
   if (id === 'sync-logs') loadSyncLogs();
   if (id === 'app-settings') loadAppSettings();
+  if (id === 'staff-profiles') loadStaffProfiles();
 }
 
 // ── LAUNCH APP ──

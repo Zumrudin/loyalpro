@@ -58,6 +58,14 @@ async function runMigrations(client) {
     )
   `).catch(() => {});
 
+  // ── Staff profile fields ───────────────────────────────────────
+  await client.query(`
+    ALTER TABLE staff_members
+      ADD COLUMN IF NOT EXISTS bio TEXT,
+      ADD COLUMN IF NOT EXISTS custom_photo_url TEXT,
+      ADD COLUMN IF NOT EXISTS display_order INTEGER DEFAULT 0
+  `).catch(() => {});
+
   // ── Home Care tables ───────────────────────────────────────────
   await client.query(`
     CREATE TABLE IF NOT EXISTS home_care_prescriptions (
@@ -168,6 +176,11 @@ async function runMigrations(client) {
 
   await client.query(`
     CREATE INDEX IF NOT EXISTS idx_hcp_record_id ON home_care_prescriptions(record_id)
+  `).catch(() => {});
+
+  // ── Staff: show_in_app flag ────────────────────────────────
+  await client.query(`
+    ALTER TABLE staff_members ADD COLUMN IF NOT EXISTS show_in_app BOOLEAN NOT NULL DEFAULT TRUE
   `).catch(() => {});
 
   // ── App Settings ───────────────────────────────────────────

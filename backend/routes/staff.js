@@ -1,10 +1,92 @@
 const router  = require('express').Router();
 const express = require('express');
+const path    = require('path');
+const multer  = require('multer');
 const { db }  = require('../db');
 const { auth } = require('../middleware/auth');
 const { getStaffList, computeStaffMetrics, computeStaffSparklines, syncStaffData, syncGoodsSales } = require('../services/staff');
 const { createLogger } = require('../logger');
 const logger = createLogger('Staff');
+
+// ── Staff profile photo upload ─────────────────────────────────
+const photoStorage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    cb(null, path.join(__dirname, '../../frontend/uploads'));
+  },
+  filename: (req, file, cb) => {
+    const ext = path.extname(file.originalname).toLowerCase() || '.jpg';
+    cb(null, `staff_${req.params.staffId}_${Date.now()}${ext}`);
+  },
+});
+const uploadPhoto = multer({
+  storage: photoStorage,
+  limits: { fileSize: 5 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    if (/^image\//.test(file.mimetype)) cb(null, true);
+    else cb(new Error('Только изображения'));
+  },
+});
+
+// GET /api/staff-profiles — список сотрудников с профильными полями
+router.get('/staff-profiles', auth, async (req, res) => {
+  try {
+    const includeFired = req.query.include_fired === '1';
+    const staff = await db.any(
+      `SELECT id, yclients_staff_id, name, specialization, avatar_url,
+              custom_photo_url, bio, display_order, is_active, show_in_app
+       FROM staff_members
+       WHERE salon_id=$1 ${includeFired ? '' : 'AND is_active=TRUE'}
+       ORDER BY display_order, name`,
+      [req.user.salonId]
+    );
+    res.json({ staff });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// PUT /api/staff-profiles/:staffId — обновить bio, display_order, show_in_app
+router.put('/staff-profiles/:staffId', auth, async (req, res) => {
+  try {
+    const { bio, display_order, show_in_app } = req.body;
+    const row = await db.oneOrNone(
+      `UPDATE staff_members SET bio=$1, display_order=$2, show_in_app=$3
+       WHERE id=$4 AND salon_id=$5 RETURNING id`,
+      [bio ?? null, display_order ?? 0, show_in_app !== false, req.params.staffId, req.user.salonId]
+    );
+    if (!row) return res.status(404).json({ error: 'Сотрудник не найден' });
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// POST /api/staff-profiles/:staffId/photo — загрузить фото
+router.post('/staff-profiles/:staffId/photo', auth, (req, res) => {
+  uploadPhoto.single('photo')(req, res, async (err) => {
+    if (err) return res.status(400).json({ error: err.message });
+    if (!req.file) return res.status(400).json({ error: 'Файл не получен' });
+    const photoUrl = `/uploads/${req.file.filename}`;
+    try {
+      const row = await db.oneOrNone(
+        `UPDATE staff_members SET custom_photo_url=$1
+         WHERE id=$2 AND salon_id=$3 RETURNING id`,
+        [photoUrl, req.params.staffId, req.user.salonId]
+      );
+      if (!row) return res.status(404).json({ error: 'Сотрудник не найден' });
+      res.json({ ok: true, url: photoUrl });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+});
+
+// DELETE /api/staff-profiles/:staffId/photo — удалить кастомное фото
+router.delete('/staff-profiles/:staffId/photo', auth, async (req, res) => {
+  try {
+    const row = await db.oneOrNone(
+      `UPDATE staff_members SET custom_photo_url=NULL
+       WHERE id=$1 AND salon_id=$2 RETURNING id`,
+      [req.params.staffId, req.user.salonId]
+    );
+    if (!row) return res.status(404).json({ error: 'Сотрудник не найден' });
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
 
 router.get('/staff-analytics/staff', auth, async (req, res) => {
   try { res.json({ staff: await getStaffList(req.user.salonId) }); }

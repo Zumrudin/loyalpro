@@ -15,17 +15,23 @@ function calcWorkMinutes(from, to) {
 
 async function syncStaffData(salon) {
   try {
-    const staffList = await ycGet(salon, `/staff/${salon.yclients_company_id}`, { is_fired: 0 });
-    if (!Array.isArray(staffList)) return;
+    const allStaff = await ycGet(salon, `/staff/${salon.yclients_company_id}`, {});
+    if (!Array.isArray(allStaff)) return;
 
-    for (const s of staffList) {
+    const activeIds = [];
+    for (const s of allStaff) {
+      const isActive = !s.fired;
       await db.query(`
         INSERT INTO staff_members (salon_id, yclients_staff_id, name, specialization, avatar_url, is_active, synced_at)
-        VALUES ($1, $2, $3, $4, $5, TRUE, NOW())
+        VALUES ($1, $2, $3, $4, $5, $6, NOW())
         ON CONFLICT (salon_id, yclients_staff_id) DO UPDATE
-          SET name=$3, specialization=$4, avatar_url=$5, is_active=TRUE, synced_at=NOW()
-      `, [salon.id, s.id, s.name || 'Сотрудник', s.specialization || null, s.avatar || null]);
+          SET name=$3, specialization=$4, avatar_url=$5, is_active=$6, synced_at=NOW()
+      `, [salon.id, s.id, s.name || 'Сотрудник', s.specialization || null, s.avatar || null, isActive]);
+      if (isActive) activeIds.push(s.id);
     }
+
+    const staffList = allStaff.filter(s => !s.fired);
+    logger.info(`Salon ${salon.id}: ${staffList.length} active, ${allStaff.length - staffList.length} fired`);
 
     const now = new Date();
     for (let mo = -1; mo <= 0; mo++) {

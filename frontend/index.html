@@ -392,6 +392,11 @@
         </div>
         <div class="stg-sep"></div>
         <div class="stg-group">
+          <div class="stg-group-lbl">👥 Сотрудники</div>
+          <div class="stg-item" data-sec="staff-profiles" onclick="navStg('staff-profiles',this)"><span class="stg-ic">👤</span>Карточки сотрудников</div>
+        </div>
+        <div class="stg-sep"></div>
+        <div class="stg-group">
           <div class="stg-group-lbl">📱 Мобильное приложение</div>
           <div class="stg-item" data-sec="app-settings" onclick="navStg('app-settings',this)"><span class="stg-ic">⚙️</span>Настройки приложения</div>
         </div>
@@ -690,6 +695,52 @@
               <button class="btn btn-sec" onclick="previewTemplateSettings()">Предпросмотр</button>
             </div>
             <div id="tmplSaveStatus" style="margin-top:8px;font-size:12px"></div>
+          </div>
+        </div>
+
+        <!-- ── Карточки сотрудников ── -->
+        <div class="stg-section" id="stg-staff-profiles">
+          <div class="stg-hdr"><span>👥</span>Карточки сотрудников</div>
+          <p style="color:#6b7280;font-size:13px;margin-bottom:16px">
+            Заполните биографию и загрузите фото для каждого сотрудника. Эти данные будут использоваться в мобильном приложении.
+          </p>
+          <div id="staff-profiles-loading" style="color:#9ca3af;font-size:13px">Загрузка...</div>
+          <div id="staff-profiles-list" style="display:none"></div>
+
+          <!-- Модальное окно редактирования -->
+          <div id="staff-profile-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:1000;align-items:center;justify-content:center">
+            <div style="background:#fff;border-radius:16px;padding:28px;width:480px;max-width:95vw;box-shadow:0 20px 60px rgba(0,0,0,.2)">
+              <div style="font-weight:600;font-size:16px;margin-bottom:20px" id="staff-modal-title">Редактировать сотрудника</div>
+
+              <div style="display:flex;gap:16px;align-items:flex-start;margin-bottom:20px">
+                <div style="flex-shrink:0;text-align:center">
+                  <div id="staff-modal-photo-wrap" style="width:108px;height:144px;border-radius:12px;overflow:hidden;background:#f3f4f6;margin-bottom:8px;border:2px solid #e5e7eb;cursor:pointer;position:relative" onclick="document.getElementById('staff-photo-input').click()">
+                    <img id="staff-modal-photo" src="" alt="" style="width:100%;height:100%;object-fit:cover;display:none">
+                    <div id="staff-modal-photo-placeholder" style="width:100%;height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;font-size:32px;color:#d1d5db">👤<span style="font-size:10px;color:#9ca3af">Фото</span></div>
+                    <div style="position:absolute;inset:0;background:rgba(0,0,0,.35);border-radius:12px;opacity:0;transition:.2s;display:flex;align-items:center;justify-content:center;font-size:22px;color:#fff" class="staff-photo-overlay">📷</div>
+                  </div>
+                  <input type="file" id="staff-photo-input" accept="image/jpeg,image/png,image/webp" style="display:none" onchange="staffPhotoSelected(this)">
+                  <button class="btn btn-sec" style="font-size:11px;padding:4px 10px" onclick="document.getElementById('staff-photo-input').click()">Изменить фото</button>
+                  <div style="font-size:10px;color:#9ca3af;margin-top:4px;line-height:1.4">JPG, PNG, WebP<br>до 5 МБ</div>
+                  <div id="staff-photo-status" style="font-size:11px;color:#9ca3af;margin-top:2px"></div>
+                </div>
+                <div style="flex:1">
+                  <div style="font-weight:600;font-size:15px;margin-bottom:4px" id="staff-modal-name"></div>
+                  <div style="font-size:12px;color:#9ca3af;margin-bottom:14px" id="staff-modal-spec"></div>
+                  <label class="fl">Биография</label>
+                  <textarea id="staff-modal-bio" rows="5" style="width:100%;resize:vertical;font-size:13px;padding:8px 10px;border:1px solid #d1d5db;border-radius:8px;font-family:inherit;line-height:1.5" placeholder="Расскажите об опыте, специализации и достижениях сотрудника..."></textarea>
+                  <label style="display:flex;align-items:center;gap:8px;margin-top:12px;font-size:13px;cursor:pointer">
+                    <input type="checkbox" id="staff-modal-show-in-app" style="width:16px;height:16px;cursor:pointer">
+                    Показывать в приложении
+                  </label>
+                </div>
+              </div>
+
+              <div style="display:flex;gap:8px;justify-content:flex-end">
+                <button class="btn btn-sec" onclick="closeStaffModal()">Отмена</button>
+                <button class="btn btn-pri" onclick="saveStaffProfile()">Сохранить</button>
+              </div>
+            </div>
           </div>
         </div>
 

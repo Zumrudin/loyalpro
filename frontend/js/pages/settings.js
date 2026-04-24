@@ -274,3 +274,150 @@ async function previewTemplateSettings() {
     window.open(URL.createObjectURL(blob), '_blank');
   } catch(e) { notify(e.message, 'err'); }
 }
+
+// ── Staff Profiles ─────────────────────────────────────────────
+let _staffProfiles = [];
+let _staffEditingId = null;
+let _staffShowFired = false;
+
+async function loadStaffProfiles(includeFired) {
+  if (includeFired !== undefined) _staffShowFired = includeFired;
+  const loading = document.getElementById('staff-profiles-loading');
+  const list    = document.getElementById('staff-profiles-list');
+  if (!list) return;
+  loading.style.display = 'block';
+  loading.textContent = 'Загрузка...';
+  list.style.display = 'none';
+  try {
+    const data = await api('GET', '/api/staff-profiles?include_fired=1');
+    _staffProfiles = data.staff || [];
+    loading.style.display = 'none';
+    list.style.display = 'block';
+    renderStaffProfiles();
+  } catch(e) {
+    loading.textContent = 'Ошибка загрузки: ' + e.message;
+  }
+}
+
+function renderStaffProfiles() {
+  const list = document.getElementById('staff-profiles-list');
+  const active = _staffProfiles.filter(s => s.is_active);
+  const fired  = _staffProfiles.filter(s => !s.is_active);
+
+  const toggleBtn = fired.length > 0 || _staffShowFired
+    ? `<button class="btn btn-sec" style="font-size:12px;margin-bottom:14px" onclick="loadStaffProfiles(${_staffShowFired ? 'false' : 'true'})">
+        ${_staffShowFired ? 'Скрыть уволенных' : `Показать уволенных (${fired.length})`}
+       </button>`
+    : '';
+
+  const display = _staffShowFired ? _staffProfiles : active;
+
+  if (!display.length) {
+    list.innerHTML = toggleBtn + '<div style="color:#9ca3af;font-size:13px">Нет сотрудников. Выполните синхронизацию с YClients в разделе аналитики персонала.</div>';
+    return;
+  }
+  list.innerHTML = toggleBtn + `
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:14px">
+      ${display.map(s => staffProfileCard(s)).join('')}
+    </div>`;
+}
+
+function staffProfileCard(s) {
+  const photo = s.custom_photo_url || s.avatar_url || '';
+  const photoHtml = photo
+    ? `<img src="${escAttr(photo)}" style="width:72px;height:96px;border-radius:8px;object-fit:cover;border:2px solid #e5e7eb">`
+    : `<div style="width:72px;height:96px;border-radius:8px;background:#f3f4f6;display:flex;align-items:center;justify-content:center;font-size:32px;border:2px solid #e5e7eb">👤</div>`;
+  const hasBio = s.bio && s.bio.trim();
+  const firedBadge = !s.is_active ? `<div style="font-size:10px;color:#ef4444;margin-bottom:4px">Уволен</div>` : '';
+  const appBadge = s.is_active && !s.show_in_app ? `<div style="font-size:10px;color:#f59e0b">Скрыт в приложении</div>` : '';
+  return `
+    <div style="border:1px solid ${s.is_active ? '#e5e7eb' : '#fecaca'};border-radius:12px;padding:16px;text-align:center;background:${s.is_active ? '#fff' : '#fff5f5'};cursor:pointer;transition:box-shadow .15s" onclick="openStaffModal(${s.id})" onmouseover="this.style.boxShadow='0 4px 16px rgba(0,0,0,.10)'" onmouseout="this.style.boxShadow=''">
+      <div style="display:flex;justify-content:center;margin-bottom:10px">${photoHtml}</div>
+      <div style="font-weight:600;font-size:13px;margin-bottom:3px">${esc(s.name || '—')}</div>
+      <div style="font-size:11px;color:#9ca3af;margin-bottom:6px">${esc(s.specialization || '')}</div>
+      ${firedBadge}
+      <div style="font-size:11px;color:${hasBio ? '#10b981' : '#d1d5db'}">${hasBio ? '✓ Биография заполнена' : 'Биография не заполнена'}</div>
+      ${appBadge}
+    </div>`;
+}
+
+function openStaffModal(staffId) {
+  const s = _staffProfiles.find(x => x.id === staffId);
+  if (!s) return;
+  _staffEditingId = staffId;
+
+  document.getElementById('staff-modal-name').textContent = s.name || '—';
+  document.getElementById('staff-modal-spec').textContent = s.specialization || '';
+  document.getElementById('staff-modal-bio').value = s.bio || '';
+  document.getElementById('staff-modal-show-in-app').checked = s.show_in_app !== false;
+  document.getElementById('staff-photo-status').textContent = '';
+
+  const photo = s.custom_photo_url || s.avatar_url || '';
+  const img = document.getElementById('staff-modal-photo');
+  const placeholder = document.getElementById('staff-modal-photo-placeholder');
+  if (photo) {
+    img.src = photo; img.style.display = 'block'; placeholder.style.display = 'none';
+  } else {
+    img.style.display = 'none'; placeholder.style.display = 'flex';
+  }
+  document.getElementById('staff-photo-input').value = '';
+
+  const modal = document.getElementById('staff-profile-modal');
+  modal.style.display = 'flex';
+}
+
+function closeStaffModal() {
+  document.getElementById('staff-profile-modal').style.display = 'none';
+  _staffEditingId = null;
+}
+
+async function saveStaffProfile() {
+  if (!_staffEditingId) return;
+  const bio = document.getElementById('staff-modal-bio').value.trim();
+  const show_in_app = document.getElementById('staff-modal-show-in-app').checked;
+  try {
+    await api('PUT', `/api/staff-profiles/${_staffEditingId}`, { bio, show_in_app });
+    const s = _staffProfiles.find(x => x.id === _staffEditingId);
+    if (s) { s.bio = bio; s.show_in_app = show_in_app; }
+    renderStaffProfiles();
+    closeStaffModal();
+    notify('Профиль сохранён', 'ok');
+  } catch(e) { notify(e.message, 'err'); }
+}
+
+async function staffPhotoSelected(input) {
+  if (!input.files || !input.files[0] || !_staffEditingId) return;
+  const file = input.files[0];
+  const statusEl = document.getElementById('staff-photo-status');
+  statusEl.textContent = 'Загрузка...';
+
+  const formData = new FormData();
+  formData.append('photo', file);
+  try {
+    const tok = localStorage.getItem('lp_tk');
+    const r = await fetch(`/api/staff-profiles/${_staffEditingId}/photo`, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${tok}` },
+      body: formData,
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || 'Ошибка загрузки');
+
+    const img = document.getElementById('staff-modal-photo');
+    const placeholder = document.getElementById('staff-modal-photo-placeholder');
+    img.src = data.url + '?t=' + Date.now();
+    img.style.display = 'block';
+    placeholder.style.display = 'none';
+    statusEl.textContent = 'Фото загружено';
+
+    const s = _staffProfiles.find(x => x.id === _staffEditingId);
+    if (s) s.custom_photo_url = data.url;
+    renderStaffProfiles();
+  } catch(e) { statusEl.textContent = e.message; notify(e.message, 'err'); }
+}
+
+// Закрыть модал по клику на фон
+document.addEventListener('click', e => {
+  const modal = document.getElementById('staff-profile-modal');
+  if (modal && e.target === modal) closeStaffModal();
+});

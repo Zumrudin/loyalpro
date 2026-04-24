@@ -49,6 +49,7 @@ const defaultOrigins = [
   'http://127.0.0.1:8081',
   'http://127.0.0.1:3001',
   'http://127.0.0.1',
+  'https://zumrudin.ru',
 ];
 // Use ALLOWED_ORIGINS env var if provided (comma-separated), otherwise fall back to defaults
 const allowedOrigins = config.ALLOWED_ORIGINS || defaultOrigins;
