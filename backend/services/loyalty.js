@@ -669,6 +669,12 @@ async function processRecordEvent(payload, salon, settings) {
       return;
     }
 
+    if (!client.yclients_card_id) {
+      await db.query('UPDATE finances_log SET cashback_amount=0,processed=TRUE WHERE yclients_record_id=$1', [ycRecordId]);
+      logger.info(`skip accrual record=${ycRecordId} — client ${client.id} has no loyalty card`);
+      return;
+    }
+
     if (client.yclients_card_id && salon.yclients_card_type_id) {
       try {
         await ycAccrueCard(salon, client.yclients_card_id, cashback, `Кэшбэк ${pct}% по записи #${ycRecordId}`);
