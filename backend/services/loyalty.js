@@ -61,6 +61,21 @@ function getRecordStatus(ycr) {
 }
 
 async function processCompletedRecord(recordId, clientId, ycRec, salonId, settings) {
+  // Skip accrual if client used bonuses for this visit (redemption exists by record_id or same date)
+  const visitDate = String(ycRec.date || '').split(' ')[0] || null;
+  const redemptionCheck = await db.oneOrNone(
+    `SELECT 1 FROM loyalty_card_transactions
+     WHERE client_id=$1 AND salon_id=$2 AND amount<0
+     AND (record_id=$3 OR (record_id IS NULL AND $4::date IS NOT NULL AND txn_date::date=$4::date))
+     LIMIT 1`,
+    [clientId, salonId, recordId, visitDate]
+  );
+  if (redemptionCheck) {
+    logger.info(`processCompletedRecord: skip accrual record=${recordId} — redemption found`);
+    await db.query('UPDATE records SET bonus_processed=TRUE,bonus_accrued=0 WHERE id=$1', [recordId]);
+    return 0;
+  }
+
   const pg = await pool.connect();
   try {
     await pg.query('BEGIN');
@@ -592,10 +607,12 @@ async function processRecordEvent(payload, salon, settings) {
         } catch(e) { /* ignore */ }
       }
       const hasDiscountNow = services.some(s => parseFloat(s.discount||0) > 0 || parseFloat(s.cost_to_pay ?? s.cost ?? 0) < parseFloat(s.cost||0));
-      // Only check redemption tied to this specific record (not date-based — too broad)
       const hasRedemption = await db.oneOrNone(
-        `SELECT 1 FROM loyalty_card_transactions WHERE client_id=$1 AND amount<0 AND record_id=$2 LIMIT 1`,
-        [client?.id, record?.id]
+        `SELECT 1 FROM loyalty_card_transactions
+         WHERE client_id=$1 AND amount<0
+         AND (record_id=$2 OR (record_id IS NULL AND $3::date IS NOT NULL AND txn_date::date=$3::date))
+         LIMIT 1`,
+        [client?.id, record?.id, String(data.date || '').split(' ')[0] || null]
       );
       if (hasDiscountNow || hasRedemption) {
         logger.info(`update detected discount/redemption — reverting cashback record=${ycRecordId}`);
@@ -624,10 +641,13 @@ async function processRecordEvent(payload, salon, settings) {
       } catch(e) { logger.info(`ycGet failed: ${e.message}`); }
     }
 
-    // Check for redemption tied specifically to this record (date-based match is too broad)
+    // Check for redemption: by record_id OR unlinked (record_id IS NULL) on same visit date
     const hasRedemptionTx = await db.oneOrNone(
-      `SELECT 1 FROM loyalty_card_transactions WHERE client_id=$1 AND amount<0 AND record_id=$2 LIMIT 1`,
-      [client?.id, record?.id]
+      `SELECT 1 FROM loyalty_card_transactions
+       WHERE client_id=$1 AND amount<0
+       AND (record_id=$2 OR (record_id IS NULL AND $3::date IS NOT NULL AND txn_date::date=$3::date))
+       LIMIT 1`,
+      [client?.id, record?.id, String(data.date || '').split(' ')[0] || null]
     );
 
     let paidAmount = 0;
