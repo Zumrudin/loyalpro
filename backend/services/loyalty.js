@@ -96,7 +96,7 @@ async function processCompletedRecord(recordId, clientId, ycRec, salonId, settin
            'accrual',$4,$5,$6,$7,NOW(),NOW())`,
         [salonId, clientId, clientId, accrual,
          client.bonus_balance + accrual,
-         `Кэшбэк ${pct}% за визит ${String(ycRec.date || '').split(' ')[0]}`,
+         `Кэшбэк ${pct}% за визит #${ycRec.id}`,
          recordId]
       );
     }
@@ -677,7 +677,7 @@ async function processRecordEvent(payload, salon, settings) {
 
     if (client.yclients_card_id && salon.yclients_card_type_id) {
       try {
-        await ycAccrueCard(salon, client.yclients_card_id, cashback, `Кэшбэк ${pct}% по записи #${ycRecordId}`);
+        await ycAccrueCard(salon, client.yclients_card_id, cashback, `Кэшбэк ${pct}% за визит #${ycRecordId}`);
       } catch(e) { logger.error(`Card accrual error: ${e.message}`); }
     }
 
@@ -700,6 +700,13 @@ async function processRecordEvent(payload, salon, settings) {
       'UPDATE finances_log SET cashback_amount=$1, cashback_pct=$2, paid_amount=$3, processed=TRUE WHERE yclients_record_id=$4',
       [cashback, pct, paidAmount, ycRecordId]
     );
+
+    // Mark record as bonus_processed so runSync doesn't accrue cashback a second time
+    await db.query(
+      'UPDATE records SET bonus_processed=TRUE, bonus_accrued=$1, cashback_pct=$2 WHERE salon_id=$3 AND yclients_record_id=$4',
+      [cashback, pct, salon.id, ycRecordId]
+    );
+
     logger.info(`Accrued ${cashback} (${pct}%) for client ${client.name}, record #${ycRecordId}`);
 
   } catch(e) {
