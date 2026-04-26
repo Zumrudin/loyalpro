@@ -753,14 +753,22 @@ async function processRecordEvent(payload, salon, settings) {
   }
 }
 
-// Serialize FinOp processing per record to prevent duplicate concurrent webhooks
+// Serialize FinOp processing per record to prevent duplicate concurrent webhooks.
+// pg_advisory_lock is session-scoped, so it must be held on a single dedicated
+// connection for the entire duration of fn() — using db.query (which returns the
+// connection to the pool immediately) released the lock before fn even started.
 async function withRecordLock(ycRecordId, fn) {
   const lockId = Math.abs(parseInt(ycRecordId) % 2147483647);
-  await db.query('SELECT pg_advisory_lock($1)', [lockId]);
+  const lockClient = await pool.connect();
   try {
-    return await fn();
+    await lockClient.query('SELECT pg_advisory_lock($1)', [lockId]);
+    try {
+      return await fn();
+    } finally {
+      await lockClient.query('SELECT pg_advisory_unlock($1)', [lockId]);
+    }
   } finally {
-    await db.query('SELECT pg_advisory_unlock($1)', [lockId]);
+    lockClient.release();
   }
 }
 
