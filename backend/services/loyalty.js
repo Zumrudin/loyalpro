@@ -61,8 +61,9 @@ function getRecordStatus(ycr) {
 }
 
 async function processCompletedRecord(recordId, clientId, ycRec, salonId, settings) {
-  // Skip accrual if client used bonuses for this visit (redemption exists by record_id or same date)
   const visitDate = String(ycRec.date || '').split(' ')[0] || null;
+
+  // Skip if client paid with bonuses (redemption transaction exists)
   const redemptionCheck = await db.oneOrNone(
     `SELECT 1 FROM loyalty_card_transactions
      WHERE client_id=$1 AND salon_id=$2 AND amount<0
@@ -71,7 +72,16 @@ async function processCompletedRecord(recordId, clientId, ycRec, salonId, settin
     [clientId, salonId, recordId, visitDate]
   );
   if (redemptionCheck) {
-    logger.info(`processCompletedRecord: skip accrual record=${recordId} — redemption found`);
+    logger.info(`processCompletedRecord: skip record=${recordId} — redemption found`);
+    await db.query('UPDATE records SET bonus_processed=TRUE,bonus_accrued=0 WHERE id=$1', [recordId]);
+    return 0;
+  }
+
+  // Skip if any service has a manual discount applied
+  const services = ycRec.services || [];
+  const hasDiscount = services.some(s => parseFloat(s.discount || 0) > 0 || parseFloat(s.cost_to_pay ?? s.cost ?? 0) < parseFloat(s.cost || 0));
+  if (hasDiscount) {
+    logger.info(`processCompletedRecord: skip record=${recordId} — discount detected`);
     await db.query('UPDATE records SET bonus_processed=TRUE,bonus_accrued=0 WHERE id=$1', [recordId]);
     return 0;
   }
@@ -81,6 +91,14 @@ async function processCompletedRecord(recordId, clientId, ycRec, salonId, settin
     await pg.query('BEGIN');
     const client = (await pg.query('SELECT * FROM clients WHERE id=$1 FOR UPDATE', [clientId])).rows[0];
     if (!client) { await pg.query('ROLLBACK'); return 0; }
+
+    // Skip if client has no loyalty card (business rule: card required for cashback)
+    if (!client.yclients_card_id) {
+      await pg.query('ROLLBACK');
+      logger.info(`processCompletedRecord: skip record=${recordId} — client ${clientId} has no loyalty card`);
+      await db.query('UPDATE records SET bonus_processed=TRUE,bonus_accrued=0 WHERE id=$1', [recordId]);
+      return 0;
+    }
 
     const cost     = getRecordCost(ycRec);
     const newSpent = parseFloat(client.total_spent || 0) + cost;
@@ -735,13 +753,31 @@ async function processRecordEvent(payload, salon, settings) {
   }
 }
 
+// Serialize FinOp processing per record to prevent duplicate concurrent webhooks
+async function withRecordLock(ycRecordId, fn) {
+  const lockId = Math.abs(parseInt(ycRecordId) % 2147483647);
+  await db.query('SELECT pg_advisory_lock($1)', [lockId]);
+  try {
+    return await fn();
+  } finally {
+    await db.query('SELECT pg_advisory_unlock($1)', [lockId]);
+  }
+}
+
 async function processFinancesOperation(payload, salon) {
+  const data = payload.data || {};
+  const ycRecordId = data.record_id || data.record?.id;
+  const clientYcId = data.client?.id;
+  if (!ycRecordId || !clientYcId) return;
+  return withRecordLock(ycRecordId, () => _processFinancesOperationLocked(payload, salon));
+}
+
+async function _processFinancesOperationLocked(payload, salon) {
   const status = payload.status;
   const data = payload.data || {};
   const ycRecordId = data.record_id || data.record?.id;
   const clientYcId = data.client?.id;
 
-  if (!ycRecordId || !clientYcId) return;
   logger.info(`FinOp status=${status} clientYcId=${clientYcId} ycRecordId=${ycRecordId}`);
 
   if (status === 'delete') {
@@ -750,12 +786,11 @@ async function processFinancesOperation(payload, salon) {
       [ycRecordId]
     );
     if (existingLog) {
-      // Our cashback exists — revert it (handles card deduction + balance update + transaction)
       await revertCashback(ycRecordId, salon, clientYcId);
       return;
     }
-    // No cashback in our system — fall through to card balance sync only
-    const client = await db.one(
+    // No cashback in our system — sync card balance only
+    const client = await db.oneOrNone(
       'SELECT * FROM clients WHERE salon_id=$1 AND yclients_client_id=$2',
       [salon.id, clientYcId]
     );
@@ -769,6 +804,12 @@ async function processFinancesOperation(payload, salon) {
       const delta = newBalance - oldBalance;
       logger.info(`FinOp delete: card balance old=${oldBalance} new=${newBalance} delta=${delta}`);
       if (Math.abs(delta) < 1) return;
+      // Deduplication: skip if we already recorded this exact balance sync
+      const existingTxn = await db.oneOrNone(
+        `SELECT id FROM loyalty_card_transactions WHERE client_id=$1 AND record_id=(SELECT id FROM records WHERE salon_id=$2 AND yclients_record_id=$3 LIMIT 1) AND ABS(amount-$4)<0.01`,
+        [client.id, salon.id, ycRecordId, delta]
+      );
+      if (existingTxn) { logger.info(`FinOp delete: duplicate sync skipped`); return; }
       await db.query(
         'UPDATE clients SET bonus_balance=$1::numeric, yclients_card_balance=$1::numeric, updated_at=NOW() WHERE id=$2',
         [newBalance, client.id]
@@ -789,7 +830,7 @@ async function processFinancesOperation(payload, salon) {
   }
 
   if (status === 'create') {
-    const client = await db.one(
+    const client = await db.oneOrNone(
       'SELECT * FROM clients WHERE salon_id=$1 AND yclients_client_id=$2',
       [salon.id, clientYcId]
     );
@@ -806,16 +847,20 @@ async function processFinancesOperation(payload, salon) {
 
       const dbRecord = await db.oneOrNone('SELECT id, raw_payload FROM records WHERE salon_id=$1 AND yclients_record_id=$2', [salon.id, ycRecordId]);
 
-      // If delta > 0 (accrual), check if visit has any manual discount — if so, skip accrual per business rules
       if (delta > 0) {
-        const services = dbRecord?.raw_payload?.services || [];
+        // Fix: parse raw_payload (stored as TEXT) before accessing .services
+        let rawParsed = {};
+        if (dbRecord?.raw_payload) {
+          try { rawParsed = typeof dbRecord.raw_payload === 'string' ? JSON.parse(dbRecord.raw_payload) : (dbRecord.raw_payload || {}); } catch {}
+        }
+        const services = rawParsed.services || [];
         const hasDiscount = services.some(s => parseFloat(s.discount || 0) > 0 || parseFloat(s.cost_to_pay ?? s.cost ?? 0) < parseFloat(s.cost || 0));
         if (hasDiscount) {
           logger.info(`FinOp create: record=${ycRecordId} has manual discount — skipping accrual sync (delta=${delta})`);
           return;
         }
 
-        // Skip duplicate accrual if processRecordEvent already handled this record
+        // Skip if processRecordEvent already handled this record
         const alreadyProcessed = await db.oneOrNone(
           'SELECT id FROM finances_log WHERE yclients_record_id=$1 AND cashback_amount > 0',
           [ycRecordId]
@@ -828,9 +873,21 @@ async function processFinancesOperation(payload, salon) {
           );
           return;
         }
+
+        // Deduplication: skip if identical accrual transaction already exists (concurrent duplicate webhook)
+        const existingAccrual = await db.oneOrNone(
+          `SELECT id FROM loyalty_card_transactions WHERE client_id=$1 AND type='accrual' AND ABS(amount-$2)<0.01
+           AND (record_id=$3 OR record_id=$4::text) AND created_at > NOW()-INTERVAL '30 seconds'`,
+          [client.id, delta, dbRecord?.id || null, String(ycRecordId)]
+        );
+        if (existingAccrual) {
+          logger.info(`FinOp create: duplicate accrual for record=${ycRecordId} — skipped`);
+          return;
+        }
       }
 
       if (delta < 0) {
+        // Deduplication: skip if redemption transaction already recorded
         const existingRedemption = await db.oneOrNone(
           `SELECT id FROM loyalty_card_transactions WHERE client_id=$1 AND title=$2`,
           [client.id, `Списание бонусов при оплате визита #${ycRecordId}`]
@@ -859,6 +916,18 @@ async function processFinancesOperation(payload, salon) {
          dbRecord?.id || null]
       );
       logger.info(`FinOp create: synced balance ${oldBalance} → ${newBalance} for client ${client.name}`);
+
+      // Fix Bug 2: if client paid with bonuses (delta<0), revert any prior cashback accrual for this record
+      if (delta < 0) {
+        const existingCashback = await db.oneOrNone(
+          'SELECT cashback_amount FROM finances_log WHERE yclients_record_id=$1 AND cashback_amount > 0',
+          [ycRecordId]
+        );
+        if (existingCashback) {
+          logger.info(`FinOp create delta<0: reverting prior cashback for record=${ycRecordId}`);
+          await revertCashback(ycRecordId, salon, clientYcId);
+        }
+      }
     } catch(e) { logger.error(`FinOp create: card sync error: ${e.message}`); }
     return;
   }
