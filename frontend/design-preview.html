@@ -1,0 +1,1036 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>LoyalPro — Design Preview</title>
+  <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@300;400;500;600&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
+  <style>
+    /* ─── DESIGN TOKENS ─── */
+    :root {
+      /* Backgrounds */
+      --pearl:       #F5F3F0;
+      --silk:        #EDE9E3;
+      --glass:       rgba(255,252,248,0.72);
+      --glass-border:rgba(255,255,255,0.85);
+
+      /* Champagne Gold */
+      --champ:       #D4AF37;
+      --champ-light: #F0D882;
+      --champ-dark:  #A8881C;
+      --champ-glow:  rgba(212,175,55,0.18);
+
+      /* Stone/Taupe */
+      --stone:       #4A4540;
+      --stone-mid:   #7A736B;
+      --stone-faint: rgba(74,69,64,0.40);
+      --stone-muted: rgba(74,69,64,0.60);
+
+      /* Shadows */
+      --shadow:      rgba(100,90,70,0.12);
+      --shadow-deep: rgba(100,90,70,0.20);
+
+      /* Orbs */
+      --orb-gold:    rgba(240,216,130,0.22);
+      --orb-lavender:rgba(220,210,240,0.18);
+      --orb-aqua:    rgba(190,225,220,0.15);
+
+      /* Divider */
+      --divider:     rgba(212,175,55,0.22);
+
+      /* Fonts */
+      --font-serif:  'Cormorant Garamond', Georgia, serif;
+      --font-sans:   'Inter', system-ui, sans-serif;
+    }
+
+    /* ─── RESET & BASE ─── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: var(--font-sans);
+      background-color: var(--pearl);
+      color: var(--stone);
+      min-height: 100vh;
+      overflow-x: hidden;
+    }
+
+    /* ─── ORB DECORATIONS ─── */
+    .orb {
+      position: fixed;
+      border-radius: 50%;
+      filter: blur(80px);
+      pointer-events: none;
+      z-index: 0;
+    }
+    .orb-1 { width: 600px; height: 600px; top: -200px; right: -150px; background: var(--orb-gold); }
+    .orb-2 { width: 400px; height: 400px; bottom: 10%; left: -100px; background: var(--orb-lavender); }
+    .orb-3 { width: 300px; height: 300px; top: 50%; left: 40%; background: var(--orb-aqua); }
+
+    /* ─── LAYOUT ─── */
+    .page { position: relative; z-index: 1; max-width: 1200px; margin: 0 auto; padding: 0 32px 80px; }
+
+    /* ─── SIDEBAR NAV ─── */
+    .layout { display: flex; gap: 32px; min-height: 100vh; }
+
+    .sidebar {
+      width: 240px;
+      flex-shrink: 0;
+      position: sticky;
+      top: 0;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      padding: 32px 0;
+      gap: 4px;
+    }
+
+    .sidebar-logo {
+      font-family: var(--font-serif);
+      font-size: 26px;
+      font-weight: 500;
+      color: var(--stone);
+      letter-spacing: 0.5px;
+      margin-bottom: 8px;
+      padding: 0 16px;
+    }
+    .sidebar-logo span { color: var(--champ); }
+
+    .sidebar-section-label {
+      font-size: 11px;
+      letter-spacing: 1.2px;
+      text-transform: uppercase;
+      color: var(--stone-faint);
+      padding: 16px 16px 6px;
+      font-weight: 600;
+    }
+
+    .nav-item {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 10px 16px;
+      border-radius: 12px;
+      cursor: pointer;
+      transition: all 0.2s;
+      font-size: 14px;
+      font-weight: 500;
+      color: var(--stone-mid);
+      text-decoration: none;
+    }
+    .nav-item:hover { background: var(--champ-glow); color: var(--stone); }
+    .nav-item.active {
+      background: linear-gradient(135deg, var(--champ-glow), rgba(212,175,55,0.08));
+      color: var(--champ-dark);
+      border: 1px solid var(--divider);
+    }
+    .nav-icon {
+      width: 32px; height: 32px;
+      border-radius: 8px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 16px;
+      background: var(--silk);
+      flex-shrink: 0;
+    }
+    .nav-item.active .nav-icon { background: var(--champ-glow); }
+
+    .sidebar-divider { height: 1px; background: var(--divider); margin: 12px 16px; }
+
+    /* ─── MAIN CONTENT ─── */
+    .main { flex: 1; padding: 32px 0; min-width: 0; }
+
+    /* ─── PAGE HEADER ─── */
+    .page-header { margin-bottom: 32px; }
+    .page-title {
+      font-family: var(--font-serif);
+      font-size: 36px;
+      font-weight: 400;
+      color: var(--stone);
+      line-height: 1.2;
+      margin-bottom: 6px;
+    }
+    .page-subtitle {
+      font-size: 14px;
+      color: var(--stone-mid);
+      font-weight: 400;
+    }
+
+    /* ─── SECTION ─── */
+    .section { margin-bottom: 40px; }
+    .section-title {
+      font-size: 11px;
+      letter-spacing: 1.2px;
+      text-transform: uppercase;
+      color: var(--stone-faint);
+      font-weight: 600;
+      margin-bottom: 16px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .section-title::after { content: ''; flex: 1; height: 1px; background: var(--divider); }
+
+    /* ─── STATS CARDS ─── */
+    .stats-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; }
+
+    .stat-card {
+      background: var(--glass);
+      backdrop-filter: blur(20px);
+      border: 1px solid var(--glass-border);
+      border-radius: 20px;
+      padding: 20px;
+      box-shadow: 0 4px 12px var(--shadow);
+      transition: all 0.3s;
+    }
+    .stat-card:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 8px 24px var(--shadow-deep);
+    }
+
+    .stat-label {
+      font-size: 11px;
+      letter-spacing: 1.2px;
+      text-transform: uppercase;
+      color: var(--stone-faint);
+      font-weight: 600;
+      margin-bottom: 10px;
+    }
+    .stat-value {
+      font-family: var(--font-serif);
+      font-size: 32px;
+      font-weight: 500;
+      color: var(--stone);
+      line-height: 1;
+      margin-bottom: 6px;
+    }
+    .stat-sub {
+      font-size: 12px;
+      color: var(--stone-mid);
+    }
+    .stat-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 3px;
+      font-size: 11px;
+      font-weight: 600;
+      padding: 2px 8px;
+      border-radius: 20px;
+    }
+    .stat-badge.up { background: rgba(100,180,100,0.12); color: #5A9A5A; }
+    .stat-badge.down { background: rgba(180,100,100,0.12); color: #9A5A5A; }
+
+    .stat-icon {
+      width: 40px; height: 40px;
+      border-radius: 12px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 20px;
+      margin-bottom: 12px;
+      background: var(--champ-glow);
+    }
+
+    /* ─── TABLE CARD ─── */
+    .table-card {
+      background: var(--glass);
+      backdrop-filter: blur(20px);
+      border: 1px solid var(--glass-border);
+      border-radius: 20px;
+      overflow: hidden;
+      box-shadow: 0 4px 12px var(--shadow);
+    }
+
+    .table-card-header {
+      padding: 20px 24px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      border-bottom: 1px solid var(--divider);
+    }
+    .table-card-title {
+      font-family: var(--font-serif);
+      font-size: 20px;
+      font-weight: 400;
+      color: var(--stone);
+    }
+
+    table { width: 100%; border-collapse: collapse; }
+    thead th {
+      padding: 12px 24px;
+      text-align: left;
+      font-size: 11px;
+      letter-spacing: 1.2px;
+      text-transform: uppercase;
+      color: var(--stone-faint);
+      font-weight: 600;
+      border-bottom: 1px solid var(--divider);
+      background: var(--silk);
+    }
+    tbody td {
+      padding: 14px 24px;
+      font-size: 14px;
+      color: var(--stone);
+      border-bottom: 1px solid var(--divider);
+    }
+    tbody tr:last-child td { border-bottom: none; }
+    tbody tr:hover td { background: var(--champ-glow); }
+
+    .client-cell { display: flex; align-items: center; gap: 12px; }
+    .avatar {
+      width: 36px; height: 36px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, var(--champ-light), var(--champ));
+      display: flex; align-items: center; justify-content: center;
+      font-size: 14px; font-weight: 600;
+      color: var(--champ-dark);
+      flex-shrink: 0;
+    }
+    .client-name { font-weight: 500; font-size: 14px; }
+    .client-phone { font-size: 12px; color: var(--stone-mid); }
+
+    .status-pill {
+      display: inline-flex;
+      align-items: center;
+      padding: 4px 12px;
+      border-radius: 20px;
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.5px;
+    }
+    .status-pill.active { background: rgba(100,180,100,0.12); color: #5A9A5A; border: 1px solid rgba(100,180,100,0.20); }
+    .status-pill.pending { background: var(--champ-glow); color: var(--champ-dark); border: 1px solid var(--divider); }
+    .status-pill.inactive { background: rgba(74,69,64,0.06); color: var(--stone-mid); border: 1px solid var(--divider); }
+
+    /* ─── BUTTONS ─── */
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 22px;
+      border-radius: 24px;
+      font-size: 13px;
+      font-weight: 600;
+      letter-spacing: 0.3px;
+      cursor: pointer;
+      transition: all 0.2s;
+      border: none;
+      text-decoration: none;
+    }
+    .btn-primary {
+      background: linear-gradient(135deg, var(--champ), var(--champ-dark));
+      color: #fff;
+      box-shadow: 0 4px 12px rgba(212,175,55,0.30);
+    }
+    .btn-primary:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 6px 20px rgba(212,175,55,0.40);
+    }
+    .btn-secondary {
+      background: var(--glass);
+      color: var(--stone);
+      border: 1px solid var(--divider);
+      backdrop-filter: blur(12px);
+    }
+    .btn-secondary:hover { background: var(--champ-glow); border-color: var(--champ); }
+
+    .btn-ghost {
+      background: transparent;
+      color: var(--champ-dark);
+      border: 1px solid var(--divider);
+    }
+    .btn-ghost:hover { background: var(--champ-glow); }
+
+    .buttons-row { display: flex; gap: 12px; flex-wrap: wrap; }
+
+    /* ─── FORM INPUTS ─── */
+    .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+
+    .form-group { display: flex; flex-direction: column; gap: 6px; }
+    .form-label {
+      font-size: 11px;
+      letter-spacing: 1.2px;
+      text-transform: uppercase;
+      color: var(--stone-mid);
+      font-weight: 600;
+    }
+    .form-input {
+      padding: 12px 16px;
+      background: var(--glass);
+      backdrop-filter: blur(12px);
+      border: 1px solid var(--glass-border);
+      border-radius: 12px;
+      font-size: 14px;
+      color: var(--stone);
+      outline: none;
+      transition: all 0.2s;
+      font-family: var(--font-sans);
+    }
+    .form-input:focus {
+      border-color: var(--champ);
+      box-shadow: 0 0 0 3px var(--champ-glow);
+    }
+    .form-input::placeholder { color: var(--stone-faint); }
+
+    select.form-input { cursor: pointer; }
+
+    /* ─── DETAIL CARD ─── */
+    .detail-card {
+      background: var(--glass);
+      backdrop-filter: blur(20px);
+      border: 1px solid var(--glass-border);
+      border-radius: 20px;
+      padding: 24px;
+      box-shadow: 0 4px 12px var(--shadow);
+    }
+
+    .profile-row {
+      display: flex;
+      align-items: center;
+      gap: 20px;
+      margin-bottom: 24px;
+      padding-bottom: 24px;
+      border-bottom: 1px solid var(--divider);
+    }
+    .profile-avatar {
+      width: 72px; height: 72px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, var(--champ-light), var(--champ));
+      display: flex; align-items: center; justify-content: center;
+      font-family: var(--font-serif);
+      font-size: 28px;
+      color: var(--champ-dark);
+      border: 3px solid rgba(212,175,55,0.30);
+      flex-shrink: 0;
+    }
+    .profile-name {
+      font-family: var(--font-serif);
+      font-size: 26px;
+      font-weight: 400;
+      color: var(--stone);
+      line-height: 1.2;
+    }
+    .profile-meta { font-size: 13px; color: var(--stone-mid); margin-top: 2px; }
+
+    .info-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+    .info-item { }
+    .info-item-label {
+      font-size: 11px;
+      letter-spacing: 1.2px;
+      text-transform: uppercase;
+      color: var(--stone-faint);
+      font-weight: 600;
+      margin-bottom: 4px;
+    }
+    .info-item-value {
+      font-size: 15px;
+      font-weight: 500;
+      color: var(--stone);
+    }
+    .info-item-value.gold { color: var(--champ-dark); font-family: var(--font-serif); font-size: 20px; }
+
+    /* ─── BONUS CARD ─── */
+    .bonus-card {
+      background: linear-gradient(135deg, #2A2420 0%, #3D3428 50%, #2A2420 100%);
+      border-radius: 20px;
+      padding: 24px;
+      color: #fff;
+      position: relative;
+      overflow: hidden;
+    }
+    .bonus-card::before {
+      content: '';
+      position: absolute;
+      top: -60px; right: -60px;
+      width: 200px; height: 200px;
+      border-radius: 50%;
+      background: rgba(212,175,55,0.12);
+    }
+    .bonus-card::after {
+      content: '';
+      position: absolute;
+      bottom: -40px; left: -40px;
+      width: 150px; height: 150px;
+      border-radius: 50%;
+      background: rgba(212,175,55,0.08);
+    }
+    .bonus-label {
+      font-size: 11px;
+      letter-spacing: 1.2px;
+      text-transform: uppercase;
+      color: rgba(212,175,55,0.70);
+      font-weight: 600;
+      margin-bottom: 8px;
+      position: relative; z-index: 1;
+    }
+    .bonus-value {
+      font-family: var(--font-serif);
+      font-size: 44px;
+      font-weight: 300;
+      color: var(--champ-light);
+      line-height: 1;
+      margin-bottom: 4px;
+      position: relative; z-index: 1;
+    }
+    .bonus-sub {
+      font-size: 13px;
+      color: rgba(240,216,130,0.60);
+      position: relative; z-index: 1;
+    }
+
+    /* ─── NOTIFICATION TOAST ─── */
+    .toast-demo { display: flex; flex-direction: column; gap: 10px; }
+    .toast {
+      display: flex;
+      align-items: flex-start;
+      gap: 14px;
+      padding: 16px 18px;
+      border-radius: 16px;
+      backdrop-filter: blur(16px);
+    }
+    .toast-success {
+      background: rgba(255,252,248,0.85);
+      border: 1px solid rgba(100,180,100,0.25);
+      box-shadow: 0 4px 16px var(--shadow);
+    }
+    .toast-warning {
+      background: rgba(255,252,248,0.85);
+      border: 1px solid var(--divider);
+      box-shadow: 0 4px 16px var(--shadow);
+    }
+    .toast-icon {
+      width: 36px; height: 36px;
+      border-radius: 10px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 18px;
+      flex-shrink: 0;
+    }
+    .toast-icon.success { background: rgba(100,180,100,0.12); }
+    .toast-icon.gold { background: var(--champ-glow); }
+    .toast-title { font-size: 14px; font-weight: 600; color: var(--stone); margin-bottom: 2px; }
+    .toast-msg { font-size: 12px; color: var(--stone-mid); }
+
+    /* ─── TWO COL ─── */
+    .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
+    .three-col { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px; }
+
+    /* ─── CHART BAR MOCK ─── */
+    .chart-bars {
+      display: flex;
+      align-items: flex-end;
+      gap: 8px;
+      height: 120px;
+      padding: 0 4px;
+    }
+    .bar-group { display: flex; flex-direction: column; align-items: center; gap: 4px; flex: 1; }
+    .bar {
+      width: 100%;
+      border-radius: 6px 6px 0 0;
+      background: linear-gradient(180deg, var(--champ-light), var(--champ));
+      opacity: 0.85;
+      transition: opacity 0.2s;
+    }
+    .bar:hover { opacity: 1; }
+    .bar-label { font-size: 10px; color: var(--stone-faint); font-weight: 500; }
+
+    /* ─── SEARCH BAR ─── */
+    .topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 28px;
+    }
+    .search-wrap {
+      position: relative;
+      flex: 1;
+      max-width: 360px;
+    }
+    .search-wrap .search-icon {
+      position: absolute;
+      left: 14px; top: 50%;
+      transform: translateY(-50%);
+      color: var(--stone-faint);
+      font-size: 16px;
+    }
+    .search-input {
+      width: 100%;
+      padding: 10px 16px 10px 40px;
+      background: var(--glass);
+      backdrop-filter: blur(12px);
+      border: 1px solid var(--glass-border);
+      border-radius: 24px;
+      font-size: 14px;
+      color: var(--stone);
+      outline: none;
+      transition: all 0.2s;
+    }
+    .search-input:focus { border-color: var(--champ); box-shadow: 0 0 0 3px var(--champ-glow); }
+    .search-input::placeholder { color: var(--stone-faint); }
+
+    .topbar-actions { display: flex; align-items: center; gap: 12px; }
+    .topbar-avatar {
+      width: 38px; height: 38px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, var(--champ-light), var(--champ));
+      display: flex; align-items: center; justify-content: center;
+      font-size: 15px;
+      color: var(--champ-dark);
+      font-weight: 600;
+      cursor: pointer;
+      border: 2px solid rgba(212,175,55,0.30);
+    }
+    .icon-btn {
+      width: 38px; height: 38px;
+      border-radius: 12px;
+      background: var(--glass);
+      border: 1px solid var(--glass-border);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 18px;
+      cursor: pointer;
+      transition: all 0.2s;
+      color: var(--stone-mid);
+    }
+    .icon-btn:hover { background: var(--champ-glow); border-color: var(--divider); color: var(--champ-dark); }
+
+    /* ─── COLOR TOKENS DISPLAY ─── */
+    .token-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; }
+    .token-swatch {
+      border-radius: 12px;
+      height: 60px;
+      position: relative;
+      overflow: hidden;
+      border: 1px solid var(--divider);
+    }
+    .token-label {
+      font-size: 11px;
+      color: var(--stone-mid);
+      margin-top: 6px;
+      font-weight: 500;
+    }
+    .token-hex { font-size: 10px; color: var(--stone-faint); }
+
+    /* ─── RESPONSIVE ─── */
+    @media (max-width: 900px) {
+      .stats-grid { grid-template-columns: repeat(2, 1fr); }
+      .two-col, .three-col { grid-template-columns: 1fr; }
+      .form-grid { grid-template-columns: 1fr; }
+      .info-grid { grid-template-columns: repeat(2, 1fr); }
+      .token-grid { grid-template-columns: repeat(3, 1fr); }
+    }
+  </style>
+</head>
+<body>
+
+<div class="orb orb-1"></div>
+<div class="orb orb-2"></div>
+<div class="orb orb-3"></div>
+
+<div class="page">
+  <div class="layout">
+
+    <!-- ─── SIDEBAR ─── -->
+    <aside class="sidebar">
+      <div class="sidebar-logo">Loyal<span>Pro</span></div>
+
+      <div class="sidebar-section-label">Главное</div>
+      <a class="nav-item active" href="#">
+        <div class="nav-icon">✦</div>
+        Дашборд
+      </a>
+      <a class="nav-item" href="#">
+        <div class="nav-icon">👤</div>
+        Клиенты
+      </a>
+      <a class="nav-item" href="#">
+        <div class="nav-icon">📅</div>
+        Записи
+      </a>
+      <a class="nav-item" href="#">
+        <div class="nav-icon">⭐</div>
+        Бонусы
+      </a>
+
+      <div class="sidebar-divider"></div>
+      <div class="sidebar-section-label">Управление</div>
+
+      <a class="nav-item" href="#">
+        <div class="nav-icon">👥</div>
+        Сотрудники
+      </a>
+      <a class="nav-item" href="#">
+        <div class="nav-icon">🛍</div>
+        Услуги
+      </a>
+      <a class="nav-item" href="#">
+        <div class="nav-icon">📊</div>
+        Аналитика
+      </a>
+      <a class="nav-item" href="#">
+        <div class="nav-icon">🏠</div>
+        Домашний уход
+      </a>
+
+      <div class="sidebar-divider"></div>
+      <a class="nav-item" href="#">
+        <div class="nav-icon">⚙️</div>
+        Настройки
+      </a>
+    </aside>
+
+    <!-- ─── MAIN ─── -->
+    <main class="main">
+
+      <!-- Topbar -->
+      <div class="topbar">
+        <div class="search-wrap">
+          <span class="search-icon">🔍</span>
+          <input class="search-input" type="text" placeholder="Поиск клиентов, записей...">
+        </div>
+        <div class="topbar-actions">
+          <div class="icon-btn">🔔</div>
+          <div class="icon-btn">📋</div>
+          <div class="topbar-avatar">А</div>
+        </div>
+      </div>
+
+      <!-- Page header -->
+      <div class="page-header">
+        <div class="page-title">Добро пожаловать, Администратор</div>
+        <div class="page-subtitle">Четверг, 24 апреля 2026 · Beauty Studio Prestige</div>
+      </div>
+
+      <!-- Stats -->
+      <div class="section">
+        <div class="section-title">Сводка за месяц</div>
+        <div class="stats-grid">
+          <div class="stat-card">
+            <div class="stat-icon">💎</div>
+            <div class="stat-label">Выручка</div>
+            <div class="stat-value">1.24М</div>
+            <div class="stat-sub">
+              <span class="stat-badge up">↑ 12%</span> &nbsp;vs прошлый месяц
+            </div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-icon">👤</div>
+            <div class="stat-label">Новые клиенты</div>
+            <div class="stat-value">84</div>
+            <div class="stat-sub">
+              <span class="stat-badge up">↑ 7%</span> &nbsp;за апрель
+            </div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-icon">📅</div>
+            <div class="stat-label">Записей</div>
+            <div class="stat-value">312</div>
+            <div class="stat-sub">
+              <span class="stat-badge down">↓ 3%</span> &nbsp;загруженность 76%
+            </div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-icon">⭐</div>
+            <div class="stat-label">Бонусы выдано</div>
+            <div class="stat-value">18.4К</div>
+            <div class="stat-sub">
+              <span class="stat-badge up">↑ 21%</span> &nbsp;активных карт: 248
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Chart + Bonus card -->
+      <div class="two-col">
+        <div class="section">
+          <div class="section-title">Выручка по дням</div>
+          <div class="detail-card">
+            <div class="chart-bars">
+              <div class="bar-group"><div class="bar" style="height:45%"></div><div class="bar-label">18</div></div>
+              <div class="bar-group"><div class="bar" style="height:62%"></div><div class="bar-label">19</div></div>
+              <div class="bar-group"><div class="bar" style="height:38%"></div><div class="bar-label">20</div></div>
+              <div class="bar-group"><div class="bar" style="height:80%"></div><div class="bar-label">21</div></div>
+              <div class="bar-group"><div class="bar" style="height:55%"></div><div class="bar-label">22</div></div>
+              <div class="bar-group"><div class="bar" style="height:90%"></div><div class="bar-label">23</div></div>
+              <div class="bar-group"><div class="bar" style="height:70%"></div><div class="bar-label">24</div></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="section">
+          <div class="section-title">Бонусная карта</div>
+          <div class="bonus-card">
+            <div class="bonus-label">Доступные бонусы</div>
+            <div class="bonus-value">3 840</div>
+            <div class="bonus-sub">Карта Gold · №LP-00124</div>
+            <br>
+            <div style="display:flex; gap:8px; margin-top:8px; position:relative; z-index:1;">
+              <button class="btn" style="background:rgba(212,175,55,0.25);color:#F0D882;border:1px solid rgba(212,175,55,0.35);border-radius:24px;font-size:12px;padding:8px 16px;cursor:pointer;">Начислить</button>
+              <button class="btn" style="background:transparent;color:rgba(240,216,130,0.70);border:1px solid rgba(240,216,130,0.20);border-radius:24px;font-size:12px;padding:8px 16px;cursor:pointer;">История</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Client table -->
+      <div class="section">
+        <div class="section-title">Последние клиенты</div>
+        <div class="table-card">
+          <div class="table-card-header">
+            <div class="table-card-title">Клиенты</div>
+            <button class="btn btn-primary">+ Добавить</button>
+          </div>
+          <table>
+            <thead>
+              <tr>
+                <th>Клиент</th>
+                <th>Последний визит</th>
+                <th>Бонусы</th>
+                <th>Статус</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>
+                  <div class="client-cell">
+                    <div class="avatar">АМ</div>
+                    <div>
+                      <div class="client-name">Алина Миронова</div>
+                      <div class="client-phone">+7 926 123-45-67</div>
+                    </div>
+                  </div>
+                </td>
+                <td style="color:var(--stone-mid)">22 апр 2026</td>
+                <td style="color:var(--champ-dark);font-weight:600">2 400</td>
+                <td><span class="status-pill active">Активна</span></td>
+                <td><button class="btn btn-ghost" style="padding:6px 14px;font-size:12px;">Открыть</button></td>
+              </tr>
+              <tr>
+                <td>
+                  <div class="client-cell">
+                    <div class="avatar">ЕС</div>
+                    <div>
+                      <div class="client-name">Елена Соколова</div>
+                      <div class="client-phone">+7 916 987-65-43</div>
+                    </div>
+                  </div>
+                </td>
+                <td style="color:var(--stone-mid)">20 апр 2026</td>
+                <td style="color:var(--champ-dark);font-weight:600">850</td>
+                <td><span class="status-pill pending">VIP</span></td>
+                <td><button class="btn btn-ghost" style="padding:6px 14px;font-size:12px;">Открыть</button></td>
+              </tr>
+              <tr>
+                <td>
+                  <div class="client-cell">
+                    <div class="avatar">НВ</div>
+                    <div>
+                      <div class="client-name">Наталья Волкова</div>
+                      <div class="client-phone">+7 903 555-11-22</div>
+                    </div>
+                  </div>
+                </td>
+                <td style="color:var(--stone-mid)">15 апр 2026</td>
+                <td style="color:var(--stone-mid);font-weight:500">0</td>
+                <td><span class="status-pill inactive">Неактивна</span></td>
+                <td><button class="btn btn-ghost" style="padding:6px 14px;font-size:12px;">Открыть</button></td>
+              </tr>
+              <tr>
+                <td>
+                  <div class="client-cell">
+                    <div class="avatar">МК</div>
+                    <div>
+                      <div class="client-name">Мария Козлова</div>
+                      <div class="client-phone">+7 985 777-33-44</div>
+                    </div>
+                  </div>
+                </td>
+                <td style="color:var(--stone-mid)">24 апр 2026</td>
+                <td style="color:var(--champ-dark);font-weight:600">5 120</td>
+                <td><span class="status-pill active">Активна</span></td>
+                <td><button class="btn btn-ghost" style="padding:6px 14px;font-size:12px;">Открыть</button></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Client profile card -->
+      <div class="section">
+        <div class="section-title">Карточка клиента</div>
+        <div class="detail-card">
+          <div class="profile-row">
+            <div class="profile-avatar">АМ</div>
+            <div>
+              <div class="profile-name">Алина Миронова</div>
+              <div class="profile-meta">Клиент с января 2024 · 18 визитов</div>
+            </div>
+            <div style="margin-left:auto; display:flex; gap:10px;">
+              <button class="btn btn-secondary">Запись</button>
+              <button class="btn btn-primary">Начислить бонусы</button>
+            </div>
+          </div>
+          <div class="info-grid">
+            <div class="info-item">
+              <div class="info-item-label">Телефон</div>
+              <div class="info-item-value">+7 926 123-45-67</div>
+            </div>
+            <div class="info-item">
+              <div class="info-item-label">Email</div>
+              <div class="info-item-value">alina@example.com</div>
+            </div>
+            <div class="info-item">
+              <div class="info-item-label">День рождения</div>
+              <div class="info-item-value">14 марта</div>
+            </div>
+            <div class="info-item">
+              <div class="info-item-label">Последний визит</div>
+              <div class="info-item-value">22 апреля 2026</div>
+            </div>
+            <div class="info-item">
+              <div class="info-item-label">Сумма за всё время</div>
+              <div class="info-item-value">84 600 ₽</div>
+            </div>
+            <div class="info-item">
+              <div class="info-item-label">Бонусный баланс</div>
+              <div class="info-item-value gold">2 400 ✦</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Form example -->
+      <div class="section">
+        <div class="section-title">Новая запись</div>
+        <div class="detail-card">
+          <div class="form-grid">
+            <div class="form-group">
+              <label class="form-label">Клиент</label>
+              <input class="form-input" type="text" placeholder="Поиск по имени или телефону">
+            </div>
+            <div class="form-group">
+              <label class="form-label">Мастер</label>
+              <select class="form-input">
+                <option>— Выберите мастера —</option>
+                <option>Анастасия Петрова</option>
+                <option>Ирина Смирнова</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Услуга</label>
+              <select class="form-input">
+                <option>— Выберите услугу —</option>
+                <option>Окрашивание волос</option>
+                <option>Маникюр с покрытием</option>
+                <option>Массаж 60 мин</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Дата и время</label>
+              <input class="form-input" type="datetime-local">
+            </div>
+          </div>
+          <div style="margin-top:20px;">
+            <div class="form-group">
+              <label class="form-label">Комментарий</label>
+              <input class="form-input" type="text" placeholder="Пожелания клиента...">
+            </div>
+          </div>
+          <div class="buttons-row" style="margin-top:20px;">
+            <button class="btn btn-primary">Создать запись</button>
+            <button class="btn btn-secondary">Отмена</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Buttons showcase -->
+      <div class="section">
+        <div class="section-title">Кнопки</div>
+        <div class="detail-card">
+          <div class="buttons-row">
+            <button class="btn btn-primary">✦ Основная кнопка</button>
+            <button class="btn btn-secondary">Вторичная</button>
+            <button class="btn btn-ghost">Контурная</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Notifications -->
+      <div class="section">
+        <div class="section-title">Уведомления</div>
+        <div class="toast-demo">
+          <div class="toast toast-success">
+            <div class="toast-icon success">✓</div>
+            <div>
+              <div class="toast-title">Бонусы начислены</div>
+              <div class="toast-msg">Клиент Алина Миронова получила 500 бонусных баллов</div>
+            </div>
+          </div>
+          <div class="toast toast-warning">
+            <div class="toast-icon gold">✦</div>
+            <div>
+              <div class="toast-title">Новая запись</div>
+              <div class="toast-msg">Мария Козлова записалась на окрашивание · 25 апр, 14:00</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Color tokens -->
+      <div class="section">
+        <div class="section-title">Цветовые токены</div>
+        <div class="token-grid">
+          <div>
+            <div class="token-swatch" style="background:#F5F3F0;"></div>
+            <div class="token-label">pearl</div>
+            <div class="token-hex">#F5F3F0</div>
+          </div>
+          <div>
+            <div class="token-swatch" style="background:#EDE9E3;"></div>
+            <div class="token-label">silk</div>
+            <div class="token-hex">#EDE9E3</div>
+          </div>
+          <div>
+            <div class="token-swatch" style="background:rgba(255,252,248,0.72);"></div>
+            <div class="token-label">glass</div>
+            <div class="token-hex">rgba(255,252,248,.72)</div>
+          </div>
+          <div>
+            <div class="token-swatch" style="background:#D4AF37;"></div>
+            <div class="token-label">champagne</div>
+            <div class="token-hex">#D4AF37</div>
+          </div>
+          <div>
+            <div class="token-swatch" style="background:#F0D882;"></div>
+            <div class="token-label">champLight</div>
+            <div class="token-hex">#F0D882</div>
+          </div>
+          <div>
+            <div class="token-swatch" style="background:#A8881C;"></div>
+            <div class="token-label">champDark</div>
+            <div class="token-hex">#A8881C</div>
+          </div>
+          <div>
+            <div class="token-swatch" style="background:#4A4540;"></div>
+            <div class="token-label">stone</div>
+            <div class="token-hex">#4A4540</div>
+          </div>
+          <div>
+            <div class="token-swatch" style="background:#7A736B;"></div>
+            <div class="token-label">stoneMid</div>
+            <div class="token-hex">#7A736B</div>
+          </div>
+          <div>
+            <div class="token-swatch" style="background:rgba(240,216,130,0.22);"></div>
+            <div class="token-label">orb-gold</div>
+            <div class="token-hex">rgba(240,216,130,.22)</div>
+          </div>
+          <div>
+            <div class="token-swatch" style="background:rgba(220,210,240,0.18);"></div>
+            <div class="token-label">orb-lavender</div>
+            <div class="token-hex">rgba(220,210,240,.18)</div>
+          </div>
+        </div>
+      </div>
+
+    </main>
+  </div>
+</div>
+
+</body>
+</html>

@@ -80,7 +80,7 @@
 .hc-cat-label{font-size:11px;font-weight:700;color:var(--hc-gold);text-transform:uppercase;letter-spacing:.6px;margin-bottom:8px;display:flex;align-items:center;justify-content:space-between}
 .hc-cat-label span:first-child::before{content:'✓ ';color:var(--hc-gold)}
 .hc-item{display:grid;grid-template-columns:1fr 1fr auto;gap:8px;align-items:start;margin-bottom:7px}
-.hc-item input{padding:7px 10px;font-size:12.5px;border-color:var(--hc-border);background:#fdfaf5}
+.hc-item input{padding:7px 10px;font-size:16px;border-color:var(--hc-border);background:#fdfaf5}
 .hc-item input:focus{border-color:var(--hc-gold);box-shadow:0 0 0 3px rgba(201,169,110,.15)}
 .hc-item-del{width:28px;height:32px;border-radius:6px;background:transparent;border:1px solid var(--hc-border);color:var(--hc-brown2);cursor:pointer;font-size:13px;display:flex;align-items:center;justify-content:center;flex-shrink:0;transition:.15s;margin-top:1px}
 .hc-item-del:hover{background:#fef2f2;border-color:#fecaca;color:var(--danger)}

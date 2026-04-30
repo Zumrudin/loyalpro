@@ -3,3 +3,5 @@ backend/node_modules/
 *.log
 .env
 logs/
+.mcp.json
+.aider*

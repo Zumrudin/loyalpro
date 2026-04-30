@@ -1,0 +1,105 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e23]:
+    - generic [ref=e24]:
+      - generic [ref=e25]:
+        - img [ref=e27]
+        - generic [ref=e29]: LoyalPro
+      - navigation [ref=e30]:
+        - generic [ref=e31] [cursor=pointer]: Дашборд
+        - generic [ref=e32] [cursor=pointer]: Клиенты
+        - generic [ref=e33] [cursor=pointer]: Записи
+        - generic [ref=e34] [cursor=pointer]: Сотрудники
+        - generic [ref=e35] [cursor=pointer]: Сегменты
+        - generic [ref=e36] [cursor=pointer]: Уход
+        - generic [ref=e37] [cursor=pointer]: Настройки
+        - generic [ref=e38] [cursor=pointer]: Пользователи
+      - generic [ref=e39]:
+        - button "Синхронизировать" [ref=e40] [cursor=pointer]:
+          - img [ref=e41]
+          - text: Синхронизировать
+        - generic [ref=e44]:
+          - generic [ref=e45]: 🌙
+          - button "Тёмная тема" [ref=e46] [cursor=pointer]
+        - generic [ref=e47]: MY
+        - generic [ref=e48]: My Clinic
+        - button "Выйти" [ref=e49] [cursor=pointer]
+    - generic [ref=e50]:
+      - text: ▲ ⇅ ⇅ ⇅ ⇅ ⇅ ⇅ ⇅ ⇅ ⇅
+      - generic [ref=e266]:
+        - generic [ref=e267]:
+          - generic [ref=e268]: Домашний уход
+          - button "Новое назначение" [ref=e269] [cursor=pointer]:
+            - img [ref=e270]
+            - text: Новое назначение
+        - textbox "Поиск по клиенту или телефону..." [ref=e272]
+        - generic [ref=e273]:
+          - table [ref=e275]:
+            - rowgroup [ref=e276]:
+              - row "Дата Клиент Телефон Специалист Заметка" [ref=e277]:
+                - columnheader "Дата" [ref=e278]
+                - columnheader "Клиент" [ref=e279]
+                - columnheader "Телефон" [ref=e280]
+                - columnheader "Специалист" [ref=e281]
+                - columnheader "Заметка" [ref=e282]
+                - columnheader [ref=e283]
+            - rowgroup [ref=e284]:
+              - row "26.04.2026 — — My Clinic 👁 PDF Изм. Удалить" [ref=e285]:
+                - cell "26.04.2026" [ref=e286]
+                - cell "—" [ref=e287]
+                - cell "—" [ref=e288]
+                - cell "My Clinic" [ref=e289]
+                - cell [ref=e290]
+                - cell "👁 PDF Изм. Удалить" [ref=e291]:
+                  - button "👁" [ref=e292] [cursor=pointer]
+                  - button "PDF" [ref=e293] [cursor=pointer]
+                  - button "Изм." [ref=e294] [cursor=pointer]
+                  - button "Удалить" [ref=e295] [cursor=pointer]
+              - row "26.04.2026 — — My Clinic 👁 PDF Изм. Удалить" [ref=e296]:
+                - cell "26.04.2026" [ref=e297]
+                - cell "—" [ref=e298]
+                - cell "—" [ref=e299]
+                - cell "My Clinic" [ref=e300]
+                - cell [ref=e301]
+                - cell "👁 PDF Изм. Удалить" [ref=e302]:
+                  - button "👁" [ref=e303] [cursor=pointer]
+                  - button "PDF" [ref=e304] [cursor=pointer]
+                  - button "Изм." [ref=e305] [cursor=pointer]
+                  - button "Удалить" [ref=e306] [cursor=pointer]
+              - row "20.04.2026 Зумрудин +79200255591 Гаджиева Пери Врач-косметолог 👁 PDF Изм. Удалить" [ref=e307]:
+                - cell "20.04.2026" [ref=e308]
+                - cell "Зумрудин" [ref=e309]
+                - cell "+79200255591" [ref=e310]
+                - cell "Гаджиева Пери Врач-косметолог" [ref=e311]:
+                  - text: Гаджиева Пери
+                  - text: Врач-косметолог
+                - cell [ref=e312]
+                - cell "👁 PDF Изм. Удалить" [ref=e313]:
+                  - button "👁" [ref=e314] [cursor=pointer]
+                  - button "PDF" [ref=e315] [cursor=pointer]
+                  - button "Изм." [ref=e316] [cursor=pointer]
+                  - button "Удалить" [ref=e317] [cursor=pointer]
+          - generic [ref=e319]: "Всего: 3"
+  - text: ✓ ✓ ✓ ✓ ✓ ✓ ✓ ✓ ✓ ✓ ✓ ✓ ✓ ✓ ✓ ✓ ✓ ✓
+  - generic:
+    - generic:
+      - generic:
+        - generic: Клиент
+        - button "✕"
+  - generic:
+    - generic:
+      - generic:
+        - generic: Начислить / Списать бонусы
+        - button "✕"
+      - generic:
+        - generic: Клиент (имя или телефон)
+        - textbox "Начните вводить..."
+      - generic:
+        - generic: Количество бонусов
+        - spinbutton
+      - generic:
+        - generic: Комментарий
+        - textbox: Ручная корректировка
+      - generic:
+        - button "+ Начислить"
+        - button "− Списать"
+        - button "Отмена"

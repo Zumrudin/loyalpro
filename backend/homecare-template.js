@@ -423,13 +423,13 @@ html, body {
 .cat-check { color: var(--accent); font-size: 9pt; font-weight: 700; }
 .cat-items { padding-left: 13px; }
 .item-name {
-  font-size: 8.8pt;
+  font-size: 11.4pt;
   color: var(--text);
   line-height: 1.5;
   font-weight: 500;
 }
 .item-instr {
-  font-size: 7.8pt;
+  font-size: 11.4pt;
   color: var(--text2);
   font-style: italic;
   line-height: 1.4;

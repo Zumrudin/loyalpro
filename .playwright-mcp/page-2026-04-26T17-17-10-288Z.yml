@@ -1,0 +1,262 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e23]:
+    - generic [ref=e24]:
+      - generic [ref=e25]:
+        - img [ref=e27]
+        - generic [ref=e29]: LoyalPro
+      - navigation [ref=e30]:
+        - generic [ref=e31] [cursor=pointer]: Дашборд
+        - generic [ref=e32] [cursor=pointer]: Клиенты
+        - generic [ref=e33] [cursor=pointer]: Записи
+        - generic [ref=e34] [cursor=pointer]: Сотрудники
+        - generic [ref=e35] [cursor=pointer]: Сегменты
+        - generic [ref=e36] [cursor=pointer]: Уход
+        - generic [ref=e37] [cursor=pointer]: Настройки
+        - generic [ref=e38] [cursor=pointer]: Пользователи
+      - generic [ref=e39]:
+        - button "Синхронизировать" [ref=e40] [cursor=pointer]:
+          - img [ref=e41]
+          - text: Синхронизировать
+        - generic [ref=e44]:
+          - generic [ref=e45]: 🌙
+          - button "Тёмная тема" [ref=e46] [cursor=pointer]
+        - generic [ref=e47]: MY
+        - generic [ref=e48]: My Clinic
+        - button "Выйти" [ref=e49] [cursor=pointer]
+    - generic [ref=e50]:
+      - generic [ref=e51]:
+        - generic [ref=e52]:
+          - generic [ref=e53]: Обзор
+          - generic [ref=e54]:
+            - button "7 дней" [ref=e55] [cursor=pointer]
+            - button "30 дней" [ref=e56] [cursor=pointer]
+            - button "90 дней" [ref=e57] [cursor=pointer]
+        - generic [ref=e58]:
+          - generic [ref=e59]:
+            - generic [ref=e60]: Клиентов в базе
+            - generic [ref=e61]: 4 109
+            - generic [ref=e62]: +12 новых за период
+          - generic [ref=e63]:
+            - generic [ref=e64]: Выручка за период
+            - generic [ref=e65]: 1 901 023 ₽
+            - generic [ref=e66]: за 7 дней · 113 визитов
+          - generic [ref=e67]:
+            - generic [ref=e68]: Клиентов с картой лояльности
+            - generic [ref=e69]: 2 321
+            - generic [ref=e70]: 56% от всех клиентов
+          - generic [ref=e71]:
+            - generic [ref=e72]: Активных бонусов
+            - generic [ref=e73]: 2 456 952
+            - generic [ref=e74]: начислено 36 030 · списано 43 639
+          - generic [ref=e75]:
+            - generic [ref=e76]: Подписаны в Telegram
+            - generic [ref=e77]: "107"
+            - generic [ref=e78]: 3% от всех клиентов
+        - generic [ref=e79]:
+          - generic [ref=e80]:
+            - generic [ref=e81]: Средний чек
+            - generic [ref=e82]: 16 823 ₽
+            - generic [ref=e83]: 113 записей за период
+          - generic [ref=e84]:
+            - generic [ref=e85]: Начислено бонусов
+            - generic [ref=e86]: 36 030 ₽
+            - generic [ref=e87]: за 7 дней
+          - generic [ref=e88]:
+            - generic [ref=e89]: Списано бонусов
+            - generic [ref=e90]: 43 639 ₽
+            - generic [ref=e91]: за 7 дней
+          - generic [ref=e92]:
+            - generic [ref=e93]: ROI программы
+            - generic [ref=e94]: 53x
+          - generic [ref=e97]:
+            - generic [ref=e98]: Новых клиентов
+            - generic [ref=e99]: "12"
+            - generic [ref=e100]: за 7 дней
+        - generic [ref=e101]:
+          - generic [ref=e103]: Выручка по дням
+          - generic [ref=e106]:
+            - generic [ref=e107]: Уровни клиентов
+            - generic [ref=e108]:
+              - generic [ref=e110]:
+                - generic [ref=e111]: 💎 Платина
+                - strong [ref=e112]: 10 (0%)
+              - generic [ref=e115]:
+                - generic [ref=e116]: 🥇 Золото
+                - strong [ref=e117]: 71 (2%)
+              - generic [ref=e121]:
+                - generic [ref=e122]: 🥈 Серебро
+                - strong [ref=e123]: 222 (5%)
+              - generic [ref=e127]:
+                - generic [ref=e128]: 🥉 Бронза
+                - strong [ref=e129]: 3806 (93%)
+        - generic [ref=e132]:
+          - generic [ref=e133]:
+            - generic [ref=e134]: Последние начисления
+            - generic [ref=e135]:
+              - generic [ref=e136]:
+                - generic [ref=e137]: 💰
+                - generic [ref=e138]:
+                  - generic [ref=e139]:
+                    - strong [ref=e140]: Сеидова Алиса Арифовна
+                    - text: —
+                    - strong [ref=e141]: "+500"
+                    - text: бонусов
+                  - generic [ref=e142]: 🎂 Подарок на день рождения · 26 апр., 06:59
+              - generic [ref=e143]:
+                - generic [ref=e144]: 💰
+                - generic [ref=e145]:
+                  - generic [ref=e146]:
+                    - strong [ref=e147]: Юлия Срывалина Григорьевна
+                    - text: —
+                    - strong [ref=e148]: "+500"
+                    - text: бонусов
+                  - generic [ref=e149]: 🎂 Подарок на день рождения · 26 апр., 06:59
+              - generic [ref=e150]:
+                - generic [ref=e151]: 💰
+                - generic [ref=e152]:
+                  - generic [ref=e153]:
+                    - strong [ref=e154]: Туманова Ольга Геннадьевна
+                    - text: —
+                    - strong [ref=e155]: "+500"
+                    - text: бонусов
+                  - generic [ref=e156]: 🎂 Подарок на день рождения · 26 апр., 06:59
+              - generic [ref=e157]:
+                - generic [ref=e158]: 💰
+                - generic [ref=e159]:
+                  - generic [ref=e160]:
+                    - strong [ref=e161]: Субочева Анастасия Юрьевна
+                    - text: —
+                    - strong [ref=e162]: "+500"
+                    - text: бонусов
+                  - generic [ref=e163]: 🎂 Подарок на день рождения · 26 апр., 06:59
+              - generic [ref=e164]:
+                - generic [ref=e165]: 💰
+                - generic [ref=e166]:
+                  - generic [ref=e167]:
+                    - strong [ref=e168]: Нестерова Алина Сергеевна
+                    - text: —
+                    - strong [ref=e169]: "+500"
+                    - text: бонусов
+                  - generic [ref=e170]: 🎂 Подарок на день рождения · 26 апр., 06:59
+              - generic [ref=e171]:
+                - generic [ref=e172]: 💰
+                - generic [ref=e173]:
+                  - generic [ref=e174]:
+                    - strong [ref=e175]: Кускова Ирина Михайловна
+                    - text: —
+                    - strong [ref=e176]: "+500"
+                    - text: бонусов
+                  - generic [ref=e177]: 🎂 Подарок на день рождения · 26 апр., 06:59
+              - generic [ref=e178]:
+                - generic [ref=e179]: 💰
+                - generic [ref=e180]:
+                  - generic [ref=e181]:
+                    - strong [ref=e182]: Мишанская Валентина Николаевна
+                    - text: —
+                    - strong [ref=e183]: "+500"
+                    - text: бонусов
+                  - generic [ref=e184]: 🎂 Подарок на день рождения · 26 апр., 06:59
+              - generic [ref=e185]:
+                - generic [ref=e186]: 💰
+                - generic [ref=e187]:
+                  - generic [ref=e188]:
+                    - strong [ref=e189]: Ермошина Алина Алексеевна
+                    - text: —
+                    - strong [ref=e190]: "+500"
+                    - text: бонусов
+                  - generic [ref=e191]: 🎂 Подарок на день рождения · 25 апр., 06:59
+          - generic [ref=e192]:
+            - generic [ref=e193]: Топ услуг
+            - generic [ref=e194]:
+              - table [ref=e195]:
+                - rowgroup [ref=e196]:
+                  - row "Услуга ▲ Количество ⇅ Сумма ₽ ⇅" [ref=e197]:
+                    - columnheader "Услуга ▲" [ref=e198] [cursor=pointer]:
+                      - text: Услуга
+                      - generic [ref=e199]: ▲
+                    - columnheader "Количество ⇅" [ref=e200] [cursor=pointer]:
+                      - text: Количество
+                      - generic [ref=e201]: ⇅
+                    - columnheader "Сумма ₽ ⇅" [ref=e202] [cursor=pointer]:
+                      - text: Сумма ₽
+                      - generic [ref=e203]: ⇅
+                - rowgroup [ref=e204]:
+                  - row "Фотоомоложение Lumeca - лицо 17 270 811,45 ₽" [ref=e205]:
+                    - cell "Фотоомоложение Lumeca - лицо" [ref=e206]
+                    - cell "17" [ref=e207]:
+                      - strong [ref=e208]: "17"
+                    - cell "270 811,45 ₽" [ref=e209]
+                  - row "№3 Голень с коленями + бикини тотальное + подмышки 12 51 636,27 ₽" [ref=e210]:
+                    - cell "№3 Голень с коленями + бикини тотальное + подмышки" [ref=e211]
+                    - cell "12" [ref=e212]:
+                      - strong [ref=e213]: "12"
+                    - cell "51 636,27 ₽" [ref=e214]
+                  - row "Ботулинотерапия Лоб + межбровье 10 139 551,78 ₽" [ref=e215]:
+                    - cell "Ботулинотерапия Лоб + межбровье" [ref=e216]
+                    - cell "10" [ref=e217]:
+                      - strong [ref=e218]: "10"
+                    - cell "139 551,78 ₽" [ref=e219]
+                  - row "Комбинированная чистка лица на космоцевтике Сhristina,GIGI ( 90минут ) 10 63 225 ₽" [ref=e220]:
+                    - cell "Комбинированная чистка лица на космоцевтике Сhristina,GIGI ( 90минут )" [ref=e221]
+                    - cell "10" [ref=e222]:
+                      - strong [ref=e223]: "10"
+                    - cell "63 225 ₽" [ref=e224]
+                  - row "Ботулинотерапия Уголки глаз (\"гусиные лапки») 9 61 928,91 ₽" [ref=e225]:
+                    - cell "Ботулинотерапия Уголки глаз (\"гусиные лапки»)" [ref=e226]
+                    - cell "9" [ref=e227]:
+                      - strong [ref=e228]: "9"
+                    - cell "61 928,91 ₽" [ref=e229]
+                  - row "5в1Лоб+брови+межбровье+глаза+нос 8 153 931,46 ₽" [ref=e230]:
+                    - cell "5в1Лоб+брови+межбровье+глаза+нос" [ref=e231]
+                    - cell "8" [ref=e232]:
+                      - strong [ref=e233]: "8"
+                    - cell "153 931,46 ₽" [ref=e234]
+                  - row "Малая зона (верхняя губа\\подбородок\\межбровье) 7 8 750,04 ₽" [ref=e235]:
+                    - cell "Малая зона (верхняя губа\\подбородок\\межбровье)" [ref=e236]
+                    - cell "7" [ref=e237]:
+                      - strong [ref=e238]: "7"
+                    - cell "8 750,04 ₽" [ref=e239]
+                  - row "BEAUTYLISER RSL скульптурирование 6 21 190,3 ₽" [ref=e240]:
+                    - cell "BEAUTYLISER RSL скульптурирование" [ref=e241]
+                    - cell "6" [ref=e242]:
+                      - strong [ref=e243]: "6"
+                    - cell "21 190,3 ₽" [ref=e244]
+                  - row "Анестезия 1 зона 30 гр 6 8 868,24 ₽" [ref=e245]:
+                    - cell "Анестезия 1 зона 30 гр" [ref=e246]
+                    - cell "6" [ref=e247]:
+                      - strong [ref=e248]: "6"
+                    - cell "8 868,24 ₽" [ref=e249]
+                  - row "№2 Ноги полностью + бикини тотальное + подмышки 6 41 461,54 ₽" [ref=e250]:
+                    - cell "№2 Ноги полностью + бикини тотальное + подмышки" [ref=e251]
+                    - cell "6" [ref=e252]:
+                      - strong [ref=e253]: "6"
+                    - cell "41 461,54 ₽" [ref=e254]
+              - button "Показать все ▼" [ref=e256] [cursor=pointer]
+        - generic [ref=e257]:
+          - generic [ref=e259]: "Бонусы: начислено vs потрачено"
+          - generic [ref=e263]: Распределение по уровням
+      - text: ⇅ ⇅ ⇅ ⇅ ⇅ ⇅ ⇅
+  - text: ✓ ✓ ✓ ✓ ✓ ✓ ✓ ✓ ✓ ✓ ✓ ✓ ✓ ✓ ✓ ✓ ✓ ✓
+  - generic:
+    - generic:
+      - generic:
+        - generic: Клиент
+        - button "✕"
+  - generic:
+    - generic:
+      - generic:
+        - generic: Начислить / Списать бонусы
+        - button "✕"
+      - generic:
+        - generic: Клиент (имя или телефон)
+        - textbox "Начните вводить..."
+      - generic:
+        - generic: Количество бонусов
+        - spinbutton
+      - generic:
+        - generic: Комментарий
+        - textbox: Ручная корректировка
+      - generic:
+        - button "+ Начислить"
+        - button "− Списать"
+        - button "Отмена"

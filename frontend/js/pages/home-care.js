@@ -545,8 +545,8 @@ body{font-family:'Lora',Georgia,serif;background:#faf4ec;color:#2c2416;font-size
 .cat-name{font-size:9pt;font-weight:700;color:#c9a96e;text-transform:uppercase;letter-spacing:.5px;margin-bottom:3px;display:flex;align-items:baseline;gap:5px}
 .check{color:#c9a96e;font-weight:700;font-size:9.5pt}
 .item-row{padding-left:14px;margin-bottom:2px}
-.item-name{font-size:9pt;color:#2c2416;line-height:1.5;font-weight:500}
-.item-instr{font-size:8pt;color:#7a6a55;font-style:italic;line-height:1.4}
+.item-name{font-size:11.7pt;color:#2c2416;line-height:1.5;font-weight:500}
+.item-instr{font-size:10.5pt;color:#7a6a55;font-style:italic;line-height:1.4}
 .empty-slot{border-bottom:1px dashed rgba(201,169,110,.5);height:1px;margin:8px 0 10px 14px}
 .add-section{padding-top:10px;border-top:1px solid #e8dcc8;margin-bottom:14px}
 .add-title{font-family:'Playfair Display',serif;font-size:11pt;font-weight:600;color:#2c2416;margin-bottom:8px}

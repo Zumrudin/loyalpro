@@ -1,0 +1,42 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e3]:
+    - generic [ref=e4]:
+      - img [ref=e6]
+      - generic [ref=e8]:
+        - generic [ref=e9]: LoyalPro
+        - generic [ref=e10]: Программа лояльности для YClients
+    - generic [ref=e11]:
+      - button "Войти" [ref=e12] [cursor=pointer]
+      - button "Регистрация" [ref=e13] [cursor=pointer]
+    - generic [ref=e14]:
+      - generic [ref=e15]:
+        - generic [ref=e16]: Email
+        - textbox "admin@salon.ru" [ref=e17]
+      - generic [ref=e18]:
+        - generic [ref=e19]: Пароль
+        - textbox "••••••••" [ref=e20]
+      - button "Войти в личный кабинет" [ref=e21] [cursor=pointer]
+  - text: ▲ ⇅ ⇅ ⇅ ⇅ ⇅ ⇅ ⇅ ⇅ ⇅ ✓ ✓ ✓ ✓ ✓ ✓ ✓ ✓ ✓ ✓ ✓ ✓ ✓ ✓ ✓ ✓ ✓ ✓
+  - generic:
+    - generic:
+      - generic:
+        - generic: Клиент
+        - button "✕"
+  - generic:
+    - generic:
+      - generic:
+        - generic: Начислить / Списать бонусы
+        - button "✕"
+      - generic:
+        - generic: Клиент (имя или телефон)
+        - textbox "Начните вводить..."
+      - generic:
+        - generic: Количество бонусов
+        - spinbutton
+      - generic:
+        - generic: Комментарий
+        - textbox: Ручная корректировка
+      - generic:
+        - button "+ Начислить"
+        - button "− Списать"
+        - button "Отмена"

@@ -1,0 +1,514 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LoyalPro — Dashboard Preview v2</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  :root {
+    --sage: #7A9E74;
+    --sage-light: #A3BF9E;
+    --sage-dark: #5A7D55;
+    --sage-bg: #D6E8D3;
+    --sage-bg2: #C4DBBD;
+    --cream: #F0EDE7;
+    --cream-dark: #E4DFDA;
+    --taupe: #B5ADA3;
+    --text: #2E3A2D;
+    --text2: #5A6659;
+    --text3: #8A9E88;
+    --white: #FFFFFF;
+    --border: #C8D8C5;
+    --danger: #C0796B;
+    --success: #5A7D55;
+  }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    background: var(--sage-bg);
+    color: var(--text);
+    font-size: 13px;
+  }
+
+  /* TOPBAR */
+  .topbar {
+    background: var(--sage-dark);
+    height: 54px;
+    display: flex;
+    align-items: center;
+    padding: 0 22px;
+    gap: 24px;
+    position: sticky;
+    top: 0;
+    z-index: 100;
+    box-shadow: 0 2px 8px rgba(90,125,85,0.25);
+  }
+
+  .tb-logo {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 15px;
+    font-weight: 700;
+    color: white;
+    min-width: 110px;
+  }
+
+  .tb-logo svg { width: 22px; height: 22px; fill: rgba(255,255,255,0.85); }
+
+  .tb-nav { display: flex; gap: 2px; flex: 1; }
+
+  .tn {
+    padding: 6px 13px;
+    border-radius: 6px;
+    font-size: 12.5px;
+    color: rgba(255,255,255,0.7);
+    cursor: pointer;
+    transition: all 0.15s;
+    white-space: nowrap;
+  }
+
+  .tn:hover { background: rgba(255,255,255,0.15); color: white; }
+  .tn.active { background: rgba(255,255,255,0.2); color: white; font-weight: 600; }
+
+  .tb-right { display: flex; align-items: center; gap: 10px; }
+
+  .btn {
+    padding: 6px 14px;
+    border-radius: 6px;
+    border: none;
+    cursor: pointer;
+    font-size: 12px;
+    font-weight: 500;
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    transition: all 0.15s;
+  }
+
+  .btn-sec {
+    background: rgba(255,255,255,0.15);
+    border: 1px solid rgba(255,255,255,0.25);
+    color: white;
+  }
+  .btn-sec:hover { background: rgba(255,255,255,0.25); }
+
+  .btn-exit {
+    background: none;
+    border: 1px solid rgba(255,255,255,0.3);
+    color: rgba(255,255,255,0.75);
+    font-size: 11.5px;
+    padding: 5px 12px;
+    border-radius: 6px;
+    cursor: pointer;
+  }
+
+  .avatar {
+    width: 30px; height: 30px;
+    background: rgba(255,255,255,0.25);
+    border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    color: white;
+    font-size: 11.5px;
+    font-weight: 600;
+    border: 1.5px solid rgba(255,255,255,0.4);
+  }
+
+  .sync-status { font-size: 11px; color: rgba(255,255,255,0.6); }
+
+  /* CONTENT */
+  .content { padding: 22px; max-width: 1400px; margin: 0 auto; }
+
+  /* PERIOD */
+  .page-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 16px;
+  }
+
+  .page-title { font-size: 17px; font-weight: 700; color: var(--text); }
+
+  .pb-btns {
+    display: flex;
+    background: var(--white);
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    overflow: hidden;
+  }
+
+  .pb-btn {
+    padding: 6px 14px;
+    background: none;
+    border: none;
+    font-size: 12px;
+    color: var(--text2);
+    cursor: pointer;
+    transition: all 0.15s;
+    border-right: 1px solid var(--border);
+  }
+  .pb-btn:last-child { border-right: none; }
+  .pb-btn.active { background: var(--sage); color: white; font-weight: 600; }
+  .pb-btn:hover:not(.active) { background: var(--sage-bg); }
+
+  /* STAT CARDS */
+  .sg { display: grid; gap: 12px; margin-bottom: 12px; }
+
+  .sc {
+    background: var(--white);
+    border-radius: 10px;
+    padding: 16px 18px;
+    border: 1px solid var(--border);
+    transition: box-shadow 0.15s;
+  }
+  .sc:hover { box-shadow: 0 3px 14px rgba(90,125,85,0.18); }
+
+  .sl {
+    font-size: 11px;
+    color: var(--text3);
+    margin-bottom: 6px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+
+  .sv { font-size: 22px; font-weight: 700; color: var(--text); margin-bottom: 3px; }
+  .sv.green { color: var(--sage-dark); }
+
+  .sd { font-size: 11px; color: var(--text3); }
+  .sd.up { color: var(--success); }
+  .sd.dn { color: var(--danger); }
+
+  /* CARDS */
+  .card {
+    background: var(--white);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 18px;
+  }
+  .ct { font-size: 13px; font-weight: 600; color: var(--text); margin-bottom: 14px; }
+
+  .g2 { display: grid; grid-template-columns: 1fr 1fr; gap: 13px; margin-bottom: 13px; }
+  .g32 { display: grid; grid-template-columns: 2fr 1fr; gap: 13px; margin-bottom: 13px; }
+
+  /* CHART */
+  .chart-placeholder {
+    height: 200px;
+    background: var(--sage-bg);
+    border-radius: 8px;
+    display: flex;
+    align-items: flex-end;
+    gap: 5px;
+    padding: 12px;
+    overflow: hidden;
+  }
+
+  .bar {
+    flex: 1;
+    background: linear-gradient(180deg, var(--sage-dark) 0%, var(--sage) 100%);
+    border-radius: 4px 4px 0 0;
+    opacity: 0.85;
+    transition: opacity 0.2s;
+  }
+  .bar:hover { opacity: 1; }
+
+  /* LEVELS */
+  .level-row {
+    display: flex; align-items: center; gap: 10px;
+    padding: 8px 0; border-bottom: 1px solid var(--sage-bg);
+  }
+  .level-row:last-child { border-bottom: none; }
+  .level-badge { width: 28px; height: 28px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 13px; flex-shrink: 0; }
+  .level-name { font-size: 12.5px; font-weight: 600; flex: 1; color: var(--text); }
+  .level-count { font-size: 12px; color: var(--text2); margin-right: 8px; }
+  .level-bar-wrap { flex: 2; height: 6px; background: var(--sage-bg); border-radius: 3px; }
+  .level-bar-fill { height: 6px; border-radius: 3px; }
+
+  /* TRANSACTIONS */
+  .tx-row { display: flex; align-items: center; gap: 10px; padding: 9px 0; border-bottom: 1px solid var(--sage-bg); }
+  .tx-row:last-child { border-bottom: none; }
+  .tx-av { width: 32px; height: 32px; border-radius: 50%; background: var(--sage-bg); display: flex; align-items: center; justify-content: center; font-size: 11.5px; font-weight: 600; color: var(--sage-dark); flex-shrink: 0; }
+  .tx-name { font-size: 12.5px; font-weight: 600; color: var(--text); }
+  .tx-date { font-size: 11px; color: var(--text3); }
+  .tx-amount { margin-left: auto; font-size: 13px; font-weight: 600; }
+  .tx-amount.plus { color: var(--success); }
+  .tx-amount.minus { color: var(--danger); }
+
+  /* TABLE */
+  .tw { overflow: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  th { text-align: left; padding: 9px 12px; background: var(--sage-bg); color: var(--text2); font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: 0.3px; border-bottom: 1px solid var(--border); }
+  td { padding: 10px 12px; border-bottom: 1px solid var(--sage-bg); color: var(--text); }
+  tr:last-child td { border-bottom: none; }
+  tr:hover td { background: var(--sage-bg); }
+
+  /* PIE */
+  .pie-placeholder {
+    width: 150px; height: 150px;
+    border-radius: 50%;
+    margin: 0 auto;
+    background: conic-gradient(
+      var(--sage-dark) 0deg 130deg,
+      var(--sage) 130deg 230deg,
+      var(--sage-light) 230deg 290deg,
+      var(--taupe) 290deg 360deg
+    );
+    box-shadow: 0 2px 16px rgba(90,125,85,0.2);
+    flex-shrink: 0;
+  }
+
+  .pie-legend { display: flex; flex-direction: column; gap: 8px; margin-top: 0; }
+  .pie-item { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text2); }
+  .pie-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+
+  /* BONUS CHART */
+  .bonus-bars {
+    display: flex;
+    align-items: flex-end;
+    justify-content: center;
+    gap: 30px;
+    height: 160px;
+    padding: 0 20px;
+  }
+  .bonus-bar-wrap { text-align: center; display: flex; flex-direction: column; align-items: center; gap: 8px; }
+  .bonus-bar { width: 64px; border-radius: 6px 6px 0 0; }
+</style>
+</head>
+<body>
+
+<!-- TOPBAR — тёмно-зелёный -->
+<div class="topbar">
+  <div class="tb-logo">
+    <svg viewBox="0 0 24 24"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>
+    LoyalPro
+  </div>
+  <nav class="tb-nav">
+    <div class="tn active">Дашборд</div>
+    <div class="tn">Клиенты</div>
+    <div class="tn">Записи</div>
+    <div class="tn">Сотрудники</div>
+    <div class="tn">Сегменты</div>
+    <div class="tn">Уход</div>
+    <div class="tn">Настройки</div>
+  </nav>
+  <div class="tb-right">
+    <span class="sync-status">Синхр. 14:32</span>
+    <button class="btn btn-sec">
+      <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+      Синхронизировать
+    </button>
+    <div class="avatar">АС</div>
+    <span style="font-size:12px;font-weight:600;color:rgba(255,255,255,0.85)">Алина</span>
+    <button class="btn-exit">Выйти</button>
+  </div>
+</div>
+
+<!-- CONTENT — зелёный фон -->
+<div class="content">
+
+  <div class="page-header">
+    <div class="page-title">Обзор</div>
+    <div class="pb-btns">
+      <button class="pb-btn active">7 дней</button>
+      <button class="pb-btn">30 дней</button>
+      <button class="pb-btn">90 дней</button>
+    </div>
+  </div>
+
+  <!-- ROW 1 -->
+  <div class="sg" style="grid-template-columns:repeat(5,1fr)">
+    <div class="sc">
+      <div class="sl">Клиентов в базе</div>
+      <div class="sv">1 248</div>
+      <div class="sd up">+12 за период</div>
+    </div>
+    <div class="sc">
+      <div class="sl">Выручка за период</div>
+      <div class="sv">₽284 500</div>
+      <div class="sd up">↑ 8.4% к прошлому</div>
+    </div>
+    <div class="sc">
+      <div class="sl">Клиентов с картой</div>
+      <div class="sv green">847</div>
+      <div class="sd">67.8% от базы</div>
+    </div>
+    <div class="sc">
+      <div class="sl">Активных бонусов</div>
+      <div class="sv">32 140</div>
+      <div class="sd">баллов накоплено</div>
+    </div>
+    <div class="sc">
+      <div class="sl">Подписаны в Telegram</div>
+      <div class="sv">512</div>
+      <div class="sd up">+24 за неделю</div>
+    </div>
+  </div>
+
+  <!-- ROW 2 -->
+  <div class="sg" style="grid-template-columns:repeat(5,1fr);margin-bottom:16px">
+    <div class="sc">
+      <div class="sl">Средний чек</div>
+      <div class="sv">₽2 280</div>
+      <div class="sd up">↑ 3.1%</div>
+    </div>
+    <div class="sc">
+      <div class="sl">Начислено бонусов</div>
+      <div class="sv green">4 820</div>
+      <div class="sd">баллов</div>
+    </div>
+    <div class="sc">
+      <div class="sl">Списано бонусов</div>
+      <div class="sv" style="color:var(--danger)">1 240</div>
+      <div class="sd">баллов</div>
+    </div>
+    <div class="sc">
+      <div class="sl">ROI программы</div>
+      <div class="sv green">23.4x</div>
+      <div class="sd">выручка / начисления</div>
+    </div>
+    <div class="sc">
+      <div class="sl">Новых клиентов</div>
+      <div class="sv">38</div>
+      <div class="sd up">+4 к прошлому</div>
+    </div>
+  </div>
+
+  <!-- ROW 3 -->
+  <div class="g32">
+    <div class="card">
+      <div class="ct">Выручка по дням</div>
+      <div class="chart-placeholder">
+        <div class="bar" style="height:45%"></div>
+        <div class="bar" style="height:60%"></div>
+        <div class="bar" style="height:50%"></div>
+        <div class="bar" style="height:80%"></div>
+        <div class="bar" style="height:65%"></div>
+        <div class="bar" style="height:90%"></div>
+        <div class="bar" style="height:70%"></div>
+        <div class="bar" style="height:55%"></div>
+        <div class="bar" style="height:85%"></div>
+        <div class="bar" style="height:75%"></div>
+        <div class="bar" style="height:95%"></div>
+        <div class="bar" style="height:60%"></div>
+        <div class="bar" style="height:78%"></div>
+        <div class="bar" style="height:88%"></div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="ct">Уровни клиентов</div>
+      <div class="level-row">
+        <div class="level-badge" style="background:#fff8e1">⭐</div>
+        <div class="level-name">Бронза</div>
+        <div class="level-count">623</div>
+        <div class="level-bar-wrap"><div class="level-bar-fill" style="width:75%;background:var(--taupe)"></div></div>
+      </div>
+      <div class="level-row">
+        <div class="level-badge" style="background:var(--sage-bg)">🥈</div>
+        <div class="level-name">Серебро</div>
+        <div class="level-count">318</div>
+        <div class="level-bar-wrap"><div class="level-bar-fill" style="width:38%;background:var(--sage-light)"></div></div>
+      </div>
+      <div class="level-row">
+        <div class="level-badge" style="background:var(--sage-bg)">🥇</div>
+        <div class="level-name">Золото</div>
+        <div class="level-count">187</div>
+        <div class="level-bar-wrap"><div class="level-bar-fill" style="width:22%;background:var(--sage)"></div></div>
+      </div>
+      <div class="level-row">
+        <div class="level-badge" style="background:var(--sage-bg)">💎</div>
+        <div class="level-name">Платина</div>
+        <div class="level-count">120</div>
+        <div class="level-bar-wrap"><div class="level-bar-fill" style="width:14%;background:var(--sage-dark)"></div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ROW 4 -->
+  <div class="g2">
+    <div class="card">
+      <div class="ct">Последние начисления</div>
+      <div class="tx-row">
+        <div class="tx-av">МИ</div>
+        <div><div class="tx-name">Мария Иванова</div><div class="tx-date">25 апр, 14:20</div></div>
+        <div class="tx-amount plus">+250 ₽</div>
+      </div>
+      <div class="tx-row">
+        <div class="tx-av">ОК</div>
+        <div><div class="tx-name">Ольга Кузнецова</div><div class="tx-date">25 апр, 13:05</div></div>
+        <div class="tx-amount minus">−150 ₽</div>
+      </div>
+      <div class="tx-row">
+        <div class="tx-av">АС</div>
+        <div><div class="tx-name">Анна Смирнова</div><div class="tx-date">25 апр, 12:48</div></div>
+        <div class="tx-amount plus">+180 ₽</div>
+      </div>
+      <div class="tx-row">
+        <div class="tx-av">НП</div>
+        <div><div class="tx-name">Наталья Петрова</div><div class="tx-date">25 апр, 11:30</div></div>
+        <div class="tx-amount plus">+320 ₽</div>
+      </div>
+      <div class="tx-row">
+        <div class="tx-av">ЕВ</div>
+        <div><div class="tx-name">Елена Волкова</div><div class="tx-date">24 апр, 18:15</div></div>
+        <div class="tx-amount minus">−90 ₽</div>
+      </div>
+    </div>
+
+    <div class="card" style="padding:0">
+      <div class="ct" style="padding:18px 18px 0">Топ услуг</div>
+      <div class="tw">
+        <table>
+          <thead>
+            <tr>
+              <th>Услуга</th>
+              <th>Кол-во</th>
+              <th>Сумма ₽</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><td>Окрашивание волос</td><td>48</td><td>96 000</td></tr>
+            <tr><td>Стрижка женская</td><td>62</td><td>62 000</td></tr>
+            <tr><td>Маникюр классический</td><td>74</td><td>44 400</td></tr>
+            <tr><td>Укладка/брашинг</td><td>39</td><td>27 300</td></tr>
+            <tr><td>Педикюр</td><td>31</td><td>24 800</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <div style="height:13px"></div>
+
+  <!-- ROW 5 -->
+  <div class="g2">
+    <div class="card">
+      <div class="ct">Бонусы: начислено vs потрачено</div>
+      <div class="bonus-bars">
+        <div class="bonus-bar-wrap">
+          <div class="bonus-bar" style="height:130px;background:linear-gradient(180deg,var(--sage-dark),var(--sage))"></div>
+          <div style="font-size:11px;color:var(--text2)">Начислено<br><strong>4 820</strong></div>
+        </div>
+        <div class="bonus-bar-wrap">
+          <div class="bonus-bar" style="height:60px;background:linear-gradient(180deg,var(--taupe),#ccc8c0)"></div>
+          <div style="font-size:11px;color:var(--text2)">Потрачено<br><strong>1 240</strong></div>
+        </div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="ct">Распределение по уровням</div>
+      <div style="display:flex;align-items:center;gap:24px">
+        <div class="pie-placeholder"></div>
+        <div class="pie-legend">
+          <div class="pie-item"><div class="pie-dot" style="background:var(--sage-dark)"></div>Бронза — 623</div>
+          <div class="pie-item"><div class="pie-dot" style="background:var(--sage)"></div>Серебро — 318</div>
+          <div class="pie-item"><div class="pie-dot" style="background:var(--sage-light)"></div>Золото — 187</div>
+          <div class="pie-item"><div class="pie-dot" style="background:var(--taupe)"></div>Платина — 120</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+</body>
+</html>
