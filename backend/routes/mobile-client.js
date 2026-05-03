@@ -1,6 +1,7 @@
 const router = require('express').Router();
 const { db } = require('../db');
 const { mobileAuth } = require('../middleware/mobile-auth');
+const { absolutizeUrl } = require('../services/portfolio');
 const { ycGet, ycGetClientCards, ycGetCardTransactions } = require('../services/yclients');
 const { createLogger } = require('../logger');
 const logger = createLogger('Mobile');
@@ -508,6 +509,37 @@ router.get('/specialists', mobileAuth, async (req, res) => {
 
   } catch (e) {
     logger.error(`Get specialists error: ${e.message}`);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /api/mobile/client/portfolio/categories
+// Returns published, non-empty categories scoped to client's salon
+router.get('/portfolio/categories', mobileAuth, async (req, res) => {
+  try {
+    const baseUrl = `${req.protocol}://${req.get('host')}`;
+    const rows = await db.any(
+      `SELECT c.id, c.title, c.cover_photo_url,
+              (SELECT COUNT(*)::int FROM portfolio_items i
+               WHERE i.salon_id=c.salon_id AND i.category_id=c.id) AS items_count
+       FROM portfolio_categories c
+       WHERE c.salon_id = (SELECT salon_id FROM clients WHERE id=$1)
+         AND c.is_published = TRUE
+         AND c.cover_photo_url <> ''
+       ORDER BY c.display_order ASC, c.id ASC`,
+      [req.client.clientId]
+    );
+    const categories = rows
+      .filter(r => r.items_count > 0)
+      .map(r => ({
+        id: r.id,
+        title: r.title,
+        coverPhotoUrl: absolutizeUrl(baseUrl, r.cover_photo_url),
+        itemsCount: r.items_count,
+      }));
+    res.json({ success: true, categories });
+  } catch (e) {
+    logger.error(`Get portfolio categories error: ${e.message}`);
     res.status(500).json({ error: e.message });
   }
 });
