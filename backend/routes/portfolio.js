@@ -190,37 +190,34 @@ router.post('/categories/:id/cover', adminOnly, (req, res) => {
     const id = parseInt(req.params.id, 10);
     if (!id) return res.status(400).json({ error: 'invalid id' });
 
-    const cat = await db.oneOrNone(
-      `SELECT cover_photo_url FROM portfolio_categories
-       WHERE id=$1 AND salon_id=$2`,
-      [id, req.user.salonId]
-    );
-    if (!cat) return res.status(404).json({ error: 'Категория не найдена' });
-
-    const filename = buildPhotoFilename('category', id, null, req.file.originalname, Date.now());
-    const absPath = path.join(uploadsDir, filename);
+    let absPath = null;
     try {
+      const cat = await db.oneOrNone(
+        `SELECT cover_photo_url FROM portfolio_categories
+         WHERE id=$1 AND salon_id=$2`,
+        [id, req.user.salonId]
+      );
+      if (!cat) return res.status(404).json({ error: 'Категория не найдена' });
+
+      const filename = buildPhotoFilename('category', id, null, req.file.originalname, Date.now());
+      absPath = path.join(uploadsDir, filename);
       fs.writeFileSync(absPath, req.file.buffer);
-    } catch (e) {
-      return res.status(500).json({ error: 'Ошибка записи файла: ' + e.message });
-    }
-    const url = `/uploads/${filename}`;
+      const url = `/uploads/${filename}`;
 
-    try {
       await db.query(
         `UPDATE portfolio_categories
          SET cover_photo_url=$1, updated_at=NOW()
          WHERE id=$2 AND salon_id=$3`,
         [url, id, req.user.salonId]
       );
-    } catch (e) {
-      // rollback: remove just-written file
-      try { fs.unlinkSync(absPath); } catch (_) {}
-      return res.status(500).json({ error: e.message });
-    }
 
-    safeUnlink(cat.cover_photo_url); // remove old file (no-op if sentinel '')
-    res.json({ ok: true, url });
+      safeUnlink(cat.cover_photo_url); // remove old file (no-op if sentinel '')
+      res.json({ ok: true, url });
+    } catch (e) {
+      if (absPath) { try { fs.unlinkSync(absPath); } catch (_) {} }
+      logger.error(`Cover upload failed: ${e.message}`);
+      res.status(500).json({ error: e.message });
+    }
   });
 });
 
@@ -281,59 +278,78 @@ router.post('/items', adminOnly, (req, res) => {
     const description = (req.body.description != null) ? String(req.body.description).slice(0, 1000) : null;
     const staffId = req.body.staff_id ? parseInt(req.body.staff_id, 10) : null;
 
-    // verify category belongs to salon
-    const cat = await db.oneOrNone(
-      `SELECT id FROM portfolio_categories WHERE id=$1 AND salon_id=$2`,
-      [categoryId, req.user.salonId]
-    );
-    if (!cat) return res.status(404).json({ error: 'Категория не найдена' });
-
-    // verify staff belongs to salon (if provided)
-    if (staffId) {
-      const st = await db.oneOrNone(
-        `SELECT id FROM staff_members WHERE id=$1 AND salon_id=$2`,
-        [staffId, req.user.salonId]
+    const writtenPaths = [];
+    let insertedId = null;
+    try {
+      // verify category belongs to salon
+      const cat = await db.oneOrNone(
+        `SELECT id FROM portfolio_categories WHERE id=$1 AND salon_id=$2`,
+        [categoryId, req.user.salonId]
       );
-      if (!st) return res.status(400).json({ error: 'Сотрудник не найден в салоне' });
+      if (!cat) return res.status(404).json({ error: 'Категория не найдена' });
+
+      // verify staff belongs to salon (if provided)
+      if (staffId) {
+        const st = await db.oneOrNone(
+          `SELECT id FROM staff_members WHERE id=$1 AND salon_id=$2`,
+          [staffId, req.user.salonId]
+        );
+        if (!st) return res.status(400).json({ error: 'Сотрудник не найден в салоне' });
+      }
+
+      // insert with placeholder URLs to get an id, then write files using the id
+      const next = await db.one(
+        `SELECT COALESCE(MAX(display_order)+1, 0) AS next_order
+         FROM portfolio_items WHERE salon_id=$1 AND category_id=$2`,
+        [req.user.salonId, categoryId]
+      );
+      const inserted = await db.one(
+        `INSERT INTO portfolio_items
+           (salon_id, category_id, staff_id, title, description,
+            photo_after_url, photo_before_url, display_order)
+         VALUES ($1,$2,$3,$4,$5,'','',$6) RETURNING id`,
+        [req.user.salonId, categoryId, staffId, title, description, next.next_order]
+      );
+      insertedId = inserted.id;
+
+      // write files
+      const ts = Date.now();
+      const afterName  = buildPhotoFilename('item', inserted.id, 'after',  fAfter.originalname,  ts);
+      const afterAbs   = path.join(uploadsDir, afterName);
+      fs.writeFileSync(afterAbs, fAfter.buffer);
+      writtenPaths.push(afterAbs);
+      const afterUrl = `/uploads/${afterName}`;
+
+      let beforeUrl = null;
+      if (fBefore) {
+        const beforeName = buildPhotoFilename('item', inserted.id, 'before', fBefore.originalname, ts);
+        const beforeAbs  = path.join(uploadsDir, beforeName);
+        fs.writeFileSync(beforeAbs, fBefore.buffer);
+        writtenPaths.push(beforeAbs);
+        beforeUrl = `/uploads/${beforeName}`;
+      }
+
+      await db.query(
+        `UPDATE portfolio_items
+         SET photo_after_url=$1, photo_before_url=$2, updated_at=NOW()
+         WHERE id=$3`,
+        [afterUrl, beforeUrl, inserted.id]
+      );
+
+      res.json({ id: inserted.id, photoAfterUrl: afterUrl, photoBeforeUrl: beforeUrl });
+    } catch (e) {
+      // rollback: remove any files that were written, drop the placeholder row
+      for (const p of writtenPaths) { try { fs.unlinkSync(p); } catch (_) {} }
+      if (insertedId) {
+        try {
+          await db.query(`DELETE FROM portfolio_items WHERE id=$1`, [insertedId]);
+        } catch (delErr) {
+          logger.error(`Rollback delete failed for item ${insertedId}: ${delErr.message}`);
+        }
+      }
+      logger.error(`Item create failed: ${e.message}`);
+      res.status(500).json({ error: e.message });
     }
-
-    // insert with placeholder URLs to get an id, then write files using the id
-    const next = await db.one(
-      `SELECT COALESCE(MAX(display_order)+1, 0) AS next_order
-       FROM portfolio_items WHERE salon_id=$1 AND category_id=$2`,
-      [req.user.salonId, categoryId]
-    );
-    const inserted = await db.one(
-      `INSERT INTO portfolio_items
-         (salon_id, category_id, staff_id, title, description,
-          photo_after_url, photo_before_url, display_order)
-       VALUES ($1,$2,$3,$4,$5,'','',$6) RETURNING id`,
-      [req.user.salonId, categoryId, staffId, title, description, next.next_order]
-    );
-
-    // write files
-    const ts = Date.now();
-    const afterName  = buildPhotoFilename('item', inserted.id, 'after',  fAfter.originalname,  ts);
-    const afterAbs   = path.join(uploadsDir, afterName);
-    fs.writeFileSync(afterAbs, fAfter.buffer);
-    const afterUrl = `/uploads/${afterName}`;
-
-    let beforeUrl = null;
-    if (fBefore) {
-      const beforeName = buildPhotoFilename('item', inserted.id, 'before', fBefore.originalname, ts);
-      const beforeAbs  = path.join(uploadsDir, beforeName);
-      fs.writeFileSync(beforeAbs, fBefore.buffer);
-      beforeUrl = `/uploads/${beforeName}`;
-    }
-
-    await db.query(
-      `UPDATE portfolio_items
-       SET photo_after_url=$1, photo_before_url=$2, updated_at=NOW()
-       WHERE id=$3`,
-      [afterUrl, beforeUrl, inserted.id]
-    );
-
-    res.json({ id: inserted.id, photoAfterUrl: afterUrl, photoBeforeUrl: beforeUrl });
   });
 });
 
@@ -438,44 +454,57 @@ router.post('/items/:id/photos', adminOnly, (req, res) => {
 
     const id = parseInt(req.params.id, 10);
     if (!id) return res.status(400).json({ error: 'invalid id' });
-    const cur = await db.oneOrNone(
-      `SELECT photo_after_url, photo_before_url FROM portfolio_items
-       WHERE id=$1 AND salon_id=$2`,
-      [id, req.user.salonId]
-    );
-    if (!cur) return res.status(404).json({ error: 'Запись не найдена' });
 
-    const ts = Date.now();
-    const updates = []; const params = [];
-    let oldAfter = null, oldBefore = null;
+    const writtenPaths = [];
+    try {
+      const cur = await db.oneOrNone(
+        `SELECT photo_after_url, photo_before_url FROM portfolio_items
+         WHERE id=$1 AND salon_id=$2`,
+        [id, req.user.salonId]
+      );
+      if (!cur) return res.status(404).json({ error: 'Запись не найдена' });
 
-    if (fAfter) {
-      const name = buildPhotoFilename('item', id, 'after', fAfter.originalname, ts);
-      fs.writeFileSync(path.join(uploadsDir, name), fAfter.buffer);
-      params.push(`/uploads/${name}`); updates.push(`photo_after_url=$${params.length}`);
-      oldAfter = cur.photo_after_url;
+      const ts = Date.now();
+      const updates = []; const params = [];
+      let oldAfter = null, oldBefore = null;
+
+      if (fAfter) {
+        const name = buildPhotoFilename('item', id, 'after', fAfter.originalname, ts);
+        const absP = path.join(uploadsDir, name);
+        fs.writeFileSync(absP, fAfter.buffer);
+        writtenPaths.push(absP);
+        params.push(`/uploads/${name}`); updates.push(`photo_after_url=$${params.length}`);
+        oldAfter = cur.photo_after_url;
+      }
+      if (fBefore) {
+        const name = buildPhotoFilename('item', id, 'before', fBefore.originalname, ts);
+        const absP = path.join(uploadsDir, name);
+        fs.writeFileSync(absP, fBefore.buffer);
+        writtenPaths.push(absP);
+        params.push(`/uploads/${name}`); updates.push(`photo_before_url=$${params.length}`);
+        oldBefore = cur.photo_before_url;
+      }
+      updates.push(`updated_at=NOW()`);
+      params.push(id, req.user.salonId);
+      await db.query(
+        `UPDATE portfolio_items SET ${updates.join(', ')}
+         WHERE id=$${params.length - 1} AND salon_id=$${params.length}`,
+        params
+      );
+
+      safeUnlink(oldAfter);
+      safeUnlink(oldBefore);
+
+      const fresh = await db.one(
+        `SELECT photo_after_url, photo_before_url FROM portfolio_items WHERE id=$1`, [id]
+      );
+      res.json({ photoAfterUrl: fresh.photo_after_url, photoBeforeUrl: fresh.photo_before_url });
+    } catch (e) {
+      // rollback: unlink the newly-written files; old files (in DB) remain untouched
+      for (const p of writtenPaths) { try { fs.unlinkSync(p); } catch (_) {} }
+      logger.error(`Item photos replace failed: ${e.message}`);
+      res.status(500).json({ error: e.message });
     }
-    if (fBefore) {
-      const name = buildPhotoFilename('item', id, 'before', fBefore.originalname, ts);
-      fs.writeFileSync(path.join(uploadsDir, name), fBefore.buffer);
-      params.push(`/uploads/${name}`); updates.push(`photo_before_url=$${params.length}`);
-      oldBefore = cur.photo_before_url;
-    }
-    updates.push(`updated_at=NOW()`);
-    params.push(id, req.user.salonId);
-    await db.query(
-      `UPDATE portfolio_items SET ${updates.join(', ')}
-       WHERE id=$${params.length - 1} AND salon_id=$${params.length}`,
-      params
-    );
-
-    safeUnlink(oldAfter);
-    safeUnlink(oldBefore);
-
-    const fresh = await db.one(
-      `SELECT photo_after_url, photo_before_url FROM portfolio_items WHERE id=$1`, [id]
-    );
-    res.json({ photoAfterUrl: fresh.photo_after_url, photoBeforeUrl: fresh.photo_before_url });
   });
 });
 
