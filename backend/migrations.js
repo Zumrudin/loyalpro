@@ -213,6 +213,51 @@ async function runMigrations(client) {
     CREATE INDEX IF NOT EXISTS idx_mobile_telegram_links_chat_id
       ON mobile_telegram_links(chat_id)
   `).catch(() => {});
+
+  // ── Portfolio (До/После) tables ─────────────────────────────
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS portfolio_categories (
+      id              SERIAL PRIMARY KEY,
+      salon_id        INTEGER NOT NULL REFERENCES salons(id) ON DELETE CASCADE,
+      title           VARCHAR(120) NOT NULL,
+      cover_photo_url TEXT NOT NULL DEFAULT '',
+      display_order   INTEGER NOT NULL DEFAULT 0,
+      is_published    BOOLEAN NOT NULL DEFAULT TRUE,
+      created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `).catch(() => {});
+
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS idx_portfolio_categories_salon_order
+      ON portfolio_categories (salon_id, display_order)
+  `).catch(() => {});
+
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS portfolio_items (
+      id                SERIAL PRIMARY KEY,
+      salon_id          INTEGER NOT NULL REFERENCES salons(id) ON DELETE CASCADE,
+      category_id       INTEGER NOT NULL REFERENCES portfolio_categories(id) ON DELETE CASCADE,
+      staff_id          INTEGER REFERENCES staff_members(id) ON DELETE SET NULL,
+      title             VARCHAR(80) NOT NULL,
+      description       VARCHAR(1000),
+      photo_after_url   TEXT NOT NULL,
+      photo_before_url  TEXT,
+      display_order     INTEGER NOT NULL DEFAULT 0,
+      created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `).catch(() => {});
+
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS idx_portfolio_items_category_order
+      ON portfolio_items (salon_id, category_id, display_order)
+  `).catch(() => {});
+
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS idx_portfolio_items_staff
+      ON portfolio_items (salon_id, staff_id) WHERE staff_id IS NOT NULL
+  `).catch(() => {});
 }
 
 module.exports = { runMigrations };
