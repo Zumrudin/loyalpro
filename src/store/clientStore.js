@@ -33,6 +33,10 @@ export const useClientStore = create((set, get) => ({
   prescriptionDetail: null,
   prescriptionDetailLoading: false,
 
+  // Specialists
+  specialists: [],
+  specialistsLoading: false,
+
   // Errors
   error: null,
 
@@ -226,6 +230,20 @@ export const useClientStore = create((set, get) => ({
       set({ error: error.message });
     } finally {
       set({ prescriptionDetailLoading: false });
+    }
+  },
+
+  fetchSpecialists: async () => {
+    set({ specialistsLoading: true });
+    try {
+      const response = await clientDataAPI.getSpecialists();
+      console.log('[API] specialists →', (response.specialists || []).length);
+      set({ specialists: response.specialists || response || [], error: null });
+    } catch (error) {
+      console.error('[API] specialists error:', error.message);
+      set({ error: error.message });
+    } finally {
+      set({ specialistsLoading: false });
     }
   },
 
