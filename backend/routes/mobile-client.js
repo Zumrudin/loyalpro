@@ -469,4 +469,47 @@ router.get('/price-list', mobileAuth, async (req, res) => {
   }
 });
 
+// Get specialists (staff_members with show_in_app=TRUE and is_active=TRUE)
+router.get('/specialists', mobileAuth, async (req, res) => {
+  try {
+    const baseUrl = `${req.protocol}://${req.get('host')}`;
+
+    const rows = await db.any(
+      `SELECT id, name, specialization, bio,
+              custom_photo_url, avatar_url, display_order
+       FROM staff_members
+       WHERE salon_id = (SELECT salon_id FROM clients WHERE id=$1)
+         AND show_in_app = TRUE
+         AND is_active   = TRUE
+       ORDER BY display_order ASC NULLS LAST, name ASC`,
+      [req.client.clientId]
+    );
+
+    const specialists = rows.map((r) => {
+      let photoUrl = null;
+      if (r.custom_photo_url && r.custom_photo_url.trim()) {
+        photoUrl = r.custom_photo_url.startsWith('http')
+          ? r.custom_photo_url
+          : `${baseUrl}${r.custom_photo_url}`;
+      } else if (r.avatar_url && r.avatar_url.trim()) {
+        photoUrl = r.avatar_url;
+      }
+      return {
+        id: r.id,
+        name: r.name,
+        specialization: r.specialization,
+        bio: r.bio,
+        photoUrl,
+        displayOrder: r.display_order,
+      };
+    });
+
+    res.json({ success: true, specialists });
+
+  } catch (e) {
+    logger.error(`Get specialists error: ${e.message}`);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 module.exports = router;
