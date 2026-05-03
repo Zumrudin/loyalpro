@@ -57,6 +57,7 @@ node test-auth-integration.js   # integration, requires running server
 - `services/home-care.js` — "домашний уход" (home care) goods catalog sync
 - `services/segments.js` — client segmentation refresh
 - `services/staff.js` — staff data sync
+- `services/portfolio.js` — pure helpers (filename templating, reorder validation, URL absolutize) shared by admin route + mobile API. No DB/HTTP — unit-tested in `portfolio.test.js`
 
 ### Auth & roles
 JWT in `Authorization: Bearer <token>` header (or `?token=` for downloads). Roles: `owner > admin > specialist`. Specialists can only access `/api/home-care`, `/api/auth`, `/api/template-settings`. Public routes (no JWT): `/api/auth/login`, `/api/auth/register`, `/api/app-settings`.
@@ -77,7 +78,7 @@ PostgreSQL (Beget cloud, SSL). Uses `pg` pool directly — no ORM. Helper `db` o
 ### Frontend (staff SPA)
 `frontend/js/app.js` — entry, router, init  
 `frontend/js/core/` — api.js, auth.js, nav.js, theme.js, utils.js  
-`frontend/js/pages/` — one file per page (dashboard, clients, records, staff, segments, settings, home-care, users)
+`frontend/js/pages/` — one file per page (dashboard, clients, records, staff, segments, settings, home-care, users, portfolio)
 
 API calls go through `core/api.js` which attaches JWT from localStorage automatically.
 
@@ -91,6 +92,30 @@ Always use the **MCP PostgreSQL server** (`mcp__postgres__query`) for direct DB 
 
 ### Browser / UI testing
 Always use the **MCP Playwright server** (`mcp__playwright__*`) for browser automation and UI testing — do not spawn Playwright via bash scripts.
+
+### Portfolio module (До/После)
+"Before/after" gallery for the mobile client app, managed by salon admins under Settings → Mobile App → Портфолио работ.
+
+**Tables (`migrations.js`):**
+- `portfolio_categories` — `id, salon_id, title, cover_photo_url, display_order, is_published, created_at, updated_at`. `cover_photo_url DEFAULT ''` is a sentinel — categories created without a cover are publishable only after upload.
+- `portfolio_items` — `id, salon_id, category_id, staff_id (nullable, ON DELETE SET NULL), title, description, photo_after_url (NOT NULL), photo_before_url (nullable), display_order, created_at, updated_at`.
+- Indexes: `(salon_id, display_order)` on categories, `(salon_id, category_id, display_order)` on items, partial `(salon_id, staff_id) WHERE staff_id IS NOT NULL` on items.
+
+**Admin API (`routes/portfolio.js`, mounted at `/api/portfolio`, `requireRole('owner','admin')`):**
+- `GET/POST/PUT/DELETE /categories[/:id]` — list with `items_count`, create (empty cover sentinel), update title/`isPublished` (refuses publish without cover), cascade-delete with file cleanup.
+- `POST /categories/:id/cover` — multipart cover upload, replaces old file on success.
+- `PUT /categories/reorder` — batch `display_order` (declared **before** `:id` to avoid path-matcher collision).
+- `GET /categories/:id/items`, `POST /items` (multipart `after` required + `before` optional), `PUT /items/:id` (text only), `POST /items/:id/photos` (replace either or both), `DELETE /items/:id/before` (clear before-photo), `DELETE /items/:id` (cascade files).
+- `PUT /items/reorder` — same-category guard (Set over `category_id`); also declared **before** `/items/:id`.
+
+**Mobile API (`routes/mobile-client.js`, `mobileAuth`):**
+- `GET /api/mobile/client/portfolio/categories` — published categories with items_count > 0, scoped to client's salon. URLs absolutized.
+- `GET /api/mobile/client/portfolio/categories/:id` — items in a published category, embeds `specialist:{id,name,photoUrl}|null`. Photo precedence: `custom_photo_url` (trimmed) > `avatar_url` > null.
+- `GET /api/mobile/client/portfolio/by-staff/:staffId` — items attributed to a staff member, only from published categories, ordered `created_at DESC`.
+
+**Multer config:** `memoryStorage()` (so the row id can be embedded in the filename), 5 MB cap, image-only filter. Files written to `frontend/uploads/portfolio_{cat,item}_<id>[_(after|before)]_<ts>.<ext>`. `safeUnlink` swallows ENOENT and only acts on `/uploads/...` paths.
+
+**Frontend:** `frontend/js/pages/portfolio.js` — two-level admin SPA (categories grid → items grid in a category) with HTML5 drag-drop reorder on both levels and create/edit modals. Stub `staff-profile-modal` shape reused via shared classes (`stg-section`, `btn-pri`, `fg`/`fl`).
 
 ## Key constraints
 

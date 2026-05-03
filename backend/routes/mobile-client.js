@@ -1,6 +1,7 @@
 const router = require('express').Router();
 const { db } = require('../db');
 const { mobileAuth } = require('../middleware/mobile-auth');
+const { absolutizeUrl } = require('../services/portfolio');
 const { ycGet, ycGetClientCards, ycGetCardTransactions } = require('../services/yclients');
 const { createLogger } = require('../logger');
 const logger = createLogger('Mobile');
@@ -508,6 +509,135 @@ router.get('/specialists', mobileAuth, async (req, res) => {
 
   } catch (e) {
     logger.error(`Get specialists error: ${e.message}`);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /api/mobile/client/portfolio/categories
+// Returns published, non-empty categories scoped to client's salon
+router.get('/portfolio/categories', mobileAuth, async (req, res) => {
+  try {
+    const baseUrl = `${req.protocol}://${req.get('host')}`;
+    const rows = await db.any(
+      `SELECT c.id, c.title, c.cover_photo_url,
+              (SELECT COUNT(*)::int FROM portfolio_items i
+               WHERE i.salon_id=c.salon_id AND i.category_id=c.id) AS items_count
+       FROM portfolio_categories c
+       WHERE c.salon_id = (SELECT salon_id FROM clients WHERE id=$1)
+         AND c.is_published = TRUE
+         AND c.cover_photo_url <> ''
+       ORDER BY c.display_order ASC, c.id ASC`,
+      [req.client.clientId]
+    );
+    const categories = rows
+      .filter(r => r.items_count > 0)
+      .map(r => ({
+        id: r.id,
+        title: r.title,
+        coverPhotoUrl: absolutizeUrl(baseUrl, r.cover_photo_url),
+        itemsCount: r.items_count,
+      }));
+    res.json({ success: true, categories });
+  } catch (e) {
+    logger.error(`Get portfolio categories error: ${e.message}`);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /api/mobile/client/portfolio/categories/:id
+router.get('/portfolio/categories/:id', mobileAuth, async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (!id) return res.status(400).json({ error: 'invalid id' });
+    const baseUrl = `${req.protocol}://${req.get('host')}`;
+
+    const cat = await db.oneOrNone(
+      `SELECT id, title FROM portfolio_categories
+       WHERE id=$1
+         AND salon_id = (SELECT salon_id FROM clients WHERE id=$2)
+         AND is_published = TRUE`,
+      [id, req.client.clientId]
+    );
+    if (!cat) return res.status(404).json({ error: 'Категория не найдена' });
+
+    const rows = await db.any(
+      `SELECT i.id, i.title, i.description,
+              i.photo_after_url, i.photo_before_url,
+              s.id AS staff_id, s.name AS staff_name,
+              s.custom_photo_url, s.avatar_url
+       FROM portfolio_items i
+       LEFT JOIN staff_members s ON s.id=i.staff_id
+       WHERE i.salon_id = (SELECT salon_id FROM clients WHERE id=$1)
+         AND i.category_id = $2
+       ORDER BY i.display_order ASC, i.id ASC`,
+      [req.client.clientId, id]
+    );
+
+    const items = rows.map(r => {
+      let staffPhoto = null;
+      if (r.staff_id) {
+        const raw = (r.custom_photo_url && r.custom_photo_url.trim()) || r.avatar_url || null;
+        staffPhoto = absolutizeUrl(baseUrl, raw);
+      }
+      return {
+        id: r.id,
+        title: r.title,
+        description: r.description,
+        photoAfterUrl:  absolutizeUrl(baseUrl, r.photo_after_url),
+        photoBeforeUrl: absolutizeUrl(baseUrl, r.photo_before_url),
+        specialist: r.staff_id ? {
+          id: r.staff_id, name: r.staff_name, photoUrl: staffPhoto,
+        } : null,
+      };
+    });
+
+    res.json({ success: true, category: { id: cat.id, title: cat.title }, items });
+  } catch (e) {
+    logger.error(`Get portfolio category error: ${e.message}`);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /api/mobile/client/portfolio/by-staff/:staffId
+router.get('/portfolio/by-staff/:staffId', mobileAuth, async (req, res) => {
+  try {
+    const staffId = parseInt(req.params.staffId, 10);
+    if (!staffId) return res.status(400).json({ error: 'invalid staffId' });
+    const baseUrl = `${req.protocol}://${req.get('host')}`;
+
+    // verify staff belongs to client's salon
+    const staff = await db.oneOrNone(
+      `SELECT id FROM staff_members
+       WHERE id=$1 AND salon_id = (SELECT salon_id FROM clients WHERE id=$2)`,
+      [staffId, req.client.clientId]
+    );
+    if (!staff) return res.status(404).json({ error: 'Сотрудник не найден' });
+
+    const rows = await db.any(
+      `SELECT i.id, i.title, i.description,
+              i.photo_after_url, i.photo_before_url,
+              c.id AS category_id, c.title AS category_title
+       FROM portfolio_items i
+       JOIN portfolio_categories c
+         ON c.id = i.category_id AND c.salon_id = i.salon_id
+       WHERE i.staff_id = $1
+         AND i.salon_id = (SELECT salon_id FROM clients WHERE id=$2)
+         AND c.is_published = TRUE
+       ORDER BY i.created_at DESC, i.id DESC`,
+      [staffId, req.client.clientId]
+    );
+
+    const items = rows.map(r => ({
+      id: r.id,
+      title: r.title,
+      description: r.description,
+      photoAfterUrl:  absolutizeUrl(baseUrl, r.photo_after_url),
+      photoBeforeUrl: absolutizeUrl(baseUrl, r.photo_before_url),
+      category: { id: r.category_id, title: r.category_title },
+    }));
+    res.json({ success: true, items });
+  } catch (e) {
+    logger.error(`Get portfolio by-staff error: ${e.message}`);
     res.status(500).json({ error: e.message });
   }
 });
