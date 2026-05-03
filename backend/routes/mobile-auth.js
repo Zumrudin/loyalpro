@@ -3,6 +3,7 @@ const jwt = require('jsonwebtoken');
 const { pool, db } = require('../db');
 const { mobileAuth } = require('../middleware/mobile-auth');
 const { getBotLink } = require('../services/telegram');
+const { tryDeliverOtp } = require('../services/telegram-otp');
 const config = require('../config');
 
 const JWT_SECRET = config.JWT_SECRET;
@@ -48,14 +49,25 @@ router.post('/login', async (req, res) => {
       [normalizedPhone, otp]
     );
 
-    // Return Telegram bot link for OTP delivery
+    // Try to push the OTP straight into the user's Telegram chat
+    // if they've previously linked their phone via the bot (/start <phone>).
+    const delivery = await tryDeliverOtp(normalizedPhone, otp);
+    if (delivery.delivered) {
+      logger.info(`OTP pushed directly to chat_id=${delivery.chatId} for ${normalizedPhone}`);
+    }
+
+    // Always return the bot deep-link as a fallback (first-time users
+    // and users who deleted the chat still need a way to link).
     const telegramLink = getBotLink(normalizedPhone);
 
     res.json({
       success: true,
-      message: 'Откройте Telegram бота для получения кода',
+      message: delivery.delivered
+        ? 'Код отправлен в Telegram'
+        : 'Откройте Telegram бота для получения кода',
       phone: normalizedPhone,
       telegramLink,
+      delivered: delivery.delivered,
     });
 
   } catch (e) {

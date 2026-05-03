@@ -199,6 +199,20 @@ async function runMigrations(client) {
       updated_at   TIMESTAMPTZ DEFAULT NOW()
     )
   `).catch(() => {});
+
+  // ── Mobile OTP Telegram delivery: phone ↔ chat_id link ──────
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS mobile_telegram_links (
+      phone       VARCHAR(20) PRIMARY KEY,
+      chat_id     BIGINT NOT NULL,
+      updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `).catch(() => {});
+
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS idx_mobile_telegram_links_chat_id
+      ON mobile_telegram_links(chat_id)
+  `).catch(() => {});
 }
 
 module.exports = { runMigrations };
