@@ -35,6 +35,8 @@ import PrescriptionsScreen from './src/screens/PrescriptionsScreen';
 import PrescriptionDetailScreen from './src/screens/PrescriptionDetailScreen';
 import PriceListScreen from './src/screens/PriceListScreen';
 import PriceListDetailScreen from './src/screens/PriceListDetailScreen';
+import SpecialistsScreen from './src/screens/SpecialistsScreen';
+import SpecialistDetailScreen from './src/screens/SpecialistDetailScreen';
 
 const HomeStackNav = createNativeStackNavigator();
 const BookingsStackNav = createNativeStackNavigator();
@@ -54,6 +56,8 @@ function HomeStack() {
       <HomeStackNav.Screen name="PrescriptionDetail" component={PrescriptionDetailScreen} />
       <HomeStackNav.Screen name="BookingDetail" component={BookingDetailScreen} />
       <HomeStackNav.Screen name="Notifications" component={NotificationsScreen} />
+      <HomeStackNav.Screen name="Specialists" component={SpecialistsScreen} />
+      <HomeStackNav.Screen name="SpecialistDetail" component={SpecialistDetailScreen} />
     </HomeStackNav.Navigator>
   );
 }
