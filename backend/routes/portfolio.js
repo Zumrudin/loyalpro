@@ -337,6 +337,38 @@ router.post('/items', adminOnly, (req, res) => {
   });
 });
 
+// PUT /api/portfolio/items/reorder — batch update display_order within one category
+router.put('/items/reorder', adminOnly, async (req, res) => {
+  try {
+    const { order } = req.body;
+    const v = validateReorderPayload(order);
+    if (!v.valid) return res.status(400).json({ error: v.error });
+
+    const ids = order.map(o => o.id);
+    const rows = await db.any(
+      `SELECT id, category_id FROM portfolio_items
+       WHERE salon_id=$1 AND id=ANY($2::int[])`,
+      [req.user.salonId, ids]
+    );
+    if (rows.length !== ids.length) {
+      return res.status(400).json({ error: 'Some ids do not belong to your salon' });
+    }
+    const cats = new Set(rows.map(r => r.category_id));
+    if (cats.size !== 1) {
+      return res.status(400).json({ error: 'All items must belong to the same category' });
+    }
+
+    for (const { id, display_order } of order) {
+      await db.query(
+        `UPDATE portfolio_items SET display_order=$1, updated_at=NOW()
+         WHERE id=$2 AND salon_id=$3`,
+        [display_order, id, req.user.salonId]
+      );
+    }
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // PUT /api/portfolio/items/:id — update text fields (no photos here)
 router.put('/items/:id', adminOnly, async (req, res) => {
   try {
