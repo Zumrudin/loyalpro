@@ -90,4 +90,10 @@ export const clientDataAPI = {
     const res = await apiClient.get(`/mobile/client/prescriptions/${id}`);
     return res.data;
   },
+
+  // Get specialists (staff with show_in_app enabled)
+  getSpecialists: async () => {
+    const res = await apiClient.get('/mobile/client/specialists');
+    return res.data;
+  },
 };
