@@ -508,12 +508,13 @@ export default function HomeScreen({ navigation }) {
         </Reveal>
         <View style={s.quickGrid}>
           {[
-            { icon: 'calendar-outline',       label: 'История',     nav: 'Bookings',      delay: 540 },
-            { icon: 'person-outline',          label: 'Профиль',     nav: 'Profile',       delay: 580 },
-            { icon: 'notifications-outline',   label: 'Уведомления', nav: 'Notifications', delay: 620 },
-            { icon: 'gift-outline',            label: 'Бонусы',      nav: 'Bonuses',       delay: 660 },
-            { icon: 'medical-outline',         label: 'Назначения',  nav: 'Prescriptions', delay: 700 },
-            { icon: 'pricetag-outline',        label: 'Прайс',       nav: 'PriceList',     delay: 740 },
+            { icon: 'people-outline',          label: 'Специалисты', nav: 'Specialists',   delay: 540 },
+            { icon: 'calendar-outline',       label: 'История',     nav: 'Bookings',      delay: 580 },
+            { icon: 'person-outline',          label: 'Профиль',     nav: 'Profile',       delay: 620 },
+            { icon: 'notifications-outline',   label: 'Уведомления', nav: 'Notifications', delay: 660 },
+            { icon: 'gift-outline',            label: 'Бонусы',      nav: 'Bonuses',       delay: 700 },
+            { icon: 'medical-outline',         label: 'Назначения',  nav: 'Prescriptions', delay: 740 },
+            { icon: 'pricetag-outline',        label: 'Прайс',       nav: 'PriceList',     delay: 780 },
           ].map(({ icon, label, nav, delay }) => (
             <Reveal key={label} delay={delay}>
               <PressCard style={s.quickCard} onPress={() => navigation.navigate(nav)}>
