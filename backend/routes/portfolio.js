@@ -81,6 +81,35 @@ router.post('/categories', adminOnly, async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// PUT /api/portfolio/categories/reorder — batch update display_order
+router.put('/categories/reorder', adminOnly, async (req, res) => {
+  try {
+    const { order } = req.body;
+    const v = validateReorderPayload(order);
+    if (!v.valid) return res.status(400).json({ error: v.error });
+
+    // verify all ids belong to this salon
+    const ids = order.map(o => o.id);
+    const owned = await db.any(
+      `SELECT id FROM portfolio_categories
+       WHERE salon_id=$1 AND id=ANY($2::int[])`,
+      [req.user.salonId, ids]
+    );
+    if (owned.length !== ids.length) {
+      return res.status(400).json({ error: 'Some ids do not belong to your salon' });
+    }
+
+    for (const { id, display_order } of order) {
+      await db.query(
+        `UPDATE portfolio_categories SET display_order=$1, updated_at=NOW()
+         WHERE id=$2 AND salon_id=$3`,
+        [display_order, id, req.user.salonId]
+      );
+    }
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // PUT /api/portfolio/categories/:id — update title and/or is_published
 router.put('/categories/:id', adminOnly, async (req, res) => {
   try {
@@ -150,6 +179,49 @@ router.delete('/categories/:id', adminOnly, async (req, res) => {
     }
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// POST /api/portfolio/categories/:id/cover — upload/replace category cover
+router.post('/categories/:id/cover', adminOnly, (req, res) => {
+  upload.single('photo')(req, res, async (err) => {
+    if (err) return res.status(400).json({ error: err.message });
+    if (!req.file) return res.status(400).json({ error: 'Файл не получен' });
+
+    const id = parseInt(req.params.id, 10);
+    if (!id) return res.status(400).json({ error: 'invalid id' });
+
+    const cat = await db.oneOrNone(
+      `SELECT cover_photo_url FROM portfolio_categories
+       WHERE id=$1 AND salon_id=$2`,
+      [id, req.user.salonId]
+    );
+    if (!cat) return res.status(404).json({ error: 'Категория не найдена' });
+
+    const filename = buildPhotoFilename('category', id, null, req.file.originalname, Date.now());
+    const absPath = path.join(uploadsDir, filename);
+    try {
+      fs.writeFileSync(absPath, req.file.buffer);
+    } catch (e) {
+      return res.status(500).json({ error: 'Ошибка записи файла: ' + e.message });
+    }
+    const url = `/uploads/${filename}`;
+
+    try {
+      await db.query(
+        `UPDATE portfolio_categories
+         SET cover_photo_url=$1, updated_at=NOW()
+         WHERE id=$2 AND salon_id=$3`,
+        [url, id, req.user.salonId]
+      );
+    } catch (e) {
+      // rollback: remove just-written file
+      try { fs.unlinkSync(absPath); } catch (_) {}
+      return res.status(500).json({ error: e.message });
+    }
+
+    safeUnlink(cat.cover_photo_url); // remove old file (no-op if sentinel '')
+    res.json({ ok: true, url });
+  });
 });
 
 module.exports = router;
