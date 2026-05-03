@@ -53,7 +53,7 @@ export default function SpecialistDetailScreen({ navigation, route }) {
   const fetchSpecialists = useClientStore((s) => s.fetchSpecialists);
 
   const specialist = useMemo(
-    () => specialists.find((sp) => sp.id === id) || null,
+    () => specialists.find((sp) => sp.id === Number(id)) || null,
     [specialists, id]
   );
 
