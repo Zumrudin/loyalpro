@@ -37,6 +37,12 @@ export const useClientStore = create((set, get) => ({
   specialists: [],
   specialistsLoading: false,
 
+  // Portfolio (Before/After)
+  portfolioCategories: [],            // [{id, title, coverPhotoUrl, itemsCount}]
+  portfolioCategoriesLoading: false,
+  portfolioItemsByCategory: {},       // { [categoryId]: items[] }
+  portfolioItemsLoading: {},          // { [categoryId]: bool }
+
   // Errors
   error: null,
 
@@ -244,6 +250,45 @@ export const useClientStore = create((set, get) => ({
       set({ error: error.message });
     } finally {
       set({ specialistsLoading: false });
+    }
+  },
+
+  fetchPortfolioCategories: async () => {
+    set({ portfolioCategoriesLoading: true });
+    try {
+      const response = await clientDataAPI.getPortfolioCategories();
+      set({
+        portfolioCategories: response.categories || [],
+        error: null,
+      });
+    } catch (error) {
+      console.log('[API] portfolio categories failed:', error.message);
+      set({ error: error.message });
+    } finally {
+      set({ portfolioCategoriesLoading: false });
+    }
+  },
+
+  fetchPortfolioCategory: async (id) => {
+    set((s) => ({
+      portfolioItemsLoading: { ...s.portfolioItemsLoading, [id]: true },
+    }));
+    try {
+      const response = await clientDataAPI.getPortfolioCategory(id);
+      set((s) => ({
+        portfolioItemsByCategory: {
+          ...s.portfolioItemsByCategory,
+          [id]: response.items || [],
+        },
+        error: null,
+      }));
+    } catch (error) {
+      console.log('[API] portfolio category failed:', error.message);
+      set({ error: error.message });
+    } finally {
+      set((s) => ({
+        portfolioItemsLoading: { ...s.portfolioItemsLoading, [id]: false },
+      }));
     }
   },
 
