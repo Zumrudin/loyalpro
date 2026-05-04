@@ -91,9 +91,27 @@ export const clientDataAPI = {
     return res.data;
   },
 
+  // Get price list
+  getPriceList: async () => {
+    const res = await apiClient.get('/mobile/client/price-list');
+    return res.data;
+  },
+
   // Get specialists (staff with show_in_app enabled)
   getSpecialists: async () => {
     const res = await apiClient.get('/mobile/client/specialists');
+    return res.data;
+  },
+
+  // Get portfolio categories (Before/After)
+  getPortfolioCategories: async () => {
+    const res = await apiClient.get('/mobile/client/portfolio/categories');
+    return res.data;
+  },
+
+  // Get portfolio items in one category
+  getPortfolioCategory: async (id) => {
+    const res = await apiClient.get(`/mobile/client/portfolio/categories/${id}`);
     return res.data;
   },
 };
