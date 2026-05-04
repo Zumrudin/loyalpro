@@ -8,19 +8,10 @@ import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
-import * as Notifications from 'expo-notifications';
 
 import { useAuthStore } from './src/store/authStore';
 import { useClientStore } from './src/store/clientStore';
 import { useAppSettingsStore } from './src/store/appSettingsStore';
-
-Notifications.setNotificationHandler({
-  handleNotification: async () => ({
-    shouldShowAlert: true,
-    shouldPlaySound: true,
-    shouldSetBadge: false,
-  }),
-});
 
 // Screens
 import LoginScreen from './src/screens/LoginScreen';
@@ -35,11 +26,14 @@ import PrescriptionsScreen from './src/screens/PrescriptionsScreen';
 import PrescriptionDetailScreen from './src/screens/PrescriptionDetailScreen';
 import PriceListScreen from './src/screens/PriceListScreen';
 import PriceListDetailScreen from './src/screens/PriceListDetailScreen';
+import RouteToClinicScreen from './src/screens/RouteToClinicScreen';
 import SpecialistsScreen from './src/screens/SpecialistsScreen';
 import SpecialistDetailScreen from './src/screens/SpecialistDetailScreen';
+import PortfolioCategoryScreen from './src/screens/PortfolioCategoryScreen';
 
 const HomeStackNav = createNativeStackNavigator();
 const BookingsStackNav = createNativeStackNavigator();
+const ContactsStackNav = createNativeStackNavigator();
 const AuthStack = createNativeStackNavigator();
 const Tab = createBottomTabNavigator();
 
@@ -58,6 +52,7 @@ function HomeStack() {
       <HomeStackNav.Screen name="Notifications" component={NotificationsScreen} />
       <HomeStackNav.Screen name="Specialists" component={SpecialistsScreen} />
       <HomeStackNav.Screen name="SpecialistDetail" component={SpecialistDetailScreen} />
+      <HomeStackNav.Screen name="PortfolioCategory" component={PortfolioCategoryScreen} />
     </HomeStackNav.Navigator>
   );
 }
@@ -71,6 +66,17 @@ function BookingsStack() {
       <BookingsStackNav.Screen name="BookingDetail" component={BookingDetailScreen} />
       <BookingsStackNav.Screen name="PrescriptionDetail" component={PrescriptionDetailScreen} />
     </BookingsStackNav.Navigator>
+  );
+}
+
+function ContactsStack() {
+  return (
+    <ContactsStackNav.Navigator
+      screenOptions={{ headerShown: false, animation: 'slide_from_right' }}
+    >
+      <ContactsStackNav.Screen name="ContactsRoot" component={ContactsScreen} />
+      <ContactsStackNav.Screen name="RouteToClinic" component={RouteToClinicScreen} />
+    </ContactsStackNav.Navigator>
   );
 }
 
@@ -140,7 +146,7 @@ function TabNavigator() {
       />
       <Tab.Screen
         name="Contacts"
-        component={ContactsScreen}
+        component={ContactsStack}
         options={{
           tabBarLabel: 'Контакты',
           tabBarIcon: ({ color }) => (
@@ -179,30 +185,11 @@ function MainNavigator() {
   return <TabNavigator />;
 }
 
-async function registerForPushNotifications() {
-  if (Platform.OS === 'web') return null;
-  const { status: existing } = await Notifications.getPermissionsAsync();
-  let finalStatus = existing;
-  if (existing !== 'granted') {
-    const { status } = await Notifications.requestPermissionsAsync();
-    finalStatus = status;
-  }
-  if (finalStatus !== 'granted') return null;
-  try {
-    const tokenData = await Notifications.getExpoPushTokenAsync();
-    return tokenData.data;
-  } catch (e) {
-    console.warn('[Push] Could not get push token:', e.message);
-    return null;
-  }
-}
-
 export default function App() {
   const [isLoading, setIsLoading] = useState(true);
   const token = useAuthStore((state) => state.token);
   const restoreToken = useAuthStore((state) => state.restoreToken);
   const fetchAppSettings = useAppSettingsStore((state) => state.fetchAppSettings);
-  const registerFcmToken = useClientStore((state) => state.registerFcmToken);
   const navigationRef = useRef(null);
 
   useEffect(() => {
@@ -217,28 +204,6 @@ export default function App() {
       }
     };
     bootstrapAsync();
-  }, []);
-
-  // Register push token when authenticated
-  useEffect(() => {
-    if (!token) return;
-    registerForPushNotifications().then((pushToken) => {
-      if (pushToken) registerFcmToken(pushToken);
-    });
-  }, [token]);
-
-  // Handle notification tap → navigate to prescription
-  useEffect(() => {
-    const sub = Notifications.addNotificationResponseReceivedListener((response) => {
-      const data = response.notification.request.content.data;
-      if (data?.prescriptionId && navigationRef.current) {
-        navigationRef.current.navigate('Home', {
-          screen: 'PrescriptionDetail',
-          params: { prescriptionId: data.prescriptionId },
-        });
-      }
-    });
-    return () => sub.remove();
   }, []);
 
   if (isLoading) {

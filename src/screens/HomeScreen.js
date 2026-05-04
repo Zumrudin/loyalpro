@@ -469,7 +469,7 @@ export default function HomeScreen({ navigation }) {
                   <PortfolioCard
                     category={cat}
                     size="strip"
-                    onPress={() => console.log('[NAV] PortfolioCategory — pending Task 5', cat.id)}
+                    onPress={() => navigation.navigate('PortfolioCategory', { id: cat.id, title: cat.title })}
                   />
                 </Reveal>
               ))}
