@@ -29,6 +29,7 @@ import PriceListDetailScreen from './src/screens/PriceListDetailScreen';
 import RouteToClinicScreen from './src/screens/RouteToClinicScreen';
 import SpecialistsScreen from './src/screens/SpecialistsScreen';
 import SpecialistDetailScreen from './src/screens/SpecialistDetailScreen';
+import PortfolioCategoriesScreen from './src/screens/PortfolioCategoriesScreen';
 import PortfolioCategoryScreen from './src/screens/PortfolioCategoryScreen';
 import PortfolioItemViewer from './src/screens/PortfolioItemViewer';
 
@@ -53,6 +54,7 @@ function HomeStack() {
       <HomeStackNav.Screen name="Notifications" component={NotificationsScreen} />
       <HomeStackNav.Screen name="Specialists" component={SpecialistsScreen} />
       <HomeStackNav.Screen name="SpecialistDetail" component={SpecialistDetailScreen} />
+      <HomeStackNav.Screen name="PortfolioCategories" component={PortfolioCategoriesScreen} />
       <HomeStackNav.Screen name="PortfolioCategory" component={PortfolioCategoryScreen} />
       <HomeStackNav.Screen
         name="PortfolioItemViewer"

@@ -453,7 +453,7 @@ export default function HomeScreen({ navigation }) {
             <Reveal delay={240}>
               <View style={s.sectionHeader}>
                 <Text style={s.sectionTitle}>До/после</Text>
-                <TouchableOpacity onPress={() => console.log('[NAV] PortfolioCategories — pending Task 7')}>
+                <TouchableOpacity onPress={() => navigation.navigate('PortfolioCategories')}>
                   <Text style={s.sectionLink}>Все</Text>
                 </TouchableOpacity>
               </View>
