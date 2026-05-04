@@ -43,6 +43,7 @@ import { useAppSettingsStore } from '../store/appSettingsStore';
 import { format } from 'date-fns';
 import { ru } from 'date-fns/locale';
 import LoyaltyRing from '../components/LoyaltyRing';
+import { PortfolioCard, PortfolioCardSkeleton } from '../components/PortfolioCard';
 
 function parseDate(value) {
   if (!value) return new Date(NaN);
@@ -225,66 +226,6 @@ const gls = StyleSheet.create({
   orbC: { width: 200, height: 200, top: 480, right: -40, backgroundColor: T.glowC },
 });
 
-// ─── Service pill (horizontal scroll) ───────────────────────────────────────
-const SERVICES = [
-  { id: 1, icon: 'sparkles-outline',     label: 'Инъекции',    tint: '#D4AF37' },
-  { id: 2, icon: 'flower-outline',       label: 'Уход',        tint: '#C8A4A4' },
-  { id: 3, icon: 'sunny-outline',        label: 'Лазер',       tint: '#B8C4D0' },
-  { id: 4, icon: 'water-outline',        label: 'Гидратация',  tint: '#9AC4C4' },
-  { id: 5, icon: 'ribbon-outline',       label: 'Контуры',     tint: '#C4A4C4' },
-];
-
-function ServicePill({ icon, label, tint, delay, onPress }) {
-  const scale = useSharedValue(1);
-  const animStyle = useAnimatedStyle(() => ({ transform: [{ scale: scale.value }] }));
-
-  return (
-    <Reveal delay={delay}>
-      <Animated.View style={animStyle}>
-        <TouchableOpacity
-          style={[sp.pill, { borderColor: tint + '55' }]}
-          onPress={() => {
-            scale.value = withSequence(withSpring(0.92), withSpring(1));
-            Haptics.selectionAsync();
-            onPress?.();
-          }}
-          activeOpacity={0.85}
-        >
-          <LinearGradient
-            colors={[tint + '22', tint + '08']}
-            style={StyleSheet.absoluteFill}
-            start={{ x: 0, y: 0 }}
-            end={{ x: 1, y: 1 }}
-          />
-          <View style={[sp.iconWrap, { backgroundColor: tint + '25' }]}>
-            <Ionicons name={icon} size={18} color={tint} />
-          </View>
-          <Text style={sp.label}>{label}</Text>
-        </TouchableOpacity>
-      </Animated.View>
-    </Reveal>
-  );
-}
-
-const sp = StyleSheet.create({
-  pill: {
-    width: 88, minHeight: 96,
-    borderRadius: 20, borderWidth: 1,
-    alignItems: 'center', justifyContent: 'center',
-    paddingVertical: 14, paddingHorizontal: 8,
-    marginRight: 12,
-    overflow: 'hidden',
-    backgroundColor: T.glass,
-    shadowColor: T.shadow,
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.12,
-    shadowRadius: 12,
-    elevation: 3,
-  },
-  iconWrap: { width: 36, height: 36, borderRadius: 12, justifyContent: 'center', alignItems: 'center', marginBottom: 8 },
-  label: { fontSize: 11, color: T.stoneMid, fontFamily: undefined, letterSpacing: 0.4, textAlign: 'center' },
-});
-
 // ─── HomeScreen ──────────────────────────────────────────────────────────────
 export default function HomeScreen({ navigation }) {
   const insets = useSafeAreaInsets();
@@ -299,19 +240,29 @@ export default function HomeScreen({ navigation }) {
   const fetchProfile  = useClientStore((st) => st.fetchProfile);
   const fetchBonuses  = useClientStore((st) => st.fetchBonuses);
   const fetchBookings = useClientStore((st) => st.fetchBookings);
+  const portfolioCategories         = useClientStore((st) => st.portfolioCategories);
+  const portfolioCategoriesLoading  = useClientStore((st) => st.portfolioCategoriesLoading);
+  const fetchPortfolioCategories    = useClientStore((st) => st.fetchPortfolioCategories);
+  const [portfolioFetched, setPortfolioFetched] = useState(false);
 
   const clinicName = useAppSettingsStore((state) => state.clinicName);
   const logoUrl = useAppSettingsStore((state) => state.logoUrl);
 
   const loadData = useCallback(() =>
-    Promise.all([fetchProfile(), fetchBonuses(), fetchBookings('upcoming')]),
-  [fetchProfile, fetchBonuses, fetchBookings]);
+    Promise.all([
+      fetchProfile(),
+      fetchBonuses(),
+      fetchBookings('upcoming'),
+      fetchPortfolioCategories().finally(() => setPortfolioFetched(true)),
+    ]),
+  [fetchProfile, fetchBonuses, fetchBookings, fetchPortfolioCategories]);
 
   useEffect(() => { loadData(); }, [loadData]);
 
   useFocusEffect(useCallback(() => {
     fetchBookings('upcoming');
-  }, [fetchBookings]));
+    fetchPortfolioCategories();
+  }, [fetchBookings, fetchPortfolioCategories]));
 
   const isLoading   = profileLoading || bonusLoading || bookingsLoading;
   const now = new Date();
@@ -477,30 +428,54 @@ export default function HomeScreen({ navigation }) {
           )}
         </Reveal>
 
-        {/* ── Services horizontal scroll ────────────────── */}
-        <Reveal delay={240}>
-          <View style={s.sectionHeader}>
-            <Text style={s.sectionTitle}>Процедуры</Text>
-            <TouchableOpacity onPress={() => navigation.navigate('Bookings')}>
-              <Text style={s.sectionLink}>Все</Text>
-            </TouchableOpacity>
-          </View>
-        </Reveal>
+        {/* ── Portfolio Before/After ─────────────────────── */}
+        {(!portfolioFetched || portfolioCategoriesLoading) && (
+          <>
+            <Reveal delay={240}>
+              <View style={s.sectionHeader}>
+                <Text style={s.sectionTitle}>До/после</Text>
+              </View>
+            </Reveal>
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={s.servicesScroll}
+            >
+              {[0, 1, 2, 3].map((i) => (
+                <PortfolioCardSkeleton key={i} size="strip" />
+              ))}
+            </ScrollView>
+          </>
+        )}
 
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          contentContainerStyle={s.servicesScroll}
-        >
-          {SERVICES.map((svc, i) => (
-            <ServicePill
-              key={svc.id}
-              {...svc}
-              delay={280 + i * 60}
-              onPress={() => navigation.navigate('Bookings')}
-            />
-          ))}
-        </ScrollView>
+        {portfolioFetched && portfolioCategories.length > 0 && (
+          <>
+            <Reveal delay={240}>
+              <View style={s.sectionHeader}>
+                <Text style={s.sectionTitle}>До/после</Text>
+                <TouchableOpacity onPress={() => console.log('[NAV] PortfolioCategories — pending Task 7')}>
+                  <Text style={s.sectionLink}>Все</Text>
+                </TouchableOpacity>
+              </View>
+            </Reveal>
+
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={s.servicesScroll}
+            >
+              {portfolioCategories.slice(0, 4).map((cat, i) => (
+                <Reveal key={cat.id} delay={280 + i * 60}>
+                  <PortfolioCard
+                    category={cat}
+                    size="strip"
+                    onPress={() => console.log('[NAV] PortfolioCategory — pending Task 5', cat.id)}
+                  />
+                </Reveal>
+              ))}
+            </ScrollView>
+          </>
+        )}
 
         {/* ── Quick links grid ──────────────────────────── */}
         <Reveal delay={500}>
