@@ -417,6 +417,8 @@ router.get('/prescriptions/:id', mobileAuth, async (req, res) => {
         p.id,
         p.created_at as "createdAt",
         p.notes,
+        p.start_date AS "startDate",
+        p.end_date AS "endDate",
         u.name as "specialistName",
         u.position as "specialistPosition"
        FROM home_care_prescriptions p
@@ -428,12 +430,28 @@ router.get('/prescriptions/:id', mobileAuth, async (req, res) => {
     if (!p) return res.status(404).json({ error: 'Назначение не найдено' });
 
     const items = await db.any(
-      `SELECT time_of_day as "timeOfDay", category, product_name as "productName",
-              instructions, sort_order as "sortOrder"
-       FROM home_care_items
-       WHERE prescription_id = $1
-       ORDER BY sort_order`,
-      [prescriptionId]
+      `SELECT
+         i.id,
+         i.time_of_day  AS "timeOfDay",
+         i.category,
+         i.product_name AS "productName",
+         i.instructions,
+         i.sort_order   AS "sortOrder",
+         i.days_of_week AS "daysOfWeek",
+         CASE
+           WHEN i.time_of_day IN ('morning','evening','additional')
+            AND EXISTS (
+              SELECT 1 FROM home_care_completions c
+               WHERE c.item_id = i.id
+                 AND c.client_id = $2
+                 AND c.completion_date = CURRENT_DATE
+            )
+           THEN true ELSE false
+         END AS "completedToday"
+       FROM home_care_items i
+       WHERE i.prescription_id = $1
+       ORDER BY i.sort_order`,
+      [prescriptionId, req.client.clientId]
     );
     res.json({ success: true, prescription: { ...p, items } });
   } catch (e) {
