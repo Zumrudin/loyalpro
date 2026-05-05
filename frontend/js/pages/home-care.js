@@ -716,7 +716,164 @@ body{font-family:'Lora',Georgia,serif;background:#faf4ec;color:#2c2416;font-size
   else notify('Разрешите всплывающие окна в браузере', 'err');
 }
 
-// Будет реализовано в Task 13 (heatmap modal)
-function openAdherenceModal(id) {
-  alert(`Heatmap для назначения #${id} — будет реализован в следующем шаге`);
+async function openAdherenceModal(prescriptionId) {
+  const url = `/api/home-care/${prescriptionId}/adherence-history`;
+  try {
+    const res = await fetch(url, { headers: { Authorization: `Bearer ${TOKEN}` } });
+    if (!res.ok) {
+      notify('Не удалось загрузить данные выполнения', 'err');
+      return;
+    }
+    const data = await res.json();
+    renderAdherenceModal(data, prescriptionId);
+  } catch (e) {
+    notify('Ошибка: ' + e.message, 'err');
+  }
+}
+
+function renderAdherenceModal(data, prescriptionId) {
+  // Remove any previous instance
+  const old = document.getElementById('hcAdherenceModal');
+  if (old) old.remove();
+
+  const pr = data.prescription;
+  const totalExpected  = data.days.reduce((a, d) => a + d.expected, 0);
+  const totalCompleted = data.days.reduce((a, d) => a + d.completed, 0);
+  const pct = totalExpected === 0 ? null : Math.round((100 * totalCompleted) / totalExpected);
+
+  // Group days into weeks starting on Monday of the week containing start_date
+  const start = new Date(pr.start_date);
+  const startOfWeek = new Date(start);
+  const isodow = (start.getDay() + 6) % 7;     // 0=Mon..6=Sun
+  startOfWeek.setDate(start.getDate() - isodow);
+  const dayMap = {};
+  data.days.forEach(d => {
+    const key = String(d.date).slice(0, 10);
+    dayMap[key] = d;
+  });
+
+  const today = new Date(); today.setHours(0,0,0,0);
+  const endRender = pr.end_date ? new Date(pr.end_date) : today;
+  endRender.setHours(0,0,0,0);
+  const lastRender = endRender < today ? endRender : today;
+
+  const startDay = new Date(start); startDay.setHours(0,0,0,0);
+
+  const weeks = [];
+  for (let cur = new Date(startOfWeek); cur <= lastRender; cur.setDate(cur.getDate() + 7)) {
+    const week = [];
+    for (let i = 0; i < 7; i++) {
+      const d = new Date(cur); d.setDate(cur.getDate() + i);
+      // Build local YYYY-MM-DD (avoid UTC drift)
+      const m = String(d.getMonth() + 1).padStart(2, '0');
+      const day = String(d.getDate()).padStart(2, '0');
+      const ds = `${d.getFullYear()}-${m}-${day}`;
+      const inCourse = d >= startDay && d <= lastRender;
+      week.push(inCourse ? (dayMap[ds] || { date: ds, expected: 0, completed: 0 }) : null);
+    }
+    weeks.push(week);
+  }
+
+  const cellColor = (cell) => {
+    if (!cell) return 'transparent';
+    if (cell.expected === 0)  return '#e6e2dc';
+    const ratio = cell.completed / cell.expected;
+    if (ratio === 0)   return '#f4d4d4';
+    if (ratio < 0.5)   return '#f4e4b6';
+    if (ratio < 1)     return '#f0c98a';
+    return '#bee0bf';
+  };
+
+  const fmt = (d) => new Date(d).toLocaleDateString('ru');
+
+  const modal = document.createElement('div');
+  modal.id = 'hcAdherenceModal';
+  modal.className = 'hc-modal-overlay';
+  modal.innerHTML = `
+    <div class="hc-modal">
+      <button class="hc-modal-close" type="button" aria-label="Закрыть">×</button>
+      <div class="hc-modal-header">
+        <div>Назначение № ${pr.id}</div>
+        <div class="hc-modal-sub">
+          Курс: ${fmt(pr.start_date)} → ${pr.end_date ? fmt(pr.end_date) : 'бессрочно'}
+          · Пунктов: ${pr.items_count}
+        </div>
+        <div class="hc-modal-sub">
+          Выполнено: <b>${pct === null ? '—' : pct + '%'}</b> (${totalCompleted} из ${totalExpected})
+        </div>
+      </div>
+
+      <div class="hc-cal-header">
+        ${['Пн','Вт','Ср','Чт','Пт','Сб','Вс'].map(d => `<div>${d}</div>`).join('')}
+      </div>
+      <div class="hc-cal-grid">
+        ${weeks.map(w => w.map(c => `
+          <div class="hc-cal-cell"
+               data-date="${c ? c.date : ''}"
+               style="background:${cellColor(c)};${c ? 'cursor:pointer' : ''}"
+               title="${c ? `${fmt(c.date)} · ${c.completed}/${c.expected}` : ''}">
+          </div>
+        `).join('')).join('')}
+      </div>
+
+      <div class="hc-cal-legend">
+        <span><i style="background:#e6e2dc"></i> нет назначений</span>
+        <span><i style="background:#f4d4d4"></i> 0%</span>
+        <span><i style="background:#f4e4b6"></i> &lt;50%</span>
+        <span><i style="background:#f0c98a"></i> &lt;100%</span>
+        <span><i style="background:#bee0bf"></i> 100%</span>
+      </div>
+
+      <div id="hcDayDetail" class="hc-day-detail" style="display:none;"></div>
+    </div>
+  `;
+
+  // Close handlers
+  modal.addEventListener('click', (e) => { if (e.target === modal) modal.remove(); });
+  modal.querySelector('.hc-modal-close').addEventListener('click', () => modal.remove());
+  function onEsc(ev) {
+    if (ev.key === 'Escape') {
+      modal.remove();
+      document.removeEventListener('keydown', onEsc);
+    }
+  }
+  document.addEventListener('keydown', onEsc);
+
+  // Click on a day cell → fetch items_for_day
+  modal.querySelectorAll('.hc-cal-cell').forEach(el => {
+    if (!el.dataset.date) return;
+    el.addEventListener('click', async () => {
+      const date = el.dataset.date;
+      try {
+        const r = await fetch(
+          `/api/home-care/${prescriptionId}/adherence-history?date=${date}`,
+          { headers: { Authorization: `Bearer ${TOKEN}` } }
+        );
+        if (!r.ok) return;
+        const d = await r.json();
+        const detail = document.getElementById('hcDayDetail');
+        const fmtTime = (t) => t ? new Date(t).toLocaleTimeString('ru', { hour: '2-digit', minute: '2-digit' }) : '';
+        const sectionLabel = (s) => ({ morning: 'Утро', evening: 'Вечер', additional: 'Доп.' }[s] || s);
+        const items = (d.items_for_day || []);
+        detail.innerHTML = `
+          <h4>День: ${fmt(date)}</h4>
+          ${items.length === 0 ? '<div class="hc-day-empty">На этот день не было назначений</div>'
+            : items.map(item => `
+              <div class="hc-day-item">
+                <span class="hc-day-section">${sectionLabel(item.time_of_day)}</span>
+                <span class="hc-day-name">${esc(item.product_name)}</span>
+                <span class="hc-day-status" style="color:${item.completed ? '#2e8b57' : '#c33'}">
+                  ${item.completed ? '✓ ' + fmtTime(item.completed_at) : '✗ Не выполнено'}
+                </span>
+              </div>
+            `).join('')}
+        `;
+        detail.style.display = 'block';
+      } catch (e) {
+        notify('Ошибка загрузки дня: ' + e.message, 'err');
+      }
+    });
+  });
+
+  document.body.appendChild(modal);
 }
