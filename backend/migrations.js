@@ -178,6 +178,53 @@ async function runMigrations(client) {
     CREATE INDEX IF NOT EXISTS idx_hcp_record_id ON home_care_prescriptions(record_id)
   `).catch(() => {});
 
+  // ── Daily Care Checklist: schedule fields ──────────────────
+  await client.query(`
+    ALTER TABLE home_care_prescriptions
+      ADD COLUMN IF NOT EXISTS start_date DATE,
+      ADD COLUMN IF NOT EXISTS end_date   DATE
+  `).catch(() => {});
+
+  // backfill старых prescription без start_date
+  await client.query(`
+    UPDATE home_care_prescriptions
+       SET start_date = DATE(created_at)
+     WHERE start_date IS NULL
+  `).catch(() => {});
+
+  // start_date NOT NULL после backfill
+  await client.query(`
+    ALTER TABLE home_care_prescriptions
+      ALTER COLUMN start_date SET NOT NULL
+  `).catch(() => {});
+
+  await client.query(`
+    ALTER TABLE home_care_items
+      ADD COLUMN IF NOT EXISTS days_of_week SMALLINT[]
+  `).catch(() => {});
+
+  // ── Daily Care Checklist: completions log ──────────────────
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS home_care_completions (
+      id              SERIAL PRIMARY KEY,
+      item_id         INTEGER NOT NULL REFERENCES home_care_items(id) ON DELETE CASCADE,
+      client_id       INTEGER NOT NULL REFERENCES clients(id)         ON DELETE CASCADE,
+      completion_date DATE      NOT NULL,
+      completed_at    TIMESTAMP NOT NULL DEFAULT NOW(),
+      UNIQUE (item_id, client_id, completion_date)
+    )
+  `).catch(() => {});
+
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS idx_hcc_client_date
+      ON home_care_completions (client_id, completion_date DESC)
+  `).catch(() => {});
+
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS idx_hcc_item_date
+      ON home_care_completions (item_id, completion_date)
+  `).catch(() => {});
+
   // ── Staff: show_in_app flag ────────────────────────────────
   await client.query(`
     ALTER TABLE staff_members ADD COLUMN IF NOT EXISTS show_in_app BOOLEAN NOT NULL DEFAULT TRUE
