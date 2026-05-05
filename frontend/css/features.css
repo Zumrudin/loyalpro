@@ -123,3 +123,10 @@
 .hc-picker-cat-hdr:first-child{margin-top:0}
 .hc-picker-item{padding:9px 30px;font-size:13px;cursor:pointer;border-bottom:1px solid #f0f0f0;color:var(--t1)}
 .hc-picker-item:hover{background:#fdf8f0}
+.hc-period{margin-bottom:16px;padding:12px;background:#f8f6f0;border-radius:8px}
+.hc-period h3{margin:0 0 8px 0;font-size:14px;color:#4A4540}
+.hc-period-row{display:flex;gap:16px;align-items:center;flex-wrap:wrap}
+.hc-period-row label{font-size:13px;color:#4A4540;display:flex;align-items:center;gap:6px}
+.hc-period-row input[type=date]{padding:4px 8px;border:1px solid #d0c8b8;border-radius:4px}
+.hc-period-row input[type=date]:disabled{background:#eee;color:#999}
+.hc-open-ended{gap:4px !important}

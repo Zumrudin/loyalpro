@@ -124,6 +124,18 @@ async function hcOpenEdit(id) {
       hcAddItem(it.time_of_day, it.category, it.product_name, it.instructions, isService);
     });
     document.getElementById('hcNotes').value = d.notes || '';
+    // Populate course period fields
+    const startEl = document.getElementById('hcStartDate');
+    const endEl   = document.getElementById('hcEndDate');
+    const openEl  = document.getElementById('hcOpenEnded');
+    if (startEl) startEl.value = d.start_date ? String(d.start_date).slice(0, 10) : hcTodayIso();
+    if (d.end_date) {
+      if (endEl)  { endEl.value = String(d.end_date).slice(0, 10); endEl.disabled = false; }
+      if (openEl) openEl.checked = false;
+    } else {
+      if (endEl)  { endEl.value = ''; endEl.disabled = true; }
+      if (openEl) openEl.checked = true;
+    }
     document.getElementById('hcFormOv').classList.add('open');
   } catch(e) { notify('Ошибка загрузки: ' + e.message, 'err'); }
 }
@@ -134,11 +146,44 @@ function hcCloseForm() {
   if (d) d.style.display = 'none';
 }
 
+let _hcOpenEndedBound = false;
+function hcInitPeriodHandlers() {
+  if (_hcOpenEndedBound) return;
+  const cb = document.getElementById('hcOpenEnded');
+  const endEl = document.getElementById('hcEndDate');
+  if (!cb || !endEl) return;
+  cb.addEventListener('change', () => {
+    if (cb.checked) {
+      endEl.value = '';
+      endEl.disabled = true;
+    } else {
+      endEl.disabled = false;
+    }
+  });
+  _hcOpenEndedBound = true;
+}
+
+function hcTodayIso() {
+  const d = new Date();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${d.getFullYear()}-${m}-${day}`;
+}
+
 function hcResetForm() {
   document.getElementById('hcClientSearch').value = '';
   document.getElementById('hcClientId').value     = '';
   document.getElementById('hcNotes').value        = '';
   document.querySelectorAll('#hcFormBox .hc-items').forEach(c => c.innerHTML = '');
+  hcInitPeriodHandlers();
+  const startEl = document.getElementById('hcStartDate');
+  const endEl   = document.getElementById('hcEndDate');
+  const openEl  = document.getElementById('hcOpenEnded');
+  const errEl   = document.getElementById('hcPeriodError');
+  if (startEl) startEl.value = hcTodayIso();
+  if (endEl)   { endEl.value = ''; endEl.disabled = false; }
+  if (openEl)  openEl.checked = false;
+  if (errEl)   { errEl.style.display = 'none'; errEl.textContent = ''; }
 }
 
 function hcAddItem(timeOfDay, category, product = '', instructions = '', isService = false) {
@@ -340,10 +385,27 @@ function hcCollectItems() {
 
 async function hcSave() {
   const clientId = document.getElementById('hcClientId').value;
+  const startDateEl = document.getElementById('hcStartDate');
+  const endDateEl   = document.getElementById('hcEndDate');
+  const openEndedEl = document.getElementById('hcOpenEnded');
+  const startDate = startDateEl ? startDateEl.value : '';
+  const endDate   = openEndedEl && openEndedEl.checked ? null : ((endDateEl && endDateEl.value) || null);
+  const errEl = document.getElementById('hcPeriodError');
+  if (errEl) { errEl.style.display = 'none'; errEl.textContent = ''; }
+  if (!startDate) {
+    if (errEl) { errEl.textContent = 'Укажите дату начала курса'; errEl.style.display = 'block'; }
+    return;
+  }
+  if (endDate && endDate < startDate) {
+    if (errEl) { errEl.textContent = 'Дата окончания не может быть раньше начала'; errEl.style.display = 'block'; }
+    return;
+  }
   const body = {
     client_id: clientId ? parseInt(clientId) : null,
     notes:     document.getElementById('hcNotes').value.trim() || null,
     items:     hcCollectItems(),
+    start_date: startDate,
+    end_date:   endDate,
   };
   try {
     if (hcEditId) {

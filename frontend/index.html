@@ -956,6 +956,24 @@
       <input type="hidden" id="hcClientId">
     </div>
 
+    <!-- Period of course -->
+    <div class="hc-period">
+      <h3>Период курса</h3>
+      <div class="hc-period-row">
+        <label>Начало:
+          <input type="date" id="hcStartDate" required>
+        </label>
+        <label>Окончание:
+          <input type="date" id="hcEndDate">
+        </label>
+        <label class="hc-open-ended">
+          <input type="checkbox" id="hcOpenEnded">
+          <span>Бессрочно</span>
+        </label>
+      </div>
+      <div class="hc-period-error" id="hcPeriodError" style="display:none;color:#c33;font-size:13px;margin-top:6px;"></div>
+    </div>
+
     <!-- 3 TABS -->
     <div class="hc-tabs">
       <button class="hc-tab active" onclick="hcSwitchTab('care',this)">🌿 Домашний уход</button>
