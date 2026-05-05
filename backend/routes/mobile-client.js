@@ -704,7 +704,7 @@ router.get('/today-checklist', mobileAuth, async (req, res) => {
       summary: { total: rows.length, completed: completedCount },
     });
   } catch (e) {
-    console.error('[Today checklist error]', e.message);
+    logger.error(`Today checklist error: ${e.message}`);
     res.status(500).json({ error: e.message });
   }
 });
