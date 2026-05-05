@@ -394,11 +394,11 @@ async function hcSave() {
   if (errEl) { errEl.style.display = 'none'; errEl.textContent = ''; }
   if (!startDate) {
     if (errEl) { errEl.textContent = 'Укажите дату начала курса'; errEl.style.display = 'block'; }
-    return;
+    return false;
   }
   if (endDate && endDate < startDate) {
     if (errEl) { errEl.textContent = 'Дата окончания не может быть раньше начала'; errEl.style.display = 'block'; }
-    return;
+    return false;
   }
   const body = {
     client_id: clientId ? parseInt(clientId) : null,
@@ -416,7 +416,8 @@ async function hcSave() {
     }
     notify(hcEditId ? 'Назначение сохранено' : 'Назначение создано', 'ok');
     hcFetch();
-  } catch(e) { notify('Ошибка сохранения: ' + e.message, 'err'); }
+    return true;
+  } catch(e) { notify('Ошибка сохранения: ' + e.message, 'err'); return false; }
 }
 
 async function hcDelete(id) {
@@ -429,21 +430,9 @@ async function hcDelete(id) {
 }
 
 async function hcPrint() {
-  let id = hcEditId;
-  if (!id) {
-    try {
-      const r = await api('POST', '/api/home-care', {
-        client_id: document.getElementById('hcClientId').value ? parseInt(document.getElementById('hcClientId').value) : null,
-        notes:     document.getElementById('hcNotes').value.trim() || null,
-        items:     hcCollectItems(),
-      });
-      id = r.id; hcEditId = id;
-      hcFetch();
-    } catch(e) { notify('Ошибка сохранения: ' + e.message, 'err'); return; }
-  } else {
-    try { await hcSave(); } catch(e) { notify('Ошибка сохранения: ' + e.message, 'err'); return; }
-  }
-  await hcPrintById(id);
+  const ok = await hcSave();
+  if (!ok || !hcEditId) return;
+  await hcPrintById(hcEditId);
 }
 
 async function hcPrintById(id) {
