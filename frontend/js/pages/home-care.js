@@ -218,20 +218,22 @@ function hcAddItem(timeOfDay, category, product = '', instructions = '', isServi
     stripWrap.innerHTML =
       labels.map(([label, idx]) => {
         const active = days === null || days.includes(idx);
-        return `<button type="button" class="hc-day ${active ? 'active' : ''}" data-day="${idx}">${label}</button>`;
+        return `<button type="button" class="hc-day ${active ? 'active' : ''}" data-day="${idx}" aria-pressed="${active}">${label}</button>`;
       }).join('') +
-      `<button type="button" class="hc-day-all">Каждый день</button>`;
+      `<button type="button" class="hc-day-all" aria-label="Переключить все дни">Каждый день</button>`;
     stripWrap.querySelectorAll('.hc-day').forEach(btn => {
-      btn.addEventListener('click', (e) => {
-        e.preventDefault();
+      btn.addEventListener('click', () => {
         btn.classList.toggle('active');
+        btn.setAttribute('aria-pressed', btn.classList.contains('active'));
       });
     });
-    stripWrap.querySelector('.hc-day-all').addEventListener('click', (e) => {
-      e.preventDefault();
+    stripWrap.querySelector('.hc-day-all').addEventListener('click', () => {
       const all = stripWrap.querySelectorAll('.hc-day');
       const allActive = [...all].every(b => b.classList.contains('active'));
-      all.forEach(b => b.classList.toggle('active', !allActive));
+      all.forEach(b => {
+        b.classList.toggle('active', !allActive);
+        b.setAttribute('aria-pressed', !allActive);
+      });
     });
     row.appendChild(stripWrap);
   }
