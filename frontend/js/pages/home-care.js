@@ -121,7 +121,7 @@ async function hcOpenEdit(id) {
     document.getElementById('hcClientId').value     = d.client_id   || '';
     (d.items || []).forEach(it => {
       const isService = it.time_of_day.startsWith('sheet_');
-      hcAddItem(it.time_of_day, it.category, it.product_name, it.instructions, isService);
+      hcAddItem(it.time_of_day, it.category, it.product_name, it.instructions, isService, it.days_of_week || null);
     });
     document.getElementById('hcNotes').value = d.notes || '';
     // Populate course period fields
@@ -186,7 +186,7 @@ function hcResetForm() {
   if (errEl)   { errEl.style.display = 'none'; errEl.textContent = ''; }
 }
 
-function hcAddItem(timeOfDay, category, product = '', instructions = '', isService = false) {
+function hcAddItem(timeOfDay, category, product = '', instructions = '', isService = false, daysOfWeek = null) {
   const catId = `hcCat-${timeOfDay}-${category}`;
   const catEl = document.getElementById(catId);
   if (!catEl) return;
@@ -207,6 +207,35 @@ function hcAddItem(timeOfDay, category, product = '', instructions = '', isServi
     <input type="text" placeholder="Как применять, частота..." value="${esc(instructions)}" data-field="instructions">
     <button class="hc-item-del" onclick="this.closest('.hc-item').remove()" title="Удалить">✕</button>`;
   container.appendChild(row);
+
+  const isHomecare = ['morning', 'evening', 'additional'].includes(timeOfDay);
+  if (isHomecare) {
+    const days = Array.isArray(daysOfWeek) ? daysOfWeek : null;
+    const stripWrap = document.createElement('div');
+    stripWrap.className = 'hc-days';
+    stripWrap.dataset.field = 'days_of_week';
+    const labels = [['Пн', 0], ['Вт', 1], ['Ср', 2], ['Чт', 3], ['Пт', 4], ['Сб', 5], ['Вс', 6]];
+    stripWrap.innerHTML =
+      labels.map(([label, idx]) => {
+        const active = days === null || days.includes(idx);
+        return `<button type="button" class="hc-day ${active ? 'active' : ''}" data-day="${idx}">${label}</button>`;
+      }).join('') +
+      `<button type="button" class="hc-day-all">Каждый день</button>`;
+    stripWrap.querySelectorAll('.hc-day').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.preventDefault();
+        btn.classList.toggle('active');
+      });
+    });
+    stripWrap.querySelector('.hc-day-all').addEventListener('click', (e) => {
+      e.preventDefault();
+      const all = stripWrap.querySelectorAll('.hc-day');
+      const allActive = [...all].every(b => b.classList.contains('active'));
+      all.forEach(b => b.classList.toggle('active', !allActive));
+    });
+    row.appendChild(stripWrap);
+  }
+
   row.querySelector('[data-field="product"]').focus();
 }
 
@@ -368,6 +397,15 @@ function hcSelectClient(id, name) {
 
 function hcCollectItems() {
   const items = [];
+  const collectDays = (rowEl) => {
+    const stripWrap = rowEl.querySelector('[data-field="days_of_week"]');
+    if (!stripWrap) return null;
+    const active = [...stripWrap.querySelectorAll('.hc-day.active')]
+      .map(b => parseInt(b.dataset.day, 10))
+      .sort((a, b) => a - b);
+    if (active.length === 0 || active.length === 7) return null;
+    return active;
+  };
   document.querySelectorAll('#hcFormBox .hc-cat').forEach(catEl => {
     const raw      = catEl.id.replace('hcCat-', '');
     const dashIdx  = raw.indexOf('-');
@@ -376,8 +414,13 @@ function hcCollectItems() {
     catEl.querySelectorAll('.hc-item').forEach(row => {
       const product = row.querySelector('[data-field="product"]').value.trim();
       if (!product) return;
-      items.push({time_of_day: timeOfDay, category, product_name: product,
-                  instructions: row.querySelector('[data-field="instructions"]').value.trim()});
+      items.push({
+        time_of_day: timeOfDay,
+        category,
+        product_name: product,
+        instructions: row.querySelector('[data-field="instructions"]').value.trim(),
+        days_of_week: collectDays(row),
+      });
     });
   });
   return items;

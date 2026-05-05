@@ -130,3 +130,14 @@
 .hc-period-row input[type=date]{padding:4px 8px;border:1px solid #d0c8b8;border-radius:4px}
 .hc-period-row input[type=date]:disabled{background:#eee;color:#999}
 .hc-open-ended{gap:4px !important}
+.hc-days { display:flex; gap:4px; flex-wrap:wrap; padding-left:2px; margin-top:4px; }
+.hc-days .hc-day {
+  padding:3px 10px; font-size:12px; cursor:pointer;
+  border:1px solid #d0c8b8; border-radius:14px; background:#fff; color:#7A736B;
+  min-width:36px; text-align:center;
+}
+.hc-days .hc-day.active { background:#D4AF37; border-color:#D4AF37; color:#fff; }
+.hc-days .hc-day-all {
+  padding:3px 12px; font-size:12px; cursor:pointer; margin-left:8px;
+  border:1px dashed #c8b878; border-radius:14px; background:transparent; color:#7A736B;
+}
