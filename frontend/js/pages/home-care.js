@@ -25,22 +25,38 @@ async function hcFetch() {
     const d = await api('GET', `/api/home-care?search=${encodeURIComponent(search)}&page=${hcPage}&limit=20`);
     const tbody = document.getElementById('hcTbody');
     if (!d.rows.length) {
-      tbody.innerHTML = '<tr><td colspan="6" class="empty">Назначений не найдено</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="8" class="empty">Назначений не найдено</td></tr>';
     } else {
-      tbody.innerHTML = d.rows.map(r => `
+      tbody.innerHTML = d.rows.map(r => {
+        const adh = r.adherence_pct;
+        const adhText  = (adh === null || adh === undefined) ? '—' : `${adh}%`;
+        const adhColor = (adh === null || adh === undefined) ? 'var(--t3)'
+                      : adh >= 80 ? '#2e8b57'
+                      : adh >= 50 ? '#c89c1e'
+                      : '#c33';
+        const fmtDateRu = (d) => d ? new Date(d).toLocaleDateString('ru') : '';
+        const periodText = r.start_date
+          ? `${fmtDateRu(r.start_date)} → ${r.end_date ? fmtDateRu(r.end_date) : 'бессрочно'}`
+          : '—';
+        const adhDisabled = (adh === null || adh === undefined) ? 'disabled' : '';
+        return `
         <tr onclick="hcOpenEdit(${r.id})">
           <td>${new Date(r.created_at).toLocaleDateString('ru')}</td>
           <td><b>${esc(r.client_name || '—')}</b></td>
           <td style="color:var(--t3)">${esc(r.client_phone || '—')}</td>
           <td style="color:var(--t2)">${esc(r.specialist_name || '—')}${r.specialist_position ? `<br><span style="font-size:11px;color:var(--t3)">${esc(r.specialist_position)}</span>` : ''}</td>
+          <td style="color:var(--t3);font-size:12px;white-space:nowrap">${esc(periodText)}</td>
           <td style="color:var(--t3);max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(r.notes || '')}</td>
+          <td style="color:${adhColor};font-weight:600;text-align:right;white-space:nowrap">${adhText}</td>
           <td onclick="event.stopPropagation()" style="text-align:right;white-space:nowrap">
-            <button class="btn btn-sec btn-sm" onclick="hcPrintById(${r.id})" title="Открыть превью">👁</button>
+            <button class="btn btn-sec btn-sm" onclick="openAdherenceModal(${r.id})" title="Heatmap выполнения" ${adhDisabled}>Подробно</button>
+            <button class="btn btn-sec btn-sm" style="margin-left:4px" onclick="hcPrintById(${r.id})" title="Открыть превью">👁</button>
             <button class="btn btn-sec btn-sm" style="margin-left:4px" onclick="hcDownloadPdf(${r.id})" title="Скачать PDF">PDF</button>
             <button class="btn btn-sec btn-sm" style="margin-left:4px" onclick="hcOpenEdit(${r.id})">Изм.</button>
             <button class="btn btn-sec btn-sm btn-dng" style="margin-left:4px" onclick="hcDelete(${r.id})">Удалить</button>
           </td>
-        </tr>`).join('');
+        </tr>`;
+      }).join('');
     }
     const pager = document.getElementById('hcPager');
     const pages = Math.ceil(d.total / 20);
@@ -698,4 +714,9 @@ body{font-family:'Lora',Georgia,serif;background:#faf4ec;color:#2c2416;font-size
   const w = window.open('', '_blank', 'width=900,height=750');
   if (w) { w.document.write(html); w.document.close(); }
   else notify('Разрешите всплывающие окна в браузере', 'err');
+}
+
+// Будет реализовано в Task 13 (heatmap modal)
+function openAdherenceModal(id) {
+  alert(`Heatmap для назначения #${id} — будет реализован в следующем шаге`);
 }
