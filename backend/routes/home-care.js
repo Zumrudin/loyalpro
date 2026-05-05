@@ -208,8 +208,42 @@ router.get('/', auth, async (req, res) => {
     const offset = (parseInt(page) - 1) * parseInt(limit);
     const rows = await db.any(
       `SELECT p.id, p.created_at, p.updated_at, p.notes,
+              p.start_date, p.end_date,
               c.id as client_id, c.name as client_name, c.phone as client_phone,
-              u.name as specialist_name, u.position as specialist_position
+              u.name as specialist_name, u.position as specialist_position,
+              (
+                WITH days AS (
+                  SELECT generate_series(
+                    p.start_date,
+                    LEAST(COALESCE(p.end_date, CURRENT_DATE), CURRENT_DATE),
+                    '1 day'::interval
+                  )::date AS d
+                ),
+                expected AS (
+                  SELECT COUNT(*) AS n
+                    FROM days d
+                    JOIN home_care_items i ON i.prescription_id = p.id
+                                          AND i.time_of_day IN ('morning','evening','additional')
+                   WHERE i.days_of_week IS NULL
+                      OR cardinality(i.days_of_week) = 0
+                      OR (EXTRACT(ISODOW FROM d.d)::int - 1) = ANY(i.days_of_week)
+                ),
+                done AS (
+                  SELECT COUNT(*) AS n
+                    FROM home_care_completions c2
+                    JOIN home_care_items i ON i.id = c2.item_id
+                   WHERE i.prescription_id = p.id
+                     AND i.time_of_day IN ('morning','evening','additional')
+                     AND c2.client_id = p.client_id
+                     AND c2.completion_date BETWEEN
+                           p.start_date AND
+                           LEAST(COALESCE(p.end_date, CURRENT_DATE), CURRENT_DATE)
+                )
+                SELECT CASE
+                         WHEN (SELECT n FROM expected) = 0 THEN NULL
+                         ELSE ROUND(100.0 * (SELECT n FROM done) / (SELECT n FROM expected))::int
+                       END
+              ) AS adherence_pct
        FROM home_care_prescriptions p
        LEFT JOIN clients c ON c.id=p.client_id
        LEFT JOIN users u ON u.id=p.specialist_id
