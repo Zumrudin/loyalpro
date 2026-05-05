@@ -709,4 +709,92 @@ router.get('/today-checklist', mobileAuth, async (req, res) => {
   }
 });
 
+// POST /api/mobile/client/today-checklist/items/:itemId/complete
+// Mark today's item as done. Idempotent.
+router.post('/today-checklist/items/:itemId/complete', mobileAuth, async (req, res) => {
+  try {
+    const itemId = parseInt(req.params.itemId, 10);
+    if (!Number.isInteger(itemId)) {
+      return res.status(400).json({ error: 'Bad itemId' });
+    }
+
+    // Get prescription and item schedule in one query
+    const row = await db.oneOrNone(
+      `SELECT i.id, i.time_of_day, i.days_of_week,
+              p.client_id, p.start_date, p.end_date
+         FROM home_care_items i
+         JOIN home_care_prescriptions p ON p.id = i.prescription_id
+        WHERE i.id = $1`,
+      [itemId]
+    );
+    if (!row) return res.status(404).json({ error: 'Item not found' });
+    if (row.client_id !== req.client.clientId) {
+      return res.status(403).json({ error: 'Forbidden' });
+    }
+    if (!['morning', 'evening', 'additional'].includes(row.time_of_day)) {
+      return res.status(400).json({ error: 'Item is not in checklist' });
+    }
+
+    // Course period check
+    const today = new Date(); today.setHours(0, 0, 0, 0);
+    const start = new Date(row.start_date); start.setHours(0, 0, 0, 0);
+    const end   = row.end_date ? new Date(row.end_date) : null;
+    if (end) end.setHours(0, 0, 0, 0);
+    if (today < start || (end && today > end)) {
+      return res.status(400).json({ error: 'Out of course period' });
+    }
+
+    // Day-of-week check
+    const isodow = ((today.getDay() + 6) % 7); // 0=Mon..6=Sun
+    const days = row.days_of_week;
+    const fitsDay =
+      !days || days.length === 0 || days.length === 7 || days.includes(isodow);
+    if (!fitsDay) {
+      return res.status(400).json({ error: 'Not scheduled for today' });
+    }
+
+    await db.query(
+      `INSERT INTO home_care_completions (item_id, client_id, completion_date)
+       VALUES ($1, $2, CURRENT_DATE)
+       ON CONFLICT (item_id, client_id, completion_date) DO NOTHING`,
+      [itemId, req.client.clientId]
+    );
+
+    res.json({ success: true, completed: true });
+  } catch (e) {
+    logger.error(`Mark complete error: ${e.message}`);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// DELETE /api/mobile/client/today-checklist/items/:itemId/complete
+// Unmark today's item. Cannot affect past dates.
+router.delete('/today-checklist/items/:itemId/complete', mobileAuth, async (req, res) => {
+  try {
+    const itemId = parseInt(req.params.itemId, 10);
+    if (!Number.isInteger(itemId)) {
+      return res.status(400).json({ error: 'Bad itemId' });
+    }
+    // Confirm item belongs to this client's prescription (no foreign deletion)
+    const owns = await db.oneOrNone(
+      `SELECT 1 FROM home_care_items i
+         JOIN home_care_prescriptions p ON p.id = i.prescription_id
+        WHERE i.id = $1 AND p.client_id = $2`,
+      [itemId, req.client.clientId]
+    );
+    if (!owns) return res.status(403).json({ error: 'Forbidden' });
+
+    await db.query(
+      `DELETE FROM home_care_completions
+        WHERE item_id = $1 AND client_id = $2 AND completion_date = CURRENT_DATE`,
+      [itemId, req.client.clientId]
+    );
+
+    res.json({ success: true, completed: false });
+  } catch (e) {
+    logger.error(`Unmark complete error: ${e.message}`);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 module.exports = router;
