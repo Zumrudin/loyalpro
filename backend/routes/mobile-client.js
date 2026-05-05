@@ -797,4 +797,73 @@ router.delete('/today-checklist/items/:itemId/complete', mobileAuth, async (req,
   }
 });
 
+// GET /api/mobile/client/prescriptions/:id/adherence
+// Heatmap data for the patient (no items_for_day breakdown).
+router.get('/prescriptions/:id/adherence', mobileAuth, async (req, res) => {
+  try {
+    const presc = await db.oneOrNone(
+      `SELECT id, start_date, end_date
+         FROM home_care_prescriptions
+        WHERE id = $1 AND client_id = $2`,
+      [req.params.id, req.client.clientId]
+    );
+    if (!presc) return res.status(404).json({ error: 'Назначение не найдено' });
+
+    const days = await db.any(
+      `WITH days AS (
+         SELECT generate_series(
+           $1::date,
+           LEAST(COALESCE($2::date, CURRENT_DATE), CURRENT_DATE),
+           '1 day'::interval
+         )::date AS d
+       )
+       SELECT
+         d.d AS date,
+         (
+           SELECT COUNT(*)::int FROM home_care_items i
+            WHERE i.prescription_id = $3
+              AND i.time_of_day IN ('morning','evening','additional')
+              AND (i.days_of_week IS NULL
+                   OR cardinality(i.days_of_week) = 0
+                   OR (EXTRACT(ISODOW FROM d.d)::int - 1) = ANY(i.days_of_week))
+         ) AS expected,
+         (
+           SELECT COUNT(*)::int FROM home_care_completions c
+            JOIN home_care_items i ON i.id = c.item_id
+            WHERE i.prescription_id = $3
+              AND c.client_id      = $4
+              AND c.completion_date = d.d
+              AND i.time_of_day IN ('morning','evening','additional')
+         ) AS completed
+       FROM days d
+       ORDER BY d.d`,
+      [presc.start_date, presc.end_date, presc.id, req.client.clientId]
+    );
+
+    const totals = days.reduce(
+      (acc, d) => ({ expected: acc.expected + d.expected, completed: acc.completed + d.completed }),
+      { expected: 0, completed: 0 }
+    );
+    const adherencePct = totals.expected === 0
+      ? null
+      : Math.round((100 * totals.completed) / totals.expected);
+
+    res.json({
+      success: true,
+      prescription: {
+        id:           presc.id,
+        startDate:    presc.start_date,
+        endDate:      presc.end_date,
+        adherencePct,
+        completed:    totals.completed,
+        expected:     totals.expected,
+      },
+      days,
+    });
+  } catch (e) {
+    logger.error(`Patient adherence error: ${e.message}`);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 module.exports = router;
