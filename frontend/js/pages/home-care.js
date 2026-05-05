@@ -828,15 +828,14 @@ function renderAdherenceModal(data, prescriptionId) {
     </div>
   `;
 
-  // Close handlers
-  modal.addEventListener('click', (e) => { if (e.target === modal) modal.remove(); });
-  modal.querySelector('.hc-modal-close').addEventListener('click', () => modal.remove());
-  function onEsc(ev) {
-    if (ev.key === 'Escape') {
-      modal.remove();
-      document.removeEventListener('keydown', onEsc);
-    }
+  // Close handlers — every path also detaches the keydown listener
+  function onEsc(ev) { if (ev.key === 'Escape') closeModal(); }
+  function closeModal() {
+    modal.remove();
+    document.removeEventListener('keydown', onEsc);
   }
+  modal.addEventListener('click', (e) => { if (e.target === modal) closeModal(); });
+  modal.querySelector('.hc-modal-close').addEventListener('click', closeModal);
   document.addEventListener('keydown', onEsc);
 
   // Click on a day cell → fetch items_for_day
