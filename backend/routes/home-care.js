@@ -457,4 +457,107 @@ router.post('/template-settings/upload/:type', auth, (req, res) => {
   });
 });
 
+// GET /api/home-care/:id/adherence-history[?date=YYYY-MM-DD]
+// Heatmap data for admin: per-day expected/completed for the course range.
+// If `date` query is given, also returns items_for_day for that date.
+router.get('/:id/adherence-history', auth, async (req, res) => {
+  try {
+    const presc = await db.oneOrNone(
+      `SELECT id, salon_id, client_id, start_date, end_date
+         FROM home_care_prescriptions
+        WHERE id = $1 AND salon_id = $2`,
+      [req.params.id, req.user.salonId]
+    );
+    if (!presc) return res.status(404).json({ error: 'Назначение не найдено' });
+
+    const itemsCount = await db.one(
+      `SELECT COUNT(*)::int AS n FROM home_care_items
+        WHERE prescription_id = $1
+          AND time_of_day IN ('morning','evening','additional')`,
+      [presc.id]
+    );
+
+    const days = await db.any(
+      `WITH days AS (
+         SELECT generate_series(
+           $1::date,
+           LEAST(COALESCE($2::date, CURRENT_DATE), CURRENT_DATE),
+           '1 day'::interval
+         )::date AS d
+       )
+       SELECT
+         d.d AS date,
+         (
+           SELECT COUNT(*)::int FROM home_care_items i
+            WHERE i.prescription_id = $3
+              AND i.time_of_day IN ('morning','evening','additional')
+              AND (i.days_of_week IS NULL
+                   OR cardinality(i.days_of_week) = 0
+                   OR (EXTRACT(ISODOW FROM d.d)::int - 1) = ANY(i.days_of_week))
+         ) AS expected,
+         (
+           SELECT COUNT(*)::int FROM home_care_completions c
+            JOIN home_care_items i ON i.id = c.item_id
+            WHERE i.prescription_id = $3
+              AND c.client_id      = $4
+              AND c.completion_date = d.d
+              AND i.time_of_day IN ('morning','evening','additional')
+         ) AS completed
+       FROM days d
+       ORDER BY d.d`,
+      [presc.start_date, presc.end_date, presc.id, presc.client_id]
+    );
+
+    const response = {
+      prescription: {
+        id: presc.id,
+        start_date: presc.start_date,
+        end_date:   presc.end_date,
+        items_count: itemsCount.n,
+      },
+      days,
+    };
+
+    if (req.query.date) {
+      const dateStr = String(req.query.date);
+      // YYYY-MM-DD only; do not trust input
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
+        return res.status(400).json({ error: 'Неверный формат date (нужно YYYY-MM-DD)' });
+      }
+      response.items_for_day = await db.any(
+        `SELECT
+           i.id,
+           i.time_of_day,
+           i.product_name,
+           i.instructions,
+           CASE WHEN c.id IS NOT NULL THEN true ELSE false END AS completed,
+           c.completed_at
+         FROM home_care_items i
+         LEFT JOIN home_care_completions c
+                ON c.item_id  = i.id
+               AND c.client_id = $1
+               AND c.completion_date = $2::date
+         WHERE i.prescription_id = $3
+           AND i.time_of_day IN ('morning','evening','additional')
+           AND (i.days_of_week IS NULL
+                OR cardinality(i.days_of_week) = 0
+                OR (EXTRACT(ISODOW FROM $2::date)::int - 1) = ANY(i.days_of_week))
+         ORDER BY
+           CASE i.time_of_day
+             WHEN 'morning' THEN 1
+             WHEN 'evening' THEN 2
+             WHEN 'additional' THEN 3
+           END,
+           i.sort_order`,
+        [presc.client_id, dateStr, presc.id]
+      );
+    }
+
+    res.json({ success: true, ...response });
+  } catch (e) {
+    console.error('[Adherence history error]', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 module.exports = router;
