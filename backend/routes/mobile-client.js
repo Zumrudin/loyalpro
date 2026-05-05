@@ -642,4 +642,71 @@ router.get('/portfolio/by-staff/:staffId', mobileAuth, async (req, res) => {
   }
 });
 
+// ─────────────────────────────────────────────────────────────
+// Daily Care Checklist — Today
+// ─────────────────────────────────────────────────────────────
+router.get('/today-checklist', mobileAuth, async (req, res) => {
+  try {
+    const rows = await db.any(
+      `SELECT
+         i.id,
+         i.time_of_day                       AS "timeOfDay",
+         i.product_name                      AS "productName",
+         i.instructions,
+         i.sort_order                        AS "sortOrder",
+         p.id                                AS "prescriptionId",
+         EXISTS (
+           SELECT 1 FROM home_care_completions c
+            WHERE c.item_id = i.id
+              AND c.client_id = $1
+              AND c.completion_date = CURRENT_DATE
+         )                                   AS completed
+       FROM home_care_items i
+       JOIN home_care_prescriptions p ON p.id = i.prescription_id
+       WHERE p.client_id = $1
+         AND i.time_of_day IN ('morning','evening','additional')
+         AND CURRENT_DATE BETWEEN p.start_date
+                              AND COALESCE(p.end_date, '9999-12-31'::date)
+         AND (
+           i.days_of_week IS NULL
+           OR cardinality(i.days_of_week) = 0
+           OR (EXTRACT(ISODOW FROM CURRENT_DATE)::int - 1) = ANY(i.days_of_week)
+         )
+       ORDER BY
+         CASE i.time_of_day
+           WHEN 'morning'    THEN 1
+           WHEN 'evening'    THEN 2
+           WHEN 'additional' THEN 3
+         END,
+         i.sort_order`,
+      [req.client.clientId]
+    );
+
+    const sections = { morning: [], evening: [], additional: [] };
+    let completedCount = 0;
+    for (const r of rows) {
+      const sec = r.timeOfDay;
+      if (!sections[sec]) continue;
+      sections[sec].push({
+        id:             r.id,
+        productName:    r.productName,
+        instructions:   r.instructions,
+        completed:      r.completed,
+        prescriptionId: r.prescriptionId,
+      });
+      if (r.completed) completedCount += 1;
+    }
+
+    res.json({
+      success: true,
+      date: new Date().toISOString().slice(0, 10),
+      sections,
+      summary: { total: rows.length, completed: completedCount },
+    });
+  } catch (e) {
+    console.error('[Today checklist error]', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 module.exports = router;
