@@ -290,17 +290,38 @@ router.get('/:id', auth, async (req, res) => {
 
 router.post('/', auth, async (req, res) => {
   try {
-    const { client_id, face_procedures, body_procedures, hair_procedures, vitamins, notes, items = [], record_id } = req.body;
+    const { client_id, face_procedures, body_procedures, hair_procedures, vitamins, notes, items = [], record_id, start_date, end_date } = req.body;
+    const startDateValue = start_date || new Date().toISOString().slice(0, 10);
+    const endDateValue   = end_date || null;
+    function normalizeDays(raw) {
+      if (!Array.isArray(raw)) return null;
+      const cleaned = [...new Set(raw
+        .map(n => parseInt(n, 10))
+        .filter(n => Number.isInteger(n) && n >= 0 && n <= 6))]
+        .sort((a, b) => a - b);
+      // Empty or all 7 days = daily (NULL in DB)
+      if (cleaned.length === 0 || cleaned.length === 7) return null;
+      return cleaned;
+    }
     const p = await db.one(
-      `INSERT INTO home_care_prescriptions (salon_id,client_id,specialist_id,face_procedures,body_procedures,hair_procedures,vitamins,notes,record_id)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`,
-      [req.user.salonId, client_id||null, req.user.userId, face_procedures||null, body_procedures||null, hair_procedures||null, vitamins||null, notes||null, record_id||null]
+      `INSERT INTO home_care_prescriptions
+         (salon_id, client_id, specialist_id, face_procedures, body_procedures,
+          hair_procedures, vitamins, notes, record_id, start_date, end_date)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id`,
+      [
+        req.user.salonId, client_id || null, req.user.userId,
+        face_procedures || null, body_procedures || null,
+        hair_procedures || null, vitamins || null, notes || null,
+        record_id || null, startDateValue, endDateValue,
+      ]
     );
     for (let i = 0; i < items.length; i++) {
       const it = items[i];
       await db.query(
-        'INSERT INTO home_care_items (prescription_id,time_of_day,category,product_name,instructions,sort_order) VALUES ($1,$2,$3,$4,$5,$6)',
-        [p.id, it.time_of_day, it.category, it.product_name, it.instructions||null, i]
+        `INSERT INTO home_care_items
+           (prescription_id, time_of_day, category, product_name, instructions, sort_order, days_of_week)
+         VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+        [p.id, it.time_of_day, it.category, it.product_name, it.instructions || null, i, normalizeDays(it.days_of_week)]
       );
     }
     if (client_id) sendPrescriptionPush(client_id, p.id);
@@ -310,20 +331,41 @@ router.post('/', auth, async (req, res) => {
 
 router.put('/:id', auth, async (req, res) => {
   try {
-    const { client_id, face_procedures, body_procedures, hair_procedures, vitamins, notes, items = [], record_id } = req.body;
+    const { client_id, face_procedures, body_procedures, hair_procedures, vitamins, notes, items = [], record_id, start_date, end_date } = req.body;
+    const startDateValue = start_date || new Date().toISOString().slice(0, 10);
+    const endDateValue   = end_date || null;
+    function normalizeDays(raw) {
+      if (!Array.isArray(raw)) return null;
+      const cleaned = [...new Set(raw
+        .map(n => parseInt(n, 10))
+        .filter(n => Number.isInteger(n) && n >= 0 && n <= 6))]
+        .sort((a, b) => a - b);
+      // Empty or all 7 days = daily (NULL in DB)
+      if (cleaned.length === 0 || cleaned.length === 7) return null;
+      return cleaned;
+    }
     const existing = await db.oneOrNone('SELECT id FROM home_care_prescriptions WHERE id=$1 AND salon_id=$2', [req.params.id, req.user.salonId]);
     if (!existing) return res.status(404).json({ error: 'Not found' });
     await db.query(
-      `UPDATE home_care_prescriptions SET client_id=$1,face_procedures=$2,body_procedures=$3,
-       hair_procedures=$4,vitamins=$5,notes=$6,record_id=$7,updated_at=NOW() WHERE id=$8`,
-      [client_id||null, face_procedures||null, body_procedures||null, hair_procedures||null, vitamins||null, notes||null, record_id||null, req.params.id]
+      `UPDATE home_care_prescriptions
+          SET client_id=$1, face_procedures=$2, body_procedures=$3,
+              hair_procedures=$4, vitamins=$5, notes=$6, record_id=$7,
+              start_date=$8, end_date=$9, updated_at=NOW()
+        WHERE id=$10`,
+      [
+        client_id || null, face_procedures || null, body_procedures || null,
+        hair_procedures || null, vitamins || null, notes || null,
+        record_id || null, startDateValue, endDateValue, req.params.id,
+      ]
     );
     await db.query('DELETE FROM home_care_items WHERE prescription_id=$1', [req.params.id]);
     for (let i = 0; i < items.length; i++) {
       const it = items[i];
       await db.query(
-        'INSERT INTO home_care_items (prescription_id,time_of_day,category,product_name,instructions,sort_order) VALUES ($1,$2,$3,$4,$5,$6)',
-        [req.params.id, it.time_of_day, it.category, it.product_name, it.instructions||null, i]
+        `INSERT INTO home_care_items
+           (prescription_id, time_of_day, category, product_name, instructions, sort_order, days_of_week)
+         VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+        [req.params.id, it.time_of_day, it.category, it.product_name, it.instructions || null, i, normalizeDays(it.days_of_week)]
       );
     }
     res.json({ ok: true });
