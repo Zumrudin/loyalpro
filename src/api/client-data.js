@@ -114,4 +114,25 @@ export const clientDataAPI = {
     const res = await apiClient.get(`/mobile/client/portfolio/categories/${id}`);
     return res.data;
   },
+
+  // Daily Care Checklist
+  getTodayChecklist: async () => {
+    const res = await apiClient.get('/mobile/client/today-checklist');
+    return res.data;
+  },
+
+  markItemCompleted: async (itemId) => {
+    const res = await apiClient.post(`/mobile/client/today-checklist/items/${itemId}/complete`);
+    return res.data;
+  },
+
+  unmarkItemCompleted: async (itemId) => {
+    const res = await apiClient.delete(`/mobile/client/today-checklist/items/${itemId}/complete`);
+    return res.data;
+  },
+
+  getPrescriptionAdherence: async (id) => {
+    const res = await apiClient.get(`/mobile/client/prescriptions/${id}/adherence`);
+    return res.data;
+  },
 };
