@@ -30,6 +30,15 @@ function safeFmt(v, fmt, opts) {
   return format(d, fmt, opts);
 }
 
+function parseISODate(v) { return new Date(String(v).slice(0, 10) + 'T00:00:00'); }
+
+function takeLast30(days) {
+  if (!days || days.length === 0) return [];
+  return days.slice(-30);
+}
+
+const RU_DOW = ['Пн','Вт','Ср','Чт','Пт','Сб','Вс'];
+
 const T = {
   pearl:      '#F5F3F0',
   silk:       '#EDE9E3',
@@ -37,6 +46,11 @@ const T = {
   champGlow:  'rgba(212,175,55,0.15)',
   stone:      '#4A4540',
   stoneMid:   '#7A736B',
+  heatEmpty:  '#e6e2dc',
+  heat0:      '#f4d4d4',
+  heatLow:    '#f4e4b6',
+  heatMid:    '#f0c98a',
+  heatFull:   '#bee0bf',
 };
 
 const SECTION_MAP = {
@@ -63,12 +77,27 @@ function Reveal({ delay = 0, children }) {
   return <Animated.View style={style}>{children}</Animated.View>;
 }
 
-function ItemRow({ item, isLast }) {
+function ItemRow({ item, isLast, isHomecare }) {
+  const days = isHomecare ? item.daysOfWeek : null;
+  const showDots = Array.isArray(days) && days.length > 0 && days.length < 7;
+
   return (
     <View style={[s.itemRow, !isLast && s.itemRowBorder]}>
       <View style={s.itemDot} />
       <View style={s.itemContent}>
-        <Text style={s.itemName}>{item.productName}</Text>
+        <View style={s.itemNameWrap}>
+          <Text style={s.itemName}>{item.productName}</Text>
+          {showDots && (
+            <View style={s.dowWrap}>
+              {RU_DOW.map((label, idx) => (
+                <View key={idx} style={[
+                  s.dowDot,
+                  days.includes(idx) ? s.dowDotOn : s.dowDotOff,
+                ]} />
+              ))}
+            </View>
+          )}
+        </View>
         {!!item.instructions && (
           <Text style={s.itemInstr}>{item.instructions}</Text>
         )}
@@ -77,13 +106,13 @@ function ItemRow({ item, isLast }) {
   );
 }
 
-function SubSection({ label, items }) {
+function SubSection({ label, items, isHomecare }) {
   if (!items || items.length === 0) return null;
   return (
     <View style={s.subSection}>
       <Text style={s.subSectionLabel}>{label}</Text>
       {items.map((item, i) => (
-        <ItemRow key={i} item={item} isLast={i === items.length - 1} />
+        <ItemRow key={i} item={item} isLast={i === items.length - 1} isHomecare={isHomecare} />
       ))}
     </View>
   );
@@ -119,6 +148,14 @@ export default function PrescriptionDetailScreen({ route, navigation }) {
 
   useEffect(() => { fetchPrescriptionDetail(prescriptionId); }, [prescriptionId]);
 
+  const adherence        = useClientStore(st => st.adherenceData);
+  const adherenceLoading = useClientStore(st => st.adherenceLoading);
+  const fetchAdherence   = useClientStore(st => st.fetchAdherence);
+
+  useEffect(() => {
+    if (prescriptionId) fetchAdherence(prescriptionId);
+  }, [prescriptionId]);
+
   const grouped = { homecare: {}, sheet: {}, vitamins: {} };
   (prescription?.items || []).forEach(item => {
     const map = SECTION_MAP[item.timeOfDay];
@@ -148,6 +185,28 @@ export default function PrescriptionDetailScreen({ route, navigation }) {
           <Text style={s.headerDate}>
             {safeFmt(prescription.createdAt, "d MMMM yyyy", { locale: ru })}
           </Text>
+        )}
+        {!!prescription?.startDate && (
+          <View style={s.coursePill}>
+            <Ionicons name="calendar-outline" size={12} color={T.champagne} />
+            <Text style={s.coursePillText}>
+              {(() => {
+                const sd = parseISODate(prescription.startDate);
+                const today = new Date(); today.setHours(0,0,0,0);
+                const ed = prescription.endDate ? parseISODate(prescription.endDate) : null;
+                const leftStr = format(sd, 'd MMM', { locale: ru });
+                const rightStr = ed ? format(ed, 'd MMM yyyy', { locale: ru }) : 'бессрочно';
+                let suffix = '';
+                if (sd > today) {
+                  const diff = Math.ceil((sd - today) / 86400000);
+                  suffix = ` · Старт через ${diff} дн.`;
+                } else if (ed && ed < today) {
+                  suffix = ' · Курс завершён';
+                }
+                return `Курс: ${leftStr} → ${rightStr}${suffix}`;
+              })()}
+            </Text>
+          </View>
         )}
       </View>
 
@@ -183,10 +242,43 @@ export default function PrescriptionDetailScreen({ route, navigation }) {
             </View>
           </Reveal>
 
+          {adherence?.prescription?.adherencePct !== undefined &&
+           adherence?.prescription?.adherencePct !== null && (
+            <Reveal delay={40}>
+              <TouchableOpacity
+                activeOpacity={0.8}
+                onPress={() => navigation.navigate('AdherenceCalendar', { prescriptionId })}
+                style={s.adhCard}
+              >
+                <BlurView intensity={22} tint="light" style={StyleSheet.absoluteFill} />
+                <View style={s.adhInner}>
+                  <View style={s.adhLeft}>
+                    <Text style={s.adhPct}>{adherence.prescription.adherencePct}%</Text>
+                    <Text style={s.adhLabel}>выполнено</Text>
+                  </View>
+                  <View style={s.adhStrip}>
+                    {takeLast30(adherence.days).map((d, i) => {
+                      let bg = T.heatEmpty;
+                      if (d.expected > 0) {
+                        const r = d.completed / d.expected;
+                        if (r === 0)        bg = T.heat0;
+                        else if (r < 0.5)   bg = T.heatLow;
+                        else if (r < 1)     bg = T.heatMid;
+                        else                bg = T.heatFull;
+                      }
+                      return <View key={i} style={[s.adhCell, { backgroundColor: bg }]} />;
+                    })}
+                  </View>
+                  <Ionicons name="chevron-forward" size={18} color={T.champagne} />
+                </View>
+              </TouchableOpacity>
+            </Reveal>
+          )}
+
           {Object.keys(grouped.homecare).length > 0 && (
             <SectionCard title="Домашний уход" icon="home-outline" delay={60}>
               {Object.entries(grouped.homecare).map(([label, items]) => (
-                <SubSection key={label} label={label} items={items} />
+                <SubSection key={label} label={label} items={items} isHomecare />
               ))}
             </SectionCard>
           )}
@@ -286,4 +378,35 @@ const s = StyleSheet.create({
   notesCardInner: { padding: 16 },
   notesLabel: { fontSize: 12, color: T.champagne, fontWeight: '600', marginBottom: 6 },
   notesText:  { fontSize: 14, color: T.stone, lineHeight: 20 },
+
+  coursePill: {
+    marginTop: 8, alignSelf: 'flex-start',
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    backgroundColor: T.champGlow,
+    borderRadius: 12, paddingHorizontal: 10, paddingVertical: 4,
+  },
+  coursePillText: { fontSize: 12, color: T.champagne, fontWeight: '600' },
+
+  adhCard: {
+    borderRadius: 16, overflow: 'hidden', marginBottom: 10,
+    borderWidth: 1, borderColor: 'rgba(255,255,255,0.85)',
+    shadowColor: 'rgba(100,90,70,0.10)', shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 1, shadowRadius: 8, elevation: 3,
+    backgroundColor: 'rgba(255,252,248,0.6)',
+  },
+  adhInner: { flexDirection: 'row', alignItems: 'center', gap: 12, padding: 14 },
+  adhLeft:  { alignItems: 'center', minWidth: 60 },
+  adhPct:   { fontSize: 22, fontWeight: '700', color: T.champagne, fontFamily: 'serif' },
+  adhLabel: { fontSize: 10, color: T.stoneMid, textTransform: 'uppercase', letterSpacing: 0.4 },
+  adhStrip: {
+    flex: 1, flexDirection: 'row', justifyContent: 'flex-end',
+    alignItems: 'center', gap: 2,
+  },
+  adhCell:  { width: 7, height: 24, borderRadius: 1.5 },
+
+  itemNameWrap: { flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap' },
+  dowWrap:      { flexDirection: 'row', gap: 2.5, marginLeft: 'auto' },
+  dowDot:       { width: 5, height: 5, borderRadius: 2.5 },
+  dowDotOn:     { backgroundColor: T.champagne },
+  dowDotOff:    { backgroundColor: 'rgba(74,69,64,0.18)' },
 });
