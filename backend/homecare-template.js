@@ -76,14 +76,43 @@ function escHtml(s) {
     .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
+const DAY_LABELS = ['Пн','Вт','Ср','Чт','Пт','Сб','Вс'];
+
+// 'YYYY-MM-DD' / Date → 'DD.MM.YYYY'
+function formatDateRu(d) {
+  if (!d) return '';
+  const dt = (d instanceof Date) ? d : new Date(String(d).slice(0, 10) + 'T00:00:00');
+  if (isNaN(dt)) return '';
+  const dd = String(dt.getDate()).padStart(2, '0');
+  const mm = String(dt.getMonth() + 1).padStart(2, '0');
+  return `${dd}.${mm}.${dt.getFullYear()}`;
+}
+
+// days_of_week → "Пн · Ср · Пт" or "" if daily (null/empty/all 7)
+function formatDays(arr) {
+  if (!Array.isArray(arr) || arr.length === 0 || arr.length >= 7) return '';
+  const cleaned = [...new Set(arr
+    .map(n => parseInt(n, 10))
+    .filter(n => Number.isInteger(n) && n >= 0 && n <= 6))]
+    .sort((a, b) => a - b);
+  if (cleaned.length === 0 || cleaned.length === 7) return '';
+  return cleaned.map(i => DAY_LABELS[i]).join(' · ');
+}
+
 // Рендер одной категории (чекбокс + продукты)
-function renderCategory(catName, items = []) {
-  const c   = BRAND_CONFIG.accentColor;
-  const rows = items.map(it => `
-    <div class="item-name">${escHtml(it.product_name)}</div>
+function renderCategory(catName, items = [], opts = {}) {
+  const showDays = !!opts.showDays;
+  const rows = items.map(it => {
+    const daysTxt = showDays ? formatDays(it.days_of_week) : '';
+    const daysBadge = daysTxt
+      ? `<span class="item-days" title="Дни недели">${escHtml(daysTxt)}</span>`
+      : '';
+    return `
+    <div class="item-name">${escHtml(it.product_name)}${daysBadge}</div>
     ${it.instructions
       ? `<div class="item-instr">${escHtml(it.instructions)}</div>`
-      : ''}`).join('') || '<div class="empty-slot"></div>';
+      : ''}`;
+  }).join('') || '<div class="empty-slot"></div>';
 
   return `
     <div class="cat-block">
@@ -95,9 +124,9 @@ function renderCategory(catName, items = []) {
 }
 
 // Рендер одного столбца (Утро / Вечер)
-function renderColumn(title, categories, grouped) {
+function renderColumn(title, categories, grouped, opts = {}) {
   const inner = categories.map(cat =>
-    renderCategory(cat, (grouped[cat] || []))
+    renderCategory(cat, (grouped[cat] || []), opts)
   ).join('');
   return `
     <div class="col">
@@ -139,6 +168,12 @@ function buildHomeCareHtml(prescription, config = {}) {
         .toLocaleDateString('ru', {day:'2-digit',month:'long',year:'numeric'})
     : '';
 
+  const periodStartTxt = formatDateRu(prescription.start_date);
+  const periodEndTxt   = prescription.end_date ? formatDateRu(prescription.end_date) : 'бессрочно';
+  const periodHtml     = periodStartTxt
+    ? `Курс: <b>${escHtml(periodStartTxt)}</b> → <b>${escHtml(periodEndTxt)}</b>`
+    : '';
+
   // Водяной знак
   const wmHtml = C.wmImageUrl
     ? `<img src="${C.wmImageUrl}" class="watermark" alt="">`
@@ -171,6 +206,7 @@ function buildHomeCareHtml(prescription, config = {}) {
       <div class="doc-title">${escHtml(docTitle)}</div>
       <div class="gold-bar"></div>
       <div class="client-line">Имя: <b>${clientName}</b></div>
+      ${periodHtml ? `<div class="period-line">${periodHtml}</div>` : ''}
     </div>`;
   }
 
@@ -210,15 +246,15 @@ function buildHomeCareHtml(prescription, config = {}) {
       <div class="add-title">Дополнительный уход</div>
       <div class="add-grid">
         ${['Маски','Пилинги'].map(cat =>
-          `<div>${renderCategory(cat, addSec[cat] || [])}</div>`
+          `<div>${renderCategory(cat, addSec[cat] || [], { showDays: true })}</div>`
         ).join('')}
       </div>
     </div>` : '';
 
   const homeCarePage = hasHomeCarePage ? buildPage(C.docTitle, `
     <div class="two-col">
-      ${renderColumn('Утро',  morningCats, bySection['morning'] || {})}
-      ${renderColumn('Вечер', eveningCats, bySection['evening'] || {})}
+      ${renderColumn('Утро',  morningCats, bySection['morning'] || {}, { showDays: true })}
+      ${renderColumn('Вечер', eveningCats, bySection['evening'] || {}, { showDays: true })}
     </div>
     ${addHtml}
     ${prescription.notes
@@ -389,6 +425,17 @@ html, body {
   color: var(--text);
 }
 .client-line b { font-style: italic; }
+.period-line {
+  margin-top: 3px;
+  font-size: 9pt;
+  color: var(--text2);
+  letter-spacing: 0.3px;
+}
+.period-line b {
+  color: var(--text);
+  font-weight: 600;
+  font-style: normal;
+}
 
 /* ─── TWO COLUMNS (Утро / Вечер) ─── */
 .two-col {
@@ -427,6 +474,22 @@ html, body {
   color: var(--text);
   line-height: 1.5;
   font-weight: 500;
+}
+.item-days {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 6px;
+  font-family: var(--font-b);
+  font-size: 7.6pt;
+  font-weight: 500;
+  font-style: normal;
+  letter-spacing: 0.3px;
+  color: var(--accent);
+  border: 1px solid rgba(184,148,62,0.55);
+  border-radius: 10px;
+  background: rgba(184,148,62,0.08);
+  vertical-align: middle;
+  white-space: nowrap;
 }
 .item-instr {
   font-size: 11.4pt;
