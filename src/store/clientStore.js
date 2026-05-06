@@ -33,6 +33,13 @@ export const useClientStore = create((set, get) => ({
   prescriptionDetail: null,
   prescriptionDetailLoading: false,
 
+  // Daily Care Checklist
+  todayChecklist: null,           // { date, sections: { morning, evening, additional }, summary }
+  todayChecklistLoading: false,
+
+  adherenceData: null,            // { prescription, days[] }
+  adherenceLoading: false,
+
   // Specialists
   specialists: [],
   specialistsLoading: false,
@@ -289,6 +296,83 @@ export const useClientStore = create((set, get) => ({
       set((s) => ({
         portfolioItemsLoading: { ...s.portfolioItemsLoading, [id]: false },
       }));
+    }
+  },
+
+  fetchTodayChecklist: async () => {
+    set({ todayChecklistLoading: true });
+    try {
+      const response = await clientDataAPI.getTodayChecklist();
+      set({
+        todayChecklist: {
+          date: response.date,
+          sections: response.sections || { morning: [], evening: [], additional: [] },
+          summary: response.summary || { total: 0, completed: 0 },
+        },
+        error: null,
+      });
+    } catch (error) {
+      console.log('[API] fetchTodayChecklist error:', error?.message);
+      set({ error: error?.message || 'Не удалось загрузить чек-лист' });
+    } finally {
+      set({ todayChecklistLoading: false });
+    }
+  },
+
+  toggleItemCompletion: async (itemId, currentlyCompleted) => {
+    // 1. Optimistic flip в локальном state
+    const prev = get().todayChecklist;
+    if (!prev) return;
+
+    const flipItem = (item) =>
+      item.id === itemId ? { ...item, completed: !currentlyCompleted } : item;
+
+    const nextSections = {
+      morning:    prev.sections.morning.map(flipItem),
+      evening:    prev.sections.evening.map(flipItem),
+      additional: prev.sections.additional.map(flipItem),
+    };
+    const delta = currentlyCompleted ? -1 : +1;
+    const nextSummary = {
+      total:     prev.summary.total,
+      completed: prev.summary.completed + delta,
+    };
+    set({ todayChecklist: { ...prev, sections: nextSections, summary: nextSummary } });
+
+    // 2. Сетевой вызов
+    try {
+      if (currentlyCompleted) {
+        await clientDataAPI.unmarkItemCompleted(itemId);
+      } else {
+        await clientDataAPI.markItemCompleted(itemId);
+      }
+    } catch (error) {
+      // 3. Откат при ошибке
+      console.log('[API] toggleItemCompletion error:', error?.message);
+      set({
+        todayChecklist: prev,
+        error: error?.response?.data?.error || error?.message || 'Не удалось сохранить отметку',
+      });
+      throw error;
+    }
+  },
+
+  fetchAdherence: async (prescriptionId) => {
+    set({ adherenceLoading: true, adherenceData: null });
+    try {
+      const response = await clientDataAPI.getPrescriptionAdherence(prescriptionId);
+      set({
+        adherenceData: {
+          prescription: response.prescription,
+          days: response.days || [],
+        },
+        error: null,
+      });
+    } catch (error) {
+      console.log('[API] fetchAdherence error:', error?.message);
+      set({ error: error?.message || 'Не удалось загрузить данные выполнения' });
+    } finally {
+      set({ adherenceLoading: false });
     }
   },
 
