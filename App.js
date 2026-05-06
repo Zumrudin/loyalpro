@@ -77,6 +77,7 @@ function BookingsStack() {
       <BookingsStackNav.Screen name="BookingsRoot" component={BookingsScreen} />
       <BookingsStackNav.Screen name="BookingDetail" component={BookingDetailScreen} />
       <BookingsStackNav.Screen name="PrescriptionDetail" component={PrescriptionDetailScreen} />
+      <BookingsStackNav.Screen name="AdherenceCalendar" component={AdherenceCalendarScreen} />
     </BookingsStackNav.Navigator>
   );
 }
