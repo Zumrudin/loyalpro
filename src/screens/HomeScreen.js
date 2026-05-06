@@ -243,6 +243,8 @@ export default function HomeScreen({ navigation }) {
   const portfolioCategories         = useClientStore((st) => st.portfolioCategories);
   const portfolioCategoriesLoading  = useClientStore((st) => st.portfolioCategoriesLoading);
   const fetchPortfolioCategories    = useClientStore((st) => st.fetchPortfolioCategories);
+  const todayChecklist  = useClientStore((st) => st.todayChecklist);
+  const fetchToday      = useClientStore((st) => st.fetchTodayChecklist);
   const [portfolioFetched, setPortfolioFetched] = useState(false);
 
   const clinicName = useAppSettingsStore((state) => state.clinicName);
@@ -258,11 +260,13 @@ export default function HomeScreen({ navigation }) {
   [fetchProfile, fetchBonuses, fetchBookings, fetchPortfolioCategories]);
 
   useEffect(() => { loadData(); }, [loadData]);
+  useEffect(() => { fetchToday(); }, []);
 
   useFocusEffect(useCallback(() => {
     fetchBookings('upcoming');
     fetchPortfolioCategories();
-  }, [fetchBookings, fetchPortfolioCategories]));
+    fetchToday();
+  }, [fetchBookings, fetchPortfolioCategories, fetchToday]));
 
   const isLoading   = profileLoading || bonusLoading || bookingsLoading;
   const now = new Date();
@@ -329,6 +333,85 @@ export default function HomeScreen({ navigation }) {
             <View style={s.heroDivider} />
           </View>
         </Reveal>
+
+        {/* ── Today checklist banner ───────────────────── */}
+        {!!todayChecklist && todayChecklist.summary?.total > 0 && (
+          <Reveal delay={40}>
+            <TouchableOpacity
+              style={[
+                s.todayBanner,
+                todayChecklist.summary.completed === todayChecklist.summary.total && s.todayBannerDone,
+              ]}
+              activeOpacity={0.85}
+              onPress={() => navigation.navigate('TodayChecklist')}
+            >
+              <BlurView intensity={26} tint="light" style={StyleSheet.absoluteFill} />
+              <LinearGradient
+                colors={
+                  todayChecklist.summary.completed === todayChecklist.summary.total
+                    ? ['rgba(190,224,191,0.50)', 'rgba(190,224,191,0.30)']
+                    : ['rgba(255,252,248,0.55)', 'rgba(212,175,55,0.10)']
+                }
+                style={StyleSheet.absoluteFill}
+              />
+              <View style={s.todayInner}>
+                <View style={s.todayIconWrap}>
+                  <Ionicons
+                    name={todayChecklist.summary.completed === todayChecklist.summary.total
+                      ? 'checkmark-circle' : 'leaf-outline'}
+                    size={22}
+                    color={T.champagne}
+                  />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <View style={s.todayTopRow}>
+                    <Text style={s.todayTitle}>
+                      {todayChecklist.summary.completed === todayChecklist.summary.total
+                        ? 'Сегодня всё выполнено'
+                        : 'Уход сегодня'}
+                    </Text>
+                    <Text style={s.todayCount}>
+                      {todayChecklist.summary.completed} / {todayChecklist.summary.total}
+                    </Text>
+                  </View>
+                  <View style={s.todayProgressTrack}>
+                    <View
+                      style={[
+                        s.todayProgressFill,
+                        {
+                          width: `${Math.round(
+                            (100 * todayChecklist.summary.completed) /
+                            Math.max(todayChecklist.summary.total, 1)
+                          )}%`,
+                        },
+                      ]}
+                    />
+                  </View>
+                  <Text style={s.todaySub}>
+                    {[
+                      todayChecklist.sections.morning?.length
+                        ? `Утро ${
+                            todayChecklist.sections.morning.filter(i => i.completed).length
+                          }/${todayChecklist.sections.morning.length}`
+                        : null,
+                      todayChecklist.sections.evening?.length
+                        ? `Вечер ${
+                            todayChecklist.sections.evening.filter(i => i.completed).length
+                          }/${todayChecklist.sections.evening.length}`
+                        : null,
+                      todayChecklist.sections.additional?.length
+                        ? `Доп ${
+                            todayChecklist.sections.additional.filter(i => i.completed).length
+                          }/${todayChecklist.sections.additional.length}`
+                        : null,
+                    ].filter(Boolean).join(' · ')}
+                  </Text>
+                </View>
+                <Ionicons name="chevron-forward" size={18} color={T.champagne} />
+              </View>
+            </TouchableOpacity>
+          </Reveal>
+        )}
 
         {/* ── Booking card ──────────────────────────────── */}
         <Reveal delay={100}>
@@ -488,8 +571,9 @@ export default function HomeScreen({ navigation }) {
             { icon: 'person-outline',          label: 'Профиль',     nav: 'Profile',       delay: 620 },
             { icon: 'notifications-outline',   label: 'Уведомления', nav: 'Notifications', delay: 660 },
             { icon: 'gift-outline',            label: 'Бонусы',      nav: 'Bonuses',       delay: 700 },
-            { icon: 'medical-outline',         label: 'Назначения',  nav: 'Prescriptions', delay: 740 },
-            { icon: 'pricetag-outline',        label: 'Прайс',       nav: 'PriceList',     delay: 780 },
+            { icon: 'medical-outline',         label: 'Назначения',     nav: 'Prescriptions',  delay: 740 },
+            { icon: 'checkmark-done-outline',  label: 'Уход сегодня',   nav: 'TodayChecklist', delay: 760 },
+            { icon: 'pricetag-outline',        label: 'Прайс',          nav: 'PriceList',      delay: 780 },
           ].map(({ icon, label, nav, delay }) => (
             <Reveal key={label} delay={delay}>
               <PressCard style={s.quickCard} onPress={() => navigation.navigate(nav)}>
@@ -674,4 +758,29 @@ const s = StyleSheet.create({
     backgroundColor: T.champGlow, borderWidth: 1, borderColor: T.champagne + '40',
     justifyContent: 'center', alignItems: 'center',
   },
+
+  // Today care banner
+  todayBanner: {
+    marginHorizontal: 0, marginTop: 0, marginBottom: 16,
+    borderRadius: 18, overflow: 'hidden',
+    borderWidth: 1, borderColor: 'rgba(255,255,255,0.85)',
+    shadowColor: 'rgba(100,90,70,0.12)', shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 1, shadowRadius: 12, elevation: 4,
+  },
+  todayBannerDone: { borderColor: 'rgba(190,224,191,0.7)' },
+  todayInner: { flexDirection: 'row', alignItems: 'center', padding: 14, gap: 12 },
+  todayIconWrap: {
+    width: 38, height: 38, borderRadius: 19,
+    backgroundColor: 'rgba(212,175,55,0.18)',
+    justifyContent: 'center', alignItems: 'center',
+  },
+  todayTopRow:    { flexDirection: 'row', alignItems: 'baseline' },
+  todayTitle:     { flex: 1, fontSize: 15, fontWeight: '600', color: '#4A4540' },
+  todayCount:     { fontSize: 13, color: '#D4AF37', fontWeight: '700' },
+  todayProgressTrack: {
+    marginTop: 6, height: 4, borderRadius: 2,
+    backgroundColor: 'rgba(212,175,55,0.16)', overflow: 'hidden',
+  },
+  todayProgressFill: { height: '100%', backgroundColor: '#D4AF37' },
+  todaySub: { marginTop: 6, fontSize: 11, color: '#7A736B' },
 });
