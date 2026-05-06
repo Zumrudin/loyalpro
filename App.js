@@ -32,6 +32,8 @@ import SpecialistDetailScreen from './src/screens/SpecialistDetailScreen';
 import PortfolioCategoriesScreen from './src/screens/PortfolioCategoriesScreen';
 import PortfolioCategoryScreen from './src/screens/PortfolioCategoryScreen';
 import PortfolioItemViewer from './src/screens/PortfolioItemViewer';
+import TodayChecklistScreen from './src/screens/TodayChecklistScreen';
+import AdherenceCalendarScreen from './src/screens/AdherenceCalendarScreen';
 
 const HomeStackNav = createNativeStackNavigator();
 const BookingsStackNav = createNativeStackNavigator();
@@ -61,6 +63,8 @@ function HomeStack() {
         component={PortfolioItemViewer}
         options={{ presentation: 'modal' }}
       />
+      <HomeStackNav.Screen name="TodayChecklist" component={TodayChecklistScreen} />
+      <HomeStackNav.Screen name="AdherenceCalendar" component={AdherenceCalendarScreen} />
     </HomeStackNav.Navigator>
   );
 }
