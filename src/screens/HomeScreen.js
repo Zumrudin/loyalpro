@@ -454,7 +454,7 @@ export default function HomeScreen({ navigation }) {
               </View>
             </PressCard>
           ) : (
-            <PressCard style={s.emptyCard} onPress={() => navigation.navigate('Bookings')}>
+            <PressCard style={s.emptyCard} onPress={() => setBookingSheetOpen(true)}>
               <LinearGradient
                 colors={[T.champagne + '30', 'transparent']}
                 style={[StyleSheet.absoluteFill, { borderRadius: 24 }]}
