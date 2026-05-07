@@ -131,7 +131,13 @@ function getInitials(name) {
 
 function SpecialistPhoto({ photoUrl, name, style, fontSize = 36 }) {
   if (photoUrl) {
-    return <Image source={{ uri: photoUrl }} style={style} resizeMode="cover" />;
+    return (
+      <Image
+        source={{ uri: photoUrl }}
+        style={style}
+        resizeMode="cover"
+      />
+    );
   }
   return (
     <View style={[style, { backgroundColor: T.glowA, justifyContent: 'center', alignItems: 'center' }]}>

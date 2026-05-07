@@ -1,7 +1,8 @@
 {
   "expo": {
-    "name": "Clinic App",
+    "name": "PERI CLINIC",
     "slug": "clinic-app",
+    "icon": "./assets/icon.png",
     "version": "1.0.0",
     "assetBundlePatterns": [
       "**/*"
@@ -13,11 +14,12 @@
     ],
     "ios": {
       "supportsTabletMode": true,
-      "bundleIdentifier": "com.clinic.app",
+      "bundleIdentifier": "com.peri.clinic",
       "infoPlist": {
         "NSAppTransportSecurity": {
           "NSAllowsArbitraryLoads": true
-        }
+        },
+        "NSLocationWhenInUseUsageDescription": "Приложению нужен доступ к геолокации, чтобы построить маршрут до клиники."
       }
     },
     "android": {
@@ -25,19 +27,25 @@
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#ffffff"
       },
-      "package": "com.clinic.app"
+      "package": "com.peri.clinic",
+      "usesCleartextTraffic": true
     },
     "plugins": [
+      "expo-secure-store",
       [
-        "expo-notifications",
+        "expo-location",
         {
-          "icon": "./assets/notification-icon.png",
-          "color": "#007AFF"
+          "locationWhenInUsePermission": "Приложению нужен доступ к геолокации, чтобы построить маршрут до клиники.",
+          "locationAlwaysAndWhenInUsePermission": "Приложению нужен доступ к геолокации, чтобы построить маршрут до клиники."
         }
-      ],
-      "expo-secure-store"
+      ]
     ],
     "scheme": "clinic-app",
-    "owner": "clinic"
+    "owner": "clinic",
+    "extra": {
+      "eas": {
+        "projectId": "237ab06c-cdcc-4b74-86e1-68c9e5a6d219"
+      }
+    }
   }
 }

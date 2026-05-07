@@ -98,7 +98,11 @@ export default function SpecialistDetailScreen({ navigation, route }) {
         {/* Photo (extends under status bar) */}
         <View style={s.photoWrap}>
           {hasPhoto ? (
-            <Image source={{ uri: specialist.photoUrl }} style={s.photo} resizeMode="cover" />
+            <Image
+              source={{ uri: specialist.photoUrl }}
+              style={s.photo}
+              resizeMode="cover"
+            />
           ) : (
             <View style={s.photo}>
               <LinearGradient

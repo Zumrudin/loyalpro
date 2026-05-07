@@ -35,9 +35,9 @@ function ContactRow({ icon, label, value, onPress }) {
   );
 }
 
-export default function ContactsScreen() {
+export default function ContactsScreen({ navigation }) {
   const insets = useSafeAreaInsets();
-  const { clinicName, phone, whatsapp, telegram, instagram, mapsUrl, email } = useAppSettingsStore();
+  const { clinicName, phone, whatsapp, telegram, instagram, email } = useAppSettingsStore();
 
   const open = (url) => Linking.openURL(url).catch(() => {});
 
@@ -105,8 +105,8 @@ export default function ContactsScreen() {
           <ContactRow
             icon="map-outline"
             label="Как добраться"
-            value={mapsUrl ? 'Открыть карту' : null}
-            onPress={() => open(mapsUrl)}
+            value="Построить маршрут"
+            onPress={() => navigation.navigate('RouteToClinic')}
           />
           <ContactRow
             icon="mail-outline"

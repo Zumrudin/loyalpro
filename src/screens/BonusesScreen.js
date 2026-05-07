@@ -27,6 +27,7 @@ import Animated, {
 import { LinearGradient } from 'expo-linear-gradient';
 import { BlurView } from 'expo-blur';
 import { useClientStore } from '../store/clientStore';
+import { useAppSettingsStore } from '../store/appSettingsStore';
 import { format } from 'date-fns';
 import { ru } from 'date-fns/locale';
 import LoyaltyRing from '../components/LoyaltyRing';
@@ -122,6 +123,7 @@ export default function BonusesScreen() {
   const bonusHistory = useClientStore((s) => s.bonusHistory);
   const bonusLoading = useClientStore((s) => s.bonusLoading);
   const fetchBonuses = useClientStore((s) => s.fetchBonuses);
+  const clinicName   = useAppSettingsStore((s) => s.clinicName);
 
   useEffect(() => { fetchBonuses(); }, []);
 
@@ -140,7 +142,7 @@ export default function BonusesScreen() {
           style={StyleSheet.absoluteFill}
         />
         <View style={styles.headerBorder} />
-        <Text style={styles.headerSub}>Аура Эстетик</Text>
+        {!!clinicName && <Text style={styles.headerSub}>{clinicName}</Text>}
         <Text style={styles.headerTitle}>Бонусы</Text>
       </View>
 

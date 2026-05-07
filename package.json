@@ -26,7 +26,9 @@
     "expo-blur": "~15.0.8",
     "expo-constants": "^18.0.13",
     "expo-haptics": "~15.0.8",
+    "expo-image": "~3.0.11",
     "expo-linear-gradient": "~15.0.8",
+    "expo-location": "~19.0.8",
     "expo-notifications": "^0.32.16",
     "expo-secure-store": "^15.0.8",
     "expo-sensors": "~15.0.8",
@@ -40,6 +42,7 @@
     "react-native-screens": "^4.16.0",
     "react-native-svg": "^15.8.0",
     "react-native-web": "^0.21.0",
+    "react-native-webview": "13.15.0",
     "zustand": "^4.4.0"
   },
   "devDependencies": {

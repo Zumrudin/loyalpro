@@ -29,6 +29,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { BlurView } from 'expo-blur';
 import * as Haptics from 'expo-haptics';
 import { useClientStore } from '../store/clientStore';
+import { useAppSettingsStore } from '../store/appSettingsStore';
 import { format, parseISO } from 'date-fns';
 import { ru } from 'date-fns/locale';
 
@@ -143,6 +144,50 @@ function StatusBadge({ status }) {
   );
 }
 
+// ─── Pulsing prescription badge ──────────────────────────────────────────────
+function PulsingPrescriptionBadge() {
+  const pulse = useSharedValue(0);
+  useEffect(() => {
+    pulse.value = withRepeat(
+      withSequence(
+        withTiming(1, { duration: 900, easing: Easing.inOut(Easing.sin) }),
+        withTiming(0, { duration: 900, easing: Easing.inOut(Easing.sin) }),
+      ),
+      -1,
+    );
+    return () => cancelAnimation(pulse);
+  }, []);
+  const ringStyle = useAnimatedStyle(() => ({
+    opacity: interpolate(pulse.value, [0, 1], [0, 0.7]),
+    transform: [{ scale: interpolate(pulse.value, [0, 1], [0.6, 1.5]) }],
+  }));
+  const dotStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: interpolate(pulse.value, [0, 1], [1, 1.15]) }],
+  }));
+  return (
+    <View style={{ marginLeft: 6, alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: 5 }}>
+      <View style={{ width: 20, height: 20, alignItems: 'center', justifyContent: 'center' }}>
+        <Animated.View style={[{
+          position: 'absolute',
+          width: 20, height: 20, borderRadius: 10,
+          backgroundColor: 'rgba(212,175,55,0.35)',
+        }, ringStyle]} />
+        <Animated.View style={[{
+          width: 8, height: 8, borderRadius: 4,
+          backgroundColor: T.champagne,
+        }, dotStyle]} />
+      </View>
+      <View style={{
+        backgroundColor: 'rgba(212,175,55,0.12)',
+        borderRadius: 8, paddingHorizontal: 7, paddingVertical: 3,
+        borderWidth: 1, borderColor: 'rgba(212,175,55,0.4)',
+      }}>
+        <Text style={{ fontSize: 10, color: '#D4AF37', fontWeight: '600' }}>Назначения</Text>
+      </View>
+    </View>
+  );
+}
+
 // ─── Booking card ─────────────────────────────────────────────────────────────
 function BookingCard({ booking, index, onPress }) {
   const isFirst = index === 0;
@@ -177,17 +222,7 @@ function BookingCard({ booking, index, onPress }) {
             </View>
             <View style={{ flexDirection: 'row', alignItems: 'center' }}>
               <StatusBadge status={booking.status} />
-              {booking.hasPrescription && (
-                <View style={{
-                  backgroundColor: 'rgba(212,175,55,0.15)',
-                  borderRadius: 8, paddingHorizontal: 8, paddingVertical: 3,
-                  marginLeft: 6,
-                }}>
-                  <Text style={{ fontSize: 10, color: '#D4AF37', fontWeight: '600' }}>
-                    Назначения
-                  </Text>
-                </View>
-              )}
+              {booking.hasPrescription && <PulsingPrescriptionBadge />}
             </View>
           </View>
 
@@ -241,7 +276,7 @@ function groupVisits(bookings) {
     const totalPrice = items.reduce((s, x) => s + Number(x.price || 0), 0);
     const names = items.map((x) => x.serviceName).filter(Boolean);
     const serviceName = names.length > 1 ? `${names[0]} +${names.length - 1}` : (names[0] || '—');
-    return { id: first.id, ids, dateTime: first.dateTime, serviceName, specialistName: first.specialistName, status: first.status, price: totalPrice || null };
+    return { id: first.id, ids, dateTime: first.dateTime, serviceName, specialistName: first.specialistName, status: first.status, price: totalPrice || null, hasPrescription: items.some(x => x.hasPrescription), prescriptionId: items.find(x => x.prescriptionId)?.prescriptionId || null };
   });
 }
 
@@ -253,6 +288,7 @@ export default function BookingsScreen({ navigation }) {
   const bookings        = useClientStore((s) => s.bookings);
   const bookingsLoading = useClientStore((s) => s.bookingsLoading);
   const fetchBookings   = useClientStore((s) => s.fetchBookings);
+  const clinicName      = useAppSettingsStore((s) => s.clinicName);
 
   useEffect(() => { fetchBookings(filter); }, [filter]);
 
@@ -277,7 +313,7 @@ export default function BookingsScreen({ navigation }) {
           style={StyleSheet.absoluteFill}
         />
         <View style={styles.headerBorder} />
-        <Text style={styles.headerSub}>Аура Эстетик</Text>
+        {!!clinicName && <Text style={styles.headerSub}>{clinicName}</Text>}
         <Text style={styles.headerTitle}>Мои записи</Text>
       </View>
 

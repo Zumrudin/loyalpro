@@ -33,7 +33,6 @@ import PortfolioCategoriesScreen from './src/screens/PortfolioCategoriesScreen';
 import PortfolioCategoryScreen from './src/screens/PortfolioCategoryScreen';
 import PortfolioItemViewer from './src/screens/PortfolioItemViewer';
 import TodayChecklistScreen from './src/screens/TodayChecklistScreen';
-import AdherenceCalendarScreen from './src/screens/AdherenceCalendarScreen';
 
 const HomeStackNav = createNativeStackNavigator();
 const BookingsStackNav = createNativeStackNavigator();
@@ -64,7 +63,6 @@ function HomeStack() {
         options={{ presentation: 'modal' }}
       />
       <HomeStackNav.Screen name="TodayChecklist" component={TodayChecklistScreen} />
-      <HomeStackNav.Screen name="AdherenceCalendar" component={AdherenceCalendarScreen} />
     </HomeStackNav.Navigator>
   );
 }
@@ -77,7 +75,6 @@ function BookingsStack() {
       <BookingsStackNav.Screen name="BookingsRoot" component={BookingsScreen} />
       <BookingsStackNav.Screen name="BookingDetail" component={BookingDetailScreen} />
       <BookingsStackNav.Screen name="PrescriptionDetail" component={PrescriptionDetailScreen} />
-      <BookingsStackNav.Screen name="AdherenceCalendar" component={AdherenceCalendarScreen} />
     </BookingsStackNav.Navigator>
   );
 }
