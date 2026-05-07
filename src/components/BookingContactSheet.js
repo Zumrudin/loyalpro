@@ -36,12 +36,12 @@ function buildTelegramUrl(handle) {
   if (!raw) return null;
   if (raw.startsWith('http')) return raw;
   const clean = raw.replace(/^@/, '');
-  return clean ? `tg://resolve?domain=${encodeURIComponent(clean)}` : null;
+  return clean ? `https://t.me/${encodeURIComponent(clean)}` : null;
 }
 
 function buildWhatsappUrl(phone) {
   const digits = String(phone || '').replace(/\D/g, '');
-  return digits ? `whatsapp://send?phone=${digits}` : null;
+  return digits ? `https://wa.me/${digits}` : null;
 }
 
 function buildMaxUrl(handle) {
