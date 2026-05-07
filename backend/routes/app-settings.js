@@ -37,6 +37,7 @@ router.get('/', async (req, res) => {
       phone:      row.phone,
       whatsapp:   row.whatsapp,
       telegram:   row.telegram,
+      max:        row.max,
       instagram:  row.instagram,
       mapsUrl:    row.maps_url,
       email:      row.email,
@@ -47,21 +48,21 @@ router.get('/', async (req, res) => {
 // Admin only — update text fields
 router.put('/', auth, requireRole('owner', 'admin'), async (req, res) => {
   try {
-    const { clinicName, phone, whatsapp, telegram, instagram, mapsUrl, email } = req.body;
+    const { clinicName, phone, whatsapp, telegram, max, instagram, mapsUrl, email } = req.body;
     const existing = await db.oneOrNone('SELECT id FROM app_settings ORDER BY id LIMIT 1');
     if (existing) {
       await db.query(
         `UPDATE app_settings SET clinic_name=$1, phone=$2, whatsapp=$3, telegram=$4,
-         instagram=$5, maps_url=$6, email=$7, updated_at=NOW() WHERE id=$8`,
+         max=$5, instagram=$6, maps_url=$7, email=$8, updated_at=NOW() WHERE id=$9`,
         [clinicName || '', phone || null, whatsapp || null, telegram || null,
-         instagram || null, mapsUrl || null, email || null, existing.id]
+         max || null, instagram || null, mapsUrl || null, email || null, existing.id]
       );
     } else {
       await db.query(
-        `INSERT INTO app_settings (clinic_name, phone, whatsapp, telegram, instagram, maps_url, email)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        `INSERT INTO app_settings (clinic_name, phone, whatsapp, telegram, max, instagram, maps_url, email)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
         [clinicName || '', phone || null, whatsapp || null, telegram || null,
-         instagram || null, mapsUrl || null, email || null]
+         max || null, instagram || null, mapsUrl || null, email || null]
       );
     }
     res.json({ ok: true });
