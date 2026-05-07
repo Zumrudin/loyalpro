@@ -215,6 +215,7 @@ async function loadAppSettings() {
     s('app-phone',       d.phone);
     s('app-whatsapp',    d.whatsapp);
     s('app-telegram',    d.telegram);
+    s('app-max',         d.max);
     s('app-instagram',   d.instagram);
     s('app-maps-url',    d.mapsUrl);
     s('app-email',       d.email);
@@ -233,6 +234,7 @@ async function saveAppSettings() {
       phone:      g('app-phone'),
       whatsapp:   g('app-whatsapp'),
       telegram:   g('app-telegram'),
+      max:        g('app-max'),
       instagram:  g('app-instagram'),
       mapsUrl:    g('app-maps-url'),
       email:      g('app-email'),
