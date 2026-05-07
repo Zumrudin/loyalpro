@@ -44,6 +44,7 @@ import { format } from 'date-fns';
 import { ru } from 'date-fns/locale';
 import LoyaltyRing from '../components/LoyaltyRing';
 import { PortfolioCard, PortfolioCardSkeleton } from '../components/PortfolioCard';
+import BookingContactSheet from '../components/BookingContactSheet';
 
 function parseDate(value) {
   if (!value) return new Date(NaN);
@@ -246,6 +247,7 @@ export default function HomeScreen({ navigation }) {
   const todayChecklist  = useClientStore((st) => st.todayChecklist);
   const fetchToday      = useClientStore((st) => st.fetchTodayChecklist);
   const [portfolioFetched, setPortfolioFetched] = useState(false);
+  const [bookingSheetOpen, setBookingSheetOpen] = useState(false);
 
   const clinicName = useAppSettingsStore((state) => state.clinicName);
   const logoUrl = useAppSettingsStore((state) => state.logoUrl);
@@ -464,7 +466,7 @@ export default function HomeScreen({ navigation }) {
                   style={s.bookNowBtn}
                   onPressIn={() => { btnFill.value = withSpring(1); }}
                   onPressOut={() => { btnFill.value = withSpring(0); }}
-                  onPress={() => navigation.navigate('Bookings')}
+                  onPress={() => setBookingSheetOpen(true)}
                   activeOpacity={1}
                 >
                   <LinearGradient
@@ -610,6 +612,10 @@ export default function HomeScreen({ navigation }) {
 
         <View style={{ height: 32 }} />
       </ScrollView>
+      <BookingContactSheet
+        visible={bookingSheetOpen}
+        onClose={() => setBookingSheetOpen(false)}
+      />
     </View>
   );
 }
