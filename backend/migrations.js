@@ -247,6 +247,11 @@ async function runMigrations(client) {
     )
   `).catch(() => {});
 
+  // ── App Settings: MAX messenger field ──────────────────────────
+  await client.query(`
+    ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS max TEXT
+  `).catch(() => {});
+
   // ── Mobile OTP Telegram delivery: phone ↔ chat_id link ──────
   await client.query(`
     CREATE TABLE IF NOT EXISTS mobile_telegram_links (
