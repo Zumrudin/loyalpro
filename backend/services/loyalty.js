@@ -469,13 +469,15 @@ async function runSync(salon, syncType, userId) {
     }
 
     logger.info('Updating last_visit_at from records...');
+    // Salons rarely use status_id=4 ('completed') — most close visits at status_id=3
+    // ('arrived'). Both indicate the client actually showed up.
     await db.query(`
       UPDATE clients c
       SET last_visit_at = sub.last_visit, updated_at = NOW()
       FROM (
         SELECT client_id, MAX(visit_datetime) AS last_visit
         FROM   records
-        WHERE  salon_id = $1 AND status = 'completed' AND client_id IS NOT NULL
+        WHERE  salon_id = $1 AND status IN ('completed','arrived') AND client_id IS NOT NULL
         GROUP  BY client_id
       ) sub
       WHERE c.id = sub.client_id AND c.salon_id = $1
