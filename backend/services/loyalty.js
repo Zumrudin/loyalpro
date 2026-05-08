@@ -276,7 +276,9 @@ async function runSync(salon, syncType, userId) {
         const phone        = ycc.phone || null;
         const totalSpent   = parseFloat(ycc.spent || ycc.paid || 0);
         const visitsCount  = parseInt(ycc.visits || 0);
-        const lastVisitAt  = ycc.last_change_date ? new Date(ycc.last_change_date) : null;
+        // last_change_date is "last edit" (incl. fresh bookings) — NOT a visit date.
+        // Use last_visit_date; the bulk update from records refines this.
+        const lastVisitAt  = ycc.last_visit_date ? new Date(ycc.last_visit_date) : null;
 
         const ex = await db.oneOrNone(
           'SELECT id FROM clients WHERE salon_id=$1 AND yclients_client_id=$2',
@@ -448,8 +450,10 @@ async function runSync(salon, syncType, userId) {
         if (exRec) {
           await db.query(
             `UPDATE records SET status=$1, raw_payload=$2, amount=$3,
-             services=$4, staff=$5, updated_at=NOW() WHERE id=$6`,
+             visit_date=$4, visit_datetime=$5,
+             services=$6, staff=$7, updated_at=NOW() WHERE id=$8`,
             [status, JSON.stringify(ycr), recCost,
+             String(ycr.date || '').split(' ')[0] || null, ycr.date || null,
              JSON.stringify(ycr.services || []), JSON.stringify(ycr.staff || []), exRec.id]
           );
         } else {
@@ -598,8 +602,13 @@ async function processRecordEvent(payload, salon, settings) {
     );
   } else {
     await db.query(
-      'UPDATE records SET status=$1,raw_payload=$2,amount=$3,updated_at=NOW() WHERE id=$4',
-      [recStatus, JSON.stringify(data), getRecordCost(data), record.id]
+      `UPDATE records SET status=$1, raw_payload=$2, amount=$3,
+       visit_date=$4, visit_datetime=$5,
+       services=$6, staff=$7, updated_at=NOW() WHERE id=$8`,
+      [recStatus, JSON.stringify(data), getRecordCost(data),
+       String(data.date || '').split(' ')[0] || null, data.date || null,
+       JSON.stringify(data.services || []), JSON.stringify(data.staff || []),
+       record.id]
     );
   }
 
