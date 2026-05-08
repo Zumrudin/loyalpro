@@ -154,7 +154,7 @@ async function getStaffList(salonId) {
 
 async function computeStaffMetrics(salonId, ycStaffId, fromDate, toDate) {
   const sid = parseInt(ycStaffId);
-  const DONE = `status IN ('completed','confirmed')`;
+  const DONE = `status IN ('completed','arrived')`;
   const CANCELLED = `status IN ('no_show','deleted','cancelled')`;
   const [basic, ret, reapp, sched, consult, goods] = await Promise.all([
     db.one(`
@@ -325,9 +325,9 @@ async function computeStaffSparklines(salonId, ycStaffId) {
   return db.many(`
     SELECT
       TO_CHAR(DATE_TRUNC('month', visit_date::date), 'YYYY-MM') AS month,
-      COUNT(*) FILTER (WHERE status IN ('completed','confirmed')) AS visits,
-      COALESCE(AVG(amount) FILTER (WHERE status IN ('completed','confirmed')), 0) AS avg_check,
-      COALESCE(SUM(amount) FILTER (WHERE status IN ('completed','confirmed')), 0) AS revenue
+      COUNT(*) FILTER (WHERE status IN ('completed','arrived')) AS visits,
+      COALESCE(AVG(amount) FILTER (WHERE status IN ('completed','arrived')), 0) AS avg_check,
+      COALESCE(SUM(amount) FILTER (WHERE status IN ('completed','arrived')), 0) AS revenue
     FROM records
     WHERE salon_id=$1 AND (staff->>'id')::int = $2
       AND visit_date >= (CURRENT_DATE - INTERVAL '6 months')::date
