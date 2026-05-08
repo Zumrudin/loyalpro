@@ -44,7 +44,7 @@ async function calcReturnWindow(salonId) {
         (visit_date - LAG(visit_date) OVER (PARTITION BY client_id ORDER BY visit_date)) AS gap_days
       FROM records
       WHERE salon_id = $1
-        AND status IN ('completed','confirmed')
+        AND status IN ('completed','arrived')
         AND visit_date < CURRENT_DATE
         AND visit_date IS NOT NULL
     ) t
@@ -79,13 +79,13 @@ async function refreshSegments(salonId) {
       COALESCE(
         MAX(r.visit_date) FILTER (
           WHERE r.visit_date < CURRENT_DATE
-            AND r.status IN ('completed','confirmed','no_show')
+            AND r.status IN ('completed','arrived','no_show')
         ),
         c.last_visit_at
       ) AS actual_last_visit,
       CASE
-        WHEN MAX(r.visit_date) FILTER (WHERE r.visit_date < CURRENT_DATE AND r.status IN ('completed','confirmed','no_show')) IS NOT NULL
-          THEN (CURRENT_DATE - MAX(r.visit_date) FILTER (WHERE r.visit_date < CURRENT_DATE AND r.status IN ('completed','confirmed','no_show')))::float
+        WHEN MAX(r.visit_date) FILTER (WHERE r.visit_date < CURRENT_DATE AND r.status IN ('completed','arrived','no_show')) IS NOT NULL
+          THEN (CURRENT_DATE - MAX(r.visit_date) FILTER (WHERE r.visit_date < CURRENT_DATE AND r.status IN ('completed','arrived','no_show')))::float
         WHEN c.last_visit_at IS NOT NULL
           THEN EXTRACT(EPOCH FROM (NOW() - c.last_visit_at))/86400
         ELSE NULL
