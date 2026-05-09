@@ -70,6 +70,11 @@ router.get('/bookings', mobileAuth, async (req, res) => {
         r.staff->0->>'name'      as "specialistName",
         r.status,
         r.amount as price,
+        (
+          r.visit_datetime > NOW()
+          AND r.visit_datetime <= NOW() + INTERVAL '24 hours'
+          AND r.yclients_record_id IS NOT NULL
+        ) AS "withinActionWindow",
         CASE WHEN p.id IS NOT NULL THEN true ELSE false END as "hasPrescription",
         p.id as "prescriptionId"
        FROM records r
@@ -110,6 +115,11 @@ router.get('/bookings/:bookingId', mobileAuth, async (req, res) => {
         r.staff->0->>'name'      as "specialistName",
         r.status,
         r.amount as price,
+        (
+          r.visit_datetime > NOW()
+          AND r.visit_datetime <= NOW() + INTERVAL '24 hours'
+          AND r.yclients_record_id IS NOT NULL
+        ) AS "withinActionWindow",
         COALESCE(r.raw_payload->'services', r.services) as services,
         r.staff,
         r.client_id,
