@@ -3,6 +3,7 @@ const { db } = require('../db');
 const { mobileAuth } = require('../middleware/mobile-auth');
 const { absolutizeUrl } = require('../services/portfolio');
 const { ycGet, ycGetClientCards, ycGetCardTransactions } = require('../services/yclients');
+const { updateAttendance } = require('../services/yclients-records');
 const { createLogger } = require('../logger');
 const logger = createLogger('Mobile');
 
@@ -154,30 +155,72 @@ router.get('/bookings/:bookingId', mobileAuth, async (req, res) => {
   }
 });
 
-// Cancel booking
+// Cancel booking → marks attendance as "no_show" in YClients
 router.post('/bookings/:bookingId/cancel', mobileAuth, async (req, res) => {
-  try {
-    const { reason = '' } = req.body;
+  const { reason = '' } = req.body;
+  const bookingId = req.params.bookingId;
+  const clientId  = req.client.clientId;
 
-    const booking = await db.one(
-      'SELECT * FROM records WHERE id=$1 AND client_id=$2',
-      [req.params.bookingId, req.client.clientId]
+  try {
+    const booking = await db.oneOrNone(
+      `SELECT r.id, r.client_id, r.salon_id, r.status, r.visit_datetime,
+              r.yclients_record_id,
+              s.yclients_company_id, s.yclients_partner_token, s.yclients_user_token
+         FROM records r
+         JOIN salons  s ON s.id = r.salon_id
+        WHERE r.id = $1 AND r.client_id = $2`,
+      [bookingId, clientId],
     );
 
     if (!booking) {
       return res.status(404).json({ error: 'Запись не найдена' });
     }
 
-    // Cancel in our DB
+    // Idempotent: already cancelled
+    if (booking.status === 'no_show') {
+      return res.json({ success: true, status: 'no_show' });
+    }
+
+    if (!['waiting', 'confirmed'].includes(booking.status)) {
+      return res.status(409).json({
+        error: `Запись нельзя отменить (статус: ${booking.status})`,
+      });
+    }
+
+    if (new Date(booking.visit_datetime) <= new Date()) {
+      return res.status(400).json({ error: 'Время визита уже наступило' });
+    }
+
+    if (!booking.yclients_record_id) {
+      return res.status(502).json({
+        error: 'Запись не синхронизирована с YClients',
+      });
+    }
+
+    // Push to YClients first; only mirror to local DB on success.
+    try {
+      await updateAttendance(booking, booking.yclients_record_id, -1);
+    } catch (e) {
+      logger.error(
+        `cancel bookingId=${bookingId} clientId=${clientId} ` +
+        `ycRecordId=${booking.yclients_record_id} → YC ERR: ${e.message}`,
+      );
+      return res.status(502).json({
+        error: 'Не удалось обновить статус в YClients',
+      });
+    }
+
     await db.query(
-      'UPDATE records SET status=$1, updated_at=NOW() WHERE id=$2',
-      ['cancelled', booking.id]
+      `UPDATE records SET status='no_show', updated_at=NOW() WHERE id=$1`,
+      [booking.id],
     );
 
-    res.json({
-      success: true,
-      message: 'Запись отменена'
-    });
+    logger.info(
+      `cancel bookingId=${bookingId} clientId=${clientId} ` +
+      `ycRecordId=${booking.yclients_record_id} reason="${reason}" → ok`,
+    );
+
+    res.json({ success: true, status: 'no_show' });
 
   } catch (e) {
     logger.error(`Cancel booking error: ${e.message}`);
