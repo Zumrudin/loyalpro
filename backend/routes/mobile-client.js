@@ -228,6 +228,85 @@ router.post('/bookings/:bookingId/cancel', mobileAuth, async (req, res) => {
   }
 });
 
+// Confirm booking → marks attendance as "confirmed" in YClients
+router.post('/bookings/:bookingId/confirm', mobileAuth, async (req, res) => {
+  const bookingId = req.params.bookingId;
+  const clientId  = req.client.clientId;
+
+  try {
+    const booking = await db.oneOrNone(
+      `SELECT r.id, r.client_id, r.salon_id, r.status, r.visit_datetime,
+              r.yclients_record_id,
+              s.yclients_company_id, s.yclients_partner_token, s.yclients_user_token
+         FROM records r
+         JOIN salons  s ON s.id = r.salon_id
+        WHERE r.id = $1 AND r.client_id = $2`,
+      [bookingId, clientId],
+    );
+
+    if (!booking) {
+      return res.status(404).json({ error: 'Запись не найдена' });
+    }
+
+    // Idempotent
+    if (booking.status === 'confirmed') {
+      return res.json({ success: true, status: 'confirmed' });
+    }
+
+    if (booking.status !== 'waiting') {
+      return res.status(409).json({
+        error: `Запись нельзя подтвердить (статус: ${booking.status})`,
+      });
+    }
+
+    const visit = new Date(booking.visit_datetime);
+    const now   = new Date();
+    const delta = visit.getTime() - now.getTime();
+    if (delta <= 0) {
+      return res.status(400).json({ error: 'Время визита уже наступило' });
+    }
+    if (delta > 24 * 60 * 60 * 1000) {
+      return res.status(400).json({
+        error: 'Подтверждение доступно только за 24 часа до визита',
+      });
+    }
+
+    if (!booking.yclients_record_id) {
+      return res.status(502).json({
+        error: 'Запись не синхронизирована с YClients',
+      });
+    }
+
+    try {
+      await updateAttendance(booking, booking.yclients_record_id, 2);
+    } catch (e) {
+      logger.error(
+        `confirm bookingId=${bookingId} clientId=${clientId} ` +
+        `ycRecordId=${booking.yclients_record_id} → YC ERR: ${e.message}`,
+      );
+      return res.status(502).json({
+        error: 'Не удалось обновить статус в YClients',
+      });
+    }
+
+    await db.query(
+      `UPDATE records SET status='confirmed', updated_at=NOW() WHERE id=$1`,
+      [booking.id],
+    );
+
+    logger.info(
+      `confirm bookingId=${bookingId} clientId=${clientId} ` +
+      `ycRecordId=${booking.yclients_record_id} → ok`,
+    );
+
+    res.json({ success: true, status: 'confirmed' });
+
+  } catch (e) {
+    logger.error(`Confirm booking error: ${e.message}`);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // Reschedule booking
 router.post('/bookings/:bookingId/reschedule', mobileAuth, async (req, res) => {
   try {
