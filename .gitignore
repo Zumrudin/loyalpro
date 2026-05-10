@@ -5,3 +5,4 @@ backend/node_modules/
 logs/
 .mcp.json
 .aider*
+.worktrees/
