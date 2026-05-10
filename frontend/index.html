@@ -16,6 +16,12 @@
 <link rel="stylesheet" href="css/features.css">
 </head>
 <body>
+<div class="aurora" aria-hidden="true">
+  <div class="orb lime"></div>
+  <div class="orb sage"></div>
+  <div class="orb cream"></div>
+  <div class="orb faint"></div>
+</div>
 
 <!-- ═══════════════ LOGIN / REGISTER ═══════════════ -->
 <div id="loginScreen" class="lw">
@@ -1584,6 +1590,14 @@ function fireConfetti() {
 // loadDashboard → js/pages/dashboard.js
 
 // submitBonus → js/pages/clients.js
+
+document.addEventListener('mousemove', (e) => {
+  const el = e.target.closest && e.target.closest('.gl');
+  if (!el) return;
+  const r = el.getBoundingClientRect();
+  el.style.setProperty('--mx', ((e.clientX - r.left) / r.width * 100) + '%');
+  el.style.setProperty('--my', ((e.clientY - r.top) / r.height * 100) + '%');
+}, { passive: true });
 </script>
 <script src="js/pages/staff.js"></script>
 <script src="js/pages/home-care.js"></script>

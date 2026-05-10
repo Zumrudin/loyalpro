@@ -52,3 +52,31 @@
 }
 [data-theme="glass"].no-motion .aurora .orb,
 .no-motion[data-theme="glass"] .aurora .orb { animation: none !important; }
+
+/* ── glass-card mixin ─────────────────────────────────────── */
+[data-theme="glass"] .gl {
+  position: relative;
+  background: var(--glass);
+  -webkit-backdrop-filter: blur(20px) saturate(140%);
+  backdrop-filter: blur(20px) saturate(140%);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-glass);
+  overflow: hidden;
+}
+[data-theme="glass"] .gl::before {
+  content: '';
+  position: absolute; inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  background:
+    radial-gradient(circle at var(--mx,50%) var(--my,50%),
+                    rgba(255,255,255,.42) 0%,
+                    transparent 45%);
+  opacity: 0;
+  transition: opacity .25s ease;
+}
+[data-theme="glass"] .gl:hover::before { opacity: 1; }
+
+@supports not ((-webkit-backdrop-filter: blur(20px)) or (backdrop-filter: blur(20px))) {
+  [data-theme="glass"] .gl { background: rgba(252,252,248,.92); }
+}
