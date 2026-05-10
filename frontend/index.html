@@ -80,38 +80,56 @@
 </div>
 
 <!-- ═══════════════ APP ═══════════════ -->
-<div id="app">
-  <div class="topbar">
-    <div class="tb-logo">
-      <div class="tb-li"><svg viewBox="0 0 24 24"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg></div>
-      <div class="tb-ln">LoyalPro</div>
-    </div>
-    <nav class="tb-nav" id="mainNav">
-      <div class="tn active" data-p="dashboard" data-roles="owner,admin" onclick="nav(this)">Дашборд</div>
-      <div class="tn" data-p="clients" data-roles="owner,admin" onclick="nav(this)">Клиенты</div>
-      <div class="tn" data-p="records" data-roles="owner,admin" onclick="nav(this)">Записи</div>
-      <div class="tn" data-p="staff-analytics" data-roles="owner,admin" onclick="nav(this)">Сотрудники</div>
-      <div class="tn" data-p="segments" data-roles="owner,admin" onclick="nav(this)">Сегменты</div>
-      <div class="tn" data-p="home-care" data-roles="owner,admin,specialist" onclick="nav(this)">Уход</div>
-      <div class="tn" data-p="settings" data-roles="owner,admin" onclick="nav(this)">Настройки</div>
-      <div class="tn" data-p="users" data-roles="owner" onclick="nav(this)">Пользователи</div>
-    </nav>
-    <div class="tb-right">
-      <div id="syncSt" style="font-size:11.5px;color:var(--t3)"></div>
-      <button class="btn btn-sec btn-sm" id="syncBtn" onclick="triggerSync()">
-        <svg viewBox="0 0 24 24"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>Синхронизировать
-      </button>
-      <div style="display:flex;align-items:center;gap:5px">
-        <span class="dm-label" id="dmLabel">🌙</span>
-        <button class="dm-btn" id="dmToggle" onclick="toggleDarkMode()" title="Тёмная тема"></button>
-      </div>
-      <div class="t-av" id="topAv">?</div>
-      <span id="topName" style="font-size:12.5px;font-weight:600;color:var(--t2)"></span>
-      <button class="btn btn-sm" style="color:var(--t3);border:1px solid var(--bd)" onclick="doLogout()">Выйти</button>
-    </div>
-  </div>
+<div class="app" id="app" style="display:none">
 
-  <div class="content">
+  <aside class="side gl" id="mainNav">
+    <div class="brand">
+      <div class="brand-mark">L</div>
+      <div class="brand-name">loyal<em>.pro</em></div>
+    </div>
+
+    <div class="nav-section">главное</div>
+    <nav class="nav">
+      <a class="nav-a active" data-p="dashboard"        data-roles="owner,admin"            onclick="nav(this); return false" href="#dashboard"><span class="nav-ic">📊</span>Дашборд</a>
+      <a class="nav-a"        data-p="clients"          data-roles="owner,admin"            onclick="nav(this); return false" href="#clients"><span class="nav-ic">👥</span>Клиенты</a>
+      <a class="nav-a"        data-p="records"          data-roles="owner,admin"            onclick="nav(this); return false" href="#records"><span class="nav-ic">📅</span>Записи</a>
+      <a class="nav-a"        data-p="segments"         data-roles="owner,admin"            onclick="nav(this); return false" href="#segments"><span class="nav-ic">📈</span>Сегменты</a>
+      <a class="nav-a"        data-p="staff-analytics"  data-roles="owner,admin"            onclick="nav(this); return false" href="#staff"><span class="nav-ic">✂️</span>Сотрудники</a>
+    </nav>
+
+    <div class="nav-section">сервис</div>
+    <nav class="nav">
+      <a class="nav-a"        data-p="home-care"        data-roles="owner,admin,specialist" onclick="nav(this); return false" href="#home-care"><span class="nav-ic">🏠</span>Уход</a>
+      <a class="nav-a"        data-p="settings"         data-roles="owner,admin"            onclick="nav(this); return false" href="#settings"><span class="nav-ic">⚙️</span>Настройки</a>
+      <a class="nav-a"        data-p="users"            data-roles="owner"                  onclick="nav(this); return false" href="#users"><span class="nav-ic">🔐</span>Пользователи</a>
+    </nav>
+
+    <div class="side-foot">
+      <button class="icon-btn gl" id="syncBtn" onclick="triggerSync()" title="Синхронизация">↻</button>
+      <button class="icon-btn gl" onclick="doLogout()" title="Выйти">⏏</button>
+      <div class="user-chip">
+        <div class="user-ava" id="topAv">?</div>
+        <div>
+          <div class="user-name" id="topName">—</div>
+          <div class="user-role" id="topRole"></div>
+        </div>
+      </div>
+    </div>
+  </aside>
+
+  <main class="main">
+
+    <div class="topbar">
+      <button class="burger" id="navBurger" aria-label="Меню" onclick="toggleDrawer()">☰</button>
+      <div class="crumbs">
+        <strong id="crumbTitle">Дашборд</strong>
+      </div>
+      <div class="top-actions">
+        <!-- intentionally empty for now; search/notifications come later -->
+      </div>
+    </div>
+
+
 
     <!-- ── DASHBOARD ── -->
     <div class="page active" id="page-dashboard">
@@ -932,7 +950,9 @@
       </div>
     </div>
 
-  </div><!-- /content -->
+  </main>
+
+  <div class="drawer-overlay" id="drawerOverlay" onclick="toggleDrawer(false)"></div>
 </div><!-- /app -->
 
 <!-- HOME CARE FORM OVERLAY -->
