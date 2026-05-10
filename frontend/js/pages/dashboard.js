@@ -251,7 +251,8 @@ async function loadDashboard() {
     buildTopSvc(d.topServices);
     buildBfChart(bon);
     buildLvlChart(d.levelDist);
-    if (d.syncStatus?.finished_at) document.getElementById('syncSt').textContent = 'Синхр.: ' + timeSince(d.syncStatus.finished_at);
+    const syncStEl = document.getElementById('syncSt');
+    if (syncStEl && d.syncStatus?.finished_at) syncStEl.textContent = 'Синхр.: ' + timeSince(d.syncStatus.finished_at);
 
     cascadeCards('#page-dashboard .sc', 50);
 
