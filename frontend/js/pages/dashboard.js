@@ -65,6 +65,10 @@ function renderDashMetrics(dash) {
     const rev = parseFloat(r.revenue || 0), rec = parseInt(r.records || 0);
     return rec > 0 ? rev / rec : 0;
   }));
+  setDelta('mtAvgDelta', computeHalfDelta(daily.map(r => {
+    const rev = parseFloat(r.revenue || 0), rec = parseInt(r.records || 0);
+    return { _avg: rec > 0 ? rev / rec : 0 };
+  }), '_avg'));
 
   setText('mtBonuses', String(Math.round(s.periodBonuses || 0)));
   setSpark('mtBonusesSpark', daily.map(r => parseFloat(r.bonuses_accrued || 0)));
@@ -101,7 +105,7 @@ function renderCashFlowChart(dash) {
   const grid = [P, P + (H - 2 * P) / 3, P + 2 * (H - 2 * P) / 3, H - P]
     .map(y => `<line class="grid-line" x1="0" y1="${y}" x2="${W}" y2="${y}"/>`).join('');
   const labels = daily.length <= 14
-    ? daily.map((r, i) => `<text class="axis-text" x="${xs[i] - 8}" y="${H - 8}">${(r.visit_date || '').slice(8)}</text>`).join('')
+    ? daily.map((r, i) => `<text class="axis-text" x="${xs[i] - 8}" y="${H - 8}">${escapeHtml((r.visit_date || '').slice(8))}</text>`).join('')
     : '';
 
   wrap.innerHTML = `

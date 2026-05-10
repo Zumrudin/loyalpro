@@ -141,7 +141,7 @@
       <h1 class="hero-title">сегодня — <em>хороший</em> день для красоты.</h1>
       <p class="hero-sub" id="heroSub">—</p>
     </div>
-    <div class="period" role="tablist" id="dashPeriod">
+    <div class="period" id="dashPeriod">
       <button data-d="1">день</button>
       <button data-d="7" class="on">7 дней</button>
       <button data-d="30">30 дней</button>
@@ -1472,6 +1472,7 @@ async function loadSettings() {
     loadLs();
     loadSyncLogs();
     loadTemplateSettings();
+    if (typeof loadAppearance === 'function') loadAppearance();
   } catch(e){notify(e.message,'err');}
 }
 async function saveSalon() {

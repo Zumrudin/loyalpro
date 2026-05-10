@@ -57,14 +57,38 @@ function navStg(id, el) {
   if (id === 'appearance') loadAppearance();
 }
 
+let _drawerLastFocus = null;
+
 function toggleDrawer(force) {
   const html = document.documentElement;
-  const open = (typeof force === 'boolean') ? force : !html.classList.contains('drawer-open');
+  const wasOpen = html.classList.contains('drawer-open');
+  const open = (typeof force === 'boolean') ? force : !wasOpen;
+  if (open === wasOpen) return;
   html.classList.toggle('drawer-open', open);
+
+  if (open) {
+    _drawerLastFocus = document.activeElement;
+    const firstLink = document.querySelector('#mainNav .nav-a:not([style*="display: none"])');
+    if (firstLink) firstLink.focus();
+  } else if (_drawerLastFocus && typeof _drawerLastFocus.focus === 'function') {
+    _drawerLastFocus.focus();
+    _drawerLastFocus = null;
+  }
 }
 
+// Tab-key trap inside drawer when open
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && document.documentElement.classList.contains('drawer-open')) toggleDrawer(false);
+  if (e.key !== 'Tab') return;
+  if (!document.documentElement.classList.contains('drawer-open')) return;
+  const sidebar = document.getElementById('mainNav');
+  if (!sidebar) return;
+  const focusables = Array.from(sidebar.querySelectorAll('a, button, [tabindex]:not([tabindex="-1"])'))
+    .filter(el => !el.hasAttribute('disabled') && el.offsetParent !== null);
+  if (!focusables.length) return;
+  const first = focusables[0], last = focusables[focusables.length - 1];
+  if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+  else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
 });
 
 async function launchApp() {
