@@ -67,13 +67,170 @@ function extractCategoryTitle(g, catMap) {
  * }>}
  */
 async function syncGoodsCatalog(salon) {
-  // SCAFFOLD ONLY — body implemented in Wave 2 (Plan 02).
-  // Self-guard against missing creds (matches syncGoodsCategories line 9):
+  // Self-guard (D-context Pitfall 5, matches services/home-care.js:9 pattern)
   if (!salon || !salon.yclients_company_id || !salon.yclients_user_token) {
     return { skipped: true, reason: 'no-yclients' };
   }
-  logger.warn(`syncGoodsCatalog: scaffold called for salon ${salon.id} — body not yet implemented`);
-  return { skipped: true, reason: 'not-implemented' };
+  const cid = salon.yclients_company_id;
+  const salonId = salon.id;
+  const startedAt = Date.now();
+  const errors = [];
+  const PAGE_SIZE = 200;
+  const MAX_PAGES_PER_CATEGORY = 50;        // T-03-04 hard cap (DoS guard)
+  const PACE_MS = 200;                       // D-11
+  const BOOTSTRAP_PACE_MS = 150;             // matches services/staff.js:58
+  let inserted = 0, updated = 0, goodsSeen = 0;
+
+  logger.info(`Salon ${salonId}: starting catalog sync (cid=${cid})`);
+
+  // ─── STEP A — Bootstrap category id list (D-07, D-08, D-09) ─────────
+  const catMap = {};        // cat_id → cat_title (best-effort, used by extractCategoryTitle)
+  const catIds = new Set();
+
+  // A1. Try /good_categories — opportunistic, may 404 (D-07)
+  try {
+    const cats = await ycGet(salon, `/good_categories/${cid}`);
+    if (Array.isArray(cats)) {
+      for (const c of cats) {
+        if (c && c.id != null && c.title) {
+          catMap[c.id] = c.title;
+          catIds.add(c.id);
+        }
+      }
+      logger.info(`Salon ${salonId}: /good_categories returned ${catIds.size} categories`);
+    }
+  } catch (e) {
+    logger.warn(`Salon ${salonId}: /good_categories failed (${e.message}); will fallback`);
+  }
+
+  // A2. Reuse known cat_ids from previous syncs (D-09)
+  if (catIds.size === 0) {
+    const known = await db.any(
+      `SELECT DISTINCT category_id FROM yclients_goods_catalog
+        WHERE salon_id = $1 AND category_id IS NOT NULL`,
+      [salonId]
+    );
+    for (const r of known) catIds.add(r.category_id);
+    if (catIds.size > 0) {
+      logger.info(`Salon ${salonId}: reused ${catIds.size} cat_ids from existing catalog`);
+    }
+  }
+
+  // A3. Bootstrap from goods_sale_items via per-good /goods/{cid}/{good_id} (D-08)
+  // NOTE: goods_sale_items has NO numeric category_id column (verified by mcp__postgres__query
+  // before planning); must hit per-good endpoint to discover cat_ids on first-ever sync.
+  if (catIds.size === 0) {
+    const sold = await db.any(
+      `SELECT DISTINCT gsi.yclients_goods_id AS gid
+         FROM goods_sale_items gsi
+         JOIN goods_sales gs ON gs.id = gsi.sale_id
+        WHERE gs.salon_id = $1 AND gsi.yclients_goods_id IS NOT NULL`,
+      [salonId]
+    );
+    logger.info(`Salon ${salonId}: bootstrapping cat_ids from ${sold.length} sold goods`);
+    for (let i = 0; i < sold.length; i++) {
+      const gid = sold[i].gid;
+      try {
+        const data = await ycGet(salon, `/goods/${cid}/${gid}`);
+        if (data && data.category_id != null) catIds.add(data.category_id);
+        if (data && data.category && typeof data.category === 'object' && data.category.title && data.category_id != null) {
+          catMap[data.category_id] = data.category.title;
+        }
+      } catch (e) {
+        errors.push({ step: 'bootstrap', goodId: gid, msg: e.message });
+      }
+      await new Promise(r => setTimeout(r, BOOTSTRAP_PACE_MS));
+    }
+  }
+
+  // A4. If still nothing — bail; cron will retry (D-19 + D-12)
+  if (catIds.size === 0) {
+    logger.warn(`Salon ${salonId}: no category_ids discovered; skipping`);
+    return { skipped: true, reason: 'no-categories', errors: errors.length, errorSamples: errors.slice(0, 5) };
+  }
+
+  // ─── STEP B — Enumerate goods per category (D-06, D-11, D-12) ───────
+  const catIdList = [...catIds];
+  logger.info(`Salon ${salonId}: enumerating ${catIdList.length} categories`);
+
+  for (const catId of catIdList) {
+    try {
+      let page = 1;
+      while (page <= MAX_PAGES_PER_CATEGORY) {        // T-03-04 hard cap
+        const goods = await ycGet(salon, `/goods/${cid}`, { category_id: catId, count: PAGE_SIZE, page });
+        if (!Array.isArray(goods) || goods.length === 0) break;
+        for (const g of goods) {
+          if (g.good_id == null) continue;            // D-10 — same gotcha as bug fix in Wave 1
+          const categoryTitle = extractCategoryTitle(g, catMap);
+          const result = await db.one(`
+            INSERT INTO yclients_goods_catalog
+              (salon_id, yclients_good_id, category_id, category_title, title, article, last_seen_at, is_archived)
+            VALUES ($1, $2, $3, $4, $5, $6, NOW(), FALSE)
+            ON CONFLICT (salon_id, yclients_good_id) DO UPDATE
+              SET category_id    = EXCLUDED.category_id,
+                  category_title = EXCLUDED.category_title,
+                  title          = EXCLUDED.title,
+                  article        = EXCLUDED.article,
+                  last_seen_at   = NOW(),
+                  is_archived    = FALSE,
+                  updated_at     = NOW()
+            RETURNING (xmax = 0) AS is_insert
+          `, [
+            salonId,
+            g.good_id,
+            g.category_id != null ? g.category_id : null,
+            categoryTitle,
+            String(g.title || '').slice(0, 500),
+            g.article != null ? String(g.article).slice(0, 200) : null,
+          ]);
+          if (result.is_insert) inserted++; else updated++;
+          goodsSeen++;
+        }
+        if (goods.length < PAGE_SIZE) break;
+        page++;
+        await new Promise(r => setTimeout(r, PACE_MS));   // D-11
+      }
+      if (page > MAX_PAGES_PER_CATEGORY) {
+        logger.warn(`Salon ${salonId}: category ${catId} hit MAX_PAGES_PER_CATEGORY=${MAX_PAGES_PER_CATEGORY} cap`);
+      }
+    } catch (e) {
+      errors.push({ step: 'enumerate', catId, msg: e.message });
+      logger.warn(`Salon ${salonId}: category ${catId} failed: ${e.message}`);
+      // continue to next category (D-12 — partial-failure resilience)
+    }
+  }
+
+  // ─── STEP C — Soft-delete stale (D-13) ───────────────────────────────
+  const archived = await db.query(`
+    UPDATE yclients_goods_catalog
+       SET is_archived = TRUE, updated_at = NOW()
+     WHERE salon_id = $1
+       AND last_seen_at < NOW() - INTERVAL '24 hours'
+       AND NOT is_archived
+    RETURNING id
+  `, [salonId]);
+
+  // ─── STEP D — Invalidate tree cache (D-18) ──────────────────────────
+  clearTreeCache(salonId);
+
+  const durationMs = Date.now() - startedAt;
+  logger.info(
+    `Salon ${salonId}: catalog sync done. ` +
+    `inserted=${inserted} updated=${updated} archived=${archived.rowCount} ` +
+    `goodsSeen=${goodsSeen} categories=${catIdList.length} errors=${errors.length} duration=${durationMs}ms`
+  );
+
+  return {
+    salonId,
+    inserted,
+    updated,
+    archived: archived.rowCount,
+    goodsSeen,
+    categoriesSeen: catIdList.length,
+    errors: errors.length,
+    errorSamples: errors.slice(0, 5),
+    durationMs,
+  };
 }
 
 module.exports = {
