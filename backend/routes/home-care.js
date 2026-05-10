@@ -9,6 +9,7 @@ const { auth }  = require('../middleware/auth');
 const { ycGet } = require('../services/yclients');
 const { getTreeCache, setTreeCache } = require('../services/yclients');
 const { syncGoodsCategories }        = require('../services/home-care');
+const { isBlacklisted }              = require('../services/yclients-goods-catalog');
 const { buildHomeCareHtml, BRAND_CONFIG } = require('../homecare-template');
 const config = require('../config');
 const { createLogger } = require('../logger');
@@ -100,14 +101,24 @@ async function loadTemplateConfig(salonId, salonName) {
 router.get('/products', auth, async (req, res) => {
   try {
     const { search = '', limit = 10 } = req.query;
-    res.json(await db.any(
-      `SELECT DISTINCT ON (lower(trim(title))) title, yclients_goods_id as id
-       FROM goods_sale_items gsi JOIN goods_sales gs ON gs.id=gsi.sale_id
-       WHERE gs.salon_id=$1 AND ($2='' OR title ILIKE '%'||$2||'%')
-         AND title IS NOT NULL AND trim(title)!=''
-       ORDER BY lower(trim(title)), title LIMIT $3`,
-      [req.user.salonId, search, parseInt(limit)]
-    ));
+    const cap = parseInt(limit) || 10;
+    // Pull 3× cap to compensate for client-side blacklist filter
+    const rows = await db.any(
+      `SELECT title, yclients_good_id AS id, category_title
+         FROM yclients_goods_catalog
+        WHERE salon_id = $1
+          AND NOT is_archived
+          AND title IS NOT NULL AND trim(title) != ''
+          AND ($2 = '' OR title ILIKE '%' || $2 || '%')
+        ORDER BY lower(trim(title)), title
+        LIMIT $3`,
+      [req.user.salonId, search, cap * 3]
+    );
+    const filtered = rows
+      .filter(r => !isBlacklisted(r.category_title))
+      .slice(0, cap)
+      .map(({ title, id }) => ({ title, id }));   // shape preserved
+    res.json(filtered);
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
