@@ -1,0 +1,54 @@
+/* ── glass.css — applied only under [data-theme="glass"] ────── */
+
+[data-theme="glass"] body {
+  background:
+    radial-gradient(ellipse 90% 70% at 50% 100%, #fffef7 0%, transparent 60%),
+    linear-gradient(180deg, #fcfcf8 0%, #f5f4ee 100%);
+  min-height: 100vh;
+  letter-spacing: -.005em;
+  font-weight: 400;
+}
+
+/* ── Aurora ─────────────────────────────────────────────────── */
+[data-theme="glass"] .aurora {
+  position: fixed; inset: 0; z-index: 0;
+  pointer-events: none; overflow: hidden;
+}
+[data-theme="glass"] .aurora .orb {
+  position: absolute; border-radius: 50%;
+  filter: blur(90px); will-change: transform;
+}
+[data-theme="glass"] .aurora .orb.lime {
+  width: 760px; height: 760px; left: -220px; top: -240px;
+  background: radial-gradient(circle, #d3fa99 0%, #d3fa99 22%, transparent 70%);
+  opacity: .32;
+  animation: aurora-drift1 24s ease-in-out infinite;
+}
+[data-theme="glass"] .aurora .orb.sage {
+  width: 720px; height: 720px; right: -220px; top: -180px;
+  background: radial-gradient(circle, #cdd9c4 0%, #cdd9c4 26%, transparent 70%);
+  opacity: .5;
+  animation: aurora-drift2 26s ease-in-out infinite;
+}
+[data-theme="glass"] .aurora .orb.cream {
+  width: 640px; height: 640px; left: 32%; bottom: -180px;
+  background: radial-gradient(circle, #f4f3ec 0%, #f4f3ec 30%, transparent 70%);
+  opacity: .85;
+  animation: aurora-drift3 28s ease-in-out infinite;
+}
+[data-theme="glass"] .aurora .orb.faint {
+  width: 480px; height: 480px; right: 22%; bottom: -120px;
+  background: radial-gradient(circle, #dde2d4 0%, #dde2d4 28%, transparent 70%);
+  opacity: .5;
+  animation: aurora-drift4 30s ease-in-out infinite;
+}
+@keyframes aurora-drift1 { 0%,100% { transform: translate(0,0) scale(1); } 50% { transform: translate(100px,70px) scale(1.1); } }
+@keyframes aurora-drift2 { 0%,100% { transform: translate(0,0) scale(1); } 50% { transform: translate(-80px,90px) scale(1.06); } }
+@keyframes aurora-drift3 { 0%,100% { transform: translate(0,0) scale(1); } 50% { transform: translate(60px,-50px) scale(1.04); } }
+@keyframes aurora-drift4 { 0%,100% { transform: translate(0,0) scale(1); } 50% { transform: translate(-40px,-60px) scale(1.08); } }
+
+@media (prefers-reduced-motion: reduce) {
+  [data-theme="glass"] .aurora .orb { animation: none !important; }
+}
+[data-theme="glass"].no-motion .aurora .orb,
+.no-motion[data-theme="glass"] .aurora .orb { animation: none !important; }
