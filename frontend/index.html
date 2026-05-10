@@ -133,65 +133,97 @@
 
     <!-- ── DASHBOARD ── -->
     <div class="page active" id="page-dashboard">
-      <div id="syncBanner" class="sync-banner" style="display:none">
-        <span class="spinner"></span><span id="syncBannerText">Синхронизация...</span>
-      </div>
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
-        <div style="font-size:16px;font-weight:700">Обзор</div>
-        <div class="pb-btns">
-          <button class="pb-btn active" onclick="setPeriod(7,this)">7 дней</button>
-          <button class="pb-btn" onclick="setPeriod(30,this)">30 дней</button>
-          <button class="pb-btn" onclick="setPeriod(90,this)">90 дней</button>
-        </div>
-      </div>
-      <div class="sg" style="grid-template-columns:repeat(5,1fr)">
-        <div class="sc"><div class="sl">Клиентов в базе</div><div class="sv" id="ds1">—</div><div class="sd up" id="ds1s"></div></div>
-        <div class="sc"><div class="sl">Выручка за период</div><div class="sv" id="ds3">—</div><div class="sd" id="ds3s"></div></div>
-        <div class="sc"><div class="sl">Клиентов с картой лояльности</div><div class="sv" id="ds5">—</div><div class="sd" id="ds5s"></div></div>
-        <div class="sc"><div class="sl">Активных бонусов</div><div class="sv" id="ds2">—</div><div class="sd" id="ds2s"></div></div>
-        <div class="sc"><div class="sl">Подписаны в Telegram</div><div class="sv" id="ds6">—</div><div class="sd" id="ds6s"></div></div>
-      </div>
-      <div class="sg mb" style="grid-template-columns:repeat(5,1fr)">
-        <div class="sc"><div class="sl">Средний чек</div><div class="sv" id="an1">—</div><div class="sd" id="an1s"></div></div>
-        <div class="sc"><div class="sl">Начислено бонусов</div><div class="sv" id="an2" style="color:var(--a)">—</div><div class="sd up" id="an2s"></div></div>
-        <div class="sc"><div class="sl">Списано бонусов</div><div class="sv" id="an5" style="color:var(--danger)">—</div><div class="sd dn" id="an5s"></div></div>
-        <div class="sc"><div class="sl">ROI программы</div><div class="sv" id="an3" style="color:var(--a)">—</div><div class="sd" id="an3s">выручка / начисления</div></div>
-        <div class="sc"><div class="sl">Новых клиентов</div><div class="sv" id="an4">—</div><div class="sd" id="an4s"></div></div>
-      </div>
-      <div class="g32 mb">
-        <div class="card"><div class="ct">Выручка по дням</div><div style="height:220px"><canvas id="revChart"></canvas></div></div>
-        <div class="card"><div class="ct">Уровни клиентов</div><div id="lvlDash" style="display:flex;flex-direction:column;gap:10px;padding-top:4px"></div></div>
-      </div>
-      <div class="g2 mb">
-        <div class="card"><div class="ct">Последние начисления</div><div id="recentTx"><div class="empty">Нет данных</div></div></div>
-        <div class="card" style="padding:0">
-          <div class="ct" style="padding:18px 18px 0 18px">Топ услуг</div>
-          <div class="tw"><table>
-            <thead>
-              <tr>
-                <th class="th-sort asc" onclick="svcSort('service_name')" data-col="service_name">
-                  <span>Услуга</span><i class="sort-icon"></i>
-                </th>
-                <th class="th-sort" onclick="svcSort('cnt')" data-col="cnt">
-                  <span>Количество</span><i class="sort-icon"></i>
-                </th>
-                <th class="th-sort" onclick="svcSort('total_amount')" data-col="total_amount">
-                  <span>Сумма ₽</span><i class="sort-icon"></i>
-                </th>
-              </tr>
-            </thead>
-            <tbody id="svcBody"><tr><td colspan="3" class="empty">Нет данных</td></tr></tbody>
-          </table>
-          <div style="padding:12px 18px 18px 18px;text-align:center">
-            <button id="svcToggleBtn" onclick="toggleSvc()" style="background:none;border:1px solid var(--b3);padding:8px 16px;border-radius:4px;cursor:pointer;font-size:12px;color:var(--t2);display:none">Показать все ▼</button>
-          </div></div>
-        </div>
-      </div>
-      <div class="g2">
-        <div class="card"><div class="ct">Бонусы: начислено vs потрачено</div><div style="height:200px"><canvas id="bfChart"></canvas></div></div>
-        <div class="card"><div class="ct">Распределение по уровням</div><div style="height:200px"><canvas id="lvlChart"></canvas></div></div>
-      </div>
+
+  <!-- Hero -->
+  <section class="hero gl">
+    <div>
+      <div class="hero-greet" id="heroGreet">доброе утро</div>
+      <h1 class="hero-title">сегодня — <em>хороший</em> день для красоты.</h1>
+      <p class="hero-sub" id="heroSub">—</p>
     </div>
+    <div class="period" role="tablist" id="dashPeriod">
+      <button data-d="1">день</button>
+      <button data-d="7" class="on">7 дней</button>
+      <button data-d="30">30 дней</button>
+      <button data-d="365">год</button>
+    </div>
+  </section>
+
+  <!-- Metrics -->
+  <section class="metrics" id="dashMetrics">
+    <article class="metric gl" data-k="revenue">
+      <div class="m-head"><span class="m-label">выручка</span></div>
+      <div class="m-value" id="mtRevenue">—</div>
+      <div class="m-foot"><span class="delta" id="mtRevenueDelta"></span><span class="m-note" id="mtRevenueNote">vs прошлый период</span></div>
+      <svg class="m-spark" viewBox="0 0 88 30" preserveAspectRatio="none"><path id="mtRevenueSpark" d="" stroke="#1b2710" stroke-width="1.3" fill="none" stroke-linejoin="round" stroke-linecap="round"/></svg>
+    </article>
+    <article class="metric gl" data-k="visits">
+      <div class="m-head"><span class="m-label">визиты</span></div>
+      <div class="m-value" id="mtVisits">—</div>
+      <div class="m-foot"><span class="delta" id="mtVisitsDelta"></span><span class="m-note" id="mtVisitsNote"></span></div>
+      <svg class="m-spark" viewBox="0 0 88 30" preserveAspectRatio="none"><path id="mtVisitsSpark" d="" stroke="#1b2710" stroke-width="1.3" fill="none" stroke-linejoin="round" stroke-linecap="round"/></svg>
+    </article>
+    <article class="metric gl" data-k="avg">
+      <div class="m-head"><span class="m-label">средний чек</span></div>
+      <div class="m-value" id="mtAvg">—</div>
+      <div class="m-foot"><span class="delta" id="mtAvgDelta"></span><span class="m-note">за период</span></div>
+      <svg class="m-spark" viewBox="0 0 88 30" preserveAspectRatio="none"><path id="mtAvgSpark" d="" stroke="#1b2710" stroke-width="1.3" fill="none" stroke-linejoin="round" stroke-linecap="round"/></svg>
+    </article>
+    <article class="metric gl" data-k="bonuses">
+      <div class="m-head"><span class="m-label">бонусы</span></div>
+      <div class="m-value" id="mtBonuses">—</div>
+      <div class="m-foot"><span class="delta" id="mtBonusesDelta"></span><span class="m-note" id="mtBonusesNote"></span></div>
+      <svg class="m-spark" viewBox="0 0 88 30" preserveAspectRatio="none"><path id="mtBonusesSpark" d="" stroke="#1b2710" stroke-width="1.3" fill="none" stroke-linejoin="round" stroke-linecap="round" stroke-opacity=".5"/></svg>
+    </article>
+  </section>
+
+  <!-- Chart + top services -->
+  <section class="grid-2">
+    <article class="card gl">
+      <div class="card-head">
+        <div>
+          <h2 class="card-title">денежный поток</h2>
+          <div class="card-sub">выручка, начисления и списания</div>
+        </div>
+        <div class="legend">
+          <span><i style="background:#1b2710"></i>выручка</span>
+          <span><i style="background:#6b8c3a"></i>начислено</span>
+          <span><i style="background:#b89868"></i>списано</span>
+        </div>
+      </div>
+      <div class="chart-wrap" id="cashFlowChart"></div>
+    </article>
+
+    <article class="card gl">
+      <div class="card-head">
+        <div>
+          <h2 class="card-title">топ услуг</h2>
+          <div class="card-sub">по числу визитов</div>
+        </div>
+      </div>
+      <div class="svc" id="topServicesList"></div>
+    </article>
+  </section>
+
+  <!-- Bottom row: segments + upcoming -->
+  <section class="grid-2">
+    <article class="card gl">
+      <div class="card-head"><div><h2 class="card-title">сегменты клиентов</h2><div class="card-sub" id="segCardSub">—</div></div></div>
+      <div class="seg" id="segmentsWidget"></div>
+    </article>
+    <article class="card gl">
+      <div class="card-head"><div><h2 class="card-title">сегодня в зале</h2><div class="card-sub">ближайшие записи</div></div></div>
+      <div id="upcomingList"></div>
+    </article>
+  </section>
+
+  <!-- Activity feed full width -->
+  <article class="card gl">
+    <div class="card-head"><div><h2 class="card-title">лента бонусов</h2><div class="card-sub">последние операции</div></div></div>
+    <div class="feed" id="feedList"></div>
+  </article>
+
+</div>
 
     <!-- ── CLIENTS ── -->
     <div class="page" id="page-clients">
