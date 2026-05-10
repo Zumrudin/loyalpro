@@ -23,10 +23,10 @@ async function syncGoodsCategories(salon) {
       const goods = await ycGet(salon, `/goods/${cid}`, { count: 200, page });
       if (!Array.isArray(goods) || !goods.length) break;
       for (const g of goods) {
-        if (g.id == null) continue;
-        if (g.category && typeof g.category === 'object' && g.category.title) goodCatMap[g.id] = g.category.title;
-        else if (g.category && typeof g.category === 'string') goodCatMap[g.id] = g.category;
-        else if (g.category_id != null && catMap[g.category_id]) goodCatMap[g.id] = catMap[g.category_id];
+        if (g.good_id == null) continue;
+        if (g.category && typeof g.category === 'object' && g.category.title) goodCatMap[g.good_id] = g.category.title;
+        else if (g.category && typeof g.category === 'string') goodCatMap[g.good_id] = g.category;
+        else if (g.category_id != null && catMap[g.category_id]) goodCatMap[g.good_id] = catMap[g.category_id];
       }
       if (goods.length < 200) break;
       page++;
