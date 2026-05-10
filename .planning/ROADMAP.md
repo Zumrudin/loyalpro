@@ -32,10 +32,10 @@
 **Branch:** `fix/home-care-goods-catalog-sync`
 
 **Depends on:** —
-**Plans:** 3/4 plans executed
+**Plans:** 4/4 plans complete
 
 Plans:
 - [x] 03-01-PLAN.md — Wave 1: миграция yclients_goods_catalog + scaffold services/yclients-goods-catalog.js + bug fix g.id→g.good_id (3 tasks)
 - [x] 03-02-PLAN.md — Wave 2: реализация syncGoodsCatalog body — bootstrap + enumerate + UPSERT + soft-delete + clearTreeCache (1 task)
 - [x] 03-03-PLAN.md — Wave 3: repointing /products + /product-tree на новый каталог + юнит-тесты (3 tasks)
-- [ ] 03-04-PLAN.md — Wave 4: cron wiring + manual production cutover + visual smoke (3 tasks, includes checkpoint)
+- [x] 03-04-PLAN.md — Wave 4: cron wiring + manual production cutover + visual smoke (3 tasks, includes checkpoint)
