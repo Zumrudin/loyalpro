@@ -180,3 +180,24 @@
   [data-theme="glass"].drawer-open .side { transform: translateX(0); }
   [data-theme="glass"] .main { padding: 16px 16px 60px; }
 }
+
+[data-theme="glass"] .theme-grid {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(220px,1fr)); gap: 14px;
+}
+[data-theme="glass"] .theme-card {
+  display: block; padding: 16px; border-radius: var(--radius-md); cursor: pointer;
+  border: 1px solid var(--hairline-d);
+}
+[data-theme="glass"] .theme-card input[type="radio"] {
+  position: absolute; opacity: 0; pointer-events: none;
+}
+[data-theme="glass"] .theme-card:has(input:checked) {
+  outline: 2px solid var(--olive-3); outline-offset: -2px;
+}
+[data-theme="glass"] .theme-card-disabled { opacity: .55; cursor: default; }
+[data-theme="glass"] .theme-prev {
+  display: flex; gap: 4px; height: 40px; margin-bottom: 10px; border-radius: 8px; overflow: hidden;
+}
+[data-theme="glass"] .theme-prev > span { flex: 1; }
+[data-theme="glass"] .theme-name { font-weight: 500; font-size: 13px; color: var(--ink); }
+[data-theme="glass"] .theme-desc { font-size: 11px; color: var(--ink-3); margin-top: 2px; }

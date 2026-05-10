@@ -384,8 +384,13 @@
       <!-- ═══ SIDEBAR ═══ -->
       <div class="stg-sidebar">
         <div class="stg-group">
+          <div class="stg-group-lbl">🎨 Интерфейс</div>
+          <div class="stg-item active" data-sec="appearance" onclick="navStg('appearance',this)"><span class="stg-ic">🎨</span>Внешний вид</div>
+        </div>
+        <div class="stg-sep"></div>
+        <div class="stg-group">
           <div class="stg-group-lbl">🏆 Лояльность</div>
-          <div class="stg-item active" data-sec="loyalty-levels" onclick="navStg('loyalty-levels',this)"><span class="stg-ic">⭐</span>Уровни и кэшбэк</div>
+          <div class="stg-item" data-sec="loyalty-levels" onclick="navStg('loyalty-levels',this)"><span class="stg-ic">⭐</span>Уровни и кэшбэк</div>
           <div class="stg-item" data-sec="loyalty-services" onclick="navStg('loyalty-services',this)"><span class="stg-ic">✂️</span>По услугам</div>
           <div class="stg-item" data-sec="loyalty-birthday" onclick="navStg('loyalty-birthday',this)"><span class="stg-ic">🎂</span>День рождения</div>
           <div class="stg-item" data-sec="loyalty-referral" onclick="navStg('loyalty-referral',this)"><span class="stg-ic">🤝</span>Реферальная</div>
@@ -431,8 +436,39 @@
       <!-- ═══ CONTENT ═══ -->
       <div class="stg-content">
 
+        <!-- ── Внешний вид ── -->
+        <div class="stg-section active" id="stg-appearance">
+          <h3 class="ct" style="margin-bottom:6px">Тема оформления</h3>
+          <div style="color:var(--t3); font-size:12px; margin-bottom:18px">Выберите внешний вид интерфейса</div>
+
+          <div class="theme-grid">
+            <label class="theme-card gl">
+              <input type="radio" name="lp-theme" value="glass" checked>
+              <div class="theme-prev theme-prev-glass">
+                <span style="background:#fcfcf8"></span>
+                <span style="background:#d3fa99"></span>
+                <span style="background:#1b2710"></span>
+              </div>
+              <div class="theme-name">Glass</div>
+              <div class="theme-desc">Cream + olive, glassmorphism</div>
+            </label>
+            <div class="theme-card theme-card-disabled">
+              <div class="theme-name">Скоро</div>
+              <div class="theme-desc">Новые темы появятся в следующих обновлениях</div>
+            </div>
+          </div>
+
+          <div class="fg" style="margin-top:24px">
+            <label style="display:flex; align-items:center; gap:10px; cursor:pointer">
+              <input type="checkbox" id="reduceMotionToggle">
+              <span>Уменьшить анимации</span>
+            </label>
+            <div style="color:var(--t3); font-size:11px; margin-top:6px; padding-left:24px">Отключает плавающие пятна на фоне</div>
+          </div>
+        </div>
+
         <!-- ── Уровни и кэшбэк ── -->
-        <div class="stg-section active" id="stg-loyalty-levels">
+        <div class="stg-section" id="stg-loyalty-levels">
           <div class="stg-hdr"><span>⭐</span>Уровни и кэшбэк</div>
           <div id="bonuses-disabled-banner" style="display:none;background:#fef3c7;border:1px solid #f59e0b;border-radius:10px;padding:12px 16px;margin-bottom:16px;align-items:center;gap:10px">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#d97706" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
