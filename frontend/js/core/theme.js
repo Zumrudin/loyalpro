@@ -45,10 +45,8 @@ function setReduceMotion(on) {
 
 initTheme();
 
-// Expose to global for both browser (where global === window via implicit) and node tests
-if (typeof globalThis !== 'undefined') {
-  globalThis.initTheme = initTheme;
-  globalThis.setTheme = setTheme;
-  globalThis.getTheme = getTheme;
-  globalThis.setReduceMotion = setReduceMotion;
-}
+// Expose for Node test runner; in browser these are also implicit globals.
+globalThis.initTheme = initTheme;
+globalThis.setTheme = setTheme;
+globalThis.getTheme = getTheme;
+globalThis.setReduceMotion = setReduceMotion;

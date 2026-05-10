@@ -21,7 +21,7 @@ function setupDom(localStorageData) {
 function loadTheme() {
   delete require.cache[require.resolve('../js/core/theme.js')];
   require('../js/core/theme.js');
-  return { setTheme: global.setTheme, getTheme: global.getTheme, initTheme: global.initTheme };
+  return { setTheme: global.setTheme, getTheme: global.getTheme, initTheme: global.initTheme, setReduceMotion: global.setReduceMotion };
 }
 
 // Test 1: Fresh user (no keys) → glass default
@@ -55,4 +55,19 @@ api.setTheme('glass');
 assert.strictEqual(localStorage.getItem('lp_theme'), 'glass');
 assert.strictEqual(document.documentElement.getAttribute('data-theme'), 'glass');
 
-console.log('theme-migration.test: all 5 assertions passed');
+// Test 6: setReduceMotion adds/removes .no-motion class
+setupDom({});
+const api2 = loadTheme();
+api2.setReduceMotion(true);
+assert.ok(document.documentElement.classList.contains('no-motion'), 'setReduceMotion(true) adds .no-motion');
+assert.strictEqual(localStorage.getItem('lp_reduce_motion'), '1', 'setReduceMotion(true) persists lp_reduce_motion');
+api2.setReduceMotion(false);
+assert.ok(!document.documentElement.classList.contains('no-motion'), 'setReduceMotion(false) removes .no-motion');
+assert.strictEqual(localStorage.getItem('lp_reduce_motion'), null, 'setReduceMotion(false) clears lp_reduce_motion');
+
+// Test 7: initTheme applies .no-motion when lp_reduce_motion='1' is preset
+setupDom({ lp_theme: 'glass', lp_reduce_motion: '1' });
+loadTheme();
+assert.ok(document.documentElement.classList.contains('no-motion'), 'initTheme adds .no-motion when lp_reduce_motion=1');
+
+console.log('theme-migration.test: all 7 assertions passed');
