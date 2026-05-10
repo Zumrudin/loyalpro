@@ -310,6 +310,35 @@ async function runMigrations(client) {
     CREATE INDEX IF NOT EXISTS idx_portfolio_items_staff
       ON portfolio_items (salon_id, staff_id) WHERE staff_id IS NOT NULL
   `).catch(() => {});
+
+  // ── YClients goods catalog (Phase 03 — full product catalog from YClients) ──
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS yclients_goods_catalog (
+      id                BIGSERIAL PRIMARY KEY,
+      salon_id          INTEGER     NOT NULL REFERENCES salons(id) ON DELETE CASCADE,
+      yclients_good_id  BIGINT      NOT NULL,
+      category_id       INTEGER,
+      category_title    VARCHAR(200),
+      title             VARCHAR(500) NOT NULL DEFAULT '',
+      article           VARCHAR(200),
+      last_seen_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      is_archived       BOOLEAN     NOT NULL DEFAULT FALSE,
+      created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE (salon_id, yclients_good_id)
+    )
+  `).catch(() => {});
+
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS idx_ygc_salon_active_cat
+      ON yclients_goods_catalog (salon_id, category_title)
+      WHERE NOT is_archived
+  `).catch(() => {});
+
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS idx_ygc_salon_last_seen
+      ON yclients_goods_catalog (salon_id, last_seen_at)
+  `).catch(() => {});
 }
 
 module.exports = { runMigrations };
