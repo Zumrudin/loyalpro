@@ -6,6 +6,7 @@ const { pool, db } = require('./db');
 const { runMigrations } = require('./migrations');
 const { runSync }           = require('./services/loyalty');
 const { syncGoodsCategories } = require('./services/home-care');
+const { syncGoodsCatalog }    = require('./services/yclients-goods-catalog');
 const { syncStaffData }     = require('./services/staff');
 const { refreshSegments }   = require('./services/segments');
 const mountRoutes = require('./routes/index');
@@ -124,6 +125,7 @@ cron.schedule('0 */3 * * *', async () => {
     );
     for (const salon of salons) {
       runSync(salon, 'auto').catch(e => cronLogger.error(`AutoSync salon=${salon.id}: ${e.message}`));
+      syncGoodsCatalog(salon).catch(e => cronLogger.error(`GoodsCatalogSync salon=${salon.id}: ${e.message}`));
       syncGoodsCategories(salon).catch(e => cronLogger.error(`GoodsCatSync salon=${salon.id}: ${e.message}`));
     }
   } catch (e) { cronLogger.error(`AutoSync cron: ${e.message}`); }
