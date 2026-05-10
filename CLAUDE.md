@@ -82,6 +82,16 @@ PostgreSQL (Beget cloud, SSL). Uses `pg` pool directly — no ORM. Helper `db` o
 
 API calls go through `core/api.js` which attaches JWT from localStorage automatically.
 
+### Theme system
+
+Single `glass` theme (cream/olive palette, glassmorphism). Layout is sidebar (`<aside class="side gl">`) + main (`<main class="main">`), with off-canvas drawer below 1024px width. The theme attribute lives on `<html data-theme="glass">` and is applied by `frontend/js/core/theme.js`. CSS is split: `css/base.css` carries shared tokens (`--bg`, `--card`, `--bd`, `--t1` etc.) repointed to cream/olive — names preserved so existing pages inherit the new palette automatically; `css/glass.css` carries everything under `[data-theme="glass"]` selectors (aurora-orbs background, sidebar, `.gl` glass-card mixin with backdrop-filter blur + sheen-by-cursor, dashboard widget styles).
+
+The legacy `lp_dark` localStorage key is one-time-migrated to `lp_theme=glass` on first load by `theme.js`. Dark mode is no longer supported; the old `🌙` toggle in the header has been removed entirely.
+
+The theme switcher lives in **Настройки → 🎨 Интерфейс → Внешний вид**. `setTheme(name)` and `setReduceMotion(on)` are exposed as globals. Today only `glass` is offered; the UI is wired through `setTheme` and ready for additional themes. The "Уменьшить анимации" checkbox toggles a `.no-motion` class on `<html>` that stops aurora-orb animations (also automatically respected via `@media (prefers-reduced-motion: reduce)`).
+
+Pure dashboard formatters live in `frontend/js/pages/dashboard-formatters.js` (loaded before `dashboard.js`) and are unit-tested via plain Node + `assert` in `frontend/tests/dashboard-formatters.test.js` and `frontend/tests/theme-migration.test.js` — run with bare `node` (no test runner needed).
+
 ### Multi-salon
 All DB tables have `salon_id` FK to `salons`. Every API route resolves the salon from `req.user.salon_id`. Never run queries without scoping to `salon_id`.
 
