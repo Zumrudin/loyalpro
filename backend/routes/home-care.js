@@ -192,21 +192,27 @@ router.get('/product-tree', auth, async (req, res) => {
       const cached = getTreeCache(salonId);
       if (cached?.products) return res.json(cached.products);
     }
-    const { rows } = await db.query(
-      `SELECT DISTINCT ON (lower(trim(title))) title, yclients_category
-       FROM goods_sale_items gsi JOIN goods_sales gs ON gs.id=gsi.sale_id
-       WHERE gs.salon_id=$1 AND title IS NOT NULL AND trim(title)!=''
-         AND ($2='' OR lower(title) LIKE '%'||lower($2)||'%')
-       ORDER BY lower(trim(title)) LIMIT 600`,
+    const rows = await db.any(
+      `SELECT title,
+              COALESCE(NULLIF(trim(category_title), ''), 'Без категории') AS cat
+         FROM yclients_goods_catalog
+        WHERE salon_id = $1
+          AND NOT is_archived
+          AND title IS NOT NULL AND trim(title) != ''
+          AND ($2 = '' OR lower(title) LIKE '%' || lower($2) || '%')
+        ORDER BY lower(trim(title))
+        LIMIT 1000`,
       [salonId, search]
     );
     const grouped = {};
     for (const r of rows) {
-      const cat = (r.yclients_category || '').trim() || 'Без категории';
-      if (!grouped[cat]) grouped[cat] = [];
-      grouped[cat].push(r.title);
+      if (isBlacklisted(r.cat)) continue;
+      if (!grouped[r.cat]) grouped[r.cat] = [];
+      grouped[r.cat].push(r.title);
     }
-    const result = Object.entries(grouped).sort(([a],[b])=>a.localeCompare(b,'ru')).map(([cat,items])=>({cat,items}));
+    const result = Object.entries(grouped)
+      .sort(([a], [b]) => a.localeCompare(b, 'ru'))
+      .map(([cat, items]) => ({ cat, items }));
     if (!search) setTreeCache(salonId, 'products', result);
     res.json(result);
   } catch (e) { res.status(500).json({ error: e.message }); }
