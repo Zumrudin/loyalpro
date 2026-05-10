@@ -55,7 +55,7 @@
 body{font-family:-apple-system,'Segoe UI',system-ui,sans-serif;background:var(--bg);color:var(--t1);font-size:14px}
 
 /* ─── LOGIN ─── */
-.lw{min-height:100vh;display:flex;align-items:center;justify-content:center;background:linear-gradient(135deg,#0d1117 0%,#1a2535 100%)}
+.lw{min-height:100vh;display:flex;align-items:center;justify-content:center;background:linear-gradient(180deg,#fcfcf8 0%,#f5f4ee 100%)}
 .lb{background:#fff;border-radius:16px;padding:36px;width:420px;max-width:95vw;box-shadow:0 20px 60px rgba(0,0,0,.3)}
 .ll{display:flex;align-items:center;gap:10px;margin-bottom:24px}
 .li{width:34px;height:34px;background:var(--a);border-radius:8px;display:flex;align-items:center;justify-content:center}
