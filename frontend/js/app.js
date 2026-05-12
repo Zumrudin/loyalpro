@@ -4,7 +4,7 @@
 // core/api.js    → api(), TOKEN
 // core/auth.js   → ME, doLogin, doRegister, doLogout, doChangePw
 // core/nav.js    → nav, applyRoleNav, navStg, launchApp, showLogin
-// core/theme.js  → initTheme, setTheme, getTheme, setReduceMotion
+// core/theme.js  → initDarkMode, toggleDarkMode
 
 // Запуск приложения при загрузке страницы
 document.addEventListener('DOMContentLoaded', async () => {

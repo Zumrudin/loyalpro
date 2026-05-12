@@ -495,17 +495,3 @@ document.addEventListener('click', e => {
   const modal = document.getElementById('staff-profile-modal');
   if (modal && e.target === modal) closeStaffModal();
 });
-
-function loadAppearance() {
-  const cb = document.getElementById('reduceMotionToggle');
-  if (cb) {
-    cb.checked = localStorage.getItem('lp_reduce_motion') === '1';
-    cb.onchange = () => setReduceMotion(cb.checked);
-  }
-  const radios = document.querySelectorAll('input[name="lp-theme"]');
-  const current = (typeof getTheme === 'function') ? getTheme() : 'glass';
-  radios.forEach(r => {
-    r.checked = (r.value === current);
-    r.onchange = () => { if (r.checked) setTheme(r.value); };
-  });
-}
