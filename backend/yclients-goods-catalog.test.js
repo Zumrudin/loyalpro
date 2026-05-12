@@ -272,4 +272,48 @@ describe('syncGoodsCatalog smoke', () => {
     expect(r.inserted).toBe(1);             // surviving category still upserts
     expect(clearTreeCache).toHaveBeenCalledTimes(1);   // sync completes despite partial failure
   });
+
+  test('paginates past a short page — YClients caps /goods page size below the requested count (Genosys 33 = 25 + 8 across 2 pages)', async () => {
+    const cid = 668791;
+    // Real-world quirk: /goods/{cid}?count=200 silently downgrades to ~25 items/page.
+    // A 33-good category therefore comes back as page1=25, page2=8, page3=[].
+    // The sync must NOT treat the short first page as terminal.
+    const page1 = Array.from({ length: 25 }, (_, i) => ({
+      good_id: 5000 + i, title: `Genosys item ${i}`, category_id: 1268258,
+      category: { id: 1268258, title: 'Genosys' },
+    }));
+    const page2 = Array.from({ length: 8 }, (_, i) => ({
+      good_id: 5025 + i, title: `Genosys item ${25 + i}`, category_id: 1268258,
+      category: { id: 1268258, title: 'Genosys' },
+    }));
+
+    ycGet.mockImplementation(async (salon, endpoint, params) => {
+      if (endpoint === `/good_categories/${cid}`) return [{ id: 1268258, title: 'Genosys' }];
+      if (endpoint === `/goods/${cid}` && params && params.category_id === 1268258) {
+        if (params.page === 1) return page1;
+        if (params.page === 2) return page2;
+        return [];                       // page 3 — empty terminator
+      }
+      return [];
+    });
+
+    db.any.mockResolvedValue([]);
+    db.one.mockResolvedValue({ is_insert: true });
+    db.query.mockResolvedValue({ rowCount: 0, rows: [] });
+
+    const r = await syncGoodsCatalog({
+      id: 1, yclients_company_id: cid, yclients_user_token: 'fake-token',
+    });
+
+    expect(r.goodsSeen).toBe(33);          // ALL 33, not just the first page of 25
+    expect(r.inserted).toBe(33);
+    expect(db.one).toHaveBeenCalledTimes(33);
+
+    // /goods was paged: page 1, 2, and 3 (the empty terminator) were all requested
+    const goodsCalls = ycGet.mock.calls.filter(
+      c => c[1] === `/goods/${cid}` && c[2] && c[2].category_id === 1268258
+    );
+    const pages = goodsCalls.map(c => c[2].page).sort((a, b) => a - b);
+    expect(pages).toEqual([1, 2, 3]);
+  });
 });

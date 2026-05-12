@@ -75,8 +75,11 @@ async function syncGoodsCatalog(salon) {
   const salonId = salon.id;
   const startedAt = Date.now();
   const errors = [];
-  const PAGE_SIZE = 200;
-  const MAX_PAGES_PER_CATEGORY = 50;        // T-03-04 hard cap (DoS guard)
+  // YClients quirk: /goods/{cid} silently downgrades count to a ~25-item default
+  // page when count exceeds ~100. Stay at 100 (the largest value the API honors)
+  // so each page is full and pagination terminates on a genuinely empty page.
+  const PAGE_SIZE = 100;
+  const MAX_PAGES_PER_CATEGORY = 100;       // T-03-04 hard cap (DoS guard) — 100 pages × 100 = 10k goods/cat
   const PACE_MS = 200;                       // D-11
   const BOOTSTRAP_PACE_MS = 150;             // matches services/staff.js:58
   let inserted = 0, updated = 0, goodsSeen = 0;
@@ -186,7 +189,10 @@ async function syncGoodsCatalog(salon) {
           if (result.is_insert) inserted++; else updated++;
           goodsSeen++;
         }
-        if (goods.length < PAGE_SIZE) break;
+        // Terminate only on a genuinely empty page (handled at the top of the
+        // loop). A short page is NOT terminal — YClients caps page size below
+        // the requested count, so the first page of a 33-good category can come
+        // back with only ~25 items while page 2 still has the rest.
         page++;
         await new Promise(r => setTimeout(r, PACE_MS));   // D-11
       }
