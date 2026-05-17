@@ -39,7 +39,7 @@ function animateCount(el, toRaw, opts = {}) {
   if (!el) return;
   const { duration = 1100, prefix = '', suffix = '', isFloat = false } = opts;
   const to = parseFloat(toRaw) || 0;
-  if (to === 0) return;
+  if (to === 0) { el.textContent = prefix + '0' + suffix; return; }
   const start = performance.now();
   function update(ts) {
     const p = Math.min((ts - start) / duration, 1);

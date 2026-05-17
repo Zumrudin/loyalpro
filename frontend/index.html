@@ -114,10 +114,19 @@
       </div>
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
         <div style="font-size:16px;font-weight:700">Обзор</div>
-        <div class="pb-btns">
-          <button class="pb-btn active" onclick="setPeriod(7,this)">7 дней</button>
-          <button class="pb-btn" onclick="setPeriod(30,this)">30 дней</button>
-          <button class="pb-btn" onclick="setPeriod(90,this)">90 дней</button>
+        <div class="pb-wrap">
+          <div class="pb-btns">
+            <button class="pb-btn" data-preset="today" onclick="setPreset('today')">Сегодня</button>
+            <button class="pb-btn active" data-preset="week" onclick="setPreset('week')">Неделя</button>
+            <button class="pb-btn" data-preset="month" onclick="setPreset('month')">Месяц</button>
+            <button class="pb-btn" data-preset="custom" onclick="togglePbRange()" id="pbRangeBtn">Период</button>
+          </div>
+          <div class="pb-range" id="pbRange" style="display:none">
+            <input type="date" id="pbFrom" class="pb-date">
+            <span class="pb-dash">—</span>
+            <input type="date" id="pbTo" class="pb-date">
+            <button class="btn btn-sm btn-pri" onclick="applyPbRange()">OK</button>
+          </div>
         </div>
       </div>
       <div class="sg" style="grid-template-columns:repeat(5,1fr)">
@@ -1128,7 +1137,7 @@
 
 <script>
 // ── PAGE-LEVEL STATE (остаётся в index.html) ──
-// dashP, rCh, bfCh, lvlCh → js/pages/dashboard.js
+// dashRange, rCh, bfCh, lvlCh → js/pages/dashboard.js
 // cPage_, cSortCol, cSortDir, bonusTarget → js/pages/clients.js
 let lsData = {}, ycSvcs = [];
 const LVL_L = {bronze:'🥉 Бронза',silver:'🥈 Серебро',gold:'🥇 Золото',platinum:'💎 Платина'};

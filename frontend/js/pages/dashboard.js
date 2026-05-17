@@ -1,17 +1,68 @@
 // ── DASHBOARD PAGE ─────────────────────────────────────────────
 // Зависимости: api(), animateCount(), cascadeCards(), notify(), timeSince()
 
-let dashP = 7;
+// Period filter: 'today' / 'week' / 'month' / 'custom' — backend gets from/to in Moscow-local YYYY-MM-DD.
+let dashRange = { preset: 'week', from: '', to: '' };
 let rCh, bfCh, lvlCh;
 let svcData = [];
 let svcSortCol = 'cnt';
 let svcSortDir = 'desc';
 let svcExpanded = false;
 
-function setPeriod(d, el) {
-  dashP = d;
-  document.querySelectorAll('#page-dashboard .pb-btns .pb-btn').forEach(b => b.classList.remove('active'));
-  el.classList.add('active');
+function moscowToday() {
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Moscow' }).format(new Date());
+}
+function addDays(iso, n) {
+  const d = new Date(iso + 'T00:00:00Z');
+  d.setUTCDate(d.getUTCDate() + n);
+  return d.toISOString().slice(0, 10);
+}
+function rangeForPreset(preset) {
+  const today = moscowToday();
+  if (preset === 'today') return { from: today, to: today };
+  if (preset === 'month') return { from: today.slice(0, 8) + '01', to: today };
+  // 'week' — Monday → today (Moscow weekday)
+  const d = new Date(today + 'T00:00:00Z');
+  const dow = d.getUTCDay(); // 0=Sun, 1=Mon, ..., 6=Sat
+  const back = dow === 0 ? 6 : dow - 1;
+  return { from: addDays(today, -back), to: today };
+}
+function formatPeriodLabel(from, to) {
+  const fmt = iso => {
+    const [y, m, d] = iso.split('-');
+    return d + '.' + m + (y !== moscowToday().slice(0, 4) ? '.' + y.slice(2) : '');
+  };
+  return from === to ? fmt(from) : fmt(from) + ' – ' + fmt(to);
+}
+function setPreset(preset) {
+  const { from, to } = rangeForPreset(preset);
+  dashRange = { preset, from, to };
+  document.querySelectorAll('#page-dashboard .pb-btns .pb-btn').forEach(b => b.classList.toggle('active', b.dataset.preset === preset));
+  const btn = document.getElementById('pbRangeBtn');
+  if (btn) btn.textContent = 'Период';
+  const rangeEl = document.getElementById('pbRange');
+  if (rangeEl) rangeEl.style.display = 'none';
+  loadDashboard();
+}
+function togglePbRange() {
+  const el = document.getElementById('pbRange');
+  if (!el) return;
+  const opening = el.style.display === 'none';
+  el.style.display = opening ? 'flex' : 'none';
+  if (opening) {
+    document.getElementById('pbFrom').value = dashRange.from || moscowToday();
+    document.getElementById('pbTo').value = dashRange.to || moscowToday();
+  }
+}
+function applyPbRange() {
+  const from = document.getElementById('pbFrom').value;
+  const to = document.getElementById('pbTo').value;
+  if (!from || !to) { notify('Выберите обе даты', 'err'); return; }
+  const [lo, hi] = from <= to ? [from, to] : [to, from];
+  dashRange = { preset: 'custom', from: lo, to: hi };
+  document.querySelectorAll('#page-dashboard .pb-btns .pb-btn').forEach(b => b.classList.toggle('active', b.dataset.preset === 'custom'));
+  document.getElementById('pbRangeBtn').textContent = formatPeriodLabel(lo, hi);
+  document.getElementById('pbRange').style.display = 'none';
   loadDashboard();
 }
 
@@ -203,11 +254,17 @@ function showDashSkeleton() {
 async function loadDashboard() {
   showDashSkeleton();
   try {
+    if (!dashRange.from || !dashRange.to) {
+      const r = rangeForPreset(dashRange.preset || 'week');
+      dashRange.from = r.from; dashRange.to = r.to;
+    }
+    const q = '?from=' + dashRange.from + '&to=' + dashRange.to;
     const [d, bon] = await Promise.all([
-      api('GET', '/api/analytics/dashboard?period=' + dashP),
-      api('GET', '/api/analytics/bonuses?period=' + dashP)
+      api('GET', '/api/analytics/dashboard' + q),
+      api('GET', '/api/analytics/bonuses' + q)
     ]);
     const s = d.stats;
+    const periodSuffix = 'за ' + formatPeriodLabel(dashRange.from, dashRange.to);
 
     animateCount(document.getElementById('ds1'), s.totalClients);
     document.getElementById('ds1s').textContent = '+' + s.newClients + ' новых за период';
@@ -217,7 +274,7 @@ async function loadDashboard() {
 
     const rev = parseFloat(s.periodRevenue || 0);
     animateCount(document.getElementById('ds3'), rev, { suffix: ' ₽' });
-    document.getElementById('ds3s').textContent = 'за ' + dashP + ' дней · ' + s.periodRecords + ' визитов';
+    document.getElementById('ds3s').textContent = periodSuffix + ' · ' + s.periodRecords + ' визитов';
 
     animateCount(document.getElementById('ds5'), s.cardClients);
     document.getElementById('ds5s').textContent = s.totalClients ? Math.round(s.cardClients / s.totalClients * 100) + '% от всех клиентов' : '';
@@ -233,17 +290,17 @@ async function loadDashboard() {
     document.getElementById('an1s').textContent = s.periodRecords + ' записей за период';
 
     animateCount(document.getElementById('an2'), periodBonuses, { suffix: ' ₽' });
-    document.getElementById('an2s').textContent = 'за ' + dashP + ' дней';
+    document.getElementById('an2s').textContent = periodSuffix;
 
     animateCount(document.getElementById('an5'), periodRedeemed, { suffix: ' ₽' });
-    document.getElementById('an5s').textContent = 'за ' + dashP + ' дней';
+    document.getElementById('an5s').textContent = periodSuffix;
 
     const roi = periodBonuses > 0 ? Math.round(s.periodRevenue / periodBonuses) : 0;
     if (roi > 0) animateCount(document.getElementById('an3'), roi, { suffix: 'x' });
     else document.getElementById('an3').textContent = '—';
 
     animateCount(document.getElementById('an4'), s.newClients);
-    document.getElementById('an4s').textContent = 'за ' + dashP + ' дней';
+    document.getElementById('an4s').textContent = periodSuffix;
 
     buildRevChart(d.dailyRevenue);
     buildLvlDash(d.levelDist, s.totalClients);
