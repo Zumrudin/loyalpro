@@ -1,6 +1,7 @@
 const router = require('express').Router();
 const { db } = require('../db');
 const { getLoyaltySettings, processRecordEvent, processFinancesOperation } = require('../services/loyalty');
+const { buildClientFio } = require('../utils/client-name');
 const { createLogger } = require('../logger');
 const logger = createLogger('Webhook');
 
@@ -38,7 +39,7 @@ router.post('/webhook.v2/:companyId', async (req, res) => {
          VALUES ($1,$2,$3,$4,$5,$6,NOW())
          ON CONFLICT (salon_id,yclients_client_id)
          DO UPDATE SET name=$3,phone=$4,email=$5,birthday=$6,synced_at=NOW()`,
-        [salon.id, ycRec.id, ycRec.name||'Клиент', ycRec.phone, ycRec.email||null, ycRec.birth_date||null]
+        [salon.id, ycRec.id, buildClientFio(ycRec), ycRec.phone, ycRec.email||null, ycRec.birth_date||null]
       );
     }
 

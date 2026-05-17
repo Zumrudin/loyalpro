@@ -3,6 +3,7 @@
 // ============================================================
 const { pool, db } = require('../db');
 const { ycGet, ycPost, ycGetClientCards, ycAccrueCard } = require('./yclients');
+const { buildClientFio } = require('../utils/client-name');
 const { createLogger } = require('../logger');
 const logger = createLogger('Sync');
 
@@ -271,8 +272,7 @@ async function runSync(salon, syncType, userId) {
         const ycc = await ycGet(salon, `/client/${salon.yclients_company_id}/${ycClientId}`);
         if (!ycc) continue;
 
-        const fullName = [ycc.name, ycc.surname, ycc.patronymic]
-          .filter(Boolean).join(' ').trim() || ycc.display_name || ycc.phone || 'Клиент';
+        const fullName = buildClientFio(ycc);
         const phone        = ycc.phone || null;
         const totalSpent   = parseFloat(ycc.spent || ycc.paid || 0);
         const visitsCount  = parseInt(ycc.visits || 0);
@@ -583,7 +583,7 @@ async function processRecordEvent(payload, salon, settings) {
     await db.query(
       `INSERT INTO clients (salon_id,yclients_client_id,name,phone,synced_at)
        VALUES ($1,$2,$3,$4,NOW()) ON CONFLICT DO NOTHING`,
-      [salon.id, clientYcId, data.client?.name || 'Клиент', data.client?.phone || null]
+      [salon.id, clientYcId, buildClientFio(data.client), data.client?.phone || null]
     );
     client = await db.oneOrNone('SELECT * FROM clients WHERE salon_id=$1 AND yclients_client_id=$2', [salon.id, clientYcId]);
   }
