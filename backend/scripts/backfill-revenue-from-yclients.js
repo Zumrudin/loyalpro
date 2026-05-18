@@ -70,15 +70,15 @@ async function backfillSalon(salon, { dateFrom, dateTo, rateLimitMs }) {
           INSERT INTO revenue_operations
             (salon_id, yclients_operation_id, category, amount, operation_date, operation_at,
              client_id, yclients_client_id, yclients_record_id,
-             expense_id, expense_title, sold_item_type, account_title, is_cash, source)
-          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+             expense_id, expense_title, sold_item_type, account_title, is_cash, raw_payload, source)
+          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
           ON CONFLICT (salon_id, yclients_operation_id) DO NOTHING
         `, [
           salon.id, item.id, category, amount, operationDate, operationAt,
           clientId, clientYcId, ycRecordId,
           item.expense?.id || null, expenseTitle,
           item.sold_item_type || null, item.account?.title || null,
-          item.account?.is_cash ?? null, 'api_backfill',
+          item.account?.is_cash ?? null, item, 'api_backfill',
         ]);
 
         if (result.rowCount > 0) inserted++;

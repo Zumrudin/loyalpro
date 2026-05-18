@@ -1,7 +1,6 @@
 // backend/revenue-classify.test.js
 'use strict';
 
-// classifyExpense is not yet implemented — this test will FAIL until Task 3.
 const { classifyExpense } = require('./services/revenue');
 
 describe('classifyExpense', () => {

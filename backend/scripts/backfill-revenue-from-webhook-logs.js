@@ -59,15 +59,15 @@ async function main() {
         INSERT INTO revenue_operations
           (salon_id, yclients_operation_id, category, amount, operation_date, operation_at,
            client_id, yclients_client_id, yclients_record_id,
-           expense_id, expense_title, sold_item_type, account_title, is_cash, source)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+           expense_id, expense_title, sold_item_type, account_title, is_cash, raw_payload, source)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
         ON CONFLICT (salon_id, yclients_operation_id) DO NOTHING
       `, [
         salon.id, data.id, category, amount, operationDate, operationAt,
         clientId, clientYcId, ycRecordId,
         data.expense?.id || null, data.expense?.title || null,
         data.sold_item_type || null, data.account?.title || null,
-        data.account?.is_cash ?? null, 'webhook_logs_backfill',
+        data.account?.is_cash ?? null, payload, 'webhook_logs_backfill',
       ]);
 
       if (result.rowCount > 0) inserted++;
@@ -80,30 +80,41 @@ async function main() {
 
   console.log(`\nDone. Inserted: ${inserted}, Skipped/existing: ${skipped}, Errors: ${errors}`);
 
-  const r = await db.one(`
-    SELECT
-      (SELECT COALESCE(SUM(amount),0) FROM records
-       WHERE salon_id=1 AND status IN ('completed','confirmed','arrived')
-         AND COALESCE((visit_datetime AT TIME ZONE 'Europe/Moscow')::date, visit_date::date)
-         BETWEEN '2026-03-21' AND '2026-04-24') AS records_services,
-      (SELECT COALESCE(SUM(amount),0) FROM revenue_operations
-       WHERE salon_id=1 AND category='services'
-         AND operation_date BETWEEN '2026-03-21' AND '2026-04-24') AS rev_ops_services
-  `);
+  // Reconciliation for the first active salon
+  if (salons.length > 0) {
+    const s1 = salons[0];
+    const range = await db.oneOrNone(`
+      SELECT MIN(operation_date)::text AS min_date, MAX(operation_date)::text AS max_date
+      FROM revenue_operations WHERE salon_id=$1
+    `, [s1.id]);
 
-  const diff = Math.abs(parseFloat(r.records_services) - parseFloat(r.rev_ops_services));
-  const pct = parseFloat(r.records_services) > 0
-    ? (diff / parseFloat(r.records_services) * 100).toFixed(1)
-    : '0.0';
+    if (range && range.min_date) {
+      const r = await db.one(`
+        SELECT
+          (SELECT COALESCE(SUM(amount),0) FROM records
+           WHERE salon_id=$1 AND status IN ('completed','confirmed','arrived')
+             AND COALESCE((visit_datetime AT TIME ZONE 'Europe/Moscow')::date, visit_date::date)
+             BETWEEN $2::date AND $3::date) AS records_services,
+          (SELECT COALESCE(SUM(amount),0) FROM revenue_operations
+           WHERE salon_id=$1 AND category='services'
+             AND operation_date BETWEEN $2::date AND $3::date) AS rev_ops_services
+      `, [s1.id, range.min_date, range.max_date]);
 
-  console.log('\nReconciliation (salon_id=1, 2026-03-21..2026-04-24):');
-  console.log(`  records.amount services:       ${r.records_services}`);
-  console.log(`  revenue_operations services:   ${r.rev_ops_services}`);
-  console.log(`  Difference: ${diff} (${pct}%)`);
-  if (parseFloat(pct) > 5) {
-    console.warn('  WARNING: Difference > 5% — investigate');
-  } else {
-    console.log('  OK: Within 5% tolerance');
+      const diff = Math.abs(parseFloat(r.records_services) - parseFloat(r.rev_ops_services));
+      const pct = parseFloat(r.records_services) > 0
+        ? (diff / parseFloat(r.records_services) * 100).toFixed(1)
+        : '0.0';
+
+      console.log(`\nReconciliation (salon_id=${s1.id}, ${range.min_date}..${range.max_date}):`);
+      console.log(`  records.amount services:       ${r.records_services}`);
+      console.log(`  revenue_operations services:   ${r.rev_ops_services}`);
+      console.log(`  Difference: ${diff} (${pct}%)`);
+      if (parseFloat(pct) > 5) {
+        console.warn('  WARNING: Difference > 5% — investigate');
+      } else {
+        console.log('  OK: Within 5% tolerance');
+      }
+    }
   }
 
   await pool.end();

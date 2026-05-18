@@ -307,7 +307,7 @@ async function loadDashboard() {
     animateCount(document.getElementById('an5'), periodRedeemed, { suffix: ' ₽' });
     document.getElementById('an5s').textContent = periodSuffix;
 
-    const roi = periodBonuses > 0 ? Math.round(s.periodRevenue / periodBonuses) : 0;
+    const roi = periodBonuses > 0 ? Math.round(revTotal / periodBonuses) : 0;
     if (roi > 0) animateCount(document.getElementById('an3'), roi, { suffix: 'x' });
     else document.getElementById('an3').textContent = '—';
 

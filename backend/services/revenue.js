@@ -61,8 +61,8 @@ async function recordRevenueOperation(payload, salon, source) {
     INSERT INTO revenue_operations
       (salon_id, yclients_operation_id, category, amount, operation_date, operation_at,
        client_id, yclients_client_id, yclients_record_id,
-       expense_id, expense_title, sold_item_type, account_title, is_cash, source)
-    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+       expense_id, expense_title, sold_item_type, account_title, is_cash, raw_payload, source)
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
     ON CONFLICT (salon_id, yclients_operation_id) DO NOTHING
   `, [
     salon.id,
@@ -79,6 +79,7 @@ async function recordRevenueOperation(payload, salon, source) {
     data.sold_item_type || null,
     data.account?.title || null,
     data.account?.is_cash ?? null,
+    payload,
     source,
   ]);
 }
