@@ -359,7 +359,7 @@ async function runMigrations(client) {
       account_title         VARCHAR(128),
       is_cash               BOOLEAN,
       raw_payload           JSONB,
-      source                VARCHAR(16) NOT NULL,
+      source                VARCHAR(32) NOT NULL,
       created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       UNIQUE(salon_id, yclients_operation_id)
     )
@@ -373,6 +373,12 @@ async function runMigrations(client) {
   await client.query(`
     CREATE INDEX IF NOT EXISTS idx_revenue_ops_salon_cat_date
       ON revenue_operations(salon_id, category, operation_date)
+  `).catch(() => {});
+
+  // ── Widen source column to VARCHAR(32) if it was created as VARCHAR(16) ──
+  await client.query(`
+    ALTER TABLE revenue_operations
+      ALTER COLUMN source TYPE VARCHAR(32)
   `).catch(() => {});
 }
 
