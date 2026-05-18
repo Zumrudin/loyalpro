@@ -73,6 +73,10 @@ input[readonly]{background:var(--bg);color:var(--t2)}
 .sl{font-size:11px;color:var(--t3);font-weight:500;margin-bottom:6px}
 .sv{font-size:24px;font-weight:800;letter-spacing:-.5px;line-height:1}
 .sd{font-size:11px;margin-top:5px;color:var(--t3)}.sd.up{color:var(--a)}.sd.dn{color:var(--danger)}
+.rev-breakdown{margin-top:10px;display:flex;flex-direction:column;gap:5px;border-top:1px solid var(--bd);padding-top:10px}
+.rev-row{display:flex;justify-content:space-between;align-items:center;font-size:12px;color:var(--t2)}
+.rev-val{font-variant-numeric:tabular-nums;color:var(--t1);font-weight:600}
+.rev-row.zero .rev-val{color:var(--t3);font-weight:400}
 .g2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
 .g3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px}
 .g32{display:grid;grid-template-columns:2fr 1fr;gap:14px}
