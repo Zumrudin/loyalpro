@@ -272,9 +272,20 @@ async function loadDashboard() {
     animateCount(document.getElementById('ds2'), s.totalBonusBalance);
     document.getElementById('ds2s').textContent = 'начислено ' + parseFloat(s.periodBonuses || 0).toLocaleString('ru') + ' · списано ' + parseFloat(s.periodRedeemed || 0).toLocaleString('ru');
 
-    const rev = parseFloat(s.periodRevenue || 0);
-    animateCount(document.getElementById('ds3'), rev, { suffix: ' ₽' });
+    const rbc = s.periodRevenueByCategory || {};
+    const revTotal = parseFloat(rbc.total ?? s.periodRevenue ?? 0);
+    animateCount(document.getElementById('ds3'), revTotal, { suffix: ' ₽' });
     document.getElementById('ds3s').textContent = periodSuffix + ' · ' + s.periodRecords + ' визитов';
+
+    const revCats = ['services', 'goods', 'abonement', 'certificate', 'deposit'];
+    for (const cat of revCats) {
+      const val = parseFloat(rbc[cat] || 0);
+      const valEl = document.getElementById('rev-' + cat);
+      const rowEl = document.getElementById('rev-row-' + cat);
+      if (!valEl || !rowEl) continue;
+      animateCount(valEl, val, { suffix: ' ₽' });
+      rowEl.classList.toggle('zero', val === 0);
+    }
 
     animateCount(document.getElementById('ds5'), s.cardClients);
     document.getElementById('ds5s').textContent = s.totalClients ? Math.round(s.cardClients / s.totalClients * 100) + '% от всех клиентов' : '';
@@ -284,7 +295,8 @@ async function loadDashboard() {
 
     const periodBonuses  = parseFloat(s.periodBonuses  || 0);
     const periodRedeemed = parseFloat(s.periodRedeemed || 0);
-    const avgCheck = s.periodRecords > 0 ? Math.round(s.periodRevenue / s.periodRecords) : 0;
+    const servicesRev = parseFloat((s.periodRevenueByCategory || {}).services ?? s.periodRevenue ?? 0);
+    const avgCheck = s.periodRecords > 0 ? Math.round(servicesRev / s.periodRecords) : 0;
 
     animateCount(document.getElementById('an1'), avgCheck, { suffix: ' ₽' });
     document.getElementById('an1s').textContent = s.periodRecords + ' записей за период';
