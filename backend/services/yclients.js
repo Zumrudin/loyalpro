@@ -198,10 +198,19 @@ async function ycAccrueCard(salon, cardId, amount, title) {
   return data.data;
 }
 
+async function ycListFinanceTransactions(salon, { dateFrom, dateTo, page = 1, count = 50 } = {}) {
+  return ycGet(salon, `/company/${salon.yclients_company_id}/finance/transactions`, {
+    date_from: dateFrom,
+    date_to: dateTo,
+    page,
+    count,
+  });
+}
+
 module.exports = {
   ycHeaders, ycGet, ycPost, ycAuth,
   ycGetCardTypes, ycGetClientCards, ycWebLogin, ycGetCardTransactions,
-  parseCardTransactionsHtml, ycAccrueCard,
+  parseCardTransactionsHtml, ycAccrueCard, ycListFinanceTransactions,
   ycWebSessions,
   getTreeCache, setTreeCache, clearTreeCache,
 };
