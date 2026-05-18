@@ -198,10 +198,10 @@ async function ycAccrueCard(salon, cardId, amount, title) {
   return data.data;
 }
 
-async function ycListFinanceTransactions(salon, { dateFrom, dateTo, page = 1, count = 50 } = {}) {
-  return ycGet(salon, `/company/${salon.yclients_company_id}/finance/transactions`, {
-    date_from: dateFrom,
-    date_to: dateTo,
+async function ycListFinanceTransactions(salon, { dateFrom, dateTo, page = 1, count = 200 } = {}) {
+  return ycGet(salon, `/transactions/${salon.yclients_company_id}`, {
+    start_date: dateFrom,
+    end_date: dateTo,
     page,
     count,
   });

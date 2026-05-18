@@ -27,9 +27,20 @@ function classifyExpense(expenseTitle) {
 }
 
 async function recordRevenueOperation(payload, salon, source) {
-  if (payload.status === 'delete') return;
-
   const data = payload.data || {};
+
+  if (payload.status === 'delete') {
+    if (!data.id) return;
+    const result = await db.query(
+      'DELETE FROM revenue_operations WHERE salon_id=$1 AND yclients_operation_id=$2',
+      [salon.id, data.id]
+    );
+    if (result.rowCount > 0) {
+      logger.info(`Deleted revenue_operations op_id=${data.id} (status=delete)`);
+    }
+    return;
+  }
+
   const amount = parseFloat(data.amount || 0);
   if (amount <= 0) return;
 

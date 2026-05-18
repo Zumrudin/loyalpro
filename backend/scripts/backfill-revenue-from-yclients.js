@@ -21,15 +21,22 @@ function parseArgs() {
 
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
-async function backfillSalon(salon, { dateFrom, dateTo, rateLimitMs }) {
+function addDays(dateStr, days) {
+  const d = new Date(dateStr + 'T00:00:00Z');
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+
+async function backfillDay(salon, day, rateLimitMs) {
   let page = 1;
   let inserted = 0, skipped = 0, errors = 0;
+  const PAGE_SIZE = 200;
 
   while (true) {
     let rows;
     try {
       rows = await ycListFinanceTransactions(salon, {
-        dateFrom, dateTo, page, count: 50,
+        dateFrom: day, dateTo: day, page, count: PAGE_SIZE,
       });
     } catch (e) {
       if (e.response?.status === 429) {
@@ -41,7 +48,6 @@ async function backfillSalon(salon, { dateFrom, dateTo, rateLimitMs }) {
     }
 
     if (!rows || rows.length === 0) break;
-    console.log(`  Page ${page}: ${rows.length} rows`);
 
     for (const item of rows) {
       const amount = parseFloat(item.amount || 0);
@@ -89,12 +95,25 @@ async function backfillSalon(salon, { dateFrom, dateTo, rateLimitMs }) {
       }
     }
 
-    if (rows.length < 50) break;
+    if (rows.length < PAGE_SIZE) break;
     page++;
     await sleep(rateLimitMs);
   }
 
   return { inserted, skipped, errors };
+}
+
+async function backfillSalon(salon, { dateFrom, dateTo, rateLimitMs }) {
+  let totalIns = 0, totalSkip = 0, totalErr = 0;
+  let day = dateFrom;
+  while (day <= dateTo) {
+    const r = await backfillDay(salon, day, rateLimitMs);
+    console.log(`  ${day}: inserted=${r.inserted}, skipped=${r.skipped}, errors=${r.errors}`);
+    totalIns += r.inserted; totalSkip += r.skipped; totalErr += r.errors;
+    day = addDays(day, 1);
+    await sleep(rateLimitMs);
+  }
+  return { inserted: totalIns, skipped: totalSkip, errors: totalErr };
 }
 
 async function main() {
