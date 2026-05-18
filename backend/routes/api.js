@@ -162,6 +162,11 @@ router.get('/analytics/dashboard', auth, async (req, res) => {
       if (row.category in revByCat) revByCat[row.category] = parseFloat(row.total);
     }
     revByCat.total = revByCat.services + revByCat.goods + revByCat.abonement + revByCat.certificate + revByCat.deposit;
+    // Fallback: if revenue_operations has no data for the period, use records.amount as services revenue
+    if (revByCat.total === 0) {
+      revByCat.services = parseFloat(rev.rv) || 0;
+      revByCat.total = revByCat.services;
+    }
     res.json({ stats: { totalClients: parseInt(tc.count), activeClients: parseInt(ac.count), sleepingClients: parseInt(slp.count), newClients: parseInt(nc.count), totalBonusBalance: parseFloat(bs.tb), totalSpent: parseFloat(bs.ts), periodRevenue: revByCat.total, periodRevenueByCategory: revByCat, periodRecords: parseInt(rev.rc), periodBonuses: parseFloat(bonusStat.accrued), periodRedeemed: parseFloat(bonusStat.redeemed), telegramClients: parseInt(tgCount.count), cardClients: parseInt(cardCount.count) }, period: { from, to }, levelDist: lvlDist, topServices: topSvc, dailyRevenue: daily, recentTxns: recentTx, syncStatus: lastSync, bonusEconomy: bonEconomy });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });

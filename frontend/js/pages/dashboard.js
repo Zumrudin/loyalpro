@@ -21,11 +21,8 @@ function rangeForPreset(preset) {
   const today = moscowToday();
   if (preset === 'today') return { from: today, to: today };
   if (preset === 'month') return { from: today.slice(0, 8) + '01', to: today };
-  // 'week' — Monday → today (Moscow weekday)
-  const d = new Date(today + 'T00:00:00Z');
-  const dow = d.getUTCDay(); // 0=Sun, 1=Mon, ..., 6=Sat
-  const back = dow === 0 ? 6 : dow - 1;
-  return { from: addDays(today, -back), to: today };
+  // 'week' — last 7 days (always shows 6 days back + today)
+  return { from: addDays(today, -6), to: today };
 }
 function formatPeriodLabel(from, to) {
   const fmt = iso => {
