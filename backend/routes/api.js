@@ -125,7 +125,7 @@ router.get('/analytics/dashboard', auth, async (req, res) => {
           AND (bt.created_at AT TIME ZONE 'Europe/Moscow')::date BETWEEN $2::date AND $3::date
           AND bt.description NOT LIKE '%импорт%'
       ) combined`;
-    const [tc,ac,slp,nc,bs,rev,bonusStat,topSvc,lvlDist,daily,recentTx,lastSync,tgCount,cardCount,bonEconomy] = await Promise.all([
+    const [tc,ac,slp,nc,bs,rev,bonusStat,topSvc,lvlDist,daily,recentTx,lastSync,tgCount,cardCount,bonEconomy,revByCatRows] = await Promise.all([
       db.one('SELECT COUNT(*) FROM clients WHERE salon_id=$1',[sid]),
       db.one(`SELECT COUNT(*) FROM clients WHERE salon_id=$1 AND (last_visit_at AT TIME ZONE 'Europe/Moscow')::date BETWEEN $2::date AND $3::date`,p),
       db.one(`SELECT COUNT(*) FROM clients WHERE salon_id=$1 AND last_visit_at<NOW()-INTERVAL '60 days' AND visits_count>0`,[sid]),
@@ -147,8 +147,22 @@ router.get('/analytics/dashboard', auth, async (req, res) => {
       db.one(`SELECT COUNT(*) FROM clients WHERE salon_id=$1 AND yclients_card_id IS NOT NULL`,[sid]),
       // db.any() — may be empty if no transactions in period
       db.any(`SELECT CASE WHEN lct.title ILIKE '%день рождения%' OR lct.title ILIKE '%ДР%' OR lct.title ILIKE '%подарок%' THEN 'birthday' WHEN lct.type='redemption' AND lct.title ILIKE '%отмена%' THEN 'cancellation' WHEN lct.type='redemption' THEN 'redemption' ELSE 'accrual' END as type, COALESCE(SUM(ABS(lct.amount)),0) as total FROM loyalty_card_transactions lct JOIN clients c ON c.id=lct.client_id WHERE c.salon_id=$1 AND (COALESCE(lct.txn_date,lct.created_at) AT TIME ZONE 'Europe/Moscow')::date BETWEEN $2::date AND $3::date GROUP BY 1 ORDER BY total DESC`,p),
+      // db.any() — revenue breakdown by category; empty if revenue_operations has no rows in period
+      db.any(`
+        SELECT category, COALESCE(SUM(amount),0) AS total
+        FROM revenue_operations
+        WHERE salon_id=$1
+          AND operation_date BETWEEN $2::date AND $3::date
+          AND category IN ('services','goods','abonement','certificate','deposit')
+        GROUP BY category
+      `, p),
     ]);
-    res.json({ stats: { totalClients: parseInt(tc.count), activeClients: parseInt(ac.count), sleepingClients: parseInt(slp.count), newClients: parseInt(nc.count), totalBonusBalance: parseFloat(bs.tb), totalSpent: parseFloat(bs.ts), periodRevenue: parseFloat(rev.rv), periodRecords: parseInt(rev.rc), periodBonuses: parseFloat(bonusStat.accrued), periodRedeemed: parseFloat(bonusStat.redeemed), telegramClients: parseInt(tgCount.count), cardClients: parseInt(cardCount.count) }, period: { from, to }, levelDist: lvlDist, topServices: topSvc, dailyRevenue: daily, recentTxns: recentTx, syncStatus: lastSync, bonusEconomy: bonEconomy });
+    const revByCat = { services: 0, goods: 0, abonement: 0, certificate: 0, deposit: 0 };
+    for (const row of revByCatRows) {
+      if (row.category in revByCat) revByCat[row.category] = parseFloat(row.total);
+    }
+    revByCat.total = revByCat.services + revByCat.goods + revByCat.abonement + revByCat.certificate + revByCat.deposit;
+    res.json({ stats: { totalClients: parseInt(tc.count), activeClients: parseInt(ac.count), sleepingClients: parseInt(slp.count), newClients: parseInt(nc.count), totalBonusBalance: parseFloat(bs.tb), totalSpent: parseFloat(bs.ts), periodRevenue: revByCat.total, periodRevenueByCategory: revByCat, periodRecords: parseInt(rev.rc), periodBonuses: parseFloat(bonusStat.accrued), periodRedeemed: parseFloat(bonusStat.redeemed), telegramClients: parseInt(tgCount.count), cardClients: parseInt(cardCount.count) }, period: { from, to }, levelDist: lvlDist, topServices: topSvc, dailyRevenue: daily, recentTxns: recentTx, syncStatus: lastSync, bonusEconomy: bonEconomy });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
