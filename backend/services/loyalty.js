@@ -6,6 +6,7 @@ const { ycGet, ycPost, ycGetClientCards, ycAccrueCard } = require('./yclients');
 const { buildClientFio } = require('../utils/client-name');
 const { createLogger } = require('../logger');
 const logger = createLogger('Sync');
+const { recordRevenueOperation } = require('./revenue');
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
@@ -784,6 +785,12 @@ async function withRecordLock(ycRecordId, fn) {
 }
 
 async function processFinancesOperation(payload, salon) {
+  // Revenue recording: runs for ALL events (including deposits that have no record_id).
+  // Wrapped in catch so a revenue write failure never breaks cashback processing.
+  await recordRevenueOperation(payload, salon, 'webhook').catch(e =>
+    logger.warn(`recordRevenueOperation failed: ${e.message}`)
+  );
+
   const data = payload.data || {};
   const ycRecordId = data.record_id || data.record?.id;
   const clientYcId = data.client?.id;
