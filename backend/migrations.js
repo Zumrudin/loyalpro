@@ -339,6 +339,41 @@ async function runMigrations(client) {
     CREATE INDEX IF NOT EXISTS idx_ygc_salon_last_seen
       ON yclients_goods_catalog (salon_id, last_seen_at)
   `).catch(() => {});
+
+  // ── Revenue Operations (multi-source revenue tracking) ──────────
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS revenue_operations (
+      id                    SERIAL PRIMARY KEY,
+      salon_id              INT NOT NULL REFERENCES salons(id) ON DELETE CASCADE,
+      yclients_operation_id BIGINT NOT NULL,
+      category              VARCHAR(32) NOT NULL,
+      amount                NUMERIC(12,2) NOT NULL,
+      operation_date        DATE NOT NULL,
+      operation_at          TIMESTAMPTZ NOT NULL,
+      client_id             INT REFERENCES clients(id) ON DELETE SET NULL,
+      yclients_client_id    BIGINT,
+      yclients_record_id    BIGINT,
+      expense_id            INT,
+      expense_title         VARCHAR(128),
+      sold_item_type        VARCHAR(32),
+      account_title         VARCHAR(128),
+      is_cash               BOOLEAN,
+      raw_payload           JSONB,
+      source                VARCHAR(16) NOT NULL,
+      created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE(salon_id, yclients_operation_id)
+    )
+  `).catch(() => {});
+
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS idx_revenue_ops_salon_date
+      ON revenue_operations(salon_id, operation_date)
+  `).catch(() => {});
+
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS idx_revenue_ops_salon_cat_date
+      ON revenue_operations(salon_id, category, operation_date)
+  `).catch(() => {});
 }
 
 module.exports = { runMigrations };
