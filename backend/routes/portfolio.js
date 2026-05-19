@@ -7,6 +7,7 @@ const multer = require('multer');
 const { db } = require('../db');
 const { auth, requireRole } = require('../middleware/auth');
 const { buildPhotoFilename, validateReorderPayload } = require('../services/portfolio');
+const { imageFileFilter, validateImageBuffer } = require('../utils/upload-validator');
 const { createLogger } = require('../logger');
 const logger = createLogger('Portfolio');
 
@@ -19,10 +20,7 @@ if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
 const upload = multer({
   storage: multer.memoryStorage(), // we set the final filename ourselves
   limits: { fileSize: 5 * 1024 * 1024 },
-  fileFilter: (req, file, cb) => {
-    if (/^image\//.test(file.mimetype)) cb(null, true);
-    else cb(new Error('Только изображения'));
-  },
+  fileFilter: imageFileFilter,
 });
 
 function safeUnlink(relUrl) {
@@ -187,6 +185,9 @@ router.post('/categories/:id/cover', adminOnly, (req, res) => {
     if (err) return res.status(400).json({ error: err.message });
     if (!req.file) return res.status(400).json({ error: 'Файл не получен' });
 
+    const v = validateImageBuffer(req.file.buffer, req.file.originalname);
+    if (!v.ok) return res.status(400).json({ error: v.error });
+
     const id = parseInt(req.params.id, 10);
     if (!id) return res.status(400).json({ error: 'invalid id' });
 
@@ -269,6 +270,13 @@ router.post('/items', adminOnly, (req, res) => {
     const fAfter  = req.files?.after?.[0];
     const fBefore = req.files?.before?.[0];
     if (!fAfter) return res.status(400).json({ error: 'Фото "После" обязательно' });
+
+    const vA = validateImageBuffer(fAfter.buffer, fAfter.originalname);
+    if (!vA.ok) return res.status(400).json({ error: `after: ${vA.error}` });
+    if (fBefore) {
+      const vB = validateImageBuffer(fBefore.buffer, fBefore.originalname);
+      if (!vB.ok) return res.status(400).json({ error: `before: ${vB.error}` });
+    }
 
     const categoryId = parseInt(req.body.category_id, 10);
     if (!categoryId) return res.status(400).json({ error: 'category_id required' });
@@ -451,6 +459,15 @@ router.post('/items/:id/photos', adminOnly, (req, res) => {
     const fAfter  = req.files?.after?.[0];
     const fBefore = req.files?.before?.[0];
     if (!fAfter && !fBefore) return res.status(400).json({ error: 'Файлы не получены' });
+
+    if (fAfter) {
+      const vA = validateImageBuffer(fAfter.buffer, fAfter.originalname);
+      if (!vA.ok) return res.status(400).json({ error: `after: ${vA.error}` });
+    }
+    if (fBefore) {
+      const vB = validateImageBuffer(fBefore.buffer, fBefore.originalname);
+      if (!vB.ok) return res.status(400).json({ error: `before: ${vB.error}` });
+    }
 
     const id = parseInt(req.params.id, 10);
     if (!id) return res.status(400).json({ error: 'invalid id' });

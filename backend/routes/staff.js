@@ -1,30 +1,22 @@
 const router  = require('express').Router();
 const express = require('express');
 const path    = require('path');
+const fs      = require('fs');
 const multer  = require('multer');
 const { db }  = require('../db');
 const { auth } = require('../middleware/auth');
 const { getStaffList, computeStaffMetrics, computeStaffSparklines, syncStaffData, syncGoodsSales } = require('../services/staff');
+const { imageFileFilter, validateImageBuffer, getExt } = require('../utils/upload-validator');
 const { createLogger } = require('../logger');
 const logger = createLogger('Staff');
 
-// ── Staff profile photo upload ─────────────────────────────────
-const photoStorage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    cb(null, path.join(__dirname, '../../frontend/uploads'));
-  },
-  filename: (req, file, cb) => {
-    const ext = path.extname(file.originalname).toLowerCase() || '.jpg';
-    cb(null, `staff_${req.params.staffId}_${Date.now()}${ext}`);
-  },
-});
+const uploadsDir = path.join(__dirname, '../../frontend/uploads');
+
+// ── Staff profile photo upload — memoryStorage so we can validate buffer before writing
 const uploadPhoto = multer({
-  storage: photoStorage,
+  storage: multer.memoryStorage(),
   limits: { fileSize: 5 * 1024 * 1024 },
-  fileFilter: (req, file, cb) => {
-    if (/^image\//.test(file.mimetype)) cb(null, true);
-    else cb(new Error('Только изображения'));
-  },
+  fileFilter: imageFileFilter,
 });
 
 // GET /api/staff-profiles — список сотрудников с профильными полями
@@ -75,16 +67,37 @@ router.post('/staff-profiles/:staffId/photo', auth, (req, res) => {
   uploadPhoto.single('photo')(req, res, async (err) => {
     if (err) return res.status(400).json({ error: err.message });
     if (!req.file) return res.status(400).json({ error: 'Файл не получен' });
-    const photoUrl = `/uploads/${req.file.filename}`;
+
+    const v = validateImageBuffer(req.file.buffer, req.file.originalname);
+    if (!v.ok) return res.status(400).json({ error: v.error });
+
+    const staffId = parseInt(req.params.staffId, 10);
+    if (!staffId) return res.status(400).json({ error: 'invalid staffId' });
+
+    let absPath = null;
     try {
-      const row = await db.oneOrNone(
-        `UPDATE staff_members SET custom_photo_url=$1
-         WHERE id=$2 AND salon_id=$3 RETURNING id`,
-        [photoUrl, req.params.staffId, req.user.salonId]
+      // Verify ownership BEFORE writing anything to disk
+      const owned = await db.oneOrNone(
+        'SELECT id FROM staff_members WHERE id=$1 AND salon_id=$2',
+        [staffId, req.user.salonId]
       );
-      if (!row) return res.status(404).json({ error: 'Сотрудник не найден' });
+      if (!owned) return res.status(404).json({ error: 'Сотрудник не найден' });
+
+      const filename = `staff_${staffId}_${Date.now()}${v.ext}`;
+      absPath = path.join(uploadsDir, filename);
+      fs.writeFileSync(absPath, req.file.buffer);
+      const photoUrl = `/uploads/${filename}`;
+
+      await db.query(
+        'UPDATE staff_members SET custom_photo_url=$1 WHERE id=$2 AND salon_id=$3',
+        [photoUrl, staffId, req.user.salonId]
+      );
       res.json({ ok: true, url: photoUrl });
-    } catch (e) { res.status(500).json({ error: e.message }); }
+    } catch (e) {
+      if (absPath) { try { fs.unlinkSync(absPath); } catch (_) {} }
+      logger.error(`Staff photo upload failed: ${e.message}`);
+      res.status(500).json({ error: e.message });
+    }
   });
 });
 

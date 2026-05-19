@@ -4,26 +4,17 @@ const fs     = require('fs');
 const multer = require('multer');
 const { db } = require('../db');
 const { auth, requireRole } = require('../middleware/auth');
+const { imageFileFilter, validateImageBuffer } = require('../utils/upload-validator');
 
-const uploadStorage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    const dir = path.join(__dirname, '../../frontend/uploads');
-    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-    cb(null, dir);
-  },
-  filename: (req, file, cb) => {
-    const ext = path.extname(file.originalname).toLowerCase() || '.jpg';
-    cb(null, `app_logo${ext}`);
-  },
-});
+const uploadsDir = path.join(__dirname, '../../frontend/uploads');
+if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
 
+// memoryStorage so we can validate content before writing.
+// SVG removed — SVG can carry <script> and execute in same-origin → stored XSS.
 const upload = multer({
-  storage: uploadStorage,
+  storage: multer.memoryStorage(),
   limits: { fileSize: 5 * 1024 * 1024 },
-  fileFilter: (req, file, cb) => {
-    if (/^image\/(jpeg|png|gif|webp|svg\+xml)$/.test(file.mimetype)) cb(null, true);
-    else cb(new Error('Разрешены только изображения'));
-  },
+  fileFilter: imageFileFilter,
 });
 
 // Public — mobile app calls this at startup without auth
@@ -74,16 +65,35 @@ router.post('/logo', auth, requireRole('owner', 'admin'), (req, res) => {
   upload.single('file')(req, res, async (err) => {
     if (err) return res.status(400).json({ error: err.message });
     if (!req.file) return res.status(400).json({ error: 'Файл не загружен' });
-    const logoUrl = `/uploads/${req.file.filename}`;
+
+    const v = validateImageBuffer(req.file.buffer, req.file.originalname);
+    if (!v.ok) return res.status(400).json({ error: v.error });
+
+    let absPath = null;
     try {
-      const existing = await db.oneOrNone('SELECT id FROM app_settings ORDER BY id LIMIT 1');
+      // Use a timestamp suffix so a stale CDN/browser cache can't serve an old logo
+      // and so concurrent uploads don't race on the same filename.
+      const filename = `app_logo_${Date.now()}${v.ext}`;
+      absPath = path.join(uploadsDir, filename);
+      fs.writeFileSync(absPath, req.file.buffer);
+      const logoUrl = `/uploads/${filename}`;
+
+      const existing = await db.oneOrNone('SELECT id, logo_url FROM app_settings ORDER BY id LIMIT 1');
       if (existing) {
         await db.query('UPDATE app_settings SET logo_url=$1, updated_at=NOW() WHERE id=$2', [logoUrl, existing.id]);
+        // best-effort delete of old file
+        if (existing.logo_url && existing.logo_url.startsWith('/uploads/')) {
+          const old = path.join(uploadsDir, path.basename(existing.logo_url));
+          fs.unlink(old, () => {});
+        }
       } else {
         await db.query('INSERT INTO app_settings (clinic_name, logo_url) VALUES ($1, $2)', ['', logoUrl]);
       }
       res.json({ ok: true, logoUrl });
-    } catch (e) { res.status(500).json({ error: e.message }); }
+    } catch (e) {
+      if (absPath) { try { fs.unlinkSync(absPath); } catch (_) {} }
+      res.status(500).json({ error: e.message });
+    }
   });
 });
 

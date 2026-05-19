@@ -5,20 +5,16 @@ const fs     = require('fs');
 const multer = require('multer');
 const { db } = require('../db');
 const { auth } = require('../middleware/auth');
+const { imageFileFilter, validateImageBuffer } = require('../utils/upload-validator');
 
-const uploadStorage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    const dir = path.join(__dirname, '../../frontend/uploads');
-    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-    cb(null, dir);
-  },
-  filename: (req, file, cb) => {
-    const ext = path.extname(file.originalname).toLowerCase() || '.jpg';
-    cb(null, `salon_${req.user?.salonId}_${req.params.type || 'file'}${ext}`);
-  },
-});
-const upload = multer({ storage: uploadStorage, limits: { fileSize: 5 * 1024 * 1024 },
-  fileFilter: (req, file, cb) => { if (/^image\/(jpeg|png|gif|webp|svg\+xml)$/.test(file.mimetype)) cb(null, true); else cb(new Error('Разрешены только изображения')); }
+const uploadsDir = path.join(__dirname, '../../frontend/uploads');
+if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
+
+// memoryStorage so we validate before disk write. SVG removed (XSS vector).
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024 },
+  fileFilter: imageFileFilter,
 });
 
 router.get('/', auth, async (req, res) => {
@@ -53,12 +49,26 @@ router.post('/upload/:type', auth, (req, res) => {
   upload.single('file')(req, res, async (err) => {
     if (err) return res.status(400).json({ error: err.message });
     if (!req.file) return res.status(400).json({ error: 'Файл не загружен' });
+
     const type = req.params.type;
     if (!['logo', 'wm'].includes(type)) return res.status(400).json({ error: 'Invalid type' });
+
+    const v = validateImageBuffer(req.file.buffer, req.file.originalname);
+    if (!v.ok) return res.status(400).json({ error: v.error });
+
     const col = type === 'logo' ? 'template_logo_url' : 'template_wm_url';
-    const url = `/uploads/${req.file.filename}`;
-    try { await db.query(`UPDATE salons SET ${col}=$1 WHERE id=$2`, [url, req.user.salonId]); res.json({ ok: true, url }); }
-    catch (e) { res.status(500).json({ error: e.message }); }
+    let absPath = null;
+    try {
+      const filename = `salon_${req.user.salonId}_${type}_${Date.now()}${v.ext}`;
+      absPath = path.join(uploadsDir, filename);
+      fs.writeFileSync(absPath, req.file.buffer);
+      const url = `/uploads/${filename}`;
+      await db.query(`UPDATE salons SET ${col}=$1 WHERE id=$2`, [url, req.user.salonId]);
+      res.json({ ok: true, url });
+    } catch (e) {
+      if (absPath) { try { fs.unlinkSync(absPath); } catch (_) {} }
+      res.status(500).json({ error: e.message });
+    }
   });
 });
 
