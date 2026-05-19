@@ -96,11 +96,11 @@ router.post('/change-password', auth, async (req, res) => {
       return res.status(400).json({ error: 'Новый пароль минимум 6 символов' });
     const user = await db.one('SELECT * FROM users WHERE id=$1', [req.user.userId]);
     if (!user) return res.status(404).json({ error: 'Пользователь не найден' });
-    if (!user.must_change_password) {
-      if (!current_password) return res.status(400).json({ error: 'Укажите текущий пароль' });
-      const ok = await bcrypt.compare(current_password, user.password_hash);
-      if (!ok) return res.status(401).json({ error: 'Текущий пароль неверный' });
-    }
+    // Always require the current password, even on first activation.
+    // The user just logged in with the temp password — they know it.
+    if (!current_password) return res.status(400).json({ error: 'Укажите текущий пароль' });
+    const ok = await bcrypt.compare(current_password, user.password_hash);
+    if (!ok) return res.status(401).json({ error: 'Текущий пароль неверный' });
     const hash = await bcrypt.hash(new_password, 12);
     await db.query(
       'UPDATE users SET password_hash=$1, must_change_password=FALSE WHERE id=$2',

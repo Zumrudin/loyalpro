@@ -59,16 +59,18 @@ async function doLogout() {
 
 // ── CHANGE PASSWORD ──
 async function doChangePw() {
+  const cur = document.getElementById('cpCur').value;
   const np = document.getElementById('cpNew').value;
   const np2 = document.getElementById('cpNew2').value;
   const err = document.getElementById('cpErr');
   const btn = document.getElementById('cpBtn');
   err.style.display = 'none';
+  if (!cur) { err.textContent = 'Укажите текущий пароль'; err.style.display = 'block'; return; }
   if (np !== np2) { err.textContent = 'Пароли не совпадают'; err.style.display = 'block'; return; }
   if (np.length < 6) { err.textContent = 'Пароль минимум 6 символов'; err.style.display = 'block'; return; }
   btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>';
   try {
-    await api('POST', '/api/auth/change-password', { new_password: np });
+    await api('POST', '/api/auth/change-password', { current_password: cur, new_password: np });
     document.getElementById('changePwScreen').style.display = 'none';
     document.getElementById('app').style.display = 'flex';
     applyRoleNav(ME.role);

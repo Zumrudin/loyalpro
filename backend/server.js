@@ -35,7 +35,9 @@ app.use(helmet({
       fontSrc:   ["'self'", "data:"],
     },
   },
-  hsts: false,
+  // HSTS: 1 year, include subdomains. Prevents SSL-strip on first request after
+  // the browser has visited at least once.
+  hsts: { maxAge: 31536000, includeSubDomains: true },
 }));
 
 const defaultOrigins = [

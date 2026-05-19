@@ -11,12 +11,12 @@ module.exports = {
   DATABASE_URL: process.env.DATABASE_URL,
   DB_SSL: process.env.DB_SSL === 'true' ? { rejectUnauthorized: false } : false,
 
-  // Security
+  // Security — JWT_SECRET MUST be set. Fail fast instead of using an insecure default.
+  // A leaked default would let an attacker forge tokens for any user/role.
   JWT_SECRET: (() => {
     const secret = process.env.JWT_SECRET;
-    if (!secret) {
-      console.warn('[SECURITY WARNING] JWT_SECRET env var is not set — using insecure default. Set JWT_SECRET in production!');
-      return 'loyalpro_dev_secret_change_in_production';
+    if (!secret || secret.length < 32) {
+      throw new Error('JWT_SECRET env var is required and must be at least 32 chars. Refusing to start.');
     }
     return secret;
   })(),

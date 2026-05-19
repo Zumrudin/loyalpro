@@ -1,5 +1,6 @@
 const router = require('express').Router();
 const jwt = require('jsonwebtoken');
+const crypto = require('crypto');
 const { pool, db } = require('../db');
 const { mobileAuth } = require('../middleware/mobile-auth');
 const { getBotLink } = require('../services/telegram');
@@ -37,9 +38,10 @@ router.post('/login', async (req, res) => {
       });
     }
 
-    // Generate 4-digit OTP
-    const otp = Math.floor(1000 + Math.random() * 9000).toString();
-    logger.info(`Phone: ${normalizedPhone}, Code: ${otp}`);
+    // Generate 4-digit OTP using cryptographically secure RNG.
+    // Never log the code itself — OTP is the sole auth factor for mobile clients.
+    const otp = crypto.randomInt(1000, 10000).toString();
+    logger.info(`OTP issued for phone=${normalizedPhone}`);
 
     // Store OTP with 5 min TTL
     await db.query(
