@@ -82,6 +82,8 @@ async function syncGoodsCatalog(salon) {
   const MAX_PAGES_PER_CATEGORY = 100;       // T-03-04 hard cap (DoS guard) — 100 pages × 100 = 10k goods/cat
   const PACE_MS = 200;                       // D-11
   const BOOTSTRAP_PACE_MS = 150;             // matches services/staff.js:58
+  const RETRIES_429   = 3;                   // retry budget when YClients returns 429 Too Many Requests
+  const RETRY_BASE_MS = 500;                 // exponential backoff: 500, 1000, 2000ms
   let inserted = 0, updated = 0, goodsSeen = 0;
 
   logger.info(`Salon ${salonId}: starting catalog sync (cid=${cid})`);
@@ -157,10 +159,28 @@ async function syncGoodsCatalog(salon) {
   logger.info(`Salon ${salonId}: enumerating ${catIdList.length} categories`);
 
   for (const catId of catIdList) {
+    // Pace before each category, not just between pages. Without this, the
+    // first-page request of every category fires back-to-back (most categories
+    // fit on one page), bursting ~23 requests in <1s and tripping YClients 429.
+    await new Promise(r => setTimeout(r, PACE_MS));
     try {
       let page = 1;
       while (page <= MAX_PAGES_PER_CATEGORY) {        // T-03-04 hard cap
-        const goods = await ycGet(salon, `/goods/${cid}`, { category_id: catId, count: PAGE_SIZE, page });
+        let goods;
+        for (let attempt = 0; ; attempt++) {
+          try {
+            goods = await ycGet(salon, `/goods/${cid}`, { category_id: catId, count: PAGE_SIZE, page });
+            break;
+          } catch (e) {
+            if (e.response?.status === 429 && attempt < RETRIES_429) {
+              const wait = RETRY_BASE_MS * (2 ** attempt);
+              logger.warn(`Salon ${salonId}: category ${catId} page ${page} got 429, retry ${attempt + 1}/${RETRIES_429} in ${wait}ms`);
+              await new Promise(r => setTimeout(r, wait));
+              continue;
+            }
+            throw e;
+          }
+        }
         if (!Array.isArray(goods) || goods.length === 0) break;
         for (const g of goods) {
           if (g.good_id == null) continue;            // D-10 — same gotcha as bug fix in Wave 1
