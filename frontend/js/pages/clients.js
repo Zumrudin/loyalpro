@@ -265,10 +265,24 @@ async function searchBonusC(q) {
   try {
     const d = await api('GET', '/api/clients?search=' + encodeURIComponent(q) + '&limit=5');
     if (!d.clients?.length) { el.innerHTML = '<div style="font-size:12px;color:var(--t3)">Не найдено</div>'; return; }
+    // Never interpolate client names into inline onclick handlers — HTML
+    // attribute decoding bypasses esc()/escAttr() and produces XSS.
+    // Use data-* + event delegation instead.
     el.innerHTML = d.clients.map(c => `
-      <div onclick="selBC(${c.id},'${escAttr(c.name)}',${c.bonus_balance})" style="padding:7px 10px;border:1px solid var(--bd);border-radius:7px;cursor:pointer;margin-bottom:4px;font-size:12.5px">
+      <div data-bonus-pick="${c.id}" data-bonus-balance="${c.bonus_balance || 0}" style="padding:7px 10px;border:1px solid var(--bd);border-radius:7px;cursor:pointer;margin-bottom:4px;font-size:12.5px">
         <strong>${esc(c.name)}</strong> · ${esc(c.phone || '—')} · <span style="color:var(--a)">${c.bonus_balance || 0} бонусов</span>
       </div>`).join('');
+    if (!el._bonusDelegated) {
+      el.addEventListener('click', (e) => {
+        const row = e.target.closest('[data-bonus-pick]');
+        if (!row) return;
+        const id = parseInt(row.dataset.bonusPick, 10);
+        const balance = parseFloat(row.dataset.bonusBalance) || 0;
+        const name = row.querySelector('strong')?.textContent || '';
+        selBC(id, name, balance);
+      });
+      el._bonusDelegated = true;
+    }
   } catch(e) { console.error('searchBonusC:', e); }
 }
 

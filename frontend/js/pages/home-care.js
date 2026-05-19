@@ -353,9 +353,20 @@ function hcPickerRender(groups) {
         <span id="hcPickChev-${gi}" style="font-size:11px;color:var(--t3)">${g.open === true ? '▼' : '▶'}</span>
       </div>
       <div id="hcPickGrp-${gi}" style="display:${g.open === true ? '' : 'none'}">
-        ${g.items.map(t => `<div class="hc-picker-item" onclick="event.stopPropagation();hcPickerSelect('${escAttr(t)}')">${esc(t)}</div>`).join('')}
+        ${g.items.map(t => `<div class="hc-picker-item" data-hc-pick-title="${esc(t)}" onclick="event.stopPropagation()">${esc(t)}</div>`).join('')}
       </div>
     </div>`).join('');
+  // Delegation: read title from textContent (safe) instead of interpolating
+  // it into the onclick string (HTML-attribute decode bypasses escAttr).
+  const root = document.getElementById('hcPickerBody');
+  if (root && !root._hcPickerDelegated) {
+    root.addEventListener('click', (e) => {
+      const it = e.target.closest('[data-hc-pick-title]');
+      if (!it) return;
+      hcPickerSelect(it.textContent);
+    });
+    root._hcPickerDelegated = true;
+  }
 }
 
 function hcPickerToggle(gi) {
@@ -399,10 +410,21 @@ async function hcSearchClient(q) {
   try {
     const d = await api('GET', `/api/clients?search=${encodeURIComponent(q)}&limit=6`);
     if (!d.clients?.length) { drop.style.display = 'none'; return; }
+    // Use data-attr + delegation — never interpolate client.name into onclick.
     drop.innerHTML = d.clients.map(c =>
-      `<div class="hc-client-opt" onclick="hcSelectClient(${c.id},'${escAttr(c.name)}')">
+      `<div class="hc-client-opt" data-hc-pick="${c.id}">
         <b>${esc(c.name)}</b> <span style="color:var(--t3);font-size:12px">${esc(c.phone || '')}</span>
       </div>`).join('');
+    if (!drop._hcDelegated) {
+      drop.addEventListener('click', (e) => {
+        const row = e.target.closest('[data-hc-pick]');
+        if (!row) return;
+        const id = parseInt(row.dataset.hcPick, 10);
+        const name = row.querySelector('b')?.textContent || '';
+        hcSelectClient(id, name);
+      });
+      drop._hcDelegated = true;
+    }
     drop.style.display = 'block';
   } catch { drop.style.display = 'none'; }
 }

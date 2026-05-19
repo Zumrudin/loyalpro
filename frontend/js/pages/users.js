@@ -27,11 +27,27 @@ function renderUsers(users) {
       <td>${u.is_active ? '<span style="color:#059669">Активен</span>' : '<span style="color:var(--t3)">Отключён</span>'}</td>
       <td style="color:var(--t3);font-size:12px">${u.last_login_at ? new Date(u.last_login_at).toLocaleDateString('ru') : '—'}</td>
       <td style="text-align:right">
-        <button class="btn btn-sec btn-sm" onclick="usersOpenEdit(${u.id})">Изменить</button>
-        ${u.is_active && u.role!=='owner' ? `<button class="btn btn-sm" style="color:var(--danger);border:1px solid var(--bd);margin-left:4px" onclick="usersDeactivate(${u.id},'${esc(u.name)}')">Отключить</button>` : ''}
+        <button class="btn btn-sec btn-sm" data-users-edit="${u.id}">Изменить</button>
+        ${u.is_active && u.role!=='owner' ? `<button class="btn btn-sm" style="color:var(--danger);border:1px solid var(--bd);margin-left:4px" data-users-deactivate="${u.id}">Отключить</button>` : ''}
       </td>
     </tr>
   `).join('');
+  // Event delegation: never interpolate user-controlled strings into onclick
+  // handlers — HTML attribute decoding turns escaped quotes back into real
+  // quotes, opening XSS via stored names. Look up the row from _usersData by id.
+  if (!tbody._usersDelegated) {
+    tbody.addEventListener('click', (e) => {
+      const editBtn = e.target.closest('[data-users-edit]');
+      if (editBtn) { usersOpenEdit(parseInt(editBtn.dataset.usersEdit, 10)); return; }
+      const deactBtn = e.target.closest('[data-users-deactivate]');
+      if (deactBtn) {
+        const id = parseInt(deactBtn.dataset.usersDeactivate, 10);
+        const u = _usersData.find(x => x.id === id);
+        usersDeactivate(id, u?.name || '');
+      }
+    });
+    tbody._usersDelegated = true;
+  }
 }
 
 function usersOpenCreate() {
