@@ -252,6 +252,15 @@ async function runMigrations(client) {
     ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS max TEXT
   `).catch(() => {});
 
+  // ── Salons: HMAC secret for YClients webhooks ──────────────────────
+  // Per-salon secret used to verify the signature attached by YClients on
+  // every webhook call. NULL means HMAC is not yet configured for this salon
+  // (legacy mode — webhook accepted without signature). Once set, all
+  // webhooks for that salon MUST carry a matching signature.
+  await client.query(`
+    ALTER TABLE salons ADD COLUMN IF NOT EXISTS yclients_webhook_secret VARCHAR(128)
+  `).catch(() => {});
+
   // ── App Settings: per-salon scoping (closes cross-tenant write hole) ────
   // Before this, app_settings was a single global row that ANY salon's admin
   // could overwrite. Adding salon_id makes the table multi-tenant.

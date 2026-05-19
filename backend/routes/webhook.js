@@ -1,25 +1,71 @@
 const router = require('express').Router();
+const crypto = require('crypto');
 const { db } = require('../db');
 const { getLoyaltySettings, processRecordEvent, processFinancesOperation } = require('../services/loyalty');
 const { buildClientFio } = require('../utils/client-name');
 const { createLogger } = require('../logger');
 const logger = createLogger('Webhook');
 
+/**
+ * Verify HMAC signature attached by YClients to a webhook delivery.
+ * Expects `X-Yclients-Signature: sha256=<hex>` over the raw JSON body.
+ * If `secret` is null/empty we treat the salon as not-yet-configured for HMAC
+ * and accept (legacy mode) — admins should generate a secret to enable enforcement.
+ */
+function verifyWebhookSignature(req, secret) {
+  if (!secret) return { ok: true, mode: 'legacy' };
+
+  const header = req.headers['x-yclients-signature']
+              || req.headers['x-signature']
+              || req.headers['x-hub-signature-256'];
+  if (!header || typeof header !== 'string') {
+    return { ok: false, reason: 'missing signature header' };
+  }
+  const provided = header.replace(/^sha256=/i, '').trim();
+  if (!/^[0-9a-f]+$/i.test(provided)) {
+    return { ok: false, reason: 'malformed signature' };
+  }
+  const raw = req.rawBody;
+  if (!raw || !raw.length) return { ok: false, reason: 'empty body' };
+
+  const expected = crypto.createHmac('sha256', secret).update(raw).digest('hex');
+  const a = Buffer.from(provided, 'hex');
+  const b = Buffer.from(expected, 'hex');
+  if (a.length !== b.length) return { ok: false, reason: 'length mismatch' };
+  return crypto.timingSafeEqual(a, b)
+    ? { ok: true, mode: 'verified' }
+    : { ok: false, reason: 'signature mismatch' };
+}
+
 router.post('/webhook.v2/:companyId', async (req, res) => {
-  res.json({ ok: true });
   const t0 = Date.now();
-  logger.info(`hit companyId=${req.params.companyId} resource=${req.body?.resource||req.body?.resource_type}`);
   let wlog = null;
   try {
     const salon = await db.oneOrNone(
       'SELECT * FROM salons WHERE yclients_company_id=$1 AND is_active=TRUE',
       [req.params.companyId]
     );
-    if (!salon) { logger.warn(`salon not found companyId=${req.params.companyId}`); return; }
+    if (!salon) {
+      logger.warn(`salon not found companyId=${req.params.companyId}`);
+      return res.status(404).json({ error: 'company not found' });
+    }
+
+    const sig = verifyWebhookSignature(req, salon.yclients_webhook_secret);
+    if (!sig.ok) {
+      logger.warn(`signature check failed companyId=${req.params.companyId} salon=${salon.id}: ${sig.reason}`);
+      return res.status(401).json({ error: 'invalid signature' });
+    }
+    if (sig.mode === 'legacy') {
+      logger.warn(`legacy unsigned webhook accepted companyId=${req.params.companyId} salon=${salon.id} — set yclients_webhook_secret to enable HMAC enforcement`);
+    }
+
+    // ACK immediately AFTER auth check — YClients retries on timeout, but we
+    // don't want spoofed payloads to get 200 OK.
+    res.json({ ok: true });
 
     const payload = req.body;
     const resourceType = payload.resource || payload.resource_type;
-    logger.info(`salon=${salon.id} resource=${resourceType} data_id=${payload.data?.id}`);
+    logger.info(`hit companyId=${req.params.companyId} salon=${salon.id} resource=${resourceType} data_id=${payload.data?.id}`);
 
     wlog = await db.one(
       `INSERT INTO webhook_logs (salon_id,event_type,resource_id,payload) VALUES ($1,$2,$3,$4) RETURNING id`,

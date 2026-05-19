@@ -1,6 +1,7 @@
 const router = require('express').Router();
+const crypto = require('crypto');
 const { db } = require('../db');
-const { auth } = require('../middleware/auth');
+const { auth, requireRole } = require('../middleware/auth');
 const { ycAuth, ycWebSessions } = require('../services/yclients');
 const { getLoyaltySettings } = require('../services/loyalty');
 const { createLogger } = require('../logger');
@@ -31,6 +32,34 @@ router.put('/', auth, async (req, res) => {
       return res.status(409).json({ error: 'Салон с таким ID филиала YClients уже зарегистрирован в системе. Обратитесь в поддержку.' });
     res.status(500).json({ error: e.message });
   }
+});
+
+// ── Webhook HMAC secret management ──────────────────────────────
+// GET returns whether a secret is configured (never the secret itself);
+// POST generates and returns a NEW secret (replacing any prior one).
+// The secret must then be entered in the YClients partner dashboard
+// against the webhook URL — YClients signs each delivery with sha256-HMAC.
+router.get('/webhook-secret', auth, requireRole('owner', 'admin'), async (req, res) => {
+  try {
+    const row = await db.oneOrNone(
+      'SELECT yclients_webhook_secret FROM salons WHERE id=$1',
+      [req.user.salonId]
+    );
+    res.json({ configured: !!row?.yclients_webhook_secret });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+router.post('/webhook-secret', auth, requireRole('owner', 'admin'), async (req, res) => {
+  try {
+    const secret = crypto.randomBytes(32).toString('hex'); // 64 hex chars
+    await db.query(
+      'UPDATE salons SET yclients_webhook_secret=$1, updated_at=NOW() WHERE id=$2',
+      [secret, req.user.salonId]
+    );
+    logger.info(`webhook secret rotated salon=${req.user.salonId} by user=${req.user.userId}`);
+    // Returned once. After this admin acknowledges the value we don't expose it again.
+    res.json({ secret });
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 router.post('/yclients-auth', auth, async (req, res) => {

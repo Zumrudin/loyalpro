@@ -68,7 +68,12 @@ app.use(cors({
   credentials: true,
 }));
 // NOTE: No manual app.options('*', ...) handler — cors() middleware handles OPTIONS preflight correctly.
-app.use(express.json({ limit: '2mb' }));
+// Capture rawBody on parse so the webhook handler can verify HMAC signatures.
+// The buffer is reused, not duplicated — no significant memory cost.
+app.use(express.json({
+  limit: '2mb',
+  verify: (req, _res, buf) => { req.rawBody = buf; },
+}));
 app.use(express.static(path.join(__dirname, '../frontend'), { etag: false, lastModified: false, setHeaders: (res, filePath) => { if (filePath.endsWith('.js') || filePath.endsWith('.css')) { res.setHeader('Cache-Control', 'no-store'); } } }));
 
 // Explicit route for index.html
