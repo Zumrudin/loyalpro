@@ -252,6 +252,22 @@ async function runMigrations(client) {
     ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS max TEXT
   `).catch(() => {});
 
+  // ── App Settings: per-salon scoping (closes cross-tenant write hole) ────
+  // Before this, app_settings was a single global row that ANY salon's admin
+  // could overwrite. Adding salon_id makes the table multi-tenant.
+  await client.query(`
+    ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS salon_id INTEGER REFERENCES salons(id) ON DELETE CASCADE
+  `).catch(() => {});
+  // Backfill: any pre-existing row gets attributed to the lowest salon id.
+  await client.query(`
+    UPDATE app_settings SET salon_id = (SELECT MIN(id) FROM salons)
+    WHERE salon_id IS NULL
+  `).catch(() => {});
+  await client.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS app_settings_salon_id_unique
+    ON app_settings (salon_id) WHERE salon_id IS NOT NULL
+  `).catch(() => {});
+
   // ── Mobile OTP Telegram delivery: phone ↔ chat_id link ──────
   await client.query(`
     CREATE TABLE IF NOT EXISTS mobile_telegram_links (

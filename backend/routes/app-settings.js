@@ -17,50 +17,63 @@ const upload = multer({
   fileFilter: imageFileFilter,
 });
 
-// Public — mobile app calls this at startup without auth
+function shape(row) {
+  if (!row) return {};
+  return {
+    clinicName: row.clinic_name,
+    logoUrl:    row.logo_url,
+    phone:      row.phone,
+    whatsapp:   row.whatsapp,
+    telegram:   row.telegram,
+    max:        row.max,
+    instagram:  row.instagram,
+    mapsUrl:    row.maps_url,
+    email:      row.email,
+  };
+}
+
+// Resolve which salon a public/anonymous request is for.
+// Priority: ?salon=N (validated int) → lowest salon_id row (single-tenant default).
+async function resolvePublicSalonId(req) {
+  const q = parseInt(req.query.salon, 10);
+  if (Number.isFinite(q) && q > 0) return q;
+  const fallback = await db.oneOrNone('SELECT id FROM salons ORDER BY id LIMIT 1');
+  return fallback?.id || null;
+}
+
+// Public — mobile app calls this at startup without auth.
+// Accepts optional ?salon=N to disambiguate in multi-tenant deployments.
 router.get('/', async (req, res) => {
   try {
-    const row = await db.oneOrNone('SELECT * FROM app_settings ORDER BY id LIMIT 1');
-    if (!row) return res.json({});
-    res.json({
-      clinicName: row.clinic_name,
-      logoUrl:    row.logo_url,
-      phone:      row.phone,
-      whatsapp:   row.whatsapp,
-      telegram:   row.telegram,
-      max:        row.max,
-      instagram:  row.instagram,
-      mapsUrl:    row.maps_url,
-      email:      row.email,
-    });
+    const salonId = await resolvePublicSalonId(req);
+    if (!salonId) return res.json({});
+    const row = await db.oneOrNone(
+      'SELECT * FROM app_settings WHERE salon_id=$1 LIMIT 1',
+      [salonId]
+    );
+    res.json(shape(row));
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// Admin only — update text fields
+// Admin only — update text fields, scoped to caller's salon
 router.put('/', auth, requireRole('owner', 'admin'), async (req, res) => {
   try {
     const { clinicName, phone, whatsapp, telegram, max, instagram, mapsUrl, email } = req.body;
-    const existing = await db.oneOrNone('SELECT id FROM app_settings ORDER BY id LIMIT 1');
-    if (existing) {
-      await db.query(
-        `UPDATE app_settings SET clinic_name=$1, phone=$2, whatsapp=$3, telegram=$4,
-         max=$5, instagram=$6, maps_url=$7, email=$8, updated_at=NOW() WHERE id=$9`,
-        [clinicName || '', phone || null, whatsapp || null, telegram || null,
-         max || null, instagram || null, mapsUrl || null, email || null, existing.id]
-      );
-    } else {
-      await db.query(
-        `INSERT INTO app_settings (clinic_name, phone, whatsapp, telegram, max, instagram, maps_url, email)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-        [clinicName || '', phone || null, whatsapp || null, telegram || null,
-         max || null, instagram || null, mapsUrl || null, email || null]
-      );
-    }
+    const salonId = req.user.salonId;
+    await db.query(
+      `INSERT INTO app_settings (salon_id, clinic_name, phone, whatsapp, telegram, max, instagram, maps_url, email)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+       ON CONFLICT (salon_id) DO UPDATE SET
+         clinic_name=$2, phone=$3, whatsapp=$4, telegram=$5,
+         max=$6, instagram=$7, maps_url=$8, email=$9, updated_at=NOW()`,
+      [salonId, clinicName || '', phone || null, whatsapp || null, telegram || null,
+       max || null, instagram || null, mapsUrl || null, email || null]
+    );
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// Admin only — upload logo
+// Admin only — upload logo, scoped to caller's salon
 router.post('/logo', auth, requireRole('owner', 'admin'), (req, res) => {
   upload.single('file')(req, res, async (err) => {
     if (err) return res.status(400).json({ error: err.message });
@@ -69,25 +82,33 @@ router.post('/logo', auth, requireRole('owner', 'admin'), (req, res) => {
     const v = validateImageBuffer(req.file.buffer, req.file.originalname);
     if (!v.ok) return res.status(400).json({ error: v.error });
 
+    const salonId = req.user.salonId;
     let absPath = null;
     try {
-      // Use a timestamp suffix so a stale CDN/browser cache can't serve an old logo
-      // and so concurrent uploads don't race on the same filename.
-      const filename = `app_logo_${Date.now()}${v.ext}`;
+      // Per-salon filename so admins of different salons can't collide.
+      const filename = `app_logo_${salonId}_${Date.now()}${v.ext}`;
       absPath = path.join(uploadsDir, filename);
       fs.writeFileSync(absPath, req.file.buffer);
       const logoUrl = `/uploads/${filename}`;
 
-      const existing = await db.oneOrNone('SELECT id, logo_url FROM app_settings ORDER BY id LIMIT 1');
+      const existing = await db.oneOrNone(
+        'SELECT logo_url FROM app_settings WHERE salon_id=$1',
+        [salonId]
+      );
       if (existing) {
-        await db.query('UPDATE app_settings SET logo_url=$1, updated_at=NOW() WHERE id=$2', [logoUrl, existing.id]);
-        // best-effort delete of old file
+        await db.query(
+          'UPDATE app_settings SET logo_url=$1, updated_at=NOW() WHERE salon_id=$2',
+          [logoUrl, salonId]
+        );
         if (existing.logo_url && existing.logo_url.startsWith('/uploads/')) {
           const old = path.join(uploadsDir, path.basename(existing.logo_url));
           fs.unlink(old, () => {});
         }
       } else {
-        await db.query('INSERT INTO app_settings (clinic_name, logo_url) VALUES ($1, $2)', ['', logoUrl]);
+        await db.query(
+          'INSERT INTO app_settings (salon_id, clinic_name, logo_url) VALUES ($1, $2, $3)',
+          [salonId, '', logoUrl]
+        );
       }
       res.json({ ok: true, logoUrl });
     } catch (e) {
