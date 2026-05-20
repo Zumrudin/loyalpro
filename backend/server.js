@@ -22,6 +22,12 @@ const helmet   = require('helmet');
 
 const app = express();
 
+// Behind a single nginx reverse proxy — trust exactly one X-Forwarded-For hop
+// so req.ip is the real client IP. Required for correct rate-limiting and for
+// the IP recorded in the sessions table; without it express-rate-limit raises
+// ERR_ERL_UNEXPECTED_X_FORWARDED_FOR and keys every client to the proxy IP.
+app.set('trust proxy', 1);
+
 // Security headers
 app.use(helmet({
   contentSecurityPolicy: {
@@ -53,6 +59,7 @@ const defaultOrigins = [
   'http://127.0.0.1:3001',
   'http://127.0.0.1',
   'https://zumrudin.ru',
+  'https://dev.zumrudin.ru',
 ];
 // Use ALLOWED_ORIGINS env var if provided (comma-separated), otherwise fall back to defaults
 const allowedOrigins = config.ALLOWED_ORIGINS || defaultOrigins;
@@ -68,12 +75,7 @@ app.use(cors({
   credentials: true,
 }));
 // NOTE: No manual app.options('*', ...) handler — cors() middleware handles OPTIONS preflight correctly.
-// Capture rawBody on parse so the webhook handler can verify HMAC signatures.
-// The buffer is reused, not duplicated — no significant memory cost.
-app.use(express.json({
-  limit: '2mb',
-  verify: (req, _res, buf) => { req.rawBody = buf; },
-}));
+app.use(express.json({ limit: '2mb' }));
 app.use(express.static(path.join(__dirname, '../frontend'), { etag: false, lastModified: false, setHeaders: (res, filePath) => { if (filePath.endsWith('.js') || filePath.endsWith('.css')) { res.setHeader('Cache-Control', 'no-store'); } } }));
 
 // Explicit route for index.html

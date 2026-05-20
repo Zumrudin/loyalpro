@@ -7,34 +7,30 @@ const { createLogger } = require('../logger');
 const logger = createLogger('Webhook');
 
 /**
- * Verify HMAC signature attached by YClients to a webhook delivery.
- * Expects `X-Yclients-Signature: sha256=<hex>` over the raw JSON body.
- * If `secret` is null/empty we treat the salon as not-yet-configured for HMAC
- * and accept (legacy mode) — admins should generate a secret to enable enforcement.
+ * Authenticate a webhook delivery by a shared secret carried in the URL.
+ *
+ * YClients does NOT sign webhook bodies and exposes no secret/signature field
+ * in the marketplace app — the only thing you control is the notification URL.
+ * So the secret travels as a query param: register the URL in YClients as
+ *   https://<host>/yclients/webhook.v2/<companyId>?key=<secret>
+ * and we compare `?key=` against the per-salon secret (timing-safe).
+ *
+ * If `secret` is null/empty the salon is not-yet-configured and we accept
+ * (legacy mode) so delivery never breaks before the URL is updated. Generate a
+ * secret + update the YClients URL together to switch a salon into enforcement.
  */
-function verifyWebhookSignature(req, secret) {
+function verifyWebhookSecret(req, secret) {
   if (!secret) return { ok: true, mode: 'legacy' };
 
-  const header = req.headers['x-yclients-signature']
-              || req.headers['x-signature']
-              || req.headers['x-hub-signature-256'];
-  if (!header || typeof header !== 'string') {
-    return { ok: false, reason: 'missing signature header' };
-  }
-  const provided = header.replace(/^sha256=/i, '').trim();
-  if (!/^[0-9a-f]+$/i.test(provided)) {
-    return { ok: false, reason: 'malformed signature' };
-  }
-  const raw = req.rawBody;
-  if (!raw || !raw.length) return { ok: false, reason: 'empty body' };
+  const provided = typeof req.query.key === 'string' ? req.query.key : '';
+  if (!provided) return { ok: false, reason: 'missing key' };
 
-  const expected = crypto.createHmac('sha256', secret).update(raw).digest('hex');
-  const a = Buffer.from(provided, 'hex');
-  const b = Buffer.from(expected, 'hex');
-  if (a.length !== b.length) return { ok: false, reason: 'length mismatch' };
+  const a = Buffer.from(provided);
+  const b = Buffer.from(secret);
+  if (a.length !== b.length) return { ok: false, reason: 'key mismatch' };
   return crypto.timingSafeEqual(a, b)
     ? { ok: true, mode: 'verified' }
-    : { ok: false, reason: 'signature mismatch' };
+    : { ok: false, reason: 'key mismatch' };
 }
 
 router.post('/webhook.v2/:companyId', async (req, res) => {
@@ -50,13 +46,13 @@ router.post('/webhook.v2/:companyId', async (req, res) => {
       return res.status(404).json({ error: 'company not found' });
     }
 
-    const sig = verifyWebhookSignature(req, salon.yclients_webhook_secret);
+    const sig = verifyWebhookSecret(req, salon.yclients_webhook_secret);
     if (!sig.ok) {
-      logger.warn(`signature check failed companyId=${req.params.companyId} salon=${salon.id}: ${sig.reason}`);
-      return res.status(401).json({ error: 'invalid signature' });
+      logger.warn(`webhook key check failed companyId=${req.params.companyId} salon=${salon.id}: ${sig.reason}`);
+      return res.status(401).json({ error: 'invalid key' });
     }
     if (sig.mode === 'legacy') {
-      logger.warn(`legacy unsigned webhook accepted companyId=${req.params.companyId} salon=${salon.id} — set yclients_webhook_secret to enable HMAC enforcement`);
+      logger.warn(`legacy unauthenticated webhook accepted companyId=${req.params.companyId} salon=${salon.id} — set yclients_webhook_secret and add ?key=<secret> to the YClients notification URL to enable enforcement`);
     }
 
     // ACK immediately AFTER auth check — YClients retries on timeout, but we

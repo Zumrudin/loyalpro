@@ -405,6 +405,56 @@ async function runMigrations(client) {
     ALTER TABLE revenue_operations
       ALTER COLUMN source TYPE VARCHAR(32)
   `).catch(() => {});
+
+  // ── Session tables: back the JWT-revocation check ──────────────
+  // Auth (routes/index.js, middleware/mobile-auth.js) now requires every token
+  // to map to a live row here, so logout / forced sign-out can revoke a JWT
+  // before its expiry. These tables predate migrations.js on existing servers;
+  // create them IF NOT EXISTS so a fresh deploy (e.g. prod) doesn't lock out
+  // every login the moment the revocation check goes live.
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS sessions (
+      id         SERIAL PRIMARY KEY,
+      user_id    INTEGER,
+      token      VARCHAR(512) NOT NULL UNIQUE,
+      ip         VARCHAR(64),
+      user_agent TEXT,
+      expires_at TIMESTAMPTZ NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `).catch(() => {});
+  await client.query(`CREATE INDEX IF NOT EXISTS idx_sessions_token   ON sessions(token)`).catch(() => {});
+  await client.query(`CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions(user_id)`).catch(() => {});
+
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS mobile_sessions (
+      id         SERIAL PRIMARY KEY,
+      client_id  INTEGER NOT NULL,
+      token      TEXT NOT NULL UNIQUE,
+      phone      VARCHAR(32) NOT NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      expires_at TIMESTAMP NOT NULL
+    )
+  `).catch(() => {});
+  await client.query(`CREATE INDEX IF NOT EXISTS idx_mobile_sessions_client_id  ON mobile_sessions(client_id)`).catch(() => {});
+  await client.query(`CREATE INDEX IF NOT EXISTS idx_mobile_sessions_expires_at ON mobile_sessions(expires_at)`).catch(() => {});
+
+  // ── Mobile OTP: per-code failed-attempt counter ────────────────
+  // The 6-digit OTP is the sole auth factor for mobile clients. We cap
+  // failed guesses per issued code (see routes/mobile-auth.js) so the code
+  // space can't be brute-forced — even if an attacker rotates source IPs.
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS mobile_otp_sessions (
+      phone      VARCHAR(32) PRIMARY KEY,
+      otp        VARCHAR(16) NOT NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      expires_at TIMESTAMP NOT NULL
+    )
+  `).catch(() => {});
+  await client.query(`CREATE INDEX IF NOT EXISTS idx_mobile_otp_sessions_expires_at ON mobile_otp_sessions(expires_at)`).catch(() => {});
+  await client.query(`
+    ALTER TABLE mobile_otp_sessions ADD COLUMN IF NOT EXISTS attempts INTEGER NOT NULL DEFAULT 0
+  `).catch(() => {});
 }
 
 module.exports = { runMigrations };

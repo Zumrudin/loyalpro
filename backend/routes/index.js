@@ -3,6 +3,7 @@
 // ============================================================
 const config = require('../config');
 const jwt    = require('jsonwebtoken');
+const { db } = require('../db');
 
 module.exports = function mountRoutes(app) {
   // ── Webhook (no JWT required) ───────────────────────────────
@@ -13,18 +14,25 @@ module.exports = function mountRoutes(app) {
   app.use('/api/mobile/client', require('./mobile-client'));
 
   // ── Global API auth + role middleware ──────────────────────
-  app.use('/api', (req, res, next) => {
+  app.use('/api', async (req, res, next) => {
     const fullPath = '/api' + req.path;
     if (config.API_PUBLIC.includes(fullPath)) return next();
-    if (fullPath.startsWith('/api/yclients/')) return next();
 
-    if (!req.user) {
-      const h = req.headers.authorization;
-      const t = h?.startsWith('Bearer ') ? h.slice(7) : (req.query.token || '');
-      if (!t) return res.status(401).json({ error: 'Unauthorized' });
-      try { req.user = jwt.verify(t, config.JWT_SECRET); }
-      catch { return res.status(401).json({ error: 'Token expired or invalid' }); }
-    }
+    const h = req.headers.authorization;
+    const token = h?.startsWith('Bearer ') ? h.slice(7) : (req.query.token || '');
+    if (!token) return res.status(401).json({ error: 'Unauthorized' });
+    try { req.user = jwt.verify(token, config.JWT_SECRET); }
+    catch { return res.status(401).json({ error: 'Token expired or invalid' }); }
+
+    // Token must still map to a live session — lets logout / forced sign-out
+    // actually revoke a JWT before its 7-day expiry.
+    try {
+      const sess = await db.oneOrNone(
+        'SELECT 1 FROM sessions WHERE token=$1 AND expires_at > NOW()',
+        [token]
+      );
+      if (!sess) return res.status(401).json({ error: 'Session expired or revoked' });
+    } catch { return res.status(401).json({ error: 'Session check failed' }); }
 
     if (req.user.role === 'specialist') {
       const allowed = config.SPECIALIST_ALLOWED_PREFIXES.some(p => fullPath.startsWith(p));

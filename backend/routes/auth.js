@@ -21,8 +21,8 @@ router.post('/register', async (req, res) => {
     const { salonName, city, email, password } = req.body;
     if (!salonName || !email || !password)
       return res.status(400).json({ error: 'Заполните все поля' });
-    if (password.length < 6)
-      return res.status(400).json({ error: 'Пароль минимум 6 символов' });
+    if (password.length < 8)
+      return res.status(400).json({ error: 'Пароль минимум 8 символов' });
 
     await pg.query('BEGIN');
     const salon = (await pg.query(
@@ -52,7 +52,8 @@ router.post('/register', async (req, res) => {
     await pg.query('ROLLBACK');
     if (e.code === '23505')
       return res.status(409).json({ error: 'Пользователь с таким email уже существует' });
-    res.status(500).json({ error: e.message });
+    console.error('[auth/register]', e.message);
+    res.status(500).json({ error: 'Внутренняя ошибка сервера' });
   } finally { pg.release(); }
 });
 
@@ -86,14 +87,14 @@ router.post('/login', loginLimiter, async (req, res) => {
       role: user.role, salonName: user.salon_name,
       must_change_password: user.must_change_password || false,
     }});
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { console.error('[auth]', e.message); res.status(500).json({ error: 'Внутренняя ошибка сервера' }); }
 });
 
 router.post('/change-password', auth, async (req, res) => {
   try {
     const { current_password, new_password } = req.body;
-    if (!new_password || new_password.length < 6)
-      return res.status(400).json({ error: 'Новый пароль минимум 6 символов' });
+    if (!new_password || new_password.length < 8)
+      return res.status(400).json({ error: 'Новый пароль минимум 8 символов' });
     const user = await db.one('SELECT * FROM users WHERE id=$1', [req.user.userId]);
     if (!user) return res.status(404).json({ error: 'Пользователь не найден' });
     // Always require the current password, even on first activation.
@@ -107,7 +108,7 @@ router.post('/change-password', auth, async (req, res) => {
       [hash, req.user.userId]
     );
     res.json({ ok: true });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { console.error('[auth]', e.message); res.status(500).json({ error: 'Внутренняя ошибка сервера' }); }
 });
 
 router.post('/logout', auth, async (req, res) => {
@@ -125,7 +126,7 @@ router.get('/me', auth, async (req, res) => {
       [req.user.userId]
     );
     res.json(user);
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { console.error('[auth]', e.message); res.status(500).json({ error: 'Внутренняя ошибка сервера' }); }
 });
 
 module.exports = router;

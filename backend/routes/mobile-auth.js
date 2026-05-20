@@ -1,6 +1,7 @@
 const router = require('express').Router();
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
+const rateLimit = require('express-rate-limit');
 const { pool, db } = require('../db');
 const { mobileAuth } = require('../middleware/mobile-auth');
 const { getBotLink } = require('../services/telegram');
@@ -11,8 +12,30 @@ const JWT_SECRET = config.JWT_SECRET;
 const { createLogger } = require('../logger');
 const logger = createLogger('MobileAuth');
 
+// Max failed guesses per issued OTP before it is burned. With a 6-digit code
+// (10^6 space) and 5 guesses, brute force is infeasible.
+const MAX_OTP_ATTEMPTS = 5;
+
+// Throttle OTP issuance — stops Telegram/SMS spam and code-reset flooding.
+const otpRequestLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 5,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Слишком много запросов кода. Повторите через 15 минут.' },
+});
+
+// Throttle verification attempts as a second layer on top of the per-OTP counter.
+const otpVerifyLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Слишком много попыток. Повторите через 15 минут.' },
+});
+
 // Login by phone - send OTP
-router.post('/login', async (req, res) => {
+router.post('/login', otpRequestLimiter, async (req, res) => {
   try {
     const { phone } = req.body;
 
@@ -38,16 +61,16 @@ router.post('/login', async (req, res) => {
       });
     }
 
-    // Generate 4-digit OTP using cryptographically secure RNG.
+    // Generate 6-digit OTP using cryptographically secure RNG.
     // Never log the code itself — OTP is the sole auth factor for mobile clients.
-    const otp = crypto.randomInt(1000, 10000).toString();
+    const otp = crypto.randomInt(100000, 1000000).toString();
     logger.info(`OTP issued for phone=${normalizedPhone}`);
 
-    // Store OTP with 5 min TTL
+    // Store OTP with 5 min TTL. Reset the attempt counter on every reissue.
     await db.query(
-      `INSERT INTO mobile_otp_sessions (phone, otp, created_at, expires_at)
-       VALUES ($1, $2, NOW(), NOW() + INTERVAL '5 minutes')
-       ON CONFLICT (phone) DO UPDATE SET otp=$2, created_at=NOW(), expires_at=NOW() + INTERVAL '5 minutes'`,
+      `INSERT INTO mobile_otp_sessions (phone, otp, attempts, created_at, expires_at)
+       VALUES ($1, $2, 0, NOW(), NOW() + INTERVAL '5 minutes')
+       ON CONFLICT (phone) DO UPDATE SET otp=$2, attempts=0, created_at=NOW(), expires_at=NOW() + INTERVAL '5 minutes'`,
       [normalizedPhone, otp]
     );
 
@@ -74,12 +97,12 @@ router.post('/login', async (req, res) => {
 
   } catch (e) {
     logger.error('Login error', e.message);
-    res.status(500).json({ error: e.message });
+    res.status(500).json({ error: 'Внутренняя ошибка сервера' });
   }
 });
 
 // Verify OTP and create session
-router.post('/verify-otp', async (req, res) => {
+router.post('/verify-otp', otpVerifyLimiter, async (req, res) => {
   try {
     const { phone, otp } = req.body;
 
@@ -91,13 +114,26 @@ router.post('/verify-otp', async (req, res) => {
     const cleanPhone = String(phone).replace(/\D/g, '');
     const normalizedPhone = cleanPhone.length === 11 ? cleanPhone : '7' + cleanPhone.slice(-10);
 
-    // Check OTP
-    const otpRecord = await db.one(
-      'SELECT * FROM mobile_otp_sessions WHERE phone=$1 AND otp=$2 AND expires_at > NOW()',
-      [normalizedPhone, otp]
+    // Fetch the active OTP for this phone (do NOT match the code in SQL — we
+    // need the row to enforce a per-code attempt cap regardless of the guess).
+    const otpRecord = await db.oneOrNone(
+      'SELECT * FROM mobile_otp_sessions WHERE phone=$1 AND expires_at > NOW()',
+      [normalizedPhone]
     );
 
     if (!otpRecord) {
+      return res.status(401).json({ error: 'Неверный или истекший код' });
+    }
+
+    // Burn the code once too many wrong guesses have been made — forces the
+    // client to request a fresh OTP and resets the brute-force search space.
+    if (otpRecord.attempts >= MAX_OTP_ATTEMPTS) {
+      await db.query('DELETE FROM mobile_otp_sessions WHERE phone=$1', [normalizedPhone]);
+      return res.status(429).json({ error: 'Слишком много попыток. Запросите новый код.' });
+    }
+
+    if (String(otpRecord.otp) !== String(otp)) {
+      await db.query('UPDATE mobile_otp_sessions SET attempts=attempts+1 WHERE phone=$1', [normalizedPhone]);
       return res.status(401).json({ error: 'Неверный или истекший код' });
     }
 
@@ -146,7 +182,7 @@ router.post('/verify-otp', async (req, res) => {
 
   } catch (e) {
     logger.error('Verify OTP error', e.message);
-    res.status(500).json({ error: e.message });
+    res.status(500).json({ error: 'Внутренняя ошибка сервера' });
   }
 });
 
@@ -169,7 +205,7 @@ router.get('/me', mobileAuth, async (req, res) => {
 
   } catch (e) {
     logger.error('Get me error', e.message);
-    res.status(500).json({ error: e.message });
+    res.status(500).json({ error: 'Внутренняя ошибка сервера' });
   }
 });
 
@@ -185,7 +221,7 @@ router.post('/logout', mobileAuth, async (req, res) => {
 
   } catch (e) {
     logger.error('Logout error', e.message);
-    res.status(500).json({ error: e.message });
+    res.status(500).json({ error: 'Внутренняя ошибка сервера' });
   }
 });
 

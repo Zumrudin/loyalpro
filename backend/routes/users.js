@@ -24,8 +24,8 @@ router.post('/', auth, requireRole('owner'), async (req, res) => {
       return res.status(400).json({ error: 'Заполните все поля' });
     if (!['admin', 'specialist'].includes(role))
       return res.status(400).json({ error: 'Недопустимая роль' });
-    if (password.length < 6)
-      return res.status(400).json({ error: 'Пароль минимум 6 символов' });
+    if (password.length < 8)
+      return res.status(400).json({ error: 'Пароль минимум 8 символов' });
 
     const salon = await db.one('SELECT max_users FROM salons WHERE id=$1', [req.user.salonId]);
     const { rows: [{ count }] } = await db.query(
@@ -67,7 +67,7 @@ router.patch('/:id', auth, requireRole('owner'), async (req, res) => {
     if (is_active !== undefined) { updates.push(`is_active=$${i++}`); vals.push(is_active); }
     if (position !== undefined) { updates.push(`position=$${i++}`); vals.push(position || null); }
     if (password) {
-      if (password.length < 6) return res.status(400).json({ error: 'Пароль минимум 6 символов' });
+      if (password.length < 8) return res.status(400).json({ error: 'Пароль минимум 8 символов' });
       const hash = await bcrypt.hash(password, 12);
       updates.push(`password_hash=$${i++}`, `must_change_password=$${i++}`);
       vals.push(hash, true);
