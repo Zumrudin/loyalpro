@@ -125,11 +125,47 @@ router.get('/analytics/dashboard', auth, async (req, res) => {
           AND (bt.created_at AT TIME ZONE 'Europe/Moscow')::date BETWEEN $2::date AND $3::date
           AND bt.description NOT LIKE '%импорт%'
       ) combined`;
+    // "Первичные" пациенты за период.
+    // Правило: клиент первичный, если его ПЕРВЫЙ состоявшийся и полностью
+    // оплаченный деньгами визит попал в период [from,to]. Квалифицирующий визит =
+    //   • статус 'completed' ИЛИ 'arrived' (визит реально состоялся — см. логику кэшбэка);
+    //   • paid_full=1 (полная оплата);
+    //   • без скидок (ни одна услуга не имеет discount>0);
+    //   • без списания бонусов (нет связанной расходной loyalty-транзакции).
+    // Отменённые/несостоявшиеся (cancelled/no_show/waiting) записи НЕ учитываются,
+    // поэтому клиент, у которого ранее были только отменённые записи, считается
+    // первичным в день первого выполненного оплаченного визита.
+    // Считаем по фактической дате визита, а НЕ по clients.created_at (дата импорта в БД).
+    const primaryClientsSql = `
+      WITH qualifying AS (
+        SELECT r.client_id,
+               MIN(COALESCE((r.visit_datetime AT TIME ZONE 'Europe/Moscow')::date, r.visit_date::date)) AS first_visit
+        FROM records r
+        WHERE r.salon_id = $1
+          AND r.client_id IS NOT NULL
+          AND r.status IN ('completed','arrived')
+          AND (r.raw_payload->>'paid_full')::int = 1
+          AND NOT EXISTS (
+            SELECT 1 FROM jsonb_array_elements(COALESCE(r.raw_payload->'services','[]'::jsonb)) svc
+            WHERE COALESCE(NULLIF(svc->>'discount','')::numeric, 0) > 0
+          )
+          AND NOT EXISTS (
+            SELECT 1 FROM loyalty_card_transactions lct
+            WHERE lct.salon_id = r.salon_id AND lct.amount < 0
+              AND (lct.record_id = r.id
+                   OR lct.record_id = r.yclients_record_id
+                   OR (lct.record_id IS NULL AND lct.client_id = r.client_id
+                       AND r.visit_date IS NOT NULL AND lct.txn_date::date = r.visit_date::date))
+          )
+        GROUP BY r.client_id
+      )
+      SELECT COUNT(*) FROM qualifying
+      WHERE first_visit BETWEEN $2::date AND $3::date`;
     const [tc,ac,slp,nc,bs,rev,bonusStat,topSvc,lvlDist,daily,recentTx,lastSync,tgCount,cardCount,bonEconomy,revByCatRows] = await Promise.all([
       db.one('SELECT COUNT(*) FROM clients WHERE salon_id=$1',[sid]),
       db.one(`SELECT COUNT(*) FROM clients WHERE salon_id=$1 AND (last_visit_at AT TIME ZONE 'Europe/Moscow')::date BETWEEN $2::date AND $3::date`,p),
       db.one(`SELECT COUNT(*) FROM clients WHERE salon_id=$1 AND last_visit_at<NOW()-INTERVAL '60 days' AND visits_count>0`,[sid]),
-      db.one(`SELECT COUNT(*) FROM clients WHERE salon_id=$1 AND (created_at AT TIME ZONE 'Europe/Moscow')::date BETWEEN $2::date AND $3::date`,p),
+      db.one(primaryClientsSql,p),
       db.one(`SELECT COALESCE(SUM(bonus_balance),0) as tb, COALESCE(SUM(total_spent),0) as ts FROM clients WHERE salon_id=$1`,[sid]),
       db.one(`SELECT COUNT(*) as rc, COALESCE(SUM(amount),0) as rv FROM records WHERE salon_id=$1 AND status IN ('completed','confirmed','arrived') AND COALESCE((visit_datetime AT TIME ZONE 'Europe/Moscow')::date, visit_date::date) BETWEEN $2::date AND $3::date`,p),
       db.one(bonusStatsSql,p),

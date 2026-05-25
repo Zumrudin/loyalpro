@@ -267,7 +267,7 @@ async function loadDashboard() {
     const periodSuffix = 'за ' + formatPeriodLabel(dashRange.from, dashRange.to);
 
     animateCount(document.getElementById('ds1'), s.totalClients);
-    document.getElementById('ds1s').textContent = '+' + s.newClients + ' новых за период';
+    document.getElementById('ds1s').textContent = '+' + s.newClients + ' первичных за период';
 
     animateCount(document.getElementById('ds2'), s.totalBonusBalance);
     document.getElementById('ds2s').textContent = 'начислено ' + parseFloat(s.periodBonuses || 0).toLocaleString('ru') + ' · списано ' + parseFloat(s.periodRedeemed || 0).toLocaleString('ru');
