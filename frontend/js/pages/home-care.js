@@ -353,7 +353,7 @@ function hcPickerRender(groups) {
         <span id="hcPickChev-${gi}" style="font-size:11px;color:var(--t3)">${g.open === true ? '▼' : '▶'}</span>
       </div>
       <div id="hcPickGrp-${gi}" style="display:${g.open === true ? '' : 'none'}">
-        ${g.items.map(t => `<div class="hc-picker-item" data-hc-pick-title="${esc(t)}" onclick="event.stopPropagation()">${esc(t)}</div>`).join('')}
+        ${g.items.map(t => `<div class="hc-picker-item" data-hc-pick-title="${esc(t)}">${esc(t)}</div>`).join('')}
       </div>
     </div>`).join('');
   // Delegation: read title from textContent (safe) instead of interpolating
