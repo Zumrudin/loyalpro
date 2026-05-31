@@ -13,6 +13,8 @@
     "node": ">=18.0.0"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1057.0",
+    "@aws-sdk/s3-request-presigner": "^3.1057.0",
     "axios": "^1.6.0",
     "bcryptjs": "^2.4.3",
     "cors": "^2.8.5",
@@ -26,11 +28,13 @@
     "node-cron": "^3.0.3",
     "pg": "^8.11.3",
     "puppeteer": "^24.40.0",
+    "sharp": "^0.34.5",
     "uuid": "^9.0.0",
     "winston": "^3.19.0",
     "winston-daily-rotate-file": "^5.0.0"
   },
   "devDependencies": {
+    "aws-sdk-client-mock": "^4.1.0",
     "jest": "^30.3.0",
     "nodemon": "^3.0.0"
   }
