@@ -310,3 +310,36 @@ body,input,select,textarea,.card,.sc,.topbar,.stg-sidebar,.modal,.notif{transiti
 #page-patient-portfolio .pp-lb-img{max-width:92vw;max-height:86vh;object-fit:contain;border-radius:4px}
 #page-patient-portfolio .pp-lb-close{position:absolute;top:14px;right:18px;font-size:36px;line-height:1;background:none;color:#fff;border:0;cursor:pointer;padding:0 8px}
 #page-patient-portfolio .pp-lb-dl{position:absolute;bottom:24px;left:50%;transform:translateX(-50%);padding:8px 18px}
+
+/* ═══════════════════════════════════════════════════════════
+   MOBILE  (≤700px телефоны)  — слой переопределений
+   ═══════════════════════════════════════════════════════════ */
+@media(max-width:700px){
+  /* — Топбар — */
+  .topbar{padding:0 12px;gap:8px}
+  .tb-burger{display:flex}                 /* кнопка-бургер (добавляется в Task 2) */
+  .tb-ln{font-size:13px}
+  /* прячем из шапки то, что переезжает в drawer (Task 4) */
+  .topbar #syncSt,
+  .topbar #syncBtn,
+  .topbar #topName,
+  .topbar .tb-logout{display:none}
+  .tb-right{gap:6px}
+
+  /* — Контент: меньше паддинги — */
+  .content{padding:14px}
+
+  /* — Тач-таргеты — */
+  .btn{min-height:38px}
+  .btn-sm{min-height:32px}
+  /* iOS Safari не зумит поля при font-size>=16px */
+  input,select,textarea{font-size:16px}
+}
+
+/* десктоп: бургер скрыт всегда */
+.tb-burger{display:none}
+
+@media(max-width:480px){
+  .content{padding:10px}
+  .tb-ln{display:none}                      /* совсем узко — прячем текст лого */
+}
