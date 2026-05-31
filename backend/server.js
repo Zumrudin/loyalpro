@@ -31,6 +31,15 @@ const app = express();
 app.set('trust proxy', 1);
 
 // Security headers
+// Patient photo cases отдают thumbnails из S3 через presigned URL — добавляем
+// origin из S3_ENDPOINT в img-src, чтобы CSP не блокировал отрисовку.
+const s3ImgOrigin = (() => {
+  try { return config.S3_ENDPOINT ? new URL(config.S3_ENDPOINT).origin : null; }
+  catch { return null; }
+})();
+const imgSrc = ["'self'", "data:", "blob:"];
+if (s3ImgOrigin) imgSrc.push(s3ImgOrigin);
+
 app.use(helmet({
   contentSecurityPolicy: {
     useDefaults: false,
@@ -38,7 +47,7 @@ app.use(helmet({
       defaultSrc: ["'self'"],
       scriptSrc: ["'self'", "'unsafe-inline'", "cdn.jsdelivr.net"],
       styleSrc:  ["'self'", "'unsafe-inline'"],
-      imgSrc:    ["'self'", "data:", "blob:"],
+      imgSrc,
       connectSrc: ["'self'"],
       fontSrc:   ["'self'", "data:"],
     },

@@ -25,7 +25,9 @@ async function api(method, path, body) {
       }
     }
 
-    const j = await r.json();
-    return j;
+    // 204 No Content и пустые тела (DELETE-эндпоинты) — JSON.parse тут упадёт.
+    if (r.status === 204) return null;
+    const text = await r.text();
+    return text ? JSON.parse(text) : null;
   } finally { showLbar(false); }
 }

@@ -144,12 +144,145 @@ async function _ppNewVisit() {
   }
 }
 
+// ── Level 3: альбом визита — 3 стадии + загрузка + лайтбокс + комментарии ──
+const _PP_STAGE_LABELS = { before: 'До', in_progress: 'В процессе', after: 'После' };
+
 async function _ppRenderAlbum() {
+  let v;
+  try {
+    v = await api('GET', `/api/patient-portfolio/visits/${_ppState.visitId}`);
+  } catch (e) {
+    _ppRoot().innerHTML = `<div class="pp-hint" style="color:#c00">Ошибка загрузки: ${_ppEsc(e.message)}</div>`;
+    return;
+  }
+  const byStage = { before: [], in_progress: [], after: [] };
+  v.photos.forEach(p => { if (byStage[p.stage]) byStage[p.stage].push(p); });
+
+  const stageBlock = (key) => `
+    <section class="pp-stage">
+      <header class="pp-stage-head">
+        <h3>${_PP_STAGE_LABELS[key]} <span class="pp-stage-count">${byStage[key].length}</span></h3>
+        <label class="pp-add-btn">
+          + Добавить фото
+          <input type="file" accept="image/jpeg,image/png,image/webp" multiple data-stage="${key}" hidden>
+        </label>
+      </header>
+      <div class="pp-stage-grid">
+        ${byStage[key].length === 0 ? '<div class="pp-stage-empty">Нет фото</div>' :
+          byStage[key].map(p => `<img class="pp-thumb" src="${_ppEsc(p.url_thumb)}" data-photo-id="${p.id}" data-medium="${_ppEsc(p.url_medium)}" alt="">`).join('')}
+      </div>
+    </section>
+  `;
+
   _ppRoot().innerHTML = `
     <div class="pp-toolbar">
-      <button class="btn-back" onclick="_ppBack(2)">← Назад</button>
+      <button class="btn-back" onclick="_ppBack(2)">← К пациенту</button>
+      <div class="pp-album-meta">Альбом от ${_ppEsc(_ppFmtDate(v.visit_date))}</div>
+      <button class="btn pp-del-visit">Удалить альбом</button>
     </div>
-    <div class="pp-hint">TODO: альбом ${_ppState.visitId} (Task 12)</div>`;
+    ${stageBlock('before')}
+    ${stageBlock('in_progress')}
+    ${stageBlock('after')}
+    <section class="pp-notes">
+      <h3>Заметки</h3>
+      <textarea class="pp-notes-ta" placeholder="Клинические заметки по альбому">${_ppEsc(v.notes || '')}</textarea>
+      <div class="pp-notes-hint">Сохраняется при потере фокуса</div>
+    </section>
+    <section class="pp-comments">
+      <h3>Комментарии</h3>
+      <div class="pp-comments-list">
+        ${v.comments.length === 0 ? '<div class="pp-stage-empty">Комментариев пока нет</div>' :
+          v.comments.map(c => `
+            <div class="pp-comment">
+              <div class="pp-c-head">${_ppEsc(c.author_name || '—')} • ${new Date(c.created_at).toLocaleString('ru')}</div>
+              <div class="pp-c-text">${_ppEsc(c.text)}</div>
+            </div>`).join('')}
+      </div>
+      <div class="pp-comment-form">
+        <textarea class="pp-new-comment" placeholder="Написать комментарий…"></textarea>
+        <button class="btn btn-pri pp-add-comment">Отправить</button>
+      </div>
+    </section>
+    <div class="pp-lightbox" hidden>
+      <img class="pp-lb-img" alt="">
+      <button class="pp-lb-close" type="button">×</button>
+      <button class="pp-lb-dl btn btn-pri" type="button">Скачать оригинал</button>
+    </div>
+  `;
+
+  // ── Delete album
+  _ppRoot().querySelector('.pp-del-visit').onclick = async () => {
+    if (!confirm('Удалить альбом со всеми фото безвозвратно?')) return;
+    try {
+      await api('DELETE', `/api/patient-portfolio/visits/${v.id}`);
+      _ppState.level = 2; _ppState.visitId = null; _ppRender();
+    } catch (e) { alert('Не удалось удалить: ' + e.message); }
+  };
+
+  // ── Notes autosave
+  _ppRoot().querySelector('.pp-notes-ta').addEventListener('blur', async (e) => {
+    if (e.target.value === (v.notes || '')) return;
+    try { await api('PUT', `/api/patient-portfolio/visits/${v.id}`, { notes: e.target.value }); }
+    catch (err) { alert('Не удалось сохранить заметки: ' + err.message); }
+  });
+
+  // ── Upload (batched по 5, multipart, без api() — у него только JSON)
+  _ppRoot().querySelectorAll('input[type=file][data-stage]').forEach(inp => {
+    inp.addEventListener('change', async (e) => {
+      const files = Array.from(e.target.files);
+      if (!files.length) return;
+      const stage = inp.dataset.stage;
+      try {
+        for (let i = 0; i < files.length; i += 5) {
+          const chunk = files.slice(i, i + 5);
+          const fd = new FormData();
+          fd.append('stage', stage);
+          chunk.forEach(f => fd.append('files', f));
+          const r = await fetch(`/api/patient-portfolio/visits/${v.id}/photos`, {
+            method: 'POST',
+            headers: { 'Authorization': 'Bearer ' + (TOKEN || localStorage.getItem('lp_tk')) },
+            body: fd,
+          });
+          if (!r.ok) {
+            const t = await r.text();
+            throw new Error(`HTTP ${r.status}: ${t}`);
+          }
+        }
+        _ppRender();
+      } catch (err) {
+        alert('Ошибка загрузки: ' + err.message);
+      }
+    });
+  });
+
+  // ── Lightbox
+  const lb = _ppRoot().querySelector('.pp-lightbox');
+  _ppRoot().querySelectorAll('.pp-thumb').forEach(img => {
+    img.onclick = () => {
+      lb.hidden = false;
+      lb.querySelector('.pp-lb-img').src = img.dataset.medium;
+      lb.dataset.photoId = img.dataset.photoId;
+    };
+  });
+  lb.querySelector('.pp-lb-close').onclick = () => { lb.hidden = true; };
+  lb.querySelector('.pp-lb-dl').onclick = async () => {
+    try {
+      const r = await api('GET', `/api/patient-portfolio/photos/${lb.dataset.photoId}/url?variant=original`);
+      window.open(r.url, '_blank');
+    } catch (e) { alert('Не удалось получить ссылку: ' + e.message); }
+  };
+
+  // ── Comment add
+  _ppRoot().querySelector('.pp-add-comment').onclick = async () => {
+    const ta = _ppRoot().querySelector('.pp-new-comment');
+    const text = ta.value.trim();
+    if (!text) return;
+    try {
+      await api('POST', `/api/patient-portfolio/visits/${v.id}/comments`, { text });
+      ta.value = '';
+      _ppRender();
+    } catch (e) { alert('Не удалось отправить: ' + e.message); }
+  };
 }
 
 function _ppBack(level) {
