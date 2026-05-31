@@ -271,7 +271,14 @@ async function _ppRenderAlbum() {
       lb.dataset.photoId = img.dataset.photoId;
     };
   });
-  lb.querySelector('.pp-lb-close').onclick = () => { lb.hidden = true; };
+  const closeLightbox = () => { lb.hidden = true; };
+  lb.querySelector('.pp-lb-close').onclick = closeLightbox;
+  // Клик по фону (но не по картинке/кнопкам) — тоже закрывает
+  lb.addEventListener('click', (ev) => { if (ev.target === lb) closeLightbox(); });
+  // Esc
+  document.addEventListener('keydown', function escClose(ev) {
+    if (ev.key === 'Escape' && !lb.hidden) closeLightbox();
+  });
   lb.querySelector('.pp-lb-dl').onclick = async () => {
     try {
       const r = await api('GET', `/api/patient-portfolio/photos/${lb.dataset.photoId}/url?variant=original`);
