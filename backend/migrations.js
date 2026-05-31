@@ -455,6 +455,96 @@ async function runMigrations(client) {
   await client.query(`
     ALTER TABLE mobile_otp_sessions ADD COLUMN IF NOT EXISTS attempts INTEGER NOT NULL DEFAULT 0
   `).catch(() => {});
+
+  // ── Patient Photo Cases (внутренний клинический модуль) ─────────
+  // Спека:  docs/superpowers/specs/2026-05-30-patient-photo-cases-design.md
+  // План:   docs/superpowers/plans/2026-05-30-patient-photo-cases.md  (Task 2)
+  // ENUM создаём через DO-блок: CREATE TYPE ... IF NOT EXISTS появилось только в PG14.
+  await client.query(`
+    DO $$
+    BEGIN
+      IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'case_photo_stage') THEN
+        CREATE TYPE case_photo_stage AS ENUM ('before','in_progress','after');
+      END IF;
+    END $$;
+  `).catch(() => {});
+
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS case_courses (
+      id          SERIAL PRIMARY KEY,
+      salon_id    INTEGER NOT NULL REFERENCES salons(id) ON DELETE CASCADE,
+      client_id   INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+      title       VARCHAR(200) NOT NULL,
+      description TEXT,
+      created_by  INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `).catch(() => {});
+  await client.query(`CREATE INDEX IF NOT EXISTS idx_case_courses_client ON case_courses (salon_id, client_id)`).catch(() => {});
+
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS case_visits (
+      id                 SERIAL PRIMARY KEY,
+      salon_id           INTEGER NOT NULL REFERENCES salons(id) ON DELETE CASCADE,
+      client_id          INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+      record_id          INTEGER REFERENCES records(id) ON DELETE SET NULL,
+      course_id          INTEGER REFERENCES case_courses(id) ON DELETE SET NULL,
+      specialist_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      visit_date         DATE NOT NULL,
+      notes              TEXT,
+      created_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at         TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `).catch(() => {});
+  await client.query(`CREATE UNIQUE INDEX IF NOT EXISTS uq_case_visits_record ON case_visits (salon_id, record_id) WHERE record_id IS NOT NULL`).catch(() => {});
+  await client.query(`CREATE INDEX IF NOT EXISTS idx_case_visits_client_date ON case_visits (salon_id, client_id, visit_date DESC)`).catch(() => {});
+  await client.query(`CREATE INDEX IF NOT EXISTS idx_case_visits_course ON case_visits (course_id) WHERE course_id IS NOT NULL`).catch(() => {});
+
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS case_photos (
+      id              BIGSERIAL PRIMARY KEY,
+      salon_id        INTEGER NOT NULL REFERENCES salons(id) ON DELETE CASCADE,
+      case_visit_id   INTEGER NOT NULL REFERENCES case_visits(id) ON DELETE CASCADE,
+      stage           case_photo_stage NOT NULL,
+      s3_key_original TEXT NOT NULL,
+      s3_key_medium   TEXT NOT NULL,
+      s3_key_thumb    TEXT NOT NULL,
+      mime_type       VARCHAR(50) NOT NULL,
+      size_bytes      INTEGER NOT NULL,
+      width           INTEGER,
+      height          INTEGER,
+      uploaded_by     INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      uploaded_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      sort_order      INTEGER NOT NULL DEFAULT 0
+    )
+  `).catch(() => {});
+  await client.query(`CREATE INDEX IF NOT EXISTS idx_case_photos_visit_stage ON case_photos (case_visit_id, stage, sort_order)`).catch(() => {});
+
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS case_comments (
+      id             BIGSERIAL PRIMARY KEY,
+      salon_id       INTEGER NOT NULL REFERENCES salons(id) ON DELETE CASCADE,
+      case_visit_id  INTEGER NOT NULL REFERENCES case_visits(id) ON DELETE CASCADE,
+      author_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      text           TEXT NOT NULL,
+      created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `).catch(() => {});
+  await client.query(`CREATE INDEX IF NOT EXISTS idx_case_comments_visit ON case_comments (case_visit_id, created_at)`).catch(() => {});
+
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS s3_orphans (
+      id         BIGSERIAL PRIMARY KEY,
+      bucket     VARCHAR(100) NOT NULL,
+      s3_key     TEXT NOT NULL,
+      reason     VARCHAR(40),
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      attempts   INTEGER NOT NULL DEFAULT 0,
+      last_error TEXT
+    )
+  `).catch(() => {});
+  await client.query(`CREATE INDEX IF NOT EXISTS idx_s3_orphans_pending ON s3_orphans (created_at) WHERE attempts < 5`).catch(() => {});
 }
 
 module.exports = { runMigrations };
