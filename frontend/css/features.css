@@ -198,7 +198,7 @@
   #page-settings .stg-group{display:contents}
   #page-settings .stg-group-lbl,
   #page-settings .stg-sep{display:none}             /* подписи групп/разделители прячем на мобиле */
-  #page-settings .stg-item{flex:0 0 auto;margin:0;padding:8px 12px;border:1px solid var(--bd);border-radius:20px;font-size:13px}
+  #page-settings .stg-item{flex:0 0 auto;margin:0;padding:8px 12px;min-height:38px;border:1px solid var(--bd);border-radius:20px;font-size:13px}
   #page-settings .stg-item.active{border-color:var(--a)}
   #page-settings .stg-content{padding:16px;max-width:none}
 }
