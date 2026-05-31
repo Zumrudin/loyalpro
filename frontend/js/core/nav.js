@@ -28,19 +28,14 @@ function nav(el) {
 function applyRoleNav(role) {
   // покрываем оба набора пунктов: десктопное меню (#mainNav) и мобильный drawer (#mnavList)
   const navItems = document.querySelectorAll('#mainNav .tn, #mnavList .tn');
-  let firstVisible = null;
   navItems.forEach(item => {
     const roles = (item.dataset.roles || '').split(',').map(r => r.trim());
-    if (roles.includes(role)) {
-      item.style.display = '';
-      if (!firstVisible) firstVisible = item;
-    } else {
-      item.style.display = 'none';
-    }
+    item.style.display = roles.includes(role) ? '' : 'none';
+    item.classList.remove('active');
   });
-  navItems.forEach(n => n.classList.remove('active'));
-  // первый видимый из #mainNav — стартовая страница
-  const firstMain = document.querySelector('#mainNav .tn:not([style*="display: none"])');
+  // стартовая страница — первый видимый пункт десктопного меню (#mainNav всегда в DOM)
+  const firstMain = Array.from(document.querySelectorAll('#mainNav .tn'))
+    .find(n => n.style.display !== 'none');
   if (firstMain) firstMain.classList.add('active');
   return firstMain?.dataset?.p || 'home-care';
 }
