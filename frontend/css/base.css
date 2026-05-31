@@ -343,3 +343,22 @@ body,input,select,textarea,.card,.sc,.topbar,.stg-sidebar,.modal,.notif{transiti
   .content{padding:10px}
   .tb-ln{display:none}                      /* совсем узко — прячем текст лого */
 }
+
+/* — Кнопка-бургер — */
+.tb-burger{align-items:center;justify-content:center;background:transparent;border:none;color:var(--t1);cursor:pointer;padding:6px;border-radius:8px}
+.tb-burger:hover{background:var(--bg)}
+
+/* — Drawer (скрыт на десктопе) — */
+.mnav-ov{position:fixed;inset:0;background:rgba(0,0,0,.45);opacity:0;visibility:hidden;transition:opacity .2s,visibility .2s;z-index:90}
+.mnav-ov.open{opacity:1;visibility:visible}
+.mnav-drawer{position:fixed;top:0;left:0;height:100%;width:80vw;max-width:300px;background:var(--card);border-right:1px solid var(--bd);
+  transform:translateX(-100%);transition:transform .22s ease;z-index:95;display:flex;flex-direction:column}
+.mnav-drawer.open{transform:translateX(0)}
+.mnav-hdr{display:flex;align-items:center;gap:10px;padding:16px 14px;border-bottom:1px solid var(--bd)}
+.mnav-hdr-txt{flex:1;min-width:0}
+.mnav-name{font-size:14px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mnav-role{font-size:11px;color:var(--t3)}
+.mnav-close{background:transparent;border:none;font-size:18px;color:var(--t3);cursor:pointer;padding:4px 8px}
+.mnav-list{flex:1;overflow-y:auto;padding:8px}
+.mnav-list .tn{display:block;padding:12px 14px;border-radius:8px;font-size:15px;margin-bottom:2px}
+.mnav-foot{border-top:1px solid var(--bd);padding:12px;display:flex;flex-direction:column;gap:8px}

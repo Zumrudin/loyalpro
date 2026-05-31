@@ -86,3 +86,14 @@ function showLogin() {
   document.getElementById('loginScreen').style.display = 'flex';
   document.getElementById('app').style.display = 'none';
 }
+
+// ── MOBILE DRAWER ──
+function openMenu() {
+  document.getElementById('mnavOv')?.classList.add('open');
+  document.getElementById('mnavDrawer')?.classList.add('open');
+}
+function closeMenu() {
+  document.getElementById('mnavOv')?.classList.remove('open');
+  document.getElementById('mnavDrawer')?.classList.remove('open');
+}
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeMenu(); });
