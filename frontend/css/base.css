@@ -243,9 +243,29 @@ body,input,select,textarea,.card,.sc,.topbar,.stg-sidebar,.modal,.notif{transiti
 .notif.ok::before{animation:dot-pulse 1.5s ease-in-out infinite}
 
 /* ─── Patient Photo Cases ─── */
-#page-patient-portfolio .pp-search{display:flex;gap:12px;padding:16px 0 12px}
-#page-patient-portfolio .pp-q{flex:1;padding:10px 14px;border:1px solid var(--bd,#ddd);border-radius:8px;font-size:14px;background:var(--bg,#fff);color:var(--t1,#111)}
+#page-patient-portfolio .pp-search{display:grid;grid-template-columns:repeat(5,1fr);gap:12px;padding:16px 0 12px;align-items:center}
+#page-patient-portfolio .pp-q{grid-column:1 / span 2;padding:10px 14px;border:1px solid var(--bd,#ddd);border-radius:8px;font-size:14px;background:var(--bg,#fff);color:var(--t1,#111);min-width:0}
+#page-patient-portfolio .pp-create-btn{grid-column:3 / span 1;padding:10px 14px;justify-self:start;white-space:nowrap}
+@media(max-width:1280px){#page-patient-portfolio .pp-search{grid-template-columns:repeat(4,1fr)}}
+@media(max-width:980px){#page-patient-portfolio .pp-search{grid-template-columns:repeat(3,1fr)}}
+@media(max-width:680px){#page-patient-portfolio .pp-search{grid-template-columns:repeat(2,1fr)}#page-patient-portfolio .pp-q{grid-column:1 / span 1}#page-patient-portfolio .pp-create-btn{grid-column:2 / span 1;justify-self:stretch}}
+#page-patient-portfolio .pp-modal-bg{position:fixed;inset:0;background:rgba(0,0,0,.55);display:grid;place-items:center;z-index:9998;padding:20px}
+#page-patient-portfolio .pp-modal-bg[hidden]{display:none !important}
+#page-patient-portfolio .pp-modal{background:var(--card,#fff);border-radius:10px;width:min(560px,100%);max-height:80vh;display:flex;flex-direction:column;box-shadow:0 12px 40px rgba(0,0,0,.25)}
+#page-patient-portfolio .pp-modal-head{display:flex;align-items:center;justify-content:space-between;padding:14px 18px;border-bottom:1px solid var(--bd,#eee)}
+#page-patient-portfolio .pp-modal-head h3{margin:0;font-size:16px;color:var(--t1,#111)}
+#page-patient-portfolio .pp-modal-close{background:none;border:0;font-size:24px;line-height:1;cursor:pointer;color:var(--t3,#888);padding:0 6px}
+#page-patient-portfolio .pp-modal-close:hover{color:var(--t1,#111)}
+#page-patient-portfolio .pp-modal-body{padding:14px 18px;overflow:auto;display:flex;flex-direction:column;gap:12px}
+#page-patient-portfolio .pp-create-q{padding:10px 14px;border:1px solid var(--bd,#ddd);border-radius:8px;font-size:14px;background:var(--bg,#fff);color:var(--t1,#111)}
+#page-patient-portfolio .pp-create-results{display:flex;flex-direction:column;gap:8px}
+#page-patient-portfolio .pp-pick{padding:10px 12px}
 #page-patient-portfolio .pp-recent{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px}
+#page-patient-portfolio .pp-feed{display:grid;grid-template-columns:repeat(5,1fr);gap:12px;padding:4px 0}
+@media(max-width:1280px){#page-patient-portfolio .pp-feed{grid-template-columns:repeat(4,1fr)}}
+@media(max-width:980px){#page-patient-portfolio .pp-feed{grid-template-columns:repeat(3,1fr)}}
+@media(max-width:680px){#page-patient-portfolio .pp-feed{grid-template-columns:repeat(2,1fr)}}
+#page-patient-portfolio .pp-search-results{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px}
 #page-patient-portfolio .case-card{padding:12px 14px;border:1px solid var(--bd,#ddd);border-radius:8px;cursor:pointer;background:var(--card,#fff);transition:background .12s}
 #page-patient-portfolio .case-card:hover{background:var(--hover,#f5f5f5)}
 #page-patient-portfolio .cc-name{font-weight:600;font-size:14px}

@@ -28,13 +28,26 @@ async function _ppRender() {
   return _ppRenderSearch();
 }
 
-// ── Level 1: поиск пациента ─────────────────────────────────
+// ── Level 1: лента альбомов (entry-view) + поиск пациента ───
 async function _ppRenderSearch() {
   _ppRoot().innerHTML = `
     <div class="pp-search">
       <input class="pp-q" placeholder="Поиск пациента по имени или телефону" autocomplete="off">
+      <button class="btn btn-pri pp-create-btn">+ Создать альбом</button>
     </div>
-    <div class="pp-recent"><div class="pp-hint">Начните вводить имя или телефон</div></div>
+    <div class="pp-recent"></div>
+    <div class="pp-modal-bg" hidden>
+      <div class="pp-modal" role="dialog" aria-label="Создать альбом">
+        <header class="pp-modal-head">
+          <h3>Создать альбом</h3>
+          <button class="pp-modal-close" type="button" aria-label="Закрыть">×</button>
+        </header>
+        <div class="pp-modal-body">
+          <input class="pp-create-q" placeholder="Найдите пациента по имени или телефону" autocomplete="off">
+          <div class="pp-create-results"><div class="pp-hint">Введите минимум 2 символа</div></div>
+        </div>
+      </div>
+    </div>
   `;
   const inp = _ppRoot().querySelector('.pp-q');
   let t;
@@ -42,11 +55,36 @@ async function _ppRenderSearch() {
     clearTimeout(t);
     t = setTimeout(() => _ppDoSearch(inp.value), 250);
   });
-  inp.focus();
+  _ppRoot().querySelector('.pp-create-btn').addEventListener('click', _ppOpenCreateModal);
+  await _ppRenderFeed();
 }
 
-async function _ppDoSearch(q) {
-  const out = _ppRoot().querySelector('.pp-recent');
+function _ppOpenCreateModal() {
+  const bg = _ppRoot().querySelector('.pp-modal-bg');
+  bg.hidden = false;
+  const q = bg.querySelector('.pp-create-q');
+  q.value = '';
+  bg.querySelector('.pp-create-results').innerHTML = `<div class="pp-hint">Введите минимум 2 символа</div>`;
+  q.focus();
+  let t;
+  q.oninput = () => { clearTimeout(t); t = setTimeout(() => _ppCreateModalSearch(q.value), 250); };
+  bg.querySelector('.pp-modal-close').onclick = _ppCloseCreateModal;
+  bg.onclick = (ev) => { if (ev.target === bg) _ppCloseCreateModal(); };
+  document.addEventListener('keydown', _ppCreateModalEsc);
+}
+
+function _ppCloseCreateModal() {
+  const bg = _ppRoot()?.querySelector('.pp-modal-bg');
+  if (bg) bg.hidden = true;
+  document.removeEventListener('keydown', _ppCreateModalEsc);
+}
+
+function _ppCreateModalEsc(ev) {
+  if (ev.key === 'Escape') _ppCloseCreateModal();
+}
+
+async function _ppCreateModalSearch(q) {
+  const out = _ppRoot().querySelector('.pp-create-results');
   if (!q || q.trim().length < 2) {
     out.innerHTML = `<div class="pp-hint">Введите минимум 2 символа</div>`;
     return;
@@ -59,15 +97,101 @@ async function _ppDoSearch(q) {
     return;
   }
   if (!list.length) {
-    out.innerHTML = `<div class="pp-hint">Пациент с таким именем/телефоном не найден в этом салоне. Пациенты подтягиваются из YClients автоматически.</div>`;
+    out.innerHTML = `<div class="pp-hint">Пациент не найден. Они подтягиваются из YClients автоматически.</div>`;
     return;
   }
   out.innerHTML = list.map(c => `
+    <div class="case-card pp-pick" data-client-id="${c.id}" data-client-name="${_ppEsc(c.name)}">
+      <div class="cc-name">${_ppEsc(c.name)}</div>
+      <div class="cc-meta">${_ppEsc(c.phone || '')}${c.cases_count > 0 ? ' • ' + c.cases_count + ' альбом(ов)' : ''}${c.last_visit ? ' • посл. ' + _ppFmtDate(c.last_visit) : ''}</div>
+    </div>
+  `).join('');
+  out.querySelectorAll('.pp-pick').forEach(el => {
+    el.addEventListener('click', () => _ppCreateFromPick(parseInt(el.dataset.clientId), el.dataset.clientName));
+  });
+}
+
+async function _ppCreateFromPick(clientId, clientName) {
+  // Защита от двойного клика
+  const bg = _ppRoot().querySelector('.pp-modal-bg');
+  if (bg.dataset.busy === '1') return;
+  bg.dataset.busy = '1';
+  try {
+    const v = await api('POST', '/api/patient-portfolio/visits', { client_id: clientId });
+    _ppCloseCreateModal();
+    _ppState.level = 3;
+    _ppState.clientId = clientId;
+    _ppState.visitId = v.id;
+    _ppRender();
+  } catch (e) {
+    alert('Не удалось создать альбом для «' + clientName + '»: ' + e.message);
+  } finally {
+    bg.dataset.busy = '0';
+  }
+}
+
+async function _ppRenderFeed() {
+  const out = _ppRoot().querySelector('.pp-recent');
+  if (!out) return;
+  out.innerHTML = `<div class="pp-hint">Загрузка ленты…</div>`;
+  let visits;
+  try {
+    visits = await api('GET', `/api/patient-portfolio/visits/recent?limit=60`);
+  } catch (e) {
+    out.innerHTML = `<div class="pp-hint" style="color:#c00">Ошибка: ${_ppEsc(e.message)}</div>`;
+    return;
+  }
+  if (!visits.length) {
+    out.innerHTML = `<div class="pp-hint">Пока нет ни одного альбома. Найдите пациента через поиск выше и создайте первый альбом.</div>`;
+    return;
+  }
+  out.className = 'pp-feed';
+  out.innerHTML = visits.map(v => `
+    <div class="case-card pp-tile" data-visit-id="${v.id}" data-client-id="${v.client_id}">
+      ${v.preview_url ? `<img class="cc-preview" src="${_ppEsc(v.preview_url)}" alt="">` : '<div class="cc-noimg">нет фото</div>'}
+      <div class="cc-body">
+        <div class="cc-name">${_ppEsc(v.client_name || '—')}</div>
+        <div class="cc-meta">${_ppEsc(_ppFmtDate(v.visit_date))} • ${v.photos_count} фото${v.comments_count ? ' • ' + v.comments_count + ' комм.' : ''}</div>
+        ${v.course_title ? `<div class="cc-course">↳ ${_ppEsc(v.course_title)}</div>` : ''}
+      </div>
+    </div>
+  `).join('');
+  out.querySelectorAll('.case-card[data-visit-id]').forEach(el => {
+    el.addEventListener('click', () => {
+      _ppState.level = 3;
+      _ppState.clientId = parseInt(el.dataset.clientId);
+      _ppState.visitId = parseInt(el.dataset.visitId);
+      _ppRender();
+    });
+  });
+}
+
+async function _ppDoSearch(q) {
+  const out = _ppRoot().querySelector('.pp-recent');
+  if (!q || q.trim().length < 2) {
+    out.className = '';
+    await _ppRenderFeed();
+    return;
+  }
+  let list;
+  try {
+    list = await api('GET', `/api/patient-portfolio/search?q=${encodeURIComponent(q)}`);
+  } catch (e) {
+    out.className = '';
+    out.innerHTML = `<div class="pp-hint" style="color:#c00">Ошибка: ${_ppEsc(e.message)}</div>`;
+    return;
+  }
+  out.className = '';
+  if (!list.length) {
+    out.innerHTML = `<div class="pp-hint">Пациент с таким именем/телефоном не найден в этом салоне. Пациенты подтягиваются из YClients автоматически.</div>`;
+    return;
+  }
+  out.innerHTML = `<div class="pp-search-results">` + list.map(c => `
     <div class="case-card" data-client-id="${c.id}">
       <div class="cc-name">${_ppEsc(c.name)}</div>
       <div class="cc-meta">${_ppEsc(c.phone || '')} • ${c.cases_count > 0 ? c.cases_count + ' альбом(ов)' : 'нет альбомов — кликните, чтобы создать первый'}${c.last_visit ? ' • посл. ' + _ppFmtDate(c.last_visit) : ''}</div>
     </div>
-  `).join('');
+  `).join('') + `</div>`;
   out.querySelectorAll('.case-card').forEach(el => {
     el.addEventListener('click', () => {
       _ppState.level = 2; _ppState.clientId = parseInt(el.dataset.clientId);

@@ -115,6 +115,35 @@ router.get('/clients/:clientId/cases', wrap(async (req, res) => {
   res.json(rows);
 }));
 
+// Лента альбомов всего салона: новые сверху, по умолчанию 30 шт.
+// Используется как entry-view на странице «Фото-кейсы».
+router.get('/visits/recent', wrap(async (req, res) => {
+  const limit = Math.min(parseInt(req.query.limit, 10) || 30, 100);
+  const offset = Math.max(parseInt(req.query.offset, 10) || 0, 0);
+  const rows = await db.any(`
+    SELECT v.id, v.visit_date, v.client_id, v.created_at,
+           cl.name AS client_name, cl.phone AS client_phone,
+           u.name AS specialist_name,
+           crs.title AS course_title,
+           (SELECT COUNT(*)::int FROM case_photos p WHERE p.case_visit_id = v.id) AS photos_count,
+           (SELECT COUNT(*)::int FROM case_comments cm WHERE cm.case_visit_id = v.id) AS comments_count
+    FROM case_visits v
+    JOIN clients cl ON cl.id = v.client_id
+    LEFT JOIN users u ON u.id = v.specialist_user_id
+    LEFT JOIN case_courses crs ON crs.id = v.course_id
+    WHERE v.salon_id = $1
+    ORDER BY v.created_at DESC, v.id DESC
+    LIMIT $2 OFFSET $3
+  `, [sid(req), limit, offset]);
+  for (const v of rows) {
+    const photos = await db.any(
+      `SELECT id, stage, s3_key_thumb FROM case_photos WHERE case_visit_id=$1`, [v.id]);
+    const pick = svc.pickThumbForCard(photos);
+    v.preview_url = pick ? await s3.presignGet(pick.s3_key_thumb) : null;
+  }
+  res.json(rows);
+}));
+
 router.get('/visits/:id', wrap(async (req, res) => {
   const v = await loadVisit(req.params.id, sid(req));
   const photos = await db.any(`
