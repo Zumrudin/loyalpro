@@ -403,3 +403,13 @@ body,input,select,textarea,.card,.sc,.topbar,.stg-sidebar,.modal,.notif{transiti
   #page-records #rPager{display:flex;flex-wrap:wrap;align-items:center;gap:4px}
   #page-records #rPager .btn{min-height:34px;padding:4px 12px}
 }
+
+/* ─── MOBILE: модалки и сетки ─── */
+@media(max-width:700px){
+  .modal{width:100%;max-width:100%;max-height:92vh;border-radius:16px 16px 0 0;padding:16px}
+  .ov{align-items:flex-end}                 /* модалка прижата к низу (bottom-sheet) */
+  .g3,.g32,.g2{grid-template-columns:1fr}   /* любые многоколоночные сетки → 1 колонка */
+}
+@media(max-width:480px){
+  #page-patient-portfolio .pp-feed{grid-template-columns:1fr}   /* фото-кейсы в 1 колонку на узких */
+}
