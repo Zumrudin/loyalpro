@@ -415,3 +415,13 @@ body,input,select,textarea,.card,.sc,.topbar,.stg-sidebar,.modal,.notif{transiti
 @media(max-width:480px){
   #page-patient-portfolio .pp-feed{grid-template-columns:1fr}   /* фото-кейсы в 1 колонку на узких */
 }
+
+/* ─── MOBILE: дополнительные фиксы ─── */
+@media(max-width:700px){
+  /* Таблица пользователей: убираем overflow:hidden (применён инлайново),
+     добавляем горизонтальный скролл, чтобы все колонки были доступны */
+  #page-users .card{overflow-x:auto !important}
+  /* Инпуты с явно заданным маленьким font-size — переопределяем для iOS Safari,
+     чтобы браузер не делал auto-zoom при фокусировке */
+  .pb-date,.sa-sel,.sa-inp{font-size:16px !important}
+}
