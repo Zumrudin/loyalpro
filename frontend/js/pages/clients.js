@@ -83,14 +83,14 @@ async function loadClients() {
     if (!d.clients?.length) { tb.innerHTML = '<tr><td colspan="8" class="empty">Клиенты не найдены</td></tr>'; return; }
     tb.innerHTML = d.clients.map(c => `
       <tr onclick="openCD(${c.id})">
-        <td><div style="display:flex;align-items:center;gap:9px"><div class="av" style="background:${avc(c.name)};color:#fff;font-size:10px">${avi(c.name)}</div><div style="font-weight:600">${esc(c.name)}</div></div></td>
-        <td style="color:var(--t2)">${esc(c.phone || '—')}</td>
-        <td><span class="badge ${LVL_B[c.loyalty_level] || 'bgr'}">${LVL_L[c.loyalty_level] || '—'}</span></td>
-        <td style="font-weight:700;color:var(--a)">${(c.bonus_balance || 0).toLocaleString('ru')}</td>
-        <td>${parseFloat(c.total_spent || 0).toLocaleString('ru')} ₽</td>
-        <td>${c.visits_count || 0}</td>
-        <td style="color:var(--t3)">${c.last_visit_at ? new Date(c.last_visit_at).toLocaleDateString('ru', {day:'numeric',month:'short',year:'numeric'}) : '—'}</td>
-        <td><button class="btn btn-sec btn-sm" onclick="event.stopPropagation();openCD(${c.id})">→</button></td>
+        <td class="c-card-title"><div style="display:flex;align-items:center;gap:9px"><div class="av" style="background:${avc(c.name)};color:#fff;font-size:10px">${avi(c.name)}</div><div style="font-weight:600">${esc(c.name)}</div></div></td>
+        <td data-label="Телефон" style="color:var(--t2)">${esc(c.phone || '—')}</td>
+        <td data-label="Уровень"><span class="badge ${LVL_B[c.loyalty_level] || 'bgr'}">${LVL_L[c.loyalty_level] || '—'}</span></td>
+        <td data-label="Бонусы" style="font-weight:700;color:var(--a)">${(c.bonus_balance || 0).toLocaleString('ru')}</td>
+        <td data-label="Потрачено">${parseFloat(c.total_spent || 0).toLocaleString('ru')} ₽</td>
+        <td data-label="Визитов">${c.visits_count || 0}</td>
+        <td data-label="Последний визит" style="color:var(--t3)">${c.last_visit_at ? new Date(c.last_visit_at).toLocaleDateString('ru', {day:'numeric',month:'short',year:'numeric'}) : '—'}</td>
+        <td class="c-card-arrow"><button class="btn btn-sec btn-sm" onclick="event.stopPropagation();openCD(${c.id})">→</button></td>
       </tr>`).join('');
     const shown = Math.min(cPage_ * 50, d.total);
     const from  = d.total === 0 ? 0 : (cPage_ - 1) * 50 + 1;

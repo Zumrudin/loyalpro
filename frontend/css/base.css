@@ -359,3 +359,26 @@ body,input,select,textarea,.card,.sc,.topbar,.stg-sidebar,.modal,.notif{transiti
 .mnav-list{flex:1;overflow-y:auto;padding:8px}
 .mnav-list .tn{display:block;padding:12px 14px;border-radius:8px;font-size:15px;margin-bottom:2px}
 .mnav-foot{border-top:1px solid var(--bd);padding:12px;display:flex;flex-direction:column;gap:8px}
+
+/* — Карточный режим таблицы клиентов на мобиле — */
+@media(max-width:700px){
+  #page-clients .tw{overflow:visible}
+  #page-clients table,#page-clients tbody,#page-clients tbody tr,#page-clients tbody td{display:block;width:auto}
+  #page-clients thead tr:first-child{display:none}              /* строка сортировки */
+  /* строка фильтров → панель из чипов */
+  #page-clients thead tr.filter-row{display:flex;flex-wrap:wrap;gap:8px;padding:0 0 12px}
+  #page-clients thead tr.filter-row th{display:block;flex:1 1 46%;padding:0;border:none}
+  #page-clients thead tr.filter-row input,
+  #page-clients thead tr.filter-row select{font-size:16px}      /* iOS не зумит */
+  /* карточка */
+  #page-clients tbody tr{border:1px solid var(--bd);border-radius:var(--r);box-shadow:var(--sh);
+    background:var(--card);padding:12px 14px;margin-bottom:10px}
+  #page-clients tbody td{display:flex;justify-content:space-between;align-items:center;gap:12px;
+    padding:5px 0;border:none;text-align:right}
+  #page-clients tbody td::before{content:attr(data-label);color:var(--t3);font-size:12px;font-weight:600;text-align:left}
+  #page-clients tbody td.c-card-title{justify-content:flex-start;padding-bottom:10px;margin-bottom:6px;border-bottom:1px solid var(--bd)}
+  #page-clients tbody td.c-card-title::before{content:none}
+  #page-clients tbody td.c-card-arrow{display:none}            /* дублирующая стрелка не нужна */
+  #page-clients tbody td.empty{display:block;text-align:center}
+  #page-clients tbody td.empty::before{content:none}
+}
