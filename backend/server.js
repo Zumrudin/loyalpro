@@ -9,6 +9,8 @@ const { syncGoodsCategories } = require('./services/home-care');
 const { syncGoodsCatalog }    = require('./services/yclients-goods-catalog');
 const { syncStaffData }     = require('./services/staff');
 const { refreshSegments }   = require('./services/segments');
+const { processS3Orphans }  = require('./services/patient-portfolio');
+const s3                    = require('./services/s3');
 const mountRoutes = require('./routes/index');
 const { createLogger } = require('./logger');
 const logger = createLogger('Server');
@@ -159,6 +161,14 @@ cron.schedule('30 * * * *', async () => {
     }
   } catch (e) { cronLogger.error(`Segments cron: ${e.message}`); }
 });
+
+// Patient photo cases: периодически добиваем S3-удаления, которые не дошли в основном потоке.
+cron.schedule('17 3 * * *', async () => {
+  try {
+    const r = await processS3Orphans(db, s3);
+    if (r.processed > 0) cronLogger.info(`s3 orphans: ${JSON.stringify(r)}`);
+  } catch (e) { cronLogger.error(`s3 orphans cron: ${e.message}`); }
+}, { timezone: 'Europe/Moscow' });
 
 // ============================================================
 // START

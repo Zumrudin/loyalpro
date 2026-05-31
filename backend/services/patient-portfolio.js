@@ -99,6 +99,26 @@ async function processAndUpload({ salonId, clientId, visitId, photoId, buffer, m
   };
 }
 
+// Cron-handler: чистит таблицу s3_orphans — добивает удаления, которые
+// не дошли из основного потока (S3 был недоступен, vpn-блип, etc).
+// До 200 ключей за запуск, retries-cap 5.
+async function processS3Orphans(dbIn, s3In) {
+  const rows = await dbIn.any(`SELECT id, s3_key FROM s3_orphans WHERE attempts < 5 ORDER BY created_at LIMIT 200`);
+  if (rows.length === 0) return { processed: 0, ok: 0, fail: 0 };
+  let ok = 0, fail = 0;
+  for (const r of rows) {
+    try {
+      await s3In.deleteObjects([r.s3_key]);
+      await dbIn.query(`DELETE FROM s3_orphans WHERE id=$1`, [r.id]);
+      ok++;
+    } catch (e) {
+      await dbIn.query(`UPDATE s3_orphans SET attempts = attempts + 1, last_error = $1 WHERE id=$2`, [e.message, r.id]);
+      fail++;
+    }
+  }
+  return { processed: rows.length, ok, fail };
+}
+
 module.exports = {
   buildS3Key,
   parseStage,
@@ -107,4 +127,5 @@ module.exports = {
   assertCanMutate,
   ForbiddenError,
   processAndUpload,
+  processS3Orphans,
 };

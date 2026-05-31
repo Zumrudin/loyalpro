@@ -50,6 +50,7 @@ module.exports = function mountRoutes(app) {
   app.use('/api/template-settings', require('./home-care-template-settings'));
   app.use('/api/app-settings',      require('./app-settings'));
   app.use('/api/portfolio',         require('./portfolio'));
+  app.use('/api/patient-portfolio', require('./patient-portfolio'));
 
   // ── Clients CRUD at /api/clients (has /:id — must be specific prefix) ──
   app.use('/api/clients',           require('./clients'));
