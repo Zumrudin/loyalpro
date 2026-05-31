@@ -138,9 +138,13 @@ async function _ppNewCourse() {
 
 async function _ppNewVisit() {
   // MVP: создаём альбом без привязки к записи в YClients — даты сегодня.
-  // Привязку к records делает Task 12 / отдельный UI выбора визита.
+  // После создания сразу проваливаемся в L3 — там кнопки «+ Добавить фото».
   try {
-    await api('POST', '/api/patient-portfolio/visits', { client_id: _ppState.clientId });
+    const v = await api('POST', '/api/patient-portfolio/visits', { client_id: _ppState.clientId });
+    if (v && v.id) {
+      _ppState.level = 3;
+      _ppState.visitId = v.id;
+    }
     _ppRender();
   } catch (e) {
     alert('Не удалось создать альбом: ' + e.message);
