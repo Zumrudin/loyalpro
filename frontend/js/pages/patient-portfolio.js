@@ -278,6 +278,33 @@ async function _ppNewVisit() {
 // ── Level 3: альбом визита — 3 стадии + загрузка + лайтбокс + комментарии ──
 const _PP_STAGE_LABELS = { before: 'До', in_progress: 'В процессе', after: 'После' };
 
+// Загрузка одного батча через XHR (fetch не даёт upload-progress).
+// onProgress(frac) — доля переданных байтов батча (0..1). Резолвит JSON-ответ.
+function _ppUploadChunk(visitId, stage, chunk, onProgress) {
+  return new Promise((resolve, reject) => {
+    const fd = new FormData();
+    fd.append('stage', stage);
+    chunk.forEach(f => fd.append('files', f));
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', `/api/patient-portfolio/visits/${visitId}/photos`);
+    xhr.setRequestHeader('Authorization', 'Bearer ' + (TOKEN || localStorage.getItem('lp_tk')));
+    xhr.timeout = 120000; // 2 мин на батч — крупные фото на медленной мобильной сети
+    xhr.upload.onprogress = (ev) => { if (ev.lengthComputable && onProgress) onProgress(ev.loaded / ev.total); };
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        let body = {};
+        try { body = JSON.parse(xhr.responseText); } catch (_) { /* пустой/невалидный ответ — считаем успехом батча */ }
+        resolve(body);
+      } else {
+        reject(new Error(`HTTP ${xhr.status}: ${xhr.responseText || 'ошибка сервера'}`));
+      }
+    };
+    xhr.onerror = () => reject(new Error('сеть недоступна, проверьте соединение'));
+    xhr.ontimeout = () => reject(new Error('превышено время ожидания'));
+    xhr.send(fd);
+  });
+}
+
 async function _ppRenderAlbum() {
   let v;
   try {
@@ -298,6 +325,10 @@ async function _ppRenderAlbum() {
           <input type="file" accept="image/jpeg,image/png,image/webp" multiple data-stage="${key}" hidden>
         </label>
       </header>
+      <div class="pp-upload-bar" hidden>
+        <div class="pp-upload-track"><div class="pp-upload-fill"></div></div>
+        <span class="pp-upload-label"></span>
+      </div>
       <div class="pp-stage-grid">
         ${byStage[key].length === 0 ? '<div class="pp-stage-empty">Нет фото</div>' :
           byStage[key].map(p => `<img class="pp-thumb" src="${_ppEsc(p.url_thumb)}" data-photo-id="${p.id}" data-medium="${_ppEsc(p.url_medium)}" alt="">`).join('')}
@@ -357,31 +388,54 @@ async function _ppRenderAlbum() {
     catch (err) { alert('Не удалось сохранить заметки: ' + err.message); }
   });
 
-  // ── Upload (batched по 5, multipart, без api() — у него только JSON)
+  // ── Upload (batched по 5, multipart, XHR — реальный прогресс + устойчивость к обрыву сети)
   _ppRoot().querySelectorAll('input[type=file][data-stage]').forEach(inp => {
     inp.addEventListener('change', async (e) => {
       const files = Array.from(e.target.files);
       if (!files.length) return;
       const stage = inp.dataset.stage;
+      const section = inp.closest('.pp-stage');
+      const bar = section.querySelector('.pp-upload-bar');
+      const fill = bar.querySelector('.pp-upload-fill');
+      const label = bar.querySelector('.pp-upload-label');
+      const addBtn = section.querySelector('.pp-add-btn');
+
+      const total = files.length;
+      let done = 0;      // фото из полностью завершённых батчей
+      let failed = 0;    // не прошли обработку на сервере
+      const setBar = (frac, pct) => {
+        fill.style.width = Math.min(100, Math.round(pct)) + '%';
+        label.textContent = `Загрузка ${Math.min(done + frac, total)} из ${total}…`;
+      };
+      bar.hidden = false;
+      addBtn.classList.add('pp-add-disabled');
+      inp.disabled = true;
+      setBar(0, 0);
+
       try {
         for (let i = 0; i < files.length; i += 5) {
           const chunk = files.slice(i, i + 5);
-          const fd = new FormData();
-          fd.append('stage', stage);
-          chunk.forEach(f => fd.append('files', f));
-          const r = await fetch(`/api/patient-portfolio/visits/${v.id}/photos`, {
-            method: 'POST',
-            headers: { 'Authorization': 'Bearer ' + (TOKEN || localStorage.getItem('lp_tk')) },
-            body: fd,
+          const body = await _ppUploadChunk(v.id, stage, chunk, (chunkFrac) => {
+            // прогресс байтов текущего батча → доля от его фото
+            setBar(Math.round(chunkFrac * chunk.length), ((done + chunkFrac * chunk.length) / total) * 100);
           });
-          if (!r.ok) {
-            const t = await r.text();
-            throw new Error(`HTTP ${r.status}: ${t}`);
-          }
+          const ups = Array.isArray(body.uploaded) ? body.uploaded : [];
+          failed += chunk.length - ups.filter(u => u && u.ok).length; // ловит и ok:false, и пропуски
+          done += chunk.length;
+          setBar(0, (done / total) * 100);
         }
-        _ppRender();
+        fill.style.width = '100%';
+        label.textContent = failed ? `Готово · ${failed} не удалось` : 'Готово';
+        if (failed) {
+          alert(`Загружено ${total - failed} из ${total}. ${failed} фото не удалось обработать — попробуйте добавить их ещё раз.`);
+          _ppRender();
+        } else {
+          setTimeout(() => _ppRender(), 450); // показать 100% перед перерисовкой
+        }
       } catch (err) {
-        alert('Ошибка загрузки: ' + err.message);
+        // Часть батчей могла пройти — перерисовка покажет уже загруженное.
+        alert('Ошибка загрузки: ' + err.message + (done ? `\nЗагружено ${done} из ${total} до обрыва.` : ''));
+        _ppRender();
       }
     });
   });
