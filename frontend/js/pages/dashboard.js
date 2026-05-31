@@ -320,7 +320,11 @@ async function loadDashboard() {
     buildTopSvc(d.topServices);
     buildBfChart(bon);
     buildLvlChart(d.levelDist);
-    if (d.syncStatus?.finished_at) document.getElementById('syncSt').textContent = 'Синхр.: ' + timeSince(d.syncStatus.finished_at);
+    if (d.syncStatus?.finished_at) {
+      const _syncTxt = 'Синхр.: ' + timeSince(d.syncStatus.finished_at);
+      document.getElementById('syncSt').textContent = _syncTxt;
+      const _mnavSt = document.getElementById('mnavSyncSt'); if (_mnavSt) _mnavSt.textContent = _syncTxt;
+    }
 
     cascadeCards('#page-dashboard .sc', 50);
 
