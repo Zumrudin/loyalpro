@@ -33,7 +33,16 @@ module.exports = {
 
   // API Access Control
   API_PUBLIC: ['/api/auth/login', '/api/auth/register', '/api/app-settings'],
-  SPECIALIST_ALLOWED_PREFIXES: ['/api/home-care', '/api/auth', '/api/template-settings'],
+  SPECIALIST_ALLOWED_PREFIXES: ['/api/home-care', '/api/auth', '/api/template-settings', '/api/patient-portfolio'],
+
+  // S3 (patient photo cases — Yandex Object Storage / S3-compatible)
+  S3_ENDPOINT: process.env.S3_ENDPOINT,
+  S3_REGION: process.env.S3_REGION || 'ru-central1',
+  S3_BUCKET: process.env.S3_BUCKET,
+  S3_ACCESS_KEY: process.env.S3_ACCESS_KEY,
+  S3_SECRET_KEY: process.env.S3_SECRET_KEY,
+  S3_FORCE_PATH_STYLE: process.env.S3_FORCE_PATH_STYLE === 'true',
+  S3_URL_TTL_SECONDS: parseInt(process.env.S3_URL_TTL_SECONDS, 10) || 900,
 
   // Sync
   SYNC_DAYS: 365,
