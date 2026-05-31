@@ -183,3 +183,25 @@
 .hc-day-name    { flex:1; color:var(--hc-brown); }
 .hc-day-status  { font-size:12px; }
 .hc-day-empty   { color:var(--hc-brown2); font-size:13px; }
+
+/* ─── MOBILE: настройки ─── */
+@media(max-width:700px){
+  #page-settings{margin:-14px}                       /* совпадает с .content padding на мобиле */
+  #page-settings.active{flex-direction:column}       /* sidebar (чипы) над контентом, не сбоку */
+  /* sidebar → горизонтальная прокручиваемая полоса чипов */
+  #page-settings .stg-sidebar{
+    width:auto;flex-shrink:0;position:static;max-height:none;
+    border-right:none;border-bottom:1px solid var(--bd);
+    display:flex;gap:6px;overflow-x:auto;overflow-y:hidden;
+    padding:8px;white-space:nowrap;-webkit-overflow-scrolling:touch}
+  /* группы разворачиваем в одну строку чипов */
+  #page-settings .stg-group{display:contents}
+  #page-settings .stg-group-lbl,
+  #page-settings .stg-sep{display:none}             /* подписи групп/разделители прячем на мобиле */
+  #page-settings .stg-item{flex:0 0 auto;margin:0;padding:8px 12px;border:1px solid var(--bd);border-radius:20px;font-size:13px}
+  #page-settings .stg-item.active{border-color:var(--a)}
+  #page-settings .stg-content{padding:16px;max-width:none}
+}
+@media(max-width:480px){
+  #page-settings{margin:-10px}                       /* совпадает с .content padding на ≤480 */
+}
