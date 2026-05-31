@@ -383,3 +383,23 @@ body,input,select,textarea,.card,.sc,.topbar,.stg-sidebar,.modal,.notif{transiti
   #page-clients tbody td.empty{display:block;text-align:center}
   #page-clients tbody td.empty::before{content:none}
 }
+
+/* — Карточный режим таблицы записей на мобиле — */
+@media(max-width:700px){
+  #page-records .tw{overflow:visible}
+  #page-records table,#page-records thead,#page-records tbody,#page-records tbody tr,#page-records tbody td{display:block;width:auto}
+  #page-records thead{display:none}                 /* у записей фильтры отдельно над таблицей */
+  #page-records tbody tr{border:1px solid var(--bd);border-radius:var(--r);box-shadow:var(--sh);
+    background:var(--card);padding:12px 14px;margin-bottom:10px}
+  #page-records tbody td{display:flex;justify-content:space-between;align-items:center;gap:12px;
+    padding:5px 0;border:none;text-align:right}
+  #page-records tbody td::before{content:attr(data-label);color:var(--t3);font-size:12px;font-weight:600;text-align:left;flex-shrink:0}
+  #page-records tbody td.r-card-title{justify-content:flex-start;padding-bottom:10px;margin-bottom:6px;
+    border-bottom:1px solid var(--bd);font-weight:700;color:var(--t1)}
+  #page-records tbody td.r-card-title::before{content:none}
+  #page-records tbody td.empty{display:block;text-align:center}
+  #page-records tbody td.empty::before{content:none}
+  /* пагинация записей — крупнее, переносимая */
+  #rPager{display:flex;flex-wrap:wrap;align-items:center;gap:4px}
+  #rPager .btn{min-height:34px;padding:4px 12px}
+}

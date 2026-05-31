@@ -77,18 +77,18 @@ async function loadRecords(page) {
         : '';
 
       return `<tr>
-        <td style="color:var(--t2);white-space:nowrap">
+        <td class="r-card-title" style="color:var(--t2);white-space:nowrap">
           ${formatVisitDate(r.visit_date_msk || r.visit_date)}
-          ${timeStr ? `<br><span style="font-size:11px;color:var(--t3)">${timeStr}</span>` : ''}
+          ${timeStr ? `<span style="font-size:11px;color:var(--t3)"> · ${timeStr}</span>` : ''}
         </td>
-        <td><strong>${esc(r.client_name || '—')}</strong><br><span style="font-size:11px;color:var(--t3)">${esc(r.client_phone || '')}</span></td>
-        <td style="color:var(--t2);font-size:12px">${esc(svc)}</td>
-        <td style="color:var(--t2);font-size:12px">${esc(st)}</td>
-        <td style="font-weight:600;text-align:right">${amt > 0 ? amt.toLocaleString('ru') + ' ₽' : '—'}</td>
-        <td style="color:var(--a);font-weight:600;text-align:right">${accrued > 0 ? '+' + accrued.toLocaleString('ru') : '—'}</td>
-        <td style="color:var(--danger);font-weight:600;text-align:right">${redeemed > 0 ? '-' + redeemed.toLocaleString('ru') : '—'}</td>
-        <td style="white-space:nowrap"><span class="badge" style="${badgeStyle}">${esc(SL[displayStatus] || SL[status] || status)}</span>${paidMark}</td>
-        <td><span class="badge bgr" style="font-size:10px">${esc({sync:'Синхр.',webhook:'Hook'}[r.source] || r.source || '—')}</span></td>
+        <td data-label="Клиент"><strong>${esc(r.client_name || '—')}</strong><br><span style="font-size:11px;color:var(--t3)">${esc(r.client_phone || '')}</span></td>
+        <td data-label="Услуги" style="color:var(--t2);font-size:12px">${esc(svc)}</td>
+        <td data-label="Мастер" style="color:var(--t2);font-size:12px">${esc(st)}</td>
+        <td data-label="Сумма" style="font-weight:600;text-align:right">${amt > 0 ? amt.toLocaleString('ru') + ' ₽' : '—'}</td>
+        <td data-label="Начислено" style="color:var(--a);font-weight:600;text-align:right">${accrued > 0 ? '+' + accrued.toLocaleString('ru') : '—'}</td>
+        <td data-label="Списано" style="color:var(--danger);font-weight:600;text-align:right">${redeemed > 0 ? '-' + redeemed.toLocaleString('ru') : '—'}</td>
+        <td data-label="Статус" style="white-space:nowrap"><span class="badge" style="${badgeStyle}">${esc(SL[displayStatus] || SL[status] || status)}</span>${paidMark}</td>
+        <td data-label="Источник"><span class="badge bgr" style="font-size:10px">${esc({sync:'Синхр.',webhook:'Hook'}[r.source] || r.source || '—')}</span></td>
       </tr>`;
     }).join('');
     renderRecordsPager(d);
