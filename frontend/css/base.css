@@ -311,6 +311,9 @@ body,input,select,textarea,.card,.sc,.topbar,.stg-sidebar,.modal,.notif{transiti
 #page-patient-portfolio .pp-lb-close{position:absolute;top:14px;right:18px;font-size:36px;line-height:1;background:none;color:#fff;border:0;cursor:pointer;padding:0 8px}
 #page-patient-portfolio .pp-lb-dl{position:absolute;bottom:24px;left:50%;transform:translateX(-50%);padding:8px 18px}
 
+/* десктоп: бургер скрыт всегда */
+.tb-burger{display:none}
+
 /* ═══════════════════════════════════════════════════════════
    MOBILE  (≤700px телефоны)  — слой переопределений
    ═══════════════════════════════════════════════════════════ */
@@ -335,9 +338,6 @@ body,input,select,textarea,.card,.sc,.topbar,.stg-sidebar,.modal,.notif{transiti
   /* iOS Safari не зумит поля при font-size>=16px */
   input,select,textarea{font-size:16px}
 }
-
-/* десктоп: бургер скрыт всегда */
-.tb-burger{display:none}
 
 @media(max-width:480px){
   .content{padding:10px}
