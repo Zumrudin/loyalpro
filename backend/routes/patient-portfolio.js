@@ -87,9 +87,10 @@ router.get('/clients/:clientId/cases', wrap(async (req, res) => {
   const limit = Math.min(parseInt(req.query.limit, 10) || 50, 100);
   const before = req.query.before;
   const params = [sid(req), req.params.clientId];
-  let where = `salon_id=$1 AND client_id=$2`;
+  // case_courses тоже имеет salon_id/client_id — без префикса v. PG ругается ambiguous.
+  let where = `v.salon_id=$1 AND v.client_id=$2`;
   if (before && /^\d{4}-\d{2}-\d{2}$/.test(before)) {
-    params.push(before); where += ` AND visit_date < $3::date`;
+    params.push(before); where += ` AND v.visit_date < $3::date`;
   }
   params.push(limit);
   const rows = await db.any(`
@@ -101,7 +102,7 @@ router.get('/clients/:clientId/cases', wrap(async (req, res) => {
     LEFT JOIN users u ON u.id = v.specialist_user_id
     LEFT JOIN case_courses c ON c.id = v.course_id
     WHERE ${where}
-    ORDER BY visit_date DESC, v.id DESC
+    ORDER BY v.visit_date DESC, v.id DESC
     LIMIT $${params.length}
   `, params);
 
