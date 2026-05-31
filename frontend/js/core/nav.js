@@ -1,6 +1,7 @@
 // ── NAV ────────────────────────────────────────────────────────
 
 function nav(el) {
+  closeMenu();                         // закрыть drawer, если переход был из него
   document.querySelectorAll('.tn').forEach(n => n.classList.remove('active'));
   el.classList.add('active');
   const p = el.dataset.p;
@@ -25,7 +26,8 @@ function nav(el) {
 
 // ── ROLE-BASED NAV ──
 function applyRoleNav(role) {
-  const navItems = document.querySelectorAll('#mainNav .tn');
+  // покрываем оба набора пунктов: десктопное меню (#mainNav) и мобильный drawer (#mnavList)
+  const navItems = document.querySelectorAll('#mainNav .tn, #mnavList .tn');
   let firstVisible = null;
   navItems.forEach(item => {
     const roles = (item.dataset.roles || '').split(',').map(r => r.trim());
@@ -37,8 +39,10 @@ function applyRoleNav(role) {
     }
   });
   navItems.forEach(n => n.classList.remove('active'));
-  if (firstVisible) firstVisible.classList.add('active');
-  return firstVisible?.dataset?.p || 'home-care';
+  // первый видимый из #mainNav — стартовая страница
+  const firstMain = document.querySelector('#mainNav .tn:not([style*="display: none"])');
+  if (firstMain) firstMain.classList.add('active');
+  return firstMain?.dataset?.p || 'home-care';
 }
 
 // ── SETTINGS SIDEBAR NAV ──
@@ -63,6 +67,12 @@ async function launchApp() {
   document.getElementById('loginScreen').style.display = 'none';
   document.getElementById('topAv').textContent  = (ME.name || ME.email || '?').slice(0, 2).toUpperCase();
   document.getElementById('topName').textContent = ME.name || ME.email;
+
+  // шапка мобильного drawer
+  const ROLE_LBL = { owner: 'Владелец', admin: 'Администратор', specialist: 'Специалист' };
+  document.getElementById('mnavAv').textContent   = (ME.name || ME.email || '?').slice(0, 2).toUpperCase();
+  document.getElementById('mnavName').textContent = ME.name || ME.email;
+  document.getElementById('mnavRole').textContent = ROLE_LBL[ME.role] || ME.role || '';
 
   if (ME.must_change_password) {
     document.getElementById('changePwScreen').style.display = 'flex';
