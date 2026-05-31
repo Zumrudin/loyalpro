@@ -18,6 +18,7 @@ function nav(el) {
   if (p === 'staff-analytics') loadStaffAnalytics();
   if (p === 'segments')        loadSegments();
   if (p === 'home-care')       loadHomeCare();
+  if (p === 'patient-portfolio') loadPatientPortfolio();
   if (p === 'settings')        loadSettings();
   if (p === 'users')           loadUsers();
 }

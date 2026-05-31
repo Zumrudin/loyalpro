@@ -241,3 +241,16 @@ body,input,select,textarea,.card,.sc,.topbar,.stg-sidebar,.modal,.notif{transiti
 /* ─── NOTIF PULSE DOT ─── */
 @keyframes dot-pulse{0%,100%{transform:scale(1);opacity:1}50%{transform:scale(1.5);opacity:.7}}
 .notif.ok::before{animation:dot-pulse 1.5s ease-in-out infinite}
+
+/* ─── Patient Photo Cases ─── */
+#page-patient-portfolio .pp-search{display:flex;gap:12px;padding:16px 0 12px}
+#page-patient-portfolio .pp-q{flex:1;padding:10px 14px;border:1px solid var(--bd,#ddd);border-radius:8px;font-size:14px;background:var(--bg,#fff);color:var(--t1,#111)}
+#page-patient-portfolio .pp-recent{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px}
+#page-patient-portfolio .case-card{padding:12px 14px;border:1px solid var(--bd,#ddd);border-radius:8px;cursor:pointer;background:var(--card,#fff);transition:background .12s}
+#page-patient-portfolio .case-card:hover{background:var(--hover,#f5f5f5)}
+#page-patient-portfolio .cc-name{font-weight:600;font-size:14px}
+#page-patient-portfolio .cc-meta{color:var(--t3,#888);font-size:12.5px;margin-top:4px}
+#page-patient-portfolio .pp-hint{color:var(--t3,#888);padding:16px 0;font-size:13px}
+#page-patient-portfolio .pp-toolbar{display:flex;gap:8px;padding:8px 0 12px;align-items:center}
+#page-patient-portfolio .btn-back{background:none;border:0;color:var(--accent,#2a7);cursor:pointer;padding:6px 10px;font-size:14px}
+#page-patient-portfolio .btn-back:hover{text-decoration:underline}
