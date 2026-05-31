@@ -3,8 +3,9 @@
 function nav(el) {
   closeMenu();                         // закрыть drawer, если переход был из него
   document.querySelectorAll('.tn').forEach(n => n.classList.remove('active'));
-  el.classList.add('active');
   const p = el.dataset.p;
+  // подсветить пункт в ОБОИХ меню (верхнее + drawer)
+  document.querySelectorAll('.tn[data-p="' + p + '"]').forEach(n => n.classList.add('active'));
   document.querySelectorAll('.page').forEach(x => {
     x.classList.remove('active', 'page-enter');
   });
@@ -36,7 +37,8 @@ function applyRoleNav(role) {
   // стартовая страница — первый видимый пункт десктопного меню (#mainNav всегда в DOM)
   const firstMain = Array.from(document.querySelectorAll('#mainNav .tn'))
     .find(n => n.style.display !== 'none');
-  if (firstMain) firstMain.classList.add('active');
+  // подсветить стартовую страницу в обоих меню
+  if (firstMain) document.querySelectorAll('.tn[data-p="' + firstMain.dataset.p + '"]').forEach(n => n.classList.add('active'));
   return firstMain?.dataset?.p || 'home-care';
 }
 
