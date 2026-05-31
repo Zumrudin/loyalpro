@@ -364,6 +364,7 @@ body,input,select,textarea,.card,.sc,.topbar,.stg-sidebar,.modal,.notif{transiti
 @media(max-width:700px){
   #page-clients .tw{overflow:visible}
   #page-clients table,#page-clients tbody,#page-clients tbody tr,#page-clients tbody td{display:block;width:auto}
+  #page-clients thead{display:block}                            /* явно, не полагаясь на table-fixup браузера */
   #page-clients thead tr:first-child{display:none}              /* строка сортировки */
   /* строка фильтров → панель из чипов */
   #page-clients thead tr.filter-row{display:flex;flex-wrap:wrap;gap:8px;padding:0 0 12px}
