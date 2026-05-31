@@ -308,7 +308,9 @@ router.get('/search', wrap(async (req, res) => {
     ORDER BY last_visit DESC NULLS LAST, c.name
     LIMIT 50
   `, params);
-  res.json(rows.filter(r => r.cases_count > 0));
+  // Не фильтруем по cases_count > 0 — иначе новый пациент без кейсов не находится,
+  // и тогда невозможно завести ему первый альбом через поиск.
+  res.json(rows);
 }));
 
 // ─── ERROR HANDLER ───────────────────────────────────────────────

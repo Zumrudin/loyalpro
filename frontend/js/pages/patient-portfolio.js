@@ -58,11 +58,14 @@ async function _ppDoSearch(q) {
     out.innerHTML = `<div class="pp-hint" style="color:#c00">Ошибка: ${_ppEsc(e.message)}</div>`;
     return;
   }
-  if (!list.length) { out.innerHTML = `<div class="pp-hint">Ничего не найдено или у пациентов ещё нет кейсов</div>`; return; }
+  if (!list.length) {
+    out.innerHTML = `<div class="pp-hint">Пациент с таким именем/телефоном не найден в этом салоне. Пациенты подтягиваются из YClients автоматически.</div>`;
+    return;
+  }
   out.innerHTML = list.map(c => `
     <div class="case-card" data-client-id="${c.id}">
       <div class="cc-name">${_ppEsc(c.name)}</div>
-      <div class="cc-meta">${_ppEsc(c.phone || '')} • ${c.cases_count} кейсов${c.last_visit ? ' • посл. ' + c.last_visit : ''}</div>
+      <div class="cc-meta">${_ppEsc(c.phone || '')} • ${c.cases_count > 0 ? c.cases_count + ' альбом(ов)' : 'нет альбомов — кликните, чтобы создать первый'}${c.last_visit ? ' • посл. ' + _ppFmtDate(c.last_visit) : ''}</div>
     </div>
   `).join('');
   out.querySelectorAll('.case-card').forEach(el => {
