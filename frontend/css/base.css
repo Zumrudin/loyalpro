@@ -320,7 +320,8 @@ body,input,select,textarea,.card,.sc,.topbar,.stg-sidebar,.modal,.notif{transiti
 @media(max-width:700px){
   /* — Топбар — */
   .topbar{padding:0 12px;gap:8px}
-  .tb-burger{display:flex}                 /* кнопка-бургер (добавляется в Task 2) */
+  .tb-burger{display:flex;align-items:center;justify-content:center;background:transparent;border:none;color:var(--t1);cursor:pointer;padding:6px;border-radius:8px}
+  .tb-burger:hover{background:var(--bg)}
   .tb-ln{font-size:13px}
   /* прячем из шапки то, что переезжает в drawer (Task 4) */
   .topbar #syncSt,
@@ -343,10 +344,6 @@ body,input,select,textarea,.card,.sc,.topbar,.stg-sidebar,.modal,.notif{transiti
   .content{padding:10px}
   .tb-ln{display:none}                      /* совсем узко — прячем текст лого */
 }
-
-/* — Кнопка-бургер — */
-.tb-burger{align-items:center;justify-content:center;background:transparent;border:none;color:var(--t1);cursor:pointer;padding:6px;border-radius:8px}
-.tb-burger:hover{background:var(--bg)}
 
 /* — Drawer (скрыт на десктопе) — */
 .mnav-ov{position:fixed;inset:0;background:rgba(0,0,0,.45);opacity:0;visibility:hidden;transition:opacity .2s,visibility .2s;z-index:90}
