@@ -395,11 +395,11 @@ body,input,select,textarea,.card,.sc,.topbar,.stg-sidebar,.modal,.notif{transiti
     padding:5px 0;border:none;text-align:right}
   #page-records tbody td::before{content:attr(data-label);color:var(--t3);font-size:12px;font-weight:600;text-align:left;flex-shrink:0}
   #page-records tbody td.r-card-title{justify-content:flex-start;padding-bottom:10px;margin-bottom:6px;
-    border-bottom:1px solid var(--bd);font-weight:700;color:var(--t1)}
+    border-bottom:1px solid var(--bd);font-weight:700}
   #page-records tbody td.r-card-title::before{content:none}
   #page-records tbody td.empty{display:block;text-align:center}
   #page-records tbody td.empty::before{content:none}
   /* пагинация записей — крупнее, переносимая */
-  #rPager{display:flex;flex-wrap:wrap;align-items:center;gap:4px}
-  #rPager .btn{min-height:34px;padding:4px 12px}
+  #page-records #rPager{display:flex;flex-wrap:wrap;align-items:center;gap:4px}
+  #page-records #rPager .btn{min-height:34px;padding:4px 12px}
 }
