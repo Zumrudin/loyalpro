@@ -61,20 +61,20 @@
 - Modify: `backend/package.json`
 - Modify: `.env.example`
 
-- [ ] **Step 1:** В `backend/` запустить:
+- [x] **Step 1:** В `backend/` запустить:
   ```bash
   cd backend
   npm install @aws-sdk/client-s3 @aws-sdk/s3-request-presigner sharp
   npm install --save-dev aws-sdk-client-mock
   ```
 
-- [ ] **Step 2:** Убедиться, что `sharp` собрался без ошибок:
+- [x] **Step 2:** Убедиться, что `sharp` собрался без ошибок:
   ```bash
   node -e "const sharp = require('sharp'); console.log('sharp ok, libvips', sharp.versions.vips)"
   ```
   Ожидается строка вида `sharp ok, libvips 8.x.x`. Если ошибка про prebuilt-binary — `npm install --include=optional sharp` либо `apt-get install libvips-dev` и переустановка.
 
-- [ ] **Step 3:** Обновить `.env.example` — добавить блок:
+- [x] **Step 3:** Обновить `.env.example` — добавить блок:
   ```
   # S3 (patient photo cases)
   S3_ENDPOINT=https://storage.yandexcloud.net
@@ -86,7 +86,7 @@
   S3_URL_TTL_SECONDS=900
   ```
 
-- [ ] **Step 4:** Commit:
+- [x] **Step 4:** Commit:
   ```bash
   git add backend/package.json backend/package-lock.json .env.example
   git commit -m "deps: add aws-sdk + sharp for patient photo cases"
