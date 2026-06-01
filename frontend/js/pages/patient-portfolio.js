@@ -38,7 +38,7 @@ async function _ppRenderSearch() {
       <input class="pp-q" placeholder="Поиск пациента по имени или телефону" autocomplete="off">
       <button class="btn btn-pri pp-create-btn">+ Создать альбом</button>
     </div>
-    <div class="pp-recent"></div>
+    <div id="pp-recent" class="pp-recent"></div>
     <div class="pp-modal-bg" hidden>
       <div class="pp-modal" role="dialog" aria-label="Создать альбом">
         <header class="pp-modal-head">
@@ -134,7 +134,7 @@ async function _ppCreateFromPick(clientId, clientName) {
 }
 
 async function _ppRenderFeed() {
-  const out = _ppRoot().querySelector('.pp-recent');
+  const out = _ppRoot().querySelector('#pp-recent');
   if (!out) return;
   out.innerHTML = `<div class="pp-hint">Загрузка ленты…</div>`;
   let visits;
@@ -184,7 +184,7 @@ async function _ppRenderFeed() {
 }
 
 async function _ppDoSearch(q) {
-  const out = _ppRoot().querySelector('.pp-recent');
+  const out = _ppRoot().querySelector('#pp-recent');
   if (!q || q.trim().length < 2) {
     out.className = '';
     await _ppRenderFeed();
