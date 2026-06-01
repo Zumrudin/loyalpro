@@ -393,6 +393,10 @@ body,input,select,textarea,.card,.sc,.topbar,.stg-sidebar,.modal,.notif{transiti
 /* десктоп: миниатюры фикс-размера, выше hero-сравнение */
 @media(min-width:701px){
   #page-patient-portfolio .pp-stage-grid{grid-template-columns:repeat(auto-fill,120px)}
+  /* Сравнение «До·После»: на широких экранах не даём раздуваться во всю ширину
+     (получаются гипер-широкие половинки и фото с object-fit:cover «растягиваются»).
+     Ограничиваем и центрируем — пропорции половинок становятся ближе к 1:1. */
+  #page-patient-portfolio .pp-compare{max-width:720px;margin-left:auto;margin-right:auto}
   #page-patient-portfolio .pp-cmp-half img{height:300px}
 }
 
