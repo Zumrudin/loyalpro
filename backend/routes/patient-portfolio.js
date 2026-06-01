@@ -96,11 +96,13 @@ router.get('/clients/:clientId/cases', wrap(async (req, res) => {
   const rows = await db.any(`
     SELECT v.*, u.name AS specialist_name,
            c.title AS course_title,
+           cl.name AS client_name, cl.phone AS client_phone,
            (SELECT COUNT(*)::int FROM case_photos p WHERE p.case_visit_id = v.id) AS photos_count,
            (SELECT COUNT(*)::int FROM case_comments cm WHERE cm.case_visit_id = v.id) AS comments_count
     FROM case_visits v
     LEFT JOIN users u ON u.id = v.specialist_user_id
     LEFT JOIN case_courses c ON c.id = v.course_id
+    JOIN clients cl ON cl.id = v.client_id
     WHERE ${where}
     ORDER BY v.visit_date DESC, v.id DESC
     LIMIT $${params.length}
@@ -111,6 +113,7 @@ router.get('/clients/:clientId/cases', wrap(async (req, res) => {
       `SELECT id, stage, s3_key_thumb FROM case_photos WHERE case_visit_id=$1`, [v.id]);
     const pick = svc.pickThumbForCard(photos);
     v.preview_url = pick ? await s3.presignGet(pick.s3_key_thumb) : null;
+    Object.assign(v, svc.stageFlags(photos));
   }
   res.json(rows);
 }));
@@ -140,6 +143,7 @@ router.get('/visits/recent', wrap(async (req, res) => {
       `SELECT id, stage, s3_key_thumb FROM case_photos WHERE case_visit_id=$1`, [v.id]);
     const pick = svc.pickThumbForCard(photos);
     v.preview_url = pick ? await s3.presignGet(pick.s3_key_thumb) : null;
+    Object.assign(v, svc.stageFlags(photos));
   }
   res.json(rows);
 }));

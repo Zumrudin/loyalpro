@@ -32,6 +32,15 @@ function pickThumbForCard(photos) {
   return by('after') || by('in_progress') || by('before') || null;
 }
 
+// Флаги для бейджа «До·После» в ленте/карточке. photos: [{stage}].
+function stageFlags(photos) {
+  const arr = Array.isArray(photos) ? photos : [];
+  return {
+    has_before: arr.some(p => p.stage === 'before'),
+    has_after:  arr.some(p => p.stage === 'after'),
+  };
+}
+
 class ForbiddenError extends Error {
   constructor(msg = 'Forbidden') { super(msg); this.statusCode = 403; }
 }
@@ -124,6 +133,7 @@ module.exports = {
   parseStage,
   normalizePhone,
   pickThumbForCard,
+  stageFlags,
   assertCanMutate,
   ForbiddenError,
   processAndUpload,

@@ -69,3 +69,21 @@ describe('assertCanMutate', () => {
   test('owner на NULL author — ок', () => { expect(() => assertCanMutate({ id: 5, role: 'owner' }, null)).not.toThrow(); });
   test('specialist на NULL author — 403', () => { expect(() => assertCanMutate({ id: 5, role: 'specialist' }, null)).toThrow(); });
 });
+
+describe('stageFlags', () => {
+  const { stageFlags } = require('./services/patient-portfolio');
+  const photo = (stage) => ({ stage });
+  test('обе стадии присутствуют', () => {
+    expect(stageFlags([photo('before'), photo('after')])).toEqual({ has_before: true, has_after: true });
+  });
+  test('только before', () => {
+    expect(stageFlags([photo('before'), photo('in_progress')])).toEqual({ has_before: true, has_after: false });
+  });
+  test('только after', () => {
+    expect(stageFlags([photo('after')])).toEqual({ has_before: false, has_after: true });
+  });
+  test('пусто/не массив', () => {
+    expect(stageFlags([])).toEqual({ has_before: false, has_after: false });
+    expect(stageFlags(null)).toEqual({ has_before: false, has_after: false });
+  });
+});
