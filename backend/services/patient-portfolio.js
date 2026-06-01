@@ -41,6 +41,30 @@ function stageFlags(photos) {
   };
 }
 
+// Подборка для коллажа на L1-плитке: до `max` фото с приоритетом «по одной из
+// каждой стадии в порядке before → in_progress → after; недостающие слоты
+// добиваются из оставшихся фото в порядке их следования во входном массиве».
+// photos: [{id, stage, ...}]; ожидается, что массив уже упорядочен по
+// (stage, sort_order, id) — берём первый элемент из каждой стадии.
+function pickPreviewSet(photos, max = 3) {
+  const arr = Array.isArray(photos) ? photos : [];
+  if (arr.length === 0) return [];
+  const picks = [];
+  const used = new Set();
+  for (const stage of ['before', 'in_progress', 'after']) {
+    if (picks.length >= max) break;
+    const first = arr.find(p => p.stage === stage);
+    if (first && !used.has(first.id)) { picks.push(first); used.add(first.id); }
+  }
+  if (picks.length < max) {
+    for (const p of arr) {
+      if (picks.length >= max) break;
+      if (!used.has(p.id)) { picks.push(p); used.add(p.id); }
+    }
+  }
+  return picks;
+}
+
 class ForbiddenError extends Error {
   constructor(msg = 'Forbidden') { super(msg); this.statusCode = 403; }
 }
@@ -134,6 +158,7 @@ module.exports = {
   normalizePhone,
   pickThumbForCard,
   stageFlags,
+  pickPreviewSet,
   assertCanMutate,
   ForbiddenError,
   processAndUpload,

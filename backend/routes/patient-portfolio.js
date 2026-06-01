@@ -139,10 +139,15 @@ router.get('/visits/recent', wrap(async (req, res) => {
     LIMIT $2 OFFSET $3
   `, [sid(req), limit, offset]);
   for (const v of rows) {
+    // ORDER BY stage,sort_order,id — pickPreviewSet берёт первое в каждой стадии
     const photos = await db.any(
-      `SELECT id, stage, s3_key_thumb FROM case_photos WHERE case_visit_id=$1`, [v.id]);
-    const pick = svc.pickThumbForCard(photos);
-    v.preview_url = pick ? await s3.presignGet(pick.s3_key_thumb) : null;
+      `SELECT id, stage, s3_key_thumb FROM case_photos
+       WHERE case_visit_id=$1
+       ORDER BY stage, sort_order, id`, [v.id]);
+    const picks = svc.pickPreviewSet(photos, 3);
+    v.preview_urls = await Promise.all(picks.map(p => s3.presignGet(p.s3_key_thumb)));
+    // Бэквард-совместимость: оставляем preview_url=первая миниатюра, чтобы старый JS не падал
+    v.preview_url = v.preview_urls[0] || null;
     Object.assign(v, svc.stageFlags(photos));
   }
   res.json(rows);

@@ -149,20 +149,30 @@ async function _ppRenderFeed() {
     return;
   }
   out.className = 'pp-feed';
-  out.innerHTML = visits.map(v => `
-    <div class="case-card pp-tile" data-visit-id="${v.id}" data-client-id="${v.client_id}">
-      <div class="pp-tile-media">
-        ${v.preview_url ? `<img class="cc-preview" src="${_ppEsc(v.preview_url)}" alt="">` : '<div class="cc-noimg">нет фото</div>'}
-        ${(v.has_before && v.has_after) ? '<span class="pp-ba-badge">До·После</span>' : ''}
+  out.innerHTML = visits.map(v => {
+    // Бэкенд отдаёт preview_urls (массив до 3) + preview_url (для бэквард-совместимости).
+    const urls = Array.isArray(v.preview_urls) ? v.preview_urls
+               : (v.preview_url ? [v.preview_url] : []);
+    const media = urls.length === 0
+      ? '<div class="cc-noimg">нет фото</div>'
+      : `<div class="cc-preview-strip" data-n="${urls.length}">
+           ${urls.map(u => `<img src="${_ppEsc(u)}" alt="">`).join('')}
+         </div>`;
+    return `
+      <div class="case-card pp-tile" data-visit-id="${v.id}" data-client-id="${v.client_id}">
+        <div class="pp-tile-media">
+          ${media}
+          ${(v.has_before && v.has_after) ? '<span class="pp-ba-badge">До·После</span>' : ''}
+        </div>
+        <div class="cc-body">
+          <div class="cc-name">${_ppEsc(v.client_name || '—')}</div>
+          <div class="cc-staff">${_ppEsc(v.specialist_name || '—')}</div>
+          <div class="cc-meta">${_ppEsc(_ppFmtDate(v.visit_date))} • ${v.photos_count} фото${v.comments_count ? ' • ' + v.comments_count + ' комм.' : ''}</div>
+          ${v.course_title ? `<div class="cc-course">↳ ${_ppEsc(v.course_title)}</div>` : ''}
+        </div>
       </div>
-      <div class="cc-body">
-        <div class="cc-name">${_ppEsc(v.client_name || '—')}</div>
-        <div class="cc-staff">${_ppEsc(v.specialist_name || '—')}</div>
-        <div class="cc-meta">${_ppEsc(_ppFmtDate(v.visit_date))} • ${v.photos_count} фото${v.comments_count ? ' • ' + v.comments_count + ' комм.' : ''}</div>
-        ${v.course_title ? `<div class="cc-course">↳ ${_ppEsc(v.course_title)}</div>` : ''}
-      </div>
-    </div>
-  `).join('');
+    `;
+  }).join('');
   out.querySelectorAll('.case-card[data-visit-id]').forEach(el => {
     el.addEventListener('click', () => {
       _ppState.level = 3;

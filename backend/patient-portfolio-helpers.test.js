@@ -87,3 +87,38 @@ describe('stageFlags', () => {
     expect(stageFlags(null)).toEqual({ has_before: false, has_after: false });
   });
 });
+
+describe('pickPreviewSet', () => {
+  const { pickPreviewSet } = require('./services/patient-portfolio');
+  const p = (id, stage) => ({ id, stage });
+
+  test('по одному из каждой стадии в порядке before → in_progress → after', () => {
+    const photos = [p(1,'before'), p(2,'in_progress'), p(3,'after')];
+    expect(pickPreviewSet(photos).map(x => x.id)).toEqual([1, 2, 3]);
+  });
+  test('только before — недостающие добиваем из той же стадии', () => {
+    const photos = [p(1,'before'), p(2,'before'), p(3,'before')];
+    expect(pickPreviewSet(photos).map(x => x.id)).toEqual([1, 2, 3]);
+  });
+  test('две стадии, in_progress пуст — третий слот из лишних', () => {
+    const photos = [p(1,'before'), p(2,'before'), p(3,'after')];
+    expect(pickPreviewSet(photos).map(x => x.id)).toEqual([1, 3, 2]);
+  });
+  test('меньше трёх всего — возвращаем что есть', () => {
+    expect(pickPreviewSet([p(1,'before')]).map(x => x.id)).toEqual([1]);
+    expect(pickPreviewSet([p(1,'after'), p(2,'after')]).map(x => x.id)).toEqual([1, 2]);
+  });
+  test('пусто / не массив', () => {
+    expect(pickPreviewSet([])).toEqual([]);
+    expect(pickPreviewSet(null)).toEqual([]);
+  });
+  test('max параметр уважается', () => {
+    const photos = [p(1,'before'), p(2,'in_progress'), p(3,'after'), p(4,'after')];
+    expect(pickPreviewSet(photos, 2).map(x => x.id)).toEqual([1, 2]);
+  });
+  test('первый из стадии — это первый по порядку (sort_order, id)', () => {
+    // если before имеет несколько, берём первый из массива
+    const photos = [p(5,'before'), p(1,'before'), p(9,'after')];
+    expect(pickPreviewSet(photos).map(x => x.id)).toEqual([5, 9, 1]);
+  });
+});
