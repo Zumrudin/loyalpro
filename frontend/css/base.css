@@ -242,81 +242,141 @@ body,input,select,textarea,.card,.sc,.topbar,.stg-sidebar,.modal,.notif{transiti
 @keyframes dot-pulse{0%,100%{transform:scale(1);opacity:1}50%{transform:scale(1.5);opacity:.7}}
 .notif.ok::before{animation:dot-pulse 1.5s ease-in-out infinite}
 
-/* ─── Patient Photo Cases ─── */
-#page-patient-portfolio .pp-search{display:grid;grid-template-columns:repeat(5,1fr);gap:12px;padding:16px 0 12px;align-items:center}
-#page-patient-portfolio .pp-q{grid-column:1 / span 2;padding:10px 14px;border:1px solid var(--bd,#ddd);border-radius:8px;font-size:14px;background:var(--bg,#fff);color:var(--t1,#111);min-width:0}
-#page-patient-portfolio .pp-create-btn{grid-column:3 / span 1;padding:10px 14px;justify-self:start;white-space:nowrap}
-@media(max-width:1280px){#page-patient-portfolio .pp-search{grid-template-columns:repeat(4,1fr)}}
-@media(max-width:980px){#page-patient-portfolio .pp-search{grid-template-columns:repeat(3,1fr)}}
-@media(max-width:680px){#page-patient-portfolio .pp-search{grid-template-columns:repeat(2,1fr)}#page-patient-portfolio .pp-q{grid-column:1 / span 1}#page-patient-portfolio .pp-create-btn{grid-column:2 / span 1;justify-self:stretch}}
+/* ════ Фото-кейсы — оформление (направление «A · Чистая клиника») ════ */
+/* L1 поиск + сетки */
+#page-patient-portfolio .pp-search{display:flex;gap:10px;align-items:center;padding:14px 0 12px}
+#page-patient-portfolio .pp-q{flex:1;padding:10px 14px;border:1px solid var(--bd);border-radius:10px;font-size:14px;background:var(--bg);color:var(--t1);min-width:0}
+#page-patient-portfolio .pp-create-btn{white-space:nowrap;padding:10px 16px}
+#page-patient-portfolio .pp-feed{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:14px;padding:4px 0}
+#page-patient-portfolio .pp-recent,#page-patient-portfolio .pp-search-results{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:12px}
+
+/* карточки общие */
+#page-patient-portfolio .case-card{border:1px solid var(--bd);border-radius:var(--r);cursor:pointer;background:var(--card);box-shadow:var(--sh);transition:transform .12s,box-shadow .12s;overflow:hidden}
+#page-patient-portfolio .case-card:hover{transform:translateY(-2px);box-shadow:0 6px 18px rgba(0,0,0,.10)}
+#page-patient-portfolio .pp-pick,#page-patient-portfolio .pp-search-results .case-card{padding:12px 14px}
+#page-patient-portfolio .cc-name{font-weight:700;font-size:14px;color:var(--t1)}
+#page-patient-portfolio .cc-meta{color:var(--t3);font-size:12.5px;margin-top:4px}
+#page-patient-portfolio .cc-course{color:var(--a);font-size:12px;margin-top:4px;font-weight:600}
+
+/* L1 плитки ленты */
+#page-patient-portfolio .pp-tile{padding:0}
+#page-patient-portfolio .pp-tile-media{position:relative}
+#page-patient-portfolio .cc-preview{display:block;width:100%;height:150px;object-fit:cover;background:var(--bg)}
+#page-patient-portfolio .cc-noimg{width:100%;height:150px;background:var(--bg);display:grid;place-items:center;color:var(--t3);font-size:12px}
+#page-patient-portfolio .pp-ba-badge{position:absolute;top:8px;right:8px;background:var(--grad-a);color:#fff;font-size:11px;font-weight:600;padding:3px 9px;border-radius:8px;box-shadow:0 2px 8px rgba(0,0,0,.18)}
+#page-patient-portfolio .pp-tile .cc-body{padding:10px 13px}
+
+/* подсказки/пустые */
+#page-patient-portfolio .pp-hint,#page-patient-portfolio .pp-empty{color:var(--t3);padding:16px 0;font-size:13px}
+#page-patient-portfolio .pp-stage-empty{color:var(--t3);font-size:12px;padding:10px 14px}
+
+/* тулбар */
+#page-patient-portfolio .pp-toolbar{display:flex;gap:8px;padding:10px 0 14px;align-items:center}
+#page-patient-portfolio .btn-back{background:none;border:0;color:var(--a);cursor:pointer;padding:6px 8px;font-size:14px;font-weight:600}
+#page-patient-portfolio .btn-back:hover{text-decoration:underline}
+
+/* L2 шапка пациента */
+#page-patient-portfolio .pp-patient-head{display:flex;align-items:center;gap:12px;padding:14px 16px;background:var(--card);border:1px solid var(--bd);border-radius:var(--r);box-shadow:var(--sh);margin-bottom:12px}
+#page-patient-portfolio .pp-avatar{width:46px;height:46px;border-radius:50%;background:var(--grad-a);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:16px;flex-shrink:0}
+#page-patient-portfolio .pp-patient-name{font-weight:700;font-size:16px;color:var(--t1)}
+#page-patient-portfolio .pp-patient-sub{font-size:12.5px;color:var(--t3);margin-top:2px}
+
+/* L2 чипы курсов */
+#page-patient-portfolio .pp-courses-row{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px}
+#page-patient-portfolio .pp-chip{font-size:12px;font-weight:600;border-radius:20px;padding:5px 12px;cursor:pointer;white-space:nowrap}
+#page-patient-portfolio .pp-chip-course{background:var(--as);color:var(--a)}
+#page-patient-portfolio .pp-chip-add{background:var(--bg);color:var(--t2);border:1px dashed var(--bd)}
+#page-patient-portfolio .pp-chip-add:hover{color:var(--t1)}
+
+/* L2 ряды альбомов */
+#page-patient-portfolio .pp-timeline{display:flex;flex-direction:column;gap:10px}
+#page-patient-portfolio .pp-row{display:flex;align-items:stretch}
+#page-patient-portfolio .pp-row-img{width:72px;height:72px;object-fit:cover;flex-shrink:0;background:var(--bg)}
+#page-patient-portfolio .pp-row-noimg{width:72px;height:72px;flex-shrink:0;background:var(--bg);display:grid;place-items:center;color:var(--t3);font-size:10px}
+#page-patient-portfolio .pp-row-body{padding:10px 13px}
+
+/* L3 заголовок альбома + меню ⋯ */
+#page-patient-portfolio .pp-album-meta{flex:1;font-weight:700;font-size:14px;color:var(--t1)}
+#page-patient-portfolio .pp-menu{position:relative}
+#page-patient-portfolio .pp-menu-btn{background:none;border:0;font-size:22px;line-height:1;color:var(--t3);cursor:pointer;padding:4px 10px;border-radius:8px}
+#page-patient-portfolio .pp-menu-btn:hover{background:var(--bg);color:var(--t1)}
+#page-patient-portfolio .pp-menu-pop{position:absolute;right:0;top:110%;background:var(--card);border:1px solid var(--bd);border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,.18);padding:6px;z-index:50;min-width:160px}
+#page-patient-portfolio .pp-menu-pop[hidden]{display:none}
+#page-patient-portfolio .pp-del-visit{display:block;width:100%;text-align:left;background:none;border:0;color:var(--danger);font-size:13px;padding:8px 10px;border-radius:7px;cursor:pointer}
+#page-patient-portfolio .pp-del-visit:hover{background:rgba(232,84,84,.10)}
+
+/* L3 сравнение До/После */
+#page-patient-portfolio .pp-compare{margin:0 0 14px;border:1px solid var(--bd);border-radius:var(--r);overflow:hidden;background:var(--card);box-shadow:0 2px 12px rgba(0,200,150,.12)}
+#page-patient-portfolio .pp-cmp-pair{display:grid;grid-template-columns:1fr 1fr;gap:2px;background:var(--bd)}
+#page-patient-portfolio .pp-cmp-half{position:relative;margin:0;background:var(--bg)}
+#page-patient-portfolio .pp-cmp-half img{display:block;width:100%;height:220px;object-fit:cover;cursor:pointer}
+#page-patient-portfolio .pp-cmp-lbl{position:absolute;top:8px;font-size:11px;font-weight:600;color:#fff;padding:2px 8px;border-radius:7px}
+#page-patient-portfolio .pp-cmp-before{left:8px;background:rgba(0,0,0,.55)}
+#page-patient-portfolio .pp-cmp-after{right:8px;background:var(--grad-a)}
+#page-patient-portfolio .pp-cmp-foot{padding:8px 12px;font-size:12px;font-weight:600;color:var(--a)}
+
+/* L3 карточки стадий */
+#page-patient-portfolio .pp-stage{margin:0 0 14px;background:var(--card);border:1px solid var(--bd);border-radius:var(--r);box-shadow:var(--sh);overflow:hidden}
+#page-patient-portfolio .pp-stage--after{border-color:var(--a)}
+#page-patient-portfolio .pp-stage--after::before{content:"";display:block;height:3px;background:var(--grad-a)}
+#page-patient-portfolio .pp-stage-head{display:flex;align-items:center;justify-content:space-between;padding:10px 14px}
+#page-patient-portfolio .pp-stage-head h3{margin:0;font-size:13px;color:var(--t1);font-weight:700}
+#page-patient-portfolio .pp-stage-count{display:inline-block;margin-left:6px;padding:1px 8px;background:var(--bg);border-radius:10px;font-size:11px;color:var(--t3)}
+#page-patient-portfolio .pp-stage--after .pp-stage-count{background:var(--as);color:var(--a)}
+#page-patient-portfolio .pp-add-btn{cursor:pointer;color:var(--a);font-size:13px;font-weight:600}
+#page-patient-portfolio .pp-add-btn:hover{text-decoration:underline}
+#page-patient-portfolio .pp-stage-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:4px;padding:0 4px 4px}
+#page-patient-portfolio .pp-thumb{width:100%;aspect-ratio:1;object-fit:cover;border-radius:6px;cursor:pointer;background:var(--bg);transition:transform .12s}
+#page-patient-portfolio .pp-thumb:hover{transform:scale(1.03)}
+
+/* L3 дропзона пустой стадии */
+#page-patient-portfolio .pp-dropzone{display:flex;flex-direction:column;align-items:center;gap:4px;margin:0 14px 14px;padding:20px;border:1.5px dashed var(--bd);border-radius:12px;color:var(--t3);font-size:12px;cursor:pointer;text-align:center}
+#page-patient-portfolio .pp-dropzone:hover{border-color:var(--a);color:var(--a)}
+#page-patient-portfolio .pp-dz-plus{font-size:24px;line-height:1}
+
+/* прогресс загрузки (логика без изменений) */
+#page-patient-portfolio .pp-upload-bar{display:flex;align-items:center;gap:10px;margin:0 14px 12px}
+#page-patient-portfolio .pp-upload-bar[hidden]{display:none}
+#page-patient-portfolio .pp-upload-track{flex:1;height:6px;background:var(--bg);border-radius:3px;overflow:hidden}
+#page-patient-portfolio .pp-upload-fill{height:100%;width:0;background:var(--grad-a);border-radius:3px;transition:width .2s ease}
+#page-patient-portfolio .pp-upload-label{font-size:12px;color:var(--t2);white-space:nowrap;min-width:96px;text-align:right}
+#page-patient-portfolio .pp-add-disabled{pointer-events:none;opacity:.5}
+
+/* заметки / комментарии */
+#page-patient-portfolio .pp-notes,#page-patient-portfolio .pp-comments{padding:14px;margin:0 0 14px;background:var(--card);border:1px solid var(--bd);border-radius:var(--r);box-shadow:var(--sh)}
+#page-patient-portfolio .pp-notes h3,#page-patient-portfolio .pp-comments h3{margin:0 0 10px;font-size:13px;color:var(--t1);font-weight:700}
+#page-patient-portfolio .pp-notes-ta{width:100%;min-height:72px;padding:10px;border:1px solid var(--bd);border-radius:8px;background:var(--bg);color:var(--t1);font-family:inherit;font-size:13px;resize:vertical}
+#page-patient-portfolio .pp-notes-hint{font-size:11px;color:var(--t3);margin-top:4px}
+#page-patient-portfolio .pp-comment{padding:10px 0;border-bottom:1px solid var(--bd)}
+#page-patient-portfolio .pp-c-head{font-size:11px;color:var(--t3)}
+#page-patient-portfolio .pp-c-text{margin-top:4px;white-space:pre-wrap;font-size:13px;color:var(--t1)}
+#page-patient-portfolio .pp-comment-form{display:flex;gap:8px;align-items:flex-start;margin-top:12px}
+#page-patient-portfolio .pp-new-comment{flex:1;min-height:48px;padding:8px;border:1px solid var(--bd);border-radius:8px;font-family:inherit;font-size:13px;resize:vertical;background:var(--bg);color:var(--t1)}
+
+/* модалка создания альбома (L1) */
 #page-patient-portfolio .pp-modal-bg{position:fixed;inset:0;background:rgba(0,0,0,.55);display:grid;place-items:center;z-index:9998;padding:20px}
 #page-patient-portfolio .pp-modal-bg[hidden]{display:none !important}
-#page-patient-portfolio .pp-modal{background:var(--card,#fff);border-radius:10px;width:min(560px,100%);max-height:80vh;display:flex;flex-direction:column;box-shadow:0 12px 40px rgba(0,0,0,.25)}
-#page-patient-portfolio .pp-modal-head{display:flex;align-items:center;justify-content:space-between;padding:14px 18px;border-bottom:1px solid var(--bd,#eee)}
-#page-patient-portfolio .pp-modal-head h3{margin:0;font-size:16px;color:var(--t1,#111)}
-#page-patient-portfolio .pp-modal-close{background:none;border:0;font-size:24px;line-height:1;cursor:pointer;color:var(--t3,#888);padding:0 6px}
-#page-patient-portfolio .pp-modal-close:hover{color:var(--t1,#111)}
+#page-patient-portfolio .pp-modal{background:var(--card);border-radius:var(--r);width:min(560px,100%);max-height:80vh;display:flex;flex-direction:column;box-shadow:0 12px 40px rgba(0,0,0,.25)}
+#page-patient-portfolio .pp-modal-head{display:flex;align-items:center;justify-content:space-between;padding:14px 18px;border-bottom:1px solid var(--bd)}
+#page-patient-portfolio .pp-modal-head h3{margin:0;font-size:16px;color:var(--t1)}
+#page-patient-portfolio .pp-modal-close{background:none;border:0;font-size:24px;line-height:1;cursor:pointer;color:var(--t3);padding:0 6px}
+#page-patient-portfolio .pp-modal-close:hover{color:var(--t1)}
 #page-patient-portfolio .pp-modal-body{padding:14px 18px;overflow:auto;display:flex;flex-direction:column;gap:12px}
-#page-patient-portfolio .pp-create-q{padding:10px 14px;border:1px solid var(--bd,#ddd);border-radius:8px;font-size:14px;background:var(--bg,#fff);color:var(--t1,#111)}
+#page-patient-portfolio .pp-create-q{padding:10px 14px;border:1px solid var(--bd);border-radius:8px;font-size:14px;background:var(--bg);color:var(--t1)}
 #page-patient-portfolio .pp-create-results{display:flex;flex-direction:column;gap:8px}
-#page-patient-portfolio .pp-pick{padding:10px 12px}
-#page-patient-portfolio .pp-recent{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px}
-#page-patient-portfolio .pp-feed{display:grid;grid-template-columns:repeat(5,1fr);gap:12px;padding:4px 0}
-@media(max-width:1280px){#page-patient-portfolio .pp-feed{grid-template-columns:repeat(4,1fr)}}
-@media(max-width:980px){#page-patient-portfolio .pp-feed{grid-template-columns:repeat(3,1fr)}}
-@media(max-width:680px){#page-patient-portfolio .pp-feed{grid-template-columns:repeat(2,1fr)}}
-#page-patient-portfolio .pp-search-results{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px}
-#page-patient-portfolio .case-card{padding:12px 14px;border:1px solid var(--bd,#ddd);border-radius:8px;cursor:pointer;background:var(--card,#fff);transition:background .12s}
-#page-patient-portfolio .case-card:hover{background:var(--hover,#f5f5f5)}
-#page-patient-portfolio .cc-name{font-weight:600;font-size:14px}
-#page-patient-portfolio .cc-meta{color:var(--t3,#888);font-size:12.5px;margin-top:4px}
-#page-patient-portfolio .pp-hint{color:var(--t3,#888);padding:16px 0;font-size:13px}
-#page-patient-portfolio .pp-toolbar{display:flex;gap:8px;padding:8px 0 12px;align-items:center}
-#page-patient-portfolio .btn-back{background:none;border:0;color:var(--accent,#2a7);cursor:pointer;padding:6px 10px;font-size:14px}
-#page-patient-portfolio .btn-back:hover{text-decoration:underline}
-#page-patient-portfolio .pp-grid{display:grid;grid-template-columns:240px 1fr;gap:16px;padding:0}
-#page-patient-portfolio .pp-courses h3{margin:0 0 8px 0;font-size:13px;color:var(--t3,#888);text-transform:uppercase;letter-spacing:.5px}
-#page-patient-portfolio .course-card{padding:10px 12px;border:1px solid var(--bd,#ddd);border-radius:6px;margin-bottom:8px;cursor:pointer;background:var(--card,#fff);transition:background .12s}
-#page-patient-portfolio .course-card:hover{background:var(--hover,#f5f5f5)}
-#page-patient-portfolio .pp-timeline{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px;align-content:start}
-#page-patient-portfolio .pp-tile{padding:0;overflow:hidden}
-#page-patient-portfolio .cc-preview{display:block;width:100%;height:160px;object-fit:cover;background:var(--bg2,#eee)}
-#page-patient-portfolio .cc-noimg{width:100%;height:160px;background:var(--bg2,#eee);display:grid;place-items:center;color:var(--t3,#888);font-size:12px}
-#page-patient-portfolio .pp-tile .cc-body{padding:10px 12px}
-#page-patient-portfolio .cc-course{color:var(--accent,#2a7);font-size:12px;margin-top:4px}
-#page-patient-portfolio .pp-album-meta{flex:1;font-weight:600;font-size:14px;color:var(--t1,#111)}
-#page-patient-portfolio .pp-stage{padding:14px 0;border-top:1px solid var(--bd,#eee)}
-#page-patient-portfolio .pp-stage:first-of-type{border-top:0}
-#page-patient-portfolio .pp-stage-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px}
-#page-patient-portfolio .pp-stage-head h3{margin:0;font-size:14px;color:var(--t1,#111);text-transform:uppercase;letter-spacing:.5px}
-#page-patient-portfolio .pp-stage-count{display:inline-block;margin-left:6px;padding:1px 8px;background:var(--bg2,#eee);border-radius:10px;font-size:11px;color:var(--t3,#888)}
-#page-patient-portfolio .pp-add-btn{cursor:pointer;padding:6px 12px;border:1px dashed var(--accent,#2a7);border-radius:6px;color:var(--accent,#2a7);font-size:13px}
-#page-patient-portfolio .pp-add-btn:hover{background:var(--hover,#f5f5f5)}
-#page-patient-portfolio .pp-stage-grid{display:grid;grid-template-columns:repeat(auto-fill,120px);gap:8px}
-#page-patient-portfolio .pp-stage-empty{color:var(--t3,#888);font-size:12px;padding:8px 0}
-#page-patient-portfolio .pp-thumb{width:120px;height:120px;object-fit:cover;border-radius:6px;cursor:pointer;background:var(--bg2,#eee);transition:transform .12s}
-#page-patient-portfolio .pp-thumb:hover{transform:scale(1.03)}
-#page-patient-portfolio .pp-notes,#page-patient-portfolio .pp-comments{padding:14px 0;border-top:1px solid var(--bd,#eee)}
-#page-patient-portfolio .pp-notes h3,#page-patient-portfolio .pp-comments h3{margin:0 0 8px;font-size:14px;color:var(--t1,#111);text-transform:uppercase;letter-spacing:.5px}
-#page-patient-portfolio .pp-notes-ta{width:100%;min-height:72px;padding:10px;border:1px solid var(--bd,#ddd);border-radius:6px;background:var(--bg,#fff);color:var(--t1,#111);font-family:inherit;font-size:13px;resize:vertical}
-#page-patient-portfolio .pp-notes-hint{font-size:11px;color:var(--t3,#888);margin-top:4px}
-#page-patient-portfolio .pp-comment{padding:8px 0;border-bottom:1px solid var(--bg2,#f0f0f0)}
-#page-patient-portfolio .pp-c-head{font-size:11px;color:var(--t3,#888)}
-#page-patient-portfolio .pp-c-text{margin-top:4px;white-space:pre-wrap;font-size:13px;color:var(--t1,#111)}
-#page-patient-portfolio .pp-comment-form{display:flex;gap:8px;align-items:flex-start;margin-top:10px}
-#page-patient-portfolio .pp-new-comment{flex:1;min-height:48px;padding:8px;border:1px solid var(--bd,#ddd);border-radius:6px;font-family:inherit;font-size:13px;resize:vertical}
+
+/* лайтбокс */
 #page-patient-portfolio .pp-lightbox{position:fixed;inset:0;background:rgba(0,0,0,.88);display:grid;place-items:center;z-index:9999}
 #page-patient-portfolio .pp-lightbox[hidden]{display:none !important}
 #page-patient-portfolio .pp-lb-img{max-width:92vw;max-height:86vh;object-fit:contain;border-radius:4px}
 #page-patient-portfolio .pp-lb-close{position:absolute;top:14px;right:18px;font-size:36px;line-height:1;background:none;color:#fff;border:0;cursor:pointer;padding:0 8px}
 #page-patient-portfolio .pp-lb-dl{position:absolute;bottom:24px;left:50%;transform:translateX(-50%);padding:8px 18px}
-/* upload progress (per stage) */
-#page-patient-portfolio .pp-upload-bar{display:flex;align-items:center;gap:10px;margin:0 0 10px}
-#page-patient-portfolio .pp-upload-bar[hidden]{display:none}
-#page-patient-portfolio .pp-upload-track{flex:1;height:6px;background:var(--bg2,#eee);border-radius:3px;overflow:hidden}
-#page-patient-portfolio .pp-upload-fill{height:100%;width:0;background:var(--grad-a,linear-gradient(90deg,#2a7,#19c39c));border-radius:3px;transition:width .2s ease}
-#page-patient-portfolio .pp-upload-label{font-size:12px;color:var(--t2,#666);white-space:nowrap;min-width:96px;text-align:right}
-#page-patient-portfolio .pp-add-disabled{pointer-events:none;opacity:.5}
+
+/* десктоп: миниатюры фикс-размера, выше hero-сравнение */
+@media(min-width:701px){
+  #page-patient-portfolio .pp-stage-grid{grid-template-columns:repeat(auto-fill,120px)}
+  #page-patient-portfolio .pp-cmp-half img{height:300px}
+}
 
 /* десктоп: бургер скрыт всегда */
 .tb-burger{display:none}
@@ -417,7 +477,6 @@ body,input,select,textarea,.card,.sc,.topbar,.stg-sidebar,.modal,.notif{transiti
   .ov.open .modal{transform:translateY(0)}  /* выезд снизу вместо scale-пульсации */
   .ov{align-items:flex-end}                 /* модалка прижата к низу (bottom-sheet) */
   .g3,.g32,.g2{grid-template-columns:1fr}   /* любые многоколоночные сетки → 1 колонка */
-  #page-patient-portfolio .pp-grid{grid-template-columns:1fr}  /* детальный вид кейса: сайдбар над контентом */
 }
 @media(max-width:480px){
   #page-patient-portfolio .pp-feed{grid-template-columns:1fr}   /* фото-кейсы в 1 колонку на узких */
