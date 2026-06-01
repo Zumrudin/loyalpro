@@ -411,7 +411,10 @@ async function _ppRenderAlbum() {
     <div class="pp-lightbox" hidden>
       <img class="pp-lb-img" alt="">
       <button class="pp-lb-close" type="button">×</button>
-      <button class="pp-lb-dl btn btn-pri" type="button">Скачать оригинал</button>
+      <div class="pp-lb-actions">
+        <button class="pp-lb-dl btn btn-pri" type="button">Скачать оригинал</button>
+        <button class="pp-lb-del btn" type="button">Удалить</button>
+      </div>
     </div>
   `;
 
@@ -510,6 +513,14 @@ async function _ppRenderAlbum() {
       const r = await api('GET', `/api/patient-portfolio/photos/${lb.dataset.photoId}/url?variant=original`);
       window.open(r.url, '_blank');
     } catch (e) { alert('Не удалось получить ссылку: ' + e.message); }
+  };
+  lb.querySelector('.pp-lb-del').onclick = async () => {
+    if (!confirm('Удалить это фото безвозвратно?')) return;
+    try {
+      await api('DELETE', `/api/patient-portfolio/photos/${lb.dataset.photoId}`);
+      closeLightbox();
+      _ppRender();
+    } catch (e) { alert('Не удалось удалить: ' + e.message); }
   };
 
   // ── Добавление комментария

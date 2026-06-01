@@ -371,7 +371,10 @@ body,input,select,textarea,.card,.sc,.topbar,.stg-sidebar,.modal,.notif{transiti
 #page-patient-portfolio .pp-lightbox[hidden]{display:none !important}
 #page-patient-portfolio .pp-lb-img{max-width:92vw;max-height:86vh;object-fit:contain;border-radius:4px}
 #page-patient-portfolio .pp-lb-close{position:absolute;top:14px;right:18px;font-size:36px;line-height:1;background:none;color:#fff;border:0;cursor:pointer;padding:0 8px}
-#page-patient-portfolio .pp-lb-dl{position:absolute;bottom:24px;left:50%;transform:translateX(-50%);padding:8px 18px}
+#page-patient-portfolio .pp-lb-actions{position:absolute;bottom:24px;left:50%;transform:translateX(-50%);display:flex;gap:10px}
+#page-patient-portfolio .pp-lb-dl{padding:8px 18px}
+#page-patient-portfolio .pp-lb-del{padding:8px 18px;background:var(--danger);color:#fff;border:0}
+#page-patient-portfolio .pp-lb-del:hover{filter:brightness(1.1)}
 
 /* десктоп: миниатюры фикс-размера, выше hero-сравнение */
 @media(min-width:701px){
