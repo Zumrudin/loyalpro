@@ -316,32 +316,66 @@ async function _ppRenderAlbum() {
   const byStage = { before: [], in_progress: [], after: [] };
   v.photos.forEach(p => { if (byStage[p.stage]) byStage[p.stage].push(p); });
 
-  const stageBlock = (key) => `
-    <section class="pp-stage">
-      <header class="pp-stage-head">
-        <h3>${_PP_STAGE_LABELS[key]} <span class="pp-stage-count">${byStage[key].length}</span></h3>
-        <label class="pp-add-btn">
-          + Добавить фото
-          <input type="file" accept="image/jpeg,image/png,image/webp" multiple data-stage="${key}" hidden>
-        </label>
-      </header>
-      <div class="pp-upload-bar" hidden>
-        <div class="pp-upload-track"><div class="pp-upload-fill"></div></div>
-        <span class="pp-upload-label"></span>
+  // Карточка-сравнение: первое (старейшее) «до» + последнее (новейшее) «после».
+  // photos с сервера упорядочены stage, sort_order, id — внутри стадии массив по возрастанию.
+  const cmpBefore = byStage.before[0];
+  const cmpAfter  = byStage.after[byStage.after.length - 1];
+  const compareBlock = (cmpBefore && cmpAfter) ? `
+    <section class="pp-compare">
+      <div class="pp-cmp-pair">
+        <figure class="pp-cmp-half">
+          <img class="pp-thumb" src="${_ppEsc(cmpBefore.url_thumb)}" data-photo-id="${cmpBefore.id}" data-medium="${_ppEsc(cmpBefore.url_medium)}" alt="">
+          <figcaption class="pp-cmp-lbl pp-cmp-before">ДО</figcaption>
+        </figure>
+        <figure class="pp-cmp-half">
+          <img class="pp-thumb" src="${_ppEsc(cmpAfter.url_thumb)}" data-photo-id="${cmpAfter.id}" data-medium="${_ppEsc(cmpAfter.url_medium)}" alt="">
+          <figcaption class="pp-cmp-lbl pp-cmp-after">ПОСЛЕ</figcaption>
+        </figure>
       </div>
-      <div class="pp-stage-grid">
-        ${byStage[key].length === 0 ? '<div class="pp-stage-empty">Нет фото</div>' :
-          byStage[key].map(p => `<img class="pp-thumb" src="${_ppEsc(p.url_thumb)}" data-photo-id="${p.id}" data-medium="${_ppEsc(p.url_medium)}" alt="">`).join('')}
-      </div>
+      <div class="pp-cmp-foot">Результат</div>
     </section>
-  `;
+  ` : '';
+
+  const fileInput = (key) => `<input type="file" accept="image/jpeg,image/png,image/webp" multiple data-stage="${key}" hidden>`;
+
+  const stageBlock = (key) => {
+    const photos = byStage[key];
+    const body = photos.length === 0
+      ? `<label class="pp-dropzone">
+           <span class="pp-dz-plus">＋</span>
+           <span>${_PP_STAGE_LABELS[key]} — добавить фото</span>
+           ${fileInput(key)}
+         </label>`
+      : `<div class="pp-stage-grid">
+           ${photos.map(p => `<img class="pp-thumb" src="${_ppEsc(p.url_thumb)}" data-photo-id="${p.id}" data-medium="${_ppEsc(p.url_medium)}" alt="">`).join('')}
+         </div>`;
+    return `
+      <section class="pp-stage pp-stage--${key}">
+        <header class="pp-stage-head">
+          <h3>${_PP_STAGE_LABELS[key]} <span class="pp-stage-count">${photos.length}</span></h3>
+          ${photos.length ? `<label class="pp-add-btn">+ Добавить фото${fileInput(key)}</label>` : ''}
+        </header>
+        <div class="pp-upload-bar" hidden>
+          <div class="pp-upload-track"><div class="pp-upload-fill"></div></div>
+          <span class="pp-upload-label"></span>
+        </div>
+        ${body}
+      </section>
+    `;
+  };
 
   _ppRoot().innerHTML = `
     <div class="pp-toolbar">
-      <button class="btn-back" onclick="_ppBack(2)">← К пациенту</button>
-      <div class="pp-album-meta">Альбом от ${_ppEsc(_ppFmtDate(v.visit_date))}</div>
-      <button class="btn pp-del-visit">Удалить альбом</button>
+      <button class="btn-back" onclick="_ppBack(2)">‹ Пациент</button>
+      <div class="pp-album-meta">Альбом · ${_ppEsc(_ppFmtDate(v.visit_date))}</div>
+      <div class="pp-menu">
+        <button class="pp-menu-btn" type="button" aria-label="Меню альбома">⋯</button>
+        <div class="pp-menu-pop" hidden>
+          <button class="pp-del-visit" type="button">Удалить альбом</button>
+        </div>
+      </div>
     </div>
+    ${compareBlock}
     ${stageBlock('before')}
     ${stageBlock('in_progress')}
     ${stageBlock('after')}
@@ -372,7 +406,16 @@ async function _ppRenderAlbum() {
     </div>
   `;
 
-  // ── Delete album
+  // ── Меню ⋯ (открыть/закрыть; клик вне — закрыть)
+  const menuBtn = _ppRoot().querySelector('.pp-menu-btn');
+  const menuPop = _ppRoot().querySelector('.pp-menu-pop');
+  menuBtn.onclick = (ev) => { ev.stopPropagation(); menuPop.hidden = !menuPop.hidden; };
+  document.addEventListener('click', function closeMenu(ev) {
+    if (!_ppRoot() || !_ppRoot().contains(menuPop)) { document.removeEventListener('click', closeMenu); return; }
+    if (!menuPop.hidden && ev.target !== menuBtn && !menuPop.contains(ev.target)) menuPop.hidden = true;
+  });
+
+  // ── Удаление альбома (пункт меню)
   _ppRoot().querySelector('.pp-del-visit').onclick = async () => {
     if (!confirm('Удалить альбом со всеми фото безвозвратно?')) return;
     try {
@@ -381,14 +424,14 @@ async function _ppRenderAlbum() {
     } catch (e) { alert('Не удалось удалить: ' + e.message); }
   };
 
-  // ── Notes autosave
+  // ── Автосохранение заметок
   _ppRoot().querySelector('.pp-notes-ta').addEventListener('blur', async (e) => {
     if (e.target.value === (v.notes || '')) return;
     try { await api('PUT', `/api/patient-portfolio/visits/${v.id}`, { notes: e.target.value }); }
     catch (err) { alert('Не удалось сохранить заметки: ' + err.message); }
   });
 
-  // ── Upload (batched по 5, multipart, XHR — реальный прогресс + устойчивость к обрыву сети)
+  // ── Загрузка (батчи по 5, multipart, XHR — реальный прогресс + устойчивость к обрыву)
   _ppRoot().querySelectorAll('input[type=file][data-stage]').forEach(inp => {
     inp.addEventListener('change', async (e) => {
       const files = Array.from(e.target.files);
@@ -401,14 +444,14 @@ async function _ppRenderAlbum() {
       const addBtn = section.querySelector('.pp-add-btn');
 
       const total = files.length;
-      let done = 0;      // фото из полностью завершённых батчей
-      let failed = 0;    // не прошли обработку на сервере
+      let done = 0;
+      let failed = 0;
       const setBar = (frac, pct) => {
         fill.style.width = Math.min(100, Math.round(pct)) + '%';
         label.textContent = `Загрузка ${Math.min(done + frac, total)} из ${total}…`;
       };
       bar.hidden = false;
-      addBtn.classList.add('pp-add-disabled');
+      if (addBtn) addBtn.classList.add('pp-add-disabled');
       inp.disabled = true;
       setBar(0, 0);
 
@@ -416,11 +459,10 @@ async function _ppRenderAlbum() {
         for (let i = 0; i < files.length; i += 5) {
           const chunk = files.slice(i, i + 5);
           const body = await _ppUploadChunk(v.id, stage, chunk, (chunkFrac) => {
-            // прогресс байтов текущего батча → доля от его фото
             setBar(Math.round(chunkFrac * chunk.length), ((done + chunkFrac * chunk.length) / total) * 100);
           });
           const ups = Array.isArray(body.uploaded) ? body.uploaded : [];
-          failed += chunk.length - ups.filter(u => u && u.ok).length; // ловит и ok:false, и пропуски
+          failed += chunk.length - ups.filter(u => u && u.ok).length;
           done += chunk.length;
           setBar(0, (done / total) * 100);
         }
@@ -430,17 +472,16 @@ async function _ppRenderAlbum() {
           alert(`Загружено ${total - failed} из ${total}. ${failed} фото не удалось обработать — попробуйте добавить их ещё раз.`);
           _ppRender();
         } else {
-          setTimeout(() => _ppRender(), 450); // показать 100% перед перерисовкой
+          setTimeout(() => _ppRender(), 450);
         }
       } catch (err) {
-        // Часть батчей могла пройти — перерисовка покажет уже загруженное.
         alert('Ошибка загрузки: ' + err.message + (done ? `\nЗагружено ${done} из ${total} до обрыва.` : ''));
         _ppRender();
       }
     });
   });
 
-  // ── Lightbox
+  // ── Лайтбокс (покрывает и миниатюры стадий, и половинки сравнения — класс .pp-thumb)
   const lb = _ppRoot().querySelector('.pp-lightbox');
   _ppRoot().querySelectorAll('.pp-thumb').forEach(img => {
     img.onclick = () => {
@@ -451,9 +492,7 @@ async function _ppRenderAlbum() {
   });
   const closeLightbox = () => { lb.hidden = true; };
   lb.querySelector('.pp-lb-close').onclick = closeLightbox;
-  // Клик по фону (но не по картинке/кнопкам) — тоже закрывает
   lb.addEventListener('click', (ev) => { if (ev.target === lb) closeLightbox(); });
-  // Esc
   document.addEventListener('keydown', function escClose(ev) {
     if (ev.key === 'Escape' && !lb.hidden) closeLightbox();
   });
@@ -464,7 +503,7 @@ async function _ppRenderAlbum() {
     } catch (e) { alert('Не удалось получить ссылку: ' + e.message); }
   };
 
-  // ── Comment add
+  // ── Добавление комментария
   _ppRoot().querySelector('.pp-add-comment').onclick = async () => {
     const ta = _ppRoot().querySelector('.pp-new-comment');
     const text = ta.value.trim();
