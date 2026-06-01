@@ -262,7 +262,7 @@ body,input,select,textarea,.card,.sc,.topbar,.stg-sidebar,.modal,.notif{transiti
 /* L1 плитки ленты */
 #page-patient-portfolio .pp-tile{padding:0}
 #page-patient-portfolio .pp-tile-media{position:relative}
-#page-patient-portfolio .cc-preview{display:block;width:100%;height:150px;object-fit:cover;background:var(--bg)}
+#page-patient-portfolio .cc-preview{display:block;width:100%;height:150px;object-fit:contain;background:var(--bg)}
 #page-patient-portfolio .cc-noimg{width:100%;height:150px;background:var(--bg);display:grid;place-items:center;color:var(--t3);font-size:12px}
 #page-patient-portfolio .pp-ba-badge{position:absolute;top:8px;right:8px;background:var(--grad-a);color:#fff;font-size:11px;font-weight:600;padding:3px 9px;border-radius:8px;box-shadow:0 2px 8px rgba(0,0,0,.18)}
 #page-patient-portfolio .pp-tile .cc-body{padding:10px 13px}
