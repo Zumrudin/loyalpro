@@ -1,7 +1,10 @@
 // ── Patient Photo Cases (внутренний клинический модуль) ─────────
 'use strict';
 
-const _ppState = { level: 1, clientId: null, visitId: null };
+const _ppState = { level: 1, clientId: null, visitId: null, clientName: null };
+
+// Инициалы для аватара пациента: «Иванова Ася» → «ИА».
+const _ppInitials = (name) => String(name || '').trim().split(/\s+/).slice(0, 2).map(w => w[0] || '').join('').toUpperCase() || '—';
 
 const _ppEsc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
@@ -148,7 +151,10 @@ async function _ppRenderFeed() {
   out.className = 'pp-feed';
   out.innerHTML = visits.map(v => `
     <div class="case-card pp-tile" data-visit-id="${v.id}" data-client-id="${v.client_id}">
-      ${v.preview_url ? `<img class="cc-preview" src="${_ppEsc(v.preview_url)}" alt="">` : '<div class="cc-noimg">нет фото</div>'}
+      <div class="pp-tile-media">
+        ${v.preview_url ? `<img class="cc-preview" src="${_ppEsc(v.preview_url)}" alt="">` : '<div class="cc-noimg">нет фото</div>'}
+        ${(v.has_before && v.has_after) ? '<span class="pp-ba-badge">До·После</span>' : ''}
+      </div>
       <div class="cc-body">
         <div class="cc-name">${_ppEsc(v.client_name || '—')}</div>
         <div class="cc-meta">${_ppEsc(_ppFmtDate(v.visit_date))} • ${v.photos_count} фото${v.comments_count ? ' • ' + v.comments_count + ' комм.' : ''}</div>
@@ -187,14 +193,16 @@ async function _ppDoSearch(q) {
     return;
   }
   out.innerHTML = `<div class="pp-search-results">` + list.map(c => `
-    <div class="case-card" data-client-id="${c.id}">
+    <div class="case-card" data-client-id="${c.id}" data-client-name="${_ppEsc(c.name)}">
       <div class="cc-name">${_ppEsc(c.name)}</div>
       <div class="cc-meta">${_ppEsc(c.phone || '')} • ${c.cases_count > 0 ? c.cases_count + ' альбом(ов)' : 'нет альбомов — кликните, чтобы создать первый'}${c.last_visit ? ' • посл. ' + _ppFmtDate(c.last_visit) : ''}</div>
     </div>
   `).join('') + `</div>`;
   out.querySelectorAll('.case-card').forEach(el => {
     el.addEventListener('click', () => {
-      _ppState.level = 2; _ppState.clientId = parseInt(el.dataset.clientId);
+      _ppState.level = 2;
+      _ppState.clientId = parseInt(el.dataset.clientId);
+      _ppState.clientName = el.dataset.clientName || null;
       _ppRender();
     });
   });
@@ -212,36 +220,36 @@ async function _ppRenderPatient() {
     _ppRoot().innerHTML = `<div class="pp-hint" style="color:#c00">Ошибка: ${_ppEsc(e.message)}</div>`;
     return;
   }
+  const pname = (cases[0] && cases[0].client_name) || _ppState.clientName || '—';
+  const pphone = (cases[0] && cases[0].client_phone) || '';
   _ppRoot().innerHTML = `
     <div class="pp-toolbar">
-      <button class="btn-back" onclick="_ppBack(1)">← К поиску</button>
+      <button class="btn-back" onclick="_ppBack(1)">‹ К поиску</button>
       <button class="btn btn-pri" onclick="_ppNewVisit()">+ Новый альбом</button>
-      <button class="btn" onclick="_ppNewCourse()">+ Курс</button>
     </div>
-    <div class="pp-grid">
-      <aside class="pp-courses">
-        <h3>Курсы лечения</h3>
-        ${courses.length === 0 ? '<div class="pp-hint">Курсов нет</div>' :
-          courses.map(c => `
-            <div class="course-card" data-id="${c.id}">
-              <div class="cc-name">${_ppEsc(c.title)}</div>
-              <div class="cc-meta">${c.visits.length} визитов${c.description ? ' • ' + _ppEsc(c.description.slice(0,60)) : ''}</div>
+    <div class="pp-patient-head">
+      <div class="pp-avatar">${_ppEsc(_ppInitials(pname))}</div>
+      <div class="pp-patient-id">
+        <div class="pp-patient-name">${_ppEsc(pname)}</div>
+        <div class="pp-patient-sub">${_ppEsc(pphone)}${cases.length ? ' · ' + cases.length + ' альбом(ов)' : ''}</div>
+      </div>
+    </div>
+    <div class="pp-courses-row">
+      ${courses.map(c => `<span class="pp-chip pp-chip-course" data-id="${c.id}">${_ppEsc(c.title)} · ${c.visits.length}</span>`).join('')}
+      <span class="pp-chip pp-chip-add" onclick="_ppNewCourse()">+ Курс</span>
+    </div>
+    <div class="pp-timeline">
+      ${cases.length === 0 ? '<div class="pp-empty">Альбомов пока нет — нажмите «+ Новый альбом»</div>' :
+        cases.map(v => `
+          <div class="case-card pp-row" data-visit-id="${v.id}">
+            ${v.preview_url ? `<img class="pp-row-img" src="${_ppEsc(v.preview_url)}" alt="">` : '<div class="pp-row-noimg">нет фото</div>'}
+            <div class="pp-row-body">
+              <div class="cc-name">${_ppEsc(_ppFmtDate(v.visit_date))}</div>
+              <div class="cc-meta">${_ppEsc(v.specialist_name || '—')} • ${v.photos_count} фото • ${v.comments_count} комм.</div>
+              ${v.course_title ? `<div class="cc-course">↳ ${_ppEsc(v.course_title)}</div>` : ''}
             </div>
-          `).join('')}
-      </aside>
-      <main class="pp-timeline">
-        ${cases.length === 0 ? '<div class="pp-hint">Альбомов пока нет — нажмите «+ Новый альбом»</div>' :
-          cases.map(v => `
-            <div class="case-card pp-tile" data-visit-id="${v.id}">
-              ${v.preview_url ? `<img class="cc-preview" src="${_ppEsc(v.preview_url)}" alt="">` : '<div class="cc-noimg">нет фото</div>'}
-              <div class="cc-body">
-                <div class="cc-name">${_ppEsc(_ppFmtDate(v.visit_date))}</div>
-                <div class="cc-meta">${_ppEsc(v.specialist_name || '—')} • ${v.photos_count} фото • ${v.comments_count} комм.</div>
-                ${v.course_title ? `<div class="cc-course">↳ ${_ppEsc(v.course_title)}</div>` : ''}
-              </div>
-            </div>
-          `).join('')}
-      </main>
+          </div>
+        `).join('')}
     </div>
   `;
   _ppRoot().querySelectorAll('.case-card[data-visit-id]').forEach(el =>
