@@ -21,6 +21,7 @@ function nav(el) {
   if (p === 'segments')        loadSegments();
   if (p === 'home-care')       loadHomeCare();
   if (p === 'patient-portfolio') loadPatientPortfolio();
+  if (p === 'staff-dashboard') loadStaffDashboard();
   if (p === 'settings')        loadSettings();
   if (p === 'users')           loadUsers();
 }
@@ -84,6 +85,7 @@ async function launchApp() {
   document.getElementById('page-' + startPage)?.classList.add('active');
 
   if (startPage === 'dashboard') { loadDashboard(); loadLs(); }
+  else if (startPage === 'staff-dashboard') { loadStaffDashboard(); }
   else if (startPage === 'home-care') { loadHomeCare(); }
   else { loadDashboard(); loadLs(); }
 }
