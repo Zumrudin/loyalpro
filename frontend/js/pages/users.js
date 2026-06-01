@@ -23,7 +23,10 @@ function renderUsers(users) {
       <td><b>${esc(u.name)}</b>${u.must_change_password ? ' <span style="font-size:11px;color:#92400e;background:#fffbeb;padding:1px 6px;border-radius:4px;border:1px solid #fde68a">Не активирован</span>' : ''}</td>
       <td style="color:var(--t3)">${esc(u.email)}</td>
       <td style="color:var(--t2)">${esc(u.position || '—')}</td>
-      <td><span style="font-size:11.5px;font-weight:600;color:${ROLE_COLOR[u.role]||'#333'};background:${ROLE_BG[u.role]||'#f3f4f6'};padding:2px 8px;border-radius:4px">${ROLE_LABEL[u.role]||u.role}</span></td>
+      <td>
+        <span style="font-size:11.5px;font-weight:600;color:${ROLE_COLOR[u.role]||'#333'};background:${ROLE_BG[u.role]||'#f3f4f6'};padding:2px 8px;border-radius:4px">${ROLE_LABEL[u.role]||u.role}</span>
+        ${u.role==='specialist' && u.staff_member_name ? `<div style="font-size:11px;color:var(--t3);margin-top:3px">→ ${esc(u.staff_member_name)}</div>` : ''}
+      </td>
       <td>${u.is_active ? '<span style="color:#059669">Активен</span>' : '<span style="color:var(--t3)">Отключён</span>'}</td>
       <td style="color:var(--t3);font-size:12px">${u.last_login_at ? new Date(u.last_login_at).toLocaleDateString('ru') : '—'}</td>
       <td style="text-align:right">
@@ -81,6 +84,13 @@ function usersShowModal(u, isNew) {
             <option value="specialist">Специалист</option>
           </select>
         </div>
+        <div class="fg" id="umStaffRow" hidden>
+          <label class="fl">Сотрудник YClients <span class="fh">для личного дашборда специалиста</span></label>
+          <select id="umStaffSelect">
+            <option value="">— не привязан —</option>
+          </select>
+          <div class="fh" id="umStaffHint" style="margin-top:4px"></div>
+        </div>
         <div class="fg">
           <label class="fl">${isNew ? 'Временный пароль' : 'Новый пароль'} <span class="fh">${isNew ? 'обязательно' : 'оставьте пустым чтобы не менять'}</span></label>
           <input type="password" id="umPw" placeholder="••••••••">
@@ -103,6 +113,48 @@ function usersShowModal(u, isNew) {
   // Set role value after render
   const sel = document.getElementById('umRole');
   if (sel && !isNew) sel.value = u.role;
+
+  // Загрузить список YClients-сотрудников и подключить логику показа/скрытия.
+  usersHydrateStaffSelect(u);
+  if (sel) sel.addEventListener('change', () => usersToggleStaffRow(sel.value));
+  usersToggleStaffRow(sel?.value);
+}
+
+function usersToggleStaffRow(role) {
+  const row = document.getElementById('umStaffRow');
+  if (row) row.hidden = (role !== 'specialist');
+}
+
+async function usersHydrateStaffSelect(u) {
+  const sel = document.getElementById('umStaffSelect');
+  const hint = document.getElementById('umStaffHint');
+  if (!sel) return;
+  try {
+    const d = await api('GET', '/api/staff-profiles');
+    const staff = d.staff || [];
+    const myId = u.id;
+    const opts = ['<option value="">— не привязан —</option>'].concat(
+      staff.map(s => {
+        const takenByOther = s.linked_to_user_id && s.linked_to_user_id !== myId;
+        const label = esc(s.name) + (takenByOther ? ` (привязан к: ${esc(s.linked_to_user_name || '?')})` : '');
+        const selected = (u.staff_member_id === s.id) ? ' selected' : '';
+        return `<option value="${s.id}" data-taken="${takenByOther ? '1' : '0'}"${selected}>${label}</option>`;
+      })
+    );
+    sel.innerHTML = opts.join('');
+    const showHint = () => {
+      const o = sel.options[sel.selectedIndex];
+      hint.textContent = (o && o.dataset.taken === '1')
+        ? '⚠ Этот сотрудник уже привязан к другому логину — сохранение перезапишет привязку.'
+        : '';
+      hint.style.color = '#92400e';
+    };
+    sel.addEventListener('change', showHint);
+    showHint();
+  } catch (e) {
+    hint.textContent = 'Не удалось загрузить список сотрудников: ' + e.message;
+    hint.style.color = 'var(--danger)';
+  }
 }
 
 function usersCloseModal() {
@@ -118,13 +170,17 @@ async function usersSave(id, isNew) {
   const position = document.getElementById('umPosition')?.value.trim() || null;
   const pw    = document.getElementById('umPw')?.value;
   const active = document.getElementById('umActive');
+  // staff_member_id передаём только для specialist; иначе null (бэк сам сбросит).
+  const staffSel = document.getElementById('umStaffSelect');
+  const staff_member_id = (role === 'specialist' && staffSel && staffSel.value)
+    ? parseInt(staffSel.value, 10) : null;
 
   try {
     if (isNew) {
-      await api('POST', '/api/users', { name, email, role, position, password: pw });
+      await api('POST', '/api/users', { name, email, role, position, password: pw, staff_member_id });
       notify('Пользователь создан', 'ok');
     } else {
-      const body = { name, role, position };
+      const body = { name, role, position, staff_member_id };
       if (pw) body.password = pw;
       if (active) body.is_active = active.checked;
       await api('PATCH', `/api/users/${id}`, body);
