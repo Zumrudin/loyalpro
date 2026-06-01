@@ -207,6 +207,88 @@ router.get('/analytics/dashboard', auth, async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// ── Personal Staff Dashboard (для role=specialist) ─────────────────
+// Спека: docs/superpowers/specs/2026-06-01-staff-dashboard-design.md
+router.get('/analytics/staff-dashboard', auth, async (req, res) => {
+  try {
+    if (req.user.role !== 'specialist') return res.status(403).json({ error: 'forbidden' });
+    const sid = req.user.salonId, uid = req.user.userId;
+    const { from, to } = resolvePeriod(req);
+
+    // Привязка → yclients_staff_id
+    const link = await db.oneOrNone(`
+      SELECT sm.yclients_staff_id, sm.name AS staff_name
+      FROM users u JOIN staff_members sm ON sm.id = u.staff_member_id
+      WHERE u.id = $1 AND sm.salon_id = $2
+    `, [uid, sid]);
+    if (!link) return res.json({ unlinked: true });
+
+    const sdSvc = require('../services/staff-dashboard');
+    const yc = link.yclients_staff_id;
+    const p = [sid, from, to, yc];
+
+    const [rev, byCat, uniq, first, top, daily] = await Promise.all([
+      db.one(`SELECT COUNT(*) AS rc, COALESCE(SUM(amount),0) AS rv FROM records r
+              WHERE r.salon_id=$1 AND r.status IN ('completed','arrived')
+                AND COALESCE((r.visit_datetime AT TIME ZONE 'Europe/Moscow')::date, r.visit_date::date) BETWEEN $2::date AND $3::date
+                AND (r.raw_payload->'staff'->0->>'id')::int = $4`, p),
+      db.any(`SELECT category, COALESCE(SUM(amount),0) AS total FROM revenue_operations
+              WHERE salon_id=$1 AND operation_date BETWEEN $2::date AND $3::date
+                AND (raw_payload->'staff'->0->>'id')::int = $4
+                AND category IN ('services','goods','abonement')
+              GROUP BY category`, p),
+      db.one(`SELECT COUNT(DISTINCT client_id) AS n FROM records r
+              WHERE r.salon_id=$1 AND r.status IN ('completed','arrived')
+                AND COALESCE((r.visit_datetime AT TIME ZONE 'Europe/Moscow')::date, r.visit_date::date) BETWEEN $2::date AND $3::date
+                AND (r.raw_payload->'staff'->0->>'id')::int = $4`, p),
+      db.one(`WITH client_first AS (
+                SELECT client_id,
+                       MIN(COALESCE((visit_datetime AT TIME ZONE 'Europe/Moscow')::date, visit_date::date)) AS d,
+                       (ARRAY_AGG((raw_payload->'staff'->0->>'id') ORDER BY visit_date))[1]::int AS first_staff
+                FROM records WHERE salon_id=$1 AND status IN ('completed','arrived')
+                  AND (raw_payload->>'paid_full')::int = 1
+                GROUP BY client_id)
+              SELECT COUNT(*) AS n FROM client_first
+              WHERE d BETWEEN $2::date AND $3::date AND first_staff = $4`, p),
+      db.any(`SELECT svc->>'title' AS service_name, COUNT(DISTINCT r.id) AS cnt,
+                     SUM((svc->>'cost_to_pay')::numeric) AS total_amount
+              FROM records r, jsonb_array_elements(COALESCE(r.services,'[]'::jsonb)) svc
+              WHERE r.salon_id=$1 AND r.status IN ('completed','arrived')
+                AND COALESCE((r.visit_datetime AT TIME ZONE 'Europe/Moscow')::date, r.visit_date::date) BETWEEN $2::date AND $3::date
+                AND (r.raw_payload->'staff'->0->>'id')::int = $4
+                AND svc->>'title' IS NOT NULL
+              GROUP BY 1 ORDER BY total_amount DESC NULLS LAST LIMIT 5`, p),
+      db.any(`SELECT COALESCE((r.visit_datetime AT TIME ZONE 'Europe/Moscow')::date, r.visit_date::date)::text AS d,
+                     COUNT(*) AS records, COALESCE(SUM(amount),0) AS revenue
+              FROM records r
+              WHERE r.salon_id=$1 AND r.status IN ('completed','arrived')
+                AND COALESCE((r.visit_datetime AT TIME ZONE 'Europe/Moscow')::date, r.visit_date::date) BETWEEN $2::date AND $3::date
+                AND (r.raw_payload->'staff'->0->>'id')::int = $4
+              GROUP BY 1 ORDER BY 1`, p),
+    ]);
+
+    const revenueByCategory = sdSvc.aggregateRevenueByCategory(byCat);
+    const periodRecords = parseInt(rev.rc);
+    const periodRevenue = parseFloat(rev.rv);
+    const avgCheck = sdSvc.computeAvgCheck(periodRecords, periodRevenue);
+
+    res.json({
+      stats: {
+        staffName: link.staff_name,
+        periodRecords, periodRevenue, revenueByCategory,
+        uniqueClients: parseInt(uniq.n),
+        newClients: parseInt(first.n),
+        avgCheck,
+      },
+      topServices: top,
+      dailyRevenue: daily,
+      period: { from, to },
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 router.get('/analytics/bonuses', auth, async (req, res) => {
   try {
     const sid = req.user.salonId;

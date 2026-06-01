@@ -33,7 +33,7 @@ module.exports = {
 
   // API Access Control
   API_PUBLIC: ['/api/auth/login', '/api/auth/register', '/api/app-settings'],
-  SPECIALIST_ALLOWED_PREFIXES: ['/api/home-care', '/api/auth', '/api/template-settings', '/api/patient-portfolio'],
+  SPECIALIST_ALLOWED_PREFIXES: ['/api/home-care', '/api/auth', '/api/template-settings', '/api/patient-portfolio', '/api/analytics/staff-dashboard'],
 
   // S3 (patient photo cases — Yandex Object Storage / S3-compatible)
   S3_ENDPOINT: process.env.S3_ENDPOINT,
