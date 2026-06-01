@@ -545,6 +545,19 @@ async function runMigrations(client) {
     )
   `).catch(() => {});
   await client.query(`CREATE INDEX IF NOT EXISTS idx_s3_orphans_pending ON s3_orphans (created_at) WHERE attempts < 5`).catch(() => {});
+
+  // ── Personal Staff Dashboard ───────────────────────────────────
+  // Спека: docs/superpowers/specs/2026-06-01-staff-dashboard-design.md
+  // План:  docs/superpowers/plans/2026-06-01-staff-dashboard.md (Task 1)
+  await client.query(`
+    ALTER TABLE users
+    ADD COLUMN IF NOT EXISTS staff_member_id INTEGER
+      REFERENCES staff_members(id) ON DELETE SET NULL
+  `).catch(() => {});
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS idx_users_staff_member
+      ON users (staff_member_id) WHERE staff_member_id IS NOT NULL
+  `).catch(() => {});
 }
 
 module.exports = { runMigrations };
