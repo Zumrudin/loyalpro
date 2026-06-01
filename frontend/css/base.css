@@ -367,14 +367,17 @@ body,input,select,textarea,.card,.sc,.topbar,.stg-sidebar,.modal,.notif{transiti
 #page-patient-portfolio .pp-create-results{display:flex;flex-direction:column;gap:8px}
 
 /* лайтбокс */
-#page-patient-portfolio .pp-lightbox{position:fixed;inset:0;background:rgba(0,0,0,.88);display:grid;place-items:center;z-index:9999}
-#page-patient-portfolio .pp-lightbox[hidden]{display:none !important}
-#page-patient-portfolio .pp-lb-img{max-width:92vw;max-height:86vh;object-fit:contain;border-radius:4px}
-#page-patient-portfolio .pp-lb-close{position:absolute;top:14px;right:18px;font-size:36px;line-height:1;background:none;color:#fff;border:0;cursor:pointer;padding:0 8px}
-#page-patient-portfolio .pp-lb-actions{position:absolute;bottom:24px;left:50%;transform:translateX(-50%);display:flex;gap:10px}
-#page-patient-portfolio .pp-lb-dl{padding:8px 18px}
-#page-patient-portfolio .pp-lb-del{padding:8px 18px;background:var(--danger);color:#fff;border:0}
-#page-patient-portfolio .pp-lb-del:hover{filter:brightness(1.1)}
+/* Лайтбокс рендерится в <body> (см. patient-portfolio.js — снимаем transform-контекст),
+   поэтому селектор уже НЕ #page-patient-portfolio. Класс уникален, конфликтов нет. */
+.pp-lightbox{position:fixed;inset:0;background:rgba(0,0,0,.88);display:grid;place-items:center;z-index:9999;
+             height:100vh;height:100dvh}
+.pp-lightbox[hidden]{display:none !important}
+.pp-lb-img{max-width:92vw;max-height:86vh;max-height:86dvh;object-fit:contain;border-radius:4px;display:block}
+.pp-lb-close{position:absolute;top:14px;right:18px;font-size:36px;line-height:1;background:none;color:#fff;border:0;cursor:pointer;padding:0 8px}
+.pp-lb-actions{position:absolute;bottom:24px;left:50%;transform:translateX(-50%);display:flex;gap:10px}
+.pp-lb-dl{padding:8px 18px}
+.pp-lb-del{padding:8px 18px;background:var(--danger);color:#fff;border:0}
+.pp-lb-del:hover{filter:brightness(1.1)}
 
 /* десктоп: миниатюры фикс-размера, выше hero-сравнение */
 @media(min-width:701px){

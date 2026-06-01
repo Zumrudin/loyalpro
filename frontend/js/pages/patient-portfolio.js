@@ -494,15 +494,20 @@ async function _ppRenderAlbum() {
   });
 
   // ── Лайтбокс (покрывает и миниатюры стадий, и половинки сравнения — класс .pp-thumb)
+  // Переносим в <body>, иначе он наследует transform-контекст от .page-enter
+  // и position:fixed перестаёт быть относительно вьюпорта → на мобильном растёт по высоте.
+  document.querySelectorAll('body > .pp-lightbox').forEach(el => el.remove());
   const lb = _ppRoot().querySelector('.pp-lightbox');
+  document.body.appendChild(lb);
   _ppRoot().querySelectorAll('.pp-thumb').forEach(img => {
     img.onclick = () => {
       lb.hidden = false;
       lb.querySelector('.pp-lb-img').src = img.dataset.medium;
       lb.dataset.photoId = img.dataset.photoId;
+      document.body.style.overflow = 'hidden';   // блокируем скролл страницы пока открыт
     };
   });
-  const closeLightbox = () => { lb.hidden = true; };
+  const closeLightbox = () => { lb.hidden = true; document.body.style.overflow = ''; };
   lb.querySelector('.pp-lb-close').onclick = closeLightbox;
   lb.addEventListener('click', (ev) => { if (ev.target === lb) closeLightbox(); });
   document.addEventListener('keydown', function escClose(ev) {
