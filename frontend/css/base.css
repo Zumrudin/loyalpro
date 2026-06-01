@@ -255,6 +255,7 @@ body,input,select,textarea,.card,.sc,.topbar,.stg-sidebar,.modal,.notif{transiti
 #page-patient-portfolio .case-card:hover{transform:translateY(-2px);box-shadow:0 6px 18px rgba(0,0,0,.10)}
 #page-patient-portfolio .pp-pick,#page-patient-portfolio .pp-search-results .case-card{padding:12px 14px}
 #page-patient-portfolio .cc-name{font-weight:700;font-size:14px;color:var(--t1)}
+#page-patient-portfolio .cc-staff{color:var(--t2);font-size:12.5px;margin-top:2px;font-weight:500}
 #page-patient-portfolio .cc-meta{color:var(--t3);font-size:12.5px;margin-top:4px}
 #page-patient-portfolio .cc-course{color:var(--a);font-size:12px;margin-top:4px;font-weight:600}
 

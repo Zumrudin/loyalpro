@@ -157,6 +157,7 @@ async function _ppRenderFeed() {
       </div>
       <div class="cc-body">
         <div class="cc-name">${_ppEsc(v.client_name || '—')}</div>
+        <div class="cc-staff">${_ppEsc(v.specialist_name || '—')}</div>
         <div class="cc-meta">${_ppEsc(_ppFmtDate(v.visit_date))} • ${v.photos_count} фото${v.comments_count ? ' • ' + v.comments_count + ' комм.' : ''}</div>
         ${v.course_title ? `<div class="cc-course">↳ ${_ppEsc(v.course_title)}</div>` : ''}
       </div>
