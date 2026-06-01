@@ -335,21 +335,23 @@ async function _ppRenderAlbum() {
   const byStage = { before: [], in_progress: [], after: [] };
   v.photos.forEach(p => { if (byStage[p.stage]) byStage[p.stage].push(p); });
 
-  // Карточка-сравнение: первое (старейшее) «до» + последнее (новейшее) «после».
-  // photos с сервера упорядочены stage, sort_order, id — внутри стадии массив по возрастанию.
-  const cmpBefore = byStage.before[0];
-  const cmpAfter  = byStage.after[byStage.after.length - 1];
-  const compareBlock = (cmpBefore && cmpAfter) ? `
+  // Карточка-сравнение: по одному фото из каждой существующей стадии.
+  // photos с сервера упорядочены stage, sort_order, id — берём первое в before/in_progress,
+  // последнее (новейшее) в after.
+  const cmpPicks = [
+    { stage: 'before',      label: 'ДО',         photo: byStage.before[0] },
+    { stage: 'in_progress', label: 'В ПРОЦЕССЕ', photo: byStage.in_progress[0] },
+    { stage: 'after',       label: 'ПОСЛЕ',      photo: byStage.after[byStage.after.length - 1] },
+  ].filter(p => p.photo);
+  const compareBlock = cmpPicks.length >= 2 ? `
     <section class="pp-compare">
-      <div class="pp-cmp-pair">
-        <figure class="pp-cmp-half">
-          <img class="pp-thumb" src="${_ppEsc(cmpBefore.url_thumb)}" data-photo-id="${cmpBefore.id}" data-medium="${_ppEsc(cmpBefore.url_medium)}" alt="">
-          <figcaption class="pp-cmp-lbl pp-cmp-before">ДО</figcaption>
-        </figure>
-        <figure class="pp-cmp-half">
-          <img class="pp-thumb" src="${_ppEsc(cmpAfter.url_thumb)}" data-photo-id="${cmpAfter.id}" data-medium="${_ppEsc(cmpAfter.url_medium)}" alt="">
-          <figcaption class="pp-cmp-lbl pp-cmp-after">ПОСЛЕ</figcaption>
-        </figure>
+      <div class="pp-cmp-pair" data-n="${cmpPicks.length}">
+        ${cmpPicks.map(p => `
+          <figure class="pp-cmp-half">
+            <img class="pp-thumb" src="${_ppEsc(p.photo.url_thumb)}" data-photo-id="${p.photo.id}" data-medium="${_ppEsc(p.photo.url_medium)}" alt="">
+            <figcaption class="pp-cmp-lbl pp-cmp-${p.stage}">${p.label}</figcaption>
+          </figure>
+        `).join('')}
       </div>
       <div class="pp-cmp-foot">Результат</div>
     </section>
