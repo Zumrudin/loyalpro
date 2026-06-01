@@ -19,16 +19,22 @@ const uploadPhoto = multer({
   fileFilter: imageFileFilter,
 });
 
-// GET /api/staff-profiles — список сотрудников с профильными полями
+// GET /api/staff-profiles — список сотрудников с профильными полями.
+// Дополнительно: linked_to_user_id / linked_to_user_name — id и имя логина,
+// привязанного к этому staff_member (для UI селектора «Сотрудник YClients»
+// при создании/редактировании пользователя).
 router.get('/staff-profiles', auth, async (req, res) => {
   try {
     const includeFired = req.query.include_fired === '1';
     const staff = await db.any(
-      `SELECT id, yclients_staff_id, name, specialization, avatar_url,
-              custom_photo_url, bio, display_order, is_active, show_in_app
-       FROM staff_members
-       WHERE salon_id=$1 ${includeFired ? '' : 'AND is_active=TRUE'}
-       ORDER BY display_order, name`,
+      `SELECT sm.id, sm.yclients_staff_id, sm.name, sm.specialization, sm.avatar_url,
+              sm.custom_photo_url, sm.bio, sm.display_order, sm.is_active, sm.show_in_app,
+              u.id   AS linked_to_user_id,
+              u.name AS linked_to_user_name
+       FROM staff_members sm
+       LEFT JOIN users u ON u.staff_member_id = sm.id AND u.salon_id = sm.salon_id
+       WHERE sm.salon_id=$1 ${includeFired ? '' : 'AND sm.is_active=TRUE'}
+       ORDER BY sm.display_order, sm.name`,
       [req.user.salonId]
     );
     res.json({ staff });
