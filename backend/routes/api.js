@@ -231,20 +231,26 @@ router.get('/analytics/staff-dashboard', auth, async (req, res) => {
       db.one(`SELECT COUNT(*) AS rc, COALESCE(SUM(amount),0) AS rv FROM records r
               WHERE r.salon_id=$1 AND r.status IN ('completed','arrived')
                 AND COALESCE((r.visit_datetime AT TIME ZONE 'Europe/Moscow')::date, r.visit_date::date) BETWEEN $2::date AND $3::date
-                AND (r.raw_payload->'staff'->0->>'id')::int = $4`, p),
-      db.any(`SELECT category, COALESCE(SUM(amount),0) AS total FROM revenue_operations
-              WHERE salon_id=$1 AND operation_date BETWEEN $2::date AND $3::date
-                AND (raw_payload->'staff'->0->>'id')::int = $4
-                AND category IN ('services','goods','abonement')
-              GROUP BY category`, p),
+                AND COALESCE((r.raw_payload->'staff'->>'id')::int, (r.raw_payload->'staff'->0->>'id')::int) = $4`, p),
+      // revenue_operations не несёт привязки к мастеру в raw_payload (поле staff пустое/нет).
+      // Связь идёт через yclients_record_id → records.staff. JOIN с records,
+      // фильтруем по staff из records. Deposit/certificate без record_id выпадают —
+      // они не привязаны к мастеру, не наши.
+      db.any(`SELECT ro.category, COALESCE(SUM(ro.amount),0) AS total
+              FROM revenue_operations ro
+              JOIN records r ON r.salon_id=ro.salon_id AND r.yclients_record_id=ro.yclients_record_id
+              WHERE ro.salon_id=$1 AND ro.operation_date BETWEEN $2::date AND $3::date
+                AND COALESCE((r.raw_payload->'staff'->>'id')::int, (r.raw_payload->'staff'->0->>'id')::int) = $4
+                AND ro.category IN ('services','goods','abonement')
+              GROUP BY ro.category`, p),
       db.one(`SELECT COUNT(DISTINCT client_id) AS n FROM records r
               WHERE r.salon_id=$1 AND r.status IN ('completed','arrived')
                 AND COALESCE((r.visit_datetime AT TIME ZONE 'Europe/Moscow')::date, r.visit_date::date) BETWEEN $2::date AND $3::date
-                AND (r.raw_payload->'staff'->0->>'id')::int = $4`, p),
+                AND COALESCE((r.raw_payload->'staff'->>'id')::int, (r.raw_payload->'staff'->0->>'id')::int) = $4`, p),
       db.one(`WITH client_first AS (
                 SELECT client_id,
                        MIN(COALESCE((visit_datetime AT TIME ZONE 'Europe/Moscow')::date, visit_date::date)) AS d,
-                       (ARRAY_AGG((raw_payload->'staff'->0->>'id') ORDER BY visit_date))[1]::int AS first_staff
+                       (ARRAY_AGG(COALESCE(raw_payload->'staff'->>'id', raw_payload->'staff'->0->>'id') ORDER BY visit_date))[1]::int AS first_staff
                 FROM records WHERE salon_id=$1 AND status IN ('completed','arrived')
                   AND (raw_payload->>'paid_full')::int = 1
                 GROUP BY client_id)
@@ -255,7 +261,7 @@ router.get('/analytics/staff-dashboard', auth, async (req, res) => {
               FROM records r, jsonb_array_elements(COALESCE(r.services,'[]'::jsonb)) svc
               WHERE r.salon_id=$1 AND r.status IN ('completed','arrived')
                 AND COALESCE((r.visit_datetime AT TIME ZONE 'Europe/Moscow')::date, r.visit_date::date) BETWEEN $2::date AND $3::date
-                AND (r.raw_payload->'staff'->0->>'id')::int = $4
+                AND COALESCE((r.raw_payload->'staff'->>'id')::int, (r.raw_payload->'staff'->0->>'id')::int) = $4
                 AND svc->>'title' IS NOT NULL
               GROUP BY 1 ORDER BY total_amount DESC NULLS LAST LIMIT 5`, p),
       db.any(`SELECT COALESCE((r.visit_datetime AT TIME ZONE 'Europe/Moscow')::date, r.visit_date::date)::text AS d,
@@ -263,7 +269,7 @@ router.get('/analytics/staff-dashboard', auth, async (req, res) => {
               FROM records r
               WHERE r.salon_id=$1 AND r.status IN ('completed','arrived')
                 AND COALESCE((r.visit_datetime AT TIME ZONE 'Europe/Moscow')::date, r.visit_date::date) BETWEEN $2::date AND $3::date
-                AND (r.raw_payload->'staff'->0->>'id')::int = $4
+                AND COALESCE((r.raw_payload->'staff'->>'id')::int, (r.raw_payload->'staff'->0->>'id')::int) = $4
               GROUP BY 1 ORDER BY 1`, p),
     ]);
 
