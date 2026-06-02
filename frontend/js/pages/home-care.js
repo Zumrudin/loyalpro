@@ -418,7 +418,10 @@ async function hcSearchClient(q) {
   const drop = document.getElementById('hcClientDrop');
   if (!q || q.length < 2) { drop.style.display = 'none'; return; }
   try {
-    const d = await api('GET', `/api/clients?search=${encodeURIComponent(q)}&limit=6`);
+    // /api/home-care/clients-search вместо /api/clients?search — первый
+    // в SPECIALIST_ALLOWED_PREFIXES, второй нет (специалист не видит общий
+    // список клиентов, но в дропдауне home-care должен искать).
+    const d = await api('GET', `/api/home-care/clients-search?search=${encodeURIComponent(q)}&limit=6`);
     if (!d.clients?.length) { drop.style.display = 'none'; return; }
     // Use data-attr + delegation — never interpolate client.name into onclick.
     drop.innerHTML = d.clients.map(c =>

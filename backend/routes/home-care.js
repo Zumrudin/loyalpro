@@ -89,6 +89,34 @@ async function loadTemplateConfig(salonId, salonName) {
   };
 }
 
+// ── Поиск клиентов для пикера в home-care UI ──────────────────
+// Аналог /api/clients?search=... но под /api/home-care/* — поэтому доступен
+// и роли specialist (в SPECIALIST_ALLOWED_PREFIXES /api/clients не входит).
+// ВАЖНО: маршрут объявлен ДО всех `/:id` (иначе Express уведёт сюда что угодно).
+router.get('/clients-search', auth, async (req, res) => {
+  try {
+    const q = (req.query.search || req.query.q || '').trim();
+    const limit = Math.min(parseInt(req.query.limit, 10) || 10, 50);
+    if (!q || q.length < 2) return res.json({ clients: [] });
+    const phoneDigits = q.replace(/\D/g, '');
+    const params = [req.user.salonId, '%' + q + '%'];
+    let where = `salon_id = $1 AND name ILIKE $2`;
+    if (phoneDigits.length >= 3) {
+      params.push('%' + phoneDigits + '%');
+      where = `salon_id = $1 AND (name ILIKE $2 OR REGEXP_REPLACE(COALESCE(phone,''), '\\D', '', 'g') ILIKE $3)`;
+    }
+    params.push(limit);
+    const rows = await db.any(
+      `SELECT id, name, phone, last_visit_at FROM clients
+       WHERE ${where}
+       ORDER BY last_visit_at DESC NULLS LAST, name
+       LIMIT $${params.length}`,
+      params
+    );
+    res.json({ clients: rows });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // ── Catalog ───────────────────────────────────────────────────
 router.get('/products', auth, async (req, res) => {
   try {
