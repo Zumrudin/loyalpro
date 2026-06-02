@@ -254,15 +254,34 @@ router.get('/analytics/staff-dashboard', auth, async (req, res) => {
               WHERE r.salon_id=$1 AND r.status = 'no_show'
                 AND COALESCE((r.visit_datetime AT TIME ZONE 'Europe/Moscow')::date, r.visit_date::date) BETWEEN $2::date AND $3::date
                 AND COALESCE((r.raw_payload->'staff'->>'id')::int, (r.raw_payload->'staff'->0->>'id')::int) = $4`, p),
-      db.one(`WITH client_first AS (
+      // «Мои первичные» = клиент, чей первый-в-салоне оплаченный визит был
+      // в периоде, мастером был данный специалист, И мы знаем о всех его
+      // визитах (YClients-clients.visits_count <= числа наших записей).
+      // Последняя проверка — защита от случая, когда у клиента в YClients
+      // 25 визитов, но наш sync принёс только 1: без неё мы бы ошибочно
+      // считали такого клиента «первичным».
+      db.one(`WITH client_record_count AS (
+                -- Считаем ВСЕ записи (любые статусы) — clients.visits_count в YClients
+                -- включает в т.ч. waiting/confirmed/no_show. Если YClients знает
+                -- больше визитов чем мы — клиент НЕ первичный (мы потеряли историю).
+                SELECT client_id, COUNT(*) AS n
+                FROM records WHERE salon_id=$1
+                GROUP BY client_id
+              ),
+              client_first AS (
                 SELECT client_id,
                        MIN(COALESCE((visit_datetime AT TIME ZONE 'Europe/Moscow')::date, visit_date::date)) AS d,
                        (ARRAY_AGG(COALESCE(raw_payload->'staff'->>'id', raw_payload->'staff'->0->>'id') ORDER BY visit_date))[1]::int AS first_staff
                 FROM records WHERE salon_id=$1 AND status IN ('completed','arrived')
                   AND (raw_payload->>'paid_full')::int = 1
-                GROUP BY client_id)
-              SELECT COUNT(*) AS n FROM client_first
-              WHERE d BETWEEN $2::date AND $3::date AND first_staff = $4`, p),
+                GROUP BY client_id
+              )
+              SELECT COUNT(*) AS n FROM client_first cf
+              JOIN clients cl ON cl.id = cf.client_id
+              LEFT JOIN client_record_count crc ON crc.client_id = cf.client_id
+              WHERE cf.d BETWEEN $2::date AND $3::date
+                AND cf.first_staff = $4
+                AND COALESCE(cl.visits_count, 0) <= COALESCE(crc.n, 0)`, p),
       db.any(`SELECT svc->>'title' AS service_name, COUNT(DISTINCT r.id) AS cnt,
                      SUM((svc->>'cost_to_pay')::numeric) AS total_amount
               FROM records r, jsonb_array_elements(COALESCE(r.services,'[]'::jsonb)) svc
