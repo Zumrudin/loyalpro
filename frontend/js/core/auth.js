@@ -73,8 +73,15 @@ async function doChangePw() {
     await api('POST', '/api/auth/change-password', { current_password: cur, new_password: np });
     document.getElementById('changePwScreen').style.display = 'none';
     document.getElementById('app').style.display = 'flex';
-    applyRoleNav(ME.role);
-    loadDashboard(); loadLs();
+    // Диспатч по роли — для specialist главного дашборда нет (403),
+    // ему нужен loadStaffDashboard(). Та же логика, что в launchApp.
+    const startPage = applyRoleNav(ME.role);
+    document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+    document.getElementById('page-' + startPage)?.classList.add('active');
+    if (startPage === 'dashboard') { loadDashboard(); loadLs(); }
+    else if (startPage === 'staff-dashboard') { loadStaffDashboard(); }
+    else if (startPage === 'home-care') { loadHomeCare(); }
+    else { loadDashboard(); loadLs(); }
   } catch(e) {
     err.textContent = e.message; err.style.display = 'block';
   } finally { btn.disabled = false; btn.textContent = 'Сохранить пароль и войти'; }
