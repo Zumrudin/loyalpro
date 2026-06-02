@@ -85,7 +85,7 @@ async function _sdRender() {
         </div>
       </div>
       <div class="sc"><div class="sl">Визитов проведено</div><div class="sv">${s.periodRecords}</div></div>
-      <div class="sc"><div class="sl">Уникальных клиентов</div><div class="sv">${s.uniqueClients}</div></div>
+      <div class="sc"><div class="sl">Не пришли</div><div class="sv">${s.noShowClients}</div></div>
       <div class="sc"><div class="sl">Средний чек</div><div class="sv">₽ ${_sdFmtRub(s.avgCheck)}</div></div>
       <div class="sc"><div class="sl">Первичных за период</div><div class="sv">${s.newClients}</div></div>
     </div>

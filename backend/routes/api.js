@@ -227,7 +227,7 @@ router.get('/analytics/staff-dashboard', auth, async (req, res) => {
     const yc = link.yclients_staff_id;
     const p = [sid, from, to, yc];
 
-    const [rev, byCat, uniq, first, top, daily] = await Promise.all([
+    const [rev, byCat, noShow, first, top, daily] = await Promise.all([
       db.one(`SELECT COUNT(*) AS rc, COALESCE(SUM(amount),0) AS rv FROM records r
               WHERE r.salon_id=$1 AND r.status IN ('completed','arrived')
                 AND COALESCE((r.visit_datetime AT TIME ZONE 'Europe/Moscow')::date, r.visit_date::date) BETWEEN $2::date AND $3::date
@@ -247,8 +247,11 @@ router.get('/analytics/staff-dashboard', auth, async (req, res) => {
                 AND jsonb_array_length(ro.raw_payload->'data'->'master') > 0
                 AND (ro.raw_payload->'data'->'master'->0->>'id')::int = $4
               GROUP BY ro.category`, p),
-      db.one(`SELECT COUNT(DISTINCT client_id) AS n FROM records r
-              WHERE r.salon_id=$1 AND r.status IN ('completed','arrived')
+      // «Не пришли» — визиты со статусом no_show за период, где мастер = специалист.
+      // Сюда специально НЕ фильтруем по completed/arrived (как остальные метрики),
+      // потому что нужны как раз пропущенные визиты.
+      db.one(`SELECT COUNT(*) AS n FROM records r
+              WHERE r.salon_id=$1 AND r.status = 'no_show'
                 AND COALESCE((r.visit_datetime AT TIME ZONE 'Europe/Moscow')::date, r.visit_date::date) BETWEEN $2::date AND $3::date
                 AND COALESCE((r.raw_payload->'staff'->>'id')::int, (r.raw_payload->'staff'->0->>'id')::int) = $4`, p),
       db.one(`WITH client_first AS (
@@ -297,7 +300,7 @@ router.get('/analytics/staff-dashboard', auth, async (req, res) => {
       stats: {
         staffName: link.staff_name,
         periodRecords, periodRevenue, revenueByCategory,
-        uniqueClients: parseInt(uniq.n),
+        noShowClients: parseInt(noShow.n),
         newClients: parseInt(first.n),
         avgCheck,
       },
