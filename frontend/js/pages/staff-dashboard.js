@@ -14,17 +14,26 @@ const _sdState = { from: null, to: null, preset: 'week' };
 function _sdToday() {
   return new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Moscow' }).format(new Date());
 }
-function _sdDaysAgo(n) {
-  const d = new Date(_sdToday() + 'T00:00:00Z');
-  d.setUTCDate(d.getUTCDate() - (n - 1));
-  return d.toISOString().slice(0, 10);
+// Понедельник текущей календарной недели (по МСК). Если сегодня понедельник —
+// возвращает сегодня. Использует UTC-арифметику по строке YYYY-MM-DD, что
+// безопасно: getUTCDay для даты в UTC 00:00 совпадает с днём в МСК для всех чисел.
+function _sdWeekStart() {
+  const today = new Date(_sdToday() + 'T00:00:00Z');
+  // getUTCDay: 0=Sun, 1=Mon, ..., 6=Sat. Сдвиг до пн = (day + 6) % 7.
+  const daysSinceMon = (today.getUTCDay() + 6) % 7;
+  today.setUTCDate(today.getUTCDate() - daysSinceMon);
+  return today.toISOString().slice(0, 10);
+}
+// 1-е число текущего месяца (по МСК).
+function _sdMonthStart() {
+  return _sdToday().slice(0, 7) + '-01';
 }
 function _sdSetPeriod(preset) {
   _sdState.preset = preset;
   _sdState.to = _sdToday();
   if (preset === 'today') _sdState.from = _sdState.to;
-  else if (preset === 'week') _sdState.from = _sdDaysAgo(7);
-  else if (preset === 'month') _sdState.from = _sdDaysAgo(30);
+  else if (preset === 'week') _sdState.from = _sdWeekStart();   // ← с пн текущей недели
+  else if (preset === 'month') _sdState.from = _sdMonthStart(); // ← с 1-го числа текущего месяца
 }
 const _sdEsc = (s) => String(s ?? '').replace(/[&<>"']/g,
   c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
