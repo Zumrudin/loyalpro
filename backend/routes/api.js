@@ -232,16 +232,20 @@ router.get('/analytics/staff-dashboard', auth, async (req, res) => {
               WHERE r.salon_id=$1 AND r.status IN ('completed','arrived')
                 AND COALESCE((r.visit_datetime AT TIME ZONE 'Europe/Moscow')::date, r.visit_date::date) BETWEEN $2::date AND $3::date
                 AND COALESCE((r.raw_payload->'staff'->>'id')::int, (r.raw_payload->'staff'->0->>'id')::int) = $4`, p),
-      // revenue_operations не несёт привязки к мастеру в raw_payload (поле staff пустое/нет).
-      // Связь идёт через yclients_record_id → records.staff. JOIN с records,
-      // фильтруем по staff из records. Deposit/certificate без record_id выпадают —
-      // они не привязаны к мастеру, не наши.
+      // goods/abonement: только если YClients ЯВНО указал мастера в payload-операции
+      // (raw_payload.data.master[0].id = ourYC). Если master пуст — значит продал
+      // ресепшен/админ, и эту сумму НЕ относим к специалисту. Привязка через
+      // record_id некорректна для товаров и абонементов (на визите специалиста
+      // могли продать что угодно через кассу — это не его выручка).
+      // Услуги (`services`) считаем отдельно — через records.amount (см. ниже),
+      // чтобы итог совпадал с total визитов и не уплывал из-за частичных оплат.
       db.any(`SELECT ro.category, COALESCE(SUM(ro.amount),0) AS total
               FROM revenue_operations ro
-              JOIN records r ON r.salon_id=ro.salon_id AND r.yclients_record_id=ro.yclients_record_id
               WHERE ro.salon_id=$1 AND ro.operation_date BETWEEN $2::date AND $3::date
-                AND COALESCE((r.raw_payload->'staff'->>'id')::int, (r.raw_payload->'staff'->0->>'id')::int) = $4
-                AND ro.category IN ('services','goods','abonement')
+                AND ro.category IN ('goods','abonement')
+                AND jsonb_typeof(ro.raw_payload->'data'->'master') = 'array'
+                AND jsonb_array_length(ro.raw_payload->'data'->'master') > 0
+                AND (ro.raw_payload->'data'->'master'->0->>'id')::int = $4
               GROUP BY ro.category`, p),
       db.one(`SELECT COUNT(DISTINCT client_id) AS n FROM records r
               WHERE r.salon_id=$1 AND r.status IN ('completed','arrived')
@@ -273,9 +277,20 @@ router.get('/analytics/staff-dashboard', auth, async (req, res) => {
               GROUP BY 1 ORDER BY 1`, p),
     ]);
 
-    const revenueByCategory = sdSvc.aggregateRevenueByCategory(byCat);
+    // Услуги = вся выручка визитов специалиста (records.amount).
+    // Косметика/абонементы — только то, что в payload-операции явно указано как
+    // проданное этим мастером (см. byCat выше). При наших данных YClients
+    // обычно не заполняет master в operations → косметика/абонементы 0.
+    const opSums = sdSvc.aggregateRevenueByCategory(byCat);  // goods + abonement
+    const servicesSum = parseFloat(rev.rv) || 0;
+    const revenueByCategory = {
+      services: servicesSum,
+      goods: opSums.goods,
+      abonement: opSums.abonement,
+      total: servicesSum + opSums.goods + opSums.abonement,
+    };
     const periodRecords = parseInt(rev.rc);
-    const periodRevenue = parseFloat(rev.rv);
+    const periodRevenue = revenueByCategory.total;
     const avgCheck = sdSvc.computeAvgCheck(periodRecords, periodRevenue);
 
     res.json({
