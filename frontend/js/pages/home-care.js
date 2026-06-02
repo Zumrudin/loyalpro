@@ -381,7 +381,17 @@ function hcPickerToggle(gi) {
 function hcPickerSelect(title) {
   if (hcPickerUid) {
     const inp = document.querySelector(`[data-uid="${hcPickerUid}"]`);
-    if (inp) inp.value = title;
+    if (inp) {
+      inp.value = title;
+      // Триггерим input-event на случай если на input навешены слушатели,
+      // которые ждут любого изменения (autocomplete, dirty-tracking).
+      inp.dispatchEvent(new Event('input', { bubbles: true }));
+      inp.focus();
+    } else {
+      console.warn('[home-care] picker: input with data-uid="' + hcPickerUid + '" не найден на странице');
+    }
+  } else {
+    console.warn('[home-care] picker: hcPickerUid не установлен — клик игнорируется');
   }
   hcPickerClose();
 }
