@@ -4,6 +4,7 @@ const { auth } = require('../middleware/auth');
 const { buildClientsQuery } = require('../clients-query');
 const { ycGet, ycGetClientCards, ycGetCardTransactions, ycWebSessions } = require('../services/yclients');
 const { getLoyaltySettings, getLevel, runSync, sleep } = require('../services/loyalty');
+const { computeStaffMetrics } = require('../services/staff');
 const { createLogger } = require('../logger');
 const logger = createLogger('API');
 
@@ -227,7 +228,7 @@ router.get('/analytics/staff-dashboard', auth, async (req, res) => {
     const yc = link.yclients_staff_id;
     const p = [sid, from, to, yc];
 
-    const [rev, byCat, noShow, first, top, daily] = await Promise.all([
+    const [rev, byCat, noShow, first, top, daily, staffMetrics] = await Promise.all([
       db.one(`SELECT COUNT(*) AS rc, COALESCE(SUM(amount),0) AS rv FROM records r
               WHERE r.salon_id=$1 AND r.status IN ('completed','arrived')
                 AND COALESCE((r.visit_datetime AT TIME ZONE 'Europe/Moscow')::date, r.visit_date::date) BETWEEN $2::date AND $3::date
@@ -297,6 +298,15 @@ router.get('/analytics/staff-dashboard', auth, async (req, res) => {
                 AND COALESCE((r.visit_datetime AT TIME ZONE 'Europe/Moscow')::date, r.visit_date::date) BETWEEN $2::date AND $3::date
                 AND COALESCE((r.raw_payload->'staff'->>'id')::int, (r.raw_payload->'staff'->0->>'id')::int) = $4
               GROUP BY 1 ORDER BY 1`, p),
+      // Метрики из «Сотрудники»-аналитики — возвращаемость, перезапись,
+      // продажи товаров, загрузка. Считает существующий computeStaffMetrics
+      // на той же таблице records и плюс goods_sales / staff_schedule.
+      // Если упадёт (например, нет staff_schedule) — не валим весь запрос,
+      // возвращаем null.
+      computeStaffMetrics(sid, yc, from, to).catch(e => {
+        logger.warn?.(`computeStaffMetrics failed for staff=${yc}: ${e.message}`);
+        return null;
+      }),
     ]);
 
     // Услуги = вся выручка визитов специалиста (records.amount).
@@ -315,6 +325,16 @@ router.get('/analytics/staff-dashboard', auth, async (req, res) => {
     const periodRevenue = revenueByCategory.total;
     const avgCheck = sdSvc.computeAvgCheck(periodRecords, periodRevenue);
 
+    // 4 метрики из «Сотрудники»-аналитики. computeStaffMetrics() может вернуть
+    // null если не было данных — отдаём null, фронт покажет «—».
+    const extra = staffMetrics ? {
+      retentionRate:     staffMetrics.retentionRate,     // %; null если < 45д истории
+      reappointmentRate: staffMetrics.reappointmentRate, // % визитов с перезаписью
+      goodsCount:        staffMetrics.goodsCount,        // шт. проданных товаров
+      goodsRevenue:      staffMetrics.goodsRevenue,      // ₽ выручка от товаров (этого мастера)
+      utilizationRate:   staffMetrics.utilizationRate,   // % загрузки от расписания
+    } : { retentionRate: null, reappointmentRate: null, goodsCount: 0, goodsRevenue: 0, utilizationRate: null };
+
     res.json({
       stats: {
         staffName: link.staff_name,
@@ -322,6 +342,7 @@ router.get('/analytics/staff-dashboard', auth, async (req, res) => {
         noShowClients: parseInt(noShow.n),
         newClients: parseInt(first.n),
         avgCheck,
+        ...extra,
       },
       topServices: top,
       dailyRevenue: daily,

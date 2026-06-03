@@ -99,6 +99,29 @@ async function _sdRender() {
       <div class="sc"><div class="sl">Первичных за период</div><div class="sv">${s.newClients}</div></div>
     </div>
 
+    <div class="sg" style="display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-top:14px">
+      <div class="sc">
+        <div class="sl">Возвращаемость</div>
+        <div class="sv">${s.retentionRate == null ? '—' : s.retentionRate + '%'}</div>
+        <div class="sd" style="font-size:11px;color:var(--t3);margin-top:6px">клиенты, вернувшиеся в течение 45 дней</div>
+      </div>
+      <div class="sc">
+        <div class="sl">Перезапись</div>
+        <div class="sv">${s.reappointmentRate == null ? '—' : s.reappointmentRate + '%'}</div>
+        <div class="sd" style="font-size:11px;color:var(--t3);margin-top:6px">% визитов с последующей записью</div>
+      </div>
+      <div class="sc">
+        <div class="sl">Продажи товаров</div>
+        <div class="sv">${s.goodsCount || 0} <span style="font-size:14px;color:var(--t3);font-weight:400">шт</span></div>
+        <div class="sd" style="font-size:11px;color:var(--t3);margin-top:6px">на ₽ ${_sdFmtRub(s.goodsRevenue)}</div>
+      </div>
+      <div class="sc">
+        <div class="sl">Загрузка</div>
+        <div class="sv">${s.utilizationRate == null ? '—' : s.utilizationRate + '%'}</div>
+        <div class="sd" style="font-size:11px;color:var(--t3);margin-top:6px">от рабочего расписания</div>
+      </div>
+    </div>
+
     <div class="sc" style="margin-top:14px">
       <div class="sl">Дневной график выручки</div>
       <canvas id="sd-chart" width="1200" height="180"
