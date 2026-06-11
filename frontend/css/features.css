@@ -235,11 +235,16 @@
 .sd-hello{min-height:55vh;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:40px 20px;animation:sdHelloIn .5s ease both}
 .sd-hello-emoji{font-size:46px;line-height:1;margin-bottom:16px;animation:sdFloat 2.4s ease-in-out infinite}
 .sd-hello h2{margin:0 0 10px;font-size:26px;letter-spacing:-.4px;color:var(--t1)}
-.sd-hello-sub{color:var(--t3);font-size:14px;min-height:20px;transition:opacity .25s}
+.sd-hello-sub{position:relative;width:100%;color:var(--t3);font-size:14px;height:20px}
+.sd-step-txt{position:absolute;left:0;right:0;top:0;animation:sdStepIn .3s ease both}
+.sd-step-txt.sd-step-out{animation:sdStepOut .25s ease both}
+@keyframes sdStepIn{from{opacity:0;transform:translateY(5px)}to{opacity:1;transform:none}}
+@keyframes sdStepOut{from{opacity:1}to{opacity:0}}
 .sd-hello-bar{width:min(280px,72vw);height:6px;background:var(--bg);border:1px solid var(--bd);border-radius:4px;overflow:hidden;margin-top:20px}
-.sd-hello-fill{height:100%;width:0;background:linear-gradient(90deg,#19c39c,#13a05e);border-radius:4px;animation:sdFill 2.4s cubic-bezier(.25,.6,.3,1) forwards}
-.sd-hello-fill.done{animation:none;width:100%;transition:width .3s ease}
+.sd-hello-fill{height:100%;width:0;background:linear-gradient(90deg,#19c39c,#13a05e);border-radius:4px;transition:width 2.6s cubic-bezier(.3,.6,.25,1)}
+.sd-hello-fill.done{transition:width .6s cubic-bezier(.3,.7,.4,1)}
+.sd-hello.out{animation:none;opacity:0;transform:translateY(-10px);transition:opacity .35s ease,transform .35s ease}
+.sd-enter{animation:sdHelloIn .45s ease both}
 @media(max-width:700px){.sd-hello h2{font-size:21px}.sd-hello-emoji{font-size:38px}}
-@keyframes sdFill{0%{width:0}70%{width:76%}100%{width:90%}}
 @keyframes sdFloat{0%,100%{transform:translateY(0)}50%{transform:translateY(-6px)}}
 @keyframes sdHelloIn{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}

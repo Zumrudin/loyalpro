@@ -84,9 +84,25 @@ function _sdHelloHtml() {
     <div class="sd-hello">
       <div class="sd-hello-emoji">${emoji}</div>
       <h2>${greet}${name ? ', ' + _sdEsc(name) : ''}!</h2>
-      <div class="sd-hello-sub" id="sd-hello-step">Собираем актуальные данные…</div>
+      <div class="sd-hello-sub" id="sd-hello-step"><span class="sd-step-txt">Собираем актуальные данные…</span></div>
       <div class="sd-hello-bar"><div class="sd-hello-fill"></div></div>
     </div>`;
+}
+// Смена статуса двумя независимыми span'ами строго по очереди: старый
+// полностью угасает, потом появляется новый. Менять textContent во время
+// opacity-перехода нельзя — iOS Safari рисует обе строки разом (наложение).
+function _sdStepSwap(el, txt, isFinal) {
+  const old = el.querySelector('.sd-step-txt:not(.sd-step-out)');
+  const delay = old ? 260 : 0;
+  if (old) { old.classList.add('sd-step-out'); setTimeout(() => old.remove(), 300); }
+  setTimeout(() => {
+    // «Готово!» уже показано или на подходе — отложенный статус не вставляем
+    if (!el.isConnected || (el.dataset.done && !isFinal)) return;
+    const span = document.createElement('span');
+    span.className = 'sd-step-txt';
+    span.textContent = txt;
+    el.appendChild(span);
+  }, delay);
 }
 // Ротация статусов «что мы сейчас делаем» под приветствием.
 function _sdHelloSteps(root) {
@@ -94,10 +110,8 @@ function _sdHelloSteps(root) {
   let i = 0;
   return setInterval(() => {
     const el = root.querySelector('#sd-hello-step');
-    if (!el || i >= steps.length) return;
-    el.style.opacity = '0';
-    const txt = steps[i++];
-    setTimeout(() => { el.textContent = txt; el.style.opacity = '1'; }, 220);
+    if (!el || el.dataset.done || i >= steps.length) return;
+    _sdStepSwap(el, steps[i++]);
   }, 800);
 }
 
@@ -119,7 +133,15 @@ async function _sdRender() {
   if (firstLoad) {
     root.innerHTML = _sdHelloHtml();
     stepTimer = _sdHelloSteps(root);
-    minDelay = new Promise(r => setTimeout(r, 1500)); // чтобы приветствие успели прочитать
+    // Прогресс ведём транзишеном из JS (не keyframe): тогда «доезд» до 100%
+    // продолжается с текущей ширины без скачка. Старт — кадром позже вставки
+    // в DOM, иначе браузер схлопнет 0→88% без анимации.
+    const fill0 = root.querySelector('.sd-hello-fill');
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      if (fill0) fill0.style.width = '88%';
+    }));
+    // Даже если данные пришли раньше — даём бару плавно дойти до конца.
+    minDelay = new Promise(r => setTimeout(r, 2600));
   } else {
     root.classList.add('sd-stale');
   }
@@ -136,14 +158,22 @@ async function _sdRender() {
   if (firstLoad) {
     await minDelay;
     clearInterval(stepTimer);
-    // добиваем прогресс-бар до 100% и даём анимации завершиться
+    // Плавно довозим бар с текущей ширины до 100%, показываем «Готово!»,
+    // затем растворяем приветствие — и только после этого рисуем дашборд.
     const fill = root.querySelector('.sd-hello-fill');
     const step = root.querySelector('#sd-hello-step');
-    if (fill) fill.classList.add('done');
-    if (step) { step.style.opacity = '1'; step.textContent = 'Готово!'; }
-    await new Promise(r => setTimeout(r, 350));
+    if (step) { step.dataset.done = '1'; _sdStepSwap(step, 'Готово!', true); }
+    if (fill) { fill.classList.add('done'); fill.style.width = '100%'; }
+    await new Promise(r => setTimeout(r, 650));
+    const hello = root.querySelector('.sd-hello');
+    if (hello) { hello.classList.add('out'); await new Promise(r => setTimeout(r, 330)); }
   }
   root.classList.remove('sd-stale');
+  if (firstLoad) {
+    // Дашборд появляется с тем же мягким въездом, что и приветствие.
+    root.classList.add('sd-enter');
+    setTimeout(() => root.classList.remove('sd-enter'), 600);
+  }
   root.dataset.loaded = '1';
 
   if (data && data.unlinked) {
