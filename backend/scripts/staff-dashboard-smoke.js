@@ -86,13 +86,22 @@ function assert(cond, msg) {
     assert(typeof s.periodRevenue === 'number', '.stats.periodRevenue: number');
     assert(s.revenueByCategory && 'services' in s.revenueByCategory && 'goods' in s.revenueByCategory && 'abonement' in s.revenueByCategory,
       '.stats.revenueByCategory: {services, goods, abonement}');
-    assert(typeof s.uniqueClients === 'number', '.stats.uniqueClients: number');
+    assert(typeof s.noShowClients === 'number', '.stats.noShowClients: number');
     assert(typeof s.newClients === 'number', '.stats.newClients: number');
     assert(typeof s.avgCheck === 'number', '.stats.avgCheck: number');
     assert(Array.isArray(j.topServices), '.topServices: array');
     assert(Array.isArray(j.dailyRevenue), '.dailyRevenue: array');
     assert(j.period && j.period.from === from && j.period.to === to, '.period correct');
-    console.log(`  Sample: visits=${s.periodRecords} revenue=${s.periodRevenue} unique=${s.uniqueClients} new=${s.newClients} avg=${s.avgCheck} (services=${s.revenueByCategory.services})`);
+    // Сравнение с прошлым месяцем: весь месяц + эквивалентный отрезок
+    assert(j.comparison && j.comparison.prevMonth && j.comparison.prevWindow, '.comparison: {prevMonth, prevWindow}');
+    const pm = j.comparison.prevMonth, pw = j.comparison.prevWindow;
+    assert(/^\d{4}-\d{2}-01$/.test(pm.from), '.comparison.prevMonth.from = 1-е число');
+    assert(pw.from === pm.from && pw.to <= pm.to, '.comparison.prevWindow внутри prevMonth');
+    assert(typeof pm.stats.periodRevenue === 'number' && typeof pm.stats.periodRecords === 'number',
+      '.comparison.prevMonth.stats: {periodRevenue, periodRecords}: numbers');
+    assert('revenueByCategory' in pm.stats && 'goodsCount' in pm.stats, '.comparison.prevMonth.stats: revenueByCategory + goodsCount');
+    console.log(`  Sample: visits=${s.periodRecords} revenue=${s.periodRevenue} noShow=${s.noShowClients} new=${s.newClients} avg=${s.avgCheck} (services=${s.revenueByCategory.services})`);
+    console.log(`  Compare: prevMonth ${pm.from}…${pm.to} rev=${pm.stats.periodRevenue}; prevWindow ${pw.from}…${pw.to} rev=${pw.stats.periodRevenue}`);
   } else {
     console.log('\n[1] No linked specialist in DB — skip linked case');
   }

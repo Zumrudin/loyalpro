@@ -210,29 +210,19 @@ router.get('/analytics/dashboard', auth, async (req, res) => {
 
 // ── Personal Staff Dashboard (для role=specialist) ─────────────────
 // Спека: docs/superpowers/specs/2026-06-01-staff-dashboard-design.md
-router.get('/analytics/staff-dashboard', auth, async (req, res) => {
-  try {
-    if (req.user.role !== 'specialist') return res.status(403).json({ error: 'forbidden' });
-    const sid = req.user.salonId, uid = req.user.userId;
-    const { from, to } = resolvePeriod(req);
 
-    // Привязка → yclients_staff_id
-    const link = await db.oneOrNone(`
-      SELECT sm.yclients_staff_id, sm.name AS staff_name
-      FROM users u JOIN staff_members sm ON sm.id = u.staff_member_id
-      WHERE u.id = $1 AND sm.salon_id = $2
-    `, [uid, sid]);
-    if (!link) return res.json({ unlinked: true });
+// Все числовые метрики специалиста за произвольный период. Вызывается до трёх
+// раз за запрос: основной период + сравнительные (весь прошлый календарный
+// месяц и эквивалентный отрезок прошлого месяца — для бейджей динамики).
+async function computeSpecialistStats(sid, yc, from, to) {
+  const sdSvc = require('../services/staff-dashboard');
+  const p = [sid, from, to, yc];
 
-    const sdSvc = require('../services/staff-dashboard');
-    const yc = link.yclients_staff_id;
-    const p = [sid, from, to, yc];
-
-    const [rev, byCat, noShow, first, top, daily, staffMetrics] = await Promise.all([
-      db.one(`SELECT COUNT(*) AS rc, COALESCE(SUM(amount),0) AS rv FROM records r
-              WHERE r.salon_id=$1 AND r.status IN ('completed','arrived')
-                AND COALESCE((r.visit_datetime AT TIME ZONE 'Europe/Moscow')::date, r.visit_date::date) BETWEEN $2::date AND $3::date
-                AND COALESCE((r.raw_payload->'staff'->>'id')::int, (r.raw_payload->'staff'->0->>'id')::int) = $4`, p),
+  const [rev, byCat, noShow, first, staffMetrics] = await Promise.all([
+    db.one(`SELECT COUNT(*) AS rc, COALESCE(SUM(amount),0) AS rv FROM records r
+            WHERE r.salon_id=$1 AND r.status IN ('completed','arrived')
+              AND COALESCE((r.visit_datetime AT TIME ZONE 'Europe/Moscow')::date, r.visit_date::date) BETWEEN $2::date AND $3::date
+              AND COALESCE((r.raw_payload->'staff'->>'id')::int, (r.raw_payload->'staff'->0->>'id')::int) = $4`, p),
       // goods/abonement: считаем через связь с визитом (yclients_record_id).
       // Если товар/абонемент продана во время визита, то выручка идёт мастеру визита.
       // Если продажа не привязана к визиту — берём directly из operation данные:
@@ -291,6 +281,75 @@ router.get('/analytics/staff-dashboard', auth, async (req, res) => {
               WHERE cf.d BETWEEN $2::date AND $3::date
                 AND cf.first_staff = $4
                 AND COALESCE(cl.visits_count, 0) <= COALESCE(crc.n, 0)`, p),
+      // Метрики из «Сотрудники»-аналитики — возвращаемость, перезапись,
+      // продажи товаров, загрузка. Считает существующий computeStaffMetrics
+      // на той же таблице records и плюс goods_sales / staff_schedule.
+      // Если упадёт (например, нет staff_schedule) — не валим весь запрос,
+      // возвращаем null.
+      computeStaffMetrics(sid, yc, from, to).catch(e => {
+        logger.warn?.(`computeStaffMetrics failed for staff=${yc}: ${e.message}`);
+        return null;
+      }),
+  ]);
+
+  // Услуги = вся выручка визитов специалиста (records.amount).
+  // Косметика/абонементы — из revenue_operations через связь операции с визитом
+  // (см. byCat выше), кредитуются мастеру визита.
+  const opSums = sdSvc.aggregateRevenueByCategory(byCat);  // goods + abonement
+  const servicesSum = parseFloat(rev.rv) || 0;
+  const revenueByCategory = {
+    services: servicesSum,
+    goods: opSums.goods,
+    abonement: opSums.abonement,
+    total: servicesSum + opSums.goods + opSums.abonement,
+  };
+  const periodRecords = parseInt(rev.rc);
+  const periodRevenue = revenueByCategory.total;
+  const avgCheck = sdSvc.computeAvgCheck(periodRecords, periodRevenue);
+
+  // 4 метрики из «Сотрудники»-аналитики. computeStaffMetrics() может вернуть
+  // null если не было данных — отдаём null, фронт покажет «—».
+  const extra = staffMetrics ? {
+    retentionRate:     staffMetrics.retentionRate,     // %; null если < 45д истории
+    reappointmentRate: staffMetrics.reappointmentRate, // % визитов с перезаписью
+    goodsCount:        staffMetrics.goodsCount,        // шт. проданных товаров
+    goodsRevenue:      staffMetrics.goodsRevenue,      // ₽ выручка от товаров (этого мастера)
+    utilizationRate:   staffMetrics.utilizationRate,   // % загрузки от расписания
+  } : { retentionRate: null, reappointmentRate: null, goodsCount: 0, goodsRevenue: 0, utilizationRate: null };
+
+  return {
+    periodRecords, periodRevenue, revenueByCategory,
+    noShowClients: parseInt(noShow.n),
+    newClients: parseInt(first.n),
+    avgCheck,
+    ...extra,
+  };
+}
+
+router.get('/analytics/staff-dashboard', auth, async (req, res) => {
+  try {
+    if (req.user.role !== 'specialist') return res.status(403).json({ error: 'forbidden' });
+    const sid = req.user.salonId, uid = req.user.userId;
+    const { from, to } = resolvePeriod(req);
+
+    // Привязка → yclients_staff_id
+    const link = await db.oneOrNone(`
+      SELECT sm.yclients_staff_id, sm.name AS staff_name
+      FROM users u JOIN staff_members sm ON sm.id = u.staff_member_id
+      WHERE u.id = $1 AND sm.salon_id = $2
+    `, [uid, sid]);
+    if (!link) return res.json({ unlinked: true });
+
+    const yc = link.yclients_staff_id;
+    const p = [sid, from, to, yc];
+
+    // Сравнительные периоды: весь прошлый календарный месяц (справка на
+    // карточках) + эквивалентный отрезок прошлого месяца (с 1-го по то же
+    // число) — для честной динамики, пока текущий месяц не закончился.
+    const cmp = require('../services/staff-dashboard').prevMonthRanges(to);
+
+    const [stats, top, daily, prevMonthStats, prevWindowOwn] = await Promise.all([
+      computeSpecialistStats(sid, yc, from, to),
       db.any(`SELECT svc->>'title' AS service_name, COUNT(DISTINCT r.id) AS cnt,
                      SUM((svc->>'cost_to_pay')::numeric) AS total_amount
               FROM records r, jsonb_array_elements(COALESCE(r.services,'[]'::jsonb)) svc
@@ -306,55 +365,21 @@ router.get('/analytics/staff-dashboard', auth, async (req, res) => {
                 AND COALESCE((r.visit_datetime AT TIME ZONE 'Europe/Moscow')::date, r.visit_date::date) BETWEEN $2::date AND $3::date
                 AND COALESCE((r.raw_payload->'staff'->>'id')::int, (r.raw_payload->'staff'->0->>'id')::int) = $4
               GROUP BY 1 ORDER BY 1`, p),
-      // Метрики из «Сотрудники»-аналитики — возвращаемость, перезапись,
-      // продажи товаров, загрузка. Считает существующий computeStaffMetrics
-      // на той же таблице records и плюс goods_sales / staff_schedule.
-      // Если упадёт (например, нет staff_schedule) — не валим весь запрос,
-      // возвращаем null.
-      computeStaffMetrics(sid, yc, from, to).catch(e => {
-        logger.warn?.(`computeStaffMetrics failed for staff=${yc}: ${e.message}`);
-        return null;
-      }),
+      computeSpecialistStats(sid, yc, cmp.monthFrom, cmp.monthTo),
+      // Если «то же число» — конец прошлого месяца, отрезок совпадает с целым
+      // месяцем: не считаем дважды, переиспользуем prevMonthStats ниже.
+      cmp.windowTo === cmp.monthTo ? null : computeSpecialistStats(sid, yc, cmp.windowFrom, cmp.windowTo),
     ]);
 
-    // Услуги = вся выручка визитов специалиста (records.amount).
-    // Косметика/абонементы — только то, что в payload-операции явно указано как
-    // проданное этим мастером (см. byCat выше). При наших данных YClients
-    // обычно не заполняет master в operations → косметика/абонементы 0.
-    const opSums = sdSvc.aggregateRevenueByCategory(byCat);  // goods + abonement
-    const servicesSum = parseFloat(rev.rv) || 0;
-    const revenueByCategory = {
-      services: servicesSum,
-      goods: opSums.goods,
-      abonement: opSums.abonement,
-      total: servicesSum + opSums.goods + opSums.abonement,
-    };
-    const periodRecords = parseInt(rev.rc);
-    const periodRevenue = revenueByCategory.total;
-    const avgCheck = sdSvc.computeAvgCheck(periodRecords, periodRevenue);
-
-    // 4 метрики из «Сотрудники»-аналитики. computeStaffMetrics() может вернуть
-    // null если не было данных — отдаём null, фронт покажет «—».
-    const extra = staffMetrics ? {
-      retentionRate:     staffMetrics.retentionRate,     // %; null если < 45д истории
-      reappointmentRate: staffMetrics.reappointmentRate, // % визитов с перезаписью
-      goodsCount:        staffMetrics.goodsCount,        // шт. проданных товаров
-      goodsRevenue:      staffMetrics.goodsRevenue,      // ₽ выручка от товаров (этого мастера)
-      utilizationRate:   staffMetrics.utilizationRate,   // % загрузки от расписания
-    } : { retentionRate: null, reappointmentRate: null, goodsCount: 0, goodsRevenue: 0, utilizationRate: null };
-
     res.json({
-      stats: {
-        staffName: link.staff_name,
-        periodRecords, periodRevenue, revenueByCategory,
-        noShowClients: parseInt(noShow.n),
-        newClients: parseInt(first.n),
-        avgCheck,
-        ...extra,
-      },
+      stats: { staffName: link.staff_name, ...stats },
       topServices: top,
       dailyRevenue: daily,
       period: { from, to },
+      comparison: {
+        prevMonth:  { from: cmp.monthFrom,  to: cmp.monthTo,  stats: prevMonthStats },
+        prevWindow: { from: cmp.windowFrom, to: cmp.windowTo, stats: prevWindowOwn || prevMonthStats },
+      },
     });
   } catch (e) {
     res.status(500).json({ error: e.message });

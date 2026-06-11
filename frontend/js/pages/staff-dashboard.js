@@ -39,6 +39,30 @@ const _sdEsc = (s) => String(s ?? '').replace(/[&<>"']/g,
   c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const _sdFmtRub = (n) => Math.round(parseFloat(n || 0)).toLocaleString('ru');
 
+// Бейдж динамики ▲/▼ к прошлому периоду. opts.inverse — рост это плохо
+// (например «не пришли»); opts.pp — метрика уже в процентах, разница
+// считается в процентных пунктах, а не относительно.
+function _sdDelta(cur, prev, opts = {}) {
+  const c = parseFloat(cur), p = parseFloat(prev);
+  if (!isFinite(c) || !isFinite(p)) return '';
+  let diff, txt;
+  if (opts.pp) {
+    diff = Math.round((c - p) * 10) / 10;
+    txt = (diff > 0 ? '+' : '') + diff + ' п.п.';
+  } else {
+    if (p === 0) return '';
+    diff = Math.round((c - p) / p * 100);
+    txt = (diff > 0 ? '+' : '') + diff + '%';
+  }
+  if (diff === 0)
+    return `<span style="font-size:13px;font-weight:600;color:var(--t3);vertical-align:3px;white-space:nowrap">${opts.pp ? '0 п.п.' : '0%'}</span>`;
+  const good = opts.inverse ? diff < 0 : diff > 0;
+  return `<span style="font-size:13px;font-weight:700;color:${good ? '#13a05e' : '#d23f3f'};vertical-align:3px;white-space:nowrap">${diff > 0 ? '▲' : '▼'} ${txt}</span>`;
+}
+
+const _SD_MON_GEN = ['января','февраля','марта','апреля','мая','июня','июля','августа','сентября','октября','ноября','декабря'];
+const _SD_MON_NOM = ['январь','февраль','март','апрель','май','июнь','июль','август','сентябрь','октябрь','ноябрь','декабрь'];
+
 async function loadStaffDashboard() {
   const page = document.querySelector('#page-staff-dashboard');
   if (page) page.hidden = false;
@@ -73,6 +97,52 @@ async function _sdRender() {
 
   const s = data.stats;
   const r = s.revenueByCategory;
+
+  // ── Сравнение с прошлым месяцем ─────────────────────────────────
+  // pW — эквивалентный отрезок прошлого месяца (1-е…то же число), по нему
+  // считаем бейдж динамики, но только на пресете «Месяц» (день/неделю
+  // сравнивать с месячным отрезком некорректно). pM — весь прошлый месяц,
+  // показывается справкой внизу карточки на всех пресетах.
+  const cmp = data.comparison || {};
+  const pW = (cmp.prevWindow && cmp.prevWindow.stats) || null;
+  const pM = (cmp.prevMonth && cmp.prevMonth.stats) || null;
+  const isMonthCmp = _sdState.preset === 'month' && !!pW;
+  let wLabel = '', mLabel = 'Прошлый месяц';
+  if (cmp.prevWindow) {
+    const mIdx = parseInt(cmp.prevWindow.to.slice(5, 7), 10) - 1;
+    wLabel = `к 1–${parseInt(cmp.prevWindow.to.slice(8, 10), 10)} ${_SD_MON_GEN[mIdx]}`;
+    if (isMonthCmp) mLabel = `Весь ${_SD_MON_NOM[mIdx]}`;
+  }
+  const fmtRub = (v) => '₽ ' + _sdFmtRub(v);
+  const fmtInt = (v) => String(parseInt(v) || 0);
+  const fmtPct = (v) => v == null ? '—' : v + '%';
+  // Возвращает {badge, sub, ref} для карточки метрики `key`.
+  const _sdC = (cur, key, fmt, opts = {}) => {
+    if (!pM) return { badge: '', sub: '', ref: '' };
+    const vW = pW ? pW[key] : null;
+    const vM = pM[key];
+    let badge = '', sub = '';
+    if (isMonthCmp && vW != null && cur != null) {
+      badge = _sdDelta(cur, vW, opts);
+      if (badge) sub = `<div style="font-size:11px;color:var(--t3);margin-top:3px">${wLabel} (${fmt(vW)})</div>`;
+    }
+    const ref = vM == null ? '' :
+      `<div style="font-size:12px;color:var(--t3);margin-top:8px;border-top:1px dashed var(--bd);padding-top:6px">${mLabel}: <b>${fmt(vM)}</b></div>`;
+    return { badge, sub, ref };
+  };
+  const cRev  = _sdC(s.periodRevenue,     'periodRevenue',     fmtRub);
+  const cVis  = _sdC(s.periodRecords,     'periodRecords',     fmtInt);
+  const cNoSh = _sdC(s.noShowClients,     'noShowClients',     fmtInt, { inverse: true });
+  const cAvg  = _sdC(s.avgCheck,          'avgCheck',          fmtRub);
+  const cNew  = _sdC(s.newClients,        'newClients',        fmtInt);
+  const cRet  = _sdC(s.retentionRate,     'retentionRate',     fmtPct, { pp: true });
+  const cReap = _sdC(s.reappointmentRate, 'reappointmentRate', fmtPct, { pp: true });
+  const cUtil = _sdC(s.utilizationRate,   'utilizationRate',   fmtPct, { pp: true });
+  const cGoods = _sdC(s.goodsRevenue,     'goodsRevenue',      fmtRub);
+  // Для товаров справка комбинированная: «N шт на ₽ X»
+  if (pM) cGoods.ref =
+    `<div style="font-size:12px;color:var(--t3);margin-top:8px;border-top:1px dashed var(--bd);padding-top:6px">${mLabel}: <b>${fmtInt(pM.goodsCount)} шт на ${fmtRub(pM.goodsRevenue)}</b></div>`;
+
   root.innerHTML = `
     <div class="sd-toolbar" style="display:flex;gap:8px;padding:14px 0;align-items:center;flex-wrap:wrap">
       ${['today','week','month'].map(p => `
@@ -86,39 +156,44 @@ async function _sdRender() {
     <div class="sg" style="display:grid;grid-template-columns:repeat(3,1fr);gap:14px">
       <div class="sc">
         <div class="sl">Моя выручка за период</div>
-        <div class="sv">₽ ${_sdFmtRub(s.periodRevenue)}</div>
+        <div class="sv">₽ ${_sdFmtRub(s.periodRevenue)} ${cRev.badge}</div>${cRev.sub}
         <div style="margin-top:10px;border-top:1px solid var(--bd);padding-top:10px;font-size:13px;line-height:1.7">
           <div style="display:flex;justify-content:space-between"><span style="color:var(--t3)">Услуги</span><b>₽ ${_sdFmtRub(r.services)}</b></div>
           <div style="display:flex;justify-content:space-between"><span style="color:var(--t3)">Косметика</span><b>₽ ${_sdFmtRub(r.goods)}</b></div>
           <div style="display:flex;justify-content:space-between"><span style="color:var(--t3)">Абонементы</span><b>₽ ${_sdFmtRub(r.abonement)}</b></div>
         </div>
+        ${cRev.ref}
       </div>
-      <div class="sc"><div class="sl">Визитов проведено</div><div class="sv">${s.periodRecords}</div></div>
-      <div class="sc"><div class="sl">Не пришли</div><div class="sv">${s.noShowClients}</div></div>
-      <div class="sc"><div class="sl">Средний чек</div><div class="sv">₽ ${_sdFmtRub(s.avgCheck)}</div></div>
-      <div class="sc"><div class="sl">Первичных за период</div><div class="sv">${s.newClients}</div></div>
+      <div class="sc"><div class="sl">Визитов проведено</div><div class="sv">${s.periodRecords} ${cVis.badge}</div>${cVis.sub}${cVis.ref}</div>
+      <div class="sc"><div class="sl">Не пришли</div><div class="sv">${s.noShowClients} ${cNoSh.badge}</div>${cNoSh.sub}${cNoSh.ref}</div>
+      <div class="sc"><div class="sl">Средний чек</div><div class="sv">₽ ${_sdFmtRub(s.avgCheck)} ${cAvg.badge}</div>${cAvg.sub}${cAvg.ref}</div>
+      <div class="sc"><div class="sl">Первичных за период</div><div class="sv">${s.newClients} ${cNew.badge}</div>${cNew.sub}${cNew.ref}</div>
     </div>
 
     <div class="sg" style="display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-top:14px">
       <div class="sc">
         <div class="sl">Возвращаемость</div>
-        <div class="sv">${s.retentionRate == null ? '—' : s.retentionRate + '%'}</div>
+        <div class="sv">${s.retentionRate == null ? '—' : s.retentionRate + '%'} ${cRet.badge}</div>${cRet.sub}
         <div class="sd" style="font-size:11px;color:var(--t3);margin-top:6px">клиенты, вернувшиеся в течение 45 дней</div>
+        ${cRet.ref}
       </div>
       <div class="sc">
         <div class="sl">Перезапись</div>
-        <div class="sv">${s.reappointmentRate == null ? '—' : s.reappointmentRate + '%'}</div>
+        <div class="sv">${s.reappointmentRate == null ? '—' : s.reappointmentRate + '%'} ${cReap.badge}</div>${cReap.sub}
         <div class="sd" style="font-size:11px;color:var(--t3);margin-top:6px">% визитов с последующей записью</div>
+        ${cReap.ref}
       </div>
       <div class="sc">
         <div class="sl">Продажи товаров</div>
-        <div class="sv">${s.goodsCount || 0} <span style="font-size:14px;color:var(--t3);font-weight:400">шт</span></div>
+        <div class="sv">${s.goodsCount || 0} <span style="font-size:14px;color:var(--t3);font-weight:400">шт</span> ${cGoods.badge}</div>${cGoods.sub}
         <div class="sd" style="font-size:11px;color:var(--t3);margin-top:6px">на ₽ ${_sdFmtRub(s.goodsRevenue)}</div>
+        ${cGoods.ref}
       </div>
       <div class="sc">
         <div class="sl">Загрузка</div>
-        <div class="sv">${s.utilizationRate == null ? '—' : s.utilizationRate + '%'}</div>
+        <div class="sv">${s.utilizationRate == null ? '—' : s.utilizationRate + '%'} ${cUtil.badge}</div>${cUtil.sub}
         <div class="sd" style="font-size:11px;color:var(--t3);margin-top:6px">от рабочего расписания</div>
+        ${cUtil.ref}
       </div>
     </div>
 

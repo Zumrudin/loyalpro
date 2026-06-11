@@ -25,4 +25,21 @@ function computeAvgCheck(count, sum) {
   return c > 0 ? Math.round(s / c) : 0;
 }
 
-module.exports = { aggregateRevenueByCategory, computeAvgCheck };
+// Границы сравнительных периодов относительно даты `to` (YYYY-MM-DD):
+// весь предыдущий календарный месяц + эквивалентный отрезок (с 1-го по то же
+// число; если в прошлом месяце дней меньше — по его конец). Чистая UTC-арифметика
+// по строке даты — таймзона сервера не влияет.
+function prevMonthRanges(to) {
+  const t = new Date(to + 'T00:00:00Z');
+  const prevLast = new Date(Date.UTC(t.getUTCFullYear(), t.getUTCMonth(), 0));
+  const prevFirst = new Date(Date.UTC(prevLast.getUTCFullYear(), prevLast.getUTCMonth(), 1));
+  const day = Math.min(t.getUTCDate(), prevLast.getUTCDate());
+  const windowTo = new Date(Date.UTC(prevLast.getUTCFullYear(), prevLast.getUTCMonth(), day));
+  const iso = (d) => d.toISOString().slice(0, 10);
+  return {
+    monthFrom: iso(prevFirst), monthTo: iso(prevLast),
+    windowFrom: iso(prevFirst), windowTo: iso(windowTo),
+  };
+}
+
+module.exports = { aggregateRevenueByCategory, computeAvgCheck, prevMonthRanges };
