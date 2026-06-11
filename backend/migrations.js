@@ -574,6 +574,14 @@ async function runMigrations(client) {
       UNIQUE (salon_id, staff_member_id, month)
     )
   `).catch(() => {});
+
+  // Коррелированные подзапросы по клиенту (перезапись, возвращаемость в
+  // staff-dashboard) без этого индекса делают seq scan на каждый визит —
+  // эндпоинт деградировал до 10-15 секунд.
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS idx_records_salon_yc_client
+      ON records (salon_id, yclients_client_id)
+  `).catch(() => {});
 }
 
 module.exports = { runMigrations };

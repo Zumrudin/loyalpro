@@ -63,6 +63,44 @@ function _sdDelta(cur, prev, opts = {}) {
 const _SD_MON_GEN = ['января','февраля','марта','апреля','мая','июня','июля','августа','сентября','октября','ноября','декабря'];
 const _SD_MON_NOM = ['январь','февраль','март','апрель','май','июнь','июль','август','сентябрь','октябрь','ноябрь','декабрь'];
 
+// ── Экран приветствия при первом заходе ─────────────────────────
+// Имя берём из ME (users.name = «Фамилия Имя») — второе слово.
+function _sdFirstName() {
+  const parts = String((typeof ME !== 'undefined' && ME && ME.name) || '').trim().split(/\s+/);
+  return parts.length >= 2 ? parts[1] : (parts[0] || '');
+}
+// Приветствие по локальному времени устройства специалиста.
+function _sdGreeting() {
+  const h = new Date().getHours();
+  if (h >= 5 && h < 12)  return ['Доброе утро', '🌅'];
+  if (h >= 12 && h < 17) return ['Добрый день', '☀️'];
+  if (h >= 17 && h < 23) return ['Добрый вечер', '🌆'];
+  return ['Доброй ночи', '🌙'];
+}
+function _sdHelloHtml() {
+  const [greet, emoji] = _sdGreeting();
+  const name = _sdFirstName();
+  return `
+    <div class="sd-hello">
+      <div class="sd-hello-emoji">${emoji}</div>
+      <h2>${greet}${name ? ', ' + _sdEsc(name) : ''}!</h2>
+      <div class="sd-hello-sub" id="sd-hello-step">Собираем актуальные данные…</div>
+      <div class="sd-hello-bar"><div class="sd-hello-fill"></div></div>
+    </div>`;
+}
+// Ротация статусов «что мы сейчас делаем» под приветствием.
+function _sdHelloSteps(root) {
+  const steps = ['Загружаем визиты…', 'Считаем выручку…', 'Сверяем цель месяца…', 'Почти готово…'];
+  let i = 0;
+  return setInterval(() => {
+    const el = root.querySelector('#sd-hello-step');
+    if (!el || i >= steps.length) return;
+    el.style.opacity = '0';
+    const txt = steps[i++];
+    setTimeout(() => { el.textContent = txt; el.style.opacity = '1'; }, 220);
+  }, 800);
+}
+
 async function loadStaffDashboard() {
   const page = document.querySelector('#page-staff-dashboard');
   if (page) page.hidden = false;
@@ -73,15 +111,40 @@ async function loadStaffDashboard() {
 async function _sdRender() {
   const root = _sdRoot();
   if (!root) return;
-  root.innerHTML = `<div class="pp-hint" style="padding:24px">Загрузка…</div>`;
+  // Первый заход — приветствие с анимацией сбора данных; при смене пресета
+  // не стираем контент, а приглушаем его, пока едут свежие данные.
+  const firstLoad = !root.dataset.loaded;
+  let stepTimer = null;
+  let minDelay = Promise.resolve();
+  if (firstLoad) {
+    root.innerHTML = _sdHelloHtml();
+    stepTimer = _sdHelloSteps(root);
+    minDelay = new Promise(r => setTimeout(r, 1500)); // чтобы приветствие успели прочитать
+  } else {
+    root.classList.add('sd-stale');
+  }
   let data;
   try {
     data = await api('GET',
       `/api/analytics/staff-dashboard?from=${_sdState.from}&to=${_sdState.to}`);
   } catch (e) {
+    if (stepTimer) clearInterval(stepTimer);
+    root.classList.remove('sd-stale');
     root.innerHTML = `<div class="pp-hint" style="color:#c00;padding:24px">Ошибка: ${_sdEsc(e.message)}</div>`;
     return;
   }
+  if (firstLoad) {
+    await minDelay;
+    clearInterval(stepTimer);
+    // добиваем прогресс-бар до 100% и даём анимации завершиться
+    const fill = root.querySelector('.sd-hello-fill');
+    const step = root.querySelector('#sd-hello-step');
+    if (fill) fill.classList.add('done');
+    if (step) { step.style.opacity = '1'; step.textContent = 'Готово!'; }
+    await new Promise(r => setTimeout(r, 350));
+  }
+  root.classList.remove('sd-stale');
+  root.dataset.loaded = '1';
 
   if (data && data.unlinked) {
     root.innerHTML = `
@@ -186,17 +249,17 @@ async function _sdRender() {
   })();
 
   root.innerHTML = `
-    <div class="sd-toolbar" style="display:flex;gap:8px;padding:14px 0;align-items:center;flex-wrap:wrap">
+    <div class="sd-toolbar">
       ${['today','week','month'].map(p => `
         <button class="btn ${p===_sdState.preset?'btn-pri':''}" data-preset="${p}">
           ${({today:'Сегодня',week:'Неделя',month:'Месяц'})[p]}
         </button>`).join('')}
       <span style="flex:1;min-width:12px"></span>
-      <span style="font-size:13px;color:var(--t3)">${s.staffName || ''} · ${_sdState.from} … ${_sdState.to}</span>
+      <span class="sd-meta">${s.staffName || ''} · ${_sdState.from} … ${_sdState.to}</span>
     </div>
     ${goalHtml}
-    <div class="sg" style="display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-top:${goalHtml ? '14px' : '0'}">
-      <div class="sc">
+    <div class="sd-g3" style="margin-top:${goalHtml ? '14px' : '0'}">
+      <div class="sc sd-card-rev">
         <div class="sl">Моя выручка за период</div>
         <div class="sv">₽ ${_sdFmtRub(s.periodRevenue)} ${cRev.badge}</div>${cRev.sub}
         <div style="margin-top:10px;border-top:1px solid var(--bd);padding-top:10px;font-size:13px;line-height:1.7">
@@ -212,7 +275,7 @@ async function _sdRender() {
       <div class="sc"><div class="sl">Первичных за период</div><div class="sv">${s.newClients} ${cNew.badge}</div>${cNew.sub}${cNew.ref}</div>
     </div>
 
-    <div class="sg" style="display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-top:14px">
+    <div class="sd-g4" style="margin-top:14px">
       <div class="sc">
         <div class="sl">Возвращаемость</div>
         <div class="sv">${s.retentionRate == null ? '—' : s.retentionRate + '%'} ${cRet.badge}</div>${cRet.sub}
@@ -249,7 +312,7 @@ async function _sdRender() {
       <div class="sl">Топ-5 услуг</div>
       ${data.topServices.length === 0
         ? '<div class="pp-hint" style="margin-top:10px">Нет данных за период</div>'
-        : `<table style="width:100%;margin-top:10px;font-size:13px;border-collapse:collapse">
+        : `<table class="sd-top5" style="width:100%;margin-top:10px;font-size:13px;border-collapse:collapse">
             <thead><tr style="border-bottom:1px solid var(--bd)">
               <th style="text-align:left;padding:8px 6px;color:var(--t3);font-weight:600">Услуга</th>
               <th style="text-align:right;padding:8px 6px;color:var(--t3);font-weight:600">Кол-во</th>

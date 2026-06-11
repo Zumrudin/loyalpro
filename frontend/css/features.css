@@ -205,3 +205,41 @@
 @media(max-width:480px){
   #page-settings{margin:-10px}                       /* совпадает с .content padding на ≤480 */
 }
+
+/* ─── STAFF DASHBOARD (личный кабинет специалиста) ─── */
+.sd-toolbar{display:flex;gap:8px;padding:14px 0;align-items:center;flex-wrap:wrap}
+.sd-meta{font-size:13px;color:var(--t3)}
+.sd-g3{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
+.sd-g4{display:grid;grid-template-columns:repeat(4,1fr);gap:14px}
+/* при перезагрузке данных (смена пресета) приглушаем старый контент */
+.sd-stale{opacity:.45;pointer-events:none;transition:opacity .2s}
+
+@media(max-width:1100px){
+  .sd-g4{grid-template-columns:repeat(2,1fr)}
+}
+@media(max-width:700px){
+  .sd-g3,.sd-g4{grid-template-columns:repeat(2,1fr);gap:10px}
+  .sd-card-rev{grid-column:1/-1}              /* выручка — на всю ширину */
+  #page-staff-dashboard .sc{padding:12px 14px}
+  #page-staff-dashboard .sv{font-size:20px;letter-spacing:-.3px}
+  .sd-toolbar{padding:10px 0;gap:6px}
+  .sd-toolbar .btn{padding:8px 12px;font-size:13px}
+  .sd-meta{flex-basis:100%;order:9;font-size:12px}
+  .sd-top5 th,.sd-top5 td{padding:6px 4px!important;font-size:12px}
+}
+@media(max-width:400px){
+  .sd-g3,.sd-g4{grid-template-columns:1fr}
+}
+
+/* ─── Экран приветствия + анимация сбора данных ─── */
+.sd-hello{min-height:55vh;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:40px 20px;animation:sdHelloIn .5s ease both}
+.sd-hello-emoji{font-size:46px;line-height:1;margin-bottom:16px;animation:sdFloat 2.4s ease-in-out infinite}
+.sd-hello h2{margin:0 0 10px;font-size:26px;letter-spacing:-.4px;color:var(--t1)}
+.sd-hello-sub{color:var(--t3);font-size:14px;min-height:20px;transition:opacity .25s}
+.sd-hello-bar{width:min(280px,72vw);height:6px;background:var(--bg);border:1px solid var(--bd);border-radius:4px;overflow:hidden;margin-top:20px}
+.sd-hello-fill{height:100%;width:0;background:linear-gradient(90deg,#19c39c,#13a05e);border-radius:4px;animation:sdFill 2.4s cubic-bezier(.25,.6,.3,1) forwards}
+.sd-hello-fill.done{animation:none;width:100%;transition:width .3s ease}
+@media(max-width:700px){.sd-hello h2{font-size:21px}.sd-hello-emoji{font-size:38px}}
+@keyframes sdFill{0%{width:0}70%{width:76%}100%{width:90%}}
+@keyframes sdFloat{0%,100%{transform:translateY(0)}50%{transform:translateY(-6px)}}
+@keyframes sdHelloIn{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
