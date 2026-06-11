@@ -233,20 +233,28 @@ router.get('/analytics/staff-dashboard', auth, async (req, res) => {
               WHERE r.salon_id=$1 AND r.status IN ('completed','arrived')
                 AND COALESCE((r.visit_datetime AT TIME ZONE 'Europe/Moscow')::date, r.visit_date::date) BETWEEN $2::date AND $3::date
                 AND COALESCE((r.raw_payload->'staff'->>'id')::int, (r.raw_payload->'staff'->0->>'id')::int) = $4`, p),
-      // goods/abonement: только если YClients ЯВНО указал мастера в payload-операции
-      // (raw_payload.data.master[0].id = ourYC). Если master пуст — значит продал
-      // ресепшен/админ, и эту сумму НЕ относим к специалисту. Привязка через
-      // record_id некорректна для товаров и абонементов (на визите специалиста
-      // могли продать что угодно через кассу — это не его выручка).
+      // goods/abonement: считаем через связь с визитом (yclients_record_id).
+      // Если товар/абонемент продана во время визита, то выручка идёт мастеру визита.
+      // Если продажа не привязана к визиту — берём directly из operation данные:
+      // если raw_payload.data.master[0].id указан явно, считаем по нему; иначе скипаем.
       // Услуги (`services`) считаем отдельно — через records.amount (см. ниже),
       // чтобы итог совпадал с total визитов и не уплывал из-за частичных оплат.
       db.any(`SELECT ro.category, COALESCE(SUM(ro.amount),0) AS total
               FROM revenue_operations ro
+              LEFT JOIN records r ON r.salon_id=$1 AND r.yclients_record_id = ro.yclients_record_id
               WHERE ro.salon_id=$1 AND ro.operation_date BETWEEN $2::date AND $3::date
                 AND ro.category IN ('goods','abonement')
-                AND jsonb_typeof(ro.raw_payload->'data'->'master') = 'array'
-                AND jsonb_array_length(ro.raw_payload->'data'->'master') > 0
-                AND (ro.raw_payload->'data'->'master'->0->>'id')::int = $4
+                AND (
+                  -- Если есть связь к визиту: кредитуем мастера визита
+                  (r.id IS NOT NULL
+                   AND COALESCE((r.raw_payload->'staff'->>'id')::int, (r.raw_payload->'staff'->0->>'id')::int) = $4)
+                  OR
+                  -- Если нет — считаем операцию, только если master явно указан
+                  (r.id IS NULL
+                   AND jsonb_typeof(ro.raw_payload->'data'->'master') = 'array'
+                   AND jsonb_array_length(ro.raw_payload->'data'->'master') > 0
+                   AND (ro.raw_payload->'data'->'master'->0->>'id')::int = $4)
+                )
               GROUP BY ro.category`, p),
       // «Не пришли» — визиты со статусом no_show за период, где мастер = специалист.
       // Сюда специально НЕ фильтруем по completed/arrived (как остальные метрики),
