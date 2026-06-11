@@ -7,7 +7,7 @@ const { runMigrations } = require('./migrations');
 const { runSync }           = require('./services/loyalty');
 const { syncGoodsCategories } = require('./services/home-care');
 const { syncGoodsCatalog }    = require('./services/yclients-goods-catalog');
-const { syncStaffData }     = require('./services/staff');
+const { syncStaffData, syncGoodsSales } = require('./services/staff');
 const { refreshSegments }   = require('./services/segments');
 const { processS3Orphans }  = require('./services/patient-portfolio');
 const s3                    = require('./services/s3');
@@ -158,6 +158,7 @@ cron.schedule('0 * * * *', async () => {
     );
     for (const salon of salons) {
       syncStaffData(salon).catch(e => cronLogger.error(`StaffSync salon=${salon.id}: ${e.message}`));
+      syncGoodsSales(salon.id).catch(e => cronLogger.error(`GoodsSalesSync salon=${salon.id}: ${e.message}`));
     }
   } catch (e) { cronLogger.error(`StaffSync cron: ${e.message}`); }
 });
