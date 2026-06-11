@@ -143,6 +143,48 @@ async function _sdRender() {
   if (pM) cGoods.ref =
     `<div style="font-size:12px;color:var(--t3);margin-top:8px;border-top:1px dashed var(--bd);padding-top:6px">${mLabel}: <b>${fmtInt(pM.goodsCount)} шт на ${fmtRub(pM.goodsRevenue)}</b></div>`;
 
+  // ── Цель месяца ─────────────────────────────────────────────────
+  // Личный план (услуги ₽ + товары ₽), который ставит руководитель на
+  // странице «Сотрудники». Всегда за текущий календарный месяц,
+  // независимо от пресета. Цвет — по прогнозу на конец месяца.
+  const goalHtml = (() => {
+    const g = data.goal;
+    if (!g) return '';
+    const goalBar = (lbl, o) => {
+      if (!(parseFloat(o.target) > 0)) return '';
+      const pct = Math.round(o.fact / o.target * 100);
+      const fc  = Math.round(o.forecast / o.target * 100);
+      const color = fc >= 100 ? '#13a05e' : fc >= 80 ? '#e8a23d' : '#d23f3f';
+      const fcTxt = fc >= 100
+        ? `Прогноз: ₽ ${_sdFmtRub(o.forecast)} — план будет выполнен ✓`
+        : `Прогноз: ₽ ${_sdFmtRub(o.forecast)} (${fc}% плана)`;
+      return `
+        <div style="margin-top:12px">
+          <div style="display:flex;justify-content:space-between;gap:8px;font-size:13px;margin-bottom:4px;flex-wrap:wrap">
+            <span><b>${lbl}</b>: ₽ ${_sdFmtRub(o.fact)} <span style="color:var(--t3)">из ₽ ${_sdFmtRub(o.target)}</span></span>
+            <b style="color:${color}">${Math.min(999, pct)}%</b>
+          </div>
+          <div style="height:10px;background:var(--bg);border-radius:5px;overflow:hidden">
+            <div style="height:100%;width:${Math.min(100, pct)}%;background:${color};border-radius:5px"></div>
+          </div>
+          <div style="font-size:12px;color:${color};margin-top:4px">${fcTxt}</div>
+        </div>`;
+    };
+    const mIdx = parseInt(g.month.slice(5, 7), 10) - 1;
+    const daysInfo = g.plannedDays > 0
+      ? `отработано ${g.workedDays} из ${g.plannedDays} раб. дней`
+      : `прошло ${g.elapsedDays} из ${g.daysTotal} дней`;
+    return `
+      <div class="sc" style="margin-top:14px">
+        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px">
+          <div class="sl">🎯 Цель на ${_SD_MON_NOM[mIdx]}</div>
+          <span style="font-size:11px;color:var(--t3)">${daysInfo}</span>
+        </div>
+        ${goalBar('Услуги', g.services)}
+        ${goalBar('Товары', g.goods)}
+      </div>`;
+  })();
+
   root.innerHTML = `
     <div class="sd-toolbar" style="display:flex;gap:8px;padding:14px 0;align-items:center;flex-wrap:wrap">
       ${['today','week','month'].map(p => `
@@ -152,8 +194,8 @@ async function _sdRender() {
       <span style="flex:1;min-width:12px"></span>
       <span style="font-size:13px;color:var(--t3)">${s.staffName || ''} · ${_sdState.from} … ${_sdState.to}</span>
     </div>
-
-    <div class="sg" style="display:grid;grid-template-columns:repeat(3,1fr);gap:14px">
+    ${goalHtml}
+    <div class="sg" style="display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-top:${goalHtml ? '14px' : '0'}">
       <div class="sc">
         <div class="sl">Моя выручка за период</div>
         <div class="sv">₽ ${_sdFmtRub(s.periodRevenue)} ${cRev.badge}</div>${cRev.sub}

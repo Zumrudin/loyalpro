@@ -334,7 +334,7 @@ router.get('/analytics/staff-dashboard', auth, async (req, res) => {
 
     // Привязка → yclients_staff_id
     const link = await db.oneOrNone(`
-      SELECT sm.yclients_staff_id, sm.name AS staff_name
+      SELECT sm.id AS staff_member_id, sm.yclients_staff_id, sm.name AS staff_name
       FROM users u JOIN staff_members sm ON sm.id = u.staff_member_id
       WHERE u.id = $1 AND sm.salon_id = $2
     `, [uid, sid]);
@@ -348,7 +348,11 @@ router.get('/analytics/staff-dashboard', auth, async (req, res) => {
     // число) — для честной динамики, пока текущий месяц не закончился.
     const cmp = require('../services/staff-dashboard').prevMonthRanges(to);
 
-    const [stats, top, daily, prevMonthStats, prevWindowOwn] = await Promise.all([
+    // «Цель месяца»: личный план специалиста — всегда за текущий календарный
+    // месяц (по МСК), независимо от выбранного периода from/to.
+    const todayMsk = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Moscow' }).format(new Date());
+
+    const [stats, top, daily, prevMonthStats, prevWindowOwn, goal] = await Promise.all([
       computeSpecialistStats(sid, yc, from, to),
       db.any(`SELECT svc->>'title' AS service_name, COUNT(DISTINCT r.id) AS cnt,
                      SUM((svc->>'cost_to_pay')::numeric) AS total_amount
@@ -369,6 +373,11 @@ router.get('/analytics/staff-dashboard', auth, async (req, res) => {
       // Если «то же число» — конец прошлого месяца, отрезок совпадает с целым
       // месяцем: не считаем дважды, переиспользуем prevMonthStats ниже.
       cmp.windowTo === cmp.monthTo ? null : computeSpecialistStats(sid, yc, cmp.windowFrom, cmp.windowTo),
+      // null если план не задан — карточка цели на фронте не показывается.
+      // Ошибки не валят весь дашборд.
+      require('../services/staff-goals')
+        .getGoalForStaff(sid, link.staff_member_id, yc, todayMsk.slice(0, 7), todayMsk)
+        .catch(e => { logger.warn?.(`staff-goals failed for staff=${yc}: ${e.message}`); return null; }),
     ]);
 
     res.json({
@@ -376,6 +385,7 @@ router.get('/analytics/staff-dashboard', auth, async (req, res) => {
       topServices: top,
       dailyRevenue: daily,
       period: { from, to },
+      goal,
       comparison: {
         prevMonth:  { from: cmp.monthFrom,  to: cmp.monthTo,  stats: prevMonthStats },
         prevWindow: { from: cmp.windowFrom, to: cmp.windowTo, stats: prevWindowOwn || prevMonthStats },

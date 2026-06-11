@@ -335,6 +335,23 @@
         </div>
       </div>
 
+      <!-- Планы на месяц («Цель месяца») -->
+      <div class="card mb" id="sg-card">
+        <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px">
+          <div class="ct">🎯 Планы на месяц</div>
+          <div style="display:flex;align-items:center;gap:8px">
+            <button class="btn btn-sec btn-sm" onclick="sgChangeMonth(-1)">◀</button>
+            <b id="sg-month-label" style="min-width:130px;text-align:center"></b>
+            <button class="btn btn-sec btn-sm" onclick="sgChangeMonth(1)">▶</button>
+          </div>
+        </div>
+        <div style="font-size:12px;color:var(--t3);margin:6px 0 12px">
+          План по выручке от услуг и продажам товаров на месяц. Прогноз — по рабочим дням мастера
+          (если расписание не загружено — по календарным). Специалист видит свой план на личном дашборде.
+        </div>
+        <div id="sg-table"></div>
+      </div>
+
       <div id="sa-empty" style="text-align:center;padding:60px 20px;color:var(--t3)">
         <div style="font-size:42px;margin-bottom:12px">📊</div>
         <div style="font-size:15px;font-weight:600;margin-bottom:6px">Выберите сотрудника</div>
@@ -1649,14 +1666,14 @@ function fireConfetti() {
 
 // submitBonus → js/pages/clients.js
 </script>
-<script src="js/pages/staff.js"></script>
+<script src="js/pages/staff.js?v=2026-06-11a"></script>
 <script src="js/pages/home-care.js?v=2026-06-02c"></script>
 <script src="js/pages/segments.js"></script>
 <script src="js/pages/records.js"></script>
 <script src="js/pages/settings.js"></script>
 <script src="js/pages/portfolio.js"></script>
 <script src="js/pages/patient-portfolio.js?v=2026-06-01e"></script>
-<script src="js/pages/staff-dashboard.js?v=2026-06-02f"></script>
+<script src="js/pages/staff-dashboard.js?v=2026-06-11a"></script>
 <script src="js/pages/users.js"></script>
 <script src="js/pages/clients.js"></script>
 <script src="js/pages/dashboard.js"></script>

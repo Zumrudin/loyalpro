@@ -177,6 +177,38 @@ router.post('/staff-analytics/sync', auth, async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// ── Планы на месяц («Цель месяца») ──────────────────────────────
+const { getGoalsOverview, upsertGoal } = require('../services/staff-goals');
+
+function mskTodayStr() {
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Moscow' }).format(new Date());
+}
+
+// GET /api/staff-goals?month=YYYY-MM — все мастера с планом/фактом/прогнозом
+router.get('/staff-goals', auth, async (req, res) => {
+  try {
+    const today = mskTodayStr();
+    const month = /^\d{4}-\d{2}$/.test(req.query.month || '') ? req.query.month : today.slice(0, 7);
+    res.json({ month, goals: await getGoalsOverview(req.user.salonId, month, today) });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// PUT /api/staff-goals — upsert {staffMemberId, month:'YYYY-MM', servicesTarget, goodsTarget}
+router.put('/staff-goals', auth, async (req, res) => {
+  try {
+    const { staffMemberId, month, servicesTarget, goodsTarget } = req.body;
+    const smId = parseInt(staffMemberId, 10);
+    if (!smId || !/^\d{4}-\d{2}$/.test(month || ''))
+      return res.status(400).json({ error: 'staffMemberId и month (YYYY-MM) обязательны' });
+    const sv = parseFloat(servicesTarget), gv = parseFloat(goodsTarget);
+    if (!isFinite(sv) || sv < 0 || !isFinite(gv) || gv < 0)
+      return res.status(400).json({ error: 'Планы должны быть числами ≥ 0' });
+    const row = await upsertGoal(req.user.salonId, smId, month, sv, gv);
+    if (!row) return res.status(404).json({ error: 'Сотрудник не найден' });
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 router.post('/goods-sales/sync', auth, async (req, res) => {
   try { res.json({ ok: true, ...(await syncGoodsSales(req.user.salonId)) }); }
   catch (e) { res.status(500).json({ error: e.message }); }

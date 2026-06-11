@@ -6,6 +6,7 @@ const saSparkCharts = {};
 
 async function loadStaffAnalytics() {
   saInitDates();
+  sgLoad();
   try {
     const d = await api('GET', '/api/staff-analytics/staff');
     const sel = document.getElementById('sa-staff');
@@ -245,6 +246,112 @@ function saRenderInsights(m) {
       <div class="sa-insight-icon">${i.icon}</div>
       <div><div class="sa-insight-title">${i.title}</div><div class="sa-insight-body">${i.body}</div></div>
     </div>`).join('');
+}
+
+// ── Планы на месяц («Цель месяца») ─────────────────────────────
+// Раздел над аналитикой: руководитель ставит каждому мастеру план на
+// месяц (услуги ₽ + товары ₽) и видит факт/прогресс/прогноз.
+let sgMonth = null; // 'YYYY-MM'
+
+const SG_MONTHS = ['Январь','Февраль','Март','Апрель','Май','Июнь','Июль','Август','Сентябрь','Октябрь','Ноябрь','Декабрь'];
+
+function sgCurMonth() {
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Moscow' }).format(new Date()).slice(0, 7);
+}
+
+async function sgLoad() {
+  if (!sgMonth) sgMonth = sgCurMonth();
+  const [y, m] = sgMonth.split('-').map(Number);
+  document.getElementById('sg-month-label').textContent = `${SG_MONTHS[m - 1]} ${y}`;
+  const box = document.getElementById('sg-table');
+  box.innerHTML = '<div style="color:var(--t3);padding:10px">Загрузка…</div>';
+  try {
+    const d = await api('GET', `/api/staff-goals?month=${sgMonth}`);
+    sgRender(d.goals || []);
+  } catch (e) {
+    box.innerHTML = `<div style="color:#c00;padding:10px">Ошибка: ${esc(e.message)}</div>`;
+  }
+}
+
+function sgChangeMonth(delta) {
+  const [y, m] = sgMonth.split('-').map(Number);
+  sgMonth = new Date(Date.UTC(y, m - 1 + delta, 1)).toISOString().slice(0, 7);
+  sgLoad();
+}
+
+// Прогресс-ячейка: факт из плана + бар + прогноз. Цвет — по прогнозу:
+// зелёный ≥100% плана, жёлтый ≥80%, красный ниже.
+function sgProgress(fact, target, forecast) {
+  const f = Math.round(fact).toLocaleString('ru');
+  if (!(target > 0)) {
+    return `<div style="font-size:12px">₽ ${f}</div><div style="font-size:11px;color:var(--t3)">план не задан</div>`;
+  }
+  const pct = Math.round(fact / target * 100);
+  const fc  = Math.round(forecast / target * 100);
+  const color = fc >= 100 ? '#13a05e' : fc >= 80 ? '#e8a23d' : '#d23f3f';
+  return `
+    <div style="display:flex;justify-content:space-between;gap:6px;font-size:12px;margin-bottom:3px">
+      <span>₽ ${f} <span style="color:var(--t3)">из ${Math.round(target).toLocaleString('ru')}</span></span><b>${pct}%</b>
+    </div>
+    <div style="height:6px;background:var(--bg);border-radius:3px;overflow:hidden">
+      <div style="height:100%;width:${Math.min(100, pct)}%;background:${color};border-radius:3px"></div>
+    </div>
+    <div style="font-size:11px;color:${color};margin-top:3px">прогноз: ₽ ${Math.round(forecast).toLocaleString('ru')} (${fc}%)</div>`;
+}
+
+function sgRender(rows) {
+  const box = document.getElementById('sg-table');
+  if (!rows.length) {
+    box.innerHTML = '<div style="color:var(--t3);padding:10px">Нет сотрудников — выполните синхронизацию.</div>';
+    return;
+  }
+  box.innerHTML = `
+    <div style="overflow-x:auto"><table style="width:100%;font-size:13px;border-collapse:collapse;min-width:760px">
+      <thead><tr style="border-bottom:1px solid var(--bd);color:var(--t3)">
+        <th style="text-align:left;padding:8px 6px;font-weight:600">Сотрудник</th>
+        <th style="text-align:right;padding:8px 6px;font-weight:600">План: услуги, ₽</th>
+        <th style="text-align:left;padding:8px 6px;font-weight:600;width:24%">Выполнение: услуги</th>
+        <th style="text-align:right;padding:8px 6px;font-weight:600">План: товары, ₽</th>
+        <th style="text-align:left;padding:8px 6px;font-weight:600;width:24%">Выполнение: товары</th>
+        <th style="padding:8px 6px"></th>
+      </tr></thead>
+      <tbody>
+        ${rows.map(r => `
+          <tr style="border-bottom:1px solid var(--bg)">
+            <td style="padding:8px 6px"><b>${esc(r.name || 'Без имени')}</b>
+              ${r.specialization ? `<div style="font-size:11px;color:var(--t3)">${esc(r.specialization)}</div>` : ''}
+              ${r.planned_days > 0 ? `<div style="font-size:11px;color:var(--t3)">${r.worked_days} из ${r.planned_days} раб. дн.</div>` : ''}
+            </td>
+            <td style="padding:8px 6px;text-align:right">
+              <input id="sg-sv-${r.staff_member_id}" type="number" min="0" step="1000"
+                value="${r.has_goal ? r.services_target : ''}" placeholder="—"
+                class="sa-inp" style="width:110px;text-align:right">
+            </td>
+            <td style="padding:8px 6px">${sgProgress(r.services_fact, r.services_target, r.services_forecast)}</td>
+            <td style="padding:8px 6px;text-align:right">
+              <input id="sg-gv-${r.staff_member_id}" type="number" min="0" step="1000"
+                value="${r.has_goal ? r.goods_target : ''}" placeholder="—"
+                class="sa-inp" style="width:110px;text-align:right">
+            </td>
+            <td style="padding:8px 6px">${sgProgress(r.goods_fact, r.goods_target, r.goods_forecast)}</td>
+            <td style="padding:8px 6px;text-align:right">
+              <button class="btn btn-pri btn-sm" onclick="sgSave(${r.staff_member_id}, this)">Сохранить</button>
+            </td>
+          </tr>`).join('')}
+      </tbody>
+    </table></div>`;
+}
+
+async function sgSave(staffMemberId, btn) {
+  const sv = parseFloat(document.getElementById('sg-sv-' + staffMemberId).value) || 0;
+  const gv = parseFloat(document.getElementById('sg-gv-' + staffMemberId).value) || 0;
+  btn.disabled = true;
+  try {
+    await api('PUT', '/api/staff-goals', { staffMemberId, month: sgMonth, servicesTarget: sv, goodsTarget: gv });
+    notify('План сохранён', 'ok');
+    sgLoad();
+  } catch (e) { notify('Ошибка: ' + e.message, 'err'); }
+  finally { btn.disabled = false; }
 }
 
 async function saSyncStaff() {

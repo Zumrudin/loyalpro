@@ -558,6 +558,22 @@ async function runMigrations(client) {
     CREATE INDEX IF NOT EXISTS idx_users_staff_member
       ON users (staff_member_id) WHERE staff_member_id IS NOT NULL
   `).catch(() => {});
+
+  // ── Staff monthly goals («Цель месяца») ────────────────────────
+  // month — всегда 1-е число месяца. Планы в ₽: услуги и товары раздельно.
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS staff_goals (
+      id SERIAL PRIMARY KEY,
+      salon_id INTEGER NOT NULL REFERENCES salons(id) ON DELETE CASCADE,
+      staff_member_id INTEGER NOT NULL REFERENCES staff_members(id) ON DELETE CASCADE,
+      month DATE NOT NULL,
+      services_target NUMERIC(12,2) NOT NULL DEFAULT 0,
+      goods_target NUMERIC(12,2) NOT NULL DEFAULT 0,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE (salon_id, staff_member_id, month)
+    )
+  `).catch(() => {});
 }
 
 module.exports = { runMigrations };
