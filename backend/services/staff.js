@@ -39,24 +39,34 @@ async function syncStaffData(salon) {
       const lastDay = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate();
       const startDate = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-01`;
 
+      const endDate = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(lastDay).padStart(2,'0')}`;
       for (const s of staffList) {
         try {
-          const sched = await ycGet(salon, `/schedule/${salon.yclients_company_id}/${s.id}`, {
-            date: startDate, count: lastDay
-          });
+          // YClients: даты — сегменты пути (/schedule/{cid}/{staff}/{from}/{to});
+          // query-вариант с date/count возвращает 405. Ответ: {date, is_working, slots:[{from,to}]}.
+          const sched = await ycGet(salon,
+            `/schedule/${salon.yclients_company_id}/${s.id}/${startDate}/${endDate}`, {});
           if (!Array.isArray(sched)) continue;
           for (const day of sched) {
             if (!day.date) continue;
-            const wm = day.is_off ? 0 : calcWorkMinutes(day.from, day.to);
+            const slots = Array.isArray(day.slots) ? day.slots : [];
+            const working = day.is_working && slots.length > 0;
+            const wm = working
+              ? slots.reduce((sum, sl) => sum + calcWorkMinutes(sl.from, sl.to), 0)
+              : 0;
+            const fromT = working ? slots[0].from : null;
+            const toT   = working ? slots[slots.length - 1].to : null;
             await db.query(`
               INSERT INTO staff_schedule (salon_id, yclients_staff_id, date, from_time, to_time, work_minutes)
               VALUES ($1, $2, $3, $4, $5, $6)
               ON CONFLICT (salon_id, yclients_staff_id, date)
               DO UPDATE SET from_time=$4, to_time=$5, work_minutes=$6
-            `, [salon.id, s.id, day.date, day.from || null, day.to || null, wm]);
+            `, [salon.id, s.id, day.date, fromT, toT, wm]);
           }
           await new Promise(r => setTimeout(r, 150));
-        } catch { /* schedule endpoint may vary by plan */ }
+        } catch (e) {
+          logger.warn(`Schedule sync failed staff=${s.id}: ${e.message}`);
+        }
       }
     }
     logger.info(`Salon ${salon.id}: ${staffList.length} staff synced`);
