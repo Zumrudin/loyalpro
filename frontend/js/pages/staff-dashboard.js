@@ -534,7 +534,6 @@ function _sdRenderChart(wrap, rows) {
     (rows.length <= 14 || i % step === 0)
       ? `<text class="sd-chart-x" x="${pts[i][0].toFixed(1)}" y="${H - 8}" text-anchor="middle">${fmtD(r.d)}</text>` : ''
   ).join('');
-  const pathLen = 2200; // безопасно больше реальной длины — для stroke-dash анимации
 
   wrap.innerHTML = `
     <svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" style="height:200px">
@@ -545,8 +544,7 @@ function _sdRenderChart(wrap, rows) {
         </linearGradient>
       </defs>
       <path class="sd-chart-area" d="${area}" fill="url(#sdAg)" style="opacity:0;transition:opacity .5s ease .4s"/>
-      <path class="sd-chart-line" d="${d}"
-        style="stroke-dasharray:${pathLen};stroke-dashoffset:${pathLen};transition:stroke-dashoffset .9s ease"/>
+      <path class="sd-chart-line" d="${d}"/>
       <line class="sd-chart-guide" x1="0" y1="${padT}" x2="0" y2="${H - padB}"/>
       <circle class="sd-chart-dot" r="5" cx="0" cy="0"/>
       ${xLabels}
@@ -556,13 +554,24 @@ function _sdRenderChart(wrap, rows) {
 
   const svg = wrap.querySelector('svg');
   const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-  requestAnimationFrame(() => requestAnimationFrame(() => {
+  {
     const line = svg.querySelector('.sd-chart-line');
     const areaEl = svg.querySelector('.sd-chart-area');
-    if (reduced) { line.style.transition = 'none'; areaEl.style.transition = 'none'; }
-    line.style.strokeDashoffset = '0';
-    areaEl.style.opacity = '1';
-  }));
+    if (reduced) {
+      areaEl.style.transition = 'none';
+      areaEl.style.opacity = '1';
+    } else {
+      // Точная длина пути → анимация отрисовки без обрезания на длинных кривых.
+      const len = line.getTotalLength();
+      line.style.strokeDasharray = len;
+      line.style.strokeDashoffset = len;
+      requestAnimationFrame(() => requestAnimationFrame(() => {
+        line.style.transition = 'stroke-dashoffset .9s ease';
+        line.style.strokeDashoffset = '0';
+        areaEl.style.opacity = '1';
+      }));
+    }
+  }
 
   // Hover: ближайшая точка → направляющая + точка + тултип
   const guide = svg.querySelector('.sd-chart-guide');
