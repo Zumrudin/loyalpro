@@ -156,7 +156,7 @@ async function _ppRenderFeed() {
     const media = urls.length === 0
       ? '<div class="cc-noimg">нет фото</div>'
       : `<div class="cc-preview-strip" data-n="${urls.length}">
-           ${urls.map(u => `<img src="${_ppEsc(u)}" alt="">`).join('')}
+           ${urls.map(u => `<img src="${_ppEsc(u)}" loading="lazy" decoding="async" alt="">`).join('')}
          </div>`;
     return `
       <div class="case-card pp-tile" data-visit-id="${v.id}" data-client-id="${v.client_id}">
@@ -253,7 +253,7 @@ async function _ppRenderPatient() {
       ${cases.length === 0 ? '<div class="pp-empty">Альбомов пока нет — нажмите «+ Новый альбом»</div>' :
         cases.map(v => `
           <div class="case-card pp-row" data-visit-id="${v.id}">
-            ${v.preview_url ? `<img class="pp-row-img" src="${_ppEsc(v.preview_url)}" alt="">` : '<div class="pp-row-noimg">нет фото</div>'}
+            ${v.preview_url ? `<img class="pp-row-img" src="${_ppEsc(v.preview_url)}" loading="lazy" decoding="async" alt="">` : '<div class="pp-row-noimg">нет фото</div>'}
             <div class="pp-row-body">
               <div class="cc-name">${_ppEsc(_ppFmtDate(v.visit_date))}</div>
               <div class="cc-meta">${_ppEsc(v.specialist_name || '—')} • ${v.photos_count} фото • ${v.comments_count} комм.</div>
@@ -368,7 +368,7 @@ async function _ppRenderAlbum() {
            ${fileInput(key)}
          </label>`
       : `<div class="pp-stage-grid">
-           ${photos.map(p => `<img class="pp-thumb" src="${_ppEsc(p.url_thumb)}" data-photo-id="${p.id}" data-medium="${_ppEsc(p.url_medium)}" alt="">`).join('')}
+           ${photos.map(p => `<img class="pp-thumb" src="${_ppEsc(p.url_thumb)}" loading="lazy" decoding="async" data-photo-id="${p.id}" data-medium="${_ppEsc(p.url_medium)}" alt="">`).join('')}
          </div>`;
     return `
       <section class="pp-stage pp-stage--${key}">

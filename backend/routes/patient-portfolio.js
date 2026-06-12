@@ -35,6 +35,22 @@ async function loadPhoto(photoId, salonId) {
   return p;
 }
 
+// Батч-загрузка превью-фото для списка визитов одним запросом (вместо N+1).
+// Возвращает Map<visitId, photos[]>, фото упорядочены stage, sort_order, id.
+async function loadPhotosByVisit(visitIds) {
+  const map = new Map();
+  if (!visitIds.length) return map;
+  const photos = await db.any(
+    `SELECT case_visit_id, id, stage, s3_key_thumb FROM case_photos
+     WHERE case_visit_id = ANY($1::int[])
+     ORDER BY case_visit_id, stage, sort_order, id`, [visitIds]);
+  for (const p of photos) {
+    if (!map.has(p.case_visit_id)) map.set(p.case_visit_id, []);
+    map.get(p.case_visit_id).push(p);
+  }
+  return map;
+}
+
 // ─── COURSES ──────────────────────────────────────────────────────
 router.get('/clients/:clientId/courses', wrap(async (req, res) => {
   const rows = await db.any(`
@@ -108,13 +124,14 @@ router.get('/clients/:clientId/cases', wrap(async (req, res) => {
     LIMIT $${params.length}
   `, params);
 
-  for (const v of rows) {
-    const photos = await db.any(
-      `SELECT id, stage, s3_key_thumb FROM case_photos WHERE case_visit_id=$1`, [v.id]);
+  // Батч вместо N+1 (см. loadPhotosByVisit)
+  const photosByVisit = await loadPhotosByVisit(rows.map(v => v.id));
+  await Promise.all(rows.map(async (v) => {
+    const photos = photosByVisit.get(v.id) || [];
     const pick = svc.pickThumbForCard(photos);
     v.preview_url = pick ? await s3.presignGet(pick.s3_key_thumb) : null;
     Object.assign(v, svc.stageFlags(photos));
-  }
+  }));
   res.json(rows);
 }));
 
@@ -138,18 +155,18 @@ router.get('/visits/recent', wrap(async (req, res) => {
     ORDER BY v.created_at DESC, v.id DESC
     LIMIT $2 OFFSET $3
   `, [sid(req), limit, offset]);
-  for (const v of rows) {
-    // ORDER BY stage,sort_order,id — pickPreviewSet берёт первое в каждой стадии
-    const photos = await db.any(
-      `SELECT id, stage, s3_key_thumb FROM case_photos
-       WHERE case_visit_id=$1
-       ORDER BY stage, sort_order, id`, [v.id]);
+  // Один батч-запрос вместо N+1: при limit=60 и удалённой БД (~40мс RTT)
+  // цикл по визитам давал бы ~2.5с только на сетевые задержки.
+  // ORDER BY stage,sort_order,id — pickPreviewSet берёт первое в каждой стадии
+  const photosByVisit = await loadPhotosByVisit(rows.map(v => v.id));
+  await Promise.all(rows.map(async (v) => {
+    const photos = photosByVisit.get(v.id) || [];
     const picks = svc.pickPreviewSet(photos, 3);
     v.preview_urls = await Promise.all(picks.map(p => s3.presignGet(p.s3_key_thumb)));
     // Бэквард-совместимость: оставляем preview_url=первая миниатюра, чтобы старый JS не падал
     v.preview_url = v.preview_urls[0] || null;
     Object.assign(v, svc.stageFlags(photos));
-  }
+  }));
   res.json(rows);
 }));
 

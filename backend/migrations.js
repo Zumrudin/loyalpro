@@ -500,6 +500,8 @@ async function runMigrations(client) {
   await client.query(`CREATE UNIQUE INDEX IF NOT EXISTS uq_case_visits_record ON case_visits (salon_id, record_id) WHERE record_id IS NOT NULL`).catch(() => {});
   await client.query(`CREATE INDEX IF NOT EXISTS idx_case_visits_client_date ON case_visits (salon_id, client_id, visit_date DESC)`).catch(() => {});
   await client.query(`CREATE INDEX IF NOT EXISTS idx_case_visits_course ON case_visits (course_id) WHERE course_id IS NOT NULL`).catch(() => {});
+  // Лента «Фото-кейсы» (/visits/recent): WHERE salon_id ORDER BY created_at DESC, id DESC
+  await client.query(`CREATE INDEX IF NOT EXISTS idx_case_visits_salon_created ON case_visits (salon_id, created_at DESC, id DESC)`).catch(() => {});
 
   await client.query(`
     CREATE TABLE IF NOT EXISTS case_photos (
