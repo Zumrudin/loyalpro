@@ -223,11 +223,11 @@ async function computeSpecialistStats(sid, yc, from, to) {
             WHERE r.salon_id=$1 AND r.status IN ('completed','arrived')
               AND COALESCE((r.visit_datetime AT TIME ZONE 'Europe/Moscow')::date, r.visit_date::date) BETWEEN $2::date AND $3::date
               AND COALESCE((r.raw_payload->'staff'->>'id')::int, (r.raw_payload->'staff'->0->>'id')::int) = $4`, p),
-      // abonement: считаем по «на кого записана продажа» — sold_by_yc_staff_id
-      // (master_id товарной транзакции YClients). Транзакцию проводит админ,
-      // но продажа записывается на конкретного сотрудника — кредитуем его,
-      // а не мастера привязанного визита.
-      // goods (и abonement без атрибуции — старые строки/сбой API): fallback —
+      // goods/abonement: считаем по «на кого записана продажа» —
+      // sold_by_yc_staff_id (master_id товарной транзакции YClients).
+      // Транзакцию проводит админ, но продажа записывается на конкретного
+      // сотрудника — кредитуем его, а не мастера привязанного визита.
+      // Операции без атрибуции (старые строки/сбой API): fallback —
       // мастер визита по yclients_record_id, иначе явный master[0] из payload.
       // Услуги (`services`) считаем отдельно — через records.amount (см. ниже),
       // чтобы итог совпадал с total визитов и не уплывал из-за частичных оплат.
@@ -237,11 +237,10 @@ async function computeSpecialistStats(sid, yc, from, to) {
               WHERE ro.salon_id=$1 AND ro.operation_date BETWEEN $2::date AND $3::date
                 AND ro.category IN ('goods','abonement')
                 AND (
-                  -- Абонемент с явной атрибуцией: только сотрудник продажи
-                  (ro.category='abonement' AND ro.sold_by_yc_staff_id IS NOT NULL
-                   AND ro.sold_by_yc_staff_id = $4)
+                  -- Явная атрибуция: только сотрудник, на кого записана продажа
+                  (ro.sold_by_yc_staff_id IS NOT NULL AND ro.sold_by_yc_staff_id = $4)
                   OR
-                  ((ro.category='goods' OR ro.sold_by_yc_staff_id IS NULL) AND (
+                  (ro.sold_by_yc_staff_id IS NULL AND (
                     -- Если есть связь к визиту: кредитуем мастера визита
                     (r.id IS NOT NULL
                      AND COALESCE((r.raw_payload->'staff'->>'id')::int, (r.raw_payload->'staff'->0->>'id')::int) = $4)

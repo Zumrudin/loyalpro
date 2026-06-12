@@ -68,10 +68,12 @@ async function fetchMonthFacts(salonId, from, to) {
             WHERE r.salon_id=$1 AND r.status IN ('completed','arrived')
               AND COALESCE((r.visit_datetime AT TIME ZONE 'Europe/Moscow')::date, r.visit_date::date) BETWEEN $2::date AND $3::date
             GROUP BY 1`, [salonId, from, to]),
-    // Товары: если операция привязана к визиту — кредитуем мастера визита,
-    // иначе — явного master[0] из payload операции (та же логика, что byCat
-    // в /api/analytics/staff-dashboard).
+    // Товары: приоритет — «на кого записана продажа» (sold_by_yc_staff_id,
+    // master_id товарной транзакции YClients). Fallback для операций без
+    // атрибуции: мастер привязанного визита, иначе явный master[0] из payload
+    // (та же логика, что byCat в /api/analytics/staff-dashboard).
     db.any(`SELECT COALESCE(
+                     ro.sold_by_yc_staff_id,
                      CASE WHEN r.id IS NOT NULL
                           THEN COALESCE((r.raw_payload->'staff'->>'id')::int, (r.raw_payload->'staff'->0->>'id')::int) END,
                      CASE WHEN jsonb_typeof(ro.raw_payload->'data'->'master') = 'array'
