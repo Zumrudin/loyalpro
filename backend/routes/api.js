@@ -334,7 +334,7 @@ router.get('/analytics/staff-dashboard', auth, async (req, res) => {
 
     // Привязка → yclients_staff_id
     const link = await db.oneOrNone(`
-      SELECT sm.id AS staff_member_id, sm.yclients_staff_id, sm.name AS staff_name
+      SELECT sm.id AS staff_member_id, sm.yclients_staff_id, sm.name AS staff_name, sm.avatar_url
       FROM users u JOIN staff_members sm ON sm.id = u.staff_member_id
       WHERE u.id = $1 AND sm.salon_id = $2
     `, [uid, sid]);
@@ -381,7 +381,7 @@ router.get('/analytics/staff-dashboard', auth, async (req, res) => {
     ]);
 
     res.json({
-      stats: { staffName: link.staff_name, ...stats },
+      stats: { staffName: link.staff_name, staffAvatar: link.avatar_url || null, ...stats },
       topServices: top,
       dailyRevenue: daily,
       period: { from, to },
