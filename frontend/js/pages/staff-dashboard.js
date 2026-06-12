@@ -536,15 +536,18 @@ function _sdRenderChart(wrap, rows) {
       ? `<text class="sd-chart-x" x="${pts[i][0].toFixed(1)}" y="${H - 8}" text-anchor="${i === 0 ? 'start' : i === rows.length - 1 ? 'end' : 'middle'}">${fmtD(r.d)}</text>` : ''
   ).join('');
 
+  // Уникальный id градиента на каждый рендер: при смене пресета innerHTML
+  // ненадолго создаёт второй <defs> с тем же id — браузер может взять не тот.
+  const gid = 'sdAg' + Math.random().toString(36).slice(2, 8);
   wrap.innerHTML = `
     <svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" style="height:200px">
       <defs>
-        <linearGradient id="sdAg" x1="0" y1="0" x2="0" y2="1">
+        <linearGradient id="${gid}" x1="0" y1="0" x2="0" y2="1">
           <stop offset="0%" stop-color="var(--sda-rev)" stop-opacity=".25"/>
           <stop offset="100%" stop-color="var(--sda-rev)" stop-opacity="0"/>
         </linearGradient>
       </defs>
-      <path class="sd-chart-area" d="${area}" fill="url(#sdAg)" style="opacity:0;transition:opacity .5s ease .4s"/>
+      <path class="sd-chart-area" d="${area}" fill="url(#${gid})" style="opacity:0;transition:opacity .5s ease .4s"/>
       <path class="sd-chart-line" d="${d}"/>
       <line class="sd-chart-guide" x1="0" y1="${padT}" x2="0" y2="${H - padB}"/>
       <circle class="sd-chart-dot" r="5" cx="0" cy="0"/>
