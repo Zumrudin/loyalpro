@@ -376,126 +376,126 @@ async function _sdRender() {
       </div>`;
   })();
 
+  const presets = { today: 'Сегодня', week: 'Неделя', month: 'Месяц' };
   root.innerHTML = `
+    ${_sdHeroHtml(s)}
     <div class="sd-toolbar">
-      ${['today','week','month'].map(p => `
-        <button class="btn ${p===_sdState.preset?'btn-pri':''}" data-preset="${p}">
-          ${({today:'Сегодня',week:'Неделя',month:'Месяц'})[p]}
-        </button>`).join('')}
-      <span style="flex:1;min-width:12px"></span>
-      <span class="sd-meta">${s.staffName || ''} · ${_sdState.from} … ${_sdState.to}</span>
+      <div class="sd-seg" id="sd-seg">
+        <div class="sd-seg-pill"></div>
+        ${Object.entries(presets).map(([p, t]) =>
+          `<button class="${p === _sdState.preset ? 'on' : ''}" data-preset="${p}">${t}</button>`).join('')}
+      </div>
     </div>
     ${goalHtml}
     <div class="sd-g3" style="margin-top:${goalHtml ? '14px' : '0'}">
-      <div class="sc sd-card-rev">
-        <div class="sl">Моя выручка за период</div>
-        <div class="sv">₽ ${_sdFmtRub(s.periodRevenue)} ${cRev.badge}</div>${cRev.sub}
-        <div style="margin-top:10px;border-top:1px solid var(--bd);padding-top:10px;font-size:13px;line-height:1.7">
-          <div style="display:flex;justify-content:space-between"><span style="color:var(--t3)">Услуги</span><b>₽ ${_sdFmtRub(r.services)}</b></div>
-          <div style="display:flex;justify-content:space-between"><span style="color:var(--t3)">Косметика</span><b>₽ ${_sdFmtRub(r.goods)}</b></div>
-          <div style="display:flex;justify-content:space-between"><span style="color:var(--t3)">Абонементы</span><b>₽ ${_sdFmtRub(r.abonement)}</b></div>
+      <div class="sc sd-p sd-p-rev sd-anim sd-card-rev" style="--i:1">
+        <div class="sd-p-head"><span class="sd-p-ico">₽</span><span class="sl">Моя выручка за период</span></div>
+        <div class="sv"><span class="sd-cu" data-cu="${parseFloat(s.periodRevenue) || 0}" data-fmt="rub"></span> ${cRev.badge}</div>${cRev.sub}
+        <div style="margin-top:10px;border-top:1px solid rgba(0,0,0,.07);padding-top:10px;font-size:13px;line-height:1.6">
+          ${[['Услуги', r.services, 'var(--sda-rev)'], ['Косметика', r.goods, 'var(--sda-goods)'], ['Абонементы', r.abonement, 'var(--sda-avg)']].map(([lbl, v, col]) => {
+            const pct = s.periodRevenue > 0 ? Math.round((parseFloat(v) || 0) / s.periodRevenue * 100) : 0;
+            return `<div style="margin-bottom:6px">
+              <div style="display:flex;justify-content:space-between">
+                <span style="color:var(--t3)"><i style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${col};margin-right:6px"></i>${lbl}</span>
+                <b>₽ ${_sdFmtRub(v)}</b>
+              </div>
+              <div class="sd-mini"><i data-w="${pct}" style="background:${col}"></i></div>
+            </div>`;
+          }).join('')}
         </div>
         ${cRev.ref}
       </div>
-      <div class="sc"><div class="sl">Визитов проведено</div><div class="sv">${s.periodRecords} ${cVis.badge}</div>${cVis.sub}${cVis.ref}</div>
-      <div class="sc"><div class="sl">Не пришли</div><div class="sv">${s.noShowClients} ${cNoSh.badge}</div>${cNoSh.sub}${cNoSh.ref}</div>
-      <div class="sc"><div class="sl">Средний чек</div><div class="sv">₽ ${_sdFmtRub(s.avgCheck)} ${cAvg.badge}</div>${cAvg.sub}${cAvg.ref}</div>
-      <div class="sc"><div class="sl">Первичных за период</div><div class="sv">${s.newClients} ${cNew.badge}</div>${cNew.sub}${cNew.ref}</div>
+      <div class="sc sd-p sd-p-vis sd-anim" style="--i:2">
+        <div class="sd-p-head"><span class="sd-p-ico">📅</span><span class="sl">Визитов проведено</span></div>
+        <div class="sv"><span class="sd-cu" data-cu="${s.periodRecords}" data-fmt="int"></span> ${cVis.badge}</div>${cVis.sub}${cVis.ref}
+      </div>
+      <div class="sc sd-p sd-p-nosh sd-anim" style="--i:3">
+        <div class="sd-p-head"><span class="sd-p-ico">✖️</span><span class="sl">Не пришли</span></div>
+        <div class="sv"><span class="sd-cu" data-cu="${s.noShowClients}" data-fmt="int"></span> ${cNoSh.badge}</div>${cNoSh.sub}${cNoSh.ref}
+      </div>
+      <div class="sc sd-p sd-p-avg sd-anim" style="--i:4">
+        <div class="sd-p-head"><span class="sd-p-ico">💳</span><span class="sl">Средний чек</span></div>
+        <div class="sv"><span class="sd-cu" data-cu="${parseFloat(s.avgCheck) || 0}" data-fmt="rub"></span> ${cAvg.badge}</div>${cAvg.sub}${cAvg.ref}
+      </div>
+      <div class="sc sd-p sd-p-new sd-anim" style="--i:5">
+        <div class="sd-p-head"><span class="sd-p-ico">🌱</span><span class="sl">Первичных за период</span></div>
+        <div class="sv"><span class="sd-cu" data-cu="${s.newClients}" data-fmt="int"></span> ${cNew.badge}</div>${cNew.sub}${cNew.ref}
+      </div>
     </div>
 
     <div class="sd-g4" style="margin-top:14px">
-      <div class="sc">
-        <div class="sl">Возвращаемость</div>
-        <div class="sv">${s.retentionRate == null ? '—' : s.retentionRate + '%'} ${cRet.badge}</div>${cRet.sub}
-        <div class="sd" style="font-size:11px;color:var(--t3);margin-top:6px">клиенты, вернувшиеся в течение 45 дней</div>
+      <div class="sc sd-p sd-p-ret sd-anim" style="--i:6">
+        <div class="sd-p-head"><span class="sd-p-ico">🔄</span><span class="sl">Возвращаемость</span></div>
+        <div class="sd-ring-row">
+          ${_sdRingHtml(s.retentionRate)}
+          <div>
+            ${cRet.badge ? `<div>${cRet.badge}</div>` : ''}${cRet.sub}
+            <div class="sd" style="font-size:11px;color:var(--t3)">клиенты, вернувшиеся в течение 45 дней</div>
+          </div>
+        </div>
         ${cRet.ref}
       </div>
-      <div class="sc">
-        <div class="sl">Перезапись</div>
-        <div class="sv">${s.reappointmentRate == null ? '—' : s.reappointmentRate + '%'} ${cReap.badge}</div>${cReap.sub}
-        <div class="sd" style="font-size:11px;color:var(--t3);margin-top:6px">% визитов с последующей записью</div>
+      <div class="sc sd-p sd-p-reap sd-anim" style="--i:7">
+        <div class="sd-p-head"><span class="sd-p-ico">📝</span><span class="sl">Перезапись</span></div>
+        <div class="sd-ring-row">
+          ${_sdRingHtml(s.reappointmentRate)}
+          <div>
+            ${cReap.badge ? `<div>${cReap.badge}</div>` : ''}${cReap.sub}
+            <div class="sd" style="font-size:11px;color:var(--t3)">% визитов с последующей записью</div>
+          </div>
+        </div>
         ${cReap.ref}
       </div>
-      <div class="sc">
-        <div class="sl">Продажи товаров</div>
-        <div class="sv">${s.goodsCount || 0} <span style="font-size:14px;color:var(--t3);font-weight:400">шт</span> ${cGoods.badge}</div>${cGoods.sub}
+      <div class="sc sd-p sd-p-goods sd-anim" style="--i:8">
+        <div class="sd-p-head"><span class="sd-p-ico">🛍️</span><span class="sl">Продажи товаров</span></div>
+        <div class="sv"><span class="sd-cu" data-cu="${s.goodsCount || 0}" data-fmt="int"></span> <span style="font-size:14px;color:var(--t3);font-weight:400">шт</span> ${cGoods.badge}</div>${cGoods.sub}
         <div class="sd" style="font-size:11px;color:var(--t3);margin-top:6px">на ₽ ${_sdFmtRub(s.goodsRevenue)}</div>
         ${cGoods.ref}
       </div>
-      <div class="sc">
-        <div class="sl">Загрузка</div>
-        <div class="sv">${s.utilizationRate == null ? '—' : s.utilizationRate + '%'} ${cUtil.badge}</div>${cUtil.sub}
-        <div class="sd" style="font-size:11px;color:var(--t3);margin-top:6px">от рабочего расписания</div>
+      <div class="sc sd-p sd-p-util sd-anim" style="--i:9">
+        <div class="sd-p-head"><span class="sd-p-ico">⏱️</span><span class="sl">Загрузка</span></div>
+        <div class="sd-ring-row">
+          ${_sdRingHtml(s.utilizationRate)}
+          <div>
+            ${cUtil.badge ? `<div>${cUtil.badge}</div>` : ''}${cUtil.sub}
+            <div class="sd" style="font-size:11px;color:var(--t3)">от рабочего расписания</div>
+          </div>
+        </div>
         ${cUtil.ref}
       </div>
     </div>
 
-    <div class="sc" style="margin-top:14px">
+    <div class="sc sd-anim" style="--i:10;margin-top:14px;border-radius:16px">
       <div class="sl">Дневной график выручки</div>
-      <canvas id="sd-chart" width="1200" height="180"
-        style="width:100%;height:180px;display:block;margin-top:10px"></canvas>
+      <div class="sd-chart-wrap" id="sd-chart-wrap"></div>
     </div>
 
-    <div class="sc" style="margin-top:14px">
+    <div class="sc sd-anim" style="--i:11;margin-top:14px;border-radius:16px">
       <div class="sl">Топ-5 услуг</div>
-      ${data.topServices.length === 0
-        ? '<div class="pp-hint" style="margin-top:10px">Нет данных за период</div>'
-        : `<table class="sd-top5" style="width:100%;margin-top:10px;font-size:13px;border-collapse:collapse">
-            <thead><tr style="border-bottom:1px solid var(--bd)">
-              <th style="text-align:left;padding:8px 6px;color:var(--t3);font-weight:600">Услуга</th>
-              <th style="text-align:right;padding:8px 6px;color:var(--t3);font-weight:600">Кол-во</th>
-              <th style="text-align:right;padding:8px 6px;color:var(--t3);font-weight:600">Выручка</th>
-            </tr></thead>
-            <tbody>
-              ${data.topServices.map(t => `
-                <tr style="border-bottom:1px solid var(--bg)">
-                  <td style="padding:8px 6px">${_sdEsc(t.service_name)}</td>
-                  <td style="padding:8px 6px;text-align:right">${t.cnt}</td>
-                  <td style="padding:8px 6px;text-align:right;font-weight:600">₽ ${_sdFmtRub(t.total_amount)}</td>
-                </tr>`).join('')}
-            </tbody>
-          </table>`}
+      <div id="sd-top5"></div>
     </div>
   `;
 
+  // Переключатель периодов
   root.querySelectorAll('[data-preset]').forEach(b => {
     b.onclick = () => { _sdSetPeriod(b.dataset.preset); _sdRender(); };
   });
+  const seg = root.querySelector('#sd-seg');
+  if (seg) requestAnimationFrame(() => _sdMovePill(seg));
 
-  const cv = root.querySelector('#sd-chart');
-  if (cv && data.dailyRevenue && data.dailyRevenue.length) {
-    _sdDrawChart(cv, data.dailyRevenue);
-  } else if (cv) {
-    const ctx = cv.getContext('2d');
-    ctx.fillStyle = '#888'; ctx.font = '13px sans-serif'; ctx.textAlign = 'center';
-    ctx.fillText('Нет данных за период', cv.width / 2, cv.height / 2);
-  }
+  // Анимации
+  _sdBindAvaFallback(root);
+  _sdRunCountUps(root);
+  _sdFillRings(root);
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    root.querySelectorAll('.sd-mini i').forEach(i => { i.style.width = (i.dataset.w || 0) + '%'; });
+  }));
+
+  // График + топ-5 (реализации в следующих тасках)
+  _sdRenderChart(root.querySelector('#sd-chart-wrap'), data.dailyRevenue || []);
+  _sdRenderTop5(root.querySelector('#sd-top5'), data.topServices || []);
 }
 
-// Простой канвас-бар-чарт (без внешних либ — соответствует существующему стилю
-// главного дашборда, который тоже использует канвас).
-function _sdDrawChart(canvas, rows) {
-  const ctx = canvas.getContext('2d');
-  const w = canvas.width, h = canvas.height;
-  ctx.clearRect(0, 0, w, h);
-  const max = Math.max(...rows.map(r => parseFloat(r.revenue) || 0), 1);
-  const padL = 8, padR = 8, padB = 22, padT = 8;
-  const innerW = w - padL - padR;
-  const innerH = h - padB - padT;
-  const barW = innerW / rows.length;
-  rows.forEach((r, i) => {
-    const val = parseFloat(r.revenue) || 0;
-    const barH = (val / max) * innerH;
-    const x = padL + i * barW;
-    const y = h - padB - barH;
-    ctx.fillStyle = '#19c39c';
-    ctx.fillRect(x + 2, y, Math.max(2, barW - 4), barH);
-    ctx.fillStyle = '#888';
-    ctx.font = '10px sans-serif';
-    ctx.textAlign = 'center';
-    const step = Math.ceil(rows.length / 14);
-    if (rows.length <= 14 || i % step === 0) {
-      ctx.fillText(String(r.d).slice(5), x + barW / 2, h - 5);
-    }
-  });
-}
+// Заглушки — заменяются в Task 5/6 плана редизайна.
+function _sdRenderChart(wrap, rows) { /* Task 5 */ }
+function _sdRenderTop5(wrap, rows)  { /* Task 6 */ }
