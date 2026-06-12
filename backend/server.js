@@ -39,6 +39,8 @@ const s3ImgOrigin = (() => {
 })();
 const imgSrc = ["'self'", "data:", "blob:"];
 if (s3ImgOrigin) imgSrc.push(s3ImgOrigin);
+// Аватары мастеров на дашборде специалиста отдаются напрямую с CDN YClients.
+imgSrc.push('https://assets.yclients.com');
 
 app.use(helmet({
   contentSecurityPolicy: {
