@@ -223,10 +223,12 @@ async function computeSpecialistStats(sid, yc, from, to) {
             WHERE r.salon_id=$1 AND r.status IN ('completed','arrived')
               AND COALESCE((r.visit_datetime AT TIME ZONE 'Europe/Moscow')::date, r.visit_date::date) BETWEEN $2::date AND $3::date
               AND COALESCE((r.raw_payload->'staff'->>'id')::int, (r.raw_payload->'staff'->0->>'id')::int) = $4`, p),
-      // goods/abonement: считаем через связь с визитом (yclients_record_id).
-      // Если товар/абонемент продана во время визита, то выручка идёт мастеру визита.
-      // Если продажа не привязана к визиту — берём directly из operation данные:
-      // если raw_payload.data.master[0].id указан явно, считаем по нему; иначе скипаем.
+      // abonement: считаем по «на кого записана продажа» — sold_by_yc_staff_id
+      // (master_id товарной транзакции YClients). Транзакцию проводит админ,
+      // но продажа записывается на конкретного сотрудника — кредитуем его,
+      // а не мастера привязанного визита.
+      // goods (и abonement без атрибуции — старые строки/сбой API): fallback —
+      // мастер визита по yclients_record_id, иначе явный master[0] из payload.
       // Услуги (`services`) считаем отдельно — через records.amount (см. ниже),
       // чтобы итог совпадал с total визитов и не уплывал из-за частичных оплат.
       db.any(`SELECT ro.category, COALESCE(SUM(ro.amount),0) AS total
@@ -235,15 +237,21 @@ async function computeSpecialistStats(sid, yc, from, to) {
               WHERE ro.salon_id=$1 AND ro.operation_date BETWEEN $2::date AND $3::date
                 AND ro.category IN ('goods','abonement')
                 AND (
-                  -- Если есть связь к визиту: кредитуем мастера визита
-                  (r.id IS NOT NULL
-                   AND COALESCE((r.raw_payload->'staff'->>'id')::int, (r.raw_payload->'staff'->0->>'id')::int) = $4)
+                  -- Абонемент с явной атрибуцией: только сотрудник продажи
+                  (ro.category='abonement' AND ro.sold_by_yc_staff_id IS NOT NULL
+                   AND ro.sold_by_yc_staff_id = $4)
                   OR
-                  -- Если нет — считаем операцию, только если master явно указан
-                  (r.id IS NULL
-                   AND jsonb_typeof(ro.raw_payload->'data'->'master') = 'array'
-                   AND jsonb_array_length(ro.raw_payload->'data'->'master') > 0
-                   AND (ro.raw_payload->'data'->'master'->0->>'id')::int = $4)
+                  ((ro.category='goods' OR ro.sold_by_yc_staff_id IS NULL) AND (
+                    -- Если есть связь к визиту: кредитуем мастера визита
+                    (r.id IS NOT NULL
+                     AND COALESCE((r.raw_payload->'staff'->>'id')::int, (r.raw_payload->'staff'->0->>'id')::int) = $4)
+                    OR
+                    -- Если нет — считаем операцию, только если master явно указан
+                    (r.id IS NULL
+                     AND jsonb_typeof(ro.raw_payload->'data'->'master') = 'array'
+                     AND jsonb_array_length(ro.raw_payload->'data'->'master') > 0
+                     AND (ro.raw_payload->'data'->'master'->0->>'id')::int = $4)
+                  ))
                 )
               GROUP BY ro.category`, p),
       // «Не пришли» — визиты со статусом no_show за период, где мастер = специалист.

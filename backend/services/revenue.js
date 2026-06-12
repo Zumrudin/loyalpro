@@ -26,6 +26,34 @@ function classifyExpense(expenseTitle) {
   return EXPENSE_TO_CATEGORY[expenseTitle] || 'other';
 }
 
+// Ссылка на товарную транзакцию из payload операции. Поддерживает обе формы:
+// webhook ({data:{sold_item_*}}) и плоский item из /transactions API (бэкфиллы).
+function goodsTransactionRef(data) {
+  if (!data) return null;
+  const type = data.sold_item_type ?? data.data?.sold_item_type;
+  const id = data.sold_item_id ?? data.data?.sold_item_id;
+  if (type !== 'goods_transaction') return null;
+  const n = parseInt(id, 10);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+// «На кого записана продажа»: master_id товарной транзакции YClients.
+// Webhook finances_operation всегда отдаёт master=[] — настоящая атрибуция
+// продажи (товар/абонемент) есть только в goods_transaction. Ошибки API не
+// валят приём операции — возвращаем null, атрибуция останется fallback'ом.
+async function fetchSoldByStaffId(salon, soldItemId) {
+  if (!soldItemId || !salon?.yclients_company_id || !salon?.yclients_partner_token) return null;
+  try {
+    const { ycGet } = require('./yclients');
+    const gt = await ycGet(salon, `/storage_operations/goods_transactions/${salon.yclients_company_id}/${soldItemId}`);
+    const masterId = parseInt(gt?.master_id, 10);
+    return Number.isFinite(masterId) && masterId > 0 ? masterId : null;
+  } catch (e) {
+    logger.warn(`fetchSoldByStaffId failed sold_item_id=${soldItemId}: ${e.message}`);
+    return null;
+  }
+}
+
 async function recordRevenueOperation(payload, salon, source) {
   const data = payload.data || {};
 
@@ -68,12 +96,21 @@ async function recordRevenueOperation(payload, salon, source) {
     clientId = client?.id || null;
   }
 
+  // Атрибуция продажи товара/абонемента конкретному сотруднику («на кого
+  // записана продажа») — из товарной транзакции YClients. Один доп. API-вызов
+  // на операцию; продажи редкие, обработка webhook уже асинхронная (после 200).
+  let soldByYcStaffId = null;
+  if (category === 'goods' || category === 'abonement') {
+    soldByYcStaffId = await fetchSoldByStaffId(salon, goodsTransactionRef(data));
+  }
+
   await db.query(`
     INSERT INTO revenue_operations
       (salon_id, yclients_operation_id, category, amount, operation_date, operation_at,
        client_id, yclients_client_id, yclients_record_id,
-       expense_id, expense_title, sold_item_type, account_title, is_cash, raw_payload, source)
-    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+       expense_id, expense_title, sold_item_type, account_title, is_cash, raw_payload, source,
+       sold_by_yc_staff_id)
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
     ON CONFLICT (salon_id, yclients_operation_id) DO NOTHING
   `, [
     salon.id,
@@ -92,7 +129,8 @@ async function recordRevenueOperation(payload, salon, source) {
     data.account?.is_cash ?? null,
     payload,
     source,
+    soldByYcStaffId,
   ]);
 }
 
-module.exports = { classifyExpense, recordRevenueOperation };
+module.exports = { classifyExpense, recordRevenueOperation, goodsTransactionRef, fetchSoldByStaffId };

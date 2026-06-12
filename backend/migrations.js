@@ -406,6 +406,14 @@ async function runMigrations(client) {
       ALTER COLUMN source TYPE VARCHAR(32)
   `).catch(() => {});
 
+  // «На кого записана продажа» — master_id товарной транзакции YClients
+  // (webhook finances_operation отдаёт master=[] всегда; реальная атрибуция
+  // продажи товара/абонемента живёт в goods_transaction.master_id).
+  await client.query(`
+    ALTER TABLE revenue_operations
+      ADD COLUMN IF NOT EXISTS sold_by_yc_staff_id INT
+  `).catch(() => {});
+
   // ── Session tables: back the JWT-revocation check ──────────────
   // Auth (routes/index.js, middleware/mobile-auth.js) now requires every token
   // to map to a live row here, so logout / forced sign-out can revoke a JWT
