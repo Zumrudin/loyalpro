@@ -341,14 +341,44 @@ async function _sdRender() {
   const goalHtml = (() => {
     const g = data.goal;
     if (!g) return '';
+    // Цвет и комментарий — из pace (бэкенд computePace, спека 2026-06-12).
+    const PACE_COLORS = { done: '#13a05e', ahead: '#13a05e', tight: '#e8a23d', behind: '#d23f3f' };
+    const paceLine = (p) => {
+      if (!p) return '';
+      const shifts = (n) => `ещё ${n} ${_sdPlural(n, 'смена', 'смены', 'смен')}`;
+      const perShift = (pp) => pp.perShiftNeeded == null ? ''
+        : `: нужно в среднем ₽ ${_sdFmtRub(pp.perShiftNeeded)} за смену (${shifts(pp.remainingShifts)})`;
+      if (p.status === 'done')
+        return `<div style="font-size:12px;font-weight:600;color:${PACE_COLORS.done};margin-top:4px">🎉 План выполнен — перевыполнение на ${p.overPct}%! Красавчик, так держать!</div>`;
+      if (p.status === 'ahead')
+        return `<div style="font-size:12px;font-weight:600;color:${PACE_COLORS.ahead};margin-top:4px">🟢 Отличный темп! В таком ритме вы укладываетесь в план</div>`;
+      if (p.status === 'tight')
+        return `<div style="font-size:12px;font-weight:600;color:${PACE_COLORS.tight};margin-top:4px">🟡 Идёте впритык${p.perShiftNeeded == null ? '' : `: надёжнее держать в среднем ₽ ${_sdFmtRub(p.perShiftNeeded)} за смену (${shifts(p.remainingShifts)})`}</div>`;
+      if (p.status === 'behind')
+        return `<div style="font-size:12px;font-weight:600;color:${PACE_COLORS.behind};margin-top:4px">🔴 Таким темпом план не закрыть${perShift(p)}</div>`;
+      if (p.status === 'no_schedule') {
+        const r = p.ratio || 0;
+        const verdict = r >= 1.05
+          ? `<span style="color:${PACE_COLORS.ahead}">🟢 По текущему темпу вы укладываетесь в план</span>`
+          : r >= 0.95
+            ? `<span style="color:${PACE_COLORS.tight}">🟡 По текущему темпу идёте впритык</span>`
+            : `<span style="color:${PACE_COLORS.behind}">🔴 По текущему темпу план не закрывается</span>`;
+        return `<div style="font-size:12px;font-weight:600;margin-top:4px">${verdict}</div>
+          <div style="font-size:11px;color:var(--t3);margin-top:2px">Синхронизируйте график в YClients, чтобы видеть расчёт по сменам</div>`;
+      }
+      return '';
+    };
+    const paceColor = (p, fcPct) => {
+      if (p && PACE_COLORS[p.status]) return PACE_COLORS[p.status];
+      if (p && p.status === 'no_schedule')
+        return p.ratio >= 1.05 ? PACE_COLORS.ahead : p.ratio >= 0.95 ? PACE_COLORS.tight : PACE_COLORS.behind;
+      return fcPct >= 100 ? '#13a05e' : fcPct >= 80 ? '#e8a23d' : '#d23f3f'; // фолбэк до деплоя бэка
+    };
     const goalBar = (lbl, o) => {
       if (!(parseFloat(o.target) > 0)) return '';
       const pct = Math.round(o.fact / o.target * 100);
       const fc  = Math.round(o.forecast / o.target * 100);
-      const color = fc >= 100 ? '#13a05e' : fc >= 80 ? '#e8a23d' : '#d23f3f';
-      const fcTxt = fc >= 100
-        ? `Прогноз: ₽ ${_sdFmtRub(o.forecast)} — план будет выполнен ✓`
-        : `Прогноз: ₽ ${_sdFmtRub(o.forecast)} (${fc}% плана)`;
+      const color = paceColor(o.pace, fc);
       return `
         <div style="margin-top:12px">
           <div style="display:flex;justify-content:space-between;gap:8px;font-size:13px;margin-bottom:4px;flex-wrap:wrap">
@@ -358,7 +388,8 @@ async function _sdRender() {
           <div style="height:10px;background:var(--bg);border-radius:5px;overflow:hidden">
             <div style="height:100%;width:${Math.min(100, pct)}%;background:${color};border-radius:5px"></div>
           </div>
-          <div style="font-size:12px;color:${color};margin-top:4px">${fcTxt}</div>
+          <div style="font-size:11px;color:var(--t3);margin-top:4px">Прогноз: ₽ ${_sdFmtRub(o.forecast)} (${fc}% плана)</div>
+          ${paceLine(o.pace)}
         </div>`;
     };
     const mIdx = parseInt(g.month.slice(5, 7), 10) - 1;
