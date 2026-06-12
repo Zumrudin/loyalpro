@@ -131,6 +131,7 @@ function _sdRunCountUps(root) {
     if (reduced || target === 0) { el.textContent = _sdCuFmt(target, fmt); return; }
     const t0 = performance.now(), dur = 600;
     const tick = (t) => {
+      if (!el.isConnected) return; // элемент убран из DOM — останавливаем анимацию
       const k = Math.min(1, (t - t0) / dur);
       const e = 1 - Math.pow(1 - k, 3); // easeOutCubic
       el.textContent = _sdCuFmt(target * e, fmt);
@@ -172,7 +173,7 @@ function _sdHeroHtml(s) {
   const [greet, emoji] = _sdGreeting();
   const name = String(s.staffName || '').trim().split(/\s+/).pop() || ''; // «Гатауллина Юлия» → «Юлия»
   const ava = s.staffAvatar
-    ? `<img class="sd-hero-ava" src="${_sdEsc(s.staffAvatar)}" alt="" onerror="this.outerHTML='<div class=&quot;sd-hero-ava-fb&quot;>${_sdEsc(name.slice(0,1))}</div>'">`
+    ? `<img class="sd-hero-ava" src="${_sdEsc(s.staffAvatar)}" alt="" data-fb="${_sdEsc(name.slice(0, 1) || '•')}">`
     : `<div class="sd-hero-ava-fb">${_sdEsc(name.slice(0, 1) || '•')}</div>`;
   return `
     <div class="sd-hero sd-anim" style="--i:0">
@@ -183,6 +184,18 @@ function _sdHeroHtml(s) {
       </div>
       <div class="sd-hero-dates">${_sdState.from} … ${_sdState.to}</div>
     </div>`;
+}
+// Фолбэк аватара: если картинка не загрузилась — заменяем на круг с инициалом.
+// Вызывается из рендера после вставки HTML. textContent → XSS-safe.
+function _sdBindAvaFallback(root) {
+  const img = root.querySelector('.sd-hero-ava');
+  if (!img) return;
+  img.onerror = () => {
+    const d = document.createElement('div');
+    d.className = 'sd-hero-ava-fb';
+    d.textContent = img.dataset.fb || '•';
+    img.replaceWith(d);
+  };
 }
 function _sdPlural(n, one, few, many) {
   const m10 = n % 10, m100 = n % 100;
