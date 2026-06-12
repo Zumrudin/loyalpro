@@ -530,9 +530,10 @@ function _sdRenderChart(wrap, rows) {
   const area = `${d} L ${pts[pts.length - 1][0].toFixed(1)} ${H - padB} L ${pts[0][0].toFixed(1)} ${H - padB} Z`;
   const step = Math.ceil(rows.length / 14);
   const fmtD = (s) => { const parts = String(s).split('-'); return `${parseInt(parts[2])}.${parts[1]}`; };
+  // Крайние метки прижимаем внутрь (start/end), чтобы текст не обрезался краями viewBox.
   const xLabels = rows.map((r, i) =>
     (rows.length <= 14 || i % step === 0)
-      ? `<text class="sd-chart-x" x="${pts[i][0].toFixed(1)}" y="${H - 8}" text-anchor="middle">${fmtD(r.d)}</text>` : ''
+      ? `<text class="sd-chart-x" x="${pts[i][0].toFixed(1)}" y="${H - 8}" text-anchor="${i === 0 ? 'start' : i === rows.length - 1 ? 'end' : 'middle'}">${fmtD(r.d)}</text>` : ''
   ).join('');
 
   wrap.innerHTML = `
