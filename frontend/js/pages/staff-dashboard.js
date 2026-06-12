@@ -115,6 +115,91 @@ function _sdHelloSteps(root) {
   }, 800);
 }
 
+// ── Редизайн: пастельные хелперы (спека 2026-06-12) ─────────────
+// Count-up: после вставки HTML вызвать _sdRunCountUps(root).
+// Элемент: <span class="sd-cu" data-cu="58600" data-fmt="rub|int|pct1"></span>
+function _sdCuFmt(v, fmt) {
+  if (fmt === 'rub')  return '₽ ' + Math.round(v).toLocaleString('ru');
+  if (fmt === 'pct1') return (Math.round(v * 10) / 10) + '%';
+  return String(Math.round(v));
+}
+function _sdRunCountUps(root) {
+  const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  root.querySelectorAll('.sd-cu').forEach(el => {
+    const target = parseFloat(el.dataset.cu) || 0;
+    const fmt = el.dataset.fmt || 'int';
+    if (reduced || target === 0) { el.textContent = _sdCuFmt(target, fmt); return; }
+    const t0 = performance.now(), dur = 600;
+    const tick = (t) => {
+      const k = Math.min(1, (t - t0) / dur);
+      const e = 1 - Math.pow(1 - k, 3); // easeOutCubic
+      el.textContent = _sdCuFmt(target * e, fmt);
+      if (k < 1) requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+  });
+}
+
+// Прогресс-кольцо 64px. val: 0..100 или null («—», пустое кольцо).
+// Заполнение анимируется CSS-транзишеном stroke-dashoffset — после вставки
+// в DOM вызвать _sdFillRings(root).
+const _SD_RING_C = 2 * Math.PI * 26; // r=26 во viewBox 64
+function _sdRingHtml(val) {
+  const shown = val == null ? '—' : (val + '%');
+  return `
+    <svg class="sd-ring" viewBox="0 0 64 64" data-ring="${val == null ? '' : val}">
+      <circle class="bgc" cx="32" cy="32" r="26"/>
+      <circle class="fgc" cx="32" cy="32" r="26"
+        stroke-dasharray="${_SD_RING_C.toFixed(1)}"
+        stroke-dashoffset="${_SD_RING_C.toFixed(1)}"/>
+      <text x="32" y="37" text-anchor="middle">${shown}</text>
+    </svg>`;
+}
+function _sdFillRings(root) {
+  // Двойной rAF — иначе браузер схлопнет транзишен (как в _sdRender прогресс-бар)
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    root.querySelectorAll('.sd-ring').forEach(svg => {
+      const v = parseFloat(svg.dataset.ring);
+      if (!isFinite(v)) return;
+      const off = _SD_RING_C * (1 - Math.min(100, Math.max(0, v)) / 100);
+      svg.querySelector('.fgc').style.strokeDashoffset = off.toFixed(1);
+    });
+  }));
+}
+
+// Hero-блок. s — data.stats. Использует существующий _sdGreeting().
+function _sdHeroHtml(s) {
+  const [greet, emoji] = _sdGreeting();
+  const name = String(s.staffName || '').trim().split(/\s+/).pop() || ''; // «Гатауллина Юлия» → «Юлия»
+  const ava = s.staffAvatar
+    ? `<img class="sd-hero-ava" src="${_sdEsc(s.staffAvatar)}" alt="" onerror="this.outerHTML='<div class=&quot;sd-hero-ava-fb&quot;>${_sdEsc(name.slice(0,1))}</div>'">`
+    : `<div class="sd-hero-ava-fb">${_sdEsc(name.slice(0, 1) || '•')}</div>`;
+  return `
+    <div class="sd-hero sd-anim" style="--i:0">
+      ${ava}
+      <div class="sd-hero-t">
+        <h2>${greet}${name ? ', ' + _sdEsc(name) : ''}! ${emoji}</h2>
+        <div class="sd-hero-sub">За период: ${s.periodRecords} ${_sdPlural(s.periodRecords, 'визит', 'визита', 'визитов')} на ₽ ${_sdFmtRub(s.periodRevenue)}</div>
+      </div>
+      <div class="sd-hero-dates">${_sdState.from} … ${_sdState.to}</div>
+    </div>`;
+}
+function _sdPlural(n, one, few, many) {
+  const m10 = n % 10, m100 = n % 100;
+  if (m10 === 1 && m100 !== 11) return one;
+  if (m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14)) return few;
+  return many;
+}
+
+// Сегментный контрол: позиционируем пилюлю под активной кнопкой.
+function _sdMovePill(seg) {
+  const pill = seg.querySelector('.sd-seg-pill');
+  const btn = seg.querySelector('button.on');
+  if (!pill || !btn) return;
+  pill.style.left = btn.offsetLeft + 'px';
+  pill.style.width = btn.offsetWidth + 'px';
+}
+
 async function loadStaffDashboard() {
   const page = document.querySelector('#page-staff-dashboard');
   if (page) page.hidden = false;
