@@ -9,7 +9,7 @@
 'use strict';
 
 const _sdRoot = () => document.querySelector('#page-staff-dashboard .sd-root');
-const _sdState = { from: null, to: null, preset: 'week' };
+const _sdState = { from: null, to: null, preset: 'week', t5: { key: 'total_amount', dir: 'desc' } };
 
 function _sdToday() {
   return new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Moscow' }).format(new Date());
@@ -601,5 +601,49 @@ function _sdRenderChart(wrap, rows) {
   });
 }
 
-// Заглушка — заменяется в Task 6 плана редизайна.
-function _sdRenderTop5(wrap, rows)  { /* Task 6 */ }
+// Топ-5 услуг: рейтинг с барами (доля в выручке топ-5) + сортировка по
+// «Кол-во»/«Выручка». Места пересчитываются под текущий порядок.
+function _sdRenderTop5(wrap, rows) {
+  if (!wrap) return;
+  if (!rows.length) {
+    wrap.innerHTML = '<div class="pp-hint" style="margin-top:10px">Нет данных за период</div>';
+    return;
+  }
+  const { key, dir } = _sdState.t5;
+  const sorted = [...rows].sort((a, b) =>
+    dir === 'desc' ? (parseFloat(b[key]) || 0) - (parseFloat(a[key]) || 0)
+                   : (parseFloat(a[key]) || 0) - (parseFloat(b[key]) || 0));
+  const maxRev = Math.max(...rows.map(t => parseFloat(t.total_amount) || 0), 1);
+  const arrow = (k) => key === k ? (dir === 'desc' ? ' ↓' : ' ↑') : '';
+  wrap.innerHTML = `
+    <div class="sd-t5-h" style="margin-top:10px">
+      <span></span><span>Услуга</span>
+      <span class="srt" data-k="cnt">Кол-во${arrow('cnt')}</span>
+      <span class="srt" data-k="total_amount">Выручка${arrow('total_amount')}</span>
+    </div>
+    ${sorted.map((t, i) => {
+      const pct = Math.round((parseFloat(t.total_amount) || 0) / maxRev * 100);
+      return `
+      <div class="sd-t5-row ${i === 0 ? 'lead' : ''}">
+        <span class="sd-t5-rank">${i === 0 ? '👑' : i + 1}</span>
+        <div class="sd-t5-name">
+          <span title="${_sdEsc(t.service_name)}">${_sdEsc(t.service_name)}</span>
+          <div class="sd-t5-bar"><i data-w="${pct}"></i></div>
+        </div>
+        <span class="sd-t5-cnt">${t.cnt}</span>
+        <span class="sd-t5-sum">₽ ${_sdFmtRub(t.total_amount)}</span>
+      </div>`;
+    }).join('')}`;
+  // Анимация баров
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    wrap.querySelectorAll('.sd-t5-bar i').forEach(i => { i.style.width = (i.dataset.w || 0) + '%'; });
+  }));
+  // Сортировка: клик по заголовку — без полного _sdRender (данные те же)
+  wrap.querySelectorAll('.srt').forEach(h => {
+    h.onclick = () => {
+      const k = h.dataset.k;
+      _sdState.t5 = { key: k, dir: _sdState.t5.key === k && _sdState.t5.dir === 'desc' ? 'asc' : 'desc' };
+      _sdRenderTop5(wrap, rows);
+    };
+  });
+}
