@@ -248,3 +248,135 @@
 @media(max-width:700px){.sd-hello h2{font-size:21px}.sd-hello-emoji{font-size:38px}}
 @keyframes sdFloat{0%,100%{transform:translateY(0)}50%{transform:translateY(-6px)}}
 @keyframes sdHelloIn{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
+
+/* ─── STAFF DASHBOARD PASTEL REDESIGN ─────────────────────────── */
+/* Палитра: --sdp-* фон, --sda-* акцент. Спека 2026-06-12. */
+:root{
+  --sdp-rev:#e6f7f1;   --sda-rev:#0fa97e;
+  --sdp-vis:#e8f1fd;   --sda-vis:#3b82f6;
+  --sdp-nosh:#fdf0e6;  --sda-nosh:#e8833a;
+  --sdp-avg:#f0ecfd;   --sda-avg:#7c5cf0;
+  --sdp-new:#fdecf2;   --sda-new:#e0508a;
+  --sdp-ret:#e4f6f8;   --sda-ret:#0ea5b7;
+  --sdp-reap:#eff8e6;  --sda-reap:#6aa832;
+  --sdp-goods:#fdf4e2; --sda-goods:#d99114;
+  --sdp-util:#f5ebfa;  --sda-util:#a855d8;
+}
+[data-theme="dark"]{
+  --sdp-rev:#11261f;   --sda-rev:#2dd4a8;
+  --sdp-vis:#13202f;   --sda-vis:#60a5fa;
+  --sdp-nosh:#2a1d12;  --sda-nosh:#f0995a;
+  --sdp-avg:#1d1830;   --sda-avg:#a78bfa;
+  --sdp-new:#2a1520;   --sda-new:#f077a8;
+  --sdp-ret:#10262a;   --sda-ret:#38c5d8;
+  --sdp-reap:#1a2412;  --sda-reap:#8fc758;
+  --sdp-goods:#27200f; --sda-goods:#eab94a;
+  --sdp-util:#231630;  --sda-util:#c084ec;
+}
+
+/* Пастельная карточка: фон по метрике, без рамки, скругление 16 */
+.sd-p{border:none!important;border-radius:16px!important;
+  background:var(--sdp,var(--card));
+  transition:transform .2s ease,box-shadow .2s ease}
+.sd-p:hover{transform:translateY(-2px);box-shadow:0 6px 18px rgba(0,0,0,.10)}
+.sd-p .sv{color:var(--sda,var(--t1))}
+.sd-p-rev  {--sdp:var(--sdp-rev);  --sda:var(--sda-rev)}
+.sd-p-vis  {--sdp:var(--sdp-vis);  --sda:var(--sda-vis)}
+.sd-p-nosh {--sdp:var(--sdp-nosh); --sda:var(--sda-nosh)}
+.sd-p-avg  {--sdp:var(--sdp-avg);  --sda:var(--sda-avg)}
+.sd-p-new  {--sdp:var(--sdp-new);  --sda:var(--sda-new)}
+.sd-p-ret  {--sdp:var(--sdp-ret);  --sda:var(--sda-ret)}
+.sd-p-reap {--sdp:var(--sdp-reap); --sda:var(--sda-reap)}
+.sd-p-goods{--sdp:var(--sdp-goods);--sda:var(--sda-goods)}
+.sd-p-util {--sdp:var(--sdp-util); --sda:var(--sda-util)}
+
+/* Иконка метрики в белом круге */
+.sd-p-head{display:flex;align-items:center;gap:8px;margin-bottom:8px}
+.sd-p-head .sl{margin-bottom:0}
+.sd-p-ico{width:30px;height:30px;border-radius:50%;background:var(--card);
+  display:inline-flex;align-items:center;justify-content:center;
+  font-size:15px;box-shadow:0 1px 3px rgba(0,0,0,.08);flex-shrink:0}
+
+/* Hero */
+.sd-hero{display:flex;align-items:center;gap:14px;padding:18px 20px;
+  border-radius:20px;margin-bottom:14px;
+  background:linear-gradient(135deg,var(--sdp-rev) 0%,var(--sdp-avg) 100%)}
+.sd-hero-ava{width:56px;height:56px;border-radius:50%;object-fit:cover;
+  border:3px solid var(--card);box-shadow:0 2px 8px rgba(0,0,0,.10);flex-shrink:0}
+.sd-hero-ava-fb{width:56px;height:56px;border-radius:50%;flex-shrink:0;
+  border:3px solid var(--card);background:var(--sda-rev);color:#fff;
+  display:flex;align-items:center;justify-content:center;font-size:20px;font-weight:700}
+.sd-hero-t h2{margin:0;font-size:19px;letter-spacing:-.3px;color:var(--t1)}
+.sd-hero-sub{font-size:13px;color:var(--t2);margin-top:3px}
+.sd-hero-dates{margin-left:auto;font-size:12px;color:var(--t3);white-space:nowrap}
+
+/* Сегментный контрол со скользящей пилюлей */
+.sd-seg{position:relative;display:inline-flex;background:var(--bg);
+  border:1px solid var(--bd);border-radius:12px;padding:3px;gap:0}
+.sd-seg button{position:relative;z-index:1;border:none;background:transparent;
+  padding:8px 18px;font-size:13px;font-weight:600;color:var(--t3);cursor:pointer;
+  border-radius:9px;font-family:inherit;transition:color .2s}
+.sd-seg button.on{color:var(--t1)}
+.sd-seg-pill{position:absolute;top:3px;bottom:3px;border-radius:9px;
+  background:var(--card);box-shadow:0 1px 4px rgba(0,0,0,.12);
+  transition:left .25s cubic-bezier(.4,0,.2,1),width .25s cubic-bezier(.4,0,.2,1)}
+
+/* Каскад появления */
+.sd-anim{animation:sdCardIn .5s ease both;animation-delay:calc(var(--i,0)*60ms)}
+@keyframes sdCardIn{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
+
+/* Прогресс-кольцо */
+.sd-ring-row{display:flex;align-items:center;gap:12px;margin-top:4px}
+.sd-ring{width:64px;height:64px;flex-shrink:0}
+.sd-ring .bgc{fill:none;stroke:var(--card);stroke-width:7}
+.sd-ring .fgc{fill:none;stroke:var(--sda,var(--a));stroke-width:7;stroke-linecap:round;
+  transform:rotate(-90deg);transform-origin:50% 50%;
+  transition:stroke-dashoffset .7s cubic-bezier(.3,.6,.3,1)}
+.sd-ring text{font-size:15px;font-weight:800;fill:var(--sda,var(--t1))}
+
+/* Мини-бары в разбивке выручки */
+.sd-mini{height:4px;border-radius:2px;background:rgba(0,0,0,.06);overflow:hidden;margin-top:2px}
+[data-theme="dark"] .sd-mini{background:rgba(255,255,255,.08)}
+.sd-mini i{display:block;height:100%;border-radius:2px;width:0;transition:width .7s ease .2s}
+
+/* SVG-график */
+.sd-chart-wrap{position:relative;margin-top:10px}
+.sd-chart-wrap svg{display:block;width:100%}
+.sd-chart-line{fill:none;stroke:var(--sda-rev);stroke-width:2.5;
+  stroke-linecap:round;stroke-linejoin:round}
+.sd-chart-dot{fill:var(--sda-rev);stroke:var(--card);stroke-width:2;opacity:0;transition:opacity .15s}
+.sd-chart-guide{stroke:var(--t3);stroke-width:1;stroke-dasharray:3 4;opacity:0;transition:opacity .15s}
+.sd-chart-x{font-size:10px;fill:var(--t3)}
+.sd-tip{position:absolute;pointer-events:none;background:var(--t1);color:var(--card);
+  font-size:12px;font-weight:600;padding:5px 9px;border-radius:8px;white-space:nowrap;
+  transform:translate(-50%,-130%);opacity:0;transition:opacity .15s;z-index:5}
+
+/* Топ-5 */
+.sd-t5-row{display:grid;grid-template-columns:26px 1fr 64px 90px;gap:8px;
+  align-items:center;padding:9px 4px;border-bottom:1px solid var(--bg);font-size:13px}
+.sd-t5-rank{font-weight:800;color:var(--t3);text-align:center}
+.sd-t5-name{min-width:0}
+.sd-t5-name span{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sd-t5-bar{height:6px;border-radius:3px;background:var(--bg);overflow:hidden;margin-top:5px}
+.sd-t5-bar i{display:block;height:100%;border-radius:3px;background:var(--sdp-rev);width:0;transition:width .7s ease .15s}
+.sd-t5-row.lead .sd-t5-bar i{background:var(--sda-rev)}
+.sd-t5-cnt{text-align:right;color:var(--t2)}
+.sd-t5-sum{text-align:right;font-weight:700}
+.sd-t5-h{display:grid;grid-template-columns:26px 1fr 64px 90px;gap:8px;padding:4px;
+  font-size:11px;color:var(--t3);font-weight:600;border-bottom:1px solid var(--bd)}
+.sd-t5-h .srt{cursor:pointer;text-align:right;user-select:none}
+.sd-t5-h .srt:hover{color:var(--t1)}
+
+/* Десктоп: карточка выручки занимает 2 из 3 колонок ряда 1 */
+@media(min-width:701px){.sd-g3 .sd-card-rev{grid-column:span 2}}
+
+/* Доступность: всё статично при reduced-motion */
+@media (prefers-reduced-motion: reduce){
+  .sd-anim{animation:none}
+  .sd-ring .fgc,.sd-mini i,.sd-t5-bar i,.sd-seg-pill,.sd-p{transition:none}
+}
+@media(max-width:700px){
+  .sd-hero{flex-wrap:wrap;padding:14px 16px}
+  .sd-hero-dates{margin-left:0;flex-basis:100%}
+  .sd-hero-t h2{font-size:17px}
+}
