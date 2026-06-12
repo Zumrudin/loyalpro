@@ -496,6 +496,101 @@ async function _sdRender() {
   _sdRenderTop5(root.querySelector('#sd-top5'), data.topServices || []);
 }
 
-// Заглушки — заменяются в Task 5/6 плана редизайна.
-function _sdRenderChart(wrap, rows) { /* Task 5 */ }
+// SVG-график выручки: сглаженная кривая + градиентная область + hover-тултип.
+// rows: [{d:'2026-06-05', revenue:'58600'}]. 1 точка → плашка вместо графика.
+function _sdRenderChart(wrap, rows) {
+  if (!wrap) return;
+  if (!rows.length) {
+    wrap.innerHTML = '<div class="pp-hint" style="padding:20px;text-align:center">Нет данных за период</div>';
+    return;
+  }
+  if (rows.length === 1) {
+    wrap.innerHTML = `<div style="padding:24px;text-align:center">
+      <div style="font-size:30px;font-weight:800;color:var(--sda-rev)">₽ ${_sdFmtRub(rows[0].revenue)}</div>
+      <div style="font-size:12px;color:var(--t3);margin-top:4px">за сегодня</div></div>`;
+    return;
+  }
+  const W = 1200, H = 200, padL = 10, padR = 10, padT = 14, padB = 26;
+  const iw = W - padL - padR, ih = H - padT - padB;
+  const vals = rows.map(r => parseFloat(r.revenue) || 0);
+  const max = Math.max(...vals, 1);
+  const pts = vals.map((v, i) => [
+    padL + i * iw / (rows.length - 1),
+    padT + ih - (v / max) * ih,
+  ]);
+  // Catmull-Rom → cubic bezier (сглаживание)
+  let d = `M ${pts[0][0].toFixed(1)} ${pts[0][1].toFixed(1)}`;
+  for (let i = 0; i < pts.length - 1; i++) {
+    const p0 = pts[Math.max(0, i - 1)], p1 = pts[i],
+          p2 = pts[i + 1], p3 = pts[Math.min(pts.length - 1, i + 2)];
+    const c1 = [p1[0] + (p2[0] - p0[0]) / 6, p1[1] + (p2[1] - p0[1]) / 6];
+    const c2 = [p2[0] - (p3[0] - p1[0]) / 6, p2[1] - (p3[1] - p1[1]) / 6];
+    d += ` C ${c1[0].toFixed(1)} ${c1[1].toFixed(1)}, ${c2[0].toFixed(1)} ${c2[1].toFixed(1)}, ${p2[0].toFixed(1)} ${p2[1].toFixed(1)}`;
+  }
+  const area = `${d} L ${pts[pts.length - 1][0].toFixed(1)} ${H - padB} L ${pts[0][0].toFixed(1)} ${H - padB} Z`;
+  const step = Math.ceil(rows.length / 14);
+  const fmtD = (s) => { const parts = String(s).split('-'); return `${parseInt(parts[2])}.${parts[1]}`; };
+  const xLabels = rows.map((r, i) =>
+    (rows.length <= 14 || i % step === 0)
+      ? `<text class="sd-chart-x" x="${pts[i][0].toFixed(1)}" y="${H - 8}" text-anchor="middle">${fmtD(r.d)}</text>` : ''
+  ).join('');
+  const pathLen = 2200; // безопасно больше реальной длины — для stroke-dash анимации
+
+  wrap.innerHTML = `
+    <svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" style="height:200px">
+      <defs>
+        <linearGradient id="sdAg" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stop-color="var(--sda-rev)" stop-opacity=".25"/>
+          <stop offset="100%" stop-color="var(--sda-rev)" stop-opacity="0"/>
+        </linearGradient>
+      </defs>
+      <path class="sd-chart-area" d="${area}" fill="url(#sdAg)" style="opacity:0;transition:opacity .5s ease .4s"/>
+      <path class="sd-chart-line" d="${d}"
+        style="stroke-dasharray:${pathLen};stroke-dashoffset:${pathLen};transition:stroke-dashoffset .9s ease"/>
+      <line class="sd-chart-guide" x1="0" y1="${padT}" x2="0" y2="${H - padB}"/>
+      <circle class="sd-chart-dot" r="5" cx="0" cy="0"/>
+      ${xLabels}
+      <rect x="0" y="0" width="${W}" height="${H}" fill="transparent" style="cursor:crosshair"/>
+    </svg>
+    <div class="sd-tip"></div>`;
+
+  const svg = wrap.querySelector('svg');
+  const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    const line = svg.querySelector('.sd-chart-line');
+    const areaEl = svg.querySelector('.sd-chart-area');
+    if (reduced) { line.style.transition = 'none'; areaEl.style.transition = 'none'; }
+    line.style.strokeDashoffset = '0';
+    areaEl.style.opacity = '1';
+  }));
+
+  // Hover: ближайшая точка → направляющая + точка + тултип
+  const guide = svg.querySelector('.sd-chart-guide');
+  const dot = svg.querySelector('.sd-chart-dot');
+  const tip = wrap.querySelector('.sd-tip');
+  const MON = ['янв', 'фев', 'мар', 'апр', 'мая', 'июн', 'июл', 'авг', 'сен', 'окт', 'ноя', 'дек'];
+  svg.addEventListener('mousemove', (e) => {
+    const box = svg.getBoundingClientRect();
+    const x = (e.clientX - box.left) / box.width * W;
+    let best = 0, bd = Infinity;
+    pts.forEach((p, i) => { const dd = Math.abs(p[0] - x); if (dd < bd) { bd = dd; best = i; } });
+    const px = pts[best][0], py = pts[best][1];
+    guide.setAttribute('x1', px); guide.setAttribute('x2', px);
+    guide.style.opacity = '1';
+    dot.setAttribute('cx', px); dot.setAttribute('cy', py);
+    dot.style.opacity = '1';
+    const dparts = String(rows[best].d).split('-');
+    tip.textContent = `${parseInt(dparts[2])} ${MON[parseInt(dparts[1]) - 1]} · ₽ ${_sdFmtRub(rows[best].revenue)}`;
+    // px в координатах viewBox → проценты контейнера; зажать чтобы не вылезал
+    const leftPct = Math.min(92, Math.max(8, px / W * 100));
+    tip.style.left = leftPct + '%';
+    tip.style.top = (py / H * 100) + '%';
+    tip.style.opacity = '1';
+  });
+  svg.addEventListener('mouseleave', () => {
+    guide.style.opacity = '0'; dot.style.opacity = '0'; tip.style.opacity = '0';
+  });
+}
+
+// Заглушка — заменяется в Task 6 плана редизайна.
 function _sdRenderTop5(wrap, rows)  { /* Task 6 */ }
