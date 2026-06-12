@@ -54,3 +54,46 @@ describe('forecastMonthEnd', () => {
     expect(forecastMonthEnd(1000, 3, 20, 11, 30)).toBe(6667);
   });
 });
+
+describe('computePace', () => {
+  const { computePace } = require('./services/staff-goals');
+
+  test('план не задан → null', () => {
+    expect(computePace(0, 100, 200, 5, 20)).toBeNull();
+  });
+  test('факт ровно план → done, overPct 0', () => {
+    expect(computePace(100000, 100000, 120000, 10, 20))
+      .toEqual({ status: 'done', overPct: 0 });
+  });
+  test('перевыполнение → done с overPct', () => {
+    expect(computePace(100000, 112000, 130000, 10, 20))
+      .toEqual({ status: 'done', overPct: 12 });
+  });
+  test('нет графика → no_schedule с ratio', () => {
+    const p = computePace(100000, 40000, 80000, 0, 0);
+    expect(p.status).toBe('no_schedule');
+    expect(p.ratio).toBeCloseTo(0.8);
+  });
+  test('прогноз ровно 105% → ahead', () => {
+    expect(computePace(100000, 50000, 105000, 10, 20).status).toBe('ahead');
+  });
+  test('прогноз ровно 95% → tight', () => {
+    const p = computePace(100000, 50000, 95000, 10, 20);
+    expect(p.status).toBe('tight');
+    expect(p.remainingShifts).toBe(10);
+    expect(p.perShiftNeeded).toBe(5000); // (100000-50000)/10
+  });
+  test('прогноз 94.9% → behind', () => {
+    expect(computePace(100000, 40000, 94900, 10, 20).status).toBe('behind');
+  });
+  test('perShiftNeeded округляется вверх', () => {
+    const p = computePace(100000, 40000, 80000, 13, 20); // осталось 7 смен, нужно 60000/7
+    expect(p.perShiftNeeded).toBe(Math.ceil(60000 / 7)); // 8572
+  });
+  test('смен не осталось при behind → perShiftNeeded null', () => {
+    const p = computePace(100000, 40000, 80000, 20, 20);
+    expect(p.status).toBe('behind');
+    expect(p.remainingShifts).toBe(0);
+    expect(p.perShiftNeeded).toBeNull();
+  });
+});

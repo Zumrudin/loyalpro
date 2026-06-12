@@ -35,6 +35,27 @@ function forecastMonthEnd(fact, workedDays, plannedDays, elapsedDays, totalDays)
   return 0;
 }
 
+// Оценка темпа выполнения плана для автокомментария на дашборде.
+// Спека: docs/superpowers/specs/2026-06-12-goal-pace-analysis-design.md
+// → null            план не задан
+// → {status:'done', overPct}                 факт ≥ плана
+// → {status:'no_schedule', ratio}            график не синхронизирован
+// → {status:'ahead'}                          прогноз ≥ 105% плана
+// → {status:'tight'|'behind', perShiftNeeded, remainingShifts}
+//   tight: 95–105%, behind: <95%. perShiftNeeded=null если смен не осталось.
+function computePace(target, fact, forecast, workedDays, plannedDays) {
+  const t = parseFloat(target) || 0;
+  if (t <= 0) return null;
+  const f = parseFloat(fact) || 0;
+  if (f >= t) return { status: 'done', overPct: Math.round((f / t - 1) * 100) };
+  const ratio = (parseFloat(forecast) || 0) / t;
+  if (!(plannedDays > 0)) return { status: 'no_schedule', ratio };
+  if (ratio >= 1.05) return { status: 'ahead' };
+  const remainingShifts = Math.max(0, plannedDays - workedDays);
+  const perShiftNeeded = remainingShifts > 0 ? Math.ceil((t - f) / remainingShifts) : null;
+  return { status: ratio >= 0.95 ? 'tight' : 'behind', perShiftNeeded, remainingShifts };
+}
+
 // ── Запросы фактов ──────────────────────────────────────────────────
 
 // Факты за период по всем мастерам салона одним проходом.
@@ -168,6 +189,6 @@ async function getGoalForStaff(salonId, staffMemberId, ycStaffId, month, todayIs
 }
 
 module.exports = {
-  monthBounds, elapsedDaysInMonth, forecastMonthEnd,
+  monthBounds, elapsedDaysInMonth, forecastMonthEnd, computePace,
   getGoalsOverview, upsertGoal, getGoalForStaff,
 };
