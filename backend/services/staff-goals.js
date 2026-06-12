@@ -178,13 +178,15 @@ async function getGoalForStaff(salonId, staffMemberId, ycStaffId, month, todayIs
   ]);
   const f  = facts.get(ycStaffId) || { services: 0, goods: 0 };
   const sc = sched.get(ycStaffId) || { planned: 0, worked: 0 };
+  const servicesForecast = forecastMonthEnd(f.services, sc.worked, sc.planned, elapsed, daysTotal);
+  const goodsForecast    = forecastMonthEnd(f.goods,    sc.worked, sc.planned, elapsed, daysTotal);
   return {
     month, daysTotal, elapsedDays: elapsed,
     workedDays: sc.worked, plannedDays: sc.planned,
-    services: { target: servicesTarget, fact: f.services,
-                forecast: forecastMonthEnd(f.services, sc.worked, sc.planned, elapsed, daysTotal) },
-    goods:    { target: goodsTarget, fact: f.goods,
-                forecast: forecastMonthEnd(f.goods, sc.worked, sc.planned, elapsed, daysTotal) },
+    services: { target: servicesTarget, fact: f.services, forecast: servicesForecast,
+                pace: computePace(servicesTarget, f.services, servicesForecast, sc.worked, sc.planned) },
+    goods:    { target: goodsTarget, fact: f.goods, forecast: goodsForecast,
+                pace: computePace(goodsTarget, f.goods, goodsForecast, sc.worked, sc.planned) },
   };
 }
 
