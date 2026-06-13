@@ -79,6 +79,8 @@ async function loadBotSubscribers() {
 //   lastVisitDays   { gte?: N, lte?: N }   — дней с последнего визита
 //   birthMonth      1..12 — месяц ДР
 //   gender          'male' | 'female'
+//   phone           строка — частичное совпадение по нормализованным цифрам
+//                   ("+7 (905) 597-07-87", "8 905…", "9055970787" — эквиваленты)
 async function resolveAudience(salonId, filters = {}) {
   const subs = await loadBotSubscribers();
   if (!subs.rows.length) return [];
@@ -103,6 +105,8 @@ async function resolveAudience(salonId, filters = {}) {
   }
 
   const segKeys = Array.isArray(filters.segments) ? filters.segments.filter(Boolean) : [];
+  // Нормализованный фрагмент телефона (только цифры) — пустая строка ⇒ фильтр не применяется.
+  const phoneFrag = filters.phone ? normPhone(filters.phone) : '';
 
   const sql = `
     SELECT c.id                  AS client_id,
@@ -157,6 +161,11 @@ async function resolveAudience(salonId, filters = {}) {
     }
 
     if (filters.gender && c.gender && String(c.gender).toLowerCase() !== String(filters.gender).toLowerCase()) continue;
+
+    if (phoneFrag) {
+      const clientNp = normPhone(c.phone) || normPhone(sub.phone);
+      if (!clientNp.includes(phoneFrag)) continue;
+    }
 
     out.push({
       client_id:        c.client_id,

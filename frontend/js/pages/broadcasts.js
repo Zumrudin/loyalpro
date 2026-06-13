@@ -61,6 +61,8 @@ function bcToggleSeg(key, el) {
 
 function bcCollectFilters() {
   const filters = {};
+  const ph = (document.getElementById('bcPhone').value || '').trim();
+  if (ph) filters.phone = ph;
   if (_bcSegmentsSel.size) filters.segments = Array.from(_bcSegmentsSel);
   const bMin = document.getElementById('bcBonusMin').value;
   const bMax = document.getElementById('bcBonusMax').value;
@@ -109,7 +111,7 @@ function bcOpenComposer() {
   // reset
   _bcSegmentsSel.clear();
   document.querySelectorAll('#bcSegments .bc-chip').forEach(el => el.classList.remove('on'));
-  ['bcBonusMin', 'bcBonusMax', 'bcDaysGte', 'bcDaysLte'].forEach(id => document.getElementById(id).value = '');
+  ['bcPhone', 'bcBonusMin', 'bcBonusMax', 'bcDaysGte', 'bcDaysLte'].forEach(id => document.getElementById(id).value = '');
   document.getElementById('bcBirthMonth').value = '';
   document.getElementById('bcGender').value = '';
   document.getElementById('bcText').value = '';
@@ -186,6 +188,7 @@ function bcRenderHistoryItem(b) {
   const preview = (b.message_template || '').slice(0, 160) + ((b.message_template || '').length > 160 ? '…' : '');
   const filters = b.filters || {};
   const fParts = [];
+  if (filters.phone) fParts.push(`телефон: ${filters.phone}`);
   if (filters.segments && filters.segments.length) fParts.push(`сегменты: ${filters.segments.length}`);
   if (filters.bonusMin != null || filters.bonusMax != null) {
     fParts.push(`бонусы ${filters.bonusMin ?? '0'}–${filters.bonusMax ?? '∞'}`);
