@@ -13,7 +13,7 @@
 <script src="js/core/auth.js?v=2026-06-02a"></script>
 <script src="js/core/nav.js?v=2026-06-02a"></script>
 <link rel="stylesheet" href="css/base.css?v=2026-06-01-staff">
-<link rel="stylesheet" href="css/features.css?v=2026-06-11d">
+<link rel="stylesheet" href="css/features.css?v=2026-06-13b">
 </head>
 <body>
 
@@ -994,10 +994,10 @@
 
     <!-- ═══ TELEGRAM BROADCASTS PAGE ═══ -->
     <div class="page" id="page-broadcasts">
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px;flex-wrap:wrap;gap:12px">
+      <div class="bc-head">
         <div>
-          <div style="font-size:16px;font-weight:700">📨 Рассылка в Telegram</div>
-          <div id="bcMeta" style="font-size:12.5px;color:var(--t3);margin-top:2px">Подписчиков бота: —</div>
+          <div class="bc-head-title">📨 Рассылка в Telegram</div>
+          <div id="bcMeta" class="bc-head-sub">Подписчиков бота: —</div>
         </div>
         <button class="btn btn-pri" onclick="bcOpenComposer()">+ Новая рассылка</button>
       </div>
@@ -1008,42 +1008,42 @@
 
     <!-- ═══ BROADCAST COMPOSER MODAL ═══ -->
     <div id="bcComposerOv" class="ov" onclick="if(event.target===this)bcCloseComposer()">
-      <div class="modal" style="width:760px;max-width:96vw">
+      <div class="modal bc-modal">
         <div class="mh">
           <div class="mt">Новая рассылка</div>
           <button class="mc" onclick="bcCloseComposer()">✕</button>
         </div>
-        <div style="display:flex;flex-direction:column;gap:14px">
+        <div class="bc-modal-body">
 
-          <div class="stg-section" style="padding:12px;border:1px solid var(--bd);border-radius:8px">
-            <div style="font-size:13px;font-weight:600;margin-bottom:8px">Фильтр получателей</div>
+          <div class="bc-section">
+            <div class="bc-section-title">Фильтр получателей</div>
 
             <div class="fg" style="margin-bottom:10px">
               <label class="fl">Сегменты (любой из выбранных)</label>
-              <div id="bcSegments" style="display:flex;flex-wrap:wrap;gap:6px"></div>
+              <div id="bcSegments" class="bc-chip-row"></div>
             </div>
 
-            <div style="display:flex;gap:10px;flex-wrap:wrap">
-              <div class="fg" style="flex:1;min-width:140px">
+            <div class="bc-filter-row">
+              <div class="fg">
                 <label class="fl">Бонусов ≥</label>
-                <input id="bcBonusMin" type="number" min="0" placeholder="—" oninput="bcUpdatePreview()">
+                <input id="bcBonusMin" type="number" inputmode="numeric" min="0" placeholder="—" oninput="bcUpdatePreview()">
               </div>
-              <div class="fg" style="flex:1;min-width:140px">
+              <div class="fg">
                 <label class="fl">Бонусов ≤</label>
-                <input id="bcBonusMax" type="number" min="0" placeholder="—" oninput="bcUpdatePreview()">
+                <input id="bcBonusMax" type="number" inputmode="numeric" min="0" placeholder="—" oninput="bcUpdatePreview()">
               </div>
-              <div class="fg" style="flex:1;min-width:140px">
+              <div class="fg">
                 <label class="fl">Не был дней ≥</label>
-                <input id="bcDaysGte" type="number" min="0" placeholder="—" oninput="bcUpdatePreview()">
+                <input id="bcDaysGte" type="number" inputmode="numeric" min="0" placeholder="—" oninput="bcUpdatePreview()">
               </div>
-              <div class="fg" style="flex:1;min-width:140px">
+              <div class="fg">
                 <label class="fl">Не был дней ≤</label>
-                <input id="bcDaysLte" type="number" min="0" placeholder="—" oninput="bcUpdatePreview()">
+                <input id="bcDaysLte" type="number" inputmode="numeric" min="0" placeholder="—" oninput="bcUpdatePreview()">
               </div>
             </div>
 
-            <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:6px">
-              <div class="fg" style="flex:1;min-width:140px">
+            <div class="bc-filter-row bc-filter-row-2" style="margin-top:6px">
+              <div class="fg">
                 <label class="fl">Месяц ДР</label>
                 <select id="bcBirthMonth" onchange="bcUpdatePreview()">
                   <option value="">— любой —</option>
@@ -1055,7 +1055,7 @@
                   <option value="11">Ноябрь</option><option value="12">Декабрь</option>
                 </select>
               </div>
-              <div class="fg" style="flex:1;min-width:140px">
+              <div class="fg">
                 <label class="fl">Пол</label>
                 <select id="bcGender" onchange="bcUpdatePreview()">
                   <option value="">— любой —</option>
@@ -1065,28 +1065,28 @@
               </div>
             </div>
 
-            <div id="bcPreview" style="margin-top:10px;padding:10px;background:var(--bg2);border-radius:6px;font-size:13px">
+            <div id="bcPreview" class="bc-preview" style="margin-top:10px">
               <span style="color:var(--t3)">Получателей: </span>
-              <b id="bcPreviewCount">—</b>
-              <span id="bcPreviewSample" style="color:var(--t3);margin-left:8px"></span>
+              <b id="bcPreviewCount" class="bc-preview-count">—</b>
+              <span id="bcPreviewSample" class="bc-preview-sample"></span>
             </div>
           </div>
 
-          <div class="stg-section" style="padding:12px;border:1px solid var(--bd);border-radius:8px">
-            <div style="font-size:13px;font-weight:600;margin-bottom:6px">Текст сообщения</div>
-            <div style="font-size:11.5px;color:var(--t3);margin-bottom:6px">
-              Поддерживается HTML-разметка Telegram: &lt;b&gt;жирный&lt;/b&gt;, &lt;i&gt;курсив&lt;/i&gt;, &lt;a href="…"&gt;ссылка&lt;/a&gt;.
+          <div class="bc-section">
+            <div class="bc-section-title">Текст сообщения</div>
+            <div class="bc-section-hint">
+              HTML-разметка Telegram: &lt;b&gt;жирный&lt;/b&gt;, &lt;i&gt;курсив&lt;/i&gt;, &lt;a href="…"&gt;ссылка&lt;/a&gt;.<br>
               Подстановки:
-              <code style="cursor:pointer" onclick="bcInsertVar('{name}')">{name}</code>
-              <code style="cursor:pointer" onclick="bcInsertVar('{first_name}')">{first_name}</code>
-              <code style="cursor:pointer" onclick="bcInsertVar('{bonuses}')">{bonuses}</code>
-              <code style="cursor:pointer" onclick="bcInsertVar('{salon}')">{salon}</code>
+              <code onclick="bcInsertVar('{name}')">{name}</code>
+              <code onclick="bcInsertVar('{first_name}')">{first_name}</code>
+              <code onclick="bcInsertVar('{bonuses}')">{bonuses}</code>
+              <code onclick="bcInsertVar('{salon}')">{salon}</code>
             </div>
-            <textarea id="bcText" rows="7" placeholder="Здравствуйте, {first_name}! У вас на счету {bonuses} бонусов…" style="width:100%;font-family:inherit;font-size:13.5px;resize:vertical" maxlength="4000"></textarea>
-            <div style="font-size:11px;color:var(--t3);margin-top:4px"><span id="bcCharCount">0</span> / 4000</div>
+            <textarea id="bcText" class="bc-textarea" rows="7" placeholder="Здравствуйте, {first_name}! У вас на счету {bonuses} бонусов…" maxlength="4000"></textarea>
+            <div class="bc-char-count"><span id="bcCharCount">0</span> / 4000</div>
           </div>
 
-          <div style="display:flex;gap:10px;justify-content:flex-end">
+          <div class="bc-actions">
             <button class="btn btn-sec" onclick="bcCloseComposer()">Отмена</button>
             <button id="bcSendBtn" class="btn btn-pri" onclick="bcSend()">Отправить</button>
           </div>
@@ -1781,7 +1781,7 @@ function fireConfetti() {
 <script src="js/pages/users.js"></script>
 <script src="js/pages/clients.js"></script>
 <script src="js/pages/dashboard.js"></script>
-<script src="js/pages/broadcasts.js?v=2026-06-13a"></script>
+<script src="js/pages/broadcasts.js?v=2026-06-13b"></script>
 <script src="js/app.js"></script>
 </body>
 </html>

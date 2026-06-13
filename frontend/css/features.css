@@ -380,3 +380,98 @@
   .sd-hero-dates{margin-left:0;flex-basis:100%}
   .sd-hero-t h2{font-size:17px}
 }
+
+/* ═══════════════════════════════════════════════════════════════
+   BROADCASTS PAGE (📨 Рассылка в Telegram)
+   ═══════════════════════════════════════════════════════════════ */
+
+/* Шапка страницы */
+.bc-head{display:flex;align-items:center;justify-content:space-between;
+  margin-bottom:20px;flex-wrap:wrap;gap:12px}
+.bc-head-title{font-size:16px;font-weight:700}
+.bc-head-sub{font-size:12.5px;color:var(--t3);margin-top:2px}
+
+/* Composer modal: на десктопе шире обычной модалки */
+.bc-modal{width:760px;max-width:96vw}
+.bc-modal-body{display:flex;flex-direction:column;gap:14px}
+
+/* Секции фильтра / редактора текста */
+.bc-section{padding:12px;border:1px solid var(--bd);border-radius:8px}
+.bc-section-title{font-size:13px;font-weight:600;margin-bottom:8px}
+.bc-section-hint{font-size:11.5px;color:var(--t3);margin-bottom:6px}
+.bc-section-hint code{cursor:pointer;background:var(--bg2);padding:1px 6px;
+  border-radius:4px;margin:0 2px;font-size:11px}
+
+/* Чипы сегментов */
+.bc-chip-row{display:flex;flex-wrap:wrap;gap:6px}
+.bc-chip{display:inline-block;padding:5px 11px;border-radius:14px;
+  font-size:12px;border:1px solid var(--bd);cursor:pointer;
+  user-select:none;background:var(--bg2);transition:.15s}
+.bc-chip.on{background:var(--a);border-color:var(--a);color:#fff}
+
+/* Сетка фильтров: 4 поля в ряд на десктопе */
+.bc-filter-row{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
+.bc-filter-row-2{grid-template-columns:repeat(2,1fr)}  /* для рядов из 2 полей */
+.bc-filter-row .fg{margin-bottom:0}
+
+/* Превью аудитории */
+.bc-preview{padding:10px;background:var(--bg2);border-radius:6px;font-size:13px}
+.bc-preview-count{font-weight:700}
+.bc-preview-sample{color:var(--t3);margin-left:8px}
+
+/* Textarea сообщения */
+.bc-textarea{width:100%;font-family:inherit;font-size:13.5px;resize:vertical;
+  min-height:120px;padding:8px 10px;border:1px solid var(--bd);
+  border-radius:6px;background:var(--bg);color:var(--t1);box-sizing:border-box}
+.bc-textarea:focus{outline:none;border-color:var(--a)}
+.bc-char-count{font-size:11px;color:var(--t3);margin-top:4px;text-align:right}
+
+/* Действия (Отмена / Отправить) */
+.bc-actions{display:flex;gap:10px;justify-content:flex-end;flex-wrap:wrap}
+
+/* История рассылок */
+.bc-row{background:var(--bg2);border:1px solid var(--bd);border-radius:10px;
+  padding:14px 16px;margin-bottom:10px}
+.bc-row-grid{display:flex;justify-content:space-between;align-items:flex-start;
+  gap:12px;flex-wrap:wrap}
+.bc-row-left{flex:1;min-width:0}  /* min-width:0 чтобы preview мог сжиматься */
+.bc-row-right{text-align:right;min-width:160px;flex-shrink:0}
+.bc-row-status{display:inline-block;padding:2px 8px;border-radius:10px;
+  font-size:11px;font-weight:600;margin-right:8px}
+.bc-row-meta{font-size:13px;font-weight:600;margin-bottom:4px}
+.bc-row-preview{font-size:12.5px;color:var(--t2);margin-bottom:6px;
+  white-space:pre-wrap;word-wrap:break-word;overflow-wrap:break-word}
+.bc-row-filters{font-size:11.5px;color:var(--t3)}
+.bc-row-errors{margin-top:6px;font-size:11px;color:var(--t3);
+  word-wrap:break-word;overflow-wrap:break-word}
+.bc-progress-lbl{font-size:11px;color:var(--t3)}
+.bc-progress-val{font-size:13.5px;font-weight:700}
+.bc-progress-bar{height:6px;background:var(--bd);border-radius:3px;
+  margin-top:6px;overflow:hidden}
+.bc-progress-bar i{display:block;height:100%;transition:width .3s}
+
+/* ─── Мобильные брейкпоинты ──────────────────────────────────── */
+@media(max-width:700px){
+  .bc-modal{width:100%;max-width:100vw;border-radius:0;
+    max-height:100vh;height:100vh;padding:16px}
+  .bc-filter-row{grid-template-columns:repeat(2,1fr);gap:8px}
+  .bc-section{padding:10px}
+  .bc-textarea{min-height:140px;font-size:14px}  /* 14px чтобы iOS не зумил */
+  .bc-actions{justify-content:stretch}
+  .bc-actions .btn{flex:1;justify-content:center}
+  .bc-row-grid{flex-direction:column}
+  .bc-row-right{text-align:left;min-width:0;width:100%}
+  .bc-progress-bar{margin-top:4px}
+  .bc-head{margin-bottom:14px}
+  .bc-head .btn{width:100%}
+  .bc-head>div:first-child{flex:1 1 100%}
+}
+@media(max-width:480px){
+  .bc-filter-row{grid-template-columns:1fr}
+  .bc-modal{padding:12px}
+  .bc-section{padding:8px}
+  .bc-section-hint code{display:inline-block;margin:2px 2px;font-size:10.5px}
+  .bc-row{padding:12px;border-radius:8px}
+  .bc-row-preview{font-size:12px}
+  .bc-chip{padding:5px 9px;font-size:11.5px}
+}

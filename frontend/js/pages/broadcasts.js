@@ -43,9 +43,7 @@ async function bcRenderSegmentChips() {
   const wrap = document.getElementById('bcSegments');
   if (!wrap) return;
   wrap.innerHTML = BC_SEGMENTS.map(s => `
-    <span class="bc-chip" data-key="${s.key}" onclick="bcToggleSeg('${s.key}', this)"
-          style="display:inline-block;padding:5px 11px;border-radius:14px;font-size:12px;
-                 border:1px solid var(--bd);cursor:pointer;user-select:none;background:var(--bg2)">
+    <span class="bc-chip" data-key="${s.key}" onclick="bcToggleSeg('${s.key}', this)">
       ${esc(s.label)}
     </span>`).join('');
 }
@@ -53,14 +51,10 @@ async function bcRenderSegmentChips() {
 function bcToggleSeg(key, el) {
   if (_bcSegmentsSel.has(key)) {
     _bcSegmentsSel.delete(key);
-    el.style.background = 'var(--bg2)';
-    el.style.borderColor = 'var(--bd)';
-    el.style.color = '';
+    el.classList.remove('on');
   } else {
     _bcSegmentsSel.add(key);
-    el.style.background = 'var(--a)';
-    el.style.borderColor = 'var(--a)';
-    el.style.color = '#fff';
+    el.classList.add('on');
   }
   bcUpdatePreview();
 }
@@ -114,11 +108,7 @@ function bcUpdatePreview() {
 function bcOpenComposer() {
   // reset
   _bcSegmentsSel.clear();
-  document.querySelectorAll('#bcSegments .bc-chip').forEach(el => {
-    el.style.background = 'var(--bg2)';
-    el.style.borderColor = 'var(--bd)';
-    el.style.color = '';
-  });
+  document.querySelectorAll('#bcSegments .bc-chip').forEach(el => el.classList.remove('on'));
   ['bcBonusMin', 'bcBonusMax', 'bcDaysGte', 'bcDaysLte'].forEach(id => document.getElementById(id).value = '');
   document.getElementById('bcBirthMonth').value = '';
   document.getElementById('bcGender').value = '';
@@ -210,29 +200,27 @@ function bcRenderHistoryItem(b) {
 
   const canCancel = b.status === 'pending' || b.status === 'in_progress';
   const errLine = (b.errorSamples && b.errorSamples.length)
-    ? `<div style="margin-top:6px;font-size:11px;color:var(--t3)">Примеры ошибок: ${b.errorSamples.slice(0,3).map(e => esc(e.error || '').slice(0, 60)).join(' / ')}</div>`
+    ? `<div class="bc-row-errors">Примеры ошибок: ${b.errorSamples.slice(0,3).map(e => esc(e.error || '').slice(0, 60)).join(' / ')}</div>`
     : '';
 
   return `
-    <div class="bc-row" data-id="${b.id}" style="background:var(--bg2);border:1px solid var(--bd);border-radius:10px;padding:14px 16px;margin-bottom:10px">
-      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap">
-        <div style="flex:1;min-width:240px">
-          <div style="font-size:13px;font-weight:600;margin-bottom:4px">
-            <span style="display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:600;background:${s.color}22;color:${s.color};margin-right:8px">${s.lbl}</span>
+    <div class="bc-row" data-id="${b.id}">
+      <div class="bc-row-grid">
+        <div class="bc-row-left">
+          <div class="bc-row-meta">
+            <span class="bc-row-status" style="background:${s.color}22;color:${s.color}">${s.lbl}</span>
             ${esc(b.author_name || '—')} · ${esc(created)}
           </div>
-          <div style="font-size:12.5px;color:var(--t2);margin-bottom:6px;white-space:pre-wrap">${esc(preview)}</div>
-          <div style="font-size:11.5px;color:var(--t3)">${esc(fLine)}</div>
+          <div class="bc-row-preview">${esc(preview)}</div>
+          <div class="bc-row-filters">${esc(fLine)}</div>
           ${errLine}
         </div>
-        <div style="text-align:right;min-width:160px">
-          <div style="font-size:11px;color:var(--t3)">Прогресс</div>
-          <div style="font-size:13.5px;font-weight:700">${b.sent.toLocaleString('ru')} / ${b.total.toLocaleString('ru')}
+        <div class="bc-row-right">
+          <div class="bc-progress-lbl">Прогресс</div>
+          <div class="bc-progress-val">${b.sent.toLocaleString('ru')} / ${b.total.toLocaleString('ru')}
             ${b.failed > 0 ? `<span style="color:var(--danger);font-size:11px">· ${b.failed} ошибок</span>` : ''}
           </div>
-          <div style="height:6px;background:var(--bd);border-radius:3px;margin-top:6px;overflow:hidden">
-            <div style="width:${pct}%;height:100%;background:${s.color};transition:width .3s"></div>
-          </div>
+          <div class="bc-progress-bar"><i style="width:${pct}%;background:${s.color}"></i></div>
           ${canCancel ? `<button class="btn btn-sec btn-sm" style="margin-top:8px" onclick="bcCancel(${b.id})">Отменить</button>` : ''}
         </div>
       </div>
@@ -259,9 +247,8 @@ function bcStartPolling() {
     const page = document.getElementById('page-broadcasts');
     if (!page || !page.classList.contains('active')) return;
     // Проверяем, есть ли активные рассылки в DOM
-    const hasActive = Array.from(document.querySelectorAll('.bc-row')).some(row => {
-      const lbl = row.querySelector('span');
-      const txt = lbl ? lbl.textContent : '';
+    const hasActive = Array.from(document.querySelectorAll('.bc-row .bc-row-status')).some(lbl => {
+      const txt = (lbl.textContent || '').trim();
       return txt === 'В очереди' || txt === 'Отправляется';
     });
     if (!hasActive) return;
