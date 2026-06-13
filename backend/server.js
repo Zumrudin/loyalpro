@@ -90,10 +90,13 @@ app.use(cors({
 }));
 // NOTE: No manual app.options('*', ...) handler — cors() middleware handles OPTIONS preflight correctly.
 app.use(express.json({ limit: '2mb' }));
-app.use(express.static(path.join(__dirname, '../frontend'), { etag: false, lastModified: false, setHeaders: (res, filePath) => { if (filePath.endsWith('.js') || filePath.endsWith('.css')) { res.setHeader('Cache-Control', 'no-store'); } } }));
+app.use(express.static(path.join(__dirname, '../frontend'), { etag: false, lastModified: false, setHeaders: (res, filePath) => { if (filePath.endsWith('.js') || filePath.endsWith('.css') || filePath.endsWith('.html')) { res.setHeader('Cache-Control', 'no-store'); } } }));
 
 // Explicit route for index.html
 app.get('/', (req, res) => {
+  // index.html не кэшируем — иначе обновления UI «прилипают» в браузере после
+  // деплоя/правок CSS/JS (cache-buster в URL не помогает, пока сам HTML стар).
+  res.setHeader('Cache-Control', 'no-store');
   res.sendFile(path.join(__dirname, '../frontend/index.html'));
 });
 
