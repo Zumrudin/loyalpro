@@ -32,7 +32,11 @@ const db = {
 };
 
 const botDb = {
-  one: async (sql, p) => { const r = await botPool.query(sql, p); return r.rows[0] || null; },
+  query:     (sql, p) => botPool.query(sql, p),
+  one:       async (sql, p) => { const r = await botPool.query(sql, p); return r.rows[0] || null; },
+  oneOrNone: async (sql, p) => { const r = await botPool.query(sql, p); return r.rows[0] || null; },
+  many:      async (sql, p) => { const r = await botPool.query(sql, p); return r.rows; },
+  any:       async (sql, p) => { const r = await botPool.query(sql, p); return r.rows; },
 };
 
 module.exports = { pool, db, botDb };

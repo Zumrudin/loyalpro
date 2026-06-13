@@ -51,6 +51,7 @@ module.exports = function mountRoutes(app) {
   app.use('/api/app-settings',      require('./app-settings'));
   app.use('/api/portfolio',         require('./portfolio'));
   app.use('/api/patient-portfolio', require('./patient-portfolio'));
+  app.use('/api/broadcasts',        require('./broadcasts'));
 
   // ── Clients CRUD at /api/clients (has /:id — must be specific prefix) ──
   app.use('/api/clients',           require('./clients'));

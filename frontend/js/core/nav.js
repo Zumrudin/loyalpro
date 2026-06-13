@@ -19,6 +19,7 @@ function nav(el) {
   if (p === 'records')         { setDefDates(); loadRecords(1); }
   if (p === 'staff-analytics') loadStaffAnalytics();
   if (p === 'segments')        loadSegments();
+  if (p === 'broadcasts')      loadBroadcasts();
   if (p === 'home-care')       loadHomeCare();
   if (p === 'patient-portfolio') loadPatientPortfolio();
   if (p === 'staff-dashboard') loadStaffDashboard();

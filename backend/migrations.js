@@ -592,6 +592,63 @@ async function runMigrations(client) {
     CREATE INDEX IF NOT EXISTS idx_records_salon_yc_client
       ON records (salon_id, yclients_client_id)
   `).catch(() => {});
+
+  // ── Telegram broadcasts ────────────────────────────────────────
+  // Рассылка сообщений подписчикам Telegram-бота. Очередь живёт в основной
+  // БД (broadcasts + broadcast_recipients), а сам список подписчиков
+  // подтягивается из botDb (n8n_db.clients_peri.tg_id) в момент создания.
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS broadcasts (
+      id                SERIAL PRIMARY KEY,
+      salon_id          INTEGER NOT NULL REFERENCES salons(id) ON DELETE CASCADE,
+      author_user_id    INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      message_template  TEXT NOT NULL,
+      filters           JSONB NOT NULL DEFAULT '{}'::jsonb,
+      status            VARCHAR(20) NOT NULL DEFAULT 'pending',
+      total             INTEGER NOT NULL DEFAULT 0,
+      sent              INTEGER NOT NULL DEFAULT 0,
+      failed            INTEGER NOT NULL DEFAULT 0,
+      created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      started_at        TIMESTAMPTZ,
+      finished_at       TIMESTAMPTZ,
+      cancel_requested  BOOLEAN NOT NULL DEFAULT FALSE,
+      last_error        TEXT
+    )
+  `).catch(() => {});
+
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS idx_broadcasts_salon_created
+      ON broadcasts (salon_id, created_at DESC)
+  `).catch(() => {});
+
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS idx_broadcasts_status
+      ON broadcasts (status) WHERE status IN ('pending','in_progress')
+  `).catch(() => {});
+
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS broadcast_recipients (
+      id                BIGSERIAL PRIMARY KEY,
+      broadcast_id      INTEGER NOT NULL REFERENCES broadcasts(id) ON DELETE CASCADE,
+      client_id         INTEGER REFERENCES clients(id) ON DELETE SET NULL,
+      telegram_chat_id  BIGINT NOT NULL,
+      client_name       VARCHAR(255),
+      personalized_text TEXT NOT NULL,
+      status            VARCHAR(20) NOT NULL DEFAULT 'pending',
+      error             TEXT,
+      sent_at           TIMESTAMPTZ
+    )
+  `).catch(() => {});
+
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS idx_broadcast_recipients_pending
+      ON broadcast_recipients (broadcast_id, status)
+  `).catch(() => {});
+
+  await client.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_broadcast_recipient
+      ON broadcast_recipients (broadcast_id, telegram_chat_id)
+  `).catch(() => {});
 }
 
 module.exports = { runMigrations };
