@@ -27,6 +27,28 @@ function sanitizeUpper(s) {
   return (s == null ? '' : String(s)).trim().toUpperCase();
 }
 
+// Дату → составные блоки {dd, mm, yyyy} (строки). Для раздельного позиционирования
+// числа/месяца/года в группах клеток с разделителями-точками на бланке.
+function splitDateParts(value) {
+  const a = splitDate(value);
+  if (!a) return null;
+  return { dd: a[0] + a[1], mm: a[2] + a[3], yyyy: a[4] + a[5] + a[6] + a[7] };
+}
+
+// «Серия и номер» (паспорт РФ) → блоки: серия 2+2, номер 3+3.
+// На вводе одно поле; первые 4 цифры — серия, следующие 6 — номер.
+// Возвращает только непустые блоки; null если цифр нет.
+function splitDoc(value) {
+  const digits = (value == null ? '' : String(value)).replace(/\D/g, '');
+  if (!digits) return null;
+  const serie = digits.slice(0, 4);
+  const num = digits.slice(4, 10);
+  const out = {};
+  if (serie.length) { out.serie1 = serie.slice(0, 2); if (serie.length > 2) out.serie2 = serie.slice(2, 4); }
+  if (num.length)   { out.number1 = num.slice(0, 3); if (num.length > 3) out.number2 = num.slice(3, 6); }
+  return out;
+}
+
 // Единое поле name → {last, first, middle}
 function splitFullName(name) {
   const parts = sanitizeUpper(name).split(/\s+/).filter(Boolean);
@@ -37,4 +59,4 @@ function splitFullName(name) {
   };
 }
 
-module.exports = { splitAmount, splitDate, splitFullName, sanitizeUpper };
+module.exports = { splitAmount, splitDate, splitDateParts, splitDoc, splitFullName, sanitizeUpper };

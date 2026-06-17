@@ -10,7 +10,7 @@ const { createLogger } = require('../logger');
 const { buildDefaults } = require('../services/medical-cert-defaults');
 const { fillCertificate } = require('../services/medical-cert-pdf');
 const tpl = require('../services/medical-cert-template');
-const { splitAmount, splitDate, sanitizeUpper } = require('../services/medical-cert-layout');
+const { splitAmount, splitDateParts, splitDoc, sanitizeUpper } = require('../services/medical-cert-layout');
 
 const logger = createLogger('MedicalCert');
 const adminOnly = [auth, requireRole('owner', 'admin')];
@@ -33,6 +33,20 @@ router.get('/defaults', adminOnly, async (req, res) => {
 function mapValues(body) {
   const v = {};
   const set = (k, val) => { if (val !== undefined && val !== null && val !== '') v[k] = val; };
+  // Дата → отдельные блоки <prefix>_dd / _mm / _yyyy (каждый позиционируется отдельно).
+  const setDate = (prefix, raw) => {
+    const p = splitDateParts(raw);
+    if (p) { v[prefix + '_dd'] = p.dd; v[prefix + '_mm'] = p.mm; v[prefix + '_yyyy'] = p.yyyy; }
+  };
+  // Серия и номер → блоки <serie>1/2 (серия 2+2) и <num>1/2 (номер 3+3).
+  const setDoc = (serieKey, numKey, raw) => {
+    const d = splitDoc(raw);
+    if (!d) return;
+    if (d.serie1) v[serieKey + '1'] = d.serie1;
+    if (d.serie2) v[serieKey + '2'] = d.serie2;
+    if (d.number1) v[numKey + '1'] = d.number1;
+    if (d.number2) v[numKey + '2'] = d.number2;
+  };
 
   set('cert_number', body.cert_number);
   set('correction_number', body.correction_number);
@@ -45,10 +59,10 @@ function mapValues(body) {
   set('payer_first', sanitizeUpper(body.payer_first));
   set('payer_middle', sanitizeUpper(body.payer_middle));
   if (body.payer_inn) set('payer_inn', String(body.payer_inn));
-  const pbd = splitDate(body.payer_birthdate); if (pbd) v.payer_birthdate = pbd.join('');
+  setDate('payer_birthdate', body.payer_birthdate);
   if (body.doc_type_code) set('doc_type_code', String(body.doc_type_code));
-  if (body.doc_serie_number) set('doc_serie_number', String(body.doc_serie_number).replace(/\s/g, ''));
-  const did = splitDate(body.doc_issue_date); if (did) v.doc_issue_date = did.join('');
+  setDoc('doc_serie', 'doc_number', body.doc_serie_number);
+  setDate('doc_issue_date', body.doc_issue_date);
   set('payer_is_patient', body.payer_is_patient === '1' || body.payer_is_patient === true ? '1' : '0');
 
   const a1 = splitAmount(body.amount1); if (a1) { v.amount1_rub = a1.rubles; v.amount1_kop = a1.kopecks; }
@@ -57,7 +71,7 @@ function mapValues(body) {
   set('signer_last', sanitizeUpper(body.signer_last));
   set('signer_first', sanitizeUpper(body.signer_first));
   set('signer_middle', sanitizeUpper(body.signer_middle));
-  const sd = splitDate(body.sign_date); if (sd) v.sign_date = sd.join('');
+  setDate('sign_date', body.sign_date);
   set('pages_count', body.payer_is_patient === '1' ? '1' : '2');
 
   // Страница 2 — только если плательщик ≠ пациент
@@ -66,10 +80,10 @@ function mapValues(body) {
     set('patient_first', sanitizeUpper(body.patient_first));
     set('patient_middle', sanitizeUpper(body.patient_middle));
     if (body.patient_inn) set('patient_inn', String(body.patient_inn));
-    const ptbd = splitDate(body.patient_birthdate); if (ptbd) v.patient_birthdate = ptbd.join('');
+    setDate('patient_birthdate', body.patient_birthdate);
     if (body.patient_doc_type) set('patient_doc_type', String(body.patient_doc_type));
-    if (body.patient_doc_serie) set('patient_doc_serie', String(body.patient_doc_serie).replace(/\s/g, ''));
-    const ptd = splitDate(body.patient_doc_date); if (ptd) v.patient_doc_date = ptd.join('');
+    setDoc('patient_serie', 'patient_number', body.patient_doc_serie);
+    setDate('patient_doc_date', body.patient_doc_date);
   }
   return v;
 }
