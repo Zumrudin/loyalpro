@@ -49,7 +49,10 @@ function drawField(page, font, value, f) {
 async function fillCertificate({ blank, coords, values }) {
   const doc = await PDFDocument.load(blank);
   doc.registerFontkit(fontkit);
-  const font = await doc.embedFont(fs.readFileSync(FONT_PATH), { subset: true });
+  // subset:false — субсеттинг fontkit искажает кириллические глифы для этого
+  // PTSans TTF (цифры/латиница выживают, кириллица ломается). Полное встраивание
+  // даёт корректный рендер ценой ~+300 КБ к размеру PDF.
+  const font = await doc.embedFont(fs.readFileSync(FONT_PATH), { subset: false });
   const pages = doc.getPages();
 
   for (const [name, f] of Object.entries(coords.fields || {})) {
