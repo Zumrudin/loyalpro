@@ -46,4 +46,12 @@ module.exports = {
 
   // Sync
   SYNC_DAYS: 365,
+
+  // Medical Certificate КНД 1151156 — clinic defaults
+  MEDICAL_CERT_CLINIC: {
+    org_name: process.env.MEDCERT_ORG_NAME || 'ООО «КЛИНИКА ЭСТЕТИЧЕСКОЙ МЕДИЦИНЫ «ПЕРИ КЛИНИК»',
+    org_inn:  process.env.MEDCERT_ORG_INN  || '9724060392',
+    org_kpp:  process.env.MEDCERT_ORG_KPP  || '772401001',
+    signer_name: process.env.MEDCERT_SIGNER || 'Гаджиева Пери Исамудиновна',
+  },
 };
