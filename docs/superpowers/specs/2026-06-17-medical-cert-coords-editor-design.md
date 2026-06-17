@@ -16,13 +16,21 @@
 - Проект уже грузит сторонние библиотеки с CDN jsdelivr (`chart.js`, `canvas-confetti`) и лениво подключает `html2pdf` динамическим `<script>` в [staff.js](../../../frontend/js/pages/staff.js#L373) — `pdf.js` подключаем тем же способом.
 - Есть паттерн полноэкранной модалки (`staff-profile-modal`: `position:fixed;inset:0;z-index:1000;background:rgba(0,0,0,.45)`) и хелперы `api()`, `notify(msg,type)` (тип ошибки — `'err'`), `esc()`, `escAttr()`.
 
-## Переиспользуемые эндпоинты (без изменений)
+## Эндпоинты
 
-- `GET /api/medical-cert/template` → `{ fileName, version, url }` — presigned URL пустого бланка.
 - `GET /api/medical-cert/template/coords` → карта координат `{ version, pageSize:{width,height}, fields:{...} }`.
 - `PUT /api/medical-cert/template/coords` (body = вся карта) → `{ ok:true }`.
+- **`GET /api/medical-cert/template/blank`** (добавлен) → сырой PDF активного бланка (`application/pdf`), same-origin прокси к S3.
 
 Формат поля карты (из дефолтной карты): `{ page, type:'cells'|'text'|'checkbox', x, y, step?, max?, width?, lineHeight?, fontSize?, align?, anchorRight? }`.
+
+### Доставка бланка и pdf.js (важно — CSP)
+
+Приложение отдаёт строгий CSP (`connect-src 'self'`, helmet в `server.js`). Браузер **не может** делать `fetch`/XHR на чужой origin, поэтому pdf.js **нельзя** скармливать presigned-S3-URL напрямую (а у бакета Yandex ещё и нет CORS-заголовков). Решение — всё с того же origin:
+
+- Бланк грузится байтами через прокси `GET /api/medical-cert/template/blank` и передаётся в `pdfjsLib.getDocument({ data })` — pdf.js не делает сетевых запросов на чужой origin.
+- `pdf.js` и его worker **вендорятся** в `frontend/js/vendor/pdfjs/` (`pdf.min.js`, `pdf.worker.min.js`, v3.11.174) и грузятся same-origin — без CDN/CSP-зависимостей и без ослабления CSP.
+- `<img>`-превью S3 по-прежнему работают через `imgSrc` (CSP это разрешает), но для `connect-src` это не помогает — отсюда прокси.
 
 ## Архитектура
 

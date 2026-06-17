@@ -2,18 +2,17 @@
 // Визуальный редактор координат бланка медсправки.
 // Зависимости: api(), notify(), esc(); mcPtToScreen/mcScreenToPt/mcSampleFor (transform.js).
 
-const MC_PDFJS_VER = '3.11.174';
 const mcVE = { coords: null, baseScale: 1.5, selected: null, showGrid: false, dragging: null };
 
-// Лениво подгрузить pdf.js (как html2pdf в staff.js).
+// Лениво подгрузить вендоренный pdf.js (same-origin — CSP connect-src 'self' ок,
+// без зависимости от CDN; worker тоже локальный).
 function mcLoadPdfJs() {
   if (window.pdfjsLib) return Promise.resolve(window.pdfjsLib);
   return new Promise((resolve, reject) => {
     const s = document.createElement('script');
-    s.src = `https://cdn.jsdelivr.net/npm/pdfjs-dist@${MC_PDFJS_VER}/build/pdf.min.js`;
+    s.src = '/js/vendor/pdfjs/pdf.min.js';
     s.onload = () => {
-      window.pdfjsLib.GlobalWorkerOptions.workerSrc =
-        `https://cdn.jsdelivr.net/npm/pdfjs-dist@${MC_PDFJS_VER}/build/pdf.worker.min.js`;
+      window.pdfjsLib.GlobalWorkerOptions.workerSrc = '/js/vendor/pdfjs/pdf.worker.min.js';
       resolve(window.pdfjsLib);
     };
     s.onerror = () => reject(new Error('pdfjs load failed'));
@@ -21,10 +20,16 @@ function mcLoadPdfJs() {
   });
 }
 
+// Скачать байты активного бланка с того же origin (прокси-роут бэка).
+async function mcFetchBlankBytes() {
+  const resp = await fetch('/api/medical-cert/template/blank', {
+    headers: { 'Authorization': 'Bearer ' + localStorage.getItem('lp_tk') },
+  });
+  if (!resp.ok) throw new Error((await resp.json().catch(() => ({}))).error || resp.status);
+  return await resp.arrayBuffer();
+}
+
 async function mcOpenVisualEditor() {
-  let meta;
-  try { meta = await api('GET', '/api/medical-cert/template'); } catch { meta = null; }
-  if (!meta || !meta.url) return notify('Сначала загрузите бланк', 'err');
   try {
     mcVE.coords = await api('GET', '/api/medical-cert/template/coords');
   } catch { return notify('Не удалось загрузить координаты', 'err'); }
@@ -33,12 +38,16 @@ async function mcOpenVisualEditor() {
   document.getElementById('mc-ve-pages').innerHTML = 'Загрузка бланка…';
   try {
     const pdfjsLib = await mcLoadPdfJs();
-    const pdf = await pdfjsLib.getDocument(meta.url).promise;
+    const bytes = await mcFetchBlankBytes();
+    const pdf = await pdfjsLib.getDocument({ data: bytes }).promise;
     await mcRenderAllPages(pdf);
     mcRenderPanel();
   } catch (e) {
     mcCloseVisualEditor();
-    notify('Не удалось открыть бланк (pdf.js). Используйте JSON-редактор.', 'err');
+    const msg = (e && (e.message === '409' || e.message === 'no_active_template'))
+      ? 'Сначала загрузите бланк'
+      : 'Не удалось открыть бланк (pdf.js). Используйте JSON-редактор.';
+    notify(msg, 'err');
   }
 }
 
@@ -215,11 +224,12 @@ function mcPanelEdit(k) {
 
 async function mcToggleGrid() {
   mcVE.showGrid = !mcVE.showGrid;
-  let meta; try { meta = await api('GET', '/api/medical-cert/template'); } catch { meta = null; }
-  if (!meta || !meta.url) return;
-  const pdf = await window.pdfjsLib.getDocument(meta.url).promise;
-  await mcRenderAllPages(pdf);
-  if (mcVE.selected) mcSelect(mcVE.selected);
+  try {
+    const bytes = await mcFetchBlankBytes();
+    const pdf = await window.pdfjsLib.getDocument({ data: bytes }).promise;
+    await mcRenderAllPages(pdf);
+    if (mcVE.selected) mcSelect(mcVE.selected);
+  } catch (e) { notify('Не удалось перерисовать бланк', 'err'); }
 }
 
 async function mcSaveVisualCoords() {

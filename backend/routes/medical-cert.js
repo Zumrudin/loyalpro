@@ -103,6 +103,19 @@ router.post('/template', adminOnly, upload.single('file'), async (req, res) => {
   } catch (e) { logger.error(e.message); res.status(500).json({ error: 'upload_failed' }); }
 });
 
+// GET сырой PDF активного бланка — same-origin прокси для pdf.js.
+// Браузерный CSP (connect-src 'self') и отсутствие CORS у S3 не дают тянуть
+// presigned-URL напрямую из браузера; отдаём байты с того же origin.
+router.get('/template/blank', adminOnly, async (req, res) => {
+  try {
+    const active = await tpl.getActiveTemplateForFill(salonOf(req));
+    if (!active) return res.status(409).json({ error: 'no_active_template' });
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Cache-Control', 'no-store');
+    res.send(active.blank);
+  } catch (e) { logger.error(e.message); res.status(500).json({ error: 'blank_failed' }); }
+});
+
 // GET/PUT координаты
 router.get('/template/coords', adminOnly, async (req, res) => {
   try { res.json(await tpl.getCoords(salonOf(req))); }
