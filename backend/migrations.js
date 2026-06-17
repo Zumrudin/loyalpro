@@ -649,6 +649,27 @@ async function runMigrations(client) {
     CREATE UNIQUE INDEX IF NOT EXISTS uq_broadcast_recipient
       ON broadcast_recipients (broadcast_id, telegram_chat_id)
   `).catch(() => {});
+
+  // ── Medical certificate (КНД 1151156) ──────────────────────────
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS medical_cert_templates (
+      id          SERIAL PRIMARY KEY,
+      salon_id    INTEGER REFERENCES salons(id) ON DELETE CASCADE,
+      s3_key      TEXT NOT NULL,
+      file_name   VARCHAR(255),
+      version     INTEGER NOT NULL DEFAULT 1,
+      is_active   BOOLEAN NOT NULL DEFAULT TRUE,
+      created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `).catch(() => {});
+
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS medical_cert_coords (
+      template_id INTEGER PRIMARY KEY REFERENCES medical_cert_templates(id) ON DELETE CASCADE,
+      coords      JSONB NOT NULL,
+      updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `).catch(() => {});
 }
 
 module.exports = { runMigrations };
