@@ -1,5 +1,5 @@
 // frontend/js/pages/medical-cert.js
-// Зависимости: api(), notify()
+// Зависимости: api(), notify(), esc(), escAttr()
 
 // Поля формы: [key, label, авто?]. Авто-поля подтягиваются из /defaults.
 const MC_FIELDS = [
@@ -67,14 +67,14 @@ function mcSearchClients() {
       const rows = await api('GET', '/api/clients?search=' + encodeURIComponent(q) + '&limit=8');
       const list = Array.isArray(rows) ? rows : (rows.items || rows.clients || []);
       document.getElementById('mc-client-results').innerHTML = list.map(c =>
-        `<div style="cursor:pointer;padding:4px" onclick="mcPickClient(${c.id},'${(c.name||'').replace(/'/g,'')}')">${c.name||''} ${c.phone||''}</div>`).join('');
+        `<div style="cursor:pointer;padding:4px" data-id="${escAttr(String(c.id))}" data-name="${escAttr(c.name || '')}" onclick="mcPickClient(this)">${esc(c.name || '')} ${esc(c.phone || '')}</div>`).join('');
     } catch {}
   }, 300);
 }
 
-function mcPickClient(id, name) {
-  document.getElementById('mc-client-id').value = id;
-  document.getElementById('mc-client-search').value = name;
+function mcPickClient(el) {
+  document.getElementById('mc-client-id').value = el.dataset.id;
+  document.getElementById('mc-client-search').value = el.dataset.name;
   document.getElementById('mc-client-results').innerHTML = '';
 }
 
