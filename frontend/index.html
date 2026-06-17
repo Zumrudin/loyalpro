@@ -95,6 +95,7 @@
       <div class="tn" data-p="staff-analytics" data-roles="owner,admin" onclick="nav(this)">Сотрудники</div>
       <div class="tn" data-p="segments" data-roles="owner,admin" onclick="nav(this)">Сегменты</div>
       <div class="tn" data-p="broadcasts" data-roles="owner,admin" onclick="nav(this)">📨 Рассылка</div>
+      <div class="tn" data-p="medical-cert" data-roles="owner,admin" onclick="nav(this)">Справки</div>
       <div class="tn" data-p="home-care" data-roles="owner,admin,specialist" onclick="nav(this)">Уход</div>
       <div class="tn" data-p="patient-portfolio" data-roles="owner,admin,specialist" onclick="nav(this)">📷 Фото-кейсы</div>
       <div class="tn" data-p="settings" data-roles="owner,admin" onclick="nav(this)">Настройки</div>
@@ -134,6 +135,7 @@
       <div class="tn" data-p="staff-analytics" data-roles="owner,admin" onclick="nav(this)">Сотрудники</div>
       <div class="tn" data-p="segments" data-roles="owner,admin" onclick="nav(this)">Сегменты</div>
       <div class="tn" data-p="broadcasts" data-roles="owner,admin" onclick="nav(this)">📨 Рассылка</div>
+      <div class="tn" data-p="medical-cert" data-roles="owner,admin" onclick="nav(this)">Справки</div>
       <div class="tn" data-p="home-care" data-roles="owner,admin,specialist" onclick="nav(this)">Уход</div>
       <div class="tn" data-p="patient-portfolio" data-roles="owner,admin,specialist" onclick="nav(this)">📷 Фото-кейсы</div>
       <div class="tn" data-p="settings" data-roles="owner,admin" onclick="nav(this)">Настройки</div>
@@ -1101,6 +1103,36 @@
       </div>
     </div>
 
+    <!-- ═══ MEDICAL CERT PAGE ═══ -->
+    <div class="page" id="page-medical-cert">
+  <div class="card" style="padding:16px;margin-bottom:16px">
+    <h2 style="margin-bottom:12px">Справка об оплате мед. услуг (КНД 1151156)</h2>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+      <div class="fg"><label class="fl">Клиент (поиск)</label>
+        <input id="mc-client-search" placeholder="Имя или телефон" oninput="mcSearchClients()">
+        <div id="mc-client-results" style="font-size:12px"></div>
+        <input type="hidden" id="mc-client-id">
+      </div>
+      <div class="fg"><label class="fl">Отчётный год</label>
+        <input type="number" id="mc-year" value="2025"></div>
+    </div>
+    <button class="btn" onclick="mcLoadDefaults()">Подтянуть данные</button>
+
+    <hr style="margin:16px 0">
+    <div id="mc-form" style="display:grid;grid-template-columns:1fr 1fr;gap:10px"></div>
+    <div style="margin-top:16px"><button class="btn btn-primary" onclick="mcGenerate()">Сформировать PDF</button></div>
+  </div>
+
+  <div class="card" style="padding:16px">
+    <h3 style="margin-bottom:8px">Шаблон бланка</h3>
+    <div id="mc-template-meta" style="font-size:13px;margin-bottom:8px"></div>
+    <input type="file" id="mc-template-file" accept="application/pdf">
+    <button class="btn" onclick="mcUploadTemplate()">Загрузить новый бланк</button>
+    <button class="btn" onclick="mcOpenCoordsEditor()">Редактор координат</button>
+    <div id="mc-coords-editor" style="margin-top:12px"></div>
+  </div>
+</div>
+
     <!-- ═══ USERS PAGE ═══ -->
     <div class="page" id="page-users">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px">
@@ -1789,6 +1821,7 @@ function fireConfetti() {
 <script src="js/pages/clients.js"></script>
 <script src="js/pages/dashboard.js"></script>
 <script src="js/pages/broadcasts.js?v=2026-06-13c"></script>
+<script src="js/pages/medical-cert.js"></script>
 <script src="js/app.js"></script>
 </body>
 </html>
