@@ -475,3 +475,20 @@
   .bc-row-preview{font-size:12px}
   .bc-chip{padding:5px 9px;font-size:11.5px}
 }
+
+/* ═══ MEDICAL CERT VISUAL COORDS EDITOR ═══ */
+#mc-visual-editor { display:none; position:fixed; inset:0; background:rgba(0,0,0,.5); z-index:1100; }
+#mc-visual-editor .mc-ve-shell { position:absolute; inset:24px; background:#fff; border-radius:12px; display:flex; flex-direction:column; overflow:hidden; }
+#mc-visual-editor .mc-ve-head { display:flex; gap:8px; align-items:center; padding:10px 14px; border-bottom:1px solid #e5e7eb; }
+#mc-visual-editor .mc-ve-body { flex:1; display:flex; min-height:0; }
+#mc-ve-pages { flex:1; overflow:auto; background:#94a3b8; padding:16px; display:flex; flex-direction:column; gap:16px; align-items:center; }
+#mc-ve-panel { width:240px; border-left:1px solid #e5e7eb; padding:12px; overflow:auto; }
+.mc-ve-page { position:relative; background:#fff; box-shadow:0 2px 8px rgba(0,0,0,.3); }
+.mc-ve-page canvas { display:block; }
+.mc-ve-marker { position:absolute; color:#1d4ed8; line-height:1; white-space:nowrap; cursor:move; outline:none; user-select:none; }
+.mc-ve-marker.sel { background:rgba(29,78,216,.15); box-shadow:0 0 0 1px #1d4ed8; }
+.mc-ve-marker:focus { box-shadow:0 0 0 2px #f59e0b; }
+.mc-ve-cell { position:absolute; top:0; }
+.mc-ve-grid-h { position:absolute; left:0; right:0; height:1px; background:rgba(220,38,38,.35); }
+.mc-ve-grid-v { position:absolute; top:0; bottom:0; width:1px; background:rgba(220,38,38,.2); }
+.mc-ve-grid-lbl { position:absolute; left:2px; top:-10px; font-size:9px; color:#dc2626; }
