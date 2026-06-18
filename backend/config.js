@@ -54,7 +54,7 @@ module.exports = {
   // Через запятую в env CERT_REQUEST_FRAME_ANCESTORS, иначе дефолт ниже.
   CERT_REQUEST_FRAME_ANCESTORS: (process.env.CERT_REQUEST_FRAME_ANCESTORS
     ? process.env.CERT_REQUEST_FRAME_ANCESTORS.split(',').map(s => s.trim()).filter(Boolean)
-    : ['https://*.wixsite.com', 'https://*.editorx.io', 'https://*.wix.com', 'https://zumrudin.ru', 'https://www.zumrudin.ru']),
+    : ['https://*.wixsite.com', 'https://*.editorx.io', 'https://*.wix.com', 'https://*.filesusr.com', 'https://zumrudin.ru', 'https://www.zumrudin.ru', 'https://peri-clinic.ru', 'https://www.peri-clinic.ru']),
 
   // Medical Certificate КНД 1151156 — clinic defaults
   MEDICAL_CERT_CLINIC: {
