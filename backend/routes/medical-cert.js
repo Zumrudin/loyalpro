@@ -193,6 +193,10 @@ router.put('/requests/:id/match', adminOnly, async (req, res) => {
     const clientId = req.body && req.body.clientId ? Number(req.body.clientId) : null;
     const r = await db.oneOrNone('SELECT id, report_year FROM cert_requests WHERE id=$1 AND salon_id=$2', [Number(req.params.id), salonOf(req)]);
     if (!r) return res.status(404).json({ error: 'not_found' });
+    if (clientId) {
+      const c = await db.oneOrNone('SELECT 1 FROM clients WHERE id=$1 AND salon_id=$2', [clientId, salonOf(req)]);
+      if (!c) return res.status(400).json({ error: 'bad_client' });
+    }
     const amount = await computeYearAmount({ db, salonId: salonOf(req), clientId, year: r.report_year });
     await db.query(`UPDATE cert_requests SET matched_client_id=$1, computed_amount=$2, updated_at=now() WHERE id=$3`,
       [clientId, amount, r.id]);

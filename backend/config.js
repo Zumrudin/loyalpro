@@ -47,6 +47,9 @@ module.exports = {
   // Sync
   SYNC_DAYS: 365,
 
+  // URL политики обработки ПДн для чекбокса согласия (152-ФЗ). Клиника указывает свой.
+  CERT_REQUEST_POLICY_URL: process.env.CERT_REQUEST_POLICY_URL || '/privacy-policy.html',
+
   // Домены, которым разрешено встраивать публичную форму заявки в iframe (Wix и т.п.).
   // Через запятую в env CERT_REQUEST_FRAME_ANCESTORS, иначе дефолт ниже.
   CERT_REQUEST_FRAME_ANCESTORS: (process.env.CERT_REQUEST_FRAME_ANCESTORS
