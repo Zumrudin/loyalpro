@@ -570,6 +570,23 @@
             </div>
             <button class="btn btn-pri" onclick="saveSalon()">Сохранить</button>
           </div>
+          <div class="card" style="max-width:480px;margin-top:16px">
+            <div class="ct">Логотип филиала</div>
+            <div style="font-size:12.5px;color:var(--t2);margin-bottom:12px;line-height:1.6">
+              Отображается как иконка вкладки браузера (favicon). Рекомендуется квадратное изображение PNG от 64×64.
+            </div>
+            <div id="salonLogoPreview" style="min-height:76px;display:flex;align-items:center;margin-bottom:12px">
+              <span style="font-size:12px;color:var(--t3)">Логотип не загружен</span>
+            </div>
+            <div style="display:flex;gap:8px;align-items:center">
+              <label class="btn btn-pri" style="cursor:pointer;margin:0">
+                Загрузить логотип
+                <input type="file" accept="image/png,image/jpeg,image/gif,image/webp" style="display:none" onchange="uploadSalonLogo(this)">
+              </label>
+              <button class="btn btn-sec" id="salonLogoDeleteBtn" style="display:none" onclick="deleteSalonLogo()">Удалить</button>
+              <span id="salonLogoStatus" style="font-size:12px"></span>
+            </div>
+          </div>
         </div>
 
         <!-- ── Подключение YClients ── -->
@@ -1613,6 +1630,7 @@ async function loadSettings() {
     }
     const ci = document.getElementById('st-chain-id');
     if (ci) ci.value = salon.yclients_chain_id || '';
+    renderSalonLogo(salon.logo_url);
     // Показать статус куки
     const cookieSt = document.getElementById('cookieSt');
     if (cookieSt && salon.yclients_web_cookie) {

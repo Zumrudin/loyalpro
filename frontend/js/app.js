@@ -8,6 +8,7 @@
 
 // Запуск приложения при загрузке страницы
 document.addEventListener('DOMContentLoaded', async () => {
+  initFavicon();
   if (TOKEN) {
     try { await launchApp(); } catch { showLogin(); }
   }

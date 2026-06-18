@@ -1,11 +1,25 @@
 const router = require('express').Router();
 const crypto = require('crypto');
+const path   = require('path');
+const fs     = require('fs');
+const multer = require('multer');
 const { db } = require('../db');
 const { auth, requireRole } = require('../middleware/auth');
 const { ycAuth, ycWebSessions } = require('../services/yclients');
 const { getLoyaltySettings } = require('../services/loyalty');
+const { imageFileFilter, validateImageBuffer } = require('../utils/upload-validator');
 const { createLogger } = require('../logger');
 const logger = createLogger('Salon');
+
+const uploadsDir = path.join(__dirname, '../../frontend/uploads');
+if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
+
+// memoryStorage — валидируем содержимое до записи на диск (см. app-settings.js)
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024 },
+  fileFilter: imageFileFilter,
+});
 
 router.get('/', auth, async (req, res) => {
   try { res.json(await db.one('SELECT * FROM salons WHERE id=$1', [req.user.salonId])); }
@@ -32,6 +46,67 @@ router.put('/', auth, async (req, res) => {
       return res.status(409).json({ error: 'Салон с таким ID филиала YClients уже зарегистрирован в системе. Обратитесь в поддержку.' });
     res.status(500).json({ error: e.message });
   }
+});
+
+// ── Логотип филиала (используется как favicon веб-интерфейса) ──
+// GET — публичный (в config.API_PUBLIC): favicon нужен до логина.
+// Салон определяется как в app-settings: ?salon=N → минимальный id (single-tenant default).
+router.get('/logo', async (req, res) => {
+  try {
+    const q = parseInt(req.query.salon, 10);
+    let salonId = Number.isFinite(q) && q > 0 ? q : null;
+    if (!salonId) {
+      const fallback = await db.oneOrNone('SELECT id FROM salons ORDER BY id LIMIT 1');
+      salonId = fallback?.id || null;
+    }
+    if (!salonId) return res.json({ logoUrl: null });
+    const row = await db.oneOrNone('SELECT logo_url FROM salons WHERE id=$1', [salonId]);
+    res.json({ logoUrl: row?.logo_url || null });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+router.post('/logo', auth, requireRole('owner', 'admin'), (req, res) => {
+  upload.single('file')(req, res, async (err) => {
+    if (err) return res.status(400).json({ error: err.message });
+    if (!req.file) return res.status(400).json({ error: 'Файл не загружен' });
+
+    const v = validateImageBuffer(req.file.buffer, req.file.originalname);
+    if (!v.ok) return res.status(400).json({ error: v.error });
+
+    const salonId = req.user.salonId;
+    let absPath = null;
+    try {
+      const filename = `salon_logo_${salonId}_${Date.now()}${v.ext}`;
+      absPath = path.join(uploadsDir, filename);
+      fs.writeFileSync(absPath, req.file.buffer);
+      const logoUrl = `/uploads/${filename}`;
+
+      const old = await db.oneOrNone('SELECT logo_url FROM salons WHERE id=$1', [salonId]);
+      await db.query(
+        'UPDATE salons SET logo_url=$1, updated_at=NOW() WHERE id=$2',
+        [logoUrl, salonId]
+      );
+      if (old?.logo_url && old.logo_url.startsWith('/uploads/')) {
+        fs.unlink(path.join(uploadsDir, path.basename(old.logo_url)), () => {});
+      }
+      res.json({ ok: true, logoUrl });
+    } catch (e) {
+      if (absPath) { try { fs.unlinkSync(absPath); } catch (_) {} }
+      res.status(500).json({ error: e.message });
+    }
+  });
+});
+
+router.delete('/logo', auth, requireRole('owner', 'admin'), async (req, res) => {
+  try {
+    const salonId = req.user.salonId;
+    const old = await db.oneOrNone('SELECT logo_url FROM salons WHERE id=$1', [salonId]);
+    await db.query('UPDATE salons SET logo_url=NULL, updated_at=NOW() WHERE id=$1', [salonId]);
+    if (old?.logo_url && old.logo_url.startsWith('/uploads/')) {
+      fs.unlink(path.join(uploadsDir, path.basename(old.logo_url)), () => {});
+    }
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 // ── Webhook HMAC secret management ──────────────────────────────

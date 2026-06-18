@@ -65,3 +65,31 @@ function cascadeCards(selector, delay = 60) {
     }, i * delay + 10);
   });
 }
+
+// ── Favicon ────────────────────────────────────────────────────
+// Логотип филиала как иконка вкладки браузера. URL кэшируется в
+// localStorage — применяется мгновенно, до ответа /api/salon/logo.
+function applyFavicon(url) {
+  const link = document.querySelector('link[rel="icon"]');
+  if (!link) return;
+  if (url) {
+    link.removeAttribute('type');
+    link.href = url;
+    localStorage.setItem('lp_favicon', url);
+  } else {
+    link.type = 'image/svg+xml';
+    link.href = 'favicon.svg';
+    localStorage.removeItem('lp_favicon');
+  }
+}
+
+async function initFavicon() {
+  const cached = localStorage.getItem('lp_favicon');
+  if (cached) applyFavicon(cached);
+  try {
+    const r = await fetch('/api/salon/logo');
+    const d = await r.json();
+    if (d.logoUrl) applyFavicon(d.logoUrl);
+    else if (cached) applyFavicon(null);
+  } catch {}
+}

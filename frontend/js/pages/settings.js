@@ -263,6 +263,49 @@ async function uploadAppLogo(input) {
   } catch(e) { notify(e.message, 'err'); if (st) st.textContent = ''; }
 }
 
+// ── Salon Logo (favicon) ───────────────────────────────────────
+function renderSalonLogo(url) {
+  const prev = document.getElementById('salonLogoPreview');
+  const del  = document.getElementById('salonLogoDeleteBtn');
+  if (!prev) return;
+  if (url) {
+    prev.innerHTML = `<img src="${escAttr(url)}?t=${Date.now()}" style="max-height:76px;max-width:100%;object-fit:contain">`;
+    if (del) del.style.display = '';
+  } else {
+    prev.innerHTML = '<span style="font-size:12px;color:var(--t3)">Логотип не загружен</span>';
+    if (del) del.style.display = 'none';
+  }
+}
+
+async function uploadSalonLogo(input) {
+  if (!input.files[0]) return;
+  const fd = new FormData();
+  fd.append('file', input.files[0]);
+  input.value = '';
+  const tok = localStorage.getItem('lp_tk');
+  const st  = document.getElementById('salonLogoStatus');
+  if (st) { st.style.color = 'var(--t3)'; st.textContent = 'Загрузка...'; }
+  try {
+    const r = await fetch('/api/salon/logo', {
+      method: 'POST', headers: { 'Authorization': `Bearer ${tok}` }, body: fd,
+    });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error || 'Ошибка');
+    renderSalonLogo(d.logoUrl);
+    applyFavicon(d.logoUrl);
+    if (st) { st.style.color = 'var(--a)'; st.textContent = '✓ Логотип загружен'; setTimeout(() => st.textContent = '', 3000); }
+  } catch(e) { notify(e.message, 'err'); if (st) st.textContent = ''; }
+}
+
+async function deleteSalonLogo() {
+  try {
+    await api('DELETE', '/api/salon/logo');
+    renderSalonLogo(null);
+    applyFavicon(null);
+    notify('Логотип удалён', 'ok');
+  } catch(e) { notify(e.message, 'err'); }
+}
+
 async function previewTemplateSettings() {
   try {
     const list  = await api('GET', '/api/home-care?limit=1');

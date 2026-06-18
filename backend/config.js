@@ -32,7 +32,7 @@ module.exports = {
     : null,
 
   // API Access Control
-  API_PUBLIC: ['/api/auth/login', '/api/auth/register', '/api/app-settings'],
+  API_PUBLIC: ['/api/auth/login', '/api/auth/register', '/api/app-settings', '/api/salon/logo'],
   SPECIALIST_ALLOWED_PREFIXES: ['/api/home-care', '/api/auth', '/api/template-settings', '/api/patient-portfolio', '/api/analytics/staff-dashboard'],
 
   // S3 (patient photo cases — Yandex Object Storage / S3-compatible)

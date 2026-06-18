@@ -150,6 +150,11 @@ async function runMigrations(client) {
     ALTER TABLE salons ADD COLUMN IF NOT EXISTS max_users INTEGER NOT NULL DEFAULT 5
   `).catch(() => {});
 
+  // Логотип филиала — используется как favicon веб-интерфейса
+  await client.query(`
+    ALTER TABLE salons ADD COLUMN IF NOT EXISTS logo_url VARCHAR(500)
+  `).catch(() => {});
+
   // ── Template settings columns ──────────────────────────────────
   const tmplCols = [
     'template_logo_url TEXT',
