@@ -23,10 +23,16 @@ function validateInn(raw) {
 }
 
 // In-memory rate-limit по ключу (IP). now() инъектируется для тестов.
+// Истёкшие записи периодически вычищаются, чтобы Map не рос неограниченно
+// от разовых IP на долгоживущем сервере.
 function makeRateLimiter({ max, windowMs, now = () => Date.now() }) {
   const hits = new Map(); // key -> { count, resetAt }
+  function prune(t) {
+    for (const [k, rec] of hits) if (t >= rec.resetAt) hits.delete(k);
+  }
   return function allow(key) {
     const t = now();
+    if (hits.size > 1000) prune(t); // дешёвая защита от роста, только при разрастании
     const rec = hits.get(key);
     if (!rec || t >= rec.resetAt) { hits.set(key, { count: 1, resetAt: t + windowMs }); return true; }
     if (rec.count >= max) return false;
@@ -44,6 +50,8 @@ function makeTokenStore({ ttlMs, now = () => Date.now() }) {
       m.set(token, { value, expiresAt: now() + ttlMs });
       return token;
     },
+    // Возвращает значение, пока токен жив. Намеренно МНОГОРАЗОВЫЙ в пределах TTL
+    // (клиент может скачать «Заявление» несколько раз за 30 минут).
     get(token) {
       const rec = m.get(token);
       if (!rec) return null;
