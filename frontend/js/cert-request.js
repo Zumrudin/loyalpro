@@ -12,6 +12,27 @@
     'patient_doc_type_code', 'patient_doc_serie_number', 'patient_doc_date', 'patient_phone',
   ];
 
+  // Коды ошибок валидации с сервера → понятные пользователю сообщения.
+  const FIELD_MESSAGES = {
+    report_year: 'Выберите отчётный год.',
+    consent: 'Поставьте отметку о согласии на обработку персональных данных.',
+    payer_name: 'Укажите фамилию и имя получателя справки.',
+    payer_inn: 'ИНН получателя указан неверно — должно быть 10 или 12 цифр без ошибок. Если не знаете ИНН, оставьте поле пустым (оно необязательное).',
+    payer_phone: 'Укажите корректный телефон получателя (не менее 10 цифр).',
+    patient_name: 'Укажите фамилию и имя пациента.',
+    patient_inn: 'ИНН пациента указан неверно — должно быть 10 или 12 цифр без ошибок. Если не знаете ИНН, оставьте поле пустым (оно необязательное).',
+    patient_phone: 'Укажите телефон пациента — по нему мы найдём оплаты в базе (не менее 10 цифр).',
+    relationship: 'Выберите степень родства с пациентом.',
+  };
+
+  function showErrors(fields) {
+    const list = (fields || []).map((f) => FIELD_MESSAGES[f] || ('Проверьте поле: ' + f));
+    $('cr-error').innerHTML = list.length
+      ? 'Проверьте, пожалуйста:<ul style="margin:6px 0 0;padding-left:18px">'
+        + list.map((m) => `<li>${m}</li>`).join('') + '</ul>'
+      : 'Проверьте правильность заполнения полей.';
+  }
+
   function togglePatient() {
     const same = $('cr-payer_is_patient').checked;
     $('cr-patient-block').classList.toggle('hidden', same);
@@ -35,7 +56,7 @@
 
   async function submit(ev) {
     ev.preventDefault();
-    $('cr-error').textContent = '';
+    $('cr-error').innerHTML = '';
     const same = $('cr-payer_is_patient').checked;
     const body = { report_year: Number($('cr-report_year').value), payer_is_patient: same,
       consent: $('cr-consent').checked, relationship: $('cr-relationship').value, website: $('cr-website').value };
@@ -47,9 +68,10 @@
       const resp = await fetch(base, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
       const data = await resp.json().catch(() => ({}));
       if (!resp.ok) {
-        $('cr-error').textContent = data.error === 'validation'
-          ? 'Проверьте поля: ' + (data.fields || []).join(', ')
-          : (data.error === 'too_many_requests' ? 'Слишком много заявок, попробуйте позже.' : 'Ошибка отправки.');
+        if (data.error === 'validation') showErrors(data.fields);
+        else $('cr-error').textContent = data.error === 'too_many_requests'
+          ? 'Слишком много заявок с этого устройства. Попробуйте позже.'
+          : 'Не удалось отправить заявку. Повторите попытку.';
         return;
       }
       $('cr-form-view').classList.add('hidden');
