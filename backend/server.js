@@ -74,6 +74,7 @@ const defaultOrigins = [
   'http://127.0.0.1',
   'https://zumrudin.ru',
   'https://dev.zumrudin.ru',
+  'https://forma.zumrudin.ru', // публичная форма заявки на справку (iframe-встройка в Wix)
 ];
 // Use ALLOWED_ORIGINS env var if provided (comma-separated), otherwise fall back to defaults
 const allowedOrigins = config.ALLOWED_ORIGINS || defaultOrigins;
