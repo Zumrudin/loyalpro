@@ -142,7 +142,7 @@ router.put('/template/coords', adminOnly, async (req, res) => {
 });
 
 // ── Заявки на справки (самозаявка с сайта) ──────────────────────
-const { computeYearAmount, matchPatient } = require('../services/cert-request');
+const { computeYearAmount } = require('../services/cert-request');
 
 const ALLOWED_STATUS = ['new', 'in_progress', 'done', 'rejected'];
 
