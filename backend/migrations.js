@@ -670,6 +670,64 @@ async function runMigrations(client) {
       updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
     )
   `).catch(() => {});
+
+  // ── Заявки на справку (самозаявка с сайта) ─────────────────────
+  await client.query(`
+    ALTER TABLE salons ADD COLUMN IF NOT EXISTS cert_request_slug VARCHAR(40)
+  `).catch(() => {});
+  // бэкфилл slug для салонов без значения: 'clinic-<id>'
+  await client.query(`
+    UPDATE salons SET cert_request_slug = 'clinic-' || id WHERE cert_request_slug IS NULL
+  `).catch(() => {});
+  await client.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS salons_cert_request_slug_uq
+      ON salons(cert_request_slug)
+  `).catch(() => {});
+
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS cert_requests (
+      id                        SERIAL PRIMARY KEY,
+      salon_id                  INTEGER NOT NULL REFERENCES salons(id) ON DELETE CASCADE,
+      status                    VARCHAR(20) NOT NULL DEFAULT 'new',
+      report_year               INTEGER NOT NULL,
+      payer_is_patient          BOOLEAN NOT NULL,
+      payer_last                VARCHAR(120),
+      payer_first               VARCHAR(120),
+      payer_middle              VARCHAR(120),
+      payer_birthdate           DATE,
+      payer_inn                 VARCHAR(12),
+      payer_doc_type_code       VARCHAR(2),
+      payer_doc_serie_number    VARCHAR(20),
+      payer_doc_issue_date      DATE,
+      payer_phone               VARCHAR(20),
+      payer_email               VARCHAR(190),
+      patient_last              VARCHAR(120),
+      patient_first             VARCHAR(120),
+      patient_middle            VARCHAR(120),
+      patient_birthdate         DATE,
+      patient_inn               VARCHAR(12),
+      patient_doc_type_code     VARCHAR(2),
+      patient_doc_serie_number  VARCHAR(20),
+      patient_doc_issue_date    DATE,
+      patient_phone             VARCHAR(20),
+      relationship              VARCHAR(20),
+      matched_client_id         INTEGER REFERENCES clients(id) ON DELETE SET NULL,
+      computed_amount           NUMERIC(12,2),
+      consent_at                TIMESTAMPTZ NOT NULL,
+      ip                        VARCHAR(64),
+      user_agent                VARCHAR(400),
+      created_at                TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at                TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `).catch(() => {});
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS cert_requests_salon_status_idx
+      ON cert_requests(salon_id, status, created_at DESC)
+  `).catch(() => {});
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS cert_requests_salon_match_idx
+      ON cert_requests(salon_id, matched_client_id)
+  `).catch(() => {});
 }
 
 module.exports = { runMigrations };
