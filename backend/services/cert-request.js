@@ -12,9 +12,38 @@ const RELATIONSHIP_LABELS = {
   spouse: 'супругом(ой)', parent: 'родителем', child: 'ребёнком', ward: 'подопечным',
 };
 
+// Коды вида документа (классификатор ФНС): паспорт РФ и свидетельство о рождении.
+const DOC_TYPE_PASSPORT = '21';
+const DOC_TYPE_BIRTH_CERT = '03';
+const PATIENT_DOC_TYPES = new Set([DOC_TYPE_PASSPORT, DOC_TYPE_BIRTH_CERT]);
+
 // Телефон → только цифры (нормализация для хранения и сравнения).
 function normalizePhone(raw) {
   return (raw == null ? '' : String(raw)).replace(/\D/g, '');
+}
+
+// Телефон → канонический «+7XXXXXXXXXX» или null, если не похоже на рос. номер.
+// 8XXXXXXXXXX и 7XXXXXXXXXX и XXXXXXXXXX (10 цифр) приводим к одному виду.
+function toRuPhone(raw) {
+  let d = normalizePhone(raw);
+  if (d.length === 11 && (d[0] === '7' || d[0] === '8')) d = d.slice(1);
+  if (d.length !== 10) return null;
+  return '+7' + d;
+}
+
+// Серия+номер паспорта РФ: ровно 10 цифр (4 серия + 6 номер).
+function validatePassportSerieNumber(raw) {
+  return /^\d{10}$/.test((raw == null ? '' : String(raw)).replace(/\D/g, ''));
+}
+
+// Совершеннолетие на дату ref (по умолчанию — сегодня). birthdate в 'YYYY-MM-DD'.
+function isAdult(birthdate, ref = new Date()) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(birthdate || '')) return false;
+  const [y, m, d] = birthdate.split('-').map(Number);
+  let age = ref.getFullYear() - y;
+  const mm = ref.getMonth() + 1;
+  if (mm < m || (mm === m && ref.getDate() < d)) age -= 1;
+  return age >= 18;
 }
 
 // ИНН → только цифры (пользователь может ввести с пробелами/дефисами).
@@ -165,7 +194,9 @@ async function buildApplicationPdf(r) {
 }
 
 module.exports = {
-  normalizePhone, normalizeInn, validateInn, makeRateLimiter, makeTokenStore,
+  normalizePhone, toRuPhone, normalizeInn, validateInn, validatePassportSerieNumber, isAdult,
+  makeRateLimiter, makeTokenStore,
   matchPatient, computeYearAmount, resolveSalonBySlug,
   buildApplicationPdf, RELATIONSHIP_LABELS,
+  DOC_TYPE_PASSPORT, DOC_TYPE_BIRTH_CERT, PATIENT_DOC_TYPES,
 };

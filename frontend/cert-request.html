@@ -49,13 +49,13 @@
             <div class="fg"><label class="fl">Отчество</label><input id="cr-payer_middle"></div>
           </div>
           <div class="row">
-            <div class="fg"><label class="fl">Дата рождения</label><input id="cr-payer_birthdate" type="date"></div>
-            <div class="fg"><label class="fl">ИНН</label><input id="cr-payer_inn" inputmode="numeric"></div>
+            <div class="fg"><label class="fl">Дата рождения *</label><input id="cr-payer_birthdate" type="date"></div>
+            <div class="fg"><label class="fl">ИНН *</label><input id="cr-payer_inn" inputmode="numeric" placeholder="10 или 12 цифр"></div>
           </div>
           <div class="row">
-            <div class="fg"><label class="fl">Код вида документа</label><input id="cr-payer_doc_type_code" placeholder="21"></div>
-            <div class="fg"><label class="fl">Серия и номер паспорта</label><input id="cr-payer_doc_serie_number" inputmode="numeric"></div>
-            <div class="fg"><label class="fl">Дата выдачи</label><input id="cr-payer_doc_issue_date" type="date"></div>
+            <div class="fg"><label class="fl">Вид документа *</label><input id="cr-payer_doc_type_label" value="Паспорт гражданина РФ" readonly></div>
+            <div class="fg"><label class="fl">Серия и номер паспорта *</label><input id="cr-payer_doc_serie_number" inputmode="numeric" placeholder="10 цифр" maxlength="14"></div>
+            <div class="fg"><label class="fl">Дата выдачи *</label><input id="cr-payer_doc_issue_date" type="date"></div>
           </div>
           <div class="row">
             <div class="fg"><label class="fl">Телефон *</label><input id="cr-payer_phone" inputmode="tel" placeholder="+7 ..."></div>
@@ -74,16 +74,21 @@
           <div class="row">
             <div class="fg"><label class="fl">Фамилия *</label><input id="cr-patient_last"></div>
             <div class="fg"><label class="fl">Имя *</label><input id="cr-patient_first"></div>
-            <div class="fg"><label class="fl">Отчество</label><input id="cr-patient_middle"></div>
+            <div class="fg"><label class="fl">Отчество *</label><input id="cr-patient_middle"></div>
           </div>
           <div class="row">
-            <div class="fg"><label class="fl">Дата рождения</label><input id="cr-patient_birthdate" type="date"></div>
-            <div class="fg"><label class="fl">ИНН</label><input id="cr-patient_inn" inputmode="numeric"></div>
+            <div class="fg"><label class="fl">Дата рождения *</label><input id="cr-patient_birthdate" type="date"></div>
+            <div class="fg"><label class="fl">ИНН *</label><input id="cr-patient_inn" inputmode="numeric" placeholder="10 или 12 цифр"></div>
           </div>
           <div class="row">
-            <div class="fg"><label class="fl">Код вида документа</label><input id="cr-patient_doc_type_code"></div>
-            <div class="fg"><label class="fl">Серия и номер</label><input id="cr-patient_doc_serie_number" inputmode="numeric"></div>
-            <div class="fg"><label class="fl">Дата выдачи</label><input id="cr-patient_doc_date" type="date"></div>
+            <div class="fg"><label class="fl">Вид документа *</label>
+              <select id="cr-patient_doc_type_code">
+                <option value="21">Паспорт гражданина РФ</option>
+                <option value="03">Свидетельство о рождении</option>
+              </select>
+            </div>
+            <div class="fg"><label class="fl" id="cr-patient_doc_label">Серия и номер паспорта *</label><input id="cr-patient_doc_serie_number" inputmode="numeric" placeholder="10 цифр"></div>
+            <div class="fg"><label class="fl">Дата выдачи *</label><input id="cr-patient_doc_date" type="date"></div>
           </div>
           <div class="row">
             <div class="fg"><label class="fl">Телефон пациента *</label><input id="cr-patient_phone" inputmode="tel"></div>

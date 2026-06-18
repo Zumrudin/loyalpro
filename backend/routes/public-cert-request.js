@@ -85,23 +85,40 @@ router.post('/api/public/cert-requests/:slug', async (req, res) => {
     const ip = clientIp(req);
     if (!rateLimit(ip)) return res.status(429).json({ error: 'too_many_requests' });
 
-    // Валидация.
+    // Валидация. Все поля формы (кроме email) обязательны.
     const errors = [];
     const samePerson = b.payer_is_patient === true || b.payer_is_patient === '1' || b.payer_is_patient === 'true';
     const year = Number(b.report_year);
     if (!availableYears().includes(year)) errors.push('report_year');
     if (!b.consent) errors.push('consent');
-    if (!b.payer_last || !b.payer_first) errors.push('payer_name');
-    if (b.payer_inn && !svc.validateInn(b.payer_inn)) errors.push('payer_inn');
-    const payerPhone = svc.normalizePhone(b.payer_phone);
-    if (payerPhone.length < 10) errors.push('payer_phone');
 
-    let patientPhone = '';
+    // Плательщик (получатель справки) — всегда совершеннолетний, документ — паспорт РФ.
+    if (!b.payer_last || !b.payer_first || !b.payer_middle) errors.push('payer_name');
+    if (!dateOrNull(b.payer_birthdate)) errors.push('payer_birthdate');
+    else if (!svc.isAdult(b.payer_birthdate)) errors.push('payer_adult');
+    if (!b.payer_inn || !svc.validateInn(b.payer_inn)) errors.push('payer_inn');
+    if (!svc.validatePassportSerieNumber(b.payer_doc_serie_number)) errors.push('payer_doc');
+    if (!dateOrNull(b.payer_doc_issue_date)) errors.push('payer_doc_issue_date');
+    const payerPhone = svc.toRuPhone(b.payer_phone);
+    if (!payerPhone) errors.push('payer_phone');
+
+    let patientPhone = null;
+    let patientDocType = null;
     if (!samePerson) {
-      if (!b.patient_last || !b.patient_first) errors.push('patient_name');
-      if (b.patient_inn && !svc.validateInn(b.patient_inn)) errors.push('patient_inn');
-      patientPhone = svc.normalizePhone(b.patient_phone);
-      if (patientPhone.length < 10) errors.push('patient_phone');
+      if (!b.patient_last || !b.patient_first || !b.patient_middle) errors.push('patient_name');
+      if (!dateOrNull(b.patient_birthdate)) errors.push('patient_birthdate');
+      if (!b.patient_inn || !svc.validateInn(b.patient_inn)) errors.push('patient_inn');
+      // Пациент может быть несовершеннолетним → паспорт (21) ИЛИ свидетельство о рождении (03).
+      patientDocType = String(b.patient_doc_type_code || '').slice(0, 2);
+      if (!svc.PATIENT_DOC_TYPES.has(patientDocType)) errors.push('patient_doc_type');
+      if (patientDocType === svc.DOC_TYPE_PASSPORT) {
+        if (!svc.validatePassportSerieNumber(b.patient_doc_serie_number)) errors.push('patient_doc');
+      } else if (!String(b.patient_doc_serie_number || '').trim()) {
+        errors.push('patient_doc'); // свидетельство о рождении — свободный ввод, лишь бы не пусто
+      }
+      if (!dateOrNull(b.patient_doc_date)) errors.push('patient_doc_date');
+      patientPhone = svc.toRuPhone(b.patient_phone);
+      if (!patientPhone) errors.push('patient_phone');
       if (!svc.RELATIONSHIP_LABELS[b.relationship]) errors.push('relationship');
     }
     if (errors.length) return res.status(400).json({ error: 'validation', fields: errors });
@@ -130,10 +147,10 @@ router.post('/api/public/cert-requests/:slug', async (req, res) => {
       [
         salon.id, year, samePerson,
         b.payer_last, b.payer_first, b.payer_middle || null, dateOrNull(b.payer_birthdate), svc.normalizeInn(b.payer_inn) || null,
-        (b.payer_doc_type_code || '').slice(0, 2) || null, b.payer_doc_serie_number || null, dateOrNull(b.payer_doc_issue_date), payerPhone, b.payer_email || null,
+        svc.DOC_TYPE_PASSPORT, (b.payer_doc_serie_number || '').trim() || null, dateOrNull(b.payer_doc_issue_date), payerPhone, b.payer_email || null,
         samePerson ? null : b.patient_last, samePerson ? null : b.patient_first, samePerson ? null : (b.patient_middle || null),
         samePerson ? null : dateOrNull(b.patient_birthdate), samePerson ? null : (svc.normalizeInn(b.patient_inn) || null),
-        samePerson ? null : ((b.patient_doc_type_code || '').slice(0, 2) || null), samePerson ? null : (b.patient_doc_serie_number || null),
+        samePerson ? null : patientDocType, samePerson ? null : ((b.patient_doc_serie_number || '').trim() || null),
         samePerson ? null : dateOrNull(b.patient_doc_date), samePerson ? null : patientPhone, // поле формы patient_doc_date → колонка patient_doc_issue_date
         samePerson ? null : b.relationship, clientId, amount, ip, String(req.headers['user-agent'] || '').slice(0, 400),
       ]);
