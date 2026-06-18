@@ -44,6 +44,11 @@ router.get('/cert-request/:slug', async (req, res) => {
     const salon = await svc.resolveSalonBySlug({ db, slug: req.params.slug });
     if (!salon) return res.status(404).send('Форма не найдена');
     res.removeHeader('X-Frame-Options');
+    // Страница встраивается в iframe на чужом домене (Wix). helmet по умолчанию
+    // ставит CORP/COOP = same-origin, что в браузерах с COEP отдаёт пустой
+    // (серый) фрейм. Для встраиваемого ресурса нужен cross-origin.
+    res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+    res.setHeader('Cross-Origin-Opener-Policy', 'unsafe-none');
     const ancestors = ["'self'", ...cfg.CERT_REQUEST_FRAME_ANCESTORS].join(' ');
     res.setHeader('Content-Security-Policy',
       `default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; ` +
