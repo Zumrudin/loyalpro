@@ -26,6 +26,7 @@ function nav(el) {
   if (p === 'settings')        loadSettings();
   if (p === 'users')           loadUsers();
   if (p === 'medical-cert')    loadMedicalCert();
+  if (p === 'cert-requests')  loadCertRequests();
 }
 
 // ── ROLE-BASED NAV ──

@@ -152,3 +152,15 @@ async function mcSaveCoords() {
     notify('Координаты сохранены');
   } catch (e) { notify('Ошибка JSON/сохранения: ' + e.message, 'err'); }
 }
+
+// Предзаполнить форму генератора значениями из заявки (объект /prefill).
+function mcPrefillFromRequest(p) {
+  const same = p.payer_is_patient === '1';
+  const setV = (k, v) => { const el = document.getElementById('mc-f-' + k); if (el && v !== undefined && v !== null) el.value = v; };
+  for (const [k] of MC_FIELDS) if (p[k] !== undefined) setV(k, p[k]);
+  for (const [k] of MC_PATIENT_FIELDS) if (p[k] !== undefined) setV(k, p[k]);
+  const cb = document.getElementById('mc-f-payer_is_patient');
+  if (cb) { cb.checked = same; mcTogglePatient(); }
+  if (p.clientId) { const ci = document.getElementById('mc-client-id'); if (ci) ci.value = p.clientId; }
+  if (typeof notify === 'function') notify('Данные заявки загружены в генератор');
+}
