@@ -2,6 +2,15 @@
 'use strict';
 
 const crypto = require('crypto');
+const fs = require('fs');
+const path = require('path');
+const { PDFDocument, rgb } = require('pdf-lib');
+const fontkit = require('@pdf-lib/fontkit');
+
+const FONT_PATH = path.join(__dirname, '../assets/fonts/PTSans-Regular.ttf');
+const RELATIONSHIP_LABELS = {
+  spouse: 'супругом(ой)', parent: 'родителем', child: 'ребёнком', ward: 'подопечным',
+};
 
 // Телефон → только цифры (нормализация для хранения и сравнения).
 function normalizePhone(raw) {
@@ -95,7 +104,63 @@ async function resolveSalonBySlug({ db, slug }) {
     [slug]);
 }
 
+// «Заявление» — A4-PDF с переносом по ширине.
+async function buildApplicationPdf(r) {
+  const doc = await PDFDocument.create();
+  doc.registerFontkit(fontkit);
+  const font = await doc.embedFont(fs.readFileSync(FONT_PATH), { subset: false });
+  const page = doc.addPage([595, 842]); // A4 в pt
+  const black = rgb(0, 0, 0);
+  const left = 60, right = 535, size = 12, lh = 18;
+  let y = 770;
+
+  const fio = (l, f, m) => [l, f, m].filter(Boolean).join(' ');
+  const payerFio = fio(r.payer_last, r.payer_first, r.payer_middle);
+  const patientFio = fio(r.patient_last, r.patient_first, r.patient_middle);
+  const rel = RELATIONSHIP_LABELS[r.relationship] || 'родственником';
+
+  const purpose = r.payer_is_patient
+    ? `за оказанные мне медицинские услуги.`
+    : `за медицинские услуги, оказанные ${patientFio}, являющемуся(ейся) мне ${rel}.`;
+
+  const body =
+    `Я, ${payerFio}` +
+    (r.payer_doc_serie_number ? `, паспорт ${r.payer_doc_serie_number}` : '') +
+    (r.payer_doc_issue_date ? `, выдан ${r.payer_doc_issue_date}` : '') +
+    (r.payer_inn ? `, ИНН ${r.payer_inn}` : '') +
+    `, прошу подготовить справку об оплате медицинских услуг для представления ` +
+    `в налоговый орган за ${r.report_year} год ${purpose} ` +
+    `Контактный телефон: ${r.payer_phone || '—'}.`;
+
+  // Заголовок
+  const title = 'Заявление';
+  page.drawText(title, { x: (595 - font.widthOfTextAtSize(title, 16)) / 2, y, size: 16, font, color: black });
+  y -= lh * 2;
+  if (r.clinic_name) {
+    page.drawText(`Кому: ${r.clinic_name}`, { x: left, y, size, font, color: black });
+    y -= lh * 2;
+  }
+
+  // Тело с переносом по словам
+  const words = body.split(/\s+/);
+  let line = '';
+  const flush = () => { if (line) { page.drawText(line, { x: left, y, size, font, color: black }); y -= lh; line = ''; } };
+  for (const w of words) {
+    const trial = line ? line + ' ' + w : w;
+    if (font.widthOfTextAtSize(trial, size) > (right - left) && line) { flush(); line = w; }
+    else line = trial;
+  }
+  flush();
+
+  y -= lh * 2;
+  page.drawText('Дата: «___» ____________ 20__ г.', { x: left, y, size, font, color: black });
+  page.drawText('Подпись: _______________', { x: right - 200, y, size, font, color: black });
+
+  return Buffer.from(await doc.save());
+}
+
 module.exports = {
   normalizePhone, validateInn, makeRateLimiter, makeTokenStore,
   matchPatient, computeYearAmount, resolveSalonBySlug,
+  buildApplicationPdf, RELATIONSHIP_LABELS,
 };

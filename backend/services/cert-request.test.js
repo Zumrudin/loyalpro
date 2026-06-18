@@ -100,3 +100,33 @@ test('resolveSalonBySlug: находит салон', async () => {
   const s = await resolveSalonBySlug({ db, slug: 'clinic-1' });
   assert.strictEqual(s.id, 1);
 });
+
+const { buildApplicationPdf, RELATIONSHIP_LABELS } = require('./cert-request');
+
+test('RELATIONSHIP_LABELS покрывает все коды', () => {
+  assert.deepStrictEqual(Object.keys(RELATIONSHIP_LABELS).sort(),
+    ['child', 'parent', 'spouse', 'ward']);
+});
+
+test('buildApplicationPdf: возвращает непустой PDF (за себя)', async () => {
+  const buf = await buildApplicationPdf({
+    payer_last: 'АГАФОНОВ', payer_first: 'АРТЕМ', payer_middle: 'ЭДУАРДОВИЧ',
+    payer_inn: '500100732259', payer_doc_serie_number: '1234567890',
+    payer_doc_issue_date: '2015-03-25', payer_phone: '79123456789',
+    report_year: 2025, payer_is_patient: true,
+    clinic_name: 'ООО Клиника',
+  });
+  assert.ok(Buffer.isBuffer(buf) && buf.length > 800);
+  assert.strictEqual(buf.slice(0, 5).toString(), '%PDF-');
+});
+
+test('buildApplicationPdf: за пациента — тоже валидный PDF', async () => {
+  const buf = await buildApplicationPdf({
+    payer_last: 'ИВАНОВ', payer_first: 'ИВАН', payer_middle: 'ИВАНОВИЧ',
+    payer_inn: '500100732259', payer_phone: '79123456789',
+    report_year: 2024, payer_is_patient: false,
+    patient_last: 'ИВАНОВА', patient_first: 'МАРИЯ', patient_middle: 'ИВАНОВНА',
+    relationship: 'child', clinic_name: 'ООО Клиника',
+  });
+  assert.strictEqual(buf.slice(0, 5).toString(), '%PDF-');
+});
