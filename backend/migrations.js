@@ -715,7 +715,7 @@ async function runMigrations(client) {
       computed_amount           NUMERIC(12,2),
       consent_at                TIMESTAMPTZ NOT NULL,
       ip                        VARCHAR(64),
-      user_agent                VARCHAR(400),
+      user_agent                TEXT,
       created_at                TIMESTAMPTZ NOT NULL DEFAULT now(),
       updated_at                TIMESTAMPTZ NOT NULL DEFAULT now()
     )
@@ -727,6 +727,7 @@ async function runMigrations(client) {
   await client.query(`
     CREATE INDEX IF NOT EXISTS cert_requests_salon_match_idx
       ON cert_requests(salon_id, matched_client_id)
+      WHERE matched_client_id IS NOT NULL
   `).catch(() => {});
 }
 
