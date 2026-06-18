@@ -142,7 +142,7 @@ async function buildApplicationPdf(r) {
   }
 
   // Тело с переносом по словам
-  const words = body.split(/\s+/);
+  const words = body.split(/\s+/).filter(Boolean);
   let line = '';
   const flush = () => { if (line) { page.drawText(line, { x: left, y, size, font, color: black }); y -= lh; line = ''; } };
   for (const w of words) {
