@@ -141,4 +141,84 @@ router.put('/template/coords', adminOnly, async (req, res) => {
   catch (e) { logger.error(e.message); res.status(e.message === 'NO_ACTIVE_TEMPLATE' ? 409 : 500).json({ error: 'coords_save_failed' }); }
 });
 
+// ── Заявки на справки (самозаявка с сайта) ──────────────────────
+const { computeYearAmount, matchPatient } = require('../services/cert-request');
+
+const ALLOWED_STATUS = ['new', 'in_progress', 'done', 'rejected'];
+
+// Список заявок салона (+ счётчик новых).
+router.get('/requests', adminOnly, async (req, res) => {
+  try {
+    const status = ALLOWED_STATUS.includes(req.query.status) ? req.query.status : null;
+    const rows = await db.any(
+      `SELECT id, status, report_year, payer_is_patient,
+              payer_last, payer_first, payer_middle, payer_phone,
+              patient_last, patient_first, patient_phone,
+              matched_client_id, computed_amount, created_at
+         FROM cert_requests
+        WHERE salon_id=$1 ${status ? 'AND status=$2' : ''}
+        ORDER BY created_at DESC`,
+      status ? [salonOf(req), status] : [salonOf(req)]);
+    const newCount = await db.one(
+      `SELECT COUNT(*)::int AS n FROM cert_requests WHERE salon_id=$1 AND status='new'`, [salonOf(req)]);
+    res.json({ items: rows, newCount: newCount.n });
+  } catch (e) { logger.error(e.message); res.status(500).json({ error: 'requests_list_failed' }); }
+});
+
+// Полная заявка.
+router.get('/requests/:id', adminOnly, async (req, res) => {
+  try {
+    const r = await db.oneOrNone('SELECT * FROM cert_requests WHERE id=$1 AND salon_id=$2', [Number(req.params.id), salonOf(req)]);
+    if (!r) return res.status(404).json({ error: 'not_found' });
+    res.json(r);
+  } catch (e) { logger.error(e.message); res.status(500).json({ error: 'request_get_failed' }); }
+});
+
+// Смена статуса.
+router.put('/requests/:id/status', adminOnly, async (req, res) => {
+  try {
+    const status = req.body && req.body.status;
+    if (!ALLOWED_STATUS.includes(status)) return res.status(400).json({ error: 'bad_status' });
+    const r = await db.oneOrNone(
+      `UPDATE cert_requests SET status=$1, updated_at=now() WHERE id=$2 AND salon_id=$3 RETURNING id`,
+      [status, Number(req.params.id), salonOf(req)]);
+    if (!r) return res.status(404).json({ error: 'not_found' });
+    res.json({ ok: true });
+  } catch (e) { logger.error(e.message); res.status(500).json({ error: 'status_failed' }); }
+});
+
+// Ручная привязка клиента + пересчёт суммы.
+router.put('/requests/:id/match', adminOnly, async (req, res) => {
+  try {
+    const clientId = req.body && req.body.clientId ? Number(req.body.clientId) : null;
+    const r = await db.oneOrNone('SELECT id, report_year FROM cert_requests WHERE id=$1 AND salon_id=$2', [Number(req.params.id), salonOf(req)]);
+    if (!r) return res.status(404).json({ error: 'not_found' });
+    const amount = await computeYearAmount({ db, salonId: salonOf(req), clientId, year: r.report_year });
+    await db.query(`UPDATE cert_requests SET matched_client_id=$1, computed_amount=$2, updated_at=now() WHERE id=$3`,
+      [clientId, amount, r.id]);
+    res.json({ ok: true, computed_amount: amount });
+  } catch (e) { logger.error(e.message); res.status(500).json({ error: 'match_failed' }); }
+});
+
+// Предзаполнение генератора справки из заявки (значения в ключах формы генератора).
+router.get('/requests/:id/prefill', adminOnly, async (req, res) => {
+  try {
+    const r = await db.oneOrNone('SELECT * FROM cert_requests WHERE id=$1 AND salon_id=$2', [Number(req.params.id), salonOf(req)]);
+    if (!r) return res.status(404).json({ error: 'not_found' });
+    const d = (x) => { if (!x) return ''; const y=x.getFullYear(), m=String(x.getMonth()+1).padStart(2,'0'), day=String(x.getDate()).padStart(2,'0'); return `${y}-${m}-${day}`; };
+    res.json({
+      clientId: r.matched_client_id || null,
+      report_year: String(r.report_year),
+      payer_is_patient: r.payer_is_patient ? '1' : '0',
+      payer_last: r.payer_last || '', payer_first: r.payer_first || '', payer_middle: r.payer_middle || '',
+      payer_inn: r.payer_inn || '', payer_birthdate: d(r.payer_birthdate),
+      doc_type_code: r.payer_doc_type_code || '', doc_serie_number: r.payer_doc_serie_number || '', doc_issue_date: d(r.payer_doc_issue_date),
+      patient_last: r.patient_last || '', patient_first: r.patient_first || '', patient_middle: r.patient_middle || '',
+      patient_inn: r.patient_inn || '', patient_birthdate: d(r.patient_birthdate),
+      patient_doc_type: r.patient_doc_type_code || '', patient_doc_serie: r.patient_doc_serie_number || '', patient_doc_date: d(r.patient_doc_issue_date),
+      amount1: r.computed_amount != null ? String(r.computed_amount) : '',
+    });
+  } catch (e) { logger.error(e.message); res.status(500).json({ error: 'prefill_failed' }); }
+});
+
 module.exports = router;
