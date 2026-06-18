@@ -9,6 +9,9 @@ module.exports = function mountRoutes(app) {
   // ── Webhook (no JWT required) ───────────────────────────────
   app.use('/yclients', require('./webhook'));
 
+  // ── Публичная форма заявки на справку (БЕЗ JWT — монтируем до guard) ──
+  app.use(require('./public-cert-request'));
+
   // ── Mobile App API (separate auth) ────────────────────────
   app.use('/api/mobile/auth', require('./mobile-auth'));
   app.use('/api/mobile/client', require('./mobile-client'));
