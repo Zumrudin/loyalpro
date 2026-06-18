@@ -19,15 +19,17 @@ function availableYears() {
 
 // Страница-форма: разрешаем встраивание в iframe для доменов из конфига.
 router.get('/cert-request/:slug', async (req, res) => {
-  const salon = await svc.resolveSalonBySlug({ db, slug: req.params.slug });
-  if (!salon) return res.status(404).send('Форма не найдена');
-  res.removeHeader('X-Frame-Options');
-  const ancestors = ["'self'", ...cfg.CERT_REQUEST_FRAME_ANCESTORS].join(' ');
-  res.setHeader('Content-Security-Policy',
-    `default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; ` +
-    `img-src 'self' data:; connect-src 'self'; font-src 'self' data:; frame-ancestors ${ancestors}`);
-  res.setHeader('Cache-Control', 'no-store');
-  res.sendFile(path.join(__dirname, '../../frontend/cert-request.html'));
+  try {
+    const salon = await svc.resolveSalonBySlug({ db, slug: req.params.slug });
+    if (!salon) return res.status(404).send('Форма не найдена');
+    res.removeHeader('X-Frame-Options');
+    const ancestors = ["'self'", ...cfg.CERT_REQUEST_FRAME_ANCESTORS].join(' ');
+    res.setHeader('Content-Security-Policy',
+      `default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; ` +
+      `img-src 'self' data:; connect-src 'self'; font-src 'self' data:; frame-ancestors ${ancestors}`);
+    res.setHeader('Cache-Control', 'no-store');
+    res.sendFile(path.join(__dirname, '../../frontend/cert-request.html'));
+  } catch (e) { logger.error(e.message); res.status(503).send('Сервис временно недоступен'); }
 });
 
 // Конфиг формы (публичный): название клиники, годы, степени родства, ссылка на политику.
