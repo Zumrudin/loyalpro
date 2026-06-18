@@ -161,6 +161,9 @@ function mcPrefillFromRequest(p) {
   for (const [k] of MC_PATIENT_FIELDS) if (p[k] !== undefined) setV(k, p[k]);
   const cb = document.getElementById('mc-f-payer_is_patient');
   if (cb) { cb.checked = same; mcTogglePatient(); }
-  if (p.clientId) { const ci = document.getElementById('mc-client-id'); if (ci) ci.value = p.clientId; }
+  if (p.clientId) {
+    const ci = document.getElementById('mc-client-id'); if (ci) ci.value = p.clientId;
+    const cs = document.getElementById('mc-client-search'); if (cs) cs.value = p.clientName || '';
+  }
   if (typeof notify === 'function') notify('Данные заявки загружены в генератор');
 }

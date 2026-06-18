@@ -206,8 +206,14 @@ router.get('/requests/:id/prefill', adminOnly, async (req, res) => {
     const r = await db.oneOrNone('SELECT * FROM cert_requests WHERE id=$1 AND salon_id=$2', [Number(req.params.id), salonOf(req)]);
     if (!r) return res.status(404).json({ error: 'not_found' });
     const d = (x) => { if (!x) return ''; const y=x.getFullYear(), m=String(x.getMonth()+1).padStart(2,'0'), day=String(x.getDate()).padStart(2,'0'); return `${y}-${m}-${day}`; };
+    let clientName = '';
+    if (r.matched_client_id) {
+      const c = await db.oneOrNone('SELECT name FROM clients WHERE id=$1 AND salon_id=$2', [r.matched_client_id, salonOf(req)]);
+      clientName = c ? c.name : '';
+    }
     res.json({
       clientId: r.matched_client_id || null,
+      clientName,
       report_year: String(r.report_year),
       payer_is_patient: r.payer_is_patient ? '1' : '0',
       payer_last: r.payer_last || '', payer_first: r.payer_first || '', payer_middle: r.payer_middle || '',

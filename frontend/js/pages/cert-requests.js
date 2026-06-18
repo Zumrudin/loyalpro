@@ -29,18 +29,32 @@ function crRow(r) {
   const patient = r.payer_is_patient ? '— (он же)' : esc(crFio(r.patient_last, r.patient_first, '') + ' · ' + (r.patient_phone || ''));
   const matched = r.matched_client_id ? '✅' : '—';
   return `<tr style="border-top:1px solid #eee;font-size:14px">
-    <td>${date}</td><td>${r.report_year}</td><td>${payer}</td><td>${patient}</td>
+    <td>${date}</td><td>${esc(String(r.report_year))}</td><td>${payer}</td><td>${patient}</td>
     <td>${matched}${r.computed_amount != null ? ' · ' + esc(String(r.computed_amount)) + '₽' : ''}</td>
     <td>${esc(CR_STATUS_LABEL[r.status] || r.status)}</td>
-    <td><button class="btn-pri" onclick="crOpenInGenerator(${r.id})">Создать справку</button></td>
+    <td>
+      <button class="btn-pri" onclick="crOpenInGenerator(${r.id})">Создать справку</button>
+      ${r.status !== 'done' ? `<button onclick="crSetStatus(${r.id},'done')">Готово</button>` : ''}
+      ${r.status !== 'rejected' ? `<button onclick="crSetStatus(${r.id},'rejected')">Отклонить</button>` : ''}
+    </td>
   </tr>`;
 }
 
 async function crOpenInGenerator(id) {
+  let p;
   try {
-    const p = await api('GET', `/api/medical-cert/requests/${id}/prefill`);
-    nav(document.querySelector('.tn[data-p="medical-cert"]')); // переключиться на генератор
-    setTimeout(() => { if (typeof mcPrefillFromRequest === 'function') mcPrefillFromRequest(p); }, 50);
-    await api('PUT', `/api/medical-cert/requests/${id}/status`, { status: 'in_progress' });
-  } catch (e) { notify('Не удалось открыть заявку', 'err'); }
+    p = await api('GET', `/api/medical-cert/requests/${id}/prefill`);
+  } catch (e) { return notify('Не удалось открыть заявку', 'err'); }
+  nav(document.querySelector('.tn[data-p="medical-cert"]')); // переключиться на генератор
+  setTimeout(() => { if (typeof mcPrefillFromRequest === 'function') mcPrefillFromRequest(p); }, 50);
+  try { await api('PUT', `/api/medical-cert/requests/${id}/status`, { status: 'in_progress' }); }
+  catch (e) { /* статус не критичен для открытия генератора */ }
+}
+
+async function crSetStatus(id, status) {
+  try {
+    await api('PUT', `/api/medical-cert/requests/${id}/status`, { status });
+    notify('Статус обновлён');
+    loadCertRequests();
+  } catch (e) { notify('Не удалось изменить статус', 'err'); }
 }
