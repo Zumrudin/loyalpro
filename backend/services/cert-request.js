@@ -17,9 +17,14 @@ function normalizePhone(raw) {
   return (raw == null ? '' : String(raw)).replace(/\D/g, '');
 }
 
+// ИНН → только цифры (пользователь может ввести с пробелами/дефисами).
+function normalizeInn(raw) {
+  return (raw == null ? '' : String(raw)).replace(/\D/g, '');
+}
+
 // Контрольные цифры ИНН: 10 знаков (юрлицо) или 12 (физлицо).
 function validateInn(raw) {
-  const s = (raw == null ? '' : String(raw)).trim();
+  const s = normalizeInn(raw);
   if (!/^\d{10}$/.test(s) && !/^\d{12}$/.test(s)) return false;
   const d = s.split('').map(Number);
   const csum = (coeffs) => coeffs.reduce((a, c, i) => a + c * d[i], 0) % 11 % 10;
@@ -160,7 +165,7 @@ async function buildApplicationPdf(r) {
 }
 
 module.exports = {
-  normalizePhone, validateInn, makeRateLimiter, makeTokenStore,
+  normalizePhone, normalizeInn, validateInn, makeRateLimiter, makeTokenStore,
   matchPatient, computeYearAmount, resolveSalonBySlug,
   buildApplicationPdf, RELATIONSHIP_LABELS,
 };

@@ -124,10 +124,10 @@ router.post('/api/public/cert-requests/:slug', async (req, res) => {
        ) RETURNING id`,
       [
         salon.id, year, samePerson,
-        b.payer_last, b.payer_first, b.payer_middle || null, dateOrNull(b.payer_birthdate), b.payer_inn || null,
+        b.payer_last, b.payer_first, b.payer_middle || null, dateOrNull(b.payer_birthdate), svc.normalizeInn(b.payer_inn) || null,
         (b.payer_doc_type_code || '').slice(0, 2) || null, b.payer_doc_serie_number || null, dateOrNull(b.payer_doc_issue_date), payerPhone, b.payer_email || null,
         samePerson ? null : b.patient_last, samePerson ? null : b.patient_first, samePerson ? null : (b.patient_middle || null),
-        samePerson ? null : dateOrNull(b.patient_birthdate), samePerson ? null : (b.patient_inn || null),
+        samePerson ? null : dateOrNull(b.patient_birthdate), samePerson ? null : (svc.normalizeInn(b.patient_inn) || null),
         samePerson ? null : ((b.patient_doc_type_code || '').slice(0, 2) || null), samePerson ? null : (b.patient_doc_serie_number || null),
         samePerson ? null : dateOrNull(b.patient_doc_date), samePerson ? null : patientPhone, // поле формы patient_doc_date → колонка patient_doc_issue_date
         samePerson ? null : b.relationship, clientId, amount, ip, String(req.headers['user-agent'] || '').slice(0, 400),
