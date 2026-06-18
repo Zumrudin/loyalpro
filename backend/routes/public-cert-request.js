@@ -22,6 +22,16 @@ function clientIp(req) {
 // Дата 'YYYY-MM-DD' или '' → null; иначе строка (для DATE-колонок).
 function dateOrNull(s) { return /^\d{4}-\d{2}-\d{2}$/.test(s || '') ? s : null; }
 
+// pg отдаёт DATE как JS Date в локальной полуночи; берём ЛОКАЛЬНЫЕ части,
+// иначе toISOString() сдвигает день на -1 в TZ=Europe/Moscow.
+function pgDateToISO(d) {
+  if (!d) return '';
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
 // Доступные отчётные годы: текущий и 2 предыдущих (TZ Москвы — сервер уже в ней).
 function availableYears() {
   const y = new Date().getFullYear();
@@ -60,19 +70,19 @@ router.get('/api/public/cert-requests/:slug/config', async (req, res) => {
 // Приём заявки.
 router.post('/api/public/cert-requests/:slug', async (req, res) => {
   try {
+    const b = req.body || {};
+    // Honeypot: скрытое поле должно быть пустым у людей. Проверяем до запроса в БД.
+    if (b.website) return res.json({ ok: true }); // тихо игнорируем бота
+
     const salon = await svc.resolveSalonBySlug({ db, slug: req.params.slug });
     if (!salon) return res.status(404).json({ error: 'not_found' });
-
-    const b = req.body || {};
-    // Honeypot: скрытое поле должно быть пустым у людей.
-    if (b.website) return res.json({ ok: true }); // тихо игнорируем бота
 
     const ip = clientIp(req);
     if (!rateLimit(ip)) return res.status(429).json({ error: 'too_many_requests' });
 
     // Валидация.
     const errors = [];
-    const samePerson = b.payer_is_patient === true || b.payer_is_patient === '1';
+    const samePerson = b.payer_is_patient === true || b.payer_is_patient === '1' || b.payer_is_patient === 'true';
     const year = Number(b.report_year);
     if (!availableYears().includes(year)) errors.push('report_year');
     if (!b.consent) errors.push('consent');
@@ -119,7 +129,7 @@ router.post('/api/public/cert-requests/:slug', async (req, res) => {
         samePerson ? null : b.patient_last, samePerson ? null : b.patient_first, samePerson ? null : (b.patient_middle || null),
         samePerson ? null : dateOrNull(b.patient_birthdate), samePerson ? null : (b.patient_inn || null),
         samePerson ? null : (b.patient_doc_type_code || null), samePerson ? null : (b.patient_doc_serie_number || null),
-        samePerson ? null : dateOrNull(b.patient_doc_date), samePerson ? null : patientPhone,
+        samePerson ? null : dateOrNull(b.patient_doc_date), samePerson ? null : patientPhone, // поле формы patient_doc_date → колонка patient_doc_issue_date
         samePerson ? null : b.relationship, clientId, amount, ip, String(req.headers['user-agent'] || '').slice(0, 400),
       ]);
 
@@ -141,8 +151,10 @@ router.get('/api/public/cert-requests/:slug/application/:token', async (req, res
 
     const pdf = await svc.buildApplicationPdf({
       ...r,
-      payer_birthdate: r.payer_birthdate ? r.payer_birthdate.toISOString().slice(0, 10) : '',
-      payer_doc_issue_date: r.payer_doc_issue_date ? r.payer_doc_issue_date.toISOString().slice(0, 10) : '',
+      payer_birthdate: pgDateToISO(r.payer_birthdate),
+      payer_doc_issue_date: pgDateToISO(r.payer_doc_issue_date),
+      patient_birthdate: pgDateToISO(r.patient_birthdate),
+      patient_doc_issue_date: pgDateToISO(r.patient_doc_issue_date),
       clinic_name: cfg.MEDICAL_CERT_CLINIC.org_name,
     });
     res.setHeader('Content-Type', 'application/pdf');
