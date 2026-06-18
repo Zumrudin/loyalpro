@@ -77,6 +77,13 @@ test('matchPatient: пустой телефон → null без запроса',
   assert.deepStrictEqual(r, { clientId: null });
 });
 
+test('matchPatient: 8-префикс в базе, +7 на вводе → совпадение по 10 цифрам', async () => {
+  // в базе хранится '89123456789', пациент вводит '+79123456789'
+  const db = fakeDb([{ id: 55 }]);
+  const r = await matchPatient({ db, salonId: 1, phone: '+79123456789' });
+  assert.deepStrictEqual(r, { clientId: 55 });
+});
+
 test('computeYearAmount: сумма из revenue_operations', async () => {
   const db = fakeDb([{ total: '12345.67' }]);
   const sum = await computeYearAmount({ db, salonId: 1, clientId: 42, year: 2025 });

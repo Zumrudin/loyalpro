@@ -64,13 +64,14 @@ function makeTokenStore({ ttlMs, now = () => Date.now() }) {
 // Поиск клиента салона по телефону (нормализуем обе стороны сравнения).
 async function matchPatient({ db, salonId, phone }) {
   const norm = normalizePhone(phone);
-  if (!norm) return { clientId: null };
+  const tail = norm.slice(-10); // последние 10 цифр — без привязки к префиксу 8/+7
+  if (tail.length < 10) return { clientId: null }; // меньше 10 цифр — слишком неоднозначно
   const row = await db.oneOrNone(
     `SELECT id FROM clients
        WHERE salon_id = $1
-         AND regexp_replace(COALESCE(phone,''), '\\D', '', 'g') = $2
+         AND RIGHT(regexp_replace(COALESCE(phone,''), '\\D', '', 'g'), 10) = $2
        LIMIT 1`,
-    [salonId, norm]);
+    [salonId, tail]);
   return { clientId: row ? row.id : null };
 }
 
