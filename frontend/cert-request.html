@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Заявка на справку об оплате медицинских услуг</title>
+  <style>
+    :root { --b:#2563eb; --bd:#d1d5db; --err:#dc2626; }
+    * { box-sizing: border-box; }
+    body { font-family: system-ui, Arial, sans-serif; margin:0; padding:16px; color:#111; background:#fff; }
+    .wrap { max-width: 640px; margin: 0 auto; }
+    h1 { font-size: 20px; margin: 0 0 4px; }
+    .sub { color:#6b7280; font-size:13px; margin-bottom:16px; }
+    .fg { margin-bottom: 12px; }
+    label.fl { display:block; font-size:13px; margin-bottom:4px; }
+    input, select { width:100%; padding:8px 10px; border:1px solid var(--bd); border-radius:8px; font-size:14px; }
+    .row { display:flex; gap:12px; flex-wrap:wrap; }
+    .row > .fg { flex:1; min-width:140px; }
+    .chk { display:flex; align-items:flex-start; gap:8px; font-size:13px; }
+    .chk input { width:auto; margin-top:2px; }
+    fieldset { border:1px solid var(--bd); border-radius:10px; padding:12px; margin:0 0 16px; }
+    legend { font-size:13px; font-weight:600; padding:0 6px; }
+    button { background:var(--b); color:#fff; border:0; border-radius:10px; padding:12px 18px; font-size:15px; cursor:pointer; width:100%; }
+    button:disabled { opacity:.6; cursor:default; }
+    .hp { position:absolute; left:-9999px; }
+    .err { color:var(--err); font-size:12px; margin-top:4px; }
+    .ok { text-align:center; padding:24px 8px; }
+    .hidden { display:none; }
+    .note { font-size:12px; color:#6b7280; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div id="cr-form-view">
+      <h1>Заявка на справку об оплате медицинских услуг</h1>
+      <div class="sub" id="cr-clinic"></div>
+
+      <form id="cr-form" autocomplete="on" novalidate>
+        <div class="fg">
+          <label class="fl">Отчётный год *</label>
+          <select id="cr-report_year"></select>
+        </div>
+
+        <fieldset>
+          <legend>Получатель справки (налогоплательщик)</legend>
+          <div class="row">
+            <div class="fg"><label class="fl">Фамилия *</label><input id="cr-payer_last"></div>
+            <div class="fg"><label class="fl">Имя *</label><input id="cr-payer_first"></div>
+            <div class="fg"><label class="fl">Отчество</label><input id="cr-payer_middle"></div>
+          </div>
+          <div class="row">
+            <div class="fg"><label class="fl">Дата рождения</label><input id="cr-payer_birthdate" type="date"></div>
+            <div class="fg"><label class="fl">ИНН</label><input id="cr-payer_inn" inputmode="numeric"></div>
+          </div>
+          <div class="row">
+            <div class="fg"><label class="fl">Код вида документа</label><input id="cr-payer_doc_type_code" placeholder="21"></div>
+            <div class="fg"><label class="fl">Серия и номер паспорта</label><input id="cr-payer_doc_serie_number" inputmode="numeric"></div>
+            <div class="fg"><label class="fl">Дата выдачи</label><input id="cr-payer_doc_issue_date" type="date"></div>
+          </div>
+          <div class="row">
+            <div class="fg"><label class="fl">Телефон *</label><input id="cr-payer_phone" inputmode="tel" placeholder="+7 ..."></div>
+            <div class="fg"><label class="fl">Email</label><input id="cr-payer_email" type="email"></div>
+          </div>
+        </fieldset>
+
+        <div class="fg chk">
+          <input type="checkbox" id="cr-payer_is_patient" checked>
+          <label for="cr-payer_is_patient">Пациент — это я (услуги оказаны мне)</label>
+        </div>
+
+        <fieldset id="cr-patient-block" class="hidden">
+          <legend>Пациент (кому оказаны услуги)</legend>
+          <div class="note" style="margin-bottom:8px">Укажите телефон пациента — по нему мы найдём оплаты в нашей базе.</div>
+          <div class="row">
+            <div class="fg"><label class="fl">Фамилия *</label><input id="cr-patient_last"></div>
+            <div class="fg"><label class="fl">Имя *</label><input id="cr-patient_first"></div>
+            <div class="fg"><label class="fl">Отчество</label><input id="cr-patient_middle"></div>
+          </div>
+          <div class="row">
+            <div class="fg"><label class="fl">Дата рождения</label><input id="cr-patient_birthdate" type="date"></div>
+            <div class="fg"><label class="fl">ИНН</label><input id="cr-patient_inn" inputmode="numeric"></div>
+          </div>
+          <div class="row">
+            <div class="fg"><label class="fl">Код вида документа</label><input id="cr-patient_doc_type_code"></div>
+            <div class="fg"><label class="fl">Серия и номер</label><input id="cr-patient_doc_serie_number" inputmode="numeric"></div>
+            <div class="fg"><label class="fl">Дата выдачи</label><input id="cr-patient_doc_date" type="date"></div>
+          </div>
+          <div class="row">
+            <div class="fg"><label class="fl">Телефон пациента *</label><input id="cr-patient_phone" inputmode="tel"></div>
+            <div class="fg"><label class="fl">Степень родства *</label><select id="cr-relationship"></select></div>
+          </div>
+        </fieldset>
+
+        <div class="fg chk">
+          <input type="checkbox" id="cr-consent">
+          <label for="cr-consent">Я согласен(на) на обработку персональных данных в соответствии с
+            <a id="cr-policy" href="#" target="_blank">политикой</a> (152-ФЗ) *</label>
+        </div>
+
+        <!-- honeypot: скрыто от людей -->
+        <input class="hp" id="cr-website" tabindex="-1" autocomplete="off" placeholder="Не заполняйте">
+
+        <div id="cr-error" class="err"></div>
+        <button id="cr-submit" type="submit">Отправить заявку</button>
+      </form>
+    </div>
+
+    <div id="cr-ok-view" class="ok hidden">
+      <h1>Заявка принята ✅</h1>
+      <p>Скачайте заявление и принесите его в клинику.</p>
+      <p><a id="cr-download" href="#"><button type="button">Скачать заявление (PDF)</button></a></p>
+      <p class="note">Ссылка действует 30 минут.</p>
+    </div>
+  </div>
+  <script src="js/cert-request.js"></script>
+</body>
+</html>
