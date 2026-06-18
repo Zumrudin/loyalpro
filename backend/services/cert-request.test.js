@@ -48,3 +48,48 @@ test('makeTokenStore: выдаёт токен, отдаёт значение в 
   now = 101;
   assert.strictEqual(store.get(tok), null);
 });
+
+const { matchPatient, computeYearAmount, resolveSalonBySlug } = require('./cert-request');
+
+function fakeDb(responses) {
+  // responses: массив значений, отдаём по очереди на каждый oneOrNone/one
+  let i = 0;
+  return {
+    oneOrNone: async () => responses[i++],
+    one: async () => responses[i++],
+  };
+}
+
+test('matchPatient: находит клиента по нормализованному телефону', async () => {
+  const db = fakeDb([{ id: 42 }]);
+  const r = await matchPatient({ db, salonId: 1, phone: '+7 (912) 345-67-89' });
+  assert.deepStrictEqual(r, { clientId: 42 });
+});
+
+test('matchPatient: нет совпадения → clientId null', async () => {
+  const db = fakeDb([null]);
+  const r = await matchPatient({ db, salonId: 1, phone: '79990000000' });
+  assert.deepStrictEqual(r, { clientId: null });
+});
+
+test('matchPatient: пустой телефон → null без запроса', async () => {
+  const r = await matchPatient({ db: fakeDb([]), salonId: 1, phone: '' });
+  assert.deepStrictEqual(r, { clientId: null });
+});
+
+test('computeYearAmount: сумма из revenue_operations', async () => {
+  const db = fakeDb([{ total: '12345.67' }]);
+  const sum = await computeYearAmount({ db, salonId: 1, clientId: 42, year: 2025 });
+  assert.strictEqual(sum, 12345.67);
+});
+
+test('computeYearAmount: clientId null → 0 без запроса', async () => {
+  const sum = await computeYearAmount({ db: fakeDb([]), salonId: 1, clientId: null, year: 2025 });
+  assert.strictEqual(sum, 0);
+});
+
+test('resolveSalonBySlug: находит салон', async () => {
+  const db = fakeDb([{ id: 1, cert_request_slug: 'clinic-1' }]);
+  const s = await resolveSalonBySlug({ db, slug: 'clinic-1' });
+  assert.strictEqual(s.id, 1);
+});

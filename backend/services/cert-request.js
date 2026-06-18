@@ -61,4 +61,40 @@ function makeTokenStore({ ttlMs, now = () => Date.now() }) {
   };
 }
 
-module.exports = { normalizePhone, validateInn, makeRateLimiter, makeTokenStore };
+// Поиск клиента салона по телефону (нормализуем обе стороны сравнения).
+async function matchPatient({ db, salonId, phone }) {
+  const norm = normalizePhone(phone);
+  if (!norm) return { clientId: null };
+  const row = await db.oneOrNone(
+    `SELECT id FROM clients
+       WHERE salon_id = $1
+         AND regexp_replace(COALESCE(phone,''), '\\D', '', 'g') = $2
+       LIMIT 1`,
+    [salonId, norm]);
+  return { clientId: row ? row.id : null };
+}
+
+// Сумма оплат клиента за отчётный год (Москва). 0, если клиент не сопоставлен.
+async function computeYearAmount({ db, salonId, clientId, year }) {
+  if (!clientId) return 0;
+  const row = await db.one(
+    `SELECT COALESCE(SUM(amount),0) AS total
+       FROM revenue_operations
+      WHERE salon_id=$1 AND client_id=$2
+        AND EXTRACT(YEAR FROM operation_date)=$3`,
+    [salonId, clientId, year]);
+  return Number(row.total) || 0;
+}
+
+// Салон по публичному slug формы.
+async function resolveSalonBySlug({ db, slug }) {
+  if (!slug) return null;
+  return db.oneOrNone(
+    'SELECT id, cert_request_slug FROM salons WHERE cert_request_slug=$1',
+    [slug]);
+}
+
+module.exports = {
+  normalizePhone, validateInn, makeRateLimiter, makeTokenStore,
+  matchPatient, computeYearAmount, resolveSalonBySlug,
+};
