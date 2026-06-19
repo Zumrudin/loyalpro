@@ -105,17 +105,27 @@ function mcCollect() {
   return body;
 }
 
+// Имя файла справки — ФИО получателя (налогоплательщика). Чистим символы,
+// недопустимые в именах файлов; если ФИО пустое — общее имя.
+function mcCertFileName(body) {
+  const fio = [body.payer_last, body.payer_first, body.payer_middle]
+    .map(s => (s || '').trim()).filter(Boolean).join(' ');
+  const safe = fio.replace(/[\\/:*?"<>|]+/g, '').replace(/\s+/g, ' ').trim();
+  return (safe ? `Справка ${safe}` : 'Справка об оплате медуслуг') + '.pdf';
+}
+
 async function mcGenerate() {
   try {
+    const body = mcCollect();
     const resp = await fetch('/api/medical-cert/generate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + localStorage.getItem('lp_tk') },
-      body: JSON.stringify(mcCollect()),
+      body: JSON.stringify(body),
     });
     if (!resp.ok) { const e = await resp.json().catch(() => ({})); throw new Error(e.error || resp.status); }
     const blob = await resp.blob();
     const url = URL.createObjectURL(blob);
-    const a = document.createElement('a'); a.href = url; a.download = 'spravka.pdf'; a.click();
+    const a = document.createElement('a'); a.href = url; a.download = mcCertFileName(body); a.click();
     URL.revokeObjectURL(url);
   } catch (e) { notify('Ошибка генерации: ' + e.message, 'err'); }
 }

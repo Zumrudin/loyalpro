@@ -91,6 +91,17 @@ function mapValues(body) {
   return v;
 }
 
+// Content-Disposition с именем файла = ФИО получателя (налогоплательщика).
+// ASCII-фолбэк + RFC 5987 (filename*) для корректной кириллицы.
+function certDisposition(body) {
+  const fio = [body.payer_last, body.payer_first, body.payer_middle]
+    .map(s => String(s || '').trim()).filter(Boolean).join(' ');
+  const safe = fio.replace(/[\\/:*?"<>|]+/g, '').replace(/\s+/g, ' ').trim();
+  const name = (safe ? `Справка ${safe}` : 'Справка об оплате медуслуг') + '.pdf';
+  const ascii = name.replace(/[^\x20-\x7E]/g, '_').replace(/"/g, '');
+  return `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(name)}`;
+}
+
 // POST generate — вернуть PDF
 router.post('/generate', adminOnly, async (req, res) => {
   try {
@@ -99,7 +110,7 @@ router.post('/generate', adminOnly, async (req, res) => {
     const values = mapValues(req.body || {});
     const pdf = await fillCertificate({ blank: active.blank, coords: active.coords, values });
     res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', `attachment; filename="medical-cert.pdf"`);
+    res.setHeader('Content-Disposition', certDisposition(req.body || {}));
     res.send(pdf);
   } catch (e) { logger.error(e.message); res.status(500).json({ error: 'generate_failed' }); }
 });
