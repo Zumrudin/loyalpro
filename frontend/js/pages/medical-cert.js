@@ -49,6 +49,11 @@ function loadMedicalCert() {
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">` +
     MC_PATIENT_FIELDS.map(([k, l]) => mcInput(k, l)).join('') + `</div></div>`;
   form.innerHTML = html;
+  // Чистая форма при открытии: сбрасываем выбор клиента (предзаполнение из
+  // заявки, если оно есть, выполняется уже после этого вызова).
+  const cs = document.getElementById('mc-client-search'); if (cs) cs.value = '';
+  const ci = document.getElementById('mc-client-id'); if (ci) ci.value = '';
+  const cr = document.getElementById('mc-client-results'); if (cr) cr.innerHTML = '';
   // Дата формирования справки по умолчанию — сегодня (ГГГГ-ММ-ДД).
   const t = new Date();
   const today = `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, '0')}-${String(t.getDate()).padStart(2, '0')}`;
@@ -110,8 +115,10 @@ function mcCollect() {
 function mcCertFileName(body) {
   const fio = [body.payer_last, body.payer_first, body.payer_middle]
     .map(s => (s || '').trim()).filter(Boolean).join(' ');
-  const safe = fio.replace(/[\\/:*?"<>|]+/g, '').replace(/\s+/g, ' ').trim();
-  return (safe ? `Справка ${safe}` : 'Справка об оплате медуслуг') + '.pdf';
+  const year = String(body.report_year || '').trim();
+  const parts = ['Справка', fio, year].filter(Boolean).join(' ');
+  const safe = parts.replace(/[\\/:*?"<>|]+/g, '').replace(/\s+/g, ' ').trim();
+  return (safe || 'Справка об оплате медуслуг') + '.pdf';
 }
 
 async function mcGenerate() {

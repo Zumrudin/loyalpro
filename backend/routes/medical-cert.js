@@ -96,8 +96,10 @@ function mapValues(body) {
 function certDisposition(body) {
   const fio = [body.payer_last, body.payer_first, body.payer_middle]
     .map(s => String(s || '').trim()).filter(Boolean).join(' ');
-  const safe = fio.replace(/[\\/:*?"<>|]+/g, '').replace(/\s+/g, ' ').trim();
-  const name = (safe ? `Справка ${safe}` : 'Справка об оплате медуслуг') + '.pdf';
+  const year = String(body.report_year || '').trim();
+  const parts = ['Справка', fio, year].filter(Boolean).join(' ');
+  const safe = parts.replace(/[\\/:*?"<>|]+/g, '').replace(/\s+/g, ' ').trim();
+  const name = (safe || 'Справка об оплате медуслуг') + '.pdf';
   const ascii = name.replace(/[^\x20-\x7E]/g, '_').replace(/"/g, '');
   return `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(name)}`;
 }

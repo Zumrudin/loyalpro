@@ -1,11 +1,16 @@
 // ── NAV ────────────────────────────────────────────────────────
 
-function nav(el) {
+function nav(el) { navTo(el.dataset.p); }
+
+// Переход на страницу по ключу (без привязки к пункту меню) — позволяет открывать
+// под-страницы, у которых нет своего .tn (напр. генератор справки внутри «Справок»).
+function navTo(p) {
   closeMenu();                         // закрыть drawer, если переход был из него
   document.querySelectorAll('.tn').forEach(n => n.classList.remove('active'));
-  const p = el.dataset.p;
+  // Генератор справки — под-страница раздела «Справки»: держим его пункт активным.
+  const highlight = (p === 'medical-cert') ? 'cert-requests' : p;
   // подсветить пункт в ОБОИХ меню (верхнее + drawer)
-  document.querySelectorAll('.tn[data-p="' + p + '"]').forEach(n => n.classList.add('active'));
+  document.querySelectorAll('.tn[data-p="' + highlight + '"]').forEach(n => n.classList.add('active'));
   document.querySelectorAll('.page').forEach(x => {
     x.classList.remove('active', 'page-enter');
   });

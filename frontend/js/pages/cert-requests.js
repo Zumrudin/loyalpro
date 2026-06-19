@@ -5,12 +5,20 @@ const CR_STATUS_LABEL = { new: 'Новая', in_progress: 'В работе', don
 
 async function loadCertRequests() {
   const host = document.getElementById('page-cert-requests');
-  host.innerHTML = '<h2 style="margin-bottom:12px">Заявки на справки</h2><div id="cr-list">Загрузка…</div>';
+  host.innerHTML = `
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px">
+      <h2 style="margin:0">Справки</h2>
+      <button class="btn-pri" onclick="crNewCert()">+ Создать новую справку</button>
+    </div>
+    <div id="cr-list">Загрузка…</div>`;
   try {
     const data = await api('GET', '/api/medical-cert/requests');
     crRenderList(data.items || []);
   } catch (e) { document.getElementById('cr-list').textContent = 'Ошибка загрузки'; }
 }
+
+// Открыть генератор с чистой формой (новая справка «с нуля»).
+function crNewCert() { navTo('medical-cert'); }
 
 function crFio(l, f, m) { return [l, f, m].filter(Boolean).join(' '); }
 
@@ -45,7 +53,7 @@ async function crOpenInGenerator(id) {
   try {
     p = await api('GET', `/api/medical-cert/requests/${id}/prefill`);
   } catch (e) { return notify('Не удалось открыть заявку', 'err'); }
-  nav(document.querySelector('.tn[data-p="medical-cert"]')); // переключиться на генератор
+  navTo('medical-cert'); // переключиться на генератор (под-страница раздела «Справки»)
   setTimeout(() => { if (typeof mcPrefillFromRequest === 'function') mcPrefillFromRequest(p); }, 50);
   try { await api('PUT', `/api/medical-cert/requests/${id}/status`, { status: 'in_progress' }); }
   catch (e) { /* статус не критичен для открытия генератора */ }
