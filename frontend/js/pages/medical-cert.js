@@ -49,6 +49,11 @@ function loadMedicalCert() {
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">` +
     MC_PATIENT_FIELDS.map(([k, l]) => mcInput(k, l)).join('') + `</div></div>`;
   form.innerHTML = html;
+  // Дата формирования справки по умолчанию — сегодня (ГГГГ-ММ-ДД).
+  const t = new Date();
+  const today = `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, '0')}-${String(t.getDate()).padStart(2, '0')}`;
+  const sd = document.getElementById('mc-f-sign_date');
+  if (sd) sd.value = today;
   mcLoadTemplateMeta();
 }
 

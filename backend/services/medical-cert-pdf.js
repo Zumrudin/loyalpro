@@ -13,6 +13,23 @@ const BLACK = rgb(0, 0, 0);
 function drawCells(page, font, text, f) {
   const chars = String(text);
   const size = f.fontSize || 11;
+
+  // Перенос длинного текста на вторую строку клеток (wrapY — y второй строки).
+  // Ломаем по последнему пробелу в пределах max клеток; иначе жёстко по max.
+  if (f.wrapY && f.max && chars.length > f.max) {
+    let cut = chars.lastIndexOf(' ', f.max);
+    const row1 = cut > 0 ? chars.slice(0, cut) : chars.slice(0, f.max);
+    const row2 = cut > 0 ? chars.slice(cut + 1) : chars.slice(f.max);
+    const drawRow = (s, y) => {
+      for (let i = 0; i < s.length && i < f.max; i++) {
+        page.drawText(s[i], { x: f.x + i * f.step, y, size, font, color: BLACK });
+      }
+    };
+    drawRow(row1, f.y);
+    drawRow(row2, f.wrapY);
+    return;
+  }
+
   let startX = f.x;
   if (f.align === 'right' && f.anchorRight) {
     startX = f.anchorRight - (chars.length - 1) * f.step;

@@ -2,7 +2,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert');
 const { PDFDocument } = require('pdf-lib');
-const { fillCertificate } = require('./medical-cert-pdf');
+const { fillCertificate, drawCells } = require('./medical-cert-pdf');
 
 async function blankTwoPagePdf() {
   const doc = await PDFDocument.create();
@@ -37,6 +37,26 @@ test('fillCertificate: неизвестное поле в values не валит
   const blank = await blankTwoPagePdf();
   const out = await fillCertificate({ blank, coords, values: { not_a_field: 'X' } });
   assert.ok(Buffer.isBuffer(out));
+});
+
+test('drawCells: длинное наименование переносится на вторую строку по границе слова', () => {
+  const calls = [];
+  const page = { drawText: (ch, o) => calls.push({ ch, x: o.x, y: o.y }) };
+  const f = { type: 'cells', x: 60, y: 640, wrapY: 618, step: 14.3, max: 37, fontSize: 12 };
+  drawCells(page, {}, 'ООО «КЛИНИКА ЭСТЕТИЧЕСКОЙ МЕДИЦИНЫ «ПЕРИ КЛИНИК»', f);
+  const row1 = calls.filter(c => c.y === 640).map(c => c.ch).join('');
+  const row2 = calls.filter(c => c.y === 618).map(c => c.ch).join('');
+  assert.strictEqual(row1, 'ООО «КЛИНИКА ЭСТЕТИЧЕСКОЙ МЕДИЦИНЫ');
+  assert.strictEqual(row2, '«ПЕРИ КЛИНИК»');
+  assert.ok(row1.length <= 37 && row2.length <= 37);
+});
+
+test('drawCells: короткий текст не переносится (одна строка)', () => {
+  const calls = [];
+  const page = { drawText: (ch, o) => calls.push({ ch, y: o.y }) };
+  const f = { type: 'cells', x: 60, y: 640, wrapY: 618, step: 14.3, max: 37, fontSize: 12 };
+  drawCells(page, {}, 'ООО «РОМАШКА»', f);
+  assert.ok(calls.every(c => c.y === 640));
 });
 
 test('fillCertificate: значение для несуществующей страницы пропускается', async () => {

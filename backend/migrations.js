@@ -734,6 +734,39 @@ async function runMigrations(client) {
       ON cert_requests(salon_id, matched_client_id)
       WHERE matched_client_id IS NOT NULL
   `).catch(() => {});
+
+  // ── Разовый патч координат активных бланков (стр. 2 + перенос наименования) ──
+  // Применяется один раз на шаблон (маркер _p2patch_v1), чтобы не затирать
+  // ручную калибровку. Только добавляет недостающие поля / выравнивает секции.
+  const tpls = (await client.query(
+    `SELECT c.template_id, c.coords
+       FROM medical_cert_coords c
+       JOIN medical_cert_templates t ON t.id = c.template_id AND t.is_active`
+  ).catch(() => ({ rows: [] }))).rows;
+  for (const r of tpls) {
+    const coords = r.coords;
+    const f = coords && coords.fields;
+    if (!f || coords._p2patch_v1) continue;
+    // Наименование организации — перенос на вторую строку клеток (шаг строки ~23pt).
+    if (f.org_name && f.org_name.wrapY == null) f.org_name.wrapY = f.org_name.y - 23;
+    // ИНН/КПП организации в верхнем блоке стр. 2 (дублируются на каждом листе).
+    if (f.org_inn && !f.org_inn_p2) f.org_inn_p2 = { ...f.org_inn, page: 1 };
+    if (f.org_kpp && !f.org_kpp_p2) {
+      // Сдвиг на клетку влево: 9-я цифра КПП не должна наезжать на «Стр.».
+      f.org_kpp_p2 = { ...f.org_kpp, page: 1, x: f.org_kpp.x - (f.org_kpp.step || 14.3) };
+    }
+    // Серия/номер паспорта пациента — те же колонки, что на стр. 1 (раздельные секции).
+    const align = (dst, src) => { if (f[dst] && f[src]) f[dst].x = f[src].x; };
+    align('patient_serie1', 'doc_serie1');
+    align('patient_serie2', 'doc_serie2');
+    align('patient_number1', 'doc_number1');
+    align('patient_number2', 'doc_number2');
+    coords._p2patch_v1 = true;
+    await client.query(
+      `UPDATE medical_cert_coords SET coords = $1, updated_at = now() WHERE template_id = $2`,
+      [coords, r.template_id]
+    ).catch(() => {});
+  }
 }
 
 module.exports = { runMigrations };

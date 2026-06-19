@@ -76,6 +76,9 @@ function mapValues(body) {
 
   // Страница 2 — только если плательщик ≠ пациент
   if (body.payer_is_patient !== '1') {
+    // Реквизиты организации в верхнем блоке второй страницы (ИНН/КПП дублируются на каждом листе).
+    if (body.org_inn) set('org_inn_p2', String(body.org_inn));
+    if (body.org_kpp) set('org_kpp_p2', String(body.org_kpp));
     set('patient_last', sanitizeUpper(body.patient_last));
     set('patient_first', sanitizeUpper(body.patient_first));
     set('patient_middle', sanitizeUpper(body.patient_middle));
@@ -215,10 +218,21 @@ router.get('/requests/:id/prefill', adminOnly, async (req, res) => {
       const c = await db.oneOrNone('SELECT name FROM clients WHERE id=$1 AND salon_id=$2', [r.matched_client_id, salonOf(req)]);
       clientName = c ? c.name : '';
     }
+
+    // Реквизиты организации, подписант и сумма «код 1» — как при «Подтянуть данные»:
+    // одним кликом форма заполняется полностью. Сумму пересчитываем по
+    // сопоставленному клиенту (только процедуры за отчётный год).
+    const defaults = await buildDefaults({
+      db, clinic: cfg.MEDICAL_CERT_CLINIC, salonId: salonOf(req),
+      clientId: r.matched_client_id || null, year: r.report_year,
+    });
+
     res.json({
       clientId: r.matched_client_id || null,
       clientName,
       report_year: String(r.report_year),
+      org_name: defaults.org_name, org_inn: defaults.org_inn, org_kpp: defaults.org_kpp,
+      signer_last: defaults.signer_last, signer_first: defaults.signer_first, signer_middle: defaults.signer_middle,
       payer_is_patient: r.payer_is_patient ? '1' : '0',
       payer_last: r.payer_last || '', payer_first: r.payer_first || '', payer_middle: r.payer_middle || '',
       payer_inn: r.payer_inn || '', payer_birthdate: d(r.payer_birthdate),
@@ -226,7 +240,8 @@ router.get('/requests/:id/prefill', adminOnly, async (req, res) => {
       patient_last: r.patient_last || '', patient_first: r.patient_first || '', patient_middle: r.patient_middle || '',
       patient_inn: r.patient_inn || '', patient_birthdate: d(r.patient_birthdate),
       patient_doc_type: r.patient_doc_type_code || '', patient_doc_serie: r.patient_doc_serie_number || '', patient_doc_date: d(r.patient_doc_issue_date),
-      amount1: r.computed_amount != null ? String(r.computed_amount) : '',
+      // Сопоставлен клиент → свежий пересчёт (только услуги); иначе сохранённое значение заявки.
+      amount1: r.matched_client_id ? String(defaults.amount_total) : (r.computed_amount != null ? String(r.computed_amount) : ''),
     });
   } catch (e) { logger.error(e.message); res.status(500).json({ error: 'prefill_failed' }); }
 });

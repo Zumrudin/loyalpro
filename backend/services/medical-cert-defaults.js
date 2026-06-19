@@ -3,11 +3,15 @@
 
 const { splitFullName } = require('./medical-cert-layout');
 
+// Сумма «код 1»: только процедуры (category='services') за отчётный год
+// (1 января — 31 декабря). Абонементы, косметика (товары), сертификаты и
+// пополнения счёта в налоговый вычет не входят.
 async function sumPaymentsForYear(db, salonId, clientId, year) {
   const row = await db.one(
     `SELECT COALESCE(SUM(amount),0) AS total
        FROM revenue_operations
       WHERE salon_id=$1 AND client_id=$2
+        AND category='services'
         AND EXTRACT(YEAR FROM operation_date)=$3`,
     [salonId, clientId, year]);
   return Number(row.total) || 0;
