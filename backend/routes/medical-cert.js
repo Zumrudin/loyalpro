@@ -175,8 +175,32 @@ router.get('/requests', adminOnly, async (req, res) => {
         WHERE salon_id=$1 ${status ? 'AND status=$2' : ''}
         ORDER BY created_at DESC`,
       status ? [salonOf(req), status] : [salonOf(req)]);
+
+    // computed_amount — снимок на момент подачи и устаревает. Для отображения
+    // пересчитываем сумму по сопоставленным заявкам из YClients (дедуп по
+    // (клиент, год), кэш 5 мин, ограниченная параллельность). При ошибке —
+    // остаётся сохранённое значение.
+    const salonId = salonOf(req);
+    const { sumServicePaymentsCached } = require('../services/cert-amount');
+    const pairs = [...new Set(rows.filter(r => r.matched_client_id)
+      .map(r => `${r.matched_client_id}:${r.report_year}`))];
+    const amt = {};
+    const LIMIT = 5;
+    for (let i = 0; i < pairs.length; i += LIMIT) {
+      await Promise.all(pairs.slice(i, i + LIMIT).map(async key => {
+        const [cid, yr] = key.split(':').map(Number);
+        try { amt[key] = await sumServicePaymentsCached({ db, salonId, clientId: cid, year: yr }); }
+        catch { /* оставим сохранённое значение */ }
+      }));
+    }
+    for (const r of rows) {
+      if (!r.matched_client_id) continue;
+      const v = amt[`${r.matched_client_id}:${r.report_year}`];
+      if (v != null) r.computed_amount = v;
+    }
+
     const newCount = await db.one(
-      `SELECT COUNT(*)::int AS n FROM cert_requests WHERE salon_id=$1 AND status='new'`, [salonOf(req)]);
+      `SELECT COUNT(*)::int AS n FROM cert_requests WHERE salon_id=$1 AND status='new'`, [salonId]);
     res.json({ items: rows, newCount: newCount.n });
   } catch (e) { logger.error(e.message); res.status(500).json({ error: 'requests_list_failed' }); }
 });

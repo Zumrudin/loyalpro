@@ -40,4 +40,18 @@ async function sumServicePaymentsForYear({ db, salonId, clientId, year }) {
   return Number(row.total) || 0;
 }
 
-module.exports = { sumServicePaymentsForYear };
+// Кэш сумм для списка заявок: живой расчёт дорогой, а список открывают часто.
+// Генерация/предзаполнение справки кэш НЕ используют — там всегда свежий расчёт.
+const _amtCache = new Map(); // key 'salon:client:year' → { at, val }
+const AMT_TTL_MS = 5 * 60 * 1000;
+async function sumServicePaymentsCached(args) {
+  const key = `${args.salonId}:${args.clientId}:${args.year}`;
+  const now = Date.now();
+  const hit = _amtCache.get(key);
+  if (hit && now - hit.at < AMT_TTL_MS) return hit.val;
+  const val = await sumServicePaymentsForYear(args);
+  _amtCache.set(key, { at: now, val });
+  return val;
+}
+
+module.exports = { sumServicePaymentsForYear, sumServicePaymentsCached };

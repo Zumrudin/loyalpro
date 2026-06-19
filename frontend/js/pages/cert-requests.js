@@ -38,7 +38,7 @@ function crRow(r) {
   const matched = r.matched_client_id ? '✅' : '—';
   return `<tr style="border-top:1px solid #eee;font-size:14px">
     <td>${date}</td><td>${esc(String(r.report_year))}</td><td>${payer}</td><td>${patient}</td>
-    <td>${matched}${r.computed_amount != null ? ' · ' + esc(String(r.computed_amount)) + '₽' : ''}</td>
+    <td>${matched}${r.computed_amount != null ? ' · ' + esc(Number(r.computed_amount).toLocaleString('ru-RU')) + ' ₽' : ''}</td>
     <td>${esc(CR_STATUS_LABEL[r.status] || r.status)}</td>
     <td>
       <button class="btn-pri" onclick="crOpenInGenerator(${r.id})">Создать справку</button>
