@@ -13,7 +13,7 @@ const tpl = require('../services/medical-cert-template');
 const { splitAmount, splitDateParts, splitDoc, sanitizeUpper } = require('../services/medical-cert-layout');
 
 const logger = createLogger('MedicalCert');
-const adminOnly = [auth, requireRole('owner', 'admin')];
+const adminOnly = [auth, requireRole('owner', 'admin', 'specialist')];
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 
 // salon_id текущего пользователя (JWT-пейлоад использует camelCase salonId)
