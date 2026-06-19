@@ -767,6 +767,34 @@ async function runMigrations(client) {
       [coords, r.template_id]
     ).catch(() => {});
   }
+
+  // ── Выравнивание: номер справки по правому краю, суммы — слева ──────────
+  // Самонацеливается на известное «битое» состояние (точные значения текущего
+  // бланка), поэтому идемпотентно и не трогает иначе откалиброванные шаблоны.
+  for (const r of tpls) {
+    const coords = r.coords;
+    const f = coords && coords.fields;
+    if (!f) continue;
+    let changed = false;
+    // Номер справки печатался по середине (anchorRight=185) → к правому краю поля.
+    if (f.cert_number && f.cert_number.anchorRight === 185) {
+      Object.assign(f.cert_number, { x: 88, step: 14.2, max: 12, align: 'right', anchorRight: 244 });
+      changed = true;
+    }
+    // Суммы печатались по середине (align:right, anchorRight=470) → слева.
+    for (const k of ['amount1_rub', 'amount2_rub']) {
+      if (f[k] && f[k].align === 'right' && f[k].anchorRight === 470) {
+        f[k] = { x: 329, y: f[k].y, step: 14.2, max: 13, type: 'cells', page: 0, fontSize: 11 };
+        changed = true;
+      }
+    }
+    if (changed) {
+      await client.query(
+        `UPDATE medical_cert_coords SET coords = $1, updated_at = now() WHERE template_id = $2`,
+        [coords, r.template_id]
+      ).catch(() => {});
+    }
+  }
 }
 
 module.exports = { runMigrations };
