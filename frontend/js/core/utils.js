@@ -70,6 +70,7 @@ function cascadeCards(selector, delay = 60) {
 // Логотип филиала как иконка вкладки браузера. URL кэшируется в
 // localStorage — применяется мгновенно, до ответа /api/salon/logo.
 function applyFavicon(url) {
+  applyBrandLogo(url);
   const link = document.querySelector('link[rel="icon"]');
   if (!link) return;
   if (url) {
@@ -80,6 +81,21 @@ function applyFavicon(url) {
     link.type = 'image/svg+xml';
     link.href = 'favicon.svg';
     localStorage.removeItem('lp_favicon');
+  }
+}
+
+// Логотип филиала в шапке (слева, рядом с «LoyalPro»). При наличии —
+// показываем загруженное лого вместо дефолтной звёздочки.
+const BRAND_LOGO_STAR = '<svg viewBox="0 0 24 24"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>';
+function applyBrandLogo(url) {
+  const box = document.getElementById('tbBrandLogo');
+  if (!box) return;
+  if (url) {
+    box.classList.add('has-img');
+    box.innerHTML = `<img src="${url}" alt="Логотип">`;
+  } else {
+    box.classList.remove('has-img');
+    box.innerHTML = BRAND_LOGO_STAR;
   }
 }
 

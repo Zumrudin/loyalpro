@@ -7,12 +7,12 @@
 <title>LoyalPro — Программа лояльности</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.9.2/dist/confetti.browser.min.js"></script>
-<script src="js/core/utils.js"></script>
+<script src="js/core/utils.js?v=2026-06-19-brand"></script>
 <script src="js/core/api.js"></script>
 <script src="js/core/theme.js"></script>
 <script src="js/core/auth.js?v=2026-06-02a"></script>
 <script src="js/core/nav.js?v=2026-06-19"></script>
-<link rel="stylesheet" href="css/base.css?v=2026-06-01-staff">
+<link rel="stylesheet" href="css/base.css?v=2026-06-19-brand">
 <link rel="stylesheet" href="css/features.css?v=2026-06-17a">
 </head>
 <body>
@@ -84,7 +84,7 @@
       <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
     </button>
     <div class="tb-logo">
-      <div class="tb-li"><svg viewBox="0 0 24 24"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg></div>
+      <div class="tb-li" id="tbBrandLogo"><svg viewBox="0 0 24 24"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg></div>
       <div class="tb-ln">LoyalPro</div>
     </div>
     <nav class="tb-nav" id="mainNav">
@@ -1184,6 +1184,11 @@
         </table>
       </div>
     </div>
+
+    <footer class="app-credit">
+      Разработано и создано <strong>Зумрудином Гаджиевым</strong> · ZUMRUDIN GADZHIEV
+      <span class="app-credit-sub">Создатель и разработчик системы LoyalPro</span>
+    </footer>
 
   </div><!-- /content -->
 </div><!-- /app -->
