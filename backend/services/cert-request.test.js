@@ -84,8 +84,14 @@ test('matchPatient: 8-префикс в базе, +7 на вводе → сов�
   assert.deepStrictEqual(r, { clientId: 55 });
 });
 
-test('computeYearAmount: сумма из revenue_operations', async () => {
-  const db = fakeDb([{ total: '12345.67' }]);
+test('computeYearAmount: фолбэк на revenue_operations без реквизитов YClients', async () => {
+  // oneOrNone(clients) → нет yclients_client_id; oneOrNone(salons) → нет токенов;
+  // → ветка YClients пропускается, сумма берётся из revenue_operations (db.one).
+  const db = fakeDb([
+    { yclients_client_id: null },
+    { id: 1, yclients_company_id: null, yclients_partner_token: null, yclients_user_token: null },
+    { total: '12345.67' },
+  ]);
   const sum = await computeYearAmount({ db, salonId: 1, clientId: 42, year: 2025 });
   assert.strictEqual(sum, 12345.67);
 });

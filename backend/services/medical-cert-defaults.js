@@ -2,20 +2,7 @@
 'use strict';
 
 const { splitFullName } = require('./medical-cert-layout');
-
-// Сумма «код 1»: только процедуры (category='services') за отчётный год
-// (1 января — 31 декабря). Абонементы, косметика (товары), сертификаты и
-// пополнения счёта в налоговый вычет не входят.
-async function sumPaymentsForYear(db, salonId, clientId, year) {
-  const row = await db.one(
-    `SELECT COALESCE(SUM(amount),0) AS total
-       FROM revenue_operations
-      WHERE salon_id=$1 AND client_id=$2
-        AND category='services'
-        AND EXTRACT(YEAR FROM operation_date)=$3`,
-    [salonId, clientId, year]);
-  return Number(row.total) || 0;
-}
+const { sumServicePaymentsForYear } = require('./cert-amount');
 
 // clinic: объект констант клиники (из настроек/конфига).
 // db инжектируется (по умолчанию реальный) — упрощает тестирование.
@@ -26,7 +13,7 @@ async function buildDefaults({ db, clinic, salonId, clientId, year }) {
     : null;
   const fio = splitFullName(client ? client.name : '');
   const signer = splitFullName(clinic.signer_name || '');
-  const amount = clientId ? await sumPaymentsForYear(dbi, salonId, clientId, year) : 0;
+  const amount = clientId ? await sumServicePaymentsForYear({ db: dbi, salonId, clientId, year }) : 0;
 
   return {
     report_year: String(year),
@@ -39,4 +26,4 @@ async function buildDefaults({ db, clinic, salonId, clientId, year }) {
   };
 }
 
-module.exports = { buildDefaults, sumPaymentsForYear };
+module.exports = { buildDefaults };

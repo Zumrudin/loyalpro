@@ -207,10 +207,33 @@ async function ycListFinanceTransactions(salon, { dateFrom, dateTo, page = 1, co
   });
 }
 
+// Сумма платежей клиента за медуслуги («Оказание услуг») за период [dateFrom..dateTo]
+// напрямую из YClients. Эндпоинт фильтрует по client_id на сервере; пагинируем
+// до пустой страницы. Категорию определяем тем же классификатором, что и при
+// записи revenue_operations (expense.title → 'services').
+async function ycSumServicePayments(salon, clientId, dateFrom, dateTo) {
+  const { classifyExpense } = require('./revenue');
+  let page = 1, total = 0;
+  for (;;) {
+    const txns = await ycGet(salon, `/transactions/${salon.yclients_company_id}`, {
+      start_date: dateFrom, end_date: dateTo, client_id: clientId, count: 200, page,
+    });
+    if (!Array.isArray(txns) || txns.length === 0) break;
+    for (const t of txns) {
+      if (classifyExpense(t.expense && t.expense.title) === 'services') {
+        total += parseFloat(t.amount) || 0;
+      }
+    }
+    if (txns.length < 200) break;
+    page++;
+  }
+  return Math.round(total * 100) / 100;
+}
+
 module.exports = {
   ycHeaders, ycGet, ycPost, ycAuth,
   ycGetCardTypes, ycGetClientCards, ycWebLogin, ycGetCardTransactions,
-  parseCardTransactionsHtml, ycAccrueCard, ycListFinanceTransactions,
+  parseCardTransactionsHtml, ycAccrueCard, ycListFinanceTransactions, ycSumServicePayments,
   ycWebSessions,
   getTreeCache, setTreeCache, clearTreeCache,
 };

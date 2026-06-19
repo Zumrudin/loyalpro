@@ -118,20 +118,13 @@ async function matchPatient({ db, salonId, phone }) {
   return { clientId: row ? row.id : null };
 }
 
-// Сумма оплат клиента за отчётный год (1 января — 31 декабря, Москва).
-// Учитываются ТОЛЬКО процедуры (category='services'); абонементы, косметика
-// (товары), сертификаты и пополнения счёта в налоговый вычет не входят.
-// 0, если клиент не сопоставлен.
+// Сумма оплат клиента за медуслуги за отчётный год (1 января — 31 декабря).
+// Источник — YClients (finance «Оказание услуг») с фолбэком на revenue_operations.
+// 0, если клиент не сопоставлен. Услуги — только процедуры; товары/абонементы/
+// сертификаты/пополнения в налоговый вычет не входят.
 async function computeYearAmount({ db, salonId, clientId, year }) {
-  if (!clientId) return 0;
-  const row = await db.one(
-    `SELECT COALESCE(SUM(amount),0) AS total
-       FROM revenue_operations
-      WHERE salon_id=$1 AND client_id=$2
-        AND category='services'
-        AND EXTRACT(YEAR FROM operation_date)=$3`,
-    [salonId, clientId, year]);
-  return Number(row.total) || 0;
+  const { sumServicePaymentsForYear } = require('./cert-amount');
+  return sumServicePaymentsForYear({ db, salonId, clientId, year });
 }
 
 // Салон по публичному slug формы.
