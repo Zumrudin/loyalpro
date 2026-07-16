@@ -7,6 +7,7 @@ const { validateReorderPayload } = require('../services/portfolio');
 const {
   STARTER_CATEGORIES, validateArticleInput, normalizeTags, buildPrefixTsQuery,
 } = require('../services/knowledge-base');
+const kbAssistant = require('../services/kb-assistant');
 const { createLogger } = require('../logger');
 const logger = createLogger('KnowledgeBase');
 
@@ -193,6 +194,31 @@ router.get('/articles/:id', readAny, async (req, res) => {
   } catch (e) {
     logger.error(`GET /articles/:id: ${e.message}`);
     res.status(500).json({ error: 'Ошибка загрузки статьи' });
+  }
+});
+
+// POST /api/kb/ask — ИИ-ассистент: ответ по статьям базы знаний
+router.post('/ask', readAny, async (req, res) => {
+  const question = (req.body?.question || '').trim();
+  if (!question)              return res.status(400).json({ error: 'Пустой вопрос' });
+  if (question.length > 500)  return res.status(400).json({ error: 'Слишком длинный вопрос (макс. 500 символов)' });
+  try {
+    const out = await kbAssistant.ask(req.user.salonId, req.user.userId, question);
+    res.json(out);
+  } catch (e) {
+    if (e.code === 'NOT_CONFIGURED') {
+      return res.status(503).json({ error: 'ИИ-ассистент не настроен' });
+    }
+    if (e.code === 'LLM_UNAVAILABLE') {
+      // Деградация: ответа нет, но отдаём найденные статьи-источники.
+      return res.status(200).json({
+        answer: 'Не удалось получить ответ ассистента, попробуйте позже. Смотрите найденные статьи ниже.',
+        sources: e.sources || [],
+        degraded: true,
+      });
+    }
+    logger.error(`POST /ask: ${e.message}`);
+    res.status(500).json({ error: 'Ошибка ассистента' });
   }
 });
 
