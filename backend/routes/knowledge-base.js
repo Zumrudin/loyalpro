@@ -5,7 +5,7 @@ const { db } = require('../db');
 const { auth, requireRole } = require('../middleware/auth');
 const { validateReorderPayload } = require('../services/portfolio');
 const {
-  STARTER_CATEGORIES, validateArticleInput, normalizeTags,
+  STARTER_CATEGORIES, validateArticleInput, normalizeTags, buildPrefixTsQuery,
 } = require('../services/knowledge-base');
 const { createLogger } = require('../logger');
 const logger = createLogger('KnowledgeBase');
@@ -123,11 +123,15 @@ router.delete('/categories/:id', adminOnly, async (req, res) => {
 
 // ── Articles ──────────────────────────────────────────────────
 
-// GET /api/kb/articles?q=&category_id=&tag= — поиск/список опубликованных
+// GET /api/kb/articles?q=&category_id=&tag=&limit= — поиск/список опубликованных
 router.get('/articles', readAny, async (req, res) => {
   const q         = (req.query.q || '').trim();
   const catId     = req.query.category_id ? parseInt(req.query.category_id, 10) : null;
   const tag       = (req.query.tag || '').trim();
+  // limit: typeahead шлёт небольшое число (напр. 8); обычный список — 100
+  let limit = parseInt(req.query.limit, 10);
+  if (!Number.isInteger(limit) || limit < 1) limit = 100;
+  if (limit > 100) limit = 100;
   try {
     const params = [req.user.salonId];
     const where  = ['a.salon_id=$1', 'a.is_published=true'];
@@ -141,17 +145,25 @@ router.get('/articles', readAny, async (req, res) => {
 
     if (q) {
       params.push(q);
-      const qp = `$${params.length}`;
-      where.push(`(a.search_vector @@ plainto_tsquery('russian', ${qp})
-                   OR a.title ILIKE '%'||${qp}||'%'
-                   OR a.body  ILIKE '%'||${qp}||'%')`);
-      rankSelect = `ts_rank(a.search_vector, plainto_tsquery('russian', ${qp})) AS rank`;
-      // Подсветку выделяем безопасными сентинел-маркерами (не HTML). Фронт
-      // экранирует весь сниппет, затем заменяет маркеры на <b>/</b> — так тело
-      // статьи не может протащить HTML/скрипт в innerHTML (защита от XSS).
-      snippetSelect = `ts_headline('russian', a.body, plainto_tsquery('russian', ${qp}),
-                        'StartSel=@@KBH_S@@, StopSel=@@KBH_E@@, MaxWords=30, MinWords=15, ShortWord=2, HighlightAll=false') AS snippet`;
-      orderBy = 'rank DESC, a.display_order ASC';
+      const qp = `$${params.length}`;             // сырой ввод для ILIKE
+      const tsq = buildPrefixTsQuery(q);          // prefix-tsquery для FTS
+      if (tsq) {
+        params.push(tsq);
+        const tp = `$${params.length}`;
+        where.push(`(a.search_vector @@ to_tsquery('russian', ${tp})
+                     OR a.title ILIKE '%'||${qp}||'%'
+                     OR a.body  ILIKE '%'||${qp}||'%')`);
+        rankSelect = `ts_rank(a.search_vector, to_tsquery('russian', ${tp})) AS rank`;
+        // Подсветку выделяем безопасными сентинел-маркерами (не HTML). Фронт
+        // экранирует весь сниппет, затем заменяет маркеры на <b>/</b> — так тело
+        // статьи не может протащить HTML/скрипт в innerHTML (защита от XSS).
+        snippetSelect = `ts_headline('russian', a.body, to_tsquery('russian', ${tp}),
+                          'StartSel=@@KBH_S@@, StopSel=@@KBH_E@@, MaxWords=30, MinWords=15, ShortWord=2, HighlightAll=false') AS snippet`;
+        orderBy = 'rank DESC, a.display_order ASC';
+      } else {
+        // tsquery пуст (только спецсимволы) → ищем лишь подстрокой ILIKE
+        where.push(`(a.title ILIKE '%'||${qp}||'%' OR a.body ILIKE '%'||${qp}||'%')`);
+      }
     }
 
     const rows = await db.any(
@@ -160,7 +172,7 @@ router.get('/articles', readAny, async (req, res) => {
          FROM kb_articles a
         WHERE ${where.join(' AND ')}
         ORDER BY ${orderBy}
-        LIMIT 100`,
+        LIMIT ${limit}`,
       params);
     res.json({ articles: rows });
   } catch (e) {
