@@ -31,7 +31,7 @@
 ## Архитектура (RAG-поток)
 
 ```
-Вопрос сотрудника (POST /api/knowledge-base/ask { question })
+Вопрос сотрудника (POST /api/kb/ask { question })   ← роутер kb монтируется на /api/kb
   1. RETRIEVE: to_tsquery('russian', ...) по kb_articles WHERE salon_id = req.user.salon_id
               AND is_published, ORDER BY ts_rank DESC LIMIT 4
               (переиспользуем buildPrefixTsQuery / логику из articles-поиска)
