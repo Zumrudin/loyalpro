@@ -95,7 +95,7 @@ async function callGemini(prompt, opts) {
 async function retrieveArticles(salonId, question, limit = 4) {
   const tsq = buildPrefixTsQuery(question);
   if (tsq) {
-    return db.any(
+    const ftsQuery = (tsQuery) => db.any(
       `SELECT id, title, body, category_id,
               ts_rank(search_vector, to_tsquery('russian', $2)) AS rank
          FROM kb_articles
@@ -104,7 +104,14 @@ async function retrieveArticles(salonId, question, limit = 4) {
                OR title ILIKE '%'||$3||'%' OR body ILIKE '%'||$3||'%')
         ORDER BY rank DESC NULLS LAST, display_order ASC
         LIMIT $4`,
-      [salonId, tsq, question, limit]);
+      [salonId, tsQuery, question, limit]);
+    // Сначала строгий AND (все слова). Вопросы-предложения так почти не находятся,
+    // поэтому если пусто — повторяем в режиме OR (любое слово), ранжируя по ts_rank.
+    let rows = await ftsQuery(tsq);
+    if (!rows.length && tsq.includes(' & ')) {
+      rows = await ftsQuery(tsq.replace(/ & /g, ' | '));
+    }
+    return rows;
   }
   // Ввод из одних спецсимволов → только ILIKE.
   return db.any(
