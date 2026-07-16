@@ -541,4 +541,33 @@ body.kb-editor .kb-admin-only { display: inline-flex; }
   max-width: 100%; max-height: 90vh; overflow-y: auto; }
 .kb-modal-actions, .kb-article-actions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 12px; }
 @media (max-width: 720px) { .kb-body { flex-direction: column; } .kb-folders { width: 100%; } }
+
+/* ── База знаний: ИИ-ассистент ─────────────────────────── */
+.kb-ask-panel {
+  margin: 8px 0 12px;
+  padding: 12px;
+  border: 1px solid var(--bd, #e2e2e2);
+  border-radius: 10px;
+  background: var(--card, #fff);
+}
+.kb-ask-row { display: flex; gap: 8px; }
+.kb-ask-input {
+  flex: 1; padding: 9px 12px;
+  border: 1px solid var(--bd, #ccc); border-radius: 8px;
+  font-size: 14px; background: var(--card, #fff); color: var(--t1, #222);
+}
+.kb-ask-result { margin-top: 12px; }
+.kb-ask-loading, .kb-ask-error { padding: 8px 0; color: var(--t3, #888); }
+.kb-ask-error { color: var(--danger, #c0392b); }
+.kb-ask-answer { line-height: 1.5; white-space: normal; }
+.kb-ask-sources {
+  margin-top: 10px; display: flex; flex-wrap: wrap; gap: 6px; align-items: center;
+  font-size: 13px; color: var(--t3, #888);
+}
+.kb-ask-src {
+  padding: 4px 10px; border: 1px solid var(--bd, #ddd); border-radius: 999px;
+  background: transparent; color: var(--a, #3b82f6); cursor: pointer; font-size: 13px;
+}
+.kb-ask-src:hover { background: var(--a, #3b82f6); color: #fff; }
+
 .mc-ve-grid-lbl { position:absolute; left:2px; top:-10px; font-size:9px; color:#dc2626; }
