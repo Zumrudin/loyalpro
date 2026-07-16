@@ -613,6 +613,25 @@ async function runMigrations(client) {
     ON kb_articles (salon_id, category_id, display_order)
   `).catch(() => {});
 
+  // ── База знаний: логи ИИ-ассистента ────────────────────────────
+  // Спека: docs/superpowers/specs/2026-07-16-kb-ai-assistant-design.md
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS kb_chat_logs (
+      id          SERIAL PRIMARY KEY,
+      salon_id    INTEGER NOT NULL REFERENCES salons(id) ON DELETE CASCADE,
+      user_id     INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      question    TEXT NOT NULL,
+      answer      TEXT NOT NULL DEFAULT '',
+      source_ids  INTEGER[] NOT NULL DEFAULT '{}',
+      created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `).catch(() => {});
+
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS kb_chat_logs_salon_idx
+    ON kb_chat_logs (salon_id, created_at DESC)
+  `).catch(() => {});
+
   // ── Personal Staff Dashboard ───────────────────────────────────
   // Спека: docs/superpowers/specs/2026-06-01-staff-dashboard-design.md
   // План:  docs/superpowers/plans/2026-06-01-staff-dashboard.md (Task 1)
