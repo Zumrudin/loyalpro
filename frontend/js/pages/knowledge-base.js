@@ -79,8 +79,8 @@ function kbRenderSuggest(arts) {
     box.innerHTML = `<div class="kb-suggest-empty">Ничего не найдено</div>`;
     box.hidden = false; return;
   }
-  box.innerHTML = arts.map((a, i) => `
-    <div class="kb-suggest-item" data-i="${i}" data-id="${a.id}">
+  box.innerHTML = arts.map((a) => `
+    <div class="kb-suggest-item" data-id="${a.id}">
       <div class="kb-suggest-title">${kbEsc(a.title)}</div>
       <div class="kb-suggest-snippet">${kbSnippet(a.snippet)}</div>
     </div>`).join('');
