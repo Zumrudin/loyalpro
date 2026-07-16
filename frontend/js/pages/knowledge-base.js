@@ -54,6 +54,21 @@ function kbBindOnce() {
 
   document.getElementById('kb-add-article').addEventListener('click', () => kbOpenArticleModal(null));
 
+  const askToggle = document.getElementById('kb-ask-toggle');
+  const askPanel  = document.getElementById('kb-ask-panel');
+  const askInput  = document.getElementById('kb-ask-input');
+  const askSend   = document.getElementById('kb-ask-send');
+  if (askToggle && askPanel) {
+    askToggle.addEventListener('click', () => {
+      askPanel.hidden = !askPanel.hidden;
+      if (!askPanel.hidden) askInput.focus();
+    });
+    askSend.addEventListener('click', kbAskSend);
+    askInput.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Enter') { ev.preventDefault(); kbAskSend(); }
+    });
+  }
+
   // делегирование: клики по кнопкам копирования внутри статьи
   document.getElementById('kb-content').addEventListener('click', (ev) => {
     const copy = ev.target.closest('.kb-copy');
@@ -257,4 +272,27 @@ async function kbDeleteArticle(id) {
     await api('DELETE', '/api/kb/articles/' + id);
     await loadKnowledgeBase();
   } catch (e) { alert('Ошибка: ' + e.message); }
+}
+
+async function kbAskSend() {
+  const input  = document.getElementById('kb-ask-input');
+  const result = document.getElementById('kb-ask-result');
+  const q = (input.value || '').trim();
+  if (q.length < 2) return;
+  result.hidden = false;
+  result.innerHTML = `<div class="kb-ask-loading">Думаю…</div>`;
+  try {
+    const data = await api('POST', '/api/kb/ask', { question: q });
+    const answer = kbMarkdown(data.answer || '');
+    const sources = (data.sources || []).map(s =>
+      `<button class="kb-ask-src" type="button" data-id="${s.id}">${kbEsc(s.title)}</button>`
+    ).join('');
+    result.innerHTML = `
+      <div class="kb-ask-answer">${answer}</div>
+      ${sources ? `<div class="kb-ask-sources"><span>Источники:</span> ${sources}</div>` : ''}`;
+    result.querySelectorAll('.kb-ask-src').forEach(btn =>
+      btn.addEventListener('click', () => kbOpenArticle(parseInt(btn.dataset.id, 10))));
+  } catch (e) {
+    result.innerHTML = `<div class="kb-ask-error">Ошибка: ${kbEsc(e.message)}</div>`;
+  }
 }
