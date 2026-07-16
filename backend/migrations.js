@@ -561,6 +561,54 @@ async function runMigrations(client) {
   `).catch(() => {});
   await client.query(`CREATE INDEX IF NOT EXISTS idx_s3_orphans_pending ON s3_orphans (created_at) WHERE attempts < 5`).catch(() => {});
 
+  // ── База знаний (Knowledge Base) ───────────────────────────────
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS kb_categories (
+      id            SERIAL PRIMARY KEY,
+      salon_id      INTEGER NOT NULL REFERENCES salons(id) ON DELETE CASCADE,
+      title         TEXT NOT NULL,
+      icon          TEXT NOT NULL DEFAULT '',
+      display_order INTEGER NOT NULL DEFAULT 0,
+      created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `).catch(() => {});
+
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS kb_categories_salon_order_idx
+    ON kb_categories (salon_id, display_order)
+  `).catch(() => {});
+
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS kb_articles (
+      id            SERIAL PRIMARY KEY,
+      salon_id      INTEGER NOT NULL REFERENCES salons(id) ON DELETE CASCADE,
+      category_id   INTEGER NOT NULL REFERENCES kb_categories(id) ON DELETE CASCADE,
+      title         TEXT NOT NULL,
+      body          TEXT NOT NULL DEFAULT '',
+      tags          TEXT[] NOT NULL DEFAULT '{}',
+      is_published  BOOLEAN NOT NULL DEFAULT TRUE,
+      display_order INTEGER NOT NULL DEFAULT 0,
+      search_vector TSVECTOR GENERATED ALWAYS AS (
+        setweight(to_tsvector('russian', coalesce(title, '')), 'A') ||
+        setweight(to_tsvector('russian', coalesce(body,  '')), 'B') ||
+        setweight(to_tsvector('russian', array_to_string(tags, ' ')), 'A')
+      ) STORED,
+      created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `).catch(() => {});
+
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS kb_articles_search_idx
+    ON kb_articles USING GIN (search_vector)
+  `).catch(() => {});
+
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS kb_articles_salon_cat_order_idx
+    ON kb_articles (salon_id, category_id, display_order)
+  `).catch(() => {});
+
   // ── Personal Staff Dashboard ───────────────────────────────────
   // Спека: docs/superpowers/specs/2026-06-01-staff-dashboard-design.md
   // План:  docs/superpowers/plans/2026-06-01-staff-dashboard.md (Task 1)
