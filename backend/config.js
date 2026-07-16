@@ -25,6 +25,13 @@ module.exports = {
   YC: 'https://api.yclients.com/api/v1',
   FRONTEND_URL: process.env.FRONTEND_URL || '*',
 
+  // Knowledge-base AI assistant (Gemini). Dual-key: free первым, paid по fallback на 429.
+  // Внимание: как только на Google-проекте включён биллинг, бесплатный тариф на нём
+  // исчезает — поэтому нужны ДВА ключа из двух разных проектов.
+  KB_GEMINI_KEY_FREE: process.env.KB_GEMINI_KEY_FREE || '',   // проект без биллинга (основной)
+  KB_GEMINI_KEY_PAID: process.env.KB_GEMINI_KEY_PAID || '',   // ключ periaiassistent (резерв)
+  KB_LLM_MODEL:       process.env.KB_LLM_MODEL       || 'gemini-2.5-flash',
+
   // CORS — comma-separated list of allowed origins, e.g.:
   // ALLOWED_ORIGINS=http://89.22.233.73,http://89.22.233.73:8081
   ALLOWED_ORIGINS: process.env.ALLOWED_ORIGINS
