@@ -30,7 +30,8 @@ module.exports = {
   // исчезает — поэтому нужны ДВА ключа из двух разных проектов.
   KB_GEMINI_KEY_FREE: process.env.KB_GEMINI_KEY_FREE || '',   // проект без биллинга (основной)
   KB_GEMINI_KEY_PAID: process.env.KB_GEMINI_KEY_PAID || '',   // ключ periaiassistent (резерв)
-  KB_LLM_MODEL:       process.env.KB_LLM_MODEL       || 'gemini-2.5-flash',
+  // gemini-*-latest — алиасы на актуальную модель; gemini-2.5-flash отдаёт 404 новым ключам.
+  KB_LLM_MODEL:       process.env.KB_LLM_MODEL       || 'gemini-flash-lite-latest',
 
   // CORS — comma-separated list of allowed origins, e.g.:
   // ALLOWED_ORIGINS=http://89.22.233.73,http://89.22.233.73:8081
