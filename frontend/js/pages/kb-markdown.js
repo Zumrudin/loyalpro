@@ -17,7 +17,10 @@ function kbMarkdown(src) {
   const lines = String(src ?? '').replace(/\r\n/g, '\n').split('\n');
   const out = [];
   let listBuf = null;      // 'ul' пока копим <li>
-  let checkIdx = 0;        // сквозной индекс чекбоксов для localStorage
+  // Сквозной порядковый индекс чекбоксов — ключ состояния в localStorage.
+  // Каверза v1 (осознанно): вставка пункта выше сдвигает индексы и «съезжает»
+  // сохранённые отметки. Состояние всё равно эфемерное (localStorage), поэтому ок.
+  let checkIdx = 0;
   let i = 0;
 
   const flushList = () => {
@@ -82,5 +85,14 @@ function kbMarkdown(src) {
   return out.join('\n');
 }
 
-if (typeof window !== 'undefined') { window.kbMarkdown = kbMarkdown; window.kbEsc = kbEsc; }
-if (typeof module !== 'undefined' && module.exports) { module.exports = { kbMarkdown, kbEsc }; }
+// Рендер сниппета поисковой выдачи. Бэкенд отдаёт подсветку сентинел-маркерами
+// (@@KBH_S@@/@@KBH_E@@), НЕ html. Экранируем весь текст (нейтрализуем любой html
+// из тела статьи), затем возвращаем только маркеры как <b>/</b>. Защита от XSS.
+function kbSnippet(s) {
+  return kbEsc(s || '')
+    .split('@@KBH_S@@').join('<b>')
+    .split('@@KBH_E@@').join('</b>');
+}
+
+if (typeof window !== 'undefined') { window.kbMarkdown = kbMarkdown; window.kbEsc = kbEsc; window.kbSnippet = kbSnippet; }
+if (typeof module !== 'undefined' && module.exports) { module.exports = { kbMarkdown, kbEsc, kbSnippet }; }

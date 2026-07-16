@@ -1,6 +1,6 @@
 const { test } = require('node:test');
 const assert = require('node:assert');
-const { kbMarkdown } = require('./kb-markdown');
+const { kbMarkdown, kbSnippet } = require('./kb-markdown');
 
 test('экранирует HTML', () => {
   assert.ok(kbMarkdown('<script>x</script>').includes('&lt;script&gt;'));
@@ -39,4 +39,25 @@ test('код-блок ``` → <pre> с кнопкой копирования', (
   assert.ok(html.includes('<pre'));
   assert.ok(html.includes('kb-copy'));
   assert.ok(html.includes('Привет, {name}!'));
+});
+
+test('kbSnippet: экранирует HTML из тела (защита от XSS)', () => {
+  const out = kbSnippet('<img src=x onerror=alert(1)>');
+  assert.ok(out.includes('&lt;img'));
+  assert.ok(!out.includes('<img'));
+});
+
+test('kbSnippet: сентинел-маркеры → <b>/</b>', () => {
+  assert.strictEqual(kbSnippet('текст @@KBH_S@@важно@@KBH_E@@ да'),
+    'текст <b>важно</b> да');
+});
+
+test('kbSnippet: подсветка поверх опасного html остаётся безопасной', () => {
+  const out = kbSnippet('@@KBH_S@@<b>@@KBH_E@@');
+  assert.strictEqual(out, '<b>&lt;b&gt;</b>');
+});
+
+test('kbSnippet: пустой/undefined → пустая строка', () => {
+  assert.strictEqual(kbSnippet(null), '');
+  assert.strictEqual(kbSnippet(undefined), '');
 });

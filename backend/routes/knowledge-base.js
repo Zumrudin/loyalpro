@@ -146,8 +146,11 @@ router.get('/articles', readAny, async (req, res) => {
                    OR a.title ILIKE '%'||${qp}||'%'
                    OR a.body  ILIKE '%'||${qp}||'%')`);
       rankSelect = `ts_rank(a.search_vector, plainto_tsquery('russian', ${qp})) AS rank`;
+      // Подсветку выделяем безопасными сентинел-маркерами (не HTML). Фронт
+      // экранирует весь сниппет, затем заменяет маркеры на <b>/</b> — так тело
+      // статьи не может протащить HTML/скрипт в innerHTML (защита от XSS).
       snippetSelect = `ts_headline('russian', a.body, plainto_tsquery('russian', ${qp}),
-                        'MaxWords=30, MinWords=15, ShortWord=2, HighlightAll=false') AS snippet`;
+                        'StartSel=@@KBH_S@@, StopSel=@@KBH_E@@, MaxWords=30, MinWords=15, ShortWord=2, HighlightAll=false') AS snippet`;
       orderBy = 'rank DESC, a.display_order ASC';
     }
 

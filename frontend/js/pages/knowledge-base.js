@@ -6,6 +6,8 @@ let _kbActiveCat = null;       // id выбранной папки или null (
 let _kbSearchTimer = null;
 
 const _kbCanEdit = () => ME && (ME.role === 'owner' || ME.role === 'admin');
+// kbSnippet — из kb-markdown.js (глобальная); экранирует сниппет и возвращает
+// подсветку <b> из сентинел-маркеров. Защита от XSS в поисковой выдаче.
 
 async function loadKnowledgeBase() {
   document.body.classList.toggle('kb-editor', _kbCanEdit());
@@ -83,7 +85,7 @@ async function kbRunSearch() {
     content.innerHTML = arts.map(a => `
       <div class="kb-card" data-id="${a.id}">
         <div class="kb-card-title">${kbEsc(a.title)}</div>
-        <div class="kb-card-snippet">${a.snippet || ''}</div>
+        <div class="kb-card-snippet">${kbSnippet(a.snippet)}</div>
         <div class="kb-card-tags">${(a.tags || []).map(t => `<span class="kb-tag">${kbEsc(t)}</span>`).join('')}</div>
       </div>`).join('');
     content.querySelectorAll('.kb-card').forEach(card =>
