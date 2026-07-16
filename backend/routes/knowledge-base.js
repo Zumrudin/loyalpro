@@ -223,11 +223,11 @@ router.post('/articles', adminOnly, async (req, res) => {
       [req.user.salonId, body.category_id]);
     const row = await db.one(
       `INSERT INTO kb_articles
-         (salon_id, category_id, title, body, tags, is_published, display_order)
-       VALUES ($1,$2,$3,$4,$5,$6,$7)
+         (salon_id, category_id, title, body, tags, tags_text, is_published, display_order)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
        RETURNING id, category_id, title, body, tags, is_published, display_order`,
       [req.user.salonId, body.category_id, body.title.trim(),
-       body.body || '', tags, body.is_published !== false, next.next]);
+       body.body || '', tags, tags.join(' '), body.is_published !== false, next.next]);
     res.json({ article: row });
   } catch (e) {
     logger.error(`POST /articles: ${e.message}`);
@@ -250,11 +250,11 @@ router.put('/articles/:id', adminOnly, async (req, res) => {
     const tags = normalizeTags(body.tags);
     const row = await db.oneOrNone(
       `UPDATE kb_articles
-          SET category_id=$1, title=$2, body=$3, tags=$4,
-              is_published=$5, updated_at=now()
-        WHERE id=$6 AND salon_id=$7
+          SET category_id=$1, title=$2, body=$3, tags=$4, tags_text=$5,
+              is_published=$6, updated_at=now()
+        WHERE id=$7 AND salon_id=$8
         RETURNING id, category_id, title, body, tags, is_published, display_order`,
-      [body.category_id, body.title.trim(), body.body || '', tags,
+      [body.category_id, body.title.trim(), body.body || '', tags, tags.join(' '),
        body.is_published !== false, req.params.id, req.user.salonId]);
     if (!row) return res.status(404).json({ error: 'Статья не найдена' });
     res.json({ article: row });

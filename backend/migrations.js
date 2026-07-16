@@ -587,12 +587,16 @@ async function runMigrations(client) {
       title         TEXT NOT NULL,
       body          TEXT NOT NULL DEFAULT '',
       tags          TEXT[] NOT NULL DEFAULT '{}',
+      -- tags_text: теги плоской строкой (роут пишет tags.join(' ')). Нужно, т.к.
+      -- array_to_string()/массив→текст в GENERATED-колонке не immutable — Postgres
+      -- отвергает такое выражение. Обычная текстовая колонка immutable и стеммится.
+      tags_text     TEXT NOT NULL DEFAULT '',
       is_published  BOOLEAN NOT NULL DEFAULT TRUE,
       display_order INTEGER NOT NULL DEFAULT 0,
       search_vector TSVECTOR GENERATED ALWAYS AS (
-        setweight(to_tsvector('russian', coalesce(title, '')), 'A') ||
-        setweight(to_tsvector('russian', coalesce(body,  '')), 'B') ||
-        setweight(to_tsvector('russian', array_to_string(tags, ' ')), 'A')
+        setweight(to_tsvector('russian'::regconfig, coalesce(title, '')),     'A') ||
+        setweight(to_tsvector('russian'::regconfig, coalesce(body,  '')),     'B') ||
+        setweight(to_tsvector('russian'::regconfig, coalesce(tags_text, '')), 'A')
       ) STORED,
       created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
       updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
