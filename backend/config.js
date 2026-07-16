@@ -32,6 +32,11 @@ module.exports = {
   KB_GEMINI_KEY_PAID: process.env.KB_GEMINI_KEY_PAID || '',   // ключ periaiassistent (резерв)
   // gemini-*-latest — алиасы на актуальную модель; gemini-2.5-flash отдаёт 404 новым ключам.
   KB_LLM_MODEL:       process.env.KB_LLM_MODEL       || 'gemini-flash-lite-latest',
+  // Relay: регион прод-сервера гео-заблокирован Gemini free API ("User location is not
+  // supported"). Прод шлёт промпт на dev (в поддерживаемом регионе), тот вызывает Gemini
+  // и возвращает ответ. Пусто на dev → прямой вызов Google. Секрет защищает /api/kb/relay.
+  KB_GEMINI_RELAY_URL:    process.env.KB_GEMINI_RELAY_URL    || '',
+  KB_GEMINI_RELAY_SECRET: process.env.KB_GEMINI_RELAY_SECRET || '',
 
   // CORS — comma-separated list of allowed origins, e.g.:
   // ALLOWED_ORIGINS=http://89.22.233.73,http://89.22.233.73:8081
@@ -40,7 +45,7 @@ module.exports = {
     : null,
 
   // API Access Control
-  API_PUBLIC: ['/api/auth/login', '/api/auth/register', '/api/app-settings', '/api/salon/logo'],
+  API_PUBLIC: ['/api/auth/login', '/api/auth/register', '/api/app-settings', '/api/salon/logo', '/api/kb/relay'],
   SPECIALIST_ALLOWED_PREFIXES: ['/api/home-care', '/api/auth', '/api/template-settings', '/api/patient-portfolio', '/api/analytics/staff-dashboard', '/api/medical-cert', '/api/kb'],
 
   // S3 (patient photo cases — Yandex Object Storage / S3-compatible)

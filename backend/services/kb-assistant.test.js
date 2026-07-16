@@ -115,3 +115,42 @@ describe('callGemini (dual-key fallback)', () => {
       .rejects.toThrow();
   });
 });
+
+describe('callGemini relay-режим (прод → dev)', () => {
+  const config = require('../config');
+  const prompt = { system: 'S', user: 'U' };
+  const okJson = { candidates: [{ content: { parts: [{ text: 'Ответ.' }] } }] };
+
+  afterEach(() => { config.KB_GEMINI_RELAY_URL = ''; config.KB_GEMINI_RELAY_SECRET = ''; });
+
+  test('при заданном RELAY_URL промпт уходит на relay, а не в Google', async () => {
+    config.KB_GEMINI_RELAY_URL = 'http://dev.example/api/kb/relay';
+    config.KB_GEMINI_RELAY_SECRET = 'SEK';
+    const calls = [];
+    const fetchFn = async (url, opts) => {
+      calls.push({ url, opts });
+      return { ok: true, status: 200, json: async () => ({ answer: 'Ответ через relay.' }) };
+    };
+    const text = await kb.callGemini(prompt, { free: 'FREE', paid: 'PAID', model: 'm', fetchFn });
+    expect(text).toBe('Ответ через relay.');
+    expect(calls.length).toBe(1);
+    expect(calls[0].url).toBe('http://dev.example/api/kb/relay');
+    expect(calls[0].opts.headers['X-Relay-Secret']).toBe('SEK');
+    expect(JSON.parse(calls[0].opts.body).prompt.user).toBe('U');
+  });
+
+  test('relay вернул не-2xx → бросает ошибку', async () => {
+    config.KB_GEMINI_RELAY_URL = 'http://dev.example/api/kb/relay';
+    const fetchFn = async () => ({ ok: false, status: 502, json: async () => ({}) });
+    await expect(kb.callGemini(prompt, { fetchFn })).rejects.toThrow(/Relay HTTP 502/);
+  });
+
+  test('callGeminiDirect игнорирует relay и зовёт Google напрямую', async () => {
+    config.KB_GEMINI_RELAY_URL = 'http://dev.example/api/kb/relay';
+    const calls = [];
+    const fetchFn = async (url) => { calls.push(url); return { ok: true, status: 200, json: async () => okJson }; };
+    const text = await kb.callGeminiDirect(prompt, { free: 'FREE', paid: '', model: 'm', fetchFn });
+    expect(text).toBe('Ответ.');
+    expect(calls[0]).toContain('generativelanguage');
+  });
+});

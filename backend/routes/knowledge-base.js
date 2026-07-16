@@ -8,6 +8,7 @@ const {
   STARTER_CATEGORIES, validateArticleInput, normalizeTags, buildPrefixTsQuery,
 } = require('../services/knowledge-base');
 const kbAssistant = require('../services/kb-assistant');
+const config = require('../config');
 const { createLogger } = require('../logger');
 const logger = createLogger('KnowledgeBase');
 
@@ -219,6 +220,32 @@ router.post('/ask', readAny, async (req, res) => {
     }
     logger.error(`POST /ask: ${e.message}`);
     res.status(500).json({ error: 'Ошибка ассистента' });
+  }
+});
+
+// POST /api/kb/relay — server-to-server: прод-сервер (гео-блок Gemini) шлёт сюда промпт,
+// dev вызывает Gemini своим ключом в поддерживаемом регионе. БЕЗ JWT (в API_PUBLIC),
+// защищён общим секретом X-Relay-Secret. Обрабатывает только dev (где relay-URL пуст).
+router.post('/relay', async (req, res) => {
+  if (!config.KB_GEMINI_RELAY_SECRET ||
+      req.get('X-Relay-Secret') !== config.KB_GEMINI_RELAY_SECRET) {
+    return res.status(403).json({ error: 'forbidden' });
+  }
+  const prompt = req.body?.prompt;
+  if (!prompt || !prompt.system || !prompt.user) {
+    return res.status(400).json({ error: 'bad prompt' });
+  }
+  try {
+    // callGeminiDirect минует relay-ветку → без риска рекурсии, даже если URL задан.
+    const answer = await kbAssistant.callGeminiDirect(prompt, {
+      free:  config.KB_GEMINI_KEY_FREE,
+      paid:  config.KB_GEMINI_KEY_PAID,
+      model: config.KB_LLM_MODEL,
+    });
+    res.json({ answer });
+  } catch (e) {
+    logger.error(`POST /relay: ${e.message}`);
+    res.status(502).json({ error: 'gemini', message: e.message });
   }
 });
 

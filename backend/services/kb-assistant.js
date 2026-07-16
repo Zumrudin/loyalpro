@@ -91,7 +91,7 @@ async function callGeminiOnce(prompt, { key, model, fetchFn }) {
 
 // Dual-key: сначала free, затем paid на ЛЮБОЙ ошибке (429/5xx/сеть). Пустые ключи пропускаются.
 // opts: { free, paid, model, fetchFn }. fetchFn по умолчанию — глобальный fetch.
-async function callGemini(prompt, opts) {
+async function callGeminiDirect(prompt, opts) {
   const { free, paid, model } = opts;
   const fetchFn = opts.fetchFn || fetch;
   const keys = [free, paid].filter(Boolean);
@@ -109,6 +109,44 @@ async function callGemini(prompt, opts) {
     }
   }
   throw lastErr || new Error('Gemini: все ключи недоступны');
+}
+
+// Relay-режим: регион прод-сервера не поддерживается бесплатным Gemini API
+// ("User location is not supported"), поэтому прод не зовёт Google напрямую, а
+// проксирует промпт на dev-сервер (в поддерживаемом регионе), где ключ и вызов.
+// Тело: { prompt:{system,user} }; ответ: { answer }. Защита — общий секрет в заголовке.
+async function callViaRelay(prompt, { fetchFn }) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  let res;
+  try {
+    res = await fetchFn(config.KB_GEMINI_RELAY_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Relay-Secret': config.KB_GEMINI_RELAY_SECRET || '',
+      },
+      body: JSON.stringify({ prompt }),
+      signal: controller.signal,
+    });
+  } finally {
+    clearTimeout(timer);
+  }
+  if (!res.ok) {
+    const err = new Error(`Relay HTTP ${res.status}`);
+    err.status = res.status;
+    throw err;
+  }
+  const json = await res.json();
+  return (json && json.answer) || '';
+}
+
+// Диспетчер: если задан KB_GEMINI_RELAY_URL (прод) — идём через relay; иначе прямой вызов.
+async function callGemini(prompt, opts) {
+  if (config.KB_GEMINI_RELAY_URL) {
+    return callViaRelay(prompt, { fetchFn: (opts && opts.fetchFn) || fetch });
+  }
+  return callGeminiDirect(prompt, opts);
 }
 
 // Топ-N опубликованных статей салона по релевантности вопросу (FTS + ILIKE fallback).
@@ -195,6 +233,6 @@ async function ask(salonId, userId, question) {
 module.exports = {
   CONTEXT_CHAR_BUDGET, SYSTEM_PROMPT, REQUEST_TIMEOUT_MS,
   buildContext, buildPrompt, parseGeminiResponse,
-  callGeminiOnce, callGemini,
+  callGeminiOnce, callGemini, callGeminiDirect, callViaRelay,
   retrieveArticles, logChat, ask,
 };
