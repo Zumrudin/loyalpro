@@ -274,11 +274,16 @@ async function kbDeleteArticle(id) {
   } catch (e) { alert('Ошибка: ' + e.message); }
 }
 
+let kbAsking = false;   // защита от двойной отправки (клик + Enter / быстрые клики)
 async function kbAskSend() {
+  if (kbAsking) return;
   const input  = document.getElementById('kb-ask-input');
   const result = document.getElementById('kb-ask-result');
+  const sendBtn = document.getElementById('kb-ask-send');
   const q = (input.value || '').trim();
   if (q.length < 2) return;
+  kbAsking = true;
+  if (sendBtn) sendBtn.disabled = true;
   result.hidden = false;
   result.innerHTML = `<div class="kb-ask-loading">Думаю…</div>`;
   try {
@@ -294,5 +299,8 @@ async function kbAskSend() {
       btn.addEventListener('click', () => kbOpenArticle(parseInt(btn.dataset.id, 10))));
   } catch (e) {
     result.innerHTML = `<div class="kb-ask-error">Ошибка: ${kbEsc(e.message)}</div>`;
+  } finally {
+    kbAsking = false;
+    if (sendBtn) sendBtn.disabled = false;
   }
 }

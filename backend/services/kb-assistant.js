@@ -56,11 +56,21 @@ async function callGeminiOnce(prompt, { key, model, fetchFn }) {
     contents: [{ role: 'user', parts: [{ text: prompt.user }] }],
     generationConfig: { temperature: 0.2, maxOutputTokens: 800 },
   };
-  const res = await fetchFn(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
+  // Таймаут через AbortController — иначе повисший запрос держит соединение
+  // до OS-таймаута (минуты). На abort callGemini попробует следующий ключ.
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  let res;
+  try {
+    res = await fetchFn(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+  } finally {
+    clearTimeout(timer);
+  }
   if (!res.ok) {
     const err = new Error(`Gemini HTTP ${res.status}`);
     err.status = res.status;
