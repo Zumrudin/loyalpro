@@ -53,6 +53,7 @@ module.exports = function mountRoutes(app) {
   app.use('/api/template-settings', require('./home-care-template-settings'));
   app.use('/api/app-settings',      require('./app-settings'));
   app.use('/api/portfolio',         require('./portfolio'));
+  app.use('/api/kb',                require('./knowledge-base'));
   app.use('/api/patient-portfolio', require('./patient-portfolio'));
   app.use('/api/broadcasts',        require('./broadcasts'));
   app.use('/api/medical-cert',      require('./medical-cert'));
