@@ -1195,6 +1195,15 @@
             <div id="kb-suggest" class="kb-suggest" hidden></div>
           </div>
           <button id="kb-add-article" class="btn-pri kb-admin-only" type="button">+ Статья</button>
+          <button id="kb-ask-toggle" class="btn-sec" type="button">🤖 Спросить ИИ</button>
+        </div>
+        <div id="kb-ask-panel" class="kb-ask-panel" hidden>
+          <div class="kb-ask-row">
+            <input id="kb-ask-input" class="kb-ask-input" type="text"
+                   maxlength="500" placeholder="Задайте вопрос по базе знаний…" autocomplete="off">
+            <button id="kb-ask-send" class="btn-pri" type="button">Спросить</button>
+          </div>
+          <div id="kb-ask-result" class="kb-ask-result" hidden></div>
         </div>
         <div class="kb-body">
           <aside id="kb-folders" class="kb-folders"></aside>
