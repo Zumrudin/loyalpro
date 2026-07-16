@@ -13,7 +13,7 @@
 <script src="js/core/auth.js?v=2026-06-02a"></script>
 <script src="js/core/nav.js?v=2026-06-19"></script>
 <link rel="stylesheet" href="css/base.css?v=2026-06-19-brand">
-<link rel="stylesheet" href="css/features.css?v=2026-07-16-kb">
+<link rel="stylesheet" href="css/features.css?v=2026-07-16-kb2">
 </head>
 <body>
 
@@ -1190,7 +1190,10 @@
     <div class="page" id="page-knowledge-base">
       <div class="kb-wrap">
         <div class="kb-topbar">
-          <input id="kb-search" class="kb-search" type="search" placeholder="Поиск по базе знаний…" autocomplete="off">
+          <div class="kb-search-wrap">
+            <input id="kb-search" class="kb-search" type="search" placeholder="Поиск по базе знаний…" autocomplete="off">
+            <div id="kb-suggest" class="kb-suggest" hidden></div>
+          </div>
           <button id="kb-add-article" class="btn-pri kb-admin-only" type="button">+ Статья</button>
         </div>
         <div class="kb-body">
@@ -1880,8 +1883,8 @@ function fireConfetti() {
 <script src="js/pages/cert-requests.js?v=2026-06-19b"></script>
 <script src="js/pages/medical-cert-coords-transform.js?v=2026-06-17b"></script>
 <script src="js/pages/medical-cert-coords-editor.js?v=2026-06-17b"></script>
-<script src="js/pages/kb-markdown.js"></script>
-<script src="js/pages/knowledge-base.js"></script>
+<script src="js/pages/kb-markdown.js?v=2026-07-16-kb2"></script>
+<script src="js/pages/knowledge-base.js?v=2026-07-16-kb2"></script>
 <script src="js/app.js"></script>
 </body>
 </html>
