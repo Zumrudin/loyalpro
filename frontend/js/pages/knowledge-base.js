@@ -4,6 +4,9 @@
 let _kbCats = [];
 let _kbActiveCat = null;       // id выбранной папки или null (все)
 let _kbSearchTimer = null;
+let _kbSuggestSeq = 0;         // токен «последнего запроса» — защита от гонки ответов
+let _kbSuggestItems = [];      // текущие статьи в popup
+let _kbSuggestActive = -1;     // индекс подсвеченной строки (-1 = нет)
 
 const _kbCanEdit = () => ME && (ME.role === 'owner' || ME.role === 'admin');
 // kbSnippet — из kb-markdown.js (глобальная); экранирует сниппет и возвращает
@@ -27,10 +30,28 @@ let _kbBound = false;
 function kbBindOnce() {
   if (_kbBound) return; _kbBound = true;
 
-  document.getElementById('kb-search').addEventListener('input', () => {
+  const input = document.getElementById('kb-search');
+  input.addEventListener('input', () => {
     clearTimeout(_kbSearchTimer);
-    _kbSearchTimer = setTimeout(kbRunSearch, 250);
+    _kbSearchTimer = setTimeout(kbTypeahead, 180);
   });
+  input.addEventListener('keydown', (ev) => {
+    const box = document.getElementById('kb-suggest');
+    if (box.hidden) return;
+    if (ev.key === 'ArrowDown')      { ev.preventDefault(); kbMoveActive(1); }
+    else if (ev.key === 'ArrowUp')   { ev.preventDefault(); kbMoveActive(-1); }
+    else if (ev.key === 'Enter') {
+      ev.preventDefault();
+      const pick = _kbSuggestActive >= 0 ? _kbSuggestActive : 0;
+      const art = _kbSuggestItems[pick];
+      if (art) { kbHideSuggest(); kbOpenArticle(art.id); }
+    } else if (ev.key === 'Escape') { kbHideSuggest(); }
+  });
+  // клик вне строки поиска — закрыть popup
+  document.addEventListener('click', (ev) => {
+    if (!ev.target.closest('.kb-search-wrap')) kbHideSuggest();
+  });
+
   document.getElementById('kb-add-article').addEventListener('click', () => kbOpenArticleModal(null));
 
   // делегирование: клики по кнопкам копирования внутри статьи
@@ -43,6 +64,53 @@ function kbBindOnce() {
       });
     }
   });
+}
+
+function kbHideSuggest() {
+  const box = document.getElementById('kb-suggest');
+  box.hidden = true; box.innerHTML = '';
+  _kbSuggestItems = []; _kbSuggestActive = -1;
+}
+
+function kbRenderSuggest(arts) {
+  const box = document.getElementById('kb-suggest');
+  _kbSuggestItems = arts; _kbSuggestActive = -1;
+  if (!arts.length) {
+    box.innerHTML = `<div class="kb-suggest-empty">Ничего не найдено</div>`;
+    box.hidden = false; return;
+  }
+  box.innerHTML = arts.map((a, i) => `
+    <div class="kb-suggest-item" data-i="${i}" data-id="${a.id}">
+      <div class="kb-suggest-title">${kbEsc(a.title)}</div>
+      <div class="kb-suggest-snippet">${kbSnippet(a.snippet)}</div>
+    </div>`).join('');
+  box.hidden = false;
+  box.querySelectorAll('.kb-suggest-item').forEach(el =>
+    el.addEventListener('click', () => {
+      const id = parseInt(el.dataset.id, 10);
+      kbHideSuggest(); kbOpenArticle(id);
+    }));
+}
+
+function kbMoveActive(dir) {
+  const items = document.querySelectorAll('#kb-suggest .kb-suggest-item');
+  if (!items.length) return;
+  _kbSuggestActive = (_kbSuggestActive + dir + items.length) % items.length;
+  items.forEach((el, i) => el.classList.toggle('active', i === _kbSuggestActive));
+  items[_kbSuggestActive].scrollIntoView({ block: 'nearest' });
+}
+
+async function kbTypeahead() {
+  const q = document.getElementById('kb-search').value.trim();
+  if (q.length < 2) { kbHideSuggest(); return; }
+  const seq = ++_kbSuggestSeq;
+  try {
+    const data = await api('GET', '/api/kb/articles?q=' + encodeURIComponent(q) + '&limit=8');
+    if (seq !== _kbSuggestSeq) return;          // пришёл устаревший ответ — игнор
+    kbRenderSuggest(data.articles || []);
+  } catch (e) {
+    if (seq === _kbSuggestSeq) kbHideSuggest(); // ошибку в popup не показываем
+  }
 }
 
 function renderKbFolders() {
