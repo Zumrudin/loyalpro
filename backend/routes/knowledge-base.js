@@ -121,4 +121,158 @@ router.delete('/categories/:id', adminOnly, async (req, res) => {
   }
 });
 
+// ── Articles ──────────────────────────────────────────────────
+
+// GET /api/kb/articles?q=&category_id=&tag= — поиск/список опубликованных
+router.get('/articles', readAny, async (req, res) => {
+  const q         = (req.query.q || '').trim();
+  const catId     = req.query.category_id ? parseInt(req.query.category_id, 10) : null;
+  const tag       = (req.query.tag || '').trim();
+  try {
+    const params = [req.user.salonId];
+    const where  = ['a.salon_id=$1', 'a.is_published=true'];
+
+    if (catId) { params.push(catId); where.push(`a.category_id=$${params.length}`); }
+    if (tag)   { params.push(tag);   where.push(`$${params.length} = ANY(a.tags)`); }
+
+    let rankSelect = 'NULL::real AS rank';
+    let snippetSelect = "left(a.body, 200) AS snippet";
+    let orderBy = 'a.display_order ASC, a.id ASC';
+
+    if (q) {
+      params.push(q);
+      const qp = `$${params.length}`;
+      where.push(`(a.search_vector @@ plainto_tsquery('russian', ${qp})
+                   OR a.title ILIKE '%'||${qp}||'%'
+                   OR a.body  ILIKE '%'||${qp}||'%')`);
+      rankSelect = `ts_rank(a.search_vector, plainto_tsquery('russian', ${qp})) AS rank`;
+      snippetSelect = `ts_headline('russian', a.body, plainto_tsquery('russian', ${qp}),
+                        'MaxWords=30, MinWords=15, ShortWord=2, HighlightAll=false') AS snippet`;
+      orderBy = 'rank DESC, a.display_order ASC';
+    }
+
+    const rows = await db.any(
+      `SELECT a.id, a.category_id, a.title, a.tags, a.display_order,
+              ${snippetSelect}, ${rankSelect}
+         FROM kb_articles a
+        WHERE ${where.join(' AND ')}
+        ORDER BY ${orderBy}
+        LIMIT 100`,
+      params);
+    res.json({ articles: rows });
+  } catch (e) {
+    logger.error(`GET /articles: ${e.message}`);
+    res.status(500).json({ error: 'Ошибка поиска' });
+  }
+});
+
+// GET /api/kb/articles/:id — одна статья целиком
+router.get('/articles/:id', readAny, async (req, res) => {
+  try {
+    const row = await db.oneOrNone(
+      `SELECT id, category_id, title, body, tags, is_published, display_order
+         FROM kb_articles WHERE id=$1 AND salon_id=$2`,
+      [req.params.id, req.user.salonId]);
+    if (!row) return res.status(404).json({ error: 'Статья не найдена' });
+    res.json({ article: row });
+  } catch (e) {
+    logger.error(`GET /articles/:id: ${e.message}`);
+    res.status(500).json({ error: 'Ошибка загрузки статьи' });
+  }
+});
+
+// PUT /api/kb/articles/reorder — батч display_order в пределах папки (ДО /:id!)
+router.put('/articles/reorder', adminOnly, async (req, res) => {
+  const { order } = req.body || {};
+  const v = validateReorderPayload(order);
+  if (!v.valid) return res.status(400).json({ error: v.error });
+  try {
+    for (const { id, display_order } of order) {
+      await db.query(
+        `UPDATE kb_articles SET display_order=$1, updated_at=now()
+          WHERE id=$2 AND salon_id=$3`,
+        [display_order, id, req.user.salonId]);
+    }
+    res.json({ ok: true });
+  } catch (e) {
+    logger.error(`PUT /articles/reorder: ${e.message}`);
+    res.status(500).json({ error: 'Ошибка сортировки' });
+  }
+});
+
+// POST /api/kb/articles — создать статью
+router.post('/articles', adminOnly, async (req, res) => {
+  const body = req.body || {};
+  if (typeof body.category_id === 'string') body.category_id = parseInt(body.category_id, 10);
+  const v = validateArticleInput(body);
+  if (!v.valid) return res.status(400).json({ error: v.error });
+  try {
+    // категория обязана принадлежать этому же салону
+    const cat = await db.oneOrNone(
+      `SELECT id FROM kb_categories WHERE id=$1 AND salon_id=$2`,
+      [body.category_id, req.user.salonId]);
+    if (!cat) return res.status(400).json({ error: 'Папка не найдена' });
+
+    const tags = normalizeTags(body.tags);
+    const next = await db.one(
+      `SELECT COALESCE(MAX(display_order),0)+1 AS next
+         FROM kb_articles WHERE salon_id=$1 AND category_id=$2`,
+      [req.user.salonId, body.category_id]);
+    const row = await db.one(
+      `INSERT INTO kb_articles
+         (salon_id, category_id, title, body, tags, is_published, display_order)
+       VALUES ($1,$2,$3,$4,$5,$6,$7)
+       RETURNING id, category_id, title, body, tags, is_published, display_order`,
+      [req.user.salonId, body.category_id, body.title.trim(),
+       body.body || '', tags, body.is_published !== false, next.next]);
+    res.json({ article: row });
+  } catch (e) {
+    logger.error(`POST /articles: ${e.message}`);
+    res.status(500).json({ error: 'Ошибка создания статьи' });
+  }
+});
+
+// PUT /api/kb/articles/:id — редактировать статью
+router.put('/articles/:id', adminOnly, async (req, res) => {
+  const body = req.body || {};
+  if (typeof body.category_id === 'string') body.category_id = parseInt(body.category_id, 10);
+  const v = validateArticleInput(body);
+  if (!v.valid) return res.status(400).json({ error: v.error });
+  try {
+    const cat = await db.oneOrNone(
+      `SELECT id FROM kb_categories WHERE id=$1 AND salon_id=$2`,
+      [body.category_id, req.user.salonId]);
+    if (!cat) return res.status(400).json({ error: 'Папка не найдена' });
+
+    const tags = normalizeTags(body.tags);
+    const row = await db.oneOrNone(
+      `UPDATE kb_articles
+          SET category_id=$1, title=$2, body=$3, tags=$4,
+              is_published=$5, updated_at=now()
+        WHERE id=$6 AND salon_id=$7
+        RETURNING id, category_id, title, body, tags, is_published, display_order`,
+      [body.category_id, body.title.trim(), body.body || '', tags,
+       body.is_published !== false, req.params.id, req.user.salonId]);
+    if (!row) return res.status(404).json({ error: 'Статья не найдена' });
+    res.json({ article: row });
+  } catch (e) {
+    logger.error(`PUT /articles/:id: ${e.message}`);
+    res.status(500).json({ error: 'Ошибка обновления статьи' });
+  }
+});
+
+// DELETE /api/kb/articles/:id — удалить статью
+router.delete('/articles/:id', adminOnly, async (req, res) => {
+  try {
+    const row = await db.oneOrNone(
+      `DELETE FROM kb_articles WHERE id=$1 AND salon_id=$2 RETURNING id`,
+      [req.params.id, req.user.salonId]);
+    if (!row) return res.status(404).json({ error: 'Статья не найдена' });
+    res.json({ ok: true });
+  } catch (e) {
+    logger.error(`DELETE /articles/:id: ${e.message}`);
+    res.status(500).json({ error: 'Ошибка удаления статьи' });
+  }
+});
+
 module.exports = router;
