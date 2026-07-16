@@ -39,4 +39,18 @@ function validateArticleInput(body) {
   return { valid: true };
 }
 
-module.exports = { STARTER_CATEGORIES, validateArticleInput, normalizeTags };
+// Строит prefix-tsquery для to_tsquery('russian', …) из пользовательского ввода:
+// разбивает по пробелам, вычищает операторы tsquery (& | ! ( ) < > : * ' " \),
+// к каждому токену добавляет :* (префиксный матч), склеивает через ' & '.
+// Пустой/мусорный ввод → '' (вызывающий код тогда падает в ILIKE-ветку).
+function buildPrefixTsQuery(q) {
+  if (typeof q !== 'string') return '';
+  const tokens = q
+    .split(/\s+/)
+    .map(t => t.replace(/[&|!()<>:*'"\\]/g, '').trim())
+    .filter(Boolean);
+  if (!tokens.length) return '';
+  return tokens.map(t => `${t}:*`).join(' & ');
+}
+
+module.exports = { STARTER_CATEGORIES, validateArticleInput, normalizeTags, buildPrefixTsQuery };
