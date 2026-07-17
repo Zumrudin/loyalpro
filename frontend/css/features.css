@@ -565,9 +565,69 @@ body.kb-editor .kb-admin-only { display: inline-flex; }
   font-size: 13px; color: var(--t3, #888);
 }
 .kb-ask-src {
-  padding: 4px 10px; border: 1px solid var(--bd, #ddd); border-radius: 999px;
-  background: transparent; color: var(--a, #3b82f6); cursor: pointer; font-size: 13px;
+  padding: 5px 12px; border: 1px solid rgba(108,92,231,.35); border-radius: 999px;
+  background: rgba(108,92,231,.06); color: var(--kb-accent, #6c5ce7); cursor: pointer;
+  font-size: 13px; font-weight: 600; transition: .15s;
 }
-.kb-ask-src:hover { background: var(--a, #3b82f6); color: #fff; }
+.kb-ask-src:hover {
+  background: var(--kb-accent, #6c5ce7); border-color: transparent; color: #fff;
+  box-shadow: 0 2px 8px rgba(108,92,231,.35);
+}
+
+/* ── База знаний: кнопки (единый фиолетовый акцент страницы) ──────────
+   Кнопки на этой странице раньше наследовали глобальный сине-зелёный
+   градиент, который спорил с фиолетовым акцентом папок. Здесь всё
+   приведено к одному аккуратному фиолетовому тону — локально, не трогая
+   глобальную тему. */
+#page-knowledge-base {
+  --kb-accent: #6c5ce7;
+  --kb-accent-d: #574bd1;
+}
+#page-knowledge-base .btn-pri,
+#page-knowledge-base .btn-sec {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 10px 18px; border-radius: 10px;
+  font-size: 14px; font-weight: 600; line-height: 1;
+  cursor: pointer; font-family: inherit; white-space: nowrap;
+  transition: transform .12s, box-shadow .15s, background-color .15s, border-color .15s, color .15s;
+}
+#page-knowledge-base .btn-pri {
+  border: none; color: #fff;
+  background: linear-gradient(135deg, var(--kb-accent) 0%, var(--kb-accent-d) 100%);
+  box-shadow: 0 2px 10px rgba(108,92,231,.28);
+}
+#page-knowledge-base .btn-pri:hover {
+  opacity: 1; transform: translateY(-1px);
+  box-shadow: 0 6px 18px rgba(108,92,231,.42);
+}
+#page-knowledge-base .btn-pri:active { transform: translateY(0); box-shadow: 0 2px 8px rgba(108,92,231,.3); }
+#page-knowledge-base .btn-sec {
+  background: var(--card, #fff); color: var(--t2, #555);
+  border: 1px solid var(--bd, #e2e2e2);
+}
+#page-knowledge-base .btn-sec:hover {
+  border-color: var(--kb-accent); color: var(--kb-accent);
+  background: rgba(108,92,231,.06); transform: translateY(-1px);
+}
+#page-knowledge-base .btn-sec:active { transform: translateY(0); }
+#page-knowledge-base .btn-dng,
+#page-knowledge-base #kb-del-art:hover {
+  border-color: var(--danger, #e05252); color: var(--danger, #e05252);
+  background: rgba(224,82,82,.06);
+}
+/* AI-переключатель: мягкий фиолетовый чип, заливается при открытой панели */
+#page-knowledge-base #kb-ask-toggle {
+  border: 1px solid rgba(108,92,231,.3); color: var(--kb-accent);
+  background: linear-gradient(135deg, rgba(108,92,231,.09), rgba(108,92,231,.03));
+}
+#page-knowledge-base #kb-ask-toggle:hover {
+  border-color: var(--kb-accent); color: var(--kb-accent);
+  background: linear-gradient(135deg, rgba(108,92,231,.16), rgba(108,92,231,.07));
+}
+#page-knowledge-base #kb-ask-toggle.active {
+  border-color: transparent; color: #fff;
+  background: linear-gradient(135deg, var(--kb-accent), var(--kb-accent-d));
+  box-shadow: 0 2px 10px rgba(108,92,231,.3);
+}
 
 .mc-ve-grid-lbl { position:absolute; left:2px; top:-10px; font-size:9px; color:#dc2626; }

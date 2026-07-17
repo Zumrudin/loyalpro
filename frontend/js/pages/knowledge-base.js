@@ -61,7 +61,13 @@ function kbBindOnce() {
   if (askToggle && askPanel) {
     askToggle.addEventListener('click', () => {
       askPanel.hidden = !askPanel.hidden;
-      if (!askPanel.hidden) askInput.focus();
+      askToggle.classList.toggle('active', !askPanel.hidden);
+      if (!askPanel.hidden) {
+        askInput.focus();
+      } else {
+        // закрыли вкладку ассистента — затираем последний ответ
+        kbClearAskResult();
+      }
     });
     askSend.addEventListener('click', kbAskSend);
     askInput.addEventListener('keydown', (ev) => {
@@ -79,6 +85,12 @@ function kbBindOnce() {
       });
     }
   });
+}
+
+// затирает последний ответ ИИ-ассистента (при закрытии панели / переходе в статью)
+function kbClearAskResult() {
+  const result = document.getElementById('kb-ask-result');
+  if (result) { result.hidden = true; result.innerHTML = ''; }
 }
 
 function kbHideSuggest() {
@@ -181,6 +193,7 @@ async function kbRunSearch() {
 async function kbOpenArticle(id) {
   try {
     const { article } = await api('GET', '/api/kb/articles/' + id);
+    kbClearAskResult();   // перешли в статью — затираем последний ответ ассистента
     const content = document.getElementById('kb-content');
     const editBtns = _kbCanEdit()
       ? `<button class="btn-sec" id="kb-edit-art" type="button">Редактировать</button>
