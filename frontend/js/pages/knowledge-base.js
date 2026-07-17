@@ -251,8 +251,18 @@ function kbOpenArticleModal(article) {
         <select id="kbm-cat">${opts}</select></div>
       <div class="fg"><label class="fl">Теги (через запятую)</label>
         <input id="kbm-tags" type="text" value="${isEdit ? kbEsc((article.tags || []).join(', ')) : ''}"></div>
-      <div class="fg"><label class="fl">Текст (markdown: # заголовок, **жирный**, - список, - [ ] чекбокс, \`\`\` код)</label>
-        <textarea id="kbm-body" rows="12">${isEdit ? kbEsc(article.body) : ''}</textarea></div>
+      <div class="fg"><label class="fl">Текст (markdown: # заголовок, **жирный**, - список, - [ ] чекбокс, \`\`\` код, ![](фото); размер фото — {small}/{medium} после ссылки)</label>
+        <textarea id="kbm-body" rows="12">${isEdit ? kbEsc(article.body) : ''}</textarea>
+        <div class="kbm-toolbar">
+          <button class="btn-sec" id="kbm-img-btn" type="button">🖼 Вставить фото</button>
+          <select id="kbm-img-size" class="kbm-img-size" title="Размер картинки">
+            <option value="small">Маленькая</option>
+            <option value="medium" selected>Средняя</option>
+            <option value="full">Полная</option>
+          </select>
+          <input id="kbm-img-file" type="file" accept="image/*" hidden>
+          <span id="kbm-img-status" class="kbm-img-status"></span>
+        </div></div>
       <div class="kb-modal-actions">
         <button class="btn-sec" id="kbm-cancel" type="button">Отмена</button>
         <button class="btn-pri" id="kbm-save" type="button">Сохранить</button>
@@ -262,6 +272,32 @@ function kbOpenArticleModal(article) {
   const close = () => wrap.remove();
   wrap.querySelector('#kbm-cancel').addEventListener('click', close);
   wrap.addEventListener('click', e => { if (e.target === wrap) close(); });
+
+  // загрузка фото → вставка ![](url) на позицию курсора в textarea
+  const imgBtn    = wrap.querySelector('#kbm-img-btn');
+  const imgFile   = wrap.querySelector('#kbm-img-file');
+  const imgStatus = wrap.querySelector('#kbm-img-status');
+  const bodyEl    = wrap.querySelector('#kbm-body');
+  imgBtn.addEventListener('click', () => imgFile.click());
+  imgFile.addEventListener('change', async () => {
+    const file = imgFile.files && imgFile.files[0];
+    if (!file) return;
+    imgBtn.disabled = true;
+    imgStatus.textContent = 'Загрузка…';
+    try {
+      const url = await kbUploadImage(file);
+      const size = wrap.querySelector('#kbm-img-size').value;
+      const tok = (size === 'small' || size === 'medium') ? `{${size}}` : '';  // full → без токена
+      kbInsertAtCursor(bodyEl, `\n![](${url})${tok}\n`);
+      imgStatus.textContent = 'Готово ✓';
+      setTimeout(() => (imgStatus.textContent = ''), 1500);
+    } catch (e) {
+      imgStatus.textContent = 'Ошибка: ' + e.message;
+    } finally {
+      imgBtn.disabled = false;
+      imgFile.value = '';   // позволяет выбрать тот же файл повторно
+    }
+  });
   wrap.querySelector('#kbm-save').addEventListener('click', async () => {
     const payload = {
       title: wrap.querySelector('#kbm-title').value.trim(),
@@ -277,6 +313,30 @@ function kbOpenArticleModal(article) {
       await loadKnowledgeBase();
     } catch (e) { alert('Ошибка: ' + e.message); }
   });
+}
+
+// Загрузка картинки multipart (api() умеет только JSON, поэтому свой fetch).
+// TOKEN — глобальный из core/api.js.
+async function kbUploadImage(file) {
+  const fd = new FormData();
+  fd.append('image', file);
+  const headers = {};
+  if (TOKEN) headers['Authorization'] = 'Bearer ' + TOKEN;
+  const r = await fetch('/api/kb/upload', { method: 'POST', headers, body: fd });
+  const text = await r.text();
+  const j = text ? JSON.parse(text) : {};
+  if (!r.ok) throw new Error(j.error || 'HTTP ' + r.status);
+  return j.url;
+}
+
+// Вставляет текст на позицию курсора в textarea (или в конец, если нет фокуса).
+function kbInsertAtCursor(textarea, text) {
+  const start = textarea.selectionStart ?? textarea.value.length;
+  const end   = textarea.selectionEnd   ?? textarea.value.length;
+  textarea.value = textarea.value.slice(0, start) + text + textarea.value.slice(end);
+  const pos = start + text.length;
+  textarea.selectionStart = textarea.selectionEnd = pos;
+  textarea.focus();
 }
 
 async function kbDeleteArticle(id) {

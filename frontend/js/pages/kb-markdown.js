@@ -8,9 +8,21 @@ function kbEsc(s) {
     ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
-// Инлайн-разметка внутри уже экранированной строки: **жирный**.
+// Инлайн-разметка внутри уже экранированной строки: картинка ![alt](url){size}, **жирный**.
+// Картинка: только локальные загрузки (URL начинается с /uploads/). Внешние URL и
+// javascript:/data: остаются обычным текстом — защита от XSS. Строка уже прошла
+// kbEsc, поэтому кавычки в alt/url безопасны внутри атрибутов.
+// Необязательный {small}/{medium} задаёт размер (по умолчанию — полный).
 function kbInline(escaped) {
-  return escaped.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+  return escaped
+    .replace(/!\[([^\]]*)\]\((\/uploads\/[A-Za-z0-9_\-./]+)\)(?:\{(small|medium|full)\})?/g,
+      (m, alt, url, size) => {
+        const cls = size === 'small'  ? 'kb-img kb-img-sm'
+                  : size === 'medium' ? 'kb-img kb-img-md'
+                  : 'kb-img';
+        return `<img class="${cls}" src="${url}" alt="${alt}" loading="lazy">`;
+      })
+    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
 }
 
 function kbMarkdown(src) {

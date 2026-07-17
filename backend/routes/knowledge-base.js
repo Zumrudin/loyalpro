@@ -1,9 +1,13 @@
 'use strict';
 
 const router = require('express').Router();
+const path   = require('path');
+const fs     = require('fs');
+const multer = require('multer');
 const { db } = require('../db');
 const { auth, requireRole } = require('../middleware/auth');
 const { validateReorderPayload } = require('../services/portfolio');
+const { imageFileFilter, validateImageBuffer } = require('../utils/upload-validator');
 const {
   STARTER_CATEGORIES, validateArticleInput, normalizeTags, buildPrefixTsQuery,
 } = require('../services/knowledge-base');
@@ -14,6 +18,18 @@ const logger = createLogger('KnowledgeBase');
 
 const readAny   = [auth];                              // читают все роли
 const adminOnly = [auth, requireRole('owner', 'admin')];
+
+// ── Загрузка картинок в статьи ────────────────────────────────
+// Картинка сохраняется в /uploads, её URL встраивается в тело статьи как
+// markdown ![](/uploads/...). Отдельной таблицы нет — ссылка живёт в body.
+const uploadsDir = path.join(__dirname, '../../frontend/uploads');
+if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
+
+const upload = multer({
+  storage: multer.memoryStorage(),   // имя файла задаём сами
+  limits: { fileSize: 5 * 1024 * 1024 },
+  fileFilter: imageFileFilter,
+});
 
 // ── Categories ────────────────────────────────────────────────
 
@@ -327,6 +343,29 @@ router.put('/articles/:id', adminOnly, async (req, res) => {
     logger.error(`PUT /articles/:id: ${e.message}`);
     res.status(500).json({ error: 'Ошибка обновления статьи' });
   }
+});
+
+// POST /api/kb/upload — загрузить картинку для статьи, вернуть её URL.
+// Поле формы: image (multipart). Проверяем «магические байты» (защита от
+// подмены расширения). Имя файла содержит salon_id и ts, чтобы не пересекаться.
+router.post('/upload', adminOnly, (req, res) => {
+  upload.single('image')(req, res, (err) => {
+    if (err) return res.status(400).json({ error: err.message });
+    if (!req.file) return res.status(400).json({ error: 'Файл не получен' });
+
+    const v = validateImageBuffer(req.file.buffer, req.file.originalname);
+    if (!v.ok) return res.status(400).json({ error: v.error });
+
+    const rand = Math.random().toString(36).slice(2, 8);
+    const filename = `kb_${req.user.salonId}_${Date.now()}_${rand}${v.ext}`;
+    try {
+      fs.writeFileSync(path.join(uploadsDir, filename), req.file.buffer);
+    } catch (e) {
+      logger.error(`POST /upload write: ${e.message}`);
+      return res.status(500).json({ error: 'Не удалось сохранить файл' });
+    }
+    res.json({ url: `/uploads/${filename}` });
+  });
 });
 
 // DELETE /api/kb/articles/:id — удалить статью

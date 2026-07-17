@@ -528,6 +528,13 @@
 .kb-empty { padding: 40px; text-align: center; opacity: .6; }
 .kb-article-body { line-height: 1.6; }
 .kb-article-body .kb-h { margin: 16px 0 8px; }
+.kb-img { max-width: 100%; height: auto; border-radius: 10px; margin: 12px 0; display: block; }
+.kb-img-md { max-width: 380px; }   /* средняя */
+.kb-img-sm { max-width: 180px; }   /* маленькая */
+.kbm-toolbar { display: flex; align-items: center; gap: 10px; margin-top: 8px; }
+.kbm-img-size { padding: 6px 8px; border: 1px solid var(--bd, #ccc); border-radius: 8px;
+  background: var(--card, #fff); color: var(--t1, #222); font-size: 13px; }
+.kbm-img-status { font-size: 13px; color: var(--t3, #888); }
 .kb-article-body .kb-check { display: flex; align-items: flex-start; gap: 8px; padding: 4px 0; }
 .kb-code { position: relative; margin: 12px 0; }
 .kb-code pre { background: #1e1e2e; color: #eee; padding: 14px; border-radius: 10px; overflow-x: auto; }
