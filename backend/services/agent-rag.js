@@ -3,6 +3,7 @@
 const crypto = require('crypto');
 const { db } = require('../db');
 const kbAssistant = require('./kb-assistant');
+const { buildPrefixTsQuery } = require('./knowledge-base');
 
 // ── Чистые хелперы RAG-слоя (без БД/HTTP, юнит-тестируемы) ──────
 // Спека: docs/superpowers/specs/2026-07-18-kb-rag-retrieval-design.md
@@ -123,8 +124,56 @@ async function reembedArticle(salonId, articleId) {
     [articleId, chunks.length]);
 }
 
+const VECTOR_TOPN = 12;   // сколько кандидатов брать из каждого поиска до слияния
+
+// Гибридный поиск чанков: JS-косинус (pgvector недоступен) + Postgres FTS → RRF.
+// Возвращает top-K чанков { id, article_id, content }.
+async function retrieveChunks(salonId, query, opts = {}) {
+  const limit = opts.limit || 4;
+  const q = String(query || '').trim();
+  if (!q) return [];
+
+  // 1) Вектор: эмбеддим запрос, тянем все чанки салона, косинус в JS.
+  const qvec = await kbAssistant.embedText(q);
+  const qnorm = vectorNorm(qvec);
+  const all = await db.any(
+    `SELECT id, article_id, content, embedding, embed_norm
+       FROM kb_chunks
+      WHERE salon_id = $1 AND embedding IS NOT NULL`,
+    [salonId]);
+  const byId = new Map(all.map(c => [c.id, c]));
+  const vectorRanked = all
+    .map(c => ({ id: c.id, score: cosineSim(qvec, c.embedding, qnorm, c.embed_norm) }))
+    .sort((a, b) => b.score - a.score)
+    .slice(0, VECTOR_TOPN)
+    .map(r => r.id);
+
+  // 2) FTS по search_vector чанков (prefix-tsquery; при пустом — пропускаем).
+  let ftsRanked = [];
+  const tsq = buildPrefixTsQuery(q);
+  if (tsq) {
+    const ftsRows = await db.any(
+      `SELECT id, article_id,
+              ts_rank(search_vector, to_tsquery('russian', $2)) AS rank
+         FROM kb_chunks
+        WHERE salon_id = $1 AND search_vector @@ to_tsquery('russian', $2)
+        ORDER BY rank DESC NULLS LAST
+        LIMIT $3`,
+      [salonId, tsq, VECTOR_TOPN]);
+    ftsRanked = ftsRows.map(r => r.id);
+    for (const r of ftsRows) if (!byId.has(r.id)) byId.set(r.id, r);
+  }
+
+  // 3) Слияние RRF → top-K, восстанавливаем контент.
+  const merged = reciprocalRankFusion([vectorRanked, ftsRanked]).slice(0, limit);
+  return merged
+    .map(id => byId.get(id))
+    .filter(Boolean)
+    .map(c => ({ id: c.id, article_id: c.article_id, content: c.content }));
+}
+
 module.exports = {
   DEFAULT_MAX_CHARS, chunkArticle, hashChunk,
   vectorNorm, cosineSim, reciprocalRankFusion,
-  reembedArticle,
+  reembedArticle, retrieveChunks,
 };

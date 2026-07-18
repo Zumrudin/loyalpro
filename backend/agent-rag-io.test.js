@@ -42,3 +42,32 @@ describe('reembedArticle', () => {
     expect(kb.embedText).not.toHaveBeenCalled();
   });
 });
+
+describe('retrieveChunks', () => {
+  test('сливает вектор и FTS через RRF, отдаёт top-K', async () => {
+    kb.embedText.mockResolvedValue([1, 0, 0]);
+    // Все чанки салона (для JS-косинуса):
+    db.any.mockImplementation(async (sql) => {
+      if (/FROM kb_chunks[\s\S]*embedding/i.test(sql) && !/search_vector/i.test(sql)) {
+        return [
+          { id: 10, article_id: 1, content: 'ботокс морщины', embedding: [1, 0, 0], embed_norm: 1 },
+          { id: 11, article_id: 1, content: 'массаж спины',   embedding: [0, 1, 0], embed_norm: 1 },
+        ];
+      }
+      if (/search_vector/i.test(sql)) {
+        return [{ id: 11, article_id: 1 }]; // FTS нашёл второй
+      }
+      return [];
+    });
+    const out = await rag.retrieveChunks(1, 'ботокс', { limit: 2 });
+    expect(out.map(c => c.id)).toContain(10);
+    expect(out.length).toBeLessThanOrEqual(2);
+    expect(out[0]).toHaveProperty('content');
+  });
+
+  test('пустой запрос → пусто без вызова эмбеддинга', async () => {
+    const out = await rag.retrieveChunks(1, '   ', { limit: 4 });
+    expect(out).toEqual([]);
+    expect(kb.embedText).not.toHaveBeenCalled();
+  });
+});
