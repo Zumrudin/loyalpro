@@ -37,3 +37,36 @@ describe('hashChunk', () => {
     expect(rag.hashChunk('abc')).not.toBe(rag.hashChunk('abd'));
   });
 });
+
+describe('vectorNorm & cosineSim', () => {
+  test('норма считается корректно', () => {
+    expect(rag.vectorNorm([3, 4])).toBeCloseTo(5, 6);
+  });
+
+  test('косинус одинаковых векторов = 1', () => {
+    const a = [1, 2, 3];
+    expect(rag.cosineSim(a, a, rag.vectorNorm(a), rag.vectorNorm(a))).toBeCloseTo(1, 6);
+  });
+
+  test('косинус ортогональных = 0', () => {
+    const a = [1, 0], b = [0, 1];
+    expect(rag.cosineSim(a, b, rag.vectorNorm(a), rag.vectorNorm(b))).toBeCloseTo(0, 6);
+  });
+
+  test('нулевая норма → 0 без деления на ноль', () => {
+    expect(rag.cosineSim([0, 0], [1, 1], 0, rag.vectorNorm([1, 1]))).toBe(0);
+  });
+});
+
+describe('reciprocalRankFusion', () => {
+  test('id из обоих списков поднимается выше', () => {
+    const merged = rag.reciprocalRankFusion([['a', 'b', 'c'], ['b', 'd']], 60);
+    expect(merged[0]).toBe('b');           // встречается в обоих
+    expect(merged).toContain('a');
+    expect(merged).toContain('d');
+  });
+
+  test('пустые списки → пустой результат', () => {
+    expect(rag.reciprocalRankFusion([[], []], 60)).toEqual([]);
+  });
+});

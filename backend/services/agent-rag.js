@@ -58,4 +58,35 @@ function hashChunk(content) {
   return crypto.createHash('sha256').update(String(content), 'utf8').digest('hex');
 }
 
-module.exports = { DEFAULT_MAX_CHARS, chunkArticle, hashChunk };
+// Евклидова норма вектора.
+function vectorNorm(vec) {
+  let s = 0;
+  for (let i = 0; i < vec.length; i++) s += vec[i] * vec[i];
+  return Math.sqrt(s);
+}
+
+// Косинус по предпосчитанным нормам. Нулевая норма → 0.
+function cosineSim(a, b, normA, normB) {
+  if (!normA || !normB) return 0;
+  const n = Math.min(a.length, b.length);
+  let dot = 0;
+  for (let i = 0; i < n; i++) dot += a[i] * b[i];
+  return dot / (normA * normB);
+}
+
+// Reciprocal Rank Fusion: score(id) = Σ 1/(k + rank). rank — 0-based позиция
+// в каждом ранжированном списке id. Возвращает id, отсортированные по убыванию.
+function reciprocalRankFusion(rankLists, k = 60) {
+  const scores = new Map();
+  for (const list of rankLists) {
+    list.forEach((id, rank) => {
+      scores.set(id, (scores.get(id) || 0) + 1 / (k + rank));
+    });
+  }
+  return [...scores.entries()].sort((a, b) => b[1] - a[1]).map(([id]) => id);
+}
+
+module.exports = {
+  DEFAULT_MAX_CHARS, chunkArticle, hashChunk,
+  vectorNorm, cosineSim, reciprocalRankFusion,
+};
