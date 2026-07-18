@@ -13,6 +13,7 @@ const {
 } = require('../services/knowledge-base');
 const kbAssistant = require('../services/kb-assistant');
 const config = require('../config');
+const agentRag = require('../services/agent-rag');
 const { createLogger } = require('../logger');
 const logger = createLogger('KnowledgeBase');
 
@@ -333,6 +334,9 @@ router.post('/articles', adminOnly, async (req, res) => {
        RETURNING id, category_id, title, body, tags, is_published, display_order`,
       [req.user.salonId, body.category_id, body.title.trim(),
        body.body || '', tags, tags.join(' '), body.is_published !== false, next.next]);
+    // Переэмбеддинг — асинхронно, не блокируем ответ. Ошибку глотаем (не критично).
+    agentRag.reembedArticle(req.user.salonId, row.id)
+      .catch(e => logger.error(`reembed(create ${row.id}): ${e.message}`));
     res.json({ article: row });
   } catch (e) {
     logger.error(`POST /articles: ${e.message}`);
@@ -362,6 +366,8 @@ router.put('/articles/:id', adminOnly, async (req, res) => {
       [body.category_id, body.title.trim(), body.body || '', tags, tags.join(' '),
        body.is_published !== false, req.params.id, req.user.salonId]);
     if (!row) return res.status(404).json({ error: 'Статья не найдена' });
+    agentRag.reembedArticle(req.user.salonId, row.id)
+      .catch(e => logger.error(`reembed(update ${row.id}): ${e.message}`));
     res.json({ article: row });
   } catch (e) {
     logger.error(`PUT /articles/:id: ${e.message}`);
