@@ -1,6 +1,8 @@
 'use strict';
 
 const crypto = require('crypto');
+const { db } = require('../db');
+const kbAssistant = require('./kb-assistant');
 
 // ── Чистые хелперы RAG-слоя (без БД/HTTP, юнит-тестируемы) ──────
 // Спека: docs/superpowers/specs/2026-07-18-kb-rag-retrieval-design.md
@@ -86,7 +88,43 @@ function reciprocalRankFusion(rankLists, k = 60) {
   return [...scores.entries()].sort((a, b) => b[1] - a[1]).map(([id]) => id);
 }
 
+// ── IO: переэмбеддинг статьи ────────────────────────────────────
+// Разбивает статью на чанки, переэмбеддит только изменённые (по content_hash),
+// апсертит kb_chunks, удаляет лишние старые чанки. Безопасно вызывать асинхронно.
+async function reembedArticle(salonId, articleId) {
+  const art = await db.one(
+    `SELECT id, salon_id, title, body FROM kb_articles WHERE id=$1 AND salon_id=$2`,
+    [articleId, salonId]);
+  if (!art) return;
+
+  const chunks = chunkArticle({ title: art.title, body: art.body });
+  const existing = await db.any(
+    `SELECT chunk_index, content_hash FROM kb_chunks WHERE article_id=$1`,
+    [articleId]);
+  const oldHash = new Map(existing.map(r => [r.chunk_index, r.content_hash]));
+
+  for (const ch of chunks) {
+    const hash = hashChunk(ch.content);
+    if (oldHash.get(ch.chunk_index) === hash) continue;   // не изменился
+    const embedding = await kbAssistant.embedText(ch.content);
+    const norm = vectorNorm(embedding);
+    await db.query(
+      `INSERT INTO kb_chunks
+         (salon_id, article_id, chunk_index, content, content_hash, embedding, embed_norm, updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7, now())
+       ON CONFLICT (article_id, chunk_index) DO UPDATE
+         SET content=$4, content_hash=$5, embedding=$6, embed_norm=$7, updated_at=now()`,
+      [salonId, articleId, ch.chunk_index, ch.content, hash, embedding, norm]);
+  }
+
+  // Удаляем чанки, которых больше нет (статья стала короче).
+  await db.query(
+    `DELETE FROM kb_chunks WHERE article_id=$1 AND chunk_index >= $2`,
+    [articleId, chunks.length]);
+}
+
 module.exports = {
   DEFAULT_MAX_CHARS, chunkArticle, hashChunk,
   vectorNorm, cosineSim, reciprocalRankFusion,
+  reembedArticle,
 };
