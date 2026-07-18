@@ -1,6 +1,6 @@
 'use strict';
 
-const claudeDefault = require('./claude');
+const providers = require('./providers');
 const registryDefault = require('./tools');
 const historyDefault = require('./history');
 const stateDefault = require('./dialog-state');
@@ -22,7 +22,7 @@ function todayMoscow() {
 // Прогнать один ход диалога. Возвращает { replies, escalated, sideEffect }.
 async function runDialog(salonId, dialogKey, opts = {}) {
   const d = opts.deps || {};
-  const claude = d.claude || claudeDefault;
+  const provider = d.provider || providers.getProvider();
   const registry = d.registry || registryDefault;
   const history = d.history || historyDefault;
   const state = d.state || stateDefault;
@@ -50,34 +50,33 @@ async function runDialog(salonId, dialogKey, opts = {}) {
     let sideEffect = false;
 
     for (let i = 0; i < MAX_ITERS; i++) {
-      const message = await claude.createMessage(
+      const resp = await provider.createMessage(
         { system, messages: convo.slice(), tools: registry.schemas },
         { client: opts.client });
-      const { text, toolUses, stopReason } = claude.splitContent(message);
 
-      convo.push({ role: 'assistant', content: message.content });
-      if (text) replies.push(text);
+      convo.push(resp.assistantMsg);
+      if (resp.text) replies.push(resp.text);
 
-      if (stopReason !== 'tool_use' || !toolUses.length) break;
+      if (!resp.toolCalls.length) break;
 
-      const resultBlocks = [];
-      for (const tu of toolUses) {
-        const handler = registry.handlers[tu.name];
+      const results = [];
+      for (const tc of resp.toolCalls) {
+        const handler = registry.handlers[tc.name];
         let result;
         try {
           result = handler
-            ? await handler(salonId, tu.input, toolCtx)
-            : { error: `Неизвестный инструмент: ${tu.name}` };
+            ? await handler(salonId, tc.input, toolCtx)
+            : { error: `Неизвестный инструмент: ${tc.name}` };
         } catch (e) {
-          logger.error(`tool ${tu.name} failed: ${e.message}`);
+          logger.error(`tool ${tc.name} failed: ${e.message}`);
           result = { error: e.message };
         }
         const isError = !!(result && result.error);
-        if (!isError && SIDE_EFFECT_TOOLS.has(tu.name)) sideEffect = true;
-        if (tu.name === 'escalate_to_operator' && result && result.escalated) escalated = true;
-        resultBlocks.push(claude.toolResultBlock(tu.id, result, isError));
+        if (!isError && SIDE_EFFECT_TOOLS.has(tc.name)) sideEffect = true;
+        if (tc.name === 'escalate_to_operator' && result && result.escalated) escalated = true;
+        results.push({ id: tc.id, name: tc.name, result, isError });
       }
-      convo.push({ role: 'user', content: resultBlocks });
+      for (const m of provider.toolResultMessages(results)) convo.push(m);
       if (escalated) break;
     }
 
@@ -85,7 +84,7 @@ async function runDialog(salonId, dialogKey, opts = {}) {
     const stale = await history.hasIncomingAfter(salonId, dialogKey, watermark);
     if (stale && !sideEffect && attempt < MAX_REGEN) {
       logger.info(`dialog ${dialogKey}: новое сообщение во время прогона — выбрасываю черновик, перегенерация (${attempt + 1})`);
-      continue;   // выбрасываем текстовый черновик, крутим заново с полным контекстом
+      continue;
     }
 
     await state.setWatermark(salonId, dialogKey, watermark);
