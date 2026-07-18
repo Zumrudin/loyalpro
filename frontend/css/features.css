@@ -638,3 +638,33 @@ body.kb-editor .kb-admin-only { display: inline-flex; }
 }
 
 .mc-ve-grid-lbl { position:absolute; left:2px; top:-10px; font-size:9px; color:#dc2626; }
+
+/* ── Чат (просмотр переписок chatpush) ─────────────────────── */
+.chat-layout { display:flex; gap:12px; height:calc(100vh - 200px); min-height:420px; }
+.chat-sidebar { flex:0 0 300px; overflow-y:auto; border:1px solid var(--bd); border-radius:var(--r); background:var(--card); }
+.chat-main { flex:1; overflow-y:auto; border:1px solid var(--bd); border-radius:var(--r); background:var(--card); padding:14px; display:flex; flex-direction:column; gap:8px; }
+.chat-dialog { padding:10px 12px; border-bottom:1px solid var(--bd); cursor:pointer; }
+.chat-dialog:hover { background:var(--bg); }
+.chat-dialog.active { background:var(--bg); border-left:3px solid var(--a); }
+.chat-dialog-top { display:flex; align-items:center; gap:6px; }
+.chat-dialog-name { font-weight:600; font-size:13px; flex:1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.chat-dialog-time { font-size:11px; color:var(--t3); white-space:nowrap; }
+.chat-dialog-preview { font-size:12px; color:var(--t2); margin-top:3px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.chat-badge { font-size:10px; padding:1px 6px; border-radius:8px; color:#fff; white-space:nowrap; }
+.chan-wa  { background:#25d366; }
+.chan-tg  { background:#28a8e9; }
+.chan-max { background:#8b5cf6; }
+.chan-def { background:#8b949e; }
+.chat-msg { display:flex; flex-direction:column; max-width:75%; }
+.chat-msg-in  { align-self:flex-start; align-items:flex-start; }
+.chat-msg-out { align-self:flex-end;   align-items:flex-end; }
+.chat-bubble { padding:8px 12px; border-radius:12px; font-size:13px; white-space:pre-wrap; word-break:break-word; }
+.chat-msg-in  .chat-bubble { background:var(--bg); color:var(--t1); border-bottom-left-radius:3px; }
+.chat-msg-out .chat-bubble { background:var(--a);  color:#fff;      border-bottom-right-radius:3px; }
+.chat-bubble a { color:inherit; text-decoration:underline; }
+.chat-msg-time { font-size:10px; color:var(--t3); margin-top:2px; }
+@media (max-width:640px) {
+  .chat-layout { flex-direction:column; height:auto; }
+  .chat-sidebar { flex:0 0 auto; max-height:240px; }
+  .chat-main { min-height:320px; }
+}
