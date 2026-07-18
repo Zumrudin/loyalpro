@@ -3,6 +3,7 @@
 const { db } = require('../db');
 const config = require('../config');
 const { buildPrefixTsQuery } = require('./knowledge-base');
+const aitunnel = require('./aitunnel');
 
 // ── RAG-ассистент базы знаний ─────────────────────────────────
 // Спека: docs/superpowers/specs/2026-07-16-kb-ai-assistant-design.md
@@ -145,8 +146,40 @@ async function callViaRelay(prompt, { fetchFn }) {
   return (json && json.answer) || '';
 }
 
+// ── aitunnel-ветка (OpenAI-совместимый Gemini) ────────────────
+// Чат: system+user → chat.completions. client переопределяется в тестах.
+async function callAitunnel(prompt, opts = {}) {
+  const client = opts.client || aitunnel.makeClient();
+  const resp = await client.chat.completions.create({
+    model: config.AITUNNEL_CHAT_MODEL,
+    temperature: 0.2,
+    max_tokens: 800,
+    messages: [
+      { role: 'system', content: prompt.system },
+      { role: 'user', content: prompt.user },
+    ],
+  });
+  const content = resp && resp.choices && resp.choices[0] && resp.choices[0].message
+    && resp.choices[0].message.content;
+  return (content || '').trim();
+}
+
+// Эмбеддинг через aitunnel /v1/embeddings с фиксированной размерностью.
+async function embedTextAitunnel(text, opts = {}) {
+  const client = opts.client || aitunnel.makeClient();
+  const resp = await client.embeddings.create({
+    model: config.AITUNNEL_EMBED_MODEL,
+    input: text,
+    dimensions: config.AITUNNEL_EMBED_DIM,
+  });
+  const emb = resp && resp.data && resp.data[0] && resp.data[0].embedding;
+  if (!Array.isArray(emb)) throw new Error('aitunnel embed: пустой ответ');
+  return emb;
+}
+
 // Диспетчер: если задан KB_GEMINI_RELAY_URL (прод) — идём через relay; иначе прямой вызов.
 async function callGemini(prompt, opts) {
+  if (config.KB_PROVIDER === 'aitunnel') return callAitunnel(prompt, opts);
   if (config.KB_GEMINI_RELAY_URL) {
     return callViaRelay(prompt, { fetchFn: (opts && opts.fetchFn) || fetch });
   }
@@ -246,7 +279,11 @@ async function ask(salonId, userId, question) {
   const free  = config.KB_GEMINI_KEY_FREE;
   const paid  = config.KB_GEMINI_KEY_PAID;
   const model = config.KB_LLM_MODEL;
-  if (!free && !paid) {
+  if (config.KB_PROVIDER === 'aitunnel') {
+    if (!config.AITUNNEL_API_KEY) {
+      const e = new Error('Ассистент не настроен'); e.code = 'NOT_CONFIGURED'; throw e;
+    }
+  } else if (!free && !paid) {
     const e = new Error('Ассистент не настроен'); e.code = 'NOT_CONFIGURED'; throw e;
   }
 
@@ -307,6 +344,7 @@ async function embedTextViaRelay(text, { url, secret, fetchFn }) {
 
 // Диспетчер: relay-URL задан (прод) → relay; иначе прямой вызов.
 async function embedText(text, opts) {
+  if (config.KB_PROVIDER === 'aitunnel') return embedTextAitunnel(text, opts);
   const model = (opts && opts.model) || config.KB_EMBED_MODEL;
   const fetchFn = (opts && opts.fetchFn) || fetch;
   if (config.KB_GEMINI_RELAY_URL) {
@@ -326,7 +364,7 @@ async function embedText(text, opts) {
 module.exports = {
   CONTEXT_CHAR_BUDGET, SYSTEM_PROMPT, REQUEST_TIMEOUT_MS,
   buildContext, buildPrompt, parseGeminiResponse,
-  callGeminiOnce, callGemini, callGeminiDirect, callViaRelay,
+  callGeminiOnce, callGemini, callGeminiDirect, callViaRelay, callAitunnel,
   retrieveArticles, logChat, ask,
-  embedContentOnce, embedTextDirect, embedTextViaRelay, embedText,
+  embedContentOnce, embedTextDirect, embedTextViaRelay, embedText, embedTextAitunnel,
 };

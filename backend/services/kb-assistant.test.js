@@ -55,6 +55,10 @@ describe('parseGeminiResponse', () => {
 const kb = require('./kb-assistant');
 
 describe('callGemini (dual-key fallback)', () => {
+  const config = require('../config');
+  let _savedProvider;
+  beforeEach(() => { _savedProvider = config.KB_PROVIDER; config.KB_PROVIDER = 'gemini'; });
+  afterEach(() => { config.KB_PROVIDER = _savedProvider; });
   const prompt = { system: 'S', user: 'U' };
   const okJson = { candidates: [{ content: { parts: [{ text: 'Ответ.' }] } }] };
 
@@ -121,7 +125,12 @@ describe('callGemini relay-режим (прод → dev)', () => {
   const prompt = { system: 'S', user: 'U' };
   const okJson = { candidates: [{ content: { parts: [{ text: 'Ответ.' }] } }] };
 
-  afterEach(() => { config.KB_GEMINI_RELAY_URL = ''; config.KB_GEMINI_RELAY_SECRET = ''; });
+  let _savedProvider;
+  beforeEach(() => { _savedProvider = config.KB_PROVIDER; config.KB_PROVIDER = 'gemini'; });
+  afterEach(() => {
+    config.KB_GEMINI_RELAY_URL = ''; config.KB_GEMINI_RELAY_SECRET = '';
+    config.KB_PROVIDER = _savedProvider;
+  });
 
   test('при заданном RELAY_URL промпт уходит на relay, а не в Google', async () => {
     config.KB_GEMINI_RELAY_URL = 'http://dev.example/api/kb/relay';
