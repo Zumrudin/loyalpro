@@ -19,6 +19,7 @@ const { db } = require('../db');
 const chatpush = require('../services/chatpush');
 const { phoneMatchCandidates } = require('../services/chat');
 const { generateReply } = require('../services/chatpush-agent');
+const agentSettings = require('../services/agent-settings');
 const { createLogger } = require('../logger');
 const logger = createLogger('ChatpushWebhook');
 
@@ -134,19 +135,25 @@ router.post('/webhook', async (req, res) => {
       await db.query('UPDATE chatpush_events SET processed=TRUE WHERE id=$1', [eventId]);
     }
 
-    // 3) Авто-ответ — ТОЛЬКО при включённом агенте и только на входящее.
+    // 3) Авто-ответ — при глобальном флаге (env kill-switch) И допуске из админки
+    //    (per-salon вкл/выкл + белый/чёрный список), только на входящее.
     if (config.CHATPUSH.agentEnabled && msg && msg.direction === 'incoming') {
-      const reply = await generateReply(msg);
-      if (!reply) return;
-      const token = config.CHATPUSH.instanceToken;
-      if (!token) { logger.error('CHATPUSH_INSTANCE_TOKEN not set — cannot reply'); return; }
-      const delivery = await chatpush.sendMessage(token, {
-        text: reply,
-        phone: msg.phone,
-        dispatchRouting: [chatpush.replyRoutingFor(msg.channel)],
-        replyToMessageId: msg.messageId,
-      });
-      logger.info(`agent replied to ${msg.phone} (delivery=${delivery?.id}) in ${Date.now() - t0}ms`);
+      const gate = await agentSettings.isAllowed(salonId, msg.phone);
+      if (!gate.allow) {
+        logger.info(`agent gate: skip ${msg.phone || msg.chatId || '?'} (${gate.reason})`);
+      } else {
+        const reply = await generateReply(msg);
+        if (!reply) return;
+        const token = config.CHATPUSH.instanceToken;
+        if (!token) { logger.error('CHATPUSH_INSTANCE_TOKEN not set — cannot reply'); return; }
+        const delivery = await chatpush.sendMessage(token, {
+          text: reply,
+          phone: msg.phone,
+          dispatchRouting: [chatpush.replyRoutingFor(msg.channel)],
+          replyToMessageId: msg.messageId,
+        });
+        logger.info(`agent replied to ${msg.phone} (delivery=${delivery?.id}) in ${Date.now() - t0}ms`);
+      }
     }
   } catch (e) {
     logger.error(`ERROR: ${e.message}`);
