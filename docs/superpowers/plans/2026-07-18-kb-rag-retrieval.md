@@ -1157,4 +1157,16 @@ git commit -m "feat(agent): buildKnowledgeContext — grounded-контекст 
 - **Out of scope here (Phase 2):** booking tools, orchestrator, debouncer, KB↔catalog linking UI, agent tool wiring — separate plan (`ai-booking-agent`).
 - **Type consistency:** `embedText`/`embedTextDirect`/`embedTextViaRelay`/`embedContentOnce`, `chunkArticle`/`hashChunk`/`vectorNorm`/`cosineSim`/`reciprocalRankFusion`, `reembedArticle`/`retrieveChunks`/`buildKnowledgeContext` — names consistent across tasks and export lists.
 - **Open verification item:** `services_config` column names (flagged in Task 10 Step 3). `API_PUBLIC` location (flagged in Task 5 Step 6).
+
+## Post-Implementation Notes (verified during execution)
+
+- **`services_config` has no prices** — actual columns: `id, salon_id, service_title, tag, yclients_service_id`. No DB table stores YClients prices. Task 10 was implemented against the corrected data path: `kb_article_links.entity_yc_id` → live `ycGet(salon, '/services/{company_id}')`, filtered by linked ids, with graceful `[]` fallback on any error. `services_config` is not used.
+- **`API_PUBLIC` lives in `backend/config.js:68`** (not `routes/index.js`); matched by exact `.includes(fullPath)` in `routes/index.js`, so the explicit `/api/kb/relay/embed` entry is required.
+- **Spec-compliance fix applied post-review:** `retrieveChunks` now joins `kb_articles` and requires `is_published = true` on both the vector and FTS queries (spec §"Пайплайн поиска" — published-only). Commit `fix(agent): retrieveChunks — только опубликованные статьи`.
+
+## Phase-2 blockers (from final holistic review — close before wiring into `/ask` or chat)
+
+1. **YClients cache**: `liveServicesForArticles` calls `ycGet('/services/{cid}')` uncached on every `buildKnowledgeContext`. Reuse the existing `getTreeCache`/`setTreeCache` in `services/yclients.js` before wiring to a per-message chat path (project has documented 429 history).
+2. **Embedding-dimension change**: `cosineSim` truncates to `min(len)` and `reembedArticle` only re-embeds on `content_hash` change — changing `KB_EMBED_MODEL` silently compares stale-dimension vectors. Track model version per chunk (or force full re-embed) if the model ever changes.
+3. **Unpublish cleanup (minor)**: unpublishing an article leaves its `kb_chunks` in place; retrieval now filters them out (published-only fix above), but a cleanup on publish-state change would keep the table tidy.
 ```
