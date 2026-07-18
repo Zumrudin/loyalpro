@@ -18,8 +18,10 @@ const config = require('../config');
 const { db } = require('../db');
 const chatpush = require('../services/chatpush');
 const { phoneMatchCandidates } = require('../services/chat');
-const { generateReply } = require('../services/chatpush-agent');
-const agentSettings = require('../services/agent-settings');
+const dispatcher = require('../services/agent/dispatcher');
+
+// Текстовые типы разных каналов: WhatsApp/MAX → 'text', tdlib/Telegram → 'formattedText'.
+const AGENT_TEXT_TYPES = new Set(['text', 'formattedText']);
 const { createLogger } = require('../logger');
 const logger = createLogger('ChatpushWebhook');
 
@@ -135,24 +137,21 @@ router.post('/webhook', async (req, res) => {
       await db.query('UPDATE chatpush_events SET processed=TRUE WHERE id=$1', [eventId]);
     }
 
-    // 3) Авто-ответ — при глобальном флаге (env kill-switch) И допуске из админки
-    //    (per-salon вкл/выкл + белый/чёрный список), только на входящее.
-    if (config.CHATPUSH.agentEnabled && msg && msg.direction === 'incoming') {
-      const gate = await agentSettings.isAllowed(salonId, msg.phone);
-      if (!gate.allow) {
-        logger.info(`agent gate: skip ${msg.phone || msg.chatId || '?'} (${gate.reason})`);
-      } else {
-        const reply = await generateReply(msg);
-        if (!reply) return;
-        const token = config.CHATPUSH.instanceToken;
-        if (!token) { logger.error('CHATPUSH_INSTANCE_TOKEN not set — cannot reply'); return; }
-        const delivery = await chatpush.sendMessage(token, {
-          text: reply,
+    // 3) Авто-ответ агента — при глобальном флаге (env kill-switch) И только на
+    //    ВХОДЯЩЕЕ текстовое сообщение. Гейт допуска (per-salon вкл/выкл + бело/чёрный
+    //    список), дебаунс серии, ReAct-цикл и отправка — внутри диспетчера.
+    if (
+      config.CHATPUSH.agentEnabled &&
+      msg && msg.direction === 'incoming' &&
+      AGENT_TEXT_TYPES.has(msg.type) && (msg.text || '').trim()
+    ) {
+      const dialogKey = (msg.phone && msg.phone.trim()) || msg.chatId;
+      if (dialogKey) {
+        dispatcher.enqueue(salonId, dialogKey, {
           phone: msg.phone,
-          dispatchRouting: [chatpush.replyRoutingFor(msg.channel)],
-          replyToMessageId: msg.messageId,
+          channel: msg.channel,
+          messageId: msg.messageId,
         });
-        logger.info(`agent replied to ${msg.phone} (delivery=${delivery?.id}) in ${Date.now() - t0}ms`);
       }
     }
   } catch (e) {
