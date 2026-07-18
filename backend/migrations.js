@@ -866,6 +866,57 @@ async function runMigrations(client) {
       ).catch(() => {});
     }
   }
+
+  // ── Chatpush: приём входящих сообщений (мессенджер-агент) ───────────
+  // chatpush_events — СЫРОЙ лог всех вебхуков (аудит + возможность переиграть).
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS chatpush_events (
+      id SERIAL PRIMARY KEY,
+      salon_id INTEGER REFERENCES salons(id) ON DELETE CASCADE,
+      customer_id INTEGER,
+      type VARCHAR(50),
+      direction VARCHAR(20),
+      external_message_id VARCHAR(500),
+      phone VARCHAR(32),
+      payload JSONB NOT NULL,
+      processed BOOLEAN DEFAULT FALSE,
+      error TEXT,
+      received_at TIMESTAMP DEFAULT NOW()
+    )
+  `).catch(() => {});
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS idx_chatpush_events_received
+      ON chatpush_events (salon_id, received_at DESC)
+  `).catch(() => {});
+
+  // chatpush_messages — нормализованные сообщения (входящие + исходящие-эхо).
+  // client_id nullable: клиент может быть ещё не сматчен по номеру.
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS chatpush_messages (
+      id SERIAL PRIMARY KEY,
+      salon_id INTEGER REFERENCES salons(id) ON DELETE CASCADE,
+      client_id INTEGER REFERENCES clients(id) ON DELETE SET NULL,
+      customer_id INTEGER,
+      channel VARCHAR(30),
+      direction VARCHAR(20),
+      external_message_id VARCHAR(500),
+      reply_to_message_id VARCHAR(500),
+      msg_type VARCHAR(30),
+      text TEXT,
+      file_url TEXT,
+      mime_type VARCHAR(120),
+      sender_name VARCHAR(255),
+      phone VARCHAR(32),
+      chat_id VARCHAR(120),
+      msg_ts BIGINT,
+      created_at TIMESTAMP DEFAULT NOW(),
+      UNIQUE (salon_id, external_message_id)
+    )
+  `).catch(() => {});
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS idx_chatpush_messages_dialog
+      ON chatpush_messages (salon_id, phone, msg_ts DESC)
+  `).catch(() => {});
 }
 
 module.exports = { runMigrations };

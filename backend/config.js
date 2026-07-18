@@ -38,6 +38,26 @@ module.exports = {
   KB_GEMINI_RELAY_URL:    process.env.KB_GEMINI_RELAY_URL    || '',
   KB_GEMINI_RELAY_SECRET: process.env.KB_GEMINI_RELAY_SECRET || '',
 
+  // Chatpush — мессенджер-платформа (WhatsApp/Telegram/MAX/SMS) для двустороннего
+  // диалогового агента. instanceToken — Bearer token инстанса: отправка, приём И
+  // регистрация webhooks (для ОДНОГО аккаунта api_key НЕ нужен — подтверждено
+  // поддержкой). apiKey — девелоперский мастер-токен, нужен лишь для управления
+  // НЕСКОЛЬКИМИ аккаунтами (/developer/v1/*).
+  // webhookSecret — свой секрет: регистрируем URL как
+  //   https://<host>/chatpush/webhook?key=<secret>  и сверяем ?key= (timing-safe).
+  CHATPUSH: {
+    apiBase:       process.env.CHATPUSH_API_BASE       || 'https://api.chatpush.ru',
+    apiKey:        process.env.CHATPUSH_API_KEY        || '',
+    instanceToken: process.env.CHATPUSH_INSTANCE_TOKEN || '',
+    webhookSecret: process.env.CHATPUSH_WEBHOOK_SECRET || '',
+    // Фаза 1: приём ВСЕХ входящих без авто-ответа. Агент включается флагом.
+    agentEnabled:  process.env.CHATPUSH_AGENT_ENABLED === 'true',
+    // Single-tenant мэппинг инстанс→салон: customer_id инстанса → salon_id.
+    // Позже заменится колонкой salons.chatpush_customer_id.
+    customerId:    process.env.CHATPUSH_CUSTOMER_ID ? parseInt(process.env.CHATPUSH_CUSTOMER_ID, 10) : null,
+    salonId:       process.env.CHATPUSH_SALON_ID ? parseInt(process.env.CHATPUSH_SALON_ID, 10) : null,
+  },
+
   // CORS — comma-separated list of allowed origins, e.g.:
   // ALLOWED_ORIGINS=http://89.22.233.73,http://89.22.233.73:8081
   ALLOWED_ORIGINS: process.env.ALLOWED_ORIGINS

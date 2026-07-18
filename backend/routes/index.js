@@ -9,6 +9,9 @@ module.exports = function mountRoutes(app) {
   // ── Webhook (no JWT required) ───────────────────────────────
   app.use('/yclients', require('./webhook'));
 
+  // ── Chatpush webhook — входящие сообщения (no JWT) ──────────
+  app.use('/chatpush', require('./chatpush-webhook'));
+
   // ── Публичная форма заявки на справку (БЕЗ JWT — монтируем до guard) ──
   app.use(require('./public-cert-request'));
 
