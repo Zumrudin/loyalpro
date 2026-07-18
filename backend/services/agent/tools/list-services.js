@@ -15,7 +15,9 @@ async function run(salonId, _input) {
     `SELECT yclients_service_id, service_title
        FROM services_config WHERE salon_id = $1`,
     [salonId]);
-  const salon = await db.one(`SELECT id, yclients_company_id FROM salons WHERE id=$1`, [salonId]);
+  const salon = await db.one(
+    `SELECT id, yclients_company_id, yclients_partner_token, yclients_user_token
+       FROM salons WHERE id=$1`, [salonId]);
 
   let liveById = new Map();
   if (salon && salon.yclients_company_id) {
