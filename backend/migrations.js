@@ -924,6 +924,30 @@ async function runMigrations(client) {
     CREATE INDEX IF NOT EXISTS idx_chatpush_messages_dialogkey
       ON chatpush_messages (salon_id, (COALESCE(NULLIF(phone,''), chat_id)), msg_ts DESC)
   `).catch(() => {});
+
+  // agent_settings — настройки ИИ-агента по салону (вкл/выкл + режим допуска).
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS agent_settings (
+      salon_id INTEGER PRIMARY KEY REFERENCES salons(id) ON DELETE CASCADE,
+      enabled BOOLEAN NOT NULL DEFAULT FALSE,
+      mode VARCHAR(20) NOT NULL DEFAULT 'all',
+      updated_at TIMESTAMP DEFAULT NOW()
+    )
+  `).catch(() => {});
+
+  // agent_number_rules — белый/чёрный списки номеров для допуска агента.
+  // phone хранится каноничным (только цифры, РФ 8→7) — см. services/agent-gate.
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS agent_number_rules (
+      id SERIAL PRIMARY KEY,
+      salon_id INTEGER REFERENCES salons(id) ON DELETE CASCADE,
+      phone VARCHAR(32) NOT NULL,
+      rule_type VARCHAR(10) NOT NULL,
+      note TEXT,
+      created_at TIMESTAMP DEFAULT NOW(),
+      UNIQUE (salon_id, phone, rule_type)
+    )
+  `).catch(() => {});
 }
 
 module.exports = { runMigrations };
