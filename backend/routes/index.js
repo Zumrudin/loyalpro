@@ -57,6 +57,7 @@ module.exports = function mountRoutes(app) {
   app.use('/api/app-settings',      require('./app-settings'));
   app.use('/api/portfolio',         require('./portfolio'));
   app.use('/api/chat',              require('./chat'));
+  app.use('/api/agent',             require('./agent-settings'));
   app.use('/api/kb',                require('./knowledge-base'));
   app.use('/api/patient-portfolio', require('./patient-portfolio'));
   app.use('/api/broadcasts',        require('./broadcasts'));
