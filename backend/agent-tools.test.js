@@ -3,12 +3,12 @@
 jest.mock('./services/agent-rag', () => ({ buildKnowledgeContext: jest.fn() }));
 jest.mock('./db', () => ({ db: { any: jest.fn(), one: jest.fn(), oneOrNone: jest.fn() } }));
 jest.mock('./services/yclients', () => ({ ycGet: jest.fn() }));
-jest.mock('./services/yclients-booking', () => ({ ycGetBookTimes: jest.fn(), ycGetStaffSchedule: jest.fn() }));
+jest.mock('./services/yclients-booking', () => ({ ycGetBookTimes: jest.fn(), ycGetStaffSchedule: jest.fn(), ycGetStaffSeances: jest.fn() }));
 
 const { db } = require('./db');
 const rag = require('./services/agent-rag');
 const { ycGet } = require('./services/yclients');
-const { ycGetBookTimes, ycGetStaffSchedule } = require('./services/yclients-booking');
+const { ycGetBookTimes, ycGetStaffSchedule, ycGetStaffSeances } = require('./services/yclients-booking');
 
 const searchKb = require('./services/agent/tools/search-knowledge-base');
 const listServices = require('./services/agent/tools/list-services');
@@ -69,17 +69,42 @@ describe('list_staff', () => {
 });
 
 describe('get_available_slots', () => {
-  test('тянет слоты через book_times', async () => {
+  test('онлайн-запись: слоты под услугу через book_times', async () => {
     db.one.mockResolvedValue({ id: 1, yclients_company_id: 100 });
     ycGetBookTimes.mockResolvedValue([{ time: '10:00', seance_length: 3600, datetime: '2026-07-20T10:00:00+03:00' }]);
     const out = await getSlots.run(1, { service_yc_id: 7, staff_yc_id: 55, date: '2026-07-20' });
     expect(ycGetBookTimes).toHaveBeenCalledWith({ id: 1, yclients_company_id: 100 }, 55, '2026-07-20', [7]);
+    expect(out.source).toBe('booking');
     expect(out.slots[0].time).toBe('10:00');
+    expect(ycGetStaffSeances).not.toHaveBeenCalled();
+  });
+  test('book_times пусто → fallback на seances (интервалы + старты шагом 30 мин)', async () => {
+    db.one.mockResolvedValue({ id: 1, yclients_company_id: 100 });
+    ycGetBookTimes.mockResolvedValue([]);
+    // 10:00–11:00 свободно (5-мин грид)
+    const grid = [];
+    for (let m = 600; m < 660; m += 5) grid.push({ time: `${String(Math.floor(m/60)).padStart(2,'0')}:${String(m%60).padStart(2,'0')}`, is_free: true });
+    ycGetStaffSeances.mockResolvedValue(grid);
+    const out = await getSlots.run(1, { service_yc_id: 7, staff_yc_id: 55, date: '2026-07-20' });
+    expect(out.source).toBe('schedule');
+    expect(out.free_ranges).toEqual([{ from: '10:00', to: '11:00' }]);
+    // шагом 30 мин, чтобы влез полный шаг: 10:00 и 10:30 (11:00 не влезает)
+    expect(out.slots.map(s => s.time)).toEqual(['10:00', '10:30']);
+    expect(out.slots[0].datetime).toBe('2026-07-20T10:00:00+03:00');
+  });
+  test('без service_yc_id сразу идёт в seances (book_times не зовётся)', async () => {
+    db.one.mockResolvedValue({ id: 1, yclients_company_id: 100 });
+    ycGetStaffSeances.mockResolvedValue([]);
+    const out = await getSlots.run(1, { staff_yc_id: 55, date: '2026-07-20' });
+    expect(ycGetBookTimes).not.toHaveBeenCalled();
+    expect(out.source).toBe('schedule');
+    expect(out.slots).toEqual([]);
   });
   test('нет мастера/даты → ошибка валидации без вызова YClients', async () => {
     const out = await getSlots.run(1, { service_yc_id: 7 });
     expect(out.error).toBeTruthy();
     expect(ycGetBookTimes).not.toHaveBeenCalled();
+    expect(ycGetStaffSeances).not.toHaveBeenCalled();
   });
 });
 

@@ -39,6 +39,15 @@ async function ycGetStaffSchedule(salon, staffYcId, dateFrom, dateTo) {
     {});
 }
 
+// Реальная свободность мастера на дату через management API (не зависит от
+// онлайн-записи). Возвращает 5-мин грид [{time, is_free}] за рабочий день.
+async function ycGetStaffSeances(salon, staffYcId, date) {
+  return ycGet(
+    salon,
+    `/timetable/seances/${salon.yclients_company_id}/${staffYcId}/${date}`,
+    {});
+}
+
 // Создание записи через management API (partner+user токен, без SMS-кода).
 async function ycCreateRecord(salon, {
   staffYcId, serviceYcIds, datetime, seanceLength, clientPhone, clientName, comment,
@@ -56,4 +65,4 @@ async function ycCreateRecord(salon, {
   return ycPost(salon, `/records/${salon.yclients_company_id}`, body);
 }
 
-module.exports = { ycGetBookTimes, ycGetBookDates, ycGetStaffSchedule, ycCreateRecord };
+module.exports = { ycGetBookTimes, ycGetBookDates, ycGetStaffSchedule, ycGetStaffSeances, ycCreateRecord };
