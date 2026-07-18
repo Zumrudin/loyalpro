@@ -167,8 +167,9 @@ async function callAitunnel(prompt, opts = {}) {
 // Эмбеддинг через aitunnel /v1/embeddings с фиксированной размерностью.
 // aitunnel изредка отдаёт 200 без data (транзиентный троттлинг) либо кидает 429 —
 // ретраим с линейным бэкоффом. sleepFn/attempts переопределяются в тестах.
-const EMBED_MAX_ATTEMPTS = 4;   // всего попыток на один эмбеддинг
+const EMBED_MAX_ATTEMPTS = 6;   // всего попыток на один эмбеддинг
 const EMBED_RETRY_BASE_MS = 600;   // задержка = base * номер попытки
+const EMBED_RETRY_MAX_MS = 2500;   // потолок задержки между попытками
 function embedSleep(ms, opts) {
   return (opts && opts.sleepFn) ? opts.sleepFn(ms) : new Promise(r => setTimeout(r, ms));
 }
@@ -189,7 +190,9 @@ async function embedTextAitunnel(text, opts = {}) {
     } catch (e) {
       lastErr = e;
     }
-    if (attempt < attempts) await embedSleep(EMBED_RETRY_BASE_MS * attempt, opts);
+    if (attempt < attempts) {
+      await embedSleep(Math.min(EMBED_RETRY_BASE_MS * attempt, EMBED_RETRY_MAX_MS), opts);
+    }
   }
   throw lastErr;
 }

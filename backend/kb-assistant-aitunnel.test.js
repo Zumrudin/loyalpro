@@ -47,6 +47,18 @@ describe('embedTextAitunnel', () => {
     expect(n).toBe(2);
   });
 
+  test('дефолт: 6 попыток, задержки растут линейно и ограничены потолком', async () => {
+    let n = 0;
+    const delays = [];
+    const fakeClient = { embeddings: { create: async () => { n++; return { data: [] }; } } };
+    await expect(kb.embedTextAitunnel('x', {
+      client: fakeClient,
+      sleepFn: (ms) => { delays.push(ms); return Promise.resolve(); },
+    })).rejects.toThrow(/пустой ответ/);
+    expect(n).toBe(6);                       // дефолтное число попыток
+    expect(delays).toEqual([600, 1200, 1800, 2400, 2500]); // 5 пауз, последняя упёрлась в потолок 2500
+  });
+
   test('брошенная ошибка вызова → ретрай и успех', async () => {
     let n = 0;
     const fakeClient = { embeddings: { create: async () => {
