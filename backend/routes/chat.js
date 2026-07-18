@@ -16,6 +16,9 @@ const logger = createLogger('Chat');
 const adminOnly = [auth, requireRole('owner', 'admin')];
 
 // GET /api/chat/dialogs — список диалогов салона (последнее сообщение + счётчик).
+// NB: chatpush-webhook пока не заполняет client_id, поэтому LEFT JOIN clients
+// сейчас всегда даёт NULL, а фронт откатывается на senderName/key. Джойн готов
+// к матчингу клиента по номеру — включится, когда вебхук начнёт писать client_id.
 router.get('/dialogs', adminOnly, async (req, res) => {
   try {
     const salonId = req.user.salonId;
