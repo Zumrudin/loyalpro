@@ -19,7 +19,9 @@ function keyOf(salonId, dialogKey) { return `${salonId}:${dialogKey}`; }
 function enqueue(salonId, dialogKey, meta, opts = {}) {
   const k = keyOf(salonId, dialogKey);
   const debounceMs = opts.debounceMs || config.AGENT_DEBOUNCE_MS;
-  if (running.has(k)) rerun.add(k);   // прогон уже идёт — перезапустим после него
+  // Прогон уже идёт → перезапустим после него через флаг rerun; новый debounce-таймер
+  // здесь не нужен (он выстрелил бы лишний повторный прогон и дубль-ответ клиенту).
+  if (running.has(k)) { rerun.add(k); return; }
 
   const existing = timers.get(k);
   if (existing) clearTimeout(existing.timer);
@@ -36,24 +38,26 @@ async function process(salonId, dialogKey, meta, opts = {}) {
   const orchestrator = opts.orchestrator || orchestratorDefault;
   const send = opts.send || defaultSend;
 
-  const gate = await settings.isAllowed(salonId, meta.phone);
-  if (!gate.allow) { logger.info(`gate skip ${dialogKey} (${gate.reason})`); return; }
-
-  if (running.has(k)) { rerun.add(k); return; }
-  running.add(k);
   try {
-    const res = await orchestrator.runDialog(salonId, dialogKey, { ctx: { phone: meta.phone } });
-    for (const text of (res.replies || [])) {
-      if (text && text.trim()) await send(meta, text);
+    const gate = await settings.isAllowed(salonId, meta.phone);
+    if (!gate.allow) { logger.info(`gate skip ${dialogKey} (${gate.reason})`); return; }
+
+    if (running.has(k)) { rerun.add(k); return; }
+    running.add(k);
+    try {
+      const res = await orchestrator.runDialog(salonId, dialogKey, { ctx: { phone: meta.phone } });
+      for (const text of (res.replies || [])) {
+        if (text && text.trim()) await send(meta, text);
+      }
+    } finally {
+      running.delete(k);
+    }
+    if (rerun.delete(k)) {
+      logger.info(`dialog ${dialogKey}: отложенный прогон (сообщение пришло во время обработки)`);
+      return process(salonId, dialogKey, meta, opts);
     }
   } catch (e) {
-    logger.error(`dialog ${dialogKey} failed: ${e.message}`);
-  } finally {
-    running.delete(k);
-  }
-  if (rerun.delete(k)) {
-    logger.info(`dialog ${dialogKey}: отложенный прогон (сообщение пришло во время обработки)`);
-    return process(salonId, dialogKey, meta, opts);
+    logger.error(`dialog ${dialogKey} process failed: ${e.message}`);
   }
 }
 
