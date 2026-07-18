@@ -11,6 +11,7 @@ const _chatEsc = (s) => String(s ?? '').replace(/[&<>"']/g, c =>
 function _chatSafeUrl(u) {
   const s = String(u || '').trim();
   if (/^https?:\/\//i.test(s)) return s;
+  if (s.startsWith('//')) return '';   // protocol-relative → off-origin, блокируем
   if (s.startsWith('/')) return s;
   return '';
 }
