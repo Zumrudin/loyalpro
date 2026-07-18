@@ -1129,7 +1129,10 @@
     <div class="page" id="page-chat">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
         <div style="font-size:16px;font-weight:700">💬 Чат</div>
-        <button class="btn btn-sec" onclick="loadChat()">↻ Обновить</button>
+        <div style="display:flex;gap:8px">
+          <button class="btn btn-sec" onclick="openAgentSettings()">⚙️ Агент</button>
+          <button class="btn btn-sec" onclick="loadChat()">↻ Обновить</button>
+        </div>
       </div>
       <div class="chat-layout">
         <div class="chat-sidebar" id="chat-dialogs">
@@ -1137,6 +1140,41 @@
         </div>
         <div class="chat-main" id="chat-messages">
           <div class="empty">Выберите диалог</div>
+        </div>
+      </div>
+      <div class="ov" id="agent-settings-modal" onclick="if(event.target===this)closeAgentSettings()">
+        <div class="modal">
+          <div class="mh">
+            <div class="mt">Настройки ИИ-агента</div>
+            <button class="mc" onclick="closeAgentSettings()">✕</button>
+          </div>
+          <div class="stg-section">
+            <label class="fl"><input type="checkbox" id="agent-enabled"> Агент включён</label>
+          </div>
+          <div class="stg-section">
+            <div class="fl">Кому отвечать:</div>
+            <label class="fl"><input type="radio" name="agent-mode" value="all"> Всем</label>
+            <label class="fl"><input type="radio" name="agent-mode" value="whitelist"> Только указанным номерам</label>
+          </div>
+          <div class="stg-section" id="agent-allow-section">
+            <div class="fl">Белый список (кому отвечать в режиме «только указанным»)</div>
+            <div id="agent-allow-list"></div>
+            <div style="display:flex;gap:6px;margin-top:6px">
+              <input id="agent-allow-input" style="flex:1" placeholder="Напр. 89200255591">
+              <button class="btn btn-pri" onclick="addAgentNumber('allow')">Добавить</button>
+            </div>
+          </div>
+          <div class="stg-section">
+            <div class="fl">Чёрный список (кому не отвечать никогда)</div>
+            <div id="agent-block-list"></div>
+            <div style="display:flex;gap:6px;margin-top:6px">
+              <input id="agent-block-input" style="flex:1" placeholder="Напр. 79991112233">
+              <button class="btn btn-pri" onclick="addAgentNumber('block')">Добавить</button>
+            </div>
+          </div>
+          <div class="stg-section" style="text-align:right">
+            <button class="btn btn-pri" onclick="saveAgentSettings()">Сохранить</button>
+          </div>
         </div>
       </div>
     </div>
@@ -1900,6 +1938,7 @@ function fireConfetti() {
 <script src="js/pages/settings.js"></script>
 <script src="js/pages/portfolio.js"></script>
 <script src="js/pages/chat.js"></script>
+<script src="js/pages/agent-settings.js"></script>
 <script src="js/pages/patient-portfolio.js?v=2026-06-01e"></script>
 <script src="js/pages/staff-dashboard.js?v=2026-06-11d"></script>
 <script src="js/pages/users.js"></script>
