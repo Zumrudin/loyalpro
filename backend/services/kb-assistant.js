@@ -165,16 +165,33 @@ async function callAitunnel(prompt, opts = {}) {
 }
 
 // Эмбеддинг через aitunnel /v1/embeddings с фиксированной размерностью.
+// aitunnel изредка отдаёт 200 без data (транзиентный троттлинг) либо кидает 429 —
+// ретраим с линейным бэкоффом. sleepFn/attempts переопределяются в тестах.
+const EMBED_MAX_ATTEMPTS = 4;   // всего попыток на один эмбеддинг
+const EMBED_RETRY_BASE_MS = 600;   // задержка = base * номер попытки
+function embedSleep(ms, opts) {
+  return (opts && opts.sleepFn) ? opts.sleepFn(ms) : new Promise(r => setTimeout(r, ms));
+}
 async function embedTextAitunnel(text, opts = {}) {
   const client = opts.client || aitunnel.makeClient();
-  const resp = await client.embeddings.create({
-    model: config.AITUNNEL_EMBED_MODEL,
-    input: text,
-    dimensions: config.AITUNNEL_EMBED_DIM,
-  });
-  const emb = resp && resp.data && resp.data[0] && resp.data[0].embedding;
-  if (!Array.isArray(emb)) throw new Error('aitunnel embed: пустой ответ');
-  return emb;
+  const attempts = opts.attempts || EMBED_MAX_ATTEMPTS;
+  let lastErr;
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    try {
+      const resp = await client.embeddings.create({
+        model: config.AITUNNEL_EMBED_MODEL,
+        input: text,
+        dimensions: config.AITUNNEL_EMBED_DIM,
+      });
+      const emb = resp && resp.data && resp.data[0] && resp.data[0].embedding;
+      if (Array.isArray(emb)) return emb;
+      lastErr = new Error('aitunnel embed: пустой ответ');
+    } catch (e) {
+      lastErr = e;
+    }
+    if (attempt < attempts) await embedSleep(EMBED_RETRY_BASE_MS * attempt, opts);
+  }
+  throw lastErr;
 }
 
 // Диспетчер: если задан KB_GEMINI_RELAY_URL (прод) — идём через relay; иначе прямой вызов.

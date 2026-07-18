@@ -28,8 +28,34 @@ describe('embedTextAitunnel', () => {
     expect(typeof calls[0].dimensions).toBe('number');
   });
 
-  test('пустой ответ → бросает', async () => {
-    const fakeClient = { embeddings: { create: async () => ({ data: [] }) } };
-    await expect(kb.embedTextAitunnel('x', { client: fakeClient })).rejects.toThrow(/пустой ответ/);
+  test('пустой ответ на всех попытках → ретраит attempts раз и бросает', async () => {
+    let n = 0;
+    const fakeClient = { embeddings: { create: async () => { n++; return { data: [] }; } } };
+    await expect(kb.embedTextAitunnel('x', { client: fakeClient, attempts: 3, sleepFn: () => Promise.resolve() }))
+      .rejects.toThrow(/пустой ответ/);
+    expect(n).toBe(3);
+  });
+
+  test('транзиентный пустой ответ → ретрай и успех', async () => {
+    let n = 0;
+    const fakeClient = { embeddings: { create: async () => {
+      n++;
+      return n < 2 ? { data: [] } : { data: [{ embedding: [0.5, 0.6] }] };
+    } } };
+    const vec = await kb.embedTextAitunnel('x', { client: fakeClient, sleepFn: () => Promise.resolve() });
+    expect(vec).toEqual([0.5, 0.6]);
+    expect(n).toBe(2);
+  });
+
+  test('брошенная ошибка вызова → ретрай и успех', async () => {
+    let n = 0;
+    const fakeClient = { embeddings: { create: async () => {
+      n++;
+      if (n < 2) throw new Error('429 Too Many Requests');
+      return { data: [{ embedding: [1, 2, 3] }] };
+    } } };
+    const vec = await kb.embedTextAitunnel('x', { client: fakeClient, sleepFn: () => Promise.resolve() });
+    expect(vec).toEqual([1, 2, 3]);
+    expect(n).toBe(2);
   });
 });
