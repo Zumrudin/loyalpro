@@ -1,22 +1,28 @@
 'use strict';
 
 const { db } = require('../../../db');
-const { ycGetBookDates } = require('../../yclients-booking');
+const { ycGetStaffSchedule } = require('../../yclients-booking');
+
+// YYYY-MM-DD по Москве со сдвигом на N дней. Москва — фиксированный UTC+3, DST нет.
+function moscowDatePlus(days) {
+  const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Moscow' }).format(new Date());
+  const [y, m, d] = today.split('-').map(Number);
+  return new Date(Date.UTC(y, m - 1, d) + days * 86400000).toISOString().slice(0, 10);
+}
 
 const schema = {
   name: 'get_available_dates',
-  description: 'График работы мастера и дни, в которые у него есть свободная запись. ' +
-    'Возвращает schedule_dates — рабочие дни мастера (его график) — и bookable_dates — ' +
-    'дни, где ещё есть свободные окошки. На вопрос «когда работает / какой график у мастера» ' +
-    'отвечай по schedule_dates; на «когда можно записаться» — по bookable_dates. ' +
-    'Если bookable_dates пуст, но schedule_dates нет — мастер работает, но свободных окон нет ' +
-    '(предложи другой день/мастера или эскалацию). Сначала узнай yc_id мастера (list_staff); ' +
-    'service_yc_id (list_services) уточняет свободные окошки.',
+  description: 'График работы мастера: в какие дни и часы он работает (реальное расписание из YClients, ' +
+    'не зависит от онлайн-записи). Отвечай по этому на вопросы «когда работает / какой график / ' +
+    'в какие дни принимает мастер». По умолчанию — ближайшие 14 дней; можно указать date_from/date_to ' +
+    '(YYYY-MM-DD). Сначала узнай yc_id мастера через list_staff. ' +
+    'Для конкретного свободного времени на выбранную дату используй get_available_slots.',
   input_schema: {
     type: 'object',
     properties: {
-      staff_yc_id:   { type: 'integer', description: 'YClients-id мастера (из list_staff).' },
-      service_yc_id: { type: 'integer', description: 'YClients-id услуги (из list_services). Необязательно, но уточняет свободные окошки.' },
+      staff_yc_id: { type: 'integer', description: 'YClients-id мастера (из list_staff).' },
+      date_from:   { type: 'string',  description: 'Начало периода YYYY-MM-DD. По умолчанию сегодня.' },
+      date_to:     { type: 'string',  description: 'Конец периода YYYY-MM-DD. По умолчанию +14 дней.' },
     },
     required: ['staff_yc_id'],
     additionalProperties: false,
@@ -25,18 +31,22 @@ const schema = {
 
 async function run(salonId, input) {
   const staffId = input && input.staff_yc_id;
-  const serviceId = input && input.service_yc_id;
   if (!staffId) return { error: 'Нужен staff_yc_id (из list_staff).' };
+  const from = (input && input.date_from) || moscowDatePlus(0);
+  const to = (input && input.date_to) || moscowDatePlus(14);
   const salon = await db.one(`SELECT id, yclients_company_id, yclients_partner_token, yclients_user_token FROM salons WHERE id=$1`, [salonId]);
   if (!salon || !salon.yclients_company_id) return { error: 'YClients не подключён для салона.' };
   try {
-    const serviceIds = serviceId ? [serviceId] : [];
-    const res = await ycGetBookDates(salon, staffId, serviceIds);
-    const scheduleDates = res && Array.isArray(res.working_dates) ? res.working_dates : [];
-    const bookableDates = res && Array.isArray(res.booking_dates) ? res.booking_dates : [];
-    return { schedule_dates: scheduleDates, bookable_dates: bookableDates };
+    const rows = await ycGetStaffSchedule(salon, staffId, from, to);
+    const schedule = (Array.isArray(rows) ? rows : [])
+      .filter(r => r && r.is_working && Array.isArray(r.slots) && r.slots.length)
+      .map(r => ({
+        date: r.date,
+        hours: r.slots.map(s => ({ from: s.from, to: s.to })),
+      }));
+    return { schedule, working_days_count: schedule.length };
   } catch (e) {
-    return { error: `Не удалось получить даты записи: ${e.message}` };
+    return { error: `Не удалось получить график: ${e.message}` };
   }
 }
 

@@ -29,6 +29,16 @@ async function ycGetBookDates(salon, staffYcId, serviceYcIds) {
     { staff_id: staffYcId, ...serviceIdsParams(serviceYcIds) });
 }
 
+// Реальный график мастера через management API — НЕ зависит от онлайн-записи
+// (bookable-флага), в отличие от book_dates/book_times. Возвращает по дню
+// [{date, is_working, slots:[{from,to}]}] за диапазон дат.
+async function ycGetStaffSchedule(salon, staffYcId, dateFrom, dateTo) {
+  return ycGet(
+    salon,
+    `/schedule/${salon.yclients_company_id}/${staffYcId}/${dateFrom}/${dateTo}`,
+    {});
+}
+
 // Создание записи через management API (partner+user токен, без SMS-кода).
 async function ycCreateRecord(salon, {
   staffYcId, serviceYcIds, datetime, seanceLength, clientPhone, clientName, comment,
@@ -46,4 +56,4 @@ async function ycCreateRecord(salon, {
   return ycPost(salon, `/records/${salon.yclients_company_id}`, body);
 }
 
-module.exports = { ycGetBookTimes, ycGetBookDates, ycCreateRecord };
+module.exports = { ycGetBookTimes, ycGetBookDates, ycGetStaffSchedule, ycCreateRecord };
