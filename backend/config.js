@@ -68,6 +68,18 @@ module.exports = {
   // Дебаунс серии сообщений (мс) — используется диспетчером в Фазе 2b.
   AGENT_DEBOUNCE_MS: process.env.AGENT_DEBOUNCE_MS ? parseInt(process.env.AGENT_DEBOUNCE_MS, 10) : 5000,
 
+  // ── aitunnel.ru — OpenAI-совместимый агрегатор (обход геоблока, оплата ₽). ──
+  // Единая точка для агента (Gemini 3.1 Flash Lite) и базы знаний (чат + эмбеддинги).
+  AITUNNEL_API_KEY:     process.env.AITUNNEL_API_KEY     || '',
+  AITUNNEL_BASE:        process.env.AITUNNEL_BASE        || 'https://api.aitunnel.ru/v1',
+  AITUNNEL_CHAT_MODEL:  process.env.AITUNNEL_CHAT_MODEL  || 'gemini-3.1-flash-lite',
+  AITUNNEL_EMBED_MODEL: process.env.AITUNNEL_EMBED_MODEL || 'gemini-embedding-001',
+  AITUNNEL_EMBED_DIM:   process.env.AITUNNEL_EMBED_DIM ? parseInt(process.env.AITUNNEL_EMBED_DIM, 10) : 3072,
+  // Провайдер диалогового агента: 'aitunnel' (Gemini) | 'anthropic' (Claude, откат).
+  AGENT_PROVIDER:       process.env.AGENT_PROVIDER       || 'aitunnel',
+  // Провайдер базы знаний: 'aitunnel' | 'gemini' (старый релей/прямой вызов, откат).
+  KB_PROVIDER:          process.env.KB_PROVIDER          || 'aitunnel',
+
   // CORS — comma-separated list of allowed origins, e.g.:
   // ALLOWED_ORIGINS=http://89.22.233.73,http://89.22.233.73:8081
   ALLOWED_ORIGINS: process.env.ALLOWED_ORIGINS
