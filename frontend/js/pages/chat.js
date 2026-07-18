@@ -94,6 +94,10 @@ function renderChatMessages(messages) {
     paneEl.innerHTML = '<div class="empty">Нет сообщений</div>';
     return;
   }
+  // Если переписка собрана из разных каналов (Telegram + WhatsApp и т.п.) —
+  // подписываем каждое сообщение каналом. Для одноканального диалога не мусорим.
+  const channelLabels = new Set(messages.map(m => _chatChannel(m.channel).label));
+  const multiChannel = channelLabels.size > 1;
   paneEl.innerHTML = messages.map(m => {
     const side = m.direction === 'outgoing' ? 'out' : 'in';
     const isText = !m.msg_type || String(m.msg_type).toLowerCase().includes('text');
@@ -107,10 +111,14 @@ function renderChatMessages(messages) {
     } else {
       body = '📎 Вложение' + (m.text ? `<div>${_chatEsc(m.text)}</div>` : '');
     }
+    const ch = _chatChannel(m.channel);
+    const chanTag = multiChannel
+      ? `<span class="chat-chan-tag ${ch.cls}">${_chatEsc(ch.label)}</span>`
+      : '';
     return `
       <div class="chat-msg chat-msg-${side}">
         <div class="chat-bubble">${body}</div>
-        <div class="chat-msg-time">${_chatTime(m.msg_ts)}</div>
+        <div class="chat-msg-time">${chanTag}${_chatTime(m.msg_ts)}</div>
       </div>`;
   }).join('');
   paneEl.scrollTop = paneEl.scrollHeight;

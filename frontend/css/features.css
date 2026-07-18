@@ -662,7 +662,8 @@ body.kb-editor .kb-admin-only { display: inline-flex; }
 .chat-msg-in  .chat-bubble { background:var(--bg); color:var(--t1); border-bottom-left-radius:3px; }
 .chat-msg-out .chat-bubble { background:var(--a);  color:#fff;      border-bottom-right-radius:3px; }
 .chat-bubble a { color:inherit; text-decoration:underline; }
-.chat-msg-time { font-size:10px; color:var(--t3); margin-top:2px; }
+.chat-msg-time { font-size:10px; color:var(--t3); margin-top:2px; display:flex; align-items:center; gap:5px; }
+.chat-chan-tag { font-size:9px; line-height:1.4; padding:0 5px; border-radius:7px; color:#fff; white-space:nowrap; }
 @media (max-width:640px) {
   .chat-layout { flex-direction:column; height:auto; }
   .chat-sidebar { flex:0 0 auto; max-height:240px; }
