@@ -3,17 +3,18 @@
 jest.mock('./services/agent-rag', () => ({ buildKnowledgeContext: jest.fn() }));
 jest.mock('./db', () => ({ db: { any: jest.fn(), one: jest.fn(), oneOrNone: jest.fn() } }));
 jest.mock('./services/yclients', () => ({ ycGet: jest.fn() }));
-jest.mock('./services/yclients-booking', () => ({ ycGetBookTimes: jest.fn() }));
+jest.mock('./services/yclients-booking', () => ({ ycGetBookTimes: jest.fn(), ycGetBookDates: jest.fn() }));
 
 const { db } = require('./db');
 const rag = require('./services/agent-rag');
 const { ycGet } = require('./services/yclients');
-const { ycGetBookTimes } = require('./services/yclients-booking');
+const { ycGetBookTimes, ycGetBookDates } = require('./services/yclients-booking');
 
 const searchKb = require('./services/agent/tools/search-knowledge-base');
 const listServices = require('./services/agent/tools/list-services');
 const listStaff = require('./services/agent/tools/list-staff');
 const getSlots = require('./services/agent/tools/get-available-slots');
+const getDates = require('./services/agent/tools/get-available-dates');
 const getClient = require('./services/agent/tools/get-client');
 
 beforeEach(() => jest.clearAllMocks());
@@ -79,6 +80,27 @@ describe('get_available_slots', () => {
     const out = await getSlots.run(1, { service_yc_id: 7 });
     expect(out.error).toBeTruthy();
     expect(ycGetBookTimes).not.toHaveBeenCalled();
+  });
+});
+
+describe('get_available_dates', () => {
+  test('тянет доступные даты через book_dates', async () => {
+    db.one.mockResolvedValue({ id: 1, yclients_company_id: 100 });
+    ycGetBookDates.mockResolvedValue({ booking_dates: ['2026-07-20', '2026-07-22'] });
+    const out = await getDates.run(1, { staff_yc_id: 55, service_yc_id: 7 });
+    expect(ycGetBookDates).toHaveBeenCalledWith({ id: 1, yclients_company_id: 100 }, 55, [7]);
+    expect(out.dates).toEqual(['2026-07-20', '2026-07-22']);
+  });
+  test('без услуги — service_ids пустой', async () => {
+    db.one.mockResolvedValue({ id: 1, yclients_company_id: 100 });
+    ycGetBookDates.mockResolvedValue({ booking_dates: [] });
+    await getDates.run(1, { staff_yc_id: 55 });
+    expect(ycGetBookDates).toHaveBeenCalledWith({ id: 1, yclients_company_id: 100 }, 55, []);
+  });
+  test('нет мастера → ошибка валидации без вызова YClients', async () => {
+    const out = await getDates.run(1, {});
+    expect(out.error).toBeTruthy();
+    expect(ycGetBookDates).not.toHaveBeenCalled();
   });
 });
 
