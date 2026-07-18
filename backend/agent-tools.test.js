@@ -84,12 +84,23 @@ describe('get_available_slots', () => {
 });
 
 describe('get_available_dates', () => {
-  test('тянет доступные даты через book_dates', async () => {
+  test('разделяет график (working_dates) и свободные дни (booking_dates)', async () => {
     db.one.mockResolvedValue({ id: 1, yclients_company_id: 100 });
-    ycGetBookDates.mockResolvedValue({ booking_dates: ['2026-07-20', '2026-07-22'] });
+    ycGetBookDates.mockResolvedValue({
+      working_dates: ['2026-07-20', '2026-07-23', '2026-07-25'],
+      booking_dates: ['2026-07-25'],
+    });
     const out = await getDates.run(1, { staff_yc_id: 55, service_yc_id: 7 });
     expect(ycGetBookDates).toHaveBeenCalledWith({ id: 1, yclients_company_id: 100 }, 55, [7]);
-    expect(out.dates).toEqual(['2026-07-20', '2026-07-22']);
+    expect(out.schedule_dates).toEqual(['2026-07-20', '2026-07-23', '2026-07-25']);
+    expect(out.bookable_dates).toEqual(['2026-07-25']);
+  });
+  test('работает, но свободных окон нет → bookable_dates пуст, schedule_dates заполнен', async () => {
+    db.one.mockResolvedValue({ id: 1, yclients_company_id: 100 });
+    ycGetBookDates.mockResolvedValue({ working_dates: ['2026-07-20'], booking_dates: [] });
+    const out = await getDates.run(1, { staff_yc_id: 55 });
+    expect(out.schedule_dates).toEqual(['2026-07-20']);
+    expect(out.bookable_dates).toEqual([]);
   });
   test('без услуги — service_ids пустой', async () => {
     db.one.mockResolvedValue({ id: 1, yclients_company_id: 100 });

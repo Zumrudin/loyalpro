@@ -5,15 +5,18 @@ const { ycGetBookDates } = require('../../yclients-booking');
 
 const schema = {
   name: 'get_available_dates',
-  description: 'Даты, в которые у мастера есть свободная запись (на ближайший период) под услугу(и). ' +
-    'Отвечает на вопросы «когда работает / в какие дни доступен мастер». ' +
-    'Сначала узнай yc_id мастера (list_staff) и, если возможно, услуги (list_services). ' +
-    'Для конкретного свободного времени на выбранную дату используй get_available_slots.',
+  description: 'График работы мастера и дни, в которые у него есть свободная запись. ' +
+    'Возвращает schedule_dates — рабочие дни мастера (его график) — и bookable_dates — ' +
+    'дни, где ещё есть свободные окошки. На вопрос «когда работает / какой график у мастера» ' +
+    'отвечай по schedule_dates; на «когда можно записаться» — по bookable_dates. ' +
+    'Если bookable_dates пуст, но schedule_dates нет — мастер работает, но свободных окон нет ' +
+    '(предложи другой день/мастера или эскалацию). Сначала узнай yc_id мастера (list_staff); ' +
+    'service_yc_id (list_services) уточняет свободные окошки.',
   input_schema: {
     type: 'object',
     properties: {
       staff_yc_id:   { type: 'integer', description: 'YClients-id мастера (из list_staff).' },
-      service_yc_id: { type: 'integer', description: 'YClients-id услуги (из list_services). Необязательно, но уточняет доступность.' },
+      service_yc_id: { type: 'integer', description: 'YClients-id услуги (из list_services). Необязательно, но уточняет свободные окошки.' },
     },
     required: ['staff_yc_id'],
     additionalProperties: false,
@@ -29,8 +32,9 @@ async function run(salonId, input) {
   try {
     const serviceIds = serviceId ? [serviceId] : [];
     const res = await ycGetBookDates(salon, staffId, serviceIds);
-    const dates = res && Array.isArray(res.booking_dates) ? res.booking_dates : [];
-    return { dates };
+    const scheduleDates = res && Array.isArray(res.working_dates) ? res.working_dates : [];
+    const bookableDates = res && Array.isArray(res.booking_dates) ? res.booking_dates : [];
+    return { schedule_dates: scheduleDates, bookable_dates: bookableDates };
   } catch (e) {
     return { error: `Не удалось получить даты записи: ${e.message}` };
   }
