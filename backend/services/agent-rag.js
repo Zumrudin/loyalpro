@@ -4,6 +4,7 @@ const crypto = require('crypto');
 const { db } = require('../db');
 const kbAssistant = require('./kb-assistant');
 const { buildPrefixTsQuery } = require('./knowledge-base');
+const { ycGet } = require('./yclients');
 
 // ── Чистые хелперы RAG-слоя (без БД/HTTP, юнит-тестируемы) ──────
 // Спека: docs/superpowers/specs/2026-07-18-kb-rag-retrieval-design.md
@@ -172,8 +173,78 @@ async function retrieveChunks(salonId, query, opts = {}) {
     .map(c => ({ id: c.id, article_id: c.article_id, content: c.content }));
 }
 
+const CONTEXT_CHAR_BUDGET = 12000;
+
+// Живые цены/длительность услуг, привязанных к статьям через kb_article_links.
+// Цен в БД нет (services_config хранит только теги) → тянем из YClients live по
+// entity_yc_id. Любая ошибка/отсутствие интеграции → [] (контекст без блока цен).
+async function liveServicesForArticles(salonId, articleIds) {
+  if (!articleIds.length) return [];
+  const links = await db.any(
+    `SELECT DISTINCT entity_yc_id
+       FROM kb_article_links
+      WHERE salon_id = $1 AND entity_type = 'service'
+        AND article_id = ANY($2::int[])`,
+    [salonId, articleIds]);
+  if (!links.length) return [];
+  const wanted = new Set(links.map(l => String(l.entity_yc_id)));
+  try {
+    const salon = await db.oneOrNone(`SELECT * FROM salons WHERE id=$1`, [salonId]);
+    if (!salon || !salon.yclients_company_id) return [];
+    const data = await ycGet(salon, `/services/${salon.yclients_company_id}`);
+    const services = Array.isArray(data) ? data : [];
+    return services
+      .filter(s => wanted.has(String(s.id)))
+      .map(s => ({
+        title: s.title,
+        price_min: s.price_min,
+        price_max: s.price_max,
+        duration: s.duration,
+      }));
+  } catch (_) {
+    return [];   // YClients недоступен → контекст без цен
+  }
+}
+
+// Формат строки цены из услуги: "Ботулинотерапия — 5000–8000 ₽, 30 мин".
+function formatServiceLine(s) {
+  const parts = [];
+  if (s.price_min != null && s.price_max != null && s.price_min !== s.price_max) {
+    parts.push(`${s.price_min}–${s.price_max} ₽`);
+  } else if (s.price_min != null) {
+    parts.push(`${s.price_min} ₽`);
+  }
+  if (s.duration != null) parts.push(`${s.duration} мин`);
+  return `${s.title}${parts.length ? ' — ' + parts.join(', ') : ''}`;
+}
+
+// Собирает grounded-контекст для агента: релевантные чанки + блок живых цен.
+// Возвращает { context, sources: number[] (article_id) }.
+async function buildKnowledgeContext(salonId, query, opts = {}) {
+  const budget = opts.budget || CONTEXT_CHAR_BUDGET;
+  const chunks = await retrieveChunks(salonId, query, { limit: opts.limit || 4 });
+  if (!chunks.length) return { context: '', sources: [] };
+
+  const articleIds = [...new Set(chunks.map(c => c.article_id))];
+  const services = await liveServicesForArticles(salonId, articleIds);
+
+  let context = '';
+  for (const c of chunks) {
+    const block = `${c.content}\n\n`;
+    if (context.length + block.length > budget) break;
+    context += block;
+  }
+  if (services.length) {
+    context += 'АКТУАЛЬНЫЕ УСЛУГИ И ЦЕНЫ:\n' +
+      services.map(formatServiceLine).join('\n') + '\n';
+  }
+
+  return { context: context.trim(), sources: articleIds };
+}
+
 module.exports = {
-  DEFAULT_MAX_CHARS, chunkArticle, hashChunk,
+  DEFAULT_MAX_CHARS, CONTEXT_CHAR_BUDGET, chunkArticle, hashChunk,
   vectorNorm, cosineSim, reciprocalRankFusion,
   reembedArticle, retrieveChunks,
+  liveServicesForArticles, formatServiceLine, buildKnowledgeContext,
 };

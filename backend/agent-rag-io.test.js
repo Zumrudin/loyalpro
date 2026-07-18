@@ -4,11 +4,13 @@ jest.mock('./services/kb-assistant', () => ({
   embedText: jest.fn(async () => [0.1, 0.2, 0.3]),
 }));
 jest.mock('./db', () => ({
-  db: { any: jest.fn(), one: jest.fn(), query: jest.fn(async () => ({})) },
+  db: { any: jest.fn(), one: jest.fn(), oneOrNone: jest.fn(), query: jest.fn(async () => ({})) },
 }));
+jest.mock('./services/yclients', () => ({ ycGet: jest.fn() }));
 
 const { db } = require('./db');
 const kb = require('./services/kb-assistant');
+const yc = require('./services/yclients');
 const rag = require('./services/agent-rag');
 
 beforeEach(() => {
@@ -69,5 +71,38 @@ describe('retrieveChunks', () => {
     const out = await rag.retrieveChunks(1, '   ', { limit: 4 });
     expect(out).toEqual([]);
     expect(kb.embedText).not.toHaveBeenCalled();
+  });
+});
+
+describe('buildKnowledgeContext', () => {
+  test('собирает контекст из чанков и живых цен связанных услуг', async () => {
+    kb.embedText.mockResolvedValue([1, 0, 0]);
+    db.any.mockImplementation(async (sql) => {
+      if (/FROM kb_chunks[\s\S]*embedding/i.test(sql) && !/search_vector/i.test(sql)) {
+        return [{ id: 10, article_id: 1, content: 'Ботокс: разглаживает морщины', embedding: [1, 0, 0], embed_norm: 1 }];
+      }
+      if (/search_vector/i.test(sql)) return [];
+      if (/kb_article_links/i.test(sql)) return [{ entity_yc_id: 555 }];
+      return [];
+    });
+    db.oneOrNone.mockResolvedValue({ id: 1, yclients_company_id: 100 });
+    yc.ycGet.mockResolvedValue([
+      { id: 555, title: 'Ботулинотерапия', price_min: 5000, price_max: 8000, duration: 30 },
+      { id: 999, title: 'Массаж', price_min: 2000, price_max: 2000, duration: 60 },
+    ]);
+    const ctx = await rag.buildKnowledgeContext(1, 'ботокс');
+    expect(ctx.context).toContain('разглаживает морщины');
+    expect(ctx.context).toContain('Ботулинотерапия');
+    expect(ctx.context).toMatch(/5000/);
+    expect(ctx.context).not.toContain('Массаж');   // не связана со статьёй
+    expect(ctx.sources).toContain(1);   // article_id
+  });
+
+  test('нет чанков → пустой контекст', async () => {
+    kb.embedText.mockResolvedValue([1, 0, 0]);
+    db.any.mockResolvedValue([]);
+    const ctx = await rag.buildKnowledgeContext(1, 'нет-такого');
+    expect(ctx.context).toBe('');
+    expect(ctx.sources).toEqual([]);
   });
 });
