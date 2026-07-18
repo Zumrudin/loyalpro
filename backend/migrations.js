@@ -993,6 +993,52 @@ async function runMigrations(client) {
       UNIQUE (salon_id, phone, rule_type)
     )
   `).catch(() => {});
+
+  // ── Состояние диалога агента + аудит вызовов инструментов (спека booking-agent) ──
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS agent_dialogs (
+      id                SERIAL PRIMARY KEY,
+      salon_id          INTEGER NOT NULL REFERENCES salons(id) ON DELETE CASCADE,
+      dialog_key        TEXT NOT NULL,
+      status            TEXT NOT NULL DEFAULT 'bot' CHECK (status IN ('bot','escalated','closed')),
+      collected         JSONB NOT NULL DEFAULT '{}'::jsonb,
+      watermark_ts      BIGINT NOT NULL DEFAULT 0,
+      dirty             BOOLEAN NOT NULL DEFAULT FALSE,
+      escalated_reason  TEXT,
+      assigned_operator INTEGER,
+      last_activity     TIMESTAMPTZ NOT NULL DEFAULT now(),
+      created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+      UNIQUE (salon_id, dialog_key)
+    )
+  `).catch(() => {});
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS agent_dialogs_lookup_idx
+    ON agent_dialogs (salon_id, dialog_key)
+  `).catch(() => {});
+
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS agent_events (
+      id            SERIAL PRIMARY KEY,
+      salon_id      INTEGER NOT NULL REFERENCES salons(id) ON DELETE CASCADE,
+      dialog_key    TEXT,
+      kind          TEXT NOT NULL,
+      tool_name     TEXT,
+      payload       JSONB,
+      idempotency_key TEXT,
+      created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `).catch(() => {});
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS agent_events_dialog_idx
+    ON agent_events (salon_id, dialog_key, created_at DESC)
+  `).catch(() => {});
+  // Идемпотентность создания записи: один и тот же (dialog+service+datetime) — одна бронь.
+  await client.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS agent_events_idem_idx
+    ON agent_events (salon_id, idempotency_key)
+    WHERE idempotency_key IS NOT NULL
+  `).catch(() => {});
 }
 
 module.exports = { runMigrations };
