@@ -1,0 +1,104 @@
+'use strict';
+
+// ── Чат (просмотр переписок chatpush) — read-only ───────────────
+let _chatDialogs = [];
+let _chatActiveKey = null;
+
+const _chatEsc = (s) => String(s ?? '').replace(/[&<>"']/g, c =>
+  ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+const CHAT_CHANNELS = {
+  whatsapp:     { label: 'WhatsApp', cls: 'chan-wa' },
+  tdlib:        { label: 'Telegram', cls: 'chan-tg' },
+  telegram_bot: { label: 'Telegram', cls: 'chan-tg' },
+  max:          { label: 'MAX',      cls: 'chan-max' },
+  max_bot:      { label: 'MAX',      cls: 'chan-max' },
+};
+function _chatChannel(ch) {
+  return CHAT_CHANNELS[ch] || { label: ch || '—', cls: 'chan-def' };
+}
+
+// msg_ts — Unix seconds (chatpush). Показываем как локальную дату/время.
+function _chatTime(ts) {
+  const n = Number(ts);
+  if (!n) return '';
+  const d = new Date(n * 1000);
+  return d.toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+}
+
+async function loadChat() {
+  const listEl = document.getElementById('chat-dialogs');
+  listEl.innerHTML = '<div class="empty">Загрузка…</div>';
+  try {
+    const data = await api('GET', '/api/chat/dialogs');
+    _chatDialogs = data.dialogs || [];
+    renderChatDialogs();
+  } catch (e) {
+    listEl.innerHTML = '<div class="empty">Ошибка загрузки диалогов</div>';
+  }
+}
+
+function renderChatDialogs() {
+  const listEl = document.getElementById('chat-dialogs');
+  if (!_chatDialogs.length) {
+    listEl.innerHTML = '<div class="empty">Пока нет сообщений</div>';
+    return;
+  }
+  listEl.innerHTML = _chatDialogs.map(d => {
+    const ch = _chatChannel(d.channel);
+    const title = d.client ? d.client.name : (d.senderName || d.key);
+    const active = d.key === _chatActiveKey ? ' active' : '';
+    return `
+      <div class="chat-dialog${active}" onclick="openChatDialog('${_chatEsc(d.key)}')">
+        <div class="chat-dialog-top">
+          <span class="chat-badge ${ch.cls}">${_chatEsc(ch.label)}</span>
+          <span class="chat-dialog-name">${_chatEsc(title)}</span>
+          <span class="chat-dialog-time">${_chatTime(d.lastTs)}</span>
+        </div>
+        <div class="chat-dialog-preview">${_chatEsc(d.lastText)}</div>
+      </div>`;
+  }).join('');
+}
+
+async function openChatDialog(key) {
+  _chatActiveKey = key;
+  renderChatDialogs();
+  const paneEl = document.getElementById('chat-messages');
+  paneEl.innerHTML = '<div class="empty">Загрузка…</div>';
+  try {
+    const data = await api('GET', '/api/chat/dialogs/' + encodeURIComponent(key) + '/messages');
+    renderChatMessages(data.messages || []);
+  } catch (e) {
+    paneEl.innerHTML = '<div class="empty">Ошибка загрузки сообщений</div>';
+  }
+}
+
+function renderChatMessages(messages) {
+  const paneEl = document.getElementById('chat-messages');
+  if (!messages.length) {
+    paneEl.innerHTML = '<div class="empty">Нет сообщений</div>';
+    return;
+  }
+  paneEl.innerHTML = messages.map(m => {
+    const side = m.direction === 'outgoing' ? 'out' : 'in';
+    const isText = !m.msg_type || String(m.msg_type).toLowerCase().includes('text');
+    let body;
+    if (isText) {
+      body = _chatEsc(m.text || '');
+    } else if (m.file_url) {
+      body = `<a href="${_chatEsc(m.file_url)}" target="_blank" rel="noopener">📎 Вложение</a>` +
+             (m.text ? `<div>${_chatEsc(m.text)}</div>` : '');
+    } else {
+      body = '📎 Вложение';
+    }
+    return `
+      <div class="chat-msg chat-msg-${side}">
+        <div class="chat-bubble">${body}</div>
+        <div class="chat-msg-time">${_chatTime(m.msg_ts)}</div>
+      </div>`;
+  }).join('');
+  paneEl.scrollTop = paneEl.scrollHeight;
+}
+
+window.loadChat = loadChat;
+window.openChatDialog = openChatDialog;
