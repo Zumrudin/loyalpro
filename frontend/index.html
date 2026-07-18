@@ -95,6 +95,7 @@
       <div class="tn" data-p="staff-analytics" data-roles="owner,admin" onclick="nav(this)">Сотрудники</div>
       <div class="tn" data-p="segments" data-roles="owner,admin" onclick="nav(this)">Сегменты</div>
       <div class="tn" data-p="broadcasts" data-roles="owner,admin" onclick="nav(this)">📨 Рассылка</div>
+      <div class="tn" data-p="chat" data-roles="owner,admin" onclick="nav(this)">💬 Чат</div>
       <div class="tn" data-p="cert-requests" data-roles="owner,admin,specialist" onclick="nav(this)">Справки</div>
       <div class="tn" data-p="home-care" data-roles="owner,admin,specialist" onclick="nav(this)">Уход</div>
       <div class="tn" data-p="patient-portfolio" data-roles="owner,admin,specialist" onclick="nav(this)">📷 Фото-кейсы</div>
@@ -136,6 +137,7 @@
       <div class="tn" data-p="staff-analytics" data-roles="owner,admin" onclick="nav(this)">Сотрудники</div>
       <div class="tn" data-p="segments" data-roles="owner,admin" onclick="nav(this)">Сегменты</div>
       <div class="tn" data-p="broadcasts" data-roles="owner,admin" onclick="nav(this)">📨 Рассылка</div>
+      <div class="tn" data-p="chat" data-roles="owner,admin" onclick="nav(this)">💬 Чат</div>
       <div class="tn" data-p="cert-requests" data-roles="owner,admin,specialist" onclick="nav(this)">Справки</div>
       <div class="tn" data-p="home-care" data-roles="owner,admin,specialist" onclick="nav(this)">Уход</div>
       <div class="tn" data-p="patient-portfolio" data-roles="owner,admin,specialist" onclick="nav(this)">📷 Фото-кейсы</div>
@@ -1123,6 +1125,21 @@
     </div>
 
     <!-- ═══ MEDICAL CERT PAGE ═══ -->
+    <!-- ═══ ЧАТ (просмотр переписок chatpush) ═══ -->
+    <div class="page" id="page-chat">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
+        <div style="font-size:16px;font-weight:700">💬 Чат</div>
+        <button class="btn btn-sec" onclick="loadChat()">↻ Обновить</button>
+      </div>
+      <div class="chat-layout">
+        <div class="chat-sidebar" id="chat-dialogs">
+          <div class="empty">Загрузка…</div>
+        </div>
+        <div class="chat-main" id="chat-messages">
+          <div class="empty">Выберите диалог</div>
+        </div>
+      </div>
+    </div>
     <div class="page" id="page-cert-requests"></div>
     <div class="page" id="page-medical-cert">
   <div style="margin-bottom:12px"><a href="#" onclick="navTo('cert-requests');return false" style="color:var(--t3);text-decoration:none;font-size:14px">← К справкам</a></div>
@@ -1882,6 +1899,7 @@ function fireConfetti() {
 <script src="js/pages/records.js"></script>
 <script src="js/pages/settings.js"></script>
 <script src="js/pages/portfolio.js"></script>
+<script src="js/pages/chat.js"></script>
 <script src="js/pages/patient-portfolio.js?v=2026-06-01e"></script>
 <script src="js/pages/staff-dashboard.js?v=2026-06-11d"></script>
 <script src="js/pages/users.js"></script>
