@@ -188,6 +188,8 @@ function envelope(body) {
       // номер партнёра по чату (клиента)
       phone: str(nm.chat_phone || nm.sender_phone_number),
       senderName: nm.sender_name || nm.pushname || null,
+      // timestamp может лежать в message ИЛИ на уровне события — берём любой.
+      ts: nm.message?.timestamp ?? nm.timestamp ?? p.timestamp ?? null,
     };
   }
   const dir = p.direction || null;
@@ -203,6 +205,8 @@ function envelope(body) {
       ? (p.recipient_phone_number || p.sender_phone_number)
       : (p.sender_phone_number || p.recipient_phone_number)),
     senderName: p.sender_name || p.recipient_username || null,
+    // MAX кладёт timestamp на уровень payload, а не в message — берём любой.
+    ts: p.message?.timestamp ?? p.timestamp ?? null,
   };
 }
 
@@ -228,7 +232,7 @@ function parseMessageEvent(body) {
     text: m.text || m.file_data?.caption || '',
     fileUrl: m.file_data?.download_url || null,              // Chatpush сам заливает медиа и даёт ссылку
     mimeType: m.file_data?.mime_type || null,
-    timestamp: m.timestamp || null,
+    timestamp: m.timestamp || e.ts || null,
     chatId: e.chatId,
     phone: e.phone,
     senderName: e.senderName,

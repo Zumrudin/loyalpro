@@ -14,9 +14,13 @@ const logger = createLogger('ChatpushAgent');
  * @param {object} msg  результат chatpush.parseIncomingMessage()
  * @returns {Promise<string|null>}  текст ответа или null (не отвечать)
  */
+// Текстовые типы разных каналов: WhatsApp/MAX шлют 'text', tdlib/Telegram — 'formattedText'.
+// Оба несут обычный текст в msg.text — отвечаем на любой из них.
+const TEXT_TYPES = new Set(['text', 'formattedText']);
+
 async function generateReply(msg) {
-  // Пока отвечаем только на текст; файлы/картинки — молча пропускаем.
-  if (msg.type !== 'text' || !msg.text.trim()) {
+  // Пока отвечаем только на текст; файлы/картинки/голос — молча пропускаем.
+  if (!TEXT_TYPES.has(msg.type) || !msg.text.trim()) {
     logger.debug(`skip non-text (type=${msg.type}) from ${msg.phone}`);
     return null;
   }
