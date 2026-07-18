@@ -38,4 +38,17 @@ function messagePreview(msg) {
   return String(msg.text || '').trim();
 }
 
-module.exports = { dialogKey, isMedia, mediaLabel, messagePreview };
+// Кандидаты форматов номера для матчинга входящего сообщения с clients.phone.
+// Входящий телефон приходит без «+» (79200255591), а в базе хранится с «+»
+// (+79200255591) — и иногда с «8». Берём последние 10 цифр (ядро мобильного РФ)
+// и генерируем варианты префиксов, чтобы искать через ТОЧНОЕ сравнение
+// `phone = ANY($candidates)` и попадать в btree-индекс idx_clients_phone
+// (salon_id, phone), а не гонять regexp по всей таблице клиентов.
+function phoneMatchCandidates(raw) {
+  const digits = raw ? String(raw).replace(/\D/g, '') : '';
+  if (digits.length < 10) return [];
+  const core = digits.slice(-10);
+  return [`+7${core}`, `7${core}`, `8${core}`, `+8${core}`, core];
+}
+
+module.exports = { dialogKey, isMedia, mediaLabel, messagePreview, phoneMatchCandidates };

@@ -17,6 +17,7 @@ const crypto = require('crypto');
 const config = require('../config');
 const { db } = require('../db');
 const chatpush = require('../services/chatpush');
+const { phoneMatchCandidates } = require('../services/chat');
 const { generateReply } = require('../services/chatpush-agent');
 const { createLogger } = require('../logger');
 const logger = createLogger('ChatpushWebhook');
@@ -50,6 +51,27 @@ function resolveSalonId(customerId) {
   const { customerId: cfgCustomer, salonId } = config.CHATPUSH;
   if (salonId && (!cfgCustomer || cfgCustomer === customerId)) return salonId;
   return null;
+}
+
+/**
+ * Найти клиента салона по номеру телефона входящего/исходящего сообщения.
+ * Возвращает clients.id или null (номера нет / клиент не найден / нет салона).
+ * Точное сравнение по вариантам формата (phoneMatchCandidates) → индекс.
+ */
+async function matchClientId(salonId, phone) {
+  if (!salonId || !phone) return null;
+  const candidates = phoneMatchCandidates(phone);
+  if (!candidates.length) return null;
+  try {
+    const row = await db.oneOrNone(
+      'SELECT id FROM clients WHERE salon_id=$1 AND phone = ANY($2) LIMIT 1',
+      [salonId, candidates]
+    );
+    return row?.id || null;
+  } catch (e) {
+    logger.warn(`client match failed for ${phone}: ${e.message}`);
+    return null;
+  }
 }
 
 router.post('/webhook', async (req, res) => {
@@ -89,16 +111,21 @@ router.post('/webhook', async (req, res) => {
   try {
     // 2) Нормализованное сообщение (входящее И исходящее-эхо) — вся переписка.
     if (msg && msg.messageId) {
+      // Сматчить клиента по номеру телефона, чтобы в чате показывать имя из
+      // клиентской базы. Точное сравнение по вариантам формата → индекс
+      // idx_clients_phone. Номер клиента одинаков для in/out, поэтому весь
+      // диалог привязывается к клиенту независимо от направления.
+      const clientId = await matchClientId(salonId, msg.phone);
       await db.query(
         `INSERT INTO chatpush_messages
-           (salon_id, customer_id, channel, direction, external_message_id, reply_to_message_id,
+           (salon_id, client_id, customer_id, channel, direction, external_message_id, reply_to_message_id,
             msg_type, text, file_url, mime_type, sender_name, phone, chat_id, msg_ts)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
          ON CONFLICT (salon_id, external_message_id) DO NOTHING`,
-        [salonId, customerId, msg.channel, msg.direction, msg.messageId, msg.replyToMessageId,
+        [salonId, clientId, customerId, msg.channel, msg.direction, msg.messageId, msg.replyToMessageId,
          msg.type, msg.text, msg.fileUrl, msg.mimeType, msg.senderName, msg.phone, msg.chatId, msg.timestamp]
       );
-      logger.info(`stored ${msg.direction} ${msg.channel} ${msg.phone || ''}: ${(msg.text || '').slice(0, 60)}`);
+      logger.info(`stored ${msg.direction} ${msg.channel} ${msg.phone || ''}${clientId ? ` (client #${clientId})` : ''}: ${(msg.text || '').slice(0, 60)}`);
     } else {
       logger.debug(`non-message event type=${body.type} stored (event only)`);
     }

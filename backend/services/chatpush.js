@@ -177,8 +177,12 @@ function envelope(body) {
   if (nm) {
     return {
       direction: nm.direction || null,
-      customerId: p.instance?.customer_id ?? null,
-      instanceId: p.instance?.id ?? null,
+      // WhatsApp (вложенная форма) кладёт customer_id прямо в payload и НЕ шлёт
+      // объект instance — проверено на живых данных. Раньше брали только
+      // payload.instance.customer_id → для WhatsApp был null → сообщение
+      // сохранялось без salon_id и не попадало в чат.
+      customerId: p.instance?.customer_id ?? p.customer_id ?? null,
+      instanceId: p.instance?.id ?? p.instance_id ?? null,
       m: nm.message || {},
       chatId: str(nm.chat_id),
       // номер партнёра по чату (клиента)
