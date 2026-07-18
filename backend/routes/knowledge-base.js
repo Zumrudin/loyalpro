@@ -265,6 +265,30 @@ router.post('/relay', async (req, res) => {
   }
 });
 
+// POST /api/kb/relay/embed — dev-приёмник эмбеддингов для прода (гео-блок Gemini).
+// Тело: { text }; ответ: { embedding }. БЕЗ JWT, защищён X-Relay-Secret.
+router.post('/relay/embed', async (req, res) => {
+  if (!config.KB_GEMINI_RELAY_SECRET ||
+      req.get('X-Relay-Secret') !== config.KB_GEMINI_RELAY_SECRET) {
+    return res.status(403).json({ error: 'forbidden' });
+  }
+  const text = req.body && req.body.text;
+  if (typeof text !== 'string' || !text.trim()) {
+    return res.status(400).json({ error: 'bad text' });
+  }
+  try {
+    const embedding = await kbAssistant.embedTextDirect(text, {
+      free:  config.KB_GEMINI_KEY_FREE,
+      paid:  config.KB_GEMINI_KEY_PAID,
+      model: config.KB_EMBED_MODEL,
+    });
+    res.json({ embedding });
+  } catch (e) {
+    logger.error(`POST /relay/embed: ${e.message}`);
+    res.status(502).json({ error: 'gemini', message: e.message });
+  }
+});
+
 // PUT /api/kb/articles/reorder — батч display_order в пределах папки (ДО /:id!)
 router.put('/articles/reorder', adminOnly, async (req, res) => {
   const { order } = req.body || {};

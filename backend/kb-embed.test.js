@@ -33,3 +33,16 @@ describe('embedTextDirect', () => {
     expect(calls).toBe(2);
   });
 });
+
+describe('embedTextViaRelay', () => {
+  test('шлёт {text} и парсит {embedding}', async () => {
+    let sentBody;
+    const fetchFn = async (url, opts) => {
+      sentBody = JSON.parse(opts.body);
+      return { ok: true, status: 200, json: async () => ({ embedding: [4, 5, 6] }) };
+    };
+    const vec = await kb.embedTextViaRelay('запрос', { url: 'http://dev/api/kb/relay/embed', secret: 'S', fetchFn });
+    expect(sentBody).toEqual({ text: 'запрос' });
+    expect(vec).toEqual([4, 5, 6]);
+  });
+});

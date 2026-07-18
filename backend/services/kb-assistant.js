@@ -278,10 +278,55 @@ async function ask(salonId, userId, question) {
   return { answer, sources };
 }
 
+// Relay-режим для эмбеддингов: прод шлёт текст на dev, тот эмбеддит своим ключом.
+// Тело: { text }; ответ: { embedding: number[] }.
+async function embedTextViaRelay(text, { url, secret, fetchFn }) {
+  const fn = fetchFn || fetch;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  let res;
+  try {
+    res = await fn(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Relay-Secret': secret || '' },
+      body: JSON.stringify({ text }),
+      signal: controller.signal,
+    });
+  } finally {
+    clearTimeout(timer);
+  }
+  if (!res.ok) {
+    const err = new Error(`Relay embed HTTP ${res.status}`);
+    err.status = res.status;
+    throw err;
+  }
+  const json = await res.json();
+  if (!Array.isArray(json && json.embedding)) throw new Error('Relay embed: пустой ответ');
+  return json.embedding;
+}
+
+// Диспетчер: relay-URL задан (прод) → relay; иначе прямой вызов.
+async function embedText(text, opts) {
+  const model = (opts && opts.model) || config.KB_EMBED_MODEL;
+  const fetchFn = (opts && opts.fetchFn) || fetch;
+  if (config.KB_GEMINI_RELAY_URL) {
+    return embedTextViaRelay(text, {
+      url: config.KB_GEMINI_RELAY_URL + '/embed',
+      secret: config.KB_GEMINI_RELAY_SECRET,
+      fetchFn,
+    });
+  }
+  return embedTextDirect(text, {
+    free: config.KB_GEMINI_KEY_FREE,
+    paid: config.KB_GEMINI_KEY_PAID,
+    model, fetchFn,
+  });
+}
+
 module.exports = {
   CONTEXT_CHAR_BUDGET, SYSTEM_PROMPT, REQUEST_TIMEOUT_MS,
   buildContext, buildPrompt, parseGeminiResponse,
   callGeminiOnce, callGemini, callGeminiDirect, callViaRelay,
   retrieveArticles, logChat, ask,
-  embedContentOnce, embedTextDirect,
+  embedContentOnce, embedTextDirect, embedTextViaRelay, embedText,
 };
