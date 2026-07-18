@@ -46,8 +46,12 @@ async function process(salonId, dialogKey, meta, opts = {}) {
     running.add(k);
     try {
       const res = await orchestrator.runDialog(salonId, dialogKey, { ctx: { phone: meta.phone } });
-      for (const text of (res.replies || [])) {
-        if (text && text.trim()) await send(meta, text);
+      // При эскалации бот замолкает: не отправляем реплики, даже если модель что-то написала
+      // в том же ходе перед вызовом escalate_to_operator.
+      if (!res.escalated) {
+        for (const text of (res.replies || [])) {
+          if (text && text.trim()) await send(meta, text);
+        }
       }
     } finally {
       running.delete(k);

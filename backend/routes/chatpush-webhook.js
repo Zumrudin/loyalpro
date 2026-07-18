@@ -112,6 +112,8 @@ router.post('/webhook', async (req, res) => {
   }
 
   try {
+    // Вставилось ли НОВОЕ сообщение (а не дубль ретрая) — гейтит авто-ответ ниже.
+    let storedNew = false;
     // 2) Нормализованное сообщение (входящее И исходящее-эхо) — вся переписка.
     if (msg && msg.messageId) {
       // Сматчить клиента по номеру телефона, чтобы в чате показывать имя из
@@ -119,15 +121,17 @@ router.post('/webhook', async (req, res) => {
       // idx_clients_phone. Номер клиента одинаков для in/out, поэтому весь
       // диалог привязывается к клиенту независимо от направления.
       const clientId = await matchClientId(salonId, msg.phone);
-      await db.query(
+      const ins = await db.query(
         `INSERT INTO chatpush_messages
            (salon_id, client_id, customer_id, channel, direction, external_message_id, reply_to_message_id,
             msg_type, text, file_url, mime_type, sender_name, phone, chat_id, msg_ts)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
-         ON CONFLICT (salon_id, external_message_id) DO NOTHING`,
+         ON CONFLICT (salon_id, external_message_id) DO NOTHING
+         RETURNING id`,
         [salonId, clientId, customerId, msg.channel, msg.direction, msg.messageId, msg.replyToMessageId,
          msg.type, msg.text, msg.fileUrl, msg.mimeType, msg.senderName, msg.phone, msg.chatId, msg.timestamp]
       );
+      storedNew = ins.rowCount > 0;
       logger.info(`stored ${msg.direction} ${msg.channel} ${msg.phone || ''}${clientId ? ` (client #${clientId})` : ''}: ${(msg.text || '').slice(0, 60)}`);
     } else {
       logger.debug(`non-message event type=${body.type} stored (event only)`);
@@ -142,6 +146,7 @@ router.post('/webhook', async (req, res) => {
     //    список), дебаунс серии, ReAct-цикл и отправка — внутри диспетчера.
     if (
       config.CHATPUSH.agentEnabled &&
+      storedNew &&
       msg && msg.direction === 'incoming' &&
       AGENT_TEXT_TYPES.has(msg.type) && (msg.text || '').trim()
     ) {

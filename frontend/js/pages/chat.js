@@ -135,6 +135,7 @@ async function renderAgentBanner(key) {
     status = data.status || 'bot';
   } catch (e) { console.error('chat agent status:', e); return; }
 
+  if (_chatActiveKey !== key) return;   // диалог переключили, пока грузился статус — чужой баннер не рисуем
   const escalated = status === 'escalated';
   const label = escalated ? '👤 Отвечает оператор (бот молчит)' : '🤖 Отвечает бот';
   const btnLabel = escalated ? 'Вернуть боту' : 'Передать оператору';
