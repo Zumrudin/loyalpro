@@ -53,13 +53,6 @@ router.post('/', auth, requireRole('owner'), async (req, res) => {
       return res.status(400).json({ error: 'Пароль минимум 8 символов' });
     const sid = await resolveStaffMemberId(role, staff_member_id, req.user.salonId);
 
-    const salon = await db.one('SELECT max_users FROM salons WHERE id=$1', [req.user.salonId]);
-    const { rows: [{ count }] } = await db.query(
-      'SELECT COUNT(*) FROM users WHERE salon_id=$1 AND is_active=TRUE', [req.user.salonId]
-    );
-    if (parseInt(count) >= salon.max_users)
-      return res.status(403).json({ error: `Достигнут лимит пользователей (${salon.max_users}). Обратитесь в поддержку для увеличения лимита.` });
-
     const hash = await bcrypt.hash(password, 12);
     const user = await db.one(
       `INSERT INTO users (salon_id,email,password_hash,name,role,position,staff_member_id,is_active,must_change_password,created_by)
