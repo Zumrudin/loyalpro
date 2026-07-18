@@ -57,6 +57,9 @@ async function removeNumberRule(salonId, id) {
 
 // Комбинированный допуск: настройки + списки → решение чистого гейта.
 async function isAllowed(salonId, phone) {
+  // Fail-closed без салона: не даём авто-ответ на неопознанный инстанс,
+  // независимо от DEFAULTS (нет salon_id → нет контекста списков).
+  if (!salonId) return { allow: false, reason: 'no-salon' };
   const settings = await getSettings(salonId);
   if (!settings.enabled) return { allow: false, reason: 'disabled' };
   const rules = await listNumberRules(salonId, null);
