@@ -36,6 +36,13 @@ describe('search_knowledge_base', () => {
     const out = await searchKb.run(1, { query: 'нет' });
     expect(out.found).toBe(false);
   });
+  test('сбой поиска → мягкий found:false с degraded, без error (не «технические сложности»)', async () => {
+    rag.buildKnowledgeContext.mockRejectedValue(new Error('aitunnel embed: пустой ответ'));
+    const out = await searchKb.run(1, { query: 'эпиляция' });
+    expect(out.found).toBe(false);
+    expect(out.degraded).toBe(true);
+    expect(out.error).toBeUndefined();   // orchestrator НЕ пометит isError
+  });
 });
 
 describe('list_services', () => {

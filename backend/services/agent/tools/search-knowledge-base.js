@@ -20,8 +20,14 @@ const schema = {
 async function run(salonId, input) {
   const query = String((input && input.query) || '').trim();
   if (!query) return { found: false, context: '', sources: [] };
-  const { context, sources } = await rag.buildKnowledgeContext(salonId, query, {});
-  return { found: !!context, context, sources };
+  try {
+    const { context, sources } = await rag.buildKnowledgeContext(salonId, query, {});
+    return { found: !!context, context, sources };
+  } catch (e) {
+    // Не превращаем сбой поиска в «технические сложности»: отдаём мягкий found:false
+    // (без error), чтобы модель ответила из других инструментов или предложила оператора.
+    return { found: false, context: '', sources: [], degraded: true };
+  }
 }
 
 module.exports = { schema, run };

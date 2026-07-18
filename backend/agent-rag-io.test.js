@@ -73,6 +73,24 @@ describe('retrieveChunks', () => {
     expect(kb.embedText).not.toHaveBeenCalled();
   });
 
+  test('сбой эмбеддинга → деградация на FTS-only, поиск не падает', async () => {
+    kb.embedText.mockRejectedValue(new Error('aitunnel embed: пустой ответ'));
+    db.any.mockImplementation(async (sql) => {
+      if (/FROM kb_chunks[\s\S]*embedding/i.test(sql) && !/search_vector/i.test(sql)) {
+        return [
+          { id: 10, article_id: 1, content: 'ботокс морщины', embedding: [1, 0, 0], embed_norm: 1 },
+          { id: 11, article_id: 1, content: 'лазерная эпиляция', embedding: [0, 1, 0], embed_norm: 1 },
+        ];
+      }
+      if (/search_vector/i.test(sql)) return [{ id: 11, article_id: 1 }]; // FTS нашёл эпиляцию
+      return [];
+    });
+    const out = await rag.retrieveChunks(1, 'эпиляция', { limit: 4 });
+    // вектор отвалился, но FTS-результат вернулся — функция не бросила
+    expect(out.map(c => c.id)).toEqual([11]);
+    expect(out[0].content).toBe('лазерная эпиляция');
+  });
+
   test('вектор и FTS фильтруют по опубликованным статьям', async () => {
     kb.embedText.mockResolvedValue([1, 0, 0]);
     db.any.mockResolvedValue([]);

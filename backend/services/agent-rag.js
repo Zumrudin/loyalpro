@@ -5,6 +5,8 @@ const { db } = require('../db');
 const kbAssistant = require('./kb-assistant');
 const { buildPrefixTsQuery } = require('./knowledge-base');
 const { ycGet } = require('./yclients');
+const { createLogger } = require('../logger');
+const logger = createLogger('AgentRAG');
 
 // ── Чистые хелперы RAG-слоя (без БД/HTTP, юнит-тестируемы) ──────
 // Спека: docs/superpowers/specs/2026-07-18-kb-rag-retrieval-design.md
@@ -135,8 +137,9 @@ async function retrieveChunks(salonId, query, opts = {}) {
   if (!q) return [];
 
   // 1) Вектор: эмбеддим запрос, тянем все чанки салона, косинус в JS.
-  const qvec = await kbAssistant.embedText(q);
-  const qnorm = vectorNorm(qvec);
+  // Эмбеддинг-провайдер (aitunnel) изредка флапает — при его сбое НЕ роняем
+  // поиск целиком, а деградируем на FTS-only (ниже). Слово из запроса часто
+  // есть в статьях буквально, так что FTS всё равно находит релевантное.
   const all = await db.any(
     `SELECT c.id, c.article_id, c.content, c.embedding, c.embed_norm
        FROM kb_chunks c
@@ -144,11 +147,18 @@ async function retrieveChunks(salonId, query, opts = {}) {
       WHERE c.salon_id = $1 AND c.embedding IS NOT NULL AND a.is_published = true`,
     [salonId]);
   const byId = new Map(all.map(c => [c.id, c]));
-  const vectorRanked = all
-    .map(c => ({ id: c.id, score: cosineSim(qvec, c.embedding, qnorm, c.embed_norm) }))
-    .sort((a, b) => b.score - a.score)
-    .slice(0, VECTOR_TOPN)
-    .map(r => r.id);
+  let vectorRanked = [];
+  try {
+    const qvec = await kbAssistant.embedText(q);
+    const qnorm = vectorNorm(qvec);
+    vectorRanked = all
+      .map(c => ({ id: c.id, score: cosineSim(qvec, c.embedding, qnorm, c.embed_norm) }))
+      .sort((a, b) => b.score - a.score)
+      .slice(0, VECTOR_TOPN)
+      .map(r => r.id);
+  } catch (e) {
+    logger.warn(`эмбеддинг недоступен (${e.message}) — деградация на FTS-only поиск`);
+  }
 
   // 2) FTS по search_vector чанков (prefix-tsquery; при пустом — пропускаем).
   let ftsRanked = [];
