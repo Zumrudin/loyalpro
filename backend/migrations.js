@@ -917,6 +917,13 @@ async function runMigrations(client) {
     CREATE INDEX IF NOT EXISTS idx_chatpush_messages_dialog
       ON chatpush_messages (salon_id, phone, msg_ts DESC)
   `).catch(() => {});
+  // Индекс по выражению ключа диалога COALESCE(NULLIF(phone,''), chat_id) —
+  // обслуживает группировку/сортировку в routes/chat.js (список диалогов),
+  // включая каналы без phone (Telegram/MAX, ключ = chat_id).
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS idx_chatpush_messages_dialogkey
+      ON chatpush_messages (salon_id, (COALESCE(NULLIF(phone,''), chat_id)), msg_ts DESC)
+  `).catch(() => {});
 }
 
 module.exports = { runMigrations };
