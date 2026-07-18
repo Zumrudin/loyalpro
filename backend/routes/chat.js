@@ -85,4 +85,44 @@ router.get('/dialogs/:key/messages', adminOnly, async (req, res) => {
   }
 });
 
+// GET /api/chat/dialogs/:key/agent — статус агента по диалогу (для баннера).
+router.get('/dialogs/:key/agent', adminOnly, async (req, res) => {
+  try {
+    const salonId = req.user.salonId;
+    const key = String(req.params.key || '');
+    if (!key) return res.status(400).json({ error: 'Пустой ключ диалога' });
+    const row = await db.oneOrNone(
+      `SELECT status, escalated_reason FROM agent_dialogs
+        WHERE salon_id = $1 AND dialog_key = $2`,
+      [salonId, key]);
+    // Нет строки → агент этим диалогом ещё не занимался: считаем 'bot'.
+    res.json({ status: row ? row.status : 'bot', escalatedReason: row ? row.escalated_reason : null });
+  } catch (e) {
+    logger.error(`agent status failed: ${e.message}`);
+    res.status(500).json({ error: 'Не удалось загрузить статус агента' });
+  }
+});
+
+// POST /api/chat/dialogs/:key/agent — переключить бот ↔ оператор.
+// body: { status: 'bot' | 'escalated' }. 'bot' = вернуть управление боту.
+router.post('/dialogs/:key/agent', adminOnly, async (req, res) => {
+  try {
+    const salonId = req.user.salonId;
+    const key = String(req.params.key || '');
+    const status = req.body && req.body.status === 'escalated' ? 'escalated' : 'bot';
+    if (!key) return res.status(400).json({ error: 'Пустой ключ диалога' });
+    // Upsert: диалога может ещё не быть в agent_dialogs, если бот не отвечал.
+    await db.query(
+      `INSERT INTO agent_dialogs (salon_id, dialog_key, status)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (salon_id, dialog_key)
+         DO UPDATE SET status = $3, updated_at = now()`,
+      [salonId, key, status]);
+    res.json({ status });
+  } catch (e) {
+    logger.error(`agent toggle failed: ${e.message}`);
+    res.status(500).json({ error: 'Не удалось переключить режим' });
+  }
+});
+
 module.exports = router;

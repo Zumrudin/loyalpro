@@ -82,6 +82,7 @@ async function openChatDialog(key) {
   try {
     const data = await api('GET', '/api/chat/dialogs/' + encodeURIComponent(key) + '/messages');
     renderChatMessages(data.messages || []);
+    await renderAgentBanner(key);
   } catch (e) {
     console.error('chat:', e);
     paneEl.innerHTML = '<div class="empty">Ошибка загрузки сообщений</div>';
@@ -122,6 +123,41 @@ function renderChatMessages(messages) {
       </div>`;
   }).join('');
   paneEl.scrollTop = paneEl.scrollHeight;
+}
+
+// Баннер режима агента над перепиской: показывает bot/escalated + кнопку переключения.
+async function renderAgentBanner(key) {
+  const paneEl = document.getElementById('chat-messages');
+  if (!paneEl) return;
+  let status = 'bot';
+  try {
+    const data = await api('GET', '/api/chat/dialogs/' + encodeURIComponent(key) + '/agent');
+    status = data.status || 'bot';
+  } catch (e) { console.error('chat agent status:', e); return; }
+
+  const escalated = status === 'escalated';
+  const label = escalated ? '👤 Отвечает оператор (бот молчит)' : '🤖 Отвечает бот';
+  const btnLabel = escalated ? 'Вернуть боту' : 'Передать оператору';
+  const nextStatus = escalated ? 'bot' : 'escalated';
+
+  const bar = document.createElement('div');
+  bar.className = 'chat-agent-banner' + (escalated ? ' chat-agent-escalated' : '');
+  bar.innerHTML =
+    '<span class="chat-agent-state">' + _chatEsc(label) + '</span>' +
+    '<button class="btn-pri chat-agent-toggle">' + _chatEsc(btnLabel) + '</button>';
+  bar.querySelector('.chat-agent-toggle').onclick = () => toggleAgent(key, nextStatus);
+  paneEl.prepend(bar);
+}
+
+// Переключить режим диалога и перерисовать переписку.
+async function toggleAgent(key, nextStatus) {
+  try {
+    await api('POST', '/api/chat/dialogs/' + encodeURIComponent(key) + '/agent', { status: nextStatus });
+    openChatDialog(key);
+  } catch (e) {
+    console.error('chat agent toggle:', e);
+    alert('Не удалось переключить режим');
+  }
 }
 
 window.loadChat = loadChat;
