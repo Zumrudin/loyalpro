@@ -117,6 +117,13 @@ Always use the **MCP Playwright server** (`mcp__playwright__*`) for browser auto
 
 **Frontend:** `frontend/js/pages/portfolio.js` — two-level admin SPA (categories grid → items grid in a category) with HTML5 drag-drop reorder on both levels and create/edit modals. Stub `staff-profile-modal` shape reused via shared classes (`stg-section`, `btn-pri`, `fg`/`fl`).
 
+### AI-агент: управление и гейт допуска
+- `services/agent-gate.js` — чистые хелперы: `normalizePhoneKey` (РФ `8→7`), `decideGate` (порядок: enabled → чёрный список → режим/белый). Юнит-тесты `agent-gate.test.js`.
+- `services/agent-settings.js` — настройки (`agent_settings`) и списки номеров (`agent_number_rules`); `isAllowed(salonId, phone)` объединяет их через `decideGate` (fail-closed без `salonId`). Номера хранятся каноничными (нормализуются при записи в `addNumberRule`).
+- `routes/agent-settings.js` (`/api/agent`, owner/admin) — тумблер, режим `all|whitelist`, CRUD номеров.
+- `routes/chatpush-webhook.js` зовёт `isAllowed` перед авто-ответом. Два уровня: env `CHATPUSH_AGENT_ENABLED` (глобальный kill-switch) И per-salon настройки из админки.
+- Фронт: модалка «⚙️ Агент» на странице «Чат» (`frontend/js/pages/agent-settings.js`).
+
 ## Key constraints
 
 - **Webhook handler must respond 200 immediately** before any async processing — YClients retries on timeout.
