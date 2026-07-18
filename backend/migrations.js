@@ -613,6 +613,51 @@ async function runMigrations(client) {
     ON kb_articles (salon_id, category_id, display_order)
   `).catch(() => {});
 
+  // ── RAG-слой базы знаний (спека 2026-07-18-kb-rag-retrieval-design) ──
+  // pgvector на Beget недоступен → эмбеддинг храним как real[], косинус в JS.
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS kb_chunks (
+      id            SERIAL PRIMARY KEY,
+      salon_id      INTEGER NOT NULL REFERENCES salons(id) ON DELETE CASCADE,
+      article_id    INTEGER NOT NULL REFERENCES kb_articles(id) ON DELETE CASCADE,
+      chunk_index   INTEGER NOT NULL,
+      content       TEXT NOT NULL,
+      content_hash  TEXT NOT NULL DEFAULT '',
+      embedding     REAL[],
+      embed_norm    REAL NOT NULL DEFAULT 0,
+      search_vector TSVECTOR GENERATED ALWAYS AS (
+        to_tsvector('russian'::regconfig, coalesce(content, ''))
+      ) STORED,
+      created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+      UNIQUE (article_id, chunk_index)
+    )
+  `).catch(() => {});
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS kb_chunks_search_idx
+    ON kb_chunks USING GIN (search_vector)
+  `).catch(() => {});
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS kb_chunks_salon_idx
+    ON kb_chunks (salon_id)
+  `).catch(() => {});
+
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS kb_article_links (
+      id            SERIAL PRIMARY KEY,
+      salon_id      INTEGER NOT NULL REFERENCES salons(id) ON DELETE CASCADE,
+      article_id    INTEGER NOT NULL REFERENCES kb_articles(id) ON DELETE CASCADE,
+      entity_type   TEXT NOT NULL CHECK (entity_type IN ('service','staff')),
+      entity_yc_id  BIGINT NOT NULL,
+      created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+      UNIQUE (article_id, entity_type, entity_yc_id)
+    )
+  `).catch(() => {});
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS kb_article_links_lookup_idx
+    ON kb_article_links (salon_id, entity_type, entity_yc_id)
+  `).catch(() => {});
+
   // ── База знаний: логи ИИ-ассистента ────────────────────────────
   // Спека: docs/superpowers/specs/2026-07-16-kb-ai-assistant-design.md
   await client.query(`
