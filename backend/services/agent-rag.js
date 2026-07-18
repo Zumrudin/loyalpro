@@ -138,9 +138,10 @@ async function retrieveChunks(salonId, query, opts = {}) {
   const qvec = await kbAssistant.embedText(q);
   const qnorm = vectorNorm(qvec);
   const all = await db.any(
-    `SELECT id, article_id, content, embedding, embed_norm
-       FROM kb_chunks
-      WHERE salon_id = $1 AND embedding IS NOT NULL`,
+    `SELECT c.id, c.article_id, c.content, c.embedding, c.embed_norm
+       FROM kb_chunks c
+       JOIN kb_articles a ON a.id = c.article_id
+      WHERE c.salon_id = $1 AND c.embedding IS NOT NULL AND a.is_published = true`,
     [salonId]);
   const byId = new Map(all.map(c => [c.id, c]));
   const vectorRanked = all
@@ -154,10 +155,12 @@ async function retrieveChunks(salonId, query, opts = {}) {
   const tsq = buildPrefixTsQuery(q);
   if (tsq) {
     const ftsRows = await db.any(
-      `SELECT id, article_id,
-              ts_rank(search_vector, to_tsquery('russian', $2)) AS rank
-         FROM kb_chunks
-        WHERE salon_id = $1 AND search_vector @@ to_tsquery('russian', $2)
+      `SELECT c.id, c.article_id,
+              ts_rank(c.search_vector, to_tsquery('russian', $2)) AS rank
+         FROM kb_chunks c
+         JOIN kb_articles a ON a.id = c.article_id
+        WHERE c.salon_id = $1 AND c.search_vector @@ to_tsquery('russian', $2)
+          AND a.is_published = true
         ORDER BY rank DESC NULLS LAST
         LIMIT $3`,
       [salonId, tsq, VECTOR_TOPN]);

@@ -72,6 +72,17 @@ describe('retrieveChunks', () => {
     expect(out).toEqual([]);
     expect(kb.embedText).not.toHaveBeenCalled();
   });
+
+  test('вектор и FTS фильтруют по опубликованным статьям', async () => {
+    kb.embedText.mockResolvedValue([1, 0, 0]);
+    db.any.mockResolvedValue([]);
+    await rag.retrieveChunks(1, 'ботокс', { limit: 2 });
+    const sqls = db.any.mock.calls.map(c => c[0]);
+    const vectorSql = sqls.find(s => /FROM kb_chunks/i.test(s) && /embedding/i.test(s) && !/search_vector/i.test(s));
+    const ftsSql = sqls.find(s => /search_vector/i.test(s));
+    expect(vectorSql).toMatch(/is_published/i);
+    expect(ftsSql).toMatch(/is_published/i);
+  });
 });
 
 describe('buildKnowledgeContext', () => {
