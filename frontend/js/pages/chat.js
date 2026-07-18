@@ -7,6 +7,14 @@ let _chatActiveKey = null;
 const _chatEsc = (s) => String(s ?? '').replace(/[&<>"']/g, c =>
   ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
+// Разрешаем только http(s) и относительные пути — блокируем javascript:/data: и пр.
+function _chatSafeUrl(u) {
+  const s = String(u || '').trim();
+  if (/^https?:\/\//i.test(s)) return s;
+  if (s.startsWith('/')) return s;
+  return '';
+}
+
 const CHAT_CHANNELS = {
   whatsapp:     { label: 'WhatsApp', cls: 'chan-wa' },
   tdlib:        { label: 'Telegram', cls: 'chan-tg' },
@@ -34,6 +42,7 @@ async function loadChat() {
     _chatDialogs = data.dialogs || [];
     renderChatDialogs();
   } catch (e) {
+    console.error('chat:', e);
     listEl.innerHTML = '<div class="empty">Ошибка загрузки диалогов</div>';
   }
 }
@@ -49,7 +58,7 @@ function renderChatDialogs() {
     const title = d.client ? d.client.name : (d.senderName || d.key);
     const active = d.key === _chatActiveKey ? ' active' : '';
     return `
-      <div class="chat-dialog${active}" onclick="openChatDialog('${_chatEsc(d.key)}')">
+      <div class="chat-dialog${active}" data-key="${_chatEsc(d.key)}">
         <div class="chat-dialog-top">
           <span class="chat-badge ${ch.cls}">${_chatEsc(ch.label)}</span>
           <span class="chat-dialog-name">${_chatEsc(title)}</span>
@@ -58,6 +67,10 @@ function renderChatDialogs() {
         <div class="chat-dialog-preview">${_chatEsc(d.lastText)}</div>
       </div>`;
   }).join('');
+  listEl.onclick = (e) => {
+    const el = e.target.closest('.chat-dialog');
+    if (el && el.dataset.key != null) openChatDialog(el.dataset.key);
+  };
 }
 
 async function openChatDialog(key) {
@@ -69,6 +82,7 @@ async function openChatDialog(key) {
     const data = await api('GET', '/api/chat/dialogs/' + encodeURIComponent(key) + '/messages');
     renderChatMessages(data.messages || []);
   } catch (e) {
+    console.error('chat:', e);
     paneEl.innerHTML = '<div class="empty">Ошибка загрузки сообщений</div>';
   }
 }
@@ -83,13 +97,14 @@ function renderChatMessages(messages) {
     const side = m.direction === 'outgoing' ? 'out' : 'in';
     const isText = !m.msg_type || String(m.msg_type).toLowerCase().includes('text');
     let body;
+    const safeUrl = _chatSafeUrl(m.file_url);
     if (isText) {
       body = _chatEsc(m.text || '');
-    } else if (m.file_url) {
-      body = `<a href="${_chatEsc(m.file_url)}" target="_blank" rel="noopener">📎 Вложение</a>` +
+    } else if (safeUrl) {
+      body = `<a href="${_chatEsc(safeUrl)}" target="_blank" rel="noopener">📎 Вложение</a>` +
              (m.text ? `<div>${_chatEsc(m.text)}</div>` : '');
     } else {
-      body = '📎 Вложение';
+      body = '📎 Вложение' + (m.text ? `<div>${_chatEsc(m.text)}</div>` : '');
     }
     return `
       <div class="chat-msg chat-msg-${side}">
