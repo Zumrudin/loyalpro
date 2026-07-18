@@ -31,8 +31,12 @@ function _agentMode() {
 }
 
 function _agentToggleAllowSection() {
-  document.getElementById('agent-allow-section').style.opacity =
-    _agentMode() === 'whitelist' ? '1' : '0.5';
+  const isWhitelist = _agentMode() === 'whitelist';
+  const sec = document.getElementById('agent-allow-section');
+  // Белый список актуален только в режиме whitelist — гасим и блокируем ввод
+  // в режиме «Всем», чтобы не плодить правила, которые гейт не учитывает.
+  sec.style.opacity = isWhitelist ? '1' : '0.5';
+  sec.style.pointerEvents = isWhitelist ? '' : 'none';
 }
 
 async function loadAgentRules() {
