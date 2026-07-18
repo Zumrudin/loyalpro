@@ -32,6 +32,8 @@ module.exports = {
   KB_GEMINI_KEY_PAID: process.env.KB_GEMINI_KEY_PAID || '',   // ключ periaiassistent (резерв)
   // gemini-*-latest — алиасы на актуальную модель; gemini-2.5-flash отдаёт 404 новым ключам.
   KB_LLM_MODEL:       process.env.KB_LLM_MODEL       || 'gemini-flash-lite-latest',
+  // Эмбеддинги для RAG. text-embedding-004 = 768 значений. Через тот же relay, что и чат.
+  KB_EMBED_MODEL: process.env.KB_EMBED_MODEL || 'text-embedding-004',
   // Relay: регион прод-сервера гео-заблокирован Gemini free API ("User location is not
   // supported"). Прод шлёт промпт на dev (в поддерживаемом регионе), тот вызывает Gemini
   // и возвращает ответ. Пусто на dev → прямой вызов Google. Секрет защищает /api/kb/relay.

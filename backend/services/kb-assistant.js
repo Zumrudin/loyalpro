@@ -153,6 +153,50 @@ async function callGemini(prompt, opts) {
   return callGeminiDirect(prompt, opts);
 }
 
+// ── Эмбеддинги (RAG) ───────────────────────────────────────────
+// Один вызов embedContent конкретным ключом. Возвращает массив чисел. Бросает {status}.
+async function embedContentOnce(text, { key, model, fetchFn }) {
+  const url = `${GEMINI_BASE}/${model}:embedContent?key=${key}`;
+  const body = { model: `models/${model}`, content: { parts: [{ text }] } };
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  let res;
+  try {
+    res = await fetchFn(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+  } finally {
+    clearTimeout(timer);
+  }
+  if (!res.ok) {
+    const err = new Error(`Gemini embed HTTP ${res.status}`);
+    err.status = res.status;
+    throw err;
+  }
+  const json = await res.json();
+  const values = json && json.embedding && json.embedding.values;
+  if (!Array.isArray(values)) throw new Error('Gemini embed: пустой ответ');
+  return values;
+}
+
+// Dual-key эмбеддинг: free → paid на любой ошибке. Пустые ключи пропускаются.
+async function embedTextDirect(text, opts) {
+  const { free, paid, model } = opts;
+  const fetchFn = opts.fetchFn || fetch;
+  const keys = [free, paid].filter(Boolean);
+  if (!keys.length) throw new Error('Gemini embed: не задан ни один ключ');
+  let lastErr;
+  for (const key of keys) {
+    try {
+      return await embedContentOnce(text, { key, model, fetchFn });
+    } catch (e) { lastErr = e; continue; }
+  }
+  throw lastErr || new Error('Gemini embed: все ключи недоступны');
+}
+
 // Топ-N опубликованных статей салона по релевантности вопросу (FTS + ILIKE fallback).
 async function retrieveArticles(salonId, question, limit = 4) {
   const tsq = buildPrefixTsQuery(question);
@@ -239,4 +283,5 @@ module.exports = {
   buildContext, buildPrompt, parseGeminiResponse,
   callGeminiOnce, callGemini, callGeminiDirect, callViaRelay,
   retrieveArticles, logChat, ask,
+  embedContentOnce, embedTextDirect,
 };
