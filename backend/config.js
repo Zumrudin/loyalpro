@@ -60,6 +60,14 @@ module.exports = {
     salonId:       process.env.CHATPUSH_SALON_ID ? parseInt(process.env.CHATPUSH_SALON_ID, 10) : null,
   },
 
+  // ── ИИ-агент-администратор (диалог + запись). Движок — Claude tool-calling. ──
+  // Ключ Anthropic. Claude не гео-блокируется на dev (Финляндия) — прямой вызов.
+  ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY || '',
+  AGENT_LLM_MODEL:   process.env.AGENT_LLM_MODEL   || 'claude-opus-4-8',
+  AGENT_MAX_TOKENS:  process.env.AGENT_MAX_TOKENS ? parseInt(process.env.AGENT_MAX_TOKENS, 10) : 4096,
+  // Дебаунс серии сообщений (мс) — используется диспетчером в Фазе 2b.
+  AGENT_DEBOUNCE_MS: process.env.AGENT_DEBOUNCE_MS ? parseInt(process.env.AGENT_DEBOUNCE_MS, 10) : 5000,
+
   // CORS — comma-separated list of allowed origins, e.g.:
   // ALLOWED_ORIGINS=http://89.22.233.73,http://89.22.233.73:8081
   ALLOWED_ORIGINS: process.env.ALLOWED_ORIGINS
