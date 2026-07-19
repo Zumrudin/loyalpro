@@ -95,7 +95,7 @@ function renderAgentServices() {
     </div>`;
   }).join('');
   root.innerHTML = `
-    <div class="stg-section">
+    <div class="stg-section active">
       <div class="fg"><div class="fl">Режим</div>${modeRadios}</div>
       <label class="as-showall" style="display:block;margin:8px 0">
         <input type="checkbox" id="as-showall-cb" ${_asShowAll ? 'checked' : ''}>
