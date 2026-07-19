@@ -69,3 +69,23 @@ describe('aitunnel.toolResultMessages', () => {
     ]);
   });
 });
+
+// Добивочный вызов оркестратора идёт с tools: [] — модель обязана ответить прозой.
+// Пустой массив tools API отвергает, поэтому параметр надо опускать целиком.
+describe('aitunnel.createMessage без инструментов', () => {
+  test('пустой список инструментов → параметр tools не отправляется', async () => {
+    const calls = [];
+    const fakeClient = { chat: { completions: { create: async (p) => {
+      calls.push(p);
+      return { choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: 'Завтра в 16:00.' } }] };
+    } } } };
+
+    const res = await provider.createMessage(
+      { system: 'ты админ', messages: [{ role: 'user', content: 'когда?' }], tools: [] },
+      { client: fakeClient });
+
+    expect(calls[0]).not.toHaveProperty('tools');
+    expect(res.text).toBe('Завтра в 16:00.');
+    expect(res.toolCalls).toEqual([]);
+  });
+});

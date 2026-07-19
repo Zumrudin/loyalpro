@@ -117,3 +117,22 @@ describe('buildSystemPrompt', () => {
     expect(p.length).toBeGreaterThan(50);
   });
 });
+
+// Экономия tool-итераций: каждый лишний вызов приближает ход к лимиту и немому ответу.
+describe('экономия вызовов инструментов', () => {
+  test('запрещает повторный вызов инструмента с теми же аргументами', () => {
+    const p = buildSystemPrompt({});
+    expect(p).toMatch(/повторно.*с теми же аргументами|не вызывай один и тот же инструмент/i);
+  });
+
+  test('объясняет, что list_staff не нужен ради мастеров и цен конкретной услуги', () => {
+    const p = buildSystemPrompt({});
+    expect(p).toMatch(/list_staff/);
+    expect(p).toMatch(/не вызывай list_staff/i);
+  });
+
+  test('требует отвечать, когда данных уже достаточно', () => {
+    const p = buildSystemPrompt({});
+    expect(p).toMatch(/данных уже достаточно/i);
+  });
+});

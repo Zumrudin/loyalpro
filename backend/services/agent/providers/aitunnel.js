@@ -21,12 +21,17 @@ function safeParse(s) {
 async function createMessage({ system, messages, tools }, opts = {}) {
   const client = opts.client || aitunnel.makeClient(opts.apiKey);
   const msgs = system ? [{ role: 'system', content: system }, ...messages] : messages.slice();
-  const resp = await client.chat.completions.create({
+  const params = {
     model: opts.model || config.AITUNNEL_CHAT_MODEL,
     max_tokens: opts.maxTokens || config.AGENT_MAX_TOKENS,
     messages: msgs,
-    tools: toOpenAITools(tools),
-  });
+  };
+  // Пустой tools API отвергает, поэтому опускаем ключ целиком. Так оркестратор
+  // делает добивочный вызов «ответь прозой» — без инструментов модель обязана
+  // выдать текст, а не очередной tool_call.
+  const openAITools = toOpenAITools(tools);
+  if (openAITools.length) params.tools = openAITools;
+  const resp = await client.chat.completions.create(params);
   const choice = (resp.choices && resp.choices[0]) || {};
   const m = choice.message || {};
   const text = (m.content || '').trim();

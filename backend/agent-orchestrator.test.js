@@ -123,6 +123,66 @@ describe('runDialog', () => {
     deps.provider.createMessage.mockResolvedValue(
       toolResp('get_available_slots', { staff_yc_id: 1, service_yc_id: 1, date: '2026-07-20' }));
     await orchestrator.runDialog(1, 'k', { deps });
+    // MAX_ITERS вызовов в цикле + 1 добивочный без инструментов (реплик-то нет).
+    expect(deps.provider.createMessage).toHaveBeenCalledTimes(orchestrator.MAX_ITERS + 1);
+  });
+});
+
+// ── Регресс: немой ход (инцидент 2026-07-19, диалог 79200255591) ──
+// Flash Lite отдаёт tool_calls с пустым content. Мультизапрос (2 услуги × 2 пациента)
+// упёрся в MAX_ITERS=6, цикл вышел с replies=[] — клиент не получил НИЧЕГО.
+describe('исчерпание лимита tool-итераций', () => {
+  test('7 подряд tool-итераций укладываются в лимит и дают ответ', async () => {
+    const deps = makeDeps();
+    for (let i = 0; i < 7; i++) {
+      deps.provider.createMessage.mockResolvedValueOnce(
+        toolResp('get_available_slots', { date: '2026-07-20' }, `c${i}`));
+    }
+    deps.provider.createMessage.mockResolvedValueOnce(textResp('Свободно в 16:00 или 18:30.'));
+
+    const out = await orchestrator.runDialog(1, 'k', { deps, today: '2026-07-19' });
+
+    expect(out.replies).toEqual(['Свободно в 16:00 или 18:30.']);
+    expect(out.exhausted).toBeFalsy();
+  });
+
+  test('лимит исчерпан без единой реплики → добивочный вызов БЕЗ инструментов даёт ответ', async () => {
+    const deps = makeDeps();
+    deps.provider.createMessage.mockImplementation(async ({ tools }) => {
+      if (!tools || tools.length === 0) return textResp('Завтра есть окошки в 16:00 и 18:30.');
+      return toolResp('get_available_slots', { date: '2026-07-20' });
+    });
+
+    const out = await orchestrator.runDialog(1, 'k', { deps, today: '2026-07-19' });
+
+    expect(out.replies).toEqual(['Завтра есть окошки в 16:00 и 18:30.']);
+    expect(out.exhausted).toBe(true);
+    // Добивочный вызов идёт с пустым списком инструментов — модель обязана ответить прозой.
+    const lastArgs = deps.provider.createMessage.mock.calls.at(-1)[0];
+    expect(lastArgs.tools).toEqual([]);
+  });
+
+  test('даже добивочный вызов молчит → ход помечен exhausted, реплик нет', async () => {
+    const deps = makeDeps();
+    deps.provider.createMessage.mockImplementation(async ({ tools }) => {
+      if (!tools || tools.length === 0) return textResp('');
+      return toolResp('get_available_slots', { date: '2026-07-20' });
+    });
+
+    const out = await orchestrator.runDialog(1, 'k', { deps, today: '2026-07-19' });
+
+    expect(out.replies).toEqual([]);
+    expect(out.exhausted).toBe(true);
+  });
+
+  test('лимит исчерпан, но текст уже был → добивочного вызова НЕ делаем', async () => {
+    const deps = makeDeps();
+    deps.provider.createMessage.mockImplementation(async () =>
+      toolResp('get_available_slots', { date: '2026-07-20' }, 'c1', 'Секунду, уточняю…'));
+
+    const out = await orchestrator.runDialog(1, 'k', { deps, today: '2026-07-19' });
+
     expect(deps.provider.createMessage).toHaveBeenCalledTimes(orchestrator.MAX_ITERS);
+    expect(out.replies.length).toBeGreaterThan(0);
   });
 });

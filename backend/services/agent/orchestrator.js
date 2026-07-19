@@ -8,7 +8,11 @@ const { buildSystemPrompt } = require('./system-prompt');
 const { createLogger } = require('../../logger');
 const logger = createLogger('AgentOrchestrator');
 
-const MAX_ITERS = 6;   // защитный лимит tool-use итераций на один ход
+// Защитный лимит tool-use итераций на один ход. Не жадничать: Gemini Flash Lite
+// отдаёт tool_calls с ПУСТЫМ content, поэтому упёршийся в лимит ход не оставляет
+// ни единой реплики. Мультизапрос («мне пилинг, а дочке фототерапия») легко берёт
+// 7–8 вызовов: list_services → list_staff → dates → slots × N.
+const MAX_ITERS = 12;
 const MAX_REGEN = 2;   // сколько раз перегенерировать при новом входящем во время прогона
 
 // Пишущие инструменты: их результат нельзя «выбросить» перегенерацией.
@@ -65,6 +69,7 @@ async function runDialog(salonId, dialogKey, opts = {}) {
     const replies = [];
     let escalated = false;
     let sideEffect = false;
+    let exhausted = false;
 
     for (let i = 0; i < MAX_ITERS; i++) {
       const resp = await provider.createMessage(
@@ -95,6 +100,20 @@ async function runDialog(salonId, dialogKey, opts = {}) {
       }
       for (const m of provider.toolResultMessages(results)) convo.push(m);
       if (escalated) break;
+      if (i === MAX_ITERS - 1) exhausted = true;
+    }
+
+    // Лимит выбило, а связного ответа так и не появилось (модель всё это время
+    // молча дёргала инструменты). Данные уже собраны — грех их выбрасывать:
+    // добиваем одним вызовом БЕЗ инструментов, чтобы модель была вынуждена
+    // ответить прозой. Без этого ход завершался нулём реплик и клиент — тишиной.
+    if (exhausted && replies.length === 0) {
+      logger.warn(`dialog ${dialogKey}: исчерпан лимит tool-итераций (${MAX_ITERS}) без единой реплики — добивочный вызов без инструментов`);
+      const final = await provider.createMessage(
+        { system, messages: convo.slice(), tools: [] },
+        { client: opts.client });
+      if (final.text) replies.push(final.text);
+      else logger.warn(`dialog ${dialogKey}: добивочный вызов тоже без текста — ответ клиенту берёт на себя диспетчер`);
     }
 
     // Пришло ли новое входящее, пока мы думали?
@@ -105,7 +124,7 @@ async function runDialog(salonId, dialogKey, opts = {}) {
     }
 
     await state.setWatermark(salonId, dialogKey, watermark);
-    return { replies, escalated, sideEffect };
+    return { replies, escalated, sideEffect, exhausted };
   }
 
   return { replies: [], escalated: false, sideEffect: false };

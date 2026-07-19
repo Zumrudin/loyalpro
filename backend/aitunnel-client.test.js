@@ -13,3 +13,12 @@ describe('aitunnel.makeClient', () => {
     expect(c.baseURL).toContain('api.aitunnel.ru/v1');
   });
 });
+
+// Без таймаута дефолт SDK = 600с × ретраи: залипший запрос = немой диалог на полчаса.
+describe('таймауты', () => {
+  test('клиент создаётся с явным таймаутом и ограниченными ретраями', () => {
+    const c = aitunnel.makeClient('sk-test');
+    expect(c.timeout).toBe(60000);
+    expect(c.maxRetries).toBe(2);
+  });
+});

@@ -4,12 +4,20 @@ const config = require('../../config');
 const agentSettings = require('../agent-settings');
 const chatpush = require('../chatpush');
 const orchestratorDefault = require('./orchestrator');
+const escalateTool = require('./tools/escalate-to-operator');
 const { createLogger } = require('../../logger');
 const logger = createLogger('AgentDispatcher');
 
 // Фраза-страховка, если модель эскалировала, не написав объявления о переводе.
 const DEFAULT_HANDOVER_TEXT =
   'Передаю ваш диалог администратору клиники — он подключится с минуты на минуту 🤍';
+
+// Инвариант «агент никогда не молчит»: если ход не дал НИ ОДНОЙ реплики (упёрся
+// в лимит итераций, провайдер отвалился, БД легла) — клиент всё равно получает
+// сообщение, а диалог уходит живому человеку. Инцидент 2026-07-19: ход завершился
+// с replies=[], watermark уже сдвинут → ретрая не будет, клиент завис навсегда.
+const DEFAULT_SILENT_FALLBACK_TEXT =
+  'Секунду, уточняю детали — передаю ваш вопрос администратору клиники, он ответит вам с минуты на минуту 🤍';
 
 // Один PM2-процесс → in-memory состояние (спека [2]: дебаунс на один процесс).
 const timers = new Map();   // key → { timer, meta }  (дебаунс серии)
@@ -41,11 +49,20 @@ async function process(salonId, dialogKey, meta, opts = {}) {
   const settings = opts.settings || agentSettings;
   const orchestrator = opts.orchestrator || orchestratorDefault;
   const send = opts.send || defaultSend;
+  const escalate = opts.escalate || defaultEscalate;
+
+  // Гейт — ВНЕ общего try: его падение fail-closed (молчим). Мы не знаем, разрешён
+  // ли номер, а страховочный ответ из catch написал бы тому, кому писать нельзя.
+  let gate;
+  try {
+    gate = await settings.isAllowed(salonId, meta.phone);
+  } catch (e) {
+    logger.error(`dialog ${dialogKey} gate failed: ${e.message} — молчим (fail-closed)`);
+    return;
+  }
+  if (!gate.allow) { logger.info(`gate skip ${dialogKey} (${gate.reason})`); return; }
 
   try {
-    const gate = await settings.isAllowed(salonId, meta.phone);
-    if (!gate.allow) { logger.info(`gate skip ${dialogKey} (${gate.reason})`); return; }
-
     if (running.has(k)) { rerun.add(k); return; }
     running.add(k);
     try {
@@ -63,6 +80,11 @@ async function process(salonId, dialogKey, meta, opts = {}) {
         // на каждое последующее входящее (иначе фраза перевода спамит клиента).
       } else if (res.escalated && replies.length === 0) {
         await send(meta, DEFAULT_HANDOVER_TEXT);
+      } else if (replies.length === 0) {
+        // Бот не смог ответить. Молчать нельзя — зовём человека и говорим об этом.
+        logger.warn(`dialog ${dialogKey}: ход без реплик (exhausted=${!!res.exhausted}) — страховочный ответ + эскалация`);
+        await handOverSilently(salonId, dialogKey, meta, send, escalate,
+          res.exhausted ? 'агент исчерпал лимит инструментов без ответа' : 'агент не сформировал ответ');
       } else {
         for (const text of replies) await send(meta, text);
       }
@@ -75,7 +97,31 @@ async function process(salonId, dialogKey, meta, opts = {}) {
     }
   } catch (e) {
     logger.error(`dialog ${dialogKey} process failed: ${e.message}`);
+    // Тот же инвариант на аварийном пути: упавший прогон не должен обернуться
+    // тишиной в чате. Гейт сюда не попадает — он отсекается до running-блока.
+    await handOverSilently(salonId, dialogKey, meta, send, escalate,
+      `сбой обработки: ${e.message}`);
   }
+}
+
+// Отдать диалог человеку и предупредить клиента. Обе операции — best-effort:
+// падение эскалации (БД) не должно съесть сообщение клиенту, и наоборот.
+async function handOverSilently(salonId, dialogKey, meta, send, escalate, reason) {
+  try {
+    await escalate(salonId, dialogKey, reason);
+  } catch (e) {
+    logger.error(`dialog ${dialogKey}: эскалация не удалась (${e.message}) — клиенту всё равно отвечаем`);
+  }
+  try {
+    await send(meta, DEFAULT_SILENT_FALLBACK_TEXT);
+  } catch (e) {
+    logger.error(`dialog ${dialogKey}: страховочное сообщение не ушло: ${e.message}`);
+  }
+}
+
+// Пометить диалог эскалированным (та же запись, что делает инструмент агента).
+async function defaultEscalate(salonId, dialogKey, reason) {
+  return escalateTool.run(salonId, { reason }, { dialogKey });
 }
 
 // Отправка одной реплики обратно клиенту через chatpush.

@@ -11,14 +11,16 @@ function makeClient(apiKey) {
 // Вызов Claude + нормализация ответа в провайдер-агностичный вид.
 async function createMessage({ system, messages, tools }, opts = {}) {
   const client = opts.client || makeClient(opts.apiKey);
-  const msg = await client.messages.create({
+  const params = {
     model: opts.model || config.AGENT_LLM_MODEL,
     max_tokens: opts.maxTokens || config.AGENT_MAX_TOKENS,
     thinking: { type: 'adaptive' },
     system,
-    tools,
     messages,
-  });
+  };
+  // Пустой список — добивочный вызов оркестратора «ответь прозой без инструментов».
+  if (tools && tools.length) params.tools = tools;
+  const msg = await client.messages.create(params);
   const blocks = (msg && msg.content) || [];
   const text = blocks.filter(b => b.type === 'text').map(b => b.text).join('\n').trim();
   const toolCalls = blocks
