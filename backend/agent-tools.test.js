@@ -4,11 +4,13 @@ jest.mock('./services/agent-rag', () => ({ buildKnowledgeContext: jest.fn() }));
 jest.mock('./db', () => ({ db: { any: jest.fn(), one: jest.fn(), oneOrNone: jest.fn() } }));
 jest.mock('./services/yclients', () => ({ ycGet: jest.fn() }));
 jest.mock('./services/yclients-booking', () => ({ ycGetBookTimes: jest.fn(), ycGetStaffSchedule: jest.fn(), ycGetStaffSeances: jest.fn() }));
+jest.mock('./services/agent-settings', () => ({ loadServiceFilterSafe: jest.fn() }));
 
 const { db } = require('./db');
 const rag = require('./services/agent-rag');
 const { ycGet } = require('./services/yclients');
 const { ycGetBookTimes, ycGetStaffSchedule, ycGetStaffSeances } = require('./services/yclients-booking');
+const settings = require('./services/agent-settings');
 
 const searchKb = require('./services/agent/tools/search-knowledge-base');
 const listServices = require('./services/agent/tools/list-services');
@@ -17,7 +19,12 @@ const getSlots = require('./services/agent/tools/get-available-slots');
 const getDates = require('./services/agent/tools/get-available-dates');
 const getClient = require('./services/agent/tools/get-client');
 
-beforeEach(() => jest.clearAllMocks());
+beforeEach(() => {
+  jest.clearAllMocks();
+  settings.loadServiceFilterSafe.mockResolvedValue({
+    mode: 'all', denyServices: new Set(), allowServices: new Set(), denyPairs: new Set(),
+  });
+});
 
 describe('search_knowledge_base', () => {
   test('schema имеет имя и query', () => {
@@ -80,6 +87,25 @@ describe('list_services', () => {
     const out = await listServices.run(1, {});
     expect(out.services[0]).toEqual(expect.objectContaining({ yc_id: 7, title: 'Ботокс', staff: [] }));
     expect(ycGet).not.toHaveBeenCalled();
+  });
+  test('скрывает deny-услуги и deny-пары услуга×мастер', async () => {
+    db.any
+      .mockResolvedValueOnce([])                                                            // services_config
+      .mockResolvedValueOnce([{ yclients_staff_id: 5, name: 'Аня' }, { yclients_staff_id: 6, name: 'Пери' }]); // staff_members
+    db.one.mockResolvedValue({ id: 1, yclients_company_id: 100 });
+    ycGet.mockResolvedValue([
+      { id: 10, title: 'A', price_min: 1000, price_max: 1000, active: 1, staff: [{ id: 5 }, { id: 6 }] },
+      { id: 20, title: 'B', price_min: 500, price_max: 500, active: 1, staff: [{ id: 6 }] },
+    ]);
+    settings.loadServiceFilterSafe.mockResolvedValue({
+      mode: 'all', denyServices: new Set(['20']), allowServices: new Set(), denyPairs: new Set(['10:5']),
+    });
+    const out = await listServices.run(1, {});
+    const ids = out.services.map(s => s.yc_id);
+    expect(ids).not.toContain(20);              // услуга целиком скрыта
+    const a = out.services.find(s => s.yc_id === 10);
+    expect(a.staff).not.toContain('Аня');       // пара 10:5 скрыта (Аня = мастер 5)
+    expect(a.staff).toContain('Пери');          // мастер 6 остаётся
   });
   test('YClients упал → фолбэк на конфиг', async () => {
     db.any
