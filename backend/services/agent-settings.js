@@ -5,6 +5,7 @@
 // Решение допуска делегируется чистому services/agent-gate.
 // ============================================================
 const { db } = require('../db');
+const { ycGet } = require('./yclients');
 const { normalizePhoneKey, decideGate } = require('./agent-gate');
 
 const DEFAULTS = { enabled: false, mode: 'all' };
@@ -143,8 +144,42 @@ async function loadServiceFilterSafe(salonId) {
   }
 }
 
+// Полный список услуг YClients + мастера + текущая видимость (для админки).
+async function getServicesForAdmin(salonId) {
+  const salon = await db.oneOrNone(
+    `SELECT id, yclients_company_id, yclients_partner_token, yclients_user_token
+       FROM salons WHERE id=$1`, [salonId]);
+  const staffRows = await db.any(
+    `SELECT yclients_staff_id, name FROM staff_members
+      WHERE salon_id=$1 AND is_active=true`, [salonId]);
+  const staffNameById = new Map(staffRows.map(s => [String(s.yclients_staff_id), s.name]));
+  let live = [];
+  if (salon && salon.yclients_company_id) {
+    try {
+      const data = await ycGet(salon, `/services/${salon.yclients_company_id}`);
+      live = Array.isArray(data) ? data : [];
+    } catch (_) { live = []; }
+  }
+  const filter = await loadServiceFilter(salonId);   // админке нужен реальный статус, не fail-open
+  return {
+    serviceMode: filter.mode,
+    services: live.filter(s => s.active === 1).map(s => ({
+      yc_id: s.id,
+      title: s.title,
+      price_min: s.price_min,
+      price_max: s.price_max,
+      visible: (require('./agent/service-filter')).decideServiceVisible(filter, s.id),
+      staff: (s.staff || []).map(st => ({
+        yc_id: st.id,
+        name: staffNameById.get(String(st.id)) || `#${st.id}`,
+        hidden: filter.denyPairs.has(`${String(s.id)}:${String(st.id)}`),
+      })),
+    })),
+  };
+}
+
 module.exports = {
   getSettings, updateSettings, listNumberRules, addNumberRule, removeNumberRule, isAllowed,
   getServiceMode, updateServiceMode, listServiceRules, addServiceRule, removeServiceRule,
-  loadServiceFilter, loadServiceFilterSafe,
+  loadServiceFilter, loadServiceFilterSafe, getServicesForAdmin,
 };

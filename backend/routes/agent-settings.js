@@ -52,4 +52,47 @@ router.delete('/number-rules/:id', adminOnly, async (req, res) => {
   } catch (e) { logger.error(e.message); res.status(500).json({ error: 'server error' }); }
 });
 
+// GET /api/agent/service-settings → { serviceMode }
+router.get('/service-settings', adminOnly, async (req, res) => {
+  try { res.json({ serviceMode: await settings.getServiceMode(req.user.salonId) }); }
+  catch (e) { logger.error(e.message); res.status(500).json({ error: 'server error' }); }
+});
+
+// PUT /api/agent/service-settings { serviceMode }
+router.put('/service-settings', adminOnly, async (req, res) => {
+  try { res.json(await settings.updateServiceMode(req.user.salonId, (req.body || {}).serviceMode)); }
+  catch (e) { logger.error(e.message); res.status(500).json({ error: 'server error' }); }
+});
+
+// GET /api/agent/services → живой список YClients + видимость
+router.get('/services', adminOnly, async (req, res) => {
+  try { res.json(await settings.getServicesForAdmin(req.user.salonId)); }
+  catch (e) { logger.error(e.message); res.status(500).json({ error: 'server error' }); }
+});
+
+// GET /api/agent/service-rules → { rules }
+router.get('/service-rules', adminOnly, async (req, res) => {
+  try { res.json({ rules: await settings.listServiceRules(req.user.salonId) }); }
+  catch (e) { logger.error(e.message); res.status(500).json({ error: 'server error' }); }
+});
+
+// POST /api/agent/service-rules { ycServiceId, ycStaffId?, ruleType, note }
+router.post('/service-rules', adminOnly, async (req, res) => {
+  try {
+    const { ycServiceId, ycStaffId, ruleType, note } = req.body || {};
+    res.json(await settings.addServiceRule(req.user.salonId, { ycServiceId, ycStaffId, ruleType, note }));
+  } catch (e) {
+    if (e.code === 'BAD_SERVICE') return res.status(400).json({ error: 'Не указана услуга' });
+    logger.error(e.message); res.status(500).json({ error: 'server error' });
+  }
+});
+
+// DELETE /api/agent/service-rules/:id
+router.delete('/service-rules/:id', adminOnly, async (req, res) => {
+  try {
+    await settings.removeServiceRule(req.user.salonId, parseInt(req.params.id, 10));
+    res.json({ ok: true });
+  } catch (e) { logger.error(e.message); res.status(500).json({ error: 'server error' }); }
+});
+
 module.exports = router;
