@@ -63,7 +63,8 @@ describe('runDialog', () => {
       .mockResolvedValueOnce(textResp('Свободно 10:00. Записать?'));
     const out = await orchestrator.runDialog(1, 'k', { deps, ctx: { phone: '79001112233' } });
     expect(deps.registry.handlers.get_available_slots)
-      .toHaveBeenCalledWith(1, { staff_yc_id: 55, service_yc_id: 7, date: '2026-07-20' }, { dialogKey: 'k', clientPhone: '79001112233' });
+      .toHaveBeenCalledWith(1, { staff_yc_id: 55, service_yc_id: 7, date: '2026-07-20' },
+        { dialogKey: 'k', clientPhone: '79001112233', nowMs: expect.any(Number) });
     expect(out.replies).toContain('Свободно 10:00. Записать?');
     expect(out.sideEffect).toBe(false);
     const secondCallMessages = deps.provider.createMessage.mock.calls[1][0].messages;
@@ -86,6 +87,24 @@ describe('runDialog', () => {
     const out = await orchestrator.runDialog(1, 'k', { deps });
     expect(out.escalated).toBe(true);
     expect(deps.provider.createMessage).not.toHaveBeenCalled();
+  });
+
+  test('вернули боту после эскалации (status=bot + escalated_reason) → в промпт идёт анти-ре-эскалация', async () => {
+    const deps = makeDeps({
+      state: { getOrCreate: jest.fn(async () => ({ status: 'bot', escalated_reason: 'прошлый негатив' })) },
+    });
+    deps.provider.createMessage.mockResolvedValueOnce(textResp('Конечно, помогу с записью!'));
+    await orchestrator.runDialog(1, 'k', { deps });
+    const sentSystem = deps.provider.createMessage.mock.calls[0][0].system;
+    expect(sentSystem).toMatch(/ВЕРНУЛ ТЕБЕ АДМИНИСТРАТОР/i);
+  });
+
+  test('обычный диалог (bot, без escalated_reason) → блока анти-ре-эскалации НЕТ', async () => {
+    const deps = makeDeps();
+    deps.provider.createMessage.mockResolvedValueOnce(textResp('Здравствуйте!'));
+    await orchestrator.runDialog(1, 'k', { deps });
+    const sentSystem = deps.provider.createMessage.mock.calls[0][0].system;
+    expect(sentSystem).not.toMatch(/ВЕРНУЛ ТЕБЕ АДМИНИСТРАТОР/i);
   });
 
   test('новое входящее во время прогона без side-effect → черновик выброшен, перегенерация', async () => {

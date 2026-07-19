@@ -11,7 +11,7 @@ async function getOrCreate(salonId, dialogKey) {
      VALUES ($1, $2)
      ON CONFLICT (salon_id, dialog_key)
        DO UPDATE SET last_activity = now()
-     RETURNING id, salon_id, dialog_key, status, collected, watermark_ts, dirty`,
+     RETURNING id, salon_id, dialog_key, status, collected, watermark_ts, dirty, escalated_reason`,
     [salonId, dialogKey]);
 }
 

@@ -83,6 +83,14 @@ test('эскалация с пустой (пробельной) репликой
   expect(d.send).toHaveBeenCalledWith(meta, expect.stringContaining('администратор'));
 });
 
+test('уже-эскалированный диалог → бот молчит, не переотправляет фразу перевода (регрессия)', async () => {
+  const d = deps({ orchestrator: { runDialog: jest.fn(async () => ({ replies: [], escalated: true, alreadyEscalated: true })) } });
+  dispatcher.enqueue(1, 'k', meta, d);
+  await jest.advanceTimersByTimeAsync(1000);
+  expect(d.orchestrator.runDialog).toHaveBeenCalledTimes(1);
+  expect(d.send).not.toHaveBeenCalled();
+});
+
 test('сообщение во время прогона → ровно один повторный прогон, лишнего от таймера нет (I1)', async () => {
   const d = deps();
   let runs = 0;

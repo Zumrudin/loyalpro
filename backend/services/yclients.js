@@ -258,14 +258,24 @@ async function ycGetServiceCatalog(salon, staffIds = []) {
 
   const priced = (Array.isArray(catalog) ? catalog : []).filter(s => Number(s.price_max) > 0);
   const staffIdsByService = new Map();
+  // Достоверная цена per-staff: в ответе /services?staff_id={id} price_min/price_max
+  // относятся к цене этого мастера за услугу. staffPricesByService: svcIdStr →
+  // Map<staffIdStr, {price_min, price_max}>. Нужна, т.к. цена процедуры может
+  // отличаться между специалистами (врач vs. главный врач).
+  const staffPricesByService = new Map();
   for (const { id, services } of perStaff) {
     for (const s of services) {
       const k = String(s.id);
       if (!staffIdsByService.has(k)) staffIdsByService.set(k, new Set());
       staffIdsByService.get(k).add(String(id));
+      if (!staffPricesByService.has(k)) staffPricesByService.set(k, new Map());
+      staffPricesByService.get(k).set(String(id), {
+        price_min: Number(s.price_min) || 0,
+        price_max: Number(s.price_max) || 0,
+      });
     }
   }
-  const data = { priced, categories: Array.isArray(categories) ? categories : [], staffIdsByService };
+  const data = { priced, categories: Array.isArray(categories) ? categories : [], staffIdsByService, staffPricesByService };
   _svcCatalogCache[key] = { ts: Date.now(), data };
   return data;
 }

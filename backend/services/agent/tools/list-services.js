@@ -34,20 +34,36 @@ async function run(salonId, _input) {
 
   // Достоверная привязка услуга→мастера строится per-staff запросами (поле staff
   // в общем /services урезано). staffIdsByService: svcIdStr → Set(staffIdStr).
-  let priced = [], staffIdsByService = new Map();
+  // staffPricesByService: svcIdStr → Map<staffIdStr,{price_min,price_max}> — цена
+  // у конкретного мастера (может отличаться: врач vs. главный врач).
+  let priced = [], staffIdsByService = new Map(), staffPricesByService = new Map();
   if (salon && salon.yclients_company_id) {
     try {
       const cat = await ycGetServiceCatalog(salon, staffRows.map(r => r.yclients_staff_id));
       priced = cat.priced;
       staffIdsByService = cat.staffIdsByService;
+      staffPricesByService = cat.staffPricesByService || new Map();
     } catch (_) { /* YClients недоступен → фолбэк на заголовки из конфига */ }
   }
 
   // Мастера, кто делает услугу: только активные, реально привязанные; минус deny-пары.
-  const staffNamesOf = (s) => svcFilter
-    .filterServiceStaff(filter, s.id, [...(staffIdsByService.get(String(s.id)) || new Set())])
-    .map(id => staffNameById.get(String(id)))
-    .filter(Boolean);
+  // У каждого — его цена за услугу (фолбэк на общий диапазон услуги, если per-staff нет).
+  const staffOf = (s) => {
+    const priceMap = staffPricesByService.get(String(s.id)) || new Map();
+    return svcFilter
+      .filterServiceStaff(filter, s.id, [...(staffIdsByService.get(String(s.id)) || new Set())])
+      .map(id => {
+        const name = staffNameById.get(String(id));
+        if (!name) return null;
+        const p = priceMap.get(String(id));
+        return {
+          name,
+          price_min: p && p.price_min ? p.price_min : s.price_min,
+          price_max: p && p.price_max ? p.price_max : s.price_max,
+        };
+      })
+      .filter(Boolean);
+  };
 
   let services;
   if (priced.length) {
@@ -58,7 +74,7 @@ async function run(salonId, _input) {
         title: s.title,
         price_min: s.price_min,
         price_max: s.price_max,
-        staff: staffNamesOf(s),   // мастера, выполняющие услугу
+        staff: staffOf(s),   // мастера с ценой каждого: [{name, price_min, price_max}]
       }));
   } else {
     // Нет живых данных (нет YClients-компании или API упал) → отдаём хотя бы заголовки из конфига.

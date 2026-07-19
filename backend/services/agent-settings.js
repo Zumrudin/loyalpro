@@ -181,6 +181,44 @@ async function loadServiceFilterSafe(salonId) {
   }
 }
 
+// ── Стоп-темы: чем клиника не занимается вообще (даже не консультирует) ──
+// Отдаёт массив строк тем. Кидает при сбое БД.
+async function loadStopTopics(salonId) {
+  if (!salonId) return [];
+  const rows = await db.any(
+    `SELECT topic FROM agent_stop_topics WHERE salon_id=$1 ORDER BY id`, [salonId]);
+  return rows.map(r => String(r.topic || '').trim()).filter(Boolean);
+}
+
+// Fail-open обёртка: при сбое БД → пустой список. Осознанный компромисс —
+// транзиентный сбой БД не должен ронять весь диалог. Риск: в этот момент агент
+// не увидит стоп-темы. Если понадобится fail-closed, менять здесь.
+async function loadStopTopicsSafe(salonId) {
+  try { return await loadStopTopics(salonId); }
+  catch (_) { return []; }
+}
+
+// Список стоп-тем для админки (с id, чтобы можно было удалять).
+async function listStopTopics(salonId) {
+  return db.any(
+    `SELECT id, topic, note, created_at FROM agent_stop_topics
+      WHERE salon_id=$1 ORDER BY id`, [salonId]);
+}
+
+async function addStopTopic(salonId, topic, note) {
+  const t = String(topic || '').trim();
+  if (!t) throw new Error('Пустая стоп-тема');
+  return db.oneOrNone(
+    `INSERT INTO agent_stop_topics (salon_id, topic, note) VALUES ($1,$2,$3)
+     ON CONFLICT (salon_id, lower(topic)) DO NOTHING
+     RETURNING id, topic, note`,
+    [salonId, t, note || null]);
+}
+
+async function removeStopTopic(salonId, id) {
+  await db.query('DELETE FROM agent_stop_topics WHERE salon_id=$1 AND id=$2', [salonId, id]);
+}
+
 // Полный каталог услуг, сгруппированный по категориям, с ДОСТОВЕРНЫМИ мастерами
 // (кто реально выполняет услугу) и текущей видимостью — для экрана админки.
 // Структура: { serviceMode, categories: [{ id, title, services: [{…, staff:[…]}] }] }.
@@ -259,4 +297,5 @@ module.exports = {
   getServiceMode, updateServiceMode, listServiceRules, addServiceRule, removeServiceRule,
   removeServiceRuleByKey, applyServiceVisibility, setServicesVisibilityBulk,
   loadServiceFilter, loadServiceFilterSafe, getServicesForAdmin,
+  loadStopTopics, loadStopTopicsSafe, listStopTopics, addStopTopic, removeStopTopic,
 };

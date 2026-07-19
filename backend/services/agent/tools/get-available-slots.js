@@ -28,6 +28,33 @@ const schema = {
 const toMin = (t) => { const [h, m] = String(t).split(':').map(Number); return h * 60 + m; };
 const toHHMM = (min) => `${String(Math.floor(min / 60)).padStart(2, '0')}:${String(min % 60).padStart(2, '0')}`;
 
+// Текущий момент по Москве: { date:'YYYY-MM-DD', minutes: часы*60+минуты }.
+function moscowNow(ms) {
+  const d = new Date(ms);
+  const date = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Moscow' }).format(d);
+  const hm = new Intl.DateTimeFormat('en-GB',
+    { timeZone: 'Europe/Moscow', hour: '2-digit', minute: '2-digit', hour12: false }).format(d);
+  const [h, m] = hm.split(':').map(Number);
+  return { date, minutes: h * 60 + m };
+}
+
+// Отрезаем уже прошедшее время, если дата — сегодня по Москве. Иначе не трогаем.
+// Нельзя предлагать пациенту окно, которое наступит в прошлом.
+function dropPastToday(result, date, nowMs) {
+  const now = moscowNow(nowMs);
+  if (date !== now.date) return result;
+  const cut = now.minutes;
+  if (Array.isArray(result.slots)) {
+    result.slots = result.slots.filter(s => toMin(s.time) > cut);
+  }
+  if (Array.isArray(result.free_ranges)) {
+    result.free_ranges = result.free_ranges
+      .map(r => ({ from: toMin(r.from) < cut ? toHHMM(cut) : r.from, to: r.to }))
+      .filter(r => toMin(r.from) < toMin(r.to) && toMin(r.to) > cut);
+  }
+  return result;
+}
+
 // 5-мин грид is_free → непрерывные интервалы [{from,to}] (to эксклюзивно, +5 мин к последней точке).
 function seancesToRanges(seances) {
   const free = (Array.isArray(seances) ? seances : [])
@@ -55,10 +82,11 @@ function rangesToSlots(ranges, date, step) {
   return slots;
 }
 
-async function run(salonId, input) {
+async function run(salonId, input, ctx = {}) {
   const serviceId = input && input.service_yc_id;
   const staffId = input && input.staff_yc_id;
   const date = input && input.date;
+  const nowMs = (ctx && ctx.nowMs) || Date.now();
   if (!staffId || !date) return { error: 'Нужны staff_yc_id и date (YYYY-MM-DD).' };
   // Скрытую услугу/пару не предлагаем (мягкий пустой ответ, без «технических сложностей»).
   if (serviceId) {
@@ -76,14 +104,14 @@ async function run(salonId, input) {
       const slots = (Array.isArray(times) ? times : []).map(t => ({
         time: t.time, datetime: t.datetime, seance_length: t.seance_length,
       }));
-      if (slots.length) return { slots, source: 'booking' };
+      if (slots.length) return dropPastToday({ slots, source: 'booking' }, date, nowMs);
     }
     // 2) Иначе (или пусто) — свободность из графика (management API, без онлайн-записи).
     const seances = await ycGetStaffSeances(salon, staffId, date);
     const ranges = seancesToRanges(seances);
     const freeRanges = ranges.map(r => ({ from: toHHMM(r.start), to: toHHMM(r.end) }));
     const slots = rangesToSlots(ranges, date, DEFAULT_STEP_MIN);
-    return { slots, free_ranges: freeRanges, source: 'schedule' };
+    return dropPastToday({ slots, free_ranges: freeRanges, source: 'schedule' }, date, nowMs);
   } catch (e) {
     return { error: `Не удалось получить слоты: ${e.message}` };
   }

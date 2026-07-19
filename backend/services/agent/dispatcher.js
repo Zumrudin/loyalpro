@@ -49,11 +49,19 @@ async function process(salonId, dialogKey, meta, opts = {}) {
     if (running.has(k)) { rerun.add(k); return; }
     running.add(k);
     try {
-      const res = await orchestrator.runDialog(salonId, dialogKey, { ctx: { phone: meta.phone } });
+      // Стоп-темы грузим здесь (у диспетчера уже есть settings), чтобы не тащить
+      // зависимость от БД в оркестратор. Отсутствие метода в моке → пустой список.
+      const stopTopics = settings.loadStopTopicsSafe
+        ? await settings.loadStopTopicsSafe(salonId) : [];
+      const res = await orchestrator.runDialog(salonId, dialogKey,
+        { ctx: { phone: meta.phone }, stopTopics });
       // Доставляем реплики, в т.ч. на ходе эскалации — это явное объявление о переводе.
-      // Инвариант: при эскалации клиент никогда не остаётся без сообщения.
+      // Инвариант: при СВЕЖЕЙ эскалации клиент никогда не остаётся без сообщения.
       const replies = (res.replies || []).filter((t) => t && t.trim());
-      if (res.escalated && replies.length === 0) {
+      if (res.alreadyEscalated) {
+        // Диалог уже у оператора — бот молчит, не переотправляем объявление о переводе
+        // на каждое последующее входящее (иначе фраза перевода спамит клиента).
+      } else if (res.escalated && replies.length === 0) {
         await send(meta, DEFAULT_HANDOVER_TEXT);
       } else {
         for (const text of replies) await send(meta, text);

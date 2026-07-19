@@ -1023,6 +1023,25 @@ async function runMigrations(client) {
       ON agent_service_rules (salon_id)
   `).catch(() => {});
 
+  // agent_stop_topics — темы, которыми клиника не занимается ВООБЩЕ (даже не
+  // консультирует). Отличается от agent_service_rules: там прячутся конкретные
+  // yc_service_id, а здесь тема, которой в каталоге может не быть вовсе
+  // (например «новообразования: родинки, папилломы»). В промпте имеет приоритет
+  // над каталогом — иначе агент предложит смежную услугу в обход отказа.
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS agent_stop_topics (
+      id         SERIAL PRIMARY KEY,
+      salon_id   INTEGER REFERENCES salons(id) ON DELETE CASCADE,
+      topic      TEXT NOT NULL,
+      note       TEXT,
+      created_at TIMESTAMP DEFAULT NOW()
+    )
+  `).catch(() => {});
+  await client.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS agent_stop_topics_uniq
+      ON agent_stop_topics (salon_id, lower(topic))
+  `).catch(() => {});
+
   // ── Состояние диалога агента + аудит вызовов инструментов (спека booking-agent) ──
   await client.query(`
     CREATE TABLE IF NOT EXISTS agent_dialogs (

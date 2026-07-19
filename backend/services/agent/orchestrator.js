@@ -19,6 +19,12 @@ function todayMoscow() {
   return new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Moscow' }).format(new Date());
 }
 
+// HH:MM по Москве (для промпта — чтобы модель не предлагала прошедшее время).
+function nowTimeMoscow() {
+  return new Intl.DateTimeFormat('ru-RU',
+    { timeZone: 'Europe/Moscow', hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date());
+}
+
 // Прогнать один ход диалога. Возвращает { replies, escalated, sideEffect }.
 async function runDialog(salonId, dialogKey, opts = {}) {
   const d = opts.deps || {};
@@ -30,15 +36,26 @@ async function runDialog(salonId, dialogKey, opts = {}) {
 
   const dialog = await state.getOrCreate(salonId, dialogKey);
   if (dialog.status === 'escalated') {
-    return { replies: [], escalated: true, sideEffect: false };
+    // Диалог уже передан оператору. Бот молчит на все последующие входящие —
+    // объявление о переводе было отправлено в ход самой эскалации. Флаг
+    // alreadyEscalated отличает это от свежей эскалации, чтобы диспетчер
+    // не переотправлял фразу перевода на каждое новое сообщение.
+    return { replies: [], escalated: true, alreadyEscalated: true, sideEffect: false };
   }
 
   const system = buildSystemPrompt({
     salonName: opts.salonName,
     workingHours: opts.workingHours,
     today: opts.today || todayMoscow(),
+    now: opts.now || nowTimeMoscow(),
+    stopTopics: opts.stopTopics,   // загружает диспетчер (agent_stop_topics)
+    // status здесь всегда !== 'escalated' (иначе вышли бы выше). Непустой
+    // escalated_reason при статусе 'bot' = диалог вернул боту администратор →
+    // просим модель не эскалировать заново на уже разрешённом конфликте.
+    resumedFromEscalation: !!dialog.escalated_reason,
   });
-  const toolCtx = { dialogKey, clientPhone: ctx.phone };
+  // nowMs — чтобы инструменты слотов отрезали уже прошедшее время «сегодня».
+  const toolCtx = { dialogKey, clientPhone: ctx.phone, nowMs: opts.nowMs || Date.now() };
 
   for (let attempt = 0; attempt <= MAX_REGEN; attempt++) {
     const { messages, watermark } = await history.loadTranscript(salonId, dialogKey, { limit: 20 });
