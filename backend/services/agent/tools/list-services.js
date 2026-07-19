@@ -40,8 +40,9 @@ async function run(salonId, _input) {
     } catch (_) { /* YClients недоступен → фолбэк на заголовки из конфига */ }
   }
 
-  // Активные услуги с ценой — только то, что реально можно предложить и записать.
-  const active = live.filter(s => s.active === 1 && Number(s.price_max) > 0);
+  // Услуги с реальной ценой — база каталога. Видимость (учёт active YClients,
+  // deny/allow-правил админки) решает decideOfferVisible ниже.
+  const priced = live.filter(s => Number(s.price_max) > 0);
 
   // service.staff = [{ id, seance_length }] → имена мастеров, кто делает эту услугу.
   // Сначала выкидываем deny-пары услуга×мастер, затем резолвим в имена.
@@ -51,9 +52,9 @@ async function run(salonId, _input) {
     .filter(Boolean);
 
   let services;
-  if (active.length) {
-    services = active
-      .filter(s => svcFilter.decideServiceVisible(filter, s.id))
+  if (priced.length) {
+    services = priced
+      .filter(s => svcFilter.decideOfferVisible(filter, s.id, s.active === 1))
       .map(s => ({
         yc_id: s.id,
         title: s.title,

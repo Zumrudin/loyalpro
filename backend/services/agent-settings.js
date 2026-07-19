@@ -161,14 +161,18 @@ async function getServicesForAdmin(salonId) {
     } catch (_) { live = []; }
   }
   const filter = await loadServiceFilter(salonId);   // админке нужен реальный статус, не fail-open
+  const svcFilter = require('./agent/service-filter');
   return {
     serviceMode: filter.mode,
-    services: live.filter(s => s.active === 1).map(s => ({
+    // Весь каталог с ценой (не только active) — активность агента управляется этим
+    // экраном, а не флагом онлайн-записи YClients. `active` отдаём для UI.
+    services: live.filter(s => Number(s.price_max) > 0).map(s => ({
       yc_id: s.id,
       title: s.title,
       price_min: s.price_min,
       price_max: s.price_max,
-      visible: (require('./agent/service-filter')).decideServiceVisible(filter, s.id),
+      active: s.active === 1,
+      visible: svcFilter.decideOfferVisible(filter, s.id, s.active === 1),
       staff: (s.staff || []).map(st => ({
         yc_id: st.id,
         name: staffNameById.get(String(st.id)) || `#${st.id}`,

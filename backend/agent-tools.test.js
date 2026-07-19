@@ -110,6 +110,23 @@ describe('list_services', () => {
     expect(a.staff).not.toContain('Аня');       // пара 10:5 скрыта (Аня = мастер 5)
     expect(a.staff).toContain('Пери');          // мастер 6 остаётся
   });
+  test('active:0 услуга каталога показывается, если явно разрешена (allow)', async () => {
+    db.any
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{ yclients_staff_id: 5, name: 'Аня' }]);
+    db.one.mockResolvedValue({ id: 1, yclients_company_id: 100 });
+    ycGet.mockResolvedValue([
+      { id: 30, title: 'Филлер', price_min: 20000, price_max: 20000, active: 0, staff: [{ id: 5 }] }, // не в онлайн-записи
+      { id: 31, title: 'Прочее', price_min: 1000, price_max: 1000, active: 0, staff: [{ id: 5 }] },   // active:0, без allow → скрыта
+    ]);
+    settings.loadServiceFilterSafe.mockResolvedValue({
+      mode: 'all', denyServices: new Set(), allowServices: new Set(['30']), denyPairs: new Set(),
+    });
+    const out = await listServices.run(1, {});
+    const ids = out.services.map(s => s.yc_id);
+    expect(ids).toContain(30);       // явно разрешена
+    expect(ids).not.toContain(31);   // active:0 без allow остаётся скрытой
+  });
   test('YClients упал → фолбэк на конфиг', async () => {
     db.any
       .mockResolvedValueOnce([{ yclients_service_id: 7, service_title: 'Ботокс' }])
