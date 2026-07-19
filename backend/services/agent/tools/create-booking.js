@@ -1,6 +1,8 @@
 'use strict';
 
 const booking = require('../booking');
+const settings = require('../../agent-settings');
+const svcFilter = require('../service-filter');
 
 const schema = {
   name: 'create_booking',
@@ -25,6 +27,14 @@ const schema = {
 
 // ctx.dialogKey прокидывается оркестратором (Фаза 2b).
 async function run(salonId, input, ctx = {}) {
+  const filter = await settings.loadServiceFilterSafe(salonId);
+  if (!svcFilter.isBookable(filter, input.service_yc_id, input.staff_yc_id)) {
+    return {
+      not_bookable: true,
+      error: 'Эта услуга у выбранного мастера сейчас недоступна для записи. ' +
+        'Предложи другую услугу или мастера, либо передай оператору.',
+    };
+  }
   return booking.createBookingRecord(salonId, {
     dialogKey: ctx.dialogKey || input.client_phone,
     staffYcId: input.staff_yc_id,

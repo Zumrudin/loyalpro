@@ -5,12 +5,14 @@ jest.mock('./db', () => ({ db: { any: jest.fn(), one: jest.fn(), oneOrNone: jest
 jest.mock('./services/yclients', () => ({ ycGet: jest.fn() }));
 jest.mock('./services/yclients-booking', () => ({ ycGetBookTimes: jest.fn(), ycGetStaffSchedule: jest.fn(), ycGetStaffSeances: jest.fn() }));
 jest.mock('./services/agent-settings', () => ({ loadServiceFilterSafe: jest.fn() }));
+jest.mock('./services/agent/booking', () => ({ createBookingRecord: jest.fn() }));
 
 const { db } = require('./db');
 const rag = require('./services/agent-rag');
 const { ycGet } = require('./services/yclients');
 const { ycGetBookTimes, ycGetStaffSchedule, ycGetStaffSeances } = require('./services/yclients-booking');
 const settings = require('./services/agent-settings');
+const booking = require('./services/agent/booking');
 
 const searchKb = require('./services/agent/tools/search-knowledge-base');
 const listServices = require('./services/agent/tools/list-services');
@@ -18,6 +20,7 @@ const listStaff = require('./services/agent/tools/list-staff');
 const getSlots = require('./services/agent/tools/get-available-slots');
 const getDates = require('./services/agent/tools/get-available-dates');
 const getClient = require('./services/agent/tools/get-client');
+const createBooking = require('./services/agent/tools/create-booking');
 
 beforeEach(() => {
   jest.clearAllMocks();
@@ -217,5 +220,19 @@ describe('get_client', () => {
     db.oneOrNone.mockResolvedValue(null);
     const out = await getClient.run(1, { phone: '79990000000' });
     expect(out.found).toBe(false);
+  });
+});
+
+describe('create_booking', () => {
+  test('отказывает при скрытой паре услуга×мастер и НЕ создаёт запись', async () => {
+    settings.loadServiceFilterSafe.mockResolvedValue({
+      mode: 'all', denyServices: new Set(), allowServices: new Set(), denyPairs: new Set(['10:5']),
+    });
+    const out = await createBooking.run(1, {
+      staff_yc_id: 5, service_yc_id: 10,
+      datetime: '2026-07-20T10:00:00+03:00', client_phone: '79990000000',
+    });
+    expect(out.not_bookable).toBe(true);
+    expect(booking.createBookingRecord).not.toHaveBeenCalled();
   });
 });
