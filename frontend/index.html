@@ -102,6 +102,7 @@
       <div class="tn" data-p="settings" data-roles="owner,admin" onclick="nav(this)">Настройки</div>
       <div class="tn" data-p="knowledge-base" data-roles="owner,admin,specialist" onclick="nav(this)">База знаний</div>
       <div class="tn" data-p="users" data-roles="owner" onclick="nav(this)">Пользователи</div>
+      <div class="tn" data-p="agent-services" data-roles="owner,admin" onclick="nav(this)">Услуги агента</div>
     </nav>
     <div class="tb-right">
       <div id="syncSt" style="font-size:11.5px;color:var(--t3)"></div>
@@ -144,6 +145,7 @@
       <div class="tn" data-p="settings" data-roles="owner,admin" onclick="nav(this)">Настройки</div>
       <div class="tn" data-p="knowledge-base" data-roles="owner,admin,specialist" onclick="nav(this)">База знаний</div>
       <div class="tn" data-p="users" data-roles="owner" onclick="nav(this)">Пользователи</div>
+      <div class="tn" data-p="agent-services" data-roles="owner,admin" onclick="nav(this)">Услуги агента</div>
     </nav>
     <div class="mnav-foot">
       <div id="mnavSyncSt" style="font-size:11.5px;color:var(--t3)"></div>
@@ -1242,6 +1244,11 @@
       </div>
     </div>
 
+    <div class="page" id="page-agent-services">
+      <div style="font-size:16px;font-weight:700;margin-bottom:16px">Услуги агента</div>
+      <div id="agent-services-root"></div>
+    </div>
+
     <div class="page" id="page-knowledge-base">
       <div class="kb-wrap">
         <div class="kb-topbar">
@@ -1951,6 +1958,7 @@ function fireConfetti() {
 <script src="js/pages/medical-cert-coords-editor.js?v=2026-06-17b"></script>
 <script src="js/pages/kb-markdown.js?v=2026-07-17-kbimg2"></script>
 <script src="js/pages/knowledge-base.js?v=2026-07-17-kbimg2"></script>
+<script src="js/pages/agent-services.js"></script>
 <script src="js/app.js"></script>
 </body>
 </html>

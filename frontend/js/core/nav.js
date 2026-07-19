@@ -34,6 +34,7 @@ function navTo(p) {
   if (p === 'medical-cert')    loadMedicalCert();
   if (p === 'cert-requests')  loadCertRequests();
   if (p === 'knowledge-base') loadKnowledgeBase();
+  if (p === 'agent-services') loadAgentServices();
 }
 
 // ── ROLE-BASED NAV ──
