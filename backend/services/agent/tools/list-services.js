@@ -1,7 +1,7 @@
 'use strict';
 
 const { db } = require('../../../db');
-const { ycGet } = require('../../yclients');
+const { ycGetServiceCatalog } = require('../../yclients');
 const settings = require('../../agent-settings');
 const svcFilter = require('../service-filter');
 
@@ -32,22 +32,20 @@ async function run(salonId, _input) {
 
   const filter = await settings.loadServiceFilterSafe(salonId);
 
-  let live = [];
+  // Достоверная привязка услуга→мастера строится per-staff запросами (поле staff
+  // в общем /services урезано). staffIdsByService: svcIdStr → Set(staffIdStr).
+  let priced = [], staffIdsByService = new Map();
   if (salon && salon.yclients_company_id) {
     try {
-      const data = await ycGet(salon, `/services/${salon.yclients_company_id}`);
-      live = Array.isArray(data) ? data : [];
+      const cat = await ycGetServiceCatalog(salon, staffRows.map(r => r.yclients_staff_id));
+      priced = cat.priced;
+      staffIdsByService = cat.staffIdsByService;
     } catch (_) { /* YClients недоступен → фолбэк на заголовки из конфига */ }
   }
 
-  // Услуги с реальной ценой — база каталога. Видимость (учёт active YClients,
-  // deny/allow-правил админки) решает decideOfferVisible ниже.
-  const priced = live.filter(s => Number(s.price_max) > 0);
-
-  // service.staff = [{ id, seance_length }] → имена мастеров, кто делает эту услугу.
-  // Сначала выкидываем deny-пары услуга×мастер, затем резолвим в имена.
+  // Мастера, кто делает услугу: только активные, реально привязанные; минус deny-пары.
   const staffNamesOf = (s) => svcFilter
-    .filterServiceStaff(filter, s.id, (s.staff || []).map(st => st.id))
+    .filterServiceStaff(filter, s.id, [...(staffIdsByService.get(String(s.id)) || new Set())])
     .map(id => staffNameById.get(String(id)))
     .filter(Boolean);
 

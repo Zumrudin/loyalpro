@@ -5,7 +5,7 @@
 // Решение допуска делегируется чистому services/agent-gate.
 // ============================================================
 const { db } = require('../db');
-const { ycGet } = require('./yclients');
+const { ycGetServiceCatalog } = require('./yclients');
 const { normalizePhoneKey, decideGate } = require('./agent-gate');
 
 const DEFAULTS = { enabled: false, mode: 'all' };
@@ -116,6 +116,43 @@ async function removeServiceRule(salonId, id) {
   await db.query('DELETE FROM agent_service_rules WHERE salon_id=$1 AND id=$2', [salonId, id]);
 }
 
+// Удалить правило по составному ключу (без знания id) — нужно для bulk-операций.
+async function removeServiceRuleByKey(salonId, svcId, staffId, ruleType) {
+  await db.query(
+    `DELETE FROM agent_service_rules
+      WHERE salon_id=$1 AND yc_service_id=$2
+        AND COALESCE(yc_staff_id,0)=COALESCE($3::int,0) AND rule_type=$4`,
+    [salonId, svcId, staffId ?? null, ruleType]);
+}
+
+// Применить желаемую видимость услуги целиком (та же логика, что тумблер на фронте).
+// Всегда чистим противоположное правило, чтобы deny+allow не противоречили.
+//   allowlist — видимость = наличие allow (active не важен).
+//   all + active  — по умолчанию видна: скрыть = deny, показать = снять deny.
+//   all + !active — по умолчанию скрыта: показать = allow, скрыть = снять allow.
+async function applyServiceVisibility(salonId, { ycServiceId, active, wantVisible }, mode) {
+  const svc = parseInt(ycServiceId, 10);
+  if (!svc) return;
+  const isActive = !!active;
+  if (mode === 'allowlist') {
+    if (wantVisible) await addServiceRule(salonId, { ycServiceId: svc, ruleType: 'allow' });
+    else await removeServiceRuleByKey(salonId, svc, null, 'allow');
+  } else if (wantVisible) {
+    await removeServiceRuleByKey(salonId, svc, null, 'deny');
+    if (!isActive) await addServiceRule(salonId, { ycServiceId: svc, ruleType: 'allow' });
+  } else {
+    await removeServiceRuleByKey(salonId, svc, null, 'allow');
+    if (isActive) await addServiceRule(salonId, { ycServiceId: svc, ruleType: 'deny' });
+  }
+}
+
+// Массовая установка видимости (тумблер категории). items: [{ycServiceId, active, wantVisible}].
+async function setServicesVisibilityBulk(salonId, items) {
+  const mode = await getServiceMode(salonId);
+  for (const it of (items || [])) await applyServiceVisibility(salonId, it, mode);
+  return { ok: true };
+}
+
 // Загрузчик правил → структуры для service-filter. Кидает при сбое БД.
 async function loadServiceFilter(salonId) {
   const mode = await getServiceMode(salonId);
@@ -144,7 +181,9 @@ async function loadServiceFilterSafe(salonId) {
   }
 }
 
-// Полный список услуг YClients + мастера + текущая видимость (для админки).
+// Полный каталог услуг, сгруппированный по категориям, с ДОСТОВЕРНЫМИ мастерами
+// (кто реально выполняет услугу) и текущей видимостью — для экрана админки.
+// Структура: { serviceMode, categories: [{ id, title, services: [{…, staff:[…]}] }] }.
 async function getServicesForAdmin(salonId) {
   const salon = await db.oneOrNone(
     `SELECT id, yclients_company_id, yclients_partner_token, yclients_user_token
@@ -153,37 +192,71 @@ async function getServicesForAdmin(salonId) {
     `SELECT yclients_staff_id, name FROM staff_members
       WHERE salon_id=$1 AND is_active=true`, [salonId]);
   const staffNameById = new Map(staffRows.map(s => [String(s.yclients_staff_id), s.name]));
-  let live = [];
-  if (salon && salon.yclients_company_id) {
-    try {
-      const data = await ycGet(salon, `/services/${salon.yclients_company_id}`);
-      live = Array.isArray(data) ? data : [];
-    } catch (_) { live = []; }
-  }
+
+  const { priced, categories, staffIdsByService } = salon
+    ? await ycGetServiceCatalog(salon, staffRows.map(s => s.yclients_staff_id))
+    : { priced: [], categories: [], staffIdsByService: new Map() };
+
   const filter = await loadServiceFilter(salonId);   // админке нужен реальный статус, не fail-open
   const svcFilter = require('./agent/service-filter');
-  return {
-    serviceMode: filter.mode,
-    // Весь каталог с ценой (не только active) — активность агента управляется этим
-    // экраном, а не флагом онлайн-записи YClients. `active` отдаём для UI.
-    services: live.filter(s => Number(s.price_max) > 0).map(s => ({
+  const catById = new Map((categories || []).map(c => [String(c.id), c]));
+
+  // Услуга → объект с мастерами (только активные, реально выполняющие), отсортированными.
+  const svcObjs = priced.map(s => {
+    const performerIds = staffIdsByService.get(String(s.id)) || new Set();
+    const staff = [...performerIds]
+      .filter(id => staffNameById.has(id))
+      .map(id => ({
+        yc_id: Number(id),
+        name: staffNameById.get(id),
+        hidden: filter.denyPairs.has(`${String(s.id)}:${id}`),
+      }))
+      .sort((a, b) => String(a.name).localeCompare(String(b.name), 'ru'));
+    return {
       yc_id: s.id,
       title: s.title,
       price_min: s.price_min,
       price_max: s.price_max,
       active: s.active === 1,
       visible: svcFilter.decideOfferVisible(filter, s.id, s.active === 1),
-      staff: (s.staff || []).map(st => ({
-        yc_id: st.id,
-        name: staffNameById.get(String(st.id)) || `#${st.id}`,
-        hidden: filter.denyPairs.has(`${String(s.id)}:${String(st.id)}`),
-      })),
-    })),
-  };
+      category_id: s.category_id ?? null,
+      _weight: Number(s.weight) || 0,
+      staff,
+    };
+  });
+
+  // Группировка по категориям.
+  const groups = new Map();   // catKey → { id, title, _weight, services }
+  for (const s of svcObjs) {
+    const catKey = String(s.category_id ?? '');
+    if (!groups.has(catKey)) {
+      const c = catById.get(catKey);
+      groups.set(catKey, {
+        id: s.category_id ?? null,
+        title: (c && c.title) || 'Без категории',
+        _weight: c ? (Number(c.weight) || 0) : -1,   // «Без категории» — в конец
+        services: [],
+      });
+    }
+    groups.get(catKey).services.push(s);
+  }
+
+  // Сортировка: категории и услуги — по весу (убыв.), затем по названию.
+  const byWeightTitle = (a, b) =>
+    (b._weight - a._weight) || String(a.title).localeCompare(String(b.title), 'ru');
+  const out = [...groups.values()].sort(byWeightTitle);
+  for (const g of out) {
+    g.services.sort(byWeightTitle);
+    g.services.forEach(s => delete s._weight);
+    delete g._weight;
+  }
+
+  return { serviceMode: filter.mode, categories: out };
 }
 
 module.exports = {
   getSettings, updateSettings, listNumberRules, addNumberRule, removeNumberRule, isAllowed,
   getServiceMode, updateServiceMode, listServiceRules, addServiceRule, removeServiceRule,
+  removeServiceRuleByKey, applyServiceVisibility, setServicesVisibilityBulk,
   loadServiceFilter, loadServiceFilterSafe, getServicesForAdmin,
 };

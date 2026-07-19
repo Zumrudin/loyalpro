@@ -87,6 +87,14 @@ router.post('/service-rules', adminOnly, async (req, res) => {
   }
 });
 
+// POST /api/agent/service-rules/bulk-visibility { items:[{ycServiceId, active, wantVisible}] }
+// Массовый тумблер (чекбокс категории): показать/скрыть все услуги разом.
+router.post('/service-rules/bulk-visibility', adminOnly, async (req, res) => {
+  try {
+    res.json(await settings.setServicesVisibilityBulk(req.user.salonId, (req.body || {}).items));
+  } catch (e) { logger.error(e.message); res.status(500).json({ error: 'server error' }); }
+});
+
 // DELETE /api/agent/service-rules/:id
 router.delete('/service-rules/:id', adminOnly, async (req, res) => {
   try {

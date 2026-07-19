@@ -230,10 +230,53 @@ async function ycSumServicePayments(salon, clientId, dateFrom, dateTo) {
   return Math.round(total * 100) / 100;
 }
 
+// ── Каталог услуг с ДОСТОВЕРНОЙ привязкой мастеров ───────────────────────────
+// Поле service.staff в общем ответе /services/{cid} НЕДОСТОВЕРНО: YClients кладёт
+// туда лишь урезанный набор мастеров (у части мастеров услуги теряются). Правда
+// доступна только через запрос услуг по КАЖДОМУ мастеру: /services/{cid}?staff_id=.
+// Поэтому строим карту service→staff объединением per-staff ответов.
+// Возвращает { priced, categories, staffIdsByService: Map<svcIdStr, Set<staffIdStr>> }.
+const _svcCatalogCache = {};                 // salonId → { ts, data }
+const SVC_CATALOG_TTL = 2 * 60 * 1000;       // 2 мин: режем нагрузку, окно устаревания мало
+
+async function ycGetServiceCatalog(salon, staffIds = []) {
+  const cid = salon && salon.yclients_company_id;
+  if (!cid) return { priced: [], categories: [], staffIdsByService: new Map() };
+
+  const key = salon.id;
+  const cached = _svcCatalogCache[key];
+  if (cached && (Date.now() - cached.ts) < SVC_CATALOG_TTL) return cached.data;
+
+  const uniqStaff = [...new Set((staffIds || []).map(String))].filter(Boolean);
+  const [catalog, categories, ...perStaff] = await Promise.all([
+    ycGet(salon, `/services/${cid}`).catch(() => []),
+    ycGet(salon, `/service_categories/${cid}`).catch(() => []),
+    ...uniqStaff.map(id => ycGet(salon, `/services/${cid}`, { staff_id: id })
+      .then(d => ({ id, services: Array.isArray(d) ? d : [] }))
+      .catch(() => ({ id, services: [] }))),
+  ]);
+
+  const priced = (Array.isArray(catalog) ? catalog : []).filter(s => Number(s.price_max) > 0);
+  const staffIdsByService = new Map();
+  for (const { id, services } of perStaff) {
+    for (const s of services) {
+      const k = String(s.id);
+      if (!staffIdsByService.has(k)) staffIdsByService.set(k, new Set());
+      staffIdsByService.get(k).add(String(id));
+    }
+  }
+  const data = { priced, categories: Array.isArray(categories) ? categories : [], staffIdsByService };
+  _svcCatalogCache[key] = { ts: Date.now(), data };
+  return data;
+}
+
+function clearServiceCatalogCache(salonId) { delete _svcCatalogCache[salonId]; }
+
 module.exports = {
   ycHeaders, ycGet, ycPost, ycAuth,
   ycGetCardTypes, ycGetClientCards, ycWebLogin, ycGetCardTransactions,
   parseCardTransactionsHtml, ycAccrueCard, ycListFinanceTransactions, ycSumServicePayments,
   ycWebSessions,
   getTreeCache, setTreeCache, clearTreeCache,
+  ycGetServiceCatalog, clearServiceCatalogCache,
 };
