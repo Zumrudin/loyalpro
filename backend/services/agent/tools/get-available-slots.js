@@ -2,6 +2,8 @@
 
 const { db } = require('../../../db');
 const { ycGetBookTimes, ycGetStaffSeances } = require('../../yclients-booking');
+const settings = require('../../agent-settings');
+const svcFilter = require('../service-filter');
 
 const DEFAULT_STEP_MIN = 30;   // шаг предлагаемых стартов в fallback-режиме
 
@@ -58,6 +60,13 @@ async function run(salonId, input) {
   const staffId = input && input.staff_yc_id;
   const date = input && input.date;
   if (!staffId || !date) return { error: 'Нужны staff_yc_id и date (YYYY-MM-DD).' };
+  // Скрытую услугу/пару не предлагаем (мягкий пустой ответ, без «технических сложностей»).
+  if (serviceId) {
+    const filter = await settings.loadServiceFilterSafe(salonId);
+    if (!svcFilter.isBookable(filter, serviceId, staffId)) {
+      return { slots: [], filtered: true };
+    }
+  }
   const salon = await db.one(`SELECT id, yclients_company_id, yclients_partner_token, yclients_user_token FROM salons WHERE id=$1`, [salonId]);
   if (!salon || !salon.yclients_company_id) return { error: 'YClients не подключён для салона.' };
   try {
