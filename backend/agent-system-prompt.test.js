@@ -27,6 +27,14 @@ describe('buildSystemPrompt', () => {
     expect(p).toContain('escalate_to_operator');
   });
 
+  test('Сценарий 3 — двухшаговая де-эскалация: спасти диалог, затем явный перевод', () => {
+    const p = buildSystemPrompt({});
+    expect(p).toContain('ШАГ А');
+    expect(p).toContain('ШАГ Б');
+    expect(p).toMatch(/извин/i);             // сначала извиниться
+    expect(p).toMatch(/НИКОГДА не замолк/i); // запрет уходить в тишину
+  });
+
   test('без опций не падает и даёт дефолтное имя', () => {
     const p = buildSystemPrompt();
     expect(typeof p).toBe('string');
