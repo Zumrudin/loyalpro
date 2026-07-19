@@ -7,6 +7,10 @@ const orchestratorDefault = require('./orchestrator');
 const { createLogger } = require('../../logger');
 const logger = createLogger('AgentDispatcher');
 
+// Фраза-страховка, если модель эскалировала, не написав объявления о переводе.
+const DEFAULT_HANDOVER_TEXT =
+  'Передаю ваш диалог администратору клиники — он подключится с минуты на минуту 🤍';
+
 // Один PM2-процесс → in-memory состояние (спека [2]: дебаунс на один процесс).
 const timers = new Map();   // key → { timer, meta }  (дебаунс серии)
 const running = new Set();   // key диалогов в обработке (сериализация в процессе)
@@ -46,12 +50,13 @@ async function process(salonId, dialogKey, meta, opts = {}) {
     running.add(k);
     try {
       const res = await orchestrator.runDialog(salonId, dialogKey, { ctx: { phone: meta.phone } });
-      // При эскалации бот замолкает: не отправляем реплики, даже если модель что-то написала
-      // в том же ходе перед вызовом escalate_to_operator.
-      if (!res.escalated) {
-        for (const text of (res.replies || [])) {
-          if (text && text.trim()) await send(meta, text);
-        }
+      // Доставляем реплики, в т.ч. на ходе эскалации — это явное объявление о переводе.
+      // Инвариант: при эскалации клиент никогда не остаётся без сообщения.
+      const replies = (res.replies || []).filter((t) => t && t.trim());
+      if (res.escalated && replies.length === 0) {
+        await send(meta, DEFAULT_HANDOVER_TEXT);
+      } else {
+        for (const text of replies) await send(meta, text);
       }
     } finally {
       running.delete(k);

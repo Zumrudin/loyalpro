@@ -58,12 +58,29 @@ test('гейт бросил исключение → process не реджект
   expect(d.orchestrator.runDialog).not.toHaveBeenCalled();
 });
 
-test('эскалация → реплики не отправляются, бот молчит (I2)', async () => {
-  const d = deps({ orchestrator: { runDialog: jest.fn(async () => ({ replies: ['секунду, зову оператора'], escalated: true })) } });
+test('эскалация с текстом → объявление о переводе доставляется (де-эскалация)', async () => {
+  const d = deps({ orchestrator: { runDialog: jest.fn(async () => ({ replies: ['Передаю вас администратору 🤍'], escalated: true })) } });
   dispatcher.enqueue(1, 'k', meta, d);
   await jest.advanceTimersByTimeAsync(1000);
   expect(d.orchestrator.runDialog).toHaveBeenCalledTimes(1);
-  expect(d.send).not.toHaveBeenCalled();
+  expect(d.send).toHaveBeenCalledTimes(1);
+  expect(d.send).toHaveBeenCalledWith(meta, 'Передаю вас администратору 🤍');
+});
+
+test('эскалация без текста → дефолтная фраза перевода (страховка от молчания)', async () => {
+  const d = deps({ orchestrator: { runDialog: jest.fn(async () => ({ replies: [], escalated: true })) } });
+  dispatcher.enqueue(1, 'k', meta, d);
+  await jest.advanceTimersByTimeAsync(1000);
+  expect(d.send).toHaveBeenCalledTimes(1);
+  expect(d.send).toHaveBeenCalledWith(meta, expect.stringContaining('администратор'));
+});
+
+test('эскалация с пустой (пробельной) репликой → дефолтная фраза перевода (страховка)', async () => {
+  const d = deps({ orchestrator: { runDialog: jest.fn(async () => ({ replies: ['   '], escalated: true })) } });
+  dispatcher.enqueue(1, 'k', meta, d);
+  await jest.advanceTimersByTimeAsync(1000);
+  expect(d.send).toHaveBeenCalledTimes(1);
+  expect(d.send).toHaveBeenCalledWith(meta, expect.stringContaining('администратор'));
 });
 
 test('сообщение во время прогона → ровно один повторный прогон, лишнего от таймера нет (I1)', async () => {
