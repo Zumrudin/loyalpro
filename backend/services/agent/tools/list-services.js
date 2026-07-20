@@ -57,6 +57,10 @@ async function run(salonId, _input) {
         if (!name) return null;
         const p = priceMap.get(String(id));
         return {
+          // yc_id здесь избавляет от лишнего list_staff: слоты и бронь требуют
+          // id мастера, а раньше его приходилось добывать отдельным вызовом и
+          // сопоставлять по имени.
+          yc_id: Number(id),
           name,
           price_min: p && p.price_min ? p.price_min : s.price_min,
           price_max: p && p.price_max ? p.price_max : s.price_max,

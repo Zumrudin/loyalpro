@@ -12,9 +12,15 @@ const { ycCreateRecord } = require('../yclients-booking');
 // Спека: docs/superpowers/specs/2026-07-18-ai-booking-agent-design.md (гейт create_booking).
 
 // Стабильный ключ идемпотентности одной брони.
-function buildIdempotencyKey(dialogKey, serviceYcId, datetime) {
+// Мастер и телефон входят в ключ намеренно: параллельная запись двух гостей
+// идёт из ОДНОГО диалога, и без них вторая бронь (та же услуга, то же время,
+// другой мастер/гость) схлопнулась бы в «дубликат» — человек остался бы
+// незаписанным, а агент отчитался бы об успехе. Ретрай одной и той же брони
+// по-прежнему даёт тот же ключ, так что защита от дубль-вебхука сохраняется.
+function buildIdempotencyKey(draft = {}) {
+  const { dialogKey, serviceYcId, staffYcId, datetime, clientPhone } = draft;
   return crypto.createHash('sha256')
-    .update(`${dialogKey}|${serviceYcId}|${datetime}`, 'utf8')
+    .update(`${dialogKey}|${serviceYcId}|${staffYcId}|${datetime}|${clientPhone || ''}`, 'utf8')
     .digest('hex');
 }
 
@@ -29,7 +35,7 @@ async function createBookingRecord(salonId, draft) {
     dialogKey, staffYcId, serviceYcId, datetime, seanceLength,
     clientPhone, clientName, comment,
   } = draft;
-  const idem = buildIdempotencyKey(dialogKey, serviceYcId, datetime);
+  const idem = buildIdempotencyKey(draft);
 
   const client = await pool.connect();
   try {

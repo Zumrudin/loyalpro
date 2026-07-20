@@ -4,6 +4,8 @@ const { db } = require('../../../db');
 const { ycGetBookTimes, ycGetStaffSeances } = require('../../yclients-booking');
 const settings = require('../../agent-settings');
 const svcFilter = require('../service-filter');
+const eq = require('../equipment');
+const eqContext = require('../equipment-context');
 
 const DEFAULT_STEP_MIN = 30;   // шаг предлагаемых стартов в fallback-режиме
 
@@ -107,11 +109,27 @@ async function run(salonId, input, ctx = {}) {
       if (slots.length) return dropPastToday({ slots, source: 'booking' }, date, nowMs);
     }
     // 2) Иначе (или пусто) — свободность из графика (management API, без онлайн-записи).
+    // Этот график знает только занятость кресла мастера и слеп к аппаратам,
+    // поэтому вычитаем время, когда занято оборудование услуги: иначе предложим
+    // окно, на котором создание записи упрётся в save_if_busy:false.
     const seances = await ycGetStaffSeances(salon, staffId, date);
-    const ranges = seancesToRanges(seances);
+    let ranges = seancesToRanges(seances);
+    let equipmentBusy = false;
+    if (serviceId) {
+      const eqCtx = await eqContext.loadEquipmentContext(salon, date);
+      const busy = eqContext.busyForService(eqCtx, serviceId);
+      if (busy.length) {
+        const trimmed = eq.subtractRanges(ranges, busy);
+        equipmentBusy = trimmed.length !== ranges.length
+          || trimmed.some((r, i) => !ranges[i] || r.start !== ranges[i].start || r.end !== ranges[i].end);
+        ranges = trimmed;
+      }
+    }
     const freeRanges = ranges.map(r => ({ from: toHHMM(r.start), to: toHHMM(r.end) }));
     const slots = rangesToSlots(ranges, date, DEFAULT_STEP_MIN);
-    return dropPastToday({ slots, free_ranges: freeRanges, source: 'schedule' }, date, nowMs);
+    const out = { slots, free_ranges: freeRanges, source: 'schedule' };
+    if (equipmentBusy) out.equipment_busy = true;   // часть окон срезана занятым аппаратом
+    return dropPastToday(out, date, nowMs);
   } catch (e) {
     return { error: `Не удалось получить слоты: ${e.message}` };
   }

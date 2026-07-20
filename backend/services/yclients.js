@@ -241,13 +241,15 @@ const SVC_CATALOG_TTL = 2 * 60 * 1000;       // 2 мин: режем нагру�
 
 async function ycGetServiceCatalog(salon, staffIds = []) {
   const cid = salon && salon.yclients_company_id;
-  if (!cid) return { priced: [], categories: [], staffIdsByService: new Map() };
+  if (!cid) return { priced: [], categories: [], staffIdsByService: new Map(), staffPricesByService: new Map() };
 
-  const key = salon.id;
+  // Ключ включает набор мастеров: staffIdsByService строится ИЗ него, и запись,
+  // положенная вызовом без мастеров, иначе отдавалась бы list_services как
+  // «ни у одной услуги нет мастеров» до истечения TTL.
+  const uniqStaff = [...new Set((staffIds || []).map(String))].filter(Boolean).sort();
+  const key = `${salon.id}|${uniqStaff.join(',')}`;
   const cached = _svcCatalogCache[key];
   if (cached && (Date.now() - cached.ts) < SVC_CATALOG_TTL) return cached.data;
-
-  const uniqStaff = [...new Set((staffIds || []).map(String))].filter(Boolean);
   const [catalog, categories, ...perStaff] = await Promise.all([
     ycGet(salon, `/services/${cid}`).catch(() => []),
     ycGet(salon, `/service_categories/${cid}`).catch(() => []),
@@ -280,7 +282,45 @@ async function ycGetServiceCatalog(salon, staffIds = []) {
   return data;
 }
 
-function clearServiceCatalogCache(salonId) { delete _svcCatalogCache[salonId]; }
+// ── Мета услуг: привязка к аппаратам и длительность ─────────────────────────
+// ВАЖНО: booking-эндпоинт /services/{cid} (его использует ycGetServiceCatalog)
+// НЕ содержит полей resources и duration — они есть только у management-версии
+// /company/{cid}/services/. Отдельная функция вместо «добавить пару полей в
+// каталог»: иначе карты молча заполнялись бы пустыми значениями и проверка
+// оборудования не проверяла бы ничего, выглядя рабочей.
+// Возвращает { resourceIdsByService: Map<svcIdStr,[resIdStr]>, durationByService: Map<svcIdStr,сек> }.
+const _svcMetaCache = {};                    // salonId → { ts, data }
+const SVC_META_TTL = 10 * 60 * 1000;         // мета меняется редко
+
+async function ycGetServiceMeta(salon) {
+  const cid = salon && salon.yclients_company_id;
+  const empty = { resourceIdsByService: new Map(), durationByService: new Map() };
+  if (!cid) return empty;
+
+  const cached = _svcMetaCache[salon.id];
+  if (cached && (Date.now() - cached.ts) < SVC_META_TTL) return cached.data;
+
+  const raw = await ycGet(salon, `/company/${cid}/services/`, {}).catch(() => null);
+  if (!Array.isArray(raw)) return empty;      // не кэшируем сбой
+
+  const resourceIdsByService = new Map();
+  const durationByService = new Map();
+  for (const s of raw) {
+    resourceIdsByService.set(String(s.id), (Array.isArray(s.resources) ? s.resources : []).map(String));
+    durationByService.set(String(s.id), Number(s.duration) || 0);
+  }
+  const data = { resourceIdsByService, durationByService };
+  _svcMetaCache[salon.id] = { ts: Date.now(), data };
+  return data;
+}
+
+// Ключ теперь составной (`salonId|staffIds`) — чистим все записи салона.
+function clearServiceCatalogCache(salonId) {
+  const prefix = `${salonId}|`;
+  for (const k of Object.keys(_svcCatalogCache)) {
+    if (k === String(salonId) || k.startsWith(prefix)) delete _svcCatalogCache[k];
+  }
+}
 
 module.exports = {
   ycHeaders, ycGet, ycPost, ycAuth,
@@ -288,5 +328,5 @@ module.exports = {
   parseCardTransactionsHtml, ycAccrueCard, ycListFinanceTransactions, ycSumServicePayments,
   ycWebSessions,
   getTreeCache, setTreeCache, clearTreeCache,
-  ycGetServiceCatalog, clearServiceCatalogCache,
+  ycGetServiceCatalog, clearServiceCatalogCache, ycGetServiceMeta,
 };

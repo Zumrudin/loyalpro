@@ -85,8 +85,8 @@ describe('list_services', () => {
     const out = await listServices.run(1, {});
     expect(out.services).toEqual([
       { yc_id: 7, title: 'Ботулинотерапия', price_min: 5000, price_max: 8000, staff: [
-        { name: 'Аня', price_min: 5000, price_max: 5000 },
-        { name: 'Пери', price_min: 8000, price_max: 8000 },
+        { yc_id: 55, name: 'Аня', price_min: 5000, price_max: 5000 },
+        { yc_id: 66, name: 'Пери', price_min: 8000, price_max: 8000 },
       ] },
     ]);
   });
@@ -99,7 +99,7 @@ describe('list_services', () => {
       [{ id: 7, title: 'Пилинг', price_min: 4000, price_max: 4000, active: 1 }],
       { 7: [55] }));   // prices не заданы
     const out = await listServices.run(1, {});
-    expect(out.services[0].staff).toEqual([{ name: 'Аня', price_min: 4000, price_max: 4000 }]);
+    expect(out.services[0].staff).toEqual([{ yc_id: 55, name: 'Аня', price_min: 4000, price_max: 4000 }]);
   });
   test('неизвестный staff_id услуги отбрасывается (нет в staff_members)', async () => {
     db.any
