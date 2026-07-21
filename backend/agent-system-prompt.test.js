@@ -22,6 +22,13 @@ describe('buildSystemPrompt', () => {
     expect(p).toMatch(/подтвер|соглас/i);
   });
 
+  test('запрещает подтверждать запись без успешного create_booking', () => {
+    const p = buildSystemPrompt({});
+    expect(p).toMatch(/created:true/);
+    expect(p).toMatch(/НИКОГДА не пиши[^]*записал/i);
+    expect(p).toMatch(/записи НЕТ/);
+  });
+
   test('описывает правило эскалации', () => {
     const p = buildSystemPrompt({});
     expect(p).toContain('escalate_to_operator');

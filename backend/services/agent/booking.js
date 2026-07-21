@@ -30,6 +30,23 @@ function lockKey(str) {
   return h.readInt32BE(0);
 }
 
+// Best-effort лог НЕУДАЧНОЙ попытки записи. Без него провал create_booking не
+// оставляет следа — инцидент 2026-07-21: агент написал «запись оформлена», а
+// записи нет и в agent_events пусто. Пишем отдельным соединением (транзакция
+// брони уже откатана) и глушим ошибки — лог не должен ломать ответ агенту.
+async function logBookingFailure(salonId, draft, reason) {
+  try {
+    await pool.query(
+      `INSERT INTO agent_events (salon_id, dialog_key, kind, tool_name, payload)
+       VALUES ($1,$2,'booking_failed','create_booking',$3)`,
+      [salonId, draft.dialogKey, JSON.stringify({
+        reason: String(reason || '').slice(0, 500),
+        staffYcId: draft.staffYcId, serviceYcId: draft.serviceYcId,
+        datetime: draft.datetime, clientPhone: draft.clientPhone,
+      })]);
+  } catch (_) { /* лог не должен ломать ответ агенту */ }
+}
+
 async function createBookingRecord(salonId, draft) {
   const {
     dialogKey, staffYcId, serviceYcId, datetime, seanceLength,
@@ -66,6 +83,7 @@ async function createBookingRecord(salonId, draft) {
       });
     } catch (e) {
       await client.query('ROLLBACK');
+      await logBookingFailure(salonId, draft, e.message);
       return { created: false, error: e.message };
     }
 
@@ -80,6 +98,7 @@ async function createBookingRecord(salonId, draft) {
     return { created: true, record_id: recordId };
   } catch (e) {
     try { await client.query('ROLLBACK'); } catch (_) { /* соединение уже мертво */ }
+    await logBookingFailure(salonId, draft, e.message);
     return { created: false, error: e.message };
   } finally {
     client.release();

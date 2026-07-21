@@ -15,12 +15,15 @@ const schema = {
     properties: {
       staff_yc_id:   { type: 'integer', description: 'YClients-id мастера.' },
       service_yc_id: { type: 'integer', description: 'YClients-id услуги.' },
-      datetime:      { type: 'string',  description: 'ISO datetime слота (из get_available_slots.datetime).' },
+      datetime:      { type: 'string',  description: 'ISO datetime слота — передавай ТОЧНУЮ строку из ' +
+        'get_available_slots.datetime вместе с часовым поясом (…+03:00), не собирай её вручную.' },
       seance_length: { type: 'integer', description: 'Длительность в секундах (из слота).' },
       client_phone:  { type: 'string',  description: 'Телефон клиента.' },
       client_name:   { type: 'string',  description: 'Имя клиента (если известно).' },
-      comment:       { type: 'string',  description: 'Пометка для администратора: например, ' +
-        'что это спутник другого гостя и записи параллельные («подруга Анны, параллельно с записью на 12:00»).' },
+      comment:       { type: 'string',  description: 'ОБЯЗАТЕЛЬНО: краткий контекст обращения для администратора — ' +
+        'чем интересовался клиент и важные детали из диалога (напр. «Интересовалась фотоомоложением Lumecca, ' +
+        'спрашивала про биоревитализацию и бонусы»). Для параллельной записи добавь пометку про спутника ' +
+        '(«подруга Анны, параллельно с записью на 12:00»).' },
     },
     required: ['staff_yc_id', 'service_yc_id', 'datetime', 'client_phone'],
     additionalProperties: false,

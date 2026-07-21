@@ -17,6 +17,38 @@ function safeParse(s) {
   try { return JSON.parse(s || '{}'); } catch (_) { return {}; }
 }
 
+// Транзиентные сбои провайдера, на которых стоит повторить вызов. Ключевой случай —
+// aitunnel HTTP 421 «Не удалось посчитать стоимость запроса, отсутствует поле usage»:
+// его billing-прокси иногда не видит usage в ответе Gemini и роняет вполне нормальный
+// ход. Повторить вызов LLM безопасно — сам по себе он без побочных эффектов, а запись
+// защищена идемпотентностью в booking.js.
+function isTransient(err) {
+  if (!err) return false;
+  const s = err.status;
+  if (s === 421 || s === 429 || (s >= 500 && s <= 599)) return true;
+  if (/usage|стоимость запроса/i.test(err.message || '')) return true;
+  if (/APIConnection/i.test(err.name || '')) return true;
+  return ['ECONNRESET', 'ETIMEDOUT', 'ECONNREFUSED', 'EPIPE', 'ENOTFOUND'].includes(err.code || '');
+}
+
+const MAX_RETRIES = 2;                       // 1 основная попытка + 2 ретрая
+const RETRY_BASE_MS = 400;                   // 400мс, 800мс — короткий бэкофф
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+async function createWithRetry(client, params) {
+  let lastErr;
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      return await client.chat.completions.create(params);
+    } catch (e) {
+      lastErr = e;
+      if (attempt === MAX_RETRIES || !isTransient(e)) throw e;
+      await sleep(RETRY_BASE_MS * (attempt + 1));
+    }
+  }
+  throw lastErr;
+}
+
 // Вызов chat.completions + нормализация ответа в провайдер-агностичный вид.
 async function createMessage({ system, messages, tools }, opts = {}) {
   const client = opts.client || aitunnel.makeClient(opts.apiKey);
@@ -31,7 +63,7 @@ async function createMessage({ system, messages, tools }, opts = {}) {
   // выдать текст, а не очередной tool_call.
   const openAITools = toOpenAITools(tools);
   if (openAITools.length) params.tools = openAITools;
-  const resp = await client.chat.completions.create(params);
+  const resp = await createWithRetry(client, params);
   const choice = (resp.choices && resp.choices[0]) || {};
   const m = choice.message || {};
   const text = (m.content || '').trim();

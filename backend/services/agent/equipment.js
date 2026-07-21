@@ -164,7 +164,9 @@ function parallelStarts(entries, opts = {}) {
 
   const out = [];
   for (const win of common) {
-    for (let t = win.start; t <= win.end; t += step) {
+    // Старт — на чистой сетке (кратной step от полуночи → :00/:30), а не с win.start:
+    // иначе смещённое начало окна давало параллельные слоты вида 19:05/20:05.
+    for (let t = Math.ceil(win.start / step) * step; t <= win.end; t += step) {
       // 1) у каждого мастера окно вмещает его услугу целиком
       if (!entries.every(e => fitsIn(e.ranges, t, e.durationMin))) continue;
       // 2) каждой заявке достаётся свободный в её интервале экземпляр аппарата.

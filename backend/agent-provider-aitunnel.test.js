@@ -57,6 +57,34 @@ describe('aitunnel.createMessage', () => {
   });
 });
 
+// Транзиентный сбой aitunnel (421 «отсутствует поле usage») не должен ронять ход —
+// провайдер повторяет вызов. Инцидент 2026-07-21: 421 посреди записи → клиент увидел
+// «технический сбой», хотя запись уже создалась.
+describe('aitunnel.createMessage — ретрай на транзиентном сбое', () => {
+  test('421 на первой попытке → повтор → успех', async () => {
+    let n = 0;
+    const fakeClient = { chat: { completions: { create: async () => {
+      n += 1;
+      if (n === 1) { const e = new Error('Не удалось посчитать стоимость запроса, отсутствует поле "usage"'); e.status = 421; throw e; }
+      return { choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: 'Готово ✨' } }] };
+    } } } };
+    const res = await provider.createMessage(
+      { system: 's', messages: [{ role: 'user', content: 'да' }], tools: [] }, { client: fakeClient });
+    expect(n).toBe(2);
+    expect(res.text).toBe('Готово ✨');
+  });
+
+  test('нетранзиентная ошибка (400) не ретраится и пробрасывается', async () => {
+    let n = 0;
+    const fakeClient = { chat: { completions: { create: async () => {
+      n += 1; const e = new Error('bad request'); e.status = 400; throw e;
+    } } } };
+    await expect(provider.createMessage(
+      { system: 's', messages: [], tools: [] }, { client: fakeClient })).rejects.toThrow('bad request');
+    expect(n).toBe(1);
+  });
+});
+
 describe('aitunnel.toolResultMessages', () => {
   test('по одному {role:tool} на вызов с tool_call_id', () => {
     const msgs = provider.toolResultMessages([

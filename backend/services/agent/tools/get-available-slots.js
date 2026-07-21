@@ -73,10 +73,14 @@ function seancesToRanges(seances) {
 }
 
 // Из интервалов — старты с шагом step, где влезает хотя бы один шаг свободного времени.
+// Старт привязываем к ЧИСТОЙ сетке (кратной step от полуночи → :00/:30), а НЕ к
+// r.start. Иначе окно, начатое в 19:05 (хвост от предыдущей записи чужой длительности),
+// тянуло смещение через все старты: 19:05, 19:35, 20:05 — и прятало свободные 19:00/20:00.
 function rangesToSlots(ranges, date, step) {
   const slots = [];
   for (const r of ranges) {
-    for (let t = r.start; t + step <= r.end; t += step) {
+    const first = Math.ceil(r.start / step) * step;   // ближайший чистый старт ≥ r.start
+    for (let t = first; t + step <= r.end; t += step) {
       const hhmm = toHHMM(t);
       slots.push({ time: hhmm, datetime: `${date}T${hhmm}:00+03:00` });
     }
@@ -135,4 +139,4 @@ async function run(salonId, input, ctx = {}) {
   }
 }
 
-module.exports = { schema, run };
+module.exports = { schema, run, seancesToRanges, rangesToSlots, toMin, toHHMM };
