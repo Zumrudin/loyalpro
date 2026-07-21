@@ -82,6 +82,26 @@ describe('runDialog', () => {
     expect(deps.provider.createMessage).toHaveBeenCalledTimes(1);
   });
 
+  test('create_booking вернул ошибку → bookingFailed:true (диспетчер переведёт на человека)', async () => {
+    const deps = makeDeps({ handlers: { create_booking: jest.fn(async () => ({ invalid_args: true, error: 'выдуманный id' })) } });
+    deps.provider.createMessage
+      .mockResolvedValueOnce(toolResp('create_booking', { staff_yc_id: 1, service_yc_id: 2, datetime: 'x', client_phone: '7' }))
+      .mockResolvedValueOnce(textResp('Секундочку, уточняю детали 🤍'));
+    const out = await orchestrator.runDialog(1, 'k', { deps });
+    expect(out.bookingFailed).toBe(true);
+    expect(out.sideEffect).toBe(false);
+  });
+
+  test('create_booking успех → bookingFailed:false', async () => {
+    const deps = makeDeps();   // дефолтный create_booking → { created:true, record_id:999 }
+    deps.provider.createMessage
+      .mockResolvedValueOnce(toolResp('create_booking', { staff_yc_id: 1, service_yc_id: 2, datetime: 'x', client_phone: '7' }))
+      .mockResolvedValueOnce(textResp('Записала вас, всё готово ✨'));
+    const out = await orchestrator.runDialog(1, 'k', { deps });
+    expect(out.bookingFailed).toBe(false);
+    expect(out.sideEffect).toBe(true);
+  });
+
   test('диалог уже escalated → ничего не делаем', async () => {
     const deps = makeDeps({ state: { getOrCreate: jest.fn(async () => ({ status: 'escalated' })) } });
     const out = await orchestrator.runDialog(1, 'k', { deps });

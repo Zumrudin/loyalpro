@@ -78,6 +78,12 @@ async function process(salonId, dialogKey, meta, opts = {}) {
       if (res.alreadyEscalated) {
         // Диалог уже у оператора — бот молчит, не переотправляем объявление о переводе
         // на каждое последующее входящее (иначе фраза перевода спамит клиента).
+      } else if (res.bookingFailed && !res.escalated) {
+        // Запись не создалась (create_booking вернул ошибку), а бот сам не перевёл на
+        // человека — типичная «секундочку» без результата. Не оставляем клиента с пустым
+        // обещанием: передаём администратору и сообщаем об этом. Инцидент 2026-07-21.
+        logger.warn(`dialog ${dialogKey}: create_booking не удался, бот не эскалировал — принудительный перевод на человека`);
+        await handOverSilently(salonId, dialogKey, meta, send, escalate, 'create_booking не удался — запись не создана автоматически');
       } else if (res.escalated && replies.length === 0) {
         await send(meta, DEFAULT_HANDOVER_TEXT);
       } else if (replies.length === 0) {

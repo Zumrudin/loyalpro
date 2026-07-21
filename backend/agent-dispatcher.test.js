@@ -130,6 +130,25 @@ test('реплики из пробелов считаются пустым от�
   expect(d.send.mock.calls[0][1]).toMatch(/администратор/i);
 });
 
+test('create_booking провалился, бот не эскалировал → принудительный перевод, не «секундочку»', async () => {
+  const d = deps({ orchestrator: { runDialog: jest.fn(async () => (
+    { replies: ['Секундочку, уточняю детали 🤍'], escalated: false, bookingFailed: true })) } });
+  dispatcher.enqueue(1, 'k', meta, d);
+  await jest.advanceTimersByTimeAsync(1000);
+  expect(d.escalate).toHaveBeenCalledTimes(1);                 // диалог реально уходит человеку
+  expect(d.send).toHaveBeenCalledTimes(1);
+  expect(d.send.mock.calls[0][1]).toMatch(/администратор/i);   // клиент получил перевод, а не заглушку
+});
+
+test('booking провалился, НО бот уже сам эскалировал → без двойного перевода', async () => {
+  const d = deps({ orchestrator: { runDialog: jest.fn(async () => (
+    { replies: ['Передаю администратору 🤍'], escalated: true, bookingFailed: true })) } });
+  dispatcher.enqueue(1, 'k', meta, d);
+  await jest.advanceTimersByTimeAsync(1000);
+  expect(d.send).toHaveBeenCalledTimes(1);
+  expect(d.send).toHaveBeenCalledWith(meta, 'Передаю администратору 🤍');
+});
+
 test('прогон упал с ошибкой → клиент всё равно получает сообщение', async () => {
   const d = deps({ orchestrator: { runDialog: jest.fn(async () => { throw new Error('provider timeout'); }) } });
   await expect(dispatcher.process(1, 'k', meta, d)).resolves.toBeUndefined();

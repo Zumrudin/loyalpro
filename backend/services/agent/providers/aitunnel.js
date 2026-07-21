@@ -31,8 +31,8 @@ function isTransient(err) {
   return ['ECONNRESET', 'ETIMEDOUT', 'ECONNREFUSED', 'EPIPE', 'ENOTFOUND'].includes(err.code || '');
 }
 
-const MAX_RETRIES = 2;                       // 1 основная попытка + 2 ретрая
-const RETRY_BASE_MS = 400;                   // 400мс, 800мс — короткий бэкофф
+const MAX_RETRIES = 4;                       // 1 основная попытка + 4 ретрая (aitunnel часто флапает 421/429)
+const RETRY_BASE_MS = 400;                   // 400/800/1200/1600мс — короткий бэкофф
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 async function createWithRetry(client, params) {

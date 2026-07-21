@@ -70,6 +70,8 @@ async function runDialog(salonId, dialogKey, opts = {}) {
     let escalated = false;
     let sideEffect = false;
     let exhausted = false;
+    let bookingSucceeded = false;   // create_booking вернул успех в этом ходе
+    let bookingErrored = false;     // create_booking вернул ошибку в этом ходе
 
     for (let i = 0; i < MAX_ITERS; i++) {
       const resp = await provider.createMessage(
@@ -96,6 +98,7 @@ async function runDialog(salonId, dialogKey, opts = {}) {
         const isError = !!(result && result.error);
         if (!isError && SIDE_EFFECT_TOOLS.has(tc.name)) sideEffect = true;
         if (tc.name === 'escalate_to_operator' && result && result.escalated) escalated = true;
+        if (tc.name === 'create_booking') { if (isError) bookingErrored = true; else bookingSucceeded = true; }
         results.push({ id: tc.id, name: tc.name, result, isError });
       }
       for (const m of provider.toolResultMessages(results)) convo.push(m);
@@ -124,7 +127,9 @@ async function runDialog(salonId, dialogKey, opts = {}) {
     }
 
     await state.setWatermark(salonId, dialogKey, watermark);
-    return { replies, escalated, sideEffect, exhausted };
+    // bookingFailed: попытка записи была и НЕ увенчалась успехом. Диспетчер по этому
+    // сигналу принудительно переведёт на человека, чтобы клиент не завис на «секундочку».
+    return { replies, escalated, sideEffect, exhausted, bookingFailed: bookingErrored && !bookingSucceeded };
   }
 
   return { replies: [], escalated: false, sideEffect: false };
