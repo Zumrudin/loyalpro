@@ -315,4 +315,44 @@ describe('create_booking', () => {
     expect(out.not_bookable).toBe(true);
     expect(booking.createBookingRecord).not.toHaveBeenCalled();
   });
+
+  test('выдуманный service_yc_id → invalid_args, запись НЕ создаётся', async () => {
+    jest.spyOn(listServices, 'run').mockResolvedValue({
+      services: [{ yc_id: 15394152, title: 'Фото', staff: [{ yc_id: 5708379 }] }],
+    });
+    const out = await createBooking.run(1, {
+      staff_yc_id: 5708379, service_yc_id: 10495123, // услуги нет в каталоге
+      datetime: '2026-07-23T12:00:00+03:00', client_phone: '79200255591',
+    });
+    expect(out.invalid_args).toBe(true);
+    expect(booking.createBookingRecord).not.toHaveBeenCalled();
+    listServices.run.mockRestore();
+  });
+
+  test('мастер не выполняет услугу → invalid_args, запись НЕ создаётся', async () => {
+    jest.spyOn(listServices, 'run').mockResolvedValue({
+      services: [{ yc_id: 15394152, title: 'Фото', staff: [{ yc_id: 5708379 }] }],
+    });
+    const out = await createBooking.run(1, {
+      staff_yc_id: 1554316, service_yc_id: 15394152, // мастера нет в списке услуги
+      datetime: '2026-07-23T12:00:00+03:00', client_phone: '79200255591',
+    });
+    expect(out.invalid_args).toBe(true);
+    expect(booking.createBookingRecord).not.toHaveBeenCalled();
+    listServices.run.mockRestore();
+  });
+
+  test('реальная пара услуга×мастер → запись создаётся', async () => {
+    jest.spyOn(listServices, 'run').mockResolvedValue({
+      services: [{ yc_id: 15394152, title: 'Фото', staff: [{ yc_id: 5708379 }] }],
+    });
+    booking.createBookingRecord.mockResolvedValue({ created: true, record_id: 42 });
+    const out = await createBooking.run(1, {
+      staff_yc_id: 5708379, service_yc_id: 15394152,
+      datetime: '2026-07-23T12:00:00+03:00', client_phone: '79200255591',
+    });
+    expect(booking.createBookingRecord).toHaveBeenCalled();
+    expect(out.created).toBe(true);
+    listServices.run.mockRestore();
+  });
 });

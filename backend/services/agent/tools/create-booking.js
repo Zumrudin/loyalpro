@@ -3,6 +3,7 @@
 const booking = require('../booking');
 const settings = require('../../agent-settings');
 const svcFilter = require('../service-filter');
+const listServices = require('./list-services');
 
 const schema = {
   name: 'create_booking',
@@ -39,6 +40,33 @@ async function run(salonId, input, ctx = {}) {
       error: 'Эта услуга у выбранного мастера сейчас недоступна для записи. ' +
         'Предложи другую услугу или мастера, либо передай оператору.',
     };
+  }
+  // Детерминированная защита от ВЫДУМАННЫХ id: услуга и мастер должны реально
+  // существовать в каталоге салона, и мастер должен выполнять эту услугу.
+  // Flash Lite иногда подставляет несуществующие id → YClients отвечает 404 уже
+  // ПОСЛЕ «подтверждения». Ловим до вызова YClients и возвращаем модели
+  // корректирующую ошибку, чтобы она взяла точные id из list_services.
+  // Fail-open: если каталог недоступен/пуст — не блокируем (иначе при сбое
+  // YClients ни одна легитимная запись не пройдёт).
+  let catalog = null;
+  try { catalog = await listServices.run(salonId); } catch (_) { catalog = null; }
+  if (catalog && Array.isArray(catalog.services) && catalog.services.length) {
+    const svc = catalog.services.find(s => String(s.yc_id) === String(input.service_yc_id));
+    if (!svc) {
+      return {
+        invalid_args: true,
+        error: 'Услуга с таким service_yc_id не найдена в каталоге. Возьми точный ' +
+          'service_yc_id из list_services — не придумывай id.',
+      };
+    }
+    const staffOk = (svc.staff || []).some(m => String(m.yc_id) === String(input.staff_yc_id));
+    if (!staffOk) {
+      return {
+        invalid_args: true,
+        error: 'Выбранный мастер не выполняет эту услугу (или staff_yc_id неверный). ' +
+          'Возьми мастера из поля staff нужной услуги в list_services.',
+      };
+    }
   }
   return booking.createBookingRecord(salonId, {
     dialogKey: ctx.dialogKey || input.client_phone,
