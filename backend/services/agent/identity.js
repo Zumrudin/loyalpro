@@ -22,4 +22,23 @@ async function resolveClient(salonId, rawPhone) {
   return row ? { id: row.id, name: row.name, phone: row.phone } : null;
 }
 
-module.exports = { resolveClient };
+// YClients client_id пациента по номеру. В таблице clients его нет — берём из
+// последней синхронизированной записи (records.yclients_client_id стабилен для
+// клиента). Нужен для живого запроса записей и проверки принадлежности при
+// отмене/переносе. null, если у клиента нет ни одной синхронизированной записи.
+async function resolveYclientsClientId(salonId, rawPhone) {
+  const phone = normalizePhoneKey(String(rawPhone || ''));
+  if (!salonId || !phone) return null;
+  const row = await db.oneOrNone(
+    `SELECT r.yclients_client_id AS yc_client_id
+       FROM records r
+       JOIN clients c ON c.id = r.client_id
+      WHERE c.salon_id = $1 AND c.phone LIKE '%' || $2
+        AND r.yclients_client_id IS NOT NULL
+      ORDER BY r.visit_datetime DESC NULLS LAST
+      LIMIT 1`,
+    [salonId, phone]);
+  return row && row.yc_client_id ? Number(row.yc_client_id) : null;
+}
+
+module.exports = { resolveClient, resolveYclientsClientId };
