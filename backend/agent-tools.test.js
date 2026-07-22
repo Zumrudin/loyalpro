@@ -516,3 +516,14 @@ describe('reschedule_booking', () => {
     expect(out.error).toBe('занято');
   });
 });
+
+describe('реестр инструментов', () => {
+  test('новые инструменты зарегистрированы', () => {
+    const registry = require('./services/agent/tools');
+    const names = registry.schemas.map(s => s.name);
+    expect(names).toContain('list_client_bookings');
+    expect(names).toContain('cancel_booking');
+    expect(names).toContain('reschedule_booking');
+    expect(typeof registry.handlers.cancel_booking).toBe('function');
+  });
+});
