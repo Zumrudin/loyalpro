@@ -6,6 +6,15 @@ jest.mock('./services/yclients', () => ({ ycGet: jest.fn(), ycGetServiceCatalog:
 jest.mock('./services/yclients-booking', () => ({ ycGetBookTimes: jest.fn(), ycGetStaffSchedule: jest.fn(), ycGetStaffSeances: jest.fn() }));
 jest.mock('./services/agent-settings', () => ({ loadServiceFilterSafe: jest.fn() }));
 jest.mock('./services/agent/booking', () => ({ createBookingRecord: jest.fn() }));
+jest.mock('./services/yclients-records', () => ({
+  ycGetClientRecords: jest.fn(), ycGetRecord: jest.fn(), ycUpdateRecord: jest.fn(),
+}));
+jest.mock('./services/agent/booking-modify', () => ({
+  cancelBookingRecord: jest.fn(), rescheduleBookingRecord: jest.fn(),
+}));
+jest.mock('./services/agent/identity', () => ({
+  resolveClient: jest.fn(), resolveYclientsClientId: jest.fn(),
+}));
 
 const { db } = require('./db');
 const rag = require('./services/agent-rag');
@@ -34,6 +43,12 @@ const getSlots = require('./services/agent/tools/get-available-slots');
 const getDates = require('./services/agent/tools/get-available-dates');
 const getClient = require('./services/agent/tools/get-client');
 const createBooking = require('./services/agent/tools/create-booking');
+const { ycGetClientRecords } = require('./services/yclients-records');
+const bookingModify = require('./services/agent/booking-modify');
+const identity = require('./services/agent/identity');
+const listClientBookings = require('./services/agent/tools/list-client-bookings');
+const cancelBooking = require('./services/agent/tools/cancel-booking');
+const rescheduleBooking = require('./services/agent/tools/reschedule-booking');
 
 beforeEach(() => {
   jest.clearAllMocks();
@@ -389,5 +404,39 @@ describe('create_booking', () => {
       { dialogKey: 'k' });
     expect(out.invalid_args).toBe(true);
     expect(booking.createBookingRecord).not.toHaveBeenCalled();
+  });
+});
+
+describe('list_client_bookings', () => {
+  test('нет телефона в ctx → reason no_phone', async () => {
+    const out = await listClientBookings.run(1, {}, {});
+    expect(out.bookings).toEqual([]);
+    expect(out.reason).toBe('no_phone');
+  });
+
+  test('клиент без yclients_client_id → reason client_not_found', async () => {
+    identity.resolveYclientsClientId.mockResolvedValue(null);
+    const out = await listClientBookings.run(1, {}, { clientPhone: '79001112233' });
+    expect(out.reason).toBe('client_not_found');
+    expect(ycGetClientRecords).not.toHaveBeenCalled();
+  });
+
+  test('возвращает только будущие и не отменённые записи', async () => {
+    identity.resolveYclientsClientId.mockResolvedValue(777);
+    db.one.mockResolvedValue({ id: 1, yclients_company_id: 100 });
+    const nowMs = Date.parse('2026-07-22T10:00:00+03:00');
+    ycGetClientRecords.mockResolvedValue([
+      { id: 1, datetime: '2026-07-25T12:00:00+03:00', attendance: 0,
+        services: [{ id: 10, title: 'Пилинг' }], staff_id: 7, staff: { id: 7, name: 'Иванова' } },
+      { id: 2, datetime: '2026-07-24T12:00:00+03:00', attendance: -1,  // отменена — отфильтровать
+        services: [{ id: 11, title: 'Чистка' }], staff: { id: 8, name: 'Петрова' } },
+      { id: 3, datetime: '2026-07-20T12:00:00+03:00', attendance: 0,   // прошлое — отфильтровать
+        services: [{ id: 12, title: 'Массаж' }], staff: { id: 9, name: 'Сидорова' } },
+    ]);
+    const out = await listClientBookings.run(1, {}, { clientPhone: '79001112233', nowMs });
+    expect(out.bookings).toHaveLength(1);
+    expect(out.bookings[0]).toMatchObject({
+      record_id: 1, staff_yc_id: 7, staff_name: 'Иванова', services: ['Пилинг'],
+    });
   });
 });
