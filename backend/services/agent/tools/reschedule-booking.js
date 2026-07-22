@@ -28,6 +28,13 @@ async function run(salonId, input, ctx = {}) {
   if (!recordId || !datetime) return { invalid_args: true, error: 'Нужны record_id и datetime.' };
 
   const expectedYcClientId = await identity.resolveYclientsClientId(salonId, ctx.clientPhone);
+  // Fail-closed: без подтверждённого клиента перенос не делаем (гейт
+  // принадлежности в booking-modify иначе открывается на выдуманный record_id).
+  if (!expectedYcClientId) {
+    return { unverified: true,
+      error: 'Не удалось подтвердить, что запись принадлежит этому пациенту. ' +
+        'Уточни номер телефона или переведи диалог на администратора.' };
+  }
   const res = await bookingModify.rescheduleBookingRecord(salonId, {
     dialogKey: ctx.dialogKey || ctx.clientPhone,
     recordId,

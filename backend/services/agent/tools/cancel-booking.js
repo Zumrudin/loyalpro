@@ -1,8 +1,9 @@
 'use strict';
 
+const { db } = require('../../../db');
 const bookingModify = require('../booking-modify');
 const identity = require('../identity');
-const listServices = require('./list-services');
+const { ycFindServiceIdByTitle } = require('../../yclients-records');
 
 const schema = {
   name: 'cancel_booking',
@@ -20,16 +21,22 @@ const schema = {
 };
 
 // Услуга-флаг «Запрет на отправку» глушит уведомления YClients по записи.
-// Ищем её в каталоге по нормализованному названию (отдельной настройки нет).
+// Ищем её в ПОЛНОМ каталоге салона по нормализованному названию (отдельной
+// настройки нет). Важно: НЕ через list_services — тот в allowlist-режиме
+// (feat/agent-service-filter) отдаёт только услуги из белого списка и режет
+// технические услуги с ценой 0, поэтому «Запрет на отправку» там не находится.
 const NO_NOTIFY_TITLE = 'запрет на отправку';
-const norm = (s) => String(s || '').toLowerCase().replace(/\s+/g, ' ').trim();
 
 async function findNoNotifyServiceId(salonId) {
-  let catalog = null;
-  try { catalog = await listServices.run(salonId); } catch (_) { return null; }
-  const svc = (catalog && Array.isArray(catalog.services) ? catalog.services : [])
-    .find(s => norm(s.title).includes(NO_NOTIFY_TITLE));
-  return svc ? svc.yc_id : null;
+  let salon;
+  try {
+    salon = await db.one(
+      `SELECT id, yclients_company_id, yclients_partner_token, yclients_user_token
+         FROM salons WHERE id=$1`, [salonId]);
+  } catch (_) { return null; }
+  if (!salon.yclients_company_id) return null;
+  try { return await ycFindServiceIdByTitle(salon, NO_NOTIFY_TITLE); }
+  catch (_) { return null; }
 }
 
 async function run(salonId, input, ctx = {}) {
@@ -37,6 +44,15 @@ async function run(salonId, input, ctx = {}) {
   if (!recordId) return { invalid_args: true, error: 'Нужен record_id из list_client_bookings.' };
 
   const expectedYcClientId = await identity.resolveYclientsClientId(salonId, ctx.clientPhone);
+  // Fail-closed: без подтверждённого клиента отмену не делаем (иначе гейт
+  // принадлежности в booking-modify открывается — можно было бы отменить чужую
+  // запись по выдуманному record_id). Клиент без синхронизированной истории
+  // сюда не попадёт (list_client_bookings тоже вернёт client_not_found).
+  if (!expectedYcClientId) {
+    return { unverified: true,
+      error: 'Не удалось подтвердить, что запись принадлежит этому пациенту. ' +
+        'Уточни номер телефона или переведи диалог на администратора.' };
+  }
   const noNotifyServiceId = await findNoNotifyServiceId(salonId);
 
   const res = await bookingModify.cancelBookingRecord(salonId, {

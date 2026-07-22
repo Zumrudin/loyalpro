@@ -9,7 +9,7 @@ jest.mock('./services/yclients', () => ({
 const axios = require('axios');
 const { ycGet } = require('./services/yclients');
 const {
-  ycGetRecord, ycGetClientRecords, ycUpdateRecord,
+  ycGetRecord, ycGetClientRecords, ycUpdateRecord, ycFindServiceIdByTitle,
 } = require('./services/yclients-records');
 
 const salon = { id: 1, yclients_company_id: 100, yclients_partner_token: 'p', yclients_user_token: 'u' };
@@ -54,5 +54,26 @@ describe('ycUpdateRecord', () => {
   test('success:false → бросает', async () => {
     axios.put.mockResolvedValue({ data: { success: false, meta: { message: 'нет' } } });
     await expect(ycUpdateRecord(salon, 555, {})).rejects.toThrow('нет');
+  });
+});
+
+describe('ycFindServiceIdByTitle', () => {
+  test('ищет в полном каталоге /company/{cid}/services/ по подстроке (регистр/пробелы)', async () => {
+    ycGet.mockResolvedValue([
+      { id: 10, title: 'Пилинг' },
+      { id: 99, title: '  ЗАПРЕТ  на   Отправку ' },   // техническая, цена 0
+    ]);
+    const id = await ycFindServiceIdByTitle(salon, 'запрет на отправку');
+    expect(ycGet).toHaveBeenCalledWith(salon, '/company/100/services/', {});
+    expect(id).toBe(99);
+  });
+  test('не найдено → null', async () => {
+    ycGet.mockResolvedValue([{ id: 10, title: 'Пилинг' }]);
+    expect(await ycFindServiceIdByTitle(salon, 'запрет на отправку')).toBeNull();
+  });
+  test('пустой needle или нет company_id → null без запроса', async () => {
+    expect(await ycFindServiceIdByTitle(salon, '')).toBeNull();
+    expect(await ycFindServiceIdByTitle({ id: 1 }, 'запрет')).toBeNull();
+    expect(ycGet).not.toHaveBeenCalled();
   });
 });

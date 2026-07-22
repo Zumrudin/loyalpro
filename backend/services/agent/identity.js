@@ -26,6 +26,12 @@ async function resolveClient(salonId, rawPhone) {
 // последней синхронизированной записи (records.yclients_client_id стабилен для
 // клиента). Нужен для живого запроса записей и проверки принадлежности при
 // отмене/переносе. null, если у клиента нет ни одной синхронизированной записи.
+// ИЗВЕСТНОЕ ОГРАНИЧЕНИЕ: только что созданную запись (клиент без прошлой истории
+// в records) агент не увидит до ближайшего 3-часового синка → list_client_bookings
+// вернёт client_not_found, а cancel/reschedule — fail-closed (эскалация на
+// администратора). Приемлемо для whitelist-пилота (клиенты уже с историей).
+// TODO(follow-up): при промахе резолвить client_id живьём через YClients
+// clients/search по телефону, чтобы покрыть свежесозданные записи.
 async function resolveYclientsClientId(salonId, rawPhone) {
   const phone = normalizePhoneKey(String(rawPhone || ''));
   if (!salonId || !phone) return null;

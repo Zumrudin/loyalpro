@@ -68,4 +68,23 @@ async function ycUpdateRecord(salon, ycRecordId, body) {
   return data.data;
 }
 
-module.exports = { updateAttendance, ycGetRecord, ycGetClientRecords, ycUpdateRecord };
+/**
+ * Найти id услуги по названию в ПОЛНОМ каталоге салона (management-эндпоинт
+ * GET /company/{company_id}/services/). Именно полный список — не booking-версия
+ * /services/{cid} и не list_services: те режут технические услуги (цена 0) и
+ * применяют offer-фильтр (в allowlist-режиме отдают только услуги из белого
+ * списка). Техническая услуга «Запрет на отправку» есть только здесь.
+ * Возвращает id первой услуги, чьё название содержит needle, иначе null.
+ */
+async function ycFindServiceIdByTitle(salon, needle) {
+  const n = String(needle || '').toLowerCase().replace(/\s+/g, ' ').trim();
+  if (!n || !salon || !salon.yclients_company_id) return null;
+  const list = await ycGet(salon, `/company/${salon.yclients_company_id}/services/`, {});
+  const svc = (Array.isArray(list) ? list : []).find(
+    s => String(s.title || '').toLowerCase().replace(/\s+/g, ' ').trim().includes(n));
+  return svc ? svc.id : null;
+}
+
+module.exports = {
+  updateAttendance, ycGetRecord, ycGetClientRecords, ycUpdateRecord, ycFindServiceIdByTitle,
+};
