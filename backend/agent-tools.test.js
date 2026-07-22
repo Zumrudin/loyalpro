@@ -440,3 +440,47 @@ describe('list_client_bookings', () => {
     });
   });
 });
+
+describe('cancel_booking', () => {
+  test('нет record_id → invalid_args', async () => {
+    const out = await cancelBooking.run(1, {}, { clientPhone: '79001112233' });
+    expect(out.invalid_args).toBe(true);
+    expect(bookingModify.cancelBookingRecord).not.toHaveBeenCalled();
+  });
+
+  test('услуга «Запрет на отправку» найдена → отмена без предупреждения', async () => {
+    identity.resolveYclientsClientId.mockResolvedValue(777);
+    jest.spyOn(listServices, 'run').mockResolvedValue({
+      services: [{ yc_id: 10, title: 'Пилинг' }, { yc_id: 99, title: 'Запрет на отправку' }],
+    });
+    bookingModify.cancelBookingRecord.mockResolvedValue({ ok: true, record_id: 555, no_notify_applied: true });
+    const out = await cancelBooking.run(1, { record_id: 555 }, { clientPhone: '79001112233', dialogKey: 'd' });
+    expect(out.cancelled).toBe(true);
+    expect(out.no_notify_warning).toBe(false);
+    // услуга «Запрет на отправку» (yc_id 99) передана в исполнитель
+    expect(bookingModify.cancelBookingRecord.mock.calls[0][1].noNotifyServiceId).toBe(99);
+    expect(bookingModify.cancelBookingRecord.mock.calls[0][1].expectedYcClientId).toBe(777);
+    listServices.run.mockRestore();
+  });
+
+  test('услуги «Запрет на отправку» нет в каталоге → no_notify_warning:true', async () => {
+    identity.resolveYclientsClientId.mockResolvedValue(777);
+    jest.spyOn(listServices, 'run').mockResolvedValue({ services: [{ yc_id: 10, title: 'Пилинг' }] });
+    bookingModify.cancelBookingRecord.mockResolvedValue({ ok: true, record_id: 555, no_notify_applied: false });
+    const out = await cancelBooking.run(1, { record_id: 555 }, { clientPhone: '79001112233', dialogKey: 'd' });
+    expect(out.cancelled).toBe(true);
+    expect(out.no_notify_warning).toBe(true);
+    expect(bookingModify.cancelBookingRecord.mock.calls[0][1].noNotifyServiceId).toBeNull();
+    listServices.run.mockRestore();
+  });
+
+  test('исполнитель вернул foreign → error проброшен, cancelled нет', async () => {
+    identity.resolveYclientsClientId.mockResolvedValue(888);
+    jest.spyOn(listServices, 'run').mockResolvedValue({ services: [] });
+    bookingModify.cancelBookingRecord.mockResolvedValue({ ok: false, foreign: true, error: 'чужая' });
+    const out = await cancelBooking.run(1, { record_id: 555 }, { clientPhone: '79001112233' });
+    expect(out.cancelled).toBeUndefined();
+    expect(out.error).toBe('чужая');
+    listServices.run.mockRestore();
+  });
+});
