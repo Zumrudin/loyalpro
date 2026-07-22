@@ -57,6 +57,34 @@ describe('aitunnel.createMessage', () => {
   });
 });
 
+// Транзиентный сбой aitunnel (421 «отсутствует поле usage») не должен ронять ход —
+// провайдер повторяет вызов. Инцидент 2026-07-21: 421 посреди записи → клиент увидел
+// «технический сбой», хотя запись уже создалась.
+describe('aitunnel.createMessage — ретрай на транзиентном сбое', () => {
+  test('421 на первой попытке → повтор → успех', async () => {
+    let n = 0;
+    const fakeClient = { chat: { completions: { create: async () => {
+      n += 1;
+      if (n === 1) { const e = new Error('Не удалось посчитать стоимость запроса, отсутствует поле "usage"'); e.status = 421; throw e; }
+      return { choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: 'Готово ✨' } }] };
+    } } } };
+    const res = await provider.createMessage(
+      { system: 's', messages: [{ role: 'user', content: 'да' }], tools: [] }, { client: fakeClient });
+    expect(n).toBe(2);
+    expect(res.text).toBe('Готово ✨');
+  });
+
+  test('нетранзиентная ошибка (400) не ретраится и пробрасывается', async () => {
+    let n = 0;
+    const fakeClient = { chat: { completions: { create: async () => {
+      n += 1; const e = new Error('bad request'); e.status = 400; throw e;
+    } } } };
+    await expect(provider.createMessage(
+      { system: 's', messages: [], tools: [] }, { client: fakeClient })).rejects.toThrow('bad request');
+    expect(n).toBe(1);
+  });
+});
+
 describe('aitunnel.toolResultMessages', () => {
   test('по одному {role:tool} на вызов с tool_call_id', () => {
     const msgs = provider.toolResultMessages([
@@ -67,5 +95,25 @@ describe('aitunnel.toolResultMessages', () => {
       { role: 'tool', tool_call_id: 'c1', content: JSON.stringify({ slots: ['10:00'] }) },
       { role: 'tool', tool_call_id: 'c2', content: JSON.stringify({ error: 'занято' }) },
     ]);
+  });
+});
+
+// Добивочный вызов оркестратора идёт с tools: [] — модель обязана ответить прозой.
+// Пустой массив tools API отвергает, поэтому параметр надо опускать целиком.
+describe('aitunnel.createMessage без инструментов', () => {
+  test('пустой список инструментов → параметр tools не отправляется', async () => {
+    const calls = [];
+    const fakeClient = { chat: { completions: { create: async (p) => {
+      calls.push(p);
+      return { choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: 'Завтра в 16:00.' } }] };
+    } } } };
+
+    const res = await provider.createMessage(
+      { system: 'ты админ', messages: [{ role: 'user', content: 'когда?' }], tools: [] },
+      { client: fakeClient });
+
+    expect(calls[0]).not.toHaveProperty('tools');
+    expect(res.text).toBe('Завтра в 16:00.');
+    expect(res.toolCalls).toEqual([]);
   });
 });

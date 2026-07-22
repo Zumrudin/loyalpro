@@ -67,6 +67,11 @@ module.exports = {
   AGENT_MAX_TOKENS:  process.env.AGENT_MAX_TOKENS ? parseInt(process.env.AGENT_MAX_TOKENS, 10) : 4096,
   // Дебаунс серии сообщений (мс) — используется диспетчером в Фазе 2b.
   AGENT_DEBOUNCE_MS: process.env.AGENT_DEBOUNCE_MS ? parseInt(process.env.AGENT_DEBOUNCE_MS, 10) : 5000,
+  // User-токен приложения-интеграции LoyalPRO — используется ТОЛЬКО для СОЗДАНИЯ
+  // записей, чтобы автор в YClients был «LoyalPRO», а не личная УЗ владельца
+  // (иначе created_user_id = владелец yclients_user_token). Чтения слотов/каталога
+  // это не трогает. Пусто → запись создаётся под salons.yclients_user_token (как раньше).
+  YCLIENTS_INTEGRATION_USER_TOKEN: process.env.YCLIENTS_INTEGRATION_USER_TOKEN || '',
 
   // ── aitunnel.ru — OpenAI-совместимый агрегатор (обход геоблока, оплата ₽). ──
   // Единая точка для агента (Gemini 3.1 Flash Lite) и базы знаний (чат + эмбеддинги).

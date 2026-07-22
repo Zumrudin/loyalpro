@@ -1,6 +1,7 @@
 'use strict';
 
 const { ycGet, ycPost } = require('./yclients');
+const config = require('../config');
 
 // ── YClients booking-flow: свободные слоты + создание записи. ──────────
 // Слоты берём через book_times (уже вычитает занятость), не через /schedule.
@@ -48,7 +49,36 @@ async function ycGetStaffSeances(salon, staffYcId, date) {
     {});
 }
 
+// Аппараты салона: [{id, title, instances:[{id, title, resource_id}]}].
+// Экземпляров у аппарата обычно ровно один — поэтому две услуги на одном
+// аппарате параллельно невозможны. Кэш: список меняется крайне редко.
+const _resourcesCache = {};                    // salonId → { ts, data }
+const RESOURCES_TTL = 30 * 60 * 1000;
+
+async function ycGetResources(salon) {
+  const key = salon && salon.id;
+  const cached = _resourcesCache[key];
+  if (cached && (Date.now() - cached.ts) < RESOURCES_TTL) return cached.data;
+  const data = await ycGet(salon, `/resources/${salon.yclients_company_id}`, {});
+  const list = Array.isArray(data) ? data : [];
+  _resourcesCache[key] = { ts: Date.now(), data: list };
+  return list;
+}
+
+// Записи салона за один день. Нужны, чтобы увидеть занятость аппаратов: в
+// записи лежит resource_instance_ids, и это единственный способ узнать, что
+// аппарат занят чужим визитом (management-график мастера про это не знает).
+async function ycGetDayRecords(salon, date) {
+  const data = await ycGet(salon, `/records/${salon.yclients_company_id}`,
+    { start_date: date, end_date: date, count: 300 });
+  return Array.isArray(data) ? data : [];
+}
+
 // Создание записи через management API (partner+user токен, без SMS-кода).
+// Автор записи в YClients = владелец User-токена. Если задан отдельный
+// YCLIENTS_INTEGRATION_USER_TOKEN (УЗ приложения LoyalPRO) — создаём запись под
+// ним, чтобы автор был «LoyalPRO», а не личная УЗ владельца. Иначе — как раньше,
+// под salons.yclients_user_token. Заголовки собирает ycHeaders по этому полю.
 async function ycCreateRecord(salon, {
   staffYcId, serviceYcIds, datetime, seanceLength, clientPhone, clientName, comment,
 }) {
@@ -62,7 +92,13 @@ async function ycCreateRecord(salon, {
     send_sms: false,
     comment: comment || 'Запись через ИИ-агента',
   };
-  return ycPost(salon, `/records/${salon.yclients_company_id}`, body);
+  const authSalon = config.YCLIENTS_INTEGRATION_USER_TOKEN
+    ? { ...salon, yclients_user_token: config.YCLIENTS_INTEGRATION_USER_TOKEN }
+    : salon;
+  return ycPost(authSalon, `/records/${salon.yclients_company_id}`, body);
 }
 
-module.exports = { ycGetBookTimes, ycGetBookDates, ycGetStaffSchedule, ycGetStaffSeances, ycCreateRecord };
+module.exports = {
+  ycGetBookTimes, ycGetBookDates, ycGetStaffSchedule, ycGetStaffSeances, ycCreateRecord,
+  ycGetResources, ycGetDayRecords,
+};

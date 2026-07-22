@@ -5,6 +5,7 @@
 // Решение допуска делегируется чистому services/agent-gate.
 // ============================================================
 const { db } = require('../db');
+const { ycGetServiceCatalog } = require('./yclients');
 const { normalizePhoneKey, decideGate } = require('./agent-gate');
 
 const DEFAULTS = { enabled: false, mode: 'all' };
@@ -68,6 +69,233 @@ async function isAllowed(salonId, phone) {
   return decideGate({ enabled: true, mode: settings.mode, allow, block, phone });
 }
 
+// ── Фильтр услуг агента ─────────────────────────────────────
+async function getServiceMode(salonId) {
+  if (!salonId) return 'all';
+  const row = await db.oneOrNone(
+    'SELECT service_mode FROM agent_settings WHERE salon_id=$1', [salonId]);
+  return (row && row.service_mode === 'allowlist') ? 'allowlist' : 'all';
+}
+
+async function updateServiceMode(salonId, mode) {
+  const m = mode === 'allowlist' ? 'allowlist' : 'all';
+  const row = await db.one(
+    `INSERT INTO agent_settings (salon_id, service_mode, updated_at)
+     VALUES ($1,$2,NOW())
+     ON CONFLICT (salon_id) DO UPDATE SET service_mode=$2, updated_at=NOW()
+     RETURNING service_mode`,
+    [salonId, m]);
+  return { serviceMode: row.service_mode };
+}
+
+async function listServiceRules(salonId) {
+  return db.any(
+    `SELECT id, yc_service_id, yc_staff_id, rule_type, note, created_at
+       FROM agent_service_rules WHERE salon_id=$1 ORDER BY created_at DESC`,
+    [salonId]);
+}
+
+async function addServiceRule(salonId, { ycServiceId, ycStaffId, ruleType, note }) {
+  const svc = parseInt(ycServiceId, 10);
+  if (!svc) { const e = new Error('bad service'); e.code = 'BAD_SERVICE'; throw e; }
+  const staff = (ycStaffId === undefined || ycStaffId === null || ycStaffId === '')
+    ? null : parseInt(ycStaffId, 10);
+  // Пары поддерживают только deny (см. спеку); услуга целиком — allow|deny.
+  let type = ruleType === 'allow' ? 'allow' : 'deny';
+  if (staff !== null) type = 'deny';
+  return db.one(
+    `INSERT INTO agent_service_rules (salon_id, yc_service_id, yc_staff_id, rule_type, note)
+     VALUES ($1,$2,$3,$4,$5)
+     ON CONFLICT (salon_id, yc_service_id, COALESCE(yc_staff_id,0), rule_type)
+       DO UPDATE SET note=EXCLUDED.note
+     RETURNING id, yc_service_id, yc_staff_id, rule_type, note, created_at`,
+    [salonId, svc, staff, type, note || null]);
+}
+
+async function removeServiceRule(salonId, id) {
+  await db.query('DELETE FROM agent_service_rules WHERE salon_id=$1 AND id=$2', [salonId, id]);
+}
+
+// Удалить правило по составному ключу (без знания id) — нужно для bulk-операций.
+async function removeServiceRuleByKey(salonId, svcId, staffId, ruleType) {
+  await db.query(
+    `DELETE FROM agent_service_rules
+      WHERE salon_id=$1 AND yc_service_id=$2
+        AND COALESCE(yc_staff_id,0)=COALESCE($3::int,0) AND rule_type=$4`,
+    [salonId, svcId, staffId ?? null, ruleType]);
+}
+
+// Применить желаемую видимость услуги целиком (та же логика, что тумблер на фронте).
+// Всегда чистим противоположное правило, чтобы deny+allow не противоречили.
+//   allowlist — видимость = наличие allow (active не важен).
+//   all + active  — по умолчанию видна: скрыть = deny, показать = снять deny.
+//   all + !active — по умолчанию скрыта: показать = allow, скрыть = снять allow.
+async function applyServiceVisibility(salonId, { ycServiceId, active, wantVisible }, mode) {
+  const svc = parseInt(ycServiceId, 10);
+  if (!svc) return;
+  const isActive = !!active;
+  if (mode === 'allowlist') {
+    if (wantVisible) await addServiceRule(salonId, { ycServiceId: svc, ruleType: 'allow' });
+    else await removeServiceRuleByKey(salonId, svc, null, 'allow');
+  } else if (wantVisible) {
+    await removeServiceRuleByKey(salonId, svc, null, 'deny');
+    if (!isActive) await addServiceRule(salonId, { ycServiceId: svc, ruleType: 'allow' });
+  } else {
+    await removeServiceRuleByKey(salonId, svc, null, 'allow');
+    if (isActive) await addServiceRule(salonId, { ycServiceId: svc, ruleType: 'deny' });
+  }
+}
+
+// Массовая установка видимости (тумблер категории). items: [{ycServiceId, active, wantVisible}].
+async function setServicesVisibilityBulk(salonId, items) {
+  const mode = await getServiceMode(salonId);
+  for (const it of (items || [])) await applyServiceVisibility(salonId, it, mode);
+  return { ok: true };
+}
+
+// Загрузчик правил → структуры для service-filter. Кидает при сбое БД.
+async function loadServiceFilter(salonId) {
+  const mode = await getServiceMode(salonId);
+  const rows = await db.any(
+    `SELECT yc_service_id, yc_staff_id, rule_type FROM agent_service_rules WHERE salon_id=$1`,
+    [salonId]);
+  const denyServices = new Set(), allowServices = new Set(), denyPairs = new Set();
+  for (const r of rows) {
+    const sid = String(r.yc_service_id);
+    if (r.yc_staff_id === null || r.yc_staff_id === undefined) {
+      if (r.rule_type === 'deny') denyServices.add(sid);
+      else allowServices.add(sid);
+    } else if (r.rule_type === 'deny') {
+      denyPairs.add(`${sid}:${String(r.yc_staff_id)}`);
+    }
+  }
+  return { mode, denyServices, allowServices, denyPairs };
+}
+
+// Fail-open обёртка: при любом сбое БД → пустой пермиссивный фильтр (mode 'all',
+// пустые множества → видно всё). Транзиентный сбой не должен ломать агента.
+async function loadServiceFilterSafe(salonId) {
+  try { return await loadServiceFilter(salonId); }
+  catch (e) {
+    return { mode: 'all', denyServices: new Set(), allowServices: new Set(), denyPairs: new Set() };
+  }
+}
+
+// ── Стоп-темы: чем клиника не занимается вообще (даже не консультирует) ──
+// Отдаёт массив строк тем. Кидает при сбое БД.
+async function loadStopTopics(salonId) {
+  if (!salonId) return [];
+  const rows = await db.any(
+    `SELECT topic FROM agent_stop_topics WHERE salon_id=$1 ORDER BY id`, [salonId]);
+  return rows.map(r => String(r.topic || '').trim()).filter(Boolean);
+}
+
+// Fail-open обёртка: при сбое БД → пустой список. Осознанный компромисс —
+// транзиентный сбой БД не должен ронять весь диалог. Риск: в этот момент агент
+// не увидит стоп-темы. Если понадобится fail-closed, менять здесь.
+async function loadStopTopicsSafe(salonId) {
+  try { return await loadStopTopics(salonId); }
+  catch (_) { return []; }
+}
+
+// Список стоп-тем для админки (с id, чтобы можно было удалять).
+async function listStopTopics(salonId) {
+  return db.any(
+    `SELECT id, topic, note, created_at FROM agent_stop_topics
+      WHERE salon_id=$1 ORDER BY id`, [salonId]);
+}
+
+async function addStopTopic(salonId, topic, note) {
+  const t = String(topic || '').trim();
+  if (!t) throw new Error('Пустая стоп-тема');
+  return db.oneOrNone(
+    `INSERT INTO agent_stop_topics (salon_id, topic, note) VALUES ($1,$2,$3)
+     ON CONFLICT (salon_id, lower(topic)) DO NOTHING
+     RETURNING id, topic, note`,
+    [salonId, t, note || null]);
+}
+
+async function removeStopTopic(salonId, id) {
+  await db.query('DELETE FROM agent_stop_topics WHERE salon_id=$1 AND id=$2', [salonId, id]);
+}
+
+// Полный каталог услуг, сгруппированный по категориям, с ДОСТОВЕРНЫМИ мастерами
+// (кто реально выполняет услугу) и текущей видимостью — для экрана админки.
+// Структура: { serviceMode, categories: [{ id, title, services: [{…, staff:[…]}] }] }.
+async function getServicesForAdmin(salonId) {
+  const salon = await db.oneOrNone(
+    `SELECT id, yclients_company_id, yclients_partner_token, yclients_user_token
+       FROM salons WHERE id=$1`, [salonId]);
+  const staffRows = await db.any(
+    `SELECT yclients_staff_id, name FROM staff_members
+      WHERE salon_id=$1 AND is_active=true`, [salonId]);
+  const staffNameById = new Map(staffRows.map(s => [String(s.yclients_staff_id), s.name]));
+
+  const { priced, categories, staffIdsByService } = salon
+    ? await ycGetServiceCatalog(salon, staffRows.map(s => s.yclients_staff_id))
+    : { priced: [], categories: [], staffIdsByService: new Map() };
+
+  const filter = await loadServiceFilter(salonId);   // админке нужен реальный статус, не fail-open
+  const svcFilter = require('./agent/service-filter');
+  const catById = new Map((categories || []).map(c => [String(c.id), c]));
+
+  // Услуга → объект с мастерами (только активные, реально выполняющие), отсортированными.
+  const svcObjs = priced.map(s => {
+    const performerIds = staffIdsByService.get(String(s.id)) || new Set();
+    const staff = [...performerIds]
+      .filter(id => staffNameById.has(id))
+      .map(id => ({
+        yc_id: Number(id),
+        name: staffNameById.get(id),
+        hidden: filter.denyPairs.has(`${String(s.id)}:${id}`),
+      }))
+      .sort((a, b) => String(a.name).localeCompare(String(b.name), 'ru'));
+    return {
+      yc_id: s.id,
+      title: s.title,
+      price_min: s.price_min,
+      price_max: s.price_max,
+      active: s.active === 1,
+      visible: svcFilter.decideOfferVisible(filter, s.id, s.active === 1),
+      category_id: s.category_id ?? null,
+      _weight: Number(s.weight) || 0,
+      staff,
+    };
+  });
+
+  // Группировка по категориям.
+  const groups = new Map();   // catKey → { id, title, _weight, services }
+  for (const s of svcObjs) {
+    const catKey = String(s.category_id ?? '');
+    if (!groups.has(catKey)) {
+      const c = catById.get(catKey);
+      groups.set(catKey, {
+        id: s.category_id ?? null,
+        title: (c && c.title) || 'Без категории',
+        _weight: c ? (Number(c.weight) || 0) : -1,   // «Без категории» — в конец
+        services: [],
+      });
+    }
+    groups.get(catKey).services.push(s);
+  }
+
+  // Сортировка: категории и услуги — по весу (убыв.), затем по названию.
+  const byWeightTitle = (a, b) =>
+    (b._weight - a._weight) || String(a.title).localeCompare(String(b.title), 'ru');
+  const out = [...groups.values()].sort(byWeightTitle);
+  for (const g of out) {
+    g.services.sort(byWeightTitle);
+    g.services.forEach(s => delete s._weight);
+    delete g._weight;
+  }
+
+  return { serviceMode: filter.mode, categories: out };
+}
+
 module.exports = {
   getSettings, updateSettings, listNumberRules, addNumberRule, removeNumberRule, isAllowed,
+  getServiceMode, updateServiceMode, listServiceRules, addServiceRule, removeServiceRule,
+  removeServiceRuleByKey, applyServiceVisibility, setServicesVisibilityBulk,
+  loadServiceFilter, loadServiceFilterSafe, getServicesForAdmin,
+  loadStopTopics, loadStopTopicsSafe, listStopTopics, addStopTopic, removeStopTopic,
 };

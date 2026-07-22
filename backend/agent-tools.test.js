@@ -2,13 +2,30 @@
 
 jest.mock('./services/agent-rag', () => ({ buildKnowledgeContext: jest.fn() }));
 jest.mock('./db', () => ({ db: { any: jest.fn(), one: jest.fn(), oneOrNone: jest.fn() } }));
-jest.mock('./services/yclients', () => ({ ycGet: jest.fn() }));
+jest.mock('./services/yclients', () => ({ ycGet: jest.fn(), ycGetServiceCatalog: jest.fn() }));
 jest.mock('./services/yclients-booking', () => ({ ycGetBookTimes: jest.fn(), ycGetStaffSchedule: jest.fn(), ycGetStaffSeances: jest.fn() }));
+jest.mock('./services/agent-settings', () => ({ loadServiceFilterSafe: jest.fn() }));
+jest.mock('./services/agent/booking', () => ({ createBookingRecord: jest.fn() }));
 
 const { db } = require('./db');
 const rag = require('./services/agent-rag');
-const { ycGet } = require('./services/yclients');
+const { ycGet, ycGetServiceCatalog } = require('./services/yclients');
+
+// Хелпер: собрать возврат ycGetServiceCatalog. pairs = { svcId: [staffId,…] } →
+// достоверная карта услуга→мастера. prices = { svcId: { staffId: {price_min,price_max} } } →
+// цена per-staff (может отличаться между мастерами).
+const catalog = (priced, pairs = {}, prices = {}) => ({
+  priced,
+  categories: [],
+  staffIdsByService: new Map(
+    Object.entries(pairs).map(([k, v]) => [String(k), new Set(v.map(String))])),
+  staffPricesByService: new Map(
+    Object.entries(prices).map(([k, perStaff]) =>
+      [String(k), new Map(Object.entries(perStaff).map(([sid, p]) => [String(sid), p]))])),
+});
 const { ycGetBookTimes, ycGetStaffSchedule, ycGetStaffSeances } = require('./services/yclients-booking');
+const settings = require('./services/agent-settings');
+const booking = require('./services/agent/booking');
 
 const searchKb = require('./services/agent/tools/search-knowledge-base');
 const listServices = require('./services/agent/tools/list-services');
@@ -16,8 +33,14 @@ const listStaff = require('./services/agent/tools/list-staff');
 const getSlots = require('./services/agent/tools/get-available-slots');
 const getDates = require('./services/agent/tools/get-available-dates');
 const getClient = require('./services/agent/tools/get-client');
+const createBooking = require('./services/agent/tools/create-booking');
 
-beforeEach(() => jest.clearAllMocks());
+beforeEach(() => {
+  jest.clearAllMocks();
+  settings.loadServiceFilterSafe.mockResolvedValue({
+    mode: 'all', denyServices: new Set(), allowServices: new Set(), denyPairs: new Set(),
+  });
+});
 
 describe('search_knowledge_base', () => {
   test('schema имеет имя и query', () => {
@@ -46,21 +69,107 @@ describe('search_knowledge_base', () => {
 });
 
 describe('list_services', () => {
-  test('склеивает services_config с живыми ценами YClients', async () => {
-    db.any.mockResolvedValue([{ yclients_service_id: 7, service_title: 'Ботокс' }]);
+  test('активные услуги + достоверные мастера (per-staff) с ценой каждого, неактивные отфильтрованы', async () => {
+    db.any
+      .mockResolvedValueOnce([{ yclients_service_id: 7, service_title: 'Ботокс' }])            // services_config
+      .mockResolvedValueOnce([{ yclients_staff_id: 55, name: 'Аня' }, { yclients_staff_id: 66, name: 'Пери' }]); // staff_members
     db.one.mockResolvedValue({ id: 1, yclients_company_id: 100 });
-    ycGet.mockResolvedValue([{ id: 7, title: 'Ботулинотерапия', price_min: 5000, price_max: 8000 }]);
+    ycGetServiceCatalog.mockResolvedValue(catalog(
+      [
+        { id: 7, title: 'Ботулинотерапия', price_min: 5000, price_max: 8000, active: 1 },
+        { id: 11, title: 'Скрытая', price_min: 3000, price_max: 3000, active: 0 },   // active:0 без allow → выкинуть
+      ],
+      { 7: [55, 66], 11: [55] },
+      // цена процедуры отличается между мастерами: Аня 5000, главврач Пери 8000
+      { 7: { 55: { price_min: 5000, price_max: 5000 }, 66: { price_min: 8000, price_max: 8000 } } }));
     const out = await listServices.run(1, {});
     expect(out.services).toEqual([
-      expect.objectContaining({ yc_id: 7, title: 'Ботулинотерапия', price_min: 5000, price_max: 8000 }),
+      { yc_id: 7, title: 'Ботулинотерапия', price_min: 5000, price_max: 8000, staff: [
+        { yc_id: 55, name: 'Аня', price_min: 5000, price_max: 5000 },
+        { yc_id: 66, name: 'Пери', price_min: 8000, price_max: 8000 },
+      ] },
     ]);
   });
-  test('нет YClients-компании → отдаёт только заголовки из конфига', async () => {
-    db.any.mockResolvedValue([{ yclients_service_id: 7, service_title: 'Ботокс' }]);
+  test('per-staff цена отсутствует → фолбэк на общий диапазон услуги', async () => {
+    db.any
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{ yclients_staff_id: 55, name: 'Аня' }]);
+    db.one.mockResolvedValue({ id: 1, yclients_company_id: 100 });
+    ycGetServiceCatalog.mockResolvedValue(catalog(
+      [{ id: 7, title: 'Пилинг', price_min: 4000, price_max: 4000, active: 1 }],
+      { 7: [55] }));   // prices не заданы
+    const out = await listServices.run(1, {});
+    expect(out.services[0].staff).toEqual([{ yc_id: 55, name: 'Аня', price_min: 4000, price_max: 4000 }]);
+  });
+  test('неизвестный staff_id услуги отбрасывается (нет в staff_members)', async () => {
+    db.any
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{ yclients_staff_id: 55, name: 'Аня' }]);
+    db.one.mockResolvedValue({ id: 1, yclients_company_id: 100 });
+    ycGetServiceCatalog.mockResolvedValue(catalog(
+      [{ id: 7, title: 'Пилинг', price_min: 4000, price_max: 4000, active: 1 }],
+      { 7: [55, 999] }));
+    const out = await listServices.run(1, {});
+    expect(out.services[0].staff.map(s => s.name)).toEqual(['Аня']);   // 999 не резолвится → выброшен
+  });
+  test('нет YClients-компании → отдаёт только заголовки из конфига (staff пуст)', async () => {
+    db.any
+      .mockResolvedValueOnce([{ yclients_service_id: 7, service_title: 'Ботокс' }])
+      .mockResolvedValueOnce([]);
     db.one.mockResolvedValue({ id: 1, yclients_company_id: null });
     const out = await listServices.run(1, {});
-    expect(out.services[0]).toEqual(expect.objectContaining({ yc_id: 7, title: 'Ботокс' }));
-    expect(ycGet).not.toHaveBeenCalled();
+    expect(out.services[0]).toEqual(expect.objectContaining({ yc_id: 7, title: 'Ботокс', staff: [] }));
+    expect(ycGetServiceCatalog).not.toHaveBeenCalled();
+  });
+  test('скрывает deny-услуги и deny-пары услуга×мастер', async () => {
+    db.any
+      .mockResolvedValueOnce([])                                                            // services_config
+      .mockResolvedValueOnce([{ yclients_staff_id: 5, name: 'Аня' }, { yclients_staff_id: 6, name: 'Пери' }]); // staff_members
+    db.one.mockResolvedValue({ id: 1, yclients_company_id: 100 });
+    ycGetServiceCatalog.mockResolvedValue(catalog(
+      [
+        { id: 10, title: 'A', price_min: 1000, price_max: 1000, active: 1 },
+        { id: 20, title: 'B', price_min: 500, price_max: 500, active: 1 },
+      ],
+      { 10: [5, 6], 20: [6] }));
+    settings.loadServiceFilterSafe.mockResolvedValue({
+      mode: 'all', denyServices: new Set(['20']), allowServices: new Set(), denyPairs: new Set(['10:5']),
+    });
+    const out = await listServices.run(1, {});
+    const ids = out.services.map(s => s.yc_id);
+    expect(ids).not.toContain(20);              // услуга целиком скрыта
+    const a = out.services.find(s => s.yc_id === 10);
+    const aNames = a.staff.map(s => s.name);
+    expect(aNames).not.toContain('Аня');        // пара 10:5 скрыта (Аня = мастер 5)
+    expect(aNames).toContain('Пери');           // мастер 6 остаётся
+  });
+  test('active:0 услуга каталога показывается, если явно разрешена (allow)', async () => {
+    db.any
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{ yclients_staff_id: 5, name: 'Аня' }]);
+    db.one.mockResolvedValue({ id: 1, yclients_company_id: 100 });
+    ycGetServiceCatalog.mockResolvedValue(catalog(
+      [
+        { id: 30, title: 'Филлер', price_min: 20000, price_max: 20000, active: 0 }, // не в онлайн-записи
+        { id: 31, title: 'Прочее', price_min: 1000, price_max: 1000, active: 0 },   // active:0, без allow → скрыта
+      ],
+      { 30: [5], 31: [5] }));
+    settings.loadServiceFilterSafe.mockResolvedValue({
+      mode: 'all', denyServices: new Set(), allowServices: new Set(['30']), denyPairs: new Set(),
+    });
+    const out = await listServices.run(1, {});
+    const ids = out.services.map(s => s.yc_id);
+    expect(ids).toContain(30);       // явно разрешена
+    expect(ids).not.toContain(31);   // active:0 без allow остаётся скрытой
+  });
+  test('YClients упал → фолбэк на конфиг', async () => {
+    db.any
+      .mockResolvedValueOnce([{ yclients_service_id: 7, service_title: 'Ботокс' }])
+      .mockResolvedValueOnce([]);
+    db.one.mockResolvedValue({ id: 1, yclients_company_id: 100 });
+    ycGetServiceCatalog.mockRejectedValue(new Error('yc down'));
+    const out = await listServices.run(1, {});
+    expect(out.services[0]).toEqual(expect.objectContaining({ yc_id: 7, title: 'Ботокс', staff: [] }));
   });
 });
 
@@ -76,10 +185,20 @@ describe('list_staff', () => {
 });
 
 describe('get_available_slots', () => {
+  // Фиксируем «сейчас» на 2026-07-19 12:00 МСК → даты 2026-07-20+ в будущем,
+  // фильтр прошедшего времени неактивен (детерминизм независимо от часов машины).
+  const NOW = { nowMs: Date.parse('2026-07-19T12:00:00+03:00') };
+  const grid1000to1100 = () => {
+    const grid = [];
+    for (let m = 600; m < 660; m += 5) grid.push({ time: toHHMM(m), is_free: true });
+    return grid;
+  };
+  const toHHMM = (m) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
+
   test('онлайн-запись: слоты под услугу через book_times', async () => {
     db.one.mockResolvedValue({ id: 1, yclients_company_id: 100 });
     ycGetBookTimes.mockResolvedValue([{ time: '10:00', seance_length: 3600, datetime: '2026-07-20T10:00:00+03:00' }]);
-    const out = await getSlots.run(1, { service_yc_id: 7, staff_yc_id: 55, date: '2026-07-20' });
+    const out = await getSlots.run(1, { service_yc_id: 7, staff_yc_id: 55, date: '2026-07-20' }, NOW);
     expect(ycGetBookTimes).toHaveBeenCalledWith({ id: 1, yclients_company_id: 100 }, 55, '2026-07-20', [7]);
     expect(out.source).toBe('booking');
     expect(out.slots[0].time).toBe('10:00');
@@ -88,21 +207,39 @@ describe('get_available_slots', () => {
   test('book_times пусто → fallback на seances (интервалы + старты шагом 30 мин)', async () => {
     db.one.mockResolvedValue({ id: 1, yclients_company_id: 100 });
     ycGetBookTimes.mockResolvedValue([]);
-    // 10:00–11:00 свободно (5-мин грид)
-    const grid = [];
-    for (let m = 600; m < 660; m += 5) grid.push({ time: `${String(Math.floor(m/60)).padStart(2,'0')}:${String(m%60).padStart(2,'0')}`, is_free: true });
-    ycGetStaffSeances.mockResolvedValue(grid);
-    const out = await getSlots.run(1, { service_yc_id: 7, staff_yc_id: 55, date: '2026-07-20' });
+    ycGetStaffSeances.mockResolvedValue(grid1000to1100());   // 10:00–11:00 свободно
+    const out = await getSlots.run(1, { service_yc_id: 7, staff_yc_id: 55, date: '2026-07-20' }, NOW);
     expect(out.source).toBe('schedule');
     expect(out.free_ranges).toEqual([{ from: '10:00', to: '11:00' }]);
     // шагом 30 мин, чтобы влез полный шаг: 10:00 и 10:30 (11:00 не влезает)
     expect(out.slots.map(s => s.time)).toEqual(['10:00', '10:30']);
     expect(out.slots[0].datetime).toBe('2026-07-20T10:00:00+03:00');
   });
+  test('дата = сегодня → уже прошедшие окна отрезаны (не предлагаем прошлое)', async () => {
+    db.one.mockResolvedValue({ id: 1, yclients_company_id: 100 });
+    ycGetBookTimes.mockResolvedValue([
+      { time: '10:00', datetime: '2026-07-19T10:00:00+03:00' },   // прошло (сейчас 12:00)
+      { time: '13:00', datetime: '2026-07-19T13:00:00+03:00' },   // ещё будет
+      { time: '15:30', datetime: '2026-07-19T15:30:00+03:00' },
+    ]);
+    const out = await getSlots.run(1, { service_yc_id: 7, staff_yc_id: 55, date: '2026-07-19' }, NOW);
+    expect(out.slots.map(s => s.time)).toEqual(['13:00', '15:30']);
+  });
+  test('дата = сегодня, schedule: free_ranges тоже подрезаются по текущему времени', async () => {
+    db.one.mockResolvedValue({ id: 1, yclients_company_id: 100 });
+    ycGetBookTimes.mockResolvedValue([]);
+    // 10:00–14:00 свободно, сейчас 12:00 → остаётся 12:00–14:00
+    const grid = [];
+    for (let m = 600; m < 840; m += 5) grid.push({ time: toHHMM(m), is_free: true });
+    ycGetStaffSeances.mockResolvedValue(grid);
+    const out = await getSlots.run(1, { service_yc_id: 7, staff_yc_id: 55, date: '2026-07-19' }, NOW);
+    expect(out.free_ranges).toEqual([{ from: '12:00', to: '14:00' }]);
+    expect(out.slots.every(s => s.time >= '12:00')).toBe(true);
+  });
   test('без service_yc_id сразу идёт в seances (book_times не зовётся)', async () => {
     db.one.mockResolvedValue({ id: 1, yclients_company_id: 100 });
     ycGetStaffSeances.mockResolvedValue([]);
-    const out = await getSlots.run(1, { staff_yc_id: 55, date: '2026-07-20' });
+    const out = await getSlots.run(1, { staff_yc_id: 55, date: '2026-07-20' }, NOW);
     expect(ycGetBookTimes).not.toHaveBeenCalled();
     expect(out.source).toBe('schedule');
     expect(out.slots).toEqual([]);
@@ -163,5 +300,94 @@ describe('get_client', () => {
     db.oneOrNone.mockResolvedValue(null);
     const out = await getClient.run(1, { phone: '79990000000' });
     expect(out.found).toBe(false);
+  });
+});
+
+describe('create_booking', () => {
+  test('отказывает при скрытой паре услуга×мастер и НЕ создаёт запись', async () => {
+    settings.loadServiceFilterSafe.mockResolvedValue({
+      mode: 'all', denyServices: new Set(), allowServices: new Set(), denyPairs: new Set(['10:5']),
+    });
+    const out = await createBooking.run(1, {
+      staff_yc_id: 5, service_yc_id: 10,
+      datetime: '2026-07-20T10:00:00+03:00', client_phone: '79990000000',
+    });
+    expect(out.not_bookable).toBe(true);
+    expect(booking.createBookingRecord).not.toHaveBeenCalled();
+  });
+
+  test('выдуманный service_yc_id → invalid_args, запись НЕ создаётся', async () => {
+    jest.spyOn(listServices, 'run').mockResolvedValue({
+      services: [{ yc_id: 15394152, title: 'Фото', staff: [{ yc_id: 5708379 }] }],
+    });
+    const out = await createBooking.run(1, {
+      staff_yc_id: 5708379, service_yc_id: 10495123, // услуги нет в каталоге
+      datetime: '2026-07-23T12:00:00+03:00', client_phone: '79200255591',
+    });
+    expect(out.invalid_args).toBe(true);
+    expect(booking.createBookingRecord).not.toHaveBeenCalled();
+    listServices.run.mockRestore();
+  });
+
+  test('мастер не выполняет услугу → invalid_args, запись НЕ создаётся', async () => {
+    jest.spyOn(listServices, 'run').mockResolvedValue({
+      services: [{ yc_id: 15394152, title: 'Фото', staff: [{ yc_id: 5708379 }] }],
+    });
+    const out = await createBooking.run(1, {
+      staff_yc_id: 1554316, service_yc_id: 15394152, // мастера нет в списке услуги
+      datetime: '2026-07-23T12:00:00+03:00', client_phone: '79200255591',
+    });
+    expect(out.invalid_args).toBe(true);
+    expect(booking.createBookingRecord).not.toHaveBeenCalled();
+    listServices.run.mockRestore();
+  });
+
+  test('реальная пара услуга×мастер → запись создаётся', async () => {
+    jest.spyOn(listServices, 'run').mockResolvedValue({
+      services: [{ yc_id: 15394152, title: 'Фото', staff: [{ yc_id: 5708379 }] }],
+    });
+    booking.createBookingRecord.mockResolvedValue({ created: true, record_id: 42 });
+    const out = await createBooking.run(1, {
+      staff_yc_id: 5708379, service_yc_id: 15394152,
+      datetime: '2026-07-23T12:00:00+03:00', client_phone: '79200255591',
+    });
+    expect(booking.createBookingRecord).toHaveBeenCalled();
+    expect(out.created).toBe(true);
+    listServices.run.mockRestore();
+  });
+
+  test('номер не передан моделью → берётся из ctx (идентификация основного пациента)', async () => {
+    jest.spyOn(listServices, 'run').mockResolvedValue({
+      services: [{ yc_id: 15394152, title: 'Фото', staff: [{ yc_id: 5708379 }] }],
+    });
+    booking.createBookingRecord.mockResolvedValue({ created: true, record_id: 43 });
+    await createBooking.run(1,
+      { staff_yc_id: 5708379, service_yc_id: 15394152, datetime: '2026-07-23T12:00:00+03:00' },
+      { dialogKey: 'k', clientPhone: '79200255591', clientName: 'Анна' });
+    expect(booking.createBookingRecord).toHaveBeenCalledWith(1,
+      expect.objectContaining({ clientPhone: '79200255591', clientName: 'Анна', dialogKey: 'k' }));
+    listServices.run.mockRestore();
+  });
+
+  test('номер второго гостя из input приоритетнее ctx основного пациента', async () => {
+    jest.spyOn(listServices, 'run').mockResolvedValue({
+      services: [{ yc_id: 15394152, title: 'Фото', staff: [{ yc_id: 5708379 }] }],
+    });
+    booking.createBookingRecord.mockResolvedValue({ created: true, record_id: 44 });
+    await createBooking.run(1,
+      { staff_yc_id: 5708379, service_yc_id: 15394152, datetime: '2026-07-23T12:00:00+03:00',
+        client_phone: '79995554433', client_name: 'Мария' },
+      { dialogKey: 'k', clientPhone: '79200255591', clientName: 'Анна' });
+    expect(booking.createBookingRecord).toHaveBeenCalledWith(1,
+      expect.objectContaining({ clientPhone: '79995554433', clientName: 'Мария' }));
+    listServices.run.mockRestore();
+  });
+
+  test('нет номера ни в input, ни в ctx → invalid_args, запись НЕ создаётся', async () => {
+    const out = await createBooking.run(1,
+      { staff_yc_id: 5708379, service_yc_id: 15394152, datetime: '2026-07-23T12:00:00+03:00' },
+      { dialogKey: 'k' });
+    expect(out.invalid_args).toBe(true);
+    expect(booking.createBookingRecord).not.toHaveBeenCalled();
   });
 });

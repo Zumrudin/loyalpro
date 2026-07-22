@@ -994,6 +994,54 @@ async function runMigrations(client) {
     )
   `).catch(() => {});
 
+  // service_mode — режим фильтра услуг агента (независим от mode для номеров).
+  await client.query(`
+    ALTER TABLE agent_settings
+      ADD COLUMN IF NOT EXISTS service_mode VARCHAR(20) NOT NULL DEFAULT 'all'
+  `).catch(() => {});
+
+  // agent_service_rules — правила видимости услуг/пар услуга×мастер для агента.
+  // yc_staff_id NULL = правило на услугу целиком; заполнен = пара услуга×мастер.
+  // rule_type: 'deny' | 'allow'. Пары поддерживают только 'deny' (см. спеку).
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS agent_service_rules (
+      id            SERIAL PRIMARY KEY,
+      salon_id      INTEGER REFERENCES salons(id) ON DELETE CASCADE,
+      yc_service_id BIGINT NOT NULL,
+      yc_staff_id   BIGINT NULL,
+      rule_type     VARCHAR(10) NOT NULL,
+      note          TEXT,
+      created_at    TIMESTAMP DEFAULT NOW()
+    )
+  `).catch(() => {});
+  await client.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS agent_service_rules_uniq
+      ON agent_service_rules (salon_id, yc_service_id, COALESCE(yc_staff_id, 0), rule_type)
+  `).catch(() => {});
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS agent_service_rules_salon_idx
+      ON agent_service_rules (salon_id)
+  `).catch(() => {});
+
+  // agent_stop_topics — темы, которыми клиника не занимается ВООБЩЕ (даже не
+  // консультирует). Отличается от agent_service_rules: там прячутся конкретные
+  // yc_service_id, а здесь тема, которой в каталоге может не быть вовсе
+  // (например «новообразования: родинки, папилломы»). В промпте имеет приоритет
+  // над каталогом — иначе агент предложит смежную услугу в обход отказа.
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS agent_stop_topics (
+      id         SERIAL PRIMARY KEY,
+      salon_id   INTEGER REFERENCES salons(id) ON DELETE CASCADE,
+      topic      TEXT NOT NULL,
+      note       TEXT,
+      created_at TIMESTAMP DEFAULT NOW()
+    )
+  `).catch(() => {});
+  await client.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS agent_stop_topics_uniq
+      ON agent_stop_topics (salon_id, lower(topic))
+  `).catch(() => {});
+
   // ── Состояние диалога агента + аудит вызовов инструментов (спека booking-agent) ──
   await client.query(`
     CREATE TABLE IF NOT EXISTS agent_dialogs (

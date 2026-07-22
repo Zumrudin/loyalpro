@@ -34,12 +34,33 @@ beforeEach(() => {
 });
 
 describe('booking.buildIdempotencyKey', () => {
-  test('детерминирован по dialog+service+datetime', () => {
-    const a = booking.buildIdempotencyKey('79001112233', 7, '2026-07-20T10:00:00+03:00');
-    const b = booking.buildIdempotencyKey('79001112233', 7, '2026-07-20T10:00:00+03:00');
-    const c = booking.buildIdempotencyKey('79001112233', 7, '2026-07-20T11:00:00+03:00');
-    expect(a).toBe(b);
-    expect(a).not.toBe(c);
+  const base = {
+    dialogKey: '79001112233', serviceYcId: 7, staffYcId: 55,
+    datetime: '2026-07-20T10:00:00+03:00', clientPhone: '79001112233',
+  };
+
+  test('детерминирован по одному и тому же черновику', () => {
+    expect(booking.buildIdempotencyKey(base)).toBe(booking.buildIdempotencyKey({ ...base }));
+  });
+
+  test('различает время и услугу', () => {
+    expect(booking.buildIdempotencyKey(base))
+      .not.toBe(booking.buildIdempotencyKey({ ...base, datetime: '2026-07-20T11:00:00+03:00' }));
+    expect(booking.buildIdempotencyKey(base))
+      .not.toBe(booking.buildIdempotencyKey({ ...base, serviceYcId: 8 }));
+  });
+
+  // Параллельная запись двух гостей идёт из ОДНОГО диалога. Если ключ не
+  // различает гостей, вторая бронь схлопнется в «дубликат» и человек окажется
+  // незаписанным, а агент отрапортует об успехе.
+  test('различает гостей одного диалога: разные мастера при той же услуге и времени', () => {
+    expect(booking.buildIdempotencyKey(base))
+      .not.toBe(booking.buildIdempotencyKey({ ...base, staffYcId: 56 }));
+  });
+
+  test('различает гостей одного диалога: разные телефоны', () => {
+    expect(booking.buildIdempotencyKey(base))
+      .not.toBe(booking.buildIdempotencyKey({ ...base, clientPhone: '79005556677' }));
   });
 });
 
@@ -121,7 +142,7 @@ describe('tools registry', () => {
     const names = registry.schemas.map(s => s.name).sort();
     expect(names).toEqual([
       'create_booking', 'escalate_to_operator', 'get_available_dates', 'get_available_slots',
-      'get_client', 'list_services', 'list_staff', 'search_knowledge_base',
+      'get_client', 'get_parallel_slots', 'list_services', 'list_staff', 'search_knowledge_base',
     ].sort());
     for (const n of names) expect(typeof registry.handlers[n]).toBe('function');
   });

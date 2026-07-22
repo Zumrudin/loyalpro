@@ -31,6 +31,10 @@ function makeDeps(overrides = {}) {
       setWatermark: jest.fn(async () => {}),
       ...overrides.state,
     },
+    identity: {
+      resolveClient: jest.fn(async () => null),
+      ...overrides.identity,
+    },
   };
 }
 
@@ -63,7 +67,8 @@ describe('runDialog', () => {
       .mockResolvedValueOnce(textResp('Свободно 10:00. Записать?'));
     const out = await orchestrator.runDialog(1, 'k', { deps, ctx: { phone: '79001112233' } });
     expect(deps.registry.handlers.get_available_slots)
-      .toHaveBeenCalledWith(1, { staff_yc_id: 55, service_yc_id: 7, date: '2026-07-20' }, { dialogKey: 'k', clientPhone: '79001112233' });
+      .toHaveBeenCalledWith(1, { staff_yc_id: 55, service_yc_id: 7, date: '2026-07-20' },
+        { dialogKey: 'k', clientPhone: '79001112233', clientName: null, nowMs: expect.any(Number) });
     expect(out.replies).toContain('Свободно 10:00. Записать?');
     expect(out.sideEffect).toBe(false);
     const secondCallMessages = deps.provider.createMessage.mock.calls[1][0].messages;
@@ -81,11 +86,79 @@ describe('runDialog', () => {
     expect(deps.provider.createMessage).toHaveBeenCalledTimes(1);
   });
 
+  test('create_booking вернул ошибку → bookingFailed:true (диспетчер переведёт на человека)', async () => {
+    const deps = makeDeps({ handlers: { create_booking: jest.fn(async () => ({ invalid_args: true, error: 'выдуманный id' })) } });
+    deps.provider.createMessage
+      .mockResolvedValueOnce(toolResp('create_booking', { staff_yc_id: 1, service_yc_id: 2, datetime: 'x', client_phone: '7' }))
+      .mockResolvedValueOnce(textResp('Секундочку, уточняю детали 🤍'));
+    const out = await orchestrator.runDialog(1, 'k', { deps });
+    expect(out.bookingFailed).toBe(true);
+    expect(out.sideEffect).toBe(false);
+  });
+
+  test('create_booking успех → bookingFailed:false', async () => {
+    const deps = makeDeps();   // дефолтный create_booking → { created:true, record_id:999 }
+    deps.provider.createMessage
+      .mockResolvedValueOnce(toolResp('create_booking', { staff_yc_id: 1, service_yc_id: 2, datetime: 'x', client_phone: '7' }))
+      .mockResolvedValueOnce(textResp('Записала вас, всё готово ✨'));
+    const out = await orchestrator.runDialog(1, 'k', { deps });
+    expect(out.bookingFailed).toBe(false);
+    expect(out.sideEffect).toBe(true);
+  });
+
   test('диалог уже escalated → ничего не делаем', async () => {
     const deps = makeDeps({ state: { getOrCreate: jest.fn(async () => ({ status: 'escalated' })) } });
     const out = await orchestrator.runDialog(1, 'k', { deps });
     expect(out.escalated).toBe(true);
     expect(deps.provider.createMessage).not.toHaveBeenCalled();
+  });
+
+  test('вернули боту после эскалации (status=bot + escalated_reason) → в промпт идёт анти-ре-эскалация', async () => {
+    const deps = makeDeps({
+      state: { getOrCreate: jest.fn(async () => ({ status: 'bot', escalated_reason: 'прошлый негатив' })) },
+    });
+    deps.provider.createMessage.mockResolvedValueOnce(textResp('Конечно, помогу с записью!'));
+    await orchestrator.runDialog(1, 'k', { deps });
+    const sentSystem = deps.provider.createMessage.mock.calls[0][0].system;
+    expect(sentSystem).toMatch(/ВЕРНУЛ ТЕБЕ АДМИНИСТРАТОР/i);
+  });
+
+  test('клиент найден по номеру → имя идёт в промпт и в toolCtx (create_booking подставит номер сам)', async () => {
+    const deps = makeDeps({ identity: { resolveClient: jest.fn(async () => ({ id: 5, name: 'Анна', phone: '+79001112233' })) } });
+    deps.provider.createMessage
+      .mockResolvedValueOnce(toolResp('get_available_slots', { staff_yc_id: 1, service_yc_id: 1, date: '2026-07-20' }))
+      .mockResolvedValueOnce(textResp('Свободно 10:00. Записать?'));
+    await orchestrator.runDialog(1, 'k', { deps, ctx: { phone: '79001112233' } });
+    expect(deps.identity.resolveClient).toHaveBeenCalledWith(1, '79001112233');
+    const sentSystem = deps.provider.createMessage.mock.calls[0][0].system;
+    expect(sentSystem).toMatch(/ИДЕНТИФИКАЦИЯ ПАЦИЕНТА/);
+    expect(sentSystem).toContain('Анна');
+    expect(deps.registry.handlers.get_available_slots)
+      .toHaveBeenCalledWith(1, expect.anything(), expect.objectContaining({ clientName: 'Анна', clientPhone: '79001112233' }));
+  });
+
+  test('резолвинг клиента упал (нет БД) → ход не падает, работаем без имени', async () => {
+    const deps = makeDeps({ identity: { resolveClient: jest.fn(async () => { throw new Error('no db'); }) } });
+    deps.provider.createMessage.mockResolvedValueOnce(textResp('Здравствуйте!'));
+    const out = await orchestrator.runDialog(1, 'k', { deps, ctx: { phone: '79001112233' } });
+    expect(out.replies).toEqual(['Здравствуйте!']);
+  });
+
+  test('канал без номера → resolveClient не зовётся, промпт просит уточнить имя как у нового', async () => {
+    const deps = makeDeps();
+    deps.provider.createMessage.mockResolvedValueOnce(textResp('Здравствуйте!'));
+    await orchestrator.runDialog(1, 'k', { deps });   // ctx без phone
+    expect(deps.identity.resolveClient).not.toHaveBeenCalled();
+    const sentSystem = deps.provider.createMessage.mock.calls[0][0].system;
+    expect(sentSystem).toMatch(/как.*обращаться/i);
+  });
+
+  test('обычный диалог (bot, без escalated_reason) → блока анти-ре-эскалации НЕТ', async () => {
+    const deps = makeDeps();
+    deps.provider.createMessage.mockResolvedValueOnce(textResp('Здравствуйте!'));
+    await orchestrator.runDialog(1, 'k', { deps });
+    const sentSystem = deps.provider.createMessage.mock.calls[0][0].system;
+    expect(sentSystem).not.toMatch(/ВЕРНУЛ ТЕБЕ АДМИНИСТРАТОР/i);
   });
 
   test('новое входящее во время прогона без side-effect → черновик выброшен, перегенерация', async () => {
@@ -104,6 +177,66 @@ describe('runDialog', () => {
     deps.provider.createMessage.mockResolvedValue(
       toolResp('get_available_slots', { staff_yc_id: 1, service_yc_id: 1, date: '2026-07-20' }));
     await orchestrator.runDialog(1, 'k', { deps });
+    // MAX_ITERS вызовов в цикле + 1 добивочный без инструментов (реплик-то нет).
+    expect(deps.provider.createMessage).toHaveBeenCalledTimes(orchestrator.MAX_ITERS + 1);
+  });
+});
+
+// ── Регресс: немой ход (инцидент 2026-07-19, диалог 79200255591) ──
+// Flash Lite отдаёт tool_calls с пустым content. Мультизапрос (2 услуги × 2 пациента)
+// упёрся в MAX_ITERS=6, цикл вышел с replies=[] — клиент не получил НИЧЕГО.
+describe('исчерпание лимита tool-итераций', () => {
+  test('7 подряд tool-итераций укладываются в лимит и дают ответ', async () => {
+    const deps = makeDeps();
+    for (let i = 0; i < 7; i++) {
+      deps.provider.createMessage.mockResolvedValueOnce(
+        toolResp('get_available_slots', { date: '2026-07-20' }, `c${i}`));
+    }
+    deps.provider.createMessage.mockResolvedValueOnce(textResp('Свободно в 16:00 или 18:30.'));
+
+    const out = await orchestrator.runDialog(1, 'k', { deps, today: '2026-07-19' });
+
+    expect(out.replies).toEqual(['Свободно в 16:00 или 18:30.']);
+    expect(out.exhausted).toBeFalsy();
+  });
+
+  test('лимит исчерпан без единой реплики → добивочный вызов БЕЗ инструментов даёт ответ', async () => {
+    const deps = makeDeps();
+    deps.provider.createMessage.mockImplementation(async ({ tools }) => {
+      if (!tools || tools.length === 0) return textResp('Завтра есть окошки в 16:00 и 18:30.');
+      return toolResp('get_available_slots', { date: '2026-07-20' });
+    });
+
+    const out = await orchestrator.runDialog(1, 'k', { deps, today: '2026-07-19' });
+
+    expect(out.replies).toEqual(['Завтра есть окошки в 16:00 и 18:30.']);
+    expect(out.exhausted).toBe(true);
+    // Добивочный вызов идёт с пустым списком инструментов — модель обязана ответить прозой.
+    const lastArgs = deps.provider.createMessage.mock.calls.at(-1)[0];
+    expect(lastArgs.tools).toEqual([]);
+  });
+
+  test('даже добивочный вызов молчит → ход помечен exhausted, реплик нет', async () => {
+    const deps = makeDeps();
+    deps.provider.createMessage.mockImplementation(async ({ tools }) => {
+      if (!tools || tools.length === 0) return textResp('');
+      return toolResp('get_available_slots', { date: '2026-07-20' });
+    });
+
+    const out = await orchestrator.runDialog(1, 'k', { deps, today: '2026-07-19' });
+
+    expect(out.replies).toEqual([]);
+    expect(out.exhausted).toBe(true);
+  });
+
+  test('лимит исчерпан, но текст уже был → добивочного вызова НЕ делаем', async () => {
+    const deps = makeDeps();
+    deps.provider.createMessage.mockImplementation(async () =>
+      toolResp('get_available_slots', { date: '2026-07-20' }, 'c1', 'Секунду, уточняю…'));
+
+    const out = await orchestrator.runDialog(1, 'k', { deps, today: '2026-07-19' });
+
     expect(deps.provider.createMessage).toHaveBeenCalledTimes(orchestrator.MAX_ITERS);
+    expect(out.replies.length).toBeGreaterThan(0);
   });
 });

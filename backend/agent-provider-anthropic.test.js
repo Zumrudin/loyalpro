@@ -41,3 +41,20 @@ describe('anthropic.toolResultMessages', () => {
     expect(msgs[0].content[1].is_error).toBe(true);
   });
 });
+
+describe('anthropic.createMessage без инструментов', () => {
+  test('пустой список инструментов → параметр tools не отправляется', async () => {
+    const calls = [];
+    const fakeClient = { messages: { create: async (p) => {
+      calls.push(p);
+      return { stop_reason: 'end_turn', content: [{ type: 'text', text: 'Завтра в 16:00.' }] };
+    } } };
+
+    const res = await anthropic.createMessage(
+      { system: 'ты админ', messages: [{ role: 'user', content: 'когда?' }], tools: [] },
+      { client: fakeClient });
+
+    expect(calls[0]).not.toHaveProperty('tools');
+    expect(res.text).toBe('Завтра в 16:00.');
+  });
+});

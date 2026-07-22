@@ -669,3 +669,29 @@ body.kb-editor .kb-admin-only { display: inline-flex; }
   .chat-sidebar { flex:0 0 auto; max-height:240px; }
   .chat-main { min-height:320px; }
 }
+
+/* ═══ Услуги агента: дерево категория → услуга → мастера ═══ */
+.as-radios { display:flex; flex-wrap:wrap; gap:8px 16px; }
+.as-radio { display:inline-flex; align-items:center; gap:6px; font-size:13px; color:var(--t1); cursor:pointer; }
+.as-showall { display:flex; align-items:center; gap:8px; margin:10px 0; font-size:13px; color:var(--t1); cursor:pointer; }
+
+.as-cats { display:flex; flex-direction:column; gap:8px; }
+.as-cat { border:1px solid var(--bd); border-radius:10px; background:var(--card); overflow:hidden; }
+.as-cat-head { display:flex; align-items:center; gap:10px; padding:10px 12px; }
+.as-cat-cb { flex:0 0 auto; width:16px; height:16px; cursor:pointer; }
+.as-cat-toggle { flex:1; display:flex; align-items:center; gap:8px; background:none; border:0; padding:0; cursor:pointer;
+  font:inherit; text-align:left; color:var(--t1); }
+.as-caret { flex:0 0 auto; width:14px; color:var(--t3); font-size:11px; }
+.as-cat-title { font-weight:700; font-size:13.5px; }
+.as-cat-count { flex:0 0 auto; margin-left:auto; font-size:12px; }
+.as-cat-body { border-top:1px solid var(--bd); padding:4px 12px 10px 34px; display:flex; flex-direction:column; gap:2px; }
+
+.as-svc { padding:7px 0; border-bottom:1px solid var(--bd); }
+.as-svc:last-child { border-bottom:0; }
+.as-svc-head { display:flex; align-items:baseline; gap:8px; font-size:13px; color:var(--t1); cursor:pointer; }
+.as-svc-head input { flex:0 0 auto; align-self:center; width:15px; height:15px; cursor:pointer; }
+.as-svc-head b { font-weight:600; }
+.as-price { flex:0 0 auto; margin-left:auto; white-space:nowrap; font-size:12px; }
+.as-staff { display:flex; flex-wrap:wrap; gap:6px 14px; margin:5px 0 2px 23px; }
+.as-pair { display:inline-flex; align-items:center; gap:5px; font-size:12.5px; color:var(--t2); cursor:pointer; }
+.as-pair input { width:14px; height:14px; cursor:pointer; }
