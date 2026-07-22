@@ -141,8 +141,9 @@ describe('tools registry', () => {
   test('экспортирует schemas и handlers по всем инструментам', () => {
     const names = registry.schemas.map(s => s.name).sort();
     expect(names).toEqual([
-      'create_booking', 'escalate_to_operator', 'get_available_dates', 'get_available_slots',
-      'get_client', 'get_parallel_slots', 'list_services', 'list_staff', 'search_knowledge_base',
+      'cancel_booking', 'create_booking', 'escalate_to_operator', 'get_available_dates',
+      'get_available_slots', 'get_client', 'get_parallel_slots', 'list_client_bookings',
+      'list_services', 'list_staff', 'reschedule_booking', 'search_knowledge_base',
     ].sort());
     for (const n of names) expect(typeof registry.handlers[n]).toBe('function');
   });
