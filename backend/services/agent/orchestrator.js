@@ -4,6 +4,7 @@ const providers = require('./providers');
 const registryDefault = require('./tools');
 const historyDefault = require('./history');
 const stateDefault = require('./dialog-state');
+const identityDefault = require('./identity');
 const { buildSystemPrompt } = require('./system-prompt');
 const { createLogger } = require('../../logger');
 const logger = createLogger('AgentOrchestrator');
@@ -36,6 +37,7 @@ async function runDialog(salonId, dialogKey, opts = {}) {
   const registry = d.registry || registryDefault;
   const history = d.history || historyDefault;
   const state = d.state || stateDefault;
+  const identity = d.identity || identityDefault;
   const ctx = opts.ctx || {};
 
   const dialog = await state.getOrCreate(salonId, dialogKey);
@@ -47,6 +49,20 @@ async function runDialog(salonId, dialogKey, opts = {}) {
     return { replies: [], escalated: true, alreadyEscalated: true, sideEffect: false };
   }
 
+  // Идентификация по номеру из вебхука (WhatsApp/tdlib присылают телефон). Если
+  // канал номер не дал (Telegram Bot/MAX) или БД недоступна — client=null, и агент
+  // собирает контакты в диалоге как раньше. Резолвинг не должен ронять ход.
+  let client = null;
+  if (ctx.phone) {
+    try {
+      client = await identity.resolveClient(salonId, ctx.phone);
+    } catch (e) {
+      logger.warn(`dialog ${dialogKey}: не удалось идентифицировать клиента (${e.message}) — работаем без имени`);
+      client = null;
+    }
+  }
+  const clientName = (client && client.name && String(client.name).trim()) || null;
+
   const system = buildSystemPrompt({
     salonName: opts.salonName,
     workingHours: opts.workingHours,
@@ -57,9 +73,19 @@ async function runDialog(salonId, dialogKey, opts = {}) {
     // escalated_reason при статусе 'bot' = диалог вернул боту администратор →
     // просим модель не эскалировать заново на уже разрешённом конфликте.
     resumedFromEscalation: !!dialog.escalated_reason,
+    // Идентификация: знаем ли телефон (из канала) и имя (из карточки клиента).
+    phoneKnown: !!ctx.phone,
+    clientName,
   });
   // nowMs — чтобы инструменты слотов отрезали уже прошедшее время «сегодня».
-  const toolCtx = { dialogKey, clientPhone: ctx.phone, nowMs: opts.nowMs || Date.now() };
+  // clientPhone/clientName — детерминированный фолбэк для create_booking основного
+  // пациента: модель не переспрашивает уже известный номер, а инструмент подставит его сам.
+  const toolCtx = {
+    dialogKey,
+    clientPhone: ctx.phone,
+    clientName,
+    nowMs: opts.nowMs || Date.now(),
+  };
 
   for (let attempt = 0; attempt <= MAX_REGEN; attempt++) {
     const { messages, watermark } = await history.loadTranscript(salonId, dialogKey, { limit: 20 });

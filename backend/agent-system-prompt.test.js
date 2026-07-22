@@ -123,6 +123,32 @@ describe('buildSystemPrompt', () => {
     expect(typeof p).toBe('string');
     expect(p.length).toBeGreaterThan(50);
   });
+
+  describe('идентификация пациента', () => {
+    test('клиент найден (clientName) → обращаться по имени, номер не просить, client_phone не передавать', () => {
+      const p = buildSystemPrompt({ clientName: 'Анна', phoneKnown: true });
+      expect(p).toMatch(/ИДЕНТИФИКАЦИЯ ПАЦИЕНТА/);
+      expect(p).toContain('Анна');
+      expect(p).toMatch(/НИКОГДА не проси у него номер/i);
+      expect(p).toMatch(/НЕ передавай client_phone/i);
+    });
+
+    test('номер известен, но карточки нет → новый пациент, уточнить имя, номер не просить', () => {
+      const p = buildSystemPrompt({ phoneKnown: true });
+      expect(p).toMatch(/ИДЕНТИФИКАЦИЯ ПАЦИЕНТА/);
+      expect(p).toMatch(/как могу к вам обращаться/i);
+      expect(p).toMatch(/НИКОГДА не проси у него номер/i);
+      expect(p).not.toMatch(/его номера телефона у нас нет/i);
+    });
+
+    test('канал без номера → не знаем ни имени, ни номера; уточнить имя, номер только при записи', () => {
+      const p = buildSystemPrompt({});
+      expect(p).toMatch(/ИДЕНТИФИКАЦИЯ ПАЦИЕНТА/);
+      expect(p).toMatch(/как могу к вам обращаться/i);
+      expect(p).toMatch(/номера телефона у нас нет/i);
+      expect(p).toMatch(/только на этапе оформления записи/i);
+    });
+  });
 });
 
 // Экономия tool-итераций: каждый лишний вызов приближает ход к лимиту и немому ответу.

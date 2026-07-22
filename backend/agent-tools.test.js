@@ -355,4 +355,39 @@ describe('create_booking', () => {
     expect(out.created).toBe(true);
     listServices.run.mockRestore();
   });
+
+  test('номер не передан моделью → берётся из ctx (идентификация основного пациента)', async () => {
+    jest.spyOn(listServices, 'run').mockResolvedValue({
+      services: [{ yc_id: 15394152, title: 'Фото', staff: [{ yc_id: 5708379 }] }],
+    });
+    booking.createBookingRecord.mockResolvedValue({ created: true, record_id: 43 });
+    await createBooking.run(1,
+      { staff_yc_id: 5708379, service_yc_id: 15394152, datetime: '2026-07-23T12:00:00+03:00' },
+      { dialogKey: 'k', clientPhone: '79200255591', clientName: 'Анна' });
+    expect(booking.createBookingRecord).toHaveBeenCalledWith(1,
+      expect.objectContaining({ clientPhone: '79200255591', clientName: 'Анна', dialogKey: 'k' }));
+    listServices.run.mockRestore();
+  });
+
+  test('номер второго гостя из input приоритетнее ctx основного пациента', async () => {
+    jest.spyOn(listServices, 'run').mockResolvedValue({
+      services: [{ yc_id: 15394152, title: 'Фото', staff: [{ yc_id: 5708379 }] }],
+    });
+    booking.createBookingRecord.mockResolvedValue({ created: true, record_id: 44 });
+    await createBooking.run(1,
+      { staff_yc_id: 5708379, service_yc_id: 15394152, datetime: '2026-07-23T12:00:00+03:00',
+        client_phone: '79995554433', client_name: 'Мария' },
+      { dialogKey: 'k', clientPhone: '79200255591', clientName: 'Анна' });
+    expect(booking.createBookingRecord).toHaveBeenCalledWith(1,
+      expect.objectContaining({ clientPhone: '79995554433', clientName: 'Мария' }));
+    listServices.run.mockRestore();
+  });
+
+  test('нет номера ни в input, ни в ctx → invalid_args, запись НЕ создаётся', async () => {
+    const out = await createBooking.run(1,
+      { staff_yc_id: 5708379, service_yc_id: 15394152, datetime: '2026-07-23T12:00:00+03:00' },
+      { dialogKey: 'k' });
+    expect(out.invalid_args).toBe(true);
+    expect(booking.createBookingRecord).not.toHaveBeenCalled();
+  });
 });

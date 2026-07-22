@@ -31,6 +31,10 @@ function makeDeps(overrides = {}) {
       setWatermark: jest.fn(async () => {}),
       ...overrides.state,
     },
+    identity: {
+      resolveClient: jest.fn(async () => null),
+      ...overrides.identity,
+    },
   };
 }
 
@@ -64,7 +68,7 @@ describe('runDialog', () => {
     const out = await orchestrator.runDialog(1, 'k', { deps, ctx: { phone: '79001112233' } });
     expect(deps.registry.handlers.get_available_slots)
       .toHaveBeenCalledWith(1, { staff_yc_id: 55, service_yc_id: 7, date: '2026-07-20' },
-        { dialogKey: 'k', clientPhone: '79001112233', nowMs: expect.any(Number) });
+        { dialogKey: 'k', clientPhone: '79001112233', clientName: null, nowMs: expect.any(Number) });
     expect(out.replies).toContain('Свободно 10:00. Записать?');
     expect(out.sideEffect).toBe(false);
     const secondCallMessages = deps.provider.createMessage.mock.calls[1][0].messages;
@@ -117,6 +121,36 @@ describe('runDialog', () => {
     await orchestrator.runDialog(1, 'k', { deps });
     const sentSystem = deps.provider.createMessage.mock.calls[0][0].system;
     expect(sentSystem).toMatch(/ВЕРНУЛ ТЕБЕ АДМИНИСТРАТОР/i);
+  });
+
+  test('клиент найден по номеру → имя идёт в промпт и в toolCtx (create_booking подставит номер сам)', async () => {
+    const deps = makeDeps({ identity: { resolveClient: jest.fn(async () => ({ id: 5, name: 'Анна', phone: '+79001112233' })) } });
+    deps.provider.createMessage
+      .mockResolvedValueOnce(toolResp('get_available_slots', { staff_yc_id: 1, service_yc_id: 1, date: '2026-07-20' }))
+      .mockResolvedValueOnce(textResp('Свободно 10:00. Записать?'));
+    await orchestrator.runDialog(1, 'k', { deps, ctx: { phone: '79001112233' } });
+    expect(deps.identity.resolveClient).toHaveBeenCalledWith(1, '79001112233');
+    const sentSystem = deps.provider.createMessage.mock.calls[0][0].system;
+    expect(sentSystem).toMatch(/ИДЕНТИФИКАЦИЯ ПАЦИЕНТА/);
+    expect(sentSystem).toContain('Анна');
+    expect(deps.registry.handlers.get_available_slots)
+      .toHaveBeenCalledWith(1, expect.anything(), expect.objectContaining({ clientName: 'Анна', clientPhone: '79001112233' }));
+  });
+
+  test('резолвинг клиента упал (нет БД) → ход не падает, работаем без имени', async () => {
+    const deps = makeDeps({ identity: { resolveClient: jest.fn(async () => { throw new Error('no db'); }) } });
+    deps.provider.createMessage.mockResolvedValueOnce(textResp('Здравствуйте!'));
+    const out = await orchestrator.runDialog(1, 'k', { deps, ctx: { phone: '79001112233' } });
+    expect(out.replies).toEqual(['Здравствуйте!']);
+  });
+
+  test('канал без номера → resolveClient не зовётся, промпт просит уточнить имя как у нового', async () => {
+    const deps = makeDeps();
+    deps.provider.createMessage.mockResolvedValueOnce(textResp('Здравствуйте!'));
+    await orchestrator.runDialog(1, 'k', { deps });   // ctx без phone
+    expect(deps.identity.resolveClient).not.toHaveBeenCalled();
+    const sentSystem = deps.provider.createMessage.mock.calls[0][0].system;
+    expect(sentSystem).toMatch(/как.*обращаться/i);
   });
 
   test('обычный диалог (bot, без escalated_reason) → блока анти-ре-эскалации НЕТ', async () => {
