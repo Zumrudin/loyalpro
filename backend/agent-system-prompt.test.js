@@ -149,6 +149,35 @@ describe('buildSystemPrompt', () => {
       expect(p).toMatch(/только на этапе оформления записи/i);
     });
   });
+
+  test('Сценарий 4 — упоминает инструменты отмены/переноса', () => {
+    const p = buildSystemPrompt({});
+    expect(p).toContain('list_client_bookings');
+    expect(p).toContain('cancel_booking');
+    expect(p).toContain('reschedule_booking');
+  });
+
+  test('при отмене сначала предлагает перенос', () => {
+    const p = buildSystemPrompt({});
+    expect(p).toMatch(/сначала[^]*предложи[^]*перенест/i);
+  });
+
+  test('при переносе уточняет какую запись, если их несколько', () => {
+    const p = buildSystemPrompt({});
+    expect(p).toMatch(/если записей несколько[^]*уточни, какую/i);
+  });
+
+  test('требует согласие и запрещает подтверждать до успеха инструмента', () => {
+    const p = buildSystemPrompt({});
+    expect(p).toMatch(/cancelled:true/);
+    expect(p).toMatch(/rescheduled:true/);
+    expect(p).toMatch(/ТОЛЬКО после явного подтвержд/i);
+  });
+
+  test('отмена/перенос только для идентифицированного пациента', () => {
+    const p = buildSystemPrompt({});
+    expect(p).toMatch(/ТОЛЬКО идентифицированному пациенту/i);
+  });
 });
 
 // Экономия tool-итераций: каждый лишний вызов приближает ход к лимиту и немому ответу.

@@ -17,7 +17,9 @@ const MAX_ITERS = 12;
 const MAX_REGEN = 2;   // сколько раз перегенерировать при новом входящем во время прогона
 
 // Пишущие инструменты: их результат нельзя «выбросить» перегенерацией.
-const SIDE_EFFECT_TOOLS = new Set(['create_booking', 'escalate_to_operator']);
+const SIDE_EFFECT_TOOLS = new Set([
+  'create_booking', 'cancel_booking', 'reschedule_booking', 'escalate_to_operator',
+]);
 
 // YYYY-MM-DD по Москве (для системного промпта «сегодня …»).
 function todayMoscow() {

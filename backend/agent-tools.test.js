@@ -6,6 +6,16 @@ jest.mock('./services/yclients', () => ({ ycGet: jest.fn(), ycGetServiceCatalog:
 jest.mock('./services/yclients-booking', () => ({ ycGetBookTimes: jest.fn(), ycGetStaffSchedule: jest.fn(), ycGetStaffSeances: jest.fn() }));
 jest.mock('./services/agent-settings', () => ({ loadServiceFilterSafe: jest.fn() }));
 jest.mock('./services/agent/booking', () => ({ createBookingRecord: jest.fn() }));
+jest.mock('./services/yclients-records', () => ({
+  ycGetClientRecords: jest.fn(), ycGetRecord: jest.fn(), ycUpdateRecord: jest.fn(),
+  ycFindServiceIdByTitle: jest.fn(),
+}));
+jest.mock('./services/agent/booking-modify', () => ({
+  cancelBookingRecord: jest.fn(), rescheduleBookingRecord: jest.fn(),
+}));
+jest.mock('./services/agent/identity', () => ({
+  resolveClient: jest.fn(), resolveYclientsClientId: jest.fn(),
+}));
 
 const { db } = require('./db');
 const rag = require('./services/agent-rag');
@@ -34,6 +44,12 @@ const getSlots = require('./services/agent/tools/get-available-slots');
 const getDates = require('./services/agent/tools/get-available-dates');
 const getClient = require('./services/agent/tools/get-client');
 const createBooking = require('./services/agent/tools/create-booking');
+const { ycGetClientRecords, ycFindServiceIdByTitle } = require('./services/yclients-records');
+const bookingModify = require('./services/agent/booking-modify');
+const identity = require('./services/agent/identity');
+const listClientBookings = require('./services/agent/tools/list-client-bookings');
+const cancelBooking = require('./services/agent/tools/cancel-booking');
+const rescheduleBooking = require('./services/agent/tools/reschedule-booking');
 
 beforeEach(() => {
   jest.clearAllMocks();
@@ -389,5 +405,141 @@ describe('create_booking', () => {
       { dialogKey: 'k' });
     expect(out.invalid_args).toBe(true);
     expect(booking.createBookingRecord).not.toHaveBeenCalled();
+  });
+});
+
+describe('list_client_bookings', () => {
+  test('нет телефона в ctx → reason no_phone', async () => {
+    const out = await listClientBookings.run(1, {}, {});
+    expect(out.bookings).toEqual([]);
+    expect(out.reason).toBe('no_phone');
+  });
+
+  test('клиент без yclients_client_id → reason client_not_found', async () => {
+    identity.resolveYclientsClientId.mockResolvedValue(null);
+    const out = await listClientBookings.run(1, {}, { clientPhone: '79001112233' });
+    expect(out.reason).toBe('client_not_found');
+    expect(ycGetClientRecords).not.toHaveBeenCalled();
+  });
+
+  test('возвращает только будущие и не отменённые записи', async () => {
+    identity.resolveYclientsClientId.mockResolvedValue(777);
+    db.one.mockResolvedValue({ id: 1, yclients_company_id: 100 });
+    const nowMs = Date.parse('2026-07-22T10:00:00+03:00');
+    ycGetClientRecords.mockResolvedValue([
+      { id: 1, datetime: '2026-07-25T12:00:00+03:00', attendance: 0,
+        services: [{ id: 10, title: 'Пилинг' }], staff_id: 7, staff: { id: 7, name: 'Иванова' } },
+      { id: 2, datetime: '2026-07-24T12:00:00+03:00', attendance: -1,  // отменена — отфильтровать
+        services: [{ id: 11, title: 'Чистка' }], staff: { id: 8, name: 'Петрова' } },
+      { id: 3, datetime: '2026-07-20T12:00:00+03:00', attendance: 0,   // прошлое — отфильтровать
+        services: [{ id: 12, title: 'Массаж' }], staff: { id: 9, name: 'Сидорова' } },
+    ]);
+    const out = await listClientBookings.run(1, {}, { clientPhone: '79001112233', nowMs });
+    expect(out.bookings).toHaveLength(1);
+    expect(out.bookings[0]).toMatchObject({
+      record_id: 1, staff_yc_id: 7, staff_name: 'Иванова', services: ['Пилинг'],
+    });
+  });
+});
+
+describe('cancel_booking', () => {
+  test('нет record_id → invalid_args', async () => {
+    const out = await cancelBooking.run(1, {}, { clientPhone: '79001112233' });
+    expect(out.invalid_args).toBe(true);
+    expect(bookingModify.cancelBookingRecord).not.toHaveBeenCalled();
+  });
+
+  test('без подтверждённого клиента → unverified, отмены нет (fail-closed)', async () => {
+    identity.resolveYclientsClientId.mockResolvedValue(null);
+    const out = await cancelBooking.run(1, { record_id: 555 }, { clientPhone: '79001112233' });
+    expect(out.unverified).toBe(true);
+    expect(out.cancelled).toBeUndefined();
+    expect(bookingModify.cancelBookingRecord).not.toHaveBeenCalled();
+  });
+
+  test('услуга «Запрет на отправку» найдена в полном каталоге → отмена без предупреждения', async () => {
+    identity.resolveYclientsClientId.mockResolvedValue(777);
+    db.one.mockResolvedValue({ id: 1, yclients_company_id: 100 });
+    ycFindServiceIdByTitle.mockResolvedValue(99);   // найдена в /company/{cid}/services/
+    bookingModify.cancelBookingRecord.mockResolvedValue({ ok: true, record_id: 555, no_notify_applied: true });
+    const out = await cancelBooking.run(1, { record_id: 555 }, { clientPhone: '79001112233', dialogKey: 'd' });
+    expect(out.cancelled).toBe(true);
+    expect(out.no_notify_warning).toBe(false);
+    // услуга «Запрет на отправку» (id 99) передана в исполнитель
+    expect(bookingModify.cancelBookingRecord.mock.calls[0][1].noNotifyServiceId).toBe(99);
+    expect(bookingModify.cancelBookingRecord.mock.calls[0][1].expectedYcClientId).toBe(777);
+  });
+
+  test('услуги «Запрет на отправку» нет в каталоге → no_notify_warning:true', async () => {
+    identity.resolveYclientsClientId.mockResolvedValue(777);
+    db.one.mockResolvedValue({ id: 1, yclients_company_id: 100 });
+    ycFindServiceIdByTitle.mockResolvedValue(null);
+    bookingModify.cancelBookingRecord.mockResolvedValue({ ok: true, record_id: 555, no_notify_applied: false });
+    const out = await cancelBooking.run(1, { record_id: 555 }, { clientPhone: '79001112233', dialogKey: 'd' });
+    expect(out.cancelled).toBe(true);
+    expect(out.no_notify_warning).toBe(true);
+    expect(bookingModify.cancelBookingRecord.mock.calls[0][1].noNotifyServiceId).toBeNull();
+  });
+
+  test('исполнитель вернул foreign → error проброшен, cancelled нет', async () => {
+    identity.resolveYclientsClientId.mockResolvedValue(888);
+    db.one.mockResolvedValue({ id: 1, yclients_company_id: 100 });
+    ycFindServiceIdByTitle.mockResolvedValue(null);
+    bookingModify.cancelBookingRecord.mockResolvedValue({ ok: false, foreign: true, error: 'чужая' });
+    const out = await cancelBooking.run(1, { record_id: 555 }, { clientPhone: '79001112233' });
+    expect(out.cancelled).toBeUndefined();
+    expect(out.error).toBe('чужая');
+  });
+});
+
+describe('reschedule_booking', () => {
+  test('нет datetime → invalid_args', async () => {
+    const out = await rescheduleBooking.run(1, { record_id: 555 }, { clientPhone: '79001112233' });
+    expect(out.invalid_args).toBe(true);
+    expect(bookingModify.rescheduleBookingRecord).not.toHaveBeenCalled();
+  });
+
+  test('без подтверждённого клиента → unverified, переноса нет (fail-closed)', async () => {
+    identity.resolveYclientsClientId.mockResolvedValue(null);
+    const out = await rescheduleBooking.run(1,
+      { record_id: 555, datetime: '2026-07-26T15:00:00+03:00' }, { clientPhone: '79001112233' });
+    expect(out.unverified).toBe(true);
+    expect(out.rescheduled).toBeUndefined();
+    expect(bookingModify.rescheduleBookingRecord).not.toHaveBeenCalled();
+  });
+
+  test('делегирует в исполнитель и возвращает rescheduled', async () => {
+    identity.resolveYclientsClientId.mockResolvedValue(777);
+    bookingModify.rescheduleBookingRecord.mockResolvedValue({
+      ok: true, record_id: 555, datetime: '2026-07-26T15:00:00+03:00',
+    });
+    const out = await rescheduleBooking.run(1,
+      { record_id: 555, datetime: '2026-07-26T15:00:00+03:00' },
+      { clientPhone: '79001112233', dialogKey: 'd' });
+    expect(out.rescheduled).toBe(true);
+    expect(out.datetime).toBe('2026-07-26T15:00:00+03:00');
+    expect(bookingModify.rescheduleBookingRecord.mock.calls[0][1]).toMatchObject({
+      recordId: 555, expectedYcClientId: 777, datetime: '2026-07-26T15:00:00+03:00',
+    });
+  });
+
+  test('исполнитель вернул ошибку → error проброшен', async () => {
+    identity.resolveYclientsClientId.mockResolvedValue(777);
+    bookingModify.rescheduleBookingRecord.mockResolvedValue({ ok: false, error: 'занято' });
+    const out = await rescheduleBooking.run(1,
+      { record_id: 555, datetime: '2026-07-26T15:00:00+03:00' }, { clientPhone: '79001112233' });
+    expect(out.rescheduled).toBeUndefined();
+    expect(out.error).toBe('занято');
+  });
+});
+
+describe('реестр инструментов', () => {
+  test('новые инструменты зарегистрированы', () => {
+    const registry = require('./services/agent/tools');
+    const names = registry.schemas.map(s => s.name);
+    expect(names).toContain('list_client_bookings');
+    expect(names).toContain('cancel_booking');
+    expect(names).toContain('reschedule_booking');
+    expect(typeof registry.handlers.cancel_booking).toBe('function');
   });
 });
