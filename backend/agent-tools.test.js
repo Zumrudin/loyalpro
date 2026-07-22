@@ -484,3 +484,35 @@ describe('cancel_booking', () => {
     listServices.run.mockRestore();
   });
 });
+
+describe('reschedule_booking', () => {
+  test('нет datetime → invalid_args', async () => {
+    const out = await rescheduleBooking.run(1, { record_id: 555 }, { clientPhone: '79001112233' });
+    expect(out.invalid_args).toBe(true);
+    expect(bookingModify.rescheduleBookingRecord).not.toHaveBeenCalled();
+  });
+
+  test('делегирует в исполнитель и возвращает rescheduled', async () => {
+    identity.resolveYclientsClientId.mockResolvedValue(777);
+    bookingModify.rescheduleBookingRecord.mockResolvedValue({
+      ok: true, record_id: 555, datetime: '2026-07-26T15:00:00+03:00',
+    });
+    const out = await rescheduleBooking.run(1,
+      { record_id: 555, datetime: '2026-07-26T15:00:00+03:00' },
+      { clientPhone: '79001112233', dialogKey: 'd' });
+    expect(out.rescheduled).toBe(true);
+    expect(out.datetime).toBe('2026-07-26T15:00:00+03:00');
+    expect(bookingModify.rescheduleBookingRecord.mock.calls[0][1]).toMatchObject({
+      recordId: 555, expectedYcClientId: 777, datetime: '2026-07-26T15:00:00+03:00',
+    });
+  });
+
+  test('исполнитель вернул ошибку → error проброшен', async () => {
+    identity.resolveYclientsClientId.mockResolvedValue(777);
+    bookingModify.rescheduleBookingRecord.mockResolvedValue({ ok: false, error: 'занято' });
+    const out = await rescheduleBooking.run(1,
+      { record_id: 555, datetime: '2026-07-26T15:00:00+03:00' }, { clientPhone: '79001112233' });
+    expect(out.rescheduled).toBeUndefined();
+    expect(out.error).toBe('занято');
+  });
+});
