@@ -3,9 +3,10 @@
 jest.mock('./services/yclients', () => ({
   ycGet: jest.fn(),
   ycPost: jest.fn(),
+  ycGetServiceMeta: jest.fn(),
 }));
 
-const { ycGet, ycPost } = require('./services/yclients');
+const { ycGet, ycPost, ycGetServiceMeta } = require('./services/yclients');
 const yb = require('./services/yclients-booking');
 const config = require('./config');
 
@@ -53,6 +54,35 @@ describe('ycCreateRecord', () => {
       comment: 'тест',
     }));
     expect(out.id).toBe(999);
+  });
+
+  test('без seanceLength (онлайн-запись выключена) длительность берётся из меты услуги', async () => {
+    // Регресс инцидента 2026-07-23: management POST /records требует seance_length.
+    // При выключенной онлайн-записи слот приходит из графика без длительности —
+    // берём её из ycGetServiceMeta.durationByService, а не шлём undefined (иначе 422).
+    ycGetServiceMeta.mockResolvedValue({
+      durationByService: new Map([['7', 1800]]),
+      resourceIdsByService: new Map(),
+    });
+    ycPost.mockResolvedValue({ id: 777 });
+    await yb.ycCreateRecord(salon, {
+      staffYcId: 55, serviceYcIds: [7], datetime: '2026-07-27T15:00:00+03:00',
+      seanceLength: undefined, clientPhone: '79001234567', comment: 'без длительности',
+    });
+    expect(ycGetServiceMeta).toHaveBeenCalledWith(salon);
+    expect(ycPost).toHaveBeenCalledWith(salon, '/records/100', expect.objectContaining({
+      seance_length: 1800,
+    }));
+  });
+
+  test('seanceLength из слота имеет приоритет и НЕ дёргает мету', async () => {
+    ycPost.mockResolvedValue({ id: 1 });
+    await yb.ycCreateRecord(salon, {
+      staffYcId: 55, serviceYcIds: [7], datetime: '2026-07-20T10:00:00+03:00',
+      seanceLength: 3600, clientPhone: '79001234567',
+    });
+    expect(ycGetServiceMeta).not.toHaveBeenCalled();
+    expect(ycPost.mock.calls[0][2].seance_length).toBe(3600);
   });
 
   test('с YCLIENTS_INTEGRATION_USER_TOKEN запись создаётся под токеном приложения (автор = LoyalPRO)', async () => {

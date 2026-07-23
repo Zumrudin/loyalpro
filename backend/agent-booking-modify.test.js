@@ -4,10 +4,18 @@ jest.mock('./db', () => ({ pool: { query: jest.fn() } }));
 jest.mock('./services/yclients-records', () => ({
   ycGetRecord: jest.fn(), ycUpdateRecord: jest.fn(),
 }));
+jest.mock('./services/yclients', () => ({
+  ycGetServiceMeta: jest.fn(), ycGetServiceCatalog: jest.fn(),
+}));
+jest.mock('./services/yclients-booking', () => ({
+  ycGetDayRecords: jest.fn(),
+}));
 
 const { pool } = require('./db');
 const ycr = require('./services/yclients-records');
-const { cancelBookingRecord, rescheduleBookingRecord, CANCEL_SEANCE_LENGTH } =
+const yc = require('./services/yclients');
+const yb = require('./services/yclients-booking');
+const { cancelBookingRecord, rescheduleBookingRecord, modifyBookingServices, CANCEL_SEANCE_LENGTH } =
   require('./services/agent/booking-modify');
 
 const SALON_ROW = {
@@ -97,5 +105,93 @@ describe('rescheduleBookingRecord', () => {
     });
     expect(res.ok).toBe(false);
     expect(res.foreign).toBe(true);
+  });
+});
+
+describe('modifyBookingServices', () => {
+  beforeEach(() => {
+    // По умолчанию: длительности услуг известны, мастер 7 выполняет услугу 20, день пуст.
+    yc.ycGetServiceMeta.mockResolvedValue({
+      durationByService: new Map([['10', 1800], ['20', 2700]]),
+    });
+    yc.ycGetServiceCatalog.mockResolvedValue({
+      staffIdsByService: new Map([['20', new Set(['7'])]]),
+    });
+    yb.ycGetDayRecords.mockResolvedValue([]);
+  });
+
+  test('добавление услуги: PUT с новым набором и пересчитанной длительностью', async () => {
+    ycr.ycGetRecord.mockResolvedValue(REC);           // services [{id:10}], staff 7
+    ycr.ycUpdateRecord.mockResolvedValue({ id: 555 });
+    const res = await modifyBookingServices(1, {
+      dialogKey: 'd', recordId: 555, expectedYcClientId: 777, addServiceYcIds: [20],
+    });
+    expect(res.ok).toBe(true);
+    const body = ycr.ycUpdateRecord.mock.calls[0][2];
+    expect(body.services).toEqual([{ id: 10 }, { id: 20 }]);
+    expect(body.seance_length).toBe(4500);            // 1800 + 2700 (пересчёт, не старые 3600)
+    expect(body.datetime).toBe('2026-07-25T12:00:00+03:00');  // время не меняется
+    expect(body.client).toEqual({ id: 777, phone: '79001112233', name: 'Аня' });
+    expect(body.save_if_busy).toBe(false);
+    const kinds = pool.query.mock.calls.map(c => c[1]).filter(Boolean).flat();
+    expect(kinds).toContain('booking_services_modified');
+  });
+
+  test('удаление услуги: набор и длительность пересчитаны', async () => {
+    ycr.ycGetRecord.mockResolvedValue({ ...REC, services: [{ id: 10 }, { id: 20 }] });
+    ycr.ycUpdateRecord.mockResolvedValue({ id: 555 });
+    const res = await modifyBookingServices(1, {
+      dialogKey: 'd', recordId: 555, expectedYcClientId: 777, removeServiceYcIds: [20],
+    });
+    expect(res.ok).toBe(true);
+    const body = ycr.ycUpdateRecord.mock.calls[0][2];
+    expect(body.services).toEqual([{ id: 10 }]);
+    expect(body.seance_length).toBe(1800);
+  });
+
+  test('удаление последней услуги → removed_all, без PUT', async () => {
+    ycr.ycGetRecord.mockResolvedValue(REC);           // единственная услуга 10
+    const res = await modifyBookingServices(1, {
+      dialogKey: 'd', recordId: 555, expectedYcClientId: 777, removeServiceYcIds: [10],
+    });
+    expect(res.ok).toBe(false);
+    expect(res.removed_all).toBe(true);
+    expect(ycr.ycUpdateRecord).not.toHaveBeenCalled();
+  });
+
+  test('наложение на следующую запись мастера → overlaps, без PUT', async () => {
+    ycr.ycGetRecord.mockResolvedValue(REC);           // старт 12:00, после add длительность 75 мин → конец 13:15
+    yb.ycGetDayRecords.mockResolvedValue([
+      { id: 556, staff_id: 7, datetime: '2026-07-25T13:00:00+03:00' },   // следующая в 13:00 < 13:15
+    ]);
+    const res = await modifyBookingServices(1, {
+      dialogKey: 'd', recordId: 555, expectedYcClientId: 777, addServiceYcIds: [20],
+    });
+    expect(res.ok).toBe(false);
+    expect(res.overlaps).toBe(true);
+    expect(ycr.ycUpdateRecord).not.toHaveBeenCalled();
+  });
+
+  test('добавляемую услугу мастер не выполняет → invalid_service, без PUT', async () => {
+    ycr.ycGetRecord.mockResolvedValue(REC);
+    yc.ycGetServiceCatalog.mockResolvedValue({
+      staffIdsByService: new Map([['20', new Set(['9'])]]),   // услугу 20 делает мастер 9, а запись у 7
+    });
+    const res = await modifyBookingServices(1, {
+      dialogKey: 'd', recordId: 555, expectedYcClientId: 777, addServiceYcIds: [20],
+    });
+    expect(res.ok).toBe(false);
+    expect(res.invalid_service).toBe(true);
+    expect(ycr.ycUpdateRecord).not.toHaveBeenCalled();
+  });
+
+  test('чужая запись → foreign, без PUT', async () => {
+    ycr.ycGetRecord.mockResolvedValue(REC);           // client.id 777
+    const res = await modifyBookingServices(1, {
+      dialogKey: 'd', recordId: 555, expectedYcClientId: 888, addServiceYcIds: [20],
+    });
+    expect(res.ok).toBe(false);
+    expect(res.foreign).toBe(true);
+    expect(ycr.ycUpdateRecord).not.toHaveBeenCalled();
   });
 });

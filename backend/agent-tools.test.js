@@ -540,6 +540,8 @@ describe('реестр инструментов', () => {
     expect(names).toContain('list_client_bookings');
     expect(names).toContain('cancel_booking');
     expect(names).toContain('reschedule_booking');
+    expect(names).toContain('modify_booking_services');
     expect(typeof registry.handlers.cancel_booking).toBe('function');
+    expect(typeof registry.handlers.modify_booking_services).toBe('function');
   });
 });

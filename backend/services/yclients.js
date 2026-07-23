@@ -29,18 +29,44 @@ function ycHeaders(salon) {
   };
 }
 
+// Разворачиваем тело ответа YClients в текст ошибки: голый axios отдаёт лишь
+// «Request failed with status code 4xx», а настоящая причина лежит в
+// error.response.data.meta (message + errors по полям). Без этого провал записи
+// не оставлял диагностируемого следа (инцидент 2026-07-23: 422 seance_length
+// прятался за generic-сообщением). Сохраняем status/body на ошибке для логов.
+function ycError(e) {
+  const d = e && e.response && e.response.data;
+  const meta = d && d.meta;
+  let msg = (meta && meta.message) || (d && d.message) || (e && e.message) || 'YClients API error';
+  if (meta && meta.errors && typeof meta.errors === 'object') {
+    const parts = Object.entries(meta.errors)
+      .map(([field, arr]) => `${field}: ${Array.isArray(arr) ? arr.join('; ') : arr}`);
+    if (parts.length) msg += ` (${parts.join(' | ')})`;
+  }
+  const err = new Error(msg);
+  err.status = e && e.response && e.response.status;
+  err.body = d;
+  return err;
+}
+
 async function ycGet(salon, endpoint, params = {}) {
   const url = new URL(`${YC}${endpoint}`);
   Object.entries(params).forEach(([k, v]) => url.searchParams.set(k, v));
-  const { data } = await axios.get(url.toString(), { headers: ycHeaders(salon), timeout: 30000 });
+  let data;
+  try {
+    ({ data } = await axios.get(url.toString(), { headers: ycHeaders(salon), timeout: 30000 }));
+  } catch (e) { throw ycError(e); }
   if (!data.success) throw new Error(data.meta?.message || 'YClients API error');
   return data.data;
 }
 
 async function ycPost(salon, endpoint, body = {}) {
-  const { data } = await axios.post(`${YC}${endpoint}`, body, {
-    headers: ycHeaders(salon), timeout: 30000
-  });
+  let data;
+  try {
+    ({ data } = await axios.post(`${YC}${endpoint}`, body, {
+      headers: ycHeaders(salon), timeout: 30000,
+    }));
+  } catch (e) { throw ycError(e); }
   if (!data.success) throw new Error(data.meta?.message || 'YClients API error');
   return data.data;
 }

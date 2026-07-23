@@ -18,12 +18,13 @@ const MAX_REGEN = 2;   // сколько раз перегенерировать
 
 // Пишущие инструменты: их результат нельзя «выбросить» перегенерацией.
 const SIDE_EFFECT_TOOLS = new Set([
-  'create_booking', 'cancel_booking', 'reschedule_booking', 'escalate_to_operator',
+  'create_booking', 'cancel_booking', 'reschedule_booking', 'modify_booking_services',
+  'escalate_to_operator',
 ]);
 
 // Инструменты, меняющие запись в YClients. Успешный вызов одного из них —
 // единственное, что даёт право отрапортовать «перенесла / отменила / записала».
-const WRITE_TOOLS = new Set(['create_booking', 'cancel_booking', 'reschedule_booking']);
+const WRITE_TOOLS = new Set(['create_booking', 'cancel_booking', 'reschedule_booking', 'modify_booking_services']);
 
 // Утверждение о ВЫПОЛНЕННОМ действии над записью (не намерение). Пилот
 // claude-haiku 2026-07-22: модель написала «Готово, перенесла на 14:00», НЕ
@@ -31,7 +32,7 @@ const WRITE_TOOLS = new Set(['create_booking', 'cancel_booking', 'reschedule_boo
 // (перенесл-а/-и, перенесён, отменил-а, оформлен, «вы записаны», «запись
 // перенесена/…»); инфинитивы намерения («перенести», «отменить») НЕ триггерят.
 const COMPLETION_CLAIM =
-  /(перенесл[аио]|перенёс|перенесен[оа]|отменил[аи]?|отменен[оа]|оформлен[оа]|подтверждена|записал[аи]?\s+вас|вы\s+записаны|запись\s+(создан|перенесен|отменен|оформлен|подтвержден))/i;
+  /(перенесл[аио]|перенёс|перенесен[оа]|отменил[аи]?|отменен[оа]|оформлен[оа]|подтверждена|записал[аи]?\s+вас|вы\s+записаны|запись\s+(создан|перенесен|отменен|оформлен|подтвержден)|добавил[аи]|добавлен[аоы]|убрал[аи]|убран[аоы])/i;
 
 // YYYY-MM-DD по Москве (для системного промпта «сегодня …»).
 function todayMoscow() {
@@ -120,9 +121,16 @@ async function runDialog(salonId, dialogKey, opts = {}) {
         { client: opts.client });
 
       convo.push(resp.assistantMsg);
-      if (resp.text) replies.push(resp.text);
 
-      if (!resp.toolCalls.length) break;
+      // Пациенту уходит ТОЛЬКО финальная реплика — ход без вызовов инструментов.
+      // Промежуточный нарратив между tool-вызовами («Позвольте проверить… / Теперь
+      // проверю слот… / Слот свободен, оформляю…») НЕ шлём: это внутренняя кухня,
+      // раньше диспетчер спамил им клиента отдельными сообщениями. Модель уточнила
+      // мастера/услугу/время → записала → сообщила одним сообщением.
+      if (!resp.toolCalls.length) {
+        if (resp.text) replies.push(resp.text);
+        break;
+      }
 
       const results = [];
       for (const tc of resp.toolCalls) {

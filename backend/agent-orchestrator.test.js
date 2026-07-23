@@ -229,14 +229,19 @@ describe('исчерпание лимита tool-итераций', () => {
     expect(out.exhausted).toBe(true);
   });
 
-  test('лимит исчерпан, но текст уже был → добивочного вызова НЕ делаем', async () => {
+  test('промежуточный нарратив на tool-ходах НЕ идёт клиенту → добивочный вызов даёт реальный ответ', async () => {
+    // Раньше филлер «Секунду, уточняю…» на каждом tool-ходе считался репликой и
+    // спамил клиента. Теперь пациенту уходит ТОЛЬКО финальная реплика (ход без
+    // инструментов); филлер отбрасывается, и добивочный вызов даёт нормальный ответ.
     const deps = makeDeps();
-    deps.provider.createMessage.mockImplementation(async () =>
-      toolResp('get_available_slots', { date: '2026-07-20' }, 'c1', 'Секунду, уточняю…'));
+    deps.provider.createMessage.mockImplementation(async ({ tools }) => {
+      if (!tools || tools.length === 0) return textResp('Завтра свободно в 16:00 и 18:30.');
+      return toolResp('get_available_slots', { date: '2026-07-20' }, 'c1', 'Секунду, уточняю…');
+    });
 
     const out = await orchestrator.runDialog(1, 'k', { deps, today: '2026-07-19' });
 
-    expect(deps.provider.createMessage).toHaveBeenCalledTimes(orchestrator.MAX_ITERS);
-    expect(out.replies.length).toBeGreaterThan(0);
+    expect(out.replies).toEqual(['Завтра свободно в 16:00 и 18:30.']);
+    expect(deps.provider.createMessage).toHaveBeenCalledTimes(orchestrator.MAX_ITERS + 1);
   });
 });

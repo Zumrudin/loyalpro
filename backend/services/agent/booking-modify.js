@@ -3,6 +3,8 @@
 const { pool } = require('../../db');
 const config = require('../../config');
 const { ycGetRecord, ycUpdateRecord } = require('../yclients-records');
+const { ycGetServiceMeta, ycGetServiceCatalog } = require('../yclients');
+const { ycGetDayRecords } = require('../yclients-booking');
 
 // ── Исполнитель отмены и переноса записи агентом. ──
 // Отмена — НЕ удаление: помечаем «клиент не пришёл» (attendance=-1), режем
@@ -122,4 +124,97 @@ async function rescheduleBookingRecord(salonId, { dialogKey, recordId, expectedY
   return { ok: true, record_id: recordId, datetime };
 }
 
-module.exports = { cancelBookingRecord, rescheduleBookingRecord, CANCEL_SEANCE_LENGTH };
+// YYYY-MM-DD из datetime записи (формат YClients — «2026-07-27 15:00:00» или ISO;
+// первые 10 символов в обоих случаях = дата по Москве).
+function dateOf(datetime) {
+  return String(datetime || '').slice(0, 10);
+}
+
+// Добавление/удаление услуг в существующем визите с пересчётом ОБЩЕЙ длительности.
+// Ключевое требование: суммарная длительность всех услуг не должна налезать на
+// следующую запись мастера. Спека: docs/superpowers/specs/2026-07-23-agent-add-remove-services-design.md.
+async function modifyBookingServices(salonId, {
+  dialogKey, recordId, expectedYcClientId, addServiceYcIds, removeServiceYcIds,
+}) {
+  const salon = await loadSalon(salonId);
+  if (!salon) return { ok: false, error: 'YClients не подключён для салона.' };
+
+  let rec;
+  try { rec = await ycGetRecord(salon, recordId); }
+  catch (e) { return { ok: false, error: e.message }; }
+  if (!rec || !rec.id) return { ok: false, error: 'Запись не найдена.' };
+  if (ownershipError(rec, expectedYcClientId)) {
+    return { ok: false, foreign: true, error: ownershipError(rec, expectedYcClientId) };
+  }
+
+  // Новый набор услуг = текущие − remove + add (по id, с дедупом).
+  const removeSet = new Set((removeServiceYcIds || []).map(Number));
+  const addIds = (addServiceYcIds || []).map(Number).filter(Boolean);
+  let ids = serviceIds(rec).map(s => Number(s.id)).filter(id => !removeSet.has(id));
+  for (const id of addIds) if (!ids.includes(id)) ids.push(id);
+  ids = [...new Set(ids)];
+
+  // Визит без услуг оставлять нельзя — это отмена (у агента есть cancel_booking).
+  if (!ids.length) return { ok: false, removed_all: true };
+
+  // Добавляемая услуга должна реально выполняться мастером ЭТОЙ записи.
+  // Fail-open: каталог недоступен → не блокируем (как в create_booking).
+  if (addIds.length) {
+    const cat = await ycGetServiceCatalog(salon, [rec.staff_id]).catch(() => null);
+    if (cat && cat.staffIdsByService) {
+      for (const id of addIds) {
+        const staffSet = cat.staffIdsByService.get(String(id));
+        if (!staffSet || !staffSet.has(String(rec.staff_id))) {
+          return { ok: false, invalid_service: true,
+            error: `Услуга ${id} не выполняется мастером этой записи (или неверный service_yc_id). ` +
+              'Возьми услугу из list_services, где нужный мастер есть в поле staff.' };
+        }
+      }
+    }
+  }
+
+  // Пересчёт общей длительности из меты услуг (сек). Тот же источник, что фикс
+  // create_booking. Если сумма нулевая (мета недоступна) — фолбэк на прежнюю.
+  const meta = await ycGetServiceMeta(salon).catch(() => null);
+  let total = 0;
+  if (meta && meta.durationByService) {
+    for (const id of ids) total += Number(meta.durationByService.get(String(id))) || 0;
+  }
+  const seanceLength = total || Number(rec.seance_length) || 0;
+
+  // Проверка наложения на следующую запись мастера за тот же день.
+  const startMs = Date.parse(rec.datetime);
+  const day = await ycGetDayRecords(salon, dateOf(rec.datetime)).catch(() => []);
+  let nextStart = Infinity;
+  for (const r of day) {
+    if (Number(r.id) === Number(recordId)) continue;
+    if (Number(r.staff_id) !== Number(rec.staff_id)) continue;
+    const t = Date.parse(r.datetime);
+    if (Number.isFinite(t) && t > startMs && t < nextStart) nextStart = t;
+  }
+  if (Number.isFinite(startMs) && Number.isFinite(nextStart)
+      && startMs + seanceLength * 1000 > nextStart) {
+    return { ok: false, overlaps: true,
+      error: 'Новая длительность визита налезает на следующую запись мастера.' };
+  }
+
+  try {
+    await ycUpdateRecord(authSalonFor(salon), recordId, {
+      staff_id: rec.staff_id,
+      services: ids.map(id => ({ id })),
+      client: clientOf(rec),
+      datetime: rec.datetime,
+      seance_length: seanceLength,
+      comment: rec.comment || '',
+      save_if_busy: false,   // грубая страховка от прочих конфликтов (напр. оборудование)
+    });
+  } catch (e) { return { ok: false, error: e.message }; }
+
+  await logEvent(salonId, dialogKey, 'booking_services_modified', 'modify_booking_services',
+    { record_id: recordId, services: ids, seance_length: seanceLength });
+  return { ok: true, record_id: recordId, seance_length: seanceLength, services_count: ids.length };
+}
+
+module.exports = {
+  cancelBookingRecord, rescheduleBookingRecord, modifyBookingServices, CANCEL_SEANCE_LENGTH,
+};

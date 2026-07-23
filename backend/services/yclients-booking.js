@@ -1,6 +1,6 @@
 'use strict';
 
-const { ycGet, ycPost } = require('./yclients');
+const { ycGet, ycPost, ycGetServiceMeta } = require('./yclients');
 const config = require('../config');
 
 // ── YClients booking-flow: свободные слоты + создание записи. ──────────
@@ -82,12 +82,23 @@ async function ycGetDayRecords(salon, date) {
 async function ycCreateRecord(salon, {
   staffYcId, serviceYcIds, datetime, seanceLength, clientPhone, clientName, comment,
 }) {
+  // seance_length — ОБЯЗАТЕЛЬНЫЙ параметр management POST /records (YClients 422
+  // «Не передан обязательный параметр seance_length», инцидент 2026-07-23). При
+  // ВЫКЛЮЧЕННОЙ онлайн-записи слоты приходят из графика (management /timetable)
+  // без длительности, поэтому берём её детерминированно из меты услуги
+  // (duration, сек) — не полагаясь на то, что слот её принёс.
+  let sl = Number(seanceLength) || 0;
+  if (!sl) {
+    const meta = await ycGetServiceMeta(salon).catch(() => null);
+    const first = (serviceYcIds || [])[0];
+    sl = (meta && Number(meta.durationByService.get(String(first)))) || 0;
+  }
   const body = {
     staff_id: staffYcId,
     services: (serviceYcIds || []).map(id => ({ id })),
     client: { phone: clientPhone, name: clientName || '' },
     datetime,
-    seance_length: seanceLength,
+    seance_length: sl || seanceLength,
     save_if_busy: false,
     send_sms: false,
     comment: comment || 'Запись через ИИ-агента',
