@@ -73,15 +73,17 @@ function seancesToRanges(seances) {
   return ranges;
 }
 
-// Из интервалов — старты с шагом step, где влезает хотя бы один шаг свободного времени.
+// Из интервалов — старты с шагом step, куда услуга влезает ЦЕЛИКОМ (durationMin);
+// если длительность неизвестна (0/не передана) — по-прежнему хотя бы один шаг.
 // Старт привязываем к ЧИСТОЙ сетке (кратной step от полуночи → :00/:30), а НЕ к
 // r.start. Иначе окно, начатое в 19:05 (хвост от предыдущей записи чужой длительности),
 // тянуло смещение через все старты: 19:05, 19:35, 20:05 — и прятало свободные 19:00/20:00.
-function rangesToSlots(ranges, date, step) {
+function rangesToSlots(ranges, date, step, durationMin) {
+  const need = durationMin > 0 ? durationMin : step;
   const slots = [];
   for (const r of ranges) {
     const first = Math.ceil(r.start / step) * step;   // ближайший чистый старт ≥ r.start
-    for (let t = first; t + step <= r.end; t += step) {
+    for (let t = first; t + need <= r.end; t += step) {
       const hhmm = toHHMM(t);
       slots.push({ time: hhmm, datetime: `${date}T${hhmm}:00+03:00` });
     }

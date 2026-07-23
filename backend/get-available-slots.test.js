@@ -41,3 +41,43 @@ describe('rangesToSlots — привязка к чистой сетке', () => 
     expect(slots[0].datetime).toBe('2026-07-22T10:00:00+03:00');
   });
 });
+
+// Услуга должна влезать в окно мастера ЦЕЛИКОМ (как в get_parallel_slots), а не
+// первые 30 минут: иначе 60-минутная процедура попадает в хвост окна и упирается
+// в занятое кресло уже на create_booking.
+describe('rangesToSlots — полная длительность услуги', () => {
+  // Интервалы в минутах от полуночи: 19:00–20:00 = {start: 1140, end: 1200}.
+  const win = [{ start: 1140, end: 1200 }];
+
+  test('60-минутная услуга в часовом окне — только 19:00', () => {
+    const slots = rangesToSlots(win, '2026-07-24', 30, 60);
+    expect(slots.map(s => s.time)).toEqual(['19:00']);
+  });
+
+  test('30-минутная услуга — 19:00 и 19:30, как раньше', () => {
+    const slots = rangesToSlots(win, '2026-07-24', 30, 30);
+    expect(slots.map(s => s.time)).toEqual(['19:00', '19:30']);
+  });
+
+  test('45 минут — старт 19:30 отпадает (19:30+45 > 20:00), остаётся 19:00', () => {
+    const slots = rangesToSlots(win, '2026-07-24', 30, 45);
+    expect(slots.map(s => s.time)).toEqual(['19:00']);
+  });
+
+  test('услуга длиннее окна — слотов нет', () => {
+    const slots = rangesToSlots(win, '2026-07-24', 30, 90);
+    expect(slots).toEqual([]);
+  });
+
+  test('длительность неизвестна (0/не передана) — прежнее поведение по шагу', () => {
+    expect(rangesToSlots(win, '2026-07-24', 30, 0).map(s => s.time))
+      .toEqual(['19:00', '19:30']);
+    expect(rangesToSlots(win, '2026-07-24', 30).map(s => s.time))
+      .toEqual(['19:00', '19:30']);
+  });
+
+  test('длительность не ломает привязку к чистой сетке (окно 18:05–20:00, 60 мин)', () => {
+    const slots = rangesToSlots([{ start: 1085, end: 1200 }], '2026-07-24', 30, 60);
+    expect(slots.map(s => s.time)).toEqual(['18:30', '19:00']);
+  });
+});
