@@ -265,6 +265,10 @@ async function ycSumServicePayments(salon, clientId, dateFrom, dateTo) {
 const _svcCatalogCache = {};                 // salonId → { ts, data }
 const SVC_CATALOG_TTL = 2 * 60 * 1000;       // 2 мин: режем нагрузку, окно устаревания мало
 
+// price_max=0 — валидный признак «от price_min» (стартовая цена без верхней
+// границы). Фильтровать только по price_max нельзя — так теряются все «от»-услуги.
+const hasAnyPrice = s => Number(s && s.price_min) > 0 || Number(s && s.price_max) > 0;
+
 async function ycGetServiceCatalog(salon, staffIds = []) {
   const cid = salon && salon.yclients_company_id;
   if (!cid) return { priced: [], categories: [], staffIdsByService: new Map(), staffPricesByService: new Map() };
@@ -284,7 +288,7 @@ async function ycGetServiceCatalog(salon, staffIds = []) {
       .catch(() => ({ id, services: [] }))),
   ]);
 
-  const priced = (Array.isArray(catalog) ? catalog : []).filter(s => Number(s.price_max) > 0);
+  const priced = (Array.isArray(catalog) ? catalog : []).filter(hasAnyPrice);
   const staffIdsByService = new Map();
   // Достоверная цена per-staff: в ответе /services?staff_id={id} price_min/price_max
   // относятся к цене этого мастера за услугу. staffPricesByService: svcIdStr →
@@ -354,5 +358,5 @@ module.exports = {
   parseCardTransactionsHtml, ycAccrueCard, ycListFinanceTransactions, ycSumServicePayments,
   ycWebSessions,
   getTreeCache, setTreeCache, clearTreeCache,
-  ycGetServiceCatalog, clearServiceCatalogCache, ycGetServiceMeta,
+  ycGetServiceCatalog, clearServiceCatalogCache, ycGetServiceMeta, hasAnyPrice,
 };
