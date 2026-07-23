@@ -48,6 +48,7 @@ const { ycGetClientRecords, ycFindServiceIdByTitle } = require('./services/yclie
 const bookingModify = require('./services/agent/booking-modify');
 const identity = require('./services/agent/identity');
 const listClientBookings = require('./services/agent/tools/list-client-bookings');
+const visitHistory = require('./services/agent/tools/get-client-visit-history');
 const cancelBooking = require('./services/agent/tools/cancel-booking');
 const rescheduleBooking = require('./services/agent/tools/reschedule-booking');
 
@@ -442,6 +443,52 @@ describe('list_client_bookings', () => {
   });
 });
 
+describe('get_client_visit_history', () => {
+  test('нет телефона в ctx → reason no_phone, YClients не дёргаем', async () => {
+    const out = await visitHistory.run(1, {}, {});
+    expect(out.visits).toEqual([]);
+    expect(out.reason).toBe('no_phone');
+    expect(ycGetClientRecords).not.toHaveBeenCalled();
+  });
+
+  test('клиент без yclients_client_id → reason client_not_found', async () => {
+    identity.resolveYclientsClientId.mockResolvedValue(null);
+    const out = await visitHistory.run(1, {}, { clientPhone: '79001112233' });
+    expect(out.reason).toBe('client_not_found');
+    expect(ycGetClientRecords).not.toHaveBeenCalled();
+  });
+
+  test('возвращает только прошлые и не отменённые визиты, новые сверху, с лимитом', async () => {
+    identity.resolveYclientsClientId.mockResolvedValue(777);
+    db.one.mockResolvedValue({ id: 1, yclients_company_id: 100 });
+    const nowMs = Date.parse('2026-07-22T10:00:00+03:00');
+    ycGetClientRecords.mockResolvedValue([
+      { id: 1, datetime: '2026-07-25T12:00:00+03:00', attendance: 1,   // будущее — отфильтровать
+        services: [{ id: 10, title: 'Пилинг' }], staff: { id: 7, name: 'Иванова' } },
+      { id: 2, datetime: '2026-07-15T12:00:00+03:00', attendance: -1,  // не пришёл — отфильтровать
+        services: [{ id: 11, title: 'Чистка' }], staff: { id: 8, name: 'Петрова' } },
+      { id: 3, datetime: '2026-07-10T12:00:00+03:00', attendance: 1,   // прошлое — оставить
+        services: [{ id: 12, title: 'Лазерная эпиляция' }], staff: { id: 9, name: 'Сидорова' } },
+      { id: 4, datetime: '2026-07-18T12:00:00+03:00', attendance: 1,   // прошлое, свежее — первым
+        services: [{ id: 13, title: 'Биоревитализация' }], staff: { id: 9, name: 'Сидорова' } },
+    ]);
+    const out = await visitHistory.run(1, {}, { clientPhone: '79001112233', nowMs });
+    // прошлые визиты за сегодня по МСК запрошены через endDate
+    expect(ycGetClientRecords.mock.calls[0][2]).toMatchObject({ endDate: '2026-07-22' });
+    expect(out.visits.map(v => v.services[0])).toEqual(['Биоревитализация', 'Лазерная эпиляция']);
+    expect(out.visits[0]).toMatchObject({ staff_name: 'Сидорова', services: ['Биоревитализация'] });
+  });
+
+  test('ошибка YClients → error, без throw', async () => {
+    identity.resolveYclientsClientId.mockResolvedValue(777);
+    db.one.mockResolvedValue({ id: 1, yclients_company_id: 100 });
+    ycGetClientRecords.mockRejectedValue(new Error('таймаут'));
+    const out = await visitHistory.run(1, {}, { clientPhone: '79001112233', nowMs: Date.parse('2026-07-22T10:00:00+03:00') });
+    expect(out.visits).toEqual([]);
+    expect(out.error).toMatch(/таймаут/);
+  });
+});
+
 describe('cancel_booking', () => {
   test('нет record_id → invalid_args', async () => {
     const out = await cancelBooking.run(1, {}, { clientPhone: '79001112233' });
@@ -538,10 +585,12 @@ describe('реестр инструментов', () => {
     const registry = require('./services/agent/tools');
     const names = registry.schemas.map(s => s.name);
     expect(names).toContain('list_client_bookings');
+    expect(names).toContain('get_client_visit_history');
     expect(names).toContain('cancel_booking');
     expect(names).toContain('reschedule_booking');
     expect(names).toContain('modify_booking_services');
     expect(typeof registry.handlers.cancel_booking).toBe('function');
     expect(typeof registry.handlers.modify_booking_services).toBe('function');
+    expect(typeof registry.handlers.get_client_visit_history).toBe('function');
   });
 });

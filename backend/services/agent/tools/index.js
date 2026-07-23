@@ -11,12 +11,13 @@ const getClient = require('./get-client');
 const createBk  = require('./create-booking');
 const escalate  = require('./escalate-to-operator');
 const listBookings = require('./list-client-bookings');
+const visitHistory = require('./get-client-visit-history');
 const cancelBk  = require('./cancel-booking');
 const reschedBk = require('./reschedule-booking');
 const modifySvc = require('./modify-booking-services');
 
 const tools = [searchKb, listSvc, listStaff, getSlots, getParSlot, getDates, getClient,
-  createBk, listBookings, cancelBk, reschedBk, modifySvc, escalate];
+  createBk, listBookings, visitHistory, cancelBk, reschedBk, modifySvc, escalate];
 
 const schemas = tools.map(t => t.schema);
 const handlers = {};
