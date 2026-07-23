@@ -103,9 +103,12 @@ async function _removeRuleFor(svcId, staffId, ruleType) {
 }
 
 function _price(s) {
-  if (!(Number(s.price_max) > 0)) return '';
-  return String(s.price_min) === String(s.price_max)
-    ? `${s.price_min} ₽` : `${s.price_min}–${s.price_max} ₽`;
+  const min = Number(s.price_min) || 0, max = Number(s.price_max) || 0;
+  if (max > 0) {
+    return String(min) === String(max) ? `${min} ₽` : `${min}–${max} ₽`;
+  }
+  if (min > 0) return `от ${min} ₽`;   // price_max=0 — стартовая цена без верхней границы
+  return '';
 }
 
 function _svcRow(s) {
