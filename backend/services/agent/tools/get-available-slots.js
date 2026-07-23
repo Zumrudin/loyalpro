@@ -8,7 +8,8 @@ const staffGuard = require('../staff-service-guard');
 const eq = require('../equipment');
 const eqContext = require('../equipment-context');
 
-const DEFAULT_STEP_MIN = 30;   // шаг предлагаемых стартов в fallback-режиме
+const DEFAULT_STEP_MIN = 30;       // шаг предлагаемых стартов в fallback-режиме
+const DEFAULT_DURATION_MIN = 60;   // если YClients не отдал duration услуги (как в get_parallel_slots)
 
 const schema = {
   name: 'get_available_slots',
@@ -135,8 +136,13 @@ async function run(salonId, input, ctx = {}) {
     const seances = await ycGetStaffSeances(salon, staffId, date);
     let ranges = seancesToRanges(seances);
     let equipmentBusy = false;
+    // Длительность услуги: старт годится, только если услуга влезает целиком до
+    // конца окна мастера (как в get_parallel_slots). Без service_yc_id длительность
+    // знать неоткуда — остаётся прежняя проверка «хотя бы один шаг».
+    let svcDurationMin = 0;
     if (serviceId) {
       const eqCtx = await eqContext.loadEquipmentContext(salon, date);
+      svcDurationMin = eqContext.durationMin(eqCtx, serviceId) || DEFAULT_DURATION_MIN;
       const busy = eqContext.busyForService(eqCtx, serviceId);
       if (busy.length) {
         const trimmed = eq.subtractRanges(ranges, busy);
@@ -145,8 +151,15 @@ async function run(salonId, input, ctx = {}) {
         ranges = trimmed;
       }
     }
+    // free_ranges — «сырые» окна кресла для ответа пациенту (до фильтра длительности),
+    // slots — старты с гарантией, что услуга помещается целиком.
     const freeRanges = ranges.map(r => ({ from: toHHMM(r.start), to: toHHMM(r.end) }));
-    const slots = rangesToSlots(ranges, date, DEFAULT_STEP_MIN);
+    let slots = rangesToSlots(ranges, date, DEFAULT_STEP_MIN, svcDurationMin);
+    // seance_length — как у get_parallel_slots: create_booking без него ловил 422
+    // на салонах с выключенной онлайн-записью.
+    if (svcDurationMin) {
+      slots = slots.map(s => ({ ...s, seance_length: svcDurationMin * 60 }));
+    }
     const out = { slots, free_ranges: freeRanges, source: 'schedule' };
     if (equipmentBusy) out.equipment_busy = true;   // часть окон срезана занятым аппаратом
     return dropPastToday(out, date, nowMs);
