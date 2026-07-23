@@ -4,6 +4,7 @@ const { db } = require('../../../db');
 const { ycGetBookTimes, ycGetStaffSeances } = require('../../yclients-booking');
 const settings = require('../../agent-settings');
 const svcFilter = require('../service-filter');
+const staffGuard = require('../staff-service-guard');
 const eq = require('../equipment');
 const eqContext = require('../equipment-context');
 
@@ -99,6 +100,19 @@ async function run(salonId, input, ctx = {}) {
     const filter = await settings.loadServiceFilterSafe(salonId);
     if (!svcFilter.isBookable(filter, serviceId, staffId)) {
       return { slots: [], filtered: true };
+    }
+    // Предпроверка: выбранный мастер должен реально выполнять услугу. График/кресло
+    // мастера слепы к этому — без проверки предложим окна того, кто процедуру не
+    // делает (клиент назвал мастера по имени → его yc_id пришёл из list_staff).
+    const chk = await staffGuard.checkStaffPerformsService(salonId, serviceId, staffId);
+    if (!chk.unknown && !chk.ok) {
+      const who = chk.performers.length
+        ? `Эту услугу выполняют: ${chk.performers.join(', ')}. Предложи пациенту одного из них.`
+        : 'Подбери мастера из поля staff нужной услуги в list_services.';
+      return {
+        slots: [], staff_mismatch: true,
+        error: `Выбранный мастер не выполняет эту услугу — НЕ предлагай его время и не подтверждай запись к нему. ${who}`,
+      };
     }
   }
   const salon = await db.one(`SELECT id, yclients_company_id, yclients_partner_token, yclients_user_token FROM salons WHERE id=$1`, [salonId]);

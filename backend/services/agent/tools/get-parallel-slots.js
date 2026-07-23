@@ -4,6 +4,7 @@ const { db } = require('../../../db');
 const { ycGetStaffSeances } = require('../../yclients-booking');
 const settings = require('../../agent-settings');
 const svcFilter = require('../service-filter');
+const staffGuard = require('../staff-service-guard');
 const eq = require('../equipment');
 const eqContext = require('../equipment-context');
 
@@ -75,6 +76,22 @@ async function run(salonId, input, ctx = {}) {
       hint: 'Гостям назначен один и тот же мастер — одновременно он их не примет. ' +
         'Подбери разных мастеров на эти услуги и вызови инструмент заново.',
     };
+  }
+
+  // Предпроверка по каждому гостю: назначенный мастер должен реально выполнять свою
+  // услугу (график/кресло к этому слепы). Иначе подберём общее окно у мастера,
+  // который процедуру не делает, и упрёмся уже в create_booking.
+  for (let i = 0; i < guests.length; i++) {
+    const g = guests[i];
+    const chk = await staffGuard.checkStaffPerformsService(salonId, g.service_yc_id, g.staff_yc_id);
+    if (!chk.unknown && !chk.ok) {
+      const who = chk.performers.length ? ` Эту услугу выполняют: ${chk.performers.join(', ')}.` : '';
+      return {
+        starts: [], staff_mismatch: true, guest_index: i,
+        hint: 'Одному из гостей назначен мастер, который его услугу не выполняет. ' +
+          'Подбери профильного мастера из list_services и вызови инструмент заново.' + who,
+      };
+    }
   }
 
   const eqCtx = await eqContext.loadEquipmentContext(salon, date);

@@ -116,6 +116,14 @@ describe('buildSystemPrompt', () => {
     expect(p).toMatch(/подтверди ОДИН|самый вероятн/i);
   });
 
+  test('предпроверка «мастер делает услугу»: не предлагать окна и не обрабатывать staff_mismatch', () => {
+    const p = buildSystemPrompt({});
+    expect(p).toMatch(/МАСТЕР ДЕЛАЕТ ЭТУ УСЛУГУ/i);
+    expect(p).toContain('staff_mismatch');
+    expect(p).toMatch(/поле staff/i);
+    expect(p).toMatch(/НЕ предлагай его окна|не подтверждай запись к нему/i);
+  });
+
   test('запрет раскрывать внутреннюю кухню (база знаний, каталог, инструмент)', () => {
     const p = buildSystemPrompt({});
     expect(p).toMatch(/не раскрывай пациенту внутреннюю кухню/i);
