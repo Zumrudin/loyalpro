@@ -59,7 +59,21 @@ async function ycGetClientRecords(salon, clientId, { startDate, endDate } = {}) 
 async function ycUpdateRecord(salon, ycRecordId, body) {
   const url = `${YC}/record/${salon.yclients_company_id}/${ycRecordId}`;
   logger.info(`PUT ${url} keys=${Object.keys(body).join(',')}`);
-  const { data } = await axios.put(url, body, { headers: ycHeaders(salon), timeout: 15000 });
+  let data;
+  try {
+    ({ data } = await axios.put(url, body, { headers: ycHeaders(salon), timeout: 15000 }));
+  } catch (e) {
+    // YClients кладёт реальную причину в тело ответа (meta.message + errors), а
+    // axios показывает лишь «Request failed with status code 422». Достаём её,
+    // чтобы в логах и в reason эскалации была видна суть (напр. «Не передан
+    // обязательный параметр client»), а не голый статус.
+    const d = (e.response && e.response.data) || {};
+    const info = d.meta || d;   // YClients кладёт причину в meta, иногда в корень тела
+    const msg = info.message || e.message;
+    const fields = info.errors ? ` (${JSON.stringify(info.errors)})` : '';
+    logger.error(`YClients refused update [${e.response ? e.response.status : '?'}]: ${msg}${fields}`);
+    throw new Error(`${msg}${fields}`);
+  }
   if (!data.success) {
     const msg = data.meta?.message || 'YClients update failed';
     logger.error(`YClients refused update: ${msg}`);

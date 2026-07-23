@@ -38,6 +38,8 @@ describe('cancelBookingRecord', () => {
     expect(body.attendance).toBe(-1);
     expect(body.seance_length).toBe(CANCEL_SEANCE_LENGTH);
     expect(body.services).toEqual([{ id: 10 }, { id: 99 }]);
+    // YClients требует обязательный параметр client в PUT /record — иначе 422.
+    expect(body.client).toEqual({ id: 777, phone: '79001112233', name: 'Аня' });
     // событие записано
     const kinds = pool.query.mock.calls.map(c => c[1]).filter(Boolean).flat();
     expect(kinds).toContain('booking_cancelled');
@@ -82,6 +84,8 @@ describe('rescheduleBookingRecord', () => {
     expect(body.datetime).toBe('2026-07-26T15:00:00+03:00');
     expect(body.staff_id).toBe(7);
     expect(body.services).toEqual([{ id: 10 }]);
+    // YClients требует обязательный параметр client в PUT /record — иначе 422.
+    expect(body.client).toEqual({ id: 777, phone: '79001112233', name: 'Аня' });
     const kinds = pool.query.mock.calls.map(c => c[1]).filter(Boolean).flat();
     expect(kinds).toContain('booking_rescheduled');
   });

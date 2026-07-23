@@ -21,6 +21,18 @@ const SIDE_EFFECT_TOOLS = new Set([
   'create_booking', 'cancel_booking', 'reschedule_booking', 'escalate_to_operator',
 ]);
 
+// Инструменты, меняющие запись в YClients. Успешный вызов одного из них —
+// единственное, что даёт право отрапортовать «перенесла / отменила / записала».
+const WRITE_TOOLS = new Set(['create_booking', 'cancel_booking', 'reschedule_booking']);
+
+// Утверждение о ВЫПОЛНЕННОМ действии над записью (не намерение). Пилот
+// claude-haiku 2026-07-22: модель написала «Готово, перенесла на 14:00», НЕ
+// вызвав reschedule_booking, — клиенту ушла ложь. Ловим завершённые формы
+// (перенесл-а/-и, перенесён, отменил-а, оформлен, «вы записаны», «запись
+// перенесена/…»); инфинитивы намерения («перенести», «отменить») НЕ триггерят.
+const COMPLETION_CLAIM =
+  /(перенесл[аио]|перенёс|перенесен[оа]|отменил[аи]?|отменен[оа]|оформлен[оа]|подтверждена|записал[аи]?\s+вас|вы\s+записаны|запись\s+(создан|перенесен|отменен|оформлен|подтвержден))/i;
+
 // YYYY-MM-DD по Москве (для системного промпта «сегодня …»).
 function todayMoscow() {
   return new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Moscow' }).format(new Date());
@@ -100,6 +112,7 @@ async function runDialog(salonId, dialogKey, opts = {}) {
     let exhausted = false;
     let bookingSucceeded = false;   // create_booking вернул успех в этом ходе
     let bookingErrored = false;     // create_booking вернул ошибку в этом ходе
+    let writeSucceeded = false;     // любой из WRITE_TOOLS отработал без ошибки в этом ходе
 
     for (let i = 0; i < MAX_ITERS; i++) {
       const resp = await provider.createMessage(
@@ -125,6 +138,7 @@ async function runDialog(salonId, dialogKey, opts = {}) {
         }
         const isError = !!(result && result.error);
         if (!isError && SIDE_EFFECT_TOOLS.has(tc.name)) sideEffect = true;
+        if (!isError && WRITE_TOOLS.has(tc.name)) writeSucceeded = true;
         if (tc.name === 'escalate_to_operator' && result && result.escalated) escalated = true;
         if (tc.name === 'create_booking') { if (isError) bookingErrored = true; else bookingSucceeded = true; }
         results.push({ id: tc.id, name: tc.name, result, isError });
@@ -155,9 +169,15 @@ async function runDialog(salonId, dialogKey, opts = {}) {
     }
 
     await state.setWatermark(salonId, dialogKey, watermark);
+    // falseSuccess: реплика утверждает, что запись перенесена/отменена/создана, но
+    // ни один пишущий инструмент в этом ходе не отработал (модель соврала). Диспетчер
+    // по этому сигналу НЕ отправляет ложь, а переводит на человека. Пилот 2026-07-22.
+    const falseSuccess = !escalated && !writeSucceeded
+      && COMPLETION_CLAIM.test(replies.join('\n'));
     // bookingFailed: попытка записи была и НЕ увенчалась успехом. Диспетчер по этому
     // сигналу принудительно переведёт на человека, чтобы клиент не завис на «секундочку».
-    return { replies, escalated, sideEffect, exhausted, bookingFailed: bookingErrored && !bookingSucceeded };
+    return { replies, escalated, sideEffect, exhausted, falseSuccess,
+      bookingFailed: bookingErrored && !bookingSucceeded };
   }
 
   return { replies: [], escalated: false, sideEffect: false };

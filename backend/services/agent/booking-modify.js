@@ -43,6 +43,14 @@ function serviceIds(rec) {
   return (Array.isArray(rec.services) ? rec.services : []).map(s => ({ id: s.id }));
 }
 
+// Клиент записи → формат для PUT. YClients в PUT /record требует ОБЯЗАТЕЛЬНЫЙ
+// параметр client (id/phone/name из текущей записи) — без него ответ 422
+// «Не передан обязательный параметр client», и ни отмена, ни перенос не проходят.
+function clientOf(rec) {
+  const c = rec && rec.client;
+  return c ? { id: c.id, phone: c.phone, name: c.name || '' } : undefined;
+}
+
 // Проверка принадлежности записи клиенту. Возвращает строку-ошибку или null.
 function ownershipError(rec, expectedYcClientId) {
   if (expectedYcClientId && rec.client && Number(rec.client.id) !== Number(expectedYcClientId)) {
@@ -75,6 +83,7 @@ async function cancelBookingRecord(salonId, { dialogKey, recordId, expectedYcCli
     await ycUpdateRecord(authSalonFor(salon), recordId, {
       staff_id: rec.staff_id,
       services,
+      client: clientOf(rec),
       datetime: rec.datetime,
       seance_length: CANCEL_SEANCE_LENGTH,
       attendance: -1,
@@ -101,6 +110,7 @@ async function rescheduleBookingRecord(salonId, { dialogKey, recordId, expectedY
     await ycUpdateRecord(authSalonFor(salon), recordId, {
       staff_id: staffYcId || rec.staff_id,
       services: serviceIds(rec),
+      client: clientOf(rec),
       datetime,
       seance_length: seanceLength || rec.seance_length,
       comment: rec.comment || '',
