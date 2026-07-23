@@ -2,7 +2,7 @@
 
 jest.mock('./services/agent-rag', () => ({ buildKnowledgeContext: jest.fn() }));
 jest.mock('./db', () => ({ db: { any: jest.fn(), one: jest.fn(), oneOrNone: jest.fn() } }));
-jest.mock('./services/yclients', () => ({ ycGet: jest.fn(), ycGetServiceCatalog: jest.fn() }));
+jest.mock('./services/yclients', () => ({ ycGet: jest.fn(), ycGetServiceCatalog: jest.fn(), ycGetServiceMeta: jest.fn() }));
 jest.mock('./services/yclients-booking', () => ({ ycGetBookTimes: jest.fn(), ycGetStaffSchedule: jest.fn(), ycGetStaffSeances: jest.fn() }));
 jest.mock('./services/agent-settings', () => ({ loadServiceFilterSafe: jest.fn() }));
 jest.mock('./services/agent/booking', () => ({ createBookingRecord: jest.fn() }));
@@ -19,7 +19,7 @@ jest.mock('./services/agent/identity', () => ({
 
 const { db } = require('./db');
 const rag = require('./services/agent-rag');
-const { ycGet, ycGetServiceCatalog } = require('./services/yclients');
+const { ycGet, ycGetServiceCatalog, ycGetServiceMeta } = require('./services/yclients');
 
 // Хелпер: собрать возврат ycGetServiceCatalog. pairs = { svcId: [staffId,…] } →
 // достоверная карта услуга→мастера. prices = { svcId: { staffId: {price_min,price_max} } } →
@@ -57,6 +57,7 @@ beforeEach(() => {
   settings.loadServiceFilterSafe.mockResolvedValue({
     mode: 'all', denyServices: new Set(), allowServices: new Set(), denyPairs: new Set(),
   });
+  ycGetServiceMeta.mockResolvedValue({ durationByService: new Map(), resourceIdsByService: new Map() });
 });
 
 describe('search_knowledge_base', () => {
@@ -101,7 +102,7 @@ describe('list_services', () => {
       { 7: { 55: { price_min: 5000, price_max: 5000 }, 66: { price_min: 8000, price_max: 8000 } } }));
     const out = await listServices.run(1, {});
     expect(out.services).toEqual([
-      { yc_id: 7, title: 'Ботулинотерапия', price_min: 5000, price_max: 8000, staff: [
+      { yc_id: 7, title: 'Ботулинотерапия', duration_min: null, price_min: 5000, price_max: 8000, staff: [
         { yc_id: 55, name: 'Аня', price_min: 5000, price_max: 5000 },
         { yc_id: 66, name: 'Пери', price_min: 8000, price_max: 8000 },
       ] },
@@ -187,6 +188,51 @@ describe('list_services', () => {
     ycGetServiceCatalog.mockRejectedValue(new Error('yc down'));
     const out = await listServices.run(1, {});
     expect(out.services[0]).toEqual(expect.objectContaining({ yc_id: 7, title: 'Ботокс', staff: [] }));
+  });
+  test('«теневой» мастер (deny-пара) не влияет на цену — диапазон только по реальным исполнителям', async () => {
+    db.any
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{ yclients_staff_id: 5, name: 'Аня' }, { yclients_staff_id: 6, name: 'Пери' }]);
+    db.one.mockResolvedValue({ id: 1, yclients_company_id: 100 });
+    ycGetServiceCatalog.mockResolvedValue(catalog(
+      [{ id: 7, title: 'Ноги полностью', price_min: 5000, price_max: 21000, active: 1 }],
+      { 7: [5, 6] },
+      { 7: { 5: { price_min: 5000, price_max: 5000 }, 6: { price_min: 21000, price_max: 21000 } } }));
+    settings.loadServiceFilterSafe.mockResolvedValue({
+      mode: 'all', denyServices: new Set(), allowServices: new Set(), denyPairs: new Set(['7:6']),
+    });
+    const out = await listServices.run(1, {});
+    expect(out.services[0].staff.map(s => s.name)).toEqual(['Аня']);
+    expect(out.services[0].price_min).toBe(5000);
+    expect(out.services[0].price_max).toBe(5000);
+  });
+
+  test('услуга без исполнителей после deny-пар не показывается', async () => {
+    db.any
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{ yclients_staff_id: 5, name: 'Аня' }]);
+    db.one.mockResolvedValue({ id: 1, yclients_company_id: 100 });
+    ycGetServiceCatalog.mockResolvedValue(catalog(
+      [{ id: 7, title: 'Только на усмотрение врача', price_min: 9000, price_max: 9000, active: 1 }],
+      { 7: [5] }));
+    settings.loadServiceFilterSafe.mockResolvedValue({
+      mode: 'all', denyServices: new Set(), allowServices: new Set(), denyPairs: new Set(['7:5']),
+    });
+    const out = await listServices.run(1, {});
+    expect(out.services).toEqual([]);
+  });
+
+  test('duration_min прокидывается из меты (секунды → минуты)', async () => {
+    db.any
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{ yclients_staff_id: 5, name: 'Аня' }]);
+    db.one.mockResolvedValue({ id: 1, yclients_company_id: 100 });
+    ycGetServiceCatalog.mockResolvedValue(catalog(
+      [{ id: 7, title: 'Пилинг', price_min: 4000, price_max: 4000, active: 1 }],
+      { 7: [5] }));
+    ycGetServiceMeta.mockResolvedValue({ durationByService: new Map([['7', 1800]]), resourceIdsByService: new Map() });
+    const out = await listServices.run(1, {});
+    expect(out.services[0].duration_min).toBe(30);
   });
 });
 

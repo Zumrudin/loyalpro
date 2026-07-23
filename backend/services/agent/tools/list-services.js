@@ -1,7 +1,7 @@
 'use strict';
 
 const { db } = require('../../../db');
-const { ycGetServiceCatalog } = require('../../yclients');
+const { ycGetServiceCatalog, ycGetServiceMeta } = require('../../yclients');
 const settings = require('../../agent-settings');
 const svcFilter = require('../service-filter');
 
@@ -37,6 +37,7 @@ async function run(salonId, _input) {
   // staffPricesByService: svcIdStr → Map<staffIdStr,{price_min,price_max}> — цена
   // у конкретного мастера (может отличаться: врач vs. главный врач).
   let priced = [], staffIdsByService = new Map(), staffPricesByService = new Map();
+  let durationByService = new Map();
   if (salon && salon.yclients_company_id) {
     try {
       const cat = await ycGetServiceCatalog(salon, staffRows.map(r => r.yclients_staff_id));
@@ -44,6 +45,9 @@ async function run(salonId, _input) {
       staffIdsByService = cat.staffIdsByService;
       staffPricesByService = cat.staffPricesByService || new Map();
     } catch (_) { /* YClients недоступен → фолбэк на заголовки из конфига */ }
+    // Длительность услуги (service-level): per-staff длительности в YClients нет.
+    const meta = await ycGetServiceMeta(salon).catch(() => null);
+    durationByService = (meta && meta.durationByService) || new Map();
   }
 
   // Мастера, кто делает услугу: только активные, реально привязанные; минус deny-пары.
@@ -73,18 +77,27 @@ async function run(salonId, _input) {
   if (priced.length) {
     services = priced
       .filter(s => svcFilter.decideOfferVisible(filter, s.id, s.active === 1))
-      .map(s => ({
-        yc_id: s.id,
-        title: s.title,
-        price_min: s.price_min,
-        price_max: s.price_max,
-        staff: staffOf(s),   // мастера с ценой каждого: [{name, price_min, price_max}]
-      }));
+      .map(s => {
+        const staff = staffOf(s);   // только реальные исполнители (минус deny-пары), с ценой каждого
+        const dur = durationByService.get(String(s.id));
+        return {
+          yc_id: s.id,
+          title: s.title,
+          duration_min: dur ? Math.round(dur / 60) : null,
+          // Диапазон цены — АГРЕГАТ по отфильтрованным мастерам, а НЕ сырой диапазон
+          // каталога YClients (тот включал бы «теневых» мастеров без реальной услуги).
+          price_min: staff.length ? Math.min(...staff.map(m => m.price_min)) : null,
+          price_max: staff.length ? Math.max(...staff.map(m => m.price_max)) : null,
+          staff,
+        };
+      })
+      .filter(s => s.staff.length > 0);   // услуга без исполнителей после deny-пар не предлагается
   } else {
     // Нет живых данных (нет YClients-компании или API упал) → отдаём хотя бы заголовки из конфига.
     services = cfg.map(c => ({
       yc_id: c.yclients_service_id,
       title: c.service_title,
+      duration_min: null,
       price_min: null,
       price_max: null,
       staff: [],
