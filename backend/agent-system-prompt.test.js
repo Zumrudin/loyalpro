@@ -99,6 +99,17 @@ describe('buildSystemPrompt', () => {
     expect(p).toMatch(/НЕ спорь|не настаивай/i);
   });
 
+  test('не выдумывает причину разницы цен — только факт разных мастеров', () => {
+    const p = buildSystemPrompt({});
+    expect(p).toMatch(/не выдумывай причину разницы цен/i);
+  });
+
+  test('называет длительность услуги из поля duration_min, при null не выдумывает', () => {
+    const p = buildSystemPrompt({});
+    expect(p).toMatch(/duration_min/);
+    expect(p).toMatch(/не выдумывай длительность/i);
+  });
+
   test('распознаёт бытовые/сокращённые названия процедур и не перечисляет весь спектр', () => {
     const p = buildSystemPrompt({});
     expect(p).toMatch(/БЫТОВЫЕ И СОКРАЩ[ЁЕ]ННЫЕ НАЗВАНИЯ/i);
