@@ -233,4 +233,9 @@ describe('экономия вызовов инструментов', () => {
     const p = buildSystemPrompt({});
     expect(p).toMatch(/данных уже достаточно/i);
   });
+
+  test('промпт объясняет стартовую цену price_max=0 → «от X»', () => {
+    const p = buildSystemPrompt({});
+    expect(p).toContain('стартовая цена без верхней границы');
+  });
 });
