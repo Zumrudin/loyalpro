@@ -2,7 +2,10 @@
 
 jest.mock('./services/agent-rag', () => ({ buildKnowledgeContext: jest.fn() }));
 jest.mock('./db', () => ({ db: { any: jest.fn(), one: jest.fn(), oneOrNone: jest.fn() } }));
-jest.mock('./services/yclients', () => ({ ycGet: jest.fn(), ycGetServiceCatalog: jest.fn(), ycGetServiceMeta: jest.fn() }));
+jest.mock('./services/yclients', () => ({
+  ycGet: jest.fn(), ycGetServiceCatalog: jest.fn(), ycGetServiceMeta: jest.fn(),
+  ycGetClientCards: jest.fn(), ycGetClientAbonements: jest.fn(),
+}));
 jest.mock('./services/yclients-booking', () => ({ ycGetBookTimes: jest.fn(), ycGetStaffSchedule: jest.fn(), ycGetStaffSeances: jest.fn() }));
 jest.mock('./services/agent-settings', () => ({ loadServiceFilterSafe: jest.fn() }));
 jest.mock('./services/agent/booking', () => ({ createBookingRecord: jest.fn() }));
@@ -19,7 +22,8 @@ jest.mock('./services/agent/identity', () => ({
 
 const { db } = require('./db');
 const rag = require('./services/agent-rag');
-const { ycGet, ycGetServiceCatalog, ycGetServiceMeta } = require('./services/yclients');
+const { ycGet, ycGetServiceCatalog, ycGetServiceMeta,
+  ycGetClientCards, ycGetClientAbonements } = require('./services/yclients');
 
 // Хелпер: собрать возврат ycGetServiceCatalog. pairs = { svcId: [staffId,…] } →
 // достоверная карта услуга→мастера. prices = { svcId: { staffId: {price_min,price_max} } } →
@@ -51,6 +55,7 @@ const listClientBookings = require('./services/agent/tools/list-client-bookings'
 const visitHistory = require('./services/agent/tools/get-client-visit-history');
 const cancelBooking = require('./services/agent/tools/cancel-booking');
 const rescheduleBooking = require('./services/agent/tools/reschedule-booking');
+const bonusBalance = require('./services/agent/tools/get-bonus-balance');
 
 beforeEach(() => {
   jest.clearAllMocks();
@@ -645,6 +650,63 @@ describe('reschedule_booking', () => {
       { record_id: 555, datetime: '2026-07-26T15:00:00+03:00' }, { clientPhone: '79001112233' });
     expect(out.rescheduled).toBeUndefined();
     expect(out.error).toBe('занято');
+  });
+});
+
+describe('get_bonus_balance', () => {
+  const CTX = { clientPhone: '79200255591' };
+
+  test('schema без аргументов', () => {
+    expect(bonusBalance.schema.name).toBe('get_bonus_balance');
+    expect(Object.keys(bonusBalance.schema.input_schema.properties)).toHaveLength(0);
+  });
+
+  test('счастливый путь: карта samosale с балансом', async () => {
+    db.oneOrNone.mockResolvedValue({ yclients_client_id: '134014107' });
+    db.one.mockResolvedValue({ id: 1, yclients_company_id: '668791',
+      yclients_partner_token: 'pt', yclients_user_token: 'ut' });
+    ycGetClientCards.mockResolvedValue([{ id: 112435557, balance: 22750,
+      number: '8844205', type: { title: 'samosale' } }]);
+    const out = await bonusBalance.run(1, {}, CTX);
+    expect(ycGetClientCards).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 1 }), 134014107);
+    expect(out.found).toBe(true);
+    expect(out.cards).toEqual([{ program: 'samosale', number: '8844205', balance: 22750 }]);
+  });
+
+  test('PII-гейт по построению: телефон ТОЛЬКО из ctx, аргументы игнорируются', async () => {
+    const out = await bonusBalance.run(1, { phone: '79991234567' }, {});
+    expect(out.found).toBe(false);
+    expect(out.reason).toBe('no_phone');
+    expect(db.oneOrNone).not.toHaveBeenCalled();
+  });
+
+  test('нет yclients_client_id в clients → fallback на identity', async () => {
+    db.oneOrNone.mockResolvedValue(null);
+    identity.resolveYclientsClientId.mockResolvedValue(555);
+    db.one.mockResolvedValue({ id: 1, yclients_company_id: '668791' });
+    ycGetClientCards.mockResolvedValue([{ balance: 100, number: '1',
+      type: { title: 'samosale' } }]);
+    const out = await bonusBalance.run(1, {}, CTX);
+    expect(identity.resolveYclientsClientId).toHaveBeenCalledWith(1, '79200255591');
+    expect(out.found).toBe(true);
+  });
+
+  test('клиент не найден нигде → client_not_found', async () => {
+    db.oneOrNone.mockResolvedValue(null);
+    identity.resolveYclientsClientId.mockResolvedValue(null);
+    const out = await bonusBalance.run(1, {}, CTX);
+    expect(out.found).toBe(false);
+    expect(out.reason).toBe('client_not_found');
+  });
+
+  test('карт нет (или YClients упал → пустой массив) → no_card', async () => {
+    db.oneOrNone.mockResolvedValue({ yclients_client_id: '134014107' });
+    db.one.mockResolvedValue({ id: 1, yclients_company_id: '668791' });
+    ycGetClientCards.mockResolvedValue([]);
+    const out = await bonusBalance.run(1, {}, CTX);
+    expect(out.found).toBe(false);
+    expect(out.reason).toBe('no_card');
   });
 });
 
