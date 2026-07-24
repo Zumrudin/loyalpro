@@ -251,10 +251,27 @@ describe('buildSystemPrompt', () => {
     expect(p).toMatch(/ТОЛЬКО идентифицированному пациенту/i);
   });
 
-  test('сценарии пронумерованы по порядку появления в промпте (1→2→3→4)', () => {
+  test('сценарии пронумерованы по порядку появления в промпте (1→2→3→4→5)', () => {
     const p = buildSystemPrompt({});
     const order = [...p.matchAll(/СЦЕНАРИЙ (\d)/g)].map(m => m[1]);
-    expect(order).toEqual(['1', '2', '3', '4']);
+    expect(order).toEqual(['1', '2', '3', '4', '5']);
+  });
+
+  test('сценарий 5: бонусы и абонементы только через инструменты', () => {
+    const p = buildSystemPrompt();
+    expect(p).toContain('СЦЕНАРИЙ 5');
+    expect(p).toContain('get_bonus_balance');
+    expect(p).toContain('get_client_abonements');
+  });
+
+  test('сценарий 5: по продиктованному номеру личные данные не выдаются', () => {
+    const p = buildSystemPrompt();
+    expect(p).toContain('по продиктованному номеру');
+  });
+
+  test('правило 8: личный баланс — исключение из KB-only', () => {
+    const p = buildSystemPrompt();
+    expect(p).toMatch(/Исключение — ЛИЧНЫЙ баланс/);
   });
 
   describe('защита от prompt injection', () => {
