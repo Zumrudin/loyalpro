@@ -13,7 +13,9 @@ const { normalizePhoneKey } = require('../agent-gate');
 // возвращаем null, и агент собирает контакты в диалоге как раньше.
 async function resolveClient(salonId, rawPhone) {
   const phone = normalizePhoneKey(String(rawPhone || ''));
-  if (!salonId || !phone) return null;
+  // Короткий ключ в суффиксном LIKE совпал бы с хвостом чужого номера —
+  // идентифицируем только по полному номеру (10+ цифр).
+  if (!salonId || !phone || phone.length < 10) return null;
   const row = await db.oneOrNone(
     `SELECT id, name, phone FROM clients
       WHERE salon_id = $1 AND phone LIKE '%' || $2
@@ -34,7 +36,9 @@ async function resolveClient(salonId, rawPhone) {
 // clients/search по телефону, чтобы покрыть свежесозданные записи.
 async function resolveYclientsClientId(salonId, rawPhone) {
   const phone = normalizePhoneKey(String(rawPhone || ''));
-  if (!salonId || !phone) return null;
+  // Та же защита от суффиксного совпадения, что и в resolveClient: fail-closed —
+  // по неполному номеру нельзя отменять/переносить чужие записи.
+  if (!salonId || !phone || phone.length < 10) return null;
   const row = await db.oneOrNone(
     `SELECT r.yclients_client_id AS yc_client_id
        FROM records r

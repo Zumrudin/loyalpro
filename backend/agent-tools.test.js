@@ -274,9 +274,11 @@ describe('get_available_slots', () => {
     const out = await getSlots.run(1, { service_yc_id: 7, staff_yc_id: 55, date: '2026-07-20' }, NOW);
     expect(out.source).toBe('schedule');
     expect(out.free_ranges).toEqual([{ from: '10:00', to: '11:00' }]);
-    // шагом 30 мин, чтобы влез полный шаг: 10:00 и 10:30 (11:00 не влезает)
-    expect(out.slots.map(s => s.time)).toEqual(['10:00', '10:30']);
+    // длительность услуги неизвестна → DEFAULT_DURATION_MIN=60: в окно 10:00–11:00
+    // целиком влезает только старт 10:00 (10:30+60 мин вылезло бы за конец окна)
+    expect(out.slots.map(s => s.time)).toEqual(['10:00']);
     expect(out.slots[0].datetime).toBe('2026-07-20T10:00:00+03:00');
+    expect(out.slots[0].seance_length).toBe(3600);
   });
   test('дата = сегодня → уже прошедшие окна отрезаны (не предлагаем прошлое)', async () => {
     db.one.mockResolvedValue({ id: 1, yclients_company_id: 100 });
@@ -351,13 +353,33 @@ describe('get_available_dates', () => {
 });
 
 describe('get_client', () => {
-  test('находит клиента по телефону в этом салоне', async () => {
+  test('свой номер (совпал с номером канала) → полные данные карточки', async () => {
+    db.oneOrNone.mockResolvedValue({ id: 42, name: 'Аня', phone: '79001234567' });
+    const out = await getClient.run(1, { phone: '89001234567' },
+      { clientPhone: '+7 (900) 123-45-67' });
+    expect(out.found).toBe(true);
+    expect(out.client.id).toBe(42);
+    expect(out.client.name).toBe('Аня');
+    // телефон нормализован к 7XXXXXXXXXX перед поиском
+    expect(db.oneOrNone.mock.calls[0][1]).toEqual([1, '79001234567']);
+  });
+  test('чужой номер → только факт наличия карты, БЕЗ имени и телефона (PII-гейт)', async () => {
+    db.oneOrNone.mockResolvedValue({ id: 42, name: 'Аня', phone: '79001234567' });
+    const out = await getClient.run(1, { phone: '89001234567' },
+      { clientPhone: '79990000000' });
+    expect(out.found).toBe(true);
+    expect(out.client).toBeUndefined();
+  });
+  test('канал без номера (ctx пуст) → имя не раскрывается', async () => {
     db.oneOrNone.mockResolvedValue({ id: 42, name: 'Аня', phone: '79001234567' });
     const out = await getClient.run(1, { phone: '89001234567' });
     expect(out.found).toBe(true);
-    expect(out.client.id).toBe(42);
-    // телефон нормализован к 7XXXXXXXXXX перед поиском
-    expect(db.oneOrNone.mock.calls[0][1]).toEqual([1, '79001234567']);
+    expect(out.client).toBeUndefined();
+  });
+  test('короткий номер → found:false без запроса в БД (суффиксный LIKE не зовём)', async () => {
+    const out = await getClient.run(1, { phone: '123' });
+    expect(out.found).toBe(false);
+    expect(db.oneOrNone).not.toHaveBeenCalled();
   });
   test('не найден → found:false', async () => {
     db.oneOrNone.mockResolvedValue(null);
