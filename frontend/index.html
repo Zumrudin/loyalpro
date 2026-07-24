@@ -1137,11 +1137,18 @@
         </div>
       </div>
       <div class="chat-layout">
-        <div class="chat-sidebar" id="chat-dialogs">
-          <div class="empty">Загрузка…</div>
+        <div class="chat-sidebar">
+          <input class="chat-search" id="chat-search" type="search" autocomplete="off"
+                 placeholder="🔎 Поиск по имени или номеру" oninput="onChatSearch(this.value)">
+          <div class="chat-dialogs" id="chat-dialogs">
+            <div class="empty">Загрузка…</div>
+          </div>
         </div>
-        <div class="chat-main" id="chat-messages">
-          <div class="empty">Выберите диалог</div>
+        <div class="chat-main">
+          <div class="chat-header" id="chat-header"></div>
+          <div class="chat-messages" id="chat-messages">
+            <div class="empty">Выберите диалог</div>
+          </div>
         </div>
       </div>
       <div class="ov" id="agent-settings-modal" onclick="if(event.target===this)closeAgentSettings()">

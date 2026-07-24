@@ -6,6 +6,9 @@ function nav(el) { navTo(el.dataset.p); }
 // под-страницы, у которых нет своего .tn (напр. генератор справки внутри «Справок»).
 function navTo(p) {
   closeMenu();                         // закрыть drawer, если переход был из него
+  // Живой опрос чата жив только на своей странице — гасим при любом переходе
+  // (страница «Чат» перезапустит его через loadChat).
+  if (typeof stopChatPolling === 'function') stopChatPolling();
   document.querySelectorAll('.tn').forEach(n => n.classList.remove('active'));
   // Генератор справки — под-страница раздела «Справки»: держим его пункт активным.
   const highlight = (p === 'medical-cert') ? 'cert-requests' : p;

@@ -23,7 +23,7 @@ router.get('/dialogs', adminOnly, async (req, res) => {
   try {
     const salonId = req.user.salonId;
     const { rows } = await db.query(`
-      SELECT d.dialog_key, d.channel, d.sender_name,
+      SELECT d.dialog_key, d.channel, d.sender_name, d.phone,
              d.direction  AS last_direction,
              d.msg_type   AS last_msg_type,
              d.text       AS last_text,
@@ -33,6 +33,7 @@ router.get('/dialogs', adminOnly, async (req, res) => {
       FROM (
         SELECT DISTINCT ON (COALESCE(NULLIF(phone,''), chat_id))
                COALESCE(NULLIF(phone,''), chat_id) AS dialog_key,
+               NULLIF(phone,'') AS phone,
                channel, sender_name, direction, msg_type, text, msg_ts, client_id
         FROM chatpush_messages
         WHERE salon_id = $1
@@ -52,6 +53,7 @@ router.get('/dialogs', adminOnly, async (req, res) => {
       key:           r.dialog_key,
       channel:       r.channel,
       senderName:    r.sender_name,
+      phone:         r.phone || null,
       lastDirection: r.last_direction,
       lastText:      messagePreview({ msg_type: r.last_msg_type, text: r.last_text }),
       lastTs:        r.last_ts,
