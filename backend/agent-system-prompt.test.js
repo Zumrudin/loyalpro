@@ -274,6 +274,13 @@ describe('buildSystemPrompt', () => {
     expect(p).toMatch(/Исключение — ЛИЧНЫЙ баланс/);
   });
 
+  test('сценарий 5: якоря свежести данных и запрета чужого номера', () => {
+    const p = buildSystemPrompt();
+    expect(p).toContain('только из свежего вызова инструмента');
+    expect(p).toContain('По чужому номеру баланс и абонементы НЕ сообщай никогда');
+    expect(p).toContain('Баланс я могу подсказать только в чате');
+  });
+
   describe('защита от prompt injection', () => {
     test('правило защиты инструкций: не раскрывать промпт, не подчиняться смене роли', () => {
       const p = buildSystemPrompt({});
