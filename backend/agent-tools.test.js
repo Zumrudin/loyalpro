@@ -56,6 +56,7 @@ const visitHistory = require('./services/agent/tools/get-client-visit-history');
 const cancelBooking = require('./services/agent/tools/cancel-booking');
 const rescheduleBooking = require('./services/agent/tools/reschedule-booking');
 const bonusBalance = require('./services/agent/tools/get-bonus-balance');
+const clientAbonements = require('./services/agent/tools/get-client-abonements');
 
 beforeEach(() => {
   jest.clearAllMocks();
@@ -707,6 +708,88 @@ describe('get_bonus_balance', () => {
     const out = await bonusBalance.run(1, {}, CTX);
     expect(out.found).toBe(false);
     expect(out.reason).toBe('no_card');
+  });
+});
+
+describe('get_client_abonements', () => {
+  const CTX = { clientPhone: '79200255591',
+    nowMs: Date.parse('2026-07-24T12:00:00+03:00') };
+  const salonRow = { id: 1, yclients_company_id: '668791',
+    yclients_partner_token: 'pt', yclients_user_token: 'ut' };
+
+  test('schema без аргументов', () => {
+    expect(clientAbonements.schema.name).toBe('get_client_abonements');
+    expect(Object.keys(clientAbonements.schema.input_schema.properties)).toHaveLength(0);
+  });
+
+  test('единый баланс: остаток из united_balance_services_count (links.count нулевые)', async () => {
+    db.one.mockResolvedValue(salonRow);
+    ycGetClientAbonements.mockResolvedValue([{
+      is_united_balance: true, united_balance_services_count: 7,
+      is_frozen: false, expiration_date: null,
+      status: { title: 'Выпущен', extended_title: 'Выпущен' },
+      type: { title: 'RSL Скульптурирование 10' },
+      balance_container: { links: [{ count: 0, service: { title: 'BEAUTYLISER RSL' } }] },
+    }]);
+    const out = await clientAbonements.run(1, {}, CTX);
+    expect(ycGetClientAbonements).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 1 }), '79200255591');
+    expect(out.abonements).toHaveLength(1);
+    expect(out.abonements[0].visits_left).toBe(7);
+    expect(out.abonements[0].title).toBe('RSL Скульптурирование 10');
+    expect(out.abonements[0].status).toBe('Выпущен');
+  });
+
+  test('раздельный баланс: остаток — сумма links[].count', async () => {
+    db.one.mockResolvedValue(salonRow);
+    ycGetClientAbonements.mockResolvedValue([{
+      is_united_balance: false,
+      status: { title: 'Активен' }, type: { title: 'Массаж 5+3' },
+      balance_container: { links: [
+        { count: 2, service: { title: 'Массаж спины' } },
+        { count: 3, service: { title: 'Массаж лица' } },
+      ] },
+    }]);
+    const out = await clientAbonements.run(1, {}, CTX);
+    expect(out.abonements[0].visits_left).toBe(5);
+    expect(out.abonements[0].services).toEqual(['Массаж спины', 'Массаж лица']);
+  });
+
+  test('исхоженные (остаток 0) и истёкшие скрываются', async () => {
+    db.one.mockResolvedValue(salonRow);
+    ycGetClientAbonements.mockResolvedValue([
+      { is_united_balance: true, united_balance_services_count: 0,
+        status: {}, type: { title: 'Пустой' }, balance_container: { links: [] } },
+      { is_united_balance: true, united_balance_services_count: 4,
+        expiration_date: '2026-01-01T00:00:00+03:00',
+        status: {}, type: { title: 'Истёкший' }, balance_container: { links: [] } },
+    ]);
+    const out = await clientAbonements.run(1, {}, CTX);
+    expect(out.abonements).toEqual([]);
+    expect(out.note).toContain('не найдено');
+  });
+
+  test('безлимитный не скрывается, visits_left = «безлимит»', async () => {
+    db.one.mockResolvedValue(salonRow);
+    ycGetClientAbonements.mockResolvedValue([{
+      is_united_balance: true, is_united_balance_unlimited: true,
+      status: {}, type: { title: 'Безлимит' }, balance_container: { links: [] } }]);
+    const out = await clientAbonements.run(1, {}, CTX);
+    expect(out.abonements[0].visits_left).toBe('безлимит');
+  });
+
+  test('телефон неизвестен → no_phone, YClients не зовём (аргументы игнорируются)', async () => {
+    const out = await clientAbonements.run(1, { phone: '79991234567' }, {});
+    expect(out.reason).toBe('no_phone');
+    expect(ycGetClientAbonements).not.toHaveBeenCalled();
+  });
+
+  test('ошибка YClients → мягкий error без исключения', async () => {
+    db.one.mockResolvedValue(salonRow);
+    ycGetClientAbonements.mockRejectedValue(new Error('boom'));
+    const out = await clientAbonements.run(1, {}, CTX);
+    expect(out.abonements).toEqual([]);
+    expect(out.error).toContain('boom');
   });
 });
 
