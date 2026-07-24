@@ -24,7 +24,7 @@
 - Modify: `backend/services/agent/tools/get-available-slots.js` (функция `rangesToSlots`, ~строки 80–90)
 - Test: `backend/get-available-slots.test.js`
 
-- [ ] **Step 1: Написать падающие тесты**
+- [x] **Step 1: Написать падающие тесты**
 
 Добавить в `backend/get-available-slots.test.js` новый `describe` рядом с существующим `describe('rangesToSlots — привязка к чистой сетке', ...)`:
 
@@ -67,12 +67,12 @@ describe('rangesToSlots — полная длительность услуги',
 });
 ```
 
-- [ ] **Step 2: Прогнать — убедиться, что падают**
+- [x] **Step 2: Прогнать — убедиться, что падают**
 
 Run: `cd /root/loyalpro/backend && npx jest get-available-slots.test.js`
 Expected: FAIL — новые тесты с длительностью (60/45/90) падают: текущая сигнатура игнорирует 4-й аргумент и отдаёт лишние старты.
 
-- [ ] **Step 3: Минимальная реализация**
+- [x] **Step 3: Минимальная реализация**
 
 В `backend/services/agent/tools/get-available-slots.js` заменить `rangesToSlots`:
 
@@ -96,12 +96,12 @@ function rangesToSlots(ranges, date, step, durationMin) {
 }
 ```
 
-- [ ] **Step 4: Прогнать — тесты зелёные**
+- [x] **Step 4: Прогнать — тесты зелёные**
 
 Run: `cd /root/loyalpro/backend && npx jest get-available-slots.test.js`
 Expected: PASS — все, включая старые тесты «привязка к чистой сетке» (обратная совместимость: 3-аргументные вызовы работают как раньше).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 cd /root/loyalpro
@@ -116,7 +116,7 @@ git commit -m "feat(agent): rangesToSlots проверяет полную дли
 **Files:**
 - Modify: `backend/services/agent/tools/get-available-slots.js` (константы вверху и блок fallback в `run()`, ~строки 11 и 129–150)
 
-- [ ] **Step 1: Константа дефолтной длительности (та же, что в параллельном инструменте)**
+- [x] **Step 1: Константа дефолтной длительности (та же, что в параллельном инструменте)**
 
 Рядом с `DEFAULT_STEP_MIN` вверху файла:
 
@@ -125,7 +125,7 @@ const DEFAULT_STEP_MIN = 30;       // шаг предлагаемых старт
 const DEFAULT_DURATION_MIN = 60;   // если YClients не отдал duration услуги (как в get_parallel_slots)
 ```
 
-- [ ] **Step 2: Поднять eqCtx и вычислить длительность**
+- [x] **Step 2: Поднять eqCtx и вычислить длительность**
 
 В `run()` заменить fallback-блок (сейчас `eqCtx` — локальная константа внутри `if (serviceId)`):
 
@@ -164,12 +164,12 @@ const DEFAULT_DURATION_MIN = 60;   // если YClients не отдал duration
 
 Остальное в `run()` (в т.ч. `if (equipmentBusy) out.equipment_busy = true;` и `dropPastToday`) — без изменений. `free_ranges` считаем ДО фильтра длительности намеренно: это «сырые» окна кресла для ответа пациенту, слоты — уже с гарантией вместимости.
 
-- [ ] **Step 3: Полный прогон тестов инструмента и промпта**
+- [x] **Step 3: Полный прогон тестов инструмента и промпта**
 
 Run: `cd /root/loyalpro/backend && npx jest get-available-slots.test.js agent-system-prompt.test.js equipment.test.js`
 Expected: PASS, без регрессов.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 cd /root/loyalpro
@@ -187,12 +187,12 @@ seance_length. Без service_yc_id поведение прежнее."
 
 ### Task 3: Живая проверка на dev
 
-- [ ] **Step 1: Перезапустить dev-сервер**
+- [x] **Step 1: Перезапустить dev-сервер**
 
 Run: `pm2 restart loyalpro --update-env && sleep 3 && pm2 ls | grep loyalpro`
 Expected: `loyalpro … online`.
 
-- [ ] **Step 2: Сверить слоты до конца дня**
+- [x] **Step 2: Сверить слоты до конца дня**
 
 Прогнать инструмент напрямую (салон 1, мастер лазерной эпиляции из `list_services`, услуга «Ноги полностью» yc_id 9536746, дата — завтра):
 
@@ -213,7 +213,7 @@ const t = require('./services/agent/tools/get-available-slots');
 
 Expected: `source:'schedule'`, у каждого слота есть `seance_length`, последний слот заканчивается не позже конца окна мастера (`free_ranges`): `toMin(последний slot.time) + seance_length/60 <= toMin(последний range.to)`.
 
-- [ ] **Step 3: Push**
+- [x] **Step 3: Push**
 
 ```bash
 cd /root/loyalpro && git push origin main
