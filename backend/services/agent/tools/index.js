@@ -15,9 +15,12 @@ const visitHistory = require('./get-client-visit-history');
 const cancelBk  = require('./cancel-booking');
 const reschedBk = require('./reschedule-booking');
 const modifySvc = require('./modify-booking-services');
+const bonusBal  = require('./get-bonus-balance');
+const abonement = require('./get-client-abonements');
 
 const tools = [searchKb, listSvc, listStaff, getSlots, getParSlot, getDates, getClient,
-  createBk, listBookings, visitHistory, cancelBk, reschedBk, modifySvc, escalate];
+  createBk, listBookings, visitHistory, cancelBk, reschedBk, modifySvc,
+  bonusBal, abonement, escalate];
 
 const schemas = tools.map(t => t.schema);
 const handlers = {};

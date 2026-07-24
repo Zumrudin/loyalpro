@@ -826,5 +826,9 @@ describe('реестр инструментов', () => {
     expect(typeof registry.handlers.cancel_booking).toBe('function');
     expect(typeof registry.handlers.modify_booking_services).toBe('function');
     expect(typeof registry.handlers.get_client_visit_history).toBe('function');
+    expect(names).toContain('get_bonus_balance');
+    expect(names).toContain('get_client_abonements');
+    expect(typeof registry.handlers.get_bonus_balance).toBe('function');
+    expect(typeof registry.handlers.get_client_abonements).toBe('function');
   });
 });
