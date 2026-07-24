@@ -245,3 +245,33 @@ describe('исчерпание лимита tool-итераций', () => {
     expect(deps.provider.createMessage).toHaveBeenCalledTimes(orchestrator.MAX_ITERS + 1);
   });
 });
+
+// Инцидент 2026-07-24: create_booking успешно создал запись, но следующий вызов
+// LLM (за подтверждающей фразой) упал 421 → диалог ушёл на оператора при УЖЕ
+// созданной брони. Если запись сделана, а провайдер потом падает — не роняем ход,
+// а отдаём детерминированное подтверждение (без LLM) и НЕ эскалируем.
+describe('runDialog — деградация после успешной записи', () => {
+  test('провайдер падает ПОСЛЕ успешного create_booking → детерминированное подтверждение, без эскалации', async () => {
+    const deps = makeDeps();
+    deps.provider.createMessage
+      .mockResolvedValueOnce(toolResp('create_booking',
+        { staff_yc_id: 1, service_yc_id: 2, datetime: '2026-07-27T19:30:00+03:00', client_name: 'Ирина' }))
+      .mockRejectedValueOnce(Object.assign(new Error('421 отсутствует поле usage'), { status: 421 }));
+
+    const out = await orchestrator.runDialog(1, 'k', { deps, today: '2026-07-24' });
+
+    expect(out.degradedAfterWrite).toBe(true);
+    expect(out.escalated).toBe(false);
+    expect(out.sideEffect).toBe(true);
+    expect(out.replies).toHaveLength(1);
+    expect(out.replies[0]).toMatch(/Ирина/);
+    expect(out.replies[0]).toMatch(/27 июля/);
+    expect(out.replies[0]).toMatch(/19:30/);
+  });
+
+  test('провайдер падает БЕЗ успешной записи → исключение пробрасывается (эскалация как раньше)', async () => {
+    const deps = makeDeps();
+    deps.provider.createMessage.mockRejectedValueOnce(Object.assign(new Error('boom'), { status: 500 }));
+    await expect(orchestrator.runDialog(1, 'k', { deps, today: '2026-07-24' })).rejects.toThrow('boom');
+  });
+});

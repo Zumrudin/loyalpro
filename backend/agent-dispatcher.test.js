@@ -182,6 +182,21 @@ test('диалог уже у оператора → молчим, страхов
   expect(d.send).not.toHaveBeenCalled();
 });
 
+// Инцидент 2026-07-24: запись создана, но добивочный вызов LLM упал → сегодня диалог
+// уходил на оператора при УЖЕ созданной брони. Оркестратор теперь отдаёт правдивое
+// подтверждение с флагом degradedAfterWrite (escalated:false, writeSucceeded → falseSuccess:false,
+// bookingFailed:false). Инвариант: подтверждение доставляется КЛИЕНТУ, эскалации НЕТ.
+test('деградация после успешной записи → подтверждение доставлено, эскалации нет', async () => {
+  const confirm = 'Готово! Записала Ирину на 27 июля в 19:30 ✅ Будем ждать 🤍';
+  const d = deps({ orchestrator: { runDialog: jest.fn(async () => (
+    { replies: [confirm], escalated: false, sideEffect: true, degradedAfterWrite: true })) } });
+  dispatcher.enqueue(1, 'k', meta, d);
+  await jest.advanceTimersByTimeAsync(1000);
+  expect(d.send).toHaveBeenCalledTimes(1);
+  expect(d.send).toHaveBeenCalledWith(meta, confirm);
+  expect(d.escalate).not.toHaveBeenCalled();
+});
+
 // Гейт — предохранитель пилота (whitelist). Если он упал, мы НЕ знаем, можно ли
 // писать этому номеру → fail-closed: молчим, несмотря на инвариант «не молчать».
 test('гейт упал → страховочное сообщение НЕ шлём (fail-closed)', async () => {

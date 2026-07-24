@@ -85,6 +85,66 @@ describe('aitunnel.createMessage — ретрай на транзиентном 
   });
 });
 
+// При персистентном транзиентном сбое основной модели (aitunnel флапает 421 подряд,
+// либо таймаут/5xx) провайдер добивает ТОТ ЖЕ запрос через надёжную fallback-модель
+// (Claude тем же ключом — usage всегда есть). Инцидент 2026-07-24: 421 после успешного
+// create_booking увёл диалог на оператора при уже созданной записи.
+describe('aitunnel.createMessage — fallback на другую модель при персистентном сбое', () => {
+  test('персистентная 421 на основной модели → добивка через fallback-модель', async () => {
+    const calls = [];
+    const fakeClient = { chat: { completions: { create: async (p) => {
+      calls.push(p.model);
+      if (p.model === 'gemini-3.1-flash-lite') {
+        const e = new Error('Не удалось посчитать стоимость запроса, отсутствует поле "usage"');
+        e.status = 421; throw e;
+      }
+      return { choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: 'Готово (Claude) 🤍' } }] };
+    } } } };
+    const res = await provider.createMessage(
+      { system: 's', messages: [{ role: 'user', content: 'да' }], tools: [] },
+      { client: fakeClient, model: 'gemini-3.1-flash-lite',
+        fallbackModel: 'claude-sonnet-4.6', maxRetries: 1, retryBaseMs: 0 });
+    expect(res.text).toBe('Готово (Claude) 🤍');
+    expect(calls).toContain('claude-sonnet-4.6');
+  });
+
+  test('fallback выключен (пустая модель) → транзиентная ошибка пробрасывается', async () => {
+    const fakeClient = { chat: { completions: { create: async () => {
+      const e = new Error('отсутствует поле "usage"'); e.status = 421; throw e;
+    } } } };
+    await expect(provider.createMessage(
+      { system: 's', messages: [], tools: [] },
+      { client: fakeClient, fallbackModel: '', maxRetries: 1, retryBaseMs: 0 }))
+      .rejects.toThrow('usage');
+  });
+
+  test('нетранзиентная ошибка (400) → fallback НЕ зовётся', async () => {
+    const models = [];
+    const fakeClient = { chat: { completions: { create: async (p) => {
+      models.push(p.model); const e = new Error('bad request'); e.status = 400; throw e;
+    } } } };
+    await expect(provider.createMessage(
+      { system: 's', messages: [], tools: [] },
+      { client: fakeClient, model: 'gemini-3.1-flash-lite',
+        fallbackModel: 'claude-sonnet-4.6', maxRetries: 1, retryBaseMs: 0 }))
+      .rejects.toThrow('bad request');
+    expect(models).not.toContain('claude-sonnet-4.6');
+  });
+
+  test('основная модель ответила с первой попытки → fallback не трогаем', async () => {
+    const models = [];
+    const fakeClient = { chat: { completions: { create: async (p) => {
+      models.push(p.model);
+      return { choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: 'ок' } }] };
+    } } } };
+    const res = await provider.createMessage(
+      { system: 's', messages: [], tools: [] },
+      { client: fakeClient, model: 'gemini-3.1-flash-lite', fallbackModel: 'claude-sonnet-4.6' });
+    expect(res.text).toBe('ок');
+    expect(models).toEqual(['gemini-3.1-flash-lite']);
+  });
+});
+
 describe('aitunnel.toolResultMessages', () => {
   test('по одному {role:tool} на вызов с tool_call_id', () => {
     const msgs = provider.toolResultMessages([

@@ -2,6 +2,8 @@
 
 const aitunnel = require('../../aitunnel');
 const config = require('../../../config');
+const { createLogger } = require('../../../logger');
+const logger = createLogger('AgentAitunnel');
 
 // ── aitunnel-адаптер: Gemini 3.1 Flash Lite через OpenAI-совместимый API. ──
 
@@ -35,15 +37,17 @@ const MAX_RETRIES = 4;                       // 1 основная попытк�
 const RETRY_BASE_MS = 400;                   // 400/800/1200/1600мс — короткий бэкофф
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-async function createWithRetry(client, params) {
+async function createWithRetry(client, params, o = {}) {
+  const maxRetries = o.maxRetries != null ? o.maxRetries : MAX_RETRIES;
+  const baseMs = o.retryBaseMs != null ? o.retryBaseMs : RETRY_BASE_MS;
   let lastErr;
-  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
     try {
       return await client.chat.completions.create(params);
     } catch (e) {
       lastErr = e;
-      if (attempt === MAX_RETRIES || !isTransient(e)) throw e;
-      await sleep(RETRY_BASE_MS * (attempt + 1));
+      if (attempt === maxRetries || !isTransient(e)) throw e;
+      await sleep(baseMs * (attempt + 1));
     }
   }
   throw lastErr;
@@ -53,8 +57,9 @@ async function createWithRetry(client, params) {
 async function createMessage({ system, messages, tools }, opts = {}) {
   const client = opts.client || aitunnel.makeClient(opts.apiKey);
   const msgs = system ? [{ role: 'system', content: system }, ...messages] : messages.slice();
+  const primaryModel = opts.model || config.AITUNNEL_CHAT_MODEL;
   const params = {
-    model: opts.model || config.AITUNNEL_CHAT_MODEL,
+    model: primaryModel,
     max_tokens: opts.maxTokens || config.AGENT_MAX_TOKENS,
     messages: msgs,
   };
@@ -63,7 +68,26 @@ async function createMessage({ system, messages, tools }, opts = {}) {
   // выдать текст, а не очередной tool_call.
   const openAITools = toOpenAITools(tools);
   if (openAITools.length) params.tools = openAITools;
-  const resp = await createWithRetry(client, params);
+
+  // Основная модель со своим ретраем; при персистентном ТРАНЗИЕНТНОМ сбое
+  // (aitunnel флапает 421/usage/таймаут подряд) добиваем тот же запрос через
+  // надёжную fallback-модель (Claude тем же ключом — usage всегда есть, прокси
+  // не рубит на биллинге). Переигровка безопасна: на упавшем ответе tool_calls
+  // мы не получили, ничего не выполнилось; гонки create_booking закрыты
+  // идемпотентным ключом в booking.js. Инцидент 2026-07-24.
+  let resp;
+  try {
+    resp = await createWithRetry(client, params,
+      { maxRetries: opts.maxRetries, retryBaseMs: opts.retryBaseMs });
+  } catch (e) {
+    const fallbackModel = opts.fallbackModel !== undefined
+      ? opts.fallbackModel : config.AITUNNEL_FALLBACK_MODEL;
+    if (!isTransient(e) || !fallbackModel || fallbackModel === primaryModel) throw e;
+    const fbTimeout = opts.fallbackTimeoutMs || config.AITUNNEL_FALLBACK_TIMEOUT_MS;
+    logger.warn(`основная модель ${primaryModel} упала (${e.message}) — fallback на ${fallbackModel}`);
+    // Одна попытка: Claude надёжен, свой короткий таймаут — не копить 60+60 с.
+    resp = await client.chat.completions.create({ ...params, model: fallbackModel }, { timeout: fbTimeout });
+  }
   const choice = (resp.choices && resp.choices[0]) || {};
   const m = choice.message || {};
   const text = (m.content || '').trim();
