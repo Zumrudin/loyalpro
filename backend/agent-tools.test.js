@@ -791,6 +791,27 @@ describe('get_client_abonements', () => {
     expect(out.abonements).toEqual([]);
     expect(out.error).toContain('boom');
   });
+
+  test('непарсибельная дата истечения не прячет абонемент', async () => {
+    db.one.mockResolvedValue(salonRow);
+    ycGetClientAbonements.mockResolvedValue([{
+      is_united_balance: true, united_balance_services_count: 3,
+      expiration_date: 'не дата',
+      status: {}, type: { title: 'Кривой срок' }, balance_container: { links: [] } }]);
+    const out = await clientAbonements.run(1, {}, CTX);
+    expect(out.abonements).toHaveLength(1);
+  });
+
+  test('замороженный показывается с is_frozen:true, не фильтруется', async () => {
+    db.one.mockResolvedValue(salonRow);
+    ycGetClientAbonements.mockResolvedValue([{
+      is_united_balance: true, united_balance_services_count: 2, is_frozen: true,
+      status: { title: 'Заморожен' }, type: { title: 'Морозный' },
+      balance_container: { links: [] } }]);
+    const out = await clientAbonements.run(1, {}, CTX);
+    expect(out.abonements).toHaveLength(1);
+    expect(out.abonements[0].is_frozen).toBe(true);
+  });
 });
 
 describe('реестр инструментов', () => {

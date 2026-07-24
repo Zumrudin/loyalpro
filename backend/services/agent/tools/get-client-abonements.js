@@ -54,7 +54,12 @@ async function run(salonId, _input, ctx = {}) {
       };
     })
     .filter(x => x.visits_left === 'безлимит' || x.visits_left > 0)
-    .filter(x => !x.expires || Date.parse(x.expires) >= nowMs)
+    .filter(x => {
+      // Непарсибельную дату не считаем истечением: при сомнении показываем,
+      // а не прячем живой абонемент.
+      const t = Date.parse(x.expires || '');
+      return !x.expires || !Number.isFinite(t) || t >= nowMs;
+    })
     .slice(0, MAX_ABONEMENTS);
 
   if (!abonements.length) {
