@@ -112,6 +112,17 @@ async function ycGetClientCards(salon, yclClientsId) {
   }
 }
 
+// Абонементы клиента по номеру телефона (формат «79XXXXXXXXX», как в вебхуке).
+// ВАЖНО: параметр называется именно phone — client_phone/client_id дают 400.
+// Остаток посещений: is_united_balance → united_balance_services_count
+// (links[].count при этом нули), иначе — сумма balance_container.links[].count.
+async function ycGetClientAbonements(salon, phone) {
+  return ycGet(salon, '/loyalty/abonements/', {
+    company_id: salon.yclients_company_id,
+    phone,
+  });
+}
+
 async function ycWebLogin(salon) {
   const cached = ycWebSessions[salon.id];
   if (cached && Date.now() - cached.ts < 4 * 60 * 60 * 1000) return cached.cookie;
@@ -354,7 +365,7 @@ function clearServiceCatalogCache(salonId) {
 
 module.exports = {
   ycHeaders, ycGet, ycPost, ycAuth,
-  ycGetCardTypes, ycGetClientCards, ycWebLogin, ycGetCardTransactions,
+  ycGetCardTypes, ycGetClientCards, ycGetClientAbonements, ycWebLogin, ycGetCardTransactions,
   parseCardTransactionsHtml, ycAccrueCard, ycListFinanceTransactions, ycSumServicePayments,
   ycWebSessions,
   getTreeCache, setTreeCache, clearTreeCache,
