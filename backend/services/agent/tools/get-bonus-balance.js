@@ -27,6 +27,7 @@ async function run(salonId, _input, ctx = {}) {
   const row = await db.oneOrNone(
     `SELECT yclients_client_id FROM clients
       WHERE salon_id = $1 AND phone LIKE '%' || $2
+        AND yclients_client_id IS NOT NULL
       LIMIT 1`, [salonId, phone]);
   let ycClientId = row && row.yclients_client_id ? Number(row.yclients_client_id) : null;
   if (!ycClientId) ycClientId = await identity.resolveYclientsClientId(salonId, phone);

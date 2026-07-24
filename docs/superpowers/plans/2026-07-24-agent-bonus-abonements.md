@@ -44,7 +44,7 @@
 - Modify: `backend/services/yclients.js` (после `ycGetClientCards`, ~строка 113; экспорт ~строка 355)
 - Test: `backend/yclients-loyalty.test.js` (новый)
 
-- [ ] **Step 1: Написать падающий тест**
+- [x] **Step 1: Написать падающий тест**
 
 Создать `backend/yclients-loyalty.test.js`:
 
@@ -82,12 +82,12 @@ describe('ycGetClientAbonements', () => {
 });
 ```
 
-- [ ] **Step 2: Убедиться, что тест падает**
+- [x] **Step 2: Убедиться, что тест падает**
 
 Run: `cd /root/loyalpro/backend && npx jest yclients-loyalty -t abonements`
 Expected: FAIL — `ycGetClientAbonements is not a function`.
 
-- [ ] **Step 3: Реализация**
+- [x] **Step 3: Реализация**
 
 В `backend/services/yclients.js` после функции `ycGetClientCards` (после строки 113) добавить:
 
@@ -106,12 +106,12 @@ async function ycGetClientAbonements(salon, phone) {
 
 В `module.exports` (~строка 355) добавить `ycGetClientAbonements`.
 
-- [ ] **Step 4: Тест зелёный**
+- [x] **Step 4: Тест зелёный**
 
 Run: `npx jest yclients-loyalty`
 Expected: PASS (2 теста).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 cd /root/loyalpro
@@ -127,7 +127,7 @@ git commit -m "feat(yclients): ycGetClientAbonements — абонементы к
 - Create: `backend/services/agent/tools/get-bonus-balance.js`
 - Test: `backend/agent-tools.test.js`
 
-- [ ] **Step 1: Подготовить моки в agent-tools.test.js**
+- [x] **Step 1: Подготовить моки в agent-tools.test.js**
 
 Строка 5, заменить:
 
@@ -166,7 +166,7 @@ const clientAbonements = require('./services/agent/tools/get-client-abonements')
 
 (Второй require упадёт до Task 3 — при прогоне только этого таска временно закомментировать его либо сразу создать пустой файл-заглушку `module.exports = { schema: { name: 'get_client_abonements', input_schema: { type: 'object', properties: {} } }, run: async () => ({}) };` — Task 3 её заменит.)
 
-- [ ] **Step 2: Написать падающие тесты**
+- [x] **Step 2: Написать падающие тесты**
 
 Перед `describe('реестр инструментов', …)` (строка 651) добавить:
 
@@ -229,12 +229,12 @@ describe('get_bonus_balance', () => {
 });
 ```
 
-- [ ] **Step 3: Убедиться, что тесты падают**
+- [x] **Step 3: Убедиться, что тесты падают**
 
 Run: `npx jest agent-tools -t get_bonus_balance`
 Expected: FAIL — `Cannot find module './services/agent/tools/get-bonus-balance'`.
 
-- [ ] **Step 4: Реализация**
+- [x] **Step 4: Реализация**
 
 Создать `backend/services/agent/tools/get-bonus-balance.js`:
 
@@ -295,12 +295,12 @@ async function run(salonId, _input, ctx = {}) {
 module.exports = { schema, run };
 ```
 
-- [ ] **Step 5: Тесты зелёные**
+- [x] **Step 5: Тесты зелёные**
 
 Run: `npx jest agent-tools -t get_bonus_balance`
 Expected: PASS (6 тестов).
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add backend/services/agent/tools/get-bonus-balance.js backend/agent-tools.test.js
@@ -315,7 +315,7 @@ git commit -m "feat(agent): get_bonus_balance — баланс бонусной 
 - Create: `backend/services/agent/tools/get-client-abonements.js` (замена заглушки из Task 2, если делалась)
 - Test: `backend/agent-tools.test.js`
 
-- [ ] **Step 1: Написать падающие тесты**
+- [x] **Step 1: Написать падающие тесты**
 
 В `agent-tools.test.js` после describe `get_bonus_balance` добавить:
 
@@ -403,12 +403,12 @@ describe('get_client_abonements', () => {
 });
 ```
 
-- [ ] **Step 2: Убедиться, что тесты падают**
+- [x] **Step 2: Убедиться, что тесты падают**
 
 Run: `npx jest agent-tools -t get_client_abonements`
 Expected: FAIL (модуль-заглушка/отсутствует).
 
-- [ ] **Step 3: Реализация**
+- [x] **Step 3: Реализация**
 
 Создать `backend/services/agent/tools/get-client-abonements.js`:
 
@@ -481,12 +481,12 @@ async function run(salonId, _input, ctx = {}) {
 module.exports = { schema, run };
 ```
 
-- [ ] **Step 4: Тесты зелёные**
+- [x] **Step 4: Тесты зелёные**
 
 Run: `npx jest agent-tools -t get_client_abonements`
 Expected: PASS (7 тестов).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add backend/services/agent/tools/get-client-abonements.js backend/agent-tools.test.js
@@ -501,7 +501,7 @@ git commit -m "feat(agent): get_client_abonements — абонементы с о
 - Modify: `backend/services/agent/tools/index.js`
 - Test: `backend/agent-tools.test.js` (describe «реестр инструментов», строки 651–664)
 
-- [ ] **Step 1: Дополнить тест реестра**
+- [x] **Step 1: Дополнить тест реестра**
 
 В `describe('реестр инструментов')` добавить в существующий тест:
 
@@ -512,12 +512,12 @@ git commit -m "feat(agent): get_client_abonements — абонементы с о
     expect(typeof registry.handlers.get_client_abonements).toBe('function');
 ```
 
-- [ ] **Step 2: Убедиться, что тест падает**
+- [x] **Step 2: Убедиться, что тест падает**
 
 Run: `npx jest agent-tools -t "реестр"`
 Expected: FAIL — `names` не содержит `get_bonus_balance`.
 
-- [ ] **Step 3: Зарегистрировать**
+- [x] **Step 3: Зарегистрировать**
 
 В `backend/services/agent/tools/index.js`: после строки 17 (`const modifySvc = …`) добавить:
 
@@ -534,12 +534,12 @@ const tools = [searchKb, listSvc, listStaff, getSlots, getParSlot, getDates, get
   bonusBal, abonement, escalate];
 ```
 
-- [ ] **Step 4: Тест зелёный**
+- [x] **Step 4: Тест зелёный**
 
 Run: `npx jest agent-tools -t "реестр"`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add backend/services/agent/tools/index.js backend/agent-tools.test.js
@@ -556,7 +556,7 @@ git commit -m "feat(agent): регистрация get_bonus_balance и get_clie
 - Modify: `backend/services/agent/system-prompt.js`
 - Test: `backend/agent-system-prompt.test.js`
 
-- [ ] **Step 1: Написать падающие тесты**
+- [x] **Step 1: Написать падающие тесты**
 
 В конец `backend/agent-system-prompt.test.js` (внутрь `describe('buildSystemPrompt')`) добавить:
 
@@ -579,12 +579,12 @@ git commit -m "feat(agent): регистрация get_bonus_balance и get_clie
   });
 ```
 
-- [ ] **Step 2: Убедиться, что тесты падают**
+- [x] **Step 2: Убедиться, что тесты падают**
 
 Run: `npx jest agent-system-prompt`
 Expected: FAIL (3 новых теста).
 
-- [ ] **Step 3: Правки промпта**
+- [x] **Step 3: Правки промпта**
 
 В `backend/services/agent/system-prompt.js` правило 8 (строка 84) — заменить строку:
 
@@ -616,12 +616,12 @@ Expected: FAIL (3 новых теста).
     `Если инструмент вернул found:false, пустой список или error — не выдумывай цифры: скажи, что не видишь карту/абонементы, и предложи уточнить у администратора.`,
 ```
 
-- [ ] **Step 4: Все промпт-тесты зелёные (включая старые!)**
+- [x] **Step 4: Все промпт-тесты зелёные (включая старые!)**
 
 Run: `npx jest agent-system-prompt`
 Expected: PASS, ноль упавших старых тестов.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add backend/services/agent/system-prompt.js backend/agent-system-prompt.test.js
@@ -632,22 +632,22 @@ git commit -m "feat(agent): сценарий 5 — бонусы и абонем�
 
 ### Task 6: Полный прогон и живой smoke
 
-- [ ] **Step 1: Все агентские тесты**
+- [x] **Step 1: Все агентские тесты**
 
 Run: `cd /root/loyalpro/backend && npx jest agent-tools agent-system-prompt agent-gate agent-identity yclients-loyalty`
 Expected: PASS все сьюты.
 
-- [ ] **Step 2: Перезапустить dev-сервер**
+- [x] **Step 2: Перезапустить dev-сервер**
 
 Run: `pm2 restart loyalpro --update-env && sleep 2 && pm2 logs loyalpro --lines 15 --nostream`
 Expected: старт без ошибок.
 
-- [ ] **Step 3: Живой smoke с тестового номера**
+- [x] **Step 3: Живой smoke с тестового номера**
 
 Очистить историю тестового диалога — skill `clear-history` (номер 79200255591). Затем с тестового WhatsApp-номера отправить: «Сколько у меня бонусов на карте?» и «Сколько посещений осталось на моём абонементе?».
 Expected: Мила зовёт `get_bonus_balance` → называет 22 750 бонусов (сверить с YClients); зовёт `get_client_abonements` → называет «BEAUTYLISER/ RSL Скульптурирование 10», остаток 10 посещений, поясняет активацию с первого визита. Проверить в логах `pm2 logs loyalpro`, что инструменты вызвались и не было 4xx.
 
-- [ ] **Step 4: Финальный commit (если были правки по итогам smoke)**
+- [x] **Step 4: Финальный commit (если были правки по итогам smoke)**
 
 ```bash
 git add -A && git commit -m "fix(agent): правки по итогам живого smoke бонусов/абонементов"
