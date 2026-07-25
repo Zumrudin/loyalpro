@@ -103,4 +103,70 @@ router.delete('/service-rules/:id', adminOnly, async (req, res) => {
   } catch (e) { logger.error(e.message); res.status(500).json({ error: 'server error' }); }
 });
 
+// ── Подкатегории услуг + перемещение услуг ──────────────────────────────────
+
+// GET /api/agent/service-subcategories → { subcategories }
+router.get('/service-subcategories', adminOnly, async (req, res) => {
+  try { res.json({ subcategories: await settings.listSubcategories(req.user.salonId) }); }
+  catch (e) { logger.error(e.message); res.status(500).json({ error: 'server error' }); }
+});
+
+// POST /api/agent/service-subcategories { ycCategoryId, parentId?, title }
+router.post('/service-subcategories', adminOnly, async (req, res) => {
+  try {
+    const { ycCategoryId, parentId, title } = req.body || {};
+    res.json(await settings.addSubcategory(req.user.salonId, { ycCategoryId, parentId, title }));
+  } catch (e) {
+    if (e.code === 'BAD_TITLE' || e.code === 'BAD_PARENT' || e.code === 'BAD_CATEGORY')
+      return res.status(400).json({ error: 'Некорректные данные подкатегории' });
+    logger.error(e.message); res.status(500).json({ error: 'server error' });
+  }
+});
+
+// PUT /api/agent/service-subcategories/reorder { items:[{id, displayOrder}] }
+// Объявлено ДО /:id, чтобы 'reorder' не поймался path-матчером как id.
+router.put('/service-subcategories/reorder', adminOnly, async (req, res) => {
+  try { res.json(await settings.reorderSubcategories(req.user.salonId, (req.body || {}).items)); }
+  catch (e) { logger.error(e.message); res.status(500).json({ error: 'server error' }); }
+});
+
+// PUT /api/agent/service-subcategories/:id { title }
+router.put('/service-subcategories/:id', adminOnly, async (req, res) => {
+  try {
+    res.json(await settings.renameSubcategory(
+      req.user.salonId, parseInt(req.params.id, 10), (req.body || {}).title));
+  } catch (e) {
+    if (e.code === 'BAD_TITLE') return res.status(400).json({ error: 'Пустое название' });
+    logger.error(e.message); res.status(500).json({ error: 'server error' });
+  }
+});
+
+// DELETE /api/agent/service-subcategories/:id
+router.delete('/service-subcategories/:id', adminOnly, async (req, res) => {
+  try {
+    await settings.removeSubcategory(req.user.salonId, parseInt(req.params.id, 10));
+    res.json({ ok: true });
+  } catch (e) { logger.error(e.message); res.status(500).json({ error: 'server error' }); }
+});
+
+// POST /api/agent/service-placements { ycServiceId, subcategoryId } (пусто → снять)
+router.post('/service-placements', adminOnly, async (req, res) => {
+  try {
+    const { ycServiceId, subcategoryId } = req.body || {};
+    res.json(await settings.placeService(req.user.salonId, { ycServiceId, subcategoryId }));
+  } catch (e) {
+    if (e.code === 'BAD_SERVICE') return res.status(400).json({ error: 'Не указана услуга' });
+    if (e.code === 'BAD_SUBCATEGORY') return res.status(400).json({ error: 'Неизвестная подкатегория' });
+    logger.error(e.message); res.status(500).json({ error: 'server error' });
+  }
+});
+
+// DELETE /api/agent/service-placements/:ycServiceId
+router.delete('/service-placements/:ycServiceId', adminOnly, async (req, res) => {
+  try {
+    await settings.unplaceService(req.user.salonId, parseInt(req.params.ycServiceId, 10));
+    res.json({ ok: true });
+  } catch (e) { logger.error(e.message); res.status(500).json({ error: 'server error' }); }
+});
+
 module.exports = router;

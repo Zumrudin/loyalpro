@@ -7,7 +7,7 @@ jest.mock('./services/yclients', () => ({
   ycGetClientCards: jest.fn(), ycGetClientAbonements: jest.fn(),
 }));
 jest.mock('./services/yclients-booking', () => ({ ycGetBookTimes: jest.fn(), ycGetStaffSchedule: jest.fn(), ycGetStaffSeances: jest.fn() }));
-jest.mock('./services/agent-settings', () => ({ loadServiceFilterSafe: jest.fn() }));
+jest.mock('./services/agent-settings', () => ({ loadServiceFilterSafe: jest.fn(), loadCategoryTreeSafe: jest.fn() }));
 jest.mock('./services/agent/booking', () => ({ createBookingRecord: jest.fn() }));
 jest.mock('./services/yclients-records', () => ({
   ycGetClientRecords: jest.fn(), ycGetRecord: jest.fn(), ycUpdateRecord: jest.fn(),
@@ -63,6 +63,7 @@ beforeEach(() => {
   settings.loadServiceFilterSafe.mockResolvedValue({
     mode: 'all', denyServices: new Set(), allowServices: new Set(), denyPairs: new Set(),
   });
+  settings.loadCategoryTreeSafe.mockResolvedValue({ subcats: [], placements: [] });
   ycGetServiceMeta.mockResolvedValue({ durationByService: new Map(), resourceIdsByService: new Map() });
 });
 
@@ -108,7 +109,7 @@ describe('list_services', () => {
       { 7: { 55: { price_min: 5000, price_max: 5000 }, 66: { price_min: 8000, price_max: 8000 } } }));
     const out = await listServices.run(1, {});
     expect(out.services).toEqual([
-      { yc_id: 7, title: 'Ботулинотерапия', duration_min: null, price_min: 5000, price_max: 8000, staff: [
+      { yc_id: 7, title: 'Ботулинотерапия', duration_min: null, price_min: 5000, price_max: 8000, category_path: [], staff: [
         { yc_id: 55, name: 'Аня', price_min: 5000, price_max: 5000 },
         { yc_id: 66, name: 'Пери', price_min: 8000, price_max: 8000 },
       ] },
