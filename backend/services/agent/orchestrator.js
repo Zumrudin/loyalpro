@@ -45,6 +45,32 @@ function nowTimeMoscow() {
     { timeZone: 'Europe/Moscow', hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date());
 }
 
+// Дата+время слота по Москве для детерминированного подтверждения: «27 июля в 19:30».
+function formatSlotMoscow(iso) {
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return null;
+  const date = new Intl.DateTimeFormat('ru-RU',
+    { timeZone: 'Europe/Moscow', day: 'numeric', month: 'long' }).format(d);
+  const time = new Intl.DateTimeFormat('ru-RU',
+    { timeZone: 'Europe/Moscow', hour: '2-digit', minute: '2-digit', hour12: false }).format(d);
+  return { date, time };
+}
+
+// Детерминированное подтверждение из данных выполненного пишущего инструмента —
+// когда запись УЖЕ сделана, а провайдер упал на подтверждающей фразе (и fallback
+// внутри провайдера тоже не выжил). Без LLM: правдиво и не зависит от сбоя. Имена
+// мастера/услуги в input только как YClients-id — их не реконструируем; для
+// create_booking дата+время достаточны, для прочих write-инструментов — общее «Готово».
+function buildWriteConfirmation(lastWrite) {
+  const input = (lastWrite && lastWrite.input) || {};
+  const who = String(input.client_name || '').trim() || 'вас';
+  if (lastWrite && lastWrite.tool === 'create_booking' && input.datetime) {
+    const slot = formatSlotMoscow(input.datetime);
+    if (slot) return `Готово! Записала ${who} на ${slot.date} в ${slot.time} ✅ Будем ждать 🤍`;
+  }
+  return 'Готово, всё оформила ✅';
+}
+
 // Прогнать один ход диалога. Возвращает { replies, escalated, sideEffect }.
 async function runDialog(salonId, dialogKey, opts = {}) {
   const d = opts.deps || {};
@@ -114,11 +140,25 @@ async function runDialog(salonId, dialogKey, opts = {}) {
     let bookingSucceeded = false;   // create_booking вернул успех в этом ходе
     let bookingErrored = false;     // create_booking вернул ошибку в этом ходе
     let writeSucceeded = false;     // любой из WRITE_TOOLS отработал без ошибки в этом ходе
+    let lastWrite = null;           // { tool, input } последнего успешного write — для подтверждения
+    let degradedAfterWrite = false; // провайдер упал ПОСЛЕ успешной записи → детерминированное подтверждение
 
     for (let i = 0; i < MAX_ITERS; i++) {
-      const resp = await provider.createMessage(
-        { system, messages: convo.slice(), tools: registry.schemas },
-        { client: opts.client });
+      let resp;
+      try {
+        resp = await provider.createMessage(
+          { system, messages: convo.slice(), tools: registry.schemas },
+          { client: opts.client });
+      } catch (e) {
+        // Провайдер упал (fallback внутри провайдера тоже не выжил). Если запись
+        // в этом ходе УЖЕ сделана — не роняем ход в эскалацию: ниже отдадим
+        // детерминированное подтверждение. Ничего не сделано → пробрасываем
+        // (честная эскалация в диспетчере, как раньше).
+        if (!writeSucceeded) throw e;
+        logger.warn(`dialog ${dialogKey}: провайдер упал после успешной записи (${e.message}) — детерминированное подтверждение`);
+        degradedAfterWrite = true;
+        break;
+      }
 
       convo.push(resp.assistantMsg);
 
@@ -146,7 +186,7 @@ async function runDialog(salonId, dialogKey, opts = {}) {
         }
         const isError = !!(result && result.error);
         if (!isError && SIDE_EFFECT_TOOLS.has(tc.name)) sideEffect = true;
-        if (!isError && WRITE_TOOLS.has(tc.name)) writeSucceeded = true;
+        if (!isError && WRITE_TOOLS.has(tc.name)) { writeSucceeded = true; lastWrite = { tool: tc.name, input: tc.input }; }
         if (tc.name === 'escalate_to_operator' && result && result.escalated) escalated = true;
         if (tc.name === 'create_booking') { if (isError) bookingErrored = true; else bookingSucceeded = true; }
         results.push({ id: tc.id, name: tc.name, result, isError });
@@ -160,13 +200,25 @@ async function runDialog(salonId, dialogKey, opts = {}) {
     // молча дёргала инструменты). Данные уже собраны — грех их выбрасывать:
     // добиваем одним вызовом БЕЗ инструментов, чтобы модель была вынуждена
     // ответить прозой. Без этого ход завершался нулём реплик и клиент — тишиной.
-    if (exhausted && replies.length === 0) {
+    if (exhausted && replies.length === 0 && !degradedAfterWrite) {
       logger.warn(`dialog ${dialogKey}: исчерпан лимит tool-итераций (${MAX_ITERS}) без единой реплики — добивочный вызов без инструментов`);
-      const final = await provider.createMessage(
-        { system, messages: convo.slice(), tools: [] },
-        { client: opts.client });
-      if (final.text) replies.push(final.text);
-      else logger.warn(`dialog ${dialogKey}: добивочный вызов тоже без текста — ответ клиенту берёт на себя диспетчер`);
+      try {
+        const final = await provider.createMessage(
+          { system, messages: convo.slice(), tools: [] },
+          { client: opts.client });
+        if (final.text) replies.push(final.text);
+        else logger.warn(`dialog ${dialogKey}: добивочный вызов тоже без текста — ответ клиенту берёт на себя диспетчер`);
+      } catch (e) {
+        if (!writeSucceeded) throw e;
+        logger.warn(`dialog ${dialogKey}: добивочный вызов упал после успешной записи (${e.message}) — детерминированное подтверждение`);
+        degradedAfterWrite = true;
+      }
+    }
+
+    // Провайдер умер уже ПОСЛЕ успешной записи — реплики нет, но бронь есть.
+    // Не эскалируем в пустоту: отдаём правдивое подтверждение из данных брони.
+    if (degradedAfterWrite && replies.length === 0) {
+      replies.push(buildWriteConfirmation(lastWrite));
     }
 
     // Пришло ли новое входящее, пока мы думали?
@@ -185,7 +237,7 @@ async function runDialog(salonId, dialogKey, opts = {}) {
     // bookingFailed: попытка записи была и НЕ увенчалась успехом. Диспетчер по этому
     // сигналу принудительно переведёт на человека, чтобы клиент не завис на «секундочку».
     return { replies, escalated, sideEffect, exhausted, falseSuccess,
-      bookingFailed: bookingErrored && !bookingSucceeded };
+      bookingFailed: bookingErrored && !bookingSucceeded, degradedAfterWrite };
   }
 
   return { replies: [], escalated: false, sideEffect: false };

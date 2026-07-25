@@ -4,6 +4,7 @@ const { db } = require('../../../db');
 const { ycGetServiceCatalog, ycGetServiceMeta } = require('../../yclients');
 const settings = require('../../agent-settings');
 const svcFilter = require('../service-filter');
+const categoryTree = require('../category-tree');
 
 const schema = {
   name: 'list_services',
@@ -31,17 +32,20 @@ async function run(salonId, _input) {
   const staffNameById = new Map(staffRows.map(s => [String(s.yclients_staff_id), s.name]));
 
   const filter = await settings.loadServiceFilterSafe(salonId);
+  // Оверлей-дерево подкатегорий (fail-open): для category_path каждой услуги.
+  const tree = await settings.loadCategoryTreeSafe(salonId);
 
   // Достоверная привязка услуга→мастера строится per-staff запросами (поле staff
   // в общем /services урезано). staffIdsByService: svcIdStr → Set(staffIdStr).
   // staffPricesByService: svcIdStr → Map<staffIdStr,{price_min,price_max}> — цена
   // у конкретного мастера (может отличаться: врач vs. главный врач).
   let priced = [], staffIdsByService = new Map(), staffPricesByService = new Map();
-  let durationByService = new Map();
+  let categories = [], durationByService = new Map();
   if (salon && salon.yclients_company_id) {
     try {
       const cat = await ycGetServiceCatalog(salon, staffRows.map(r => r.yclients_staff_id));
       priced = cat.priced;
+      categories = cat.categories || [];
       staffIdsByService = cat.staffIdsByService;
       staffPricesByService = cat.staffPricesByService || new Map();
     } catch (_) { /* YClients недоступен → фолбэк на заголовки из конфига */ }
@@ -75,6 +79,8 @@ async function run(salonId, _input) {
 
   let services;
   if (priced.length) {
+    // Индекс дерева категорий/подкатегорий для category_path каждой услуги.
+    const idx = categoryTree.indexTree(categories, tree.subcats, tree.placements);
     services = priced
       .filter(s => svcFilter.decideOfferVisible(filter, s.id, s.active === 1))
       .map(s => {
@@ -88,6 +94,9 @@ async function run(salonId, _input) {
           // каталога YClients (тот включал бы «теневых» мастеров без реальной услуги).
           price_min: staff.length ? Math.min(...staff.map(m => m.price_min)) : null,
           price_max: staff.length ? Math.max(...staff.map(m => m.price_max)) : null,
+          // Путь категорий сверху вниз (направление → подкатегория) для ответов
+          // Милы про группу/направление услуг.
+          category_path: categoryTree.categoryPathForService(idx, s.id, s.category_id),
           staff,
         };
       })
@@ -100,6 +109,7 @@ async function run(salonId, _input) {
       duration_min: null,
       price_min: null,
       price_max: null,
+      category_path: [],
       staff: [],
     }));
   }

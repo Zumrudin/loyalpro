@@ -78,6 +78,14 @@ module.exports = {
   AITUNNEL_API_KEY:     process.env.AITUNNEL_API_KEY     || '',
   AITUNNEL_BASE:        process.env.AITUNNEL_BASE        || 'https://api.aitunnel.ru/v1',
   AITUNNEL_CHAT_MODEL:  process.env.AITUNNEL_CHAT_MODEL  || 'gemini-3.1-flash-lite',
+  // Аварийная модель: если основная (обычно Gemini Flash Lite) флапает транзиентно
+  // подряд (421 «нет usage», таймаут, 5xx), тот же запрос добивается через неё.
+  // Claude тем же ключом всегда отдаёт usage → биллинг-прокси aitunnel не рубит 421.
+  // Sonnet, не Haiku: пилот показал Haiku ненадёжным на booking (ложный успех,
+  // битые tool-id); fallback редок, цена Sonnet в агрегате пренебрежима. Пусто = выкл.
+  AITUNNEL_FALLBACK_MODEL:      process.env.AITUNNEL_FALLBACK_MODEL      || 'claude-sonnet-4.6',
+  AITUNNEL_FALLBACK_TIMEOUT_MS: process.env.AITUNNEL_FALLBACK_TIMEOUT_MS
+    ? parseInt(process.env.AITUNNEL_FALLBACK_TIMEOUT_MS, 10) : 30000,
   AITUNNEL_EMBED_MODEL: process.env.AITUNNEL_EMBED_MODEL || 'gemini-embedding-001',
   AITUNNEL_EMBED_DIM:   process.env.AITUNNEL_EMBED_DIM ? parseInt(process.env.AITUNNEL_EMBED_DIM, 10) : 3072,
   // Провайдер диалогового агента: 'aitunnel' (Gemini) | 'anthropic' (Claude, откат).

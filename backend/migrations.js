@@ -1023,6 +1023,53 @@ async function runMigrations(client) {
       ON agent_service_rules (salon_id)
   `).catch(() => {});
 
+  // agent_service_subcategories — локальный оверлей-дерево подкатегорий поверх
+  // плоских YClients-категорий. yc_category_id — ЯКОРЬ топ-категории всего
+  // поддерева (денормализован на всех уровнях, наследуется от родителя), поэтому
+  // путь категорий строится без обхода до корня. parent_id NULL = прямо под
+  // YClients-категорией. Каскад по детям — ON DELETE CASCADE на parent_id.
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS agent_service_subcategories (
+      id             SERIAL PRIMARY KEY,
+      salon_id       INTEGER REFERENCES salons(id) ON DELETE CASCADE,
+      yc_category_id BIGINT NOT NULL,
+      parent_id      INTEGER NULL REFERENCES agent_service_subcategories(id) ON DELETE CASCADE,
+      title          TEXT NOT NULL,
+      display_order  INTEGER NOT NULL DEFAULT 0,
+      created_at     TIMESTAMP DEFAULT NOW(),
+      updated_at     TIMESTAMP DEFAULT NOW()
+    )
+  `).catch(() => {});
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS agent_service_subcategories_cat_idx
+      ON agent_service_subcategories (salon_id, yc_category_id)
+  `).catch(() => {});
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS agent_service_subcategories_parent_idx
+      ON agent_service_subcategories (salon_id, parent_id)
+  `).catch(() => {});
+
+  // agent_service_placements — назначение услуги в подкатегорию (перемещение).
+  // Нет строки → услуга в родной YClients-категории. UNIQUE (salon_id, yc_service_id):
+  // услуга помещена максимум в ОДНУ подкатегорию. Удаление подкатегории каскадит
+  // placements → услуги возвращаются в родную категорию.
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS agent_service_placements (
+      id             SERIAL PRIMARY KEY,
+      salon_id       INTEGER REFERENCES salons(id) ON DELETE CASCADE,
+      yc_service_id  BIGINT NOT NULL,
+      subcategory_id INTEGER NOT NULL REFERENCES agent_service_subcategories(id) ON DELETE CASCADE,
+      display_order  INTEGER NOT NULL DEFAULT 0,
+      created_at     TIMESTAMP DEFAULT NOW(),
+      updated_at     TIMESTAMP DEFAULT NOW(),
+      UNIQUE (salon_id, yc_service_id)
+    )
+  `).catch(() => {});
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS agent_service_placements_sub_idx
+      ON agent_service_placements (salon_id, subcategory_id)
+  `).catch(() => {});
+
   // agent_stop_topics — темы, которыми клиника не занимается ВООБЩЕ (даже не
   // консультирует). Отличается от agent_service_rules: там прячутся конкретные
   // yc_service_id, а здесь тема, которой в каталоге может не быть вовсе

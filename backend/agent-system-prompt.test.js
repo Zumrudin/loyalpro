@@ -114,6 +114,14 @@ describe('buildSystemPrompt', () => {
     expect(p).toMatch(/цену в ответ НЕ добавляй по своей инициативе/i);
   });
 
+  test('category_path — отбор услуг направления; состав только на прямой вопрос', () => {
+    const p = buildSystemPrompt({});
+    expect(p).toMatch(/КАТЕГОРИИ И ПОДКАТЕГОРИИ УСЛУГ/i);
+    expect(p).toMatch(/category_path/);
+    expect(p).toMatch(/ТОЛЬКО на прямой вопрос о составе/i);
+    expect(p).toMatch(/не выдумывая/i);
+  });
+
   test('цена направления — диапазон «от…до», без перечисления препаратов и зон', () => {
     const p = buildSystemPrompt({});
     expect(p).toMatch(/ЦЕНА НА НАПРАВЛЕНИЕ, А НЕ НА КОНКРЕТНУЮ УСЛУГУ/i);

@@ -219,9 +219,141 @@ async function removeStopTopic(salonId, id) {
   await db.query('DELETE FROM agent_stop_topics WHERE salon_id=$1 AND id=$2', [salonId, id]);
 }
 
+// ── Подкатегории услуг агента + перемещение услуг ───────────────────────────
+// Локальный оверлей поверх плоских YClients-категорий (см. category-tree.js).
+
+// Все подкатегории салона (по якорю-категории, затем по порядку).
+async function listSubcategories(salonId) {
+  return db.any(
+    `SELECT id, salon_id, yc_category_id, parent_id, title, display_order, created_at, updated_at
+       FROM agent_service_subcategories
+      WHERE salon_id=$1
+      ORDER BY yc_category_id, display_order, id`,
+    [salonId]);
+}
+
+// Создать подкатегорию. Вложенная (parentId) наследует yc_category_id родителя;
+// верхняя требует ycCategoryId. display_order = (max среди сиблингов) + 1.
+async function addSubcategory(salonId, { ycCategoryId, parentId, title }) {
+  const t = String(title || '').trim();
+  if (!t) { const e = new Error('bad title'); e.code = 'BAD_TITLE'; throw e; }
+
+  let ycCat, parent = null;
+  const pid = (parentId === undefined || parentId === null || parentId === '')
+    ? null : parseInt(parentId, 10);
+  if (pid) {
+    parent = await db.oneOrNone(
+      `SELECT id, yc_category_id FROM agent_service_subcategories WHERE salon_id=$1 AND id=$2`,
+      [salonId, pid]);
+    if (!parent) { const e = new Error('bad parent'); e.code = 'BAD_PARENT'; throw e; }
+    ycCat = parent.yc_category_id;
+  } else {
+    ycCat = parseInt(ycCategoryId, 10);
+    if (!ycCat) { const e = new Error('bad category'); e.code = 'BAD_CATEGORY'; throw e; }
+  }
+
+  const maxRow = await db.oneOrNone(
+    `SELECT COALESCE(MAX(display_order), -1) AS m
+       FROM agent_service_subcategories
+      WHERE salon_id=$1 AND yc_category_id=$2
+        AND COALESCE(parent_id,0)=COALESCE($3::int,0)`,
+    [salonId, ycCat, pid]);
+  const order = (Number(maxRow && maxRow.m) || 0) + 1;
+
+  return db.one(
+    `INSERT INTO agent_service_subcategories (salon_id, yc_category_id, parent_id, title, display_order)
+     VALUES ($1,$2,$3,$4,$5)
+     RETURNING id, salon_id, yc_category_id, parent_id, title, display_order, created_at, updated_at`,
+    [salonId, ycCat, pid, t, order]);
+}
+
+// Переименовать подкатегорию (scope по salon_id).
+async function renameSubcategory(salonId, id, title) {
+  const t = String(title || '').trim();
+  if (!t) { const e = new Error('bad title'); e.code = 'BAD_TITLE'; throw e; }
+  return db.one(
+    `UPDATE agent_service_subcategories SET title=$3, updated_at=NOW()
+      WHERE salon_id=$1 AND id=$2
+     RETURNING id, salon_id, yc_category_id, parent_id, title, display_order, created_at, updated_at`,
+    [salonId, id, t]);
+}
+
+// Удалить подкатегорию (каскад детей + placements → услуги вернутся в категорию).
+async function removeSubcategory(salonId, id) {
+  await db.query('DELETE FROM agent_service_subcategories WHERE salon_id=$1 AND id=$2', [salonId, id]);
+}
+
+// Батч-переупорядочивание подкатегорий. items:[{id, displayOrder}].
+async function reorderSubcategories(salonId, items) {
+  for (const it of (items || [])) {
+    const id = parseInt(it && it.id, 10);
+    if (!id) continue;
+    await db.query(
+      `UPDATE agent_service_subcategories SET display_order=$3, updated_at=NOW()
+        WHERE salon_id=$1 AND id=$2`,
+      [salonId, id, Number(it.displayOrder) || 0]);
+  }
+  return { ok: true };
+}
+
+// Все привязки услуг салона.
+async function listPlacements(salonId) {
+  return db.any(
+    `SELECT id, salon_id, yc_service_id, subcategory_id, display_order, created_at, updated_at
+       FROM agent_service_placements WHERE salon_id=$1`,
+    [salonId]);
+}
+
+// Поместить услугу в подкатегорию (или снять placement при пустом subcategoryId).
+async function placeService(salonId, { ycServiceId, subcategoryId }) {
+  const svc = parseInt(ycServiceId, 10);
+  if (!svc) { const e = new Error('bad service'); e.code = 'BAD_SERVICE'; throw e; }
+  // Пусто/null → вернуть услугу в родную категорию (снять placement).
+  if (subcategoryId === undefined || subcategoryId === null || subcategoryId === '') {
+    await db.query(
+      'DELETE FROM agent_service_placements WHERE salon_id=$1 AND yc_service_id=$2', [salonId, svc]);
+    return { removed: true };
+  }
+  const subId = parseInt(subcategoryId, 10);
+  const sub = subId ? await db.oneOrNone(
+    'SELECT id FROM agent_service_subcategories WHERE salon_id=$1 AND id=$2', [salonId, subId]) : null;
+  if (!sub) { const e = new Error('bad subcategory'); e.code = 'BAD_SUBCATEGORY'; throw e; }
+  return db.one(
+    `INSERT INTO agent_service_placements (salon_id, yc_service_id, subcategory_id)
+     VALUES ($1,$2,$3)
+     ON CONFLICT (salon_id, yc_service_id)
+       DO UPDATE SET subcategory_id=EXCLUDED.subcategory_id, updated_at=NOW()
+     RETURNING id, salon_id, yc_service_id, subcategory_id, display_order, created_at, updated_at`,
+    [salonId, svc, subId]);
+}
+
+// Снять placement (услуга → родная категория).
+async function unplaceService(salonId, ycServiceId) {
+  const svc = parseInt(ycServiceId, 10);
+  if (!svc) return;
+  await db.query(
+    'DELETE FROM agent_service_placements WHERE salon_id=$1 AND yc_service_id=$2', [salonId, svc]);
+}
+
+// Загрузчик оверлей-дерева → { subcats, placements }. Кидает при сбое БД.
+async function loadCategoryTree(salonId) {
+  const [subcats, placements] = await Promise.all([
+    listSubcategories(salonId),
+    listPlacements(salonId),
+  ]);
+  return { subcats, placements };
+}
+
+// Fail-open обёртка: при любом сбое БД → пустой оверлей (услуги в родных
+// YClients-категориях). Транзиентный сбой не должен ломать list_services агента.
+async function loadCategoryTreeSafe(salonId) {
+  try { return await loadCategoryTree(salonId); }
+  catch (_) { return { subcats: [], placements: [] }; }
+}
+
 // Полный каталог услуг, сгруппированный по категориям, с ДОСТОВЕРНЫМИ мастерами
 // (кто реально выполняет услугу) и текущей видимостью — для экрана админки.
-// Структура: { serviceMode, categories: [{ id, title, services: [{…, staff:[…]}] }] }.
+// Структура: { serviceMode, categories: [вложенное дерево с подкатегориями] }.
 async function getServicesForAdmin(salonId) {
   const salon = await db.oneOrNone(
     `SELECT id, yclients_company_id, yclients_partner_token, yclients_user_token
@@ -237,7 +369,9 @@ async function getServicesForAdmin(salonId) {
 
   const filter = await loadServiceFilter(salonId);   // админке нужен реальный статус, не fail-open
   const svcFilter = require('./agent/service-filter');
-  const catById = new Map((categories || []).map(c => [String(c.id), c]));
+  const categoryTree = require('./agent/category-tree');
+  const { subcats, placements } = await loadCategoryTree(salonId);
+  const placementBySvc = new Map(placements.map(p => [String(p.yc_service_id), p.subcategory_id]));
 
   // Услуга → объект с мастерами (только активные, реально выполняющие), отсортированными.
   const svcObjs = priced.map(s => {
@@ -258,38 +392,15 @@ async function getServicesForAdmin(salonId) {
       active: s.active === 1,
       visible: svcFilter.decideOfferVisible(filter, s.id, s.active === 1),
       category_id: s.category_id ?? null,
+      subcategory_id: placementBySvc.has(String(s.id)) ? placementBySvc.get(String(s.id)) : null,
       _weight: Number(s.weight) || 0,
       staff,
     };
   });
 
-  // Группировка по категориям.
-  const groups = new Map();   // catKey → { id, title, _weight, services }
-  for (const s of svcObjs) {
-    const catKey = String(s.category_id ?? '');
-    if (!groups.has(catKey)) {
-      const c = catById.get(catKey);
-      groups.set(catKey, {
-        id: s.category_id ?? null,
-        title: (c && c.title) || 'Без категории',
-        _weight: c ? (Number(c.weight) || 0) : -1,   // «Без категории» — в конец
-        services: [],
-      });
-    }
-    groups.get(catKey).services.push(s);
-  }
-
-  // Сортировка: категории и услуги — по весу (убыв.), затем по названию.
-  const byWeightTitle = (a, b) =>
-    (b._weight - a._weight) || String(a.title).localeCompare(String(b.title), 'ru');
-  const out = [...groups.values()].sort(byWeightTitle);
-  for (const g of out) {
-    g.services.sort(byWeightTitle);
-    g.services.forEach(s => delete s._weight);
-    delete g._weight;
-  }
-
-  return { serviceMode: filter.mode, categories: out };
+  // Вложенное дерево категория → услуги + подкатегории (см. category-tree.js).
+  const tree = categoryTree.buildAdminTree(categories, svcObjs, subcats, placements);
+  return { serviceMode: filter.mode, categories: tree };
 }
 
 module.exports = {
@@ -298,4 +409,6 @@ module.exports = {
   removeServiceRuleByKey, applyServiceVisibility, setServicesVisibilityBulk,
   loadServiceFilter, loadServiceFilterSafe, getServicesForAdmin,
   loadStopTopics, loadStopTopicsSafe, listStopTopics, addStopTopic, removeStopTopic,
+  listSubcategories, addSubcategory, renameSubcategory, removeSubcategory, reorderSubcategories,
+  listPlacements, placeService, unplaceService, loadCategoryTree, loadCategoryTreeSafe,
 };
