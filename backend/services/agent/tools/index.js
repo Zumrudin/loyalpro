@@ -6,6 +6,7 @@ const listSvc   = require('./list-services');
 const listStaff = require('./list-staff');
 const getSlots  = require('./get-available-slots');
 const getParSlot = require('./get-parallel-slots');
+const getSeqSlot = require('./get-sequential-slots');
 const getDates  = require('./get-available-dates');
 const getClient = require('./get-client');
 const createBk  = require('./create-booking');
@@ -18,7 +19,7 @@ const modifySvc = require('./modify-booking-services');
 const bonusBal  = require('./get-bonus-balance');
 const abonement = require('./get-client-abonements');
 
-const tools = [searchKb, listSvc, listStaff, getSlots, getParSlot, getDates, getClient,
+const tools = [searchKb, listSvc, listStaff, getSlots, getParSlot, getSeqSlot, getDates, getClient,
   createBk, listBookings, visitHistory, cancelBk, reschedBk, modifySvc,
   bonusBal, abonement, escalate];
 
