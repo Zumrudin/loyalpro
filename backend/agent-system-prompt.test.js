@@ -353,6 +353,16 @@ describe('buildSystemPrompt', () => {
       expect(p).toContain('09:00 21:00');
     });
   });
+
+  test('несколько услуг подряд — через get_sequential_slots, без ручной арифметики окон', () => {
+    const p = buildSystemPrompt({});
+    expect(p).toContain('get_sequential_slots');
+    expect(p).toMatch(/НЕ сравнивай вручную|НЕ сравнивай слоты разных услуг вручную/i);
+    expect(p).toContain('preferred_staff_cannot');
+    expect(p).toContain('gap_minutes');
+    expect(p).toMatch(/ТОЛЬКО из (поля )?starts/);
+    expect(p).toMatch(/не обещай[^]{0,60}(встык|одним визитом)/i);
+  });
 });
 
 // Экономия tool-итераций: каждый лишний вызов приближает ход к лимиту и немому ответу.
@@ -397,12 +407,13 @@ describe('несколько услуг подряд одному пациент
     expect(b).toContain('create_booking');
   });
 
-  test('перед выводом «не получается» проверяет ВСЕХ мастеров услуги и соседние дни', () => {
+  test('get_sequential_slots сам проверяет мастеров и ближайшие дни — без ручного перебора', () => {
     const b = block();
-    expect(b).toMatch(/ВСЕХ мастеров/i);
-    expect(b).toContain('get_available_slots');
-    expect(b).toMatch(/другой день|соседни[ех] дн/i);
-    expect(b).toContain('get_available_dates');
+    expect(b).toContain('get_sequential_slots');
+    expect(b).toMatch(/других мастеров/i);
+    expect(b).toMatch(/ближайшие дни/i);
+    expect(b).toContain('до 7');
+    expect(b).toMatch(/НЕ считай|вручную/i);
   });
 
   test('предлагает перенос существующей записи для стыковки (reschedule_booking)', () => {
@@ -415,7 +426,8 @@ describe('несколько услуг подряд одному пациент
     const b = block();
     expect(b).toMatch(/КРАЙНЯЯ мера/i);
     expect(b).toMatch(/честно/i);
-    expect(b).toContain('escalate_to_operator');
+    const p = buildSystemPrompt({});
+    expect(p).toMatch(/get_sequential_slots[^]{0,300}escalate_to_operator/i);
   });
 
   test('старое безусловное «сложно → эскалируй» удалено', () => {
