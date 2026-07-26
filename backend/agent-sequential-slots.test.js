@@ -70,6 +70,8 @@ describe('get_sequential_slots — лестница приоритета', () =>
     expect(r.variants[0].starts[0].time).toBe('10:00');
     // цепочка: био 10:00–10:30, чистка 10:30–12:00
     expect(r.variants[0].starts[0].chain[1].datetime).toBe(`${DATE}T10:30:00+03:00`);
+    // один мастер, встык без перерыва → одна запись
+    expect(r.variants[0].starts[0].booking_mode).toBe('single_record');
     // ранний стоп: график запрашивался только на запрошенную дату
     const dates = new Set(ycGetStaffSeances.mock.calls.map(c => c[2]));
     expect(dates).toEqual(new Set([DATE]));
@@ -91,6 +93,8 @@ describe('get_sequential_slots — лестница приоритета', () =>
     expect(mixed).toBeDefined();
     expect(mixed.starts[0].chain[0].staff_yc_id).toBe(21);       // био у преферред-Астемира
     expect([11, 12]).toContain(mixed.starts[0].chain[1].staff_yc_id);
+    // разные мастера → каждую услугу отдельной записью
+    expect(mixed.starts[0].booking_mode).toBe('separate_records');
   });
 
   test('встык на другой день сортируется раньше with_gap на запрошенный', async () => {
@@ -113,6 +117,11 @@ describe('get_sequential_slots — лестница приоритета', () =>
     const gapVariant = r.variants[gapIdx];
     expect(gapVariant.starts[0].gap_minutes).toBeGreaterThan(15);
     expect(r.variants.filter(v => v.with_gap).length).toBe(1); // gap-вариант один
+    // ГЛАВНОЕ: даже один мастер, но с внутренним перерывом → отдельные записи,
+    // иначе одна непрерывная запись стёрла бы перерыв и заняла бы чужой аппарат.
+    expect(gapVariant.starts[0].booking_mode).toBe('separate_records');
+    // а встык на другой день у того же мастера — одной записью
+    expect(r.variants[noGapIdx].starts[0].booking_mode).toBe('single_record');
   });
 
   test('сбой графика → schedule_degraded и осторожный hint при пустой выдаче', async () => {

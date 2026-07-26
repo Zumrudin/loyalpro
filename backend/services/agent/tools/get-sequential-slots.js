@@ -195,17 +195,24 @@ async function run(salonId, input, ctx = {}) {
     }
     return {
       type: assignment.type, date: day, staff,
-      starts: chains.map(c => ({
-        time: eq.toHHMM(c.start),
-        gap_minutes: c.totalGap,
-        chain: c.starts.map((s, i) => ({
+      starts: chains.map(c => {
+        const chain = c.starts.map((s, i) => ({
           service_yc_id: entries[i].svc.yc_id,
           service_title: entries[i].svc.title,
           staff_yc_id: entries[i].staff.yc_id,
           datetime: `${day}T${eq.toHHMM(s)}:00+03:00`,
           seance_length: entries[i].durationMin * 60,
-        })),
-      })),
+        }));
+        // Как исполнять этот старт. Одну запись двумя услугами можно оформить ТОЛЬКО
+        // когда мастер один И услуги идут без перерыва: modify_booking_services
+        // пересчитывает длительность как непрерывную сумму от старта и не умеет
+        // выразить зазор — при перерыве такая запись стёрла бы его и могла занять
+        // аппарат, забронированный в это время чужой записью. Поэтому разные
+        // мастера ИЛИ любой внутренний перерыв → отдельная запись на каждый шаг.
+        const oneStaff = new Set(chain.map(l => String(l.staff_yc_id))).size === 1;
+        const bookingMode = (oneStaff && c.totalGap === 0) ? 'single_record' : 'separate_records';
+        return { time: eq.toHHMM(c.start), gap_minutes: c.totalGap, booking_mode: bookingMode, chain };
+      }),
     };
   };
 

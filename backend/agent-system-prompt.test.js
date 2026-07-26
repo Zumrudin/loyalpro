@@ -363,6 +363,18 @@ describe('buildSystemPrompt', () => {
     expect(p).toMatch(/ТОЛЬКО из (поля )?starts/);
     expect(p).toMatch(/не обещай[^]{0,60}(встык|одним визитом)/i);
   });
+
+  test('исполнение по booking_mode: одна запись без перерыва, отдельные — при перерыве/разных мастерах', () => {
+    const p = buildSystemPrompt({});
+    expect(p).toContain('booking_mode');
+    expect(p).toContain('single_record');
+    expect(p).toContain('separate_records');
+    // single_record → create_booking по первой + modify с add_service_yc_ids остальных
+    expect(p).toMatch(/single_record[^]{0,220}add_service_yc_ids/);
+    // separate_records → каждый элемент chain отдельной записью, перерыв не схлопывать
+    expect(p).toMatch(/separate_records[^]{0,220}(отдельной записью|каждый элемент)/i);
+    expect(p).toMatch(/перерыв[^]{0,40}(потеряется|не схлопыв)/i);
+  });
 });
 
 // Экономия tool-итераций: каждый лишний вызов приближает ход к лимиту и немому ответу.
