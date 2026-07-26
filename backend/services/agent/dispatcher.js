@@ -140,12 +140,17 @@ async function defaultEscalate(salonId, dialogKey, reason) {
 async function defaultSend(meta, text) {
   const token = config.CHATPUSH.instanceToken;
   if (!token) { logger.error('CHATPUSH_INSTANCE_TOKEN not set — cannot reply'); return; }
-  return chatpush.sendMessage(token, {
+  const delivery = await chatpush.sendMessage(token, {
     text,
     phone: meta.phone,
     dispatchRouting: [chatpush.replyRoutingFor(meta.channel)],
     replyToMessageId: meta.messageId,
   });
+  // Chatpush доставляет из очереди и с многоминутной задержкой (эхо в webhook
+  // приходит только по факту доставки) — без этого лога успешный ход неотличим
+  // от зависшего до прихода эха. Инцидент-диагностика 2026-07-26.
+  logger.info(`reply ${meta.phone || ''} принят в доставку: ${String(text).slice(0, 80)}`);
+  return delivery;
 }
 
 // Сброс in-memory состояния — только для тестов.

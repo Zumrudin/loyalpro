@@ -88,7 +88,20 @@ module.exports = {
     ? parseInt(process.env.AITUNNEL_FALLBACK_TIMEOUT_MS, 10) : 30000,
   AITUNNEL_EMBED_MODEL: process.env.AITUNNEL_EMBED_MODEL || 'gemini-embedding-001',
   AITUNNEL_EMBED_DIM:   process.env.AITUNNEL_EMBED_DIM ? parseInt(process.env.AITUNNEL_EMBED_DIM, 10) : 3072,
-  // Провайдер диалогового агента: 'aitunnel' (Gemini) | 'anthropic' (Claude, откат).
+
+  // ── polza.ai — OpenAI-совместимый агрегатор (наценка ~6%, оплата картой РФ). ──
+  // Модели по id вида `anthropic/claude-sonnet-4.6`. Уход с aitunnel после
+  // инцидентов 402/421 (план миграции 2026-07-25). usage.cost_rub в ответе есть.
+  POLZA_API_KEY:        process.env.POLZA_API_KEY        || '',
+  POLZA_BASE:           process.env.POLZA_BASE           || 'https://api.polza.ai/api/v1',
+  POLZA_CHAT_MODEL:     process.env.POLZA_CHAT_MODEL     || 'anthropic/claude-sonnet-4.6',
+  // Аварийная модель при персистентном транзиентном сбое основной (429/5xx/сеть).
+  // Sonnet 5: tool-calling проверен live 2026-07-26. Пусто = выкл.
+  POLZA_FALLBACK_MODEL:      process.env.POLZA_FALLBACK_MODEL      || 'anthropic/claude-sonnet-5',
+  POLZA_FALLBACK_TIMEOUT_MS: process.env.POLZA_FALLBACK_TIMEOUT_MS
+    ? parseInt(process.env.POLZA_FALLBACK_TIMEOUT_MS, 10) : 30000,
+
+  // Провайдер диалогового агента: 'aitunnel' (Gemini) | 'polza' (Claude) | 'anthropic' (прямой, откат).
   AGENT_PROVIDER:       process.env.AGENT_PROVIDER       || 'aitunnel',
   // Провайдер базы знаний: 'aitunnel' | 'gemini' (старый релей/прямой вызов, откат).
   KB_PROVIDER:          process.env.KB_PROVIDER          || 'aitunnel',

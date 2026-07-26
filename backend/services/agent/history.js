@@ -31,7 +31,30 @@ async function loadTranscript(salonId, dialogKey, opts = {}) {
     if (last && last.role === role) last.content += `\n${r.text}`;   // склейка серии
     else messages.push({ role, content: r.text });
   }
-  // Claude требует, чтобы первым шёл user — срезаем ведущие assistant-реплики.
+  // Chatpush/MAX доставляет наши ответы и с многоминутной задержкой (наблюдали 19 мин
+  // 2026-07-26) — эхо получает msg_ts ПОЗЖЕ нового входящего, и транскрипт кончается
+  // assistant-репликой. Polza (Anthropic через Azure) такой диалог отвергает
+  // (400 «does not support assistant message prefill»), а по смыслу задержанное эхо —
+  // ответ на ПРЕДЫДУЩЕЕ сообщение клиента. Переносим хвостовой assistant-блок перед
+  // последний user-блок: транскрипт всегда кончается сообщением клиента.
+  if (messages.length > 1 && messages[messages.length - 1].role === 'assistant') {
+    const tail = [];
+    while (messages.length && messages[messages.length - 1].role === 'assistant') {
+      tail.unshift(messages.pop());
+    }
+    if (messages.length) {
+      const lastUser = messages.pop();
+      for (const t of tail) {
+        const last = messages[messages.length - 1];
+        if (last && last.role === 'assistant') last.content += `\n${t.content}`;
+        else messages.push(t);
+      }
+      messages.push(lastUser);
+    }
+  }
+  // Claude требует, чтобы первым шёл user — срезаем ведущие assistant-реплики
+  // (после переноса хвоста: он мог поставить assistant в начало, если более
+  // раннего user-блока в окне не нашлось).
   while (messages.length && messages[0].role === 'assistant') messages.shift();
   return { messages, watermark };
 }

@@ -1,11 +1,13 @@
 'use strict';
 
-const aitunnel = require('../../aitunnel');
+const polza = require('../../polza');
 const config = require('../../../config');
 const { createLogger } = require('../../../logger');
-const logger = createLogger('AgentAitunnel');
+const logger = createLogger('AgentPolza');
 
-// ── aitunnel-адаптер: Gemini 3.1 Flash Lite через OpenAI-совместимый API. ──
+// ── polza.ai-адаптер: Claude через OpenAI-совместимый API (наценка ~6%). ──
+// Структурно копия providers/aitunnel.js (решение из плана миграции 2026-07-25):
+// другой base URL/ключ и id моделей вида `anthropic/claude-sonnet-4.6`.
 
 // Anthropic-схема инструмента → OpenAI function-схема.
 function toOpenAITools(schemas) {
@@ -19,22 +21,19 @@ function safeParse(s) {
   try { return JSON.parse(s || '{}'); } catch (_) { return {}; }
 }
 
-// Транзиентные сбои провайдера, на которых стоит повторить вызов. Ключевой случай —
-// aitunnel HTTP 421 «Не удалось посчитать стоимость запроса, отсутствует поле usage»:
-// его billing-прокси иногда не видит usage в ответе Gemini и роняет вполне нормальный
-// ход. Повторить вызов LLM безопасно — сам по себе он без побочных эффектов, а запись
-// защищена идемпотентностью в booking.js.
+// Транзиентные сбои, на которых повторить вызов безопасно: сам вызов LLM без
+// побочных эффектов, а запись защищена идемпотентностью в booking.js.
+// 529 — «overloaded» Anthropic, Polza пробрасывает его как есть.
 function isTransient(err) {
   if (!err) return false;
   const s = err.status;
-  if (s === 421 || s === 429 || (s >= 500 && s <= 599)) return true;
-  if (/usage|стоимость запроса/i.test(err.message || '')) return true;
+  if (s === 429 || (s >= 500 && s <= 599)) return true;
   if (/APIConnection/i.test(err.name || '')) return true;
   return ['ECONNRESET', 'ETIMEDOUT', 'ECONNREFUSED', 'EPIPE', 'ENOTFOUND'].includes(err.code || '');
 }
 
-const MAX_RETRIES = 4;                       // 1 основная попытка + 4 ретрая (aitunnel часто флапает 421/429)
-const RETRY_BASE_MS = 400;                   // 400/800/1200/1600мс — короткий бэкофф
+const MAX_RETRIES = 3;                       // 1 основная попытка + 3 ретрая
+const RETRY_BASE_MS = 400;                   // 400/800/1200мс — короткий бэкофф
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 async function createWithRetry(client, params, o = {}) {
@@ -55,9 +54,15 @@ async function createWithRetry(client, params, o = {}) {
 
 // Вызов chat.completions + нормализация ответа в провайдер-агностичный вид.
 async function createMessage({ system, messages, tools }, opts = {}) {
-  const client = opts.client || aitunnel.makeClient(opts.apiKey);
-  const msgs = system ? [{ role: 'system', content: system }, ...messages] : messages.slice();
-  const primaryModel = opts.model || config.AITUNNEL_CHAT_MODEL;
+  const client = opts.client || polza.makeClient(opts.apiKey);
+  // system уходит content-массивом с cache_control (формат OpenRouter): на моделях
+  // с прямым anthropic-роутом (sonnet-5) Polza кэширует префикс system+tools —
+  // замер 2026-07-26: повторный вызов 0.16 ₽ вместо 1.36 ₽. Azure-роут (sonnet-4.6)
+  // формат принимает и молча игнорирует кэш — безвредно.
+  const msgs = system
+    ? [{ role: 'system', content: [{ type: 'text', text: system, cache_control: { type: 'ephemeral' } }] }, ...messages]
+    : messages.slice();
+  const primaryModel = opts.model || config.POLZA_CHAT_MODEL;
   const params = {
     model: primaryModel,
     max_tokens: opts.maxTokens || config.AGENT_MAX_TOKENS,
@@ -70,31 +75,30 @@ async function createMessage({ system, messages, tools }, opts = {}) {
   if (openAITools.length) params.tools = openAITools;
 
   // Основная модель со своим ретраем; при персистентном ТРАНЗИЕНТНОМ сбое
-  // (aitunnel флапает 421/usage/таймаут подряд) добиваем тот же запрос через
-  // надёжную fallback-модель (Claude тем же ключом — usage всегда есть, прокси
-  // не рубит на биллинге). Переигровка безопасна: на упавшем ответе tool_calls
-  // мы не получили, ничего не выполнилось; гонки create_booking закрыты
-  // идемпотентным ключом в booking.js. Инцидент 2026-07-24.
+  // добиваем тот же запрос через fallback-модель. Переигровка безопасна:
+  // на упавшем ответе tool_calls мы не получили, ничего не выполнилось;
+  // гонки create_booking закрыты идемпотентным ключом в booking.js.
   let resp;
   try {
     resp = await createWithRetry(client, params,
       { maxRetries: opts.maxRetries, retryBaseMs: opts.retryBaseMs });
   } catch (e) {
     const fallbackModel = opts.fallbackModel !== undefined
-      ? opts.fallbackModel : config.AITUNNEL_FALLBACK_MODEL;
+      ? opts.fallbackModel : config.POLZA_FALLBACK_MODEL;
     if (!isTransient(e) || !fallbackModel || fallbackModel === primaryModel) throw e;
-    const fbTimeout = opts.fallbackTimeoutMs || config.AITUNNEL_FALLBACK_TIMEOUT_MS;
+    const fbTimeout = opts.fallbackTimeoutMs || config.POLZA_FALLBACK_TIMEOUT_MS;
     logger.warn(`основная модель ${primaryModel} упала (${e.message}) — fallback на ${fallbackModel}`);
-    // Одна попытка: Claude надёжен, свой короткий таймаут — не копить 60+60 с.
+    // Одна попытка со своим коротким таймаутом — не копить 60+60 с.
     resp = await client.chat.completions.create({ ...params, model: fallbackModel }, { timeout: fbTimeout });
   }
-  // aitunnel кладёт в usage реальные списания (cost_rub) и остаток (balance).
-  // Инцидент 2026-07-25: скрытые reasoning-токены gemini-3.6-flash сожгли 546 ₽
-  // незаметно — без этого лога дорогую модель видно только по кошельку.
+  // Polza кладёт в usage реальные списания (cost_rub) — логируем каждый ход,
+  // чтобы дорогую модель было видно в логах, а не только по кошельку
+  // (урок инцидента с reasoning-токенами aitunnel 2026-07-25).
   const u = resp.usage || {};
   if (u.cost_rub != null) {
     const reasoning = (u.completion_tokens_details || {}).reasoning_tokens || 0;
-    logger.info(`${resp.model || primaryModel}: ${u.cost_rub} ₽ (in=${u.prompt_tokens} out=${u.completion_tokens} reasoning=${reasoning}), баланс ${u.balance} ₽`);
+    const cached = (u.prompt_tokens_details || {}).cached_tokens || 0;
+    logger.info(`${resp.model || primaryModel}: ${u.cost_rub} ₽ (in=${u.prompt_tokens} out=${u.completion_tokens} reasoning=${reasoning} cached=${cached})`);
   }
   const choice = (resp.choices && resp.choices[0]) || {};
   const m = choice.message || {};

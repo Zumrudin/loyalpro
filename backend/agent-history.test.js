@@ -35,6 +35,40 @@ describe('loadTranscript', () => {
     expect(messages[0].role).toBe('user');
   });
 
+  test('задержанное эхо после нового входящего → assistant-хвост переносится перед последний user', async () => {
+    // Chatpush/MAX доставил наш ответ через минуты: эхо (msg_ts 400) легло ПОЗЖЕ
+    // нового входящего (300). Транскрипт не должен кончаться assistant-репликой —
+    // Polza/Azure отвергает такой диалог (400 «assistant message prefill»).
+    db.any.mockResolvedValue([
+      { direction: 'outgoing', msg_type: 'text', text: 'Ответ на «хочу маникюр»', msg_ts: 400 },
+      { direction: 'incoming', msg_type: 'text', text: 'а педикюр есть?',         msg_ts: 300 },
+      { direction: 'incoming', msg_type: 'text', text: 'хочу маникюр',            msg_ts: 200 },
+    ]);
+    const { messages, watermark } = await history.loadTranscript(1, 'k');
+    // Оба входящих в выборке соседние (по ts) → склеены в один user-блок; перенос
+    // ставит эхо перед ним, а ведущий assistant без более раннего user срезается.
+    // Главное — транскрипт кончается user-блоком, а не assistant-репликой.
+    expect(messages).toEqual([
+      { role: 'user', content: 'хочу маникюр\nа педикюр есть?' },
+    ]);
+    expect(watermark).toBe(300);
+  });
+
+  test('assistant-хвост вливается в предыдущий assistant-блок, диалог кончается user', async () => {
+    db.any.mockResolvedValue([
+      { direction: 'outgoing', msg_type: 'text', text: 'позднее эхо',   msg_ts: 500 },
+      { direction: 'incoming', msg_type: 'text', text: 'новый вопрос',  msg_ts: 400 },
+      { direction: 'outgoing', msg_type: 'text', text: 'старый ответ',  msg_ts: 300 },
+      { direction: 'incoming', msg_type: 'text', text: 'старый вопрос', msg_ts: 200 },
+    ]);
+    const { messages } = await history.loadTranscript(1, 'k');
+    expect(messages).toEqual([
+      { role: 'user', content: 'старый вопрос' },
+      { role: 'assistant', content: 'старый ответ\nпозднее эхо' },
+      { role: 'user', content: 'новый вопрос' },
+    ]);
+  });
+
   test('пустой диалог → пустые messages, watermark 0', async () => {
     db.any.mockResolvedValue([]);
     const { messages, watermark } = await history.loadTranscript(1, 'k');
