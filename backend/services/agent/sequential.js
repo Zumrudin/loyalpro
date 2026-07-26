@@ -53,11 +53,8 @@ function chainStarts(entries, opts = {}) {
   if (!entries || !entries.length) return [];
   const step = opts.step || GRID_STEP;
   const out = [];
-  const seen = new Set();
   for (const r of eq.mergeRanges(entries[0].ranges)) {
     for (let t = Math.ceil(r.start / step) * step; t + entries[0].durationMin <= r.end; t += step) {
-      if (seen.has(t)) continue;
-      seen.add(t);
       const fit = fitChain(entries, t, opts);
       if (fit) out.push({ start: t, starts: fit.starts, totalGap: fit.totalGap });
     }

@@ -70,6 +70,27 @@ describe('fitChain', () => {
     const fit = seq.fitChain(entries, 600);
     expect(fit).toEqual({ starts: [600, 630, 660], totalGap: 0 });
   });
+
+  test('зазор ровно 15 мин — принимается (граница включительно)', () => {
+    const entries = [
+      { ranges: [R(600, 630)], durationMin: 30 },
+      { ranges: [R(645, 780)], durationMin: 90 },   // зазор 15 мин
+    ];
+    const fit = seq.fitChain(entries, 600);
+    expect(fit).toEqual({ starts: [600, 645], totalGap: 15 });
+  });
+
+  test('вторая услуга перескакивает слишком маленькое окно', () => {
+    // Первое окно второй услуги (600–620) мало для 90 мин — берётся 650, но зазор 20 > 15 → null;
+    // с maxLinkGap: Infinity — собирается в 650.
+    const entries = [
+      { ranges: [R(600, 630)], durationMin: 30 },
+      { ranges: [R(600, 620), R(650, 780)], durationMin: 90 },
+    ];
+    expect(seq.fitChain(entries, 600)).toBeNull();
+    expect(seq.fitChain(entries, 600, { maxLinkGap: Infinity }))
+      .toEqual({ starts: [600, 650], totalGap: 20 });
+  });
 });
 
 describe('chainStarts', () => {
