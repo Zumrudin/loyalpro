@@ -378,3 +378,52 @@ describe('экономия вызовов инструментов', () => {
     expect(p).toContain('стартовая цена без верхней границы');
   });
 });
+
+// Несколько услуг подряд: Мила стыкует расписание САМА, эскалация — крайняя мера
+// (регресс 2026-07-26: «совместить биоревитализацию и чистку в один визит» → мгновенный
+// перевод на администратора без проверки второго мастера, соседних дней и переноса).
+describe('несколько услуг подряд одному пациенту', () => {
+  const block = () => {
+    const p = buildSystemPrompt({});
+    const start = p.indexOf('НЕСКОЛЬКО УСЛУГ ПОДРЯД');
+    expect(start).toBeGreaterThan(-1);
+    const end = p.indexOf('Шаг 1.', start);
+    return p.slice(start, end === -1 ? undefined : end);
+  };
+
+  test('штатная ситуация: отдельная запись create_booking на каждую услугу', () => {
+    const b = block();
+    expect(b).toMatch(/ШТАТНАЯ ситуация/i);
+    expect(b).toContain('create_booking');
+  });
+
+  test('перед выводом «не получается» проверяет ВСЕХ мастеров услуги и соседние дни', () => {
+    const b = block();
+    expect(b).toMatch(/ВСЕХ мастеров/i);
+    expect(b).toContain('get_available_slots');
+    expect(b).toMatch(/другой день|соседни[ех] дн/i);
+    expect(b).toContain('get_available_dates');
+  });
+
+  test('предлагает перенос существующей записи для стыковки (reschedule_booking)', () => {
+    const b = block();
+    expect(b).toMatch(/перенос/i);
+    expect(b).toContain('reschedule_booking');
+  });
+
+  test('эскалация — крайняя мера, и только после честного ответа, что именно не вышло', () => {
+    const b = block();
+    expect(b).toMatch(/КРАЙНЯЯ мера/i);
+    expect(b).toMatch(/честно/i);
+    expect(b).toContain('escalate_to_operator');
+  });
+
+  test('старое безусловное «сложно → эскалируй» удалено', () => {
+    const p = buildSystemPrompt({});
+    expect(p).not.toContain('Если подобрать такие окна сложно');
+    // ШАГ Б больше не называет стыковку процедур поводом для перевода —
+    // упоминание допустимо только в отрицательной форме («НЕ повод»)
+    expect(p).not.toMatch(/\(\d\)\s*стыковка нескольких процедур/i);
+    expect(p).toMatch(/Стыковка нескольких процедур[^]{0,80}НЕ повод/i);
+  });
+});
