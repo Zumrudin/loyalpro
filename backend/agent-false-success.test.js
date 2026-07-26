@@ -52,4 +52,24 @@ describe('false-success guard', () => {
     const res = await run(provider, registry, 'хочу перенести');
     expect(res.falseSuccess).toBe(false);
   });
+
+  // «Вы записаны…» двусмысленно: после успешного list_client_bookings это честный
+  // ответ про существующую запись (polza-пилот gemini-2.5-pro 2026-07-26 уходил
+  // в эскалацию на вопросе «когда я записан?»), без чтения записей — ложь.
+  test('«вы записаны» после успешного list_client_bookings → НЕ falseSuccess', async () => {
+    const provider = providerOf([
+      { text: '', toolCalls: [{ id: 't1', name: 'list_client_bookings', input: {} }], assistantMsg: {} },
+      { text: 'Вы записаны на 27 июля в 11:00 к Астемиру 🌸', toolCalls: [], assistantMsg: {} },
+    ]);
+    const registry = { schemas: [], handlers: { list_client_bookings: async () => ({ bookings: [{ id: 1 }] }) } };
+    const res = await run(provider, registry, 'когда я записан?');
+    expect(res.falseSuccess).toBe(false);
+  });
+
+  test('«вы записаны» БЕЗ чтения записей и без create_booking → falseSuccess', async () => {
+    const provider = providerOf([{ text: 'Отлично, вы записаны на завтра! 🤍', toolCalls: [], assistantMsg: {} }]);
+    const registry = { schemas: [], handlers: {} };
+    const res = await run(provider, registry, 'запишите на завтра');
+    expect(res.falseSuccess).toBe(true);
+  });
 });

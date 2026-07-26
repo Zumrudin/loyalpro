@@ -32,7 +32,13 @@ const WRITE_TOOLS = new Set(['create_booking', 'cancel_booking', 'reschedule_boo
 // (перенесл-а/-и, перенесён, отменил-а, оформлен, «вы записаны», «запись
 // перенесена/…»); инфинитивы намерения («перенести», «отменить») НЕ триггерят.
 const COMPLETION_CLAIM =
-  /(перенесл[аио]|перенёс|перенесен[оа]|отменил[аи]?|отменен[оа]|оформлен[оа]|подтверждена|записал[аи]?\s+вас|вы\s+записаны|запись\s+(создан|перенесен|отменен|оформлен|подтвержден)|добавил[аи]|добавлен[аоы]|убрал[аи]|убран[аоы])/i;
+  /(перенесл[аио]|перенёс|перенесен[оа]|отменил[аи]?|отменен[оа]|оформлен[оа]|подтверждена|записал[аи]?\s+вас|запись\s+(создан|перенесен|отменен|оформлен|подтвержден)|добавил[аи]|добавлен[аоы]|убрал[аи]|убран[аоы])/i;
+
+// «Вы записаны…» — двусмысленно: это и ложный успех НОВОЙ записи, и честный ответ
+// про СУЩЕСТВУЮЩУЮ (вопрос «когда я записан?»). Гейтим только если модель НЕ читала
+// записи клиента (list_client_bookings) в этом ходе. Polza-пилот gemini-2.5-pro
+// 2026-07-26: честный ответ «Вы записаны на 27 июля в 11:00» уходил в эскалацию.
+const BOOKED_STATE_CLAIM = /вы\s+записаны/i;
 
 // YYYY-MM-DD по Москве (для системного промпта «сегодня …»).
 function todayMoscow() {
@@ -142,6 +148,7 @@ async function runDialog(salonId, dialogKey, opts = {}) {
     let writeSucceeded = false;     // любой из WRITE_TOOLS отработал без ошибки в этом ходе
     let lastWrite = null;           // { tool, input } последнего успешного write — для подтверждения
     let degradedAfterWrite = false; // провайдер упал ПОСЛЕ успешной записи → детерминированное подтверждение
+    let readBookings = false;       // list_client_bookings отработал → «вы записаны…» может быть честным ответом
 
     for (let i = 0; i < MAX_ITERS; i++) {
       let resp;
@@ -187,6 +194,7 @@ async function runDialog(salonId, dialogKey, opts = {}) {
         const isError = !!(result && result.error);
         if (!isError && SIDE_EFFECT_TOOLS.has(tc.name)) sideEffect = true;
         if (!isError && WRITE_TOOLS.has(tc.name)) { writeSucceeded = true; lastWrite = { tool: tc.name, input: tc.input }; }
+        if (!isError && tc.name === 'list_client_bookings') readBookings = true;
         if (tc.name === 'escalate_to_operator' && result && result.escalated) escalated = true;
         if (tc.name === 'create_booking') { if (isError) bookingErrored = true; else bookingSucceeded = true; }
         results.push({ id: tc.id, name: tc.name, result, isError });
@@ -232,8 +240,10 @@ async function runDialog(salonId, dialogKey, opts = {}) {
     // falseSuccess: реплика утверждает, что запись перенесена/отменена/создана, но
     // ни один пишущий инструмент в этом ходе не отработал (модель соврала). Диспетчер
     // по этому сигналу НЕ отправляет ложь, а переводит на человека. Пилот 2026-07-22.
+    const allReplies = replies.join('\n');
     const falseSuccess = !escalated && !writeSucceeded
-      && COMPLETION_CLAIM.test(replies.join('\n'));
+      && (COMPLETION_CLAIM.test(allReplies)
+        || (!readBookings && BOOKED_STATE_CLAIM.test(allReplies)));
     // bookingFailed: попытка записи была и НЕ увенчалась успехом. Диспетчер по этому
     // сигналу принудительно переведёт на человека, чтобы клиент не завис на «секундочку».
     return { replies, escalated, sideEffect, exhausted, falseSuccess,
