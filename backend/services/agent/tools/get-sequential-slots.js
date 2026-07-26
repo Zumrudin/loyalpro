@@ -24,6 +24,7 @@ const MAX_DATES = 3;           // дат с вариантами в выдаче
 const MAX_STARTS = 4;          // стартов на вариант
 const MAX_OTHER_STAFF = 3;     // «универсалов» помимо текущего мастера
 const MAX_MIXED_COMBOS = 6;    // потолок комбинаций мастеров в mixed
+const MAX_VARIANTS = 6;        // суммарный потолок вариантов в ответе (диета токенов)
 const DEFAULT_DURATION_MIN = 60;
 
 const schema = {
@@ -78,7 +79,7 @@ function moscowNow(ms) {
 async function run(salonId, input, ctx = {}) {
   const date = input && input.date;
   const items = (input && Array.isArray(input.services)) ? input.services : [];
-  const preferredId = input && input.preferred_staff_yc_id ? String(input.preferred_staff_yc_id) : null;
+  const preferredId = input && input.preferred_staff_yc_id ? String(input.preferred_staff_yc_id) : null;  // falsy 0 = «нет предпочтения» — реальных yc_id 0 не бывает
   const nowMs = (ctx && ctx.nowMs) || Date.now();
   if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date) || items.length < 2) {
     return { error: 'Нужны date (YYYY-MM-DD) и минимум две услуги в services.' };
@@ -108,7 +109,13 @@ async function run(salonId, input, ctx = {}) {
     if (!svc) return { error: `Услуга ${svcId} не найдена в каталоге — возьми верный yc_id из list_services.` };
     const performers = (svc.staff || [])
       .filter(m => m && m.yc_id && svcFilter.isBookable(filter, svcId, m.yc_id));
-    if (!performers.length) return { variants: [], filtered: true };
+    if (!performers.length) {
+      return {
+        variants: [], filtered: true,
+        hint: 'Ни один мастер сейчас не доступен для записи на одну из услуг — не подбирай другого мастера ' +
+          'для этой связки, предложи другую услугу или отдельные визиты.',
+      };
+    }
     chainSvcs.push({ yc_id: svcId, title: svc.title, performers });
     performersByService[String(svcId)] = performers.map(m => m.name).filter(Boolean);
   }
@@ -139,6 +146,8 @@ async function run(salonId, input, ctx = {}) {
   for (const choices of perSvcChoices) {
     const next = [];
     for (const c of combos) for (const ch of choices) next.push([...c, ch]);
+    // Обрезка ВНУТРИ накопления порядко-зависима: при 3+ услугах теряются комбо из
+    // поздних выборов ранних услуг. Для типичных 2 услуг полный продукт ≤4 — не влияет.
     combos = next.slice(0, MAX_MIXED_COMBOS);
   }
   for (const combo of combos) {
@@ -148,11 +157,12 @@ async function run(salonId, input, ctx = {}) {
 
   const now = moscowNow(nowMs);
   const seancesCache = new Map();   // `${staffYcId}|${day}` → ranges кресла
+  let scheduleFailures = 0;   // сбои получения графика: не путать «не работает» и «не смогли узнать»
   const getStaffRanges = async (staffYcId, day) => {
     const k = `${staffYcId}|${day}`;
     if (!seancesCache.has(k)) {
       let s = [];
-      try { s = await ycGetStaffSeances(salon, staffYcId, day); } catch (_) { s = []; }
+      try { s = await ycGetStaffSeances(salon, staffYcId, day); } catch (_) { s = []; scheduleFailures++; }
       seancesCache.set(k, seancesToRanges(s));
     }
     return seancesCache.get(k);
@@ -243,13 +253,19 @@ async function run(salonId, input, ctx = {}) {
     || ((x.with_gap ? 1 : 0) - (y.with_gap ? 1 : 0))
     || x.date.localeCompare(y.date));
 
-  const out = { requested_date: date, variants, performers_by_service: performersByService };
+  const shortlist = variants.slice(0, MAX_VARIANTS);
+  const out = { requested_date: date, variants: shortlist, performers_by_service: performersByService };
+  if (scheduleFailures) out.schedule_degraded = true;
   if (preferredCannot.length) out.preferred_staff_cannot = preferredCannot;
-  if (!variants.length) {
+  if (!shortlist.length) {
     out.reason = 'no_combo_in_horizon';
     out.hint = `За ${HORIZON_DAYS + 1} дней с ${date} собрать эти услуги в один визит не получилось. ` +
       'ЧЕСТНО скажи это пациенту и предложи: процедуры отдельными визитами (get_available_slots по каждой) ' +
       'или другой удобный период. Эскалация — крайняя мера.';
+    if (scheduleFailures) {
+      out.hint += ' ВНИМАНИЕ: часть графиков получить не удалось (schedule_degraded) — НЕ утверждай уверенно, ' +
+        'что времени нет совсем; предложи повторить позже или уточнить у администратора.';
+    }
   } else {
     out.hint = 'Предлагай варианты в порядке списка (приоритет — сохранить всё у текущего мастера) и ' +
       'называй мастера каждой процедуры. Время предлагай ТОЛЬКО из starts. Вариант with_gap подавай честно, ' +
