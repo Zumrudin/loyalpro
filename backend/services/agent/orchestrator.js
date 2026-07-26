@@ -40,9 +40,16 @@ const COMPLETION_CLAIM =
 // 2026-07-26: честный ответ «Вы записаны на 27 июля в 11:00» уходил в эскалацию.
 const BOOKED_STATE_CLAIM = /вы\s+записаны/i;
 
-// YYYY-MM-DD по Москве (для системного промпта «сегодня …»).
+// Дата по Москве для системного промпта «сегодня …». Даём модели ОБЕ формы:
+// машинную YYYY-MM-DD (для арифметики относительных дат и сверки с выдачей
+// инструментов) и человеческую с днём недели — чтобы модель не путала «завтра»
+// с числом (регресс 2026-07-26: 28 июля названо «завтра» при сегодня 26-м).
 function todayMoscow() {
-  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Moscow' }).format(new Date());
+  const now = new Date();
+  const iso = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Moscow' }).format(now);
+  const human = new Intl.DateTimeFormat('ru-RU',
+    { timeZone: 'Europe/Moscow', weekday: 'long', day: 'numeric', month: 'long' }).format(now);
+  return `${iso} (${human})`;
 }
 
 // HH:MM по Москве (для промпта — чтобы модель не предлагала прошедшее время).
