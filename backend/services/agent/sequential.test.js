@@ -1,0 +1,125 @@
+'use strict';
+
+const seq = require('./sequential');
+
+// Интервалы в минутах от полуночи, [start, end). 600=10:00, 630=10:30, 720=12:00.
+const R = (start, end) => ({ start, end });
+
+describe('fitChain', () => {
+  test('две услуги встык в одном окне', () => {
+    // Окно 10:00–13:00 у обоих мастеров; био 30 мин + чистка 90 мин.
+    const entries = [
+      { ranges: [R(600, 780)], durationMin: 30 },
+      { ranges: [R(600, 780)], durationMin: 90 },
+    ];
+    const fit = seq.fitChain(entries, 600);
+    expect(fit).toEqual({ starts: [600, 630], totalGap: 0 });
+  });
+
+  test('первая услуга не влезает в t — null', () => {
+    const entries = [
+      { ranges: [R(600, 620)], durationMin: 30 },   // окно 20 мин < 30
+      { ranges: [R(600, 780)], durationMin: 90 },
+    ];
+    expect(seq.fitChain(entries, 600)).toBeNull();
+  });
+
+  test('зазор ≤15 мин допустим и попадает в totalGap', () => {
+    // Чистка может начаться не раньше 10:40 (окно второй услуги с 640) → зазор 10 мин.
+    const entries = [
+      { ranges: [R(600, 630)], durationMin: 30 },
+      { ranges: [R(640, 780)], durationMin: 90 },
+    ];
+    const fit = seq.fitChain(entries, 600);
+    expect(fit).toEqual({ starts: [600, 640], totalGap: 10 });
+  });
+
+  test('зазор >15 мин по умолчанию отвергается', () => {
+    const entries = [
+      { ranges: [R(600, 630)], durationMin: 30 },
+      { ranges: [R(650, 780)], durationMin: 90 },   // зазор 20 мин
+    ];
+    expect(seq.fitChain(entries, 600)).toBeNull();
+  });
+
+  test('maxLinkGap=Infinity пропускает большой перерыв', () => {
+    const entries = [
+      { ranges: [R(600, 630)], durationMin: 30 },
+      { ranges: [R(1230, 1320)], durationMin: 90 },  // 20:30–22:00
+    ];
+    const fit = seq.fitChain(entries, 600, { maxLinkGap: Infinity });
+    expect(fit).toEqual({ starts: [600, 1230], totalGap: 600 });
+  });
+
+  test('старт следующей услуги выравнивается к 5-мин сетке', () => {
+    // Первая заканчивается в 10:33 → следующая не в 10:33, а в 10:35.
+    const entries = [
+      { ranges: [R(600, 633)], durationMin: 33 },
+      { ranges: [R(600, 780)], durationMin: 60 },
+    ];
+    const fit = seq.fitChain(entries, 600);
+    expect(fit).toEqual({ starts: [600, 635], totalGap: 2 });
+  });
+
+  test('три услуги цепочкой', () => {
+    const entries = [
+      { ranges: [R(600, 780)], durationMin: 30 },
+      { ranges: [R(600, 780)], durationMin: 30 },
+      { ranges: [R(600, 780)], durationMin: 60 },
+    ];
+    const fit = seq.fitChain(entries, 600);
+    expect(fit).toEqual({ starts: [600, 630, 660], totalGap: 0 });
+  });
+});
+
+describe('chainStarts', () => {
+  test('перебирает сетку 30 мин и требует полного размещения', () => {
+    // Окно 10:00–12:30. Цепочка 30+90=120 мин → старты только 10:00 и 10:30.
+    const entries = [
+      { ranges: [R(600, 750)], durationMin: 30 },
+      { ranges: [R(600, 750)], durationMin: 90 },
+    ];
+    const starts = seq.chainStarts(entries).map(c => c.start);
+    expect(starts).toEqual([600, 630]);
+  });
+
+  test('окна разных мастеров учитываются раздельно', () => {
+    // У первого мастера окно 10:00–10:30, у второго 10:30–12:00 → единственный старт 10:00.
+    const entries = [
+      { ranges: [R(600, 630)], durationMin: 30 },
+      { ranges: [R(630, 720)], durationMin: 90 },
+    ];
+    const chains = seq.chainStarts(entries);
+    expect(chains).toHaveLength(1);
+    expect(chains[0]).toEqual({ start: 600, starts: [600, 630], totalGap: 0 });
+  });
+
+  test('пустые окна → пусто', () => {
+    const entries = [
+      { ranges: [], durationMin: 30 },
+      { ranges: [R(600, 780)], durationMin: 90 },
+    ];
+    expect(seq.chainStarts(entries)).toEqual([]);
+  });
+});
+
+describe('bestGapChain', () => {
+  test('выбирает минимальный суммарный перерыв', () => {
+    // Старт 10:00 → чистка ждёт до 20:30 (перерыв 600 мин).
+    // Старт 19:30 (окно 19:30–20:00) → чистка в 20:30 (перерыв 30 мин) — лучше.
+    const entries = [
+      { ranges: [R(600, 630), R(1170, 1200)], durationMin: 30 },
+      { ranges: [R(1230, 1320)], durationMin: 90 },
+    ];
+    const best = seq.bestGapChain(entries);
+    expect(best).toEqual({ start: 1170, starts: [1170, 1230], totalGap: 30 });
+  });
+
+  test('ничего не собирается → null', () => {
+    const entries = [
+      { ranges: [R(600, 630)], durationMin: 30 },
+      { ranges: [], durationMin: 90 },
+    ];
+    expect(seq.bestGapChain(entries)).toBeNull();
+  });
+});
