@@ -76,15 +76,21 @@ describe('get_sequential_slots — лестница приоритета', () =>
     expect(r.preferred_staff_cannot).toBeUndefined();
   });
 
-  test('preferred не делает часть услуг → preferred_staff_cannot и нет same_staff', async () => {
-    // Все работают 10:00–13:00; preferred = Астемир (чистку не делает).
-    ycGetStaffSeances.mockResolvedValue(grid(600, 780));
+  test('preferred не делает часть услуг → preferred_staff_cannot + mixed с его участием', async () => {
+    // Все работают 10:00–13:00, но ТОЛЬКО в запрошенный день — иначе other_staff
+    // по трём датам заполняет потолок MAX_VARIANTS и вытесняет mixed из шортлиста.
+    ycGetStaffSeances.mockImplementation(async (s, staffId, day) =>
+      (day === DATE ? grid(600, 780) : []));
     const r = await runTool({ ...baseInput, preferred_staff_yc_id: 21 });
     expect(r.preferred_staff_cannot).toEqual(['Чистка']);
     expect(r.variants.some(v => v.type === 'same_staff')).toBe(false);
-    if (r.variants.length > 0) {
-      expect(r.variants[0].type).toBe('other_staff');           // Юлия или Татьяна целиком
-    }
+    expect(r.variants.length).toBeGreaterThan(0);
+    expect(r.variants.length).toBeLessThanOrEqual(6);            // потолок MAX_VARIANTS
+    expect(r.variants[0].type).toBe('other_staff');              // Юлия или Татьяна целиком
+    const mixed = r.variants.find(v => v.type === 'mixed');
+    expect(mixed).toBeDefined();
+    expect(mixed.starts[0].chain[0].staff_yc_id).toBe(21);       // био у преферред-Астемира
+    expect([11, 12]).toContain(mixed.starts[0].chain[1].staff_yc_id);
   });
 
   test('встык на другой день сортируется раньше with_gap на запрошенный', async () => {
