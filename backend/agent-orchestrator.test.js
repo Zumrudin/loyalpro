@@ -275,3 +275,48 @@ describe('runDialog — деградация после успешной зап�
     await expect(orchestrator.runDialog(1, 'k', { deps, today: '2026-07-24' })).rejects.toThrow('boom');
   });
 });
+
+describe('AGENT_CATALOG_IN_PROMPT', () => {
+  test('флаг + блок собрался → каталог в system, реестр catalogMode (без list_services)', async () => {
+    const deps = makeDeps();
+    deps.registry = undefined;                          // пусть оркестратор выберет сам
+    deps.config = { AGENT_CATALOG_IN_PROMPT: true };
+    deps.catalogBlock = { buildSafe: jest.fn(async () => 'КАТАЛОГ УСЛУГ КЛИНИКИ (…):\n7|Ботокс|60|5000||55') };
+    deps.provider.createMessage.mockResolvedValue({ text: 'Здравствуйте!', toolCalls: [], assistantMsg: { role: 'assistant', content: 'Здравствуйте!' } });
+
+    await orchestrator.runDialog(1, 'dlg', { deps });
+
+    expect(deps.catalogBlock.buildSafe).toHaveBeenCalledWith(1);
+    const call = deps.provider.createMessage.mock.calls[0][0];
+    expect(call.system).toContain('КАТАЛОГ УСЛУГ КЛИНИКИ');
+    expect(call.system).toContain('ИСТОЧНИК КАТАЛОГА УСЛУГ');
+    const names = call.tools.map(t => t.name);
+    expect(names).not.toContain('list_services');
+    expect(names).toContain('get_service_masters');
+  });
+
+  test('флаг есть, но блок не собрался (null) → штатный legacy: list_services в схемах, каталога в system нет', async () => {
+    const deps = makeDeps();
+    deps.registry = undefined;
+    deps.config = { AGENT_CATALOG_IN_PROMPT: true };
+    deps.catalogBlock = { buildSafe: jest.fn(async () => null) };
+    deps.provider.createMessage.mockResolvedValue({ text: 'Здравствуйте!', toolCalls: [], assistantMsg: { role: 'assistant', content: 'Здравствуйте!' } });
+
+    await orchestrator.runDialog(1, 'dlg', { deps });
+
+    const call = deps.provider.createMessage.mock.calls[0][0];
+    expect(call.system).not.toContain('КАТАЛОГ УСЛУГ КЛИНИКИ');
+    expect(call.tools.map(t => t.name)).toContain('list_services');
+  });
+
+  test('флаг выключен → buildSafe даже не зовётся', async () => {
+    const deps = makeDeps();
+    deps.config = { AGENT_CATALOG_IN_PROMPT: false };
+    deps.catalogBlock = { buildSafe: jest.fn() };
+    deps.provider.createMessage.mockResolvedValue({ text: 'Здравствуйте!', toolCalls: [], assistantMsg: { role: 'assistant', content: 'Здравствуйте!' } });
+
+    await orchestrator.runDialog(1, 'dlg', { deps });
+
+    expect(deps.catalogBlock.buildSafe).not.toHaveBeenCalled();
+  });
+});

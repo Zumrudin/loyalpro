@@ -5,6 +5,8 @@ const registryDefault = require('./tools');
 const historyDefault = require('./history');
 const stateDefault = require('./dialog-state');
 const identityDefault = require('./identity');
+const config = require('../../config');
+const catalogBlockDefault = require('./catalog-block');
 const { buildSystemPrompt } = require('./system-prompt');
 const { createLogger } = require('../../logger');
 const logger = createLogger('AgentOrchestrator');
@@ -13,6 +15,7 @@ const logger = createLogger('AgentOrchestrator');
 // отдаёт tool_calls с ПУСТЫМ content, поэтому упёршийся в лимит ход не оставляет
 // ни единой реплики. Мультизапрос («мне пилинг, а дочке фототерапия») легко берёт
 // 7–8 вызовов: list_services → list_staff → dates → slots × N.
+// В режиме AGENT_CATALOG_IN_PROMPT каталог уже в промпте — типовой ход короче на 1-2 итерации.
 const MAX_ITERS = 12;
 const MAX_REGEN = 2;   // сколько раз перегенерировать при новом входящем во время прогона
 
@@ -88,7 +91,6 @@ function buildWriteConfirmation(lastWrite) {
 async function runDialog(salonId, dialogKey, opts = {}) {
   const d = opts.deps || {};
   const provider = d.provider || providers.getProvider();
-  const registry = d.registry || registryDefault;
   const history = d.history || historyDefault;
   const state = d.state || stateDefault;
   const identity = d.identity || identityDefault;
@@ -117,6 +119,15 @@ async function runDialog(salonId, dialogKey, opts = {}) {
   }
   const clientName = (client && client.name && String(client.name).trim()) || null;
 
+  // Каталог услуг в промпте (AGENT_CATALOG_IN_PROMPT). Сбой сборки блока →
+  // null → штатный legacy-режим с инструментом list_services (fail-open).
+  const cfg = d.config || config;
+  let catalogBlock = null;
+  if (cfg.AGENT_CATALOG_IN_PROMPT) {
+    catalogBlock = await (d.catalogBlock || catalogBlockDefault).buildSafe(salonId);
+  }
+  const registry = d.registry || (catalogBlock ? registryDefault.catalogMode : registryDefault);
+
   const system = buildSystemPrompt({
     salonName: opts.salonName,
     workingHours: opts.workingHours,
@@ -130,6 +141,7 @@ async function runDialog(salonId, dialogKey, opts = {}) {
     // Идентификация: знаем ли телефон (из канала) и имя (из карточки клиента).
     phoneKnown: !!ctx.phone,
     clientName,
+    catalogBlock,
   });
   // nowMs — чтобы инструменты слотов отрезали уже прошедшее время «сегодня».
   // clientPhone/clientName — детерминированный фолбэк для create_booking основного
