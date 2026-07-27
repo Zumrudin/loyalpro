@@ -488,3 +488,30 @@ describe('несколько услуг подряд одному пациент
     expect(p).toMatch(/Стыковка нескольких процедур[^]{0,80}НЕ повод/i);
   });
 });
+
+describe('каталог в промпте (AGENT_CATALOG_IN_PROMPT)', () => {
+  const block = 'КАТАЛОГ УСЛУГ КЛИНИКИ (полный актуальный список; формат строки: …):\nМастера: 55=Аня\n7|Ботокс|60|5000|Инъекции|55';
+
+  test('блок вшит + правило-переходник с get_service_masters и запретом фантомного вызова', () => {
+    const p = buildSystemPrompt({ catalogBlock: block });
+    expect(p).toContain('КАТАЛОГ УСЛУГ КЛИНИКИ');
+    expect(p).toContain('7|Ботокс|60|5000|Инъекции|55');
+    expect(p).toMatch(/ИСТОЧНИК КАТАЛОГА УСЛУГ/);
+    expect(p).toMatch(/get_service_masters/);
+    expect(p).toMatch(/list_services НЕ существует/);
+  });
+
+  test('каталог стоит РАНЬШЕ волатильных частей (идентификация, «Сегодня …») — префикс-кэш', () => {
+    const p = buildSystemPrompt({ catalogBlock: block, today: '2026-07-27', clientName: 'Зумрудин' });
+    expect(p.indexOf('КАТАЛОГ УСЛУГ КЛИНИКИ')).toBeLessThan(p.indexOf('ИДЕНТИФИКАЦИЯ ПАЦИЕНТА'));
+    expect(p.indexOf('КАТАЛОГ УСЛУГ КЛИНИКИ')).toBeLessThan(p.indexOf('2026-07-27'));
+  });
+
+  test('без catalogBlock (и при пустой строке) промпт как раньше — ни блока, ни переходника', () => {
+    for (const p of [buildSystemPrompt({}), buildSystemPrompt({ catalogBlock: '  ' })]) {
+      expect(p).not.toContain('КАТАЛОГ УСЛУГ КЛИНИКИ');
+      expect(p).not.toMatch(/ИСТОЧНИК КАТАЛОГА УСЛУГ/);
+      expect(p).not.toMatch(/get_service_masters/);
+    }
+  });
+});
