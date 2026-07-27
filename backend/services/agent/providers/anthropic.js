@@ -15,7 +15,9 @@ async function createMessage({ system, messages, tools }, opts = {}) {
     model: opts.model || config.AGENT_LLM_MODEL,
     max_tokens: opts.maxTokens || config.AGENT_MAX_TOKENS,
     thinking: { type: 'adaptive' },
-    system,
+    // Кэш-брейкпоинт на системном промпте: с каталогом услуг внутри он большой,
+    // итерации tool-цикла и соседние ходы платят кэш-тариф (-90% на чтении).
+    system: system ? [{ type: 'text', text: system, cache_control: { type: 'ephemeral' } }] : undefined,
     messages,
   };
   // Пустой список — добивочный вызов оркестратора «ответь прозой без инструментов».

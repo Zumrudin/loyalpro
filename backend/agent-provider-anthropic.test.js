@@ -16,7 +16,11 @@ describe('anthropic.createMessage (нормализация)', () => {
       { client: fakeClient, model: 'claude-opus-4-8', maxTokens: 1024 });
 
     expect(calls[0].model).toBe('claude-opus-4-8');
-    expect(calls[0].system).toBe('ты админ');
+    // Система уходит массивом блоков с cache_control: большой каталог в промпте
+    // оплачивается по кэш-тарифу со 2-й итерации tool-цикла.
+    expect(calls[0].system).toEqual([
+      { type: 'text', text: 'ты админ', cache_control: { type: 'ephemeral' } },
+    ]);
     expect(calls[0].thinking).toEqual({ type: 'adaptive' });
     expect(calls[0].tools).toEqual([{ name: 't', input_schema: {} }]);
     expect(res.text).toBe('Секунду.');
