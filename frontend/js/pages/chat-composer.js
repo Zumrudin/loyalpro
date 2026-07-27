@@ -16,6 +16,21 @@ const CMP_CHANNEL_LABELS = {
   max: 'MAX', max_bot: 'MAX (бот)',
 };
 
+// Каналы, доступные для ОТПРАВКИ по этому диалогу.
+// WhatsApp и MAX адресуются по номеру телефона (recipientParams: out.phone),
+// поэтому доступны для любого личного диалога с известным номером — даже если
+// клиент туда не писал. Telegram (tdlib) требует chat_id из входящего, поэтому
+// предлагается только когда он есть в истории. Группы адресуем лишь по истории.
+const CMP_PHONE_CHANNELS = ['whatsapp', 'max'];
+const CMP_CHANNEL_ORDER = ['whatsapp', 'max', 'max_bot', 'tdlib', 'telegram_bot'];
+
+function _cmpSendableChannels(d) {
+  const set = new Set((d.channels && d.channels.length) ? d.channels : (d.channel ? [d.channel] : []));
+  if (!d.isGroup && d.phone) CMP_PHONE_CHANNELS.forEach(c => set.add(c));
+  const rank = c => { const i = CMP_CHANNEL_ORDER.indexOf(c); return i < 0 ? 99 : i; };
+  return [...set].sort((a, b) => rank(a) - rank(b));
+}
+
 // Вход при открытии диалога (зовёт openChatDialog из chat.js). d=null — скрыть.
 function chatComposerSetDialog(d) {
   _cmpDialog = d;
@@ -25,7 +40,7 @@ function chatComposerSetDialog(d) {
   box.style.display = d ? '' : 'none';
   if (!d) return;
   const sel = document.getElementById('chat-chan-select');
-  const chans = (d.channels && d.channels.length) ? d.channels : (d.channel ? [d.channel] : []);
+  const chans = _cmpSendableChannels(d);
   sel.innerHTML = chans.map(c =>
     `<option value="${_chatEsc(c)}"${c === d.defaultChannel ? ' selected' : ''}>${_chatEsc(CMP_CHANNEL_LABELS[c] || c)}</option>`).join('');
   sel.disabled = !chans.length;

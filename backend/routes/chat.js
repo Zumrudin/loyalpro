@@ -182,14 +182,20 @@ async function pauseAgent(salonId, key) {
 }
 
 // Идентификаторы получателя: последнее ВХОДЯЩЕЕ выбранного канала (самый
-// достоверный chat_id), фолбэк — последнее входящее любого канала.
+// достоверный chat_id). Фолбэк — последнее входящее любого канала, но берём
+// только phone: chat_id одного канала бессмысленен (и опасен как max_user_id)
+// для другого. Это ветка для WhatsApp/MAX по номеру, когда в этот канал клиент
+// ещё не писал; Telegram без своего chat_id так не адресуется (recipientParams
+// вернёт null → 422), что и правильно — «холодный» tdlib инициировать нельзя.
 async function resolveRecipient(salonId, key, channel) {
   const q = (extra, params) => db.oneOrNone(`
     SELECT phone, chat_id FROM chatpush_messages
     WHERE salon_id = $1 AND ${DIALOG_KEY_SQL} = $2 AND direction = 'incoming' ${extra}
     ORDER BY msg_ts DESC NULLS LAST LIMIT 1`, params);
-  return (await q('AND channel = $3', [salonId, key, channel]))
-      || (await q('', [salonId, key]));
+  const exact = await q('AND channel = $3', [salonId, key, channel]);
+  if (exact) return exact;
+  const any = await q('', [salonId, key]);
+  return any ? { phone: any.phone, chat_id: null } : null;
 }
 
 // POST /api/chat/dialogs/:key/send — ручной ответ оператора. body: {text, channel}.
