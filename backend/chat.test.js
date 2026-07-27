@@ -1,5 +1,5 @@
 'use strict';
-const { dialogKey, isMedia, mediaLabel, messagePreview, phoneMatchCandidates } = require('./services/chat');
+const { dialogKey, isGroupKey, defaultChannel, recipientParams, isMedia, mediaLabel, messagePreview, phoneMatchCandidates } = require('./services/chat');
 const { parseMessageEvent } = require('./services/chatpush');
 
 describe('dialogKey', () => {
@@ -93,5 +93,61 @@ describe('phoneMatchCandidates', () => {
     expect(phoneMatchCandidates('')).toEqual([]);
     expect(phoneMatchCandidates(null)).toEqual([]);
     expect(phoneMatchCandidates('12345')).toEqual([]);
+  });
+});
+
+describe('dialogKey (группы)', () => {
+  test('групповой chat_id (минус) даёт ключ g:<chat_id> и игнорирует phone', () => {
+    expect(dialogKey({ phone: '79991234567', chat_id: '-1003759304044' }))
+      .toBe('g:-1003759304044');
+    expect(dialogKey({ phone: '', chat_id: '-72962629261478' }))
+      .toBe('g:-72962629261478');
+  });
+});
+
+describe('isGroupKey', () => {
+  test('распознаёт групповой ключ', () => {
+    expect(isGroupKey('g:-100123')).toBe(true);
+    expect(isGroupKey('79991234567')).toBe(false);
+    expect(isGroupKey('')).toBe(false);
+  });
+});
+
+describe('defaultChannel', () => {
+  test('канал последнего входящего', () => {
+    const msgs = [
+      { direction: 'incoming', channel: 'whatsapp', msg_ts: 100 },
+      { direction: 'outgoing', channel: 'tdlib',    msg_ts: 200 },
+      { direction: 'incoming', channel: 'max',      msg_ts: 150 },
+    ];
+    expect(defaultChannel(msgs)).toBe('max');
+  });
+  test('без входящих — канал последнего сообщения; пусто — null', () => {
+    expect(defaultChannel([{ direction: 'outgoing', channel: 'tdlib', msg_ts: 1 }])).toBe('tdlib');
+    expect(defaultChannel([])).toBe(null);
+  });
+});
+
+describe('recipientParams', () => {
+  test('whatsapp — по номеру', () => {
+    expect(recipientParams('whatsapp', { phone: '79991234567', chat_id: '79991234567@c.us' }))
+      .toEqual({ dispatchRouting: ['whatsapp'], phone: '79991234567' });
+  });
+  test('tdlib без номера — tdlib_user_id из chat_id', () => {
+    expect(recipientParams('tdlib', { phone: '', chat_id: '497419949' }))
+      .toEqual({ dispatchRouting: ['tdlib'], tdlib_user_id: '497419949' });
+  });
+  test('tdlib группа — tdlib_user_id даже при известном phone отправителя', () => {
+    expect(recipientParams('tdlib', { phone: '79991234567', chat_id: '-100123', isGroup: true }))
+      .toEqual({ dispatchRouting: ['tdlib'], tdlib_user_id: '-100123' });
+  });
+  test('max — phone + max_user_id; telegram_bot маппится в telegram', () => {
+    expect(recipientParams('max', { phone: '79999892340', chat_id: '30849437' }))
+      .toEqual({ dispatchRouting: ['max'], phone: '79999892340', max_user_id: '30849437' });
+    expect(recipientParams('telegram_bot', { phone: '79991234567', chat_id: '1' }).dispatchRouting)
+      .toEqual(['telegram']);
+  });
+  test('нет идентификаторов — null', () => {
+    expect(recipientParams('whatsapp', { phone: '', chat_id: '' })).toBe(null);
   });
 });
