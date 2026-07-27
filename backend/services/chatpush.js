@@ -61,6 +61,36 @@ async function sendMessage(instanceToken, { text, phone, dispatchRouting, replyT
   return data.delivery;
 }
 
+/**
+ * Отправить файл: POST /api/v1/send_file — параметры в query, сам файл
+ * multipart-полем `file`. Каналы файлов: whatsapp | tdlib | max.
+ * Фото <10 МБ уходит нативной картинкой (type=image), иначе документом;
+ * `caption` — подпись (whatsapp). Node 20: FormData/Blob глобальные,
+ * axios 1.x их понимает без пакета form-data.
+ * @returns объект `delivery` из ответа.
+ */
+async function sendFile(instanceToken, { fileName, caption, type, phone, dispatchRouting, ...extra }, buffer, mimeType) {
+  const query = qs({
+    file_name: fileName,
+    caption,
+    type,
+    phone,
+    dispatch_routing: dispatchRouting,
+    ...extra,
+  });
+  const form = new FormData();
+  form.append('file', new Blob([buffer], { type: mimeType || 'application/octet-stream' }), fileName);
+  const { data } = await axios.post(`${apiBase}/api/v1/send_file?${query}`, form, {
+    headers: { Authorization: `Bearer ${instanceToken}` },
+    timeout: 120000,
+    maxBodyLength: Infinity,
+  });
+  if (data.meta?.status !== 'success') {
+    throw new Error(data.meta?.message || `Chatpush send_file failed (code ${data.meta?.code})`);
+  }
+  return data.delivery;
+}
+
 /** Статус ранее отправленного сообщения. */
 async function getDeliveryStatus(instanceToken, id) {
   const { data } = await axios.get(`${apiBase}/api/v1/delivery/${id}`, {
@@ -262,6 +292,7 @@ function replyRoutingFor(channel) {
 
 module.exports = {
   sendMessage,
+  sendFile,
   getDeliveryStatus,
   createWebhook,
   listWebhooks,

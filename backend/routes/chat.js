@@ -8,8 +8,11 @@
 // ============================================================
 const router = require('express').Router();
 const { db } = require('../db');
+const multer = require('multer');
+const config = require('../config');
 const { auth, requireRole, authOrQuery } = require('../middleware/auth');
-const { messagePreview, isGroupKey, DIALOG_KEY_SQL } = require('../services/chat');
+const chatpush = require('../services/chatpush');
+const { messagePreview, isGroupKey, recipientParams, DIALOG_KEY_SQL } = require('../services/chat');
 const { createLogger } = require('../logger');
 const logger = createLogger('Chat');
 
@@ -161,6 +164,115 @@ router.post('/dialogs/:key/agent', adminOnly, async (req, res) => {
   } catch (e) {
     logger.error(`agent toggle failed: ${e.message}`);
     res.status(500).json({ error: 'Не удалось переключить режим' });
+  }
+});
+
+// ── Отправка ответов оператора ──────────────────────────────────
+
+// Ручной ответ ставит бота на паузу (кнопка «Вернуть боту» уже есть в шапке).
+// Группы пропускаем: agent_dialogs живёт на ключе phone||chat_id, в группах бот не работает.
+async function pauseAgent(salonId, key) {
+  if (isGroupKey(key)) return;
+  await db.query(
+    `INSERT INTO agent_dialogs (salon_id, dialog_key, status, escalated_reason)
+     VALUES ($1, $2, 'escalated', 'operator_reply')
+     ON CONFLICT (salon_id, dialog_key)
+       DO UPDATE SET status='escalated', escalated_reason='operator_reply', updated_at=now()`,
+    [salonId, key]);
+}
+
+// Идентификаторы получателя: последнее ВХОДЯЩЕЕ выбранного канала (самый
+// достоверный chat_id), фолбэк — последнее входящее любого канала.
+async function resolveRecipient(salonId, key, channel) {
+  const q = (extra, params) => db.oneOrNone(`
+    SELECT phone, chat_id FROM chatpush_messages
+    WHERE salon_id = $1 AND ${DIALOG_KEY_SQL} = $2 AND direction = 'incoming' ${extra}
+    ORDER BY msg_ts DESC NULLS LAST LIMIT 1`, params);
+  return (await q('AND channel = $3', [salonId, key, channel]))
+      || (await q('', [salonId, key]));
+}
+
+// POST /api/chat/dialogs/:key/send — ручной ответ оператора. body: {text, channel}.
+// Сообщение НЕ пишем в chatpush_messages сами: Chatpush пришлёт эхо в вебхук
+// (как с ответами бота) — единый источник правды, без дедупа.
+router.post('/dialogs/:key/send', adminOnly, async (req, res) => {
+  try {
+    const salonId = req.user.salonId;
+    const key = String(req.params.key || '');
+    const text = String((req.body && req.body.text) || '').trim();
+    const channel = String((req.body && req.body.channel) || '').trim();
+    if (!key)  return res.status(400).json({ error: 'Пустой ключ диалога' });
+    if (!text) return res.status(400).json({ error: 'Пустое сообщение' });
+    if (text.length > 3500) return res.status(400).json({ error: 'Слишком длинное сообщение (макс. 3500)' });
+    if (!channel) return res.status(400).json({ error: 'Не выбран канал' });
+
+    const rcp = await resolveRecipient(salonId, key, channel);
+    const params = rcp && recipientParams(channel, { ...rcp, isGroup: isGroupKey(key) });
+    if (!params) return res.status(422).json({ error: 'Не найден получатель для этого канала' });
+
+    const delivery = await chatpush.sendMessage(config.CHATPUSH.instanceToken, { text, ...params });
+    await pauseAgent(salonId, key);
+    logger.info(`operator sent ${channel} to ${key}: ${text.slice(0, 60)}`);
+    res.json({ ok: true, deliveryId: delivery.id, status: delivery.status_description });
+  } catch (e) {
+    logger.error(`send failed: ${e.message}`);
+    res.status(502).json({ error: 'Не удалось отправить: ' + e.message });
+  }
+});
+
+// Форматы из доки Chatpush send_file. Всё прочее режем до отправки.
+const CHAT_FILE_MIMES = new Set([
+  'application/pdf', 'application/msword',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'application/vnd.ms-powerpoint',
+  'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  'application/vnd.ms-excel',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  'application/zip', 'application/x-7z-compressed',
+  'audio/ogg', 'audio/opus', 'audio/mpeg', 'audio/aac', 'audio/mp4',
+  'image/jpeg', 'image/png', 'image/webp',
+  'video/mp4',
+]);
+const chatUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 25 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => cb(null, CHAT_FILE_MIMES.has(file.mimetype)),
+});
+
+// Каналы, в которые Chatpush умеет файлы (send_file: whatsapp | tdlib | max).
+const FILE_CHANNELS = new Set(['whatsapp', 'tdlib', 'max']);
+
+// POST /api/chat/dialogs/:key/send-file — multipart: file (обязателен),
+// text (подпись, опционально), channel. Персист — эхом вебхука, как у /send.
+router.post('/dialogs/:key/send-file', adminOnly, chatUpload.single('file'), async (req, res) => {
+  try {
+    const salonId = req.user.salonId;
+    const key = String(req.params.key || '');
+    const caption = String((req.body && req.body.text) || '').trim() || undefined;
+    let channel = String((req.body && req.body.channel) || '').trim();
+    if (channel === 'telegram_bot') channel = 'tdlib';
+    if (channel === 'max_bot') channel = 'max';
+    if (!key) return res.status(400).json({ error: 'Пустой ключ диалога' });
+    if (!req.file) return res.status(400).json({ error: 'Файл не выбран или формат не поддерживается' });
+    if (!FILE_CHANNELS.has(channel)) return res.status(400).json({ error: 'Файлы можно отправить только в WhatsApp, Telegram или MAX' });
+
+    const rcp = await resolveRecipient(salonId, key, channel);
+    const params = rcp && recipientParams(channel, { ...rcp, isGroup: isGroupKey(key) });
+    if (!params) return res.status(422).json({ error: 'Не найден получатель для этого канала' });
+
+    const isImage = /^image\/(jpeg|png|webp)$/.test(req.file.mimetype) && req.file.size < 10 * 1024 * 1024;
+    // Имя обязано содержать расширение (требование Chatpush); кириллицу не шлём.
+    const ext = (req.file.originalname.match(/\.[A-Za-z0-9]+$/) || [''])[0] || '';
+    const fileName = `file_${Date.now()}${ext}`;
+    const delivery = await chatpush.sendFile(config.CHATPUSH.instanceToken, {
+      fileName, caption, type: isImage ? 'image' : 'document', ...params,
+    }, req.file.buffer, req.file.mimetype);
+    await pauseAgent(salonId, key);
+    logger.info(`operator sent file ${channel} to ${key}: ${req.file.originalname} (${req.file.size} b)`);
+    res.json({ ok: true, deliveryId: delivery.id, status: delivery.status_description });
+  } catch (e) {
+    logger.error(`send-file failed: ${e.message}`);
+    res.status(502).json({ error: 'Не удалось отправить файл: ' + e.message });
   }
 });
 
