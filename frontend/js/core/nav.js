@@ -95,6 +95,19 @@ async function launchApp() {
   document.getElementById('app').style.display = 'flex';
 
   const startPage = applyRoleNav(ME.role);
+
+  // Deep-link: /#chat, /#clients, /#chat/<ключ-диалога> и т.п. — открыть
+  // страницу из hash, если она существует в DOM (доступность по роли уже
+  // отфильтрована applyRoleNav). Хвост после «/» страница читает сама
+  // из window._deepLinkArg (например, чат открывает диалог по ключу).
+  const rawHash = (location.hash || '').slice(1);
+  const [hashPage, ...hashRest] = rawHash.split('/');
+  window._deepLinkArg = hashRest.length ? decodeURIComponent(hashRest.join('/')) : null;
+  if (hashPage && document.getElementById('page-' + hashPage)) {
+    navTo(hashPage);
+    return;
+  }
+
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
   document.getElementById('page-' + startPage)?.classList.add('active');
 

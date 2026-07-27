@@ -51,6 +51,12 @@ async function loadChat() {
   const s = document.getElementById('chat-search');
   if (s) s.value = _chatSearch;
   await refreshChatDialogs(false);
+  // Deep-link /#chat/<ключ> — открыть диалог сразу после загрузки списка.
+  if (window._deepLinkArg) {
+    const key = window._deepLinkArg;
+    window._deepLinkArg = null;
+    openChatDialog(key);
+  }
   startChatLive();
 }
 
