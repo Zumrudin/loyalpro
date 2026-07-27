@@ -1149,6 +1149,20 @@
           <div class="chat-messages" id="chat-messages">
             <div class="empty">Выберите диалог</div>
           </div>
+          <div class="chat-composer" id="chat-composer" style="display:none">
+            <div class="chat-attach-preview" id="chat-attach-preview" style="display:none"></div>
+            <div class="chat-composer-row">
+              <select class="chat-chan-select" id="chat-chan-select" title="Куда отправить"></select>
+              <button class="chat-tool-btn" id="chat-emoji-btn" title="Эмодзи" type="button">🙂</button>
+              <button class="chat-tool-btn" id="chat-attach-btn" title="Прикрепить файл" type="button">📎</button>
+              <input type="file" id="chat-file-input" style="display:none"
+                     accept="image/jpeg,image/png,image/webp,video/mp4,audio/*,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.zip,.7z">
+              <textarea class="chat-input" id="chat-input" rows="1"
+                        placeholder="Сообщение… (Enter — отправить, Shift+Enter — перенос)"></textarea>
+              <button class="btn-pri chat-send-btn" id="chat-send-btn" type="button">➤</button>
+            </div>
+            <div class="chat-emoji-pop" id="chat-emoji-pop" style="display:none"></div>
+          </div>
         </div>
       </div>
       <div class="ov" id="agent-settings-modal" onclick="if(event.target===this)closeAgentSettings()">
@@ -1952,6 +1966,7 @@ function fireConfetti() {
 <script src="js/pages/settings.js"></script>
 <script src="js/pages/portfolio.js"></script>
 <script src="js/pages/chat.js"></script>
+<script src="js/pages/chat-composer.js"></script>
 <script src="js/pages/agent-settings.js"></script>
 <script src="js/pages/patient-portfolio.js?v=2026-06-01e"></script>
 <script src="js/pages/staff-dashboard.js?v=2026-06-11d"></script>

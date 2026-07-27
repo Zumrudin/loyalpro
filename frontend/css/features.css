@@ -639,31 +639,33 @@ body.kb-editor .kb-admin-only { display: inline-flex; }
 
 .mc-ve-grid-lbl { position:absolute; left:2px; top:-10px; font-size:9px; color:#dc2626; }
 
-/* ── Чат (просмотр переписок chatpush) ─────────────────────── */
-.chat-layout { display:flex; gap:12px; height:calc(100vh - 200px); min-height:420px; }
-.chat-sidebar { flex:0 0 300px; display:flex; flex-direction:column; border:1px solid var(--bd); border-radius:var(--r); background:var(--card); overflow:hidden; }
-.chat-search { flex:0 0 auto; margin:8px; padding:7px 10px; font-size:13px; border:1px solid var(--bd); border-radius:8px; background:var(--bg); color:var(--t1); outline:none; }
+/* ── Чат (переписки chatpush: просмотр + ответы) ───────────── */
+.chat-layout { display:flex; gap:12px; height:calc(100vh - 170px); min-height:480px; }
+.chat-sidebar { flex:0 0 380px; display:flex; flex-direction:column; border:1px solid var(--bd); border-radius:var(--r); background:var(--card); overflow:hidden; }
+.chat-search { flex:0 0 auto; margin:10px; padding:10px 12px; font-size:15px; border:1px solid var(--bd); border-radius:10px; background:var(--bg); color:var(--t1); outline:none; }
 .chat-search:focus { border-color:var(--a); }
 .chat-dialogs { flex:1; overflow-y:auto; }
 .chat-main { flex:1; display:flex; flex-direction:column; border:1px solid var(--bd); border-radius:var(--r); background:var(--card); overflow:hidden; }
 .chat-header { flex:0 0 auto; display:none; align-items:center; justify-content:space-between; gap:10px; padding:10px 14px; border-bottom:1px solid var(--bd); background:var(--card); }
 .chat-header.active { display:flex; }
 .chat-header-info { min-width:0; }
-.chat-header-name { font-weight:700; font-size:14px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.chat-header-name { font-weight:700; font-size:15px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .chat-header-phone { font-size:12px; color:var(--t2); margin-top:1px; }
 .chat-messages { flex:1; overflow-y:auto; padding:14px; display:flex; flex-direction:column; gap:8px; }
 .chat-agent-banner { flex:0 0 auto; display:flex; align-items:center; gap:10px; }
 .chat-agent-state { font-size:12px; color:var(--t2); white-space:nowrap; }
 .chat-agent-escalated .chat-agent-state { color:#dc2626; font-weight:600; }
 .chat-agent-toggle { font-size:12px; padding:5px 12px; white-space:nowrap; }
-.chat-dialog { padding:10px 12px; border-bottom:1px solid var(--bd); cursor:pointer; }
+.chat-dialog { display:flex; gap:10px; align-items:center; padding:12px 14px; border-bottom:1px solid var(--bd); cursor:pointer; }
 .chat-dialog:hover { background:var(--bg); }
 .chat-dialog.active { background:var(--bg); border-left:3px solid var(--a); }
+.chat-avatar { flex:0 0 44px; width:44px; height:44px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:17px; font-weight:700; color:#fff; }
+.chat-dialog-body { flex:1; min-width:0; }
 .chat-dialog-top { display:flex; align-items:center; gap:6px; }
-.chat-dialog-name { font-weight:600; font-size:13px; flex:1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-.chat-dialog-time { font-size:11px; color:var(--t3); white-space:nowrap; }
-.chat-dialog-phone { font-size:11px; color:var(--t3); margin-top:2px; }
-.chat-dialog-preview { font-size:12px; color:var(--t2); margin-top:3px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.chat-dialog-name { font-weight:600; font-size:15px; flex:1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.chat-dialog-time { font-size:12px; color:var(--t3); white-space:nowrap; }
+.chat-dialog-phone { font-size:12px; color:var(--t3); margin-top:2px; }
+.chat-dialog-preview { font-size:13px; color:var(--t2); margin-top:3px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .chat-badge { font-size:10px; padding:1px 6px; border-radius:8px; color:#fff; white-space:nowrap; }
 .chan-wa  { background:#25d366; }
 .chan-tg  { background:#28a8e9; }
@@ -672,16 +674,37 @@ body.kb-editor .kb-admin-only { display: inline-flex; }
 .chat-msg { display:flex; flex-direction:column; max-width:75%; }
 .chat-msg-in  { align-self:flex-start; align-items:flex-start; }
 .chat-msg-out { align-self:flex-end;   align-items:flex-end; }
-.chat-bubble { padding:8px 12px; border-radius:12px; font-size:13px; white-space:pre-wrap; word-break:break-word; }
+.chat-bubble { padding:9px 13px; border-radius:12px; font-size:14px; white-space:pre-wrap; word-break:break-word; }
 .chat-msg-in  .chat-bubble { background:var(--bg); color:var(--t1); border-bottom-left-radius:3px; }
 .chat-msg-out .chat-bubble { background:var(--a);  color:#fff;      border-bottom-right-radius:3px; }
 .chat-bubble a { color:inherit; text-decoration:underline; }
 .chat-msg-time { font-size:10px; color:var(--t3); margin-top:2px; display:flex; align-items:center; gap:5px; }
+.chat-msg-sender { font-size:11px; color:var(--t2); font-weight:600; margin-bottom:2px; }
 .chat-chan-tag { font-size:9px; line-height:1.4; padding:0 5px; border-radius:7px; color:#fff; white-space:nowrap; }
+.chat-msg-pending .chat-bubble { opacity:.6; }
+.chat-msg-failed .chat-bubble { border:1px solid #dc2626; }
+.chat-msg-status { font-size:10px; color:var(--t3); }
+.chat-msg-status.err { color:#dc2626; }
+/* Композер */
+.chat-composer { flex:0 0 auto; border-top:1px solid var(--bd); padding:10px 12px; position:relative; background:var(--card); }
+.chat-composer-row { display:flex; gap:8px; align-items:flex-end; }
+.chat-chan-select { padding:9px 6px; border:1px solid var(--bd); border-radius:8px; background:var(--bg); color:var(--t1); font-size:13px; max-width:130px; }
+.chat-tool-btn { border:none; background:none; font-size:20px; cursor:pointer; padding:6px; border-radius:8px; line-height:1; }
+.chat-tool-btn:hover { background:var(--bg); }
+.chat-input { flex:1; resize:none; max-height:120px; padding:10px 12px; font-size:14px; border:1px solid var(--bd); border-radius:10px; background:var(--bg); color:var(--t1); outline:none; font-family:inherit; }
+.chat-input:focus { border-color:var(--a); }
+.chat-send-btn { font-size:16px; padding:9px 16px; border-radius:10px; }
+.chat-emoji-pop { position:absolute; bottom:100%; left:8px; margin-bottom:6px; background:var(--card); border:1px solid var(--bd); border-radius:12px; padding:8px; display:grid; grid-template-columns:repeat(8,1fr); gap:2px; box-shadow:0 8px 24px rgba(0,0,0,.15); z-index:20; }
+.chat-emoji-pop button { border:none; background:none; font-size:20px; cursor:pointer; padding:4px; border-radius:6px; }
+.chat-emoji-pop button:hover { background:var(--bg); }
+.chat-attach-preview { display:flex; align-items:center; gap:8px; padding:6px 8px; margin-bottom:8px; border:1px dashed var(--bd); border-radius:8px; font-size:13px; color:var(--t1); }
+@media (max-width:900px) {
+  .chat-sidebar { flex:0 0 300px; }
+}
 @media (max-width:640px) {
   .chat-layout { flex-direction:column; height:auto; }
-  .chat-sidebar { flex:0 0 auto; max-height:240px; }
-  .chat-main { min-height:320px; }
+  .chat-sidebar { flex:0 0 auto; max-height:280px; }
+  .chat-main { min-height:380px; }
 }
 
 /* ═══ Услуги агента: дерево категория → услуга → мастера ═══ */

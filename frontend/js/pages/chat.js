@@ -38,7 +38,9 @@ function _chatTime(ts) {
 }
 
 // Отображаемое имя диалога: клиент → sender → номер → ключ.
+// Для групп sender — автор последнего входящего (названия группы Chatpush не отдаёт).
 function _chatTitle(d) {
+  if (d.isGroup) return 'Группа · ' + (d.senderName || d.key.slice(2));
   if (d.client && d.client.name) return d.client.name;
   if (d.senderName) return d.senderName;
   return d.phone || d.key;
@@ -97,15 +99,18 @@ function renderChatDialogs() {
     const title = _chatTitle(d);
     const phone = d.phone && d.phone !== title ? d.phone : '';
     const active = d.key === _chatActiveKey ? ' active' : '';
+    const initial = d.isGroup ? '👥' : _chatEsc((title || '?').trim().charAt(0).toUpperCase());
     return `
       <div class="chat-dialog${active}" data-key="${_chatEsc(d.key)}">
-        <div class="chat-dialog-top">
-          <span class="chat-badge ${ch.cls}">${_chatEsc(ch.label)}</span>
-          <span class="chat-dialog-name">${_chatEsc(title)}</span>
-          <span class="chat-dialog-time">${_chatTime(d.lastTs)}</span>
+        <div class="chat-avatar ${ch.cls}" title="${_chatEsc(ch.label)}">${initial}</div>
+        <div class="chat-dialog-body">
+          <div class="chat-dialog-top">
+            <span class="chat-dialog-name">${_chatEsc(title)}</span>
+            <span class="chat-dialog-time">${_chatTime(d.lastTs)}</span>
+          </div>
+          ${phone ? `<div class="chat-dialog-phone">${_chatEsc(phone)}</div>` : ''}
+          <div class="chat-dialog-preview">${d.lastDirection === 'outgoing' ? '↩ ' : ''}${_chatEsc(d.lastText)}</div>
         </div>
-        ${phone ? `<div class="chat-dialog-phone">${_chatEsc(phone)}</div>` : ''}
-        <div class="chat-dialog-preview">${_chatEsc(d.lastText)}</div>
       </div>`;
   }).join('');
   // Ре-рендерим только при реальном изменении — иначе фоновой опрос дёргал бы скролл списка.
@@ -127,6 +132,8 @@ function onChatSearch(v) {
 async function openChatDialog(key) {
   _chatActiveKey = key;
   renderChatDialogs();
+  const d = _chatDialogs.find(x => x.key === key);
+  if (window.chatComposerSetDialog) chatComposerSetDialog(d || { key, channels: [], defaultChannel: null });
   await renderChatHeader(key);
   await refreshChatMessages(key, false);
 }
