@@ -144,6 +144,17 @@ describe('buildSystemPrompt', () => {
     expect(p).toMatch(/не выдумывай причину разницы цен/i);
   });
 
+  test('правила обращения к специалистам: врачи по имени-отчеству, эстетисты по имени, фамилии только по запросу', () => {
+    const p = buildSystemPrompt({});
+    expect(p).toMatch(/КАК НАЗЫВАТЬ СПЕЦИАЛИСТОВ В ПЕРЕПИСКЕ/i);
+    expect(p).toMatch(/Пери Исамудиновна/);
+    expect(p).toMatch(/Астемир Алексеевич/);
+    expect(p).toMatch(/ТОЛЬКО по Имени и Отчеству/i);
+    expect(p).toMatch(/косметолог-эстетист Юлия/);
+    expect(p).toMatch(/по должности и ИМЕНИ, без отчества/i);
+    expect(p).toMatch(/Фамилию специалиста используй ТОЛЬКО если пациент сам о ней спрашивает/i);
+  });
+
   test('называет длительность услуги из поля duration_min, при null не выдумывает', () => {
     const p = buildSystemPrompt({});
     expect(p).toMatch(/duration_min/);
@@ -186,6 +197,13 @@ describe('buildSystemPrompt', () => {
     expect(p).toMatch(/КОНСУЛЬТАЦИЯ В ПОДАРОК/i);
     expect(p).toMatch(/в подарок|бесплатно/i);
     expect(p).toMatch(/ОДИН раз|деликатно|не навязыв/i);
+  });
+
+  test('консультация бесплатна только у того же специалиста; у разных — платная', () => {
+    const p = buildSystemPrompt({});
+    expect(p).toMatch(/ОДИН И ТОТ ЖЕ специалист/i);
+    expect(p).toMatch(/РАЗНЫЕ специалисты/i);
+    expect(p).toMatch(/консультация ПЛАТНАЯ/i);
   });
 
   test('образец приветствия и запрет тавтологии', () => {
@@ -432,9 +450,10 @@ describe('экономия вызовов инструментов', () => {
     expect(p).toMatch(/данных уже достаточно/i);
   });
 
-  test('промпт объясняет стартовую цену price_max=0 → «от X»', () => {
+  test('цена конкретной услуги — точное число, без «от» (price_max=0 не значит open-ended)', () => {
     const p = buildSystemPrompt({});
-    expect(p).toContain('стартовая цена без верхней границы');
+    expect(p).toMatch(/ЦЕНА КОНКРЕТНОЙ УСЛУГИ — НАЗЫВАЙ ТОЧНО, БЕЗ СЛОВА «ОТ»/i);
+    expect(p).toMatch(/price_max почти всегда не заполнен/i);
   });
 });
 
