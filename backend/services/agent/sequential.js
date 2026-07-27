@@ -31,9 +31,13 @@ function earliestFitAtOrAfter(ranges, from, dur) {
 // Подогнать цепочку от старта t первой услуги. Каждая следующая —
 // с ближайшего подходящего времени; зазор звена ≤ maxLinkGap.
 // Возврат { starts:[минуты по услугам], totalGap } или null.
+// opts.anchorFirst — первая услуга УЖЕ забронирована в t (её слот в графике
+// занят собственной записью, поэтому свободных окон под неё нет): старт
+// фиксируем без проверки ranges, ищем только стыковку последующих услуг.
 function fitChain(entries, t, opts = {}) {
   const maxLinkGap = opts.maxLinkGap === undefined ? MAX_LINK_GAP : opts.maxLinkGap;
-  if (!entries.length || !eq.fitsIn(entries[0].ranges, t, entries[0].durationMin)) return null;
+  if (!entries.length) return null;
+  if (!opts.anchorFirst && !eq.fitsIn(entries[0].ranges, t, entries[0].durationMin)) return null;
   const starts = [t];
   let cursor = t + entries[0].durationMin;
   let totalGap = 0;

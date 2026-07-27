@@ -54,6 +54,10 @@ const schema = {
         type: 'integer',
         description: 'Мастер, у которого пациент уже записан или которого предпочитает — приоритет сохранить всё у него.',
       },
+      first_booked_datetime: {
+        type: 'string',
+        description: 'Если ПЕРВАЯ услуга цепочки УЖЕ забронирована и пациент хочет ДОБАВИТЬ следующие ПОСЛЕ неё, НЕ перенося её — её дата и время в формате YYYY-MM-DDTHH:MM. Тогда первая услуга закрепляется как есть (её слот в графике занят собственной записью), а инструмент ищет стыковку ТОЛЬКО последующих услуг в тот же день. Указывай вместе с preferred_staff_yc_id — мастером уже записанной услуги.',
+      },
     },
     required: ['services', 'date'],
     additionalProperties: false,
@@ -65,6 +69,15 @@ const addDays = (dateStr, n) => {
   d.setUTCDate(d.getUTCDate() + n);
   return d.toISOString().slice(0, 10);
 };
+
+// Разбор datetime уже забронированной первой услуги (якорь): день + минуты от
+// полуночи. Принимает 'YYYY-MM-DDTHH:MM[:SS][±TZ]' и 'YYYY-MM-DD HH:MM'. null — не распознано.
+function parseAnchor(raw) {
+  if (!raw || typeof raw !== 'string') return null;
+  const m = raw.match(/(\d{4}-\d{2}-\d{2})[T ](\d{2}):(\d{2})/);
+  if (!m) return null;
+  return { day: m[1], minutes: Number(m[2]) * 60 + Number(m[3]) };
+}
 
 // Текущий момент по Москве (как в get_available_slots/get_parallel_slots).
 function moscowNow(ms) {
@@ -80,6 +93,7 @@ async function run(salonId, input, ctx = {}) {
   const date = input && input.date;
   const items = (input && Array.isArray(input.services)) ? input.services : [];
   const preferredId = input && input.preferred_staff_yc_id ? String(input.preferred_staff_yc_id) : null;  // falsy 0 = «нет предпочтения» — реальных yc_id 0 не бывает
+  const anchor = parseAnchor(input && input.first_booked_datetime);  // первая услуга уже забронирована — не двигаем её
   const nowMs = (ctx && ctx.nowMs) || Date.now();
   if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date) || items.length < 2) {
     return { error: 'Нужны date (YYYY-MM-DD) и минимум две услуги в services.' };
@@ -217,40 +231,99 @@ async function run(salonId, input, ctx = {}) {
   };
 
   const variants = [];
-  const datesWithHits = new Set();
-  let foundSameStaff = false;
-  for (let d = 0; d <= HORIZON_DAYS; d++) {
-    const day = addDays(date, d);
-    const eqCtx = await eqContext.loadEquipmentContext(salon, day);
 
-    for (const a of assignments) {
-      const entries = await entriesFor(a, day, eqCtx);
-      let chains = seq.chainStarts(entries);
-      if (day === now.date) chains = chains.filter(c => c.start > now.minutes);
-      if (!chains.length) continue;
-      variants.push(buildVariant(a, day, entries, chains.slice(0, MAX_STARTS)));
-      datesWithHits.add(day);
-      if (a.type === 'same_staff') foundSameStaff = true;
-    }
-
-    // «С перерывом» — только для запрошенного дня и только там, где встык не вышло.
-    if (d === 0) {
-      for (const a of assignments) {
-        if (variants.some(v => v.date === day && v.type === a.type)) continue;
-        const entries = await entriesFor(a, day, eqCtx);
-        let best = seq.bestGapChain(entries);
-        if (best && day === now.date && best.start <= now.minutes) best = null;
-        if (!best || best.totalGap <= seq.MAX_LINK_GAP) continue;  // ≤15 мин нашёл бы chainStarts
-        const v = buildVariant(a, day, entries, [best]);
-        v.with_gap = true;
-        variants.push(v);
-        datesWithHits.add(day);
-        break;  // одного честного варианта «с перерывом» достаточно
+  if (anchor) {
+    // ── Якорный режим: первая услуга УЖЕ забронирована, её НЕ двигаем. ──
+    // Закрепляем первую услугу в anchor.minutes (её слот занят собственной
+    // записью, поэтому свободных окон под неё нет), ищем стыковку только
+    // последующих услуг в тот же день у их исполнителей.
+    const day = anchor.day;
+    const bookedName = (() => {
+      for (const s of catalog.services) {
+        const m = (s.staff || []).find(x => String(x.yc_id) === preferredId);
+        if (m && m.name) return m.name;
       }
+      return null;
+    })();
+    const bookedFirst = { yc_id: preferredId ? Number(preferredId) : null, name: bookedName };
+    const subs = chainSvcs.slice(1);
+    const bookedDoesAllSubs = preferredId
+      && subs.every(s => s.performers.some(p => String(p.yc_id) === preferredId));
+
+    const anchoredAssignments = [];
+    if (bookedDoesAllSubs) {
+      anchoredAssignments.push({ type: 'same_staff', staff: chainSvcs.map(() => bookedFirst) });
+    }
+    // Микс: первую ведёт записанный мастер, на каждую последующую — preferred, если делает, иначе до 2 исполнителей.
+    const perSubChoices = subs.map(s => {
+      const pref = s.performers.find(p => String(p.yc_id) === preferredId);
+      return pref ? [pref] : s.performers.slice(0, 2);
+    });
+    let combos = [[]];
+    for (const choices of perSubChoices) {
+      const next = [];
+      for (const c of combos) for (const ch of choices) next.push([...c, ch]);
+      combos = next.slice(0, MAX_MIXED_COMBOS);
+    }
+    for (const combo of combos) {
+      const staff = [bookedFirst, ...combo];
+      if (preferredId && staff.every(m => String(m.yc_id) === preferredId)) continue;  // всё у записанного — уже покрыто same_staff
+      anchoredAssignments.push({ type: 'mixed', staff });
     }
 
-    // Ранний стоп: всё у текущего мастера найдено, либо дат уже достаточно.
-    if (foundSameStaff || datesWithHits.size >= MAX_DATES) break;
+    const eqCtx = await eqContext.loadEquipmentContext(salon, day);
+    for (const a of anchoredAssignments) {
+      const entries = await entriesFor(a, day, eqCtx);
+      // Одна цепочка от фиксированного якоря: последующие с ближайшего свободного времени.
+      const chain = seq.fitChain(entries, anchor.minutes, { anchorFirst: true, maxLinkGap: Infinity });
+      if (!chain) continue;
+      const v = buildVariant(a, day, entries,
+        [{ start: chain.starts[0], starts: chain.starts, totalGap: chain.totalGap }]);
+      v.anchored = true;
+      if (chain.totalGap > seq.MAX_LINK_GAP) v.with_gap = true;
+      // Первую услугу НЕ создаём заново (already_booked); последующие — отдельными записями.
+      for (const st of v.starts) {
+        st.booking_mode = 'separate_records';
+        if (st.chain[0]) st.chain[0].already_booked = true;
+      }
+      variants.push(v);
+    }
+  } else {
+    const datesWithHits = new Set();
+    let foundSameStaff = false;
+    for (let d = 0; d <= HORIZON_DAYS; d++) {
+      const day = addDays(date, d);
+      const eqCtx = await eqContext.loadEquipmentContext(salon, day);
+
+      for (const a of assignments) {
+        const entries = await entriesFor(a, day, eqCtx);
+        let chains = seq.chainStarts(entries);
+        if (day === now.date) chains = chains.filter(c => c.start > now.minutes);
+        if (!chains.length) continue;
+        variants.push(buildVariant(a, day, entries, chains.slice(0, MAX_STARTS)));
+        datesWithHits.add(day);
+        if (a.type === 'same_staff') foundSameStaff = true;
+      }
+
+      // «С перерывом» — только для запрошенного дня и только там, где встык не вышло.
+      if (d === 0) {
+        for (const a of assignments) {
+          if (variants.some(v => v.date === day && v.type === a.type)) continue;
+          const entries = await entriesFor(a, day, eqCtx);
+          let best = seq.bestGapChain(entries);
+          if (best && day === now.date && best.start <= now.minutes) best = null;
+          if (!best || best.totalGap <= seq.MAX_LINK_GAP) continue;  // ≤15 мин нашёл бы chainStarts
+          const v = buildVariant(a, day, entries, [best]);
+          v.with_gap = true;
+          variants.push(v);
+          datesWithHits.add(day);
+          break;  // одного честного варианта «с перерывом» достаточно
+        }
+      }
+
+      // Ранний стоп: всё у текущего мастера найдено, либо дат уже достаточно.
+      if (foundSameStaff || datesWithHits.size >= MAX_DATES) break;
+    }
   }
 
   // same_staff → other_staff → mixed; встык раньше with_gap; внутри — по дате.
@@ -264,6 +337,25 @@ async function run(salonId, input, ctx = {}) {
   const out = { requested_date: date, variants: shortlist, performers_by_service: performersByService };
   if (scheduleFailures) out.schedule_degraded = true;
   if (preferredCannot.length) out.preferred_staff_cannot = preferredCannot;
+
+  if (anchor) {
+    out.anchored = true;
+    if (!shortlist.length) {
+      out.reason = 'no_slot_after_booked';
+      out.hint = 'В тот же день ПОСЛЕ уже записанной процедуры свободного времени для следующих услуг не нашлось. ' +
+        'НЕ переноси записанную процедуру. Предложи добавляемую услугу отдельным визитом в другой день ' +
+        '(get_available_slots) или другой удобный период.';
+    } else {
+      out.hint = 'Первая услуга каждого chain УЖЕ записана (already_booked) — её НЕ создавай и НЕ переноси. ' +
+        'Оформляй ТОЛЬКО последующие услуги chain отдельными записями create_booking (staff_yc_id, service_yc_id, ' +
+        'datetime, seance_length — из элемента). Время бери ТОЛЬКО из starts. Если gap_minutes>0 — честно назови ' +
+        'перерыв. Если preferred_staff_cannot непуст — скажи, что записанный мастер эти услуги не ведёт, и назови ' +
+        'исполнителей из performers_by_service.';
+    }
+    if (scheduleFailures) out.hint += ' ВНИМАНИЕ: часть графиков получить не удалось (schedule_degraded) — список может быть неполным.';
+    return out;
+  }
+
   if (!shortlist.length) {
     out.reason = 'no_combo_in_horizon';
     out.hint = `За ${HORIZON_DAYS + 1} дней с ${date} собрать эти услуги в один визит не получилось. ` +

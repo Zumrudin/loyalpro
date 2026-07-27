@@ -490,6 +490,16 @@ describe('несколько услуг подряд одному пациент
     expect(b).toContain('reschedule_booking');
   });
 
+  test('добавление услуги ПОСЛЕ уже записанной — через first_booked_datetime, запись не двигаем', () => {
+    const b = block();
+    expect(b).toContain('first_booked_datetime');
+    expect(b).toContain('already_booked');
+    // якорную (уже записанную) процедуру не создаём заново и не переносим
+    expect(b).toMatch(/НЕ создавай|НЕ переноси|НЕ двигай/i);
+    // перенос записанной процедуры — только по явной просьбе пациента
+    expect(b).toMatch(/ТОЛЬКО если пациент сам просит/i);
+  });
+
   test('эскалация — крайняя мера, и только после честного ответа, что именно не вышло', () => {
     const b = block();
     expect(b).toMatch(/КРАЙНЯЯ мера/i);
