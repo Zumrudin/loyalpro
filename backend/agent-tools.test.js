@@ -861,4 +861,18 @@ describe('реестр инструментов', () => {
     expect(typeof registry.handlers.get_bonus_balance).toBe('function');
     expect(typeof registry.handlers.get_client_abonements).toBe('function');
   });
+
+  test('catalogMode: без list_services в схемах, с get_service_masters, стаб-подсказка на фантомный вызов', async () => {
+    const registry = require('./services/agent/tools');
+    const names = registry.catalogMode.schemas.map(s => s.name);
+    expect(names).not.toContain('list_services');
+    expect(names).toContain('get_service_masters');
+    expect(typeof registry.catalogMode.handlers.get_service_masters).toBe('function');
+    // Модель по памяти «вызвала» list_services → мягкая подсказка вместо «Неизвестный инструмент»
+    const out = await registry.catalogMode.handlers.list_services(1, {});
+    expect(out.error).toMatch(/КАТАЛОГ УСЛУГ/);
+    // Legacy-реестр не тронут: list_services на месте, get_service_masters не подмешан
+    expect(registry.schemas.map(s => s.name)).toContain('list_services');
+    expect(registry.schemas.map(s => s.name)).not.toContain('get_service_masters');
+  });
 });
