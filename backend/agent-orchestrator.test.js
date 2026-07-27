@@ -319,4 +319,19 @@ describe('AGENT_CATALOG_IN_PROMPT', () => {
 
     expect(deps.catalogBlock.buildSafe).not.toHaveBeenCalled();
   });
+
+  test('buildSafe бросает исключение → ход не падает, legacy: list_services в схемах, каталога в system нет', async () => {
+    const deps = makeDeps();
+    deps.registry = undefined;
+    deps.config = { AGENT_CATALOG_IN_PROMPT: true };
+    deps.catalogBlock = { buildSafe: jest.fn(async () => { throw new Error('boom'); }) };
+    deps.provider.createMessage.mockResolvedValue({ text: 'Здравствуйте!', toolCalls: [], assistantMsg: { role: 'assistant', content: 'Здравствуйте!' } });
+
+    const out = await orchestrator.runDialog(1, 'dlg', { deps });
+
+    expect(out.replies).toEqual(['Здравствуйте!']);
+    const call = deps.provider.createMessage.mock.calls[0][0];
+    expect(call.system).not.toContain('КАТАЛОГ УСЛУГ КЛИНИКИ');
+    expect(call.tools.map(t => t.name)).toContain('list_services');
+  });
 });

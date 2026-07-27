@@ -124,7 +124,12 @@ async function runDialog(salonId, dialogKey, opts = {}) {
   const cfg = d.config || config;
   let catalogBlock = null;
   if (cfg.AGENT_CATALOG_IN_PROMPT) {
-    catalogBlock = await (d.catalogBlock || catalogBlockDefault).buildSafe(salonId);
+    try {
+      catalogBlock = await (d.catalogBlock || catalogBlockDefault).buildSafe(salonId);
+    } catch (e) {
+      logger.warn(`dialog ${dialogKey}: не собрать каталог для промпта (${e.message}) — legacy-режим`);
+      catalogBlock = null;
+    }
   }
   const registry = d.registry || (catalogBlock ? registryDefault.catalogMode : registryDefault);
 
