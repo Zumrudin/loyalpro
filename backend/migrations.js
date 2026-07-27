@@ -969,6 +969,17 @@ async function runMigrations(client) {
     CREATE INDEX IF NOT EXISTS idx_chatpush_messages_dialogkey
       ON chatpush_messages (salon_id, (COALESCE(NULLIF(phone,''), chat_id)), msg_ts DESC)
   `).catch(() => {});
+  // Индекс по ключу диалога v2 (группы отдельным тредом: 'g:'||chat_id) —
+  // выражение обязано СИМВОЛ-В-СИМВОЛ совпадать с DIALOG_KEY_SQL из
+  // services/chat.js, иначе планировщик его не возьмёт. Старый индекс
+  // dialogkey оставлен: migrations.js только добавляет, не дропает.
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS idx_chatpush_messages_dialogkey2
+      ON chatpush_messages (salon_id,
+        (CASE WHEN chat_id LIKE '-%' THEN 'g:' || chat_id
+              ELSE COALESCE(NULLIF(phone,''), chat_id) END),
+        msg_ts DESC)
+  `).catch(() => {});
 
   // agent_settings — настройки ИИ-агента по салону (вкл/выкл + режим допуска).
   await client.query(`
