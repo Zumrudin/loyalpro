@@ -123,6 +123,7 @@ Always use the **MCP Playwright server** (`mcp__playwright__*`) for browser auto
 - `routes/agent-settings.js` (`/api/agent`, owner/admin) — тумблер, режим `all|whitelist`, CRUD номеров.
 - `routes/chatpush-webhook.js` зовёт `isAllowed` перед авто-ответом. Два уровня: env `CHATPUSH_AGENT_ENABLED` (глобальный kill-switch) И per-salon настройки из админки.
 - Фронт: модалка «⚙️ Агент» на странице «Чат» (`frontend/js/pages/agent-settings.js`).
+- Каталог услуг в промпте (флаг `AGENT_CATALOG_IN_PROMPT=true`): вместо инструмента `list_services` компактный текстовый каталог вшивается в системный промпт ДО волатильных частей (кэшируемый префикс, ~6k токенов против ~28k JSON). Общий загрузчик `services/agent/catalog-data.js`, рендерер `services/agent/catalog-block.js`, per-master цены — инструмент `get_service_masters`, реестр — `tools/index.js` `catalogMode`. Сбой сборки блока → авто-откат в legacy-режим. Блок каталога обязан быть детерминированным (сортировка по yc_id) — иначе не работает префикс-кэш.
 
 ## Key constraints
 
