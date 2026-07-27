@@ -57,6 +57,7 @@ const cancelBooking = require('./services/agent/tools/cancel-booking');
 const rescheduleBooking = require('./services/agent/tools/reschedule-booking');
 const bonusBalance = require('./services/agent/tools/get-bonus-balance');
 const clientAbonements = require('./services/agent/tools/get-client-abonements');
+const svcMasters = require('./services/agent/tools/get-service-masters');
 
 beforeEach(() => {
   jest.clearAllMocks();
@@ -240,6 +241,33 @@ describe('list_services', () => {
     ycGetServiceMeta.mockResolvedValue({ durationByService: new Map([['7', 1800]]), resourceIdsByService: new Map() });
     const out = await listServices.run(1, {});
     expect(out.services[0].duration_min).toBe(30);
+  });
+});
+
+describe('get_service_masters', () => {
+  test('мастера с персональной ценой по yc_id услуг; неизвестные id → not_found', async () => {
+    db.any
+      .mockResolvedValueOnce([])                                                                    // services_config
+      .mockResolvedValueOnce([{ yclients_staff_id: 55, name: 'Аня' }, { yclients_staff_id: 66, name: 'Пери' }]); // staff_members
+    db.one.mockResolvedValue({ id: 1, yclients_company_id: 100 });
+    ycGetServiceCatalog.mockResolvedValue(catalog(
+      [{ id: 7, title: 'Ботулинотерапия', price_min: 5000, price_max: 8000, active: 1 }],
+      { 7: [55, 66] },
+      { 7: { 55: { price_min: 5000, price_max: 5000 }, 66: { price_min: 8000, price_max: 8000 } } }));
+    const out = await svcMasters.run(1, { service_yc_ids: [7, 999] });
+    expect(out.services).toEqual([{
+      yc_id: 7, title: 'Ботулинотерапия', duration_min: null,
+      staff: [
+        { yc_id: 55, name: 'Аня', price_min: 5000, price_max: 5000 },
+        { yc_id: 66, name: 'Пери', price_min: 8000, price_max: 8000 },
+      ],
+    }]);
+    expect(out.not_found).toEqual([999]);
+  });
+  test('пустой или кривой вход → error, без похода в каталог', async () => {
+    expect((await svcMasters.run(1, {})).error).toBeTruthy();
+    expect((await svcMasters.run(1, { service_yc_ids: [] })).error).toBeTruthy();
+    expect((await svcMasters.run(1, { service_yc_ids: 'семь' })).error).toBeTruthy();
   });
 });
 
