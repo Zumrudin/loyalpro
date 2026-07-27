@@ -61,4 +61,18 @@ describe('anthropic.createMessage без инструментов', () => {
     expect(calls[0]).not.toHaveProperty('tools');
     expect(res.text).toBe('Завтра в 16:00.');
   });
+
+  test('без system (falsy) → параметр system остаётся undefined, а не [] или пустой блок', async () => {
+    const calls = [];
+    const fakeClient = { messages: { create: async (p) => {
+      calls.push(p);
+      return { stop_reason: 'end_turn', content: [{ type: 'text', text: 'Завтра в 16:00.' }] };
+    } } };
+
+    await anthropic.createMessage(
+      { messages: [{ role: 'user', content: 'когда?' }], tools: [] },
+      { client: fakeClient });
+
+    expect(calls[0].system).toBeUndefined();
+  });
 });
