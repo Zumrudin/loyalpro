@@ -103,6 +103,9 @@ module.exports = {
 
   // Провайдер диалогового агента: 'aitunnel' (Gemini) | 'polza' (Claude) | 'anthropic' (прямой, откат).
   AGENT_PROVIDER:       process.env.AGENT_PROVIDER       || 'aitunnel',
+  // Каталог услуг в системном промпте вместо инструмента list_services
+  // (кэшируемый префикс, ~5× меньше токенов). Откат: убрать env + рестарт.
+  AGENT_CATALOG_IN_PROMPT: process.env.AGENT_CATALOG_IN_PROMPT === 'true',
   // Провайдер базы знаний: 'aitunnel' | 'gemini' (старый релей/прямой вызов, откат).
   KB_PROVIDER:          process.env.KB_PROVIDER          || 'aitunnel',
 
