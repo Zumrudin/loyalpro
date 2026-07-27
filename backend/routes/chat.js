@@ -8,12 +8,31 @@
 // ============================================================
 const router = require('express').Router();
 const { db } = require('../db');
-const { auth, requireRole } = require('../middleware/auth');
+const { auth, requireRole, authOrQuery } = require('../middleware/auth');
 const { messagePreview, isGroupKey, DIALOG_KEY_SQL } = require('../services/chat');
 const { createLogger } = require('../logger');
 const logger = createLogger('Chat');
 
+const chatEvents = require('../services/chat-events');
+
 const adminOnly = [auth, requireRole('owner', 'admin')];
+// Для SSE: EventSource не умеет заголовки, токен едет в ?token= —
+// route-уровневый auth должен принимать query (authOrQuery), не только Bearer.
+const adminOnlyQuery = [authOrQuery, requireRole('owner', 'admin')];
+
+// GET /api/chat/stream — SSE-поток событий чата салона. JWT через ?token=.
+// Соединение держим открытым, heartbeat — в chat-events.
+router.get('/stream', adminOnlyQuery, (req, res) => {
+  res.set({
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache, no-transform',
+    'Connection': 'keep-alive',
+    'X-Accel-Buffering': 'no',   // nginx: не буферизовать SSE
+  });
+  res.flushHeaders();
+  res.write('retry: 3000\n\n');
+  chatEvents.subscribe(req.user.salonId, res);
+});
 
 // GET /api/chat/dialogs — список диалогов салона (последнее сообщение + счётчик).
 // Ключ v2: группы (chat_id с «-») — один тред 'g:'+chat_id, личные — по номеру.

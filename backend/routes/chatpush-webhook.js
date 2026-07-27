@@ -17,7 +17,8 @@ const crypto = require('crypto');
 const config = require('../config');
 const { db } = require('../db');
 const chatpush = require('../services/chatpush');
-const { phoneMatchCandidates } = require('../services/chat');
+const { phoneMatchCandidates, dialogKey: chatDialogKey } = require('../services/chat');
+const chatEvents = require('../services/chat-events');
 const dispatcher = require('../services/agent/dispatcher');
 
 // Текстовые типы разных каналов: WhatsApp/MAX → 'text', tdlib/Telegram → 'formattedText'.
@@ -133,6 +134,23 @@ router.post('/webhook', async (req, res) => {
       );
       storedNew = ins.rowCount > 0;
       logger.info(`stored ${msg.direction} ${msg.channel} ${msg.phone || ''}${clientId ? ` (client #${clientId})` : ''}: ${(msg.text || '').slice(0, 60)}`);
+
+      // Живое обновление страницы «Чат»: пушим сохранённое сообщение (вкл.
+      // исходящее-эхо — так на странице появляются ответы бота и оператора).
+      // Форма message — как у строк GET /dialogs/:key/messages.
+      if (storedNew && salonId) {
+        chatEvents.emit(salonId, {
+          type: 'message',
+          dialogKey: chatDialogKey({ phone: msg.phone, chat_id: msg.chatId }),
+          message: {
+            id: ins.rows[0].id,
+            direction: msg.direction, channel: msg.channel,
+            msg_type: msg.type, text: msg.text,
+            file_url: msg.fileUrl, mime_type: msg.mimeType,
+            sender_name: msg.senderName, msg_ts: msg.timestamp,
+          },
+        });
+      }
     } else {
       logger.debug(`non-message event type=${body.type} stored (event only)`);
     }
