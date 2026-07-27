@@ -268,6 +268,7 @@ describe('get_service_masters', () => {
     expect((await svcMasters.run(1, {})).error).toBeTruthy();
     expect((await svcMasters.run(1, { service_yc_ids: [] })).error).toBeTruthy();
     expect((await svcMasters.run(1, { service_yc_ids: 'семь' })).error).toBeTruthy();
+    expect(ycGetServiceCatalog).not.toHaveBeenCalled();
   });
 });
 
