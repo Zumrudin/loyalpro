@@ -15,7 +15,7 @@ const MAX_BLOCK_CHARS = 40000;
 // «дописать агенту правила», | ломает колонки: режем всё.
 function cell(v, maxLen) {
   return String(v == null ? '' : v)
-    .replace(/[\u0000-\u001F\u007F\u2028\u2029]+/g, ' ')
+    .replace(/[\u0000-\u001F\u007F-\u009F\u2028\u2029]+/g, ' ')
     .replace(/\|/g, '/')
     .replace(/\s+/g, ' ')
     .trim()
@@ -27,15 +27,18 @@ function fmtPrice(min, max) {
   const hi = Number(max) || 0;
   if (!lo && !hi) return '';
   if (!lo) return String(hi);
-  if (!hi || hi < lo) return hi === lo ? String(lo) : `от ${lo}`;   // price_max:0 = «от X» (YClients)
+  if (!hi || hi < lo) return `от ${lo}`;   // price_max:0 = «от X» (YClients)
   if (hi === lo) return String(lo);
   return `${lo}-${hi}`;
 }
 
 function renderCatalogBlock(services) {
   if (!Array.isArray(services) || !services.length) return null;
-  const masters = new Map();   // id → имя (первое вхождение)
-  for (const s of services) {
+  const sorted = services
+    .slice()
+    .sort((a, b) => a.yc_id - b.yc_id);   // детерминизм = обязательное условие префикс-кэша
+  const masters = new Map();   // id → имя (первое вхождение в отсортированном по yc_id порядке)
+  for (const s of sorted) {
     for (const m of (s.staff || [])) {
       if (!masters.has(m.yc_id)) masters.set(m.yc_id, cell(m.name, 60));
     }
@@ -44,9 +47,7 @@ function renderCatalogBlock(services) {
     .sort((a, b) => a[0] - b[0])
     .map(([id, name]) => `${id}=${name}`)
     .join('; ');
-  const lines = services
-    .slice()
-    .sort((a, b) => a.yc_id - b.yc_id)   // детерминизм = обязательное условие префикс-кэша
+  const lines = sorted
     .map(s => [
       s.yc_id,
       cell(s.title, 120),
