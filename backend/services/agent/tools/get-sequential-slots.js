@@ -35,7 +35,7 @@ const schema = {
     'ближайшие дни (до 7) и возвращает готовые варианты по приоритету: всё у текущего мастера → ' +
     'всё у другого одного мастера → разные мастера по очереди; вариант с перерывом помечен ' +
     'with_gap/gap_minutes. Вызывай ВМЕСТО ручного сравнения слотов разных услуг. ' +
-    'Нужны yc_id услуг из list_services в желаемом порядке выполнения. Дата YYYY-MM-DD.',
+    'Нужны yc_id услуг из каталога услуг в желаемом порядке выполнения. Дата YYYY-MM-DD.',
   input_schema: {
     type: 'object',
     properties: {
@@ -106,7 +106,7 @@ async function run(salonId, input, ctx = {}) {
   for (const it of items) {
     const svcId = it && it.service_yc_id;
     const svc = catalog.services.find(s => String(s.yc_id) === String(svcId));
-    if (!svc) return { error: `Услуга ${svcId} не найдена в каталоге — возьми верный yc_id из list_services.` };
+    if (!svc) return { error: `Услуга ${svcId} не найдена в каталоге — возьми верный yc_id из каталога услуг.` };
     const performers = (svc.staff || [])
       .filter(m => m && m.yc_id && svcFilter.isBookable(filter, svcId, m.yc_id));
     if (!performers.length) {

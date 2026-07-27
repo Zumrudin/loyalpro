@@ -14,14 +14,14 @@ const DEFAULT_DURATION_MIN = 60;   // если YClients не отдал duration
 const schema = {
   name: 'get_available_slots',
   description: 'Свободное время у мастера на конкретную дату. Если у салона включена онлайн-запись — ' +
-    'отдаёт слоты под услугу (нужен service_yc_id из list_services). Иначе считает свободность из ' +
+    'отдаёт слоты под услугу (нужен service_yc_id из каталога услуг). Иначе считает свободность из ' +
     'графика (окна раздвигаются шагом 30 мин). Сначала узнай yc_id мастера (list_staff) и, если есть, ' +
-    'услуги (list_services). Дата в формате YYYY-MM-DD. Само расписание (в какие дни работает) — get_available_dates.',
+    'услуги (каталог услуг). Дата в формате YYYY-MM-DD. Само расписание (в какие дни работает) — get_available_dates.',
   input_schema: {
     type: 'object',
     properties: {
       staff_yc_id:   { type: 'integer', description: 'YClients-id мастера (из list_staff).' },
-      service_yc_id: { type: 'integer', description: 'YClients-id услуги (из list_services). Нужен для салонов с онлайн-записью.' },
+      service_yc_id: { type: 'integer', description: 'YClients-id услуги (из каталога услуг). Нужен для салонов с онлайн-записью.' },
       date:          { type: 'string',  description: 'Дата YYYY-MM-DD.' },
     },
     required: ['staff_yc_id', 'date'],
@@ -111,7 +111,7 @@ async function run(salonId, input, ctx = {}) {
     if (!chk.unknown && !chk.ok) {
       const who = chk.performers.length
         ? `Эту услугу выполняют: ${chk.performers.join(', ')}. Предложи пациенту одного из них.`
-        : 'Подбери мастера из поля staff нужной услуги в list_services.';
+        : 'Подбери мастера из поля staff нужной услуги в каталоге услуг.';
       return {
         slots: [], staff_mismatch: true,
         error: `Выбранный мастер не выполняет эту услугу — НЕ предлагай его время и не подтверждай запись к нему. ${who}`,

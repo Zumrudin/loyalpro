@@ -6,7 +6,7 @@ const identity = require('../identity');
 const schema = {
   name: 'modify_booking_services',
   description: 'ДОБАВИТЬ или УБРАТЬ услуги в существующей записи пациента (без смены времени). ' +
-    'record_id бери из list_client_bookings; yc_id услуг — из list_services. Вызывать ТОЛЬКО ' +
+    'record_id бери из list_client_bookings; yc_id услуг — из каталога услуг. Вызывать ТОЛЬКО ' +
     'после подтверждения пациентом, какую услугу добавить/убрать. Общая длительность визита ' +
     'пересчитывается автоматически. Если новая длительность налезает на следующую запись — ' +
     'инструмент вернёт overlaps: НЕ обещай, предложи другое время/день или переведи на администратора. ' +
@@ -17,7 +17,7 @@ const schema = {
       record_id: { type: 'integer', description: 'YClients-id записи из list_client_bookings.' },
       add_service_yc_ids: {
         type: 'array', items: { type: 'integer' },
-        description: 'yc_id услуг для ДОБАВЛЕНИЯ (из list_services, мастер записи должен их выполнять).',
+        description: 'yc_id услуг для ДОБАВЛЕНИЯ (из каталога услуг, мастер записи должен их выполнять).',
       },
       remove_service_yc_ids: {
         type: 'array', items: { type: 'integer' },

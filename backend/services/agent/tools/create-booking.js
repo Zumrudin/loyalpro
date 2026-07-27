@@ -72,7 +72,7 @@ async function run(salonId, input, ctx = {}) {
       return {
         invalid_args: true,
         error: 'Услуга с таким service_yc_id не найдена в каталоге. Возьми точный ' +
-          'service_yc_id из list_services — не придумывай id.',
+          'service_yc_id из каталога услуг — не придумывай id.',
       };
     }
     const staffOk = (svc.staff || []).some(m => String(m.yc_id) === String(input.staff_yc_id));
@@ -80,7 +80,7 @@ async function run(salonId, input, ctx = {}) {
       return {
         invalid_args: true,
         error: 'Выбранный мастер не выполняет эту услугу (или staff_yc_id неверный). ' +
-          'Возьми мастера из поля staff нужной услуги в list_services.',
+          'Возьми мастера из поля staff нужной услуги в каталоге услуг.',
       };
     }
   }
