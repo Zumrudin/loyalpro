@@ -51,7 +51,7 @@ async function loadChat() {
   const s = document.getElementById('chat-search');
   if (s) s.value = _chatSearch;
   await refreshChatDialogs(false);
-  startChatPolling();
+  startChatLive();
 }
 
 // Загрузка/обновление списка диалогов. silent=true — фоновой опрос без спиннера.
@@ -153,42 +153,56 @@ async function refreshChatMessages(key, silent) {
   }
 }
 
+// ── Хранилище сообщений открытого диалога + инкрементальный рендер ──
+let _chatMsgs = [];
+let _chatLocalSeq = 0;   // id оптимистичных пузырей (data-local)
+
+const _chatIsGroup = () => String(_chatActiveKey || '').startsWith('g:');
+const _chatMultiChannel = () =>
+  new Set(_chatMsgs.map(m => _chatChannel(m.channel).label)).size > 1;
+
+function _chatMsgHtml(m, multiChannel, isGroup) {
+  const side = m.direction === 'outgoing' ? 'out' : 'in';
+  const isText = !m.msg_type || String(m.msg_type).toLowerCase().includes('text');
+  let body;
+  const safeUrl = _chatSafeUrl(m.file_url);
+  if (isText) {
+    body = _chatEsc(m.text || '');
+  } else if (safeUrl) {
+    body = `<a href="${_chatEsc(safeUrl)}" target="_blank" rel="noopener">📎 Вложение</a>` +
+           (m.text ? `<div>${_chatEsc(m.text)}</div>` : '');
+  } else {
+    body = '📎 Вложение' + (m.text ? `<div>${_chatEsc(m.text)}</div>` : '');
+  }
+  const ch = _chatChannel(m.channel);
+  const chanTag = multiChannel
+    ? `<span class="chat-chan-tag ${ch.cls}">${_chatEsc(ch.label)}</span>`
+    : '';
+  const sender = (isGroup && m.direction !== 'outgoing' && m.sender_name)
+    ? `<div class="chat-msg-sender">${_chatEsc(m.sender_name)}</div>` : '';
+  const pending = m._local ? ` chat-msg-${m._state || 'pending'}` : '';
+  const status = m._local ? `<span class="chat-msg-status${m._state === 'failed' ? ' err' : ''}" data-status>${m._state === 'failed' ? '⚠' : '⏳'}</span>` : '';
+  return `
+    <div class="chat-msg chat-msg-${side}${pending}"${m._local ? ` data-local="${m._local}"` : ''}>
+      ${sender}<div class="chat-bubble">${body}</div>
+      <div class="chat-msg-time">${chanTag}${status}${_chatTime(m.msg_ts)}</div>
+    </div>`;
+}
+
+// Полный рендер истории (при открытии диалога / полном обновлении).
 function renderChatMessages(messages) {
   const paneEl = document.getElementById('chat-messages');
   if (!paneEl) return;
+  _chatMsgs = messages;
   if (!messages.length) {
-    const html = '<div class="empty">Нет сообщений</div>';
-    if (paneEl._lastHtml !== html) { paneEl._lastHtml = html; paneEl.innerHTML = html; }
+    paneEl._lastHtml = null;
+    paneEl.innerHTML = '<div class="empty">Нет сообщений</div>';
     return;
   }
-  // Если переписка собрана из разных каналов (Telegram + WhatsApp и т.п.) —
-  // подписываем каждое сообщение каналом. Для одноканального диалога не мусорим.
-  const channelLabels = new Set(messages.map(m => _chatChannel(m.channel).label));
-  const multiChannel = channelLabels.size > 1;
-  const html = messages.map(m => {
-    const side = m.direction === 'outgoing' ? 'out' : 'in';
-    const isText = !m.msg_type || String(m.msg_type).toLowerCase().includes('text');
-    let body;
-    const safeUrl = _chatSafeUrl(m.file_url);
-    if (isText) {
-      body = _chatEsc(m.text || '');
-    } else if (safeUrl) {
-      body = `<a href="${_chatEsc(safeUrl)}" target="_blank" rel="noopener">📎 Вложение</a>` +
-             (m.text ? `<div>${_chatEsc(m.text)}</div>` : '');
-    } else {
-      body = '📎 Вложение' + (m.text ? `<div>${_chatEsc(m.text)}</div>` : '');
-    }
-    const ch = _chatChannel(m.channel);
-    const chanTag = multiChannel
-      ? `<span class="chat-chan-tag ${ch.cls}">${_chatEsc(ch.label)}</span>`
-      : '';
-    return `
-      <div class="chat-msg chat-msg-${side}">
-        <div class="chat-bubble">${body}</div>
-        <div class="chat-msg-time">${chanTag}${_chatTime(m.msg_ts)}</div>
-      </div>`;
-  }).join('');
-  // Без изменений — не трогаем DOM (сохраняем позицию прокрутки при фоновом опросе).
+  const multiChannel = _chatMultiChannel();
+  const isGroup = _chatIsGroup();
+  const html = messages.map(m => _chatMsgHtml(m, multiChannel, isGroup)).join('');
+  // Без изменений — не трогаем DOM (сохраняем позицию прокрутки).
   if (paneEl._lastHtml === html) return;
   // Автопрокрутка вниз, только если пользователь и так был у низа переписки.
   const atBottom = paneEl.scrollHeight - paneEl.scrollTop - paneEl.clientHeight < 60;
@@ -196,6 +210,60 @@ function renderChatMessages(messages) {
   paneEl._lastHtml = html;
   paneEl.innerHTML = html;
   if (atBottom || wasEmpty) paneEl.scrollTop = paneEl.scrollHeight;
+}
+
+// Дописать одно сообщение в открытый диалог (SSE/доопрос) без перерисовки
+// всей истории. Эхо нашей отправки заменяет оптимистичный пузырь с тем же текстом.
+function chatAppendMessage(m) {
+  const paneEl = document.getElementById('chat-messages');
+  if (!paneEl) return;
+  if (m.id != null && _chatMsgs.some(x => !x._local && x.id === m.id)) return; // дубль
+  if (m.direction === 'outgoing') {
+    const local = _chatMsgs.find(x => x._local && (x.text || '') === (m.text || ''));
+    if (local) {
+      const el = paneEl.querySelector(`[data-local="${local._local}"]`);
+      _chatMsgs[_chatMsgs.indexOf(local)] = m;
+      if (el) { el.outerHTML = _chatMsgHtml(m, _chatMultiChannel(), _chatIsGroup()); return; }
+    }
+  }
+  _chatMsgs.push(m);
+  if (paneEl.querySelector('.empty')) paneEl.innerHTML = '';
+  const atBottom = paneEl.scrollHeight - paneEl.scrollTop - paneEl.clientHeight < 60;
+  paneEl.insertAdjacentHTML('beforeend', _chatMsgHtml(m, _chatMultiChannel(), _chatIsGroup()));
+  if (atBottom || m.direction === 'outgoing') paneEl.scrollTop = paneEl.scrollHeight;
+}
+
+// ── Оптимистичные пузыри отправки (контракт с chat-composer.js) ──
+function chatAppendOptimistic({ text, channel, file }) {
+  const id = ++_chatLocalSeq;
+  const m = {
+    _local: id, _state: 'pending', direction: 'outgoing', channel,
+    msg_type: file ? 'document' : 'text',
+    text: file && !text ? '📎 ' + file : text,
+    msg_ts: Math.floor(Date.now() / 1000),
+  };
+  _chatMsgs.push(m);
+  const paneEl = document.getElementById('chat-messages');
+  if (!paneEl) return id;
+  if (paneEl.querySelector('.empty')) paneEl.innerHTML = '';
+  paneEl.insertAdjacentHTML('beforeend', _chatMsgHtml(m, _chatMultiChannel(), _chatIsGroup()));
+  paneEl.scrollTop = paneEl.scrollHeight;
+  return id;
+}
+
+function chatResolveOptimistic(id, state, err) {
+  const m = _chatMsgs.find(x => x._local === id);
+  if (!m) return;
+  m._state = state;
+  const el = document.querySelector(`#chat-messages [data-local="${id}"]`);
+  if (!el) return;
+  el.classList.remove('chat-msg-pending', 'chat-msg-failed');
+  if (state === 'failed') el.classList.add('chat-msg-failed');
+  const st = el.querySelector('[data-status]');
+  if (st) {
+    st.textContent = state === 'failed' ? ('⚠ ' + (err || 'не отправлено')) : '✓';
+    st.classList.toggle('err', state === 'failed');
+  }
 }
 
 // Закреплённая шапка диалога: имя + телефон клиента и переключатель бот/оператор.
@@ -247,24 +315,73 @@ async function toggleAgent(key, nextStatus) {
   }
 }
 
-// ── Живое обновление: опрос каждые 5 секунд ──────────────────────
-function startChatPolling() {
-  stopChatPolling();
-  _chatPollTimer = setInterval(pollChat, 5000);
+// ── Живое обновление: SSE-push + страховочный опрос раз в 30 сек ──
+let _chatES = null;
+
+function startChatLive() {
+  stopChatLive();
+  const tok = localStorage.getItem('lp_tk');
+  try {
+    // EventSource не умеет заголовки — токен в query (роут authOrQuery).
+    _chatES = new EventSource('/api/chat/stream?token=' + encodeURIComponent(tok || ''));
+    _chatES.onmessage = (ev) => {
+      let data; try { data = JSON.parse(ev.data); } catch { return; }
+      if (data.type === 'message') onChatLiveMessage(data);
+    };
+  } catch (e) { console.error('chat SSE:', e); }
+  // Страховка на случай упавшего SSE: редкий инкрементальный доопрос.
+  _chatPollTimer = setInterval(pollChat, 30000);
 }
-function stopChatPolling() {
+
+function stopChatLive() {
+  if (_chatES) { _chatES.close(); _chatES = null; }
   if (_chatPollTimer) { clearInterval(_chatPollTimer); _chatPollTimer = null; }
 }
+
+// Пришло сообщение по SSE: дописываем в открытый диалог и обновляем карточку
+// в списке локально — без запроса на сервер.
+function onChatLiveMessage({ dialogKey, message }) {
+  if (dialogKey === _chatActiveKey) chatAppendMessage(message);
+  const d = _chatDialogs.find(x => x.key === dialogKey);
+  if (d) {
+    const isText = !message.msg_type || String(message.msg_type).toLowerCase().includes('text');
+    d.lastText = isText ? (message.text || '') : '📎 Вложение';
+    d.lastTs = message.msg_ts;
+    d.lastDirection = message.direction;
+    if (message.direction === 'incoming') {
+      d.senderName = message.sender_name || d.senderName;
+      d.channel = message.channel || d.channel;
+      d.defaultChannel = message.channel || d.defaultChannel;
+      if (d.channels && message.channel && !d.channels.includes(message.channel)) {
+        d.channels.push(message.channel);
+      }
+    }
+    _chatDialogs.sort((a, b) => (Number(b.lastTs) || 0) - (Number(a.lastTs) || 0));
+    renderChatDialogs();
+  } else {
+    refreshChatDialogs(true);   // новый диалог — перечитать список
+  }
+}
+
 async function pollChat() {
   if (document.hidden) return;             // вкладка неактивна — не дёргаем сервер
   await refreshChatDialogs(true);
   if (_chatActiveKey) {
-    await refreshChatMessages(_chatActiveKey, true);
-    await renderChatHeader(_chatActiveKey);
+    const key = _chatActiveKey;
+    const last = _chatMsgs.filter(m => !m._local)
+      .reduce((mx, m) => Math.max(mx, Number(m.msg_ts) || 0), 0);
+    try {
+      const data = await api('GET', '/api/chat/dialogs/' + encodeURIComponent(key) + '/messages?after=' + last);
+      if (_chatActiveKey !== key) return;
+      for (const m of (data.messages || [])) chatAppendMessage(m);
+    } catch (e) { console.error('chat poll:', e); }
+    await renderChatHeader(key);
   }
 }
 
 window.loadChat = loadChat;
 window.openChatDialog = openChatDialog;
 window.onChatSearch = onChatSearch;
-window.stopChatPolling = stopChatPolling;
+window.stopChatPolling = stopChatLive;   // имя сохранено — его зовёт роутер при уходе со страницы
+window.chatAppendOptimistic = chatAppendOptimistic;
+window.chatResolveOptimistic = chatResolveOptimistic;
