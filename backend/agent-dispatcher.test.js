@@ -140,6 +140,33 @@ test('create_booking провалился, бот не эскалировал �
   expect(d.send.mock.calls[0][1]).toMatch(/администратор/i);   // клиент получил перевод, а не заглушку
 });
 
+test('booking провалился, но бот ПЕРЕИГРАЛ (предложил другое время) → доставляем, НЕ переводим', async () => {
+  const reoffer = 'К сожалению, 14:00 только что заняли. Могу предложить 15:00 или 16:00 — что удобнее?';
+  const d = deps({
+    orchestrator: { runDialog: jest.fn(async () => (
+      { replies: [reoffer], escalated: false, bookingFailed: true, bookingFailRecoverable: true })) },
+    priorBookingFailure: jest.fn(async () => false),   // первый провал в серии
+  });
+  dispatcher.enqueue(1, 'k', meta, d);
+  await jest.advanceTimersByTimeAsync(1000);
+  expect(d.escalate).not.toHaveBeenCalled();           // на человека НЕ переводим
+  expect(d.send).toHaveBeenCalledTimes(1);
+  expect(d.send).toHaveBeenCalledWith(meta, reoffer);  // пациент получил переигровку
+});
+
+test('booking провалился, переигровка есть, но это ПОВТОРНЫЙ провал → всё равно перевод', async () => {
+  const d = deps({
+    orchestrator: { runDialog: jest.fn(async () => (
+      { replies: ['Могу предложить 15:00'], escalated: false, bookingFailed: true, bookingFailRecoverable: true })) },
+    priorBookingFailure: jest.fn(async () => true),    // в серии уже был провал
+  });
+  dispatcher.enqueue(1, 'k', meta, d);
+  await jest.advanceTimersByTimeAsync(1000);
+  expect(d.escalate).toHaveBeenCalledTimes(1);
+  expect(d.send).toHaveBeenCalledTimes(1);
+  expect(d.send.mock.calls[0][1]).toMatch(/администратор/i);
+});
+
 test('booking провалился, НО бот уже сам эскалировал → без двойного перевода', async () => {
   const d = deps({ orchestrator: { runDialog: jest.fn(async () => (
     { replies: ['Передаю администратору 🤍'], escalated: true, bookingFailed: true })) } });

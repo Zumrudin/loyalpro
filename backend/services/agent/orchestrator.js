@@ -29,6 +29,18 @@ const SIDE_EFFECT_TOOLS = new Set([
 // единственное, что даёт право отрапортовать «перенесла / отменила / записала».
 const WRITE_TOOLS = new Set(['create_booking', 'cancel_booking', 'reschedule_booking', 'modify_booking_services']);
 
+// Инструменты чтения свободного времени. Их вызов ПОСЛЕ провала create_booking —
+// сигнал добросовестной переигровки (модель перепроверяет слоты, а не заканчивает
+// ход отпиской «секундочку»). Отличает восстановимый провод от зависания.
+const SLOT_READ_TOOLS = new Set([
+  'get_available_slots', 'get_available_dates', 'get_sequential_slots', 'get_parallel_slots',
+]);
+
+// Реплика содержит конкретное время (HH:MM / HH.MM) — модель предлагает слот.
+// Второй (наряду с перепроверкой слотов) признак переигровки после провала записи:
+// «это время заняли, могу 15:00 или 16:00» — против пустого «секундочку».
+const REPLY_HAS_TIME = /\b([01]?\d|2[0-3])[:.][0-5]\d\b/;
+
 // Утверждение о ВЫПОЛНЕННОМ действии над записью (не намерение). Пилот
 // claude-haiku 2026-07-22: модель написала «Готово, перенесла на 14:00», НЕ
 // вызвав reschedule_booking, — клиенту ушла ложь. Ловим завершённые формы
@@ -173,6 +185,7 @@ async function runDialog(salonId, dialogKey, opts = {}) {
     let lastWrite = null;           // { tool, input } последнего успешного write — для подтверждения
     let degradedAfterWrite = false; // провайдер упал ПОСЛЕ успешной записи → детерминированное подтверждение
     let readBookings = false;       // list_client_bookings отработал → «вы записаны…» может быть честным ответом
+    let recheckedAfterFail = false; // после провала create_booking модель перезапросила слоты (добросовестная переигровка)
 
     for (let i = 0; i < MAX_ITERS; i++) {
       let resp;
@@ -221,6 +234,7 @@ async function runDialog(salonId, dialogKey, opts = {}) {
         if (!isError && tc.name === 'list_client_bookings') readBookings = true;
         if (tc.name === 'escalate_to_operator' && result && result.escalated) escalated = true;
         if (tc.name === 'create_booking') { if (isError) bookingErrored = true; else bookingSucceeded = true; }
+        if (bookingErrored && SLOT_READ_TOOLS.has(tc.name)) recheckedAfterFail = true;
         results.push({ id: tc.id, name: tc.name, result, isError });
       }
       for (const m of provider.toolResultMessages(results)) convo.push(m);
@@ -270,8 +284,18 @@ async function runDialog(salonId, dialogKey, opts = {}) {
         || (!readBookings && BOOKED_STATE_CLAIM.test(allReplies)));
     // bookingFailed: попытка записи была и НЕ увенчалась успехом. Диспетчер по этому
     // сигналу принудительно переведёт на человека, чтобы клиент не завис на «секундочку».
+    const bookingFailed = bookingErrored && !bookingSucceeded;
+    // bookingFailRecoverable: провал записи, но модель добросовестно ПЕРЕИГРАЛА —
+    // не соврала об успехе, дала связную реплику и либо перепроверила слоты, либо
+    // предложила конкретное новое время. Такой ход диспетчер доставляет пациенту
+    // БЕЗ перевода на человека (переигровка ограничена одной попыткой на серию —
+    // счётчик провалов в диспетчере). Инцидент 2026-07-28: восстановимый провал
+    // «время занято» уводил на администратора, хотя достаточно предложить другой слот.
+    const bookingFailRecoverable = bookingFailed && !escalated && !falseSuccess
+      && replies.some((t) => t && t.trim())
+      && (recheckedAfterFail || REPLY_HAS_TIME.test(allReplies));
     return { replies, escalated, sideEffect, exhausted, falseSuccess,
-      bookingFailed: bookingErrored && !bookingSucceeded, degradedAfterWrite };
+      bookingFailed, bookingFailRecoverable, degradedAfterWrite };
   }
 
   return { replies: [], escalated: false, sideEffect: false };

@@ -151,16 +151,19 @@ async function run(salonId, input, ctx = {}) {
         ranges = trimmed;
       }
     }
-    // free_ranges — «сырые» окна кресла для ответа пациенту (до фильтра длительности),
-    // slots — старты с гарантией, что услуга помещается целиком.
-    const freeRanges = ranges.map(r => ({ from: toHHMM(r.start), to: toHHMM(r.end) }));
+    // Отдаём модели ТОЛЬКО slots — детерминированные старты, куда услуга влезает
+    // целиком. Раньше рядом возвращались free_ranges («сырые» окна кресла до
+    // фильтра длительности, «для ответа пациенту»), но слабая модель цитировала и
+    // округляла их границы как время записи: инцидент 2026-07-28 — окно с 14:40
+    // названо пациенту «14:00», create_booking упал «время недоступно» → ложная
+    // эскалация. Единственный допустимый источник предлагаемого времени — slots.
     let slots = rangesToSlots(ranges, date, DEFAULT_STEP_MIN, svcDurationMin);
     // seance_length — как у get_parallel_slots: create_booking без него ловил 422
     // на салонах с выключенной онлайн-записью.
     if (svcDurationMin) {
       slots = slots.map(s => ({ ...s, seance_length: svcDurationMin * 60 }));
     }
-    const out = { slots, free_ranges: freeRanges, source: 'schedule' };
+    const out = { slots, source: 'schedule' };
     if (equipmentBusy) out.equipment_busy = true;   // часть окон срезана занятым аппаратом
     return dropPastToday(out, date, nowMs);
   } catch (e) {

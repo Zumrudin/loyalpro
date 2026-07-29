@@ -4,6 +4,7 @@ const config = require('../../config');
 const agentSettings = require('../agent-settings');
 const chatpush = require('../chatpush');
 const orchestratorDefault = require('./orchestrator');
+const bookingEvents = require('./booking');
 const escalateTool = require('./tools/escalate-to-operator');
 const { createLogger } = require('../../logger');
 const logger = createLogger('AgentDispatcher');
@@ -50,6 +51,7 @@ async function process(salonId, dialogKey, meta, opts = {}) {
   const orchestrator = opts.orchestrator || orchestratorDefault;
   const send = opts.send || defaultSend;
   const escalate = opts.escalate || defaultEscalate;
+  const priorBookingFailure = opts.priorBookingFailure || defaultPriorBookingFailure;
 
   // Гейт — ВНЕ общего try: его падение fail-closed (молчим). Мы не знаем, разрешён
   // ли номер, а страховочный ответ из catch написал бы тому, кому писать нельзя.
@@ -85,11 +87,23 @@ async function process(salonId, dialogKey, meta, opts = {}) {
         logger.warn(`dialog ${dialogKey}: реплика утверждает выполнение без вызова пишущего инструмента — гашу ложь, перевод на человека`);
         await handOverSilently(salonId, dialogKey, meta, send, escalate, 'бот заявил о выполнении без вызова инструмента (возможный ложный успех)');
       } else if (res.bookingFailed && !res.escalated) {
-        // Запись не создалась (create_booking вернул ошибку), а бот сам не перевёл на
-        // человека — типичная «секундочку» без результата. Не оставляем клиента с пустым
-        // обещанием: передаём администратору и сообщаем об этом. Инцидент 2026-07-21.
-        logger.warn(`dialog ${dialogKey}: create_booking не удался, бот не эскалировал — принудительный перевод на человека`);
-        await handOverSilently(salonId, dialogKey, meta, send, escalate, 'create_booking не удался — запись не создана автоматически');
+        // Запись не создалась, а бот сам не перевёл на человека. Два исхода:
+        //  • Восстановимый провал (bookingFailRecoverable): модель добросовестно
+        //    переиграла — извинилась и предложила другое реально свободное время
+        //    (не соврав об успехе). Доверяем ей и доставляем реплику БЕЗ перевода,
+        //    НО только если это ПЕРВЫЙ провал в серии (иначе цикл неудачных слотов).
+        //    Инцидент 2026-07-28: «время занято» уводило на администратора зря.
+        //  • Иначе — пустая «секундочку», тишина, ложный успех или повторный провал:
+        //    передаём администратору, чтобы клиент не завис. Инцидент 2026-07-21.
+        const canRecover = res.bookingFailRecoverable
+          && !(await priorBookingFailure(salonId, dialogKey));
+        if (canRecover) {
+          logger.info(`dialog ${dialogKey}: create_booking не удался, но бот переиграл (предложил другое время) — доставляю без перевода`);
+          for (const text of replies) await send(meta, text);
+        } else {
+          logger.warn(`dialog ${dialogKey}: create_booking не удался, переигровки нет либо повторный провал — принудительный перевод на человека`);
+          await handOverSilently(salonId, dialogKey, meta, send, escalate, 'create_booking не удался — запись не создана автоматически');
+        }
       } else if (res.escalated && replies.length === 0) {
         await send(meta, DEFAULT_HANDOVER_TEXT);
       } else if (replies.length === 0) {
@@ -134,6 +148,14 @@ async function handOverSilently(salonId, dialogKey, meta, send, escalate, reason
 // Пометить диалог эскалированным (та же запись, что делает инструмент агента).
 async function defaultEscalate(salonId, dialogKey, reason) {
   return escalateTool.run(salonId, { reason }, { dialogKey });
+}
+
+// Был ли в этой серии УЖЕ провал записи (помимо текущего)? >1 booking_failed
+// после последнего успеха → серия неудачных слотов, переигровку больше не даём —
+// переводим на человека. Ограничивает восстановление одной попыткой.
+async function defaultPriorBookingFailure(salonId, dialogKey) {
+  const n = await bookingEvents.countBookingFailuresSinceSuccess(salonId, dialogKey);
+  return n > 1;
 }
 
 // Отправка одной реплики обратно клиенту через chatpush.

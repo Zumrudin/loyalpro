@@ -93,7 +93,32 @@ describe('runDialog', () => {
       .mockResolvedValueOnce(textResp('Секундочку, уточняю детали 🤍'));
     const out = await orchestrator.runDialog(1, 'k', { deps });
     expect(out.bookingFailed).toBe(true);
+    // Пустая отписка «секундочку» без перепроверки слотов и без конкретного времени —
+    // НЕ переигровка: диспетчер обязан перевести на человека.
+    expect(out.bookingFailRecoverable).toBe(false);
     expect(out.sideEffect).toBe(false);
+  });
+
+  test('провал записи → бот перепроверил слоты и предложил другое время → bookingFailRecoverable:true', async () => {
+    const deps = makeDeps({ handlers: { create_booking: jest.fn(async () => ({ created: false, error: 'Выбранное время недоступно.' })) } });
+    deps.provider.createMessage
+      .mockResolvedValueOnce(toolResp('create_booking', { staff_yc_id: 1, service_yc_id: 2, datetime: 'x', client_phone: '7' }))
+      .mockResolvedValueOnce(toolResp('get_available_slots', { staff_yc_id: 1, service_yc_id: 2, date: '2026-07-30' }, 'c2'))
+      .mockResolvedValueOnce(textResp('К сожалению, это время только что заняли. Могу предложить 15:00 или 16:00 🤍'));
+    const out = await orchestrator.runDialog(1, 'k', { deps });
+    expect(out.bookingFailed).toBe(true);
+    expect(out.bookingFailRecoverable).toBe(true);   // перепроверила слоты + назвала конкретное время
+  });
+
+  test('провал записи → бот соврал об успехе («записала») → НЕ переигровка (falseSuccess гейтит)', async () => {
+    const deps = makeDeps({ handlers: { create_booking: jest.fn(async () => ({ created: false, error: 'Выбранное время недоступно.' })) } });
+    deps.provider.createMessage
+      .mockResolvedValueOnce(toolResp('create_booking', { staff_yc_id: 1, service_yc_id: 2, datetime: 'x', client_phone: '7' }))
+      .mockResolvedValueOnce(textResp('Готово, записала вас на 16:00 ✅'));
+    const out = await orchestrator.runDialog(1, 'k', { deps });
+    expect(out.bookingFailed).toBe(true);
+    expect(out.falseSuccess).toBe(true);
+    expect(out.bookingFailRecoverable).toBe(false);
   });
 
   test('create_booking успех → bookingFailed:false', async () => {

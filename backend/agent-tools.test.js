@@ -309,7 +309,9 @@ describe('get_available_slots', () => {
     ycGetStaffSeances.mockResolvedValue(grid1000to1100());   // 10:00–11:00 свободно
     const out = await getSlots.run(1, { service_yc_id: 7, staff_yc_id: 55, date: '2026-07-20' }, NOW);
     expect(out.source).toBe('schedule');
-    expect(out.free_ranges).toEqual([{ from: '10:00', to: '11:00' }]);
+    // free_ranges модели больше НЕ отдаём (слабая модель округляла их границы как
+    // время записи → инцидент 2026-07-28). Единственный источник времени — slots.
+    expect(out.free_ranges).toBeUndefined();
     // длительность услуги неизвестна → DEFAULT_DURATION_MIN=60: в окно 10:00–11:00
     // целиком влезает только старт 10:00 (10:30+60 мин вылезло бы за конец окна)
     expect(out.slots.map(s => s.time)).toEqual(['10:00']);
@@ -326,7 +328,7 @@ describe('get_available_slots', () => {
     const out = await getSlots.run(1, { service_yc_id: 7, staff_yc_id: 55, date: '2026-07-19' }, NOW);
     expect(out.slots.map(s => s.time)).toEqual(['13:00', '15:30']);
   });
-  test('дата = сегодня, schedule: free_ranges тоже подрезаются по текущему времени', async () => {
+  test('дата = сегодня, schedule: прошедшие старты отрезаны из slots', async () => {
     db.one.mockResolvedValue({ id: 1, yclients_company_id: 100 });
     ycGetBookTimes.mockResolvedValue([]);
     // 10:00–14:00 свободно, сейчас 12:00 → остаётся 12:00–14:00
@@ -334,7 +336,8 @@ describe('get_available_slots', () => {
     for (let m = 600; m < 840; m += 5) grid.push({ time: toHHMM(m), is_free: true });
     ycGetStaffSeances.mockResolvedValue(grid);
     const out = await getSlots.run(1, { service_yc_id: 7, staff_yc_id: 55, date: '2026-07-19' }, NOW);
-    expect(out.free_ranges).toEqual([{ from: '12:00', to: '14:00' }]);
+    expect(out.free_ranges).toBeUndefined();
+    expect(out.slots.length).toBeGreaterThan(0);
     expect(out.slots.every(s => s.time >= '12:00')).toBe(true);
   });
   test('без service_yc_id сразу идёт в seances (book_times не зовётся)', async () => {
