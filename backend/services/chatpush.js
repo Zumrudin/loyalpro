@@ -290,6 +290,30 @@ function replyRoutingFor(channel) {
   return channel === 'telegram_bot' ? 'telegram' : channel;
 }
 
+// ── Персист исходящих WhatsApp (обход отсутствующего эха) ───────────
+//
+// С ~2026-07-26 Chatpush перестал слать эхо наших API-отправок в WhatsApp
+// как whatsapp_incoming_msg (приходит только message_status без текста) —
+// проверено на живых данных. Поэтому исходящие в WhatsApp сохраняем СРАЗУ при
+// отправке (routes/chat.js), а не ждём эхо, иначе сообщение живёт лишь
+// оптимистичным пузырём и исчезает после перезагрузки страницы.
+//
+// Чтобы не задвоить, если эхо когда-нибудь вернётся: id такого эха содержит
+// `_d<delivery_id>THISISBOT` — извлекаем delivery_id и по нему находим строку,
+// уже сохранённую при отправке (её external_message_id = ownOutgoingExternalId).
+
+/** delivery_id из id WhatsApp-эха нашей API-отправки (`_d<id>THISISBOT`) или null. */
+function deliveryIdFromWhatsappEchoId(id) {
+  if (typeof id !== 'string') return null;
+  const m = id.match(/_d(\d+)THISISBOT/);
+  return m ? m[1] : null;
+}
+
+/** external_message_id для строки, сохранённой при отправке (по delivery_id). */
+function ownOutgoingExternalId(deliveryId) {
+  return `api:${deliveryId}`;
+}
+
 module.exports = {
   sendMessage,
   sendFile,
@@ -304,5 +328,7 @@ module.exports = {
   parseIncomingMessage,
   parseMessageEvent,
   replyRoutingFor,
+  deliveryIdFromWhatsappEchoId,
+  ownOutgoingExternalId,
   qs,
 };

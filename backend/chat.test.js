@@ -1,6 +1,6 @@
 'use strict';
 const { dialogKey, isGroupKey, defaultChannel, recipientParams, isMedia, mediaLabel, messagePreview, phoneMatchCandidates } = require('./services/chat');
-const { parseMessageEvent } = require('./services/chatpush');
+const { parseMessageEvent, deliveryIdFromWhatsappEchoId, ownOutgoingExternalId } = require('./services/chatpush');
 
 describe('dialogKey', () => {
   test('prefers phone', () => {
@@ -149,5 +149,30 @@ describe('recipientParams', () => {
   });
   test('нет идентификаторов — null', () => {
     expect(recipientParams('whatsapp', { phone: '', chat_id: '' })).toBe(null);
+  });
+});
+
+// Chatpush перестал слать эхо наших исходящих WhatsApp (с ~2026-07-26 — только
+// message_status без текста), поэтому исходящие в WhatsApp пишем сразу при
+// отправке. Эти хелперы связывают отправку и (возможное) эхо, чтобы не задвоить.
+describe('deliveryIdFromWhatsappEchoId', () => {
+  test('извлекает delivery_id из id нашего API-отправленного WhatsApp-эха', () => {
+    expect(deliveryIdFromWhatsappEchoId('true_214490700357823@lid_d371968314THISISBOT'))
+      .toBe('371968314');
+  });
+  test('null для ручного (нативного) WhatsApp-id без метки', () => {
+    expect(deliveryIdFromWhatsappEchoId('true_223286927609990@lid_3A582D4461C487E42F50'))
+      .toBeNull();
+  });
+  test('null для не-строки', () => {
+    expect(deliveryIdFromWhatsappEchoId(null)).toBeNull();
+    expect(deliveryIdFromWhatsappEchoId(371968314)).toBeNull();
+  });
+});
+
+describe('ownOutgoingExternalId', () => {
+  test('префикс api: к delivery_id (строка или число)', () => {
+    expect(ownOutgoingExternalId('371968314')).toBe('api:371968314');
+    expect(ownOutgoingExternalId(371968314)).toBe('api:371968314');
   });
 });

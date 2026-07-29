@@ -12,7 +12,7 @@ const multer = require('multer');
 const config = require('../config');
 const { auth, requireRole, authOrQuery } = require('../middleware/auth');
 const chatpush = require('../services/chatpush');
-const { messagePreview, isGroupKey, recipientParams, DIALOG_KEY_SQL } = require('../services/chat');
+const { messagePreview, isGroupKey, recipientParams, DIALOG_KEY_SQL, dialogKey, phoneMatchCandidates } = require('../services/chat');
 const { createLogger } = require('../logger');
 const logger = createLogger('Chat');
 
@@ -199,6 +199,49 @@ async function resolveRecipient(salonId, key, channel) {
   return any ? { phone: any.phone, chat_id: null } : null;
 }
 
+// Сохранить исходящее в WhatsApp СРАЗУ при отправке + запушить в SSE.
+// Chatpush перестал слать эхо наших WhatsApp-отправок (см. services/chatpush) —
+// без этого сообщение живёт лишь оптимистичным пузырём и пропадает после
+// перезагрузки. tdlib/max эхо шлют исправно, их сохраняет вебхук — не трогаем.
+// external_message_id = api:<delivery_id>: если эхо вернётся, вебхук дедупит по
+// нему (chatpush.deliveryIdFromWhatsappEchoId). ON CONFLICT — на случай гонки.
+async function persistWhatsappOutgoing(salonId, { delivery, phone, chatId, text, msgType, fileUrl, mimeType }) {
+  if (!salonId || !delivery || delivery.id == null) return;
+  let clientId = null;
+  try {
+    const cands = phoneMatchCandidates(phone);
+    if (cands.length) {
+      const row = await db.oneOrNone(
+        'SELECT id FROM clients WHERE salon_id=$1 AND phone = ANY($2) LIMIT 1', [salonId, cands]);
+      clientId = row?.id || null;
+    }
+  } catch (e) { logger.warn(`client match failed for ${phone}: ${e.message}`); }
+
+  const ts = Math.floor(Date.now() / 1000);
+  const externalId = chatpush.ownOutgoingExternalId(delivery.id);
+  const ins = await db.query(
+    `INSERT INTO chatpush_messages
+       (salon_id, client_id, customer_id, channel, direction, external_message_id,
+        msg_type, text, file_url, mime_type, phone, chat_id, msg_ts)
+     VALUES ($1,$2,$3,'whatsapp','outgoing',$4,$5,$6,$7,$8,$9,$10,$11)
+     ON CONFLICT (salon_id, external_message_id) DO NOTHING
+     RETURNING id`,
+    [salonId, clientId, config.CHATPUSH.customerId, externalId,
+     msgType, text || '', fileUrl, mimeType, phone, chatId, ts]
+  );
+  if (ins.rowCount > 0) {
+    chatEvents.emit(salonId, {
+      type: 'message',
+      dialogKey: dialogKey({ phone, chat_id: chatId }),
+      message: {
+        id: ins.rows[0].id, direction: 'outgoing', channel: 'whatsapp',
+        msg_type: msgType, text: text || '',
+        file_url: fileUrl, mime_type: mimeType, sender_name: null, msg_ts: ts,
+      },
+    });
+  }
+}
+
 // POST /api/chat/dialogs/:key/send — ручной ответ оператора. body: {text, channel}.
 // Сообщение НЕ пишем в chatpush_messages сами: Chatpush пришлёт эхо в вебхук
 // (как с ответами бота) — единый источник правды, без дедупа.
@@ -220,6 +263,14 @@ router.post('/dialogs/:key/send', adminOnly, async (req, res) => {
     const delivery = await chatpush.sendMessage(config.CHATPUSH.instanceToken, { text, ...params });
     await pauseAgent(salonId, key);
     logger.info(`operator sent ${channel} to ${key}: ${text.slice(0, 60)}`);
+    if (channel === 'whatsapp') {
+      try {
+        await persistWhatsappOutgoing(salonId, {
+          delivery, phone: params.phone, chatId: rcp.chat_id || null,
+          text, msgType: 'text', fileUrl: null, mimeType: null,
+        });
+      } catch (e) { logger.error(`persist whatsapp outgoing failed: ${e.message}`); }
+    }
     res.json({ ok: true, deliveryId: delivery.id, status: delivery.status_description });
   } catch (e) {
     logger.error(`send failed: ${e.message}`);
@@ -276,6 +327,17 @@ router.post('/dialogs/:key/send-file', adminOnly, chatUpload.single('file'), asy
     }, req.file.buffer, req.file.mimetype);
     await pauseAgent(salonId, key);
     logger.info(`operator sent file ${channel} to ${key}: ${req.file.originalname} (${req.file.size} b)`);
+    if (channel === 'whatsapp') {
+      try {
+        // file_url null: ссылку на медиа Chatpush отдаёт только в эхе (которого
+        // для WhatsApp нет) — сохраняем подпись/имя, чтобы сообщение не пропадало.
+        await persistWhatsappOutgoing(salonId, {
+          delivery, phone: params.phone, chatId: rcp.chat_id || null,
+          text: caption || ('📎 ' + req.file.originalname),
+          msgType: isImage ? 'image' : 'document', fileUrl: null, mimeType: req.file.mimetype,
+        });
+      } catch (e) { logger.error(`persist whatsapp outgoing file failed: ${e.message}`); }
+    }
     res.json({ ok: true, deliveryId: delivery.id, status: delivery.status_description });
   } catch (e) {
     logger.error(`send-file failed: ${e.message}`);
