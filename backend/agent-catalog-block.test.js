@@ -14,13 +14,42 @@ const svc = (over = {}) => ({
 describe('fmtPrice', () => {
   test('точная цена одним числом', () => expect(fmtPrice(5000, 5000)).toBe('5000'));
   test('диапазон min-max', () => expect(fmtPrice(5000, 8000)).toBe('5000-8000'));
-  test('YClients-паттерн «от X»: price_max 0 или null', () => {
-    expect(fmtPrice(12000, 0)).toBe('от 12000');
-    expect(fmtPrice(12000, null)).toBe('от 12000');
+  test('YClients-паттерн: price_max 0 или null → точная цена по price_min, без «от»', () => {
+    expect(fmtPrice(12000, 0)).toBe('12000');
+    expect(fmtPrice(12000, null)).toBe('12000');
   });
   test('нет цен → пустая ячейка', () => expect(fmtPrice(null, null)).toBe(''));
-  test('кривые данные max<min → страховочное «от min», не «12000-500»', () =>
-    expect(fmtPrice(12000, 500)).toBe('от 12000'));
+  test('кривые данные max<min → точная цена по min, не «12000-500»', () =>
+    expect(fmtPrice(12000, 500)).toBe('12000'));
+});
+
+describe('fmtPrice: точная цена и заглушки (2026-07-29)', () => {
+  const { fmtPrice } = require('./services/agent/catalog-block');
+
+  test('price_max:0 — точная цена, БЕЗ «от»', () => {
+    expect(fmtPrice(6500, 0)).toBe('6500');
+  });
+
+  test('price_max < price_min (мусорные данные) — точная цена по price_min', () => {
+    expect(fmtPrice(6500, 100)).toBe('6500');
+  });
+
+  test('реальный диапазон сохраняется', () => {
+    expect(fmtPrice(3000, 5000)).toBe('3000-5000');
+  });
+
+  test('равные границы — одно число', () => {
+    expect(fmtPrice(3000, 3000)).toBe('3000');
+  });
+
+  test('цена-заглушка (≤100 ₽, без верхней границы) — маркер «инд.»', () => {
+    expect(fmtPrice(1, 0)).toBe('инд.');
+    expect(fmtPrice(100, 0)).toBe('инд.');
+  });
+
+  test('нет цены вовсе — пустая строка', () => {
+    expect(fmtPrice(0, 0)).toBe('');
+  });
 });
 
 describe('renderCatalogBlock', () => {
