@@ -40,8 +40,11 @@ module.exports = function mountRoutes(app) {
       if (!sess) return res.status(401).json({ error: 'Session expired or revoked' });
     } catch { return res.status(401).json({ error: 'Session check failed' }); }
 
-    if (req.user.role === 'specialist') {
-      const allowed = config.SPECIALIST_ALLOWED_PREFIXES.some(p => fullPath.startsWith(p));
+    if (req.user.role === 'specialist' || req.user.role === 'admin_cashier') {
+      const prefixes = req.user.role === 'admin_cashier'
+        ? config.CASHIER_ALLOWED_PREFIXES
+        : config.SPECIALIST_ALLOWED_PREFIXES;
+      const allowed = prefixes.some(p => fullPath.startsWith(p));
       if (!allowed) return res.status(403).json({ error: 'Нет доступа' });
     }
     next();

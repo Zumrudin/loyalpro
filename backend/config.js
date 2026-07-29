@@ -3,6 +3,9 @@
 // ============================================================
 require('dotenv').config();
 
+// Route prefixes a `specialist` may reach. `admin_cashier` gets the same set + chat.
+const SPECIALIST_ALLOWED_PREFIXES = ['/api/home-care', '/api/auth', '/api/template-settings', '/api/patient-portfolio', '/api/analytics/staff-dashboard', '/api/medical-cert', '/api/kb'];
+
 module.exports = {
   // Server
   PORT: process.env.PORT || 3001,
@@ -117,7 +120,9 @@ module.exports = {
 
   // API Access Control
   API_PUBLIC: ['/api/auth/login', '/api/auth/register', '/api/app-settings', '/api/salon/logo', '/api/kb/relay', '/api/kb/relay/embed'],
-  SPECIALIST_ALLOWED_PREFIXES: ['/api/home-care', '/api/auth', '/api/template-settings', '/api/patient-portfolio', '/api/analytics/staff-dashboard', '/api/medical-cert', '/api/kb'],
+  SPECIALIST_ALLOWED_PREFIXES,
+  // Администратор-кассир: те же права, что у специалиста, плюс доступ к чату.
+  CASHIER_ALLOWED_PREFIXES: [...SPECIALIST_ALLOWED_PREFIXES, '/api/chat'],
 
   // S3 (patient photo cases — Yandex Object Storage / S3-compatible)
   S3_ENDPOINT: process.env.S3_ENDPOINT,

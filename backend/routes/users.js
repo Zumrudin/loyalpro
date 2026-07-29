@@ -47,7 +47,7 @@ router.post('/', auth, requireRole('owner'), async (req, res) => {
     const { name, email, role, password, position, staff_member_id } = req.body;
     if (!name || !email || !role || !password)
       return res.status(400).json({ error: 'Заполните все поля' });
-    if (!['admin', 'specialist'].includes(role))
+    if (!['admin', 'specialist', 'admin_cashier'].includes(role))
       return res.status(400).json({ error: 'Недопустимая роль' });
     if (password.length < 8)
       return res.status(400).json({ error: 'Пароль минимум 8 символов' });
@@ -80,7 +80,7 @@ router.patch('/:id', auth, requireRole('owner'), async (req, res) => {
     let i = 1;
     if (name !== undefined) { updates.push(`name=$${i++}`); vals.push(name); }
     if (role !== undefined) {
-      if (!['owner','admin','specialist'].includes(role))
+      if (!['owner','admin','specialist','admin_cashier'].includes(role))
         return res.status(400).json({ error: 'Недопустимая роль' });
       updates.push(`role=$${i++}`); vals.push(role);
     }

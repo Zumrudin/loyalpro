@@ -81,7 +81,7 @@ async function launchApp() {
   document.getElementById('topName').textContent = ME.name || ME.email;
 
   // шапка мобильного drawer
-  const ROLE_LBL = { owner: 'Владелец', admin: 'Администратор', specialist: 'Специалист' };
+  const ROLE_LBL = { owner: 'Владелец', admin: 'Администратор', specialist: 'Специалист', admin_cashier: 'Администратор-кассир' };
   document.getElementById('mnavAv').textContent   = (ME.name || ME.email || '?').slice(0, 2).toUpperCase();
   document.getElementById('mnavName').textContent = ME.name || ME.email;
   document.getElementById('mnavRole').textContent = ROLE_LBL[ME.role] || ME.role || '';
@@ -114,6 +114,7 @@ async function launchApp() {
   if (startPage === 'dashboard') { loadDashboard(); loadLs(); }
   else if (startPage === 'staff-dashboard') { loadStaffDashboard(); }
   else if (startPage === 'home-care') { loadHomeCare(); }
+  else if (startPage === 'chat') { loadChat(); }
   else { loadDashboard(); loadLs(); }
 }
 

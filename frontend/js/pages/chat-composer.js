@@ -5,6 +5,16 @@
 
 let _cmpDialog = null;   // {key, channels, defaultChannel, ...}
 let _cmpFile = null;
+let _cmpManualH = false;  // пользователь потянул «ручку» textarea → авто-рост выключен
+
+// Авто-рост поля ввода по мере набора (до предела). Если пользователь вручную
+// растянул поле — не трогаем его высоту.
+function _cmpAutoGrow() {
+  const ta = document.getElementById('chat-input');
+  if (!ta || _cmpManualH) return;
+  ta.style.height = 'auto';
+  ta.style.height = Math.min(ta.scrollHeight, 400) + 'px';
+}
 
 const CHAT_EMOJIS = ['😀','😁','😂','🤣','😊','😍','😘','😉','🙂','🤗','🤔','😌','😎','🥰','😢','😭','😤','🙏','👍','👎','👏','🙌','💪','🤝','❤️','💕','🔥','✨','🎉','🥳','💐','🌸','☀️','⭐','✅','❌','⏰','📅','💇','💅','💆','🧖','💄','💋','🎁','☕','😇','🤩'];
 
@@ -57,7 +67,8 @@ async function _cmpSend() {
   if (!text && !_cmpFile) return;
   if (!channel) { alert('Не выбран канал отправки'); return; }
   const file = _cmpFile;
-  ta.value = ''; ta.style.height = 'auto';
+  ta.value = '';
+  if (!_cmpManualH) ta.style.height = 'auto';   // ручную высоту после отправки сохраняем
   _cmpClearFile();
   const localId = chatAppendOptimistic({ text, channel, file: file ? file.name : null });
   try {
@@ -129,9 +140,14 @@ document.addEventListener('DOMContentLoaded', () => {
   ta.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); _cmpSend(); }
   });
-  ta.addEventListener('input', () => {
-    ta.style.height = 'auto';
-    ta.style.height = Math.min(ta.scrollHeight, 120) + 'px';
+  ta.addEventListener('input', _cmpAutoGrow);
+  // Ручное растягивание нативной «ручкой» textarea: если после mousedown→mouseup
+  // высота изменилась — пользователь потянул ручку, выключаем авто-рост.
+  let _downH = 0;
+  ta.addEventListener('mousedown', () => { _downH = ta.offsetHeight; });
+  window.addEventListener('mouseup', () => {
+    if (_downH && ta.offsetHeight !== _downH) _cmpManualH = true;
+    _downH = 0;
   });
   document.getElementById('chat-send-btn').onclick = _cmpSend;
   document.getElementById('chat-emoji-btn').onclick = _cmpToggleEmoji;
