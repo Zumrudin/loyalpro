@@ -40,6 +40,10 @@ describe('lintReply', () => {
     expect(g.lintReply('в базе знаний нет статьи')).toEqual(
       expect.arrayContaining([{ type: 'taboo_word', value: 'базе знаний' }]));
   });
+  test('«базой знаний» (творительный падеж) тоже табу', () => {
+    expect(g.lintReply('я сверилась с базой знаний')).toEqual(
+      expect.arrayContaining([{ type: 'taboo_word', value: 'базой знаний' }]));
+  });
   test('утечка внутреннего id (6+ цифр подряд)', () => {
     expect(g.lintReply('ваша запись 15234567 создана')).toEqual(
       expect.arrayContaining([{ type: 'id_leak', value: '15234567' }]));
@@ -50,6 +54,12 @@ describe('lintReply', () => {
   });
   test('цена с пробелом-разделителем не триггерит id_leak', () => {
     expect(g.lintReply('стоимость 6 500 ₽')).toEqual([]);
+  });
+  test('цена ≥100000 без разделителей с маркером валюты не триггерит id_leak', () => {
+    expect(g.lintReply('курс стоит 150000 ₽')).toEqual([]);
+    expect(g.lintReply('курс 150000 руб')).toEqual([]);
+    expect(g.lintReply('ваша запись 15234567 создана')).toEqual(
+      expect.arrayContaining([{ type: 'id_leak', value: '15234567' }]));
   });
   test('повторное приветствие при hasPriorAssistant', () => {
     expect(g.lintReply('Здравствуйте! Записать вас?', { hasPriorAssistant: true }))
@@ -72,7 +82,11 @@ describe('hardViolations', () => {
   test('taboo_word и id_leak — жёсткие (требуют переписывания)', () => {
     expect(g.hardViolations([
       { type: 'taboo_word', value: 'прайс' },
+      { type: 'id_leak', value: '15234567' },
       { type: 'emoji_excess', value: '2' },
-    ])).toEqual([{ type: 'taboo_word', value: 'прайс' }]);
+    ])).toEqual([
+      { type: 'taboo_word', value: 'прайс' },
+      { type: 'id_leak', value: '15234567' },
+    ]);
   });
 });
