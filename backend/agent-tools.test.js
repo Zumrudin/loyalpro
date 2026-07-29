@@ -258,8 +258,8 @@ describe('get_service_masters', () => {
     expect(out.services).toEqual([{
       yc_id: 7, title: 'Ботулинотерапия', duration_min: null,
       staff: [
-        { yc_id: 55, name: 'Аня', price_min: 5000, price_max: 5000 },
-        { yc_id: 66, name: 'Пери', price_min: 8000, price_max: 8000 },
+        { yc_id: 55, name: 'Аня', price_min: 5000, price_max: 5000, price_display: '5000 ₽' },
+        { yc_id: 66, name: 'Пери', price_min: 8000, price_max: 8000, price_display: '8000 ₽' },
       ],
     }]);
     expect(out.not_found).toEqual([999]);
@@ -269,6 +269,20 @@ describe('get_service_masters', () => {
     expect((await svcMasters.run(1, { service_yc_ids: [] })).error).toBeTruthy();
     expect((await svcMasters.run(1, { service_yc_ids: 'семь' })).error).toBeTruthy();
     expect(ycGetServiceCatalog).not.toHaveBeenCalled();
+  });
+  test('каждый мастер получает готовую строку price_display', async () => {
+    db.any
+      .mockResolvedValueOnce([])                                                                    // services_config
+      .mockResolvedValueOnce([{ yclients_staff_id: 1, name: 'Юлия' }, { yclients_staff_id: 2, name: 'Пери Исамудиновна' }]); // staff_members
+    db.one.mockResolvedValue({ id: 1, yclients_company_id: 100 });
+    ycGetServiceCatalog.mockResolvedValue(catalog(
+      [{ id: 101, title: 'Услуга', price_min: 3000, price_max: 0, active: 1 }],
+      { 101: [1, 2] },
+      { 101: { 1: { price_min: 3000, price_max: 0 }, 2: { price_min: 5000, price_max: 8000 } } }));
+    const res = await svcMasters.run(1, { service_yc_ids: [101] });
+    const staff = res.services[0].staff;
+    expect(staff[0].price_display).toBe('3000 ₽');
+    expect(staff[1].price_display).toBe('5000-8000 ₽');
   });
 });
 

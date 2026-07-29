@@ -4,12 +4,14 @@
 // AGENT_CATALOG_IN_PROMPT: в строке каталога виден только общий диапазон
 // цены услуги, а «у Ани 5000, у главврача 8000» — здесь.
 const { loadCatalogServices } = require('../catalog-data');
+const { fmtPrice } = require('../catalog-block');
 
 const MAX_IDS = 20;
 
 const schema = {
   name: 'get_service_masters',
   description: 'Мастера указанных услуг с персональной ценой КАЖДОГО мастера (цены могут отличаться: врач vs главный врач). ' +
+    'В поле price_display каждого мастера — готовая строка цены: называй её пациенту дословно. ' +
     'Звать, когда пациент спрашивает цену у конкретного мастера или нужна точная сумма, а у услуги в каталоге диапазон.',
   input_schema: {
     type: 'object',
@@ -36,8 +38,18 @@ async function run(salonId, input) {
   const notFound = [];
   for (const id of ids) {
     const s = byId.get(id);
-    if (s) services.push({ yc_id: s.yc_id, title: s.title, duration_min: s.duration_min, staff: s.staff });
-    else notFound.push(id);
+    if (s) {
+      const staff = (s.staff || []).map(m => ({
+        ...m,
+        // Готовая строка для показа пациенту — модель копирует, а не форматирует
+        // сырые price_min/price_max (источник ошибок «от 6500 ₽» и «6500–0»).
+        price_display: (() => {
+          const p = fmtPrice(m.price_min, m.price_max);
+          return p ? `${p} ₽` : '';
+        })(),
+      }));
+      services.push({ yc_id: s.yc_id, title: s.title, duration_min: s.duration_min, staff });
+    } else notFound.push(id);
   }
   return notFound.length ? { services, not_found: notFound } : { services };
 }
