@@ -1,9 +1,9 @@
 // ── USERS PAGE ────────────────────────────────────────────────
 let _usersData = [];
 
-const ROLE_LABEL = { owner: 'Владелец', admin: 'Администратор', specialist: 'Специалист' };
-const ROLE_COLOR = { owner: '#6d28d9', admin: '#1d4ed8', specialist: '#065f46' };
-const ROLE_BG    = { owner: '#ede9fe', admin: '#dbeafe', specialist: '#d1fae5' };
+const ROLE_LABEL = { owner: 'Владелец', admin: 'Администратор', specialist: 'Специалист', admin_cashier: 'Администратор-кассир' };
+const ROLE_COLOR = { owner: '#6d28d9', admin: '#1d4ed8', specialist: '#065f46', admin_cashier: '#9a3412' };
+const ROLE_BG    = { owner: '#ede9fe', admin: '#dbeafe', specialist: '#d1fae5', admin_cashier: '#ffedd5' };
 
 async function loadUsers() {
   try {
@@ -82,6 +82,7 @@ function usersShowModal(u, isNew) {
           <select id="umRole" ${!isOwner ? 'disabled' : ''}>
             ${isOwner ? '<option value="admin">Администратор</option>' : ''}
             <option value="specialist">Специалист</option>
+            <option value="admin_cashier">Администратор-кассир</option>
           </select>
         </div>
         <div class="fg" id="umStaffRow" hidden>

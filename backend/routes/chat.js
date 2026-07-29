@@ -18,10 +18,11 @@ const logger = createLogger('Chat');
 
 const chatEvents = require('../services/chat-events');
 
-const adminOnly = [auth, requireRole('owner', 'admin')];
+// admin_cashier — «Администратор-кассир»: полный доступ к чату наравне с owner/admin.
+const adminOnly = [auth, requireRole('owner', 'admin', 'admin_cashier')];
 // Для SSE: EventSource не умеет заголовки, токен едет в ?token= —
 // route-уровневый auth должен принимать query (authOrQuery), не только Bearer.
-const adminOnlyQuery = [authOrQuery, requireRole('owner', 'admin')];
+const adminOnlyQuery = [authOrQuery, requireRole('owner', 'admin', 'admin_cashier')];
 
 // GET /api/chat/stream — SSE-поток событий чата салона. JWT через ?token=.
 // Соединение держим открытым, heartbeat — в chat-events.

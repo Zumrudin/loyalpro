@@ -46,8 +46,28 @@ function _chatTitle(d) {
   return d.phone || d.key;
 }
 
+// ── Масштаб шрифта переписки (кнопки A−/A+, сохраняется в localStorage) ──
+const CHAT_FS_MIN = 13, CHAT_FS_MAX = 26, CHAT_FS_DEF = 15;
+function _chatFsRead() {
+  const px = Number(localStorage.getItem('lp_chat_fs'));
+  return px >= CHAT_FS_MIN && px <= CHAT_FS_MAX ? px : CHAT_FS_DEF;
+}
+function _chatFsApply(px) {
+  const layout = document.querySelector('.chat-layout');
+  if (layout) layout.style.setProperty('--chat-fs', px + 'px');
+}
+function chatFontStep(delta) {
+  const px = Math.max(CHAT_FS_MIN, Math.min(CHAT_FS_MAX, _chatFsRead() + delta));
+  localStorage.setItem('lp_chat_fs', px);
+  _chatFsApply(px);
+}
+
 // Вход на страницу: первичная загрузка + запуск живого обновления.
 async function loadChat() {
+  _chatFsApply(_chatFsRead());
+  // Администратор-кассир видит чат, но не управляет настройками ИИ-агента.
+  const agentBtn = document.getElementById('chat-agent-settings-btn');
+  if (agentBtn) agentBtn.style.display = (typeof ME !== 'undefined' && ME && ME.role === 'admin_cashier') ? 'none' : '';
   const s = document.getElementById('chat-search');
   if (s) s.value = _chatSearch;
   await refreshChatDialogs(false);
@@ -164,10 +184,8 @@ let _chatMsgs = [];
 let _chatLocalSeq = 0;   // id оптимистичных пузырей (data-local)
 
 const _chatIsGroup = () => String(_chatActiveKey || '').startsWith('g:');
-const _chatMultiChannel = () =>
-  new Set(_chatMsgs.map(m => _chatChannel(m.channel).label)).size > 1;
 
-function _chatMsgHtml(m, multiChannel, isGroup) {
+function _chatMsgHtml(m, isGroup) {
   const side = m.direction === 'outgoing' ? 'out' : 'in';
   const isText = !m.msg_type || String(m.msg_type).toLowerCase().includes('text');
   let body;
@@ -180,8 +198,10 @@ function _chatMsgHtml(m, multiChannel, isGroup) {
   } else {
     body = '📎 Вложение' + (m.text ? `<div>${_chatEsc(m.text)}</div>` : '');
   }
+  // Тег мессенджера под каждым сообщением (если канал известен) —
+  // оператор всегда видит, откуда пришло и куда ушло сообщение.
   const ch = _chatChannel(m.channel);
-  const chanTag = multiChannel
+  const chanTag = m.channel
     ? `<span class="chat-chan-tag ${ch.cls}">${_chatEsc(ch.label)}</span>`
     : '';
   const sender = (isGroup && m.direction !== 'outgoing' && m.sender_name)
@@ -205,9 +225,8 @@ function renderChatMessages(messages) {
     paneEl.innerHTML = '<div class="empty">Нет сообщений</div>';
     return;
   }
-  const multiChannel = _chatMultiChannel();
   const isGroup = _chatIsGroup();
-  const html = messages.map(m => _chatMsgHtml(m, multiChannel, isGroup)).join('');
+  const html = messages.map(m => _chatMsgHtml(m, isGroup)).join('');
   // Без изменений — не трогаем DOM (сохраняем позицию прокрутки).
   if (paneEl._lastHtml === html) return;
   // Автопрокрутка вниз, только если пользователь и так был у низа переписки.
@@ -229,13 +248,13 @@ function chatAppendMessage(m) {
     if (local) {
       const el = paneEl.querySelector(`[data-local="${local._local}"]`);
       _chatMsgs[_chatMsgs.indexOf(local)] = m;
-      if (el) { el.outerHTML = _chatMsgHtml(m, _chatMultiChannel(), _chatIsGroup()); return; }
+      if (el) { el.outerHTML = _chatMsgHtml(m, _chatIsGroup()); return; }
     }
   }
   _chatMsgs.push(m);
   if (paneEl.querySelector('.empty')) paneEl.innerHTML = '';
   const atBottom = paneEl.scrollHeight - paneEl.scrollTop - paneEl.clientHeight < 60;
-  paneEl.insertAdjacentHTML('beforeend', _chatMsgHtml(m, _chatMultiChannel(), _chatIsGroup()));
+  paneEl.insertAdjacentHTML('beforeend', _chatMsgHtml(m, _chatIsGroup()));
   if (atBottom || m.direction === 'outgoing') paneEl.scrollTop = paneEl.scrollHeight;
 }
 
@@ -252,7 +271,7 @@ function chatAppendOptimistic({ text, channel, file }) {
   const paneEl = document.getElementById('chat-messages');
   if (!paneEl) return id;
   if (paneEl.querySelector('.empty')) paneEl.innerHTML = '';
-  paneEl.insertAdjacentHTML('beforeend', _chatMsgHtml(m, _chatMultiChannel(), _chatIsGroup()));
+  paneEl.insertAdjacentHTML('beforeend', _chatMsgHtml(m, _chatIsGroup()));
   paneEl.scrollTop = paneEl.scrollHeight;
   return id;
 }
@@ -391,3 +410,4 @@ window.onChatSearch = onChatSearch;
 window.stopChatPolling = stopChatLive;   // имя сохранено — его зовёт роутер при уходе со страницы
 window.chatAppendOptimistic = chatAppendOptimistic;
 window.chatResolveOptimistic = chatResolveOptimistic;
+window.chatFontStep = chatFontStep;
