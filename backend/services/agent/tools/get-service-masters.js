@@ -39,15 +39,17 @@ async function run(salonId, input) {
   for (const id of ids) {
     const s = byId.get(id);
     if (s) {
-      const staff = (s.staff || []).map(m => ({
-        ...m,
-        // Готовая строка для показа пациенту — модель копирует, а не форматирует
-        // сырые price_min/price_max (источник ошибок «от 6500 ₽» и «6500–0»).
-        price_display: (() => {
-          const p = fmtPrice(m.price_min, m.price_max);
-          return p ? `${p} ₽` : '';
-        })(),
-      }));
+      const staff = (s.staff || []).map(m => {
+        const p = fmtPrice(m.price_min, m.price_max);
+        return {
+          ...m,
+          // Готовая строка для показа пациенту — модель копирует, а не форматирует
+          // сырые price_min/price_max (источник ошибок «от 6500 ₽» и «6500–0»).
+          // «₽» только к числу: fmtPrice может вернуть «инд.» (плейсхолдер-цена) —
+          // там суффикс сломал бы строку в «инд. ₽».
+          price_display: /^\d/.test(p) ? `${p} ₽` : p,
+        };
+      });
       services.push({ yc_id: s.yc_id, title: s.title, duration_min: s.duration_min, staff });
     } else notFound.push(id);
   }

@@ -273,16 +273,28 @@ describe('get_service_masters', () => {
   test('каждый мастер получает готовую строку price_display', async () => {
     db.any
       .mockResolvedValueOnce([])                                                                    // services_config
-      .mockResolvedValueOnce([{ yclients_staff_id: 1, name: 'Юлия' }, { yclients_staff_id: 2, name: 'Пери Исамудиновна' }]); // staff_members
+      .mockResolvedValueOnce([
+        { yclients_staff_id: 1, name: 'Юлия' },
+        { yclients_staff_id: 2, name: 'Пери Исамудиновна' },
+        { yclients_staff_id: 3, name: 'Врач-плейсхолдер' },
+        { yclients_staff_id: 4, name: 'Врач-без-цены' },
+      ]); // staff_members
     db.one.mockResolvedValue({ id: 1, yclients_company_id: 100 });
     ycGetServiceCatalog.mockResolvedValue(catalog(
-      [{ id: 101, title: 'Услуга', price_min: 3000, price_max: 0, active: 1 }],
-      { 101: [1, 2] },
-      { 101: { 1: { price_min: 3000, price_max: 0 }, 2: { price_min: 5000, price_max: 8000 } } }));
-    const res = await svcMasters.run(1, { service_yc_ids: [101] });
+      [
+        { id: 101, title: 'Услуга', price_min: 3000, price_max: 0, active: 1 },
+        { id: 102, title: 'Услуга без цены', price_min: 0, price_max: 0, active: 1 },
+      ],
+      { 101: [1, 2, 3], 102: [4] },
+      { 101: { 1: { price_min: 3000, price_max: 0 }, 2: { price_min: 5000, price_max: 8000 }, 3: { price_min: 1, price_max: 0 } } }));
+    const res = await svcMasters.run(1, { service_yc_ids: [101, 102] });
     const staff = res.services[0].staff;
     expect(staff[0].price_display).toBe('3000 ₽');
     expect(staff[1].price_display).toBe('5000-8000 ₽');
+    // Плейсхолдер-цена (≤100₽, определяет врач) → «инд.» без «₽»: это не число, суффикс ломает строку.
+    expect(staff[2].price_display).toBe('инд.');
+    // Совсем нет цены → пустая строка.
+    expect(res.services[1].staff[0].price_display).toBe('');
   });
 });
 
