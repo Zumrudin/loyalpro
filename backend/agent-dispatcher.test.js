@@ -84,6 +84,22 @@ test('эскалация с пустой (пробельной) репликой
   expect(d.send).toHaveBeenCalledWith(meta, expect.stringContaining('администратор'));
 });
 
+test('эскалация с репликой БЕЗ упоминания администратора → фраза перевода добавляется', async () => {
+  const d = deps({ orchestrator: { runDialog: jest.fn(async () => ({ replies: ['Спасибо, что предупредили!'], escalated: true })) } });
+  dispatcher.enqueue(1, 'k', meta, d);
+  await jest.advanceTimersByTimeAsync(1000);
+  expect(d.send).toHaveBeenCalledTimes(2);
+  expect(d.send).toHaveBeenNthCalledWith(1, meta, 'Спасибо, что предупредили!');
+  expect(d.send).toHaveBeenNthCalledWith(2, meta, expect.stringContaining('администратору'));
+});
+
+test('эскалация с репликой, где перевод уже объявлен → ничего не добавляем', async () => {
+  const d = deps({ orchestrator: { runDialog: jest.fn(async () => ({ replies: ['Передаю ваш диалог администратору клиники — он подключится с минуты на минуту 🤍'], escalated: true })) } });
+  dispatcher.enqueue(1, 'k', meta, d);
+  await jest.advanceTimersByTimeAsync(1000);
+  expect(d.send).toHaveBeenCalledTimes(1);
+});
+
 test('уже-эскалированный диалог → бот молчит, не переотправляет фразу перевода (регрессия)', async () => {
   const d = deps({ orchestrator: { runDialog: jest.fn(async () => ({ replies: [], escalated: true, alreadyEscalated: true })) } });
   dispatcher.enqueue(1, 'k', meta, d);

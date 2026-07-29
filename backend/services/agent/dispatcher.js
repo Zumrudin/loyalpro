@@ -104,8 +104,13 @@ async function process(salonId, dialogKey, meta, opts = {}) {
           logger.warn(`dialog ${dialogKey}: create_booking не удался, переигровки нет либо повторный провал — принудительный перевод на человека`);
           await handOverSilently(salonId, dialogKey, meta, send, escalate, 'create_booking не удался — запись не создана автоматически');
         }
-      } else if (res.escalated && replies.length === 0) {
-        await send(meta, DEFAULT_HANDOVER_TEXT);
+      } else if (res.escalated) {
+        // Свежая эскалация: клиент ОБЯЗАН услышать про перевод на администратора.
+        // Модель могла ответить по делу («Спасибо, что предупредили»), но забыть
+        // объявить перевод — тогда добавляем стандартную фразу детерминированно.
+        for (const text of replies) await send(meta, text);
+        const announced = replies.some(t => /администратор/i.test(t));
+        if (!announced) await send(meta, DEFAULT_HANDOVER_TEXT);
       } else if (replies.length === 0) {
         // Бот не смог ответить. Молчать нельзя — зовём человека и говорим об этом.
         logger.warn(`dialog ${dialogKey}: ход без реплик (exhausted=${!!res.exhausted}) — страховочный ответ + эскалация`);
