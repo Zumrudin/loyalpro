@@ -306,6 +306,7 @@ async function runDialog(salonId, dialogKey, opts = {}) {
             tools: [],
           }, { client: opts.client });
           if (fix.text) { replies.length = 0; replies.push(fix.text); }
+          else logger.warn(`dialog ${dialogKey}: корректирующий довызов вернул пустой текст — отдаю исходную реплику`);
         } catch (e) {
           logger.warn(`dialog ${dialogKey}: корректирующий довызов не удался (${e.message}) — отдаю исходную реплику`);
         }

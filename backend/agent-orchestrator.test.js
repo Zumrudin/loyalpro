@@ -324,8 +324,19 @@ describe('reply-guard в оркестраторе (2026-07-29)', () => {
       .mockResolvedValueOnce(textResp('В нашем прайсе чистка 6500'))
       .mockResolvedValueOnce(textResp('Смотрю прайс — 6500'));
     const out = await orchestrator.runDialog(1, 'k', { deps, today: '2026-07-29', now: '09:00' });
-    expect(out.replies).toHaveLength(1);
+    // Доставляется именно переписанная (пусть и грязная) реплика, не исходная.
+    expect(out.replies).toEqual(['Смотрю прайс — 6500']);
     // Ровно 2 вызова: исходный + один ретрай. Второй раз не переписываем.
+    expect(deps.provider.createMessage).toHaveBeenCalledTimes(2);
+  });
+
+  test('корректирующий довызов упал → отдаём исходную реплику как есть (без throw)', async () => {
+    const deps = makeDeps();
+    deps.provider.createMessage
+      .mockResolvedValueOnce(textResp('Посмотрела в нашем прайсе, чистка 6500 ₽'))
+      .mockRejectedValueOnce(new Error('421 boom'));
+    const out = await orchestrator.runDialog(1, 'k', { deps, today: '2026-07-29', now: '09:00' });
+    expect(out.replies).toEqual(['Посмотрела в нашем прайсе, чистка 6500 ₽']);
     expect(deps.provider.createMessage).toHaveBeenCalledTimes(2);
   });
 
