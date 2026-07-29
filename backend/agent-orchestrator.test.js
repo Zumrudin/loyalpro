@@ -301,6 +301,57 @@ describe('runDialog — деградация после успешной зап�
   });
 });
 
+// ── reply-guard в оркестраторе (инцидент 2026-07-28: выдуманное 14:00; утечка
+// внутренней кухни правила 9). Жёсткие нарушения → один корректирующий довызов,
+// время/стиль → только лог (меряем шум неделю). ──
+describe('reply-guard в оркестраторе (2026-07-29)', () => {
+  test('жёсткое нарушение (слово-табу) → один корректирующий довызов, отдаётся переписанная реплика', async () => {
+    const deps = makeDeps();
+    deps.provider.createMessage
+      .mockResolvedValueOnce(textResp('Посмотрела в нашем прайсе, чистка 6500 ₽'))
+      .mockResolvedValueOnce(textResp('Чистка лица стоит 6500 ₽'));
+    const out = await orchestrator.runDialog(1, 'k', { deps, today: '2026-07-29', now: '09:00' });
+    expect(out.replies).toEqual(['Чистка лица стоит 6500 ₽']);
+    expect(deps.provider.createMessage).toHaveBeenCalledTimes(2);
+    // Корректирующий довызов — без инструментов.
+    const fixArgs = deps.provider.createMessage.mock.calls[1][0];
+    expect(fixArgs.tools).toEqual([]);
+  });
+
+  test('переписанная реплика всё ещё грязная → отдаём её как есть (без второго ретрая)', async () => {
+    const deps = makeDeps();
+    deps.provider.createMessage
+      .mockResolvedValueOnce(textResp('В нашем прайсе чистка 6500'))
+      .mockResolvedValueOnce(textResp('Смотрю прайс — 6500'));
+    const out = await orchestrator.runDialog(1, 'k', { deps, today: '2026-07-29', now: '09:00' });
+    expect(out.replies).toHaveLength(1);
+    // Ровно 2 вызова: исходный + один ретрай. Второй раз не переписываем.
+    expect(deps.provider.createMessage).toHaveBeenCalledTimes(2);
+  });
+
+  test('unknown_time НЕ переписывается (лог-only)', async () => {
+    const deps = makeDeps({ handlers: { get_available_slots: jest.fn(async () => ({ slots: [{ time: '14:30' }] })) } });
+    deps.provider.createMessage
+      .mockResolvedValueOnce(toolResp('get_available_slots', { staff_yc_id: 1, service_yc_id: 1, date: '2026-07-30' }))
+      .mockResolvedValueOnce(textResp('могу предложить 15:00'));
+    const out = await orchestrator.runDialog(1, 'k', { deps, today: '2026-07-29', now: '09:00' });
+    // Реплика доставлена как есть, без корректирующего довызова: 1 tool-итерация + 1 финал = 2 вызова.
+    expect(out.replies).toEqual(['могу предложить 15:00']);
+    expect(deps.provider.createMessage).toHaveBeenCalledTimes(2);
+  });
+
+  test('время, названное клиентом в истории, не считается unknown_time', async () => {
+    const deps = makeDeps({
+      history: { loadTranscript: jest.fn(async () => ({ messages: [{ role: 'user', content: 'хочу на 15:00' }], watermark: 100 })) },
+    });
+    deps.provider.createMessage.mockResolvedValueOnce(textResp('Хорошо, 15:00 вам подходит?'));
+    const out = await orchestrator.runDialog(1, 'k', { deps, today: '2026-07-29', now: '09:00' });
+    expect(out.replies).toEqual(['Хорошо, 15:00 вам подходит?']);
+    // Нет ретрая: только исходный вызов.
+    expect(deps.provider.createMessage).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('AGENT_CATALOG_IN_PROMPT', () => {
   test('флаг + блок собрался → каталог в system, реестр catalogMode (без list_services)', async () => {
     const deps = makeDeps();

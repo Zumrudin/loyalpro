@@ -7,6 +7,7 @@ const stateDefault = require('./dialog-state');
 const identityDefault = require('./identity');
 const config = require('../../config');
 const catalogBlockDefault = require('./catalog-block');
+const replyGuard = require('./reply-guard');
 const { buildSystemPrompt } = require('./system-prompt');
 const { createLogger } = require('../../logger');
 const logger = createLogger('AgentOrchestrator');
@@ -175,6 +176,16 @@ async function runDialog(salonId, dialogKey, opts = {}) {
     if (!messages.length) return { replies: [], escalated: false, sideEffect: false };
 
     const convo = messages.slice();
+
+    // Допустимые времена для финальной реплики: всё, что реально всплывало в
+    // этом ходе — история диалога (клиент сам называл время / мы уже предлагали),
+    // текущее время из промпта и результаты инструментов (пополняется ниже).
+    // Сверка — детерминированная страховка правила «время дословно из slots»
+    // (инцидент 2026-07-28: выдуманное 14:00). Пока ТОЛЬКО лог — меряем шум.
+    const allowedTimes = new Set(replyGuard.extractTimes(JSON.stringify(messages)));
+    for (const t of replyGuard.extractTimes(system)) allowedTimes.add(t);
+    const hasPriorAssistant = messages.some(m => m.role === 'assistant');
+
     const replies = [];
     let escalated = false;
     let sideEffect = false;
@@ -236,6 +247,7 @@ async function runDialog(salonId, dialogKey, opts = {}) {
         if (tc.name === 'create_booking') { if (isError) bookingErrored = true; else bookingSucceeded = true; }
         if (bookingErrored && SLOT_READ_TOOLS.has(tc.name)) recheckedAfterFail = true;
         results.push({ id: tc.id, name: tc.name, result, isError });
+        for (const t of replyGuard.extractTimes(JSON.stringify(result))) allowedTimes.add(t);
       }
       for (const m of provider.toolResultMessages(results)) convo.push(m);
       if (escalated) break;
@@ -265,6 +277,39 @@ async function runDialog(salonId, dialogKey, opts = {}) {
     // Не эскалируем в пустоту: отдаём правдивое подтверждение из данных брони.
     if (degradedAfterWrite && replies.length === 0) {
       replies.push(buildWriteConfirmation(lastWrite));
+    }
+
+    // ── Линт финальной реплики (reply-guard) ──
+    if (replies.length && !degradedAfterWrite) {
+      const joined = replies.join('\n');
+      const violations = [
+        ...replyGuard.lintReply(joined, { hasPriorAssistant }),
+        ...replyGuard.checkOfferedTimes(joined, allowedTimes),
+      ];
+      if (violations.length) {
+        logger.warn(`dialog ${dialogKey}: reply-guard: ${JSON.stringify(violations)}`);
+      }
+      const hard = replyGuard.hardViolations(violations);
+      if (hard.length) {
+        // ОДИН корректирующий довызов без инструментов: убрать внутреннюю кухню,
+        // сохранив смысл. Второй раз не переписываем — доставляем как есть (лог уже был).
+        try {
+          const fix = await provider.createMessage({
+            system,
+            messages: convo.concat([{
+              role: 'user',
+              content: 'СЛУЖЕБНАЯ ПРОВЕРКА (пациент этого не видит): твой последний ответ ' +
+                `содержит внутренние термины или идентификаторы: ${hard.map(v => v.value).join(', ')}. ` +
+                'Перепиши его для пациента тем же смыслом, но без этих слов и чисел. ' +
+                'В ответе — ТОЛЬКО переписанный текст.',
+            }]),
+            tools: [],
+          }, { client: opts.client });
+          if (fix.text) { replies.length = 0; replies.push(fix.text); }
+        } catch (e) {
+          logger.warn(`dialog ${dialogKey}: корректирующий довызов не удался (${e.message}) — отдаю исходную реплику`);
+        }
+      }
     }
 
     // Пришло ли новое входящее, пока мы думали?
