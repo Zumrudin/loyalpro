@@ -216,6 +216,9 @@ async function run(salonId, input, ctx = {}) {
           service_yc_id: entries[i].svc.yc_id,
           service_title: entries[i].svc.title,
           staff_yc_id: entries[i].staff.yc_id,
+          // Имя мастера уже есть в назначении (пришло из каталога) — кладём в звено,
+          // чтобы рендер активных вариантов в промпте называл человека, а не id.
+          staff_name: entries[i].staff.name || null,
           datetime: `${day}T${eq.toHHMM(s)}:00+03:00`,
           seance_length: entries[i].durationMin * 60,
         }));

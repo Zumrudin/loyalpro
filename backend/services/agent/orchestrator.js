@@ -7,6 +7,7 @@ const stateDefault = require('./dialog-state');
 const identityDefault = require('./identity');
 const config = require('../../config');
 const catalogBlockDefault = require('./catalog-block');
+const seqOffers = require('./sequential-offers');
 const replyGuard = require('./reply-guard');
 const { buildSystemPrompt } = require('./system-prompt');
 const { createLogger } = require('../../logger');
@@ -166,6 +167,19 @@ async function runDialog(salonId, dialogKey, opts = {}) {
   }
   const registry = d.registry || (catalogBlock ? registryDefault.catalogMode : registryDefault);
 
+  // Живые варианты get_sequential_slots этого диалога → в волатильный хвост промпта.
+  // Их мог создать только ПРЕДЫДУЩИЙ ход (в текущем результат инструмента модель
+  // и так видит), поэтому одного peek перед циклом попыток достаточно. Сбой кэша
+  // не имеет права ронять диалог — просто идём без блока (модель перезапросит слоты).
+  let activeOffers = [];
+  try {
+    const live = seqOffers.peek(salonId, dialogKey, { nowMs: opts.nowMs || Date.now() });
+    if (live) activeOffers = seqOffers.renderOffers(live);
+  } catch (e) {
+    logger.warn(`dialog ${dialogKey}: не прочитать активные варианты стыковки (${e.message}) — промпт без них`);
+    activeOffers = [];
+  }
+
   const system = buildSystemPrompt({
     salonName: opts.salonName,
     workingHours: opts.workingHours,
@@ -180,6 +194,7 @@ async function runDialog(salonId, dialogKey, opts = {}) {
     phoneKnown: !!ctx.phone,
     clientName,
     catalogBlock,
+    activeOffers,
   });
   // nowMs — чтобы инструменты слотов отрезали уже прошедшее время «сегодня».
   // clientPhone/clientName — детерминированный фолбэк для create_booking основного

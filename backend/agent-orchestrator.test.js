@@ -553,3 +553,69 @@ describe('AGENT_CATALOG_IN_PROMPT', () => {
     expect(call.tools.map(t => t.name)).toContain('list_services');
   });
 });
+
+// Модель видит option_id только в результате инструмента ТОГО хода, а транскрипт
+// пересобирается из текстов сообщений — на следующем ходу («давайте первый») id
+// потерян. Живые варианты подкладываем в волатильный хвост промпта.
+describe('активные варианты стыковки в системном промпте', () => {
+  const seqOffers = require('./services/agent/sequential-offers');
+  const CHAIN = [
+    { service_yc_id: 101, service_title: 'Чистка', staff_yc_id: 7, staff_name: 'Юлия',
+      datetime: '2026-07-30T10:30:00+03:00', seance_length: 3600 },
+    { service_yc_id: 202, service_title: 'Консультация', staff_yc_id: 12, staff_name: 'Астемир',
+      datetime: '2026-07-30T12:00:00+03:00', seance_length: 1800 },
+  ];
+
+  beforeEach(() => seqOffers._reset());
+  afterEach(() => { jest.restoreAllMocks(); seqOffers._reset(); });
+
+  test('есть живые варианты диалога → их option_id и время попали в system', async () => {
+    seqOffers.remember(1, 'k', {
+      o1: { chain: CHAIN, booking_mode: 'separate_records' },
+      o2: { chain: [CHAIN[0]], booking_mode: 'single_record' },
+    });
+    const deps = makeDeps();
+    deps.provider.createMessage.mockResolvedValueOnce(textResp('Оформляю?'));
+
+    await orchestrator.runDialog(1, 'k', { deps });
+
+    const sys = deps.provider.createMessage.mock.calls[0][0].system;
+    expect(sys).toContain('АКТИВНЫЕ ВАРИАНТЫ СТЫКОВКИ');
+    expect(sys).toContain('o1 — 30.07: 10:30 «Чистка» (Юлия) → 12:00 «Консультация» (Астемир)');
+    expect(sys).toContain('o2 — 30.07: 10:30 «Чистка» (Юлия)');
+  });
+
+  test('вариантов нет → блока в промпте нет', async () => {
+    const deps = makeDeps();
+    deps.provider.createMessage.mockResolvedValueOnce(textResp('Здравствуйте!'));
+    await orchestrator.runDialog(1, 'k', { deps });
+    expect(deps.provider.createMessage.mock.calls[0][0].system).not.toContain('АКТИВНЫЕ ВАРИАНТЫ СТЫКОВКИ');
+  });
+
+  test('варианты чужого диалога не подмешиваются', async () => {
+    seqOffers.remember(1, 'other', { o1: { chain: CHAIN } });
+    const deps = makeDeps();
+    deps.provider.createMessage.mockResolvedValueOnce(textResp('Здравствуйте!'));
+    await orchestrator.runDialog(1, 'k', { deps });
+    expect(deps.provider.createMessage.mock.calls[0][0].system).not.toContain('АКТИВНЫЕ ВАРИАНТЫ СТЫКОВКИ');
+  });
+
+  test('протухшие варианты (часы берём из opts.nowMs) в промпт не идут', async () => {
+    seqOffers.remember(1, 'k', { o1: { chain: CHAIN } }, { nowMs: 1000 });
+    const deps = makeDeps();
+    deps.provider.createMessage.mockResolvedValueOnce(textResp('Здравствуйте!'));
+    await orchestrator.runDialog(1, 'k', { deps, nowMs: 1000 + seqOffers.TTL_MS + 1 });
+    expect(deps.provider.createMessage.mock.calls[0][0].system).not.toContain('АКТИВНЫЕ ВАРИАНТЫ СТЫКОВКИ');
+  });
+
+  test('peek упал → ход не ломается, просто без блока', async () => {
+    jest.spyOn(seqOffers, 'peek').mockImplementation(() => { throw new Error('boom'); });
+    const deps = makeDeps();
+    deps.provider.createMessage.mockResolvedValueOnce(textResp('Здравствуйте!'));
+
+    const out = await orchestrator.runDialog(1, 'k', { deps });
+
+    expect(out.replies).toEqual(['Здравствуйте!']);
+    expect(deps.provider.createMessage.mock.calls[0][0].system).not.toContain('АКТИВНЫЕ ВАРИАНТЫ СТЫКОВКИ');
+  });
+});
