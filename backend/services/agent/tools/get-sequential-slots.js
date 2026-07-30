@@ -9,6 +9,7 @@ const { seancesToRanges } = require('./get-available-slots');
 const eq = require('../equipment');
 const eqContext = require('../equipment-context');
 const seq = require('../sequential');
+const seqOffers = require('../sequential-offers');
 
 // ── Несколько услуг ПОДРЯД одному клиенту («встык»). ────────────────────────
 // Отдельный инструмент, а не «сравни слоты двух услуг сама»: стыковка окон —
@@ -334,6 +335,23 @@ async function run(salonId, input, ctx = {}) {
     || x.date.localeCompare(y.date));
 
   const shortlist = variants.slice(0, MAX_VARIANTS);
+
+  // option_id на каждый старт + кэш цепочек: пациент выбирает вариант →
+  // модель зовёт book_chain(option_id), НЕ переписывая chain руками.
+  let optN = 0;
+  const offerMap = {};
+  for (const v of shortlist) {
+    for (const st of v.starts) {
+      st.option_id = `o${++optN}`;
+      offerMap[st.option_id] = {
+        chain: st.chain,
+        booking_mode: st.booking_mode,
+        anchored: !!v.anchored,
+      };
+    }
+  }
+  if (ctx && ctx.dialogKey) seqOffers.remember(salonId, ctx.dialogKey, offerMap, { nowMs });
+
   const out = { requested_date: date, variants: shortlist, performers_by_service: performersByService };
   if (scheduleFailures) out.schedule_degraded = true;
   if (preferredCannot.length) out.preferred_staff_cannot = preferredCannot;

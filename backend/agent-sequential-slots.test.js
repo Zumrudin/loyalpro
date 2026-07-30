@@ -140,6 +140,28 @@ describe('get_sequential_slots — лестница приоритета', () =>
     expect(r.hint).toMatch(/не подбирай другого мастера|отдельные визиты/i);
     expect(ycGetStaffSeances).not.toHaveBeenCalled();
   });
+
+  test('каждый старт выдачи имеет уникальный option_id формата oN', async () => {
+    ycGetStaffSeances.mockImplementation(async (s, staffId) =>
+      String(staffId) === '11' ? grid(600, 780) : []);
+    const r = await runTool({ ...baseInput, preferred_staff_yc_id: 11 });
+    const ids = r.variants.flatMap(v => v.starts.map(s => s.option_id));
+    expect(ids.length).toBeGreaterThan(0);
+    expect(new Set(ids).size).toBe(ids.length);
+    for (const id of ids) expect(id).toMatch(/^o\d+$/);
+  });
+
+  test('варианты запоминаются в sequential-offers: take по option_id отдаёт chain и booking_mode', async () => {
+    const offers = require('./services/agent/sequential-offers');
+    offers._reset();
+    ycGetStaffSeances.mockImplementation(async (s, staffId) =>
+      String(staffId) === '11' ? grid(600, 780) : []);
+    const r = await tool.run(1, { ...baseInput, preferred_staff_yc_id: 11 }, { ...CTX, dialogKey: 'dlg' });
+    const st = r.variants[0].starts[0];
+    const saved = offers.take(1, 'dlg', st.option_id);
+    expect(saved.chain).toEqual(st.chain);
+    expect(saved.booking_mode).toBe(st.booking_mode);
+  });
 });
 
 // Якорный режим: первая услуга уже забронирована, её НЕ двигаем — добавляем следующую после неё.
