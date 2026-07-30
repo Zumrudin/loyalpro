@@ -22,11 +22,12 @@ function remember(salonId, dialogKey, offers, opts = {}) {
   while (store.size > MAX_DIALOGS) store.delete(store.keys().next().value);
 }
 
+// take НЕ удаляет запись — ретрай book_chain после сетевого сбоя должен мочь перечитать тот же вариант
 function take(salonId, dialogKey, optionId, opts = {}) {
   const now = opts.nowMs || Date.now();
   const entry = store.get(keyOf(salonId, dialogKey));
   if (!entry || now - entry.at > TTL_MS) return null;
-  return entry.offers[optionId] || null;
+  return Object.prototype.hasOwnProperty.call(entry.offers, optionId) ? (entry.offers[optionId] || null) : null;
 }
 
 function _reset() { store.clear(); }

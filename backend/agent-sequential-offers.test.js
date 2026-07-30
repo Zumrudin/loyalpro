@@ -32,3 +32,9 @@ test('TTL: протухшее предложение не возвращаетс
   offers.remember(1, 'dlg', { o1: { chain: CHAIN, booking_mode: 'single_record' } }, { nowMs: 1000 });
   expect(offers.take(1, 'dlg', 'o1', { nowMs: 1000 + offers.TTL_MS + 1 })).toBeNull();
 });
+
+test('option_id не ходит по прототипу (LLM может прислать constructor/__proto__)', () => {
+  offers.remember(1, 'dlg', { o1: { chain: CHAIN, booking_mode: 'separate_records' } });
+  expect(offers.take(1, 'dlg', 'constructor')).toBeNull();
+  expect(offers.take(1, 'dlg', '__proto__')).toBeNull();
+});
