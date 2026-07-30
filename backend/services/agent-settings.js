@@ -24,9 +24,9 @@ function rowToSettings(row) {
   };
 }
 
-// Валидация времени из тела запроса. undefined → оставить текущее значение.
+// Валидация времени из тела запроса. undefined и null → оставить текущее значение.
 function pickTime(raw, current) {
-  if (raw === undefined) return current;
+  if (raw == null) return current;   // undefined и null → оставить текущее
   if (parseHhMm(raw) === null) { const e = new Error('bad time'); e.code = 'BAD_TIME'; throw e; }
   return String(raw).trim();
 }
@@ -42,11 +42,15 @@ async function getSettings(salonId) {
 
 // Поля расписания, не переданные в теле, сохраняют текущее значение — иначе
 // старый закэшированный фронт (шлёт только enabled+mode) молча сбросил бы окно.
+// enabled/mode ведут себя иначе — отсутствие поля означает false/'all': это
+// прежний контракт роута, менять его в рамках фичи расписания не стали.
 async function updateSettings(salonId, body) {
   const { enabled, mode, scheduleEnabled, scheduleStart, scheduleEnd } = body || {};
   const cur = await getSettings(salonId);
   const m = mode === 'whitelist' ? 'whitelist' : 'all';
-  const schedOn = scheduleEnabled === undefined ? cur.scheduleEnabled : !!scheduleEnabled;
+  // null трактуем как «поле не передано»: фронт очищает контрол в null, и
+  // разная реакция на него (400 для времени, тихое выключение для флага) была бы ловушкой.
+  const schedOn = scheduleEnabled == null ? cur.scheduleEnabled : !!scheduleEnabled;
   const start = pickTime(scheduleStart, cur.scheduleStart);
   const end = pickTime(scheduleEnd, cur.scheduleEnd);
   const row = await db.one(
