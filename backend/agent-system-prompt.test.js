@@ -579,6 +579,27 @@ describe('несколько услуг подряд одному пациент
   });
 });
 
+describe('режимозависимые правила фактов (catalog vs legacy)', () => {
+  const CATALOG = 'КАТАЛОГ УСЛУГ КЛИНИКИ (тест)\n1|Чистка|60|6500|Уход|7';
+
+  test('catalog-режим: за ценами мастеров отправляет в get_service_masters, а не в поле staff', () => {
+    const p = buildSystemPrompt({ catalogBlock: CATALOG });
+    expect(p).toContain('get_service_masters');
+    expect(p).not.toContain('всё это уже есть в поле staff внутри list_services');
+  });
+
+  test('legacy-режим: правило про поле staff сохраняется', () => {
+    const p = buildSystemPrompt({});
+    expect(p).toContain('поле staff внутри list_services');
+  });
+
+  test('строка «Прежде чем ответить по существу, вызови…» удалена в обоих режимах', () => {
+    for (const p of [buildSystemPrompt({}), buildSystemPrompt({ catalogBlock: CATALOG })]) {
+      expect(p).not.toContain('Прежде чем ответить по существу, вызови');
+    }
+  });
+});
+
 describe('каталог в промпте (AGENT_CATALOG_IN_PROMPT)', () => {
   const block = 'КАТАЛОГ УСЛУГ КЛИНИКИ (полный актуальный список; формат строки: …):\nМастера: 55=Аня\n7|Ботокс|60|5000|Инъекции|55';
 
