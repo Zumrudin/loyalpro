@@ -12,6 +12,22 @@ describe('extractTimes', () => {
   test('без времени — пустой массив', () => {
     expect(g.extractTimes('запишу вас на чистку')).toEqual([]);
   });
+  test('время внутри ISO datetime (book_chain.records[].datetime) извлекается', () => {
+    expect(g.extractTimes('{"datetime":"2026-07-30T10:30:00+03:00"}')).toEqual(['10:30']);
+  });
+  test('часовой пояс ISO datetime (+03:00) НЕ считается временем', () => {
+    expect(g.extractTimes('2026-07-30T10:30:00+03:00')).toEqual(['10:30']);
+  });
+  test('часовой пояс со знаком минус и Z-форма тоже не считаются временем', () => {
+    expect(g.extractTimes('2026-07-30T22:15:00-05:30')).toEqual(['22:15']);
+    expect(g.extractTimes('2026-07-30T22:15:00Z')).toEqual(['22:15']);
+  });
+  test('дата DD.MM (месяц 01-12) не читается как время', () => {
+    expect(g.extractTimes('запись 12.07')).toEqual([]);
+  });
+  test('точечное время с минутами вне диапазона месяца остаётся временем (сохранённое поведение)', () => {
+    expect(g.extractTimes('в 14.30')).toEqual(['14:30']);
+  });
 });
 
 describe('checkOfferedTimes', () => {
