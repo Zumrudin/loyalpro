@@ -80,11 +80,26 @@ function parseDt(raw) {
   return m ? { date: `${m[3]}.${m[2]}`, time: `${m[4]}:${m[5]}` } : null;
 }
 
+// Название услуги для пациентской строки. Голый slice режет посреди слова и
+// оставляет огрызок пунктуации («…Сhristina,GIGI (» — живой E2E 30.07): модель
+// пересказывает витрину своими словами и может процитировать такое пациенту.
+// Режем по границе слова (если она не съедает пол-названия), снимаем висящую
+// пунктуацию и честно помечаем обрезку многоточием.
+function clipTitle(raw) {
+  const s = sanitizeLine(raw, TITLE_MAX * 4);
+  if (s.length <= TITLE_MAX) return s;
+  let cut = s.slice(0, TITLE_MAX);
+  const space = cut.lastIndexOf(' ');
+  if (space >= Math.floor(TITLE_MAX * 0.6)) cut = cut.slice(0, space);
+  cut = cut.replace(/[\s(\[{«"',.;:\-–—/\\]+$/u, '');
+  return cut ? `${cut}…` : '';
+}
+
 function renderLink(link) {
   if (!link || typeof link !== 'object') return null;
   const dt = parseDt(link.datetime);
   if (!dt) return null;                       // нечитаемое звено → вариант отбрасывается целиком (см. вызов)
-  const title = sanitizeLine(link.service_title, TITLE_MAX) || 'процедура';
+  const title = clipTitle(link.service_title) || 'процедура';
   const notes = [];
   // Имени мастера нет — yc_id НЕ подставляем: это внутренний идентификатор
   // (правило 9 промпта, id_leak в reply-guard), а модели он ничего не даёт —
