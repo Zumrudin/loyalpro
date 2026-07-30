@@ -273,6 +273,15 @@ describe('buildSystemPrompt', () => {
     expect(p).toMatch(/НИЧЕГО не переспрашивай[^]{0,120}create_booking/i);
   });
 
+  // Регресс: «ВЫБОР ВАРИАНТА = СОГЛАСИЕ» описывает ровно ситуацию офера
+  // get_sequential_slots (1-2 конкретных варианта) — без явной оговорки модель
+  // читала это как «зови create_booking», хотя цепочку должен оформлять book_chain.
+  test('согласие на предложенный вариант И согласие на конкретную запись оговаривают book_chain как альтернативу create_booking', () => {
+    const p = buildSystemPrompt({});
+    expect(p).toMatch(/create_booking ТОЛЬКО после того[\s\S]{0,200}book_chain/i);
+    expect(p).toMatch(/ВЫБОР ВАРИАНТА = СОГЛАСИЕ[\s\S]{0,400}book_chain[\s\S]{0,40}option_id/i);
+  });
+
   test('без опций не падает и даёт дефолтное имя', () => {
     const p = buildSystemPrompt();
     expect(typeof p).toBe('string');
@@ -306,6 +315,8 @@ describe('buildSystemPrompt', () => {
       expect(p).toMatch(/ЗАПИСЬ ДРУГОГО ЧЕЛОВЕКА[^]*client_name/);
       // запись НЕ на номер собеседника (кроме оговорённых исключений)
       expect(p).toMatch(/ЗАПИСЬ ДРУГОГО ЧЕЛОВЕКА[^]*НЕ оформляй[^]*номер собеседника/i);
+      // третье лицо может записываться и цепочкой услуг — book_chain тоже принимает client_phone/client_name
+      expect(p).toMatch(/Полученные данные передай в create_booking[^]{0,60}book_chain/i);
     });
 
     test('исключения: ребёнок — на телефон родителя; взрослый без номера — на номер собеседника с пометкой', () => {
@@ -455,6 +466,26 @@ describe('buildSystemPrompt', () => {
     expect(p).toMatch(/booked_all:false[^]{0,200}(failed_at|ЧЕСТНО)/i);
   });
 
+  // Регресс: честный партиал-отчёт без вызова инструмента в том же ходе попадал
+  // под silent-fallback гейт диспетчера (canRecover требует bookingFailRecoverable) —
+  // клиент терял информацию, что часть цепочки УЖЕ записана. Промпт теперь требует
+  // ход С инструментом и различает пустой/непустой records.
+  test('партиал book_chain: пустые records → get_sequential_slots заново; непустые → инструмент в этом же ходе, не голый текст', () => {
+    const p = buildSystemPrompt({});
+    // пустой records: честно сказать и сразу перезапросить варианты
+    expect(p).toMatch(/booked_all:false[^]{0,60}ПУСТЫМ records[^]{0,200}get_sequential_slots/i);
+    // непустой records (partial:true): в этом же ходе — get_available_slots ИЛИ escalate_to_operator
+    expect(p).toMatch(/partial:true[^]{0,400}get_available_slots[^]{0,100}escalate_to_operator/i);
+    // оба случая явно запрещают закончить ход одним текстом без вызова инструмента
+    const noSilentTurn = (p.match(/заканчивай ход одним текстом без вызова инструмента/gi) || []).length;
+    expect(noSilentTurn).toBeGreaterThanOrEqual(2);
+  });
+
+  test('поле comment ведётся и для book_chain, не только create_booking', () => {
+    const p = buildSystemPrompt({});
+    expect(p).toMatch(/поле comment у create_booking\/book_chain/i);
+  });
+
   test('сценарий стыковки предписывает book_chain по option_id, а не ручную оркестровку', () => {
     const p = buildSystemPrompt({});
     expect(p).toContain('book_chain с option_id');
@@ -524,10 +555,10 @@ describe('несколько услуг подряд одному пациент
     const b = block();
     expect(b).toContain('first_booked_datetime');
     // якорную (уже записанную) процедуру book_chain не трогает — не создаём заново и не переносим
-    expect(b).toMatch(/якорном режиме book_chain её не тронет/i);
-    expect(b).toMatch(/НЕ создавай|НЕ переноси|НЕ двигай/i);
+    expect(b).toMatch(/book_chain[\s\S]{0,80}не тронет/i);
+    expect(b).toMatch(/НЕ переноси|НЕ двигай/i);
     // перенос записанной процедуры — только по явной просьбе пациента
-    expect(b).toMatch(/ТОЛЬКО если пациент сам об этом просит/i);
+    expect(b).toMatch(/ТОЛЬКО если пациент[\s\S]{0,20}просит/i);
   });
 
   test('эскалация — крайняя мера, и только после честного ответа, что именно не вышло', () => {

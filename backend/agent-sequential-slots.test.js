@@ -76,6 +76,8 @@ describe('get_sequential_slots — лестница приоритета', () =>
     const dates = new Set(ycGetStaffSeances.mock.calls.map(c => c[2]));
     expect(dates).toEqual(new Set([DATE]));
     expect(r.preferred_staff_cannot).toBeUndefined();
+    // hint нормального успешного ответа предписывает оформление ОДНИМ вызовом book_chain
+    expect(r.hint).toMatch(/book_chain[\s\S]{0,80}option_id/i);
   });
 
   test('preferred не делает часть услуг → preferred_staff_cannot + mixed с его участием', async () => {
@@ -212,6 +214,8 @@ describe('get_sequential_slots — якорь (первая услуга уже 
     expect(start.booking_mode).toBe('separate_records');
     // Записанный мастер консультацию не ведёт — подсказка назвать исполнителя.
     expect(r.preferred_staff_cannot).toEqual(['Консультация']);
+    // hint якорного успешного ответа тоже предписывает ОДИН вызов book_chain
+    expect(r.hint).toMatch(/book_chain[\s\S]{0,80}option_id/i);
   });
 
   test('консультация встык (врач свободен сразу после чистки) → перерыв 0, не with_gap', async () => {
@@ -235,5 +239,11 @@ describe('get_sequential_slots — якорь (первая услуга уже 
     expect(r.variants).toEqual([]);
     expect(r.reason).toBe('no_slot_after_booked');
     expect(r.hint).toMatch(/НЕ переноси|отдельным визитом/i);
+  });
+});
+
+describe('get_sequential_slots — schema.description направляет на book_chain', () => {
+  test('description упоминает оформление выбранного варианта через book_chain по option_id', () => {
+    expect(tool.schema.description).toMatch(/book_chain[\s\S]{0,80}option_id/i);
   });
 });
