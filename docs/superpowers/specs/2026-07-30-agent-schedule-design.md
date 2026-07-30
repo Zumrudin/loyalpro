@@ -77,7 +77,8 @@
 ### Часовой пояс
 
 `decideGate` получает `nowMinutes` числом и остаётся чистой. Считает его тонкая
-обёртка в `agent-settings.js`:
+обёртка `nowMskMinutes` в том же `agent-gate.js` (не в `agent-settings.js`:
+оттуда её не покрыть Jest'ом, не подтянув `db.js` с живым пулом к Beget):
 
 ```js
 function nowMskMinutes(date = new Date()) {
@@ -112,8 +113,9 @@ function nowMskMinutes(date = new Date()) {
 
 `PUT /api/agent/settings` принимает те же поля. Валидация: `scheduleStart` и
 `scheduleEnd` должны парситься как `HH:MM` → иначе `400 { error: 'Некорректное время расписания' }`.
-Если `scheduleEnabled` не передан — считается `false` (совместимо с текущим
-телом запроса от старого фронта).
+Поля расписания, **отсутствующие** в теле запроса, сохраняют текущее значение из
+БД. Иначе старый закэшированный фронт, шлющий только `{enabled, mode}`, молча
+сбросил бы окно.
 
 Роли не меняются: `owner`/`admin`.
 
