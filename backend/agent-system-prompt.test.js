@@ -378,6 +378,22 @@ describe('buildSystemPrompt', () => {
     });
   });
 
+  describe('шаблоны первого сообщения по identity-случаям', () => {
+    test('известный пациент: образец с обращением по имени, БЕЗ вопроса об имени', () => {
+      const p = buildSystemPrompt({ clientName: 'Анна' });
+      expect(p).toContain('Здравствуйте, Анна!');
+      expect(p).not.toContain('как могу к вам обращаться');
+    });
+    test('новый пациент с известным номером: образец объединяет имя и цель одним сообщением', () => {
+      const p = buildSystemPrompt({ phoneKnown: true });
+      expect(p).toContain('как могу к вам обращаться');
+    });
+    test('канал без номера: образец тоже спрашивает имя', () => {
+      const p = buildSystemPrompt({});
+      expect(p).toContain('как могу к вам обращаться');
+    });
+  });
+
   test('Сценарий 3 — упоминает инструменты отмены/переноса', () => {
     const p = buildSystemPrompt({});
     expect(p).toContain('list_client_bookings');
