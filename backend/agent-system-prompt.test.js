@@ -142,8 +142,8 @@ describe('buildSystemPrompt', () => {
     // иначе агент увидит price_max:0 и решит, что это открытый диапазон «X-0».
     expect(legacy).toContain('price_max почти всегда не заполнен');
     // «от» без верхней границы разрешено ровно в одном месте — диапазон направления (в каждом режиме)
-    expect(legacy.match(/Слово «от» уместно ТОЛЬКО/g)).toHaveLength(1);
-    expect(catalog.match(/Слово «от» уместно ТОЛЬКО/g)).toHaveLength(1);
+    expect(legacy.match(/Слово «от» без верхней границы уместно ТОЛЬКО/g)).toHaveLength(1);
+    expect(catalog.match(/Слово «от» без верхней границы уместно ТОЛЬКО/g)).toHaveLength(1);
   });
 
   test('category_path — отбор услуг направления; состав только на прямой вопрос', () => {
