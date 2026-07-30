@@ -1183,6 +1183,14 @@
             <label class="fl"><input type="radio" name="agent-mode" value="all"> Всем</label>
             <label class="fl"><input type="radio" name="agent-mode" value="whitelist"> Только указанным номерам</label>
           </div>
+          <div class="stg-section active">
+            <label class="fl"><input type="checkbox" id="agent-schedule-enabled" onchange="agentToggleSchedule()"> Работать по расписанию</label>
+            <div id="agent-schedule-fields" style="display:flex;gap:8px;align-items:center;margin-top:6px">
+              <span>с</span><input type="time" id="agent-schedule-start" style="width:120px">
+              <span>до</span><input type="time" id="agent-schedule-end" style="width:120px">
+            </div>
+            <div class="fl" style="opacity:.7;margin-top:4px">Внутри окна отвечает по выбранному режиму, вне окна — только номерам из белого списка. Время московское.</div>
+          </div>
           <div class="stg-section active" id="agent-allow-section">
             <div class="fl">Белый список (кому отвечать в режиме «только указанным»)</div>
             <div id="agent-allow-list"></div>

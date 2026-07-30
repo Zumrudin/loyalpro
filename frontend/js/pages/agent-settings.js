@@ -13,7 +13,10 @@ async function openAgentSettings() {
     document.querySelectorAll('input[name="agent-mode"]').forEach(r => {
       r.checked = r.value === (s.mode || 'all');
     });
-    _agentToggleAllowSection();
+    document.getElementById('agent-schedule-enabled').checked = !!s.scheduleEnabled;
+    document.getElementById('agent-schedule-start').value = s.scheduleStart || '22:00';
+    document.getElementById('agent-schedule-end').value = s.scheduleEnd || '09:30';
+    agentToggleSchedule();
     document.querySelectorAll('input[name="agent-mode"]').forEach(r => {
       r.onchange = _agentToggleAllowSection;
     });
@@ -31,12 +34,21 @@ function _agentMode() {
 }
 
 function _agentToggleAllowSection() {
-  const isWhitelist = _agentMode() === 'whitelist';
+  // Белый список значим в режиме whitelist, а также при включённом расписании:
+  // вне окна гейт сам сужает режим до whitelist (services/agent-gate.decideGate).
+  const scheduleOn = document.getElementById('agent-schedule-enabled').checked;
+  const active = _agentMode() === 'whitelist' || scheduleOn;
   const sec = document.getElementById('agent-allow-section');
-  // Белый список актуален только в режиме whitelist — гасим и блокируем ввод
-  // в режиме «Всем», чтобы не плодить правила, которые гейт не учитывает.
-  sec.style.opacity = isWhitelist ? '1' : '0.5';
-  sec.style.pointerEvents = isWhitelist ? '' : 'none';
+  sec.style.opacity = active ? '1' : '0.5';
+  sec.style.pointerEvents = active ? '' : 'none';
+}
+
+function agentToggleSchedule() {
+  const on = document.getElementById('agent-schedule-enabled').checked;
+  const box = document.getElementById('agent-schedule-fields');
+  box.style.opacity = on ? '1' : '0.5';
+  box.style.pointerEvents = on ? '' : 'none';
+  _agentToggleAllowSection();
 }
 
 async function loadAgentRules() {
@@ -80,6 +92,9 @@ async function saveAgentSettings() {
     await api('PUT', '/api/agent/settings', {
       enabled: document.getElementById('agent-enabled').checked,
       mode: _agentMode(),
+      scheduleEnabled: document.getElementById('agent-schedule-enabled').checked,
+      scheduleStart: document.getElementById('agent-schedule-start').value,
+      scheduleEnd: document.getElementById('agent-schedule-end').value,
     });
     notify('Настройки агента сохранены');
     closeAgentSettings();
@@ -91,3 +106,4 @@ window.closeAgentSettings = closeAgentSettings;
 window.addAgentNumber = addAgentNumber;
 window.removeAgentNumber = removeAgentNumber;
 window.saveAgentSettings = saveAgentSettings;
+window.agentToggleSchedule = agentToggleSchedule;
