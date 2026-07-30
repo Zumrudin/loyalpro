@@ -107,3 +107,59 @@ describe('decideGate', () => {
       .toEqual({ allow: false, reason: 'blacklisted' });
   });
 });
+
+describe('decideGate + расписание', () => {
+  // Окно 22:00–09:30 мск. 23:00 = 1380 внутри, 12:00 = 720 вне.
+  const sched = {
+    enabled: true, mode: 'all', allow: [], block: [], phone: '79200255591',
+    scheduleEnabled: true, scheduleStart: '22:00', scheduleEnd: '09:30',
+  };
+
+  test('внутри окна режим «Всем» пропускает незнакомый номер', () => {
+    expect(decideGate({ ...sched, nowMinutes: 1380 }))
+      .toEqual({ allow: true, reason: 'ok' });
+  });
+  test('вне окна незнакомый номер отсекается с reason outside-schedule', () => {
+    expect(decideGate({ ...sched, nowMinutes: 720 }))
+      .toEqual({ allow: false, reason: 'outside-schedule' });
+  });
+  test('вне окна номер из белого списка проходит (тестовые номера круглосуточно)', () => {
+    expect(decideGate({ ...sched, nowMinutes: 720, allow: ['79200255591'] }))
+      .toEqual({ allow: true, reason: 'ok' });
+  });
+  test('вне окна белый список нормализуется (8→7)', () => {
+    expect(decideGate({ ...sched, nowMinutes: 720, allow: ['79200255591'], phone: '89200255591' }))
+      .toEqual({ allow: true, reason: 'ok' });
+  });
+  test('чёрный список сильнее расписания (внутри окна)', () => {
+    expect(decideGate({ ...sched, nowMinutes: 1380, block: ['79200255591'] }))
+      .toEqual({ allow: false, reason: 'blacklisted' });
+  });
+  test('выключенный агент сильнее расписания', () => {
+    expect(decideGate({ ...sched, enabled: false, nowMinutes: 1380 }))
+      .toEqual({ allow: false, reason: 'disabled' });
+  });
+  test('scheduleEnabled=false → расписание не влияет, вне окна отвечаем всем', () => {
+    expect(decideGate({ ...sched, scheduleEnabled: false, nowMinutes: 720 }))
+      .toEqual({ allow: true, reason: 'ok' });
+  });
+  test('битый формат времени → расписание игнорируется (не молчание на сутки)', () => {
+    expect(decideGate({ ...sched, scheduleStart: '', nowMinutes: 720 }))
+      .toEqual({ allow: true, reason: 'ok' });
+    expect(decideGate({ ...sched, scheduleEnd: '9:3', nowMinutes: 720 }))
+      .toEqual({ allow: true, reason: 'ok' });
+  });
+  test('нет nowMinutes → расписание игнорируется', () => {
+    expect(decideGate({ ...sched })).toEqual({ allow: true, reason: 'ok' });
+  });
+  test('режим whitelist: расписание ничего не меняет, reason остаётся not-whitelisted', () => {
+    expect(decideGate({ ...sched, mode: 'whitelist', nowMinutes: 720 }))
+      .toEqual({ allow: false, reason: 'not-whitelisted' });
+    expect(decideGate({ ...sched, mode: 'whitelist', nowMinutes: 1380 }))
+      .toEqual({ allow: false, reason: 'not-whitelisted' });
+  });
+  test('вне окна пустой номер (Telegram chat_id) → deny', () => {
+    expect(decideGate({ ...sched, nowMinutes: 720, allow: ['79200255591'], phone: '' }))
+      .toEqual({ allow: false, reason: 'outside-schedule' });
+  });
+});

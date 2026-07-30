@@ -42,19 +42,40 @@ function nowMskMinutes(date = new Date()) {
   return h * 60 + m;
 }
 
-// Решение допуска. Чистая функция. Порядок: enabled → чёрный список → режим/белый.
+// Решение допуска. Чистая функция. Порядок: enabled → чёрный список →
+// расписание (сужает режим до whitelist вне окна) → режим/белый список.
 // @param {boolean} enabled
 // @param {'all'|'whitelist'} mode
 // @param {string[]} allow  нормализованные номера белого списка
 // @param {string[]} block  нормализованные номера чёрного списка
 // @param {string}   phone  сырой номер входящего (нормализуем внутри)
+// @param {boolean}  scheduleEnabled  учитывать окно расписания
+// @param {string}   scheduleStart    'HH:MM' мск, включительно
+// @param {string}   scheduleEnd      'HH:MM' мск, исключительно
+// @param {number}   nowMinutes       текущее мск-время в минутах (см. nowMskMinutes)
 // @returns {{allow: boolean, reason: string}}
-function decideGate({ enabled, mode, allow, block, phone }) {
+function decideGate({
+  enabled, mode, allow, block, phone,
+  scheduleEnabled, scheduleStart, scheduleEnd, nowMinutes,
+}) {
   if (!enabled) return { allow: false, reason: 'disabled' };
   const key = normalizePhoneKey(phone);
   if (key && (block || []).includes(key)) return { allow: false, reason: 'blacklisted' };
-  if (mode === 'whitelist') {
-    if (!key || !(allow || []).includes(key)) return { allow: false, reason: 'not-whitelisted' };
+
+  // Расписание ТОЛЬКО сужает: вне окна эффективный режим — whitelist, чтобы
+  // тестовые номера работали круглосуточно. При mode='whitelist' сужать нечего.
+  // Битые границы или отсутствие времени → расписание игнорируем (fail-open к
+  // текущему поведению: круглосуточное молчание выглядит как «бот сломался»).
+  const startMin = parseHhMm(scheduleStart);
+  const endMin = parseHhMm(scheduleEnd);
+  const narrowed = !!scheduleEnabled && mode !== 'whitelist'
+    && startMin !== null && endMin !== null && typeof nowMinutes === 'number'
+    && !isWithinWindow(nowMinutes, startMin, endMin);
+
+  if (narrowed || mode === 'whitelist') {
+    if (!key || !(allow || []).includes(key)) {
+      return { allow: false, reason: narrowed ? 'outside-schedule' : 'not-whitelisted' };
+    }
   }
   return { allow: true, reason: 'ok' };
 }
