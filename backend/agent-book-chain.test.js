@@ -90,6 +90,29 @@ test('провал ВТОРОЙ записи → partial:true с перечне�
   expect(res.failed_at).toBe('svc102');
 });
 
+test('separate_records: duplicate (идемпотентный ретрай) первого звена = успех, record_id из duplicate', async () => {
+  offers.remember(1, 'dlg', { o1: { booking_mode: 'separate_records', chain: [
+    LINK(101, 7, '2026-07-30T14:00:00+03:00'), LINK(102, 8, '2026-07-30T15:00:00+03:00'),
+  ] } });
+  let n = 0;
+  const d = deps({ createBooking: jest.fn(async () =>
+    ++n === 1 ? { created: false, duplicate: true, record_id: 555 } : { created: true, record_id: 556 }) });
+  const res = await bookChain.run(1, { option_id: 'o1', comment: 'к' }, CTX, d);
+  expect(res.booked_all).toBe(true);
+  expect(res.records.map(r => r.record_id)).toEqual([555, 556]);
+});
+
+test('single_record: duplicate create → всё равно добавляем остальные услуги и booked_all', async () => {
+  offers.remember(1, 'dlg', { o1: { booking_mode: 'single_record', chain: [
+    LINK(101, 7, '2026-07-30T14:00:00+03:00'), LINK(102, 7, '2026-07-30T15:00:00+03:00'),
+  ] } });
+  const d = deps({ createBooking: jest.fn(async () => ({ created: false, duplicate: true, record_id: 555 })) });
+  const res = await bookChain.run(1, { option_id: 'o1', comment: 'к' }, CTX, d);
+  expect(res.booked_all).toBe(true);
+  expect(d.modifyServices).toHaveBeenCalledWith(1,
+    { record_id: 555, add_service_yc_ids: [102] }, CTX);
+});
+
 test('client_phone/client_name из input пробрасываются в каждую бронь (запись другого человека)', async () => {
   offers.remember(1, 'dlg', { o1: { booking_mode: 'separate_records', chain: [
     LINK(101, 7, '2026-07-30T14:00:00+03:00'), LINK(102, 8, '2026-07-30T15:00:00+03:00'),

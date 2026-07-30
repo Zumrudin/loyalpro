@@ -66,6 +66,12 @@ async function run(salonId, input, ctx = {}, deps = {}) {
     ...common,
   }, ctx);
 
+  // Идемпотентный ретрай (take() не потребляет offer, повтор book_chain с тем же
+  // option_id — штатный сценарий): createBookingRecord на дубль отдаёт
+  // { created:false, duplicate:true, record_id } — запись УЖЕ есть, это успех
+  // звена, а не провал. Так же трактует дубли и одиночный create_booking.
+  const bookedOk = (r) => !!(r && (r.created || r.duplicate) && r.record_id);
+
   const records = [];
   const fail = (failedLink, error) => ({
     booked_all: false,
@@ -84,7 +90,7 @@ async function run(salonId, input, ctx = {}, deps = {}) {
     // Один мастер, без перерыва: одна запись, услуги добавляются в неё.
     const [first, ...rest] = items;
     const r1 = await bookOne(first);
-    if (!r1 || !r1.created) return fail(first, (r1 && r1.error) || 'запись не создана');
+    if (!bookedOk(r1)) return fail(first, (r1 && r1.error) || 'запись не создана');
     records.push({ record_id: r1.record_id, service_title: first.service_title, datetime: first.datetime });
     if (rest.length) {
       const r2 = await modifyServices(salonId, {
@@ -101,7 +107,7 @@ async function run(salonId, input, ctx = {}, deps = {}) {
   // схлопывать нельзя, зазор потерялся бы; см. buildVariant в get-sequential-slots).
   for (const l of items) {
     const r = await bookOne(l);
-    if (!r || !r.created) return fail(l, (r && r.error) || 'запись не создана');
+    if (!bookedOk(r)) return fail(l, (r && r.error) || 'запись не создана');
     records.push({ record_id: r.record_id, service_title: l.service_title, datetime: l.datetime });
   }
   return { booked_all: true, records };
