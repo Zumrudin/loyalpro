@@ -443,16 +443,22 @@ describe('buildSystemPrompt', () => {
     expect(p).toMatch(/не обещай[^]{0,60}(встык|одним визитом)/i);
   });
 
-  test('исполнение по booking_mode: одна запись без перерыва, отдельные — при перерыве/разных мастерах', () => {
+  test('выбор варианта стыковки → book_chain(option_id), обработка option_expired и частичного успеха', () => {
     const p = buildSystemPrompt({});
-    expect(p).toContain('booking_mode');
-    expect(p).toContain('single_record');
-    expect(p).toContain('separate_records');
-    // single_record → create_booking по первой + modify с add_service_yc_ids остальных
-    expect(p).toMatch(/single_record[^]{0,220}add_service_yc_ids/);
-    // separate_records → каждый элемент chain отдельной записью, перерыв не схлопывать
-    expect(p).toMatch(/separate_records[^]{0,220}(отдельной записью|каждый элемент)/i);
-    expect(p).toMatch(/перерыв[^]{0,40}(потеряется|не схлопыв)/i);
+    expect(p).toContain('book_chain');
+    expect(p).toMatch(/book_chain[^]{0,80}option_id/);
+    // инструмент сам оформляет цепочку — ручная оркестровка через create_booking запрещена
+    expect(p).toMatch(/book_chain[^]{0,250}(НЕ оформляй|САМ оформит)/i);
+    // просроченный вариант — перезапросить get_sequential_slots
+    expect(p).toMatch(/option_expired[^]{0,150}(get_sequential_slots|заново)/i);
+    // частичный успех — честно сказать, что записано, а что нет
+    expect(p).toMatch(/booked_all:false[^]{0,200}(failed_at|ЧЕСТНО)/i);
+  });
+
+  test('сценарий стыковки предписывает book_chain по option_id, а не ручную оркестровку', () => {
+    const p = buildSystemPrompt({});
+    expect(p).toContain('book_chain с option_id');
+    expect(p).not.toContain('СЛЕДУЯ полю booking_mode');
   });
 });
 
@@ -514,14 +520,14 @@ describe('несколько услуг подряд одному пациент
     expect(b).toContain('reschedule_booking');
   });
 
-  test('добавление услуги ПОСЛЕ уже записанной — через first_booked_datetime, запись не двигаем', () => {
+  test('добавление услуги ПОСЛЕ уже записанной — через first_booked_datetime, book_chain её не трогает', () => {
     const b = block();
     expect(b).toContain('first_booked_datetime');
-    expect(b).toContain('already_booked');
-    // якорную (уже записанную) процедуру не создаём заново и не переносим
+    // якорную (уже записанную) процедуру book_chain не трогает — не создаём заново и не переносим
+    expect(b).toMatch(/якорном режиме book_chain её не тронет/i);
     expect(b).toMatch(/НЕ создавай|НЕ переноси|НЕ двигай/i);
     // перенос записанной процедуры — только по явной просьбе пациента
-    expect(b).toMatch(/ТОЛЬКО если пациент сам просит/i);
+    expect(b).toMatch(/ТОЛЬКО если пациент сам об этом просит/i);
   });
 
   test('эскалация — крайняя мера, и только после честного ответа, что именно не вышло', () => {
