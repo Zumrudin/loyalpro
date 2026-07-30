@@ -11,8 +11,25 @@
 // клонирует): цепочку и её элементы НЕ мутируем.
 
 const createBk = require('./create-booking');
-const modifySvc = require('./modify-booking-services');
+const bookingModify = require('../booking-modify');
 const offers = require('../sequential-offers');
+
+// Доверенный modify для book_chain: record_id получен из НАШЕГО createBooking
+// (не от LLM), поэтому ownership-гейт modify_booking_services тут не нужен и
+// ВРЕДЕН — для нового клиента локальная таблица ещё не синхронизирована, а при
+// записи третьего лица (жена/мама) resolveYclientsClientId вернёт не того →
+// каждый single_record падал бы в partial. Зовём booking-modify напрямую БЕЗ
+// expectedYcClientId (ownershipError при пустом id пропускает). LLM-facing
+// инструмент modify_booking_services СВОЙ гейт сохраняет.
+async function trustedModify(salonId, input, ctx = {}) {
+  const res = await bookingModify.modifyBookingServices(salonId, {
+    dialogKey: ctx.dialogKey || ctx.clientPhone,
+    recordId: input.record_id,
+    addServiceYcIds: input.add_service_yc_ids,
+  });
+  if (!res || !res.ok) return { error: (res && res.error) || 'услуги не добавились в запись' };
+  return { modified: true, record_id: res.record_id, services_count: res.services_count };
+}
 
 const schema = {
   name: 'book_chain',
@@ -38,7 +55,7 @@ const schema = {
 // deps — для тестов; по умолчанию реальные хендлеры инструментов.
 async function run(salonId, input, ctx = {}, deps = {}) {
   const createBooking = deps.createBooking || createBk.run;
-  const modifyServices = deps.modifyServices || modifySvc.run;
+  const modifyServices = deps.modifyServices || trustedModify;
 
   const offer = offers.take(salonId, ctx.dialogKey, input && input.option_id);
   if (!offer) {
@@ -89,14 +106,19 @@ async function run(salonId, input, ctx = {}, deps = {}) {
   if (offer.booking_mode === 'single_record') {
     // Один мастер, без перерыва: одна запись, услуги добавляются в неё.
     const [first, ...rest] = items;
-    const r1 = await bookOne(first);
+    let r1;
+    try { r1 = await bookOne(first); }
+    catch (e) { return fail(first, e.message); }
     if (!bookedOk(r1)) return fail(first, (r1 && r1.error) || 'запись не создана');
     records.push({ record_id: r1.record_id, service_title: first.service_title, datetime: first.datetime });
     if (rest.length) {
-      const r2 = await modifyServices(salonId, {
-        record_id: r1.record_id,
-        add_service_yc_ids: rest.map(l => l.service_yc_id),
-      }, ctx);
+      let r2;
+      try {
+        r2 = await modifyServices(salonId, {
+          record_id: r1.record_id,
+          add_service_yc_ids: rest.map(l => l.service_yc_id),
+        }, ctx);
+      } catch (e) { return fail(rest[0], e.message); }
       if (!r2 || !r2.modified) return fail(rest[0], (r2 && r2.error) || 'услуги не добавились в запись');
       records[0].services_count = r2.services_count;
     }
@@ -106,7 +128,9 @@ async function run(salonId, input, ctx = {}, deps = {}) {
   // separate_records: отдельная запись на каждый шаг (разные мастера или перерыв —
   // схлопывать нельзя, зазор потерялся бы; см. buildVariant в get-sequential-slots).
   for (const l of items) {
-    const r = await bookOne(l);
+    let r;
+    try { r = await bookOne(l); }
+    catch (e) { return fail(l, e.message); }
     if (!bookedOk(r)) return fail(l, (r && r.error) || 'запись не создана');
     records.push({ record_id: r.record_id, service_title: l.service_title, datetime: l.datetime });
   }

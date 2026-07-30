@@ -258,7 +258,15 @@ async function runDialog(salonId, dialogKey, opts = {}) {
             lastWrite = { tool: 'create_booking', input: { datetime: first.datetime, client_name: (tc.input || {}).client_name } };
           } else if (result && (result.partial || result.failed_at)) {
             bookingErrored = true;
-            if (result.partial) writeSucceeded = true;
+            if (result.partial) {
+              // Часть цепочки уже забронирована → writeSucceeded (ход не выбросить),
+              // и lastWrite ставим из ПЕРВОЙ созданной записи, чтобы деградационное
+              // подтверждение назвало реально забронированный слот, а не соврало
+              // «всё оформила» про частичную бронь.
+              writeSucceeded = true;
+              const first = (result.records || [])[0] || {};
+              lastWrite = { tool: 'create_booking', input: { datetime: first.datetime, client_name: (tc.input || {}).client_name } };
+            }
           } else if (result && !result.option_expired) {
             bookingErrored = true;
           }

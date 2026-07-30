@@ -2,8 +2,10 @@
 
 const bookChain = require('./services/agent/tools/book-chain');
 const offers = require('./services/agent/sequential-offers');
+const bookingModify = require('./services/agent/booking-modify');
 
 beforeEach(() => offers._reset());
+afterEach(() => jest.restoreAllMocks());
 
 const CTX = { dialogKey: 'dlg', clientPhone: '79990001122', clientName: 'Анна' };
 const LINK = (svc, staff, dt) => ({
@@ -111,6 +113,60 @@ test('single_record: duplicate create → всё равно добавляем �
   expect(res.booked_all).toBe(true);
   expect(d.modifyServices).toHaveBeenCalledWith(1,
     { record_id: 555, add_service_yc_ids: [102] }, CTX);
+});
+
+test('single_record: дефолтный modify зовёт booking-modify напрямую БЕЗ expectedYcClientId (ownership-гейт обойдён)', async () => {
+  offers.remember(1, 'dlg', { o1: { booking_mode: 'single_record', chain: [
+    LINK(101, 7, '2026-07-30T14:00:00+03:00'), LINK(102, 7, '2026-07-30T15:00:00+03:00'),
+  ] } });
+  const spy = jest.spyOn(bookingModify, 'modifyBookingServices')
+    .mockResolvedValue({ ok: true, record_id: 555, services_count: 2 });
+  // modifyServices НЕ инжектим → используется доверенный дефолт book-chain.
+  const d = { createBooking: jest.fn(async () => ({ created: true, record_id: 555 })) };
+  const res = await bookChain.run(1, { option_id: 'o1', comment: 'к' }, CTX, d);
+  expect(res.booked_all).toBe(true);
+  const arg = spy.mock.calls[0][1];
+  expect(arg).toMatchObject({ recordId: 555, addServiceYcIds: [102] });
+  expect(arg.expectedYcClientId).toBeUndefined();
+});
+
+test('single_record: modify вернул неуспех (modified:false) → partial:true, запись создана', async () => {
+  offers.remember(1, 'dlg', { o1: { booking_mode: 'single_record', chain: [
+    LINK(101, 7, '2026-07-30T14:00:00+03:00'), LINK(102, 7, '2026-07-30T15:00:00+03:00'),
+  ] } });
+  const d = deps({ modifyServices: jest.fn(async () => ({ modified: false, error: 'overlaps' })) });
+  const res = await bookChain.run(1, { option_id: 'o1', comment: 'к' }, CTX, d);
+  expect(res.booked_all).toBe(false);
+  expect(res.partial).toBe(true);
+  expect(res.records).toEqual([expect.objectContaining({ record_id: 555 })]);
+  expect(res.failed_at).toBe('svc102');
+});
+
+test('single_record: modify БРОСАЕТ исключение → partial:true (запись звена 1 не теряется)', async () => {
+  offers.remember(1, 'dlg', { o1: { booking_mode: 'single_record', chain: [
+    LINK(101, 7, '2026-07-30T14:00:00+03:00'), LINK(102, 7, '2026-07-30T15:00:00+03:00'),
+  ] } });
+  const d = deps({ modifyServices: jest.fn(async () => { throw new Error('db down'); }) });
+  const res = await bookChain.run(1, { option_id: 'o1', comment: 'к' }, CTX, d);
+  expect(res.partial).toBe(true);
+  expect(res.records).toEqual([expect.objectContaining({ record_id: 555 })]);
+  expect(res.failed_at).toBe('svc102');
+});
+
+test('separate_records: исключение во ВТОРОМ create → partial:true с первой записью', async () => {
+  offers.remember(1, 'dlg', { o1: { booking_mode: 'separate_records', chain: [
+    LINK(101, 7, '2026-07-30T14:00:00+03:00'), LINK(102, 8, '2026-07-30T15:00:00+03:00'),
+  ] } });
+  let n = 0;
+  const d = deps({ createBooking: jest.fn(async () => {
+    if (++n === 1) return { created: true, record_id: 555 };
+    throw new Error('yclients timeout');
+  }) });
+  const res = await bookChain.run(1, { option_id: 'o1', comment: 'к' }, CTX, d);
+  expect(res.booked_all).toBe(false);
+  expect(res.partial).toBe(true);
+  expect(res.records).toEqual([expect.objectContaining({ record_id: 555 })]);
+  expect(res.failed_at).toBe('svc102');
 });
 
 test('client_phone/client_name из input пробрасываются в каждую бронь (запись другого человека)', async () => {

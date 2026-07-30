@@ -156,6 +156,21 @@ describe('runDialog', () => {
     expect(out.bookingFailed).toBe(true);
   });
 
+  test('book_chain частичный успех (partial) → sideEffect+bookingFailed, falseSuccess подавлен (writeSucceeded)', async () => {
+    const deps = makeDeps({ handlers: { book_chain: jest.fn(async () => ({
+      booked_all: false, partial: true, failed_at: 'svc102',
+      records: [{ record_id: 555, service_title: 'Чистка', datetime: '2026-07-30T14:00:00+03:00' }],
+      error: 'вторую занято', hint: 'скажи честно',
+    })) } });
+    deps.provider.createMessage
+      .mockResolvedValueOnce(toolResp('book_chain', { option_id: 'o1', comment: 'к' }))
+      .mockResolvedValueOnce(textResp('Записала вас на чистку, а по второй процедуре предложу другое время 🤍'));
+    const out = await orchestrator.runDialog(1, 'k', { deps });
+    expect(out.sideEffect).toBe(true);        // partial → ход нельзя выбросить перегенерацией
+    expect(out.bookingFailed).toBe(true);     // bookingErrored && !bookingSucceeded
+    expect(out.falseSuccess).toBe(false);     // writeSucceeded подавляет ложный успех, хотя реплика «записала вас»
+  });
+
   test('диалог уже escalated → ничего не делаем', async () => {
     const deps = makeDeps({ state: { getOrCreate: jest.fn(async () => ({ status: 'escalated' })) } });
     const out = await orchestrator.runDialog(1, 'k', { deps });
