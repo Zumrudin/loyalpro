@@ -1,5 +1,11 @@
 'use strict';
 
+// Мокаем логгер (тот же модуль, что резолвит '../../logger' из orchestrator.js)
+// чтобы проверять, что вызовы инструментов реально логируются — logger не
+// инжектится через deps, поэтому перехватываем сам модуль createLogger.
+const mockLogger = { info: jest.fn(), warn: jest.fn(), error: jest.fn() };
+jest.mock('./logger', () => ({ createLogger: () => mockLogger }));
+
 // Оркестратор провайдер-агностичен: мокаем provider.createMessage, реальный
 // toolResultMessages берём из aitunnel-провайдера (формат {role:'tool'}).
 const realProvider = require('./services/agent/providers/aitunnel');
@@ -271,6 +277,64 @@ describe('runDialog', () => {
     await orchestrator.runDialog(1, 'k', { deps });
     // MAX_ITERS вызовов в цикле + 1 добивочный без инструментов (реплик-то нет).
     expect(deps.provider.createMessage).toHaveBeenCalledTimes(orchestrator.MAX_ITERS + 1);
+  });
+});
+
+// ── Логирование вызовов инструментов (Task 13: «в логах виден вызов book_chain») ──
+describe('логирование tool-вызовов', () => {
+  beforeEach(() => { mockLogger.info.mockClear(); mockLogger.warn.mockClear(); mockLogger.error.mockClear(); });
+
+  test('успешный вызов инструмента логируется через logger.info: имя, длительность, префикс диалога', async () => {
+    const deps = makeDeps();
+    deps.provider.createMessage
+      .mockResolvedValueOnce(toolResp('get_available_slots', { staff_yc_id: 1, service_yc_id: 1, date: '2026-07-20' }))
+      .mockResolvedValueOnce(textResp('Свободно 10:00.'));
+    await orchestrator.runDialog(1, 'k', { deps });
+    const call = mockLogger.info.mock.calls.find(([msg]) => msg.includes('tool get_available_slots'));
+    expect(call).toBeTruthy();
+    expect(call[0]).toMatch(/^dialog k: tool get_available_slots \d+ms ok/);
+  });
+
+  test('успешная запись логирует record_id, но НЕ телефон клиента (PII)', async () => {
+    const deps = makeDeps();
+    deps.provider.createMessage
+      .mockResolvedValueOnce(toolResp('create_booking',
+        { staff_yc_id: 1, service_yc_id: 2, datetime: '2026-07-30T10:30:00+03:00', client_phone: '79001234567' }))
+      .mockResolvedValueOnce(textResp('Готово ✅'));
+    await orchestrator.runDialog(1, 'k', { deps });
+    const call = mockLogger.info.mock.calls.find(([msg]) => msg.includes('tool create_booking'));
+    expect(call).toBeTruthy();
+    expect(call[0]).toContain('record_id=999');
+    expect(call[0]).not.toContain('79001234567');
+  });
+
+  test('провалившийся инструмент (исключение) — старое logger.error не задваивается новым logger.info', async () => {
+    const deps = makeDeps({
+      handlers: { get_available_slots: jest.fn(async () => { throw new Error('boom'); }) },
+    });
+    deps.provider.createMessage
+      .mockResolvedValueOnce(toolResp('get_available_slots', { staff_yc_id: 1, service_yc_id: 1, date: '2026-07-20' }))
+      .mockResolvedValueOnce(textResp('Секундочку 🤍'));
+    await orchestrator.runDialog(1, 'k', { deps });
+    expect(mockLogger.error).toHaveBeenCalledTimes(1);
+    expect(mockLogger.info.mock.calls.some(([msg]) => msg.includes('tool get_available_slots'))).toBe(false);
+  });
+
+  test('лог не превышает разумную длину (нет дампа всего результата)', async () => {
+    const deps = makeDeps({
+      handlers: {
+        get_available_slots: jest.fn(async () => ({
+          slots: Array.from({ length: 200 }, (_, i) => ({ time: `${String(i % 24).padStart(2, '0')}:00`, extra: 'x'.repeat(50) })),
+        })),
+      },
+    });
+    deps.provider.createMessage
+      .mockResolvedValueOnce(toolResp('get_available_slots', { staff_yc_id: 1, service_yc_id: 1, date: '2026-07-20' }))
+      .mockResolvedValueOnce(textResp('Есть окошки.'));
+    await orchestrator.runDialog(1, 'k', { deps });
+    const call = mockLogger.info.mock.calls.find(([msg]) => msg.includes('tool get_available_slots'));
+    expect(call).toBeTruthy();
+    expect(call[0].length).toBeLessThan(300);
   });
 });
 

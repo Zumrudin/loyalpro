@@ -85,6 +85,26 @@ function formatSlotMoscow(iso) {
   return { date, time };
 }
 
+// Компактная сводка результата инструмента для лога вызовов (Task 13 плана:
+// «в логах виден вызов book_chain» — раньше логировались только исключения,
+// диагностика поведения агента требовала debug-preload). НИКОГДА не полный
+// дамп — результаты несут PII (телефон) и большие каталоги; берём только
+// дешёвые решающие поля бронирования + обрезанный текст ошибки, режем общей
+// длиной на случай, если в error затесалось что-то длинное.
+const LOG_FRAGMENT_CAP = 200;
+function summarizeToolResult(result) {
+  if (!result || typeof result !== 'object') return '';
+  const bits = [];
+  if ('record_id' in result) bits.push(`record_id=${result.record_id}`);
+  if ('created' in result) bits.push(`created=${result.created}`);
+  if ('booked_all' in result) bits.push(`booked_all=${result.booked_all}`);
+  if ('partial' in result) bits.push(`partial=${result.partial}`);
+  if ('failed_at' in result) bits.push(`failed_at=${result.failed_at}`);
+  if ('escalated' in result) bits.push(`escalated=${result.escalated}`);
+  if (result.error) bits.push(`error=${String(result.error).slice(0, 80)}`);
+  return bits.join(' ').slice(0, LOG_FRAGMENT_CAP);
+}
+
 // Детерминированное подтверждение из данных выполненного пишущего инструмента —
 // когда запись УЖЕ сделана, а провайдер упал на подтверждающей фразе (и fallback
 // внутри провайдера тоже не выжил). Без LLM: правдиво и не зависит от сбоя. Имена
@@ -230,16 +250,26 @@ async function runDialog(salonId, dialogKey, opts = {}) {
       const results = [];
       for (const tc of resp.toolCalls) {
         const handler = registry.handlers[tc.name];
+        const startedAt = Date.now();
         let result;
+        let threw = false;
         try {
           result = handler
             ? await handler(salonId, tc.input, toolCtx)
             : { error: `Неизвестный инструмент: ${tc.name}` };
         } catch (e) {
-          logger.error(`tool ${tc.name} failed: ${e.message}`);
+          threw = true;
+          logger.error(`dialog ${dialogKey}: tool ${tc.name} ${Date.now() - startedAt}ms error ${String(e.message).slice(0, 120)}`);
           result = { error: e.message };
         }
         const isError = !!(result && result.error);
+        // Один лог на вызов инструмента (ok/error, длительность, решающие поля
+        // без PII). Для исключения уже отработал logger.error выше — второй
+        // раз не логируем, чтобы не задваивать одно и то же событие.
+        if (!threw) {
+          const outcome = summarizeToolResult(result);
+          logger.info(`dialog ${dialogKey}: tool ${tc.name} ${Date.now() - startedAt}ms ${isError ? 'error' : 'ok'}${outcome ? ' ' + outcome : ''}`);
+        }
         if (!isError && SIDE_EFFECT_TOOLS.has(tc.name)) sideEffect = true;
         if (!isError && WRITE_TOOLS.has(tc.name)) { writeSucceeded = true; lastWrite = { tool: tc.name, input: tc.input }; }
         if (!isError && tc.name === 'list_client_bookings') readBookings = true;
