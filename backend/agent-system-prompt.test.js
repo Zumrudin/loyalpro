@@ -2,6 +2,9 @@
 
 const { buildSystemPrompt } = require('./services/agent/system-prompt');
 
+// Мини-каталог для тестов режима AGENT_CATALOG_IN_PROMPT (непустой catalogBlock → catalogMode:true).
+const PRICE_CATALOG = 'КАТАЛОГ УСЛУГ КЛИНИКИ (тест)\n1|Чистка|60|6500|Уход|7';
+
 describe('buildSystemPrompt', () => {
   test('подставляет имя салона и часы', () => {
     const p = buildSystemPrompt({ salonName: 'PERI CLINIC', workingHours: '09:00–21:00', today: '2026-07-18' });
@@ -128,11 +131,19 @@ describe('buildSystemPrompt', () => {
   });
 
   test('ценовые правила консолидированы в один блок и не дублируются', () => {
-    const p = buildSystemPrompt({});
-    expect(p).toContain('ЦЕНЫ (ЕДИНЫЕ ПРАВИЛА):');
-    expect(p).not.toContain('price_max почти всегда не заполнен');
-    // «от» без верхней границы разрешено ровно в одном месте — диапазон направления
-    expect(p.match(/Слово «от» уместно ТОЛЬКО/g)).toHaveLength(1);
+    const legacy = buildSystemPrompt({});
+    const catalog = buildSystemPrompt({ catalogBlock: PRICE_CATALOG });
+    expect(legacy).toContain('ЦЕНЫ (ЕДИНЫЕ ПРАВИЛА):');
+    expect(catalog).toContain('ЦЕНЫ (ЕДИНЫЕ ПРАВИЛА):');
+    // catalog-режим: цена уже отформатирована кодом каталога (fmtPrice) — сырую семантику
+    // price_min/price_max YClients объяснять не нужно.
+    expect(catalog).not.toContain('price_max почти всегда не заполнен');
+    // legacy-режим: list_services отдаёт сырые price_min/price_max — правило обязано остаться,
+    // иначе агент увидит price_max:0 и решит, что это открытый диапазон «X-0».
+    expect(legacy).toContain('price_max почти всегда не заполнен');
+    // «от» без верхней границы разрешено ровно в одном месте — диапазон направления (в каждом режиме)
+    expect(legacy.match(/Слово «от» уместно ТОЛЬКО/g)).toHaveLength(1);
+    expect(catalog.match(/Слово «от» уместно ТОЛЬКО/g)).toHaveLength(1);
   });
 
   test('category_path — отбор услуг направления; состав только на прямой вопрос', () => {
@@ -193,14 +204,21 @@ describe('buildSystemPrompt', () => {
   });
 
   test('препарат не уточняем — обобщённая услуга по умолчанию (био/губы/контурная пластика)', () => {
-    const p = buildSystemPrompt({});
-    expect(p).toMatch(/ПРЕПАРАТ\/ФИЛЛЕР НЕ УТОЧНЯЕМ/i);
-    // три обобщённые услуги
-    expect(p).toMatch(/«Биоревитализация», «Увеличение губ» или «Контурная пластика»/);
-    // цену-заглушку не называем — отсылка к консолидированному разделу «ЦЕНЫ»
-    expect(p).toMatch(/помечена «инд\.».*раздел[а-я]* «ЦЕНЫ»/i);
-    // если пациент сам назвал препарат — оформляем конкретную услугу
-    expect(p).toMatch(/САМ назвал конкретный препарат/i);
+    const legacy = buildSystemPrompt({});
+    const catalog = buildSystemPrompt({ catalogBlock: PRICE_CATALOG });
+    for (const p of [legacy, catalog]) {
+      expect(p).toMatch(/ПРЕПАРАТ\/ФИЛЛЕР НЕ УТОЧНЯЕМ/i);
+      // три обобщённые услуги
+      expect(p).toMatch(/«Биоревитализация», «Увеличение губ» или «Контурная пластика»/);
+      // если пациент сам назвал препарат — оформляем конкретную услугу
+      expect(p).toMatch(/САМ назвал конкретный препарат/i);
+    }
+    // catalog-режим: цена-заглушка уже отрендерена кодом каталога как «инд.» — отсылка к разделу «ЦЕНЫ»
+    expect(catalog).toMatch(/помечена «инд\.».*раздел[а-я]* «ЦЕНЫ»/i);
+    expect(legacy).not.toMatch(/помечена «инд\.»/i);
+    // legacy-режим: list_services отдаёт сырую заглушку (например 1 ₽) — запрет называть её пациенту
+    // обязан остаться дословно, иначе агент озвучит «Биоревитализация — 1 ₽».
+    expect(legacy).toMatch(/служебная заглушка \(например 1 ₽\).*НИКОГДА не показывай пациенту/i);
   });
 
   test('неоднозначное бытовое слово (лазер) → мягкое подтверждение ОДНОГО варианта + история визитов', () => {
@@ -519,10 +537,38 @@ describe('экономия вызовов инструментов', () => {
     expect(p).toMatch(/данных уже достаточно/i);
   });
 
-  test('цена конкретной услуги — точное число, без «от» (форматирование ушло в код каталога)', () => {
-    const p = buildSystemPrompt({});
+  test('цена конкретной услуги — точное число, без «от» (catalog-режим: форматирование ушло в код каталога)', () => {
+    const p = buildSystemPrompt({ catalogBlock: PRICE_CATALOG });
     expect(p).toMatch(/дословно из каталога: одно число называй точно/i);
     expect(p).toMatch(/БЕЗ слова «от»/i);
+  });
+
+  test('legacy-режим: price_max=0 не значит open-ended, заглушку и «6500-0» не показывать', () => {
+    const p = buildSystemPrompt({});
+    expect(p).toMatch(/price_max почти всегда не заполнен \(0\)/i);
+    expect(p).toMatch(/это НЕ означает «цена без верхней границы»/i);
+    expect(p).toMatch(/бери price_min как фактическую стоимость услуги/i);
+    expect(p).toMatch(/Диапазон вида «6500–0» не показывай никогда/i);
+  });
+
+  test('genuine-range исключение: X-Y может быть настоящим диапазоном самой услуги, не только разницей мастеров', () => {
+    const legacy = buildSystemPrompt({});
+    const catalog = buildSystemPrompt({ catalogBlock: PRICE_CATALOG });
+    // legacy: price_max реально заполнен и больше price_min → «от X до Y ₽»
+    expect(legacy).toMatch(/Исключение: если price_max реально заполнен и больше price_min — это настоящий диапазон/i);
+    // catalog: X-Y без реального расхождения по мастерам (get_service_masters) — тоже настоящий диапазон
+    expect(catalog).toMatch(/если по факту \(get_service_masters\) диапазон одинаков у всех мастеров или мастер всего один, это настоящий диапазон самой услуги/i);
+  });
+
+  test('catalog-режим: «инд.» цифрой не озвучивается и исключена из подсчёта диапазона направления', () => {
+    const p = buildSystemPrompt({ catalogBlock: PRICE_CATALOG });
+    expect(p).toMatch(/«инд\.» — цифру НЕ называй/i);
+    expect(p).toMatch(/услуги с ценой «инд\.» в подсчёт диапазона не включай/i);
+  });
+
+  test('legacy-режим: заглушки (1 ₽ и подобные) исключены из подсчёта диапазона направления', () => {
+    const p = buildSystemPrompt({});
+    expect(p).toMatch(/услуги-заглушки \(например с ценой 1 ₽\) в подсчёт диапазона не включай/i);
   });
 });
 
