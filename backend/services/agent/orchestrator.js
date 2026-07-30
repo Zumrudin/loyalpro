@@ -276,7 +276,15 @@ async function runDialog(salonId, dialogKey, opts = {}) {
         for (const t of replyGuard.extractTimes(JSON.stringify(result))) allowedTimes.add(t);
       }
       for (const m of provider.toolResultMessages(results)) convo.push(m);
-      if (escalated) break;
+      if (escalated) {
+        // Текст, написанный В ТОМ ЖЕ ходе, что и escalate_to_operator (прощание /
+        // честный отчёт о частичной записи цепочки), иначе теряется: ветка выше
+        // пушит text в replies ТОЛЬКО когда toolCalls пуст, а цикл прерывается
+        // сразу после эскалации — текстового хода без инструментов больше не будет.
+        // Это последнее, что услышит клиент перед переводом на администратора.
+        if (resp.text && !replies.includes(resp.text)) replies.push(resp.text);
+        break;
+      }
       if (i === MAX_ITERS - 1) exhausted = true;
     }
 

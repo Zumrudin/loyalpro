@@ -86,6 +86,33 @@ describe('runDialog', () => {
     expect(deps.provider.createMessage).toHaveBeenCalledTimes(1);
   });
 
+  // Регресс: book_chain partial + escalate_to_operator в одном ходе — модель пишет
+  // честный отчёт («чистку записала, консультация не встала») И зовёт эскалацию
+  // ОДНИМ ответом. Раньше text уходил в никуда: реплика пушится в replies ТОЛЬКО
+  // когда toolCalls пуст (строка «if (!resp.toolCalls.length)» выше), а после
+  // escalate цикл сразу прерывается — текстового хода больше не будет. Диспетчер
+  // получал replies:[] и слал только generic DEFAULT_HANDOVER_TEXT, клиент никогда
+  // не узнавал, что часть цепочки УЖЕ забронирована.
+  test('escalate_to_operator с текстом в том же ходе → текст доходит в replies (честный отчёт при передаче администратору)', async () => {
+    const deps = makeDeps();
+    const text = 'Чистку записала на 14:00, консультация не встала — передаю администратору';
+    deps.provider.createMessage.mockResolvedValueOnce(
+      toolResp('escalate_to_operator', { reason: 'partial' }, 'c1', text));
+    const out = await orchestrator.runDialog(1, 'k', { deps });
+    expect(out.escalated).toBe(true);
+    expect(out.replies).toContain(text);
+  });
+
+  // Regression-guard: без текста рядом с вызовом (обычная молчаливая эскалация)
+  // replies по-прежнему пуст — диспетчер сам подставляет DEFAULT_HANDOVER_TEXT.
+  test('escalate_to_operator БЕЗ текста в том же ходе → replies остаётся пустым', async () => {
+    const deps = makeDeps();
+    deps.provider.createMessage.mockResolvedValueOnce(toolResp('escalate_to_operator', { reason: 'жалоба' }));
+    const out = await orchestrator.runDialog(1, 'k', { deps });
+    expect(out.escalated).toBe(true);
+    expect(out.replies).toEqual([]);
+  });
+
   test('create_booking вернул ошибку → bookingFailed:true (диспетчер переведёт на человека)', async () => {
     const deps = makeDeps({ handlers: { create_booking: jest.fn(async () => ({ invalid_args: true, error: 'выдуманный id' })) } });
     deps.provider.createMessage
