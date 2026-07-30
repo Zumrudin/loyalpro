@@ -7,6 +7,8 @@
 // In-memory на один PM2-процесс (тот же компромисс, что дебаунс диспетчера);
 // рестарт/TTL → book_chain вернёт option_expired, модель перезапросит слоты.
 
+const { sanitizeLine } = require('./sanitize');
+
 const TTL_MS = 30 * 60 * 1000;
 const MAX_DIALOGS = 500;   // страховка от утечки: старейший диалог вытесняется
 
@@ -42,20 +44,35 @@ function peek(salonId, dialogKey, opts = {}) {
   return entry.offers || null;
 }
 
+// markBooked — вариант оформлен book_chain: в промпте его больше не показываем
+// (слот занят нами же, а кэш живёт до 30 минут). Флаг ставим на САМ вариант, а не
+// на chain: цепочка — разделяемая ссылка и остаётся read-only. take по-прежнему
+// отдаёт вариант, чтобы идемпотентный ретрай book_chain с тем же option_id работал.
+function markBooked(salonId, dialogKey, optionId, opts = {}) {
+  const now = opts.nowMs || Date.now();
+  const entry = store.get(keyOf(salonId, dialogKey));
+  if (!entry || now - entry.at > TTL_MS) return false;
+  if (!Object.prototype.hasOwnProperty.call(entry.offers, optionId)) return false;
+  const offer = entry.offers[optionId];
+  if (!offer || typeof offer !== 'object') return false;
+  offer.booked = true;
+  return true;
+}
+
 // ── Рендер вариантов в строки для промпта. Чистая функция. ──────────────────
 // Живёт рядом с кэшем, а не в system-prompt.js: промпт остаётся не знающим о
 // форме chain (её задаёт get_sequential_slots и хранит этот модуль), а
 // оркестратору достаточно одного require.
+// ГЛАВНОЕ ПРАВИЛО: вариант показывается ТОЛЬКО ЦЕЛИКОМ. book_chain оформит ВСЕ
+// звенья цепочки, поэтому урезанная строка (обрезка по длине или пропуск
+// нечитаемого звена) = молчаливая запись пациента на процедуру, которую ему не
+// назвали. Не влезает или не читается — выбрасываем вариант целиком, модель
+// перезапросит get_sequential_slots.
 
-const LINE_MAX = 300;
-
-// Название услуги/мастера приходит из YClients — в промпт только одной строкой
-// (перенос строки внутри = дописать агенту «правила»).
-const clean = (v, max = 60) => String(v == null ? '' : v)
-  .replace(/[\u0000-\u001F\u007F\u2028\u2029]+/g, ' ')
-  .replace(/\s+/g, ' ')
-  .trim()
-  .slice(0, max);
+const MAX_RENDERED_OPTIONS = 8;   // потолок инструмента — 6 вариантов × 4 старта = 24 строки: и промпт пухнет, и allowedTimes reply-guard размывается
+const LINE_MAX = 420;             // ≈ префикс (13) + 3 звена по максимуму полей (~125) + разделители
+const TITLE_MAX = 60;
+const STAFF_MAX = 40;
 
 // '2026-07-30T10:30:00+03:00' → { date:'30.07', time:'10:30' }; иначе null.
 function parseDt(raw) {
@@ -66,11 +83,13 @@ function parseDt(raw) {
 function renderLink(link) {
   if (!link || typeof link !== 'object') return null;
   const dt = parseDt(link.datetime);
-  if (!dt) return null;                       // без времени звено бесполезно — молча пропускаем
-  const title = clean(link.service_title) || 'процедура';
+  if (!dt) return null;                       // нечитаемое звено → вариант отбрасывается целиком (см. вызов)
+  const title = sanitizeLine(link.service_title, TITLE_MAX) || 'процедура';
   const notes = [];
-  const who = clean(link.staff_name, 40)
-    || (link.staff_yc_id == null || link.staff_yc_id === '' ? '' : `мастер ${clean(link.staff_yc_id, 20)}`);
+  // Имени мастера нет — yc_id НЕ подставляем: это внутренний идентификатор
+  // (правило 9 промпта, id_leak в reply-guard), а модели он ничего не даёт —
+  // book_chain принимает только option_id.
+  const who = sanitizeLine(link.staff_name, STAFF_MAX);
   if (who) notes.push(who);
   if (link.already_booked) notes.push('уже записана');
   return `${dt.time} «${title}»${notes.length ? ` (${notes.join(', ')})` : ''}`;
@@ -82,23 +101,37 @@ const optionNum = (id) => {
   return m ? Number(m[1]) : Number.MAX_SAFE_INTEGER;
 };
 
-function renderOffers(offers) {
+function renderOffers(offers, opts = {}) {
   if (!offers || typeof offers !== 'object') return [];
+  const now = opts.nowMs || Date.now();
   const ids = Object.keys(offers).sort((a, b) =>
     (optionNum(a) - optionNum(b)) || (a < b ? -1 : a > b ? 1 : 0));
   const lines = [];
   for (const id of ids) {
+    if (lines.length >= MAX_RENDERED_OPTIONS) break;   // режем ХВОСТ: первые варианты приоритетнее (same_staff идёт первым)
     const offer = offers[id];
-    const chain = offer && Array.isArray(offer.chain) ? offer.chain : null;
+    if (!offer || typeof offer !== 'object' || offer.booked) continue;
+    const chain = Array.isArray(offer.chain) ? offer.chain : null;
     if (!chain || !chain.length) continue;
-    const links = chain.map(renderLink).filter(Boolean);
-    if (!links.length) continue;
-    const day = chain.map(l => parseDt(l && l.datetime)).find(Boolean);
-    lines.push(`${clean(id, 12)} — ${day.date}: ${links.join(' → ')}`.slice(0, LINE_MAX));
+    const day = parseDt(chain[0] && chain[0].datetime);
+    if (!day) continue;
+    // Старт уже прошёл — предлагать нельзя. get_sequential_slots отрезает прошедшее
+    // время, кэш же живёт до 30 минут: иначе модель предложит прошлое → create_booking
+    // провалится → принудительный перевод на человека (инцидент 2026-07-28).
+    const startMs = Date.parse(chain[0].datetime);
+    if (!Number.isFinite(startMs) || startMs <= now) continue;
+    const links = chain.map(renderLink);
+    if (links.some(l => !l)) continue;                 // хоть одно звено не отрисовалось → вариант мимо
+    const line = `${sanitizeLine(id, 12)} — ${day.date}: ${links.join(' → ')}`;
+    if (line.length > LINE_MAX) continue;              // не режем по середине — выбрасываем вариант
+    lines.push(line);
   }
   return lines;
 }
 
 function _reset() { store.clear(); }
 
-module.exports = { remember, take, peek, renderOffers, TTL_MS, _reset };
+module.exports = {
+  remember, take, peek, markBooked, renderOffers,
+  TTL_MS, MAX_RENDERED_OPTIONS, _reset,
+};

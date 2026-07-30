@@ -173,8 +173,17 @@ async function runDialog(salonId, dialogKey, opts = {}) {
   // не имеет права ронять диалог — просто идём без блока (модель перезапросит слоты).
   let activeOffers = [];
   try {
-    const live = seqOffers.peek(salonId, dialogKey, { nowMs: opts.nowMs || Date.now() });
-    if (live) activeOffers = seqOffers.renderOffers(live);
+    const nowMs = opts.nowMs || Date.now();
+    const live = seqOffers.peek(salonId, dialogKey, { nowMs });
+    if (live) {
+      activeOffers = seqOffers.renderOffers(live, { nowMs });
+      // Часть вариантов не показана (прошедший старт, уже оформлен, потолок
+      // строк) — модель по правилу блока просто перезапросит get_sequential_slots.
+      const total = Object.keys(live).length;
+      if (total > activeOffers.length) {
+        logger.info(`dialog ${dialogKey}: активных вариантов ${activeOffers.length} из ${total} (остальные прошли, оформлены или срезаны потолком)`);
+      }
+    }
   } catch (e) {
     logger.warn(`dialog ${dialogKey}: не прочитать активные варианты стыковки (${e.message}) — промпт без них`);
     activeOffers = [];

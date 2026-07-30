@@ -566,6 +566,8 @@ describe('активные варианты стыковки в системно
       datetime: '2026-07-30T12:00:00+03:00', seance_length: 1800 },
   ];
 
+  const NOW = Date.parse('2026-07-30T09:00:00+03:00');   // до стартов CHAIN
+
   beforeEach(() => seqOffers._reset());
   afterEach(() => { jest.restoreAllMocks(); seqOffers._reset(); });
 
@@ -577,7 +579,7 @@ describe('активные варианты стыковки в системно
     const deps = makeDeps();
     deps.provider.createMessage.mockResolvedValueOnce(textResp('Оформляю?'));
 
-    await orchestrator.runDialog(1, 'k', { deps });
+    await orchestrator.runDialog(1, 'k', { deps, nowMs: NOW });
 
     const sys = deps.provider.createMessage.mock.calls[0][0].system;
     expect(sys).toContain('АКТИВНЫЕ ВАРИАНТЫ СТЫКОВКИ');
@@ -606,6 +608,35 @@ describe('активные варианты стыковки в системно
     deps.provider.createMessage.mockResolvedValueOnce(textResp('Здравствуйте!'));
     await orchestrator.runDialog(1, 'k', { deps, nowMs: 1000 + seqOffers.TTL_MS + 1 });
     expect(deps.provider.createMessage.mock.calls[0][0].system).not.toContain('АКТИВНЫЕ ВАРИАНТЫ СТЫКОВКИ');
+  });
+
+  test('старт, который уже прошёл, в промпт не попадает (часы — opts.nowMs)', async () => {
+    const at = Date.parse('2026-07-30T10:45:00+03:00');           // кэш свежий, TTL ни при чём
+    seqOffers.remember(1, 'k', {
+      o1: { chain: [CHAIN[0]] },                                   // старт 10:30 — уже прошёл
+      o2: { chain: [CHAIN[1]] },                                   // старт 12:00 — впереди
+    }, { nowMs: at });
+    const deps = makeDeps();
+    deps.provider.createMessage.mockResolvedValueOnce(textResp('Здравствуйте!'));
+
+    await orchestrator.runDialog(1, 'k', { deps, nowMs: at + 60 * 1000 });
+
+    const sys = deps.provider.createMessage.mock.calls[0][0].system;
+    expect(sys).toContain('o2 — 30.07: 12:00 «Консультация» (Астемир)');
+    expect(sys).not.toContain('o1 —');
+  });
+
+  test('оформленный book_chain вариант больше не рекламируется', async () => {
+    seqOffers.remember(1, 'k', { o1: { chain: [CHAIN[0]] }, o2: { chain: [CHAIN[1]] } });
+    seqOffers.markBooked(1, 'k', 'o1');
+    const deps = makeDeps();
+    deps.provider.createMessage.mockResolvedValueOnce(textResp('Здравствуйте!'));
+
+    await orchestrator.runDialog(1, 'k', { deps, nowMs: NOW });
+
+    const sys = deps.provider.createMessage.mock.calls[0][0].system;
+    expect(sys).toContain('o2 —');
+    expect(sys).not.toContain('o1 —');
   });
 
   test('peek упал → ход не ломается, просто без блока', async () => {

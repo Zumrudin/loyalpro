@@ -179,3 +179,38 @@ test('client_phone/client_name из input пробрасываются в каж
     expect(call[1]).toMatchObject({ client_phone: '79995556677', client_name: 'Мама' });
   }
 });
+
+// Оформленный вариант нельзя рекламировать в промпте следующего хода: слот занят
+// нами же. Флаг ставится на ВАРИАНТ, take по-прежнему отдаёт его (ретрай).
+test('успешный book_chain помечает вариант оформленным: из рендера исчез, take работает', async () => {
+  offers.remember(1, 'dlg', {
+    o1: { booking_mode: 'separate_records', chain: [LINK(101, 7, '2026-07-30T14:00:00+03:00')] },
+    o2: { booking_mode: 'separate_records', chain: [LINK(102, 8, '2026-07-30T16:00:00+03:00')] },
+  });
+  const res = await bookChain.run(1, { option_id: 'o1', comment: 'к' }, CTX, deps());
+  expect(res.booked_all).toBe(true);
+
+  const nowMs = Date.parse('2026-07-30T09:00:00+03:00');
+  expect(offers.renderOffers(offers.peek(1, 'dlg'), { nowMs }).map(l => l.split(' ')[0])).toEqual(['o2']);
+  expect(offers.take(1, 'dlg', 'o1')).toBeTruthy();          // ретрай того же option_id всё ещё возможен
+  expect(offers.peek(1, 'dlg').o1.chain[0].booked).toBeUndefined();   // цепочка не тронута
+});
+
+test('якорный single_record тоже помечается оформленным', async () => {
+  offers.remember(1, 'dlg', { o1: { booking_mode: 'single_record', chain: [
+    LINK(101, 7, '2026-07-30T14:00:00+03:00'), LINK(102, 7, '2026-07-30T15:00:00+03:00'),
+  ] } });
+  const res = await bookChain.run(1, { option_id: 'o1', comment: 'к' }, CTX, deps());
+  expect(res.booked_all).toBe(true);
+  expect(offers.peek(1, 'dlg').o1.booked).toBe(true);
+});
+
+test('провалившийся book_chain вариант оформленным НЕ помечает', async () => {
+  offers.remember(1, 'dlg', { o1: { booking_mode: 'separate_records', chain: [
+    LINK(101, 7, '2026-07-30T14:00:00+03:00'),
+  ] } });
+  const res = await bookChain.run(1, { option_id: 'o1', comment: 'к' }, CTX,
+    deps({ createBooking: jest.fn(async () => ({ created: false, error: 'время занято' })) }));
+  expect(res.booked_all).toBe(false);
+  expect(offers.peek(1, 'dlg').o1.booked).toBeUndefined();
+});

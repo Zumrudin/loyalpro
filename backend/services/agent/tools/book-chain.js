@@ -122,6 +122,10 @@ async function run(salonId, input, ctx = {}, deps = {}) {
       if (!r2 || !r2.modified) return fail(rest[0], (r2 && r2.error) || 'услуги не добавились в запись');
       records[0].services_count = r2.services_count;
     }
+    // Вариант оформлен — снимаем его с витрины активных вариантов в промпте
+    // (кэш живёт до 30 минут, слот теперь занят нашей же записью). take его
+    // по-прежнему отдаёт: повторный book_chain тем же option_id идемпотентен.
+    offers.markBooked(salonId, ctx.dialogKey, input.option_id);
     return { booked_all: true, records };
   }
 
@@ -134,6 +138,7 @@ async function run(salonId, input, ctx = {}, deps = {}) {
     if (!bookedOk(r)) return fail(l, (r && r.error) || 'запись не создана');
     records.push({ record_id: r.record_id, service_title: l.service_title, datetime: l.datetime });
   }
+  offers.markBooked(salonId, ctx.dialogKey, input.option_id);
   return { booked_all: true, records };
 }
 
