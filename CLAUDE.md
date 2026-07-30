@@ -119,6 +119,7 @@ Always use the **MCP Playwright server** (`mcp__playwright__*`) for browser auto
 
 ### AI-агент: управление и гейт допуска
 - `services/agent-gate.js` — чистые хелперы: `normalizePhoneKey` (РФ `8→7`), `decideGate` (порядок: enabled → чёрный список → режим/белый). Юнит-тесты `agent-gate.test.js`.
+- Расписание: `agent_settings.schedule_enabled/schedule_start/schedule_end` ('HH:MM', мск). Окно **только сужает** допуск — вне окна режим принудительно `whitelist` (reason `outside-schedule`), внутри действует выбранный режим. Окно через полночь поддержано (`start > end`), начало включительно, конец исключительно; битые границы → расписание игнорируется (fail-open). Отсечка жёсткая по часам: диалог, начатый в окне, после его конца бот не продолжает.
 - `services/agent-settings.js` — настройки (`agent_settings`) и списки номеров (`agent_number_rules`); `isAllowed(salonId, phone)` объединяет их через `decideGate` (fail-closed без `salonId`). Номера хранятся каноничными (нормализуются при записи в `addNumberRule`).
 - `routes/agent-settings.js` (`/api/agent`, owner/admin) — тумблер, режим `all|whitelist`, CRUD номеров.
 - `routes/chatpush-webhook.js` зовёт `isAllowed` перед авто-ответом. Два уровня: env `CHATPUSH_AGENT_ENABLED` (глобальный kill-switch) И per-salon настройки из админки.
