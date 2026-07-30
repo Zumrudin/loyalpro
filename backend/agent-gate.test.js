@@ -1,5 +1,7 @@
 'use strict';
-const { normalizePhoneKey, decideGate } = require('./services/agent-gate');
+const {
+  normalizePhoneKey, decideGate, parseHhMm, isWithinWindow, nowMskMinutes,
+} = require('./services/agent-gate');
 
 describe('normalizePhoneKey', () => {
   test('РФ 8→7 для 11 цифр', () => {
@@ -17,6 +19,61 @@ describe('normalizePhoneKey', () => {
   test('пустой/мусор → пустая строка', () => {
     expect(normalizePhoneKey('')).toBe('');
     expect(normalizePhoneKey(null)).toBe('');
+  });
+});
+
+describe('parseHhMm', () => {
+  test('валидное время → минуты от полуночи', () => {
+    expect(parseHhMm('00:00')).toBe(0);
+    expect(parseHhMm('09:30')).toBe(570);
+    expect(parseHhMm('22:00')).toBe(1320);
+    expect(parseHhMm('23:59')).toBe(1439);
+  });
+  test('пробелы по краям не мешают', () => {
+    expect(parseHhMm(' 09:30 ')).toBe(570);
+  });
+  test('вне диапазона → null', () => {
+    expect(parseHhMm('24:00')).toBe(null);
+    expect(parseHhMm('09:60')).toBe(null);
+  });
+  test('кривой формат → null', () => {
+    expect(parseHhMm('9:3')).toBe(null);
+    expect(parseHhMm('0930')).toBe(null);
+    expect(parseHhMm('')).toBe(null);
+    expect(parseHhMm(undefined)).toBe(null);
+    expect(parseHhMm(null)).toBe(null);
+  });
+});
+
+describe('isWithinWindow', () => {
+  test('обычное окно 09:00–18:00', () => {
+    expect(isWithinWindow(540, 540, 1080)).toBe(true);    // 09:00 — начало включительно
+    expect(isWithinWindow(720, 540, 1080)).toBe(true);    // 12:00
+    expect(isWithinWindow(1080, 540, 1080)).toBe(false);  // 18:00 — конец исключительно
+    expect(isWithinWindow(300, 540, 1080)).toBe(false);   // 05:00
+  });
+  test('окно через полночь 22:00–09:30', () => {
+    expect(isWithinWindow(1320, 1320, 570)).toBe(true);   // 22:00 ровно
+    expect(isWithinWindow(1380, 1320, 570)).toBe(true);   // 23:00
+    expect(isWithinWindow(120, 1320, 570)).toBe(true);    // 02:00
+    expect(isWithinWindow(569, 1320, 570)).toBe(true);    // 09:29
+    expect(isWithinWindow(570, 1320, 570)).toBe(false);   // 09:30 ровно — уже вне
+    expect(isWithinWindow(720, 1320, 570)).toBe(false);   // 12:00
+  });
+  test('start === end → окно нулевой длины, а не круглые сутки', () => {
+    expect(isWithinWindow(1320, 1320, 1320)).toBe(false);
+    expect(isWithinWindow(0, 1320, 1320)).toBe(false);
+  });
+});
+
+describe('nowMskMinutes', () => {
+  test('считает московское время независимо от TZ процесса', () => {
+    // 19:07 UTC = 22:07 MSK (UTC+3 круглый год, без перехода на летнее время)
+    expect(nowMskMinutes(new Date('2026-07-30T19:07:00Z'))).toBe(22 * 60 + 7);
+  });
+  test('переход через полночь по мск', () => {
+    // 21:30 UTC 30 июля = 00:30 MSK 31 июля
+    expect(nowMskMinutes(new Date('2026-07-30T21:30:00Z'))).toBe(30);
   });
 });
 

@@ -14,6 +14,34 @@ function normalizePhoneKey(raw) {
   return digits;
 }
 
+// 'HH:MM' → минуты от полуночи. Любой мусор → null (вызывающий решает, что делать).
+function parseHhMm(raw) {
+  const m = /^(\d{2}):(\d{2})$/.exec(String(raw ?? '').trim());
+  if (!m) return null;
+  const h = Number(m[1]), min = Number(m[2]);
+  if (h > 23 || min > 59) return null;
+  return h * 60 + min;
+}
+
+// Попадает ли момент в окно. Начало включительно, конец исключительно.
+// start > end — окно через полночь (22:00–09:30). start === end — окно нулевой
+// длины (НЕ круглые сутки: молчаливое превращение в 24/7 — опасный сюрприз).
+function isWithinWindow(nowMinutes, startMin, endMin) {
+  if (startMin === endMin) return false;
+  if (startMin < endMin) return nowMinutes >= startMin && nowMinutes < endMin;
+  return nowMinutes >= startMin || nowMinutes < endMin;
+}
+
+// Текущее московское время в минутах от полуночи. TZ задан явно: процесс сейчас
+// живёт на Europe/Moscow, но опираться на это — скрытая зависимость.
+function nowMskMinutes(date = new Date()) {
+  const s = date.toLocaleTimeString('ru-RU', {
+    timeZone: 'Europe/Moscow', hour12: false, hour: '2-digit', minute: '2-digit',
+  });
+  const [h, m] = s.split(':').map(Number);
+  return h * 60 + m;
+}
+
 // Решение допуска. Чистая функция. Порядок: enabled → чёрный список → режим/белый.
 // @param {boolean} enabled
 // @param {'all'|'whitelist'} mode
@@ -31,4 +59,6 @@ function decideGate({ enabled, mode, allow, block, phone }) {
   return { allow: true, reason: 'ok' };
 }
 
-module.exports = { normalizePhoneKey, decideGate };
+module.exports = {
+  normalizePhoneKey, decideGate, parseHhMm, isWithinWindow, nowMskMinutes,
+};
