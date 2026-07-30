@@ -88,17 +88,25 @@ async function removeAgentNumber(id) {
 }
 
 async function saveAgentSettings() {
+  const scheduleEnabled = document.getElementById('agent-schedule-enabled').checked;
+  const scheduleStart = document.getElementById('agent-schedule-start').value;
+  const scheduleEnd = document.getElementById('agent-schedule-end').value;
+  // Пустое время из <input type="time"> сервер отклонит целиком — проверяем на клиенте
+  if (scheduleEnabled && (!scheduleStart || !scheduleEnd)) {
+    notify('Укажите начало и конец окна расписания', 'err');
+    return;
+  }
   try {
     await api('PUT', '/api/agent/settings', {
       enabled: document.getElementById('agent-enabled').checked,
       mode: _agentMode(),
-      scheduleEnabled: document.getElementById('agent-schedule-enabled').checked,
-      scheduleStart: document.getElementById('agent-schedule-start').value,
-      scheduleEnd: document.getElementById('agent-schedule-end').value,
+      scheduleEnabled,
+      scheduleStart,
+      scheduleEnd,
     });
     notify('Настройки агента сохранены');
     closeAgentSettings();
-  } catch (e) { console.error(e); notify('Ошибка сохранения', 'err'); }
+  } catch (e) { console.error(e); notify(e.message || 'Ошибка сохранения', 'err'); }
 }
 
 window.openAgentSettings = openAgentSettings;
