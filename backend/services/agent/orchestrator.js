@@ -22,7 +22,7 @@ const MAX_REGEN = 2;   // сколько раз перегенерировать
 
 // Пишущие инструменты: их результат нельзя «выбросить» перегенерацией.
 const SIDE_EFFECT_TOOLS = new Set([
-  'create_booking', 'cancel_booking', 'reschedule_booking', 'modify_booking_services',
+  'create_booking', 'book_chain', 'cancel_booking', 'reschedule_booking', 'modify_booking_services',
   'escalate_to_operator',
 ]);
 
@@ -245,6 +245,24 @@ async function runDialog(salonId, dialogKey, opts = {}) {
         if (!isError && tc.name === 'list_client_bookings') readBookings = true;
         if (tc.name === 'escalate_to_operator' && result && result.escalated) escalated = true;
         if (tc.name === 'create_booking') { if (isError) bookingErrored = true; else bookingSucceeded = true; }
+        if (tc.name === 'book_chain') {
+          // Частичный успех (partial) = записи уже есть → право на «записала»
+          // сохраняется (writeSucceeded) и ход нельзя выбрасывать перегенерацией
+          // (sideEffect), но серия считается проваленной (bookingErrored) —
+          // диспетчер решит про перевод. option_expired — ни успех, ни провал
+          // записи: модель перезапросит слоты.
+          if (result && (result.booked_all || result.partial)) sideEffect = true;
+          if (result && result.booked_all) {
+            bookingSucceeded = true; writeSucceeded = true;
+            const first = (result.records || [])[0] || {};
+            lastWrite = { tool: 'create_booking', input: { datetime: first.datetime, client_name: (tc.input || {}).client_name } };
+          } else if (result && (result.partial || result.failed_at)) {
+            bookingErrored = true;
+            if (result.partial) writeSucceeded = true;
+          } else if (result && !result.option_expired) {
+            bookingErrored = true;
+          }
+        }
         if (bookingErrored && SLOT_READ_TOOLS.has(tc.name)) recheckedAfterFail = true;
         results.push({ id: tc.id, name: tc.name, result, isError });
         for (const t of replyGuard.extractTimes(JSON.stringify(result))) allowedTimes.add(t);

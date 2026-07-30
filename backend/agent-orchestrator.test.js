@@ -131,6 +131,31 @@ describe('runDialog', () => {
     expect(out.sideEffect).toBe(true);
   });
 
+  test('book_chain booked_all → writeSucceeded: реплика «записала» не считается ложным успехом', async () => {
+    const deps = makeDeps({ handlers: { book_chain: jest.fn(async () => ({
+      booked_all: true,
+      records: [{ record_id: 555, service_title: 'Чистка', datetime: '2026-07-30T14:00:00+03:00' }],
+    })) } });
+    deps.provider.createMessage
+      .mockResolvedValueOnce(toolResp('book_chain', { option_id: 'o1', comment: 'чистка+консультация' }))
+      .mockResolvedValueOnce(textResp('Записала вас на обе процедуры, ждём! ✅'));
+    const out = await orchestrator.runDialog(1, 'k', { deps });
+    expect(out.falseSuccess).toBe(false);
+    expect(out.bookingFailed).toBe(false);
+    expect(out.sideEffect).toBe(true);
+  });
+
+  test('book_chain провал без partial → bookingFailed', async () => {
+    const deps = makeDeps({ handlers: { book_chain: jest.fn(async () => ({
+      booked_all: false, partial: false, failed_at: 'svc101', error: 'занято', records: [],
+    })) } });
+    deps.provider.createMessage
+      .mockResolvedValueOnce(toolResp('book_chain', { option_id: 'o1', comment: 'к' }))
+      .mockResolvedValueOnce(textResp('Секундочку, уточняю детали 🤍'));
+    const out = await orchestrator.runDialog(1, 'k', { deps });
+    expect(out.bookingFailed).toBe(true);
+  });
+
   test('диалог уже escalated → ничего не делаем', async () => {
     const deps = makeDeps({ state: { getOrCreate: jest.fn(async () => ({ status: 'escalated' })) } });
     const out = await orchestrator.runDialog(1, 'k', { deps });
