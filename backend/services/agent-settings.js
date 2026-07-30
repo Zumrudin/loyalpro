@@ -6,27 +6,60 @@
 // ============================================================
 const { db } = require('../db');
 const { ycGetServiceCatalog } = require('./yclients');
-const { normalizePhoneKey, decideGate } = require('./agent-gate');
+const { normalizePhoneKey, decideGate, parseHhMm, nowMskMinutes } = require('./agent-gate');
 
-const DEFAULTS = { enabled: false, mode: 'all' };
+const DEFAULTS = {
+  enabled: false, mode: 'all',
+  scheduleEnabled: false, scheduleStart: '22:00', scheduleEnd: '09:30',
+};
+
+// Строка БД → camelCase-настройки для API и гейта.
+function rowToSettings(row) {
+  return {
+    enabled: !!row.enabled,
+    mode: row.mode === 'whitelist' ? 'whitelist' : 'all',
+    scheduleEnabled: !!row.schedule_enabled,
+    scheduleStart: row.schedule_start || DEFAULTS.scheduleStart,
+    scheduleEnd: row.schedule_end || DEFAULTS.scheduleEnd,
+  };
+}
+
+// Валидация времени из тела запроса. undefined → оставить текущее значение.
+function pickTime(raw, current) {
+  if (raw === undefined) return current;
+  if (parseHhMm(raw) === null) { const e = new Error('bad time'); e.code = 'BAD_TIME'; throw e; }
+  return String(raw).trim();
+}
 
 async function getSettings(salonId) {
   if (!salonId) return { ...DEFAULTS };
   const row = await db.oneOrNone(
-    'SELECT enabled, mode FROM agent_settings WHERE salon_id=$1', [salonId]
+    `SELECT enabled, mode, schedule_enabled, schedule_start, schedule_end
+       FROM agent_settings WHERE salon_id=$1`, [salonId]
   );
-  return row || { ...DEFAULTS };
+  return row ? rowToSettings(row) : { ...DEFAULTS };
 }
 
-async function updateSettings(salonId, { enabled, mode }) {
+// Поля расписания, не переданные в теле, сохраняют текущее значение — иначе
+// старый закэшированный фронт (шлёт только enabled+mode) молча сбросил бы окно.
+async function updateSettings(salonId, body) {
+  const { enabled, mode, scheduleEnabled, scheduleStart, scheduleEnd } = body || {};
+  const cur = await getSettings(salonId);
   const m = mode === 'whitelist' ? 'whitelist' : 'all';
-  return db.one(
-    `INSERT INTO agent_settings (salon_id, enabled, mode, updated_at)
-     VALUES ($1,$2,$3,NOW())
-     ON CONFLICT (salon_id) DO UPDATE SET enabled=$2, mode=$3, updated_at=NOW()
-     RETURNING enabled, mode`,
-    [salonId, !!enabled, m]
+  const schedOn = scheduleEnabled === undefined ? cur.scheduleEnabled : !!scheduleEnabled;
+  const start = pickTime(scheduleStart, cur.scheduleStart);
+  const end = pickTime(scheduleEnd, cur.scheduleEnd);
+  const row = await db.one(
+    `INSERT INTO agent_settings
+       (salon_id, enabled, mode, schedule_enabled, schedule_start, schedule_end, updated_at)
+     VALUES ($1,$2,$3,$4,$5,$6,NOW())
+     ON CONFLICT (salon_id) DO UPDATE SET
+       enabled=$2, mode=$3, schedule_enabled=$4,
+       schedule_start=$5, schedule_end=$6, updated_at=NOW()
+     RETURNING enabled, mode, schedule_enabled, schedule_start, schedule_end`,
+    [salonId, !!enabled, m, schedOn, start, end]
   );
+  return rowToSettings(row);
 }
 
 async function listNumberRules(salonId, ruleType) {
@@ -66,7 +99,13 @@ async function isAllowed(salonId, phone) {
   const rules = await listNumberRules(salonId, null);
   const allow = rules.filter(r => r.rule_type === 'allow').map(r => r.phone);
   const block = rules.filter(r => r.rule_type === 'block').map(r => r.phone);
-  return decideGate({ enabled: true, mode: settings.mode, allow, block, phone });
+  return decideGate({
+    enabled: true, mode: settings.mode, allow, block, phone,
+    scheduleEnabled: settings.scheduleEnabled,
+    scheduleStart: settings.scheduleStart,
+    scheduleEnd: settings.scheduleEnd,
+    nowMinutes: nowMskMinutes(),
+  });
 }
 
 // ── Фильтр услуг агента ─────────────────────────────────────
