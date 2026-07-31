@@ -72,11 +72,13 @@ router.get('/dialogs', adminOnly, async (req, res) => {
              m.text AS last_text, m.msg_ts AS last_ts, m.channel AS last_channel,
              i.in_channel, i.in_sender, i.in_phone, i.in_chat_id, i.client_id,
              cl.name AS client_name,
-             a.cnt AS messages_count, a.channels
+             a.cnt AS messages_count, a.channels,
+             ad.status AS agent_status, ad.escalated_reason
       FROM last_msg m
       JOIN agg a ON a.dialog_key = m.dialog_key
       LEFT JOIN last_in i ON i.dialog_key = m.dialog_key
       LEFT JOIN clients cl ON cl.id = i.client_id AND cl.salon_id = $1
+      LEFT JOIN agent_dialogs ad ON ad.salon_id = $1 AND ad.dialog_key = m.dialog_key
       ORDER BY m.msg_ts DESC NULLS LAST
     `, [salonId]);
 
@@ -96,6 +98,9 @@ router.get('/dialogs', adminOnly, async (req, res) => {
         channels:      r.channels || [],
         defaultChannel: r.in_channel || (r.channels && r.channels[0]) || null,
         client:        r.client_id ? { id: r.client_id, name: r.client_name } : null,
+        // Нет строки в agent_dialogs → бот этим диалогом не занимался (в т.ч. все группы).
+        agentStatus:     r.agent_status || 'bot',
+        escalatedReason: r.escalated_reason || null,
       };
     });
     res.json({ dialogs });
@@ -161,6 +166,8 @@ router.post('/dialogs/:key/agent', adminOnly, async (req, res) => {
        ON CONFLICT (salon_id, dialog_key)
          DO UPDATE SET status = $3, updated_at = now()`,
       [salonId, key, status]);
+    // Красная подсветка в списке диалогов у всех открытых вкладок — сразу.
+    chatEvents.emitAgentStatus(salonId, key, status, status === 'escalated' ? 'operator_takeover' : null);
     res.json({ status });
   } catch (e) {
     logger.error(`agent toggle failed: ${e.message}`);
@@ -180,6 +187,7 @@ async function pauseAgent(salonId, key) {
      ON CONFLICT (salon_id, dialog_key)
        DO UPDATE SET status='escalated', escalated_reason='operator_reply', updated_at=now()`,
     [salonId, key]);
+  chatEvents.emitAgentStatus(salonId, key, 'escalated', 'operator_reply');
 }
 
 // Идентификаторы получателя: последнее ВХОДЯЩЕЕ выбранного канала (самый

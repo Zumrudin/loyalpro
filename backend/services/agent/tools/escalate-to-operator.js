@@ -1,6 +1,7 @@
 'use strict';
 
 const { db } = require('../../../db');
+const chatEvents = require('../../chat-events');
 
 const schema = {
   name: 'escalate_to_operator',
@@ -27,6 +28,8 @@ async function run(salonId, input, ctx = {}) {
     `INSERT INTO agent_events (salon_id, dialog_key, kind, tool_name, payload)
      VALUES ($1,$2,'escalated','escalate_to_operator',$3)`,
     [salonId, dialogKey, JSON.stringify({ reason })]);
+  // Диалог ждёт живого человека — подсветить его в списке чатов немедленно.
+  chatEvents.emitAgentStatus(salonId, dialogKey, 'escalated', reason);
   return { escalated: true, reason };
 }
 

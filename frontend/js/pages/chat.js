@@ -96,11 +96,13 @@ async function refreshChatDialogs(silent) {
 }
 
 // Фильтр списка по имени/номеру. Цифры сравниваем отдельно, игнорируя +, пробелы, скобки.
+// Порядок списка: диалоги на операторе — сверху (chat-dialog-sort.js).
 function _chatFilter() {
   const term = _chatSearch;
-  if (!term) return _chatDialogs;
+  const sorted = chatSortDialogs(_chatDialogs);
+  if (!term) return sorted;
   const digits = term.replace(/\D/g, '');
-  return _chatDialogs.filter(d => {
+  return sorted.filter(d => {
     const name = _chatTitle(d).toLowerCase();
     const phone = (d.phone || d.key || '');
     if (name.includes(term)) return true;
@@ -126,12 +128,17 @@ function renderChatDialogs() {
     const phone = d.phone && d.phone !== title ? d.phone : '';
     const active = d.key === _chatActiveKey ? ' active' : '';
     const initial = d.isGroup ? '👥' : _chatEsc((title || '?').trim().charAt(0).toUpperCase());
+    // Бот молчит, диалог ждёт администратора — красная карточка и бейдж.
+    const esc = chatIsEscalated(d) ? ' chat-dialog-escalated' : '';
+    const escBadge = chatIsEscalated(d)
+      ? '<span class="chat-badge chat-badge-esc" title="Бот на паузе, отвечает администратор">👤 Оператор</span>' : '';
     return `
-      <div class="chat-dialog${active}" data-key="${_chatEsc(d.key)}">
+      <div class="chat-dialog${active}${esc}" data-key="${_chatEsc(d.key)}">
         <div class="chat-avatar ${ch.cls}" title="${_chatEsc(ch.label)}">${initial}</div>
         <div class="chat-dialog-body">
           <div class="chat-dialog-top">
             <span class="chat-dialog-name">${_chatEsc(title)}</span>
+            ${escBadge}
             <span class="chat-dialog-time">${_chatTime(d.lastTs)}</span>
           </div>
           ${phone ? `<div class="chat-dialog-phone">${_chatEsc(phone)}</div>` : ''}
@@ -331,6 +338,9 @@ async function renderChatHeader(key) {
 async function toggleAgent(key, nextStatus) {
   try {
     await api('POST', '/api/chat/dialogs/' + encodeURIComponent(key) + '/agent', { status: nextStatus });
+    // Не ждём эха собственного SSE — иначе карточка полсекунды висит не в той группе.
+    const d = _chatDialogs.find(x => x.key === key);
+    if (d) { d.agentStatus = nextStatus; renderChatDialogs(); }
     const headEl = document.getElementById('chat-header');
     if (headEl) headEl._lastHtml = null;   // форсируем перерисовку после смены статуса
     await renderChatHeader(key);
@@ -352,6 +362,7 @@ function startChatLive() {
     _chatES.onmessage = (ev) => {
       let data; try { data = JSON.parse(ev.data); } catch { return; }
       if (data.type === 'message') onChatLiveMessage(data);
+      else if (data.type === 'agent_status') onChatAgentStatus(data);
     };
   } catch (e) { console.error('chat SSE:', e); }
   // Страховка на случай упавшего SSE: редкий инкрементальный доопрос.
@@ -381,10 +392,26 @@ function onChatLiveMessage({ dialogKey, message }) {
         d.channels.push(message.channel);
       }
     }
-    _chatDialogs.sort((a, b) => (Number(b.lastTs) || 0) - (Number(a.lastTs) || 0));
-    renderChatDialogs();
+    renderChatDialogs();   // порядок пересчитает _chatFilter (chatSortDialogs)
   } else {
     refreshChatDialogs(true);   // новый диалог — перечитать список
+  }
+}
+
+// Диалог передали оператору или вернули боту (эскалация Милы, ручной ответ,
+// кнопка в шапке — в т.ч. из соседней вкладки). Красим/раскрашиваем карточку и
+// пересортировываем список; открытому диалогу обновляем баннер в шапке.
+function onChatAgentStatus({ dialogKey, status, reason }) {
+  const d = _chatDialogs.find(x => x.key === dialogKey);
+  if (!d) { refreshChatDialogs(true); return; }   // диалога ещё нет в списке
+  if (d.agentStatus === status) return;
+  d.agentStatus = status;
+  d.escalatedReason = reason || null;
+  renderChatDialogs();
+  if (dialogKey === _chatActiveKey) {
+    const headEl = document.getElementById('chat-header');
+    if (headEl) headEl._lastHtml = null;   // форсируем перерисовку баннера
+    renderChatHeader(dialogKey);
   }
 }
 
