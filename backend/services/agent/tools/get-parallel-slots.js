@@ -7,6 +7,7 @@ const svcFilter = require('../service-filter');
 const staffGuard = require('../staff-service-guard');
 const eq = require('../equipment');
 const eqContext = require('../equipment-context');
+const leadTime = require('../lead-time');
 
 // ── Общее время для НЕСКОЛЬКИХ гостей одновременно. ─────────────────────────
 // Отдельный инструмент, а не «позови get_available_slots дважды и пересеки»:
@@ -136,9 +137,13 @@ async function run(salonId, input, ctx = {}) {
     };
   }
 
-  const starts = eq.dropPastStarts(
+  let starts = eq.dropPastStarts(
     eq.parallelStarts(entries, { step: STEP_MIN, busy: eqCtx.busy }),
     date, moscowNow(nowMs));
+  // Минимальный срок до визита (день в день +2ч, вечером на завтра — с 12:00):
+  // параллельные старты подчиняются тому же правилу, что и одиночные слоты.
+  const floor = leadTime.minStartMin(moscowNow(nowMs), date);
+  if (floor) starts = starts.filter(t => t >= floor);
 
   if (!starts.length) {
     return {

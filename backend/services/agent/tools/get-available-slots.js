@@ -7,24 +7,25 @@ const svcFilter = require('../service-filter');
 const staffGuard = require('../staff-service-guard');
 const eq = require('../equipment');
 const eqContext = require('../equipment-context');
+const leadTime = require('../lead-time');
 
 const DEFAULT_STEP_MIN = 30;       // шаг предлагаемых стартов в fallback-режиме
 const DEFAULT_DURATION_MIN = 60;   // если YClients не отдал duration услуги (как в get_parallel_slots)
 
 const schema = {
   name: 'get_available_slots',
-  description: 'Свободное время у мастера на конкретную дату. Если у салона включена онлайн-запись — ' +
-    'отдаёт слоты под услугу (нужен service_yc_id из каталога услуг). Иначе считает свободность из ' +
-    'графика (окна раздвигаются шагом 30 мин). Сначала узнай yc_id мастера (list_staff) и, если есть, ' +
-    'услуги (каталог услуг). Дата в формате YYYY-MM-DD. Само расписание (в какие дни работает) — get_available_dates.',
+  description: 'Свободное время у мастера на конкретную дату ПОД КОНКРЕТНУЮ УСЛУГУ. Если у салона ' +
+    'включена онлайн-запись — отдаёт слоты под услугу. Иначе считает свободность из графика (старты ' +
+    'шагом 30 мин, куда услуга влезает целиком). Сначала узнай yc_id мастера (list_staff) и услуги ' +
+    '(каталог услуг). Дата в формате YYYY-MM-DD. Само расписание (в какие дни работает) — get_available_dates.',
   input_schema: {
     type: 'object',
     properties: {
       staff_yc_id:   { type: 'integer', description: 'YClients-id мастера (из list_staff).' },
-      service_yc_id: { type: 'integer', description: 'YClients-id услуги (из каталога услуг). Нужен для салонов с онлайн-записью.' },
+      service_yc_id: { type: 'integer', description: 'YClients-id услуги (из каталога услуг).' },
       date:          { type: 'string',  description: 'Дата YYYY-MM-DD.' },
     },
-    required: ['staff_yc_id', 'date'],
+    required: ['staff_yc_id', 'service_yc_id', 'date'],
     additionalProperties: false,
   },
 };
@@ -42,14 +43,15 @@ function moscowNow(ms) {
   return { date, minutes: h * 60 + m };
 }
 
-// Отрезаем уже прошедшее время, если дата — сегодня по Москве. Иначе не трогаем.
-// Нельзя предлагать пациенту окно, которое наступит в прошлом.
-function dropPastToday(result, date, nowMs) {
+// Отрезаем недопустимые старты: прошедшее время И слоты ближе минимального
+// срока до визита (lead-time: день в день +2ч, вечером на завтра — с 12:00).
+// Для сегодня floor = now+2ч сам по себе строже отсечки прошлого.
+function dropDisallowedStarts(result, date, nowMs) {
   const now = moscowNow(nowMs);
-  if (date !== now.date) return result;
-  const cut = now.minutes;
+  const cut = leadTime.minStartMin(now, date);
+  if (!cut) return result;
   if (Array.isArray(result.slots)) {
-    result.slots = result.slots.filter(s => toMin(s.time) > cut);
+    result.slots = result.slots.filter(s => toMin(s.time) >= cut);
   }
   if (Array.isArray(result.free_ranges)) {
     result.free_ranges = result.free_ranges
@@ -98,6 +100,15 @@ async function run(salonId, input, ctx = {}) {
   const date = input && input.date;
   const nowMs = (ctx && ctx.nowMs) || Date.now();
   if (!staffId || !date) return { error: 'Нужны staff_yc_id и date (YYYY-MM-DD).' };
+  // Услуга обязательна: без неё неизвестна длительность, и старты считались бы
+  // «хотя бы на один шаг» — сеткой 30 мин. Инцидент 2026-07-31: так предложили
+  // 11:30 перед чужой записью в 12:00, а записывали 60-минутную процедуру →
+  // YClients отказал «время недоступно» уже ПОСЛЕ согласования с пациентом.
+  if (!serviceId) {
+    return { error: 'Нужен service_yc_id: без услуги нельзя проверить, влезает ли процедура в окно. ' +
+      'Возьми точный id услуги из каталога услуг. Если вопрос про график мастера (в какие дни ' +
+      'работает) — это get_available_dates, а не слоты.' };
+  }
   // Скрытую услугу/пару не предлагаем (мягкий пустой ответ, без «технических сложностей»).
   if (serviceId) {
     const filter = await settings.loadServiceFilterSafe(salonId);
@@ -127,7 +138,7 @@ async function run(salonId, input, ctx = {}) {
       const slots = (Array.isArray(times) ? times : []).map(t => ({
         time: t.time, datetime: t.datetime, seance_length: t.seance_length,
       }));
-      if (slots.length) return dropPastToday({ slots, source: 'booking' }, date, nowMs);
+      if (slots.length) return dropDisallowedStarts({ slots, source: 'booking' }, date, nowMs);
     }
     // 2) Иначе (или пусто) — свободность из графика (management API, без онлайн-записи).
     // Этот график знает только занятость кресла мастера и слеп к аппаратам,
@@ -165,7 +176,7 @@ async function run(salonId, input, ctx = {}) {
     }
     const out = { slots, source: 'schedule' };
     if (equipmentBusy) out.equipment_busy = true;   // часть окон срезана занятым аппаратом
-    return dropPastToday(out, date, nowMs);
+    return dropDisallowedStarts(out, date, nowMs);
   } catch (e) {
     return { error: `Не удалось получить слоты: ${e.message}` };
   }

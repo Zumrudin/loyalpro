@@ -2,6 +2,7 @@
 
 const bookingModify = require('../booking-modify');
 const identity = require('../identity');
+const leadTime = require('../lead-time');
 
 const schema = {
   name: 'reschedule_booking',
@@ -26,6 +27,12 @@ async function run(salonId, input, ctx = {}) {
   const recordId = input && input.record_id;
   const datetime = input && input.datetime;
   if (!recordId || !datetime) return { invalid_args: true, error: 'Нужны record_id и datetime.' };
+
+  // Минимальный срок до визита действует и на перенос: перенести запись на
+  // «через час» или поздним вечером на завтра до 12:00 нельзя — специалист
+  // выходит в клинику под запись и не успеет (то же правило, что в create_booking).
+  const v = leadTime.violation(leadTime.moscowNow((ctx && ctx.nowMs) || Date.now()), datetime);
+  if (v) return { too_soon: true, error: leadTime.violationHint(v) };
 
   const expectedYcClientId = await identity.resolveYclientsClientId(salonId, ctx.clientPhone);
   // Fail-closed: без подтверждённого клиента перенос не делаем (гейт

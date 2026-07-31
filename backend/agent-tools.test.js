@@ -344,35 +344,75 @@ describe('get_available_slots', () => {
     expect(out.slots[0].datetime).toBe('2026-07-20T10:00:00+03:00');
     expect(out.slots[0].seance_length).toBe(3600);
   });
-  test('дата = сегодня → уже прошедшие окна отрезаны (не предлагаем прошлое)', async () => {
+  test('дата = сегодня → прошлое И ближайшие 2 часа отрезаны (день в день +2ч)', async () => {
     db.one.mockResolvedValue({ id: 1, yclients_company_id: 100 });
     ycGetBookTimes.mockResolvedValue([
       { time: '10:00', datetime: '2026-07-19T10:00:00+03:00' },   // прошло (сейчас 12:00)
-      { time: '13:00', datetime: '2026-07-19T13:00:00+03:00' },   // ещё будет
+      { time: '13:00', datetime: '2026-07-19T13:00:00+03:00' },   // будущее, но ближе 2 часов
+      { time: '14:00', datetime: '2026-07-19T14:00:00+03:00' },   // ровно +2ч — допустимо
       { time: '15:30', datetime: '2026-07-19T15:30:00+03:00' },
     ]);
     const out = await getSlots.run(1, { service_yc_id: 7, staff_yc_id: 55, date: '2026-07-19' }, NOW);
-    expect(out.slots.map(s => s.time)).toEqual(['13:00', '15:30']);
+    expect(out.slots.map(s => s.time)).toEqual(['14:00', '15:30']);
   });
-  test('дата = сегодня, schedule: прошедшие старты отрезаны из slots', async () => {
+  test('дата = сегодня, schedule: старты раньше now+2ч отрезаны из slots', async () => {
     db.one.mockResolvedValue({ id: 1, yclients_company_id: 100 });
     ycGetBookTimes.mockResolvedValue([]);
-    // 10:00–14:00 свободно, сейчас 12:00 → остаётся 12:00–14:00
+    // 10:00–17:00 свободно, сейчас 12:00 → предлагаем только с 14:00 (+2 часа)
     const grid = [];
-    for (let m = 600; m < 840; m += 5) grid.push({ time: toHHMM(m), is_free: true });
+    for (let m = 600; m < 1020; m += 5) grid.push({ time: toHHMM(m), is_free: true });
     ycGetStaffSeances.mockResolvedValue(grid);
     const out = await getSlots.run(1, { service_yc_id: 7, staff_yc_id: 55, date: '2026-07-19' }, NOW);
     expect(out.free_ranges).toBeUndefined();
     expect(out.slots.length).toBeGreaterThan(0);
-    expect(out.slots.every(s => s.time >= '12:00')).toBe(true);
+    expect(out.slots.every(s => s.time >= '14:00')).toBe(true);
   });
-  test('без service_yc_id сразу идёт в seances (book_times не зовётся)', async () => {
+  test('заявка в 22:00+ на завтра → слоты раньше 12:00 скрыты', async () => {
     db.one.mockResolvedValue({ id: 1, yclients_company_id: 100 });
-    ycGetStaffSeances.mockResolvedValue([]);
+    ycGetBookTimes.mockResolvedValue([
+      { time: '10:00', datetime: '2026-07-20T10:00:00+03:00' },
+      { time: '12:00', datetime: '2026-07-20T12:00:00+03:00' },
+      { time: '15:00', datetime: '2026-07-20T15:00:00+03:00' },
+    ]);
+    const EVENING = { nowMs: Date.parse('2026-07-19T22:30:00+03:00') };
+    const out = await getSlots.run(1, { service_yc_id: 7, staff_yc_id: 55, date: '2026-07-20' }, EVENING);
+    expect(out.slots.map(s => s.time)).toEqual(['12:00', '15:00']);
+  });
+  test('ночная заявка (02:00) на сегодня → слоты раньше 12:00 скрыты', async () => {
+    db.one.mockResolvedValue({ id: 1, yclients_company_id: 100 });
+    ycGetBookTimes.mockResolvedValue([
+      { time: '09:00', datetime: '2026-07-20T09:00:00+03:00' },   // +2ч пропустило бы, ночь — нет
+      { time: '12:00', datetime: '2026-07-20T12:00:00+03:00' },
+      { time: '15:00', datetime: '2026-07-20T15:00:00+03:00' },
+    ]);
+    const NIGHT = { nowMs: Date.parse('2026-07-20T02:00:00+03:00') };
+    const out = await getSlots.run(1, { service_yc_id: 7, staff_yc_id: 55, date: '2026-07-20' }, NIGHT);
+    expect(out.slots.map(s => s.time)).toEqual(['12:00', '15:00']);
+  });
+  test('днём на завтра ограничения нет — ранние слоты на месте', async () => {
+    db.one.mockResolvedValue({ id: 1, yclients_company_id: 100 });
+    ycGetBookTimes.mockResolvedValue([
+      { time: '10:00', datetime: '2026-07-20T10:00:00+03:00' },
+      { time: '12:00', datetime: '2026-07-20T12:00:00+03:00' },
+    ]);
+    const out = await getSlots.run(1, { service_yc_id: 7, staff_yc_id: 55, date: '2026-07-20' }, NOW);
+    expect(out.slots.map(s => s.time)).toEqual(['10:00', '12:00']);
+  });
+  // Регресс 2026-07-31 (диалог 79200255591): без service_yc_id длительность услуги
+  // неизвестна, и слоты считались «хотя бы один шаг» — сетка 30 мин. Модель
+  // предложила 11:30 перед записью в 12:00, а записывала 60-минутную услугу →
+  // YClients отказал «Выбранное время недоступно». Услуга обязательна.
+  test('без service_yc_id → ошибка валидации без вызова YClients', async () => {
+    db.one.mockResolvedValue({ id: 1, yclients_company_id: 100 });
     const out = await getSlots.run(1, { staff_yc_id: 55, date: '2026-07-20' }, NOW);
+    expect(out.error).toMatch(/service_yc_id/);
+    expect(out.error).toMatch(/get_available_dates/);   // куда идти за графиком мастера
     expect(ycGetBookTimes).not.toHaveBeenCalled();
-    expect(out.source).toBe('schedule');
-    expect(out.slots).toEqual([]);
+    expect(ycGetStaffSeances).not.toHaveBeenCalled();
+  });
+  test('service_yc_id обязателен в схеме инструмента', () => {
+    expect(getSlots.schema.input_schema.required).toEqual(
+      expect.arrayContaining(['staff_yc_id', 'service_yc_id', 'date']));
   });
   test('нет мастера/даты → ошибка валидации без вызова YClients', async () => {
     const out = await getSlots.run(1, { service_yc_id: 7 });
@@ -539,6 +579,134 @@ describe('create_booking', () => {
       { dialogKey: 'k' });
     expect(out.invalid_args).toBe(true);
     expect(booking.createBookingRecord).not.toHaveBeenCalled();
+  });
+
+  // Регресс 2026-07-31 (диалог 79200255591): YClients отказал «Выбранное время
+  // недоступно», и модель СОЧИНИЛА причину («окошко только что заняли») и
+  // предложила время из УСТАРЕВШЕЙ выдачи, не перезапросив слоты. Теперь провал
+  // по времени детерминированно возвращает свежие реальные старты именно этой
+  // услуги и запрещает выдумывать причину.
+  describe('провал по времени → свежие слоты в ответе (slot_unavailable)', () => {
+    const svcOk = () => jest.spyOn(listServices, 'run').mockResolvedValue({
+      services: [{ yc_id: 9536496, title: 'Revi Silk 1 ml', staff: [{ yc_id: 1914276 }] }],
+    });
+    const CALL = {
+      staff_yc_id: 1914276, service_yc_id: 9536496,
+      datetime: '2026-08-04T11:30:00+03:00', client_phone: '79200255591',
+    };
+    const NOW = { nowMs: Date.parse('2026-07-31T19:22:00+03:00') };
+
+    test('прикладывает available_slots за ту же дату/услугу/мастера', async () => {
+      svcOk();
+      booking.createBookingRecord.mockResolvedValue({
+        created: false, error: 'Выбранное время недоступно. Выберите другое время.',
+      });
+      jest.spyOn(getSlots, 'run').mockResolvedValue({
+        slots: [{ time: '13:00', datetime: '2026-08-04T13:00:00+03:00' },
+                { time: '15:00', datetime: '2026-08-04T15:00:00+03:00' }],
+      });
+      const out = await createBooking.run(1, CALL, NOW);
+      expect(out.created).toBe(false);
+      expect(out.slot_unavailable).toBe(true);
+      expect(getSlots.run).toHaveBeenCalledWith(1,
+        { staff_yc_id: 1914276, service_yc_id: 9536496, date: '2026-08-04' }, NOW);
+      expect(out.available_slots.map(s => s.time)).toEqual(['13:00', '15:00']);
+      // Модели прямо запрещено сочинять «слот только что заняли».
+      expect(out.error).toMatch(/не выдумывай|не утверждай/i);
+      expect(out.error).toMatch(/available_slots/);
+      getSlots.run.mockRestore();
+      listServices.run.mockRestore();
+    });
+
+    test('слотов на дату не осталось → available_slots пуст, подсказка про другой день', async () => {
+      svcOk();
+      booking.createBookingRecord.mockResolvedValue({
+        created: false, error: 'Выбранное время недоступно. Выберите другое время.',
+      });
+      jest.spyOn(getSlots, 'run').mockResolvedValue({ slots: [] });
+      const out = await createBooking.run(1, CALL, NOW);
+      expect(out.slot_unavailable).toBe(true);
+      expect(out.available_slots).toEqual([]);
+      expect(out.error).toMatch(/друг(ой|ому) день|другой день|другую дату/i);
+      getSlots.run.mockRestore();
+      listServices.run.mockRestore();
+    });
+
+    test('сбой перезапроса слотов не ломает ответ (fail-open)', async () => {
+      svcOk();
+      booking.createBookingRecord.mockResolvedValue({
+        created: false, error: 'Выбранное время недоступно. Выберите другое время.',
+      });
+      jest.spyOn(getSlots, 'run').mockRejectedValue(new Error('yclients 500'));
+      const out = await createBooking.run(1, CALL, NOW);
+      expect(out.created).toBe(false);
+      expect(out.slot_unavailable).toBe(true);
+      expect(out.available_slots).toBeUndefined();
+      getSlots.run.mockRestore();
+      listServices.run.mockRestore();
+    });
+
+    test('успешная запись слоты не перезапрашивает', async () => {
+      svcOk();
+      booking.createBookingRecord.mockResolvedValue({ created: true, record_id: 77 });
+      jest.spyOn(getSlots, 'run').mockResolvedValue({ slots: [] });
+      const out = await createBooking.run(1, CALL, NOW);
+      expect(out.created).toBe(true);
+      expect(getSlots.run).not.toHaveBeenCalled();
+      getSlots.run.mockRestore();
+      listServices.run.mockRestore();
+    });
+
+    test('провал НЕ по времени (дубль) слоты не перезапрашивает', async () => {
+      svcOk();
+      booking.createBookingRecord.mockResolvedValue({ created: false, duplicate: true, record_id: 5 });
+      jest.spyOn(getSlots, 'run').mockResolvedValue({ slots: [] });
+      const out = await createBooking.run(1, CALL, NOW);
+      expect(out.slot_unavailable).toBeUndefined();
+      expect(getSlots.run).not.toHaveBeenCalled();
+      getSlots.run.mockRestore();
+      listServices.run.mockRestore();
+    });
+  });
+
+  // Минимальный срок до визита: даже если пациент сам назвал раннее время в
+  // обход выдачи слотов — запись не создаётся, модель получает корректирующую ошибку.
+  describe('минимальный срок до визита (too_soon)', () => {
+    const svcMock = () => jest.spyOn(listServices, 'run').mockResolvedValue({
+      services: [{ yc_id: 15394152, title: 'Фото', staff: [{ yc_id: 5708379 }] }],
+    });
+    const input = (datetime) => ({
+      staff_yc_id: 5708379, service_yc_id: 15394152, datetime, client_phone: '79200255591',
+    });
+
+    test('день в день ближе 2 часов → too_soon, запись НЕ создаётся', async () => {
+      const spy = svcMock();
+      const out = await createBooking.run(1, input('2026-07-19T13:00:00+03:00'),
+        { nowMs: Date.parse('2026-07-19T12:00:00+03:00') });
+      expect(out.too_soon).toBe(true);
+      expect(out.error).toMatch(/14:00/);
+      expect(booking.createBookingRecord).not.toHaveBeenCalled();
+      spy.mockRestore();
+    });
+
+    test('вечером (22:30) на завтра 10:00 → too_soon с подсказкой про 12:00', async () => {
+      const spy = svcMock();
+      const out = await createBooking.run(1, input('2026-07-20T10:00:00+03:00'),
+        { nowMs: Date.parse('2026-07-19T22:30:00+03:00') });
+      expect(out.too_soon).toBe(true);
+      expect(out.error).toMatch(/12:00/);
+      expect(booking.createBookingRecord).not.toHaveBeenCalled();
+      spy.mockRestore();
+    });
+
+    test('вечером на завтра 12:00 → запись создаётся', async () => {
+      const spy = svcMock();
+      booking.createBookingRecord.mockResolvedValue({ created: true, record_id: 45 });
+      const out = await createBooking.run(1, input('2026-07-20T12:00:00+03:00'),
+        { nowMs: Date.parse('2026-07-19T22:30:00+03:00') });
+      expect(out.created).toBe(true);
+      spy.mockRestore();
+    });
   });
 });
 
@@ -710,6 +878,23 @@ describe('reschedule_booking', () => {
       { record_id: 555, datetime: '2026-07-26T15:00:00+03:00' }, { clientPhone: '79001112233' });
     expect(out.rescheduled).toBeUndefined();
     expect(out.error).toBe('занято');
+  });
+
+  test('перенос вечером на завтра до 12:00 → too_soon, переноса нет', async () => {
+    const out = await rescheduleBooking.run(1,
+      { record_id: 555, datetime: '2026-07-20T10:00:00+03:00' },
+      { clientPhone: '79001112233', nowMs: Date.parse('2026-07-19T23:00:00+03:00') });
+    expect(out.too_soon).toBe(true);
+    expect(out.error).toMatch(/12:00/);
+    expect(bookingModify.rescheduleBookingRecord).not.toHaveBeenCalled();
+  });
+
+  test('перенос день в день ближе 2 часов → too_soon', async () => {
+    const out = await rescheduleBooking.run(1,
+      { record_id: 555, datetime: '2026-07-19T12:30:00+03:00' },
+      { clientPhone: '79001112233', nowMs: Date.parse('2026-07-19T11:00:00+03:00') });
+    expect(out.too_soon).toBe(true);
+    expect(bookingModify.rescheduleBookingRecord).not.toHaveBeenCalled();
   });
 });
 

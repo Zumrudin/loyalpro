@@ -292,7 +292,21 @@ describe('логирование tool-вызовов', () => {
     await orchestrator.runDialog(1, 'k', { deps });
     const call = mockLogger.info.mock.calls.find(([msg]) => msg.includes('tool get_available_slots'));
     expect(call).toBeTruthy();
-    expect(call[0]).toMatch(/^dialog k: tool get_available_slots \d+ms ok/);
+    expect(call[0]).toMatch(/^dialog k: tool get_available_slots\(.+\) \d+ms ok/);
+  });
+
+  // Разбор инцидента 2026-07-31 упёрся в отсутствие аргументов в логе: по нему
+  // нельзя было понять, с какой услугой модель спрашивала слоты.
+  test('лог вызова содержит аргументы инструмента (для разбора инцидентов)', async () => {
+    const deps = makeDeps();
+    deps.provider.createMessage
+      .mockResolvedValueOnce(toolResp('get_available_slots', { staff_yc_id: 1914276, service_yc_id: 9536496, date: '2026-08-04' }))
+      .mockResolvedValueOnce(textResp('Свободно 10:00.'));
+    await orchestrator.runDialog(1, 'k', { deps });
+    const call = mockLogger.info.mock.calls.find(([msg]) => msg.includes('tool get_available_slots'));
+    expect(call[0]).toContain('staff_yc_id=1914276');
+    expect(call[0]).toContain('service_yc_id=9536496');
+    expect(call[0]).toContain('date=2026-08-04');
   });
 
   test('успешная запись логирует record_id, но НЕ телефон клиента (PII)', async () => {

@@ -106,6 +106,22 @@ function summarizeToolResult(result) {
   return bits.join(' ').slice(0, LOG_FRAGMENT_CAP);
 }
 
+// Аргументы вызова для лога. Разбор инцидента 2026-07-31 (предложила 11:30,
+// записать не смогла) уперся в то, что логировались только результаты: по
+// логам нельзя было сказать, с какой услугой модель спрашивала слоты. Пишем
+// компактные скалярные аргументы БЕЗ PII (телефон/имя/комментарий не логируем).
+const LOG_PII_ARGS = new Set(['client_phone', 'client_name', 'comment']);
+function summarizeToolInput(input) {
+  if (!input || typeof input !== 'object') return '';
+  const bits = [];
+  for (const [k, v] of Object.entries(input)) {
+    if (LOG_PII_ARGS.has(k)) continue;
+    if (v === null || v === undefined || typeof v === 'object') continue;
+    bits.push(`${k}=${String(v).slice(0, 40)}`);
+  }
+  return bits.join(',').slice(0, LOG_FRAGMENT_CAP);
+}
+
 // Детерминированное подтверждение из данных выполненного пишущего инструмента —
 // когда запись УЖЕ сделана, а провайдер упал на подтверждающей фразе (и fallback
 // внутри провайдера тоже не выжил). Без LLM: правдиво и не зависит от сбоя. Имена
@@ -292,7 +308,8 @@ async function runDialog(salonId, dialogKey, opts = {}) {
         // раз не логируем, чтобы не задваивать одно и то же событие.
         if (!threw) {
           const outcome = summarizeToolResult(result);
-          logger.info(`dialog ${dialogKey}: tool ${tc.name} ${Date.now() - startedAt}ms ${isError ? 'error' : 'ok'}${outcome ? ' ' + outcome : ''}`);
+          const args = summarizeToolInput(tc.input);
+          logger.info(`dialog ${dialogKey}: tool ${tc.name}${args ? `(${args})` : ''} ${Date.now() - startedAt}ms ${isError ? 'error' : 'ok'}${outcome ? ' ' + outcome : ''}`);
         }
         if (!isError && SIDE_EFFECT_TOOLS.has(tc.name)) sideEffect = true;
         if (!isError && WRITE_TOOLS.has(tc.name)) { writeSucceeded = true; lastWrite = { tool: tc.name, input: tc.input }; }

@@ -10,6 +10,7 @@ const eq = require('../equipment');
 const eqContext = require('../equipment-context');
 const seq = require('../sequential');
 const seqOffers = require('../sequential-offers');
+const leadTime = require('../lead-time');
 
 // ── Несколько услуг ПОДРЯД одному клиенту («встык»). ────────────────────────
 // Отдельный инструмент, а не «сравни слоты двух услуг сама»: стыковка окон —
@@ -282,6 +283,12 @@ async function run(salonId, input, ctx = {}) {
       // Одна цепочка от фиксированного якоря: последующие с ближайшего свободного времени.
       const chain = seq.fitChain(entries, anchor.minutes, { anchorFirst: true, maxLinkGap: Infinity });
       if (!chain) continue;
+      // Минимальный срок до визита: якорная (уже записанная) услуга остаётся как
+      // есть, но ДОБАВЛЯЕМЫЕ записи подчиняются общему правилу (день в день +2ч,
+      // вечером на завтра — с 12:00) — иначе create_booking внутри book_chain
+      // отклонит звено и цепочка развалится в partial.
+      const anchorFloor = leadTime.minStartMin(now, day);
+      if (anchorFloor && chain.starts.slice(1).some(s => s < anchorFloor)) continue;
       const v = buildVariant(a, day, entries,
         [{ start: chain.starts[0], starts: chain.starts, totalGap: chain.totalGap }]);
       v.anchored = true;
@@ -300,10 +307,14 @@ async function run(salonId, input, ctx = {}) {
       const day = addDays(date, d);
       const eqCtx = await eqContext.loadEquipmentContext(salon, day);
 
+      // Минимальный срок до визита (день в день +2ч, вечером на завтра — с 12:00)
+      // заодно отрезает и прошедшие старты сегодняшнего дня.
+      const dayFloor = leadTime.minStartMin(now, day);
+
       for (const a of assignments) {
         const entries = await entriesFor(a, day, eqCtx);
         let chains = seq.chainStarts(entries);
-        if (day === now.date) chains = chains.filter(c => c.start > now.minutes);
+        if (dayFloor) chains = chains.filter(c => c.start >= dayFloor);
         if (!chains.length) continue;
         variants.push(buildVariant(a, day, entries, chains.slice(0, MAX_STARTS)));
         datesWithHits.add(day);
@@ -316,7 +327,7 @@ async function run(salonId, input, ctx = {}) {
           if (variants.some(v => v.date === day && v.type === a.type)) continue;
           const entries = await entriesFor(a, day, eqCtx);
           let best = seq.bestGapChain(entries);
-          if (best && day === now.date && best.start <= now.minutes) best = null;
+          if (best && dayFloor && best.start < dayFloor) best = null;
           if (!best || best.totalGap <= seq.MAX_LINK_GAP) continue;  // ≤15 мин нашёл бы chainStarts
           const v = buildVariant(a, day, entries, [best]);
           v.with_gap = true;

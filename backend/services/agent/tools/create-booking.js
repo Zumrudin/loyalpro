@@ -4,6 +4,13 @@ const booking = require('../booking');
 const settings = require('../../agent-settings');
 const svcFilter = require('../service-filter');
 const listServices = require('./list-services');
+const getSlots = require('./get-available-slots');
+const leadTime = require('../lead-time');
+
+// Отказ YClients именно по времени старта («Выбранное время недоступно…»,
+// «мастер занят…»), а не по услуге/токену/клиенту. Только на нём есть смысл
+// перезапрашивать слоты.
+const TIME_UNAVAILABLE_RE = /недоступн|занят|пересек|overlap|busy/i;
 
 const schema = {
   name: 'create_booking',
@@ -84,7 +91,14 @@ async function run(salonId, input, ctx = {}) {
       };
     }
   }
-  return booking.createBookingRecord(salonId, {
+  // Минимальный срок до визита (день в день +2ч, вечером на завтра — с 12:00).
+  // Инструменты слотов такие старты уже не выдают, но пациент может назвать
+  // раннее время сам, а модель — послушно передать его сюда. Детерминированный
+  // отказ до похода в YClients; сообщение — корректирующее, модель предложит
+  // допустимое время. Тот же guard срабатывает и внутри book_chain.
+  const v = leadTime.violation(leadTime.moscowNow((ctx && ctx.nowMs) || Date.now()), input.datetime);
+  if (v) return { too_soon: true, error: leadTime.violationHint(v) };
+  const res = await booking.createBookingRecord(salonId, {
     dialogKey: ctx.dialogKey || clientPhone,
     staffYcId: input.staff_yc_id,
     serviceYcId: input.service_yc_id,
@@ -94,6 +108,43 @@ async function run(salonId, input, ctx = {}) {
     clientName,
     comment: input.comment,
   });
+  return withFreshSlotsOnTimeFailure(salonId, input, ctx, res);
+}
+
+// YClients отказал по времени → детерминированно кладём в ответ СВЕЖИЕ реальные
+// старты именно этой услуги у этого мастера на эту дату.
+// Инцидент 2026-07-31 (диалог 79200255591): на отказ модель сочинила причину
+// («окошко на 11:30 только что заняли» — этого никто не сообщал) и предложила
+// следующее время из УСТАРЕВШЕЙ выдачи, не перезапросив слоты. Раньше это
+// лечилось только правилом в промпте, которое модель наполовину проигнорировала;
+// теперь альтернативы приходят в самом результате инструмента.
+// Fail-open: перезапрос слотов упал — отдаём исходный ответ как есть.
+async function withFreshSlotsOnTimeFailure(salonId, input, ctx, res) {
+  if (!res || res.created !== false || res.duplicate) return res;
+  if (!TIME_UNAVAILABLE_RE.test(String(res.error || ''))) return res;
+  const date = String(input.datetime || '').slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return res;
+
+  let slots = null;
+  try {
+    const fresh = await getSlots.run(salonId, {
+      staff_yc_id: input.staff_yc_id, service_yc_id: input.service_yc_id, date,
+    }, ctx);
+    if (fresh && Array.isArray(fresh.slots)) slots = fresh.slots;
+  } catch (_) { /* fail-open: подсказка без списка всё равно полезнее исходной ошибки */ }
+
+  const out = { ...res, slot_unavailable: true };
+  if (slots) out.available_slots = slots;
+  out.error = slots && slots.length
+    ? 'Записать на это время не удалось. Причина неизвестна — НЕ выдумывай её и не утверждай ' +
+      'пациенту, что слот «только что заняли». Извинись нейтрально («к сожалению, это время уже ' +
+      'недоступно») и предложи время ТОЛЬКО из available_slots — это свежие реально свободные ' +
+      'старты для этой услуги и этого мастера на ту же дату.'
+    : 'Записать на это время не удалось, и свободных стартов под эту услугу на эту дату больше нет. ' +
+      'НЕ выдумывай причину и не утверждай, что слот «только что заняли». Извинись нейтрально и ' +
+      'предложи другой день (get_available_slots на другую дату) или другого мастера, ' +
+      'который выполняет эту услугу.';
+  return out;
 }
 
 module.exports = { schema, run };

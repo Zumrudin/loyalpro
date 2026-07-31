@@ -9,6 +9,29 @@ const { ycGetServiceCatalog, ycGetServiceMeta } = require('../yclients');
 const settings = require('../agent-settings');
 const svcFilter = require('./service-filter');
 const categoryTree = require('./category-tree');
+const { createLogger } = require('../../logger');
+const logger = createLogger('AgentCatalogData');
+
+// Обобщённые услуги, на которые промпт ОБЯЗЫВАЕТ записывать, когда пациент не
+// назвал препарат/филлер (правило «ПРЕПАРАТ/ФИЛЛЕР НЕ УТОЧНЯЕМ» в system-prompt.js).
+// В YClients они выключены (active=0) и попадают в каталог только явной галочкой
+// «включить из каталога» (allow-правило). Инцидент 2026-07-31: галочки не было,
+// модель не видела «Биоревитализацию» в каталоге и записала пациента на конкретный
+// препарат «Revi Silk 1 ml» — правило было невыполнимым, и это нигде не всплывало.
+const GENERIC_SERVICE_TITLES = ['Биоревитализация', 'Увеличение губ', 'Контурная пластика'];
+const warnedMissing = new Set();   // один лог на процесс, а не на каждый ход диалога
+
+function warnMissingGenericServices(salonId, services) {
+  for (const title of GENERIC_SERVICE_TITLES) {
+    const key = `${salonId}:${title}`;
+    if (warnedMissing.has(key)) continue;
+    if (services.some(s => String(s.title).trim().toLowerCase() === title.toLowerCase())) continue;
+    warnedMissing.add(key);
+    logger.warn(`salon ${salonId}: обобщённой услуги «${title}» нет в каталоге агента — ` +
+      'правило «препарат не уточняем» невыполнимо, модель запишет на конкретный препарат. ' +
+      'Включи услугу в админке (Агент → услуги) или сними deny-правило.');
+  }
+}
 
 // → [{ yc_id, title, duration_min, price_min, price_max, category_path, staff:[{yc_id,name,price_min,price_max}] }]
 async function loadCatalogServices(salonId) {
@@ -112,7 +135,8 @@ async function loadCatalogServices(salonId) {
     }));
   }
 
+  warnMissingGenericServices(salonId, services);
   return services;
 }
 
-module.exports = { loadCatalogServices };
+module.exports = { loadCatalogServices, GENERIC_SERVICE_TITLES, warnMissingGenericServices };

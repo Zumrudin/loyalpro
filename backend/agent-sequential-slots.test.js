@@ -247,3 +247,27 @@ describe('get_sequential_slots — schema.description направляет на 
     expect(tool.schema.description).toMatch(/book_chain[\s\S]{0,80}option_id/i);
   });
 });
+
+describe('get_sequential_slots — минимальный срок до визита', () => {
+  test('заявка в 22:00+ на завтра: старты цепочек раньше 12:00 не предлагаются', async () => {
+    // Юлия-универсал работает завтра 10:00–15:00; цепочка био+чистка = 120 мин →
+    // без ограничения старты были бы 10:00…13:00, с вечерним floor — только с 12:00.
+    ycGetStaffSeances.mockImplementation(async (s, staffId) =>
+      String(staffId) === '11' ? grid(600, 900) : []);
+    const EVENING = { nowMs: Date.parse('2026-08-09T22:30:00+03:00') };  // DATE = завтра
+    const r = await tool.run(1, { ...baseInput, preferred_staff_yc_id: 11 }, EVENING);
+    const v = r.variants.find(x => x.date === DATE);
+    expect(v).toBeDefined();
+    const times = v.starts.map(st => st.time);
+    expect(times[0]).toBe('12:00');
+    expect(times.every(t => t >= '12:00')).toBe(true);
+  });
+
+  test('днём накануне ограничения нет — ранние старты на месте', async () => {
+    ycGetStaffSeances.mockImplementation(async (s, staffId) =>
+      String(staffId) === '11' ? grid(600, 900) : []);
+    const DAYTIME = { nowMs: Date.parse('2026-08-09T15:00:00+03:00') };
+    const r = await tool.run(1, { ...baseInput, preferred_staff_yc_id: 11 }, DAYTIME);
+    expect(r.variants[0].starts[0].time).toBe('10:00');
+  });
+});
