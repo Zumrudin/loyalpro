@@ -76,6 +76,8 @@ describe('get_sequential_slots — лестница приоритета', () =>
     const dates = new Set(ycGetStaffSeances.mock.calls.map(c => c[2]));
     expect(dates).toEqual(new Set([DATE]));
     expect(r.preferred_staff_cannot).toBeUndefined();
+    // hint нормального успешного ответа предписывает оформление ОДНИМ вызовом book_chain
+    expect(r.hint).toMatch(/book_chain[\s\S]{0,80}option_id/i);
   });
 
   test('preferred не делает часть услуг → preferred_staff_cannot + mixed с его участием', async () => {
@@ -139,5 +141,133 @@ describe('get_sequential_slots — лестница приоритета', () =>
     expect(r).toMatchObject({ variants: [], filtered: true });
     expect(r.hint).toMatch(/не подбирай другого мастера|отдельные визиты/i);
     expect(ycGetStaffSeances).not.toHaveBeenCalled();
+  });
+
+  test('каждый старт выдачи имеет уникальный option_id формата oN', async () => {
+    ycGetStaffSeances.mockImplementation(async (s, staffId) =>
+      String(staffId) === '11' ? grid(600, 780) : []);
+    const r = await runTool({ ...baseInput, preferred_staff_yc_id: 11 });
+    const ids = r.variants.flatMap(v => v.starts.map(s => s.option_id));
+    expect(ids.length).toBeGreaterThan(0);
+    expect(new Set(ids).size).toBe(ids.length);
+    for (const id of ids) expect(id).toMatch(/^o\d+$/);
+  });
+
+  test('варианты запоминаются в sequential-offers: take по option_id отдаёт chain и booking_mode', async () => {
+    const offers = require('./services/agent/sequential-offers');
+    offers._reset();
+    ycGetStaffSeances.mockImplementation(async (s, staffId) =>
+      String(staffId) === '11' ? grid(600, 780) : []);
+    const r = await tool.run(1, { ...baseInput, preferred_staff_yc_id: 11 }, { ...CTX, dialogKey: 'dlg' });
+    const st = r.variants[0].starts[0];
+    const saved = offers.take(1, 'dlg', st.option_id);
+    expect(saved.chain).toEqual(st.chain);
+    expect(saved.booking_mode).toBe(st.booking_mode);
+  });
+});
+
+// Якорный режим: первая услуга уже забронирована, её НЕ двигаем — добавляем следующую после неё.
+describe('get_sequential_slots — якорь (первая услуга уже записана)', () => {
+  const PERI = { yc_id: 31, name: 'Пери' };            // врач, ведёт консультацию; чистку — нет
+  const CONSULT = 902;
+  // Чистка у Юлии (записана), консультацию ведёт только врач Пери.
+  const ANCHOR_CATALOG = {
+    services: [
+      { yc_id: CLEAN, title: 'Чистка', staff: [YULIA] },
+      { yc_id: CONSULT, title: 'Консультация', staff: [PERI] },
+    ],
+  };
+  const anchorInput = {
+    services: [{ service_yc_id: CLEAN }, { service_yc_id: CONSULT }],
+    date: DATE,
+    preferred_staff_yc_id: 11,                          // Юлия — мастер записанной чистки
+    first_booked_datetime: `${DATE}T15:30`,             // чистка уже стоит 15:30
+  };
+
+  beforeEach(() => {
+    listServices.run.mockResolvedValue(ANCHOR_CATALOG);
+    // Чистка 60 мин, консультация 30 мин.
+    eqContext.durationMin.mockImplementation((ctx, id) => (id === CLEAN ? 60 : 30));
+  });
+
+  test('чистка остаётся в 15:30, консультация встаёт в окно врача 17:00 (перерыв 30), запись не двигается', async () => {
+    // Пери свободна ТОЛЬКО 17:00–18:00. Чистка 15:30–16:30 → консультация раньше 17:00 невозможна.
+    ycGetStaffSeances.mockImplementation(async (s, staffId) =>
+      String(staffId) === '31' ? grid(1020, 1080) : grid(600, 900));  // Пери 17–18; Юлия до полудня (не важно — якорь)
+    const r = await runTool(anchorInput);
+
+    expect(r.anchored).toBe(true);
+    expect(r.variants).toHaveLength(1);
+    const v = r.variants[0];
+    expect(v.type).toBe('mixed');
+    expect(v.with_gap).toBe(true);
+    const start = v.starts[0];
+    // Чистка НЕ сдвинута — стоит ровно в 15:30 и помечена как уже записанная.
+    expect(start.chain[0].datetime).toBe(`${DATE}T15:30:00+03:00`);
+    expect(start.chain[0].already_booked).toBe(true);
+    expect(start.chain[0].staff_yc_id).toBe(11);
+    // Консультация — у врача Пери в 17:00, честный перерыв 30 мин.
+    expect(start.chain[1].datetime).toBe(`${DATE}T17:00:00+03:00`);
+    expect(start.chain[1].staff_yc_id).toBe(31);
+    expect(start.gap_minutes).toBe(30);
+    // Добавляемую услугу оформляем ОТДЕЛЬНОЙ записью, записанную чистку не трогаем.
+    expect(start.booking_mode).toBe('separate_records');
+    // Записанный мастер консультацию не ведёт — подсказка назвать исполнителя.
+    expect(r.preferred_staff_cannot).toEqual(['Консультация']);
+    // hint якорного успешного ответа тоже предписывает ОДИН вызов book_chain
+    expect(r.hint).toMatch(/book_chain[\s\S]{0,80}option_id/i);
+  });
+
+  test('консультация встык (врач свободен сразу после чистки) → перерыв 0, не with_gap', async () => {
+    ycGetStaffSeances.mockImplementation(async (s, staffId) =>
+      String(staffId) === '31' ? grid(990, 1080) : grid(600, 900));  // Пери с 16:30
+    const r = await runTool(anchorInput);
+
+    const start = r.variants[0].starts[0];
+    expect(start.chain[1].datetime).toBe(`${DATE}T16:30:00+03:00`);
+    expect(start.gap_minutes).toBe(0);
+    expect(r.variants[0].with_gap).toBeUndefined();
+    expect(start.booking_mode).toBe('separate_records');  // не единая запись: чистка уже существует
+  });
+
+  test('после записанной чистки врач в этот день не свободен → no_slot_after_booked, чистку не переносим', async () => {
+    ycGetStaffSeances.mockImplementation(async (s, staffId) =>
+      String(staffId) === '31' ? grid(600, 700) : grid(600, 900));  // Пери свободна только утром, ДО чистки
+    const r = await runTool(anchorInput);
+
+    expect(r.anchored).toBe(true);
+    expect(r.variants).toEqual([]);
+    expect(r.reason).toBe('no_slot_after_booked');
+    expect(r.hint).toMatch(/НЕ переноси|отдельным визитом/i);
+  });
+});
+
+describe('get_sequential_slots — schema.description направляет на book_chain', () => {
+  test('description упоминает оформление выбранного варианта через book_chain по option_id', () => {
+    expect(tool.schema.description).toMatch(/book_chain[\s\S]{0,80}option_id/i);
+  });
+});
+
+describe('get_sequential_slots — минимальный срок до визита', () => {
+  test('заявка в 22:00+ на завтра: старты цепочек раньше 12:00 не предлагаются', async () => {
+    // Юлия-универсал работает завтра 10:00–15:00; цепочка био+чистка = 120 мин →
+    // без ограничения старты были бы 10:00…13:00, с вечерним floor — только с 12:00.
+    ycGetStaffSeances.mockImplementation(async (s, staffId) =>
+      String(staffId) === '11' ? grid(600, 900) : []);
+    const EVENING = { nowMs: Date.parse('2026-08-09T22:30:00+03:00') };  // DATE = завтра
+    const r = await tool.run(1, { ...baseInput, preferred_staff_yc_id: 11 }, EVENING);
+    const v = r.variants.find(x => x.date === DATE);
+    expect(v).toBeDefined();
+    const times = v.starts.map(st => st.time);
+    expect(times[0]).toBe('12:00');
+    expect(times.every(t => t >= '12:00')).toBe(true);
+  });
+
+  test('днём накануне ограничения нет — ранние старты на месте', async () => {
+    ycGetStaffSeances.mockImplementation(async (s, staffId) =>
+      String(staffId) === '11' ? grid(600, 900) : []);
+    const DAYTIME = { nowMs: Date.parse('2026-08-09T15:00:00+03:00') };
+    const r = await tool.run(1, { ...baseInput, preferred_staff_yc_id: 11 }, DAYTIME);
+    expect(r.variants[0].starts[0].time).toBe('10:00');
   });
 });

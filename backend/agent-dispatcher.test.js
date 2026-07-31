@@ -84,6 +84,22 @@ test('эскалация с пустой (пробельной) репликой
   expect(d.send).toHaveBeenCalledWith(meta, expect.stringContaining('администратор'));
 });
 
+test('эскалация с репликой БЕЗ упоминания администратора → фраза перевода добавляется', async () => {
+  const d = deps({ orchestrator: { runDialog: jest.fn(async () => ({ replies: ['Спасибо, что предупредили!'], escalated: true })) } });
+  dispatcher.enqueue(1, 'k', meta, d);
+  await jest.advanceTimersByTimeAsync(1000);
+  expect(d.send).toHaveBeenCalledTimes(2);
+  expect(d.send).toHaveBeenNthCalledWith(1, meta, 'Спасибо, что предупредили!');
+  expect(d.send).toHaveBeenNthCalledWith(2, meta, expect.stringContaining('администратору'));
+});
+
+test('эскалация с репликой, где перевод уже объявлен → ничего не добавляем', async () => {
+  const d = deps({ orchestrator: { runDialog: jest.fn(async () => ({ replies: ['Передаю ваш диалог администратору клиники — он подключится с минуты на минуту 🤍'], escalated: true })) } });
+  dispatcher.enqueue(1, 'k', meta, d);
+  await jest.advanceTimersByTimeAsync(1000);
+  expect(d.send).toHaveBeenCalledTimes(1);
+});
+
 test('уже-эскалированный диалог → бот молчит, не переотправляет фразу перевода (регрессия)', async () => {
   const d = deps({ orchestrator: { runDialog: jest.fn(async () => ({ replies: [], escalated: true, alreadyEscalated: true })) } });
   dispatcher.enqueue(1, 'k', meta, d);
@@ -138,6 +154,33 @@ test('create_booking провалился, бот не эскалировал �
   expect(d.escalate).toHaveBeenCalledTimes(1);                 // диалог реально уходит человеку
   expect(d.send).toHaveBeenCalledTimes(1);
   expect(d.send.mock.calls[0][1]).toMatch(/администратор/i);   // клиент получил перевод, а не заглушку
+});
+
+test('booking провалился, но бот ПЕРЕИГРАЛ (предложил другое время) → доставляем, НЕ переводим', async () => {
+  const reoffer = 'К сожалению, 14:00 только что заняли. Могу предложить 15:00 или 16:00 — что удобнее?';
+  const d = deps({
+    orchestrator: { runDialog: jest.fn(async () => (
+      { replies: [reoffer], escalated: false, bookingFailed: true, bookingFailRecoverable: true })) },
+    priorBookingFailure: jest.fn(async () => false),   // первый провал в серии
+  });
+  dispatcher.enqueue(1, 'k', meta, d);
+  await jest.advanceTimersByTimeAsync(1000);
+  expect(d.escalate).not.toHaveBeenCalled();           // на человека НЕ переводим
+  expect(d.send).toHaveBeenCalledTimes(1);
+  expect(d.send).toHaveBeenCalledWith(meta, reoffer);  // пациент получил переигровку
+});
+
+test('booking провалился, переигровка есть, но это ПОВТОРНЫЙ провал → всё равно перевод', async () => {
+  const d = deps({
+    orchestrator: { runDialog: jest.fn(async () => (
+      { replies: ['Могу предложить 15:00'], escalated: false, bookingFailed: true, bookingFailRecoverable: true })) },
+    priorBookingFailure: jest.fn(async () => true),    // в серии уже был провал
+  });
+  dispatcher.enqueue(1, 'k', meta, d);
+  await jest.advanceTimersByTimeAsync(1000);
+  expect(d.escalate).toHaveBeenCalledTimes(1);
+  expect(d.send).toHaveBeenCalledTimes(1);
+  expect(d.send.mock.calls[0][1]).toMatch(/администратор/i);
 });
 
 test('booking провалился, НО бот уже сам эскалировал → без двойного перевода', async () => {
@@ -195,6 +238,65 @@ test('деградация после успешной записи → подт
   expect(d.send).toHaveBeenCalledTimes(1);
   expect(d.send).toHaveBeenCalledWith(meta, confirm);
   expect(d.escalate).not.toHaveBeenCalled();
+});
+
+// ── Серия сообщений: устаревший черновик не отправляется ──
+// Инцидент 2026-07-31: сообщение пришло в последние секунды прогона (после
+// stale-check оркестратора) → черновик отправлялся, а повторный прогон отвечал
+// на серию ещё раз — клиент получал два почти одинаковых ответа с приветствием.
+test('новое сообщение до отправки (без side-effect) → черновик выброшен, один общий ответ', async () => {
+  const d = deps();
+  let runs = 0;
+  d.orchestrator.runDialog = jest.fn(async () => {
+    runs += 1;
+    if (runs === 1) dispatcher.enqueue(1, 'k', meta, d);   // новое входящее во время 1-го прогона
+    return { replies: [`r${runs}`] };
+  });
+  dispatcher.enqueue(1, 'k', meta, d);
+  await jest.advanceTimersByTimeAsync(1000);
+  expect(d.orchestrator.runDialog).toHaveBeenCalledTimes(2);
+  // Черновик r1 не ушёл: клиент получил ровно один ответ — из повторного прогона.
+  expect(d.send).toHaveBeenCalledTimes(1);
+  expect(d.send).toHaveBeenCalledWith(meta, 'r2');
+});
+
+test('ход с side-effect (запись создана) НЕ выбрасывается даже при новом сообщении', async () => {
+  const d = deps();
+  let runs = 0;
+  d.orchestrator.runDialog = jest.fn(async () => {
+    runs += 1;
+    if (runs === 1) {
+      dispatcher.enqueue(1, 'k', meta, d);
+      return { replies: ['Записала вас на 20:00'], sideEffect: true };
+    }
+    return { replies: [`r${runs}`] };
+  });
+  dispatcher.enqueue(1, 'k', meta, d);
+  await jest.advanceTimersByTimeAsync(1000);
+  // Подтверждение реальной записи обязано дойти, потом ответ на новое сообщение.
+  expect(d.send).toHaveBeenCalledTimes(2);
+  expect(d.send).toHaveBeenNthCalledWith(1, meta, 'Записала вас на 20:00');
+  expect(d.send).toHaveBeenNthCalledWith(2, meta, 'r2');
+});
+
+test('успешно отправленная реплика запоминается в pending-replies (для транскрипта)', async () => {
+  const pending = require('./services/agent/pending-replies');
+  pending._reset();
+  const d = deps();
+  dispatcher.enqueue(1, 'k', meta, d);
+  await jest.advanceTimersByTimeAsync(1000);
+  expect(pending.peek(1, 'k').map(e => e.text)).toEqual(['Здравствуйте!']);
+});
+
+test('упавшая отправка НЕ запоминается в pending-replies', async () => {
+  const pending = require('./services/agent/pending-replies');
+  pending._reset();
+  const d = deps({
+    orchestrator: { runDialog: jest.fn(async () => ({ replies: ['ответ'] })) },
+    send: jest.fn(async () => { throw new Error('chatpush 500'); }),
+  });
+  await dispatcher.process(1, 'k', meta, d);
+  expect(pending.peek(1, 'k').map(e => e.text)).not.toContain('ответ');
 });
 
 // Гейт — предохранитель пилота (whitelist). Если он упал, мы НЕ знаем, можно ли

@@ -14,21 +14,72 @@ function normalizePhoneKey(raw) {
   return digits;
 }
 
-// Решение допуска. Чистая функция. Порядок: enabled → чёрный список → режим/белый.
+// 'HH:MM' → минуты от полуночи. Любой мусор → null (вызывающий решает, что делать).
+function parseHhMm(raw) {
+  const m = /^(\d{2}):(\d{2})$/.exec(String(raw ?? '').trim());
+  if (!m) return null;
+  const h = Number(m[1]), min = Number(m[2]);
+  if (h > 23 || min > 59) return null;
+  return h * 60 + min;
+}
+
+// Попадает ли момент в окно. Начало включительно, конец исключительно.
+// start > end — окно через полночь (22:00–09:30). start === end — окно нулевой
+// длины (НЕ круглые сутки: молчаливое превращение в 24/7 — опасный сюрприз).
+function isWithinWindow(nowMinutes, startMin, endMin) {
+  if (startMin === endMin) return false;
+  if (startMin < endMin) return nowMinutes >= startMin && nowMinutes < endMin;
+  return nowMinutes >= startMin || nowMinutes < endMin;
+}
+
+// Текущее московское время в минутах от полуночи. TZ задан явно: процесс сейчас
+// живёт на Europe/Moscow, но опираться на это — скрытая зависимость.
+function nowMskMinutes(date = new Date()) {
+  const s = date.toLocaleTimeString('ru-RU', {
+    timeZone: 'Europe/Moscow', hour12: false, hour: '2-digit', minute: '2-digit',
+  });
+  const [h, m] = s.split(':').map(Number);
+  return h * 60 + m;
+}
+
+// Решение допуска. Чистая функция. Порядок: enabled → чёрный список →
+// расписание (сужает режим до whitelist вне окна) → режим/белый список.
 // @param {boolean} enabled
 // @param {'all'|'whitelist'} mode
 // @param {string[]} allow  нормализованные номера белого списка
 // @param {string[]} block  нормализованные номера чёрного списка
 // @param {string}   phone  сырой номер входящего (нормализуем внутри)
+// @param {boolean}  scheduleEnabled  учитывать окно расписания
+// @param {string}   scheduleStart    'HH:MM' мск, включительно
+// @param {string}   scheduleEnd      'HH:MM' мск, исключительно
+// @param {number}   nowMinutes       текущее мск-время в минутах (см. nowMskMinutes)
 // @returns {{allow: boolean, reason: string}}
-function decideGate({ enabled, mode, allow, block, phone }) {
+function decideGate({
+  enabled, mode, allow, block, phone,
+  scheduleEnabled, scheduleStart, scheduleEnd, nowMinutes,
+}) {
   if (!enabled) return { allow: false, reason: 'disabled' };
   const key = normalizePhoneKey(phone);
   if (key && (block || []).includes(key)) return { allow: false, reason: 'blacklisted' };
-  if (mode === 'whitelist') {
-    if (!key || !(allow || []).includes(key)) return { allow: false, reason: 'not-whitelisted' };
+
+  // Расписание ТОЛЬКО сужает: вне окна эффективный режим — whitelist, чтобы
+  // тестовые номера работали круглосуточно. При mode='whitelist' сужать нечего.
+  // Битые границы или отсутствие времени → расписание игнорируем (fail-open к
+  // текущему поведению: круглосуточное молчание выглядит как «бот сломался»).
+  const startMin = parseHhMm(scheduleStart);
+  const endMin = parseHhMm(scheduleEnd);
+  const narrowed = !!scheduleEnabled && mode !== 'whitelist'
+    && startMin !== null && endMin !== null && typeof nowMinutes === 'number'
+    && !isWithinWindow(nowMinutes, startMin, endMin);
+
+  if (narrowed || mode === 'whitelist') {
+    if (!key || !(allow || []).includes(key)) {
+      return { allow: false, reason: narrowed ? 'outside-schedule' : 'not-whitelisted' };
+    }
   }
   return { allow: true, reason: 'ok' };
 }
 
-module.exports = { normalizePhoneKey, decideGate };
+module.exports = {
+  normalizePhoneKey, decideGate, parseHhMm, isWithinWindow, nowMskMinutes,
+};

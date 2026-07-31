@@ -93,6 +93,46 @@ describe('fitChain', () => {
   });
 });
 
+describe('fitChain — anchorFirst (первая услуга уже забронирована)', () => {
+  test('первая услуга фиксирована вне свободных окон мастера, вторая стыкуется после', () => {
+    // Чистка уже стоит 15:30–16:30 (930–990). В графике это ЗАНЯТО собственной
+    // записью, поэтому ranges первой услуги пусты — обычный fitChain бы её отверг.
+    // Врач-консультант свободен 17:00–18:00 (1020–1080) → минимальный перерыв, старт 17:00.
+    const entries = [
+      { ranges: [], durationMin: 60 },
+      { ranges: [R(1020, 1080)], durationMin: 30 },
+    ];
+    const fit = seq.fitChain(entries, 930, { anchorFirst: true, maxLinkGap: Infinity });
+    expect(fit).toEqual({ starts: [930, 1020], totalGap: 30 });
+  });
+
+  test('вторая услуга встык (зазор ≤15) при закреплённой первой', () => {
+    // Чистка 930–990; врач свободен с 990 → консультация ровно встык, gap 0.
+    const entries = [
+      { ranges: [], durationMin: 60 },
+      { ranges: [R(990, 1080)], durationMin: 30 },
+    ];
+    const fit = seq.fitChain(entries, 930, { anchorFirst: true });
+    expect(fit).toEqual({ starts: [930, 990], totalGap: 0 });
+  });
+
+  test('без anchorFirst та же цепочка невозможна (окно первой услуги пусто) → null', () => {
+    const entries = [
+      { ranges: [], durationMin: 60 },
+      { ranges: [R(1020, 1080)], durationMin: 30 },
+    ];
+    expect(seq.fitChain(entries, 930, { maxLinkGap: Infinity })).toBeNull();
+  });
+
+  test('anchorFirst: вторая услуга вообще не влезает после якоря → null', () => {
+    const entries = [
+      { ranges: [], durationMin: 60 },
+      { ranges: [R(600, 700)], durationMin: 30 },   // окно врача ДО чистки — после 990 пусто
+    ];
+    expect(seq.fitChain(entries, 930, { anchorFirst: true, maxLinkGap: Infinity })).toBeNull();
+  });
+});
+
 describe('chainStarts', () => {
   test('перебирает сетку 30 мин и требует полного размещения', () => {
     // Окно 10:00–12:30. Цепочка 30+90=120 мин → старты только 10:00 и 10:30.

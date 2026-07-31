@@ -11,18 +11,21 @@ const logger = createLogger('AgentSettings');
 
 const adminOnly = [auth, requireRole('owner', 'admin')];
 
-// GET /api/agent/settings → { enabled, mode }
+// GET /api/agent/settings → { enabled, mode, scheduleEnabled, scheduleStart, scheduleEnd }
 router.get('/settings', adminOnly, async (req, res) => {
   try { res.json(await settings.getSettings(req.user.salonId)); }
   catch (e) { logger.error(e.message); res.status(500).json({ error: 'server error' }); }
 });
 
-// PUT /api/agent/settings { enabled, mode }
+// PUT /api/agent/settings { enabled, mode, scheduleEnabled, scheduleStart, scheduleEnd }
 router.put('/settings', adminOnly, async (req, res) => {
   try {
-    const { enabled, mode } = req.body || {};
-    res.json(await settings.updateSettings(req.user.salonId, { enabled, mode }));
-  } catch (e) { logger.error(e.message); res.status(500).json({ error: 'server error' }); }
+    res.json(await settings.updateSettings(req.user.salonId, req.body || {}));
+  } catch (e) {
+    if (e.code === 'BAD_TIME')
+      return res.status(400).json({ error: 'Некорректное время расписания' });
+    logger.error(e.message); res.status(500).json({ error: 'server error' });
+  }
 });
 
 // GET /api/agent/number-rules?type=allow|block → { rules: [...] }

@@ -29,6 +29,15 @@ function emit(salonId, event) {
   }
 }
 
+// Смена режима диалога (бот ↔ оператор). Список диалогов в админке красит
+// такие диалоги и поднимает наверх — без этого события подсветка появлялась бы
+// только на страховочном опросе раз в 30 сек.
+// Зовётся отовсюду, где меняется agent_dialogs.status: эскалация агента,
+// ручной ответ оператора, кнопка «Передать оператору»/«Вернуть боту».
+function emitAgentStatus(salonId, dialogKey, status, reason = null) {
+  emit(salonId, { type: 'agent_status', dialogKey, status, reason: reason || null });
+}
+
 // Heartbeat: прокси/nginx рвут тихие соединения. Комментарий SSE клиентом не парсится.
 const HEARTBEAT_MS = 25000;
 const timer = setInterval(() => {
@@ -40,4 +49,4 @@ const timer = setInterval(() => {
 }, HEARTBEAT_MS);
 timer.unref(); // не держать процесс (и jest) живым из-за интервала
 
-module.exports = { subscribe, unsubscribe, emit };
+module.exports = { subscribe, unsubscribe, emit, emitAgentStatus };

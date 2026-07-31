@@ -1011,6 +1011,17 @@ async function runMigrations(client) {
       ADD COLUMN IF NOT EXISTS service_mode VARCHAR(20) NOT NULL DEFAULT 'all'
   `).catch(() => {});
 
+  // Расписание работы агента: окно «отвечаем всем» в мск. Вне окна режим
+  // принудительно сужается до whitelist — см. services/agent-gate.decideGate.
+  // Время строкой 'HH:MM': не зависит от того, как pg отдаёт TIME в JS,
+  // и читается глазами в БД.
+  await client.query(`
+    ALTER TABLE agent_settings
+      ADD COLUMN IF NOT EXISTS schedule_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+      ADD COLUMN IF NOT EXISTS schedule_start VARCHAR(5) NOT NULL DEFAULT '22:00',
+      ADD COLUMN IF NOT EXISTS schedule_end VARCHAR(5) NOT NULL DEFAULT '09:30'
+  `).catch(() => {});
+
   // agent_service_rules — правила видимости услуг/пар услуга×мастер для агента.
   // yc_staff_id NULL = правило на услугу целиком; заполнен = пара услуга×мастер.
   // rule_type: 'deny' | 'allow'. Пары поддерживают только 'deny' (см. спеку).

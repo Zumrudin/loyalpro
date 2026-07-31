@@ -117,6 +117,22 @@ router.post('/webhook', async (req, res) => {
     let storedNew = false;
     // 2) Нормализованное сообщение (входящее И исходящее-эхо) — вся переписка.
     if (msg && msg.messageId) {
+      // Наши исходящие в WhatsApp сохраняются сразу при отправке (routes/chat.js),
+      // т.к. Chatpush перестал слать по ним эхо. Если эхо всё же придёт — дедупим
+      // по delivery_id, зашитому в id (`_d<delivery>THISISBOT`), чтобы не задвоить.
+      if (msg.channel === 'whatsapp' && msg.direction === 'outgoing' && salonId) {
+        const dId = chatpush.deliveryIdFromWhatsappEchoId(msg.messageId);
+        if (dId) {
+          const dup = await db.oneOrNone(
+            'SELECT 1 FROM chatpush_messages WHERE salon_id=$1 AND external_message_id=$2',
+            [salonId, chatpush.ownOutgoingExternalId(dId)]);
+          if (dup) {
+            logger.debug(`skip echo of own whatsapp send (delivery ${dId})`);
+            if (eventId) await db.query('UPDATE chatpush_events SET processed=TRUE WHERE id=$1', [eventId]);
+            return;
+          }
+        }
+      }
       // Сматчить клиента по номеру телефона, чтобы в чате показывать имя из
       // клиентской базы. Точное сравнение по вариантам формата → индекс
       // idx_clients_phone. Номер клиента одинаков для in/out, поэтому весь

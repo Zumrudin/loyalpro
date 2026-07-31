@@ -7,6 +7,8 @@ const stateDefault = require('./dialog-state');
 const identityDefault = require('./identity');
 const config = require('../../config');
 const catalogBlockDefault = require('./catalog-block');
+const seqOffers = require('./sequential-offers');
+const replyGuard = require('./reply-guard');
 const { buildSystemPrompt } = require('./system-prompt');
 const { createLogger } = require('../../logger');
 const logger = createLogger('AgentOrchestrator');
@@ -21,13 +23,25 @@ const MAX_REGEN = 2;   // сколько раз перегенерировать
 
 // Пишущие инструменты: их результат нельзя «выбросить» перегенерацией.
 const SIDE_EFFECT_TOOLS = new Set([
-  'create_booking', 'cancel_booking', 'reschedule_booking', 'modify_booking_services',
+  'create_booking', 'book_chain', 'cancel_booking', 'reschedule_booking', 'modify_booking_services',
   'escalate_to_operator',
 ]);
 
 // Инструменты, меняющие запись в YClients. Успешный вызов одного из них —
 // единственное, что даёт право отрапортовать «перенесла / отменила / записала».
 const WRITE_TOOLS = new Set(['create_booking', 'cancel_booking', 'reschedule_booking', 'modify_booking_services']);
+
+// Инструменты чтения свободного времени. Их вызов ПОСЛЕ провала create_booking —
+// сигнал добросовестной переигровки (модель перепроверяет слоты, а не заканчивает
+// ход отпиской «секундочку»). Отличает восстановимый провод от зависания.
+const SLOT_READ_TOOLS = new Set([
+  'get_available_slots', 'get_available_dates', 'get_sequential_slots', 'get_parallel_slots',
+]);
+
+// Реплика содержит конкретное время (HH:MM / HH.MM) — модель предлагает слот.
+// Второй (наряду с перепроверкой слотов) признак переигровки после провала записи:
+// «это время заняли, могу 15:00 или 16:00» — против пустого «секундочку».
+const REPLY_HAS_TIME = /\b([01]?\d|2[0-3])[:.][0-5]\d\b/;
 
 // Утверждение о ВЫПОЛНЕННОМ действии над записью (не намерение). Пилот
 // claude-haiku 2026-07-22: модель написала «Готово, перенесла на 14:00», НЕ
@@ -70,6 +84,42 @@ function formatSlotMoscow(iso) {
   const time = new Intl.DateTimeFormat('ru-RU',
     { timeZone: 'Europe/Moscow', hour: '2-digit', minute: '2-digit', hour12: false }).format(d);
   return { date, time };
+}
+
+// Компактная сводка результата инструмента для лога вызовов (Task 13 плана:
+// «в логах виден вызов book_chain» — раньше логировались только исключения,
+// диагностика поведения агента требовала debug-preload). НИКОГДА не полный
+// дамп — результаты несут PII (телефон) и большие каталоги; берём только
+// дешёвые решающие поля бронирования + обрезанный текст ошибки, режем общей
+// длиной на случай, если в error затесалось что-то длинное.
+const LOG_FRAGMENT_CAP = 200;
+function summarizeToolResult(result) {
+  if (!result || typeof result !== 'object') return '';
+  const bits = [];
+  if ('record_id' in result) bits.push(`record_id=${result.record_id}`);
+  if ('created' in result) bits.push(`created=${result.created}`);
+  if ('booked_all' in result) bits.push(`booked_all=${result.booked_all}`);
+  if ('partial' in result) bits.push(`partial=${result.partial}`);
+  if ('failed_at' in result) bits.push(`failed_at=${result.failed_at}`);
+  if ('escalated' in result) bits.push(`escalated=${result.escalated}`);
+  if (result.error) bits.push(`error=${String(result.error).slice(0, 80)}`);
+  return bits.join(' ').slice(0, LOG_FRAGMENT_CAP);
+}
+
+// Аргументы вызова для лога. Разбор инцидента 2026-07-31 (предложила 11:30,
+// записать не смогла) уперся в то, что логировались только результаты: по
+// логам нельзя было сказать, с какой услугой модель спрашивала слоты. Пишем
+// компактные скалярные аргументы БЕЗ PII (телефон/имя/комментарий не логируем).
+const LOG_PII_ARGS = new Set(['client_phone', 'client_name', 'comment']);
+function summarizeToolInput(input) {
+  if (!input || typeof input !== 'object') return '';
+  const bits = [];
+  for (const [k, v] of Object.entries(input)) {
+    if (LOG_PII_ARGS.has(k)) continue;
+    if (v === null || v === undefined || typeof v === 'object') continue;
+    bits.push(`${k}=${String(v).slice(0, 40)}`);
+  }
+  return bits.join(',').slice(0, LOG_FRAGMENT_CAP);
 }
 
 // Детерминированное подтверждение из данных выполненного пишущего инструмента —
@@ -133,6 +183,28 @@ async function runDialog(salonId, dialogKey, opts = {}) {
   }
   const registry = d.registry || (catalogBlock ? registryDefault.catalogMode : registryDefault);
 
+  // Живые варианты get_sequential_slots этого диалога → в волатильный хвост промпта.
+  // Их мог создать только ПРЕДЫДУЩИЙ ход (в текущем результат инструмента модель
+  // и так видит), поэтому одного peek перед циклом попыток достаточно. Сбой кэша
+  // не имеет права ронять диалог — просто идём без блока (модель перезапросит слоты).
+  let activeOffers = [];
+  try {
+    const nowMs = opts.nowMs || Date.now();
+    const live = seqOffers.peek(salonId, dialogKey, { nowMs });
+    if (live) {
+      activeOffers = seqOffers.renderOffers(live, { nowMs });
+      // Часть вариантов не показана (прошедший старт, уже оформлен, потолок
+      // строк) — модель по правилу блока просто перезапросит get_sequential_slots.
+      const total = Object.keys(live).length;
+      if (total > activeOffers.length) {
+        logger.info(`dialog ${dialogKey}: активных вариантов ${activeOffers.length} из ${total} (остальные прошли, оформлены или срезаны потолком)`);
+      }
+    }
+  } catch (e) {
+    logger.warn(`dialog ${dialogKey}: не прочитать активные варианты стыковки (${e.message}) — промпт без них`);
+    activeOffers = [];
+  }
+
   const system = buildSystemPrompt({
     salonName: opts.salonName,
     workingHours: opts.workingHours,
@@ -147,6 +219,7 @@ async function runDialog(salonId, dialogKey, opts = {}) {
     phoneKnown: !!ctx.phone,
     clientName,
     catalogBlock,
+    activeOffers,
   });
   // nowMs — чтобы инструменты слотов отрезали уже прошедшее время «сегодня».
   // clientPhone/clientName — детерминированный фолбэк для create_booking основного
@@ -163,6 +236,16 @@ async function runDialog(salonId, dialogKey, opts = {}) {
     if (!messages.length) return { replies: [], escalated: false, sideEffect: false };
 
     const convo = messages.slice();
+
+    // Допустимые времена для финальной реплики: всё, что реально всплывало в
+    // этом ходе — история диалога (клиент сам называл время / мы уже предлагали),
+    // текущее время из промпта и результаты инструментов (пополняется ниже).
+    // Сверка — детерминированная страховка правила «время дословно из slots»
+    // (инцидент 2026-07-28: выдуманное 14:00). Пока ТОЛЬКО лог — меряем шум.
+    const allowedTimes = new Set(replyGuard.extractTimes(JSON.stringify(messages)));
+    for (const t of replyGuard.extractTimes(system)) allowedTimes.add(t);
+    const hasPriorAssistant = messages.some(m => m.role === 'assistant');
+
     const replies = [];
     let escalated = false;
     let sideEffect = false;
@@ -173,6 +256,7 @@ async function runDialog(salonId, dialogKey, opts = {}) {
     let lastWrite = null;           // { tool, input } последнего успешного write — для подтверждения
     let degradedAfterWrite = false; // провайдер упал ПОСЛЕ успешной записи → детерминированное подтверждение
     let readBookings = false;       // list_client_bookings отработал → «вы записаны…» может быть честным ответом
+    let recheckedAfterFail = false; // после провала create_booking модель перезапросила слоты (добросовестная переигровка)
 
     for (let i = 0; i < MAX_ITERS; i++) {
       let resp;
@@ -206,25 +290,72 @@ async function runDialog(salonId, dialogKey, opts = {}) {
       const results = [];
       for (const tc of resp.toolCalls) {
         const handler = registry.handlers[tc.name];
+        const startedAt = Date.now();
         let result;
+        let threw = false;
         try {
           result = handler
             ? await handler(salonId, tc.input, toolCtx)
             : { error: `Неизвестный инструмент: ${tc.name}` };
         } catch (e) {
-          logger.error(`tool ${tc.name} failed: ${e.message}`);
+          threw = true;
+          logger.error(`dialog ${dialogKey}: tool ${tc.name} ${Date.now() - startedAt}ms error ${String(e.message).slice(0, 120)}`);
           result = { error: e.message };
         }
         const isError = !!(result && result.error);
+        // Один лог на вызов инструмента (ok/error, длительность, решающие поля
+        // без PII). Для исключения уже отработал logger.error выше — второй
+        // раз не логируем, чтобы не задваивать одно и то же событие.
+        if (!threw) {
+          const outcome = summarizeToolResult(result);
+          const args = summarizeToolInput(tc.input);
+          logger.info(`dialog ${dialogKey}: tool ${tc.name}${args ? `(${args})` : ''} ${Date.now() - startedAt}ms ${isError ? 'error' : 'ok'}${outcome ? ' ' + outcome : ''}`);
+        }
         if (!isError && SIDE_EFFECT_TOOLS.has(tc.name)) sideEffect = true;
         if (!isError && WRITE_TOOLS.has(tc.name)) { writeSucceeded = true; lastWrite = { tool: tc.name, input: tc.input }; }
         if (!isError && tc.name === 'list_client_bookings') readBookings = true;
         if (tc.name === 'escalate_to_operator' && result && result.escalated) escalated = true;
         if (tc.name === 'create_booking') { if (isError) bookingErrored = true; else bookingSucceeded = true; }
+        if (tc.name === 'book_chain') {
+          // Частичный успех (partial) = записи уже есть → право на «записала»
+          // сохраняется (writeSucceeded) и ход нельзя выбрасывать перегенерацией
+          // (sideEffect), но серия считается проваленной (bookingErrored) —
+          // диспетчер решит про перевод. option_expired — ни успех, ни провал
+          // записи: модель перезапросит слоты.
+          if (result && (result.booked_all || result.partial)) sideEffect = true;
+          if (result && result.booked_all) {
+            bookingSucceeded = true; writeSucceeded = true;
+            const first = (result.records || [])[0] || {};
+            lastWrite = { tool: 'create_booking', input: { datetime: first.datetime, client_name: (tc.input || {}).client_name } };
+          } else if (result && (result.partial || result.failed_at)) {
+            bookingErrored = true;
+            if (result.partial) {
+              // Часть цепочки уже забронирована → writeSucceeded (ход не выбросить),
+              // и lastWrite ставим из ПЕРВОЙ созданной записи, чтобы деградационное
+              // подтверждение назвало реально забронированный слот, а не соврало
+              // «всё оформила» про частичную бронь.
+              writeSucceeded = true;
+              const first = (result.records || [])[0] || {};
+              lastWrite = { tool: 'create_booking', input: { datetime: first.datetime, client_name: (tc.input || {}).client_name } };
+            }
+          } else if (result && !result.option_expired) {
+            bookingErrored = true;
+          }
+        }
+        if (bookingErrored && SLOT_READ_TOOLS.has(tc.name)) recheckedAfterFail = true;
         results.push({ id: tc.id, name: tc.name, result, isError });
+        for (const t of replyGuard.extractTimes(JSON.stringify(result))) allowedTimes.add(t);
       }
       for (const m of provider.toolResultMessages(results)) convo.push(m);
-      if (escalated) break;
+      if (escalated) {
+        // Текст, написанный В ТОМ ЖЕ ходе, что и escalate_to_operator (прощание /
+        // честный отчёт о частичной записи цепочки), иначе теряется: ветка выше
+        // пушит text в replies ТОЛЬКО когда toolCalls пуст, а цикл прерывается
+        // сразу после эскалации — текстового хода без инструментов больше не будет.
+        // Это последнее, что услышит клиент перед переводом на администратора.
+        if (resp.text && !replies.includes(resp.text)) replies.push(resp.text);
+        break;
+      }
       if (i === MAX_ITERS - 1) exhausted = true;
     }
 
@@ -253,6 +384,40 @@ async function runDialog(salonId, dialogKey, opts = {}) {
       replies.push(buildWriteConfirmation(lastWrite));
     }
 
+    // ── Линт финальной реплики (reply-guard) ──
+    if (replies.length && !degradedAfterWrite) {
+      const joined = replies.join('\n');
+      const violations = [
+        ...replyGuard.lintReply(joined, { hasPriorAssistant }),
+        ...replyGuard.checkOfferedTimes(joined, allowedTimes),
+      ];
+      if (violations.length) {
+        logger.warn(`dialog ${dialogKey}: reply-guard: ${JSON.stringify(violations)}`);
+      }
+      const hard = replyGuard.hardViolations(violations);
+      if (hard.length) {
+        // ОДИН корректирующий довызов без инструментов: убрать внутреннюю кухню,
+        // сохранив смысл. Второй раз не переписываем — доставляем как есть (лог уже был).
+        try {
+          const fix = await provider.createMessage({
+            system,
+            messages: convo.concat([{
+              role: 'user',
+              content: 'СЛУЖЕБНАЯ ПРОВЕРКА (пациент этого не видит): твой последний ответ ' +
+                `содержит внутренние термины или идентификаторы: ${hard.map(v => v.value).join(', ')}. ` +
+                'Перепиши его для пациента тем же смыслом, но без этих слов и чисел. ' +
+                'В ответе — ТОЛЬКО переписанный текст.',
+            }]),
+            tools: [],
+          }, { client: opts.client });
+          if (fix.text) { replies.length = 0; replies.push(fix.text); }
+          else logger.warn(`dialog ${dialogKey}: корректирующий довызов вернул пустой текст — отдаю исходную реплику`);
+        } catch (e) {
+          logger.warn(`dialog ${dialogKey}: корректирующий довызов не удался (${e.message}) — отдаю исходную реплику`);
+        }
+      }
+    }
+
     // Пришло ли новое входящее, пока мы думали?
     const stale = await history.hasIncomingAfter(salonId, dialogKey, watermark);
     if (stale && !sideEffect && attempt < MAX_REGEN) {
@@ -270,8 +435,18 @@ async function runDialog(salonId, dialogKey, opts = {}) {
         || (!readBookings && BOOKED_STATE_CLAIM.test(allReplies)));
     // bookingFailed: попытка записи была и НЕ увенчалась успехом. Диспетчер по этому
     // сигналу принудительно переведёт на человека, чтобы клиент не завис на «секундочку».
+    const bookingFailed = bookingErrored && !bookingSucceeded;
+    // bookingFailRecoverable: провал записи, но модель добросовестно ПЕРЕИГРАЛА —
+    // не соврала об успехе, дала связную реплику и либо перепроверила слоты, либо
+    // предложила конкретное новое время. Такой ход диспетчер доставляет пациенту
+    // БЕЗ перевода на человека (переигровка ограничена одной попыткой на серию —
+    // счётчик провалов в диспетчере). Инцидент 2026-07-28: восстановимый провал
+    // «время занято» уводил на администратора, хотя достаточно предложить другой слот.
+    const bookingFailRecoverable = bookingFailed && !escalated && !falseSuccess
+      && replies.some((t) => t && t.trim())
+      && (recheckedAfterFail || REPLY_HAS_TIME.test(allReplies));
     return { replies, escalated, sideEffect, exhausted, falseSuccess,
-      bookingFailed: bookingErrored && !bookingSucceeded, degradedAfterWrite };
+      bookingFailed, bookingFailRecoverable, degradedAfterWrite };
   }
 
   return { replies: [], escalated: false, sideEffect: false };

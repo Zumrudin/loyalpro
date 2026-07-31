@@ -105,4 +105,24 @@ async function createBookingRecord(salonId, draft) {
   }
 }
 
-module.exports = { buildIdempotencyKey, lockKey, createBookingRecord };
+// Сколько провалов записи (booking_failed) уже было в этом диалоге ПОСЛЕ последнего
+// успеха (booking_created) — чтобы ограничить «переигровку» после провала одной
+// попыткой на серию. Текущий провал уже залогирован logBookingFailure, поэтому
+// значение >1 означает наличие ПРЕДЫДУЩЕГО провала → пора переводить на человека,
+// а не давать модели бесконечно предлагать неудачные слоты. Fail-open (0 при сбое):
+// сбой лога не должен запирать легитимную переигровку.
+async function countBookingFailuresSinceSuccess(salonId, dialogKey) {
+  try {
+    const row = (await pool.query(
+      `SELECT count(*)::int AS n FROM agent_events
+        WHERE salon_id = $1 AND dialog_key = $2 AND kind = 'booking_failed'
+          AND created_at > COALESCE(
+            (SELECT max(created_at) FROM agent_events
+              WHERE salon_id = $1 AND dialog_key = $2 AND kind = 'booking_created'),
+            'epoch'::timestamptz)`,
+      [salonId, dialogKey])).rows[0];
+    return (row && row.n) || 0;
+  } catch (_) { return 0; }
+}
+
+module.exports = { buildIdempotencyKey, lockKey, createBookingRecord, countBookingFailuresSinceSuccess };

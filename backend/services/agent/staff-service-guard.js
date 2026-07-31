@@ -16,13 +16,19 @@ async function checkStaffPerformsService(salonId, serviceYcId, staffYcId) {
   let catalog = null;
   try { catalog = await listServices.run(salonId); } catch (_) { catalog = null; }
   if (!catalog || !Array.isArray(catalog.services) || !catalog.services.length) {
-    return { unknown: true, ok: false, performers: [] };
+    return { unknown: true, ok: false, performers: [], staffList: [] };
   }
   const svc = catalog.services.find(s => String(s.yc_id) === String(serviceYcId));
-  if (!svc) return { unknown: true, ok: false, performers: [] };
+  if (!svc) return { unknown: true, ok: false, performers: [], staffList: [] };
   const staff = svc.staff || [];
   const ok = staff.some(m => String(m.yc_id) === String(staffYcId));
-  return { ok, unknown: false, performers: staff.map(m => m.name).filter(Boolean) };
+  return {
+    ok, unknown: false,
+    performers: staff.map(m => m.name).filter(Boolean),
+    // Полный список исполнителей с id — для подбора альтернативного мастера,
+    // когда у запрошенного нет свободного времени на дату.
+    staffList: staff.map(m => ({ yc_id: m.yc_id, name: m.name })),
+  };
 }
 
 module.exports = { checkStaffPerformsService };
