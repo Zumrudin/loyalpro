@@ -225,7 +225,7 @@ describe('buildSystemPrompt', () => {
     const legacy = buildSystemPrompt({});
     const catalog = buildSystemPrompt({ catalogBlock: PRICE_CATALOG });
     for (const p of [legacy, catalog]) {
-      expect(p).toMatch(/ПРЕПАРАТ\/ФИЛЛЕР НЕ УТОЧНЯЕМ/i);
+      expect(p).toMatch(/ПРЕПАРАТ\/ФИЛЛЕР\/ЗОНУ НЕ УТОЧНЯЕМ/i);
       // три обобщённые услуги
       expect(p).toMatch(/«Биоревитализация», «Увеличение губ» или «Контурная пластика»/);
       // если пациент сам назвал препарат — оформляем конкретную услугу
@@ -246,8 +246,39 @@ describe('buildSystemPrompt', () => {
   test('названия обобщённых услуг совпадают с теми, что проверяет catalog-data', () => {
     const { GENERIC_SERVICE_TITLES } = require('./services/agent/catalog-data');
     const p = buildSystemPrompt({});
-    expect(GENERIC_SERVICE_TITLES.length).toBe(3);
+    expect(GENERIC_SERVICE_TITLES.length).toBe(4);
     for (const title of GENERIC_SERVICE_TITLES) expect(p).toContain(`«${title}»`);
+  });
+
+  // Название в YClients — «Ботулинотерапия  Ботулакс 1 ед ( 30 минут )»: двойной
+  // пробел и хвост с длительностью. Матчер обязан узнавать его как обобщённую
+  // услугу, но не считать «Биоревитализацию Profhilo» «Биоревитализацией».
+  test('matchesGenericTitle: пробелы схлопываются, хвост в скобках допустим, чужой хвост — нет', () => {
+    const { matchesGenericTitle } = require('./services/agent/catalog-data');
+    expect(matchesGenericTitle('Ботулинотерапия  Ботулакс 1 ед ( 30 минут )', 'Ботулинотерапия Ботулакс 1 ед')).toBe(true);
+    expect(matchesGenericTitle('Биоревитализация', 'Биоревитализация')).toBe(true);
+    expect(matchesGenericTitle('Биоревитализация Profhilo 2 ml', 'Биоревитализация')).toBe(false);
+  });
+
+  // Инцидент 2026-07-31 (диалог 79200255591): «можно на ботокс записаться?» →
+  // «не знаю, как врач порекомендует» → Мила увела в запись на консультацию и
+  // прорекламировала «в подарок». Должна была записать на обобщённый Ботулакс.
+  test('ботокс без зоны → запись на «Ботулинотерапия Ботулакс 1 ед», не консультация', () => {
+    const p = buildSystemPrompt({});
+    expect(p).toMatch(/хочет БОТУЛИНОТЕРАПИЮ .*НЕ назвал зону — НЕ спрашивай зону/i);
+    expect(p).toContain('«Ботулинотерапия Ботулакс 1 ед»');
+    expect(p).toMatch(/«не знаю», «как врач порекомендует» .*НЕ сомнение/i);
+    expect(p).toMatch(/САМ назвал зону .*оформляй услугу именно этой зоны/i);
+    expect(p).toMatch(/ЗАПРОС НА ПРОЦЕДУРУ ≠ КОНСУЛЬТАЦИЯ/);
+    expect(p).toMatch(/НИКОГДА не своди такой запрос к записи на консультацию/i);
+  });
+
+  test('цена ботулинотерапии — подсветить зоны, диапазон; цену единицы Ботулакса не называть', () => {
+    const p = buildSystemPrompt({});
+    expect(p).toMatch(/БОТУЛИНОТЕРАПИЯ — тоже направление по ЗОНАМ/i);
+    expect(p).toMatch(/проводится по зонам/i);
+    expect(p).toMatch(/Цену обобщённой услуги «Ботулинотерапия Ботулакс 1 ед» пациенту НЕ называй/i);
+    expect(p).toMatch(/стоимость одной единицы препарата/i);
   });
 
   test('неоднозначное бытовое слово (лазер) → мягкое подтверждение ОДНОГО варианта + история визитов', () => {
@@ -269,6 +300,16 @@ describe('buildSystemPrompt', () => {
     const p = buildSystemPrompt({});
     expect(p).toMatch(/не раскрывай пациенту внутреннюю кухню/i);
     expect(p).toMatch(/база знаний|нет статьи/i);
+  });
+
+  // Жалоба 2026-07-31: при негативе тон должен становиться заметно мягче,
+  // без продаж и организационных вставок — а не продолжать «как обычно».
+  test('негатив → смена тона на тёплый/эмпатичный, без продаж и смайликов', () => {
+    const p = buildSystemPrompt({});
+    expect(p).toMatch(/СМЕНИ ТОН/);
+    expect(p).toMatch(/теплее, мягче и эмпатичнее/i);
+    expect(p).toMatch(/НИКАКИХ продаж/i);
+    expect(p).toMatch(/не напоминай про записи, не предлагай услуги, акции и «консультацию в подарок»/i);
   });
 
   test('консультация в подарок при процедуре в тот же день — деликатно, один раз', () => {

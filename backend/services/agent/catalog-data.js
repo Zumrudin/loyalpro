@@ -18,14 +18,27 @@ const logger = createLogger('AgentCatalogData');
 // «включить из каталога» (allow-правило). Инцидент 2026-07-31: галочки не было,
 // модель не видела «Биоревитализацию» в каталоге и записала пациента на конкретный
 // препарат «Revi Silk 1 ml» — правило было невыполнимым, и это нигде не всплывало.
-const GENERIC_SERVICE_TITLES = ['Биоревитализация', 'Увеличение губ', 'Контурная пластика'];
+// «Ботулинотерапия Ботулакс 1 ед» — тот же паттерн для зон: пациент не назвал
+// зону → запись на единицу Ботулакса, зоны и дозу определяет врач на визите
+// (инцидент 2026-07-31: запрос «записаться на ботокс» свёлся к консультации).
+const GENERIC_SERVICE_TITLES = ['Биоревитализация', 'Увеличение губ', 'Контурная пластика', 'Ботулинотерапия Ботулакс 1 ед'];
 const warnedMissing = new Set();   // один лог на процесс, а не на каждый ход диалога
+
+// Совпадение названия: после схлопывания пробелов — точное ИЛИ с техническим
+// хвостом в скобках. В YClients «Ботулакс» называется
+// «Ботулинотерапия  Ботулакс 1 ед ( 30 минут )» — двойной пробел и длительность.
+const normTitle = (t) => String(t).toLowerCase().replace(/\s+/g, ' ').trim();
+function matchesGenericTitle(catalogTitle, genericTitle) {
+  const t = normTitle(catalogTitle);
+  const g = normTitle(genericTitle);
+  return t === g || (t.startsWith(g) && t.slice(g.length).trim().startsWith('('));
+}
 
 function warnMissingGenericServices(salonId, services) {
   for (const title of GENERIC_SERVICE_TITLES) {
     const key = `${salonId}:${title}`;
     if (warnedMissing.has(key)) continue;
-    if (services.some(s => String(s.title).trim().toLowerCase() === title.toLowerCase())) continue;
+    if (services.some(s => matchesGenericTitle(s.title, title))) continue;
     warnedMissing.add(key);
     logger.warn(`salon ${salonId}: обобщённой услуги «${title}» нет в каталоге агента — ` +
       'правило «препарат не уточняем» невыполнимо, модель запишет на конкретный препарат. ' +
@@ -139,4 +152,4 @@ async function loadCatalogServices(salonId) {
   return services;
 }
 
-module.exports = { loadCatalogServices, GENERIC_SERVICE_TITLES, warnMissingGenericServices };
+module.exports = { loadCatalogServices, GENERIC_SERVICE_TITLES, warnMissingGenericServices, matchesGenericTitle };
