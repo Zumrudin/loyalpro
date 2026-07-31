@@ -11,6 +11,7 @@ const leadTime = require('../lead-time');
 
 const DEFAULT_STEP_MIN = 30;       // шаг предлагаемых стартов в fallback-режиме
 const DEFAULT_DURATION_MIN = 60;   // если YClients не отдал duration услуги (как в get_parallel_slots)
+const MAX_ALT_STAFF = 3;           // сколько других мастеров услуги проверяем при пустой выдаче
 
 const schema = {
   name: 'get_available_slots',
@@ -94,6 +95,83 @@ function rangesToSlots(ranges, date, step, durationMin) {
   return slots;
 }
 
+// Слоты одного мастера под услугу на дату: сперва онлайн-запись (точные слоты),
+// иначе fallback из графика с вычетом занятого оборудования. Вынесено из run(),
+// чтобы тем же кодом считать альтернативных мастеров при пустой выдаче.
+async function computeStaffSlots(salon, staffId, serviceId, date, nowMs) {
+  // 1) Онлайн-запись включена и известна услуга → точные слоты под услугу.
+  if (serviceId) {
+    const times = await ycGetBookTimes(salon, staffId, date, [serviceId]);
+    const slots = (Array.isArray(times) ? times : []).map(t => ({
+      time: t.time, datetime: t.datetime, seance_length: t.seance_length,
+    }));
+    if (slots.length) return dropDisallowedStarts({ slots, source: 'booking' }, date, nowMs);
+  }
+  // 2) Иначе (или пусто) — свободность из графика (management API, без онлайн-записи).
+  // Этот график знает только занятость кресла мастера и слеп к аппаратам,
+  // поэтому вычитаем время, когда занято оборудование услуги: иначе предложим
+  // окно, на котором создание записи упрётся в save_if_busy:false.
+  const seances = await ycGetStaffSeances(salon, staffId, date);
+  let ranges = seancesToRanges(seances);
+  let equipmentBusy = false;
+  // Длительность услуги: старт годится, только если услуга влезает целиком до
+  // конца окна мастера (как в get_parallel_slots). Без service_yc_id длительность
+  // знать неоткуда — остаётся прежняя проверка «хотя бы один шаг».
+  let svcDurationMin = 0;
+  if (serviceId) {
+    const eqCtx = await eqContext.loadEquipmentContext(salon, date);
+    svcDurationMin = eqContext.durationMin(eqCtx, serviceId) || DEFAULT_DURATION_MIN;
+    const busy = eqContext.busyForService(eqCtx, serviceId);
+    if (busy.length) {
+      const trimmed = eq.subtractRanges(ranges, busy);
+      equipmentBusy = trimmed.length !== ranges.length
+        || trimmed.some((r, i) => !ranges[i] || r.start !== ranges[i].start || r.end !== ranges[i].end);
+      ranges = trimmed;
+    }
+  }
+  // Отдаём модели ТОЛЬКО slots — детерминированные старты, куда услуга влезает
+  // целиком. Раньше рядом возвращались free_ranges («сырые» окна кресла до
+  // фильтра длительности, «для ответа пациенту»), но слабая модель цитировала и
+  // округляла их границы как время записи: инцидент 2026-07-28 — окно с 14:40
+  // названо пациенту «14:00», create_booking упал «время недоступно» → ложная
+  // эскалация. Единственный допустимый источник предлагаемого времени — slots.
+  let slots = rangesToSlots(ranges, date, DEFAULT_STEP_MIN, svcDurationMin);
+  // seance_length — как у get_parallel_slots: create_booking без него ловил 422
+  // на салонах с выключенной онлайн-записью.
+  if (svcDurationMin) {
+    slots = slots.map(s => ({ ...s, seance_length: svcDurationMin * 60 }));
+  }
+  const out = { slots, source: 'schedule' };
+  if (equipmentBusy) out.equipment_busy = true;   // часть окон срезана занятым аппаратом
+  return dropDisallowedStarts(out, date, nowMs);
+}
+
+// У запрошенного мастера пусто → проверяем других исполнителей ЭТОЙ услуги на ту же
+// дату. Инцидент 2026-08-01: «Голливуд» на завтра — модель проверила только Юлию и
+// сказала «окошек нет», хотя у Татьяны было 14:00; клиент сам вытащил альтернативу
+// вопросом «а почему к Тане не предлагаешь?». Задача — довести до записи: альтернативу
+// подсвечивает сам инструмент, а не память модели.
+async function findAlternativeStaff(salon, filter, staffList, staffId, serviceId, date, nowMs) {
+  const others = (staffList || [])
+    .filter(m => m && m.yc_id && String(m.yc_id) !== String(staffId))
+    .filter(m => svcFilter.isBookable(filter, serviceId, m.yc_id))
+    .slice(0, MAX_ALT_STAFF);
+  if (!others.length) return null;
+  const checked = await Promise.all(others.map(async (m) => {
+    try {
+      const r = await computeStaffSlots(salon, m.yc_id, serviceId, date, nowMs);
+      return { staff_yc_id: m.yc_id, name: m.name, slots: r.slots || [] };
+    } catch (_) { return null; }   // сбой по одному мастеру не валит весь ответ
+  }));
+  const reachable = checked.filter(Boolean);
+  const withSlots = reachable.filter(a => a.slots.length);
+  if (withSlots.length) return { alternative_staff: withSlots };
+  // Все альтернативы реально проверены и пусты → модель может честно сказать,
+  // что на эту дату времени нет ни у кого из исполнителей услуги.
+  if (reachable.length === others.length) return { no_alternative_staff: true };
+  return null;
+}
+
 async function run(salonId, input, ctx = {}) {
   const serviceId = input && input.service_yc_id;
   const staffId = input && input.staff_yc_id;
@@ -110,8 +188,10 @@ async function run(salonId, input, ctx = {}) {
       'работает) — это get_available_dates, а не слоты.' };
   }
   // Скрытую услугу/пару не предлагаем (мягкий пустой ответ, без «технических сложностей»).
+  let filter = {};
+  let staffList = [];
   if (serviceId) {
-    const filter = await settings.loadServiceFilterSafe(salonId);
+    filter = await settings.loadServiceFilterSafe(salonId);
     if (!svcFilter.isBookable(filter, serviceId, staffId)) {
       return { slots: [], filtered: true };
     }
@@ -128,55 +208,25 @@ async function run(salonId, input, ctx = {}) {
         error: `Выбранный мастер не выполняет эту услугу — НЕ предлагай его время и не подтверждай запись к нему. ${who}`,
       };
     }
+    staffList = chk.staffList || [];
   }
   const salon = await db.one(`SELECT id, yclients_company_id, yclients_partner_token, yclients_user_token FROM salons WHERE id=$1`, [salonId]);
   if (!salon || !salon.yclients_company_id) return { error: 'YClients не подключён для салона.' };
   try {
-    // 1) Онлайн-запись включена и известна услуга → точные слоты под услугу.
-    if (serviceId) {
-      const times = await ycGetBookTimes(salon, staffId, date, [serviceId]);
-      const slots = (Array.isArray(times) ? times : []).map(t => ({
-        time: t.time, datetime: t.datetime, seance_length: t.seance_length,
-      }));
-      if (slots.length) return dropDisallowedStarts({ slots, source: 'booking' }, date, nowMs);
+    const out = await computeStaffSlots(salon, staffId, serviceId, date, nowMs);
+    if (out.slots.length) return out;
+    // У запрошенного мастера на эту дату пусто → сразу подсвечиваем альтернативу:
+    // те же слоты у других исполнителей услуги, чтобы клиент не ушёл без записи.
+    const alt = await findAlternativeStaff(salon, filter, staffList, staffId, serviceId, date, nowMs);
+    if (alt && alt.alternative_staff) {
+      out.alternative_staff = alt.alternative_staff;
+      out.hint = 'У выбранного мастера на эту дату свободного времени нет, но ЭТУ ЖЕ услугу в этот день ' +
+        'выполняют другие мастера — их реальные свободные окна в alternative_staff. Предложи пациенту ' +
+        'записаться к одному из них (назови имя), время бери ДОСЛОВНО из их slots.';
+    } else if (alt && alt.no_alternative_staff) {
+      out.no_alternative_staff = true;   // проверены ВСЕ исполнители услуги — на дату пусто у всех
     }
-    // 2) Иначе (или пусто) — свободность из графика (management API, без онлайн-записи).
-    // Этот график знает только занятость кресла мастера и слеп к аппаратам,
-    // поэтому вычитаем время, когда занято оборудование услуги: иначе предложим
-    // окно, на котором создание записи упрётся в save_if_busy:false.
-    const seances = await ycGetStaffSeances(salon, staffId, date);
-    let ranges = seancesToRanges(seances);
-    let equipmentBusy = false;
-    // Длительность услуги: старт годится, только если услуга влезает целиком до
-    // конца окна мастера (как в get_parallel_slots). Без service_yc_id длительность
-    // знать неоткуда — остаётся прежняя проверка «хотя бы один шаг».
-    let svcDurationMin = 0;
-    if (serviceId) {
-      const eqCtx = await eqContext.loadEquipmentContext(salon, date);
-      svcDurationMin = eqContext.durationMin(eqCtx, serviceId) || DEFAULT_DURATION_MIN;
-      const busy = eqContext.busyForService(eqCtx, serviceId);
-      if (busy.length) {
-        const trimmed = eq.subtractRanges(ranges, busy);
-        equipmentBusy = trimmed.length !== ranges.length
-          || trimmed.some((r, i) => !ranges[i] || r.start !== ranges[i].start || r.end !== ranges[i].end);
-        ranges = trimmed;
-      }
-    }
-    // Отдаём модели ТОЛЬКО slots — детерминированные старты, куда услуга влезает
-    // целиком. Раньше рядом возвращались free_ranges («сырые» окна кресла до
-    // фильтра длительности, «для ответа пациенту»), но слабая модель цитировала и
-    // округляла их границы как время записи: инцидент 2026-07-28 — окно с 14:40
-    // названо пациенту «14:00», create_booking упал «время недоступно» → ложная
-    // эскалация. Единственный допустимый источник предлагаемого времени — slots.
-    let slots = rangesToSlots(ranges, date, DEFAULT_STEP_MIN, svcDurationMin);
-    // seance_length — как у get_parallel_slots: create_booking без него ловил 422
-    // на салонах с выключенной онлайн-записью.
-    if (svcDurationMin) {
-      slots = slots.map(s => ({ ...s, seance_length: svcDurationMin * 60 }));
-    }
-    const out = { slots, source: 'schedule' };
-    if (equipmentBusy) out.equipment_busy = true;   // часть окон срезана занятым аппаратом
-    return dropDisallowedStarts(out, date, nowMs);
+    return out;
   } catch (e) {
     return { error: `Не удалось получить слоты: ${e.message}` };
   }
