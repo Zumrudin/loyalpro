@@ -240,6 +240,65 @@ test('деградация после успешной записи → подт
   expect(d.escalate).not.toHaveBeenCalled();
 });
 
+// ── Серия сообщений: устаревший черновик не отправляется ──
+// Инцидент 2026-07-31: сообщение пришло в последние секунды прогона (после
+// stale-check оркестратора) → черновик отправлялся, а повторный прогон отвечал
+// на серию ещё раз — клиент получал два почти одинаковых ответа с приветствием.
+test('новое сообщение до отправки (без side-effect) → черновик выброшен, один общий ответ', async () => {
+  const d = deps();
+  let runs = 0;
+  d.orchestrator.runDialog = jest.fn(async () => {
+    runs += 1;
+    if (runs === 1) dispatcher.enqueue(1, 'k', meta, d);   // новое входящее во время 1-го прогона
+    return { replies: [`r${runs}`] };
+  });
+  dispatcher.enqueue(1, 'k', meta, d);
+  await jest.advanceTimersByTimeAsync(1000);
+  expect(d.orchestrator.runDialog).toHaveBeenCalledTimes(2);
+  // Черновик r1 не ушёл: клиент получил ровно один ответ — из повторного прогона.
+  expect(d.send).toHaveBeenCalledTimes(1);
+  expect(d.send).toHaveBeenCalledWith(meta, 'r2');
+});
+
+test('ход с side-effect (запись создана) НЕ выбрасывается даже при новом сообщении', async () => {
+  const d = deps();
+  let runs = 0;
+  d.orchestrator.runDialog = jest.fn(async () => {
+    runs += 1;
+    if (runs === 1) {
+      dispatcher.enqueue(1, 'k', meta, d);
+      return { replies: ['Записала вас на 20:00'], sideEffect: true };
+    }
+    return { replies: [`r${runs}`] };
+  });
+  dispatcher.enqueue(1, 'k', meta, d);
+  await jest.advanceTimersByTimeAsync(1000);
+  // Подтверждение реальной записи обязано дойти, потом ответ на новое сообщение.
+  expect(d.send).toHaveBeenCalledTimes(2);
+  expect(d.send).toHaveBeenNthCalledWith(1, meta, 'Записала вас на 20:00');
+  expect(d.send).toHaveBeenNthCalledWith(2, meta, 'r2');
+});
+
+test('успешно отправленная реплика запоминается в pending-replies (для транскрипта)', async () => {
+  const pending = require('./services/agent/pending-replies');
+  pending._reset();
+  const d = deps();
+  dispatcher.enqueue(1, 'k', meta, d);
+  await jest.advanceTimersByTimeAsync(1000);
+  expect(pending.peek(1, 'k').map(e => e.text)).toEqual(['Здравствуйте!']);
+});
+
+test('упавшая отправка НЕ запоминается в pending-replies', async () => {
+  const pending = require('./services/agent/pending-replies');
+  pending._reset();
+  const d = deps({
+    orchestrator: { runDialog: jest.fn(async () => ({ replies: ['ответ'] })) },
+    send: jest.fn(async () => { throw new Error('chatpush 500'); }),
+  });
+  await dispatcher.process(1, 'k', meta, d);
+  expect(pending.peek(1, 'k').map(e => e.text)).not.toContain('ответ');
+});
+
 // Гейт — предохранитель пилота (whitelist). Если он упал, мы НЕ знаем, можно ли
 // писать этому номеру → fail-closed: молчим, несмотря на инвариант «не молчать».
 test('гейт упал → страховочное сообщение НЕ шлём (fail-closed)', async () => {

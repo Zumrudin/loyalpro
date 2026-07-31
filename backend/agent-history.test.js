@@ -75,6 +75,53 @@ describe('loadTranscript', () => {
     expect(messages).toEqual([]);
     expect(watermark).toBe(0);
   });
+
+  // ── pending-replies: только что отправленные ответы до прихода эха ──
+  // Инцидент 2026-07-31: повторный прогон стартовал сразу после отправки ответа,
+  // эха ещё не было → модель видела серию клиента «без ответа» и отвечала заново.
+  describe('подмешивание pending-replies', () => {
+    const pending = require('./services/agent/pending-replies');
+    beforeEach(() => pending._reset());
+
+    test('свежеотправленный ответ виден в транскрипте до прихода эха', async () => {
+      db.any.mockResolvedValue([
+        { direction: 'incoming', msg_type: 'text', text: '5в1',         msg_ts: 200 },
+        { direction: 'incoming', msg_type: 'text', text: 'хочу ботокс', msg_ts: 100 },
+      ]);
+      pending.remember(1, 'k', 'Есть окошки в 20:00 и 20:30', 150_000);   // ts=150с
+      const { messages, watermark } = await history.loadTranscript(1, 'k', { nowMs: 160_000 });
+      expect(messages).toEqual([
+        { role: 'user', content: 'хочу ботокс' },
+        { role: 'assistant', content: 'Есть окошки в 20:00 и 20:30' },
+        { role: 'user', content: '5в1' },
+      ]);
+      expect(watermark).toBe(200);
+    });
+
+    test('эхо уже в БД → pending с тем же текстом не дублируется', async () => {
+      db.any.mockResolvedValue([
+        { direction: 'incoming', msg_type: 'text', text: 'ещё вопрос', msg_ts: 300 },
+        { direction: 'outgoing', msg_type: 'text', text: 'Ответ',      msg_ts: 150 },
+        { direction: 'incoming', msg_type: 'text', text: 'вопрос',     msg_ts: 100 },
+      ]);
+      pending.remember(1, 'k', 'Ответ', 150_000);
+      const { messages } = await history.loadTranscript(1, 'k', { nowMs: 160_000 });
+      expect(messages).toEqual([
+        { role: 'user', content: 'вопрос' },
+        { role: 'assistant', content: 'Ответ' },
+        { role: 'user', content: 'ещё вопрос' },
+      ]);
+    });
+
+    test('pending чужого диалога не подмешивается', async () => {
+      db.any.mockResolvedValue([
+        { direction: 'incoming', msg_type: 'text', text: 'вопрос', msg_ts: 100 },
+      ]);
+      pending.remember(1, 'другой-диалог', 'чужой ответ', 150_000);
+      const { messages } = await history.loadTranscript(1, 'k', { nowMs: 160_000 });
+      expect(messages).toEqual([{ role: 'user', content: 'вопрос' }]);
+    });
+  });
 });
 
 describe('hasIncomingAfter', () => {

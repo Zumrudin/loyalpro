@@ -1,6 +1,7 @@
 'use strict';
 
 const { db } = require('../../db');
+const pendingReplies = require('./pending-replies');
 
 // Ключ диалога в chatpush_messages — тот же, что во всём коде (routes/chat.js):
 // телефон, либо chat_id для каналов без телефона (Telegram/MAX).
@@ -21,6 +22,21 @@ async function loadTranscript(salonId, dialogKey, opts = {}) {
     [salonId, dialogKey, limit]);
 
   rows.reverse();   // из DESC (свежие сверху) → в хронологический порядок
+
+  // Только что отправленные ответы агента, чьё эхо ещё не легло в БД (Chatpush
+  // доставляет с задержкой; WhatsApp эхо не шлёт вовсе). Без них повторный прогон
+  // видит серию клиента «без ответа» и отвечает заново (инцидент 2026-07-31).
+  // Дедуп по тексту: если эхо уже в выборке — pending-копия не подмешивается.
+  const pending = pendingReplies.peek(salonId, dialogKey, opts.nowMs || Date.now());
+  if (pending.length) {
+    const echoed = new Set(rows.filter((r) => r.direction === 'outgoing').map((r) => r.text));
+    const extra = pending.filter((p) => !echoed.has(p.text))
+      .map((p) => ({ direction: 'outgoing', text: p.text, msg_ts: p.ts }));
+    if (extra.length) {
+      rows.push(...extra);
+      rows.sort((a, b) => Number(a.msg_ts) - Number(b.msg_ts));   // stable → равные ts не перемешиваются
+    }
+  }
 
   const messages = [];
   let watermark = 0;

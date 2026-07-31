@@ -5,6 +5,7 @@ const agentSettings = require('../agent-settings');
 const chatpush = require('../chatpush');
 const orchestratorDefault = require('./orchestrator');
 const bookingEvents = require('./booking');
+const pendingReplies = require('./pending-replies');
 const escalateTool = require('./tools/escalate-to-operator');
 const { createLogger } = require('../../logger');
 const logger = createLogger('AgentDispatcher');
@@ -49,7 +50,16 @@ async function process(salonId, dialogKey, meta, opts = {}) {
   const k = keyOf(salonId, dialogKey);
   const settings = opts.settings || agentSettings;
   const orchestrator = opts.orchestrator || orchestratorDefault;
-  const send = opts.send || defaultSend;
+  // Каждая успешно отправленная реплика запоминается в pending-replies: эхо
+  // Chatpush приходит с задержкой (или не приходит вовсе), и без этого повторный
+  // прогон не видит в транскрипте только что отправленный ответ — модель отвечает
+  // на серию заново, с повторным приветствием (инцидент 2026-07-31).
+  const rawSend = opts.send || defaultSend;
+  const send = async (m, text) => {
+    const out = await rawSend(m, text);
+    pendingReplies.remember(salonId, dialogKey, text);
+    return out;
+  };
   const escalate = opts.escalate || defaultEscalate;
   const priorBookingFailure = opts.priorBookingFailure || defaultPriorBookingFailure;
 
@@ -116,6 +126,14 @@ async function process(salonId, dialogKey, meta, opts = {}) {
         logger.warn(`dialog ${dialogKey}: ход без реплик (exhausted=${!!res.exhausted}) — страховочный ответ + эскалация`);
         await handOverSilently(salonId, dialogKey, meta, send, escalate,
           res.exhausted ? 'агент исчерпал лимит инструментов без ответа' : 'агент не сформировал ответ');
+      } else if (rerun.has(k) && !res.sideEffect) {
+        // Пока модель думала, клиент дописал сообщение (оно пришло уже после
+        // stale-check оркестратора) → черновик отвечает не на всю серию. Ход без
+        // побочных эффектов безопасно выбросить: rerun ниже соберёт ОДИН ответ на
+        // всё сразу. Иначе клиент получал два почти одинаковых ответа с повторным
+        // приветствием (инцидент 2026-07-31). Ходы с side-effect (запись создана)
+        // не выбрасываются — подтверждение обязано дойти.
+        logger.info(`dialog ${dialogKey}: новое сообщение до отправки — выбрасываю устаревший черновик, отвечу одним сообщением`);
       } else {
         for (const text of replies) await send(meta, text);
       }
