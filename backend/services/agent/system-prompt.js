@@ -6,7 +6,7 @@
 
 // Однострочная санитизация значений, попадающих в промпт извне (карточка клиента,
 // настройки в БД, вебхук) — общая с sequential-offers.js: правило одно на всех.
-const { sanitizeLine } = require('./sanitize');
+const { sanitizeLine, sanitizeName } = require('./sanitize');
 
 // Правило-переходник режима AGENT_CATALOG_IN_PROMPT: правила ниже по тексту
 // ссылаются на list_services (они выверены живыми тестами — не переписываем),
@@ -45,8 +45,10 @@ function buildSystemPrompt(opts = {}) {
   //   • phoneKnown && !clientName → канал прислал номер, но карточки нет: новый пациент.
   //   • ничего → канал без телефона (Telegram Bot/MAX): не знаем ни имени, ни номера.
   // Имя из карточки клиента задаёт сам клиент (регистрация в боте, WhatsApp) —
-  // единственное клиент-контролируемое значение в системном промпте, санитизация обязательна.
-  const clientName = sanitizeLine(opts.clientName, 60);
+  // единственное клиент-контролируемое значение в системном промпте: sanitizeName
+  // пропускает только «словесные» слова (инъекция и мусор вроде телефона → null,
+  // агент вежливо спросит имя по ветке «имени не знаем»).
+  const clientName = sanitizeName(opts.clientName);
   const phoneKnown = !!opts.phoneKnown;
   // Живые варианты get_sequential_slots этого диалога (рендер — sequential-offers,
   // подкладывает оркестратор). option_id модель видит только в результате
