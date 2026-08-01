@@ -26,13 +26,19 @@ const { ycGet, ycGetServiceCatalog, ycGetServiceMeta,
   ycGetClientCards, ycGetClientAbonements } = require('./services/yclients');
 
 // Хелпер: собрать возврат ycGetServiceCatalog. pairs = { svcId: [staffId,…] } →
-// достоверная карта услуга→мастера. prices = { svcId: { staffId: {price_min,price_max} } } →
-// цена per-staff (может отличаться между мастерами).
-const catalog = (priced, pairs = {}, prices = {}) => ({
+// достоверная карта услуга→мастера. Персональных цен здесь НЕТ: booking-каталог
+// отдаёт всем базовую цену услуги, персональные приходят из ycGetServiceMeta.
+const catalog = (priced, pairs = {}) => ({
   priced,
   categories: [],
   staffIdsByService: new Map(
     Object.entries(pairs).map(([k, v]) => [String(k), new Set(v.map(String))])),
+});
+// Хелпер: возврат ycGetServiceMeta. prices = { svcId: { staffId: {price_min,price_max} } } —
+// персональная цена мастера (ключ есть только у того, у кого своя цена).
+const meta = ({ prices = {}, durations = {} } = {}) => ({
+  resourceIdsByService: new Map(),
+  durationByService: new Map(Object.entries(durations).map(([k, v]) => [String(k), v])),
   staffPricesByService: new Map(
     Object.entries(prices).map(([k, perStaff]) =>
       [String(k), new Map(Object.entries(perStaff).map(([sid, p]) => [String(sid), p]))])),
@@ -65,7 +71,7 @@ beforeEach(() => {
     mode: 'all', denyServices: new Set(), allowServices: new Set(), denyPairs: new Set(),
   });
   settings.loadCategoryTreeSafe.mockResolvedValue({ subcats: [], placements: [] });
-  ycGetServiceMeta.mockResolvedValue({ durationByService: new Map(), resourceIdsByService: new Map() });
+  ycGetServiceMeta.mockResolvedValue(meta());
 });
 
 describe('search_knowledge_base', () => {
@@ -102,12 +108,12 @@ describe('list_services', () => {
     db.one.mockResolvedValue({ id: 1, yclients_company_id: 100 });
     ycGetServiceCatalog.mockResolvedValue(catalog(
       [
-        { id: 7, title: 'Ботулинотерапия', price_min: 5000, price_max: 8000, active: 1 },
+        { id: 7, title: 'Ботулинотерапия', price_min: 5000, price_max: 5000, active: 1 },
         { id: 11, title: 'Скрытая', price_min: 3000, price_max: 3000, active: 0 },   // active:0 без allow → выкинуть
       ],
-      { 7: [55, 66], 11: [55] },
-      // цена процедуры отличается между мастерами: Аня 5000, главврач Пери 8000
-      { 7: { 55: { price_min: 5000, price_max: 5000 }, 66: { price_min: 8000, price_max: 8000 } } }));
+      { 7: [55, 66], 11: [55] }));
+    // цена процедуры отличается между мастерами: у Ани базовая 5000, у главврача Пери своя 8000
+    ycGetServiceMeta.mockResolvedValue(meta({ prices: { 7: { 66: { price_min: 8000, price_max: 8000 } } } }));
     const out = await listServices.run(1, {});
     expect(out.services).toEqual([
       { yc_id: 7, title: 'Ботулинотерапия', duration_min: null, price_min: 5000, price_max: 8000, category_path: [], staff: [
@@ -203,9 +209,9 @@ describe('list_services', () => {
       .mockResolvedValueOnce([{ yclients_staff_id: 5, name: 'Аня' }, { yclients_staff_id: 6, name: 'Пери' }]);
     db.one.mockResolvedValue({ id: 1, yclients_company_id: 100 });
     ycGetServiceCatalog.mockResolvedValue(catalog(
-      [{ id: 7, title: 'Ноги полностью', price_min: 5000, price_max: 21000, active: 1 }],
-      { 7: [5, 6] },
-      { 7: { 5: { price_min: 5000, price_max: 5000 }, 6: { price_min: 21000, price_max: 21000 } } }));
+      [{ id: 7, title: 'Ноги полностью', price_min: 5000, price_max: 5000, active: 1 }],
+      { 7: [5, 6] }));
+    ycGetServiceMeta.mockResolvedValue(meta({ prices: { 7: { 6: { price_min: 21000, price_max: 21000 } } } }));
     settings.loadServiceFilterSafe.mockResolvedValue({
       mode: 'all', denyServices: new Set(), allowServices: new Set(), denyPairs: new Set(['7:6']),
     });
@@ -251,9 +257,10 @@ describe('get_service_masters', () => {
       .mockResolvedValueOnce([{ yclients_staff_id: 55, name: 'Аня' }, { yclients_staff_id: 66, name: 'Пери' }]); // staff_members
     db.one.mockResolvedValue({ id: 1, yclients_company_id: 100 });
     ycGetServiceCatalog.mockResolvedValue(catalog(
-      [{ id: 7, title: 'Ботулинотерапия', price_min: 5000, price_max: 8000, active: 1 }],
-      { 7: [55, 66] },
-      { 7: { 55: { price_min: 5000, price_max: 5000 }, 66: { price_min: 8000, price_max: 8000 } } }));
+      [{ id: 7, title: 'Ботулинотерапия', price_min: 5000, price_max: 5000, active: 1 }],
+      { 7: [55, 66] }));
+    // У главного врача своя цена, у обычного мастера ключа нет → базовая цена услуги.
+    ycGetServiceMeta.mockResolvedValue(meta({ prices: { 7: { 66: { price_min: 8000, price_max: 8000 } } } }));
     const out = await svcMasters.run(1, { service_yc_ids: [7, 999] });
     expect(out.services).toEqual([{
       yc_id: 7, title: 'Ботулинотерапия', duration_min: null,
@@ -285,8 +292,10 @@ describe('get_service_masters', () => {
         { id: 101, title: 'Услуга', price_min: 3000, price_max: 0, active: 1 },
         { id: 102, title: 'Услуга без цены', price_min: 0, price_max: 0, active: 1 },
       ],
-      { 101: [1, 2, 3], 102: [4] },
-      { 101: { 1: { price_min: 3000, price_max: 0 }, 2: { price_min: 5000, price_max: 8000 }, 3: { price_min: 1, price_max: 0 } } }));
+      { 101: [1, 2, 3], 102: [4] }));
+    ycGetServiceMeta.mockResolvedValue(meta({ prices: {
+      101: { 2: { price_min: 5000, price_max: 8000 }, 3: { price_min: 1, price_max: 1 } },
+    } }));
     const res = await svcMasters.run(1, { service_yc_ids: [101, 102] });
     const staff = res.services[0].staff;
     expect(staff[0].price_display).toBe('3000 ₽');
@@ -295,6 +304,57 @@ describe('get_service_masters', () => {
     expect(staff[2].price_display).toBe('инд.');
     // Совсем нет цены → пустая строка.
     expect(res.services[1].staff[0].price_display).toBe('');
+  });
+
+  // Инцидент 2026-08-01: на вопрос «сколько стоит комплекс 5в1 у Пери» Мила
+  // назвала 19 000 ₽ — базовую цену услуги. У главного врача она 23 000 ₽, и эта
+  // цена есть ТОЛЬКО в management-каталоге (ycGetServiceMeta).
+  test('персональная цена главного врача берётся из меты, а не базовая цена услуги', async () => {
+    db.any
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([
+        { yclients_staff_id: 5708379, name: 'Астемир Боташев' },
+        { yclients_staff_id: 1910274, name: 'Гаджиева Пери' },
+      ]);
+    db.one.mockResolvedValue({ id: 1, yclients_company_id: 100 });
+    ycGetServiceCatalog.mockResolvedValue(catalog(
+      [{ id: 15394018, title: '5в1Лоб+брови+межбровье+глаза+нос', price_min: 19000, price_max: 19000, active: 1 }],
+      { 15394018: [5708379, 1910274] }));
+    ycGetServiceMeta.mockResolvedValue(meta({ prices: {
+      15394018: { 1910274: { price_min: 23000, price_max: 23000 } },
+    } }));
+    const res = await svcMasters.run(1, { service_yc_ids: [15394018] });
+    expect(res.services[0].staff).toEqual([
+      { yc_id: 5708379, name: 'Астемир Боташев', price_min: 19000, price_max: 19000, price_display: '19000 ₽' },
+      { yc_id: 1910274, name: 'Гаджиева Пери', price_min: 23000, price_max: 23000, price_display: '23000 ₽' },
+    ]);
+  });
+
+  // Второй слой инцидента: пациент-мужчина. Мужской прайс — отдельные услуги
+  // «Муж. …», и подсказка должна прийти ровно в тот момент, когда модель берёт цену.
+  test('в направлении есть мужской прайс → men_price_list + подсказка', async () => {
+    db.any
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{ yclients_staff_id: 1910274, name: 'Гаджиева Пери' }]);
+    db.one.mockResolvedValue({ id: 1, yclients_company_id: 100 });
+    settings.loadCategoryTreeSafe.mockResolvedValue({ subcats: [], placements: [] });
+    ycGetServiceCatalog.mockResolvedValue({
+      priced: [
+        { id: 15394018, title: '5в1Лоб+брови+межбровье+глаза+нос', price_min: 19000, price_max: 19000, active: 1, category_id: 900 },
+        { id: 17987378, title: 'Муж. Комплекс 5в1 лоб+межбровье+глаза+нос', price_min: 24700, price_max: 24700, active: 1, category_id: 900 },
+      ],
+      categories: [{ id: 900, title: 'Ботулинотерапия' }],
+      staffIdsByService: new Map([['15394018', new Set(['1910274'])], ['17987378', new Set(['1910274'])]]),
+    });
+    const res = await svcMasters.run(1, { service_yc_ids: [15394018, 17987378] });
+    const [female, male] = res.services;
+    expect(female.men_price_list).toBe(true);
+    expect(female.hint).toMatch(/Муж\./);
+    expect(female.for_men).toBeUndefined();
+    // У самой мужской услуги — обратная пометка, чтобы её не назвали женщине.
+    expect(male.for_men).toBe(true);
+    expect(male.men_price_list).toBeUndefined();
+    expect(male.hint).toMatch(/мужск/i);
   });
 });
 

@@ -282,7 +282,7 @@ const hasAnyPrice = s => Number(s && s.price_min) > 0 || Number(s && s.price_max
 
 async function ycGetServiceCatalog(salon, staffIds = []) {
   const cid = salon && salon.yclients_company_id;
-  if (!cid) return { priced: [], categories: [], staffIdsByService: new Map(), staffPricesByService: new Map() };
+  if (!cid) return { priced: [], categories: [], staffIdsByService: new Map() };
 
   // Ключ включает набор мастеров: staffIdsByService строится ИЗ него, и запись,
   // положенная вызовом без мастеров, иначе отдавалась бы list_services как
@@ -300,25 +300,20 @@ async function ycGetServiceCatalog(salon, staffIds = []) {
   ]);
 
   const priced = (Array.isArray(catalog) ? catalog : []).filter(hasAnyPrice);
+  // ЦЕН МАСТЕРОВ ЗДЕСЬ НЕТ: в ответе /services/{cid}?staff_id={id} price_min/price_max —
+  // это БАЗОВАЯ цена услуги, одинаковая для всех мастеров; персональные цены
+  // booking-эндпоинт не отдаёт (проверено живьём 2026-08-01: у главного врача
+  // Пери «5в1» стоит 23 000 ₽, а здесь приходило 19 000 ₽ — Мила называла базовую).
+  // Персональные цены живут в management-каталоге → ycGetServiceMeta.
   const staffIdsByService = new Map();
-  // Достоверная цена per-staff: в ответе /services?staff_id={id} price_min/price_max
-  // относятся к цене этого мастера за услугу. staffPricesByService: svcIdStr →
-  // Map<staffIdStr, {price_min, price_max}>. Нужна, т.к. цена процедуры может
-  // отличаться между специалистами (врач vs. главный врач).
-  const staffPricesByService = new Map();
   for (const { id, services } of perStaff) {
     for (const s of services) {
       const k = String(s.id);
       if (!staffIdsByService.has(k)) staffIdsByService.set(k, new Set());
       staffIdsByService.get(k).add(String(id));
-      if (!staffPricesByService.has(k)) staffPricesByService.set(k, new Map());
-      staffPricesByService.get(k).set(String(id), {
-        price_min: Number(s.price_min) || 0,
-        price_max: Number(s.price_max) || 0,
-      });
     }
   }
-  const data = { priced, categories: Array.isArray(categories) ? categories : [], staffIdsByService, staffPricesByService };
+  const data = { priced, categories: Array.isArray(categories) ? categories : [], staffIdsByService };
   _svcCatalogCache[key] = { ts: Date.now(), data };
   return data;
 }
@@ -329,13 +324,40 @@ async function ycGetServiceCatalog(salon, staffIds = []) {
 // /company/{cid}/services/. Отдельная функция вместо «добавить пару полей в
 // каталог»: иначе карты молча заполнялись бы пустыми значениями и проверка
 // оборудования не проверяла бы ничего, выглядя рабочей.
-// Возвращает { resourceIdsByService: Map<svcIdStr,[resIdStr]>, durationByService: Map<svcIdStr,сек> }.
+// Здесь же — ПЕРСОНАЛЬНЫЕ ЦЕНЫ МАСТЕРОВ (staff[].price): это единственное место
+// в API, где они есть (booking-каталог отдаёт всем базовую цену услуги).
+// Возвращает { resourceIdsByService: Map<svcIdStr,[resIdStr]>, durationByService: Map<svcIdStr,сек>,
+//              staffPricesByService: Map<svcIdStr, Map<staffIdStr,{price_min,price_max}>> }.
 const _svcMetaCache = {};                    // salonId → { ts, data }
 const SVC_META_TTL = 10 * 60 * 1000;         // мета меняется редко
 
+// Чистый разбор management-каталога в карту персональных цен. В карту попадают
+// ТОЛЬКО реальные переопределения (staff[].price с положительным min) — у мастера
+// без своей цены действует базовая цена услуги, и подмешивать её сюда нельзя:
+// потребитель отличает «своя цена» от «по базовой» именно наличием ключа.
+function staffPricesFromServices(raw) {
+  const byService = new Map();
+  if (!Array.isArray(raw)) return byService;
+  for (const s of raw) {
+    for (const m of (Array.isArray(s && s.staff) ? s.staff : [])) {
+      const min = Number(m && m.price && m.price.min) || 0;
+      if (!min) continue;
+      // price.max часто не заполнен (null) — верхняя граница равна цене мастера,
+      // а НЕ price_max услуги: иначе персональная цена смешалась бы с базовой.
+      const max = Number(m.price.max) || min;
+      const k = String(s.id);
+      if (!byService.has(k)) byService.set(k, new Map());
+      byService.get(k).set(String(m.id), { price_min: min, price_max: max });
+    }
+  }
+  return byService;
+}
+
 async function ycGetServiceMeta(salon) {
   const cid = salon && salon.yclients_company_id;
-  const empty = { resourceIdsByService: new Map(), durationByService: new Map() };
+  const empty = {
+    resourceIdsByService: new Map(), durationByService: new Map(), staffPricesByService: new Map(),
+  };
   if (!cid) return empty;
 
   const cached = _svcMetaCache[salon.id];
@@ -350,7 +372,7 @@ async function ycGetServiceMeta(salon) {
     resourceIdsByService.set(String(s.id), (Array.isArray(s.resources) ? s.resources : []).map(String));
     durationByService.set(String(s.id), Number(s.duration) || 0);
   }
-  const data = { resourceIdsByService, durationByService };
+  const data = { resourceIdsByService, durationByService, staffPricesByService: staffPricesFromServices(raw) };
   _svcMetaCache[salon.id] = { ts: Date.now(), data };
   return data;
 }
@@ -369,5 +391,5 @@ module.exports = {
   parseCardTransactionsHtml, ycAccrueCard, ycListFinanceTransactions, ycSumServicePayments,
   ycWebSessions,
   getTreeCache, setTreeCache, clearTreeCache,
-  ycGetServiceCatalog, clearServiceCatalogCache, ycGetServiceMeta, hasAnyPrice,
+  ycGetServiceCatalog, clearServiceCatalogCache, ycGetServiceMeta, hasAnyPrice, staffPricesFromServices,
 };
