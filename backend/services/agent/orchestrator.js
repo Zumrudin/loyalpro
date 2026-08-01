@@ -9,6 +9,7 @@ const config = require('../../config');
 const catalogBlockDefault = require('./catalog-block');
 const seqOffers = require('./sequential-offers');
 const replyGuard = require('./reply-guard');
+const adminHours = require('./admin-hours');
 const { buildSystemPrompt } = require('./system-prompt');
 const { createLogger } = require('../../logger');
 const logger = createLogger('AgentOrchestrator');
@@ -210,6 +211,9 @@ async function runDialog(salonId, dialogKey, opts = {}) {
     workingHours: opts.workingHours,
     today: opts.today || todayMoscow(),
     now: opts.now || nowTimeMoscow(),
+    // Вне окна присутствия администратора фраза эскалации не обещает
+    // «с минуты на минуту» (аудит 2026-08-01: ночью это ложь).
+    adminOffHours: adminHours.isAdminOffHours(opts.now || nowTimeMoscow(), cfg.AGENT_ADMIN_HOURS),
     stopTopics: opts.stopTopics,   // загружает диспетчер (agent_stop_topics)
     // status здесь всегда !== 'escalated' (иначе вышли бы выше). Непустой
     // escalated_reason при статусе 'bot' = диалог вернул боту администратор →
