@@ -6,6 +6,7 @@ const svcFilter = require('../service-filter');
 const listServices = require('./list-services');
 const getSlots = require('./get-available-slots');
 const leadTime = require('../lead-time');
+const tpLimit = require('../third-party-limit');
 
 // Отказ YClients именно по времени старта («Выбранное время недоступно…»,
 // «мастер занят…»), а не по услуге/токену/клиенту. Только на нём есть смысл
@@ -56,6 +57,19 @@ async function run(salonId, input, ctx = {}) {
     };
   }
   const clientName = String((input && input.client_name) || ctx.clientName || '').trim() || undefined;
+  const nowMs = (ctx && ctx.nowMs) || Date.now();
+  // Анти-абьюз (аудит 2026-08-01): client_phone принимает произвольный номер
+  // («запись другого человека») — без лимита один диалог насоздаёт записей на
+  // чужие номера. Не больше LIMIT РАЗНЫХ посторонних номеров за сутки; повторная
+  // запись на уже записанный номер (цепочка услуг гостю) проходит всегда.
+  const thirdParty = tpLimit.isThirdParty(input && input.client_phone, ctx.clientPhone);
+  if (thirdParty && !tpLimit.allowed(salonId, ctx.dialogKey || clientPhone, clientPhone, nowMs)) {
+    return {
+      third_party_limit: true,
+      error: 'Оформить запись ещё на один новый номер из этого диалога сегодня нельзя. ' +
+        'Предложи, чтобы гость написал нам сам со своего номера, или переведи на администратора (escalate_to_operator).',
+    };
+  }
   const filter = await settings.loadServiceFilterSafe(salonId);
   if (!svcFilter.isBookable(filter, input.service_yc_id, input.staff_yc_id)) {
     return {
@@ -96,7 +110,7 @@ async function run(salonId, input, ctx = {}) {
   // раннее время сам, а модель — послушно передать его сюда. Детерминированный
   // отказ до похода в YClients; сообщение — корректирующее, модель предложит
   // допустимое время. Тот же guard срабатывает и внутри book_chain.
-  const v = leadTime.violation(leadTime.moscowNow((ctx && ctx.nowMs) || Date.now()), input.datetime);
+  const v = leadTime.violation(leadTime.moscowNow(nowMs), input.datetime);
   if (v) return { too_soon: true, error: leadTime.violationHint(v) };
   const res = await booking.createBookingRecord(salonId, {
     dialogKey: ctx.dialogKey || clientPhone,
@@ -108,6 +122,11 @@ async function run(salonId, input, ctx = {}) {
     clientName,
     comment: input.comment,
   });
+  // Лимит тратят только УСПЕШНЫЕ записи (и не дубли): неудачная попытка не должна
+  // блокировать честную переигровку с тем же гостем.
+  if (thirdParty && res && res.created === true && !res.duplicate) {
+    tpLimit.record(salonId, ctx.dialogKey || clientPhone, clientPhone, nowMs);
+  }
   return withFreshSlotsOnTimeFailure(salonId, input, ctx, res);
 }
 

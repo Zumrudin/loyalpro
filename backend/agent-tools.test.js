@@ -581,6 +581,63 @@ describe('create_booking', () => {
     expect(booking.createBookingRecord).not.toHaveBeenCalled();
   });
 
+  // Аудит 2026-08-01: произвольный client_phone («запись другого человека») — вектор
+  // злоупотребления: спам-записи на чужие номера. Лимит — по РАЗНЫМ посторонним
+  // номерам за сутки на диалог; цепочка услуг одному гостю лимит не съедает.
+  describe('лимит записей на чужие номера', () => {
+    const tpLimit = require('./services/agent/third-party-limit');
+    const svcOk = () => jest.spyOn(listServices, 'run').mockResolvedValue({
+      services: [{ yc_id: 15394152, title: 'Фото', staff: [{ yc_id: 5708379 }] }],
+    });
+    const CTX = { dialogKey: 'k', clientPhone: '79200255591',
+      nowMs: Date.parse('2026-08-01T12:00:00+03:00') };
+    const call = (phone) => createBooking.run(1,
+      { staff_yc_id: 5708379, service_yc_id: 15394152, datetime: '2026-08-03T12:00:00+03:00',
+        client_phone: phone, client_name: 'Гость' }, CTX);
+    beforeEach(() => tpLimit.reset());
+    afterEach(() => listServices.run.mockRestore());
+
+    test('сверх лимита разных чужих номеров → third_party_limit, YClients не вызывается', async () => {
+      svcOk();
+      booking.createBookingRecord.mockResolvedValue({ created: true, record_id: 1 });
+      for (let i = 0; i < tpLimit.LIMIT; i++) {
+        const out = await call(`7999555443${i}`);
+        expect(out.created).toBe(true);
+      }
+      booking.createBookingRecord.mockClear();
+      const out = await call('79995554439');
+      expect(out.third_party_limit).toBe(true);
+      expect(out.error).toMatch(/администратор/i);
+      expect(booking.createBookingRecord).not.toHaveBeenCalled();
+    });
+
+    test('повторные записи на тот же чужой номер (цепочка услуг) лимит не съедают', async () => {
+      svcOk();
+      booking.createBookingRecord.mockResolvedValue({ created: true, record_id: 2 });
+      for (let i = 0; i < tpLimit.LIMIT + 2; i++) {
+        const out = await call('79995554430');
+        expect(out.created).toBe(true);
+      }
+    });
+
+    test('свой номер (совпадает с ctx) не считается и не блокируется', async () => {
+      svcOk();
+      booking.createBookingRecord.mockResolvedValue({ created: true, record_id: 3 });
+      for (let i = 0; i < tpLimit.LIMIT; i++) tpLimit.record(1, 'k', `7999555443${i}`, CTX.nowMs);
+      const out = await call('79200255591'); // номер самого диалога
+      expect(out.created).toBe(true);
+    });
+
+    test('неуспешная запись лимит не тратит', async () => {
+      svcOk();
+      booking.createBookingRecord.mockResolvedValue({ created: false, error: 'ошибка' });
+      for (let i = 0; i < tpLimit.LIMIT + 2; i++) await call(`7999555443${i}`);
+      booking.createBookingRecord.mockResolvedValue({ created: true, record_id: 4 });
+      const out = await call('79995554439');
+      expect(out.created).toBe(true);
+    });
+  });
+
   // Регресс 2026-07-31 (диалог 79200255591): YClients отказал «Выбранное время
   // недоступно», и модель СОЧИНИЛА причину («окошко только что заняли») и
   // предложила время из УСТАРЕВШЕЙ выдачи, не перезапросив слоты. Теперь провал
