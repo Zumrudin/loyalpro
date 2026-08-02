@@ -1,11 +1,16 @@
 'use strict';
 // Разбор решения care-прохода Милы. LLM обязана вернуть строгий JSON:
-//   { "action": "send"|"skip"|"stop_program", "text"?: string,
+//   { "action": "send"|"skip"|"stop_program"|"escalate", "text"?: string,
 //     "status"?: "declined"|"completed", "reason": string }
 // Всё неразобранное/невалидное → fail-safe skip (НЕ отправка): молчание
 // безопаснее выдуманного сообщения пациенту.
+// escalate (2026-08-02, код-ревью Task 4): у care-прохода нет инструментов, а
+// касание Т+1 буквально спрашивает «как самочувствие» — по МЕД-ГРАНИЦАМ проекта
+// (CLAUDE.md) осложнение после процедуры требует немедленной передачи человеку,
+// а молчаливый skip никого не зовёт. text для escalate не нужен и игнорируется —
+// пациенту при эскалации ничего не пишет сама Мила, дальше пишет оператор.
 
-const ACTIONS = new Set(['send', 'skip', 'stop_program']);
+const ACTIONS = new Set(['send', 'skip', 'stop_program', 'escalate']);
 const STOP_STATUSES = new Set(['declined', 'completed']);
 
 // Единственное поле, которое реально уходит человеку. Зацикленная модель
@@ -57,6 +62,12 @@ function parseCareDecision(raw) {
       status: STOP_STATUSES.has(obj.status) ? obj.status : 'stopped',
       reason,
     };
+  }
+  // escalate не пишет пациенту — text не требуется и не разбирается, даже
+  // если модель его прислала (в отличие от send, где text — единственное
+  // поле, которое реально уходит человеку).
+  if (obj.action === 'escalate') {
+    return { action: 'escalate', reason };
   }
   return { action: 'skip', reason: reason || 'skip' };
 }

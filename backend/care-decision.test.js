@@ -20,7 +20,12 @@ describe('parseCareDecision', () => {
       .toMatchObject({ action: 'skip', failSafe: true });
   });
   test('неизвестный action → fail-safe skip', () => {
-    expect(parseCareDecision('{"action":"escalate","reason":"x"}'))
+    // Ревизия 2026-08-02: раньше здесь стоял action:"escalate" как пример
+    // НЕИЗВЕСТНОГО значения — с тех пор escalate стал настоящим действием
+    // (см. описание ACTIONS выше), поэтому фикстура заменена на заведомо
+    // выдуманное имя, чтобы тест продолжал проверять именно fail-safe на
+    // незнакомом action, а не поведение escalate.
+    expect(parseCareDecision('{"action":"reboot","reason":"x"}'))
       .toMatchObject({ action: 'skip', failSafe: true });
   });
   test('stop_program со статусом', () => {
@@ -30,6 +35,14 @@ describe('parseCareDecision', () => {
   test('stop_program с левым статусом → stopped', () => {
     const d = parseCareDecision('{"action":"stop_program","status":"banana","reason":"x"}');
     expect(d.status).toBe('stopped');
+  });
+  test('escalate с reason разбирается', () => {
+    const d = parseCareDecision('{"action":"escalate","reason":"жалоба на отёк после процедуры"}');
+    expect(d).toEqual({ action: 'escalate', reason: 'жалоба на отёк после процедуры' });
+  });
+  test('escalate без reason тоже валиден (reason пустой)', () => {
+    const d = parseCareDecision('{"action":"escalate"}');
+    expect(d).toEqual({ action: 'escalate', reason: '' });
   });
 });
 
