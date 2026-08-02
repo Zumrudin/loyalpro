@@ -1130,10 +1130,37 @@ git commit -m "feat(care): записи клиента для retention-пров
 > 4. Ответы пациента на касание обрабатывает ОСНОВНОЙ агент Милы (обычный
 >    вебхук-путь с мед-границами), НЕ care-проход.
 
+> **РЕВИЗИЯ (Task 9 выполнен, 2026-08-02) — код ниже синхронизирован с фактической
+> реализацией.** Отклонения от исходного эталона:
+> 1. Статусы в `markSend`/`stopEnrollment`/catch вшиты в SQL литералами из
+>    whitelisted `Set`'ов (никогда не клиент-контролируемы). Исходный эталон слал
+>    их `$`-параметрами — и был внутренне противоречив: его же тесты ищут
+>    `'skipped'`/`'completed'`/… в ТЕКСТЕ SQL и с параметрами не проходили.
+> 2. Добавлена ветка `decision.action === 'escalate'` + инжектируемая
+>    `deps.escalateDialog(salonId, phone, reason)`; дефолт — тот же механизм, что
+>    `escalate-to-operator.js` (`agent_dialogs.status='escalated'` + agent_events
+>    + `chat-events.emitAgentStatus`), но через UPSERT `ON CONFLICT (salon_id,
+>    dialog_key)`: у клиента, никогда не писавшего агенту, строки agent_dialogs
+>    ещё нет, а оператора позвать всё равно надо. Порядок сознательный:
+>    escalateDialog → enrollment `'escalated'` (+отмена его scheduled-касаний) →
+>    строка `'skipped'` с reason `Мила: эскалация — <reason>`; если escalateDialog
+>    упал, общий catch вернёт строку на ретрай и эскалация повторится, а не
+>    потеряется с уже-skipped строкой.
+> 3. Тестов 11, а не 9: +2 обязательных escalate-теста (полный путь и
+>    «сообщение пациенту не отправляется»).
+> 4. Фактические сигнатуры живых deps сверены (chatpush.sendMessage(instanceToken,
+>    {text,phone,dispatchRouting}), history.loadTranscript → {messages,watermark}
+>    с content-строками, getProvider().createMessage({system,messages},opts) →
+>    {text,…}, pendingReplies.remember, reply-guard, emitAgentStatus) — эталон им
+>    соответствовал, defaultDeps не менялись.
+
 - [ ] **Step 1: Падающие тесты (моки всех deps)**
 
 ```js
 'use strict';
+// Юнит-тесты воркера «Отдела заботы»: все внешние зависимости замоканы через
+// DI (deps), БД/сеть не трогаются. Проверки статусов идут по подстрокам SQL
+// в вызовах db.query — тот же стиль, что notification-воркер.
 const worker = require('./services/care/worker');
 
 // Общий конструктор моков: happy-path, отдельные тесты переопределяют куски.
@@ -1161,6 +1188,7 @@ function makeDeps(over = {}) {
       lastIncomingChannel: jest.fn(async () => 'telegram'),
       rememberPending: jest.fn(),
       persistWhatsapp: jest.fn(async () => {}),
+      escalateDialog: jest.fn(async () => {}),
       log: { info: () => {}, warn: () => {}, error: () => {} },
       ...over,
     },
@@ -1243,6 +1271,35 @@ describe('care worker processOne', () => {
     const backToScheduled = deps.db.query.mock.calls.find(c => c[0].includes(`'scheduled'`) || c[0].includes(`'failed'`));
     expect(backToScheduled).toBeTruthy();
   });
+
+  // ── escalate: осложнение в переписке (ревизия Task 4, ОБЯЗАТЕЛЬНО) ──
+  test('LLM escalate → полный путь: диалог на оператора, enrollment escalated, строка skipped', async () => {
+    const { deps } = makeDeps({
+      createMessage: jest.fn(async () => ({ text: '{"action":"escalate","reason":"жалоба на отёк"}' })),
+    });
+    await worker.processOne(row, deps);
+    // Диалог передан оператору тем же механизмом, что escalate_to_operator.
+    expect(deps.escalateDialog).toHaveBeenCalledWith(5, '79200255591', 'жалоба на отёк');
+    // Enrollment помечен escalated, его scheduled-касания отменены.
+    const escalated = deps.db.query.mock.calls.find(c => c[0].includes(`'escalated'`));
+    expect(escalated).toBeTruthy();
+    const cancelled = deps.db.query.mock.calls.find(c => c[0].includes(`'cancelled'`));
+    expect(cancelled).toBeTruthy();
+    // Строка отправки — skipped с внятной причиной.
+    const skipped = deps.db.query.mock.calls.find(c => c[0].includes(`'skipped'`));
+    expect(skipped).toBeTruthy();
+    expect(skipped[1]).toEqual(expect.arrayContaining(['Мила: эскалация — жалоба на отёк']));
+  });
+  test('LLM escalate при осложнении → сообщение пациенту НЕ отправляется', async () => {
+    const { deps } = makeDeps({
+      createMessage: jest.fn(async () => ({ text: '{"action":"escalate","reason":"покраснение после процедуры"}' })),
+    });
+    await worker.processOne(row, deps);
+    expect(deps.sendMessage).not.toHaveBeenCalled();
+    expect(deps.rememberPending).not.toHaveBeenCalled();
+    const sent = deps.db.query.mock.calls.find(c => c[0].includes(`'sent'`));
+    expect(sent).toBeFalsy();
+  });
 });
 ```
 
@@ -1256,6 +1313,11 @@ describe('care worker processOne', () => {
 // (FOR UPDATE SKIP LOCKED + attempts при аренде), затем на каждую строку:
 // детерминированные проверки → care-проход LLM → отправка → персист.
 // Все внешние зависимости инжектируются (юнит-тесты без БД/сети).
+//
+// Ответы пациента на касание обрабатывает ОСНОВНОЙ агент Милы (обычный
+// вебхук-путь со всеми мед-границами) — воркер в это не вмешивается;
+// rememberPending лишь подмешивает отправленное касание в транскрипт
+// основного агента до прихода эха Chatpush.
 
 const config = require('../../config');
 const { db: realDb } = require('../../db');
@@ -1266,6 +1328,7 @@ const history = require('../agent/history');
 const pendingReplies = require('../agent/pending-replies');
 const replyGuard = require('../agent/reply-guard');
 const notifications = require('../notifications');
+const chatEvents = require('../chat-events');
 const context = require('./context');
 const { buildCarePrompt } = require('./care-prompt');
 const { parseCareDecision } = require('./decision');
@@ -1313,21 +1376,46 @@ const defaultDeps = {
   sendMessage: (payload) => chatpush.sendMessage(config.CHATPUSH.instanceToken, payload),
   lastIncomingChannel: notifications.lastIncomingChannel,
   rememberPending: (salonId, key, text) => pendingReplies.remember(salonId, key, text),
+  // Тот же механизм, что services/agent/tools/escalate-to-operator.js:
+  // status='escalated' + emitAgentStatus (красный чат сверху списка немедленно).
+  // Upsert, а не UPDATE: клиент мог никогда не писать агенту — строки
+  // agent_dialogs у него ещё нет, а оператора позвать всё равно надо.
+  escalateDialog: async (salonId, phone, reason) => {
+    await realDb.query(
+      `INSERT INTO agent_dialogs (salon_id, dialog_key, status, escalated_reason)
+       VALUES ($1,$2,'escalated',$3)
+       ON CONFLICT (salon_id, dialog_key) DO UPDATE
+         SET status='escalated', escalated_reason=$3, updated_at=now()`,
+      [salonId, phone, reason]);
+    await realDb.query(
+      `INSERT INTO agent_events (salon_id, dialog_key, kind, tool_name, payload)
+       VALUES ($1,$2,'escalated','care_worker',$3)`,
+      [salonId, phone, JSON.stringify({ reason })]);
+    chatEvents.emitAgentStatus(salonId, phone, 'escalated', reason);
+  },
   persistWhatsapp: async () => {},   // подключается в Task 10
   log,
 };
 
+// Статусы вшиваются в SQL литералами (а не $-параметрами) сознательно:
+// значения приходят ТОЛЬКО из этих двух Set'ов (никогда от клиента), а
+// журнал/тесты/grep по логам ищут статус прямо в тексте запроса.
+const SEND_STATUSES = new Set(['scheduled', 'sent', 'skipped', 'cancelled', 'failed']);
+const ENROLLMENT_STATUSES = new Set(['active', 'completed', 'declined', 'escalated', 'superseded', 'stopped']);
+
 async function markSend(db, id, status, reason) {
+  if (!SEND_STATUSES.has(status)) throw new Error(`bad send status: ${status}`);
   await db.query(
-    `UPDATE care_touch_sends SET status=$2, decision_reason=$3 WHERE id=$1`,
-    [id, status, reason || null]);
+    `UPDATE care_touch_sends SET status='${status}', decision_reason=$2 WHERE id=$1`,
+    [id, reason || null]);
 }
 
 async function stopEnrollment(db, enrollmentId, status, reason) {
+  if (!ENROLLMENT_STATUSES.has(status)) throw new Error(`bad enrollment status: ${status}`);
   await db.query(
-    `UPDATE care_enrollments SET status=$2, status_reason=$3, updated_at=NOW()
+    `UPDATE care_enrollments SET status='${status}', status_reason=$2, updated_at=NOW()
       WHERE id=$1 AND status='active'`,
-    [enrollmentId, status, reason || null]);
+    [enrollmentId, reason || null]);
   await db.query(
     `UPDATE care_touch_sends SET status='cancelled', decision_reason=$2
       WHERE enrollment_id=$1 AND status='scheduled'`,
@@ -1392,7 +1480,7 @@ async function processOne(row, deps = defaultDeps) {
     let records = { completedAfter: [], future: [] };
     try { records = await d.loadClientRecords(sid, row.phone, anchorMs, Date.now()); }
     catch (e) { d.log.warn(`send #${row.id}: записи YClients недоступны (${e.message}) — контекст без них`); }
-    // catMap — та же fail-open логика: пустая карта molча не матчит условия
+    // catMap — та же fail-open логика: пустая карта молча не матчит условия
     // ПО КАТЕГОРИИ (условия по staff/service всё равно сработают) — но это
     // надо видеть в логах, иначе разбор инцидента «программа не завершилась
     // по категории» упрётся в «неизвестно, что вернул getCatMap».
@@ -1429,6 +1517,16 @@ async function processOne(row, deps = defaultDeps) {
       { maxTokens: 700 });
     const decision = parseCareDecision(resp && resp.text);
 
+    if (decision.action === 'escalate') {
+      // Осложнение в переписке: касание НЕ отправляем, к пациенту как можно
+      // скорее подключается человек. Порядок сознательный: сначала перевод
+      // диалога на оператора — если он упадёт, общий catch вернёт строку на
+      // ретрай и эскалация будет повторена (а не потеряна с уже-skipped строкой).
+      const why = decision.reason || 'осложнение в переписке';
+      await d.escalateDialog(sid, row.phone, why);
+      await stopEnrollment(db, row.enrollment_id, 'escalated', why);
+      return markSend(db, row.id, 'skipped', `Мила: эскалация — ${why}`);
+    }
     if (decision.action === 'stop_program') {
       await stopEnrollment(db, row.enrollment_id, decision.status, decision.reason);
       return markSend(db, row.id, 'cancelled', `Мила: ${decision.reason}`);
@@ -1469,8 +1567,8 @@ async function processOne(row, deps = defaultDeps) {
   } catch (e) {
     const final = row.attempts >= MAX_ATTEMPTS;
     await d.db.query(
-      `UPDATE care_touch_sends SET status=$2, error=$3 WHERE id=$1`,
-      [row.id, final ? 'failed' : 'scheduled', String(e.message || e).slice(0, 500)]
+      `UPDATE care_touch_sends SET status='${final ? 'failed' : 'scheduled'}', error=$2 WHERE id=$1`,
+      [row.id, String(e.message || e).slice(0, 500)]
     ).catch(() => {});
     d.log.warn(`send #${row.id} attempt ${row.attempts}/${MAX_ATTEMPTS} failed: ${e.message}`);
   }
@@ -1529,7 +1627,7 @@ module.exports = { processOne, processTick, startCareWorker, defaultDeps };
 - `row.program_conditions` приходит как объект (jsonb) — прокидывать как есть.
 - Гейт `isAllowed` бросил → общий catch: строка уйдёт на ретрай, а после 3 попыток `failed` — fail-closed, отправки не будет.
 
-- [ ] **Step 4: Run** `cd backend && npx jest care-worker` → PASS (9 тестов)
+- [ ] **Step 4: Run** `cd backend && npx jest care-worker` → PASS (11 тестов)
 
 - [ ] **Step 5: Commit**
 
