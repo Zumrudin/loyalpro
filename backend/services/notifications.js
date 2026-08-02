@@ -282,5 +282,8 @@ module.exports = {
   renderTemplate,
   resolveRouting,
   splitVisitDatetime,
+  // переиспользуются «Отделом заботы»
+  getServiceCategoryMap,
+  lastIncomingChannel,
   _lastIncomingChannel: lastIncomingChannel,
 };
