@@ -1010,21 +1010,35 @@ const { db } = require('../../db');
 const identity = require('../agent/identity');
 const { ycGetClientRecords } = require('../yclients-records');
 const { evaluateRule } = require('../notifications');
+const { parseVisitAt } = require('./schedule');
 
 function moscowDate(ms) {
   return new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Moscow' }).format(new Date(ms));
 }
 
-/** Чистая: делит записи на состоявшиеся-после-якоря и будущие. */
+/**
+ * Чистая: делит записи на состоявшиеся-после-якоря и будущие.
+ * Дата парсится через parseVisitAt (якорь +03:00, без опоры на TZ процесса) —
+ * Date.parse() на «голой» строке YClients ('2026-08-20 14:00:00', без зоны)
+ * взял бы TZ процесса; в не-московской TZ якорный визит перестал бы совпадать
+ * с anchorMs и ложно засчитался бы как повторный (hasMatchingRepeatVisit=true
+ * на самом якоре → программа молча завершается как «цель достигнута»).
+ */
 function splitRecords(recs, anchorMs, nowMs) {
   const completedAfter = [];
   const future = [];
   for (const r of (recs || [])) {
     if (r.deleted) continue;
-    const t = Date.parse(r.datetime || r.date || '');
-    if (!Number.isFinite(t)) continue;
+    const d = parseVisitAt(r.datetime || r.date);
+    if (!d) continue;
+    const t = d.getTime();
     const att = Number(r.attendance);
     if (att === 1 && t > anchorMs) completedAfter.push(r);
+    // att===0 (ожидание отметки) и att===2 (подтверждено, но исход визита ещё
+    // не проставлен салоном) в прошлом сознательно не попадают никуда: не
+    // completedAfter (нет подтверждения, что визит состоялся) и не future
+    // (дата уже прошла) — засчитать их как состоявшиеся значило бы ложно
+    // завершать программу по визитам, о которых YClients ничего не сказал.
     if (att !== -1 && t >= nowMs) future.push(r);
   }
   return { completedAfter, future };
@@ -1044,7 +1058,13 @@ function hasMatchingRepeatVisit(completedAfter, conditions, catMap) {
   });
 }
 
-/** Живая загрузка: null при недоступности YClients (воркер решает, что делать). */
+/**
+ * Живая загрузка. THROWS при сбое YClients (ycGetClientRecords не оборачивается
+ * в try/catch здесь) — вызывающий обязан ловить и решать сам (см. Task 9: fail-open,
+ * warn + слать касание без retention-проверки). Пустые списки возвращаются только
+ * когда клиент не резолвится в YClients (нет client_id) или салон не подключён
+ * (нет yclients_company_id) — это не сбой, а отсутствие данных.
+ */
 async function loadClientRecords(salonId, phone, anchorMs, nowMs) {
   const ycClientId = await identity.resolveYclientsClientId(salonId, phone);
   if (!ycClientId) return { completedAfter: [], future: [] };
@@ -1060,6 +1080,21 @@ module.exports = { splitRecords, hasMatchingRepeatVisit, loadClientRecords };
 ```
 
 Примечание: у `ycGetClientRecords` посмотреть реальную сигнатуру в `backend/services/yclients-records.js` — использовать так же, как `tools/list-client-bookings.js:39`. Формат `datetime` в ответе YClients — с таймзоной; если поле «голое» (`YYYY-MM-DD HH:MM:SS`), парсить через `parseVisitAt` из Task 2 — проверить на живом ответе в Task 13 (e2e).
+
+> **РЕВИЗИЯ (код-ревью после первой реализации, 2026-08-02):** первая версия
+> парсила `datetime` через `Date.parse()` напрямую — на «голой» строке YClients
+> без TZ-суффикса это берёт TZ процесса, а не московскую. В не-московской TZ
+> якорная запись сама переставала совпадать с `anchorMs` и ложно засчитывалась
+> как повторный визит → `hasMatchingRepeatVisit=true` на самом якоре →
+> программа молча завершалась как «цель достигнута», все запланированные
+> касания отменялись. Фикс: парсинг через `parseVisitAt` из `./schedule`
+> (якорит +03:00 детерминированно, без опоры на TZ процесса) — конвенция всех
+> care-модулей. Заодно уточнён контракт `loadClientRecords`: функция **throws**
+> при сбое живого запроса YClients (не ловит ошибку сама и не возвращает
+> пустые списки как признак сбоя) — пустые списки означают только «клиент не
+> резолвится» или «салон не подключён к YClients», это осознанное отсутствие
+> данных, а не ошибка. Вызывающий (Task 9) обязан сам ловить throw и решать,
+> что делать при недоступности YClients.
 
 - [ ] **Step 4: Run** `cd backend && npx jest care-context` → PASS
 
@@ -1342,11 +1377,29 @@ async function processOne(row, deps = defaultDeps) {
     }
 
     // Повторный визит по условиям программы после якоря → цель достигнута.
+    //
+    // РЕШЕНИЕ «YClients недоступен → fail-open» (обоснование, ревизия
+    // код-ревью 2026-08-02): loadClientRecords THROWS при живом сбое
+    // (см. контракт в context.js). Ловим здесь и продолжаем БЕЗ
+    // retention-проверки (records остаётся пустым), а не блокируем отправку
+    // касания — перманентный сбой YClients (аналог инцидента 2026-08-02 с
+    // архивацией категорий каталога при устойчивых 429) не должен молча
+    // остановить все care-касания навсегда. Цена fail-open — одно лишнее
+    // касание в редком совпадении «сбой YClients именно на этой строке» +
+    // «клиент как раз был на повторном визите»: воркер зайдёт снова на
+    // следующем тике и остановит цепочку с опозданием, а не потеряет её.
     const anchorMs = row.visit_at ? new Date(row.visit_at).getTime() : Date.now();
     let records = { completedAfter: [], future: [] };
     try { records = await d.loadClientRecords(sid, row.phone, anchorMs, Date.now()); }
     catch (e) { d.log.warn(`send #${row.id}: записи YClients недоступны (${e.message}) — контекст без них`); }
-    const catMap = await d.getCatMap(sid).catch(() => new Map());
+    // catMap — та же fail-open логика: пустая карта molча не матчит условия
+    // ПО КАТЕГОРИИ (условия по staff/service всё равно сработают) — но это
+    // надо видеть в логах, иначе разбор инцидента «программа не завершилась
+    // по категории» упрётся в «неизвестно, что вернул getCatMap».
+    const catMap = await d.getCatMap(sid).catch(e => {
+      d.log.warn(`send #${row.id}: карта категорий недоступна (${e.message}) — условия по категории не сматчатся`);
+      return new Map();
+    });
     if (context.hasMatchingRepeatVisit(records.completedAfter, row.program_conditions, catMap)) {
       await stopEnrollment(db, row.enrollment_id, 'completed', 'клиент уже был на повторном визите');
       return markSend(db, row.id, 'cancelled', 'повторный визит состоялся');

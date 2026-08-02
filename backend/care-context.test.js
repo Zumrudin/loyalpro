@@ -34,4 +34,44 @@ describe('hasMatchingRepeatVisit', () => {
     const { completedAfter } = splitRecords(recs, anchorMs, nowMs);
     expect(hasMatchingRepeatVisit(completedAfter, { logic: 'and', items: [] }, catMap)).toBe(true);
   });
+
+  test('staff-условие матчится и через staff_id, и через r.staff.id', () => {
+    const conditions = { logic: 'and', items: [{ type: 'staff', ids: [5] }] };
+    const viaStaffId = [{ id: 90, datetime: '2026-08-06T12:00:00+03:00', attendance: 1, services: [], staff_id: 5 }];
+    const viaStaffObj = [{ id: 91, datetime: '2026-08-06T12:00:00+03:00', attendance: 1, services: [], staff: { id: 5 } }];
+    expect(hasMatchingRepeatVisit(viaStaffId, conditions, catMap)).toBe(true);
+    expect(hasMatchingRepeatVisit(viaStaffObj, conditions, catMap)).toBe(true);
+  });
+});
+
+describe('splitRecords — граничные случаи', () => {
+  test('deleted:true отбрасывается целиком (ни completedAfter, ни future)', () => {
+    const deletedRec = [{ id: 100, datetime: '2026-08-06T12:00:00+03:00', attendance: 1, deleted: true, services: [] }];
+    const { completedAfter, future } = splitRecords(deletedRec, anchorMs, nowMs);
+    expect(completedAfter).toEqual([]);
+    expect(future).toEqual([]);
+  });
+
+  test('битая дата отбрасывается', () => {
+    const brokenRec = [{ id: 101, datetime: 'не дата', attendance: 1, services: [] }];
+    const { completedAfter, future } = splitRecords(brokenRec, anchorMs, nowMs);
+    expect(completedAfter).toEqual([]);
+    expect(future).toEqual([]);
+  });
+
+  test('att=2 (подтверждено, исход не проставлен) в прошлом не попадает никуда', () => {
+    const confirmedPastRec = [{ id: 102, datetime: '2026-08-06T12:00:00+03:00', attendance: 2, services: [] }];
+    const { completedAfter, future } = splitRecords(confirmedPastRec, anchorMs, nowMs);
+    expect(completedAfter).toEqual([]);
+    expect(future).toEqual([]);
+  });
+
+  test('«голая» строка datetime (без TZ) интерпретируется как московская — тот же результат, что и с явным +03:00', () => {
+    const bare = [{ id: 103, datetime: '2026-08-06 12:00:00', attendance: 1, services: [] }];
+    const withTz = [{ id: 103, datetime: '2026-08-06T12:00:00+03:00', attendance: 1, services: [] }];
+    const bareResult = splitRecords(bare, anchorMs, nowMs);
+    const tzResult = splitRecords(withTz, anchorMs, nowMs);
+    expect(bareResult.completedAfter.map(r => r.id)).toEqual(tzResult.completedAfter.map(r => r.id));
+    expect(bareResult.future.map(r => r.id)).toEqual(tzResult.future.map(r => r.id));
+  });
 });
