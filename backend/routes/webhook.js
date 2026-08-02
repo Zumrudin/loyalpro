@@ -3,6 +3,7 @@ const crypto = require('crypto');
 const { db } = require('../db');
 const { getLoyaltySettings, processRecordEvent, processFinancesOperation } = require('../services/loyalty');
 const { handleRecordCreated } = require('../services/notifications');
+const care = require('../services/care/enroll');
 const { buildClientFio } = require('../utils/client-name');
 const { createLogger } = require('../logger');
 const logger = createLogger('Webhook');
@@ -79,6 +80,10 @@ router.post('/webhook.v2/:companyId', async (req, res) => {
         await handleRecordCreated(salon, payload).catch(e =>
           logger.error(`notifications: ${e.message}`));
       }
+      // «Отдел заботы»: визит состоялся → зачисление в программы.
+      // Свой catch — сбой заботы не должен ломать начисления.
+      await care.handleRecordEvent(salon, payload).catch(e =>
+        logger.error(`care enroll: ${e.message}`));
     }
 
     if (resourceType === 'client' && payload.data) {
