@@ -239,6 +239,17 @@ git commit -m "feat(care): расчёт scheduled_at касаний (мск, sen
 - Create: `backend/services/care/decision.js`
 - Test: `backend/care-decision.test.js`
 
+> **Ревизия (2026-08-02, код-ревью после первой реализации):** исходный эталон
+> Step 3 был небезопасен для собственного принципа fail-safe. `String(obj.text || '')`
+> коэрсит ЛЮБОЕ truthy-значение в правдоподобную строку: `text: ["Добрый день!","ещё"]`
+> → `"Добрый день!,ещё"` (не отличить от настоящего сообщения в логах), `text: 42` →
+> `"42"`, `text: true` → `"true"` — всё это уходило бы пациенту как `action:"send"`
+> вместо ожидаемого skip. Плюс не было ни лимита длины `text` (единственное поле,
+> которое реально уходит человеку — а `reason` лимит имел), ни очистки от
+> control/bidi-символов (спуфинг вида RTL-override, отрисовывающий «50%» как «05%»).
+> Ниже — исправленная версия Step 1/Step 3; структура возврата и имена экспортов не
+> менялись.
+
 - [ ] **Step 1: Падающие тесты**
 
 ```js
@@ -276,6 +287,51 @@ describe('parseCareDecision', () => {
     expect(d.status).toBe('stopped');
   });
 });
+
+describe('parseCareDecision — fail-safe на нестроковом/длинном/bidi тексте', () => {
+  test('text — объект → fail-safe skip', () => {
+    const d = parseCareDecision('{"action":"send","text":{"a":1},"reason":"x"}');
+    expect(d).toMatchObject({ action: 'skip', failSafe: true });
+  });
+  test('text — массив строк → fail-safe skip (правдоподобный текст опаснее объекта)', () => {
+    const d = parseCareDecision('{"action":"send","text":["Добрый день!","ещё"],"reason":"x"}');
+    expect(d).toMatchObject({ action: 'skip', failSafe: true });
+  });
+  test('text — число → fail-safe skip', () => {
+    const d = parseCareDecision('{"action":"send","text":42,"reason":"x"}');
+    expect(d).toMatchObject({ action: 'skip', failSafe: true });
+  });
+  test('text длиной 2000 символов → fail-safe skip, НЕ обрезанная отправка', () => {
+    const longText = 'а'.repeat(2000);
+    const d = parseCareDecision(JSON.stringify({ action: 'send', text: longText, reason: 'x' }));
+    expect(d).toMatchObject({ action: 'skip', failSafe: true, reason: 'llm_text_too_long' });
+  });
+  test('text с U+202E (bidi-override, спуфинг «50%»→«05%») → символ вырезан из результата', () => {
+    const d = parseCareDecision(JSON.stringify({ action: 'send', text: 'Скидка 50\u202E%', reason: 'x' }));
+    expect(d.action).toBe('send');
+    expect(d.text).not.toMatch(/\u202E/);
+    expect(d.text).toBe('Скидка 50%');
+  });
+  test('reason не-строка при валидном send → отправка проходит, reason пустой', () => {
+    const d = parseCareDecision('{"action":"send","text":"ok","reason":123}');
+    expect(d).toEqual({ action: 'send', text: 'ok', reason: '' });
+  });
+  test('raw не строка (null/undefined/объект/массив) → fail-safe skip, не throw', () => {
+    expect(parseCareDecision(null)).toMatchObject({ action: 'skip', failSafe: true });
+    expect(parseCareDecision(undefined)).toMatchObject({ action: 'skip', failSafe: true });
+    expect(parseCareDecision({ action: 'send', text: 'x' })).toMatchObject({ action: 'skip', failSafe: true });
+    expect(parseCareDecision(['a', 'b'])).toMatchObject({ action: 'skip', failSafe: true });
+  });
+  test('честный skip → без флага failSafe, reason дословно', () => {
+    const d = parseCareDecision('{"action":"skip","reason":"клиент попросил не писать сегодня"}');
+    expect(d).toEqual({ action: 'skip', reason: 'клиент попросил не писать сегодня' });
+    expect(d.failSafe).toBeUndefined();
+  });
+  test('несколько JSON-объектов в ответе → fail-safe skip', () => {
+    const d = parseCareDecision('{"action":"skip","reason":"draft"} {"action":"send","text":"real","reason":"x"}');
+    expect(d).toMatchObject({ action: 'skip', failSafe: true });
+  });
+});
 ```
 
 - [ ] **Step 2: Run** `cd backend && npx jest care-decision` → FAIL (module not found)
@@ -293,18 +349,47 @@ describe('parseCareDecision', () => {
 const ACTIONS = new Set(['send', 'skip', 'stop_program']);
 const STOP_STATUSES = new Set(['declined', 'completed']);
 
+// Единственное поле, которое реально уходит человеку. Зацикленная модель
+// (в проекте уже были такие инциденты) может прогнать тысячи символов до
+// API мессенджера — режем жёстко fail-safe'ом, а не обрезкой на полуслове:
+// оборванное сообщение пациенту хуже молчания.
+const TEXT_MAX = 1500;
+
+// Bidi-override/isolate (U+202A–U+202E, U+2066–U+2069) — известный приём
+// спуфинга текста (напр. RTL-override отрисовывает «50%» как «05%»);
+// C0/C1-контролы (кроме \n) — бинарный мусор в сообщении пациенту. Чистим
+// здесь, а не полагаемся на reply-guard: reply-guard линтует СОДЕРЖАНИЕ
+// (утечку id/внутренней кухни), а не класс символов.
+const UNSAFE_CHARS_RE = /[\x00-\x09\x0B\x0C\x0E-\x1F\x80-\x9F\u202A-\u202E\u2066-\u2069]/g;
+
 function failSafe(code) { return { action: 'skip', reason: code, failSafe: true }; }
 
 function parseCareDecision(raw) {
+  // Жадный regex + строгий JSON.parse — сознательный размен: несколько
+  // JSON-блобов в одном ответе склеятся в невалидный JSON и провалятся в
+  // llm_bad_json (skip), а не в случайно выбранный из них.
   const m = String(raw || '').match(/\{[\s\S]*\}/);
   if (!m) return failSafe('llm_no_json');
   let obj;
-  try { obj = JSON.parse(m[0]); } catch { return failSafe('llm_bad_json'); }
+  try {
+    // Дубли ключей внутри одного объекта (например два "action") JSON.parse
+    // разрешает по правилу last-wins — это поведение спецификации JSON,
+    // здесь оно ожидаемо и не требует отдельной обработки.
+    obj = JSON.parse(m[0]);
+  } catch {
+    return failSafe('llm_bad_json');
+  }
   if (!ACTIONS.has(obj.action)) return failSafe('llm_bad_action');
-  const reason = String(obj.reason || '').slice(0, 500);
+  const reason = typeof obj.reason === 'string' ? obj.reason.slice(0, 500) : '';
   if (obj.action === 'send') {
-    const text = String(obj.text || '').trim();
+    // typeof-гейт, а не String(obj.text || ''): массив ["Добрый день!","ещё"]
+    // коэрсится в "Добрый день!,ещё" (выглядит настоящим текстом), объект —
+    // в "[object Object]", число/bool — в цифры/строку — и всё это ушло бы
+    // пациенту как подлинное сообщение.
+    if (typeof obj.text !== 'string') return failSafe('llm_text_not_string');
+    const text = obj.text.replace(UNSAFE_CHARS_RE, '').trim();
     if (!text) return failSafe('llm_empty_text');
+    if (text.length > TEXT_MAX) return failSafe('llm_text_too_long');
     return { action: 'send', text, reason };
   }
   if (obj.action === 'stop_program') {
@@ -320,13 +405,13 @@ function parseCareDecision(raw) {
 module.exports = { parseCareDecision };
 ```
 
-- [ ] **Step 4: Run** `cd backend && npx jest care-decision` → PASS
+- [ ] **Step 4: Run** `cd backend && npx jest care-decision` → PASS (16 tests)
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add backend/services/care/decision.js backend/care-decision.test.js
-git commit -m "feat(care): парс решения care-прохода с fail-safe skip"
+git add backend/services/care/decision.js backend/care-decision.test.js docs/superpowers/plans/2026-08-02-care-programs.md
+git commit -m "fix(care): fail-safe skip на нестроковом, слишком длинном и bidi-тексте LLM"
 ```
 
 ---

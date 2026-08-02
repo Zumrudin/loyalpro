@@ -32,3 +32,48 @@ describe('parseCareDecision', () => {
     expect(d.status).toBe('stopped');
   });
 });
+
+describe('parseCareDecision — fail-safe на нестроковом/длинном/bidi тексте', () => {
+  test('text — объект → fail-safe skip', () => {
+    const d = parseCareDecision('{"action":"send","text":{"a":1},"reason":"x"}');
+    expect(d).toMatchObject({ action: 'skip', failSafe: true });
+  });
+  test('text — массив строк → fail-safe skip (правдоподобный текст опаснее объекта)', () => {
+    const d = parseCareDecision('{"action":"send","text":["Добрый день!","ещё"],"reason":"x"}');
+    expect(d).toMatchObject({ action: 'skip', failSafe: true });
+  });
+  test('text — число → fail-safe skip', () => {
+    const d = parseCareDecision('{"action":"send","text":42,"reason":"x"}');
+    expect(d).toMatchObject({ action: 'skip', failSafe: true });
+  });
+  test('text длиной 2000 символов → fail-safe skip, НЕ обрезанная отправка', () => {
+    const longText = 'а'.repeat(2000);
+    const d = parseCareDecision(JSON.stringify({ action: 'send', text: longText, reason: 'x' }));
+    expect(d).toMatchObject({ action: 'skip', failSafe: true, reason: 'llm_text_too_long' });
+  });
+  test('text с U+202E (bidi-override, спуфинг «50%»→«05%») → символ вырезан из результата', () => {
+    const d = parseCareDecision(JSON.stringify({ action: 'send', text: 'Скидка 50\u202E%', reason: 'x' }));
+    expect(d.action).toBe('send');
+    expect(d.text).not.toMatch(/\u202E/);
+    expect(d.text).toBe('Скидка 50%');
+  });
+  test('reason не-строка при валидном send → отправка проходит, reason пустой', () => {
+    const d = parseCareDecision('{"action":"send","text":"ok","reason":123}');
+    expect(d).toEqual({ action: 'send', text: 'ok', reason: '' });
+  });
+  test('raw не строка (null/undefined/объект/массив) → fail-safe skip, не throw', () => {
+    expect(parseCareDecision(null)).toMatchObject({ action: 'skip', failSafe: true });
+    expect(parseCareDecision(undefined)).toMatchObject({ action: 'skip', failSafe: true });
+    expect(parseCareDecision({ action: 'send', text: 'x' })).toMatchObject({ action: 'skip', failSafe: true });
+    expect(parseCareDecision(['a', 'b'])).toMatchObject({ action: 'skip', failSafe: true });
+  });
+  test('честный skip → без флага failSafe, reason дословно', () => {
+    const d = parseCareDecision('{"action":"skip","reason":"клиент попросил не писать сегодня"}');
+    expect(d).toEqual({ action: 'skip', reason: 'клиент попросил не писать сегодня' });
+    expect(d.failSafe).toBeUndefined();
+  });
+  test('несколько JSON-объектов в ответе → fail-safe skip', () => {
+    const d = parseCareDecision('{"action":"skip","reason":"draft"} {"action":"send","text":"real","reason":"x"}');
+    expect(d).toMatchObject({ action: 'skip', failSafe: true });
+  });
+});
