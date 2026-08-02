@@ -11,6 +11,7 @@ const { syncStaffData, syncGoodsSales } = require('./services/staff');
 const { refreshSegments }   = require('./services/segments');
 const { processS3Orphans }  = require('./services/patient-portfolio');
 const { startBroadcastWorker } = require('./services/broadcast');
+const { startNotificationWorker } = require('./services/notifications');
 const s3                    = require('./services/s3');
 const mountRoutes = require('./routes/index');
 const { createLogger } = require('./logger');
@@ -211,6 +212,7 @@ pool.connect()
       logger.info('Webhook: POST /yclients/webhook.v2/:companyId');
       logger.info('Register: POST /api/auth/register');
       startBroadcastWorker();
+      startNotificationWorker();
     });
   })
   .catch(e => {

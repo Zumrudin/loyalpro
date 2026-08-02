@@ -771,6 +771,62 @@ async function runMigrations(client) {
       ON broadcast_recipients (broadcast_id, telegram_chat_id)
   `).catch(() => {});
 
+  // ── Автоуведомления по событиям (v1: создание записи) ──────────
+  // Правило: conditions = { logic:'and'|'or', items:[{type:'staff'|'category'|'service', ids:[…]}] },
+  // channels = порядок каскада dispatch_routing Chatpush (['telegram','whatsapp',…]).
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS notification_rules (
+      id                  SERIAL PRIMARY KEY,
+      salon_id            INTEGER NOT NULL REFERENCES salons(id) ON DELETE CASCADE,
+      title               VARCHAR(255) NOT NULL,
+      is_enabled          BOOLEAN NOT NULL DEFAULT TRUE,
+      trigger_type        VARCHAR(40) NOT NULL DEFAULT 'record_created',
+      conditions          JSONB NOT NULL DEFAULT '{"logic":"and","items":[]}'::jsonb,
+      message_template    TEXT NOT NULL,
+      channels            JSONB NOT NULL DEFAULT '["telegram","whatsapp"]'::jsonb,
+      prefer_last_channel BOOLEAN NOT NULL DEFAULT TRUE,
+      created_by          INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `).catch(() => {});
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS idx_notification_rules_salon
+      ON notification_rules (salon_id, is_enabled)
+  `).catch(() => {});
+
+  // Очередь и одновременно журнал отправок. UNIQUE (rule_id, yclients_record_id)
+  // дедупит повторные доставки вебхука YClients.
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS notification_sends (
+      id                  BIGSERIAL PRIMARY KEY,
+      salon_id            INTEGER NOT NULL REFERENCES salons(id) ON DELETE CASCADE,
+      rule_id             INTEGER NOT NULL REFERENCES notification_rules(id) ON DELETE CASCADE,
+      yclients_record_id  BIGINT NOT NULL,
+      client_id           INTEGER REFERENCES clients(id) ON DELETE SET NULL,
+      phone               VARCHAR(32),
+      status              VARCHAR(20) NOT NULL DEFAULT 'pending',
+      attempts            INTEGER NOT NULL DEFAULT 0,
+      error               TEXT,
+      rendered_text       TEXT NOT NULL,
+      routing             JSONB,
+      channel_used        VARCHAR(30),
+      delivery_id         VARCHAR(120),
+      last_attempt_at     TIMESTAMPTZ,
+      created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      sent_at             TIMESTAMPTZ,
+      UNIQUE (rule_id, yclients_record_id)
+    )
+  `).catch(() => {});
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS idx_notification_sends_pending
+      ON notification_sends (status, created_at) WHERE status = 'pending'
+  `).catch(() => {});
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS idx_notification_sends_rule
+      ON notification_sends (rule_id, created_at DESC)
+  `).catch(() => {});
+
   // ── Medical certificate (КНД 1151156) ──────────────────────────
   await client.query(`
     CREATE TABLE IF NOT EXISTS medical_cert_templates (

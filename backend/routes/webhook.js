@@ -2,6 +2,7 @@ const router = require('express').Router();
 const crypto = require('crypto');
 const { db } = require('../db');
 const { getLoyaltySettings, processRecordEvent, processFinancesOperation } = require('../services/loyalty');
+const { handleRecordCreated } = require('../services/notifications');
 const { buildClientFio } = require('../utils/client-name');
 const { createLogger } = require('../logger');
 const logger = createLogger('Webhook');
@@ -72,6 +73,12 @@ router.post('/webhook.v2/:companyId', async (req, res) => {
 
     if (resourceType === 'record') {
       await processRecordEvent(payload, salon, settings);
+      // Автоуведомления — только на первое создание записи; сбой не должен
+      // ломать начисления, поэтому свой catch.
+      if (payload.status === 'create') {
+        await handleRecordCreated(salon, payload).catch(e =>
+          logger.error(`notifications: ${e.message}`));
+      }
     }
 
     if (resourceType === 'client' && payload.data) {
