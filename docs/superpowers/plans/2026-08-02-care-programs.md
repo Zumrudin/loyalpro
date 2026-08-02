@@ -158,6 +158,16 @@ describe('care schedule', () => {
     expect(plusOneDay(new Date('2026-08-03T07:30:00Z')).toISOString())
       .toBe('2026-08-04T07:30:00.000Z');
   });
+  test('computeScheduledAt: visitAt=null → null (не эпоха 1970)', () => {
+    expect(computeScheduledAt(null, 1, '10:30')).toBeNull();
+  });
+  test('композиция parseVisitAt(мусор) → computeScheduledAt → null', () => {
+    expect(computeScheduledAt(parseVisitAt('не дата'), 1, '10:30')).toBeNull();
+  });
+  test('нечисловой delayDays → null', () => {
+    const visit = parseVisitAt('2026-08-02 14:00:00');
+    expect(computeScheduledAt(visit, 'abc', '10:30')).toBeNull();
+  });
 });
 ```
 
@@ -186,8 +196,11 @@ function moscowDateStr(d) {
   return new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Moscow' }).format(d);
 }
 
-/** МСК-дата визита + delayDays, в send_time ('HH:MM') по Москве → Date. */
+/** МСК-дата визита + delayDays, в send_time ('HH:MM') по Москве → Date | null. */
 function computeScheduledAt(visitAt, delayDays, sendTime) {
+  // new Date(null) — валидная эпоха (1970-01-01), а не NaN: parseVisitAt(мусор)
+  // отдаёт null, и без этой проверки он тихо прошёл бы как «валидная» дата.
+  if (visitAt == null) return null;
   const visit = visitAt instanceof Date ? visitAt : new Date(visitAt);
   if (Number.isNaN(visit.getTime())) return null;
   const m = /^([01]\d|2[0-3]):([0-5]\d)$/.exec(String(sendTime || '').trim());
@@ -195,7 +208,10 @@ function computeScheduledAt(visitAt, delayDays, sendTime) {
   const [y, mo, d] = moscowDateStr(visit).split('-').map(Number);
   const base = new Date(Date.UTC(y, mo - 1, d + Number(delayDays || 0)));
   const ymd = `${base.getUTCFullYear()}-${String(base.getUTCMonth() + 1).padStart(2, '0')}-${String(base.getUTCDate()).padStart(2, '0')}`;
-  return new Date(`${ymd}T${hm}:00+03:00`);
+  const result = new Date(`${ymd}T${hm}:00+03:00`);
+  // Нечисловой delayDays просачивается сюда как NaN в дате — ловим тут, а не
+  // оставляем вызывающему ловить Invalid Date/RangeError на .toISOString().
+  return Number.isNaN(result.getTime()) ? null : result;
 }
 
 /** +24 часа: анти-спам «1 касание в день» сдвигает касание, не скипает. */
@@ -206,7 +222,7 @@ module.exports = { parseVisitAt, computeScheduledAt, plusOneDay };
 
 - [ ] **Step 4: Тесты зелёные**
 
-Run: `cd backend && npx jest care-schedule` → PASS (7 тестов)
+Run: `cd backend && npx jest care-schedule` → PASS (10 тестов)
 
 - [ ] **Step 5: Commit**
 

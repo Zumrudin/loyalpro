@@ -34,4 +34,14 @@ describe('care schedule', () => {
     expect(plusOneDay(new Date('2026-08-03T07:30:00Z')).toISOString())
       .toBe('2026-08-04T07:30:00.000Z');
   });
+  test('computeScheduledAt: visitAt=null → null (не эпоха 1970)', () => {
+    expect(computeScheduledAt(null, 1, '10:30')).toBeNull();
+  });
+  test('композиция parseVisitAt(мусор) → computeScheduledAt → null', () => {
+    expect(computeScheduledAt(parseVisitAt('не дата'), 1, '10:30')).toBeNull();
+  });
+  test('нечисловой delayDays → null', () => {
+    const visit = parseVisitAt('2026-08-02 14:00:00');
+    expect(computeScheduledAt(visit, 'abc', '10:30')).toBeNull();
+  });
 });

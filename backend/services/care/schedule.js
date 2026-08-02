@@ -15,8 +15,11 @@ function moscowDateStr(d) {
   return new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Moscow' }).format(d);
 }
 
-/** МСК-дата визита + delayDays, в send_time ('HH:MM') по Москве → Date. */
+/** МСК-дата визита + delayDays, в send_time ('HH:MM') по Москве → Date | null. */
 function computeScheduledAt(visitAt, delayDays, sendTime) {
+  // new Date(null) — валидная эпоха (1970-01-01), а не NaN: parseVisitAt(мусор)
+  // отдаёт null, и без этой проверки он тихо прошёл бы как «валидная» дата.
+  if (visitAt == null) return null;
   const visit = visitAt instanceof Date ? visitAt : new Date(visitAt);
   if (Number.isNaN(visit.getTime())) return null;
   const m = /^([01]\d|2[0-3]):([0-5]\d)$/.exec(String(sendTime || '').trim());
@@ -24,7 +27,10 @@ function computeScheduledAt(visitAt, delayDays, sendTime) {
   const [y, mo, d] = moscowDateStr(visit).split('-').map(Number);
   const base = new Date(Date.UTC(y, mo - 1, d + Number(delayDays || 0)));
   const ymd = `${base.getUTCFullYear()}-${String(base.getUTCMonth() + 1).padStart(2, '0')}-${String(base.getUTCDate()).padStart(2, '0')}`;
-  return new Date(`${ymd}T${hm}:00+03:00`);
+  const result = new Date(`${ymd}T${hm}:00+03:00`);
+  // Нечисловой delayDays просачивается сюда как NaN в дате — ловим тут, а не
+  // оставляем вызывающему ловить Invalid Date/RangeError на .toISOString().
+  return Number.isNaN(result.getTime()) ? null : result;
 }
 
 /** +24 часа: анти-спам «1 касание в день» сдвигает касание, не скипает. */
