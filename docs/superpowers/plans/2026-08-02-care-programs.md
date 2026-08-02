@@ -893,6 +893,28 @@ git add backend/services/care/enroll.js backend/care-enroll.test.js
 git commit -m "feat(care): зачисление в программы по состоявшемуся визиту + superseded"
 ```
 
+- [x] **Ревизия (код-ревью после Step 5): 3 содержательных дефекта + 2 minor**
+
+Код-ревью нашло, что эталон Step 3 в проде мог: (1) навсегда зависать с enrollment без единого касания, (2) супersede'ить живую цепочку правкой старой записи, (3) не иметь пути отчисления при отмене визита. Все три пофикшены в `enroll.js`, тесты — в `care-enroll.test.js`.
+
+1. **Самолечение после частичного падения.** Если процесс упал между `INSERT enrollment` и вставкой касаний, ретрай вебхука раньше упирался в `ON CONFLICT DO NOTHING` → пустой `RETURNING` → `continue`, и enrollment оставался active без единого касания навсегда. Теперь при пустом `RETURNING` строка дозагружается (`SELECT id, status ... WHERE program_id=$1 AND yclients_record_id=$2`); если `status='active'` — цикл планирования касаний всё равно прогоняется (идемпотентен через `ON CONFLICT (enrollment_id, touch_id) DO NOTHING`), а supersede-блок при этом НЕ повторяется (флаг `isNewEnrollment`). Если статус уже не `'active'` (superseded/stopped/…) — вебхук игнорируется с логом.
+
+2. **Supersede по порядку визитов, не вебхуков.** Правка старой записи (например коррекция оплаты) может перевыстрелить вебхук с `attendance=1` годы спустя; если та запись раньше не зачислялась (программу включили позже), она зачислялась бы СЕЙЧАС и супersede'ила живую цепочку от актуального визита — а её собственные касания, все в прошлом, закапали бы «как самочувствие» задним числом. Фикс двумя частями: (а) в supersede-`UPDATE` добавлено условие `AND (visit_at IS NULL OR visit_at < $5)` — гасим только прохождения от визитов РАНЬШЕ нового, и весь supersede-блок пропускается, если у нового enrollment `visitAt` не распарсился (`isNewEnrollment && visitAt`); (б) перед вставкой — проверка `SELECT ... WHERE status='active' AND visit_at > $4`: если у клиента уже есть активная цепочка этой программы от визита ПОЗЖЕ нового, зачисление вообще не выполняется (лог `пропуск — активная цепочка #… от более позднего визита`). Оба условия симметрично пропускаются при `visitAt=null` (сравнение невозможно).
+
+3. **Un-enroll при отмене/неявке.** Пути «отчисления» не было вообще: предоплаченный клиент (`paid_full=1` при `attendance=2` или даже `attendance=-1` — см. `loyalty.js:621`) отменил визит — цепочка «после визита» всё равно продолжала бы капать. Добавлена чистая `classifyRecordEvent(data, payloadStatus) → 'enroll'|'unenroll'|'ignore'`, вызывается ДО `isVisitCompleted`: `payload.status==='delete'` ИЛИ `data.deleted===true` ИЛИ `Number(data.attendance)===-1` → `'unenroll'` (проверяется первым, чтобы предоплаченная-но-неявка не утекла в `'enroll'` через `paid_full=1`). На `'unenroll'` — `stopEnrollmentsForRecord`: все активные enrollment'ы этой `yclients_record_id` (любых программ салона) → `status='stopped'`, их `scheduled`-касания → `cancelled`.
+
+   Minor из того же ревью: (4) блэклист-лукап получил фолбэк по телефону — `WHERE salon_id=$1 AND (yclients_client_id=$2 OR phone=$3) ORDER BY (yclients_client_id=$2) DESC NULLS LAST LIMIT 1`, иначе несинкнутый ЧС-клиент (нет `yclients_client_id` в `clients`) проскакивал мимо проверки; (5) добавлены `log.info` при `matched.length===0` (сколько программ проверено) и `log.warn` при `computeScheduledAt→null` для конкретного касания — самые частые вопросы «почему не зачислило»/«почему касание пропало».
+
+   `care_touch_sends.enrollment_id` — `BIGINT` (`care_enrollments.id` — `BIGSERIAL`, pg отдаёт такие id строками) — везде используется `ANY($1::bigint[])`, не `::int[]`.
+
+   Тесты: `classifyRecordEvent` полностью покрыт юнитами (delete побеждает даже при «состоявшемся» визите, `attendance=-1` побеждает `paid_full=1`, обычные enroll/ignore-ветки). Ветки с БД (self-heal, supersede-по-дате, un-enroll write-путь) оставлены без моков — `handleRecordEvent` намеренно тонкий, реальная проверка через БД придёт с воркером (Task 9/живой смоук).
+
+```bash
+cd backend && npx jest care-   # 5 suites / 77 tests OK
+git add backend/services/care/enroll.js backend/care-enroll.test.js docs/superpowers/plans/2026-08-02-care-programs.md
+git commit -m "fix(care): self-heal ретраем, supersede по дате визита, un-enroll при отмене"
+```
+
 ---
 
 ### Task 7: Вебхук — вызов зачисления
