@@ -153,11 +153,26 @@ cron.schedule('0 */3 * * *', async () => {
     );
     for (const salon of salons) {
       runSync(salon, 'auto').catch(e => cronLogger.error(`AutoSync salon=${salon.id}: ${e.message}`));
-      syncGoodsCatalog(salon).catch(e => cronLogger.error(`GoodsCatalogSync salon=${salon.id}: ${e.message}`));
       syncGoodsCategories(salon).catch(e => cronLogger.error(`GoodsCatSync salon=${salon.id}: ${e.message}`));
     }
   } catch (e) { cronLogger.error(`AutoSync cron: ${e.message}`); }
 });
+
+// Каталог товаров синхронизируется в СВОЮ минуту, а не вместе с остальными.
+// На минуте 0 по одному салону разом стартовали runSync + syncGoodsCategories
+// + syncStaffData + syncGoodsSales, и общая квота YClients выедалась до того,
+// как каталог доходил до конца списка категорий: хвост категорий падал с
+// «Превышен лимит запросов» в КАЖДОМ прогоне (инцидент 2026-08-02).
+cron.schedule('25 */3 * * *', async () => {
+  try {
+    const salons = await db.many(
+      `SELECT * FROM salons WHERE is_active=TRUE AND yclients_company_id IS NOT NULL AND yclients_user_token IS NOT NULL`
+    );
+    for (const salon of salons) {
+      syncGoodsCatalog(salon).catch(e => cronLogger.error(`GoodsCatalogSync salon=${salon.id}: ${e.message}`));
+    }
+  } catch (e) { cronLogger.error(`GoodsCatalogSync cron: ${e.message}`); }
+}, { timezone: 'Europe/Moscow' });
 
 cron.schedule('0 * * * *', async () => {
   try {

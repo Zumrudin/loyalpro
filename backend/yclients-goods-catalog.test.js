@@ -44,6 +44,7 @@ jest.mock('./logger', () => ({
 const {
   isBlacklisted,
   extractCategoryTitle,
+  isRateLimitError,
   HOME_CARE_CATEGORY_BLACKLIST,
   syncGoodsCatalog,
 } = require('./services/yclients-goods-catalog');
@@ -132,6 +133,47 @@ describe('extractCategoryTitle', () => {
     // category is object but title is empty/missing — first branch guard fails,
     // string branch false, no usable category_id → null.
     expect(extractCategoryTitle({ category: { id: 1 } }, {})).toBeNull();
+  });
+});
+
+// ── isRateLimitError ─────────────────────────────────────────────────────────
+// Incident 2026-08-02: the 429 retry guard tested `e.response?.status`, but no
+// error reaching this service carries an axios `response` — ycError() rebuilds a
+// plain Error with the code on `err.status`, and a 200-with-success:false body
+// throws a bare Error carrying only the meta message. The retry never fired and
+// 7–10 categories burned per cron run.
+
+describe('isRateLimitError', () => {
+  test('ycError shape: status on the error itself, no .response', () => {
+    const e = new Error('Превышен лимит запросов, попробуйте повторить запрос через 1 секунду.');
+    e.status = 429;
+    expect(isRateLimitError(e)).toBe(true);
+  });
+
+  test('raw axios shape: e.response.status', () => {
+    expect(isRateLimitError({ message: 'Request failed', response: { status: 429 } })).toBe(true);
+  });
+
+  test('success:false shape: message only, no status anywhere', () => {
+    // yclients.js:59 — `throw new Error(data.meta?.message)` when HTTP 200 carries success:false
+    expect(isRateLimitError(
+      new Error('Превышен лимит запросов, попробуйте повторить запрос через 0 секунд.')
+    )).toBe(true);
+  });
+
+  test('english wording is matched too', () => {
+    expect(isRateLimitError(new Error('Too Many Requests'))).toBe(true);
+    expect(isRateLimitError(new Error('API rate limit exceeded'))).toBe(true);
+  });
+
+  test.each([
+    [new Error('YClients 500')],
+    [new Error('Произошла ошибка')],
+    [Object.assign(new Error('not found'), { status: 404 })],
+    [null],
+    [undefined],
+  ])('non-rate-limit error %#: false', (e) => {
+    expect(isRateLimitError(e)).toBe(false);
   });
 });
 
@@ -271,6 +313,106 @@ describe('syncGoodsCatalog smoke', () => {
     expect(r.errorSamples[0].catId).toBe(999);
     expect(r.inserted).toBe(1);             // surviving category still upserts
     expect(clearTreeCache).toHaveBeenCalledTimes(1);   // sync completes despite partial failure
+  });
+
+  test('rate-limited page is retried, not lost (ycError shape: no .response, status on the error)', async () => {
+    const cid = 668791;
+    let hits = 0;
+
+    ycGet.mockImplementation(async (salon, endpoint, params) => {
+      if (endpoint === `/good_categories/${cid}`) return [{ id: 1820118, title: 'Forlled' }];
+      if (endpoint === `/goods/${cid}` && params && params.category_id === 1820118) {
+        if (params.page === 1) {
+          hits++;
+          if (hits === 1) {
+            // exactly the error prod sees, in exactly the shape ycError() produces
+            const e = new Error('Превышен лимит запросов, попробуйте повторить запрос через 1 секунду.');
+            e.status = 429;
+            throw e;
+          }
+          return [{ good_id: 7001, title: 'Forlled Serum', category_id: 1820118 }];
+        }
+        return [];
+      }
+      return [];
+    });
+
+    db.any.mockResolvedValue([]);
+    db.one.mockResolvedValue({ is_insert: true });
+    db.query.mockResolvedValue({ rowCount: 0, rows: [] });
+
+    const r = await syncGoodsCatalog({
+      id: 1, yclients_company_id: cid, yclients_user_token: 'fake-token',
+    });
+
+    expect(hits).toBe(2);          // retried after the rate limit
+    expect(r.errors).toBe(0);      // and recovered — the category is NOT lost
+    expect(r.goodsSeen).toBe(1);
+  });
+
+  test('a category that failed to enumerate keeps its goods — archive is scoped to enumerated categories', async () => {
+    const cid = 668791;
+
+    ycGet.mockImplementation(async (salon, endpoint, params) => {
+      if (endpoint === `/good_categories/${cid}`) {
+        return [
+          { id: 101, title: 'Forlled' },
+          { id: 999, title: 'GIGI' },
+        ];
+      }
+      if (endpoint === `/goods/${cid}` && params && params.category_id === 101) {
+        return params.page === 1
+          ? [{ good_id: 1001, title: 'F1', category_id: 101 }]
+          : [];
+      }
+      if (endpoint === `/goods/${cid}` && params && params.category_id === 999) {
+        throw new Error('YClients 500');    // persistent failure, retries won't help
+      }
+      return [];
+    });
+
+    db.any.mockResolvedValue([]);
+    db.one.mockResolvedValue({ is_insert: true });
+    db.query.mockResolvedValue({ rowCount: 0, rows: [] });
+
+    const r = await syncGoodsCatalog({
+      id: 1, yclients_company_id: cid, yclients_user_token: 'fake-token',
+    });
+
+    expect(r.errors).toBe(1);
+    expect(r.categoriesOk).toEqual([101]);
+
+    // The archive UPDATE must be restricted to the categories we actually read.
+    // Without this, category 999's goods age past 24h and vanish from the
+    // home-care dropdown (incident 2026-08-02: 72 goods across 6 brands).
+    const archiveCall = db.query.mock.calls.find(c => /is_archived\s*=\s*TRUE/i.test(c[0]));
+    expect(archiveCall).toBeDefined();
+    expect(archiveCall[0]).toMatch(/category_id\s*=\s*ANY/i);
+    expect(archiveCall[1]).toEqual([1, [101]]);
+  });
+
+  test('every category failed → nothing is archived at all', async () => {
+    const cid = 668791;
+
+    ycGet.mockImplementation(async (salon, endpoint, params) => {
+      if (endpoint === `/good_categories/${cid}`) return [{ id: 101, title: 'Forlled' }];
+      throw new Error('YClients 500');
+    });
+
+    db.any.mockResolvedValue([]);
+    db.one.mockResolvedValue({ is_insert: true });
+    db.query.mockResolvedValue({ rowCount: 0, rows: [] });
+
+    const r = await syncGoodsCatalog({
+      id: 1, yclients_company_id: cid, yclients_user_token: 'fake-token',
+    });
+
+    expect(r.categoriesOk).toEqual([]);
+    expect(r.archived).toBe(0);
+    // no archive UPDATE issued whatsoever
+    expect(db.query.mock.calls.filter(c => /is_archived\s*=\s*TRUE/i.test(c[0]))).toHaveLength(0);
+    // cache is still invalidated so the next read is honest
+    expect(clearTreeCache).toHaveBeenCalledWith(1);
   });
 
   test('paginates past a short page — YClients caps /goods page size below the requested count (Genosys 33 = 25 + 8 across 2 pages)', async () => {

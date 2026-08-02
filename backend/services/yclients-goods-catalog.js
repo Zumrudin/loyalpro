@@ -34,6 +34,30 @@ function isBlacklisted(categoryTitle) {
   return HOME_CARE_CATEGORY_BLACKLIST.has(categoryTitle.trim().toLowerCase());
 }
 
+// ── Rate-limit detection (incident 2026-08-02) ───────────────────────────────
+// YClients signals «Превышен лимит запросов» in two shapes, and NEITHER carries
+// an axios `response` by the time it reaches us:
+//   • ycError() (services/yclients.js) rebuilds a plain Error and puts the HTTP
+//     code on `err.status`;
+//   • a 200 response with `success:false` throws a bare Error carrying only the
+//     meta message (services/yclients.js:59) — no status at all.
+// The retry guard below originally tested `e.response?.status === 429`, so it
+// never fired: prod lost 7–10 categories to undetected rate limits on every cron
+// run, and Step C then archived their goods 24h later.
+const RATE_LIMIT_RE = /превышен лимит запросов|rate limit|too many requests/i;
+
+/**
+ * True when an error means "YClients throttled us" and a retry may succeed.
+ * @param {any} e
+ * @returns {boolean}
+ */
+function isRateLimitError(e) {
+  if (!e) return false;
+  const status = e.status != null ? e.status : (e.response && e.response.status);
+  if (status === 429) return true;
+  return RATE_LIMIT_RE.test(String(e.message || ''));
+}
+
 /**
  * Normalize YClients per-good response into a category title string.
  * YClients returns category in 3 shapes: object {id, title}, string, or
@@ -156,6 +180,7 @@ async function syncGoodsCatalog(salon) {
 
   // ─── STEP B — Enumerate goods per category (D-06, D-11, D-12) ───────
   const catIdList = [...catIds];
+  const okCatIds = [];      // categories fully read this run — the only ones Step C may prune
   logger.info(`Salon ${salonId}: enumerating ${catIdList.length} categories`);
 
   for (const catId of catIdList) {
@@ -172,9 +197,9 @@ async function syncGoodsCatalog(salon) {
             goods = await ycGet(salon, `/goods/${cid}`, { category_id: catId, count: PAGE_SIZE, page });
             break;
           } catch (e) {
-            if (e.response?.status === 429 && attempt < RETRIES_429) {
+            if (isRateLimitError(e) && attempt < RETRIES_429) {
               const wait = RETRY_BASE_MS * (2 ** attempt);
-              logger.warn(`Salon ${salonId}: category ${catId} page ${page} got 429, retry ${attempt + 1}/${RETRIES_429} in ${wait}ms`);
+              logger.warn(`Salon ${salonId}: category ${catId} page ${page} rate-limited, retry ${attempt + 1}/${RETRIES_429} in ${wait}ms`);
               await new Promise(r => setTimeout(r, wait));
               continue;
             }
@@ -219,6 +244,7 @@ async function syncGoodsCatalog(salon) {
       if (page > MAX_PAGES_PER_CATEGORY) {
         logger.warn(`Salon ${salonId}: category ${catId} hit MAX_PAGES_PER_CATEGORY=${MAX_PAGES_PER_CATEGORY} cap`);
       }
+      okCatIds.push(catId);      // read to the end (or to the cap) — safe to prune
     } catch (e) {
       errors.push({ step: 'enumerate', catId, msg: e.message });
       logger.warn(`Salon ${salonId}: category ${catId} failed: ${e.message}`);
@@ -227,14 +253,30 @@ async function syncGoodsCatalog(salon) {
   }
 
   // ─── STEP C — Soft-delete stale (D-13) ───────────────────────────────
-  const archived = await db.query(`
-    UPDATE yclients_goods_catalog
-       SET is_archived = TRUE, updated_at = NOW()
-     WHERE salon_id = $1
-       AND last_seen_at < NOW() - INTERVAL '24 hours'
-       AND NOT is_archived
-    RETURNING id
-  `, [salonId]);
+  // Only inside categories we actually enumerated this run. A category that
+  // errored out (rate limit, 5xx) keeps ALL of its goods: it was not read, so
+  // their staleness says nothing about whether YClients still has them.
+  // Without this scope a few failed requests silently wipe whole brands out of
+  // the home-care dropdown 24h later — incident 2026-08-02 cost 72 goods across
+  // Forlled, GIGI, Phyto-C, HELEO4, HELIOCARE, Luscious Lips.
+  let archived = { rowCount: 0 };
+  if (okCatIds.length) {
+    archived = await db.query(`
+      UPDATE yclients_goods_catalog
+         SET is_archived = TRUE, updated_at = NOW()
+       WHERE salon_id = $1
+         AND category_id = ANY($2::int[])
+         AND last_seen_at < NOW() - INTERVAL '24 hours'
+         AND NOT is_archived
+      RETURNING id
+    `, [salonId, okCatIds]);
+  }
+  if (okCatIds.length < catIdList.length) {
+    logger.warn(
+      `Salon ${salonId}: ${catIdList.length - okCatIds.length}/${catIdList.length} categories not enumerated — ` +
+      `their goods left untouched by archiving`
+    );
+  }
 
   // ─── STEP D — Invalidate tree cache (D-18) ──────────────────────────
   clearTreeCache(salonId);
@@ -243,7 +285,7 @@ async function syncGoodsCatalog(salon) {
   logger.info(
     `Salon ${salonId}: catalog sync done. ` +
     `inserted=${inserted} updated=${updated} archived=${archived.rowCount} ` +
-    `goodsSeen=${goodsSeen} categories=${catIdList.length} errors=${errors.length} duration=${durationMs}ms`
+    `goodsSeen=${goodsSeen} categories=${okCatIds.length}/${catIdList.length} errors=${errors.length} duration=${durationMs}ms`
   );
 
   return {
@@ -253,6 +295,7 @@ async function syncGoodsCatalog(salon) {
     archived: archived.rowCount,
     goodsSeen,
     categoriesSeen: catIdList.length,
+    categoriesOk: okCatIds,
     errors: errors.length,
     errorSamples: errors.slice(0, 5),
     durationMs,
@@ -264,4 +307,5 @@ module.exports = {
   HOME_CARE_CATEGORY_BLACKLIST,
   isBlacklisted,
   extractCategoryTitle,
+  isRateLimitError,
 };
