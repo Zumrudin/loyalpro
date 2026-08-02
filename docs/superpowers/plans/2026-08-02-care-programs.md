@@ -28,18 +28,18 @@ CREATE TABLE IF NOT EXISTS care_programs (
   id          SERIAL PRIMARY KEY,
   salon_id    INTEGER NOT NULL REFERENCES salons(id) ON DELETE CASCADE,
   title       VARCHAR(255) NOT NULL,
-  is_enabled  BOOLEAN DEFAULT TRUE,
+  is_enabled  BOOLEAN NOT NULL DEFAULT TRUE,
   conditions  JSONB NOT NULL DEFAULT '{"logic":"and","items":[]}',
-  created_by  INTEGER,
-  created_at  TIMESTAMPTZ DEFAULT NOW(),
-  updated_at  TIMESTAMPTZ DEFAULT NOW()
+  created_by  INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_care_programs_salon
   ON care_programs (salon_id, is_enabled);
 
 CREATE TABLE IF NOT EXISTS care_touches (
   id          SERIAL PRIMARY KEY,
-  salon_id    INTEGER NOT NULL,
+  salon_id    INTEGER NOT NULL REFERENCES salons(id) ON DELETE CASCADE,
   program_id  INTEGER NOT NULL REFERENCES care_programs(id) ON DELETE CASCADE,
   title       VARCHAR(255) NOT NULL DEFAULT '',
   delay_days  INTEGER NOT NULL,
@@ -51,8 +51,8 @@ CREATE INDEX IF NOT EXISTS idx_care_touches_program
   ON care_touches (program_id, sort_order);
 
 CREATE TABLE IF NOT EXISTS care_enrollments (
-  id                 SERIAL PRIMARY KEY,
-  salon_id           INTEGER NOT NULL,
+  id                 BIGSERIAL PRIMARY KEY,
+  salon_id           INTEGER NOT NULL REFERENCES salons(id) ON DELETE CASCADE,
   program_id         INTEGER NOT NULL REFERENCES care_programs(id) ON DELETE CASCADE,
   client_id          INTEGER,
   phone              VARCHAR(20),
@@ -63,8 +63,8 @@ CREATE TABLE IF NOT EXISTS care_enrollments (
   services           JSONB DEFAULT '[]',
   status             VARCHAR(20) NOT NULL DEFAULT 'active',
   status_reason      TEXT,
-  created_at         TIMESTAMPTZ DEFAULT NOW(),
-  updated_at         TIMESTAMPTZ DEFAULT NOW(),
+  created_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   UNIQUE (program_id, yclients_record_id)
 );
 CREATE INDEX IF NOT EXISTS idx_care_enrollments_salon
@@ -73,9 +73,9 @@ CREATE INDEX IF NOT EXISTS idx_care_enrollments_phone
   ON care_enrollments (salon_id, phone) WHERE status = 'active';
 
 CREATE TABLE IF NOT EXISTS care_touch_sends (
-  id              SERIAL PRIMARY KEY,
-  salon_id        INTEGER NOT NULL,
-  enrollment_id   INTEGER NOT NULL REFERENCES care_enrollments(id) ON DELETE CASCADE,
+  id              BIGSERIAL PRIMARY KEY,
+  salon_id        INTEGER NOT NULL REFERENCES salons(id) ON DELETE CASCADE,
+  enrollment_id   BIGINT NOT NULL REFERENCES care_enrollments(id) ON DELETE CASCADE,
   touch_id        INTEGER REFERENCES care_touches(id) ON DELETE SET NULL,
   scheduled_at    TIMESTAMPTZ NOT NULL,
   status          VARCHAR(20) NOT NULL DEFAULT 'scheduled',
@@ -85,10 +85,10 @@ CREATE TABLE IF NOT EXISTS care_touch_sends (
   decision_reason TEXT,
   rendered_text   TEXT,
   routing         JSONB,
-  channel_used    VARCHAR(20),
-  delivery_id     VARCHAR(64),
+  channel_used    VARCHAR(30),
+  delivery_id     TEXT,
   sent_at         TIMESTAMPTZ,
-  created_at      TIMESTAMPTZ DEFAULT NOW(),
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   UNIQUE (enrollment_id, touch_id)
 );
 CREATE INDEX IF NOT EXISTS idx_care_touch_sends_due
