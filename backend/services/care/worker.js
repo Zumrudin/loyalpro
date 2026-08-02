@@ -264,30 +264,40 @@ async function processOne(row, deps = defaultDeps) {
   }
 }
 
+// Аренда due-строк. КРИТИЧНО (спек-ревью 2026-08-02): на алиас цели UPDATE
+// (cts) НЕЛЬЗЯ ссылаться из ON-условий джойнов во FROM — PG отвечает
+// «invalid reference to FROM-clause entry for table "cts"», и воркер падал бы
+// каждый тик (юнит-тесты с замоканным db.any этого не ловят — SQL обязан
+// проходить живой EXPLAIN на дев-БД). Поэтому колонки касания берутся
+// скалярными подзапросами в RETURNING (там ссылка на cts легальна); LIMIT 5 —
+// три подзапроса по PK на строку, копейки. LEFT JOIN clients ссылается только
+// на e (обычную FROM-запись) — это разрешено, EXPLAIN проходит.
+const LEASE_SQL =
+  `UPDATE care_touch_sends cts
+      SET attempts = cts.attempts + 1, last_attempt_at = NOW()
+     FROM care_enrollments e
+     JOIN care_programs p ON p.id = e.program_id
+     JOIN salons sal ON sal.id = e.salon_id
+     LEFT JOIN clients c ON c.id = e.client_id
+    WHERE e.id = cts.enrollment_id
+      AND cts.id IN (
+        SELECT id FROM care_touch_sends
+         WHERE status = 'scheduled' AND scheduled_at <= NOW()
+           AND (last_attempt_at IS NULL OR last_attempt_at < NOW() - make_interval(secs => $1))
+         ORDER BY scheduled_at ASC
+         LIMIT 5
+         FOR UPDATE SKIP LOCKED)
+    RETURNING cts.*, e.phone, e.status AS enrollment_status, e.staff_name, e.visit_at,
+              e.services AS visit_services, e.program_id, e.client_id,
+              p.is_enabled AS program_enabled, p.conditions AS program_conditions,
+              p.title AS program_title, sal.name AS salon_name, c.name AS client_name,
+              (SELECT t.intent_text FROM care_touches t WHERE t.id = cts.touch_id) AS intent_text,
+              (SELECT t.title       FROM care_touches t WHERE t.id = cts.touch_id) AS touch_title,
+              (SELECT t.delay_days  FROM care_touches t WHERE t.id = cts.touch_id) AS delay_days`;
+
 async function processTick(deps = defaultDeps) {
   const d = { ...defaultDeps, ...deps };
-  const rows = await d.db.any(
-    `UPDATE care_touch_sends cts
-        SET attempts = cts.attempts + 1, last_attempt_at = NOW()
-       FROM care_enrollments e
-       JOIN care_programs p ON p.id = e.program_id
-       JOIN salons sal ON sal.id = e.salon_id
-       LEFT JOIN care_touches t ON t.id = cts.touch_id
-       LEFT JOIN clients c ON c.id = e.client_id
-      WHERE e.id = cts.enrollment_id
-        AND cts.id IN (
-          SELECT id FROM care_touch_sends
-           WHERE status = 'scheduled' AND scheduled_at <= NOW()
-             AND (last_attempt_at IS NULL OR last_attempt_at < NOW() - make_interval(secs => $1))
-           ORDER BY scheduled_at ASC
-           LIMIT 5
-           FOR UPDATE SKIP LOCKED)
-      RETURNING cts.*, e.phone, e.status AS enrollment_status, e.staff_name, e.visit_at,
-                e.services AS visit_services, e.program_id, e.client_id,
-                p.is_enabled AS program_enabled, p.conditions AS program_conditions,
-                p.title AS program_title, sal.name AS salon_name, c.name AS client_name,
-                t.intent_text, t.title AS touch_title, t.delay_days`,
-    [RETRY_BACKOFF_S]);
+  const rows = await d.db.any(LEASE_SQL, [RETRY_BACKOFF_S]);
   for (const row of rows) {
     if (!row.touch_id || row.intent_text == null) {   // касание удалили из программы
       await markSend(d.db, row.id, 'cancelled', 'касание удалено из программы').catch(() => {});
@@ -309,4 +319,6 @@ function startCareWorker() {
   log.info(`Care worker started (tick=${WORKER_TICK_MS}ms)`);
 }
 
-module.exports = { processOne, processTick, startCareWorker, defaultDeps };
+// LEASE_SQL экспортируется для живой EXPLAIN-проверки (scripts / node -e):
+// юнит-тесты мокают db.any и валидность SQL не проверяют.
+module.exports = { processOne, processTick, startCareWorker, defaultDeps, LEASE_SQL };
