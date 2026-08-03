@@ -455,7 +455,7 @@ async function careToggleEnr(id) {
       return `
         <div class="nr-log-row">
           <div class="nr-log-top">
-            <span class="bc-row-status" style="background:${st.color}22;color:${st.color}">${st.lbl}</span>
+            <span class="bc-row-status" style="background:${st.color}22;color:${st.color}">${esc(st.lbl)}</span>
             <b>${esc(name)}</b>${s.delay_days != null && s.touch_title ? ` <span style="color:var(--t3)">· Т+${s.delay_days}</span>` : ''}
             <span style="color:var(--t3)">${esc(when)}${s.channel_used ? ' · ' + esc(s.channel_used) : ''}</span>
           </div>
