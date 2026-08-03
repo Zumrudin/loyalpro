@@ -5,8 +5,12 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <link rel="icon" type="image/svg+xml" href="favicon.svg">
 <title>LoyalPro — Программа лояльности</title>
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.9.2/dist/confetti.browser.min.js"></script>
+<!-- Chart.js и canvas-confetti РАЗДАЁМ СО СВОЕГО ДОМЕНА (vendor/), а не с cdn.jsdelivr.net:
+     это синхронные скрипты в <head>, они блокируют разбор страницы — а jsdelivr на
+     российских мобильных сетях режется/тормозит, и админка «висела» на телефоне до
+     таймаута запроса. Обновлять — заново скачать файл нужной версии в frontend/vendor/. -->
+<script src="vendor/chart.umd.min.js?v=4.4.0"></script>
+<script src="vendor/confetti.browser.min.js?v=1.9.2"></script>
 <script src="js/core/utils.js?v=2026-06-19-brand"></script>
 <script src="js/core/api.js"></script>
 <script src="js/core/theme.js"></script>
