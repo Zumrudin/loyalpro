@@ -235,18 +235,21 @@ async function processOne(row, deps = defaultDeps) {
       enrollment: { staff_name: row.staff_name, visit_at: row.visit_at, services: row.visit_services },
       transcript: trList, futureBookings,
     });
-    // maxTokens 1200: русский текст ~2-3 символа/токен — легитимные 1500
-    // символов текста (TEXT_MAX в decision.js) + JSON-конверт в 700 токенов
-    // не влезали, обрезанный JSON падал в fail-safe skip и касание молча
-    // терялось. Таймаут через Promise.race (провайдер не трогаем): по
-    // истечении — throw → общий catch → ретрай строки.
+    // maxTokens — дефолт провайдера (AGENT_MAX_TOKENS, 4096), как у основного
+    // агента. Урок e2e-смоука 2026-08-03: ручной бюджет 1200 (посчитанный под
+    // «1500 символов текста + JSON-конверт») не учитывал, что у reasoning-модели
+    // (gemini-2.5-pro через Polza) reasoning-токены СЧИТАЮТСЯ в max_tokens —
+    // на текст оставалось ~50 токенов, JSON обрезался (finish=length) и КАЖДОЕ
+    // касание молча падало в fail-safe skip (llm_no_json). Таймаут через
+    // Promise.race (провайдер не трогаем): по истечении — throw → общий catch
+    // → ретрай строки.
     let resp;
     let llmTimer;
     try {
       resp = await Promise.race([
         d.createMessage(
           { system, messages: [{ role: 'user', content: user }] },
-          { maxTokens: 1200 }),
+          {}),
         new Promise((_, reject) => {
           llmTimer = setTimeout(() => reject(new Error(`care LLM timeout ${LLM_TIMEOUT_MS}ms`)), LLM_TIMEOUT_MS);
           if (llmTimer.unref) llmTimer.unref();
