@@ -76,6 +76,34 @@ describe('parseMessageEvent — WhatsApp nested payload', () => {
   test('extracts the client phone from chat_phone', () => {
     expect(parseMessageEvent(waBody).phone).toBe('79200255591');
   });
+  test('WhatsApp не шлёт chat_type → null (группу там ловим по jid @g.us)', () => {
+    expect(parseMessageEvent(waBody).chatType).toBeNull();
+  });
+});
+
+describe('parseMessageEvent — chat_type (гейт группового чата)', () => {
+  // Живая плоская форма MAX: группа «Админы PERI CLINIC» шлёт chat_type='group'
+  // И номер участника в sender_phone_number — по номеру группу не отличить.
+  const groupBody = {
+    type: 'max_incoming_msg',
+    payload: {
+      customer_id: 46594,
+      chat_id: '-72962629261478',
+      chat_type: 'group',
+      chat_name: 'Админы PERI CLINIC',
+      direction: 'incoming',
+      sender_phone_number: '79250177778',
+      timestamp: 1785783150,
+      message: { id: '117033084582515339', type: 'text', text: 'Остаток в кассе: 75 358' },
+    },
+  };
+  test('chat_type группы доезжает до нормализованного сообщения', () => {
+    expect(parseMessageEvent(groupBody).chatType).toBe('group');
+  });
+  test('личный чат — person', () => {
+    const personBody = { ...groupBody, payload: { ...groupBody.payload, chat_type: 'person', chat_id: '41588932' } };
+    expect(parseMessageEvent(personBody).chatType).toBe('person');
+  });
 });
 
 describe('phoneMatchCandidates', () => {

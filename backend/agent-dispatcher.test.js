@@ -45,6 +45,25 @@ test('несколько реплик отправляются по очеред
   expect(d.send).toHaveBeenNthCalledWith(2, meta, 'два');
 });
 
+test('групповой чат → прогона нет, даже если в meta есть номер участника', async () => {
+  const d = deps();
+  const groupMeta = { ...meta, channel: 'tdlib', chatId: '-1003759304044' };
+  // Ключ диалога = номер участника (так его считает вебхук) — раньше это уводило
+  // Милу в ЛИЧНУЮ переписку с этим участником.
+  dispatcher.enqueue(1, '79001112233', groupMeta, d);
+  await jest.advanceTimersByTimeAsync(1000);
+  expect(d.settings.isAllowed).not.toHaveBeenCalled();
+  expect(d.orchestrator.runDialog).not.toHaveBeenCalled();
+  expect(d.send).not.toHaveBeenCalled();
+});
+
+test('групповой ключ диалога → process молчит (второй уровень защиты)', async () => {
+  const d = deps();
+  await expect(dispatcher.process(1, 'g:-1003759304044', meta, d)).resolves.toBeUndefined();
+  expect(d.orchestrator.runDialog).not.toHaveBeenCalled();
+  expect(d.send).not.toHaveBeenCalled();
+});
+
 test('гейт проверяется по телефону из meta', async () => {
   const d = deps();
   dispatcher.enqueue(1, 'k', meta, d);

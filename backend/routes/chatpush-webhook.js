@@ -20,6 +20,7 @@ const chatpush = require('../services/chatpush');
 const { phoneMatchCandidates, dialogKey: chatDialogKey } = require('../services/chat');
 const chatEvents = require('../services/chat-events');
 const dispatcher = require('../services/agent/dispatcher');
+const groupChat = require('../services/agent/group-chat');
 
 // Текстовые типы разных каналов: WhatsApp/MAX → 'text', tdlib/Telegram → 'formattedText'.
 const AGENT_TEXT_TYPES = new Set(['text', 'formattedText']);
@@ -178,19 +179,30 @@ router.post('/webhook', async (req, res) => {
     // 3) Авто-ответ агента — при глобальном флаге (env kill-switch) И только на
     //    ВХОДЯЩЕЕ текстовое сообщение. Гейт допуска (per-salon вкл/выкл + бело/чёрный
     //    список), дебаунс серии, ReAct-цикл и отправка — внутри диспетчера.
+    //    Групповые чаты Мила игнорирует полностью (см. services/agent/group-chat.js):
+    //    ключ диалога — `phone || chat_id`, а в группе Chatpush шлёт номер УЧАСТНИКА,
+    //    поэтому без этого гейта сообщение из рабочей группы уводило Милу в ЛИЧНУЮ
+    //    переписку с этим участником. Сообщение при этом сохранено и видно в «Чате» —
+    //    в группе отвечает только человек.
     if (
       config.CHATPUSH.agentEnabled &&
       storedNew &&
       msg && msg.direction === 'incoming' &&
       AGENT_TEXT_TYPES.has(msg.type) && (msg.text || '').trim()
     ) {
-      const dialogKey = (msg.phone && msg.phone.trim()) || msg.chatId;
-      if (dialogKey) {
-        dispatcher.enqueue(salonId, dialogKey, {
-          phone: msg.phone,
-          channel: msg.channel,
-          messageId: msg.messageId,
-        });
+      if (groupChat.isGroupMessage(msg)) {
+        logger.info(`skip agent: групповой чат ${msg.chatId} (${msg.channel}) — Мила отвечает только в личной переписке`);
+      } else {
+        const dialogKey = (msg.phone && msg.phone.trim()) || msg.chatId;
+        if (dialogKey) {
+          dispatcher.enqueue(salonId, dialogKey, {
+            phone: msg.phone,
+            channel: msg.channel,
+            messageId: msg.messageId,
+            chatId: msg.chatId,
+            chatType: msg.chatType,
+          });
+        }
       }
     }
   } catch (e) {

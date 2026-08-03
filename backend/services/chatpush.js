@@ -215,6 +215,9 @@ function envelope(body) {
       instanceId: p.instance?.id ?? p.instance_id ?? null,
       m: nm.message || {},
       chatId: str(nm.chat_id),
+      // 'person' | 'group' | … — явный признак группы (шлют tdlib и MAX; WhatsApp
+      // не шлёт, там группу видно по jid «@g.us»). Нужен агенту: в группе он молчит.
+      chatType: str(nm.chat_type),
       // номер партнёра по чату (клиента)
       phone: str(nm.chat_phone || nm.sender_phone_number),
       senderName: nm.sender_name || nm.pushname || null,
@@ -229,6 +232,7 @@ function envelope(body) {
     instanceId: p.instance_id ?? null,
     m: p.message || {},
     chatId: str(p.chat_id),
+    chatType: str(p.chat_type),
     // номер КЛИЕНТА (не салона): для outgoing клиент — получатель, для incoming — отправитель.
     // Так вся переписка с одним клиентом группируется по одному phone независимо от направления.
     phone: str(dir === 'outgoing'
@@ -264,6 +268,7 @@ function parseMessageEvent(body) {
     mimeType: m.file_data?.mime_type || null,
     timestamp: m.timestamp || e.ts || null,
     chatId: e.chatId,
+    chatType: e.chatType,                                    // person | group | … | null
     phone: e.phone,
     senderName: e.senderName,
   };

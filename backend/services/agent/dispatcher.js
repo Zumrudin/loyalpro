@@ -8,6 +8,7 @@ const bookingEvents = require('./booking');
 const pendingReplies = require('./pending-replies');
 const escalateTool = require('./tools/escalate-to-operator');
 const adminHours = require('./admin-hours');
+const groupChat = require('./group-chat');
 const { createLogger } = require('../../logger');
 const logger = createLogger('AgentDispatcher');
 
@@ -25,9 +26,20 @@ const rerun = new Set();     // пришло входящее, пока диал
 
 function keyOf(salonId, dialogKey) { return `${salonId}:${dialogKey}`; }
 
+// Мила ведёт переписку только ЛИЧНО с клиентом: групповой чат отсекается и здесь,
+// а не только в вебхуке — второй уровень защиты для любых будущих вызовов
+// (дублировать нечего: сам список признаков живёт в одном месте, group-chat.js).
+function isGroupDialog(dialogKey, meta) {
+  return groupChat.isGroupChatId(dialogKey) || groupChat.isGroupMessage(meta);
+}
+
 // Вызывается из вебхука на каждое ВХОДЯЩЕЕ. Копит серию, запускает после тишины.
 // opts (для тестов): { debounceMs, settings, orchestrator, send }.
 function enqueue(salonId, dialogKey, meta, opts = {}) {
+  if (isGroupDialog(dialogKey, meta)) {
+    logger.info(`skip ${dialogKey}: групповой чат — агент отвечает только в личной переписке`);
+    return;
+  }
   const k = keyOf(salonId, dialogKey);
   const debounceMs = opts.debounceMs || config.AGENT_DEBOUNCE_MS;
   // Прогон уже идёт → перезапустим после него через флаг rerun; новый debounce-таймер
@@ -44,6 +56,10 @@ function enqueue(salonId, dialogKey, meta, opts = {}) {
 }
 
 async function process(salonId, dialogKey, meta, opts = {}) {
+  if (isGroupDialog(dialogKey, meta)) {
+    logger.info(`skip ${dialogKey}: групповой чат — агент отвечает только в личной переписке`);
+    return;
+  }
   const k = keyOf(salonId, dialogKey);
   const settings = opts.settings || agentSettings;
   const orchestrator = opts.orchestrator || orchestratorDefault;
