@@ -125,6 +125,20 @@ async function stopEnrollment(db, enrollmentId, status, reason) {
     [enrollmentId, `enrollment ${status}: ${reason || ''}`.slice(0, 500)]);
 }
 
+// Отложить касание на сутки (НЕ терминальный skip): строка остаётся
+// scheduled и видна в дашборде, бюджет попыток обнуляется. Тот же приём,
+// что анти-спам «1 касание в день» ниже — вынесено в хелпер, чтобы не
+// дублировать SQL. База сдвига — max(scheduled_at, now()): просроченная
+// строка уезжает в будущее ОДНИМ шагом, а не по дню за тик.
+async function deferTouch(db, row, reason) {
+  const base = Math.max(new Date(row.scheduled_at || Date.now()).getTime(), Date.now());
+  await db.query(
+    `UPDATE care_touch_sends SET scheduled_at=$2, attempts=0, last_attempt_at=NULL,
+            decision_reason=$3
+      WHERE id=$1`,
+    [row.id, plusOneDay(new Date(base)), reason]);
+}
+
 /** Цепочка пройдена (нет больше scheduled) → enrollment completed. */
 async function maybeCompleteChain(db, enrollmentId) {
   const left = await db.oneOrNone(
@@ -166,24 +180,44 @@ async function processOne(row, deps = defaultDeps) {
       return finish('cancelled', `enrollment ${row.enrollment_status}`);
     }
     if (!row.program_enabled) return finish('skipped', 'программа выключена');
-    if (!d.agentGloballyEnabled()) return finish('skipped', 'агент выключен (env)');
+    if (!d.agentGloballyEnabled()) {
+      // Env kill-switch НЕ означает «этой цепочке нельзя навсегда» — это
+      // временное состояние проекта (Мила выключена сейчас, может включиться
+      // через час). Терминальный skip здесь сжигал бы цепочку молча (ревью
+      // 2026-08-02: касания дозревали при выключенном env и терялись
+      // безвозвратно, at-most-once не даёт второго шанса). Откладываем на
+      // сутки — строка остаётся scheduled и видна в дашборде, при включении
+      // env уйдёт сама.
+      await deferTouch(db, row, 'отложено: агент выключен (env)');
+      return;
+    }
 
     const gate = await d.isAllowed(sid, row.phone);   // fail-closed: throw → catch ниже
-    if (!gate.allow) return finish('skipped', `гейт Милы: ${gate.reason}`);
+    if (!gate.allow) {
+      // 'outside-schedule' — литерал из services/agent-gate.js (decideGate):
+      // расписание Милы проектировалось для ВХОДЯЩИХ сообщений, а не для
+      // исходящих care-касаний; вне окна режим принудительно сужается до
+      // whitelist, и дневное касание (напр. send_time 10:30) получило бы
+      // терминальный skip каждый раз. Откладываем на сутки вместо этого.
+      // ВНИМАНИЕ: сдвиг на +24ч сохраняет время суток — если окно
+      // расписания постоянное (напр. всегда ночное), касание будет вечно
+      // откладываться и висеть scheduled в дашборде. Это ОСОЗНАННО:
+      // видимость в дашборде лучше молчаливой смерти цепочки.
+      if (gate.reason === 'outside-schedule') {
+        await deferTouch(db, row, 'отложено: вне окна расписания агента');
+        return;
+      }
+      // Прочие причины (whitelist/blacklist/disabled per-salon) — это
+      // «этому клиенту/салону нельзя», а не «сейчас нельзя» → терминальный skip.
+      return finish('skipped', `гейт Милы: ${gate.reason}`);
+    }
 
     const dlg = await d.dialogStatus(sid, row.phone);
     if (dlg === 'escalated') return finish('skipped', 'диалог на операторе');
 
     if (await d.sentTodayExists(sid, row.phone)) {
-      // Анти-спам «1 касание в день»: сдвигаем на завтра, бюджет попыток
-      // обнуляем. База сдвига — max(scheduled_at, now()): просроченная на
-      // неделю строка уезжает в будущее ОДНИМ шагом, а не по дню за тик.
-      const base = Math.max(new Date(row.scheduled_at || Date.now()).getTime(), Date.now());
-      await db.query(
-        `UPDATE care_touch_sends SET scheduled_at=$2, attempts=0, last_attempt_at=NULL,
-                decision_reason='анти-спам: сдвинуто на день'
-          WHERE id=$1`,
-        [row.id, plusOneDay(new Date(base))]);
+      // Анти-спам «1 касание в день»: сдвигаем на завтра (см. deferTouch).
+      await deferTouch(db, row, 'анти-спам: сдвинуто на день');
       return;
     }
 

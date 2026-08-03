@@ -63,6 +63,30 @@ describe('care worker processOne', () => {
     const skipped = deps.db.query.mock.calls.find(c => c[0].includes(`'skipped'`));
     expect(skipped).toBeTruthy();
   });
+  test('env kill-switch выключен → отложено на сутки, НЕ skipped, цепочка не завершена', async () => {
+    const { deps } = makeDeps({ agentGloballyEnabled: () => false });
+    await worker.processOne(row, deps);
+    expect(deps.createMessage).not.toHaveBeenCalled();
+    expect(deps.sendMessage).not.toHaveBeenCalled();
+    const skipped = deps.db.query.mock.calls.find(c => c[0].includes(`'skipped'`));
+    expect(skipped).toBeFalsy();
+    const completed = deps.db.query.mock.calls.find(c => c[0].includes(`'completed'`));
+    expect(completed).toBeFalsy();
+    const moved = deps.db.query.mock.calls.find(c => c[0].includes('scheduled_at') && c[1].includes('отложено: агент выключен (env)'));
+    expect(moved).toBeTruthy();
+  });
+  test('гейт outside-schedule → отложено на сутки, НЕ skipped, цепочка не завершена', async () => {
+    const { deps } = makeDeps({ isAllowed: jest.fn(async () => ({ allow: false, reason: 'outside-schedule' })) });
+    await worker.processOne(row, deps);
+    expect(deps.createMessage).not.toHaveBeenCalled();
+    expect(deps.sendMessage).not.toHaveBeenCalled();
+    const skipped = deps.db.query.mock.calls.find(c => c[0].includes(`'skipped'`));
+    expect(skipped).toBeFalsy();
+    const completed = deps.db.query.mock.calls.find(c => c[0].includes(`'completed'`));
+    expect(completed).toBeFalsy();
+    const moved = deps.db.query.mock.calls.find(c => c[0].includes('scheduled_at') && c[1].includes('отложено: вне окна расписания агента'));
+    expect(moved).toBeTruthy();
+  });
   test('диалог на операторе → skipped', async () => {
     const { deps } = makeDeps({ dialogStatus: jest.fn(async () => 'escalated') });
     await worker.processOne(row, deps);
