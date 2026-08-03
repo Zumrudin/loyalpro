@@ -30,7 +30,7 @@ function makeDeps(over = {}) {
       rememberPending: jest.fn(),
       persistWhatsapp: jest.fn(async () => {}),
       escalateDialog: jest.fn(async () => {}),
-      log: { info: () => {}, warn: () => {}, error: () => {} },
+      log: { info: jest.fn(), warn: jest.fn(), error: jest.fn() },
       ...over,
     },
   };
@@ -106,11 +106,25 @@ describe('care worker processOne', () => {
     await worker.processOne(row, deps);
     expect(deps.sendMessage).not.toHaveBeenCalled();
   });
-  test('сбой отправки → строка остаётся на ретрай (attempts<3)', async () => {
+  // Требование M1: раздельные исходы сбоя отправки. При at-most-once сбой
+  // sendMessage случается ПОСЛЕ записанного sent-маркера — откат в scheduled
+  // обязан идти строго после него (порядок проверяется по списку запросов).
+  test('сбой отправки при attempts=1 → строка возвращена в scheduled (ретрай)', async () => {
     const { deps } = makeDeps({ sendMessage: jest.fn(async () => { throw new Error('net'); }) });
-    await worker.processOne(row, deps);
-    const backToScheduled = deps.db.query.mock.calls.find(c => c[0].includes(`'scheduled'`) || c[0].includes(`'failed'`));
-    expect(backToScheduled).toBeTruthy();
+    await worker.processOne({ ...row, attempts: 1 }, deps);
+    const sqls = deps.db.query.mock.calls.map(c => c[0]);
+    const sentIdx = sqls.findIndex(s => s.includes(`status='sent'`));
+    const backIdx = sqls.findIndex(s => s.includes(`status='scheduled'`));
+    expect(sentIdx).toBeGreaterThanOrEqual(0);          // маркер был записан до отправки
+    expect(backIdx).toBeGreaterThan(sentIdx);           // и откатан после сбоя
+    expect(sqls.some(s => s.includes(`'failed'`))).toBe(false);
+  });
+  test('сбой отправки при attempts=3 → ретраи исчерпаны, строка failed', async () => {
+    const { deps } = makeDeps({ sendMessage: jest.fn(async () => { throw new Error('net'); }) });
+    await worker.processOne({ ...row, attempts: 3 }, deps);
+    const sqls = deps.db.query.mock.calls.map(c => c[0]);
+    expect(sqls.some(s => s.includes(`status='failed'`))).toBe(true);
+    expect(sqls.some(s => s.includes(`status='scheduled'`))).toBe(false);
   });
 
   // ── escalate: осложнение в переписке (ревизия Task 4, ОБЯЗАТЕЛЬНО) ──
@@ -140,5 +154,123 @@ describe('care worker processOne', () => {
     expect(deps.rememberPending).not.toHaveBeenCalled();
     const sent = deps.db.query.mock.calls.find(c => c[0].includes(`'sent'`));
     expect(sent).toBeFalsy();
+  });
+});
+
+// ── at-most-once, таймаут LLM, завершение цепочки, анти-спам (ревизия 2026-08-02) ──
+describe('care worker at-most-once', () => {
+  test('mark-before-send: UPDATE sent записан в БД ДО вызова sendMessage', async () => {
+    const order = [];
+    const { deps } = makeDeps();
+    deps.db.query = jest.fn(async (sql) => { order.push(sql); return { rowCount: 1 }; });
+    deps.sendMessage = jest.fn(async () => { order.push('SEND'); return { id: 777, channel: 'telegram' }; });
+    await worker.processOne(row, deps);
+    const sentIdx = order.findIndex(s => typeof s === 'string' && s.includes(`status='sent'`));
+    const sendIdx = order.indexOf('SEND');
+    expect(sentIdx).toBeGreaterThanOrEqual(0);
+    expect(sendIdx).toBeGreaterThan(sentIdx);
+  });
+  test('sendMessage упал при записанном sent-маркере → откат в scheduled + лог отката', async () => {
+    const { deps } = makeDeps({ sendMessage: jest.fn(async () => { throw new Error('net down'); }) });
+    await worker.processOne(row, deps);
+    const rolled = deps.db.query.mock.calls.find(c => c[0].includes(`status='scheduled'`));
+    expect(rolled).toBeTruthy();
+    expect(deps.log.warn).toHaveBeenCalledWith(expect.stringContaining('sent-маркер откатан'));
+  });
+  test('падение дозаписи delivery_id ПОСЛЕ доставки → sent НЕ откатывается в scheduled', async () => {
+    const { deps } = makeDeps();
+    deps.db.query = jest.fn(async (sql) => {
+      if (sql.includes('delivery_id')) throw new Error('db hiccup');
+      return { rowCount: 1 };
+    });
+    await worker.processOne(row, deps);
+    expect(deps.sendMessage).toHaveBeenCalledTimes(1);
+    const sqls = deps.db.query.mock.calls.map(c => c[0]);
+    expect(sqls.some(s => s.includes(`status='scheduled'`))).toBe(false);
+    expect(deps.log.error).toHaveBeenCalledWith(expect.stringContaining('persist delivery'));
+  });
+  test('падение пост-обработки ПОСЛЕ доставки → re-mark sent, никакого scheduled', async () => {
+    // rememberPending бросает синхронно уже после успешного sendMessage —
+    // единственный путь в общий catch при delivered=true.
+    const { deps } = makeDeps({ rememberPending: jest.fn(() => { throw new Error('boom'); }) });
+    await worker.processOne(row, deps);
+    expect(deps.sendMessage).toHaveBeenCalledTimes(1);
+    const sqls = deps.db.query.mock.calls.map(c => c[0]);
+    expect(sqls.some(s => s.includes(`status='scheduled'`))).toBe(false);
+    // Best-effort re-mark 'sent' с текстом ошибки (запрос с error=, без sent_at).
+    const remark = deps.db.query.mock.calls.find(c => c[0].includes(`status='sent', error=`));
+    expect(remark).toBeTruthy();
+    expect(deps.log.error).toHaveBeenCalledWith(expect.stringContaining('доставлено'));
+  });
+  test('детерминированный skip (гейт) последнего касания → проверка завершения цепочки', async () => {
+    // oneOrNone → null: scheduled-строк не осталось → enrollment completed.
+    const { deps } = makeDeps({ isAllowed: jest.fn(async () => ({ allow: false, reason: 'whitelist' })) });
+    await worker.processOne(row, deps);
+    const chainCheck = deps.db.oneOrNone.mock.calls.find(c => c[0].includes(`status='scheduled'`));
+    expect(chainCheck).toBeTruthy();
+    expect(chainCheck[1]).toEqual([11]);   // enrollment_id
+    const completed = deps.db.query.mock.calls.find(c => c[0].includes(`'completed'`));
+    expect(completed).toBeTruthy();
+  });
+  test('детерминированный skip при оставшихся scheduled → enrollment НЕ completed', async () => {
+    const { deps } = makeDeps({ isAllowed: jest.fn(async () => ({ allow: false, reason: 'whitelist' })) });
+    deps.db.oneOrNone = jest.fn(async () => ({ '?column?': 1 }));   // ещё есть scheduled
+    await worker.processOne(row, deps);
+    const completed = deps.db.query.mock.calls.find(c => c[0].includes(`'completed'`));
+    expect(completed).toBeFalsy();
+  });
+  test('таймаут LLM: зависший провайдер → строка на ретрай, sendMessage не вызван', async () => {
+    jest.useFakeTimers();
+    try {
+      const { deps } = makeDeps({ createMessage: jest.fn(() => new Promise(() => {})) });   // висит вечно
+      const p = worker.processOne(row, deps);
+      // Прогоняем цепочку await'ов до Promise.race (моки резолвятся микротасками).
+      for (let i = 0; i < 200; i++) await Promise.resolve();
+      jest.advanceTimersByTime(60001);
+      await p;
+      expect(deps.sendMessage).not.toHaveBeenCalled();
+      const rolled = deps.db.query.mock.calls.find(c => c[0].includes(`status='scheduled'`));
+      expect(rolled).toBeTruthy();
+      expect(String(rolled[1][1])).toMatch(/timeout/);
+    } finally { jest.useRealTimers(); }
+  });
+  test('анти-спам: просроченная на неделю строка уезжает в будущее одним сдвигом', async () => {
+    const { deps } = makeDeps({ sentTodayExists: jest.fn(async () => true) });
+    const stale = { ...row, scheduled_at: new Date(Date.now() - 7 * 24 * 3600 * 1000) };
+    await worker.processOne(stale, deps);
+    const moved = deps.db.query.mock.calls.find(c => c[0].includes('scheduled_at'));
+    expect(moved).toBeTruthy();
+    const next = moved[1][1];
+    expect(next instanceof Date).toBe(true);
+    expect(next.getTime()).toBeGreaterThan(Date.now());   // > now, а не «вчера + день»
+  });
+});
+
+describe('care worker processTick', () => {
+  test('guard: тик не наслаивается на ещё живой предыдущий', async () => {
+    let release;
+    let firstLease = true;
+    const { deps } = makeDeps();
+    deps.db.any = jest.fn(() => {
+      if (!firstLease) return Promise.resolve([]);
+      firstLease = false;
+      return new Promise(res => { release = () => res([]); });   // висит до release()
+    });
+    const p1 = worker.processTick(deps);
+    await worker.processTick(deps);               // guard: выходит сразу, аренду не зовёт
+    expect(deps.db.any).toHaveBeenCalledTimes(1);
+    release();
+    await p1;
+    await worker.processTick(deps);               // после завершения тик снова работает
+    expect(deps.db.any).toHaveBeenCalledTimes(2);
+  });
+  test('касание удалено из программы → cancelled + проверка завершения цепочки', async () => {
+    const { deps } = makeDeps();
+    deps.db.any = jest.fn(async () => [{ ...row, intent_text: null }]);
+    await worker.processTick(deps);
+    const cancelled = deps.db.query.mock.calls.find(c => c[0].includes(`'cancelled'`));
+    expect(cancelled).toBeTruthy();
+    const chainCheck = deps.db.oneOrNone.mock.calls.find(c => c[0].includes(`status='scheduled'`));
+    expect(chainCheck).toBeTruthy();
   });
 });

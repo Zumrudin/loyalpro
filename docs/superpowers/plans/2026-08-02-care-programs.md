@@ -1164,6 +1164,27 @@ git commit -m "feat(care): записи клиента для retention-пров
 >    константу `LEASE_SQL`. Урок: юнит-тесты с моками БД валидность SQL не
 >    проверяют — живой `EXPLAIN` на дев-БД ОБЯЗАТЕЛЕН для каждого нового
 >    запроса (EXPLAIN без ANALYZE ничего не исполняет и безопасен).
+> 6. **Ревизия код-ревью (at-most-once, 2026-08-02) — блоки кода ниже уже
+>    синхронизированы.** Доставка объявлена AT-MOST-ONCE: пропущенное касание
+>    дешевле дубля живому пациенту (философия фичи). Отсюда mark-before-send:
+>    sent-маркер пишется в БД ДО sendMessage, delivery_id/channel_used
+>    дозаписываются после best-effort; catch-разбор по флагам
+>    sentMarked/delivered/terminalWritten (delivered → статус НИКОГДА не
+>    откатывается в scheduled, только re-mark sent + ERROR-лог; terminalWritten
+>    → терминальный статус не перезаписывается; sentMarked без delivered →
+>    откат в scheduled безопасен, лог с пометкой «sent-маркер откатан»).
+>    Care-проход LLM ограничен таймаутом 60с (Promise.race, LLM_TIMEOUT_MS;
+>    60с < backoff аренды 120с — таймаут-ретрай не пересечётся с живым прошлым
+>    вызовом), maxTokens 700→1200 (легитимные 1500 символов TEXT_MAX + JSON не
+>    влезали, обрезанный JSON падал в fail-safe skip). processTick получил
+>    guard _tickInFlight (setInterval не ждёт медленный прогон), хелпер
+>    finish() зовёт maybeCompleteChain после ВСЕХ терминальных исходов —
+>    включая детерминированные skip/cancel и dead-touch cancel в processTick
+>    (иначе enrollment-зомби: active навсегда при нуле scheduled). Анти-спам
+>    сдвигает от max(scheduled_at, now()) — просроченная на неделю строка
+>    уезжает в будущее ОДНИМ шагом. Тестов 21: сбой отправки разделён на
+>    attempts=1→scheduled / attempts=3→failed (M1), + порядок mark-before-send,
+>    инварианты catch, завершение цепочки, таймаут LLM, guard тика.
 
 - [ ] **Step 1: Падающие тесты (моки всех deps)**
 
@@ -1200,7 +1221,7 @@ function makeDeps(over = {}) {
       rememberPending: jest.fn(),
       persistWhatsapp: jest.fn(async () => {}),
       escalateDialog: jest.fn(async () => {}),
-      log: { info: () => {}, warn: () => {}, error: () => {} },
+      log: { info: jest.fn(), warn: jest.fn(), error: jest.fn() },
       ...over,
     },
   };
@@ -1276,11 +1297,25 @@ describe('care worker processOne', () => {
     await worker.processOne(row, deps);
     expect(deps.sendMessage).not.toHaveBeenCalled();
   });
-  test('сбой отправки → строка остаётся на ретрай (attempts<3)', async () => {
+  // Требование M1: раздельные исходы сбоя отправки. При at-most-once сбой
+  // sendMessage случается ПОСЛЕ записанного sent-маркера — откат в scheduled
+  // обязан идти строго после него (порядок проверяется по списку запросов).
+  test('сбой отправки при attempts=1 → строка возвращена в scheduled (ретрай)', async () => {
     const { deps } = makeDeps({ sendMessage: jest.fn(async () => { throw new Error('net'); }) });
-    await worker.processOne(row, deps);
-    const backToScheduled = deps.db.query.mock.calls.find(c => c[0].includes(`'scheduled'`) || c[0].includes(`'failed'`));
-    expect(backToScheduled).toBeTruthy();
+    await worker.processOne({ ...row, attempts: 1 }, deps);
+    const sqls = deps.db.query.mock.calls.map(c => c[0]);
+    const sentIdx = sqls.findIndex(s => s.includes(`status='sent'`));
+    const backIdx = sqls.findIndex(s => s.includes(`status='scheduled'`));
+    expect(sentIdx).toBeGreaterThanOrEqual(0);          // маркер был записан до отправки
+    expect(backIdx).toBeGreaterThan(sentIdx);           // и откатан после сбоя
+    expect(sqls.some(s => s.includes(`'failed'`))).toBe(false);
+  });
+  test('сбой отправки при attempts=3 → ретраи исчерпаны, строка failed', async () => {
+    const { deps } = makeDeps({ sendMessage: jest.fn(async () => { throw new Error('net'); }) });
+    await worker.processOne({ ...row, attempts: 3 }, deps);
+    const sqls = deps.db.query.mock.calls.map(c => c[0]);
+    expect(sqls.some(s => s.includes(`status='failed'`))).toBe(true);
+    expect(sqls.some(s => s.includes(`status='scheduled'`))).toBe(false);
   });
 
   // ── escalate: осложнение в переписке (ревизия Task 4, ОБЯЗАТЕЛЬНО) ──
@@ -1312,6 +1347,124 @@ describe('care worker processOne', () => {
     expect(sent).toBeFalsy();
   });
 });
+
+// ── at-most-once, таймаут LLM, завершение цепочки, анти-спам (ревизия 2026-08-02) ──
+describe('care worker at-most-once', () => {
+  test('mark-before-send: UPDATE sent записан в БД ДО вызова sendMessage', async () => {
+    const order = [];
+    const { deps } = makeDeps();
+    deps.db.query = jest.fn(async (sql) => { order.push(sql); return { rowCount: 1 }; });
+    deps.sendMessage = jest.fn(async () => { order.push('SEND'); return { id: 777, channel: 'telegram' }; });
+    await worker.processOne(row, deps);
+    const sentIdx = order.findIndex(s => typeof s === 'string' && s.includes(`status='sent'`));
+    const sendIdx = order.indexOf('SEND');
+    expect(sentIdx).toBeGreaterThanOrEqual(0);
+    expect(sendIdx).toBeGreaterThan(sentIdx);
+  });
+  test('sendMessage упал при записанном sent-маркере → откат в scheduled + лог отката', async () => {
+    const { deps } = makeDeps({ sendMessage: jest.fn(async () => { throw new Error('net down'); }) });
+    await worker.processOne(row, deps);
+    const rolled = deps.db.query.mock.calls.find(c => c[0].includes(`status='scheduled'`));
+    expect(rolled).toBeTruthy();
+    expect(deps.log.warn).toHaveBeenCalledWith(expect.stringContaining('sent-маркер откатан'));
+  });
+  test('падение дозаписи delivery_id ПОСЛЕ доставки → sent НЕ откатывается в scheduled', async () => {
+    const { deps } = makeDeps();
+    deps.db.query = jest.fn(async (sql) => {
+      if (sql.includes('delivery_id')) throw new Error('db hiccup');
+      return { rowCount: 1 };
+    });
+    await worker.processOne(row, deps);
+    expect(deps.sendMessage).toHaveBeenCalledTimes(1);
+    const sqls = deps.db.query.mock.calls.map(c => c[0]);
+    expect(sqls.some(s => s.includes(`status='scheduled'`))).toBe(false);
+    expect(deps.log.error).toHaveBeenCalledWith(expect.stringContaining('persist delivery'));
+  });
+  test('падение пост-обработки ПОСЛЕ доставки → re-mark sent, никакого scheduled', async () => {
+    // rememberPending бросает синхронно уже после успешного sendMessage —
+    // единственный путь в общий catch при delivered=true.
+    const { deps } = makeDeps({ rememberPending: jest.fn(() => { throw new Error('boom'); }) });
+    await worker.processOne(row, deps);
+    expect(deps.sendMessage).toHaveBeenCalledTimes(1);
+    const sqls = deps.db.query.mock.calls.map(c => c[0]);
+    expect(sqls.some(s => s.includes(`status='scheduled'`))).toBe(false);
+    // Best-effort re-mark 'sent' с текстом ошибки (запрос с error=, без sent_at).
+    const remark = deps.db.query.mock.calls.find(c => c[0].includes(`status='sent', error=`));
+    expect(remark).toBeTruthy();
+    expect(deps.log.error).toHaveBeenCalledWith(expect.stringContaining('доставлено'));
+  });
+  test('детерминированный skip (гейт) последнего касания → проверка завершения цепочки', async () => {
+    // oneOrNone → null: scheduled-строк не осталось → enrollment completed.
+    const { deps } = makeDeps({ isAllowed: jest.fn(async () => ({ allow: false, reason: 'whitelist' })) });
+    await worker.processOne(row, deps);
+    const chainCheck = deps.db.oneOrNone.mock.calls.find(c => c[0].includes(`status='scheduled'`));
+    expect(chainCheck).toBeTruthy();
+    expect(chainCheck[1]).toEqual([11]);   // enrollment_id
+    const completed = deps.db.query.mock.calls.find(c => c[0].includes(`'completed'`));
+    expect(completed).toBeTruthy();
+  });
+  test('детерминированный skip при оставшихся scheduled → enrollment НЕ completed', async () => {
+    const { deps } = makeDeps({ isAllowed: jest.fn(async () => ({ allow: false, reason: 'whitelist' })) });
+    deps.db.oneOrNone = jest.fn(async () => ({ '?column?': 1 }));   // ещё есть scheduled
+    await worker.processOne(row, deps);
+    const completed = deps.db.query.mock.calls.find(c => c[0].includes(`'completed'`));
+    expect(completed).toBeFalsy();
+  });
+  test('таймаут LLM: зависший провайдер → строка на ретрай, sendMessage не вызван', async () => {
+    jest.useFakeTimers();
+    try {
+      const { deps } = makeDeps({ createMessage: jest.fn(() => new Promise(() => {})) });   // висит вечно
+      const p = worker.processOne(row, deps);
+      // Прогоняем цепочку await'ов до Promise.race (моки резолвятся микротасками).
+      for (let i = 0; i < 200; i++) await Promise.resolve();
+      jest.advanceTimersByTime(60001);
+      await p;
+      expect(deps.sendMessage).not.toHaveBeenCalled();
+      const rolled = deps.db.query.mock.calls.find(c => c[0].includes(`status='scheduled'`));
+      expect(rolled).toBeTruthy();
+      expect(String(rolled[1][1])).toMatch(/timeout/);
+    } finally { jest.useRealTimers(); }
+  });
+  test('анти-спам: просроченная на неделю строка уезжает в будущее одним сдвигом', async () => {
+    const { deps } = makeDeps({ sentTodayExists: jest.fn(async () => true) });
+    const stale = { ...row, scheduled_at: new Date(Date.now() - 7 * 24 * 3600 * 1000) };
+    await worker.processOne(stale, deps);
+    const moved = deps.db.query.mock.calls.find(c => c[0].includes('scheduled_at'));
+    expect(moved).toBeTruthy();
+    const next = moved[1][1];
+    expect(next instanceof Date).toBe(true);
+    expect(next.getTime()).toBeGreaterThan(Date.now());   // > now, а не «вчера + день»
+  });
+});
+
+describe('care worker processTick', () => {
+  test('guard: тик не наслаивается на ещё живой предыдущий', async () => {
+    let release;
+    let firstLease = true;
+    const { deps } = makeDeps();
+    deps.db.any = jest.fn(() => {
+      if (!firstLease) return Promise.resolve([]);
+      firstLease = false;
+      return new Promise(res => { release = () => res([]); });   // висит до release()
+    });
+    const p1 = worker.processTick(deps);
+    await worker.processTick(deps);               // guard: выходит сразу, аренду не зовёт
+    expect(deps.db.any).toHaveBeenCalledTimes(1);
+    release();
+    await p1;
+    await worker.processTick(deps);               // после завершения тик снова работает
+    expect(deps.db.any).toHaveBeenCalledTimes(2);
+  });
+  test('касание удалено из программы → cancelled + проверка завершения цепочки', async () => {
+    const { deps } = makeDeps();
+    deps.db.any = jest.fn(async () => [{ ...row, intent_text: null }]);
+    await worker.processTick(deps);
+    const cancelled = deps.db.query.mock.calls.find(c => c[0].includes(`'cancelled'`));
+    expect(cancelled).toBeTruthy();
+    const chainCheck = deps.db.oneOrNone.mock.calls.find(c => c[0].includes(`status='scheduled'`));
+    expect(chainCheck).toBeTruthy();
+  });
+});
 ```
 
 - [ ] **Step 2: Run** `cd backend && npx jest care-worker` → FAIL
@@ -1324,6 +1477,10 @@ describe('care worker processOne', () => {
 // (FOR UPDATE SKIP LOCKED + attempts при аренде), затем на каждую строку:
 // детерминированные проверки → care-проход LLM → отправка → персист.
 // Все внешние зависимости инжектируются (юнит-тесты без БД/сети).
+//
+// Доставка — AT-MOST-ONCE (ревью 2026-08-02): пропущенное касание дешевле
+// дубля живому пациенту, это философия фичи. Отсюда mark-before-send и
+// правила catch-разбора (см. блок отправки в processOne).
 //
 // Ответы пациента на касание обрабатывает ОСНОВНОЙ агент Милы (обычный
 // вебхук-путь со всеми мед-границами) — воркер в это не вмешивается;
@@ -1351,6 +1508,10 @@ const log = createLogger('CareWorker');
 const WORKER_TICK_MS  = 15000;
 const MAX_ATTEMPTS    = 3;
 const RETRY_BACKOFF_S = 120;
+// Таймаут care-прохода LLM: зависший провайдер не должен держать строку (и
+// тик) вечно. 60с < backoff аренды 120с — таймаут-ретрай не пересечётся с
+// ещё живым прошлым вызовом в окне аренды.
+const LLM_TIMEOUT_MS  = 60000;
 
 const defaultDeps = {
   db: realDb,
@@ -1451,27 +1612,47 @@ async function processOne(row, deps = defaultDeps) {
   const { db } = d;
   const sid = row.salon_id;
 
+  // Флаги для catch-разбора (инвариант at-most-once, см. блок отправки):
+  let sentMarked = false;      // sent-маркер записан ДО отправки (откат в scheduled допустим)
+  let delivered = false;       // sendMessage вернулся успешно (статус НЕ откатывать НИКОГДА)
+  let terminalWritten = false; // терминальный skipped/cancelled в БД (статус НЕ перезаписывать)
+
+  // Терминальный исход + проверка завершения цепочки: ЛЮБОЙ терминальный
+  // статус последнего касания обязан завершить enrollment (в т.ч.
+  // детерминированные skip'ы — иначе enrollment зависает active навсегда с
+  // нулём scheduled: зомби в дашборде). Ошибка проверки цепочки логируется,
+  // но НЕ откатывает уже записанный терминальный статус.
+  const finish = async (status, reason) => {
+    await markSend(db, row.id, status, reason);
+    terminalWritten = true;
+    await maybeCompleteChain(db, row.enrollment_id)
+      .catch(e => d.log.error(`chain check #${row.id}: ${e.message}`));
+  };
+
   try {
     // ── детерминированные проверки ─────────────────────────────
     if (row.enrollment_status !== 'active') {
-      return markSend(db, row.id, 'cancelled', `enrollment ${row.enrollment_status}`);
+      return finish('cancelled', `enrollment ${row.enrollment_status}`);
     }
-    if (!row.program_enabled) return markSend(db, row.id, 'skipped', 'программа выключена');
-    if (!d.agentGloballyEnabled()) return markSend(db, row.id, 'skipped', 'агент выключен (env)');
+    if (!row.program_enabled) return finish('skipped', 'программа выключена');
+    if (!d.agentGloballyEnabled()) return finish('skipped', 'агент выключен (env)');
 
     const gate = await d.isAllowed(sid, row.phone);   // fail-closed: throw → catch ниже
-    if (!gate.allow) return markSend(db, row.id, 'skipped', `гейт Милы: ${gate.reason}`);
+    if (!gate.allow) return finish('skipped', `гейт Милы: ${gate.reason}`);
 
     const dlg = await d.dialogStatus(sid, row.phone);
-    if (dlg === 'escalated') return markSend(db, row.id, 'skipped', 'диалог на операторе');
+    if (dlg === 'escalated') return finish('skipped', 'диалог на операторе');
 
     if (await d.sentTodayExists(sid, row.phone)) {
-      // Анти-спам «1 касание в день»: сдвигаем на завтра, бюджет попыток обнуляем.
+      // Анти-спам «1 касание в день»: сдвигаем на завтра, бюджет попыток
+      // обнуляем. База сдвига — max(scheduled_at, now()): просроченная на
+      // неделю строка уезжает в будущее ОДНИМ шагом, а не по дню за тик.
+      const base = Math.max(new Date(row.scheduled_at || Date.now()).getTime(), Date.now());
       await db.query(
         `UPDATE care_touch_sends SET scheduled_at=$2, attempts=0, last_attempt_at=NULL,
                 decision_reason='анти-спам: сдвинуто на день'
           WHERE id=$1`,
-        [row.id, plusOneDay(new Date(row.scheduled_at || Date.now()))]);
+        [row.id, plusOneDay(new Date(base))]);
       return;
     }
 
@@ -1501,7 +1682,7 @@ async function processOne(row, deps = defaultDeps) {
     });
     if (context.hasMatchingRepeatVisit(records.completedAfter, row.program_conditions, catMap)) {
       await stopEnrollment(db, row.enrollment_id, 'completed', 'клиент уже был на повторном визите');
-      return markSend(db, row.id, 'cancelled', 'повторный визит состоялся');
+      return finish('cancelled', 'повторный визит состоялся');
     }
 
     // ── care-проход LLM ────────────────────────────────────────
@@ -1523,9 +1704,24 @@ async function processOne(row, deps = defaultDeps) {
       enrollment: { staff_name: row.staff_name, visit_at: row.visit_at, services: row.visit_services },
       transcript: trList, futureBookings,
     });
-    const resp = await d.createMessage(
-      { system, messages: [{ role: 'user', content: user }] },
-      { maxTokens: 700 });
+    // maxTokens 1200: русский текст ~2-3 символа/токен — легитимные 1500
+    // символов текста (TEXT_MAX в decision.js) + JSON-конверт в 700 токенов
+    // не влезали, обрезанный JSON падал в fail-safe skip и касание молча
+    // терялось. Таймаут через Promise.race (провайдер не трогаем): по
+    // истечении — throw → общий catch → ретрай строки.
+    let resp;
+    let llmTimer;
+    try {
+      resp = await Promise.race([
+        d.createMessage(
+          { system, messages: [{ role: 'user', content: user }] },
+          { maxTokens: 1200 }),
+        new Promise((_, reject) => {
+          llmTimer = setTimeout(() => reject(new Error(`care LLM timeout ${LLM_TIMEOUT_MS}ms`)), LLM_TIMEOUT_MS);
+          if (llmTimer.unref) llmTimer.unref();
+        }),
+      ]);
+    } finally { clearTimeout(llmTimer); }
     const decision = parseCareDecision(resp && resp.text);
 
     if (decision.action === 'escalate') {
@@ -1536,36 +1732,57 @@ async function processOne(row, deps = defaultDeps) {
       const why = decision.reason || 'осложнение в переписке';
       await d.escalateDialog(sid, row.phone, why);
       await stopEnrollment(db, row.enrollment_id, 'escalated', why);
-      return markSend(db, row.id, 'skipped', `Мила: эскалация — ${why}`);
+      return finish('skipped', `Мила: эскалация — ${why}`);
     }
     if (decision.action === 'stop_program') {
       await stopEnrollment(db, row.enrollment_id, decision.status, decision.reason);
-      return markSend(db, row.id, 'cancelled', `Мила: ${decision.reason}`);
+      return finish('cancelled', `Мила: ${decision.reason}`);
     }
     if (decision.action === 'skip') {
-      await markSend(db, row.id, 'skipped', `Мила: ${decision.reason}`);
-      return maybeCompleteChain(db, row.enrollment_id);
+      return finish('skipped', `Мила: ${decision.reason}`);
     }
 
-    // ── отправка ───────────────────────────────────────────────
     const viol = d.hardViolations(d.lintReply(decision.text, {}));
     if (viol.length) {
-      await markSend(db, row.id, 'skipped',
-        `reply-guard: ${viol.map(v => v.type).join(',')}`);
-      return maybeCompleteChain(db, row.enrollment_id);
+      return finish('skipped', `reply-guard: ${viol.map(v => v.type).join(',')}`);
     }
+
+    // ── отправка: AT-MOST-ONCE (mark-before-send) ──────────────
+    // Пропущенное касание дешевле дубля живому пациенту. Разбор отказов:
+    //  1) UPDATE sent УПАЛ → отправка не выполняется → общий catch вернёт
+    //     строку на ретрай. Дубля нет.
+    //  2) UPDATE sent прошёл, sendMessage УПАЛ → catch (sentMarked &&
+    //     !delivered): вернуть строку в scheduled — отправки не было, ретрай
+    //     безопасен; если и этот возврат упал — строка остаётся 'sent' без
+    //     доставки = пропущенное касание. Приемлемо by design.
+    //  3) sendMessage ПРОШЁЛ, дальше что-то упало → catch при delivered=true
+    //     НИКОГДА не откатывает статус в scheduled; best-effort re-mark
+    //     'sent' + ERROR-лог.
     const last = await d.lastIncomingChannel(sid, row.phone).catch(() => null);
     const routing = notifications.resolveRouting([], true, last);   // дефолт telegram→whatsapp
-    const delivery = await d.sendMessage({ text: decision.text, phone: row.phone, dispatchRouting: routing });
-    const channelUsed = (delivery && (delivery.channel || delivery.messenger)) || routing[0] || null;
 
+    // 1) sent-маркер ДО отправки (delivery_id/channel_used дозаписываются после).
     await db.query(
       `UPDATE care_touch_sends
           SET status='sent', sent_at=NOW(), error=NULL, decision_reason=$2,
-              rendered_text=$3, routing=$4::jsonb, delivery_id=$5, channel_used=$6
+              rendered_text=$3, routing=$4::jsonb
         WHERE id=$1`,
-      [row.id, `Мила: ${decision.reason}`, decision.text, JSON.stringify(routing),
-       delivery && delivery.id != null ? String(delivery.id) : null, channelUsed]);
+      [row.id, `Мила: ${decision.reason}`, decision.text, JSON.stringify(routing)]);
+    sentMarked = true;
+
+    // 2) отправка.
+    const delivery = await d.sendMessage({ text: decision.text, phone: row.phone, dispatchRouting: routing });
+    delivered = true;
+    // Единственный след для разбора «ушло дважды / не ушло» — пишется до
+    // любых пост-обработок.
+    d.log.info(`delivered #${row.id} delivery=${delivery && delivery.id}`);
+
+    // 3) best-effort дозапись реквизитов доставки (падение — не катастрофа).
+    const channelUsed = (delivery && (delivery.channel || delivery.messenger)) || routing[0] || null;
+    await db.query(
+      `UPDATE care_touch_sends SET delivery_id=$2, channel_used=$3 WHERE id=$1`,
+      [row.id, delivery && delivery.id != null ? String(delivery.id) : null, channelUsed]
+    ).catch(e => d.log.error(`persist delivery #${row.id}: ${e.message}`));
 
     // Транскрипт/чат: pending до прихода эха; whatsapp эха не шлёт — персист сразу.
     d.rememberPending(sid, row.phone, decision.text);
@@ -1574,14 +1791,34 @@ async function processOne(row, deps = defaultDeps) {
         .catch(e => d.log.error(`persist wa: ${e.message}`));
     }
     d.log.info(`sent #${row.id} enrollment=${row.enrollment_id} routing=[${routing.join(',')}]`);
-    await maybeCompleteChain(db, row.enrollment_id);
+    await maybeCompleteChain(db, row.enrollment_id)
+      .catch(e => d.log.error(`chain check #${row.id}: ${e.message}`));
   } catch (e) {
+    // Инвариант at-most-once (разбор отказов — над блоком отправки).
+    if (delivered) {
+      // Доставлено пациенту — статус НЕ откатывать НИКОГДА: ретрай = дубль.
+      d.log.error(`send #${row.id}: доставлено, но пост-обработка упала: ${e.message}`);
+      await d.db.query(
+        `UPDATE care_touch_sends SET status='sent', error=$2 WHERE id=$1`,
+        [row.id, String(e.message || e).slice(0, 500)]
+      ).catch(() => {});
+      return;
+    }
+    if (terminalWritten) {
+      // Терминальный skipped/cancelled уже в БД — не перезаписывать, только лог.
+      d.log.error(`send #${row.id}: терминальный статус записан, хвост упал: ${e.message}`);
+      return;
+    }
+    // Отправки не было (в т.ч. sentMarked без delivered: sent-маркер записан,
+    // но sendMessage упал) — возврат в scheduled безопасен; после MAX_ATTEMPTS
+    // ретраи исчерпаны → failed.
     const final = row.attempts >= MAX_ATTEMPTS;
     await d.db.query(
       `UPDATE care_touch_sends SET status='${final ? 'failed' : 'scheduled'}', error=$2 WHERE id=$1`,
       [row.id, String(e.message || e).slice(0, 500)]
     ).catch(() => {});
-    d.log.warn(`send #${row.id} attempt ${row.attempts}/${MAX_ATTEMPTS} failed: ${e.message}`);
+    d.log.warn(`send #${row.id} attempt ${row.attempts}/${MAX_ATTEMPTS} failed: ${e.message}` +
+      (sentMarked ? ' (sent-маркер откатан)' : ''));
   }
 }
 
@@ -1616,15 +1853,31 @@ const LEASE_SQL =
               (SELECT t.title       FROM care_touches t WHERE t.id = cts.touch_id) AS touch_title,
               (SELECT t.delay_days  FROM care_touches t WHERE t.id = cts.touch_id) AS delay_days`;
 
+// setInterval не ждёт предыдущий тик: медленный прогон (LLM до 60с на строку,
+// до 5 строк) наслаивался бы на следующий. Guard пропускает тик, пока прошлый
+// жив — аренда с SKIP LOCKED и так не отдаст те же строки (в окне backoff),
+// но наслоение множит соединения и ломает разбор логов.
+let _tickInFlight = false;
+
 async function processTick(deps = defaultDeps) {
-  const d = { ...defaultDeps, ...deps };
-  const rows = await d.db.any(LEASE_SQL, [RETRY_BACKOFF_S]);
-  for (const row of rows) {
-    if (!row.touch_id || row.intent_text == null) {   // касание удалили из программы
-      await markSend(d.db, row.id, 'cancelled', 'касание удалено из программы').catch(() => {});
-      continue;
+  if (_tickInFlight) return;
+  _tickInFlight = true;
+  try {
+    const d = { ...defaultDeps, ...deps };
+    const rows = await d.db.any(LEASE_SQL, [RETRY_BACKOFF_S]);
+    for (const row of rows) {
+      if (!row.touch_id || row.intent_text == null) {   // касание удалили из программы
+        // Терминальный cancel — тоже проверить завершение цепочки (иначе
+        // enrollment с единственным удалённым касанием — зомби навсегда).
+        await markSend(d.db, row.id, 'cancelled', 'касание удалено из программы').catch(() => {});
+        await maybeCompleteChain(d.db, row.enrollment_id)
+          .catch(e => d.log.error(`chain check #${row.id}: ${e.message}`));
+        continue;
+      }
+      await processOne(row, d);
     }
-    await processOne(row, d);
+  } finally {
+    _tickInFlight = false;
   }
 }
 
@@ -1650,7 +1903,7 @@ module.exports = { processOne, processTick, startCareWorker, defaultDeps, LEASE_
 - `row.program_conditions` приходит как объект (jsonb) — прокидывать как есть.
 - Гейт `isAllowed` бросил → общий catch: строка уйдёт на ретрай, а после 3 попыток `failed` — fail-closed, отправки не будет.
 
-- [ ] **Step 4: Run** `cd backend && npx jest care-worker` → PASS (11 тестов)
+- [ ] **Step 4: Run** `cd backend && npx jest care-worker` → PASS (21 тест)
 
 - [ ] **Step 5: Commit**
 

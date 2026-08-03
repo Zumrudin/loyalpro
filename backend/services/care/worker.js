@@ -4,6 +4,10 @@
 // детерминированные проверки → care-проход LLM → отправка → персист.
 // Все внешние зависимости инжектируются (юнит-тесты без БД/сети).
 //
+// Доставка — AT-MOST-ONCE (ревью 2026-08-02): пропущенное касание дешевле
+// дубля живому пациенту, это философия фичи. Отсюда mark-before-send и
+// правила catch-разбора (см. блок отправки в processOne).
+//
 // Ответы пациента на касание обрабатывает ОСНОВНОЙ агент Милы (обычный
 // вебхук-путь со всеми мед-границами) — воркер в это не вмешивается;
 // rememberPending лишь подмешивает отправленное касание в транскрипт
@@ -30,6 +34,10 @@ const log = createLogger('CareWorker');
 const WORKER_TICK_MS  = 15000;
 const MAX_ATTEMPTS    = 3;
 const RETRY_BACKOFF_S = 120;
+// Таймаут care-прохода LLM: зависший провайдер не должен держать строку (и
+// тик) вечно. 60с < backoff аренды 120с — таймаут-ретрай не пересечётся с
+// ещё живым прошлым вызовом в окне аренды.
+const LLM_TIMEOUT_MS  = 60000;
 
 const defaultDeps = {
   db: realDb,
@@ -130,27 +138,47 @@ async function processOne(row, deps = defaultDeps) {
   const { db } = d;
   const sid = row.salon_id;
 
+  // Флаги для catch-разбора (инвариант at-most-once, см. блок отправки):
+  let sentMarked = false;      // sent-маркер записан ДО отправки (откат в scheduled допустим)
+  let delivered = false;       // sendMessage вернулся успешно (статус НЕ откатывать НИКОГДА)
+  let terminalWritten = false; // терминальный skipped/cancelled в БД (статус НЕ перезаписывать)
+
+  // Терминальный исход + проверка завершения цепочки: ЛЮБОЙ терминальный
+  // статус последнего касания обязан завершить enrollment (в т.ч.
+  // детерминированные skip'ы — иначе enrollment зависает active навсегда с
+  // нулём scheduled: зомби в дашборде). Ошибка проверки цепочки логируется,
+  // но НЕ откатывает уже записанный терминальный статус.
+  const finish = async (status, reason) => {
+    await markSend(db, row.id, status, reason);
+    terminalWritten = true;
+    await maybeCompleteChain(db, row.enrollment_id)
+      .catch(e => d.log.error(`chain check #${row.id}: ${e.message}`));
+  };
+
   try {
     // ── детерминированные проверки ─────────────────────────────
     if (row.enrollment_status !== 'active') {
-      return markSend(db, row.id, 'cancelled', `enrollment ${row.enrollment_status}`);
+      return finish('cancelled', `enrollment ${row.enrollment_status}`);
     }
-    if (!row.program_enabled) return markSend(db, row.id, 'skipped', 'программа выключена');
-    if (!d.agentGloballyEnabled()) return markSend(db, row.id, 'skipped', 'агент выключен (env)');
+    if (!row.program_enabled) return finish('skipped', 'программа выключена');
+    if (!d.agentGloballyEnabled()) return finish('skipped', 'агент выключен (env)');
 
     const gate = await d.isAllowed(sid, row.phone);   // fail-closed: throw → catch ниже
-    if (!gate.allow) return markSend(db, row.id, 'skipped', `гейт Милы: ${gate.reason}`);
+    if (!gate.allow) return finish('skipped', `гейт Милы: ${gate.reason}`);
 
     const dlg = await d.dialogStatus(sid, row.phone);
-    if (dlg === 'escalated') return markSend(db, row.id, 'skipped', 'диалог на операторе');
+    if (dlg === 'escalated') return finish('skipped', 'диалог на операторе');
 
     if (await d.sentTodayExists(sid, row.phone)) {
-      // Анти-спам «1 касание в день»: сдвигаем на завтра, бюджет попыток обнуляем.
+      // Анти-спам «1 касание в день»: сдвигаем на завтра, бюджет попыток
+      // обнуляем. База сдвига — max(scheduled_at, now()): просроченная на
+      // неделю строка уезжает в будущее ОДНИМ шагом, а не по дню за тик.
+      const base = Math.max(new Date(row.scheduled_at || Date.now()).getTime(), Date.now());
       await db.query(
         `UPDATE care_touch_sends SET scheduled_at=$2, attempts=0, last_attempt_at=NULL,
                 decision_reason='анти-спам: сдвинуто на день'
           WHERE id=$1`,
-        [row.id, plusOneDay(new Date(row.scheduled_at || Date.now()))]);
+        [row.id, plusOneDay(new Date(base))]);
       return;
     }
 
@@ -180,7 +208,7 @@ async function processOne(row, deps = defaultDeps) {
     });
     if (context.hasMatchingRepeatVisit(records.completedAfter, row.program_conditions, catMap)) {
       await stopEnrollment(db, row.enrollment_id, 'completed', 'клиент уже был на повторном визите');
-      return markSend(db, row.id, 'cancelled', 'повторный визит состоялся');
+      return finish('cancelled', 'повторный визит состоялся');
     }
 
     // ── care-проход LLM ────────────────────────────────────────
@@ -202,9 +230,24 @@ async function processOne(row, deps = defaultDeps) {
       enrollment: { staff_name: row.staff_name, visit_at: row.visit_at, services: row.visit_services },
       transcript: trList, futureBookings,
     });
-    const resp = await d.createMessage(
-      { system, messages: [{ role: 'user', content: user }] },
-      { maxTokens: 700 });
+    // maxTokens 1200: русский текст ~2-3 символа/токен — легитимные 1500
+    // символов текста (TEXT_MAX в decision.js) + JSON-конверт в 700 токенов
+    // не влезали, обрезанный JSON падал в fail-safe skip и касание молча
+    // терялось. Таймаут через Promise.race (провайдер не трогаем): по
+    // истечении — throw → общий catch → ретрай строки.
+    let resp;
+    let llmTimer;
+    try {
+      resp = await Promise.race([
+        d.createMessage(
+          { system, messages: [{ role: 'user', content: user }] },
+          { maxTokens: 1200 }),
+        new Promise((_, reject) => {
+          llmTimer = setTimeout(() => reject(new Error(`care LLM timeout ${LLM_TIMEOUT_MS}ms`)), LLM_TIMEOUT_MS);
+          if (llmTimer.unref) llmTimer.unref();
+        }),
+      ]);
+    } finally { clearTimeout(llmTimer); }
     const decision = parseCareDecision(resp && resp.text);
 
     if (decision.action === 'escalate') {
@@ -215,36 +258,57 @@ async function processOne(row, deps = defaultDeps) {
       const why = decision.reason || 'осложнение в переписке';
       await d.escalateDialog(sid, row.phone, why);
       await stopEnrollment(db, row.enrollment_id, 'escalated', why);
-      return markSend(db, row.id, 'skipped', `Мила: эскалация — ${why}`);
+      return finish('skipped', `Мила: эскалация — ${why}`);
     }
     if (decision.action === 'stop_program') {
       await stopEnrollment(db, row.enrollment_id, decision.status, decision.reason);
-      return markSend(db, row.id, 'cancelled', `Мила: ${decision.reason}`);
+      return finish('cancelled', `Мила: ${decision.reason}`);
     }
     if (decision.action === 'skip') {
-      await markSend(db, row.id, 'skipped', `Мила: ${decision.reason}`);
-      return maybeCompleteChain(db, row.enrollment_id);
+      return finish('skipped', `Мила: ${decision.reason}`);
     }
 
-    // ── отправка ───────────────────────────────────────────────
     const viol = d.hardViolations(d.lintReply(decision.text, {}));
     if (viol.length) {
-      await markSend(db, row.id, 'skipped',
-        `reply-guard: ${viol.map(v => v.type).join(',')}`);
-      return maybeCompleteChain(db, row.enrollment_id);
+      return finish('skipped', `reply-guard: ${viol.map(v => v.type).join(',')}`);
     }
+
+    // ── отправка: AT-MOST-ONCE (mark-before-send) ──────────────
+    // Пропущенное касание дешевле дубля живому пациенту. Разбор отказов:
+    //  1) UPDATE sent УПАЛ → отправка не выполняется → общий catch вернёт
+    //     строку на ретрай. Дубля нет.
+    //  2) UPDATE sent прошёл, sendMessage УПАЛ → catch (sentMarked &&
+    //     !delivered): вернуть строку в scheduled — отправки не было, ретрай
+    //     безопасен; если и этот возврат упал — строка остаётся 'sent' без
+    //     доставки = пропущенное касание. Приемлемо by design.
+    //  3) sendMessage ПРОШЁЛ, дальше что-то упало → catch при delivered=true
+    //     НИКОГДА не откатывает статус в scheduled; best-effort re-mark
+    //     'sent' + ERROR-лог.
     const last = await d.lastIncomingChannel(sid, row.phone).catch(() => null);
     const routing = notifications.resolveRouting([], true, last);   // дефолт telegram→whatsapp
-    const delivery = await d.sendMessage({ text: decision.text, phone: row.phone, dispatchRouting: routing });
-    const channelUsed = (delivery && (delivery.channel || delivery.messenger)) || routing[0] || null;
 
+    // 1) sent-маркер ДО отправки (delivery_id/channel_used дозаписываются после).
     await db.query(
       `UPDATE care_touch_sends
           SET status='sent', sent_at=NOW(), error=NULL, decision_reason=$2,
-              rendered_text=$3, routing=$4::jsonb, delivery_id=$5, channel_used=$6
+              rendered_text=$3, routing=$4::jsonb
         WHERE id=$1`,
-      [row.id, `Мила: ${decision.reason}`, decision.text, JSON.stringify(routing),
-       delivery && delivery.id != null ? String(delivery.id) : null, channelUsed]);
+      [row.id, `Мила: ${decision.reason}`, decision.text, JSON.stringify(routing)]);
+    sentMarked = true;
+
+    // 2) отправка.
+    const delivery = await d.sendMessage({ text: decision.text, phone: row.phone, dispatchRouting: routing });
+    delivered = true;
+    // Единственный след для разбора «ушло дважды / не ушло» — пишется до
+    // любых пост-обработок.
+    d.log.info(`delivered #${row.id} delivery=${delivery && delivery.id}`);
+
+    // 3) best-effort дозапись реквизитов доставки (падение — не катастрофа).
+    const channelUsed = (delivery && (delivery.channel || delivery.messenger)) || routing[0] || null;
+    await db.query(
+      `UPDATE care_touch_sends SET delivery_id=$2, channel_used=$3 WHERE id=$1`,
+      [row.id, delivery && delivery.id != null ? String(delivery.id) : null, channelUsed]
+    ).catch(e => d.log.error(`persist delivery #${row.id}: ${e.message}`));
 
     // Транскрипт/чат: pending до прихода эха; whatsapp эха не шлёт — персист сразу.
     d.rememberPending(sid, row.phone, decision.text);
@@ -253,14 +317,34 @@ async function processOne(row, deps = defaultDeps) {
         .catch(e => d.log.error(`persist wa: ${e.message}`));
     }
     d.log.info(`sent #${row.id} enrollment=${row.enrollment_id} routing=[${routing.join(',')}]`);
-    await maybeCompleteChain(db, row.enrollment_id);
+    await maybeCompleteChain(db, row.enrollment_id)
+      .catch(e => d.log.error(`chain check #${row.id}: ${e.message}`));
   } catch (e) {
+    // Инвариант at-most-once (разбор отказов — над блоком отправки).
+    if (delivered) {
+      // Доставлено пациенту — статус НЕ откатывать НИКОГДА: ретрай = дубль.
+      d.log.error(`send #${row.id}: доставлено, но пост-обработка упала: ${e.message}`);
+      await d.db.query(
+        `UPDATE care_touch_sends SET status='sent', error=$2 WHERE id=$1`,
+        [row.id, String(e.message || e).slice(0, 500)]
+      ).catch(() => {});
+      return;
+    }
+    if (terminalWritten) {
+      // Терминальный skipped/cancelled уже в БД — не перезаписывать, только лог.
+      d.log.error(`send #${row.id}: терминальный статус записан, хвост упал: ${e.message}`);
+      return;
+    }
+    // Отправки не было (в т.ч. sentMarked без delivered: sent-маркер записан,
+    // но sendMessage упал) — возврат в scheduled безопасен; после MAX_ATTEMPTS
+    // ретраи исчерпаны → failed.
     const final = row.attempts >= MAX_ATTEMPTS;
     await d.db.query(
       `UPDATE care_touch_sends SET status='${final ? 'failed' : 'scheduled'}', error=$2 WHERE id=$1`,
       [row.id, String(e.message || e).slice(0, 500)]
     ).catch(() => {});
-    d.log.warn(`send #${row.id} attempt ${row.attempts}/${MAX_ATTEMPTS} failed: ${e.message}`);
+    d.log.warn(`send #${row.id} attempt ${row.attempts}/${MAX_ATTEMPTS} failed: ${e.message}` +
+      (sentMarked ? ' (sent-маркер откатан)' : ''));
   }
 }
 
@@ -295,15 +379,31 @@ const LEASE_SQL =
               (SELECT t.title       FROM care_touches t WHERE t.id = cts.touch_id) AS touch_title,
               (SELECT t.delay_days  FROM care_touches t WHERE t.id = cts.touch_id) AS delay_days`;
 
+// setInterval не ждёт предыдущий тик: медленный прогон (LLM до 60с на строку,
+// до 5 строк) наслаивался бы на следующий. Guard пропускает тик, пока прошлый
+// жив — аренда с SKIP LOCKED и так не отдаст те же строки (в окне backoff),
+// но наслоение множит соединения и ломает разбор логов.
+let _tickInFlight = false;
+
 async function processTick(deps = defaultDeps) {
-  const d = { ...defaultDeps, ...deps };
-  const rows = await d.db.any(LEASE_SQL, [RETRY_BACKOFF_S]);
-  for (const row of rows) {
-    if (!row.touch_id || row.intent_text == null) {   // касание удалили из программы
-      await markSend(d.db, row.id, 'cancelled', 'касание удалено из программы').catch(() => {});
-      continue;
+  if (_tickInFlight) return;
+  _tickInFlight = true;
+  try {
+    const d = { ...defaultDeps, ...deps };
+    const rows = await d.db.any(LEASE_SQL, [RETRY_BACKOFF_S]);
+    for (const row of rows) {
+      if (!row.touch_id || row.intent_text == null) {   // касание удалили из программы
+        // Терминальный cancel — тоже проверить завершение цепочки (иначе
+        // enrollment с единственным удалённым касанием — зомби навсегда).
+        await markSend(d.db, row.id, 'cancelled', 'касание удалено из программы').catch(() => {});
+        await maybeCompleteChain(d.db, row.enrollment_id)
+          .catch(e => d.log.error(`chain check #${row.id}: ${e.message}`));
+        continue;
+      }
+      await processOne(row, d);
     }
-    await processOne(row, d);
+  } finally {
+    _tickInFlight = false;
   }
 }
 
