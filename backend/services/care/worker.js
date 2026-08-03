@@ -288,12 +288,27 @@ async function processOne(row, deps = defaultDeps) {
     const routing = notifications.resolveRouting([], true, last);   // дефолт telegram→whatsapp
 
     // 1) sent-маркер ДО отправки (delivery_id/channel_used дозаписываются после).
-    await db.query(
+    //    Условие AND status='scheduled' ОБЯЗАТЕЛЬНО — это ПОСЛЕДНИЙ гейт перед
+    //    отправкой: row.enrollment_status снят в момент аренды и в LIMIT-5
+    //    батче устаревает. Сценарий: два касания одного enrollment в одном
+    //    батче, строка A обработана первой, LLM решил stop_program declined →
+    //    stopEnrollment отменил строку B (scheduled→cancelled), но цикл берёт
+    //    B с арендованным status='active' — без условия маркер перезаписал бы
+    //    cancelled→sent и пациенту, только что попросившему не писать, ушло бы
+    //    сообщение. Та же защита закрывает межпроцессную гонку за строку.
+    const marked = await db.query(
       `UPDATE care_touch_sends
           SET status='sent', sent_at=NOW(), error=NULL, decision_reason=$2,
               rendered_text=$3, routing=$4::jsonb
-        WHERE id=$1`,
+        WHERE id=$1 AND status='scheduled'`,
       [row.id, `Мила: ${decision.reason}`, decision.text, JSON.stringify(routing)]);
+    if (!marked || !marked.rowCount) {
+      // Строкой владеет другой исход (cancelled/skipped/…) — не отправляем и
+      // ничего не откатываем (перезапись чужого терминального статуса хуже
+      // пропущенного касания).
+      d.log.info(`send #${row.id}: строка перехвачена другим исходом — не отправляем`);
+      return;
+    }
     sentMarked = true;
 
     // 2) отправка.
@@ -338,9 +353,11 @@ async function processOne(row, deps = defaultDeps) {
     // Отправки не было (в т.ч. sentMarked без delivered: sent-маркер записан,
     // но sendMessage упал) — возврат в scheduled безопасен; после MAX_ATTEMPTS
     // ретраи исчерпаны → failed.
+    // При откате sent-маркера чистим и sent_at — иначе на строке остаётся
+    // отметка времени несостоявшейся отправки и форензика путается.
     const final = row.attempts >= MAX_ATTEMPTS;
     await d.db.query(
-      `UPDATE care_touch_sends SET status='${final ? 'failed' : 'scheduled'}', error=$2 WHERE id=$1`,
+      `UPDATE care_touch_sends SET status='${final ? 'failed' : 'scheduled'}'${sentMarked ? ', sent_at=NULL' : ''}, error=$2 WHERE id=$1`,
       [row.id, String(e.message || e).slice(0, 500)]
     ).catch(() => {});
     d.log.warn(`send #${row.id} attempt ${row.attempts}/${MAX_ATTEMPTS} failed: ${e.message}` +

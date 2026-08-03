@@ -113,8 +113,9 @@ describe('care worker processOne', () => {
     const { deps } = makeDeps({ sendMessage: jest.fn(async () => { throw new Error('net'); }) });
     await worker.processOne({ ...row, attempts: 1 }, deps);
     const sqls = deps.db.query.mock.calls.map(c => c[0]);
-    const sentIdx = sqls.findIndex(s => s.includes(`status='sent'`));
-    const backIdx = sqls.findIndex(s => s.includes(`status='scheduled'`));
+    // SET-форма: sent-маркер сам содержит status='scheduled' в WHERE (гейт).
+    const sentIdx = sqls.findIndex(s => s.includes(`SET status='sent'`));
+    const backIdx = sqls.findIndex(s => s.includes(`SET status='scheduled'`));
     expect(sentIdx).toBeGreaterThanOrEqual(0);          // маркер был записан до отправки
     expect(backIdx).toBeGreaterThan(sentIdx);           // и откатан после сбоя
     expect(sqls.some(s => s.includes(`'failed'`))).toBe(false);
@@ -123,8 +124,8 @@ describe('care worker processOne', () => {
     const { deps } = makeDeps({ sendMessage: jest.fn(async () => { throw new Error('net'); }) });
     await worker.processOne({ ...row, attempts: 3 }, deps);
     const sqls = deps.db.query.mock.calls.map(c => c[0]);
-    expect(sqls.some(s => s.includes(`status='failed'`))).toBe(true);
-    expect(sqls.some(s => s.includes(`status='scheduled'`))).toBe(false);
+    expect(sqls.some(s => s.includes(`SET status='failed'`))).toBe(true);
+    expect(sqls.some(s => s.includes(`SET status='scheduled'`))).toBe(false);
   });
 
   // ── escalate: осложнение в переписке (ревизия Task 4, ОБЯЗАТЕЛЬНО) ──
@@ -173,9 +174,28 @@ describe('care worker at-most-once', () => {
   test('sendMessage упал при записанном sent-маркере → откат в scheduled + лог отката', async () => {
     const { deps } = makeDeps({ sendMessage: jest.fn(async () => { throw new Error('net down'); }) });
     await worker.processOne(row, deps);
-    const rolled = deps.db.query.mock.calls.find(c => c[0].includes(`status='scheduled'`));
+    const rolled = deps.db.query.mock.calls.find(c => c[0].includes(`SET status='scheduled'`));
     expect(rolled).toBeTruthy();
+    // Откат стирает и sent_at несостоявшейся отправки (форензика).
+    expect(rolled[0]).toContain('sent_at=NULL');
     expect(deps.log.warn).toHaveBeenCalledWith(expect.stringContaining('sent-маркер откатан'));
+  });
+  test('sent-маркер условный: rowCount=0 (строка перехвачена другим исходом) → не отправляем и не откатываем', async () => {
+    // Сценарий: два касания одного enrollment в одном LIMIT-5 батче, первая
+    // строка остановила программу и отменила вторую — арендованный
+    // enrollment_status='active' второй строки устарел, последний гейт ловит.
+    const { deps } = makeDeps();
+    deps.db.query = jest.fn(async (sql) => {
+      if (sql.includes(`SET status='sent'`)) return { rowCount: 0 };   // маркер не взял строку
+      return { rowCount: 1 };
+    });
+    await worker.processOne(row, deps);
+    expect(deps.sendMessage).not.toHaveBeenCalled();
+    expect(deps.rememberPending).not.toHaveBeenCalled();
+    const sqls = deps.db.query.mock.calls.map(c => c[0]);
+    expect(sqls.some(s => s.includes(`SET status='scheduled'`))).toBe(false);   // никакого отката
+    expect(sqls.some(s => s.includes(`SET status='failed'`))).toBe(false);
+    expect(deps.log.info).toHaveBeenCalledWith(expect.stringContaining('перехвачена другим исходом'));
   });
   test('падение дозаписи delivery_id ПОСЛЕ доставки → sent НЕ откатывается в scheduled', async () => {
     const { deps } = makeDeps();
@@ -186,7 +206,7 @@ describe('care worker at-most-once', () => {
     await worker.processOne(row, deps);
     expect(deps.sendMessage).toHaveBeenCalledTimes(1);
     const sqls = deps.db.query.mock.calls.map(c => c[0]);
-    expect(sqls.some(s => s.includes(`status='scheduled'`))).toBe(false);
+    expect(sqls.some(s => s.includes(`SET status='scheduled'`))).toBe(false);
     expect(deps.log.error).toHaveBeenCalledWith(expect.stringContaining('persist delivery'));
   });
   test('падение пост-обработки ПОСЛЕ доставки → re-mark sent, никакого scheduled', async () => {
@@ -196,7 +216,7 @@ describe('care worker at-most-once', () => {
     await worker.processOne(row, deps);
     expect(deps.sendMessage).toHaveBeenCalledTimes(1);
     const sqls = deps.db.query.mock.calls.map(c => c[0]);
-    expect(sqls.some(s => s.includes(`status='scheduled'`))).toBe(false);
+    expect(sqls.some(s => s.includes(`SET status='scheduled'`))).toBe(false);
     // Best-effort re-mark 'sent' с текстом ошибки (запрос с error=, без sent_at).
     const remark = deps.db.query.mock.calls.find(c => c[0].includes(`status='sent', error=`));
     expect(remark).toBeTruthy();
@@ -229,7 +249,7 @@ describe('care worker at-most-once', () => {
       jest.advanceTimersByTime(60001);
       await p;
       expect(deps.sendMessage).not.toHaveBeenCalled();
-      const rolled = deps.db.query.mock.calls.find(c => c[0].includes(`status='scheduled'`));
+      const rolled = deps.db.query.mock.calls.find(c => c[0].includes(`SET status='scheduled'`));
       expect(rolled).toBeTruthy();
       expect(String(rolled[1][1])).toMatch(/timeout/);
     } finally { jest.useRealTimers(); }

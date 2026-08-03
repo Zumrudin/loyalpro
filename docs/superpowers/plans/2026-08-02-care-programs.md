@@ -1185,6 +1185,14 @@ git commit -m "feat(care): записи клиента для retention-пров
 >    уезжает в будущее ОДНИМ шагом. Тестов 21: сбой отправки разделён на
 >    attempts=1→scheduled / attempts=3→failed (M1), + порядок mark-before-send,
 >    инварианты catch, завершение цепочки, таймаут LLM, guard тика.
+>    Пост-фикс повторного ревью: sent-маркер УСЛОВНЫЙ (`WHERE id=$1 AND
+>    status='scheduled'`) — финальный гейт перед отправкой: арендованный
+>    row.enrollment_status в LIMIT-5 батче устаревает (строка A того же
+>    enrollment остановила программу и отменила строку B → без условия маркер
+>    перезаписал бы cancelled→sent и пациенту, попросившему не писать, ушло бы
+>    касание); rowCount=0 → лог «строка перехвачена другим исходом», return без
+>    отправки и без отката. Откат sent-маркера дополнительно чистит sent_at
+>    (след несостоявшейся отправки путал бы форензику). Тестов 22.
 
 - [ ] **Step 1: Падающие тесты (моки всех deps)**
 
@@ -1304,8 +1312,9 @@ describe('care worker processOne', () => {
     const { deps } = makeDeps({ sendMessage: jest.fn(async () => { throw new Error('net'); }) });
     await worker.processOne({ ...row, attempts: 1 }, deps);
     const sqls = deps.db.query.mock.calls.map(c => c[0]);
-    const sentIdx = sqls.findIndex(s => s.includes(`status='sent'`));
-    const backIdx = sqls.findIndex(s => s.includes(`status='scheduled'`));
+    // SET-форма: sent-маркер сам содержит status='scheduled' в WHERE (гейт).
+    const sentIdx = sqls.findIndex(s => s.includes(`SET status='sent'`));
+    const backIdx = sqls.findIndex(s => s.includes(`SET status='scheduled'`));
     expect(sentIdx).toBeGreaterThanOrEqual(0);          // маркер был записан до отправки
     expect(backIdx).toBeGreaterThan(sentIdx);           // и откатан после сбоя
     expect(sqls.some(s => s.includes(`'failed'`))).toBe(false);
@@ -1314,8 +1323,8 @@ describe('care worker processOne', () => {
     const { deps } = makeDeps({ sendMessage: jest.fn(async () => { throw new Error('net'); }) });
     await worker.processOne({ ...row, attempts: 3 }, deps);
     const sqls = deps.db.query.mock.calls.map(c => c[0]);
-    expect(sqls.some(s => s.includes(`status='failed'`))).toBe(true);
-    expect(sqls.some(s => s.includes(`status='scheduled'`))).toBe(false);
+    expect(sqls.some(s => s.includes(`SET status='failed'`))).toBe(true);
+    expect(sqls.some(s => s.includes(`SET status='scheduled'`))).toBe(false);
   });
 
   // ── escalate: осложнение в переписке (ревизия Task 4, ОБЯЗАТЕЛЬНО) ──
@@ -1364,9 +1373,28 @@ describe('care worker at-most-once', () => {
   test('sendMessage упал при записанном sent-маркере → откат в scheduled + лог отката', async () => {
     const { deps } = makeDeps({ sendMessage: jest.fn(async () => { throw new Error('net down'); }) });
     await worker.processOne(row, deps);
-    const rolled = deps.db.query.mock.calls.find(c => c[0].includes(`status='scheduled'`));
+    const rolled = deps.db.query.mock.calls.find(c => c[0].includes(`SET status='scheduled'`));
     expect(rolled).toBeTruthy();
+    // Откат стирает и sent_at несостоявшейся отправки (форензика).
+    expect(rolled[0]).toContain('sent_at=NULL');
     expect(deps.log.warn).toHaveBeenCalledWith(expect.stringContaining('sent-маркер откатан'));
+  });
+  test('sent-маркер условный: rowCount=0 (строка перехвачена другим исходом) → не отправляем и не откатываем', async () => {
+    // Сценарий: два касания одного enrollment в одном LIMIT-5 батче, первая
+    // строка остановила программу и отменила вторую — арендованный
+    // enrollment_status='active' второй строки устарел, последний гейт ловит.
+    const { deps } = makeDeps();
+    deps.db.query = jest.fn(async (sql) => {
+      if (sql.includes(`SET status='sent'`)) return { rowCount: 0 };   // маркер не взял строку
+      return { rowCount: 1 };
+    });
+    await worker.processOne(row, deps);
+    expect(deps.sendMessage).not.toHaveBeenCalled();
+    expect(deps.rememberPending).not.toHaveBeenCalled();
+    const sqls = deps.db.query.mock.calls.map(c => c[0]);
+    expect(sqls.some(s => s.includes(`SET status='scheduled'`))).toBe(false);   // никакого отката
+    expect(sqls.some(s => s.includes(`SET status='failed'`))).toBe(false);
+    expect(deps.log.info).toHaveBeenCalledWith(expect.stringContaining('перехвачена другим исходом'));
   });
   test('падение дозаписи delivery_id ПОСЛЕ доставки → sent НЕ откатывается в scheduled', async () => {
     const { deps } = makeDeps();
@@ -1377,7 +1405,7 @@ describe('care worker at-most-once', () => {
     await worker.processOne(row, deps);
     expect(deps.sendMessage).toHaveBeenCalledTimes(1);
     const sqls = deps.db.query.mock.calls.map(c => c[0]);
-    expect(sqls.some(s => s.includes(`status='scheduled'`))).toBe(false);
+    expect(sqls.some(s => s.includes(`SET status='scheduled'`))).toBe(false);
     expect(deps.log.error).toHaveBeenCalledWith(expect.stringContaining('persist delivery'));
   });
   test('падение пост-обработки ПОСЛЕ доставки → re-mark sent, никакого scheduled', async () => {
@@ -1387,7 +1415,7 @@ describe('care worker at-most-once', () => {
     await worker.processOne(row, deps);
     expect(deps.sendMessage).toHaveBeenCalledTimes(1);
     const sqls = deps.db.query.mock.calls.map(c => c[0]);
-    expect(sqls.some(s => s.includes(`status='scheduled'`))).toBe(false);
+    expect(sqls.some(s => s.includes(`SET status='scheduled'`))).toBe(false);
     // Best-effort re-mark 'sent' с текстом ошибки (запрос с error=, без sent_at).
     const remark = deps.db.query.mock.calls.find(c => c[0].includes(`status='sent', error=`));
     expect(remark).toBeTruthy();
@@ -1420,7 +1448,7 @@ describe('care worker at-most-once', () => {
       jest.advanceTimersByTime(60001);
       await p;
       expect(deps.sendMessage).not.toHaveBeenCalled();
-      const rolled = deps.db.query.mock.calls.find(c => c[0].includes(`status='scheduled'`));
+      const rolled = deps.db.query.mock.calls.find(c => c[0].includes(`SET status='scheduled'`));
       expect(rolled).toBeTruthy();
       expect(String(rolled[1][1])).toMatch(/timeout/);
     } finally { jest.useRealTimers(); }
@@ -1762,12 +1790,27 @@ async function processOne(row, deps = defaultDeps) {
     const routing = notifications.resolveRouting([], true, last);   // дефолт telegram→whatsapp
 
     // 1) sent-маркер ДО отправки (delivery_id/channel_used дозаписываются после).
-    await db.query(
+    //    Условие AND status='scheduled' ОБЯЗАТЕЛЬНО — это ПОСЛЕДНИЙ гейт перед
+    //    отправкой: row.enrollment_status снят в момент аренды и в LIMIT-5
+    //    батче устаревает. Сценарий: два касания одного enrollment в одном
+    //    батче, строка A обработана первой, LLM решил stop_program declined →
+    //    stopEnrollment отменил строку B (scheduled→cancelled), но цикл берёт
+    //    B с арендованным status='active' — без условия маркер перезаписал бы
+    //    cancelled→sent и пациенту, только что попросившему не писать, ушло бы
+    //    сообщение. Та же защита закрывает межпроцессную гонку за строку.
+    const marked = await db.query(
       `UPDATE care_touch_sends
           SET status='sent', sent_at=NOW(), error=NULL, decision_reason=$2,
               rendered_text=$3, routing=$4::jsonb
-        WHERE id=$1`,
+        WHERE id=$1 AND status='scheduled'`,
       [row.id, `Мила: ${decision.reason}`, decision.text, JSON.stringify(routing)]);
+    if (!marked || !marked.rowCount) {
+      // Строкой владеет другой исход (cancelled/skipped/…) — не отправляем и
+      // ничего не откатываем (перезапись чужого терминального статуса хуже
+      // пропущенного касания).
+      d.log.info(`send #${row.id}: строка перехвачена другим исходом — не отправляем`);
+      return;
+    }
     sentMarked = true;
 
     // 2) отправка.
@@ -1812,9 +1855,11 @@ async function processOne(row, deps = defaultDeps) {
     // Отправки не было (в т.ч. sentMarked без delivered: sent-маркер записан,
     // но sendMessage упал) — возврат в scheduled безопасен; после MAX_ATTEMPTS
     // ретраи исчерпаны → failed.
+    // При откате sent-маркера чистим и sent_at — иначе на строке остаётся
+    // отметка времени несостоявшейся отправки и форензика путается.
     const final = row.attempts >= MAX_ATTEMPTS;
     await d.db.query(
-      `UPDATE care_touch_sends SET status='${final ? 'failed' : 'scheduled'}', error=$2 WHERE id=$1`,
+      `UPDATE care_touch_sends SET status='${final ? 'failed' : 'scheduled'}'${sentMarked ? ', sent_at=NULL' : ''}, error=$2 WHERE id=$1`,
       [row.id, String(e.message || e).slice(0, 500)]
     ).catch(() => {});
     d.log.warn(`send #${row.id} attempt ${row.attempts}/${MAX_ATTEMPTS} failed: ${e.message}` +
@@ -1903,7 +1948,7 @@ module.exports = { processOne, processTick, startCareWorker, defaultDeps, LEASE_
 - `row.program_conditions` приходит как объект (jsonb) — прокидывать как есть.
 - Гейт `isAllowed` бросил → общий catch: строка уйдёт на ретрай, а после 3 попыток `failed` — fail-closed, отправки не будет.
 
-- [ ] **Step 4: Run** `cd backend && npx jest care-worker` → PASS (21 тест)
+- [ ] **Step 4: Run** `cd backend && npx jest care-worker` → PASS (22 теста)
 
 - [ ] **Step 5: Commit**
 
