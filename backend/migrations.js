@@ -867,6 +867,12 @@ async function runMigrations(client) {
     CREATE INDEX IF NOT EXISTS idx_care_touches_program
       ON care_touches (program_id, sort_order)
   `).catch(() => {});
+  // text_mode: 'free' — intent_text это ЗАГОТОВКА СМЫСЛА, текст пишет Мила;
+  // 'strict' — intent_text это ГОТОВЫЙ ТЕКСТ, Миле разрешено менять только
+  // обращение по имени. Дефолт 'free' — поведение существующих касаний.
+  await client.query(`
+    ALTER TABLE care_touches ADD COLUMN IF NOT EXISTS text_mode VARCHAR(10) NOT NULL DEFAULT 'free'
+  `).catch(() => {});
 
   await client.query(`
     CREATE TABLE IF NOT EXISTS care_enrollments (

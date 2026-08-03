@@ -265,7 +265,7 @@ async function processOne(row, deps = defaultDeps) {
     }));
     const { system, user } = buildCarePrompt({
       salonName: row.salon_name, clientName: row.client_name,
-      touch: { title: row.touch_title, intent_text: row.intent_text },
+      touch: { title: row.touch_title, intent_text: row.intent_text, text_mode: row.text_mode },
       enrollment: { staff_name: row.staff_name, visit_at: row.visit_at, services: row.visit_services },
       transcript: trList, futureBookings,
     });
@@ -436,7 +436,8 @@ const LEASE_SQL =
               p.title AS program_title, sal.name AS salon_name, c.name AS client_name,
               (SELECT t.intent_text FROM care_touches t WHERE t.id = cts.touch_id) AS intent_text,
               (SELECT t.title       FROM care_touches t WHERE t.id = cts.touch_id) AS touch_title,
-              (SELECT t.delay_days  FROM care_touches t WHERE t.id = cts.touch_id) AS delay_days`;
+              (SELECT t.delay_days  FROM care_touches t WHERE t.id = cts.touch_id) AS delay_days,
+              (SELECT t.text_mode   FROM care_touches t WHERE t.id = cts.touch_id) AS text_mode`;
 
 // setInterval не ждёт предыдущий тик: медленный прогон (LLM до 60с на строку,
 // до 5 строк) наслаивался бы на следующий. Guard пропускает тик, пока прошлый

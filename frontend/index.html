@@ -13,7 +13,7 @@
 <script src="js/core/auth.js?v=2026-06-02a"></script>
 <script src="js/core/nav.js?v=2026-08-03a"></script>
 <link rel="stylesheet" href="css/base.css?v=2026-06-19-brand">
-<link rel="stylesheet" href="css/features.css?v=2026-08-03a">
+<link rel="stylesheet" href="css/features.css?v=2026-08-03b">
 </head>
 <body>
 
@@ -1316,17 +1316,46 @@
           <div class="bc-section">
             <div class="bc-section-title">Цепочка касаний</div>
             <div class="bc-section-hint">
-              Т+N дней после визита, время — московское. Заготовка — не готовый текст,
-              а задание для Милы: что узнать или предложить в этом касании.
+              Т+N дней после визита, время — московское. «Мила пишет сама» — текст задаётся
+              смыслом (что узнать или предложить). «Готовый текст» — Мила отправит написанное
+              дословно, но по-прежнему решает, уместно ли касание вообще.
             </div>
             <div id="careTouches"></div>
             <button class="btn btn-sec btn-sm" style="margin-top:8px" onclick="careAddTouch()">+ Касание</button>
           </div>
 
           <div class="bc-actions">
+            <button class="btn btn-sec" style="margin-right:auto" onclick="careOpenPreview()">👁 Проверить выборку</button>
             <button class="btn btn-sec" onclick="careCloseEditor()">Отмена</button>
             <button id="careSaveBtn" class="btn btn-pri" onclick="careSaveProgram()">Сохранить</button>
           </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══ CARE PREVIEW MODAL (сухой прогон условий по прошлым визитам) ═══ -->
+    <div id="carePreviewOv" class="ov" onclick="if(event.target===this)careClosePreview()">
+      <div class="modal bc-modal">
+        <div class="mh">
+          <div class="mt" id="carePreviewTitle">Проверка выборки</div>
+          <button class="mc" onclick="careClosePreview()">✕</button>
+        </div>
+        <div class="bc-modal-body">
+          <div class="bc-section-hint" style="margin-bottom:10px">
+            Сухой прогон: кто попал бы в программу, если бы она работала последние N дней.
+            Ничего не сохраняется и никому не отправляется.
+          </div>
+          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:12px">
+            <label class="care-touch-lbl">период
+              <select id="carePreviewDays" onchange="careRunPreview()" style="width:auto">
+                <option value="7">7 дней</option>
+                <option value="30" selected>30 дней</option>
+                <option value="90">90 дней</option>
+              </select>
+            </label>
+            <button class="btn btn-sec btn-sm" onclick="careRunPreview()">↻ Пересчитать</button>
+          </div>
+          <div id="carePreviewBody" class="empty">Загрузка…</div>
         </div>
       </div>
     </div>
@@ -2193,7 +2222,7 @@ function fireConfetti() {
 <script src="js/pages/dashboard.js"></script>
 <script src="js/pages/broadcasts.js?v=2026-06-13c"></script>
 <script src="js/pages/broadcast-rules.js?v=2026-08-02a"></script>
-<script src="js/pages/care.js?v=2026-08-03a"></script>
+<script src="js/pages/care.js?v=2026-08-03b"></script>
 <script src="js/pages/medical-cert.js?v=2026-06-19"></script>
 <script src="js/pages/cert-requests.js?v=2026-06-19b"></script>
 <script src="js/pages/medical-cert-coords-transform.js?v=2026-06-17b"></script>

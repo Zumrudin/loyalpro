@@ -33,7 +33,10 @@ let _careEnrOpenId = null;  // раскрытая строка дашборда
 let _careEditId = null;
 let _careConds = [];        // [{ type, ids:Set<string>, filter:'' }]
 let _careLogic = 'and';
-let _careTouches = [];      // [{ id?, title, delayDays, sendTime, intentText }]
+let _careTouches = [];      // [{ id?, title, delayDays, sendTime, intentText, textMode }]
+
+// состояние превью («сухой прогон»)
+let _carePreviewFor = null; // { programId } | { draft: true } — что именно проверяем
 
 // ── вкладки ────────────────────────────────────────────────────
 
@@ -120,6 +123,7 @@ function careRenderPrograms() {
             <div class="bc-progress-lbl">Клиенты / отправки</div>
             <div class="bc-progress-val" style="font-size:12.5px">${stats.join(' · ')}</div>
             <div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap;justify-content:flex-end">
+              <button class="btn btn-sec btn-sm" onclick="careOpenPreview(${p.id})" title="Кто попал бы в программу за последние N дней">👁 Выборка</button>
               <button class="btn btn-sec btn-sm" onclick="careOpenProgramModal(${p.id})">Изменить</button>
               <button class="btn btn-sec btn-sm" onclick="careDeleteProgram(${p.id})">🗑</button>
             </div>
@@ -170,8 +174,9 @@ async function careOpenProgramModal(id) {
     ? (p.touches || []).map(t => ({
         id: t.id, title: t.title || '', delayDays: t.delayDays,
         sendTime: t.sendTime || '10:30', intentText: t.intentText || '',
+        textMode: t.textMode === 'strict' ? 'strict' : 'free',
       }))
-    : [{ title: '', delayDays: 1, sendTime: '10:30', intentText: '' }];
+    : [{ title: '', delayDays: 1, sendTime: '10:30', intentText: '', textMode: 'free' }];
 
   careRenderConds();
   careSetLogic(_careLogic);
@@ -286,7 +291,7 @@ function careAddTouch() {
   const last = _careTouches[_careTouches.length - 1];
   _careTouches.push({
     title: '', delayDays: last ? Math.min(730, (+last.delayDays || 0) + 1) : 1,
-    sendTime: '10:30', intentText: '',
+    sendTime: '10:30', intentText: '', textMode: 'free',
   });
   careRenderTouches();
 }
@@ -310,13 +315,24 @@ function careTouchField(i, field, value) {
   _careTouches[i][field] = value;
 }
 
+// Режим текста касания: 'free' — Мила пишет сама по смыслу заготовки;
+// 'strict' — отправляет написанное дословно (см. care-prompt.js на бэке).
+// Перерисовка нужна: меняются подпись, подсказка и placeholder поля.
+function careTouchMode(i, mode) {
+  if (!_careTouches[i]) return;
+  _careTouches[i].textMode = mode === 'strict' ? 'strict' : 'free';
+  careRenderTouches();
+}
+
 function careRenderTouches() {
   const wrap = document.getElementById('careTouches');
   if (!_careTouches.length) {
     wrap.innerHTML = '<div class="empty" style="padding:14px 0">Нет касаний — добавьте хотя бы одно.</div>';
     return;
   }
-  wrap.innerHTML = _careTouches.map((t, i) => `
+  wrap.innerHTML = _careTouches.map((t, i) => {
+    const strict = t.textMode === 'strict';
+    return `
     <div class="care-touch">
       <div class="care-touch-head">
         <span class="care-touch-num">${i + 1}</span>
@@ -335,10 +351,22 @@ function careRenderTouches() {
           <button class="mc" onclick="careRemoveTouch(${i})" title="Удалить касание">✕</button>
         </span>
       </div>
+      <div class="care-touch-mode">
+        <div class="bc-chip-row">
+          <span class="bc-chip ${strict ? '' : 'on'}" onclick="careTouchMode(${i}, 'free')">✍️ Мила пишет сама</span>
+          <span class="bc-chip ${strict ? 'on' : ''}" onclick="careTouchMode(${i}, 'strict')">📋 Готовый текст</span>
+        </div>
+        <span class="care-touch-modehint">${strict
+          ? 'Уйдёт дословно; Мила подставит имя и решит, уместно ли касание.'
+          : 'Мила напишет текст сама по смыслу заготовки.'}</span>
+      </div>
       <textarea class="bc-textarea" rows="3" maxlength="2000"
-        placeholder="Заготовка для Милы: что узнать/предложить в этом касании…"
+        placeholder="${strict
+          ? 'Готовый текст сообщения — уйдёт пациенту как написано…'
+          : 'Заготовка для Милы: что узнать/предложить в этом касании…'}"
         oninput="careTouchField(${i}, 'intentText', this.value)">${esc(t.intentText)}</textarea>
-    </div>`).join('');
+    </div>`;
+  }).join('');
 }
 
 async function careSaveProgram() {
@@ -365,6 +393,7 @@ async function careSaveProgram() {
       delayDays: Number(t.delayDays),
       sendTime: t.sendTime || '10:30',
       intentText: String(t.intentText || '').trim(),
+      textMode: t.textMode === 'strict' ? 'strict' : 'free',
     })),
   };
 
@@ -380,6 +409,128 @@ async function careSaveProgram() {
     notify('Ошибка: ' + e.message, 'err');
     btn.disabled = false;
   }
+}
+
+// ── превью выборки: «кто попал бы, если бы программа работала» ──
+// Зачисление в заботу событийное (вебхук в момент состоявшегося визита),
+// бэкфилла нет — у новой программы дашборд пуст. Превью прогоняет ТЕ ЖЕ
+// условия по прошлым визитам из YClients, ничего не сохраняя и не отправляя.
+
+const CARE_SKIP_LBL = {
+  no_phone:   { lbl: 'нет телефона',  hint: 'у клиента не заполнен номер — касание отправить некуда' },
+  blacklist:  { lbl: 'чёрный список', hint: 'клиент в ЧС — Мила ему не пишет' },
+  superseded: { lbl: 'перекрыт',      hint: 'более поздний подходящий визит перезапустил бы программу' },
+};
+
+// Компактная дата для бейджей касаний: в узкой колонке модалки полный формат
+// (с годом) не помещался и обрезался многоточием.
+function careFmtShort(v) {
+  if (!v) return '—';
+  const d = new Date(v);
+  if (isNaN(d)) return '—';
+  return d.toLocaleString('ru', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
+    .replace(',', '');
+}
+
+function careOpenPreview(programId) {
+  if (programId) {
+    const p = _carePrograms.find(x => x.id === programId);
+    _carePreviewFor = { programId };
+    document.getElementById('carePreviewTitle').textContent =
+      'Выборка: ' + (p ? p.title : `программа #${programId}`);
+  } else {
+    _carePreviewFor = { draft: true };
+    document.getElementById('carePreviewTitle').textContent = 'Выборка по текущим условиям';
+  }
+  document.getElementById('carePreviewOv').classList.add('open');
+  careRunPreview();
+}
+
+function careClosePreview() {
+  document.getElementById('carePreviewOv').classList.remove('open');
+}
+
+async function careRunPreview() {
+  if (!_carePreviewFor) return;
+  const box = document.getElementById('carePreviewBody');
+  box.className = 'empty';
+  box.innerHTML = 'Считаю выборку по записям YClients…';
+  const days = Number(document.getElementById('carePreviewDays').value) || 30;
+
+  const body = _carePreviewFor.programId
+    ? { programId: _carePreviewFor.programId, days }
+    : {
+        days,
+        conditions: {
+          logic: _careLogic,
+          items: _careConds.map(c => ({ type: c.type, ids: Array.from(c.ids).map(Number) })),
+        },
+        touches: _careTouches.map(t => ({
+          title: String(t.title || '').trim(),
+          delayDays: Number(t.delayDays),
+          sendTime: t.sendTime || '10:30',
+        })),
+      };
+  try {
+    careRenderPreview(await api('POST', '/api/care/preview', body));
+  } catch (e) {
+    box.className = 'empty';
+    box.innerHTML = `<span style="color:var(--danger)">Ошибка: ${esc(e.message)}</span>`;
+  }
+}
+
+function careRenderPreview(d) {
+  const box = document.getElementById('carePreviewBody');
+  const t = d.totals || {};
+  const head = `
+    <div class="care-pv-stats">
+      <div class="care-pv-stat"><b>${t.willEnroll || 0}</b><span>цепочек стартовало бы</span></div>
+      <div class="care-pv-stat"><b>${t.matched || 0}</b><span>визитов подошло</span></div>
+      <div class="care-pv-stat"><b>${t.completed || 0}</b><span>состоявшихся визитов</span></div>
+      <div class="care-pv-stat"><b>${t.records || 0}</b><span>записей за период</span></div>
+    </div>
+    <div style="font-size:11.5px;color:var(--t3);margin:2px 0 10px">
+      Период: ${esc(d.from || '')} — ${esc(d.to || '')} (мск).
+      ${d.catMapFailed ? '<span style="color:var(--danger)">Каталог услуг недоступен — условия ПО КАТЕГОРИИ не учтены.</span>' : ''}
+      ${d.truncated ? 'Показаны первые 200 строк.' : ''}
+    </div>`;
+
+  if (!(d.rows || []).length) {
+    box.className = '';
+    box.innerHTML = head +
+      '<div class="empty" style="padding:16px 0">Под условия не подошёл ни один состоявшийся визит за период. ' +
+      'Проверьте условия или увеличьте период.</div>';
+    return;
+  }
+
+  const rows = d.rows.map(r => {
+    const skip = r.skipReason ? CARE_SKIP_LBL[r.skipReason] || { lbl: r.skipReason, hint: '' } : null;
+    const touches = (r.touches || []).map(x =>
+      `<span class="care-tbadge ${x.past ? 'care-tbadge-past' : ''}" title="${escAttr(esc((x.title || '') + (x.past ? ' — дата уже прошла' : '')))}">Т+${x.delayDays}: ${esc(careFmtShort(x.scheduledAt))}</span>`
+    ).join('') || '<span style="font-size:11.5px;color:var(--t3)">—</span>';
+    return `
+      <tr class="${skip ? 'care-pv-skip' : ''}">
+        <td>
+          <b>${esc(r.clientName || 'Без имени')}</b>
+          <div style="font-size:11.5px;color:var(--t3)">${esc(r.phone || 'нет номера')}</div>
+        </td>
+        <td>${esc(careFmtDt(r.visitAt))}
+          ${r.services && r.services.length ? `<div style="font-size:11.5px;color:var(--t3)">${esc(r.services.join(', '))}</div>` : ''}
+        </td>
+        <td>${esc(r.staffName || '—')}</td>
+        <td>${skip
+          ? `<span class="care-badge care-st-stopped" title="${escAttr(esc(skip.hint))}">${esc(skip.lbl)}</span>`
+          : '<span class="care-badge care-st-active">зачислен</span>'}</td>
+        <td><div class="care-pv-touches">${touches}</div></td>
+      </tr>`;
+  }).join('');
+
+  box.className = '';
+  box.innerHTML = head + `
+    <div class="tw"><table class="care-pv-table">
+      <thead><tr><th>Клиент</th><th>Визит</th><th>Врач</th><th>Итог</th><th>Касания</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table></div>`;
 }
 
 // ── вкладка «Клиенты» (дашборд прохождений) ────────────────────

@@ -124,3 +124,45 @@ describe('buildCarePrompt — устойчивость и формат дат', 
     expect(user).toContain('20.08.2026, 14:00'); // будущая запись
   });
 });
+
+describe('buildCarePrompt — режим готового текста (text_mode=strict)', () => {
+  const tpl = 'Здравствуйте! Напоминаем: через неделю самое время повторить процедуру.';
+  const strict = { ...base, touch: { title: 'Т+7', intent_text: tpl, text_mode: 'strict' } };
+
+  test('свободный режим (по умолчанию) — заготовка, инструкции «дословно» нет', () => {
+    const { system, user } = buildCarePrompt(base);
+    expect(user).toContain('перескажи своими словами');
+    expect(system).not.toContain('ГОТОВЫЙ ТЕКСТ');
+  });
+
+  test('strict: текст подан как готовый и запрещено менять смысл', () => {
+    const { system, user } = buildCarePrompt(strict);
+    expect(user).toContain('ГОТОВЫЙ ТЕКСТ КАСАНИЯ (отправить дословно');
+    expect(user).toContain(tpl);
+    expect(user).not.toContain('перескажи своими словами');
+    expect(system).toContain('ГОТОВЫЙ ТЕКСТ');
+    expect(system).toContain('Правило 1 (тон и длина)');
+  });
+
+  test('strict сохраняет мед-правила и JSON-контракт (решение «слать ли» остаётся за Милой)', () => {
+    const { system } = buildCarePrompt(strict);
+    expect(system).toContain('ОСЛОЖНЕНИЕ ПОСЛЕ ПРОЦЕДУРЫ');
+    expect(system).toContain('escalate');
+    expect(system).toContain('stop_program');
+  });
+
+  test('strict поднимает лимит текста до 1200 символов (в свободном режиме 400)', () => {
+    const long = 'а'.repeat(1500);
+    const free = buildCarePrompt({ ...base, touch: { intent_text: long } }).user;
+    const str  = buildCarePrompt({ ...base, touch: { intent_text: long, text_mode: 'strict' } }).user;
+    expect(free).toContain('а'.repeat(400));
+    expect(free).not.toContain('а'.repeat(401));
+    expect(str).toContain('а'.repeat(1200));
+    expect(str).not.toContain('а'.repeat(1201));
+  });
+
+  test('неизвестный режим трактуется как свободный (fail-safe)', () => {
+    const { system } = buildCarePrompt({ ...base, touch: { intent_text: tpl, text_mode: 'СВОЙ' } });
+    expect(system).not.toContain('ГОТОВЫЙ ТЕКСТ');
+  });
+});

@@ -13,16 +13,24 @@
 //   GET    /enrollments           → дашборд (?status=&program_id=)
 //   GET    /enrollments/:id/sends → журнал касаний прохождения
 //   POST   /enrollments/:id/stop  → ручная остановка
+//   POST   /preview               → сухой прогон условий по прошлым визитам
 //
 const router = require('express').Router();
 const { auth, requireRole } = require('../middleware/auth');
 const { db } = require('../db');
 const { createLogger } = require('../logger');
+const { getServiceCategoryMap } = require('../services/notifications');
+const { fetchRecords, matchVisits } = require('../services/care/preview');
+const { normalizePhoneKey } = require('../services/agent-gate');
 
 const log = createLogger('Care');
 const guard = [auth, requireRole('owner', 'admin')];
 
 const TIME_RE = /^([01]\d|2[0-3]):([0-5]\d)$/;
+
+// Режим текста касания: 'free' — Мила пишет сама по заготовке смысла,
+// 'strict' — intent_text уходит как готовый текст (см. care-prompt.js).
+const TEXT_MODES = ['free', 'strict'];
 
 // Статусы (enum'ов в БД нет — whitelist здесь):
 const ENROLLMENT_STATUSES = ['active', 'completed', 'declined', 'escalated', 'superseded', 'stopped'];
@@ -53,10 +61,11 @@ function parseProgramBody(body) {
     if (!Number.isInteger(delay) || delay < 0 || delay > 730)
       return { error: `Касание ${i + 1}: задержка 0–730 дней` };
     const sendTime = TIME_RE.test(String(t.sendTime || '')) ? t.sendTime : '10:30';
+    const textMode = TEXT_MODES.includes(t.textMode) ? t.textMode : 'free';
     touches.push({
       id: Number.isInteger(Number(t.id)) ? Number(t.id) : null,
       title: String((t && t.title) || '').trim().slice(0, 255),
-      delayDays: delay, sendTime, intentText: intent, sortOrder: i,
+      delayDays: delay, sendTime, intentText: intent, textMode, sortOrder: i,
     });
   }
   return { value: { title, conditions: { logic, items }, touches } };
@@ -69,7 +78,8 @@ router.get('/programs', guard, async (req, res) => {
       `SELECT p.*,
               COALESCE((SELECT json_agg(json_build_object(
                   'id', t.id, 'title', t.title, 'delayDays', t.delay_days,
-                  'sendTime', t.send_time, 'intentText', t.intent_text
+                  'sendTime', t.send_time, 'intentText', t.intent_text,
+                  'textMode', t.text_mode
                 ) ORDER BY t.sort_order, t.id)
                 FROM care_touches t WHERE t.program_id = p.id), '[]'::json) AS touches,
               (SELECT COUNT(*) FROM care_enrollments e
@@ -97,9 +107,9 @@ router.post('/programs', guard, async (req, res) => {
       [req.user.salonId, v.title, JSON.stringify(v.conditions), req.user.userId]);
     for (const t of v.touches) {
       await db.query(
-        `INSERT INTO care_touches (salon_id, program_id, title, delay_days, send_time, intent_text, sort_order)
-         VALUES ($1,$2,$3,$4,$5,$6,$7)`,
-        [req.user.salonId, p.id, t.title, t.delayDays, t.sendTime, t.intentText, t.sortOrder]);
+        `INSERT INTO care_touches (salon_id, program_id, title, delay_days, send_time, intent_text, sort_order, text_mode)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+        [req.user.salonId, p.id, t.title, t.delayDays, t.sendTime, t.intentText, t.sortOrder, t.textMode]);
     }
     res.json({ id: p.id });
   } catch (e) { log.error(`program create: ${e.message}`); res.status(500).json({ error: 'Ошибка создания' }); }
@@ -133,15 +143,16 @@ router.put('/programs/:id', guard, async (req, res) => {
     for (const t of v.touches) {
       if (t.id) {
         const r = await db.query(
-          `UPDATE care_touches SET title=$3, delay_days=$4, send_time=$5, intent_text=$6, sort_order=$7
+          `UPDATE care_touches SET title=$3, delay_days=$4, send_time=$5, intent_text=$6, sort_order=$7,
+                  text_mode=$8
             WHERE id=$1 AND program_id=$2`,
-          [t.id, pid, t.title, t.delayDays, t.sendTime, t.intentText, t.sortOrder]);
+          [t.id, pid, t.title, t.delayDays, t.sendTime, t.intentText, t.sortOrder, t.textMode]);
         if (r.rowCount) { keepIds.push(t.id); continue; }
       }
       const ins = await db.one(
-        `INSERT INTO care_touches (salon_id, program_id, title, delay_days, send_time, intent_text, sort_order)
-         VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id`,
-        [req.user.salonId, pid, t.title, t.delayDays, t.sendTime, t.intentText, t.sortOrder]);
+        `INSERT INTO care_touches (salon_id, program_id, title, delay_days, send_time, intent_text, sort_order, text_mode)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id`,
+        [req.user.salonId, pid, t.title, t.delayDays, t.sendTime, t.intentText, t.sortOrder, t.textMode]);
       keepIds.push(ins.id);
     }
     // Сначала cancel scheduled-отправок удаляемых касаний (пока touch_id жив)…
@@ -255,6 +266,93 @@ router.post('/enrollments/:id/stop', guard, async (req, res) => {
         WHERE enrollment_id=$1 AND status='scheduled'`, [r.id]);
     res.json({ ok: true });
   } catch (e) { log.error(`enrollment stop: ${e.message}`); res.status(500).json({ error: 'Ошибка' }); }
+});
+
+// ── POST /preview — сухой прогон условий по прошлым визитам ─────
+//
+// «Кого зацепило бы, если бы программа работала последние N дней». Ничего не
+// пишет и не отправляет. Нужен потому, что боевое зачисление событийное
+// (вебхук) и бэкфилла нет: у только что созданной программы дашборд пуст, и
+// без превью не отличить «условия кривые» от «подходящих визитов не было».
+//
+// Тело: { programId? , conditions?, touches?, days? }
+//   programId — берём условия и цепочку из БД (кнопка в карточке программы);
+//   без него — из тела (черновик в редакторе, программа ещё не сохранена).
+const PREVIEW_MAX_DAYS = 90;
+const PREVIEW_MAX_ROWS = 200;
+
+// Лёгкая нормализация черновика: в отличие от parseProgramBody не требует
+// названия и заполненных заготовок — превью считает ОТБОР, а не тексты.
+function parsePreviewDraft(body) {
+  const c = (body && body.conditions) || {};
+  const conditions = {
+    logic: c.logic === 'or' ? 'or' : 'and',
+    items: (Array.isArray(c.items) ? c.items : [])
+      .filter(it => it && ['staff', 'category', 'service'].includes(it.type))
+      .map(it => ({ type: it.type, ids: (Array.isArray(it.ids) ? it.ids : []).map(Number).filter(Number.isFinite) }))
+      .filter(it => it.ids.length),
+  };
+  const touches = (Array.isArray(body && body.touches) ? body.touches : [])
+    .slice(0, 20)
+    .map(t => ({
+      id: Number.isInteger(Number(t && t.id)) ? Number(t.id) : null,
+      title: String((t && t.title) || '').trim().slice(0, 255),
+      delay_days: Number.isFinite(Number(t && t.delayDays)) ? Number(t.delayDays) : 0,
+      send_time: TIME_RE.test(String((t && t.sendTime) || '')) ? t.sendTime : '10:30',
+    }));
+  return { conditions, touches };
+}
+
+router.post('/preview', guard, async (req, res) => {
+  try {
+    const days = Math.min(PREVIEW_MAX_DAYS, Math.max(1, parseInt(req.body && req.body.days, 10) || 30));
+
+    let conditions, touches;
+    const programId = parseInt(req.body && req.body.programId, 10);
+    if (programId) {
+      const p = await db.oneOrNone(
+        `SELECT conditions FROM care_programs WHERE id=$1 AND salon_id=$2`,
+        [programId, req.user.salonId]);
+      if (!p) return res.status(404).json({ error: 'Программа не найдена' });
+      conditions = p.conditions;
+      touches = await db.any(
+        `SELECT id, title, delay_days, send_time FROM care_touches
+          WHERE program_id=$1 ORDER BY sort_order, id`, [programId]);
+    } else {
+      ({ conditions, touches } = parsePreviewDraft(req.body));
+    }
+
+    const salon = await db.oneOrNone(`SELECT * FROM salons WHERE id=$1`, [req.user.salonId]);
+    if (!salon) return res.status(404).json({ error: 'Салон не найден' });
+
+    const { records, startDate, endDate } = await fetchRecords(salon, days);
+    // Карта категорий — тот же кэшируемый источник, что и в боевом зачислении.
+    // Пустая карта не матчит условия ПО КАТЕГОРИИ: честно сообщаем это фронту
+    // (иначе «никто не подошёл» читается как «условия не те»).
+    let catMap = new Map();
+    let catMapFailed = false;
+    try { catMap = await getServiceCategoryMap(salon); }
+    catch (e) { catMapFailed = true; log.warn(`preview catMap: ${e.message}`); }
+    if (!catMap.size) catMapFailed = true;
+
+    const bl = await db.any(
+      `SELECT phone FROM clients WHERE salon_id=$1 AND is_blacklisted = TRUE AND phone IS NOT NULL`,
+      [req.user.salonId]);
+    // Телефон в clients хранится как пришёл из YClients (см. loyalty.js) —
+    // нормализуем обе стороны, иначе ЧС молча не сматчится.
+    const blacklisted = new Set(bl.map(r => normalizePhoneKey(r.phone)).filter(Boolean));
+
+    const { totals, rows } = matchVisits({ records, conditions, touches, catMap, blacklisted });
+    res.json({
+      from: startDate, to: endDate, days,
+      totals, catMapFailed,
+      truncated: rows.length > PREVIEW_MAX_ROWS,
+      rows: rows.slice(0, PREVIEW_MAX_ROWS),
+    });
+  } catch (e) {
+    log.error(`preview: ${e.message}`);
+    res.status(502).json({ error: `Не удалось получить записи YClients: ${e.message}` });
+  }
 });
 
 module.exports = router;

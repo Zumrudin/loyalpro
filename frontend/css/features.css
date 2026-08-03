@@ -497,6 +497,28 @@
 .care-st-escalated{background:rgba(239,68,68,.14);color:#ef4444}
 .care-st-declined,.care-st-stopped{background:rgba(156,163,175,.16);color:#9ca3af}
 .care-st-superseded{background:rgba(156,163,175,.1);color:var(--t3);opacity:.75}
+/* переключатель режима текста касания (Мила пишет сама / готовый текст) */
+.care-touch-mode{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px}
+.care-touch-modehint{font-size:11.5px;color:var(--t3)}
+/* превью выборки («сухой прогон» программы по прошлым визитам) */
+.care-pv-stats{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px}
+.care-pv-stat{flex:1 1 110px;background:var(--bg);border:1px solid var(--bd);
+  border-radius:8px;padding:8px 10px;display:flex;flex-direction:column;gap:2px}
+.care-pv-stat b{font-size:18px;line-height:1.1;color:var(--t1)}
+.care-pv-stat span{font-size:11px;color:var(--t3)}
+.care-pv-skip td{opacity:.6}
+.care-pv-touches{display:flex;flex-direction:column;gap:3px;align-items:flex-start}
+.care-pv-touches .care-tbadge{white-space:nowrap}
+/* фиксированная раскладка: длинные названия услуг иначе распирают таблицу
+   шире модалки и колонка касаний уезжает за край */
+.care-pv-table{width:100%;table-layout:fixed}
+.care-pv-table td{vertical-align:top;word-break:break-word}
+.care-pv-table th:nth-child(1),.care-pv-table td:nth-child(1){width:21%}
+.care-pv-table th:nth-child(2),.care-pv-table td:nth-child(2){width:31%}
+.care-pv-table th:nth-child(3),.care-pv-table td:nth-child(3){width:15%}
+.care-pv-table th:nth-child(4),.care-pv-table td:nth-child(4){width:14%}
+.care-pv-table th:nth-child(5),.care-pv-table td:nth-child(5){width:19%}
+.care-tbadge-past{opacity:.55;text-decoration:line-through}
 /* строки дашборда: раскрытие журнала */
 .care-enr-row{cursor:pointer}
 .care-enr-row:hover td{background:var(--bg)}
