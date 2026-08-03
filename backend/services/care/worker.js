@@ -16,6 +16,7 @@
 const config = require('../../config');
 const { db: realDb } = require('../../db');
 const chatpush = require('../chatpush');
+const { persistWhatsappOutgoing } = require('../chat-persist');
 const agentSettings = require('../agent-settings');
 const { getProvider } = require('../agent/providers');
 const history = require('../agent/history');
@@ -91,7 +92,11 @@ const defaultDeps = {
       [salonId, phone, JSON.stringify({ reason })]);
     chatEvents.emitAgentStatus(salonId, phone, 'escalated', reason);
   },
-  persistWhatsapp: async () => {},   // подключается в Task 10
+  // Персист исходящего касания в chatpush_messages (WhatsApp не шлёт эхо на
+  // свои же отправки — без этого шага сообщение живёт лишь в транскрипте
+  // pendingReplies и пропадает из истории чата после перезагрузки).
+  persistWhatsapp: (salonId, { delivery, phone, text }) =>
+    persistWhatsappOutgoing(salonId, { delivery, phone, chatId: null, text, msgType: 'text' }),
   log,
 };
 

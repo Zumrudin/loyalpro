@@ -228,6 +228,7 @@ pool.connect()
       logger.info('Register: POST /api/auth/register');
       startBroadcastWorker();
       startNotificationWorker();
+      require('./services/care/worker').startCareWorker();
     });
   })
   .catch(e => {
