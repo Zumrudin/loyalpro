@@ -44,7 +44,11 @@ async function run(salonId, input, ctx = {}) {
           WHERE status='scheduled' AND enrollment_id = ANY($1::bigint[])`,
         [careIds]);
     }
-  } catch (_) { /* care-каскад best-effort */ }
+  } catch (e) {
+    // Best-effort, но не молча: постоянный сбой каскада (например после
+    // изменения схемы) должен быть виден в логах.
+    console.warn(`[EscalateToOperator] care-каскад не применён: ${e.message}`);
+  }
   await db.query(
     `INSERT INTO agent_events (salon_id, dialog_key, kind, tool_name, payload)
      VALUES ($1,$2,'escalated','escalate_to_operator',$3)`,
