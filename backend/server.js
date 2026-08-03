@@ -92,7 +92,14 @@ app.use(cors({
 }));
 // NOTE: No manual app.options('*', ...) handler — cors() middleware handles OPTIONS preflight correctly.
 app.use(express.json({ limit: '2mb' }));
-app.use(express.static(path.join(__dirname, '../frontend'), { etag: false, lastModified: false, setHeaders: (res, filePath) => { if (filePath.endsWith('.js') || filePath.endsWith('.css') || filePath.endsWith('.html')) { res.setHeader('Cache-Control', 'no-store'); } } }));
+// Статика фронтенда. ETag и Last-Modified ВКЛЮЧЕНЫ намеренно: на проде nginx
+// накрывает .js/.css своим `expires`, и без валидаторов закэшированный файл
+// невозможно перепроверить — браузер обязан верить копии до конца срока. Так
+// правки фронта доезжали до людей неделями (инцидент с nav.js и «Заботой»), а
+// битая копия в кэше телефона жила бы вечно. С ETag браузер шлёт If-None-Match
+// и получает пустой 304. HTML по-прежнему no-store: index.html обязан быть
+// свежим, иначе он сошлётся на несуществующие версии ассетов.
+app.use(express.static(path.join(__dirname, '../frontend'), { etag: true, lastModified: true, setHeaders: (res, filePath) => { if (filePath.endsWith('.html')) { res.setHeader('Cache-Control', 'no-store'); } } }));
 
 // Explicit route for index.html
 app.get('/', (req, res) => {
