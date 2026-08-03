@@ -150,13 +150,29 @@ router.get('/analytics/dashboard', auth, async (req, res) => {
             SELECT 1 FROM jsonb_array_elements(COALESCE(r.raw_payload->'services','[]'::jsonb)) svc
             WHERE COALESCE(NULLIF(svc->>'discount','')::numeric, 0) > 0
           )
+          -- «Нет списания бонусов по этому визиту» — ТРИ раздельных NOT EXISTS, а не
+          -- один с OR внутри. Логически это то же самое (NOT EXISTS(A OR B OR C) ≡
+          -- NOT EXISTS(A) AND NOT EXISTS(B) AND NOT EXISTS(C)), но план другой:
+          -- с OR планировщик не может опереться ни на один индекс и делает Nested Loop
+          -- Anti Join через всю таблицу транзакций — на живых данных 93 млн отброшенных
+          -- строк и 7 с на КАЖДЫЙ вызов дашборда (замер 2026-08-03, EXPLAIN ANALYZE).
+          -- Раздельные условия дают hash anti join → 0.2 с. Значения сверены на шести
+          -- периодах (день/неделя/месяц/полгода/полтора года) — совпали до строки.
+          -- Эталон правила «первичного пациента» — primary-clients.test.js (там форма
+          -- с OR намеренно оставлена как независимая проверка).
           AND NOT EXISTS (
             SELECT 1 FROM loyalty_card_transactions lct
-            WHERE lct.salon_id = r.salon_id AND lct.amount < 0
-              AND (lct.record_id = r.id
-                   OR lct.record_id = r.yclients_record_id
-                   OR (lct.record_id IS NULL AND lct.client_id = r.client_id
-                       AND r.visit_date IS NOT NULL AND lct.txn_date::date = r.visit_date::date))
+            WHERE lct.salon_id = r.salon_id AND lct.amount < 0 AND lct.record_id = r.id
+          )
+          AND NOT EXISTS (
+            SELECT 1 FROM loyalty_card_transactions lct
+            WHERE lct.salon_id = r.salon_id AND lct.amount < 0 AND lct.record_id = r.yclients_record_id
+          )
+          AND NOT EXISTS (
+            SELECT 1 FROM loyalty_card_transactions lct
+            WHERE lct.salon_id = r.salon_id AND lct.amount < 0 AND lct.record_id IS NULL
+              AND lct.client_id = r.client_id
+              AND r.visit_date IS NOT NULL AND lct.txn_date::date = r.visit_date::date
           )
         GROUP BY r.client_id
       )
