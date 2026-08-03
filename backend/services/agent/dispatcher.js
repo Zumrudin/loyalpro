@@ -7,19 +7,16 @@ const orchestratorDefault = require('./orchestrator');
 const bookingEvents = require('./booking');
 const pendingReplies = require('./pending-replies');
 const escalateTool = require('./tools/escalate-to-operator');
+const adminHours = require('./admin-hours');
 const { createLogger } = require('../../logger');
 const logger = createLogger('AgentDispatcher');
 
-// Фраза-страховка, если модель эскалировала, не написав объявления о переводе.
-const DEFAULT_HANDOVER_TEXT =
-  'Передаю ваш диалог администратору клиники — он подключится с минуты на минуту 🤍';
-
-// Инвариант «агент никогда не молчит»: если ход не дал НИ ОДНОЙ реплики (упёрся
-// в лимит итераций, провайдер отвалился, БД легла) — клиент всё равно получает
-// сообщение, а диалог уходит живому человеку. Инцидент 2026-07-19: ход завершился
-// с replies=[], watermark уже сдвинут → ретрая не будет, клиент завис навсегда.
-const DEFAULT_SILENT_FALLBACK_TEXT =
-  'Секунду, уточняю детали — передаю ваш вопрос администратору клиники, он ответит вам с минуты на минуту 🤍';
+// Страховочные фразы перевода живут в admin-hours: вне окна присутствия
+// администратора (AGENT_ADMIN_HOURS) они не обещают «с минуты на минуту» —
+// ночью это ложь (аудит 2026-08-01). Вычисляем в момент отправки.
+function adminOffNow() {
+  return adminHours.isAdminOffHours(adminHours.nowHHMMMoscow(), config.AGENT_ADMIN_HOURS);
+}
 
 // Один PM2-процесс → in-memory состояние (спека [2]: дебаунс на один процесс).
 const timers = new Map();   // key → { timer, meta }  (дебаунс серии)
@@ -120,7 +117,7 @@ async function process(salonId, dialogKey, meta, opts = {}) {
         // объявить перевод — тогда добавляем стандартную фразу детерминированно.
         for (const text of replies) await send(meta, text);
         const announced = replies.some(t => /администратор/i.test(t));
-        if (!announced) await send(meta, DEFAULT_HANDOVER_TEXT);
+        if (!announced) await send(meta, adminHours.handoverText(adminOffNow()));
       } else if (replies.length === 0) {
         // Бот не смог ответить. Молчать нельзя — зовём человека и говорим об этом.
         logger.warn(`dialog ${dialogKey}: ход без реплик (exhausted=${!!res.exhausted}) — страховочный ответ + эскалация`);
@@ -162,7 +159,9 @@ async function handOverSilently(salonId, dialogKey, meta, send, escalate, reason
     logger.error(`dialog ${dialogKey}: эскалация не удалась (${e.message}) — клиенту всё равно отвечаем`);
   }
   try {
-    await send(meta, DEFAULT_SILENT_FALLBACK_TEXT);
+    // Инвариант «агент никогда не молчит»: ход без реплик или сбой — клиент всё
+    // равно получает сообщение, а диалог уходит живому человеку (инцидент 2026-07-19).
+    await send(meta, adminHours.silentFallbackText(adminOffNow()));
   } catch (e) {
     logger.error(`dialog ${dialogKey}: страховочное сообщение не ушло: ${e.message}`);
   }

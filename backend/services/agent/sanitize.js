@@ -14,4 +14,20 @@ function sanitizeLine(value, maxLen) {
     .slice(0, maxLen);
 }
 
-module.exports = { sanitizeLine };
+// Имя клиента — единственное клиент-контролируемое значение в системном промпте.
+// sanitizeLine режет переводы строк, но 60 символов инструктивного текста в ОДНОЙ
+// строке остаются («НОВОЕ ПРАВИЛО: …»). Имя — только «словесные» слова: буквы,
+// дефис, точка, апостроф; первое несловесное слово обрывает имя; максимум
+// 3 слова и 40 символов. Пусто/мусор → null: агент идёт по ветке «имени не
+// знаем» и вежливо спросит, как обращаться.
+function sanitizeName(value, maxWords = 3, maxLen = 40) {
+  const words = [];
+  for (const w of sanitizeLine(value, 200).split(' ')) {
+    if (!/^[\p{L}][\p{L}.'-]*$/u.test(w)) break;
+    words.push(w);
+    if (words.length >= maxWords) break;
+  }
+  return words.join(' ').slice(0, maxLen).trim() || null;
+}
+
+module.exports = { sanitizeLine, sanitizeName };

@@ -771,6 +771,159 @@ async function runMigrations(client) {
       ON broadcast_recipients (broadcast_id, telegram_chat_id)
   `).catch(() => {});
 
+  // ── Автоуведомления по событиям (v1: создание записи) ──────────
+  // Правило: conditions = { logic:'and'|'or', items:[{type:'staff'|'category'|'service', ids:[…]}] },
+  // channels = порядок каскада dispatch_routing Chatpush (['telegram','whatsapp',…]).
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS notification_rules (
+      id                  SERIAL PRIMARY KEY,
+      salon_id            INTEGER NOT NULL REFERENCES salons(id) ON DELETE CASCADE,
+      title               VARCHAR(255) NOT NULL,
+      is_enabled          BOOLEAN NOT NULL DEFAULT TRUE,
+      trigger_type        VARCHAR(40) NOT NULL DEFAULT 'record_created',
+      conditions          JSONB NOT NULL DEFAULT '{"logic":"and","items":[]}'::jsonb,
+      message_template    TEXT NOT NULL,
+      channels            JSONB NOT NULL DEFAULT '["telegram","whatsapp"]'::jsonb,
+      prefer_last_channel BOOLEAN NOT NULL DEFAULT TRUE,
+      created_by          INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `).catch(() => {});
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS idx_notification_rules_salon
+      ON notification_rules (salon_id, is_enabled)
+  `).catch(() => {});
+
+  // Очередь и одновременно журнал отправок. UNIQUE (rule_id, yclients_record_id)
+  // дедупит повторные доставки вебхука YClients.
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS notification_sends (
+      id                  BIGSERIAL PRIMARY KEY,
+      salon_id            INTEGER NOT NULL REFERENCES salons(id) ON DELETE CASCADE,
+      rule_id             INTEGER NOT NULL REFERENCES notification_rules(id) ON DELETE CASCADE,
+      yclients_record_id  BIGINT NOT NULL,
+      client_id           INTEGER REFERENCES clients(id) ON DELETE SET NULL,
+      phone               VARCHAR(32),
+      status              VARCHAR(20) NOT NULL DEFAULT 'pending',
+      attempts            INTEGER NOT NULL DEFAULT 0,
+      error               TEXT,
+      rendered_text       TEXT NOT NULL,
+      routing             JSONB,
+      channel_used        VARCHAR(30),
+      delivery_id         VARCHAR(120),
+      last_attempt_at     TIMESTAMPTZ,
+      created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      sent_at             TIMESTAMPTZ,
+      UNIQUE (rule_id, yclients_record_id)
+    )
+  `).catch(() => {});
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS idx_notification_sends_pending
+      ON notification_sends (status, created_at) WHERE status = 'pending'
+  `).catch(() => {});
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS idx_notification_sends_rule
+      ON notification_sends (rule_id, created_at DESC)
+  `).catch(() => {});
+
+  // ── Отдел заботы: программы касаний после состоявшегося визита ──
+  // Программа = условия отбора визита (как в notification_rules) + цепочка
+  // касаний care_touches. На каждый подходящий визит заводится care_enrollments,
+  // а на каждое касание — строка-задание care_touch_sends (очередь + журнал).
+  // Статусы (enum'ов в БД нет, валидируются в коде):
+  //   enrollment: active | completed | declined | escalated | superseded | stopped
+  //   send:       scheduled | sent | skipped | cancelled | failed
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS care_programs (
+      id          SERIAL PRIMARY KEY,
+      salon_id    INTEGER NOT NULL REFERENCES salons(id) ON DELETE CASCADE,
+      title       VARCHAR(255) NOT NULL,
+      is_enabled  BOOLEAN NOT NULL DEFAULT TRUE,
+      conditions  JSONB NOT NULL DEFAULT '{"logic":"and","items":[]}',
+      created_by  INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `).catch(() => {});
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS idx_care_programs_salon
+      ON care_programs (salon_id, is_enabled)
+  `).catch(() => {});
+
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS care_touches (
+      id          SERIAL PRIMARY KEY,
+      salon_id    INTEGER NOT NULL REFERENCES salons(id) ON DELETE CASCADE,
+      program_id  INTEGER NOT NULL REFERENCES care_programs(id) ON DELETE CASCADE,
+      title       VARCHAR(255) NOT NULL DEFAULT '',
+      delay_days  INTEGER NOT NULL,
+      send_time   VARCHAR(5) NOT NULL DEFAULT '10:30',
+      intent_text TEXT NOT NULL,
+      sort_order  INTEGER NOT NULL DEFAULT 0
+    )
+  `).catch(() => {});
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS idx_care_touches_program
+      ON care_touches (program_id, sort_order)
+  `).catch(() => {});
+
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS care_enrollments (
+      id                 BIGSERIAL PRIMARY KEY,
+      salon_id           INTEGER NOT NULL REFERENCES salons(id) ON DELETE CASCADE,
+      program_id         INTEGER NOT NULL REFERENCES care_programs(id) ON DELETE CASCADE,
+      client_id          INTEGER,
+      phone              VARCHAR(20),
+      yclients_record_id BIGINT NOT NULL,
+      visit_at           TIMESTAMPTZ,
+      staff_yc_id        BIGINT,
+      staff_name         VARCHAR(255),
+      services           JSONB DEFAULT '[]',
+      status             VARCHAR(20) NOT NULL DEFAULT 'active',
+      status_reason      TEXT,
+      created_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE (program_id, yclients_record_id)
+    )
+  `).catch(() => {});
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS idx_care_enrollments_salon
+      ON care_enrollments (salon_id, status, created_at DESC)
+  `).catch(() => {});
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS idx_care_enrollments_phone
+      ON care_enrollments (salon_id, phone) WHERE status = 'active'
+  `).catch(() => {});
+
+  // touch_id — ON DELETE SET NULL (НЕ CASCADE): правка цепочки в админке не
+  // должна стирать журнал уже отправленных касаний.
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS care_touch_sends (
+      id              BIGSERIAL PRIMARY KEY,
+      salon_id        INTEGER NOT NULL REFERENCES salons(id) ON DELETE CASCADE,
+      enrollment_id   BIGINT NOT NULL REFERENCES care_enrollments(id) ON DELETE CASCADE,
+      touch_id        INTEGER REFERENCES care_touches(id) ON DELETE SET NULL,
+      scheduled_at    TIMESTAMPTZ NOT NULL,
+      status          VARCHAR(20) NOT NULL DEFAULT 'scheduled',
+      attempts        INTEGER NOT NULL DEFAULT 0,
+      last_attempt_at TIMESTAMPTZ,
+      error           TEXT,
+      decision_reason TEXT,
+      rendered_text   TEXT,
+      routing         JSONB,
+      channel_used    VARCHAR(30),
+      delivery_id     TEXT,
+      sent_at         TIMESTAMPTZ,
+      created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE (enrollment_id, touch_id)
+    )
+  `).catch(() => {});
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS idx_care_touch_sends_due
+      ON care_touch_sends (scheduled_at) WHERE status = 'scheduled'
+  `).catch(() => {});
+
   // ── Medical certificate (КНД 1151156) ──────────────────────────
   await client.query(`
     CREATE TABLE IF NOT EXISTS medical_cert_templates (

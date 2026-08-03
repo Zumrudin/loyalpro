@@ -11,9 +11,9 @@
 <script src="js/core/api.js"></script>
 <script src="js/core/theme.js"></script>
 <script src="js/core/auth.js?v=2026-06-02a"></script>
-<script src="js/core/nav.js?v=2026-07-28-cashier"></script>
+<script src="js/core/nav.js?v=2026-08-03a"></script>
 <link rel="stylesheet" href="css/base.css?v=2026-06-19-brand">
-<link rel="stylesheet" href="css/features.css?v=2026-07-31a">
+<link rel="stylesheet" href="css/features.css?v=2026-08-03a">
 </head>
 <body>
 
@@ -95,6 +95,7 @@
       <div class="tn" data-p="staff-analytics" data-roles="owner,admin" onclick="nav(this)">Сотрудники</div>
       <div class="tn" data-p="segments" data-roles="owner,admin" onclick="nav(this)">Сегменты</div>
       <div class="tn" data-p="broadcasts" data-roles="owner,admin" onclick="nav(this)">📨 Рассылка</div>
+      <div class="tn" data-p="care" data-roles="owner,admin" onclick="nav(this)">💚 Забота</div>
       <div class="tn" data-p="chat" data-roles="owner,admin,admin_cashier" onclick="nav(this)">💬 Чат</div>
       <div class="tn" data-p="cert-requests" data-roles="owner,admin,specialist,admin_cashier" onclick="nav(this)">Справки</div>
       <div class="tn" data-p="home-care" data-roles="owner,admin,specialist,admin_cashier" onclick="nav(this)">Уход</div>
@@ -138,6 +139,7 @@
       <div class="tn" data-p="staff-analytics" data-roles="owner,admin" onclick="nav(this)">Сотрудники</div>
       <div class="tn" data-p="segments" data-roles="owner,admin" onclick="nav(this)">Сегменты</div>
       <div class="tn" data-p="broadcasts" data-roles="owner,admin" onclick="nav(this)">📨 Рассылка</div>
+      <div class="tn" data-p="care" data-roles="owner,admin" onclick="nav(this)">💚 Забота</div>
       <div class="tn" data-p="chat" data-roles="owner,admin,admin_cashier" onclick="nav(this)">💬 Чат</div>
       <div class="tn" data-p="cert-requests" data-roles="owner,admin,specialist,admin_cashier" onclick="nav(this)">Справки</div>
       <div class="tn" data-p="home-care" data-roles="owner,admin,specialist,admin_cashier" onclick="nav(this)">Уход</div>
@@ -1019,16 +1021,34 @@
 
     <!-- ═══ TELEGRAM BROADCASTS PAGE ═══ -->
     <div class="page" id="page-broadcasts">
-      <div class="bc-head">
-        <div>
-          <div class="bc-head-title">📨 Рассылка в Telegram</div>
-          <div id="bcMeta" class="bc-head-sub">Подписчиков бота: —</div>
-        </div>
-        <button class="btn btn-pri" onclick="bcOpenComposer()">+ Новая рассылка</button>
+      <div class="tabs" style="max-width:440px">
+        <button class="tab active" id="bcTabBtn-once" onclick="bcSwitchTab('once')">📨 Разовые рассылки</button>
+        <button class="tab" id="bcTabBtn-rules" onclick="bcSwitchTab('rules')">🔁 Автоуведомления</button>
       </div>
 
-      <!-- История рассылок -->
-      <div id="bcHistory" class="empty">Загрузка истории…</div>
+      <div id="bcTab-once">
+        <div class="bc-head">
+          <div>
+            <div class="bc-head-title">📨 Рассылка в Telegram</div>
+            <div id="bcMeta" class="bc-head-sub">Подписчиков бота: —</div>
+          </div>
+          <button class="btn btn-pri" onclick="bcOpenComposer()">+ Новая рассылка</button>
+        </div>
+
+        <!-- История рассылок -->
+        <div id="bcHistory" class="empty">Загрузка истории…</div>
+      </div>
+
+      <div id="bcTab-rules" style="display:none">
+        <div class="bc-head">
+          <div>
+            <div class="bc-head-title">🔁 Автоуведомления</div>
+            <div class="bc-head-sub">Постоянные уведомления по событию «создание записи»</div>
+          </div>
+          <button class="btn btn-pri" onclick="nrOpenEditor()">+ Новое правило</button>
+        </div>
+        <div id="nrList" class="empty">Загрузка…</div>
+      </div>
     </div>
 
     <!-- ═══ BROADCAST COMPOSER MODAL ═══ -->
@@ -1121,6 +1141,191 @@
           <div class="bc-actions">
             <button class="btn btn-sec" onclick="bcCloseComposer()">Отмена</button>
             <button id="bcSendBtn" class="btn btn-pri" onclick="bcSend()">Отправить</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══ NOTIFICATION RULE EDITOR MODAL ═══ -->
+    <div id="nrEditorOv" class="ov" onclick="if(event.target===this)nrCloseEditor()">
+      <div class="modal bc-modal">
+        <div class="mh">
+          <div class="mt" id="nrEditorTitle">Новое правило</div>
+          <button class="mc" onclick="nrCloseEditor()">✕</button>
+        </div>
+        <div class="bc-modal-body">
+
+          <div class="bc-section">
+            <div class="fg">
+              <label class="fl">Название правила</label>
+              <input id="nrTitle" type="text" maxlength="255" placeholder="напр. Запись на лазерную эпиляцию">
+            </div>
+          </div>
+
+          <div class="bc-section">
+            <div class="bc-section-title">Условия (событие: создание записи)</div>
+            <div class="bc-section-hint">
+              Без условий правило срабатывает на любую новую запись.
+              Внутри одного условия значения объединяются через ИЛИ.
+            </div>
+            <div id="nrConds"></div>
+            <div style="display:flex;align-items:center;gap:14px;margin-top:8px;flex-wrap:wrap">
+              <button class="btn btn-sec btn-sm" onclick="nrAddCond()">+ Условие</button>
+              <div id="nrLogicWrap" style="display:none;align-items:center;gap:8px">
+                <span style="font-size:12px;color:var(--t3)">Объединять условия:</span>
+                <div class="bc-chip-row">
+                  <span class="bc-chip on" id="nrLogic-and" onclick="nrSetLogic('and')">И</span>
+                  <span class="bc-chip" id="nrLogic-or" onclick="nrSetLogic('or')">ИЛИ</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="bc-section">
+            <div class="bc-section-title">Текст сообщения</div>
+            <div class="bc-section-hint">
+              Эмодзи поддерживаются. Разметка WhatsApp: *жирный*, _курсив_.<br>
+              Подстановки:
+              <code onclick="nrInsertVar('{first_name}')">{first_name}</code>
+              <code onclick="nrInsertVar('{name}')">{name}</code>
+              <code onclick="nrInsertVar('{date}')">{date}</code>
+              <code onclick="nrInsertVar('{time}')">{time}</code>
+              <code onclick="nrInsertVar('{services}')">{services}</code>
+              <code onclick="nrInsertVar('{staff}')">{staff}</code>
+              <code onclick="nrInsertVar('{salon}')">{salon}</code>
+            </div>
+            <textarea id="nrText" class="bc-textarea" rows="6" maxlength="4000"
+              placeholder="Здравствуйте, {first_name}! Вы записаны {date} в {time} на «{services}» к мастеру {staff} 💜"></textarea>
+            <div class="bc-char-count"><span id="nrCharCount">0</span> / 4000</div>
+          </div>
+
+          <div class="bc-section">
+            <div class="bc-section-title">Каналы отправки</div>
+            <div class="bc-section-hint">
+              Кликайте в нужном порядке — это порядок каскада: не доставили в первый, пробуем следующий.
+            </div>
+            <div id="nrChannels" class="bc-chip-row"></div>
+            <label style="display:flex;align-items:center;gap:8px;margin-top:10px;font-size:12.5px;cursor:pointer">
+              <input type="checkbox" id="nrPreferLast" checked>
+              Сначала — канал, из которого клиент писал в последний раз
+            </label>
+          </div>
+
+          <div class="bc-actions">
+            <button class="btn btn-sec" onclick="nrCloseEditor()">Отмена</button>
+            <button id="nrSaveBtn" class="btn btn-pri" onclick="nrSave()">Сохранить</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══ NOTIFICATION RULE LOG MODAL ═══ -->
+    <div id="nrLogOv" class="ov" onclick="if(event.target===this)nrCloseLog()">
+      <div class="modal bc-modal">
+        <div class="mh">
+          <div class="mt" id="nrLogTitle">Журнал отправок</div>
+          <button class="mc" onclick="nrCloseLog()">✕</button>
+        </div>
+        <div class="bc-modal-body" id="nrLogBody">
+          <div class="empty">Загрузка…</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══ CARE PAGE («Забота»: программы касаний + дашборд) ═══ -->
+    <div class="page" id="page-care">
+      <div class="tabs" style="max-width:440px">
+        <button class="tab active" id="careTabBtn-programs" onclick="careSwitchTab('programs')">💚 Программы</button>
+        <button class="tab" id="careTabBtn-clients" onclick="careSwitchTab('clients')">👥 Клиенты</button>
+      </div>
+
+      <div id="careTab-programs">
+        <div class="bc-head">
+          <div>
+            <div class="bc-head-title">💚 Программы заботы</div>
+            <div class="bc-head-sub">Цепочки касаний после состоявшегося визита</div>
+          </div>
+          <button class="btn btn-pri" onclick="careOpenProgramModal()">+ Новая программа</button>
+        </div>
+        <div id="carePrograms" class="empty">Загрузка…</div>
+      </div>
+
+      <div id="careTab-clients" style="display:none">
+        <div class="bc-head">
+          <div>
+            <div class="bc-head-title">👥 Клиенты в программах</div>
+            <div class="bc-head-sub">Прохождения: кто на каком касании, журнал отправок</div>
+          </div>
+          <select id="careEnrStatus" onchange="careLoadEnrollments()" style="width:auto;min-width:170px;flex-shrink:0">
+            <option value="">Все статусы</option>
+            <option value="active">Активно</option>
+            <option value="completed">Завершено</option>
+            <option value="escalated">Эскалация</option>
+            <option value="declined">Отказался</option>
+            <option value="stopped">Остановлено</option>
+            <option value="superseded">Перекрыто</option>
+          </select>
+        </div>
+        <div class="card" style="padding:0"><div class="tw">
+          <table>
+            <thead><tr>
+              <th>Клиент</th><th>Программа</th><th>Визит</th><th>Врач</th>
+              <th>Статус</th><th>След. касание</th><th>Последняя отправка</th>
+            </tr></thead>
+            <tbody id="careEnrBody"><tr><td colspan="7" class="empty">Загрузка…</td></tr></tbody>
+          </table>
+        </div></div>
+      </div>
+    </div>
+
+    <!-- ═══ CARE PROGRAM EDITOR MODAL ═══ -->
+    <div id="careEditorOv" class="ov" onclick="if(event.target===this)careCloseEditor()">
+      <div class="modal bc-modal">
+        <div class="mh">
+          <div class="mt" id="careEditorTitle">Новая программа</div>
+          <button class="mc" onclick="careCloseEditor()">✕</button>
+        </div>
+        <div class="bc-modal-body">
+
+          <div class="bc-section">
+            <div class="fg">
+              <label class="fl">Название программы</label>
+              <input id="careTitle" type="text" maxlength="255" placeholder="напр. Забота после чистки лица">
+            </div>
+          </div>
+
+          <div class="bc-section">
+            <div class="bc-section-title">Условия зачисления (событие: состоявшийся визит)</div>
+            <div class="bc-section-hint">
+              Без условий программа срабатывает на любой состоявшийся визит.
+              Внутри одного условия значения объединяются через ИЛИ.
+            </div>
+            <div id="careConds"></div>
+            <div style="display:flex;align-items:center;gap:14px;margin-top:8px;flex-wrap:wrap">
+              <button class="btn btn-sec btn-sm" onclick="careAddCond()">+ Условие</button>
+              <div id="careLogicWrap" style="display:none;align-items:center;gap:8px">
+                <span style="font-size:12px;color:var(--t3)">Объединять условия:</span>
+                <div class="bc-chip-row">
+                  <span class="bc-chip on" id="careLogic-and" onclick="careSetLogic('and')">И</span>
+                  <span class="bc-chip" id="careLogic-or" onclick="careSetLogic('or')">ИЛИ</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="bc-section">
+            <div class="bc-section-title">Цепочка касаний</div>
+            <div class="bc-section-hint">
+              Т+N дней после визита, время — московское. Заготовка — не готовый текст,
+              а задание для Милы: что узнать или предложить в этом касании.
+            </div>
+            <div id="careTouches"></div>
+            <button class="btn btn-sec btn-sm" style="margin-top:8px" onclick="careAddTouch()">+ Касание</button>
+          </div>
+
+          <div class="bc-actions">
+            <button class="btn btn-sec" onclick="careCloseEditor()">Отмена</button>
+            <button id="careSaveBtn" class="btn btn-pri" onclick="careSaveProgram()">Сохранить</button>
           </div>
         </div>
       </div>
@@ -1987,6 +2192,8 @@ function fireConfetti() {
 <script src="js/pages/clients.js"></script>
 <script src="js/pages/dashboard.js"></script>
 <script src="js/pages/broadcasts.js?v=2026-06-13c"></script>
+<script src="js/pages/broadcast-rules.js?v=2026-08-02a"></script>
+<script src="js/pages/care.js?v=2026-08-03a"></script>
 <script src="js/pages/medical-cert.js?v=2026-06-19"></script>
 <script src="js/pages/cert-requests.js?v=2026-06-19b"></script>
 <script src="js/pages/medical-cert-coords-transform.js?v=2026-06-17b"></script>

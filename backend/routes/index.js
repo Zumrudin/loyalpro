@@ -64,6 +64,8 @@ module.exports = function mountRoutes(app) {
   app.use('/api/kb',                require('./knowledge-base'));
   app.use('/api/patient-portfolio', require('./patient-portfolio'));
   app.use('/api/broadcasts',        require('./broadcasts'));
+  app.use('/api/notification-rules', require('./notification-rules'));
+  app.use('/api/care',              require('./care'));
   app.use('/api/medical-cert',      require('./medical-cert'));
 
   // ── Clients CRUD at /api/clients (has /:id — must be specific prefix) ──

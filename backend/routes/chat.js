@@ -12,11 +12,12 @@ const multer = require('multer');
 const config = require('../config');
 const { auth, requireRole, authOrQuery } = require('../middleware/auth');
 const chatpush = require('../services/chatpush');
-const { messagePreview, isGroupKey, recipientParams, DIALOG_KEY_SQL, dialogKey, phoneMatchCandidates } = require('../services/chat');
+const { messagePreview, isGroupKey, recipientParams, DIALOG_KEY_SQL } = require('../services/chat');
 const { createLogger } = require('../logger');
 const logger = createLogger('Chat');
 
 const chatEvents = require('../services/chat-events');
+const { persistWhatsappOutgoing } = require('../services/chat-persist');
 
 // admin_cashier — «Администратор-кассир»: полный доступ к чату наравне с owner/admin.
 const adminOnly = [auth, requireRole('owner', 'admin', 'admin_cashier')];
@@ -205,49 +206,6 @@ async function resolveRecipient(salonId, key, channel) {
   if (exact) return exact;
   const any = await q('', [salonId, key]);
   return any ? { phone: any.phone, chat_id: null } : null;
-}
-
-// Сохранить исходящее в WhatsApp СРАЗУ при отправке + запушить в SSE.
-// Chatpush перестал слать эхо наших WhatsApp-отправок (см. services/chatpush) —
-// без этого сообщение живёт лишь оптимистичным пузырём и пропадает после
-// перезагрузки. tdlib/max эхо шлют исправно, их сохраняет вебхук — не трогаем.
-// external_message_id = api:<delivery_id>: если эхо вернётся, вебхук дедупит по
-// нему (chatpush.deliveryIdFromWhatsappEchoId). ON CONFLICT — на случай гонки.
-async function persistWhatsappOutgoing(salonId, { delivery, phone, chatId, text, msgType, fileUrl, mimeType }) {
-  if (!salonId || !delivery || delivery.id == null) return;
-  let clientId = null;
-  try {
-    const cands = phoneMatchCandidates(phone);
-    if (cands.length) {
-      const row = await db.oneOrNone(
-        'SELECT id FROM clients WHERE salon_id=$1 AND phone = ANY($2) LIMIT 1', [salonId, cands]);
-      clientId = row?.id || null;
-    }
-  } catch (e) { logger.warn(`client match failed for ${phone}: ${e.message}`); }
-
-  const ts = Math.floor(Date.now() / 1000);
-  const externalId = chatpush.ownOutgoingExternalId(delivery.id);
-  const ins = await db.query(
-    `INSERT INTO chatpush_messages
-       (salon_id, client_id, customer_id, channel, direction, external_message_id,
-        msg_type, text, file_url, mime_type, phone, chat_id, msg_ts)
-     VALUES ($1,$2,$3,'whatsapp','outgoing',$4,$5,$6,$7,$8,$9,$10,$11)
-     ON CONFLICT (salon_id, external_message_id) DO NOTHING
-     RETURNING id`,
-    [salonId, clientId, config.CHATPUSH.customerId, externalId,
-     msgType, text || '', fileUrl, mimeType, phone, chatId, ts]
-  );
-  if (ins.rowCount > 0) {
-    chatEvents.emit(salonId, {
-      type: 'message',
-      dialogKey: dialogKey({ phone, chat_id: chatId }),
-      message: {
-        id: ins.rows[0].id, direction: 'outgoing', channel: 'whatsapp',
-        msg_type: msgType, text: text || '',
-        file_url: fileUrl, mime_type: mimeType, sender_name: null, msg_ts: ts,
-      },
-    });
-  }
 }
 
 // POST /api/chat/dialogs/:key/send — ручной ответ оператора. body: {text, channel}.

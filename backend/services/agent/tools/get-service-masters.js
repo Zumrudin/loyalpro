@@ -5,8 +5,15 @@
 // цены услуги, а «у Ани 5000, у главврача 8000» — здесь.
 const { loadCatalogServices } = require('../catalog-data');
 const { fmtPrice } = require('../catalog-block');
+const { isMaleService, hasMalePriceList } = require('../male-services');
 
 const MAX_IDS = 20;
+
+// Подсказки мужского прайса приходят ровно в тот момент, когда модель берёт цену:
+// правило промпта «МУЖСКОЙ ПРАЙС» легко пропустить на длинном ходу, а здесь оно
+// лежит рядом с числом, которое пойдёт пациенту.
+const HINT_FOR_MEN = 'Это услуга по МУЖСКОМУ прайсу — называй её цену и записывай по ней, только если процедура для мужчины. Женщине предложи ту же зону без приставки «Муж.».';
+const HINT_MEN_LIST = 'В этом направлении для мужчин действует ОТДЕЛЬНЫЙ прайс — услуги с приставкой «Муж.» в каталоге. Это цена для женщины: если процедура для мужчины, возьми цену и оформляй запись по услуге «Муж. …».';
 
 const schema = {
   name: 'get_service_masters',
@@ -50,7 +57,10 @@ async function run(salonId, input) {
           price_display: /^\d/.test(p) ? `${p} ₽` : p,
         };
       });
-      services.push({ yc_id: s.yc_id, title: s.title, duration_min: s.duration_min, staff });
+      const male = isMaleService(s.title)
+        ? { for_men: true, hint: HINT_FOR_MEN }
+        : hasMalePriceList(all, s) ? { men_price_list: true, hint: HINT_MEN_LIST } : null;
+      services.push({ yc_id: s.yc_id, title: s.title, duration_min: s.duration_min, staff, ...male });
     } else notFound.push(id);
   }
   return notFound.length ? { services, not_found: notFound } : { services };

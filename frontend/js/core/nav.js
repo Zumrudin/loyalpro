@@ -28,6 +28,7 @@ function navTo(p) {
   if (p === 'staff-analytics') loadStaffAnalytics();
   if (p === 'segments')        loadSegments();
   if (p === 'broadcasts')      loadBroadcasts();
+  if (p === 'care')            loadCarePage();
   if (p === 'chat')            loadChat();
   if (p === 'home-care')       loadHomeCare();
   if (p === 'patient-portfolio') loadPatientPortfolio();

@@ -160,7 +160,9 @@ describe('get_sequential_slots — лестница приоритета', () =>
       String(staffId) === '11' ? grid(600, 780) : []);
     const r = await tool.run(1, { ...baseInput, preferred_staff_yc_id: 11 }, { ...CTX, dialogKey: 'dlg' });
     const st = r.variants[0].starts[0];
-    const saved = offers.take(1, 'dlg', st.option_id);
+    // nowMs обязателен: вариант сохранён с CTX.nowMs (фикс. 01.08 09:00 мск) — take
+    // с реальным Date.now() превращал тест в бомбу, взводящуюся после 09:30 01.08.
+    const saved = offers.take(1, 'dlg', st.option_id, { nowMs: CTX.nowMs });
     expect(saved.chain).toEqual(st.chain);
     expect(saved.booking_mode).toBe(st.booking_mode);
   });

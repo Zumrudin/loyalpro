@@ -71,21 +71,22 @@ async function loadCatalogServices(salonId) {
 
   // Достоверная привязка услуга→мастера строится per-staff запросами (поле staff
   // в общем /services урезано). staffIdsByService: svcIdStr → Set(staffIdStr).
-  // staffPricesByService: svcIdStr → Map<staffIdStr,{price_min,price_max}> — цена
-  // у конкретного мастера (может отличаться: врач vs. главный врач).
-  let priced = [], staffIdsByService = new Map(), staffPricesByService = new Map();
-  let categories = [], durationByService = new Map();
+  let priced = [], staffIdsByService = new Map();
+  let categories = [], durationByService = new Map(), staffPricesByService = new Map();
   if (salon && salon.yclients_company_id) {
     try {
       const cat = await ycGetServiceCatalog(salon, staffRows.map(r => r.yclients_staff_id));
       priced = cat.priced;
       categories = cat.categories || [];
       staffIdsByService = cat.staffIdsByService;
-      staffPricesByService = cat.staffPricesByService || new Map();
     } catch (_) { /* YClients недоступен → фолбэк на заголовки из конфига */ }
     // Длительность услуги (service-level): per-staff длительности в YClients нет.
+    // Оттуда же — ПЕРСОНАЛЬНЫЕ цены мастеров (svcIdStr → Map<staffIdStr,{price_min,price_max}>):
+    // цена процедуры отличается у врача и у главного врача, и только management-каталог
+    // их отдаёт. Мета недоступна → у всех останется базовая цена услуги (как и было).
     const meta = await ycGetServiceMeta(salon).catch(() => null);
     durationByService = (meta && meta.durationByService) || new Map();
+    staffPricesByService = (meta && meta.staffPricesByService) || new Map();
   }
 
   // Мастера, кто делает услугу: только активные, реально привязанные; минус deny-пары.
@@ -97,6 +98,8 @@ async function loadCatalogServices(salonId) {
       .map(id => {
         const name = staffNameById.get(String(id));
         if (!name) return null;
+        // Ключ есть только у мастера с ПЕРСОНАЛЬНОЙ ценой; у остальных — базовая
+        // цена услуги целиком (обе границы), без смешивания с чужой.
         const p = priceMap.get(String(id));
         return {
           // yc_id здесь избавляет от лишнего list_staff: слоты и бронь требуют
@@ -104,8 +107,8 @@ async function loadCatalogServices(salonId) {
           // сопоставлять по имени.
           yc_id: Number(id),
           name,
-          price_min: p && p.price_min ? p.price_min : s.price_min,
-          price_max: p && p.price_max ? p.price_max : s.price_max,
+          price_min: p ? p.price_min : s.price_min,
+          price_max: p ? p.price_max : s.price_max,
         };
       })
       .filter(Boolean);
