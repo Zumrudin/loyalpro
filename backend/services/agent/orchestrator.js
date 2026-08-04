@@ -141,7 +141,19 @@ function buildWriteConfirmation(lastWrite) {
 }
 
 // Прогнать один ход диалога. Возвращает { replies, escalated, sideEffect }.
+//
+// Страховка от неожиданного/забытого выхода: явные флаши внутри остаются
+// авторитетными (они ставят delivered=false на выброшенном черновике), а этот —
+// идемпотентный добор с консервативным вердиктом для выхода, которого мы не
+// предусмотрели. Без него любой throw мимо перечисленных мест терял бы журнал
+// хода — ровно в том инциденте, ради форензики которого журнал и заводится.
 async function runDialog(salonId, dialogKey, opts = {}) {
+  const bag = {};
+  try { return await runDialogInner(salonId, dialogKey, opts, bag); }
+  finally { if (bag.buf) await bag.buf.flush(null); }
+}
+
+async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
   const d = opts.deps || {};
   const provider = d.provider || providers.getProvider();
   const history = d.history || historyDefault;
@@ -150,6 +162,9 @@ async function runDialog(salonId, dialogKey, opts = {}) {
   const toolEvents = d.toolEvents || toolEventsDefault;
   const toolMemory = d.toolMemory || toolMemoryDefault;
   const ctx = opts.ctx || {};
+  // Одни часы на весь ход: активные варианты стыковки, гейт свежести памяти и
+  // toolCtx обязаны видеть одно и то же «сейчас», иначе разъедутся на миллисекунды.
+  const nowMs = opts.nowMs || Date.now();
 
   const dialog = await state.getOrCreate(salonId, dialogKey);
   if (dialog.status === 'escalated') {
@@ -200,7 +215,6 @@ async function runDialog(salonId, dialogKey, opts = {}) {
   // не имеет права ронять диалог — просто идём без блока (модель перезапросит слоты).
   let activeOffers = [];
   try {
-    const nowMs = opts.nowMs || Date.now();
     const live = seqOffers.peek(salonId, dialogKey, { nowMs });
     if (live) {
       activeOffers = seqOffers.renderOffers(live, { nowMs });
@@ -222,7 +236,7 @@ async function runDialog(salonId, dialogKey, opts = {}) {
   let toolMemoryLines = [];
   try {
     const rows = await toolEvents.loadRecent(salonId, dialogKey);
-    const rendered = toolMemory.renderMemory(rows, { nowMs: opts.nowMs || Date.now() });
+    const rendered = toolMemory.renderMemory(rows, { nowMs });
     toolMemoryLines = rendered.lines;
     if (rendered.dropped > 0) {
       logger.info(`dialog ${dialogKey}: журнал инструментов срезан капом (${rendered.dropped} событий не в промпте)`);
@@ -259,7 +273,7 @@ async function runDialog(salonId, dialogKey, opts = {}) {
     dialogKey,
     clientPhone: ctx.phone,
     clientName,
-    nowMs: opts.nowMs || Date.now(),
+    nowMs,
   };
 
   for (let attempt = 0; attempt <= MAX_REGEN; attempt++) {
@@ -267,12 +281,15 @@ async function runDialog(salonId, dialogKey, opts = {}) {
     if (!messages.length) return { replies: [], escalated: false, sideEffect: false };
 
     // Буфер журнала tool-цикла этой ПОПЫТКИ. Создаётся после проверки пустого
-    // транскрипта (там возвращаться нечему — не оставляем нефлашнутый буфер).
-    // ВАЖНО: каждый выход из попытки обязан его флашить — иначе tool-цикл
-    // пропадёт и следующий ход снова останется без памяти. Выходов пять:
-    // падение провайдера / падение добивочного вызова / падение БД в хвосте /
-    // перегенерация (delivered=false) / штатный возврат (delivered=null).
+    // транскрипта (там возвращаться нечему — не заводим буфер впустую).
+    // Флашей ровно два смысловых: delivered=false на выброшенном перегенерацией
+    // черновике и delivered=null перед штатным возвратом. Все прочие выходы
+    // (падение провайдера, добивочного вызова, БД в хвосте, любой непредвиденный
+    // throw) добирает страховочный flush(null) в finally обёртки runDialog —
+    // ради него buf и кладётся в bag, причём КАЖДАЯ попытка перетирает ссылку
+    // своим свежим буфером.
     const evBuffer = toolEvents.createBuffer(salonId, dialogKey);
+    bag.buf = evBuffer;
 
     const convo = messages.slice();
 
@@ -308,7 +325,7 @@ async function runDialog(salonId, dialogKey, opts = {}) {
         // в этом ходе УЖЕ сделана — не роняем ход в эскалацию: ниже отдадим
         // детерминированное подтверждение. Ничего не сделано → пробрасываем
         // (честная эскалация в диспетчере, как раньше).
-        if (!writeSucceeded) { await evBuffer.flush(null); throw e; }
+        if (!writeSucceeded) throw e;
         logger.warn(`dialog ${dialogKey}: провайдер упал после успешной записи (${e.message}) — детерминированное подтверждение`);
         degradedAfterWrite = true;
         break;
@@ -413,7 +430,7 @@ async function runDialog(salonId, dialogKey, opts = {}) {
         if (final.text) replies.push(final.text);
         else logger.warn(`dialog ${dialogKey}: добивочный вызов тоже без текста — ответ клиенту берёт на себя диспетчер`);
       } catch (e) {
-        if (!writeSucceeded) { await evBuffer.flush(null); throw e; }
+        if (!writeSucceeded) throw e;
         logger.warn(`dialog ${dialogKey}: добивочный вызов упал после успешной записи (${e.message}) — детерминированное подтверждение`);
         degradedAfterWrite = true;
       }
@@ -459,21 +476,15 @@ async function runDialog(salonId, dialogKey, opts = {}) {
       }
     }
 
-    // Пришло ли новое входящее, пока мы думали? Оба обращения к БД в хвосте
-    // попытки — тоже её выходы, если упадут: флашим буфер и пробрасываем.
-    let stale;
-    try {
-      stale = await history.hasIncomingAfter(salonId, dialogKey, watermark);
-    } catch (e) { await evBuffer.flush(null); throw e; }
+    // Пришло ли новое входящее, пока мы думали?
+    const stale = await history.hasIncomingAfter(salonId, dialogKey, watermark);
     if (stale && !sideEffect && attempt < MAX_REGEN) {
       logger.info(`dialog ${dialogKey}: новое сообщение во время прогона — выбрасываю черновик, перегенерация (${attempt + 1})`);
       await evBuffer.flush(false);   // события выброшенной попытки пациент не видел
       continue;
     }
 
-    try {
-      await state.setWatermark(salonId, dialogKey, watermark);
-    } catch (e) { await evBuffer.flush(null); throw e; }
+    await state.setWatermark(salonId, dialogKey, watermark);
     // falseSuccess: реплика утверждает, что запись перенесена/отменена/создана, но
     // ни один пишущий инструмент в этом ходе не отработал (модель соврала). Диспетчер
     // по этому сигналу НЕ отправляет ложь, а переводит на человека. Пилот 2026-07-22.
@@ -493,7 +504,12 @@ async function runDialog(salonId, dialogKey, opts = {}) {
     const bookingFailRecoverable = bookingFailed && !escalated && !falseSuccess
       && replies.some((t) => t && t.trim())
       && (recheckedAfterFail || REPLY_HAS_TIME.test(allReplies));
-    await evBuffer.flush(null);   // вердикт delivered поставит диспетчер после отправки
+    // Вердикт delivered поставит диспетчер после отправки. AWAIT ОБЯЗАТЕЛЕН, и
+    // снимать его «ради задержки» нельзя: markDelivered — это UPDATE … WHERE
+    // turn_id=$1 AND delivered IS NULL, и если вердикт диспетчера обгонит этот
+    // INSERT, он не найдёт ни одной строки — все read-события хода навсегда
+    // останутся невидимыми для памяти.
+    await evBuffer.flush(null);
     return { replies, escalated, sideEffect, exhausted, falseSuccess,
       bookingFailed, bookingFailRecoverable, degradedAfterWrite, turnId: evBuffer.turnId };
   }

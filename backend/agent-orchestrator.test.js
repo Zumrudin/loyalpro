@@ -743,6 +743,11 @@ describe('журнал инструментов (tool-events/tool-memory)', () =
     const system = deps.provider.createMessage.mock.calls[0][0].system;
     expect(system).toContain('ЖУРНАЛ ТВОИХ ДЕЙСТВИЙ В ПРЕДЫДУЩИХ ХОДАХ');
     expect(system).toContain('Юлия 5 000 ₽');
+    // Рендереру уходят именно строки loadRecent и часы хода: без nowMs гейт
+    // свежести посчитал бы все слот-выдачи устаревшими.
+    expect(deps.toolEvents.loadRecent).toHaveBeenCalledWith(1, 'k');
+    expect(deps.toolMemory.renderMemory).toHaveBeenCalledWith(
+      [{ tool: 'x', age_ms: 1000 }], { nowMs: expect.any(Number) });
   });
 
   test('сбой loadRecent не роняет ход — промпт без блока (fail-open)', async () => {
@@ -768,6 +773,9 @@ describe('журнал инструментов (tool-events/tool-memory)', () =
     expect(out.replies).toEqual(['финальный ответ']);
     expect(te.buffers).toHaveLength(2);
     expect(te.buffers[0].flush).toHaveBeenCalledWith(false);
+    // Страховочный флаш обёртки добирает ТОЛЬКО актуальный буфер: вердикт
+    // выброшенного черновика не должен переписываться вторым вызовом.
+    expect(te.buffers[0].flush).toHaveBeenCalledTimes(1);
     expect(te.buffers[1].flush).toHaveBeenCalledWith(null);
     expect(out.turnId).toBe('turn-2');
   });
@@ -782,8 +790,9 @@ describe('журнал инструментов (tool-events/tool-memory)', () =
     expect(te.buffers[0].flush).toHaveBeenCalledWith(null);
   });
 
-  // Не из плана: единственные два await'а БД в хвосте попытки (проверка нового
-  // входящего и запись watermark) — тоже выход из попытки, если упадут.
+  // Не из плана: выходы, которые НЕ прикрыты явным флашем, — их добирает
+  // страховочный flush(null) в finally обёртки runDialog. Именно эту страховку
+  // и закрепляют два теста ниже (падения БД в хвосте попытки).
   test('падение hasIncomingAfter → буфер попытки всё равно флашится', async () => {
     const te = makeToolEventsStub();
     const deps = makeDeps({ toolEvents: te });
@@ -827,5 +836,35 @@ describe('журнал инструментов (tool-events/tool-memory)', () =
     });
     await expect(orchestrator.runDialog(1, 'k', { deps })).rejects.toThrow('LLM down');
     expect(te.buffers[0].flush).toHaveBeenCalledWith(null);
+  });
+
+  // Самая ценная строка журнала для разбора инцидента — та, где инструмент упал.
+  test('обработчик инструмента БРОСИЛ → событие в буфере с isError=true', async () => {
+    const te = makeToolEventsStub();
+    const deps = makeDeps({
+      toolEvents: te,
+      handlers: { get_available_slots: jest.fn(async () => { throw new Error('boom'); }) },
+    });
+    deps.provider.createMessage
+      .mockResolvedValueOnce(toolResp('get_available_slots', { date: '2026-07-20' }))
+      .mockResolvedValueOnce(textResp('Секундочку 🤍'));
+    await orchestrator.runDialog(1, 'k', { deps });
+    expect(te.buffers[0].push).toHaveBeenCalledWith(
+      'get_available_slots', { date: '2026-07-20' }, { error: 'boom' }, true);
+  });
+
+  test('деградация после успешной записи → ход доходит до штатного флаша, запись в буфере', async () => {
+    const te = makeToolEventsStub();
+    const deps = makeDeps({ toolEvents: te });
+    deps.provider.createMessage
+      .mockResolvedValueOnce(toolResp('create_booking',
+        { staff_yc_id: 1, service_yc_id: 2, datetime: '2026-07-27T19:30:00+03:00', client_name: 'Ирина' }))
+      .mockRejectedValueOnce(Object.assign(new Error('421 boom'), { status: 421 }));
+    const out = await orchestrator.runDialog(1, 'k', { deps, today: '2026-07-24' });
+    expect(out.degradedAfterWrite).toBe(true);
+    expect(te.buffers[0].push).toHaveBeenCalledWith(
+      'create_booking', expect.objectContaining({ staff_yc_id: 1 }), { created: true, record_id: 999 }, false);
+    expect(te.buffers[0].flush).toHaveBeenCalledWith(null);
+    expect(out.turnId).toBe('turn-1');
   });
 });
