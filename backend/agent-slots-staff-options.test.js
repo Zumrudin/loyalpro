@@ -156,3 +156,55 @@ describe('get_available_slots без staff_yc_id — выбор специали
     expect(out.error).toMatch(/service_yc_id/);
   });
 });
+
+describe('get_available_slots без staff_yc_id — граничные случаи', () => {
+  // Пустой staff_options с общим хинтом «перечисли ВСЕХ» — это указание перечислить
+  // пустоту: модель либо молчит, либо выдумывает мастера. Пустой день должен звучать
+  // как пустой день и вести к предложению другой даты.
+  test('окон нет ни у кого → no_staff_available:true и подсказка про другой день', async () => {
+    ycGetBookTimes.mockResolvedValue([]);
+    const out = await slots.run(1, ARGS, { nowMs: NOON });
+    expect(out.no_staff_available).toBe(true);
+    expect(out.staff_options).toEqual([]);
+    expect(out.hint).toMatch(/другой день/);
+  });
+
+  // «Выбор за пациентом» из одного варианта — это не выбор, а лишний вопрос в переписке.
+  test('услугу ведёт один специалист → выбора не устраиваем (hint об этом говорит)', async () => {
+    listServices.run.mockResolvedValue({
+      services: [{ yc_id: 900, title: 'Биоревитализация', staff: [{ yc_id: 11, name: 'Юлия' }] }],
+    });
+    ycGetBookTimes.mockImplementation(async (_salon, staffId) =>
+      staffId === 11 ? bookSlot('12:00') : []);
+    const out = await slots.run(1, ARGS, { nowMs: NOON });
+    expect(out.staff_options.map(o => o.staff_yc_id)).toEqual([11]);
+    expect(out.hint).toMatch(/один специалист/);
+  });
+
+  // Предпроверка исполнителей fail-open: при сбое каталога staffList пуст, и перебирать
+  // некого. Молчаливый пустой выбор здесь неотличим от «на этот день никого нет».
+  test('каталог недоступен → просим повторить с конкретным staff_yc_id, а не молчим', async () => {
+    listServices.run.mockResolvedValue({ services: [] });
+    const out = await slots.run(1, ARGS, { nowMs: NOON });
+    expect(out.error).toMatch(/staff_yc_id/);
+    expect(out.staff_options).toBeUndefined();
+  });
+
+  // Регресс-страховки: код Task 1 их уже покрывает, тесты фиксируют поведение.
+  test('скрытая пара услуга+мастер в выбор не попадает', async () => {
+    svcFilter.isBookable.mockImplementation((_f, _svc, staffId) => staffId !== 11);
+    ycGetBookTimes.mockResolvedValue(bookSlot('12:00'));
+    const out = await slots.run(1, ARGS, { nowMs: NOON });
+    expect(out.staff_options.map(o => o.staff_yc_id)).not.toContain(11);
+  });
+
+  test('сбой YClients по одному мастеру не валит ответ', async () => {
+    ycGetBookTimes.mockImplementation(async (_salon, staffId) => {
+      if (staffId === 11) throw new Error('502 YClients');
+      if (staffId === 12) return bookSlot('15:00');
+      return [];
+    });
+    const out = await slots.run(1, ARGS, { nowMs: NOON });
+    expect(out.staff_options.map(o => o.staff_yc_id)).toEqual([12]);
+  });
+});

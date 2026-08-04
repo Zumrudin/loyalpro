@@ -24,6 +24,16 @@ const HINT_STAFF_CHOICE = 'Пациент специалиста не назыв
   'как «лучшего». Цену не называй, пока пациент сам о ней не спросил. НЕ утверждай, что это все ' +
   'специалисты клиники: здесь только те, у кого в этот день есть свободное время.';
 
+// Выбор из одного варианта — не выбор, а лишний вопрос в переписке: «к кому вам
+// удобнее?» при единственном мастере звучит нелепо и добавляет ход до записи.
+const HINT_STAFF_SINGLE = 'Эту услугу в этот день ведёт один специалист — выбора не устраивай: ' +
+  'назови его имя, должность (position) и 1–2 времени ДОСЛОВНО из slots и предложи записать.';
+
+// Пустой staff_options с хинтом «перечисли ВСЕХ» — это указание перечислить пустоту:
+// модель либо молчит, либо выдумывает мастера. Пустой день обязан звучать как пустой день.
+const HINT_NO_STAFF = 'На эту дату свободного времени нет ни у одного исполнителя услуги — ' +
+  'честно скажи об этом и предложи другой день (get_available_slots на другую дату).';
+
 const schema = {
   name: 'get_available_slots',
   description: 'Свободное время под КОНКРЕТНУЮ УСЛУГУ на дату. Если пациент назвал мастера — передай ' +
@@ -242,10 +252,19 @@ async function run(salonId, input, ctx = {}) {
     // это «предлагать нельзя вообще», а не «на этот день никого нет».
     if (!svcFilter.decideServiceVisible(filter, serviceId)) return { slots: [], filtered: true };
     const chk = await staffGuard.checkStaffPerformsService(salonId, serviceId, 0);
+    // Каталог не отдал исполнителей (fail-open предпроверки: сбой YClients или услуги
+    // нет в каталоге) — перебирать некого. Отдать пустой выбор нельзя: он неотличим от
+    // «на этот день никого нет», и модель начнёт предлагать другие даты, которых тоже
+    // не проверить. Просим повторить вызов с конкретным мастером — id есть в каталоге.
+    if (!chk.staffList || !chk.staffList.length) {
+      return { error: 'Не удалось получить список исполнителей услуги. Вызови get_available_slots ещё раз, ' +
+        'указав конкретный staff_yc_id (id мастера — в колонке мастеров строки услуги в каталоге).' };
+    }
     const salon = await loadSalon(salonId);
     if (!salon || !salon.yclients_company_id) return { error: 'YClients не подключён для салона.' };
     const options = await computeStaffOptions(salon, filter, chk.staffList, serviceId, date, nowMs);
-    return { staff_options: options, hint: HINT_STAFF_CHOICE };
+    if (!options.length) return { staff_options: [], no_staff_available: true, hint: HINT_NO_STAFF };
+    return { staff_options: options, hint: options.length > 1 ? HINT_STAFF_CHOICE : HINT_STAFF_SINGLE };
   }
   // Скрытую услугу/пару не предлагаем (мягкий пустой ответ, без «технических сложностей»).
   let filter = {};
