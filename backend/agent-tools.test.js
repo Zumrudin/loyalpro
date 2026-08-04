@@ -470,9 +470,12 @@ describe('get_available_slots', () => {
     expect(ycGetBookTimes).not.toHaveBeenCalled();
     expect(ycGetStaffSeances).not.toHaveBeenCalled();
   });
-  test('service_yc_id обязателен в схеме инструмента', () => {
+  // staff_yc_id намеренно НЕ обязателен: если пациент врача не называл, мастера
+  // выбирает он сам — инструмент отдаёт окна всех исполнителей в staff_options.
+  test('обязательны только service_yc_id и date; мастер — опционален', () => {
     expect(getSlots.schema.input_schema.required).toEqual(
-      expect.arrayContaining(['staff_yc_id', 'service_yc_id', 'date']));
+      expect.arrayContaining(['service_yc_id', 'date']));
+    expect(getSlots.schema.input_schema.required).not.toContain('staff_yc_id');
   });
   test('нет мастера/даты → ошибка валидации без вызова YClients', async () => {
     const out = await getSlots.run(1, { service_yc_id: 7 });

@@ -12,21 +12,33 @@ const leadTime = require('../lead-time');
 const DEFAULT_STEP_MIN = 30;       // шаг предлагаемых стартов в fallback-режиме
 const DEFAULT_DURATION_MIN = 60;   // если YClients не отдал duration услуги (как в get_parallel_slots)
 const MAX_ALT_STAFF = 3;           // сколько других мастеров услуги проверяем при пустой выдаче
+// Столько исполнителей проверяем, когда мастера выбирает пациент. Кап тот же, что у
+// альтернатив: каждый мастер — отдельный запрос в YClients. Следствие — там, где
+// исполнителей больше, часть в выдачу не попадёт, поэтому хинт запрещает модели
+// утверждать «это все специалисты».
+const MAX_STAFF_OPTIONS = 3;
+
+const HINT_STAFF_CHOICE = 'Пациент специалиста не называл — выбор за НИМ, а не за тобой. ' +
+  'Перечисли в ОДНОМ сообщении ВСЕХ из staff_options: имя, должность (position) и 1–2 времени ' +
+  'ДОСЛОВНО из его slots, и спроси, к кому удобнее записать. НЕ выбирай сама и никого не советуй ' +
+  'как «лучшего». Цену не называй, пока пациент сам о ней не спросил. НЕ утверждай, что это все ' +
+  'специалисты клиники: здесь только те, у кого в этот день есть свободное время.';
 
 const schema = {
   name: 'get_available_slots',
-  description: 'Свободное время у мастера на конкретную дату ПОД КОНКРЕТНУЮ УСЛУГУ. Если у салона ' +
-    'включена онлайн-запись — отдаёт слоты под услугу. Иначе считает свободность из графика (старты ' +
-    'шагом 30 мин, куда услуга влезает целиком). Сначала узнай yc_id мастера (list_staff) и услуги ' +
-    '(каталог услуг). Дата в формате YYYY-MM-DD. Само расписание (в какие дни работает) — get_available_dates.',
+  description: 'Свободное время под КОНКРЕТНУЮ УСЛУГУ на дату. Если пациент назвал мастера — передай ' +
+    'его staff_yc_id. Если НЕ называл — staff_yc_id не передавай: инструмент вернёт свободные окна ВСЕХ ' +
+    'исполнителей услуги в staff_options, и выбор сделает пациент. Если у салона включена онлайн-запись — ' +
+    'отдаёт слоты под услугу. Иначе считает свободность из графика (старты шагом 30 мин, куда услуга ' +
+    'влезает целиком). Дата в формате YYYY-MM-DD. Само расписание (в какие дни работает) — get_available_dates.',
   input_schema: {
     type: 'object',
     properties: {
-      staff_yc_id:   { type: 'integer', description: 'YClients-id мастера (из list_staff).' },
+      staff_yc_id:   { type: 'integer', description: 'YClients-id мастера (из каталога услуг). НЕ передавай, если пациент специалиста не называл.' },
       service_yc_id: { type: 'integer', description: 'YClients-id услуги (из каталога услуг).' },
       date:          { type: 'string',  description: 'Дата YYYY-MM-DD.' },
     },
-    required: ['staff_yc_id', 'service_yc_id', 'date'],
+    required: ['service_yc_id', 'date'],
     additionalProperties: false,
   },
 };
@@ -172,12 +184,33 @@ async function findAlternativeStaff(salon, filter, staffList, staffId, serviceId
   return null;
 }
 
+// Пациент мастера не называл → окна считаем у ВСЕХ исполнителей услуги, а выбор
+// отдаём пациенту. Раньше исполнителя выбирала сама модель (промпт это разрешал), и
+// пациент молча получал одного специалиста — при том что цена зависит от мастера.
+async function computeStaffOptions(salon, filter, staffList, serviceId, date, nowMs) {
+  const candidates = (staffList || [])
+    .filter(m => m && m.yc_id)
+    .filter(m => svcFilter.isBookable(filter, serviceId, m.yc_id))
+    .slice(0, MAX_STAFF_OPTIONS);
+  const checked = await Promise.all(candidates.map(async (m) => {
+    try {
+      const r = await computeStaffSlots(salon, m.yc_id, serviceId, date, nowMs);
+      return { staff_yc_id: m.yc_id, name: m.name, position: null, slots: r.slots || [] };
+    } catch (_) { return null; }   // сбой по одному мастеру не валит весь ответ
+  }));
+  return checked
+    .filter(Boolean)
+    .filter(o => o.slots.length)
+    // Ближайшее окно — первым. Порядок детерминированный: тай-брейк по yc_id.
+    .sort((a, b) => (toMin(a.slots[0].time) - toMin(b.slots[0].time)) || (a.staff_yc_id - b.staff_yc_id));
+}
+
 async function run(salonId, input, ctx = {}) {
   const serviceId = input && input.service_yc_id;
   const staffId = input && input.staff_yc_id;
   const date = input && input.date;
   const nowMs = (ctx && ctx.nowMs) || Date.now();
-  if (!staffId || !date) return { error: 'Нужны staff_yc_id и date (YYYY-MM-DD).' };
+  if (!date) return { error: 'Нужна date (YYYY-MM-DD).' };
   // Услуга обязательна: без неё неизвестна длительность, и старты считались бы
   // «хотя бы на один шаг» — сеткой 30 мин. Инцидент 2026-07-31: так предложили
   // 11:30 перед чужой записью в 12:00, а записывали 60-минутную процедуру →
@@ -186,6 +219,15 @@ async function run(salonId, input, ctx = {}) {
     return { error: 'Нужен service_yc_id: без услуги нельзя проверить, влезает ли процедура в окно. ' +
       'Возьми точный id услуги из каталога услуг. Если вопрос про график мастера (в какие дни ' +
       'работает) — это get_available_dates, а не слоты.' };
+  }
+  // Мастер не назван — считаем окна у всех исполнителей услуги (выбор за пациентом).
+  if (!staffId) {
+    const filter = await settings.loadServiceFilterSafe(salonId);
+    const chk = await staffGuard.checkStaffPerformsService(salonId, serviceId, 0);
+    const salon = await db.one(`SELECT id, yclients_company_id, yclients_partner_token, yclients_user_token FROM salons WHERE id=$1`, [salonId]);
+    if (!salon || !salon.yclients_company_id) return { error: 'YClients не подключён для салона.' };
+    const options = await computeStaffOptions(salon, filter, chk.staffList, serviceId, date, nowMs);
+    return { staff_options: options, hint: HINT_STAFF_CHOICE };
   }
   // Скрытую услугу/пару не предлагаем (мягкий пустой ответ, без «технических сложностей»).
   let filter = {};
