@@ -184,6 +184,13 @@ async function findAlternativeStaff(salon, filter, staffList, staffId, serviceId
   return null;
 }
 
+// Салон с токенами YClients. Обе ветки run() ходят в БД ПОСЛЕ своих проверок
+// (filtered/staff_mismatch отвечают, не дёргая базу), поэтому запрос нельзя поднять
+// выше ветвления — но и копировать его дважды незачем.
+async function loadSalon(salonId) {
+  return db.one(`SELECT id, yclients_company_id, yclients_partner_token, yclients_user_token FROM salons WHERE id=$1`, [salonId]);
+}
+
 // Пациент мастера не называл → окна считаем у ВСЕХ исполнителей услуги, а выбор
 // отдаём пациенту. Раньше исполнителя выбирала сама модель (промпт это разрешал), и
 // пациент молча получал одного специалиста — при том что цена зависит от мастера.
@@ -191,6 +198,11 @@ async function computeStaffOptions(salon, filter, staffList, serviceId, date, no
   const candidates = (staffList || [])
     .filter(m => m && m.yc_id)
     .filter(m => svcFilter.isBookable(filter, serviceId, m.yc_id))
+    // Сортировка ДО капа: порядок staffList наследуется от SELECT по staff_members
+    // без ORDER BY, то есть меняется после UPDATE/автовакуума. Без неё кап срезал бы
+    // случайных исполнителей: у услуги с 4+ мастерами пациент видел бы каждый раз
+    // разный набор, невоспроизводимый при разборе инцидента.
+    .sort((a, b) => a.yc_id - b.yc_id)
     .slice(0, MAX_STAFF_OPTIONS);
   const checked = await Promise.all(candidates.map(async (m) => {
     try {
@@ -223,8 +235,14 @@ async function run(salonId, input, ctx = {}) {
   // Мастер не назван — считаем окна у всех исполнителей услуги (выбор за пациентом).
   if (!staffId) {
     const filter = await settings.loadServiceFilterSafe(salonId);
+    // Услугу, скрытую админкой ЦЕЛИКОМ, отсекаем ДО каталога и БД — тем же мягким
+    // ответом, что и одномастерная ветка. Через isBookable отфильтровались бы ВСЕ
+    // кандидаты, и наружу ушёл бы пустой выбор, который читается как «нет времени»:
+    // модель начала бы предлагать другие даты вместо мягкого отказа. Скрытая услуга —
+    // это «предлагать нельзя вообще», а не «на этот день никого нет».
+    if (!svcFilter.decideServiceVisible(filter, serviceId)) return { slots: [], filtered: true };
     const chk = await staffGuard.checkStaffPerformsService(salonId, serviceId, 0);
-    const salon = await db.one(`SELECT id, yclients_company_id, yclients_partner_token, yclients_user_token FROM salons WHERE id=$1`, [salonId]);
+    const salon = await loadSalon(salonId);
     if (!salon || !salon.yclients_company_id) return { error: 'YClients не подключён для салона.' };
     const options = await computeStaffOptions(salon, filter, chk.staffList, serviceId, date, nowMs);
     return { staff_options: options, hint: HINT_STAFF_CHOICE };
@@ -252,7 +270,7 @@ async function run(salonId, input, ctx = {}) {
     }
     staffList = chk.staffList || [];
   }
-  const salon = await db.one(`SELECT id, yclients_company_id, yclients_partner_token, yclients_user_token FROM salons WHERE id=$1`, [salonId]);
+  const salon = await loadSalon(salonId);
   if (!salon || !salon.yclients_company_id) return { error: 'YClients не подключён для салона.' };
   try {
     const out = await computeStaffSlots(salon, staffId, serviceId, date, nowMs);

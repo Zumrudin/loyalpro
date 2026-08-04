@@ -16,7 +16,10 @@ jest.mock('./services/yclients-booking', () => ({
   ycGetStaffSeances: jest.fn(async () => []),
 }));
 jest.mock('./services/agent-settings', () => ({ loadServiceFilterSafe: jest.fn(async () => ({})) }));
-jest.mock('./services/agent/service-filter', () => ({ isBookable: jest.fn(() => true) }));
+jest.mock('./services/agent/service-filter', () => ({
+  isBookable: jest.fn(() => true),
+  decideServiceVisible: jest.fn(() => true),
+}));
 jest.mock('./services/agent/equipment-context', () => ({
   loadEquipmentContext: jest.fn(async () => ({ busy: [], resources: [] })),
   durationMin: jest.fn(() => 60),
@@ -49,6 +52,7 @@ beforeEach(() => {
   listServices.run.mockResolvedValue(CATALOG);
   ycGetBookTimes.mockResolvedValue([]);
   svcFilter.isBookable.mockReturnValue(true);
+  svcFilter.decideServiceVisible.mockReturnValue(true);
 });
 
 describe('get_available_slots без staff_yc_id — выбор специалиста пациентом', () => {
@@ -98,6 +102,48 @@ describe('get_available_slots без staff_yc_id — выбор специали
     const out = await slots.run(1, { ...ARGS, staff_yc_id: 11 }, { nowMs: NOON });
     expect(out.slots).toEqual(bookSlot('12:00'));
     expect(out.staff_options).toBeUndefined();
+  });
+
+  // Услуга, скрытая админкой целиком, отфильтровала бы ВСЕХ кандидатов, и пустой
+  // выбор прочитался бы как «на этот день никого нет» → бесконечные «а другой день?»
+  // вместо мягкого отказа. Ответ обязан быть тем же, что у одномастерной ветки.
+  test('скрытая целиком услуга → filtered:true, а не пустой выбор', async () => {
+    svcFilter.decideServiceVisible.mockReturnValue(false);
+    ycGetBookTimes.mockImplementation(async () => bookSlot('12:00'));
+    const out = await slots.run(1, ARGS, { nowMs: NOON });
+    expect(out).toEqual({ slots: [], filtered: true });
+    expect(out.staff_options).toBeUndefined();
+    expect(listServices.run).not.toHaveBeenCalled();   // до каталога и БД не идём
+    expect(ycGetBookTimes).not.toHaveBeenCalled();
+  });
+
+  // Порядок staffList приходит из SELECT без ORDER BY — без сортировки кап срезал бы
+  // случайных мастеров, и выдача была бы невоспроизводимой.
+  test('исполнителей больше капа → берём первых по yc_id, детерминированно', async () => {
+    listServices.run.mockResolvedValue({
+      services: [{ yc_id: 900, title: 'Биоревитализация', staff: [
+        { yc_id: 14, name: 'Пери Исамудиновна' }, { yc_id: 11, name: 'Юлия' },
+        { yc_id: 13, name: 'Мария' }, { yc_id: 12, name: 'Татьяна' },
+      ] }],
+    });
+    const times = { 11: '16:00', 12: '11:00', 13: '13:00', 14: '09:00' };
+    ycGetBookTimes.mockImplementation(async (_salon, staffId) => bookSlot(times[staffId]));
+    const out = await slots.run(1, ARGS, { nowMs: NOON });
+    // проверены ровно трое с наименьшими yc_id — 14 в перебор не попал…
+    expect(ycGetBookTimes.mock.calls.map(c => c[1]).sort()).toEqual([11, 12, 13]);
+    // …а сама выдача упорядочена по времени первого окна, как и раньше
+    expect(out.staff_options.map(o => o.staff_yc_id)).toEqual([12, 13, 11]);
+  });
+
+  test('одинаковое время первого окна → тай-брейк по yc_id', async () => {
+    listServices.run.mockResolvedValue({
+      services: [{ yc_id: 900, title: 'Биоревитализация', staff: [
+        { yc_id: 12, name: 'Пери Исамудиновна' }, { yc_id: 11, name: 'Юлия' },
+      ] }],
+    });
+    ycGetBookTimes.mockImplementation(async () => bookSlot('12:00'));
+    const out = await slots.run(1, ARGS, { nowMs: NOON });
+    expect(out.staff_options.map(o => o.staff_yc_id)).toEqual([11, 12]);
   });
 
   test('без date — прежняя ошибка', async () => {
