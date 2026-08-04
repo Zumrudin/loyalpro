@@ -46,10 +46,12 @@ test('свежие слоты (<30 мин) — с временами, стары
 });
 
 test('PII-аргументы не попадают в рендер (в т.ч. через фолбэк)', () => {
-  const rows = [ev({ tool: 'get_bonus_balance', input: { client_phone: '79991234567', client_name: 'Мария Ивановна', comment: 'секрет' }, result: { balance: 100 } })];
+  // Инструмент намеренно НЕИЗВЕСТНЫЙ: фолбэк живёт только для таких (у всех
+  // зарегистрированных есть экстрактор либо запись в SKIP_TOOLS).
+  const rows = [ev({ tool: 'some_new_tool', input: { client_phone: '79991234567', client_name: 'Мария Ивановна', comment: 'секрет' }, result: { balance: 100 } })];
   const joined = renderMemory(rows, { nowMs: NOW }).lines.join('\n');
   expect(joined).not.toMatch(/79991234567|Мария|секрет/);
-  expect(joined).toMatch(/get_bonus_balance/);
+  expect(joined).toMatch(/some_new_tool/);
   expect(joined).toMatch(/balance=100/);
 });
 
@@ -184,6 +186,54 @@ test('хронология одного хода: события с ОДИНАК
   expect(lines.length).toBe(2);
   expect(lines[0]).toMatch(/читала историю визитов/);
   expect(lines[1]).toMatch(/record_id=42/);
+});
+
+describe('SKIP_TOOLS: инструменты, которых в памяти быть не должно', () => {
+  test('escalate_to_operator не даёт строки (закрытый конфликт не тянем назад)', () => {
+    // После «Вернуть боту» промпт отдельным блоком велит считать конфликт
+    // РАЗРЕШЁННЫМ; строка «escalated=true, reason=пациент недоволен…» лежала бы
+    // в САМОМ хвосте промпта, свежее этого блока, и провоцировала ре-эскалацию.
+    const rows = [ev({ tool: 'escalate_to_operator', input: { reason: 'пациент недоволен ценой' }, result: { escalated: true, reason: 'пациент недоволен ценой' } })];
+    const { lines, dropped } = renderMemory(rows, { nowMs: NOW });
+    expect(lines).toEqual([]);
+    expect(dropped).toBe(0);   // не срез капом — событие просто не рендерится
+  });
+
+  test('живые персональные данные и статические справочники не рендерятся', () => {
+    const rows = [
+      ev({ tool: 'get_bonus_balance', result: { found: true, cards: [{ balance: 1500 }] } }),
+      ev({ tool: 'get_client_abonements', result: { abonements: [], note: 'Активных абонементов не найдено.' } }),
+      ev({ tool: 'get_client', input: { phone: '79991234567' }, result: { found: true } }),
+      ev({ tool: 'list_staff', result: { staff: [{ yc_id: 1, name: 'Юлия' }] } }),
+      ev({ tool: 'list_services', result: { services: [{ yc_id: 1, title: 'Чистка' }] } }),
+    ];
+    expect(renderMemory(rows, { nowMs: NOW }).lines).toEqual([]);
+  });
+
+  test('скипнутые события не съедают бюджет MAX_EVENTS', () => {
+    const rows = [];
+    for (let i = 0; i < 40; i++) rows.push(ev({ tool: 'get_bonus_balance', result: { found: true }, age_ms: (200 - i) * MIN }));
+    rows.push(ev({ tool: 'search_knowledge_base', input: { query: 'акция' }, age_ms: 5 * MIN }));
+    const { lines, dropped } = renderMemory(rows, { nowMs: NOW });
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatch(/акция/);
+    expect(dropped).toBe(0);
+  });
+
+  test('каждый зарегистрированный инструмент — либо экстрактор, либо SKIP_TOOLS (фолбэк только для неизвестных)', () => {
+    // Фолбэк «tool(args) → k=v» задуман для инструмента, которого ещё нет в
+    // tool-memory. На зарегистрированном он даёт строку-пустышку («list_staff()»),
+    // которая занимает место в бюджете и ничего не сообщает. Тест ловит новый
+    // инструмент, добавленный в реестр мимо этого файла.
+    const registry = require('./services/agent/tools');
+    const names = new Set(registry.schemas.map(s => s.name));
+    for (const n of Object.keys(registry.catalogMode.handlers)) names.add(n);
+    for (const tool of names) {
+      const line = renderMemory([ev({ tool, input: {}, result: {} })], { nowMs: NOW }).lines[0];
+      if (line === undefined) continue;   // скип или экстрактор без факта — ок
+      expect(line).not.toContain(`${tool}(`);
+    }
+  });
 });
 
 test('get_available_dates: свежий график — с часами, устаревший — только факт', () => {
