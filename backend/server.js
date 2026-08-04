@@ -207,6 +207,8 @@ cron.schedule('30 * * * *', async () => {
 // старые строки чистим раз в сутки.
 cron.schedule('40 4 * * *', () => {
   require('./services/outgoing-authorship').cleanup();
+  // Журнал tool-цикла Милы (agent_tool_events): форензика 30 дней, дальше в мусор.
+  require('./services/agent/tool-events').cleanup();
 });
 
 // Patient photo cases: периодически добиваем S3-удаления, которые не дошли в основном потоке.
