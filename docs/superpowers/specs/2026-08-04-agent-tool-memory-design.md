@@ -30,8 +30,8 @@
 id        bigserial PK
 salon_id  int NOT NULL
 dialog_key text NOT NULL          -- тот же ключ phone || chat_id, что во всём чате
-turn_id   uuid NOT NULL           -- группирует события одной попытки runDialog
-ts        timestamptz NOT NULL DEFAULT now()
+turn_id   varchar(40) NOT NULL (crypto.randomUUID())  -- группирует события одной попытки runDialog
+created_at timestamp DEFAULT now()  -- возраст считается только в SQL
 tool      text NOT NULL
 input     jsonb                   -- полный (PII допустима: та же БД, где chatpush_messages)
 result    jsonb                   -- кап ~64 КБ, при обрезке маркер truncated:true

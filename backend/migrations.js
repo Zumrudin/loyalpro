@@ -1164,6 +1164,38 @@ async function runMigrations(client) {
       ON outgoing_authored (salon_id, text_hash, id DESC)
   `).catch(() => {});
 
+  // Сырой журнал tool-цикла Милы: каждый вызов инструмента с input/result.
+  // Транскрипт диалога собирается из ТЕКСТОВ chatpush_messages, поэтому весь
+  // tool-цикл раньше жил один прогон и выбрасывался — модель на следующем ходе
+  // не помнила ни показанных слотов, ни названных цен. Журнал: (1) форензика
+  // инцидентов, (2) источник «памяти» в промпте (services/agent/tool-memory).
+  // delivered: TRUE — реплики хода отправлены пациенту; FALSE — черновик выброшен
+  // (перегенерация/rerun) или реплики погашены диспетчером (falseSuccess и пр.);
+  // NULL — вердикта не было (краш между флашем и отправкой). Чистка кроном
+  // 40 4 * * * (server.js), хранение 30 дней (tool-events.KEEP_DAYS).
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS agent_tool_events (
+      id BIGSERIAL PRIMARY KEY,
+      salon_id INTEGER REFERENCES salons(id) ON DELETE CASCADE,
+      dialog_key VARCHAR(120) NOT NULL,
+      turn_id VARCHAR(40) NOT NULL,
+      tool VARCHAR(60) NOT NULL,
+      input JSONB,
+      result JSONB,
+      is_error BOOLEAN NOT NULL DEFAULT FALSE,
+      delivered BOOLEAN,
+      created_at TIMESTAMP DEFAULT NOW()
+    )
+  `).catch(() => {});
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS agent_tool_events_dialog_idx
+      ON agent_tool_events (salon_id, dialog_key, id DESC)
+  `).catch(() => {});
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS agent_tool_events_turn_idx
+      ON agent_tool_events (turn_id)
+  `).catch(() => {});
+
   // agent_settings — настройки ИИ-агента по салону (вкл/выкл + режим допуска).
   await client.query(`
     CREATE TABLE IF NOT EXISTS agent_settings (
