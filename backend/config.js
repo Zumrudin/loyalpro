@@ -112,6 +112,11 @@ module.exports = {
   // Каталог услуг в системном промпте вместо инструмента list_services
   // (кэшируемый префикс, ~5× меньше токенов). Откат: убрать env + рестарт.
   AGENT_CATALOG_IN_PROMPT: process.env.AGENT_CATALOG_IN_PROMPT === 'true',
+  // Выжимка журнала инструментов («ЖУРНАЛ ТВОИХ ДЕЙСТВИЙ») в системном промпте.
+  // По умолчанию ВКЛЮЧЕНА; аварийный рычаг — AGENT_TOOL_MEMORY=false + рестарт:
+  // модель перестаёт видеть память, а ЗАПИСЬ журнала в agent_tool_events идёт
+  // как обычно (форензика нужна независимо от того, показываем ли выжимку).
+  AGENT_TOOL_MEMORY: process.env.AGENT_TOOL_MEMORY !== 'false',
   // Провайдер базы знаний: 'aitunnel' | 'gemini' (старый релей/прямой вызов, откат).
   KB_PROVIDER:          process.env.KB_PROVIDER          || 'aitunnel',
 

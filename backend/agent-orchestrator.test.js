@@ -750,6 +750,48 @@ describe('журнал инструментов (tool-events/tool-memory)', () =
       [{ tool: 'x', age_ms: 1000 }], { nowMs: expect.any(Number) });
   });
 
+  // Аварийный рычаг AGENT_TOOL_MEMORY=false: память меняет поведение модели в
+  // КАЖДОМ ходе и включена сразу для всех салонов — выключать её откатом кода
+  // (или переименованием таблицы, которую migrations.js вернёт на рестарте)
+  // нельзя. Гасится ровно ЧТЕНИЕ в промпт, запись журнала продолжается.
+  describe('флаг AGENT_TOOL_MEMORY', () => {
+    test('выключен → loadRecent не зовётся и блока в промпте нет', async () => {
+      const te = makeToolEventsStub();
+      const deps = makeDeps({
+        toolEvents: te,
+        toolMemory: { renderMemory: jest.fn(() => ({ lines: ['[сегодня 10:00] что-то'], dropped: 0 })) },
+      });
+      deps.config = { AGENT_TOOL_MEMORY: false };
+      deps.provider.createMessage
+        .mockResolvedValueOnce(toolResp('get_available_slots', { date: 'd' }))
+        .mockResolvedValueOnce(textResp('ок'));
+      const out = await orchestrator.runDialog(1, 'k', { deps });
+      expect(out.replies).toEqual(['ок']);
+      expect(deps.toolEvents.loadRecent).not.toHaveBeenCalled();
+      expect(deps.toolMemory.renderMemory).not.toHaveBeenCalled();
+      expect(deps.provider.createMessage.mock.calls[0][0].system).not.toContain('ЖУРНАЛ ТВОИХ ДЕЙСТВИЙ');
+      // Форензика не зависит от флага: журнал хода всё равно пишется.
+      expect(te.buffers[0].push).toHaveBeenCalledWith('get_available_slots', { date: 'd' }, { slots: [{ time: '10:00' }] }, false);
+      expect(te.buffers[0].flush).toHaveBeenCalledWith(null);
+    });
+
+    test('включён → блок на месте (по умолчанию флаг включён)', async () => {
+      const te = makeToolEventsStub();
+      te.mod.loadRecent.mockResolvedValue([{ tool: 'x', age_ms: 1000 }]);
+      const deps = makeDeps({
+        toolEvents: te,
+        toolMemory: { renderMemory: jest.fn(() => ({ lines: ['[сегодня 10:00] называла цены'], dropped: 0 })) },
+      });
+      deps.config = { AGENT_TOOL_MEMORY: true };
+      deps.provider.createMessage.mockResolvedValueOnce(textResp('ок'));
+      await orchestrator.runDialog(1, 'k', { deps });
+      expect(deps.toolEvents.loadRecent).toHaveBeenCalledWith(1, 'k');
+      expect(deps.provider.createMessage.mock.calls[0][0].system).toContain('ЖУРНАЛ ТВОИХ ДЕЙСТВИЙ');
+      // Дефолт конфига — включено: тот же ход без deps.config ведёт себя так же.
+      expect(require('./config').AGENT_TOOL_MEMORY).toBe(true);
+    });
+  });
+
   test('сбой loadRecent не роняет ход — промпт без блока (fail-open)', async () => {
     const te = makeToolEventsStub();
     te.mod.loadRecent.mockRejectedValue(new Error('db down'));

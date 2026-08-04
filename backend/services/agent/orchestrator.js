@@ -233,17 +233,22 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
   // Память прошлых ходов: выжимка журнала инструментов → волатильный хвост
   // промпта. Сбой чтения/рендера не роняет ход — идём без блока (fail-open,
   // как activeOffers): модель просто переспросит инструментами.
+  // AGENT_TOOL_MEMORY=false гасит РОВНО это — показ выжимки модели. Запись
+  // журнала ниже по ходу идёт при любом значении флага: аварийное выключение
+  // памяти не должно лишать нас форензики инцидента, ради которой журнал и заведён.
   let toolMemoryLines = [];
-  try {
-    const rows = await toolEvents.loadRecent(salonId, dialogKey);
-    const rendered = toolMemory.renderMemory(rows, { nowMs });
-    toolMemoryLines = rendered.lines;
-    if (rendered.dropped > 0) {
-      logger.info(`dialog ${dialogKey}: журнал инструментов срезан капом (${rendered.dropped} событий не в промпте)`);
+  if (cfg.AGENT_TOOL_MEMORY) {
+    try {
+      const rows = await toolEvents.loadRecent(salonId, dialogKey);
+      const rendered = toolMemory.renderMemory(rows, { nowMs });
+      toolMemoryLines = rendered.lines;
+      if (rendered.dropped > 0) {
+        logger.info(`dialog ${dialogKey}: журнал инструментов срезан капом (${rendered.dropped} событий не в промпте)`);
+      }
+    } catch (e) {
+      logger.warn(`dialog ${dialogKey}: не прочитать журнал инструментов (${e.message}) — промпт без памяти`);
+      toolMemoryLines = [];
     }
-  } catch (e) {
-    logger.warn(`dialog ${dialogKey}: не прочитать журнал инструментов (${e.message}) — промпт без памяти`);
-    toolMemoryLines = [];
   }
 
   const system = buildSystemPrompt({
