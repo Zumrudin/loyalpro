@@ -144,8 +144,12 @@ router.post('/webhook', async (req, res) => {
       // Кто автор исходящего: наша отправка (Мила/автоуведомление) или человек,
       // набравший текст прямо в приложении Chatpush. Эхо у них одинаковое —
       // различаем по журналу собственных отправок (services/outgoing-authorship).
+      // viaApi: через инстанс Chatpush пишет не только LoyalPro — автоуведомления
+      // YClients уходят тем же каналом, и без этого признака они были неотличимы
+      // от живого администратора (инцидент 2026-08-04: «Вы записаны на прием…»
+      // после записи Милы ставило её же диалог на паузу).
       const authoredBy = msg.direction === 'outgoing'
-        ? await authorship.classify(salonId, msg.text) : null;
+        ? await authorship.classify(salonId, msg.text, { viaApi: !!msg.deliveryId }) : null;
       const ins = await db.query(
         `INSERT INTO chatpush_messages
            (salon_id, client_id, customer_id, channel, direction, external_message_id, reply_to_message_id,

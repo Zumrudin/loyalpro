@@ -60,9 +60,27 @@ async function remember(salonId, dialogKey, text, author) {
 
 /**
  * Кто автор исходящего текста.
+ *
+ * Журнал знает только НАШИ отправки, а через один инстанс Chatpush пишет не
+ * только LoyalPro: автоуведомления YClients («Вы записаны на прием…»,
+ * «Напоминаем о записи…», «Ваша запись перенесена») уходят клиенту тем же
+ * каналом и возвращаются таким же эхом. Инцидент 2026-08-04 (79200255591):
+ * такое уведомление о записи, ТОЛЬКО ЧТО созданной Милой, считалось ответом
+ * живого администратора и ставило диалог на паузу — Мила замолкала ровно на
+ * своём успехе. На проде так помечались все записи дня, а не только тестовая.
+ *
+ * Различает источники delivery_id из вебхука: он есть у всего, что ушло через
+ * API Chatpush (мы или чужая интеграция), и его НЕТ у текста, который человек
+ * набрал руками в приложении Telegram/MAX/WhatsApp — а пауза нужна ровно там.
+ * Проверено на боевых payload'ах: у всех автоуведомлений и реплик Милы
+ * delivery_id заполнен, у живых сообщений администраторов — пуст.
+ *
+ * @param {{viaApi?: boolean}} opts viaApi — сообщение ушло через API Chatpush
+ *   (см. chatpush.parseMessageEvent().deliveryId). По умолчанию false —
+ *   консервативно, как до появления признака.
  * @returns {Promise<'agent'|'system'|'operator'|null>} null — текста нет или БД недоступна.
  */
-async function classify(salonId, text) {
+async function classify(salonId, text, opts = {}) {
   const key = textKey(text);
   if (!salonId || !key) return null;
   try {
@@ -72,7 +90,10 @@ async function classify(salonId, text) {
           AND created_at > NOW() - INTERVAL '${KEEP_HOURS} hours'
         ORDER BY id DESC LIMIT 1`,
       [salonId, key]);
-    return row ? row.author : 'operator';
+    // Журнал главнее признака доставки: наша отправка из админки тоже идёт через
+    // API, но она — именно ответ оператора, и пауза после неё обязательна.
+    if (row) return row.author;
+    return opts.viaApi ? 'system' : 'operator';
   } catch (e) {
     return null;
   }

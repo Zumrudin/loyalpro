@@ -67,6 +67,25 @@ describe('classify', () => {
     expect(await authorship.classify(1, 'В 19:15 удобно было бы?')).toBe('operator');
   });
 
+  // Инцидент 2026-08-04 (79200255591): после успешной записи YClients сам шлёт
+  // клиенту «Вы записаны на прием…» через ТОТ ЖЕ инстанс Chatpush. В нашем журнале
+  // такого текста нет — и Мила замолкала на собственном успехе, как будто в диалог
+  // вошёл человек. Отличаем по delivery_id: он есть у всего, что ушло через API.
+  test('чужой интеграции (есть delivery_id) — system, а не operator', async () => {
+    db.oneOrNone.mockResolvedValue(null);
+    expect(await authorship.classify(1, 'Вы записаны на прием 05.08.2026 12:00', { viaApi: true })).toBe('system');
+  });
+
+  test('живой набор в приложении (delivery_id нет) — по-прежнему operator', async () => {
+    db.oneOrNone.mockResolvedValue(null);
+    expect(await authorship.classify(1, 'В 19:15 удобно было бы?', { viaApi: false })).toBe('operator');
+  });
+
+  test('журнал главнее delivery_id: наш же текст остаётся operator (отправка из админки)', async () => {
+    db.oneOrNone.mockResolvedValue({ author: 'operator' });
+    expect(await authorship.classify(1, 'на завтра можно', { viaApi: true })).toBe('operator');
+  });
+
   test('пустой текст → null (файлы и стикеры не классифицируем)', async () => {
     expect(await authorship.classify(1, '')).toBeNull();
     expect(db.oneOrNone).not.toHaveBeenCalled();

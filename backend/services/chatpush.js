@@ -214,6 +214,11 @@ function envelope(body) {
       customerId: p.instance?.customer_id ?? p.customer_id ?? null,
       instanceId: p.instance?.id ?? p.instance_id ?? null,
       m: nm.message || {},
+      // Идентификатор ДОСТАВКИ Chatpush: есть у всего, что ушло через API
+      // (наша отправка, автоуведомление YClients), и его нет у текста, который
+      // человек набрал руками в приложении. См. parseMessageEvent.deliveryId.
+      // В WhatsApp-форме лежит на уровне payload, рядом с new_message.
+      deliveryId: str(p.delivery_id ?? nm.delivery_id),
       chatId: str(nm.chat_id),
       // 'person' | 'group' | … — явный признак группы (шлют tdlib и MAX; WhatsApp
       // не шлёт, там группу видно по jid «@g.us»). Нужен агенту: в группе он молчит.
@@ -231,6 +236,7 @@ function envelope(body) {
     customerId: p.customer_id ?? null,
     instanceId: p.instance_id ?? null,
     m: p.message || {},
+    deliveryId: str(p.delivery_id),
     chatId: str(p.chat_id),
     chatType: str(p.chat_type),
     // номер КЛИЕНТА (не салона): для outgoing клиент — получатель, для incoming — отправитель.
@@ -271,6 +277,13 @@ function parseMessageEvent(body) {
     chatType: e.chatType,                                    // person | group | … | null
     phone: e.phone,
     senderName: e.senderName,
+    // Ушло через API Chatpush (наша отправка ИЛИ чужая интеграция — например
+    // автоуведомления YClients) ⟺ deliveryId не null. Живой набор в приложении
+    // мессенджера доставки не создаёт — поле приходит пустым. По этому признаку
+    // вебхук решает, ставить ли паузу «отвечает оператор» (инцидент 2026-08-04:
+    // «Вы записаны на прием…» от YClients глушило Милу после её же записи).
+    // Запасной путь для WhatsApp: там id эха API-отправки несёт `_d<id>THISISBOT`.
+    deliveryId: e.deliveryId || deliveryIdFromWhatsappEchoId(str(m.id)),
   };
 }
 

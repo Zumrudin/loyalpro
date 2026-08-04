@@ -81,6 +81,57 @@ describe('parseMessageEvent — WhatsApp nested payload', () => {
   });
 });
 
+describe('parseMessageEvent — delivery_id (кто отправил исходящее)', () => {
+  // ЗАЧЕМ. Эхо исходящего одинаково у трёх источников: наша отправка, чужая
+  // интеграция (автоуведомления YClients через тот же инстанс Chatpush) и текст,
+  // который администратор НАБРАЛ РУКАМИ в приложении. Различает их delivery_id:
+  // он есть у всего, что ушло через API Chatpush, и его НЕТ у живого набора.
+  // Живые payload'ы инцидента 2026-08-04 (диалог 79200255591).
+  const tdlibOut = (extra) => ({
+    type: 'tdlib_incoming_msg',
+    payload: {
+      chat_id: 385578542, customer_id: 46594, direction: 'outgoing',
+      sender_id: 5240356278, sender_name: 'periclinic',
+      recipient_phone_number: '79200255591', sender_phone_number: '79250177778',
+      message: { id: 43283120128, type: 'formattedText', text: 'Вы записаны на прием', timestamp: 1785873963 },
+      ...extra,
+    },
+  });
+  test('автоуведомление YClients ушло через API → delivery_id есть', () => {
+    expect(parseMessageEvent(tdlibOut({ delivery_id: 375080823 })).deliveryId).toBe('375080823');
+  });
+  test('администратор набрал текст в приложении → delivery_id нет', () => {
+    expect(parseMessageEvent(tdlibOut({ delivery_id: null })).deliveryId).toBeNull();
+    expect(parseMessageEvent(tdlibOut({})).deliveryId).toBeNull();
+  });
+  test('WhatsApp: delivery_id лежит на уровне payload, рядом с new_message', () => {
+    const wa = {
+      type: 'whatsapp_incoming_msg',
+      payload: {
+        customer_id: 46594, delivery_id: 374966585,
+        new_message: {
+          chat_id: '79262644959@c.us', chat_phone: '79262644959', direction: 'outgoing',
+          message: { id: 'true_279843040162044@lid_d374966585THISISBOT', type: 'text', text: 'Спасибо что посетили' },
+        },
+      },
+    };
+    expect(parseMessageEvent(wa).deliveryId).toBe('374966585');
+  });
+  test('WhatsApp без поля: delivery_id достаётся из id эха (_d<id>THISISBOT)', () => {
+    const wa = {
+      type: 'whatsapp_incoming_msg',
+      payload: {
+        customer_id: 46594,
+        new_message: {
+          chat_id: '79262644959@c.us', chat_phone: '79262644959', direction: 'outgoing',
+          message: { id: 'true_279843040162044@lid_d374966585THISISBOT', type: 'text', text: 'Спасибо что посетили' },
+        },
+      },
+    };
+    expect(parseMessageEvent(wa).deliveryId).toBe('374966585');
+  });
+});
+
 describe('parseMessageEvent — chat_type (гейт группового чата)', () => {
   // Живая плоская форма MAX: группа «Админы PERI CLINIC» шлёт chat_type='group'
   // И номер участника в sender_phone_number — по номеру группу не отличить.

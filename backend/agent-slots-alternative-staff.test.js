@@ -66,6 +66,18 @@ describe('get_available_slots — альтернативный мастер пр
     expect(out.no_alternative_staff).toBeUndefined();
   });
 
+  // Инцидент 2026-08-04 (79200255591): пациент про мастера не спрашивал вообще,
+  // модель сама выбрала главврача, у неё оказалось пусто — и пациент получил
+  // «у главного врача Пери Исамудиновны на завтра всё занято». Внутренний перебор
+  // не должен звучать в чате: hint обязан прямо это запрещать.
+  test('hint запрещает называть занятость мастера, которого пациент не выбирал', async () => {
+    ycGetBookTimes.mockImplementation(async (_salon, staffId) =>
+      staffId === 12 ? bookSlot('14:00') : []);
+    const out = await slots.run(1, ARGS, { nowMs: NOON });
+    expect(out.hint).toMatch(/не называл|не выбирал|сам не спрашивал/);
+    expect(out.hint).toMatch(/НЕ (говори|сообщай|пиши)/);
+  });
+
   test('у запрошенного мастера слоты есть → других НЕ проверяем, alternative_staff нет', async () => {
     ycGetBookTimes.mockImplementation(async (_salon, staffId) =>
       staffId === 11 ? bookSlot('10:00') : bookSlot('14:00'));
