@@ -21,6 +21,8 @@ const { phoneMatchCandidates, dialogKey: chatDialogKey } = require('../services/
 const chatEvents = require('../services/chat-events');
 const dispatcher = require('../services/agent/dispatcher');
 const groupChat = require('../services/agent/group-chat');
+const authorship = require('../services/outgoing-authorship');
+const dialogState = require('../services/agent/dialog-state');
 
 // Текстовые типы разных каналов: WhatsApp/MAX → 'text', tdlib/Telegram → 'formattedText'.
 const AGENT_TEXT_TYPES = new Set(['text', 'formattedText']);
@@ -139,18 +141,37 @@ router.post('/webhook', async (req, res) => {
       // idx_clients_phone. Номер клиента одинаков для in/out, поэтому весь
       // диалог привязывается к клиенту независимо от направления.
       const clientId = await matchClientId(salonId, msg.phone);
+      // Кто автор исходящего: наша отправка (Мила/автоуведомление) или человек,
+      // набравший текст прямо в приложении Chatpush. Эхо у них одинаковое —
+      // различаем по журналу собственных отправок (services/outgoing-authorship).
+      const authoredBy = msg.direction === 'outgoing'
+        ? await authorship.classify(salonId, msg.text) : null;
       const ins = await db.query(
         `INSERT INTO chatpush_messages
            (salon_id, client_id, customer_id, channel, direction, external_message_id, reply_to_message_id,
-            msg_type, text, file_url, mime_type, sender_name, phone, chat_id, msg_ts)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+            msg_type, text, file_url, mime_type, sender_name, phone, chat_id, msg_ts, authored_by)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
          ON CONFLICT (salon_id, external_message_id) DO NOTHING
          RETURNING id`,
         [salonId, clientId, customerId, msg.channel, msg.direction, msg.messageId, msg.replyToMessageId,
-         msg.type, msg.text, msg.fileUrl, msg.mimeType, msg.senderName, msg.phone, msg.chatId, msg.timestamp]
+         msg.type, msg.text, msg.fileUrl, msg.mimeType, msg.senderName, msg.phone, msg.chatId, msg.timestamp,
+         authoredBy]
       );
       storedNew = ins.rowCount > 0;
       logger.info(`stored ${msg.direction} ${msg.channel} ${msg.phone || ''}${clientId ? ` (client #${clientId})` : ''}: ${(msg.text || '').slice(0, 60)}`);
+
+      // Человек ответил клиенту сам (мимо админки, прямо из приложения) —
+      // дальше диалог ведёт он: Мила молчит до кнопки «Вернуть боту».
+      // Инцидент 2026-08-04: администратор четверо суток вёл переписку из MAX,
+      // Мила вклинилась ночью и оформила запись на выдуманную услугу.
+      if (storedNew && salonId && authoredBy === 'operator') {
+        const pauseKey = (msg.phone && msg.phone.trim()) || msg.chatId;
+        if (pauseKey && !groupChat.isGroupMessage(msg)) {
+          await dialogState.pauseForOperator(salonId, pauseKey)
+            .then(() => logger.info(`agent paused ${pauseKey}: ответил оператор (сообщение из приложения)`))
+            .catch(e => logger.error(`pause on operator reply failed: ${e.message}`));
+        }
+      }
 
       // Живое обновление страницы «Чат»: пушим сохранённое сообщение (вкл.
       // исходящее-эхо — так на странице появляются ответы бота и оператора).

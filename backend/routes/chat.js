@@ -18,6 +18,8 @@ const logger = createLogger('Chat');
 
 const chatEvents = require('../services/chat-events');
 const { persistWhatsappOutgoing } = require('../services/chat-persist');
+const authorship = require('../services/outgoing-authorship');
+const dialogState = require('../services/agent/dialog-state');
 
 // admin_cashier — «Администратор-кассир»: полный доступ к чату наравне с owner/admin.
 const adminOnly = [auth, requireRole('owner', 'admin', 'admin_cashier')];
@@ -180,15 +182,12 @@ router.post('/dialogs/:key/agent', adminOnly, async (req, res) => {
 
 // Ручной ответ ставит бота на паузу (кнопка «Вернуть боту» уже есть в шапке).
 // Группы пропускаем: agent_dialogs живёт на ключе phone||chat_id, в группах бот не работает.
+// Сам upsert + SSE — в services/agent/dialog-state.pauseForOperator: тот же
+// механизм нужен вебхуку, когда оператор отвечает мимо админки, прямо из
+// приложения Chatpush. Двух копий правила быть не должно.
 async function pauseAgent(salonId, key) {
   if (isGroupKey(key)) return;
-  await db.query(
-    `INSERT INTO agent_dialogs (salon_id, dialog_key, status, escalated_reason)
-     VALUES ($1, $2, 'escalated', 'operator_reply')
-     ON CONFLICT (salon_id, dialog_key)
-       DO UPDATE SET status='escalated', escalated_reason='operator_reply', updated_at=now()`,
-    [salonId, key]);
-  chatEvents.emitAgentStatus(salonId, key, 'escalated', 'operator_reply');
+  await dialogState.pauseForOperator(salonId, key);
 }
 
 // Идентификаторы получателя: последнее ВХОДЯЩЕЕ выбранного канала (самый
@@ -228,6 +227,9 @@ router.post('/dialogs/:key/send', adminOnly, async (req, res) => {
 
     const delivery = await chatpush.sendMessage(config.CHATPUSH.instanceToken, { text, ...params });
     await pauseAgent(salonId, key);
+    // Эхо этой отправки придёт как обычное outgoing — пометим автора заранее,
+    // чтобы в транскрипте Милы оно не выглядело её собственной репликой.
+    await authorship.remember(salonId, key, text, 'operator');
     logger.info(`operator sent ${channel} to ${key}: ${text.slice(0, 60)}`);
     if (channel === 'whatsapp') {
       try {
@@ -292,6 +294,9 @@ router.post('/dialogs/:key/send-file', adminOnly, chatUpload.single('file'), asy
       fileName, caption, type: isImage ? 'image' : 'document', ...params,
     }, req.file.buffer, req.file.mimetype);
     await pauseAgent(salonId, key);
+    // Подпись к файлу приедет эхом отдельным текстом — помечаем её автором так же,
+    // как обычную отправку оператора.
+    if (caption) await authorship.remember(salonId, key, caption, 'operator');
     logger.info(`operator sent file ${channel} to ${key}: ${req.file.originalname} (${req.file.size} b)`);
     if (channel === 'whatsapp') {
       try {

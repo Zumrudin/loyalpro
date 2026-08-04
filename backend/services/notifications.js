@@ -22,6 +22,11 @@ const config = require('../config');
 const chatpush = require('./chatpush');
 const { normalizePhoneKey } = require('./agent-gate');
 const { ycGet } = require('./yclients');
+const { persistWhatsappOutgoing } = require('./chat-persist');
+const pendingReplies = require('./agent/pending-replies');
+const authorship = require('./outgoing-authorship');
+const { resolveGivenName } = require('../utils/person-name');
+const salonNames = require('../utils/salon-names');
 const { createLogger } = require('../logger');
 
 const log = createLogger('Notifications');
@@ -68,7 +73,11 @@ function evaluateRule(conditions, ctx) {
  */
 function renderTemplate(text, ctx) {
   if (!text) return '';
-  const firstName = (ctx.name || '').trim().split(/\s+/)[0] || '';
+  // {first_name} — ЛИЧНОЕ имя, а не первое слово карточки: на боевой базе 77%
+  // карточек это «Фамилия Имя Отчество» одной строкой, и пациенту уходило бы
+  // «Вихарева, добрый вечер!». Имя не опознано → подстановка пустая, а осиротевшая
+  // запятая в начале строки убирается ниже (иначе «, добрый день!»).
+  const firstName = resolveGivenName(ctx.name, { dictionary: ctx.nameDictionary }) || '';
   return String(text)
     .replace(/\{name\}/g,       ctx.name || '')
     .replace(/\{first_name\}/g, firstName)
@@ -76,7 +85,9 @@ function renderTemplate(text, ctx) {
     .replace(/\{time\}/g,       ctx.time || '')
     .replace(/\{services\}/g,   ctx.services || '')
     .replace(/\{staff\}/g,      ctx.staff || '')
-    .replace(/\{salon\}/g,      ctx.salon || '');
+    .replace(/\{salon\}/g,      ctx.salon || '')
+    // «{first_name}, добрый день!» без имени → «Добрый день!», а не «, добрый день!».
+    .replace(/^[ \t]*,\s*(\p{L})/gmu, (_, ch) => ch.toUpperCase());
 }
 
 /** '2026-08-02 14:00:00' → { date:'02.08.2026', time:'14:00' } (строка YClients уже салон-локальная). */
@@ -170,6 +181,9 @@ async function handleRecordCreated(salon, payload) {
   const dt = splitVisitDatetime(data.date);
   const renderCtx = {
     name:     (client && client.name) || (data.client && data.client.name) || '',
+    // Словарь имён салона — чтобы редкое имя из карточки попало в {first_name},
+    // а не потерялось. Недоступен → работает базовый список (fail-open).
+    nameDictionary: await salonNames.load(salon.id).catch(() => null),
     date:     dt.date,
     time:     dt.time,
     services: (Array.isArray(data.services) ? data.services : []).map(s => s && s.title).filter(Boolean).join(', '),
@@ -237,6 +251,7 @@ async function processTick() {
         phone: row.phone,
         dispatchRouting: routing,
       });
+      const channelUsed = (delivery && (delivery.channel || delivery.messenger)) || routing[0] || null;
       await db.query(
         `UPDATE notification_sends
             SET status='sent', sent_at=NOW(), error=NULL,
@@ -244,9 +259,30 @@ async function processTick() {
           WHERE id=$1`,
         [row.id, JSON.stringify(routing),
          delivery && delivery.id != null ? String(delivery.id) : null,
-         (delivery && (delivery.channel || delivery.messenger)) || routing[0] || null]
+         channelUsed]
       );
       log.info(`sent #${row.id} rule=${row.rule_id} record=${row.yclients_record_id} routing=[${routing.join(',')}]`);
+      // Транскрипт Милы собирается из chatpush_messages, куда исходящее
+      // попадает только с эхом Chatpush: tdlib/max его шлют с задержкой,
+      // WhatsApp — не шлёт вовсе. Без этих двух шагов пациент, ответивший на
+      // уведомление («+», «да, расскажите»), приходил к Миле без текста, НА
+      // который он отвечает. Та же схема, что у «Отдела заботы»
+      // (services/care/worker.js): pending до эха + персист для WhatsApp.
+      // Оба шага — best-effort и НИКОГДА не бросают наружу: строка уже
+      // помечена sent, а падение сюда увело бы её в общий catch и вернуло в
+      // pending → повторная отправка живому клиенту.
+      try {
+        pendingReplies.remember(row.salon_id, row.phone, row.rendered_text);
+      } catch (e) { log.error(`pending #${row.id}: ${e.message}`); }
+      // Автоуведомление — НАШЕ сообщение: без этой отметки его эхо выглядит как
+      // ответ живого администратора и поставило бы Милу на паузу.
+      await authorship.remember(row.salon_id, row.phone, row.rendered_text, 'system');
+      if (channelUsed === 'whatsapp') {
+        await persistWhatsappOutgoing(row.salon_id, {
+          delivery, phone: row.phone, chatId: null,
+          text: row.rendered_text, msgType: 'text',
+        }).catch(e => log.error(`persist wa #${row.id}: ${e.message}`));
+      }
     } catch (e) {
       // attempts уже инкрементирован при аренде — row.attempts актуален.
       const final = row.attempts >= MAX_ATTEMPTS;

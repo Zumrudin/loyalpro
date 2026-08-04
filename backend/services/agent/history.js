@@ -7,13 +7,17 @@ const pendingReplies = require('./pending-replies');
 // телефон, либо chat_id для каналов без телефона (Telegram/MAX).
 const DIALOG_KEY_SQL = `COALESCE(NULLIF(phone,''), chat_id)`;
 
+// Пометка чужого авторства в транскрипте. Держится в паре с правилом промпта
+// «РЕПЛИКИ АДМИНИСТРАТОРА» (services/agent/system-prompt.js) — менять только вместе.
+const OPERATOR_MARK = '[сообщение администратора клиники]';
+
 // Транскрипт диалога для Claude Messages API.
 //  incoming → {role:'user'}, outgoing (наши эхо-ответы) → {role:'assistant'}.
 // Возвращает { messages, watermark }, где watermark = max(msg_ts) входящих.
 async function loadTranscript(salonId, dialogKey, opts = {}) {
   const limit = opts.limit || 20;
   const rows = await db.any(
-    `SELECT direction, msg_type, text, msg_ts
+    `SELECT direction, msg_type, text, msg_ts, authored_by
        FROM chatpush_messages
       WHERE salon_id = $1 AND ${DIALOG_KEY_SQL} = $2
         AND text IS NOT NULL AND text <> ''
@@ -43,9 +47,16 @@ async function loadTranscript(salonId, dialogKey, opts = {}) {
   for (const r of rows) {
     if (r.direction === 'incoming' && Number(r.msg_ts) > watermark) watermark = Number(r.msg_ts);
     const role = r.direction === 'outgoing' ? 'assistant' : 'user';
+    // Исходящее, написанное ЖИВЫМ администратором (не нами), помечаем явно.
+    // Роль всё равно assistant — других ролей у Messages API нет, — но без
+    // пометки модель считает такие реплики своими: инцидент 2026-08-04, где
+    // время и услугу согласовал человек, а Мила по правилу «выбор варианта =
+    // согласие» молча оформила запись, придумав услугу. Автор проставлен
+    // вебхуком (services/outgoing-authorship); NULL у сообщений до 04.08.2026.
+    const text = r.authored_by === 'operator' ? `${OPERATOR_MARK} ${r.text}` : r.text;
     const last = messages[messages.length - 1];
-    if (last && last.role === role) last.content += `\n${r.text}`;   // склейка серии
-    else messages.push({ role, content: r.text });
+    if (last && last.role === role) last.content += `\n${text}`;   // склейка серии
+    else messages.push({ role, content: text });
   }
   // Chatpush/MAX доставляет наши ответы и с многоминутной задержкой (наблюдали 19 мин
   // 2026-07-26) — эхо получает msg_ts ПОЗЖЕ нового входящего, и транскрипт кончается
@@ -86,4 +97,4 @@ async function hasIncomingAfter(salonId, dialogKey, watermark) {
   return !!row;
 }
 
-module.exports = { loadTranscript, hasIncomingAfter };
+module.exports = { loadTranscript, hasIncomingAfter, OPERATOR_MARK };

@@ -163,3 +163,32 @@ describe('decideGate + расписание', () => {
       .toEqual({ allow: false, reason: 'outside-schedule' });
   });
 });
+
+// Пауза «отвечал администратор» снимается на ОТКРЫТИИ окна расписания: ночью
+// администраторов нет, и иначе диалог остаётся красным навсегда (на проде это
+// ≈24% диалогов за неделю).
+describe('minutesSinceWindowStart', () => {
+  const { minutesSinceWindowStart } = require('./services/agent-gate');
+  const win = { scheduleEnabled: true, scheduleStart: '22:00', scheduleEnd: '09:30' };
+
+  test('внутри ночного окна — минуты от открытия', () => {
+    expect(minutesSinceWindowStart({ ...win, nowMinutes: 22 * 60 })).toBe(0);
+    expect(minutesSinceWindowStart({ ...win, nowMinutes: 23 * 60 })).toBe(60);
+    expect(minutesSinceWindowStart({ ...win, nowMinutes: 60 })).toBe(180);        // 01:00
+    expect(minutesSinceWindowStart({ ...win, nowMinutes: 9 * 60 + 29 })).toBe(689);
+  });
+  test('вне окна → null (сбрасывать нечего)', () => {
+    expect(minutesSinceWindowStart({ ...win, nowMinutes: 21 * 60 + 59 })).toBeNull();
+    expect(minutesSinceWindowStart({ ...win, nowMinutes: 9 * 60 + 30 })).toBeNull();
+  });
+  test('обычное окно (без перехода через полночь)', () => {
+    const day = { scheduleEnabled: true, scheduleStart: '09:00', scheduleEnd: '18:00' };
+    expect(minutesSinceWindowStart({ ...day, nowMinutes: 10 * 60 })).toBe(60);
+    expect(minutesSinceWindowStart({ ...day, nowMinutes: 8 * 60 })).toBeNull();
+  });
+  test('расписание выключено или границы битые → null (автосброса нет)', () => {
+    expect(minutesSinceWindowStart({ ...win, scheduleEnabled: false, nowMinutes: 60 })).toBeNull();
+    expect(minutesSinceWindowStart({ ...win, scheduleStart: 'ерунда', nowMinutes: 60 })).toBeNull();
+    expect(minutesSinceWindowStart({ ...win, nowMinutes: undefined })).toBeNull();
+  });
+});

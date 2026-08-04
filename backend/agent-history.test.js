@@ -26,6 +26,45 @@ describe('loadTranscript', () => {
     expect(db.any.mock.calls[0][1]).toEqual([1, '79001112233', 20]);
   });
 
+  // Инцидент 2026-08-04 (79253209302): администратор вёл диалог из приложения
+  // MAX, его реплики приходили тем же эхом и попадали в транскрипт как СВОИ.
+  // Сработало правило «ВЫБОР ВАРИАНТА = СОГЛАСИЕ» — Мила сочла услугу и время
+  // согласованными ею самой и оформила запись на выдуманную услугу.
+  describe('авторство исходящих', () => {
+    test('реплика оператора помечена в транскрипте', async () => {
+      db.any.mockResolvedValue([
+        { direction: 'incoming', msg_type: 'text', text: 'Да можно', msg_ts: 300 },
+        { direction: 'outgoing', msg_type: 'text', text: 'В 19:15 удобно было бы?', msg_ts: 200, authored_by: 'operator' },
+        { direction: 'incoming', msg_type: 'text', text: 'В 18.40', msg_ts: 100 },
+      ]);
+      const { messages } = await history.loadTranscript(1, 'k');
+      const assistant = messages.find(m => m.role === 'assistant');
+      expect(assistant.content).toBe('[сообщение администратора клиники] В 19:15 удобно было бы?');
+    });
+
+    test('свои реплики и автоуведомления не помечаются', async () => {
+      db.any.mockResolvedValue([
+        { direction: 'incoming', msg_type: 'text', text: 'ок', msg_ts: 300 },
+        { direction: 'outgoing', msg_type: 'text', text: 'Записала вас', msg_ts: 200, authored_by: 'agent' },
+        { direction: 'outgoing', msg_type: 'text', text: 'Вы записаны на прием', msg_ts: 150, authored_by: 'system' },
+        { direction: 'incoming', msg_type: 'text', text: 'да', msg_ts: 100 },
+      ]);
+      const { messages } = await history.loadTranscript(1, 'k');
+      expect(messages.find(m => m.role === 'assistant').content)
+        .toBe('Вы записаны на прием\nЗаписала вас');   // хронологический порядок
+    });
+
+    test('старые сообщения без отметки автора ведут себя как раньше', async () => {
+      db.any.mockResolvedValue([
+        { direction: 'incoming', msg_type: 'text', text: 'ок', msg_ts: 300 },
+        { direction: 'outgoing', msg_type: 'text', text: 'Здравствуйте!', msg_ts: 200, authored_by: null },
+        { direction: 'incoming', msg_type: 'text', text: 'да', msg_ts: 100 },
+      ]);
+      const { messages } = await history.loadTranscript(1, 'k');
+      expect(messages.find(m => m.role === 'assistant').content).toBe('Здравствуйте!');
+    });
+  });
+
   test('ведущие assistant-реплики срезаются (Claude требует user первым)', async () => {
     db.any.mockResolvedValue([
       { direction: 'incoming', msg_type: 'text', text: 'привет', msg_ts: 50 },

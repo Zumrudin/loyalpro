@@ -168,7 +168,13 @@ async function runDialog(salonId, dialogKey, opts = {}) {
       client = null;
     }
   }
+  // Два РАЗНЫХ имени, и путать их нельзя:
+  //   • clientGivenName — как обращаться в переписке. Только личное имя, без
+  //     фамилии и отчества (инцидент 2026-08-04: «Мария Андреевна, …»).
+  //   • clientName — ФИО целиком, уходит в карточку записи YClients, где
+  //     администратору нужна полная форма.
   const clientName = (client && client.name && String(client.name).trim()) || null;
+  const clientGivenName = (client && client.givenName) || null;
 
   // Каталог услуг в промпте (AGENT_CATALOG_IN_PROMPT). Сбой сборки блока →
   // null → штатный legacy-режим с инструментом list_services (fail-open).
@@ -221,7 +227,7 @@ async function runDialog(salonId, dialogKey, opts = {}) {
     resumedFromEscalation: !!dialog.escalated_reason,
     // Идентификация: знаем ли телефон (из канала) и имя (из карточки клиента).
     phoneKnown: !!ctx.phone,
-    clientName,
+    clientName: clientGivenName,
     catalogBlock,
     activeOffers,
   });

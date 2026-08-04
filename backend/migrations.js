@@ -1140,6 +1140,30 @@ async function runMigrations(client) {
         msg_ts DESC)
   `).catch(() => {});
 
+  // Кто автор исходящего сообщения: 'agent' (Мила), 'system' (автоуведомление,
+  // касание «Заботы»), 'operator' (живой администратор), NULL — сообщения до
+  // введения журнала. Эхо Chatpush одинаково для всех, поэтому автора мы
+  // проставляем сами по журналу outgoing_authored (services/outgoing-authorship).
+  await client.query(`
+    ALTER TABLE chatpush_messages ADD COLUMN IF NOT EXISTS authored_by VARCHAR(16)
+  `).catch(() => {});
+
+  // Журнал СВОИХ отправок: текст хэшем (без PII), чтобы опознать собственное эхо.
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS outgoing_authored (
+      id SERIAL PRIMARY KEY,
+      salon_id INTEGER REFERENCES salons(id) ON DELETE CASCADE,
+      dialog_key VARCHAR(120),
+      text_hash CHAR(64) NOT NULL,
+      author VARCHAR(16) NOT NULL,
+      created_at TIMESTAMP DEFAULT NOW()
+    )
+  `).catch(() => {});
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS idx_outgoing_authored_lookup
+      ON outgoing_authored (salon_id, text_hash, id DESC)
+  `).catch(() => {});
+
   // agent_settings — настройки ИИ-агента по салону (вкл/выкл + режим допуска).
   await client.query(`
     CREATE TABLE IF NOT EXISTS agent_settings (

@@ -6,7 +6,8 @@
 // ============================================================
 const { db } = require('../db');
 const { ycGetServiceCatalog } = require('./yclients');
-const { normalizePhoneKey, decideGate, parseHhMm, nowMskMinutes } = require('./agent-gate');
+const { normalizePhoneKey, decideGate, parseHhMm, nowMskMinutes,
+        minutesSinceWindowStart } = require('./agent-gate');
 
 const DEFAULTS = {
   enabled: false, mode: 'all',
@@ -103,13 +104,20 @@ async function isAllowed(salonId, phone) {
   const rules = await listNumberRules(salonId, null);
   const allow = rules.filter(r => r.rule_type === 'allow').map(r => r.phone);
   const block = rules.filter(r => r.rule_type === 'block').map(r => r.phone);
-  return decideGate({
-    enabled: true, mode: settings.mode, allow, block, phone,
+  const nowMinutes = nowMskMinutes();
+  const window = {
     scheduleEnabled: settings.scheduleEnabled,
     scheduleStart: settings.scheduleStart,
     scheduleEnd: settings.scheduleEnd,
-    nowMinutes: nowMskMinutes(),
-  });
+    nowMinutes,
+  };
+  return {
+    ...decideGate({ enabled: true, mode: settings.mode, allow, block, phone, ...window }),
+    // Сколько минут назад открылось окно расписания (null — расписание выключено
+    // или мы вне окна). Диспетчер снимает по нему протухшую паузу «отвечал
+    // администратор» — считаем здесь, чтобы не читать настройки салона дважды.
+    minutesSinceWindowStart: minutesSinceWindowStart(window),
+  };
 }
 
 // ── Фильтр услуг агента ─────────────────────────────────────

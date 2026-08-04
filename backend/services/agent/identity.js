@@ -2,6 +2,8 @@
 
 const { db } = require('../../db');
 const { normalizePhoneKey } = require('../agent-gate');
+const { resolveGivenName } = require('../../utils/person-name');
+const salonNames = require('../../utils/salon-names');
 
 // ── Идентификация клиента по номеру из вебхука. ──
 // Для каналов, которые присылают телефон (WhatsApp, номерной Telegram/tdlib),
@@ -17,11 +19,33 @@ async function resolveClient(salonId, rawPhone) {
   // идентифицируем только по полному номеру (10+ цифр).
   if (!salonId || !phone || phone.length < 10) return null;
   const row = await db.oneOrNone(
-    `SELECT id, name, phone FROM clients
+    `SELECT id, name, phone, yclients_data FROM clients
       WHERE salon_id = $1 AND phone LIKE '%' || $2
       LIMIT 1`,
     [salonId, phone]);
-  return row ? { id: row.id, name: row.name, phone: row.phone } : null;
+  if (!row) return null;
+  // name — ФИО целиком («Вихарева Мария Андреевна»), для обращения не годится:
+  // инцидент 2026-08-04, Мила написала пациентке «Мария Андреевна, …». В чат
+  // уходит только givenName (одно личное имя) либо ничего — см. utils/person-name.
+  // Разбор не имеет права уронить ход: без имени бот просто спросит, как обращаться.
+  let givenName = null;
+  try {
+    givenName = resolveGivenName(nameSource(row), { dictionary: await salonNames.load(salonId) });
+  } catch (e) { givenName = null; }
+  return { id: row.id, name: row.name, givenName, phone: row.phone };
+}
+
+// Раздельные поля YClients точнее склеенного ФИО (в них видно, где имя, а где
+// фамилия), но заполнены меньше чем у 11% карточек — иначе разбираем строку.
+function nameSource(row) {
+  const yc = row.yclients_data && typeof row.yclients_data === 'object' ? row.yclients_data : {};
+  if (yc.name || yc.surname || yc.patronymic || yc.display_name) {
+    return {
+      name: yc.name, surname: yc.surname, patronymic: yc.patronymic,
+      display_name: yc.display_name || row.name,
+    };
+  }
+  return row.name;
 }
 
 // YClients client_id пациента по номеру. Основной источник — clients.yclients_client_id

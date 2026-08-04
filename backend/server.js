@@ -202,6 +202,13 @@ cron.schedule('30 * * * *', async () => {
   } catch (e) { cronLogger.error(`Segments cron: ${e.message}`); }
 });
 
+// Журнал авторства исходящих (по нему вебхук отличает эхо наших отправок от
+// сообщения, набранного администратором вручную) нужен ровно до прихода эха —
+// старые строки чистим раз в сутки.
+cron.schedule('40 4 * * *', () => {
+  require('./services/outgoing-authorship').cleanup();
+});
+
 // Patient photo cases: периодически добиваем S3-удаления, которые не дошли в основном потоке.
 cron.schedule('17 3 * * *', async () => {
   try {

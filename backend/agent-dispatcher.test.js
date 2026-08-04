@@ -12,6 +12,9 @@ function deps(overrides = {}) {
     settings: { isAllowed: jest.fn(async () => ({ allow: true, reason: 'ok' })) },
     orchestrator: { runDialog: jest.fn(async () => ({ replies: ['Здравствуйте!'], escalated: false })) },
     send: jest.fn(async () => {}),
+    // Журнал авторства ходит в БД — в юнит-тесте подменяем (иначе pg тянет
+    // реальное соединение и падает после teardown).
+    authorship: { remember: jest.fn() },
     escalate: jest.fn(async () => ({ escalated: true })),
     ...overrides,
   };
@@ -325,4 +328,39 @@ test('гейт упал → страховочное сообщение НЕ ш�
   await expect(dispatcher.process(1, 'k', meta, d)).resolves.toBeUndefined();
   expect(d.send).not.toHaveBeenCalled();
   expect(d.escalate).not.toHaveBeenCalled();
+});
+
+// Пауза «отвечал администратор» снимается на ОТКРЫТИИ окна расписания. Без
+// этого красный диалог не вернулся бы боту никогда: на проде админы отвечают
+// из приложения Chatpush, и за неделю так помечается ≈24% диалогов.
+describe('снятие паузы оператора на открытии окна', () => {
+  const withWindow = (minutes, dialogState) => deps({
+    settings: { isAllowed: jest.fn(async () => ({ allow: true, reason: 'ok', minutesSinceWindowStart: minutes })) },
+    dialogState,
+  });
+
+  test('внутри окна — пробуем снять паузу, дальше обычный прогон', async () => {
+    const dialogState = { resumeOperatorPauseIfWindowReopened: jest.fn(async () => true) };
+    const d = withWindow(180, dialogState);
+    dispatcher.enqueue(1, 'k', meta, d);
+    await jest.advanceTimersByTimeAsync(1000);
+    expect(dialogState.resumeOperatorPauseIfWindowReopened).toHaveBeenCalledWith(1, 'k', 180);
+    expect(d.orchestrator.runDialog).toHaveBeenCalledTimes(1);
+  });
+
+  test('вне окна (null) — паузу не трогаем', async () => {
+    const dialogState = { resumeOperatorPauseIfWindowReopened: jest.fn(async () => false) };
+    const d = withWindow(null, dialogState);
+    dispatcher.enqueue(1, 'k', meta, d);
+    await jest.advanceTimersByTimeAsync(1000);
+    expect(dialogState.resumeOperatorPauseIfWindowReopened).not.toHaveBeenCalled();
+  });
+
+  test('сбой снятия паузы не роняет ход', async () => {
+    const dialogState = { resumeOperatorPauseIfWindowReopened: jest.fn(async () => { throw new Error('db down'); }) };
+    const d = withWindow(10, dialogState);
+    dispatcher.enqueue(1, 'k', meta, d);
+    await jest.advanceTimersByTimeAsync(1000);
+    expect(d.orchestrator.runDialog).toHaveBeenCalledTimes(1);
+  });
 });

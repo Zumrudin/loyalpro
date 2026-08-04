@@ -6,6 +6,8 @@ const chatpush = require('../chatpush');
 const orchestratorDefault = require('./orchestrator');
 const bookingEvents = require('./booking');
 const pendingReplies = require('./pending-replies');
+const dialogStateDefault = require('./dialog-state');
+const authorship = require('../outgoing-authorship');
 const escalateTool = require('./tools/escalate-to-operator');
 const adminHours = require('./admin-hours');
 const groupChat = require('./group-chat');
@@ -68,9 +70,15 @@ async function process(salonId, dialogKey, meta, opts = {}) {
   // прогон не видит в транскрипте только что отправленный ответ — модель отвечает
   // на серию заново, с повторным приветствием (инцидент 2026-07-31).
   const rawSend = opts.send || defaultSend;
+  // Журнал авторства: по нему вебхук отличит эхо ЭТОЙ реплики от сообщения,
+  // которое администратор набрал руками в приложении Chatpush (там нужна пауза).
+  const authorLog = opts.authorship || authorship;
   const send = async (m, text) => {
     const out = await rawSend(m, text);
     pendingReplies.remember(salonId, dialogKey, text);
+    // Без await: доставка следующей реплики не должна ждать служебной записи, а
+    // эхо приходит секундами-минутами позже вставки. remember сам не бросает.
+    authorLog.remember(salonId, dialogKey, text, 'agent');
     return out;
   };
   const escalate = opts.escalate || defaultEscalate;
@@ -86,6 +94,20 @@ async function process(salonId, dialogKey, meta, opts = {}) {
     return;
   }
   if (!gate.allow) { logger.info(`gate skip ${dialogKey} (${gate.reason})`); return; }
+
+  // Пауза «отвечал администратор» протухает на ОТКРЫТИИ окна расписания: если её
+  // поставили до начала текущего окна, диалог возвращается боту. Настоящую
+  // эскалацию Милы это не трогает — только operator_reply. Сбой не имеет права
+  // ронять ход: не сняли паузу → оркестратор просто промолчит, как раньше.
+  if (typeof gate.minutesSinceWindowStart === 'number') {
+    try {
+      const resumed = await (opts.dialogState || dialogStateDefault)
+        .resumeOperatorPauseIfWindowReopened(salonId, dialogKey, gate.minutesSinceWindowStart);
+      if (resumed) logger.info(`dialog ${dialogKey}: пауза оператора снята — открылось окно расписания`);
+    } catch (e) {
+      logger.warn(`dialog ${dialogKey}: не снять паузу оператора (${e.message})`);
+    }
+  }
 
   try {
     if (running.has(k)) { rerun.add(k); return; }

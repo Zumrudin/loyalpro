@@ -22,6 +22,8 @@ const { getProvider } = require('../agent/providers');
 const history = require('../agent/history');
 const pendingReplies = require('../agent/pending-replies');
 const replyGuard = require('../agent/reply-guard');
+const salonNames = require('../../utils/salon-names');
+const authorship = require('../outgoing-authorship');
 const notifications = require('../notifications');
 const chatEvents = require('../chat-events');
 const context = require('./context');
@@ -74,7 +76,10 @@ const defaultDeps = {
   hardViolations: replyGuard.hardViolations,
   sendMessage: (payload) => chatpush.sendMessage(config.CHATPUSH.instanceToken, payload),
   lastIncomingChannel: notifications.lastIncomingChannel,
-  rememberPending: (salonId, key, text) => pendingReplies.remember(salonId, key, text),
+  rememberPending: async (salonId, key, text) => {
+    pendingReplies.remember(salonId, key, text);
+    await authorship.remember(salonId, key, text, 'system');
+  },
   // Тот же механизм, что services/agent/tools/escalate-to-operator.js:
   // status='escalated' + emitAgentStatus (красный чат сверху списка немедленно).
   // Upsert, а не UPDATE: клиент мог никогда не писать агенту — строки
@@ -265,6 +270,7 @@ async function processOne(row, deps = defaultDeps) {
     }));
     const { system, user } = buildCarePrompt({
       salonName: row.salon_name, clientName: row.client_name,
+      nameDictionary: await salonNames.load(sid).catch(() => null),
       touch: { title: row.touch_title, intent_text: row.intent_text, text_mode: row.text_mode },
       enrollment: { staff_name: row.staff_name, visit_at: row.visit_at, services: row.visit_services },
       transcript: trList, futureBookings,

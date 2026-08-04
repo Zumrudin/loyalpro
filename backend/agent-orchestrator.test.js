@@ -222,7 +222,7 @@ describe('runDialog', () => {
   });
 
   test('клиент найден по номеру → имя идёт в промпт и в toolCtx (create_booking подставит номер сам)', async () => {
-    const deps = makeDeps({ identity: { resolveClient: jest.fn(async () => ({ id: 5, name: 'Анна', phone: '+79001112233' })) } });
+    const deps = makeDeps({ identity: { resolveClient: jest.fn(async () => ({ id: 5, name: 'Анна', givenName: 'Анна', phone: '+79001112233' })) } });
     deps.provider.createMessage
       .mockResolvedValueOnce(toolResp('get_available_slots', { staff_yc_id: 1, service_yc_id: 1, date: '2026-07-20' }))
       .mockResolvedValueOnce(textResp('Свободно 10:00. Записать?'));
@@ -233,6 +233,34 @@ describe('runDialog', () => {
     expect(sentSystem).toContain('Анна');
     expect(deps.registry.handlers.get_available_slots)
       .toHaveBeenCalledWith(1, expect.anything(), expect.objectContaining({ clientName: 'Анна', clientPhone: '79001112233' }));
+  });
+
+  test('в промпт уходит только ЛИЧНОЕ имя, в запись — ФИО целиком', async () => {
+    // Инцидент 2026-08-04: пациентке «Вихарева Мария Андреевна» Мила написала
+    // «Мария Андреевна, …» — в промпт уходило ФИО из карточки целиком.
+    const deps = makeDeps({ identity: { resolveClient: jest.fn(async () => (
+      { id: 5, name: 'Вихарева Мария Андреевна', givenName: 'Мария', phone: '+79133850883' })) } });
+    deps.provider.createMessage
+      .mockResolvedValueOnce(toolResp('get_available_slots', { staff_yc_id: 1, service_yc_id: 1, date: '2026-07-20' }))
+      .mockResolvedValueOnce(textResp('Свободно 10:00. Записать?'));
+    await orchestrator.runDialog(1, 'k', { deps, ctx: { phone: '79133850883' } });
+    const sentSystem = deps.provider.createMessage.mock.calls[0][0].system;
+    expect(sentSystem).toContain('Мария');
+    expect(sentSystem).not.toContain('Андреевна');
+    expect(sentSystem).not.toContain('Вихарева');
+    // В карточку записи YClients уходит полное ФИО — там оно и нужно.
+    expect(deps.registry.handlers.get_available_slots)
+      .toHaveBeenCalledWith(1, expect.anything(),
+        expect.objectContaining({ clientName: 'Вихарева Мария Андреевна' }));
+  });
+
+  test('имя из карточки не распознано (телефон вместо имени) → ветка «имени не знаем»', async () => {
+    const deps = makeDeps({ identity: { resolveClient: jest.fn(async () => (
+      { id: 6, name: '79265303607', givenName: null, phone: '+79265303607' })) } });
+    deps.provider.createMessage.mockResolvedValueOnce(textResp('Здравствуйте!'));
+    await orchestrator.runDialog(1, 'k', { deps, ctx: { phone: '79265303607' } });
+    expect(deps.provider.createMessage.mock.calls[0][0].system)
+      .toMatch(/как могу к вам обращаться/i);
   });
 
   test('резолвинг клиента упал (нет БД) → ход не падает, работаем без имени', async () => {

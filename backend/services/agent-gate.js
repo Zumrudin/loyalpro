@@ -42,6 +42,22 @@ function nowMskMinutes(date = new Date()) {
   return h * 60 + m;
 }
 
+// Сколько минут назад ОТКРЫЛОСЬ текущее окно расписания. null — расписание
+// выключено, границы битые или сейчас вне окна.
+// Нужно для снятия паузы «отвечал администратор»: пауза, поставленная ДО
+// открытия текущего окна, считается протухшей (ночью админов нет — отвечать
+// всё равно некому, а иначе диалог остаётся красным навсегда).
+// Возвращаем именно МИНУТЫ, а не абсолютный момент: сравнение делает SQL от
+// своего NOW(), и вопрос часового пояса `timestamp without time zone` не встаёт.
+function minutesSinceWindowStart({ scheduleEnabled, scheduleStart, scheduleEnd, nowMinutes }) {
+  if (!scheduleEnabled) return null;
+  const startMin = parseHhMm(scheduleStart);
+  const endMin = parseHhMm(scheduleEnd);
+  if (startMin === null || endMin === null || typeof nowMinutes !== 'number') return null;
+  if (!isWithinWindow(nowMinutes, startMin, endMin)) return null;
+  return (nowMinutes - startMin + 1440) % 1440;
+}
+
 // Решение допуска. Чистая функция. Порядок: enabled → чёрный список →
 // расписание (сужает режим до whitelist вне окна) → режим/белый список.
 // @param {boolean} enabled
@@ -82,4 +98,5 @@ function decideGate({
 
 module.exports = {
   normalizePhoneKey, decideGate, parseHhMm, isWithinWindow, nowMskMinutes,
+  minutesSinceWindowStart,
 };
