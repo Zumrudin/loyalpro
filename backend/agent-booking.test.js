@@ -9,11 +9,13 @@ jest.mock('./db', () => {
   };
 });
 jest.mock('./services/yclients-booking', () => ({ ycCreateRecord: jest.fn() }));
+jest.mock('./services/yclients-records', () => ({ ycGetRecord: jest.fn() }));
 
 const dbMod = require('./db');
 const { db } = dbMod;
 const client = dbMod.__client;
 const { ycCreateRecord } = require('./services/yclients-booking');
+const { ycGetRecord } = require('./services/yclients-records');
 const booking = require('./services/agent/booking');
 const createBookingTool = require('./services/agent/tools/create-booking');
 const escalate = require('./services/agent/tools/escalate-to-operator');
@@ -31,6 +33,8 @@ function programClient({ prior = null, salon = { id: 1, yclients_company_id: 100
 beforeEach(() => {
   jest.clearAllMocks();
   client.query.mockImplementation(async () => ({ rows: [] }));
+  // По умолчанию помеченная ключом запись ЖИВА — идемпотентность работает как раньше.
+  ycGetRecord.mockResolvedValue({ id: 999, attendance: 0 });
 });
 
 describe('booking.buildIdempotencyKey', () => {
@@ -94,6 +98,64 @@ describe('createBookingRecord', () => {
     expect(out.record_id).toBe(999);
     expect(ycCreateRecord).not.toHaveBeenCalled();
     expect(client.release).toHaveBeenCalled();
+  });
+
+  // ── Протухший идемпотентный ключ ────────────────────────────────────────
+  // Ключ (диалог+услуга+мастер+время+телефон) жил вечно и о судьбе брони не знал.
+  // Инцидент 2026-08-04: тестовую запись удалили в YClients, и повтор записи на
+  // тот же слот вернул бы duplicate:true с МЁРТВЫМ record_id — Мила отчиталась бы
+  // «вы записаны», а записи бы не появилось. То же ломало штатное «запись
+  // отменили, надо вернуть в работу»: cancel/reschedule ключ не гасят.
+  describe('протухший ключ (запись удалили или отменили)', () => {
+    const prior = { id: 5, payload: { record_id: 999 } };
+
+    test('удалённая в YClients (deleted:true) → ключ гасится, запись создаётся заново', async () => {
+      programClient({ prior });
+      // YClients НЕ отдаёт 404 на удалённую запись — возвращает тело с deleted:true.
+      ycGetRecord.mockResolvedValue({ id: 999, attendance: 0, deleted: true });
+      ycCreateRecord.mockResolvedValue({ id: 1001 });
+
+      const out = await booking.createBookingRecord(1, draft);
+      expect(out).toEqual({ created: true, record_id: 1001 });
+      expect(ycCreateRecord).toHaveBeenCalledTimes(1);
+      // Строку журнала не удаляем (форензика) — гасим только ключ.
+      const sqls = client.query.mock.calls.map(c => c[0]);
+      expect(sqls.some(s => /UPDATE agent_events SET idempotency_key = NULL/i.test(s))).toBe(true);
+      expect(sqls.some(s => /DELETE FROM agent_events/i.test(s))).toBe(false);
+    });
+
+    test('отменённая агентом (attendance=-1) → тоже перезаписываем', async () => {
+      programClient({ prior });
+      ycGetRecord.mockResolvedValue({ id: 999, attendance: -1 });
+      ycCreateRecord.mockResolvedValue({ id: 1002 });
+      expect(await booking.createBookingRecord(1, draft)).toEqual({ created: true, record_id: 1002 });
+    });
+
+    // Fail-safe в неизвестность: ошибиться в сторону «уже записан» дешевле, чем
+    // создать пациенту вторую бронь на то же время.
+    test('YClients недоступен → ключ считается действующим (дубликат, как раньше)', async () => {
+      programClient({ prior });
+      ycGetRecord.mockRejectedValue(new Error('ETIMEDOUT'));
+      const out = await booking.createBookingRecord(1, draft);
+      expect(out).toEqual({ created: false, duplicate: true, record_id: 999 });
+      expect(ycCreateRecord).not.toHaveBeenCalled();
+    });
+
+    test('404 однозначен → перезаписываем', async () => {
+      programClient({ prior });
+      const e = new Error('Not found'); e.status = 404;
+      ycGetRecord.mockRejectedValue(e);
+      ycCreateRecord.mockResolvedValue({ id: 1003 });
+      expect((await booking.createBookingRecord(1, draft)).created).toBe(true);
+    });
+
+    test('старая строка журнала без record_id → проверять нечего, остаёмся дубликатом', async () => {
+      programClient({ prior: { id: 5, payload: {} } });
+      const out = await booking.createBookingRecord(1, draft);
+      expect(out.duplicate).toBe(true);
+      expect(ycGetRecord).not.toHaveBeenCalled();
+      expect(ycCreateRecord).not.toHaveBeenCalled();
+    });
   });
 
   test('ошибка YClients → created:false, ROLLBACK, без idempotency-события', async () => {

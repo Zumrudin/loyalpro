@@ -12,6 +12,8 @@ const replyGuard = require('./reply-guard');
 const adminHours = require('./admin-hours');
 const toolEventsDefault = require('./tool-events');
 const toolMemoryDefault = require('./tool-memory');
+const listBookingsDefault = require('./tools/list-client-bookings');
+const bookingsBlock = require('./bookings-block');
 const { buildSystemPrompt } = require('./system-prompt');
 const { createLogger } = require('../../logger');
 const logger = createLogger('AgentOrchestrator');
@@ -251,6 +253,31 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
     }
   }
 
+  // Живые записи пациента из CRM → самый хвост промпта. Единственный источник,
+  // который знает про отмену и удаление: и транскрипт, и журнал инструментов —
+  // это ИСТОРИЯ (инцидент 2026-08-04: запись удалили в 23:35, в 23:40 Мила без
+  // единого вызова инструмента заявила «вы уже записаны на завтра, 12:00»).
+  // null = сверки не было (нет номера, сбой YClients) → блока нет, как раньше;
+  // ПУСТОЙ массив = сверка прошла, записей нет — это утверждение, а не молчание.
+  let liveBookings = null;
+  if (ctx.phone) {
+    try {
+      const res = await (d.listBookings || listBookingsDefault)
+        .run(salonId, {}, { clientPhone: ctx.phone, nowMs });
+      // reason no_yclients / error — «не знаем», а не «записей нет»: молчим.
+      if (res && Array.isArray(res.bookings) && !res.error && res.reason !== 'no_yclients') {
+        const rendered = bookingsBlock.renderBookings(res.bookings, { nowMs });
+        liveBookings = rendered.lines;
+        if (rendered.dropped > 0) {
+          logger.info(`dialog ${dialogKey}: записей пациента ${rendered.lines.length} из ${rendered.lines.length + rendered.dropped} (остальные срезаны потолком блока)`);
+        }
+      }
+    } catch (e) {
+      logger.warn(`dialog ${dialogKey}: не сверить записи пациента с CRM (${e.message}) — промпт без блока записей`);
+      liveBookings = null;
+    }
+  }
+
   const system = buildSystemPrompt({
     salonName: opts.salonName,
     workingHours: opts.workingHours,
@@ -270,6 +297,7 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
     catalogBlock,
     activeOffers,
     toolMemory: toolMemoryLines,
+    liveBookings,
   });
   // nowMs — чтобы инструменты слотов отрезали уже прошедшее время «сегодня».
   // clientPhone/clientName — детерминированный фолбэк для create_booking основного

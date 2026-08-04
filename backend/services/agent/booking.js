@@ -3,6 +3,11 @@
 const crypto = require('crypto');
 const { pool } = require('../../db');
 const { ycCreateRecord } = require('../yclients-booking');
+const { ycGetRecord } = require('../yclients-records');
+const { isRecordAlive } = require('./record-liveness');
+const { createLogger } = require('../../logger');
+
+const logger = createLogger('AgentBooking');
 
 // ── Исполнитель создания записи. Единственное необратимое действие агента. ──
 // Всё под ОДНИМ соединением в транзакции: pg_advisory_xact_lock(salon, dialog)
@@ -47,6 +52,34 @@ async function logBookingFailure(salonId, draft, reason) {
   } catch (_) { /* лог не должен ломать ответ агенту */ }
 }
 
+// Жива ли ещё бронь, помеченная идемпотентным ключом.
+//   true  — существует, ключ работает как раньше (дубль-вебхук/ретрай);
+//   false — удалена или отменена, ключ протух;
+//   null  — выяснить не удалось (нет record_id в старой строке, сбой YClients).
+//
+// ЗАЧЕМ. Ключ (диалог+услуга+мастер+время+телефон) жил вечно и о судьбе записи
+// ничего не знал. Инцидент 2026-08-04: тестовую запись удалили в YClients, и
+// повтор записи на тот же слот вернул бы duplicate:true с МЁРТВЫМ record_id —
+// Мила отчиталась бы «вы записаны», а записи бы не появилось. Это же ломало
+// штатный «запись отменили, надо вернуть в работу»: отмена и перенос ключ не гасят,
+// а правку в CRM руками мы не видим вовсе.
+//
+// FAIL-SAFE в неизвестность: при сбое сети возвращаем null → вызывающий код
+// оставляет прежнее поведение (дубликат). Ошибиться в сторону «уже записан»
+// дешевле, чем создать пациенту вторую бронь на то же время.
+async function priorBookingAlive(salon, recordId) {
+  if (!recordId) return null;
+  try {
+    return isRecordAlive(await ycGetRecord(salon, recordId));
+  } catch (e) {
+    // Удалённую запись YClients отдаёт телом с deleted:true, а не 404 (см.
+    // record-liveness.js) — но если 404 всё-таки пришёл, он однозначен.
+    if (e && e.status === 404) return false;
+    logger.warn(`не проверить запись ${recordId} (${e.message}) — считаем ключ действующим`);
+    return null;
+  }
+}
+
 async function createBookingRecord(salonId, draft) {
   const {
     dialogKey, staffYcId, serviceYcId, datetime, seanceLength,
@@ -60,19 +93,30 @@ async function createBookingRecord(salonId, draft) {
     // Лок на диалог держится до конца транзакции (COMMIT/ROLLBACK).
     await client.query('SELECT pg_advisory_xact_lock($1, $2)', [salonId, lockKey(dialogKey)]);
 
+    const salon = (await client.query(`SELECT * FROM salons WHERE id=$1`, [salonId])).rows[0];
+    if (!salon || !salon.yclients_company_id) {
+      await client.query('COMMIT');
+      return { created: false, error: 'YClients не подключён для салона.' };
+    }
+
     // Уже создавали эту бронь? (идемпотентность против дубль-вебхука/ретрая)
     const prior = (await client.query(
       `SELECT id, payload FROM agent_events WHERE salon_id = $1 AND idempotency_key = $2 LIMIT 1`,
       [salonId, idem])).rows[0];
     if (prior) {
-      await client.query('COMMIT');
-      return { created: false, duplicate: true, record_id: prior.payload && prior.payload.record_id };
-    }
-
-    const salon = (await client.query(`SELECT * FROM salons WHERE id=$1`, [salonId])).rows[0];
-    if (!salon || !salon.yclients_company_id) {
-      await client.query('COMMIT');
-      return { created: false, error: 'YClients не подключён для салона.' };
+      const priorRecordId = prior.payload && prior.payload.record_id;
+      // Ключ действует, только пока жива помеченная им запись. Мёртвая (удалили
+      // в CRM, отменили) означает, что пациента надо записать ЗАНОВО, а не
+      // отчитаться о несуществующей брони.
+      const alive = await priorBookingAlive(salon, priorRecordId);
+      if (alive !== false) {
+        await client.query('COMMIT');
+        return { created: false, duplicate: true, record_id: priorRecordId };
+      }
+      // Строку журнала не удаляем — форензика ценнее: гасим только ключ, и
+      // частичный UNIQUE (salon_id, idempotency_key) снова свободен для этого слота.
+      await client.query(`UPDATE agent_events SET idempotency_key = NULL WHERE id = $1`, [prior.id]);
+      logger.info(`диалог ${dialogKey}: запись ${priorRecordId} удалена/отменена в YClients — ключ брони погашен, записываю заново`);
     }
 
     let record;

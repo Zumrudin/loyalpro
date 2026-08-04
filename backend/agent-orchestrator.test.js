@@ -63,6 +63,12 @@ function makeDeps(overrides = {}) {
       renderMemory: jest.fn(() => ({ lines: [], dropped: 0 })),
       ...(overrides.toolMemory || {}),
     },
+    // Сверка записей пациента с CRM (только при известном номере) ходит в
+    // YClients — во всех тестах застабана, иначе ход полез бы в сеть и в БД.
+    listBookings: {
+      run: jest.fn(async () => ({ bookings: [] })),
+      ...(overrides.listBookings || {}),
+    },
   };
 }
 
@@ -908,5 +914,65 @@ describe('журнал инструментов (tool-events/tool-memory)', () =
       'create_booking', expect.objectContaining({ staff_yc_id: 1 }), { created: true, record_id: 999 }, false);
     expect(te.buffers[0].flush).toHaveBeenCalledWith(null);
     expect(out.turnId).toBe('turn-1');
+  });
+});
+
+// ── Сверка записей пациента с CRM ───────────────────────────────────────────
+// Инцидент 2026-08-04 (79200255591): запись оформлена в 23:06, удалена в CRM в
+// 23:35, а в 23:40 Мила без единого вызова инструмента заявила «вы уже записаны
+// на завтра, 12:00» — и транскрипт, и журнал действий это ИСТОРИЯ, об отмене они
+// не знают. Оркестратор теперь сверяется с CRM сам, каждый ход.
+describe('блок актуальных записей в промпте', () => {
+  const HEAD = 'АКТУАЛЬНЫЕ ЗАПИСИ ПАЦИЕНТА (сверено с CRM';
+  const NOW = Date.parse('2026-08-04T23:40:00+03:00');
+  const REC = {
+    record_id: 1886730339, datetime: '2026-08-05T12:00:00+03:00',
+    services: ['Лазерное удаление сосудов'], staff_name: 'Гатауллина Юлия',
+  };
+  const sysOf = (deps) => deps.provider.createMessage.mock.calls[0][0].system;
+
+  async function run(overrides, ctx = { phone: '79200255591' }) {
+    const deps = makeDeps(overrides);
+    deps.provider.createMessage.mockResolvedValueOnce(textResp('Здравствуйте!'));
+    await orchestrator.runDialog(1, 'k', { deps, ctx, nowMs: NOW });
+    return deps;
+  }
+
+  test('записи пациента попали в промпт', async () => {
+    const deps = await run({ listBookings: { run: jest.fn(async () => ({ bookings: [REC] })) } });
+    expect(sysOf(deps)).toContain(HEAD);
+    expect(sysOf(deps)).toContain('05.08 (ср) 12:00 — Лазерное удаление сосудов, мастер Гатауллина Юлия [record_id 1886730339]');
+    expect(deps.listBookings.run).toHaveBeenCalledWith(1, {}, { clientPhone: '79200255591', nowMs: NOW });
+  });
+
+  // Главное: пустой результат сверки — это УТВЕРЖДЕНИЕ «записей нет», которое
+  // перебивает журнал, а не отсутствие информации.
+  test('записей нет → блок всё равно есть и говорит «НЕТ»', async () => {
+    const deps = await run({ listBookings: { run: jest.fn(async () => ({ bookings: [] })) } });
+    expect(sysOf(deps)).toContain(HEAD);
+    expect(sysOf(deps)).toMatch(/Будущих записей у пациента сейчас НЕТ/);
+  });
+
+  test('канал без номера → сверки нет, блока нет', async () => {
+    const deps = await run({}, {});
+    expect(sysOf(deps)).not.toContain(HEAD);
+    expect(deps.listBookings.run).not.toHaveBeenCalled();
+  });
+
+  test('сбой YClients → fail-open: ход идёт, блока нет (а не «записей нет»)', async () => {
+    for (const stub of [
+      jest.fn(async () => { throw new Error('ETIMEDOUT'); }),
+      jest.fn(async () => ({ bookings: [], error: 'Не удалось получить записи: 502' })),
+      jest.fn(async () => ({ bookings: [], reason: 'no_yclients' })),
+    ]) {
+      const deps = await run({ listBookings: { run: stub } });
+      expect(sysOf(deps)).not.toContain(HEAD);
+    }
+  });
+
+  // client_not_found — это карточки в YClients нет, то есть записей и правда нет.
+  test('клиент не найден в CRM → это честное «записей нет»', async () => {
+    const deps = await run({ listBookings: { run: jest.fn(async () => ({ bookings: [], reason: 'client_not_found' })) } });
+    expect(sysOf(deps)).toMatch(/Будущих записей у пациента сейчас НЕТ/);
   });
 });

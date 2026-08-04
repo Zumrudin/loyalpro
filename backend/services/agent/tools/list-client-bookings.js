@@ -3,6 +3,7 @@
 const { db } = require('../../../db');
 const identity = require('../identity');
 const { ycGetClientRecords } = require('../../yclients-records');
+const { isRecordAlive } = require('../record-liveness');
 
 const schema = {
   name: 'list_client_bookings',
@@ -40,7 +41,7 @@ async function run(salonId, _input, ctx = {}) {
   catch (e) { return { bookings: [], error: `Не удалось получить записи: ${e.message}` }; }
 
   const bookings = recs
-    .filter(r => Number(r.attendance) !== -1 && !r.deleted)
+    .filter(isRecordAlive)
     .filter(r => {
       const t = Date.parse(r.datetime || r.date || '');
       return !Number.isFinite(t) || t >= nowMs;   // прошлое отбрасываем
