@@ -88,6 +88,23 @@ async function process(salonId, dialogKey, meta, opts = {}) {
   const escalate = opts.escalate || defaultEscalate;
   const priorBookingFailure = opts.priorBookingFailure || defaultPriorBookingFailure;
 
+  // Вердикт для журнала инструментов: видел ли пациент реплики МОДЕЛИ этого хода.
+  // turnId известен только со штатного результата runDialog (ранние выходы и
+  // падение прогона его не отдают); пишет вердикт finally ниже — в том числе
+  // когда отправка упала на середине серии.
+  let turnId = null;
+  let deliveredReplies = false;
+  // ЕДИНАЯ точка доставки реплик модели. ЗАЧЕМ хелпер, а не цикл по месту: веток
+  // отправки в process() уже три, и файл обрастает новой примерно после каждого
+  // инцидента. Забытый рядом с четвёртым циклом флаг дал бы МОЛЧАЛИВЫЙ false —
+  // Мила повторила бы пациенту уже сказанное (включая приветствие), то есть ровно
+  // тот инцидент, ради которого журнал и заводится. Ни компилятор, ни тесты этого
+  // не поймают, поэтому флаг выставляет сама естественная запись отправки.
+  const deliverReplies = async (list) => {
+    for (const text of list) await send(meta, text);
+    deliveredReplies = list.length > 0;
+  };
+
   // Гейт — ВНЕ общего try: его падение fail-closed (молчим). Мы не знаем, разрешён
   // ли номер, а страховочный ответ из catch написал бы тому, кому писать нельзя.
   let gate;
@@ -116,12 +133,6 @@ async function process(salonId, dialogKey, meta, opts = {}) {
   try {
     if (running.has(k)) { rerun.add(k); return; }
     running.add(k);
-    // Вердикт для журнала инструментов: видел ли пациент реплики МОДЕЛИ этого
-    // хода. Живёт снаружи try — его пишет finally, в том числе когда отправка
-    // упала на середине серии. turnId известен только со штатного результата
-    // runDialog (ранние выходы и падение прогона его не отдают).
-    let turnId = null;
-    let deliveredReplies = false;
     try {
       // Стоп-темы грузим здесь (у диспетчера уже есть settings), чтобы не тащить
       // зависимость от БД в оркестратор. Отсутствие метода в моке → пустой список.
@@ -155,8 +166,7 @@ async function process(salonId, dialogKey, meta, opts = {}) {
           && !(await priorBookingFailure(salonId, dialogKey));
         if (canRecover) {
           logger.info(`dialog ${dialogKey}: create_booking не удался, но бот переиграл (предложил другое время) — доставляю без перевода`);
-          for (const text of replies) await send(meta, text);
-          deliveredReplies = replies.length > 0;
+          await deliverReplies(replies);
         } else {
           logger.warn(`dialog ${dialogKey}: create_booking не удался, переигровки нет либо повторный провал — принудительный перевод на человека`);
           await handOverSilently(salonId, dialogKey, meta, send, escalate, 'create_booking не удался — запись не создана автоматически');
@@ -165,8 +175,9 @@ async function process(salonId, dialogKey, meta, opts = {}) {
         // Свежая эскалация: клиент ОБЯЗАН услышать про перевод на администратора.
         // Модель могла ответить по делу («Спасибо, что предупредили»), но забыть
         // объявить перевод — тогда добавляем стандартную фразу детерминированно.
-        for (const text of replies) await send(meta, text);
-        deliveredReplies = replies.length > 0;
+        await deliverReplies(replies);
+        // handoverText — фиксированная системная фраза, а не факт хода: она уходит
+        // ПОСЛЕ хелпера и на вердикт delivered намеренно не влияет.
         const announced = replies.some(t => /администратор/i.test(t));
         if (!announced) await send(meta, adminHours.handoverText(adminOffNow()));
       } else if (replies.length === 0) {
@@ -183,17 +194,18 @@ async function process(salonId, dialogKey, meta, opts = {}) {
         // не выбрасываются — подтверждение обязано дойти.
         logger.info(`dialog ${dialogKey}: новое сообщение до отправки — выбрасываю устаревший черновик, отвечу одним сообщением`);
       } else {
-        for (const text of replies) await send(meta, text);
-        deliveredReplies = replies.length > 0;
+        await deliverReplies(replies);
       }
     } finally {
       running.delete(k);
       // Вердикт журнала инструментов. Fire-and-forget (markDelivered сам глотает
       // сбои БД) — не критичный путь, ждать его доставка реплик не должна.
       // В finally, а не после цепочки if/else: упавшая на середине серии отправка
-      // уходит в общий catch, а вердикт нужен и там. Ветки без отправки реплик
-      // модели (rerun-черновик, falseSuccess, handOverSilently, молчание на
-      // alreadyEscalated) оставляют false: их факты пациенту не показаны.
+      // уходит в общий catch, а вердикт нужен и там. Ветки, где реплики модели не
+      // ушли, оставляют false — их факты пациенту не показаны: falseSuccess,
+      // bookingFailed без переигровки, ход без реплик (handOverSilently во всех
+      // трёх шлёт только страховочный текст), выброшенный rerun-черновик и
+      // молчание на alreadyEscalated.
       if (turnId) void toolEventsLog.markDelivered(turnId, deliveredReplies);
     }
     if (rerun.delete(k)) {
