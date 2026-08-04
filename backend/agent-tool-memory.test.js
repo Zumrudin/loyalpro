@@ -73,6 +73,47 @@ test('кап событий: write выживают, старые read срез�
   expect(lines.join('\n')).not.toMatch(/«q0»/);       // старейший read срезан
 });
 
+test('кап событий на границе: writes >= MAX_EVENTS вытесняет ВСЕ read (регресс slice(-0))', () => {
+  // reads.slice(-0) в JS эквивалентен reads.slice(0) — весь массив, а не пустой
+  // срез. При writes.length >= MAX_EVENTS бюджет на read равен нулю: без явной
+  // проверки нуля этот баг тихо возвращал бы все read-события и dropped=0.
+  function writesN(n) {
+    const arr = [];
+    for (let i = 0; i < n; i++) {
+      arr.push(ev({ tool: 'create_booking', input: { datetime: '2026-08-05T14:00:00+03:00' }, result: { record_id: i + 1 }, age_ms: (500 - i) * MIN }));
+    }
+    return arr;
+  }
+  function readsN(n) {
+    const arr = [];
+    for (let i = 0; i < n; i++) {
+      arr.push(ev({ tool: 'search_knowledge_base', input: { query: `r${i}` }, age_ms: (50 - i) * MIN }));
+    }
+    return arr;
+  }
+
+  // Ровно MAX_EVENTS (30) write — бюджет на read равен нулю.
+  {
+    const rows = [...writesN(30), ...readsN(10)];
+    const { lines, dropped } = renderMemory(rows, { nowMs: NOW });
+    expect(lines.length).toBe(30);
+    expect(lines.every(l => /record_id=/.test(l))).toBe(true);
+    expect(lines.join('\n')).not.toMatch(/база знаний/);
+    expect(dropped).toBe(10);
+  }
+
+  // Больше MAX_EVENTS (35) write — write не срезаются никогда, но read всё
+  // равно должны уйти целиком, а не просочиться через отрицательный ноль.
+  {
+    const rows = [...writesN(35), ...readsN(10)];
+    const { lines, dropped } = renderMemory(rows, { nowMs: NOW });
+    expect(lines.length).toBeLessThanOrEqual(35);
+    expect(lines.every(l => /record_id=/.test(l))).toBe(true);
+    expect(lines.join('\n')).not.toMatch(/база знаний/);
+    expect(dropped).toBe(10);
+  }
+});
+
 test('кап символов: длинный журнал усыхает, write остаются', () => {
   const rows = [ev({ tool: 'create_booking', input: { datetime: '2026-08-05T14:00:00+03:00' }, result: { record_id: 9 }, age_ms: 90 * MIN })];
   for (let i = 0; i < 29; i++) rows.push(ev({ tool: 'search_knowledge_base', input: { query: 'о'.repeat(200) }, age_ms: (80 - i) * MIN }));

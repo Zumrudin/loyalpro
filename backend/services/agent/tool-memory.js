@@ -188,10 +188,16 @@ function renderMemory(rows, opts = {}) {
   const visible = events.filter(e =>
     !e.isError && (e.delivered === true || WRITE_TOOLS.has(e.tool)));
 
-  // Кап по числу событий: write не срезаются никогда, read — старейшие первыми.
+  // Кап по числу событий: write не срезаются НИКОГДА (даже если их больше
+  // MAX_EVENTS — итог тогда осознанно превышает MAX_EVENTS, запись в YClients
+  // важнее лимита строк), read — старейшие первыми, в пределах оставшегося
+  // бюджета. readsBudget обязан быть проверен явно: `reads.slice(-0)` в JS
+  // эквивалентен slice(0) (весь массив), а НЕ пустому срезу — при
+  // writes.length >= MAX_EVENTS отрицательный ноль тихо возвращал бы все read.
   const writes = visible.filter(e => WRITE_TOOLS.has(e.tool));
   const reads = visible.filter(e => !WRITE_TOOLS.has(e.tool));
-  const keptReads = reads.slice(-Math.max(0, MAX_EVENTS - writes.length));
+  const readsBudget = Math.max(0, MAX_EVENTS - writes.length);
+  const keptReads = readsBudget ? reads.slice(-readsBudget) : [];
   const kept = writes.concat(keptReads).sort((a, b) => a.tsMs - b.tsMs);
 
   let items = kept.map(e => {
