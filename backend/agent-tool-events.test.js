@@ -80,6 +80,26 @@ describe('createBuffer / flush', () => {
     expect(a.turnId).not.toBe(b.turnId);
     expect(a.turnId).toMatch(/^[0-9a-f-]{36}$/);
   });
+
+  test('result=null (и input=null) кладёт в параметр настоящий null, а не строку "null"', async () => {
+    db.query.mockResolvedValue({ rows: [] });
+    const buf = toolEvents.createBuffer(1, 'k');
+    buf.push('t', null, null, false);
+    await buf.flush(null);
+    const [, params] = db.query.mock.calls[0];
+    expect(params[4]).toBeNull();   // input
+    expect(params[5]).toBeNull();   // result
+  });
+
+  test('событие после flush() теряется с логом, а не молча копится', async () => {
+    db.query.mockResolvedValue({ rows: [] });
+    const buf = toolEvents.createBuffer(1, 'k');
+    buf.push('first', {}, {}, false);
+    await buf.flush(null);
+    buf.push('after-flush', {}, {}, false);
+    expect(mockLogger.warn).toHaveBeenCalled();
+    expect(db.query).toHaveBeenCalledTimes(1); // второго INSERT не было
+  });
 });
 
 describe('markDelivered', () => {
@@ -113,6 +133,11 @@ describe('loadRecent', () => {
     expect(sql).toMatch(/ORDER BY id DESC/i);
     expect(params).toEqual([1, 'k', 48, 120]);
     expect(rows.map(r => r.tool)).toEqual(['a', 'b']);   // reverse → хронология
+  });
+
+  test('НЕ best-effort: сбой БД пробрасывается наружу, а не превращается в []', async () => {
+    db.any.mockRejectedValue(new Error('db down'));
+    await expect(toolEvents.loadRecent(1, 'k')).rejects.toThrow('db down');
   });
 });
 

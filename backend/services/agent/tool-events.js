@@ -37,8 +37,20 @@ function createBuffer(salonId, dialogKey) {
   return {
     turnId,
     push(tool, input, result, isError) {
+      // После flush() массив rows больше никуда не уходит — молчаливое
+      // накопление здесь было бы утечкой памяти И потерей события без следа.
+      if (flushed) {
+        logger.warn(`tool-events push ${dialogKey}: событие после flush() — в журнал не попадёт (tool=${tool})`);
+        return;
+      }
       rows.push({ tool, input: input == null ? null : input, result: capResult(result), isError: !!isError });
     },
+    // Протокол PostgreSQL ограничивает запрос 65535 параметрами; при 8 колонках
+    // на строку это ≈8191 событий за одну попытку. Сегодня недостижимо — предел
+    // держит лимит итераций tool-цикла в оркестраторе (десятки вызовов на ход),
+    // не этот файл. Если тот лимит когда-нибудь вырастет на порядки, INSERT
+    // молча упадёт целиком (см. catch ниже) — кап по числу строк здесь
+    // намеренно не вводится, это чужая ответственность.
     async flush(delivered) {
       if (flushed || !rows.length) { flushed = true; return; }
       flushed = true;
@@ -49,7 +61,9 @@ function createBuffer(salonId, dialogKey) {
           const b = i * 8;
           values.push(`($${b + 1},$${b + 2},$${b + 3},$${b + 4},$${b + 5},$${b + 6},$${b + 7},$${b + 8})`);
           params.push(salonId, String(dialogKey || ''), turnId, r.tool,
-            JSON.stringify(r.input), JSON.stringify(r.result), r.isError,
+            r.input == null ? null : JSON.stringify(r.input),
+            r.result == null ? null : JSON.stringify(r.result),
+            r.isError,
             delivered == null ? null : !!delivered);
         });
         await db.query(
@@ -80,6 +94,11 @@ async function markDelivered(turnId, delivered) {
 // В SQL (created_at — timestamp without time zone, JS-Date сюда нельзя — гочта
 // resumeOperatorPauseIfWindowReopened); наружу уходит age_ms, tool-memory
 // восстанавливает абсолютное время как nowMs - age_ms.
+//
+// НЕ best-effort — единственная функция файла с таким исключением. Ошибка БД
+// НАМЕРЕННО не глотается: вызывающий оркестратор (Task 5) ловит её сам, со
+// своим логом и fail-open (промпт без выжимки памяти лучше, чем упавший ход).
+// Не оборачивать в try/catch «для единообразия» — это молча убьёт тот лог.
 async function loadRecent(salonId, dialogKey, opts = {}) {
   const hours = opts.hours || 48;
   const limit = opts.limit || 120;
