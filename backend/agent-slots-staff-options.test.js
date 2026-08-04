@@ -190,12 +190,43 @@ describe('get_available_slots без staff_yc_id — граничные случ
     expect(out.staff_options).toBeUndefined();
   });
 
+  // Пустая выдача мастера и недостижимый мастер снаружи выглядят одинаково, а значат
+  // разное: «занят» против «не знаем». Сказать пациенту «свободного времени нет ни у
+  // кого» в момент, когда до YClients просто не достучались, — выдумка о клинике.
+  test('до всех исполнителей не достучались → ошибка, а не no_staff_available', async () => {
+    ycGetBookTimes.mockRejectedValue(new Error('502 YClients'));
+    const out = await slots.run(1, ARGS, { nowMs: NOON });
+    expect(out.error).toMatch(/Не удалось получить слоты/);
+    expect(out.no_staff_available).toBeUndefined();
+    expect(out.staff_options).toBeUndefined();
+  });
+
+  test('часть мастеров недостижима, у достижимых пусто → no_staff_available НЕ выставляем', async () => {
+    ycGetBookTimes.mockImplementation(async (_salon, staffId) => {
+      if (staffId === 11) throw new Error('502 YClients');
+      return [];   // 12 и 13 ответили и просто заняты
+    });
+    const out = await slots.run(1, ARGS, { nowMs: NOON });
+    expect(out.staff_options).toEqual([]);
+    expect(out.no_staff_available).toBeUndefined();
+    expect(out.hint).toMatch(/проверить не удалось/);
+  });
+
   // Регресс-страховки: код Task 1 их уже покрывает, тесты фиксируют поведение.
   test('скрытая пара услуга+мастер в выбор не попадает', async () => {
     svcFilter.isBookable.mockImplementation((_f, _svc, staffId) => staffId !== 11);
     ycGetBookTimes.mockResolvedValue(bookSlot('12:00'));
     const out = await slots.run(1, ARGS, { nowMs: NOON });
     expect(out.staff_options.map(o => o.staff_yc_id)).not.toContain(11);
+  });
+
+  // Скрыты пары по КАЖДОМУ мастеру (услуга целиком не скрыта) — перебирать некого,
+  // но это решение админки, а не сбой: ответ обязан быть тем же мягким filtered.
+  test('скрыты пары со всеми мастерами → filtered:true, а не «сбой»', async () => {
+    svcFilter.isBookable.mockReturnValue(false);
+    const out = await slots.run(1, ARGS, { nowMs: NOON });
+    expect(out).toEqual({ slots: [], filtered: true });
+    expect(ycGetBookTimes).not.toHaveBeenCalled();
   });
 
   test('сбой YClients по одному мастеру не валит ответ', async () => {

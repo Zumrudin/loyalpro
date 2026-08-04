@@ -34,6 +34,19 @@ const HINT_STAFF_SINGLE = 'Эту услугу в этот день ведёт �
 const HINT_NO_STAFF = 'На эту дату свободного времени нет ни у одного исполнителя услуги — ' +
   'честно скажи об этом и предложи другой день (get_available_slots на другую дату).';
 
+// Часть исполнителей проверить не удалось: про них мы не знаем НИЧЕГО, поэтому «нет
+// ни у кого» — уже выдумка. Но и молчать не о чем: у проверенных действительно пусто,
+// и предложить другую дату честно.
+const HINT_STAFF_PARTIAL = 'У проверенных исполнителей на эту дату свободного времени нет, ' +
+  'но часть специалистов проверить не удалось (временный сбой). НЕ утверждай, что времени нет ' +
+  'ни у кого — этого мы не знаем. Предложи посмотреть другую дату (get_available_slots на другую дату).';
+
+// Ни один исполнитель не ответил — это техническая неудача, а не занятость клиники.
+// Тон и формулировка — как в одномастерной ветке («Не удалось получить слоты: …»).
+const ERR_STAFF_UNREACHABLE = 'Не удалось получить слоты: ни один исполнитель услуги не ответил ' +
+  '(временный сбой). НЕ говори пациенту, что свободного времени нет — этого мы не знаем. ' +
+  'Извинись за задержку и предложи уточнить у администратора.';
+
 const schema = {
   name: 'get_available_slots',
   description: 'Свободное время под КОНКРЕТНУЮ УСЛУГУ на дату. Если пациент назвал мастера — передай ' +
@@ -220,11 +233,18 @@ async function computeStaffOptions(salon, filter, staffList, serviceId, date, no
       return { staff_yc_id: m.yc_id, name: m.name, position: null, slots: r.slots || [] };
     } catch (_) { return null; }   // сбой по одному мастеру не валит весь ответ
   }));
-  return checked
-    .filter(Boolean)
+  const reachable = checked.filter(Boolean);
+  const options = reachable
     .filter(o => o.slots.length)
     // Ближайшее окно — первым. Порядок детерминированный: тай-брейк по yc_id.
     .sort((a, b) => (toMin(a.slots[0].time) - toMin(b.slots[0].time)) || (a.staff_yc_id - b.staff_yc_id));
+  // Наружу отдаём не только окна, но и СКОЛЬКО мастеров реально ответили: мастер,
+  // до которого не достучались, выпадает из выдачи ровно так же, как занятый, и по
+  // одному пустому списку «занят» от «не знаем» не отличить. Ровно та же развилка,
+  // что у findAlternativeStaff (там она уже стоит: no_alternative_staff выставляется
+  // только при reachable.length === others.length) — две ветки одного файла обязаны
+  // лечить эту проблему одинаково.
+  return { options, reachable: reachable.length, total: candidates.length };
 }
 
 async function run(salonId, input, ctx = {}) {
@@ -262,9 +282,22 @@ async function run(salonId, input, ctx = {}) {
     }
     const salon = await loadSalon(salonId);
     if (!salon || !salon.yclients_company_id) return { error: 'YClients не подключён для салона.' };
-    const options = await computeStaffOptions(salon, filter, chk.staffList, serviceId, date, nowMs);
-    if (!options.length) return { staff_options: [], no_staff_available: true, hint: HINT_NO_STAFF };
-    return { staff_options: options, hint: options.length > 1 ? HINT_STAFF_CHOICE : HINT_STAFF_SINGLE };
+    const { options, reachable, total } = await computeStaffOptions(salon, filter, chk.staffList, serviceId, date, nowMs);
+    if (options.length) {
+      return { staff_options: options, hint: options.length > 1 ? HINT_STAFF_CHOICE : HINT_STAFF_SINGLE };
+    }
+    // Пустой список окон САМ ПО СЕБЕ не означает «времени нет»: недостижимый мастер
+    // (сбой YClients) выпадает из выдачи так же, как занятый. Утверждать «свободного
+    // времени нет ни у кого» можно ТОЛЬКО когда все кандидаты реально ответили —
+    // иначе это выдуманная причина отказа от лица клиники (тот же класс, что инцидент
+    // 2026-07-31 с «это время только что заняли»).
+    // Кандидатов не осталось после фильтра админки (скрыты пары со ВСЕМИ мастерами,
+    // хотя услуга целиком не скрыта) — спрашивать было некого, и это решение салона,
+    // а не сбой. Ответ тот же мягкий, что у скрытой услуги.
+    if (!total) return { slots: [], filtered: true };
+    if (!reachable) return { error: ERR_STAFF_UNREACHABLE };
+    if (reachable < total) return { staff_options: [], hint: HINT_STAFF_PARTIAL };
+    return { staff_options: [], no_staff_available: true, hint: HINT_NO_STAFF };
   }
   // Скрытую услугу/пару не предлагаем (мягкий пустой ответ, без «технических сложностей»).
   let filter = {};
