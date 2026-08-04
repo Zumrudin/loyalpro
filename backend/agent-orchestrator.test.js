@@ -11,6 +11,23 @@ jest.mock('./logger', () => ({ createLogger: () => mockLogger }));
 const realProvider = require('./services/agent/providers/aitunnel');
 const orchestrator = require('./services/agent/orchestrator');
 
+// Журнал tool-цикла (agent_tool_events) ходит в БД — во всех тестах он застабан,
+// иначе существующие сценарии полезли бы в реальную базу.
+function makeToolEventsStub() {
+  const buffers = [];
+  return {
+    buffers,
+    mod: {
+      createBuffer: jest.fn(() => {
+        const buf = { turnId: `turn-${buffers.length + 1}`, push: jest.fn(), flush: jest.fn(async () => {}) };
+        buffers.push(buf);
+        return buf;
+      }),
+      loadRecent: jest.fn(async () => []),
+    },
+  };
+}
+
 function makeDeps(overrides = {}) {
   return {
     provider: {
@@ -40,6 +57,11 @@ function makeDeps(overrides = {}) {
     identity: {
       resolveClient: jest.fn(async () => null),
       ...overrides.identity,
+    },
+    toolEvents: (overrides.toolEvents && overrides.toolEvents.mod) || makeToolEventsStub().mod,
+    toolMemory: {
+      renderMemory: jest.fn(() => ({ lines: [], dropped: 0 })),
+      ...(overrides.toolMemory || {}),
     },
   };
 }
@@ -690,5 +712,120 @@ describe('активные варианты стыковки в системно
 
     expect(out.replies).toEqual(['Здравствуйте!']);
     expect(deps.provider.createMessage.mock.calls[0][0].system).not.toContain('АКТИВНЫЕ ВАРИАНТЫ СТЫКОВКИ');
+  });
+});
+
+describe('журнал инструментов (tool-events/tool-memory)', () => {
+  test('каждый tool-вызов буферизуется, попытка флашится с delivered=null, turnId в результате', async () => {
+    const te = makeToolEventsStub();
+    const deps = makeDeps({ toolEvents: te });
+    deps.provider.createMessage
+      .mockResolvedValueOnce(toolResp('get_available_slots', { staff_yc_id: 55, service_yc_id: 7, date: '2026-07-20' }))
+      .mockResolvedValueOnce(textResp('Свободно 10:00.'));
+    const out = await orchestrator.runDialog(1, 'k', { deps });
+    const buf = te.buffers[0];
+    expect(buf.push).toHaveBeenCalledWith('get_available_slots',
+      { staff_yc_id: 55, service_yc_id: 7, date: '2026-07-20' },
+      { slots: [{ time: '10:00' }] }, false);
+    expect(buf.flush).toHaveBeenCalledWith(null);
+    expect(out.turnId).toBe('turn-1');
+  });
+
+  test('выжимка журнала уходит в системный промпт', async () => {
+    const te = makeToolEventsStub();
+    te.mod.loadRecent.mockResolvedValue([{ tool: 'x', age_ms: 1000 }]);
+    const deps = makeDeps({
+      toolEvents: te,
+      toolMemory: { renderMemory: jest.fn(() => ({ lines: ['[сегодня 10:00] называла цены — «Чистка»: Юлия 5 000 ₽'], dropped: 0 })) },
+    });
+    deps.provider.createMessage.mockResolvedValueOnce(textResp('ок'));
+    await orchestrator.runDialog(1, 'k', { deps });
+    const system = deps.provider.createMessage.mock.calls[0][0].system;
+    expect(system).toContain('ЖУРНАЛ ТВОИХ ДЕЙСТВИЙ В ПРЕДЫДУЩИХ ХОДАХ');
+    expect(system).toContain('Юлия 5 000 ₽');
+  });
+
+  test('сбой loadRecent не роняет ход — промпт без блока (fail-open)', async () => {
+    const te = makeToolEventsStub();
+    te.mod.loadRecent.mockRejectedValue(new Error('db down'));
+    const deps = makeDeps({ toolEvents: te });
+    deps.provider.createMessage.mockResolvedValueOnce(textResp('ок'));
+    const out = await orchestrator.runDialog(1, 'k', { deps });
+    expect(out.replies).toEqual(['ок']);
+    expect(deps.provider.createMessage.mock.calls[0][0].system).not.toContain('ЖУРНАЛ ТВОИХ ДЕЙСТВИЙ');
+  });
+
+  test('перегенерация: выброшенная попытка флашится с delivered=false, доставленная — с null', async () => {
+    const te = makeToolEventsStub();
+    const deps = makeDeps({ toolEvents: te });
+    deps.history.hasIncomingAfter = jest.fn(async () => true).mockResolvedValueOnce(true).mockResolvedValue(false);
+    deps.provider.createMessage
+      .mockResolvedValueOnce(toolResp('get_available_slots', { date: 'd' }, 'c1'))
+      .mockResolvedValueOnce(textResp('черновик'))
+      .mockResolvedValueOnce(toolResp('get_available_slots', { date: 'd' }, 'c2'))
+      .mockResolvedValueOnce(textResp('финальный ответ'));
+    const out = await orchestrator.runDialog(1, 'k', { deps });
+    expect(out.replies).toEqual(['финальный ответ']);
+    expect(te.buffers).toHaveLength(2);
+    expect(te.buffers[0].flush).toHaveBeenCalledWith(false);
+    expect(te.buffers[1].flush).toHaveBeenCalledWith(null);
+    expect(out.turnId).toBe('turn-2');
+  });
+
+  test('провайдер упал без записи → flush(null) успевает до проброса исключения', async () => {
+    const te = makeToolEventsStub();
+    const deps = makeDeps({ toolEvents: te });
+    deps.provider.createMessage
+      .mockResolvedValueOnce(toolResp('get_available_slots', { date: 'd' }))
+      .mockRejectedValueOnce(new Error('LLM down'));
+    await expect(orchestrator.runDialog(1, 'k', { deps })).rejects.toThrow('LLM down');
+    expect(te.buffers[0].flush).toHaveBeenCalledWith(null);
+  });
+
+  // Не из плана: единственные два await'а БД в хвосте попытки (проверка нового
+  // входящего и запись watermark) — тоже выход из попытки, если упадут.
+  test('падение hasIncomingAfter → буфер попытки всё равно флашится', async () => {
+    const te = makeToolEventsStub();
+    const deps = makeDeps({ toolEvents: te });
+    deps.history.hasIncomingAfter = jest.fn(async () => { throw new Error('db down'); });
+    deps.provider.createMessage
+      .mockResolvedValueOnce(toolResp('get_available_slots', { date: 'd' }))
+      .mockResolvedValueOnce(textResp('ок'));
+    await expect(orchestrator.runDialog(1, 'k', { deps })).rejects.toThrow('db down');
+    expect(te.buffers[0].flush).toHaveBeenCalledWith(null);
+  });
+
+  test('падение setWatermark → буфер попытки всё равно флашится', async () => {
+    const te = makeToolEventsStub();
+    const deps = makeDeps({ toolEvents: te });
+    deps.state.setWatermark = jest.fn(async () => { throw new Error('db down'); });
+    deps.provider.createMessage
+      .mockResolvedValueOnce(toolResp('get_available_slots', { date: 'd' }))
+      .mockResolvedValueOnce(textResp('ок'));
+    await expect(orchestrator.runDialog(1, 'k', { deps })).rejects.toThrow('db down');
+    expect(te.buffers[0].flush).toHaveBeenCalledWith(null);
+  });
+
+  // Пустой транскрипт — ранний возврат ДО первого tool-вызова: буфер там ещё не
+  // создан (turnId в ответе нет — так и задумано, вердикт диспетчеру не нужен).
+  test('пустой транскрипт → буфер не создаётся вовсе', async () => {
+    const te = makeToolEventsStub();
+    const deps = makeDeps({ toolEvents: te });
+    deps.history.loadTranscript = jest.fn(async () => ({ messages: [], watermark: 100 }));
+    const out = await orchestrator.runDialog(1, 'k', { deps });
+    expect(out.replies).toEqual([]);
+    expect(out.turnId).toBeUndefined();
+    expect(te.buffers).toHaveLength(0);
+  });
+
+  test('добивочный вызов упал без записи → flush(null) до проброса', async () => {
+    const te = makeToolEventsStub();
+    const deps = makeDeps({ toolEvents: te });
+    deps.provider.createMessage.mockImplementation(async ({ tools }) => {
+      if (!tools || tools.length === 0) throw new Error('LLM down');
+      return toolResp('get_available_slots', { date: 'd' });
+    });
+    await expect(orchestrator.runDialog(1, 'k', { deps })).rejects.toThrow('LLM down');
+    expect(te.buffers[0].flush).toHaveBeenCalledWith(null);
   });
 });

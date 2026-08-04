@@ -10,6 +10,8 @@ const catalogBlockDefault = require('./catalog-block');
 const seqOffers = require('./sequential-offers');
 const replyGuard = require('./reply-guard');
 const adminHours = require('./admin-hours');
+const toolEventsDefault = require('./tool-events');
+const toolMemoryDefault = require('./tool-memory');
 const { buildSystemPrompt } = require('./system-prompt');
 const { createLogger } = require('../../logger');
 const logger = createLogger('AgentOrchestrator');
@@ -145,6 +147,8 @@ async function runDialog(salonId, dialogKey, opts = {}) {
   const history = d.history || historyDefault;
   const state = d.state || stateDefault;
   const identity = d.identity || identityDefault;
+  const toolEvents = d.toolEvents || toolEventsDefault;
+  const toolMemory = d.toolMemory || toolMemoryDefault;
   const ctx = opts.ctx || {};
 
   const dialog = await state.getOrCreate(salonId, dialogKey);
@@ -212,6 +216,22 @@ async function runDialog(salonId, dialogKey, opts = {}) {
     activeOffers = [];
   }
 
+  // Память прошлых ходов: выжимка журнала инструментов → волатильный хвост
+  // промпта. Сбой чтения/рендера не роняет ход — идём без блока (fail-open,
+  // как activeOffers): модель просто переспросит инструментами.
+  let toolMemoryLines = [];
+  try {
+    const rows = await toolEvents.loadRecent(salonId, dialogKey);
+    const rendered = toolMemory.renderMemory(rows, { nowMs: opts.nowMs || Date.now() });
+    toolMemoryLines = rendered.lines;
+    if (rendered.dropped > 0) {
+      logger.info(`dialog ${dialogKey}: журнал инструментов срезан капом (${rendered.dropped} событий не в промпте)`);
+    }
+  } catch (e) {
+    logger.warn(`dialog ${dialogKey}: не прочитать журнал инструментов (${e.message}) — промпт без памяти`);
+    toolMemoryLines = [];
+  }
+
   const system = buildSystemPrompt({
     salonName: opts.salonName,
     workingHours: opts.workingHours,
@@ -230,6 +250,7 @@ async function runDialog(salonId, dialogKey, opts = {}) {
     clientName: clientGivenName,
     catalogBlock,
     activeOffers,
+    toolMemory: toolMemoryLines,
   });
   // nowMs — чтобы инструменты слотов отрезали уже прошедшее время «сегодня».
   // clientPhone/clientName — детерминированный фолбэк для create_booking основного
@@ -244,6 +265,14 @@ async function runDialog(salonId, dialogKey, opts = {}) {
   for (let attempt = 0; attempt <= MAX_REGEN; attempt++) {
     const { messages, watermark } = await history.loadTranscript(salonId, dialogKey, { limit: 20 });
     if (!messages.length) return { replies: [], escalated: false, sideEffect: false };
+
+    // Буфер журнала tool-цикла этой ПОПЫТКИ. Создаётся после проверки пустого
+    // транскрипта (там возвращаться нечему — не оставляем нефлашнутый буфер).
+    // ВАЖНО: каждый выход из попытки обязан его флашить — иначе tool-цикл
+    // пропадёт и следующий ход снова останется без памяти. Выходов пять:
+    // падение провайдера / падение добивочного вызова / падение БД в хвосте /
+    // перегенерация (delivered=false) / штатный возврат (delivered=null).
+    const evBuffer = toolEvents.createBuffer(salonId, dialogKey);
 
     const convo = messages.slice();
 
@@ -279,7 +308,7 @@ async function runDialog(salonId, dialogKey, opts = {}) {
         // в этом ходе УЖЕ сделана — не роняем ход в эскалацию: ниже отдадим
         // детерминированное подтверждение. Ничего не сделано → пробрасываем
         // (честная эскалация в диспетчере, как раньше).
-        if (!writeSucceeded) throw e;
+        if (!writeSucceeded) { await evBuffer.flush(null); throw e; }
         logger.warn(`dialog ${dialogKey}: провайдер упал после успешной записи (${e.message}) — детерминированное подтверждение`);
         degradedAfterWrite = true;
         break;
@@ -313,6 +342,8 @@ async function runDialog(salonId, dialogKey, opts = {}) {
           result = { error: e.message };
         }
         const isError = !!(result && result.error);
+        // Журнал tool-цикла: сырые input/result в БД (форензика + память).
+        evBuffer.push(tc.name, tc.input, result, isError);
         // Один лог на вызов инструмента (ok/error, длительность, решающие поля
         // без PII). Для исключения уже отработал logger.error выше — второй
         // раз не логируем, чтобы не задваивать одно и то же событие.
@@ -382,7 +413,7 @@ async function runDialog(salonId, dialogKey, opts = {}) {
         if (final.text) replies.push(final.text);
         else logger.warn(`dialog ${dialogKey}: добивочный вызов тоже без текста — ответ клиенту берёт на себя диспетчер`);
       } catch (e) {
-        if (!writeSucceeded) throw e;
+        if (!writeSucceeded) { await evBuffer.flush(null); throw e; }
         logger.warn(`dialog ${dialogKey}: добивочный вызов упал после успешной записи (${e.message}) — детерминированное подтверждение`);
         degradedAfterWrite = true;
       }
@@ -428,14 +459,21 @@ async function runDialog(salonId, dialogKey, opts = {}) {
       }
     }
 
-    // Пришло ли новое входящее, пока мы думали?
-    const stale = await history.hasIncomingAfter(salonId, dialogKey, watermark);
+    // Пришло ли новое входящее, пока мы думали? Оба обращения к БД в хвосте
+    // попытки — тоже её выходы, если упадут: флашим буфер и пробрасываем.
+    let stale;
+    try {
+      stale = await history.hasIncomingAfter(salonId, dialogKey, watermark);
+    } catch (e) { await evBuffer.flush(null); throw e; }
     if (stale && !sideEffect && attempt < MAX_REGEN) {
       logger.info(`dialog ${dialogKey}: новое сообщение во время прогона — выбрасываю черновик, перегенерация (${attempt + 1})`);
+      await evBuffer.flush(false);   // события выброшенной попытки пациент не видел
       continue;
     }
 
-    await state.setWatermark(salonId, dialogKey, watermark);
+    try {
+      await state.setWatermark(salonId, dialogKey, watermark);
+    } catch (e) { await evBuffer.flush(null); throw e; }
     // falseSuccess: реплика утверждает, что запись перенесена/отменена/создана, но
     // ни один пишущий инструмент в этом ходе не отработал (модель соврала). Диспетчер
     // по этому сигналу НЕ отправляет ложь, а переводит на человека. Пилот 2026-07-22.
@@ -455,8 +493,9 @@ async function runDialog(salonId, dialogKey, opts = {}) {
     const bookingFailRecoverable = bookingFailed && !escalated && !falseSuccess
       && replies.some((t) => t && t.trim())
       && (recheckedAfterFail || REPLY_HAS_TIME.test(allReplies));
+    await evBuffer.flush(null);   // вердикт delivered поставит диспетчер после отправки
     return { replies, escalated, sideEffect, exhausted, falseSuccess,
-      bookingFailed, bookingFailRecoverable, degradedAfterWrite };
+      bookingFailed, bookingFailRecoverable, degradedAfterWrite, turnId: evBuffer.turnId };
   }
 
   return { replies: [], escalated: false, sideEffect: false };
