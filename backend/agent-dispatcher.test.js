@@ -413,6 +413,18 @@ describe('вердикт delivered для журнала инструменто�
     expect(d.toolEvents.markDelivered).toHaveBeenCalledWith('t5', false);
   });
 
+  // Исчерпанный tool-цикл: модель текста не дала, пациенту ушла только
+  // детерминированная страховка → фактов хода он не видел.
+  test('ход без реплик модели (страховка + эскалация) → false', async () => {
+    const d = deps({ orchestrator: { runDialog: jest.fn(async () => (
+      { replies: [], escalated: false, exhausted: true, turnId: 't9' })) } });
+    dispatcher.enqueue(1, 'k', meta, d);
+    await jest.advanceTimersByTimeAsync(1000);
+    expect(d.send).toHaveBeenCalledTimes(1);                     // только silentFallbackText
+    expect(d.send.mock.calls[0][1]).toMatch(/администратор/i);
+    expect(d.toolEvents.markDelivered).toHaveBeenCalledWith('t9', false);
+  });
+
   test('восстановимый провал записи: переигровка доставлена → true', async () => {
     const d = deps({
       orchestrator: { runDialog: jest.fn(async () => (
