@@ -148,5 +148,8 @@ describe('cleanup', () => {
     expect(db.query.mock.calls[0][0]).toMatch(/DELETE FROM agent_tool_events[\s\S]*30 days/i);
     db.query.mockRejectedValue(new Error('x'));
     await expect(toolEvents.cleanup()).resolves.toBeUndefined();
+    // Но не молча: чистка — единственная гарантия 30-дневного хранения сырых
+    // input/result, сломавшийся крон должен быть виден в логах.
+    expect(mockLogger.warn).toHaveBeenCalledWith(expect.stringMatching(/cleanup.*x/));
   });
 });

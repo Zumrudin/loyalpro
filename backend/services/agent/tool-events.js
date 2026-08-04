@@ -118,7 +118,12 @@ async function cleanup() {
   try {
     await db.query(
       `DELETE FROM agent_tool_events WHERE created_at < NOW() - INTERVAL '${KEEP_DAYS} days'`);
-  } catch (e) { /* уборка не критична */ }
+  } catch (e) {
+    // Не молча: чистка — единственная гарантия 30-дневного хранения СЫРЫХ
+    // input/result (там, в частности, история визитов пациента). Тихо
+    // сломавшийся крон = бессрочное хранение, о котором никто не узнает.
+    logger.warn(`tool-events cleanup: ${e.message} — старые события не удалены`);
+  }
 }
 
 module.exports = { createBuffer, markDelivered, loadRecent, cleanup, KEEP_DAYS };
