@@ -11,6 +11,7 @@ const authorship = require('../outgoing-authorship');
 const escalateTool = require('./tools/escalate-to-operator');
 const adminHours = require('./admin-hours');
 const groupChat = require('./group-chat');
+const toolEventsDefault = require('./tool-events');
 const { createLogger } = require('../../logger');
 const logger = createLogger('AgentDispatcher');
 
@@ -73,6 +74,9 @@ async function process(salonId, dialogKey, meta, opts = {}) {
   // Журнал авторства: по нему вебхук отличит эхо ЭТОЙ реплики от сообщения,
   // которое администратор набрал руками в приложении Chatpush (там нужна пауза).
   const authorLog = opts.authorship || authorship;
+  // Журнал tool-цикла: оркестратор флашит события хода с delivered=null, вердикт
+  // «пациент это видел» знает только диспетчер — он и проставляет его ниже.
+  const toolEventsLog = opts.toolEvents || toolEventsDefault;
   const send = async (m, text) => {
     const out = await rawSend(m, text);
     pendingReplies.remember(salonId, dialogKey, text);
@@ -112,6 +116,12 @@ async function process(salonId, dialogKey, meta, opts = {}) {
   try {
     if (running.has(k)) { rerun.add(k); return; }
     running.add(k);
+    // Вердикт для журнала инструментов: видел ли пациент реплики МОДЕЛИ этого
+    // хода. Живёт снаружи try — его пишет finally, в том числе когда отправка
+    // упала на середине серии. turnId известен только со штатного результата
+    // runDialog (ранние выходы и падение прогона его не отдают).
+    let turnId = null;
+    let deliveredReplies = false;
     try {
       // Стоп-темы грузим здесь (у диспетчера уже есть settings), чтобы не тащить
       // зависимость от БД в оркестратор. Отсутствие метода в моке → пустой список.
@@ -122,6 +132,7 @@ async function process(salonId, dialogKey, meta, opts = {}) {
       // Доставляем реплики, в т.ч. на ходе эскалации — это явное объявление о переводе.
       // Инвариант: при СВЕЖЕЙ эскалации клиент никогда не остаётся без сообщения.
       const replies = (res.replies || []).filter((t) => t && t.trim());
+      turnId = res.turnId || null;
       if (res.alreadyEscalated) {
         // Диалог уже у оператора — бот молчит, не переотправляем объявление о переводе
         // на каждое последующее входящее (иначе фраза перевода спамит клиента).
@@ -145,6 +156,7 @@ async function process(salonId, dialogKey, meta, opts = {}) {
         if (canRecover) {
           logger.info(`dialog ${dialogKey}: create_booking не удался, но бот переиграл (предложил другое время) — доставляю без перевода`);
           for (const text of replies) await send(meta, text);
+          deliveredReplies = replies.length > 0;
         } else {
           logger.warn(`dialog ${dialogKey}: create_booking не удался, переигровки нет либо повторный провал — принудительный перевод на человека`);
           await handOverSilently(salonId, dialogKey, meta, send, escalate, 'create_booking не удался — запись не создана автоматически');
@@ -154,6 +166,7 @@ async function process(salonId, dialogKey, meta, opts = {}) {
         // Модель могла ответить по делу («Спасибо, что предупредили»), но забыть
         // объявить перевод — тогда добавляем стандартную фразу детерминированно.
         for (const text of replies) await send(meta, text);
+        deliveredReplies = replies.length > 0;
         const announced = replies.some(t => /администратор/i.test(t));
         if (!announced) await send(meta, adminHours.handoverText(adminOffNow()));
       } else if (replies.length === 0) {
@@ -171,9 +184,17 @@ async function process(salonId, dialogKey, meta, opts = {}) {
         logger.info(`dialog ${dialogKey}: новое сообщение до отправки — выбрасываю устаревший черновик, отвечу одним сообщением`);
       } else {
         for (const text of replies) await send(meta, text);
+        deliveredReplies = replies.length > 0;
       }
     } finally {
       running.delete(k);
+      // Вердикт журнала инструментов. Fire-and-forget (markDelivered сам глотает
+      // сбои БД) — не критичный путь, ждать его доставка реплик не должна.
+      // В finally, а не после цепочки if/else: упавшая на середине серии отправка
+      // уходит в общий catch, а вердикт нужен и там. Ветки без отправки реплик
+      // модели (rerun-черновик, falseSuccess, handOverSilently, молчание на
+      // alreadyEscalated) оставляют false: их факты пациенту не показаны.
+      if (turnId) void toolEventsLog.markDelivered(turnId, deliveredReplies);
     }
     if (rerun.delete(k)) {
       logger.info(`dialog ${dialogKey}: отложенный прогон (сообщение пришло во время обработки)`);

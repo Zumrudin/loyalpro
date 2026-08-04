@@ -15,6 +15,7 @@ function deps(overrides = {}) {
     // Журнал авторства ходит в БД — в юнит-тесте подменяем (иначе pg тянет
     // реальное соединение и падает после teardown).
     authorship: { remember: jest.fn() },
+    toolEvents: { markDelivered: jest.fn() },
     escalate: jest.fn(async () => ({ escalated: true })),
     ...overrides,
   };
@@ -362,5 +363,104 @@ describe('снятие паузы оператора на открытии ок�
     dispatcher.enqueue(1, 'k', meta, d);
     await jest.advanceTimersByTimeAsync(1000);
     expect(d.orchestrator.runDialog).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ── Вердикт delivered для журнала tool-цикла ──
+// Смысл: факты, которых пациент НЕ видел, не должны всплыть в памяти следующего
+// хода как «уже сказанное». true — только когда реплики МОДЕЛИ реально ушли.
+describe('вердикт delivered для журнала инструментов', () => {
+  test('реплики отправлены → markDelivered(turnId, true)', async () => {
+    const d = deps({ orchestrator: { runDialog: jest.fn(async () => ({ replies: ['ответ'], escalated: false, turnId: 't1' })) } });
+    dispatcher.enqueue(1, 'k', meta, d);
+    await jest.advanceTimersByTimeAsync(1000);
+    expect(d.toolEvents.markDelivered).toHaveBeenCalledWith('t1', true);
+  });
+
+  test('ложный успех: реплика погашена → markDelivered(turnId, false)', async () => {
+    const d = deps({ orchestrator: { runDialog: jest.fn(async () => ({ replies: ['Готово, перенесла!'], falseSuccess: true, escalated: false, turnId: 't2' })) } });
+    dispatcher.enqueue(1, 'k', meta, d);
+    await jest.advanceTimersByTimeAsync(1000);
+    expect(d.toolEvents.markDelivered).toHaveBeenCalledWith('t2', false);
+  });
+
+  test('без turnId (ранние выходы runDialog) — вердикт не пишется', async () => {
+    const d = deps({ orchestrator: { runDialog: jest.fn(async () => ({ replies: ['ответ'], escalated: false })) } });
+    dispatcher.enqueue(1, 'k', meta, d);
+    await jest.advanceTimersByTimeAsync(1000);
+    expect(d.toolEvents.markDelivered).not.toHaveBeenCalled();
+  });
+
+  test('эскалация с репликой → true (клиент реплику видел)', async () => {
+    const d = deps({ orchestrator: { runDialog: jest.fn(async () => ({ replies: ['Передаю администратору'], escalated: true, turnId: 't3' })) } });
+    dispatcher.enqueue(1, 'k', meta, d);
+    await jest.advanceTimersByTimeAsync(1000);
+    expect(d.toolEvents.markDelivered).toHaveBeenCalledWith('t3', true);
+  });
+
+  test('эскалация БЕЗ реплик модели (только страховочная фраза) → false', async () => {
+    const d = deps({ orchestrator: { runDialog: jest.fn(async () => ({ replies: [], escalated: true, turnId: 't4' })) } });
+    dispatcher.enqueue(1, 'k', meta, d);
+    await jest.advanceTimersByTimeAsync(1000);
+    expect(d.send).toHaveBeenCalledTimes(1);   // ушёл детерминированный текст диспетчера
+    expect(d.toolEvents.markDelivered).toHaveBeenCalledWith('t4', false);
+  });
+
+  test('диалог уже у оператора (бот молчит) → false', async () => {
+    const d = deps({ orchestrator: { runDialog: jest.fn(async () => ({ replies: [], escalated: true, alreadyEscalated: true, turnId: 't5' })) } });
+    dispatcher.enqueue(1, 'k', meta, d);
+    await jest.advanceTimersByTimeAsync(1000);
+    expect(d.toolEvents.markDelivered).toHaveBeenCalledWith('t5', false);
+  });
+
+  test('восстановимый провал записи: переигровка доставлена → true', async () => {
+    const d = deps({
+      orchestrator: { runDialog: jest.fn(async () => (
+        { replies: ['Могу предложить 15:00'], escalated: false, bookingFailed: true, bookingFailRecoverable: true, turnId: 't6' })) },
+      priorBookingFailure: jest.fn(async () => false),
+    });
+    dispatcher.enqueue(1, 'k', meta, d);
+    await jest.advanceTimersByTimeAsync(1000);
+    expect(d.toolEvents.markDelivered).toHaveBeenCalledWith('t6', true);
+  });
+
+  test('провал записи без переигровки: реплика погашена переводом → false', async () => {
+    const d = deps({ orchestrator: { runDialog: jest.fn(async () => (
+      { replies: ['Секундочку 🤍'], escalated: false, bookingFailed: true, turnId: 't7' })) } });
+    dispatcher.enqueue(1, 'k', meta, d);
+    await jest.advanceTimersByTimeAsync(1000);
+    expect(d.toolEvents.markDelivered).toHaveBeenCalledWith('t7', false);
+  });
+
+  test('устаревший черновик (rerun) выброшен → false для того хода', async () => {
+    const d = deps();
+    let runs = 0;
+    d.orchestrator.runDialog = jest.fn(async () => {
+      runs += 1;
+      if (runs === 1) dispatcher.enqueue(1, 'k', meta, d);
+      return { replies: [`r${runs}`], turnId: `t${runs}` };
+    });
+    dispatcher.enqueue(1, 'k', meta, d);
+    await jest.advanceTimersByTimeAsync(1000);
+    expect(d.toolEvents.markDelivered).toHaveBeenNthCalledWith(1, 't1', false);
+    expect(d.toolEvents.markDelivered).toHaveBeenNthCalledWith(2, 't2', true);
+  });
+
+  // Отправка бросила на середине серии: часть реплик ушла, часть нет. Пишем
+  // false — консервативно. Показать в памяти факт, которого пациент не видел,
+  // хуже, чем повторить уже сказанное; к тому же ход всё равно уходит человеку.
+  test('отправка упала на середине → вердикт всё равно пишется, и он false', async () => {
+    const d = deps({
+      orchestrator: { runDialog: jest.fn(async () => ({ replies: ['раз', 'два'], turnId: 't8' })) },
+      send: jest.fn(async (m, text) => { if (text === 'два') throw new Error('chatpush 500'); }),
+    });
+    await expect(dispatcher.process(1, 'k', meta, d)).resolves.toBeUndefined();
+    expect(d.toolEvents.markDelivered).toHaveBeenCalledWith('t8', false);
+  });
+
+  test('прогон упал целиком (turnId неизвестен) → вердикт не пишется', async () => {
+    const d = deps({ orchestrator: { runDialog: jest.fn(async () => { throw new Error('provider timeout'); }) } });
+    await expect(dispatcher.process(1, 'k', meta, d)).resolves.toBeUndefined();
+    expect(d.toolEvents.markDelivered).not.toHaveBeenCalled();
   });
 });
