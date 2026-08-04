@@ -14,19 +14,37 @@
 //    диспетчером в том же ходе (bookingFailed/falseSuccess);
 //  • слоты: конкретные времена — только если событию < 30 минут; старше — лишь
 //    факт «смотрела слоты» (иначе память воспроизвела бы инцидент со стухшими
-//    слотами 2026-07-31, TIME_UNAVAILABLE);
-//  • PII-аргументы (client_phone/client_name/comment) в рендер не попадают
-//    никогда — тот же список, что у лога вызовов в оркестраторе.
+//    слотами 2026-07-31, TIME_UNAVAILABLE); гейт свежести действует на ВСЕХ
+//    четырёх слот-инструментах (get_available_slots/get_available_dates/
+//    get_sequential_slots/get_parallel_slots), не только на первом —
+//    у каждого свой экстрактор, фолбэк ctx.fresh не проверяет;
+//  • PII-поля (телефон/имя/email клиента, свободный комментарий) в рендер не
+//    попадают никогда — ни из input (аргументы вызова), ни из result (поля
+//    ответа инструмента). Сегодня это гарантируют только выделенные
+//    экстракторы: они явно перечисляют, какие поля результата показывать.
+//    Фолбэк для НЕИЗВЕСТНОГО инструмента (fmtResultScalars) фильтрует те же
+//    ключи по имени — иначе он был бы «безопасен» только случайно, пока
+//    ни один инструмент не кладёт PII скаляром верхнего уровня результата.
 
 const MSK = 'Europe/Moscow';
 const WRITE_TOOLS = new Set([
   'create_booking', 'book_chain', 'cancel_booking', 'reschedule_booking', 'modify_booking_services',
 ]);
-const PII_ARGS = new Set(['client_phone', 'client_name', 'comment']);
+// Точные имена полей (как LOG_PII_ARGS в orchestrator.js) + паттерн на класс
+// «телефон/полное имя/email» — покрывает будущие инструменты, кладущие PII
+// скаляром верхнего уровня результата, а не только сегодняшние три поля.
+const PII_EXACT_KEYS = new Set(['client_phone', 'client_name', 'comment']);
+const PII_KEY_RE = /phone|client_name|full_name|e-?mail/i;
+function isPiiKey(k) {
+  return PII_EXACT_KEYS.has(k) || PII_KEY_RE.test(k);
+}
 
 const SLOT_TIMES_FRESH_MS = 30 * 60 * 1000;
 const MAX_EVENTS = 30;
-const MAX_CHARS = 4000;   // ≈1–1.5k токенов кириллицы — потолок блока в промпте
+// ≈1–1.5k токенов кириллицы — потолок блока в промпте. Не включает префикс
+// "- " (~2 символа/строку), который добавляет потребитель (Task 4) при сборке
+// блока промпта — фактический размер блока чуть больше MAX_CHARS, это осознанно.
+const MAX_CHARS = 4000;
 
 function parseMaybe(v) {
   if (v == null) return null;
@@ -63,18 +81,22 @@ function fmtArgs(input) {
   if (!input || typeof input !== 'object') return '';
   const bits = [];
   for (const [k, v] of Object.entries(input)) {
-    if (PII_ARGS.has(k)) continue;
+    if (isPiiKey(k)) continue;
     if (v === null || v === undefined || typeof v === 'object') continue;
     bits.push(`${k}=${String(v).slice(0, 40)}`);
   }
   return bits.join(',').slice(0, 120);
 }
 
-// Скалярные поля результата для фолбэк-экстрактора.
+// Скалярные поля результата для фолбэк-экстрактора. Тот же PII-фильтр, что и
+// у аргументов: результат НЕИЗВЕСТНОГО инструмента может положить персональные
+// данные скаляром верхнего уровня (напр. будущий `client_full_name`) — без
+// фильтра по имени поля это утекло бы в промпт как «безопасное» число/строку.
 function fmtResultScalars(result) {
   if (!result || typeof result !== 'object') return '';
   const bits = [];
   for (const [k, v] of Object.entries(result)) {
+    if (isPiiKey(k)) continue;
     if (v === null || v === undefined || typeof v === 'object') continue;
     bits.push(`${k}=${String(v).slice(0, 60)}`);
     if (bits.length >= 4) break;
@@ -133,6 +155,51 @@ const EXTRACTORS = {
     const times = slots.slice(0, 12).map(s => s && s.time).filter(Boolean);
     return `${base}: показаны ${times.join(', ')}${slots.length > 12 ? '…' : ''}`;
   },
+  get_available_dates(e, ctx) {
+    const inp = e.input || {}, res = e.result || {};
+    const period = (inp.date_from || inp.date_to) ? ` ${inp.date_from || '…'}–${inp.date_to || '…'}` : '';
+    const base = `смотрела график мастера staff_yc_id=${inp.staff_yc_id}${period}`;
+    if (!ctx.fresh) return `${base} (выдача устарела — при вопросе о графике перезапроси)`;
+    const schedule = Array.isArray(res.schedule) ? res.schedule : [];
+    if (!schedule.length) return `${base}: рабочих дней в периоде не нашла`;
+    const days = schedule.slice(0, 6).map(d => {
+      const hrs = Array.isArray(d.hours) && d.hours.length
+        ? ` ${d.hours[0].from}-${d.hours[d.hours.length - 1].to}` : '';
+      return `${d.date}${hrs}`;
+    });
+    return `${base}: рабочие дни — ${days.join(', ')}${schedule.length > 6 ? '…' : ''}`;
+  },
+  get_parallel_slots(e, ctx) {
+    const inp = e.input || {}, res = e.result || {};
+    const guests = Array.isArray(inp.guests) ? inp.guests : [];
+    const guestDesc = guests.map(g => `staff_yc_id=${g && g.staff_yc_id}`).join('+');
+    const base = `смотрела параллельные слоты на ${inp.date} (${guests.length} гостя: ${guestDesc})`;
+    if (!ctx.fresh) return `${base} (выдача устарела — при вопросе о времени перезапроси)`;
+    const starts = Array.isArray(res.starts) ? res.starts : [];
+    if (!starts.length) {
+      return `${base}: общего окна не нашла${res.reason ? ` (${res.reason})` : ''}`;
+    }
+    const times = starts.slice(0, 12).map(s => s && s.time).filter(Boolean);
+    return `${base}: показаны ${times.join(', ')}${starts.length > 12 ? '…' : ''}`;
+  },
+  get_sequential_slots(e, ctx) {
+    const inp = e.input || {}, res = e.result || {};
+    const svcCount = Array.isArray(inp.services) ? inp.services.length : 0;
+    const base = `смотрела стыковку ${svcCount} услуг подряд с ${inp.date}`;
+    if (!ctx.fresh) return `${base} (выдача устарела — используй витрину активных вариантов, не эти времена)`;
+    const variants = Array.isArray(res.variants) ? res.variants : [];
+    if (!variants.length) return `${base}: подходящих вариантов не нашла${res.reason ? ` (${res.reason})` : ''}`;
+    // ТОЛЬКО факт и времена — option_id внутренний и живёт в отдельной витрине
+    // «АКТИВНЫЕ ВАРИАНТЫ СТЫКОВКИ» (sequential-offers.js); протухший id из
+    // памяти модель не должна цитировать пациенту мимо этой витрины.
+    const parts = variants.slice(0, 3).map(v => {
+      const staffNames = (Array.isArray(v.staff) ? v.staff : []).map(s => s && s.name).filter(Boolean).join('+');
+      const times = (Array.isArray(v.starts) ? v.starts : []).slice(0, 3)
+        .map(s => s && s.time).filter(Boolean).join(', ');
+      return `${v.date}${staffNames ? ` у ${staffNames}` : ''}: ${times}`;
+    });
+    return `${base}: показаны варианты — ${parts.join('; ')}`;
+  },
   get_service_masters(e) {
     const res = e.result || {};
     const svcs = Array.isArray(res.services) ? res.services : [];
@@ -176,13 +243,22 @@ function extract(e, ctx) {
 // rows — из tool-events.loadRecent (хронологический порядок, age_ms из SQL).
 function renderMemory(rows, opts = {}) {
   const nowMs = opts.nowMs || 0;   // без nowMs всё считается устаревшим (безопасно)
-  const events = (Array.isArray(rows) ? rows : []).map(r => ({
+  // idx — исходная позиция в rows (порядок loadRecent, хронологический). Нужен
+  // как тай-брейк при сортировке: все события ОДНОГО хода флашатся одним
+  // multi-row INSERT с DEFAULT NOW(), поэтому у них совпадает created_at и,
+  // следовательно, tsMs — без тай-брейка Array.sort по равным ключам стабильно
+  // сохранял бы пред-сортировочный порядок writes.concat(keptReads), который
+  // ВСЕГДА ставит write впереди read независимо от реальной причинности хода
+  // (инцидент: «сначала посмотрела историю, потом записала» рендерился в
+  // обратном порядке).
+  const events = (Array.isArray(rows) ? rows : []).map((r, idx) => ({
     tool: String(r.tool || ''),
     input: parseMaybe(r.input),
     result: parseMaybe(r.result),
     isError: !!r.is_error,
     delivered: r.delivered,
     tsMs: nowMs - Number(r.age_ms || 0),
+    idx,
   }));
 
   const visible = events.filter(e =>
@@ -198,8 +274,12 @@ function renderMemory(rows, opts = {}) {
   const reads = visible.filter(e => !WRITE_TOOLS.has(e.tool));
   const readsBudget = Math.max(0, MAX_EVENTS - writes.length);
   const keptReads = readsBudget ? reads.slice(-readsBudget) : [];
-  const kept = writes.concat(keptReads).sort((a, b) => a.tsMs - b.tsMs);
+  const droppedByCountCap = reads.length - keptReads.length;
+  const kept = writes.concat(keptReads).sort((a, b) => (a.tsMs - b.tsMs) || (a.idx - b.idx));
 
+  // fact===null — экстрактору нечего сказать (напр. book_chain без records,
+  // get_service_masters с пустым services). Это НЕ срез капом — событие само
+  // по себе пустое, dropped его не считает (см. droppedByCountCap/CharCap ниже).
   let items = kept.map(e => {
     const fact = extract(e, { fresh: nowMs - e.tsMs < SLOT_TIMES_FRESH_MS });
     if (!fact) return null;
@@ -208,14 +288,19 @@ function renderMemory(rows, opts = {}) {
 
   // Кап по символам: пока не влезает — выбрасываем старейший read-факт.
   let total = items.reduce((n, it) => n + it.line.length + 1, 0);
+  let droppedByCharCap = 0;
   while (total > MAX_CHARS) {
     const idx = items.findIndex(it => !it.write);
     if (idx === -1) break;   // остались только write — их не режем
     total -= items[idx].line.length + 1;
     items.splice(idx, 1);
+    droppedByCharCap++;
   }
 
-  return { lines: items.map(it => it.line), dropped: visible.length - items.length };
+  // dropped означает РОВНО «срезано капом» (число + символы) — оркестратор
+  // логирует dropped>0 как «журнал срезан капом»; событие без факта не должно
+  // попадать в этот счётчик, иначе лог врал бы про срез там, где ничего не резали.
+  return { lines: items.map(it => it.line), dropped: droppedByCountCap + droppedByCharCap };
 }
 
 module.exports = { renderMemory, SLOT_TIMES_FRESH_MS, MAX_EVENTS, MAX_CHARS, WRITE_TOOLS };

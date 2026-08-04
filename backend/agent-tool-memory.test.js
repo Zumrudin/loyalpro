@@ -146,3 +146,81 @@ test('битые строки (не-JSON input/result) не роняют рен�
   const rows = [ev({ tool: 'x', input: 'не json', result: undefined })];
   expect(() => renderMemory(rows, { nowMs: NOW })).not.toThrow();
 });
+
+test('PII в РЕЗУЛЬТАТЕ неизвестного инструмента не течёт через фолбэк', () => {
+  // Ни один существующий инструмент так не делает (персональные поля всегда
+  // внутри объектов/массивов) — это репро для правдоподобного будущего
+  // инструмента, кладущего PII СКАЛЯРОМ верхнего уровня результата.
+  const rows = [ev({
+    tool: 'some_new_tool',
+    input: {},
+    result: { client_full_name: 'Иванова Мария Петровна', client_phone: '79991234567', contact_email: 'm@example.com', ok: true },
+  })];
+  const joined = renderMemory(rows, { nowMs: NOW }).lines.join('\n');
+  expect(joined).not.toMatch(/Иванова|Мария|Петровна|79991234567|m@example\.com/);
+  expect(joined).toMatch(/some_new_tool/);
+  expect(joined).toMatch(/ok=true/);
+});
+
+test('dropped считает ТОЛЬКО срезанное капом, а не факты-пустышки экстракторов', () => {
+  const rows = [
+    ev({ tool: 'book_chain', result: { booked_all: false, records: [] } }),        // экстрактор → null
+    ev({ tool: 'get_service_masters', result: { services: [] } }),                  // экстрактор → null
+  ];
+  const { lines, dropped } = renderMemory(rows, { nowMs: NOW });
+  expect(lines).toEqual([]);
+  expect(dropped).toBe(0);   // ничего не срезано капом — экстракторам просто нечего сказать
+});
+
+test('хронология одного хода: события с ОДИНАКОВЫМ age_ms сохраняют исходный порядок', () => {
+  // created_at общий для всего хода (один multi-row INSERT DEFAULT NOW()) —
+  // tsMs совпадает; без тай-брейка по исходному индексу writes.concat(reads)
+  // всегда ставил бы write перед read, даже если по факту она была первой.
+  const rows = [
+    ev({ tool: 'get_client_visit_history', result: { visits: [{ datetime: '2026-08-01', services: ['Чистка'] }] }, age_ms: 5 * MIN }),
+    ev({ tool: 'create_booking', input: { datetime: '2026-08-05T14:00:00+03:00' }, result: { record_id: 42 }, age_ms: 5 * MIN }),
+  ];
+  const { lines } = renderMemory(rows, { nowMs: NOW });
+  expect(lines.length).toBe(2);
+  expect(lines[0]).toMatch(/читала историю визитов/);
+  expect(lines[1]).toMatch(/record_id=42/);
+});
+
+test('get_available_dates: свежий график — с часами, устаревший — только факт', () => {
+  const res = { schedule: [{ date: '2026-08-05', hours: [{ from: '10:00', to: '18:00' }] }], working_days_count: 1 };
+  const inp = { staff_yc_id: 55, date_from: '2026-08-05', date_to: '2026-08-10' };
+  const fresh = renderMemory([ev({ tool: 'get_available_dates', input: inp, result: res, age_ms: 10 * MIN })], { nowMs: NOW });
+  expect(fresh.lines[0]).toMatch(/2026-08-05 10:00-18:00/);
+  const stale = renderMemory([ev({ tool: 'get_available_dates', input: inp, result: res, age_ms: SLOT_TIMES_FRESH_MS + MIN })], { nowMs: NOW });
+  expect(stale.lines[0]).not.toMatch(/10:00-18:00/);
+  expect(stale.lines[0]).toMatch(/устарел/);
+  expect(stale.lines[0]).toMatch(/staff_yc_id=55/);
+});
+
+test('get_parallel_slots: свежие старты — с временем, устаревшие — только факт', () => {
+  const res = { date: '2026-08-05', starts: [{ time: '12:00', guests: [] }, { time: '13:00', guests: [] }] };
+  const inp = { date: '2026-08-05', guests: [{ service_yc_id: 1, staff_yc_id: 10 }, { service_yc_id: 2, staff_yc_id: 20 }] };
+  const fresh = renderMemory([ev({ tool: 'get_parallel_slots', input: inp, result: res, age_ms: 10 * MIN })], { nowMs: NOW });
+  expect(fresh.lines[0]).toMatch(/12:00, 13:00/);
+  const stale = renderMemory([ev({ tool: 'get_parallel_slots', input: inp, result: res, age_ms: SLOT_TIMES_FRESH_MS + MIN })], { nowMs: NOW });
+  expect(stale.lines[0]).not.toMatch(/12:00|13:00/);
+  expect(stale.lines[0]).toMatch(/устарел/);
+});
+
+test('get_sequential_slots: свежие варианты — с временем и БЕЗ option_id; устаревшие — только факт', () => {
+  const res = {
+    requested_date: '2026-08-05',
+    variants: [{
+      type: 'same_staff', date: '2026-08-05', staff: [{ yc_id: 10, name: 'Юлия' }],
+      starts: [{ time: '12:00', option_id: 'o1', gap_minutes: 0, booking_mode: 'single_record', chain: [{ option_id: 'o1-leak' }] }],
+    }],
+  };
+  const inp = { services: [{ service_yc_id: 1 }, { service_yc_id: 2 }], date: '2026-08-05' };
+  const fresh = renderMemory([ev({ tool: 'get_sequential_slots', input: inp, result: res, age_ms: 10 * MIN })], { nowMs: NOW });
+  expect(fresh.lines[0]).toMatch(/12:00/);
+  expect(fresh.lines[0]).toMatch(/Юлия/);
+  expect(fresh.lines[0]).not.toMatch(/o1|option_id/);
+  const stale = renderMemory([ev({ tool: 'get_sequential_slots', input: inp, result: res, age_ms: SLOT_TIMES_FRESH_MS + MIN })], { nowMs: NOW });
+  expect(stale.lines[0]).not.toMatch(/12:00|Юлия/);
+  expect(stale.lines[0]).toMatch(/устарел/);
+});
