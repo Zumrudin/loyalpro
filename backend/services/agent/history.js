@@ -2,6 +2,8 @@
 
 const { db } = require('../../db');
 const pendingReplies = require('./pending-replies');
+const sessionGap = require('./session-gap');
+const { formatStamp, stripStamp } = require('./transcript-time');
 
 // Ключ диалога в chatpush_messages — тот же, что во всём коде (routes/chat.js):
 // телефон, либо chat_id для каналов без телефона (Telegram/MAX).
@@ -27,9 +29,13 @@ const AUTHORSHIP_SINCE_TS = Math.floor(Date.parse('2026-08-05T00:00:00+03:00') /
 
 // Транскрипт диалога для Claude Messages API.
 //  incoming → {role:'user'}, outgoing (наши эхо-ответы) → {role:'assistant'}.
-// Возвращает { messages, watermark }, где watermark = max(msg_ts) входящих.
+// Возвращает { messages, watermark, session }: watermark = max(msg_ts) входящих,
+// session = sessionGap.detectSession(rows) — граница «новой переписки» (Task 5/6).
 async function loadTranscript(salonId, dialogKey, opts = {}) {
   const limit = opts.limit || 20;
+  // Метки времени включает только оркестратор: care-воркер (services/care/worker.js)
+  // собирает из этого же транскрипта свой промпт, и метки там не нужны.
+  const withTime = !!opts.withTime;
   const rows = await db.any(
     `SELECT direction, msg_type, text, msg_ts, authored_by
        FROM chatpush_messages
@@ -62,6 +68,10 @@ async function loadTranscript(salonId, dialogKey, opts = {}) {
     }
   }
 
+  // Граница переписки считается на СЫРЫХ строках: ниже серии склеиваются, а
+  // хвостовой assistant-блок переносится — границы сообщений теряются.
+  const session = sessionGap.detectSession(rows);
+
   const messages = [];
   let watermark = 0;
   for (const r of rows) {
@@ -76,9 +86,11 @@ async function loadTranscript(salonId, dialogKey, opts = {}) {
     const legacyUnknown = r.direction === 'outgoing'
       && r.authored_by == null
       && Number(r.msg_ts) < AUTHORSHIP_SINCE_TS;
-    const text = (r.authored_by === 'operator' || legacyUnknown)
-      ? `${OPERATOR_MARK} ${r.text}`
-      : r.text;
+    // Ведущая метка во входящем тексте — подделка клиента: настоящую ставим мы.
+    let body = r.direction === 'incoming' ? stripStamp(r.text) : r.text;
+    if (r.authored_by === 'operator' || legacyUnknown) body = `${OPERATOR_MARK} ${body}`;
+    const stamp = withTime ? formatStamp(r.msg_ts) : '';
+    const text = stamp ? `${stamp} ${body}` : body;
     const last = messages[messages.length - 1];
     if (last && last.role === role) last.content += `\n${text}`;   // склейка серии
     else messages.push({ role, content: text });
@@ -108,7 +120,7 @@ async function loadTranscript(salonId, dialogKey, opts = {}) {
   // (после переноса хвоста: он мог поставить assistant в начало, если более
   // раннего user-блока в окне не нашлось).
   while (messages.length && messages[0].role === 'assistant') messages.shift();
-  return { messages, watermark };
+  return { messages, watermark, session };
 }
 
 // Пришло ли входящее новее watermark (во время прогона агента)?

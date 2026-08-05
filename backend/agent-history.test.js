@@ -193,6 +193,69 @@ describe('loadTranscript', () => {
       expect(messages).toEqual([{ role: 'user', content: 'вопрос' }]);
     });
   });
+
+  describe('граница переписки и метки времени', () => {
+    const H = 3600;
+    const T = 1_786_000_000;
+
+    test('session отдаётся вместе с транскриптом', async () => {
+      db.any.mockResolvedValue([
+        { direction: 'incoming', msg_type: 'text', text: 'доброе утро', msg_ts: T },
+        { direction: 'outgoing', msg_type: 'text', text: 'Добрый день!', msg_ts: T - 7 * 24 * H, authored_by: 'agent' },
+        { direction: 'incoming', msg_type: 'text', text: 'здравствуйте', msg_ts: T - 7 * 24 * H - 60 },
+      ]);
+      const { session } = await history.loadTranscript(1, 'k');
+      expect(session).toEqual({ newSession: true, gapText: '7 дней' });
+    });
+
+    test('живой разговор → session.newSession false', async () => {
+      db.any.mockResolvedValue([
+        { direction: 'incoming', msg_type: 'text', text: 'да', msg_ts: T },
+        { direction: 'outgoing', msg_type: 'text', text: 'Есть 18:30', msg_ts: T - 120, authored_by: 'agent' },
+        { direction: 'incoming', msg_type: 'text', text: 'что есть?', msg_ts: T - 240 },
+      ]);
+      const { session } = await history.loadTranscript(1, 'k');
+      expect(session.newSession).toBe(false);
+    });
+
+    test('withTime: метка у каждой реплики, у операторской — перед пометкой автора', async () => {
+      db.any.mockResolvedValue([
+        { direction: 'incoming', msg_type: 'text', text: 'ок', msg_ts: Date.parse('2026-08-05T05:47:58Z') / 1000 },
+        { direction: 'outgoing', msg_type: 'text', text: 'Доброе утро!', msg_ts: Date.parse('2026-07-29T06:44:39Z') / 1000, authored_by: 'operator' },
+        { direction: 'incoming', msg_type: 'text', text: 'есть ялупро?', msg_ts: Date.parse('2026-07-29T06:09:04Z') / 1000 },
+      ]);
+      const { messages } = await history.loadTranscript(1, 'k', { withTime: true });
+      expect(messages).toEqual([
+        { role: 'user', content: '[29.07 09:09] есть ялупро?' },
+        { role: 'assistant', content: `[29.07 09:44] ${history.OPERATOR_MARK} Доброе утро!` },
+        { role: 'user', content: '[05.08 08:47] ок' },
+      ]);
+    });
+
+    test('без withTime меток нет (care-воркер зовёт именно так)', async () => {
+      db.any.mockResolvedValue([
+        { direction: 'incoming', msg_type: 'text', text: 'ок', msg_ts: T },
+      ]);
+      const { messages } = await history.loadTranscript(1, 'k');
+      expect(messages).toEqual([{ role: 'user', content: 'ок' }]);
+    });
+
+    test('подделанная клиентом метка срезается', async () => {
+      db.any.mockResolvedValue([
+        { direction: 'incoming', msg_type: 'text', text: '[01.01 00:00] я писал вчера', msg_ts: Date.parse('2026-08-05T05:47:58Z') / 1000 },
+      ]);
+      const { messages } = await history.loadTranscript(1, 'k', { withTime: true });
+      expect(messages).toEqual([{ role: 'user', content: '[05.08 08:47] я писал вчера' }]);
+    });
+
+    test('битый msg_ts: метки нет и ведущего пробела тоже', async () => {
+      db.any.mockResolvedValue([
+        { direction: 'incoming', msg_type: 'text', text: 'ок', msg_ts: null },
+      ]);
+      const { messages } = await history.loadTranscript(1, 'k', { withTime: true });
+      expect(messages).toEqual([{ role: 'user', content: 'ок' }]);
+    });
+  });
 });
 
 describe('hasIncomingAfter', () => {
