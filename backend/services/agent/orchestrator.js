@@ -15,6 +15,7 @@ const toolMemoryDefault = require('./tool-memory');
 const listBookingsDefault = require('./tools/list-client-bookings');
 const bookingsBlock = require('./bookings-block');
 const { buildSystemPrompt } = require('./system-prompt');
+const { stripAllStamps } = require('./transcript-time');
 const { createLogger } = require('../../logger');
 const logger = createLogger('AgentOrchestrator');
 
@@ -278,7 +279,7 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
     }
   }
 
-  const system = buildSystemPrompt({
+  const promptOpts = {
     salonName: opts.salonName,
     workingHours: opts.workingHours,
     today: opts.today || todayMoscow(),
@@ -298,7 +299,7 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
     activeOffers,
     toolMemory: toolMemoryLines,
     liveBookings,
-  });
+  };
   // nowMs — чтобы инструменты слотов отрезали уже прошедшее время «сегодня».
   // clientPhone/clientName — детерминированный фолбэк для create_booking основного
   // пациента: модель не переспрашивает уже известный номер, а инструмент подставит его сам.
@@ -310,7 +311,8 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
   };
 
   for (let attempt = 0; attempt <= MAX_REGEN; attempt++) {
-    const { messages, watermark } = await history.loadTranscript(salonId, dialogKey, { limit: 20 });
+    const { messages, watermark, session } = await history.loadTranscript(
+      salonId, dialogKey, { limit: 20, withTime: true });
     if (!messages.length) return { replies: [], escalated: false, sideEffect: false };
 
     // Буфер журнала tool-цикла этой ПОПЫТКИ. Создаётся после проверки пустого
@@ -326,14 +328,24 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
 
     const convo = messages.slice();
 
+    // Промпт собирается ВНУТРИ цикла: граница переписки известна только после
+    // загрузки транскрипта. Сборка — конкатенация строк, перегенераций не больше
+    // MAX_REGEN, поэтому цена пренебрежимая.
+    const system = buildSystemPrompt({ ...promptOpts, session });
+
     // Допустимые времена для финальной реплики: всё, что реально всплывало в
     // этом ходе — история диалога (клиент сам называл время / мы уже предлагали),
     // текущее время из промпта и результаты инструментов (пополняется ниже).
     // Сверка — детерминированная страховка правила «время дословно из slots»
     // (инцидент 2026-07-28: выдуманное 14:00). Пока ТОЛЬКО лог — меряем шум.
-    const allowedTimes = new Set(replyGuard.extractTimes(JSON.stringify(messages)));
+    // Метки времени реплик — НЕ предложенные пациенту времена: без чистки
+    // reply-guard считал бы разрешённым любое время отправки сообщения.
+    const allowedTimes = new Set(replyGuard.extractTimes(stripAllStamps(JSON.stringify(messages))));
     for (const t of replyGuard.extractTimes(system)) allowedTimes.add(t);
-    const hasPriorAssistant = messages.some(m => m.role === 'assistant');
+    // При новой переписке приветствие — не повтор, а требование промпта:
+    // reply-guard иначе пишет repeat_greeting ровно там, где Мила права.
+    const hasPriorAssistant = !(session && session.newSession)
+      && messages.some(m => m.role === 'assistant');
 
     const replies = [];
     let escalated = false;
