@@ -15,7 +15,7 @@ const toolMemoryDefault = require('./tool-memory');
 const listBookingsDefault = require('./tools/list-client-bookings');
 const bookingsBlock = require('./bookings-block');
 const { buildSystemPrompt } = require('./system-prompt');
-const { stripAllStamps } = require('./transcript-time');
+const { stripAllStamps, stripStamp } = require('./transcript-time');
 const { createLogger } = require('../../logger');
 const logger = createLogger('AgentOrchestrator');
 
@@ -520,6 +520,18 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
         }
       }
     }
+
+    // Метка времени вырезается из реплик ДЕТЕРМИНИРОВАННО, а не только
+    // запрещается промптом: в транскрипте с неё начинается КАЖДАЯ ассистентская
+    // реплика, и для модели это сильнейший образец для подражания — она ставит
+    // метку и в своём ответе. На исходящей стороне её не ловит ничто (id_leak
+    // требует шести цифр подряд, unknown_time — лог-only и при совпадении минуты
+    // с текущей молчит), так что пациенту уходило бы «[05.08 09:12] Здравствуйте!».
+    // Точка ОДНА и последняя: здесь реплики уже финальны — позади и добивочный
+    // вызов, и детерминированное подтверждение записи, и переписывание reply-guard,
+    // а впереди только чтение (falseSuccess / REPLY_HAS_TIME) и диспетчер.
+    // stripStamp срезает метку лишь в начале строк — обычная реплика проходит байт-в-байт.
+    for (let i = 0; i < replies.length; i++) replies[i] = stripStamp(replies[i]);
 
     // Пришло ли новое входящее, пока мы думали?
     const stale = await history.hasIncomingAfter(salonId, dialogKey, watermark);

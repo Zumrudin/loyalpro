@@ -424,6 +424,48 @@ describe('runDialog', () => {
     const guardLogs = mockLogger.warn.mock.calls.filter(([msg]) => String(msg).includes('reply-guard'));
     expect(guardLogs.join(' ')).toContain('unknown_time');
   });
+
+  // Метка стоит в начале каждой ассистентской реплики транскрипта и работает
+  // как образец: промпт-запрета «не пиши её» недостаточно.
+  test('метку времени из ответа модели пациент не получает', async () => {
+    const deps = makeDeps();
+    deps.provider.createMessage.mockResolvedValueOnce(
+      textResp('[05.08 09:12] Здравствуйте! Есть окошко в 18:30'));
+    const out = await orchestrator.runDialog(1, 'k', { deps });
+    expect(out.replies).toEqual(['Здравствуйте! Есть окошко в 18:30']);
+  });
+
+  test('обычная реплика проходит без изменений', async () => {
+    const deps = makeDeps();
+    const text = 'Здравствуйте!\nПодскажите, на какой день удобно?';
+    deps.provider.createMessage.mockResolvedValueOnce(textResp(text));
+    const out = await orchestrator.runDialog(1, 'k', { deps });
+    expect(out.replies).toEqual([text]);
+  });
+
+  // Ради этого сборка промпта и перенесена внутрь цикла: граница переписки
+  // известна только после загрузки транскрипта, и на второй попытке она своя.
+  test('перегенерация пересобирает промпт со свежей границей переписки', async () => {
+    let loads = 0;
+    let checks = 0;
+    const deps = makeDeps({
+      history: {
+        loadTranscript: jest.fn(async () => (++loads === 1
+          ? { messages: [{ role: 'user', content: 'привет' }], watermark: 100,
+            session: { newSession: false, gapText: null } }
+          : { messages: [{ role: 'user', content: 'привет' }], watermark: 101,
+            session: { newSession: true, gapText: '7 дней' } })),
+        hasIncomingAfter: jest.fn(async () => (++checks === 1)),
+      },
+    });
+    deps.provider.createMessage
+      .mockResolvedValueOnce(textResp('ответ про маникюр'))
+      .mockResolvedValueOnce(textResp('ответ про педикюр'));
+    await orchestrator.runDialog(1, 'k', { deps });
+    expect(deps.provider.createMessage).toHaveBeenCalledTimes(2);
+    expect(deps.provider.createMessage.mock.calls[0][0].system).not.toContain('НАЧАЛО НОВОЙ ПЕРЕПИСКИ');
+    expect(deps.provider.createMessage.mock.calls[1][0].system).toContain('НАЧАЛО НОВОЙ ПЕРЕПИСКИ');
+  });
 });
 
 // ── Логирование вызовов инструментов (Task 13: «в логах виден вызов book_chain») ──
