@@ -34,12 +34,18 @@ const HINT_STAFF_SINGLE = 'Эту услугу в этот день ведёт �
 const HINT_NO_STAFF = 'На эту дату свободного времени нет ни у одного исполнителя услуги — ' +
   'честно скажи об этом и предложи другой день (get_available_slots на другую дату).';
 
-// Часть исполнителей проверить не удалось: про них мы не знаем НИЧЕГО, поэтому «нет
+// Проверены НЕ ВСЕ исполнители: про непроверенных мы не знаем НИЧЕГО, поэтому «нет
 // ни у кого» — уже выдумка. Но и молчать не о чем: у проверенных действительно пусто,
 // и предложить другую дату честно.
+// Формулировка покрывает ДВА источника неполноты, а не только сбой связи: мастер мог
+// не ответить (YClients упал), а мог просто не попасть в перебор из-за MAX_STAFF_OPTIONS.
+// Прежний текст «часть специалистов проверить не удалось (временный сбой)» во втором
+// случае врал бы модели о причине — а причина отказа, выданная от лица клиники,
+// это тот же класс инцидента, что «это время только что заняли» (2026-07-31).
 const HINT_STAFF_PARTIAL = 'У проверенных исполнителей на эту дату свободного времени нет, ' +
-  'но часть специалистов проверить не удалось (временный сбой). НЕ утверждай, что времени нет ' +
-  'ни у кого — этого мы не знаем. Предложи посмотреть другую дату (get_available_slots на другую дату).';
+  'но проверены НЕ ВСЕ специалисты услуги (часть не ответила или не попала в проверку). ' +
+  'НЕ утверждай, что времени нет ни у кого — этого мы не знаем. Предложи посмотреть другую ' +
+  'дату (get_available_slots на другую дату).';
 
 // Ни один исполнитель не ответил — это техническая неудача, а не занятость клиники.
 // Тон и формулировка — как в одномастерной ветке («Не удалось получить слоты: …»).
@@ -187,10 +193,12 @@ async function computeStaffSlots(salon, staffId, serviceId, date, nowMs) {
 // вопросом «а почему к Тане не предлагаешь?». Задача — довести до записи: альтернативу
 // подсвечивает сам инструмент, а не память модели.
 async function findAlternativeStaff(salon, filter, staffList, staffId, serviceId, date, nowMs) {
-  const others = (staffList || [])
+  const eligible = (staffList || [])
     .filter(m => m && m.yc_id && String(m.yc_id) !== String(staffId))
-    .filter(m => svcFilter.isBookable(filter, serviceId, m.yc_id))
-    .slice(0, MAX_ALT_STAFF);
+    .filter(m => svcFilter.isBookable(filter, serviceId, m.yc_id));
+  // Кап считаем ОТДЕЛЬНО от числа подходящих: no_alternative_staff — утверждение
+  // обо ВСЕХ исполнителях услуги, а перебираем мы максимум MAX_ALT_STAFF.
+  const others = eligible.slice(0, MAX_ALT_STAFF);
   if (!others.length) return null;
   const checked = await Promise.all(others.map(async (m) => {
     try {
@@ -201,9 +209,13 @@ async function findAlternativeStaff(salon, filter, staffList, staffId, serviceId
   const reachable = checked.filter(Boolean);
   const withSlots = reachable.filter(a => a.slots.length);
   if (withSlots.length) return { alternative_staff: withSlots };
-  // Все альтернативы реально проверены и пусты → модель может честно сказать,
-  // что на эту дату времени нет ни у кого из исполнителей услуги.
-  if (reachable.length === others.length) return { no_alternative_staff: true };
+  // Сказать «ни у кого» можно, только когда проверка РЕАЛЬНО состоялась по всем:
+  // все подходящие исполнители попали в перебор (кап никого не срезал) И каждый
+  // ответил. Непроверенный мастер выглядит снаружи ровно как занятый — выдать его
+  // за занятого значит соврать пациенту от лица клиники.
+  if (reachable.length === others.length && others.length === eligible.length) {
+    return { no_alternative_staff: true };
+  }
   return null;
 }
 
@@ -218,15 +230,19 @@ async function loadSalon(salonId) {
 // отдаём пациенту. Раньше исполнителя выбирала сама модель (промпт это разрешал), и
 // пациент молча получал одного специалиста — при том что цена зависит от мастера.
 async function computeStaffOptions(salon, filter, staffList, serviceId, date, nowMs) {
-  const candidates = (staffList || [])
+  const eligible = (staffList || [])
     .filter(m => m && m.yc_id)
     .filter(m => svcFilter.isBookable(filter, serviceId, m.yc_id))
     // Сортировка ДО капа: порядок staffList наследуется от SELECT по staff_members
     // без ORDER BY, то есть меняется после UPDATE/автовакуума. Без неё кап срезал бы
     // случайных исполнителей: у услуги с 4+ мастерами пациент видел бы каждый раз
     // разный набор, невоспроизводимый при разборе инцидента.
-    .sort((a, b) => a.yc_id - b.yc_id)
-    .slice(0, MAX_STAFF_OPTIONS);
+    // Number(): весь остальной файл сравнивает мастеров через String(...) — типам
+    // yc_id тут не верят. На строках вычитание дало бы NaN, sort молча оставил бы
+    // порядок SELECT'а, и детерминированность, ради которой сортировка и стоит,
+    // тихо исчезла бы.
+    .sort((a, b) => Number(a.yc_id) - Number(b.yc_id));
+  const candidates = eligible.slice(0, MAX_STAFF_OPTIONS);
   const checked = await Promise.all(candidates.map(async (m) => {
     try {
       const r = await computeStaffSlots(salon, m.yc_id, serviceId, date, nowMs);
@@ -236,15 +252,19 @@ async function computeStaffOptions(salon, filter, staffList, serviceId, date, no
   const reachable = checked.filter(Boolean);
   const options = reachable
     .filter(o => o.slots.length)
-    // Ближайшее окно — первым. Порядок детерминированный: тай-брейк по yc_id.
-    .sort((a, b) => (toMin(a.slots[0].time) - toMin(b.slots[0].time)) || (a.staff_yc_id - b.staff_yc_id));
-  // Наружу отдаём не только окна, но и СКОЛЬКО мастеров реально ответили: мастер,
-  // до которого не достучались, выпадает из выдачи ровно так же, как занятый, и по
-  // одному пустому списку «занят» от «не знаем» не отличить. Ровно та же развилка,
-  // что у findAlternativeStaff (там она уже стоит: no_alternative_staff выставляется
-  // только при reachable.length === others.length) — две ветки одного файла обязаны
-  // лечить эту проблему одинаково.
-  return { options, reachable: reachable.length, total: candidates.length };
+    // Ближайшее окно — первым. Порядок детерминированный: тай-брейк по yc_id
+    // (Number по той же причине, что и в сортировке кандидатов выше).
+    .sort((a, b) => (toMin(a.slots[0].time) - toMin(b.slots[0].time))
+      || (Number(a.staff_yc_id) - Number(b.staff_yc_id)));
+  // Наружу отдаём три РАЗНЫХ числа, потому что пустой список окон имеет три разные
+  // причины, и только одна из них — «занято»:
+  //   total    — сколько исполнителей у услуги вообще подходит (после фильтра админки);
+  //   checked  — скольких мы успели спросить (кап MAX_STAFF_OPTIONS режет остальных);
+  //   reachable— сколько из спрошенных реально ответили (остальные — сбой YClients).
+  // Мастер непроверенный и мастер недостижимый выпадают из выдачи ровно так же, как
+  // занятый, и по одному пустому списку их не различить. Ровно та же развилка, что у
+  // findAlternativeStaff — две ветки одного файла обязаны лечить это одинаково.
+  return { options, reachable: reachable.length, checked: candidates.length, total: eligible.length };
 }
 
 // Должность — из карточки сотрудника (то же поле, что отдаёт list_staff): хинт требует
@@ -299,7 +319,7 @@ async function run(salonId, input, ctx = {}) {
     }
     const salon = await loadSalon(salonId);
     if (!salon || !salon.yclients_company_id) return { error: 'YClients не подключён для салона.' };
-    const { options, reachable, total } = await computeStaffOptions(salon, filter, chk.staffList, serviceId, date, nowMs);
+    const { options, reachable, checked, total } = await computeStaffOptions(salon, filter, chk.staffList, serviceId, date, nowMs);
     if (options.length) {
       await attachPositions(salonId, options);
       return { staff_options: options, hint: options.length > 1 ? HINT_STAFF_CHOICE : HINT_STAFF_SINGLE };
@@ -314,7 +334,12 @@ async function run(salonId, input, ctx = {}) {
     // а не сбой. Ответ тот же мягкий, что у скрытой услуги.
     if (!total) return { slots: [], filtered: true };
     if (!reachable) return { error: ERR_STAFF_UNREACHABLE };
-    if (reachable < total) return { staff_options: [], hint: HINT_STAFF_PARTIAL };
+    // «Ни у кого» законно ровно в одном случае: кап никого не срезал (checked === total)
+    // И все спрошенные ответили (reachable === checked). Услугу может вести пятеро, а
+    // спрашиваем мы троих — молчание про 4-го и 5-го нельзя выдавать за занятость
+    // клиники: это дословный повтор инцидента 2026-08-01 («а почему к Тане не
+    // предлагаешь?»), только на дефолтном пути любого «а когда можно?».
+    if (reachable < checked || checked < total) return { staff_options: [], hint: HINT_STAFF_PARTIAL };
     return { staff_options: [], no_staff_available: true, hint: HINT_NO_STAFF };
   }
   // Скрытую услугу/пару не предлагаем (мягкий пустой ответ, без «технических сложностей»).

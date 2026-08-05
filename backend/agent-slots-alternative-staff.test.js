@@ -97,6 +97,22 @@ describe('get_available_slots — альтернативный мастер пр
     expect(asked).toEqual([11, 12, 13]);
   });
 
+  // Кап MAX_ALT_STAFF режет перебор, а «ни у кого» — утверждение обо ВСЕХ
+  // исполнителях услуги. Услугу ведут пятеро, проверили троих: у 4-го и 5-го
+  // никто не смотрел, и молчание про них нельзя выдавать за занятость клиники.
+  test('исполнителей больше капа, у проверенных пусто → no_alternative_staff НЕ выставляем', async () => {
+    listServices.run.mockResolvedValue({
+      services: [{ yc_id: 900, title: 'ProFacial «Голливуд»', staff: [
+        { yc_id: 11, name: 'Юлия' }, { yc_id: 12, name: 'Татьяна' }, { yc_id: 13, name: 'Мария' },
+        { yc_id: 14, name: 'Пери Исамудиновна' }, { yc_id: 15, name: 'Анна' },
+      ] }],
+    });
+    const out = await slots.run(1, ARGS, { nowMs: NOON });
+    expect(out.slots).toEqual([]);
+    expect(out.alternative_staff).toBeUndefined();
+    expect(out.no_alternative_staff).toBeUndefined();
+  });
+
   test('альтернативы тоже проходят lead-time: слот «впритык» не подсвечивается', async () => {
     // Сейчас 13:30 мск того же дня; у Татьяны окно в 14:00 — ближе 2 часов.
     const now = Date.parse('2026-08-02T13:30:00+03:00');

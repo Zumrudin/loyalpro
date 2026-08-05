@@ -211,7 +211,36 @@ describe('get_available_slots без staff_yc_id — граничные случ
     const out = await slots.run(1, ARGS, { nowMs: NOON });
     expect(out.staff_options).toEqual([]);
     expect(out.no_staff_available).toBeUndefined();
-    expect(out.hint).toMatch(/проверить не удалось/);
+    expect(out.hint).toMatch(/НЕ ВСЕ|не все/);
+  });
+
+  // Третий источник пустой выдачи, кроме «занят» и «не ответил»: «не спрашивали».
+  // Услугу ведут пятеро, кап проверяет троих — если у этих троих пусто, сказать
+  // «времени нет ни у кого из исполнителей» нельзя: у 4-го и 5-го никто не смотрел.
+  // Дословный повтор инцидента 2026-08-01 («а почему к Тане не предлагаешь?»),
+  // только теперь на ДЕФОЛТНОМ пути любого «а когда можно?».
+  test('исполнителей больше капа, у проверенных пусто → no_staff_available НЕ выставляем', async () => {
+    listServices.run.mockResolvedValue({
+      services: [{ yc_id: 900, title: 'Биоревитализация', staff: [
+        { yc_id: 11, name: 'Юлия' }, { yc_id: 12, name: 'Татьяна' },
+        { yc_id: 13, name: 'Мария' }, { yc_id: 14, name: 'Пери Исамудиновна' },
+        { yc_id: 15, name: 'Анна' },
+      ] }],
+    });
+    ycGetBookTimes.mockResolvedValue([]);   // у всех проверенных пусто
+    const out = await slots.run(1, ARGS, { nowMs: NOON });
+    expect(ycGetBookTimes.mock.calls.map(c => c[1]).sort()).toEqual([11, 12, 13]);
+    expect(out.staff_options).toEqual([]);
+    expect(out.no_staff_available).toBeUndefined();
+    expect(out.hint).toMatch(/НЕ ВСЕ|не все/);
+  });
+
+  // Обратная граница: кап никого не срезал и все ответили — «ни у кого» законно.
+  test('исполнителей ровно по капу, у всех пусто → no_staff_available:true', async () => {
+    ycGetBookTimes.mockResolvedValue([]);
+    const out = await slots.run(1, ARGS, { nowMs: NOON });   // в CATALOG ровно 3 мастера
+    expect(ycGetBookTimes.mock.calls.map(c => c[1]).sort()).toEqual([11, 12, 13]);
+    expect(out.no_staff_available).toBe(true);
   });
 
   // Регресс-страховки: код Task 1 их уже покрывает, тесты фиксируют поведение.
