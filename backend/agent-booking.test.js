@@ -10,6 +10,19 @@ jest.mock('./db', () => {
 });
 jest.mock('./services/yclients-booking', () => ({ ycCreateRecord: jest.fn() }));
 jest.mock('./services/yclients-records', () => ({ ycGetRecord: jest.fn() }));
+// Схемы оставляем настоящие (реестр инструментов проверяется ниже по именам),
+// подменяем только run: create_booking зовёт их на своём guard-пути.
+jest.mock('./services/agent/tools/get-available-slots', () => ({
+  ...jest.requireActual('./services/agent/tools/get-available-slots'), run: jest.fn(),
+}));
+jest.mock('./services/agent/tools/list-services', () => ({
+  ...jest.requireActual('./services/agent/tools/list-services'), run: jest.fn(async () => ({ services: [] })),
+}));
+jest.mock('./services/agent-settings', () => ({
+  loadServiceFilterSafe: jest.fn(async () => ({
+    mode: 'all', denyServices: new Set(), allowServices: new Set(), denyPairs: new Set(),
+  })),
+}));
 
 const dbMod = require('./db');
 const { db } = dbMod;
@@ -180,6 +193,41 @@ describe('createBookingRecord', () => {
 });
 
 describe('create_booking tool', () => {
+  // Провал записи ИМЕННО по времени → guard перезапрашивает свежие старты той же
+  // услуги у того же мастера и кладёт их в available_slots.
+  describe('перезапрос слотов при отказе по времени', () => {
+    const getSlots = require('./services/agent/tools/get-available-slots');
+    const CTX = { clientPhone: '79001112233', dialogKey: '79001112233',
+      nowMs: Date.parse('2026-08-01T09:00:00+03:00') };
+    const INPUT = { staff_yc_id: 55, service_yc_id: 7, datetime: '2026-08-05T12:00:00+03:00' };
+
+    beforeEach(() => {
+      programClient({ prior: null });
+      ycCreateRecord.mockRejectedValue(new Error('Выбранное время недоступно'));
+      getSlots.run.mockResolvedValue({ slots: [{ time: '15:00', datetime: '2026-08-05T15:00:00+03:00' }] });
+    });
+
+    test('мастер известен → слоты перезапрашиваются, ответ несёт available_slots', async () => {
+      const out = await createBookingTool.run(1, INPUT, CTX);
+      expect(getSlots.run).toHaveBeenCalledTimes(1);
+      expect(getSlots.run.mock.calls[0][1]).toMatchObject({ staff_yc_id: 55, service_yc_id: 7, date: '2026-08-05' });
+      expect(out.slot_unavailable).toBe(true);
+      expect(out.available_slots).toHaveLength(1);
+    });
+
+    // Без staff_yc_id get_available_slots уходит в мультимастерный режим и отдаёт
+    // staff_options БЕЗ slots — guard прочитал бы пустоту и сказал пациенту
+    // «свободных стартов на эту дату больше нет». Детерминированная защита от
+    // вранья соврала бы сама; перезапрашивать тут нечего.
+    test('staff_yc_id отсутствует (модель нарушила схему) → слоты не перезапрашиваем', async () => {
+      const out = await createBookingTool.run(1, { ...INPUT, staff_yc_id: undefined }, CTX);
+      expect(getSlots.run).not.toHaveBeenCalled();
+      expect(out.slot_unavailable).toBeUndefined();
+      expect(out.available_slots).toBeUndefined();
+      expect(out.error).toMatch(/недоступно/);   // исходная ошибка YClients как есть
+    });
+  });
+
   test('schema требует поля брони', () => {
     const p = createBookingTool.schema.input_schema.properties;
     expect(p.staff_yc_id).toBeDefined();

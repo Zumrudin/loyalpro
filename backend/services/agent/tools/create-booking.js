@@ -141,6 +141,13 @@ async function run(salonId, input, ctx = {}) {
 async function withFreshSlotsOnTimeFailure(salonId, input, ctx, res) {
   if (!res || res.created !== false || res.duplicate) return res;
   if (!TIME_UNAVAILABLE_RE.test(String(res.error || ''))) return res;
+  // Мастер обязателен по схеме create_booking, но модель схему нарушить может, а
+  // get_available_slots БЕЗ staff_yc_id уходит в мультимастерный режим и отдаёт
+  // staff_options вместо slots. Guard прочитал бы пустой slots и заявил пациенту,
+  // что «свободных стартов под эту услугу на эту дату больше нет» — то есть
+  // детерминированная защита ОТ вранья соврала бы сама. Перезапрашивать нечего:
+  // отдаём исходный ответ как есть.
+  if (!input || !input.staff_yc_id) return res;
   const date = String(input.datetime || '').slice(0, 10);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return res;
 
