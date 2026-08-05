@@ -274,3 +274,61 @@ test('get_sequential_slots: свежие варианты — с времене�
   expect(stale.lines[0]).not.toMatch(/12:00|Юлия/);
   expect(stale.lines[0]).toMatch(/устарел/);
 });
+
+describe('память: get_available_slots без мастера (выбор специалиста)', () => {
+  // Пациент мастера не называл → инструмент вернул окна всех исполнителей
+  // (staff_options вместо slots). Экстрактор, читавший только res.slots, писал
+  // в журнал «staff_yc_id=undefined … свободного времени не было» — прямую ложь
+  // о том, что модель тем же ходом показала пациенту.
+  const OPTIONS = {
+    staff_options: [
+      { staff_yc_id: 11, name: 'Юлия', position: 'косметолог-эстетист', slots: [{ time: '12:00' }, { time: '14:00' }] },
+      { staff_yc_id: 12, name: 'Пери Исамудиновна', position: 'главный врач', slots: [{ time: '15:00' }] },
+    ],
+  };
+  const INPUT = { service_yc_id: 900, date: '2026-08-02' };   // staff_yc_id не передавался
+
+  test('времена всех показанных мастеров попадают в выжимку', () => {
+    const { lines } = renderMemory(
+      [ev({ tool: 'get_available_slots', input: INPUT, result: OPTIONS, age_ms: 10 * MIN })],
+      { nowMs: NOW });
+    expect(lines[0]).toMatch(/Юлия/);
+    expect(lines[0]).toMatch(/12:00, 14:00/);
+    expect(lines[0]).toMatch(/Пери Исамудиновна/);
+    expect(lines[0]).toMatch(/15:00/);
+    expect(lines[0]).not.toMatch(/свободного времени не было/);
+    expect(lines[0]).not.toMatch(/undefined/);
+  });
+
+  test('устаревшее событие времён не показывает', () => {
+    const { lines } = renderMemory(
+      [ev({ tool: 'get_available_slots', input: INPUT, result: OPTIONS, age_ms: SLOT_TIMES_FRESH_MS + MIN })],
+      { nowMs: NOW });
+    expect(lines[0]).not.toMatch(/12:00|15:00/);
+    expect(lines[0]).toMatch(/перезапроси/);
+  });
+
+  test('«ни у кого» — только когда все исполнители реально ответили', () => {
+    // Тот же водораздел, что в самом инструменте (no_staff_available выставляется
+    // лишь при reachable === total): недостижимый из-за сбоя YClients мастер не
+    // должен превращаться в журнале в «занят» — иначе модель следующим ходом
+    // объявит пациенту выдуманный отказ клиники.
+    const all = renderMemory(
+      [ev({ tool: 'get_available_slots', input: INPUT, result: { staff_options: [], no_staff_available: true }, age_ms: MIN })],
+      { nowMs: NOW });
+    expect(all.lines[0]).toMatch(/ни у кого/);
+    const partial = renderMemory(
+      [ev({ tool: 'get_available_slots', input: INPUT, result: { staff_options: [] }, age_ms: MIN })],
+      { nowMs: NOW });
+    expect(partial.lines[0]).not.toMatch(/ни у кого/);
+    expect(partial.lines[0]).toMatch(/не всех/);
+  });
+
+  test('одномастерный режим не изменился: id мастера в строке', () => {
+    const { lines } = renderMemory(
+      [ev({ tool: 'get_available_slots', input: { ...INPUT, staff_yc_id: 55 }, result: { slots: [{ time: '10:00' }] }, age_ms: MIN })],
+      { nowMs: NOW });
+    expect(lines[0]).toMatch(/staff_yc_id=55/);
+    expect(lines[0]).toMatch(/показаны 10:00/);
+  });
+});

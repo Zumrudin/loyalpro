@@ -182,8 +182,31 @@ const EXTRACTORS = {
   },
   get_available_slots(e, ctx) {
     const inp = e.input || {}, res = e.result || {};
-    const base = `смотрела слоты service_yc_id=${inp.service_yc_id} staff_yc_id=${inp.staff_yc_id} на ${inp.date}`;
+    // Мастера в запросе могло не быть вовсе: пациент его не называл, и инструмент
+    // посчитал окна у ВСЕХ исполнителей услуги (staff_options вместо slots) —
+    // выбор специалиста делает пациент. Читая только res.slots, память писала
+    // «staff_yc_id=undefined … свободного времени не было» — то есть врала ровно
+    // там, где тем же ходом пациенту показали времена трёх мастеров.
+    const who = inp.staff_yc_id ? `staff_yc_id=${inp.staff_yc_id}` : 'у всех исполнителей';
+    const base = `смотрела слоты service_yc_id=${inp.service_yc_id} ${who} на ${inp.date}`;
     if (!ctx.fresh) return `${base} (выдача устарела — при вопросе о времени перезапроси)`;
+    if (Array.isArray(res.staff_options)) {
+      // В строку идут только имя мастера и времена: должность (position) уже была
+      // названа пациенту в реплике и вернётся транскриптом, а бюджет блока общий.
+      const per = res.staff_options.slice(0, 3).map((o) => {
+        const times = (Array.isArray(o.slots) ? o.slots : []).slice(0, 6).map(s => s && s.time).filter(Boolean);
+        return `${o.name}: ${times.join(', ')}`;
+      });
+      if (per.length) return `${base}: показаны ${per.join('; ')}`;
+      // Пустой выбор — это ДВА разных случая, и путать их нельзя (тот же водораздел,
+      // что в самом инструменте): «нет ни у кого» законно только когда все исполнители
+      // реально ответили. Недостижимый из-за сбоя YClients мастер выпадает из выдачи
+      // так же, как занятый, и выданный за занятого превращается в выдуманный отказ
+      // клиники — класс инцидента 2026-07-31 («это время только что заняли»).
+      return res.no_staff_available
+        ? `${base}: свободного времени не было ни у кого из исполнителей`
+        : `${base}: свободных окон не нашла, но проверить удалось не всех исполнителей — перезапроси`;
+    }
     const slots = Array.isArray(res.slots) ? res.slots : [];
     if (!slots.length) {
       return `${base}: свободного времени не было${res.alternative_staff ? ', предлагала альтернативных мастеров' : ''}`;
