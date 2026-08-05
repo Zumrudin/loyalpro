@@ -193,11 +193,16 @@ const EXTRACTORS = {
     if (Array.isArray(res.staff_options)) {
       // В строку идут только имя мастера и времена: должность (position) уже была
       // названа пациенту в реплике и вернётся транскриптом, а бюджет блока общий.
+      // Многоточие при срезе — обязательное, как в одномастерной ветке ниже:
+      // «Юлия: 12:00, 12:30, 13:00, 13:30, 14:00, 14:30» без него читается как
+      // ПОЛНЫЙ список окон, и следующим ходом модель отвечает пациенту «больше
+      // у Юлии времени нет» — про окна, которые сама же показала часом раньше.
       const per = res.staff_options.slice(0, 3).map((o) => {
-        const times = (Array.isArray(o.slots) ? o.slots : []).slice(0, 6).map(s => s && s.time).filter(Boolean);
-        return `${o.name}: ${times.join(', ')}`;
+        const all = Array.isArray(o.slots) ? o.slots : [];
+        const times = all.slice(0, 6).map(s => s && s.time).filter(Boolean);
+        return `${o.name}: ${times.join(', ')}${all.length > 6 ? '…' : ''}`;
       });
-      if (per.length) return `${base}: показаны ${per.join('; ')}`;
+      if (per.length) return `${base}: показаны ${per.join('; ')}${res.staff_options.length > 3 ? '…' : ''}`;
       // Пустой выбор — это ДВА разных случая, и путать их нельзя (тот же водораздел,
       // что в самом инструменте): «нет ни у кого» законно только когда все исполнители
       // реально ответили. Недостижимый из-за сбоя YClients мастер выпадает из выдачи

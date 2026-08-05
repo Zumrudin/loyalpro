@@ -324,6 +324,32 @@ describe('память: get_available_slots без мастера (выбор с
     expect(partial.lines[0]).toMatch(/не всех/);
   });
 
+  // Усечение без многоточия читается как полный список: следующим ходом модель
+  // видит «Юлия: 12:00, …, 14:30» и может заявить пациенту «больше окон нет».
+  // Одномастерная ветка многоточие ставит — мультимастерная обязана тоже.
+  test('усечённые списки помечены многоточием — и времена, и мастера', () => {
+    const many = (n) => Array.from({ length: n }, (_, i) => ({ time: `1${i}:00` }));
+    const { lines } = renderMemory([ev({
+      tool: 'get_available_slots', input: INPUT, age_ms: MIN,
+      result: { staff_options: [
+        { staff_yc_id: 11, name: 'Юлия', slots: many(8) },
+        { staff_yc_id: 12, name: 'Татьяна', slots: [{ time: '15:00' }] },
+        { staff_yc_id: 13, name: 'Мария', slots: [{ time: '16:00' }] },
+        { staff_yc_id: 14, name: 'Анна', slots: [{ time: '17:00' }] },
+      ] },
+    })], { nowMs: NOW });
+    expect(lines[0]).toMatch(/Юлия: 10:00, 11:00, 12:00, 13:00, 14:00, 15:00…/);
+    expect(lines[0]).not.toMatch(/Анна/);
+    expect(lines[0]).toMatch(/16:00…$/);   // мастера тоже срезаны — многоточие в конце
+  });
+
+  test('полные списки многоточием не помечаются', () => {
+    const { lines } = renderMemory(
+      [ev({ tool: 'get_available_slots', input: INPUT, result: OPTIONS, age_ms: MIN })],
+      { nowMs: NOW });
+    expect(lines[0]).not.toMatch(/…/);
+  });
+
   test('одномастерный режим не изменился: id мастера в строке', () => {
     const { lines } = renderMemory(
       [ev({ tool: 'get_available_slots', input: { ...INPUT, staff_yc_id: 55 }, result: { slots: [{ time: '10:00' }] }, age_ms: MIN })],
