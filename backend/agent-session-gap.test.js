@@ -59,12 +59,33 @@ describe('detectSession', () => {
     expect(detectSession([out(T - 10), out(T)])).toEqual({ newSession: false, gapText: null });
   });
 
+  // history.js фильтрует пустой текст (WHERE text IS NOT NULL AND text <> ''),
+  // так что единственная строка окна — исходящее — тот же случай «входящих нет»,
+  // что и несколько исходящих подряд, и не должен считаться новой перепиской.
+  test('единственное исходящее сообщение → не новая переписка', () => {
+    expect(detectSession([out(T)])).toEqual({ newSession: false, gapText: null });
+  });
+
   test('битый msg_ts → не новая переписка (fail-safe, лишнего приветствия не даём)', () => {
     expect(detectSession([out(null), inc(T)])).toEqual({ newSession: false, gapText: null });
   });
 
+  test('строковый msg_ts из PG (bigint) разбирается', () => {
+    expect(detectSession([out(String(T - 7 * 24 * H)), inc(String(T))]))
+      .toEqual({ newSession: true, gapText: '7 дней' });
+  });
+
+  test('нечисловой и пустой msg_ts → fail-safe', () => {
+    expect(detectSession([out('abc'), inc(T)]).newSession).toBe(false);
+    expect(detectSession([out(''), inc(T)]).newSession).toBe(false);
+  });
+
   test('порог настраивается', () => {
     expect(detectSession([out(T - 3 * H), inc(T)], { gapHours: 2 }).newSession).toBe(true);
+  });
+
+  test('opts=null не бросает исключение (дефолт параметра ловит только undefined)', () => {
+    expect(detectSession([out(T - 7 * 24 * H), inc(T)], null).newSession).toBe(true);
   });
 
   describe('склонение разрыва', () => {
@@ -82,6 +103,14 @@ describe('detectSession', () => {
       expect(gap(71 * H)).toBe('2 дня');
       expect(gap(5 * 24 * H)).toBe('5 дней');
       expect(gap(21 * 24 * H)).toBe('21 день');
+    });
+
+    // Разрыв меряется до НАЧАЛА серии, поэтому «неделя молчания» на деле
+    // 6 д 23:59:40 — с округлением вниз это дало бы «6 дней» (инцидент 2026-08-05).
+    test('неполные часы округляются до ближайшего, а не вниз', () => {
+      expect(gap(7 * 24 * H - 20)).toBe('7 дней');
+      expect(gap(6 * H + 1700)).toBe('6 часов');     // вниз
+      expect(gap(47 * H + 1900)).toBe('2 дня');      // вверх, через границу 48 ч
     });
   });
 });

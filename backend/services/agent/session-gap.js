@@ -43,10 +43,13 @@ function toTs(v) {
 // rows — сырые строки транскрипта в ХРОНОЛОГИЧЕСКОМ порядке (до склейки серий и
 // до переноса хвостового assistant-блока: обе операции теряют границы сообщений).
 // → { newSession, gapText }, gapText непуст только при newSession.
-function detectSession(rows, opts = {}) {
-  const gapHours = Number(opts.gapHours) > 0 ? Number(opts.gapHours) : DEFAULT_GAP_HOURS;
+function detectSession(rows, opts) {
+  // opts=null проходит мимо дефолта параметра (тот ловит только undefined) —
+  // без этого исключение улетело бы наверх и уронило бы ход диалога.
+  const o = opts || {};
+  const gapHours = Number(o.gapHours) > 0 ? Number(o.gapHours) : DEFAULT_GAP_HOURS;
   const list = Array.isArray(rows) ? rows : [];
-  if (list.length < 2) return { newSession: true, gapText: null };
+  if (!list.length) return { newSession: true, gapText: null };
 
   // Последнее входящее, а не последняя строка: задержанное эхо Chatpush получает
   // msg_ts ПОЗЖЕ нового входящего и стоит в хвосте (см. history.js).
@@ -54,7 +57,10 @@ function detectSession(rows, opts = {}) {
   for (let k = list.length - 1; k >= 0; k--) {
     if (list[k].direction === 'incoming') { last = k; break; }
   }
-  if (last < 0) return { newSession: false, gapText: null };   // входящих в окне нет
+  // Входящих в окне нет вовсе — сюда попадает и «только исходящие» из нескольких
+  // строк, и единственное исходящее сообщение (history.js фильтрует пустой текст,
+  // так что входящее-картинка без подписи из окна выпадает — тот же случай).
+  if (last < 0) return { newSession: false, gapText: null };
 
   // Начало ХВОСТОВОЙ СЕРИИ сообщений пациента. Сравнивать два последних сообщения
   // нельзя: после долгого молчания клиент часто пишет 2-3 сообщения подряд, и
