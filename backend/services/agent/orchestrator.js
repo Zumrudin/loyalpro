@@ -344,7 +344,11 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
     for (const t of replyGuard.extractTimes(system)) allowedTimes.add(t);
     // При новой переписке приветствие — не повтор, а требование промпта:
     // reply-guard иначе пишет repeat_greeting ровно там, где Мила права.
-    const hasPriorAssistant = !(session && session.newSession)
+    // Подавляем ровно в том случае, в каком промпт предписал поздороваться:
+    // блок «НАЧАЛО НОВОЙ ПЕРЕПИСКИ» рендерится только при ИЗМЕРЕННОМ разрыве
+    // (непустой gapText). Без gapText приветствие не предписано, и если модель
+    // поздоровается посреди разговора — про это надо узнать из лога guard'а.
+    const hasPriorAssistant = !(session && session.newSession && session.gapText)
       && messages.some(m => m.role === 'assistant');
 
     const replies = [];

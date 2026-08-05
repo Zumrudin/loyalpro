@@ -407,6 +407,30 @@ describe('runDialog', () => {
     expect(guardLogs.join(' ')).toContain('repeat_greeting');
   });
 
+  test('newSession без измеренного разрыва: приветствие всё ещё считается повтором', async () => {
+    // Без gapText блок «НАЧАЛО НОВОЙ ПЕРЕПИСКИ» не рендерится (system-prompt.js),
+    // то есть приветствие промптом НЕ предписано — глушить guard не за что.
+    mockLogger.warn.mockClear();
+    const deps = makeDeps({
+      history: {
+        loadTranscript: jest.fn(async () => ({
+          messages: [
+            { role: 'assistant', content: '[05.08 08:40] Здравствуйте! Я Мила' },
+            { role: 'user', content: '[05.08 08:47] хочу записаться' },
+          ],
+          watermark: 100,
+          session: { newSession: true, gapText: null },
+        })),
+      },
+    });
+    deps.provider.createMessage.mockResolvedValueOnce(textResp('Здравствуйте! Чем могу помочь?'));
+    await orchestrator.runDialog(1, 'k', { deps });
+    const sentSystem = deps.provider.createMessage.mock.calls[0][0].system;
+    expect(sentSystem).not.toContain('НАЧАЛО НОВОЙ ПЕРЕПИСКИ');
+    const guardLogs = mockLogger.warn.mock.calls.filter(([msg]) => String(msg).includes('reply-guard'));
+    expect(guardLogs.join(' ')).toContain('repeat_greeting');
+  });
+
   // Метка времени реплики — не предложенное пациенту время: reply-guard иначе
   // считал бы разрешённым любое время отправки сообщения.
   test('время из метки транскрипта не становится разрешённым для reply-guard', async () => {
