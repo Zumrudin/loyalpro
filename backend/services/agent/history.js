@@ -9,6 +9,28 @@ const { formatStamp, stripStamp } = require('./transcript-time');
 // телефон, либо chat_id для каналов без телефона (Telegram/MAX).
 const DIALOG_KEY_SQL = `COALESCE(NULLIF(phone,''), chat_id)`;
 
+// Время сообщения. msg_ts NULLABLE (migrations.js), и такие строки на базе есть.
+// ПОЧЕМУ COALESCE, а не «WHERE msg_ts IS NOT NULL»: выкинуть сообщение из
+// транскрипта нельзя — модель потеряет его ТЕКСТ, а это единственное, ради чего
+// транскрипт и грузится. Подставляем время вставки строки: оно на секунды
+// расходится с реальным msg_ts (замерено на dev: разница ~4 сек) и для меток и
+// разрывов полностью годится.
+// ЗАЧЕМ вообще: «ORDER BY msg_ts DESC» в PostgreSQL — это NULLS FIRST, поэтому
+// NULL-строка ВСЕГДА попадала в окно LIMIT 20, а после rows.reverse() вставала в
+// самый ХВОСТ, то есть выглядела самым свежим сообщением диалога. detectSession
+// брала её за хвостовую серию, toTs(null) → null → {newSession:false} — и
+// граница переписки (инцидент 2026-08-05) для такого диалога молча выключалась
+// навсегда, без единой записи в лог.
+// Выражение ОБЯЗАНО совпадать в SELECT и в ORDER BY — потому и вынесено в
+// константу: разъехавшись, они дали бы порядок по одному значению, а метку и
+// разрыв по другому, и это хуже исходного бага (порядок реплик врал бы модели).
+// AT TIME ZONE: created_at — timestamp WITHOUT time zone, куда NOW() кладёт
+// МОСКОВСКОЕ стенное время (сессия PG в Europe/Moscow), поэтому голый
+// EXTRACT(EPOCH FROM created_at) даёт epoch на 3 часа ВПЕРЁД (проверено на
+// dev-БД). Три часа сдвига — это и метка «[дд.мм чч:мм]» в будущем, и ложный
+// разрыв при пороге 6 ч, если соседняя строка со своим msg_ts честная.
+const MSG_TS_SQL = `COALESCE(msg_ts, EXTRACT(EPOCH FROM (created_at AT TIME ZONE 'Europe/Moscow'))::bigint)`;
+
 // Пометка чужого авторства в транскрипте. Держится в паре с правилом промпта
 // «РЕПЛИКИ АДМИНИСТРАТОРА» (services/agent/system-prompt.js) — менять только вместе.
 const OPERATOR_MARK = '[сообщение администратора клиники]';
@@ -43,11 +65,12 @@ async function loadTranscript(salonId, dialogKey, opts = {}) {
   // формат метки здесь без синхронной правки stripAllStamps нельзя.
   const withTime = !!opts.withTime;
   const rows = await db.any(
-    `SELECT direction, msg_type, text, msg_ts, authored_by
+    `SELECT direction, msg_type, text, authored_by,
+            ${MSG_TS_SQL} AS msg_ts
        FROM chatpush_messages
       WHERE salon_id = $1 AND ${DIALOG_KEY_SQL} = $2
         AND text IS NOT NULL AND text <> ''
-      ORDER BY msg_ts DESC, id DESC
+      ORDER BY ${MSG_TS_SQL} DESC, id DESC
       LIMIT $3`,
     [salonId, dialogKey, limit]);
 
@@ -89,6 +112,14 @@ async function loadTranscript(salonId, dialogKey, opts = {}) {
     // время и услугу согласовал человек, а Мила по правилу «выбор варианта =
     // согласие» молча оформила запись, придумав услугу. Автор проставлен
     // вебхуком (services/outgoing-authorship); что делать с NULL — см. AUTHORSHIP_SINCE_TS.
+    // Number(r.msg_ts) здесь БЕЗ обвязки toTs намеренно: msg_ts приходит из
+    // MSG_TS_SQL, то есть после COALESCE на created_at, и пустым уже не бывает —
+    // предикат определён всегда. До COALESCE он вёл себя на битом значении
+    // по-разному (null → 0 → «оператор», 'abc' → NaN → сравнение false → «не
+    // оператор»); лишний слой проверки поверх гарантии из СУБД только создал бы
+    // впечатление, что значение по-прежнему ненадёжно. Единственный источник
+    // msg_ts мимо СУБД — pendingReplies (число, наша же отправка), и туда ветка
+    // legacyUnknown не заходит: у pending-строк authored_by = 'agent'.
     const legacyUnknown = r.direction === 'outgoing'
       && r.authored_by == null
       && Number(r.msg_ts) < AUTHORSHIP_SINCE_TS;

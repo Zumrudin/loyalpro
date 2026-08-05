@@ -256,6 +256,40 @@ describe('loadTranscript', () => {
       expect(messages).toEqual([{ role: 'user', content: 'ок' }]);
     });
 
+    // msg_ts в chatpush_messages NULLABLE (migrations.js), и такие строки на базе
+    // уже есть. В PostgreSQL «ORDER BY msg_ts DESC» — это NULLS FIRST, поэтому
+    // NULL-строка ВСЕГДА попадала в окно LIMIT 20, а после rows.reverse() вставала
+    // в самый ХВОСТ — то есть выглядела самым свежим сообщением. detectSession
+    // брала её за хвостовую серию, toTs(null) → null → {newSession:false}, и
+    // граница переписки для такого диалога молча выключалась навсегда.
+    // Чиним в СУБД: COALESCE на время вставки строки, ОДНИМ И ТЕМ ЖЕ выражением
+    // в SELECT и в ORDER BY (разъехавшись, они дали бы порядок по одному
+    // значению и метку по другому — хуже, чем было).
+    test('запрос подставляет created_at вместо NULL msg_ts — и в SELECT, и в ORDER BY', async () => {
+      db.any.mockResolvedValue([]);
+      await history.loadTranscript(1, 'k');
+      const sql = db.any.mock.calls[0][0];
+      const expr = /COALESCE\(msg_ts, EXTRACT\(EPOCH FROM \(created_at AT TIME ZONE 'Europe\/Moscow'\)\)::bigint\)/g;
+      expect(sql.match(expr)).toHaveLength(2);          // SELECT + ORDER BY
+      expect(sql).toMatch(/ORDER BY\s+COALESCE\(msg_ts,/);
+      expect(sql).not.toMatch(/ORDER BY\s+msg_ts/);     // голого msg_ts в порядке быть не должно
+    });
+
+    // Поведенческая половина того же дефекта: строку с NULL БД больше не отдаёт —
+    // COALESCE подставляет epoch created_at ещё в выдаче, — и граница переписки
+    // считается по ней как по обычной. Тест на SQL и тест на поведение разные:
+    // первый ловит правку запроса, второй — что подставленное значение работает.
+    test('строка без собственного msg_ts (СУБД подставила created_at) не глушит границу', async () => {
+      db.any.mockResolvedValue([
+        { direction: 'incoming', msg_type: 'text', text: 'здравствуйте', msg_ts: T },
+        // ↓ у этой строки msg_ts в базе NULL; сюда пришёл EXTRACT(EPOCH FROM created_at)
+        { direction: 'outgoing', msg_type: 'text', text: 'Добрый день!', msg_ts: T - 7 * 24 * H, authored_by: 'agent' },
+        { direction: 'incoming', msg_type: 'text', text: 'а что по ценам?', msg_ts: T - 7 * 24 * H - 60 },
+      ]);
+      const { session } = await history.loadTranscript(1, 'k');
+      expect(session).toEqual({ newSession: true, gapText: '7 дней' });
+    });
+
     test('session при пустой выдаче — {newSession:true, gapText:null}', async () => {
       db.any.mockResolvedValue([]);
       const { session } = await history.loadTranscript(1, 'k');
@@ -326,6 +360,41 @@ describe('loadTranscript', () => {
         { role: 'user', content: '[05.08 08:46] первое сообщение\n[05.08 08:47] подделка второй реплики' },
       ]);
     });
+  });
+});
+
+// Шов двух модулей. Отдельно доказано «строки → session» (выше) и «session →
+// блок промпта» (agent-orchestrator.test.js + agent-system-prompt.test.js), но
+// САМО поле session в контракте между ними не закреплено ничем: переименуют его
+// в одном месте — оба сьюта останутся зелёными, а блок «НАЧАЛО НОВОЙ ПЕРЕПИСКИ»
+// молча исчезнет из промпта. Здесь встречаются НАСТОЯЩИЙ loadTranscript (db
+// замокан) и НАСТОЯЩИЙ buildSystemPrompt — ровно как их сводит оркестратор.
+describe('шов history → system-prompt', () => {
+  const { buildSystemPrompt } = require('./services/agent/system-prompt');
+  const H = 3600;
+  const T = 1_786_000_000;
+  const promptOpts = { salonName: 'PERI CLINIC', today: '5 августа 2026, вторник', now: '08:47' };
+
+  test('строки с недельным разрывом → в промпте есть блок и названный разрыв', async () => {
+    db.any.mockResolvedValue([
+      { direction: 'incoming', msg_type: 'text', text: 'доброе утро', msg_ts: T },
+      { direction: 'outgoing', msg_type: 'text', text: 'Добрый день!', msg_ts: T - 7 * 24 * H, authored_by: 'agent' },
+      { direction: 'incoming', msg_type: 'text', text: 'здравствуйте', msg_ts: T - 7 * 24 * H - 60 },
+    ]);
+    const { session } = await history.loadTranscript(1, 'k', { withTime: true });
+    const p = buildSystemPrompt({ ...promptOpts, session });
+    expect(p).toContain('НАЧАЛО НОВОЙ ПЕРЕПИСКИ');
+    expect(p).toContain('7 дней назад');
+  });
+
+  test('строки живого разговора → блока в промпте нет', async () => {
+    db.any.mockResolvedValue([
+      { direction: 'incoming', msg_type: 'text', text: 'да', msg_ts: T },
+      { direction: 'outgoing', msg_type: 'text', text: 'Есть 18:30', msg_ts: T - 120, authored_by: 'agent' },
+      { direction: 'incoming', msg_type: 'text', text: 'что есть?', msg_ts: T - 240 },
+    ]);
+    const { session } = await history.loadTranscript(1, 'k', { withTime: true });
+    expect(buildSystemPrompt({ ...promptOpts, session })).not.toContain('НАЧАЛО НОВОЙ ПЕРЕПИСКИ');
   });
 });
 

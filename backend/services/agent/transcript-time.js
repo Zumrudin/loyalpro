@@ -34,7 +34,12 @@ function formatStamp(tsSec) {
   // в 1970-м. Порог n > 0 тот же, что в session-gap.toTs, — обе половины фичи
   // обязаны одинаково понимать, какой msg_ts считается битым.
   const n = Number(tsSec);
-  if (!Number.isFinite(n) || n <= 0) return '';
+  // Верхняя граница: new Date(n*1000) за пределами диапазона Date даёт Invalid
+  // Date, и Intl.formatToParts БРОСАЕТ — исключение уронило бы ход, а битая
+  // строка осталась бы в окне LIMIT 20 и роняла бы его снова и снова. Заодно
+  // ловится ts в МИЛЛИсекундах: он дал бы правдоподобную, но ложную метку
+  // (года в формате нет, глазами не отличить).
+  if (!Number.isFinite(n) || n <= 0 || n > 4e10) return '';   // 4e10 ≈ год 3237
   const p = {};
   for (const part of FMT.formatToParts(new Date(n * 1000))) p[part.type] = part.value;
   return `[${p.day}.${p.month} ${p.hour}:${p.minute}]`;

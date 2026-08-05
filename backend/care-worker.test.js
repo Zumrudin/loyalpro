@@ -77,6 +77,20 @@ describe('care worker processOne', () => {
     expect(userPrompt).toContain('Доброе утро!');
     expect(userPrompt).not.toContain(OPERATOR_MARK);
   });
+  // Продолжение того же: срез OPERATOR_MARK держится на startsWith, то есть на
+  // том, что маркер стоит РОВНО в позиции 0. Метки времени сдвинули бы его
+  // вправо («[05.08 08:47] [сообщение администратора клиники] …»), и пометка
+  // ушла бы живому пациенту в тексте касания. Единственное, что этому мешает, —
+  // что care зовёт loadTranscript БЕЗ withTime; до этого теста факт держался
+  // только на комментарии в worker.js, и правдоподобная правка «дадим и Заботе
+  // временной контекст» вернула бы утечку молча.
+  test('care зовёт loadTranscript БЕЗ withTime (иначе метка сдвинет OPERATOR_MARK)', async () => {
+    const { deps } = makeDeps();
+    await worker.processOne(row, deps);
+    expect(deps.loadTranscript).toHaveBeenCalled();
+    const opts = deps.loadTranscript.mock.calls[0][2] || {};
+    expect(opts.withTime).toBeFalsy();
+  });
   test('гейт запретил → skipped, LLM не зовётся', async () => {
     const { deps } = makeDeps({ isAllowed: jest.fn(async () => ({ allow: false, reason: 'whitelist' })) });
     await worker.processOne(row, deps);

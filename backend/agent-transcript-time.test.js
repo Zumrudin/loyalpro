@@ -31,6 +31,15 @@ describe('formatStamp', () => {
     expect(formatStamp(undefined)).toBe('');
   });
 
+  // Верхняя граница — не косметика: new Date(n*1000) вне диапазона Date даёт
+  // Invalid Date, и Intl.formatToParts БРОСАЕТ RangeError. Исключение улетело бы
+  // из loadTranscript в оркестратор и уронило бы ход, причём отравленная строка
+  // осталась бы в окне LIMIT 20 и роняла бы его снова и снова.
+  test('ts вне диапазона и ts в миллисекундах → метки нет, исключения тоже', () => {
+    expect(formatStamp(1e18)).toBe('');
+    expect(formatStamp(1_785_908_878_000)).toBe('');   // мс вместо секунд
+  });
+
   test('строковый msg_ts из PG (bigint) форматируется как число', () => {
     expect(formatStamp('1785908878')).toBe('[05.08 08:47]');
   });
