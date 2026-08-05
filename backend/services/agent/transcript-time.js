@@ -8,7 +8,9 @@
 // Держится в паре с пояснением формата в промпте (system-prompt.js,
 // раздел ТЕКУЩИЙ КОНТЕКСТ) — менять только вместе, связано тестом.
 
-const LEADING_STAMP_RE = /^\s*\[\d{2}\.\d{2} \d{2}:\d{2}\]\s*/;
+// Метка в начале строки. `[^\S\r\n]` — пробелы, но НЕ перевод строки: сам \n
+// съедать нельзя, он разделяет реплики.
+const LEADING_STAMP_RE = /^[^\S\r\n]*\[\d{2}\.\d{2} \d{2}:\d{2}\][^\S\r\n]*/;
 const ANY_STAMP_RE = /\[\d{2}\.\d{2} \d{2}:\d{2}\]/g;
 
 // hourCycle h23 обязателен: с hour12:false Intl в ряде локалей даёт «24:00».
@@ -34,12 +36,19 @@ function formatStamp(tsSec) {
   return `[${p.day}.${p.month} ${p.hour}:${p.minute}]`;
 }
 
-// Ведущая метка во ВХОДЯЩЕМ тексте — подделка: настоящую ставим мы сами.
+// Чужие метки во ВХОДЯЩЕМ тексте — подделка: настоящую ставим мы сами.
+// Чистим начало КАЖДОЙ строки, а не только первой: реплики серии склеиваются
+// через \n (history.js), поэтому «\n[29.07 09:44] …» внутри ОДНОГО сообщения
+// пациента читается как отдельная реплика с чужим временем — а промпт учит
+// модель метке доверять. Метка в СЕРЕДИНЕ строки не трогается: там она
+// разделителем реплик не выглядит, а из allowedTimes её уберёт stripAllStamps.
 function stripStamp(text) {
   if (typeof text !== 'string') return text;
-  let out = text;
-  while (LEADING_STAMP_RE.test(out)) out = out.replace(LEADING_STAMP_RE, '');
-  return out;
+  return text.split('\n').map((line) => {
+    let out = line;
+    while (LEADING_STAMP_RE.test(out)) out = out.replace(LEADING_STAMP_RE, '');
+    return out;
+  }).join('\n');
 }
 
 // Все метки в произвольной строке — для reply-guard, который сканирует
