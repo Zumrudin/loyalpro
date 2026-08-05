@@ -34,6 +34,13 @@ const svcFilter = require('./services/agent/service-filter');
 const listServices = require('./services/agent/tools/list-services');
 const slots = require('./services/agent/tools/get-available-slots');
 
+// Кап берём ИЗ МОДУЛЯ, а не числом: фикстуры с «удобной» тройкой мастеров остались бы
+// зелёными и после сдвига капа — ровно на этом инцидент 2026-08-06 и держался.
+const CAP = slots.MAX_STAFF_OPTIONS;
+// Ровно CAP+1 исполнителей с возрастающими yc_id: последний — тот, кого срезает кап.
+const overCapStaff = () => Array.from({ length: CAP + 1 },
+  (_, i) => ({ yc_id: 11 + i, name: `Мастер ${11 + i}` }));
+
 // Услуга 900: Юлия (11), Пери Исамудиновна (12), Мария (13).
 const CATALOG = {
   services: [
@@ -122,19 +129,43 @@ describe('get_available_slots без staff_yc_id — выбор специали
   // Порядок staffList приходит из SELECT без ORDER BY — без сортировки кап срезал бы
   // случайных мастеров, и выдача была бы невоспроизводимой.
   test('исполнителей больше капа → берём первых по yc_id, детерминированно', async () => {
+    const staff = overCapStaff();
     listServices.run.mockResolvedValue({
-      services: [{ yc_id: 900, title: 'Биоревитализация', staff: [
-        { yc_id: 14, name: 'Пери Исамудиновна' }, { yc_id: 11, name: 'Юлия' },
-        { yc_id: 13, name: 'Мария' }, { yc_id: 12, name: 'Татьяна' },
+      services: [{ yc_id: 900, title: 'Биоревитализация', staff: [...staff].reverse() }],
+    });
+    // Первый по yc_id получает самое позднее окно — чтобы порядок выдачи проверялся
+    // по времени, а не совпадал случайно с порядком перебора.
+    ycGetBookTimes.mockImplementation(async (_salon, staffId) =>
+      bookSlot(staffId === 11 ? '16:00' : '11:00'));
+    const out = await slots.run(1, ARGS, { nowMs: NOON });
+    const expected = staff.slice(0, CAP).map(m => m.yc_id);
+    // проверены ровно CAP мастеров с наименьшими yc_id — последний в перебор не попал…
+    expect(ycGetBookTimes.mock.calls.map(c => c[1]).sort((a, b) => a - b)).toEqual(expected);
+    // …а сама выдача упорядочена по времени первого окна, как и раньше
+    expect(out.staff_options.map(o => o.staff_yc_id)).toEqual([...expected.slice(1), 11]);
+  });
+
+  // Инцидент 2026-08-06 (79200255591): «Фотоомоложение — минимальная зона» ведут
+  // ЧЕТВЕРО, кап был 3 и сортировка по возрастанию yc_id — самый новый врач
+  // (наибольший yc_id) не попадал в перебор НИКОГДА. У двоих из троих проверенных окон
+  // не было, пациент увидел одну Татьяну и сам спросил «а доктор сегодня не принимает?».
+  // На проде так устроено 42 услуги из 226.
+  test('реальный расклад PERI (4 исполнителя) → проверяются ВСЕ, включая самый большой yc_id', async () => {
+    listServices.run.mockResolvedValue({
+      services: [{ yc_id: 900, title: 'Фотоомоложение - минимальная зона', staff: [
+        { yc_id: 1910274, name: 'Гаджиева Пери' }, { yc_id: 1914276, name: 'Гатауллина Юлия' },
+        { yc_id: 3356928, name: 'Богатырева Татьяна' }, { yc_id: 5708379, name: 'Астемир Боташев' },
       ] }],
     });
-    const times = { 11: '16:00', 12: '11:00', 13: '13:00', 14: '09:00' };
-    ycGetBookTimes.mockImplementation(async (_salon, staffId) => bookSlot(times[staffId]));
+    ycGetBookTimes.mockImplementation(async (_salon, staffId) => {
+      if (staffId === 3356928) return bookSlot('12:30');
+      if (staffId === 5708379) return bookSlot('12:00');
+      return [];   // у Пери и Юлии в этот день пусто — как и было в проде
+    });
     const out = await slots.run(1, ARGS, { nowMs: NOON });
-    // проверены ровно трое с наименьшими yc_id — 14 в перебор не попал…
-    expect(ycGetBookTimes.mock.calls.map(c => c[1]).sort()).toEqual([11, 12, 13]);
-    // …а сама выдача упорядочена по времени первого окна, как и раньше
-    expect(out.staff_options.map(o => o.staff_yc_id)).toEqual([12, 13, 11]);
+    expect(ycGetBookTimes.mock.calls.map(c => c[1])).toContain(5708379);
+    expect(out.staff_options.map(o => o.staff_yc_id)).toEqual([5708379, 3356928]);
+    expect(out.hint).not.toMatch(/один специалист/);
   });
 
   test('одинаковое время первого окна → тай-брейк по yc_id', async () => {
@@ -220,19 +251,48 @@ describe('get_available_slots без staff_yc_id — граничные случ
   // Дословный повтор инцидента 2026-08-01 («а почему к Тане не предлагаешь?»),
   // только теперь на ДЕФОЛТНОМ пути любого «а когда можно?».
   test('исполнителей больше капа, у проверенных пусто → no_staff_available НЕ выставляем', async () => {
+    const staff = overCapStaff();
     listServices.run.mockResolvedValue({
-      services: [{ yc_id: 900, title: 'Биоревитализация', staff: [
-        { yc_id: 11, name: 'Юлия' }, { yc_id: 12, name: 'Татьяна' },
-        { yc_id: 13, name: 'Мария' }, { yc_id: 14, name: 'Пери Исамудиновна' },
-        { yc_id: 15, name: 'Анна' },
-      ] }],
+      services: [{ yc_id: 900, title: 'Биоревитализация', staff }],
     });
     ycGetBookTimes.mockResolvedValue([]);   // у всех проверенных пусто
     const out = await slots.run(1, ARGS, { nowMs: NOON });
-    expect(ycGetBookTimes.mock.calls.map(c => c[1]).sort()).toEqual([11, 12, 13]);
+    expect(ycGetBookTimes.mock.calls.map(c => c[1]).sort((a, b) => a - b))
+      .toEqual(staff.slice(0, CAP).map(m => m.yc_id));
     expect(out.staff_options).toEqual([]);
     expect(out.no_staff_available).toBeUndefined();
     expect(out.hint).toMatch(/НЕ ВСЕ|не все/);
+  });
+
+  // Тот же водораздел, что у ПУСТОЙ выдачи, но на НЕПУСТОЙ: «эту услугу ведёт один
+  // специалист» — утверждение обо ВСЕХ исполнителях, и по частичному перебору его
+  // делать нельзя. Инцидент 2026-08-06: хинт единственности ушёл модели ровно там, где
+  // четвёртого мастера никто не спрашивал, — и она честно его отработала.
+  test('окна нашлись у одного, но проверены НЕ ВСЕ → хинт не утверждает единственность', async () => {
+    const staff = overCapStaff();
+    listServices.run.mockResolvedValue({
+      services: [{ yc_id: 900, title: 'Биоревитализация', staff }],
+    });
+    ycGetBookTimes.mockImplementation(async (_salon, staffId) =>
+      (staffId === 11 ? bookSlot('12:00') : []));
+    const out = await slots.run(1, ARGS, { nowMs: NOON });
+    expect(out.staff_options.map(o => o.staff_yc_id)).toEqual([11]);
+    expect(out.hint).not.toMatch(/один специалист/);
+    expect(out.hint).toMatch(/НЕ ВСЕ|не все/);
+    expect(out.hint).toMatch(/12:00|slots/);   // предложить время всё равно обязана
+  });
+
+  // Вторая причина неполноты — мастер не ответил. Снаружи неотличима от «занят»,
+  // и «специалист один» тут такая же выдумка.
+  test('часть мастеров недостижима, окна у одного → хинт не утверждает единственность', async () => {
+    ycGetBookTimes.mockImplementation(async (_salon, staffId) => {
+      if (staffId === 11) return bookSlot('12:00');
+      if (staffId === 12) throw new Error('502 YClients');
+      return [];
+    });
+    const out = await slots.run(1, ARGS, { nowMs: NOON });
+    expect(out.staff_options.map(o => o.staff_yc_id)).toEqual([11]);
+    expect(out.hint).not.toMatch(/один специалист/);
   });
 
   // Обратная граница: кап никого не срезал и все ответили — «ни у кого» законно.
