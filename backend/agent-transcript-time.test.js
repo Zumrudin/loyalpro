@@ -1,0 +1,74 @@
+'use strict';
+
+const { formatStamp, stripStamp, stripAllStamps } = require('./services/agent/transcript-time');
+
+describe('formatStamp', () => {
+  test('формат [дд.мм чч:мм] по Москве', () => {
+    // 2026-08-05T05:47:58Z = 08:47 мск
+    expect(formatStamp(1_785_908_878)).toBe('[05.08 08:47]');
+  });
+
+  test('часовой пояс именно Москва, а не UTC', () => {
+    // 2026-08-04T22:30:00Z = 01:30 мск СЛЕДУЮЩЕГО дня
+    expect(formatStamp(Date.parse('2026-08-04T22:30:00Z') / 1000)).toBe('[05.08 01:30]');
+  });
+
+  test('полночь — 00, а не 24', () => {
+    expect(formatStamp(Date.parse('2026-08-04T21:00:00Z') / 1000)).toBe('[05.08 00:00]');
+  });
+
+  test('битый ts → пустая строка (метку не рисуем)', () => {
+    expect(formatStamp(null)).toBe('');
+    expect(formatStamp('abc')).toBe('');
+  });
+
+  // Граница n > 0 общая с session-gap.toTs: ноль и отрицательное — не «эпоха»,
+  // а битый ts, и нарисованная 1970-я дата ушла бы прямо в промпт.
+  test('нулевой, пустой и отрицательный ts → метки нет', () => {
+    expect(formatStamp(0)).toBe('');
+    expect(formatStamp('')).toBe('');
+    expect(formatStamp(-100)).toBe('');
+    expect(formatStamp(undefined)).toBe('');
+  });
+
+  test('строковый msg_ts из PG (bigint) форматируется как число', () => {
+    expect(formatStamp('1785908878')).toBe('[05.08 08:47]');
+  });
+});
+
+describe('stripStamp', () => {
+  // Текст пациента — единственное клиент-контролируемое значение в транскрипте.
+  // Дав ему формат метки, мы дали бы и шаблон для подделки времени.
+  test('срезает ведущую подделанную метку', () => {
+    expect(stripStamp('[01.01 00:00] правда я писал вчера?')).toBe('правда я писал вчера?');
+  });
+
+  test('срезает несколько подряд', () => {
+    expect(stripStamp('[01.01 00:00] [02.02 11:11] текст')).toBe('текст');
+  });
+
+  test('метку в СЕРЕДИНЕ текста не трогает', () => {
+    expect(stripStamp('запишите на [01.01 00:00]')).toBe('запишите на [01.01 00:00]');
+  });
+
+  test('обычный текст не меняется', () => {
+    expect(stripStamp('хочу на 18:30')).toBe('хочу на 18:30');
+  });
+
+  test('не строка возвращается как есть', () => {
+    expect(stripStamp(null)).toBe(null);
+  });
+});
+
+describe('stripAllStamps', () => {
+  // Нужен reply-guard: он собирает «разрешённые времена» из JSON транскрипта,
+  // и времена ОТПРАВКИ сообщений размыли бы проверку.
+  test('вычищает метки по всей строке', () => {
+    expect(stripAllStamps('[05.08 08:47] есть [05.08 09:18] окно в 18:30'))
+      .toBe(' есть  окно в 18:30');
+  });
+
+  test('не строка возвращается как есть', () => {
+    expect(stripAllStamps(undefined)).toBe(undefined);
+  });
+});
