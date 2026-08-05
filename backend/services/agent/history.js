@@ -34,7 +34,13 @@ const AUTHORSHIP_SINCE_TS = Math.floor(Date.parse('2026-08-05T00:00:00+03:00') /
 async function loadTranscript(salonId, dialogKey, opts = {}) {
   const limit = opts.limit || 20;
   // Метки времени включает только оркестратор: care-воркер (services/care/worker.js)
-  // собирает из этого же транскрипта свой промпт, и метки там не нужны.
+  // собирает из этого же транскрипта свой промпт, и метки там не нужны (он и не
+  // передаёт withTime — см. комментарий у его вызова loadTranscript).
+  // withTime жёстко связан с reply-guard'ом оркестратора: allowedTimes там
+  // собирается из JSON.stringify(messages) через stripAllStamps — без этой чистки
+  // КАЖДАЯ метка отправки читалась бы как «разрешённое время», и это ровно та
+  // размывка проверки, против которой guard делался (инцидент 2026-07-28). Менять
+  // формат метки здесь без синхронной правки stripAllStamps нельзя.
   const withTime = !!opts.withTime;
   const rows = await db.any(
     `SELECT direction, msg_type, text, msg_ts, authored_by
@@ -87,6 +93,8 @@ async function loadTranscript(salonId, dialogKey, opts = {}) {
       && r.authored_by == null
       && Number(r.msg_ts) < AUTHORSHIP_SINCE_TS;
     // Ведущая метка во входящем тексте — подделка клиента: настоящую ставим мы.
+    // Чистка идёт ВСЕГДА, независимо от withTime — правило одно и без копий, и
+    // care-путь (withTime=false) тоже получает текст без подделанных меток.
     let body = r.direction === 'incoming' ? stripStamp(r.text) : r.text;
     if (r.authored_by === 'operator' || legacyUnknown) body = `${OPERATOR_MARK} ${body}`;
     const stamp = withTime ? formatStamp(r.msg_ts) : '';

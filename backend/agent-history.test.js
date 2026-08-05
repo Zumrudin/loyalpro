@@ -255,6 +255,77 @@ describe('loadTranscript', () => {
       const { messages } = await history.loadTranscript(1, 'k', { withTime: true });
       expect(messages).toEqual([{ role: 'user', content: 'ок' }]);
     });
+
+    test('session при пустой выдаче — {newSession:true, gapText:null}', async () => {
+      db.any.mockResolvedValue([]);
+      const { session } = await history.loadTranscript(1, 'k');
+      expect(session).toEqual({ newSession: true, gapText: null });
+    });
+
+    // Метка ставится ПО СТРОКЕ (r.msg_ts) ДО переноса хвостового assistant-блока —
+    // перенос лишь двигает уже готовые {role,content}. Поэтому итоговый порядок
+    // сообщений не монотонен по времени: задержанное эхо (Chatpush/MAX, до 19 мин
+    // по наблюдениям) попадает в assistant-блок ВЫШЕ последнего user-блока, хотя
+    // его собственная метка новее метки этого user-блока. Тест фиксирует это как
+    // ожидаемое поведение — Task 5 объясняет модели немонотонность в промпте.
+    test('withTime + перенос хвостового эха: метки внутри блока растут, но последний user-блок помечен старше эха над ним', async () => {
+      db.any.mockResolvedValue([
+        { direction: 'outgoing', msg_type: 'text', text: 'Позднее эхо', msg_ts: Date.parse('2026-08-05T05:52:10Z') / 1000, authored_by: 'agent' },
+        { direction: 'incoming', msg_type: 'text', text: 'новый вопрос', msg_ts: Date.parse('2026-08-05T05:47:58Z') / 1000 },
+        { direction: 'outgoing', msg_type: 'text', text: 'Старый ответ', msg_ts: Date.parse('2026-07-29T06:44:39Z') / 1000, authored_by: 'agent' },
+        { direction: 'incoming', msg_type: 'text', text: 'старый вопрос', msg_ts: Date.parse('2026-07-29T06:09:04Z') / 1000 },
+      ]);
+      const { messages } = await history.loadTranscript(1, 'k', { withTime: true });
+      expect(messages).toEqual([
+        { role: 'user', content: '[29.07 09:09] старый вопрос' },
+        { role: 'assistant', content: '[29.07 09:44] Старый ответ\n[05.08 08:52] Позднее эхо' },
+        { role: 'user', content: '[05.08 08:47] новый вопрос' },
+      ]);
+      // Немонотонность в цифрах: последний user-блок [05.08 08:47] старше [05.08 08:52]
+      // строкой выше — это и есть задержанная доставка эха, а не баг сортировки.
+      expect(messages[1].content).toContain('[05.08 08:52]');
+      expect(messages[2].content).toContain('[05.08 08:47]');
+    });
+
+    describe('withTime + pending-replies', () => {
+      const pending = require('./services/agent/pending-replies');
+      beforeEach(() => pending._reset());
+
+      // formatStamp кормится p.ts из pendingReplies.peek() — это Number
+      // (Math.floor(atMs/1000)), а не bigint-строка из PG; отдельная проверка
+      // на то, что стемпинг одинаково работает для обоих источников.
+      test('pending-реплика тоже получает метку', async () => {
+        const base = 1785908700;   // 2026-08-05T05:45:00Z = [05.08 08:45] мск
+        // pending.ts (base+50) сидит МЕЖДУ двумя входящими — как в исходном
+        // сценарии инцидента 2026-07-31 (ts=100/150/200): pending не в хвосте,
+        // а раскалывает то, что иначе было бы одним склеенным user-блоком.
+        db.any.mockResolvedValue([
+          { direction: 'incoming', msg_type: 'text', text: 'хочу ботокс', msg_ts: base },
+          { direction: 'incoming', msg_type: 'text', text: '5в1', msg_ts: base + 100 },
+        ]);
+        pending.remember(1, 'k', 'Есть окошки в 20:00 и 20:30', (base + 50) * 1000);
+        const { messages } = await history.loadTranscript(1, 'k', { withTime: true, nowMs: (base + 60) * 1000 });
+        expect(messages).toEqual([
+          { role: 'user', content: '[05.08 08:45] хочу ботокс' },
+          { role: 'assistant', content: '[05.08 08:45] Есть окошки в 20:00 и 20:30' },
+          { role: 'user', content: '[05.08 08:46] 5в1' },
+        ]);
+      });
+    });
+
+    // Модульный уровень (agent-transcript-time.test.js) проверяет stripStamp в
+    // отрыве от истории; здесь — что склейка серии через `\n${text}` не создаёт
+    // новую подделку и не портит собственную метку соседней строки.
+    test('подделка метки во второй реплике серии срезается, склейка получает свои реальные метки', async () => {
+      db.any.mockResolvedValue([
+        { direction: 'incoming', msg_type: 'text', text: '[01.01 00:00] подделка второй реплики', msg_ts: Date.parse('2026-08-05T05:47:58Z') / 1000 },
+        { direction: 'incoming', msg_type: 'text', text: 'первое сообщение', msg_ts: Date.parse('2026-08-05T05:46:58Z') / 1000 },
+      ]);
+      const { messages } = await history.loadTranscript(1, 'k', { withTime: true });
+      expect(messages).toEqual([
+        { role: 'user', content: '[05.08 08:46] первое сообщение\n[05.08 08:47] подделка второй реплики' },
+      ]);
+    });
   });
 });
 

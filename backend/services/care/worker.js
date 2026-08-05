@@ -270,6 +270,9 @@ async function processOne(row, deps = defaultDeps) {
     }
 
     // ── care-проход LLM ────────────────────────────────────────
+    // withTime намеренно НЕ передаём: stripOperatorMark ниже ждёт маркер
+    // строго в позиции 0 строки, а метка сдвинула бы его вправо — пометка
+    // администратора утекла бы в промпт «Заботы» текстом.
     const transcript = await d.loadTranscript(sid, row.phone, { limit: 15 })
       .catch(() => ({ messages: [] }));
     const trList = (transcript.messages || []).map(m => ({
