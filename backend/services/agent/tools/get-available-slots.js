@@ -247,6 +247,23 @@ async function computeStaffOptions(salon, filter, staffList, serviceId, date, no
   return { options, reachable: reachable.length, total: candidates.length };
 }
 
+// Должность — из карточки сотрудника (то же поле, что отдаёт list_staff): хинт требует
+// назвать её по каждому специалисту, а в каталоге услуг должностей нет — без подстановки
+// модель либо промолчит о должности, либо выдумает её. Мутируем на месте: строго
+// best-effort, сбой БД оставляет position=null, слоты от этого не страдают.
+async function attachPositions(salonId, options) {
+  if (!options.length) return;
+  try {
+    const rows = await db.any(
+      `SELECT yclients_staff_id, specialization
+         FROM staff_members
+        WHERE salon_id = $1 AND yclients_staff_id = ANY($2::int[])`,
+      [salonId, options.map(o => Number(o.staff_yc_id))]);
+    const byId = new Map((rows || []).map(r => [Number(r.yclients_staff_id), r.specialization || null]));
+    for (const o of options) o.position = byId.get(Number(o.staff_yc_id)) || null;
+  } catch (_) { /* без должности реплика просто короче */ }
+}
+
 async function run(salonId, input, ctx = {}) {
   const serviceId = input && input.service_yc_id;
   const staffId = input && input.staff_yc_id;
@@ -284,6 +301,7 @@ async function run(salonId, input, ctx = {}) {
     if (!salon || !salon.yclients_company_id) return { error: 'YClients не подключён для салона.' };
     const { options, reachable, total } = await computeStaffOptions(salon, filter, chk.staffList, serviceId, date, nowMs);
     if (options.length) {
+      await attachPositions(salonId, options);
       return { staff_options: options, hint: options.length > 1 ? HINT_STAFF_CHOICE : HINT_STAFF_SINGLE };
     }
     // Пустой список окон САМ ПО СЕБЕ не означает «времени нет»: недостижимый мастер

@@ -28,6 +28,7 @@ jest.mock('./services/agent/equipment-context', () => ({
 }));
 jest.mock('./services/agent/tools/list-services', () => ({ run: jest.fn() }));
 
+const { db } = require('./db');
 const { ycGetBookTimes } = require('./services/yclients-booking');
 const svcFilter = require('./services/agent/service-filter');
 const listServices = require('./services/agent/tools/list-services');
@@ -53,6 +54,7 @@ beforeEach(() => {
   ycGetBookTimes.mockResolvedValue([]);
   svcFilter.isBookable.mockReturnValue(true);
   svcFilter.decideServiceVisible.mockReturnValue(true);
+  db.any.mockResolvedValue([]);
 });
 
 describe('get_available_slots без staff_yc_id — выбор специалиста пациентом', () => {
@@ -237,5 +239,44 @@ describe('get_available_slots без staff_yc_id — граничные случ
     });
     const out = await slots.run(1, ARGS, { nowMs: NOON });
     expect(out.staff_options.map(o => o.staff_yc_id)).toEqual([12]);
+  });
+});
+
+// Хинт требует назвать должность каждого специалиста, а в каталоге промпта должностей
+// нет: без подстановки модель либо промолчит о ней, либо выдумает.
+describe('get_available_slots без staff_yc_id — должность специалиста', () => {
+  test('position подставляется из staff_members', async () => {
+    db.any.mockResolvedValue([
+      { yclients_staff_id: 11, specialization: 'косметолог-эстетист' },
+      { yclients_staff_id: 12, specialization: 'главный врач' },
+    ]);
+    ycGetBookTimes.mockImplementation(async (_salon, staffId) => (staffId === 13 ? [] : bookSlot('12:00')));
+    const out = await slots.run(1, ARGS, { nowMs: NOON });
+    expect(out.staff_options.map(o => o.position)).toEqual(['косметолог-эстетист', 'главный врач']);
+  });
+
+  // Читаем ТОЛЬКО карточки своего салона: staff_members общая на все салоны,
+  // и yclients_staff_id у разных салонов совпадают.
+  test('запрос за должностями ограничен салоном и нужными мастерами', async () => {
+    ycGetBookTimes.mockImplementation(async (_salon, staffId) => (staffId === 11 ? bookSlot('12:00') : []));
+    await slots.run(1, ARGS, { nowMs: NOON });
+    const [sql, params] = db.any.mock.calls[0];
+    expect(sql).toMatch(/salon_id\s*=\s*\$1/);
+    expect(params).toEqual([1, [11]]);
+  });
+
+  test('должности в базе нет → position остаётся null, ответ не ломается', async () => {
+    db.any.mockResolvedValue([{ yclients_staff_id: 11, specialization: null }]);
+    ycGetBookTimes.mockImplementation(async (_salon, staffId) => (staffId === 11 ? bookSlot('12:00') : []));
+    const out = await slots.run(1, ARGS, { nowMs: NOON });
+    expect(out.staff_options[0].position).toBeNull();
+  });
+
+  test('сбой БД при чтении должностей не валит выдачу слотов', async () => {
+    db.any.mockRejectedValue(new Error('db down'));
+    ycGetBookTimes.mockImplementation(async (_salon, staffId) => (staffId === 11 ? bookSlot('12:00') : []));
+    const out = await slots.run(1, ARGS, { nowMs: NOON });
+    expect(out.staff_options.map(o => o.staff_yc_id)).toEqual([11]);
+    expect(out.staff_options[0].position).toBeNull();
   });
 });
