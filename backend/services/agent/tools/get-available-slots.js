@@ -195,7 +195,12 @@ async function computeStaffSlots(salon, staffId, serviceId, date, nowMs) {
 async function findAlternativeStaff(salon, filter, staffList, staffId, serviceId, date, nowMs) {
   const eligible = (staffList || [])
     .filter(m => m && m.yc_id && String(m.yc_id) !== String(staffId))
-    .filter(m => svcFilter.isBookable(filter, serviceId, m.yc_id));
+    .filter(m => svcFilter.isBookable(filter, serviceId, m.yc_id))
+    // Сортировка ДО капа — та же причина, что в computeStaffOptions: порядок staffList
+    // наследуется от SELECT по staff_members без ORDER BY и меняется после
+    // UPDATE/автовакуума, поэтому без неё кап срезал бы случайных исполнителей и
+    // предложенная альтернатива была бы невоспроизводима при разборе инцидента.
+    .sort((a, b) => Number(a.yc_id) - Number(b.yc_id));
   // Кап считаем ОТДЕЛЬНО от числа подходящих: no_alternative_staff — утверждение
   // обо ВСЕХ исполнителях услуги, а перебираем мы максимум MAX_ALT_STAFF.
   const others = eligible.slice(0, MAX_ALT_STAFF);
