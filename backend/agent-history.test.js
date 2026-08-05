@@ -54,14 +54,29 @@ describe('loadTranscript', () => {
         .toBe('Вы записаны на прием\nЗаписала вас');   // хронологический порядок
     });
 
-    test('старые сообщения без отметки автора ведут себя как раньше', async () => {
+    // Отсечка = момент выката журнала авторства (04.08.2026, коммит 34caa25).
+    // До неё NULL означает «автор неизвестен, вероятно администратор»; после —
+    // «classify упал» (там намеренный fail-open, чтобы не глушить Милу на её
+    // же эхе), и такое NULL оператором считать нельзя.
+    test('исходящее без автора СТАРШЕ отсечки помечается как администраторское', async () => {
       db.any.mockResolvedValue([
-        { direction: 'incoming', msg_type: 'text', text: 'ок', msg_ts: 300 },
-        { direction: 'outgoing', msg_type: 'text', text: 'Здравствуйте!', msg_ts: 200, authored_by: null },
-        { direction: 'incoming', msg_type: 'text', text: 'да', msg_ts: 100 },
+        { direction: 'incoming', msg_type: 'text', text: 'ок', msg_ts: 1_785_000_000 },
+        { direction: 'outgoing', msg_type: 'text', text: 'Доброе утро!', msg_ts: 1_753_000_000, authored_by: null },
+        { direction: 'incoming', msg_type: 'text', text: 'да', msg_ts: 1_752_000_000 },
       ]);
       const { messages } = await history.loadTranscript(1, 'k');
-      expect(messages.find(m => m.role === 'assistant').content).toBe('Здравствуйте!');
+      expect(messages.find(m => m.role === 'assistant').content)
+        .toBe(`${history.OPERATOR_MARK} Доброе утро!`);
+    });
+
+    test('исходящее без автора ПОСЛЕ отсечки своим и остаётся (fail-open classify)', async () => {
+      db.any.mockResolvedValue([
+        { direction: 'incoming', msg_type: 'text', text: 'ок', msg_ts: 1_786_000_100 },
+        { direction: 'outgoing', msg_type: 'text', text: 'Записала вас', msg_ts: 1_786_000_000, authored_by: null },
+        { direction: 'incoming', msg_type: 'text', text: 'да', msg_ts: 1_785_999_000 },
+      ]);
+      const { messages } = await history.loadTranscript(1, 'k');
+      expect(messages.find(m => m.role === 'assistant').content).toBe('Записала вас');
     });
   });
 
@@ -95,9 +110,9 @@ describe('loadTranscript', () => {
 
   test('assistant-хвост вливается в предыдущий assistant-блок, диалог кончается user', async () => {
     db.any.mockResolvedValue([
-      { direction: 'outgoing', msg_type: 'text', text: 'позднее эхо',   msg_ts: 500 },
+      { direction: 'outgoing', msg_type: 'text', text: 'позднее эхо',   msg_ts: 500, authored_by: 'agent' },
       { direction: 'incoming', msg_type: 'text', text: 'новый вопрос',  msg_ts: 400 },
-      { direction: 'outgoing', msg_type: 'text', text: 'старый ответ',  msg_ts: 300 },
+      { direction: 'outgoing', msg_type: 'text', text: 'старый ответ',  msg_ts: 300, authored_by: 'agent' },
       { direction: 'incoming', msg_type: 'text', text: 'старый вопрос', msg_ts: 200 },
     ]);
     const { messages } = await history.loadTranscript(1, 'k');
@@ -140,7 +155,7 @@ describe('loadTranscript', () => {
     test('эхо уже в БД → pending с тем же текстом не дублируется', async () => {
       db.any.mockResolvedValue([
         { direction: 'incoming', msg_type: 'text', text: 'ещё вопрос', msg_ts: 300 },
-        { direction: 'outgoing', msg_type: 'text', text: 'Ответ',      msg_ts: 150 },
+        { direction: 'outgoing', msg_type: 'text', text: 'Ответ',      msg_ts: 150, authored_by: 'agent' },
         { direction: 'incoming', msg_type: 'text', text: 'вопрос',     msg_ts: 100 },
       ]);
       pending.remember(1, 'k', 'Ответ', 150_000);

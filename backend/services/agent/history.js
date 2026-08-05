@@ -11,6 +11,17 @@ const DIALOG_KEY_SQL = `COALESCE(NULLIF(phone,''), chat_id)`;
 // «РЕПЛИКИ АДМИНИСТРАТОРА» (services/agent/system-prompt.js) — менять только вместе.
 const OPERATOR_MARK = '[сообщение администратора клиники]';
 
+// Журнал авторства исходящих (services/outgoing-authorship) выкачен на прод
+// 04.08.2026 (коммит 34caa25). У сообщений ДО него authored_by = NULL, и среди
+// них есть реплики живых администраторов — без пометки модель считает их своими
+// (инцидент 2026-08-05: пациентке не ответили приветствием, потому что неделю
+// назад с ней здоровался администратор, а его «Доброе утро» числилось за Милой).
+// ПОСЛЕ отсечки NULL значит ДРУГОЕ: classify упал, а там намеренный fail-open,
+// чтобы не глушить Милу на её же эхе, — такое NULL оператором НЕ считаем.
+// Отсечка взята концом суток 04.08 мск: ошибка в эту сторону заставит Милу лишний
+// раз перепроверить собственную договорённость, ошибка в другую — исходный баг.
+const AUTHORSHIP_SINCE_TS = Math.floor(Date.parse('2026-08-05T00:00:00+03:00') / 1000);
+
 // Транскрипт диалога для Claude Messages API.
 //  incoming → {role:'user'}, outgoing (наши эхо-ответы) → {role:'assistant'}.
 // Возвращает { messages, watermark }, где watermark = max(msg_ts) входящих.
@@ -35,7 +46,7 @@ async function loadTranscript(salonId, dialogKey, opts = {}) {
   if (pending.length) {
     const echoed = new Set(rows.filter((r) => r.direction === 'outgoing').map((r) => r.text));
     const extra = pending.filter((p) => !echoed.has(p.text))
-      .map((p) => ({ direction: 'outgoing', text: p.text, msg_ts: p.ts }));
+      .map((p) => ({ direction: 'outgoing', text: p.text, msg_ts: p.ts, authored_by: 'agent' }));
     if (extra.length) {
       rows.push(...extra);
       rows.sort((a, b) => Number(a.msg_ts) - Number(b.msg_ts));   // stable → равные ts не перемешиваются
@@ -53,7 +64,12 @@ async function loadTranscript(salonId, dialogKey, opts = {}) {
     // время и услугу согласовал человек, а Мила по правилу «выбор варианта =
     // согласие» молча оформила запись, придумав услугу. Автор проставлен
     // вебхуком (services/outgoing-authorship); NULL у сообщений до 04.08.2026.
-    const text = r.authored_by === 'operator' ? `${OPERATOR_MARK} ${r.text}` : r.text;
+    const legacyUnknown = r.direction === 'outgoing'
+      && r.authored_by == null
+      && Number(r.msg_ts) < AUTHORSHIP_SINCE_TS;
+    const text = (r.authored_by === 'operator' || legacyUnknown)
+      ? `${OPERATOR_MARK} ${r.text}`
+      : r.text;
     const last = messages[messages.length - 1];
     if (last && last.role === role) last.content += `\n${text}`;   // склейка серии
     else messages.push({ role, content: text });
