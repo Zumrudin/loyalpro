@@ -20,6 +20,9 @@ const OPERATOR_MARK = '[сообщение администратора клин
 // чтобы не глушить Милу на её же эхе, — такое NULL оператором НЕ считаем.
 // Отсечка взята концом суток 04.08 мск: ошибка в эту сторону заставит Милу лишний
 // раз перепроверить собственную договорённость, ошибка в другую — исходный баг.
+// Компромисс: под пометку попадут и до-выкатные автоуведомления YClients («Вы
+// записаны на прием…», authored_by тоже NULL) — они прочитаются моделью как
+// реплика администратора. Это дешевле обратной ошибки, отдельно не разбираем.
 const AUTHORSHIP_SINCE_TS = Math.floor(Date.parse('2026-08-05T00:00:00+03:00') / 1000);
 
 // Транскрипт диалога для Claude Messages API.
@@ -45,6 +48,12 @@ async function loadTranscript(salonId, dialogKey, opts = {}) {
   const pending = pendingReplies.peek(salonId, dialogKey, opts.nowMs || Date.now());
   if (pending.length) {
     const echoed = new Set(rows.filter((r) => r.direction === 'outgoing').map((r) => r.text));
+    // authored_by: конкретное значение тут не важно, важно лишь что не null/
+    // 'operator' — pending всегда НАША собственная отправка (диспетчер Милы,
+    // care-воркер или notifications.js — 'agent' здесь условность, ниже по
+    // потоку различают только 'operator' и null, а 'operator' в pending попасть
+    // не может: routes/chat.js кладёт свои реплики через authorship.remember,
+    // не через pendingReplies).
     const extra = pending.filter((p) => !echoed.has(p.text))
       .map((p) => ({ direction: 'outgoing', text: p.text, msg_ts: p.ts, authored_by: 'agent' }));
     if (extra.length) {
@@ -63,7 +72,7 @@ async function loadTranscript(salonId, dialogKey, opts = {}) {
     // пометки модель считает такие реплики своими: инцидент 2026-08-04, где
     // время и услугу согласовал человек, а Мила по правилу «выбор варианта =
     // согласие» молча оформила запись, придумав услугу. Автор проставлен
-    // вебхуком (services/outgoing-authorship); NULL у сообщений до 04.08.2026.
+    // вебхуком (services/outgoing-authorship); что делать с NULL — см. AUTHORSHIP_SINCE_TS.
     const legacyUnknown = r.direction === 'outgoing'
       && r.authored_by == null
       && Number(r.msg_ts) < AUTHORSHIP_SINCE_TS;
@@ -113,4 +122,4 @@ async function hasIncomingAfter(salonId, dialogKey, watermark) {
   return !!row;
 }
 
-module.exports = { loadTranscript, hasIncomingAfter, OPERATOR_MARK };
+module.exports = { loadTranscript, hasIncomingAfter, OPERATOR_MARK, AUTHORSHIP_SINCE_TS };

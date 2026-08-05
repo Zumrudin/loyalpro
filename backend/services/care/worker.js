@@ -42,6 +42,20 @@ const RETRY_BACKOFF_S = 120;
 // ещё живым прошлым вызовом в окне аренды.
 const LLM_TIMEOUT_MS  = 60000;
 
+// Срезает OPERATOR_MARK (history.js) с начала КАЖДОЙ строки текста — реплики
+// серии в транскрипте склеены через '\n', одной проверки на весь текст мало.
+// Маркер предназначен основному агенту (его промпт и правило «РЕПЛИКИ
+// АДМИНИСТРАТОРА» знают, что с ним делать) — care-промпт про пометку не
+// знает вообще, поэтому без среза она ушла бы пациенту дословно в тексте
+// касания.
+const OPERATOR_MARK_PREFIX = `${history.OPERATOR_MARK} `;
+function stripOperatorMark(text) {
+  return String(text || '')
+    .split('\n')
+    .map((line) => (line.startsWith(OPERATOR_MARK_PREFIX) ? line.slice(OPERATOR_MARK_PREFIX.length) : line))
+    .join('\n');
+}
+
 const defaultDeps = {
   db: realDb,
   isAllowed: (salonId, phone) => agentSettings.isAllowed(salonId, phone),
@@ -260,8 +274,9 @@ async function processOne(row, deps = defaultDeps) {
       .catch(() => ({ messages: [] }));
     const trList = (transcript.messages || []).map(m => ({
       direction: m.role === 'user' ? 'incoming' : 'outgoing',
-      text: typeof m.content === 'string' ? m.content
-        : (Array.isArray(m.content) ? m.content.map(b => b.text || '').join(' ') : ''),
+      // stripOperatorMark — см. комментарий у объявления функции.
+      text: stripOperatorMark(typeof m.content === 'string' ? m.content
+        : (Array.isArray(m.content) ? m.content.map(b => b.text || '').join(' ') : '')),
     })).filter(m => m.text);
     const futureBookings = records.future.map(r => ({
       datetime: r.datetime || r.date || '',

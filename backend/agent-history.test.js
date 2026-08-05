@@ -59,10 +59,11 @@ describe('loadTranscript', () => {
     // «classify упал» (там намеренный fail-open, чтобы не глушить Милу на её
     // же эхе), и такое NULL оператором считать нельзя.
     test('исходящее без автора СТАРШЕ отсечки помечается как администраторское', async () => {
+      const ts = history.AUTHORSHIP_SINCE_TS - 3600;
       db.any.mockResolvedValue([
-        { direction: 'incoming', msg_type: 'text', text: 'ок', msg_ts: 1_785_000_000 },
-        { direction: 'outgoing', msg_type: 'text', text: 'Доброе утро!', msg_ts: 1_753_000_000, authored_by: null },
-        { direction: 'incoming', msg_type: 'text', text: 'да', msg_ts: 1_752_000_000 },
+        { direction: 'incoming', msg_type: 'text', text: 'ок', msg_ts: ts + 60 },
+        { direction: 'outgoing', msg_type: 'text', text: 'Доброе утро!', msg_ts: ts, authored_by: null },
+        { direction: 'incoming', msg_type: 'text', text: 'да', msg_ts: ts - 60 },
       ]);
       const { messages } = await history.loadTranscript(1, 'k');
       expect(messages.find(m => m.role === 'assistant').content)
@@ -70,13 +71,29 @@ describe('loadTranscript', () => {
     });
 
     test('исходящее без автора ПОСЛЕ отсечки своим и остаётся (fail-open classify)', async () => {
+      const ts = history.AUTHORSHIP_SINCE_TS + 3600;
       db.any.mockResolvedValue([
-        { direction: 'incoming', msg_type: 'text', text: 'ок', msg_ts: 1_786_000_100 },
-        { direction: 'outgoing', msg_type: 'text', text: 'Записала вас', msg_ts: 1_786_000_000, authored_by: null },
-        { direction: 'incoming', msg_type: 'text', text: 'да', msg_ts: 1_785_999_000 },
+        { direction: 'incoming', msg_type: 'text', text: 'ок', msg_ts: ts + 60 },
+        { direction: 'outgoing', msg_type: 'text', text: 'Записала вас', msg_ts: ts, authored_by: null },
+        { direction: 'incoming', msg_type: 'text', text: 'да', msg_ts: ts - 60 },
       ]);
       const { messages } = await history.loadTranscript(1, 'k');
       expect(messages.find(m => m.role === 'assistant').content).toBe('Записала вас');
+    });
+
+    // Отсечка исключительна: РОВНО в момент выката журнал уже работал.
+    test('ровно на отсечке — своё, на секунду раньше — администраторское', async () => {
+      const at = async (ts) => {
+        db.any.mockResolvedValue([
+          { direction: 'incoming', msg_type: 'text', text: 'ок', msg_ts: ts + 60 },
+          { direction: 'outgoing', msg_type: 'text', text: 'Ответ', msg_ts: ts, authored_by: null },
+          { direction: 'incoming', msg_type: 'text', text: 'да', msg_ts: ts - 60 },
+        ]);
+        const { messages } = await history.loadTranscript(1, 'k');
+        return messages.find(m => m.role === 'assistant').content;
+      };
+      expect(await at(history.AUTHORSHIP_SINCE_TS)).toBe('Ответ');
+      expect(await at(history.AUTHORSHIP_SINCE_TS - 1)).toBe(`${history.OPERATOR_MARK} Ответ`);
     });
   });
 
