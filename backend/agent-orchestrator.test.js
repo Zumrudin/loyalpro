@@ -334,6 +334,162 @@ describe('runDialog', () => {
     // MAX_ITERS вызовов в цикле + 1 добивочный без инструментов (реплик-то нет).
     expect(deps.provider.createMessage).toHaveBeenCalledTimes(orchestrator.MAX_ITERS + 1);
   });
+
+  // Инцидент 2026-08-05: диалог, возобновлённый через неделю, был неотличим от
+  // продолжающегося, и Мила не поздоровалась.
+  test('транскрипт грузится с метками времени, граница переписки уходит в промпт', async () => {
+    const deps = makeDeps({
+      history: {
+        loadTranscript: jest.fn(async () => ({
+          messages: [{ role: 'user', content: '[05.08 08:47] доброе утро' }],
+          watermark: 100,
+          session: { newSession: true, gapText: '7 дней' },
+        })),
+      },
+    });
+    deps.provider.createMessage.mockResolvedValueOnce(textResp('Здравствуйте! 🤍'));
+    await orchestrator.runDialog(1, 'k', { deps });
+
+    expect(deps.history.loadTranscript.mock.calls[0][2]).toMatchObject({ withTime: true });
+    const { system } = deps.provider.createMessage.mock.calls[0][0];
+    expect(system).toContain('НАЧАЛО НОВОЙ ПЕРЕПИСКИ');
+    expect(system).toContain('7 дней назад');
+  });
+
+  test('без границы переписки блока в промпте нет', async () => {
+    const deps = makeDeps();   // дефолтный loadTranscript отдаёт транскрипт без session
+    deps.provider.createMessage.mockResolvedValueOnce(textResp('Есть окошко в 18:30'));
+    await orchestrator.runDialog(1, 'k', { deps });
+    // withTime безусловен: промпт ВСЕГДА описывает формат метки [дд.мм чч:мм],
+    // и транскрипт без меток сделал бы это описание ложью.
+    expect(deps.history.loadTranscript.mock.calls[0][2]).toMatchObject({ withTime: true });
+    const { system } = deps.provider.createMessage.mock.calls[0][0];
+    expect(system).not.toContain('НАЧАЛО НОВОЙ ПЕРЕПИСКИ');
+  });
+
+  test('при новой переписке приветствие не считается повтором (reply-guard молчит)', async () => {
+    mockLogger.warn.mockClear();
+    const deps = makeDeps({
+      history: {
+        loadTranscript: jest.fn(async () => ({
+          messages: [
+            { role: 'assistant', content: '[29.07 09:44] Записала вас на 29 июля' },
+            { role: 'user', content: '[05.08 08:47] доброе утро' },
+          ],
+          watermark: 100,
+          session: { newSession: true, gapText: '7 дней' },
+        })),
+      },
+    });
+    deps.provider.createMessage.mockResolvedValueOnce(textResp('Здравствуйте! Чем могу помочь?'));
+    await orchestrator.runDialog(1, 'k', { deps });
+    const guardLogs = mockLogger.warn.mock.calls.filter(([msg]) => String(msg).includes('reply-guard'));
+    expect(guardLogs.join(' ')).not.toContain('repeat_greeting');
+  });
+
+  test('внутри одной переписки повторное приветствие всё ещё ловится reply-guard', async () => {
+    mockLogger.warn.mockClear();
+    const deps = makeDeps({
+      history: {
+        loadTranscript: jest.fn(async () => ({
+          messages: [
+            { role: 'assistant', content: '[05.08 08:40] Здравствуйте! Я Мила' },
+            { role: 'user', content: '[05.08 08:47] хочу записаться' },
+          ],
+          watermark: 100,
+          session: { newSession: false, gapText: null },
+        })),
+      },
+    });
+    deps.provider.createMessage.mockResolvedValueOnce(textResp('Здравствуйте! Чем могу помочь?'));
+    await orchestrator.runDialog(1, 'k', { deps });
+    const guardLogs = mockLogger.warn.mock.calls.filter(([msg]) => String(msg).includes('reply-guard'));
+    expect(guardLogs.join(' ')).toContain('repeat_greeting');
+  });
+
+  test('newSession без измеренного разрыва: приветствие всё ещё считается повтором', async () => {
+    // Без gapText блок «НАЧАЛО НОВОЙ ПЕРЕПИСКИ» не рендерится (system-prompt.js),
+    // то есть приветствие промптом НЕ предписано — глушить guard не за что.
+    mockLogger.warn.mockClear();
+    const deps = makeDeps({
+      history: {
+        loadTranscript: jest.fn(async () => ({
+          messages: [
+            { role: 'assistant', content: '[05.08 08:40] Здравствуйте! Я Мила' },
+            { role: 'user', content: '[05.08 08:47] хочу записаться' },
+          ],
+          watermark: 100,
+          session: { newSession: true, gapText: null },
+        })),
+      },
+    });
+    deps.provider.createMessage.mockResolvedValueOnce(textResp('Здравствуйте! Чем могу помочь?'));
+    await orchestrator.runDialog(1, 'k', { deps });
+    const sentSystem = deps.provider.createMessage.mock.calls[0][0].system;
+    expect(sentSystem).not.toContain('НАЧАЛО НОВОЙ ПЕРЕПИСКИ');
+    const guardLogs = mockLogger.warn.mock.calls.filter(([msg]) => String(msg).includes('reply-guard'));
+    expect(guardLogs.join(' ')).toContain('repeat_greeting');
+  });
+
+  // Метка времени реплики — не предложенное пациенту время: reply-guard иначе
+  // считал бы разрешённым любое время отправки сообщения.
+  test('время из метки транскрипта не становится разрешённым для reply-guard', async () => {
+    mockLogger.warn.mockClear();
+    const deps = makeDeps({
+      history: {
+        loadTranscript: jest.fn(async () => ({
+          messages: [{ role: 'user', content: '[05.08 08:47] хочу записаться' }],
+          watermark: 100,
+        })),
+      },
+    });
+    deps.provider.createMessage.mockResolvedValueOnce(textResp('Могу предложить 08:47'));
+    await orchestrator.runDialog(1, 'k', { deps, today: '2026-08-05', now: '07:00' });
+    const guardLogs = mockLogger.warn.mock.calls.filter(([msg]) => String(msg).includes('reply-guard'));
+    expect(guardLogs.join(' ')).toContain('unknown_time');
+  });
+
+  // Метка стоит в начале каждой ассистентской реплики транскрипта и работает
+  // как образец: промпт-запрета «не пиши её» недостаточно.
+  test('метку времени из ответа модели пациент не получает', async () => {
+    const deps = makeDeps();
+    deps.provider.createMessage.mockResolvedValueOnce(
+      textResp('[05.08 09:12] Здравствуйте! Есть окошко в 18:30'));
+    const out = await orchestrator.runDialog(1, 'k', { deps });
+    expect(out.replies).toEqual(['Здравствуйте! Есть окошко в 18:30']);
+  });
+
+  test('обычная реплика проходит без изменений', async () => {
+    const deps = makeDeps();
+    const text = 'Здравствуйте!\nПодскажите, на какой день удобно?';
+    deps.provider.createMessage.mockResolvedValueOnce(textResp(text));
+    const out = await orchestrator.runDialog(1, 'k', { deps });
+    expect(out.replies).toEqual([text]);
+  });
+
+  // Ради этого сборка промпта и перенесена внутрь цикла: граница переписки
+  // известна только после загрузки транскрипта, и на второй попытке она своя.
+  test('перегенерация пересобирает промпт со свежей границей переписки', async () => {
+    let loads = 0;
+    let checks = 0;
+    const deps = makeDeps({
+      history: {
+        loadTranscript: jest.fn(async () => (++loads === 1
+          ? { messages: [{ role: 'user', content: 'привет' }], watermark: 100,
+            session: { newSession: false, gapText: null } }
+          : { messages: [{ role: 'user', content: 'привет' }], watermark: 101,
+            session: { newSession: true, gapText: '7 дней' } })),
+        hasIncomingAfter: jest.fn(async () => (++checks === 1)),
+      },
+    });
+    deps.provider.createMessage
+      .mockResolvedValueOnce(textResp('ответ про маникюр'))
+      .mockResolvedValueOnce(textResp('ответ про педикюр'));
+    await orchestrator.runDialog(1, 'k', { deps });
+    expect(deps.provider.createMessage).toHaveBeenCalledTimes(2);
+    expect(deps.provider.createMessage.mock.calls[0][0].system).not.toContain('НАЧАЛО НОВОЙ ПЕРЕПИСКИ');
+    expect(deps.provider.createMessage.mock.calls[1][0].system).toContain('НАЧАЛО НОВОЙ ПЕРЕПИСКИ');
+  });
 });
 
 // ── Логирование вызовов инструментов (Task 13: «в логах виден вызов book_chain») ──

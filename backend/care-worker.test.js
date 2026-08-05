@@ -3,6 +3,7 @@
 // DI (deps), БД/сеть не трогаются. Проверки статусов идут по подстрокам SQL
 // в вызовах db.query — тот же стиль, что notification-воркер.
 const worker = require('./services/care/worker');
+const { OPERATOR_MARK } = require('./services/agent/history');
 
 // Общий конструктор моков: happy-path, отдельные тесты переопределяют куски.
 function makeDeps(over = {}) {
@@ -54,6 +55,41 @@ describe('care worker processOne', () => {
     expect(deps.rememberPending).toHaveBeenCalledWith(5, '79200255591', 'Добрый день! Как самочувствие?');
     const sent = deps.db.query.mock.calls.find(c => c[0].includes(`'sent'`));
     expect(sent).toBeTruthy();
+  });
+  // Ревью Task 3: history.loadTranscript помечает старые/операторские реплики
+  // OPERATOR_MARK для ОСНОВНОГО агента (его промпт про пометку знает) — но care-
+  // проход того же транскрипта не различает авторство вовсе, а его промпт ничего
+  // не знает про маркер, и reply-guard на этом пути нет. Без среза служебная
+  // пометка ушла бы пациенту дословно в тексте касания.
+  test('OPERATOR_MARK из транскрипта не попадает в care-промпт', async () => {
+    const { deps } = makeDeps({
+      loadTranscript: jest.fn(async () => ({
+        messages: [
+          { role: 'user', content: 'привет' },
+          { role: 'assistant', content: `${OPERATOR_MARK} Доброе утро!` },
+        ],
+      })),
+    });
+    await worker.processOne(row, deps);
+    expect(deps.createMessage).toHaveBeenCalled();
+    const [{ messages }] = deps.createMessage.mock.calls[0];
+    const userPrompt = messages[0].content;
+    expect(userPrompt).toContain('Доброе утро!');
+    expect(userPrompt).not.toContain(OPERATOR_MARK);
+  });
+  // Продолжение того же: срез OPERATOR_MARK держится на startsWith, то есть на
+  // том, что маркер стоит РОВНО в позиции 0. Метки времени сдвинули бы его
+  // вправо («[05.08 08:47] [сообщение администратора клиники] …»), и пометка
+  // ушла бы живому пациенту в тексте касания. Единственное, что этому мешает, —
+  // что care зовёт loadTranscript БЕЗ withTime; до этого теста факт держался
+  // только на комментарии в worker.js, и правдоподобная правка «дадим и Заботе
+  // временной контекст» вернула бы утечку молча.
+  test('care зовёт loadTranscript БЕЗ withTime (иначе метка сдвинет OPERATOR_MARK)', async () => {
+    const { deps } = makeDeps();
+    await worker.processOne(row, deps);
+    expect(deps.loadTranscript).toHaveBeenCalled();
+    const opts = deps.loadTranscript.mock.calls[0][2] || {};
+    expect(opts.withTime).toBeFalsy();
   });
   test('гейт запретил → skipped, LLM не зовётся', async () => {
     const { deps } = makeDeps({ isAllowed: jest.fn(async () => ({ allow: false, reason: 'whitelist' })) });
