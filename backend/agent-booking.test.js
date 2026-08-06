@@ -226,6 +226,40 @@ describe('create_booking tool', () => {
       expect(out.available_slots).toBeUndefined();
       expect(out.error).toMatch(/недоступно/);   // исходная ошибка YClients как есть
     });
+
+    // Плотная запись: повторное предложение после отказа YClients тоже обязано
+    // идти по offer_slots, а не по самому раннему из полного списка.
+    test('свежая выдача несёт offer_slots → ответ несёт offer_slots рядом с полным available_slots, текст ошибки называет offer_slots', async () => {
+      getSlots.run.mockResolvedValue({
+        slots: [
+          { time: '15:00', datetime: '2026-08-05T15:00:00+03:00' },
+          { time: '20:30', datetime: '2026-08-05T20:30:00+03:00' },
+        ],
+        offer_slots: [{ time: '20:30', datetime: '2026-08-05T20:30:00+03:00' }],
+      });
+      const out = await createBookingTool.run(1, INPUT, CTX);
+      expect(out.slot_unavailable).toBe(true);
+      expect(out.available_slots).toHaveLength(2);
+      expect(out.offer_slots).toEqual([{ time: '20:30', datetime: '2026-08-05T20:30:00+03:00' }]);
+      expect(out.error).toMatch(/offer_slots/);
+    });
+
+    // Без offer_slots в свежей выдаче (фолбэк/поле не пришло) текст ошибки и
+    // форма ответа обязаны остаться РОВНО прежними — их и так один раз уже
+    // выстрадали инцидентом 2026-07-31.
+    test('свежая выдача без offer_slots → поля offer_slots в ответе нет, текст ошибки прежний', async () => {
+      const out = await createBookingTool.run(1, INPUT, CTX);
+      expect(out.slot_unavailable).toBe(true);
+      expect(out.available_slots).toHaveLength(1);
+      expect(out).not.toHaveProperty('offer_slots');
+      expect(out.error).not.toMatch(/offer_slots/);
+      expect(out.error).toBe(
+        'Записать на это время не удалось. Причина неизвестна — НЕ выдумывай её и не утверждай ' +
+        'пациенту, что слот «только что заняли». Извинись нейтрально («к сожалению, это время уже ' +
+        'недоступно») и предложи время ТОЛЬКО из available_slots — это свежие реально свободные ' +
+        'старты для этой услуги и этого мастера на ту же дату.'
+      );
+    });
   });
 
   test('schema требует поля брони', () => {
