@@ -993,6 +993,33 @@ describe('reply-guard: offer_bypass (плотная запись, только �
     const guardLogs = mockLogger.warn.mock.calls.filter(([msg]) => String(msg).includes('reply-guard'));
     expect(guardLogs.join(' ')).not.toContain('offer_bypass');
   });
+
+  // Второе разрешение правила «КАКОЕ ВРЕМЯ ПРЕДЛАГАТЬ ПЕРВЫМ»: пациент попросил
+  // время СЛОВАМИ («а можно пораньше?»), без цифр — самый частый разговорный
+  // паттерн. Без patientAskedOtherTime такой ход систематически ловился бы как
+  // offer_bypass, хотя ответ полностью соответствует правилу.
+  test('пациент попросил пораньше СЛОВАМИ → offer_bypass не пишется', async () => {
+    const deps = makeDeps({
+      handlers: {
+        get_available_slots: jest.fn(async () => ({
+          slots: [{ time: '11:00' }, { time: '15:00' }],
+          offer_slots: [{ time: '14:00' }],
+        })),
+      },
+      history: {
+        loadTranscript: jest.fn(async () => ({
+          messages: [{ role: 'user', content: 'а можно пораньше?' }], watermark: 100,
+        })),
+      },
+    });
+    deps.provider.createMessage
+      .mockResolvedValueOnce(toolResp('get_available_slots', { staff_yc_id: 1, service_yc_id: 1, date: '2026-08-07' }))
+      .mockResolvedValueOnce(textResp('Тогда 11:00, подойдёт?'));
+    const out = await orchestrator.runDialog(1, 'k', { deps, today: '2026-08-06', now: '09:00' });
+    expect(out.replies).toEqual(['Тогда 11:00, подойдёт?']);
+    const guardLogs = mockLogger.warn.mock.calls.filter(([msg]) => String(msg).includes('reply-guard'));
+    expect(guardLogs.join(' ')).not.toContain('offer_bypass');
+  });
 });
 
 describe('AGENT_CATALOG_IN_PROMPT', () => {

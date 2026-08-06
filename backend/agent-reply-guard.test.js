@@ -163,6 +163,66 @@ describe('checkOfferDeviation', () => {
   test('отсутствие opts (undefined) не роняет функцию — трактуется как выключенная проверка', () => {
     expect(g.checkOfferDeviation('окошко в 15:00')).toEqual([]);
   });
+
+  // Второе разрешение правила «КАКОЕ ВРЕМЯ ПРЕДЛАГАТЬ ПЕРВЫМ»: пациент попросил
+  // другое время СЛОВАМИ, без цифр («а есть пораньше?»). extractTimes цифр в
+  // такой фразе не найдёт, и без patientAskedOtherTime легальный ответ писался
+  // бы как offer_bypass.
+  test('пациент попросил пораньше словами → offer_bypass не пишется, даже если время не совпадает', () => {
+    const v = g.checkOfferDeviation('хорошо, тогда 11:00', {
+      toolTimes: new Set(['11:00', '14:00']),
+      offerTimes: new Set(['14:00']),
+      patientTimes: new Set(),
+      patientAskedOtherTime: true,
+    });
+    expect(v).toEqual([]);
+  });
+  // Симметрично: без просьбы о другом времени словами проверка не выключается
+  // сама по себе — иначе она была бы выключена всегда.
+  test('обычное сообщение (patientAskedOtherTime=false) — нарушение по-прежнему фиксируется', () => {
+    const v = g.checkOfferDeviation('хорошо, тогда 11:00', {
+      toolTimes: new Set(['11:00', '14:00']),
+      offerTimes: new Set(['14:00']),
+      patientTimes: new Set(),
+      patientAskedOtherTime: false,
+    });
+    expect(v).toEqual([{ type: 'offer_bypass', value: '11:00' }]);
+  });
+});
+
+describe('OTHER_TIME_REQUEST_RE', () => {
+  test('ловит все слова из формулировки промпт-правила «КАКОЕ ВРЕМЯ ПРЕДЛАГАТЬ ПЕРВЫМ»', () => {
+    for (const w of ['пораньше', 'попозже', 'утром', 'вечером', 'в другой половине дня']) {
+      expect(g.OTHER_TIME_REQUEST_RE.test(w)).toBe(true);
+    }
+  });
+  test('ловит очевидные словоформы того же смысла', () => {
+    for (const w of ['раньше', 'позже', 'днём', 'днем', 'до обеда', 'после обеда']) {
+      expect(g.OTHER_TIME_REQUEST_RE.test(w)).toBe(true);
+    }
+  });
+  test('не срабатывает на обычном сообщении без просьбы о другом времени', () => {
+    expect(g.OTHER_TIME_REQUEST_RE.test('хорошо, записывайте')).toBe(false);
+  });
+  test('регистр и словоформы: «Пораньше?», «А ПОПОЗЖЕ можно?»', () => {
+    expect(g.OTHER_TIME_REQUEST_RE.test('Пораньше?')).toBe(true);
+    expect(g.OTHER_TIME_REQUEST_RE.test('А ПОПОЗЖЕ можно?')).toBe(true);
+  });
+  // Связь с формулировкой промпт-правила (как OPERATOR_MARK/formatStamp):
+  // слова регулярки обязаны реально встречаться в тексте самого правила —
+  // иначе правило и код измерения тихо разойдутся при правке одного без другого.
+  test('слова правила реально есть в самом тексте правила system-prompt.js', () => {
+    const { buildSystemPrompt } = require('./services/agent/system-prompt');
+    const p = buildSystemPrompt({});
+    const idx = p.indexOf('КАКОЕ ВРЕМЯ ПРЕДЛАГАТЬ ПЕРВЫМ');
+    expect(idx).toBeGreaterThan(-1);
+    const ruleEnd = p.indexOf('Если offer_slots в ответе нет или он пуст', idx);
+    const rule = ruleEnd > -1 ? p.slice(idx, ruleEnd) : p.slice(idx, idx + 800);
+    for (const w of ['пораньше', 'попозже', 'утром', 'вечером', 'в другой половине дня']) {
+      expect(rule).toContain(w);
+      expect(g.OTHER_TIME_REQUEST_RE.test(w)).toBe(true);
+    }
+  });
 });
 
 describe('hardViolations', () => {

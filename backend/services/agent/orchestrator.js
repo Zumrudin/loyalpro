@@ -420,13 +420,16 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
     const hasPriorAssistant = !(session && session.newSession && session.gapText)
       && messages.some(m => m.role === 'assistant');
 
-    // Плотная запись (§8 спеки, checkOfferDeviation в reply-guard): времена,
-    // которые пациент назвал сам, — легальны ДАЖЕ мимо offer_slots (правило
-    // промпта прямо разрешает подтверждать названное пациентом время). Считаем
-    // ТОЛЬКО по роли user — реплики Милы/администратора сюда не подмешиваются,
-    // и метку [дд.мм чч:мм] чистим тем же stripAllStamps, что и allowedTimes выше.
-    const patientTimes = new Set(replyGuard.extractTimes(
-      stripAllStamps(messages.filter(m => m.role === 'user').map(m => m.content).join('\n'))));
+    // Плотная запись (§8 спеки, checkOfferDeviation в reply-guard): промпт-правило
+    // «КАКОЕ ВРЕМЯ ПРЕДЛАГАТЬ ПЕРВЫМ» разрешает полный slots ДВУМЯ путями — пациент
+    // назвал время ЦИФРАМИ (patientTimes) или попросил другое СЛОВАМИ, без цифр
+    // («а есть пораньше?», OTHER_TIME_REQUEST_RE). Считаем ТОЛЬКО по роли user —
+    // реплики Милы/администратора сюда не подмешиваются, и метку [дд.мм чч:мм]
+    // чистим тем же stripAllStamps, что и allowedTimes выше; кусок текста общий
+    // для обоих признаков — второй проход по транскрипту не нужен.
+    const patientText = stripAllStamps(messages.filter(m => m.role === 'user').map(m => m.content).join('\n'));
+    const patientTimes = new Set(replyGuard.extractTimes(patientText));
+    const patientAskedOtherTime = replyGuard.OTHER_TIME_REQUEST_RE.test(patientText);
     // toolOfferTimes/offerSlotTimes пополняются в tool-цикле ниже (только на
     // результатах, где реально был offer_slots).
     const toolOfferTimes = new Set();
@@ -596,7 +599,7 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
         // Плотная запись (§8 спеки): только лог, переписывания нет (offer_bypass
         // не входит в HARD_TYPES) — см. шапку checkOfferDeviation в reply-guard.js.
         ...replyGuard.checkOfferDeviation(joined,
-          { toolTimes: toolOfferTimes, offerTimes: offerSlotTimes, patientTimes }),
+          { toolTimes: toolOfferTimes, offerTimes: offerSlotTimes, patientTimes, patientAskedOtherTime }),
       ];
       if (violations.length) {
         logger.warn(`dialog ${dialogKey}: reply-guard: ${JSON.stringify(violations)}`);
