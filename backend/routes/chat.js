@@ -163,11 +163,19 @@ router.post('/dialogs/:key/agent', adminOnly, async (req, res) => {
     const status = req.body && req.body.status === 'escalated' ? 'escalated' : 'bot';
     if (!key) return res.status(400).json({ error: 'Пустой ключ диалога' });
     // Upsert: диалога может ещё не быть в agent_dialogs, если бот не отвечал.
+    // «Вернуть боту» ОБЯЗАН гасить escalated_reason: оркестратор читает его как
+    // «диалог вернул тебе администратор ПОСЛЕ КОНФЛИКТА» (resumedFromEscalation)
+    // и дописывает Миле соответствующий блок промпта. Без этого на проде осело
+    // 21 диалог в состоянии status='bot' + reason='operator_reply', и каждый
+    // ход Мила получала разбор конфликта, которого не было.
     await db.query(
       `INSERT INTO agent_dialogs (salon_id, dialog_key, status)
        VALUES ($1, $2, $3)
        ON CONFLICT (salon_id, dialog_key)
-         DO UPDATE SET status = $3, updated_at = now()`,
+         DO UPDATE SET status = $3,
+           escalated_reason = CASE WHEN $3 = 'bot' THEN NULL
+                                   ELSE agent_dialogs.escalated_reason END,
+           updated_at = now()`,
       [salonId, key, status]);
     // Красная подсветка в списке диалогов у всех открытых вкладок — сразу.
     chatEvents.emitAgentStatus(salonId, key, status, status === 'escalated' ? 'operator_takeover' : null);

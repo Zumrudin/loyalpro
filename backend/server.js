@@ -230,6 +230,17 @@ cron.schedule('40 4 * * *', async () => {
   } catch (e) { cronLogger.error(`revenue reconcile cron: ${e.message}`); }
 }, { timezone: 'Europe/Moscow' });
 
+// Вечерний автосброс пауз «отвечал администратор»: на открытии окна расписания
+// диалоги, поставленные на паузу ДО окна, возвращаются Миле. Тик, а не разовый
+// крон на время старта окна: schedule_start у каждого салона свой и меняется из
+// админки, а рестарт процесса не должен стоить салону целой ночи ручной работы.
+// Подробности и разбор инцидента — services/agent/operator-pause-sweep.js.
+cron.schedule('*/5 * * * *', async () => {
+  try {
+    await require('./services/agent/operator-pause-sweep').sweepAll();
+  } catch (e) { cronLogger.error(`operator pause sweep: ${e.message}`); }
+}, { timezone: 'Europe/Moscow' });
+
 // ============================================================
 // START
 // ============================================================
