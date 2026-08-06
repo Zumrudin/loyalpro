@@ -358,3 +358,35 @@ describe('память: get_available_slots без мастера (выбор с
     expect(lines[0]).toMatch(/показаны 10:00/);
   });
 });
+
+describe('память: рендерятся ПОКАЗАННЫЕ времена, а не начало slots', () => {
+  const INP = { service_yc_id: 9536676, date: '2026-08-07' };
+  const ALL = ['11:00', '11:30', '12:00', '12:30', '13:00', '13:30', '14:00'].map(t => ({ time: t }));
+  const OFFER = [{ time: '14:00' }, { time: '13:30' }];
+
+  // В журнал должно попадать то, что пациент реально услышал: иначе следующим
+  // ходом модель процитирует время, которое сама никогда не предлагала.
+  test('одномастерная выдача: в память идёт offer_slots с многоточием', () => {
+    const { lines } = renderMemory(
+      [ev({ tool: 'get_available_slots', input: { ...INP, staff_yc_id: 1910274 }, age_ms: MIN,
+        result: { slots: ALL, offer_slots: OFFER } })], { nowMs: NOW });
+    expect(lines.join('\n')).toContain('14:00, 13:30…');
+    expect(lines.join('\n')).not.toContain('11:00');
+  });
+
+  test('staff_options: в память идёт offer_slots каждого мастера', () => {
+    const { lines } = renderMemory(
+      [ev({ tool: 'get_available_slots', input: INP, age_ms: MIN,
+        result: { staff_options: [{ name: 'Пери', slots: ALL, offer_slots: OFFER }] } })], { nowMs: NOW });
+    expect(lines.join('\n')).toContain('Пери: 14:00, 13:30…');
+  });
+
+  // События, записанные ДО выката, offer_slots не имеют, а память читает журнал
+  // за 48 часов — для них поведение обязано остаться прежним.
+  test('события без offer_slots рендерятся по slots, как раньше', () => {
+    const { lines } = renderMemory(
+      [ev({ tool: 'get_available_slots', input: { ...INP, staff_yc_id: 1910274 }, age_ms: MIN,
+        result: { slots: ALL } })], { nowMs: NOW });
+    expect(lines.join('\n')).toContain('11:00');
+  });
+});

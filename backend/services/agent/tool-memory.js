@@ -40,6 +40,20 @@ function isPiiKey(k) {
   return PII_EXACT_KEYS.has(k) || PII_KEY_RE.test(k);
 }
 
+// Времена, которые пациент РЕАЛЬНО услышал. Инструмент подбирает их сам
+// (offer_slots — слоты, примыкающие к существующим записям мастера), и в журнал
+// должно попадать именно это: рендер первых элементов полного slots писал бы в
+// память время, которое модель никогда не называла, и следующим ходом она
+// сослалась бы на него как на предложенное.
+// Старые события журнала (до выката offer_slots) живут в памяти ещё 48 часов —
+// для них фолбэк на slots обязателен.
+function shownTimes(holder, cap) {
+  const offer = Array.isArray(holder.offer_slots) ? holder.offer_slots : [];
+  const all = Array.isArray(holder.slots) ? holder.slots : [];
+  const src = offer.length ? offer : all;
+  return src.slice(0, cap).map(s => s && s.time).filter(Boolean);
+}
+
 // Инструменты, которых в памяти быть НЕ должно. Фолбэк (fmtResultScalars)
 // задуман для НЕИЗВЕСТНОГО инструмента — будущего, у которого экстрактора ещё
 // нет; на ЗАРЕГИСТРИРОВАННЫХ (tools/index.js) он давал либо вредную строку,
@@ -199,8 +213,8 @@ const EXTRACTORS = {
       // у Юлии времени нет» — про окна, которые сама же показала часом раньше.
       const per = res.staff_options.slice(0, 3).map((o) => {
         const all = Array.isArray(o.slots) ? o.slots : [];
-        const times = all.slice(0, 6).map(s => s && s.time).filter(Boolean);
-        return `${o.name}: ${times.join(', ')}${all.length > 6 ? '…' : ''}`;
+        const times = shownTimes(o, 6);
+        return `${o.name}: ${times.join(', ')}${all.length > times.length ? '…' : ''}`;
       });
       if (per.length) return `${base}: показаны ${per.join('; ')}${res.staff_options.length > 3 ? '…' : ''}`;
       // Пустой выбор — это ДВА разных случая, и путать их нельзя (тот же водораздел,
@@ -216,8 +230,8 @@ const EXTRACTORS = {
     if (!slots.length) {
       return `${base}: свободного времени не было${res.alternative_staff ? ', предлагала альтернативных мастеров' : ''}`;
     }
-    const times = slots.slice(0, 12).map(s => s && s.time).filter(Boolean);
-    return `${base}: показаны ${times.join(', ')}${slots.length > 12 ? '…' : ''}`;
+    const times = shownTimes(res, 12);
+    return `${base}: показаны ${times.join(', ')}${slots.length > times.length ? '…' : ''}`;
   },
   get_available_dates(e, ctx) {
     const inp = e.input || {}, res = e.result || {};
