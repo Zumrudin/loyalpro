@@ -60,7 +60,7 @@ describe('get_available_slots — альтернативный мастер пр
     const out = await slots.run(1, ARGS, { nowMs: NOON });
     expect(out.slots).toEqual([]);
     expect(out.alternative_staff).toEqual([
-      { staff_yc_id: 12, name: 'Татьяна', slots: bookSlot('14:00') },
+      { staff_yc_id: 12, name: 'Татьяна', slots: bookSlot('14:00'), offer_slots: bookSlot('14:00') },
     ]);
     expect(out.hint).toMatch(/другие мастера/);
     expect(out.no_alternative_staff).toBeUndefined();
@@ -130,7 +130,7 @@ describe('get_available_slots — альтернативный мастер пр
     const out = await slots.run(1, ARGS, { nowMs: NOON });
     // Татьяна (12) скрыта фильтром — осталась только Мария (13)
     expect(out.alternative_staff).toEqual([
-      { staff_yc_id: 13, name: 'Мария', slots: bookSlot('14:00') },
+      { staff_yc_id: 13, name: 'Мария', slots: bookSlot('14:00'), offer_slots: bookSlot('14:00') },
     ]);
   });
 
@@ -141,7 +141,7 @@ describe('get_available_slots — альтернативный мастер пр
     });
     const out = await slots.run(1, ARGS, { nowMs: NOON });
     expect(out.alternative_staff).toEqual([
-      { staff_yc_id: 13, name: 'Мария', slots: bookSlot('16:30') },
+      { staff_yc_id: 13, name: 'Мария', slots: bookSlot('16:30'), offer_slots: bookSlot('16:30') },
     ]);
   });
 
@@ -175,5 +175,40 @@ describe('get_available_slots — альтернативный мастер пр
     expect(out.alternative_staff).toBeDefined();
     const alt = out.alternative_staff.find(a => a.staff_yc_id === 12);
     expect(alt.slots.map(s => s.time)).toEqual(['14:00']);   // 60-мин услуга в часовом окне
+  });
+});
+
+function seanceGrid(from, to, busy = []) {
+  const toMin = (t) => { const [h, m] = t.split(':').map(Number); return h * 60 + m; };
+  const toHHMM = (m) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
+  const cuts = busy.map(([a, b]) => [toMin(a), toMin(b)]);
+  const out = [];
+  for (let m = toMin(from); m < toMin(to); m += 5) {
+    out.push({ time: toHHMM(m), is_free: !cuts.some(([a, b]) => m >= a && m < b) });
+  }
+  return out;
+}
+
+describe('offer_slots у альтернативных специалистов', () => {
+  // durationMin в этом файле замокан на 60 минут → вплотную к блоку 14:30
+  // встаёт старт 13:30.
+  test('альтернативный мастер приходит с offer_slots', async () => {
+    ycGetStaffSeances.mockImplementation(async (_salon, staffId) => (staffId === 11
+      ? seanceGrid('11:00', '21:00', [['11:00', '21:00']])     // у запрошенного всё занято
+      : seanceGrid('11:00', '21:00', [['14:30', '21:00']])));
+    const out = await slots.run(1, ARGS, { nowMs: NOON });
+    expect(out.slots).toEqual([]);
+    expect(out.alternative_staff.length).toBeGreaterThan(0);
+    for (const a of out.alternative_staff) {
+      expect(a.offer_slots[0].time).toBe('13:30');
+      expect(a.slots.length).toBeGreaterThan(a.offer_slots.length);
+    }
+  });
+
+  test('хинт альтернативы велит брать время из offer_slots', async () => {
+    ycGetBookTimes.mockImplementation(async (_salon, staffId) =>
+      staffId === 12 ? bookSlot('14:00') : []);
+    const out = await slots.run(1, ARGS, { nowMs: NOON });
+    expect(out.hint).toMatch(/offer_slots/);
   });
 });

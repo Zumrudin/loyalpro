@@ -73,8 +73,8 @@ describe('get_available_slots без staff_yc_id — выбор специали
     });
     const out = await slots.run(1, ARGS, { nowMs: NOON });
     expect(out.staff_options).toEqual([
-      { staff_yc_id: 11, name: 'Юлия', position: null, slots: bookSlot('12:00') },
-      { staff_yc_id: 12, name: 'Пери Исамудиновна', position: null, slots: bookSlot('15:00') },
+      { staff_yc_id: 11, name: 'Юлия', position: null, slots: bookSlot('12:00'), offer_slots: bookSlot('12:00') },
+      { staff_yc_id: 12, name: 'Пери Исамудиновна', position: null, slots: bookSlot('15:00'), offer_slots: bookSlot('15:00') },
     ]);
     expect(out.slots).toBeUndefined();
   });
@@ -367,5 +367,55 @@ describe('get_available_slots без staff_yc_id — должность спец
     const out = await slots.run(1, ARGS, { nowMs: NOON });
     expect(out.staff_options.map(o => o.staff_yc_id)).toEqual([11]);
     expect(out.staff_options[0].position).toBeNull();
+  });
+});
+
+// Сетка сеансов: точки через 5 минут, to эксклюзивно, busy — интервалы 'HH:MM'.
+function seanceGrid(from, to, busy = []) {
+  const toMin = (t) => { const [h, m] = t.split(':').map(Number); return h * 60 + m; };
+  const toHHMM = (m) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
+  const cuts = busy.map(([a, b]) => [toMin(a), toMin(b)]);
+  const out = [];
+  for (let m = toMin(from); m < toMin(to); m += 5) {
+    out.push({ time: toHHMM(m), is_free: !cuts.some(([a, b]) => m >= a && m < b) });
+  }
+  return out;
+}
+
+describe('offer_slots в staff_options', () => {
+  const { ycGetStaffSeances } = require('./services/yclients-booking');
+
+  // ВНИМАНИЕ: в этом файле equipment-context.durationMin замокан на 60 минут,
+  // поэтому вплотную к блоку 14:30 встаёт старт 13:30, а не 14:00, как в
+  // 30-минутном боевом кейсе.
+  test('у каждого специалиста своё offer_slots, посчитанное по ЕГО дню', async () => {
+    ycGetStaffSeances.mockImplementation(async (_salon, staffId) => (staffId === 11
+      ? seanceGrid('11:00', '21:00', [['14:30', '21:00']])    // блок после обеда
+      : seanceGrid('11:00', '21:00', [['11:00', '13:00']]))); // блок с утра
+    const out = await slots.run(1, ARGS, { nowMs: NOON });
+    const byId = Object.fromEntries(out.staff_options.map(o => [String(o.staff_yc_id), o]));
+    expect(byId['11'].offer_slots.map(s => s.time)).toEqual(['13:30', '13:00']);
+    expect(byId['12'].offer_slots[0].time).toBe('13:00');
+    // Полный список сохраняется — пациент может попросить другое время.
+    expect(byId['11'].slots.length).toBeGreaterThan(byId['11'].offer_slots.length);
+  });
+
+  test('хинт велит называть время из offer_slots', async () => {
+    ycGetBookTimes.mockImplementation(async (_salon, staffId) =>
+      staffId === 13 ? [] : bookSlot('12:00'));
+    const out = await slots.run(1, ARGS, { nowMs: NOON });
+    expect(out.hint).toMatch(/offer_slots/);
+  });
+
+  // Task 3 code review: в booking-ветке computeStaffSlots делает ДОПОЛНИТЕЛЬНЫЙ
+  // запрос сетки (ycGetStaffSeances) — offer_slots нужен по каждому мастеру
+  // отдельно. Цена осознанная, но не должна размножаться сверх «раз на мастера»:
+  // в CATALOG ровно 3 исполнителя услуги 900, значит сетка запрашивается ровно 3 раза.
+  test('сетка запрашивается ровно один раз на каждого проверенного мастера', async () => {
+    ycGetBookTimes.mockImplementation(async (_salon, staffId) =>
+      (staffId === 13 ? [] : bookSlot('12:00')));   // 11 и 12 — booking-ветка, 13 — schedule-ветка
+    await slots.run(1, ARGS, { nowMs: NOON });
+    expect(ycGetStaffSeances).toHaveBeenCalledTimes(3);
+    expect(ycGetStaffSeances.mock.calls.map(c => c[1]).sort((a, b) => a - b)).toEqual([11, 12, 13]);
   });
 });

@@ -27,15 +27,16 @@ const MAX_ALT_STAFF = 3;           // сколько других мастеро
 const MAX_STAFF_OPTIONS = 6;
 
 const HINT_STAFF_CHOICE = 'Пациент специалиста не называл — выбор за НИМ, а не за тобой. ' +
-  'Перечисли в ОДНОМ сообщении ВСЕХ из staff_options: имя, должность (position) и 1–2 времени ' +
-  'ДОСЛОВНО из его slots, и спроси, к кому удобнее записать. НЕ выбирай сама и никого не советуй ' +
+  'Перечисли в ОДНОМ сообщении ВСЕХ из staff_options: имя, должность (position) и время ' +
+  'ДОСЛОВНО из его offer_slots (это уже подобранные 1–2 времени; полный slots бери, только если ' +
+  'пациент сам попросил другое), и спроси, к кому удобнее записать. НЕ выбирай сама и никого не советуй ' +
   'как «лучшего». Цену не называй, пока пациент сам о ней не спросил. НЕ утверждай, что это все ' +
   'специалисты клиники: здесь только те, у кого в этот день есть свободное время.';
 
 // Выбор из одного варианта — не выбор, а лишний вопрос в переписке: «к кому вам
 // удобнее?» при единственном мастере звучит нелепо и добавляет ход до записи.
 const HINT_STAFF_SINGLE = 'Эту услугу в этот день ведёт один специалист — выбора не устраивай: ' +
-  'назови его имя, должность (position) и 1–2 времени ДОСЛОВНО из slots и предложи записать.';
+  'назови его имя, должность (position) и время ДОСЛОВНО из offer_slots и предложи записать.';
 
 // Тот же водораздел, что у ПУСТОЙ выдачи (HINT_STAFF_PARTIAL), только на непустой:
 // «эту услугу ведёт один специалист» — утверждение обо ВСЕХ исполнителях, и по
@@ -44,7 +45,7 @@ const HINT_STAFF_SINGLE = 'Эту услугу в этот день ведёт �
 // честно отработала, объявив единственной ту, у кого просто нашлись окна.
 const HINT_STAFF_ONE_OF_PARTIAL = 'Свободное время нашлось у ОДНОГО специалиста из проверенных, ' +
   'но проверены НЕ ВСЕ исполнители услуги (часть не ответила или не попала в проверку). ' +
-  'Назови его имя, должность (position) и 1–2 времени ДОСЛОВНО из slots и предложи записать. ' +
+  'Назови его имя, должность (position) и время ДОСЛОВНО из offer_slots и предложи записать. ' +
   'НЕ утверждай, что он единственный, кто ведёт эту услугу, и что у остальных занято — ' +
   'этого мы не знаем.';
 
@@ -244,8 +245,11 @@ async function findAlternativeStaff(salon, filter, staffList, staffId, serviceId
   if (!others.length) return null;
   const checked = await Promise.all(others.map(async (m) => {
     try {
+      // В booking-ветке computeStaffSlots делает ДОПОЛНИТЕЛЬНЫЙ запрос сетки на
+      // КАЖДОГО мастера (до MAX_ALT_STAFF штук) — цена осознанная: offer_slots
+      // нужен по каждому специалисту отдельно, плотность считается по ЕГО дню.
       const r = await computeStaffSlots(salon, m.yc_id, serviceId, date, nowMs);
-      return { staff_yc_id: m.yc_id, name: m.name, slots: r.slots || [] };
+      return { staff_yc_id: m.yc_id, name: m.name, slots: r.slots || [], offer_slots: r.offer_slots || [] };
     } catch (_) { return null; }   // сбой по одному мастеру не валит весь ответ
   }));
   const reachable = checked.filter(Boolean);
@@ -287,8 +291,14 @@ async function computeStaffOptions(salon, filter, staffList, serviceId, date, no
   const candidates = eligible.slice(0, MAX_STAFF_OPTIONS);
   const checked = await Promise.all(candidates.map(async (m) => {
     try {
+      // В booking-ветке computeStaffSlots делает ДОПОЛНИТЕЛЬНЫЙ запрос сетки на
+      // КАЖДОГО мастера (до MAX_STAFF_OPTIONS штук) — цена осознанная: offer_slots
+      // нужен по каждому специалисту отдельно, плотность считается по ЕГО дню.
       const r = await computeStaffSlots(salon, m.yc_id, serviceId, date, nowMs);
-      return { staff_yc_id: m.yc_id, name: m.name, position: null, slots: r.slots || [] };
+      return {
+        staff_yc_id: m.yc_id, name: m.name, position: null,
+        slots: r.slots || [], offer_slots: r.offer_slots || [],
+      };
     } catch (_) { return null; }   // сбой по одному мастеру не валит весь ответ
   }));
   const reachable = checked.filter(Boolean);
@@ -425,7 +435,7 @@ async function run(salonId, input, ctx = {}) {
       out.alternative_staff = alt.alternative_staff;
       out.hint = 'У выбранного мастера на эту дату свободного времени нет, но ЭТУ ЖЕ услугу в этот день ' +
         'выполняют другие мастера — их реальные свободные окна в alternative_staff. Предложи пациенту ' +
-        'записаться к одному из них (назови имя), время бери ДОСЛОВНО из их slots. ' +
+        'записаться к одному из них (назови имя), время бери ДОСЛОВНО из их offer_slots. ' +
         // Инцидент 2026-08-04: пациент про мастера не спрашивал, мастера для проверки
         // выбрала сама модель — и пациент получил «у главного врача Пери Исамудиновны
         // на завтра всё занято». Кого проверяли внутри, пациента не касается.
