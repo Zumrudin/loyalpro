@@ -84,6 +84,17 @@ function lintReply(text, opts = {}) {
     const gr = s.match(GREETING_RE);
     if (gr) out.push({ type: 'repeat_greeting', value: gr[1][0].toUpperCase() + gr[1].slice(1) });
   }
+  // Обратная сторона repeat_greeting: ПРОПУЩЕННОЕ приветствие. Инцидент
+  // 2026-08-06 (79165370505) — первое в истории обращение, а Мила начала с
+  // «Да, на 12 августа в 16:00 есть свободное время…». firstContact ставит
+  // оркестратор ровно там, где промпт приветствие ПРЕДПИСАЛ (блок ПЕРВОЕ
+  // ОБРАЩЕНИЕ), поэтому расхождение здесь — всегда нарушение правила, а не
+  // спорная стилистика. Переписывание не просим (не HARD_TYPES): довызов стоит
+  // денег и рискует сломать уже корректный по сути ответ — как с unknown_time,
+  // сначала меряем шум по логам.
+  if (opts.firstContact && !GREETING_RE.test(s)) {
+    out.push({ type: 'missing_greeting', value: '' });
+  }
   const emoji = s.match(EMOJI_RE);
   if (emoji && emoji.length > 1) out.push({ type: 'emoji_excess', value: String(emoji.length) });
   return out;

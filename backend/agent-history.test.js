@@ -398,6 +398,40 @@ describe('шов history → system-prompt', () => {
   });
 });
 
+// Инцидент 2026-08-06 (79165370505): на ПЕРВОМ в истории обращении Мила
+// ответила без приветствия и без представления. Признак «мы этому пациенту ещё
+// ни разу не отвечали» обязан быть детерминированным и считаться по ВСЕЙ
+// истории, а не по окну LIMIT 20 транскрипта.
+describe('hasEverAnswered', () => {
+  test('исходящих в диалоге нет → false', async () => {
+    db.oneOrNone.mockResolvedValue(null);
+    expect(await history.hasEverAnswered(1, '79165370505')).toBe(false);
+    expect(db.oneOrNone.mock.calls[0][1]).toEqual([1, '79165370505']);
+  });
+
+  test('исходящее есть → true', async () => {
+    db.oneOrNone.mockResolvedValue({ '?column?': 1 });
+    expect(await history.hasEverAnswered(1, 'k')).toBe(true);
+  });
+
+  // Автоуведомление YClients («Вы записаны на прием…», authored_by='system')
+  // — не разговор: пациент, впервые написавший в чат после такой отбивки, ни
+  // одного НАШЕГО ответа не видел и приветствие ему полагается.
+  test('автоуведомления (authored_by=system) за ответ не считаются', async () => {
+    db.oneOrNone.mockResolvedValue(null);
+    await history.hasEverAnswered(1, 'k');
+    expect(db.oneOrNone.mock.calls[0][0]).toMatch(/authored_by IS DISTINCT FROM 'system'/);
+  });
+
+  // Реплика живого администратора из приложения — разговор состоялся, и
+  // здороваться поверх него Миле нельзя.
+  test('запрос не сужен до собственных реплик агента', async () => {
+    db.oneOrNone.mockResolvedValue(null);
+    await history.hasEverAnswered(1, 'k');
+    expect(db.oneOrNone.mock.calls[0][0]).not.toMatch(/authored_by\s*=\s*'agent'/);
+  });
+});
+
 describe('hasIncomingAfter', () => {
   test('true, если есть входящее новее watermark', async () => {
     db.oneOrNone.mockResolvedValue({ '?column?': 1 });

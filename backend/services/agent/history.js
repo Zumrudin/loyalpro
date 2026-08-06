@@ -162,6 +162,38 @@ async function loadTranscript(salonId, dialogKey, opts = {}) {
   return { messages, watermark, session };
 }
 
+// Отвечали ли этому пациенту хоть раз за ВСЮ историю диалога?
+//
+// ЗАЧЕМ: инцидент 2026-08-06 (79165370505) — первое в жизни обращение
+// («Доброе утро! Можете записать меня на эпиляцию…»), а Мила ответила по делу,
+// без приветствия и без представления. Приветствие было чисто промптовым
+// правилом, и признака «это первое сообщение» в промпте не было вовсе: блок
+// НАЧАЛО НОВОЙ ПЕРЕПИСКИ рендерится только при ИЗМЕРЕННОМ разрыве, а на первом
+// обращении мерить не с чем (см. detectSession: ветка «в окне только клиент»).
+//
+// Считается по всей истории, а НЕ по окну LIMIT 20 транскрипта: окно и так
+// целиком состоит из сообщений клиента ровно в тех случаях, которые надо
+// различить, а ведущие assistant-реплики loadTranscript вдобавок срезает
+// (Messages API требует user первым) — по messages вопрос не решается.
+//
+// authored_by='system' (автоуведомления YClients «Вы записаны на прием…»,
+// рассылки) за ответ НЕ считается: разговора не было, и пациент, впервые
+// написавший в чат после такой отбивки, приветствие заслуживает. Всё
+// остальное — 'agent' (наши реплики), 'operator' (живой администратор из
+// приложения) и NULL (до выката журнала авторства либо classify упал) —
+// считается ответом: ошибка в эту сторону стоит пропущенного приветствия,
+// ошибка в другую — приветствия поверх живого разговора.
+async function hasEverAnswered(salonId, dialogKey) {
+  const row = await db.oneOrNone(
+    `SELECT 1 FROM chatpush_messages
+      WHERE salon_id = $1 AND ${DIALOG_KEY_SQL} = $2
+        AND direction = 'outgoing'
+        AND authored_by IS DISTINCT FROM 'system'
+      LIMIT 1`,
+    [salonId, dialogKey]);
+  return !!row;
+}
+
 // Пришло ли входящее новее watermark (во время прогона агента)?
 async function hasIncomingAfter(salonId, dialogKey, watermark) {
   const row = await db.oneOrNone(
@@ -173,4 +205,4 @@ async function hasIncomingAfter(salonId, dialogKey, watermark) {
   return !!row;
 }
 
-module.exports = { loadTranscript, hasIncomingAfter, OPERATOR_MARK, AUTHORSHIP_SINCE_TS };
+module.exports = { loadTranscript, hasIncomingAfter, hasEverAnswered, OPERATOR_MARK, AUTHORSHIP_SINCE_TS };

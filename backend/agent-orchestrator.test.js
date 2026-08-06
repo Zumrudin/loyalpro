@@ -47,6 +47,9 @@ function makeDeps(overrides = {}) {
     history: {
       loadTranscript: jest.fn(async () => ({ messages: [{ role: 'user', content: 'привет' }], watermark: 100 })),
       hasIncomingAfter: jest.fn(async () => false),
+      // Дефолт «мы этому пациенту уже отвечали»: блок ПЕРВОГО ОБРАЩЕНИЯ не
+      // должен всплывать в сценариях, которые про него ничего не утверждают.
+      hasEverAnswered: jest.fn(async () => true),
       ...overrides.history,
     },
     state: {
@@ -405,6 +408,152 @@ describe('runDialog', () => {
     await orchestrator.runDialog(1, 'k', { deps });
     const guardLogs = mockLogger.warn.mock.calls.filter(([msg]) => String(msg).includes('reply-guard'));
     expect(guardLogs.join(' ')).toContain('repeat_greeting');
+  });
+
+  // Инцидент 2026-08-06 (79165370505): первое в истории обращение, Мила
+  // ответила по делу без приветствия и без представления. Признак первого
+  // обращения детерминированный: в транскрипте нет НИ ОДНОЙ своей реплики
+  // (ловит свежую pending-отправку) И в БД нет ни одного исходящего за всю
+  // историю диалога (ловит всё, что не влезло в окно LIMIT 20).
+  test('первое обращение → блок ПЕРВОЕ ОБРАЩЕНИЕ в промпте', async () => {
+    const deps = makeDeps({
+      history: {
+        loadTranscript: jest.fn(async () => ({
+          messages: [{ role: 'user', content: '[06.08 08:27] Доброе утро! Можете записать меня?' }],
+          watermark: 100,
+          session: { newSession: true, gapText: null },
+        })),
+        hasEverAnswered: jest.fn(async () => false),
+      },
+    });
+    deps.provider.createMessage.mockResolvedValueOnce(textResp('Здравствуйте! Я Мила'));
+    await orchestrator.runDialog(1, 'k', { deps });
+    expect(deps.history.hasEverAnswered).toHaveBeenCalledWith(1, 'k');
+    expect(deps.provider.createMessage.mock.calls[0][0].system).toContain('ПЕРВОЕ ОБРАЩЕНИЕ');
+  });
+
+  test('мы уже отвечали в этом диалоге → блока нет', async () => {
+    const deps = makeDeps({
+      history: {
+        loadTranscript: jest.fn(async () => ({
+          messages: [{ role: 'user', content: '[06.08 08:27] я снова к вам' }],
+          watermark: 100,
+          session: { newSession: true, gapText: null },
+        })),
+        hasEverAnswered: jest.fn(async () => true),
+      },
+    });
+    deps.provider.createMessage.mockResolvedValueOnce(textResp('Конечно, слушаю вас'));
+    await orchestrator.runDialog(1, 'k', { deps });
+    expect(deps.provider.createMessage.mock.calls[0][0].system).not.toContain('ПЕРВОЕ ОБРАЩЕНИЕ');
+  });
+
+  // Своя реплика в транскрипте — вопрос закрыт без похода в БД: лишний запрос
+  // на КАЖДОМ ходу живого диалога не нужен.
+  test('своя реплика в транскрипте → в БД не ходим и блока нет', async () => {
+    const deps = makeDeps({
+      history: {
+        loadTranscript: jest.fn(async () => ({
+          messages: [
+            { role: 'assistant', content: '[06.08 08:28] Есть 16:00' },
+            { role: 'user', content: '[06.08 08:29] да' },
+          ],
+          watermark: 100,
+          session: { newSession: false, gapText: null },
+        })),
+        hasEverAnswered: jest.fn(async () => false),
+      },
+    });
+    deps.provider.createMessage.mockResolvedValueOnce(textResp('Записала вас'));
+    await orchestrator.runDialog(1, 'k', { deps });
+    expect(deps.history.hasEverAnswered).not.toHaveBeenCalled();
+    expect(deps.provider.createMessage.mock.calls[0][0].system).not.toContain('ПЕРВОЕ ОБРАЩЕНИЕ');
+  });
+
+  // Признак первого обращения — новый запрос в БД на пути, который до него
+  // работал. Сбой не должен ронять ход: без блока Мила отвечает как раньше,
+  // а с исключением пациент не получил бы вообще ничего.
+  test('сбой проверки первого обращения не роняет ход (fail-open, блока нет)', async () => {
+    const deps = makeDeps({
+      history: {
+        loadTranscript: jest.fn(async () => ({
+          messages: [{ role: 'user', content: 'Доброе утро!' }],
+          watermark: 100,
+          session: { newSession: true, gapText: null },
+        })),
+        hasEverAnswered: jest.fn(async () => { throw new Error('db down'); }),
+      },
+    });
+    deps.provider.createMessage.mockResolvedValueOnce(textResp('Здравствуйте! Чем помочь?'));
+    const out = await orchestrator.runDialog(1, 'k', { deps });
+    expect(out.replies).toEqual(['Здравствуйте! Чем помочь?']);
+    expect(deps.provider.createMessage.mock.calls[0][0].system).not.toContain('ПЕРВОЕ ОБРАЩЕНИЕ');
+  });
+
+  // Промпт-блока мало: на живом пробнике ветка известного пациента с отказом
+  // по времени дала приветствие 1 раз из 3 (scripts/agent-greeting-probe.js).
+  // Дописываем детерминированно — как блок актуальных записей бьёт память.
+  test('первое обращение без приветствия → приветствие дописывается к реплике', async () => {
+    const deps = makeDeps({
+      history: {
+        loadTranscript: jest.fn(async () => ({
+          messages: [{ role: 'user', content: 'Доброе утро! Запишите меня на 12.08 в 16:00' }],
+          watermark: 100,
+          session: { newSession: true, gapText: null },
+        })),
+        hasEverAnswered: jest.fn(async () => false),
+      },
+      identity: { resolveClient: jest.fn(async () => ({ id: 1, name: 'Тестова Юлия', givenName: 'Юлия', phone: '79165370505' })) },
+    });
+    deps.provider.createMessage.mockResolvedValueOnce(textResp('К сожалению, 16:00 занято — есть 18:30.'));
+    const out = await orchestrator.runDialog(1, 'k', {
+      deps, salonName: 'PERI CLINIC', ctx: { phone: '79165370505' },
+    });
+    expect(out.replies[0]).toBe(
+      'Здравствуйте, Юлия! Я Мила, виртуальный администратор PERI CLINIC.\n\n'
+      + 'К сожалению, 16:00 занято — есть 18:30.');
+  });
+
+  test('первое обращение С приветствием от модели → реплика не трогается', async () => {
+    const deps = makeDeps({
+      history: {
+        loadTranscript: jest.fn(async () => ({
+          messages: [{ role: 'user', content: 'Доброе утро!' }],
+          watermark: 100,
+          session: { newSession: true, gapText: null },
+        })),
+        hasEverAnswered: jest.fn(async () => false),
+      },
+    });
+    deps.provider.createMessage.mockResolvedValueOnce(textResp('Здравствуйте! Я Мила. Чем помочь?'));
+    const out = await orchestrator.runDialog(1, 'k', { deps, salonName: 'PERI CLINIC' });
+    expect(out.replies).toEqual(['Здравствуйте! Я Мила. Чем помочь?']);
+  });
+
+  test('не первое обращение → приветствие не дописывается', async () => {
+    const deps = makeDeps();   // hasEverAnswered → true
+    deps.provider.createMessage.mockResolvedValueOnce(textResp('Есть окошко в 18:30'));
+    const out = await orchestrator.runDialog(1, 'k', { deps, salonName: 'PERI CLINIC' });
+    expect(out.replies).toEqual(['Есть окошко в 18:30']);
+  });
+
+  test('первое обращение без приветствия в ответе → reply-guard пишет missing_greeting', async () => {
+    mockLogger.warn.mockClear();
+    const deps = makeDeps({
+      history: {
+        loadTranscript: jest.fn(async () => ({
+          messages: [{ role: 'user', content: '[06.08 08:27] Доброе утро! Можете записать меня?' }],
+          watermark: 100,
+          session: { newSession: true, gapText: null },
+        })),
+        hasEverAnswered: jest.fn(async () => false),
+      },
+    });
+    deps.provider.createMessage.mockResolvedValueOnce(
+      textResp('Да, на 12 августа есть свободное время. Записать вас?'));
+    await orchestrator.runDialog(1, 'k', { deps });
+    const guardLogs = mockLogger.warn.mock.calls.filter(([msg]) => String(msg).includes('reply-guard'));
+    expect(guardLogs.join(' ')).toContain('missing_greeting');
   });
 
   test('newSession без измеренного разрыва: приветствие всё ещё считается повтором', async () => {

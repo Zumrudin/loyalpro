@@ -84,6 +84,25 @@ describe('lintReply', () => {
   test('приветствие в ПЕРВОМ ответе — норма', () => {
     expect(g.lintReply('Здравствуйте! Я Мила', { hasPriorAssistant: false })).toEqual([]);
   });
+  // Инцидент 2026-08-06 (79165370505): первое в истории обращение, а Мила
+  // ответила «Да, на 12 августа в 16:00 есть свободное время…». Обратная
+  // сторона repeat_greeting: пропущенное приветствие guard не видел вовсе.
+  test('первое обращение без приветствия — missing_greeting', () => {
+    expect(g.lintReply('Да, на 12 августа в 16:00 есть свободное время.', { firstContact: true }))
+      .toEqual(expect.arrayContaining([{ type: 'missing_greeting', value: '' }]));
+  });
+  test('первое обращение С приветствием — нарушения нет', () => {
+    expect(g.lintReply('Здравствуйте, Юлия! Я Мила, виртуальный администратор.', { firstContact: true }))
+      .toEqual([]);
+  });
+  test('без firstContact пропущенное приветствие не проверяется', () => {
+    expect(g.lintReply('Да, на 12 августа есть свободное время.')).toEqual([]);
+  });
+  // Переписывать реплику из-за стилистики нельзя: довызов стоит денег и
+  // рискует сломать уже корректный ответ. Как unknown_time — сначала лог.
+  test('missing_greeting — мягкое нарушение, переписывания не требует', () => {
+    expect(g.hardViolations([{ type: 'missing_greeting', value: '' }])).toEqual([]);
+  });
   test('больше одного эмодзи — emoji_excess', () => {
     expect(g.lintReply('Готово! ✅ Ждём вас 🤍🌸')).toEqual(
       expect.arrayContaining([{ type: 'emoji_excess', value: '3' }]));

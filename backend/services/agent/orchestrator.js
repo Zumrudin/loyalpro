@@ -9,6 +9,7 @@ const config = require('../../config');
 const catalogBlockDefault = require('./catalog-block');
 const seqOffers = require('./sequential-offers');
 const replyGuard = require('./reply-guard');
+const greeting = require('./greeting');
 const adminHours = require('./admin-hours');
 const toolEventsDefault = require('./tool-events');
 const toolMemoryDefault = require('./tool-memory');
@@ -328,10 +329,33 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
 
     const convo = messages.slice();
 
+    // Первое в истории обращение: приветствие и представление держались только
+    // на промпт-правиле, и модель его обошла (инцидент 2026-08-06, 79165370505).
+    // Признак из двух частей, и обе нужны:
+    //  • в транскрипте нет НИ ОДНОЙ своей реплики — ловит свежую отправку, эхо
+    //    которой ещё не легло в БД (она приходит из pendingReplies);
+    //  • в БД нет ни одного исходящего за всю историю диалога — ловит всё, что
+    //    не влезло в окно LIMIT 20, и срезанные ведущие assistant-реплики.
+    // Порядок важен: своя реплика в транскрипте закрывает вопрос без запроса в
+    // БД, то есть в живом диалоге лишнего похода нет.
+    // Fail-open: сбой этой проверки — не повод терять ход. Без блока Мила
+    // отвечает ровно как до фичи, с исключением пациент не получил бы ничего.
+    // try/catch, а не .catch(): ловим и отказ БД, и синхронный TypeError на
+    // неполной реализации history (у неё несколько инжекторов).
+    let answeredBefore = true;
+    if (!messages.some(m => m.role === 'assistant')) {
+      try {
+        answeredBefore = await history.hasEverAnswered(salonId, dialogKey);
+      } catch (e) {
+        logger.warn(`dialog ${dialogKey}: проверка первого обращения не удалась: ${e.message}`);
+      }
+    }
+    const firstContact = !answeredBefore;
+
     // Промпт собирается ВНУТРИ цикла: граница переписки известна только после
     // загрузки транскрипта. Сборка — конкатенация строк, перегенераций не больше
     // MAX_REGEN, поэтому цена пренебрежимая.
-    const system = buildSystemPrompt({ ...promptOpts, session });
+    const system = buildSystemPrompt({ ...promptOpts, session, firstContact });
 
     // Допустимые времена для финальной реплики: всё, что реально всплывало в
     // этом ходе — история диалога (клиент сам называл время / мы уже предлагали),
@@ -495,7 +519,7 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
     if (replies.length && !degradedAfterWrite) {
       const joined = replies.join('\n');
       const violations = [
-        ...replyGuard.lintReply(joined, { hasPriorAssistant }),
+        ...replyGuard.lintReply(joined, { hasPriorAssistant, firstContact }),
         ...replyGuard.checkOfferedTimes(joined, allowedTimes),
       ];
       if (violations.length) {
@@ -540,6 +564,25 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
     // unknown_time. Guard там в режиме лога, а знать, что модель повторяет
     // служебную метку, полезно — тишина здесь была бы потерей сигнала.
     for (let i = 0; i < replies.length; i++) replies[i] = stripStamp(replies[i]);
+
+    // Приветствие в первом сообщении переписки — детерминированно, а не только
+    // промптом. Инцидент 2026-08-06 (79165370505): блок «ПЕРВОЕ ОБРАЩЕНИЕ»
+    // модель отрабатывает не всегда — на живом пробнике ветка известного
+    // пациента с отказом по времени дала приветствие 1 раз из 3 (правило
+    // проигрывает соседним «сразу выдавай суть»). Тот же приём, что с блоком
+    // актуальных записей: факт бьёт правило.
+    // Место — ПОСЛЕ stripStamp и переписывания reply-guard: реплики уже
+    // финальны, и наш текст не должен попасть под чужие чистки. Ветка
+    // degradedAfterWrite сюда тоже заходит: пациенту, получившему одно лишь
+    // детерминированное подтверждение записи, приветствие нужно не меньше.
+    if (firstContact && replies.length && !greeting.hasGreeting(replies.join('\n'))) {
+      logger.info(`dialog ${dialogKey}: первое обращение без приветствия — дописываю детерминированно`);
+      const fixed = greeting.ensureGreeting(replies, {
+        givenName: clientGivenName, salonName: opts.salonName,
+      });
+      replies.length = 0;
+      replies.push(...fixed);
+    }
 
     // Пришло ли новое входящее, пока мы думали?
     const stale = await history.hasIncomingAfter(salonId, dialogKey, watermark);
