@@ -49,4 +49,48 @@ function seancesToBusy(seances) {
   return mergeRanges(out);
 }
 
-module.exports = { seancesToBusy, MAX_OFFER_SLOTS };
+// Стоимость слота [start, start+dur): расстояние до ближайшей занятости слева и
+// справа. Бесконечность = с этой стороны занятости нет вовсе.
+function slotCost(slot, busy, durationMin) {
+  const start = toMin(slot.time);
+  const fromSlot = Math.round((Number(slot.seance_length) || 0) / 60);
+  const dur = fromSlot > 0 ? fromSlot : (durationMin > 0 ? durationMin : 0);
+  const end = start + dur;
+  let before = Infinity;
+  let after = Infinity;
+  for (const b of busy) {
+    if (b.end <= start) before = Math.min(before, start - b.end);
+    if (b.start >= end) after = Math.min(after, b.start - end);
+  }
+  return { near: Math.min(before, after), far: Math.max(before, after), start };
+}
+
+// Сравнение чисел ВЫЧИТАНИЕМ ЗАПРЕЩЕНО: у слота без соседей near/far равны
+// Infinity, а Infinity - Infinity === NaN. Компаратор, вернувший NaN, оставляет
+// порядок неопределённым — и «пустой день → самые ранние» тихо перестаёт
+// работать ровно там, где регресс никто не заметит.
+const cmp = (a, b) => (a === b ? 0 : (a < b ? -1 : 1));
+
+// Топ-N слотов по плотности. Критерий (утверждён с салоном): минимум мёртвого
+// времени до/после ближайшей существующей записи; при равенстве — слот, который
+// примыкает ВТОРОЙ стороной тоже (закрывает дыру целиком); при равенстве —
+// раньше по времени.
+//
+// Слот возвращается ЦЕЛЫМ объектом из входного массива: модель цитирует то же
+// самое, что лежит в slots, и create_booking получает тот же datetime.
+//
+// Поля-причины («примыкает к записи») тут намеренно НЕТ: модель процитирует её
+// пациенту, а это внутренняя кухня клиники — тот же класс, что «у главного врача
+// на завтра всё занято» (инцидент 2026-08-04).
+function pickOfferSlots(slots, busy, opts = {}) {
+  const list = (Array.isArray(slots) ? slots : []).filter(s => s && s.time);
+  if (!list.length) return [];
+  const ranges = Array.isArray(busy) ? busy : [];
+  const limit = Number(opts.limit) > 0 ? Number(opts.limit) : MAX_OFFER_SLOTS;
+  const durationMin = Number(opts.durationMin) || 0;
+  const scored = list.map((slot, i) => Object.assign({ slot, i }, slotCost(slot, ranges, durationMin)));
+  scored.sort((a, b) => cmp(a.near, b.near) || cmp(a.far, b.far) || cmp(a.start, b.start) || cmp(a.i, b.i));
+  return scored.slice(0, limit).map(x => x.slot);
+}
+
+module.exports = { seancesToBusy, pickOfferSlots, MAX_OFFER_SLOTS };
