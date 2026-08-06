@@ -29,6 +29,16 @@ const CHANNEL = 'whatsapp';
 
 // Хвост реальной переписки 06.08: подтверждение записи и прощание ушли ОДНОЙ
 // серией (loyalpro склеит их в один assistant-блок), затем круг благодарностей.
+// Запись, которую пробник считает СУЩЕСТВУЮЩЕЙ в CRM. Сверка `list_client_bookings`
+// подменяется: у синтетического номера карточки в YClients нет, а заводить
+// реальную запись в боевой CRM салона ради пробника нельзя. Без подмены фикстура
+// внутренне противоречива — транскрипт говорит «записала вас», а CRM пуста, и
+// анти-ложь-guard законно гасит любую реплику про запись.
+const LIVE_BOOKING = {
+  record_id: 1889103753, datetime: '2026-08-12T16:00:00+03:00',
+  services: ['Тотальное бикини и подмышки'], staff_name: 'Татьяна', attendance: 0,
+};
+
 const BOOKED = 'Записала вас! 🌸 Ждём вас 12 августа в 16:00 на комплекс «Тотальное бикини и подмышки» к косметологу-эстетисту Татьяне.';
 const BYE = 'Была рада помочь! Хорошего дня! ✨';
 const YOURE_WELCOME = 'Пожалуйста! Рада была помочь. 🤍';
@@ -55,6 +65,21 @@ const CASES = [
       ['outgoing', BOOKED], ['outgoing', BYE],
     ],
     text: 'Спасибо!',
+    wantSilent: false,
+    wantLlm: true,
+  },
+  {
+    // Анти-ложь-guard: ответ про СУЩЕСТВУЮЩУЮ запись модель берёт из блока
+    // «АКТУАЛЬНЫЕ ЗАПИСИ ПАЦИЕНТА», не вызывая инструмента, — и до фикса такая
+    // реплика («да, вы записаны на 12 августа») считалась выдумкой и уводила
+    // диалог на администратора.
+    phone: '79000000924',
+    label: 'вопрос «я точно записана?» — ответ из блока записей, не выдумка',
+    seed: [
+      ['incoming', 'Запишите меня на глубокое бикини и подмышки 12.08 на 16:00'],
+      ['outgoing', BOOKED], ['outgoing', BYE],
+    ],
+    text: 'Подскажите, я точно записана на 12 августа?',
     wantSilent: false,
     wantLlm: true,
   },
@@ -132,7 +157,14 @@ async function runCase(c) {
     // Полная цепочка диспетчера, но с подменёнными инструментами и провайдером.
     orchestrator: {
       runDialog: async (salonId, key, o) => {
-        res = await orchestratorReal.runDialog(salonId, key, { ...o, deps: { registry: wrapRegistry(calls), provider } });
+        res = await orchestratorReal.runDialog(salonId, key, {
+          ...o,
+          deps: {
+            registry: wrapRegistry(calls),
+            provider,
+            listBookings: { run: async () => ({ bookings: [LIVE_BOOKING] }) },
+          },
+        });
         return res;
       },
     },
@@ -153,16 +185,13 @@ async function runCase(c) {
   const okSilent = silent === c.wantSilent;
   // Молчим — значит НИЧЕГО не ушло и на оператора диалог не свалился.
   const okSent = c.wantSilent ? sent.length === 0 : sent.length > 0;
-  // Эскалация — критерий провала для молчаливого кейса: именно её ветка
-  // res.silent и предотвращает. На отвечающих кейсах ход идёт мимо новой ветки
-  // (silent=false ⇒ код в точности прежний), и сработать там может любая старая
-  // защита — например анти-ложь на синтетическом номере, у которого записи в
-  // YClients нет, а транскрипт фикстуры про неё говорит.
-  const okEsc = c.wantSilent ? escalations.length === 0 : true;
+  // Эскалации быть не должно НИ В ОДНОМ кейсе: разговор штатный. Пока сверка
+  // записей не отражала фикстуру, сюда попадал анти-ложь-guard — ответ про
+  // существующую запись он считал выдумкой и уводил диалог на администратора.
+  const okEsc = escalations.length === 0;
   const okLlm = c.wantLlm ? llmCalls > 0 : llmCalls === 0;
   console.log(`  silent=${silent} (ждали ${c.wantSilent}) ${okSilent ? '✅' : '❌'}`);
-  console.log(`  отправка: ${okSent ? '✅' : '❌'}   LLM: ${okLlm ? '✅' : '❌'}`
-    + (c.wantSilent ? `   эскалации нет: ${okEsc ? '✅' : '❌'}` : ''));
+  console.log(`  отправка: ${okSent ? '✅' : '❌'}   LLM: ${okLlm ? '✅' : '❌'}   эскалации нет: ${okEsc ? '✅' : '❌'}`);
   return okSilent && okSent && okEsc && okLlm;
 }
 

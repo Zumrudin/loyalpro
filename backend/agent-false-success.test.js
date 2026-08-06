@@ -24,8 +24,22 @@ const state = { getOrCreate: async () => ({ status: 'bot', escalated_reason: nul
 const identity = { resolveClient: async () => null };
 const baseDeps = (provider, registry) => ({ provider, registry, history: null, state, identity });
 
-const run = (provider, registry, userText) =>
-  runDialog(1, '79000000000', { ctx: { phone: '79000000000' }, deps: { ...baseDeps(provider, registry), history: historyOf(userText) } });
+// Сверка записей с CRM (блок «АКТУАЛЬНЫЕ ЗАПИСИ ПАЦИЕНТА») идёт КАЖДЫЙ ход при
+// известном номере. Стабим её всегда: без стаба тест лез бы в YClients, а
+// главное — именно её результат теперь решает, ложь реплика или пересказ факта.
+const FUTURE_BOOKING = {
+  record_id: 111, datetime: '2099-08-12T16:00:00+03:00',
+  services: ['Тотальное бикини и подмышки'], staff_name: 'Татьяна', attendance: 0,
+};
+const run = (provider, registry, userText, bookings = []) =>
+  runDialog(1, '79000000000', {
+    ctx: { phone: '79000000000' },
+    deps: {
+      ...baseDeps(provider, registry),
+      history: historyOf(userText),
+      listBookings: { run: async () => ({ bookings }) },
+    },
+  });
 
 describe('false-success guard', () => {
   test('заявлен перенос без вызова reschedule_booking → falseSuccess', async () => {
@@ -70,6 +84,57 @@ describe('false-success guard', () => {
     const provider = providerOf([{ text: 'Отлично, вы записаны на завтра! 🤍', toolCalls: [], assistantMsg: {} }]);
     const registry = { schemas: [], handlers: {} };
     const res = await run(provider, registry, 'запишите на завтра');
+    expect(res.falseSuccess).toBe(true);
+  });
+});
+
+// ── Пересказ СВЕРЕННОГО состояния записи ≠ ложный успех ─────────────────────
+//
+// 26.07 (0fc2296) «вы записаны» вывели из-под безусловной защиты, потому что это
+// двусмысленно; глаголы «записала вас / отменила» тогда осознанно оставили
+// безусловными — источником фактов о записи мог быть ТОЛЬКО вызов инструмента.
+// 04.08 предпосылка сломалась: оркестратор сам сверяется с CRM каждый ход и
+// кладёт результат в промпт блоком «АКТУАЛЬНЫЕ ЗАПИСИ ПАЦИЕНТА», то есть модель
+// получила легальный источник тех же фактов БЕЗ инструмента. Гейт остался
+// прежним и стал глушить честные ответы (прод 04.08, 79200255591: пациент
+// «ту запись уже удалили» → ответ Милы про отменённую запись → эскалация).
+describe('false-success guard: сверенное состояние записей', () => {
+  test('«мы записали вас на 16:00» при ЖИВОЙ записи в CRM → НЕ falseSuccess', async () => {
+    const provider = providerOf([{ text: 'Мы записали вас на 16:00. Подойдите за 5–10 минут 🤍', toolCalls: [], assistantMsg: {} }]);
+    const res = await run(provider, { schemas: [], handlers: {} }, 'а во сколько подойти?', [FUTURE_BOOKING]);
+    expect(res.falseSuccess).toBe(false);
+  });
+
+  test('«мы записали вас на 16:00», а записей в CRM НЕТ → falseSuccess (выдумка)', async () => {
+    const provider = providerOf([{ text: 'Мы записали вас на 16:00. Подойдите за 5–10 минут 🤍', toolCalls: [], assistantMsg: {} }]);
+    const res = await run(provider, { schemas: [], handlers: {} }, 'а во сколько подойти?', []);
+    expect(res.falseSuccess).toBe(true);
+  });
+
+  test('«вашу запись отменили» при пустом списке в CRM → НЕ falseSuccess', async () => {
+    const provider = providerOf([{ text: 'Да, вашу запись отменили. Давайте подберём новое время 🌸', toolCalls: [], assistantMsg: {} }]);
+    const res = await run(provider, { schemas: [], handlers: {} }, 'ту запись уже удалили ((', []);
+    expect(res.falseSuccess).toBe(false);
+  });
+
+  test('«я отменила вашу запись», а запись в CRM ЖИВА → falseSuccess', async () => {
+    const provider = providerOf([{ text: 'Готово, я отменила вашу запись 🤍', toolCalls: [], assistantMsg: {} }]);
+    const res = await run(provider, { schemas: [], handlers: {} }, 'отмените запись', [FUTURE_BOOKING]);
+    expect(res.falseSuccess).toBe(true);
+  });
+
+  test('«перенесла на 14:00» остаётся безусловной ложью — снимок переноса не подтверждает', async () => {
+    const provider = providerOf([{ text: 'Готово, перенесла вашу запись на 14:00 🤍', toolCalls: [], assistantMsg: {} }]);
+    const res = await run(provider, { schemas: [], handlers: {} }, 'перенеси на 14', [FUTURE_BOOKING]);
+    expect(res.falseSuccess).toBe(true);
+  });
+
+  test('сверки не было (нет блока записей) → поведение прежнее, реплика считается ложью', async () => {
+    const provider = providerOf([{ text: 'Мы записали вас на 16:00 🤍', toolCalls: [], assistantMsg: {} }]);
+    const res = await runDialog(1, '79000000000', {
+      // Номера нет → блок записей не строится вовсе (liveBookings = null).
+      deps: { ...baseDeps(provider, { schemas: [], handlers: {} }), history: historyOf('а во сколько подойти?') },
+    });
     expect(res.falseSuccess).toBe(true);
   });
 });
