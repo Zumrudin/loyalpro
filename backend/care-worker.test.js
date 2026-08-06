@@ -111,6 +111,23 @@ describe('care worker processOne', () => {
     const moved = deps.db.query.mock.calls.find(c => c[0].includes('scheduled_at') && c[1].includes('отложено: агент выключен (env)'));
     expect(moved).toBeTruthy();
   });
+  // Окно расписания агента на плановые касания не распространяется: время
+  // касания задаёт салон в программе (send_time). Без ignoreSchedule дневное
+  // касание при постоянном ночном окне откладывалось на сутки КАЖДЫЙ раз и не
+  // уходило никогда. Проверяем именно боевую зависимость, а не мок: правка
+  // «унифицируем вызовы гейта» вернула бы дефект молча.
+  test('боевой isAllowed зовётся с ignoreSchedule', async () => {
+    const agentSettings = require('./services/agent-settings');
+    const spy = jest.spyOn(agentSettings, 'isAllowed').mockResolvedValue({ allow: true, reason: 'ok' });
+    try {
+      await worker.defaultDeps.isAllowed(5, '79200255591');
+      expect(spy).toHaveBeenCalledWith(5, '79200255591', { ignoreSchedule: true });
+    } finally { spy.mockRestore(); }
+  });
+  // Страховочная ветка: при ignoreSchedule этой причины быть не может, но если
+  // расписание всё-таки применилось (откат опции, подменённый гейт), касание
+  // должно откладываться, а не сгорать терминальным skip — at-most-once не даёт
+  // второго шанса.
   test('гейт outside-schedule → отложено на сутки, НЕ skipped, цепочка не завершена', async () => {
     const { deps } = makeDeps({ isAllowed: jest.fn(async () => ({ allow: false, reason: 'outside-schedule' })) });
     await worker.processOne(row, deps);

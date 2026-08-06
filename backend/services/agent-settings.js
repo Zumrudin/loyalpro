@@ -95,7 +95,17 @@ async function removeNumberRule(salonId, id) {
 }
 
 // Комбинированный допуск: настройки + списки → решение чистого гейта.
-async function isAllowed(salonId, phone) {
+//
+// @param {{ignoreSchedule?: boolean}} opts
+//   ignoreSchedule — НЕ сужать допуск окном расписания. Окно проектировалось
+//   для ВХОДЯЩИХ сообщений («когда Мила отвечает клиентам»), и на исходящие
+//   плановые касания «Отдела заботы» оно не распространяется: время касания
+//   задаёт САМ салон в программе (send_time), это уже осознанное решение о
+//   том, когда писать пациенту. Второй фильтр поверх него означал, что
+//   дневное касание при ночном окне не уходит НИКОГДА (см. worker.js).
+//   Чёрный список, режим whitelist и тумблер агента продолжают действовать —
+//   отменяется ровно окно.
+async function isAllowed(salonId, phone, opts = {}) {
   // Fail-closed без салона: не даём авто-ответ на неопознанный инстанс,
   // независимо от DEFAULTS (нет salon_id → нет контекста списков).
   if (!salonId) return { allow: false, reason: 'no-salon' };
@@ -106,7 +116,7 @@ async function isAllowed(salonId, phone) {
   const block = rules.filter(r => r.rule_type === 'block').map(r => r.phone);
   const nowMinutes = nowMskMinutes();
   const window = {
-    scheduleEnabled: settings.scheduleEnabled,
+    scheduleEnabled: settings.scheduleEnabled && !opts.ignoreSchedule,
     scheduleStart: settings.scheduleStart,
     scheduleEnd: settings.scheduleEnd,
     nowMinutes,

@@ -58,7 +58,10 @@ function stripOperatorMark(text) {
 
 const defaultDeps = {
   db: realDb,
-  isAllowed: (salonId, phone) => agentSettings.isAllowed(salonId, phone),
+  // ignoreSchedule: окно расписания Милы на плановые касания НЕ распространяется
+  // (см. комментарий у gate-проверки в processOne). Чёрный список, режим
+  // whitelist и тумблер агента продолжают действовать.
+  isAllowed: (salonId, phone) => agentSettings.isAllowed(salonId, phone, { ignoreSchedule: true }),
   agentGloballyEnabled: () => !!config.CHATPUSH.agentEnabled,
   dialogStatus: async (salonId, phone) => {
     const r = await realDb.oneOrNone(
@@ -211,18 +214,26 @@ async function processOne(row, deps = defaultDeps) {
       return;
     }
 
+    // ignoreSchedule=true (см. defaultDeps.isAllowed): окно расписания агента
+    // на плановые касания НЕ распространяется — касание уходит в назначенное
+    // время в любом случае. ЗАЧЕМ: окно проектировалось для ВХОДЯЩИХ («когда
+    // Мила отвечает клиентам»), а время касания задаёт сам салон в программе
+    // (send_time) — это уже решение о том, когда писать пациенту. Прежнее
+    // поведение (defer на сутки, фикс 2026-08-03) при ПОСТОЯННОМ окне —
+    // например ночном 22:00–09:30 на проде, при касании в 11:00 — означало
+    // вечный сдвиг на сутки: касание не уходило НИКОГДА и висело scheduled в
+    // дашборде. Остальные причины гейта (ЧС, whitelist, выключенный агент)
+    // продолжают действовать в полном объёме.
     const gate = await d.isAllowed(sid, row.phone);   // fail-closed: throw → catch ниже
     if (!gate.allow) {
-      // 'outside-schedule' — литерал из services/agent-gate.js (decideGate):
-      // расписание Милы проектировалось для ВХОДЯЩИХ сообщений, а не для
-      // исходящих care-касаний; вне окна режим принудительно сужается до
-      // whitelist, и дневное касание (напр. send_time 10:30) получило бы
-      // терминальный skip каждый раз. Откладываем на сутки вместо этого.
-      // ВНИМАНИЕ: сдвиг на +24ч сохраняет время суток — если окно
-      // расписания постоянное (напр. всегда ночное), касание будет вечно
-      // откладываться и висеть scheduled в дашборде. Это ОСОЗНАННО:
-      // видимость в дашборде лучше молчаливой смерти цепочки.
+      // Страховка: 'outside-schedule' (литерал из services/agent-gate.js) при
+      // ignoreSchedule прийти НЕ может. Если пришёл — расписание всё-таки
+      // применилось (подменённый isAllowed в тестах/скриптах, откат опции),
+      // и терминальный skip сжёг бы цепочку молча: at-most-once второго шанса
+      // не даёт. Откладываем на сутки и ГРОМКО пишем в лог — это дефект
+      // конфигурации, а не штатная ветка.
       if (gate.reason === 'outside-schedule') {
+        d.log.warn(`send #${row.id}: гейт вернул outside-schedule вопреки ignoreSchedule — откладываю на сутки`);
         await deferTouch(db, row, 'отложено: вне окна расписания агента');
         return;
       }
