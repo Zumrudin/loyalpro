@@ -100,11 +100,49 @@ function lintReply(text, opts = {}) {
   return out;
 }
 
+// Плотная запись (§8 docs/superpowers/specs/2026-08-06-agent-slot-density-design.md):
+// «КАКОЕ ВРЕМЯ ПРЕДЛАГАТЬ ПЕРВЫМ» требует называть время из короткого offer_slots
+// (1-2 подобранных значения), а не из полного slots/available_slots той же выдачи.
+// ЗАЧЕМ ЛОГ, А НЕ GUARD: отличить нарушение от честного «пациент попросил другое
+// время» можно, только зная, называл ли пациент время сам, — а это ровно тот
+// класс, на котором анти-ложь-guard 04.08 (falseSuccess, agent-false-success.js)
+// глушил правдивые ответы о записи. Спека прямо запрещает повторять ту ошибку:
+// offer_slots и так короткий — цитировать оттуда физически нечего, кроме
+// подобранного, — поэтому переписывания НЕТ, только измерение (как missing_greeting).
+//
+// opts:
+//   toolTimes    — времена, реально встретившиеся в выдаче слот-инструментов
+//                  этого хода (offer_slots и/или полный slots/available_slots
+//                  ТОЙ ЖЕ выдачи — неважно, из какой именно части);
+//   offerTimes   — подмножество toolTimes, вошедшее в подобранный offer_slots;
+//   patientTimes — времена, которые пациент назвал сам (его сообщения в
+//                  транскрипте) — правило промпта прямо разрешает подтверждать
+//                  названное пациентом время, и это не нарушение.
+//
+// Пустой offerTimes = за ход offer_slots нигде не встретился (поля не было или
+// оно везде пусто) → проверка выключена целиком: мерить нечего, а шум обесценит
+// лог. Время не из toolTimes — не дело этой проверки: его уже ловит unknown_time
+// (checkOfferedTimes выше), дублировать нарушение нельзя.
+function checkOfferDeviation(text, opts = {}) {
+  const offerTimes = opts.offerTimes;
+  if (!offerTimes || !offerTimes.size) return [];
+  const toolTimes = opts.toolTimes || new Set();
+  const patientTimes = opts.patientTimes || new Set();
+  const out = [];
+  for (const t of extractTimes(text)) {
+    if (!toolTimes.has(t)) continue;     // не из выдачи инструментов вовсе — забота unknown_time
+    if (offerTimes.has(t)) continue;     // время из offer_slots — легально
+    if (patientTimes.has(t)) continue;   // пациент назвал это время сам — легально
+    out.push({ type: 'offer_bypass', value: t });
+  }
+  return out;
+}
+
 // Жёсткие нарушения — раскрытие внутренней кухни. По ним оркестратор просит
-// модель переписать ответ; стилистика (эмодзи, приветствие) — только лог.
+// модель переписать ответ; стилистика (эмодзи, приветствие, offer_bypass) — только лог.
 const HARD_TYPES = new Set(['taboo_word', 'id_leak']);
 function hardViolations(violations) {
   return (violations || []).filter(v => HARD_TYPES.has(v.type));
 }
 
-module.exports = { extractTimes, checkOfferedTimes, lintReply, hardViolations };
+module.exports = { extractTimes, checkOfferedTimes, checkOfferDeviation, lintReply, hardViolations };

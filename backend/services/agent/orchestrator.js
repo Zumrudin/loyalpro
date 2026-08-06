@@ -47,6 +47,24 @@ const SLOT_READ_TOOLS = new Set([
   'get_available_slots', 'get_available_dates', 'get_sequential_slots', 'get_parallel_slots',
 ]);
 
+// Плотная запись (§8 docs/superpowers/specs/2026-08-06-agent-slot-density-design.md):
+// offer_slots появляется в результате get_available_slots в ТРЁХ местах —
+// на верхнем уровне, и внутри каждого элемента staff_options[]/alternative_staff[]
+// (мультимастерные ветки, у каждого мастера своя плотность). Собираем времена
+// ИМЕННО из offer_slots (не из slots рядом) через общий extractTimes — свой
+// парсер времени не пишем, только обход вложенности результата.
+function collectOfferSlotTimes(result, out) {
+  if (!result || typeof result !== 'object') return;
+  if (Array.isArray(result.offer_slots)) {
+    for (const t of replyGuard.extractTimes(JSON.stringify(result.offer_slots))) out.add(t);
+  }
+  for (const key of ['staff_options', 'alternative_staff']) {
+    if (Array.isArray(result[key])) {
+      for (const item of result[key]) collectOfferSlotTimes(item, out);
+    }
+  }
+}
+
 // Реплика содержит конкретное время (HH:MM / HH.MM) — модель предлагает слот.
 // Второй (наряду с перепроверкой слотов) признак переигровки после провала записи:
 // «это время заняли, могу 15:00 или 16:00» — против пустого «секундочку».
@@ -402,6 +420,18 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
     const hasPriorAssistant = !(session && session.newSession && session.gapText)
       && messages.some(m => m.role === 'assistant');
 
+    // Плотная запись (§8 спеки, checkOfferDeviation в reply-guard): времена,
+    // которые пациент назвал сам, — легальны ДАЖЕ мимо offer_slots (правило
+    // промпта прямо разрешает подтверждать названное пациентом время). Считаем
+    // ТОЛЬКО по роли user — реплики Милы/администратора сюда не подмешиваются,
+    // и метку [дд.мм чч:мм] чистим тем же stripAllStamps, что и allowedTimes выше.
+    const patientTimes = new Set(replyGuard.extractTimes(
+      stripAllStamps(messages.filter(m => m.role === 'user').map(m => m.content).join('\n'))));
+    // toolOfferTimes/offerSlotTimes пополняются в tool-цикле ниже (только на
+    // результатах, где реально был offer_slots).
+    const toolOfferTimes = new Set();
+    const offerSlotTimes = new Set();
+
     const replies = [];
     let escalated = false;
     let sideEffect = false;
@@ -506,7 +536,17 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
         }
         if (bookingErrored && SLOT_READ_TOOLS.has(tc.name)) recheckedAfterFail = true;
         results.push({ id: tc.id, name: tc.name, result, isError });
-        for (const t of replyGuard.extractTimes(JSON.stringify(result))) allowedTimes.add(t);
+        const resultJson = JSON.stringify(result);
+        for (const t of replyGuard.extractTimes(resultJson)) allowedTimes.add(t);
+        // Плотная запись (§8 спеки): ограничиваем ИМЕННО результатами, где реально
+        // есть offer_slots (get_available_slots и ретрай create_booking при отказе
+        // по времени) — не любым tool-вызовом. Иначе время из ответа
+        // list_client_bookings («вы записаны на 14:00») ловилось бы как нарушение,
+        // хотя это честное подтверждение существующей записи, а не предложенный слот.
+        if (resultJson && resultJson.includes('"offer_slots"')) {
+          for (const t of replyGuard.extractTimes(resultJson)) toolOfferTimes.add(t);
+          collectOfferSlotTimes(result, offerSlotTimes);
+        }
         if (!isError && tc.name === 'search_knowledge_base') kbSourceText += JSON.stringify(result);
       }
       for (const m of provider.toolResultMessages(results)) convo.push(m);
@@ -553,6 +593,10 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
       const violations = [
         ...replyGuard.lintReply(joined, { hasPriorAssistant, firstContact }),
         ...replyGuard.checkOfferedTimes(joined, allowedTimes),
+        // Плотная запись (§8 спеки): только лог, переписывания нет (offer_bypass
+        // не входит в HARD_TYPES) — см. шапку checkOfferDeviation в reply-guard.js.
+        ...replyGuard.checkOfferDeviation(joined,
+          { toolTimes: toolOfferTimes, offerTimes: offerSlotTimes, patientTimes }),
       ];
       if (violations.length) {
         logger.warn(`dialog ${dialogKey}: reply-guard: ${JSON.stringify(violations)}`);

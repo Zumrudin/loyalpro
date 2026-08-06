@@ -113,6 +113,58 @@ describe('lintReply', () => {
   });
 });
 
+// Плотная запись (§8 docs/superpowers/specs/2026-08-06-agent-slot-density-design.md):
+// модель называет время МИМО подобранного offer_slots — только лог, никакого
+// переписывания (offer_bypass не входит в HARD_TYPES).
+describe('checkOfferDeviation', () => {
+  test('offer_slots за ход не было (offerTimes пуст) — проверка выключена целиком', () => {
+    const v = g.checkOfferDeviation('окошко в 15:00', {
+      toolTimes: new Set(['14:00', '15:00']),
+      offerTimes: new Set(),
+      patientTimes: new Set(),
+    });
+    expect(v).toEqual([]);
+  });
+  test('время из offer_slots — не нарушение', () => {
+    const v = g.checkOfferDeviation('окошко в 14:00', {
+      toolTimes: new Set(['14:00', '15:00']),
+      offerTimes: new Set(['14:00']),
+      patientTimes: new Set(),
+    });
+    expect(v).toEqual([]);
+  });
+  test('время вне offer_slots, но НАЗВАННОЕ ПАЦИЕНТОМ САМИМ — не нарушение', () => {
+    const v = g.checkOfferDeviation('хорошо, подтверждаю 15:00', {
+      toolTimes: new Set(['14:00', '15:00']),
+      offerTimes: new Set(['14:00']),
+      patientTimes: new Set(['15:00']),
+    });
+    expect(v).toEqual([]);
+  });
+  test('время, которого нет в выдаче инструментов вовсе — не дело этой проверки (ловит unknown_time)', () => {
+    const v = g.checkOfferDeviation('окошко в 16:00', {
+      toolTimes: new Set(['14:00', '15:00']),
+      offerTimes: new Set(['14:00']),
+      patientTimes: new Set(),
+    });
+    expect(v).toEqual([]);
+  });
+  test('время И в выдаче инструментов, И не в offer_slots, И пациент его не называл — offer_bypass', () => {
+    const v = g.checkOfferDeviation('окошко в 15:00', {
+      toolTimes: new Set(['14:00', '15:00']),
+      offerTimes: new Set(['14:00']),
+      patientTimes: new Set(),
+    });
+    expect(v).toEqual([{ type: 'offer_bypass', value: '15:00' }]);
+  });
+  test('offer_bypass — мягкое нарушение, переписывания не требует', () => {
+    expect(g.hardViolations([{ type: 'offer_bypass', value: '15:00' }])).toEqual([]);
+  });
+  test('отсутствие opts (undefined) не роняет функцию — трактуется как выключенная проверка', () => {
+    expect(g.checkOfferDeviation('окошко в 15:00')).toEqual([]);
+  });
+});
+
 describe('hardViolations', () => {
   test('taboo_word и id_leak — жёсткие (требуют переписывания)', () => {
     expect(g.hardViolations([

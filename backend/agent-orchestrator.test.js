@@ -911,6 +911,90 @@ describe('reply-guard в оркестраторе (2026-07-29)', () => {
   });
 });
 
+// ── Плотная запись (§8 docs/superpowers/specs/2026-08-06-agent-slot-density-design.md):
+// модель называет время из полного slots МИМО подобранного offer_slots — только
+// лог (offer_bypass), никакого корректирующего довызова. ──
+describe('reply-guard: offer_bypass (плотная запись, только лог)', () => {
+  beforeEach(() => { mockLogger.warn.mockClear(); });
+
+  test('время из slots, но НЕ из offer_slots и НЕ названное пациентом → лог offer_bypass, реплика доставлена как есть', async () => {
+    const deps = makeDeps({
+      handlers: {
+        get_available_slots: jest.fn(async () => ({
+          slots: [{ time: '11:00' }, { time: '15:00' }],
+          offer_slots: [{ time: '14:00' }],
+        })),
+      },
+    });
+    deps.provider.createMessage
+      .mockResolvedValueOnce(toolResp('get_available_slots', { staff_yc_id: 1, service_yc_id: 1, date: '2026-08-07' }))
+      .mockResolvedValueOnce(textResp('Могу предложить 15:00'));
+    const out = await orchestrator.runDialog(1, 'k', { deps, today: '2026-08-06', now: '09:00' });
+    // Реплика доставлена как есть, без корректирующего довызова: 1 tool-итерация + 1 финал = 2 вызова.
+    expect(out.replies).toEqual(['Могу предложить 15:00']);
+    expect(deps.provider.createMessage).toHaveBeenCalledTimes(2);
+    const guardLogs = mockLogger.warn.mock.calls.filter(([msg]) => String(msg).includes('reply-guard'));
+    expect(guardLogs.join(' ')).toContain('offer_bypass');
+    expect(guardLogs.join(' ')).toContain('15:00');
+  });
+
+  test('время из offer_slots — не offer_bypass', async () => {
+    const deps = makeDeps({
+      handlers: {
+        get_available_slots: jest.fn(async () => ({
+          slots: [{ time: '11:00' }, { time: '14:00' }],
+          offer_slots: [{ time: '14:00' }],
+        })),
+      },
+    });
+    deps.provider.createMessage
+      .mockResolvedValueOnce(toolResp('get_available_slots', { staff_yc_id: 1, service_yc_id: 1, date: '2026-08-07' }))
+      .mockResolvedValueOnce(textResp('Могу предложить 14:00'));
+    const out = await orchestrator.runDialog(1, 'k', { deps, today: '2026-08-06', now: '09:00' });
+    expect(out.replies).toEqual(['Могу предложить 14:00']);
+    const guardLogs = mockLogger.warn.mock.calls.filter(([msg]) => String(msg).includes('reply-guard'));
+    expect(guardLogs.join(' ')).not.toContain('offer_bypass');
+  });
+
+  test('пациент сам назвал время вне offer_slots — подтверждение НЕ offer_bypass', async () => {
+    const deps = makeDeps({
+      handlers: {
+        get_available_slots: jest.fn(async () => ({
+          slots: [{ time: '11:00' }, { time: '15:00' }],
+          offer_slots: [{ time: '14:00' }],
+        })),
+      },
+      history: {
+        loadTranscript: jest.fn(async () => ({
+          messages: [{ role: 'user', content: 'а можно на 15:00?' }], watermark: 100,
+        })),
+      },
+    });
+    deps.provider.createMessage
+      .mockResolvedValueOnce(toolResp('get_available_slots', { staff_yc_id: 1, service_yc_id: 1, date: '2026-08-07' }))
+      .mockResolvedValueOnce(textResp('Хорошо, 15:00 вам подходит?'));
+    const out = await orchestrator.runDialog(1, 'k', { deps, today: '2026-08-06', now: '09:00' });
+    expect(out.replies).toEqual(['Хорошо, 15:00 вам подходит?']);
+    const guardLogs = mockLogger.warn.mock.calls.filter(([msg]) => String(msg).includes('reply-guard'));
+    expect(guardLogs.join(' ')).not.toContain('offer_bypass');
+  });
+
+  test('offer_slots за ход не было вовсе — проверка выключена, время из slots не логируется как offer_bypass', async () => {
+    const deps = makeDeps({
+      handlers: {
+        get_available_slots: jest.fn(async () => ({ slots: [{ time: '11:00' }, { time: '15:00' }] })),
+      },
+    });
+    deps.provider.createMessage
+      .mockResolvedValueOnce(toolResp('get_available_slots', { staff_yc_id: 1, service_yc_id: 1, date: '2026-08-07' }))
+      .mockResolvedValueOnce(textResp('Могу предложить 15:00'));
+    const out = await orchestrator.runDialog(1, 'k', { deps, today: '2026-08-06', now: '09:00' });
+    expect(out.replies).toEqual(['Могу предложить 15:00']);
+    const guardLogs = mockLogger.warn.mock.calls.filter(([msg]) => String(msg).includes('reply-guard'));
+    expect(guardLogs.join(' ')).not.toContain('offer_bypass');
+  });
+});
+
 describe('AGENT_CATALOG_IN_PROMPT', () => {
   test('флаг + блок собрался → каталог в system, реестр catalogMode (без list_services)', async () => {
     const deps = makeDeps();
