@@ -8,6 +8,7 @@ const staffGuard = require('../staff-service-guard');
 const eq = require('../equipment');
 const eqContext = require('../equipment-context');
 const leadTime = require('../lead-time');
+const density = require('../slot-density');
 
 const DEFAULT_STEP_MIN = 30;       // шаг предлагаемых стартов в fallback-режиме
 const DEFAULT_DURATION_MIN = 60;   // если YClients не отдал duration услуги (как в get_parallel_slots)
@@ -164,7 +165,19 @@ async function computeStaffSlots(salon, staffId, serviceId, date, nowMs) {
     const slots = (Array.isArray(times) ? times : []).map(t => ({
       time: t.time, datetime: t.datetime, seance_length: t.seance_length,
     }));
-    if (slots.length) return dropDisallowedStarts({ slots, source: 'booking' }, date, nowMs);
+    if (slots.length) {
+      const out = dropDisallowedStarts({ slots, source: 'booking' }, date, nowMs);
+      // Занятость для ранжирования здесь взять неоткуда: онлайн-запись отдаёт
+      // только свободные старты. Тянем сетку смены ОТДЕЛЬНО — это один лишний
+      // запрос, но только на салонах с включённой онлайн-записью (у PERI это
+      // 4 услуги из 317, обычный путь идёт ниже и сетку уже загрузил).
+      // Сбой → пустая занятость → offer_slots = самые ранние, то есть ровно
+      // сегодняшнее поведение. Ранжирование не должно стоить пациенту ответа.
+      let busy = [];
+      try { busy = density.seancesToBusy(await ycGetStaffSeances(salon, staffId, date)); } catch (_) { busy = []; }
+      out.offer_slots = density.pickOfferSlots(out.slots, busy, {});
+      return out;
+    }
   }
   // 2) Иначе (или пусто) — свободность из графика (management API, без онлайн-записи).
   // Этот график знает только занятость кресла мастера и слеп к аппаратам,
@@ -202,7 +215,13 @@ async function computeStaffSlots(salon, staffId, serviceId, date, nowMs) {
   }
   const out = { slots, source: 'schedule' };
   if (equipmentBusy) out.equipment_busy = true;   // часть окон срезана занятым аппаратом
-  return dropDisallowedStarts(out, date, nowMs);
+  const ranked = dropDisallowedStarts(out, date, nowMs);
+  // Плотность считаем ПОСЛЕ lead-time и ПОСЛЕ вычета занятого оборудования:
+  // иначе порекомендуем старт, который сам же отфильтровали, и create_booking
+  // упрётся в save_if_busy:false уже после согласования времени с пациентом.
+  ranked.offer_slots = density.pickOfferSlots(ranked.slots, density.seancesToBusy(seances),
+    { durationMin: svcDurationMin });
+  return ranked;
 }
 
 // У запрошенного мастера пусто → проверяем других исполнителей ЭТОЙ услуги на ту же
