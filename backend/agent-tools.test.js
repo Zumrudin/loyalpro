@@ -387,7 +387,10 @@ describe('get_available_slots', () => {
     expect(ycGetBookTimes).toHaveBeenCalledWith({ id: 1, yclients_company_id: 100 }, 55, '2026-07-20', [7]);
     expect(out.source).toBe('booking');
     expect(out.slots[0].time).toBe('10:00');
-    expect(ycGetStaffSeances).not.toHaveBeenCalled();
+    // Плотная запись (2026-08-06): онлайн-запись отдаёт только свободные старты,
+    // занятость для offer_slots взять неоткуда — сетку смены тянем ОТДЕЛЬНЫМ
+    // запросом. Ровно один: ассерт стережёт цену ветки, чтобы вызов не размножился.
+    expect(ycGetStaffSeances).toHaveBeenCalledTimes(1);
   });
   test('book_times пусто → fallback на seances (интервалы + старты шагом 30 мин)', async () => {
     db.one.mockResolvedValue({ id: 1, yclients_company_id: 100 });
