@@ -2,6 +2,12 @@
 
 jest.useFakeTimers();
 
+// Логгер не инжектится через deps — перехватываем сам модуль createLogger:
+// погашенный черновик обязан попадать в лог (иначе разбор инцидента упирается
+// в «неизвестно, что модель написала» — прод 2026-08-06, 79200255591).
+const mockLogger = { info: jest.fn(), warn: jest.fn(), error: jest.fn() };
+jest.mock('./logger', () => ({ createLogger: () => mockLogger }));
+
 const dispatcher = require('./services/agent/dispatcher');
 
 const meta = { phone: '79001112233', channel: 'whatsapp', messageId: 'm1' };
@@ -21,7 +27,13 @@ function deps(overrides = {}) {
   };
 }
 
-beforeEach(() => { dispatcher._reset(); jest.clearAllTimers(); });
+beforeEach(() => {
+  dispatcher._reset();
+  jest.clearAllTimers();
+  // Логгер общий на файл — без чистки поиск строки по подстроке находит запись
+  // предыдущего теста (и тест зеленеет/краснеет по чужому ходу).
+  for (const fn of Object.values(mockLogger)) fn.mockClear();
+});
 
 test('серия из двух сообщений в окне дебаунса → один прогон', async () => {
   const d = deps();
@@ -382,6 +394,21 @@ describe('вердикт delivered для журнала инструменто�
     dispatcher.enqueue(1, 'k', meta, d);
     await jest.advanceTimersByTimeAsync(1000);
     expect(d.toolEvents.markDelivered).toHaveBeenCalledWith('t2', false);
+  });
+
+  // Разбор инцидента 2026-08-06 (79200255591) упёрся в то, что текста погашенной
+  // реплики нет НИГДЕ: guard логировал только факт, а в БД черновики не ложатся.
+  // Пишем в лог сам текст (с видом утверждения) — это единственный след.
+  test('ложный успех: текст погашенной реплики и вид утверждения попадают в лог', async () => {
+    const draft = 'Я вижу, что вы уже записаны\nна 7 августа в 12:00 🤍';
+    const d = deps({ orchestrator: { runDialog: jest.fn(async () => (
+      { replies: [draft], falseSuccess: true, falseSuccessKind: 'booked', escalated: false, turnId: 't9' })) } });
+    dispatcher.enqueue(1, 'k', meta, d);
+    await jest.advanceTimersByTimeAsync(1000);
+    const line = mockLogger.warn.mock.calls.map(c => String(c[0])).find(t => t.includes('гашу ложь'));
+    expect(line).toContain('booked');
+    // Перевод строки схлопнут: многострочная реплика не должна рвать лог.
+    expect(line).toContain('Я вижу, что вы уже записаны на 7 августа в 12:00');
   });
 
   test('без turnId (ранние выходы runDialog) — вердикт не пишется', async () => {
