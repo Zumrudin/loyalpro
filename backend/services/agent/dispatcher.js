@@ -180,6 +180,11 @@ async function process(salonId, dialogKey, meta, opts = {}) {
         // ПОСЛЕ хелпера и на вердикт delivered намеренно не влияет.
         const announced = replies.some(t => /администратор/i.test(t));
         if (!announced) await send(meta, adminHours.handoverText(adminOffNow()));
+      } else if (res.silent) {
+        // Оркестратор РЕШИЛ промолчать (завершающая вежливость), а не не смог.
+        // Ветка обязана стоять ВЫШЕ соседней: там ноль реплик = отказ, и на
+        // «спасибо» пациент получил бы «передаю администратору».
+        logger.info(`dialog ${dialogKey}: молчим — отвечать не на что (завершающая вежливость)`);
       } else if (replies.length === 0) {
         // Бот не смог ответить. Молчать нельзя — зовём человека и говорим об этом.
         logger.warn(`dialog ${dialogKey}: ход без реплик (exhausted=${!!res.exhausted}) — страховочный ответ + эскалация`);

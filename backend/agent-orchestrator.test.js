@@ -1281,3 +1281,46 @@ describe('блок актуальных записей в промпте', () =>
     expect(sysOf(deps)).toMatch(/Будущих записей у пациента сейчас НЕТ/);
   });
 });
+
+// Вежливое завершение переписки: круг взаимных благодарностей (инцидент
+// 2026-08-06, 79165370505). Проверяем, что ход обрывается ДО провайдера —
+// платный вызов на «Всегда пожалуйста» не нужен.
+describe('runDialog: молчание на завершающей вежливости', () => {
+  const closingTranscript = [
+    { role: 'user', content: 'Спасибо!' },
+    { role: 'assistant', content: 'Пожалуйста! Рада была помочь. 🤍' },
+    { role: 'user', content: 'Благодарю!И Вам🌹' },
+  ];
+
+  test('чистая благодарность после чистого прощания → silent, провайдер не звался', async () => {
+    const deps = makeDeps({
+      history: { loadTranscript: jest.fn(async () => ({ messages: closingTranscript, watermark: 100 })) },
+    });
+    const out = await orchestrator.runDialog(1, 'k', { deps });
+    expect(out.silent).toBe(true);
+    expect(out.replies).toEqual([]);
+    expect(out.escalated).toBe(false);
+    expect(deps.provider.createMessage).not.toHaveBeenCalled();
+    // Ватермарк двигать обязательно: иначе то же сообщение будет обрабатываться заново.
+    expect(deps.state.setWatermark).toHaveBeenCalledWith(1, 'k', 100);
+  });
+
+  test('содержательное сообщение → ход идёт как обычно', async () => {
+    const deps = makeDeps({
+      history: {
+        loadTranscript: jest.fn(async () => ({
+          messages: [
+            { role: 'user', content: 'Спасибо!' },
+            { role: 'assistant', content: 'Всегда пожалуйста! ✨' },
+            { role: 'user', content: 'А перенесите меня на 17:00' },
+          ],
+          watermark: 100,
+        })),
+      },
+    });
+    deps.provider.createMessage.mockResolvedValueOnce(textResp('Сейчас посмотрю.'));
+    const out = await orchestrator.runDialog(1, 'k', { deps });
+    expect(out.silent).toBeFalsy();
+    expect(deps.provider.createMessage).toHaveBeenCalledTimes(1);
+  });
+});

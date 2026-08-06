@@ -476,3 +476,23 @@ describe('вердикт delivered для журнала инструменто�
     expect(d.toolEvents.markDelivered).not.toHaveBeenCalled();
   });
 });
+
+// Молчание на завершающей вежливости. Ключевое отличие от «хода без реплик»:
+// silent — это РЕШЕНИЕ промолчать, а не отказ, поэтому ни эскалации, ни
+// страховочной фразы быть не должно (иначе на «спасибо» пациент получал бы
+// «сейчас подключу администратора»).
+test('silent → ни отправки, ни эскалации', async () => {
+  const d = deps({ orchestrator: { runDialog: jest.fn(async () => ({ replies: [], silent: true })) } });
+  dispatcher.enqueue(1, 'k', meta, d);
+  await jest.advanceTimersByTimeAsync(1000);
+  expect(d.send).not.toHaveBeenCalled();
+  expect(d.escalate).not.toHaveBeenCalled();
+});
+
+test('ход без реплик и БЕЗ silent → по-прежнему эскалация + страховочный ответ', async () => {
+  const d = deps({ orchestrator: { runDialog: jest.fn(async () => ({ replies: [] })) } });
+  dispatcher.enqueue(1, 'k', meta, d);
+  await jest.advanceTimersByTimeAsync(1000);
+  expect(d.escalate).toHaveBeenCalled();
+  expect(d.send).toHaveBeenCalledTimes(1);
+});

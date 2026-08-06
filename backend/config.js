@@ -117,6 +117,10 @@ module.exports = {
   // модель перестаёт видеть память, а ЗАПИСЬ журнала в agent_tool_events идёт
   // как обычно (форензика нужна независимо от того, показываем ли выжимку).
   AGENT_TOOL_MEMORY: process.env.AGENT_TOOL_MEMORY !== 'false',
+  // Молчание на завершающей вежливости («спасибо» ↔ «пожалуйста» по кругу).
+  // По умолчанию ВКЛЮЧЕНО; аварийный рычаг — AGENT_CLOSING_SILENCE=false +
+  // рестарт: Мила снова отвечает на каждое входящее, как до 06.08.2026.
+  AGENT_CLOSING_SILENCE: process.env.AGENT_CLOSING_SILENCE !== 'false',
   // Провайдер базы знаний: 'aitunnel' | 'gemini' (старый релей/прямой вызов, откат).
   KB_PROVIDER:          process.env.KB_PROVIDER          || 'aitunnel',
 

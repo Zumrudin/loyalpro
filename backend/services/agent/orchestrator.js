@@ -10,6 +10,7 @@ const catalogBlockDefault = require('./catalog-block');
 const seqOffers = require('./sequential-offers');
 const replyGuard = require('./reply-guard');
 const greeting = require('./greeting');
+const closing = require('./closing');
 const adminHours = require('./admin-hours');
 const toolEventsDefault = require('./tool-events');
 const toolMemoryDefault = require('./tool-memory');
@@ -315,6 +316,17 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
     const { messages, watermark, session } = await history.loadTranscript(
       salonId, dialogKey, { limit: 20, withTime: true });
     if (!messages.length) return { replies: [], escalated: false, sideEffect: false };
+
+    // Круг взаимных благодарностей: пациенту отвечать уже нечего. Проверка стоит
+    // ДО провайдера — платный вызов ради «Всегда пожалуйста» не нужен, а модель
+    // всё равно не смогла бы промолчать (ход без реплик диспетчер трактует как
+    // отказ). Ватермарк двигаем как в штатном ходе, иначе то же сообщение
+    // обрабатывалось бы заново на каждом следующем входящем.
+    if (cfg.AGENT_CLOSING_SILENCE && closing.shouldStaySilent(messages)) {
+      logger.info(`dialog ${dialogKey}: завершающая вежливость — молчим, последнее слово за пациентом`);
+      await state.setWatermark(salonId, dialogKey, watermark);
+      return { replies: [], escalated: false, sideEffect: false, silent: true };
+    }
 
     // Буфер журнала tool-цикла этой ПОПЫТКИ. Создаётся после проверки пустого
     // транскрипта (там возвращаться нечему — не заводим буфер впустую).
