@@ -195,6 +195,48 @@ describe('runDialog', () => {
     expect(out.sideEffect).toBe(true);
   });
 
+  // Инцидент 2026-08-06 (79037504378): после успешной записи Мила дописала
+  // «Наш адрес: 2-й Троицкий переулок, 6Ас4» — адрес выдуман, а
+  // search_knowledge_base за ход не вызывался ни разу.
+  describe('адрес клиники без источника', () => {
+    const FAKE = 'Отлично, записала вас на ботулинотерапию на завтра, 7 августа, в 11:30.\n\nНаш адрес: 2-й Троицкий переулок, 6Ас4. Будем ждать вас! 🤍';
+    const KB_HIT = { found: true, chunks: [{ title: 'Информация о клинике',
+      text: 'Адрес: г. Москва, ул. Генерала Белова, д. 28, к. 3 (метро Домодедовская)' }] };
+
+    test('вымышленный адрес вырезан, подтверждение записи сохранено', async () => {
+      const deps = makeDeps();
+      deps.provider.createMessage
+        .mockResolvedValueOnce(toolResp('create_booking', { staff_yc_id: 1, service_yc_id: 2, datetime: 'x' }))
+        .mockResolvedValueOnce(textResp(FAKE));
+      const out = await orchestrator.runDialog(1, 'k', { deps });
+      expect(out.replies.join('\n')).not.toMatch(/Троицкий/);
+      expect(out.replies.join('\n')).toMatch(/записала вас на ботулинотерапию/);
+      expect(out.falseSuccess).toBe(false);
+    });
+
+    test('адрес из статьи базы знаний, прочитанной в этом ходе, проходит', async () => {
+      const deps = makeDeps({ handlers: { search_knowledge_base: jest.fn(async () => KB_HIT) } });
+      deps.registry.schemas.push({ name: 'search_knowledge_base' });
+      deps.provider.createMessage
+        .mockResolvedValueOnce(toolResp('search_knowledge_base', { query: 'адрес клиники, как добраться' }))
+        .mockResolvedValueOnce(textResp('Мы находимся по адресу: г. Москва, ул. Генерала Белова, д. 28, к. 3 — это метро Домодедовская.'));
+      const out = await orchestrator.runDialog(1, 'k', { deps });
+      expect(out.replies).toEqual(['Мы находимся по адресу: г. Москва, ул. Генерала Белова, д. 28, к. 3 — это метро Домодедовская.']);
+    });
+
+    test('реплика была ОДНИМ адресом, а запись оформлена → детерминированное подтверждение вместо тишины', async () => {
+      const deps = makeDeps();
+      deps.provider.createMessage
+        .mockResolvedValueOnce(toolResp('create_booking', {
+          staff_yc_id: 1, service_yc_id: 2, datetime: '2026-08-07T11:30:00+03:00' }))
+        .mockResolvedValueOnce(textResp('Ждём вас по адресу: 2-й Троицкий переулок, 6Ас4!'));
+      const out = await orchestrator.runDialog(1, 'k', { deps });
+      expect(out.replies.join('\n')).not.toMatch(/Троицкий/);
+      expect(out.replies.length).toBe(1);
+      expect(out.replies[0]).toMatch(/11:30/);
+    });
+  });
+
   test('book_chain booked_all → writeSucceeded: реплика «записала» не считается ложным успехом', async () => {
     const deps = makeDeps({ handlers: { book_chain: jest.fn(async () => ({
       booked_all: true,

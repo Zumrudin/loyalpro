@@ -10,6 +10,7 @@ const catalogBlockDefault = require('./catalog-block');
 const seqOffers = require('./sequential-offers');
 const replyGuard = require('./reply-guard');
 const greeting = require('./greeting');
+const addressGuard = require('./address-guard');
 const closing = require('./closing');
 const adminHours = require('./admin-hours');
 const toolEventsDefault = require('./tool-events');
@@ -412,6 +413,10 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
     let degradedAfterWrite = false; // провайдер упал ПОСЛЕ успешной записи → детерминированное подтверждение
     let readBookings = false;       // list_client_bookings отработал → «вы записаны…» может быть честным ответом
     let recheckedAfterFail = false; // после провала create_booking модель перезапросила слоты (добросовестная переигровка)
+    // Единственный легальный источник адреса/контактов клиники — статьи базы
+    // знаний, прочитанные В ЭТОМ ходе (address-guard). Транскрипт и журнал
+    // действий источниками не считаются: см. шапку address-guard.js.
+    let kbSourceText = '';
 
     for (let i = 0; i < MAX_ITERS; i++) {
       let resp;
@@ -502,6 +507,7 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
         if (bookingErrored && SLOT_READ_TOOLS.has(tc.name)) recheckedAfterFail = true;
         results.push({ id: tc.id, name: tc.name, result, isError });
         for (const t of replyGuard.extractTimes(JSON.stringify(result))) allowedTimes.add(t);
+        if (!isError && tc.name === 'search_knowledge_base') kbSourceText += JSON.stringify(result);
       }
       for (const m of provider.toolResultMessages(results)) convo.push(m);
       if (escalated) {
@@ -590,6 +596,27 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
     // unknown_time. Guard там в режиме лога, а знать, что модель повторяет
     // служебную метку, полезно — тишина здесь была бы потерей сигнала.
     for (let i = 0; i < replies.length; i++) replies[i] = stripStamp(replies[i]);
+
+    // Адрес клиники — только из статьи базы знаний, прочитанной В ЭТОМ ходе.
+    // Инцидент 2026-08-06 (79037504378): после успешной записи Мила дописала
+    // «Наш адрес: 2-й Троицкий переулок, 6Ас4» — адрес выдуман, а
+    // search_knowledge_base за весь ход не вызывался ни разу (журнал
+    // agent_tool_events: только get_available_slots и create_booking).
+    // Место — ПОСЛЕ переписывания reply-guard (иначе корректирующий довызов
+    // вернул бы адрес обратно) и ДО дописки приветствия (ей чистить нечего).
+    {
+      const scrubbed = addressGuard.scrubAddresses(replies, { sourceText: kbSourceText });
+      if (scrubbed.removed.length) {
+        logger.warn(`dialog ${dialogKey}: адрес без источника в базе знаний — вырезано: ${JSON.stringify(scrubbed.removed)}`);
+        replies.length = 0;
+        replies.push(...scrubbed.replies);
+        // Реплика состояла ТОЛЬКО из адреса, а запись при этом оформлена:
+        // молчание диспетчер трактует как отказ и уводит на администратора —
+        // пациент остался бы без подтверждения уже созданной брони. Отдаём то
+        // же детерминированное подтверждение, что и при падении провайдера.
+        if (!replies.length && writeSucceeded) replies.push(buildWriteConfirmation(lastWrite));
+      }
+    }
 
     // Приветствие в первом сообщении переписки — детерминированно, а не только
     // промптом. Инцидент 2026-08-06 (79165370505): блок «ПЕРВОЕ ОБРАЩЕНИЕ»
