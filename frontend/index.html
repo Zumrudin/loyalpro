@@ -1467,7 +1467,11 @@
 
           <div class="bc-section">
             <label class="fl" style="display:flex;gap:8px;align-items:center">
-              <input type="checkbox" id="remBonusEnabled" onchange="remRenderTiers()"> Начислять и упоминать бонусы
+              <!-- width:16px обязателен: глобальное правило base.css input{width:100%}
+                   растягивает чекбокс на всю строку, галка уезжает в центр, а подпись
+                   вправо (тот же приём, что у staff-modal-show-in-app). -->
+              <input type="checkbox" id="remBonusEnabled" onchange="remRenderTiers()"
+                     style="width:16px;height:16px;flex:none;cursor:pointer"> Начислять и упоминать бонусы
             </label>
             <div id="remTiers"></div>
             <button class="btn btn-sec btn-sm" id="remAddTierBtn" onclick="remAddTier()">+ Ступень</button>
