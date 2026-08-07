@@ -1,0 +1,357 @@
+// ============================================================
+// Напоминания о повторном визите (вкладки страницы «Забота»)
+// ============================================================
+//
+// Mounted at /api/reminders. owner/admin only (глобальный гейт в
+// routes/index.js: /api/reminders не входит в SPECIALIST/CASHIER_ALLOWED_PREFIXES).
+//
+//   GET    /rules                       правила со счётчиками
+//   POST   /rules                       создать
+//   PUT    /rules/:id                   обновить
+//   POST   /rules/:id/toggle            вкл/выкл
+//   DELETE /rules/:id                   удалить (история остаётся: rule_id → NULL)
+//   POST   /rules/:id/backfill/preview  превью догона
+//   POST   /rules/:id/backfill          выполнить догон
+//   POST   /queue/:id/cancel            отменить запланированную
+//   GET    /history                     журнал с фильтрами (включая scheduled)
+//   POST   /suppressions/toggle         ручной тумблер анти-повтора
+//
+// ВНИМАНИЕ: поля JWT — req.user.salonId и req.user.userId (НЕ salon_id).
+const router = require('express').Router();
+const { auth, requireRole } = require('../middleware/auth');
+const { db } = require('../db');
+const { createLogger } = require('../logger');
+const { ycGet } = require('../services/yclients');
+const { getServiceCategoryMap } = require('../services/notifications');
+const { normalizePhoneKey } = require('../services/agent-gate');
+const { matchBackfillVisits, spreadOverDays } = require('../services/reminders/backfill');
+const { TIER_ACTIONS } = require('../services/reminders/tiers');
+
+const log = createLogger('Reminders');
+const guard = [auth, requireRole('owner', 'admin')];
+
+const TIME_RE = /^([01]\d|2[0-3]):([0-5]\d)$/;
+const TEXT_MODES = ['free', 'strict'];
+const PAGE = 200;
+const MAX_PAGES = 25;                 // 5000 записей — потолок одного догона
+
+/** 'YYYY-MM-DD' московской даты (как в care/preview.js). */
+function mskDate(d) {
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Moscow' }).format(d);
+}
+
+/** Валидация тела правила → { error } | { value }. */
+function parseRuleBody(body) {
+  const b = body || {};
+  const title = String(b.title || '').trim();
+  if (!title) return { error: 'Название обязательно' };
+  if (title.length > 255) return { error: 'Название слишком длинное' };
+
+  const c = b.conditions || {};
+  const logic = c.logic === 'or' ? 'or' : 'and';
+  const items = (Array.isArray(c.items) ? c.items : [])
+    .filter(it => it && ['staff', 'category', 'service'].includes(it.type))
+    .map(it => ({ type: it.type, ids: (Array.isArray(it.ids) ? it.ids : []).map(Number).filter(Number.isFinite) }))
+    .filter(it => it.ids.length);
+  if (!items.length) return { error: 'Нужно хотя бы одно условие: без него напоминание уйдёт после ЛЮБОГО визита' };
+
+  const delay = Number(b.delayDays);
+  if (!Number.isInteger(delay) || delay < 1 || delay > 730) return { error: 'Задержка 1–730 дней' };
+
+  const text = String(b.text || '').trim();
+  if (!text) return { error: 'Текст напоминания пуст' };
+  if (text.length > 2000) return { error: 'Текст слишком длинный' };
+
+  const attributionDays = Number(b.attributionDays);
+  if (!Number.isInteger(attributionDays) || attributionDays < 1 || attributionDays > 365) {
+    return { error: 'Окно атрибуции 1–365 дней' };
+  }
+  const cap = Number(b.backfillMaxPerDay);
+  if (!Number.isInteger(cap) || cap < 1 || cap > 500) return { error: 'Кап догона 1–500 в день' };
+
+  // Ступени бонусов: суммы уходят реальными деньгами на карту клиента,
+  // поэтому валидация недоверчивая — неизвестное действие отвергаем, а не
+  // молча игнорируем.
+  const rawTiers = Array.isArray(b.bonusTiers) ? b.bonusTiers : [];
+  const tiers = [];
+  for (const [i, t] of rawTiers.entries()) {
+    if (!t || !TIER_ACTIONS.includes(t.action)) return { error: `Ступень ${i + 1}: неизвестное действие` };
+    const upTo = t.upTo === null || t.upTo === undefined || t.upTo === '' ? null : Number(t.upTo);
+    if (upTo !== null && (!Number.isFinite(upTo) || upTo < 0)) return { error: `Ступень ${i + 1}: неверный порог` };
+    const amount = Math.max(0, Math.round(Number(t.amount) || 0));
+    if (t.action === 'accrue' && amount <= 0) return { error: `Ступень ${i + 1}: сумма начисления должна быть больше нуля` };
+    if (amount > 100000) return { error: `Ступень ${i + 1}: сумма начисления слишком велика` };
+    tiers.push({ up_to: upTo, action: t.action, amount, text: String(t.text || '').slice(0, 2000) });
+  }
+  if (b.bonusEnabled && !tiers.length) return { error: 'Бонусы включены, но ни одной ступени не задано' };
+
+  return { value: {
+    title,
+    conditions: { logic, items },
+    delayDays: delay,
+    sendTime: TIME_RE.test(String(b.sendTime || '')) ? b.sendTime : '11:00',
+    textMode: TEXT_MODES.includes(b.textMode) ? b.textMode : 'strict',
+    text,
+    attributionDays,
+    bonusEnabled: !!b.bonusEnabled,
+    bonusTiers: tiers,
+    backfillMaxPerDay: cap,
+  } };
+}
+
+const RULE_COLUMNS = `
+  id, title, is_enabled AS "isEnabled", conditions, delay_days AS "delayDays",
+  send_time AS "sendTime", text_mode AS "textMode", text,
+  attribution_days AS "attributionDays", bonus_enabled AS "bonusEnabled",
+  bonus_tiers AS "bonusTiers", backfill_max_per_day AS "backfillMaxPerDay",
+  created_at AS "createdAt"`;
+
+// GET /rules — правила со счётчиками очереди, отправок и конверсии.
+router.get('/rules', guard, async (req, res) => {
+  try {
+    const rows = await db.any(
+      `SELECT ${RULE_COLUMNS},
+              (SELECT count(*) FROM reminder_queue q
+                WHERE q.rule_id = r.id AND q.status = 'scheduled')::int AS "queuedCount",
+              (SELECT count(*) FROM reminder_queue q
+                WHERE q.rule_id = r.id AND q.status = 'sent')::int AS "sentCount",
+              (SELECT count(*) FROM reminder_queue q
+                WHERE q.rule_id = r.id AND q.conversion_record_id IS NOT NULL)::int AS "convertedCount",
+              (SELECT count(*) FROM reminder_queue q
+                WHERE q.rule_id = r.id AND q.visited_at IS NOT NULL)::int AS "visitedCount",
+              (SELECT COALESCE(sum(q.bonus_accrued), 0) FROM reminder_queue q
+                WHERE q.rule_id = r.id)::int AS "bonusTotal"
+         FROM reminder_rules r
+        WHERE r.salon_id = $1
+        ORDER BY r.created_at DESC`,
+      [req.user.salonId]);
+    res.json({ rules: rows });
+  } catch (e) { log.error(e.message); res.status(500).json({ error: 'Не удалось загрузить правила' }); }
+});
+
+router.post('/rules', guard, async (req, res) => {
+  const parsed = parseRuleBody(req.body);
+  if (parsed.error) return res.status(400).json({ error: parsed.error });
+  const v = parsed.value;
+  try {
+    const row = await db.one(
+      `INSERT INTO reminder_rules
+         (salon_id, title, conditions, delay_days, send_time, text_mode, text,
+          attribution_days, bonus_enabled, bonus_tiers, backfill_max_per_day, created_by)
+       VALUES ($1,$2,$3::jsonb,$4,$5,$6,$7,$8,$9,$10::jsonb,$11,$12)
+       RETURNING ${RULE_COLUMNS}`,
+      [req.user.salonId, v.title, JSON.stringify(v.conditions), v.delayDays, v.sendTime,
+       v.textMode, v.text, v.attributionDays, v.bonusEnabled, JSON.stringify(v.bonusTiers),
+       v.backfillMaxPerDay, req.user.userId]);
+    res.json({ rule: row });
+  } catch (e) { log.error(e.message); res.status(500).json({ error: 'Не удалось создать правило' }); }
+});
+
+router.put('/rules/:id', guard, async (req, res) => {
+  const parsed = parseRuleBody(req.body);
+  if (parsed.error) return res.status(400).json({ error: parsed.error });
+  const v = parsed.value;
+  try {
+    const row = await db.oneOrNone(
+      `UPDATE reminder_rules
+          SET title=$3, conditions=$4::jsonb, delay_days=$5, send_time=$6, text_mode=$7,
+              text=$8, attribution_days=$9, bonus_enabled=$10, bonus_tiers=$11::jsonb,
+              backfill_max_per_day=$12, updated_at=NOW()
+        WHERE id=$1 AND salon_id=$2
+        RETURNING ${RULE_COLUMNS}`,
+      [req.params.id, req.user.salonId, v.title, JSON.stringify(v.conditions), v.delayDays,
+       v.sendTime, v.textMode, v.text, v.attributionDays, v.bonusEnabled,
+       JSON.stringify(v.bonusTiers), v.backfillMaxPerDay]);
+    if (!row) return res.status(404).json({ error: 'Правило не найдено' });
+    // rule_title в очереди денормализован ради истории — синхронизируем.
+    await db.query(`UPDATE reminder_queue SET rule_title=$2 WHERE rule_id=$1`, [req.params.id, v.title]);
+    res.json({ rule: row });
+  } catch (e) { log.error(e.message); res.status(500).json({ error: 'Не удалось сохранить правило' }); }
+});
+
+router.post('/rules/:id/toggle', guard, async (req, res) => {
+  try {
+    const row = await db.oneOrNone(
+      `UPDATE reminder_rules SET is_enabled = NOT is_enabled, updated_at=NOW()
+        WHERE id=$1 AND salon_id=$2 RETURNING id, is_enabled AS "isEnabled"`,
+      [req.params.id, req.user.salonId]);
+    if (!row) return res.status(404).json({ error: 'Правило не найдено' });
+    res.json(row);
+  } catch (e) { log.error(e.message); res.status(500).json({ error: 'Не удалось переключить правило' }); }
+});
+
+// DELETE — история НЕ удаляется: rule_id уходит в NULL (ON DELETE SET NULL),
+// rule_title в строках остаётся. Запланированные строки гасит воркер (ORPHAN_SQL).
+router.delete('/rules/:id', guard, async (req, res) => {
+  try {
+    const row = await db.oneOrNone(
+      `DELETE FROM reminder_rules WHERE id=$1 AND salon_id=$2 RETURNING id`,
+      [req.params.id, req.user.salonId]);
+    if (!row) return res.status(404).json({ error: 'Правило не найдено' });
+    res.json({ ok: true });
+  } catch (e) { log.error(e.message); res.status(500).json({ error: 'Не удалось удалить правило' }); }
+});
+
+/** Общая подготовка догона: тянет записи и считает выборку (ничего не пишет). */
+async function buildBackfill(salonId, ruleId, days) {
+  const rule = await db.oneOrNone(
+    `SELECT * FROM reminder_rules WHERE id=$1 AND salon_id=$2`, [ruleId, salonId]);
+  if (!rule) return { error: 'Правило не найдено', code: 404 };
+
+  const salon = await db.one(
+    `SELECT id, yclients_company_id, yclients_partner_token, yclients_user_token
+       FROM salons WHERE id=$1`, [salonId]);
+  if (!salon.yclients_company_id) return { error: 'У салона не настроен YClients', code: 400 };
+
+  const nowMs = Date.now();
+  // Диапазон захватывает и будущее: будущие записи нужны, чтобы отсеять уже
+  // записавшихся клиентов, и брать их отдельным запросом на каждого нельзя.
+  const startDate = mskDate(new Date(nowMs - days * 86400000));
+  const endDate = mskDate(new Date(nowMs + 90 * 86400000));
+  let records = [];
+  for (let page = 1; page <= MAX_PAGES; page++) {
+    const chunk = await ycGet(salon, `/records/${salon.yclients_company_id}`,
+      { start_date: startDate, end_date: endDate, page, count: PAGE });
+    if (!Array.isArray(chunk) || !chunk.length) break;
+    records = records.concat(chunk);
+    if (chunk.length < PAGE) break;
+  }
+
+  const catMap = await getServiceCategoryMap(salon).catch(() => new Map());
+  const bl = await db.any(
+    `SELECT phone FROM clients WHERE salon_id=$1 AND is_blacklisted = TRUE AND phone IS NOT NULL`,
+    [salonId]);
+  const muted = await db.any(
+    `SELECT phone FROM reminder_suppressions WHERE rule_id=$1 AND muted = TRUE`, [ruleId]);
+  const queued = await db.any(
+    `SELECT anchor_record_id FROM reminder_queue WHERE rule_id=$1`, [ruleId]);
+
+  const out = matchBackfillVisits({
+    records,
+    conditions: rule.conditions,
+    catMap,
+    blacklisted: new Set(bl.map(r => normalizePhoneKey(r.phone)).filter(Boolean)),
+    mutedPhones: new Set(muted.map(r => r.phone)),
+    queuedRecordIds: new Set(queued.map(r => String(r.anchor_record_id))),
+    nowMs,
+  });
+  return { rule, out, catMapFailed: catMap.size === 0, startDate, endDate };
+}
+
+router.post('/rules/:id/backfill/preview', guard, async (req, res) => {
+  const days = Math.min(90, Math.max(1, Number(req.body && req.body.days) || 30));
+  try {
+    const r = await buildBackfill(req.user.salonId, req.params.id, days);
+    if (r.error) return res.status(r.code).json({ error: r.error });
+    const planned = spreadOverDays(r.out.rows.filter(x => !x.skipReason), {
+      maxPerDay: r.rule.backfill_max_per_day, sendTime: r.rule.send_time });
+    res.json({
+      totals: r.out.totals, rows: r.out.rows, days,
+      catMapFailed: r.catMapFailed,
+      lastScheduledAt: planned.length ? planned[planned.length - 1].scheduledAt : null,
+    });
+  } catch (e) { log.error(e.message); res.status(500).json({ error: `Не удалось построить выборку: ${e.message}` }); }
+});
+
+router.post('/rules/:id/backfill', guard, async (req, res) => {
+  const days = Math.min(90, Math.max(1, Number(req.body && req.body.days) || 30));
+  try {
+    const r = await buildBackfill(req.user.salonId, req.params.id, days);
+    if (r.error) return res.status(r.code).json({ error: r.error });
+    const planned = spreadOverDays(r.out.rows.filter(x => !x.skipReason), {
+      maxPerDay: r.rule.backfill_max_per_day, sendTime: r.rule.send_time });
+
+    let queued = 0;
+    for (const row of planned) {
+      if (!row.scheduledAt) continue;
+      const client = await db.oneOrNone(
+        `SELECT id FROM clients WHERE salon_id=$1 AND (yclients_client_id=$2 OR phone=$3) LIMIT 1`,
+        [req.user.salonId, row.ycClientId, row.phone]);
+      const ins = await db.query(
+        `INSERT INTO reminder_queue
+           (salon_id, rule_id, rule_title, client_id, phone, yclients_client_id,
+            anchor_record_id, anchor_visit_at, anchor_staff_name, anchor_services,
+            scheduled_at, source)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11,'backfill')
+         ON CONFLICT (rule_id, anchor_record_id) DO NOTHING`,
+        [req.user.salonId, r.rule.id, r.rule.title, client ? client.id : null, row.phone,
+         row.ycClientId, row.recordId, row.visitAt, row.staffName || null,
+         JSON.stringify(row.services), row.scheduledAt]);
+      queued += (ins && ins.rowCount) || 0;
+    }
+    log.info(`догон правила #${r.rule.id}: поставлено ${queued} из ${planned.length}`);
+    res.json({ queued, planned: planned.length, totals: r.out.totals });
+  } catch (e) { log.error(e.message); res.status(500).json({ error: `Не удалось выполнить догон: ${e.message}` }); }
+});
+
+const QUEUE_COLUMNS = `
+  q.id, q.rule_id AS "ruleId", q.rule_title AS "ruleTitle", q.phone,
+  q.scheduled_at AS "scheduledAt", q.status, q.decision_reason AS "reason",
+  q.rendered_text AS "text", q.sent_at AS "sentAt", q.channel_used AS "channel",
+  q.balance_before AS "balanceBefore", q.bonus_tier AS "bonusTier",
+  q.bonus_accrued AS "bonusAccrued", q.bonus_txn_ok AS "bonusTxnOk",
+  q.conversion_record_id AS "conversionRecordId", q.converted_at AS "convertedAt",
+  q.visited_at AS "visitedAt", q.source, q.anchor_services AS "anchorServices",
+  q.anchor_visit_at AS "anchorVisitAt", c.name AS "clientName",
+  EXISTS (SELECT 1 FROM reminder_suppressions s
+           WHERE s.rule_id = q.rule_id AND s.phone = q.phone AND s.muted = TRUE) AS "muted"`;
+
+// Отдельной вкладки «очередь» нет: запланированные строки видны в истории по
+// фильтру статуса «Запланировано», оттуда же их можно отменить.
+router.post('/queue/:id/cancel', guard, async (req, res) => {
+  try {
+    const row = await db.oneOrNone(
+      `UPDATE reminder_queue SET status='cancelled', decision_reason='отменено вручную'
+        WHERE id=$1 AND salon_id=$2 AND status='scheduled' RETURNING id`,
+      [req.params.id, req.user.salonId]);
+    if (!row) return res.status(404).json({ error: 'Строка не найдена или уже обработана' });
+    res.json({ ok: true });
+  } catch (e) { log.error(e.message); res.status(500).json({ error: 'Не удалось отменить' }); }
+});
+
+router.get('/history', guard, async (req, res) => {
+  const limit = Math.min(200, Math.max(1, Number(req.query.limit) || 50));
+  const offset = Math.max(0, Number(req.query.offset) || 0);
+  const ruleId = req.query.ruleId ? Number(req.query.ruleId) : null;
+  const status = req.query.status || null;
+  const converted = req.query.converted === '1' ? true : (req.query.converted === '0' ? false : null);
+  try {
+    const rows = await db.any(
+      `SELECT ${QUEUE_COLUMNS}
+         FROM reminder_queue q LEFT JOIN clients c ON c.id = q.client_id
+        WHERE q.salon_id = $1
+          AND ($2::int  IS NULL OR q.rule_id = $2)
+          AND ($3::text IS NULL OR q.status  = $3)
+          AND ($4::bool IS NULL OR (q.conversion_record_id IS NOT NULL) = $4)
+        ORDER BY COALESCE(q.sent_at, q.scheduled_at) DESC
+        LIMIT $5 OFFSET $6`,
+      [req.user.salonId, ruleId, status, converted, limit, offset]);
+    res.json({ rows, limit, offset });
+  } catch (e) { log.error(e.message); res.status(500).json({ error: 'Не удалось загрузить историю' }); }
+});
+
+// Ручной тумблер анти-повтора по паре клиент+правило.
+router.post('/suppressions/toggle', guard, async (req, res) => {
+  const ruleId = Number(req.body && req.body.ruleId);
+  const phone = normalizePhoneKey(req.body && req.body.phone);
+  const muted = !!(req.body && req.body.muted);
+  if (!Number.isFinite(ruleId) || !phone) return res.status(400).json({ error: 'Нужны ruleId и phone' });
+  try {
+    const rule = await db.oneOrNone(
+      `SELECT id FROM reminder_rules WHERE id=$1 AND salon_id=$2`, [ruleId, req.user.salonId]);
+    if (!rule) return res.status(404).json({ error: 'Правило не найдено' });
+    await db.query(
+      `INSERT INTO reminder_suppressions (salon_id, rule_id, phone, muted, reason, source, muted_at, reset_at, updated_at)
+       VALUES ($1,$2,$3,$4,'изменено вручную','manual',
+               CASE WHEN $4 THEN NOW() END, CASE WHEN $4 THEN NULL ELSE NOW() END, NOW())
+       ON CONFLICT (rule_id, phone) DO UPDATE
+         SET muted=$4, reason='изменено вручную', source='manual',
+             muted_at = CASE WHEN $4 THEN NOW() ELSE reminder_suppressions.muted_at END,
+             reset_at = CASE WHEN $4 THEN NULL ELSE NOW() END,
+             updated_at = NOW()`,
+      [req.user.salonId, ruleId, phone, muted]);
+    res.json({ ok: true, muted });
+  } catch (e) { log.error(e.message); res.status(500).json({ error: 'Не удалось изменить флаг' }); }
+});
+
+module.exports = router;
