@@ -73,6 +73,41 @@ describe('handleRecordEvent — визит состоялся', () => {
     expect(sup[0].sql).toMatch(/anchor_visit_at\s*<\s*\$/i);
   });
 
+  // Снимаем muted только у ЭТОГО правила/телефона, только если отказ был
+  // АВТОМАТИЧЕСКИМ (молчание после неотвеченного напоминания) — ручной отказ
+  // (администратор осознанно отписал клиента, Task 12) визитом не отменяется.
+  test('снимает muted только у auto-отказов', async () => {
+    const { calls, deps } = makeDeps();
+    await enroll.handleRecordEvent(SALON, { status: 'update', data: VISIT }, deps);
+    const unmute = calls.find(c => /reminder_suppressions[\s\S]*muted\s*=\s*FALSE/i.test(c.sql));
+    expect(unmute).toBeDefined();
+    expect(unmute.sql).toMatch(/source\s*=\s*'auto'/i);
+  });
+
+  // Симметрия защиты «более ранние строки устаревают»: если вебхук по
+  // СТАРОМУ визиту обработался ПОСЛЕ нового (ретрай YClients / правка задним
+  // числом), у правила+телефона уже есть живая scheduled-строка от более
+  // позднего визита — планировать по этому, более старому, нечего.
+  test('вебхук не по порядку: более поздняя запланированная строка уже есть — новую не вставляем', async () => {
+    const { calls, deps } = makeDeps({
+      db: {
+        any: jest.fn(async () => [RULE]),
+        query: jest.fn(async (sql, params) => { calls.push({ sql, params }); return { rowCount: 1 }; }),
+        oneOrNone: jest.fn(async (sql, params) => {
+          calls.push({ sql, params });
+          if (/FROM clients/i.test(sql)) return { id: 42, name: 'Мария', is_blacklisted: false };
+          if (/FROM reminder_queue/i.test(sql)) return { id: 999 };
+          return null;
+        }),
+      },
+    });
+    await enroll.handleRecordEvent(SALON, { status: 'update', data: VISIT }, deps);
+    expect(sqlsOf(calls, /INSERT INTO reminder_queue/i)).toHaveLength(0);
+    // Ни un-mute, ни cancel-stale для этого правила тоже быть не должно.
+    expect(calls.find(c => /reminder_suppressions[\s\S]*muted\s*=\s*FALSE/i.test(c.sql))).toBeUndefined();
+    expect(sqlsOf(calls, /UPDATE reminder_queue[\s\S]*'cancelled'/i)).toHaveLength(0);
+  });
+
   test('клиент в чёрном списке не планируется', async () => {
     const { calls, deps } = makeDeps({
       db: {
@@ -201,6 +236,43 @@ describe('handleAttribution', () => {
     });
     deps.db.query = jest.fn(async (sql, params) => { calls.push({ sql, params }); return { rowCount: 1 }; });
     await enroll.handleAttribution(SALON, { status: 'create', data: notYetVisited }, deps);
+    const upd = sqlsOf(calls, /UPDATE reminder_queue[\s\S]*conversion_record_id/i);
+    expect(upd).toHaveLength(1);
+    expect(upd[0].params[2]).toBe(false);
+  });
+
+  // Предоплаченная неявка несёт paid_full=1 ОДНОВРЕМЕННО с attendance=-1 —
+  // это отмена (см. classifyRecordEvent), а голый isVisitCompleted() наивно
+  // вернул бы true. Дошёл ли пациент — здесь важно для KPI дашборда, который
+  // видит владелец салона, поэтому неявка не должна засчитываться визитом.
+  test('неявка (attendance=-1, paid_full=1) не помечается как visited_at', async () => {
+    const { calls, deps } = makeDeps({
+      db: {
+        any: jest.fn(async () => []),
+        query: jest.fn(async (sql, params) => { calls.push({ sql, params }); return { rowCount: 1 }; }),
+        oneOrNone: jest.fn(async () => null),
+      },
+    });
+    const noShow = { ...VISIT, attendance: -1, paid_full: 1 };
+    await enroll.handleAttribution(SALON, { status: 'update', data: noShow }, deps);
+    expect(sqlsOf(calls, /UPDATE reminder_queue[\s\S]*visited_at/i)).toHaveLength(0);
+  });
+
+  test('неявка, приведённая к отправленному напоминанию, атрибутируется, но visited_at не проставляется (третий параметр false)', async () => {
+    const sentRow = {
+      id: 11, rule_id: 5, conditions: RULE.conditions, attribution_days: 30,
+      sent_at: new Date(Date.now() - 86400000).toISOString(), conversion_record_id: null,
+    };
+    const noShow = { ...VISIT, attendance: -1, paid_full: 1 };
+    const { calls, deps } = makeDeps({
+      db: {
+        any: jest.fn(async () => [sentRow]),
+        query: jest.fn(async () => ({ rowCount: 1 })),
+        oneOrNone: jest.fn(async () => null),
+      },
+    });
+    deps.db.query = jest.fn(async (sql, params) => { calls.push({ sql, params }); return { rowCount: 1 }; });
+    await enroll.handleAttribution(SALON, { status: 'update', data: noShow }, deps);
     const upd = sqlsOf(calls, /UPDATE reminder_queue[\s\S]*conversion_record_id/i);
     expect(upd).toHaveLength(1);
     expect(upd[0].params[2]).toBe(false);

@@ -26,6 +26,19 @@ const defaultDeps = {
   log: createLogger('Reminders'),
 };
 
+/**
+ * Визит ДЕЙСТВИТЕЛЬНО состоялся? Голого isVisitCompleted() тут мало: у
+ * предоплаченной неявки paid_full=1 стоит ОДНОВРЕМЕННО с attendance=-1
+ * (депозит удержан, клиент не пришёл) — isVisitCompleted() наивно вернул бы
+ * true. classifyRecordEvent распознаёт неявку/отмену ПЕРВОЙ (тот же
+ * приоритет, что в handleRecordEvent и в «Заботе»); без него в дашборде
+ * правила «дошли» засчитался бы визит, которого не было, — прямая
+ * фальсификация KPI, на который смотрит владелец салона.
+ */
+function visitReallyHappened(data, payloadStatus) {
+  return isVisitCompleted(data) && classifyRecordEvent(data, payloadStatus) !== 'unenroll';
+}
+
 /** Отменить запланированные строки конкретной записи (отмена/неявка). */
 async function cancelForRecord(db, salonId, recordId, reason) {
   await db.query(
@@ -81,14 +94,40 @@ async function handleRecordEvent(salon, payload, deps = defaultDeps) {
     .map(s => ({ id: s && s.id, title: s && s.title })).filter(s => s.title);
 
   for (const rule of matched) {
+    // 0) Симметричная защита от вебхука, пришедшего НЕ ПО ПОРЯДКУ: если по
+    //    этому же правилу и телефону уже есть ЖИВАЯ (scheduled) строка от
+    //    БОЛЕЕ ПОЗДНЕГО визита (ретрай YClients / правка задним числом
+    //    обработались вне очереди), планировать по этому, более старому,
+    //    визиту нечего — иначе клиента дёрнут дважды. Без даты визита
+    //    сравнение невозможно — пропускаем защиту (симметрично условию в
+    //    cancel-stale блоке ниже) и полагаемся на дедуп по anchor_record_id.
+    //    Проверка идёт ПЕРВОЙ: ни un-mute, ни cancel-stale, ни INSERT для
+    //    этого правила выполняться не должны (тот же приём, что в
+    //    care/enroll.js — «более поздний активный enrollment уже есть»).
+    if (visitAt) {
+      const later = await db.oneOrNone(
+        `SELECT id FROM reminder_queue
+          WHERE salon_id = $1 AND rule_id = $2 AND phone = $3
+            AND status = 'scheduled' AND anchor_visit_at > $4
+          LIMIT 1`,
+        [salon.id, rule.id, phone, visitAt]);
+      if (later) {
+        log.info(`rule #${rule.id}: пропуск — уже есть напоминание #${later.id} от более позднего визита`);
+        continue;
+      }
+    }
+
     // 1) Клиент дошёл — снимаем флаг анти-повтора. ДО планирования: иначе новая
     //    строка упрётся в собственный muted от прошлого цикла (гейт воркера
-    //    читает suppressions в момент отправки).
+    //    читает suppressions в момент отправки). ТОЛЬКО source='auto' —
+    //    ручной отказ (администратор осознанно отписал клиента от этого
+    //    правила, тумблер в Task 12) визитом не отменяется, снять его может
+    //    только человек.
     await db.query(
       `UPDATE reminder_suppressions
           SET muted = FALSE, reset_at = NOW(), updated_at = NOW(),
               reason = 'клиент пришёл на визит'
-        WHERE rule_id = $1 AND phone = $2 AND muted = TRUE`,
+        WHERE rule_id = $1 AND phone = $2 AND muted = TRUE AND source = 'auto'`,
       [rule.id, phone]);
 
     // 2) Прежние запланированные строки от БОЛЕЕ РАННИХ визитов устарели.
@@ -146,7 +185,7 @@ async function handleAttribution(salon, payload, deps = defaultDeps) {
   // / запись задним числом с status='create' и attendance=1/paid_full=1
   // сразу) не теряется — он закрыт третьим параметром UPDATE'а атрибуции
   // ниже.
-  if (payload && payload.status !== 'create' && isVisitCompleted(data)) {
+  if (payload && payload.status !== 'create' && visitReallyHappened(data, payload.status)) {
     await db.query(
       `UPDATE reminder_queue SET visited_at = NOW()
         WHERE salon_id = $1 AND conversion_record_id = $2 AND visited_at IS NULL`,
@@ -184,7 +223,7 @@ async function handleAttribution(salon, payload, deps = defaultDeps) {
             -- visited_at на status='create' не выполняется (см. гейт выше).
             visited_at = CASE WHEN $3 THEN NOW() ELSE visited_at END
       WHERE id = $1 AND conversion_record_id IS NULL`,
-    [win.id, data.id, isVisitCompleted(data)]);
+    [win.id, data.id, visitReallyHappened(data, payload && payload.status)]);
   log.info(`конверсия: напоминание #${win.id} привело запись ${data.id}`);
 }
 
