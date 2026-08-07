@@ -394,10 +394,39 @@ describe('offer_slots в staff_options', () => {
       : seanceGrid('11:00', '21:00', [['11:00', '13:00']]))); // блок с утра
     const out = await slots.run(1, ARGS, { nowMs: NOON });
     const byId = Object.fromEntries(out.staff_options.map(o => [String(o.staff_yc_id), o]));
-    expect(byId['11'].offer_slots.map(s => s.time)).toEqual(['13:30', '13:00']);
+    // По одному времени на край занятости: у мастера 11 занято до конца смены, то
+    // есть край один — и время ровно одно (соседнее 13:00 создало бы дыру).
+    expect(byId['11'].offer_slots.map(s => s.time)).toEqual(['13:30']);
     expect(byId['12'].offer_slots[0].time).toBe('13:00');
     // Полный список сохраняется — пациент может попросить другое время.
     expect(byId['11'].slots.length).toBeGreaterThan(byId['11'].offer_slots.length);
+  });
+
+  // Решение салона 07.08: у мастера без единой записи время не называем вовсе —
+  // в перечислении специалистов про него говорим «свободно в течение дня», а
+  // половину дня спрашиваем тем же сообщением, что и выбор специалиста.
+  test('у мастера день пустой → free_day, offer_slots пуст, оговорка в хинте', async () => {
+    ycGetStaffSeances.mockImplementation(async (_salon, staffId) => (staffId === 11
+      ? seanceGrid('11:00', '21:00', [])                       // ни одной записи
+      : seanceGrid('11:00', '21:00', [['11:00', '13:00']])));  // блок с утра
+    const out = await slots.run(1, ARGS, { nowMs: NOON });
+    const byId = Object.fromEntries(out.staff_options.map(o => [String(o.staff_yc_id), o]));
+    expect(byId['11'].free_day).toBe(true);
+    expect(byId['11'].offer_slots).toEqual([]);
+    expect(byId['11'].slots.length).toBeGreaterThan(0);   // окна есть, просто не выбираем за пациента
+    // Смешанный день: у остальных мастеров всё как обычно — анкор считается.
+    expect(byId['12'].free_day).toBeUndefined();
+    expect(byId['12'].offer_slots[0].time).toBe('13:00');
+    expect(out.hint).toMatch(/free_day/);
+    expect(out.hint).toMatch(/половин/i);
+  });
+
+  test('ни у кого нет записей → оговорка про free_day есть, время не называется', async () => {
+    ycGetStaffSeances.mockResolvedValue(seanceGrid('11:00', '21:00', []));
+    const out = await slots.run(1, ARGS, { nowMs: NOON });
+    expect(out.staff_options.every(o => o.free_day === true)).toBe(true);
+    expect(out.staff_options.every(o => o.offer_slots.length === 0)).toBe(true);
+    expect(out.hint).toMatch(/day_part/);
   });
 
   test('хинт велит называть время из offer_slots', async () => {

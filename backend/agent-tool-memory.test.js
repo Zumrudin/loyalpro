@@ -381,6 +381,39 @@ describe('память: рендерятся ПОКАЗАННЫЕ времена
     expect(lines.join('\n')).toContain('Пери: 14:00, 13:30…');
   });
 
+  // Свободный день: времени пациенту не называли ВООБЩЕ (спрашивали половину дня).
+  // Без этой ветки фолбэк на slots писал бы в память «показаны 11:00, 11:30…» —
+  // времена, которых пациент не слышал, и следующим ходом модель на них ссылается.
+  test('free_day: в память идёт факт «весь день свободен», а не времена из slots', () => {
+    const { lines } = renderMemory(
+      [ev({ tool: 'get_available_slots', input: { ...INP, staff_yc_id: 1910274 }, age_ms: MIN,
+        result: { slots: ALL, offer_slots: [], free_day: true } })], { nowMs: NOW });
+    expect(lines.join('\n')).toMatch(/весь день свободен/);
+    expect(lines.join('\n')).not.toContain('11:00');
+  });
+
+  test('free_day у мастера в staff_options: имя есть, времени нет', () => {
+    const { lines } = renderMemory(
+      [ev({ tool: 'get_available_slots', input: INP, age_ms: MIN,
+        result: { staff_options: [
+          { name: 'Пери', slots: ALL, offer_slots: [], free_day: true },
+          { name: 'Юлия', slots: ALL, offer_slots: OFFER },
+        ] } })], { nowMs: NOW });
+    const text = lines.join('\n');
+    expect(text).toMatch(/Пери: весь день свободен/);
+    expect(text).toContain('Юлия: 14:00, 13:30…');
+    expect(text).not.toContain('11:00');
+  });
+
+  // Половина дня, названная пациентом, объясняет, почему времён мало: без неё
+  // следующим ходом модель читает узкую выдачу как «больше ничего нет».
+  test('day_part попадает в строку памяти', () => {
+    const { lines } = renderMemory(
+      [ev({ tool: 'get_available_slots', input: { ...INP, staff_yc_id: 1910274, day_part: 'evening' },
+        age_ms: MIN, result: { slots: ALL, offer_slots: OFFER } })], { nowMs: NOW });
+    expect(lines[0]).toContain('day_part=evening');
+  });
+
   // События, записанные ДО выката, offer_slots не имеют, а память читает журнал
   // за 48 часов — для них поведение обязано остаться прежним.
   test('события без offer_slots рендерятся по slots, как раньше', () => {

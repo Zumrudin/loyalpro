@@ -73,6 +73,35 @@ const ERR_STAFF_UNREACHABLE = 'Не удалось получить слоты: 
   '(временный сбой). НЕ говори пациенту, что свободного времени нет — этого мы не знаем. ' +
   'Извинись за задержку и предложи уточнить у администратора.';
 
+// День у мастера ПУСТОЙ (ни одной записи) — предлагать «плотное» время не из чего:
+// любое разрывает свободный день на две дыры. Решение салона (07.08): выбор половины
+// дня делает пациент. Хинт намеренно требует НЕ называть время: без этого модель
+// берёт самое раннее из slots — ровно то поведение, из-за которого плотную запись и
+// делали (инцидент 2026-08-06).
+const HINT_FREE_DAY = 'У этого мастера на выбранную дату НЕТ ни одной записи — свободен весь день, ' +
+  'и подбирать плотное время не из чего. Конкретное время пациенту НЕ называй: скажи, что свободные ' +
+  'окошки есть в течение всего дня, и спроси, в какой половине дня удобнее (до обеда, после обеда или ' +
+  'вечером). Когда пациент ответит — вызови get_available_slots ЕЩЁ РАЗ с тем же мастером и услугой и ' +
+  'параметром day_part (morning / afternoon / evening) и назови время ДОСЛОВНО из offer_slots. ' +
+  'Если пациент половину дня или конкретное время уже назвал сам — ничего не спрашивай, сразу вызывай ' +
+  'с day_part (а названное им время подтверждай, если оно есть в slots).';
+
+// Пациент назвал половину дня, а в ней всё занято. Второй раз спрашивать нечего —
+// это был бы тот же вопрос по кругу; предлагаем найденное время в остальном дне.
+const HINT_DAY_PART_EMPTY = 'В названной пациентом половине дня свободные окна ЗАНЯТЫ — там записать ' +
+  'не получится. Скажи об этом честно, без выдуманных причин, и в том же сообщении предложи время ' +
+  'ДОСЛОВНО из offer_slots (это время в другой части того же дня) либо предложи другой день. ' +
+  'Второй раз про половину дня не спрашивай.';
+
+// Тот же случай в перечислении специалистов (пациент мастера не назвал). Времени по
+// таким мастерам нет вовсе, а хинт выбора требует «назови время» — без этой оговорки
+// модель возьмёт время из полного slots, то есть самое раннее.
+const HINT_FREE_DAY_OPTIONS = ' У специалистов с free_day:true на эту дату НЕТ ни одной записи — ' +
+  'весь день свободен: время по ним НЕ называй, скажи про них «свободное время есть в течение дня». ' +
+  'В том же сообщении спроси, в какую половину дня удобнее (до обеда, после обеда или вечером) — ' +
+  'а если специалистов несколько, то и к кому. Когда пациент ответит — вызови get_available_slots ' +
+  'с его staff_yc_id и параметром day_part (morning / afternoon / evening).';
+
 const schema = {
   name: 'get_available_slots',
   description: 'Свободное время под КОНКРЕТНУЮ УСЛУГУ на дату. Если пациент назвал мастера — передай ' +
@@ -86,6 +115,11 @@ const schema = {
       staff_yc_id:   { type: 'integer', description: 'YClients-id мастера (из каталога услуг). НЕ передавай, если пациент специалиста не называл.' },
       service_yc_id: { type: 'integer', description: 'YClients-id услуги (из каталога услуг).' },
       date:          { type: 'string',  description: 'Дата YYYY-MM-DD.' },
+      day_part:      { type: 'string',  enum: ['morning', 'afternoon', 'evening'],
+        description: 'Половина дня, которую назвал ПАЦИЕНТ: morning — до обеда (до 14:00), ' +
+          'afternoon — после обеда (с 14:00), evening — вечером (с 17:00). Передавай, когда пациент ' +
+          'сказал, в какую часть дня ему удобно (в том числе в ответ на твой вопрос при free_day). ' +
+          'Полный slots от этого не сужается — сужается только подобранное offer_slots.' },
     },
     required: ['service_yc_id', 'date'],
     additionalProperties: false,
@@ -159,7 +193,7 @@ function rangesToSlots(ranges, date, step, durationMin) {
 // Слоты одного мастера под услугу на дату: сперва онлайн-запись (точные слоты),
 // иначе fallback из графика с вычетом занятого оборудования. Вынесено из run(),
 // чтобы тем же кодом считать альтернативных мастеров при пустой выдаче.
-async function computeStaffSlots(salon, staffId, serviceId, date, nowMs) {
+async function computeStaffSlots(salon, staffId, serviceId, date, nowMs, dayPart) {
   // 1) Онлайн-запись включена и известна услуга → точные слоты под услугу.
   if (serviceId) {
     const times = await ycGetBookTimes(salon, staffId, date, [serviceId]);
@@ -172,11 +206,24 @@ async function computeStaffSlots(salon, staffId, serviceId, date, nowMs) {
       // только свободные старты. Тянем сетку смены ОТДЕЛЬНО — это один лишний
       // запрос, но только на салонах с включённой онлайн-записью (у PERI это
       // 4 услуги из 317, обычный путь идёт ниже и сетку уже загрузил).
-      // Сбой → пустая занятость → offer_slots = самые ранние, то есть ровно
-      // сегодняшнее поведение. Ранжирование не должно стоить пациенту ответа.
+      // Сбой → занятость НЕИЗВЕСТНА (busyKnown=false) → offer_slots = самые ранние,
+      // то есть ровно сегодняшнее поведение. Ранжирование не должно стоить пациенту
+      // ответа. Пустую занятость от неизвестной отличаем именно флагом: молчание
+      // сетки нельзя выдать за «день полностью свободен» (это вопрос пациенту о
+      // половине дня там, где у мастера может быть занят весь вечер).
       let busy = [];
-      try { busy = density.seancesToBusy(await ycGetStaffSeances(salon, staffId, date)); } catch (_) { busy = []; }
-      out.offer_slots = density.pickOfferSlots(out.slots, busy, {});
+      let busyKnown = false;
+      try {
+        const seances = await ycGetStaffSeances(salon, staffId, date);
+        // ПУСТАЯ сетка — это не «день полностью свободен», а отсутствие информации:
+        // так выглядит и день, в который мастер не работает, и молчание API. При этом
+        // онлайн-запись выше уже отдала реальные слоты, то есть мастер работает —
+        // выдать пустоту за свободный день значило бы спросить пациента о половине
+        // дня там, где у мастера может быть занят весь вечер.
+        busyKnown = Array.isArray(seances) && seances.length > 0;
+        busy = density.seancesToBusy(seances);
+      } catch (_) { busyKnown = false; busy = []; }
+      applyOffer(out, out.slots, busy, { busyKnown, dayPart });
       return out;
     }
   }
@@ -220,9 +267,22 @@ async function computeStaffSlots(salon, staffId, serviceId, date, nowMs) {
   // Плотность считаем ПОСЛЕ lead-time и ПОСЛЕ вычета занятого оборудования:
   // иначе порекомендуем старт, который сам же отфильтровали, и create_booking
   // упрётся в save_if_busy:false уже после согласования времени с пациентом.
-  ranked.offer_slots = density.pickOfferSlots(ranked.slots, density.seancesToBusy(seances),
-    { durationMin: svcDurationMin });
+  applyOffer(ranked, ranked.slots, density.seancesToBusy(seances),
+    // Пустая сетка = мастер в этот день не работает (тогда и слотов нет), а не
+    // «свободен весь день» — тот же водораздел, что в booking-ветке выше.
+    { busyKnown: Array.isArray(seances) && seances.length > 0, dayPart, durationMin: svcDurationMin });
   return ranked;
+}
+
+// Решение «что предложить» приезжает из чистого модуля, а тут только раскладывается
+// по полям ответа. Флаги ставятся ТОЛЬКО когда истинны: `free_day:false` в выдаче
+// модель читала бы как отдельный факт («день занят»), которого мы не утверждаем.
+function applyOffer(out, slots, busy, opts) {
+  const r = density.chooseOffer(slots, busy, opts);
+  out.offer_slots = r.offer;
+  if (r.freeDay) out.free_day = true;
+  if (r.dayPartEmpty) out.day_part_empty = true;
+  return out;
 }
 
 // У запрошенного мастера пусто → проверяем других исполнителей ЭТОЙ услуги на ту же
@@ -230,7 +290,7 @@ async function computeStaffSlots(salon, staffId, serviceId, date, nowMs) {
 // сказала «окошек нет», хотя у Татьяны было 14:00; клиент сам вытащил альтернативу
 // вопросом «а почему к Тане не предлагаешь?». Задача — довести до записи: альтернативу
 // подсвечивает сам инструмент, а не память модели.
-async function findAlternativeStaff(salon, filter, staffList, staffId, serviceId, date, nowMs) {
+async function findAlternativeStaff(salon, filter, staffList, staffId, serviceId, date, nowMs, dayPart) {
   const eligible = (staffList || [])
     .filter(m => m && m.yc_id && String(m.yc_id) !== String(staffId))
     .filter(m => svcFilter.isBookable(filter, serviceId, m.yc_id))
@@ -248,8 +308,10 @@ async function findAlternativeStaff(salon, filter, staffList, staffId, serviceId
       // В booking-ветке computeStaffSlots делает ДОПОЛНИТЕЛЬНЫЙ запрос сетки на
       // КАЖДОГО мастера (до MAX_ALT_STAFF штук) — цена осознанная: offer_slots
       // нужен по каждому специалисту отдельно, плотность считается по ЕГО дню.
-      const r = await computeStaffSlots(salon, m.yc_id, serviceId, date, nowMs);
-      return { staff_yc_id: m.yc_id, name: m.name, slots: r.slots || [], offer_slots: r.offer_slots || [] };
+      const r = await computeStaffSlots(salon, m.yc_id, serviceId, date, nowMs, dayPart);
+      const item = { staff_yc_id: m.yc_id, name: m.name, slots: r.slots || [], offer_slots: r.offer_slots || [] };
+      if (r.free_day) item.free_day = true;   // весь день свободен — времени по нему не называем
+      return item;
     } catch (_) { return null; }   // сбой по одному мастеру не валит весь ответ
   }));
   const reachable = checked.filter(Boolean);
@@ -275,7 +337,7 @@ async function loadSalon(salonId) {
 // Пациент мастера не называл → окна считаем у ВСЕХ исполнителей услуги, а выбор
 // отдаём пациенту. Раньше исполнителя выбирала сама модель (промпт это разрешал), и
 // пациент молча получал одного специалиста — при том что цена зависит от мастера.
-async function computeStaffOptions(salon, filter, staffList, serviceId, date, nowMs) {
+async function computeStaffOptions(salon, filter, staffList, serviceId, date, nowMs, dayPart) {
   const eligible = (staffList || [])
     .filter(m => m && m.yc_id)
     .filter(m => svcFilter.isBookable(filter, serviceId, m.yc_id))
@@ -294,11 +356,13 @@ async function computeStaffOptions(salon, filter, staffList, serviceId, date, no
       // В booking-ветке computeStaffSlots делает ДОПОЛНИТЕЛЬНЫЙ запрос сетки на
       // КАЖДОГО мастера (до MAX_STAFF_OPTIONS штук) — цена осознанная: offer_slots
       // нужен по каждому специалисту отдельно, плотность считается по ЕГО дню.
-      const r = await computeStaffSlots(salon, m.yc_id, serviceId, date, nowMs);
-      return {
+      const r = await computeStaffSlots(salon, m.yc_id, serviceId, date, nowMs, dayPart);
+      const item = {
         staff_yc_id: m.yc_id, name: m.name, position: null,
         slots: r.slots || [], offer_slots: r.offer_slots || [],
       };
+      if (r.free_day) item.free_day = true;   // весь день свободен — времени по нему не называем
+      return item;
     } catch (_) { return null; }   // сбой по одному мастеру не валит весь ответ
   }));
   const reachable = checked.filter(Boolean);
@@ -340,6 +404,9 @@ async function run(salonId, input, ctx = {}) {
   const serviceId = input && input.service_yc_id;
   const staffId = input && input.staff_yc_id;
   const date = input && input.date;
+  // Половина дня, названная ПАЦИЕНТОМ. Валидацию делает сам density (незнакомое
+  // значение фильтром не считается) — молча сужать выдачу по опечатке модели нельзя.
+  const dayPart = input && input.day_part;
   const nowMs = (ctx && ctx.nowMs) || Date.now();
   if (!date) return { error: 'Нужна date (YYYY-MM-DD).' };
   // Услуга обязательна: без неё неизвестна длительность, и старты считались бы
@@ -371,15 +438,19 @@ async function run(salonId, input, ctx = {}) {
     }
     const salon = await loadSalon(salonId);
     if (!salon || !salon.yclients_company_id) return { error: 'YClients не подключён для салона.' };
-    const { options, reachable, checked, total } = await computeStaffOptions(salon, filter, chk.staffList, serviceId, date, nowMs);
+    const { options, reachable, checked, total } = await computeStaffOptions(salon, filter, chk.staffList, serviceId, date, nowMs, dayPart);
     if (options.length) {
       await attachPositions(salonId, options);
       // «Один специалист» законно ровно там же, где законно «ни у кого»: кап никого не
       // срезал (checked === total) И все спрошенные ответили (reachable === checked).
       // Иначе единственность — выдумка о клинике поверх непроверенных мастеров.
       const exhaustive = reachable === checked && checked === total;
-      const hint = options.length > 1 ? HINT_STAFF_CHOICE
+      let hint = options.length > 1 ? HINT_STAFF_CHOICE
         : (exhaustive ? HINT_STAFF_SINGLE : HINT_STAFF_ONE_OF_PARTIAL);
+      // Хоть у одного мастера день пустой — базовый хинт («назови время из его
+      // offer_slots») по нему невыполним: времени там нет. Оговорка дописывается,
+      // а не заменяет хинт: в смешанном дне остальные мастера идут как обычно.
+      if (options.some(o => o.free_day)) hint += HINT_FREE_DAY_OPTIONS;
       return { staff_options: options, hint };
     }
     // Пустой список окон САМ ПО СЕБЕ не означает «времени нет»: недостижимый мастер
@@ -426,11 +497,18 @@ async function run(salonId, input, ctx = {}) {
   const salon = await loadSalon(salonId);
   if (!salon || !salon.yclients_company_id) return { error: 'YClients не подключён для салона.' };
   try {
-    const out = await computeStaffSlots(salon, staffId, serviceId, date, nowMs);
-    if (out.slots.length) return out;
+    const out = await computeStaffSlots(salon, staffId, serviceId, date, nowMs, dayPart);
+    if (out.slots.length) {
+      // Хинт про пустой день и про занятую половину дня — единственные случаи, где
+      // одномастерная выдача что-то ОБЪЯСНЯЕТ модели: время в offer_slots её и так
+      // ведёт (правило промпта «КАКОЕ ВРЕМЯ ПРЕДЛАГАТЬ ПЕРВЫМ»).
+      if (out.free_day) out.hint = HINT_FREE_DAY;
+      else if (out.day_part_empty) out.hint = HINT_DAY_PART_EMPTY;
+      return out;
+    }
     // У запрошенного мастера на эту дату пусто → сразу подсвечиваем альтернативу:
     // те же слоты у других исполнителей услуги, чтобы клиент не ушёл без записи.
-    const alt = await findAlternativeStaff(salon, filter, staffList, staffId, serviceId, date, nowMs);
+    const alt = await findAlternativeStaff(salon, filter, staffList, staffId, serviceId, date, nowMs, dayPart);
     if (alt && alt.alternative_staff) {
       out.alternative_staff = alt.alternative_staff;
       out.hint = 'У выбранного мастера на эту дату свободного времени нет, но ЭТУ ЖЕ услугу в этот день ' +
@@ -441,6 +519,9 @@ async function run(salonId, input, ctx = {}) {
         // на завтра всё занято». Кого проверяли внутри, пациента не касается.
         'Если пациент этого мастера сам не спрашивал (выбрала его ты) — НЕ говори, что у него занято: ' +
         'просто предложи специалиста с окнами и его время, без отчёта о проверке.';
+      // Тот же случай, что и в staff_options: у альтернативного мастера день может быть
+      // пустым, и тогда «время из его offer_slots» назвать физически нечем.
+      if (out.alternative_staff.some(a => a.free_day)) out.hint += HINT_FREE_DAY_OPTIONS;
     } else if (alt && alt.no_alternative_staff) {
       out.no_alternative_staff = true;   // проверены ВСЕ исполнители услуги — на дату пусто у всех
     }

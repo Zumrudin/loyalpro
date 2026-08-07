@@ -62,7 +62,30 @@ describe('offer_slots: одномастерная выдача', () => {
     const res = await tool.run(1, ARGS, CTX);
     expect(res.slots.map(s => s.time))
       .toEqual(['11:00', '11:30', '12:00', '12:30', '13:00', '13:30', '14:00']);
-    expect(res.offer_slots.map(s => s.time)).toEqual(['14:00', '13:30']);
+    expect(res.offer_slots.map(s => s.time)).toEqual(['14:00']);
+  });
+
+  // БОЕВОЙ ДЕНЬ, на который жаловался салон (Гаджиева Пери, 07.08, records прод-копии):
+  // занято 12:00–12:30, дальше сплошняк 14:00–21:00. Свободные старты 30-минутной
+  // услуги — 11:00, 11:30, 12:30, 13:00, 13:30, и Мила предложила «13:00 и 13:30»:
+  // возьми пациент 13:00 — между ним и блоком 14:00 остаётся дыра 30 минут.
+  // Теперь оба времени примыкают вплотную: 12:30 сразу ПОСЛЕ утренней записи,
+  // 13:30 вплотную ПЕРЕД началом блока.
+  test('день Пери 07.08: 12:30 и 13:30 (примыкают), а не 13:00 и 13:30', async () => {
+    ycGetStaffSeances.mockResolvedValue(
+      grid('11:00', '21:00', [['12:00', '12:30'], ['14:00', '21:00']]));
+    const res = await tool.run(1, ARGS, CTX);
+    expect(res.slots.map(s => s.time)).toEqual(['11:00', '11:30', '12:30', '13:00', '13:30']);
+    expect(res.offer_slots.map(s => s.time)).toEqual(['12:30', '13:30']);
+  });
+
+  // Правка 07.08 (просьба салона): у блока полезны РОВНО два времени — вплотную
+  // перед началом и сразу после конца. Соседние окошки одного куска (13:30 рядом
+  // с 14:00) не предлагаем: раннее из пары оставляет дыру в 30 минут.
+  test('свободно и после блока → второе время из ПОСЛЕ-части, а не сосед первого', async () => {
+    ycGetStaffSeances.mockResolvedValue(grid('11:00', '21:00', [['14:30', '18:00']]));
+    const res = await tool.run(1, ARGS, CTX);
+    expect(res.offer_slots.map(s => s.time)).toEqual(['14:00', '18:00']);
   });
 
   test('offer_slots — это объекты ИЗ slots (тот же datetime для create_booking)', async () => {
@@ -79,7 +102,9 @@ describe('offer_slots: одномастерная выдача', () => {
     ycGetStaffSeances.mockResolvedValue(grid('11:00', '21:00', [['14:30', '21:00']]));
     const res = await tool.run(1, ARGS, CTX);
     expect(res.source).toBe('booking');
-    expect(res.offer_slots.map(s => s.time)).toEqual(['14:00', '11:00']);
+    // 11:00 и 14:00 примыкают к ОДНОМУ краю (блок с 14:30), поэтому остаётся одно
+    // время — то, что вплотную. Второе появилось бы, будь свободное и после блока.
+    expect(res.offer_slots.map(s => s.time)).toEqual(['14:00']);
   });
 
   // Fail-open: без занятости деградируем в сегодняшнее поведение (самые ранние),
@@ -99,5 +124,59 @@ describe('offer_slots: одномастерная выдача', () => {
     const res = await tool.run(1, ARGS, CTX);
     expect(res.slots).toEqual([]);
     expect(res.offer_slots).toEqual([]);
+    // Занято всё — это НЕ «день свободен»: вопрос о половине дня тут бессмыслен.
+    expect(res.free_day).toBeUndefined();
+  });
+});
+
+// ── День без единой записи: время не называем, спрашиваем половину дня ──
+// Решение салона 07.08: «плотного» времени в пустом дне не существует (любое рвёт
+// день на две дыры), поэтому выбор половины дня делает пациент.
+describe('free_day: у мастера на дату нет ни одной записи', () => {
+  test('свободный день → offer_slots пуст, free_day и хинт про половину дня', async () => {
+    ycGetStaffSeances.mockResolvedValue(grid('11:00', '21:00', []));
+    const res = await tool.run(1, ARGS, CTX);
+    expect(res.slots.length).toBeGreaterThan(0);
+    expect(res.offer_slots).toEqual([]);
+    expect(res.free_day).toBe(true);
+    expect(res.hint).toMatch(/половин/i);
+    expect(res.hint).toMatch(/day_part/);
+  });
+
+  // Сбой сетки в booking-ветке НЕ должен читаться как «день свободен»: занятость
+  // просто неизвестна. Деградируем в прежние самые ранние (fail-open), а не в вопрос.
+  test('booking-ветка: сетка не ответила → free_day НЕ выставляется', async () => {
+    ycGetBookTimes.mockResolvedValue([
+      { time: '11:00', datetime: '2026-08-07T11:00:00+03:00', seance_length: 1800 },
+      { time: '14:00', datetime: '2026-08-07T14:00:00+03:00', seance_length: 1800 },
+    ]);
+    ycGetStaffSeances.mockRejectedValue(new Error('YClients 500'));
+    const res = await tool.run(1, ARGS, CTX);
+    expect(res.free_day).toBeUndefined();
+    expect(res.offer_slots.map(s => s.time)).toEqual(['11:00', '14:00']);
+  });
+
+  test('пациент назвал половину дня → времена краёв этой половины, free_day снят', async () => {
+    ycGetStaffSeances.mockResolvedValue(grid('11:00', '21:00', []));
+    const res = await tool.run(1, { ...ARGS, day_part: 'evening' }, CTX);
+    expect(res.free_day).toBeUndefined();
+    expect(res.offer_slots.map(s => s.time)).toEqual(['17:00', '20:30']);
+  });
+
+  test('половина дня сужает и обычную (не пустую) выдачу', async () => {
+    ycGetStaffSeances.mockResolvedValue(grid('11:00', '21:00', [['14:30', '18:00']]));
+    const res = await tool.run(1, { ...ARGS, day_part: 'evening' }, CTX);
+    expect(res.offer_slots.map(s => s.time)).toEqual(['18:00']);
+    // slots остаётся ПОЛНЫМ: его читает allowedTimes reply-guard'а, и пациент
+    // вправе следующим сообщением попросить время из другой половины дня.
+    expect(res.slots.map(s => s.time)).toContain('11:00');
+  });
+
+  test('в названной половине дня всё занято → day_part_empty + время из остального дня', async () => {
+    ycGetStaffSeances.mockResolvedValue(grid('11:00', '21:00', [['14:30', '21:00']]));
+    const res = await tool.run(1, { ...ARGS, day_part: 'evening' }, CTX);
+    expect(res.day_part_empty).toBe(true);
+    expect(res.offer_slots.map(s => s.time)).toEqual(['14:00']);
+    expect(res.hint).toMatch(/заняты/i);
   });
 });

@@ -190,6 +190,37 @@ describe('checkOfferDeviation', () => {
   });
 });
 
+// Свободный день (правка 07.08): промпт велит вместо времени спросить половину дня.
+// Метрика нужна потому, что правило держится на промпте, а промпт-правила в этом
+// проекте уже дважды проигрывали живым пробникам (приветствие, плотная запись).
+describe('checkFreeDayTime: день свободен, а модель назвала время', () => {
+  test('время в реплике при free_day → free_day_time', () => {
+    expect(g.checkFreeDayTime('Могу записать на 11:00', { freeDay: true, patientTimes: new Set() }))
+      .toEqual([{ type: 'free_day_time', value: '11:00' }]);
+  });
+
+  test('вопрос о половине дня без времени → чисто', () => {
+    expect(g.checkFreeDayTime('Свободно в течение дня. В какой половине дня удобнее?',
+      { freeDay: true, patientTimes: new Set() })).toEqual([]);
+  });
+
+  // Пациент назвал время сам — подтверждать его модель ОБЯЗАНА (правило «просьба
+  // пациента важнее подобранного времени»), и метрика на этом шуметь не должна.
+  test('время назвал пациент → не нарушение', () => {
+    expect(g.checkFreeDayTime('Записываю на 16:00', { freeDay: true, patientTimes: new Set(['16:00']) }))
+      .toEqual([]);
+  });
+
+  test('без free_day проверка выключена', () => {
+    expect(g.checkFreeDayTime('Могу в 11:00', { freeDay: false, patientTimes: new Set() })).toEqual([]);
+    expect(g.checkFreeDayTime('Могу в 11:00', {})).toEqual([]);
+  });
+
+  test('free_day_time — мягкое нарушение, переписывания не требует', () => {
+    expect(g.hardViolations([{ type: 'free_day_time', value: '11:00' }])).toEqual([]);
+  });
+});
+
 describe('OTHER_TIME_REQUEST_RE', () => {
   test('ловит все слова из формулировки промпт-правила «КАКОЕ ВРЕМЯ ПРЕДЛАГАТЬ ПЕРВЫМ»', () => {
     for (const w of ['пораньше', 'попозже', 'утром', 'вечером', 'в другой половине дня']) {

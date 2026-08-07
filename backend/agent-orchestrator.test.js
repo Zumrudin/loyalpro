@@ -938,6 +938,45 @@ describe('reply-guard: offer_bypass (плотная запись, только �
     expect(guardLogs.join(' ')).toContain('15:00');
   });
 
+  // Свободный день (правка 07.08): времени в ответе быть не должно ВООБЩЕ — только
+  // вопрос о половине дня. Тоже лишь метрика: реплику не глушим, иначе повторим
+  // дефект анти-ложь-guard'а 04.08 на честном подтверждении времени пациента.
+  test('free_day, а модель назвала время → лог free_day_time, реплика доставлена', async () => {
+    const deps = makeDeps({
+      handlers: {
+        get_available_slots: jest.fn(async () => ({
+          slots: [{ time: '11:00' }, { time: '11:30' }],
+          offer_slots: [], free_day: true,
+        })),
+      },
+    });
+    deps.provider.createMessage
+      .mockResolvedValueOnce(toolResp('get_available_slots', { staff_yc_id: 1, service_yc_id: 1, date: '2026-08-07' }))
+      .mockResolvedValueOnce(textResp('Могу записать на 11:00'));
+    const out = await orchestrator.runDialog(1, 'k', { deps, today: '2026-08-06', now: '09:00' });
+    expect(out.replies).toEqual(['Могу записать на 11:00']);
+    const guardLogs = mockLogger.warn.mock.calls.filter(([msg]) => String(msg).includes('reply-guard'));
+    expect(guardLogs.join(' ')).toContain('free_day_time');
+  });
+
+  test('free_day и вопрос про половину дня без времени → лога нет', async () => {
+    const deps = makeDeps({
+      handlers: {
+        get_available_slots: jest.fn(async () => ({
+          slots: [{ time: '11:00' }, { time: '11:30' }],
+          offer_slots: [], free_day: true,
+        })),
+      },
+    });
+    deps.provider.createMessage
+      .mockResolvedValueOnce(toolResp('get_available_slots', { staff_yc_id: 1, service_yc_id: 1, date: '2026-08-07' }))
+      .mockResolvedValueOnce(textResp('Свободное время есть в течение дня. В какой половине дня вам удобнее?'));
+    const out = await orchestrator.runDialog(1, 'k', { deps, today: '2026-08-06', now: '09:00' });
+    expect(out.replies).toHaveLength(1);
+    const guardLogs = mockLogger.warn.mock.calls.filter(([msg]) => String(msg).includes('reply-guard'));
+    expect(guardLogs.join(' ')).not.toContain('free_day_time');
+  });
+
   test('время из offer_slots — не offer_bypass', async () => {
     const deps = makeDeps({
       handlers: {

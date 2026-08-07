@@ -161,14 +161,37 @@ function checkOfferDeviation(text, opts = {}) {
   return out;
 }
 
+// Свободный день (free_day): промпт велит времени НЕ называть вовсе, а спросить
+// половину дня — подобранного времени в offer_slots в этом случае нет намеренно.
+// ЗАЧЕМ ЛОГ: правило держится на промпте, а в этом проекте промпт-правила уже
+// дважды проигрывали живым пробникам (приветствие, плотная запись) — без метрики
+// «как часто модель всё-таки называет время» о провале узнают из инцидента.
+// Переписывания НЕТ по той же причине, что у offer_bypass: время, названное САМИМ
+// пациентом, модель подтверждать обязана, и глушить такой ответ значило бы повторить
+// дефект анти-ложь-guard'а 04.08.
+//
+// opts.freeDay — за ход хоть одна выдача пришла с free_day:true;
+// opts.patientTimes — времена, названные пациентом цифрами (легальны всегда).
+function checkFreeDayTime(text, opts = {}) {
+  if (!opts.freeDay) return [];
+  const patientTimes = opts.patientTimes || new Set();
+  const out = [];
+  for (const t of extractTimes(text)) {
+    if (patientTimes.has(t)) continue;
+    out.push({ type: 'free_day_time', value: t });
+  }
+  return out;
+}
+
 // Жёсткие нарушения — раскрытие внутренней кухни. По ним оркестратор просит
-// модель переписать ответ; стилистика (эмодзи, приветствие, offer_bypass) — только лог.
+// модель переписать ответ; стилистика (эмодзи, приветствие, offer_bypass,
+// free_day_time) — только лог.
 const HARD_TYPES = new Set(['taboo_word', 'id_leak']);
 function hardViolations(violations) {
   return (violations || []).filter(v => HARD_TYPES.has(v.type));
 }
 
 module.exports = {
-  extractTimes, checkOfferedTimes, checkOfferDeviation, lintReply, hardViolations,
+  extractTimes, checkOfferedTimes, checkOfferDeviation, checkFreeDayTime, lintReply, hardViolations,
   OTHER_TIME_REQUEST_RE,
 };

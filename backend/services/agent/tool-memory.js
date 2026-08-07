@@ -47,7 +47,13 @@ function isPiiKey(k) {
 // сослалась бы на него как на предложенное.
 // Старые события журнала (до выката offer_slots) живут в памяти ещё 48 часов —
 // для них фолбэк на slots обязателен.
+// free_day (день у мастера пустой) — времён не было НАМЕРЕННО: правило промпта
+// велит вместо времени спросить половину дня. Фолбэк на slots написал бы в память
+// «показаны 11:00, 11:30…», и следующим ходом модель сослалась бы на время, которое
+// пациент никогда не слышал — тот же дефект, из-за которого рендер вообще перевели
+// с начала slots на offer_slots.
 function shownTimes(holder, cap) {
+  if (holder && holder.free_day) return [];
   const offer = Array.isArray(holder.offer_slots) ? holder.offer_slots : [];
   const all = Array.isArray(holder.slots) ? holder.slots : [];
   const src = offer.length ? offer : all;
@@ -202,7 +208,10 @@ const EXTRACTORS = {
     // «staff_yc_id=undefined … свободного времени не было» — то есть врала ровно
     // там, где тем же ходом пациенту показали времена трёх мастеров.
     const who = inp.staff_yc_id ? `staff_yc_id=${inp.staff_yc_id}` : 'у всех исполнителей';
-    const base = `смотрела слоты service_yc_id=${inp.service_yc_id} ${who} на ${inp.date}`;
+    // Половина дня, названная пациентом, сужает выдачу — без неё узкий список времён
+    // читается следующим ходом как «больше у мастера ничего нет».
+    const part = inp.day_part ? ` day_part=${String(inp.day_part).slice(0, 16)}` : '';
+    const base = `смотрела слоты service_yc_id=${inp.service_yc_id} ${who} на ${inp.date}${part}`;
     if (!ctx.fresh) return `${base} (выдача устарела — при вопросе о времени перезапроси)`;
     if (Array.isArray(res.staff_options)) {
       // В строку идут только имя мастера и времена: должность (position) уже была
@@ -214,6 +223,8 @@ const EXTRACTORS = {
       const per = res.staff_options.slice(0, 3).map((o) => {
         const all = Array.isArray(o.slots) ? o.slots : [];
         const times = shownTimes(o, 6);
+        // Пустой день мастера: времён не называли намеренно (спрашивали половину дня).
+        if (!times.length) return `${o.name}: весь день свободен, время не называла`;
         return `${o.name}: ${times.join(', ')}${all.length > times.length ? '…' : ''}`;
       });
       if (per.length) return `${base}: показаны ${per.join('; ')}${res.staff_options.length > 3 ? '…' : ''}`;
@@ -231,6 +242,9 @@ const EXTRACTORS = {
       return `${base}: свободного времени не было${res.alternative_staff ? ', предлагала альтернативных мастеров' : ''}`;
     }
     const times = shownTimes(res, 12);
+    // Тот же случай в одномастерной ветке: окна есть, но пациенту их не называли —
+    // у мастера весь день свободен, и вместо времени задавался вопрос о половине дня.
+    if (!times.length) return `${base}: у мастера весь день свободен, время не называла — спрашивала половину дня`;
     return `${base}: показаны ${times.join(', ')}${slots.length > times.length ? '…' : ''}`;
   },
   get_available_dates(e, ctx) {

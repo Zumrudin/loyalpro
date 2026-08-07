@@ -471,6 +471,9 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
     // результатах, где реально был offer_slots).
     const toolOfferTimes = new Set();
     const offerSlotTimes = new Set();
+    // Свободный день: правило промпта требует не называть время, а спросить половину
+    // дня. Только измерение (free_day_time), см. checkFreeDayTime в reply-guard.
+    let sawFreeDay = false;
 
     const replies = [];
     let escalated = false;
@@ -587,6 +590,9 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
           for (const t of replyGuard.extractTimes(resultJson)) toolOfferTimes.add(t);
           collectOfferSlotTimes(result, offerSlotTimes);
         }
+        // free_day приходит и на верхнем уровне, и внутри staff_options[]/
+        // alternative_staff[] — по строке результата это одна проверка на все ветки.
+        if (resultJson && resultJson.includes('"free_day":true')) sawFreeDay = true;
         if (!isError && tc.name === 'search_knowledge_base') kbSourceText += JSON.stringify(result);
       }
       for (const m of provider.toolResultMessages(results)) convo.push(m);
@@ -694,6 +700,9 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
         // не входит в HARD_TYPES) — см. шапку checkOfferDeviation в reply-guard.js.
         ...replyGuard.checkOfferDeviation(joined,
           { toolTimes: toolOfferTimes, offerTimes: offerSlotTimes, patientTimes, patientAskedOtherTime }),
+        // Свободный день (правка 07.08): времени в ответе быть не должно вовсе —
+        // только вопрос о половине дня. Тоже ЛИШЬ лог, без переписывания.
+        ...replyGuard.checkFreeDayTime(joined, { freeDay: sawFreeDay, patientTimes }),
       ];
       if (violations.length) {
         logger.warn(`dialog ${dialogKey}: reply-guard: ${JSON.stringify(violations)}`);
