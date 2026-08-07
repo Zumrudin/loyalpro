@@ -4,6 +4,7 @@ const { db } = require('../db');
 const { getLoyaltySettings, processRecordEvent, processFinancesOperation } = require('../services/loyalty');
 const { handleRecordCreated } = require('../services/notifications');
 const care = require('../services/care/enroll');
+const reminders = require('../services/reminders/enroll');
 const { buildClientFio } = require('../utils/client-name');
 const { createLogger } = require('../logger');
 const logger = createLogger('Webhook');
@@ -84,6 +85,12 @@ router.post('/webhook.v2/:companyId', async (req, res) => {
       // Свой catch — сбой заботы не должен ломать начисления.
       await care.handleRecordEvent(salon, payload).catch(e =>
         logger.error(`care enroll: ${e.message}`));
+      // Напоминания о повторном визите — в СВОЁМ catch: их падение не должно
+      // ронять «Заботу» и начисление кэшбэка.
+      await reminders.handleRecordEvent(salon, payload).catch(e =>
+        logger.error(`reminders enroll: ${e.message}`));
+      await reminders.handleAttribution(salon, payload).catch(e =>
+        logger.error(`reminders attribution: ${e.message}`));
     }
 
     if (resourceType === 'client' && payload.data) {
