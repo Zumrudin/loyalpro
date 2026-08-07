@@ -25,6 +25,7 @@ const replyGuard = require('../agent/reply-guard');
 const salonNames = require('../../utils/salon-names');
 const authorship = require('../outgoing-authorship');
 const notifications = require('../notifications');
+const dailyLimit = require('../messaging/daily-limit');
 const chatEvents = require('../chat-events');
 const context = require('./context');
 const { buildCarePrompt } = require('./care-prompt');
@@ -69,17 +70,10 @@ const defaultDeps = {
       [salonId, phone]);
     return r ? r.status : null;
   },
-  sentTodayExists: async (salonId, phone) => {
-    const r = await realDb.oneOrNone(
-      `SELECT 1 FROM care_touch_sends s
-         JOIN care_enrollments e ON e.id = s.enrollment_id
-        WHERE e.salon_id = $1 AND e.phone = $2 AND s.status = 'sent'
-          AND (s.sent_at AT TIME ZONE 'Europe/Moscow')::date
-              = (NOW() AT TIME ZONE 'Europe/Moscow')::date
-        LIMIT 1`,
-      [salonId, phone]);
-    return !!r;
-  },
+  // Анти-спам общий с напоминаниями о повторном визите: клиент не должен
+  // получить в один день и касание «Заботы», и напоминание (см.
+  // services/messaging/daily-limit.js).
+  sentTodayExists: (salonId, phone) => dailyLimit.sentTodayExists(realDb, salonId, phone),
   loadClientRecords: context.loadClientRecords,
   getCatMap: async (salonId) => {
     const salon = await realDb.one(
