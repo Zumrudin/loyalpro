@@ -6,9 +6,10 @@
 // правила очередь пуста, и без превью не отличить «условия кривые» от
 // «подходящих визитов ещё не было».
 //
-// Отбор гоняет ТОТ ЖЕ evaluateRule и тот же критерий «визит состоялся», что и
-// боевое планирование (services/reminders/enroll.js). Расхождение — это баг:
-// правки условий обязаны идти в оба места.
+// Отбор гоняет ТОТ ЖЕ evaluateRule и ТОТ ЖЕ предикат «визит состоялся»
+// (visitReallyHappened из ./eligibility), что и боевое планирование
+// (services/reminders/enroll.js) — предикат экспортируется ОДИН на оба
+// модуля именно затем, чтобы расхождение было невозможно молча.
 //
 // Будущие записи берутся из ТОЙ ЖЕ сводной выдачи /records (вызывающий тянет
 // диапазон, захватывающий будущее) — по отдельному запросу на каждого клиента
@@ -17,8 +18,7 @@
 const { evaluateRule } = require('../notifications');
 const { normalizePhoneKey } = require('../agent-gate');
 const { parseVisitAt, computeScheduledAt } = require('../care/schedule');
-const { isVisitCompleted } = require('../care/enroll');
-const { recordContext } = require('./eligibility');
+const { recordContext, visitReallyHappened } = require('./eligibility');
 
 /**
  * @returns {{ totals: object, rows: object[] }}
@@ -32,7 +32,14 @@ function matchBackfillVisits({ records = [], conditions, catMap = new Map(),
     try { return evaluateRule(conditions, recordContext(r, catMap)); } catch { return false; }
   };
 
-  // Телефоны, у которых есть БУДУЩАЯ запись под условия правила.
+  // Телефоны, у которых есть БУДУЩАЯ запись под условия правила. Это ДРУГОЙ
+  // вопрос, чем «визит состоялся» ниже: тут «жива ли будущая бронь», а не
+  // «был ли прошлый визит» — visitReallyHappened() тут не подходит по
+  // смыслу (он для СОСТОЯВШИХСЯ визитов, у будущей записи attendance/paid_full
+  // ещё не проставлены). Отменённую/удалённую будущую запись считать «клиент
+  // уже записан» нельзя — отсюда те же признаки (r.deleted, attendance=-1),
+  // но своей отдельной проверкой, не дублирующей ниже: там она отсеивает
+  // визиты ИЗ ВЫБОРКИ, здесь — записи ИЗ МНОЖЕСТВА «занятых» телефонов.
   const busy = new Set();
   for (const r of records) {
     if (!r || r.deleted) continue;
@@ -48,7 +55,12 @@ function matchBackfillVisits({ records = [], conditions, catMap = new Map(),
   let completed = 0;
   for (const r of records) {
     if (!r || r.id == null) continue;
-    if (!isVisitCompleted(r)) continue;
+    // Голого isVisitCompleted() мало: предоплаченная неявка (attendance=-1
+    // при paid_full=1) и удалённая запись (deleted=true при живом attendance)
+    // прошли бы его наивно. visitReallyHappened — ОБЩИЙ предикат с боевым
+    // планировщиком (services/reminders/enroll.js), чтобы догон по базе не
+    // мог разъехаться с ним молча.
+    if (!visitReallyHappened(r)) continue;
     completed++;
     if (!matches(r)) continue;
 

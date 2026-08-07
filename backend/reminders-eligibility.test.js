@@ -1,7 +1,9 @@
 'use strict';
 // «Клиент уже записан на аналогичную услугу» — утверждённый критерий:
 // будущая запись попадает под ТЕ ЖЕ условия правила (мастер/категория/услуга).
-const { hasFutureMatchingBooking } = require('./services/reminders/eligibility');
+const fs = require('fs');
+const path = require('path');
+const { hasFutureMatchingBooking, visitReallyHappened } = require('./services/reminders/eligibility');
 
 const CAT_MAP = new Map([['101', '9'], ['102', '9'], ['200', '7']]);
 const BY_CATEGORY = { logic: 'and', items: [{ type: 'category', ids: [9] }] };
@@ -48,4 +50,68 @@ test('условие по мастеру работает', () => {
 test('мастер читается и из staff_id, и из staff.id', () => {
   const byStaff = { logic: 'and', items: [{ type: 'staff', ids: [55] }] };
   expect(hasFutureMatchingBooking([{ services: [], staff_id: 55 }], byStaff, CAT_MAP)).toBe(true);
+});
+
+// Найдено ревью качества (2026-08-07): голого isVisitCompleted() мало для
+// «визит состоялся». Предикат общий для боевого планировщика (enroll.js) и
+// догона по базе (backfill.js) — тесты ниже проверяют его напрямую.
+describe('visitReallyHappened', () => {
+  test('обычный состоявшийся визит — true', () => {
+    expect(visitReallyHappened({ attendance: 1 })).toBe(true);
+    expect(visitReallyHappened({ attendance: 0, paid_full: 1 })).toBe(true);
+  });
+
+  test('обычный несостоявшийся визит — false', () => {
+    expect(visitReallyHappened({ attendance: 0 })).toBe(false);
+  });
+
+  // Предоплаченная неявка: paid_full=1 стоит ОДНОВРЕМЕННО с attendance=-1
+  // (депозит удержан, клиент не пришёл) — isVisitCompleted() наивно сказала
+  // бы «состоялся».
+  test('предоплаченная неявка — false', () => {
+    expect(visitReallyHappened({ attendance: -1, paid_full: 1 })).toBe(false);
+  });
+
+  // Удалённая запись: attendance может остаться 1 (отменили после визита или
+  // задним числом) — deleted=true обязан перебить его.
+  test('удалённая запись при живом attendance — false', () => {
+    expect(visitReallyHappened({ deleted: true, attendance: 1 })).toBe(false);
+  });
+
+  test('payloadStatus="delete" тоже гасит состоявшийся визит', () => {
+    expect(visitReallyHappened({ attendance: 1 }, 'delete')).toBe(false);
+  });
+
+  test('payloadStatus по умолчанию null — признаки самой записи достаточно', () => {
+    // Вызов без второго аргумента (как делает backfill.js) обязан ловить
+    // deleted/attendance=-1 БЕЗ payloadStatus от вебхука.
+    expect(visitReallyHappened({ deleted: true, attendance: 1 })).toBe(false);
+    expect(visitReallyHappened({ attendance: -1, paid_full: 1 })).toBe(false);
+  });
+});
+
+// Цель: будущая правка одного места (enroll.js ИЛИ backfill.js) не должна
+// суметь молча разъехаться с общим предикатом — ни своей копией функции, ни
+// импортом из другого источника. Статическая проверка исходников (а не
+// require-идентичность объекта: она гарантирована кэшем Node модулей и сама
+// по себе не ловит регресс «кто-то дописал локальную функцию рядом»).
+describe('enroll.js и backfill.js используют ОДИН экспортированный предикат', () => {
+  const read = (rel) => fs.readFileSync(path.join(__dirname, rel), 'utf8');
+
+  test('оба импортируют visitReallyHappened из ./eligibility', () => {
+    const enrollSrc = read('services/reminders/enroll.js');
+    const backfillSrc = read('services/reminders/backfill.js');
+    const importsFromEligibility = (src) =>
+      /require\(['"]\.\/eligibility['"]\)/.test(src) && /visitReallyHappened/.test(src);
+    expect(importsFromEligibility(enrollSrc)).toBe(true);
+    expect(importsFromEligibility(backfillSrc)).toBe(true);
+  });
+
+  test('ни одно из мест не переопределяет visitReallyHappened локально', () => {
+    const enrollSrc = read('services/reminders/enroll.js');
+    const backfillSrc = read('services/reminders/backfill.js');
+    const redefines = (src) => /function\s+visitReallyHappened\s*\(/.test(src);
+    expect(redefines(enrollSrc)).toBe(false);
+    expect(redefines(backfillSrc)).toBe(false);
+  });
 });

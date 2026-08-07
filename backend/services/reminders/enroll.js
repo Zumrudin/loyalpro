@@ -15,8 +15,8 @@ const { db: realDb } = require('../../db');
 const { evaluateRule, getServiceCategoryMap } = require('../notifications');
 const { normalizePhoneKey } = require('../agent-gate');
 const { parseVisitAt, computeScheduledAt } = require('../care/schedule');
-const { isVisitCompleted, classifyRecordEvent } = require('../care/enroll');
-const { recordContext } = require('./eligibility');
+const { classifyRecordEvent } = require('../care/enroll');
+const { recordContext, visitReallyHappened } = require('./eligibility');
 const { pickAttributionRow } = require('./attribution');
 const { createLogger } = require('../../logger');
 
@@ -25,19 +25,6 @@ const defaultDeps = {
   getCatMap: (salon) => getServiceCategoryMap(salon),
   log: createLogger('Reminders'),
 };
-
-/**
- * Визит ДЕЙСТВИТЕЛЬНО состоялся? Голого isVisitCompleted() тут мало: у
- * предоплаченной неявки paid_full=1 стоит ОДНОВРЕМЕННО с attendance=-1
- * (депозит удержан, клиент не пришёл) — isVisitCompleted() наивно вернул бы
- * true. classifyRecordEvent распознаёт неявку/отмену ПЕРВОЙ (тот же
- * приоритет, что в handleRecordEvent и в «Заботе»); без него в дашборде
- * правила «дошли» засчитался бы визит, которого не было, — прямая
- * фальсификация KPI, на который смотрит владелец салона.
- */
-function visitReallyHappened(data, payloadStatus) {
-  return isVisitCompleted(data) && classifyRecordEvent(data, payloadStatus) !== 'unenroll';
-}
 
 /** Отменить запланированные строки конкретной записи (отмена/неявка). */
 async function cancelForRecord(db, salonId, recordId, reason) {

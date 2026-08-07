@@ -80,6 +80,35 @@ test('ранний визит того же клиента → superseded', () =
   expect(out.rows.find(r => r.recordId === 1).skipReason).toBe('superseded');
 });
 
+// Найдено ревью качества: голого isVisitCompleted() мало — предоплаченная
+// неявка несёт paid_full=1 ОДНОВРЕМЕННО с attendance=-1, а удалённая запись
+// несёт deleted=true при живом attendance. Обе не должны попадать в выборку
+// вовсе (как и обычный несостоявшийся визит), иначе реальному клиенту, не
+// пришедшему на визит (или чью запись удалили), уйдёт «пора повторить».
+test('предоплаченная неявка (attendance=-1, paid_full=1) не попадает в выборку', () => {
+  const out = run([visit({ attendance: -1, paid_full: 1 })]);
+  expect(out.rows).toHaveLength(0);
+});
+
+test('удалённая запись (deleted=true, attendance=1) не попадает в выборку', () => {
+  const out = run([visit({ deleted: true, attendance: 1 })]);
+  expect(out.rows).toHaveLength(0);
+});
+
+// Будущая ОТМЕНЁННАЯ запись не должна считаться «клиент уже записан» —
+// прошлый визит остаётся с skipReason: null, напоминание всё ещё уйдёт.
+test('будущая отменённая запись (deleted) не помечает клиента как уже записанного', () => {
+  const futureDeleted = visit({ id: 2, date: '2026-08-20 14:00:00', deleted: true });
+  const out = run([visit(), futureDeleted]);
+  expect(out.rows.find(r => r.recordId === 1).skipReason).toBeNull();
+});
+
+test('будущая отменённая запись (attendance=-1) не помечает клиента как уже записанного', () => {
+  const futureNoShow = visit({ id: 2, date: '2026-08-20 14:00:00', attendance: -1 });
+  const out = run([visit(), futureNoShow]);
+  expect(out.rows.find(r => r.recordId === 1).skipReason).toBeNull();
+});
+
 describe('spreadOverDays', () => {
   const rows = (n) => Array.from({ length: n }, (_, i) => ({ recordId: i + 1 }));
 
