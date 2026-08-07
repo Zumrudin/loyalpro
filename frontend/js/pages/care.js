@@ -186,17 +186,16 @@ function careCloseEditor() {
 }
 
 // — конструктор условий: общий модуль conditions-editor.js —
-// Имена careXxx сохранены: на них ссылается инлайн-разметка в index.html
-// (и HTML, генерируемый самой careRenderConds/careRenderCondList).
+// Остались ТОЛЬКО те careXxx, которые реально зовёт статичная разметка
+// index.html. Остальные обёртки (careRemoveCond/careCondType/careCondFilter/
+// careCondToggleId/careRenderConds/careRenderCondList) удалены как мёртвые:
+// разметку строк условий генерирует сам модуль и зовёт в ней обобщённые
+// cond*('care', …), а не care-обёртки. Держать пустые обёртки «на всякий
+// случай» вреднее, чем не держать: они создают ложное впечатление, что имена
+// откуда-то вызываются, и переживают следующую правку разметки незамеченными.
 
 function careSetLogic(logic) { condSetLogic('care', logic); }
 function careAddCond()       { condAdd('care'); }
-function careRemoveCond(i)   { condRemove('care', i); }
-function careCondType(i, t)  { condType('care', i, t); }
-function careCondFilter(i, v){ condFilter('care', i, v); }
-function careCondToggleId(i, id, checked) { condToggleId('care', i, id, checked); }
-function careRenderConds()   { condRender('care'); }
-function careRenderCondList(i) { condRenderList('care', i); }
 
 // — конструктор цепочки касаний —
 
@@ -366,6 +365,12 @@ async function careRunPreview() {
   box.innerHTML = 'Считаю выборку по записям YClients…';
   const days = Number(document.getElementById('carePreviewDays').value) || 30;
 
+  // Превью ЧЕРНОВИКА: condGet выбрасывает условия, в которых ничего не выбрано.
+  // Это осознанное отличие от прежнего кода, который слал их как есть: пустое
+  // условие бэкенд (evaluateRule) считает «всегда истина», и при логике ИЛИ
+  // одна незаполненная строка показывала в превью ВСЕХ клиентов подряд.
+  // Сохранить программу в таком виде всё равно нельзя (careSaveProgram
+  // отбивает по condHasEmpty), так что превью теперь честнее, а не мягче.
   const body = _carePreviewFor.programId
     ? { programId: _carePreviewFor.programId, days }
     : {
