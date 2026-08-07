@@ -16,6 +16,16 @@ const { recordContext } = require('./eligibility');
 
 const DAY_MS = 86400000;
 
+// `sent_at` приходит из pg объектом Date (TIMESTAMPTZ, см. care/schedule.js
+// для той же идиомы), а тесты/превью могут подать ISO-строку. Date.parse на
+// объекте Date работает только через неявный ToString → Date.prototype.toString()
+// и молча округляет до секунды (миллисекунды теряются), плюс опирается на
+// round-trip, который спецификацией не гарантирован. Читаем миллисекунды
+// напрямую с объекта, строку разбираем как раньше.
+function sentMsOf(value) {
+  return value instanceof Date ? value.getTime() : Date.parse(value);
+}
+
 /**
  * @param {object[]} rows    строки reminder_queue со status='sent', с полями
  *                           id, rule_id, conditions, attribution_days, sent_at,
@@ -32,7 +42,7 @@ function pickAttributionRow(rows, booking, catMap, nowMs = Date.now()) {
   const candidates = (rows || []).filter(r => {
     if (!r || r.conversion_record_id != null) return false;
     if (r.rule_id == null || !r.conditions) return false;
-    const sentMs = Date.parse(r.sent_at);
+    const sentMs = sentMsOf(r.sent_at);
     if (!Number.isFinite(sentMs)) return false;
     const windowDays = Number(r.attribution_days);
     const days = Number.isFinite(windowDays) && windowDays > 0 ? windowDays : 30;
@@ -41,7 +51,7 @@ function pickAttributionRow(rows, booking, catMap, nowMs = Date.now()) {
   });
   if (!candidates.length) return null;
 
-  candidates.sort((a, b) => Date.parse(b.sent_at) - Date.parse(a.sent_at));
+  candidates.sort((a, b) => sentMsOf(b.sent_at) - sentMsOf(a.sent_at));
   return candidates[0];
 }
 

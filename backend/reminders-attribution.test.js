@@ -63,3 +63,27 @@ test('пустой список → null', () => {
   expect(pickAttributionRow([], booking, CAT_MAP, NOW)).toBeNull();
   expect(pickAttributionRow(null, booking, CAT_MAP, NOW)).toBeNull();
 });
+
+// pg отдаёт TIMESTAMPTZ объектом Date (не строкой) — боевая форма поля.
+// Дублируем проверки границы окна и «побеждает самая свежая», но на Date.
+test('sent_at объектом Date (боевая форма): граница окна считается так же', () => {
+  const edge = row({ sent_at: new Date(NOW - 30 * 24 * HOUR) });
+  expect(pickAttributionRow([edge], booking, CAT_MAP, NOW)).toMatchObject({ id: 1 });
+  const over = row({ sent_at: new Date(NOW - 30 * 24 * HOUR - HOUR) });
+  expect(pickAttributionRow([over], booking, CAT_MAP, NOW)).toBeNull();
+});
+
+test('sent_at объектом Date (боевая форма): побеждает самая свежая', () => {
+  const older = row({ id: 1, sent_at: new Date(NOW - 20 * 24 * HOUR) });
+  const newer = row({ id: 2, sent_at: new Date(NOW - 2 * 24 * HOUR) });
+  expect(pickAttributionRow([older, newer], booking, CAT_MAP, NOW)).toMatchObject({ id: 2 });
+});
+
+// Date.parse на объекте Date идёт через неявный ToString и округляет до
+// секунды — две отправки в одну секунду, отличающиеся только миллисекундами,
+// должны различаться по свежести.
+test('две отправки в одну секунду различаются по миллисекундам', () => {
+  const earlier = row({ id: 1, sent_at: new Date(NOW - 24 * HOUR) });
+  const later = row({ id: 2, sent_at: new Date(NOW - 24 * HOUR + 200) });
+  expect(pickAttributionRow([earlier, later], booking, CAT_MAP, NOW)).toMatchObject({ id: 2 });
+});
