@@ -21,15 +21,31 @@ function num(v) {
 function renderReminderText(tpl, ctx = {}) {
   if (!tpl) return '';
   const firstName = resolveGivenName(ctx.name, { dictionary: ctx.nameDictionary }) || '';
+
+  // Значения приходят из CRM (услуга, мастер, салон, имя из карточки клиента) и
+  // уходят живому клиенту — цепочка из String.replace(regex, СТРОКА) тут не
+  // годится по ДВУМ причинам:
+  //   1. строковый аргумент replace разворачивает $-шаблоны ($&, $$, $`, $',
+  //      $1…) — «Топ$& мастер» превратилось бы в текст с повторённым куском
+  //      совпадения вместо буквального «$&»;
+  //   2. каждый следующий replace в цепочке сканирует УЖЕ подставленный текст,
+  //      поэтому плейсхолдер, случайно оказавшийся внутри РАНЕЕ подставленного
+  //      значения, разворачивается повторно (инъекция через данные CRM).
+  // Один проход по ИСХОДНОМУ шаблону с функцией-заменителем читает каждый
+  // плейсхолдер ровно один раз и подставляет значение как есть, без повторного
+  // сканирования и без интерпретации $-синтаксиса.
+  const values = {
+    first_name: firstName,
+    name:       ctx.name || '',
+    'услуга':   ctx.service || '',
+    'мастер':   ctx.staff || '',
+    'дней':     num(ctx.days),
+    'бонусы':   num(ctx.accrued),
+    'баланс':   num(ctx.balance),
+    'салон':    ctx.salon || '',
+  };
   return String(tpl)
-    .replace(/\{first_name\}/g, firstName)
-    .replace(/\{name\}/g,       ctx.name || '')
-    .replace(/\{услуга\}/g,     ctx.service || '')
-    .replace(/\{мастер\}/g,     ctx.staff || '')
-    .replace(/\{дней\}/g,       num(ctx.days))
-    .replace(/\{бонусы\}/g,     num(ctx.accrued))
-    .replace(/\{баланс\}/g,     num(ctx.balance))
-    .replace(/\{салон\}/g,      ctx.salon || '')
+    .replace(/\{(first_name|name|услуга|мастер|дней|бонусы|баланс|салон)\}/g, (_, key) => values[key])
     // «{first_name}, пора повторить» без имени → «Пора повторить»
     .replace(/^[ \t]*,\s*(\p{L})/gmu, (_, ch) => ch.toUpperCase());
 }
