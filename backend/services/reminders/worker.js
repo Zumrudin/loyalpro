@@ -22,6 +22,7 @@ const salonNames = require('../../utils/salon-names');
 const authorship = require('../outgoing-authorship');
 const notifications = require('../notifications');
 const dailyLimit = require('../messaging/daily-limit');
+const chatEvents = require('../chat-events');
 const careContext = require('../care/context');
 const { plusOneDay } = require('../care/schedule');
 const { hasFutureMatchingBooking } = require('./eligibility');
@@ -37,6 +38,18 @@ const log = createLogger('RemindersWorker');
 const WORKER_TICK_MS      = 60000;
 const MAX_ATTEMPTS        = 3;
 const RETRY_BACKOFF_S     = 120;
+// Таймаут care-прохода LLM в режиме free (buildText): зависший провайдер не
+// должен держать строку 'scheduled' вечно. 60с < backoff аренды 120с (тот же
+// запас, что в care-воркере) — таймаут-ретрай не пересечётся с ещё живым
+// прошлым вызовом в окне аренды. Захват строки (SET status='sent') стоит
+// ПОСЛЕ этого вызова (вплотную перед sendMessage) — запас в 60с покрывает и
+// сам LLM-вызов, и остальные шаги между арендой (LEASE_SQL проставляет
+// last_attempt_at) и капчуром (isAllowed/YClients-проверки/applyBonus), но
+// это НЕ железная гарантия против повторной аренды той же строки ДРУГИМ
+// процессом при горизонтальном масштабировании воркера — только запас на
+// один процесс с внутрипроцессным guard'ом _tickInFlight (текущий деплой:
+// pm2 fork, один инстанс). При переходе на несколько инстансов нужен либо
+// явный distributed lock, либо увеличение backoff'а с новым запасом.
 const LLM_TIMEOUT_MS      = 60000;
 // Предел терпения к паузе администратора: она обычно снимается вечерним
 // sweep'ом, но ждать бесконечно нельзя — напоминание протухнет по смыслу.
@@ -74,13 +87,35 @@ const defaultDeps = {
       [ruleId, phone]);
     return !!r;
   },
-  mute: async (salonId, ruleId, phone, reason) => {
+  // source: 'auto' (по умолчанию, отправлено штатно) | 'manual' — ручной
+  // отказ клиента (action='stop_program' care-прохода в режиме free).
+  // enroll.js снимает флаг автоматически при следующем визите ТОЛЬКО у
+  // source='auto' — 'manual' держится, пока не снимет человек, иначе клиент,
+  // попросивший не писать, был бы переподписан первым же визитом.
+  mute: async (salonId, ruleId, phone, reason, source = 'auto') => {
     await realDb.query(
       `INSERT INTO reminder_suppressions (salon_id, rule_id, phone, muted, reason, source, muted_at, updated_at)
-       VALUES ($1,$2,$3,TRUE,$4,'auto',NOW(),NOW())
+       VALUES ($1,$2,$3,TRUE,$4,$5,NOW(),NOW())
        ON CONFLICT (rule_id, phone) DO UPDATE
-         SET muted=TRUE, reason=$4, source='auto', muted_at=NOW(), reset_at=NULL, updated_at=NOW()`,
-      [salonId, ruleId, phone, reason]);
+         SET muted=TRUE, reason=$4, source=$5, muted_at=NOW(), reset_at=NULL, updated_at=NOW()`,
+      [salonId, ruleId, phone, reason, source]);
+  },
+  // Тот же механизм, что care-воркер (services/care/worker.js) и
+  // tools/escalate-to-operator.js: status='escalated' + emitAgentStatus
+  // (красный чат сверху списка немедленно). Upsert, а не UPDATE: клиент мог
+  // никогда не писать агенту — строки agent_dialogs у него ещё нет.
+  escalateDialog: async (salonId, phone, reason) => {
+    await realDb.query(
+      `INSERT INTO agent_dialogs (salon_id, dialog_key, status, escalated_reason)
+       VALUES ($1,$2,'escalated',$3)
+       ON CONFLICT (salon_id, dialog_key) DO UPDATE
+         SET status='escalated', escalated_reason=$3, updated_at=now()`,
+      [salonId, phone, reason]);
+    await realDb.query(
+      `INSERT INTO agent_events (salon_id, dialog_key, kind, tool_name, payload)
+       VALUES ($1,$2,'escalated','reminders_worker',$3)`,
+      [salonId, phone, JSON.stringify({ reason })]);
+    chatEvents.emitAgentStatus(salonId, phone, 'escalated', reason);
   },
   sentTodayExists: (salonId, phone) => dailyLimit.sentTodayExists(realDb, salonId, phone),
   loadClientRecords: careContext.loadClientRecords,
@@ -142,7 +177,15 @@ async function deferRow(db, row, reason, bumpDefers = false) {
     [row.id, plusOneDay(new Date(base)), reason]);
 }
 
-/** Текст напоминания: strict — шаблон, free — Мила по заготовке смысла. */
+/**
+ * Решение по напоминанию: strict — всегда {action:'send', text, reason:null}
+ * (шаблон детерминирован). free — Мила решает по заготовке смысла тем же
+ * care-промптом, и решение может быть 'send'/'skip'/'escalate'/'stop_program'
+ * (см. care/decision.js) — вызывающий обязан разобрать ВСЕ варианты, а не
+ * только 'send': промпт обещает пациенту эскалацию при осложнении и
+ * прекращение цепочки по просьбе «не пишите мне», и оба обещания нужно
+ * реально выполнить, а не тихо погасить сообщением «текст напоминания пуст».
+ */
 async function buildText(row, bonus, deps) {
   const services = Array.isArray(row.anchor_services) ? row.anchor_services : [];
   const days = row.anchor_visit_at
@@ -164,7 +207,9 @@ async function buildText(row, bonus, deps) {
   const raw = bonus.tier === 'no_bonus' ? String(row.rule_text || '')
                                         : pickTierText(tier, row.rule_text);
 
-  if (row.text_mode !== 'free') return renderReminderText(raw, tplCtx);
+  if (row.text_mode !== 'free') {
+    return { action: 'send', text: renderReminderText(raw, tplCtx), reason: null };
+  }
 
   // free: заготовка смысла (уже с подставленными цифрами) уходит в тот же
   // care-промпт — отдельного промпта для напоминаний не заводим.
@@ -195,8 +240,9 @@ async function buildText(row, bonus, deps) {
       }),
     ]);
   } finally { clearTimeout(timer); }
-  const decision = parseCareDecision(resp && resp.text);
-  return decision.action === 'send' ? decision.text : null;
+  // parseCareDecision уже возвращает форму {action, text?, reason, status?} —
+  // ровно то, что нужно вызывающему; отдельного маппинга не требуется.
+  return parseCareDecision(resp && resp.text);
 }
 
 async function processOne(row, deps = defaultDeps) {
@@ -264,18 +310,15 @@ async function processOne(row, deps = defaultDeps) {
       return finish('cancelled', 'повторный визит уже состоялся');
     }
 
-    // ── захват строки: с этого момента она наша ────────────────
-    const marked = await db.query(
-      `UPDATE reminder_queue SET status='sent', sent_at=NOW(), error=NULL
-        WHERE id=$1 AND status='scheduled'`, [row.id]);
-    if (!marked || !marked.rowCount) {
-      d.log.info(`row #${row.id}: строка перехвачена другим исходом — не отправляем`);
-      return;
-    }
-
     // ── бонусы: строго один раз на строку ──────────────────────
     // Начисление НЕОБРАТИМО, поэтому повторная попытка (сбой отправки → откат
     // в scheduled) обязана взять уже записанный результат, а не начислить ещё раз.
+    // Бонусы считаются ДО захвата строки — это БЕЗОПАСНЕЕ, а не просто
+    // «раньше по коду»: крэш между начислением и отправкой оставляет строку
+    // 'scheduled' с уже записанным bonus_accrued, следующая аренда его не
+    // начислит повторно (ветка ниже), а сообщение всё-таки уйдёт. Обратный
+    // порядок (бонусы после захвата) оставлял бы строку ложно 'sent' —
+    // деньги начислены, сообщения нет, и строку больше никто не арендует.
     let bonus;
     if (row.bonus_accrued != null || row.bonus_tier != null) {
       bonus = { balanceBefore: row.balance_before, tier: row.bonus_tier,
@@ -290,17 +333,62 @@ async function processOne(row, deps = defaultDeps) {
       bonus = { balanceBefore: null, tier: 'no_bonus', accrued: 0, txnOk: null };
     }
 
-    // ── текст ──────────────────────────────────────────────────
-    const text = await buildText(row, bonus, d);
-    if (!text || !String(text).trim()) return finish('skipped', 'текст напоминания пуст');
+    // ── решение и текст ────────────────────────────────────────
+    // buildText зовёт LLM в режиме free (до LLM_TIMEOUT_MS=60с) — строка
+    // ЕЩЁ 'scheduled' в этот момент, захват — только ниже, вплотную перед
+    // sendMessage (см. комментарий у капчура).
+    const decision = await buildText(row, bonus, d);
+
+    if (decision.action === 'escalate') {
+      // Осложнение в переписке (промпт care-прохода): касание НЕ отправляем,
+      // к пациенту как можно скорее подключается человек. Порядок
+      // сознательный: если escalateDialog упадёт, decision.reason ещё не
+      // записан в БД — общий catch вернёт строку на ретрай, и эскалация
+      // будет повторена, а не потеряна с уже-skipped строкой.
+      const why = decision.reason || 'осложнение в переписке';
+      await d.escalateDialog(sid, row.phone, why);
+      return finish('skipped', `Мила: эскалация — ${why}`);
+    }
+    if (decision.action === 'stop_program') {
+      // Просьба «не пишите мне»: source='manual' — в отличие от штатного
+      // мьюта после отправки (source='auto'), этот НЕ снимается автоматически
+      // при следующем визите (enroll.js фильтрует по source='auto').
+      const why = decision.reason || 'клиент попросил не писать';
+      await d.mute(sid, row.rule_id, row.phone, why, 'manual');
+      return finish('cancelled', `Мила: ${why}`);
+    }
+
+    // decision.reason — единственное объяснение немедленного решения Милы
+    // (в т.ч. fail-safe skip из parseCareDecision) — обязано попасть в
+    // decision_reason строки, а не тонуть в общей формулировке. Пустой текст
+    // без причины (strict-режим на пустом шаблоне) — прежняя формулировка.
+    const text = decision.action === 'send' ? decision.text : null;
+    if (!text || !String(text).trim()) {
+      return finish('skipped', decision.reason ? `Мила: ${decision.reason}` : 'текст напоминания пуст');
+    }
     const viol = d.hardViolations(d.lintReply(text, {}));
     if (viol.length) return finish('skipped', `reply-guard: ${viol.map(v => v.type).join(',')}`);
 
     const last = await d.lastIncomingChannel(sid, row.phone).catch(() => null);
     const routing = notifications.resolveRouting([], true, last);
-    await db.query(
-      `UPDATE reminder_queue SET rendered_text=$2, routing=$3::jsonb WHERE id=$1`,
+
+    // ── захват строки: с этого момента она наша ────────────────
+    // ПОСЛЕДНИЙ гейт перед side-effect'ами — вплотную перед sendMessage, а не
+    // до бонусов/buildText (как было раньше). Тот же приём, что в
+    // care-воркере (услуга-донор паттерна): падение процесса (OOM,
+    // pm2 restart) между старым ранним захватом и реальной отправкой
+    // оставляло строку 'sent' без rendered_text/delivery_id и БЕЗ отправки —
+    // LEASE_SQL арендует только 'scheduled', и такая строка терялась бы
+    // навсегда, выглядя в дашборде отправленной.
+    const marked = await db.query(
+      `UPDATE reminder_queue
+          SET status='sent', sent_at=NOW(), error=NULL, rendered_text=$2, routing=$3::jsonb
+        WHERE id=$1 AND status='scheduled'`,
       [row.id, text, JSON.stringify(routing)]);
+    if (!marked || !marked.rowCount) {
+      d.log.info(`row #${row.id}: строка перехвачена другим исходом — не отправляем`);
+      return;
+    }
 
     // ── отправка ───────────────────────────────────────────────
     const delivery = await d.sendMessage({ text, phone: row.phone, dispatchRouting: routing });

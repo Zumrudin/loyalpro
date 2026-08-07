@@ -47,6 +47,7 @@ function makeDeps(over = {}) {
       rememberPending: jest.fn(async () => {}),
       persistWhatsapp: jest.fn(async () => {}),
       mute: jest.fn(async () => {}),
+      escalateDialog: jest.fn(async () => {}),
       log: { info: jest.fn(), warn: jest.fn(), error: jest.fn() },
       ...over,
     },
@@ -54,6 +55,14 @@ function makeDeps(over = {}) {
 }
 
 const find = (updates, re) => updates.filter(u => re.test(u.sql));
+
+// Порядок вызовов через глобальный счётчик jest (invocationCallOrder) — тот
+// же приём для мока db.query (у него много разных SQL за один processOne):
+// находим ПЕРВЫЙ вызов, чей SQL матчит regex, и берём его порядковый номер.
+function firstQueryOrder(queryMock, re) {
+  const idx = queryMock.mock.calls.findIndex(([sql]) => re.test(sql));
+  return idx === -1 ? null : queryMock.mock.invocationCallOrder[idx];
+}
 
 describe('гейты', () => {
   test('правило выключено → skipped', async () => {
@@ -195,8 +204,15 @@ describe('отправка и бонусы', () => {
     expect(find(updates, /bonus_accrued=\$4/).length).toBe(1);
   });
 
-  // Захват строки условным UPDATE — последний гейт перед side-effect'ами.
-  test('перехваченная строка не отправляется и бонусы не начисляет', async () => {
+  // Захват строки условным UPDATE — теперь ПОСЛЕДНИЙ гейт перед самой
+  // отправкой (после бонусов и buildText, см. «захват — после бонусов и
+  // buildText» ниже), поэтому к моменту перехвата бонусы уже МОГЛИ быть
+  // начислены — это ожидаемо и безопасно: результат уже записан в строку
+  // (bonus_accrued и т.д.), следующая аренда его не начислит повторно
+  // (ветка bonus_accrued != null), а не отправленное сообщение просто не
+  // уйдёт. Поэтому здесь мы проверяем главное — не отправку и не мьют, а
+  // не сами бонусы.
+  test('перехваченная строка не отправляется', async () => {
     const { deps } = makeDeps({
       db: {
         any: jest.fn(async () => []),
@@ -205,7 +221,6 @@ describe('отправка и бонусы', () => {
       },
     });
     await worker.processOne(ROW, deps);
-    expect(deps.applyBonus).not.toHaveBeenCalled();
     expect(deps.sendMessage).not.toHaveBeenCalled();
     expect(deps.mute).not.toHaveBeenCalled();
   });
@@ -295,6 +310,86 @@ describe('отправка и бонусы', () => {
     const { deps } = makeDeps({ sendMessage: jest.fn(async () => ({ id: 1, channel: 'whatsapp' })) });
     await worker.processOne(ROW, deps);
     expect(deps.persistWhatsapp).toHaveBeenCalled();
+  });
+
+  // КРИТИЧНО (ревью): захват строки (SET status='sent') обязан идти ПОСЛЕ
+  // бонусов и ПОСЛЕ buildText (в т.ч. LLM-вызова в режиме free), а не до —
+  // иначе крэш процесса в этом окне (OOM, pm2 restart) оставляет строку
+  // status='sent' без reality отправки, и LEASE_SQL её больше не арендует
+  // никогда (арендует только 'scheduled').
+  test('захват строки происходит ПОСЛЕ applyBonus', async () => {
+    const { deps } = makeDeps();
+    await worker.processOne(ROW, deps);
+    const bonusOrder = deps.applyBonus.mock.invocationCallOrder[0];
+    const captureOrder = firstQueryOrder(deps.db.query, /SET status='sent'/);
+    expect(bonusOrder).not.toBeNull();
+    expect(captureOrder).not.toBeNull();
+    expect(bonusOrder).toBeLessThan(captureOrder);
+  });
+
+  test('в режиме free захват строки происходит ПОСЛЕ createMessage (LLM)', async () => {
+    const { deps } = makeDeps({
+      createMessage: jest.fn(async () => ({ text: '{"action":"send","text":"Мария, привет!","reason":"ок"}' })),
+    });
+    await worker.processOne({ ...ROW, text_mode: 'free' }, deps);
+    const llmOrder = deps.createMessage.mock.invocationCallOrder[0];
+    const captureOrder = firstQueryOrder(deps.db.query, /SET status='sent'/);
+    expect(llmOrder).not.toBeNull();
+    expect(captureOrder).not.toBeNull();
+    expect(llmOrder).toBeLessThan(captureOrder);
+  });
+
+  // КРИТИЧНО (ревью): care-промпт обещает action='escalate' при осложнении
+  // после процедуры — воркер обязан реально перевести диалог на оператора
+  // тем же способом, что care-воркер, а не молча гасить сообщение.
+  test('free + escalate: диалог эскалирован, сообщение не отправлено, причина в строке', async () => {
+    const { updates, deps } = makeDeps({
+      createMessage: jest.fn(async () => ({ text: '{"action":"escalate","reason":"пациент пишет про отёк"}' })),
+    });
+    await worker.processOne({ ...ROW, text_mode: 'free' }, deps);
+    expect(deps.sendMessage).not.toHaveBeenCalled();
+    expect(deps.escalateDialog).toHaveBeenCalledWith(1, '79200255591', expect.stringContaining('пациент пишет про отёк'));
+    const skipped = find(updates, /status='skipped'/);
+    expect(skipped.length).toBe(1);
+    expect(skipped[0].params.some(p => typeof p === 'string' && p.includes('пациент пишет про отёк'))).toBe(true);
+  });
+
+  // КРИТИЧНО (ревью): action='stop_program' (просьба «не пишите мне»)
+  // обязан гасить правило НАВСЕГДА (source='manual' — автоснятие при визите
+  // в enroll.js бьёт только по source='auto'), а не одно сообщение.
+  test('free + stop_program: не отправлено, флаг анти-повтора с источником manual, причина в строке', async () => {
+    const { updates, deps } = makeDeps({
+      createMessage: jest.fn(async () => ({ text: '{"action":"stop_program","status":"declined","reason":"просил не писать"}' })),
+    });
+    await worker.processOne({ ...ROW, text_mode: 'free' }, deps);
+    expect(deps.sendMessage).not.toHaveBeenCalled();
+    expect(deps.mute).toHaveBeenCalledWith(1, 5, '79200255591', expect.stringContaining('просил не писать'), 'manual');
+    const cancelled = find(updates, /status='cancelled'/);
+    expect(cancelled.length).toBe(1);
+    expect(cancelled[0].params.some(p => typeof p === 'string' && p.includes('просил не писать'))).toBe(true);
+  });
+
+  // decision.reason не должен теряться — раньше любой не-send исход тонул
+  // в общей формулировке «текст напоминания пуст».
+  test('free + skip: причина строки содержит reason LLM, а не общую формулировку', async () => {
+    const { updates, deps } = makeDeps({
+      createMessage: jest.fn(async () => ({ text: '{"action":"skip","reason":"пациент уже обсуждал это с оператором"}' })),
+    });
+    await worker.processOne({ ...ROW, text_mode: 'free' }, deps);
+    const skipped = find(updates, /status='skipped'/);
+    expect(skipped.length).toBe(1);
+    expect(skipped[0].params.some(p => typeof p === 'string' && p.includes('пациент уже обсуждал это с оператором'))).toBe(true);
+  });
+
+  // Таймаут/сбой LLM теперь происходит ДО захвата строки — строка не должна
+  // ни разу перейти в 'sent', отправка не должна происходить.
+  test('таймаут/сбой LLM: строка не переходит в sent, отправка не происходит', async () => {
+    const { updates, deps } = makeDeps({
+      createMessage: jest.fn(async () => { throw new Error('reminder LLM timeout 60000ms'); }),
+    });
+    await worker.processOne({ ...ROW, text_mode: 'free' }, deps);
+    expect(deps.sendMessage).not.toHaveBeenCalled();
+    expect(find(updates, /SET status='sent'/).length).toBe(0);
   });
 });
 
