@@ -319,19 +319,64 @@ async function processOne(row, deps = defaultDeps) {
     // начислит повторно (ветка ниже), а сообщение всё-таки уйдёт. Обратный
     // порядок (бонусы после захвата) оставлял бы строку ложно 'sent' —
     // деньги начислены, сообщения нет, и строку больше никто не арендует.
+    //
+    // Бонусы считаются РАНЬШЕ решения Милы (buildText/decision) по ДРУГОЙ
+    // причине: текст обязан содержать ФАКТИЧЕСКИ начисленную сумму, а не
+    // прогноз. Следствие — если решение окажется 'escalate'/'stop_program'
+    // (сообщение не уйдёт вовсе), деньги на карте клиента УЖЕ начислены
+    // необратимо. Разворачивать порядок («сначала решение, потом начисление»)
+    // не наша задача — это заметная переделка воркера, решение владельца
+    // продукта; здесь только видимость такого исхода — WARN + decision_reason
+    // у веток escalate/stop_program ниже.
+    //
+    // Окно двойного начисления: у ycAccrueCard (внутри applyBonus) НЕТ ключа
+    // идемпотентности. Если applyBonus УЖЕ реально начислил деньги, а процесс
+    // упал/оборвал соединение с БД ДО того, как результат записан в
+    // bonus_accrued, при повторной аренде строка снова видна с
+    // bonus_accrued IS NULL и снова вошла бы в эту ветку — деньги начислились
+    // бы ВТОРОЙ раз, откатить нельзя. Поэтому строка сначала помечается
+    // НАМЕРЕНИЕМ ('pending') ДО вызова applyBonus: если процесс упадёт после
+    // начисления, но до записи результата, следующая аренда увидит
+    // bonus_tier='pending' и НЕ будет начислять повторно (неизвестно, состоялось
+    // ли оно) — пропущенное начисление дешевле двойного, та же философия
+    // at-most-once доставки.
     let bonus;
-    if (row.bonus_accrued != null || row.bonus_tier != null) {
+    if (row.bonus_tier === 'pending') {
+      // Прошлая попытка оборвалась ровно в этом окне — неизвестно, состоялось
+      // ли начисление. Про сумму бонусов клиенту сообщать НЕЛЬЗЯ (могло не
+      // случиться), уходит базовый текст без бонусной части; факт требует
+      // ручной проверки карты клиента человеком — отсюда WARN.
+      d.log.warn(`row #${row.id}: bonus_tier='pending' — прошлая попытка начисления оборвалась между YClients и записью результата; карту клиента нужно проверить вручную, сообщение уйдёт без бонусной части`);
+      bonus = { balanceBefore: null, tier: 'no_bonus', accrued: 0, txnOk: null,
+                pendingNote: 'бонус не подтверждён (pending) — сообщение без бонусной части, требуется ручная проверка карты клиента' };
+    } else if (row.bonus_accrued != null || row.bonus_tier != null) {
       bonus = { balanceBefore: row.balance_before, tier: row.bonus_tier,
                 accrued: row.bonus_accrued || 0, txnOk: row.bonus_txn_ok };
     } else if (row.bonus_enabled) {
-      bonus = await d.applyBonus(sid, row.yclients_client_id, row.bonus_tiers, row.rule_title);
-      await db.query(
-        `UPDATE reminder_queue SET balance_before=$2, bonus_tier=$3, bonus_accrued=$4, bonus_txn_ok=$5
-          WHERE id=$1`,
-        [row.id, bonus.balanceBefore, bonus.tier, bonus.accrued, bonus.txnOk]);
+      const claim = await db.query(
+        `UPDATE reminder_queue SET bonus_tier='pending' WHERE id=$1 AND bonus_tier IS NULL`,
+        [row.id]);
+      if (!claim || !claim.rowCount) {
+        // Заявку перехватили (параллельный процесс/повторная аренда той же
+        // строки) — не начисляем в этом заходе, риск задвоения того не стоит.
+        d.log.info(`row #${row.id}: заявку на бонус перехватили — не начисляем в этом заходе`);
+        bonus = { balanceBefore: null, tier: 'no_bonus', accrued: 0, txnOk: null };
+      } else {
+        bonus = await d.applyBonus(sid, row.yclients_client_id, row.bonus_tiers, row.rule_title);
+        await db.query(
+          `UPDATE reminder_queue SET balance_before=$2, bonus_tier=$3, bonus_accrued=$4, bonus_txn_ok=$5
+            WHERE id=$1`,
+          [row.id, bonus.balanceBefore, bonus.tier, bonus.accrued, bonus.txnOk]);
+      }
     } else {
       bonus = { balanceBefore: null, tier: 'no_bonus', accrued: 0, txnOk: null };
     }
+
+    // Факт «деньги уже необратимо начислены, а решение может погасить
+    // сообщение» — см. комментарий выше у объявления bonus.
+    const bonusAccruedNote = (bonus.tier === 'accrue' && bonus.accrued > 0)
+      ? `бонусы (${bonus.accrued}) уже начислены на карту клиента, но сообщение не отправлено`
+      : null;
 
     // ── решение и текст ────────────────────────────────────────
     // buildText зовёт LLM в режиме free (до LLM_TIMEOUT_MS=60с) — строка
@@ -346,16 +391,25 @@ async function processOne(row, deps = defaultDeps) {
       // записан в БД — общий catch вернёт строку на ретрай, и эскалация
       // будет повторена, а не потеряна с уже-skipped строкой.
       const why = decision.reason || 'осложнение в переписке';
+      // bonusAccruedNote: деньги уже могли уйти на карту клиента ДО этого
+      // решения (бонусы считаются раньше decision, см. комментарий выше) —
+      // сообщение не уйдёт, и это нельзя пропустить: WARN + decision_reason.
+      if (bonusAccruedNote) d.log.warn(`row #${row.id}: эскалация после начисления бонусов — ${bonusAccruedNote}`);
       await d.escalateDialog(sid, row.phone, why);
-      return finish('skipped', `Мила: эскалация — ${why}`);
+      return finish('skipped', bonusAccruedNote
+        ? `Мила: эскалация — ${why}; ${bonusAccruedNote}`
+        : `Мила: эскалация — ${why}`);
     }
     if (decision.action === 'stop_program') {
       // Просьба «не пишите мне»: source='manual' — в отличие от штатного
       // мьюта после отправки (source='auto'), этот НЕ снимается автоматически
       // при следующем визите (enroll.js фильтрует по source='auto').
       const why = decision.reason || 'клиент попросил не писать';
+      if (bonusAccruedNote) d.log.warn(`row #${row.id}: stop_program после начисления бонусов — ${bonusAccruedNote}`);
       await d.mute(sid, row.rule_id, row.phone, why, 'manual');
-      return finish('cancelled', `Мила: ${why}`);
+      return finish('cancelled', bonusAccruedNote
+        ? `Мила: ${why}; ${bonusAccruedNote}`
+        : `Мила: ${why}`);
     }
 
     // decision.reason — единственное объяснение немедленного решения Милы
@@ -398,8 +452,10 @@ async function processOne(row, deps = defaultDeps) {
     const channelUsed = (delivery && (delivery.channel || delivery.messenger)) || routing[0] || null;
     await db.query(
       `UPDATE reminder_queue SET delivery_id=$2, channel_used=$3, decision_reason=$4 WHERE id=$1`,
+      // pendingNote (только у bonus_tier='pending', см. выше) объясняет
+      // администратору, почему в ЭТОМ сообщении нет бонусной части.
       [row.id, delivery && delivery.id != null ? String(delivery.id) : null, channelUsed,
-       `отправлено, ступень ${bonus.tier}`]
+       bonus.pendingNote || `отправлено, ступень ${bonus.tier}`]
     ).catch(e => d.log.error(`persist delivery #${row.id}: ${e.message}`));
 
     // Флаг анти-повтора вешается ТОЛЬКО за фактически отправленное сообщение.

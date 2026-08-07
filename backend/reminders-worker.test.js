@@ -393,6 +393,111 @@ describe('отправка и бонусы', () => {
   });
 });
 
+// КРИТИЧНО (финальное ревью): у ycAccrueCard (внутри applyBonus) НЕТ ключа
+// идемпотентности. Если между успешным начислением и записью результата
+// (UPDATE ... bonus_accrued=$4) процесс упадёт/оборвёт соединение с БД,
+// строка вернётся в scheduled с bonus_accrued IS NULL, и следующая аренда
+// СНОВА войдёт в ветку начисления — деньги спишутся дважды, откатить нельзя.
+// Единственная защита — записать НАМЕРЕНИЕ ('pending') ДО вызова applyBonus:
+// тогда при обрыве повторная аренда видит pending и НЕ начисляет повторно
+// (пропущенное начисление дешевле двойного — та же философия at-most-once).
+describe('окно двойного начисления (bonus_tier=pending)', () => {
+  test('сбой записи результата после успешного начисления: строка scheduled, помечена pending, повтор не начисляет', async () => {
+    const { updates, deps } = makeDeps({
+      db: {
+        any: jest.fn(async () => []),
+        query: jest.fn(async (sql, params) => {
+          updates.push({ sql, params });
+          if (/bonus_accrued=\$4/.test(sql)) throw new Error('connection lost');
+          return { rowCount: 1 };
+        }),
+        oneOrNone: jest.fn(async () => null),
+      },
+    });
+    await worker.processOne(ROW, deps);
+    expect(deps.applyBonus).toHaveBeenCalledTimes(1);
+    // Намерение записано ДО падения — строка в БД осталась помеченной pending.
+    expect(find(updates, /bonus_tier='pending'/).length).toBe(1);
+    // Отправки не произошло, строка вернулась в scheduled (не sent, не failed).
+    expect(deps.sendMessage).not.toHaveBeenCalled();
+    expect(find(updates, /SET status='scheduled'/).length).toBe(1);
+
+    // Повторный заход "как из БД" после сбоя: bonus_tier уже 'pending',
+    // bonus_accrued всё ещё NULL — applyBonus звать НЕЛЬЗЯ.
+    const { deps: deps2 } = makeDeps();
+    const retried = { ...ROW, bonus_tier: 'pending' };
+    await worker.processOne(retried, deps2);
+    expect(deps2.applyBonus).not.toHaveBeenCalled();
+  });
+
+  test('строка bonus_tier=pending уходит с базовым текстом без бонусной части и WARN в логе', async () => {
+    const { deps } = makeDeps();
+    const pendingRow = { ...ROW, bonus_tier: 'pending' };
+    await worker.processOne(pendingRow, deps);
+    expect(deps.applyBonus).not.toHaveBeenCalled();
+    expect(deps.log.warn).toHaveBeenCalled();
+    expect(deps.sendMessage).toHaveBeenCalledWith(expect.objectContaining({
+      text: 'Мария, пора повторить Лазерная эпиляция!',
+    }));
+  });
+
+  test('пометка pending ставится ДО вызова applyBonus', async () => {
+    const { deps } = makeDeps();
+    await worker.processOne(ROW, deps);
+    const claimOrder = firstQueryOrder(deps.db.query, /bonus_tier='pending'/);
+    const bonusOrder = deps.applyBonus.mock.invocationCallOrder[0];
+    expect(claimOrder).not.toBeNull();
+    expect(bonusOrder).not.toBeNull();
+    expect(claimOrder).toBeLessThan(bonusOrder);
+  });
+
+  test('claim rowCount=0 (кто-то опередил) → applyBonus не зовётся', async () => {
+    const { deps } = makeDeps({
+      db: {
+        any: jest.fn(async () => []),
+        query: jest.fn(async (sql) => ({ rowCount: /bonus_tier='pending'/.test(sql) ? 0 : 1 })),
+        oneOrNone: jest.fn(async () => null),
+      },
+    });
+    await worker.processOne(ROW, deps);
+    expect(deps.applyBonus).not.toHaveBeenCalled();
+  });
+});
+
+// Менее острая, но видимая проблема (финальное ревью): бонусы считаются
+// РАНЬШЕ решения Милы (текст обязан содержать фактическую сумму), поэтому
+// если решение окажется escalate/stop_program (сообщение не уйдёт вовсе),
+// деньги на карте клиента уже необратимо начислены. Порядок НЕ меняем — это
+// решение владельца продукта, а не техническое; здесь только наблюдаемость.
+describe('видимость: бонус начислен, а сообщение не уйдёт (escalate/stop_program)', () => {
+  test('free + escalate после начисления: decision_reason содержит причину модели И упоминание бонусов, WARN вызван', async () => {
+    const { updates, deps } = makeDeps({
+      applyBonus: jest.fn(async () => ({ balanceBefore: 120, tier: 'accrue', accrued: 300, txnOk: true })),
+      createMessage: jest.fn(async () => ({ text: '{"action":"escalate","reason":"пациент пишет про отёк"}' })),
+    });
+    await worker.processOne({ ...ROW, text_mode: 'free' }, deps);
+    expect(deps.log.warn).toHaveBeenCalled();
+    const skipped = find(updates, /status='skipped'/);
+    expect(skipped.length).toBe(1);
+    const reasonParam = skipped[0].params.find(p => typeof p === 'string');
+    expect(reasonParam).toEqual(expect.stringContaining('пациент пишет про отёк'));
+    expect(reasonParam).toEqual(expect.stringContaining('300'));
+  });
+
+  test('free + escalate без начисления (no_bonus): в decision_reason нет лишнего упоминания бонусов', async () => {
+    const { updates, deps } = makeDeps({
+      applyBonus: jest.fn(async () => ({ balanceBefore: null, tier: 'no_bonus', accrued: 0, txnOk: null })),
+      createMessage: jest.fn(async () => ({ text: '{"action":"escalate","reason":"пациент пишет про отёк"}' })),
+    });
+    await worker.processOne({ ...ROW, text_mode: 'free' }, deps);
+    const skipped = find(updates, /status='skipped'/);
+    expect(skipped.length).toBe(1);
+    const reasonParam = skipped[0].params.find(p => typeof p === 'string');
+    expect(reasonParam).toEqual(expect.stringContaining('пациент пишет про отёк'));
+    expect(reasonParam).not.toMatch(/бонус/i);
+  });
+});
+
 describe('processTick', () => {
   test('гасит строки удалённых правил', async () => {
     const { updates, deps } = makeDeps();
