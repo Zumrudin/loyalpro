@@ -34,6 +34,15 @@ const TIME_RE = /^([01]\d|2[0-3]):([0-5]\d)$/;
 const TEXT_MODES = ['free', 'strict'];
 const PAGE = 200;
 const MAX_PAGES = 25;                 // 5000 записей — потолок одного догона
+const MAX_BONUS_TIERS = 20;           // тот же кап, что на касания в care.js
+const BACKFILL_BATCH = 500;           // 12 параметров/строку × 500 = 6000 плейсхолдеров —
+                                       // с запасом под лимит PostgreSQL в 65535
+// Догон, уже идущий по правилу (id → true) — защита от двойного клика/двух
+// администраторов: без неё два одновременных запуска оба тянут до 25 страниц
+// YClients и оба считают выборку. Это ПРОЦЕССНАЯ защита (на проде — один
+// процесс PM2 fork), а не распределённый лок: при переходе на несколько
+// инстансов нужен отдельный механизм (в стиле _tickInFlight воркера).
+const backfillInFlight = new Set();
 
 /** 'YYYY-MM-DD' московской даты (как в care/preview.js). */
 function mskDate(d) {
@@ -73,6 +82,7 @@ function parseRuleBody(body) {
   // поэтому валидация недоверчивая — неизвестное действие отвергаем, а не
   // молча игнорируем.
   const rawTiers = Array.isArray(b.bonusTiers) ? b.bonusTiers : [];
+  if (rawTiers.length > MAX_BONUS_TIERS) return { error: `Слишком много ступеней (макс ${MAX_BONUS_TIERS})` };
   const tiers = [];
   for (const [i, t] of rawTiers.entries()) {
     if (!t || !TIER_ACTIONS.includes(t.action)) return { error: `Ступень ${i + 1}: неизвестное действие` };
@@ -198,9 +208,15 @@ async function buildBackfill(salonId, ruleId, days) {
     `SELECT * FROM reminder_rules WHERE id=$1 AND salon_id=$2`, [ruleId, salonId]);
   if (!rule) return { error: 'Правило не найдено', code: 404 };
 
-  const salon = await db.one(
+  // db.one в этом проекте НЕ бросает на пустой выборке — побайтово совпадает
+  // с oneOrNone (db.js:28-29), поэтому null проверяем явно. 404, а не 400:
+  // это тот же класс «ресурс не найден», что и проверка rule чуть выше —
+  // salon_id берётся из JWT, и его отсутствие в salons означает битый токен
+  // или удалённый салон, а не ошибку в теле запроса клиента.
+  const salon = await db.oneOrNone(
     `SELECT id, yclients_company_id, yclients_partner_token, yclients_user_token
        FROM salons WHERE id=$1`, [salonId]);
+  if (!salon) return { error: 'Салон не найден', code: 404 };
   if (!salon.yclients_company_id) return { error: 'У салона не настроен YClients', code: 400 };
 
   const nowMs = Date.now();
@@ -250,38 +266,105 @@ router.post('/rules/:id/backfill/preview', guard, async (req, res) => {
       catMapFailed: r.catMapFailed,
       lastScheduledAt: planned.length ? planned[planned.length - 1].scheduledAt : null,
     });
-  } catch (e) { log.error(e.message); res.status(500).json({ error: `Не удалось построить выборку: ${e.message}` }); }
+  } catch (e) {
+    log.error(`превью догона правила #${req.params.id}: ${e.message}`);
+    res.status(500).json({ error: 'Не удалось построить выборку' });
+  }
 });
 
+// Клиентов правила резолвим ОДНИМ запросом до цикла вставки (вместо SELECT
+// на каждую строку) — при потолке 5000 записей отдельные запросы упирались
+// в дефолтный proxy_read_timeout nginx (60с), админ видел 504, а цикл в
+// Node продолжал писать в фоне: «ошибка» на экране при успешно легших
+// строках. Приоритет соответствия — как раньше: сначала yclients_client_id,
+// потом телефон.
+async function resolveClients(salonId, rows) {
+  const ycIds = [...new Set(rows.map(r => r.ycClientId).filter(v => v != null))];
+  const phones = [...new Set(rows.map(r => r.phone).filter(Boolean))];
+  const byYcId = new Map();
+  const byPhone = new Map();
+  if (!ycIds.length && !phones.length) return { byYcId, byPhone };
+  const found = await db.any(
+    `SELECT id, yclients_client_id, phone FROM clients
+      WHERE salon_id=$1 AND (yclients_client_id = ANY($2::bigint[]) OR phone = ANY($3::text[]))`,
+    [salonId, ycIds, phones]);
+  for (const c of found) {
+    if (c.yclients_client_id != null && !byYcId.has(String(c.yclients_client_id))) {
+      byYcId.set(String(c.yclients_client_id), c.id);
+    }
+    if (c.phone && !byPhone.has(c.phone)) byPhone.set(c.phone, c.id);
+  }
+  return { byYcId, byPhone };
+}
+
+// Пачка многострочного INSERT вместо построчного — тот же таймаут-риск, что
+// у per-row SELECT клиента выше. Размер пачки (BACKFILL_BATCH=500) выбран с
+// запасом от лимита PostgreSQL на число параметров одного запроса (65535).
+// rowCount многострочного INSERT — число РЕАЛЬНО вставленных строк (те, что
+// столкнулись с ON CONFLICT DO NOTHING, в него не попадают), поэтому его
+// можно суммировать в queued без отдельного пересчёта.
+async function insertQueueBatch(salonId, rule, batch, clientMap) {
+  if (!batch.length) return 0;
+  const cols = ['salon_id', 'rule_id', 'rule_title', 'client_id', 'phone', 'yclients_client_id',
+                'anchor_record_id', 'anchor_visit_at', 'anchor_staff_name', 'anchor_services',
+                'scheduled_at', 'source'];
+  const tuples = [];
+  const params = [];
+  batch.forEach((row, i) => {
+    const clientId = clientMap.byYcId.get(String(row.ycClientId))
+      ?? clientMap.byPhone.get(row.phone)
+      ?? null;
+    const base = i * cols.length;
+    tuples.push(`($${base + 1},$${base + 2},$${base + 3},$${base + 4},$${base + 5},$${base + 6},` +
+                `$${base + 7},$${base + 8},$${base + 9},$${base + 10}::jsonb,$${base + 11},$${base + 12})`);
+    params.push(
+      salonId, rule.id, rule.title, clientId, row.phone, row.ycClientId,
+      row.recordId, row.visitAt, row.staffName || null, JSON.stringify(row.services),
+      row.scheduledAt, 'backfill');
+  });
+  const res = await db.query(
+    `INSERT INTO reminder_queue (${cols.join(', ')})
+     VALUES ${tuples.join(',')}
+     ON CONFLICT (rule_id, anchor_record_id) DO NOTHING`,
+    params);
+  return (res && res.rowCount) || 0;
+}
+
 router.post('/rules/:id/backfill', guard, async (req, res) => {
+  const ruleKey = req.params.id;
+  // Двойной клик / два администратора: оба прогона тратили бы квоту YClients
+  // вдвое и админы видели бы два разных числа. Защита ПРОЦЕССНАЯ (прод —
+  // один процесс PM2 fork), не распределённая — при горизонтальном
+  // масштабировании нужен отдельный механизм (в стиле _tickInFlight
+  // reminders-воркера).
+  if (backfillInFlight.has(ruleKey)) {
+    return res.status(409).json({ error: 'Догон по этому правилу уже выполняется' });
+  }
+  backfillInFlight.add(ruleKey);
   const days = Math.min(90, Math.max(1, Number(req.body && req.body.days) || 30));
+  let queued = 0;
   try {
-    const r = await buildBackfill(req.user.salonId, req.params.id, days);
+    const r = await buildBackfill(req.user.salonId, ruleKey, days);
     if (r.error) return res.status(r.code).json({ error: r.error });
     const planned = spreadOverDays(r.out.rows.filter(x => !x.skipReason), {
-      maxPerDay: r.rule.backfill_max_per_day, sendTime: r.rule.send_time });
+      maxPerDay: r.rule.backfill_max_per_day, sendTime: r.rule.send_time })
+      .filter(row => row.scheduledAt);
 
-    let queued = 0;
-    for (const row of planned) {
-      if (!row.scheduledAt) continue;
-      const client = await db.oneOrNone(
-        `SELECT id FROM clients WHERE salon_id=$1 AND (yclients_client_id=$2 OR phone=$3) LIMIT 1`,
-        [req.user.salonId, row.ycClientId, row.phone]);
-      const ins = await db.query(
-        `INSERT INTO reminder_queue
-           (salon_id, rule_id, rule_title, client_id, phone, yclients_client_id,
-            anchor_record_id, anchor_visit_at, anchor_staff_name, anchor_services,
-            scheduled_at, source)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11,'backfill')
-         ON CONFLICT (rule_id, anchor_record_id) DO NOTHING`,
-        [req.user.salonId, r.rule.id, r.rule.title, client ? client.id : null, row.phone,
-         row.ycClientId, row.recordId, row.visitAt, row.staffName || null,
-         JSON.stringify(row.services), row.scheduledAt]);
-      queued += (ins && ins.rowCount) || 0;
+    const clientMap = await resolveClients(req.user.salonId, planned);
+    for (let i = 0; i < planned.length; i += BACKFILL_BATCH) {
+      const batch = planned.slice(i, i + BACKFILL_BATCH);
+      queued += await insertQueueBatch(req.user.salonId, r.rule, batch, clientMap);
     }
     log.info(`догон правила #${r.rule.id}: поставлено ${queued} из ${planned.length}`);
     res.json({ queued, planned: planned.length, totals: r.out.totals });
-  } catch (e) { log.error(e.message); res.status(500).json({ error: `Не удалось выполнить догон: ${e.message}` }); }
+  } catch (e) {
+    // Падение в середине пачки не должно скрывать, сколько строк УЖЕ легло —
+    // иначе админу приходится идти в историю, чтобы понять, сработало ли.
+    log.error(`догон правила #${ruleKey}: ${e.message} (успело встать ${queued})`);
+    res.status(500).json({ error: 'Не удалось выполнить догон', queued });
+  } finally {
+    backfillInFlight.delete(ruleKey);
+  }
 });
 
 const QUEUE_COLUMNS = `
@@ -355,3 +438,8 @@ router.post('/suppressions/toggle', guard, async (req, res) => {
 });
 
 module.exports = router;
+// parseRuleBody вынесена наружу ради теста (reminders-routes.test.js) — сам
+// роутер прямых тестов в проекте не имеет (как и routes/care.js), но
+// валидация тела правила чистая и легко проверяется без HTTP/БД. Не меняет
+// поведение маршрутов: router — тот же объект, что и раньше, со свойством.
+module.exports.parseRuleBody = parseRuleBody;

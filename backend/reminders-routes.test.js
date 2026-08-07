@@ -1,0 +1,134 @@
+'use strict';
+// Валидация тела правила напоминаний (routes/reminders.js). Роутер прямых
+// тестов не имеет (как и routes/care.js), но parseRuleBody — чистая функция
+// без БД/сети, вынесенная наружу свойством модуля именно ради этого теста.
+const { parseRuleBody } = require('./routes/reminders');
+
+// Минимальное валидное тело — база для мутаций в отдельных тестах.
+function validBody(overrides = {}) {
+  return {
+    title: 'Повтор через месяц',
+    conditions: { logic: 'and', items: [{ type: 'category', ids: [1] }] },
+    delayDays: 30,
+    sendTime: '11:00',
+    textMode: 'strict',
+    text: '{first_name}, пора повторить визит!',
+    attributionDays: 30,
+    backfillMaxPerDay: 30,
+    bonusEnabled: false,
+    bonusTiers: [],
+    ...overrides,
+  };
+}
+
+describe('parseRuleBody', () => {
+  test('валидное тело проходит без ошибок', () => {
+    const r = parseRuleBody(validBody());
+    expect(r.error).toBeUndefined();
+    expect(r.value.title).toBe('Повтор через месяц');
+    expect(r.value.conditions).toEqual({ logic: 'and', items: [{ type: 'category', ids: [1] }] });
+  });
+
+  test('пустой title отвергается', () => {
+    expect(parseRuleBody(validBody({ title: '  ' })).error).toBe('Название обязательно');
+  });
+
+  test('слишком длинный title отвергается', () => {
+    expect(parseRuleBody(validBody({ title: 'x'.repeat(256) })).error).toBe('Название слишком длинное');
+  });
+
+  test('условия без ни одного заполненного item отвергаются', () => {
+    const r = parseRuleBody(validBody({ conditions: { logic: 'and', items: [] } }));
+    expect(r.error).toMatch(/хотя бы одно условие/);
+  });
+
+  test('item с типом вне списка и item с пустыми ids отфильтровываются, оставляя условия пустыми', () => {
+    const r = parseRuleBody(validBody({
+      conditions: { logic: 'and', items: [{ type: 'unknown', ids: [1] }, { type: 'staff', ids: [] }] },
+    }));
+    expect(r.error).toMatch(/хотя бы одно условие/);
+  });
+
+  test.each([0, -1, 1.5, 731, NaN])('delayDays=%p отвергается (диапазон 1–730)', (delayDays) => {
+    expect(parseRuleBody(validBody({ delayDays })).error).toBe('Задержка 1–730 дней');
+  });
+
+  test('пустой текст отвергается', () => {
+    expect(parseRuleBody(validBody({ text: '   ' })).error).toBe('Текст напоминания пуст');
+  });
+
+  test('слишком длинный текст отвергается', () => {
+    expect(parseRuleBody(validBody({ text: 'x'.repeat(2001) })).error).toBe('Текст слишком длинный');
+  });
+
+  test.each([0, -1, 366, NaN])('attributionDays=%p отвергается (диапазон 1–365)', (attributionDays) => {
+    expect(parseRuleBody(validBody({ attributionDays })).error).toBe('Окно атрибуции 1–365 дней');
+  });
+
+  test.each([0, -1, 501, NaN])('backfillMaxPerDay=%p отвергается (диапазон 1–500)', (backfillMaxPerDay) => {
+    expect(parseRuleBody(validBody({ backfillMaxPerDay })).error).toBe('Кап догона 1–500 в день');
+  });
+
+  test('невалидный sendTime тихо заменяется дефолтом 11:00', () => {
+    const r = parseRuleBody(validBody({ sendTime: '25:99' }));
+    expect(r.error).toBeUndefined();
+    expect(r.value.sendTime).toBe('11:00');
+  });
+
+  test('неизвестный textMode тихо заменяется дефолтом strict', () => {
+    const r = parseRuleBody(validBody({ textMode: 'wat' }));
+    expect(r.error).toBeUndefined();
+    expect(r.value.textMode).toBe('strict');
+  });
+
+  describe('ступени бонусов', () => {
+    // Новый кап — предмет ревью: соседний parseProgramBody (routes/care.js)
+    // ограничивает список касаний тем же числом (20).
+    test('больше 20 ступеней отвергается', () => {
+      const bonusTiers = Array.from({ length: 21 }, (_, i) => ({ upTo: i, action: 'mention', amount: 0 }));
+      const r = parseRuleBody(validBody({ bonusEnabled: true, bonusTiers }));
+      expect(r.error).toBe('Слишком много ступеней (макс 20)');
+    });
+
+    test('ровно 20 ступеней проходит', () => {
+      const bonusTiers = Array.from({ length: 20 }, (_, i) => ({ upTo: i, action: 'mention', amount: 0 }));
+      const r = parseRuleBody(validBody({ bonusEnabled: true, bonusTiers }));
+      expect(r.error).toBeUndefined();
+      expect(r.value.bonusTiers).toHaveLength(20);
+    });
+
+    test('неизвестное action отвергается', () => {
+      const r = parseRuleBody(validBody({
+        bonusEnabled: true,
+        bonusTiers: [{ upTo: null, action: 'delete_everything', amount: 100 }],
+      }));
+      expect(r.error).toBe('Ступень 1: неизвестное действие');
+    });
+
+    test('accrue с нулевой суммой отвергается', () => {
+      const r = parseRuleBody(validBody({
+        bonusEnabled: true,
+        bonusTiers: [{ upTo: null, action: 'accrue', amount: 0 }],
+      }));
+      expect(r.error).toBe('Ступень 1: сумма начисления должна быть больше нуля');
+    });
+
+    test('сумма больше 100000 отвергается', () => {
+      const r = parseRuleBody(validBody({
+        bonusEnabled: true,
+        bonusTiers: [{ upTo: null, action: 'accrue', amount: 100001 }],
+      }));
+      expect(r.error).toBe('Ступень 1: сумма начисления слишком велика');
+    });
+
+    test('bonusEnabled без единой ступени отвергается', () => {
+      const r = parseRuleBody(validBody({ bonusEnabled: true, bonusTiers: [] }));
+      expect(r.error).toBe('Бонусы включены, но ни одной ступени не задано');
+    });
+
+    test('bonusEnabled=false с пустыми ступенями — валидно', () => {
+      const r = parseRuleBody(validBody({ bonusEnabled: false, bonusTiers: [] }));
+      expect(r.error).toBeUndefined();
+    });
+  });
+});
