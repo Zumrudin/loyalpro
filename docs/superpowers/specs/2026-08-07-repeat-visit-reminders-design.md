@@ -103,7 +103,8 @@ id BIGSERIAL, salon_id,
 rule_id INTEGER REFERENCES reminder_rules(id) ON DELETE SET NULL,
 rule_title VARCHAR(255),                     -- денормализовано: журнал переживает удаление правила
 client_id, phone VARCHAR(20), yclients_client_id BIGINT,
-anchor_record_id BIGINT, anchor_visit_at TIMESTAMPTZ, anchor_services JSONB,
+anchor_record_id BIGINT, anchor_visit_at TIMESTAMPTZ,
+anchor_staff_name VARCHAR(255), anchor_services JSONB,
 scheduled_at TIMESTAMPTZ NOT NULL,
 status VARCHAR(20) DEFAULT 'scheduled',      -- scheduled|sent|skipped|cancelled|failed
 attempts INTEGER DEFAULT 0, defers INTEGER DEFAULT 0,
@@ -305,7 +306,6 @@ POST   /rules/:id/toggle            вкл/выкл
 DELETE /rules/:id                   удалить (история остаётся)
 POST   /rules/:id/backfill/preview  превью догона
 POST   /rules/:id/backfill          выполнить догон
-GET    /queue                       запланированные отправки
 POST   /queue/:id/cancel            отменить запланированную
 GET    /history                     журнал с фильтрами и пагинацией
 POST   /suppressions/toggle         ручной тумблер {ruleId, phone, muted}
@@ -329,7 +329,10 @@ POST   /suppressions/toggle         ручной тумблер {ruleId, phone, 
 
 История — таблица: дата, клиент, правило, ступень и начисленные бонусы, текст
 сообщения, статус, «записался» (дата и услуга), «дошёл», кнопка тумблера
-«Разрешить снова / Запретить» в строке.
+«Разрешить снова / Запретить» в строке. Отдельной вкладки очереди нет:
+запланированные строки видны здесь же по фильтру статуса «Запланировано», и
+оттуда же их можно отменить — иначе пришлось бы держать две почти одинаковые
+таблицы.
 
 ## Подстановки шаблона
 
