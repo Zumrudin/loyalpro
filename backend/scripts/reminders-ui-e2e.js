@@ -11,9 +11,15 @@
 // открыть заново и проверить, что условие и ступени восстановились →
 // «👁 Догон» → «Показать выборку» на 30 дней (кнопку «Поставить в очередь»
 // НЕ нажимаем — иначе живым клиентам уйдут реальные сообщения) → вкладка
-// «🧾 История напоминаний»: заглушка «Отправок пока нет» для только что
-// созданного правила, фильтр правил его содержит, ошибок в консоли нет.
-// Чистит за собой: правило удаляется в конце (и в finally на всякий случай).
+// «🧾 История напоминаний»: сперва заглушка «Отправок пока нет» для только
+// что созданного правила, фильтр правил его содержит; затем строка истории
+// заводится НАПРЯМУЮ в БД (status=sent, бонусы, телефон) — проверяем рендер
+// (статус/бонус), кнопку «Запретить»/«Разрешить снова» и что клик реально
+// ставит/снимает флаг в reminder_suppressions (это путь, где живёт escJs()
+// в инлайн-обработчике remToggleMute — единственная UI-строка со статусом
+// sent, которую прежняя версия скрипта не проверяла вовсе). Ошибок в консоли
+// нет. Чистит за собой: тестовая строка очереди, флаг анти-повтора и само
+// правило удаляются в конце (и в finally на всякий случай).
 // ============================================================
 require('dotenv').config();
 const jwt = require('jsonwebtoken');
@@ -27,6 +33,7 @@ const fail = (m) => { throw new Error(m); };
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
 const RULE_TITLE = 'E2E-напоминание (тест, удалить)';
+const TEST_PHONE = '79990001122';
 
 async function main() {
   const user = await db.oneOrNone(
@@ -45,6 +52,7 @@ async function main() {
   });
   const consoleErrors = [];
   let ruleId = null;
+  let queueRowId = null;
   try {
     const page = await browser.newPage();
     await page.setViewport({ width: 1360, height: 900 });
@@ -191,9 +199,82 @@ async function main() {
     const histText = await page.$eval('#remHistBody', el => el.textContent);
     if (!/Отправок пока нет/.test(histText)) fail('ожидали заглушку «Отправок пока нет» для нового правила: ' + histText.slice(0, 200));
     ok('история по новому правилу пуста — заглушка «Отправок пока нет»');
+
+    // ── строка истории напрямую в БД: рендер, статус, бонусы, тумблер анти-повтора ──
+    // Пустая история выше не трогает саму разметку таблицы (кнопки, форматирование
+    // бонусов, инлайн-обработчик remToggleMute с телефоном внутри JS-строки) —
+    // заводим одну реальную строку, чтобы проверить именно её.
+    queueRowId = await db.one(
+      `INSERT INTO reminder_queue
+         (salon_id, rule_id, rule_title, phone, anchor_record_id, anchor_visit_at,
+          scheduled_at, status, sent_at, rendered_text, balance_before, bonus_tier, bonus_accrued, source)
+       VALUES (1, $1, $2, $3, -987654321, NOW() - interval '10 days',
+               NOW() - interval '9 days', 'sent', NOW() - interval '9 days',
+               'Тестовый текст напоминания для e2e', 150, 'accrue', 300, 'backfill')
+       RETURNING id`,
+      [ruleId, RULE_TITLE, TEST_PHONE]).then(r => r.id);
+
+    // фильтр уже стоит на нашем правиле — просто перезагружаем список
+    await page.evaluate(() => remLoadHistory());
+    await page.waitForFunction(() =>
+      document.getElementById('remHistBody').textContent.indexOf('Загрузка') === -1, { timeout: 15000 });
+    let rowText = await page.$eval('#remHistBody', el => el.textContent);
+    if (!rowText.includes(TEST_PHONE)) fail('тестовая строка истории не отрисовалась: ' + rowText.slice(0, 300));
+    if (!/Отправлено/.test(rowText)) fail('статус «Отправлено» не показан: ' + rowText.slice(0, 300));
+    if (!rowText.includes('+300')) fail('начисленный бонус +300 не показан: ' + rowText.slice(0, 300));
+    ok('строка истории отрисовалась: телефон, статус «Отправлено», бонус +300');
+
+    // «Запретить»: клик по инлайн-обработчику remToggleMute(ruleId, '<телефон через escJs>', true)
+    let clicked = await page.evaluate((phone) => {
+      const btn = [...document.querySelectorAll('#remHistBody button')]
+        .find(b => b.textContent.trim() === 'Запретить' && b.closest('tr').textContent.includes(phone));
+      if (!btn) return false;
+      btn.click();
+      return true;
+    }, TEST_PHONE);
+    if (!clicked) fail('кнопка «Запретить» не найдена в строке истории');
+    await sleep(600); // remToggleMute сама зовёт remLoadHistory() после успешного ответа
+
+    let suppression = await db.oneOrNone(
+      `SELECT muted FROM reminder_suppressions WHERE rule_id=$1 AND phone=$2`, [ruleId, TEST_PHONE]);
+    if (!suppression || suppression.muted !== true) {
+      fail('после «Запретить» флаг muted не выставился в БД: ' + JSON.stringify(suppression));
+    }
+    ok('«Запретить»: в reminder_suppressions выставлен muted=true');
+
+    rowText = await page.$eval('#remHistBody', el => el.textContent);
+    if (!/Разрешить снова/.test(rowText)) {
+      fail('после запрета кнопка не сменилась на «Разрешить снова»: ' + rowText.slice(0, 300));
+    }
+    ok('кнопка сменилась на «Разрешить снова»');
+
+    // «Разрешить снова»: обратный клик должен снять флаг
+    clicked = await page.evaluate((phone) => {
+      const btn = [...document.querySelectorAll('#remHistBody button')]
+        .find(b => b.textContent.trim() === 'Разрешить снова' && b.closest('tr').textContent.includes(phone));
+      if (!btn) return false;
+      btn.click();
+      return true;
+    }, TEST_PHONE);
+    if (!clicked) fail('кнопка «Разрешить снова» не найдена');
+    await sleep(600);
+
+    suppression = await db.oneOrNone(
+      `SELECT muted FROM reminder_suppressions WHERE rule_id=$1 AND phone=$2`, [ruleId, TEST_PHONE]);
+    if (!suppression || suppression.muted !== false) {
+      fail('после «Разрешить снова» флаг muted не снялся: ' + JSON.stringify(suppression));
+    }
+    ok('«Разрешить снова»: флаг muted снят обратно (muted=false)');
+
+    await page.screenshot({ path: '/tmp/reminders-ui-light-history.png' });
+
+    // уборка тестовой строки истории и флага анти-повтора — дальше правило не должно
+    // светить их в истории после своего удаления
+    await db.query(`DELETE FROM reminder_queue WHERE id=$1`, [queueRowId]);
+    await db.query(`DELETE FROM reminder_suppressions WHERE rule_id=$1 AND phone=$2`, [ruleId, TEST_PHONE]);
+    queueRowId = null;
     await page.select('#remHistRule', '');
     await sleep(300);
-    await page.screenshot({ path: '/tmp/reminders-ui-light-history.png' });
 
     await page.evaluate(() => toggleDarkMode());
     await sleep(400);
@@ -219,6 +300,15 @@ async function main() {
     console.log('\n\x1b[32mREMINDERS UI E2E: OK\x1b[0m');
   } finally {
     await browser.close().catch(() => {});
+    // Порядок не важен для целостности (reminder_queue.rule_id ON DELETE SET
+    // NULL, reminder_suppressions.rule_id ON DELETE CASCADE), но чистим явно
+    // и по rule_title/phone, а не полагаемся на каскад — страховка на случай
+    // падения теста ДО того, как ruleId вообще определился.
+    await db.query(`DELETE FROM reminder_queue WHERE salon_id=1 AND rule_title=$1`, [RULE_TITLE]).catch(() => {});
+    await db.query(`DELETE FROM reminder_suppressions
+                      WHERE salon_id=1 AND phone=$1
+                        AND rule_id IN (SELECT id FROM reminder_rules WHERE salon_id=1 AND title=$2)`,
+      [TEST_PHONE, RULE_TITLE]).catch(() => {});
     await db.query(`DELETE FROM reminder_rules WHERE salon_id=1 AND title=$1`, [RULE_TITLE]).catch(() => {});
     await db.query(`DELETE FROM sessions WHERE user_agent='reminders-ui-e2e'`).catch(() => {});
   }

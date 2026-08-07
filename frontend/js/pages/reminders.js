@@ -84,7 +84,8 @@ async function remDeleteRule(id) {
 // ── редактор правила ───────────────────────────────────────────
 
 async function remOpenRuleModal(id) {
-  await careEnsureDicts();                       // общий словарь с «Заботой»
+  try { await careEnsureDicts(); }                // общий словарь с «Заботой»
+  catch (e) { notify('Ошибка справочников: ' + e.message, 'err'); return; }
   condInit('rem', _careDicts);
   _remEditId = id || null;
   const r = id ? _remRules.find(x => x.id === id) : null;
@@ -102,6 +103,7 @@ async function remOpenRuleModal(id) {
   remSetMode(r ? r.textMode : 'strict');
   condSet('rem', r ? r.conditions : { logic: 'and', items: [] });
   remRenderTiers();
+  document.getElementById('remSaveBtn').disabled = false;
   document.getElementById('remRuleOv').classList.add('open');
 }
 
@@ -168,13 +170,22 @@ async function remSaveRule() {
   if (!condHasAny('rem')) {
     return notify('Добавьте хотя бы одно условие: без него напоминание уйдёт после любого визита', 'err');
   }
+  // Блокировка на время запроса — как в careSaveProgram(): без неё двойной клик
+  // (или медленная сеть + повторный клик) создаёт два одинаковых ВКЛЮЧЁННЫХ
+  // правила, и оба потом независимо планируют напоминания одному клиенту.
+  const btn = document.getElementById('remSaveBtn');
+  btn.disabled = true;
   try {
     if (_remEditId) await api('PUT', `/api/reminders/rules/${_remEditId}`, body);
     else await api('POST', '/api/reminders/rules', body);
     remCloseRuleModal();
     await remLoadRules();
     notify('Правило сохранено');
-  } catch (e) { notify(e.message || 'Не удалось сохранить', 'err'); }
+  } catch (e) {
+    notify(e.message || 'Не удалось сохранить', 'err');
+  } finally {
+    btn.disabled = false;
+  }
 }
 
 // ── догон по базе ──────────────────────────────────────────────
@@ -194,6 +205,19 @@ function remOpenBackfill(ruleId) {
 }
 
 function remCloseBackfill() { document.getElementById('remBackfillOv').classList.remove('open'); }
+
+// Правка периода ПОСЛЕ построения выборки делает старое превью (и число в
+// confirm() внутри remRunBackfill) недостоверными для НОВОГО значения поля —
+// без сброса кнопка «Поставить в очередь» осталась бы включённой, а сам
+// запуск послал бы на сервер СВЕЖИЙ days из поля при СТАРОМ подтверждённом
+// числе. Сбрасываем результат и гасим кнопку до следующего «Показать выборку».
+function remBfDaysChanged() {
+  _remBfRows = null;
+  const box = document.getElementById('remBfResult');
+  box.className = 'empty';
+  box.innerHTML = 'Задайте период и нажмите «Показать выборку»';
+  document.getElementById('remBfRunBtn').disabled = true;
+}
 
 async function remRunBackfillPreview() {
   const days = Number(document.getElementById('remBfDays').value) || 30;
@@ -232,8 +256,14 @@ async function remRunBackfillPreview() {
 }
 
 async function remRunBackfill() {
-  const days = Number(document.getElementById('remBfDays').value) || 30;
-  const n = _remBfRows ? _remBfRows.totals.willSend : 0;
+  // Период берём из ПОСТРОЕННОГО превью (d.days с бэкенда), а не заново из
+  // поля: поле могло уйти вперёд превью (remBfDaysChanged на этот случай уже
+  // гасит кнопку, но функция не должна полагаться только на состояние DOM).
+  // Без превью отправлять нечего — n и days должны быть ровно тем, что видел
+  // администратор в подтверждении.
+  if (!_remBfRows) return;
+  const days = _remBfRows.days;
+  const n = _remBfRows.totals.willSend;
   if (!confirm(`Поставить в очередь ${n} напоминаний? Они уйдут живым клиентам по расписанию правила.`)) return;
   try {
     const d = await api('POST', `/api/reminders/rules/${_remBfRuleId}/backfill`, { days });
@@ -294,7 +324,7 @@ function remRenderHistory(rows) {
       <td>${r.visitedAt ? remFmt(r.visitedAt) : '—'}</td>
       <td>${r.status === 'scheduled'
              ? `<button class="btn btn-sec btn-sm" onclick="remCancelQueued(${r.id})">Отменить</button>`
-             : (r.ruleId ? `<button class="btn btn-sec btn-sm" onclick="remToggleMute(${r.ruleId}, '${esc(r.phone)}', ${!r.muted})">
+             : (r.ruleId ? `<button class="btn btn-sec btn-sm" onclick="remToggleMute(${r.ruleId}, '${escJs(r.phone)}', ${!r.muted})">
                   ${r.muted ? 'Разрешить снова' : 'Запретить'}</button>` : '')}</td>
     </tr>`;
   }).join('');

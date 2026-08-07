@@ -360,8 +360,10 @@ router.post('/rules/:id/backfill', guard, async (req, res) => {
   } catch (e) {
     // Падение в середине пачки не должно скрывать, сколько строк УЖЕ легло —
     // иначе админу приходится идти в историю, чтобы понять, сработало ли.
+    // Число — прямо в тексте ошибки: общий api() на фронте выбрасывает только
+    // j.error, поле queued тела ответа он теряет.
     log.error(`догон правила #${ruleKey}: ${e.message} (успело встать ${queued})`);
-    res.status(500).json({ error: 'Не удалось выполнить догон', queued });
+    res.status(500).json({ error: `Не удалось выполнить догон. Успело встать в очередь: ${queued}`, queued });
   } finally {
     backfillInFlight.delete(ruleKey);
   }

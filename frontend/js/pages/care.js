@@ -539,7 +539,7 @@ async function careToggleEnr(id) {
     box.innerHTML = `
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px">
         ${canStop ? `<button class="btn btn-sec btn-sm" onclick="event.stopPropagation();careStopEnr(${id})">⏹ Остановить</button>` : ''}
-        ${e.phone ? `<button class="btn btn-sec btn-sm" onclick="event.stopPropagation();careOpenChat('${esc(e.phone)}')">💬 Открыть чат</button>` : ''}
+        ${e.phone ? `<button class="btn btn-sec btn-sm" onclick="event.stopPropagation();careOpenChat('${escJs(e.phone)}')">💬 Открыть чат</button>` : ''}
       </div>
       ${rows}`;
   } catch (err) {

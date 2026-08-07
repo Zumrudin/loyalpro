@@ -1484,7 +1484,7 @@
 
           <div class="bc-actions">
             <button class="btn btn-sec" onclick="remCloseRuleModal()">Отмена</button>
-            <button class="btn btn-pri" onclick="remSaveRule()">Сохранить</button>
+            <button class="btn btn-pri" id="remSaveBtn" onclick="remSaveRule()">Сохранить</button>
           </div>
         </div>
       </div>
@@ -1500,7 +1500,7 @@
         <div class="bc-modal-body">
           <div style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap">
             <div class="fg" style="flex:0 0 160px"><label class="fl">За последние (дней)</label>
-              <input id="remBfDays" type="number" min="1" max="90" value="30"></div>
+              <input id="remBfDays" type="number" min="1" max="90" value="30" oninput="remBfDaysChanged()"></div>
             <button class="btn btn-sec btn-sm" onclick="remRunBackfillPreview()">👁 Показать выборку</button>
           </div>
           <div id="remBfResult" class="empty">Задайте период и нажмите «Показать выборку»</div>
