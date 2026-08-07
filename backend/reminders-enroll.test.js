@@ -162,4 +162,47 @@ describe('handleAttribution', () => {
     expect(visited).toHaveLength(1);
     expect(visited[0].params).toContain(777);
   });
+
+  // Walk-in / запись задним числом: status='create', но визит УЖЕ состоялся
+  // (attendance=1) в этом же вызове. Отдельный UPDATE visited_at на
+  // status='create' не выполняется (см. гейт выше) — единственное место,
+  // где это можно отметить, это сама атрибуция.
+  test('атрибуция состоявшегося задним числом визита сразу проставляет visited_at (третий параметр true)', async () => {
+    const sentRow = {
+      id: 11, rule_id: 5, conditions: RULE.conditions, attribution_days: 30,
+      sent_at: new Date(Date.now() - 86400000).toISOString(), conversion_record_id: null,
+    };
+    const { calls, deps } = makeDeps({
+      db: {
+        any: jest.fn(async () => [sentRow]),
+        query: jest.fn(async () => ({ rowCount: 1 })),
+        oneOrNone: jest.fn(async () => null),
+      },
+    });
+    deps.db.query = jest.fn(async (sql, params) => { calls.push({ sql, params }); return { rowCount: 1 }; });
+    await enroll.handleAttribution(SALON, { status: 'create', data: VISIT }, deps);
+    const upd = sqlsOf(calls, /UPDATE reminder_queue[\s\S]*conversion_record_id/i);
+    expect(upd).toHaveLength(1);
+    expect(upd[0].params[2]).toBe(true);
+  });
+
+  test('атрибуция ещё не состоявшегося визита не проставляет visited_at (третий параметр false)', async () => {
+    const sentRow = {
+      id: 11, rule_id: 5, conditions: RULE.conditions, attribution_days: 30,
+      sent_at: new Date(Date.now() - 86400000).toISOString(), conversion_record_id: null,
+    };
+    const notYetVisited = { ...VISIT, attendance: 0 };
+    const { calls, deps } = makeDeps({
+      db: {
+        any: jest.fn(async () => [sentRow]),
+        query: jest.fn(async () => ({ rowCount: 1 })),
+        oneOrNone: jest.fn(async () => null),
+      },
+    });
+    deps.db.query = jest.fn(async (sql, params) => { calls.push({ sql, params }); return { rowCount: 1 }; });
+    await enroll.handleAttribution(SALON, { status: 'create', data: notYetVisited }, deps);
+    const upd = sqlsOf(calls, /UPDATE reminder_queue[\s\S]*conversion_record_id/i);
+    expect(upd).toHaveLength(1);
+    expect(upd[0].params[2]).toBe(false);
+  });
 });

@@ -138,9 +138,14 @@ async function handleAttribution(salon, payload, deps = defaultDeps) {
   if (!data.id) return;
 
   // Визит по приведённой записи состоялся — размечаем «дошёл». Не на
-  // status='create': это только что созданная запись, она физически не
-  // могла успеть стать чьим-то conversion_record_id ДО этого самого события
-  // (атрибуция ниже — единственное место, которое его проставляет).
+  // status='create': на этот момент ни у одной строки ещё не может стоять
+  // conversion_record_id = data.id (его проставляет только атрибуция ниже, и
+  // именно в ЭТОМ вызове) — UPDATE был бы заведомо пустым, а его SQL-текст
+  // совпал бы с регекспом `conversion_record_id` в тесте на сам факт
+  // атрибуции, задвоив счётчик. Случай «создана уже состоявшейся» (walk-in
+  // / запись задним числом с status='create' и attendance=1/paid_full=1
+  // сразу) не теряется — он закрыт третьим параметром UPDATE'а атрибуции
+  // ниже.
   if (payload && payload.status !== 'create' && isVisitCompleted(data)) {
     await db.query(
       `UPDATE reminder_queue SET visited_at = NOW()
@@ -173,9 +178,13 @@ async function handleAttribution(salon, payload, deps = defaultDeps) {
 
   await db.query(
     `UPDATE reminder_queue
-        SET conversion_record_id = $2, converted_at = NOW()
+        SET conversion_record_id = $2, converted_at = NOW(),
+            -- визит уже состоялся в момент атрибуции (walk-in / запись задним
+            -- числом): отметить «дошёл» больше будет негде — отдельный UPDATE
+            -- visited_at на status='create' не выполняется (см. гейт выше).
+            visited_at = CASE WHEN $3 THEN NOW() ELSE visited_at END
       WHERE id = $1 AND conversion_record_id IS NULL`,
-    [win.id, data.id]);
+    [win.id, data.id, isVisitCompleted(data)]);
   log.info(`конверсия: напоминание #${win.id} привело запись ${data.id}`);
 }
 
