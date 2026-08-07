@@ -31,8 +31,7 @@ let _careEnrOpenId = null;  // раскрытая строка дашборда
 
 // состояние редактора программы
 let _careEditId = null;
-let _careConds = [];        // [{ type, ids:Set<string>, filter:'' }]
-let _careLogic = 'and';
+// условия зачисления живут в общем модуле conditions-editor.js (ns 'care')
 let _careTouches = [];      // [{ id?, title, delayDays, sendTime, intentText, textMode }]
 
 // состояние превью («сухой прогон»)
@@ -58,6 +57,7 @@ function careSwitchTab(tab) {
 async function careEnsureDicts() {
   if (_careDicts) return;
   _careDicts = await api('GET', '/api/notification-rules/dictionaries');
+  condInit('care', _careDicts);
 }
 
 function careDictName(type, id) {
@@ -167,9 +167,7 @@ async function careOpenProgramModal(id) {
   document.getElementById('careEditorTitle').textContent = p ? 'Программа: ' + p.title : 'Новая программа';
   document.getElementById('careTitle').value = p ? p.title : '';
 
-  _careLogic = (p && p.conditions && p.conditions.logic === 'or') ? 'or' : 'and';
-  _careConds = ((p && p.conditions && p.conditions.items) || [])
-    .map(it => ({ type: it.type, ids: new Set((it.ids || []).map(String)), filter: '' }));
+  condSet('care', (p && p.conditions) || { logic: 'and', items: [] });
   _careTouches = p
     ? (p.touches || []).map(t => ({
         id: t.id, title: t.title || '', delayDays: t.delayDays,
@@ -178,8 +176,6 @@ async function careOpenProgramModal(id) {
       }))
     : [{ title: '', delayDays: 1, sendTime: '10:30', intentText: '', textMode: 'free' }];
 
-  careRenderConds();
-  careSetLogic(_careLogic);
   careRenderTouches();
   document.getElementById('careSaveBtn').disabled = false;
   document.getElementById('careEditorOv').classList.add('open');
@@ -189,101 +185,18 @@ function careCloseEditor() {
   document.getElementById('careEditorOv').classList.remove('open');
 }
 
-// — конструктор условий (паттерн broadcast-rules.js) —
+// — конструктор условий: общий модуль conditions-editor.js —
+// Имена careXxx сохранены: на них ссылается инлайн-разметка в index.html
+// (и HTML, генерируемый самой careRenderConds/careRenderCondList).
 
-function careSetLogic(logic) {
-  _careLogic = logic === 'or' ? 'or' : 'and';
-  document.getElementById('careLogic-and').classList.toggle('on', _careLogic === 'and');
-  document.getElementById('careLogic-or').classList.toggle('on', _careLogic === 'or');
-}
-
-function careAddCond() {
-  _careConds.push({ type: 'service', ids: new Set(), filter: '' });
-  careRenderConds();
-}
-
-function careRemoveCond(i) {
-  _careConds.splice(i, 1);
-  careRenderConds();
-}
-
-function careCondType(i, type) {
-  _careConds[i].type = type;
-  _careConds[i].ids = new Set();
-  _careConds[i].filter = '';
-  careRenderConds();
-}
-
-function careCondFilter(i, value) {
-  _careConds[i].filter = value;
-  careRenderCondList(i);
-}
-
-function careCondToggleId(i, id, checked) {
-  if (checked) _careConds[i].ids.add(String(id));
-  else _careConds[i].ids.delete(String(id));
-  const cnt = document.getElementById(`careCondCount-${i}`);
-  if (cnt) cnt.textContent = `выбрано: ${_careConds[i].ids.size}`;
-}
-
-function careCondOptions(type) {
-  if (!_careDicts) return [];
-  if (type === 'staff') {
-    return (_careDicts.staff || []).map(s => ({
-      id: s.id, label: s.name + (s.specialization ? ` — ${s.specialization}` : ''),
-    }));
-  }
-  if (type === 'category') {
-    return (_careDicts.categories || []).map(c => ({ id: c.id, label: c.title }));
-  }
-  const catById = {};
-  (_careDicts.categories || []).forEach(c => { catById[String(c.id)] = c.title; });
-  return (_careDicts.services || []).map(s => ({
-    id: s.id, label: s.title + (catById[String(s.category_id)] ? ` · ${catById[String(s.category_id)]}` : ''),
-  }));
-}
-
-function careRenderConds() {
-  const wrap = document.getElementById('careConds');
-  wrap.innerHTML = _careConds.map((c, i) => `
-    <div class="nr-cond">
-      <div class="nr-cond-head">
-        <select onchange="careCondType(${i}, this.value)">
-          ${Object.entries(CARE_COND_LABELS).map(([k, v]) =>
-            `<option value="${k}" ${c.type === k ? 'selected' : ''}>${v}</option>`).join('')}
-        </select>
-        <span class="nr-cond-count" id="careCondCount-${i}">выбрано: ${c.ids.size}</span>
-        <button class="mc" onclick="careRemoveCond(${i})" title="Убрать условие">✕</button>
-      </div>
-      <input type="search" autocomplete="off" placeholder="🔎 Поиск…" value="${escAttr(esc(c.filter))}"
-             oninput="careCondFilter(${i}, this.value)">
-      <div class="nr-cond-list" id="careCondList-${i}"></div>
-    </div>`).join('');
-  document.getElementById('careLogicWrap').style.display = _careConds.length > 1 ? 'flex' : 'none';
-  _careConds.forEach((_, i) => careRenderCondList(i));
-}
-
-function careRenderCondList(i) {
-  const box = document.getElementById(`careCondList-${i}`);
-  if (!box) return;
-  const c = _careConds[i];
-  const q = (c.filter || '').trim().toLowerCase();
-  let opts = careCondOptions(c.type);
-  if (q) opts = opts.filter(o => o.label.toLowerCase().includes(q));
-  const total = opts.length;
-  // Выбранные — всегда сверху, чтобы не терялись за фильтром/лимитом.
-  opts.sort((a, b) => (c.ids.has(String(b.id)) ? 1 : 0) - (c.ids.has(String(a.id)) ? 1 : 0));
-  opts = opts.slice(0, 150);
-  box.innerHTML = opts.map(o => `
-    <label class="nr-cond-opt">
-      <input type="checkbox" ${c.ids.has(String(o.id)) ? 'checked' : ''}
-             onchange="careCondToggleId(${i}, '${o.id}', this.checked)">
-      <span>${esc(o.label)}</span>
-    </label>`).join('') || '<div class="empty" style="padding:12px 0">Ничего не найдено</div>';
-  if (total > 150) {
-    box.innerHTML += `<div style="font-size:11px;color:var(--t3);padding:6px 2px">Показаны первые 150 из ${total} — уточните поиск</div>`;
-  }
-}
+function careSetLogic(logic) { condSetLogic('care', logic); }
+function careAddCond()       { condAdd('care'); }
+function careRemoveCond(i)   { condRemove('care', i); }
+function careCondType(i, t)  { condType('care', i, t); }
+function careCondFilter(i, v){ condFilter('care', i, v); }
+function careCondToggleId(i, id, checked) { condToggleId('care', i, id, checked); }
+function careRenderConds()   { condRender('care'); }
+function careRenderCondList(i) { condRenderList('care', i); }
 
 // — конструктор цепочки касаний —
 
@@ -372,8 +285,7 @@ function careRenderTouches() {
 async function careSaveProgram() {
   const title = document.getElementById('careTitle').value.trim();
   if (!title) { notify('Введите название программы', 'err'); return; }
-  const emptyCond = _careConds.find(c => !c.ids.size);
-  if (emptyCond) { notify('В одном из условий ничего не выбрано — выберите значения или уберите условие', 'err'); return; }
+  if (condHasEmpty('care')) { notify('В одном из условий ничего не выбрано — выберите значения или уберите условие', 'err'); return; }
   if (!_careTouches.length) { notify('Добавьте хотя бы одно касание', 'err'); return; }
   for (const [i, t] of _careTouches.entries()) {
     if (!String(t.intentText || '').trim()) { notify(`Касание ${i + 1}: заполните текст-заготовку`, 'err'); return; }
@@ -383,10 +295,7 @@ async function careSaveProgram() {
 
   const body = {
     title,
-    conditions: {
-      logic: _careLogic,
-      items: _careConds.map(c => ({ type: c.type, ids: Array.from(c.ids).map(Number) })),
-    },
+    conditions: condGet('care'),
     touches: _careTouches.map(t => ({
       ...(t.id ? { id: t.id } : {}),
       title: String(t.title || '').trim(),
@@ -461,10 +370,7 @@ async function careRunPreview() {
     ? { programId: _carePreviewFor.programId, days }
     : {
         days,
-        conditions: {
-          logic: _careLogic,
-          items: _careConds.map(c => ({ type: c.type, ids: Array.from(c.ids).map(Number) })),
-        },
+        conditions: condGet('care'),
         touches: _careTouches.map(t => ({
           title: String(t.title || '').trim(),
           delayDays: Number(t.delayDays),
