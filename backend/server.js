@@ -256,6 +256,7 @@ pool.connect()
       startBroadcastWorker();
       startNotificationWorker();
       require('./services/care/worker').startCareWorker();
+      require('./services/reminders/worker').startRemindersWorker();
     });
   })
   .catch(e => {

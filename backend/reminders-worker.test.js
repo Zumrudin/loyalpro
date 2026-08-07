@@ -181,3 +181,127 @@ describe('два обязательных дополнения', () => {
     expect(deps.sendMessage).toHaveBeenCalled();
   });
 });
+
+describe('отправка и бонусы', () => {
+  test('happy path: текст по ступени, бонусы записаны, флаг повешен', async () => {
+    const { updates, deps } = makeDeps();
+    await worker.processOne(ROW, deps);
+    expect(deps.applyBonus).toHaveBeenCalledWith(1, 777, ROW.bonus_tiers, ROW.rule_title);
+    expect(deps.sendMessage).toHaveBeenCalledWith(expect.objectContaining({
+      phone: '79200255591',
+      text: 'Мария, начислили 300 бонусов!',
+    }));
+    expect(deps.mute).toHaveBeenCalledWith(1, 5, '79200255591', expect.any(String));
+    expect(find(updates, /bonus_accrued=\$4/).length).toBe(1);
+  });
+
+  // Захват строки условным UPDATE — последний гейт перед side-effect'ами.
+  test('перехваченная строка не отправляется и бонусы не начисляет', async () => {
+    const { deps } = makeDeps({
+      db: {
+        any: jest.fn(async () => []),
+        query: jest.fn(async (sql) => ({ rowCount: /SET status='sent'/.test(sql) ? 0 : 1 })),
+        oneOrNone: jest.fn(async () => null),
+      },
+    });
+    await worker.processOne(ROW, deps);
+    expect(deps.applyBonus).not.toHaveBeenCalled();
+    expect(deps.sendMessage).not.toHaveBeenCalled();
+    expect(deps.mute).not.toHaveBeenCalled();
+  });
+
+  // Начисление необратимо: повторный заход по строке, где бонусы уже
+  // записаны, обязан взять сохранённое значение, а не начислить второй раз.
+  test('повторная попытка не начисляет бонусы дважды', async () => {
+    const { deps } = makeDeps();
+    const retried = { ...ROW, balance_before: 120, bonus_tier: 'accrue', bonus_accrued: 300, bonus_txn_ok: true };
+    await worker.processOne(retried, deps);
+    expect(deps.applyBonus).not.toHaveBeenCalled();
+    expect(deps.sendMessage).toHaveBeenCalledWith(expect.objectContaining({
+      text: 'Мария, начислили 300 бонусов!',
+    }));
+  });
+
+  // Сбой отправки: строка возвращается в scheduled, бонусы НЕ откатываются
+  // (утверждено: «сначала начислить, отката нет»), флаг анти-повтора не висит.
+  test('сбой отправки возвращает строку в scheduled и не вешает флаг', async () => {
+    const { updates, deps } = makeDeps({ sendMessage: jest.fn(async () => { throw new Error('chatpush 500'); }) });
+    await worker.processOne(ROW, deps);
+    expect(find(updates, /status='scheduled'/).length).toBe(1);
+    expect(deps.mute).not.toHaveBeenCalled();
+  });
+
+  test('исчерпание попыток → failed', async () => {
+    const { updates, deps } = makeDeps({ sendMessage: jest.fn(async () => { throw new Error('chatpush 500'); }) });
+    await worker.processOne({ ...ROW, attempts: 3 }, deps);
+    expect(find(updates, /status='failed'/).length).toBe(1);
+  });
+
+  // Доставлено, но упала пост-обработка — статус НЕ откатывать: ретрай = дубль.
+  test('падение после доставки не откатывает статус', async () => {
+    const { updates, deps } = makeDeps({ mute: jest.fn(async () => { throw new Error('db'); }) });
+    await worker.processOne(ROW, deps);
+    expect(find(updates, /status='scheduled'/).length).toBe(0);
+    expect(deps.sendMessage).toHaveBeenCalled();
+  });
+
+  // Бонусов нет (нет карты / сбой YClients) — уходит БАЗОВЫЙ текст правила,
+  // ни слова про бонусы. Это утверждённое поведение «слать без бонусов».
+  test('no_bonus → базовый текст правила без бонусной части', async () => {
+    const { deps } = makeDeps({
+      applyBonus: jest.fn(async () => ({ balanceBefore: null, tier: 'no_bonus', accrued: 0, txnOk: null })),
+    });
+    await worker.processOne(ROW, deps);
+    expect(deps.sendMessage).toHaveBeenCalledWith(expect.objectContaining({
+      text: 'Мария, пора повторить Лазерная эпиляция!',
+    }));
+  });
+
+  test('bonus_enabled=false → YClients не дёргается вовсе', async () => {
+    const { deps } = makeDeps();
+    await worker.processOne({ ...ROW, bonus_enabled: false }, deps);
+    expect(deps.applyBonus).not.toHaveBeenCalled();
+    expect(deps.sendMessage).toHaveBeenCalled();
+  });
+
+  test('режим free зовёт LLM и шлёт её текст', async () => {
+    const { deps } = makeDeps({
+      createMessage: jest.fn(async () => ({ text: '{"action":"send","text":"Мария, будем рады видеть вас снова!","reason":"ок"}' })),
+    });
+    await worker.processOne({ ...ROW, text_mode: 'free' }, deps);
+    expect(deps.createMessage).toHaveBeenCalled();
+    expect(deps.sendMessage).toHaveBeenCalledWith(expect.objectContaining({
+      text: 'Мария, будем рады видеть вас снова!',
+    }));
+  });
+
+  test('в режиме free решение «не слать» даёт skipped без отправки', async () => {
+    const { updates, deps } = makeDeps({
+      createMessage: jest.fn(async () => ({ text: '{"action":"skip","reason":"клиент просил не писать"}' })),
+    });
+    await worker.processOne({ ...ROW, text_mode: 'free' }, deps);
+    expect(deps.sendMessage).not.toHaveBeenCalled();
+    expect(find(updates, /status='skipped'/).length).toBe(1);
+  });
+
+  test('reply-guard заблокировал текст → skipped', async () => {
+    const { updates, deps } = makeDeps({ hardViolations: jest.fn(() => [{ type: 'internals_leak' }]) });
+    await worker.processOne(ROW, deps);
+    expect(deps.sendMessage).not.toHaveBeenCalled();
+    expect(find(updates, /status='skipped'/).length).toBe(1);
+  });
+
+  test('whatsapp дополнительно персистится в историю чата', async () => {
+    const { deps } = makeDeps({ sendMessage: jest.fn(async () => ({ id: 1, channel: 'whatsapp' })) });
+    await worker.processOne(ROW, deps);
+    expect(deps.persistWhatsapp).toHaveBeenCalled();
+  });
+});
+
+describe('processTick', () => {
+  test('гасит строки удалённых правил', async () => {
+    const { updates, deps } = makeDeps();
+    await worker.processTick(deps);
+    expect(updates.some(u => /rule_id IS NULL/.test(u.sql))).toBe(true);
+  });
+});

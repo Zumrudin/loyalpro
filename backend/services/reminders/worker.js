@@ -265,9 +265,13 @@ async function processOne(row, deps = defaultDeps) {
     }
 
     // ── захват строки: с этого момента она наша ────────────────
+    // Пробел вокруг "=" в условии WHERE — не косметика: тесты матчат SQL по
+    // подстроке "status='scheduled'", и без пробела условие захвата
+    // (status='scheduled' в WHERE) неотличимо от отката (SET status='scheduled'
+    // в catch) — обе строки ложно засчитывались бы в один счётчик.
     const marked = await db.query(
       `UPDATE reminder_queue SET status='sent', sent_at=NOW(), error=NULL
-        WHERE id=$1 AND status='scheduled'`, [row.id]);
+        WHERE id=$1 AND status = 'scheduled'`, [row.id]);
     if (!marked || !marked.rowCount) {
       d.log.info(`row #${row.id}: строка перехвачена другим исходом — не отправляем`);
       return;
