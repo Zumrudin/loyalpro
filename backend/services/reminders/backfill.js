@@ -88,7 +88,11 @@ function matchBackfillVisits({ records = [], conditions, catMap = new Map(),
   }
 
   // Свежие визиты сверху; из нескольких визитов клиента напоминание ушло бы
-  // только от САМОГО ПОЗДНЕГО (боевое планирование supersede'ит прежние).
+  // только от САМОГО ПОЗДНЕГО (боевое планирование supersede'ит прежние). Это
+  // сортировка ТОЛЬКО ради дедупликации — очерёдность ОТПРАВКИ (кто первым
+  // получит напоминание в многодневном догоне) задаёт отдельная сортировка
+  // в spreadOverDays, и с этой она не совпадает (там наоборот — самый давний
+  // визит первым).
   rows.sort((a, b) => b.visitMs - a.visitMs || Number(b.recordId) - Number(a.recordId));
   const seen = new Set();
   for (const row of rows) {
@@ -106,10 +110,26 @@ function matchBackfillVisits({ records = [], conditions, catMap = new Map(),
   };
 }
 
+/** ISO-строка visitAt → мс, либо null (нет даты / не распарсилась). */
+function visitMsOf(row) {
+  const ms = Date.parse(row && row.visitAt);
+  return Number.isNaN(ms) ? null : ms;
+}
+
 /**
  * Раскладка по ближайшим дням с капом: веерная рассылка сотне клиентов в одну
  * минуту исключена по построению. Старт — сегодня в send_time, а если это
  * время уже прошло, то завтра: строка в прошлом ушла бы немедленно, минуя кап.
+ *
+ * Перед раскладкой строки сортируются по visitAt ПО ВОЗРАСТАНИЮ — решение
+ * владельца: первым напоминание получает тот, кто НЕ БЫЛ ДОЛЬШЕ ВСЕХ (самый
+ * давний визит), а не тот, кто был недавно. Он самый просроченный по смыслу
+ * правила, и держать его в хвосте многодневной очереди было бы неправильно.
+ * Сортировка УСТОЙЧИВАЯ и безопасная: строки без visitAt (или с нечисловой
+ * датой) не бросают и не переставляются относительно друг друга — они всего
+ * лишь не участвуют в сравнении по дате (Array.prototype.sort в V8 стабильна
+ * с ES2019, так что при "равенстве" — оба без даты, либо одна дата — порядок
+ * входного массива сохраняется сам по себе).
  */
 function spreadOverDays(rows, { maxPerDay = 30, sendTime = '11:00', nowMs = Date.now() } = {}) {
   const list = Array.isArray(rows) ? rows : [];
@@ -119,7 +139,16 @@ function spreadOverDays(rows, { maxPerDay = 30, sendTime = '11:00', nowMs = Date
   const today = computeScheduledAt(now, 0, sendTime);
   const startOffset = today && today.getTime() > nowMs ? 0 : 1;
 
-  return list.map((row, i) => ({
+  const sorted = [...list].sort((a, b) => {
+    const ma = visitMsOf(a);
+    const mb = visitMsOf(b);
+    if (ma == null && mb == null) return 0;
+    if (ma == null) return 1;   // без даты — в хвост, но не перед другой датированной
+    if (mb == null) return -1;
+    return ma - mb;
+  });
+
+  return sorted.map((row, i) => ({
     ...row,
     scheduledAt: computeScheduledAt(now, startOffset + Math.floor(i / cap), sendTime),
   }));

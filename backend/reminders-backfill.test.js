@@ -143,4 +143,39 @@ describe('spreadOverDays', () => {
   test('пустой список → пустой результат', () => {
     expect(spreadOverDays([], { maxPerDay: 30, sendTime: '11:00', nowMs: NOW })).toEqual([]);
   });
+
+  // Решение владельца: первым догон дёргает того, кто НЕ БЫЛ ДОЛЬШЕ ВСЕХ —
+  // самый просроченный по смыслу правила, держать его в хвосте многодневной
+  // очереди неправильно.
+  test('самый давний визит уходит первым днём, самый свежий — последним', () => {
+    const withDates = [
+      { recordId: 1, visitAt: '2026-07-01T10:00:00.000Z' },
+      { recordId: 2, visitAt: '2026-05-01T10:00:00.000Z' },
+      { recordId: 3, visitAt: '2026-06-01T10:00:00.000Z' },
+    ];
+    const out = spreadOverDays(withDates, { maxPerDay: 1, sendTime: '11:00', nowMs: NOW });
+    expect(out.map(r => r.recordId)).toEqual([2, 3, 1]);
+    const days = out.map(r => r.scheduledAt.toISOString().slice(0, 10));
+    expect(days[0] < days[1]).toBe(true);
+    expect(days[1] < days[2]).toBe(true);
+  });
+
+  test('строки без visitAt сохраняют исходный относительный порядок', () => {
+    const noDates = [{ recordId: 1 }, { recordId: 2 }, { recordId: 3 }];
+    const out = spreadOverDays(noDates, { maxPerDay: 1, sendTime: '11:00', nowMs: NOW });
+    expect(out.map(r => r.recordId)).toEqual([1, 2, 3]);
+  });
+
+  test('смешанный случай: с датой и без — не бросает, датированные упорядочены по возрастанию', () => {
+    const mixed = [
+      { recordId: 1 },
+      { recordId: 2, visitAt: '2026-07-01T10:00:00.000Z' },
+      { recordId: 3 },
+      { recordId: 4, visitAt: '2026-05-01T10:00:00.000Z' },
+    ];
+    expect(() => spreadOverDays(mixed, { maxPerDay: 1, sendTime: '11:00', nowMs: NOW })).not.toThrow();
+    const out = spreadOverDays(mixed, { maxPerDay: 1, sendTime: '11:00', nowMs: NOW });
+    const dated = out.filter(r => r.recordId === 2 || r.recordId === 4);
+    expect(dated.map(r => r.recordId)).toEqual([4, 2]);
+  });
 });
