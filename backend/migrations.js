@@ -930,6 +930,109 @@ async function runMigrations(client) {
       ON care_touch_sends (scheduled_at) WHERE status = 'scheduled'
   `).catch(() => {});
 
+  // ── Напоминания о повторном визите ─────────────────────────────
+  // Правило = условия отбора визита (тот же формат, что care_programs) +
+  // задержка + текст + ступени бонусов. На каждый подходящий состоявшийся
+  // визит заводится строка reminder_queue (очередь и журнал в одной таблице).
+  // Статусы очереди: scheduled | sent | skipped | cancelled | failed.
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS reminder_rules (
+      id                   SERIAL PRIMARY KEY,
+      salon_id             INTEGER NOT NULL REFERENCES salons(id) ON DELETE CASCADE,
+      title                VARCHAR(255) NOT NULL,
+      is_enabled           BOOLEAN NOT NULL DEFAULT TRUE,
+      conditions           JSONB NOT NULL DEFAULT '{"logic":"and","items":[]}',
+      delay_days           INTEGER NOT NULL,
+      send_time            VARCHAR(5) NOT NULL DEFAULT '11:00',
+      text_mode            VARCHAR(10) NOT NULL DEFAULT 'strict',
+      text                 TEXT NOT NULL DEFAULT '',
+      attribution_days     INTEGER NOT NULL DEFAULT 30,
+      bonus_enabled        BOOLEAN NOT NULL DEFAULT FALSE,
+      bonus_tiers          JSONB NOT NULL DEFAULT '[]',
+      backfill_max_per_day INTEGER NOT NULL DEFAULT 30,
+      created_by           INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      created_at           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at           TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `).catch(() => {});
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS idx_reminder_rules_salon
+      ON reminder_rules (salon_id, is_enabled)
+  `).catch(() => {});
+
+  // rule_id — ON DELETE SET NULL (в отличие от «Заботы», где журнал уходит
+  // каскадом): история «кому что по какому правилу» обязана пережить удаление
+  // правила. Отсюда же денормализованный rule_title.
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS reminder_queue (
+      id                   BIGSERIAL PRIMARY KEY,
+      salon_id             INTEGER NOT NULL REFERENCES salons(id) ON DELETE CASCADE,
+      rule_id              INTEGER REFERENCES reminder_rules(id) ON DELETE SET NULL,
+      rule_title           VARCHAR(255),
+      client_id            INTEGER,
+      phone                VARCHAR(20),
+      yclients_client_id   BIGINT,
+      anchor_record_id     BIGINT,
+      anchor_visit_at      TIMESTAMPTZ,
+      anchor_staff_name    VARCHAR(255),
+      anchor_services      JSONB DEFAULT '[]',
+      scheduled_at         TIMESTAMPTZ NOT NULL,
+      status               VARCHAR(20) NOT NULL DEFAULT 'scheduled',
+      attempts             INTEGER NOT NULL DEFAULT 0,
+      defers               INTEGER NOT NULL DEFAULT 0,
+      last_attempt_at      TIMESTAMPTZ,
+      error                TEXT,
+      decision_reason      TEXT,
+      rendered_text        TEXT,
+      routing              JSONB,
+      channel_used         VARCHAR(30),
+      delivery_id          TEXT,
+      sent_at              TIMESTAMPTZ,
+      balance_before       INTEGER,
+      bonus_tier           VARCHAR(20),
+      bonus_accrued        INTEGER,
+      bonus_txn_ok         BOOLEAN,
+      conversion_record_id BIGINT,
+      converted_at         TIMESTAMPTZ,
+      visited_at           TIMESTAMPTZ,
+      source               VARCHAR(20) NOT NULL DEFAULT 'webhook',
+      created_at           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE (rule_id, anchor_record_id)
+    )
+  `).catch(() => {});
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS idx_reminder_queue_due
+      ON reminder_queue (scheduled_at) WHERE status = 'scheduled'
+  `).catch(() => {});
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS idx_reminder_queue_phone
+      ON reminder_queue (salon_id, phone, sent_at DESC)
+  `).catch(() => {});
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS idx_reminder_queue_history
+      ON reminder_queue (salon_id, rule_id, created_at DESC)
+  `).catch(() => {});
+
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS reminder_suppressions (
+      id         BIGSERIAL PRIMARY KEY,
+      salon_id   INTEGER NOT NULL REFERENCES salons(id) ON DELETE CASCADE,
+      rule_id    INTEGER NOT NULL REFERENCES reminder_rules(id) ON DELETE CASCADE,
+      phone      VARCHAR(20) NOT NULL,
+      muted      BOOLEAN NOT NULL DEFAULT TRUE,
+      reason     TEXT,
+      source     VARCHAR(10) NOT NULL DEFAULT 'auto',
+      muted_at   TIMESTAMPTZ,
+      reset_at   TIMESTAMPTZ,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE (rule_id, phone)
+    )
+  `).catch(() => {});
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS idx_reminder_suppressions_salon
+      ON reminder_suppressions (salon_id, phone) WHERE muted = TRUE
+  `).catch(() => {});
+
   // ── Medical certificate (КНД 1151156) ──────────────────────────
   await client.query(`
     CREATE TABLE IF NOT EXISTS medical_cert_templates (
