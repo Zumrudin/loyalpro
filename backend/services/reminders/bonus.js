@@ -34,14 +34,30 @@ async function applyBonus(salon, ycClientId, rawTiers, ruleTitle, deps = default
   const d = { ...defaultDeps, ...deps };
   if (!ycClientId) return { ...NO_BONUS_RESULT };
 
+  // Не зная, какая карта у салона бонусная, начислять реальные деньги нельзя —
+  // симметрично routes/clients.js, который в этом случае вообще отказывает.
+  if (!salon || !salon.yclients_card_type_id) {
+    d.log.warn('тип карты лояльности не выбран в настройках салона — без бонусов');
+    return { ...NO_BONUS_RESULT };
+  }
+
   let cards = [];
   try { cards = await d.getCards(salon, ycClientId); }
   catch (e) { d.log.warn(`карты клиента ${ycClientId} недоступны (${e.message}) — без бонусов`); return { ...NO_BONUS_RESULT }; }
   if (!Array.isArray(cards) || !cards.length) return { ...NO_BONUS_RESULT };
 
-  // Карт может быть несколько (разные программы). Берём ту, где больше денег:
+  // Карта — СТРОГО типа, настроенного в салоне (ровно как services/loyalty.js
+  // и routes/clients.js): у клиента могут быть карты других программ (например
+  // samosale), и их баланс — не бонусный, называть его и тем более начислять
+  // на него деньги нельзя. Тип из YClients иногда приходит строкой — сравнение
+  // и по значению, и через String().
+  const matching = cards.filter(c => c && c.type
+    && (c.type.id === salon.yclients_card_type_id || String(c.type.id) === String(salon.yclients_card_type_id)));
+  if (!matching.length) return { ...NO_BONUS_RESULT };
+
+  // Карт нужного типа может быть несколько — тай-брейк внутри них по балансу:
   // именно её клиент и потратит, и именно её баланс честно называть.
-  const card = cards
+  const card = matching
     .map(c => ({ id: c && c.id, balance: Number(c && c.balance) || 0 }))
     .filter(c => c.id != null)
     .sort((a, b) => b.balance - a.balance)[0];
