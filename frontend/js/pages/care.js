@@ -39,6 +39,8 @@ let _carePreviewFor = null; // { programId } | { draft: true } — что име
 
 // ── вкладки ────────────────────────────────────────────────────
 
+const CARE_TABS = ['programs', 'clients', 'reminders', 'reminders-history'];
+
 function loadCarePage() {
   careSwitchTab('programs');
   careLoadPrograms();
@@ -46,10 +48,16 @@ function loadCarePage() {
 }
 
 function careSwitchTab(tab) {
-  document.getElementById('careTab-programs').style.display = tab === 'programs' ? '' : 'none';
-  document.getElementById('careTab-clients').style.display  = tab === 'clients'  ? '' : 'none';
-  document.getElementById('careTabBtn-programs').classList.toggle('active', tab === 'programs');
-  document.getElementById('careTabBtn-clients').classList.toggle('active', tab === 'clients');
+  for (const t of CARE_TABS) {
+    const pane = document.getElementById(`careTab-${t}`);
+    const btn = document.getElementById(`careTabBtn-${t}`);
+    if (pane) pane.style.display = t === tab ? '' : 'none';
+    if (btn) btn.classList.toggle('active', t === tab);
+  }
+  // Вкладки напоминаний грузятся лениво: их данные не нужны тому, кто зашёл
+  // за программами заботы, а история может быть большой.
+  if (tab === 'reminders') remLoadRules();
+  if (tab === 'reminders-history') remLoadHistory();
 }
 
 // ── словарь условий (общий эндпоинт с автоуведомлениями) ───────
