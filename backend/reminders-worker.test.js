@@ -227,7 +227,7 @@ describe('отправка и бонусы', () => {
   test('сбой отправки возвращает строку в scheduled и не вешает флаг', async () => {
     const { updates, deps } = makeDeps({ sendMessage: jest.fn(async () => { throw new Error('chatpush 500'); }) });
     await worker.processOne(ROW, deps);
-    expect(find(updates, /status='scheduled'/).length).toBe(1);
+    expect(find(updates, /SET status='scheduled'/).length).toBe(1);
     expect(deps.mute).not.toHaveBeenCalled();
   });
 
@@ -241,7 +241,7 @@ describe('отправка и бонусы', () => {
   test('падение после доставки не откатывает статус', async () => {
     const { updates, deps } = makeDeps({ mute: jest.fn(async () => { throw new Error('db'); }) });
     await worker.processOne(ROW, deps);
-    expect(find(updates, /status='scheduled'/).length).toBe(0);
+    expect(find(updates, /SET status='scheduled'/).length).toBe(0);
     expect(deps.sendMessage).toHaveBeenCalled();
   });
 
