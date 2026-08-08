@@ -122,7 +122,7 @@ UI — поле в редакторе правила рядом с капом д
 
 ## Тесты
 
-- Новый `send-pacing.test.js` — `waitMsLeft`: пустой `lastAt`, интервал 0, интервал не истёк,
+- Новый `messaging-send-pacing.test.js` — `waitMsLeft`: пустой `lastAt`, интервал 0, интервал не истёк,
   истёк ровно, истёк с запасом; `lastAt` объектом `Date` и ISO-строкой (та же готча, что
   в `attribution.sentMsOf`).
 - `reminders-backfill.test.js` — план: просроченный визит попадает в догоняющую пачку и кап
