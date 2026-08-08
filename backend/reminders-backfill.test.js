@@ -180,4 +180,53 @@ describe('planBackfillSchedule', () => {
   test('пустой вход → пустой план', () => {
     expect(plan([])).toEqual([]);
   });
+
+  // Код cap = Math.max(1, Math.floor(Number(maxPerDay) || 1)) остался после
+  // замены spreadOverDays — вернуть тест нормализации, а не поверить коду.
+  // Кап видим только на просроченных (естественная дата у будущих кап не знает).
+  test('нулевой или отрицательный кап трактуется как 1', () => {
+    const rows = [
+      { recordId: 1, visitAt: '2026-06-01T11:00:00.000Z' },
+      { recordId: 2, visitAt: '2026-06-02T11:00:00.000Z' },
+    ];
+    for (const maxPerDay of [0, -5]) {
+      const out = plan(rows, { maxPerDay });
+      const days = out.map(r => r.scheduledAt.toISOString().slice(0, 10));
+      expect(days[0]).not.toBe(days[1]);
+    }
+  });
+
+  // Водораздел корзин — строгое ">" в natural.getTime() > nowMs: строка, чья
+  // естественная дата совпадает с nowMs РОВНО, идёт в просроченные, а не в
+  // будущие. Дата выведена честно из computeScheduledAt(visitAt, delayDays,
+  // sendTime) той же плановой пары (DELAY=60, sendTime='11:00'), а не
+  // подогнана под ожидание.
+  test('естественная дата ровно в момент nowMs — попадает в просроченные', () => {
+    const visitAt = '2026-06-01T08:00:00.000Z';
+    const nowMs = Date.parse('2026-07-31T08:00:00.000Z'); // = computeScheduledAt(visitAt, 60, '11:00')
+    const out = plan([{ recordId: 1, visitAt }], { nowMs });
+    expect(out[0].overdue).toBe(true);
+  });
+
+  // Самая дорогая регрессия догона: строка без телефона (или без прочих
+  // полей) встанет в очередь и её прочитают resolveClients/insertQueueBatch
+  // маршрута. Обе корзины (future и overdue) обязаны довезти поля исходной
+  // строки в неизменном виде.
+  test('поля исходной строки (phone, ycClientId, clientName, staffName, services) доезжают до выхода', () => {
+    const base = {
+      phone: '79001234567', ycClientId: 42, clientName: 'Мария',
+      staffName: 'Юлия', services: [{ id: 101, title: 'Лазерная эпиляция' }],
+    };
+    const future = { ...base, recordId: 1, visitAt: '2026-08-01T10:00:00.000Z' };
+    const overdue = { ...base, recordId: 2, visitAt: '2026-06-01T11:00:00.000Z' };
+    const out = plan([future, overdue]);
+    expect(out).toHaveLength(2);
+    for (const row of out) {
+      expect(row.phone).toBe(base.phone);
+      expect(row.ycClientId).toBe(base.ycClientId);
+      expect(row.clientName).toBe(base.clientName);
+      expect(row.staffName).toBe(base.staffName);
+      expect(row.services).toEqual(base.services);
+    }
+  });
 });

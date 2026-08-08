@@ -137,9 +137,16 @@ function visitMsOf(row) {
  *    немедленно, минуя кап).
  *
  * Строка без разбираемой даты визита попадает в догоняющую пачку: своей даты
- * у неё нет, а терять её молча нельзя.
+ * у неё нет, а терять её молча нельзя. ОГОВОРКА: тут план и боевой путь
+ * расходятся НАМЕРЕННО — enroll.js (строка ~135) при неразбираемой дате визита
+ * зовёт computeScheduledAt(visitAt || new Date(), …), то есть считает «сейчас
+ * + delay_days», а не «пачка следом за просроченными».
  *
- * @returns {object[]} те же строки + { scheduledAt: Date|null, overdue: boolean }
+ * @returns {object[]} те же строки + { scheduledAt: Date|null, overdue: boolean }.
+ *   Порядок массива НЕ гарантирует возрастания scheduledAt: это [...caught,
+ *   ...future], а future наследует порядок matchBackfillVisits («свежие визиты
+ *   сверху») — вызывающий не вправе брать planned[planned.length - 1] как
+ *   самую позднюю отправку.
  */
 function planBackfillSchedule(rows, { delayDays = 0, sendTime = '11:00',
                                       maxPerDay = 30, nowMs = Date.now() } = {}) {
