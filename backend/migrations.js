@@ -950,6 +950,7 @@ async function runMigrations(client) {
       bonus_enabled        BOOLEAN NOT NULL DEFAULT FALSE,
       bonus_tiers          JSONB NOT NULL DEFAULT '[]',
       backfill_max_per_day INTEGER NOT NULL DEFAULT 30,
+      send_interval_min    INTEGER NOT NULL DEFAULT 3,
       created_by           INTEGER REFERENCES users(id) ON DELETE SET NULL,
       created_at           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       updated_at           TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -958,6 +959,14 @@ async function runMigrations(client) {
   await client.query(`
     CREATE INDEX IF NOT EXISTS idx_reminder_rules_salon
       ON reminder_rules (salon_id, is_enabled)
+  `).catch(() => {});
+
+  // Пауза между плановыми сообщениями салона. Дефолт 3 минуты: пачка из 5
+  // сообщений подряд (воркер арендует до 5 строк за тик) — риск блокировки
+  // инстанса WhatsApp.
+  await client.query(`
+    ALTER TABLE reminder_rules
+      ADD COLUMN IF NOT EXISTS send_interval_min INTEGER NOT NULL DEFAULT 3
   `).catch(() => {});
 
   // rule_id — ON DELETE SET NULL (в отличие от «Заботы», где журнал уходит

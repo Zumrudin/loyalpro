@@ -17,6 +17,7 @@ function validBody(overrides = {}) {
     backfillMaxPerDay: 30,
     bonusEnabled: false,
     bonusTiers: [],
+    sendIntervalMin: 3,
     ...overrides,
   };
 }
@@ -205,5 +206,35 @@ describe('summarizeBackfillPlan', () => {
     expect(s.rows[0].scheduledAt).toEqual(new Date('2026-08-15T08:00:00.000Z'));
     expect(s.rows[1].skipReason).toBe('superseded');
     expect(s.rows[1].scheduledAt).toBeNull();
+  });
+});
+
+// Пауза между сообщениями: 0 — «без задержки», это законное значение, а не
+// «поле не задано». Валидация недоверчивая, как и у остальных полей правила.
+describe('sendIntervalMin', () => {
+  const base = () => ({
+    title: 'Эпиляция', conditions: { logic: 'and', items: [{ type: 'category', ids: [9] }] },
+    delayDays: 60, text: 'Пора повторить', attributionDays: 14,
+    backfillMaxPerDay: 30, sendIntervalMin: 3,
+  });
+
+  test('валидное значение проходит', () => {
+    expect(parseRuleBody(base()).value.sendIntervalMin).toBe(3);
+  });
+
+  test('ноль проходит и означает «без паузы»', () => {
+    expect(parseRuleBody({ ...base(), sendIntervalMin: 0 }).value.sendIntervalMin).toBe(0);
+  });
+
+  test('отрицательное отвергается', () => {
+    expect(parseRuleBody({ ...base(), sendIntervalMin: -1 }).error).toMatch(/0–120/);
+  });
+
+  test('больше 120 отвергается', () => {
+    expect(parseRuleBody({ ...base(), sendIntervalMin: 121 }).error).toMatch(/0–120/);
+  });
+
+  test('нечисловое отвергается, а не подставляется молча', () => {
+    expect(parseRuleBody({ ...base(), sendIntervalMin: 'быстро' }).error).toMatch(/0–120/);
   });
 });

@@ -83,6 +83,12 @@ function parseRuleBody(body) {
   const cap = Number(b.backfillMaxPerDay);
   if (!Number.isInteger(cap) || cap < 1 || cap > 500) return { error: 'Кап догона 1–500 в день' };
 
+  // 0 — законное «без паузы», поэтому нижняя граница именно 0, а не 1.
+  const interval = Number(b.sendIntervalMin);
+  if (!Number.isInteger(interval) || interval < 0 || interval > 120) {
+    return { error: 'Пауза между сообщениями 0–120 минут' };
+  }
+
   // Ступени бонусов: суммы уходят реальными деньгами на карту клиента,
   // поэтому валидация недоверчивая — неизвестное действие отвергаем, а не
   // молча игнорируем.
@@ -111,6 +117,7 @@ function parseRuleBody(body) {
     bonusEnabled: !!b.bonusEnabled,
     bonusTiers: tiers,
     backfillMaxPerDay: cap,
+    sendIntervalMin: interval,
   } };
 }
 
@@ -119,6 +126,7 @@ const RULE_COLUMNS = `
   send_time AS "sendTime", text_mode AS "textMode", text,
   attribution_days AS "attributionDays", bonus_enabled AS "bonusEnabled",
   bonus_tiers AS "bonusTiers", backfill_max_per_day AS "backfillMaxPerDay",
+  send_interval_min AS "sendIntervalMin",
   created_at AS "createdAt"`;
 
 // GET /rules — правила со счётчиками очереди, отправок и конверсии.
@@ -152,12 +160,13 @@ router.post('/rules', guard, async (req, res) => {
     const row = await db.one(
       `INSERT INTO reminder_rules
          (salon_id, title, conditions, delay_days, send_time, text_mode, text,
-          attribution_days, bonus_enabled, bonus_tiers, backfill_max_per_day, created_by)
-       VALUES ($1,$2,$3::jsonb,$4,$5,$6,$7,$8,$9,$10::jsonb,$11,$12)
+          attribution_days, bonus_enabled, bonus_tiers, backfill_max_per_day,
+          send_interval_min, created_by)
+       VALUES ($1,$2,$3::jsonb,$4,$5,$6,$7,$8,$9,$10::jsonb,$11,$12,$13)
        RETURNING ${RULE_COLUMNS}`,
       [req.user.salonId, v.title, JSON.stringify(v.conditions), v.delayDays, v.sendTime,
        v.textMode, v.text, v.attributionDays, v.bonusEnabled, JSON.stringify(v.bonusTiers),
-       v.backfillMaxPerDay, req.user.userId]);
+       v.backfillMaxPerDay, v.sendIntervalMin, req.user.userId]);
     res.json({ rule: row });
   } catch (e) { log.error(e.message); res.status(500).json({ error: 'Не удалось создать правило' }); }
 });
@@ -171,12 +180,12 @@ router.put('/rules/:id', guard, async (req, res) => {
       `UPDATE reminder_rules
           SET title=$3, conditions=$4::jsonb, delay_days=$5, send_time=$6, text_mode=$7,
               text=$8, attribution_days=$9, bonus_enabled=$10, bonus_tiers=$11::jsonb,
-              backfill_max_per_day=$12, updated_at=NOW()
+              backfill_max_per_day=$12, send_interval_min=$13, updated_at=NOW()
         WHERE id=$1 AND salon_id=$2
         RETURNING ${RULE_COLUMNS}`,
       [req.params.id, req.user.salonId, v.title, JSON.stringify(v.conditions), v.delayDays,
        v.sendTime, v.textMode, v.text, v.attributionDays, v.bonusEnabled,
-       JSON.stringify(v.bonusTiers), v.backfillMaxPerDay]);
+       JSON.stringify(v.bonusTiers), v.backfillMaxPerDay, v.sendIntervalMin]);
     if (!row) return res.status(404).json({ error: 'Правило не найдено' });
     // rule_title в очереди денормализован ради истории — синхронизируем.
     await db.query(`UPDATE reminder_queue SET rule_title=$2 WHERE rule_id=$1`, [req.params.id, v.title]);
