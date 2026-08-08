@@ -25,12 +25,20 @@ let _remBfRows = null;
 // ── вкладка «Напоминания» ──────────────────────────────────────
 
 async function remLoadRules() {
+  const wrap = document.getElementById('remRules');
+  if (wrap && !wrap.innerHTML.trim()) { wrap.className = 'empty'; wrap.innerHTML = 'Загрузка…'; }
   try {
     const d = await api('GET', '/api/reminders/rules');
     _remRules = d.rules || [];
     remRenderRules();
     remFillHistoryFilter();
-  } catch (e) { notify(e.message || 'Не удалось загрузить правила', 'err'); }
+  } catch (e) {
+    notify(e.message || 'Не удалось загрузить правила', 'err');
+    if (wrap) {
+      wrap.className = 'empty';
+      wrap.innerHTML = `<span style="color:var(--danger)">Ошибка: ${esc(e.message || 'не удалось загрузить правила')}</span>`;
+    }
+  }
 }
 
 function remRenderRules() {
@@ -42,38 +50,56 @@ function remRenderRules() {
     return;
   }
   wrap.className = '';
-  wrap.innerHTML = _remRules.map(r => `
-    <div class="card" style="margin-bottom:10px">
-      <div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:flex-start">
-        <div>
-          <div style="font-weight:600">${esc(r.title)}
-            <span class="bc-chip ${r.isEnabled ? 'on' : ''}" style="margin-left:8px">${r.isEnabled ? 'включено' : 'выключено'}</span>
+  // Раскладка карточки — та же, что у программ «Заботы» (.bc-row + тумблер +
+  // чипы статистики): страница одна, и две разные визуальные грамматики на
+  // соседних вкладках читаются как два разных раздела.
+  wrap.innerHTML = _remRules.map(r => {
+    const on = !!r.isEnabled;
+    const conv = r.sentCount ? Math.round((r.convertedCount / r.sentCount) * 100) : null;
+    return `
+    <div class="bc-row" data-id="${r.id}">
+      <div class="bc-row-grid">
+        <div class="bc-row-left">
+          <div class="care-card-title">
+            <label class="tgl" title="${on ? 'Выключить правило' : 'Включить правило'}"><input type="checkbox" ${on ? 'checked' : ''}
+              onchange="remToggleRule(${r.id})"><span class="ts"></span></label>
+            <b>${esc(r.title)}</b>
+            ${on ? '' : '<span class="care-badge care-st-stopped">выключено</span>'}
           </div>
-          <div style="font-size:12px;color:var(--t3);margin-top:4px">
+          <div class="care-meta">
             Через ${r.delayDays} дн. в ${esc(r.sendTime)} ·
-            ${r.textMode === 'free' ? 'Мила пишет сама' : 'готовый текст'} ·
-            ${r.bonusEnabled ? `бонусы: ${(r.bonusTiers || []).length} ступ.` : 'без бонусов'}
+            ${r.textMode === 'free' ? '✍️ Мила пишет сама' : '📋 готовый текст'} ·
+            ${r.bonusEnabled ? `🎁 бонусы: ${(r.bonusTiers || []).length} ступ.` : 'без бонусов'}
           </div>
-          <div style="font-size:12px;color:var(--t3);margin-top:4px">
-            В очереди: ${r.queuedCount} · отправлено: ${r.sentCount} ·
-            записались: ${r.convertedCount} · дошли: ${r.visitedCount} ·
-            начислено бонусов: ${r.bonusTotal}
+          <div class="care-stats">
+            <span class="care-stat on" title="Ждут отправки"><b>${r.queuedCount}</b> в очереди</span>
+            <span class="care-stat" title="Всего отправлено напоминаний"><b>${r.sentCount}</b> отправлено</span>
+            <span class="care-stat" title="Записались после напоминания${conv === null ? '' : ` — ${conv}% от отправленных`}"><b>${r.convertedCount}</b> записались${conv === null ? '' : ` · ${conv}%`}</span>
+            <span class="care-stat" title="Дошли до визита"><b>${r.visitedCount}</b> дошли</span>
+            <span class="care-stat" title="Начислено бонусов по этому правилу"><b>${r.bonusTotal}</b> бонусов</span>
           </div>
         </div>
-        <div style="display:flex;gap:6px;flex-wrap:wrap">
-          <button class="btn btn-sec btn-sm" onclick="remOpenTest(${r.id})">🧪 Тест</button>
-          <button class="btn btn-sec btn-sm" onclick="remOpenBackfill(${r.id})">👁 Догон</button>
-          <button class="btn btn-sec btn-sm" onclick="remOpenRuleModal(${r.id})">Изменить</button>
-          <button class="btn btn-sec btn-sm" onclick="remToggleRule(${r.id})">${r.isEnabled ? 'Выключить' : 'Включить'}</button>
-          <button class="btn btn-sec btn-sm" onclick="remDeleteRule(${r.id})">Удалить</button>
+        <div class="bc-row-right">
+          <div class="care-acts">
+            <button class="btn btn-sec btn-sm" onclick="remOpenTest(${r.id})" title="Отправить это правило на свой номер">🧪 Тест</button>
+            <button class="btn btn-sec btn-sm" onclick="remOpenBackfill(${r.id})" title="Кому ушло бы, если бы правило работало последние N дней">👁 Догон</button>
+            <button class="btn btn-sec btn-sm" onclick="remOpenRuleModal(${r.id})">✏️ Изменить</button>
+            <button class="btn btn-sec btn-sm care-act-icon" onclick="remDeleteRule(${r.id})" title="Удалить правило">🗑</button>
+          </div>
         </div>
       </div>
-    </div>`).join('');
+    </div>`;
+  }).join('');
 }
 
 async function remToggleRule(id) {
   try { await api('POST', `/api/reminders/rules/${id}/toggle`); await remLoadRules(); }
-  catch (e) { notify(e.message || 'Не удалось переключить', 'err'); }
+  catch (e) {
+    notify(e.message || 'Не удалось переключить', 'err');
+    // Тумблер уже переключился визуально — вернуть его к состоянию из модели,
+    // иначе карточка врёт «включено» на правиле, которое осталось выключенным.
+    remRenderRules();
+  }
 }
 
 async function remDeleteRule(id) {
@@ -135,24 +161,32 @@ function remRenderTiers() {
   const wrap = document.getElementById('remTiers');
   document.getElementById('remAddTierBtn').style.display = on ? '' : 'none';
   if (!on) { wrap.innerHTML = ''; return; }
-  wrap.innerHTML = _remTiers.map((t, i) => `
-    <div class="nr-cond" style="margin-bottom:8px">
-      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-        <span style="font-size:12px;color:var(--t3)">баланс меньше</span>
-        <input type="number" min="0" style="width:110px" value="${t.upTo === null ? '' : t.upTo}"
-               placeholder="без предела" oninput="remTierField(${i},'upTo',this.value)">
+  const hint = '<div class="bc-section-hint" style="margin:6px 0 8px">' +
+    'Порог не включается: ступень ловит баланс <b>строго меньше</b> указанного. ' +
+    'Ступень с пустым порогом — «весь остаток», её стоит поставить последней.</div>';
+  wrap.innerHTML = (_remTiers.map((t, i) => `
+    <div class="nr-cond rem-tier" style="margin-bottom:8px">
+      <div class="rem-tier-head">
+        <span class="care-touch-num">${i + 1}</span>
+        <span class="rem-tier-lbl">Ступень ${i + 1}</span>
+        <button class="mc" onclick="remRemoveTier(${i})" title="Убрать ступень">✕</button>
+      </div>
+      <div class="rem-tier-fields">
+        <label class="care-touch-lbl">баланс меньше
+          <input type="number" min="0" style="width:110px" value="${t.upTo === null ? '' : t.upTo}"
+                 placeholder="без предела" oninput="remTierField(${i},'upTo',this.value)"></label>
         <select style="width:auto" onchange="remTierField(${i},'action',this.value)">
-          <option value="accrue"  ${t.action === 'accrue'  ? 'selected' : ''}>начислить</option>
+          <option value="accrue"  ${t.action === 'accrue'  ? 'selected' : ''}>начислить бонусы</option>
           <option value="mention" ${t.action === 'mention' ? 'selected' : ''}>только упомянуть баланс</option>
           <option value="none"    ${t.action === 'none'    ? 'selected' : ''}>без бонусов</option>
         </select>
-        ${t.action === 'accrue' ? `<input type="number" min="1" style="width:100px" value="${t.amount}"
-               placeholder="бонусов" oninput="remTierField(${i},'amount',this.value)">` : ''}
-        <button class="mc" onclick="remRemoveTier(${i})" title="Убрать ступень">✕</button>
+        ${t.action === 'accrue' ? `<label class="care-touch-lbl">сколько
+          <input type="number" min="1" style="width:100px" value="${t.amount}"
+                 placeholder="бонусов" oninput="remTierField(${i},'amount',this.value)"></label>` : ''}
       </div>
       <textarea rows="2" placeholder="Текст для этой ступени (пусто — возьмётся основной текст правила)"
                 oninput="remTierField(${i},'text',this.value)">${esc(t.text || '')}</textarea>
-    </div>`).join('') || '<div class="empty" style="padding:10px 0">Ступеней нет — добавьте хотя бы одну</div>';
+    </div>`).join('') || '<div class="empty" style="padding:10px 0">Ступеней нет — добавьте хотя бы одну</div>') + hint;
 }
 
 async function remSaveRule() {
@@ -238,15 +272,15 @@ async function remRunBackfillPreview() {
         ${d.lastScheduledAt ? ` · последнее ${remFmt(d.lastScheduledAt)}` : ''}
       </div>
       ${d.catMapFailed ? '<div class="empty" style="color:#f59e0b">Карта категорий не загрузилась — условия по категории не сработают</div>' : ''}
-      <div class="tw"><table><thead><tr>
+      <div class="tw mtbl-wrap"><table class="mtbl"><thead><tr>
         <th>Клиент</th><th>Визит</th><th>Услуги</th><th>Итог</th>
       </tr></thead><tbody>
       ${d.rows.slice(0, 200).map(r => `<tr>
-        <td>${esc(r.clientName || r.phone || '')}</td>
-        <td>${remFmt(r.visitAt)}</td>
-        <td>${esc((r.services || []).map(s => s.title).join(', '))}</td>
-        <td>${r.skipReason ? `<span style="color:var(--t3)">${esc(REM_SKIP_LBL[r.skipReason] || r.skipReason)}</span>`
-                           : '<span style="color:#10b981">уйдёт</span>'}</td>
+        <td class="mtbl-title"><b>${esc(r.clientName || r.phone || '')}</b></td>
+        <td data-label="Визит">${remFmt(r.visitAt)}</td>
+        <td class="mtbl-full" data-label="Услуги">${esc((r.services || []).map(s => s.title).join(', '))}</td>
+        <td data-label="Итог">${r.skipReason ? `<span class="care-badge care-st-stopped">${esc(REM_SKIP_LBL[r.skipReason] || r.skipReason)}</span>`
+                           : '<span class="care-badge care-st-completed">уйдёт</span>'}</td>
       </tr>`).join('')}
       </tbody></table></div>
       ${d.rows.length > 200 ? `<div style="font-size:11px;color:var(--t3);padding:6px 2px">Показаны первые 200 из ${d.rows.length}</div>` : ''}`;
@@ -383,6 +417,11 @@ function remFillHistoryFilter() {
 }
 
 async function remLoadHistory() {
+  // Заглушка на время запроса: смена фильтра иначе оставляет на экране СТАРЫЕ
+  // строки без единого признака, что идёт перезагрузка (на медленной сети это
+  // читается как «фильтр не сработал»).
+  const body = document.getElementById('remHistBody');
+  if (body) body.innerHTML = '<tr><td colspan="9" class="empty">Загрузка…</td></tr>';
   if (!_remRules.length) await remLoadRules();
   const q = new URLSearchParams();
   const rule = document.getElementById('remHistRule').value;
@@ -395,7 +434,10 @@ async function remLoadHistory() {
   try {
     const d = await api('GET', `/api/reminders/history?${q}`);
     remRenderHistory(d.rows || []);
-  } catch (e) { notify(e.message || 'Не удалось загрузить историю', 'err'); }
+  } catch (e) {
+    notify(e.message || 'Не удалось загрузить историю', 'err');
+    if (body) body.innerHTML = `<tr><td colspan="9" class="empty" style="color:var(--danger)">Ошибка: ${esc(e.message || 'не удалось загрузить историю')}</td></tr>`;
+  }
 }
 
 function remRenderHistory(rows) {
@@ -410,21 +452,28 @@ function remRenderHistory(rows) {
     // Запланированные строки тоже живут в этой таблице (фильтр «Запланировано»):
     // отдельной вкладки очереди нет, и время у них своё — scheduled_at.
     const when = r.status === 'scheduled' ? r.scheduledAt : r.sentAt;
+    // Полный текст — в title: в ячейке он обрезан 200 символами, и до правки
+    // прочитать отправленное целиком было негде.
+    const full = r.text || '';
     return `<tr>
-      <td>${remFmt(when)}</td>
-      <td>${esc(r.clientName || r.phone || '')}</td>
-      <td>${esc(r.ruleTitle || '—')}${r.source === 'test'
+      <td data-label="Когда">${remFmt(when)}${r.status === 'scheduled'
+            ? ' <span style="font-size:11px;color:var(--t3)">(план)</span>' : ''}</td>
+      <td class="mtbl-title"><b>${esc(r.clientName || r.phone || '')}</b>
+        ${r.clientName && r.phone ? `<div style="font-size:11.5px;color:var(--t3)">${esc(r.phone)}</div>` : ''}</td>
+      <td data-label="Правило">${esc(r.ruleTitle || '—')}${r.source === 'test'
             ? ' <span class="bc-chip" title="тестовая отправка администратором">тест</span>' : ''}</td>
-      <td title="баланс был: ${r.balanceBefore == null ? 'неизвестен' : r.balanceBefore}">${esc(String(bonus))}</td>
-      <td style="max-width:320px">${esc((r.text || '').slice(0, 200))}</td>
-      <td><span style="color:${st.color}">${esc(st.lbl)}</span>
-          ${r.reason ? `<div style="font-size:11px;color:var(--t3)">${esc(r.reason)}</div>` : ''}</td>
-      <td>${r.convertedAt ? remFmt(r.convertedAt) : '—'}</td>
-      <td>${r.visitedAt ? remFmt(r.visitedAt) : '—'}</td>
-      <td>${r.status === 'scheduled'
-             ? `<button class="btn btn-sec btn-sm" onclick="remCancelQueued(${r.id})">Отменить</button>`
-             : (r.ruleId ? `<button class="btn btn-sec btn-sm" onclick="remToggleMute(${r.ruleId}, '${escJs(r.phone)}', ${!r.muted})">
-                  ${r.muted ? 'Разрешить снова' : 'Запретить'}</button>` : '')}</td>
+      <td data-label="Бонусы" title="баланс был: ${r.balanceBefore == null ? 'неизвестен' : r.balanceBefore}">${esc(String(bonus))}</td>
+      <td class="mtbl-full mtbl-hide-empty" data-label="Текст" style="max-width:320px"
+          title="${escAttr(esc(full))}">${esc(full.slice(0, 200))}${full.length > 200 ? '…' : ''}</td>
+      <td data-label="Статус"><span class="care-badge" style="background:${st.color}22;color:${st.color}">${esc(st.lbl)}</span>
+          ${r.reason ? `<div style="font-size:11px;color:var(--t3);margin-top:2px">${esc(r.reason)}</div>` : ''}</td>
+      <td data-label="Записался">${r.convertedAt ? '✅ ' + remFmt(r.convertedAt) : '—'}</td>
+      <td data-label="Дошёл">${r.visitedAt ? '✅ ' + remFmt(r.visitedAt) : '—'}</td>
+      <td class="mtbl-act mtbl-hide-empty">${r.status === 'scheduled'
+             ? `<button class="btn btn-sec btn-sm" onclick="remCancelQueued(${r.id})">Отменить отправку</button>`
+             : (r.ruleId ? `<button class="btn btn-sec btn-sm" onclick="remToggleMute(${r.ruleId}, '${escJs(r.phone)}', ${!r.muted})"
+                  title="${r.muted ? 'Разрешить напоминания этому клиенту по этому правилу' : 'Больше не напоминать этому клиенту по этому правилу'}">
+                  ${r.muted ? '🔔 Разрешить снова' : '🔕 Запретить'}</button>` : '')}</td>
     </tr>`;
   }).join('');
 }

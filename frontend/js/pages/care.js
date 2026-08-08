@@ -111,29 +111,30 @@ function careRenderPrograms() {
   wrap.className = '';
   wrap.innerHTML = _carePrograms.map(p => {
     const touches = (p.touches || []).map(t =>
-      `<span class="care-tbadge" title="${esc(t.title || '')} · в ${esc(t.sendTime || '')}">Т+${t.delayDays}</span>`).join('');
-    const stats = [];
-    stats.push(`<span style="color:var(--a)">в работе: ${+p.active_count || 0}</span>`);
-    stats.push(`<span style="color:#10b981">✓ ${+p.sent_count || 0}</span>`);
+      `<span class="care-tbadge" title="${escAttr(esc((t.title || 'касание') + ' · в ' + (t.sendTime || '')))}">Т+${t.delayDays}</span>`).join('');
+    const on = !!p.is_enabled;
     return `
       <div class="bc-row" data-id="${p.id}">
         <div class="bc-row-grid">
           <div class="bc-row-left">
-            <div class="bc-row-meta" style="display:flex;align-items:center;gap:10px">
-              <label class="tgl"><input type="checkbox" ${p.is_enabled ? 'checked' : ''}
+            <div class="care-card-title">
+              <label class="tgl" title="${on ? 'Выключить программу' : 'Включить программу'}"><input type="checkbox" ${on ? 'checked' : ''}
                 onchange="careToggleProgram(${p.id})"><span class="ts"></span></label>
-              <b style="font-size:13.5px;color:var(--t1)">${esc(p.title)}</b>
+              <b>${esc(p.title)}</b>
+              ${on ? '' : '<span class="care-badge care-st-stopped">выключена</span>'}
             </div>
             <div class="bc-row-filters" style="margin-top:6px">${esc(careCondSummary(p.conditions))}</div>
             <div class="care-tbadge-row">${touches || '<span style="font-size:11.5px;color:var(--t3)">нет касаний</span>'}</div>
+            <div class="care-stats">
+              <span class="care-stat on" title="Клиентов сейчас проходят цепочку"><b>${+p.active_count || 0}</b> в работе</span>
+              <span class="care-stat" title="Всего отправлено касаний"><b>${+p.sent_count || 0}</b> отправлено</span>
+            </div>
           </div>
           <div class="bc-row-right">
-            <div class="bc-progress-lbl">Клиенты / отправки</div>
-            <div class="bc-progress-val" style="font-size:12.5px">${stats.join(' · ')}</div>
-            <div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap;justify-content:flex-end">
+            <div class="care-acts">
               <button class="btn btn-sec btn-sm" onclick="careOpenPreview(${p.id})" title="Кто попал бы в программу за последние N дней">👁 Выборка</button>
-              <button class="btn btn-sec btn-sm" onclick="careOpenProgramModal(${p.id})">Изменить</button>
-              <button class="btn btn-sec btn-sm" onclick="careDeleteProgram(${p.id})">🗑</button>
+              <button class="btn btn-sec btn-sm" onclick="careOpenProgramModal(${p.id})">✏️ Изменить</button>
+              <button class="btn btn-sec btn-sm care-act-icon" onclick="careDeleteProgram(${p.id})" title="Удалить программу">🗑</button>
             </div>
           </div>
         </div>
@@ -256,9 +257,8 @@ function careRenderTouches() {
     <div class="care-touch">
       <div class="care-touch-head">
         <span class="care-touch-num">${i + 1}</span>
-        <input type="text" maxlength="255" placeholder="Название (напр. Контроль Т+1)"
-               value="${escAttr(esc(t.title))}" oninput="careTouchField(${i}, 'title', this.value)"
-               style="flex:1;min-width:120px">
+        <input type="text" class="care-touch-title" maxlength="255" placeholder="Название (напр. Контроль Т+1)"
+               value="${escAttr(esc(t.title))}" oninput="careTouchField(${i}, 'title', this.value)">
         <label class="care-touch-lbl">через
           <input type="number" min="0" max="730" inputmode="numeric" value="${esc(String(t.delayDays))}"
                  oninput="careTouchField(${i}, 'delayDays', this.value)" style="width:64px"> дн.</label>
@@ -429,24 +429,24 @@ function careRenderPreview(d) {
     ).join('') || '<span style="font-size:11.5px;color:var(--t3)">—</span>';
     return `
       <tr class="${skip ? 'care-pv-skip' : ''}">
-        <td>
+        <td class="mtbl-title">
           <b>${esc(r.clientName || 'Без имени')}</b>
           <div style="font-size:11.5px;color:var(--t3)">${esc(r.phone || 'нет номера')}</div>
         </td>
-        <td>${esc(careFmtDt(r.visitAt))}
+        <td data-label="Визит">${esc(careFmtDt(r.visitAt))}
           ${r.services && r.services.length ? `<div style="font-size:11.5px;color:var(--t3)">${esc(r.services.join(', '))}</div>` : ''}
         </td>
-        <td>${esc(r.staffName || '—')}</td>
-        <td>${skip
+        <td data-label="Врач">${esc(r.staffName || '—')}</td>
+        <td data-label="Итог">${skip
           ? `<span class="care-badge care-st-stopped" title="${escAttr(esc(skip.hint))}">${esc(skip.lbl)}</span>`
           : '<span class="care-badge care-st-active">зачислен</span>'}</td>
-        <td><div class="care-pv-touches">${touches}</div></td>
+        <td class="mtbl-full" data-label="Касания"><div class="care-pv-touches">${touches}</div></td>
       </tr>`;
   }).join('');
 
   box.className = '';
   box.innerHTML = head + `
-    <div class="tw"><table class="care-pv-table">
+    <div class="tw mtbl-wrap"><table class="care-pv-table mtbl">
       <thead><tr><th>Клиент</th><th>Визит</th><th>Врач</th><th>Итог</th><th>Касания</th></tr></thead>
       <tbody>${rows}</tbody>
     </table></div>`;
@@ -486,20 +486,26 @@ function careRenderEnrollments() {
     body.innerHTML = '<tr><td colspan="7" class="empty">Пока никого: клиенты попадают сюда после состоявшегося визита, подходящего под условия программы.</td></tr>';
     return;
   }
+  // data-label на каждой ячейке — подписи колонок в карточном режиме мобилы
+  // (.mtbl в features.css); на десктопе атрибут ни на что не влияет.
   body.innerHTML = _careEnr.map(e => {
     const services = (Array.isArray(e.services) ? e.services : [])
       .map(s => s && s.title).filter(Boolean).join(', ');
-    const client = `<b>${esc(e.client_name || 'Без имени')}</b><div style="font-size:11.5px;color:var(--t3)">${esc(e.phone || '')}</div>`;
+    const open = _careEnrOpenId === e.id;
+    const client = `<b>${esc(e.client_name || 'Без имени')}</b>` +
+      `<span class="care-caret" aria-hidden="true">▾</span>` +
+      `<div style="font-size:11.5px;color:var(--t3)">${esc(e.phone || '')}</div>`;
     const visit = `${careFmtDt(e.visit_at)}${services ? `<div style="font-size:11.5px;color:var(--t3)">${esc(services)}</div>` : ''}`;
     return `
-      <tr class="care-enr-row ${_careEnrOpenId === e.id ? 'open' : ''}" onclick="careToggleEnr(${e.id})">
-        <td>${client}</td>
-        <td>${esc(e.program_title || '')}</td>
-        <td>${visit}</td>
-        <td>${esc(e.staff_name || '—')}</td>
-        <td>${careEnrBadge(e.status)}${e.status_reason ? `<div style="font-size:11px;color:var(--t3);margin-top:2px">${esc(e.status_reason)}</div>` : ''}</td>
-        <td>${careFmtDt(e.next_touch_at)}</td>
-        <td>${careFmtDt(e.last_sent_at)}</td>
+      <tr class="care-enr-row ${open ? 'open' : ''}" onclick="careToggleEnr(${e.id})"
+          title="${open ? 'Свернуть журнал касаний' : 'Показать журнал касаний'}">
+        <td class="mtbl-title">${client}</td>
+        <td data-label="Программа">${esc(e.program_title || '')}</td>
+        <td data-label="Визит">${visit}</td>
+        <td data-label="Врач">${esc(e.staff_name || '—')}</td>
+        <td data-label="Статус">${careEnrBadge(e.status)}${e.status_reason ? `<div style="font-size:11px;color:var(--t3);margin-top:2px">${esc(e.status_reason)}</div>` : ''}</td>
+        <td data-label="След. касание">${careFmtDt(e.next_touch_at)}</td>
+        <td data-label="Последняя отправка">${careFmtDt(e.last_sent_at)}</td>
       </tr>
       ${_careEnrOpenId === e.id ? `
       <tr class="care-enr-detail"><td colspan="7">

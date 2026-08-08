@@ -246,7 +246,9 @@ async function main() {
     // «Запретить»: клик по инлайн-обработчику remToggleMute(ruleId, '<телефон через escJs>', true)
     let clicked = await page.evaluate((phone) => {
       const btn = [...document.querySelectorAll('#remHistBody button')]
-        .find(b => b.textContent.trim() === 'Запретить' && b.closest('tr').textContent.includes(phone));
+        // includes, а не строгое равенство: у кнопки есть эмодзи-префикс (🔕/🔔),
+        // и точное сравнение ломалось от косметической правки подписи
+        .find(b => b.textContent.includes('Запретить') && b.closest('tr').textContent.includes(phone));
       if (!btn) return false;
       btn.click();
       return true;
@@ -270,7 +272,7 @@ async function main() {
     // «Разрешить снова»: обратный клик должен снять флаг
     clicked = await page.evaluate((phone) => {
       const btn = [...document.querySelectorAll('#remHistBody button')]
-        .find(b => b.textContent.trim() === 'Разрешить снова' && b.closest('tr').textContent.includes(phone));
+        .find(b => b.textContent.includes('Разрешить снова') && b.closest('tr').textContent.includes(phone));
       if (!btn) return false;
       btn.click();
       return true;

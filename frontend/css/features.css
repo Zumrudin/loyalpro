@@ -487,6 +487,9 @@
   display:inline-flex;align-items:center;justify-content:center}
 .care-touch-lbl{display:inline-flex;align-items:center;gap:5px;
   font-size:12px;color:var(--t3);white-space:nowrap}
+/* класс, а не инлайн-стиль: мобильный брейкпоинт переносит поле на свою
+   строку (flex-basis:100%), а инлайн-`flex:1` перебить нечем */
+.care-touch-title{flex:1;min-width:120px}
 .care-touch-btns{display:inline-flex;gap:2px;margin-left:auto}
 .care-touch-btns .mc[disabled]{opacity:.3;cursor:default}
 /* статус-бейджи прохождений (дашборд «Клиенты») */
@@ -510,20 +513,112 @@
 .care-pv-touches{display:flex;flex-direction:column;gap:3px;align-items:flex-start}
 .care-pv-touches .care-tbadge{white-space:nowrap}
 /* фиксированная раскладка: длинные названия услуг иначе распирают таблицу
-   шире модалки и колонка касаний уезжает за край */
+   шире модалки и колонка касаний уезжает за край.
+   Только на десктопе: на мобиле таблица превращается в карточки (.mtbl),
+   и процентные ширины на td с display:block сжали бы содержимое в столбик. */
 .care-pv-table{width:100%;table-layout:fixed}
 .care-pv-table td{vertical-align:top;word-break:break-word}
-.care-pv-table th:nth-child(1),.care-pv-table td:nth-child(1){width:21%}
-.care-pv-table th:nth-child(2),.care-pv-table td:nth-child(2){width:31%}
-.care-pv-table th:nth-child(3),.care-pv-table td:nth-child(3){width:15%}
-.care-pv-table th:nth-child(4),.care-pv-table td:nth-child(4){width:14%}
-.care-pv-table th:nth-child(5),.care-pv-table td:nth-child(5){width:19%}
+@media(min-width:701px){
+  .care-pv-table th:nth-child(1),.care-pv-table td:nth-child(1){width:21%}
+  .care-pv-table th:nth-child(2),.care-pv-table td:nth-child(2){width:31%}
+  .care-pv-table th:nth-child(3),.care-pv-table td:nth-child(3){width:15%}
+  .care-pv-table th:nth-child(4),.care-pv-table td:nth-child(4){width:14%}
+  .care-pv-table th:nth-child(5),.care-pv-table td:nth-child(5){width:19%}
+}
 .care-tbadge-past{opacity:.55;text-decoration:line-through}
 /* строки дашборда: раскрытие журнала */
 .care-enr-row{cursor:pointer}
 .care-enr-row:hover td{background:var(--bg)}
 .care-enr-row.open td{background:var(--bg)}
 .care-enr-detail td{background:var(--bg);padding:12px 16px 14px}
+/* каретка «строка раскрывается» — без неё кликабельность строки не читается */
+.care-caret{display:inline-block;margin-left:6px;font-size:10px;color:var(--t3);
+  transition:transform .15s}
+.care-enr-row.open .care-caret{transform:rotate(180deg);color:var(--a)}
+
+/* строка статистики карточки (программа заботы / правило напоминаний):
+   вместо слипшегося «В очереди: 3 · отправлено: 12 · записались: 4» */
+.care-stats{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+.care-stat{display:inline-flex;align-items:baseline;gap:5px;padding:3px 9px;
+  border-radius:8px;background:var(--bg);border:1px solid var(--bd);
+  font-size:11.5px;color:var(--t3);white-space:nowrap}
+.care-stat b{font-size:12.5px;color:var(--t1);font-weight:700}
+.care-stat.on b{color:var(--a)}
+/* ряд кнопок карточки */
+.care-acts{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}
+/* заголовок карточки: тумблер + название + бейдж состояния */
+.care-card-title{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.care-card-title b{font-size:13.5px;color:var(--t1)}
+.care-meta{font-size:11.5px;color:var(--t3);margin-top:6px}
+/* фильтры в шапке вкладки */
+.care-filters{display:flex;gap:8px;flex-wrap:wrap}
+.care-filters select{width:auto;min-width:150px}
+
+/* ступень бонусов в редакторе правила напоминаний */
+.rem-tier-head{display:flex;align-items:center;gap:8px;margin-bottom:8px}
+.rem-tier-lbl{font-size:12.5px;font-weight:600;color:var(--t1)}
+.rem-tier-head .mc{margin-left:auto}
+.rem-tier-fields{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px}
+.rem-tier-fields select{width:auto}
+@media(max-width:700px){
+  /* на телефоне три контрола в строку сжимаются до нечитаемых 60px */
+  .rem-tier-fields{flex-direction:column;align-items:stretch}
+  .rem-tier-fields select{width:100%}
+  .rem-tier-fields .care-touch-lbl{justify-content:space-between}
+  .rem-tier-fields .care-touch-lbl input{flex:0 0 130px;width:130px !important}
+}
+
+/* ─── Таблица → карточки на мобиле (.mtbl) ───────────────────────
+   Тот же приём, что у «Клиентов» и «Записей» в base.css, но переиспользуемый:
+   на странице «Забота» четыре таблицы (прохождения, история напоминаний,
+   превью выборки, догон), и горизонтальный скролл на 7–9 колонок с телефона
+   нечитаем. Подпись колонки берётся из data-label каждой ячейки. */
+@media(max-width:700px){
+  .mtbl-wrap{overflow:visible}
+  /* обёртка .card вокруг таблицы: в карточном режиме её рамка была бы второй
+     рамкой вокруг каждой карточки-строки */
+  .care-tbl-card{background:transparent;border:none;box-shadow:none}
+  .mtbl,.mtbl thead,.mtbl tbody,.mtbl td{display:block;width:auto}
+  .mtbl thead{display:none}
+  /* flex-column, а не block: заголовок карточки (.mtbl-title) в разметке может
+     стоять не первой колонкой — в истории напоминаний первая колонка «Когда»,
+     а шапкой карточки логичнее видеть клиента. order:-1 поднимает её без
+     дублирования ячейки. */
+  .mtbl tbody tr{display:flex;flex-direction:column;width:auto;
+    border:1px solid var(--bd);border-radius:10px;background:var(--card);
+    box-shadow:var(--sh);padding:10px 12px;margin-bottom:10px}
+  .mtbl tbody td{display:flex;flex-wrap:wrap;justify-content:space-between;
+    align-items:flex-start;gap:2px 12px;padding:4px 0;border:none;
+    text-align:right;width:auto}
+  .mtbl tbody td::before{content:attr(data-label);color:var(--t3);font-size:11.5px;
+    font-weight:600;text-align:left;flex:0 0 auto}
+  .mtbl tbody td:not([data-label])::before{content:none}
+  /* вложенный блок (услуги визита, причина статуса) — своей строкой под
+     значением, иначе три элемента растягиваются в одну нечитаемую полосу */
+  .mtbl tbody td>div{flex:1 0 100%;text-align:right}
+  /* «шапка карточки» — имя клиента, без подписи и на всю ширину */
+  .mtbl tbody td.mtbl-title{order:-1;display:block;text-align:left;
+    padding-bottom:8px;margin-bottom:6px;border-bottom:1px solid var(--bd)}
+  .mtbl tbody td.mtbl-title>div{text-align:left}
+  .mtbl tbody td.mtbl-title::before{content:none}
+  /* длинный текст (сообщение, услуги) — подпись сверху, значение под ней */
+  .mtbl tbody td.mtbl-full{display:block;text-align:left}
+  .mtbl tbody td.mtbl-full::before{display:block;margin-bottom:3px}
+  .mtbl tbody td.mtbl-full>div{text-align:left}
+  /* кнопки строки — во всю ширину карточки */
+  .mtbl tbody td.mtbl-act{justify-content:stretch;padding-top:8px}
+  .mtbl tbody td.mtbl-act .btn{width:100%}
+  .mtbl tbody td.empty{display:block;text-align:center}
+  .mtbl tbody td.empty::before{content:none}
+  /* пустая ячейка карточки — просто убираем, «Дошёл: —» шума не добавляет */
+  .mtbl tbody td.mtbl-hide-empty:empty{display:none}
+  /* раскрытый журнал прохождения — не карточка, а вкладка под ней */
+  .mtbl tbody tr.care-enr-detail{padding:0;margin-top:-12px;border-radius:0 0 10px 10px}
+  .mtbl tbody tr.care-enr-detail td{display:block;text-align:left;padding:10px 12px}
+  .mtbl tbody tr.care-enr-detail td::before{content:none}
+  /* журнал касаний — обычный текст слева, а не «значение колонки» справа */
+  .mtbl tbody tr.care-enr-detail td>div{text-align:left}
+}
 
 /* ─── Мобильные брейкпоинты ──────────────────────────────────── */
 @media(max-width:700px){
@@ -540,6 +635,43 @@
   .bc-head{margin-bottom:14px}
   .bc-head .btn{width:100%}
   .bc-head>div:first-child{flex:1 1 100%}
+
+  /* — «Забота»: 4 вкладки в одну строку не помещаются (заголовки переносятся
+       по буквам). Сетка 2×2 вместо горизонтального скролла — так ни одна
+       вкладка не прячется за краем. — */
+  #page-care .tabs{display:grid;grid-template-columns:1fr 1fr;gap:4px}
+  #page-care .tab{padding:9px 6px;font-size:12px}
+  /* фильтры вкладок — на всю ширину, селект не ужимается до нечитаемого */
+  .care-filters{width:100%}
+  .care-filters select{flex:1 1 140px;min-width:0;width:auto}
+  #careEnrStatus{width:100% !important;min-width:0 !important}
+  /* кнопки карточки — тянутся по ширине, тач-таргет вместо мелкой россыпи */
+  .care-acts{justify-content:flex-start;width:100%}
+  .care-acts .btn{flex:1 1 auto;justify-content:center}
+  .care-acts .care-act-icon{flex:0 0 auto}
+  .care-stats{gap:5px}
+  .care-stat{flex:1 1 calc(50% - 3px);justify-content:center}
+  /* превью выборки: плитки статистики по две в ряд */
+  .care-pv-stat{flex:1 1 calc(50% - 4px)}
+  /* Редактор касания. Три строки вместо одной: номер+кнопки, название,
+     срок+время. В один ряд поле «Название» ужималось до ~130px (поле времени
+     в браузере занимает ~130px и тянуло колонку на себя). */
+  .care-touch-head{flex-wrap:wrap;gap:8px}
+  .care-touch-num{order:1}
+  .care-touch-btns{order:1;margin-left:auto}
+  .care-touch-title{order:2;flex:1 1 100%;min-width:0}
+  .care-touch-head>.care-touch-lbl{order:3}
+  .care-touch-lbl{white-space:nowrap}
+  .care-touch-lbl input[type=number]{width:70px !important}
+
+  /* Длинная форма на телефоне: шапка и кнопки сохранения не должны уезжать
+     за пределы прокрутки — иначе «Сохранить» ищут в конце портянки условий,
+     а закрыть модалку можно только промотав вверх. Прокручивается сам .modal
+     (overflow-y:auto), поэтому sticky работает относительно него. */
+  .bc-modal .mh{position:sticky;top:-16px;z-index:3;background:#fff;  /* фон как у .modal */
+    margin:-16px -16px 12px;padding:16px 16px 10px;border-bottom:1px solid var(--bd)}
+  .bc-modal .bc-actions{position:sticky;bottom:-16px;z-index:3;background:#fff;
+    margin:0 -16px -16px;padding:10px 16px;border-top:1px solid var(--bd)}
 }
 @media(max-width:480px){
   .bc-filter-row{grid-template-columns:1fr}
@@ -549,6 +681,11 @@
   .bc-row{padding:12px;border-radius:8px}
   .bc-row-preview{font-size:12px}
   .bc-chip{padding:5px 9px;font-size:11.5px}
+  /* совсем узко — уменьшаем подпись вкладки, но сетку 2×2 сохраняем */
+  #page-care .tab{font-size:11.5px;padding:9px 4px}
+  /* padding модалки тут 12px — отрицательные отступы sticky-полос за ним */
+  .bc-modal .mh{top:-12px;margin:-12px -12px 12px;padding:12px 12px 10px}
+  .bc-modal .bc-actions{bottom:-12px;margin:0 -12px -12px;padding:10px 12px}
 }
 
 /* ═══ MEDICAL CERT VISUAL COORDS EDITOR ═══ */

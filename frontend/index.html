@@ -1242,7 +1242,7 @@
         <button class="tab active" id="careTabBtn-programs" onclick="careSwitchTab('programs')">💚 Программы</button>
         <button class="tab" id="careTabBtn-clients" onclick="careSwitchTab('clients')">👥 Клиенты</button>
         <button class="tab" id="careTabBtn-reminders" onclick="careSwitchTab('reminders')">🔁 Напоминания</button>
-        <button class="tab" id="careTabBtn-reminders-history" onclick="careSwitchTab('reminders-history')">🧾 История напоминаний</button>
+        <button class="tab" id="careTabBtn-reminders-history" onclick="careSwitchTab('reminders-history')">🧾 История</button>
       </div>
 
       <div id="careTab-programs">
@@ -1262,7 +1262,7 @@
             <div class="bc-head-title">👥 Клиенты в программах</div>
             <div class="bc-head-sub">Прохождения: кто на каком касании, журнал отправок</div>
           </div>
-          <select id="careEnrStatus" onchange="careLoadEnrollments()" style="width:auto;min-width:170px;flex-shrink:0">
+          <select id="careEnrStatus" class="care-filter-sel" onchange="careLoadEnrollments()" style="width:auto;min-width:170px;flex-shrink:0">
             <option value="">Все статусы</option>
             <option value="active">Активно</option>
             <option value="completed">Завершено</option>
@@ -1272,8 +1272,8 @@
             <option value="superseded">Перекрыто</option>
           </select>
         </div>
-        <div class="card" style="padding:0"><div class="tw">
-          <table>
+        <div class="card care-tbl-card" style="padding:0"><div class="tw mtbl-wrap">
+          <table class="mtbl">
             <thead><tr>
               <th>Клиент</th><th>Программа</th><th>Визит</th><th>Врач</th>
               <th>Статус</th><th>След. касание</th><th>Последняя отправка</th>
@@ -1300,9 +1300,9 @@
             <div class="bc-head-title">🧾 История напоминаний</div>
             <div class="bc-head-sub">Кому и по какому правилу ушло, бонусы, записался ли в итоге</div>
           </div>
-          <div style="display:flex;gap:8px;flex-wrap:wrap">
-            <select id="remHistRule" onchange="remLoadHistory()" style="width:auto;min-width:170px"></select>
-            <select id="remHistStatus" onchange="remLoadHistory()" style="width:auto;min-width:150px">
+          <div class="care-filters">
+            <select id="remHistRule" onchange="remLoadHistory()"></select>
+            <select id="remHistStatus" onchange="remLoadHistory()">
               <option value="">Все статусы</option>
               <option value="scheduled">Запланировано</option>
               <option value="sent">Отправлено</option>
@@ -1310,15 +1310,15 @@
               <option value="cancelled">Отменено</option>
               <option value="failed">Ошибка</option>
             </select>
-            <select id="remHistConv" onchange="remLoadHistory()" style="width:auto;min-width:150px">
+            <select id="remHistConv" onchange="remLoadHistory()">
               <option value="">Конверсия: любая</option>
               <option value="1">Записался</option>
               <option value="0">Не записался</option>
             </select>
           </div>
         </div>
-        <div class="card" style="padding:0"><div class="tw">
-          <table>
+        <div class="card care-tbl-card" style="padding:0"><div class="tw mtbl-wrap">
+          <table class="mtbl">
             <thead><tr>
               <th>Когда</th><th>Клиент</th><th>Правило</th><th>Бонусы</th>
               <th>Текст</th><th>Статус</th><th>Записался</th><th>Дошёл</th><th></th>
