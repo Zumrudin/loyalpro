@@ -122,6 +122,9 @@ async function remOpenRuleModal(id) {
   document.getElementById('remSendTime').value = r ? r.sendTime : '11:00';
   document.getElementById('remAttrDays').value = r ? r.attributionDays : 30;
   document.getElementById('remCap').value = r ? r.backfillMaxPerDay : 30;
+  // r.sendIntervalMin может прийти null/undefined у старого правила — тогда 3
+  // (тот же дефолт, что бэкенд подставляет при отсутствии поля).
+  document.getElementById('remInterval').value = r && r.sendIntervalMin != null ? r.sendIntervalMin : 3;
   document.getElementById('remText').value = r ? r.text : '';
   document.getElementById('remBonusEnabled').checked = r ? !!r.bonusEnabled : false;
   _remTiers = r && Array.isArray(r.bonusTiers)
@@ -190,6 +193,10 @@ function remRenderTiers() {
 }
 
 async function remSaveRule() {
+  // Number('') === 0, а 0 значит «слать без паузы» — самое опасное значение
+  // из всех. Пустое поле уходит на сервер пустой строкой (бэкенд трактует её
+  // как «поле не задано» и подставляет дефолт 3), а не как явный ноль.
+  const rawInterval = document.getElementById('remInterval').value;
   const body = {
     title: document.getElementById('remTitle').value.trim(),
     conditions: condGet('rem'),
@@ -199,6 +206,7 @@ async function remSaveRule() {
     text: document.getElementById('remText').value.trim(),
     attributionDays: Number(document.getElementById('remAttrDays').value),
     backfillMaxPerDay: Number(document.getElementById('remCap').value),
+    sendIntervalMin: rawInterval === '' ? '' : Number(rawInterval),
     bonusEnabled: document.getElementById('remBonusEnabled').checked,
     bonusTiers: _remTiers.map(t => ({ upTo: t.upTo, action: t.action, amount: t.amount, text: t.text || '' })),
   };
@@ -269,16 +277,22 @@ async function remRunBackfillPreview() {
       <div style="margin:10px 0;font-size:13px">
         Записей за период: ${d.totals.records} · состоявшихся: ${d.totals.completed} ·
         под условия: ${d.totals.matched} · <b>уйдёт напоминаний: ${willSend}</b>
-        ${d.lastScheduledAt ? ` · последнее ${remFmt(d.lastScheduledAt)}` : ''}
+      </div>
+      <div style="margin:0 0 10px;font-size:13px">
+        Просрочено (визит был больше задержки назад): <b>${d.overdueCount}</b>${
+          d.lastOverdueAt ? ` · уйдут по ${remFmt(d.lastOverdueAt)}` : ''} ·
+        встанут в очередь на будущее: <b>${d.futureCount}</b>${
+          d.lastFutureAt ? ` · последнее ${remFmt(d.lastFutureAt)}` : ''}
       </div>
       ${d.catMapFailed ? '<div class="empty" style="color:#f59e0b">Карта категорий не загрузилась — условия по категории не сработают</div>' : ''}
       <div class="tw mtbl-wrap"><table class="mtbl"><thead><tr>
-        <th>Клиент</th><th>Визит</th><th>Услуги</th><th>Итог</th>
+        <th>Клиент</th><th>Визит</th><th>Услуги</th><th>Отправка</th><th>Итог</th>
       </tr></thead><tbody>
       ${d.rows.slice(0, 200).map(r => `<tr>
         <td class="mtbl-title"><b>${esc(r.clientName || r.phone || '')}</b></td>
         <td data-label="Визит">${remFmt(r.visitAt)}</td>
         <td class="mtbl-full" data-label="Услуги">${esc((r.services || []).map(s => s.title).join(', '))}</td>
+        <td data-label="Отправка">${r.scheduledAt ? remFmt(r.scheduledAt) : '—'}</td>
         <td data-label="Итог">${r.skipReason ? `<span class="care-badge care-st-stopped">${esc(REM_SKIP_LBL[r.skipReason] || r.skipReason)}</span>`
                            : '<span class="care-badge care-st-completed">уйдёт</span>'}</td>
       </tr>`).join('')}

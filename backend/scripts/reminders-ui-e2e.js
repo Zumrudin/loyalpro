@@ -96,6 +96,14 @@ async function main() {
     await page.type('#remText', '{first_name}, приходите ещё раз — соскучились!');
     ok('задержка и текст заполнены');
 
+    // пауза между сообщениями: меняем с дефолта 3 на 7 — round-trip ниже
+    // проверит, что значение реально доехало до send_interval_min в БД и
+    // вернулось в форму при повторном открытии. Соответствие списка колонок
+    // и параметров в INSERT/UPDATE ничем не защищено — лишняя/сдвинутая
+    // колонка в запросе тихо запишет не то поле, и юнит-тесты этого не увидят.
+    await page.$eval('#remInterval', (el) => { el.value = '7'; el.dispatchEvent(new Event('input', { bubbles: true })); });
+    ok('пауза между сообщениями изменена на 7 мин');
+
     // бонусы: включить, добавить две ступени
     await page.click('#remBonusEnabled');
     // «+ Ступень» скрыта, пока бонусы выключены (remRenderTiers прячет её
@@ -140,7 +148,7 @@ async function main() {
     if (!ruleId) fail('правило не найдено в БД после сохранения');
 
     // проверка в БД: условие и ступени легли как надо
-    const dbRule = await db.one(`SELECT conditions, bonus_tiers, bonus_enabled FROM reminder_rules WHERE id=$1`, [ruleId]);
+    const dbRule = await db.one(`SELECT conditions, bonus_tiers, bonus_enabled, send_interval_min FROM reminder_rules WHERE id=$1`, [ruleId]);
     if (!dbRule.bonus_enabled) fail('bonus_enabled=false в БД');
     if (!Array.isArray(dbRule.bonus_tiers) || dbRule.bonus_tiers.length !== 2) {
       fail('в БД не 2 ступени: ' + JSON.stringify(dbRule.bonus_tiers));
@@ -148,7 +156,8 @@ async function main() {
     if (dbRule.conditions.items.length !== 1 || dbRule.conditions.items[0].type !== 'category') {
       fail('условие в БД не по категории: ' + JSON.stringify(dbRule.conditions));
     }
-    ok('в БД: условие по категории + 2 ступени бонусов сохранены корректно');
+    if (dbRule.send_interval_min !== 7) fail('send_interval_min в БД не 7: ' + dbRule.send_interval_min);
+    ok('в БД: условие по категории + 2 ступени бонусов + пауза 7 мин сохранены корректно');
 
     // ── открыть заново: условия и ступени должны восстановиться ──
     await page.evaluate((id) => remOpenRuleModal(id), ruleId);
@@ -160,7 +169,9 @@ async function main() {
     if (reopenTierRows !== 2) fail('ступени не восстановились: ' + reopenTierRows);
     const reopenBonusChecked = await page.$eval('#remBonusEnabled', el => el.checked);
     if (!reopenBonusChecked) fail('чекбокс бонусов не восстановился');
-    ok('повторное открытие: условие и 2 ступени бонусов восстановились');
+    const reopenInterval = await page.$eval('#remInterval', el => el.value);
+    if (reopenInterval !== '7') fail('пауза между сообщениями не восстановилась: ' + reopenInterval);
+    ok('повторное открытие: условие, 2 ступени бонусов и пауза 7 мин восстановились');
     await sleep(300);
     await page.screenshot({ path: '/tmp/reminders-ui-light-rule-modal.png' });
     await page.click('#remRuleOv .mc');

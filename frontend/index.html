@@ -1478,8 +1478,17 @@
           </div>
 
           <div style="display:flex;gap:12px;flex-wrap:wrap">
-            <div class="fg" style="flex:1;min-width:150px"><label class="fl">Кап догона (в день)</label>
+            <div class="fg" style="flex:1;min-width:150px"><label class="fl">Кап догоняющей пачки (в день)</label>
               <input id="remCap" type="number" min="1" max="500" value="30"></div>
+            <div class="fg" style="flex:1;min-width:150px"><label class="fl">Пауза между сообщениями (мин)</label>
+              <input id="remInterval" type="number" min="0" max="120" value="3"></div>
+          </div>
+          <div style="font-size:11px;color:var(--t3);margin:-6px 0 10px">
+            Кап ограничивает только просроченных: строки, которым ещё не подошла
+            естественная дата, встают на неё и в кап не считаются.
+            Темп считается по всем плановым отправкам салона, включая «Заботу»
+            и автоуведомления, поэтому при нескольких правилах паузу задаёт то
+            правило, чьё сообщение уходит сейчас. 0 — без паузы.
           </div>
 
           <div class="bc-actions">
@@ -2408,7 +2417,7 @@ function fireConfetti() {
 <script src="js/pages/broadcast-rules.js?v=2026-08-02a"></script>
 <script src="js/pages/conditions-editor.js?v=2026-08-07a"></script>
 <script src="js/pages/care.js?v=2026-08-07a"></script>
-<script src="js/pages/reminders.js?v=2026-08-07a"></script>
+<script src="js/pages/reminders.js?v=2026-08-08a"></script>
 <script src="js/pages/medical-cert.js?v=2026-06-19"></script>
 <script src="js/pages/cert-requests.js?v=2026-06-19b"></script>
 <script src="js/pages/medical-cert-coords-transform.js?v=2026-06-17b"></script>
