@@ -293,6 +293,27 @@ describe('отправка и бонусы', () => {
     }));
   });
 
+  // Воркер обязан звать СВОЙ промпт напоминаний, а не care-промпт «Заботы».
+  // До 08.08.2026 тут стоял buildCarePrompt, и его рамка («плановое касание
+  // заботы после визита, это НЕ продажа» + правило «не пиши поверх переписки
+  // про эту процедуру») давала систематический skip на любой живой переписке:
+  // измерено 6 отказов из 6 на боевом провайдере. Возврат к care-промпту
+  // выглядел бы безобидной унификацией — этот тест его ловит.
+  test('режим free зовёт ПРОМПТ НАПОМИНАНИЙ, а не care-промпт', async () => {
+    const { deps } = makeDeps({
+      createMessage: jest.fn(async () => ({ text: '{"action":"send","text":"Мария, пора повторить","reason":"ок"}' })),
+    });
+    await worker.processOne({ ...ROW, text_mode: 'free' }, deps);
+    const { system, messages } = deps.createMessage.mock.calls[0][0];
+    expect(system).toContain('НАПОМИНАНИЕ О ПОВТОРНОМ ВИЗИТЕ');
+    expect(system).toContain('НЕ ПОВОД МОЛЧАТЬ');
+    expect(system).not.toMatch(/касание заботы:/);
+    // Заготовка смысла приходит УЖЕ с подставленными цифрами (renderReminderText):
+    // текст ступени бонусов с реально начисленной суммой, а не обещание.
+    expect(messages[0].content).toContain('начислили 300 бонусов');
+    expect(messages[0].content).toContain('Лазерная эпиляция');
+  });
+
   test('в режиме free решение «не слать» даёт skipped без отправки', async () => {
     const { updates, deps } = makeDeps({
       createMessage: jest.fn(async () => ({ text: '{"action":"skip","reason":"клиент просил не писать"}' })),

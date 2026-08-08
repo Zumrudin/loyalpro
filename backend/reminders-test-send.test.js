@@ -37,6 +37,40 @@ describe('pickAnchorVisit', () => {
   test('мастер приходит и полем staff_name, и объектом staff', () => {
     expect(pickAnchorVisit([rec({ staff: null, staff_name: 'Татьяна' })], NOW).staffName).toBe('Татьяна');
   });
+
+  // В бою якорь по определению прошёл evaluateRule (его планирует enroll.js).
+  // Тест без этого фильтра брал ЛЮБОЙ последний визит и давал модели
+  // противоречивое задание («напоминание про эпиляцию, последний визит: филлер»),
+  // на котором она законно отказывалась писать — инцидент 08.08.2026.
+  describe('условия правила', () => {
+    const CONDITIONS = { logic: 'and', items: [{ type: 'service', ids: [101] }] };
+
+    test('берёт свежий визит ПОД УСЛОВИЯ, а не просто последний', () => {
+      const got = pickAnchorVisit([
+        rec({ id: 1, datetime: '2026-07-01 11:00:00' }),
+        rec({ id: 2, datetime: '2026-07-31 15:25:00', services: [{ id: 999, title: 'Stylage M Lidocaine' }] }),
+      ], NOW, { conditions: CONDITIONS });
+      expect(got.recordId).toBe(1);
+    });
+
+    test('подходящих визитов нет → null (откат на «любой визит» запрещён)', () => {
+      const got = pickAnchorVisit([
+        rec({ id: 2, services: [{ id: 999, title: 'Stylage M Lidocaine' }] }),
+      ], NOW, { conditions: CONDITIONS });
+      expect(got).toBeNull();
+    });
+
+    test('условие по категории считается через карту категорий', () => {
+      const byCat = { logic: 'and', items: [{ type: 'category', ids: [9] }] };
+      const catMap = new Map([['101', 9]]);
+      expect(pickAnchorVisit([rec()], NOW, { conditions: byCat, catMap }).recordId).toBe(1);
+      expect(pickAnchorVisit([rec()], NOW, { conditions: byCat, catMap: new Map() })).toBeNull();
+    });
+
+    test('без условий фильтр не применяется (совместимость вызова)', () => {
+      expect(pickAnchorVisit([rec()], NOW).recordId).toBe(1);
+    });
+  });
 });
 
 describe('buildTestRow', () => {

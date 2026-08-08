@@ -29,7 +29,7 @@ const { hasFutureMatchingBooking } = require('./eligibility');
 const { renderReminderText, pickTierText } = require('./template');
 const { pickTier } = require('./tiers');
 const bonusSvc = require('./bonus');
-const { buildCarePrompt } = require('../care/care-prompt');
+const { buildReminderPrompt } = require('./reminder-prompt');
 const { parseCareDecision } = require('../care/decision');
 const { createLogger } = require('../../logger');
 
@@ -197,8 +197,8 @@ async function deferRow(db, row, reason, bumpDefers = false) {
 
 /**
  * Решение по напоминанию: strict — всегда {action:'send', text, reason:null}
- * (шаблон детерминирован). free — Мила решает по заготовке смысла тем же
- * care-промптом, и решение может быть 'send'/'skip'/'escalate'/'stop_program'
+ * (шаблон детерминирован). free — Мила решает по заготовке смысла промптом
+ * напоминаний, и решение может быть 'send'/'skip'/'escalate'/'stop_program'
  * (см. care/decision.js) — вызывающий обязан разобрать ВСЕ варианты, а не
  * только 'send': промпт обещает пациенту эскалацию при осложнении и
  * прекращение цепочки по просьбе «не пишите мне», и оба обещания нужно
@@ -229,24 +229,26 @@ async function buildText(row, bonus, deps) {
     return { action: 'send', text: renderReminderText(raw, tplCtx), reason: null };
   }
 
-  // free: заготовка смысла (уже с подставленными цифрами) уходит в тот же
-  // care-промпт — отдельного промпта для напоминаний не заводим.
+  // free: заготовка смысла (уже с подставленными цифрами) уходит в СОБСТВЕННЫЙ
+  // промпт напоминаний. Care-промпт («плановое касание заботы после визита, это
+  // НЕ продажа») тут стоял до 08.08.2026 и давал систематический skip: любая
+  // живая переписка читалась как «не пиши поверх» — измерено, см. шапку
+  // services/reminders/reminder-prompt.js.
   const transcript = await deps.loadTranscript(row.salon_id, row.phone, { limit: 15 })
     .catch(() => ({ messages: [] }));
-  const { system, user } = buildCarePrompt({
+  const { system, user } = buildReminderPrompt({
     salonName: row.salon_name,
     clientName: row.client_name,
     nameDictionary: tplCtx.nameDictionary,
-    touch: { title: row.rule_title, intent_text: renderReminderText(raw, tplCtx), text_mode: 'free' },
-    enrollment: { staff_name: row.anchor_staff_name, visit_at: row.anchor_visit_at, services },
+    rule: { title: row.rule_title, intent_text: renderReminderText(raw, tplCtx) },
+    anchor: { staff_name: row.anchor_staff_name, visit_at: row.anchor_visit_at, services },
     transcript: (transcript.messages || []).map(m => ({
       direction: m.role === 'user' ? 'incoming' : 'outgoing',
-      // stripOperatorMark — care-промпт про пометку администратора не знает и
-      // отдал бы её клиенту дословно в тексте (тот же дефект чинили в «Заботе»).
+      // stripOperatorMark — промпт (ни этот, ни care) про пометку администратора
+      // не знает и отдал бы её клиенту дословно в тексте.
       text: stripOperatorMark(typeof m.content === 'string' ? m.content
         : (Array.isArray(m.content) ? m.content.map(b => b.text || '').join(' ') : '')),
     })).filter(m => m.text),
-    futureBookings: [],
   });
   let resp, timer;
   try {

@@ -16,6 +16,8 @@ const { sanitizeLine } = require('../agent/sanitize');
 const { resolveGivenName } = require('../../utils/person-name');
 const { parseVisitAt } = require('./schedule');
 
+// Экспортируется: тем же форматом дат пользуется промпт напоминаний
+// (services/reminders/reminder-prompt.js) — второй копии форматтера быть не должно.
 function fmtMskDate(d) {
   if (!d) return 'неизвестна';
   return new Intl.DateTimeFormat('ru-RU', {
@@ -37,7 +39,7 @@ function fmtBookingDatetime(raw) {
   return parsed ? fmtMskDate(parsed) : sanitizeLine(raw, 40);
 }
 
-function buildCarePrompt({ salonName, clientName, nameDictionary, touch = {}, enrollment = {}, transcript, futureBookings } = {}) {
+function buildCarePrompt({ salonName, clientName, nameDictionary, touch = {}, enrollment = {}, transcript, futureBookings, nowMs = Date.now() } = {}) {
   const salon = sanitizeLine(salonName, 80) || 'клиника';
   // Только ЛИЧНОЕ имя: в карточке лежит ФИО целиком, и касание уходило бы
   // с обращением по фамилии или имени-отчеству (инцидент 2026-08-04).
@@ -107,7 +109,11 @@ function buildCarePrompt({ salonName, clientName, nameDictionary, touch = {}, en
     })
     .join('\n') || '(будущих записей нет)';
 
+  // «Сегодня» ОБЯЗАТЕЛЬНО: без текущей даты модель судит о давности визита по
+  // своим представлениям о сегодняшнем дне — в прогоне 08.08.2026 она объявила
+  // визит от 31.07.2026 БУДУЩИМ и отказалась писать «после визита» (skip).
   const user = [
+    `Сегодня ${fmtMskDate(nowMs)} (мск).`,
     `КАСАНИЕ: ${touchTitle}`,
     strict
       ? `ГОТОВЫЙ ТЕКСТ КАСАНИЯ (отправить дословно, менять смысл нельзя): ${intentText}`
@@ -129,4 +135,4 @@ function buildCarePrompt({ salonName, clientName, nameDictionary, touch = {}, en
   return { system, user };
 }
 
-module.exports = { buildCarePrompt };
+module.exports = { buildCarePrompt, fmtMskDate };

@@ -402,12 +402,14 @@ async function resolveTestClient(salonId, phone) {
 }
 
 /**
- * Якорь теста — последний СОСТОЯВШИЙСЯ визит клиента: от него считаются
- * {дней}, {услуга}, {мастер}. Визитов нет (или YClients молчит) → null, и
- * buildTestRow возьмёт дату из задержки правила, а плейсхолдеры услуги и
- * мастера отрендерятся пустыми — администратор увидит это в ответе.
+ * Якорь теста — последний СОСТОЯВШИЙСЯ визит клиента ПОД УСЛОВИЯ ПРАВИЛА
+ * (в бою якорь по определению прошёл evaluateRule, см. pickAnchorVisit): от
+ * него считаются {дней}, {услуга}, {мастер}. Подходящих визитов нет (или
+ * YClients молчит) → null, и buildTestRow возьмёт дату из задержки правила, а
+ * плейсхолдеры услуги и мастера отрендерятся пустыми — администратор увидит
+ * это в ответе.
  */
-async function loadTestAnchor(salonId, ycId) {
+async function loadTestAnchor(salonId, ycId, conditions) {
   if (!ycId) return null;
   const salon = await db.oneOrNone(
     `SELECT id, yclients_company_id, yclients_partner_token, yclients_user_token
@@ -415,7 +417,14 @@ async function loadTestAnchor(salonId, ycId) {
   if (!salon || !salon.yclients_company_id) return null;
   const recs = await ycGetClientRecords(salon, ycId,
     { startDate: mskDate(new Date(Date.now() - ANCHOR_LOOKBACK_DAYS * 86400000)) });
-  return pickAnchorVisit(recs, Date.now());
+  // Карта категорий нужна условиям вида «категория Лазерная эпиляция». Её сбой
+  // не должен ронять тест: без карты условие по КАТЕГОРИИ просто не совпадёт,
+  // и якоря не будет — администратор увидит это в ответе, а не 500.
+  const catMap = await getServiceCategoryMap(salon).catch((e) => {
+    log.warn(`тест: карта категорий недоступна (${e.message})`);
+    return new Map();
+  });
+  return pickAnchorVisit(recs, Date.now(), { conditions, catMap });
 }
 
 router.post('/rules/:id/test', guard, async (req, res) => {
@@ -432,7 +441,7 @@ router.post('/rules/:id/test', guard, async (req, res) => {
   testInFlight.add(key);
   try {
     const rule = await db.oneOrNone(
-      `SELECT id, salon_id, title, delay_days, bonus_enabled FROM reminder_rules
+      `SELECT id, salon_id, title, delay_days, bonus_enabled, conditions FROM reminder_rules
         WHERE id=$1 AND salon_id=$2`, [req.params.id, req.user.salonId]);
     if (!rule) return res.status(404).json({ error: 'Правило не найдено' });
 
@@ -445,7 +454,7 @@ router.post('/rules/:id/test', guard, async (req, res) => {
 
     let anchor = null;
     let anchorFailed = false;
-    try { anchor = await loadTestAnchor(req.user.salonId, ycClientId); }
+    try { anchor = await loadTestAnchor(req.user.salonId, ycClientId, rule.conditions); }
     catch (e) {
       anchorFailed = true;
       log.warn(`тест правила #${rule.id}: визиты клиента недоступны (${e.message})`);
