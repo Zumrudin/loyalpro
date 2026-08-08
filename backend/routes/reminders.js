@@ -83,8 +83,14 @@ function parseRuleBody(body) {
   const cap = Number(b.backfillMaxPerDay);
   if (!Number.isInteger(cap) || cap < 1 || cap > 500) return { error: 'Кап догона 1–500 в день' };
 
-  // 0 — законное «без паузы», поэтому нижняя граница именно 0, а не 1.
-  const interval = Number(b.sendIntervalMin);
+  // 0 — законное «без паузы», поэтому нижняя граница именно 0, а не 1. Но
+  // ОТСУТСТВИЕ поля — не ноль: Number(undefined|null|'') дал бы 0, то есть
+  // «слать пачкой», ровно то, от чего дефолт 3 и защищает. Старый клиент,
+  // не знающий поля, обязан получить паузу, а не её отключение.
+  const rawInterval = b.sendIntervalMin;
+  const interval = (rawInterval === undefined || rawInterval === null || rawInterval === '')
+    ? 3
+    : (typeof rawInterval === 'number' || typeof rawInterval === 'string') ? Number(rawInterval) : NaN;
   if (!Number.isInteger(interval) || interval < 0 || interval > 120) {
     return { error: 'Пауза между сообщениями 0–120 минут' };
   }

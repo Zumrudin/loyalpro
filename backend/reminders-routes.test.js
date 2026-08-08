@@ -237,4 +237,28 @@ describe('sendIntervalMin', () => {
   test('нечисловое отвергается, а не подставляется молча', () => {
     expect(parseRuleBody({ ...base(), sendIntervalMin: 'быстро' }).error).toMatch(/0–120/);
   });
+
+  test('поле не передано вовсе → безопасный дефолт 3, а не ошибка и не 0', () => {
+    const b = base();
+    delete b.sendIntervalMin;
+    const r = parseRuleBody(b);
+    expect(r.error).toBeUndefined();
+    expect(r.value.sendIntervalMin).toBe(3);
+  });
+
+  test('null → дефолт 3', () => {
+    expect(parseRuleBody({ ...base(), sendIntervalMin: null }).value.sendIntervalMin).toBe(3);
+  });
+
+  test('пустая строка → дефолт 3', () => {
+    expect(parseRuleBody({ ...base(), sendIntervalMin: '' }).value.sendIntervalMin).toBe(3);
+  });
+
+  test('false отвергается, а не коэрсится в 0', () => {
+    expect(parseRuleBody({ ...base(), sendIntervalMin: false }).error).toMatch(/0–120/);
+  });
+
+  test('массив отвергается, а не коэрсится в 0', () => {
+    expect(parseRuleBody({ ...base(), sendIntervalMin: [] }).error).toMatch(/0–120/);
+  });
 });
