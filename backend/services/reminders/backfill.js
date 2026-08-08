@@ -91,8 +91,8 @@ function matchBackfillVisits({ records = [], conditions, catMap = new Map(),
   // только от САМОГО ПОЗДНЕГО (боевое планирование supersede'ит прежние). Это
   // сортировка ТОЛЬКО ради дедупликации — очерёдность ОТПРАВКИ (кто первым
   // получит напоминание в многодневном догоне) задаёт отдельная сортировка
-  // в spreadOverDays, и с этой она не совпадает (там наоборот — самый давний
-  // визит первым).
+  // в planBackfillSchedule, и с этой она не совпадает (там наоборот — самый
+  // давний визит первым).
   rows.sort((a, b) => b.visitMs - a.visitMs || Number(b.recordId) - Number(a.recordId));
   const seen = new Set();
   for (const row of rows) {
@@ -117,41 +117,66 @@ function visitMsOf(row) {
 }
 
 /**
- * Раскладка по ближайшим дням с капом: веерная рассылка сотне клиентов в одну
- * минуту исключена по построению. Старт — сегодня в send_time, а если это
- * время уже прошло, то завтра: строка в прошлом ушла бы немедленно, минуя кап.
+ * План отправок догона.
  *
- * Перед раскладкой строки сортируются по visitAt ПО ВОЗРАСТАНИЮ — решение
- * владельца: первым напоминание получает тот, кто НЕ БЫЛ ДОЛЬШЕ ВСЕХ (самый
- * давний визит), а не тот, кто был недавно. Он самый просроченный по смыслу
- * правила, и держать его в хвосте многодневной очереди было бы неправильно.
- * Сортировка УСТОЙЧИВАЯ и безопасная: строки без visitAt (или с нечисловой
- * датой) не бросают и не переставляются относительно друг друга — они всего
- * лишь не участвуют в сравнении по дате (Array.prototype.sort в V8 стабильна
- * с ES2019, так что при "равенстве" — оба без даты, либо одна дата — порядок
- * входного массива сохраняется сам по себе).
+ * Естественная дата строки = дата визита + delay_days в send_time, и считает
+ * её ТА ЖЕ computeScheduledAt, что и боевой событийный планировщик
+ * (services/reminders/enroll.js) — вторая копия правила означала бы, что
+ * догон и боевой путь молча разъедутся, а догон ровно этим и обещает быть:
+ * «что было бы, если бы правило работало».
+ *
+ * Две корзины:
+ *  - естественная дата ЕЩЁ ВПЕРЕДИ (визит моложе задержки) — строка встаёт на
+ *    неё, кап НЕ применяется: всплеска тут нет по построению, на каждый день
+ *    падает столько строк, сколько в тот день было визитов;
+ *  - естественная дата УЖЕ ПРОШЛА (просрочен) — догоняющая пачка: сортировка
+ *    по дате визита ПО ВОЗРАСТАНИЮ (решение владельца салона: первым получает
+ *    тот, кто не был дольше всех — он самый просроченный по смыслу правила),
+ *    раскладка по ближайшим дням пачками по maxPerDay, старт сегодня, если
+ *    send_time ещё не прошло, иначе завтра (строка в прошлом ушла бы
+ *    немедленно, минуя кап).
+ *
+ * Строка без разбираемой даты визита попадает в догоняющую пачку: своей даты
+ * у неё нет, а терять её молча нельзя.
+ *
+ * @returns {object[]} те же строки + { scheduledAt: Date|null, overdue: boolean }
  */
-function spreadOverDays(rows, { maxPerDay = 30, sendTime = '11:00', nowMs = Date.now() } = {}) {
+function planBackfillSchedule(rows, { delayDays = 0, sendTime = '11:00',
+                                      maxPerDay = 30, nowMs = Date.now() } = {}) {
   const list = Array.isArray(rows) ? rows : [];
   if (!list.length) return [];
   const cap = Math.max(1, Math.floor(Number(maxPerDay) || 1));
   const now = new Date(nowMs);
-  const today = computeScheduledAt(now, 0, sendTime);
-  const startOffset = today && today.getTime() > nowMs ? 0 : 1;
 
-  const sorted = [...list].sort((a, b) => {
+  const future = [];
+  const overdue = [];
+  for (const row of list) {
+    const natural = computeScheduledAt(row && row.visitAt, delayDays, sendTime);
+    if (natural && natural.getTime() > nowMs) future.push({ ...row, scheduledAt: natural, overdue: false });
+    else overdue.push(row);
+  }
+
+  // Устойчивая и безопасная сортировка: строки без даты не бросают и не
+  // переставляются относительно друг друга (Array.prototype.sort в V8
+  // стабильна с ES2019).
+  overdue.sort((a, b) => {
     const ma = visitMsOf(a);
     const mb = visitMsOf(b);
     if (ma == null && mb == null) return 0;
-    if (ma == null) return 1;   // без даты — в хвост, но не перед другой датированной
+    if (ma == null) return 1;
     if (mb == null) return -1;
     return ma - mb;
   });
 
-  return sorted.map((row, i) => ({
+  const today = computeScheduledAt(now, 0, sendTime);
+  const startOffset = today && today.getTime() > nowMs ? 0 : 1;
+  const caught = overdue.map((row, i) => ({
     ...row,
     scheduledAt: computeScheduledAt(now, startOffset + Math.floor(i / cap), sendTime),
+    overdue: true,
   }));
+
+  return [...caught, ...future];
 }
 
-module.exports = { matchBackfillVisits, spreadOverDays };
+module.exports = { matchBackfillVisits, planBackfillSchedule };

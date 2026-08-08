@@ -3,7 +3,7 @@
 // Планирование чисто событийное, бэкфилла нет — без этой ручки только что
 // созданное правило выглядит сломанным (очередь пуста, и непонятно, условия
 // кривые или подходящих визитов не было).
-const { matchBackfillVisits, spreadOverDays } = require('./services/reminders/backfill');
+const { matchBackfillVisits, planBackfillSchedule } = require('./services/reminders/backfill');
 
 const CAT_MAP = new Map([['101', '9'], ['200', '7']]);
 const COND = { logic: 'and', items: [{ type: 'category', ids: [9] }] };
@@ -109,73 +109,75 @@ test('будущая отменённая запись (attendance=-1) не по
   expect(out.rows.find(r => r.recordId === 1).skipReason).toBeNull();
 });
 
-describe('spreadOverDays', () => {
-  const rows = (n) => Array.from({ length: n }, (_, i) => ({ recordId: i + 1 }));
+// ── план догона ────────────────────────────────────────────────
+// NOW = 2026-08-07 09:00 МСК, то есть send_time 11:00 сегодня ещё впереди.
+describe('planBackfillSchedule', () => {
+  const DELAY = 60;
+  const plan = (rows, over = {}) => planBackfillSchedule(rows, {
+    delayDays: DELAY, sendTime: '11:00', maxPerDay: 30, nowMs: NOW, ...over });
 
-  test('кап соблюдается: 70 строк по 30 в день → 3 дня', () => {
-    const out = spreadOverDays(rows(70), { maxPerDay: 30, sendTime: '11:00', nowMs: NOW });
-    const byDay = new Map();
-    for (const r of out) {
-      const k = r.scheduledAt.toISOString().slice(0, 10);
-      byDay.set(k, (byDay.get(k) || 0) + 1);
-    }
-    expect([...byDay.values()]).toEqual([30, 30, 10]);
+  // Естественная дата = визит + delay_days в send_time, ровно как в боевом
+  // планировщике (enroll.js). Визит моложе задержки ждёт своей даты.
+  test('визит моложе delay_days встаёт на естественную дату, а не на завтра', () => {
+    const out = plan([{ recordId: 1, visitAt: '2026-08-01T10:00:00.000Z' }]);
+    expect(out).toHaveLength(1);
+    expect(out[0].overdue).toBe(false);
+    // 01.08 + 60 дней = 30.09, 11:00 МСК = 08:00 UTC
+    expect(out[0].scheduledAt.toISOString()).toBe('2026-09-30T08:00:00.000Z');
   });
 
-  test('время отправки — send_time правила по Москве', () => {
-    const out = spreadOverDays(rows(1), { maxPerDay: 30, sendTime: '11:00', nowMs: NOW });
+  test('просроченный визит уходит в догоняющую пачку — сегодня, пока 11:00 не прошло', () => {
+    const out = plan([{ recordId: 1, visitAt: '2026-06-01T11:00:00.000Z' }]);
+    expect(out[0].overdue).toBe(true);
     expect(out[0].scheduledAt.toISOString()).toBe('2026-08-07T08:00:00.000Z');
   });
 
-  // Время сегодня уже прошло — начинаем с завтра, иначе строка встанет в
-  // прошлое и воркер выстрелит ей немедленно, минуя кап.
-  test('если send_time сегодня уже прошло — старт с завтра', () => {
-    const late = Date.parse('2026-08-07T20:00:00+03:00');
-    const out = spreadOverDays(rows(1), { maxPerDay: 30, sendTime: '11:00', nowMs: late });
+  test('если send_time уже прошло — догоняющая пачка стартует завтра', () => {
+    const late = Date.parse('2026-08-07T12:00:00+03:00');
+    const out = plan([{ recordId: 1, visitAt: '2026-06-01T11:00:00.000Z' }], { nowMs: late });
     expect(out[0].scheduledAt.toISOString()).toBe('2026-08-08T08:00:00.000Z');
   });
 
-  test('нулевой или отрицательный кап трактуется как 1', () => {
-    const out = spreadOverDays(rows(2), { maxPerDay: 0, sendTime: '11:00', nowMs: NOW });
-    expect(out[0].scheduledAt.toISOString().slice(0, 10)).not.toBe(out[1].scheduledAt.toISOString().slice(0, 10));
+  // Кап существует ради всплеска догона — к строкам, стоящим на свою
+  // естественную дату, он не применяется: там всплеска нет по построению.
+  test('кап режет только просроченных, будущие не трогает', () => {
+    const overdue = Array.from({ length: 3 }, (_, i) => (
+      { recordId: 100 + i, visitAt: `2026-06-0${i + 1}T11:00:00.000Z` }));
+    const future = Array.from({ length: 5 }, (_, i) => (
+      { recordId: 200 + i, visitAt: '2026-08-01T10:00:00.000Z' }));
+    const out = plan([...future, ...overdue], { maxPerDay: 2 });
+    const od = out.filter(r => r.overdue).map(r => r.scheduledAt.toISOString());
+    expect(od).toEqual([
+      '2026-08-07T08:00:00.000Z',   // 1-й и 2-й — сегодня
+      '2026-08-07T08:00:00.000Z',
+      '2026-08-08T08:00:00.000Z',   // 3-й переехал на завтра
+    ]);
+    // Все пять будущих остались на одной дате, кап их не разнёс.
+    const fu = out.filter(r => !r.overdue).map(r => r.scheduledAt.toISOString());
+    expect(fu).toEqual(Array(5).fill('2026-09-30T08:00:00.000Z'));
   });
 
-  test('пустой список → пустой результат', () => {
-    expect(spreadOverDays([], { maxPerDay: 30, sendTime: '11:00', nowMs: NOW })).toEqual([]);
-  });
-
-  // Решение владельца: первым догон дёргает того, кто НЕ БЫЛ ДОЛЬШЕ ВСЕХ —
-  // самый просроченный по смыслу правила, держать его в хвосте многодневной
-  // очереди неправильно.
-  test('самый давний визит уходит первым днём, самый свежий — последним', () => {
-    const withDates = [
-      { recordId: 1, visitAt: '2026-07-01T10:00:00.000Z' },
-      { recordId: 2, visitAt: '2026-05-01T10:00:00.000Z' },
-      { recordId: 3, visitAt: '2026-06-01T10:00:00.000Z' },
+  // Решение владельца салона: первым напоминание получает тот, кто НЕ БЫЛ
+  // ДОЛЬШЕ ВСЕХ. Это отдельная сортировка от «свежие сверху» в
+  // matchBackfillVisits (та нужна только для дедупликации superseded).
+  test('просроченные сортируются по дате визита по возрастанию', () => {
+    const rows = [
+      { recordId: 1, visitAt: '2026-06-20T11:00:00.000Z' },
+      { recordId: 2, visitAt: '2026-05-01T11:00:00.000Z' },
+      { recordId: 3, visitAt: '2026-06-01T11:00:00.000Z' },
     ];
-    const out = spreadOverDays(withDates, { maxPerDay: 1, sendTime: '11:00', nowMs: NOW });
+    const out = plan(rows, { maxPerDay: 1 });
     expect(out.map(r => r.recordId)).toEqual([2, 3, 1]);
-    const days = out.map(r => r.scheduledAt.toISOString().slice(0, 10));
-    expect(days[0] < days[1]).toBe(true);
-    expect(days[1] < days[2]).toBe(true);
   });
 
-  test('строки без visitAt сохраняют исходный относительный порядок', () => {
-    const noDates = [{ recordId: 1 }, { recordId: 2 }, { recordId: 3 }];
-    const out = spreadOverDays(noDates, { maxPerDay: 1, sendTime: '11:00', nowMs: NOW });
-    expect(out.map(r => r.recordId)).toEqual([1, 2, 3]);
+  test('строка без даты визита не роняет план и попадает в догоняющую пачку', () => {
+    const out = plan([{ recordId: 1, visitAt: null }]);
+    expect(out).toHaveLength(1);
+    expect(out[0].overdue).toBe(true);
+    expect(out[0].scheduledAt).toBeInstanceOf(Date);
   });
 
-  test('смешанный случай: с датой и без — не бросает, датированные упорядочены по возрастанию', () => {
-    const mixed = [
-      { recordId: 1 },
-      { recordId: 2, visitAt: '2026-07-01T10:00:00.000Z' },
-      { recordId: 3 },
-      { recordId: 4, visitAt: '2026-05-01T10:00:00.000Z' },
-    ];
-    expect(() => spreadOverDays(mixed, { maxPerDay: 1, sendTime: '11:00', nowMs: NOW })).not.toThrow();
-    const out = spreadOverDays(mixed, { maxPerDay: 1, sendTime: '11:00', nowMs: NOW });
-    const dated = out.filter(r => r.recordId === 2 || r.recordId === 4);
-    expect(dated.map(r => r.recordId)).toEqual([4, 2]);
+  test('пустой вход → пустой план', () => {
+    expect(plan([])).toEqual([]);
   });
 });
