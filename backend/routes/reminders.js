@@ -25,7 +25,7 @@ const { createLogger } = require('../logger');
 const { ycGet } = require('../services/yclients');
 const { getServiceCategoryMap } = require('../services/notifications');
 const { normalizePhoneKey } = require('../services/agent-gate');
-const { matchBackfillVisits, spreadOverDays } = require('../services/reminders/backfill');
+const { matchBackfillVisits, planBackfillSchedule } = require('../services/reminders/backfill');
 const { TIER_ACTIONS } = require('../services/reminders/tiers');
 const { pickAnchorVisit, buildTestRow } = require('../services/reminders/test-send');
 const remindersWorker = require('../services/reminders/worker');
@@ -264,12 +264,32 @@ router.post('/rules/:id/backfill/preview', guard, async (req, res) => {
   try {
     const r = await buildBackfill(req.user.salonId, req.params.id, days);
     if (r.error) return res.status(r.code).json({ error: r.error });
-    const planned = spreadOverDays(r.out.rows.filter(x => !x.skipReason), {
-      maxPerDay: r.rule.backfill_max_per_day, sendTime: r.rule.send_time });
+    const planned = planBackfillSchedule(r.out.rows.filter(x => !x.skipReason), {
+      delayDays: r.rule.delay_days, sendTime: r.rule.send_time,
+      maxPerDay: r.rule.backfill_max_per_day }).filter(x => x.scheduledAt);
+
+    // Две корзины показываются администратору РАЗДЕЛЬНО: «просрочено N,
+    // уйдут за K дней» и «встанет в очередь на будущее M» — это разные по
+    // смыслу вещи, и слипшись в одно число они читаются как «уйдёт N+M
+    // сообщений на днях», ровно то заблуждение, из-за которого догон и
+    // чинили.
+    const overdue = planned.filter(p => p.overdue);
+    const maxAt = (arr) => (arr.length
+      ? new Date(Math.max(...arr.map(p => p.scheduledAt.getTime())))
+      : null);
+    // Дата отправки нужна в КАЖДОЙ строке таблицы: без неё администратор не
+    // видит, что именно исправилось.
+    const whenBy = new Map(planned.map(p => [String(p.recordId), p.scheduledAt]));
+
     res.json({
-      totals: r.out.totals, rows: r.out.rows, days,
+      totals: r.out.totals,
+      rows: r.out.rows.map(x => ({ ...x, scheduledAt: whenBy.get(String(x.recordId)) || null })),
+      days,
       catMapFailed: r.catMapFailed,
-      lastScheduledAt: planned.length ? planned[planned.length - 1].scheduledAt : null,
+      overdueCount: overdue.length,
+      futureCount: planned.length - overdue.length,
+      lastOverdueAt: maxAt(overdue),
+      lastScheduledAt: maxAt(planned),
     });
   } catch (e) {
     log.error(`превью догона правила #${req.params.id}: ${e.message}`);
@@ -351,8 +371,9 @@ router.post('/rules/:id/backfill', guard, async (req, res) => {
   try {
     const r = await buildBackfill(req.user.salonId, ruleKey, days);
     if (r.error) return res.status(r.code).json({ error: r.error });
-    const planned = spreadOverDays(r.out.rows.filter(x => !x.skipReason), {
-      maxPerDay: r.rule.backfill_max_per_day, sendTime: r.rule.send_time })
+    const planned = planBackfillSchedule(r.out.rows.filter(x => !x.skipReason), {
+      delayDays: r.rule.delay_days, sendTime: r.rule.send_time,
+      maxPerDay: r.rule.backfill_max_per_day })
       .filter(row => row.scheduledAt);
 
     const clientMap = await resolveClients(req.user.salonId, planned);
