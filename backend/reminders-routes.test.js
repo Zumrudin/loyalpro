@@ -2,7 +2,7 @@
 // Валидация тела правила напоминаний (routes/reminders.js). Роутер прямых
 // тестов не имеет (как и routes/care.js), но parseRuleBody — чистая функция
 // без БД/сети, вынесенная наружу свойством модуля именно ради этого теста.
-const { parseRuleBody } = require('./routes/reminders');
+const { parseRuleBody, summarizeBackfillPlan } = require('./routes/reminders');
 
 // Минимальное валидное тело — база для мутаций в отдельных тестах.
 function validBody(overrides = {}) {
@@ -130,5 +130,80 @@ describe('parseRuleBody', () => {
       const r = parseRuleBody(validBody({ bonusEnabled: false, bonusTiers: [] }));
       expect(r.error).toBeUndefined();
     });
+  });
+});
+
+// summarizeBackfillPlan — сводка плана догона для ручки превью. Вынесена
+// наружу тем же приёмом, что parseRuleBody: maxAt/whenBy появились как
+// реакция на готчу «порядок planned НЕ гарантирует возрастания scheduledAt»
+// (см. комментарий в services/reminders/backfill.js) — ровно то место, где
+// регресс легко внести и невозможно заметить без юнит-теста.
+describe('summarizeBackfillPlan', () => {
+  test('пустой план → нули и null', () => {
+    const s = summarizeBackfillPlan([], []);
+    expect(s).toEqual({
+      rows: [],
+      overdueCount: 0,
+      futureCount: 0,
+      lastOverdueAt: null,
+      lastFutureAt: null,
+      lastScheduledAt: null,
+    });
+  });
+
+  // Порядок массива planned НАРОЧНО такой, что последний элемент — не самая
+  // поздняя дата ни в одной из корзин: тест ловит регресс вида
+  // `planned[planned.length - 1]` так же надёжно, как Math.max(...arr).
+  test('корзины считаются раздельно максимумом, а не последним элементом', () => {
+    const rows = [
+      { recordId: 1, skipReason: null },
+      { recordId: 2, skipReason: null },
+      { recordId: 3, skipReason: null },
+      { recordId: 4, skipReason: null },
+    ];
+    const planned = [
+      { recordId: 1, scheduledAt: new Date('2026-08-20T08:00:00.000Z'), overdue: true },  // самая поздняя просроченная
+      { recordId: 2, scheduledAt: new Date('2026-08-09T08:00:00.000Z'), overdue: true },
+      { recordId: 3, scheduledAt: new Date('2026-08-25T08:00:00.000Z'), overdue: false }, // самая поздняя будущая = общий максимум
+      { recordId: 4, scheduledAt: new Date('2026-08-11T08:00:00.000Z'), overdue: false }, // последний элемент массива — самый ранний
+    ];
+    const s = summarizeBackfillPlan(rows, planned);
+    expect(s.overdueCount).toBe(2);
+    expect(s.futureCount).toBe(2);
+    expect(s.lastOverdueAt).toEqual(new Date('2026-08-20T08:00:00.000Z'));
+    expect(s.lastFutureAt).toEqual(new Date('2026-08-25T08:00:00.000Z'));
+    expect(s.lastScheduledAt).toEqual(new Date('2026-08-25T08:00:00.000Z'));
+  });
+
+  test('дата отправки проставляется строке по recordId', () => {
+    const rows = [
+      { recordId: 100, skipReason: null },
+      { recordId: 200, skipReason: null },
+    ];
+    const planned = [
+      { recordId: 100, scheduledAt: new Date('2026-08-10T08:00:00.000Z'), overdue: true },
+      { recordId: 200, scheduledAt: new Date('2026-08-12T08:00:00.000Z'), overdue: false },
+    ];
+    const s = summarizeBackfillPlan(rows, planned);
+    expect(s.rows.find(r => r.recordId === 100).scheduledAt).toEqual(new Date('2026-08-10T08:00:00.000Z'));
+    expect(s.rows.find(r => r.recordId === 200).scheduledAt).toEqual(new Date('2026-08-12T08:00:00.000Z'));
+  });
+
+  // matchBackfillVisits не дедуплицирует записи YClients (сдвиг пагинации —
+  // известный класс): у дубля-близнеца с тем же recordId, но skipReason
+  // 'superseded', дата в колонке «Отправка» не нужна — он и так не уйдёт.
+  test('строка со skipReason не получает дату отправки, даже если её recordId есть в plan', () => {
+    const rows = [
+      { recordId: 10, phone: '79001112233', skipReason: null },
+      { recordId: 10, phone: '79001112233', skipReason: 'superseded' },
+    ];
+    const planned = [
+      { recordId: 10, scheduledAt: new Date('2026-08-15T08:00:00.000Z'), overdue: true },
+    ];
+    const s = summarizeBackfillPlan(rows, planned);
+    expect(s.rows[0].skipReason).toBeNull();
+    expect(s.rows[0].scheduledAt).toEqual(new Date('2026-08-15T08:00:00.000Z'));
+    expect(s.rows[1].skipReason).toBe('superseded');
+    expect(s.rows[1].scheduledAt).toBeNull();
   });
 });

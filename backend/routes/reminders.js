@@ -259,6 +259,58 @@ async function buildBackfill(salonId, ruleId, days) {
   return { rule, out, catMapFailed: catMap.size === 0, startDate, endDate };
 }
 
+/**
+ * Сводка плана догона для превью: две корзины (просроченные/будущие) считаются
+ * РАЗДЕЛЬНО, а не общим максимумом — иначе дата одной корзины подписывается
+ * под числом другой (фронт печатает lastFutureAt подписью именно к будущей
+ * корзине: «встанут в очередь на будущее: 0 · последнее 09.08»; общий
+ * lastScheduledAt тут дал бы дату догоняющей пачки под нулём). lastScheduledAt
+ * (максимум по ОБЕИМ корзинам) сохранён — его уже читает задеплоенный фронт.
+ *
+ * Дата отправки проставляется в rows ТОЛЬКО строкам без skipReason:
+ * matchBackfillVisits не дедуплицирует записи YClients (сдвиг пагинации —
+ * известный класс), и строка-близнец с skipReason:'superseded' не должна
+ * получить дату в колонке «Отправка» — она и так не уйдёт.
+ *
+ * maxAt — reduce, а не Math.max(...arr): spread на массиве, размер которого
+ * ограничен только потолком догона (MAX_PAGES*PAGE = 5000, см. buildBackfill
+ * выше), рушится на «Maximum call stack size exceeded»; reduce от размера
+ * входа не зависит.
+ *
+ * @param {object[]} rows выборка visitов (r.out.rows, включая skipReason)
+ * @param {object[]} planned результат planBackfillSchedule, УЖЕ отфильтрованный
+ *   по scheduledAt (порядок массива НЕ гарантирует возрастания дат — см.
+ *   комментарий в backfill.js)
+ * @returns {{ rows: object[], overdueCount: number, futureCount: number,
+ *   lastOverdueAt: Date|null, lastFutureAt: Date|null, lastScheduledAt: Date|null }}
+ */
+function summarizeBackfillPlan(rows, planned) {
+  const list = Array.isArray(planned) ? planned : [];
+  const overdue = list.filter(p => p.overdue);
+  const future = list.filter(p => !p.overdue);
+
+  const maxMs = (arr) => arr.reduce((max, p) => {
+    const t = p.scheduledAt.getTime();
+    return max === null || t > max ? t : max;
+  }, null);
+  const toDate = (ms) => (ms === null ? null : new Date(ms));
+
+  const whenBy = new Map(list.map(p => [String(p.recordId), p.scheduledAt]));
+  const outRows = (Array.isArray(rows) ? rows : []).map(x => ({
+    ...x,
+    scheduledAt: x.skipReason ? null : (whenBy.get(String(x.recordId)) || null),
+  }));
+
+  return {
+    rows: outRows,
+    overdueCount: overdue.length,
+    futureCount: future.length,
+    lastOverdueAt: toDate(maxMs(overdue)),
+    lastFutureAt: toDate(maxMs(future)),
+    lastScheduledAt: toDate(maxMs(list)),
+  };
+}
+
 router.post('/rules/:id/backfill/preview', guard, async (req, res) => {
   const days = Math.min(90, Math.max(1, Number(req.body && req.body.days) || 30));
   try {
@@ -268,29 +320,8 @@ router.post('/rules/:id/backfill/preview', guard, async (req, res) => {
       delayDays: r.rule.delay_days, sendTime: r.rule.send_time,
       maxPerDay: r.rule.backfill_max_per_day }).filter(x => x.scheduledAt);
 
-    // Две корзины показываются администратору РАЗДЕЛЬНО: «просрочено N,
-    // уйдут за K дней» и «встанет в очередь на будущее M» — это разные по
-    // смыслу вещи, и слипшись в одно число они читаются как «уйдёт N+M
-    // сообщений на днях», ровно то заблуждение, из-за которого догон и
-    // чинили.
-    const overdue = planned.filter(p => p.overdue);
-    const maxAt = (arr) => (arr.length
-      ? new Date(Math.max(...arr.map(p => p.scheduledAt.getTime())))
-      : null);
-    // Дата отправки нужна в КАЖДОЙ строке таблицы: без неё администратор не
-    // видит, что именно исправилось.
-    const whenBy = new Map(planned.map(p => [String(p.recordId), p.scheduledAt]));
-
-    res.json({
-      totals: r.out.totals,
-      rows: r.out.rows.map(x => ({ ...x, scheduledAt: whenBy.get(String(x.recordId)) || null })),
-      days,
-      catMapFailed: r.catMapFailed,
-      overdueCount: overdue.length,
-      futureCount: planned.length - overdue.length,
-      lastOverdueAt: maxAt(overdue),
-      lastScheduledAt: maxAt(planned),
-    });
+    const summary = summarizeBackfillPlan(r.out.rows, planned);
+    res.json({ totals: r.out.totals, days, catMapFailed: r.catMapFailed, ...summary });
   } catch (e) {
     log.error(`превью догона правила #${req.params.id}: ${e.message}`);
     res.status(500).json({ error: 'Не удалось построить выборку' });
@@ -615,3 +646,8 @@ module.exports.parseRuleBody = parseRuleBody;
 // (именно на нём и поймали промах точного сравнения телефонов).
 module.exports.resolveTestClient = resolveTestClient;
 module.exports.loadTestAnchor = loadTestAnchor;
+// Тем же приёмом наружу вынесена сводка плана догона (превью): maxAt/whenBy
+// появились как реакция на готчу «порядок planned НЕ гарантирует возрастания
+// scheduledAt» — ровно то место, где регресс легко внести и невозможно
+// заметить без юнит-теста.
+module.exports.summarizeBackfillPlan = summarizeBackfillPlan;
