@@ -1,9 +1,17 @@
 'use strict';
-// Темп плановых отправок. Чистая часть — без БД.
-const { waitMsLeft } = require('./services/messaging/send-pacing');
+// Темп плановых отправок.
+const { waitMsLeft, lastPlannedSendAt, LAST_SENT_SQL } = require('./services/messaging/send-pacing');
 
 const NOW = Date.parse('2026-08-08T11:00:00+03:00');
 const ago = (min) => new Date(NOW - min * 60000);
+
+// SQL смотрит ВСЕ ТРИ плановые очереди — без этой проверки правку UNION
+// (например, потерю ветки notification_sends) можно молча проехать.
+test('SQL смотрит все три очереди', () => {
+  expect(LAST_SENT_SQL).toContain('care_touch_sends');
+  expect(LAST_SENT_SQL).toContain('reminder_queue');
+  expect(LAST_SENT_SQL).toContain('notification_sends');
+});
 
 test('никогда не отправляли → ждать нечего', () => {
   expect(waitMsLeft(null, 3, NOW)).toBe(0);
@@ -37,4 +45,25 @@ test('мусорная дата → ждать нечего (fail-open, темп
 
 test('нечисловой интервал → ждать нечего', () => {
   expect(waitMsLeft(ago(0), 'три', NOW)).toBe(0);
+});
+
+// Часы БД (Beget) и приложения — разные машины: одиночный «будущий» sent_at
+// не должен отодвигать отправку дальше самого интервала.
+test('lastAt в будущем → ожидание не превышает сам интервал', () => {
+  const future = new Date(NOW + 10 * 3600000); // +10 часов
+  expect(waitMsLeft(future, 3, NOW)).toBe(3 * 60000);
+});
+
+test('lastPlannedSendAt: непустой ответ → Date', async () => {
+  const db = { oneOrNone: jest.fn(async () => ({ last_at: ago(5) })) };
+  const result = await lastPlannedSendAt(db, 1);
+  expect(result).toBeInstanceOf(Date);
+  expect(db.oneOrNone).toHaveBeenCalledWith(LAST_SENT_SQL, [1]);
+});
+
+// max() на пустой выборке отвечает СТРОКОЙ с last_at=null, а не отсутствием
+// строки — это второй guard в lastPlannedSendAt, не только db.oneOrNone.
+test('lastPlannedSendAt: max() на пустой выборке → null', async () => {
+  const db = { oneOrNone: jest.fn(async () => ({ last_at: null })) };
+  await expect(lastPlannedSendAt(db, 1)).resolves.toBeNull();
 });

@@ -826,6 +826,12 @@ async function runMigrations(client) {
     CREATE INDEX IF NOT EXISTS idx_notification_sends_rule
       ON notification_sends (rule_id, created_at DESC)
   `).catch(() => {});
+  // Под send-pacing.js: MAX(sent_at) по салону — запрос идёт до 5 раз в
+  // минуту (тик воркера напоминаний), без индекса читал бы всю историю.
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS idx_notification_sends_sent
+      ON notification_sends (salon_id, sent_at DESC) WHERE status = 'sent'
+  `).catch(() => {});
 
   // ── Отдел заботы: программы касаний после состоявшегося визита ──
   // Программа = условия отбора визита (как в notification_rules) + цепочка
@@ -929,6 +935,12 @@ async function runMigrations(client) {
     CREATE INDEX IF NOT EXISTS idx_care_touch_sends_due
       ON care_touch_sends (scheduled_at) WHERE status = 'scheduled'
   `).catch(() => {});
+  // Под send-pacing.js: MAX(sent_at) по салону, тот же повод, что у
+  // idx_notification_sends_sent выше.
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS idx_care_touch_sends_sent
+      ON care_touch_sends (salon_id, sent_at DESC) WHERE status = 'sent'
+  `).catch(() => {});
 
   // ── Напоминания о повторном визите ─────────────────────────────
   // Правило = условия отбора визита (тот же формат, что care_programs) +
@@ -1020,6 +1032,12 @@ async function runMigrations(client) {
   await client.query(`
     CREATE INDEX IF NOT EXISTS idx_reminder_queue_history
       ON reminder_queue (salon_id, rule_id, created_at DESC)
+  `).catch(() => {});
+  // Под send-pacing.js: MAX(sent_at) по салону — после первого же догона
+  // (до 5000 строк) без индекса запрос читал бы всю историю салона.
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS idx_reminder_queue_sent
+      ON reminder_queue (salon_id, sent_at DESC) WHERE status = 'sent'
   `).catch(() => {});
 
   await client.query(`
