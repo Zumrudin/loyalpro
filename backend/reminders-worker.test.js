@@ -14,7 +14,7 @@ const ROW = {
   bonus_accrued: null, rule_title: 'Эпиляция раз в месяц',
   rule_enabled: true, rule_conditions: { logic: 'and', items: [{ type: 'category', ids: [9] }] },
   rule_text: '{first_name}, пора повторить {услуга}!',
-  text_mode: 'strict', bonus_enabled: true,
+  text_mode: 'strict', bonus_enabled: true, send_interval_min: 3, send_time: '11:00',
   bonus_tiers: [{ up_to: 500, action: 'accrue', amount: 300, text: '{first_name}, начислили {бонусы} бонусов!' }],
   delay_days: 30, salon_name: 'PERI CLINIC', client_name: 'Мария',
 };
@@ -167,22 +167,79 @@ describe('гейты', () => {
     expect(deps.log.warn).toHaveBeenCalled();
   });
 
+});
+
+// ── темп отправки ──────────────────────────────────────────────
+// Часы фиксируются: потолок по времени суток считается от РЕАЛЬНОГО Date.now()
+// внутри воркера, и без фиксации сьют зеленел бы днём и падал ночью.
+describe('темп отправки (пауза между сообщениями)', () => {
+  const MSK = (hhmm) => Date.parse(`2026-08-08T${hhmm}:00+03:00`);
+  let nowSpy;
+  const setNow = (ms) => { nowSpy.mockReturnValue(ms); };
+
+  beforeEach(() => { nowSpy = jest.spyOn(Date, 'now').mockReturnValue(MSK('11:00')); });
+  afterEach(() => { nowSpy.mockRestore(); });
+
+  // Минуты откладывания — ЕДИНСТВЕННОЕ число, которое считает фича, и проверять
+  // его надо параметрами: регексп по тексту SQL пропустил бы мутацию
+  // deferRowMinutes(row, waitMs) вместо waitMs/60000, то есть 125 СУТОК вместо
+  // 2 минут.
+  const deferParams = (updates) => {
+    const rows = find(updates, /make_interval\(mins/);
+    expect(rows).toHaveLength(1);
+    return rows[0];
+  };
+
   // Пачка сообщений подряд = блокировка инстанса WhatsApp. Проверка стоит ДО
   // проверок YClients, бонусов и текста: откладывать надо до платного
   // LLM-вызова и до НЕОБРАТИМОГО начисления, а не после.
-  test('интервал не истёк → отложено на минуты, попытки не сожжены', async () => {
+  test('интервал не истёк → отложено ровно на остаток, попытки не сожжены', async () => {
     const { updates, deps } = makeDeps({
       lastPlannedSendAt: jest.fn(async () => new Date(Date.now() - 60000)),
     });
     await worker.processOne({ ...ROW, send_interval_min: 3 }, deps);
-    const defers = find(updates, /make_interval\(mins/);
-    expect(defers).toHaveLength(1);
-    expect(defers[0].sql).toMatch(/attempts = 0/);
+    const def = deferParams(updates);
+    expect(def.params).toEqual([ROW.id, 2, expect.stringContaining('темп')]);
     expect(deps.sendMessage).not.toHaveBeenCalled();
     expect(deps.applyBonus).not.toHaveBeenCalled();
     expect(deps.createMessage).not.toHaveBeenCalled();
     // Не терминально: строка остаётся scheduled и видна в интерфейсе.
     expect(find(updates, /status='skipped'|status='cancelled'/)).toHaveLength(0);
+  });
+
+  // Аренда инкрементит attempts у каждой выданной строки. Обнуление стирало бы
+  // и НАСТОЯЩИЕ провалы отправки (final считается по row.attempts), и строка с
+  // мёртвым каналом крутилась бы вечно, каждый круг оплачивая LLM-проход;
+  // «не трогать» сжигало бы бюджет попыток тремя откладываниями ни за что.
+  test('откат ровно одной попытки, defers не трогаем, чужой статус не затираем', async () => {
+    const { updates, deps } = makeDeps({
+      lastPlannedSendAt: jest.fn(async () => new Date(Date.now() - 60000)),
+    });
+    await worker.processOne({ ...ROW, send_interval_min: 3 }, deps);
+    const sql = deferParams(updates).sql;
+    expect(sql).toMatch(/attempts\s*=\s*GREATEST\(attempts\s*-\s*1,\s*0\)/);
+    expect(sql).not.toMatch(/attempts\s*=\s*0/);
+    expect(sql).not.toMatch(/defers/);
+    // Строку мог отменить вебхук прямо во время прогона (новый визит
+    // перепланировал напоминание) — воскресить её нельзя, затереть её
+    // decision_reason тоже.
+    expect(sql).toMatch(/status\s*=\s*'scheduled'/);
+  });
+
+  // Клэмп Math.max(1, Math.ceil(...)): make_interval с нулём минут не отложил
+  // бы строку вовсе, а дробные минуты в БД не уедут.
+  test('остаток меньше минуты → откладываем на минуту, дробные округляем вверх', async () => {
+    const { updates: u1, deps: d1 } = makeDeps({
+      lastPlannedSendAt: jest.fn(async () => new Date(Date.now() - 179 * 1000)),
+    });
+    await worker.processOne({ ...ROW, send_interval_min: 3 }, d1);
+    expect(deferParams(u1).params[1]).toBe(1);
+
+    const { updates: u2, deps: d2 } = makeDeps({
+      lastPlannedSendAt: jest.fn(async () => new Date(Date.now() - 30 * 1000)),
+    });
+    await worker.processOne({ ...ROW, send_interval_min: 3 }, d2);
+    expect(deferParams(u2).params[1]).toBe(3); // 2.5 мин → 3
   });
 
   test('интервал истёк → отправляем', async () => {
@@ -203,14 +260,83 @@ describe('гейты', () => {
   // Fail-CLOSED, в отличие от большинства проверок воркера: сбой счётчика
   // означал бы отправку пачкой, то есть ровно ту блокировку мессенджера, от
   // которой пауза и защищает. Минута ожидания стоит дёшево.
-  test('счётчик недоступен → откладываем, а не шлём пачкой', async () => {
+  test('счётчик недоступен → откладываем на полный интервал, а не шлём пачкой', async () => {
     const { updates, deps } = makeDeps({
       lastPlannedSendAt: jest.fn(async () => { throw new Error('db down'); }),
     });
     await worker.processOne({ ...ROW, send_interval_min: 3 }, deps);
-    expect(find(updates, /make_interval\(mins/)).toHaveLength(1);
+    expect(deferParams(updates).params[1]).toBe(3);
     expect(deps.sendMessage).not.toHaveBeenCalled();
     expect(deps.log.warn).toHaveBeenCalled();
+  });
+
+  // Number(null|'') дал бы 0, то есть молчаливое «слать пачкой» в трёх строках
+  // над объявленным fail-closed. Отсутствие колонки — рассинхрон схемы с кодом.
+  test('интервал отсутствует/битый → дефолт 3 мин и WARN, а не отключение паузы', async () => {
+    for (const bad of [null, undefined, '', 'три', -5]) {
+      const { updates, deps } = makeDeps({
+        lastPlannedSendAt: jest.fn(async () => new Date(Date.now() - 60000)),
+      });
+      await worker.processOne({ ...ROW, send_interval_min: bad }, deps);
+      expect(deferParams(updates).params[1]).toBe(2);
+      expect(deps.sendMessage).not.toHaveBeenCalled();
+      expect(deps.log.warn).toHaveBeenCalled();
+    }
+  });
+
+  // Потолок по времени суток. Без него send_time правила теряется после
+  // первого же отката (defer считает от NOW), и хвост рассылки уходит ночью
+  // живым пациентам — при том что окно расписания Милы для напоминаний
+  // выключено намеренно, с обоснованием «время задаёт салон в send_time».
+  test('пауза упирается в ночь → перенос на send_time, а не в 02:00', async () => {
+    setNow(MSK('20:50'));
+    const { updates, deps } = makeDeps({
+      lastPlannedSendAt: jest.fn(async () => new Date(Date.now())),
+    });
+    await worker.processOne({ ...ROW, send_interval_min: 30 }, deps);
+    const def = deferParams(updates);
+    expect(def.params[1]).toBe(850); // 20:50 → завтра 11:00
+    expect(def.params[2]).toMatch(/перенесено на 11:00/);
+    expect(deps.log.info).toHaveBeenCalledWith(expect.stringContaining('перенос на 11:00'));
+  });
+
+  test('send_time сам вне дневного окна → салон решил, потолок не применяем', async () => {
+    setNow(MSK('20:50'));
+    const { updates, deps } = makeDeps({
+      lastPlannedSendAt: jest.fn(async () => new Date(Date.now())),
+    });
+    await worker.processOne({ ...ROW, send_interval_min: 30, send_time: '23:00' }, deps);
+    expect(deferParams(updates).params[1]).toBe(30);
+  });
+
+  test('каждое откладывание темпом видно в логе', async () => {
+    const { deps } = makeDeps({
+      lastPlannedSendAt: jest.fn(async () => new Date(Date.now() - 60000)),
+    });
+    await worker.processOne({ ...ROW, send_interval_min: 3 }, deps);
+    expect(deps.log.info).toHaveBeenCalledWith(expect.stringMatching(/пауза темпа.*2 мин/));
+  });
+
+  // ЦЕНТРАЛЬНЫЙ тезис фичи: пачка РАЗНОСИТСЯ внутри одного тика. Счётчик тут
+  // читает состояние, а не константу: если последовательный `for … await`
+  // заменить на Promise.all, все арендованные строки прочитают один и тот же
+  // last_at, проскочат гейт и уйдут пачкой — тест это ловит.
+  test('processTick: из двух арендованных строк уходит одна, вторая откладывается', async () => {
+    let lastSent = null;
+    const { updates, deps } = makeDeps({
+      lastPlannedSendAt: jest.fn(async () => lastSent),
+      sendMessage: jest.fn(async () => { lastSent = new Date(Date.now()); return { id: 1, channel: 'telegram' }; }),
+    });
+    const rowA = { ...ROW, id: 101, send_interval_min: 3 };
+    const rowB = { ...ROW, id: 102, send_interval_min: 3 };
+    deps.db.any = jest.fn(async () => [rowA, rowB]);
+
+    await worker.processTick(deps);
+
+    expect(deps.sendMessage).toHaveBeenCalledTimes(1);
+    const def = find(updates, /make_interval\(mins/);
+    expect(def).toHaveLength(1);
+    expect(def[0].params).toEqual([102, 3, expect.stringContaining('темп')]);
   });
 });
 

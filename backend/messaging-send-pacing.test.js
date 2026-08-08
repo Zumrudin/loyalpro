@@ -1,6 +1,8 @@
 'use strict';
 // Темп плановых отправок.
-const { waitMsLeft, lastPlannedSendAt, LAST_SENT_SQL } = require('./services/messaging/send-pacing');
+const {
+  waitMsLeft, lastPlannedSendAt, paceDeferMinutes, LAST_SENT_SQL,
+} = require('./services/messaging/send-pacing');
 
 const NOW = Date.parse('2026-08-08T11:00:00+03:00');
 const ago = (min) => new Date(NOW - min * 60000);
@@ -66,4 +68,67 @@ test('lastPlannedSendAt: непустой ответ → Date', async () => {
 test('lastPlannedSendAt: max() на пустой выборке → null', async () => {
   const db = { oneOrNone: jest.fn(async () => ({ last_at: null })) };
   await expect(lastPlannedSendAt(db, 1)).resolves.toBeNull();
+});
+
+// max() поверх UNION ALL PostgreSQL не сводит к «первая строка индекса» —
+// живой EXPLAIN давал скан ВСЕХ строк status='sent' каждой таблицы. Три
+// отдельных max() под greatest() дают InitPlan → Limit → Index Only Scan.
+test('SQL берёт три отдельных max() через greatest(), а не агрегат над UNION', () => {
+  expect(LAST_SENT_SQL).toMatch(/greatest\(/i);
+  expect(LAST_SENT_SQL).not.toMatch(/UNION/i);
+  expect(LAST_SENT_SQL.match(/max\(/gi)).toHaveLength(3);
+});
+
+// ── потолок по времени суток ───────────────────────────────────────────────
+// Без него пауза 30–120 мин выносит хвост рассылки в ночь живым пациентам, а
+// send_time правила теряется после первого же отката (defer считает от NOW).
+describe('paceDeferMinutes', () => {
+  const msk = (hhmm, day = '08') => Date.parse(`2026-08-${day}T${hhmm}:00+03:00`);
+
+  test('момент отправки внутри окна → ждём ровно паузу', () => {
+    expect(paceDeferMinutes(msk('11:00'), 3 * 60000, '11:00')).toBe(3);
+  });
+
+  test('за верхней границей окна → перенос на send_time следующего дня', () => {
+    // 20:50 + 30 мин = 21:20 (окно кончается в 21:00, конец исключительный);
+    // сегодняшние 11:00 позади → завтра 11:00, это 14 ч 10 мин.
+    expect(paceDeferMinutes(msk('20:50'), 30 * 60000, '11:00')).toBe(850);
+  });
+
+  test('за нижней границей окна → перенос на send_time сегодня', () => {
+    expect(paceDeferMinutes(msk('07:00'), 30 * 60000, '11:00')).toBe(240);
+  });
+
+  test('границы окна: 09:00 включительно, 21:00 исключительно', () => {
+    expect(paceDeferMinutes(msk('08:30'), 30 * 60000, '11:00')).toBe(30);   // ровно 09:00
+    expect(paceDeferMinutes(msk('20:30'), 30 * 60000, '11:00')).not.toBe(30); // ровно 21:00
+  });
+
+  // Салон выбрал ночное время осознанно — переопределять его мы не вправе.
+  test('send_time сам вне окна → потолок не применяется', () => {
+    expect(paceDeferMinutes(msk('20:50'), 30 * 60000, '22:00')).toBe(30);
+    expect(paceDeferMinutes(msk('07:00'), 30 * 60000, '06:30')).toBe(30);
+  });
+
+  test('переход через полночь → ближайшие send_time уже следующих суток', () => {
+    // 23:50 + 30 мин = 00:20 следующего дня, вне окна → 11:00 того же дня.
+    expect(paceDeferMinutes(msk('23:50'), 30 * 60000, '11:00')).toBe(670);
+  });
+
+  // Потолок только УДЛИНЯЕТ: «ближайшее наступление» считается от момента
+  // отправки, иначе в узкой полосе он сократил бы саму паузу темпа.
+  test('потолок никогда не сокращает паузу темпа', () => {
+    // 19:00 + 120 мин = 21:00 (вне окна), а сегодняшние 20:00 ближе паузы.
+    const mins = paceDeferMinutes(msk('19:00'), 120 * 60000, '20:00');
+    expect(mins).toBe(25 * 60);
+    expect(mins).toBeGreaterThanOrEqual(120);
+  });
+
+  // pg отдаёт time как '11:00:00'; битое значение — fail-open (потолок это
+  // удобство пациента, а не гейт допуска).
+  test('формат pg и мусор', () => {
+    expect(paceDeferMinutes(msk('07:00'), 30 * 60000, '11:00:00')).toBe(240);
+    expect(paceDeferMinutes(msk('07:00'), 30 * 60000, 'утром')).toBe(30);
+    expect(paceDeferMinutes(msk('07:00'), 30 * 60000, null)).toBe(30);
+  });
 });

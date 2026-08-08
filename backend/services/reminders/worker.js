@@ -201,17 +201,57 @@ async function deferRow(db, row, reason, bumpDefers = false) {
  * Отложить строку на N минут (в отличие от deferRow — на сутки). Для причин,
  * которые проходят сами через минуты: пауза темпа между сообщениями. Сутки
  * тут были бы абсурдны — пауза измеряется минутами, а строка протухла бы.
- * attempts обнуляются: это не сбой отправки, а плановое ожидание. defers не
- * трогаются — предела у паузы темпа нет по построению (она всегда проходит).
+ *
+ * attempts НЕ обнуляются, а откатываются РОВНО на одну — ту, что добавила
+ * аренда (LEASE_SQL инкрементит attempts у каждой выданной строки). Обнуление
+ * стирало бы и НАСТОЯЩИЕ провалы отправки: ветка сбоя считает
+ * final = row.attempts >= MAX_ATTEMPTS, и одного откладывания темпом между
+ * двумя провалами (в активном салоне это норма — счётчик темпа общий на три
+ * очереди) хватало, чтобы строка с мёртвым каналом крутилась вечно, каждый
+ * круг оплачивая LLM-проход в режиме free. Просто «не трогать» тоже нельзя:
+ * тогда три откладывания темпом сжигали бы бюджет попыток ни за что.
+ *
+ * defers не трогаются — предела у паузы темпа нет по построению (она всегда
+ * проходит), а на defers висит MAX_OPERATOR_DEFERS.
+ *
+ * AND status='scheduled' — строку могли отменить прямо во время прогона
+ * (вебхук нового визита перепланировал напоминание): воскресить её этот
+ * UPDATE не мог бы, но затёр бы её decision_reason своим.
  */
 async function deferRowMinutes(db, row, minutes, reason) {
   const mins = Math.max(1, Math.ceil(Number(minutes) || 1));
   await db.query(
     `UPDATE reminder_queue
         SET scheduled_at = NOW() + make_interval(mins => $2),
-            attempts = 0, last_attempt_at = NULL, decision_reason = $3
-      WHERE id = $1`,
+            attempts = GREATEST(attempts - 1, 0), last_attempt_at = NULL,
+            decision_reason = $3
+      WHERE id = $1 AND status = 'scheduled'`,
     [row.id, mins, reason]);
+}
+
+// Пауза между плановыми сообщениями. Дефолт совпадает со схемой
+// (reminder_rules.send_interval_min DEFAULT 3) и с parseRuleBody.
+const DEFAULT_SEND_INTERVAL_MIN = 3;
+
+/**
+ * Интервал темпа для строки. Явный 0 — законное «без паузы». А вот
+ * ОТСУТСТВИЕ или мусор — не ноль: Number(null|undefined|'') дал бы 0, то есть
+ * тихо выключил бы защиту от пачки. Такое значение означает рассинхрон схемы
+ * с кодом (строка арендована сборкой без колонки) — берём дефолт и ГРОМКО
+ * сообщаем, а не молча шлём подряд.
+ */
+function resolveIntervalMin(row, logger) {
+  const raw = row.send_interval_min;
+  if (raw === undefined || raw === null || raw === '') {
+    logger.warn(`row #${row.id}: send_interval_min отсутствует — беру дефолт ${DEFAULT_SEND_INTERVAL_MIN} мин`);
+    return DEFAULT_SEND_INTERVAL_MIN;
+  }
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < 0) {
+    logger.warn(`row #${row.id}: send_interval_min битый (${JSON.stringify(raw)}) — беру дефолт ${DEFAULT_SEND_INTERVAL_MIN} мин`);
+    return DEFAULT_SEND_INTERVAL_MIN;
+  }
+  return n;
 }
 
 /**
@@ -332,7 +372,13 @@ async function processOne(row, deps = defaultDeps) {
     // Fail-CLOSED, в отличие от большинства проверок воркера: недоступный
     // счётчик означал бы отправку пачкой, то есть ровно ту блокировку, от
     // которой пауза защищает. Минута ожидания стоит дёшево.
-    const intervalMin = Number(row.send_interval_min) || 0;
+    //
+    // Битое/отсутствующее значение интервала — тоже НЕ повод слать пачкой:
+    // Number(null|'') дал бы 0, то есть молча выключил паузу в трёх строках
+    // над объявленным fail-closed. Дефолт тот же, что в схеме и в
+    // parseRuleBody (routes/reminders.js), плюс WARN — явный 0 остаётся
+    // законным «без паузы».
+    const intervalMin = resolveIntervalMin(row, d.log);
     if (intervalMin > 0) {
       let waitMs = 0;
       try {
@@ -343,8 +389,19 @@ async function processOne(row, deps = defaultDeps) {
         waitMs = intervalMin * 60000;
       }
       if (waitMs > 0) {
-        await deferRowMinutes(db, row, waitMs / 60000,
-          `темп: пауза ${intervalMin} мин между плановыми сообщениями`);
+        // Потолок по времени суток: без него пауза выносит хвост рассылки в
+        // ночь живым пациентам (см. paceDeferMinutes).
+        const minutes = sendPacing.paceDeferMinutes(Date.now(), waitMs, row.send_time);
+        const capped = minutes > waitMs / 60000 + 1e-6;
+        const reason = capped
+          ? `темп: пауза ${intervalMin} мин упёрлась в ночь — перенесено на ${row.send_time}`
+          : `темп: пауза ${intervalMin} мин между плановыми сообщениями`;
+        await deferRowMinutes(db, row, minutes, reason);
+        // Полноценного счётчика голодания нет (defers занят предельным
+        // ожиданием оператора), поэтому каждое откладывание темпом видно
+        // хотя бы строкой лога — иначе эффект наблюдается только по
+        // перезаписанному decision_reason последней строки.
+        d.log.info(`row #${row.id}: пауза темпа — откладываю на ${Math.ceil(minutes)} мин${capped ? ` (перенос на ${row.send_time})` : ''}`);
         return;
       }
     }
@@ -574,10 +631,16 @@ function buildLeaseSql({ single }) {
          WHERE id = $1 AND status = 'scheduled'
          LIMIT 1
          FOR UPDATE SKIP LOCKED`
+    // Тай-брейк id ASC обязателен: planBackfillSchedule ставит всем строкам
+    // одного дня ОДИН И ТОТ ЖЕ scheduled_at, и решение владельца салона
+    // «первым получает тот, кто не был дольше всех» держалось лишь на порядке
+    // вставки (догон вставляет строки в нужной очерёдности). С паузой темпа
+    // этот порядок стал ВИДИМЫМ: он решает, кто получит сообщение в 11:00, а
+    // кто вечером.
     : `SELECT id FROM reminder_queue
          WHERE status = 'scheduled' AND scheduled_at <= NOW()
            AND (last_attempt_at IS NULL OR last_attempt_at < NOW() - make_interval(secs => $1))
-         ORDER BY scheduled_at ASC
+         ORDER BY scheduled_at ASC, id ASC
          LIMIT 5
          FOR UPDATE SKIP LOCKED`;
   return `UPDATE reminder_queue rq
@@ -589,7 +652,7 @@ function buildLeaseSql({ single }) {
         ${pick})
     RETURNING rq.*, r.is_enabled AS rule_enabled, r.conditions AS rule_conditions,
               r.text AS rule_text, r.text_mode, r.bonus_enabled, r.bonus_tiers,
-              r.delay_days, r.attribution_days, r.send_interval_min,
+              r.delay_days, r.attribution_days, r.send_interval_min, r.send_time,
               sal.name AS salon_name,
               (SELECT cl.name FROM clients cl WHERE cl.id = rq.client_id) AS client_name`;
 }
