@@ -699,7 +699,9 @@ let _tickInFlight = false;
  * Пауза темпа — гейт уровня САЛОНА, а не строки: если она сработала на первой
  * же строке салона, все остальные строки ЭТОГО салона в этом тике упрутся в ту
  * же паузу (счётчик один на салон и обновляется только успешной отправкой).
- * Поэтому они просто ПРОПУСКАЮТСЯ, без единого UPDATE:
+ * Поэтому они просто ПРОПУСКАЮТСЯ — строка остаётся ровно там, где стояла
+ * (единственный запрос по ним за тик — общая компенсация attempts в самом
+ * конце, см. ниже; ни scheduled_at, ни decision_reason он не трогает):
  *
  *  - deferRowMinutes переписывает scheduled_at на NOW()+N, а аренда сортирует
  *    ПО scheduled_at первым ключом — отложенная строка уходила в хвост за ещё
@@ -724,15 +726,38 @@ async function processTick(deps = defaultDeps) {
     await d.db.query(ORPHAN_SQL).catch(e => d.log.error(`orphan cleanup: ${e.message}`));
     const rows = await d.db.any(LEASE_SQL, [RETRY_BACKOFF_S]);
     const pacedSalons = new Set();
-    let skipped = 0;
+    const skippedIds = [];
     for (const row of rows) {
-      if (pacedSalons.has(row.salon_id)) { skipped++; continue; }
+      if (pacedSalons.has(row.salon_id)) { skippedIds.push(row.id); continue; }
       const res = await processOne(row, d);
       if (res && res.pacePaused) pacedSalons.add(row.salon_id);
     }
-    // Одной строкой на тик, а не по строке: пропуск — это штатный ход рассылки,
-    // а не событие, но совсем без следа тик выглядел бы «ничего не делал».
-    if (skipped) d.log.info(`пауза темпа: пропущено без изменений ${skipped} строк(и) салонов [${[...pacedSalons].join(',')}]`);
+    if (skippedIds.length) {
+      // Одной строкой на тик, а не по строке: пропуск — это штатный ход
+      // рассылки, а не событие, но совсем без следа тик выглядел бы «ничего не
+      // делал».
+      d.log.info(`пауза темпа: пропущено без изменений ${skippedIds.length} строк(и) салонов [${[...pacedSalons].join(',')}]`);
+      // Компенсация инкремента аренды. LEASE_SQL добавляет attempts+1 КАЖДОЙ
+      // выданной строке, а пропуск по паузе — НЕ попытка отправки: воркер этих
+      // строк даже не касался. Без отката после большого догона attempts у них
+      // вырастает до десятков (строка переарендуется каждые RETRY_BACKOFF_S),
+      // и первый же транзиентный сбой отправки уводит её сразу в 'failed'
+      // (final = row.attempts >= MAX_ATTEMPTS) вместо трёх законных попыток —
+      // пациент молча остаётся без напоминания, а в дашборде это выглядит как
+      // исчерпанные попытки, которых не было. Ровно −1, а не обнуление: это
+      // компенсация ОДНОГО инкремента, и двойного отката быть не может —
+      // каждая аренда приносит свой собственный +1.
+      //
+      // ОДИН запрос на весь тик (не построчно) и НИ ОДНОГО другого поля:
+      // scheduled_at, last_attempt_at и decision_reason обязаны остаться как
+      // есть — в этом весь смысл пропуска (строка не должна сдвинуться в
+      // очереди). last_attempt_at при этом намеренно не чистится: он держит
+      // backoff аренды и не даёт тику молотить ту же пятёрку каждую минуту.
+      await d.db.query(
+        `UPDATE reminder_queue SET attempts = GREATEST(attempts - 1, 0) WHERE id = ANY($1)`,
+        [skippedIds])
+        .catch(e => d.log.warn(`компенсация attempts у пропущенных строк не удалась (${e.message}) — у ${skippedIds.length} строк(и) бюджет попыток остался урезанным на 1 незаслуженно`));
+    }
   } finally {
     _tickInFlight = false;
   }

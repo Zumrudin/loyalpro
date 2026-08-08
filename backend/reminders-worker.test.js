@@ -376,13 +376,86 @@ describe('темп отправки (пауза между сообщениям�
     const def = find(updates, /make_interval\(mins/);
     expect(def).toHaveLength(1);                                 // отложена только 102
     expect(def[0].params[0]).toBe(102);
-    // Ни одного запроса ни по одной из строк 103–105 — ни отложить, ни
-    // перезаписать decision_reason.
+    // Ни одного АДРЕСНОГО запроса по строкам 103–105 — ни отложить, ни
+    // перезаписать decision_reason. Общая компенсация attempts в конце тика
+    // (id = ANY($1)) не в счёт: она не двигает строку, см. describe ниже.
+    const rowTargeted = updates.filter(u => !/id\s*=\s*ANY\(\$1\)/.test(u.sql));
     for (const id of [103, 104, 105]) {
-      expect(updates.filter(u => Array.isArray(u.params) && u.params[0] === id)).toHaveLength(0);
+      expect(rowTargeted.filter(u => Array.isArray(u.params) && u.params[0] === id)).toHaveLength(0);
     }
     // И ни одного лишнего чтения счётчика темпа на пропущенные строки.
     expect(deps.lastPlannedSendAt).toHaveBeenCalledTimes(2);
+  });
+
+  // Аренда инкрементит attempts у ВСЕХ выданных строк, а пропуск по паузе —
+  // не попытка отправки: воркер этих строк даже не касался. Без компенсации
+  // после большого догона attempts у них дорастал до десятков, и первый же
+  // транзиентный сбой отправки уводил строку сразу в 'failed'
+  // (final = attempts >= MAX_ATTEMPTS) вместо трёх законных попыток.
+  describe('компенсация attempts у пропущенных строк', () => {
+    // Матчить по GREATEST нельзя: тот же откат попытки есть и в
+    // deferRowMinutes. Компенсация узнаётся по пакетному id = ANY($1).
+    const compQueries = (updates) => find(updates, /id\s*=\s*ANY\(\$1\)/);
+
+    const tickWithSkips = async (over = {}) => {
+      let lastSent = null;
+      const { updates, deps } = makeDeps({
+        lastPlannedSendAt: jest.fn(async () => lastSent),
+        sendMessage: jest.fn(async () => { lastSent = new Date(Date.now()); return { id: 1, channel: 'telegram' }; }),
+        ...over,
+      });
+      const rows = [101, 102, 103, 104, 105].map(id => ({ ...ROW, id, send_interval_min: 3 }));
+      deps.db.any = jest.fn(async () => rows);
+      await worker.processTick(deps);
+      return { updates, deps };
+    };
+
+    test('ровно один запрос на тик, и в нём именно пропущенные id', async () => {
+      const { updates } = await tickWithSkips();
+      const comp = compQueries(updates);
+      expect(comp).toHaveLength(1);
+      // 101 отправлена, 102 отложена паузой — их бюджет попыток трогать нельзя,
+      // компенсация только для тех, кого воркер даже не смотрел.
+      expect(comp[0].params).toEqual([[103, 104, 105]]);
+    });
+
+    test('компенсация не двигает строку: ни scheduled_at, ни decision_reason', async () => {
+      const { updates } = await tickWithSkips();
+      const sql = compQueries(updates)[0].sql;
+      expect(sql).not.toMatch(/scheduled_at/);
+      expect(sql).not.toMatch(/decision_reason/);
+      expect(sql).not.toMatch(/last_attempt_at/);
+      // Ровно −1 (компенсация одного инкремента аренды), а не обнуление.
+      expect(sql).toMatch(/attempts\s*=\s*GREATEST\(attempts\s*-\s*1,\s*0\)/);
+      expect(sql).not.toMatch(/attempts\s*=\s*0/);
+    });
+
+    test('пропущенных нет → компенсирующего запроса нет вовсе', async () => {
+      const { updates, deps } = makeDeps({
+        lastPlannedSendAt: jest.fn(async () => null),
+        sendMessage: jest.fn(async () => ({ id: 1, channel: 'telegram' })),
+      });
+      deps.db.any = jest.fn(async () => [{ ...ROW, id: 401, send_interval_min: 0 }]);
+      await worker.processTick(deps);
+      expect(compQueries(updates)).toHaveLength(0);
+    });
+
+    // Компенсация — гигиена счётчика, а не условие работы: её сбой не должен
+    // ронять тик (следующий тик всё равно пойдёт).
+    test('сбой компенсации не роняет тик, пишется WARN', async () => {
+      let lastSent = null;
+      const { deps: d2 } = makeDeps({
+        lastPlannedSendAt: jest.fn(async () => lastSent),
+        sendMessage: jest.fn(async () => { lastSent = new Date(Date.now()); return { id: 1, channel: 'telegram' }; }),
+      });
+      d2.db.query = jest.fn(async (sql) => {
+        if (/id\s*=\s*ANY\(\$1\)/.test(sql)) throw new Error('db down');
+        return { rowCount: 1 };
+      });
+      d2.db.any = jest.fn(async () => [101, 102, 103].map(id => ({ ...ROW, id, send_interval_min: 3 })));
+      await expect(worker.processTick(d2)).resolves.toBeUndefined();
+      expect(d2.log.warn).toHaveBeenCalledWith(expect.stringMatching(/компенсац/i));
+    });
   });
 
   // Гейт по САЛОНУ, а не глобальный по тику: у другого салона свой счётчик
