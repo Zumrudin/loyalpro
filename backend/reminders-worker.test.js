@@ -173,10 +173,13 @@ describe('два обязательных дополнения', () => {
   // (services/loyalty.js, routes/clients.js). Если defaultDeps.applyBonus не
   // выбирает эту колонку из salons, applyBonus (services/reminders/bonus.js)
   // детерминированно вернёт no_bonus и бонусы не начислятся НИКОГДА.
-  test('SELECT салона в defaultDeps.applyBonus содержит yclients_card_type_id', () => {
-    // defaultDeps.applyBonus строит SELECT внутри своего тела — источник
-    // истины тут функция.toString(), как и для LEASE_SQL/ORPHAN_SQL ниже.
-    expect(worker.defaultDeps.applyBonus.toString()).toMatch(/yclients_card_type_id/);
+  // SELECT общий у боевого applyBonus и у сухого applyBonusDry (тестовая
+  // отправка) — источник истины тут функция.toString() загрузчика, как и для
+  // LEASE_SQL/ORPHAN_SQL ниже.
+  test('SELECT салона для бонусов содержит yclients_card_type_id', () => {
+    expect(worker.loadBonusSalon.toString()).toMatch(/yclients_card_type_id/);
+    expect(worker.defaultDeps.applyBonus.toString()).toMatch(/loadBonusSalon/);
+    expect(worker.defaultDeps.applyBonusDry.toString()).toMatch(/loadBonusSalon/);
   });
 
   // (2) hasFutureMatchingBooking глушит исключения по каждой записи и не
@@ -503,5 +506,134 @@ describe('processTick', () => {
     const { updates, deps } = makeDeps();
     await worker.processTick(deps);
     expect(updates.some(u => /rule_id IS NULL/.test(u.sql))).toBe(true);
+  });
+});
+
+// ── тестовая отправка на свой номер ────────────────────────────
+// Прогон идёт ТЕМ ЖЕ processOne, что и боевой: расхождение теста с боевым
+// путём означало бы, что тест ничего не доказывает. Отличий ровно четыре, и
+// каждое — про то, что тест не должен портить боевое состояние клиента.
+
+const TEST_ROW = { ...ROW, id: 11, source: 'test', scheduled_at: '2026-08-08T10:00:00.000Z' };
+
+function testDeps(over = {}) {
+  const made = makeDeps({ applyBonusDry: jest.fn(async () => ({
+    balanceBefore: 120, tier: 'accrue', accrued: 300, txnOk: null,
+    note: 'ТЕСТ: бонусы РЕАЛЬНО НЕ начислялись (сухой прогон)',
+  })), ...over });
+  made.deps.db.any = jest.fn(async () => [TEST_ROW]);
+  return made;
+}
+
+describe('тестовая отправка: аренда по id', () => {
+  // Тестовая строка стоит в БУДУЩЕМ (test-send.js), чтобы её не перехватил
+  // боевой тик со своими deps. Условие due её бы не нашло — адресуемся по id.
+  test('LEASE_ONE_SQL адресуется по id и не смотрит на scheduled_at', () => {
+    expect(worker.LEASE_ONE_SQL).toMatch(/id = \$1/);
+    expect(worker.LEASE_ONE_SQL).not.toMatch(/scheduled_at <= NOW\(\)/);
+    expect(worker.LEASE_SQL).toMatch(/scheduled_at <= NOW\(\)/);
+  });
+
+  // Колонки RETURNING — контракт со всем processOne (rule_text, text_mode,
+  // bonus_tiers, client_name…). Разъехавшиеся копии означали бы, что тест
+  // гоняет строку с другим набором полей, чем боевой путь.
+  test('набор колонок RETURNING общий с боевой арендой', () => {
+    const ret = (sql) => sql.slice(sql.indexOf('RETURNING'));
+    expect(ret(worker.LEASE_ONE_SQL)).toBe(ret(worker.LEASE_SQL));
+  });
+
+  test('строку уже забрали → null, processOne не зовётся', async () => {
+    const { deps } = testDeps();
+    deps.db.any = jest.fn(async () => []);
+    expect(await worker.processTestRow(11, {}, deps)).toBeNull();
+    expect(deps.sendMessage).not.toHaveBeenCalled();
+  });
+});
+
+describe('тестовая отправка: чего тест НЕ портит', () => {
+  test('анти-повтор не ставится и прошлый не мешает', async () => {
+    const { deps } = testDeps({ isMuted: jest.fn(async () => true) });
+    await worker.processTestRow(11, {}, deps);
+    expect(deps.sendMessage).toHaveBeenCalled();
+    expect(deps.mute).not.toHaveBeenCalled();
+  });
+
+  // Иначе второй тест в тот же день (и любое сегодняшнее плановое сообщение
+  // этому клиенту) молча уезжал бы на завтра вместо отправки.
+  test('дневной лимит не применяется', async () => {
+    const { deps } = testDeps({ sentTodayExists: jest.fn(async () => true) });
+    await worker.processTestRow(11, {}, deps);
+    expect(deps.sendMessage).toHaveBeenCalled();
+  });
+
+  // У живого администратора своя история визитов: боевые гейты «уже записан» /
+  // «повторный визит состоялся» отменили бы тест, и он не увидел бы ни текста,
+  // ни ступени — ровно того, ради чего тест и запускается.
+  test('живые записи клиента тест не отменяют', async () => {
+    const { updates, deps } = testDeps({
+      loadClientRecords: jest.fn(async () => ({ completedAfter: [ROW], future: [ROW] })),
+    });
+    await worker.processTestRow(11, {}, deps);
+    // Уборочный UPDATE в finally тоже ставит 'cancelled', но только строке,
+    // оставшейся 'scheduled' — отменой ПО ГЕЙТУ он не является.
+    const byGate = find(updates, /status='cancelled'/).filter(u => !/AND status='scheduled'/.test(u.sql));
+    expect(byGate.length).toBe(0);
+    expect(deps.sendMessage).toHaveBeenCalled();
+  });
+});
+
+describe('тестовая отправка: бонусы', () => {
+  // Ради этого тест и нужен: правило проверяют ДО того, как включить его в
+  // массы, то есть выключенным. Гейт rule_enabled защищает очередь от строк
+  // отключённого правила — а тут администратор нажал «тест» на нём явно.
+  test('выключенное правило всё равно тестируется', async () => {
+    const { deps } = testDeps();
+    deps.db.any = jest.fn(async () => [{ ...TEST_ROW, rule_enabled: false }]);
+    await worker.processTestRow(11, {}, deps);
+    expect(deps.sendMessage).toHaveBeenCalled();
+  });
+
+  test('по умолчанию сухой прогон: ступень считается, деньги не уходят', async () => {
+    const { updates, deps } = testDeps();
+    await worker.processTestRow(11, {}, deps);
+    expect(deps.applyBonusDry).toHaveBeenCalled();
+    expect(deps.applyBonus).not.toHaveBeenCalled();
+    // Ступень и сумма всё равно записаны — иначе тест не показал бы, ЧТО
+    // начислилось бы, и текст ступени отрендерился бы не тот.
+    const bonusUpd = find(updates, /SET balance_before/)[0];
+    expect(bonusUpd.params).toEqual(expect.arrayContaining([120, 'accrue', 300]));
+    const sentReason = find(updates, /SET delivery_id/)[0].params.join(' ');
+    expect(sentReason).toMatch(/сухой прогон/i);
+  });
+
+  test('явное согласие → боевое начисление', async () => {
+    const { deps } = testDeps();
+    await worker.processTestRow(11, { accrue: true }, deps);
+    expect(deps.applyBonus).toHaveBeenCalled();
+    expect(deps.applyBonusDry).not.toHaveBeenCalled();
+  });
+});
+
+describe('тестовая отправка: что остаётся в силе', () => {
+  // Чёрный список и тумблер агента — «этому номеру нельзя», и тест не повод.
+  test('гейт Милы тест не обходит', async () => {
+    const { updates, deps } = testDeps({
+      isAllowed: jest.fn(async () => ({ allow: false, reason: 'blacklist' })),
+    });
+    await worker.processTestRow(11, {}, deps);
+    expect(deps.sendMessage).not.toHaveBeenCalled();
+    expect(find(updates, /status='skipped'/).length).toBe(1);
+  });
+
+  // Отложенная строка остаётся scheduled, а стоит она в БУДУЩЕМ — через час её
+  // арендовал бы боевой тик и отправил бы тестовое сообщение по-настоящему,
+  // уже с боевыми deps. Гасим сразу.
+  test('отложенная тестовая строка гасится, а не уезжает боевому воркеру', async () => {
+    const { updates, deps } = testDeps({ agentGloballyEnabled: () => false });
+    await worker.processTestRow(11, {}, deps);
+    expect(find(updates, /SET scheduled_at/).length).toBe(1);
+    const killed = find(updates, /status='cancelled'/);
+    expect(killed.length).toBe(1);
+    expect(killed[0].sql).toMatch(/status='scheduled'/);
   });
 });

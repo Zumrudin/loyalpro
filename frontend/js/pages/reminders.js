@@ -61,6 +61,7 @@ function remRenderRules() {
           </div>
         </div>
         <div style="display:flex;gap:6px;flex-wrap:wrap">
+          <button class="btn btn-sec btn-sm" onclick="remOpenTest(${r.id})">🧪 Тест</button>
           <button class="btn btn-sec btn-sm" onclick="remOpenBackfill(${r.id})">👁 Догон</button>
           <button class="btn btn-sec btn-sm" onclick="remOpenRuleModal(${r.id})">Изменить</button>
           <button class="btn btn-sec btn-sm" onclick="remToggleRule(${r.id})">${r.isEnabled ? 'Выключить' : 'Включить'}</button>
@@ -273,6 +274,88 @@ async function remRunBackfill() {
   } catch (e) { notify(e.message || 'Не удалось выполнить догон', 'err'); }
 }
 
+// ── тестовая отправка на свой номер ────────────────────────────
+
+let _remTestRuleId = null;
+
+function remOpenTest(ruleId) {
+  _remTestRuleId = ruleId;
+  // Номер тестировщика между прогонами не меняется — не заставляем набирать
+  // его заново на каждое правило.
+  const saved = localStorage.getItem('remTestPhone') || '';
+  document.getElementById('remTestPhone').value = saved;
+  document.getElementById('remTestAccrue').checked = false;
+  const box = document.getElementById('remTestResult');
+  box.className = 'empty';
+  box.innerHTML = 'Укажите номер и нажмите «Отправить тест»';
+  document.getElementById('remTestOv').classList.add('open');
+}
+
+function remCloseTest() { document.getElementById('remTestOv').classList.remove('open'); }
+
+async function remRunTest() {
+  const phone = document.getElementById('remTestPhone').value.trim();
+  if (!phone) return notify('Укажите номер телефона', 'err');
+  const accrue = document.getElementById('remTestAccrue').checked;
+  if (accrue && !confirm('Бонусы будут начислены на карту клиента по-настоящему. Отменить начисление нельзя. Продолжить?')) return;
+  localStorage.setItem('remTestPhone', phone);
+
+  const box = document.getElementById('remTestResult');
+  const btn = document.getElementById('remTestRunBtn');
+  // Двойной клик = два реальных сообщения живому человеку (на сервере тот же
+  // случай ловит testInFlight, но ждать 409 незачем).
+  btn.disabled = true;
+  box.className = 'empty';
+  box.innerHTML = 'Отправляю…';
+  try {
+    const d = await api('POST', `/api/reminders/rules/${_remTestRuleId}/test`, { phone, accrue });
+    box.className = '';
+    box.innerHTML = remTestResultHtml(d);
+    await remLoadRules();
+  } catch (e) {
+    box.className = 'empty';
+    box.innerHTML = esc(e.message || 'Не удалось выполнить тестовую отправку');
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+function remTestResultHtml(d) {
+  const st = REM_STATUS[d.status] || { lbl: d.status || 'неизвестно', color: '#9ca3af' };
+  const b = d.bonus || {};
+  // В сухом прогоне «начислено» звучало бы как свершившийся факт — там сумма
+  // сослагательная, и это единственное, что администратор обязан прочитать
+  // однозначно.
+  const bonusLine = !b.enabled
+    ? 'бонусы в правиле выключены'
+    : (b.dryRun
+        ? `ступень «${REM_TIER_LBL[b.tier] || b.tier || '—'}»` +
+          (b.accrued ? ` · начислилось бы ${b.accrued}` : '') +
+          (b.balanceBefore == null ? ' · баланс карты неизвестен' : ` · баланс ${b.balanceBefore}`) +
+          ' · <b>сухой прогон, деньги НЕ начислялись</b>'
+        : `${REM_TIER_LBL[b.tier] || b.tier || '—'}` +
+          (b.accrued ? ` · ${b.accrued} бонусов` : '') +
+          (b.balanceBefore == null ? ' · баланс карты неизвестен' : ` · баланс был ${b.balanceBefore}`) +
+          (b.txnOk ? ' · начислено по-настоящему' : ' · транзакция не прошла'));
+  const anchor = d.anchor
+    ? `визит ${remFmt(d.anchor.visitAt)}${d.anchor.staffName ? ', ' + esc(d.anchor.staffName) : ''}` +
+      `${(d.anchor.services || []).length ? ', ' + esc(d.anchor.services.map(s => s.title).join(', ')) : ''}`
+    : (d.anchorFailed
+        ? 'визиты клиента не загрузились — {услуга} и {мастер} подставились пустыми'
+        : 'состоявшихся визитов не нашлось — дата взята из задержки правила, {услуга} и {мастер} пустые');
+  return `
+    <div style="margin:10px 0;font-size:13px">
+      <div>Итог: <span style="color:${st.color};font-weight:600">${esc(st.lbl)}</span>
+        ${d.reason ? ` · ${esc(d.reason)}` : ''}${d.channel ? ` · канал: ${esc(d.channel)}` : ''}</div>
+      <div style="margin-top:4px">Якорь: ${anchor}</div>
+      <div style="margin-top:4px">Бонусы: ${bonusLine}</div>
+      ${d.clientFound ? '' : '<div style="margin-top:4px;color:#f59e0b">Карточки клиента с таким номером нет — {first_name} подставилось пустым</div>'}
+      ${d.error ? `<div style="margin-top:4px;color:#ef4444">${esc(d.error)}</div>` : ''}
+    </div>
+    ${d.text ? `<div class="card" style="white-space:pre-wrap;font-size:13px">${esc(d.text)}</div>`
+             : '<div class="empty" style="padding:10px 0">Текст не отправлялся</div>'}`;
+}
+
 // ── вкладка «История напоминаний» ──────────────────────────────
 
 function remFillHistoryFilter() {
@@ -315,7 +398,8 @@ function remRenderHistory(rows) {
     return `<tr>
       <td>${remFmt(when)}</td>
       <td>${esc(r.clientName || r.phone || '')}</td>
-      <td>${esc(r.ruleTitle || '—')}</td>
+      <td>${esc(r.ruleTitle || '—')}${r.source === 'test'
+            ? ' <span class="bc-chip" title="тестовая отправка администратором">тест</span>' : ''}</td>
       <td title="баланс был: ${r.balanceBefore == null ? 'неизвестен' : r.balanceBefore}">${esc(String(bonus))}</td>
       <td style="max-width:320px">${esc((r.text || '').slice(0, 200))}</td>
       <td><span style="color:${st.color}">${esc(st.lbl)}</span>

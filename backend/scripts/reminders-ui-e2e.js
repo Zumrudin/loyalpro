@@ -185,6 +185,25 @@ async function main() {
     await page.waitForFunction(() =>
       !document.getElementById('remBackfillOv').classList.contains('open'), { timeout: 5000 });
 
+    // ── тестовая отправка: модалка открывается, кнопку НЕ жмём ──
+    // «Отправить тест» шлёт РЕАЛЬНОЕ сообщение на указанный номер — в
+    // автоматическом прогоне этого делать нельзя (та же причина, что у
+    // «Поставить в очередь» выше). Проверяем разметку, предзаполнение номера
+    // из localStorage и то, что галочка начисления по умолчанию снята.
+    await page.evaluate(() => localStorage.setItem('remTestPhone', '79990001122'));
+    await page.evaluate((id) => remOpenTest(id), ruleId);
+    await page.waitForSelector('#remTestOv.open', { timeout: 5000 });
+    const testPhone = await page.$eval('#remTestPhone', el => el.value);
+    if (testPhone !== '79990001122') fail('номер не подставился из localStorage: ' + testPhone);
+    const accrueChecked = await page.$eval('#remTestAccrue', el => el.checked);
+    if (accrueChecked) fail('галочка реального начисления должна быть снята по умолчанию');
+    ok('«🧪 Тест»: модалка открылась, номер подставлен, начисление по умолчанию выключено');
+    await page.screenshot({ path: '/tmp/reminders-ui-light-testsend.png' });
+    await page.click('#remTestOv .mc');
+    await page.waitForFunction(() =>
+      !document.getElementById('remTestOv').classList.contains('open'), { timeout: 5000 });
+    ok('кнопка «Отправить тест» НЕ нажата (реальное сообщение в автопрогоне недопустимо)');
+
     // ── вкладка «История напоминаний» ──
     await page.click('#careTabBtn-reminders-history');
     await page.waitForFunction(() =>

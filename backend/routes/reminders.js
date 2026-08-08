@@ -12,6 +12,7 @@
 //   DELETE /rules/:id                   удалить (история остаётся: rule_id → NULL)
 //   POST   /rules/:id/backfill/preview  превью догона
 //   POST   /rules/:id/backfill          выполнить догон
+//   POST   /rules/:id/test              тестовая отправка на указанный номер
 //   POST   /queue/:id/cancel            отменить запланированную
 //   GET    /history                     журнал с фильтрами (включая scheduled)
 //   POST   /suppressions/toggle         ручной тумблер анти-повтора
@@ -26,6 +27,10 @@ const { getServiceCategoryMap } = require('../services/notifications');
 const { normalizePhoneKey } = require('../services/agent-gate');
 const { matchBackfillVisits, spreadOverDays } = require('../services/reminders/backfill');
 const { TIER_ACTIONS } = require('../services/reminders/tiers');
+const { pickAnchorVisit, buildTestRow } = require('../services/reminders/test-send');
+const remindersWorker = require('../services/reminders/worker');
+const { ycGetClientRecords } = require('../services/yclients-records');
+const identity = require('../services/agent/identity');
 
 const log = createLogger('Reminders');
 const guard = [auth, requireRole('owner', 'admin')];
@@ -369,6 +374,135 @@ router.post('/rules/:id/backfill', guard, async (req, res) => {
   }
 });
 
+// ── тестовая отправка на свой номер ────────────────────────────
+// ЗАЧЕМ: планирование чисто событийное, у нового правила очередь пуста, а
+// текст (в режиме free его пишет Мила) и ступень бонусов считаются только в
+// момент отправки — до включения «в массы» проверить их иначе нечем. Строка
+// гоняется ТЕМ ЖЕ воркером (worker.processTestRow), отличия — только в том,
+// что тест не портит боевое состояние клиента (см. buildTestDeps).
+
+const ANCHOR_LOOKBACK_DAYS = 365;
+// Двойной клик = два реальных сообщения живому человеку.  Защита ПРОЦЕССНАЯ,
+// как backfillInFlight выше.
+const testInFlight = new Set();
+
+/**
+ * Карточка клиента по номеру — суффиксным LIKE, ровно как identity.resolveClient.
+ * Точное сравнение с каноничным ключом (79200255591) промахивается: в базе
+ * номера лежат в разных формах ('+79200255591'), и тест уходил бы без имени и,
+ * что хуже, БЕЗ yclients_client_id — то есть с молча выключенными бонусами
+ * (поймано живым прогоном scripts/reminders-test-send-e2e.js). Защита от
+ * совпадения с хвостом ЧУЖОГО номера — та же: только полный номер (10+ цифр).
+ */
+async function resolveTestClient(salonId, phone) {
+  if (!phone || phone.length < 10) return null;
+  return db.oneOrNone(
+    `SELECT id, name, yclients_client_id FROM clients
+      WHERE salon_id=$1 AND phone LIKE '%' || $2 ORDER BY id LIMIT 1`, [salonId, phone]);
+}
+
+/**
+ * Якорь теста — последний СОСТОЯВШИЙСЯ визит клиента: от него считаются
+ * {дней}, {услуга}, {мастер}. Визитов нет (или YClients молчит) → null, и
+ * buildTestRow возьмёт дату из задержки правила, а плейсхолдеры услуги и
+ * мастера отрендерятся пустыми — администратор увидит это в ответе.
+ */
+async function loadTestAnchor(salonId, ycId) {
+  if (!ycId) return null;
+  const salon = await db.oneOrNone(
+    `SELECT id, yclients_company_id, yclients_partner_token, yclients_user_token
+       FROM salons WHERE id=$1`, [salonId]);
+  if (!salon || !salon.yclients_company_id) return null;
+  const recs = await ycGetClientRecords(salon, ycId,
+    { startDate: mskDate(new Date(Date.now() - ANCHOR_LOOKBACK_DAYS * 86400000)) });
+  return pickAnchorVisit(recs, Date.now());
+}
+
+router.post('/rules/:id/test', guard, async (req, res) => {
+  const phone = normalizePhoneKey(req.body && req.body.phone);
+  if (!phone) return res.status(400).json({ error: 'Укажите номер телефона' });
+  // Неполный номер нашёл бы по суффиксу ЧУЖУЮ карточку (та же защита, что в
+  // identity.resolveClient), а сообщение ушло бы неизвестно кому.
+  if (phone.length < 10) return res.status(400).json({ error: 'Номер должен быть полным (11 цифр)' });
+  // Начисление НЕОБРАТИМО (ручная транзакция по карте) — боевой путь бонусов
+  // включается только явным согласием, по умолчанию сухой прогон.
+  const accrue = !!(req.body && req.body.accrue);
+  const key = `${req.params.id}:${phone}`;
+  if (testInFlight.has(key)) return res.status(409).json({ error: 'Тестовая отправка уже выполняется' });
+  testInFlight.add(key);
+  try {
+    const rule = await db.oneOrNone(
+      `SELECT id, salon_id, title, delay_days, bonus_enabled FROM reminder_rules
+        WHERE id=$1 AND salon_id=$2`, [req.params.id, req.user.salonId]);
+    if (!rule) return res.status(404).json({ error: 'Правило не найдено' });
+
+    const client = await resolveTestClient(req.user.salonId, phone);
+    // id клиента YClients нужен И якорю (история визитов), И бонусам — резолвим
+    // один раз: в карточке поле заполнено не всегда, запасной путь — по истории
+    // записей (identity.resolveYclientsClientId).
+    const ycClientId = (client && client.yclients_client_id)
+      || await identity.resolveYclientsClientId(req.user.salonId, phone).catch(() => null);
+
+    let anchor = null;
+    let anchorFailed = false;
+    try { anchor = await loadTestAnchor(req.user.salonId, ycClientId); }
+    catch (e) {
+      anchorFailed = true;
+      log.warn(`тест правила #${rule.id}: визиты клиента недоступны (${e.message})`);
+    }
+
+    const v = buildTestRow({ rule, client, phone, anchor, ycClientId });
+    const row = await db.oneOrNone(
+      `INSERT INTO reminder_queue
+         (salon_id, rule_id, rule_title, client_id, phone, yclients_client_id,
+          anchor_record_id, anchor_visit_at, anchor_staff_name, anchor_services,
+          scheduled_at, source)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11,$12)
+       RETURNING id`,
+      [v.salon_id, v.rule_id, v.rule_title, v.client_id, v.phone, v.yclients_client_id,
+       v.anchor_record_id, v.anchor_visit_at, v.anchor_staff_name,
+       JSON.stringify(v.anchor_services), v.scheduled_at, v.source]);
+    if (!row) throw new Error('строка тестовой отправки не создалась');
+
+    await remindersWorker.processTestRow(row.id, { accrue });
+
+    const after = await db.oneOrNone(
+      `SELECT status, decision_reason, rendered_text, channel_used, error,
+              balance_before, bonus_tier, bonus_accrued, bonus_txn_ok
+         FROM reminder_queue WHERE id=$1`, [row.id]);
+    log.info(`тест правила #${rule.id} на ${phone}: ${after && after.status} (${after && after.decision_reason})`);
+    res.json({
+      queueId: row.id,
+      status: after ? after.status : null,
+      reason: after ? after.decision_reason : null,
+      error: after ? after.error : null,
+      text: after ? after.rendered_text : null,
+      channel: after ? after.channel_used : null,
+      bonus: {
+        enabled: !!rule.bonus_enabled,
+        dryRun: !accrue,
+        balanceBefore: after ? after.balance_before : null,
+        tier: after ? after.bonus_tier : null,
+        accrued: after ? after.bonus_accrued : null,
+        txnOk: after ? after.bonus_txn_ok : null,
+      },
+      clientFound: !!client,
+      clientName: client ? client.name : null,
+      anchorFailed,
+      anchor: anchor ? {
+        visitAt: anchor.visitAt,
+        staffName: anchor.staffName,
+        services: anchor.services.map(s => ({ id: s && s.id, title: s && s.title })),
+      } : null,
+    });
+  } catch (e) {
+    log.error(`тест правила #${req.params.id}: ${e.message}`);
+    res.status(500).json({ error: 'Не удалось выполнить тестовую отправку' });
+  } finally {
+    testInFlight.delete(key);
+  }
+});
+
 const QUEUE_COLUMNS = `
   q.id, q.rule_id AS "ruleId", q.rule_title AS "ruleTitle", q.phone,
   q.scheduled_at AS "scheduledAt", q.status, q.decision_reason AS "reason",
@@ -445,3 +579,9 @@ module.exports = router;
 // валидация тела правила чистая и легко проверяется без HTTP/БД. Не меняет
 // поведение маршрутов: router — тот же объект, что и раньше, со свойством.
 module.exports.parseRuleBody = parseRuleBody;
+// Тем же приёмом наружу вынесены резолверы тестовой отправки: живой прогон
+// scripts/reminders-test-send-e2e.js обязан ходить по ТОМУ ЖЕ коду, что и
+// ручка, — второй копии правила «как искать карточку по номеру» быть не должно
+// (именно на нём и поймали промах точного сравнения телефонов).
+module.exports.resolveTestClient = resolveTestClient;
+module.exports.loadTestAnchor = loadTestAnchor;

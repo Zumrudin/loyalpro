@@ -69,6 +69,15 @@ function stripOperatorMark(text) {
     .join('\n');
 }
 
+// yclients_card_type_id ОБЯЗАТЕЛЕН (см. комментарий у applyBonus ниже) —
+// один SELECT на боевой и на сухой путь, чтобы поля не разъехались.
+async function loadBonusSalon(salonId) {
+  return realDb.one(
+    `SELECT id, yclients_company_id, yclients_partner_token, yclients_user_token,
+            yclients_card_type_id
+       FROM salons WHERE id=$1`, [salonId]);
+}
+
 const defaultDeps = {
   db: realDb,
   // ignoreSchedule: ночное окно Милы на плановые напоминания не
@@ -131,11 +140,20 @@ const defaultDeps = {
   // applyBonus детерминированно возвращает no_bonus — начисления не будет
   // НИКОГДА, молча.
   applyBonus: async (salonId, ycClientId, tiers, ruleTitle) => {
-    const salon = await realDb.one(
-      `SELECT id, yclients_company_id, yclients_partner_token, yclients_user_token,
-              yclients_card_type_id
-         FROM salons WHERE id=$1`, [salonId]);
+    const salon = await loadBonusSalon(salonId);
     return bonusSvc.applyBonus(salon, ycClientId, tiers, ruleTitle);
+  },
+  // Сухой прогон бонусов для ТЕСТОВОЙ отправки: баланс карты читается
+  // по-настоящему и ступень выбирается по нему (иначе тест не показал бы, что
+  // именно начислилось бы и каким текстом), но сама транзакция подменена
+  // пустышкой. Начисление необратимо, поэтому боевой путь включается только
+  // явным согласием администратора (opts.accrue).
+  applyBonusDry: async (salonId, ycClientId, tiers, ruleTitle) => {
+    const salon = await loadBonusSalon(salonId);
+    const r = await bonusSvc.applyBonus(salon, ycClientId, tiers, ruleTitle,
+      { accrue: async () => {} });
+    // txnOk=true означало бы «транзакция прошла» — её не было вовсе.
+    return { ...r, txnOk: null, note: 'ТЕСТ: бонусы РЕАЛЬНО НЕ начислялись (сухой прогон)' };
   },
   loadNameDictionary: (salonId) => salonNames.load(salonId).catch(() => null),
   loadTranscript: (salonId, key, opts) => history.loadTranscript(salonId, key, opts),
@@ -348,7 +366,7 @@ async function processOne(row, deps = defaultDeps) {
       // ручной проверки карты клиента человеком — отсюда WARN.
       d.log.warn(`row #${row.id}: bonus_tier='pending' — прошлая попытка начисления оборвалась между YClients и записью результата; карту клиента нужно проверить вручную, сообщение уйдёт без бонусной части`);
       bonus = { balanceBefore: null, tier: 'no_bonus', accrued: 0, txnOk: null,
-                pendingNote: 'бонус не подтверждён (pending) — сообщение без бонусной части, требуется ручная проверка карты клиента' };
+                note: 'бонус не подтверждён (pending) — сообщение без бонусной части, требуется ручная проверка карты клиента' };
     } else if (row.bonus_accrued != null || row.bonus_tier != null) {
       bonus = { balanceBefore: row.balance_before, tier: row.bonus_tier,
                 accrued: row.bonus_accrued || 0, txnOk: row.bonus_txn_ok };
@@ -452,10 +470,11 @@ async function processOne(row, deps = defaultDeps) {
     const channelUsed = (delivery && (delivery.channel || delivery.messenger)) || routing[0] || null;
     await db.query(
       `UPDATE reminder_queue SET delivery_id=$2, channel_used=$3, decision_reason=$4 WHERE id=$1`,
-      // pendingNote (только у bonus_tier='pending', см. выше) объясняет
-      // администратору, почему в ЭТОМ сообщении нет бонусной части.
+      // bonus.note объясняет администратору, почему бонусная часть именно
+      // такая: 'pending' (см. выше) — почему её нет вовсе, сухой прогон
+      // тестовой отправки — почему сумма показана, но деньги не ушли.
       [row.id, delivery && delivery.id != null ? String(delivery.id) : null, channelUsed,
-       bonus.pendingNote || `отправлено, ступень ${bonus.tier}`]
+       bonus.note || `отправлено, ступень ${bonus.tier}`]
     ).catch(e => d.log.error(`persist delivery #${row.id}: ${e.message}`));
 
     // Флаг анти-повтора вешается ТОЛЬКО за фактически отправленное сообщение.
@@ -494,23 +513,42 @@ async function processOne(row, deps = defaultDeps) {
 // Поэтому имя клиента берётся скалярным подзапросом в RETURNING (там ссылка
 // на rq легальна). Юнит-моки db.any валидность SQL не проверяют — после правок
 // обязателен живой EXPLAIN на дев-БД, SQL экспортируется именно для этого.
-const LEASE_SQL =
-  `UPDATE reminder_queue rq
+//
+// Вариантов аренды два, и набор колонок RETURNING у них ОБЯЗАН быть общим —
+// отсюда сборка из одного шаблона, а не вторая копия SQL: processOne читает
+// rule_text/text_mode/bonus_tiers/client_name, и разъехавшиеся копии означали
+// бы, что тестовая отправка гоняет строку с другим набором полей, чем боевая.
+//   single=false — боевой тик: до 5 просроченных строк с backoff по попыткам;
+//   single=true  — адресная аренда ОДНОЙ строки по id, БЕЗ условия
+//                  «scheduled_at <= NOW()»: тестовая строка намеренно стоит в
+//                  будущем, чтобы её не перехватил боевой тик (test-send.js).
+function buildLeaseSql({ single }) {
+  const pick = single
+    ? `SELECT id FROM reminder_queue
+         WHERE id = $1 AND status = 'scheduled'
+         LIMIT 1
+         FOR UPDATE SKIP LOCKED`
+    : `SELECT id FROM reminder_queue
+         WHERE status = 'scheduled' AND scheduled_at <= NOW()
+           AND (last_attempt_at IS NULL OR last_attempt_at < NOW() - make_interval(secs => $1))
+         ORDER BY scheduled_at ASC
+         LIMIT 5
+         FOR UPDATE SKIP LOCKED`;
+  return `UPDATE reminder_queue rq
       SET attempts = rq.attempts + 1, last_attempt_at = NOW()
      FROM reminder_rules r
      JOIN salons sal ON sal.id = r.salon_id
     WHERE r.id = rq.rule_id
       AND rq.id IN (
-        SELECT id FROM reminder_queue
-         WHERE status = 'scheduled' AND scheduled_at <= NOW()
-           AND (last_attempt_at IS NULL OR last_attempt_at < NOW() - make_interval(secs => $1))
-         ORDER BY scheduled_at ASC
-         LIMIT 5
-         FOR UPDATE SKIP LOCKED)
+        ${pick})
     RETURNING rq.*, r.is_enabled AS rule_enabled, r.conditions AS rule_conditions,
               r.text AS rule_text, r.text_mode, r.bonus_enabled, r.bonus_tiers,
               r.delay_days, r.attribution_days, sal.name AS salon_name,
               (SELECT cl.name FROM clients cl WHERE cl.id = rq.client_id) AS client_name`;
+}
+
+const LEASE_SQL = buildLeaseSql({ single: false });
+const LEASE_ONE_SQL = buildLeaseSql({ single: true });
 
 // Строки удалённых правил join не вернёт — они висели бы scheduled вечно.
 const ORPHAN_SQL =
@@ -532,6 +570,63 @@ async function processTick(deps = defaultDeps) {
   }
 }
 
+// ── тестовая отправка на свой номер ────────────────────────────
+// Прогон идёт ТЕМ ЖЕ processOne, что и боевой: иначе тест не доказывал бы
+// ничего о боевом пути. Отличий ровно четыре, и каждое — про то, что тест не
+// должен портить боевое состояние клиента и не должен молча не состояться:
+//   1) анти-повтор не ставится и прошлый не мешает (тест повторяем);
+//   2) дневной лимит «1 плановое сообщение в день» не применяется;
+//   3) живые записи клиента (он уже записан / уже пришёл) тест не отменяют —
+//      ради текста и ступени тест и запускается;
+//   4) бонусы по умолчанию считаются сухим прогоном (начисление необратимо).
+// Гейт Милы (ЧС/режим/тумблер), выключенное правило и пауза оператора
+// остаются в силе: это «этому номеру сейчас нельзя», и тест не повод.
+function buildTestDeps(base, { accrue = false } = {}) {
+  const d = { ...defaultDeps, ...base };
+  return {
+    ...d,
+    isMuted: async () => false,
+    mute: async () => {},
+    sentTodayExists: async () => false,
+    loadClientRecords: async () => ({ completedAfter: [], future: [] }),
+    // Записи пустые — карта категорий нужна только им, лишний запрос в
+    // YClients за ней делать незачем.
+    getCatMap: async () => new Map(),
+    applyBonus: accrue ? d.applyBonus : d.applyBonusDry,
+  };
+}
+
+/**
+ * Арендовать ОДНУ строку по id и прогнать её тестовыми deps.
+ * @returns {Promise<number|null>} id обработанной строки или null, если её уже
+ *   не было в состоянии 'scheduled' (перехватили/отменили).
+ */
+async function processTestRow(rowId, opts = {}, deps = {}) {
+  const d = buildTestDeps(deps, opts);
+  const rows = await d.db.any(LEASE_ONE_SQL, [rowId]);
+  if (!rows.length) return null;
+  // Проверяют обычно ещё ВЫКЛЮЧЕННОЕ правило — ради этого тест и нужен. Гейт
+  // rule_enabled защищает очередь от строк отключённого правила, а здесь
+  // администратор нажал «тест» на этом самом правиле явно.
+  const row = { ...rows[0], rule_enabled: true };
+  try {
+    await processOne(row, d);
+  } finally {
+    // Строка, оставшаяся 'scheduled' (гейт отложил её), стоит в БУДУЩЕМ — через
+    // час её арендовал бы боевой тик и отправил бы тестовое сообщение
+    // по-настоящему, уже с боевыми deps (реальное начисление, реальный
+    // анти-повтор). Гасим сразу; у отправленной/терминальной строки условие
+    // status='scheduled' не сработает.
+    await d.db.query(
+      `UPDATE reminder_queue
+          SET status='cancelled',
+              decision_reason = COALESCE(decision_reason, 'тестовая отправка не состоялась')
+        WHERE id=$1 AND status='scheduled'`, [rowId])
+      .catch(e => d.log.error(`test row #${rowId} cleanup: ${e.message}`));
+  }
+  return rows[0].id;
+}
+
 let _running = false;
 function startRemindersWorker() {
   if (_running) return;
@@ -546,5 +641,6 @@ function startRemindersWorker() {
 
 module.exports = {
   processOne, processTick, startRemindersWorker, defaultDeps,
-  LEASE_SQL, ORPHAN_SQL, MAX_OPERATOR_DEFERS,
+  processTestRow, buildTestDeps, loadBonusSalon,
+  LEASE_SQL, LEASE_ONE_SQL, ORPHAN_SQL, MAX_OPERATOR_DEFERS,
 };
