@@ -160,6 +160,20 @@ async function main() {
     ok('в БД: условие по категории + 2 ступени бонусов + пауза 7 мин сохранены корректно');
 
     // ── открыть заново: условия и ступени должны восстановиться ──
+    // Между remCloseRuleModal (снимает только класс .open — DOM никуда не
+    // девается) и повторным открытием ничего не перезагружает форму: если бы
+    // мы проверяли поля «как есть», проверка прошла бы на СТАРОМ значении,
+    // которое туда положил сам сценарий заполнения, а не код восстановления
+    // (например, если remOpenRuleModal перестанет звать condSet/remRenderTiers
+    // для уже открывавшегося id — DOM молча останется от первого открытия).
+    // Сбрасываем в заведомо ДРУГОЕ состояние перед повторным открытием.
+    await page.evaluate(() => {
+      condSet('rem', { logic: 'and', items: [] });
+      document.getElementById('remBonusEnabled').checked = false;
+      remRenderTiers();
+    });
+    await page.$eval('#remInterval', el => { el.value = '1'; });
+
     await page.evaluate((id) => remOpenRuleModal(id), ruleId);
     await page.waitForSelector('#remRuleOv.open', { timeout: 5000 });
     await sleep(300); // condSet/remRenderTiers асинхронно ждут careEnsureDicts
@@ -171,7 +185,7 @@ async function main() {
     if (!reopenBonusChecked) fail('чекбокс бонусов не восстановился');
     const reopenInterval = await page.$eval('#remInterval', el => el.value);
     if (reopenInterval !== '7') fail('пауза между сообщениями не восстановилась: ' + reopenInterval);
-    ok('повторное открытие: условие, 2 ступени бонусов и пауза 7 мин восстановились');
+    ok('повторное открытие (после явного сброса DOM): условие, 2 ступени бонусов и пауза 7 мин восстановились');
     await sleep(300);
     await page.screenshot({ path: '/tmp/reminders-ui-light-rule-modal.png' });
     await page.click('#remRuleOv .mc');
@@ -187,6 +201,17 @@ async function main() {
     const bfText = await page.$eval('#remBfResult', el => el.textContent);
     if (!/Записей за период/.test(bfText)) fail('превью догона не отрендерилось: ' + bfText.slice(0, 200));
     ok('«Догон по базе»: выборка на 30 дней построена (' + bfText.match(/уйдёт напоминаний: \d+/)?.[0] + ')');
+    // Основной деливерабл задачи — разбивка на просроченных/будущих строк:
+    // без явной проверки текста ассерт выше («Записей за период») зеленеет,
+    // даже если overdueCount/lastFutureAt пропадут из ответа и блок отрендерит
+    // «Просрочено: undefined» — так и было в первой версии e2e этой правки.
+    if (!/Просрочено/.test(bfText)) fail('блок «Просрочено» не отрендерился: ' + bfText.slice(0, 300));
+    if (!/встанут в очередь/.test(bfText)) fail('блок «встанут в очередь» не отрендерился: ' + bfText.slice(0, 300));
+    const bfThCount = await page.$$eval('#remBfResult .mtbl thead th', els => els.length);
+    if (bfThCount !== 5) fail('ожидали 5 колонок в таблице догона (включая «Встанет на»), получили ' + bfThCount);
+    const bfThText = await page.$$eval('#remBfResult .mtbl thead th', els => els.map(e => e.textContent).join('|'));
+    if (!bfThText.includes('Встанет на')) fail('колонка «Встанет на» не найдена в шапке: ' + bfThText);
+    ok('превью догона: разбивка «Просрочено»/«встанут в очередь» и колонка «Встанет на» на месте');
     await page.screenshot({ path: '/tmp/reminders-ui-light-backfill.png' });
     // явная защита сценария: кнопку «Поставить в очередь» не нажимаем
     const runBtnDisabledOk = await page.$eval('#remBfRunBtn', el => typeof el.disabled === 'boolean');

@@ -262,6 +262,29 @@ function remBfDaysChanged() {
   document.getElementById('remBfRunBtn').disabled = true;
 }
 
+// Окно темпа 09:00–21:00 мск = 720 минут (DAY_WINDOW_START_MIN/END_MIN в
+// backend/services/messaging/send-pacing.js) — вне него отправка переносится
+// на ближайшее наступление send_time правила, поэтому выше этого предела
+// пропускной способности нет вообще, сколько бы ни был кап догона.
+const REM_PACE_WINDOW_MIN = 720;
+
+/**
+ * Заметка о пропускной способности темпа под сводкой превью. Правило тут
+ * недоступно из ответа /backfill/preview (он его не отдаёт), но оно уже
+ * загружено в _remRules — тащить его отдельным запросом не нужно.
+ */
+function remPaceNote(rule) {
+  const interval = rule ? Number(rule.sendIntervalMin) : NaN;
+  if (!Number.isFinite(interval) || interval <= 0) return '';
+  const perDay = Math.floor(REM_PACE_WINDOW_MIN / interval);
+  const cap = rule && Number.isFinite(Number(rule.backfillMaxPerDay)) ? Number(rule.backfillMaxPerDay) : null;
+  const overCap = cap != null && cap > perDay;
+  return `<div style="margin:0 0 10px;font-size:12px;color:${overCap ? '#f59e0b' : 'var(--t3)'}">
+    С паузой ${interval} мин темп даёт не больше ${perDay} сообщений в сутки${
+      overCap ? ` — кап догоняющей пачки (${cap}) выше этого предела, хвост растянется на несколько дней` : ''}.
+  </div>`;
+}
+
 async function remRunBackfillPreview() {
   const days = Number(document.getElementById('remBfDays').value) || 30;
   const box = document.getElementById('remBfResult');
@@ -273,6 +296,18 @@ async function remRunBackfillPreview() {
     box.className = '';
     const willSend = d.totals.willSend;
     document.getElementById('remBfRunBtn').disabled = willSend === 0;
+    // Даты в превью — это ПЛАНОВАЯ постановка в очередь (planBackfillSchedule),
+    // а не гарантия момента отправки: воркер её двигает паузой темпа и ночным
+    // потолком (services/messaging/send-pacing.js). Сортировка — по этой же
+    // плановой дате, строки без неё (skipReason) — в хвост, иначе колонка
+    // читается как каша (просроченные приходят от бэкенда в порядке «самый
+    // давний визит первым», а живая выборка — «свежий визит сверху»).
+    const rows = [...d.rows].sort((a, b) => {
+      const am = a.scheduledAt ? Date.parse(a.scheduledAt) : Infinity;
+      const bm = b.scheduledAt ? Date.parse(b.scheduledAt) : Infinity;
+      return am - bm;
+    });
+    const rule = _remRules.find(x => x.id === _remBfRuleId);
     box.innerHTML = `
       <div style="margin:10px 0;font-size:13px">
         Записей за период: ${d.totals.records} · состоявшихся: ${d.totals.completed} ·
@@ -280,24 +315,25 @@ async function remRunBackfillPreview() {
       </div>
       <div style="margin:0 0 10px;font-size:13px">
         Просрочено (визит был больше задержки назад): <b>${d.overdueCount}</b>${
-          d.lastOverdueAt ? ` · уйдут по ${remFmt(d.lastOverdueAt)}` : ''} ·
+          d.lastOverdueAt ? ` · встанут в очередь по ${remFmt(d.lastOverdueAt)}` : ''} ·
         встанут в очередь на будущее: <b>${d.futureCount}</b>${
           d.lastFutureAt ? ` · последнее ${remFmt(d.lastFutureAt)}` : ''}
       </div>
+      ${remPaceNote(rule)}
       ${d.catMapFailed ? '<div class="empty" style="color:#f59e0b">Карта категорий не загрузилась — условия по категории не сработают</div>' : ''}
       <div class="tw mtbl-wrap"><table class="mtbl"><thead><tr>
-        <th>Клиент</th><th>Визит</th><th>Услуги</th><th>Отправка</th><th>Итог</th>
+        <th>Клиент</th><th>Визит</th><th>Услуги</th><th>Встанет на</th><th>Итог</th>
       </tr></thead><tbody>
-      ${d.rows.slice(0, 200).map(r => `<tr>
+      ${rows.slice(0, 200).map(r => `<tr>
         <td class="mtbl-title"><b>${esc(r.clientName || r.phone || '')}</b></td>
         <td data-label="Визит">${remFmt(r.visitAt)}</td>
         <td class="mtbl-full" data-label="Услуги">${esc((r.services || []).map(s => s.title).join(', '))}</td>
-        <td data-label="Отправка">${r.scheduledAt ? remFmt(r.scheduledAt) : '—'}</td>
+        <td data-label="Встанет на">${remFmt(r.scheduledAt)}</td>
         <td data-label="Итог">${r.skipReason ? `<span class="care-badge care-st-stopped">${esc(REM_SKIP_LBL[r.skipReason] || r.skipReason)}</span>`
                            : '<span class="care-badge care-st-completed">уйдёт</span>'}</td>
       </tr>`).join('')}
       </tbody></table></div>
-      ${d.rows.length > 200 ? `<div style="font-size:11px;color:var(--t3);padding:6px 2px">Показаны первые 200 из ${d.rows.length}</div>` : ''}`;
+      ${rows.length > 200 ? `<div style="font-size:11px;color:var(--t3);padding:6px 2px">Показаны первые 200 из ${rows.length}</div>` : ''}`;
   } catch (e) {
     box.className = 'empty';
     box.innerHTML = esc(e.message || 'Не удалось построить выборку');
