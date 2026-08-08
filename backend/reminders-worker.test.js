@@ -34,6 +34,7 @@ function makeDeps(over = {}) {
       dialogStatus: jest.fn(async () => null),
       isMuted: jest.fn(async () => false),
       sentTodayExists: jest.fn(async () => false),
+      lastPlannedSendAt: jest.fn(async () => null),
       loadClientRecords: jest.fn(async () => ({ completedAfter: [], future: [] })),
       getCatMap: jest.fn(async () => new Map([['101', '9']])),
       applyBonus: jest.fn(async () => ({ balanceBefore: 120, tier: 'accrue', accrued: 300, txnOk: true })),
@@ -163,6 +164,52 @@ describe('гейты', () => {
     const { deps } = makeDeps({ loadClientRecords: jest.fn(async () => { throw new Error('502'); }) });
     await worker.processOne(ROW, deps);
     expect(deps.sendMessage).toHaveBeenCalled();
+    expect(deps.log.warn).toHaveBeenCalled();
+  });
+
+  // Пачка сообщений подряд = блокировка инстанса WhatsApp. Проверка стоит ДО
+  // проверок YClients, бонусов и текста: откладывать надо до платного
+  // LLM-вызова и до НЕОБРАТИМОГО начисления, а не после.
+  test('интервал не истёк → отложено на минуты, попытки не сожжены', async () => {
+    const { updates, deps } = makeDeps({
+      lastPlannedSendAt: jest.fn(async () => new Date(Date.now() - 60000)),
+    });
+    await worker.processOne({ ...ROW, send_interval_min: 3 }, deps);
+    const defers = find(updates, /make_interval\(mins/);
+    expect(defers).toHaveLength(1);
+    expect(defers[0].sql).toMatch(/attempts = 0/);
+    expect(deps.sendMessage).not.toHaveBeenCalled();
+    expect(deps.applyBonus).not.toHaveBeenCalled();
+    expect(deps.createMessage).not.toHaveBeenCalled();
+    // Не терминально: строка остаётся scheduled и видна в интерфейсе.
+    expect(find(updates, /status='skipped'|status='cancelled'/)).toHaveLength(0);
+  });
+
+  test('интервал истёк → отправляем', async () => {
+    const { deps } = makeDeps({
+      lastPlannedSendAt: jest.fn(async () => new Date(Date.now() - 10 * 60000)),
+    });
+    await worker.processOne({ ...ROW, send_interval_min: 3 }, deps);
+    expect(deps.sendMessage).toHaveBeenCalled();
+  });
+
+  test('интервал 0 → счётчик даже не читается', async () => {
+    const { deps } = makeDeps();
+    await worker.processOne({ ...ROW, send_interval_min: 0 }, deps);
+    expect(deps.lastPlannedSendAt).not.toHaveBeenCalled();
+    expect(deps.sendMessage).toHaveBeenCalled();
+  });
+
+  // Fail-CLOSED, в отличие от большинства проверок воркера: сбой счётчика
+  // означал бы отправку пачкой, то есть ровно ту блокировку мессенджера, от
+  // которой пауза и защищает. Минута ожидания стоит дёшево.
+  test('счётчик недоступен → откладываем, а не шлём пачкой', async () => {
+    const { updates, deps } = makeDeps({
+      lastPlannedSendAt: jest.fn(async () => { throw new Error('db down'); }),
+    });
+    await worker.processOne({ ...ROW, send_interval_min: 3 }, deps);
+    expect(find(updates, /make_interval\(mins/)).toHaveLength(1);
+    expect(deps.sendMessage).not.toHaveBeenCalled();
     expect(deps.log.warn).toHaveBeenCalled();
   });
 });

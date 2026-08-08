@@ -22,6 +22,7 @@ const salonNames = require('../../utils/salon-names');
 const authorship = require('../outgoing-authorship');
 const notifications = require('../notifications');
 const dailyLimit = require('../messaging/daily-limit');
+const sendPacing = require('../messaging/send-pacing');
 const chatEvents = require('../chat-events');
 const careContext = require('../care/context');
 const { plusOneDay } = require('../care/schedule');
@@ -127,6 +128,7 @@ const defaultDeps = {
     chatEvents.emitAgentStatus(salonId, phone, 'escalated', reason);
   },
   sentTodayExists: (salonId, phone) => dailyLimit.sentTodayExists(realDb, salonId, phone),
+  lastPlannedSendAt: (salonId) => sendPacing.lastPlannedSendAt(realDb, salonId),
   loadClientRecords: careContext.loadClientRecords,
   getCatMap: async (salonId) => {
     const salon = await realDb.one(
@@ -193,6 +195,23 @@ async function deferRow(db, row, reason, bumpDefers = false) {
             ${bumpDefers ? ', defers = reminder_queue.defers + 1' : ''}
       WHERE id=$1`,
     [row.id, plusOneDay(new Date(base)), reason]);
+}
+
+/**
+ * Отложить строку на N минут (в отличие от deferRow — на сутки). Для причин,
+ * которые проходят сами через минуты: пауза темпа между сообщениями. Сутки
+ * тут были бы абсурдны — пауза измеряется минутами, а строка протухла бы.
+ * attempts обнуляются: это не сбой отправки, а плановое ожидание. defers не
+ * трогаются — предела у паузы темпа нет по построению (она всегда проходит).
+ */
+async function deferRowMinutes(db, row, minutes, reason) {
+  const mins = Math.max(1, Math.ceil(Number(minutes) || 1));
+  await db.query(
+    `UPDATE reminder_queue
+        SET scheduled_at = NOW() + make_interval(mins => $2),
+            attempts = 0, last_attempt_at = NULL, decision_reason = $3
+      WHERE id = $1`,
+    [row.id, mins, reason]);
 }
 
 /**
@@ -303,6 +322,31 @@ async function processOne(row, deps = defaultDeps) {
     if (await d.sentTodayExists(sid, row.phone)) {
       await deferRow(db, row, 'анти-спам: сдвинуто на день');
       return;
+    }
+
+    // Темп отправки. Воркер арендует до 5 строк за тик и шлёт их за секунды —
+    // для WhatsApp это пачка и риск блокировки инстанса. Место проверки
+    // выбрано намеренно: ДО проверок YClients, бонусов и текста, потому что
+    // откладывать надо до платного LLM-вызова и до НЕОБРАТИМОГО начисления.
+    //
+    // Fail-CLOSED, в отличие от большинства проверок воркера: недоступный
+    // счётчик означал бы отправку пачкой, то есть ровно ту блокировку, от
+    // которой пауза защищает. Минута ожидания стоит дёшево.
+    const intervalMin = Number(row.send_interval_min) || 0;
+    if (intervalMin > 0) {
+      let waitMs = 0;
+      try {
+        const lastAt = await d.lastPlannedSendAt(sid);
+        waitMs = sendPacing.waitMsLeft(lastAt, intervalMin, Date.now());
+      } catch (e) {
+        d.log.warn(`row #${row.id}: счётчик темпа недоступен (${e.message}) — откладываю на ${intervalMin} мин`);
+        waitMs = intervalMin * 60000;
+      }
+      if (waitMs > 0) {
+        await deferRowMinutes(db, row, waitMs / 60000,
+          `темп: пауза ${intervalMin} мин между плановыми сообщениями`);
+        return;
+      }
     }
 
     // Проверки по живым записям YClients. Fail-open: перманентный сбой API не
@@ -545,7 +589,8 @@ function buildLeaseSql({ single }) {
         ${pick})
     RETURNING rq.*, r.is_enabled AS rule_enabled, r.conditions AS rule_conditions,
               r.text AS rule_text, r.text_mode, r.bonus_enabled, r.bonus_tiers,
-              r.delay_days, r.attribution_days, sal.name AS salon_name,
+              r.delay_days, r.attribution_days, r.send_interval_min,
+              sal.name AS salon_name,
               (SELECT cl.name FROM clients cl WHERE cl.id = rq.client_id) AS client_name`;
 }
 
@@ -574,13 +619,14 @@ async function processTick(deps = defaultDeps) {
 
 // ── тестовая отправка на свой номер ────────────────────────────
 // Прогон идёт ТЕМ ЖЕ processOne, что и боевой: иначе тест не доказывал бы
-// ничего о боевом пути. Отличий ровно четыре, и каждое — про то, что тест не
+// ничего о боевом пути. Отличий ровно пять, и каждое — про то, что тест не
 // должен портить боевое состояние клиента и не должен молча не состояться:
 //   1) анти-повтор не ставится и прошлый не мешает (тест повторяем);
 //   2) дневной лимит «1 плановое сообщение в день» не применяется;
 //   3) живые записи клиента (он уже записан / уже пришёл) тест не отменяют —
 //      ради текста и ступени тест и запускается;
-//   4) бонусы по умолчанию считаются сухим прогоном (начисление необратимо).
+//   4) бонусы по умолчанию считаются сухим прогоном (начисление необратимо);
+//   5) пауза темпа между сообщениями не применяется (тест — одно сообщение).
 // Гейт Милы (ЧС/режим/тумблер), выключенное правило и пауза оператора
 // остаются в силе: это «этому номеру сейчас нельзя», и тест не повод.
 function buildTestDeps(base, { accrue = false } = {}) {
@@ -594,6 +640,11 @@ function buildTestDeps(base, { accrue = false } = {}) {
     // Записи пустые — карта категорий нужна только им, лишний запрос в
     // YClients за ней делать незачем.
     getCatMap: async () => new Map(),
+    // 5-е отличие тестовой отправки: паузу темпа тест не ждёт. Она защищает
+    // живую рассылку от блокировки мессенджера, а тест — это ОДНО сообщение
+    // на свой номер; отложенная тестовая строка через час была бы погашена
+    // в cancelled (processTestRow), и администратор не увидел бы ничего.
+    lastPlannedSendAt: async () => null,
     applyBonus: accrue ? d.applyBonus : d.applyBonusDry,
   };
 }
