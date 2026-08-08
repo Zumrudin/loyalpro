@@ -2,6 +2,7 @@
 // Темп плановых отправок.
 const {
   waitMsLeft, lastPlannedSendAt, paceDeferMinutes, LAST_SENT_SQL,
+  inDayWindow, sendTimeInDayWindow, DAY_WINDOW_START_MIN, DAY_WINDOW_END_MIN,
 } = require('./services/messaging/send-pacing');
 
 const NOW = Date.parse('2026-08-08T11:00:00+03:00');
@@ -110,6 +111,22 @@ describe('paceDeferMinutes', () => {
     expect(paceDeferMinutes(msk('07:00'), 30 * 60000, '06:30')).toBe(30);
   });
 
+  // Границы ДВУХ проверок окна разные: момент отправки в 21:00 — уже вечер
+  // (перенос), а send_time='21:00' — обычное круглое значение формы правила, и
+  // читать его как «салон хочет ночную рассылку» нельзя. С исключительной
+  // границей потолок не применялся вовсе, и хвост пачки шёл всю ночь.
+  test('send_time=21:00 считается ВНУТРИ окна → потолок применяется', () => {
+    // 20:50 + 30 мин = 21:20 (момент отправки вне окна) → ближайшие 21:00, то
+    // есть завтра (сегодняшние уже позади): 24 ч 10 мин.
+    expect(paceDeferMinutes(msk('20:50'), 30 * 60000, '21:00')).toBe(24 * 60 + 10);
+    // 07:00 + 30 мин = 07:30 (до окна) → сегодня в 21:00.
+    expect(paceDeferMinutes(msk('07:00'), 30 * 60000, '21:00')).toBe(14 * 60);
+  });
+
+  test('21:01 у send_time — уже вне окна, потолок не применяется', () => {
+    expect(paceDeferMinutes(msk('20:50'), 30 * 60000, '21:01')).toBe(30);
+  });
+
   test('переход через полночь → ближайшие send_time уже следующих суток', () => {
     // 23:50 + 30 мин = 00:20 следующего дня, вне окна → 11:00 того же дня.
     expect(paceDeferMinutes(msk('23:50'), 30 * 60000, '11:00')).toBe(670);
@@ -130,5 +147,24 @@ describe('paceDeferMinutes', () => {
     expect(paceDeferMinutes(msk('07:00'), 30 * 60000, '11:00:00')).toBe(240);
     expect(paceDeferMinutes(msk('07:00'), 30 * 60000, 'утром')).toBe(30);
     expect(paceDeferMinutes(msk('07:00'), 30 * 60000, null)).toBe(30);
+  });
+});
+
+// Две проверки окна разведены намеренно, и границы у них РАЗНЫЕ — тест это
+// фиксирует, чтобы «упрощение» до одного предиката снова не увело
+// send_time='21:00' мимо потолка (рассылка всю ночь с шагом паузы).
+describe('границы окна: момент отправки vs send_time правила', () => {
+  test('начало окна включительно у обеих проверок', () => {
+    expect(inDayWindow(DAY_WINDOW_START_MIN)).toBe(true);
+    expect(sendTimeInDayWindow(DAY_WINDOW_START_MIN)).toBe(true);
+    expect(inDayWindow(DAY_WINDOW_START_MIN - 1)).toBe(false);
+    expect(sendTimeInDayWindow(DAY_WINDOW_START_MIN - 1)).toBe(false);
+  });
+
+  test('конец окна: у момента отправки исключительный, у send_time включительный', () => {
+    expect(inDayWindow(DAY_WINDOW_END_MIN)).toBe(false);
+    expect(sendTimeInDayWindow(DAY_WINDOW_END_MIN)).toBe(true);
+    expect(inDayWindow(DAY_WINDOW_END_MIN - 1)).toBe(true);
+    expect(sendTimeInDayWindow(DAY_WINDOW_END_MIN + 1)).toBe(false);
   });
 });

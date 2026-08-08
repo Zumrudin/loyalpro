@@ -15,7 +15,16 @@ function moscowDateStr(d) {
   return new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Moscow' }).format(d);
 }
 
-/** МСК-дата визита + delayDays, в send_time ('HH:MM') по Москве → Date | null. */
+/**
+ * МСК-дата визита + delayDays, в send_time ('HH:MM') по Москве → Date | null.
+ *
+ * ГОТЧА: регексп send_time ниже требует РОВНО 'HH:MM', без хвоста секунд.
+ * Колонки care_touches.send_time и reminder_rules.send_time — VARCHAR(5), и
+ * менять их тип на TIME нельзя без правки ОБОИХ парсеров send_time: pg отдаёт
+ * time как '11:00:00', и здесь такое значение молча свалилось бы на дефолт
+ * '10:30' (соседний parseHhMm в services/messaging/send-pacing.js хвост
+ * допускает — расхождения сегодня нет только потому, что колонка строковая).
+ */
 function computeScheduledAt(visitAt, delayDays, sendTime) {
   // new Date(null) — валидная эпоха (1970-01-01), а не NaN: parseVisitAt(мусор)
   // отдаёт null, и без этой проверки он тихо прошёл бы как «валидная» дата.

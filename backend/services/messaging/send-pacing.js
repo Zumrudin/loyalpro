@@ -82,14 +82,38 @@ function mskMinutesOfDay(ms) {
   return Math.floor((((ms + MSK_OFFSET_MS) % DAY_MS) + DAY_MS) % DAY_MS / 60000);
 }
 
-/** 'HH:MM' (допускается хвост ':SS' — pg отдаёт time как '11:00:00') → минуты. */
+/**
+ * 'HH:MM' (допускается хвост ':SS' — pg отдаёт time как '11:00:00') → минуты.
+ *
+ * ВНИМАНИЕ: колонки reminder_rules.send_time и care_touches.send_time —
+ * VARCHAR(5), и менять их тип на TIME нельзя без правки ОБОИХ парсеров
+ * send_time: соседний computeScheduledAt (services/care/schedule.js) разбирает
+ * значение регекспом БЕЗ хвоста секунд и на '11:00:00' молча свалится на
+ * дефолт '10:30'. Здесь хвост допускается, там — нет; расхождения сегодня нет
+ * только потому, что колонка строковая.
+ */
 function parseHhMm(s) {
   const m = /^([01]\d|2[0-3]):([0-5]\d)/.exec(String(s == null ? '' : s).trim());
   return m ? +m[1] * 60 + +m[2] : null;
 }
 
+// Проверок окна ДВЕ, и границы у них РАЗНЫЕ — это не копипаста:
+//
+//  - inDayWindow — про МОМЕНТ ОТПРАВКИ (попадает ли now+wait в дневное окно).
+//    Конец ИСКЛЮЧИТЕЛЬНЫЙ: 21:00 — это уже вечер, отправлять в этот момент
+//    нельзя, строку надо переносить.
+//  - sendTimeInDayWindow — про SEND_TIME САМОГО ПРАВИЛА: «салон выбрал время
+//    вне дневного окна осознанно, потолок не применяем». Конец тут
+//    ВКЛЮЧИТЕЛЬНЫЙ: 21:00 — вероятное круглое значение в форме правила, и
+//    читать его как «салон хочет ночную рассылку» неверно. С исключительной
+//    границей send_time='21:00' проезжал мимо потолка вовсе, и хвост пачки
+//    уходил всю ночь с шагом паузы — ровно то, от чего потолок и защищает.
 function inDayWindow(minOfDay) {
   return minOfDay >= DAY_WINDOW_START_MIN && minOfDay < DAY_WINDOW_END_MIN;
+}
+
+function sendTimeInDayWindow(minOfDay) {
+  return minOfDay >= DAY_WINDOW_START_MIN && minOfDay <= DAY_WINDOW_END_MIN;
 }
 
 /**
@@ -98,10 +122,12 @@ function inDayWindow(minOfDay) {
  *
  *  - момент отправки (now + waitMs) попадает В дневное окно → ждём waitMs;
  *  - попадает ВНЕ окна → переносим на ближайшее наступление send_time правила;
- *  - send_time САМ лежит вне окна → потолок не применяется вовсе: салон выбрал
- *    это время осознанно, и переопределять его мы не вправе. Тем же путём идёт
- *    непарсящийся send_time (fail-open: потолок — удобство пациента, а не
- *    гейт допуска, и битое значение не должно менять расписание рассылки).
+ *  - send_time САМ лежит вне окна (границы см. sendTimeInDayWindow — конец у
+ *    него ВКЛЮЧИТЕЛЬНЫЙ, в отличие от проверки момента отправки) → потолок не
+ *    применяется вовсе: салон выбрал это время осознанно, и переопределять его
+ *    мы не вправе. Тем же путём идёт непарсящийся send_time (fail-open:
+ *    потолок — удобство пациента, а не гейт допуска, и битое значение не
+ *    должно менять расписание рассылки).
  *
  * «Ближайшее наступление» считается от МОМЕНТА ОТПРАВКИ, а не от now: иначе в
  * узкой полосе (now=19:00, send_time=20:00, пауза 120 мин) потолок вернул бы
@@ -117,7 +143,7 @@ function paceDeferMinutes(nowMs, waitMs, sendTime) {
   const wait = Math.max(0, Number(waitMs) || 0);
   const waitMin = wait / 60000;
   const sendMin = parseHhMm(sendTime);
-  if (sendMin == null || !inDayWindow(sendMin)) return waitMin;
+  if (sendMin == null || !sendTimeInDayWindow(sendMin)) return waitMin;
 
   const target = nowMs + wait;
   if (inDayWindow(mskMinutesOfDay(target))) return waitMin;
@@ -155,4 +181,6 @@ function waitMsLeft(lastAt, intervalMin, nowMs = Date.now()) {
 module.exports = {
   lastPlannedSendAt, waitMsLeft, paceDeferMinutes, LAST_SENT_SQL,
   DAY_WINDOW_START_MIN, DAY_WINDOW_END_MIN,
+  // Экспортируются ради тестов на РАЗНЫЕ границы двух проверок окна.
+  inDayWindow, sendTimeInDayWindow,
 };

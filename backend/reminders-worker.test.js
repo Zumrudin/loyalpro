@@ -317,6 +317,23 @@ describe('темп отправки (пауза между сообщениям�
     expect(deps.log.info).toHaveBeenCalledWith(expect.stringMatching(/пауза темпа.*2 мин/));
   });
 
+  // Явный признак исхода — контракт processOne ↔ processTick. Без него тик не
+  // отличит паузу темпа от любого другого откладывания (агент выключен, пауза
+  // оператора, анти-спам) и погасил бы всю пачку салона по ложной причине.
+  test('processOne возвращает признак паузы темпа, а в остальных исходах — ничего', async () => {
+    const { deps } = makeDeps({
+      lastPlannedSendAt: jest.fn(async () => new Date(Date.now() - 60000)),
+    });
+    await expect(worker.processOne({ ...ROW, send_interval_min: 3 }, deps))
+      .resolves.toEqual({ pacePaused: true });
+
+    const { deps: d2 } = makeDeps();               // штатная отправка
+    await expect(worker.processOne(ROW, d2)).resolves.toBeUndefined();
+
+    const { deps: d3 } = makeDeps({ dialogStatus: jest.fn(async () => 'escalated') });
+    await expect(worker.processOne(ROW, d3)).resolves.toBeUndefined();
+  });
+
   // ЦЕНТРАЛЬНЫЙ тезис фичи: пачка РАЗНОСИТСЯ внутри одного тика. Счётчик тут
   // читает состояние, а не константу: если последовательный `for … await`
   // заменить на Promise.all, все арендованные строки прочитают один и тот же
@@ -337,6 +354,77 @@ describe('темп отправки (пауза между сообщениям�
     const def = find(updates, /make_interval\(mins/);
     expect(def).toHaveLength(1);
     expect(def[0].params).toEqual([102, 3, expect.stringContaining('темп')]);
+  });
+
+  // Пауза — гейт САЛОНА, а не строки: строку двигает только ПЕРВОЕ её
+  // срабатывание в тике. Остальные строки того же салона не должны получить
+  // ни одного UPDATE — переписанный scheduled_at уводит их в хвост за более
+  // СВЕЖИЕ визиты (аренда сортирует по scheduled_at), то есть ломает ровно тот
+  // порядок, ради которого в LEASE_SQL добавлен тай-брейк id ASC.
+  test('processTick: после первой паузы остальные строки САЛОНА не трогаются вовсе', async () => {
+    let lastSent = null;
+    const { updates, deps } = makeDeps({
+      lastPlannedSendAt: jest.fn(async () => lastSent),
+      sendMessage: jest.fn(async () => { lastSent = new Date(Date.now()); return { id: 1, channel: 'telegram' }; }),
+    });
+    const rows = [101, 102, 103, 104, 105].map(id => ({ ...ROW, id, send_interval_min: 3 }));
+    deps.db.any = jest.fn(async () => rows);
+
+    await worker.processTick(deps);
+
+    expect(deps.sendMessage).toHaveBeenCalledTimes(1);          // ушла только 101
+    const def = find(updates, /make_interval\(mins/);
+    expect(def).toHaveLength(1);                                 // отложена только 102
+    expect(def[0].params[0]).toBe(102);
+    // Ни одного запроса ни по одной из строк 103–105 — ни отложить, ни
+    // перезаписать decision_reason.
+    for (const id of [103, 104, 105]) {
+      expect(updates.filter(u => Array.isArray(u.params) && u.params[0] === id)).toHaveLength(0);
+    }
+    // И ни одного лишнего чтения счётчика темпа на пропущенные строки.
+    expect(deps.lastPlannedSendAt).toHaveBeenCalledTimes(2);
+  });
+
+  // Гейт по САЛОНУ, а не глобальный по тику: у другого салона свой счётчик
+  // темпа, и его строка обязана уйти в том же тике.
+  test('processTick: пауза одного салона не глушит строки другого', async () => {
+    const lastBySalon = { 1: new Date(Date.now() - 60000), 2: null };
+    const { updates, deps } = makeDeps({
+      lastPlannedSendAt: jest.fn(async (sid) => lastBySalon[sid]),
+      sendMessage: jest.fn(async () => ({ id: 1, channel: 'telegram' })),
+    });
+    deps.db.any = jest.fn(async () => [
+      { ...ROW, id: 201, salon_id: 1, send_interval_min: 3 },  // пауза
+      { ...ROW, id: 202, salon_id: 1, send_interval_min: 3 },  // пропуск без UPDATE
+      { ...ROW, id: 203, salon_id: 2, send_interval_min: 3 },  // другой салон — шлём
+    ]);
+
+    await worker.processTick(deps);
+
+    expect(deps.sendMessage).toHaveBeenCalledTimes(1);
+    const def = find(updates, /make_interval\(mins/);
+    expect(def).toHaveLength(1);
+    expect(def[0].params[0]).toBe(201);
+    expect(updates.filter(u => Array.isArray(u.params) && u.params[0] === 202)).toHaveLength(0);
+    expect(find(updates, /status='sent'/).some(u => u.params[0] === 203)).toBe(true);
+  });
+
+  // Множество «салоны на паузе» обязано жить РОВНО один тик: пауза измеряется
+  // минутами, и модульная переменная глушила бы салон навсегда.
+  test('пауза не переживает тик: следующий тик снова считает счётчик', async () => {
+    let lastSent = new Date(Date.now() - 60000);
+    const { deps } = makeDeps({
+      lastPlannedSendAt: jest.fn(async () => lastSent),
+      sendMessage: jest.fn(async () => ({ id: 1, channel: 'telegram' })),
+    });
+    deps.db.any = jest.fn(async () => [{ ...ROW, id: 301, send_interval_min: 3 }]);
+    await worker.processTick(deps);
+    expect(deps.sendMessage).not.toHaveBeenCalled();
+
+    lastSent = new Date(Date.now() - 10 * 60000); // пауза прошла
+    deps.db.any = jest.fn(async () => [{ ...ROW, id: 302, send_interval_min: 3 }]);
+    await worker.processTick(deps);
+    expect(deps.sendMessage).toHaveBeenCalledTimes(1);
   });
 });
 

@@ -1025,6 +1025,15 @@ async function runMigrations(client) {
     CREATE INDEX IF NOT EXISTS idx_reminder_queue_due
       ON reminder_queue (scheduled_at) WHERE status = 'scheduled'
   `).catch(() => {});
+  // Аренда воркера сортирует (scheduled_at, id): догон ставит СОТНИ строк на
+  // ОДИН scheduled_at, и по индексу только на scheduled_at планировщик каждый
+  // тик досортировывал всю группу. Старый idx_reminder_queue_due оставлен
+  // намеренно (правило проекта — никогда деструктивно), просто перестаёт быть
+  // выбором планировщика для этого запроса.
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS idx_reminder_queue_due2
+      ON reminder_queue (scheduled_at, id) WHERE status = 'scheduled'
+  `).catch(() => {});
   await client.query(`
     CREATE INDEX IF NOT EXISTS idx_reminder_queue_phone
       ON reminder_queue (salon_id, phone, sent_at DESC)

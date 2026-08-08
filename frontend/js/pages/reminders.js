@@ -262,25 +262,53 @@ function remBfDaysChanged() {
   document.getElementById('remBfRunBtn').disabled = true;
 }
 
-// Окно темпа 09:00–21:00 мск = 720 минут (DAY_WINDOW_START_MIN/END_MIN в
+// Окно темпа 09:00–21:00 мск (DAY_WINDOW_START_MIN/END_MIN в
 // backend/services/messaging/send-pacing.js) — вне него отправка переносится
-// на ближайшее наступление send_time правила, поэтому выше этого предела
-// пропускной способности нет вообще, сколько бы ни был кап догона.
-const REM_PACE_WINDOW_MIN = 720;
+// на ближайшее наступление send_time правила, поэтому выше пропускной
+// способности окна не выжать, сколько бы ни был кап догона.
+const REM_PACE_WINDOW_START_MIN = 9 * 60;
+const REM_PACE_WINDOW_END_MIN = 21 * 60;
+
+// «1 сообщение» — не редкость: при send_time у самого края окна ёмкость дня
+// действительно одна строка.
+function remPluralMsg(n) {
+  const t = Math.abs(n) % 100, o = t % 10;
+  if (t > 10 && t < 20) return 'сообщений';
+  if (o > 1 && o < 5) return 'сообщения';
+  if (o === 1) return 'сообщение';
+  return 'сообщений';
+}
 
 /**
  * Заметка о пропускной способности темпа под сводкой превью. Правило тут
  * недоступно из ответа /backfill/preview (он его не отдаёт), но оно уже
  * загружено в _remRules — тащить его отдельным запросом не нужно.
+ *
+ * Ёмкость дня считается от SEND_TIME ПРАВИЛА, а не от всего окна: рассылка
+ * стартует в send_time и упирается в конец окна, то есть доступен отрезок
+ * [send_time, 21:00) — при 11:00 это 600 минут, при 15:00 всего 360, а не 720.
+ * Взятое целиком окно завышало оценку почти вдвое, и предупреждение «кап выше
+ * предела» не показывалось там, где хвост реально растягивается на дни.
+ *
+ * send_time ВНЕ окна — заметки нет вовсе: потолок по времени суток в этом
+ * случае не применяется (салон выбрал время осознанно), и любая оценка была бы
+ * выдумкой. Границы те же, что у sendTimeInDayWindow на бэкенде: конец
+ * ВКЛЮЧИТЕЛЬНЫЙ, 21:00 — законное значение формы.
  */
 function remPaceNote(rule) {
   const interval = rule ? Number(rule.sendIntervalMin) : NaN;
   if (!Number.isFinite(interval) || interval <= 0) return '';
-  const perDay = Math.floor(REM_PACE_WINDOW_MIN / interval);
+  const m = /^([01]\d|2[0-3]):([0-5]\d)/.exec(String((rule && rule.sendTime) || '').trim());
+  if (!m) return '';
+  const sendMin = +m[1] * 60 + +m[2];
+  if (sendMin < REM_PACE_WINDOW_START_MIN || sendMin > REM_PACE_WINDOW_END_MIN) return '';
+  // Первое сообщение уходит в сам send_time, дальше по одному раз в interval,
+  // пока не кончится окно — отсюда минимум 1 даже у send_time на его краю.
+  const perDay = Math.max(1, Math.floor((REM_PACE_WINDOW_END_MIN - sendMin) / interval));
   const cap = rule && Number.isFinite(Number(rule.backfillMaxPerDay)) ? Number(rule.backfillMaxPerDay) : null;
   const overCap = cap != null && cap > perDay;
   return `<div style="margin:0 0 10px;font-size:12px;color:${overCap ? '#f59e0b' : 'var(--t3)'}">
-    С паузой ${interval} мин темп даёт не больше ${perDay} сообщений в сутки${
+    С паузой ${interval} мин темп даёт не больше ${perDay} ${remPluralMsg(perDay)} в сутки (от ${esc(m[0])} до 21:00)${
       overCap ? ` — кап догоняющей пачки (${cap}) выше этого предела, хвост растянется на несколько дней` : ''}.
   </div>`;
 }
