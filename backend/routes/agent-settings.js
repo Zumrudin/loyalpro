@@ -10,7 +10,7 @@ const multer = require('multer');
 const { auth, requireRole } = require('../middleware/auth');
 const settings = require('../services/agent-settings');
 const priceListData = require('../services/agent/price-list-data');
-const { imageFileFilter } = require('../utils/upload-validator');
+const { imageFileFilter, validateImageBuffer } = require('../utils/upload-validator');
 const { createLogger } = require('../logger');
 const logger = createLogger('AgentSettings');
 
@@ -246,6 +246,13 @@ router.post('/price-photos', adminOnly, (req, res) => {
     if (!catOk || !subOk || (cat == null) === (sub == null)) {
       return res.status(400).json({ error: 'Не указана категория или подкатегория' });
     }
+
+    // `imageFileFilter` верит клиенту на слово (Content-Type + расширение),
+    // поэтому содержимое проверяем по сигнатуре — тот же второй рубеж, что
+    // в routes/portfolio.js: иначе в uploads/ ляжет что угодно под именем .jpg
+    // и будет отдаваться статикой.
+    const valid = validateImageBuffer(req.file.buffer, req.file.originalname);
+    if (!valid.ok) return res.status(400).json({ error: valid.error });
 
     const node = sub != null ? `s${sub}` : `c${cat}`;
     const ext = (req.file.originalname.match(/\.[A-Za-z0-9]+$/) || ['.jpg'])[0];

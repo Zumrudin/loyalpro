@@ -50,13 +50,17 @@ function readdirSafe(dir) {
   try { return fs.readdirSync(dir); } catch { return []; }
 }
 
+// Настоящая сигнатура JPEG: маршрут проверяет содержимое, а не только
+// заголовок Content-Type, который клиент пишет какой захочет.
+const JPEG = Buffer.concat([Buffer.from([0xFF, 0xD8, 0xFF, 0xE0]), Buffer.alloc(64, 7)]);
+
 test('subcategoryId с обходом пути → 400, ни один файл не появляется НИ в uploads, НИ за его пределами', async () => {
   const before = new Set(readdirSafe(uploadsDir));
   const tmpBefore = new Set(readdirSafe(os.tmpdir()));
   const marker = `PRICEPHOTO_EVIL_${Date.now()}`;
 
   const fd = new FormData();
-  fd.append('file', new Blob([Buffer.from('fake-jpeg-bytes')], { type: 'image/jpeg' }), 'photo.jpg');
+  fd.append('file', new Blob([JPEG], { type: 'image/jpeg' }), 'photo.jpg');
   fd.append('subcategoryId', `../../../../../../../../tmp/${marker}`);
 
   const resp = await fetch(`${baseUrl}/price-photos`, { method: 'POST', body: fd });
@@ -88,6 +92,20 @@ test('не-картинка → 400 с осмысленным error, а не г�
   expect(mockAddPricePhoto).not.toHaveBeenCalled();
 });
 
+test('картинка только по заголовку (внутри не картинка) → 400, на диск не пишется', async () => {
+  const before = new Set(readdirSafe(uploadsDir));
+  const fd = new FormData();
+  // Клиент волен написать любой Content-Type и любое расширение — на слово не верим.
+  fd.append('file', new Blob([Buffer.from('<html><script>alert(1)</script>')], { type: 'image/jpeg' }), 'photo.jpg');
+  fd.append('subcategoryId', '5');
+
+  const resp = await fetch(`${baseUrl}/price-photos`, { method: 'POST', body: fd });
+  expect(resp.status).toBe(400);
+  expect((await resp.json()).error).toBeTruthy();
+  expect(mockAddPricePhoto).not.toHaveBeenCalled();
+  expect(new Set(readdirSafe(uploadsDir))).toEqual(before);
+});
+
 test('файл больше 5 МБ → 400, а не голый 500 (тот же multer-путь, что «не-картинка»)', async () => {
   const big = Buffer.alloc(6 * 1024 * 1024, 1);
   const fd = new FormData();
@@ -108,7 +126,7 @@ test('счастливый путь остаётся рабочим: файл п
 
   try {
     const fd = new FormData();
-    fd.append('file', new Blob([Buffer.from('fake-jpeg-bytes')], { type: 'image/jpeg' }), 'photo.jpg');
+    fd.append('file', new Blob([JPEG], { type: 'image/jpeg' }), 'photo.jpg');
     fd.append('subcategoryId', '7');
 
     const resp = await fetch(`${baseUrl}/price-photos`, { method: 'POST', body: fd });
