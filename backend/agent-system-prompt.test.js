@@ -1581,3 +1581,34 @@ describe('КАКОЕ ВРЕМЯ ПРЕДЛАГАТЬ ПЕРВЫМ (плотна�
     expect(src).toContain('offer_slots');
   });
 });
+
+describe('ПРАЙС-ЛИСТЫ В КАРТИНКАХ', () => {
+  const BLOCK = 'ПРАЙС-ЛИСТЫ В КАРТИНКАХ (тест):\nc12|Лазерная эпиляция\nПолный прайс на сайте клиники: https://peri.ru/price';
+
+  test('без блока промпт не упоминает инструмент — салон не загрузил ни одного листа', () => {
+    const p = buildSystemPrompt({});
+    expect(p).not.toContain('send_price_list');
+  });
+
+  test('с блоком промпт содержит и сам блок, и правило четырёх исходов', () => {
+    const p = buildSystemPrompt({ priceListBlock: BLOCK });
+    expect(p).toContain('c12|Лазерная эпиляция');
+    expect(p).toContain('send_price_list');
+    // Названа услуга — цена текстом, фото не шлём.
+    expect(p).toMatch(/конкретн[а-яё]+ услуг[а-яё]+[^\n]*не отправляй фото/i);
+    // Весь прайс без направления — сначала уточняющий вопрос.
+    expect(p).toMatch(/весь прайс|прайс клиники целиком/i);
+  });
+
+  test('запрет пересказывать картинку и слать прайс по своей инициативе', () => {
+    const p = buildSystemPrompt({ priceListBlock: BLOCK });
+    expect(p).toMatch(/не пересказывай/i);
+    expect(p).toMatch(/по своей инициативе/i);
+  });
+
+  test('блок детерминирован: одинаковый вход — байт-в-байт одинаковый промпт', () => {
+    const a = buildSystemPrompt({ priceListBlock: BLOCK, today: '9 августа', now: '10:00' });
+    const b = buildSystemPrompt({ priceListBlock: BLOCK, today: '9 августа', now: '10:00' });
+    expect(a).toBe(b);
+  });
+});
