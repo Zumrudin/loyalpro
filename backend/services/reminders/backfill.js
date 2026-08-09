@@ -27,7 +27,8 @@ const { recordContext, visitReallyHappened } = require('./eligibility');
  */
 function matchBackfillVisits({ records = [], conditions, catMap = new Map(),
                                blacklisted = new Set(), mutedPhones = new Set(),
-                               queuedRecordIds = new Set(), nowMs = Date.now() } = {}) {
+                               queuedRecordIds = new Set(), queuedPhones = new Set(),
+                               nowMs = Date.now() } = {}) {
   const matches = (r) => {
     try { return evaluateRule(conditions, recordContext(r, catMap)); } catch { return false; }
   };
@@ -70,7 +71,12 @@ function matchBackfillVisits({ records = [], conditions, catMap = new Map(),
     if (!phone) skipReason = 'no_phone';
     else if (blacklisted.has(phone)) skipReason = 'blacklist';
     else if (mutedPhones.has(phone)) skipReason = 'muted';
-    else if (queuedRecordIds.has(String(r.id))) skipReason = 'already_queued';
+    // Две проверки одного смысла «этот клиент уже ждёт напоминание»: по ЗАПИСИ
+    // (эта же строка уже стоит в очереди) и по ТЕЛЕФОНУ (живая строка очереди
+    // от визита, которого в окне догона может не быть вовсе — например
+    // поставленная вебхуком). Без второй клиент получил бы вторую строку от
+    // другого визита, и напоминание ушло бы ему дважды.
+    else if (queuedRecordIds.has(String(r.id)) || queuedPhones.has(phone)) skipReason = 'already_queued';
     else if (busy.has(phone)) skipReason = 'future_booking';
 
     rows.push({
@@ -94,18 +100,28 @@ function matchBackfillVisits({ records = [], conditions, catMap = new Map(),
   // в planBackfillSchedule, и с этой она не совпадает (там наоборот — самый
   // давний визит первым).
   rows.sort((a, b) => b.visitMs - a.visitMs || Number(b.recordId) - Number(a.recordId));
-  const seen = new Set();
+  // Телефон занимает САМЫЙ СВЕЖИЙ визит клиента — независимо от того, уйдёт ли
+  // по нему напоминание. Пропускать занятие телефона для строк со skipReason
+  // (как было до 09.08.2026) нельзя: skipReason бывает РЕКОРД-уровневым
+  // (already_queued — про конкретную запись), и тогда следующий, БОЛЕЕ СТАРЫЙ
+  // визит того же человека проезжал в очередь вторым напоминанием. Вскрылось
+  // на подготовке широкого догона поверх уже поставленных 131 строки.
+  const claimed = new Set();
   for (const row of rows) {
-    if (row.skipReason) continue;
-    if (seen.has(row.phone)) row.skipReason = 'superseded';
-    else seen.add(row.phone);
+    if (!row.phone) continue;
+    if (claimed.has(row.phone)) { if (!row.skipReason) row.skipReason = 'superseded'; continue; }
+    claimed.add(row.phone);
   }
   for (const row of rows) delete row.visitMs;
 
-  const willSend = rows.filter(r => !r.skipReason).length;
+  const sendable = rows.filter(r => !r.skipReason);
   return {
-    totals: { records: records.length, completed, matched: rows.length, willSend,
-              clients: seen.size, excluded: rows.length - willSend },
+    totals: { records: records.length, completed, matched: rows.length,
+              willSend: sendable.length,
+              // Именно те, КОМУ УЙДЁТ (не все занявшие телефон): на экране это
+              // число читается как «столько людей получит сообщение».
+              clients: new Set(sendable.map(r => r.phone)).size,
+              excluded: rows.length - sendable.length },
     rows,
   };
 }

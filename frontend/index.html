@@ -1523,9 +1523,10 @@
         <div class="bc-modal-body">
           <div style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap">
             <div class="fg" style="flex:0 0 160px"><label class="fl">За последние (дней)</label>
-              <input id="remBfDays" type="number" min="1" max="90" value="30" oninput="remBfDaysChanged()"></div>
+              <input id="remBfDays" type="number" min="1" max="730" value="30" oninput="remBfDaysChanged()"></div>
             <button class="btn btn-sec btn-sm" onclick="remRunBackfillPreview()">👁 Показать выборку</button>
           </div>
+          <div style="font-size:12px;color:var(--t3);margin:6px 0 0">До 730 дней (2 года). Год и больше считается до минуты — выборка тянется из YClients.</div>
           <div id="remBfResult" class="empty">Задайте период и нажмите «Показать выборку»</div>
           <div class="bc-actions">
             <button class="btn btn-sec" onclick="remCloseBackfill()">Отмена</button>
@@ -2432,7 +2433,7 @@ function fireConfetti() {
 <script src="js/pages/conditions-editor.js?v=2026-08-07a"></script>
 <script src="js/pages/care.js?v=2026-08-07a"></script>
 <script src="js/pages/reminders-plan.js?v=2026-08-09a"></script>
-<script src="js/pages/reminders.js?v=2026-08-09a"></script>
+<script src="js/pages/reminders.js?v=2026-08-09b"></script>
 <script src="js/pages/medical-cert.js?v=2026-06-19"></script>
 <script src="js/pages/cert-requests.js?v=2026-06-19b"></script>
 <script src="js/pages/medical-cert-coords-transform.js?v=2026-06-17b"></script>

@@ -280,6 +280,41 @@ function remPluralMsg(n) {
   return 'сообщений';
 }
 
+/** 'YYYY-MM-DD…' → 'DD.MM.YYYY' (с годом: граница периода бывает позапрошлой). */
+function remBfDay(v) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(v || ''));
+  return m ? `${m[3]}.${m[2]}.${m[1]}` : '';
+}
+
+/**
+ * Шапка превью: какой период РЕАЛЬНО взят и не потерялся ли хвост.
+ *
+ * ЗАЧЕМ: инцидент 09.08.2026 (прод) был молчаливым — администратор задал 585
+ * дней, бэкенд обрезал их до тогдашних 90, экран показал выборку за 3 месяца
+ * без единого признака подмены, и клиенты с визитами 2025 года не попали в
+ * догон вовсе. Обрезание теперь обязано быть ВИДНЫМ, а не выводимым из чисел:
+ * период `clamped` (запросили больше потолка) и выдача `truncated` (упёрлись в
+ * потолок записей YClients — теряется САМЫЙ СТАРЫЙ хвост, выдача идёт от
+ * свежих к старым) — два РАЗНЫХ повода, и лечатся они по-разному.
+ */
+function remBfPeriodNote(d, requestedDays) {
+  const warn = (html) => `<div style="margin:8px 0;padding:8px 10px;border-radius:8px;
+    background:rgba(245,158,11,.12);color:#f59e0b;font-size:12px">${html}</div>`;
+  const period = `<div style="margin:8px 0 0;font-size:12px;color:var(--t3)">
+      Период: последние <b>${d.days}</b> дн.${d.startDate ? ` — визиты с ${esc(remBfDay(d.startDate))}` : ''}
+    </div>`;
+  const clamped = d.clamped
+    ? warn(`Запрошено ${requestedDays} дн., взято ${d.days} — это потолок периода${
+        d.maxDays ? ` (${d.maxDays} дн.)` : ''}.`)
+    : '';
+  const truncated = d.truncated
+    ? warn(`Выдача YClients упёрлась в потолок записей одного прогона: проверены визиты
+        только с <b>${esc(remBfDay(d.oldestFetched))}</b>, всё, что было раньше, в выборку
+        не попало — период придётся разбирать частями, сообщите разработчику.`)
+    : '';
+  return clamped + truncated + period;
+}
+
 /**
  * Заметка о пропускной способности темпа под сводкой превью. Правило тут
  * недоступно из ответа /backfill/preview (он его не отдаёт), но оно уже
@@ -318,7 +353,9 @@ async function remRunBackfillPreview() {
   const days = Number(document.getElementById('remBfDays').value) || 30;
   const box = document.getElementById('remBfResult');
   box.className = 'empty';
-  box.innerHTML = 'Считаю…';
+  // Год и больше — это 40–60 страниц выдачи YClients по ~1 с каждая. Без
+  // предупреждения «Считаю…» выглядит зависшим, и админ жмёт кнопку второй раз.
+  box.innerHTML = days > 180 ? `Считаю за ${days} дн. — это до минуты, не закрывайте окно…` : 'Считаю…';
   try {
     const d = await api('POST', `/api/reminders/rules/${_remBfRuleId}/backfill/preview`, { days });
     _remBfRows = d;
@@ -338,6 +375,7 @@ async function remRunBackfillPreview() {
     });
     const rule = _remRules.find(x => x.id === _remBfRuleId);
     box.innerHTML = `
+      ${remBfPeriodNote(d, days)}
       <div style="margin:10px 0;font-size:13px">
         Записей за период: ${d.totals.records} · состоявшихся: ${d.totals.completed} ·
         под условия: ${d.totals.matched} · <b>уйдёт напоминаний: ${willSend}</b>
@@ -378,7 +416,7 @@ async function remRunBackfill() {
   if (!_remBfRows) return;
   const days = _remBfRows.days;
   const n = _remBfRows.totals.willSend;
-  if (!confirm(`Поставить в очередь ${n} напоминаний? Они уйдут живым клиентам по расписанию правила.`)) return;
+  if (!confirm(`Поставить в очередь ${n} напоминаний за последние ${days} дн.? Они уйдут живым клиентам по расписанию правила.`)) return;
   try {
     const d = await api('POST', `/api/reminders/rules/${_remBfRuleId}/backfill`, { days });
     remCloseBackfill();

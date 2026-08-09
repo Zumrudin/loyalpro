@@ -39,7 +39,17 @@ const guard = [auth, requireRole('owner', 'admin')];
 const TIME_RE = /^([01]\d|2[0-3]):([0-5]\d)$/;
 const TEXT_MODES = ['free', 'strict'];
 const PAGE = 200;
-const MAX_PAGES = 25;                 // 5000 записей — потолок одного догона
+// Потолок одного догона. Был 25 страниц (5000 записей) — этого не хватало уже
+// на год: у боевого салона ~450 записей в месяц, а окно догона захватывает ещё
+// и 90 дней будущего. Выдача /records отсортирована по дате УБЫВАЮЩЕ, поэтому
+// упёршийся в потолок догон терял РОВНО самый старый хвост — тех клиентов,
+// ради которых широкое окно и задают. Один запрос страницы ≈ 1.1 с, то есть
+// полный проход по двухлетнему окну ≈ 60–70 с при nginx proxy_read_timeout
+// 300 с (zumrudin.ru). Если потолок всё же достигнут, догон об этом ГОВОРИТ
+// (truncated в ответе) — молча терять хвост нельзя.
+const MAX_PAGES = 100;                // 20 000 записей
+const BACKFILL_MAX_DAYS = 730;        // два года: «с 01.01.2025» это ~585 дней
+const BACKFILL_DEFAULT_DAYS = 30;
 const MAX_BONUS_TIERS = 20;           // тот же кап, что на касания в care.js
 const BACKFILL_BATCH = 500;           // 12 параметров/строку × 500 = 6000 плейсхолдеров —
                                        // с запасом под лимит PostgreSQL в 65535
@@ -49,6 +59,24 @@ const BACKFILL_BATCH = 500;           // 12 параметров/строку ×
 // процесс PM2 fork), а не распределённый лок: при переходе на несколько
 // инстансов нужен отдельный механизм (в стиле _tickInFlight воркера).
 const backfillInFlight = new Set();
+
+/**
+ * Период догона из тела запроса → { days, clamped }.
+ *
+ * Вынесена на верхний уровень модуля ради юнит-теста (как parseRuleBody).
+ * `clamped` существует потому, что инцидент 09.08.2026 был именно МОЛЧАЛИВЫМ:
+ * администратор задал 585 дней при тогдашнем потолке 90, ручка вернула выборку
+ * за 3 месяца без единого признака обрезания, и клиенты с визитами 2025 года
+ * в очередь не попали. Возвращённого числа мало — фронт обязан отличать
+ * «столько и просили» от «столько осталось после обрезания».
+ */
+function parseBackfillDays(body) {
+  const raw = Number(body && body.days) || BACKFILL_DEFAULT_DAYS;
+  return {
+    days: Math.min(BACKFILL_MAX_DAYS, Math.max(1, raw)),
+    clamped: raw > BACKFILL_MAX_DAYS,
+  };
+}
 
 /** 'YYYY-MM-DD' московской даты (как в care/preview.js). */
 function mskDate(d) {
@@ -246,12 +274,29 @@ async function buildBackfill(salonId, ruleId, days) {
   const startDate = mskDate(new Date(nowMs - days * 86400000));
   const endDate = mskDate(new Date(nowMs + 90 * 86400000));
   let records = [];
+  // truncated = «упёрлись в потолок страниц, а записи ещё были». Выдача
+  // /records идёт от свежих к старым, поэтому потерян именно старый хвост
+  // окна — и вызывающий обязан сказать об этом администратору вслух.
+  let truncated = false;
   for (let page = 1; page <= MAX_PAGES; page++) {
     const chunk = await ycGet(salon, `/records/${salon.yclients_company_id}`,
       { start_date: startDate, end_date: endDate, page, count: PAGE });
     if (!Array.isArray(chunk) || !chunk.length) break;
     records = records.concat(chunk);
     if (chunk.length < PAGE) break;
+    if (page === MAX_PAGES) truncated = true;
+  }
+  // Дата самой старой ДОСТАВШЕЙСЯ записи: при обрезании она и есть реальная
+  // граница выборки (запрошенный startDate врал бы). Формат YClients
+  // 'YYYY-MM-DD HH:MM:SS' сравним лексикографически — разбор не нужен.
+  let oldestFetched = null;
+  for (const r of records) {
+    const d = r && typeof r.date === 'string' ? r.date : null;
+    if (d && (oldestFetched === null || d < oldestFetched)) oldestFetched = d;
+  }
+  if (truncated) {
+    log.warn(`догон правила #${ruleId}: выдача обрезана потолком ${MAX_PAGES * PAGE} записей, ` +
+             `старее ${oldestFetched} визиты не проверены`);
   }
 
   const catMap = await getServiceCategoryMap(salon).catch(() => new Map());
@@ -262,6 +307,16 @@ async function buildBackfill(salonId, ruleId, days) {
     `SELECT phone FROM reminder_suppressions WHERE rule_id=$1 AND muted = TRUE`, [ruleId]);
   const queued = await db.any(
     `SELECT anchor_record_id FROM reminder_queue WHERE rule_id=$1`, [ruleId]);
+  // Телефоны с ЖИВОЙ (ещё не отправленной) строкой очереди. Второй, телефонный
+  // ключ к тому же вопросу «клиент уже ждёт напоминание»: строку мог поставить
+  // вебхук по визиту, которого в окне догона нет, — тогда по anchor_record_id
+  // совпадения не будет ни у одного визита клиента, и человек получил бы второе
+  // сообщение. Только 'scheduled': отправленные строки — забота анти-повтора
+  // (reminder_suppressions), а он снимается визитом и обязан снова пускать
+  // клиента в очередь.
+  const queuedLive = await db.any(
+    `SELECT DISTINCT phone FROM reminder_queue
+      WHERE rule_id=$1 AND status='scheduled' AND phone IS NOT NULL`, [ruleId]);
 
   const out = matchBackfillVisits({
     records,
@@ -270,9 +325,11 @@ async function buildBackfill(salonId, ruleId, days) {
     blacklisted: new Set(bl.map(r => normalizePhoneKey(r.phone)).filter(Boolean)),
     mutedPhones: new Set(muted.map(r => r.phone)),
     queuedRecordIds: new Set(queued.map(r => String(r.anchor_record_id))),
+    queuedPhones: new Set(queuedLive.map(r => normalizePhoneKey(r.phone)).filter(Boolean)),
     nowMs,
   });
-  return { rule, out, catMapFailed: catMap.size === 0, startDate, endDate };
+  return { rule, out, catMapFailed: catMap.size === 0, startDate, endDate,
+           truncated, oldestFetched };
 }
 
 /**
@@ -328,7 +385,7 @@ function summarizeBackfillPlan(rows, planned) {
 }
 
 router.post('/rules/:id/backfill/preview', guard, async (req, res) => {
-  const days = Math.min(90, Math.max(1, Number(req.body && req.body.days) || 30));
+  const { days, clamped } = parseBackfillDays(req.body);
   try {
     const r = await buildBackfill(req.user.salonId, req.params.id, days);
     if (r.error) return res.status(r.code).json({ error: r.error });
@@ -337,7 +394,9 @@ router.post('/rules/:id/backfill/preview', guard, async (req, res) => {
       maxPerDay: r.rule.backfill_max_per_day }).filter(x => x.scheduledAt);
 
     const summary = summarizeBackfillPlan(r.out.rows, planned);
-    res.json({ totals: r.out.totals, days, catMapFailed: r.catMapFailed, ...summary });
+    res.json({ totals: r.out.totals, days, clamped, maxDays: BACKFILL_MAX_DAYS,
+               startDate: r.startDate, truncated: r.truncated, oldestFetched: r.oldestFetched,
+               catMapFailed: r.catMapFailed, ...summary });
   } catch (e) {
     log.error(`превью догона правила #${req.params.id}: ${e.message}`);
     res.status(500).json({ error: 'Не удалось построить выборку' });
@@ -413,7 +472,7 @@ router.post('/rules/:id/backfill', guard, async (req, res) => {
     return res.status(409).json({ error: 'Догон по этому правилу уже выполняется' });
   }
   backfillInFlight.add(ruleKey);
-  const days = Math.min(90, Math.max(1, Number(req.body && req.body.days) || 30));
+  const { days } = parseBackfillDays(req.body);
   let queued = 0;
   try {
     const r = await buildBackfill(req.user.salonId, ruleKey, days);
@@ -428,8 +487,10 @@ router.post('/rules/:id/backfill', guard, async (req, res) => {
       const batch = planned.slice(i, i + BACKFILL_BATCH);
       queued += await insertQueueBatch(req.user.salonId, r.rule, batch, clientMap);
     }
-    log.info(`догон правила #${r.rule.id}: поставлено ${queued} из ${planned.length}`);
-    res.json({ queued, planned: planned.length, totals: r.out.totals });
+    log.info(`догон правила #${r.rule.id}: поставлено ${queued} из ${planned.length} ` +
+             `(окно ${days} дн., записей ${r.out.totals.records}${r.truncated ? ', ВЫДАЧА ОБРЕЗАНА' : ''})`);
+    res.json({ queued, planned: planned.length, totals: r.out.totals,
+               days, truncated: r.truncated, oldestFetched: r.oldestFetched });
   } catch (e) {
     // Падение в середине пачки не должно скрывать, сколько строк УЖЕ легло —
     // иначе админу приходится идти в историю, чтобы понять, сработало ли.
@@ -716,3 +777,7 @@ module.exports.summarizeBackfillPlan = summarizeBackfillPlan;
 // Разбор фильтров журнала — там же и порядок выдачи (ближайшие сверху для
 // очереди против «свежие сверху» для истории).
 module.exports.parseHistoryQuery = parseHistoryQuery;
+// Период догона: молчаливое обрезание 585→90 стоило салону всей старой базы,
+// поэтому и потолок, и признак обрезания закреплены тестом.
+module.exports.parseBackfillDays = parseBackfillDays;
+module.exports.BACKFILL_MAX_DAYS = BACKFILL_MAX_DAYS;

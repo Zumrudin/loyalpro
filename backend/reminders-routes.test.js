@@ -2,7 +2,8 @@
 // Валидация тела правила напоминаний (routes/reminders.js). Роутер прямых
 // тестов не имеет (как и routes/care.js), но parseRuleBody — чистая функция
 // без БД/сети, вынесенная наружу свойством модуля именно ради этого теста.
-const { parseRuleBody, summarizeBackfillPlan, parseHistoryQuery } = require('./routes/reminders');
+const { parseRuleBody, summarizeBackfillPlan, parseHistoryQuery,
+        parseBackfillDays, BACKFILL_MAX_DAYS } = require('./routes/reminders');
 
 // Минимальное валидное тело — база для мутаций в отдельных тестах.
 function validBody(overrides = {}) {
@@ -131,6 +132,42 @@ describe('parseRuleBody', () => {
       const r = parseRuleBody(validBody({ bonusEnabled: false, bonusTiers: [] }));
       expect(r.error).toBeUndefined();
     });
+  });
+});
+
+// Период догона. Инцидент 09.08.2026 (прод): администратор задал 585 дней,
+// чтобы догон взял клиентов с 01.01.2025, а обе ручки молча обрезали период до
+// 90 — в очередь легли только визиты за последние 3 месяца, и пациентка с
+// ботулинотерапией 09.09.2025 не попала вовсе. Ни ошибки, ни пометки на экране
+// не было, поэтому у обрезания теперь ЕСТЬ признак (`clamped`), а не только
+// возвращённое число: превью печатает применённый период, а не запрошенный.
+describe('parseBackfillDays', () => {
+  test('обычное значение проходит как есть', () => {
+    expect(parseBackfillDays({ days: 585 })).toEqual({ days: 585, clamped: false });
+  });
+
+  test('сверх потолка — обрезается И помечается', () => {
+    expect(parseBackfillDays({ days: BACKFILL_MAX_DAYS + 1 }))
+      .toEqual({ days: BACKFILL_MAX_DAYS, clamped: true });
+  });
+
+  test('потолок вмещает два года — «с 01.01.2025» это ~585 дней', () => {
+    expect(BACKFILL_MAX_DAYS).toBeGreaterThanOrEqual(730);
+  });
+
+  test.each([undefined, null, {}, 'abc', 0])('битое значение %p → дефолт 30', (days) => {
+    expect(parseBackfillDays({ days })).toEqual({ days: 30, clamped: false });
+  });
+
+  // Отрицательное и дробное — не «дефолт», а нижняя граница: 0 и пустое поле
+  // ловятся как «значения нет» выше, а осмысленное-но-мелкое число обрезать до
+  // 30 дней означало бы взять БОЛЬШЕ, чем просили.
+  test.each([-5, 0.4])('значение %p → нижняя граница 1 день', (days) => {
+    expect(parseBackfillDays({ days })).toEqual({ days: 1, clamped: false });
+  });
+
+  test('пустое тело не роняет', () => {
+    expect(parseBackfillDays(undefined)).toEqual({ days: 30, clamped: false });
   });
 });
 

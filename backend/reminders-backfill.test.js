@@ -109,6 +109,49 @@ test('будущая отменённая запись (attendance=-1) не по
   expect(out.rows.find(r => r.recordId === 1).skipReason).toBeNull();
 });
 
+// Найдено разбором прода 09.08.2026: пропущенный клиент вскрыл, что окно
+// догона обрезано 90 днями, и следующий (уже широкий) прогон пошёл бы ПОВЕРХ
+// 131 строки, поставленной прошлым. Тут дефект дублей: skipReason у визита
+// РЕКОРД-уровневый (already_queued — про конкретную запись), а дедупликация
+// «одна строка на клиента» его пропускала (`if (row.skipReason) continue`) и
+// телефон оставался НЕ занятым — из-за чего в очередь проезжал СЛЕДУЮЩИЙ, БОЛЕЕ
+// СТАРЫЙ визит того же человека, и живой клиент получал второе напоминание.
+// Инвариант: самый свежий визит клиента занимает телефон ВСЕГДА, какова бы ни
+// была его собственная судьба; не подошёл он — не подходит никакой.
+test('самый свежий визит уже в очереди → более старый визит того же клиента не уходит', () => {
+  const older = visit({ id: 1, date: '2026-06-01 14:00:00' });
+  const newer = visit({ id: 2, date: '2026-07-20 14:00:00' });
+  const out = run([older, newer], { queuedRecordIds: new Set(['2']) });
+  expect(out.rows.find(r => r.recordId === 2).skipReason).toBe('already_queued');
+  expect(out.rows.find(r => r.recordId === 1).skipReason).toBe('superseded');
+  expect(out.totals.willSend).toBe(0);
+});
+
+// Телефон-уровневая защита: строка очереди могла встать от визита, которого в
+// окне догона нет вовсе (webhook по свежему визиту, окно короче), — тогда
+// рекорд-уровневого совпадения не будет ни у одного визита клиента.
+test('у телефона есть живая строка в очереди → его визиты already_queued', () => {
+  const out = run([visit()], { queuedPhones: new Set(['79200255591']) });
+  expect(out.rows[0].skipReason).toBe('already_queued');
+  expect(out.totals.willSend).toBe(0);
+});
+
+test('чёрный список не даёт более старому визиту клиента проехать', () => {
+  const older = visit({ id: 1, date: '2026-06-01 14:00:00' });
+  const newer = visit({ id: 2, date: '2026-07-20 14:00:00' });
+  const out = run([older, newer], { blacklisted: new Set(['79200255591']) });
+  expect(out.totals.willSend).toBe(0);
+});
+
+test('totals.clients считает только тех, кому реально уйдёт', () => {
+  const mine = visit({ id: 1, date: '2026-07-01 14:00:00' });
+  const older = visit({ id: 2, date: '2026-06-01 14:00:00' });
+  const other = visit({ id: 3, client: { id: 43, phone: '79001112233', name: 'Ольга' } });
+  const out = run([mine, older, other], { queuedPhones: new Set(['79001112233']) });
+  expect(out.totals.willSend).toBe(1);
+  expect(out.totals.clients).toBe(1);
+});
+
 // ── план догона ────────────────────────────────────────────────
 // NOW = 2026-08-07 09:00 МСК, то есть send_time 11:00 сегодня ещё впереди.
 describe('planBackfillSchedule', () => {
