@@ -2,7 +2,7 @@
 // Валидация тела правила напоминаний (routes/reminders.js). Роутер прямых
 // тестов не имеет (как и routes/care.js), но parseRuleBody — чистая функция
 // без БД/сети, вынесенная наружу свойством модуля именно ради этого теста.
-const { parseRuleBody, summarizeBackfillPlan } = require('./routes/reminders');
+const { parseRuleBody, summarizeBackfillPlan, parseHistoryQuery } = require('./routes/reminders');
 
 // Минимальное валидное тело — база для мутаций в отдельных тестах.
 function validBody(overrides = {}) {
@@ -260,5 +260,53 @@ describe('sendIntervalMin', () => {
 
   test('массив отвергается, а не коэрсится в 0', () => {
     expect(parseRuleBody({ ...base(), sendIntervalMin: [] }).error).toMatch(/0–120/);
+  });
+});
+
+// ── фильтры журнала (GET /history) ─────────────────────────────
+// Разбор вынесен из маршрута в чистую parseHistoryQuery по той же причине, что
+// parseRuleBody: тут решается ПОРЯДОК выдачи, а он у запланированных строк
+// противоположен журнальному (см. ниже), и проверять это через HTTP нечем.
+describe('parseHistoryQuery', () => {
+  test('пустой запрос → журнальные дефолты, порядок «свежие сверху»', () => {
+    const q = parseHistoryQuery({});
+    expect(q).toMatchObject({ limit: 50, offset: 0, ruleId: null, status: null, converted: null, date: null, asc: false });
+  });
+
+  test('limit ограничен сверху 200 и снизу 1, мусор → дефолт', () => {
+    expect(parseHistoryQuery({ limit: '5000' }).limit).toBe(200);
+    expect(parseHistoryQuery({ limit: '0' }).limit).toBe(50);
+    expect(parseHistoryQuery({ limit: 'много' }).limit).toBe(50);
+  });
+
+  // Догон кладёт в очередь сотни строк на два месяца вперёд. При «свежие
+  // сверху» первую страницу занимает САМЫЙ ДАЛЁКИЙ конец очереди, а ближайшая
+  // отправка уезжает за предел выдачи — то есть ровно то, ради чего в очередь
+  // и заглядывают, увидеть нельзя.
+  test('фильтр «Запланировано» переворачивает порядок: ближайшие сверху', () => {
+    expect(parseHistoryQuery({ status: 'scheduled' }).asc).toBe(true);
+  });
+
+  test('выбранный день тоже даёт хронологию сверху вниз', () => {
+    const q = parseHistoryQuery({ date: '2026-08-10' });
+    expect(q.date).toBe('2026-08-10');
+    expect(q.asc).toBe(true);
+  });
+
+  test('битая дата игнорируется как фильтр, а не уходит в SQL', () => {
+    expect(parseHistoryQuery({ date: '10.08.2026' }).date).toBeNull();
+    expect(parseHistoryQuery({ date: "2026-08-10'; DROP" }).date).toBeNull();
+    expect(parseHistoryQuery({ date: '2026-08-10' }).asc).toBe(true);
+  });
+
+  test('конверсия трёхзначна: 1 → true, 0 → false, прочее → без фильтра', () => {
+    expect(parseHistoryQuery({ converted: '1' }).converted).toBe(true);
+    expect(parseHistoryQuery({ converted: '0' }).converted).toBe(false);
+    expect(parseHistoryQuery({ converted: 'да' }).converted).toBeNull();
+  });
+
+  test('ruleId числом, пустая строка — не ноль, а «все правила»', () => {
+    expect(parseHistoryQuery({ ruleId: '7' }).ruleId).toBe(7);
+    expect(parseHistoryQuery({ ruleId: '' }).ruleId).toBeNull();
   });
 });

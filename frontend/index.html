@@ -1307,8 +1307,8 @@
             <div class="bc-head-sub">Кому и по какому правилу ушло, бонусы, записался ли в итоге</div>
           </div>
           <div class="care-filters">
-            <select id="remHistRule" onchange="remLoadHistory()"></select>
-            <select id="remHistStatus" onchange="remLoadHistory()">
+            <select id="remHistRule" onchange="remHistFilterChanged()"></select>
+            <select id="remHistStatus" onchange="remHistFilterChanged()">
               <option value="">Все статусы</option>
               <option value="scheduled">Запланировано</option>
               <option value="sent">Отправлено</option>
@@ -1316,13 +1316,17 @@
               <option value="cancelled">Отменено</option>
               <option value="failed">Ошибка</option>
             </select>
-            <select id="remHistConv" onchange="remLoadHistory()">
+            <select id="remHistConv" onchange="remHistFilterChanged()">
               <option value="">Конверсия: любая</option>
               <option value="1">Записался</option>
               <option value="0">Не записался</option>
             </select>
           </div>
         </div>
+        <!-- План отправок: очередь по дням. Журнал ниже отдаёт максимум 100 строк,
+             а догон кладёт сотни на два месяца вперёд — «когда что уйдёт» из него
+             не собирается. Клик по дню фильтрует таблицу этим днём. -->
+        <div id="remHistPlan"></div>
         <div class="card care-tbl-card" style="padding:0"><div class="tw mtbl-wrap">
           <table class="mtbl">
             <thead><tr>
@@ -2427,7 +2431,8 @@ function fireConfetti() {
 <script src="js/pages/broadcast-rules.js?v=2026-08-02a"></script>
 <script src="js/pages/conditions-editor.js?v=2026-08-07a"></script>
 <script src="js/pages/care.js?v=2026-08-07a"></script>
-<script src="js/pages/reminders.js?v=2026-08-08a"></script>
+<script src="js/pages/reminders-plan.js?v=2026-08-09a"></script>
+<script src="js/pages/reminders.js?v=2026-08-09a"></script>
 <script src="js/pages/medical-cert.js?v=2026-06-19"></script>
 <script src="js/pages/cert-requests.js?v=2026-06-19b"></script>
 <script src="js/pages/medical-cert-coords-transform.js?v=2026-06-17b"></script>

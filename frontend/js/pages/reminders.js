@@ -21,6 +21,7 @@ let _remMode = 'strict';
 let _remTiers = [];          // [{ upTo, action, amount, text }]
 let _remBfRuleId = null;
 let _remBfRows = null;
+let _remHistDate = null;     // выбранный день плана отправок ('YYYY-MM-DD') или null
 
 // ── вкладка «Напоминания» ──────────────────────────────────────
 
@@ -494,6 +495,14 @@ function remFillHistoryFilter() {
   sel.value = cur;
 }
 
+// Смена любого фильтра-селекта сбрасывает выбранный день: у другого правила
+// (или другого статуса) этого дня в очереди может не быть вовсе, и таблица
+// молча оказывалась бы пустой при подсвеченном чипе.
+function remHistFilterChanged() {
+  _remHistDate = null;
+  remLoadHistory();
+}
+
 async function remLoadHistory() {
   // Заглушка на время запроса: смена фильтра иначе оставляет на экране СТАРЫЕ
   // строки без единого признака, что идёт перезагрузка (на медленной сети это
@@ -508,7 +517,9 @@ async function remLoadHistory() {
   if (rule) q.set('ruleId', rule);
   if (status) q.set('status', status);
   if (conv) q.set('converted', conv);
+  if (_remHistDate) q.set('date', _remHistDate);
   q.set('limit', '100');
+  remLoadPlan();   // план грузится параллельно: журнал его не ждёт
   try {
     const d = await api('GET', `/api/reminders/history?${q}`);
     remRenderHistory(d.rows || []);
@@ -516,6 +527,86 @@ async function remLoadHistory() {
     notify(e.message || 'Не удалось загрузить историю', 'err');
     if (body) body.innerHTML = `<tr><td colspan="9" class="empty" style="color:var(--danger)">Ошибка: ${esc(e.message || 'не удалось загрузить историю')}</td></tr>`;
   }
+}
+
+// ── план отправок: что и когда уйдёт ───────────────────────────
+// Журнал отдаёт максимум 100 строк «свежие сверху», а догон кладёт в очередь
+// сотни на два месяца вперёд — из постраничной выдачи «когда что уйдёт» не
+// собирается в принципе. Отдельная ручка считает счётчики по дням в БД.
+
+async function remLoadPlan() {
+  const box = document.getElementById('remHistPlan');
+  if (!box) return;
+  const rule = document.getElementById('remHistRule').value;
+  try {
+    const d = await api('GET', `/api/reminders/queue/plan${rule ? `?ruleId=${encodeURIComponent(rule)}` : ''}`);
+    remRenderPlan(d, rule);
+  } catch (e) {
+    // План — вспомогательный блок: его сбой не должен прятать журнал.
+    box.innerHTML = '';
+  }
+}
+
+function remRenderPlan(d, ruleId) {
+  const box = document.getElementById('remHistPlan');
+  if (!box) return;
+  const days = (d && d.days) || [];
+  if (!days.length) {
+    box.innerHTML = `<div class="card" style="margin-bottom:10px;padding:12px 14px;font-size:13px;color:var(--t3)">
+      📅 Запланированных отправок нет${ruleId ? ' по выбранному правилу' : ''}.
+      Очередь наполняется в момент состоявшегося визита или кнопкой «Догон» в карточке правила.</div>`;
+    return;
+  }
+  // Пауза между сообщениями — настройка ПРАВИЛА, поэтому время последней
+  // отправки дня считается, только когда выбрано одно правило.
+  const rule = _remRules.find(r => String(r.id) === String(ruleId));
+  const interval = rule ? Number(rule.sendIntervalMin) : null;
+  const total = days.reduce((s, x) => s + x.count, 0);
+  const chips = days.map(day => {
+    const fin = remPlanDayFinish(day.firstTime, day.count, interval);
+    const on = _remHistDate === day.date;
+    const tip = [
+      `${day.count} сообщ., старт ${day.firstTime || '—'}`,
+      fin ? (fin.overflow
+        ? `по паузе ${interval} мин до 21:00 успеет ~${fin.fits}, остальное уедет на следующий день`
+        : `по паузе ${interval} мин последнее уйдёт около ${fin.text}`) : '',
+      day.backfillCount ? `из догона: ${day.backfillCount}` : '',
+      'клик — показать этот день в таблице',
+    ].filter(Boolean).join(' · ');
+    return `<span class="bc-chip${on ? ' on' : ''}" title="${escAttr(tip)}"
+        onclick="remPickPlanDay('${escJs(day.date)}')">${esc(remPlanDayLabel(day.date))}
+        <b style="margin-left:4px">${day.count}</b>${fin && fin.overflow ? ' ⚠️' : ''}</span>`;
+  }).join('');
+  const first = days[0];
+  const firstFin = remPlanDayFinish(first.firstTime, first.count, interval);
+  box.innerHTML = `<div class="card" style="margin-bottom:10px;padding:12px 14px">
+    <div style="font-size:13px;margin-bottom:8px">
+      📅 <b>План отправок:</b> ${total} ${remPlural(total, 'сообщение', 'сообщения', 'сообщений')} в очереди,
+      с ${esc(remPlanDayLabel(first.date))} по ${esc(remPlanDayLabel(days[days.length - 1].date))}.
+      Ближайшая партия — ${esc(remPlanDayLabel(first.date))} в ${esc(first.firstTime || '—')}: ${first.count} шт${
+        firstFin ? (firstFin.overflow
+          ? `, но при паузе ${interval} мин до 21:00 успеет около ${firstFin.fits} — остальное перенесётся на следующий день`
+          : `, последнее около ${esc(firstFin.text)}`) : ''}.
+    </div>
+    <div class="bc-chip-row">${chips}</div>
+    ${_remHistDate ? `<div style="margin-top:8px;font-size:12.5px;color:var(--t3)">
+        Таблица показывает только ${esc(remPlanDayLabel(_remHistDate))}.
+        <a href="#" onclick="event.preventDefault();remPickPlanDay(null)">показать все</a></div>` : ''}
+    <div style="margin-top:6px;font-size:11.5px;color:var(--t3)">
+      Время приблизительное: воркер держит паузу между сообщениями и не шлёт позже 21:00.</div>
+  </div>`;
+}
+
+function remPlural(n, one, few, many) {
+  const a = Math.abs(n) % 100, b = a % 10;
+  if (a > 10 && a < 20) return many;
+  if (b > 1 && b < 5) return few;
+  return b === 1 ? one : many;
+}
+
+function remPickPlanDay(date) {
+  _remHistDate = (date && _remHistDate === date) ? null : date;   // повторный клик снимает фильтр
+  remLoadHistory();
 }
 
 function remRenderHistory(rows) {

@@ -14,7 +14,8 @@
 //   POST   /rules/:id/backfill          выполнить догон
 //   POST   /rules/:id/test              тестовая отправка на указанный номер
 //   POST   /queue/:id/cancel            отменить запланированную
-//   GET    /history                     журнал с фильтрами (включая scheduled)
+//   GET    /queue/plan                  план отправок: счётчики по дням (мск)
+//   GET    /history                     журнал с фильтрами (включая scheduled и день)
 //   POST   /suppressions/toggle         ручной тумблер анти-повтора
 //
 // ВНИМАНИЕ: поля JWT — req.user.salonId и req.user.userId (НЕ salon_id).
@@ -604,12 +605,56 @@ router.post('/queue/:id/cancel', guard, async (req, res) => {
   } catch (e) { log.error(e.message); res.status(500).json({ error: 'Не удалось отменить' }); }
 });
 
-router.get('/history', guard, async (req, res) => {
-  const limit = Math.min(200, Math.max(1, Number(req.query.limit) || 50));
-  const offset = Math.max(0, Number(req.query.offset) || 0);
+// План отправок: сколько запланированных строк на какой ДЕНЬ (мск) приходится.
+// Отдельной ручкой, а не полем истории, потому что журнал отдаёт максимум 200
+// строк, а догон кладёт в очередь сотни на два месяца вперёд — «когда что
+// уйдёт» из постраничной выдачи не собирается в принципе.
+// Часы берём МИНИМАЛЬНЫЕ по дню (`send_time` правила): дальше воркер двигает
+// отправки паузой темпа, и обещать точное время каждой строки нельзя.
+router.get('/queue/plan', guard, async (req, res) => {
   const ruleId = req.query.ruleId ? Number(req.query.ruleId) : null;
-  const status = req.query.status || null;
-  const converted = req.query.converted === '1' ? true : (req.query.converted === '0' ? false : null);
+  try {
+    const days = await db.any(
+      `SELECT to_char(q.scheduled_at AT TIME ZONE 'Europe/Moscow', 'YYYY-MM-DD') AS date,
+              to_char(min(q.scheduled_at) AT TIME ZONE 'Europe/Moscow', 'HH24:MI') AS "firstTime",
+              count(*)::int AS count,
+              count(*) FILTER (WHERE q.source = 'backfill')::int AS "backfillCount"
+         FROM reminder_queue q
+        WHERE q.salon_id = $1 AND q.status = 'scheduled'
+          AND ($2::int IS NULL OR q.rule_id = $2)
+        GROUP BY 1
+        ORDER BY 1`,
+      [req.user.salonId, ruleId]);
+    res.json({ days, total: days.reduce((s, d) => s + d.count, 0) });
+  } catch (e) { log.error(e.message); res.status(500).json({ error: 'Не удалось загрузить план отправок' }); }
+});
+
+/**
+ * Разбор фильтров журнала. Вынесен наружу (как parseRuleBody) ради юнит-теста:
+ * тут решается ПОРЯДОК выдачи, а он у запланированных строк противоположен
+ * журнальному — «свежие сверху» показывает самый ДАЛЁКИЙ конец очереди и
+ * прячет ближайшую отправку за пределом страницы.
+ */
+function parseHistoryQuery(query) {
+  const q = query || {};
+  const date = /^\d{4}-\d{2}-\d{2}$/.test(String(q.date || '')) ? String(q.date) : null;
+  const status = q.status || null;
+  return {
+    limit: Math.min(200, Math.max(1, Number(q.limit) || 50)),
+    offset: Math.max(0, Number(q.offset) || 0),
+    ruleId: q.ruleId ? Number(q.ruleId) : null,
+    status,
+    converted: q.converted === '1' ? true : (q.converted === '0' ? false : null),
+    date,
+    asc: status === 'scheduled' || !!date,
+  };
+}
+
+// Тай-брейк по id ОБЯЗАТЕЛЕН: догон кладёт сотни строк на ОДИН scheduled_at, и
+// без него порядок внутри дня неспецифицирован — а это ровно тот порядок, в
+// котором воркер их и отправит (LEASE_SQL: `scheduled_at ASC, id ASC`).
+router.get('/history', guard, async (req, res) => {
+  const { limit, offset, ruleId, status, converted, date, asc } = parseHistoryQuery(req.query);
   try {
     const rows = await db.any(
       `SELECT ${QUEUE_COLUMNS}
@@ -618,9 +663,11 @@ router.get('/history', guard, async (req, res) => {
           AND ($2::int  IS NULL OR q.rule_id = $2)
           AND ($3::text IS NULL OR q.status  = $3)
           AND ($4::bool IS NULL OR (q.conversion_record_id IS NOT NULL) = $4)
-        ORDER BY COALESCE(q.sent_at, q.scheduled_at) DESC
+          AND ($7::text IS NULL OR to_char(
+                COALESCE(q.sent_at, q.scheduled_at) AT TIME ZONE 'Europe/Moscow', 'YYYY-MM-DD') = $7)
+        ORDER BY COALESCE(q.sent_at, q.scheduled_at) ${asc ? 'ASC' : 'DESC'}, q.id ${asc ? 'ASC' : 'DESC'}
         LIMIT $5 OFFSET $6`,
-      [req.user.salonId, ruleId, status, converted, limit, offset]);
+      [req.user.salonId, ruleId, status, converted, limit, offset, date]);
     res.json({ rows, limit, offset });
   } catch (e) { log.error(e.message); res.status(500).json({ error: 'Не удалось загрузить историю' }); }
 });
@@ -666,3 +713,6 @@ module.exports.loadTestAnchor = loadTestAnchor;
 // scheduledAt» — ровно то место, где регресс легко внести и невозможно
 // заметить без юнит-теста.
 module.exports.summarizeBackfillPlan = summarizeBackfillPlan;
+// Разбор фильтров журнала — там же и порядок выдачи (ближайшие сверху для
+// очереди против «свежие сверху» для истории).
+module.exports.parseHistoryQuery = parseHistoryQuery;
