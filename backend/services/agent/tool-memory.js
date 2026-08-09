@@ -319,6 +319,17 @@ const EXTRACTORS = {
     const inp = e.input || {};
     return `искала в базе знаний: «${String(inp.query || '').slice(0, 60)}»`;
   },
+  // Прайс в картинках: факт «этот лист пациент уже видел». Без него на «пришлите
+  // ещё раз» модель не знает, что уже слала. Название направления пришло из
+  // индекса, где оно уже прочищено price-list.cell — в промпт идёт безопасным.
+  send_price_list(e) {
+    const res = e.result || {};
+    const cat = String(res.category || (e.input || {}).category || '').slice(0, 60);
+    if (res.attached) {
+      return `отправила пациенту фото прайс-листа: ${cat}${res.photos ? ` (${res.photos} фото)` : ''}`;
+    }
+    return `прайс-лист «${cat}» не отправила (${res.reason || '—'}) — предлагала ссылку на сайт`;
+  },
 };
 
 function extract(e, ctx) {

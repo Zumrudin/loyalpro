@@ -423,3 +423,23 @@ describe('память: рендерятся ПОКАЗАННЫЕ времена
     expect(lines.join('\n')).toContain('11:00');
   });
 });
+
+test('send_price_list: в памяти остаётся факт отправленного прайса', () => {
+  const ok = renderMemory([ev({
+    tool: 'send_price_list',
+    input: { category: 'c12' },
+    result: { attached: true, category: 'Лазерная эпиляция', photos: 2 },
+    age_ms: 5 * MIN,
+  })], { nowMs: NOW }).lines[0];
+  expect(ok).toContain('Лазерная эпиляция');
+  expect(ok).toContain('2');
+  expect(ok).not.toContain('send_price_list(');
+
+  const fail = renderMemory([ev({
+    tool: 'send_price_list',
+    input: { category: 'c30' },
+    result: { attached: false, reason: 'no_photo', category: 'Инъекции' },
+    age_ms: 5 * MIN,
+  })], { nowMs: NOW }).lines[0];
+  expect(fail).toMatch(/не отправ/i);
+});
