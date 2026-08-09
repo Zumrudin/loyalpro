@@ -12,6 +12,7 @@ const { normalizePhoneKey, decideGate, parseHhMm, nowMskMinutes,
 const DEFAULTS = {
   enabled: false, mode: 'all',
   scheduleEnabled: false, scheduleStart: '22:00', scheduleEnd: '09:30',
+  priceListUrl: null,
 };
 
 // Строка БД → camelCase-настройки для API и гейта.
@@ -22,6 +23,7 @@ function rowToSettings(row) {
     scheduleEnabled: !!row.schedule_enabled,
     scheduleStart: row.schedule_start || DEFAULTS.scheduleStart,
     scheduleEnd: row.schedule_end || DEFAULTS.scheduleEnd,
+    priceListUrl: row.price_list_url || null,
   };
 }
 
@@ -35,7 +37,7 @@ function pickTime(raw, current) {
 async function getSettings(salonId) {
   if (!salonId) return { ...DEFAULTS };
   const row = await db.oneOrNone(
-    `SELECT enabled, mode, schedule_enabled, schedule_start, schedule_end
+    `SELECT enabled, mode, schedule_enabled, schedule_start, schedule_end, price_list_url
        FROM agent_settings WHERE salon_id=$1`, [salonId]
   );
   return row ? rowToSettings(row) : { ...DEFAULTS };
@@ -54,15 +56,19 @@ async function updateSettings(salonId, body) {
   const schedOn = scheduleEnabled == null ? cur.scheduleEnabled : !!scheduleEnabled;
   const start = pickTime(scheduleStart, cur.scheduleStart);
   const end = pickTime(scheduleEnd, cur.scheduleEnd);
+  // priceListUrl: null/undefined = «поле не передано» (старый закэшированный
+  // фронт его не шлёт) → сохраняем текущее. Пустая строка = осознанная очистка.
+  const priceUrl = (body || {}).priceListUrl === undefined || (body || {}).priceListUrl === null
+    ? cur.priceListUrl : normalizePriceListUrl((body || {}).priceListUrl);
   const row = await db.one(
     `INSERT INTO agent_settings
-       (salon_id, enabled, mode, schedule_enabled, schedule_start, schedule_end, updated_at)
-     VALUES ($1,$2,$3,$4,$5,$6,NOW())
+       (salon_id, enabled, mode, schedule_enabled, schedule_start, schedule_end, price_list_url, updated_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,NOW())
      ON CONFLICT (salon_id) DO UPDATE SET
        enabled=$2, mode=$3, schedule_enabled=$4,
-       schedule_start=$5, schedule_end=$6, updated_at=NOW()
-     RETURNING enabled, mode, schedule_enabled, schedule_start, schedule_end`,
-    [salonId, !!enabled, m, schedOn, start, end]
+       schedule_start=$5, schedule_end=$6, price_list_url=$7, updated_at=NOW()
+     RETURNING enabled, mode, schedule_enabled, schedule_start, schedule_end, price_list_url`,
+    [salonId, !!enabled, m, schedOn, start, end, priceUrl]
   );
   return rowToSettings(row);
 }
@@ -464,6 +470,69 @@ async function getServicesForAdmin(salonId) {
   return { serviceMode: filter.mode, categories: tree };
 }
 
+// ── Фото прайс-листа по узлам дерева услуг ─────────────────────────────────
+
+const MAX_PRICE_PHOTOS_PER_NODE = 10;
+
+// Ссылка на прайс на сайте: пустое значение — законное «ссылки нет».
+// Схема ограничена http/https: строка уходит в системный промпт и оттуда
+// пациенту, и `javascript:`-ссылка в чате клиники недопустима.
+function normalizePriceListUrl(raw) {
+  const s = String(raw == null ? '' : raw).trim();
+  if (!s) return null;
+  if (s.length > 500) { const e = new Error('url too long'); e.code = 'BAD_URL'; throw e; }
+  if (!/^https?:\/\/\S+$/i.test(s)) { const e = new Error('bad url'); e.code = 'BAD_URL'; throw e; }
+  return s;
+}
+
+async function listPricePhotos(salonId) {
+  return db.any(
+    `SELECT id, yc_category_id, subcategory_id, file_url, file_name, mime_type, byte_size, display_order
+       FROM agent_price_photos WHERE salon_id=$1
+      ORDER BY display_order ASC, id ASC`,
+    [salonId]);
+}
+
+async function addPricePhoto(salonId, { ycCategoryId, subcategoryId, fileUrl, fileName, mimeType, byteSize }) {
+  const cat = ycCategoryId == null || ycCategoryId === '' ? null : Number(ycCategoryId);
+  const sub = subcategoryId == null || subcategoryId === '' ? null : Number(subcategoryId);
+  if ((cat == null) === (sub == null) || (cat != null && !Number.isFinite(cat)) || (sub != null && !Number.isFinite(sub))) {
+    const e = new Error('нужен ровно один из ycCategoryId/subcategoryId'); e.code = 'BAD_NODE'; throw e;
+  }
+  const cur = await db.one(
+    `SELECT COUNT(*)::int AS n, COALESCE(MAX(display_order), 0) + 1 AS next_order
+       FROM agent_price_photos
+      WHERE salon_id=$1 AND yc_category_id IS NOT DISTINCT FROM $2
+                        AND subcategory_id IS NOT DISTINCT FROM $3`,
+    [salonId, cat, sub]);
+  if (cur.n >= MAX_PRICE_PHOTOS_PER_NODE) {
+    const e = new Error('photo limit'); e.code = 'PHOTO_LIMIT'; throw e;
+  }
+  return db.one(
+    `INSERT INTO agent_price_photos
+       (salon_id, yc_category_id, subcategory_id, file_url, file_name, mime_type, byte_size, display_order)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id`,
+    [salonId, cat, sub, fileUrl, fileName, mimeType, Number(byteSize) || 0, cur.next_order]);
+}
+
+async function reorderPricePhotos(salonId, items) {
+  for (const it of (Array.isArray(items) ? items : [])) {
+    const id = Number(it && it.id), order = Number(it && it.displayOrder);
+    if (!Number.isFinite(id) || !Number.isFinite(order)) continue;
+    await db.query(
+      `UPDATE agent_price_photos SET display_order=$3, updated_at=NOW()
+        WHERE salon_id=$1 AND id=$2`, [salonId, id, order]);
+  }
+  return { ok: true };
+}
+
+// Возвращает удалённую строку — вызывающий маршрут снимает файл с диска.
+async function removePricePhoto(salonId, id) {
+  return db.oneOrNone(
+    `DELETE FROM agent_price_photos WHERE salon_id=$1 AND id=$2 RETURNING file_url`,
+    [salonId, id]);
+}
+
 module.exports = {
   getSettings, updateSettings, listNumberRules, addNumberRule, removeNumberRule, isAllowed,
   getServiceMode, updateServiceMode, listServiceRules, addServiceRule, removeServiceRule,
@@ -472,4 +541,6 @@ module.exports = {
   loadStopTopics, loadStopTopicsSafe, listStopTopics, addStopTopic, removeStopTopic,
   listSubcategories, addSubcategory, renameSubcategory, removeSubcategory, reorderSubcategories,
   listPlacements, placeService, unplaceService, loadCategoryTree, loadCategoryTreeSafe,
+  listPricePhotos, addPricePhoto, reorderPricePhotos, removePricePhoto,
+  normalizePriceListUrl, MAX_PRICE_PHOTOS_PER_NODE,
 };

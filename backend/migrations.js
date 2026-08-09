@@ -1491,6 +1491,44 @@ async function runMigrations(client) {
       ON agent_service_placements (salon_id, subcategory_id)
   `).catch(() => {});
 
+  // agent_price_photos — фото прайс-листа, привязанное к узлу дерева услуг
+  // агента: либо к YClients-категории (yc_category_id), либо к локальной
+  // подкатегории (subcategory_id). Ровно одно из двух — узел адресуется
+  // однозначно, «фото ничьё» невозможно. Каскад от подкатегории намеренный:
+  // удалили подкатегорию — её прайс хранить незачем (форензики тут нет).
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS agent_price_photos (
+      id             SERIAL PRIMARY KEY,
+      salon_id       INTEGER REFERENCES salons(id) ON DELETE CASCADE,
+      yc_category_id BIGINT NULL,
+      subcategory_id INTEGER NULL REFERENCES agent_service_subcategories(id) ON DELETE CASCADE,
+      file_url       VARCHAR(500) NOT NULL,
+      file_name      VARCHAR(255) NOT NULL,
+      mime_type      VARCHAR(100) NOT NULL,
+      byte_size      INTEGER NOT NULL DEFAULT 0,
+      display_order  INTEGER NOT NULL DEFAULT 0,
+      created_at     TIMESTAMP DEFAULT NOW(),
+      updated_at     TIMESTAMP DEFAULT NOW(),
+      CHECK ((yc_category_id IS NULL) <> (subcategory_id IS NULL))
+    )
+  `).catch(() => {});
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS agent_price_photos_cat_idx
+      ON agent_price_photos (salon_id, yc_category_id)
+  `).catch(() => {});
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS agent_price_photos_sub_idx
+      ON agent_price_photos (salon_id, subcategory_id)
+  `).catch(() => {});
+
+  // Ссылка на полный прайс на сайте клиники: детерминированный запасной путь,
+  // когда фото нет или канал не умеет файлы. Не статья базы знаний — статью
+  // модель может не запросить, и запасной путь молча не сработает.
+  await client.query(`
+    ALTER TABLE agent_settings
+      ADD COLUMN IF NOT EXISTS price_list_url VARCHAR(500)
+  `).catch(() => {});
+
   // agent_stop_topics — темы, которыми клиника не занимается ВООБЩЕ (даже не
   // консультирует). Отличается от agent_service_rules: там прячутся конкретные
   // yc_service_id, а здесь тема, которой в каталоге может не быть вовсе
