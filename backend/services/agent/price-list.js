@@ -113,7 +113,10 @@ function resolvePhotos(key, index) {
 function renderPriceListBlock(index) {
   const nodes = index && index.nodes ? [...index.nodes.values()] : [];
   const withOwn = nodes
-    .filter(n => n.photos.length)
+    // Неразбираемый ключ (нечисловой id из YClients дал бы `cNaN`) в блок не
+    // попадает вовсе: назвать его модели всё равно нельзя, а разыменование
+    // parseKey(...).kind в компараторе снесло бы ВЕСЬ блок из-за одного узла.
+    .filter(n => n.photos.length && parseKey(n.key))
     .sort((a, b) => {
       const ka = parseKey(a.key), kb = parseKey(b.key);
       if (ka.kind !== kb.kind) return ka.kind === 'cat' ? -1 : 1;

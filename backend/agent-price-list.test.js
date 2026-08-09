@@ -153,4 +153,16 @@ describe('renderPriceListBlock', () => {
     const b = mk([photo({ id: 1, yc_category_id: 12 }), photo({ id: 2, subcategory_id: 9 })], SUBCATS.slice().reverse());
     expect(a).toBe(b);
   });
+
+  test('узел с неразбираемым ключом не роняет ВЕСЬ блок, а просто в него не попадает', () => {
+    const idx = pl.buildIndex({
+      categories: [...CATEGORIES, { id: 'мусор', title: 'Битая категория' }],
+      subcats: [],
+      photos: [photo({ id: 1, yc_category_id: 12 }), photo({ id: 3, yc_category_id: 'мусор' })],
+      priceListUrl: null,
+    });
+    const block = pl.renderPriceListBlock(idx);
+    expect(block).toContain('c12|Лазерная эпиляция');
+    expect(block).not.toContain('NaN');
+  });
 });
