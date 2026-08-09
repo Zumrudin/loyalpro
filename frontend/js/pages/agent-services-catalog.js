@@ -12,14 +12,39 @@ let _asData = { serviceMode: 'all', categories: [] };
 let _asRules = [];
 let _asShowAll = false;             // false → active + настроенные; true → весь каталог
 const _asOpenCats = new Set();      // id раскрытых категорий (по умолчанию свёрнуты)
+let _asPhotos = [];                 // фото прайса всех узлов салона
+let _asPriceUrl = '';               // ссылка на прайс на сайте
+let _asSettings = {};               // ПОЛНЫЙ ответ GET /api/agent/settings — PUT сохраняет его же
+                                     // целиком с точечной правкой priceListUrl: PUT /settings трактует
+                                     // отсутствие enabled/mode как false/'all' (см. agent-settings.js),
+                                     // и отправка одного priceListUrl молча выключила бы агента.
+let _asPriceNode = null;            // открытый в модалке узел { kind:'cat'|'sub', id, title }
 
 async function loadAgentServices() {
   try {
     _asData = await api('GET', '/api/agent/services');
     const r = await api('GET', '/api/agent/service-rules');
     _asRules = r.rules || [];
+    const ph = await api('GET', '/api/agent/price-photos');
+    _asPhotos = ph.photos || [];
+    _asSettings = await api('GET', '/api/agent/settings');
+    _asPriceUrl = _asSettings.priceListUrl || '';
     renderAgentServices();
   } catch (e) { console.error('agent-services:', e); notify('Ошибка загрузки услуг', 'err'); }
+}
+
+// Фото узла (категория или подкатегория) в порядке администратора.
+function _photosOf(kind, id) {
+  return _asPhotos
+    .filter(p => (kind === 'cat'
+      ? String(p.ycCategoryId) === String(id)
+      : String(p.subcategoryId) === String(id)))
+    .sort((a, b) => (a.displayOrder - b.displayOrder) || (a.id - b.id));
+}
+
+function _priceBtn(kind, id, title) {
+  const n = _photosOf(kind, id).length;
+  return `<button type="button" class="as-mini as-price-btn" data-kind="${kind}" data-id="${id}" data-title="${_asEsc(title)}">🖼 Прайс${n ? ` (${n})` : ''}</button>`;
 }
 
 // Есть ли у услуги хоть какое-то правило — по нему решаем, показывать ли
@@ -221,6 +246,7 @@ function _renderSubcat(sc, topCatId, subcatOptions) {
     <div class="as-subcat-head">
       <span class="as-subcat-title">${_asEsc(sc.title)}</span>
       <span class="as-subcat-actions">
+        ${_priceBtn('sub', sc.id, sc.title)}
         <button type="button" class="as-mini as-add-sub" data-cat="${topCatId}" data-parent="${sc.id}">＋ подкатегория</button>
         <button type="button" class="as-mini as-sub-rename" data-id="${sc.id}" data-title="${_asEsc(sc.title)}">переименовать</button>
         <button type="button" class="as-mini as-danger as-sub-del" data-id="${sc.id}">удалить</button>
@@ -266,6 +292,7 @@ function renderAgentServices() {
           <span class="as-cat-title">${_asEsc(cat.title)}</span>
           <span class="muted as-cat-count">${vis}/${shown.length}</span>
         </button>
+        ${canAddSub ? _priceBtn('cat', cat.id, cat.title) : ''}
         ${addBtn}
       </div>
       <div class="as-cat-body" ${open ? '' : 'hidden'}>${body}</div>
@@ -278,6 +305,9 @@ function renderAgentServices() {
       <label class="as-showall">
         <input type="checkbox" id="as-showall-cb" ${_asShowAll ? 'checked' : ''}>
         Показать весь каталог${hiddenCount > 0 ? ` <span class="muted">(+${hiddenCount} скрыто)</span>` : ''}</label>
+      <div class="fg"><div class="fl">Ссылка на прайс на сайте</div>
+        <input type="url" id="as-price-url" placeholder="https://…" value="${_asEsc(_asPriceUrl)}">
+        <button type="button" class="btn-pri" id="as-price-url-save">Сохранить</button></div>
       <p class="muted">Отмеченная услуга видна агенту. Чекбокс категории показывает/скрывает все услуги
         внутри (включая подкатегории) сразу. Услуги «не в онлайн-записи» по умолчанию скрыты — включите нужные вручную.
         Снимите галочку у мастера, чтобы скрыть ошибочную пару услуга×мастер.
@@ -321,4 +351,124 @@ function renderAgentServices() {
     btn.onclick = () => _renameSubcategory(btn.dataset.id, btn.dataset.title));
   root.querySelectorAll('.as-sub-del').forEach(btn =>
     btn.onclick = () => _removeSubcategory(btn.dataset.id));
+
+  const urlSave = root.querySelector('#as-price-url-save');
+  if (urlSave) urlSave.onclick = async () => {
+    const v = (root.querySelector('#as-price-url').value || '').trim();
+    try {
+      // Шлём ВЕСЬ известный набор настроек, а не одно поле: PUT /api/agent/settings
+      // трактует отсутствие enabled/mode как false/'all' (agent-settings.js) —
+      // точечная отправка {priceListUrl} молча выключила бы агента и сбросила режим.
+      await api('PUT', '/api/agent/settings', { ..._asSettings, priceListUrl: v });
+      _asPriceUrl = v;
+      _asSettings = { ..._asSettings, priceListUrl: v };
+      notify('Ссылка сохранена', 'ok');
+    } catch (e) { notify('Не удалось сохранить ссылку', 'err'); }
+  };
+  root.querySelectorAll('.as-price-btn').forEach(btn =>
+    btn.onclick = () => _openPriceModal(btn.dataset.kind, btn.dataset.id, btn.dataset.title));
+}
+
+// ── Модалка «Прайс раздела»: сетка фото, загрузка, порядок, удаление ──
+// Разметка создаётся из JS (на странице «Услуги агента» нет статического модального
+// контейнера) по образцу существующей agent-settings-modal: обёртка .ov + .modal,
+// показ/скрытие — classList('open'), а не style.display (см. frontend/js/pages/agent-settings.js).
+function _priceModalEl() {
+  let el = document.getElementById('as-price-modal');
+  if (el) return el;
+  el = document.createElement('div');
+  el.id = 'as-price-modal';
+  el.className = 'ov';
+  el.onclick = (ev) => { if (ev.target === el) _closePriceModal(); };
+  el.innerHTML = `<div class="modal">
+    <div class="mh">
+      <div class="mt" id="as-price-modal-title"></div>
+      <button type="button" class="mc" id="as-price-close">✕</button>
+    </div>
+    <div id="as-price-grid" class="as-price-grid"></div>
+    <div class="fg">
+      <div class="fl">Добавить фото (JPEG/PNG/WebP)</div>
+      <input type="file" id="as-price-file" accept="image/jpeg,image/png,image/webp" multiple>
+    </div>
+  </div>`;
+  document.body.appendChild(el);
+  el.querySelector('#as-price-close').onclick = () => _closePriceModal();
+  el.querySelector('#as-price-file').onchange = (ev) => _uploadPricePhotos(ev.target.files);
+  return el;
+}
+
+function _closePriceModal() {
+  const el = document.getElementById('as-price-modal');
+  if (el) el.classList.remove('open');
+}
+
+function _openPriceModal(kind, id, title) {
+  _asPriceNode = { kind, id, title };
+  const el = _priceModalEl();
+  el.querySelector('#as-price-modal-title').textContent = `Прайс: ${title}`;
+  _renderPriceGrid();
+  el.classList.add('open');
+}
+
+function _renderPriceGrid() {
+  const el = _priceModalEl();
+  const grid = el.querySelector('#as-price-grid');
+  const list = _photosOf(_asPriceNode.kind, _asPriceNode.id);
+  grid.innerHTML = list.length ? list.map((p, i) => `
+    <div class="as-price-item">
+      <img src="${_asEsc(p.fileUrl)}" alt="">
+      <div class="as-price-item-actions">
+        <button type="button" class="as-mini as-price-up" data-id="${p.id}" ${i === 0 ? 'disabled' : ''}>↑</button>
+        <button type="button" class="as-mini as-price-down" data-id="${p.id}" ${i === list.length - 1 ? 'disabled' : ''}>↓</button>
+        <button type="button" class="as-mini as-danger as-price-del" data-id="${p.id}">удалить</button>
+      </div>
+    </div>`).join('') : '<p class="muted">Фото прайса пока нет. Если их нет и у родительского раздела, Мила отправит ссылку на сайт.</p>';
+  grid.querySelectorAll('.as-price-up').forEach(b => b.onclick = () => _movePricePhoto(b.dataset.id, -1));
+  grid.querySelectorAll('.as-price-down').forEach(b => b.onclick = () => _movePricePhoto(b.dataset.id, +1));
+  grid.querySelectorAll('.as-price-del').forEach(b => b.onclick = () => _removePricePhoto(b.dataset.id));
+}
+
+async function _uploadPricePhotos(files) {
+  for (const f of Array.from(files || [])) {
+    const fd = new FormData();
+    fd.append('file', f);
+    if (_asPriceNode.kind === 'cat') fd.append('ycCategoryId', _asPriceNode.id);
+    else fd.append('subcategoryId', _asPriceNode.id);
+    try {
+      const r = await fetch('/api/agent/price-photos', {
+        method: 'POST',
+        // Ключ токена — 'lp_tk' (как в core/api.js), не 'token'.
+        headers: { Authorization: `Bearer ${localStorage.getItem('lp_tk')}` },
+        body: fd,
+      });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || 'ошибка загрузки');
+    } catch (e) { notify(e.message, 'err'); break; }
+  }
+  await loadAgentServices();
+  _renderPriceGrid();
+}
+
+async function _movePricePhoto(id, dir) {
+  const list = _photosOf(_asPriceNode.kind, _asPriceNode.id);
+  const i = list.findIndex(p => String(p.id) === String(id));
+  const j = i + dir;
+  if (i < 0 || j < 0 || j >= list.length) return;
+  const reordered = list.slice();
+  [reordered[i], reordered[j]] = [reordered[j], reordered[i]];
+  try {
+    await api('PUT', '/api/agent/price-photos/reorder',
+      { items: reordered.map((p, k) => ({ id: p.id, displayOrder: k + 1 })) });
+    await loadAgentServices();
+    _renderPriceGrid();
+  } catch (e) { notify('Не удалось изменить порядок', 'err'); }
+}
+
+async function _removePricePhoto(id) {
+  if (!confirm('Удалить фото прайса?')) return;
+  try {
+    await api('DELETE', `/api/agent/price-photos/${id}`);
+    await loadAgentServices();
+    _renderPriceGrid();
+  } catch (e) { notify('Не удалось удалить фото', 'err'); }
 }

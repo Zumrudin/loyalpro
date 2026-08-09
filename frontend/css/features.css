@@ -974,3 +974,11 @@ body.kb-editor .kb-admin-only { display: inline-flex; }
 .as-move-wrap { display:flex; align-items:center; gap:6px; margin:4px 0 2px 23px; font-size:12px; }
 .as-move { max-width:100%; font-size:12px; padding:2px 6px; border:1px solid var(--bd); border-radius:6px;
   background:var(--card); color:var(--t1); cursor:pointer; }
+
+/* Модалка «Прайс раздела»: сетка фото + порядок + удаление (as-price-modal, JS-only разметка) */
+.as-price-grid { display:flex; flex-wrap:wrap; gap:10px; margin:6px 0 14px; }
+.as-price-item { width:120px; border:1px solid var(--bd); border-radius:8px; overflow:hidden; background:var(--bg); }
+.as-price-item img { display:block; width:100%; height:120px; object-fit:cover; background:var(--bg2,var(--bg)); }
+.as-price-item-actions { display:flex; align-items:center; justify-content:center; gap:8px; padding:6px 4px; flex-wrap:wrap; }
+.as-price-up:disabled, .as-price-down:disabled { opacity:.3; cursor:default; }
+.as-price-up:disabled:hover, .as-price-down:disabled:hover { text-decoration:none; }
