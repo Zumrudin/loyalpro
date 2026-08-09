@@ -22,10 +22,11 @@ const modifySvc = require('./modify-booking-services');
 const bonusBal  = require('./get-bonus-balance');
 const abonement = require('./get-client-abonements');
 const svcMasters = require('./get-service-masters');
+const sendPrice = require('./send-price-list');
 
 const tools = [searchKb, listSvc, listStaff, getSlots, getParSlot, getSeqSlot, getDates, getClient,
   createBk, bookChain, listBookings, visitHistory, cancelBk, reschedBk, modifySvc,
-  bonusBal, abonement, escalate];
+  bonusBal, abonement, sendPrice, escalate];
 
 function build(list) {
   const schemas = list.map(t => t.schema);
