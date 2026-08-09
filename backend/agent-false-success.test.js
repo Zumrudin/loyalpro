@@ -28,7 +28,10 @@ const historyOf = (userText) => ({
 });
 const state = { getOrCreate: async () => ({ status: 'bot', escalated_reason: null }), setWatermark: async () => {} };
 const identity = { resolveClient: async () => null };
-const baseDeps = (provider, registry) => ({ provider, registry, history: null, state, identity });
+const baseDeps = (provider, registry) => ({
+  provider, registry, history: null, state, identity,
+  priceListData: { loadPriceIndex: async () => null },
+});
 
 // Сверка записей с CRM (блок «АКТУАЛЬНЫЕ ЗАПИСИ ПАЦИЕНТА») идёт КАЖДЫЙ ход при
 // известном номере. Стабим её всегда: без стаба тест лез бы в YClients, а

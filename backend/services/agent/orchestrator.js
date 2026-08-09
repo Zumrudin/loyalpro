@@ -17,6 +17,8 @@ const toolEventsDefault = require('./tool-events');
 const toolMemoryDefault = require('./tool-memory');
 const listBookingsDefault = require('./tools/list-client-bookings');
 const bookingsBlock = require('./bookings-block');
+const priceListDefault = require('./price-list-data');
+const priceList = require('./price-list');
 const { buildSystemPrompt } = require('./system-prompt');
 const { stripAllStamps, stripStamp } = require('./transcript-time');
 const { createLogger } = require('../../logger');
@@ -284,6 +286,20 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
   }
   const registry = d.registry || (catalogBlock ? registryDefault.catalogMode : registryDefault);
 
+  // Прайс-листы в картинках → кэшируемый префикс промпта + индекс для инструмента.
+  // Сбой сборки не имеет права ронять ход: блока нет, ключей у модели нет,
+  // send_price_list вернёт ошибку-подсказку (fail-open, как у каталога).
+  let priceIndex = null;
+  let priceListBlock = null;
+  try {
+    priceIndex = await (d.priceListData || priceListDefault).loadPriceIndex(salonId);
+    priceListBlock = priceList.renderPriceListBlock(priceIndex);
+  } catch (e) {
+    logger.warn(`dialog ${dialogKey}: не собрать прайс-листы (${e.message}) — промпт без них`);
+    priceIndex = null;
+    priceListBlock = null;
+  }
+
   // Живые варианты get_sequential_slots этого диалога → в волатильный хвост промпта.
   // Их мог создать только ПРЕДЫДУЩИЙ ход (в текущем результат инструмента модель
   // и так видит), поэтому одного peek перед циклом попыток достаточно. Сбой кэша
@@ -368,6 +384,7 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
     phoneKnown: !!ctx.phone,
     clientName: clientGivenName,
     catalogBlock,
+    priceListBlock,
     activeOffers,
     toolMemory: toolMemoryLines,
     liveBookings,
@@ -380,11 +397,18 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
     clientPhone: ctx.phone,
     clientName,
     nowMs,
+    // Канал нужен send_price_list: файлы Chatpush умеет только в whatsapp/tdlib/max.
+    channel: ctx.channel || null,
+    priceIndex,
   };
 
   for (let attempt = 0; attempt <= MAX_REGEN; attempt++) {
     const { messages, watermark, session } = await history.loadTranscript(
       salonId, dialogKey, { limit: 20, withTime: true });
+    // Буфер вложений ЭТОЙ попытки. Пересоздаётся на каждой перегенерации:
+    // черновик, выброшенный из-за нового входящего, обязан унести фото с собой,
+    // иначе пациент получит картинку от ответа, которого он не увидит.
+    toolCtx.attachments = [];
     if (!messages.length) return { replies: [], escalated: false, sideEffect: false };
 
     // Круг взаимных благодарностей: пациенту отвечать уже нечего. Проверка стоит
@@ -824,7 +848,8 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
     // останутся невидимыми для памяти.
     await evBuffer.flush(null);
     return { replies, escalated, sideEffect, exhausted, falseSuccess, falseSuccessKind,
-      bookingFailed, bookingFailRecoverable, degradedAfterWrite, turnId: evBuffer.turnId };
+      bookingFailed, bookingFailRecoverable, degradedAfterWrite, turnId: evBuffer.turnId,
+      attachments: toolCtx.attachments };
   }
 
   return { replies: [], escalated: false, sideEffect: false };

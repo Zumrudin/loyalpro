@@ -72,6 +72,9 @@ function makeDeps(overrides = {}) {
       run: jest.fn(async () => ({ bookings: [] })),
       ...(overrides.listBookings || {}),
     },
+    // Индекс прайс-листов ходит в БД и в YClients. Стаб «прайсов нет» —
+    // дефолт для всех сценариев, которые про них ничего не утверждают.
+    priceListData: { loadPriceIndex: jest.fn(async () => null), ...overrides.priceListData },
   };
 }
 
@@ -105,7 +108,8 @@ describe('runDialog', () => {
     const out = await orchestrator.runDialog(1, 'k', { deps, ctx: { phone: '79001112233' } });
     expect(deps.registry.handlers.get_available_slots)
       .toHaveBeenCalledWith(1, { staff_yc_id: 55, service_yc_id: 7, date: '2026-07-20' },
-        { dialogKey: 'k', clientPhone: '79001112233', clientName: null, nowMs: expect.any(Number) });
+        { dialogKey: 'k', clientPhone: '79001112233', clientName: null, nowMs: expect.any(Number),
+          channel: null, priceIndex: null, attachments: [] });
     expect(out.replies).toContain('Свободно 10:00. Записать?');
     expect(out.sideEffect).toBe(false);
     const secondCallMessages = deps.provider.createMessage.mock.calls[1][0].messages;
@@ -1514,5 +1518,78 @@ describe('runDialog: молчание на завершающей вежливо
     const out = await orchestrator.runDialog(1, 'k', { deps });
     expect(out.silent).toBeFalsy();
     expect(deps.provider.createMessage).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('прайс-листы в картинках', () => {
+  const INDEX = require('./services/agent/price-list').buildIndex({
+    categories: [{ id: 12, title: 'Лазерная эпиляция' }],
+    subcats: [],
+    photos: [{ id: 1, yc_category_id: 12, subcategory_id: null, file_url: '/uploads/a.jpg', file_name: 'a.jpg', mime_type: 'image/jpeg' }],
+    priceListUrl: 'https://peri.ru/price',
+  });
+
+  test('вложения инструмента возвращаются ходом и канал доезжает до toolCtx', async () => {
+    const deps = makeDeps({
+      handlers: {
+        send_price_list: jest.fn(async (salonId, input, ctx) => {
+          ctx.attachments.push({ nodeKey: 'c12', category: 'Лазерная эпиляция', fileUrl: '/uploads/a.jpg', fileName: 'a.jpg', mimeType: 'image/jpeg' });
+          return { attached: true, photos: 1 };
+        }),
+      },
+      priceListData: { loadPriceIndex: jest.fn(async () => INDEX) },
+    });
+    deps.registry.schemas.push({ name: 'send_price_list' });
+    deps.provider.createMessage
+      .mockResolvedValueOnce({ text: '', toolCalls: [{ id: 't1', name: 'send_price_list', input: { category: 'c12' } }], assistantMsg: {} })
+      .mockResolvedValueOnce({ text: 'Отправляю прайс', toolCalls: [], assistantMsg: {} });
+
+    const res = await orchestrator.runDialog(1, 'k', { deps, ctx: { phone: '79001112233', channel: 'whatsapp' } });
+    expect(res.attachments).toHaveLength(1);
+    expect(res.sideEffect).toBe(false);   // отправки не было — ход можно выбросить
+    const toolCtx = deps.registry.handlers.send_price_list.mock.calls[0][2];
+    expect(toolCtx.channel).toBe('whatsapp');
+    expect(toolCtx.priceIndex).toBe(INDEX);
+  });
+
+  test('перегенерация выбрасывает вложения вместе с черновиком', async () => {
+    const deps = makeDeps({
+      handlers: {
+        send_price_list: jest.fn(async (salonId, input, ctx) => {
+          ctx.attachments.push({ nodeKey: 'c12', category: 'Лазерная эпиляция', fileUrl: '/uploads/a.jpg', fileName: 'a.jpg', mimeType: 'image/jpeg' });
+          return { attached: true, photos: 1 };
+        }),
+      },
+      priceListData: { loadPriceIndex: jest.fn(async () => INDEX) },
+    });
+    deps.registry.schemas.push({ name: 'send_price_list' });
+    // Первая попытка: инструмент сработал, но пока думали — пришло входящее.
+    deps.history.hasIncomingAfter
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(false);
+    deps.provider.createMessage
+      .mockResolvedValueOnce({ text: '', toolCalls: [{ id: 't1', name: 'send_price_list', input: { category: 'c12' } }], assistantMsg: {} })
+      .mockResolvedValueOnce({ text: 'Черновик', toolCalls: [], assistantMsg: {} })
+      .mockResolvedValueOnce({ text: 'Финальный ответ', toolCalls: [], assistantMsg: {} });
+
+    const res = await orchestrator.runDialog(1, 'k', { deps, ctx: { phone: '79001112233', channel: 'whatsapp' } });
+    expect(res.replies).toEqual(['Финальный ответ']);
+    expect(res.attachments).toHaveLength(0);   // фото первой попытки не уехали
+  });
+
+  test('сбой загрузки прайсов не роняет ход', async () => {
+    const deps = makeDeps({
+      priceListData: { loadPriceIndex: jest.fn(async () => { throw new Error('db down'); }) },
+    });
+    deps.provider.createMessage.mockResolvedValueOnce({ text: 'Здравствуйте', toolCalls: [], assistantMsg: {} });
+    const res = await orchestrator.runDialog(1, 'k', { deps, ctx: { phone: '79001112233', channel: 'whatsapp' } });
+    expect(res.replies).toEqual(['Здравствуйте']);
+  });
+
+  test('send_price_list не объявлен side-effect-инструментом', () => {
+    const src = require('fs').readFileSync(require.resolve('./services/agent/orchestrator'), 'utf8');
+    const m = /SIDE_EFFECT_TOOLS = new Set\(\[([\s\S]*?)\]\)/.exec(src);
+    expect(m).toBeTruthy();
+    expect(m[1]).not.toContain('send_price_list');
   });
 });
