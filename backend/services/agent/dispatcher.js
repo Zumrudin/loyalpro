@@ -14,6 +14,7 @@ const groupChat = require('./group-chat');
 const toolEventsDefault = require('./tool-events');
 const chatPersist = require('../chat-persist');
 const deliveryWatchdog = require('./delivery-watchdog');
+const priceListData = require('./price-list-data');
 const { createLogger } = require('../../logger');
 const logger = createLogger('AgentDispatcher');
 
@@ -84,6 +85,18 @@ async function process(salonId, dialogKey, meta, opts = {}) {
   // внутри реализаций (инжектированный мок тоже не должен ломать серию).
   const persistOwn = opts.persistOwn || defaultPersistOwn;
   const deliveryLog = opts.deliveryLog || deliveryWatchdog;
+  // Отправка вложений (фото прайса). Отдельная точка от send: у файла нет текста,
+  // поэтому ни pendingReplies, ни журнал авторства ему не нужны — эхо с текстом
+  // не придёт. Персист в «Чат» нужен: иначе в админке диалог выглядит как
+  // «клиент попросил прайс — Мила молчит».
+  const rawSendFile = opts.sendFile || defaultSendFile;
+  const persistOwnFile = opts.persistOwnFile || defaultPersistOwnFile;
+  const sendAttachment = async (m, att) => {
+    const out = await rawSendFile(m, att);
+    if (!out) return;
+    try { await persistOwnFile(salonId, dialogKey, m, att, out); }
+    catch (e) { logger.warn(`dialog ${dialogKey}: фото прайса не легло в «Чат» (${e.message})`); }
+  };
   const send = async (m, text) => {
     const out = await rawSend(m, text);
     pendingReplies.remember(salonId, dialogKey, text);
@@ -111,9 +124,17 @@ async function process(salonId, dialogKey, meta, opts = {}) {
   // Мила повторила бы пациенту уже сказанное (включая приветствие), то есть ровно
   // тот инцидент, ради которого журнал и заводится. Ни компилятор, ни тесты этого
   // не поймают, поэтому флаг выставляет сама естественная запись отправки.
-  const deliverReplies = async (list) => {
+  const deliverReplies = async (list, attachments) => {
     for (const text of list) await send(meta, text);
     deliveredReplies = list.length > 0;
+    // Вложения ВНУТРИ хелпера намеренно: веток, где реплики не доставляются,
+    // уже пять, и отдельный вызов рядом с ними рано или поздно забыли бы —
+    // фото ушло бы к погашенной лжи или к выброшенному черновику.
+    // Сбой одного файла не отменяет остальные и не роняет ход: текст доставлен.
+    for (const att of (attachments || [])) {
+      try { await sendAttachment(meta, att); }
+      catch (e) { logger.warn(`dialog ${dialogKey}: фото прайса «${att.category}» не ушло (${e.message})`); }
+    }
   };
 
   // Гейт — ВНЕ общего try: его падение fail-closed (молчим). Мы не знаем, разрешён
@@ -150,7 +171,7 @@ async function process(salonId, dialogKey, meta, opts = {}) {
       const stopTopics = settings.loadStopTopicsSafe
         ? await settings.loadStopTopicsSafe(salonId) : [];
       const res = await orchestrator.runDialog(salonId, dialogKey,
-        { ctx: { phone: meta.phone }, stopTopics });
+        { ctx: { phone: meta.phone, channel: meta.channel }, stopTopics });
       // Доставляем реплики, в т.ч. на ходе эскалации — это явное объявление о переводе.
       // Инвариант: при СВЕЖЕЙ эскалации клиент никогда не остаётся без сообщения.
       const replies = (res.replies || []).filter((t) => t && t.trim());
@@ -184,7 +205,7 @@ async function process(salonId, dialogKey, meta, opts = {}) {
           && !(await priorBookingFailure(salonId, dialogKey));
         if (canRecover) {
           logger.info(`dialog ${dialogKey}: create_booking не удался, но бот переиграл (предложил другое время) — доставляю без перевода`);
-          await deliverReplies(replies);
+          await deliverReplies(replies, res.attachments);
         } else {
           logger.warn(`dialog ${dialogKey}: create_booking не удался, переигровки нет либо повторный провал — принудительный перевод на человека`);
           await handOverSilently(salonId, dialogKey, meta, send, escalate, 'create_booking не удался — запись не создана автоматически');
@@ -193,7 +214,7 @@ async function process(salonId, dialogKey, meta, opts = {}) {
         // Свежая эскалация: клиент ОБЯЗАН услышать про перевод на администратора.
         // Модель могла ответить по делу («Спасибо, что предупредили»), но забыть
         // объявить перевод — тогда добавляем стандартную фразу детерминированно.
-        await deliverReplies(replies);
+        await deliverReplies(replies, res.attachments);
         // handoverText — фиксированная системная фраза, а не факт хода: она уходит
         // ПОСЛЕ хелпера и на вердикт delivered намеренно не влияет.
         const announced = replies.some(t => /администратор/i.test(t));
@@ -217,7 +238,7 @@ async function process(salonId, dialogKey, meta, opts = {}) {
         // не выбрасываются — подтверждение обязано дойти.
         logger.info(`dialog ${dialogKey}: новое сообщение до отправки — выбрасываю устаревший черновик, отвечу одним сообщением`);
       } else {
-        await deliverReplies(replies);
+        await deliverReplies(replies, res.attachments);
       }
     } finally {
       running.delete(k);
@@ -311,10 +332,43 @@ async function defaultPersistOwn(salonId, dialogKey, meta, text, delivery) {
   });
 }
 
+// Отправка одного фото прайса. Файл читается price-list-data (единственное
+// место, где живёт путь к uploads и гейт «только /uploads/»).
+async function defaultSendFile(meta, att) {
+  const token = config.CHATPUSH.instanceToken;
+  if (!token) { logger.error('CHATPUSH_INSTANCE_TOKEN not set — cannot send price photo'); return null; }
+  const buf = await priceListData.readPhotoBuffer(att.fileUrl);
+  if (!buf) { logger.warn(`фото прайса не найдено на диске: ${att.fileUrl}`); return null; }
+  // Имя обязано содержать расширение (требование Chatpush); кириллицу не шлём.
+  const ext = (String(att.fileName || '').match(/\.[A-Za-z0-9]+$/) || ['.jpg'])[0];
+  const delivery = await chatpush.sendFile(token, {
+    fileName: `price_${Date.now()}${ext}`,
+    type: 'image',
+    phone: meta.phone,
+    dispatchRouting: [chatpush.replyRoutingFor(meta.channel)],
+  }, buf, att.mimeType);
+  logger.info(`price photo ${meta.phone || ''} принято в доставку (delivery=${delivery && delivery.id != null ? delivery.id : 'n/a'}): ${att.category}`);
+  return delivery;
+}
+
+// Своё фото в «Чате». Как и у текста: эхо WhatsApp может не прийти вовсе.
+async function defaultPersistOwnFile(salonId, dialogKey, meta, att, delivery) {
+  if (!delivery || delivery.id == null) return;
+  if (meta.channel !== 'whatsapp') return;
+  await chatPersist.persistWhatsappOutgoing(salonId, {
+    delivery, phone: meta.phone, chatId: meta.chatId,
+    text: `📎 Прайс-лист: ${att.category}`,
+    msgType: 'image', fileUrl: null, mimeType: att.mimeType, authoredBy: 'agent',
+  });
+}
+
 // Сброс in-memory состояния — только для тестов.
 function _reset() {
   for (const { timer } of timers.values()) clearTimeout(timer);
   timers.clear(); running.clear(); rerun.clear();
 }
 
-module.exports = { enqueue, process, defaultSend, defaultPersistOwn, _reset };
+module.exports = {
+  enqueue, process, defaultSend, defaultPersistOwn,
+  defaultSendFile, defaultPersistOwnFile, _reset,
+};

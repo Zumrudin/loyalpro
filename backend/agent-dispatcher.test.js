@@ -600,3 +600,56 @@ test('defaultSend пишет delivery_id в лог', async () => {
     config.CHATPUSH.instanceToken = prevToken;
   }
 });
+
+describe('фото прайса', () => {
+  const ATT = [{ nodeKey: 'c12', category: 'Лазерная эпиляция', fileUrl: '/uploads/a.jpg', fileName: 'a.jpg', mimeType: 'image/jpeg' }];
+  const withFiles = (over) => deps({
+    sendFile: jest.fn(async () => ({ id: 7 })),
+    persistOwnFile: jest.fn(async () => {}),
+    ...over,
+  });
+
+  test('обычный ход: сначала текст, потом фото', async () => {
+    const d = withFiles({
+      orchestrator: { runDialog: jest.fn(async () => ({ replies: ['Отправляю прайс'], attachments: ATT, escalated: false })) },
+    });
+    dispatcher.enqueue(1, 'k', meta, d);
+    await jest.advanceTimersByTimeAsync(1000);
+    expect(d.send).toHaveBeenCalledWith(meta, 'Отправляю прайс');
+    expect(d.sendFile).toHaveBeenCalledTimes(1);
+    expect(d.sendFile.mock.calls[0][1]).toMatchObject({ fileUrl: '/uploads/a.jpg' });
+  });
+
+  test('ложный успех: реплика погашена — фото тоже не уходит', async () => {
+    const d = withFiles({
+      orchestrator: { runDialog: jest.fn(async () => ({
+        replies: ['Я вас записала'], attachments: ATT,
+        falseSuccess: true, falseSuccessKind: 'booked', escalated: false,
+      })) },
+    });
+    dispatcher.enqueue(1, 'k', meta, d);
+    await jest.advanceTimersByTimeAsync(1000);
+    expect(d.sendFile).not.toHaveBeenCalled();
+  });
+
+  test('сбой отправки файла не роняет ход — текст уже доставлен', async () => {
+    const d = withFiles({
+      orchestrator: { runDialog: jest.fn(async () => ({ replies: ['Отправляю прайс'], attachments: ATT, escalated: false })) },
+      sendFile: jest.fn(async () => { throw new Error('chatpush 502'); }),
+    });
+    dispatcher.enqueue(1, 'k', meta, d);
+    await jest.advanceTimersByTimeAsync(1000);
+    expect(d.send).toHaveBeenCalledWith(meta, 'Отправляю прайс');
+    expect(mockLogger.warn.mock.calls.some(c => /фото прайса/.test(c[0]))).toBe(true);
+  });
+
+  test('канал доезжает до оркестратора: без него send_price_list не знает про файлы', async () => {
+    const d = withFiles({
+      orchestrator: { runDialog: jest.fn(async () => ({ replies: ['ок'], escalated: false })) },
+    });
+    dispatcher.enqueue(1, 'k', meta, d);
+    await jest.advanceTimersByTimeAsync(1000);
+    expect(d.orchestrator.runDialog.mock.calls[0][2].ctx)
+      .toMatchObject({ phone: meta.phone, channel: 'whatsapp' });
+  });
+});
