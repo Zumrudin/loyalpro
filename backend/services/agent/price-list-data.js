@@ -41,7 +41,12 @@ async function loadPriceIndex(salonId) {
 // file_url — единственное, что связывает БД с файловой системой.
 function safeAbs(relUrl) {
   if (!relUrl || typeof relUrl !== 'string' || !relUrl.startsWith('/uploads/')) return null;
-  return path.join(uploadsDir, path.basename(relUrl));
+  const base = path.basename(relUrl);
+  // ГОТЧА: `path.basename('/uploads/..')` — это `'..'`, и одного префикса мало:
+  // путь ушёл бы на РОДИТЕЛЬСКИЙ каталог, а `existsSync` на каталоге истинен —
+  // битая строка проехала бы фильтр живых фото и обещала модели вложение.
+  if (!base || base === '.' || base === '..') return null;
+  return path.join(uploadsDir, base);
 }
 
 async function readPhotoBuffer(relUrl) {

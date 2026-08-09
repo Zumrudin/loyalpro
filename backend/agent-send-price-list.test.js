@@ -51,6 +51,21 @@ test('своих фото нет — берутся родительские (п
   expect(c.attachments).toHaveLength(1);
 });
 
+test('подкатегория и её родитель в одном ходу не шлют одни и те же фото дважды', async () => {
+  const c = ctx({
+    priceIndex: priceList.buildIndex({
+      categories: [{ id: 30, title: 'Инъекции' }],
+      subcats: [{ id: 7, yc_category_id: 30, parent_id: null, title: 'Биоревитализация' }],
+      photos: [{ id: 9, yc_category_id: 30, subcategory_id: null, file_url: '/uploads/x.jpg', file_name: 'x.jpg', mime_type: 'image/jpeg' }],
+      priceListUrl: null,
+    }),
+  });
+  await tool.run(1, { category: 's7' }, c);          // взяла родительские фото
+  const res = await tool.run(1, { category: 'c30' }, c);   // тот же источник
+  expect(res.already_attached).toBe(true);
+  expect(c.attachments).toHaveLength(1);
+});
+
 test('фото нет вовсе → no_photo + ссылка на сайт, буфер пуст', async () => {
   const c = ctx();
   const res = await tool.run(1, { category: 'c30' }, c);

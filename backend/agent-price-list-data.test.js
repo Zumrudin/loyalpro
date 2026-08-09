@@ -37,4 +37,8 @@ test('readPhotoBuffer не выходит за /uploads/', async () => {
   expect(await data.readPhotoBuffer('/etc/passwd')).toBeNull();
   expect(await data.readPhotoBuffer('')).toBeNull();
   expect(await data.readPhotoBuffer(null)).toBeNull();
+  // `path.basename('/uploads/..')` = '..' — префикса мало, иначе путь ушёл бы
+  // на родительский каталог, а existsSync на каталоге истинен.
+  expect(await data.readPhotoBuffer('/uploads/..')).toBeNull();
+  expect(await data.readPhotoBuffer('/uploads/../../etc/passwd')).toBeNull();
 });

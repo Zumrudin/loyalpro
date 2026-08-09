@@ -5,6 +5,9 @@
 // а отправляет их диспетчер вместе с текстовой репликой. ЗАЧЕМ так: отправка
 // внутри tool-цикла была бы side-effect'ом, и ход перестал бы выбрасываться при
 // серии сообщений — клиент получал бы картинку без слов либо дубль ответа.
+// КОНТРАКТ С ВЫЗЫВАЮЩИМ: `ctx.attachments` — НОВЫЙ массив на КАЖДУЮ попытку
+// хода. Переиспользованный между перегенерациями буфер увёз бы пациенту фото
+// от ЧЕРНОВИКА, который выброшен и текстом до него не дошёл.
 const priceList = require('../price-list');
 
 // Chatpush send_file умеет файлы только в этих каналах.
@@ -43,7 +46,12 @@ async function run(salonId, input, ctx = {}) {
   }
   const url = ctx.priceIndex.priceListUrl || null;
 
-  if (bucket.some(a => a.nodeKey === found.node.key)) {
+  // Дедуп по узлу-ИСТОЧНИКУ фото, а не по запрошенному: у подкатегории своих
+  // листов может не быть, и она отдаёт родительские — вопрос про подкатегорию
+  // И про её направление в одном ходу прислал бы пациенту одни и те же
+  // картинки дважды под двумя названиями.
+  const sourceKey = found.inheritedFrom || found.node.key;
+  if (bucket.some(a => a.sourceKey === sourceKey)) {
     return { attached: true, already_attached: true, category: found.node.title, hint: HINT_ATTACHED };
   }
   if (!found.photos.length) {
@@ -59,7 +67,7 @@ async function run(salonId, input, ctx = {}) {
   const take = found.photos.slice(0, free);
   for (const p of take) {
     bucket.push({
-      nodeKey: found.node.key, category: found.node.title,
+      nodeKey: found.node.key, sourceKey, category: found.node.title,
       fileUrl: p.fileUrl, fileName: p.fileName, mimeType: p.mimeType,
     });
   }
