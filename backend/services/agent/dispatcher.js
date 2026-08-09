@@ -126,6 +126,17 @@ async function process(salonId, dialogKey, meta, opts = {}) {
   // не поймают, поэтому флаг выставляет сама естественная запись отправки.
   const deliverReplies = async (list, attachments) => {
     for (const text of list) await send(meta, text);
+    // РАЗМЕН (находка C3 ревью): deliveredReplies считается ТОЛЬКО по тексту,
+    // а не по фото ниже. Это осознанно, а не забытая деталь: markDelivered —
+    // вердикт на ВЕСЬ ход в целом (см. finally в process()), и если бы упавшее
+    // фото гасило его до false, мы стёрли бы из памяти всё остальное, что
+    // модель ПОКАЗАЛА пациенту текстом в этом же ходу (слоты, цены) — на
+    // следующем ходу Мила начала бы повторяться. Цена размена: если ВСЕ фото
+    // упали, а текст ушёл, следующий ход всё равно прочитает в «ЖУРНАЛЕ ТВОИХ
+    // ДЕЙСТВИЙ» «отправила пациенту фото прайс-листа» и может на него
+    // сослаться («я же присылала прайс»), хотя фото не дошло. Разбор такого
+    // случая опирается на лог ниже (fileUrl+категория+причина) — правь его
+    // одновременно с любой правкой этого места.
     deliveredReplies = list.length > 0;
     // Вложения ВНУТРИ хелпера намеренно: веток, где реплики не доставляются,
     // уже пять, и отдельный вызов рядом с ними рано или поздно забыли бы —
@@ -133,7 +144,7 @@ async function process(salonId, dialogKey, meta, opts = {}) {
     // Сбой одного файла не отменяет остальные и не роняет ход: текст доставлен.
     for (const att of (attachments || [])) {
       try { await sendAttachment(meta, att); }
-      catch (e) { logger.warn(`dialog ${dialogKey}: фото прайса «${att.category}» не ушло (${e.message})`); }
+      catch (e) { logger.warn(`dialog ${dialogKey}: фото прайса «${att.category}» (${att.fileUrl}) не ушло (${e.message})`); }
     }
   };
 
@@ -352,13 +363,17 @@ async function defaultSendFile(meta, att) {
 }
 
 // Своё фото в «Чате». Как и у текста: эхо WhatsApp может не прийти вовсе.
+// fileUrl — реальный att.fileUrl (например /uploads/pricelist_1_c12_...jpg), НЕ
+// null: файл отдаётся статикой, фронт чата (_chatSafeUrl в chat.js) корректно
+// рендерит корневые относительные пути ссылкой «📎 Вложение». С null админ видел
+// в переписке безликое «Вложение» без возможности открыть сам файл.
 async function defaultPersistOwnFile(salonId, dialogKey, meta, att, delivery) {
   if (!delivery || delivery.id == null) return;
   if (meta.channel !== 'whatsapp') return;
   await chatPersist.persistWhatsappOutgoing(salonId, {
     delivery, phone: meta.phone, chatId: meta.chatId,
     text: `📎 Прайс-лист: ${att.category}`,
-    msgType: 'image', fileUrl: null, mimeType: att.mimeType, authoredBy: 'agent',
+    msgType: 'image', fileUrl: att.fileUrl, mimeType: att.mimeType, authoredBy: 'agent',
   });
 }
 

@@ -653,3 +653,100 @@ describe('фото прайса', () => {
       .toMatchObject({ phone: meta.phone, channel: 'whatsapp' });
   });
 });
+
+// ── Находка C2 ревью: у текстовых defaultSend/defaultPersistOwn есть тесты,
+// у файловых близнецов defaultSendFile/defaultPersistOwnFile их не было. ──
+describe('defaultSendFile / defaultPersistOwnFile', () => {
+  const ATT = { nodeKey: 'c12', category: 'Лазерная эпиляция', fileUrl: '/uploads/a.jpg', fileName: 'a.jpg', mimeType: 'image/jpeg' };
+
+  test('нет токена → null, ERROR в лог, отправки нет', async () => {
+    const chatpush = require('./services/chatpush');
+    const config = require('./config');
+    const prevToken = config.CHATPUSH.instanceToken;
+    config.CHATPUSH.instanceToken = '';
+    const sendFileSpy = jest.spyOn(chatpush, 'sendFile');
+    try {
+      const out = await dispatcher.defaultSendFile(meta, ATT);
+      expect(out).toBeNull();
+      expect(sendFileSpy).not.toHaveBeenCalled();
+      expect(mockLogger.error).toHaveBeenCalledWith(expect.stringContaining('CHATPUSH_INSTANCE_TOKEN'));
+    } finally {
+      sendFileSpy.mockRestore();
+      config.CHATPUSH.instanceToken = prevToken;
+    }
+  });
+
+  test('файла нет на диске → null, WARN в лог, отправки нет', async () => {
+    const chatpush = require('./services/chatpush');
+    const config = require('./config');
+    const priceListData = require('./services/agent/price-list-data');
+    const prevToken = config.CHATPUSH.instanceToken;
+    config.CHATPUSH.instanceToken = 'tok';
+    const readSpy = jest.spyOn(priceListData, 'readPhotoBuffer').mockResolvedValue(null);
+    const sendFileSpy = jest.spyOn(chatpush, 'sendFile');
+    try {
+      const out = await dispatcher.defaultSendFile(meta, ATT);
+      expect(out).toBeNull();
+      expect(sendFileSpy).not.toHaveBeenCalled();
+      expect(mockLogger.warn).toHaveBeenCalledWith(expect.stringContaining(ATT.fileUrl));
+    } finally {
+      readSpy.mockRestore();
+      sendFileSpy.mockRestore();
+      config.CHATPUSH.instanceToken = prevToken;
+    }
+  });
+
+  test('успешный путь → зовёт chatpush.sendFile с ожидаемой формой аргументов, пишет delivery=<id> в лог', async () => {
+    const chatpush = require('./services/chatpush');
+    const config = require('./config');
+    const priceListData = require('./services/agent/price-list-data');
+    const prevToken = config.CHATPUSH.instanceToken;
+    config.CHATPUSH.instanceToken = 'tok';
+    const buf = Buffer.from('fake-image');
+    const readSpy = jest.spyOn(priceListData, 'readPhotoBuffer').mockResolvedValue(buf);
+    const sendFileSpy = jest.spyOn(chatpush, 'sendFile').mockResolvedValue({ id: 999 });
+    try {
+      const out = await dispatcher.defaultSendFile(meta, ATT);
+      expect(out).toEqual({ id: 999 });
+      expect(readSpy).toHaveBeenCalledWith(ATT.fileUrl);
+      expect(sendFileSpy).toHaveBeenCalledWith(
+        'tok',
+        expect.objectContaining({
+          type: 'image',
+          phone: meta.phone,
+          fileName: expect.stringMatching(/\.jpg$/),
+          dispatchRouting: expect.any(Array),
+        }),
+        buf,
+        ATT.mimeType,
+      );
+      expect(mockLogger.info).toHaveBeenCalledWith(expect.stringContaining('delivery=999'));
+    } finally {
+      readSpy.mockRestore();
+      sendFileSpy.mockRestore();
+      config.CHATPUSH.instanceToken = prevToken;
+    }
+  });
+
+  test('defaultPersistOwnFile: WhatsApp — своя строка с реальным fileUrl и авторством agent', async () => {
+    const persist = require('./services/chat-persist');
+    const spy = jest.spyOn(persist, 'persistWhatsappOutgoing').mockResolvedValue(undefined);
+    try {
+      await dispatcher.defaultPersistOwnFile(1, 'k', meta, ATT, { id: 555 });
+      expect(spy).toHaveBeenCalledWith(1, expect.objectContaining({
+        delivery: { id: 555 }, phone: meta.phone, fileUrl: ATT.fileUrl,
+        mimeType: ATT.mimeType, msgType: 'image', authoredBy: 'agent',
+      }));
+    } finally { spy.mockRestore(); }
+  });
+
+  test('defaultPersistOwnFile: tdlib/max не трогаем — их строку кладёт эхо вебхука', async () => {
+    const persist = require('./services/chat-persist');
+    const spy = jest.spyOn(persist, 'persistWhatsappOutgoing').mockResolvedValue(undefined);
+    try {
+      await dispatcher.defaultPersistOwnFile(1, 'k', { ...meta, channel: 'tdlib' }, ATT, { id: 555 });
+      await dispatcher.defaultPersistOwnFile(1, 'k', meta, ATT, undefined);
+      expect(spy).not.toHaveBeenCalled();
+    } finally { spy.mockRestore(); }
+  });
+});
