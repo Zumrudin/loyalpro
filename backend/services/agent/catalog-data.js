@@ -159,6 +159,11 @@ async function loadCatalogServices(salonId) {
 // названия держат в БД, а направления — только в YClients). Набор мастеров тот
 // же, что в loadCatalogServices, поэтому в пределах TTL это попадание в кэш
 // ycGetServiceCatalog, а не лишний запрос в API.
+// ГОТЧА: попадание в кэш держится ТОЛЬКО на том, что loadCatalogServices (каталог
+// услуг в промпте) прогревает ycGetServiceCatalog ПРЯМО ПЕРЕД этим вызовом, а сама
+// она собирается лишь при включённом флаге AGENT_CATALOG_IN_PROMPT. Если флаг
+// выключить, кэш будет пуст и loadCategoryTitles на КАЖДОМ ходу пойдёт живым
+// запросом в YClients — тихая деградация, которую ничего не диагностирует.
 async function loadCategoryTitles(salonId) {
   const salon = await db.oneOrNone(
     `SELECT id, yclients_company_id, yclients_partner_token, yclients_user_token

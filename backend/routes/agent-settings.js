@@ -9,9 +9,19 @@ const fs = require('fs');
 const multer = require('multer');
 const { auth, requireRole } = require('../middleware/auth');
 const settings = require('../services/agent-settings');
+const priceListData = require('../services/agent/price-list-data');
 const { imageFileFilter } = require('../utils/upload-validator');
 const { createLogger } = require('../logger');
 const logger = createLogger('AgentSettings');
+
+// Best-effort сброс TTL-кэша индекса прайсов (price-list-data.js) после мутации:
+// сбой сброса не имеет права ронять ответ ручки, но без него администратор до
+// минуты недоумевал бы, почему загруженное/удалённое/переупорядоченное фото
+// Мила не видит (или видит устаревший порядок).
+function invalidatePriceIndex(salonId) {
+  try { priceListData.invalidate(salonId); }
+  catch (e) { logger.warn(`не сбросить кэш индекса прайсов (${e.message})`); }
+}
 
 const adminOnly = [auth, requireRole('owner', 'admin')];
 
@@ -248,6 +258,7 @@ router.post('/price-photos', adminOnly, (req, res) => {
           ycCategoryId: cat, subcategoryId: sub, fileUrl, fileName,
           mimeType: req.file.mimetype, byteSize: req.file.size,
         });
+        invalidatePriceIndex(req.user.salonId);
         res.json({ id: row.id, fileUrl });
       } catch (e) {
         safeUnlink(fileUrl);   // строка не легла — файл на диске не оставляем
@@ -264,8 +275,11 @@ router.post('/price-photos', adminOnly, (req, res) => {
 // PUT /api/agent/price-photos/reorder { items:[{id, displayOrder}] }
 // Объявлено ДО /:id, чтобы 'reorder' не поймался path-матчером как id.
 router.put('/price-photos/reorder', adminOnly, async (req, res) => {
-  try { res.json(await settings.reorderPricePhotos(req.user.salonId, (req.body || {}).items)); }
-  catch (e) { logger.error(e.message); res.status(500).json({ error: 'server error' }); }
+  try {
+    const out = await settings.reorderPricePhotos(req.user.salonId, (req.body || {}).items);
+    invalidatePriceIndex(req.user.salonId);
+    res.json(out);
+  } catch (e) { logger.error(e.message); res.status(500).json({ error: 'server error' }); }
 });
 
 // DELETE /api/agent/price-photos/:id
@@ -273,6 +287,7 @@ router.delete('/price-photos/:id', adminOnly, async (req, res) => {
   try {
     const row = await settings.removePricePhoto(req.user.salonId, parseInt(req.params.id, 10));
     if (row) safeUnlink(row.file_url);
+    invalidatePriceIndex(req.user.salonId);
     res.json({ ok: true });
   } catch (e) { logger.error(e.message); res.status(500).json({ error: 'server error' }); }
 });
