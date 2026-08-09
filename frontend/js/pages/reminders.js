@@ -619,8 +619,11 @@ function remRenderHistory(rows) {
     const st = REM_STATUS[r.status] || { lbl: r.status, color: '#9ca3af' };
     const bonus = r.bonusAccrued ? `+${r.bonusAccrued}` : (REM_TIER_LBL[r.bonusTier] || '—');
     // Запланированные строки тоже живут в этой таблице (фильтр «Запланировано»):
-    // отдельной вкладки очереди нет, и время у них своё — scheduled_at.
-    const when = r.status === 'scheduled' ? r.scheduledAt : r.sentAt;
+    // отдельной вкладки очереди нет, и время у них своё — scheduled_at. У
+    // отменённых и пропущенных `sent_at` пуст ВСЕГДА, и колонка «Когда» у них
+    // показывала «—»: непонятно даже, к какому дню строка относилась. Падаем
+    // на плановое время — оно есть у любой строки очереди (NOT NULL).
+    const when = r.sentAt || r.scheduledAt;
     // Полный текст — в title: в ячейке он обрезан 200 символами, и до правки
     // прочитать отправленное целиком было негде.
     const full = r.text || '';
