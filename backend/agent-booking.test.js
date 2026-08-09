@@ -289,6 +289,7 @@ describe('tools registry', () => {
       'get_available_slots', 'get_client', 'get_client_visit_history', 'get_parallel_slots',
       'get_sequential_slots', 'list_client_bookings', 'list_services', 'list_staff', 'modify_booking_services',
       'reschedule_booking', 'search_knowledge_base', 'get_bonus_balance', 'get_client_abonements',
+      'send_price_list',
     ].sort());
     for (const n of names) expect(typeof registry.handlers[n]).toBe('function');
   });
