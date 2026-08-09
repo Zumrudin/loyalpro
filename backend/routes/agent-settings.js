@@ -216,30 +216,49 @@ router.get('/price-photos', adminOnly, async (req, res) => {
 });
 
 // POST /api/agent/price-photos — multipart: file + ycCategoryId | subcategoryId
-router.post('/price-photos', adminOnly, priceUpload.single('file'), async (req, res) => {
-  try {
+// Multer навешан вручную (не как обычный middleware): нужно поймать её ошибки
+// (не-картинка, файл > 5 МБ) самим и вернуть внятный 400, а не голый 500
+// Express (см. тот же приём в routes/portfolio.js POST /categories/:id/cover).
+router.post('/price-photos', adminOnly, (req, res) => {
+  priceUpload.single('file')(req, res, async (err) => {
+    if (err) return res.status(400).json({ error: err.message });
     if (!req.file) return res.status(400).json({ error: 'Файл не выбран или формат не поддерживается (JPEG, PNG, WEBP)' });
-    const { ycCategoryId, subcategoryId } = req.body || {};
-    const node = subcategoryId ? `s${subcategoryId}` : `c${ycCategoryId}`;
+
+    // Узел дерева ОБЯЗАН быть проверенным числом ДО того, как попадёт в имя
+    // файла на диске — сырую строку из тела запроса (`../../../tmp/evil`)
+    // в fs.writeFileSync пускать нельзя, это выход за пределы uploads/.
+    const rawCat = (req.body || {}).ycCategoryId;
+    const rawSub = (req.body || {}).subcategoryId;
+    const cat = rawCat == null || rawCat === '' ? null : Number(rawCat);
+    const sub = rawSub == null || rawSub === '' ? null : Number(rawSub);
+    const catOk = cat == null || Number.isInteger(cat);
+    const subOk = sub == null || Number.isInteger(sub);
+    if (!catOk || !subOk || (cat == null) === (sub == null)) {
+      return res.status(400).json({ error: 'Не указана категория или подкатегория' });
+    }
+
+    const node = sub != null ? `s${sub}` : `c${cat}`;
     const ext = (req.file.originalname.match(/\.[A-Za-z0-9]+$/) || ['.jpg'])[0];
     const fileName = `pricelist_${req.user.salonId}_${node}_${Date.now()}${ext}`;
     const fileUrl = `/uploads/${fileName}`;
-    fs.writeFileSync(path.join(uploadsDir, fileName), req.file.buffer);
     try {
-      const row = await settings.addPricePhoto(req.user.salonId, {
-        ycCategoryId, subcategoryId, fileUrl, fileName,
-        mimeType: req.file.mimetype, byteSize: req.file.size,
-      });
-      res.json({ id: row.id, fileUrl });
+      fs.writeFileSync(path.join(uploadsDir, fileName), req.file.buffer);
+      try {
+        const row = await settings.addPricePhoto(req.user.salonId, {
+          ycCategoryId: cat, subcategoryId: sub, fileUrl, fileName,
+          mimeType: req.file.mimetype, byteSize: req.file.size,
+        });
+        res.json({ id: row.id, fileUrl });
+      } catch (e) {
+        safeUnlink(fileUrl);   // строка не легла — файл на диске не оставляем
+        throw e;
+      }
     } catch (e) {
-      safeUnlink(fileUrl);   // строка не легла — файл на диске не оставляем
-      throw e;
+      if (e.code === 'BAD_NODE') return res.status(400).json({ error: 'Не указана категория или подкатегория' });
+      if (e.code === 'PHOTO_LIMIT') return res.status(400).json({ error: `Больше ${settings.MAX_PRICE_PHOTOS_PER_NODE} фото на один раздел загрузить нельзя` });
+      logger.error(e.message); res.status(500).json({ error: 'server error' });
     }
-  } catch (e) {
-    if (e.code === 'BAD_NODE') return res.status(400).json({ error: 'Не указана категория или подкатегория' });
-    if (e.code === 'PHOTO_LIMIT') return res.status(400).json({ error: `Больше ${settings.MAX_PRICE_PHOTOS_PER_NODE} фото на один раздел загрузить нельзя` });
-    logger.error(e.message); res.status(500).json({ error: 'server error' });
-  }
+  });
 });
 
 // PUT /api/agent/price-photos/reorder { items:[{id, displayOrder}] }
