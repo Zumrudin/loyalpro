@@ -4,12 +4,34 @@
 // Тумблер вкл/выкл, режим допуска (all|whitelist), белый/чёрный списки номеров.
 // ============================================================
 const router = require('express').Router();
+const path = require('path');
+const fs = require('fs');
+const multer = require('multer');
 const { auth, requireRole } = require('../middleware/auth');
 const settings = require('../services/agent-settings');
+const { imageFileFilter } = require('../utils/upload-validator');
 const { createLogger } = require('../logger');
 const logger = createLogger('AgentSettings');
 
 const adminOnly = [auth, requireRole('owner', 'admin')];
+
+// ── multer storage для фото прайс-листа (имя файла собираем сами) ─────────
+const uploadsDir = path.join(__dirname, '../../frontend/uploads');
+if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
+
+const priceUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024 },
+  fileFilter: imageFileFilter,
+});
+
+function safeUnlink(relUrl) {
+  if (!relUrl || !relUrl.startsWith('/uploads/')) return;
+  const abs = path.join(uploadsDir, path.basename(relUrl));
+  fs.unlink(abs, (err) => {
+    if (err && err.code !== 'ENOENT') logger.warn(`unlink ${abs}: ${err.message}`);
+  });
+}
 
 // GET /api/agent/settings → { enabled, mode, scheduleEnabled, scheduleStart, scheduleEnd }
 router.get('/settings', adminOnly, async (req, res) => {
@@ -24,6 +46,8 @@ router.put('/settings', adminOnly, async (req, res) => {
   } catch (e) {
     if (e.code === 'BAD_TIME')
       return res.status(400).json({ error: 'Некорректное время расписания' });
+    if (e.code === 'BAD_URL')
+      return res.status(400).json({ error: 'Ссылка на прайс должна начинаться с http:// или https://' });
     logger.error(e.message); res.status(500).json({ error: 'server error' });
   }
 });
@@ -168,6 +192,68 @@ router.post('/service-placements', adminOnly, async (req, res) => {
 router.delete('/service-placements/:ycServiceId', adminOnly, async (req, res) => {
   try {
     await settings.unplaceService(req.user.salonId, parseInt(req.params.ycServiceId, 10));
+    res.json({ ok: true });
+  } catch (e) { logger.error(e.message); res.status(500).json({ error: 'server error' }); }
+});
+
+// ── Фото прайс-листа по узлам дерева услуг ──────────────────────────────────
+
+// GET /api/agent/price-photos → { photos:[{id,ycCategoryId,subcategoryId,fileUrl,fileName,displayOrder}] }
+router.get('/price-photos', adminOnly, async (req, res) => {
+  try {
+    const rows = await settings.listPricePhotos(req.user.salonId);
+    res.json({
+      photos: rows.map(r => ({
+        id: r.id,
+        ycCategoryId: r.yc_category_id == null ? null : String(r.yc_category_id),
+        subcategoryId: r.subcategory_id,
+        fileUrl: r.file_url,
+        fileName: r.file_name,
+        displayOrder: r.display_order,
+      })),
+    });
+  } catch (e) { logger.error(e.message); res.status(500).json({ error: 'server error' }); }
+});
+
+// POST /api/agent/price-photos — multipart: file + ycCategoryId | subcategoryId
+router.post('/price-photos', adminOnly, priceUpload.single('file'), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'Файл не выбран или формат не поддерживается (JPEG, PNG, WEBP)' });
+    const { ycCategoryId, subcategoryId } = req.body || {};
+    const node = subcategoryId ? `s${subcategoryId}` : `c${ycCategoryId}`;
+    const ext = (req.file.originalname.match(/\.[A-Za-z0-9]+$/) || ['.jpg'])[0];
+    const fileName = `pricelist_${req.user.salonId}_${node}_${Date.now()}${ext}`;
+    const fileUrl = `/uploads/${fileName}`;
+    fs.writeFileSync(path.join(uploadsDir, fileName), req.file.buffer);
+    try {
+      const row = await settings.addPricePhoto(req.user.salonId, {
+        ycCategoryId, subcategoryId, fileUrl, fileName,
+        mimeType: req.file.mimetype, byteSize: req.file.size,
+      });
+      res.json({ id: row.id, fileUrl });
+    } catch (e) {
+      safeUnlink(fileUrl);   // строка не легла — файл на диске не оставляем
+      throw e;
+    }
+  } catch (e) {
+    if (e.code === 'BAD_NODE') return res.status(400).json({ error: 'Не указана категория или подкатегория' });
+    if (e.code === 'PHOTO_LIMIT') return res.status(400).json({ error: `Больше ${settings.MAX_PRICE_PHOTOS_PER_NODE} фото на один раздел загрузить нельзя` });
+    logger.error(e.message); res.status(500).json({ error: 'server error' });
+  }
+});
+
+// PUT /api/agent/price-photos/reorder { items:[{id, displayOrder}] }
+// Объявлено ДО /:id, чтобы 'reorder' не поймался path-матчером как id.
+router.put('/price-photos/reorder', adminOnly, async (req, res) => {
+  try { res.json(await settings.reorderPricePhotos(req.user.salonId, (req.body || {}).items)); }
+  catch (e) { logger.error(e.message); res.status(500).json({ error: 'server error' }); }
+});
+
+// DELETE /api/agent/price-photos/:id
+router.delete('/price-photos/:id', adminOnly, async (req, res) => {
+  try {
+    const row = await settings.removePricePhoto(req.user.salonId, parseInt(req.params.id, 10));
+    if (row) safeUnlink(row.file_url);
     res.json({ ok: true });
   } catch (e) { logger.error(e.message); res.status(500).json({ error: 'server error' }); }
 });
