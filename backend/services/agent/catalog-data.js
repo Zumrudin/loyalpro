@@ -155,4 +155,23 @@ async function loadCatalogServices(salonId) {
   return services;
 }
 
-module.exports = { loadCatalogServices, GENERIC_SERVICE_TITLES, warnMissingGenericServices, matchesGenericTitle };
+// Названия ТОП-категорий YClients (для блока прайс-листов: подкатегории свои
+// названия держат в БД, а направления — только в YClients). Набор мастеров тот
+// же, что в loadCatalogServices, поэтому в пределах TTL это попадание в кэш
+// ycGetServiceCatalog, а не лишний запрос в API.
+async function loadCategoryTitles(salonId) {
+  const salon = await db.oneOrNone(
+    `SELECT id, yclients_company_id, yclients_partner_token, yclients_user_token
+       FROM salons WHERE id=$1`, [salonId]);
+  if (!salon || !salon.yclients_company_id) return [];
+  const staffRows = await db.any(
+    `SELECT yclients_staff_id FROM staff_members
+      WHERE salon_id=$1 AND is_active = true`, [salonId]);
+  const cat = await ycGetServiceCatalog(salon, staffRows.map(r => r.yclients_staff_id));
+  return (cat.categories || []).map(c => ({ id: c.id, title: c.title }));
+}
+
+module.exports = {
+  loadCatalogServices, GENERIC_SERVICE_TITLES, warnMissingGenericServices, matchesGenericTitle,
+  loadCategoryTitles,
+};
