@@ -477,6 +477,9 @@ const MAX_PRICE_PHOTOS_PER_NODE = 10;
 // Ссылка на прайс на сайте: пустое значение — законное «ссылки нет».
 // Схема ограничена http/https: строка уходит в системный промпт и оттуда
 // пациенту, и `javascript:`-ссылка в чате клиники недопустима.
+// ГРАНИЦА ОТВЕТСТВЕННОСТИ: тут только белый список СХЕМЫ. Строку, попавшую
+// в HTML-атрибут, экранирует рендер (в админке — `_asEsc`), этот валидатор
+// от инъекции в атрибут не защищает.
 function normalizePriceListUrl(raw) {
   const s = String(raw == null ? '' : raw).trim();
   if (!s) return null;
@@ -499,6 +502,11 @@ async function addPricePhoto(salonId, { ycCategoryId, subcategoryId, fileUrl, fi
   if ((cat == null) === (sub == null) || (cat != null && !Number.isFinite(cat)) || (sub != null && !Number.isFinite(sub))) {
     const e = new Error('нужен ровно один из ycCategoryId/subcategoryId'); e.code = 'BAD_NODE'; throw e;
   }
+  // Чтение перед вставкой БЕЗ блокировки: две одновременные загрузки в один
+  // узел (двойной клик, две вкладки) обе увидят «мест хватает» и дадут 11 фото.
+  // Размен осознанный — ручка админская и не горячая, а транзакция ради капа
+  // картинок тут дороже последствий. `db.one` здесь безопасен вопреки общей
+  // готче проекта: COUNT(*) без GROUP BY всегда возвращает ровно одну строку.
   const cur = await db.one(
     `SELECT COUNT(*)::int AS n, COALESCE(MAX(display_order), 0) + 1 AS next_order
        FROM agent_price_photos
