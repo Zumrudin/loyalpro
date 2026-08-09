@@ -17,7 +17,14 @@ const logger = createLogger('Chat');
 // перезагрузки. tdlib/max эхо шлют исправно, их сохраняет вебхук — не трогаем.
 // external_message_id = api:<delivery_id>: если эхо вернётся, вебхук дедупит по
 // нему (chatpush.deliveryIdFromWhatsappEchoId). ON CONFLICT — на случай гонки.
-async function persistWhatsappOutgoing(salonId, { delivery, phone, chatId, text, msgType, fileUrl, mimeType }) {
+// authoredBy — кто автор строки (`agent` | `operator` | `system` | null). До
+// 09.08.2026 персист его не выставлял вовсе, потому что им пользовались только
+// пути, чьё эхо всё равно приходило и проставляло автора само. Реплики Милы в
+// WhatsApp такого эха могут не дождаться (инцидент 2026-08-09): вебхук на нашей
+// же строке уходит в ветку дедупа и до classify не доходит, поэтому автора
+// обязан проставить сам отправитель — иначе в «Чате» ответ бота неотличим от
+// строки со сбоем классификации.
+async function persistWhatsappOutgoing(salonId, { delivery, phone, chatId, text, msgType, fileUrl, mimeType, authoredBy = null }) {
   if (!salonId || !delivery || delivery.id == null) return;
   let clientId = null;
   try {
@@ -34,12 +41,12 @@ async function persistWhatsappOutgoing(salonId, { delivery, phone, chatId, text,
   const ins = await db.query(
     `INSERT INTO chatpush_messages
        (salon_id, client_id, customer_id, channel, direction, external_message_id,
-        msg_type, text, file_url, mime_type, phone, chat_id, msg_ts)
-     VALUES ($1,$2,$3,'whatsapp','outgoing',$4,$5,$6,$7,$8,$9,$10,$11)
+        msg_type, text, file_url, mime_type, phone, chat_id, msg_ts, authored_by)
+     VALUES ($1,$2,$3,'whatsapp','outgoing',$4,$5,$6,$7,$8,$9,$10,$11,$12)
      ON CONFLICT (salon_id, external_message_id) DO NOTHING
      RETURNING id`,
     [salonId, clientId, config.CHATPUSH.customerId, externalId,
-     msgType, text || '', fileUrl, mimeType, phone, chatId, ts]
+     msgType, text || '', fileUrl, mimeType, phone, chatId, ts, authoredBy]
   );
   if (ins.rowCount > 0) {
     chatEvents.emit(salonId, {

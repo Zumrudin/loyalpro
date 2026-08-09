@@ -121,6 +121,17 @@ module.exports = {
   // По умолчанию ВКЛЮЧЕНО; аварийный рычаг — AGENT_CLOSING_SILENCE=false +
   // рестарт: Мила снова отвечает на каждое входящее, как до 06.08.2026.
   AGENT_CLOSING_SILENCE: process.env.AGENT_CLOSING_SILENCE !== 'false',
+  // Сторож доставки реплик Милы: Chatpush принял delivery (meta.status=success),
+  // но сообщение так и не ушло в мессенджер — ни статуса, ни эха (инцидент
+  // 2026-08-09, 79773115566). По умолчанию ВКЛЮЧЁН; аварийный рычаг
+  // AGENT_DELIVERY_WATCHDOG=false + рестарт гасит РОВНО проход-сторож (повтор
+  // отправки и перевод на администратора), ЗАПИСЬ журнала отправок идёт всегда —
+  // без неё у инцидента снова не будет ни delivery_id, ни текста реплики.
+  AGENT_DELIVERY_WATCHDOG: process.env.AGENT_DELIVERY_WATCHDOG !== 'false',
+  // Через сколько минут без подтверждения (статус доставки или эхо) реплика
+  // считается непрошедшей. Штатно подтверждение приходит за секунды.
+  AGENT_DELIVERY_WATCHDOG_MIN: process.env.AGENT_DELIVERY_WATCHDOG_MIN
+    ? parseInt(process.env.AGENT_DELIVERY_WATCHDOG_MIN, 10) : 5,
   // Провайдер базы знаний: 'aitunnel' | 'gemini' (старый релей/прямой вызов, откат).
   KB_PROVIDER:          process.env.KB_PROVIDER          || 'aitunnel',
 

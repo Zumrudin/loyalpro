@@ -1335,6 +1335,51 @@ async function runMigrations(client) {
       ON agent_tool_events (turn_id)
   `).catch(() => {});
 
+  // Журнал ОТПРАВОК реплик Милы: что именно ушло, с каким delivery_id и чем
+  // кончилось. ЗАЧЕМ отдельная таблица, а не колонка в chatpush_messages:
+  // (1) реплика в НЕ-WhatsApp каналы в chatpush_messages при отправке не
+  // ложится вовсе (её кладёт эхо), (2) повтор порождает ВТОРУЮ доставку того же
+  // текста — историю попыток некуда писать в строке сообщения.
+  // Инцидент 2026-08-09 (79773115566): sendMessage вернул meta.status=success,
+  // а в WhatsApp не ушло ничего — ни статуса, ни эха; delivery_id нигде не
+  // логировался, поэтому проверить судьбу сообщения постфактум было нечем.
+  // status: pending — ждём подтверждения; confirmed — статус/эхо пришли;
+  // retried — не подтвердилось, отправили повтор (см. retry_of у новой строки);
+  // failed — и повтор не подтвердился, диалог переведён на администратора;
+  // gone — сторож потерял строку из виду (см. delivery-watchdog.MAX_AGE_MIN).
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS agent_reply_deliveries (
+      id BIGSERIAL PRIMARY KEY,
+      salon_id INTEGER REFERENCES salons(id) ON DELETE CASCADE,
+      dialog_key VARCHAR(120) NOT NULL,
+      channel VARCHAR(20),
+      phone VARCHAR(32),
+      chat_id VARCHAR(120),
+      reply_to_message_id VARCHAR(160),
+      delivery_id VARCHAR(40) NOT NULL,
+      text TEXT NOT NULL,
+      status VARCHAR(16) NOT NULL DEFAULT 'pending',
+      retry_of BIGINT REFERENCES agent_reply_deliveries(id) ON DELETE SET NULL,
+      resolved_at TIMESTAMP,
+      created_at TIMESTAMP DEFAULT NOW()
+    )
+  `).catch(() => {});
+  // Ключ ровно под выборку сторожа (`status='pending' ORDER BY id`): по (created_at)
+  // планировщик добавлял к сканированию Sort — строки журнала берутся в порядке
+  // вставки, и городить второй ключ незачем.
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS agent_reply_deliveries_pending_idx
+      ON agent_reply_deliveries (id) WHERE status = 'pending'
+  `).catch(() => {});
+  // Подтверждение ищется по delivery_id в СЫРЫХ событиях: и статус доставки
+  // (message_status), и эхо кладут его в payload.payload.delivery_id. Фильтровать
+  // такой поиск по salon_id НЕЛЬЗЯ — у message_status salon_id всегда NULL
+  // (проверено на проде: 580 строк из 580); delivery_id глобально уникален.
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS chatpush_events_delivery_idx
+      ON chatpush_events ((payload->'payload'->>'delivery_id'))
+  `).catch(() => {});
+
   // agent_settings — настройки ИИ-агента по салону (вкл/выкл + режим допуска).
   await client.query(`
     CREATE TABLE IF NOT EXISTS agent_settings (

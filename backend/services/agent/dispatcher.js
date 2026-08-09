@@ -12,6 +12,8 @@ const escalateTool = require('./tools/escalate-to-operator');
 const adminHours = require('./admin-hours');
 const groupChat = require('./group-chat');
 const toolEventsDefault = require('./tool-events');
+const chatPersist = require('../chat-persist');
+const deliveryWatchdog = require('./delivery-watchdog');
 const { createLogger } = require('../../logger');
 const logger = createLogger('AgentDispatcher');
 
@@ -77,12 +79,21 @@ async function process(salonId, dialogKey, meta, opts = {}) {
   // Журнал tool-цикла: оркестратор флашит события хода с delivered=null, вердикт
   // «пациент это видел» знает только диспетчер — он и проставляет его ниже.
   const toolEventsLog = opts.toolEvents || toolEventsDefault;
+  // Своя реплика в «Чате» и журнал отправок — оба best-effort и оба не имеют
+  // права уронить доставку, поэтому вызовы обёрнуты try/catch ЗДЕСЬ, а не только
+  // внутри реализаций (инжектированный мок тоже не должен ломать серию).
+  const persistOwn = opts.persistOwn || defaultPersistOwn;
+  const deliveryLog = opts.deliveryLog || deliveryWatchdog;
   const send = async (m, text) => {
     const out = await rawSend(m, text);
     pendingReplies.remember(salonId, dialogKey, text);
     // Без await: доставка следующей реплики не должна ждать служебной записи, а
     // эхо приходит секундами-минутами позже вставки. remember сам не бросает.
     authorLog.remember(salonId, dialogKey, text, 'agent');
+    try { await persistOwn(salonId, dialogKey, m, text, out); }
+    catch (e) { logger.warn(`dialog ${dialogKey}: своя реплика не легла в «Чат» (${e.message})`); }
+    try { await deliveryLog.record(salonId, dialogKey, m, text, out); }
+    catch (e) { logger.warn(`dialog ${dialogKey}: отправка не попала в журнал доставок (${e.message})`); }
     return out;
   };
   const escalate = opts.escalate || defaultEscalate;
@@ -276,8 +287,28 @@ async function defaultSend(meta, text) {
   // Chatpush доставляет из очереди и с многоминутной задержкой (эхо в webhook
   // приходит только по факту доставки) — без этого лога успешный ход неотличим
   // от зависшего до прихода эха. Инцидент-диагностика 2026-07-26.
-  logger.info(`reply ${meta.phone || ''} принят в доставку: ${String(text).slice(0, 80)}`);
+  //
+  // delivery.id в строке ОБЯЗАТЕЛЕН: `meta.status=success` означает лишь «принято
+  // в очередь», и единственный способ узнать судьбу сообщения постфактум —
+  // `GET /api/v1/delivery/:id`. Инцидент 2026-08-09 (79773115566) разбирался
+  // вслепую именно потому, что id нигде не сохранялся: чужие id отдают 404, а
+  // свои разрежены среди глобальной нумерации Chatpush (~80 id в минуту).
+  logger.info(`reply ${meta.phone || ''} принят в доставку (delivery=${delivery && delivery.id != null ? delivery.id : 'n/a'}): ${String(text).slice(0, 80)}`);
   return delivery;
+}
+
+// Своя реплика в «Чате». tdlib/max эхо шлют исправно — их строку кладёт вебхук;
+// у WhatsApp эхо может не прийти вовсе, и тогда в админке диалог выглядит как
+// «клиент написал, Мила молчит» ровно в тот момент, когда разбираться и надо
+// (инцидент 2026-08-09). Остальные наши отправки — автоуведомления, «Забота»,
+// напоминания, ручной ответ оператора — персистят себя так же и давно.
+async function defaultPersistOwn(salonId, dialogKey, meta, text, delivery) {
+  if (!delivery || delivery.id == null) return;
+  if (meta.channel !== 'whatsapp') return;
+  await chatPersist.persistWhatsappOutgoing(salonId, {
+    delivery, phone: meta.phone, chatId: meta.chatId,
+    text, msgType: 'text', authoredBy: 'agent',
+  });
 }
 
 // Сброс in-memory состояния — только для тестов.
@@ -286,4 +317,4 @@ function _reset() {
   timers.clear(); running.clear(); rerun.clear();
 }
 
-module.exports = { enqueue, process, defaultSend, _reset };
+module.exports = { enqueue, process, defaultSend, defaultPersistOwn, _reset };

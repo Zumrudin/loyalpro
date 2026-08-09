@@ -523,3 +523,80 @@ test('ход без реплик и БЕЗ silent → по-прежнему эс
   expect(d.escalate).toHaveBeenCalled();
   expect(d.send).toHaveBeenCalledTimes(1);
 });
+
+// ============================================================
+// Доставка реплики: журнал отправок и своя строка в «Чате».
+// Инцидент 2026-08-09 (79773115566): Chatpush вернул meta.status=success, а в
+// WhatsApp не ушло ничего. Разбирать было нечем — delivery.id нигде не
+// сохранялся, а реплика Милы попадает в «Чат» только эхом, которого не было.
+// ============================================================
+describe('журнал доставок и своя строка в «Чате»', () => {
+  test('каждая отправленная реплика попадает в журнал доставок вместе с delivery', async () => {
+    const deliveryLog = { record: jest.fn(async () => 1) };
+    const d = deps({
+      send: jest.fn(async () => ({ id: 555 })),
+      persistOwn: jest.fn(async () => {}),
+      deliveryLog,
+    });
+    await dispatcher.process(1, 'k', meta, d);
+    expect(deliveryLog.record).toHaveBeenCalledWith(1, 'k', meta, 'Здравствуйте!', { id: 555 });
+  });
+
+  test('своя реплика кладётся в «Чат» тем же ходом', async () => {
+    const persistOwn = jest.fn(async () => {});
+    const d = deps({ send: jest.fn(async () => ({ id: 555 })), persistOwn, deliveryLog: { record: jest.fn() } });
+    await dispatcher.process(1, 'k', meta, d);
+    expect(persistOwn).toHaveBeenCalledWith(1, 'k', meta, 'Здравствуйте!', { id: 555 });
+  });
+
+  // Обе записи служебные: их сбой не имеет права стоить клиенту ответа и не
+  // должен рвать серию на второй реплике.
+  test('сбой журнала/персиста не ломает доставку серии', async () => {
+    const d = deps({
+      orchestrator: { runDialog: jest.fn(async () => ({ replies: ['раз', 'два'] })) },
+      send: jest.fn(async () => ({ id: 555 })),
+      persistOwn: jest.fn(async () => { throw new Error('db down'); }),
+      deliveryLog: { record: jest.fn(async () => { throw new Error('db down'); }) },
+    });
+    await expect(dispatcher.process(1, 'k', meta, d)).resolves.toBeUndefined();
+    expect(d.send).toHaveBeenCalledTimes(2);
+  });
+
+  test('defaultPersistOwn: WhatsApp — своя строка с авторством agent', async () => {
+    const persist = require('./services/chat-persist');
+    const spy = jest.spyOn(persist, 'persistWhatsappOutgoing').mockResolvedValue(undefined);
+    await dispatcher.defaultPersistOwn(1, 'k', meta, 'текст', { id: 555 });
+    expect(spy).toHaveBeenCalledWith(1, expect.objectContaining({
+      delivery: { id: 555 }, phone: meta.phone, text: 'текст', authoredBy: 'agent',
+    }));
+    spy.mockRestore();
+  });
+
+  test('defaultPersistOwn: tdlib/max не трогаем — их строку кладёт эхо вебхука', async () => {
+    const persist = require('./services/chat-persist');
+    const spy = jest.spyOn(persist, 'persistWhatsappOutgoing').mockResolvedValue(undefined);
+    await dispatcher.defaultPersistOwn(1, 'k', { ...meta, channel: 'tdlib' }, 'текст', { id: 555 });
+    await dispatcher.defaultPersistOwn(1, 'k', meta, 'текст', undefined);
+    expect(spy).not.toHaveBeenCalled();
+    spy.mockRestore();
+  });
+});
+
+// delivery.id в логе — единственный способ узнать судьбу сообщения постфактум
+// (GET /api/v1/delivery/:id). Без него разбор 09.08 упёрся в стену: чужие id
+// отдают 404, а свои разрежены среди глобальной нумерации Chatpush.
+test('defaultSend пишет delivery_id в лог', async () => {
+  const chatpush = require('./services/chatpush');
+  const config = require('./config');
+  const prevToken = config.CHATPUSH.instanceToken;
+  config.CHATPUSH.instanceToken = 'tok';
+  const spy = jest.spyOn(chatpush, 'sendMessage').mockResolvedValue({ id: 376412700 });
+  try {
+    const out = await dispatcher.defaultSend(meta, 'Здравствуйте!');
+    expect(out).toEqual({ id: 376412700 });
+    expect(mockLogger.info).toHaveBeenCalledWith(expect.stringContaining('delivery=376412700'));
+  } finally {
+    spy.mockRestore();
+    config.CHATPUSH.instanceToken = prevToken;
+  }
+});

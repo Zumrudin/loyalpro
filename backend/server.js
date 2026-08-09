@@ -209,6 +209,8 @@ cron.schedule('40 4 * * *', () => {
   require('./services/outgoing-authorship').cleanup();
   // Журнал tool-цикла Милы (agent_tool_events): форензика 30 дней, дальше в мусор.
   require('./services/agent/tool-events').cleanup();
+  // Журнал отправок реплик (agent_reply_deliveries) — та же форензика, 30 дней.
+  require('./services/agent/delivery-watchdog').cleanup();
 });
 
 // Patient photo cases: периодически добиваем S3-удаления, которые не дошли в основном потоке.
@@ -239,6 +241,20 @@ cron.schedule('*/5 * * * *', async () => {
   try {
     await require('./services/agent/operator-pause-sweep').sweepAll();
   } catch (e) { cronLogger.error(`operator pause sweep: ${e.message}`); }
+}, { timezone: 'Europe/Moscow' });
+
+// Сторож доставки реплик Милы: Chatpush отвечает success в момент постановки в
+// очередь, и сообщение может не уйти вовсе — ни статуса, ни эха (инцидент
+// 2026-08-09). Тик каждые 2 минуты при пороге 5: подтверждение штатно приходит
+// за секунды, лишние тики дёшевы (запрос по частичному индексу pending).
+// Подробности и разбор — services/agent/delivery-watchdog.js.
+cron.schedule('*/2 * * * *', async () => {
+  try {
+    const r = await require('./services/agent/delivery-watchdog').sweep();
+    if (r && (r.retried || r.escalated)) {
+      cronLogger.warn(`delivery watchdog: повторов=${r.retried}, переводов на человека=${r.escalated}`);
+    }
+  } catch (e) { cronLogger.error(`delivery watchdog: ${e.message}`); }
 }, { timezone: 'Europe/Moscow' });
 
 // ============================================================
