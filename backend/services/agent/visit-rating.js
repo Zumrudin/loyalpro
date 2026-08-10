@@ -93,4 +93,8 @@ function buildApology(opts = {}) {
   return `Нам очень жаль, что визит вас расстроил — простите нас, пожалуйста. ${tail}`;
 }
 
-module.exports = { parseRating, detectRating, isRatingSurvey, buildApology };
+// EMOJI_RE экспортируется ради promo-interest.js (короткое «+» на акцию): у двух
+// коротких предикатов чистка текста обязана быть ОДНОЙ, вторая копия регулярки
+// молча разъехалась бы. Флаг /g безопасен: обе стороны зовут только String.replace,
+// а он сбрасывает lastIndex.
+module.exports = { parseRating, detectRating, isRatingSurvey, buildApology, EMOJI_RE };
