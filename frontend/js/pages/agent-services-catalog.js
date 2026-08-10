@@ -359,9 +359,16 @@ function renderAgentServices() {
       // Шлём ВЕСЬ известный набор настроек, а не одно поле: PUT /api/agent/settings
       // трактует отсутствие enabled/mode как false/'all' (agent-settings.js) —
       // точечная отправка {priceListUrl} молча выключила бы агента и сбросила режим.
-      await api('PUT', '/api/agent/settings', { ..._asSettings, priceListUrl: v });
+      // Мержим ссылку в СВЕЖИЙ снимок (перечитанный прямо перед PUT), а не в
+      // тот, что был загружен при открытии страницы: соседняя модалка «⚙️ Агент»
+      // правит те же настройки (режим, тумблер, расписание), и старый снимок,
+      // живущий всё время открытой вкладки, откатил бы её правки при сохранении
+      // ссылки здесь. Окно гонки не закрыто целиком (между GET и PUT кто-то ещё
+      // может успеть сохранить), но сжато с «пока открыта вкладка» до одного round-trip.
+      const fresh = await api('GET', '/api/agent/settings');
+      await api('PUT', '/api/agent/settings', { ...fresh, priceListUrl: v });
       _asPriceUrl = v;
-      _asSettings = { ..._asSettings, priceListUrl: v };
+      _asSettings = { ...fresh, priceListUrl: v };
       notify('Ссылка сохранена', 'ok');
     } catch (e) { notify('Не удалось сохранить ссылку', 'err'); }
   };
