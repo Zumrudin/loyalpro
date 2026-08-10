@@ -4,7 +4,7 @@
 // (AGENT_CATALOG_IN_PROMPT). Одна услуга — одна строка
 // id|название|мин|цена|направление>подкатегория|id мастеров.
 // ~16k символов против 77k у JSON list_services (замер 2026-07-27, salon 1).
-const { loadCatalogServices } = require('./catalog-data');
+const { loadCatalogServices, matchesGenericTitle } = require('./catalog-data');
 const { createLogger } = require('../../logger');
 const logger = createLogger('AgentCatalogBlock');
 
@@ -27,6 +27,14 @@ function cell(v, maxLen) {
 // чтобы модель физически не видела 1 ₽ (раньше это правило жило только в промпте).
 const PLACEHOLDER_PRICE_MAX = 100;
 
+// «Ботулинотерапия Ботулакс 1 ед» — цена за ОДНУ ЕДИНИЦУ препарата (370 ₽), а не
+// за процедуру; промпт запрещает называть её пациенту и включать в диапазоны.
+// Тот же приём, что с заглушкой 1 ₽: рендерим «инд.» и мастеров без цен — модель
+// физически не видит числа, и правило перестаёт держаться на одном промпте
+// (спека 2026-08-10-agent-prompt-to-code-offload).
+const UNIT_PRICE_TITLE = 'Ботулинотерапия Ботулакс 1 ед';
+const isUnitPriceService = (title) => matchesGenericTitle(title, UNIT_PRICE_TITLE);
+
 function fmtPrice(min, max) {
   const lo = Number(min) || 0;
   const hi = Number(max) || 0;
@@ -44,9 +52,10 @@ function fmtPrice(min, max) {
 // в строке («55=5000,66=8000»), иначе только id («55,66»). Инцидент 2026-08-01:
 // в строке был только агрегат «19000-23000», модель не пошла за точной суммой в
 // get_service_masters и назвала пациенту нижнюю границу как цену главврача.
-function fmtStaffCell(staff) {
+function fmtStaffCell(staff, opts = {}) {
   const list = (staff || []).slice().sort((a, b) => a.yc_id - b.yc_id);
   if (!list.length) return '';
+  if (opts.hidePrices) return list.map(m => String(m.yc_id)).join(',');
   const prices = list.map(m => fmtPrice(m.price_min, m.price_max));
   const same = prices.every(p => p === prices[0]);
   return list.map((m, i) => (same ? String(m.yc_id) : `${m.yc_id}=${prices[i]}`)).join(',');
@@ -68,14 +77,17 @@ function renderCatalogBlock(services) {
     .map(([id, name]) => `${id}=${name}`)
     .join('; ');
   const lines = sorted
-    .map(s => [
-      s.yc_id,
-      cell(s.title, 120),
-      s.duration_min || '',
-      fmtPrice(s.price_min, s.price_max),
-      (s.category_path || []).map(c => cell(c, 60)).join('>'),
-      fmtStaffCell(s.staff),
-    ].join('|'));
+    .map(s => {
+      const unitPrice = isUnitPriceService(s.title);
+      return [
+        s.yc_id,
+        cell(s.title, 120),
+        s.duration_min || '',
+        unitPrice ? 'инд.' : fmtPrice(s.price_min, s.price_max),
+        (s.category_path || []).map(c => cell(c, 60)).join('>'),
+        fmtStaffCell(s.staff, { hidePrices: unitPrice }),
+      ].join('|');
+    });
   const block = [
     'КАТАЛОГ УСЛУГ КЛИНИКИ (полный актуальный список; формат строки: id услуги|название|длительность в минутах|цена ₽|направление>подкатегория|id мастеров через запятую). Цена: одно число — точная стоимость; X-Y — цены мастеров различаются, и тогда в колонке мастеров у каждого стоит его собственная цена (id=цена) — называй пациенту именно её, а не границу диапазона; «инд.» — стоимость определяет врач на консультации, цифру НЕ называй; пусто — цены нет, не выдумывай. Услуги с приставкой «Муж.» в начале названия — мужской прайс: мужчине называй цену и оформляй запись ТОЛЬКО по ним, женщине — только по строкам без приставки:',
     legend ? `Мастера: ${legend}` : null,

@@ -1,6 +1,12 @@
 'use strict';
 
-jest.mock('./services/agent/catalog-data', () => ({ loadCatalogServices: jest.fn() }));
+// Стабим ТОЛЬКО загрузчик (он ходит в БД и YClients): чистый matchesGenericTitle
+// обязан быть настоящим — иначе тест маскировки «Ботулакс 1 ед» проверял бы копию
+// правила сопоставления названий, а не то, что работает в бою.
+jest.mock('./services/agent/catalog-data', () => ({
+  ...jest.requireActual('./services/agent/catalog-data'),
+  loadCatalogServices: jest.fn(),
+}));
 const { loadCatalogServices } = require('./services/agent/catalog-data');
 const { renderCatalogBlock, buildSafe, fmtPrice } = require('./services/agent/catalog-block');
 
@@ -127,5 +133,30 @@ describe('buildSafe', () => {
   test('сбой загрузки → null, НЕ бросает (fail-open в legacy)', async () => {
     loadCatalogServices.mockRejectedValue(new Error('YClients 500'));
     await expect(buildSafe(1)).resolves.toBe(null);
+  });
+});
+
+// ── Цена единицы Ботулакса не должна попадать в промпт (спека 2026-08-10) ──
+describe('маскировка цены «Ботулинотерапия Ботулакс 1 ед»', () => {
+  test('цена и цены мастеров рендерятся как «инд.»/только id — числа в блоке нет', () => {
+    const b = renderCatalogBlock([
+      { yc_id: 1, title: 'Ботулинотерапия  Ботулакс 1 ед ( 30 минут )', duration_min: 30,
+        price_min: 370, price_max: 370,
+        category_path: ['Инъекционная косметология', 'Ботулинотерапия'],
+        staff: [{ yc_id: 5, name: 'Пери', price_min: 370, price_max: 370 },
+                { yc_id: 6, name: 'Астемир', price_min: 500, price_max: 500 }] },
+    ]);
+    const line = b.split('\n').find(l => l.startsWith('1|'));
+    expect(line).toContain('|инд.|');
+    expect(line.endsWith('|5,6')).toBe(true);   // мастера без «=цена»
+    expect(b).not.toContain('370');
+    expect(b).not.toContain('500');
+  });
+  test('обычная услуга не задета', () => {
+    const b = renderCatalogBlock([
+      { yc_id: 2, title: 'Чистка лица', duration_min: 60, price_min: 5000, price_max: 5000,
+        category_path: ['Уходы'], staff: [{ yc_id: 5, name: 'Юлия', price_min: 5000, price_max: 5000 }] },
+    ]);
+    expect(b.split('\n').find(l => l.startsWith('2|'))).toContain('|5000|');
   });
 });
