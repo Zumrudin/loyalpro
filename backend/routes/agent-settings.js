@@ -231,7 +231,16 @@ router.get('/price-photos', adminOnly, async (req, res) => {
 // Express (см. тот же приём в routes/portfolio.js POST /categories/:id/cover).
 router.post('/price-photos', adminOnly, (req, res) => {
   priceUpload.single('file')(req, res, async (err) => {
-    if (err) return res.status(400).json({ error: err.message });
+    if (err) {
+      // multer отдаёт литеральный английский текст (`File too large` и т.п.) —
+      // в русском интерфейсе он не годится. Лимит размера разбираем отдельно,
+      // остальные ошибки multer (не-картинка и т.д.) оставляем как есть — их
+      // текст уже читаем (см. imageFileFilter).
+      if (err.code === 'LIMIT_FILE_SIZE') {
+        return res.status(400).json({ error: 'Файл слишком большой: лимит 5 МБ' });
+      }
+      return res.status(400).json({ error: err.message });
+    }
     if (!req.file) return res.status(400).json({ error: 'Файл не выбран или формат не поддерживается (JPEG, PNG, WEBP)' });
 
     // Узел дерева ОБЯЗАН быть проверенным числом ДО того, как попадёт в имя
@@ -272,6 +281,9 @@ router.post('/price-photos', adminOnly, (req, res) => {
         throw e;
       }
     } catch (e) {
+      // BAD_NODE сегодня недостижим: узел уже провалидирован в число выше,
+      // до вызова addPricePhoto. Подстраховка на случай второго вызывающего
+      // сервисной функции (она экспортирована и может получить свой вход).
       if (e.code === 'BAD_NODE') return res.status(400).json({ error: 'Не указана категория или подкатегория' });
       if (e.code === 'PHOTO_LIMIT') return res.status(400).json({ error: `Больше ${settings.MAX_PRICE_PHOTOS_PER_NODE} фото на один раздел загрузить нельзя` });
       logger.error(e.message); res.status(500).json({ error: 'server error' });

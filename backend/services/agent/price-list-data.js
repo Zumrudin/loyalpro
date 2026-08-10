@@ -17,8 +17,9 @@ const uploadsDir = path.join(__dirname, '../../../frontend/uploads');
 // Короткий TTL-кэш индекса по salonId. ЗАЧЕМ: loadPriceIndex зовётся оркестратором
 // на КАЖДОМ ходу КАЖДОГО диалога (даже у салонов без единого фото прайса), а внутри —
 // четыре обращения (listPricePhotos, loadCategoryTreeSafe, loadCategoryTitles,
-// getSettings) плюс fs.existsSync по каждому фото; БД удалённая (Beget). Стиль и TTL —
-// как у ycGetServiceCatalog в services/yclients.js (2 мин, тот же ключ salonId).
+// getSettings) плюс fs.existsSync по каждому фото; БД удалённая (Beget). Стиль —
+// как у ycGetServiceCatalog в services/yclients.js (тот же ключ salonId), но TTL
+// короче (60 с здесь против 2 мин там — паритета по TTL нет, только по приёму).
 // ЧЕМ ПЛАТИМ: администратор может увидеть своё новое/удалённое фото у Милы с
 // задержкой до TTL — но мутирующие ручки price-photos сбрасывают кэш явно
 // (invalidate), так что в норме админ видит эффект сразу, а TTL страхует только
