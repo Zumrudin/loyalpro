@@ -23,6 +23,7 @@ const dispatcher = require('../services/agent/dispatcher');
 const groupChat = require('../services/agent/group-chat');
 const authorship = require('../services/outgoing-authorship');
 const dialogState = require('../services/agent/dialog-state');
+const chatPersist = require('../services/chat-persist');
 
 // Текстовые типы разных каналов: WhatsApp/MAX → 'text', tdlib/Telegram → 'formattedText'.
 const AGENT_TEXT_TYPES = new Set(['text', 'formattedText']);
@@ -163,6 +164,16 @@ router.post('/webhook', async (req, res) => {
       );
       storedNew = ins.rowCount > 0;
       logger.info(`stored ${msg.direction} ${msg.channel} ${msg.phone || ''}${clientId ? ` (client #${clientId})` : ''}: ${(msg.text || '').slice(0, 60)}`);
+
+      // Номер клиента стал известен посреди переписки (Telegram/MAX скрывают его,
+      // пока клиент не пришлёт сам) — подтягиваем его к прежним строкам этого
+      // чата, иначе одна переписка живёт в «Чате» двумя диалогами: начало под
+      // chat_id, продолжение под номером.
+      if (storedNew && salonId && msg.phone && msg.chatId) {
+        await chatPersist.adoptPhoneForChat(salonId, msg.chatId, msg.phone)
+          .then(n => { if (n) logger.info(`dialog ${msg.chatId}: номер ${msg.phone} проставлен ${n} прежним сообщениям`); })
+          .catch(e => logger.warn(`adopt phone for chat ${msg.chatId} failed: ${e.message}`));
+      }
 
       // Человек ответил клиенту сам (мимо админки, прямо из приложения) —
       // дальше диалог ведёт он: Мила молчит до кнопки «Вернуть боту».

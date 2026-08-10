@@ -5,7 +5,7 @@
 // (services/care/worker.js).
 const { db } = require('../db');
 const config = require('../config');
-const { phoneMatchCandidates, dialogKey } = require('./chat');
+const { phoneMatchCandidates, dialogKey, isGroupChatId } = require('./chat');
 const chatpush = require('./chatpush');
 const chatEvents = require('./chat-events');
 const { createLogger } = require('../logger');
@@ -61,4 +61,25 @@ async function persistWhatsappOutgoing(salonId, { delivery, phone, chatId, text,
   }
 }
 
-module.exports = { persistWhatsappOutgoing };
+// Номер клиента может стать известен ПОСРЕДИ переписки: в Telegram/MAX он скрыт,
+// пока клиент не пришлёт его текстом (и не попадёт в клиентскую базу) — после
+// этого Chatpush начинает слать его в событиях. Ключ диалога («phone, иначе
+// chat_id») из-за этого прыгает, и одна переписка выглядит в «Чате» как ДВА
+// диалога: начало под chat_id, продолжение под номером (на проде так было
+// расщеплено 6 чатов, инцидент 2026-08-10). Как только номер известен,
+// дописываем его СТАРЫМ строкам того же чата — вся история собирается под одним
+// ключом. Только ЛИЧНЫЕ чаты: в группе `phone` — это номер УЧАСТНИКА, у каждого
+// сообщения свой, общего «номера чата» там нет и ключ всё равно строится от
+// chat_id. Best-effort: вызывающий не должен падать из-за косметики.
+async function adoptPhoneForChat(salonId, chatId, phone) {
+  const cid = String(chatId || '').trim();
+  const ph = String(phone || '').trim();
+  if (!salonId || !cid || !ph || isGroupChatId(cid)) return 0;
+  const r = await db.query(
+    `UPDATE chatpush_messages SET phone = $3
+      WHERE salon_id = $1 AND chat_id = $2 AND (phone IS NULL OR phone = '')`,
+    [salonId, cid, ph]);
+  return r.rowCount || 0;
+}
+
+module.exports = { persistWhatsappOutgoing, adoptPhoneForChat };
