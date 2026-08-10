@@ -73,11 +73,28 @@ test('фото нет вовсе → no_photo + ссылка на сайт, бу
   expect(c.attachments).toHaveLength(0);
 });
 
-test('канал не умеет файлы → channel_unsupported, буфер пуст', async () => {
+test('канал не умеет файлы → channel_unsupported, буфер пуст, хинт НЕ утверждает, что листа нет', async () => {
   const c = ctx({ channel: 'telegram_bot' });
   const res = await tool.run(1, { category: 'c12' }, c);
   expect(res).toMatchObject({ attached: false, reason: 'channel_unsupported' });
   expect(c.attachments).toHaveLength(0);
+  // Лист ЕСТЬ (у c12 два фото) — просто канал не умеет файлы. Хинт не должен
+  // говорить пациенту, что прайса по направлению нет: это неправда.
+  expect(res.hint).not.toMatch(/листа по этому направлению нет/i);
+});
+
+test('хинты no_photo и channel_unsupported текстуально РАЗНЫЕ', async () => {
+  const cNoPhoto = ctx();
+  const resNoPhoto = await tool.run(1, { category: 'c30' }, cNoPhoto); // c30 без фото вовсе
+
+  const cUnsupported = ctx({ channel: 'telegram_bot' });
+  const resUnsupported = await tool.run(1, { category: 'c12' }, cUnsupported); // c12 с фото, канал не умеет
+
+  expect(resNoPhoto.reason).toBe('no_photo');
+  expect(resUnsupported.reason).toBe('channel_unsupported');
+  expect(resNoPhoto.hint).not.toBe(resUnsupported.hint);
+  expect(resNoPhoto.hint).toMatch(/листа по этому направлению нет/i);
+  expect(resUnsupported.hint).not.toMatch(/листа по этому направлению нет/i);
 });
 
 test('кап файлов на ход соблюдается', async () => {

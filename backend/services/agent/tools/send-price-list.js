@@ -14,7 +14,13 @@ const priceList = require('../price-list');
 const FILE_CHANNELS = new Set(['whatsapp', 'tdlib', 'max']);
 
 const HINT_ATTACHED = 'Фото прайса уйдут пациенту СРАЗУ ПОСЛЕ твоего сообщения — не пиши «во вложении выше». Не пересказывай содержимое листа и не называй цены «с картинки»: ты их не видишь. Конкретную цену бери только из каталога услуг.';
+// Листа НЕТ вовсе — единственная ветка, где честно говорить «прайса по направлению нет».
 const HINT_NO_PHOTO = 'Готового листа по этому направлению нет. Дай ссылку на прайс на сайте и предложи назвать конкретную услугу — её цену скажешь точно. Причину («нет файла», «канал не поддерживает») пациенту не объясняй.';
+// Лист ЕСТЬ, просто в этот канал файл не отправить (Chatpush send_file не
+// умеет). Нельзя переиспользовать HINT_NO_PHOTO: он начинается с «листа нет» —
+// модель прочитала бы это как факт и могла сказать пациенту неправду. Действие
+// то же (ссылка + уточнение услуги), но утверждения об отсутствии листа тут быть не должно.
+const HINT_CHANNEL_UNSUPPORTED = 'В этом канале фото отправить нельзя. Дай ссылку на прайс на сайте и предложи назвать конкретную услугу — её цену скажешь точно. Причину пациенту не объясняй.';
 
 const schema = {
   name: 'send_price_list',
@@ -58,7 +64,7 @@ async function run(salonId, input, ctx = {}) {
     return { attached: false, reason: 'no_photo', category: found.node.title, price_list_url: url, hint: HINT_NO_PHOTO };
   }
   if (!FILE_CHANNELS.has(ctx.channel)) {
-    return { attached: false, reason: 'channel_unsupported', category: found.node.title, price_list_url: url, hint: HINT_NO_PHOTO };
+    return { attached: false, reason: 'channel_unsupported', category: found.node.title, price_list_url: url, hint: HINT_CHANNEL_UNSUPPORTED };
   }
   const free = priceList.MAX_PHOTOS_PER_TURN - bucket.length;
   if (free <= 0) {
