@@ -223,8 +223,9 @@ function envelope(body) {
       // 'person' | 'group' | … — явный признак группы (шлют tdlib и MAX; WhatsApp
       // не шлёт, там группу видно по jid «@g.us»). Нужен агенту: в группе он молчит.
       chatType: str(nm.chat_type),
-      // номер партнёра по чату (клиента)
-      phone: str(nm.chat_phone || nm.sender_phone_number),
+      // номер партнёра по чату (клиента). У ИСХОДЯЩЕГО отправитель — МЫ, поэтому
+      // фолбэк на sender_phone_number там запрещён (см. плоскую ветку ниже).
+      phone: str(nm.chat_phone || (nm.direction === 'outgoing' ? null : nm.sender_phone_number)),
       senderName: nm.sender_name || nm.pushname || null,
       // timestamp может лежать в message ИЛИ на уровне события — берём любой.
       ts: nm.message?.timestamp ?? nm.timestamp ?? p.timestamp ?? null,
@@ -241,8 +242,18 @@ function envelope(body) {
     chatType: str(p.chat_type),
     // номер КЛИЕНТА (не салона): для outgoing клиент — получатель, для incoming — отправитель.
     // Так вся переписка с одним клиентом группируется по одному phone независимо от направления.
+    // У ИСХОДЯЩЕГО фолбэка на sender_phone_number быть НЕ МОЖЕТ: отправитель — это
+    // всегда наш инстанс, и его номер клиентом не бывает. Инцидент 2026-08-10
+    // (диалог 298342940, tdlib): у собеседника в Telegram номер скрыт
+    // (recipient_phone_number:null) → в phone ложился номер клиники 79250177778,
+    // ключ диалога у ответов администратора расходился с ключом входящих
+    // (phone против chat_id), и «Чат» показывал переписку без ответов админа,
+    // а сами ответы 31 разного чата сваливались в один фантомный диалог.
+    // Побочно тем же промахивалась пауза «ответил оператор» (pauseKey в
+    // routes/chatpush-webhook.js) — Мила оставалась активной в диалоге,
+    // который уже вёл человек.
     phone: str(dir === 'outgoing'
-      ? (p.recipient_phone_number || p.sender_phone_number)
+      ? p.recipient_phone_number
       : (p.sender_phone_number || p.recipient_phone_number)),
     senderName: p.sender_name || p.recipient_username || null,
     // MAX кладёт timestamp на уровень payload, а не в message — берём любой.

@@ -132,6 +132,53 @@ describe('parseMessageEvent — delivery_id (кто отправил исход�
   });
 });
 
+describe('parseMessageEvent — номер собеседника у исходящего (инцидент 2026-08-10)', () => {
+  // ЗАЧЕМ. Ключ диалога — phone, иначе chat_id. У исходящего ОТПРАВИТЕЛЬ — это
+  // МЫ (номер инстанса клиники), поэтому фолбэк на sender_phone_number подставлял
+  // в переписку с клиентом номер салона: у собеседника в Telegram номер скрыт
+  // (recipient_phone_number:null) → входящие клиента ложились под ключ chat_id,
+  // а ответы администратора — под ключ 79250177778. В «Чате» диалог показывал
+  // ТОЛЬКО сообщения клиента, а ответы всех таких чатов сваливались в один
+  // фантомный диалог с номером клиники. Живой payload диалога 298342940.
+  const tdlibOutHiddenPhone = {
+    type: 'tdlib_incoming_msg',
+    payload: {
+      chat_id: 298342940, customer_id: 46594, direction: 'outgoing',
+      sender_name: 'periclinic', recipient_username: 'darialyaskalo',
+      recipient_phone_number: null, sender_phone_number: '79250177778',
+      message: { id: 43290710017, type: 'text', text: 'Записали на 06.09 в 19:00🤍', timestamp: 1786350712 },
+    },
+  };
+  test('номер получателя неизвестен → phone пуст, а НЕ номер клиники', () => {
+    expect(parseMessageEvent(tdlibOutHiddenPhone).phone).toBeNull();
+  });
+  test('номер получателя известен → он и попадает в phone', () => {
+    const body = { ...tdlibOutHiddenPhone,
+      payload: { ...tdlibOutHiddenPhone.payload, recipient_phone_number: '79191091250' } };
+    expect(parseMessageEvent(body).phone).toBe('79191091250');
+  });
+  test('входящее: номер по-прежнему берётся у отправителя-клиента', () => {
+    const body = { ...tdlibOutHiddenPhone,
+      payload: { ...tdlibOutHiddenPhone.payload, direction: 'incoming',
+        sender_phone_number: '79191091250', recipient_phone_number: null } };
+    expect(parseMessageEvent(body).phone).toBe('79191091250');
+  });
+  test('WhatsApp: у исходящего sender_phone_number тоже не годится в собеседники', () => {
+    const wa = {
+      type: 'whatsapp_incoming_msg',
+      payload: {
+        customer_id: 46594,
+        new_message: {
+          chat_id: '79262644959@c.us', direction: 'outgoing',
+          sender_phone_number: '79250177778',
+          message: { id: 'WA1', type: 'text', text: 'Спасибо что посетили' },
+        },
+      },
+    };
+    expect(parseMessageEvent(wa).phone).toBeNull();
+  });
+});
+
 describe('parseMessageEvent — chat_type (гейт группового чата)', () => {
   // Живая плоская форма MAX: группа «Админы PERI CLINIC» шлёт chat_type='group'
   // И номер участника в sender_phone_number — по номеру группу не отличить.
