@@ -1864,3 +1864,80 @@ describe('дедуп повторных tool-вызовов внутри ход�
     expect(handler).toHaveBeenCalledTimes(2);
   });
 });
+
+// ── Оценка визита без LLM (спека 2026-08-10-agent-prompt-to-code-offload) ──
+describe('оценка визита («5» на автоопрос)', () => {
+  function ratingDeps(rating, lastAuthor, extra = {}) {
+    return makeDeps({
+      history: {
+        loadTranscript: jest.fn(async () => ({
+          messages: [{ role: 'user', content: String(rating) }], watermark: 500 })),
+        lastOutgoingAuthor: jest.fn(async () => lastAuthor),
+      },
+      ...extra,
+    });
+  }
+
+  test('«5» после автоуведомления → благодарность, провайдер НЕ вызывается, ватермарк сдвинут', async () => {
+    const deps = ratingDeps(5, 'system');
+    const res = await orchestrator.runDialog(1, '79001112233', { deps });
+    expect(deps.provider.createMessage).not.toHaveBeenCalled();
+    expect(res.replies.join(' ')).toMatch(/спасибо/i);
+    expect(res.escalated).toBe(false);
+    expect(deps.state.setWatermark).toHaveBeenCalledWith(1, '79001112233', 500);
+    // Ход без единого вызова инструмента — запись в журнал заводить не за чем
+    // (та же экономия, что у ветки молчания closing.js).
+    expect(deps.toolEvents.createBuffer).not.toHaveBeenCalled();
+  });
+
+  test('«2» после автоуведомления → извинение + эскалация без LLM', async () => {
+    const deps = ratingDeps(2, 'system');
+    const res = await orchestrator.runDialog(1, '79001112233', { deps });
+    expect(deps.provider.createMessage).not.toHaveBeenCalled();
+    expect(deps.registry.handlers.escalate_to_operator).toHaveBeenCalledWith(
+      1, { reason: expect.stringContaining('низкая оценка') }, expect.any(Object));
+    expect(res.escalated).toBe(true);
+    expect(res.replies.join(' ')).toMatch(/администратор/i);
+  });
+
+  test('последнее исходящее — agent (Мила задавала вопрос) → ветка не срабатывает, ход в LLM', async () => {
+    const deps = ratingDeps(5, 'agent');
+    deps.provider.createMessage.mockResolvedValue(
+      { assistantMsg: { role: 'assistant', content: 'ок' }, toolCalls: [], text: 'Отвечаю по делу' });
+    const res = await orchestrator.runDialog(1, '79001112233', { deps });
+    expect(deps.provider.createMessage).toHaveBeenCalled();
+    expect(res.replies).toEqual(['Отвечаю по делу']);
+  });
+
+  test('сбой lastOutgoingAuthor → fail-open в LLM', async () => {
+    const deps = makeDeps({
+      history: {
+        loadTranscript: jest.fn(async () => ({ messages: [{ role: 'user', content: '5' }], watermark: 500 })),
+        lastOutgoingAuthor: jest.fn(async () => { throw new Error('db down'); }),
+      },
+    });
+    deps.provider.createMessage.mockResolvedValue(
+      { assistantMsg: { role: 'assistant', content: 'ок' }, toolCalls: [], text: 'Ответ' });
+    const res = await orchestrator.runDialog(1, 'k', { deps });
+    expect(res.replies).toEqual(['Ответ']);
+  });
+
+  test('инжектор history без lastOutgoingAuthor → ветка молча пропускается (совместимость)', async () => {
+    const deps = makeDeps({
+      history: { loadTranscript: jest.fn(async () => ({ messages: [{ role: 'user', content: '5' }], watermark: 500 })) },
+    });
+    deps.provider.createMessage.mockResolvedValue(
+      { assistantMsg: { role: 'assistant', content: 'ок' }, toolCalls: [], text: 'Ответ' });
+    const res = await orchestrator.runDialog(1, 'k', { deps });
+    expect(res.replies).toEqual(['Ответ']);
+  });
+
+  test('AGENT_VISIT_RATING_REPLY=false → ветка выключена', async () => {
+    const deps = ratingDeps(5, 'system');
+    deps.config = { ...require('./config'), AGENT_VISIT_RATING_REPLY: false };
+    deps.provider.createMessage.mockResolvedValue(
+      { assistantMsg: { role: 'assistant', content: 'ок' }, toolCalls: [], text: 'Ответ' });
+    const res = await orchestrator.runDialog(1, 'k', { deps });
+    expect(res.replies).toEqual(['Ответ']);
+  });
+});

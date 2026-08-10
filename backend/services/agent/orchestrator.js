@@ -12,6 +12,7 @@ const replyGuard = require('./reply-guard');
 const greeting = require('./greeting');
 const addressGuard = require('./address-guard');
 const closing = require('./closing');
+const visitRating = require('./visit-rating');
 const adminHours = require('./admin-hours');
 const toolEventsDefault = require('./tool-events');
 const toolMemoryDefault = require('./tool-memory');
@@ -496,6 +497,43 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
       logger.info(`dialog ${dialogKey}: завершающая вежливость — молчим, последнее слово за пациентом`);
       await state.setWatermark(salonId, dialogKey, watermark);
       return { replies: [], escalated: false, sideEffect: false, silent: true };
+    }
+
+    // Оценка визита: последний блок — ЧИСТАЯ цифра 2–5 И последнее исходящее
+    // диалога — автоуведомление (authored_by='system'). Ход предрешён, LLM не
+    // нужен (спека 2026-08-10-agent-prompt-to-code-offload). Правило промпта
+    // «ОЦЕНКА ВИЗИТА» остаётся для смешанных ответов и выключенного флага.
+    // Fail-open: сбой/отсутствие lastOutgoingAuthor → ветка молчит, ход в LLM.
+    if (cfg.AGENT_VISIT_RATING_REPLY
+        && typeof history.lastOutgoingAuthor === 'function') {
+      const rating = visitRating.detectRating(messages);
+      if (rating != null) {
+        let lastAuthor = null;
+        try { lastAuthor = await history.lastOutgoingAuthor(salonId, dialogKey); }
+        catch (e) {
+          logger.warn(`dialog ${dialogKey}: авторство последнего исходящего не прочитать (${e.message}) — оценку обработает LLM`);
+        }
+        if (lastAuthor === 'system') {
+          await state.setWatermark(salonId, dialogKey, watermark);
+          if (rating >= 4) {
+            logger.info(`dialog ${dialogKey}: оценка визита ${rating} — детерминированная благодарность без LLM`);
+            return { replies: [visitRating.buildThanks({ givenName: clientGivenName })],
+              escalated: false, sideEffect: false, ratingReply: true };
+          }
+          logger.info(`dialog ${dialogKey}: оценка визита ${rating} — извинение и перевод на администратора без LLM`);
+          // Эскалация тем же хендлером, что у модели: upsert agent_dialogs +
+          // emitAgentStatus + красная подсветка в «Чате». Сбой записи не должен
+          // съесть извинение — диспетчер увидит escalated и допереведёт.
+          try {
+            await registry.handlers['escalate_to_operator'](salonId,
+              { reason: `низкая оценка визита (${rating})` }, toolCtx);
+          } catch (e) {
+            logger.warn(`dialog ${dialogKey}: эскалация по низкой оценке не записалась (${e.message})`);
+          }
+          return { replies: [visitRating.buildApology({ adminOff: promptOpts.adminOffHours })],
+            escalated: true, sideEffect: true, ratingReply: true };
+        }
+      }
     }
 
     // Буфер журнала tool-цикла этой ПОПЫТКИ. Создаётся после проверки пустого

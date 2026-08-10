@@ -121,6 +121,10 @@ module.exports = {
   // По умолчанию ВКЛЮЧЕНО; аварийный рычаг — AGENT_CLOSING_SILENCE=false +
   // рестарт: Мила снова отвечает на каждое входящее, как до 06.08.2026.
   AGENT_CLOSING_SILENCE: process.env.AGENT_CLOSING_SILENCE !== 'false',
+  // Оценка визита («5» на автоопрос) детерминированной веткой без LLM.
+  // По умолчанию ВКЛЮЧЕНО; аварийный рычаг — AGENT_VISIT_RATING_REPLY=false +
+  // рестарт: чистая цифра снова уйдёт в LLM по правилу промпта «ОЦЕНКА ВИЗИТА».
+  AGENT_VISIT_RATING_REPLY: process.env.AGENT_VISIT_RATING_REPLY !== 'false',
   // Сторож доставки реплик Милы: Chatpush принял delivery (meta.status=success),
   // но сообщение так и не ушло в мессенджер — ни статуса, ни эха (инцидент
   // 2026-08-09, 79773115566). По умолчанию ВКЛЮЧЁН; аварийный рычаг
