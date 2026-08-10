@@ -144,7 +144,8 @@ async function retrieveChunks(salonId, query, opts = {}) {
     `SELECT c.id, c.article_id, c.content, c.embedding, c.embed_norm
        FROM kb_chunks c
        JOIN kb_articles a ON a.id = c.article_id
-      WHERE c.salon_id = $1 AND c.embedding IS NOT NULL AND a.is_published = true`,
+      WHERE c.salon_id = $1 AND c.embedding IS NOT NULL AND a.is_published = true
+        AND a.internal_only = false`,
     [salonId]);
   const byId = new Map(all.map(c => [c.id, c]));
   let vectorRanked = [];
@@ -171,6 +172,7 @@ async function retrieveChunks(salonId, query, opts = {}) {
          JOIN kb_articles a ON a.id = c.article_id
         WHERE c.salon_id = $1 AND c.search_vector @@ to_tsquery('russian', $2)
           AND a.is_published = true
+          AND a.internal_only = false
         ORDER BY rank DESC NULLS LAST
         LIMIT $3`,
       [salonId, tsq, VECTOR_TOPN]);

@@ -179,7 +179,7 @@ async function kbRunSearch() {
     }
     content.innerHTML = arts.map(a => `
       <div class="kb-card" data-id="${a.id}">
-        <div class="kb-card-title">${kbEsc(a.title)}</div>
+        <div class="kb-card-title">${a.internal_only ? '🔒 ' : ''}${kbEsc(a.title)}</div>
         <div class="kb-card-snippet">${kbSnippet(a.snippet)}</div>
         <div class="kb-card-tags">${(a.tags || []).map(t => `<span class="kb-tag">${kbEsc(t)}</span>`).join('')}</div>
       </div>`).join('');
@@ -201,7 +201,8 @@ async function kbOpenArticle(id) {
     content.innerHTML = `
       <div class="kb-article">
         <button class="btn-sec" id="kb-back" type="button">← Назад</button>
-        <h2 class="kb-article-title">${kbEsc(article.title)}</h2>
+        <h2 class="kb-article-title">${article.internal_only ? '🔒 ' : ''}${kbEsc(article.title)}</h2>
+        ${article.internal_only ? '<div class="kb-empty">Внутренняя статья: видна сотрудникам, Мила не использует её в ответах пациентам.</div>' : ''}
         <div class="kb-article-body">${kbMarkdown(article.body)}</div>
         <div class="kb-article-actions">${editBtns}</div>
       </div>`;
@@ -251,6 +252,9 @@ function kbOpenArticleModal(article) {
         <select id="kbm-cat">${opts}</select></div>
       <div class="fg"><label class="fl">Теги (через запятую)</label>
         <input id="kbm-tags" type="text" value="${isEdit ? kbEsc((article.tags || []).join(', ')) : ''}"></div>
+      <div class="fg"><label class="fl" style="display:flex;align-items:center;gap:8px;cursor:pointer">
+        <input id="kbm-internal" type="checkbox" ${isEdit && article.internal_only ? 'checked' : ''}>
+        🔒 Внутренняя статья — только для сотрудников (Мила не использует её в ответах пациентам)</label></div>
       <div class="fg"><label class="fl">Текст (markdown: # заголовок, **жирный**, - список, - [ ] чекбокс, \`\`\` код, ![](фото); размер фото — {small}/{medium} после ссылки)</label>
         <textarea id="kbm-body" rows="12">${isEdit ? kbEsc(article.body) : ''}</textarea>
         <div class="kbm-toolbar">
@@ -304,6 +308,8 @@ function kbOpenArticleModal(article) {
       category_id: parseInt(wrap.querySelector('#kbm-cat').value, 10),
       tags: wrap.querySelector('#kbm-tags').value,
       body: wrap.querySelector('#kbm-body').value,
+      // Контракт PUT полный: отсутствие поля = false, поэтому шлём всегда.
+      internal_only: wrap.querySelector('#kbm-internal').checked,
     };
     if (!payload.title) { alert('Введите заголовок'); return; }
     try {

@@ -186,7 +186,7 @@ router.get('/articles', readAny, async (req, res) => {
     }
 
     const rows = await db.any(
-      `SELECT a.id, a.category_id, a.title, a.tags, a.display_order,
+      `SELECT a.id, a.category_id, a.title, a.tags, a.display_order, a.internal_only,
               ${snippetSelect}, ${rankSelect}
          FROM kb_articles a
         WHERE ${where.join(' AND ')}
@@ -204,7 +204,7 @@ router.get('/articles', readAny, async (req, res) => {
 router.get('/articles/:id', readAny, async (req, res) => {
   try {
     const row = await db.oneOrNone(
-      `SELECT id, category_id, title, body, tags, is_published, display_order
+      `SELECT id, category_id, title, body, tags, is_published, internal_only, display_order
          FROM kb_articles WHERE id=$1 AND salon_id=$2`,
       [req.params.id, req.user.salonId]);
     if (!row) return res.status(404).json({ error: 'Статья не найдена' });
@@ -329,11 +329,12 @@ router.post('/articles', adminOnly, async (req, res) => {
       [req.user.salonId, body.category_id]);
     const row = await db.one(
       `INSERT INTO kb_articles
-         (salon_id, category_id, title, body, tags, tags_text, is_published, display_order)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
-       RETURNING id, category_id, title, body, tags, is_published, display_order`,
+         (salon_id, category_id, title, body, tags, tags_text, is_published, internal_only, display_order)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+       RETURNING id, category_id, title, body, tags, is_published, internal_only, display_order`,
       [req.user.salonId, body.category_id, body.title.trim(),
-       body.body || '', tags, tags.join(' '), body.is_published !== false, next.next]);
+       body.body || '', tags, tags.join(' '), body.is_published !== false,
+       body.internal_only === true, next.next]);
     // Переэмбеддинг — асинхронно, не блокируем ответ. Ошибку глотаем (не критично).
     agentRag.reembedArticle(req.user.salonId, row.id)
       .catch(e => logger.error(`reembed(create ${row.id}): ${e.message}`));
@@ -344,7 +345,8 @@ router.post('/articles', adminOnly, async (req, res) => {
   }
 });
 
-// PUT /api/kb/articles/:id — редактировать статью
+// PUT /api/kb/articles/:id — редактировать статью. Контракт полный, как у
+// is_published: отсутствие internal_only в теле = false (фронт всегда шлёт поле).
 router.put('/articles/:id', adminOnly, async (req, res) => {
   const body = req.body || {};
   if (typeof body.category_id === 'string') body.category_id = parseInt(body.category_id, 10);
@@ -360,11 +362,12 @@ router.put('/articles/:id', adminOnly, async (req, res) => {
     const row = await db.oneOrNone(
       `UPDATE kb_articles
           SET category_id=$1, title=$2, body=$3, tags=$4, tags_text=$5,
-              is_published=$6, updated_at=now()
-        WHERE id=$7 AND salon_id=$8
-        RETURNING id, category_id, title, body, tags, is_published, display_order`,
+              is_published=$6, internal_only=$7, updated_at=now()
+        WHERE id=$8 AND salon_id=$9
+        RETURNING id, category_id, title, body, tags, is_published, internal_only, display_order`,
       [body.category_id, body.title.trim(), body.body || '', tags, tags.join(' '),
-       body.is_published !== false, req.params.id, req.user.salonId]);
+       body.is_published !== false, body.internal_only === true,
+       req.params.id, req.user.salonId]);
     if (!row) return res.status(404).json({ error: 'Статья не найдена' });
     agentRag.reembedArticle(req.user.salonId, row.id)
       .catch(e => logger.error(`reembed(update ${row.id}): ${e.message}`));

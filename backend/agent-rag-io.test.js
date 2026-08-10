@@ -101,6 +101,22 @@ describe('retrieveChunks', () => {
     expect(vectorSql).toMatch(/is_published/i);
     expect(ftsSql).toMatch(/is_published/i);
   });
+
+  // Диагностика 2026-08-10: search_knowledge_base отдал Миле внутреннюю статью
+  // «Отдел заботы: … ИНСТРУКЦИЯ ДЛЯ АДМИНИСТРАТОРА» — у статей не было признака
+  // аудитории, и внутренний регламент мог процитироваться пациенту. Поиск Милы
+  // обязан отсеивать internal_only в ОБЕИХ ветках (вектор и FTS); админский
+  // ассистент КБ этим фильтром не пользуется — сотрудникам статьи видны.
+  test('вектор и FTS не отдают внутренние статьи (internal_only)', async () => {
+    kb.embedText.mockResolvedValue([1, 0, 0]);
+    db.any.mockResolvedValue([]);
+    await rag.retrieveChunks(1, 'ботокс', { limit: 2 });
+    const sqls = db.any.mock.calls.map(c => c[0]);
+    const vectorSql = sqls.find(s => /FROM kb_chunks/i.test(s) && /embedding/i.test(s) && !/search_vector/i.test(s));
+    const ftsSql = sqls.find(s => /search_vector/i.test(s));
+    expect(vectorSql).toMatch(/internal_only\s*=\s*false/i);
+    expect(ftsSql).toMatch(/internal_only\s*=\s*false/i);
+  });
 });
 
 describe('buildKnowledgeContext', () => {

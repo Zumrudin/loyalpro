@@ -603,6 +603,15 @@ async function runMigrations(client) {
     )
   `).catch(() => {});
 
+  // Признак аудитории статьи (2026-08-10): internal_only = статья для сотрудников
+  // (регламенты «Заботы», инструкции администраторам) — админка и ассистент КБ её
+  // видят, а поиск Милы (agent-rag.retrieveChunks) отсеивает: внутренний регламент
+  // не должен цитироваться пациенту.
+  await client.query(`
+    ALTER TABLE kb_articles
+      ADD COLUMN IF NOT EXISTS internal_only BOOLEAN NOT NULL DEFAULT FALSE
+  `).catch(() => {});
+
   await client.query(`
     CREATE INDEX IF NOT EXISTS kb_articles_search_idx
     ON kb_articles USING GIN (search_vector)
