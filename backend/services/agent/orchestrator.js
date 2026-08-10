@@ -519,13 +519,17 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
         }
         if (lastOut && lastOut.author === 'system' && visitRating.isRatingSurvey(lastOut.text)) {
           if (rating >= 4) {
-            // Приветствия/представления тут нет намеренно, и ensureGreeting с
-            // ensureIntroduction ветка обходит сознательно: правило «ОЦЕНКА
-            // ВИЗИТА» велит коротко поблагодарить и закончить.
-            logger.info(`dialog ${dialogKey}: оценка визита ${rating} — детерминированная благодарность без LLM`);
+            // МОЛЧИМ, а не благодарим. На боевых данных голая цифра встречалась
+            // 46 раз, все — «5», и в 42 случаях клиника САМА отвечает через
+            // ~17 с (минимум 3 с) своим системным «Спасибо за отличную оценку…
+            // За опубликованный отзыв дарим 500 бонусов». Наша реплика ушла бы
+            // раньше, пациент получил бы две благодарности подряд, а главное —
+            // наша съела бы повод для сообщения с просьбой об отзыве.
+            // Инцидент 10.08 («чем могу помочь?» в ответ на «5») закрывается
+            // молчанием так же полно. Контракт — тот же, что у closing.js выше.
+            logger.info(`dialog ${dialogKey}: оценка визита ${rating} — молчим, благодарность шлёт сама клиника`);
             await state.setWatermark(salonId, dialogKey, watermark);
-            return { replies: [visitRating.buildThanks({ givenName: clientGivenName })],
-              escalated: false, sideEffect: false };
+            return { replies: [], escalated: false, sideEffect: false, silent: true };
           }
           // Низкая оценка. Эскалация тем же хендлером, что у модели (upsert
           // agent_dialogs + emitAgentStatus + красная подсветка в «Чате») — и она
@@ -538,6 +542,11 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
           // escalate_to_operator саму.
           let escalatedOk = false;
           try {
+            // ГОТЧА (класс пре-существующий, но виден отсюда): сам инструмент НЕ
+            // атомарен — сначала UPDATE agent_dialogs, потом INSERT agent_events
+            // и emitAgentStatus. Падение на втором шаге даёт escalatedOk=false
+            // при УЖЕ эскалированном диалоге: ход уйдёт в LLM и Мила ответит
+            // один раз поверх перевода, дальше её погасит alreadyEscalated.
             const res = await registry.handlers['escalate_to_operator'](salonId,
               { reason: `низкая оценка визита (${rating})` }, toolCtx);
             escalatedOk = !!(res && res.escalated);

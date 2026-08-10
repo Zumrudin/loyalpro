@@ -1,6 +1,6 @@
 'use strict';
 
-const { detectRating, parseRating, isRatingSurvey, buildThanks, buildApology } =
+const { detectRating, parseRating, isRatingSurvey, buildApology } =
   require('./services/agent/visit-rating');
 const { HANDOVER_ANNOUNCED_RE, handoverText } = require('./services/agent/admin-hours');
 
@@ -50,9 +50,6 @@ describe('isRatingSurvey', () => {
   test('тексты опроса распознаются', () => {
     expect(isRatingSurvey('Просим оценить обслуживание цифрой от 2 до 5')).toBe(true);
     expect(isRatingSurvey('ОЦЕНИТЕ, ПОЖАЛУЙСТА, ВИЗИТ')).toBe(true);
-    expect(isRatingSurvey('Поставьте балл нашей работе')).toBe(true);
-    expect(isRatingSurvey('Сколько звёзд поставите?')).toBe(true);
-    expect(isRatingSurvey('Сколько звезд поставите?')).toBe(true);
     expect(isRatingSurvey('Ответьте цифрой от 2 до 5')).toBe(true);
   });
   test('прочие автоуведомления — не опрос', () => {
@@ -60,6 +57,13 @@ describe('isRatingSurvey', () => {
     expect(isRatingSurvey('Напоминаем о записи завтра в 12:00')).toBe(false);
     expect(isRatingSurvey('Ваша запись перенесена')).toBe(false);
     expect(isRatingSurvey('Как ваше самочувствие после процедуры?')).toBe(false);
+  });
+  // «балл» и «звёзд» в словаре этой клиники значат совсем другое — маркерами
+  // они были бы источником ложных срабатываний, а не распознавания опроса.
+  test('«баллы» и «звёздочки» клиники за опрос не считаются', () => {
+    expect(isRatingSurvey('Вам начислено 500 баллов за отзыв')).toBe(false);
+    expect(isRatingSurvey('Лазерное удаление сосудистых звёздочек')).toBe(false);
+    expect(isRatingSurvey('Сосудистые звездочки — консультация врача')).toBe(false);
   });
   test('пусто / не строка → false (fail-open в LLM)', () => {
     expect(isRatingSurvey('')).toBe(false);
@@ -88,12 +92,11 @@ describe('detectRating', () => {
 });
 
 describe('тексты ответов', () => {
-  test('благодарность: с именем и без, без вопросов', () => {
-    expect(buildThanks({ givenName: 'Марина' })).toMatch(/^Марина, /);
-    expect(buildThanks({})).toMatch(/[Сс]пасибо/);
-    expect(buildThanks({})).not.toContain('?');
-    // Имя проходит sanitizeName: телефон вместо имени → ветка без имени.
-    expect(buildThanks({ givenName: '+79001112233' })).not.toContain('7900');
+  // Своей благодарности за 4–5 модуль не строит вовсе: на неё клиника отвечает
+  // сама («Спасибо за отличную оценку… дарим 500 бонусов»), и вторая ушла бы
+  // раньше, съев повод для просьбы об отзыве. Ветка оркестратора молчит.
+  test('благодарности за высокую оценку в модуле нет', () => {
+    expect(require('./services/agent/visit-rating').buildThanks).toBeUndefined();
   });
   // Сцепка с диспетчером: он по ЭТОМУ признаку решает, дошлать ли handoverText.
   // Сверяемся с общей константой, а не со своей копией регулярки — копия

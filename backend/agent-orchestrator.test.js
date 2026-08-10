@@ -1884,12 +1884,19 @@ describe('оценка визита («5» на автоопрос)', () => {
   const llmAnswer = (deps) => deps.provider.createMessage.mockResolvedValue(
     { assistantMsg: { role: 'assistant', content: 'ок' }, toolCalls: [], text: 'Ответ' });
 
-  test('«5» после автоуведомления → благодарность, провайдер НЕ вызывается, ватермарк сдвинут', async () => {
-    const deps = ratingDeps(5, 'system');
+  // 4–5 → МОЛЧИМ тем же контрактом, что closing.js. Благодарность на такую
+  // оценку шлёт сама клиника («Спасибо за отличную оценку… дарим 500 бонусов»,
+  // по проду 42 случая из 46, задержка ~17 с) — наша ушла бы раньше и съела
+  // повод для просьбы об отзыве.
+  test.each([4, 5])('«%i» после опроса → молчим, провайдер НЕ вызывается, ватермарк сдвинут', async (rating) => {
+    const deps = ratingDeps(rating, 'system');
     const res = await orchestrator.runDialog(1, '79001112233', { deps });
     expect(deps.provider.createMessage).not.toHaveBeenCalled();
-    expect(res.replies.join(' ')).toMatch(/спасибо/i);
+    expect(res.replies).toEqual([]);
+    expect(res.silent).toBe(true);
     expect(res.escalated).toBe(false);
+    expect(res.sideEffect).toBe(false);
+    expect(deps.registry.handlers.escalate_to_operator).not.toHaveBeenCalled();
     expect(deps.state.setWatermark).toHaveBeenCalledWith(1, '79001112233', 500);
     // Ход без единого вызова инструмента — запись в журнал заводить не за чем
     // (та же экономия, что у ветки молчания closing.js).
