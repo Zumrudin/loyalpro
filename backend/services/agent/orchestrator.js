@@ -49,6 +49,24 @@ const SLOT_READ_TOOLS = new Set([
   'get_available_slots', 'get_available_dates', 'get_sequential_slots', 'get_parallel_slots',
 ]);
 
+// Дедуп повторных вызовов в пределах хода (инцидент 2026-08-10, диалог
+// 79166524647, turn 5ef41c78: 15 вызовов get_available_slots за ход, из них
+// 9 — с байт-в-байт одинаковым input, ход сгорел в MAX_ITERS и ушёл в эскалацию).
+// Промпт-правило «НИКОГДА не вызывай инструмент повторно с теми же аргументами»
+// модель игнорирует — отвечаем детерминированно: повтор получает кэш ЭТОГО хода
+// с подсказкой, без исполнения хендлера (лишний поход в YClients) и без записи
+// в журнал tool-событий (память и выжимка не задваиваются; сам повтор виден в
+// логе). Дедупу подлежат ТОЛЬКО читающие инструменты: у SIDE_EFFECT_TOOLS повтор
+// обязан дойти до хендлера и его собственной идемпотентности. Ошибочный
+// результат не кэшируется — честный ретрай после сбоя сети остаётся возможным.
+const REPEAT_CALL_HINT = 'Ты уже вызывала этот инструмент с точно теми же аргументами в этом же ходе — выше его прежний результат, повторный вызов ничего не изменит. Не вызывай его снова: ответь пациенту по уже полученным данным (или измени аргументы, если нужно другое).';
+function repeatCallKey(name, input) {
+  const src = input && typeof input === 'object' && !Array.isArray(input) ? input : {};
+  const sorted = {};
+  for (const k of Object.keys(src).sort()) sorted[k] = src[k];
+  return `${name}:${JSON.stringify(sorted)}`;
+}
+
 // Плотная запись (§8 docs/superpowers/specs/2026-08-06-agent-slot-density-design.md):
 // offer_slots появляется в результате get_available_slots в ТРЁХ местах —
 // на верхнем уровне, и внутри каждого элемента staff_options[]/alternative_staff[]
@@ -604,6 +622,8 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
     // знаний, прочитанные В ЭТОМ ходе (address-guard). Транскрипт и журнал
     // действий источниками не считаются: см. шапку address-guard.js.
     let kbSourceText = '';
+    // Кэш вызовов ЭТОГО хода для дедупа повторов (см. REPEAT_CALL_HINT).
+    const turnCallCache = new Map();
 
     for (let i = 0; i < MAX_ITERS; i++) {
       let resp;
@@ -636,6 +656,20 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
 
       const results = [];
       for (const tc of resp.toolCalls) {
+        // Повтор читающего вызова с теми же аргументами → кэш хода + подсказка,
+        // хендлер не исполняется и в журнал событие не пишется (см. комментарий
+        // у REPEAT_CALL_HINT). Времена/флаги из результата уже собраны первым
+        // проходом — повторная обработка ничего не добавит.
+        const repeatKey = SIDE_EFFECT_TOOLS.has(tc.name) ? null : repeatCallKey(tc.name, tc.input);
+        if (repeatKey && turnCallCache.has(repeatKey)) {
+          const prior = turnCallCache.get(repeatKey);
+          const repeated = (prior && typeof prior === 'object' && !Array.isArray(prior))
+            ? { ...prior, repeated_call: true, hint: REPEAT_CALL_HINT }
+            : { repeated_call: true, hint: REPEAT_CALL_HINT, result: prior };
+          logger.info(`dialog ${dialogKey}: tool ${tc.name} повтор с теми же аргументами — отдаю кэш хода без выполнения`);
+          results.push({ id: tc.id, name: tc.name, result: repeated, isError: false });
+          continue;
+        }
         const handler = registry.handlers[tc.name];
         const startedAt = Date.now();
         let result;
@@ -650,6 +684,7 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
           result = { error: e.message };
         }
         const isError = !!(result && result.error);
+        if (repeatKey && !isError) turnCallCache.set(repeatKey, result);
         // Журнал tool-цикла: сырые input/result в БД (форензика + память).
         evBuffer.push(tc.name, tc.input, result, isError);
         // Один лог на вызов инструмента (ok/error, длительность, решающие поля

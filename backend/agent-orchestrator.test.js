@@ -1792,3 +1792,75 @@ describe('срезанные сообщения клиники доезжают 
       .not.toContain('ПРЕДЫДУЩИЕ СООБЩЕНИЯ КЛИНИКИ ЭТОМУ ПАЦИЕНТУ:');
   });
 });
+
+// Инцидент 2026-08-10 (79166524647, turn 5ef41c78): за один ход 15 вызовов
+// get_available_slots, из них 9 — с байт-в-байт одинаковым input (одна дата
+// запрошена 7 раз подряд). Промпт-правило «не вызывай инструмент повторно с
+// теми же аргументами» модель игнорирует — дедуп обязан быть детерминированным.
+describe('дедуп повторных tool-вызовов внутри хода (2026-08-10)', () => {
+  const SLOTS_INPUT = { staff_yc_id: 1910274, service_yc_id: 9536676, date: '2026-08-14' };
+
+  test('повтор read-вызова с теми же аргументами → хендлер не исполняется, в результат идёт кэш хода с подсказкой', async () => {
+    const events = makeToolEventsStub();
+    const deps = makeDeps({ toolEvents: events });
+    deps.provider.createMessage
+      .mockResolvedValueOnce(toolResp('get_available_slots', SLOTS_INPUT, 'c1'))
+      .mockResolvedValueOnce(toolResp('get_available_slots', { ...SLOTS_INPUT }, 'c2'))
+      .mockResolvedValueOnce(textResp('Свободно 10:00. Записать?'));
+    const out = await orchestrator.runDialog(1, 'k', { deps });
+    expect(out.replies).toContain('Свободно 10:00. Записать?');
+    // Хендлер исполнился РОВНО один раз — второй вызов сожрал бы YClients зря.
+    expect(deps.registry.handlers.get_available_slots).toHaveBeenCalledTimes(1);
+    // Модель на повтор получает кэш ЭТОГО хода + подсказку «не повторяй, отвечай».
+    const thirdCallMessages = deps.provider.createMessage.mock.calls[2][0].messages;
+    const repeatTurn = thirdCallMessages[thirdCallMessages.length - 1];
+    expect(repeatTurn.role).toBe('tool');
+    const repeated = JSON.parse(repeatTurn.content);
+    expect(repeated.repeated_call).toBe(true);
+    expect(repeated.hint).toMatch(/уже вызывала|не повторяй/i);
+    expect(repeated.slots).toEqual([{ time: '10:00' }]);
+  });
+
+  test('другие аргументы того же инструмента дедупом не считаются', async () => {
+    const deps = makeDeps();
+    deps.provider.createMessage
+      .mockResolvedValueOnce(toolResp('get_available_slots', SLOTS_INPUT, 'c1'))
+      .mockResolvedValueOnce(toolResp('get_available_slots', { ...SLOTS_INPUT, date: '2026-08-15' }, 'c2'))
+      .mockResolvedValueOnce(textResp('Есть время на 14-е и 15-е.'));
+    await orchestrator.runDialog(1, 'k', { deps });
+    expect(deps.registry.handlers.get_available_slots).toHaveBeenCalledTimes(2);
+  });
+
+  test('write-инструменты НЕ дедупятся — у них своя идемпотентность в хендлерах', async () => {
+    const BOOK = { service_yc_id: 7, staff_yc_id: 55, datetime: '2026-08-14 12:00' };
+    const deps = makeDeps();
+    deps.provider.createMessage
+      .mockResolvedValueOnce(toolResp('create_booking', BOOK, 'c1'))
+      .mockResolvedValueOnce(toolResp('create_booking', { ...BOOK }, 'c2'))
+      .mockResolvedValueOnce(textResp('Записала вас на 12:00.'));
+    await orchestrator.runDialog(1, 'k', { deps });
+    expect(deps.registry.handlers.create_booking).toHaveBeenCalledTimes(2);
+  });
+
+  test('повтор не пишется в журнал tool-событий (память не задваивается)', async () => {
+    const events = makeToolEventsStub();
+    const deps = makeDeps({ toolEvents: events });
+    deps.provider.createMessage
+      .mockResolvedValueOnce(toolResp('get_available_slots', SLOTS_INPUT, 'c1'))
+      .mockResolvedValueOnce(toolResp('get_available_slots', { ...SLOTS_INPUT }, 'c2'))
+      .mockResolvedValueOnce(textResp('Свободно 10:00.'));
+    await orchestrator.runDialog(1, 'k', { deps });
+    expect(events.buffers[0].push).toHaveBeenCalledTimes(1);
+  });
+
+  test('ошибочный результат не кэшируется — повтор после error исполняется заново', async () => {
+    const handler = jest.fn(async () => ({ error: 'таймаут YClients' }));
+    const deps = makeDeps({ handlers: { get_available_slots: handler } });
+    deps.provider.createMessage
+      .mockResolvedValueOnce(toolResp('get_available_slots', SLOTS_INPUT, 'c1'))
+      .mockResolvedValueOnce(toolResp('get_available_slots', { ...SLOTS_INPUT }, 'c2'))
+      .mockResolvedValueOnce(textResp('Не получилось, попробуем ещё раз.'));
+    await orchestrator.runDialog(1, 'k', { deps });
+    expect(handler).toHaveBeenCalledTimes(2);
+  });
+});
