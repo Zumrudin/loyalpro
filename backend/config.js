@@ -125,6 +125,10 @@ module.exports = {
   // По умолчанию ВКЛЮЧЕНО; аварийный рычаг — AGENT_VISIT_RATING_REPLY=false +
   // рестарт: чистая цифра снова уйдёт в LLM по правилу промпта «ОЦЕНКА ВИЗИТА».
   AGENT_VISIT_RATING_REPLY: process.env.AGENT_VISIT_RATING_REPLY !== 'false',
+  // Предвызов базы знаний на короткое «+» (согласие на отбивку об акции):
+  // статью ищет код, экономя один полный проход провайдера. Рычаг —
+  // AGENT_PROMO_PREFETCH=false + рестарт (модель вызовет КБ сама, как раньше).
+  AGENT_PROMO_PREFETCH: process.env.AGENT_PROMO_PREFETCH !== 'false',
   // Сторож доставки реплик Милы: Chatpush принял delivery (meta.status=success),
   // но сообщение так и не ушло в мессенджер — ни статуса, ни эха (инцидент
   // 2026-08-09, 79773115566). По умолчанию ВКЛЮЧЁН; аварийный рычаг

@@ -2008,3 +2008,112 @@ describe('оценка визита («5» на автоопрос)', () => {
     expect(res.replies).toEqual(['Ответ']);
   });
 });
+
+// ── Предвызов КБ на «+» (спека 2026-08-10-agent-prompt-to-code-offload) ──
+describe('предвызов КБ на короткое «+»', () => {
+  function promoDeps(lastAuthor, kbResult, text = '+') {
+    const kbHandler = jest.fn(async () => kbResult);
+    const deps = makeDeps({
+      history: {
+        loadTranscript: jest.fn(async () => ({ messages: [{ role: 'user', content: text }], watermark: 500 })),
+        lastOutgoingAuthor: jest.fn(async () => lastAuthor),
+      },
+      handlers: { search_knowledge_base: kbHandler },
+    });
+    deps.provider.createMessage.mockResolvedValue(
+      { assistantMsg: { role: 'assistant', content: 'ок' }, toolCalls: [], text: 'Расскажу про акцию' });
+    return { deps, kbHandler };
+  }
+
+  test('«+» после автоуведомления → КБ вызвана кодом, статья в системном промпте', async () => {
+    const { deps, kbHandler } = promoDeps('system',
+      { found: true, context: 'Акция августа: скидка 20% на чистки', sources: [] });
+    await orchestrator.runDialog(1, '79001112233', { deps });
+    expect(kbHandler).toHaveBeenCalledWith(1, { query: 'спецпредложение месяца, акция' }, expect.any(Object));
+    const system = deps.provider.createMessage.mock.calls[0][0].system;
+    expect(system).toContain('СТАТЬЯ О СПЕЦПРЕДЛОЖЕНИИ МЕСЯЦА (найдена автоматически');
+    expect(system).toContain('скидка 20% на чистки');
+  });
+
+  test('статья не нашлась → блока нет, ход штатный', async () => {
+    const { deps } = promoDeps('system', { found: false, context: '', sources: [] });
+    const res = await orchestrator.runDialog(1, '79001112233', { deps });
+    const system = deps.provider.createMessage.mock.calls[0][0].system;
+    expect(system).not.toContain('СТАТЬЯ О СПЕЦПРЕДЛОЖЕНИИ МЕСЯЦА (найдена автоматически');
+    expect(res.replies).toEqual(['Расскажу про акцию']);
+  });
+
+  test('последнее исходящее — agent («+» может быть согласием на слот) → предвызова нет', async () => {
+    const { deps, kbHandler } = promoDeps('agent', { found: true, context: 'x', sources: [] });
+    await orchestrator.runDialog(1, '79001112233', { deps });
+    expect(kbHandler).not.toHaveBeenCalled();
+  });
+
+  test('сообщение не «+» → предвызова нет', async () => {
+    const { deps, kbHandler } = promoDeps('system', { found: true, context: 'x', sources: [] }, 'а что по акциям?');
+    await orchestrator.runDialog(1, '79001112233', { deps });
+    expect(kbHandler).not.toHaveBeenCalled();
+  });
+
+  // Fail-open: сбой КБ или чтения автора не должен стоить пациенту ответа —
+  // модель просто позовёт search_knowledge_base сама, как до фичи.
+  test('сбой предвызова → ход штатный, без блока', async () => {
+    const kbHandler = jest.fn(async () => { throw new Error('rag down'); });
+    const deps = makeDeps({
+      history: {
+        loadTranscript: jest.fn(async () => ({ messages: [{ role: 'user', content: '+' }], watermark: 500 })),
+        lastOutgoingAuthor: jest.fn(async () => 'system'),
+      },
+      handlers: { search_knowledge_base: kbHandler },
+    });
+    deps.provider.createMessage.mockResolvedValue(
+      { assistantMsg: { role: 'assistant', content: 'ок' }, toolCalls: [], text: 'Ответ' });
+    const res = await orchestrator.runDialog(1, 'k', { deps });
+    expect(res.replies).toEqual(['Ответ']);
+    expect(deps.provider.createMessage.mock.calls[0][0].system)
+      .not.toContain('СТАТЬЯ О СПЕЦПРЕДЛОЖЕНИИ МЕСЯЦА (найдена автоматически');
+  });
+
+  test('инжектор history без lastOutgoingAuthor → ветка молча пропускается', async () => {
+    const kbHandler = jest.fn(async () => ({ found: true, context: 'x', sources: [] }));
+    const deps = makeDeps({
+      history: {
+        loadTranscript: jest.fn(async () => ({ messages: [{ role: 'user', content: '+' }], watermark: 500 })),
+      },
+      handlers: { search_knowledge_base: kbHandler },
+    });
+    deps.provider.createMessage.mockResolvedValue(
+      { assistantMsg: { role: 'assistant', content: 'ок' }, toolCalls: [], text: 'Ответ' });
+    const res = await orchestrator.runDialog(1, 'k', { deps });
+    expect(kbHandler).not.toHaveBeenCalled();
+    expect(res.replies).toEqual(['Ответ']);
+  });
+
+  test('AGENT_PROMO_PREFETCH=false → предвызова нет', async () => {
+    const { deps, kbHandler } = promoDeps('system', { found: true, context: 'x', sources: [] });
+    deps.config = { ...require('./config'), AGENT_PROMO_PREFETCH: false };
+    await orchestrator.runDialog(1, 'k', { deps });
+    expect(kbHandler).not.toHaveBeenCalled();
+  });
+
+  test('предвызов пишется в журнал tool-событий (память следующего хода)', async () => {
+    const stub = makeToolEventsStub();
+    const { deps } = promoDeps('system', { found: true, context: 'Акция', sources: [] });
+    deps.toolEvents = stub.mod;
+    await orchestrator.runDialog(1, '79001112233', { deps });
+    const pushed = stub.buffers[0].push.mock.calls.map(c => c[0]);
+    expect(pushed).toContain('search_knowledge_base');
+  });
+
+  // Статья предвызова — легальный источник адреса для address-guard: иначе
+  // адрес из статьи об акции вырезался бы как выдумка модели.
+  test('адрес из предзагруженной статьи не режется address-guard', async () => {
+    const { deps } = promoDeps('system',
+      { found: true, context: 'Акция августа. Ждём вас: ул. Генерала Белова, 28 к. 3', sources: [] });
+    deps.provider.createMessage.mockResolvedValue({
+      assistantMsg: { role: 'assistant', content: 'ок' }, toolCalls: [],
+      text: 'Ждём вас по адресу: ул. Генерала Белова, 28 к. 3' });
+    const res = await orchestrator.runDialog(1, '79001112233', { deps });
+    expect(res.replies.join(' ')).toContain('Генерала Белова');
+  });
+});

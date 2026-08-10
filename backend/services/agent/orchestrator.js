@@ -13,6 +13,7 @@ const greeting = require('./greeting');
 const addressGuard = require('./address-guard');
 const closing = require('./closing');
 const visitRating = require('./visit-rating');
+const promoInterest = require('./promo-interest');
 const adminHours = require('./admin-hours');
 const toolEventsDefault = require('./tool-events');
 const toolMemoryDefault = require('./tool-memory');
@@ -476,6 +477,12 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
     priceIndex,
   };
 
+  // Предвызов КБ на короткое «+» (акция): делается ОДИН раз на ход и переживает
+  // перегенерации (статья не протухает за секунды прогона).
+  const PROMO_QUERY = { query: 'спецпредложение месяца, акция' };
+  let promoKb = null;
+  let promoChecked = false;
+
   for (let attempt = 0; attempt <= MAX_REGEN; attempt++) {
     // leadingClinic — сообщения клиники, срезанные из НАЧАЛА транскрипта
     // (провайдер требует user первым). Инцидент 2026-08-10 (79776646672): так
@@ -575,6 +582,31 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
     const evBuffer = toolEvents.createBuffer(salonId, dialogKey);
     bag.buf = evBuffer;
 
+    // «+» на отбивку об акции → search_knowledge_base зовёт КОД, а не модель:
+    // правило промпта требовало от неё вызова, т.е. второго полного прохода
+    // провайдера (спека 2026-08-10). Условие то же двухчастное, что у оценки
+    // визита: триггер-предикат + последнее исходящее — автоуведомление.
+    // Fail-open: любой сбой → блока нет, модель вызовет КБ сама, как раньше.
+    if (cfg.AGENT_PROMO_PREFETCH && !promoChecked) {
+      promoChecked = true;
+      if (promoInterest.isPromoInterest(messages)
+          && typeof history.lastOutgoingAuthor === 'function') {
+        try {
+          const author = await history.lastOutgoingAuthor(salonId, dialogKey);
+          if (author === 'system' && registry.handlers['search_knowledge_base']) {
+            const kb = await registry.handlers['search_knowledge_base'](salonId, PROMO_QUERY, toolCtx);
+            if (kb && kb.found && kb.context) promoKb = kb;
+            logger.info(`dialog ${dialogKey}: короткое «+» на акцию — предвызов базы знаний (${promoKb ? 'статья найдена' : 'статьи нет'})`);
+          }
+        } catch (e) {
+          logger.warn(`dialog ${dialogKey}: предвызов базы знаний не удался (${e.message}) — модель вызовет сама`);
+        }
+      }
+    }
+    // В журнал — на КАЖДОЙ попытке: буфер пересоздаётся, а вердикт delivered
+    // ставится тому буферу, чья попытка реально вернулась.
+    if (promoKb) evBuffer.push('search_knowledge_base', PROMO_QUERY, promoKb, false);
+
     const convo = messages.slice();
 
     // Первое в истории обращение: приветствие и представление держались только
@@ -621,6 +653,7 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
     // MAX_REGEN, поэтому цена пренебрежимая.
     const system = buildSystemPrompt({
       ...promptOpts, session, firstContact, firstAgentReply, leadingClinic,
+      promoBlock: promoKb ? promoKb.context : null,
     });
 
     // Допустимые времена для финальной реплики: всё, что реально всплывало в
@@ -687,7 +720,9 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
     // Единственный легальный источник адреса/контактов клиники — статьи базы
     // знаний, прочитанные В ЭТОМ ходе (address-guard). Транскрипт и журнал
     // действий источниками не считаются: см. шапку address-guard.js.
-    let kbSourceText = '';
+    // Предзагруженная статья — легальный источник этого хода и для address-guard
+    // (иначе адрес из статьи об акции вырезался бы как выдумка).
+    let kbSourceText = promoKb ? JSON.stringify(promoKb) : '';
     // Кэш вызовов ЭТОГО хода для дедупа повторов (см. REPEAT_CALL_HINT).
     const turnCallCache = new Map();
 
