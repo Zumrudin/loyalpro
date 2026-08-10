@@ -98,9 +98,20 @@ const COMMIT = process.argv.includes('--commit');
      HAVING count(*) FILTER (WHERE phone IS NULL OR phone = '') > 0
         AND count(DISTINCT phone) FILTER (WHERE phone IS NOT NULL AND phone <> '') > 0`);
 
-  console.log(`\nЧатов с номером, появившимся посреди переписки: ${split.length}`);
+  // Собственный номер инстанса «известным номером клиента» не считается НИКОГДА.
+  // Без этого проход 2 в сухом прогоне (проход 1 ещё ничего не записал) видит
+  // номер клиники как единственный известный номер чата и предлагает разнести
+  // его по всей переписке — ровно тот дефект, который скрипт и лечит. С фильтром
+  // проходы независимы от порядка, а чаты вида «настоящий номер + номер клиники»
+  // перестают быть ложным «номеров несколько».
+  const ownPhones = new Set(owners.map(o => o.phone));
+  for (const s of split) s.phones = (s.phones || []).filter(p => !ownPhones.has(p));
+  const own = split.filter(s => !s.phones.length).length;
+  console.log(`\nЧатов с номером, появившимся посреди переписки: ${split.length - own}`
+    + (own ? ` (ещё ${own} — только наш собственный номер, ими займётся проход 1)` : ''));
   let merged = 0;
   for (const s of split) {
+    if (!s.phones.length) continue;                 // известен только наш номер — им займётся проход 1
     if (s.phones.length > 1) {
       console.log(`  ⚠ салон ${s.salon_id} chat_id=${s.chat_id}: номеров несколько (${s.phones.join(', ')}) — пропуск`);
       continue;
