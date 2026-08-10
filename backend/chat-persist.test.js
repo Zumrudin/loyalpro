@@ -23,6 +23,11 @@ describe('adoptPhoneForChat', () => {
     expect(db.query).not.toHaveBeenCalled();
   });
 
+  test('группа WhatsApp (jid @g.us) тоже не трогается', async () => {
+    await expect(adoptPhoneForChat(1, '79991234567-1500000000@g.us', '79191091250')).resolves.toBe(0);
+    expect(db.query).not.toHaveBeenCalled();
+  });
+
   test('без салона, чата или номера ничего не делаем', async () => {
     await expect(adoptPhoneForChat(null, '374647823', '79191091250')).resolves.toBe(0);
     await expect(adoptPhoneForChat(1, '', '79191091250')).resolves.toBe(0);

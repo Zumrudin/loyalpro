@@ -5,7 +5,12 @@
 // (services/care/worker.js).
 const { db } = require('../db');
 const config = require('../config');
-const { phoneMatchCandidates, dialogKey, isGroupChatId } = require('./chat');
+const { phoneMatchCandidates, dialogKey } = require('./chat');
+// Признак группы берём ШИРОКИЙ (`agent/group-chat`, ловит и WhatsApp-jid
+// «@g.us»/«@broadcast»), а не узкий `chat.isGroupChatId`: тот зеркалит
+// DIALOG_KEY_SQL и выражение индекса, расширять его нельзя. Здесь важно не
+// разнести по «номеру чата» переписку, где номер у каждого сообщения свой.
+const { isGroupChatId } = require('./agent/group-chat');
 const chatpush = require('./chatpush');
 const chatEvents = require('./chat-events');
 const { createLogger } = require('../logger');

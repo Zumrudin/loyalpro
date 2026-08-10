@@ -91,7 +91,9 @@ const COMMIT = process.argv.includes('--commit');
             count(*) FILTER (WHERE phone IS NULL OR phone = '')::int AS blanks,
             array_agg(DISTINCT phone) FILTER (WHERE phone IS NOT NULL AND phone <> '') AS phones
        FROM chatpush_messages
-      WHERE chat_id IS NOT NULL AND chat_id <> '' AND chat_id NOT LIKE '-%'
+      WHERE chat_id IS NOT NULL AND chat_id <> ''
+        AND chat_id NOT LIKE '-%'                      -- группы tdlib/MAX
+        AND chat_id NOT LIKE '%@g.us' AND chat_id NOT LIKE '%@broadcast'   -- группы WhatsApp
       GROUP BY 1, 2
      HAVING count(*) FILTER (WHERE phone IS NULL OR phone = '') > 0
         AND count(DISTINCT phone) FILTER (WHERE phone IS NOT NULL AND phone <> '') > 0`);
