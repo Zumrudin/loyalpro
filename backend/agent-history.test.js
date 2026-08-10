@@ -513,3 +513,28 @@ describe('loadTranscript: срезанные ведущие реплики кл�
     expect(out.leadingClinic).toEqual(['Напоминаем о записи']);
   });
 });
+
+// ── lastOutgoingAuthor: автор последнего исходящего (спека 2026-08-10-agent-prompt-to-code-offload) ──
+// Детерминированные ветки оркестратора (оценка визита, «+» на акцию) включаются
+// ТОЛЬКО когда последнее слово клиники — автоуведомление (authored_by='system').
+describe('lastOutgoingAuthor', () => {
+  test('отдаёт authored_by последнего исходящего', async () => {
+    db.oneOrNone.mockResolvedValue({ authored_by: 'system' });
+    expect(await history.lastOutgoingAuthor(1, '79001112233')).toBe('system');
+    const [sql, params] = db.oneOrNone.mock.calls[0];
+    expect(sql).toMatch(/direction = 'outgoing'/);
+    expect(sql).toMatch(/ORDER BY/);
+    expect(sql).toMatch(/LIMIT 1/);
+    expect(params).toEqual([1, '79001112233']);
+  });
+
+  test('исходящих нет → null', async () => {
+    db.oneOrNone.mockResolvedValue(null);
+    expect(await history.lastOutgoingAuthor(1, 'k')).toBe(null);
+  });
+
+  test('authored_by не проставлен (NULL в строке) → null', async () => {
+    db.oneOrNone.mockResolvedValue({ authored_by: null });
+    expect(await history.lastOutgoingAuthor(1, 'k')).toBe(null);
+  });
+});
