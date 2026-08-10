@@ -160,3 +160,44 @@ describe('маскировка цены «Ботулинотерапия Бот�
     expect(b.split('\n').find(l => l.startsWith('2|'))).toContain('|5000|');
   });
 });
+
+// ── Предрассчитанные диапазоны цен направлений (спека 2026-08-10) ──
+describe('блок «ДИАПАЗОНЫ ЦЕН»', () => {
+  const staffOf = (lo, hi) => [{ yc_id: 5, name: 'А', price_min: lo, price_max: hi }];
+  const services = [
+    { yc_id: 1, title: 'Биоревитализация Revi Silk 1 ml', price_min: 12000, price_max: 12000,
+      category_path: ['Инъекционная косметология', 'Биоревитализация'], staff: staffOf(12000, 12000) },
+    { yc_id: 2, title: 'Биоревитализация Profhilo', price_min: 18000, price_max: 21000,
+      category_path: ['Инъекционная косметология', 'Биоревитализация'], staff: staffOf(18000, 21000) },
+    // Обобщённая заглушка (1 ₽ → «инд.») — в диапазон не входит.
+    { yc_id: 3, title: 'Биоревитализация', price_min: 1, price_max: 0,
+      category_path: ['Инъекционная косметология', 'Биоревитализация'], staff: staffOf(1, 0) },
+    // Единица Ботулакса — не входит (Task 7 маскирует в «инд.»).
+    { yc_id: 4, title: 'Ботулинотерапия  Ботулакс 1 ед ( 30 минут )', price_min: 370, price_max: 370,
+      category_path: ['Инъекционная косметология', 'Ботулинотерапия'], staff: staffOf(370, 370) },
+    // Мужская услуга — отдельный прайс узла.
+    { yc_id: 5, title: 'Муж. Комплекс 5в1', price_min: 24700, price_max: 24700,
+      category_path: ['Инъекционная косметология', 'Ботулинотерапия'], staff: staffOf(24700, 24700) },
+  ];
+
+  test('диапазон узла: женские без «инд.», мужские отдельно, узлы обоих уровней', () => {
+    const b = renderCatalogBlock(services);
+    expect(b).toContain('ДИАПАЗОНЫ ЦЕН');
+    expect(b).toContain('- «Биоревитализация»: от 12000 до 21000 ₽');
+    expect(b).toContain('- «Инъекционная косметология»: от 12000 до 21000 ₽ (мужской прайс «Муж.»: 24700 ₽)');
+    expect(b).toContain('- «Ботулинотерапия»: только мужской прайс «Муж.» — 24700 ₽');
+  });
+
+  test('детерминизм: перестановка входа не меняет блок байт-в-байт', () => {
+    const a = renderCatalogBlock(services);
+    const b = renderCatalogBlock(services.slice().reverse());
+    expect(a).toBe(b);
+  });
+
+  test('услуг с ценами нет → блока диапазонов нет', () => {
+    const b = renderCatalogBlock([
+      { yc_id: 9, title: 'X', price_min: null, price_max: null, category_path: ['Y'], staff: staffOf(null, null) },
+    ]);
+    expect(b).not.toContain('ДИАПАЗОНЫ ЦЕН');
+  });
+});

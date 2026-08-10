@@ -5,6 +5,7 @@
 // id|название|мин|цена|направление>подкатегория|id мастеров.
 // ~16k символов против 77k у JSON list_services (замер 2026-07-27, salon 1).
 const { loadCatalogServices, matchesGenericTitle } = require('./catalog-data');
+const { isMaleService } = require('./male-services');
 const { createLogger } = require('../../logger');
 const logger = createLogger('AgentCatalogBlock');
 
@@ -61,6 +62,51 @@ function fmtStaffCell(staff, opts = {}) {
   return list.map((m, i) => (same ? String(m.yc_id) : `${m.yc_id}=${prices[i]}`)).join(',');
 }
 
+// ── Предрассчитанные диапазоны цен по узлам category_path ────────────────────
+// ЗАЧЕМ: правило «Цена НАПРАВЛЕНИЯ» заставляло МОДЕЛЬ отбирать услуги по
+// category_path, исключать «инд.» и считать min/max — чистую арифметику, которую
+// LLM делает хуже кода. Готовые числа лежат прямо в кэшируемом блоке каталога.
+// Исключаются услуги без цены и с ценой «инд.» (заглушки ≤100 ₽, «Ботулакс 1 ед»
+// после маскировки выше); мужской прайс («Муж.») считается ОТДЕЛЬНО — смешивать
+// прайсы запрещает правило «МУЖСКОЙ ПРАЙС».
+function fmtRange(r) {
+  return r.lo === r.hi ? `${r.lo} ₽` : `от ${r.lo} до ${r.hi} ₽`;
+}
+
+const RANGES_HEADER =
+  'ДИАПАЗОНЫ ЦЕН ПО НАПРАВЛЕНИЯМ И ГРУППАМ УСЛУГ (посчитано по каталогу выше; услуги «инд.» и цена единицы препарата в диапазоны не входят). Отвечая на вопрос о цене направления или группы, называй диапазон ОТСЮДА — сама услуги не суммируй и не пересчитывай. Женский и мужской прайс разделены:';
+
+function renderPriceRanges(services) {
+  const nodes = new Map();   // имя узла → { f:{lo,hi}|null, m:{lo,hi}|null }
+  for (const s of services || []) {
+    if (isUnitPriceService(s.title)) continue;
+    const priceCell = fmtPrice(s.price_min, s.price_max);
+    if (!priceCell || priceCell === 'инд.') continue;
+    const lo = Number(s.price_min) || 0;
+    const hi = Math.max(lo, Number(s.price_max) || 0);
+    const key = isMaleService(s.title) ? 'm' : 'f';
+    for (const raw of (s.category_path || [])) {
+      const name = cell(raw, 60);
+      if (!name) continue;
+      const node = nodes.get(name) || { f: null, m: null };
+      const cur = node[key];
+      node[key] = cur
+        ? { lo: Math.min(cur.lo, lo), hi: Math.max(cur.hi, hi) }
+        : { lo, hi };
+      nodes.set(name, node);
+    }
+  }
+  // Простое строковое сравнение, НЕ localeCompare: блок обязан быть
+  // детерминированным байт-в-байт (префикс-кэш), а localeCompare зависит от ICU.
+  return [...nodes.entries()]
+    .sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0))
+    .map(([name, { f, m }]) => {
+      if (f && m) return `- «${name}»: ${fmtRange(f)} (мужской прайс «Муж.»: ${fmtRange(m)})`;
+      if (f) return `- «${name}»: ${fmtRange(f)}`;
+      return `- «${name}»: только мужской прайс «Муж.» — ${fmtRange(m)}`;
+    });
+}
+
 function renderCatalogBlock(services) {
   if (!Array.isArray(services) || !services.length) return null;
   const sorted = services
@@ -88,10 +134,13 @@ function renderCatalogBlock(services) {
         fmtStaffCell(s.staff, { hidePrices: unitPrice }),
       ].join('|');
     });
+  const rangeLines = renderPriceRanges(sorted);
   const block = [
     'КАТАЛОГ УСЛУГ КЛИНИКИ (полный актуальный список; формат строки: id услуги|название|длительность в минутах|цена ₽|направление>подкатегория|id мастеров через запятую). Цена: одно число — точная стоимость; X-Y — цены мастеров различаются, и тогда в колонке мастеров у каждого стоит его собственная цена (id=цена) — называй пациенту именно её, а не границу диапазона; «инд.» — стоимость определяет врач на консультации, цифру НЕ называй; пусто — цены нет, не выдумывай. Услуги с приставкой «Муж.» в начале названия — мужской прайс: мужчине называй цену и оформляй запись ТОЛЬКО по ним, женщине — только по строкам без приставки:',
     legend ? `Мастера: ${legend}` : null,
     ...lines,
+    // Пустая строка-разделитель добавляется ПОСЛЕ filter(Boolean) — иначе он же её и съест.
+    ...(rangeLines.length ? [`\n${RANGES_HEADER}`, ...rangeLines] : []),
   ].filter(Boolean).join('\n');
   if (block.length > MAX_BLOCK_CHARS) {
     logger.warn(`каталог в промпте аномально велик: ${block.length} символов (>${MAX_BLOCK_CHARS})`);
@@ -109,4 +158,4 @@ async function buildSafe(salonId) {
   }
 }
 
-module.exports = { renderCatalogBlock, buildSafe, fmtPrice };
+module.exports = { renderCatalogBlock, buildSafe, fmtPrice, renderPriceRanges };
