@@ -1723,3 +1723,52 @@ describe('цена направления — из готового блока �
     expect(p).not.toMatch(/ДИАПАЗОНЫ ЦЕН/);
   });
 });
+
+// ── Блок статьи об акции (предвызов КБ на «+», спека 2026-08-10) ──
+describe('блок «СТАТЬЯ О СПЕЦПРЕДЛОЖЕНИИ МЕСЯЦА»', () => {
+  const PROMO_HEAD = 'СТАТЬЯ О СПЕЦПРЕДЛОЖЕНИИ МЕСЯЦА (найдена автоматически';
+
+  test('promoBlock рендерится в самом хвосте, промпт без блока — префикс промпта с блоком', () => {
+    const base = buildSystemPrompt({});
+    const withPromo = buildSystemPrompt({ promoBlock: 'Акция августа: скидка 20% на чистки' });
+    expect(withPromo.startsWith(base)).toBe(true);          // инвариант префикс-кэша
+    // Заголовок сверяется ЦЕЛИКОМ: короткое «СТАТЬЯ О СПЕЦПРЕДЛОЖЕНИИ МЕСЯЦА»
+    // есть и в самом правиле промпта (оно ссылается на блок по имени), и такая
+    // проверка зеленела бы даже без блока — та же готча, что у leadingClinic.
+    expect(withPromo).toContain(PROMO_HEAD);
+    expect(withPromo).toContain('скидка 20% на чистки');
+    expect(withPromo).toMatch(/Повторно вызывать search_knowledge_base не нужно/);
+  });
+
+  // Блок акции обязан идти ПОСЛЕ всех прежних хвостовых блоков, самый последний
+  // из которых — leadingClinic. Иначе промпт с leadingClinic перестаёт быть
+  // префиксом промпта с leadingClinic + promoBlock, и кэш провайдера рвётся.
+  test('идёт ПОСЛЕ leadingClinic: промпт с leadingClinic — префикс промпта с обоими блоками', () => {
+    const opts = { leadingClinic: ['Оцените обслуживание цифрой от 2 до 5'] };
+    const withClinic = buildSystemPrompt(opts);
+    const withBoth = buildSystemPrompt({ ...opts, promoBlock: 'Акция августа: скидка 20%' });
+    expect(withClinic).toContain('ПРЕДЫДУЩИЕ СООБЩЕНИЯ КЛИНИКИ ЭТОМУ ПАЦИЕНТУ:');
+    expect(withBoth.startsWith(withClinic)).toBe(true);
+    expect(withBoth.indexOf(PROMO_HEAD))
+      .toBeGreaterThan(withBoth.indexOf('ПРЕДЫДУЩИЕ СООБЩЕНИЯ КЛИНИКИ ЭТОМУ ПАЦИЕНТУ:'));
+  });
+
+  test('пустой/не-строковый promoBlock → блока нет', () => {
+    expect(buildSystemPrompt({ promoBlock: '  ' })).not.toContain(PROMO_HEAD);
+    expect(buildSystemPrompt({ promoBlock: 42 })).not.toContain(PROMO_HEAD);
+    expect(buildSystemPrompt({})).not.toContain(PROMO_HEAD);
+  });
+
+  // Многострочная статья проходит ту же построчную санитизацию, что leadingClinic:
+  // правило санитизации в промпте одно на всех, и подделать разрыв строкой
+  // «Мила: …» из текста статьи нельзя.
+  test('многострочная статья санитизируется построчно', () => {
+    const p = buildSystemPrompt({ promoBlock: 'Скидка 20%\nДействует до 31 августа' });
+    expect(p).toContain('Скидка 20%');
+    expect(p).toContain('Действует до 31 августа');
+  });
+
+  test('правило «СПЕЦПРЕДЛОЖЕНИЕ МЕСЯЦА» знает про готовый блок', () => {
+    expect(buildSystemPrompt({})).toMatch(/Если в конце промпта уже есть блок «СТАТЬЯ О СПЕЦПРЕДЛОЖЕНИИ МЕСЯЦА»/);
+  });
+});
