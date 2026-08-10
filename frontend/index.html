@@ -21,9 +21,9 @@
 <script src="js/core/api.js"></script>
 <script src="js/core/theme.js"></script>
 <script src="js/core/auth.js?v=2026-06-02a"></script>
-<script src="js/core/nav.js?v=2026-08-03a"></script>
-<link rel="stylesheet" href="css/base.css?v=2026-06-19-brand">
-<link rel="stylesheet" href="css/features.css?v=2026-08-09-price-photos">
+<script src="js/core/nav.js?v=2026-08-10-hashnav"></script>
+<link rel="stylesheet" href="css/base.css?v=2026-08-10-mobile">
+<link rel="stylesheet" href="css/features.css?v=2026-08-10-chat-mobile">
 </head>
 <body>
 
@@ -1571,8 +1571,10 @@
     <!-- ═══ MEDICAL CERT PAGE ═══ -->
     <!-- ═══ ЧАТ (просмотр переписок chatpush) ═══ -->
     <div class="page" id="page-chat">
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
-        <div style="font-size:16px;font-weight:700">💬 Чат</div>
+      <!-- Стили шапки — в features.css (.chat-page-head): инлайновый display
+           перебил бы правило, которое прячет её на телефоне внутри переписки. -->
+      <div class="chat-page-head">
+        <div class="chat-page-title">💬 Чат</div>
         <div style="display:flex;gap:8px;align-items:center">
           <div class="chat-fs-ctl" title="Размер шрифта переписки">
             <button class="btn btn-sec chat-fs-btn" onclick="chatFontStep(-1)" aria-label="Меньше шрифт">A−</button>
@@ -1591,6 +1593,9 @@
           </div>
         </div>
         <div class="chat-main">
+          <!-- Возврат к списку диалогов. Видна только на телефоне (features.css):
+               там на экране одна панель, и другого выхода из переписки нет. -->
+          <button class="chat-back" type="button" onclick="chatCloseDialog()">‹ К списку чатов</button>
           <div class="chat-header" id="chat-header"></div>
           <div class="chat-messages" id="chat-messages">
             <div class="empty">Выберите диалог</div>
@@ -2420,8 +2425,8 @@ function fireConfetti() {
 <script src="js/pages/settings.js"></script>
 <script src="js/pages/portfolio.js"></script>
 <script src="js/pages/chat-dialog-sort.js?v=2026-07-31a"></script>
-<script src="js/pages/chat.js?v=2026-07-31a"></script>
-<script src="js/pages/chat-composer.js?v=2026-07-31a"></script>
+<script src="js/pages/chat.js?v=2026-08-10-mobile"></script>
+<script src="js/pages/chat-composer.js?v=2026-08-10-mobile"></script>
 <script src="js/pages/agent-settings.js?v=2026-07-31a"></script>
 <script src="js/pages/patient-portfolio.js?v=2026-06-01e"></script>
 <script src="js/pages/staff-dashboard.js?v=2026-06-11d"></script>

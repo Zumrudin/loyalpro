@@ -54,7 +54,9 @@ function chatComposerSetDialog(d) {
   sel.innerHTML = chans.map(c =>
     `<option value="${_chatEsc(c)}"${c === d.defaultChannel ? ' selected' : ''}>${_chatEsc(CMP_CHANNEL_LABELS[c] || c)}</option>`).join('');
   sel.disabled = !chans.length;
-  document.getElementById('chat-input').focus();
+  // На телефоне фокус не ставим: экранная клавиатура выехала бы сразу при
+  // открытии диалога и закрыла бы половину переписки, ради которой его и открыли.
+  if (!window.matchMedia('(max-width:700px)').matches) document.getElementById('chat-input').focus();
 }
 
 function _cmpChannel() { return document.getElementById('chat-chan-select').value; }

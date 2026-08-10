@@ -62,22 +62,92 @@ function chatFontStep(delta) {
   _chatFsApply(px);
 }
 
+// ── Мобильный режим: на экране видна ОДНА панель — список ИЛИ переписка ──
+// Ширина совпадает с общим мобильным брейкпоинтом приложения (base.css, 700px);
+// при правке порога менять ОБА места — вёрстка и логика должны переключаться вместе.
+const CHAT_MOBILE_MAX = 700;
+const _chatIsNarrow = () => window.matchMedia('(max-width:' + CHAT_MOBILE_MAX + 'px)').matches;
+
+// Показать/скрыть панель переписки. На узком экране класс переключает панели,
+// на широком видны обе — класс лишь помечает состояние (им же прячется
+// шапка страницы на мобильном, чтобы переписке досталась вся высота).
+function _chatShowPane(on) {
+  const layout = document.querySelector('.chat-layout');
+  if (layout) layout.classList.toggle('chat-show-dialog', !!on);
+  document.body.classList.toggle('chat-dialog-open', !!on);
+}
+
+// Открытый диалог держим в адресе: /#chat/<ключ>. Иначе «Назад» уводило со
+// страницы целиком, а обновление страницы теряло переписку.
+function _chatSetHash(key) {
+  const want = 'chat' + (key ? '/' + encodeURIComponent(key) : '');
+  if ((location.hash || '').slice(1) === want) return;
+  location.hash = want;
+}
+
+// Закрыть переписку и вернуться к списку (кнопка «‹ К чатам» и «Назад» браузера).
+function chatCloseDialog(opts) {
+  _chatActiveKey = null;
+  _chatMsgs = [];
+  _chatShowPane(false);
+  if (window.chatComposerSetDialog) chatComposerSetDialog(null);
+  const headEl = document.getElementById('chat-header');
+  if (headEl) { headEl._lastHtml = null; headEl.innerHTML = ''; headEl.classList.remove('active'); }
+  const paneEl = document.getElementById('chat-messages');
+  if (paneEl) { paneEl._lastHtml = null; paneEl.innerHTML = '<div class="empty">Выберите диалог</div>'; }
+  renderChatDialogs();
+  if (!(opts && opts.fromHash)) _chatSetHash(null);
+}
+
+// Хвост адреса изменился (кнопки «Назад»/«Вперёд») — зовёт роутер (core/nav.js).
+function chatOnHashArg(key) {
+  if (key) {
+    if (key !== _chatActiveKey) openChatDialog(key, { fromHash: true });
+    else _chatShowPane(true);
+  } else if (_chatActiveKey) {
+    chatCloseDialog({ fromHash: true });
+  }
+}
+
 // Вход на страницу: первичная загрузка + запуск живого обновления.
 async function loadChat() {
   _chatFsApply(_chatFsRead());
+  _chatShowPane(!!_chatActiveKey);
   // Администратор-кассир видит чат, но не управляет настройками ИИ-агента.
   const agentBtn = document.getElementById('chat-agent-settings-btn');
   if (agentBtn) agentBtn.style.display = (typeof ME !== 'undefined' && ME && ME.role === 'admin_cashier') ? 'none' : '';
   const s = document.getElementById('chat-search');
   if (s) s.value = _chatSearch;
+  // Подсказка про Enter/Shift+Enter — про физическую клавиатуру: на телефоне она
+  // не про что и не влезала в поле, обрезаясь на полуслове.
+  const ta = document.getElementById('chat-input');
+  if (ta) ta.placeholder = _chatIsNarrow()
+    ? 'Сообщение…' : 'Сообщение… (Enter — отправить, Shift+Enter — перенос)';
   await refreshChatDialogs(false);
   // Deep-link /#chat/<ключ> — открыть диалог сразу после загрузки списка.
-  if (window._deepLinkArg) {
-    const key = window._deepLinkArg;
-    window._deepLinkArg = null;
-    openChatDialog(key);
+  // Хвост адреса ГЛАВНЕЕ памяти модуля: клик по «Чат» в меню перезаписывает hash
+  // без хвоста и обязан вернуть человека к списку, а не к прошлому диалогу.
+  const fromHash = !window._deepLinkArg;
+  const arg = window._deepLinkArg || _chatHashArg();
+  window._deepLinkArg = null;
+  if (arg) {
+    // Переоткрываем ПРИНУДИТЕЛЬНО, даже если этот диалог уже помечен активным:
+    // hashchange мог открыть его, пока список ещё грузился, — тогда композер
+    // получил заглушку без каналов и отправить из него было нечего.
+    _chatActiveKey = null;
+    await openChatDialog(arg, { fromHash });
+  } else {
+    chatCloseDialog({ fromHash: true });
   }
   startChatLive();
+}
+
+// Ключ диалога из адреса (/#chat/<ключ>), либо null.
+function _chatHashArg() {
+  const raw = (location.hash || '').slice(1);
+  const [page, ...rest] = raw.split('/');
+  if (page !== 'chat' || !rest.length) return null;
+  try { return decodeURIComponent(rest.join('/')); } catch { return null; }
 }
 
 // Загрузка/обновление списка диалогов. silent=true — фоновой опрос без спиннера.
@@ -162,8 +232,10 @@ function onChatSearch(v) {
   renderChatDialogs();
 }
 
-async function openChatDialog(key) {
+async function openChatDialog(key, opts) {
   _chatActiveKey = key;
+  _chatShowPane(true);                 // на телефоне переписка занимает весь экран
+  if (!(opts && opts.fromHash)) _chatSetHash(key);
   renderChatDialogs();
   const d = _chatDialogs.find(x => x.key === key);
   if (window.chatComposerSetDialog) chatComposerSetDialog(d || { key, channels: [], defaultChannel: null });
@@ -313,7 +385,11 @@ async function renderChatHeader(key) {
 
   if (_chatActiveKey !== key) return;   // диалог переключили, пока грузился статус — чужую шапку не рисуем
   const escalated = status === 'escalated';
-  const label = escalated ? '👤 Отвечает оператор (бот молчит)' : '🤖 Отвечает бот';
+  // На телефоне подпись короткая: полная занимала две строки и выдавливала
+  // переписку вниз (шапка и так уже съедает экран кнопкой возврата).
+  const label = _chatIsNarrow()
+    ? (escalated ? '👤 Оператор' : '🤖 Бот')
+    : (escalated ? '👤 Отвечает оператор (бот молчит)' : '🤖 Отвечает бот');
   const btnLabel = escalated ? 'Вернуть боту' : 'Передать оператору';
   const nextStatus = escalated ? 'bot' : 'escalated';
 
@@ -433,6 +509,8 @@ async function pollChat() {
 
 window.loadChat = loadChat;
 window.openChatDialog = openChatDialog;
+window.chatCloseDialog = chatCloseDialog;
+window.chatOnHashArg = chatOnHashArg;   // зовёт роутер на hashchange (core/nav.js)
 window.onChatSearch = onChatSearch;
 window.stopChatPolling = stopChatLive;   // имя сохранено — его зовёт роутер при уходе со страницы
 window.chatAppendOptimistic = chatAppendOptimistic;
