@@ -458,7 +458,10 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
   };
 
   for (let attempt = 0; attempt <= MAX_REGEN; attempt++) {
-    const { messages, watermark, session } = await history.loadTranscript(
+    // leadingClinic — сообщения клиники, срезанные из НАЧАЛА транскрипта
+    // (провайдер требует user первым). Инцидент 2026-08-10 (79776646672): так
+    // потерялся опрос об оценке визита, и «5» приехала в модель без вопроса.
+    const { messages, watermark, session, leadingClinic } = await history.loadTranscript(
       salonId, dialogKey, { limit: 20, withTime: true });
     // Буфер вложений ЭТОЙ попытки. Пересоздаётся на каждой перегенерации:
     // черновик, выброшенный из-за нового входящего, обязан унести фото с собой,
@@ -512,11 +515,29 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
       }
     }
     const firstContact = !answeredBefore;
+    // Писала ли САМА Мила в этот диалог. Отдельный вопрос от «отвечали ли
+    // вообще»: инцидент 2026-08-10 (79166524647, 79295059889) — обеим пациенткам
+    // отвечал живой администратор, поэтому firstContact был false, блок ПЕРВОЕ
+    // ОБРАЩЕНИЕ не рендерился, и Мила не представилась ни той, ни другой.
+    // При firstContact ответ известен без запроса: исходящих не было вовсе.
+    // Fail-open — в сторону ПРЕЖНЕГО поведения («уже писала»): сбой БД не должен
+    // заставлять её представляться в каждом сообщении подряд.
+    let firstAgentReply = firstContact;
+    if (!firstContact && typeof history.hasAgentEverWritten === 'function') {
+      try {
+        firstAgentReply = !(await history.hasAgentEverWritten(salonId, dialogKey));
+      } catch (e) {
+        firstAgentReply = false;
+        logger.warn(`dialog ${dialogKey}: проверка первой реплики агента не удалась: ${e.message}`);
+      }
+    }
 
     // Промпт собирается ВНУТРИ цикла: граница переписки известна только после
     // загрузки транскрипта. Сборка — конкатенация строк, перегенераций не больше
     // MAX_REGEN, поэтому цена пренебрежимая.
-    const system = buildSystemPrompt({ ...promptOpts, session, firstContact });
+    const system = buildSystemPrompt({
+      ...promptOpts, session, firstContact, firstAgentReply, leadingClinic,
+    });
 
     // Допустимые времена для финальной реплики: всё, что реально всплывало в
     // этом ходе — история диалога (клиент сам называл время / мы уже предлагали),
@@ -880,6 +901,18 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
       const fixed = greeting.ensureGreeting(replies, {
         givenName: clientGivenName, salonName: opts.salonName,
       });
+      replies.length = 0;
+      replies.push(...fixed);
+    }
+
+    // Представление — отдельный слой поверх приветствия и по ДРУГОМУ признаку.
+    // Инцидент 2026-08-10: пациенткам, которым раньше отвечал живой
+    // администратор, Мила не представилась — firstContact там false, а писала
+    // она им впервые. Дописка стоит ПОСЛЕ ensureGreeting: то приветствие уже
+    // содержит представление, и hasIntroduction не даст задвоить.
+    if (firstAgentReply && replies.length && !greeting.hasIntroduction(replies.join('\n'))) {
+      logger.info(`dialog ${dialogKey}: первая реплика Милы в диалоге без представления — дописываю детерминированно`);
+      const fixed = greeting.ensureIntroduction(replies, { salonName: opts.salonName });
       replies.length = 0;
       replies.push(...fixed);
     }

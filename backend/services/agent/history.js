@@ -158,8 +158,19 @@ async function loadTranscript(salonId, dialogKey, opts = {}) {
   // Claude требует, чтобы первым шёл user — срезаем ведущие assistant-реплики
   // (после переноса хвоста: он мог поставить assistant в начало, если более
   // раннего user-блока в окне не нашлось).
-  while (messages.length && messages[0].role === 'assistant') messages.shift();
-  return { messages, watermark, session };
+  //
+  // Срезанное ВОЗВРАЩАЕТСЯ отдельно, а не пропадает. Инцидент 2026-08-10
+  // (79776646672): пациентка ответила «5» на опрос об оценке визита, но все три
+  // исходящих в диалоге были служебными и шли подряд в начале окна — их срезало
+  // целиком, и в модель ушла ровно одна строка «5», без вопроса, ответом на
+  // который она была. Мила прочитала это как начало разговора и спросила «чем
+  // могу помочь?». Оркестратор кладёт leadingClinic в ХВОСТ промпта: в
+  // messages их вернуть нельзя (роль assistant первой запрещена провайдером).
+  const leadingClinic = [];
+  while (messages.length && messages[0].role === 'assistant') {
+    leadingClinic.push(messages.shift().content);
+  }
+  return { messages, watermark, session, leadingClinic };
 }
 
 // Отвечали ли этому пациенту хоть раз за ВСЮ историю диалога?
@@ -194,6 +205,36 @@ async function hasEverAnswered(salonId, dialogKey) {
   return !!row;
 }
 
+// Писала ли САМА Мила в этот диалог хоть раз за всю историю?
+//
+// ЗАЧЕМ ОТДЕЛЬНО от hasEverAnswered: инцидент 2026-08-10 (79166524647 и
+// 79295059889). Обеим пациенткам раньше отвечал живой администратор из
+// приложения, Мила им не писала ни разу — и не представилась. hasEverAnswered
+// в обоих диалогах честно вернул true («разговор был»), поэтому блок промпта
+// «ПЕРВОЕ ОБРАЩЕНИЕ», где единственно и живёт требование представиться, не
+// рендерился; а блок «НАЧАЛО НОВОЙ ПЕРЕПИСКИ» вдобавок запрещает
+// представляться «второй раз» — на ложной посылке, первого раза не было.
+//
+// Два признака отвечают на два РАЗНЫХ вопроса, и схлопывать их нельзя:
+// hasEverAnswered — «здоровались ли с пациентом вообще» (повторное
+// «здравствуйте» посреди живого разговора неуместно), hasAgentEverWritten —
+// «представлялась ли Мила» (продублировать представление невозможно по
+// построению, если она ещё ни разу не писала).
+//
+// Строго authored_by='agent': 'operator' — живой человек, 'system' —
+// автоуведомление, NULL — до выката журнала авторства (04.08) либо упавший
+// classify. Ни то, ни другое, ни третье представлением Милы не было.
+async function hasAgentEverWritten(salonId, dialogKey) {
+  const row = await db.oneOrNone(
+    `SELECT 1 FROM chatpush_messages
+      WHERE salon_id = $1 AND ${DIALOG_KEY_SQL} = $2
+        AND direction = 'outgoing'
+        AND authored_by = 'agent'
+      LIMIT 1`,
+    [salonId, dialogKey]);
+  return !!row;
+}
+
 // Пришло ли входящее новее watermark (во время прогона агента)?
 async function hasIncomingAfter(salonId, dialogKey, watermark) {
   const row = await db.oneOrNone(
@@ -205,4 +246,7 @@ async function hasIncomingAfter(salonId, dialogKey, watermark) {
   return !!row;
 }
 
-module.exports = { loadTranscript, hasIncomingAfter, hasEverAnswered, OPERATOR_MARK, AUTHORSHIP_SINCE_TS };
+module.exports = {
+  loadTranscript, hasIncomingAfter, hasEverAnswered, hasAgentEverWritten,
+  OPERATOR_MARK, AUTHORSHIP_SINCE_TS,
+};

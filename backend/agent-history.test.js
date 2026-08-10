@@ -432,6 +432,31 @@ describe('hasEverAnswered', () => {
   });
 });
 
+// Инцидент 2026-08-10 (79166524647, 79295059889): обеим пациенткам раньше
+// отвечал ЖИВОЙ администратор, Мила — ни разу, и представиться ей было нечем:
+// hasEverAnswered считает ответ администратора за «мы уже отвечали». Признак
+// «писала ли сама Мила» — отдельный вопрос и отдельный запрос.
+describe('hasAgentEverWritten', () => {
+  test('реплик агента в диалоге нет → false', async () => {
+    db.oneOrNone.mockResolvedValue(null);
+    expect(await history.hasAgentEverWritten(1, '79166524647')).toBe(false);
+    expect(db.oneOrNone.mock.calls[0][1]).toEqual([1, '79166524647']);
+  });
+
+  test('реплика агента есть → true', async () => {
+    db.oneOrNone.mockResolvedValue({ '?column?': 1 });
+    expect(await history.hasAgentEverWritten(1, 'k')).toBe(true);
+  });
+
+  // Ровно тот водораздел, которого не хватало: ни администратор, ни
+  // автоуведомление, ни до-выкатный NULL за реплику Милы не считаются.
+  test('запрос сужен СТРОГО до собственных реплик агента', async () => {
+    db.oneOrNone.mockResolvedValue(null);
+    await history.hasAgentEverWritten(1, 'k');
+    expect(db.oneOrNone.mock.calls[0][0]).toMatch(/authored_by\s*=\s*'agent'/);
+  });
+});
+
 describe('hasIncomingAfter', () => {
   test('true, если есть входящее новее watermark', async () => {
     db.oneOrNone.mockResolvedValue({ '?column?': 1 });
@@ -442,5 +467,49 @@ describe('hasIncomingAfter', () => {
   test('false, если нет', async () => {
     db.oneOrNone.mockResolvedValue(null);
     expect(await history.hasIncomingAfter(1, 'k', 200)).toBe(false);
+  });
+});
+
+// Инцидент 2026-08-10 (79776646672): пациентка ответила «5» на опрос об оценке
+// визита, а Мила поздоровалась и спросила «чем могу помочь?». Причина
+// детерминированная: все три исходящих в диалоге были служебными и шли ПОДРЯД в
+// начале окна, а ведущие assistant-реплики срезаются (Messages API требует user
+// первым) — в модель ушла ровно одна строка, «5», без вопроса, на который это
+// ответ. Срезанное больше не теряется: оно возвращается отдельно, чтобы
+// оркестратор положил его в хвост промпта.
+describe('loadTranscript: срезанные ведущие реплики клиники', () => {
+  test('окно начинается с исходящих → они возвращаются в leadingClinic, а не пропадают', async () => {
+    // db.any отдаёт по msg_ts DESC (как в SQL) — модуль сам развернёт.
+    db.any.mockResolvedValue([
+      { direction: 'incoming', text: '5', authored_by: null, msg_ts: 3000 },
+      { direction: 'outgoing', text: 'Просим оценить обслуживание цифрой от 2 до 5', authored_by: 'system', msg_ts: 2000 },
+      { direction: 'outgoing', text: 'Вы записаны на прием 09.08.2026 19:30.', authored_by: 'system', msg_ts: 1000 },
+    ]);
+    const out = await history.loadTranscript(1, 'k');
+    expect(out.messages).toEqual([{ role: 'user', content: '5' }]);
+    expect(out.leadingClinic).toEqual([
+      'Вы записаны на прием 09.08.2026 19:30.\nПросим оценить обслуживание цифрой от 2 до 5',
+    ]);
+  });
+
+  test('окно начинается с сообщения клиента → срезать нечего', async () => {
+    db.any.mockResolvedValue([
+      { direction: 'incoming', text: 'хочу записаться', authored_by: null, msg_ts: 3000 },
+      { direction: 'outgoing', text: 'Добрый день!', authored_by: 'agent', msg_ts: 2000 },
+      { direction: 'incoming', text: 'Здравствуйте', authored_by: null, msg_ts: 1000 },
+    ]);
+    const out = await history.loadTranscript(1, 'k');
+    expect(out.leadingClinic).toEqual([]);
+  });
+
+  // Хвостовой assistant-блок переносится ПЕРЕД последний user-блок и может
+  // оказаться в начале — тогда он тоже срезается, и терять его нельзя.
+  test('в окне только исходящие → всё уходит в leadingClinic, транскрипт пуст', async () => {
+    db.any.mockResolvedValue([
+      { direction: 'outgoing', text: 'Напоминаем о записи', authored_by: 'system', msg_ts: 1000 },
+    ]);
+    const out = await history.loadTranscript(1, 'k');
+    expect(out.messages).toEqual([]);
+    expect(out.leadingClinic).toEqual(['Напоминаем о записи']);
   });
 });

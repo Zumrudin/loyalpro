@@ -1678,3 +1678,117 @@ describe('прайс-листы в картинках', () => {
     expect(m[1]).not.toContain('send_price_list');
   });
 });
+
+// ── Представление, когда Мила пишет в диалог ВПЕРВЫЕ (инцидент 2026-08-10) ──
+// 79166524647 и 79295059889: обеим пациенткам раньше отвечал живой
+// администратор, Мила — ни разу, и в обоих диалогах она не представилась.
+// hasEverAnswered в них честно true («разговор был»), поэтому блок ПЕРВОЕ
+// ОБРАЩЕНИЕ, где единственно и живёт требование представиться, не рендерился.
+describe('представление при первой реплике Милы (2026-08-10)', () => {
+  const withHistory = (over = {}) => makeDeps({
+    history: {
+      loadTranscript: jest.fn(async () => ({
+        messages: [{ role: 'user', content: 'Перепишите пожалуйста меня к Пери на пятницу' }],
+        watermark: 100,
+        session: { newSession: true, gapText: '17 дней' },
+      })),
+      hasEverAnswered: jest.fn(async () => true),
+      ...over,
+    },
+  });
+
+  test('отвечал только администратор → представление дописывается к реплике', async () => {
+    const deps = withHistory({ hasAgentEverWritten: jest.fn(async () => false) });
+    deps.provider.createMessage.mockResolvedValueOnce(textResp('Здравствуйте, Марина! 👋\n\nСейчас проверю.'));
+    const out = await orchestrator.runDialog(1, 'k', { deps, salonName: 'PERI CLINIC' });
+    expect(out.replies).toEqual([
+      'Здравствуйте, Марина! 👋 Я Мила, виртуальный администратор PERI CLINIC.\n\nСейчас проверю.',
+    ]);
+  });
+
+  test('Мила в диалоге уже писала → ничего не дописываем', async () => {
+    const deps = withHistory({ hasAgentEverWritten: jest.fn(async () => true) });
+    deps.provider.createMessage.mockResolvedValueOnce(textResp('Здравствуйте, Марина! Сейчас проверю.'));
+    const out = await orchestrator.runDialog(1, 'k', { deps, salonName: 'PERI CLINIC' });
+    expect(out.replies).toEqual(['Здравствуйте, Марина! Сейчас проверю.']);
+  });
+
+  // Блок «НАЧАЛО НОВОЙ ПЕРЕПИСКИ» запрещал представляться «второй раз», а
+  // первого раза не было — запрет обязан быть условным, иначе промпт спорит
+  // с детерминированной допиской.
+  test('запрета «представляться второй раз» в промпте нет, пока Мила не писала', async () => {
+    const deps = withHistory({ hasAgentEverWritten: jest.fn(async () => false) });
+    deps.provider.createMessage.mockResolvedValueOnce(textResp('Здравствуйте! Я Мила, виртуальный администратор PERI CLINIC.'));
+    await orchestrator.runDialog(1, 'k', { deps, salonName: 'PERI CLINIC' });
+    const sys = deps.provider.createMessage.mock.calls[0][0].system;
+    expect(sys).toContain('НАЧАЛО НОВОЙ ПЕРЕПИСКИ');
+    expect(sys).not.toContain('Представляться второй раз');
+  });
+
+  // Никто не отвечал вовсе → представление уже приходит вместе с приветствием
+  // (ensureGreeting). Второй раз представляться нельзя, и лишний запрос в БД
+  // тут не нужен: ответ известен из firstContact.
+  test('первое обращение: одно представление и БЕЗ запроса в БД', async () => {
+    const deps = makeDeps({
+      history: {
+        loadTranscript: jest.fn(async () => ({
+          messages: [{ role: 'user', content: 'Здравствуйте! Хочу записаться' }],
+          watermark: 100,
+          session: { newSession: false, gapText: null },
+        })),
+        hasEverAnswered: jest.fn(async () => false),
+        hasAgentEverWritten: jest.fn(async () => false),
+      },
+    });
+    deps.provider.createMessage.mockResolvedValueOnce(textResp('Конечно, на какую процедуру?'));
+    const out = await orchestrator.runDialog(1, 'k', { deps, salonName: 'PERI CLINIC' });
+    expect(out.replies[0].match(/Я Мила/g)).toHaveLength(1);
+    expect(deps.history.hasAgentEverWritten).not.toHaveBeenCalled();
+  });
+
+  // Fail-open в сторону ПРЕЖНЕГО поведения: сбой БД не должен заставлять Милу
+  // представляться в каждом сообщении подряд.
+  test('сбой проверки не роняет ход и не дописывает представление', async () => {
+    const deps = withHistory({ hasAgentEverWritten: jest.fn(async () => { throw new Error('db down'); }) });
+    deps.provider.createMessage.mockResolvedValueOnce(textResp('Здравствуйте, Марина! Сейчас проверю.'));
+    const out = await orchestrator.runDialog(1, 'k', { deps, salonName: 'PERI CLINIC' });
+    expect(out.replies).toEqual(['Здравствуйте, Марина! Сейчас проверю.']);
+  });
+});
+
+// ── Оценка визита: срезанный опрос доезжает до модели (инцидент 2026-08-10) ──
+// 79776646672: пациентка ответила «5» на автоматический опрос об оценке визита.
+// Все три исходящих в диалоге были служебными и шли подряд в начале окна —
+// ведущие assistant-реплики срезаются (Messages API требует user первым), и в
+// модель ушла ровно одна строка «5», без вопроса, ответом на который она была.
+describe('срезанные сообщения клиники доезжают в промпт (2026-08-10)', () => {
+  const SURVEY = 'Просим Вас оценить обслуживание, отправив в ответ сообщение с цифрой от 2 до 5';
+
+  test('leadingClinic из транскрипта попадает в системный промпт', async () => {
+    const deps = makeDeps({
+      history: {
+        loadTranscript: jest.fn(async () => ({
+          messages: [{ role: 'user', content: '5' }],
+          watermark: 100,
+          leadingClinic: [SURVEY],
+        })),
+      },
+    });
+    deps.provider.createMessage.mockResolvedValueOnce(textResp('Спасибо за оценку!'));
+    await orchestrator.runDialog(1, 'k', { deps });
+    const sys = deps.provider.createMessage.mock.calls[0][0].system;
+    expect(sys).toContain('ПРЕДЫДУЩИЕ СООБЩЕНИЯ КЛИНИКИ ЭТОМУ ПАЦИЕНТУ:');
+    expect(sys).toContain(SURVEY);
+  });
+
+  // Старый инжектор history в тестах и на care-пути поля не отдаёт — ход не
+  // должен от этого падать, просто блока нет.
+  test('транскрипт без leadingClinic → блока нет, ход цел', async () => {
+    const deps = makeDeps();
+    deps.provider.createMessage.mockResolvedValueOnce(textResp('Здравствуйте!'));
+    const out = await orchestrator.runDialog(1, 'k', { deps });
+    expect(out.replies).toEqual(['Здравствуйте!']);
+    expect(deps.provider.createMessage.mock.calls[0][0].system)
+      .not.toContain('ПРЕДЫДУЩИЕ СООБЩЕНИЯ КЛИНИКИ ЭТОМУ ПАЦИЕНТУ:');
+  });
+});
