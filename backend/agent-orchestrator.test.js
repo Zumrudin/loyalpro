@@ -810,15 +810,18 @@ describe('исчерпание лимита tool-итераций', () => {
     // Раньше филлер «Секунду, уточняю…» на каждом tool-ходе считался репликой и
     // спамил клиента. Теперь пациенту уходит ТОЛЬКО финальная реплика (ход без
     // инструментов); филлер отбрасывается, и добивочный вызов даёт нормальный ответ.
+    // Время в реплике — из выдачи инструмента (дефолтный хендлер отдаёт 10:00):
+    // с 10.08.2026 выдуманное время требует корректирующего довызова, и фикстура
+    // с «16:00 и 18:30» мерила бы уже не нарратив, а срабатывание guard'а.
     const deps = makeDeps();
     deps.provider.createMessage.mockImplementation(async ({ tools }) => {
-      if (!tools || tools.length === 0) return textResp('Завтра свободно в 16:00 и 18:30.');
+      if (!tools || tools.length === 0) return textResp('Завтра свободно в 10:00.');
       return toolResp('get_available_slots', { date: '2026-07-20' }, 'c1', 'Секунду, уточняю…');
     });
 
     const out = await orchestrator.runDialog(1, 'k', { deps, today: '2026-07-19' });
 
-    expect(out.replies).toEqual(['Завтра свободно в 16:00 и 18:30.']);
+    expect(out.replies).toEqual(['Завтра свободно в 10:00.']);
     expect(deps.provider.createMessage).toHaveBeenCalledTimes(orchestrator.MAX_ITERS + 1);
   });
 });
@@ -892,15 +895,25 @@ describe('reply-guard в оркестраторе (2026-07-29)', () => {
     expect(deps.provider.createMessage).toHaveBeenCalledTimes(2);
   });
 
-  test('unknown_time НЕ переписывается (лог-only)', async () => {
+  // 10.08.2026: unknown_time переведён из лога в жёсткие. Инцидент 79166524647 —
+  // «на вторник, 18 августа, есть время в 12:00 и 14:30» на дату, которую тул в
+  // тот ход вообще не спрашивали. Замер по проду: за весь лог (91 ход) проверка
+  // сработала дважды, и оба раза на выдуманном времени — ложных не было.
+  test('unknown_time → корректирующий довызов, отдаётся переписанная реплика', async () => {
     const deps = makeDeps({ handlers: { get_available_slots: jest.fn(async () => ({ slots: [{ time: '14:30' }] })) } });
     deps.provider.createMessage
       .mockResolvedValueOnce(toolResp('get_available_slots', { staff_yc_id: 1, service_yc_id: 1, date: '2026-07-30' }))
-      .mockResolvedValueOnce(textResp('могу предложить 15:00'));
+      .mockResolvedValueOnce(textResp('могу предложить 15:00'))
+      .mockResolvedValueOnce(textResp('свободно только в 14:30'));
     const out = await orchestrator.runDialog(1, 'k', { deps, today: '2026-07-29', now: '09:00' });
-    // Реплика доставлена как есть, без корректирующего довызова: 1 tool-итерация + 1 финал = 2 вызова.
-    expect(out.replies).toEqual(['могу предложить 15:00']);
-    expect(deps.provider.createMessage).toHaveBeenCalledTimes(2);
+    expect(out.replies).toEqual(['свободно только в 14:30']);
+    expect(deps.provider.createMessage).toHaveBeenCalledTimes(3);
+    // Инструкция довызова обязана говорить ПРО ВРЕМЯ: прежний текст про
+    // «внутренние термины и идентификаторы» на выдуманном времени бессмыслен —
+    // модель не поймёт, что именно переписывать.
+    const fixMsg = deps.provider.createMessage.mock.calls[2][0].messages.slice(-1)[0].content;
+    expect(fixMsg).toMatch(/врем/i);
+    expect(fixMsg).toContain('15:00');
   });
 
   test('время, названное клиентом в истории, не считается unknown_time', async () => {
@@ -912,6 +925,78 @@ describe('reply-guard в оркестраторе (2026-07-29)', () => {
     expect(out.replies).toEqual(['Хорошо, 15:00 вам подходит?']);
     // Нет ретрая: только исходный вызов.
     expect(deps.provider.createMessage).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ── Инцидент 2026-08-10 (79166524647): окна чужого мастера выданы за окна
+// запрошенного. У Гаджиевой Пери отпуск — get_available_slots вернул пустые
+// slots и alternative_staff с окнами Астемира Боташева, а Мила написала «у
+// главного врача Пери Исамудиновны … есть окошки в 11:00 и 15:30». Времена
+// Астемира лежали в allowedTimes, поэтому старая проверка молчала. ──
+describe('reply-guard: чужое время приписано запрошенному мастеру (2026-08-10)', () => {
+  const VACANT = {
+    slots: [], staff_name: 'Гаджиева Пери', staff_not_working: true,
+    alternative_staff: [{ staff_yc_id: 5708379, name: 'Астемир Боташев', slots: [{ time: '11:00' }, { time: '15:30' }], offer_slots: [{ time: '17:30' }] }],
+  };
+  const slotsCall = () => toolResp('get_available_slots', { staff_yc_id: 1910274, service_yc_id: 900, date: '2026-08-17' });
+
+  test('назван только мастер без окон → корректирующий довызов с его именем', async () => {
+    const deps = makeDeps({ handlers: { get_available_slots: jest.fn(async () => VACANT) } });
+    deps.provider.createMessage
+      .mockResolvedValueOnce(slotsCall())
+      .mockResolvedValueOnce(textResp('У Пери Исамудиновны есть окошки в 11:00 и 15:30.'))
+      .mockResolvedValueOnce(textResp('У Пери в этот день приёма нет, но записать можно к Астемиру на 17:30.'));
+    const out = await orchestrator.runDialog(1, 'k', { deps, today: '2026-08-10', now: '09:00' });
+    expect(out.replies).toEqual(['У Пери в этот день приёма нет, но записать можно к Астемиру на 17:30.']);
+    expect(deps.provider.createMessage).toHaveBeenCalledTimes(3);
+    const fixMsg = deps.provider.createMessage.mock.calls[2][0].messages.slice(-1)[0].content;
+    expect(fixMsg).toContain('Гаджиева Пери');
+  });
+
+  test('назван владелец окон → довызова нет, реплика уходит как есть', async () => {
+    const deps = makeDeps({ handlers: { get_available_slots: jest.fn(async () => VACANT) } });
+    const good = 'У Пери в этот день приёма нет. Эту процедуру ведёт и Астемир Боташев — у него свободно в 11:00.';
+    deps.provider.createMessage
+      .mockResolvedValueOnce(slotsCall())
+      .mockResolvedValueOnce(textResp(good));
+    const out = await orchestrator.runDialog(1, 'k', { deps, today: '2026-08-10', now: '09:00' });
+    expect(out.replies).toEqual([good]);
+    expect(deps.provider.createMessage).toHaveBeenCalledTimes(2);
+  });
+
+  // Мастер с окнами в «пустые» попасть не должен: иначе честный ответ «у
+  // Астемира свободно в 11:00» сам себя объявит нарушением.
+  test('у запрошенного мастера окна ЕСТЬ → проверка молчит', async () => {
+    const deps = makeDeps({
+      handlers: { get_available_slots: jest.fn(async () => ({
+        slots: [{ time: '11:00' }], offer_slots: [{ time: '11:00' }], staff_name: 'Гаджиева Пери',
+      })) },
+    });
+    deps.provider.createMessage
+      .mockResolvedValueOnce(slotsCall())
+      .mockResolvedValueOnce(textResp('У Пери свободно в 11:00.'));
+    const out = await orchestrator.runDialog(1, 'k', { deps, today: '2026-08-10', now: '09:00' });
+    expect(out.replies).toEqual(['У Пери свободно в 11:00.']);
+    expect(deps.provider.createMessage).toHaveBeenCalledTimes(2);
+  });
+
+  // Тот же водораздел, что у staff_options: мастер без окон в ветке выбора
+  // специалиста — такой же «пустой», его имя тоже нельзя клеить к чужому времени.
+  test('staff_options: мастер без окон в выдаче тоже считается пустым', async () => {
+    const deps = makeDeps({
+      handlers: { get_available_slots: jest.fn(async () => ({
+        staff_options: [
+          { staff_yc_id: 1910274, name: 'Гаджиева Пери', slots: [], offer_slots: [] },
+          { staff_yc_id: 5708379, name: 'Астемир Боташев', slots: [{ time: '11:00' }], offer_slots: [{ time: '11:00' }] },
+        ],
+      })) },
+    });
+    deps.provider.createMessage
+      .mockResolvedValueOnce(toolResp('get_available_slots', { service_yc_id: 900, date: '2026-08-17' }))
+      .mockResolvedValueOnce(textResp('У Гаджиевой Пери свободно в 11:00.'))
+      .mockResolvedValueOnce(textResp('Свободное время в 11:00 есть у Астемира Боташева.'));
+    const out = await orchestrator.runDialog(1, 'k', { deps, today: '2026-08-10', now: '09:00' });
+    expect(out.replies).toEqual(['Свободное время в 11:00 есть у Астемира Боташева.']);
   });
 });
 

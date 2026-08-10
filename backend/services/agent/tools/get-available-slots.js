@@ -1,7 +1,7 @@
 'use strict';
 
 const { db } = require('../../../db');
-const { ycGetBookTimes, ycGetStaffSeances } = require('../../yclients-booking');
+const { ycGetBookTimes, ycGetStaffSeances, ycGetStaffSchedule } = require('../../yclients-booking');
 const settings = require('../../agent-settings');
 const svcFilter = require('../service-filter');
 const staffGuard = require('../staff-service-guard');
@@ -9,6 +9,12 @@ const eq = require('../equipment');
 const eqContext = require('../equipment-context');
 const leadTime = require('../lead-time');
 const density = require('../slot-density');
+const staffSchedule = require('../staff-schedule');
+
+// Насколько вперёд смотрим график мастера, когда на запрошенную дату у него пусто.
+// Отпуск исчисляется неделями (у PERI — 12–31.08), и вопрос пациента «а когда
+// тогда?» должен получать ответ из ЭТОГО же вызова, а не из нового перебора дат.
+const SCHEDULE_HORIZON_DAYS = 30;
 
 const DEFAULT_STEP_MIN = 30;       // шаг предлагаемых стартов в fallback-режиме
 const DEFAULT_DURATION_MIN = 60;   // если YClients не отдал duration услуги (как в get_parallel_slots)
@@ -66,6 +72,23 @@ const HINT_STAFF_PARTIAL = 'У проверенных исполнителей �
   'но проверены НЕ ВСЕ специалисты услуги (часть не ответила или не попала в проверку). ' +
   'НЕ утверждай, что времени нет ни у кого — этого мы не знаем. Предложи посмотреть другую ' +
   'дату (get_available_slots на другую дату).';
+
+// Мастера нет в графике на эту дату (отпуск/выходной). Инцидент 2026-08-10
+// (79166524647): у главного врача отпуск 12–31.08, и на КАЖДУЮ из 9 проверенных
+// дат тул отдавал голое `slots: []` — снаружи неотличимое от «работает, но день
+// расписан». Модель молча перебирала даты, а потом выдала окна другого мастера
+// за окна запрошенного. Отсюда две обязательные части текста: назвать причину
+// пустоты и ЗАПРЕТИТЬ переклеивать чужие времена на этого мастера.
+function hintStaffNotWorking(name, nextDate, checkedUntil) {
+  const who = name ? `Мастер ${name}` : 'Запрошенный мастер';
+  const when = nextDate
+    ? `Его ближайший приёмный день — ${nextDate}: предложи пациенту именно его (слоты на эту дату запроси отдельным вызовом).`
+    : `Рабочих дней у него нет и дальше — график проверен до ${checkedUntil}. Не перебирай даты вслепую: скажи пациенту, что мастер сейчас не принимает, и предложи другого специалиста или связь с администратором.`;
+  return `${who} в этот день НЕ РАБОТАЕТ — его нет в графике (отпуск или выходной). ` +
+    `У него не «всё занято»: свободного времени в этот день не существует и не появится. ${when} ` +
+    'КАТЕГОРИЧЕСКИ НЕЛЬЗЯ называть пациенту любое время как время ЭТОГО мастера: ' +
+    'ни из этой выдачи, ни из предыдущих ходов, ни из окон других специалистов.';
+}
 
 // Ни один исполнитель не ответил — это техническая неудача, а не занятость клиники.
 // Тон и формулировка — как в одномастерной ветке («Не удалось получить слоты: …»).
@@ -327,6 +350,28 @@ async function findAlternativeStaff(salon, filter, staffList, staffId, serviceId
   return null;
 }
 
+// YYYY-MM-DD + n дней. Москва — фиксированный UTC+3 без перехода на летнее время,
+// поэтому арифметика по UTC-полуночи здесь безопасна (тот же приём, что в
+// tools/get-available-dates.js).
+function addDays(date, n) {
+  const [y, m, d] = String(date).split('-').map(Number);
+  return new Date(Date.UTC(y, m - 1, d) + n * 86400000).toISOString().slice(0, 10);
+}
+
+// Работает ли мастер в этот день — спрашиваем ТОЛЬКО когда слотов не нашлось:
+// на счастливом пути это лишний запрос в YClients на каждом ходу каждого диалога.
+// Строго best-effort: сбой графика оставляет выдачу ровно такой, какой она была
+// до фикса. Выдуманный отпуск дороже неназванного — это тот же класс ошибки, что
+// «это время только что заняли» (инцидент 2026-07-31).
+async function describeStaffSchedule(salon, staffId, date) {
+  try {
+    const rows = await ycGetStaffSchedule(salon, staffId, date, addDays(date, SCHEDULE_HORIZON_DAYS));
+    return staffSchedule.summarizeWorkingDays(rows, { date });
+  } catch (_) {
+    return { unknown: true };
+  }
+}
+
 // Салон с токенами YClients. Обе ветки run() ходят в БД ПОСЛЕ своих проверок
 // (filtered/staff_mismatch отвечают, не дёргая базу), поэтому запрос нельзя поднять
 // выше ветвления — но и копировать его дважды незачем.
@@ -498,6 +543,12 @@ async function run(salonId, input, ctx = {}) {
   if (!salon || !salon.yclients_company_id) return { error: 'YClients не подключён для салона.' };
   try {
     const out = await computeStaffSlots(salon, staffId, serviceId, date, nowMs, dayPart);
+    // Имя запрошенного мастера едет рядом с его слотами — оно нужно reply-guard'у
+    // (checkStaffAttribution): без него оркестратор знает, что выдача пуста, но не
+    // знает, ЧЬЯ, и приписанное чужое время сверять не с чем (инцидент 10.08).
+    // Каталог мог не отдать исполнителей (fail-open предпроверки) — тогда поля нет.
+    const staffName = (staffList.find(m => String(m.yc_id) === String(staffId)) || {}).name || null;
+    if (staffName) out.staff_name = staffName;
     if (out.slots.length) {
       // Хинт про пустой день и про занятую половину дня — единственные случаи, где
       // одномастерная выдача что-то ОБЪЯСНЯЕТ модели: время в offer_slots её и так
@@ -508,7 +559,12 @@ async function run(salonId, input, ctx = {}) {
     }
     // У запрошенного мастера на эту дату пусто → сразу подсвечиваем альтернативу:
     // те же слоты у других исполнителей услуги, чтобы клиент не ушёл без записи.
-    const alt = await findAlternativeStaff(salon, filter, staffList, staffId, serviceId, date, nowMs, dayPart);
+    // Параллельно выясняем ПРИЧИНУ пустоты: «день расписан» и «мастера нет в
+    // графике» до 10.08.2026 выглядели снаружи одинаково (инцидент 79166524647).
+    const [alt, sched] = await Promise.all([
+      findAlternativeStaff(salon, filter, staffList, staffId, serviceId, date, nowMs, dayPart),
+      describeStaffSchedule(salon, staffId, date),
+    ]);
     if (alt && alt.alternative_staff) {
       out.alternative_staff = alt.alternative_staff;
       out.hint = 'У выбранного мастера на эту дату свободного времени нет, но ЭТУ ЖЕ услугу в этот день ' +
@@ -524,6 +580,16 @@ async function run(salonId, input, ctx = {}) {
       if (out.alternative_staff.some(a => a.free_day)) out.hint += HINT_FREE_DAY_OPTIONS;
     } else if (alt && alt.no_alternative_staff) {
       out.no_alternative_staff = true;   // проверены ВСЕ исполнители услуги — на дату пусто у всех
+    }
+    // Отпуск/выходной запрошенного мастера — САМЫЙ важный факт этой выдачи, поэтому
+    // его хинт идёт ПЕРВЫМ, а альтернатива дописывается следом: оба факта нужны
+    // одновременно, иначе модель склеит их в «у Пери есть окна» (инцидент 10.08).
+    if (!sched.unknown && !sched.working) {
+      out.staff_not_working = true;
+      out.staff_next_working_date = sched.nextWorkingDate;
+      if (!sched.nextWorkingDate) out.staff_schedule_checked_until = sched.checkedUntil;
+      const notWorking = hintStaffNotWorking(staffName, sched.nextWorkingDate, sched.checkedUntil);
+      out.hint = out.hint ? `${notWorking} ${out.hint}` : notWorking;
     }
     return out;
   } catch (e) {

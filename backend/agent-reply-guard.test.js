@@ -256,6 +256,67 @@ describe('OTHER_TIME_REQUEST_RE', () => {
   });
 });
 
+// ── Приписывание чужого времени мастеру (инцидент 2026-08-10, 79166524647) ────
+// У Гаджиевой Пери отпуск: все 12 вызовов get_available_slots по ней вернули
+// пустые slots, а рядом в alternative_staff лежали окна Астемира Боташева.
+// Мила написала пациентке «у главного врача Пери Исамудиновны … есть окошки в
+// 11:00 и 15:30» — это времена АСТЕМИРА. Прежние проверки этого не видели: в
+// allowedTimes у оркестратора лежат голые «HH:MM» из JSON всей выдачи, без
+// привязки к мастеру и дате, поэтому чужое 11:00 делало «11:00 у Пери» законным.
+describe('checkStaffAttribution: время чужого мастера выдано за время запрошенного', () => {
+  const INCIDENT = 'К сожалению, у главного врача Пери Исамудиновны на пятницу всё расписано.\n\n' +
+    'Посмотрела на следующий понедельник, 17 августа. Есть окошки в **11:00** и **15:30**.';
+  const OPTS = { emptyStaff: ['Гаджиева Пери'], availableStaff: ['Астемир Боташев'] };
+
+  test('мастер без окон назван, время названо, владелец времени — нет → нарушение', () => {
+    const v = g.checkStaffAttribution(INCIDENT, OPTS);
+    expect(v).toEqual([{ type: 'alien_time_attribution', value: 'Гаджиева Пери' }]);
+  });
+
+  test('назван и владелец окон — легально (штатная работа alternative_staff)', () => {
+    const ok = 'У Пери на этот день всё занято, но эту же процедуру ведёт Астемир Боташев — ' +
+      'у него свободно в 17:30.';
+    expect(g.checkStaffAttribution(ok, OPTS)).toEqual([]);
+  });
+
+  test('время не названо вовсе → нарушения нет', () => {
+    expect(g.checkStaffAttribution('У Пери Исамудиновны на эту неделю всё занято.', OPTS)).toEqual([]);
+  });
+
+  test('время назвал сам пациент — модель обязана его подтверждать', () => {
+    const opts = { ...OPTS, patientTimes: new Set(['11:00']) };
+    expect(g.checkStaffAttribution('Пери на 11:00 записать не получится.', opts)).toEqual([]);
+  });
+
+  test('мастера без окон в реплике нет → нарушения нет', () => {
+    expect(g.checkStaffAttribution('Свободно в 11:00 и 15:30.', OPTS)).toEqual([]);
+  });
+
+  test('пустого списка мастеров достаточно, чтобы проверка молчала', () => {
+    expect(g.checkStaffAttribution(INCIDENT, {})).toEqual([]);
+  });
+
+  // Имена в переписке склоняются: «к Пери Исамудиновне», «у Астемира».
+  test('склонённое имя считается упоминанием', () => {
+    const v = g.checkStaffAttribution('Записать к Гаджиевой Пери можно в 11:00.', OPTS);
+    expect(v).toEqual([{ type: 'alien_time_attribution', value: 'Гаджиева Пери' }]);
+  });
+  test('склонённое имя владельца окон тоже считается', () => {
+    const ok = 'У Пери занято, но у Астемира есть 17:30.';
+    expect(g.checkStaffAttribution(ok, OPTS)).toEqual([]);
+  });
+
+  // «Пери» — 4 буквы, и без защиты стем ловил бы «период». Бренд PERI CLINIC
+  // пишется латиницей и под кириллический стем не попадает по построению
+  // (см. agent_peri_name_collision: врач «Пери» ≠ клиника «PERI»).
+  test('строчное слово с тем же корнем именем не считается', () => {
+    expect(g.checkStaffAttribution('Свободный период с 11:00.', OPTS)).toEqual([]);
+  });
+  test('латинский бренд PERI CLINIC под кириллическое имя не подпадает', () => {
+    expect(g.checkStaffAttribution('PERI CLINIC ждёт вас в 11:00.', OPTS)).toEqual([]);
+  });
+});
+
 describe('hardViolations', () => {
   test('taboo_word и id_leak — жёсткие (требуют переписывания)', () => {
     expect(g.hardViolations([
@@ -266,5 +327,29 @@ describe('hardViolations', () => {
       { type: 'taboo_word', value: 'прайс' },
       { type: 'id_leak', value: '15234567' },
     ]);
+  });
+
+  // 10.08.2026: unknown_time переведён из лога в жёсткие. Основание — замер по
+  // ПРОДУ: за весь доступный лог (91 ход агента) он сработал РОВНО ДВА раза, и
+  // оба — этот инцидент («18 августа 12:00 и 14:30» на дату, которую тул в тот
+  // ход вообще не спрашивали). Ложных срабатываний в проде не было ни одного,
+  // а цена пропуска — выдуманное время, согласованное с пациентом.
+  test('unknown_time — жёсткое: выдуманное время дороже лишнего довызова', () => {
+    expect(g.hardViolations([{ type: 'unknown_time', value: '14:30' }]))
+      .toEqual([{ type: 'unknown_time', value: '14:30' }]);
+  });
+
+  test('alien_time_attribution — жёсткое', () => {
+    expect(g.hardViolations([{ type: 'alien_time_attribution', value: 'Гаджиева Пери' }]))
+      .toEqual([{ type: 'alien_time_attribution', value: 'Гаджиева Пери' }]);
+  });
+
+  // Стилистика по-прежнему только лог: переписывание стоит денег и рискует
+  // сломать по сути верный ответ.
+  test('offer_bypass и free_day_time остаются мягкими', () => {
+    expect(g.hardViolations([
+      { type: 'offer_bypass', value: '15:00' },
+      { type: 'free_day_time', value: '11:00' },
+    ])).toEqual([]);
   });
 });

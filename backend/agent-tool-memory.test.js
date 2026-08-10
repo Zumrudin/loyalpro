@@ -275,6 +275,32 @@ test('get_sequential_slots: свежие варианты — с времене�
   expect(stale.lines[0]).toMatch(/устарел/);
 });
 
+describe('память: get_available_slots — мастера нет в графике', () => {
+  // Инцидент 2026-08-10 (79166524647): у мастера отпуск, но и выдача, и журнал
+  // говорили одно и то же — «свободного времени не было». Следующим ходом это
+  // читается как «день был расписан», и модель идёт перебирать соседние даты,
+  // хотя мастера нет в графике ещё три недели.
+  const INPUT = { service_yc_id: 900, staff_yc_id: 1910274, date: '2026-08-14' };
+
+  test('отпуск в журнале звучит как отпуск, а не как занятость', () => {
+    const res = { slots: [], staff_not_working: true, staff_next_working_date: '2026-09-01' };
+    const { lines } = renderMemory(
+      [ev({ tool: 'get_available_slots', input: INPUT, result: res, age_ms: 10 * MIN })],
+      { nowMs: NOW });
+    expect(lines[0]).toMatch(/не работа/i);
+    expect(lines[0]).toMatch(/2026-09-01/);
+    expect(lines[0]).not.toMatch(/свободного времени не было/);
+  });
+
+  test('занятый день по-прежнему занятый день', () => {
+    const { lines } = renderMemory(
+      [ev({ tool: 'get_available_slots', input: INPUT, result: { slots: [] }, age_ms: 10 * MIN })],
+      { nowMs: NOW });
+    expect(lines[0]).toMatch(/свободного времени не было/);
+    expect(lines[0]).not.toMatch(/не работа/i);
+  });
+});
+
 describe('память: get_available_slots без мастера (выбор специалиста)', () => {
   // Пациент мастера не называл → инструмент вернул окна всех исполнителей
   // (staff_options вместо slots). Экстрактор, читавший только res.slots, писал

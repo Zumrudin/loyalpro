@@ -183,15 +183,82 @@ function checkFreeDayTime(text, opts = {}) {
   return out;
 }
 
-// Жёсткие нарушения — раскрытие внутренней кухни. По ним оркестратор просит
-// модель переписать ответ; стилистика (эмодзи, приветствие, offer_bypass,
-// free_day_time) — только лог.
-const HARD_TYPES = new Set(['taboo_word', 'id_leak']);
+// ── Чужое время, приписанное запрошенному мастеру ────────────────────────────
+// Инцидент 2026-08-10 (79166524647): у Гаджиевой Пери отпуск 12–31.08, все
+// вызовы get_available_slots по ней вернули пустые slots, а рядом в
+// alternative_staff лежали окна Астемира Боташева. Мила написала пациентке «у
+// главного врача Пери Исамудиновны … есть окошки в 11:00 и 15:30» — времена
+// Астемира. Ни одна прежняя проверка это не ловила и НЕ МОГЛА: allowedTimes у
+// оркестратора — плоское множество строк «HH:MM», собранное из JSON ВСЕЙ выдачи
+// хода, без привязки к мастеру и к дате. Чужое 11:00 делало «11:00 у Пери»
+// законным по построению; guard слеп ровно по тем двум осям, по которым модель
+// и соврала.
+//
+// Разбирать русский текст на «кому какое время приписано» здесь никто не
+// пытается — это ненадёжно. Проверяется гораздо более грубый, но однозначный
+// признак: если в реплике названо время и назван мастер, у которого за этот ход
+// НЕ БЫЛО НИ ОДНОГО окна, а мастер, у которого окна были, не упомянут вовсе, —
+// приписать это время физически некому, кроме первого. Легальный ответ той же
+// ситуации («у Пери занято, но у Астемира есть 17:30») называет обоих и мимо
+// проверки проходит.
+
+// Имя мастера в переписке склоняется («к Гаджиевой Пери», «у Астемира»), поэтому
+// сравниваем по стему с допуском на окончание. Первая буква обязана быть
+// ЗАГЛАВНОЙ: без этого 4-буквенный стем «Пери» ловил бы слово «период», а
+// латинский бренд PERI CLINIC под кириллический стем не подпадает и так
+// (историческая коллизия «врач Пери ≠ клиника PERI», agent_peri_name_collision).
+// \b в JS считает словом только ASCII, поэтому границы — через \p{L} lookaround.
+// ОСТАТОЧНЫЙ РИСК: слово с тем же корнем в НАЧАЛЕ предложения («Период …»)
+// прочитается как имя. Цена — один лишний корректирующий довызов, цена обратной
+// ошибки — выдуманное время, согласованное с пациентом.
+const NAME_TAIL = 3;         // сколько букв окончания допускаем сверх стема
+const MIN_STEM = 4;          // короче — слишком много ложных совпадений
+function personRe(word) {
+  const stem = word.slice(0, Math.max(MIN_STEM, word.length - 2));
+  return new RegExp(`(?<!\\p{L})${stem}\\p{L}{0,${NAME_TAIL}}(?!\\p{L})`, 'u');
+}
+function mentionsPerson(text, fullName) {
+  const s = String(text || '');
+  return String(fullName || '')
+    .split(/\s+/)
+    .filter(w => w.length >= MIN_STEM && /^\p{Lu}/u.test(w))
+    .some(w => personRe(w).test(s));
+}
+
+// opts:
+//   emptyStaff     — имена мастеров, чья выдача слотов за ход была ПУСТА;
+//   availableStaff — имена мастеров, у кого за ход были свободные окна;
+//   patientTimes   — времена, названные ЦИФРАМИ самим пациентом (их модель
+//                    обязана подтверждать — глушить такую реплику значило бы
+//                    повторить дефект анти-ложь-guard'а 04.08).
+function checkStaffAttribution(text, opts = {}) {
+  const empty = (opts.emptyStaff || []).filter(Boolean);
+  if (!empty.length) return [];
+  const s = String(text || '');
+  const patientTimes = opts.patientTimes || new Set();
+  const offered = extractTimes(s).filter(t => !patientTimes.has(t));
+  if (!offered.length) return [];
+  const available = (opts.availableStaff || []).filter(Boolean);
+  if (available.some(name => mentionsPerson(s, name))) return [];
+  const named = empty.find(name => mentionsPerson(s, name));
+  return named ? [{ type: 'alien_time_attribution', value: named }] : [];
+}
+
+// Жёсткие нарушения — оркестратор просит модель переписать ответ; стилистика
+// (эмодзи, приветствие, offer_bypass, free_day_time) — только лог.
+//
+// unknown_time переведён из лога в жёсткие 10.08.2026, и это ИЗМЕРЕНО, а не
+// решено на глаз: за весь доступный прод-лог (91 ход агента) он сработал РОВНО
+// ДВА раза — оба в инциденте 79166524647, где модель назвала «18 августа 12:00
+// и 14:30» на дату, которую в тот ход вообще не спрашивала у инструмента. Ноль
+// ложных срабатываний против выдуманного времени, согласованного с пациентом.
+const HARD_TYPES = new Set(['taboo_word', 'id_leak', 'unknown_time', 'alien_time_attribution']);
 function hardViolations(violations) {
   return (violations || []).filter(v => HARD_TYPES.has(v.type));
 }
 
 module.exports = {
   extractTimes, checkOfferedTimes, checkOfferDeviation, checkFreeDayTime, lintReply, hardViolations,
+  checkStaffAttribution, mentionsPerson,
   OTHER_TIME_REQUEST_RE,
 };

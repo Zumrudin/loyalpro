@@ -19,7 +19,7 @@ const listBookingsDefault = require('./tools/list-client-bookings');
 const bookingsBlock = require('./bookings-block');
 const priceListDefault = require('./price-list-data');
 const priceList = require('./price-list');
-const { buildSystemPrompt } = require('./system-prompt');
+const { buildSystemPrompt, FACTUAL_SECTION_MARKER } = require('./system-prompt');
 const { stripAllStamps, stripStamp } = require('./transcript-time');
 const { createLogger } = require('../../logger');
 const logger = createLogger('AgentOrchestrator');
@@ -65,6 +65,61 @@ function collectOfferSlotTimes(result, out) {
       for (const item of result[key]) collectOfferSlotTimes(item, out);
     }
   }
+}
+
+// Кто из мастеров в этой выдаче остался БЕЗ свободных окон, а у кого они есть.
+// Нужно reply-guard'у (checkStaffAttribution): инцидент 2026-08-10 — у мастера
+// в отпуске окон не было ни одного, окна лежали рядом у ДРУГОГО специалиста, и
+// модель назвала их временем первого. Имена берём из тех же трёх мест, где
+// живут слоты: верхний уровень (staff_name кладёт сам инструмент) и элементы
+// staff_options[]/alternative_staff[].
+function collectStaffAvailability(result, empty, available) {
+  if (!result || typeof result !== 'object') return;
+  const add = (name, slots) => {
+    if (!name) return;
+    (Array.isArray(slots) && slots.length ? available : empty).add(name);
+  };
+  add(result.staff_name, result.slots);
+  for (const key of ['staff_options', 'alternative_staff']) {
+    if (Array.isArray(result[key])) {
+      for (const item of result[key]) add(item && item.name, item && item.slots);
+    }
+  }
+}
+
+// Инструкция корректирующего довызова по жёстким нарушениям reply-guard. Текст
+// РАЗНЫЙ по виду нарушения, и это не косметика: до 10.08.2026 жёсткими были
+// только утечки внутренней кухни, и единственная формулировка говорила про
+// «внутренние термины или идентификаторы». На выдуманном времени она
+// бессмысленна — модель не поймёт, что именно переписывать, и вернёт тот же
+// текст. Нарушившее время в инструкции НАЗЫВАЕТСЯ (в отличие от
+// FALSE_CLAIM_CORRECTION, где называть время запрещено): здесь это не подсказка
+// «что предложить», а адрес того, что надо УБРАТЬ, и оно и так уже стоит в
+// собственной реплике модели строчкой выше.
+function buildHardFixPrompt(hard) {
+  const val = (type) => hard.filter(v => v.type === type).map(v => v.value);
+  const parts = [];
+  const leaks = val('taboo_word').concat(val('id_leak'));
+  if (leaks.length) {
+    parts.push(`содержит внутренние термины или идентификаторы: ${leaks.join(', ')} — ` +
+      'перепиши тем же смыслом, но без этих слов и чисел');
+  }
+  const alien = val('alien_time_attribution');
+  if (alien.length) {
+    parts.push(`называет свободное время как время мастера ${alien.join(', ')}, ` +
+      'у которого по выдаче инструментов в этот день нет НИ ОДНОГО свободного окна. ' +
+      'Время, найденное у другого специалиста, приписывать ему нельзя: либо честно скажи, ' +
+      'что у него приёма нет, и назови ИМЯ того, у кого окна действительно есть, ' +
+      'либо не называй времени вовсе');
+  }
+  const unknown = val('unknown_time');
+  if (unknown.length) {
+    parts.push(`называет время, которого нет ни в одной выдаче инструментов этого хода: ` +
+      `${unknown.join(', ')} — этого времени у нас не подтверждено. Убери его: предложи только то, ` +
+      'что реально вернули инструменты, либо запроси слоты заново');
+  }
+  return 'СЛУЖЕБНАЯ ПРОВЕРКА (пациент этого не видит): твой последний ответ ' +
+    `${parts.join('; а также ')}. В ответе — ТОЛЬКО переписанный текст для пациента.`;
 }
 
 // Реплика содержит конкретное время (HH:MM / HH.MM) — модель предлагает слот.
@@ -467,11 +522,21 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
     // этом ходе — история диалога (клиент сам называл время / мы уже предлагали),
     // текущее время из промпта и результаты инструментов (пополняется ниже).
     // Сверка — детерминированная страховка правила «время дословно из slots»
-    // (инцидент 2026-07-28: выдуманное 14:00). Пока ТОЛЬКО лог — меряем шум.
+    // (инцидент 2026-07-28: выдуманное 14:00); с 10.08.2026 нарушение жёсткое.
     // Метки времени реплик — НЕ предложенные пациенту времена: без чистки
     // reply-guard считал бы разрешённым любое время отправки сообщения.
     const allowedTimes = new Set(replyGuard.extractTimes(stripAllStamps(JSON.stringify(messages))));
-    for (const t of replyGuard.extractTimes(system)) allowedTimes.add(t);
+    // Из промпта берём ТОЛЬКО фактическую часть (от «ТЕКУЩИЙ КОНТЕКСТ:» и ниже):
+    // часы клиники, текущее время, живые варианты стыковки, журнал прошлых ходов,
+    // сверенные с CRM записи. Всё, что выше, — правила с ОБРАЗЦАМИ реплик, а в них
+    // 11 конкретных времён (12:00, 13:00, 14:00, 15:00, 16:00 …), и раньше каждое
+    // из них молча становилось «подтверждённым»: см. FACTUAL_SECTION_MARKER.
+    // Маркера нет (промпт перекроили) → берём весь промпт, как раньше: fail-open
+    // в сторону прежнего поведения, а не в сторону лавины ложных нарушений.
+    const factualIdx = system.indexOf(FACTUAL_SECTION_MARKER);
+    for (const t of replyGuard.extractTimes(factualIdx >= 0 ? system.slice(factualIdx) : system)) {
+      allowedTimes.add(t);
+    }
     // При новой переписке приветствие — не повтор, а требование промпта:
     // reply-guard иначе пишет repeat_greeting ровно там, где Мила права.
     // Подавляем ровно в том случае, в каком промпт предписал поздороваться:
@@ -495,6 +560,10 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
     // результатах, где реально был offer_slots).
     const toolOfferTimes = new Set();
     const offerSlotTimes = new Set();
+    // Мастера этого хода в разрезе «есть окна / нет окон» — для проверки
+    // приписывания чужого времени (инцидент 2026-08-10, 79166524647).
+    const emptyStaff = new Set();
+    const availableStaff = new Set();
     // Свободный день: правило промпта требует не называть время, а спросить половину
     // дня. Только измерение (free_day_time), см. checkFreeDayTime в reply-guard.
     let sawFreeDay = false;
@@ -617,6 +686,7 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
         // free_day приходит и на верхнем уровне, и внутри staff_options[]/
         // alternative_staff[] — по строке результата это одна проверка на все ветки.
         if (resultJson && resultJson.includes('"free_day":true')) sawFreeDay = true;
+        if (SLOT_READ_TOOLS.has(tc.name)) collectStaffAvailability(result, emptyStaff, availableStaff);
         if (!isError && tc.name === 'search_knowledge_base') kbSourceText += JSON.stringify(result);
       }
       for (const m of provider.toolResultMessages(results)) convo.push(m);
@@ -727,6 +797,15 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
         // Свободный день (правка 07.08): времени в ответе быть не должно вовсе —
         // только вопрос о половине дня. Тоже ЛИШЬ лог, без переписывания.
         ...replyGuard.checkFreeDayTime(joined, { freeDay: sawFreeDay, patientTimes }),
+        // Чужое время, приписанное запрошенному мастеру (инцидент 2026-08-10).
+        // Мастер, у которого за ход окна ХОТЬ ГДЕ-ТО нашлись, «пустым» не
+        // считается: за один ход модель перебирает несколько дат, и пустая
+        // выдача на одну из них не делает время на другой выдумкой.
+        ...replyGuard.checkStaffAttribution(joined, {
+          emptyStaff: [...emptyStaff].filter(n => !availableStaff.has(n)),
+          availableStaff: [...availableStaff],
+          patientTimes,
+        }),
       ];
       if (violations.length) {
         logger.warn(`dialog ${dialogKey}: reply-guard: ${JSON.stringify(violations)}`);
@@ -738,13 +817,7 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
         try {
           const fix = await provider.createMessage({
             system,
-            messages: convo.concat([{
-              role: 'user',
-              content: 'СЛУЖЕБНАЯ ПРОВЕРКА (пациент этого не видит): твой последний ответ ' +
-                `содержит внутренние термины или идентификаторы: ${hard.map(v => v.value).join(', ')}. ` +
-                'Перепиши его для пациента тем же смыслом, но без этих слов и чисел. ' +
-                'В ответе — ТОЛЬКО переписанный текст.',
-            }]),
+            messages: convo.concat([{ role: 'user', content: buildHardFixPrompt(hard) }]),
             tools: [],
           }, { client: opts.client });
           if (fix.text) { replies.length = 0; replies.push(fix.text); }

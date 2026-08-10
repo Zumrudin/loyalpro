@@ -54,7 +54,7 @@ describe('false-success guard', () => {
   test('заявлен перенос без вызова reschedule_booking → falseSuccess', async () => {
     const provider = providerOf([{ text: 'Готово, перенесла вашу запись на 14:00 🤍', toolCalls: [], assistantMsg: {} }]);
     const registry = { schemas: [], handlers: {} };
-    const res = await run(provider, registry, 'перенеси на 14');
+    const res = await run(provider, registry, 'перенеси на 14:00');
     expect(res.falseSuccess).toBe(true);
     expect(res.escalated).toBe(false);
   });
@@ -65,7 +65,7 @@ describe('false-success guard', () => {
       { text: 'Готово, перенесла вашу запись на 14:00 🤍', toolCalls: [], assistantMsg: {} },
     ]);
     const registry = { schemas: [], handlers: { reschedule_booking: async () => ({ rescheduled: true }) } };
-    const res = await run(provider, registry, 'перенеси на 14');
+    const res = await run(provider, registry, 'перенеси на 14:00');
     expect(res.falseSuccess).toBe(false);
   });
 
@@ -134,7 +134,7 @@ describe('false-success guard: сверенное состояние запис�
 
   test('«перенесла на 14:00» остаётся безусловной ложью — снимок переноса не подтверждает', async () => {
     const provider = providerOf([{ text: 'Готово, перенесла вашу запись на 14:00 🤍', toolCalls: [], assistantMsg: {} }]);
-    const res = await run(provider, { schemas: [], handlers: {} }, 'перенеси на 14', [FUTURE_BOOKING]);
+    const res = await run(provider, { schemas: [], handlers: {} }, 'перенеси на 14:00', [FUTURE_BOOKING]);
     expect(res.falseSuccess).toBe(true);
   });
 
@@ -194,33 +194,37 @@ describe('detectFalseClaim: утверждение о существующей �
 // ходу нет по определению (falseSuccess требует !writeSucceeded), поэтому
 // довызов безопасен.
 describe('ложный успех при ПУСТОЙ сверке: один корректирующий довызов', () => {
+  // Время назвал САМ пациент — иначе «12:00» в реплике ловится ещё и как
+  // unknown_time (жёсткое с 10.08.2026), и тест мерил бы два довызова вместо
+  // одного, то есть уже не то, про что он написан.
+  const ASK = 'на 7 или 8 в 12:00 можно записаться?';
   const LIE = 'Я вижу, что вы уже записаны на 7 августа в 12:00 к Пери Исамудиновне 🤍';
   const FIX = 'Проверила: сейчас записи на 7 августа нет. Давайте подберу время заново — какой день удобен? 🌸';
 
   test('модель исправилась → ложь не доехала, эскалации нет, ушёл исправленный текст', async () => {
     const provider = providerOf([say(LIE), say(FIX)]);
-    const res = await run(provider, { schemas: [], handlers: {} }, 'на 7 или 8 можно записаться?', []);
+    const res = await run(provider, { schemas: [], handlers: {} }, ASK, []);
     expect(res.falseSuccess).toBe(false);
     expect(res.replies).toEqual([FIX]);
   });
 
   test('довызов идёт БЕЗ инструментов — исправление не должно ничего записывать', async () => {
     const provider = providerOf([say(LIE), say(FIX)]);
-    await run(provider, { schemas: [{ name: 'create_booking' }], handlers: {} }, 'на 7 или 8 можно записаться?', []);
+    await run(provider, { schemas: [{ name: 'create_booking' }], handlers: {} }, ASK, []);
     expect(provider.requests).toHaveLength(2);
     expect(provider.requests[1].tools).toEqual([]);
   });
 
   test('исправление тоже лжёт → довызов ровно ОДИН, дальше прежний перевод на человека', async () => {
     const provider = providerOf([say(LIE), say(LIE)]);
-    const res = await run(provider, { schemas: [], handlers: {} }, 'на 7 или 8 можно записаться?', []);
+    const res = await run(provider, { schemas: [], handlers: {} }, ASK, []);
     expect(provider.requests).toHaveLength(2);
     expect(res.falseSuccess).toBe(true);
   });
 
   test('довызов вернул пустой текст → отдаём исходную реплику и прежний перевод', async () => {
     const provider = providerOf([say(LIE), say('')]);
-    const res = await run(provider, { schemas: [], handlers: {} }, 'на 7 или 8 можно записаться?', []);
+    const res = await run(provider, { schemas: [], handlers: {} }, ASK, []);
     expect(res.falseSuccess).toBe(true);
     expect(res.replies).toEqual([LIE]);
   });
@@ -231,7 +235,7 @@ describe('ложный успех при ПУСТОЙ сверке: один к�
       createMessage: async () => { if (i++) throw new Error('provider down'); return say(LIE); },
       toolResultMessages: () => [],
     };
-    const res = await run(provider, { schemas: [], handlers: {} }, 'на 7 или 8 можно записаться?', []);
+    const res = await run(provider, { schemas: [], handlers: {} }, ASK, []);
     expect(res.falseSuccess).toBe(true);
     expect(res.replies).toEqual([LIE]);
   });
@@ -240,7 +244,7 @@ describe('ложный успех при ПУСТОЙ сверке: один к�
   // отсутствие сверки вообще — состояния, где сказать модели нечего.
   test('запись в CRM ЖИВА («перенесла» без инструмента) → довызова нет, перевод как раньше', async () => {
     const provider = providerOf([say('Готово, перенесла вашу запись на 14:00 🤍')]);
-    const res = await run(provider, { schemas: [], handlers: {} }, 'перенеси на 14', [FUTURE_BOOKING]);
+    const res = await run(provider, { schemas: [], handlers: {} }, 'перенеси на 14:00', [FUTURE_BOOKING]);
     expect(provider.requests).toHaveLength(1);
     expect(res.falseSuccess).toBe(true);
   });
@@ -248,7 +252,8 @@ describe('ложный успех при ПУСТОЙ сверке: один к�
   test('сверки не было (номер неизвестен) → довызова нет, перевод как раньше', async () => {
     const provider = providerOf([say('Мы записали вас на 16:00 🤍')]);
     const res = await runDialog(1, '79000000000', {
-      deps: { ...baseDeps(provider, { schemas: [], handlers: {} }), history: historyOf('а во сколько подойти?') },
+      // «16:00» цифрами в сообщении пациента: см. комментарий у ASK выше.
+      deps: { ...baseDeps(provider, { schemas: [], handlers: {} }), history: historyOf('а во сколько подойти, в 16:00?') },
     });
     expect(provider.requests).toHaveLength(1);
     expect(res.falseSuccess).toBe(true);
@@ -269,7 +274,7 @@ describe('ложный успех при ПУСТОЙ сверке: один к�
     const LEAK = 'Записи нет. Оформлю заново, номер обращения 1890942528 🌸';
     const CLEAN = 'Записи сейчас нет — давайте подберу время заново. Какой день удобен? 🌸';
     const provider = providerOf([say(LIE), say(LEAK), say(CLEAN)]);
-    const res = await run(provider, { schemas: [], handlers: {} }, 'на 7 или 8 можно записаться?', []);
+    const res = await run(provider, { schemas: [], handlers: {} }, ASK, []);
     expect(provider.requests).toHaveLength(3);
     expect(res.replies).toEqual([CLEAN]);
     expect(res.falseSuccess).toBe(false);
@@ -279,7 +284,7 @@ describe('ложный успех при ПУСТОЙ сверке: один к�
   // логировал только факт. Вид возвращается наружу — диспетчер пишет его в лог.
   test('вид утверждения уходит наружу вместе с флагом', async () => {
     const provider = providerOf([say(LIE), say(LIE)]);
-    const res = await run(provider, { schemas: [], handlers: {} }, 'на 7 или 8 можно записаться?', []);
+    const res = await run(provider, { schemas: [], handlers: {} }, ASK, []);
     expect(res.falseSuccessKind).toBe('booked');
   });
 });
