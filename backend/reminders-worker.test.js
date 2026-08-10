@@ -992,3 +992,17 @@ describe('тестовая отправка: что остаётся в силе
     expect(killed[0].sql).toMatch(/status='scheduled'/);
   });
 });
+
+// Диагностика 2026-08-10: gemini-2.5-pro сжигает 1400–2600 reasoning-токенов на
+// текст напоминания и изредка не укладывается в 60с — попытка горит впустую
+// («reminder LLM timeout 60000ms» в прод-логе). Таймаут поднят до 90с, backoff
+// аренды — до 180с: запас «таймаут строго меньше backoff» обязан сохраниться,
+// иначе таймаут-ретрай пересечётся с ещё живым прошлым вызовом в окне аренды.
+describe('таймаут LLM и backoff аренды', () => {
+  test('LLM-таймаут не меньше 90с (reasoning-бюджет gemini)', () => {
+    expect(worker.LLM_TIMEOUT_MS).toBeGreaterThanOrEqual(90000);
+  });
+  test('таймаут строго меньше backoff аренды (окно без пересечения вызовов)', () => {
+    expect(worker.LLM_TIMEOUT_MS).toBeLessThan(worker.RETRY_BACKOFF_S * 1000);
+  });
+});

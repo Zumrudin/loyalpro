@@ -37,11 +37,13 @@ const log = createLogger('CareWorker');
 
 const WORKER_TICK_MS  = 15000;
 const MAX_ATTEMPTS    = 3;
-const RETRY_BACKOFF_S = 120;
+const RETRY_BACKOFF_S = 180;
 // Таймаут care-прохода LLM: зависший провайдер не должен держать строку (и
-// тик) вечно. 60с < backoff аренды 120с — таймаут-ретрай не пересечётся с
-// ещё живым прошлым вызовом в окне аренды.
-const LLM_TIMEOUT_MS  = 60000;
+// тик) вечно. 90с < backoff аренды 180с — таймаут-ретрай не пересечётся с
+// ещё живым прошлым вызовом в окне аренды. 90с, а не прежние 60с: gemini
+// сжигает 1400–2600 reasoning-токенов на текст и изредка не укладывался
+// (прод-лог 2026-08-10, таймауты у соседнего воркера напоминаний).
+const LLM_TIMEOUT_MS  = 90000;
 
 // Срезает OPERATOR_MARK (history.js) с начала КАЖДОЙ строки текста — реплики
 // серии в транскрипте склеены через '\n', одной проверки на весь текст мало.
@@ -510,4 +512,8 @@ function startCareWorker() {
 
 // LEASE_SQL экспортируется для живой EXPLAIN-проверки (scripts / node -e):
 // юнит-тесты мокают db.any и валидность SQL не проверяют.
-module.exports = { processOne, processTick, startCareWorker, defaultDeps, LEASE_SQL };
+module.exports = {
+  processOne, processTick, startCareWorker, defaultDeps, LEASE_SQL,
+  // Экспорт ради инварианта в тестах: таймаут строго меньше backoff аренды.
+  LLM_TIMEOUT_MS, RETRY_BACKOFF_S,
+};

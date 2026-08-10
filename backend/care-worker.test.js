@@ -323,7 +323,7 @@ describe('care worker at-most-once', () => {
       const p = worker.processOne(row, deps);
       // Прогоняем цепочку await'ов до Promise.race (моки резолвятся микротасками).
       for (let i = 0; i < 200; i++) await Promise.resolve();
-      jest.advanceTimersByTime(60001);
+      jest.advanceTimersByTime(worker.LLM_TIMEOUT_MS + 1);
       await p;
       expect(deps.sendMessage).not.toHaveBeenCalled();
       const rolled = deps.db.query.mock.calls.find(c => c[0].includes(`SET status='scheduled'`));
@@ -369,5 +369,16 @@ describe('care worker processTick', () => {
     expect(cancelled).toBeTruthy();
     const chainCheck = deps.db.oneOrNone.mock.calls.find(c => c[0].includes(`status='scheduled'`));
     expect(chainCheck).toBeTruthy();
+  });
+});
+
+// Зеркало reminders-worker.test.js (диагностика 2026-08-10): care-текст пишет
+// тот же gemini с тем же reasoning-бюджетом, запас «таймаут < backoff» общий.
+describe('таймаут LLM и backoff аренды', () => {
+  test('LLM-таймаут не меньше 90с (reasoning-бюджет gemini)', () => {
+    expect(worker.LLM_TIMEOUT_MS).toBeGreaterThanOrEqual(90000);
+  });
+  test('таймаут строго меньше backoff аренды (окно без пересечения вызовов)', () => {
+    expect(worker.LLM_TIMEOUT_MS).toBeLessThan(worker.RETRY_BACKOFF_S * 1000);
   });
 });

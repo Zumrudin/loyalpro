@@ -38,12 +38,15 @@ const log = createLogger('RemindersWorker');
 
 const WORKER_TICK_MS      = 60000;
 const MAX_ATTEMPTS        = 3;
-const RETRY_BACKOFF_S     = 120;
+const RETRY_BACKOFF_S     = 180;
 // Таймаут care-прохода LLM в режиме free (buildText): зависший провайдер не
-// должен держать строку 'scheduled' вечно. 60с < backoff аренды 120с (тот же
+// должен держать строку 'scheduled' вечно. 90с < backoff аренды 180с (тот же
 // запас, что в care-воркере) — таймаут-ретрай не пересечётся с ещё живым
-// прошлым вызовом в окне аренды. Захват строки (SET status='sent') стоит
-// ПОСЛЕ этого вызова (вплотную перед sendMessage) — запас в 60с покрывает и
+// прошлым вызовом в окне аренды. 90с, а не прежние 60с: gemini-2.5-pro тратит
+// 1400–2600 reasoning-токенов на текст напоминания и изредка не укладывался —
+// попытка горела впустую (прод-лог 2026-08-10, «reminder LLM timeout 60000ms»).
+// Захват строки (SET status='sent') стоит
+// ПОСЛЕ этого вызова (вплотную перед sendMessage) — запас в 90с покрывает и
 // сам LLM-вызов, и остальные шаги между арендой (LEASE_SQL проставляет
 // last_attempt_at) и капчуром (isAllowed/YClients-проверки/applyBonus), но
 // это НЕ железная гарантия против повторной аренды той же строки ДРУГИМ
@@ -51,7 +54,7 @@ const RETRY_BACKOFF_S     = 120;
 // один процесс с внутрипроцессным guard'ом _tickInFlight (текущий деплой:
 // pm2 fork, один инстанс). При переходе на несколько инстансов нужен либо
 // явный distributed lock, либо увеличение backoff'а с новым запасом.
-const LLM_TIMEOUT_MS      = 60000;
+const LLM_TIMEOUT_MS      = 90000;
 // Предел терпения к паузе администратора: она обычно снимается вечерним
 // sweep'ом, но ждать бесконечно нельзя — напоминание протухнет по смыслу.
 const MAX_OPERATOR_DEFERS = 3;
@@ -842,6 +845,8 @@ module.exports = {
   processOne, processTick, startRemindersWorker, defaultDeps,
   processTestRow, buildTestDeps, loadBonusSalon,
   LEASE_SQL, LEASE_ONE_SQL, ORPHAN_SQL, MAX_OPERATOR_DEFERS,
+  // Экспорт ради инварианта в тестах: таймаут строго меньше backoff аренды.
+  LLM_TIMEOUT_MS, RETRY_BACKOFF_S,
   // Признак исхода «сработала пауза темпа» — контракт processOne ↔ processTick.
   RESULT_PACED,
 };
