@@ -1867,16 +1867,22 @@ describe('дедуп повторных tool-вызовов внутри ход�
 
 // ── Оценка визита без LLM (спека 2026-08-10-agent-prompt-to-code-offload) ──
 describe('оценка визита («5» на автоопрос)', () => {
-  function ratingDeps(rating, lastAuthor, extra = {}) {
+  const SURVEY = 'Просим оценить обслуживание цифрой от 2 до 5';
+
+  function ratingDeps(rating, lastAuthor, extra = {}, lastText = SURVEY) {
     return makeDeps({
       history: {
         loadTranscript: jest.fn(async () => ({
           messages: [{ role: 'user', content: String(rating) }], watermark: 500 })),
-        lastOutgoingAuthor: jest.fn(async () => lastAuthor),
+        lastOutgoing: jest.fn(async () => ({ author: lastAuthor, text: lastText })),
       },
       ...extra,
     });
   }
+
+  // Ход обязан уйти в LLM: ватермарк двигает уже штатный путь, а не ветка.
+  const llmAnswer = (deps) => deps.provider.createMessage.mockResolvedValue(
+    { assistantMsg: { role: 'assistant', content: 'ок' }, toolCalls: [], text: 'Ответ' });
 
   test('«5» после автоуведомления → благодарность, провайдер НЕ вызывается, ватермарк сдвинут', async () => {
     const deps = ratingDeps(5, 'system');
@@ -1900,6 +1906,42 @@ describe('оценка визита («5» на автоопрос)', () => {
     expect(res.replies.join(' ')).toMatch(/администратор/i);
   });
 
+  // Эскалация — УСЛОВИЕ извинения, а не побочный шаг: текст сам объявляет
+  // перевод, поэтому диспетчер (ветка res.escalated) ничего не дошлёт и диалог
+  // за нас не переведёт. Не записалась — обещать перевод нельзя.
+  test('сбой escalate_to_operator → извинение НЕ уходит, ход в LLM, ватермарк не сдвинут', async () => {
+    const deps = ratingDeps(2, 'system');
+    deps.registry.handlers.escalate_to_operator = jest.fn(async () => { throw new Error('db down'); });
+    llmAnswer(deps);
+    const res = await orchestrator.runDialog(1, 'k', { deps });
+    expect(res.replies).toEqual(['Ответ']);
+    expect(res.replies.join(' ')).not.toMatch(/очень жаль/i);
+    expect(deps.provider.createMessage).toHaveBeenCalled();
+    // Ватермарк тот же самый (его сдвинет штатный конец хода), поэтому сверяем
+    // ПОРЯДОК: ветка двигала бы его ДО обращения к провайдеру и уносила бы
+    // сообщение в никуда — при провалившейся эскалации это потерянная жалоба.
+    expect(deps.state.setWatermark).toHaveBeenCalledTimes(1);
+    expect(deps.state.setWatermark.mock.invocationCallOrder[0])
+      .toBeGreaterThan(deps.provider.createMessage.mock.invocationCallOrder[0]);
+  });
+
+  test('escalate_to_operator вернул не-escalated → тоже отдаём ход модели', async () => {
+    const deps = ratingDeps(3, 'system');
+    deps.registry.handlers.escalate_to_operator = jest.fn(async () => ({ escalated: false }));
+    llmAnswer(deps);
+    const res = await orchestrator.runDialog(1, 'k', { deps });
+    expect(res.replies).toEqual(['Ответ']);
+  });
+
+  // Под authored_by='system' идут ВСЕ автоуведомления, не только опрос.
+  test('system-уведомление без маркеров опроса → ветка молчит, ход в LLM', async () => {
+    const deps = ratingDeps(2, 'system', {}, 'Напоминаем о записи завтра в 12:00');
+    llmAnswer(deps);
+    const res = await orchestrator.runDialog(1, 'k', { deps });
+    expect(res.replies).toEqual(['Ответ']);
+    expect(deps.registry.handlers.escalate_to_operator).not.toHaveBeenCalled();
+  });
+
   test('последнее исходящее — agent (Мила задавала вопрос) → ветка не срабатывает, ход в LLM', async () => {
     const deps = ratingDeps(5, 'agent');
     deps.provider.createMessage.mockResolvedValue(
@@ -1909,25 +1951,44 @@ describe('оценка визита («5» на автоопрос)', () => {
     expect(res.replies).toEqual(['Отвечаю по делу']);
   });
 
-  test('сбой lastOutgoingAuthor → fail-open в LLM', async () => {
+  test('последнее исходящее — operator либо автор неизвестен → ветка молчит', async () => {
+    for (const author of ['operator', null]) {
+      const deps = ratingDeps(5, author);
+      llmAnswer(deps);
+      const res = await orchestrator.runDialog(1, 'k', { deps });
+      expect(res.replies).toEqual(['Ответ']);
+    }
+  });
+
+  test('исходящих в диалоге нет вовсе (lastOutgoing → null) → ветка молчит', async () => {
     const deps = makeDeps({
       history: {
         loadTranscript: jest.fn(async () => ({ messages: [{ role: 'user', content: '5' }], watermark: 500 })),
-        lastOutgoingAuthor: jest.fn(async () => { throw new Error('db down'); }),
+        lastOutgoing: jest.fn(async () => null),
       },
     });
-    deps.provider.createMessage.mockResolvedValue(
-      { assistantMsg: { role: 'assistant', content: 'ок' }, toolCalls: [], text: 'Ответ' });
+    llmAnswer(deps);
     const res = await orchestrator.runDialog(1, 'k', { deps });
     expect(res.replies).toEqual(['Ответ']);
   });
 
-  test('инжектор history без lastOutgoingAuthor → ветка молча пропускается (совместимость)', async () => {
+  test('сбой lastOutgoing → fail-open в LLM', async () => {
+    const deps = makeDeps({
+      history: {
+        loadTranscript: jest.fn(async () => ({ messages: [{ role: 'user', content: '5' }], watermark: 500 })),
+        lastOutgoing: jest.fn(async () => { throw new Error('db down'); }),
+      },
+    });
+    llmAnswer(deps);
+    const res = await orchestrator.runDialog(1, 'k', { deps });
+    expect(res.replies).toEqual(['Ответ']);
+  });
+
+  test('инжектор history без lastOutgoing → ветка молча пропускается (совместимость)', async () => {
     const deps = makeDeps({
       history: { loadTranscript: jest.fn(async () => ({ messages: [{ role: 'user', content: '5' }], watermark: 500 })) },
     });
-    deps.provider.createMessage.mockResolvedValue(
-      { assistantMsg: { role: 'assistant', content: 'ок' }, toolCalls: [], text: 'Ответ' });
+    llmAnswer(deps);
     const res = await orchestrator.runDialog(1, 'k', { deps });
     expect(res.replies).toEqual(['Ответ']);
   });
@@ -1935,8 +1996,7 @@ describe('оценка визита («5» на автоопрос)', () => {
   test('AGENT_VISIT_RATING_REPLY=false → ветка выключена', async () => {
     const deps = ratingDeps(5, 'system');
     deps.config = { ...require('./config'), AGENT_VISIT_RATING_REPLY: false };
-    deps.provider.createMessage.mockResolvedValue(
-      { assistantMsg: { role: 'assistant', content: 'ок' }, toolCalls: [], text: 'Ответ' });
+    llmAnswer(deps);
     const res = await orchestrator.runDialog(1, 'k', { deps });
     expect(res.replies).toEqual(['Ответ']);
   });

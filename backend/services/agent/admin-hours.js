@@ -35,6 +35,15 @@ function nowHHMMMoscow(nowMs) {
   }).format(nowMs != null ? new Date(nowMs) : new Date());
 }
 
+// «Перевод на администратора в этой реплике УЖЕ объявлен» — по этому признаку
+// диспетчер решает, дошлать ли handoverText отдельным сообщением.
+// Живёт рядом с самими фразами перевода намеренно: признак сверяют ДВЕ стороны —
+// dispatcher.js (ветка res.escalated) и авторы детерминированных реплик
+// (visit-rating.buildApology). Своя копия регулярки на каждой стороне молча
+// разъехалась бы с текстом, и пациент получил бы объявление о переводе либо
+// ДВАЖДЫ, либо (при переписанном тексте) ни одного.
+const HANDOVER_ANNOUNCED_RE = /администратор/i;
+
 // Детерминированная страховка диспетчера: модель эскалировала, не объявив перевод.
 function handoverText(offHours) {
   return offHours
@@ -49,4 +58,7 @@ function silentFallbackText(offHours) {
     : 'Секунду, уточняю детали — передаю ваш вопрос администратору клиники, он ответит вам с минуты на минуту 🤍';
 }
 
-module.exports = { parseWindow, isAdminOffHours, nowHHMMMoscow, handoverText, silentFallbackText };
+module.exports = {
+  parseWindow, isAdminOffHours, nowHHMMMoscow, handoverText, silentFallbackText,
+  HANDOVER_ANNOUNCED_RE,
+};

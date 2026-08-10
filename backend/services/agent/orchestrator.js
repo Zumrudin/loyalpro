@@ -499,39 +499,58 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
       return { replies: [], escalated: false, sideEffect: false, silent: true };
     }
 
-    // Оценка визита: последний блок — ЧИСТАЯ цифра 2–5 И последнее исходящее
-    // диалога — автоуведомление (authored_by='system'). Ход предрешён, LLM не
-    // нужен (спека 2026-08-10-agent-prompt-to-code-offload). Правило промпта
-    // «ОЦЕНКА ВИЗИТА» остаётся для смешанных ответов и выключенного флага.
-    // Fail-open: сбой/отсутствие lastOutgoingAuthor → ветка молчит, ход в LLM.
-    if (cfg.AGENT_VISIT_RATING_REPLY
-        && typeof history.lastOutgoingAuthor === 'function') {
+    // Оценка визита: последний блок — ЧИСТАЯ цифра 2–5, И последнее исходящее
+    // клиники — автоуведомление (authored_by='system') С ТЕКСТОМ ОПРОСА. Ход
+    // предрешён, LLM не нужен (спека 2026-08-10-agent-prompt-to-code-offload).
+    // Правило промпта «ОЦЕНКА ВИЗИТА» остаётся для смешанных ответов, цифры не в
+    // ответ на опрос и выключенного флага.
+    // Одного автора МАЛО: под 'system' идут ВСЕ автоуведомления YClients («Вы
+    // записаны на прием…», «Напоминаем о записи…») и касания «Заботы» — голая «2»
+    // после напоминания получила бы «нам очень жаль, что визит вас расстроил».
+    // Fail-open во всех сомнительных случаях (сбой БД, нет lastOutgoing в
+    // инжекторе, текст не опрос): ветка молчит, ход идёт в LLM как раньше.
+    if (cfg.AGENT_VISIT_RATING_REPLY && typeof history.lastOutgoing === 'function') {
       const rating = visitRating.detectRating(messages);
       if (rating != null) {
-        let lastAuthor = null;
-        try { lastAuthor = await history.lastOutgoingAuthor(salonId, dialogKey); }
+        let lastOut = null;
+        try { lastOut = await history.lastOutgoing(salonId, dialogKey); }
         catch (e) {
-          logger.warn(`dialog ${dialogKey}: авторство последнего исходящего не прочитать (${e.message}) — оценку обработает LLM`);
+          logger.warn(`dialog ${dialogKey}: последнее исходящее не прочитать (${e.message}) — оценку обработает LLM`);
         }
-        if (lastAuthor === 'system') {
-          await state.setWatermark(salonId, dialogKey, watermark);
+        if (lastOut && lastOut.author === 'system' && visitRating.isRatingSurvey(lastOut.text)) {
           if (rating >= 4) {
+            // Приветствия/представления тут нет намеренно, и ensureGreeting с
+            // ensureIntroduction ветка обходит сознательно: правило «ОЦЕНКА
+            // ВИЗИТА» велит коротко поблагодарить и закончить.
             logger.info(`dialog ${dialogKey}: оценка визита ${rating} — детерминированная благодарность без LLM`);
+            await state.setWatermark(salonId, dialogKey, watermark);
             return { replies: [visitRating.buildThanks({ givenName: clientGivenName })],
-              escalated: false, sideEffect: false, ratingReply: true };
+              escalated: false, sideEffect: false };
           }
-          logger.info(`dialog ${dialogKey}: оценка визита ${rating} — извинение и перевод на администратора без LLM`);
-          // Эскалация тем же хендлером, что у модели: upsert agent_dialogs +
-          // emitAgentStatus + красная подсветка в «Чате». Сбой записи не должен
-          // съесть извинение — диспетчер увидит escalated и допереведёт.
+          // Низкая оценка. Эскалация тем же хендлером, что у модели (upsert
+          // agent_dialogs + emitAgentStatus + красная подсветка в «Чате») — и она
+          // УСЛОВИЕ ответа, а не побочный шаг: текст извинения сам объявляет
+          // перевод, поэтому диспетчер по HANDOVER_ANNOUNCED_RE ничего не
+          // дошлёт и не переведёт диалог за нас (ветка res.escalated только
+          // доставляет реплики). Не записалась эскалация — обещать перевод
+          // нельзя: ватермарк ещё не сдвинут, проваливаемся в обычный ход, и
+          // промпт-правило «ОЦЕНКА ВИЗИТА» заставит модель позвать
+          // escalate_to_operator саму.
+          let escalatedOk = false;
           try {
-            await registry.handlers['escalate_to_operator'](salonId,
+            const res = await registry.handlers['escalate_to_operator'](salonId,
               { reason: `низкая оценка визита (${rating})` }, toolCtx);
+            escalatedOk = !!(res && res.escalated);
           } catch (e) {
-            logger.warn(`dialog ${dialogKey}: эскалация по низкой оценке не записалась (${e.message})`);
+            logger.error(`dialog ${dialogKey}: эскалация по низкой оценке не записалась (${e.message})`);
           }
-          return { replies: [visitRating.buildApology({ adminOff: promptOpts.adminOffHours })],
-            escalated: true, sideEffect: true, ratingReply: true };
+          if (escalatedOk) {
+            logger.info(`dialog ${dialogKey}: оценка визита ${rating} — извинение и перевод на администратора без LLM`);
+            await state.setWatermark(salonId, dialogKey, watermark);
+            return { replies: [visitRating.buildApology({ adminOff: promptOpts.adminOffHours })],
+              escalated: true, sideEffect: true };
+          }
+          logger.error(`dialog ${dialogKey}: оценка визита ${rating} — перевод не состоялся, отдаю ход модели`);
         }
       }
     }

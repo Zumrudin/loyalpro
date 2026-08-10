@@ -517,15 +517,45 @@ describe('loadTranscript: срезанные ведущие реплики кл�
 // ── lastOutgoingAuthor: автор последнего исходящего (спека 2026-08-10-agent-prompt-to-code-offload) ──
 // Детерминированные ветки оркестратора (оценка визита, «+» на акцию) включаются
 // ТОЛЬКО когда последнее слово клиники — автоуведомление (authored_by='system').
-describe('lastOutgoingAuthor', () => {
-  test('отдаёт authored_by последнего исходящего', async () => {
-    db.oneOrNone.mockResolvedValue({ authored_by: 'system' });
-    expect(await history.lastOutgoingAuthor(1, '79001112233')).toBe('system');
+describe('lastOutgoing', () => {
+  test('отдаёт автора И текст последнего исходящего', async () => {
+    db.oneOrNone.mockResolvedValue({ authored_by: 'system', text: 'Оцените обслуживание от 2 до 5' });
+    expect(await history.lastOutgoing(1, '79001112233'))
+      .toEqual({ author: 'system', text: 'Оцените обслуживание от 2 до 5' });
     const [sql, params] = db.oneOrNone.mock.calls[0];
     expect(sql).toMatch(/direction = 'outgoing'/);
-    expect(sql).toMatch(/ORDER BY/);
+    // Порядок именно УБЫВАЮЩИЙ и по тому же выражению времени, что в loadTranscript:
+    // «ORDER BY id ASC» отдал бы САМОЕ СТАРОЕ исходящее — тот самый дефект, ради
+    // которого тест и написан, а проверка на голое /ORDER BY/ его пропускала.
+    expect(sql).toMatch(/ORDER BY COALESCE\(msg_ts,[\s\S]*?\) DESC, id DESC/);
     expect(sql).toMatch(/LIMIT 1/);
+    // Обе колонки обязаны быть в выборке: по автору решают ветки, по тексту —
+    // что это был именно опрос об оценке.
+    expect(sql).toMatch(/SELECT authored_by, text/);
     expect(params).toEqual([1, '79001112233']);
+  });
+
+  test('исходящих нет → null', async () => {
+    db.oneOrNone.mockResolvedValue(null);
+    expect(await history.lastOutgoing(1, 'k')).toBe(null);
+  });
+
+  test('строка без текста (вложение) → text null, автор сохранён', async () => {
+    db.oneOrNone.mockResolvedValue({ authored_by: 'agent', text: null });
+    expect(await history.lastOutgoing(1, 'k')).toEqual({ author: 'agent', text: null });
+  });
+});
+
+describe('lastOutgoingAuthor', () => {
+  test('отдаёт authored_by последнего исходящего', async () => {
+    db.oneOrNone.mockResolvedValue({ authored_by: 'system', text: 'Оцените обслуживание' });
+    expect(await history.lastOutgoingAuthor(1, '79001112233')).toBe('system');
+    expect(db.oneOrNone.mock.calls[0][1]).toEqual([1, '79001112233']);
+  });
+
+  test('реплика живого администратора → operator', async () => {
+    db.oneOrNone.mockResolvedValue({ authored_by: 'operator', text: 'Добрый день!' });
+    expect(await history.lastOutgoingAuthor(1, 'k')).toBe('operator');
   });
 
   test('исходящих нет → null', async () => {
@@ -534,7 +564,7 @@ describe('lastOutgoingAuthor', () => {
   });
 
   test('authored_by не проставлен (NULL в строке) → null', async () => {
-    db.oneOrNone.mockResolvedValue({ authored_by: null });
+    db.oneOrNone.mockResolvedValue({ authored_by: null, text: 'что-то' });
     expect(await history.lastOutgoingAuthor(1, 'k')).toBe(null);
   });
 });

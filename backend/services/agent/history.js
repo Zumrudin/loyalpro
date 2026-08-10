@@ -235,22 +235,40 @@ async function hasAgentEverWritten(salonId, dialogKey) {
   return !!row;
 }
 
-// Автор ПОСЛЕДНЕГО исходящего в диалоге: 'agent' | 'operator' | 'system' | null
-// (null — исходящих нет вовсе либо authored_by не проставлен).
+// ПОСЛЕДНЕЕ исходящее диалога: { author, text } | null (null — исходящих нет).
+// author: 'agent' | 'operator' | 'system' | null (null = authored_by не проставлен).
 //
 // ЗАЧЕМ: детерминированные ветки оркестратора (оценка визита «5», короткое «+»
 // на акцию — спека 2026-08-10-agent-prompt-to-code-offload) включаются ТОЛЬКО
 // когда последнее слово клиники — автоуведомление (authored_by='system'):
 // пациент отвечает на отбивку, а не на вопрос Милы. Её вопрос сделал бы
 // последним исходящим 'agent', и ветка не сработает — ход уйдёт в LLM.
-async function lastOutgoingAuthor(salonId, dialogKey) {
+// Одного автора МАЛО: под 'system' идут ВСЕ автоуведомления YClients («Вы
+// записаны на прием…», «Напоминаем о записи…») и касания «Заботы»/напоминаний,
+// поэтому наружу отдаётся и ТЕКСТ — вызывающий сверяет, что это был именно
+// опрос (visit-rating.isRatingSurvey).
+//
+// ГОТЧА: читается СЫРАЯ БД, мимо pending-replies. Эхо Chatpush запаздывает на
+// минуты (tdlib/MAX), а WhatsApp его не шлёт вовсе — только что отправленная
+// реплика Милы может здесь ещё не лежать, и последним исходящим окажется
+// предыдущее автоуведомление. Известный класс инцидента 2026-07-31; ошибка
+// возможна только в сторону ЛИШНЕГО срабатывания ветки, которая и так требует
+// текста опроса рядом с голой цифрой.
+async function lastOutgoing(salonId, dialogKey) {
   const row = await db.oneOrNone(
-    `SELECT authored_by FROM chatpush_messages
+    `SELECT authored_by, text FROM chatpush_messages
       WHERE salon_id = $1 AND ${DIALOG_KEY_SQL} = $2 AND direction = 'outgoing'
       ORDER BY ${MSG_TS_SQL} DESC, id DESC
       LIMIT 1`,
     [salonId, dialogKey]);
-  return (row && row.authored_by) || null;
+  return row ? { author: row.authored_by || null, text: row.text || null } : null;
+}
+
+// Только автор последнего исходящего — контракт держится отдельно от lastOutgoing:
+// веткам, которым текст не нужен, незачем тащить его через сигнатуру.
+async function lastOutgoingAuthor(salonId, dialogKey) {
+  const row = await lastOutgoing(salonId, dialogKey);
+  return (row && row.author) || null;
 }
 
 // Пришло ли входящее новее watermark (во время прогона агента)?
@@ -265,6 +283,7 @@ async function hasIncomingAfter(salonId, dialogKey, watermark) {
 }
 
 module.exports = {
-  loadTranscript, hasIncomingAfter, hasEverAnswered, hasAgentEverWritten, lastOutgoingAuthor,
+  loadTranscript, hasIncomingAfter, hasEverAnswered, hasAgentEverWritten,
+  lastOutgoing, lastOutgoingAuthor,
   OPERATOR_MARK, AUTHORSHIP_SINCE_TS,
 };

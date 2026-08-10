@@ -228,7 +228,10 @@ async function process(salonId, dialogKey, meta, opts = {}) {
         await deliverReplies(replies, res.attachments);
         // handoverText — фиксированная системная фраза, а не факт хода: она уходит
         // ПОСЛЕ хелпера и на вердикт delivered намеренно не влияет.
-        const announced = replies.some(t => /администратор/i.test(t));
+        // Признак живёт в admin-hours рядом с самими фразами перевода: копия
+        // регулярки здесь молча разъехалась бы с детерминированными репликами,
+        // которые перевод объявляют сами (visit-rating.buildApology).
+        const announced = replies.some(t => adminHours.HANDOVER_ANNOUNCED_RE.test(t));
         if (!announced) await send(meta, adminHours.handoverText(adminOffNow()));
       } else if (res.silent) {
         // Оркестратор РЕШИЛ промолчать (завершающая вежливость), а не не смог.
