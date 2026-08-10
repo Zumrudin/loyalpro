@@ -163,6 +163,21 @@ describe('parseMessageEvent — номер собеседника у исход�
         sender_phone_number: '79191091250', recipient_phone_number: null } };
     expect(parseMessageEvent(body).phone).toBe('79191091250');
   });
+  test('входящее: номер получателя — снова МЫ, в phone он не идёт', () => {
+    // Живая форма MAX (диалоги 27331166 / 55303820): номер отправителя неизвестен,
+    // а свой номер MAX кладёт в recipient_phone_number — прежний фолбэк уводил
+    // сообщения клиента под ключ клиники.
+    const body = { ...tdlibOutHiddenPhone,
+      payload: { ...tdlibOutHiddenPhone.payload, direction: 'incoming',
+        sender_phone_number: null, recipient_phone_number: '79250177778' } };
+    expect(parseMessageEvent(body).phone).toBeNull();
+  });
+  test('в группе номер участника (sender_phone_number) сохраняется', () => {
+    const body = { ...tdlibOutHiddenPhone,
+      payload: { ...tdlibOutHiddenPhone.payload, direction: 'incoming', chat_id: '-72962629261478',
+        chat_type: 'group', sender_phone_number: '79250177778', recipient_phone_number: null } };
+    expect(parseMessageEvent(body).phone).toBe('79250177778');
+  });
   test('WhatsApp: у исходящего sender_phone_number тоже не годится в собеседники', () => {
     const wa = {
       type: 'whatsapp_incoming_msg',

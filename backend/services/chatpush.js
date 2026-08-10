@@ -252,9 +252,13 @@ function envelope(body) {
     // Побочно тем же промахивалась пауза «ответил оператор» (pauseKey в
     // routes/chatpush-webhook.js) — Мила оставалась активной в диалоге,
     // который уже вёл человек.
-    phone: str(dir === 'outgoing'
-      ? p.recipient_phone_number
-      : (p.sender_phone_number || p.recipient_phone_number)),
+    // Симметрично у ВХОДЯЩЕГО нет фолбэка на recipient_phone_number: получатель
+    // входящего — снова наш инстанс. MAX присылает свой номер в recipient даже
+    // тогда, когда номер клиента неизвестен (6 событий на проде, диалоги
+    // 27331166 и 55303820) — тем же способом переписка рвалась на два ключа.
+    // В ГРУППЕ номер участника лежит именно в sender_phone_number, поэтому он
+    // сохраняется как раньше.
+    phone: str(dir === 'outgoing' ? p.recipient_phone_number : p.sender_phone_number),
     senderName: p.sender_name || p.recipient_username || null,
     // MAX кладёт timestamp на уровень payload, а не в message — берём любой.
     ts: p.message?.timestamp ?? p.timestamp ?? null,

@@ -40,23 +40,29 @@ const COMMIT = process.argv.includes('--commit');
   console.log('Собственные номера инстансов (по исходящим событиям):');
   for (const o of owners) console.log(`  салон ${o.salon_id}: ${o.phone} (${o.n} событий)`);
 
+  // ВХОДЯЩИЕ трогаем только в ЛИЧНЫХ чатах: в группе `sender_phone_number` — это
+  // номер УЧАСТНИКА, и наш собственный номер там законен (администратор пишет в
+  // рабочую группу со своего аккаунта). В личном чате отправитель входящего —
+  // клиент, поэтому наш номер в phone мог взяться только из фолбэка на получателя.
+  const WHERE = `(direction = 'outgoing' OR chat_id NOT LIKE '-%')`;
+
   let total = 0;
   for (const o of owners) {
     const rows = await db.any(
-      `SELECT channel, chat_id, count(*)::int AS n
+      `SELECT channel, direction, chat_id, count(*)::int AS n
          FROM chatpush_messages
-        WHERE salon_id = $1 AND direction = 'outgoing' AND phone = $2
-        GROUP BY 1, 2 ORDER BY 3 DESC`, [o.salon_id, o.phone]);
+        WHERE salon_id = $1 AND phone = $2 AND ${WHERE}
+        GROUP BY 1, 2, 3 ORDER BY 4 DESC`, [o.salon_id, o.phone]);
     const n = rows.reduce((s, r) => s + r.n, 0);
     console.log(`\nсалон ${o.salon_id} / ${o.phone}: ${n} строк в ${rows.length} чатах`);
-    for (const r of rows.slice(0, 40)) console.log(`  ${r.channel} chat_id=${r.chat_id}: ${r.n}`);
+    for (const r of rows.slice(0, 40)) console.log(`  ${r.channel} ${r.direction} chat_id=${r.chat_id}: ${r.n}`);
     if (rows.length > 40) console.log(`  … ещё ${rows.length - 40} чатов`);
     total += n;
 
     if (COMMIT && n) {
       const upd = await db.query(
         `UPDATE chatpush_messages SET phone = NULL
-          WHERE salon_id = $1 AND direction = 'outgoing' AND phone = $2`, [o.salon_id, o.phone]);
+          WHERE salon_id = $1 AND phone = $2 AND ${WHERE}`, [o.salon_id, o.phone]);
       console.log(`  → обновлено ${upd.rowCount}`);
       // Строка агента на фантомном ключе: диалога с таким ключом больше нет,
       // а пауза «ответил оператор» на нём означала, что настоящий диалог клиента
