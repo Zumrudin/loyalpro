@@ -1,6 +1,6 @@
 'use strict';
 
-const { stripRepeatedTitles, namesWithTitle } = require('./services/agent/title-dedup');
+const { stripRepeatedTitles, namesWithTitle, stemsMatch } = require('./services/agent/title-dedup');
 
 describe('namesWithTitle', () => {
   test('собирает стемы имён, у которых должность уже звучала', () => {
@@ -40,5 +40,84 @@ describe('stripRepeatedTitles', () => {
       ['Вас ждёт косметолог-эстетист Юлия.'],
       'Я записала вас к косметологу-эстетисту Юлии.');
     expect(replies).toEqual(['Вас ждёт Юлия.']);
+  });
+
+  // Заглавное местоимение после должности — НЕ имя. Срез такой «пары» не убирал
+  // лишнее, а ломал предложение: «К Вы можете прийти завтра.»
+  test('заглавное «Вы» после должности именем не считается', () => {
+    const prior = 'Записаться к врачу-косметологу Вы можете на любой день.';
+    expect(namesWithTitle(prior).size).toBe(0);
+    const { replies, stripped } = stripRepeatedTitles(
+      ['К врачу-косметологу Вы можете прийти завтра.'], prior);
+    expect(replies).toEqual(['К врачу-косметологу Вы можете прийти завтра.']);
+    expect(stripped).toEqual([]);
+  });
+
+  test('«Вам» после должности тоже не имя', () => {
+    const prior = 'К косметологу-эстетисту Вам лучше прийти без макияжа.';
+    expect(namesWithTitle(prior).size).toBe(0);
+    const { replies } = stripRepeatedTitles(
+      ['К косметологу-эстетисту Вам удобно в 12:00?'], prior);
+    expect(replies).toEqual(['К косметологу-эстетисту Вам удобно в 12:00?']);
+  });
+
+  // Боевые написания specialization из staff_members: модель получает должность
+  // ДОСЛОВНО, и без допуска пробелов вокруг дефиса фича была бы no-op ровно для
+  // Гатауллиной Юлии и Палий.
+  test('боевое написание «Косметолог- эстетист» (пробел после дефиса)', () => {
+    const { replies } = stripRepeatedTitles(
+      ['Вас ждёт косметолог- эстетист Юлия.'], 'Свободна косметолог- эстетист Юлия.');
+    expect(replies).toEqual(['Вас ждёт Юлия.']);
+  });
+
+  test('боевое написание «Косметолог - эстетист» (пробелы с обеих сторон)', () => {
+    const { replies } = stripRepeatedTitles(
+      ['Записала к косметологу - эстетисту Юлии.'], 'Косметолог - эстетист Юлия свободна.');
+    expect(replies).toEqual(['Записала к Юлии.']);
+  });
+
+  test('тире между должностью и именем («главному врачу - Пери»)', () => {
+    const { replies } = stripRepeatedTitles(
+      ['Записала к главному врачу - Пери на 12:00.'], 'Приём ведёт главный врач Пери.');
+    expect(replies).toEqual(['Записала к Пери на 12:00.']);
+  });
+
+  // \s спанит перенос строки: в вертикальном списке заголовок «Косметолог-
+  // эстетист» и имя с ДРУГОЙ строки склеивались в пару, и срез уносил заголовок.
+  test('перенос строки пару не образует (вертикальный список)', () => {
+    const text = 'Свободны:\nкосметолог-эстетист\nЮлия — 12:00';
+    expect(namesWithTitle(text).size).toBe(0);
+    const { replies } = stripRepeatedTitles([text], 'Косметолог-эстетист Юлия свободна.');
+    expect(replies).toEqual([text]);
+  });
+
+  test('массив возвращается НОВЫЙ даже когда резать нечего (мутация у вызывающего)', () => {
+    const input = ['Здравствуйте!'];
+    const { replies } = stripRepeatedTitles(input, 'Добрый день!');
+    expect(replies).not.toBe(input);
+    expect(replies).toEqual(input);
+  });
+});
+
+describe('stemsMatch', () => {
+  const stem = (w) => w.slice(0, Math.max(4, w.length - 2));
+
+  test('склонение одного имени совпадает', () => {
+    expect(stemsMatch(stem('Юлия'), stem('Юлии'))).toBe(true);
+  });
+
+  test('разные имена не совпадают', () => {
+    expect(stemsMatch(stem('Пери'), stem('Пётр'))).toBe(false);
+  });
+
+  // ИЗВЕСТНАЯ КОЛЛИЗИЯ, а не баг: три общие буквы склеивают разные имена. Цена —
+  // лишний срез должности у второго мастера (прежнее поведение «должность не
+  // прозвучала»), поэтому тест закрепляет её намеренно — чтобы не «починили» молча.
+  test('«Александра» и «Алексей» склеиваются — известная коллизия', () => {
+    expect(stemsMatch(stem('Александра'), stem('Алексей'))).toBe(true);
+  });
+
+  test('короткие захваты (<4 букв) не матчат сами себя', () => {
+    expect(stemsMatch('Вы', 'Вы')).toBe(false);
   });
 });

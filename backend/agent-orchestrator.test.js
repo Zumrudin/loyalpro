@@ -2142,6 +2142,33 @@ test('повтор должности из прошлой реплики Мил�
   expect(res.replies).toEqual(['Вас примет Юлия, всё передала.']);
 });
 
+// Должность, произнесённая АДМИНИСТРАТОРОМ, счётчик Милы не тратит: правило —
+// «должность НАЗЫВАЙ один раз», то есть про её собственные реплики. Строки с
+// OPERATOR_MARK режутся ПОСТРОЧНО (реплика администратора склеена
+// loadTranscript'ом с соседними в один assistant-блок), поэтому первое законное
+// упоминание Милы обязано выжить.
+test('должность из реплики администратора не глушит первое упоминание Милы', async () => {
+  const { OPERATOR_MARK } = require('./services/agent/history');
+  const deps = makeDeps({
+    history: {
+      loadTranscript: jest.fn(async () => ({
+        messages: [
+          { role: 'user', content: 'кто свободен завтра?' },
+          { role: 'assistant',
+            content: `${OPERATOR_MARK} Завтра принимает косметолог-эстетист Юлия.\nПодскажу подробнее.` },
+          { role: 'user', content: 'а кто это?' },
+        ],
+        watermark: 500,
+      })),
+    },
+  });
+  deps.provider.createMessage.mockResolvedValue({
+    assistantMsg: { role: 'assistant', content: 'ок' }, toolCalls: [],
+    text: 'Это косметолог-эстетист Юлия, она ведёт чистки.' });
+  const res = await orchestrator.runDialog(1, 'k', { deps });
+  expect(res.replies).toEqual(['Это косметолог-эстетист Юлия, она ведёт чистки.']);
+});
+
 // ── Follow-up ревью предвызова КБ: источник address-guard, порог релевантности,
 //    засев кэша повторов (спека 2026-08-10-agent-prompt-to-code-offload) ──
 describe('предвызов КБ: релевантность статьи и источник для address-guard', () => {
