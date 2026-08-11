@@ -109,7 +109,10 @@ describe('runDialog', () => {
     expect(deps.registry.handlers.get_available_slots)
       .toHaveBeenCalledWith(1, { staff_yc_id: 55, service_yc_id: 7, date: '2026-07-20' },
         { dialogKey: 'k', clientPhone: '79001112233', clientName: null, nowMs: expect.any(Number),
-          channel: null, priceIndex: null, attachments: [] });
+          channel: null, priceIndex: null, attachments: [],
+          // patientText — текст сообщений пациента для generic-booking-guard в
+          // create_booking (сверка «называл ли пациент препарат»).
+          patientText: expect.any(String) });
     expect(out.replies).toContain('Свободно 10:00. Записать?');
     expect(out.sideEffect).toBe(false);
     const secondCallMessages = deps.provider.createMessage.mock.calls[1][0].messages;

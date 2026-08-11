@@ -75,13 +75,19 @@ async function run(salonId, input, ctx = {}, deps = {}) {
   const items = (offer.chain || []).filter(l => !l.already_booked);
   if (!items.length) return { error: 'В выбранном варианте нет услуг для оформления.' };
 
+  // patientText НЕ прокидываем: generic-booking-guard в create_booking обязан
+  // молчать внутри book_chain. Вариант стыковки пациент подтвердил ЦЕЛИКОМ
+  // («давайте первый вариант» после показа названий услуг), а обхода
+  // patient_named_service в схеме book_chain нет — сработавший guard дал бы
+  // невыполнимый hint и зациклил оформление.
+  const { patientText, ...linkCtx } = ctx;
   const bookOne = (l) => createBooking(salonId, {
     staff_yc_id: l.staff_yc_id,
     service_yc_id: l.service_yc_id,
     datetime: l.datetime,
     seance_length: l.seance_length,
     ...common,
-  }, ctx);
+  }, linkCtx);
 
   // Идемпотентный ретрай (take() не потребляет offer, повтор book_chain с тем же
   // option_id — штатный сценарий): createBookingRecord на дубль отдаёт

@@ -7,6 +7,7 @@ const listServices = require('./list-services');
 const getSlots = require('./get-available-slots');
 const leadTime = require('../lead-time');
 const tpLimit = require('../third-party-limit');
+const genericGuard = require('../generic-booking-guard');
 
 // Отказ YClients именно по времени старта («Выбранное время недоступно…»,
 // «мастер занят…»), а не по услуге/токену/клиенту. Только на нём есть смысл
@@ -36,6 +37,9 @@ const schema = {
         'чем интересовался клиент и важные детали из диалога (напр. «Интересовалась фотоомоложением Lumecca, ' +
         'спрашивала про биоревитализацию и бонусы»). Для параллельной записи добавь пометку про спутника ' +
         '(«подруга Анны, параллельно с записью на 12:00»).' },
+      patient_named_service: { type: 'boolean', description: 'Ставь true, ТОЛЬКО если пациент ' +
+        'САМ явно назвал этот конкретный препарат/филлер в переписке (в том числе своими словами ' +
+        'или кириллицей). Без явного упоминания пациентом — не ставь.' },
     },
     required: ['staff_yc_id', 'service_yc_id', 'datetime'],
     additionalProperties: false,
@@ -103,6 +107,24 @@ async function run(salonId, input, ctx = {}) {
         error: 'Выбранный мастер не выполняет эту услугу (или staff_yc_id неверный). ' +
           'Возьми мастера из поля staff нужной услуги в каталоге услуг.',
       };
+    }
+    // Обобщённая услуга по умолчанию (правило «ПРЕПАРАТ/ФИЛЛЕР НЕ УТОЧНЯЕМ»,
+    // инцидент 2026-07-31 «Revi Silk» вместо «Биоревитализации»): запись на
+    // конкретный препарат, латинского названия которого нет в сообщениях
+    // пациента, детерминированно переспрашивается — hint-ответ, как too_soon.
+    if (!input.patient_named_service) {
+      const g = genericGuard.check({
+        title: svc.title, categoryPath: svc.category_path,
+        patientText: ctx.patientText, services: catalog.services,
+      });
+      if (g) {
+        return {
+          generic_service_hint: true,
+          error: `Пациент не называл препарат (${g.brands.join(' ')}). По правилу «ПРЕПАРАТ/ФИЛЛЕР НЕ УТОЧНЯЕМ» ` +
+            `оформляй обобщённую услугу «${g.genericTitle}» (service_yc_id=${g.genericYcId}) — препарат подберёт врач на визите. ` +
+            'Если пациент явно называл именно этот препарат своими словами — повтори вызов с patient_named_service:true.',
+        };
+      }
     }
   }
   // Минимальный срок до визита (день в день +2ч, вечером на завтра — с 12:00).

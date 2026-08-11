@@ -214,3 +214,19 @@ test('провалившийся book_chain вариант оформленны�
   expect(res.booked_all).toBe(false);
   expect(offers.peek(1, 'dlg').o1.booked).toBeUndefined();
 });
+
+test('generic-booking-guard в book_chain молчит по построению: patientText в create_booking не передаётся', async () => {
+  // Вариант стыковки пациент подтвердил ЦЕЛИКОМ («давайте первый вариант» после
+  // показа названий услуг), а обход patient_named_service через book_chain
+  // недоступен — сработавший guard зациклил бы оформление.
+  offers.remember(1, 'dlg', { o1: { booking_mode: 'separate_records', chain: [
+    LINK(101, 7, '2026-07-30T14:00:00+03:00'),
+  ] } });
+  const d = deps();
+  const res = await bookChain.run(1, { option_id: 'o1', comment: 'к' },
+    { ...CTX, patientText: 'хочу биоревитализацию' }, d);
+  expect(res.booked_all).toBe(true);
+  expect(d.createBooking.mock.calls[0][2].patientText).toBeUndefined();
+  // Остальной ctx (идентификация пациента) обязан дойти как раньше.
+  expect(d.createBooking.mock.calls[0][2]).toMatchObject({ dialogKey: 'dlg', clientPhone: '79990001122' });
+});

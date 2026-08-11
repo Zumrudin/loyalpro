@@ -694,6 +694,10 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
     const patientText = stripAllStamps(messages.filter(m => m.role === 'user').map(m => m.content).join('\n'));
     const patientTimes = new Set(replyGuard.extractTimes(patientText));
     const patientAskedOtherTime = replyGuard.OTHER_TIME_REQUEST_RE.test(patientText);
+    // Текст сообщений пациента → generic-booking-guard в create_booking
+    // (сверка «называл ли пациент препарат»). Пересчитывается каждой попыткой,
+    // как attachments: перегенерация видит свежую серию.
+    toolCtx.patientText = patientText;
     // toolOfferTimes/offerSlotTimes пополняются в tool-цикле ниже (только на
     // результатах, где реально был offer_slots).
     const toolOfferTimes = new Set();
