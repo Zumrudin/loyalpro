@@ -1611,6 +1611,7 @@ async function runMigrations(client) {
       nudge1_at       TIMESTAMPTZ,
       final_at        TIMESTAMPTZ,
       rendered_text   TEXT,
+      error           TEXT,
       attempts        INTEGER NOT NULL DEFAULT 0,
       last_attempt_at TIMESTAMPTZ,
       created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -1633,6 +1634,13 @@ async function runMigrations(client) {
   await client.query(`
     CREATE INDEX IF NOT EXISTS agent_followups_dialog_idx
       ON agent_followups (salon_id, dialog_key, created_at DESC)
+  `).catch(() => {});
+  // Текст исключения при сбое отправки. Отдельно от close_reason: там машинный
+  // код причины, и смешивать его с произвольным текстом ошибки значит потерять
+  // разбор инцидентов — ровно то, ради чего очередь и заведена отдельной
+  // таблицей. Так же устроены reminder_queue и care_touch_sends.
+  await client.query(`
+    ALTER TABLE agent_followups ADD COLUMN IF NOT EXISTS error TEXT
   `).catch(() => {});
 
   await client.query(`
