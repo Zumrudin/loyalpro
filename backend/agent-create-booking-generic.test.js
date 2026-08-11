@@ -56,4 +56,15 @@ describe('create_booking × generic-booking-guard', () => {
     const res = await tool.run(1, INPUT, ctx);
     expect(res.created).toBe(true);
   });
+
+  test('имя правила, процитированное в hint, существует в системном промпте дословно', async () => {
+    // Связывающий тест: hint ссылается на правило по имени, и переименование
+    // правила в system-prompt.js без правки hint оставило бы модель с битой ссылкой.
+    const { buildSystemPrompt } = require('./services/agent/system-prompt');
+    listServices.run.mockResolvedValue(CATALOG);
+    const res = await tool.run(1, INPUT, CTX);
+    const m = String(res.error).match(/По правилу «([^»]+)»/);
+    expect(m).not.toBe(null);
+    expect(buildSystemPrompt({})).toContain(m[1]);
+  });
 });
