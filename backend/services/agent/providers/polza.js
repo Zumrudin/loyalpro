@@ -74,6 +74,15 @@ async function createMessage({ system, messages, tools }, opts = {}) {
   const openAITools = toOpenAITools(tools);
   if (openAITools.length) params.tools = openAITools;
 
+  // Потолок «размышлений». ЗАЧЕМ: у gemini-2.5-pro reasoning занимал 95% всего
+  // output'а при 54 токенах видимого пациенту текста — ~57% счёта уходило на то,
+  // чего никто не читает (замер scripts/agent-model-benchmark.js, 2026-08-11).
+  // Ограничение до 512 дало ту же модель вдвое дешевле и вдвое быстрее при
+  // идентичных ответах. opts.reasoningMaxTokens — для пробников и бенчмарка.
+  const reasoningCap = opts.reasoningMaxTokens !== undefined
+    ? opts.reasoningMaxTokens : config.POLZA_REASONING_MAX_TOKENS;
+  if (reasoningCap > 0) params.reasoning = { max_tokens: reasoningCap };
+
   // Основная модель со своим ретраем; при персистентном ТРАНЗИЕНТНОМ сбое
   // добиваем тот же запрос через fallback-модель. Переигровка безопасна:
   // на упавшем ответе tool_calls мы не получили, ничего не выполнилось;
@@ -89,7 +98,12 @@ async function createMessage({ system, messages, tools }, opts = {}) {
     const fbTimeout = opts.fallbackTimeoutMs || config.POLZA_FALLBACK_TIMEOUT_MS;
     logger.warn(`основная модель ${primaryModel} упала (${e.message}) — fallback на ${fallbackModel}`);
     // Одна попытка со своим коротким таймаутом — не копить 60+60 с.
-    resp = await client.chat.completions.create({ ...params, model: fallbackModel }, { timeout: fbTimeout });
+    // reasoning на fallback НЕ переносим: ручка проверена только на vertex-роутах
+    // Gemini, а запасная модель — Anthropic, где бюджет размышлений живёт по своим
+    // правилам (на 5.x он удалён и отдаёт 400). Цена ошибки — отказ ровно в тот
+    // момент, когда основная модель уже упала, то есть fallback'а не будет вовсе.
+    const { reasoning: _noReasoningOnFallback, ...fbParams } = params;
+    resp = await client.chat.completions.create({ ...fbParams, model: fallbackModel }, { timeout: fbTimeout });
   }
   // Polza кладёт в usage реальные списания (cost_rub) — логируем каждый ход,
   // чтобы дорогую модель было видно в логах, а не только по кошельку

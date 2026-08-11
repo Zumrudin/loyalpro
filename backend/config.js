@@ -106,6 +106,18 @@ module.exports = {
   POLZA_FALLBACK_MODEL:      process.env.POLZA_FALLBACK_MODEL      || 'anthropic/claude-sonnet-5',
   POLZA_FALLBACK_TIMEOUT_MS: process.env.POLZA_FALLBACK_TIMEOUT_MS
     ? parseInt(process.env.POLZA_FALLBACK_TIMEOUT_MS, 10) : 30000,
+  // Потолок «размышлений» модели на ход. ИЗМЕРЕНО (бенчмарк 2026-08-11,
+  // scripts/agent-model-benchmark.js): у gemini-2.5-pro reasoning — 95% ВСЕГО
+  // output'а (1705 из 1764 токенов), а видимого текста пациенту 54 токена;
+  // это ~57% счёта за то, чего никто не читает. Ограничение до 512 дало ту же
+  // модель вдвое дешевле (3.90 → 1.80 ₽/ход) и вдвое быстрее (27.8 → 11.2 с)
+  // при идентичном поведении на тестовом наборе (4/4 по валидным кейсам).
+  // 0 или пусто = не передавать параметр вовсе (прежнее поведение).
+  // ГОТЧА: ручку принимают ТОЛЬКО vertex-роуты (`google/gemini-2.5-pro-preview`,
+  // `gemini-3-*`); у прод-роута `google/gemini-2.5-pro` (provider `mie`) её нет,
+  // и с ним параметр бесполезен — модель думает по-прежнему.
+  POLZA_REASONING_MAX_TOKENS: process.env.POLZA_REASONING_MAX_TOKENS
+    ? parseInt(process.env.POLZA_REASONING_MAX_TOKENS, 10) : 512,
 
   // Провайдер диалогового агента: 'aitunnel' (Gemini) | 'polza' (Claude) | 'anthropic' (прямой, откат).
   AGENT_PROVIDER:       process.env.AGENT_PROVIDER       || 'aitunnel',

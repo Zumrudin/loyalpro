@@ -146,6 +146,54 @@ describe('polza.createMessage — fallback на другую модель при
   });
 });
 
+// Потолок reasoning (2026-08-11): у gemini-2.5-pro «размышления» — 95% output'а
+// и ~57% счёта при 54 токенах видимого текста. Ограничение вдвое снизило цену
+// и время хода без изменения ответов.
+describe('polza.createMessage — потолок reasoning', () => {
+  const ok = (calls) => ({ chat: { completions: { create: async (p) => {
+    calls.push(p);
+    return { choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: 'ок' } }] };
+  } } } });
+
+  test('по умолчанию шлёт reasoning.max_tokens из конфига', async () => {
+    const config = require('./config');
+    const calls = [];
+    await provider.createMessage({ system: 's', messages: [], tools: [] }, { client: ok(calls) });
+    expect(calls[0].reasoning).toEqual({ max_tokens: config.POLZA_REASONING_MAX_TOKENS });
+  });
+
+  test('явный 0 → параметр не отправляется вовсе (откат к прежнему поведению)', async () => {
+    const calls = [];
+    await provider.createMessage({ system: 's', messages: [], tools: [] },
+      { client: ok(calls), reasoningMaxTokens: 0 });
+    expect(calls[0]).not.toHaveProperty('reasoning');
+  });
+
+  // Ручку принимают только vertex-роуты Gemini; запасная модель — Anthropic,
+  // где бюджет размышлений живёт по своим правилам (на 5.x удалён → 400).
+  // Утечка параметра в fallback убила бы его ровно тогда, когда он нужен.
+  test('на fallback reasoning НЕ переносится', async () => {
+    const calls = [];
+    const fakeClient = { chat: { completions: { create: async (p) => {
+      calls.push(p);
+      if (p.model === 'primary') { const e = new Error('overloaded'); e.status = 529; throw e; }
+      return { choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: 'ок' } }] };
+    } } } };
+    const res = await provider.createMessage(
+      { system: 's', messages: [], tools: [] },
+      { client: fakeClient, model: 'primary', fallbackModel: 'anthropic/claude-sonnet-5',
+        maxRetries: 0, retryBaseMs: 0, reasoningMaxTokens: 512 });
+    expect(res.text).toBe('ок');
+    const primary = calls.filter(c => c.model === 'primary');
+    const fb = calls.filter(c => c.model === 'anthropic/claude-sonnet-5');
+    expect(primary[0].reasoning).toEqual({ max_tokens: 512 });
+    expect(fb).toHaveLength(1);
+    expect(fb[0]).not.toHaveProperty('reasoning');
+    // Остальное тело запроса на fallback обязано сохраниться.
+    expect(fb[0].messages).toEqual(primary[0].messages);
+  });
+});
+
 describe('polza.toolResultMessages', () => {
   test('по одному {role:tool} на вызов с tool_call_id', () => {
     const msgs = provider.toolResultMessages([
