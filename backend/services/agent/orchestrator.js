@@ -981,6 +981,9 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
           availableStaff: [...availableStaff],
           patientTimes,
         }),
+        // «Консультация в подарок» один раз за диалог — только измерение.
+        ...replyGuard.checkGiftRepeat(joined,
+          { priorHasGift: replyGuard.GIFT_RE.test(priorAssistantText) }),
       ];
       if (violations.length) {
         logger.warn(`dialog ${dialogKey}: reply-guard: ${JSON.stringify(violations)}`);

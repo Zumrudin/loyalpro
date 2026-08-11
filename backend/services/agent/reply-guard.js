@@ -244,8 +244,20 @@ function checkStaffAttribution(text, opts = {}) {
   return named ? [{ type: 'alien_time_attribution', value: named }] : [];
 }
 
+// «Консультация в подарок» — один раз за диалог (правило Сценария 2). ТОЛЬКО
+// измерение, как offer_bypass: резать текст с упоминанием подарка рискованно
+// (фраза вплетена в предложение), а масштаб проблемы неизвестен — сначала лог.
+// priorHasGift считает оркестратор по прошлым репликам Милы (без реплик
+// администратора).
+const GIFT_RE = /в\s+подарок/i;
+function checkGiftRepeat(text, opts = {}) {
+  if (!opts.priorHasGift) return [];
+  return GIFT_RE.test(String(text || ''))
+    ? [{ type: 'gift_repeat', value: 'в подарок' }] : [];
+}
+
 // Жёсткие нарушения — оркестратор просит модель переписать ответ; стилистика
-// (эмодзи, приветствие, offer_bypass, free_day_time) — только лог.
+// (эмодзи, приветствие, offer_bypass, free_day_time, gift_repeat) — только лог.
 //
 // unknown_time переведён из лога в жёсткие 10.08.2026, и это ИЗМЕРЕНО, а не
 // решено на глаз: за весь доступный прод-лог (91 ход агента) он сработал РОВНО
@@ -259,6 +271,6 @@ function hardViolations(violations) {
 
 module.exports = {
   extractTimes, checkOfferedTimes, checkOfferDeviation, checkFreeDayTime, lintReply, hardViolations,
-  checkStaffAttribution, mentionsPerson,
+  checkStaffAttribution, mentionsPerson, checkGiftRepeat, GIFT_RE,
   OTHER_TIME_REQUEST_RE,
 };

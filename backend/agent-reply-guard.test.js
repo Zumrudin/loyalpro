@@ -1,6 +1,7 @@
 'use strict';
 
 const g = require('./services/agent/reply-guard');
+const { checkGiftRepeat, GIFT_RE, hardViolations } = g;
 
 describe('extractTimes', () => {
   test('вытаскивает HH:MM и HH.MM, нормализует к HH:MM', () => {
@@ -351,5 +352,22 @@ describe('hardViolations', () => {
       { type: 'offer_bypass', value: '15:00' },
       { type: 'free_day_time', value: '11:00' },
     ])).toEqual([]);
+  });
+});
+
+// ── gift_repeat: «консультация в подарок» второй раз за диалог (лог-only) ──
+describe('checkGiftRepeat', () => {
+  test('повтор при уже звучавшем «в подарок» → нарушение', () => {
+    expect(checkGiftRepeat('Плюс консультация в подарок!', { priorHasGift: true }))
+      .toEqual([{ type: 'gift_repeat', value: 'в подарок' }]);
+  });
+  test('первое упоминание → чисто', () => {
+    expect(checkGiftRepeat('Консультация в подарок при процедуре в тот же день', { priorHasGift: false })).toEqual([]);
+  });
+  test('нет фразы в реплике → чисто', () => {
+    expect(checkGiftRepeat('Записала вас на чистку', { priorHasGift: true })).toEqual([]);
+  });
+  test('gift_repeat — НЕ жёсткое нарушение (только лог)', () => {
+    expect(hardViolations([{ type: 'gift_repeat', value: 'в подарок' }])).toEqual([]);
   });
 });
