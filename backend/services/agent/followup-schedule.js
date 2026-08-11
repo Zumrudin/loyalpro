@@ -22,7 +22,10 @@ const DEFAULT_DELAY2_MIN = 60;
 // а плановое напоминание (services/reminders) с его собственными правилами.
 const MAX_DELAY_MIN = 1440;
 
-function toPositiveInt(raw, max) {
+// Имя честное: 0 проходит (отвергаем только n<0), это НЕ «строго
+// положительное». Семантику «включено только при delay1>0» несёт отдельная
+// проверка `if (!d1)` в resolveDelays, а не эта функция.
+function toBoundedNonNegativeInt(raw, max) {
   const n = Number(raw);
   if (!Number.isInteger(n) || n < 0 || n > max) return null;
   return n;
@@ -36,11 +39,17 @@ function toPositiveInt(raw, max) {
  *   либо мусор в колонке (рассинхрон схемы с кодом: молча слать нельзя).
  */
 function resolveDelays(settings = {}) {
-  const d1 = toPositiveInt(settings.followupDelay1Min, MAX_DELAY_MIN);
+  const d1 = toBoundedNonNegativeInt(settings.followupDelay1Min, MAX_DELAY_MIN);
   if (!d1) return { enabled: false, delay1: 0, delay2: 0 };
-  const d2raw = toPositiveInt(settings.followupDelay2Min, MAX_DELAY_MIN);
+  const d2raw = toBoundedNonNegativeInt(settings.followupDelay2Min, MAX_DELAY_MIN);
   // Финал обязан быть ПОЗЖЕ напоминания: иначе два сообщения ушли бы подряд.
   const d2 = d2raw && d2raw > d1 ? d2raw : DEFAULT_DELAY2_MIN;
+  // Второй тернарник — защита от ИСПОРЧЕННЫХ данных, а не штатный путь.
+  // Валидация pickFollowup (Task 3) состояние «delay1 ≥ 60 и delay2 битый»
+  // не пропустит, но строка могла прийти из прямого SQL или старой записи;
+  // плоский дефолт DEFAULT_DELAY2_MIN=60 сам нарушил бы инвариант «финал
+  // позже напоминания», когда первый интервал уже не меньше часа — тогда
+  // финал считаем от первого интервала, а не от фиксированных 60 минут.
   return { enabled: true, delay1: d1, delay2: d2 > d1 ? d2 : d1 + DEFAULT_DELAY2_MIN };
 }
 
@@ -55,7 +64,7 @@ function nextAtFor({ anchorAt, stage, delay1Min, delay2Min } = {}) {
   const base = new Date(anchorAt).getTime();
   if (!Number.isFinite(base)) return null;
   const minutes = stage === 0 ? delay1Min : stage === 1 ? delay2Min : null;
-  if (!Number.isFinite(minutes) || minutes === null) return null;
+  if (!Number.isFinite(minutes)) return null;
   return new Date(base + minutes * 60000);
 }
 

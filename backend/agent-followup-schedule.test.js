@@ -24,6 +24,18 @@ describe('resolveDelays', () => {
     expect(resolveDelays({ followupDelay1Min: 30, followupDelay2Min: 20 }))
       .toEqual({ enabled: true, delay1: 30, delay2: DEFAULT_DELAY2_MIN });
   });
+
+  // Плоский дефолт 60 сам нарушил бы инвариант «финал позже напоминания»,
+  // когда первый интервал уже больше часа. Ветка защиты от испорченных данных.
+  test('первый интервал ≥ 60 и битый второй → дефолт прибавляется к первому', () => {
+    expect(resolveDelays({ followupDelay1Min: 90 }))
+      .toEqual({ enabled: true, delay1: 90, delay2: 150 });
+  });
+
+  test('граничный случай: первый интервал ровно 60', () => {
+    expect(resolveDelays({ followupDelay1Min: 60 }))
+      .toEqual({ enabled: true, delay1: 60, delay2: 120 });
+  });
 });
 
 describe('nextAtFor', () => {
