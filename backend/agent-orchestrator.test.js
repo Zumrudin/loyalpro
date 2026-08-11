@@ -2141,3 +2141,99 @@ test('повтор должности из прошлой реплики Мил�
   const res = await orchestrator.runDialog(1, 'k', { deps });
   expect(res.replies).toEqual(['Вас примет Юлия, всё передала.']);
 });
+
+// ── Follow-up ревью предвызова КБ: источник address-guard, порог релевантности,
+//    засев кэша повторов (спека 2026-08-10-agent-prompt-to-code-offload) ──
+describe('предвызов КБ: релевантность статьи и источник для address-guard', () => {
+  const PROMO_HEAD = 'СТАТЬЯ О СПЕЦПРЕДЛОЖЕНИИ МЕСЯЦА (найдена автоматически';
+
+  function deps(kbResult, replyText) {
+    const kbHandler = jest.fn(async () => kbResult);
+    const d = makeDeps({
+      history: {
+        loadTranscript: jest.fn(async () => ({ messages: [{ role: 'user', content: '+' }], watermark: 500 })),
+        lastOutgoingAuthor: jest.fn(async () => 'system'),
+      },
+      handlers: { search_knowledge_base: kbHandler },
+    });
+    d.provider.createMessage.mockResolvedValue(
+      { assistantMsg: { role: 'assistant', content: 'ок' }, toolCalls: [], text: replyText });
+    return { d, kbHandler };
+  }
+
+  // На проде статьи об акции нет ВООБЩЕ, а у retrieveChunks нет порога
+  // релевантности — вектор-топ всегда что-нибудь вернёт. Без фильтра каждое «+»
+  // вшивало бы чужую статью под заголовком «СТАТЬЯ О СПЕЦПРЕДЛОЖЕНИИ МЕСЯЦА» да
+  // ещё с запретом звать КБ повторно.
+  test('заголовок ТОП-чанка про акцию → блок в промпте', async () => {
+    const { d } = deps({ found: true, context: 'Акция августа\nСкидка 20% на чистки', sources: [3] }, 'Ответ');
+    await orchestrator.runDialog(1, 'k', { deps: d });
+    expect(d.provider.createMessage.mock.calls[0][0].system).toContain(PROMO_HEAD);
+  });
+
+  test('найдена ЧУЖАЯ статья → блока нет, ход как до фичи', async () => {
+    const { d, kbHandler } = deps(
+      { found: true, context: 'Лазерная эпиляция: подготовка\nЗа две недели…', sources: [9] }, 'Ответ');
+    const res = await orchestrator.runDialog(1, 'k', { deps: d });
+    expect(kbHandler).toHaveBeenCalledTimes(1);                       // сходили и отвергли
+    expect(d.provider.createMessage.mock.calls[0][0].system).not.toContain(PROMO_HEAD);
+    expect(res.replies).toEqual(['Ответ']);
+  });
+
+  // JSON.stringify(promoKb) экранирует переводы строк, и литеральная «n»
+  // приклеивается к первому слову строки: токен «nгенерала» вместо «генерала»,
+  // стем-сверка промахивается — address-guard режет ЛЕГАЛЬНЫЙ адрес из статьи.
+  test('адрес в НАЧАЛЕ строки многострочной статьи не вырезается', async () => {
+    const { d } = deps(
+      { found: true, context: 'Акция месяца: скидка 20%\nГенерала Белова, 28 к. 3 — ждём вас', sources: [] },
+      'Ждём вас по адресу: ул. Генерала Белова, 28 к. 3');
+    const res = await orchestrator.runDialog(1, 'k', { deps: d });
+    expect(res.replies.join(' ')).toContain('Генерала Белова, 28 к. 3');
+  });
+
+  // Обратная сторона того же дефекта: числа ОБВЯЗКИ результата (sources —
+  // article_id) сверяются точно и легализовали бы выдуманный номер дома.
+  test('номер дома, которого нет в тексте статьи, не легализуется обвязкой', async () => {
+    const { d } = deps(
+      { found: true, context: 'Акция августа. Ждём вас на Генерала Белова', sources: [6] },
+      'Расскажу про акцию. Ждём вас: ул. Генерала Белова, д. 6');
+    const res = await orchestrator.runDialog(1, 'k', { deps: d });
+    const text = res.replies.join(' ');
+    expect(text).toContain('Расскажу про акцию');
+    expect(text).not.toContain('д. 6');
+  });
+
+  // Тот же источник и в tool-цикле: раньше там тоже копился JSON.stringify.
+  test('статья, прочитанная САМОЙ моделью, тоже даёт сырой источник', async () => {
+    const kbHandler = jest.fn(async () => ({
+      found: true, context: 'О клинике\nГенерала Белова, 28 к. 3', sources: [1] }));
+    const d = makeDeps({ handlers: { search_knowledge_base: kbHandler } });
+    d.provider.createMessage
+      .mockResolvedValueOnce(toolResp('search_knowledge_base', { query: 'адрес клиники' }))
+      .mockResolvedValueOnce(textResp('Ждём вас по адресу: ул. Генерала Белова, 28 к. 3'));
+    const res = await orchestrator.runDialog(1, 'k', { deps: d });
+    expect(res.replies.join(' ')).toContain('Генерала Белова, 28 к. 3');
+  });
+
+  // Модель может позвать КБ вопреки блоку — второй поход в RAG за тем же
+  // ответом не нужен (кэш повторов хода засеян предвызовом).
+  test('повторный вызов КБ с тем же запросом не доходит до RAG', async () => {
+    const { d, kbHandler } = deps({ found: true, context: 'Акция августа\nСкидка 20%', sources: [] }, 'Ответ');
+    d.provider.createMessage
+      .mockResolvedValueOnce(toolResp('search_knowledge_base', { query: 'спецпредложение месяца, акция' }))
+      .mockResolvedValueOnce(textResp('Ответ'));
+    await orchestrator.runDialog(1, 'k', { deps: d });
+    expect(kbHandler).toHaveBeenCalledTimes(1);                       // только предвызов
+    const second = d.provider.createMessage.mock.calls[1][0].messages;
+    expect(JSON.stringify(second[second.length - 1])).toContain('repeated_call');
+  });
+
+  test('другой запрос к КБ кэшем не перехватывается', async () => {
+    const { d, kbHandler } = deps({ found: true, context: 'Акция августа\nСкидка 20%', sources: [] }, 'Ответ');
+    d.provider.createMessage
+      .mockResolvedValueOnce(toolResp('search_knowledge_base', { query: 'адрес клиники' }))
+      .mockResolvedValueOnce(textResp('Ответ'));
+    await orchestrator.runDialog(1, 'k', { deps: d });
+    expect(kbHandler).toHaveBeenCalledTimes(2);
+  });
+});

@@ -479,7 +479,12 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
   };
 
   // Предвызов КБ на короткое «+» (акция): делается ОДИН раз на ход и переживает
-  // перегенерации (статья не протухает за секунды прогона).
+  // перегенерации (статья не протухает за секунды прогона). Второй край того же
+  // решения: при перегенерации из-за нового входящего серия могла измениться, и
+  // isPromoInterest на свежем транскрипте уже false — блок всё равно ОСТАЁТСЯ.
+  // Так и задумано: окно перегенерации — секунды, блок аддитивный (лишняя статья
+  // в хвосте промпта ответу не мешает), а повторный поход в RAG на каждой
+  // перегенерации стоил бы дороже, чем возможная лишняя справка об акции.
   const PROMO_QUERY = { query: 'спецпредложение месяца, акция' };
   let promoKb = null;
   let promoChecked = false;
@@ -596,8 +601,13 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
           const author = await history.lastOutgoingAuthor(salonId, dialogKey);
           if (author === 'system' && registry.handlers['search_knowledge_base']) {
             const kb = await registry.handlers['search_knowledge_base'](salonId, PROMO_QUERY, toolCtx);
-            if (kb && kb.found && kb.context) promoKb = kb;
-            logger.info(`dialog ${dialogKey}: короткое «+» на акцию — предвызов базы знаний (${promoKb ? 'статья найдена' : 'статьи нет'})`);
+            // Фильтр релевантности обязателен: у retrieveChunks порога нет, и
+            // выдача НЕПУСТА всегда — без него «+» вшивал бы в промпт первую
+            // попавшуюся статью под заголовком «СТАТЬЯ О СПЕЦПРЕДЛОЖЕНИИ».
+            const found = !!(kb && kb.found && kb.context);
+            if (found && promoInterest.isPromoArticle(kb.context)) promoKb = kb;
+            logger.info(`dialog ${dialogKey}: короткое «+» на акцию — предвызов базы знаний (${
+              promoKb ? 'статья найдена' : (found ? 'найденное не про акцию' : 'статьи нет')})`);
           }
         } catch (e) {
           logger.warn(`dialog ${dialogKey}: предвызов базы знаний не удался (${e.message}) — модель вызовет сама`);
@@ -740,9 +750,20 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
     // действий источниками не считаются: см. шапку address-guard.js.
     // Предзагруженная статья — легальный источник этого хода и для address-guard
     // (иначе адрес из статьи об акции вырезался бы как выдумка).
-    let kbSourceText = promoKb ? JSON.stringify(promoKb) : '';
+    // Кладём СЫРОЙ context, а не JSON.stringify(результата), и это не косметика:
+    // address-guard режет источник на токены по [^\p{L}\p{N}]+, а JSON-эскейп
+    // переводов строки даёт литеральные «\» + «n» — буква n ПРИКЛЕИВАЕТСЯ к
+    // первому слову следующей строки («…чистки\nГенерала» → токен «nгенерала»),
+    // стем-сверка промахивается, и ЛЕГАЛЬНЫЙ адрес из статьи вырезается. В
+    // обратную сторону так же плохо: числа обвязки («sources»:[6]) сверяются
+    // ТОЧНО и легализовали бы выдуманный номер дома 6.
+    let kbSourceText = promoKb && typeof promoKb.context === 'string' ? promoKb.context : '';
     // Кэш вызовов ЭТОГО хода для дедупа повторов (см. REPEAT_CALL_HINT).
+    // Предвызов засеваем сразу: модель может позвать search_knowledge_base с тем
+    // же запросом вопреки блоку промпта — второй поход в RAG за тем же ответом
+    // не нужен, ей вернётся прежний результат с REPEAT_CALL_HINT.
     const turnCallCache = new Map();
+    if (promoKb) turnCallCache.set(repeatCallKey('search_knowledge_base', PROMO_QUERY), promoKb);
 
     for (let i = 0; i < MAX_ITERS; i++) {
       let resp;
@@ -862,7 +883,16 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
         // alternative_staff[] — по строке результата это одна проверка на все ветки.
         if (resultJson && resultJson.includes('"free_day":true')) sawFreeDay = true;
         if (SLOT_READ_TOOLS.has(tc.name)) collectStaffAvailability(result, emptyStaff, availableStaff);
-        if (!isError && tc.name === 'search_knowledge_base') kbSourceText += JSON.stringify(result);
+        // Источник для address-guard — СЫРОЙ текст статьи, а не JSON результата:
+        // JSON-эскейп «\n» приклеивает букву n к первому слову следующей строки
+        // (токен «nгенерала» вместо «генерала» — легальный адрес вырезался бы), а
+        // числа обвязки («sources»:[6]) сверяются точно и легализовали бы
+        // выдуманный номер дома. Фолбэк на stringify — на нестандартную форму
+        // результата без context, чтобы не потерять прежнее поведение.
+        if (!isError && tc.name === 'search_knowledge_base') {
+          kbSourceText += '\n' + (result && typeof result.context === 'string'
+            ? result.context : JSON.stringify(result));
+        }
       }
       for (const m of provider.toolResultMessages(results)) convo.push(m);
       if (escalated) {

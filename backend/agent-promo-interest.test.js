@@ -1,6 +1,6 @@
 'use strict';
 
-const { isPromoInterest } = require('./services/agent/promo-interest');
+const { isPromoInterest, isPromoArticle } = require('./services/agent/promo-interest');
 
 describe('isPromoInterest', () => {
   const userMsg = (content) => [{ role: 'user', content }];
@@ -46,5 +46,29 @@ describe('isPromoInterest', () => {
     expect(isPromoInterest(userMsg('  +  '))).toBe(true);
     expect(isPromoInterest(userMsg('плюс.'))).toBe(true);
     expect(isPromoInterest(userMsg('+\n+'))).toBe(false);   // серия склеена через \n → два блока текста
+  });
+});
+
+// ── Порог релевантности статьи (follow-up ревью: у retrieveChunks порога нет) ──
+describe('isPromoArticle', () => {
+  test('заголовок ТОП-чанка про акцию → статья принимается', () => {
+    expect(isPromoArticle('Спецпредложение августа\nСкидка 20% на чистки')).toBe(true);
+    expect(isPromoArticle('Акция месяца\nПодробности')).toBe(true);
+    expect(isPromoArticle('Скидки постоянным пациентам\nтекст')).toBe(true);
+    expect(isPromoArticle('\n\nАкция месяца\nтекст')).toBe(true);   // ведущие пустые строки
+  });
+
+  test('чужая статья в топе → отвергается (на проде статьи об акции нет вовсе)', () => {
+    expect(isPromoArticle('Лазерная эпиляция: подготовка\nЗа две недели до процедуры…')).toBe(false);
+    // Слово из тела заголовком не делает: «скидка» встречается в любой статье о ценах.
+    expect(isPromoArticle('Информация о клинике\nДействует скидка для новых пациентов')).toBe(false);
+  });
+
+  test('пустой/не-строковый контекст → false', () => {
+    expect(isPromoArticle('')).toBe(false);
+    expect(isPromoArticle('   ')).toBe(false);
+    expect(isPromoArticle(null)).toBe(false);
+    expect(isPromoArticle(42)).toBe(false);
+    expect(isPromoArticle(['Акция'])).toBe(false);
   });
 });
