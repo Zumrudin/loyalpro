@@ -34,9 +34,9 @@ describe('pickFollowup', () => {
     expect(pickFollowup({ followupLatestTime: '22:30' }, cur).followupLatestTime).toBe('22:30');
   });
 
-  test('битое время → BAD_TIME', () => {
+  test('битое время → BAD_FOLLOWUP_TIME', () => {
     expect(() => pickFollowup({ followupLatestTime: '25:00' }, cur)).toThrow(
-      expect.objectContaining({ code: 'BAD_TIME' }));
+      expect.objectContaining({ code: 'BAD_FOLLOWUP_TIME' }));
   });
 
   test('нечисловой или отрицательный интервал → BAD_FOLLOWUP', () => {
@@ -54,5 +54,19 @@ describe('pickFollowup', () => {
   test('текст режется по потолку', () => {
     const long = 'а'.repeat(2000);
     expect(pickFollowup({ followupFinalText: long }, cur).followupFinalText.length).toBe(1200);
+  });
+
+  // Ноль — валидное сохранённое значение, а не «поле не передано». Подмена
+  // дефолтом самоусиливается: updateSettings читает cur через getSettings.
+  test('сохранённый ноль во втором интервале не подменяется дефолтом', () => {
+    const zero = { ...cur, followupDelay1Min: 0, followupDelay2Min: 0 };
+    expect(pickFollowup({}, zero).followupDelay2Min).toBe(0);
+  });
+
+  test('булево, массив и объект интервалом не считаются', () => {
+    for (const bad of [true, [15], { min: 15 }]) {
+      expect(() => pickFollowup({ followupDelay1Min: bad }, cur)).toThrow(
+        expect.objectContaining({ code: 'BAD_FOLLOWUP' }));
+    }
   });
 });

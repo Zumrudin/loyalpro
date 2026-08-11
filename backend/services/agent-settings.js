@@ -28,8 +28,9 @@ function rowToSettings(row) {
     scheduleStart: row.schedule_start || DEFAULTS.scheduleStart,
     scheduleEnd: row.schedule_end || DEFAULTS.scheduleEnd,
     priceListUrl: row.price_list_url || null,
-    followupDelay1Min: Number(row.followup_delay1_min) || 0,
-    followupDelay2Min: Number(row.followup_delay2_min) || DEFAULTS.followupDelay2Min,
+    followupDelay1Min: row.followup_delay1_min == null ? 0 : Number(row.followup_delay1_min),
+    followupDelay2Min: row.followup_delay2_min == null
+      ? DEFAULTS.followupDelay2Min : Number(row.followup_delay2_min),
     followupFinalText: row.followup_final_text || null,
     followupLatestTime: row.followup_latest_time || null,
   };
@@ -53,6 +54,10 @@ function badFollowup(msg) {
 
 function pickDelay(raw, current) {
   if (raw === undefined || raw === null || raw === '') return current;
+  // Только число или строка: Number(true)===1 и Number([15])===15 иначе
+  // молча проезжали бы как валидный интервал (прецедент — parseRuleBody
+  // в routes/reminders.js отвергает bool/массив/объект тем же способом).
+  if (typeof raw !== 'number' && typeof raw !== 'string') throw badFollowup('bad followup delay');
   const n = Number(raw);
   if (!Number.isInteger(n) || n < 0 || n > FOLLOWUP_DELAY_MAX)
     throw badFollowup('bad followup delay');
@@ -69,8 +74,8 @@ function pickDelay(raw, current) {
  * от «не передано» по смыслу поля: пустой текст и снятая граница законны).
  */
 function pickFollowup(body = {}, cur = {}) {
-  const delay1 = pickDelay(body.followupDelay1Min, cur.followupDelay1Min || 0);
-  const delay2 = pickDelay(body.followupDelay2Min, cur.followupDelay2Min || DEFAULTS.followupDelay2Min);
+  const delay1 = pickDelay(body.followupDelay1Min, cur.followupDelay1Min ?? 0);
+  const delay2 = pickDelay(body.followupDelay2Min, cur.followupDelay2Min ?? DEFAULTS.followupDelay2Min);
   // Проверяем, только когда напоминания включены: при delay1=0 второе поле
   // ни на что не влияет, и запрещать его форме незачем.
   if (delay1 > 0 && !(delay2 > delay1))
@@ -84,7 +89,7 @@ function pickFollowup(body = {}, cur = {}) {
   if (rawTime === undefined || rawTime === null) latest = cur.followupLatestTime || null;
   else if (String(rawTime).trim() === '') latest = null;
   else {
-    if (parseHhMm(rawTime) === null) { const e = new Error('bad time'); e.code = 'BAD_TIME'; throw e; }
+    if (parseHhMm(rawTime) === null) { const e = new Error('bad time'); e.code = 'BAD_FOLLOWUP_TIME'; throw e; }
     latest = String(rawTime).trim();
   }
   return {
