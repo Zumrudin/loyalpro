@@ -21,7 +21,12 @@ const logger = createLogger('AgentCatalogData');
 // «Ботулинотерапия Ботулакс 1 ед» — тот же паттерн для зон: пациент не назвал
 // зону → запись на единицу Ботулакса, зоны и дозу определяет врач на визите
 // (инцидент 2026-07-31: запрос «записаться на ботокс» свёлся к консультации).
-const GENERIC_SERVICE_TITLES = ['Биоревитализация', 'Увеличение губ', 'Контурная пластика', 'Ботулинотерапия Ботулакс 1 ед'];
+// Цена этой услуги — за ОДНУ ЕДИНИЦУ препарата (370 ₽), а не за процедуру:
+// её маскирует блок каталога и инструмент get_service_masters (catalog-block.js
+// → isUnitPriceService). Литерал ОДИН на весь код — с ним же связан промпт
+// тестом на GENERIC_SERVICE_TITLES, и вторая копия молча разъехалась бы.
+const UNIT_PRICE_SERVICE_TITLE = 'Ботулинотерапия Ботулакс 1 ед';
+const GENERIC_SERVICE_TITLES = ['Биоревитализация', 'Увеличение губ', 'Контурная пластика', UNIT_PRICE_SERVICE_TITLE];
 const warnedMissing = new Set();   // один лог на процесс, а не на каждый ход диалога
 
 // Совпадение названия: после схлопывания пробелов — точное ИЛИ с техническим
@@ -177,6 +182,7 @@ async function loadCategoryTitles(salonId) {
 }
 
 module.exports = {
-  loadCatalogServices, GENERIC_SERVICE_TITLES, warnMissingGenericServices, matchesGenericTitle,
+  loadCatalogServices, GENERIC_SERVICE_TITLES, UNIT_PRICE_SERVICE_TITLE,
+  warnMissingGenericServices, matchesGenericTitle,
   loadCategoryTitles,
 };

@@ -8,7 +8,7 @@ jest.mock('./services/agent/catalog-data', () => ({
   loadCatalogServices: jest.fn(),
 }));
 const { loadCatalogServices } = require('./services/agent/catalog-data');
-const { renderCatalogBlock, buildSafe, fmtPrice } = require('./services/agent/catalog-block');
+const { renderCatalogBlock, buildSafe, fmtPrice, renderPriceRanges } = require('./services/agent/catalog-block');
 
 const svc = (over = {}) => ({
   yc_id: 7, title: 'Ботулинотерапия', duration_min: 60,
@@ -183,9 +183,26 @@ describe('блок «ДИАПАЗОНЫ ЦЕН»', () => {
   test('диапазон узла: женские без «инд.», мужские отдельно, узлы обоих уровней', () => {
     const b = renderCatalogBlock(services);
     expect(b).toContain('ДИАПАЗОНЫ ЦЕН');
-    expect(b).toContain('- «Биоревитализация»: от 12000 до 21000 ₽');
+    // Узел адресуется ПОЛНЫМ путём, в том же формате, что колонка каталога.
+    expect(b).toContain('- «Инъекционная косметология>Биоревитализация»: от 12000 до 21000 ₽');
     expect(b).toContain('- «Инъекционная косметология»: от 12000 до 21000 ₽ (мужской прайс «Муж.»: 24700 ₽)');
-    expect(b).toContain('- «Ботулинотерапия»: только мужской прайс «Муж.» — 24700 ₽');
+    expect(b).toContain('- «Инъекционная косметология>Ботулинотерапия»: только мужской прайс «Муж.» — 24700 ₽');
+  });
+
+  // На salon 1 «Дополнительно» лежит и под инъекционной, и под аппаратной
+  // косметологией: по голому имени диапазоны двух разных направлений склеивались
+  // в ОДНУ строку кэшируемого префикса промпта.
+  test('одноимённые подкатегории разных веток не склеиваются в один диапазон', () => {
+    const b = renderCatalogBlock([
+      { yc_id: 1, title: 'Укол', price_min: 3000, price_max: 3000,
+        category_path: ['Инъекционная косметология', 'Дополнительно'], staff: staffOf(3000, 3000) },
+      { yc_id: 2, title: 'Насадка', price_min: 500, price_max: 500,
+        category_path: ['Аппаратная косметология', 'Дополнительно'], staff: staffOf(500, 500) },
+    ]);
+    expect(b).toContain('- «Инъекционная косметология>Дополнительно»: 3000 ₽');
+    expect(b).toContain('- «Аппаратная косметология>Дополнительно»: 500 ₽');
+    expect(b).not.toContain('- «Дополнительно»:');
+    expect(b).not.toContain('от 500 до 3000 ₽');
   });
 
   test('детерминизм: перестановка входа не меняет блок байт-в-байт', () => {
@@ -199,5 +216,72 @@ describe('блок «ДИАПАЗОНЫ ЦЕН»', () => {
       { yc_id: 9, title: 'X', price_min: null, price_max: null, category_path: ['Y'], staff: staffOf(null, null) },
     ]);
     expect(b).not.toContain('ДИАПАЗОНЫ ЦЕН');
+  });
+});
+
+// Прямые юнит-тесты границ: в блоке эти кейсы видны только косвенно, а расхождение
+// диапазона со строкой каталога — ровно тот класс дефекта, ради которого границы
+// считает один хелпер.
+describe('renderPriceRanges: границы читаются так же, как строка каталога', () => {
+  const svcp = (over) => ({ yc_id: 1, title: 'Услуга', category_path: ['Напр'], staff: [], ...over });
+
+  test('пустой price_min → нижняя граница берётся из price_max, а не 0', () => {
+    // Каталог печатает такую услугу как «5000» — диапазон обязан совпасть.
+    expect(fmtPrice(0, 5000)).toBe('5000');
+    expect(renderPriceRanges([svcp({ price_min: 0, price_max: 5000 })]))
+      .toEqual(['- «Напр»: 5000 ₽']);
+  });
+
+  test('заглушка с реальным максимумом (1—15000) выпадает ЦЕЛИКОМ, а не даёт «от 1 ₽»', () => {
+    expect(renderPriceRanges([svcp({ price_min: 1, price_max: 15000 })])).toEqual([]);
+  });
+
+  test('мусорный price_max < price_min верхней границей не становится', () => {
+    expect(renderPriceRanges([svcp({ price_min: 12000, price_max: 500 })]))
+      .toEqual(['- «Напр»: 12000 ₽']);
+  });
+
+  test('цена единицы препарата в диапазон не входит', () => {
+    expect(renderPriceRanges([
+      svcp({ title: 'Ботулинотерапия  Ботулакс 1 ед ( 30 минут )', price_min: 370, price_max: 370 }),
+    ])).toEqual([]);
+  });
+
+  test('услуга без category_path в диапазоны не попадает (узла нет)', () => {
+    expect(renderPriceRanges([svcp({ price_min: 5000, price_max: 5000, category_path: [] })])).toEqual([]);
+  });
+});
+
+// ── get_service_masters не раскрывает цену единицы препарата (ревью 2026-08-10) ──
+// Тест живёт здесь, а не в agent-tools.test.js: маскировка — контракт catalog-block
+// (isUnitPriceService), и loadCatalogServices тут уже застаблен.
+describe('get_service_masters: маскировка «Ботулакс 1 ед»', () => {
+  const svcMasters = require('./services/agent/tools/get-service-masters');
+
+  test('price_display «инд.», сырых цен нет, есть unit_price-хинт; в JSON нет «370»', async () => {
+    loadCatalogServices.mockResolvedValue([
+      { yc_id: 4, title: 'Ботулинотерапия  Ботулакс 1 ед ( 30 минут )', duration_min: 30,
+        price_min: 370, price_max: 370,
+        category_path: ['Инъекционная косметология', 'Ботулинотерапия'],
+        staff: [{ yc_id: 5, name: 'Пери', price_min: 370, price_max: 370 }] },
+    ]);
+    const out = await svcMasters.run(1, { service_yc_ids: [4] });
+    const s = out.services[0];
+    expect(s.unit_price).toBe(true);
+    expect(s.hint).toMatch(/ОДНУ ЕДИНИЦУ препарата/);
+    expect(s.hint).toMatch(/БОТУЛИНОТЕРАПИЯ — по ЗОНАМ/);
+    expect(s.staff).toEqual([{ yc_id: 5, name: 'Пери', price_display: 'инд.' }]);
+    expect(JSON.stringify(out)).not.toContain('370');
+  });
+
+  test('обычная услуга не задета: price_display с числом и сырые цены на месте', async () => {
+    loadCatalogServices.mockResolvedValue([
+      { yc_id: 7, title: 'Чистка лица', duration_min: 60, price_min: 5000, price_max: 5000,
+        category_path: ['Уходы'],
+        staff: [{ yc_id: 5, name: 'Юлия', price_min: 5000, price_max: 5000 }] },
+    ]);
+    const out = await svcMasters.run(1, { service_yc_ids: [7] });
+    expect(out.services[0].unit_price).toBeUndefined();
+    expect(out.services[0].staff[0]).toMatchObject({ price_min: 5000, price_display: '5000 ₽' });
   });
 });

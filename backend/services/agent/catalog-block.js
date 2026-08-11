@@ -4,7 +4,7 @@
 // (AGENT_CATALOG_IN_PROMPT). Одна услуга — одна строка
 // id|название|мин|цена|направление>подкатегория|id мастеров.
 // ~16k символов против 77k у JSON list_services (замер 2026-07-27, salon 1).
-const { loadCatalogServices, matchesGenericTitle } = require('./catalog-data');
+const { loadCatalogServices, matchesGenericTitle, UNIT_PRICE_SERVICE_TITLE } = require('./catalog-data');
 const { isMaleService } = require('./male-services');
 const { createLogger } = require('../../logger');
 const logger = createLogger('AgentCatalogBlock');
@@ -32,21 +32,30 @@ const PLACEHOLDER_PRICE_MAX = 100;
 // за процедуру; промпт запрещает называть её пациенту и включать в диапазоны.
 // Тот же приём, что с заглушкой 1 ₽: рендерим «инд.» и мастеров без цен — модель
 // физически не видит числа, и правило перестаёт держаться на одном промпте
-// (спека 2026-08-10-agent-prompt-to-code-offload).
-const UNIT_PRICE_TITLE = 'Ботулинотерапия Ботулакс 1 ед';
-const isUnitPriceService = (title) => matchesGenericTitle(title, UNIT_PRICE_TITLE);
+// (спека 2026-08-10-agent-prompt-to-code-offload). Литерал названия живёт в
+// catalog-data рядом с GENERIC_SERVICE_TITLES — копий быть не должно.
+const isUnitPriceService = (title) => matchesGenericTitle(title, UNIT_PRICE_SERVICE_TITLE);
+
+// ЕДИНСТВЕННОЕ место, где сырые price_min/price_max превращаются в границы цены:
+// и строка каталога, и диапазон направления обязаны читать их ОДИНАКОВО. Пустой
+// price_min означает, что фактическая цена лежит в price_max (иначе диапазон
+// направления начинался бы с нуля там, где в каталоге стоит честная цена);
+// price_max:0 в YClients — НЕ «без верхней границы», а незаполненное поле, и
+// мусорный price_max < price_min верхней границей не считается (правило «точная
+// цена без "от"», df1f426). null — цены нет вовсе.
+function priceBounds(min, max) {
+  const rawLo = Number(min) || 0;
+  const rawHi = Number(max) || 0;
+  const lo = rawLo || rawHi;
+  if (!lo) return null;
+  return { lo, hi: Math.max(lo, rawHi) };
+}
 
 function fmtPrice(min, max) {
-  const lo = Number(min) || 0;
-  const hi = Number(max) || 0;
-  if (!lo && !hi) return '';
-  if (!lo) return String(hi);
-  // price_max:0 в YClients — НЕ «без верхней границы», а незаполненное поле:
-  // price_min и есть фактическая цена (правило «точная цена без "от"», df1f426).
-  if (!hi || hi <= lo) {
-    return lo <= PLACEHOLDER_PRICE_MAX ? 'инд.' : String(lo);
-  }
-  return `${lo}-${hi}`;
+  const b = priceBounds(min, max);
+  if (!b) return '';
+  if (b.hi <= b.lo) return b.lo <= PLACEHOLDER_PRICE_MAX ? 'инд.' : String(b.lo);
+  return `${b.lo}-${b.hi}`;
 }
 
 // Колонка мастеров. Если цены мастеров различаются — цена КАЖДОГО стоит прямо
@@ -76,24 +85,38 @@ function fmtRange(r) {
 const RANGES_HEADER =
   'ДИАПАЗОНЫ ЦЕН ПО НАПРАВЛЕНИЯМ И ГРУППАМ УСЛУГ (посчитано по каталогу выше; услуги «инд.» и цена единицы препарата в диапазоны не входят). Отвечая на вопрос о цене направления или группы, называй диапазон ОТСЮДА — сама услуги не суммируй и не пересчитывай. Женский и мужской прайс разделены:';
 
+// Границы услуги ДЛЯ ДИАПАЗОНА направления; null = услуга в диапазон не входит.
+function rangeBounds(service) {
+  if (isUnitPriceService(service.title)) return null;   // цена за единицу препарата
+  const b = priceBounds(service.price_min, service.price_max);
+  if (!b) return null;                                  // цены нет — не выдумываем
+  // Заглушка выпадает ЦЕЛИКОМ, даже когда у неё есть реальная верхняя граница
+  // (price_min=1, price_max=15000 у разошедшихся цен мастеров): «от 1 до 15000 ₽»
+  // прямо противоречит обещанию шапки блока не включать «инд.» в диапазоны.
+  return b.lo <= PLACEHOLDER_PRICE_MAX ? null : b;
+}
+
 function renderPriceRanges(services) {
-  const nodes = new Map();   // имя узла → { f:{lo,hi}|null, m:{lo,hi}|null }
+  const nodes = new Map();   // путь узла → { f:{lo,hi}|null, m:{lo,hi}|null }
   for (const s of services || []) {
-    if (isUnitPriceService(s.title)) continue;
-    const priceCell = fmtPrice(s.price_min, s.price_max);
-    if (!priceCell || priceCell === 'инд.') continue;
-    const lo = Number(s.price_min) || 0;
-    const hi = Math.max(lo, Number(s.price_max) || 0);
+    const b = rangeBounds(s);
+    if (!b) continue;
     const key = isMaleService(s.title) ? 'm' : 'f';
-    for (const raw of (s.category_path || [])) {
-      const name = cell(raw, 60);
-      if (!name) continue;
-      const node = nodes.get(name) || { f: null, m: null };
+    // Ключ узла — ПОЛНЫЙ путь от корня, а не голое имя: одноимённые подкатегории
+    // живут в разных ветках дерева (на salon 1 «Дополнительно» есть и в
+    // инъекционной, и в аппаратной косметологии), и по имени их диапазоны
+    // склеивались в одну строку промпта. Тот же принцип, что в male-services:
+    // направление сравнивается ПОЛНЫМ category_path. Печатается тот же путь —
+    // в том же формате «направление>подкатегория», что колонка каталога.
+    const path = (s.category_path || []).map(c => cell(c, 60)).filter(Boolean);
+    for (let i = 0; i < path.length; i++) {
+      const nodeKey = path.slice(0, i + 1).join('>');
+      const node = nodes.get(nodeKey) || { f: null, m: null };
       const cur = node[key];
       node[key] = cur
-        ? { lo: Math.min(cur.lo, lo), hi: Math.max(cur.hi, hi) }
-        : { lo, hi };
-      nodes.set(name, node);
+        ? { lo: Math.min(cur.lo, b.lo), hi: Math.max(cur.hi, b.hi) }
+        : { lo: b.lo, hi: b.hi };
+      nodes.set(nodeKey, node);
     }
   }
   // Простое строковое сравнение, НЕ localeCompare: блок обязан быть
@@ -139,7 +162,8 @@ function renderCatalogBlock(services) {
     'КАТАЛОГ УСЛУГ КЛИНИКИ (полный актуальный список; формат строки: id услуги|название|длительность в минутах|цена ₽|направление>подкатегория|id мастеров через запятую). Цена: одно число — точная стоимость; X-Y — цены мастеров различаются, и тогда в колонке мастеров у каждого стоит его собственная цена (id=цена) — называй пациенту именно её, а не границу диапазона; «инд.» — стоимость определяет врач на консультации, цифру НЕ называй; пусто — цены нет, не выдумывай. Услуги с приставкой «Муж.» в начале названия — мужской прайс: мужчине называй цену и оформляй запись ТОЛЬКО по ним, женщине — только по строкам без приставки:',
     legend ? `Мастера: ${legend}` : null,
     ...lines,
-    // Пустая строка-разделитель добавляется ПОСЛЕ filter(Boolean) — иначе он же её и съест.
+    // Пустая строка-разделитель — это ведущий \n ВНУТРИ строки заголовка:
+    // отдельным элементом '' её съел бы filter(Boolean) ниже.
     ...(rangeLines.length ? [`\n${RANGES_HEADER}`, ...rangeLines] : []),
   ].filter(Boolean).join('\n');
   if (block.length > MAX_BLOCK_CHARS) {
@@ -158,4 +182,10 @@ async function buildSafe(salonId) {
   }
 }
 
-module.exports = { renderCatalogBlock, buildSafe, fmtPrice, renderPriceRanges };
+module.exports = {
+  renderCatalogBlock, buildSafe, fmtPrice, renderPriceRanges,
+  // RANGES_HEADER экспортируется, чтобы тест промпта сверял ссылку правила
+  // «Цена НАПРАВЛЕНИЯ» с РЕАЛЬНЫМ заголовком блока: иначе переименование
+  // константы оставит промпт со ссылкой на несуществующий блок при зелёных тестах.
+  RANGES_HEADER, isUnitPriceService,
+};
