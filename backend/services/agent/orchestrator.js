@@ -12,6 +12,7 @@ const replyGuard = require('./reply-guard');
 const greeting = require('./greeting');
 const addressGuard = require('./address-guard');
 const closing = require('./closing');
+const titleDedup = require('./title-dedup');
 const visitRating = require('./visit-rating');
 const promoInterest = require('./promo-interest');
 const adminHours = require('./admin-hours');
@@ -698,6 +699,19 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
     // (сверка «называл ли пациент препарат»). Пересчитывается каждой попыткой,
     // как attachments: перегенерация видит свежую серию.
     toolCtx.patientText = patientText;
+    // Прошлые реплики Милы (без строк администратора и без меток времени) — для
+    // title-dedup («должность один раз за диалог») и телеметрии gift_repeat.
+    // Строки с OPERATOR_MARK режутся ПОСТРОЧНО: реплика администратора склеена
+    // loadTranscript'ом с соседними в ОДИН assistant-блок, и выбрасывать блок
+    // целиком значило бы потерять и собственные реплики Милы из той же серии.
+    // OPERATOR_MARK — константа модуля history, поэтому берётся из
+    // historyDefault, а не из инжектированного deps.history (стабы тестов её
+    // не обязаны экспортировать).
+    const priorAssistantText = stripAllStamps(messages
+      .filter(m => m.role === 'assistant')
+      .map(m => String(m.content || '').split('\n')
+        .filter(l => !l.includes(historyDefault.OPERATOR_MARK)).join('\n'))
+      .join('\n'));
     // toolOfferTimes/offerSlotTimes пополняются в tool-цикле ниже (только на
     // результатах, где реально был offer_slots).
     const toolOfferTimes = new Set();
@@ -1004,6 +1018,21 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
     // unknown_time. Guard там в режиме лога, а знать, что модель повторяет
     // служебную метку, полезно — тишина здесь была бы потерей сигнала.
     for (let i = 0; i < replies.length; i++) replies[i] = stripStamp(replies[i]);
+
+    // Должность специалиста — один раз за диалог: повтор срезается
+    // детерминированно (имя несёт падеж, фраза остаётся грамматичной; правило
+    // «ДОЛЖНОСТЬ НАЗЫВАЙ ОДИН РАЗ» промпт выполняет нестабильно —
+    // «косметолог-эстетист Юлия» звучало в каждом сообщении подряд).
+    // Место — после stripStamp (реплики финальны) и ДО address-guard/приветствия
+    // (им наш срез не мешает, а их дописки должностей не содержат).
+    {
+      const titled = titleDedup.stripRepeatedTitles(replies, priorAssistantText);
+      if (titled.stripped.length) {
+        logger.info(`dialog ${dialogKey}: повтор должности срезан: ${JSON.stringify(titled.stripped)}`);
+        replies.length = 0;
+        replies.push(...titled.replies);
+      }
+    }
 
     // Адрес клиники — только из статьи базы знаний, прочитанной В ЭТОМ ходе.
     // Инцидент 2026-08-06 (79037504378): после успешной записи Мила дописала

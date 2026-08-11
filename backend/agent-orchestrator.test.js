@@ -2120,3 +2120,24 @@ describe('предвызов КБ на короткое «+»', () => {
     expect(res.replies.join(' ')).toContain('Генерала Белова');
   });
 });
+
+// ── Повтор должности срезается детерминированно (спека 2026-08-10) ──
+test('повтор должности из прошлой реплики Милы срезается в новой', async () => {
+  const deps = makeDeps({
+    history: {
+      loadTranscript: jest.fn(async () => ({
+        messages: [
+          { role: 'user', content: 'кто свободен завтра?' },
+          { role: 'assistant', content: 'Завтра свободна косметолог-эстетист Юлия.' },
+          { role: 'user', content: 'запишите к ней' },
+        ],
+        watermark: 500,
+      })),
+    },
+  });
+  deps.provider.createMessage.mockResolvedValue({
+    assistantMsg: { role: 'assistant', content: 'ок' }, toolCalls: [],
+    text: 'Вас примет косметолог-эстетист Юлия, всё передала.' });
+  const res = await orchestrator.runDialog(1, 'k', { deps });
+  expect(res.replies).toEqual(['Вас примет Юлия, всё передала.']);
+});
