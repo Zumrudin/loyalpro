@@ -13,6 +13,10 @@ const DEFAULTS = {
   enabled: false, mode: 'all',
   scheduleEnabled: false, scheduleStart: '22:00', scheduleEnd: '09:30',
   priceListUrl: null,
+  // Напоминания Милы о себе. delay1=0 — выключено (дефолт схемы): выкат не
+  // должен сам начать писать живым пациентам.
+  followupDelay1Min: 0, followupDelay2Min: 60,
+  followupFinalText: null, followupLatestTime: null,
 };
 
 // Строка БД → camelCase-настройки для API и гейта.
@@ -24,6 +28,10 @@ function rowToSettings(row) {
     scheduleStart: row.schedule_start || DEFAULTS.scheduleStart,
     scheduleEnd: row.schedule_end || DEFAULTS.scheduleEnd,
     priceListUrl: row.price_list_url || null,
+    followupDelay1Min: Number(row.followup_delay1_min) || 0,
+    followupDelay2Min: Number(row.followup_delay2_min) || DEFAULTS.followupDelay2Min,
+    followupFinalText: row.followup_final_text || null,
+    followupLatestTime: row.followup_latest_time || null,
   };
 }
 
@@ -34,10 +42,62 @@ function pickTime(raw, current) {
   return String(raw).trim();
 }
 
+// Потолок финального текста. Совпадает с лимитом strict-режима «Заботы»:
+// это готовое сообщение живому пациенту, а не служебная строка.
+const FOLLOWUP_TEXT_MAX = 1200;
+const FOLLOWUP_DELAY_MAX = 1440;
+
+function badFollowup(msg) {
+  const e = new Error(msg); e.code = 'BAD_FOLLOWUP'; return e;
+}
+
+function pickDelay(raw, current) {
+  if (raw === undefined || raw === null || raw === '') return current;
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < 0 || n > FOLLOWUP_DELAY_MAX)
+    throw badFollowup('bad followup delay');
+  return n;
+}
+
+/**
+ * Нормализовать поля напоминаний из тела запроса.
+ * ОТСУТСТВИЕ поля (undefined/null/'') означает «не передано» и сохраняет
+ * текущее значение — в отличие от enabled/mode, где отсутствие означает
+ * «выключено» (прежний контракт роута, менять его нельзя). Иначе точечное
+ * сохранение одного интервала молча стёрло бы остальные настройки.
+ * Пустая строка в ТЕКСТЕ и во ВРЕМЕНИ — осознанная очистка (там '' отличимо
+ * от «не передано» по смыслу поля: пустой текст и снятая граница законны).
+ */
+function pickFollowup(body = {}, cur = {}) {
+  const delay1 = pickDelay(body.followupDelay1Min, cur.followupDelay1Min || 0);
+  const delay2 = pickDelay(body.followupDelay2Min, cur.followupDelay2Min || DEFAULTS.followupDelay2Min);
+  // Проверяем, только когда напоминания включены: при delay1=0 второе поле
+  // ни на что не влияет, и запрещать его форме незачем.
+  if (delay1 > 0 && !(delay2 > delay1))
+    throw badFollowup('followup delay2 must be greater than delay1');
+  const rawText = body.followupFinalText;
+  const finalText = rawText === undefined || rawText === null
+    ? (cur.followupFinalText || null)
+    : (String(rawText).trim().slice(0, FOLLOWUP_TEXT_MAX) || null);
+  const rawTime = body.followupLatestTime;
+  let latest;
+  if (rawTime === undefined || rawTime === null) latest = cur.followupLatestTime || null;
+  else if (String(rawTime).trim() === '') latest = null;
+  else {
+    if (parseHhMm(rawTime) === null) { const e = new Error('bad time'); e.code = 'BAD_TIME'; throw e; }
+    latest = String(rawTime).trim();
+  }
+  return {
+    followupDelay1Min: delay1, followupDelay2Min: delay2,
+    followupFinalText: finalText, followupLatestTime: latest,
+  };
+}
+
 async function getSettings(salonId) {
   if (!salonId) return { ...DEFAULTS };
   const row = await db.oneOrNone(
-    `SELECT enabled, mode, schedule_enabled, schedule_start, schedule_end, price_list_url
+    `SELECT enabled, mode, schedule_enabled, schedule_start, schedule_end, price_list_url,
+            followup_delay1_min, followup_delay2_min, followup_final_text, followup_latest_time
        FROM agent_settings WHERE salon_id=$1`, [salonId]
   );
   return row ? rowToSettings(row) : { ...DEFAULTS };
@@ -60,15 +120,21 @@ async function updateSettings(salonId, body) {
   // фронт его не шлёт) → сохраняем текущее. Пустая строка = осознанная очистка.
   const priceUrl = (body || {}).priceListUrl === undefined || (body || {}).priceListUrl === null
     ? cur.priceListUrl : normalizePriceListUrl((body || {}).priceListUrl);
+  const fu = pickFollowup(body || {}, cur);
   const row = await db.one(
     `INSERT INTO agent_settings
-       (salon_id, enabled, mode, schedule_enabled, schedule_start, schedule_end, price_list_url, updated_at)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,NOW())
+       (salon_id, enabled, mode, schedule_enabled, schedule_start, schedule_end, price_list_url,
+        followup_delay1_min, followup_delay2_min, followup_final_text, followup_latest_time, updated_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,NOW())
      ON CONFLICT (salon_id) DO UPDATE SET
        enabled=$2, mode=$3, schedule_enabled=$4,
-       schedule_start=$5, schedule_end=$6, price_list_url=$7, updated_at=NOW()
-     RETURNING enabled, mode, schedule_enabled, schedule_start, schedule_end, price_list_url`,
-    [salonId, !!enabled, m, schedOn, start, end, priceUrl]
+       schedule_start=$5, schedule_end=$6, price_list_url=$7,
+       followup_delay1_min=$8, followup_delay2_min=$9,
+       followup_final_text=$10, followup_latest_time=$11, updated_at=NOW()
+     RETURNING enabled, mode, schedule_enabled, schedule_start, schedule_end, price_list_url,
+               followup_delay1_min, followup_delay2_min, followup_final_text, followup_latest_time`,
+    [salonId, !!enabled, m, schedOn, start, end, priceUrl,
+     fu.followupDelay1Min, fu.followupDelay2Min, fu.followupFinalText, fu.followupLatestTime]
   );
   return rowToSettings(row);
 }
@@ -550,5 +616,5 @@ module.exports = {
   listSubcategories, addSubcategory, renameSubcategory, removeSubcategory, reorderSubcategories,
   listPlacements, placeService, unplaceService, loadCategoryTree, loadCategoryTreeSafe,
   listPricePhotos, addPricePhoto, reorderPricePhotos, removePricePhoto,
-  normalizePriceListUrl, MAX_PRICE_PHOTOS_PER_NODE,
+  normalizePriceListUrl, MAX_PRICE_PHOTOS_PER_NODE, pickFollowup,
 };
