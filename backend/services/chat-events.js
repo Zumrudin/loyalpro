@@ -38,6 +38,12 @@ function emitAgentStatus(salonId, dialogKey, status, reason = null) {
   emit(salonId, { type: 'agent_status', dialogKey, status, reason: reason || null });
 }
 
+// Смена стадии ожидания ответа клиента: чип в списке диалогов обязан
+// обновиться без F5 — список перестраивается локально по SSE.
+function emitFollowupStatus(salonId, dialogKey, status, stage = 0) {
+  emit(salonId, { type: 'followup_status', dialogKey, status, stage: Number(stage) || 0 });
+}
+
 // Heartbeat: прокси/nginx рвут тихие соединения. Комментарий SSE клиентом не парсится.
 const HEARTBEAT_MS = 25000;
 const timer = setInterval(() => {
@@ -49,4 +55,4 @@ const timer = setInterval(() => {
 }, HEARTBEAT_MS);
 timer.unref(); // не держать процесс (и jest) живым из-за интервала
 
-module.exports = { subscribe, unsubscribe, emit, emitAgentStatus };
+module.exports = { subscribe, unsubscribe, emit, emitAgentStatus, emitFollowupStatus };

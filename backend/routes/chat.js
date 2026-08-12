@@ -20,6 +20,7 @@ const chatEvents = require('../services/chat-events');
 const { persistWhatsappOutgoing } = require('../services/chat-persist');
 const authorship = require('../services/outgoing-authorship');
 const dialogState = require('../services/agent/dialog-state');
+const followupQueue = require('../services/agent/followup-queue');
 
 // admin_cashier — «Администратор-кассир»: полный доступ к чату наравне с owner/admin.
 const adminOnly = [auth, requireRole('owner', 'admin', 'admin_cashier')];
@@ -179,6 +180,10 @@ router.post('/dialogs/:key/agent', adminOnly, async (req, res) => {
       [salonId, key, status]);
     // Красная подсветка в списке диалогов у всех открытых вкладок — сразу.
     chatEvents.emitAgentStatus(salonId, key, status, status === 'escalated' ? 'operator_takeover' : null);
+    if (status === 'escalated') {
+      await followupQueue.close(salonId, key, 'cancelled', 'operator')
+        .catch(e => logger.warn(`followup close failed: ${e.message}`));
+    }
     res.json({ status });
   } catch (e) {
     logger.error(`agent toggle failed: ${e.message}`);
