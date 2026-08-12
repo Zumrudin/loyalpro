@@ -23,7 +23,7 @@
 <script src="js/core/auth.js?v=2026-06-02a"></script>
 <script src="js/core/nav.js?v=2026-08-10-hashnav"></script>
 <link rel="stylesheet" href="css/base.css?v=2026-08-10-mobile">
-<link rel="stylesheet" href="css/features.css?v=2026-08-10-chat-mobile">
+<link rel="stylesheet" href="css/features.css?v=2026-08-12a-waitstatus">
 </head>
 <body>
 
@@ -1588,6 +1588,9 @@
         <div class="chat-sidebar">
           <input class="chat-search" id="chat-search" type="search" autocomplete="off"
                  placeholder="🔎 Поиск по имени или номеру" oninput="onChatSearch(this.value)">
+          <!-- Фильтр по статусу ожидания ответа клиента (chat-wait-status.js).
+               Счётчики считаются по всем загруженным диалогам, не по отфильтрованным. -->
+          <div class="chat-wait-filters" id="chat-wait-filters"></div>
           <div class="chat-dialogs" id="chat-dialogs">
             <div class="empty">Загрузка…</div>
           </div>
@@ -2425,7 +2428,8 @@ function fireConfetti() {
 <script src="js/pages/settings.js"></script>
 <script src="js/pages/portfolio.js"></script>
 <script src="js/pages/chat-dialog-sort.js?v=2026-07-31a"></script>
-<script src="js/pages/chat.js?v=2026-08-10-mobile"></script>
+<script src="js/pages/chat-wait-status.js?v=2026-08-12a"></script>
+<script src="js/pages/chat.js?v=2026-08-12a-waitstatus"></script>
 <script src="js/pages/chat-composer.js?v=2026-08-10-mobile"></script>
 <script src="js/pages/agent-settings.js?v=2026-07-31a"></script>
 <script src="js/pages/patient-portfolio.js?v=2026-06-01e"></script>

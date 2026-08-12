@@ -71,18 +71,26 @@ router.get('/dialogs', adminOnly, async (req, res) => {
         SELECT dialog_key, COUNT(*) AS cnt,
                array_agg(DISTINCT channel) AS channels
         FROM msgs GROUP BY dialog_key
+      ),
+      fu AS (
+        SELECT DISTINCT ON (dialog_key)
+               dialog_key, status AS fu_status, stage AS fu_stage
+        FROM agent_followups WHERE salon_id = $1
+        ORDER BY dialog_key, created_at DESC
       )
       SELECT m.dialog_key, m.direction AS last_direction, m.msg_type AS last_msg_type,
              m.text AS last_text, m.msg_ts AS last_ts, m.channel AS last_channel,
              i.in_channel, i.in_sender, i.in_phone, i.in_chat_id, i.client_id,
              cl.name AS client_name,
              a.cnt AS messages_count, a.channels,
-             ad.status AS agent_status, ad.escalated_reason
+             ad.status AS agent_status, ad.escalated_reason,
+             fu.fu_status, fu.fu_stage
       FROM last_msg m
       JOIN agg a ON a.dialog_key = m.dialog_key
       LEFT JOIN last_in i ON i.dialog_key = m.dialog_key
       LEFT JOIN clients cl ON cl.id = i.client_id AND cl.salon_id = $1
       LEFT JOIN agent_dialogs ad ON ad.salon_id = $1 AND ad.dialog_key = m.dialog_key
+      LEFT JOIN fu ON fu.dialog_key = m.dialog_key
       ORDER BY m.msg_ts DESC NULLS LAST
     `, [salonId]);
 
@@ -105,6 +113,11 @@ router.get('/dialogs', adminOnly, async (req, res) => {
         // Нет строки в agent_dialogs → бот этим диалогом не занимался (в т.ч. все группы).
         agentStatus:     r.agent_status || 'bot',
         escalatedReason: r.escalated_reason || null,
+        // Статус переписки («ждём ответа», «напомнили» …) отдельным полем не
+        // хранится — выводится фронтом (chat-wait-status.js) из этой пары полей
+        // строки очереди agent_followups + agentStatus выше.
+        followupStatus: r.fu_status || null,
+        followupStage:  r.fu_stage == null ? null : Number(r.fu_stage),
       };
     });
     res.json({ dialogs });

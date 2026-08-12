@@ -5,6 +5,7 @@ let _chatDialogs = [];
 let _chatActiveKey = null;
 let _chatSearch = '';
 let _chatPollTimer = null;
+let _chatWaitFilter = 'all';   // chat-wait-status.js: 'all'|'waiting'|'operator'|'no_response'
 
 const _chatEsc = (s) => String(s ?? '').replace(/[&<>"']/g, c =>
   ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -167,9 +168,12 @@ async function refreshChatDialogs(silent) {
 
 // Фильтр списка по имени/номеру. Цифры сравниваем отдельно, игнорируя +, пробелы, скобки.
 // Порядок списка: диалоги на операторе — сверху (chat-dialog-sort.js).
+// Фильтр по статусу ожидания (chat-wait-status.js) применяется ДО поискового —
+// он сужает набор диалогов, поиск ищет уже внутри этого набора.
 function _chatFilter() {
   const term = _chatSearch;
-  const sorted = chatSortDialogs(_chatDialogs);
+  const sorted = chatSortDialogs(_chatDialogs)
+    .filter(d => chatWaitMatches(d, _chatWaitFilter));
   if (!term) return sorted;
   const digits = term.replace(/\D/g, '');
   return sorted.filter(d => {
@@ -182,9 +186,39 @@ function _chatFilter() {
   });
 }
 
+// Панель фильтров по статусу ожидания над списком диалогов. Счётчики — по
+// ВСЕМ загруженным диалогам (не по уже отфильтрованным), иначе выбор одного
+// фильтра обнулил бы счётчики соседних чипов.
+function renderChatWaitFilters() {
+  const el = document.getElementById('chat-wait-filters');
+  if (!el) return;
+  const counts = { all: _chatDialogs.length, waiting: 0, operator: 0, no_response: 0 };
+  for (const d of _chatDialogs) {
+    for (const key of ['waiting', 'operator', 'no_response']) {
+      if (chatWaitMatches(d, key)) counts[key]++;
+    }
+  }
+  const html = CHAT_WAIT_FILTERS.map(f => {
+    const active = f.key === _chatWaitFilter ? ' active' : '';
+    return `<button type="button" class="chat-wait-filter${active}" data-wf="${f.key}">` +
+      `${_chatEsc(f.label)} <span class="chat-wait-filter-count">${counts[f.key]}</span></button>`;
+  }).join('');
+  if (el._lastHtml === html) return;
+  el._lastHtml = html;
+  el.innerHTML = html;
+  el.onclick = (e) => {
+    const btn = e.target.closest('.chat-wait-filter');
+    if (!btn) return;
+    _chatWaitFilter = btn.dataset.wf;
+    renderChatWaitFilters();
+    renderChatDialogs();
+  };
+}
+
 function renderChatDialogs() {
   const listEl = document.getElementById('chat-dialogs');
   if (!listEl) return;
+  renderChatWaitFilters();   // счётчики зависят от _chatDialogs — держим панель свежей
   const list = _chatFilter();
   if (!list.length) {
     const msg = _chatSearch ? 'Ничего не найдено' : 'Пока нет сообщений';
@@ -198,17 +232,21 @@ function renderChatDialogs() {
     const phone = d.phone && d.phone !== title ? d.phone : '';
     const active = d.key === _chatActiveKey ? ' active' : '';
     const initial = d.isGroup ? '👥' : _chatEsc((title || '?').trim().charAt(0).toUpperCase());
-    // Бот молчит, диалог ждёт администратора — красная карточка и бейдж.
+    // Бот молчит, диалог ждёт администратора — красная карточка (отдельно от
+    // чипа: подсветка держится на chatIsEscalated, чип — на chatWaitStatus,
+    // который эскалацию тоже учитывает, но приоритетом, а не тем же полем).
     const esc = chatIsEscalated(d) ? ' chat-dialog-escalated' : '';
-    const escBadge = chatIsEscalated(d)
-      ? '<span class="chat-badge chat-badge-esc" title="Бот на паузе, отвечает администратор">👤 Оператор</span>' : '';
+    const waitSt = chatWaitStatus(d);
+    const waitBadge = waitSt
+      ? `<span class="chat-badge ${_chatEsc(waitSt.cls)}" title="${_chatEsc(waitSt.title)}">${_chatEsc(waitSt.label)}</span>`
+      : '';
     return `
       <div class="chat-dialog${active}${esc}" data-key="${_chatEsc(d.key)}">
         <div class="chat-avatar ${ch.cls}" title="${_chatEsc(ch.label)}">${initial}</div>
         <div class="chat-dialog-body">
           <div class="chat-dialog-top">
             <span class="chat-dialog-name">${_chatEsc(title)}</span>
-            ${escBadge}
+            ${waitBadge}
             <span class="chat-dialog-time">${_chatTime(d.lastTs)}</span>
           </div>
           ${phone ? `<div class="chat-dialog-phone">${_chatEsc(phone)}</div>` : ''}
@@ -439,6 +477,7 @@ function startChatLive() {
       let data; try { data = JSON.parse(ev.data); } catch { return; }
       if (data.type === 'message') onChatLiveMessage(data);
       else if (data.type === 'agent_status') onChatAgentStatus(data);
+      else if (data.type === 'followup_status') onChatFollowupStatus(data);
     };
   } catch (e) { console.error('chat SSE:', e); }
   // Страховка на случай упавшего SSE: редкий инкрементальный доопрос.
@@ -489,6 +528,17 @@ function onChatAgentStatus({ dialogKey, status, reason }) {
     if (headEl) headEl._lastHtml = null;   // форсируем перерисовку баннера
     renderChatHeader(dialogKey);
   }
+}
+
+// Смена стадии ожидания ответа клиента (agent_followups): чип и счётчики
+// панели фильтров обязаны обновиться без F5 — тот же приём, что onChatAgentStatus.
+function onChatFollowupStatus({ dialogKey, status, stage }) {
+  const d = _chatDialogs.find(x => x.key === dialogKey);
+  if (!d) { refreshChatDialogs(true); return; }   // диалога ещё нет в списке
+  if (d.followupStatus === status && d.followupStage === stage) return;
+  d.followupStatus = status;
+  d.followupStage = stage == null ? null : Number(stage);
+  renderChatDialogs();
 }
 
 async function pollChat() {
