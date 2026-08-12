@@ -25,6 +25,18 @@ describe('collectTimes', () => {
     // '12:345' — минут не ровно 2 цифры; '112:30' — часть числа '112'.
     expect(collectTimes('12:345 112:30 1:2')).toEqual([]);
   });
+
+  test('точечная форма «14.30» — время (14 > 12)', () => {
+    expect(collectTimes('Свободно в 14.30')).toEqual(['14.30']);
+  });
+
+  test('точечная форма «12.45» — время (45 > 12)', () => {
+    expect(collectTimes('Встреча в 12.45')).toEqual(['12.45']);
+  });
+
+  test('не-строка не коэрсится в валидный текст', () => {
+    expect(collectTimes(['12:30'])).toEqual([]);
+  });
 });
 
 describe('hasInventedTime', () => {
@@ -50,5 +62,25 @@ describe('hasInventedTime', () => {
   test('пустая история → любое время выдумано', () => {
     expect(hasInventedTime('в 12:00', '')).toBe(true);
     expect(hasInventedTime('в 12:00', null)).toBe(true);
+  });
+
+  test('выдуманное время в точечной форме ловится', () => {
+    expect(hasInventedTime('в 15.00', 'Свободно 12:30')).toBe(true);
+  });
+
+  test('законное время в точечной форме — не выдумка', () => {
+    expect(hasInventedTime('в 14.30', 'Свободно в 14.30')).toBe(false);
+  });
+
+  test('«11.08» в тексте — дата, не время, невидима guard\'у', () => {
+    expect(hasInventedTime('Ждём вас 11.08', prior)).toBe(false);
+  });
+
+  test('не-строка в тексте напоминания — считаем время выдуманным', () => {
+    expect(hasInventedTime(['15:00'], prior)).toBe(true);
+  });
+
+  test('не-строка в истории — разрешённых времён нет', () => {
+    expect(hasInventedTime('в 12:30', ['12:30'])).toBe(true);
   });
 });
