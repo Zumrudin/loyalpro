@@ -38,9 +38,13 @@ async function setStatus(salonId, dialogKey, status, reason = null) {
         SET status = $3, escalated_reason = $4, updated_at = now()
       WHERE salon_id = $1 AND dialog_key = $2`,
     [salonId, dialogKey, status, reason]);
-  // Эскалация Милы (escalate_to_operator) тоже закрывает ожидание: дальше
-  // отвечает человек. Возврат боту ('bot') строку НЕ воскрешает — ожидание
-  // заведётся заново первой же репликой Милы.
+  // Боевые пути эскалации (services/agent/tools/escalate-to-operator.js —
+  // escalate_to_operator; routes/chat.js — кнопка «Передать оператору») пишут
+  // в agent_dialogs СВОИМ SQL мимо этой функции и гасят очередь напоминаний
+  // сами, каждый в своём месте. У этой функции сегодня нет вызывающих с
+  // status='escalated' вовсе — ветка здесь для полноты контракта setStatus
+  // (кто бы её ни вызвал в будущем, гашение обязано случиться вместе со сменой
+  // статуса), а не потому, что через неё сейчас идёт боевая эскалация.
   if (status === 'escalated') {
     await require('./followup-queue').close(salonId, dialogKey, 'cancelled', 'operator');
   }

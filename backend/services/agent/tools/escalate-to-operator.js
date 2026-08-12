@@ -2,6 +2,7 @@
 
 const { db } = require('../../../db');
 const chatEvents = require('../../chat-events');
+const followupQueue = require('../followup-queue');
 
 const schema = {
   name: 'escalate_to_operator',
@@ -55,6 +56,10 @@ async function run(salonId, input, ctx = {}) {
     [salonId, dialogKey, JSON.stringify({ reason })]);
   // Диалог ждёт живого человека — подсветить его в списке чатов немедленно.
   chatEvents.emitAgentStatus(salonId, dialogKey, 'escalated', reason);
+  // Дальше отвечает человек — напоминание Милы больше не нужно. Best-effort:
+  // эскалация уже записана в БД и важнее гашения очереди напоминаний.
+  await followupQueue.close(salonId, dialogKey, 'cancelled', 'operator')
+    .catch(() => {});
   return { escalated: true, reason };
 }
 
