@@ -786,7 +786,13 @@ describe('ожидание ответа клиента (followup)', () => {
     await jest.advanceTimersByTimeAsync(1000);
     await flushMicrotasks();
     expect(d.settings.getSettings).toHaveBeenCalledWith(1);
-    expect(d.followupQueue.schedule).toHaveBeenCalledWith(1, 'k', meta, followupSettings);
+    // Пятым аргументом идёт ЯКОРЬ, снятый в момент ДОСТАВКИ, а не внутри
+    // schedule(): между этой точкой и вставкой строки лежит поход в БД за
+    // настройками, и ответ клиента, пришедший в это окно, оказался бы СТАРШЕ
+    // якоря — воркер не увидел бы входящего «после якоря» и напомнил бы о себе
+    // тому, кто уже ответил (находка финального ревью).
+    expect(d.followupQueue.schedule).toHaveBeenCalledWith(
+      1, 'k', meta, followupSettings, expect.objectContaining({ now: expect.any(Date) }));
   });
 
   test('запись оформлена в этом ходу (writeSucceeded) → followupQueue.schedule НЕ вызван', async () => {

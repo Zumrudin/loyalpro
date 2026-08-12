@@ -52,7 +52,14 @@ function chatWaitStatus(d) {
     return { key: 'expired', label: '🌙 Не напомнили', cls: 'chat-wait-expired',
       title: 'Срок напоминания пришёлся на время вне смены Милы, напоминание не ушло' };
   }
-  // answered / cancelled / failed / строки нет вовсе — чипа нет.
+  // Отправка сорвалась и попытки исчерпаны. Чип нужен: без него «сломалось»
+  // выглядит для администратора ровно как «напоминаний тут и не было», и
+  // диалог, оставшийся без обещанного касания, ничем себя не выдаёт.
+  if (status === 'failed') {
+    return { key: 'failed', label: '⚠️ Сбой напоминания', cls: 'chat-wait-failed',
+      title: 'Напоминание не удалось отправить — посмотрите переписку и ответьте сами' };
+  }
+  // answered / cancelled / строки нет вовсе — чипа нет: диалог снова обычный.
   return null;
 }
 
@@ -70,7 +77,10 @@ function chatWaitMatches(d, filter) {
   switch (filter) {
     case 'waiting':     return key === 'waiting' || key === 'nudged';
     case 'operator':    return key === 'operator';
-    case 'no_response': return key === 'no_response' || key === 'expired';
+    // Одна корзина на три исхода «клиент так и не получил ответа по существу»:
+    // не ответил на финал, не напомнили вне смены, сорвалась отправка. Админу
+    // важно увидеть их вместе — это его список на разбор.
+    case 'no_response': return key === 'no_response' || key === 'expired' || key === 'failed';
     default:            return true;   // 'all' и любое незнакомое значение — не фильтруют
   }
 }

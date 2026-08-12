@@ -36,10 +36,11 @@ test('expired → «не напомнили»', () => {
   assert.strictEqual(st.key, 'expired');
 });
 
-test('answered / cancelled / failed / без строки / пустой d — чипа нет', () => {
+// failed сюда НЕ входит намеренно (правка по финальному ревью): у сорвавшейся
+// отправки свой чип, иначе поломка неотличима от «напоминаний тут не было».
+test('answered / cancelled / без строки / пустой d — чипа нет', () => {
   assert.strictEqual(chatWaitStatus({ agentStatus: 'bot', followupStatus: 'answered' }), null);
   assert.strictEqual(chatWaitStatus({ agentStatus: 'bot', followupStatus: 'cancelled' }), null);
-  assert.strictEqual(chatWaitStatus({ agentStatus: 'bot', followupStatus: 'failed' }), null);
   assert.strictEqual(chatWaitStatus({ agentStatus: 'bot', followupStatus: null }), null);
   assert.strictEqual(chatWaitStatus({}), null);
   assert.strictEqual(chatWaitStatus(null), null);
@@ -95,6 +96,17 @@ test('CHAT_WAIT_FILTERS — порядок all, waiting, operator, no_response',
   for (const f of CHAT_WAIT_FILTERS) {
     assert.ok(typeof f.label === 'string' && f.label.length > 0);
   }
+});
+
+// Сорвавшаяся отправка обязана быть ВИДНОЙ: без чипа «сломалось» выглядит для
+// администратора ровно как «напоминаний тут и не было».
+test('сбой отправки даёт свой чип и попадает в корзину «не ответили»', () => {
+  const d = { agentStatus: 'bot', followupStatus: 'failed', followupStage: 1 };
+  const st = chatWaitStatus(d);
+  assert.strictEqual(st.key, 'failed');
+  assert.ok(st.label.length > 0 && st.title.length > 0);
+  assert.strictEqual(chatWaitMatches(d, 'no_response'), true);
+  assert.strictEqual(chatWaitMatches(d, 'waiting'), false);
 });
 
 // Оба файла подключены в index.html обычными <script> без type="module" и делят

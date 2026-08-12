@@ -887,6 +887,7 @@ body.kb-editor .kb-admin-only { display: inline-flex; }
 .chat-wait-nudged      { background:#2563eb; }
 .chat-wait-no-response { background:#6b7280; }
 .chat-wait-expired     { background:#7c3aed; }
+.chat-wait-failed      { background:#b91c1c; }
 /* Панель фильтров по статусу ожидания — над списком диалогов. */
 .chat-wait-filters { flex:0 0 auto; display:flex; flex-wrap:wrap; gap:6px; padding:0 10px 10px; }
 .chat-wait-filter {
