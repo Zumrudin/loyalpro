@@ -98,4 +98,18 @@ async function close(salonId, dialogKey, status, reason, opts = {}) {
   }
 }
 
-module.exports = { schedule, close, CLOSE_STATUSES };
+/**
+ * Ждём ли ответа клиента после этого хода.
+ *
+ * Три из четырёх утверждённых исключений сюда даже не доходят и это НЕ
+ * забытые проверки: служебные исходящие (автоуведомления YClients, касания
+ * «Заботы», плановые напоминания) идут мимо диспетчера, closing.js и высокая
+ * оценка визита возвращают silent без реплик, низкая — сразу эскалирует.
+ * Четвёртое («Мила вежливо отказала») детерминированного признака не имеет и
+ * отсекается skip-ом LLM-прохода воркера.
+ */
+function shouldAwaitReply(res = {}) {
+  return !!res.delivered && !res.writeSucceeded && !res.escalated && !res.silent;
+}
+
+module.exports = { schedule, close, shouldAwaitReply, CLOSE_STATUSES };

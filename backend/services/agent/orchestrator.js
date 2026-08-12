@@ -1157,7 +1157,11 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
     await evBuffer.flush(null);
     return { replies, escalated, sideEffect, exhausted, falseSuccess, falseSuccessKind,
       bookingFailed, bookingFailRecoverable, degradedAfterWrite, turnId: evBuffer.turnId,
-      attachments: toolCtx.attachments };
+      attachments: toolCtx.attachments,
+      // Нужен диспетчеру, чтобы не заводить ожидание ответа после оформленной
+      // записи. sideEffect для этого не годится: он ШИРЕ (включает
+      // escalate_to_operator).
+      writeSucceeded };
   }
 
   return { replies: [], escalated: false, sideEffect: false };

@@ -84,3 +84,33 @@ describe('close', () => {
     await expect(queue.close(1, 'k', 'answered', 'client_replied', { db })).resolves.toBe(false);
   });
 });
+
+describe('shouldAwaitReply', () => {
+  const ok = { delivered: true, writeSucceeded: false, escalated: false, silent: false };
+
+  test('обычный ответ Милы → ждём клиента', () => {
+    expect(queue.shouldAwaitReply(ok)).toBe(true);
+  });
+
+  test('реплики не доставлены → ждать нечего', () => {
+    expect(queue.shouldAwaitReply({ ...ok, delivered: false })).toBe(false);
+  });
+
+  // Запись оформлена: молчание пациента означает «всё понятно», а не лид.
+  test('запись оформлена в этом ходу → не ждём', () => {
+    expect(queue.shouldAwaitReply({ ...ok, writeSucceeded: true })).toBe(false);
+  });
+
+  test('диалог ушёл на человека → не ждём', () => {
+    expect(queue.shouldAwaitReply({ ...ok, escalated: true })).toBe(false);
+  });
+
+  // closing.js и высокая оценка визита: Мила сознательно промолчала.
+  test('ход решил промолчать → не ждём', () => {
+    expect(queue.shouldAwaitReply({ ...ok, silent: true })).toBe(false);
+  });
+
+  test('пустой аргумент не роняет вызов', () => {
+    expect(queue.shouldAwaitReply()).toBe(false);
+  });
+});
