@@ -8,6 +8,7 @@ const getSlots = require('./get-available-slots');
 const leadTime = require('../lead-time');
 const tpLimit = require('../third-party-limit');
 const genericGuard = require('../generic-booking-guard');
+const identity = require('../identity');
 
 // Отказ YClients именно по времени старта («Выбранное время недоступно…»,
 // «мастер занят…»), а не по услуге/токену/клиенту. Только на нём есть смысл
@@ -32,7 +33,9 @@ const schema = {
       seance_length: { type: 'integer', description: 'Длительность в секундах (из слота).' },
       client_phone:  { type: 'string',  description: 'Телефон клиента. Можно не передавать, если номер ' +
         'основного пациента уже известен системе — подставится автоматически.' },
-      client_name:   { type: 'string',  description: 'Имя клиента (если известно).' },
+      client_name:   { type: 'string',  description: 'Имя клиента. У основного пациента с карточкой ' +
+        'имя подставится само — передавай, только если пациент новый (карточки нет) или записываешь ' +
+        'другого человека (гостя, ребёнка) на его номер.' },
       comment:       { type: 'string',  description: 'ОБЯЗАТЕЛЬНО: краткий контекст обращения для администратора — ' +
         'чем интересовался клиент и важные детали из диалога (напр. «Интересовалась фотоомоложением Lumecca, ' +
         'спрашивала про биоревитализацию и бонусы»). Для параллельной записи добавь пометку про спутника ' +
@@ -45,6 +48,49 @@ const schema = {
     additionalProperties: false,
   },
 };
+
+// Имя, которое уйдёт в карточку YClients.
+//
+// ГЛАВНОЕ, ЧТО НАДО ЗНАТЬ: POST /records ищет карточку ПО ТЕЛЕФОНУ и
+// ПЕРЕЗАПИСЫВАЕТ у неё поле name присланным значением. То есть каждая запись —
+// это ещё и переименование клиента, хотим мы того или нет.
+//
+// Поэтому имя от МОДЕЛИ (input.client_name) главным быть не может: в переписке
+// Мила знает только личное имя (см. utils/person-name — обращаться по ФИО
+// запрещено с инцидента 2026-08-04), и промпт прямо велит ей класть это имя в
+// client_name. Инцидент 2026-08-12: карточка «Пунина Юлия Владимировна»
+// (yc 231299724) после записи 06.08 стала «Юлия» с пустыми surname/patronymic —
+// фамилия и отчество потеряны безвозвратно; тем же порядком пострадали
+// «Сотникова Софья Сергеевна» и «Старкова Нелли Равильевна». Масштаб: на проде
+// PERI всё ФИО лежит ОДНОЙ строкой в поле name у 3027 карточек из 4313, то есть
+// затиралось бы у 70% пациентов при первой же записи через агента.
+//
+// Отсюда правило: у ОСНОВНОГО пациента побеждает ФИО из его карточки
+// (ctx.clientName), личное имя от модели — только когда карточки нет вовсе
+// (новый пациент сам назвал имя в диалоге).
+//
+// ТРЕТЬЕ ЛИЦО (гость, ребёнок — другой номер) разведено отдельно, и прежний
+// фолбэк на ctx.clientName там был вторым дефектом того же места: имя
+// СОБЕСЕДНИКА чужому номеру не принадлежит, и запись гостя без имени уходила в
+// его карточку под ФИО того, кто писал. Своего имени модель не дала — тянем ФИО
+// из карточки самого гостя, чтобы пустое имя её не обнулило; карточки нет —
+// оставляем пусто (затирать нечего, номер нам неизвестен). Резолв best-effort:
+// его сбой не имеет права отменить запись.
+//
+// ОСТАТОЧНЫЙ РИСК: карточка есть в YClients, но не синхронизирована в clients —
+// тогда имени у нас нет и в YClients уйдёт пустое. Промпт требует спросить имя у
+// незнакомого пациента, так что путь редкий; закрывать его отказом от поля name
+// нельзя — POST /records считает client обязательным, и цена ошибки была бы
+// провалом всех записей без имени.
+async function resolveCardName(salonId, { input, ctx, thirdParty, clientPhone }) {
+  const named = String((input && input.client_name) || '').trim();
+  if (!thirdParty) return String(ctx.clientName || '').trim() || named || undefined;
+  if (named) return named;
+  try {
+    const card = await identity.resolveClient(salonId, clientPhone);
+    return (card && String(card.name || '').trim()) || undefined;
+  } catch (_) { return undefined; }
+}
 
 // ctx.dialogKey / ctx.clientPhone / ctx.clientName прокидываются оркестратором.
 // clientPhone/clientName из ctx — идентификация основного пациента по номеру из
@@ -60,13 +106,13 @@ async function run(salonId, input, ctx = {}) {
         'в client_phone; иначе вежливо запроси номер у клиента и повтори вызов.',
     };
   }
-  const clientName = String((input && input.client_name) || ctx.clientName || '').trim() || undefined;
   const nowMs = (ctx && ctx.nowMs) || Date.now();
   // Анти-абьюз (аудит 2026-08-01): client_phone принимает произвольный номер
   // («запись другого человека») — без лимита один диалог насоздаёт записей на
   // чужие номера. Не больше LIMIT РАЗНЫХ посторонних номеров за сутки; повторная
   // запись на уже записанный номер (цепочка услуг гостю) проходит всегда.
   const thirdParty = tpLimit.isThirdParty(input && input.client_phone, ctx.clientPhone);
+  const clientName = await resolveCardName(salonId, { input, ctx, thirdParty, clientPhone });
   if (thirdParty && !tpLimit.allowed(salonId, ctx.dialogKey || clientPhone, clientPhone, nowMs)) {
     return {
       third_party_limit: true,
