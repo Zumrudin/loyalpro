@@ -15,7 +15,7 @@ const toolEventsDefault = require('./tool-events');
 const chatPersist = require('../chat-persist');
 const deliveryWatchdog = require('./delivery-watchdog');
 const priceListData = require('./price-list-data');
-const followupQueue = require('./followup-queue');
+const followupQueueDefault = require('./followup-queue');
 const { createLogger } = require('../../logger');
 const logger = createLogger('AgentDispatcher');
 
@@ -112,6 +112,9 @@ async function process(salonId, dialogKey, meta, opts = {}) {
   };
   const escalate = opts.escalate || defaultEscalate;
   const priorBookingFailure = opts.priorBookingFailure || defaultPriorBookingFailure;
+  // Очередь ожидания ответа клиента — та же форма инжекции, что у остальных
+  // side-effect зависимостей выше: без неё проводку нельзя проверить тестом.
+  const followupQueue = opts.followupQueue || followupQueueDefault;
 
   // Вердикт для журнала инструментов: видел ли пациент реплики МОДЕЛИ этого хода.
   // turnId известен только со штатного результата runDialog (ранние выходы и
@@ -280,8 +283,16 @@ async function process(salonId, dialogKey, meta, opts = {}) {
         writeSucceeded: res && res.writeSucceeded,
         escalated: res && res.escalated,
         silent: res && res.silent,
-      }) && typeof settings.getSettings === 'function') {
-        void settings.getSettings(salonId)
+      })) {
+        // Promise.resolve().then(...) ОБЯЗАТЕЛЕН — не упрощать в прямой вызов
+        // settings.getSettings(salonId).then(...): прямой вызов, если метода нет
+        // (мок без getSettings, будущий рефакторинг), бросает СИНХРОННО ДО
+        // построения цепочки — мимо .catch ниже, в общий catch process(), а тот
+        // шлёт пациенту лишнюю фразу «передаю администратору» поверх уже
+        // доставленного ответа. Обёртка переносит любой синхронный бросок внутрь
+        // цепочки промисов, и он становится отклонением, видимым в .catch.
+        void Promise.resolve()
+          .then(() => settings.getSettings(salonId))
           .then(s => followupQueue.schedule(salonId, dialogKey, meta, s))
           .catch(e => logger.warn(`dialog ${dialogKey}: ожидание ответа не поставлено (${e.message})`));
       }
