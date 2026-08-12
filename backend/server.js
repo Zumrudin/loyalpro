@@ -273,6 +273,7 @@ pool.connect()
       startNotificationWorker();
       require('./services/care/worker').startCareWorker();
       require('./services/reminders/worker').startRemindersWorker();
+      require('./services/agent/followup-worker').startFollowupWorker();
     });
   })
   .catch(e => {
