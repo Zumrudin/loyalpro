@@ -27,7 +27,8 @@ describe('schedule', () => {
   test('ставит строку на якорь + первый интервал', async () => {
     const db = mockDb();
     const anchor = new Date('2026-08-11T10:00:00.000Z');
-    await queue.schedule(1, '79200255591', META, SETTINGS, { db, now: anchor });
+    const ok = await queue.schedule(1, '79200255591', META, SETTINGS, { db, now: anchor });
+    expect(ok).toBe(true);
     expect(db.calls).toHaveLength(1);
     const { sql, params } = db.calls[0];
     expect(sql).toMatch(/INSERT INTO agent_followups/);
@@ -35,6 +36,19 @@ describe('schedule', () => {
     expect(sql).toMatch(/ON CONFLICT/);
     expect(params[1]).toBe('79200255591');
     expect(new Date(params[6]).toISOString()).toBe('2026-08-11T10:15:00.000Z');
+  });
+
+  // Перезавод — НОВЫЙ цикл ожидания. Журнал прошлого цикла на живой строке
+  // оставлять нельзя: stage=0 при заполненном nudge1_at читается разбором
+  // инцидента как «напомнили в текущем цикле», чего не было.
+  test('перезавод сбрасывает журнал прошлого цикла', () => {
+    const db = mockDb();
+    return queue.schedule(1, 'k', META, SETTINGS, { db }).then(() => {
+      const { sql } = db.calls[0];
+      for (const f of ['nudge1_at=NULL', 'final_at=NULL', 'rendered_text=NULL', 'error=NULL']) {
+        expect(sql.replace(/\s+/g, '')).toContain(f.replace(/\s+/g, ''));
+      }
+    });
   });
 
   test('без dialogKey не пишет ничего', async () => {
@@ -52,7 +66,8 @@ describe('schedule', () => {
 describe('close', () => {
   test('гасит только живую строку и пишет причину', async () => {
     const db = mockDb({ rowCount: 1, rows: [] });
-    await queue.close(1, '79200255591', 'answered', 'client_replied', { db });
+    const ok = await queue.close(1, '79200255591', 'answered', 'client_replied', { db });
+    expect(ok).toBe(true);
     const { sql, params } = db.calls[0];
     expect(sql).toMatch(/UPDATE agent_followups/);
     expect(sql).toMatch(/status\s*=\s*'scheduled'/);

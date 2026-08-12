@@ -43,6 +43,18 @@ async function schedule(salonId, dialogKey, meta = {}, settings = {}, opts = {})
        ON CONFLICT (salon_id, dialog_key) WHERE status='scheduled'
        DO UPDATE SET phone=$3, channel=$4, chat_id=$5, anchor_at=$6, next_at=$7,
                      stage=0, close_reason=NULL, attempts=0, last_attempt_at=NULL,
+                     -- Перезавод — НОВЫЙ цикл ожидания, а не продолжение старого.
+                     -- Гашение строки — best-effort (см. close) и при сбое БД
+                     -- могло не пройти, оставив живую строку со stage=1 и
+                     -- заполненным nudge1_at из ПРОШЛОГО цикла; если тут сбросить
+                     -- только stage, строка станет самопротиворечивой: stage=0
+                     -- («в этом цикле ещё ничего не отправляли»), а nudge1_at
+                     -- держит время отправки из прошлого цикла. Журнал
+                     -- незавершённого цикла потерять дешевле, чем оставить
+                     -- разбору инцидента противоречивое состояние — история
+                     -- завершённых циклов и так живёт в терминальных строках
+                     -- (в этом и смысл частичного уникального индекса).
+                     nudge1_at=NULL, final_at=NULL, rendered_text=NULL, error=NULL,
                      updated_at=now()`,
       [salonId, dialogKey, meta.phone || null, meta.channel || null, meta.chatId || null,
        anchor, next]);
@@ -56,12 +68,22 @@ async function schedule(salonId, dialogKey, meta = {}, settings = {}, opts = {})
 /**
  * Погасить живую строку диалога.
  * @param {string} status один из CLOSE_STATUSES
- * @param {string} reason машинная причина (client_replied, operator, …)
+ * @param {string} reason машинная причина (client_replied, operator, …) —
+ *   НЕ валидируется, в отличие от status: status участвует в SQL-условиях
+ *   (частичный индекс, аренда) и в логике чипа списка диалогов, а reason —
+ *   только человекочитаемое объяснение для разбора инцидентов; жёсткий
+ *   список причин пришлось бы держать синхронным с каждым вызывающим
+ *   местом (воркер, вебхук, ручная пауза), а цена рассинхрона тут — просто
+ *   менее удобная строка в логе, а не сломанная логика.
  * @returns {Promise<boolean>} была ли строка (false и при сбое БД)
  */
 async function close(salonId, dialogKey, status, reason, opts = {}) {
   const db = opts.db || realDb;
-  if (!CLOSE_STATUSES.has(status)) throw new Error(`bad status: ${status}`);
+  if (!CLOSE_STATUSES.has(status)) {
+    const e = new Error(`bad status: ${status}`);
+    e.code = 'BAD_STATUS';
+    throw e;
+  }
   if (!salonId || !dialogKey) return false;
   try {
     const r = await db.query(
