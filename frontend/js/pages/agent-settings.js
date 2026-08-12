@@ -16,6 +16,10 @@ async function openAgentSettings() {
     document.getElementById('agent-schedule-enabled').checked = !!s.scheduleEnabled;
     document.getElementById('agent-schedule-start').value = s.scheduleStart || '22:00';
     document.getElementById('agent-schedule-end').value = s.scheduleEnd || '09:30';
+    document.getElementById('agent-followup-delay1').value = s.followupDelay1Min || 0;
+    document.getElementById('agent-followup-delay2').value = s.followupDelay2Min ?? 60;
+    document.getElementById('agent-followup-latest').value = s.followupLatestTime || '';
+    document.getElementById('agent-followup-text').value = s.followupFinalText || '';
     agentToggleSchedule();
     document.querySelectorAll('input[name="agent-mode"]').forEach(r => {
       r.onchange = _agentToggleAllowSection;
@@ -96,6 +100,16 @@ async function saveAgentSettings() {
     notify('Укажите начало и конец окна расписания', 'err');
     return;
   }
+  const followupDelay1Min = Number(document.getElementById('agent-followup-delay1').value) || 0;
+  const followupDelay2Min = Number(document.getElementById('agent-followup-delay2').value) || 0;
+  const followupLatestTime = document.getElementById('agent-followup-latest').value;
+  const followupFinalText = document.getElementById('agent-followup-text').value;
+  // Сервер отвергнет delay2<=delay1 кодом BAD_FOLLOWUP только когда напоминания
+  // включены (delay1>0) — при delay1=0 второе поле ни на что не влияет.
+  if (followupDelay1Min > 0 && !(followupDelay2Min > followupDelay1Min)) {
+    notify('Финальное сообщение должно уходить позже первого напоминания', 'err');
+    return;
+  }
   try {
     await api('PUT', '/api/agent/settings', {
       enabled: document.getElementById('agent-enabled').checked,
@@ -103,6 +117,10 @@ async function saveAgentSettings() {
       scheduleEnabled,
       scheduleStart,
       scheduleEnd,
+      followupDelay1Min,
+      followupDelay2Min,
+      followupLatestTime,
+      followupFinalText,
     });
     notify('Настройки агента сохранены');
     closeAgentSettings();

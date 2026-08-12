@@ -11,11 +11,20 @@
 // Юнит-тесты: chat-wait-status.test.js (node --test).
 // ============================================================
 
+// Признак «диалог на операторе» — ОБЩИЙ с сортировкой списка (chat-dialog-sort.js):
+// изменение условия эскалации иначе пришлось бы держать в двух местах. В браузере
+// оба файла — плейн-скрипты без модульной системы, порядок подключения в index.html
+// гарантирует, что chat-dialog-sort.js уже выставил window.chatIsEscalated к этому
+// моменту; под node --test модуля window нет, поэтому берём через require.
+const chatIsEscalated = (typeof module !== 'undefined' && module.exports)
+  ? require('./chat-dialog-sort').chatIsEscalated
+  : (typeof window !== 'undefined' ? window.chatIsEscalated : undefined);
+
 // Диалог на операторе перекрывает ЛЮБОЙ статус ожидания: там ждут НАС,
 // а не клиента, и чип «ждём ответа» рядом с этим был бы враньём.
 function chatWaitStatus(d) {
   if (!d) return null;
-  if (d.agentStatus === 'escalated') {
+  if (chatIsEscalated(d)) {
     return { key: 'operator', label: '👤 Оператор', cls: 'chat-wait-operator',
       title: 'Диалог передан администратору — ждём ответа НЕ клиента, а нас' };
   }
