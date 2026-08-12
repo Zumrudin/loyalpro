@@ -64,6 +64,23 @@ describe('buildFollowupPrompt', () => {
     expect(buildFollowupPrompt(base).system).toMatch(/"action"/);
   });
 
+  test('битые элементы транскрипта не дают болтающихся пустых строк', () => {
+    const { user } = buildFollowupPrompt({
+      ...base,
+      transcript: [
+        null,
+        { text: 'без direction' },
+        { direction: 'outgoing', text: '' },
+        { direction: 'incoming', text: '   ' },
+        { direction: 'incoming', text: 'Реальный вопрос пациента' },
+      ],
+    });
+    expect(user).not.toMatch(/Мила: $/m);
+    expect(user).not.toMatch(/Пациент: $/m);
+    expect(user).not.toMatch(/^Пациент: \s*$/m);
+    expect(user).toMatch(/Реальный вопрос пациента/);
+  });
+
   // Формат подтверждён фактическим выводом care-prompt.fmtMskDate (см. Task 9
   // README): 'DD.MM.YYYY, HH:MM' для Europe/Moscow.
   test('сегодняшняя дата присутствует в промпте (формат fmtMskDate)', () => {

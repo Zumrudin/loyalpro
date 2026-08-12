@@ -35,6 +35,24 @@ const MSG_TS_SQL = `COALESCE(msg_ts, EXTRACT(EPOCH FROM (created_at AT TIME ZONE
 // «РЕПЛИКИ АДМИНИСТРАТОРА» (services/agent/system-prompt.js) — менять только вместе.
 const OPERATOR_MARK = '[сообщение администратора клиники]';
 
+// Срезает OPERATOR_MARK с начала КАЖДОЙ строки текста — реплики серии в
+// транскрипте склеены через '\n', одной проверки на весь текст мало. Нужна
+// ВСЕМ промптам без tool-цикла (care/reminders/followup): их промпты про эту
+// пометку не знают и отдали бы её пациенту дословно — маркер предназначен
+// только основному агенту (его промпт и правило «РЕПЛИКИ АДМИНИСТРАТОРА»
+// знают, что с ним делать). Раньше жила тремя побайтово одинаковыми копиями
+// (services/care/worker.js, services/reminders/worker.js,
+// services/agent/followup-prompt.js) — вынесена сюда, к самой константе,
+// правкой по ревью 2026-08-12: разъехавшиеся копии означали бы, что при
+// изменении формата маркера обновят не все места.
+const OPERATOR_MARK_PREFIX = `${OPERATOR_MARK} `;
+function stripOperatorMark(text) {
+  return String(text || '')
+    .split('\n')
+    .map((line) => (line.startsWith(OPERATOR_MARK_PREFIX) ? line.slice(OPERATOR_MARK_PREFIX.length) : line))
+    .join('\n');
+}
+
 // Журнал авторства исходящих (services/outgoing-authorship) выкачен на прод
 // 04.08.2026 (коммит 34caa25). У сообщений ДО него authored_by = NULL, и среди
 // них есть реплики живых администраторов — без пометки модель считает их своими
@@ -285,5 +303,5 @@ async function hasIncomingAfter(salonId, dialogKey, watermark) {
 module.exports = {
   loadTranscript, hasIncomingAfter, hasEverAnswered, hasAgentEverWritten,
   lastOutgoing, lastOutgoingAuthor,
-  OPERATOR_MARK, AUTHORSHIP_SINCE_TS,
+  OPERATOR_MARK, AUTHORSHIP_SINCE_TS, stripOperatorMark,
 };
