@@ -46,6 +46,32 @@ const OPERATOR_MARK = '[сообщение администратора клин
 // правкой по ревью 2026-08-12: разъехавшиеся копии означали бы, что при
 // изменении формата маркера обновят не все места.
 const OPERATOR_MARK_PREFIX = `${OPERATOR_MARK} `;
+
+// Пометить сообщение администратора. Маркер ставится на КАЖДУЮ непустую строку,
+// а не один раз на всё тело, и это НЕ косметика.
+//
+// Потребители разбирают транскрипт ПОСТРОЧНО, и иначе не могут: loadTranscript
+// склеивает серию сообщений в ОДИН assistant-блок через '\n' (границы сообщений
+// после склейки не восстановить), поэтому в одном блоке законно соседствуют
+// реплики Милы и администратора. Построчно фильтруют:
+//   • services/agent/title-dedup.js — «должность один раз за диалог»;
+//   • services/agent/followup-worker.js — разрешённые времена для guard'а
+//     выдуманного времени;
+//   • stripOperatorMark ниже (care-/reminders-/followup-промпты).
+// Пока помечалась только ПЕРВАЯ строка, сообщение администратора с переводом
+// строки (обычный Shift+Enter в WhatsApp) проезжало фильтр строками 2..n как
+// собственный текст Милы. Для guard'а времени это прямой обход: администратор
+// написал «ждём вас завтра,\nприходите к 15:00» — и напоминание с «15:00»,
+// которого Мила НИКОГДА не называла, уходило пациенту (ревью 2026-08-12).
+// Пустые строки не помечаем: содержания в них нет, а хвостовой пробел маркера
+// был бы шумом. stripOperatorMark — точная обратная операция.
+function markOperatorLines(text) {
+  return String(text == null ? '' : text)
+    .split('\n')
+    .map((line) => (line.trim() ? `${OPERATOR_MARK_PREFIX}${line}` : line))
+    .join('\n');
+}
+
 function stripOperatorMark(text) {
   return String(text || '')
     .split('\n')
@@ -145,7 +171,9 @@ async function loadTranscript(salonId, dialogKey, opts = {}) {
     // Чистка идёт ВСЕГДА, независимо от withTime — правило одно и без копий, и
     // care-путь (withTime=false) тоже получает текст без подделанных меток.
     let body = r.direction === 'incoming' ? stripStamp(r.text) : r.text;
-    if (r.authored_by === 'operator' || legacyUnknown) body = `${OPERATOR_MARK} ${body}`;
+    // Маркер — на КАЖДУЮ строку сообщения (см. markOperatorLines): потребители
+    // фильтруют построчно, а склейка серии ниже стирает границы сообщений.
+    if (r.authored_by === 'operator' || legacyUnknown) body = markOperatorLines(body);
     const stamp = withTime ? formatStamp(r.msg_ts) : '';
     const text = stamp ? `${stamp} ${body}` : body;
     const last = messages[messages.length - 1];
@@ -303,5 +331,5 @@ async function hasIncomingAfter(salonId, dialogKey, watermark) {
 module.exports = {
   loadTranscript, hasIncomingAfter, hasEverAnswered, hasAgentEverWritten,
   lastOutgoing, lastOutgoingAuthor,
-  OPERATOR_MARK, AUTHORSHIP_SINCE_TS, stripOperatorMark,
+  OPERATOR_MARK, AUTHORSHIP_SINCE_TS, stripOperatorMark, markOperatorLines,
 };

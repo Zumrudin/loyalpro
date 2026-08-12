@@ -42,6 +42,30 @@ describe('loadTranscript', () => {
       expect(assistant.content).toBe('[сообщение администратора клиники] В 19:15 удобно было бы?');
     });
 
+    // Дефект, найденный ревью 2026-08-12: маркер ставился ОДИН раз на всё тело,
+    // а потребители фильтруют транскрипт ПОСТРОЧНО (иначе нельзя — склейка
+    // серии стирает границы сообщений). Сообщение администратора с переводом
+    // строки (Shift+Enter в WhatsApp) проезжало фильтр строками 2..n как
+    // собственный текст Милы, и время из такой строки легализовало выдуманное
+    // время в напоминании (services/agent/followup-worker.js).
+    test('МНОГОСТРОЧНАЯ реплика оператора помечена НА КАЖДОЙ строке', async () => {
+      db.any.mockResolvedValue([
+        { direction: 'incoming', msg_type: 'text', text: 'Да можно', msg_ts: 300 },
+        { direction: 'outgoing', msg_type: 'text', text: 'Ждём вас завтра,\n\nприходите к 15:00', msg_ts: 200, authored_by: 'operator' },
+        { direction: 'incoming', msg_type: 'text', text: 'ок', msg_ts: 100 },
+      ]);
+      const { messages } = await history.loadTranscript(1, 'k');
+      const assistant = messages.find(m => m.role === 'assistant');
+      const M = history.OPERATOR_MARK;
+      // пустая строка остаётся пустой — помечать в ней нечего
+      expect(assistant.content).toBe(`${M} Ждём вас завтра,\n\n${M} приходите к 15:00`);
+      // ни одна СОДЕРЖАТЕЛЬНАЯ строка не выглядит репликой Милы
+      expect(assistant.content.split('\n').filter(l => l.trim() && !l.includes(M))).toEqual([]);
+      // и обратная операция вычищает маркер ЦЕЛИКОМ, а не только в первой строке
+      expect(history.stripOperatorMark(assistant.content))
+        .toBe('Ждём вас завтра,\n\nприходите к 15:00');
+    });
+
     test('свои реплики и автоуведомления не помечаются', async () => {
       db.any.mockResolvedValue([
         { direction: 'incoming', msg_type: 'text', text: 'ок', msg_ts: 300 },

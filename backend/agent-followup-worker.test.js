@@ -220,6 +220,31 @@ describe('followup worker: напоминание (stage 0)', () => {
     expect(finalAt.getTime()).toBeGreaterThan(Date.now() + (worker.MIN_FINAL_GAP_MIN - 1) * 60000);
   });
 
+  test('при свежем якоре срок финала берётся ИЗ НАСТРОЕК, без зажима', async () => {
+    // Якорь только что: delay2=60 мин от него — далеко за минимальным зазором,
+    // поэтому финал обязан встать РОВНО на настройку салона.
+    const anchor = new Date(Date.now() - 15 * 60000);
+    const d = deps();
+    await worker.processOne(row({ anchor_at: anchor }), d);
+    const mark = d.calls.marks.find((m) => /stage\s*=\s*1/.test(m.sql));
+    expect(mark.params[1].getTime()).toBe(anchor.getTime() + 60 * 60000);
+  });
+
+  test('тесная пара интервалов зажимается и это ВИДНО в логе', async () => {
+    // delay2 - delay1 = 2 мин: валидация настроек такую пару пропускает, а
+    // финал ушёл бы почти вплотную за напоминанием. Сдвиг законен, молчаливым
+    // быть не должен.
+    const info = [];
+    const d = deps({ log: { info: (m) => info.push(m), warn() {}, error() {} } });
+    await worker.processOne(row({
+      anchor_at: new Date(Date.now() - 15 * 60000),
+      followup_delay1_min: 15, followup_delay2_min: 17,
+    }), d);
+    const mark = d.calls.marks.find((m) => /stage\s*=\s*1/.test(m.sql));
+    expect(mark.params[1].getTime()).toBeGreaterThan(Date.now() + (worker.MIN_FINAL_GAP_MIN - 1) * 60000);
+    expect(info.join(' ')).toMatch(/сдвинут/);
+  });
+
   test('после отправки — pending-реплика и персист в «Чат» для whatsapp', async () => {
     const d = deps();
     await worker.processOne(row(), d);
@@ -273,6 +298,28 @@ describe('followup worker: напоминание (stage 0)', () => {
       loadTranscript: async () => ({ messages: [
         { role: 'user', content: 'А когда можно?' },
         { role: 'assistant', content: `Секунду, уточню.\n${history.OPERATOR_MARK} Приходите в 15:00` },
+      ] }),
+      createMessage: async () => ({ text: '{"action":"send","text":"Ждём вас в 15:00","reason":"x"}' }),
+    });
+    await worker.processOne(row(), d);
+    expect(d.calls.sent).toHaveLength(0);
+    expect(reasons(d)).toMatch(/invented_time/);
+  });
+
+  // Воспроизведение конкретного обхода (ревью 2026-08-12): время стоит во
+  // ВТОРОЙ строке ОДНОГО сообщения администратора (Shift+Enter в WhatsApp).
+  // Пока loadTranscript помечал только первую строку тела, строка «приходите к
+  // 15:00» проходила построчный фильтр как собственный текст Милы, и guard
+  // молча пропускал время, которого она НИКОГДА не называла. Транскрипт здесь
+  // собирается НАСТОЯЩИМ markOperatorLines, а не написан руками, — иначе тест
+  // проверял бы фикстуру, а не поведение.
+  test('время во ВТОРОЙ строке одного сообщения администратора не легализует его', async () => {
+    const operatorMsg = history.markOperatorLines('Ждём вас завтра,\nприходите к 15:00');
+    expect(operatorMsg.split('\n')[1]).toContain('15:00');   // фикстура именно про это
+    const d = deps({
+      loadTranscript: async () => ({ messages: [
+        { role: 'user', content: 'А когда можно?' },
+        { role: 'assistant', content: `Секунду, уточню.\n${operatorMsg}` },
       ] }),
       createMessage: async () => ({ text: '{"action":"send","text":"Ждём вас в 15:00","reason":"x"}' }),
     });
