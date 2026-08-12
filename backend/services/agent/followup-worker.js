@@ -385,7 +385,15 @@ async function processOne(row, deps = defaultDeps) {
       });
     } else {
       // ── 7. Платный проход — последним ────────────────────────
-      const transcript = await d.loadTranscript(row.salon_id, row.dialog_key, { limit: 15 });
+      // keepTrailingAssistant: транскрипт ОБЯЗАН кончаться репликой Милы — в
+      // этом вся посылка напоминания (клиент на неё не ответил). Без флага
+      // loadTranscript переносит хвостовой assistant-блок перед последний
+      // user-блок (правка для оркестратора — там задержанное эхо читается как
+      // ответ на предыдущее сообщение), и модель либо не видит Милину реплику
+      // вовсе (leadingClinic), либо читает клиента как уже отвеченного — оба
+      // исхода дают systematic skip (см. комментарий у флага в history.js).
+      const transcript = await d.loadTranscript(row.salon_id, row.dialog_key,
+        { limit: 15, keepTrailingAssistant: true });
       const built = await buildNudgeText(d, row, (transcript && transcript.messages) || []);
       if (built.skip) return finish('cancelled', built.reason);
       text = built.text;

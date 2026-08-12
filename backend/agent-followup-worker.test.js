@@ -210,6 +210,33 @@ describe('followup worker: напоминание (stage 0)', () => {
     expect(d.calls.sent[0].phone).toBe('79200255591');
   });
 
+  // Дефект найден живым прогоном scripts/agent-followup-e2e.js 2026-08-12:
+  // loadTranscript по умолчанию переносит хвостовой assistant-блок перед
+  // последний user-блок (правка для оркестратора — задержанное эхо читается
+  // как ответ на ПРЕДЫДУЩЕЕ сообщение клиента). У воркера напоминаний посылка
+  // ОБРАТНАЯ: транскрипт ОБЯЗАН кончаться репликой Милы, иначе модель либо не
+  // видит её вовсе (уезжает в leadingClinic), либо читает клиента как уже
+  // отвеченного — оба исхода дают систематический skip. Без явной проверки
+  // аргумента «оптимизация» тихо уберёт флаг и дефект вернётся молча — прежние
+  // юнит-тесты этого не ловят, потому что подменяют loadTranscript целиком.
+  test('loadTranscript зовётся с keepTrailingAssistant:true', async () => {
+    const calls = [];
+    const d = deps({
+      loadTranscript: async (salonId, key, opts) => {
+        calls.push({ salonId, key, opts });
+        return {
+          messages: [
+            { role: 'user', content: 'Сколько стоит биоревитализация?' },
+            { role: 'assistant', content: 'Мария, от 12 000 ₽. Записать вас?' },
+          ],
+        };
+      },
+    });
+    await worker.processOne(row(), d);
+    expect(calls).toHaveLength(1);
+    expect(calls[0].opts).toMatchObject({ keepTrailingAssistant: true });
+  });
+
   test('срок финала считается от ЯКОРЯ и не может быть впритык к напоминанию', async () => {
     const d = deps();
     await worker.processOne(row(), d);

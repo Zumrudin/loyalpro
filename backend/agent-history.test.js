@@ -149,6 +149,44 @@ describe('loadTranscript', () => {
     expect(watermark).toBe(300);
   });
 
+  // Дефект найден живым прогоном scripts/agent-followup-e2e.js 2026-08-12: у
+  // воркера напоминаний посылка ОБРАТНАЯ переносу выше — транскрипт ОБЯЗАН
+  // кончаться репликой Милы (строка «ожидание ответа» существует ровно потому,
+  // что клиент на неё не ответил). keepTrailingAssistant отключает перенос
+  // РОВНО для этого потребителя.
+  describe('keepTrailingAssistant (воркер напоминаний о себе)', () => {
+    test('[клиент, Мила] с флагом → два сообщения, последнее ассистентское', async () => {
+      db.any.mockResolvedValue([
+        { direction: 'outgoing', msg_type: 'text', text: 'Записала вас на маникюр в 15:00', msg_ts: 200, authored_by: 'agent' },
+        { direction: 'incoming', msg_type: 'text', text: 'хочу записаться на маникюр',       msg_ts: 100 },
+      ]);
+      const { messages, leadingClinic } = await history.loadTranscript(1, 'k', { keepTrailingAssistant: true });
+      expect(messages).toEqual([
+        { role: 'user', content: 'хочу записаться на маникюр' },
+        { role: 'assistant', content: 'Записала вас на маникюр в 15:00' },
+      ]);
+      // реплика Милы дошла ЧЕРЕЗ messages, а не осела в leadingClinic — иначе
+      // в промпт напоминания она не попадёт вовсе (см. дефект выше)
+      expect(leadingClinic).toEqual([]);
+    });
+
+    // Без флага — прежнее (оркестраторное) поведение: перенос уносит Милину
+    // реплику в начало, а срез ведущих assistant-реплик снимает её ИЗ messages
+    // в leadingClinic. Закреплено тестом, чтобы правка флага не задела
+    // оркестраторный путь молча.
+    test('[клиент, Мила] БЕЗ флага → реплика Милы уезжает в leadingClinic', async () => {
+      db.any.mockResolvedValue([
+        { direction: 'outgoing', msg_type: 'text', text: 'Записала вас на маникюр в 15:00', msg_ts: 200, authored_by: 'agent' },
+        { direction: 'incoming', msg_type: 'text', text: 'хочу записаться на маникюр',       msg_ts: 100 },
+      ]);
+      const { messages, leadingClinic } = await history.loadTranscript(1, 'k');
+      expect(messages).toEqual([
+        { role: 'user', content: 'хочу записаться на маникюр' },
+      ]);
+      expect(leadingClinic).toEqual(['Записала вас на маникюр в 15:00']);
+    });
+  });
+
   test('assistant-хвост вливается в предыдущий assistant-блок, диалог кончается user', async () => {
     db.any.mockResolvedValue([
       { direction: 'outgoing', msg_type: 'text', text: 'позднее эхо',   msg_ts: 500, authored_by: 'agent' },
