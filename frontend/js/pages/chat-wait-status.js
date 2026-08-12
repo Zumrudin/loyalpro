@@ -12,19 +12,25 @@
 // ============================================================
 
 // Признак «диалог на операторе» — ОБЩИЙ с сортировкой списка (chat-dialog-sort.js):
-// изменение условия эскалации иначе пришлось бы держать в двух местах. В браузере
-// оба файла — плейн-скрипты без модульной системы, порядок подключения в index.html
-// гарантирует, что chat-dialog-sort.js уже выставил window.chatIsEscalated к этому
-// моменту; под node --test модуля window нет, поэтому берём через require.
-const chatIsEscalated = (typeof module !== 'undefined' && module.exports)
-  ? require('./chat-dialog-sort').chatIsEscalated
-  : (typeof window !== 'undefined' ? window.chatIsEscalated : undefined);
+// изменение условия эскалации иначе пришлось бы держать в двух местах.
+// ВАЖНО: резолвится ЛЕНИВО, внутри функции, а не top-level биндингом — оба файла
+// подключены обычными <script> без type="module" и делят одну глобальную лексическую
+// область; top-level `const chatIsEscalated` здесь столкнулся бы с `function
+// chatIsEscalated` из chat-dialog-sort.js (SyntaxError, весь файл переставал бы
+// выполняться). Ленивое чтение вдобавок не зависит от порядка тегов в index.html.
+// Под node --test модуля window нет — берём через require; в браузере — из глобали.
+function _resolveIsEscalated(d) {
+  const fn = (typeof module !== 'undefined' && module.exports)
+    ? require('./chat-dialog-sort').chatIsEscalated
+    : (typeof window !== 'undefined' ? window.chatIsEscalated : undefined);
+  return typeof fn === 'function' ? fn(d) : false;
+}
 
 // Диалог на операторе перекрывает ЛЮБОЙ статус ожидания: там ждут НАС,
 // а не клиента, и чип «ждём ответа» рядом с этим был бы враньём.
 function chatWaitStatus(d) {
   if (!d) return null;
-  if (chatIsEscalated(d)) {
+  if (_resolveIsEscalated(d)) {
     return { key: 'operator', label: '👤 Оператор', cls: 'chat-wait-operator',
       title: 'Диалог передан администратору — ждём ответа НЕ клиента, а нас' };
   }

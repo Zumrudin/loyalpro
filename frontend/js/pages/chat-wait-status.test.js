@@ -96,3 +96,32 @@ test('CHAT_WAIT_FILTERS — порядок all, waiting, operator, no_response',
     assert.ok(typeof f.label === 'string' && f.label.length > 0);
   }
 });
+
+// Оба файла подключены в index.html обычными <script> без type="module" и делят
+// ОДНУ глобальную лексическую область. Верхнеуровневый `const chatIsEscalated`
+// здесь сталкивался бы с `function chatIsEscalated` из chat-dialog-sort.js —
+// SyntaxError гасил ВЕСЬ файл, chat.js не находил chatWaitMatches, и список
+// диалогов переставал рендериться (регрессия поймана только живым прогоном
+// страницы, 12.08.2026). Обычный `require` этого не ловит: он грузит каждый
+// модуль в своей области, а браузер — в общей. Поэтому грузим их так же, как
+// браузер: подряд, в один контекст.
+test('оба скрипта грузятся в ОДНУ глобальную область, как в браузере', () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const vm = require('node:vm');
+  const ctx = vm.createContext({ console });
+  ctx.window = ctx;                       // в браузере window и есть глобаль
+  for (const f of ['chat-dialog-sort.js', 'chat-wait-status.js']) {
+    const src = fs.readFileSync(path.join(__dirname, f), 'utf8');
+    assert.doesNotThrow(() => vm.runInContext(src, ctx, { filename: f }),
+      `${f} не загрузился в общей области — проверь редекларацию имён`);
+  }
+  // Файл, упавший на парсинге, не дошёл бы до экспорта в window.
+  assert.strictEqual(typeof ctx.chatWaitStatus, 'function');
+  assert.strictEqual(typeof ctx.chatWaitMatches, 'function');
+  assert.ok(Array.isArray(ctx.CHAT_WAIT_FILTERS));
+  // И предикат эскалации реально резолвится из соседнего файла.
+  assert.strictEqual(
+    ctx.chatWaitStatus({ agentStatus: 'escalated', followupStatus: 'scheduled', followupStage: 0 }).key,
+    'operator');
+});

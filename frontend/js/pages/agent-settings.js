@@ -100,13 +100,29 @@ async function saveAgentSettings() {
     notify('Укажите начало и конец окна расписания', 'err');
     return;
   }
-  const followupDelay1Min = Number(document.getElementById('agent-followup-delay1').value) || 0;
-  const followupDelay2Min = Number(document.getElementById('agent-followup-delay2').value) || 0;
+  // Пустая строка уходит на сервер КАК ЕСТЬ (не 0!) — сервер трактует '' как
+  // «не передано, оставить текущее» (pickDelay в services/agent-settings.js).
+  // Number('')||0 стёр бы это состояние: администратор, случайно очистивший
+  // поле, молча выключил бы напоминания. Тот же приём — frontend/js/pages/reminders.js.
+  const rawDelay1 = document.getElementById('agent-followup-delay1').value.trim();
+  const rawDelay2 = document.getElementById('agent-followup-delay2').value.trim();
+  const followupDelay1Min = rawDelay1 === '' ? '' : Number(rawDelay1);
+  const followupDelay2Min = rawDelay2 === '' ? '' : Number(rawDelay2);
   const followupLatestTime = document.getElementById('agent-followup-latest').value;
   const followupFinalText = document.getElementById('agent-followup-text').value;
-  // Сервер отвергнет delay2<=delay1 кодом BAD_FOLLOWUP только когда напоминания
-  // включены (delay1>0) — при delay1=0 второе поле ни на что не влияет.
-  if (followupDelay1Min > 0 && !(followupDelay2Min > followupDelay1Min)) {
+  // Целое и в диапазоне 0..1440 (тот же потолок, что FOLLOWUP_DELAY_MAX на сервере) —
+  // дробное или вне диапазона ловим на клиенте, а не отдаём сырую ошибку сервера.
+  for (const [label, v] of [['Первое напоминание', followupDelay1Min], ['Финальное сообщение', followupDelay2Min]]) {
+    if (v !== '' && (!Number.isInteger(v) || v < 0 || v > 1440)) {
+      notify(`«${label}»: введите целое число минут от 0 до 1440`, 'err');
+      return;
+    }
+  }
+  // Проверку «второй больше первого» имеет смысл делать, только когда оба поля
+  // заполнены числом: пустое поле сохранит текущее значение на сервере, и клиент
+  // не знает, каким оно окажется.
+  if (followupDelay1Min !== '' && followupDelay2Min !== '' && followupDelay1Min > 0
+      && !(followupDelay2Min > followupDelay1Min)) {
     notify('Финальное сообщение должно уходить позже первого напоминания', 'err');
     return;
   }
