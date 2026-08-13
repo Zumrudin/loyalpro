@@ -24,6 +24,7 @@ const groupChat = require('../services/agent/group-chat');
 const authorship = require('../services/outgoing-authorship');
 const dialogState = require('../services/agent/dialog-state');
 const chatPersist = require('../services/chat-persist');
+const followupQueue = require('../services/agent/followup-queue');
 
 // Текстовые типы разных каналов: WhatsApp/MAX → 'text', tdlib/Telegram → 'formattedText'.
 const AGENT_TEXT_TYPES = new Set(['text', 'formattedText']);
@@ -173,6 +174,20 @@ router.post('/webhook', async (req, res) => {
         await chatPersist.adoptPhoneForChat(salonId, msg.chatId, msg.phone)
           .then(n => { if (n) logger.info(`dialog ${msg.chatId}: номер ${msg.phone} проставлен ${n} прежним сообщениям`); })
           .catch(e => logger.warn(`adopt phone for chat ${msg.chatId} failed: ${e.message}`));
+      }
+
+      // Клиент ответил — ожидание закрыто. Гасим ЗДЕСЬ, а не только в воркере:
+      // чип в «Чате» обязан погаснуть сразу, не дожидаясь тика. Второй рубеж —
+      // перепроверка «нет входящих после anchor_at» в самом воркере: она
+      // закрывает гонку «ответил ровно в момент отправки», которую этот вход
+      // закрыть не может.
+      if (storedNew && salonId && msg.direction === 'incoming' && !groupChat.isGroupMessage(msg)) {
+        const waitKey = (msg.phone && msg.phone.trim()) || msg.chatId;
+        if (waitKey) {
+          await followupQueue.close(salonId, waitKey, 'answered', 'client_replied')
+            .then(closed => { if (closed) chatEvents.emitFollowupStatus(salonId, waitKey, 'answered', 0); })
+            .catch(e => logger.warn(`followup close failed: ${e.message}`));
+        }
       }
 
       // Человек ответил клиенту сам (мимо админки, прямо из приложения) —

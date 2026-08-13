@@ -35,6 +35,50 @@ const MSG_TS_SQL = `COALESCE(msg_ts, EXTRACT(EPOCH FROM (created_at AT TIME ZONE
 // «РЕПЛИКИ АДМИНИСТРАТОРА» (services/agent/system-prompt.js) — менять только вместе.
 const OPERATOR_MARK = '[сообщение администратора клиники]';
 
+// Срезает OPERATOR_MARK с начала КАЖДОЙ строки текста — реплики серии в
+// транскрипте склеены через '\n', одной проверки на весь текст мало. Нужна
+// ВСЕМ промптам без tool-цикла (care/reminders/followup): их промпты про эту
+// пометку не знают и отдали бы её пациенту дословно — маркер предназначен
+// только основному агенту (его промпт и правило «РЕПЛИКИ АДМИНИСТРАТОРА»
+// знают, что с ним делать). Раньше жила тремя побайтово одинаковыми копиями
+// (services/care/worker.js, services/reminders/worker.js,
+// services/agent/followup-prompt.js) — вынесена сюда, к самой константе,
+// правкой по ревью 2026-08-12: разъехавшиеся копии означали бы, что при
+// изменении формата маркера обновят не все места.
+const OPERATOR_MARK_PREFIX = `${OPERATOR_MARK} `;
+
+// Пометить сообщение администратора. Маркер ставится на КАЖДУЮ непустую строку,
+// а не один раз на всё тело, и это НЕ косметика.
+//
+// Потребители разбирают транскрипт ПОСТРОЧНО, и иначе не могут: loadTranscript
+// склеивает серию сообщений в ОДИН assistant-блок через '\n' (границы сообщений
+// после склейки не восстановить), поэтому в одном блоке законно соседствуют
+// реплики Милы и администратора. Построчно фильтруют:
+//   • services/agent/title-dedup.js — «должность один раз за диалог»;
+//   • services/agent/followup-worker.js — разрешённые времена для guard'а
+//     выдуманного времени;
+//   • stripOperatorMark ниже (care-/reminders-/followup-промпты).
+// Пока помечалась только ПЕРВАЯ строка, сообщение администратора с переводом
+// строки (обычный Shift+Enter в WhatsApp) проезжало фильтр строками 2..n как
+// собственный текст Милы. Для guard'а времени это прямой обход: администратор
+// написал «ждём вас завтра,\nприходите к 15:00» — и напоминание с «15:00»,
+// которого Мила НИКОГДА не называла, уходило пациенту (ревью 2026-08-12).
+// Пустые строки не помечаем: содержания в них нет, а хвостовой пробел маркера
+// был бы шумом. stripOperatorMark — точная обратная операция.
+function markOperatorLines(text) {
+  return String(text == null ? '' : text)
+    .split('\n')
+    .map((line) => (line.trim() ? `${OPERATOR_MARK_PREFIX}${line}` : line))
+    .join('\n');
+}
+
+function stripOperatorMark(text) {
+  return String(text || '')
+    .split('\n')
+    .map((line) => (line.startsWith(OPERATOR_MARK_PREFIX) ? line.slice(OPERATOR_MARK_PREFIX.length) : line))
+    .join('\n');
+}
+
 // Журнал авторства исходящих (services/outgoing-authorship) выкачен на прод
 // 04.08.2026 (коммит 34caa25). У сообщений ДО него authored_by = NULL, и среди
 // них есть реплики живых администраторов — без пометки модель считает их своими
@@ -127,7 +171,9 @@ async function loadTranscript(salonId, dialogKey, opts = {}) {
     // Чистка идёт ВСЕГДА, независимо от withTime — правило одно и без копий, и
     // care-путь (withTime=false) тоже получает текст без подделанных меток.
     let body = r.direction === 'incoming' ? stripStamp(r.text) : r.text;
-    if (r.authored_by === 'operator' || legacyUnknown) body = `${OPERATOR_MARK} ${body}`;
+    // Маркер — на КАЖДУЮ строку сообщения (см. markOperatorLines): потребители
+    // фильтруют построчно, а склейка серии ниже стирает границы сообщений.
+    if (r.authored_by === 'operator' || legacyUnknown) body = markOperatorLines(body);
     const stamp = withTime ? formatStamp(r.msg_ts) : '';
     const text = stamp ? `${stamp} ${body}` : body;
     const last = messages[messages.length - 1];
@@ -140,7 +186,27 @@ async function loadTranscript(salonId, dialogKey, opts = {}) {
   // (400 «does not support assistant message prefill»), а по смыслу задержанное эхо —
   // ответ на ПРЕДЫДУЩЕЕ сообщение клиента. Переносим хвостовой assistant-блок перед
   // последний user-блок: транскрипт всегда кончается сообщением клиента.
-  if (messages.length > 1 && messages[messages.length - 1].role === 'assistant') {
+  //
+  // opts.keepTrailingAssistant ОТКЛЮЧАЕТ этот перенос. Он нужен ТОЛЬКО воркеру
+  // напоминаний о себе (followup-worker.js): у него посылка прямо ОБРАТНАЯ —
+  // строка «ожидание ответа» существует РОВНО потому, что последняя реплика в
+  // переписке — Милина, а клиент на неё не ответил. Перенос эту посылку ломает:
+  //   • переписка из одного обмена [клиент, Мила] — Милина реплика уезжает в
+  //     начало, там её срезает ветка leadingClinic ниже (первая роль в messages
+  //     становится 'assistant'), и в промпт она не попадает ВООБЩЕ — модель
+  //     отвечает «ответа от Милы в переписке нет, ссылаться не на что» → skip;
+  //   • переписка из двух и более обменов — содержимое сохраняется, но порядок
+  //     ломается, и модель читает хвостовое сообщение клиента как уже
+  //     отвеченное → тоже skip.
+  // Итог без флага: напоминания (stage 0) систематически не отправлялись бы.
+  // Юнит-тесты воркера этого не ловили — они подменяют loadTranscript целиком,
+  // а не гоняют её настоящую логику. Найдено живым прогоном
+  // scripts/agent-followup-e2e.js на реальной БД и реальной модели 2026-08-12.
+  //
+  // По умолчанию флаг выключен — оркестратор и все прочие вызовы (care-, reminders-
+  // воркеры) продолжают получать прежнее поведение без единой правки на своей стороне.
+  const keepTail = !!opts.keepTrailingAssistant;
+  if (!keepTail && messages.length > 1 && messages[messages.length - 1].role === 'assistant') {
     const tail = [];
     while (messages.length && messages[messages.length - 1].role === 'assistant') {
       tail.unshift(messages.pop());
@@ -158,6 +224,14 @@ async function loadTranscript(salonId, dialogKey, opts = {}) {
   // Claude требует, чтобы первым шёл user — срезаем ведущие assistant-реплики
   // (после переноса хвоста: он мог поставить assistant в начало, если более
   // раннего user-блока в окне не нашлось).
+  //
+  // С keepTrailingAssistant (см. выше) этот срез никак не мешает воркеру
+  // напоминаний: перенос хвоста не выполнялся, поэтому для [клиент, Мила]
+  // первая роль в messages — 'user', цикл ниже не срабатывает вовсе, и обе
+  // реплики доходят до вызывающего как есть, в исходном порядке. Срез тут
+  // ловит только диалоги, которые и БЕЗ переноса начинаются с assistant
+  // (служебные исходящие в самом начале окна) — тот же случай, что и у
+  // оркестратора.
   //
   // Срезанное ВОЗВРАЩАЕТСЯ отдельно, а не пропадает. Инцидент 2026-08-10
   // (79776646672): пациентка ответила «5» на опрос об оценке визита, но все три
@@ -285,5 +359,5 @@ async function hasIncomingAfter(salonId, dialogKey, watermark) {
 module.exports = {
   loadTranscript, hasIncomingAfter, hasEverAnswered, hasAgentEverWritten,
   lastOutgoing, lastOutgoingAuthor,
-  OPERATOR_MARK, AUTHORSHIP_SINCE_TS,
+  OPERATOR_MARK, AUTHORSHIP_SINCE_TS, stripOperatorMark, markOperatorLines,
 };

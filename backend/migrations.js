@@ -1538,6 +1538,17 @@ async function runMigrations(client) {
       ADD COLUMN IF NOT EXISTS price_list_url VARCHAR(500)
   `).catch(() => {});
 
+  // Напоминания Милы о себе. delay1=0 — ВЫКЛЮЧЕНО, и это дефолт: выкат не
+  // должен сам начать писать живым пациентам, салон включает фичу явно.
+  // latest_time пустой = верхней границы нет (действует только окно расписания).
+  await client.query(`
+    ALTER TABLE agent_settings
+      ADD COLUMN IF NOT EXISTS followup_delay1_min INTEGER NOT NULL DEFAULT 0,
+      ADD COLUMN IF NOT EXISTS followup_delay2_min INTEGER NOT NULL DEFAULT 60,
+      ADD COLUMN IF NOT EXISTS followup_final_text TEXT,
+      ADD COLUMN IF NOT EXISTS followup_latest_time VARCHAR(5)
+  `).catch(() => {});
+
   // agent_stop_topics — темы, которыми клиника не занимается ВООБЩЕ (даже не
   // консультирует). Отличается от agent_service_rules: там прячутся конкретные
   // yc_service_id, а здесь тема, которой в каталоге может не быть вовсе
@@ -1578,6 +1589,58 @@ async function runMigrations(client) {
   await client.query(`
     CREATE INDEX IF NOT EXISTS agent_dialogs_lookup_idx
     ON agent_dialogs (salon_id, dialog_key)
+  `).catch(() => {});
+
+  // ── Ожидание ответа клиента: очередь напоминаний Милы о себе ──
+  // Одна ЖИВАЯ строка на диалог (частичный уникальный индекс ниже), завершённые
+  // остаются историей: по ним разбирается, кому и почему написали. Спека —
+  // docs/superpowers/specs/2026-08-11-agent-followup-waiting-status-design.md.
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS agent_followups (
+      id              SERIAL PRIMARY KEY,
+      salon_id        INTEGER NOT NULL REFERENCES salons(id) ON DELETE CASCADE,
+      dialog_key      TEXT NOT NULL,
+      phone           TEXT,
+      channel         VARCHAR(32),
+      chat_id         TEXT,
+      anchor_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+      stage           SMALLINT NOT NULL DEFAULT 0,
+      status          TEXT NOT NULL DEFAULT 'scheduled',
+      close_reason    TEXT,
+      next_at         TIMESTAMPTZ NOT NULL,
+      nudge1_at       TIMESTAMPTZ,
+      final_at        TIMESTAMPTZ,
+      rendered_text   TEXT,
+      error           TEXT,
+      attempts        INTEGER NOT NULL DEFAULT 0,
+      last_attempt_at TIMESTAMPTZ,
+      created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `).catch(() => {});
+  // Одна живая строка на диалог. Частичный индекс, а не UNIQUE(salon_id,
+  // dialog_key): завершённые строки обязаны накапливаться историей.
+  await client.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS agent_followups_live_uniq
+      ON agent_followups (salon_id, dialog_key) WHERE status = 'scheduled'
+  `).catch(() => {});
+  // Ключ аренды. Тай-брейк по id обязателен: строки одной минуты иначе идут
+  // в неспецифицированном порядке.
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS agent_followups_due_idx
+      ON agent_followups (next_at, id) WHERE status = 'scheduled'
+  `).catch(() => {});
+  // Чип в списке диалогов берёт ПОСЛЕДНЮЮ строку по диалогу.
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS agent_followups_dialog_idx
+      ON agent_followups (salon_id, dialog_key, created_at DESC)
+  `).catch(() => {});
+  // Текст исключения при сбое отправки. Отдельно от close_reason: там машинный
+  // код причины, и смешивать его с произвольным текстом ошибки значит потерять
+  // разбор инцидентов — ровно то, ради чего очередь и заведена отдельной
+  // таблицей. Так же устроены reminder_queue и care_touch_sends.
+  await client.query(`
+    ALTER TABLE agent_followups ADD COLUMN IF NOT EXISTS error TEXT
   `).catch(() => {});
 
   await client.query(`

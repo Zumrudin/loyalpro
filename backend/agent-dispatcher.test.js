@@ -750,3 +750,104 @@ describe('defaultSendFile / defaultPersistOwnFile', () => {
     } finally { spy.mockRestore(); }
   });
 });
+
+// ── Ожидание ответа клиента (agent_followups): проводка в диспетчере ──
+// followupQueue инжектится так же, как остальные side-effect зависимости
+// выше (settings, orchestrator, send, …) — без этого проводку нельзя
+// проверить тестом, и дефект синхронного TypeError (см. коммит выше) поймала
+// бы только случайная поломка чужих ассертов, а не тест на саму фичу.
+describe('ожидание ответа клиента (followup)', () => {
+  const { shouldAwaitReply } = require('./services/agent/followup-queue');
+
+  // Реальный shouldAwaitReply (чистая функция) + застабленный schedule: так
+  // тест проверяет РЕАЛЬНУЮ проводку if/then в диспетчере, а не переигранную
+  // копию условия.
+  function followupDeps(scheduleImpl) {
+    return { followupQueue: { shouldAwaitReply, schedule: jest.fn(scheduleImpl || (async () => true)) } };
+  }
+
+  // Промис-цепочка в диспетчере — fire-and-forget (без await), поэтому после
+  // advanceTimersByTimeAsync добираем оставшиеся микрозадачи явно.
+  async function flushMicrotasks() {
+    for (let i = 0; i < 5; i += 1) await Promise.resolve();
+  }
+
+  test('обычный доставленный ход → followupQueue.schedule вызван с salonId/dialogKey/meta и настройками', async () => {
+    const followupSettings = { followupDelay1Min: 15, followupDelay2Min: 60 };
+    const d = deps({
+      ...followupDeps(),
+      settings: {
+        isAllowed: jest.fn(async () => ({ allow: true, reason: 'ok' })),
+        // Мок повторяет РЕАЛЬНЫЙ интерфейс agentSettings: isAllowed + getSettings.
+        getSettings: jest.fn(async () => followupSettings),
+      },
+    });
+    dispatcher.enqueue(1, 'k', meta, d);
+    await jest.advanceTimersByTimeAsync(1000);
+    await flushMicrotasks();
+    expect(d.settings.getSettings).toHaveBeenCalledWith(1);
+    // Пятым аргументом идёт ЯКОРЬ, снятый в момент ДОСТАВКИ, а не внутри
+    // schedule(): между этой точкой и вставкой строки лежит поход в БД за
+    // настройками, и ответ клиента, пришедший в это окно, оказался бы СТАРШЕ
+    // якоря — воркер не увидел бы входящего «после якоря» и напомнил бы о себе
+    // тому, кто уже ответил (находка финального ревью).
+    expect(d.followupQueue.schedule).toHaveBeenCalledWith(
+      1, 'k', meta, followupSettings, expect.objectContaining({ now: expect.any(Date) }));
+  });
+
+  test('запись оформлена в этом ходу (writeSucceeded) → followupQueue.schedule НЕ вызван', async () => {
+    const d = deps({
+      ...followupDeps(),
+      orchestrator: { runDialog: jest.fn(async () => (
+        { replies: ['Готово, записала вас!'], escalated: false, writeSucceeded: true })) },
+    });
+    dispatcher.enqueue(1, 'k', meta, d);
+    await jest.advanceTimersByTimeAsync(1000);
+    await flushMicrotasks();
+    expect(d.followupQueue.schedule).not.toHaveBeenCalled();
+  });
+
+  test('эскалация → followupQueue.schedule НЕ вызван', async () => {
+    const d = deps({
+      ...followupDeps(),
+      orchestrator: { runDialog: jest.fn(async () => (
+        { replies: ['Передаю вас администратору 🤍'], escalated: true })) },
+    });
+    dispatcher.enqueue(1, 'k', meta, d);
+    await jest.advanceTimersByTimeAsync(1000);
+    await flushMicrotasks();
+    expect(d.followupQueue.schedule).not.toHaveBeenCalled();
+  });
+
+  // silent всегда идёт с replies:[] (closing.js/высокая оценка визита не дают
+  // текста) — поэтому deliveredReplies тут и так false ещё до проверки silent
+  // в shouldAwaitReply. Комбинация delivered:true + silent:true в реальном
+  // коде диспетчера недостижима (silent-ветка deliverReplies не зовёт), так
+  // что этот тест проверяет ровно то, что происходит на боевом пути.
+  test('silent (молчание на вежливости) → followupQueue.schedule НЕ вызван', async () => {
+    const d = deps({
+      ...followupDeps(),
+      orchestrator: { runDialog: jest.fn(async () => ({ replies: [], silent: true })) },
+    });
+    dispatcher.enqueue(1, 'k', meta, d);
+    await jest.advanceTimersByTimeAsync(1000);
+    await flushMicrotasks();
+    expect(d.followupQueue.schedule).not.toHaveBeenCalled();
+  });
+
+  // Синхронный TypeError (settings без getSettings — переименованный метод,
+  // старый мок) обязан уйти в лог, а НЕ проехать мимо .catch() общим catch()
+  // process() (тот шлёт клиенту лишнее «передаю администратору» поверх уже
+  // доставленного ответа). Ревью нашло это дефектом первой версии guard'а.
+  test('settings.getSettings недоступен (переименован/забыт в моке) → лог, без лишнего сообщения клиенту', async () => {
+    const d = deps({ ...followupDeps() });   // deps().settings — только isAllowed, getSettings нет
+    dispatcher.enqueue(1, 'k', meta, d);
+    await jest.advanceTimersByTimeAsync(1000);
+    await flushMicrotasks();
+    expect(d.followupQueue.schedule).not.toHaveBeenCalled();
+    expect(d.send).toHaveBeenCalledTimes(1);   // только штатный ответ модели, без страховки
+    expect(mockLogger.warn.mock.calls.some(c =>
+      /ожидание ответа не поставлено/.test(String(c[0])) && /getSettings/.test(String(c[0]))
+    )).toBe(true);
+  });
+});

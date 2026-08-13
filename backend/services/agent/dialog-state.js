@@ -38,6 +38,16 @@ async function setStatus(salonId, dialogKey, status, reason = null) {
         SET status = $3, escalated_reason = $4, updated_at = now()
       WHERE salon_id = $1 AND dialog_key = $2`,
     [salonId, dialogKey, status, reason]);
+  // Боевые пути эскалации (services/agent/tools/escalate-to-operator.js —
+  // escalate_to_operator; routes/chat.js — кнопка «Передать оператору») пишут
+  // в agent_dialogs СВОИМ SQL мимо этой функции и гасят очередь напоминаний
+  // сами, каждый в своём месте. У этой функции сегодня нет вызывающих с
+  // status='escalated' вовсе — ветка здесь для полноты контракта setStatus
+  // (кто бы её ни вызвал в будущем, гашение обязано случиться вместе со сменой
+  // статуса), а не потому, что через неё сейчас идёт боевая эскалация.
+  if (status === 'escalated') {
+    await require('./followup-queue').close(salonId, dialogKey, 'cancelled', 'operator');
+  }
 }
 
 // Пауза «дальше отвечает человек». Два входа, и правило у них одно:
@@ -58,6 +68,10 @@ async function pauseForOperator(salonId, dialogKey) {
   // Требуем лениво: chat-events тянет за собой express-слой, а dialog-state
   // подключается в юнит-тестах агента без него.
   require('../chat-events').emitAgentStatus(salonId, dialogKey, 'escalated', 'operator_reply');
+  // Диалог ведёт человек — напоминания Милы отменяются. Лениво по той же
+  // причине, что chat-events: юнит-тесты агента подключают dialog-state без
+  // express-слоя.
+  await require('./followup-queue').close(salonId, dialogKey, 'cancelled', 'operator');
 }
 
 // Снять паузу «отвечал администратор», если её поставили ДО открытия текущего

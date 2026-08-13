@@ -69,17 +69,10 @@ const SEND_STATUSES = new Set(['scheduled', 'sent', 'skipped', 'cancelled', 'fai
 // вызова без догадок.
 const RESULT_PACED = Object.freeze({ pacePaused: true });
 
-// Маркер «[сообщение администратора клиники]» предназначен основному агенту:
-// его промпт знает, что с ним делать, а care-промпт (который мы переиспользуем
-// в режиме free) — нет, и пометка ушла бы клиенту дословно. Срезаем с начала
-// КАЖДОЙ строки: реплики серии в транскрипте склеены через '\n'.
-const OPERATOR_MARK_PREFIX = `${history.OPERATOR_MARK} `;
-function stripOperatorMark(text) {
-  return String(text || '')
-    .split('\n')
-    .map((line) => (line.startsWith(OPERATOR_MARK_PREFIX) ? line.slice(OPERATOR_MARK_PREFIX.length) : line))
-    .join('\n');
-}
+// stripOperatorMark — ОДНА копия на care-/reminders-/followup-промпты, живёт
+// в history.js рядом с самой константой OPERATOR_MARK (правка по ревью
+// 2026-08-12: раньше было три побайтово одинаковых копии).
+const { stripOperatorMark } = history;
 
 // yclients_card_type_id ОБЯЗАТЕЛЕН (см. комментарий у applyBonus ниже) —
 // один SELECT на боевой и на сухой путь, чтобы поля не разъехались.

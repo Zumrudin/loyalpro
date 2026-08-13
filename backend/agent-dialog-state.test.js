@@ -2,9 +2,14 @@
 
 jest.mock('./db', () => ({ db: { one: jest.fn(), oneOrNone: jest.fn(), query: jest.fn(), any: jest.fn() } }));
 jest.mock('./services/chat-events', () => ({ emitAgentStatus: jest.fn() }));
+// dialog-state требует followup-queue ЛЕНИВО (require внутри функции), поэтому
+// мок должен лежать в реестре модулей ДО первого вызова — jest.mock поднимается
+// наверх файла автоматически (hoisting), этого достаточно.
+jest.mock('./services/agent/followup-queue', () => ({ close: jest.fn().mockResolvedValue(true) }));
 
 const { db } = require('./db');
 const chatEvents = require('./services/chat-events');
+const followupQueue = require('./services/agent/followup-queue');
 const state = require('./services/agent/dialog-state');
 
 beforeEach(() => jest.clearAllMocks());
@@ -41,6 +46,34 @@ describe('setStatus', () => {
     expect(sql).toMatch(/UPDATE agent_dialogs/i);
     expect(sql).toMatch(/status\s*=\s*\$3/i);
     expect(params).toEqual([1, 'k', 'escalated', 'жалоба']);
+  });
+
+  test('escalated — гасит очередь напоминаний', async () => {
+    db.query.mockResolvedValue({ rows: [] });
+    await state.setStatus(1, 'k', 'escalated', 'жалоба');
+    expect(followupQueue.close).toHaveBeenCalledTimes(1);
+    expect(followupQueue.close).toHaveBeenCalledWith(1, 'k', 'cancelled', 'operator');
+  });
+
+  test('bot — очередь НЕ трогает', async () => {
+    db.query.mockResolvedValue({ rows: [] });
+    await state.setStatus(1, 'k', 'bot', null);
+    expect(followupQueue.close).not.toHaveBeenCalled();
+  });
+});
+
+describe('pauseForOperator', () => {
+  test('апсертит паузу, шлёт SSE и гасит очередь напоминаний', async () => {
+    db.query.mockResolvedValue({ rows: [] });
+    await state.pauseForOperator(1, 'k');
+    const [sql, params] = db.query.mock.calls[0];
+    expect(sql).toMatch(/INSERT INTO agent_dialogs/i);
+    expect(sql).toMatch(/'escalated'/);
+    expect(sql).toMatch(/'operator_reply'/);
+    expect(params).toEqual([1, 'k']);
+    expect(chatEvents.emitAgentStatus).toHaveBeenCalledWith(1, 'k', 'escalated', 'operator_reply');
+    expect(followupQueue.close).toHaveBeenCalledTimes(1);
+    expect(followupQueue.close).toHaveBeenCalledWith(1, 'k', 'cancelled', 'operator');
   });
 });
 

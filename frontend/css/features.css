@@ -879,6 +879,29 @@ body.kb-editor .kb-admin-only { display: inline-flex; }
 .chat-dialog.chat-dialog-escalated.active { background:rgba(220,38,38,.2); }
 .chat-dialog.chat-dialog-escalated .chat-dialog-name { color:#dc2626; }
 .chat-badge-esc { background:#dc2626; }
+/* Чипы статуса ожидания ответа клиента (chat-wait-status.js). Цвета — своя
+   палитра поверх переменных темы (тех же, что у .chat-badge-esc), читается
+   в обеих темах: непрозрачный фон + белый текст, не завязан на var(--t1)/var(--bg). */
+.chat-wait-operator    { background:#dc2626; }
+.chat-wait-waiting     { background:#d97706; }
+.chat-wait-nudged      { background:#2563eb; }
+.chat-wait-no-response { background:#6b7280; }
+.chat-wait-expired     { background:#7c3aed; }
+.chat-wait-failed      { background:#b91c1c; }
+/* Панель фильтров по статусу ожидания — над списком диалогов. */
+.chat-wait-filters { flex:0 0 auto; display:flex; flex-wrap:wrap; gap:6px; padding:0 10px 10px; }
+.chat-wait-filter {
+  display:inline-flex; align-items:center; gap:5px; padding:5px 10px;
+  border:1px solid var(--bd); border-radius:999px; background:var(--bg);
+  color:var(--t2); font-size:12px; cursor:pointer; white-space:nowrap;
+}
+.chat-wait-filter:hover { border-color:var(--a); color:var(--t1); }
+.chat-wait-filter.active { border-color:var(--a); background:var(--a); color:#fff; }
+.chat-wait-filter-count {
+  font-size:10px; padding:1px 6px; border-radius:8px;
+  background:rgba(127,127,127,.25); color:inherit;
+}
+.chat-wait-filter.active .chat-wait-filter-count { background:rgba(255,255,255,.25); }
 .chat-avatar { flex:0 0 44px; width:44px; height:44px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:17px; font-weight:700; color:#fff; }
 .chat-dialog-body { flex:1; min-width:0; }
 .chat-dialog-top { display:flex; align-items:center; gap:6px; }
@@ -970,6 +993,8 @@ body.kb-editor .kb-admin-only { display: inline-flex; }
   .chat-agent-state { white-space:normal; }
 
   .chat-search { margin:8px; }
+  .chat-wait-filters { padding:0 8px 8px; gap:5px; }
+  .chat-wait-filter { padding:4px 8px; font-size:11px; }
   .chat-dialog { padding:11px 12px; }
   .chat-avatar { flex:0 0 40px; width:40px; height:40px; font-size:16px; }
   .chat-messages { padding:10px; }

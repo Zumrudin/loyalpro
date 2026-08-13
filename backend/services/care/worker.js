@@ -45,19 +45,10 @@ const RETRY_BACKOFF_S = 180;
 // (прод-лог 2026-08-10, таймауты у соседнего воркера напоминаний).
 const LLM_TIMEOUT_MS  = 90000;
 
-// Срезает OPERATOR_MARK (history.js) с начала КАЖДОЙ строки текста — реплики
-// серии в транскрипте склеены через '\n', одной проверки на весь текст мало.
-// Маркер предназначен основному агенту (его промпт и правило «РЕПЛИКИ
-// АДМИНИСТРАТОРА» знают, что с ним делать) — care-промпт про пометку не
-// знает вообще, поэтому без среза она ушла бы пациенту дословно в тексте
-// касания.
-const OPERATOR_MARK_PREFIX = `${history.OPERATOR_MARK} `;
-function stripOperatorMark(text) {
-  return String(text || '')
-    .split('\n')
-    .map((line) => (line.startsWith(OPERATOR_MARK_PREFIX) ? line.slice(OPERATOR_MARK_PREFIX.length) : line))
-    .join('\n');
-}
+// stripOperatorMark — ОДНА копия на care-/reminders-/followup-промпты, живёт
+// в history.js рядом с самой константой OPERATOR_MARK (правка по ревью
+// 2026-08-12: раньше было три побайтово одинаковых копии).
+const { stripOperatorMark } = history;
 
 const defaultDeps = {
   db: realDb,

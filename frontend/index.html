@@ -23,7 +23,7 @@
 <script src="js/core/auth.js?v=2026-06-02a"></script>
 <script src="js/core/nav.js?v=2026-08-10-hashnav"></script>
 <link rel="stylesheet" href="css/base.css?v=2026-08-10-mobile">
-<link rel="stylesheet" href="css/features.css?v=2026-08-10-chat-mobile">
+<link rel="stylesheet" href="css/features.css?v=2026-08-12c">
 </head>
 <body>
 
@@ -1588,6 +1588,9 @@
         <div class="chat-sidebar">
           <input class="chat-search" id="chat-search" type="search" autocomplete="off"
                  placeholder="🔎 Поиск по имени или номеру" oninput="onChatSearch(this.value)">
+          <!-- Фильтр по статусу ожидания ответа клиента (chat-wait-status.js).
+               Счётчики считаются по всем загруженным диалогам, не по отфильтрованным. -->
+          <div class="chat-wait-filters" id="chat-wait-filters"></div>
           <div class="chat-dialogs" id="chat-dialogs">
             <div class="empty">Загрузка…</div>
           </div>
@@ -1637,6 +1640,30 @@
               <span>до</span><input type="time" id="agent-schedule-end" style="width:120px">
             </div>
             <div class="fl" style="opacity:.7;margin-top:4px">Внутри окна отвечает по выбранному режиму, вне окна — только номерам из белого списка. Время московское.</div>
+          </div>
+          <div class="stg-section active">
+            <div class="fl">Напоминания о себе (если клиент не ответил)</div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap">
+              <div class="fg" style="flex:1;min-width:160px">
+                <label class="fl">Первое напоминание, через (мин)</label>
+                <input type="number" id="agent-followup-delay1" min="0" max="1440" placeholder="0 — не напоминать">
+              </div>
+              <div class="fg" style="flex:1;min-width:160px">
+                <label class="fl">Финальное сообщение, через (мин)</label>
+                <input type="number" id="agent-followup-delay2" min="0" max="1440" placeholder="60">
+              </div>
+            </div>
+            <div class="fl" style="opacity:.7;margin-top:-8px;margin-bottom:10px">Оба срока считаются от ПОСЛЕДНЕГО сообщения Милы, а не друг от друга. Рекомендуем 15 и 60.</div>
+            <div class="fg">
+              <label class="fl">Не писать позже (по Москве)</label>
+              <input type="time" id="agent-followup-latest" style="width:120px">
+              <div class="fl" style="opacity:.7;margin-top:4px;font-weight:400">Пусто — ограничения нет, действует только окно расписания агента выше.</div>
+            </div>
+            <div class="fg">
+              <label class="fl">Текст финального сообщения</label>
+              <textarea id="agent-followup-text" rows="3" placeholder="Например: Если у вас остались вопросы — просто напишите, буду рада помочь 🙂 (пусто — используется стандартный текст)"></textarea>
+            </div>
+            <div class="fl" style="opacity:.7">0 в первом поле — Мила не напоминает вовсе. Напоминания уходят только внутри окна расписания агента.</div>
           </div>
           <div class="stg-section active" id="agent-allow-section">
             <div class="fl">Белый список (кому отвечать в режиме «только указанным»)</div>
@@ -2425,9 +2452,10 @@ function fireConfetti() {
 <script src="js/pages/settings.js"></script>
 <script src="js/pages/portfolio.js"></script>
 <script src="js/pages/chat-dialog-sort.js?v=2026-07-31a"></script>
-<script src="js/pages/chat.js?v=2026-08-10-mobile"></script>
+<script src="js/pages/chat-wait-status.js?v=2026-08-12c"></script>
+<script src="js/pages/chat.js?v=2026-08-12a-waitstatus"></script>
 <script src="js/pages/chat-composer.js?v=2026-08-10-mobile"></script>
-<script src="js/pages/agent-settings.js?v=2026-07-31a"></script>
+<script src="js/pages/agent-settings.js?v=2026-08-12b"></script>
 <script src="js/pages/patient-portfolio.js?v=2026-06-01e"></script>
 <script src="js/pages/staff-dashboard.js?v=2026-06-11d"></script>
 <script src="js/pages/users.js"></script>

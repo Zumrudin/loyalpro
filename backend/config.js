@@ -152,6 +152,13 @@ module.exports = {
   // считается непрошедшей. Штатно подтверждение приходит за секунды.
   AGENT_DELIVERY_WATCHDOG_MIN: process.env.AGENT_DELIVERY_WATCHDOG_MIN
     ? parseInt(process.env.AGENT_DELIVERY_WATCHDOG_MIN, 10) : 5,
+  // Напоминания Милы о себе, когда пациент замолчал («ожидание ответа клиента»).
+  // По умолчанию ВКЛЮЧЕНО, но это НЕ значит «салон уже пишет»: включение — это
+  // followup_delay1_min > 0 в настройках салона, а дефолт схемы там 0.
+  // Аварийный рычаг AGENT_FOLLOWUP=false + рестарт гасит РОВНО отправки (воркер
+  // не стартует), строки очереди пишутся всегда — иначе у инцидента не будет
+  // журнала.
+  AGENT_FOLLOWUP: process.env.AGENT_FOLLOWUP !== 'false',
   // Провайдер базы знаний: 'aitunnel' | 'gemini' (старый релей/прямой вызов, откат).
   KB_PROVIDER:          process.env.KB_PROVIDER          || 'aitunnel',
 

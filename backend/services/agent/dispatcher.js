@@ -15,6 +15,7 @@ const toolEventsDefault = require('./tool-events');
 const chatPersist = require('../chat-persist');
 const deliveryWatchdog = require('./delivery-watchdog');
 const priceListData = require('./price-list-data');
+const followupQueueDefault = require('./followup-queue');
 const { createLogger } = require('../../logger');
 const logger = createLogger('AgentDispatcher');
 
@@ -111,6 +112,9 @@ async function process(salonId, dialogKey, meta, opts = {}) {
   };
   const escalate = opts.escalate || defaultEscalate;
   const priorBookingFailure = opts.priorBookingFailure || defaultPriorBookingFailure;
+  // Очередь ожидания ответа клиента — та же форма инжекции, что у остальных
+  // side-effect зависимостей выше: без неё проводку нельзя проверить тестом.
+  const followupQueue = opts.followupQueue || followupQueueDefault;
 
   // Вердикт для журнала инструментов: видел ли пациент реплики МОДЕЛИ этого хода.
   // turnId известен только со штатного результата runDialog (ранние выходы и
@@ -176,12 +180,15 @@ async function process(salonId, dialogKey, meta, opts = {}) {
   try {
     if (running.has(k)) { rerun.add(k); return; }
     running.add(k);
+    // Вынесена из try: нужна в finally, чтобы поставить ожидание ответа клиента
+    // (followupQueue.shouldAwaitReply читает writeSucceeded/escalated/silent).
+    let res = null;
     try {
       // Стоп-темы грузим здесь (у диспетчера уже есть settings), чтобы не тащить
       // зависимость от БД в оркестратор. Отсутствие метода в моке → пустой список.
       const stopTopics = settings.loadStopTopicsSafe
         ? await settings.loadStopTopicsSafe(salonId) : [];
-      const res = await orchestrator.runDialog(salonId, dialogKey,
+      res = await orchestrator.runDialog(salonId, dialogKey,
         { ctx: { phone: meta.phone, channel: meta.channel }, stopTopics });
       // Доставляем реплики, в т.ч. на ходе эскалации — это явное объявление о переводе.
       // Инвариант: при СВЕЖЕЙ эскалации клиент никогда не остаётся без сообщения.
@@ -267,6 +274,35 @@ async function process(salonId, dialogKey, meta, opts = {}) {
       // трёх шлёт только страховочный текст), выброшенный rerun-черновик и
       // молчание на alreadyEscalated.
       if (turnId) void toolEventsLog.markDelivered(turnId, deliveredReplies);
+      // Ожидание ответа клиента. ТА ЖЕ точка, что и вердикт памяти, и по той же
+      // причине: веток отправки в process() уже пять, и отдельный вызов рядом с
+      // каждой рано или поздно забыли бы. Best-effort и без await — строка
+      // очереди не должна задерживать возврат из хода.
+      if (followupQueue.shouldAwaitReply({
+        delivered: deliveredReplies,
+        writeSucceeded: res && res.writeSucceeded,
+        escalated: res && res.escalated,
+        silent: res && res.silent,
+      })) {
+        // Promise.resolve().then(...) ОБЯЗАТЕЛЕН — не упрощать в прямой вызов
+        // settings.getSettings(salonId).then(...): прямой вызов, если метода нет
+        // (мок без getSettings, будущий рефакторинг), бросает СИНХРОННО ДО
+        // построения цепочки — мимо .catch ниже, в общий catch process(), а тот
+        // шлёт пациенту лишнюю фразу «передаю администратору» поверх уже
+        // доставленного ответа. Обёртка переносит любой синхронный бросок внутрь
+        // цепочки промисов, и он становится отклонением, видимым в .catch.
+        // Якорь берём ЗДЕСЬ, а не внутри schedule(): между этой точкой и вставкой
+        // строки лежит поход в БД за настройками, и за это время клиент успевает
+        // ответить. Тогда вебхук гасить ещё нечего (строки нет), а строка ляжет с
+        // якорём ПОЗЖЕ его сообщения — воркер не увидит входящего «после якоря» и
+        // напомнит о себе тому, кто уже ответил. Якорь момента ДОСТАВКИ закрывает
+        // это окно: ответ клиента гарантированно свежее его.
+        const anchorAt = new Date();
+        void Promise.resolve()
+          .then(() => settings.getSettings(salonId))
+          .then(s => followupQueue.schedule(salonId, dialogKey, meta, s, { now: anchorAt }))
+          .catch(e => logger.warn(`dialog ${dialogKey}: ожидание ответа не поставлено (${e.message})`));
+      }
     }
     if (rerun.delete(k)) {
       logger.info(`dialog ${dialogKey}: отложенный прогон (сообщение пришло во время обработки)`);
