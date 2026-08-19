@@ -6,6 +6,11 @@ let _chatActiveKey = null;
 let _chatSearch = '';
 let _chatPollTimer = null;
 let _chatWaitFilter = 'all';   // chat-wait-status.js: 'all'|'waiting'|'operator'|'no_response'
+let _chatLoadSeq = 0;
+let _chatDialogsReqSeq = 0;
+let _chatDialogsAbort = null;
+
+const CHAT_FETCH_TIMEOUT_MS = 15000;
 
 const _chatEsc = (s) => String(s ?? '').replace(/[&<>"']/g, c =>
   ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -110,8 +115,38 @@ function chatOnHashArg(key) {
   }
 }
 
+function _chatAbortDialogsRequest() {
+  if (_chatDialogsAbort) {
+    _chatDialogsAbort.abort();
+    _chatDialogsAbort = null;
+  }
+}
+
+async function _chatFetchJson(path, { signal } = {}) {
+  showLbar(true);
+  try {
+    const headers = { 'Content-Type': 'application/json' };
+    const tok = localStorage.getItem('lp_tk');
+    if (tok) headers.Authorization = 'Bearer ' + tok;
+    const r = await fetch(path, { method: 'GET', headers, signal });
+    if (!r.ok) {
+      try {
+        const j = await r.json();
+        throw new Error(j.error || 'HTTP ' + r.status);
+      } catch (e) {
+        if (e instanceof SyntaxError) throw new Error('Ошибка сервера (HTTP ' + r.status + ')');
+        throw e;
+      }
+    }
+    if (r.status === 204) return null;
+    const text = await r.text();
+    return text ? JSON.parse(text) : null;
+  } finally { showLbar(false); }
+}
+
 // Вход на страницу: первичная загрузка + запуск живого обновления.
 async function loadChat() {
+  const loadSeq = ++_chatLoadSeq;
   _chatFsApply(_chatFsRead());
   _chatShowPane(!!_chatActiveKey);
   // Администратор-кассир видит чат, но не управляет настройками ИИ-агента.
@@ -124,7 +159,12 @@ async function loadChat() {
   const ta = document.getElementById('chat-input');
   if (ta) ta.placeholder = _chatIsNarrow()
     ? 'Сообщение…' : 'Сообщение… (Enter — отправить, Shift+Enter — перенос)';
-  await refreshChatDialogs(false);
+  const loaded = await refreshChatDialogs(false);
+  if (loadSeq !== _chatLoadSeq || document.body.dataset.page !== 'chat') return;
+  if (!loaded) {
+    startChatLive();
+    return;
+  }
   // Deep-link /#chat/<ключ> — открыть диалог сразу после загрузки списка.
   // Хвост адреса ГЛАВНЕЕ памяти модуля: клик по «Чат» в меню перезаписывает hash
   // без хвоста и обязан вернуть человека к списку, а не к прошлому диалогу.
@@ -137,6 +177,7 @@ async function loadChat() {
     // получил заглушку без каналов и отправить из него было нечего.
     _chatActiveKey = null;
     await openChatDialog(arg, { fromHash });
+    if (loadSeq !== _chatLoadSeq || document.body.dataset.page !== 'chat') return;
   } else {
     chatCloseDialog({ fromHash: true });
   }
@@ -154,15 +195,41 @@ function _chatHashArg() {
 // Загрузка/обновление списка диалогов. silent=true — фоновой опрос без спиннера.
 async function refreshChatDialogs(silent) {
   const listEl = document.getElementById('chat-dialogs');
-  if (!listEl) return;
-  if (!silent) listEl.innerHTML = '<div class="empty">Загрузка…</div>';
+  if (!listEl) return false;
+  const reqSeq = ++_chatDialogsReqSeq;
+  _chatAbortDialogsRequest();
+  const ctrl = new AbortController();
+  _chatDialogsAbort = ctrl;
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    ctrl.abort();
+  }, CHAT_FETCH_TIMEOUT_MS);
+  if (!silent) {
+    listEl._lastHtml = null;
+    listEl.innerHTML = '<div class="empty">Загрузка…</div>';
+  }
   try {
-    const data = await api('GET', '/api/chat/dialogs');
+    const data = await _chatFetchJson('/api/chat/dialogs', { signal: ctrl.signal });
+    if (reqSeq !== _chatDialogsReqSeq) return false;
     _chatDialogs = data.dialogs || [];
     renderChatDialogs();
+    return true;
   } catch (e) {
+    if (reqSeq !== _chatDialogsReqSeq) return false;
+    if (e && e.name === 'AbortError' && !timedOut) return false;
     console.error('chat:', e);
-    if (!silent) listEl.innerHTML = '<div class="empty">Ошибка загрузки диалогов</div>';
+    if (!silent) {
+      const msg = timedOut
+        ? 'Сервер не ответил за 15 секунд. Нажмите «Обновить».'
+        : 'Ошибка загрузки диалогов';
+      listEl._lastHtml = null;
+      listEl.innerHTML = '<div class="empty">' + msg + '</div>';
+    }
+    return false;
+  } finally {
+    clearTimeout(timer);
+    if (_chatDialogsAbort === ctrl) _chatDialogsAbort = null;
   }
 }
 
@@ -485,6 +552,8 @@ function startChatLive() {
 }
 
 function stopChatLive() {
+  _chatLoadSeq++;
+  _chatAbortDialogsRequest();
   if (_chatES) { _chatES.close(); _chatES = null; }
   if (_chatPollTimer) { clearInterval(_chatPollTimer); _chatPollTimer = null; }
 }

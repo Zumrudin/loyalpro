@@ -22,6 +22,8 @@ const authorship = require('../services/outgoing-authorship');
 const dialogState = require('../services/agent/dialog-state');
 const followupQueue = require('../services/agent/followup-queue');
 
+const CHAT_DIALOGS_LIMIT = 500;
+
 // admin_cashier — «Администратор-кассир»: полный доступ к чату наравне с owner/admin.
 const adminOnly = [auth, requireRole('owner', 'admin', 'admin_cashier')];
 // Для SSE: EventSource не умеет заголовки, токен едет в ?token= —
@@ -50,22 +52,36 @@ router.get('/dialogs', adminOnly, async (req, res) => {
   try {
     const salonId = req.user.salonId;
     const { rows } = await db.query(`
-      WITH msgs AS (
-        SELECT *, ${DIALOG_KEY_SQL} AS dialog_key
+      WITH latest AS (
+        SELECT DISTINCT ON (${DIALOG_KEY_SQL})
+               ${DIALOG_KEY_SQL} AS dialog_key, msg_ts
         FROM chatpush_messages
         WHERE salon_id = $1
+        ORDER BY ${DIALOG_KEY_SQL}, msg_ts DESC NULLS LAST, id DESC
+      ),
+      picked AS (
+        SELECT dialog_key
+        FROM latest
+        ORDER BY msg_ts DESC NULLS LAST
+        LIMIT $2
+      ),
+      msgs AS (
+        SELECT cm.*, ${DIALOG_KEY_SQL} AS dialog_key
+        FROM chatpush_messages cm
+        JOIN picked p ON p.dialog_key = ${DIALOG_KEY_SQL}
+        WHERE cm.salon_id = $1
       ),
       last_msg AS (
         SELECT DISTINCT ON (dialog_key)
                dialog_key, direction, msg_type, text, msg_ts, channel
-        FROM msgs ORDER BY dialog_key, msg_ts DESC NULLS LAST
+        FROM msgs ORDER BY dialog_key, msg_ts DESC NULLS LAST, id DESC
       ),
       last_in AS (
         SELECT DISTINCT ON (dialog_key)
                dialog_key, channel AS in_channel, sender_name AS in_sender,
                phone AS in_phone, chat_id AS in_chat_id, client_id
         FROM msgs WHERE direction = 'incoming'
-        ORDER BY dialog_key, msg_ts DESC NULLS LAST
+        ORDER BY dialog_key, msg_ts DESC NULLS LAST, id DESC
       ),
       agg AS (
         SELECT dialog_key, COUNT(*) AS cnt,
@@ -92,7 +108,7 @@ router.get('/dialogs', adminOnly, async (req, res) => {
       LEFT JOIN agent_dialogs ad ON ad.salon_id = $1 AND ad.dialog_key = m.dialog_key
       LEFT JOIN fu ON fu.dialog_key = m.dialog_key
       ORDER BY m.msg_ts DESC NULLS LAST
-    `, [salonId]);
+    `, [salonId, CHAT_DIALOGS_LIMIT]);
 
     const dialogs = rows.map(r => {
       const isGroup = isGroupKey(r.dialog_key);
@@ -120,7 +136,7 @@ router.get('/dialogs', adminOnly, async (req, res) => {
         followupStage:  r.fu_stage == null ? null : Number(r.fu_stage),
       };
     });
-    res.json({ dialogs });
+    res.json({ dialogs, limit: CHAT_DIALOGS_LIMIT });
   } catch (e) {
     logger.error(`dialogs failed: ${e.message}`);
     res.status(500).json({ error: 'Не удалось загрузить диалоги' });
