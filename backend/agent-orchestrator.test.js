@@ -89,6 +89,28 @@ const toolResp = (name, input, id = 'c1', text = '') => ({
 });
 
 describe('runDialog', () => {
+  test('AGENT_PROMPT_VERSION=v2 выбирает компактный сценарный промпт без изменения tool-цикла', async () => {
+    const deps = makeDeps({
+      history: {
+        loadTranscript: jest.fn(async () => ({
+          messages: [{ role: 'user', content: 'Сколько стоит чистка и можно записаться завтра?' }],
+          watermark: 100,
+        })),
+      },
+    });
+    deps.config = { ...require('./config'), AGENT_PROMPT_VERSION: 'v2', AGENT_CATALOG_IN_PROMPT: false };
+    deps.provider.createMessage.mockResolvedValueOnce(textResp('Стоимость уточню по услуге. На какой день посмотреть время?'));
+
+    const out = await orchestrator.runDialog(1, 'k', { deps });
+
+    expect(out.replies).toHaveLength(1);
+    const system = deps.provider.createMessage.mock.calls[0][0].system;
+    expect(system).toContain('СЦЕНАРИИ ЭТОГО СООБЩЕНИЯ: booking, price.');
+    expect(system).toContain('ТЕКУЩИЙ КОНТЕКСТ:');
+    expect(system).not.toContain('СЦЕНАРИЙ 3 — Отмена и перенос записи:');
+    expect(deps.provider.createMessage.mock.calls[0][0].tools).toBe(deps.registry.schemas);
+  });
+
   test('только текст → возвращает реплику, инструменты не звались', async () => {
     const deps = makeDeps();
     deps.provider.createMessage.mockResolvedValueOnce(textResp('Здравствуйте! Чем помочь?'));

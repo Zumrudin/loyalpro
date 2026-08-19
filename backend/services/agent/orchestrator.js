@@ -23,6 +23,7 @@ const bookingsBlock = require('./bookings-block');
 const priceListDefault = require('./price-list-data');
 const priceList = require('./price-list');
 const { buildSystemPrompt, FACTUAL_SECTION_MARKER } = require('./system-prompt');
+const { buildSystemPromptV2 } = require('./system-prompt-v2');
 const { stripAllStamps, stripStamp } = require('./transcript-time');
 const { createLogger } = require('../../logger');
 const logger = createLogger('AgentOrchestrator');
@@ -662,9 +663,13 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
     // Промпт собирается ВНУТРИ цикла: граница переписки известна только после
     // загрузки транскрипта. Сборка — конкатенация строк, перегенераций не больше
     // MAX_REGEN, поэтому цена пренебрежимая.
-    const system = buildSystemPrompt({
+    const promptBuilder = cfg.AGENT_PROMPT_VERSION === 'v2'
+      ? buildSystemPromptV2 : buildSystemPrompt;
+    const lastUser = [...messages].reverse().find(m => m && m.role === 'user');
+    const system = promptBuilder({
       ...promptOpts, session, firstContact, firstAgentReply, leadingClinic,
       promoBlock: promoKb ? promoKb.context : null,
+      lastUserText: lastUser && lastUser.content,
     });
 
     // Допустимые времена для финальной реплики: всё, что реально всплывало в

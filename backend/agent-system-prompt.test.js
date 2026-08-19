@@ -19,6 +19,26 @@ describe('buildSystemPrompt', () => {
     expect(p).toContain('search_knowledge_base');
   });
 
+  test('снимает конфликт лаконичности: первый контакт может спросить имя и цель одним сообщением', () => {
+    const p = buildSystemPrompt({});
+    expect(p).toMatch(/один понятный следующий шаг или один уточняющий вопрос/i);
+    expect(p).toMatch(/первом обращении.*имя и цель/i);
+  });
+
+  test('отвечает на все вопросы из последнего сообщения, не увлекая диалог старой темой', () => {
+    const p = buildSystemPrompt({});
+    expect(p).toMatch(/ВСЕ вопросы, которые пациент задал в последнем сообщении/i);
+    expect(p).toMatch(/Не подмешивай тему записи/i);
+  });
+
+  test('catalog-mode признаёт каталог источником фактов, а legacy-режим сохраняет инструменты', () => {
+    const catalog = buildSystemPrompt({ catalogBlock: PRICE_CATALOG });
+    const legacy = buildSystemPrompt({});
+    expect(catalog).toMatch(/из инструментов, а в режиме каталога — из раздела «КАТАЛОГ УСЛУГ КЛИНИКИ»/i);
+    expect(catalog).toMatch(/Каталог — источник фактов текущего хода/i);
+    expect(legacy).toMatch(/бери ТОЛЬКО из инструментов/i);
+  });
+
   test('требует согласие перед create_booking', () => {
     const p = buildSystemPrompt({});
     expect(p).toContain('create_booking');

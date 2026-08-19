@@ -68,6 +68,9 @@ module.exports = {
   ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY || '',
   AGENT_LLM_MODEL:   process.env.AGENT_LLM_MODEL   || 'claude-opus-4-8',
   AGENT_MAX_TOKENS:  process.env.AGENT_MAX_TOKENS ? parseInt(process.env.AGENT_MAX_TOKENS, 10) : 4096,
+  // v1 — действующий полный промпт; v2 — компактная сценарная версия.
+  // Не принимаем значение из пользовательского ввода: переключение только env.
+  AGENT_PROMPT_VERSION: process.env.AGENT_PROMPT_VERSION === 'v2' ? 'v2' : 'v1',
   // Окно присутствия живого администратора чата (мск): вне окна фразы эскалации
   // не обещают «с минуты на минуту» (services/agent/admin-hours.js).
   AGENT_ADMIN_HOURS: process.env.AGENT_ADMIN_HOURS || '09:00-21:00',
