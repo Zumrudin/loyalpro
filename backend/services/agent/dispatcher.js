@@ -3,6 +3,7 @@
 const config = require('../../config');
 const agentSettings = require('../agent-settings');
 const chatpush = require('../chatpush');
+const { recipientParams } = require('../chat');
 const orchestratorDefault = require('./orchestrator');
 const bookingEvents = require('./booking');
 const pendingReplies = require('./pending-replies');
@@ -351,10 +352,18 @@ async function defaultPriorBookingFailure(salonId, dialogKey) {
 async function defaultSend(meta, text) {
   const token = config.CHATPUSH.instanceToken;
   if (!token) { logger.error('CHATPUSH_INSTANCE_TOKEN not set — cannot reply'); return; }
+  const params = recipientParams(meta.channel, {
+    phone: meta.phone,
+    chat_id: meta.chatId,
+    isGroup: groupChat.isGroupMessage(meta),
+  });
+  if (!params) {
+    logger.error(`нет получателя для ответа ${meta.channel} phone=${meta.phone || ''} chatId=${meta.chatId || ''}`);
+    return null;
+  }
   const delivery = await chatpush.sendMessage(token, {
     text,
-    phone: meta.phone,
-    dispatchRouting: [chatpush.replyRoutingFor(meta.channel)],
+    ...params,
     replyToMessageId: meta.messageId,
   });
   // Chatpush доставляет из очереди и с многоминутной задержкой (эхо в webhook
@@ -389,6 +398,15 @@ async function defaultPersistOwn(salonId, dialogKey, meta, text, delivery) {
 async function defaultSendFile(meta, att) {
   const token = config.CHATPUSH.instanceToken;
   if (!token) { logger.error('CHATPUSH_INSTANCE_TOKEN not set — cannot send price photo'); return null; }
+  const params = recipientParams(meta.channel, {
+    phone: meta.phone,
+    chat_id: meta.chatId,
+    isGroup: groupChat.isGroupMessage(meta),
+  });
+  if (!params) {
+    logger.error(`нет получателя для фото ${meta.channel} phone=${meta.phone || ''} chatId=${meta.chatId || ''}`);
+    return null;
+  }
   const buf = await priceListData.readPhotoBuffer(att.fileUrl);
   if (!buf) { logger.warn(`фото прайса не найдено на диске: ${att.fileUrl}`); return null; }
   // Имя обязано содержать расширение (требование Chatpush); кириллицу не шлём.
@@ -396,8 +414,7 @@ async function defaultSendFile(meta, att) {
   const delivery = await chatpush.sendFile(token, {
     fileName: `price_${Date.now()}${ext}`,
     type: 'image',
-    phone: meta.phone,
-    dispatchRouting: [chatpush.replyRoutingFor(meta.channel)],
+    ...params,
   }, buf, att.mimeType);
   logger.info(`price photo ${meta.phone || ''} принято в доставку (delivery=${delivery && delivery.id != null ? delivery.id : 'n/a'}): ${att.category}`);
   return delivery;
