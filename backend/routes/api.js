@@ -102,7 +102,22 @@ function resolvePeriod(req) {
     if (from > to) [from, to] = [to, from];
     return { from, to };
   }
-  const days = Math.max(1, parseInt(req.query.period || 30));
+  const addDays = (iso, n) => {
+    const d = new Date(iso + 'T00:00:00Z');
+    d.setUTCDate(d.getUTCDate() + n);
+    return d.toISOString().slice(0, 10);
+  };
+  const preset = String(req.query.period || '').toLowerCase();
+  if (preset === 'today' || preset === 'day') return { from: todayMsk, to: todayMsk };
+  if (preset === 'week') {
+    const d = new Date(todayMsk + 'T00:00:00Z');
+    const dow = d.getUTCDay();
+    const back = dow === 0 ? 6 : dow - 1;
+    return { from: addDays(todayMsk, -back), to: todayMsk };
+  }
+  if (preset === 'month') return { from: todayMsk.slice(0, 8) + '01', to: todayMsk };
+  const parsedDays = Number.parseInt(req.query.period || '30', 10);
+  const days = Number.isFinite(parsedDays) ? Math.max(1, parsedDays) : 30;
   const back = new Date(todayMsk + 'T00:00:00Z');
   back.setUTCDate(back.getUTCDate() - (days - 1));
   return { from: back.toISOString().slice(0, 10), to: todayMsk };
