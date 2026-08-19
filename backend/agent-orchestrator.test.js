@@ -111,6 +111,54 @@ describe('runDialog', () => {
     expect(deps.provider.createMessage.mock.calls[0][0].tools).toBe(deps.registry.schemas);
   });
 
+  test('v2 вопрос о графике названного мастера отвечает по YClients без LLM и услуги', async () => {
+    const deps = makeDeps({
+      history: {
+        loadTranscript: jest.fn(async () => ({
+          messages: [{ role: 'user', content: 'Пери работает завтра?' }], watermark: 100,
+        })),
+      },
+      handlers: {
+        list_staff: jest.fn(async () => ({ staff: [{ yc_id: 1910274, name: 'Гаджиева Пери' }] })),
+        get_available_dates: jest.fn(async () => ({
+          schedule: [{ date: '2026-09-01', hours: [{ from: '10:00', to: '19:00' }] }],
+        })),
+      },
+    });
+    deps.config = { ...require('./config'), AGENT_PROMPT_VERSION: 'v2', AGENT_CATALOG_IN_PROMPT: false };
+
+    const out = await orchestrator.runDialog(1, 'k', {
+      deps, nowMs: Date.UTC(2026, 7, 19, 9, 0, 0),
+    });
+
+    expect(out.replies).toEqual(['Завтра Гаджиева Пери не принимает. Ближайший рабочий день — 1 сентября.']);
+    expect(deps.provider.createMessage).not.toHaveBeenCalled();
+    expect(deps.registry.handlers.get_available_dates).toHaveBeenCalledWith(1, {
+      staff_yc_id: 1910274, date_from: '2026-08-20', date_to: '2026-09-19',
+    });
+  });
+
+  test('«мастер не работает» не уходит пациенту как «всё занято»', async () => {
+    const deps = makeDeps({
+      handlers: {
+        get_available_slots: jest.fn(async () => ({
+          slots: [], staff_name: 'Гаджиева Пери', staff_not_working: true,
+          staff_next_working_date: '2026-09-01',
+        })),
+      },
+    });
+    deps.provider.createMessage
+      .mockResolvedValueOnce(toolResp('get_available_slots', {
+        staff_yc_id: 1910274, service_yc_id: 17987378, date: '2026-08-20',
+      }))
+      .mockResolvedValueOnce(textResp('У Пери всё расписано на завтра.'));
+
+    const out = await orchestrator.runDialog(1, 'k', { deps });
+
+    expect(out.replies).toEqual(['Гаджиева Пери в этот день не принимает. Ближайший рабочий день — 1 сентября.']);
+    expect(deps.provider.createMessage).toHaveBeenCalledTimes(2);
+  });
+
   test('только текст → возвращает реплику, инструменты не звались', async () => {
     const deps = makeDeps();
     deps.provider.createMessage.mockResolvedValueOnce(textResp('Здравствуйте! Чем помочь?'));

@@ -24,6 +24,7 @@ const priceListDefault = require('./price-list-data');
 const priceList = require('./price-list');
 const { buildSystemPrompt, FACTUAL_SECTION_MARKER } = require('./system-prompt');
 const { buildSystemPromptV2 } = require('./system-prompt-v2');
+const schedulePreflight = require('./staff-schedule-preflight');
 const { stripAllStamps, stripStamp } = require('./transcript-time');
 const { createLogger } = require('../../logger');
 const logger = createLogger('AgentOrchestrator');
@@ -139,6 +140,10 @@ function buildHardFixPrompt(hard) {
     parts.push(`называет время, которого нет ни в одной выдаче инструментов этого хода: ` +
       `${unknown.join(', ')} — этого времени у нас не подтверждено. Убери его: предложи только то, ` +
       'что реально вернули инструменты, либо запроси слоты заново');
+  }
+  const notWorking = val('staff_not_working_claim');
+  if (notWorking.length) {
+    parts.push(`говорит, что ${notWorking.join(', ')} занята или всё расписано, но свежий график подтвердил: специалист в этот день НЕ РАБОТАЕТ. Не называй это занятостью`);
   }
   return 'СЛУЖЕБНАЯ ПРОВЕРКА (пациент этого не видит): твой последний ответ ' +
     `${parts.join('; а также ')}. В ответе — ТОЛЬКО переписанный текст для пациента.`;
@@ -660,6 +665,50 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
       }
     }
 
+    // Вопрос «работает ли названный мастер сегодня/завтра» не зависит от
+    // услуги. В v2 отвечаем на него детерминированно по графику YClients, а не
+    // ждём, пока модель спросит услугу и попробует вывести график из слотов.
+    // Ветка read-only: она не создаёт записи и не переводит диалог оператору.
+    if (cfg.AGENT_PROMPT_VERSION === 'v2') {
+      const lastUser = [...messages].reverse().find(m => m && m.role === 'user');
+      try {
+        const prefetched = await schedulePreflight.run({
+          text: lastUser && lastUser.content,
+          nowMs,
+          salonId,
+          listStaff: registry.handlers.list_staff,
+          getAvailableDates: registry.handlers.get_available_dates,
+        });
+        if (prefetched) {
+          evBuffer.push('list_staff', {}, prefetched.listed, !!(prefetched.listed && prefetched.listed.error));
+          evBuffer.push('get_available_dates', {
+            staff_yc_id: prefetched.staff.yc_id,
+            date_from: prefetched.target.date,
+            date_to: schedulePreflight.addDays(prefetched.target.date, schedulePreflight.HORIZON_DAYS),
+          }, prefetched.dates, !!(prefetched.dates && prefetched.dates.error));
+          if (await history.hasIncomingAfter(salonId, dialogKey, watermark)) {
+            await evBuffer.flush(false);
+            continue;
+          }
+          let directReplies = [prefetched.reply];
+          if (firstContact) directReplies = greeting.ensureGreeting(directReplies, {
+            givenName: clientGivenName, salonName: opts.salonName,
+          });
+          if (firstAgentReply) directReplies = greeting.ensureIntroduction(directReplies, {
+            salonName: opts.salonName,
+          });
+          await state.setWatermark(salonId, dialogKey, watermark);
+          await evBuffer.flush(null);
+          return { replies: directReplies, escalated: false, sideEffect: false,
+            turnId: evBuffer.turnId, attachments: toolCtx.attachments, writeSucceeded: false };
+        }
+      } catch (e) {
+        // Fail-open только к штатному tool-циклу: не выдаём нечитанный график за
+        // отсутствие смены и не роняем весь диалог из-за read-only предвызова.
+        logger.warn(`dialog ${dialogKey}: предвызов графика мастера не удался (${e.message}) — обычный ход`);
+      }
+    }
+
     // Промпт собирается ВНУТРИ цикла: граница переписки известна только после
     // загрузки транскрипта. Сборка — конкатенация строк, перегенераций не больше
     // MAX_REGEN, поэтому цена пренебрежимая.
@@ -738,6 +787,7 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
     // Свободный день: правило промпта требует не называть время, а спросить половину
     // дня. Только измерение (free_day_time), см. checkFreeDayTime в reply-guard.
     let sawFreeDay = false;
+    const staffNotWorking = [];
 
     const replies = [];
     let escalated = false;
@@ -888,6 +938,9 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
         // alternative_staff[] — по строке результата это одна проверка на все ветки.
         if (resultJson && resultJson.includes('"free_day":true')) sawFreeDay = true;
         if (SLOT_READ_TOOLS.has(tc.name)) collectStaffAvailability(result, emptyStaff, availableStaff);
+        if (tc.name === 'get_available_slots' && result && result.staff_not_working && result.staff_name) {
+          staffNotWorking.push({ name: result.staff_name, nextWorkingDate: result.staff_next_working_date || null });
+        }
         // Источник для address-guard — СЫРОЙ текст статьи, а не JSON результата:
         // JSON-эскейп «\n» приклеивает букву n к первому слову следующей строки
         // (токен «nгенерала» вместо «генерала» — легальный адрес вырезался бы), а
@@ -1016,6 +1069,7 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
           availableStaff: [...availableStaff],
           patientTimes,
         }),
+        ...replyGuard.checkStaffNotWorkingClaim(joined, { staffNotWorking }),
         // «Консультация в подарок» один раз за диалог — только измерение.
         ...replyGuard.checkGiftRepeat(joined,
           { priorHasGift: replyGuard.GIFT_RE.test(priorAssistantText) }),
@@ -1025,18 +1079,26 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
       }
       const hard = replyGuard.hardViolations(violations);
       if (hard.length) {
-        // ОДИН корректирующий довызов без инструментов: убрать внутреннюю кухню,
-        // сохранив смысл. Второй раз не переписываем — доставляем как есть (лог уже был).
-        try {
-          const fix = await provider.createMessage({
-            system,
-            messages: convo.concat([{ role: 'user', content: buildHardFixPrompt(hard) }]),
-            tools: [],
-          }, { client: opts.client });
-          if (fix.text) { replies.length = 0; replies.push(fix.text); }
-          else logger.warn(`dialog ${dialogKey}: корректирующий довызов вернул пустой текст — отдаю исходную реплику`);
-        } catch (e) {
-          logger.warn(`dialog ${dialogKey}: корректирующий довызов не удался (${e.message}) — отдаю исходную реплику`);
+        const notWorking = hard.find(v => v.type === 'staff_not_working_claim');
+        const fact = notWorking && staffNotWorking.find(item => item.name === notWorking.value);
+        if (fact) {
+          logger.warn(`dialog ${dialogKey}: «не работает» выдано за «занято» — заменяю ответ фактом графика`);
+          replies.length = 0;
+          replies.push(schedulePreflight.renderNotWorkingReply(fact.name, fact.nextWorkingDate));
+        } else {
+          // ОДИН корректирующий довызов без инструментов: убрать внутреннюю кухню,
+          // сохранив смысл. Второй раз не переписываем — доставляем как есть (лог уже был).
+          try {
+            const fix = await provider.createMessage({
+              system,
+              messages: convo.concat([{ role: 'user', content: buildHardFixPrompt(hard) }]),
+              tools: [],
+            }, { client: opts.client });
+            if (fix.text) { replies.length = 0; replies.push(fix.text); }
+            else logger.warn(`dialog ${dialogKey}: корректирующий довызов вернул пустой текст — отдаю исходную реплику`);
+          } catch (e) {
+            logger.warn(`dialog ${dialogKey}: корректирующий довызов не удался (${e.message}) — отдаю исходную реплику`);
+          }
         }
       }
     }

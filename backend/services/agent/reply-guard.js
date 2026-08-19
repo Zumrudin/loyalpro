@@ -244,6 +244,19 @@ function checkStaffAttribution(text, opts = {}) {
   return named ? [{ type: 'alien_time_attribution', value: named }] : [];
 }
 
+// «Не работает» и «всё занято» — разные факты. Второе создаёт ложное
+// впечатление, что слот может освободиться, хотя YClients вернул отсутствие
+// смены. Проверяем только вместе с именем мастера из tool-результата: слово
+// «занято» без привязки может честно описывать другого специалиста.
+const NOT_WORKING_AS_BOOKED_RE = /(?:всё|все|день)\s+(?:расписан[а-яё]*|занят[а-яё]*)|(?:расписан[а-яё]*|занят[а-яё]*)\s+(?:полностью|целиком)/iu;
+function checkStaffNotWorkingClaim(text, opts = {}) {
+  const staff = (opts.staffNotWorking || []).filter(item => item && item.name);
+  const s = String(text || '');
+  if (!NOT_WORKING_AS_BOOKED_RE.test(s)) return [];
+  const found = staff.find(item => mentionsPerson(s, item.name));
+  return found ? [{ type: 'staff_not_working_claim', value: found.name }] : [];
+}
+
 // «Консультация в подарок» — один раз за диалог (правило Сценария 2). ТОЛЬКО
 // измерение, как offer_bypass: резать текст с упоминанием подарка рискованно
 // (фраза вплетена в предложение), а масштаб проблемы неизвестен — сначала лог.
@@ -277,13 +290,13 @@ function checkGiftRepeat(text, opts = {}) {
 // ДВА раза — оба в инциденте 79166524647, где модель назвала «18 августа 12:00
 // и 14:30» на дату, которую в тот ход вообще не спрашивала у инструмента. Ноль
 // ложных срабатываний против выдуманного времени, согласованного с пациентом.
-const HARD_TYPES = new Set(['taboo_word', 'id_leak', 'unknown_time', 'alien_time_attribution']);
+const HARD_TYPES = new Set(['taboo_word', 'id_leak', 'unknown_time', 'alien_time_attribution', 'staff_not_working_claim']);
 function hardViolations(violations) {
   return (violations || []).filter(v => HARD_TYPES.has(v.type));
 }
 
 module.exports = {
   extractTimes, checkOfferedTimes, checkOfferDeviation, checkFreeDayTime, lintReply, hardViolations,
-  checkStaffAttribution, mentionsPerson, checkGiftRepeat, GIFT_RE,
+  checkStaffAttribution, checkStaffNotWorkingClaim, mentionsPerson, checkGiftRepeat, GIFT_RE,
   OTHER_TIME_REQUEST_RE,
 };
