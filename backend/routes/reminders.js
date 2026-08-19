@@ -164,22 +164,60 @@ const RULE_COLUMNS = `
   send_interval_min AS "sendIntervalMin",
   created_at AS "createdAt"`;
 
+const RECORD_AMOUNT_SQL = `
+  COALESCE(
+    (SELECT SUM((svc->>'cost_to_pay')::numeric)
+       FROM jsonb_array_elements(COALESCE(rec.raw_payload->'services','[]'::jsonb)) svc
+      WHERE (svc->>'cost_to_pay') ~ '^-?[0-9]+(\\.[0-9]+)?$'),
+    (SELECT SUM((svc->>'cost')::numeric)
+       FROM jsonb_array_elements(COALESCE(rec.services,'[]'::jsonb)) svc
+      WHERE (svc->>'cost') ~ '^-?[0-9]+(\\.[0-9]+)?$'),
+    rec.amount,
+    0
+  )`;
+
 // GET /rules — правила со счётчиками очереди, отправок и конверсии.
 router.get('/rules', guard, async (req, res) => {
   try {
     const rows = await db.any(
-      `SELECT ${RULE_COLUMNS},
-              (SELECT count(*) FROM reminder_queue q
-                WHERE q.rule_id = r.id AND q.status = 'scheduled')::int AS "queuedCount",
-              (SELECT count(*) FROM reminder_queue q
-                WHERE q.rule_id = r.id AND q.status = 'sent')::int AS "sentCount",
-              (SELECT count(*) FROM reminder_queue q
-                WHERE q.rule_id = r.id AND q.conversion_record_id IS NOT NULL)::int AS "convertedCount",
-              (SELECT count(*) FROM reminder_queue q
-                WHERE q.rule_id = r.id AND q.visited_at IS NOT NULL)::int AS "visitedCount",
-              (SELECT COALESCE(sum(q.bonus_accrued), 0) FROM reminder_queue q
-                WHERE q.rule_id = r.id)::int AS "bonusTotal"
+      `WITH queue_stats AS (
+         SELECT q.rule_id,
+                count(*) FILTER (WHERE q.status = 'scheduled')::int AS queued_count,
+                count(*) FILTER (WHERE q.status = 'sent')::int AS sent_count,
+                count(*) FILTER (WHERE q.conversion_record_id IS NOT NULL)::int AS converted_count,
+                count(*) FILTER (WHERE q.visited_at IS NOT NULL)::int AS visited_count,
+                COALESCE(sum(q.bonus_accrued), 0)::int AS bonus_total,
+                COALESCE(sum(conv.amount)
+                  FILTER (WHERE q.conversion_record_id IS NOT NULL), 0) AS conversion_amount_total
+           FROM reminder_queue q
+           LEFT JOIN LATERAL (
+             SELECT ${RECORD_AMOUNT_SQL} AS amount
+               FROM records rec
+              WHERE rec.salon_id = q.salon_id AND rec.yclients_record_id = q.conversion_record_id
+              LIMIT 1
+           ) conv ON TRUE
+          WHERE q.salon_id = $1 AND q.rule_id IS NOT NULL
+          GROUP BY q.rule_id
+       ),
+       revenue_stats AS (
+         SELECT q.rule_id, COALESCE(sum(ro.amount), 0) AS visit_revenue_total
+           FROM reminder_queue q
+           JOIN revenue_operations ro
+             ON ro.salon_id = q.salon_id AND ro.yclients_record_id = q.conversion_record_id
+          WHERE q.salon_id = $1 AND q.rule_id IS NOT NULL AND q.visited_at IS NOT NULL
+          GROUP BY q.rule_id
+       )
+       SELECT ${RULE_COLUMNS},
+              COALESCE(qs.queued_count, 0)::int AS "queuedCount",
+              COALESCE(qs.sent_count, 0)::int AS "sentCount",
+              COALESCE(qs.converted_count, 0)::int AS "convertedCount",
+              COALESCE(qs.visited_count, 0)::int AS "visitedCount",
+              COALESCE(qs.bonus_total, 0)::int AS "bonusTotal",
+              COALESCE(qs.conversion_amount_total, 0) AS "conversionAmountTotal",
+              COALESCE(rs.visit_revenue_total, 0) AS "visitRevenueTotal"
          FROM reminder_rules r
+         LEFT JOIN queue_stats qs ON qs.rule_id = r.id
+         LEFT JOIN revenue_stats rs ON rs.rule_id = r.id
         WHERE r.salon_id = $1
         ORDER BY r.created_at DESC`,
       [req.user.salonId]);
@@ -648,6 +686,17 @@ const QUEUE_COLUMNS = `
   q.balance_before AS "balanceBefore", q.bonus_tier AS "bonusTier",
   q.bonus_accrued AS "bonusAccrued", q.bonus_txn_ok AS "bonusTxnOk",
   q.conversion_record_id AS "conversionRecordId", q.converted_at AS "convertedAt",
+  COALESCE((
+    SELECT ${RECORD_AMOUNT_SQL}
+      FROM records rec
+     WHERE rec.salon_id = q.salon_id AND rec.yclients_record_id = q.conversion_record_id
+     LIMIT 1
+  ), 0) AS "conversionAmount",
+  CASE WHEN q.visited_at IS NOT NULL THEN COALESCE((
+    SELECT sum(ro.amount)
+      FROM revenue_operations ro
+     WHERE ro.salon_id = q.salon_id AND ro.yclients_record_id = q.conversion_record_id
+  ), 0) ELSE 0 END AS "visitRevenue",
   q.visited_at AS "visitedAt", q.source, q.anchor_services AS "anchorServices",
   q.anchor_visit_at AS "anchorVisitAt", c.name AS "clientName",
   EXISTS (SELECT 1 FROM reminder_suppressions s

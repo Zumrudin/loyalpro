@@ -404,6 +404,13 @@ async function runMigrations(client) {
     CREATE INDEX IF NOT EXISTS idx_revenue_ops_salon_cat_date
       ON revenue_operations(salon_id, category, operation_date)
   `).catch(() => {});
+  // Метрики напоминаний о повторном визите: фактическая выручка считается по
+  // финансовым операциям, привязанным к атрибутированной записи YClients.
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS idx_revenue_ops_salon_record
+      ON revenue_operations(salon_id, yclients_record_id)
+      WHERE yclients_record_id IS NOT NULL
+  `).catch(() => {});
 
   // ── Widen source column to VARCHAR(32) if it was created as VARCHAR(16) ──
   await client.query(`

@@ -76,7 +76,9 @@ function remRenderRules() {
             <span class="care-stat on" title="Ждут отправки"><b>${r.queuedCount}</b> в очереди</span>
             <span class="care-stat" title="Всего отправлено напоминаний"><b>${r.sentCount}</b> отправлено</span>
             <span class="care-stat" title="Записались после напоминания${conv === null ? '' : ` — ${conv}% от отправленных`}"><b>${r.convertedCount}</b> записались${conv === null ? '' : ` · ${conv}%`}</span>
+            <span class="care-stat" title="Плановая сумма записей, созданных после напоминания"><b>${remRub(r.conversionAmountTotal)}</b> перезапись</span>
             <span class="care-stat" title="Дошли до визита"><b>${r.visitedCount}</b> дошли</span>
+            <span class="care-stat" title="Фактическая выручка по визитам, до которых дошли после напоминания"><b>${remRub(r.visitRevenueTotal)}</b> выручка</span>
             <span class="care-stat" title="Начислено бонусов по этому правилу"><b>${r.bonusTotal}</b> бонусов</span>
           </div>
         </div>
@@ -546,7 +548,7 @@ async function remLoadHistory() {
   // строки без единого признака, что идёт перезагрузка (на медленной сети это
   // читается как «фильтр не сработал»).
   const body = document.getElementById('remHistBody');
-  if (body) body.innerHTML = '<tr><td colspan="9" class="empty">Загрузка…</td></tr>';
+  if (body) body.innerHTML = '<tr><td colspan="11" class="empty">Загрузка…</td></tr>';
   if (!_remRules.length) await remLoadRules();
   const q = new URLSearchParams();
   const rule = document.getElementById('remHistRule').value;
@@ -563,7 +565,7 @@ async function remLoadHistory() {
     remRenderHistory(d.rows || []);
   } catch (e) {
     notify(e.message || 'Не удалось загрузить историю', 'err');
-    if (body) body.innerHTML = `<tr><td colspan="9" class="empty" style="color:var(--danger)">Ошибка: ${esc(e.message || 'не удалось загрузить историю')}</td></tr>`;
+    if (body) body.innerHTML = `<tr><td colspan="11" class="empty" style="color:var(--danger)">Ошибка: ${esc(e.message || 'не удалось загрузить историю')}</td></tr>`;
   }
 }
 
@@ -650,7 +652,7 @@ function remPickPlanDay(date) {
 function remRenderHistory(rows) {
   const body = document.getElementById('remHistBody');
   if (!rows.length) {
-    body.innerHTML = '<tr><td colspan="9" class="empty">Отправок пока нет</td></tr>';
+    body.innerHTML = '<tr><td colspan="11" class="empty">Отправок пока нет</td></tr>';
     return;
   }
   body.innerHTML = rows.map(r => {
@@ -678,7 +680,9 @@ function remRenderHistory(rows) {
       <td data-label="Статус"><span class="care-badge" style="background:${st.color}22;color:${st.color}">${esc(st.lbl)}</span>
           ${r.reason ? `<div style="font-size:11px;color:var(--t3);margin-top:2px">${esc(r.reason)}</div>` : ''}</td>
       <td data-label="Записался">${r.convertedAt ? '✅ ' + remFmt(r.convertedAt) : '—'}</td>
+      <td data-label="Сумма записи" style="font-weight:600;text-align:right">${r.convertedAt ? remRub(r.conversionAmount) : '—'}</td>
       <td data-label="Дошёл">${r.visitedAt ? '✅ ' + remFmt(r.visitedAt) : '—'}</td>
+      <td data-label="Выручка" style="font-weight:600;text-align:right">${r.visitedAt ? remRub(r.visitRevenue) : '—'}</td>
       <td class="mtbl-act mtbl-hide-empty">${r.status === 'scheduled'
              ? `<button class="btn btn-sec btn-sm" onclick="remCancelQueued(${r.id})">Отменить отправку</button>`
              : (r.ruleId ? `<button class="btn btn-sec btn-sm" onclick="remToggleMute(${r.ruleId}, '${escJs(r.phone)}', ${!r.muted})"
@@ -710,4 +714,10 @@ function remFmt(v) {
   const d = new Date(v);
   if (isNaN(d.getTime())) return '—';
   return d.toLocaleString('ru-RU', { timeZone: 'Europe/Moscow', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+}
+
+function remRub(v) {
+  const n = Number(v) || 0;
+  if (n <= 0) return '—';
+  return `${Math.round(n).toLocaleString('ru-RU')} ₽`;
 }
