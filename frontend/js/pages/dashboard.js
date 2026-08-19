@@ -259,10 +259,7 @@ async function loadDashboard() {
       dashRange.from = r.from; dashRange.to = r.to;
     }
     const q = '?from=' + dashRange.from + '&to=' + dashRange.to;
-    const [d, bon] = await Promise.all([
-      api('GET', '/api/analytics/dashboard' + q),
-      api('GET', '/api/analytics/bonuses' + q)
-    ]);
+    const d = await api('GET', '/api/analytics/dashboard' + q);
     const s = d.stats;
     const periodSuffix = 'за ' + formatPeriodLabel(dashRange.from, dashRange.to);
 
@@ -318,7 +315,12 @@ async function loadDashboard() {
     buildLvlDash(d.levelDist, s.totalClients);
     buildRecentTx(d.recentTxns);
     buildTopSvc(d.topServices);
-    buildBfChart(bon);
+    try {
+      buildBfChart(await api('GET', '/api/analytics/bonuses' + q));
+    } catch (e) {
+      console.warn('Bonus chart failed:', e);
+      buildBfChart([]);
+    }
     buildLvlChart(d.levelDist);
     if (d.syncStatus?.finished_at) {
       const _syncTxt = 'Синхр.: ' + timeSince(d.syncStatus.finished_at);

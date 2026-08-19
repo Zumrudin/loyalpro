@@ -108,6 +108,15 @@ function resolvePeriod(req) {
   return { from: back.toISOString().slice(0, 10), to: todayMsk };
 }
 
+async function optionalAnalyticsQuery(label, fn, fallback) {
+  try {
+    return await fn();
+  } catch (e) {
+    logger.warn(`${label}: ${e.message}`);
+    return fallback;
+  }
+}
+
 router.get('/analytics/dashboard', auth, async (req, res) => {
   try {
     const sid = req.user.salonId;
@@ -178,37 +187,57 @@ router.get('/analytics/dashboard', auth, async (req, res) => {
       )
       SELECT COUNT(*) FROM qualifying
       WHERE first_visit BETWEEN $2::date AND $3::date`;
-    const [tc,ac,slp,nc,bs,rev,bonusStat,topSvc,lvlDist,daily,recentTx,lastSync,tgCount,cardCount,bonEconomy,revByCatRows] = await Promise.all([
+    // Keep dashboard reads in small batches: fanning out 15+ pool.query calls
+    // from one request exhausts the default pg pool on dev/prod, while strict
+    // serial execution makes the dashboard visibly slower.
+    const [tc, ac, slp, bs] = await Promise.all([
       db.one('SELECT COUNT(*) FROM clients WHERE salon_id=$1',[sid]),
       db.one(`SELECT COUNT(*) FROM clients WHERE salon_id=$1 AND (last_visit_at AT TIME ZONE 'Europe/Moscow')::date BETWEEN $2::date AND $3::date`,p),
       db.one(`SELECT COUNT(*) FROM clients WHERE salon_id=$1 AND last_visit_at<NOW()-INTERVAL '60 days' AND visits_count>0`,[sid]),
-      db.one(primaryClientsSql,p),
       db.one(`SELECT COALESCE(SUM(bonus_balance),0) as tb, COALESCE(SUM(total_spent),0) as ts FROM clients WHERE salon_id=$1`,[sid]),
+    ]);
+    const [nc, rev, bonusStat, cardCount] = await Promise.all([
+      db.one(primaryClientsSql,p),
       db.one(`SELECT COUNT(*) as rc, COALESCE(SUM(amount),0) as rv FROM records WHERE salon_id=$1 AND status IN ('completed','confirmed','arrived') AND COALESCE((visit_datetime AT TIME ZONE 'Europe/Moscow')::date, visit_date::date) BETWEEN $2::date AND $3::date`,p),
       db.one(bonusStatsSql,p),
-      // db.any() — may be empty if no completed records in period
-      db.any(`SELECT svc->>'title' as service_name, COUNT(DISTINCT r.id) as cnt, SUM((svc->>'cost_to_pay')::numeric) as total_amount FROM records r, jsonb_array_elements(COALESCE(r.services,'[]'::jsonb)) svc WHERE r.salon_id=$1 AND r.status IN ('completed','confirmed','arrived') AND COALESCE((r.visit_datetime AT TIME ZONE 'Europe/Moscow')::date, r.visit_date::date) BETWEEN $2::date AND $3::date AND svc->>'title' IS NOT NULL GROUP BY svc->>'title' ORDER BY svc->>'title' ASC LIMIT 100000`,p),
+      db.one(`SELECT COUNT(*) FROM clients WHERE salon_id=$1 AND yclients_card_id IS NOT NULL`,[sid]),
+    ]);
+    // db.any() — may be empty if no completed records in period
+    const [topSvc, lvlDist, daily] = await Promise.all([
+      db.any(`SELECT svc->>'title' as service_name, COUNT(DISTINCT r.id) as cnt,
+                       SUM(CASE WHEN (svc->>'cost_to_pay') ~ '^-?[0-9]+(\\.[0-9]+)?$' THEN (svc->>'cost_to_pay')::numeric ELSE 0 END) as total_amount
+                FROM records r, jsonb_array_elements(COALESCE(r.services,'[]'::jsonb)) svc
+                WHERE r.salon_id=$1 AND r.status IN ('completed','confirmed','arrived')
+                  AND COALESCE((r.visit_datetime AT TIME ZONE 'Europe/Moscow')::date, r.visit_date::date) BETWEEN $2::date AND $3::date
+                  AND svc->>'title' IS NOT NULL
+                GROUP BY svc->>'title' ORDER BY svc->>'title' ASC LIMIT 100000`,p),
       // db.any() — may be empty if no clients yet
       db.any(`SELECT loyalty_level, COUNT(*) as cnt FROM clients WHERE salon_id=$1 GROUP BY loyalty_level`,[sid]),
       // db.any() — may be empty if no revenue data in period
       db.any(`WITH rev AS (SELECT COALESCE((visit_datetime AT TIME ZONE 'Europe/Moscow')::date, visit_date::date)::date as d, COUNT(*) as records, COALESCE(SUM(amount),0) as revenue FROM records WHERE salon_id=$1 AND status IN ('completed','confirmed','arrived') AND COALESCE((visit_datetime AT TIME ZONE 'Europe/Moscow')::date, visit_date::date) BETWEEN $2::date AND $3::date GROUP BY COALESCE((visit_datetime AT TIME ZONE 'Europe/Moscow')::date, visit_date::date)), bon AS (SELECT (COALESCE(lct.txn_date,lct.created_at) AT TIME ZONE 'Europe/Moscow')::date as d, COALESCE(SUM(CASE WHEN lct.amount>0 THEN lct.amount ELSE 0 END),0) as bonuses_accrued, COALESCE(SUM(CASE WHEN lct.amount<0 THEN ABS(lct.amount) ELSE 0 END),0) as bonuses_redeemed FROM loyalty_card_transactions lct JOIN clients c ON c.id=lct.client_id WHERE c.salon_id=$1 AND (COALESCE(lct.txn_date,lct.created_at) AT TIME ZONE 'Europe/Moscow')::date BETWEEN $2::date AND $3::date GROUP BY (COALESCE(lct.txn_date,lct.created_at) AT TIME ZONE 'Europe/Moscow')::date) SELECT rev.d::text as visit_date, rev.records, rev.revenue, COALESCE(bon.bonuses_accrued,0) as bonuses_accrued, COALESCE(bon.bonuses_redeemed,0) as bonuses_redeemed FROM rev LEFT JOIN bon ON bon.d=rev.d ORDER BY rev.d`,p),
+    ]);
+    // db.oneOrNone() — sync may never have run; db.one() would throw on 0 rows
+    const [recentTx, lastSync, tgCount, bonEconomy, revByCatRows] = await Promise.all([
       // db.any() — may be empty if no transactions yet
       db.any(`SELECT sub.*, c.name as client_name FROM (SELECT DISTINCT ON (client_id, title, txn_date::date, amount) lct.id, lct.txn_date as created_at, lct.amount, lct.title as description, lct.client_id FROM loyalty_card_transactions lct JOIN clients c2 ON c2.id=lct.client_id WHERE c2.salon_id=$1 ORDER BY client_id, title, txn_date::date, amount, lct.txn_date DESC NULLS LAST) sub JOIN clients c ON c.id=sub.client_id ORDER BY sub.created_at DESC NULLS LAST LIMIT 15`,[sid]),
-      // db.oneOrNone() — sync may never have run; db.one() would throw on 0 rows
-      db.oneOrNone(`SELECT * FROM sync_logs WHERE salon_id=$1 ORDER BY started_at DESC LIMIT 1`,[sid]),
-      botDb.one(`SELECT COUNT(*) FROM clients_peri WHERE tg_id IS NOT NULL`),
-      db.one(`SELECT COUNT(*) FROM clients WHERE salon_id=$1 AND yclients_card_id IS NOT NULL`,[sid]),
+      optionalAnalyticsQuery('dashboard sync status failed', () =>
+        db.oneOrNone(`SELECT * FROM sync_logs WHERE salon_id=$1 ORDER BY started_at DESC LIMIT 1`,[sid]), null),
+      optionalAnalyticsQuery('dashboard telegram clients failed', () =>
+        db.one(`SELECT COUNT(DISTINCT c.id)
+                FROM clients c
+                JOIN mobile_telegram_links mtl ON mtl.phone = c.phone
+                WHERE c.salon_id=$1`, [sid]), { count: 0 }),
       // db.any() — may be empty if no transactions in period
       db.any(`SELECT CASE WHEN lct.title ILIKE '%день рождения%' OR lct.title ILIKE '%ДР%' OR lct.title ILIKE '%подарок%' THEN 'birthday' WHEN lct.type='redemption' AND lct.title ILIKE '%отмена%' THEN 'cancellation' WHEN lct.type='redemption' THEN 'redemption' ELSE 'accrual' END as type, COALESCE(SUM(ABS(lct.amount)),0) as total FROM loyalty_card_transactions lct JOIN clients c ON c.id=lct.client_id WHERE c.salon_id=$1 AND (COALESCE(lct.txn_date,lct.created_at) AT TIME ZONE 'Europe/Moscow')::date BETWEEN $2::date AND $3::date GROUP BY 1 ORDER BY total DESC`,p),
       // db.any() — revenue breakdown by category; empty if revenue_operations has no rows in period
-      db.any(`
+      optionalAnalyticsQuery('dashboard revenue category breakdown failed', () => db.any(`
         SELECT category, COALESCE(SUM(amount),0) AS total
         FROM revenue_operations
         WHERE salon_id=$1
           AND operation_date BETWEEN $2::date AND $3::date
           AND category IN ('services','goods','abonement','certificate','deposit')
         GROUP BY category
-      `, p),
+      `, p), []),
     ]);
     const revByCat = { services: 0, goods: 0, abonement: 0, certificate: 0, deposit: 0 };
     for (const row of revByCatRows) {
@@ -221,7 +250,10 @@ router.get('/analytics/dashboard', auth, async (req, res) => {
       revByCat.total = revByCat.services;
     }
     res.json({ stats: { totalClients: parseInt(tc.count), activeClients: parseInt(ac.count), sleepingClients: parseInt(slp.count), newClients: parseInt(nc.count), totalBonusBalance: parseFloat(bs.tb), totalSpent: parseFloat(bs.ts), periodRevenue: revByCat.total, periodRevenueByCategory: revByCat, periodRecords: parseInt(rev.rc), periodBonuses: parseFloat(bonusStat.accrued), periodRedeemed: parseFloat(bonusStat.redeemed), telegramClients: parseInt(tgCount.count), cardClients: parseInt(cardCount.count) }, period: { from, to }, levelDist: lvlDist, topServices: topSvc, dailyRevenue: daily, recentTxns: recentTx, syncStatus: lastSync, bonusEconomy: bonEconomy });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) {
+    logger.error(`dashboard analytics failed: ${e.message}`);
+    res.status(500).json({ error: e.message });
+  }
 });
 
 // ── Personal Staff Dashboard (для role=specialist) ─────────────────

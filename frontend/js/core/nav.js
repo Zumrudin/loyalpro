@@ -61,6 +61,7 @@ function navTo(p, opts) {
   _navPage = p;
   document.body.dataset.page = p;
   _navSyncHash(p, opts);
+  if (p === 'dashboard')       { loadDashboard(); loadLs(); }
   if (p === 'clients')         loadClients();
   if (p === 'records')         { setDefDates(); loadRecords(1); }
   if (p === 'staff-analytics') loadStaffAnalytics();

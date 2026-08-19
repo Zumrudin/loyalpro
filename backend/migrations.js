@@ -730,6 +730,42 @@ async function runMigrations(client) {
       ON records (salon_id, yclients_client_id)
   `).catch(() => {});
 
+  // ── Owner dashboard: period/status filters ─────────────────────
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS idx_records_dashboard_date_status
+      ON records (salon_id, visit_date, status)
+      WHERE status IN ('completed','confirmed','arrived')
+  `).catch(() => {});
+
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS idx_records_dashboard_client_first
+      ON records (salon_id, client_id, visit_date)
+      WHERE client_id IS NOT NULL AND status IN ('completed','arrived')
+  `).catch(() => {});
+
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS idx_clients_dashboard_last_visit
+      ON clients (salon_id, last_visit_at)
+      WHERE last_visit_at IS NOT NULL
+  `).catch(() => {});
+
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS idx_lct_dashboard_salon_client_date
+      ON loyalty_card_transactions (salon_id, client_id, txn_date)
+      WHERE txn_date IS NOT NULL
+  `).catch(() => {});
+
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS idx_lct_dashboard_salon_record_amount
+      ON loyalty_card_transactions (salon_id, record_id, amount)
+      WHERE record_id IS NOT NULL
+  `).catch(() => {});
+
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS idx_bonus_tx_dashboard_salon_created
+      ON bonus_transactions (salon_id, created_at)
+  `).catch(() => {});
+
   // ── Telegram broadcasts ────────────────────────────────────────
   // Рассылка сообщений подписчикам Telegram-бота. Очередь живёт в основной
   // БД (broadcasts + broadcast_recipients), а сам список подписчиков
