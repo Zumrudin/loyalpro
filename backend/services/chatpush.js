@@ -35,6 +35,26 @@ function qs(params) {
   return sp.toString();
 }
 
+/**
+ * Ошибка HTTP от Chatpush с ТЕЛОМ ответа в сообщении. ЗАЧЕМ: axios кладёт в
+ * `e.message` только «Request failed with status code 422», а причину отказа
+ * (какой параметр не понравился, что не так с получателем) API пишет в теле —
+ * и оно молча терялось. Инцидент 2026-09-07 (диалог 79165944414, MAX): оба
+ * фото прайса и следом ручная отправка администратора получили 422, а разбор
+ * упёрся в голый код — тот же класс, что «неизвестно, что модель написала».
+ * Тело режем: там бывают длинные списки ошибок валидации, а в лог идёт строка.
+ */
+function apiError(op, e) {
+  const st = e && e.response && e.response.status;
+  if (!st) return e;
+  let body = '';
+  try { body = JSON.stringify(e.response.data); } catch (_) { body = String(e.response.data || ''); }
+  const err = new Error(`Chatpush ${op} ${st}: ${String(body).slice(0, 300)}`);
+  err.status = st;
+  err.response = e.response;
+  return err;
+}
+
 // ── Отправка сообщений (Bearer token инстанса) ─────────────────────
 
 /**
@@ -51,10 +71,13 @@ async function sendMessage(instanceToken, { text, phone, dispatchRouting, replyT
     reply_to_message_id: replyToMessageId,
     ...extra,
   });
-  const { data } = await axios.post(`${apiBase}/api/v1/delivery?${query}`, null, {
-    headers: { Authorization: `Bearer ${instanceToken}` },
-    timeout: 30000,
-  });
+  let data;
+  try {
+    ({ data } = await axios.post(`${apiBase}/api/v1/delivery?${query}`, null, {
+      headers: { Authorization: `Bearer ${instanceToken}` },
+      timeout: 30000,
+    }));
+  } catch (e) { throw apiError('delivery', e); }
   if (data.meta?.status !== 'success') {
     throw new Error(data.meta?.message || `Chatpush delivery failed (code ${data.meta?.code})`);
   }
@@ -80,11 +103,14 @@ async function sendFile(instanceToken, { fileName, caption, type, phone, dispatc
   });
   const form = new FormData();
   form.append('file', new Blob([buffer], { type: mimeType || 'application/octet-stream' }), fileName);
-  const { data } = await axios.post(`${apiBase}/api/v1/send_file?${query}`, form, {
-    headers: { Authorization: `Bearer ${instanceToken}` },
-    timeout: 120000,
-    maxBodyLength: Infinity,
-  });
+  let data;
+  try {
+    ({ data } = await axios.post(`${apiBase}/api/v1/send_file?${query}`, form, {
+      headers: { Authorization: `Bearer ${instanceToken}` },
+      timeout: 120000,
+      maxBodyLength: Infinity,
+    }));
+  } catch (e) { throw apiError('send_file', e); }
   if (data.meta?.status !== 'success') {
     throw new Error(data.meta?.message || `Chatpush send_file failed (code ${data.meta?.code})`);
   }

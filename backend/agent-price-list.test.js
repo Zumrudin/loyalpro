@@ -166,3 +166,23 @@ describe('renderPriceListBlock', () => {
     expect(block).not.toContain('NaN');
   });
 });
+
+// ── Страховка «ни одно фото не ушло» (инцидент 2026-09-07, MAX/422) ──
+describe('photoFailureText', () => {
+  test('со ссылкой салона: причину не называет, ссылку даёт', () => {
+    const t = pl.photoFailureText('https://peri.ru/price');
+    expect(t).toContain('https://peri.ru/price');
+    expect(t).toMatch(/не отправилось/i);
+    // Пациенту не объясняем внутреннюю кухню и не обещаем прислать позже.
+    expect(t).not.toMatch(/канал|ошибк|422|позже|повтор/i);
+  });
+
+  test('ссылки у салона нет — фраза остаётся осмысленной, без «undefined»', () => {
+    for (const url of [null, undefined, '', '   ']) {
+      const t = pl.photoFailureText(url);
+      expect(t).toMatch(/не отправилось/i);
+      expect(t).toMatch(/процедура|процедуру/i);
+      expect(t).not.toMatch(/undefined|null|http/);
+    }
+  });
+});

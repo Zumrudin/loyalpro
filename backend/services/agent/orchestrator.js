@@ -36,6 +36,12 @@ const logger = createLogger('AgentOrchestrator');
 // В режиме AGENT_CATALOG_IN_PROMPT каталог уже в промпте — типовой ход короче на 1-2 итерации.
 const MAX_ITERS = 12;
 const MAX_REGEN = 2;   // сколько раз перегенерировать при новом входящем во время прогона
+// Сколько итераций подряд, состоящих ТОЛЬКО из повторных вызовов (кэш хода,
+// хендлер не исполнялся), терпим до обрыва tool-цикла. 2, а не 1: одна такая
+// итерация — обычная оплошность модели, которую REPEAT_CALL_HINT штатно чинит;
+// две подряд означают залипание, и каждая следующая — оплаченный проход по
+// ~39k-промпту без единого нового факта (инцидент 2026-09-07).
+const MAX_IDLE_ITERS = 2;
 
 // Пишущие инструменты: их результат нельзя «выбросить» перегенерацией.
 const SIDE_EFFECT_TOOLS = new Set([
@@ -700,7 +706,8 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
           await state.setWatermark(salonId, dialogKey, watermark);
           await evBuffer.flush(null);
           return { replies: directReplies, escalated: false, sideEffect: false,
-            turnId: evBuffer.turnId, attachments: toolCtx.attachments, writeSucceeded: false };
+            turnId: evBuffer.turnId, attachments: toolCtx.attachments,
+            priceListUrl: priceIndex && priceIndex.priceListUrl, writeSucceeded: false };
         }
       } catch (e) {
         // Fail-open только к штатному tool-циклу: не выдаём нечитанный график за
@@ -793,6 +800,7 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
     let escalated = false;
     let sideEffect = false;
     let exhausted = false;
+    let idleIters = 0;              // итераций подряд, где ВСЕ вызовы — повторы из кэша хода
     let bookingSucceeded = false;   // create_booking вернул успех в этом ходе
     let bookingErrored = false;     // create_booking вернул ошибку в этом ходе
     let writeSucceeded = false;     // любой из WRITE_TOOLS отработал без ошибки в этом ходе
@@ -961,6 +969,23 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
         // Это последнее, что услышит клиент перед переводом на администратора.
         if (resp.text && !replies.includes(resp.text)) replies.push(resp.text);
         break;
+      }
+      // Модель зациклилась: итерация целиком состоит из ПОВТОРОВ, то есть ни
+      // одного нового факта не добыто, а проход по ~39k-промпту оплачен.
+      // REPEAT_CALL_HINT её не останавливает — инцидент 2026-09-07
+      // (79165944414): send_price_list(category=s2) повторён по 10 раз подряд,
+      // ДВАЖДЫ выбит лимит из 12 итераций, пациентка ждала ответ 6 минут.
+      // Обрываем в уже существующую ветку «добивочный вызов без инструментов»:
+      // собранные данные не выбрасываются, модель обязана ответить прозой.
+      if (results.length && results.every(r => r.result && r.result.repeated_call)) {
+        idleIters += 1;
+        if (idleIters >= MAX_IDLE_ITERS) {
+          logger.warn(`dialog ${dialogKey}: ${idleIters} итерации подряд без единого нового вызова (только повторы) — обрываю tool-цикл`);
+          exhausted = true;
+          break;
+        }
+      } else {
+        idleIters = 0;
       }
       if (i === MAX_ITERS - 1) exhausted = true;
     }
@@ -1225,6 +1250,10 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
     return { replies, escalated, sideEffect, exhausted, falseSuccess, falseSuccessKind,
       bookingFailed, bookingFailRecoverable, degradedAfterWrite, turnId: evBuffer.turnId,
       attachments: toolCtx.attachments,
+      // Ссылка на прайс салона — диспетчеру, чтобы досылать её пациенту, когда
+      // НИ ОДНО фото не ушло (см. price-list.photoFailureText). Живёт рядом с
+      // attachments: без них поле бессмысленно.
+      priceListUrl: priceIndex && priceIndex.priceListUrl,
       // Нужен диспетчеру, чтобы не заводить ожидание ответа после оформленной
       // записи. sideEffect для этого не годится: он ШИРЕ (включает
       // escalate_to_operator).
@@ -1234,4 +1263,4 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
   return { replies: [], escalated: false, sideEffect: false };
 }
 
-module.exports = { runDialog, detectFalseClaim, todayMoscow, MAX_ITERS, MAX_REGEN };
+module.exports = { runDialog, detectFalseClaim, todayMoscow, MAX_ITERS, MAX_REGEN, MAX_IDLE_ITERS };

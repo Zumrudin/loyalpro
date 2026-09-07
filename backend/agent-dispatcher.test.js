@@ -668,6 +668,44 @@ describe('фото прайса', () => {
     expect(mockLogger.warn.mock.calls.some(c => /фото прайса/.test(c[0]))).toBe(true);
   });
 
+  // Инцидент 2026-09-07 (79165944414, MAX): Chatpush ответил 422 на ОБА файла,
+  // реплика «отправила вам цены» уже доставлена — пациентка осталась с пустым
+  // чатом и через полчаса написала «Не удалось».
+  test('ни одно фото не ушло → досылаем фразу со ссылкой на прайс', async () => {
+    const d = withFiles({
+      orchestrator: { runDialog: jest.fn(async () => ({
+        replies: ['Отправляю цены'], attachments: ATT,
+        priceListUrl: 'https://example.ru/ceny', escalated: false,
+      })) },
+      sendFile: jest.fn(async () => { throw new Error('Chatpush send_file 422: {"errors":["x"]}'); }),
+    });
+    dispatcher.enqueue(1, 'k', meta, d);
+    await jest.advanceTimersByTimeAsync(1000);
+    const texts = d.send.mock.calls.map(c => c[1]);
+    expect(texts[0]).toBe('Отправляю цены');
+    expect(texts[1]).toContain('https://example.ru/ceny');
+    expect(texts[1]).toMatch(/не отправилось/i);
+  });
+
+  test('часть фото ушла → страховочной фразы нет (картинка у пациента есть)', async () => {
+    const two = [ATT[0], { ...ATT[0], fileUrl: '/uploads/b.jpg', fileName: 'b.jpg' }];
+    let call = 0;
+    const d = withFiles({
+      orchestrator: { runDialog: jest.fn(async () => ({
+        replies: ['Отправляю цены'], attachments: two,
+        priceListUrl: 'https://example.ru/ceny', escalated: false,
+      })) },
+      sendFile: jest.fn(async () => {
+        call += 1;
+        if (call === 1) throw new Error('Chatpush send_file 422: {}');
+        return { id: 7 };
+      }),
+    });
+    dispatcher.enqueue(1, 'k', meta, d);
+    await jest.advanceTimersByTimeAsync(1000);
+    expect(d.send.mock.calls.map(c => c[1])).toEqual(['Отправляю цены']);
+  });
+
   test('канал доезжает до оркестратора: без него send_price_list не знает про файлы', async () => {
     const d = withFiles({
       orchestrator: { runDialog: jest.fn(async () => ({ replies: ['ок'], escalated: false })) },

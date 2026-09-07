@@ -16,6 +16,7 @@ const toolEventsDefault = require('./tool-events');
 const chatPersist = require('../chat-persist');
 const deliveryWatchdog = require('./delivery-watchdog');
 const priceListData = require('./price-list-data');
+const priceList = require('./price-list');
 const followupQueueDefault = require('./followup-queue');
 const { createLogger } = require('../../logger');
 const logger = createLogger('AgentDispatcher');
@@ -129,7 +130,7 @@ async function process(salonId, dialogKey, meta, opts = {}) {
   // Мила повторила бы пациенту уже сказанное (включая приветствие), то есть ровно
   // тот инцидент, ради которого журнал и заводится. Ни компилятор, ни тесты этого
   // не поймают, поэтому флаг выставляет сама естественная запись отправки.
-  const deliverReplies = async (list, attachments) => {
+  const deliverReplies = async (list, attachments, priceListUrl) => {
     for (const text of list) await send(meta, text);
     // РАЗМЕН (находка C3 ревью): deliveredReplies считается ТОЛЬКО по тексту,
     // а не по фото ниже. Это осознанно, а не забытая деталь: markDelivered —
@@ -147,9 +148,25 @@ async function process(salonId, dialogKey, meta, opts = {}) {
     // уже пять, и отдельный вызов рядом с ними рано или поздно забыли бы —
     // фото ушло бы к погашенной лжи или к выброшенному черновику.
     // Сбой одного файла не отменяет остальные и не роняет ход: текст доставлен.
+    let attTotal = 0;
+    let attFailed = 0;
     for (const att of (attachments || [])) {
+      attTotal += 1;
       try { await sendAttachment(meta, att); }
-      catch (e) { logger.warn(`dialog ${dialogKey}: фото прайса «${att.category}» (${att.fileUrl}) не ушло (${e.message})`); }
+      catch (e) {
+        attFailed += 1;
+        logger.warn(`dialog ${dialogKey}: фото прайса «${att.category}» (${att.fileUrl}) не ушло (${e.message})`);
+      }
+    }
+    // НИ ОДНО фото не дошло — пациент остался с уже доставленным «отправила вам
+    // цены» и пустым чатом (инцидент 2026-09-07, 79165944414: Chatpush ответил
+    // 422 на оба файла, клиентка через полчаса написала «Не удалось»). Досылаем
+    // короткую честную фразу со ссылкой на прайс. Условие именно «все»: при
+    // частичном сбое картинка у пациента есть, и «фото не отправилось» сбивало бы
+    // с толку. Своя ошибка тут ход не роняет — текст модели уже доставлен.
+    if (attTotal > 0 && attFailed === attTotal) {
+      try { await send(meta, priceList.photoFailureText(priceListUrl)); }
+      catch (e) { logger.error(`dialog ${dialogKey}: страховка про неотправленный прайс не ушла (${e.message})`); }
     }
   };
 
@@ -224,7 +241,7 @@ async function process(salonId, dialogKey, meta, opts = {}) {
           && !(await priorBookingFailure(salonId, dialogKey));
         if (canRecover) {
           logger.info(`dialog ${dialogKey}: create_booking не удался, но бот переиграл (предложил другое время) — доставляю без перевода`);
-          await deliverReplies(replies, res.attachments);
+          await deliverReplies(replies, res.attachments, res.priceListUrl);
         } else {
           logger.warn(`dialog ${dialogKey}: create_booking не удался, переигровки нет либо повторный провал — принудительный перевод на человека`);
           await handOverSilently(salonId, dialogKey, meta, send, escalate, 'create_booking не удался — запись не создана автоматически');
@@ -233,7 +250,7 @@ async function process(salonId, dialogKey, meta, opts = {}) {
         // Свежая эскалация: клиент ОБЯЗАН услышать про перевод на администратора.
         // Модель могла ответить по делу («Спасибо, что предупредили»), но забыть
         // объявить перевод — тогда добавляем стандартную фразу детерминированно.
-        await deliverReplies(replies, res.attachments);
+        await deliverReplies(replies, res.attachments, res.priceListUrl);
         // handoverText — фиксированная системная фраза, а не факт хода: она уходит
         // ПОСЛЕ хелпера и на вердикт delivered намеренно не влияет.
         // Признак живёт в admin-hours рядом с самими фразами перевода: копия
@@ -262,7 +279,7 @@ async function process(salonId, dialogKey, meta, opts = {}) {
         // не выбрасываются — подтверждение обязано дойти.
         logger.info(`dialog ${dialogKey}: новое сообщение до отправки — выбрасываю устаревший черновик, отвечу одним сообщением`);
       } else {
-        await deliverReplies(replies, res.attachments);
+        await deliverReplies(replies, res.attachments, res.priceListUrl);
       }
     } finally {
       running.delete(k);

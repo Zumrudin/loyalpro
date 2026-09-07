@@ -450,8 +450,11 @@ describe('runDialog', () => {
 
   test('защитный лимит итераций: бесконечный tool_call не зацикливается', async () => {
     const deps = makeDeps();
-    deps.provider.createMessage.mockResolvedValue(
-      toolResp('get_available_slots', { staff_yc_id: 1, service_yc_id: 1, date: '2026-07-20' }));
+    // Аргументы РАЗНЫЕ на каждой итерации: одинаковые обрывает более ранний
+    // guard залипания (MAX_IDLE_ITERS), и тест мерил бы уже не лимит итераций.
+    let n = 0;
+    deps.provider.createMessage.mockImplementation(async () => toolResp(
+      'get_available_slots', { staff_yc_id: 1, service_yc_id: 1, date: `2026-07-${20 + (n++)}` }));
     await orchestrator.runDialog(1, 'k', { deps });
     // MAX_ITERS вызовов в цикле + 1 добивочный без инструментов (реплик-то нет).
     expect(deps.provider.createMessage).toHaveBeenCalledTimes(orchestrator.MAX_ITERS + 1);
@@ -838,9 +841,11 @@ describe('логирование tool-вызовов', () => {
 describe('исчерпание лимита tool-итераций', () => {
   test('7 подряд tool-итераций укладываются в лимит и дают ответ', async () => {
     const deps = makeDeps();
+    // Даты РАЗНЫЕ: одинаковые аргументы — это залипание, его обрывает
+    // MAX_IDLE_ITERS, а тут проверяется длинная ОСМЫСЛЕННАЯ серия вызовов.
     for (let i = 0; i < 7; i++) {
       deps.provider.createMessage.mockResolvedValueOnce(
-        toolResp('get_available_slots', { date: '2026-07-20' }, `c${i}`));
+        toolResp('get_available_slots', { date: `2026-07-2${i}` }, `c${i}`));
     }
     deps.provider.createMessage.mockResolvedValueOnce(textResp('Свободно в 16:00 или 18:30.'));
 
@@ -887,9 +892,12 @@ describe('исчерпание лимита tool-итераций', () => {
     // с 10.08.2026 выдуманное время требует корректирующего довызова, и фикстура
     // с «16:00 и 18:30» мерила бы уже не нарратив, а срабатывание guard'а.
     const deps = makeDeps();
+    // Дата у каждого вызова своя — иначе серию оборвёт guard залипания
+    // (MAX_IDLE_ITERS), и до лимита итераций дело не дойдёт.
+    let n = 0;
     deps.provider.createMessage.mockImplementation(async ({ tools }) => {
       if (!tools || tools.length === 0) return textResp('Завтра свободно в 10:00.');
-      return toolResp('get_available_slots', { date: '2026-07-20' }, 'c1', 'Секунду, уточняю…');
+      return toolResp('get_available_slots', { date: `2026-07-${20 + (n++)}` }, 'c1', 'Секунду, уточняю…');
     });
 
     const out = await orchestrator.runDialog(1, 'k', { deps, today: '2026-07-19' });
@@ -1935,6 +1943,40 @@ describe('дедуп повторных tool-вызовов внутри ход�
       .mockResolvedValueOnce(textResp('Не получилось, попробуем ещё раз.'));
     await orchestrator.runDialog(1, 'k', { deps });
     expect(handler).toHaveBeenCalledTimes(2);
+  });
+
+  // Инцидент 2026-09-07 (79165944414): send_price_list(category=s2) повторён по
+  // 10 раз ПОДРЯД, лимит из 12 итераций выбит ДВАЖДЫ — пациентка ждала 6 минут,
+  // каждый круг оплачен проходом по ~39k-промпту. Подсказку «не повторяй»
+  // модель видит и игнорирует, значит обрыв обязан быть детерминированным.
+  test('залипание на повторах обрывает tool-цикл, а не выедает лимит итераций', async () => {
+    const deps = makeDeps();
+    // Модель зовёт один и тот же инструмент бесконечно; текст даёт только
+    // добивочный вызов БЕЗ инструментов.
+    deps.provider.createMessage.mockImplementation(async ({ tools }) => (
+      tools && tools.length
+        ? toolResp('get_available_slots', SLOTS_INPUT, 'c')
+        : textResp('Свободно 10:00. Записать?')
+    ));
+    const out = await orchestrator.runDialog(1, 'k', { deps });
+    expect(out.replies).toEqual(['Свободно 10:00. Записать?']);
+    // 1 исполненный вызов + MAX_IDLE_ITERS повторов + добивочный вызов.
+    expect(deps.provider.createMessage).toHaveBeenCalledTimes(2 + orchestrator.MAX_IDLE_ITERS);
+    expect(deps.provider.createMessage.mock.calls.length).toBeLessThan(orchestrator.MAX_ITERS);
+    expect(deps.registry.handlers.get_available_slots).toHaveBeenCalledTimes(1);
+  });
+
+  test('повтор вперемешку с новым вызовом залипанием не считается', async () => {
+    const deps = makeDeps();
+    deps.provider.createMessage
+      .mockResolvedValueOnce(toolResp('get_available_slots', SLOTS_INPUT, 'c1'))
+      .mockResolvedValueOnce(toolResp('get_available_slots', { ...SLOTS_INPUT }, 'c2'))
+      .mockResolvedValueOnce(toolResp('get_available_slots', { ...SLOTS_INPUT, date: '2026-08-15' }, 'c3'))
+      .mockResolvedValueOnce(toolResp('get_available_slots', { ...SLOTS_INPUT }, 'c4'))
+      .mockResolvedValueOnce(textResp('Есть время на 14-е и 15-е.'));
+    const out = await orchestrator.runDialog(1, 'k', { deps });
+    expect(out.replies).toEqual(['Есть время на 14-е и 15-е.']);
+    expect(deps.provider.createMessage).toHaveBeenCalledTimes(5);
   });
 });
 
