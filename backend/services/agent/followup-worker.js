@@ -37,6 +37,8 @@ const { stripAllStamps } = require('./transcript-time');
 const { parseCareDecision } = require('../care/decision');
 const { buildFollowupPrompt } = require('./followup-prompt');
 const { hasInventedTime } = require('./followup-guard');
+const { GREETING_RE } = require('./greeting-forms');
+const { stripGreeting } = require('./greeting');
 const { resolveDelays, nextAtFor, isTooLate } = require('./followup-schedule');
 const { CLOSE_STATUSES } = require('./followup-queue');
 const { resolveSalonName } = require('./system-prompt');
@@ -275,12 +277,33 @@ async function buildNudgeText(d, row, messages) {
   // значит время в тексте она могла только СОЧИНИТЬ (класс инцидента
   // 2026-08-10, alien_time_attribution). Вырезать подстроку нельзя: фраза
   // рвётся и пациент получает огрызок — молчим целиком.
-  if (hasInventedTime(decision.text, ownAssistantText(messages))) {
+  const priorText = ownAssistantText(messages);
+  if (hasInventedTime(decision.text, priorText)) {
     d.log.warn(`followup #${row.id}: в напоминании время, которого Мила не называла — не отправляем`);
     return { skip: true, reason: 'invented_time' };
   }
   const viol = d.hardViolations(d.lintReply(decision.text, {}));
   if (viol.length) return { skip: true, reason: `reply-guard: ${viol.map((v) => v.type).join(',')}` };
+
+  // Повторное приветствие: промпт прямо запрещает его (правило 1 —
+  // «без приветствия и без представления»), но живой прогон показывает, что
+  // модель это правило игнорирует ощутимо чаще, чем хотелось бы (прод,
+  // 79200255591 и 79166392549: «Зумрудин, здравствуйте! …»,
+  // «Вера, добрый день! …» — обе реплики уже ВТОРЫЕ подряд от Милы в
+  // диалоге). Мораторий на новые промпт-правила требует детерминированного
+  // фикса: тот же срез, что у основного оркестратора (greeting.stripGreeting) —
+  // вырезает само слово приветствия, обращение по имени остаётся на месте.
+  // Условие «Мила уже здоровалась раньше» обязательно: у самого первого
+  // напоминания в переписке приветствие могло не прозвучать (тогда сюда бы
+  // никто не попал — followup строку заводит только сам оркестратор после
+  // ответа Милы, — но проверка держит инвариант тем же способом, что и там).
+  if (GREETING_RE.test(priorText)) {
+    const cut = stripGreeting([decision.text]);
+    if (cut.stripped) {
+      d.log.info(`followup #${row.id}: повторное приветствие срезано: ${JSON.stringify(cut.stripped)}`);
+      return { text: cut.replies[0] };
+    }
+  }
   return { text: decision.text };
 }
 
