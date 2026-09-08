@@ -37,8 +37,6 @@ const { stripAllStamps } = require('./transcript-time');
 const { parseCareDecision } = require('../care/decision');
 const { buildFollowupPrompt } = require('./followup-prompt');
 const { hasInventedTime } = require('./followup-guard');
-const { GREETING_RE } = require('./greeting-forms');
-const { stripGreeting } = require('./greeting');
 const { resolveDelays, nextAtFor, isTooLate } = require('./followup-schedule');
 const { CLOSE_STATUSES } = require('./followup-queue');
 const { resolveSalonName } = require('./system-prompt');
@@ -240,6 +238,64 @@ function ownAssistantText(messages) {
     .join('\n'));
 }
 
+// ── Срез ПОВТОРНОГО приветствия в тексте напоминания ─────────────────────────
+// Промпт (followup-prompt.js, правило 1) прямо запрещает модели здороваться —
+// это ПРОДОЛЖЕНИЕ разговора, приветствие уже прозвучало. Живой прогон на проде
+// показывает, что модель это правило заметно игнорирует: 79200255591
+// («Зумрудин, здравствуйте! …», «Зумрудин, добрый вечер! …») и 79166392549
+// («Вера, добрый день! …») — все три ушли ВТОРОЙ репликой Милы в диалоге
+// подряд. Мораторий на новые промпт-правила требует детерминированного фикса.
+//
+// НАМЕРЕННО СВОЯ КОПИЯ, а не импорт из greeting.js/greeting-forms.js: там уже
+// есть готовый greeting.stripGreeting ровно с этой логикой (его использует
+// orchestrator.js для того же класса дефекта), но на момент этого фикса он
+// существовал только как незакоммиченный черновик другой, ещё не выпущенной
+// задачи. Тянуть сюда require на файл, которого нет в git-истории, значило бы
+// уронить весь followup-worker в проде в момент деплоя ЭТОГО фикса. Как только
+// та работа будет закоммичена, эту копию стоит заменить на импорт.
+const GREETING_RE = /(здравствуйте|добрый\s+(день|вечер|утро)|доброе\s+утро|приветству)/i;
+const LEADING_GREETING_RE = new RegExp(
+  `^\\s*[^.!?\\n]*(?:${GREETING_RE.source.slice(1, -1)})[^.!?\\n]*[.!?]+(?:[ \\t]*\\p{Extended_Pictographic}+)?`,
+  'iu');
+const HAS_LETTER_RE = /\p{L}|\p{N}/u;
+const GREETING_ONCE_RE = new RegExp(GREETING_RE.source, 'iu');
+
+// Если после выреза клауза начинается со строчной буквы — вырезали середину
+// фразы («Приветствую вас, Мария!» → «вас, Мария!»), склеивать с текстом нельзя:
+// клауза выбрасывается целиком, имя теряется, зато фраза остаётся человеческой.
+function cleanGreetingClause(clause) {
+  let s = clause.replace(GREETING_ONCE_RE, '');
+  s = s.replace(/\s*,\s*(?=[.!?…])/g, '');   // «Мария, !» → «Мария!»
+  s = s.replace(/,\s*,/g, ',');
+  s = s.replace(/^[\s,;:—–-]+/, '');
+  if (!HAS_LETTER_RE.test(s)) return '';                     // клауза была чистым приветствием
+  if (/^\p{Ll}/u.test(s)) return '';                         // вырезали середину фразы
+  return s.trim();
+}
+
+function upperFirstRu(s) {
+  return s ? s[0].toLocaleUpperCase('ru') + s.slice(1) : s;
+}
+
+// Вырезает САМО СЛОВО приветствия из ведущей клаузы текста, оставляя обращение
+// по имени на месте и в своём падеже. Возврат: { text, stripped } — stripped
+// непуст, только если реально резали.
+function stripLeadingGreeting(text) {
+  const first = String(text || '');
+  const m = first.match(LEADING_GREETING_RE);
+  if (!m) return { text: first, stripped: '' };
+  const rest = first.slice(m[0].length);
+  // Реплика состояла ТОЛЬКО из приветствия — резать нечего: пустая реплика
+  // ушла бы вместо напоминания.
+  if (!HAS_LETTER_RE.test(rest)) return { text: first, stripped: '' };
+  const clause = cleanGreetingClause(m[0]);
+  const keepBreak = /^[ \t]*\n/.test(rest);
+  const out = clause
+    ? `${clause}${keepBreak ? rest.replace(/^[ \t]+/, '') : ` ${rest.replace(/^\s+/, '')}`}`
+    : upperFirstRu(rest.replace(/^\s+/, ''));
+  return { text: out, stripped: m[0].trim() };
+}
+
 /**
  * Текст напоминания (stage 0) через LLM.
  * @returns {{text:string}|{skip:true, reason:string}}
@@ -285,23 +341,17 @@ async function buildNudgeText(d, row, messages) {
   const viol = d.hardViolations(d.lintReply(decision.text, {}));
   if (viol.length) return { skip: true, reason: `reply-guard: ${viol.map((v) => v.type).join(',')}` };
 
-  // Повторное приветствие: промпт прямо запрещает его (правило 1 —
-  // «без приветствия и без представления»), но живой прогон показывает, что
-  // модель это правило игнорирует ощутимо чаще, чем хотелось бы (прод,
-  // 79200255591 и 79166392549: «Зумрудин, здравствуйте! …»,
-  // «Вера, добрый день! …» — обе реплики уже ВТОРЫЕ подряд от Милы в
-  // диалоге). Мораторий на новые промпт-правила требует детерминированного
-  // фикса: тот же срез, что у основного оркестратора (greeting.stripGreeting) —
-  // вырезает само слово приветствия, обращение по имени остаётся на месте.
-  // Условие «Мила уже здоровалась раньше» обязательно: у самого первого
-  // напоминания в переписке приветствие могло не прозвучать (тогда сюда бы
-  // никто не попал — followup строку заводит только сам оркестратор после
-  // ответа Милы, — но проверка держит инвариант тем же способом, что и там).
+  // Повторное приветствие (см. stripLeadingGreeting выше). Условие «Мила уже
+  // здоровалась раньше» обязательно: у самого первого напоминания в переписке
+  // приветствие могло не прозвучать (тогда сюда бы никто не попал — followup
+  // строку заводит только сам оркестратор после ответа Милы, — но проверка
+  // держит инвариант тем же способом, что и в оркестраторе для основного
+  // ответа Милы).
   if (GREETING_RE.test(priorText)) {
-    const cut = stripGreeting([decision.text]);
+    const cut = stripLeadingGreeting(decision.text);
     if (cut.stripped) {
       d.log.info(`followup #${row.id}: повторное приветствие срезано: ${JSON.stringify(cut.stripped)}`);
-      return { text: cut.replies[0] };
+      return { text: cut.text };
     }
   }
   return { text: decision.text };
