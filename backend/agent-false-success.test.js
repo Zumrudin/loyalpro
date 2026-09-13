@@ -288,3 +288,105 @@ describe('ложный успех при ПУСТОЙ сверке: один к�
     expect(res.falseSuccessKind).toBe('booked');
   });
 });
+
+// ── Свежий write в журнале инструментов как доказательство ───────────────────
+//
+// Инцидент 2026-09-13 (79231471109): «11.30, запишите» и «С 19.09 запись отменить»
+// пришли с разницей в 10 секунд. Первый прогон вызвал reschedule_booking (ok) и
+// отправил «Перенесла вашу запись…»; второе сообщение пришло во время обработки
+// → диспетчер запустил rerun. Во втором прогоне модель БЕЗ инструмента правдиво
+// повторила «я как раз только что перенесла вашу запись с 19 сентября на 20-е» —
+// guard видел только свой ход (writeSucceeded=false) и увёл диалог на
+// администратора. Правда тут известна детерминированно: журнал agent_tool_events
+// (его оркестратор и так читает каждый ход для блока памяти) содержит успешный
+// reschedule_booking секундной давности.
+describe('свежий write в журнале подтверждает утверждение о записи', () => {
+  const RESTATE = 'Анна, поняла вас. Я как раз только что перенесла вашу запись с 19 сентября на 20-е, как вы и просили 🤍';
+  const NOW = Date.now();
+  const journal = (rows) => ({
+    createBuffer: () => ({ turnId: 't', push() {}, flush: async () => {} }),
+    loadRecent: async () => rows,
+  });
+  const runWith = (provider, userText, rows, bookings = [FUTURE_BOOKING]) =>
+    runDialog(1, '79000000000', {
+      ctx: { phone: '79000000000' },
+      deps: {
+        ...baseDeps(provider, { schemas: [], handlers: {} }),
+        history: historyOf(userText),
+        listBookings: { run: async () => ({ bookings }) },
+        toolEvents: journal(rows),
+      },
+    });
+
+  test('reschedule_booking секунды назад → «перенесла» без инструмента НЕ ложь', async () => {
+    const provider = providerOf([say(RESTATE)]);
+    const res = await runWith(provider, 'С 19.09 запись отменить',
+      [{ tool: 'reschedule_booking', age_ms: 9_000, is_error: false, result: { rescheduled: true } }]);
+    expect(res.falseSuccess).toBe(false);
+    expect(res.replies).toEqual([RESTATE]);
+    expect(provider.requests).toHaveLength(1);   // и корректирующего довызова тоже нет
+  });
+
+  test('тот же перенос, но полчаса назад → прежняя безусловная ложь', async () => {
+    const provider = providerOf([say(RESTATE)]);
+    const res = await runWith(provider, 'С 19.09 запись отменить',
+      [{ tool: 'reschedule_booking', age_ms: 30 * 60_000, is_error: false, result: { rescheduled: true } }]);
+    expect(res.falseSuccess).toBe(true);
+    expect(res.falseSuccessKind).toBe('completion');
+  });
+
+  test('свежий create_booking НЕ прикрывает «отменила» (полярность)', async () => {
+    const provider = providerOf([say('Готово, я отменила вашу запись 🤍')]);
+    const res = await runWith(provider, 'отмените запись',
+      [{ tool: 'create_booking', age_ms: 9_000, is_error: false, result: { created: true } }]);
+    expect(res.falseSuccess).toBe(true);
+    expect(res.falseSuccessKind).toBe('cancelled');
+  });
+
+  test('свежий cancel_booking → «отменила» честно даже при живых ДРУГИХ записях', async () => {
+    const provider = providerOf([say('Да, отменила вашу запись на пятницу 🤍')]);
+    const res = await runWith(provider, 'точно отменили?',
+      [{ tool: 'cancel_booking', age_ms: 60_000, is_error: false, result: { cancelled: true } }]);
+    expect(res.falseSuccess).toBe(false);
+  });
+
+  test('упавший reschedule_booking (is_error) в журнале ничего не подтверждает', async () => {
+    const provider = providerOf([say(RESTATE)]);
+    const res = await runWith(provider, 'С 19.09 запись отменить',
+      [{ tool: 'reschedule_booking', age_ms: 9_000, is_error: true, result: { error: 'boom' } }]);
+    expect(res.falseSuccess).toBe(true);
+  });
+
+  test('журнал недоступен (сбой чтения) → поведение прежнее, ход не падает', async () => {
+    const provider = providerOf([say(RESTATE)]);
+    const res = await runDialog(1, '79000000000', {
+      ctx: { phone: '79000000000' },
+      deps: {
+        ...baseDeps(provider, { schemas: [], handlers: {} }),
+        history: historyOf('С 19.09 запись отменить'),
+        listBookings: { run: async () => ({ bookings: [FUTURE_BOOKING] }) },
+        toolEvents: { createBuffer: () => ({ turnId: 't', push() {}, flush: async () => {} }),
+          loadRecent: async () => { throw new Error('db down'); } },
+      },
+    });
+    expect(res.falseSuccess).toBe(true);
+  });
+});
+
+describe('detectFalseClaim: доказательство из журнала (recentWrite)', () => {
+  const noProof = { existsHonest: false, cancelledHonest: false };
+  test('перенос в журнале → «перенесла» / «вы записаны» / «запись отменена» честны', () => {
+    const proof = { ...noProof, recentWrite: 'reschedule_booking' };
+    expect(detectFalseClaim('Готово, перенесла вашу запись на 14:00', proof)).toBe(null);
+    expect(detectFalseClaim('Теперь вы записаны на 20 сентября', proof)).toBe(null);
+    expect(detectFalseClaim('Запись на 19-е отменена, вы записаны на 20-е', proof)).toBe(null);
+  });
+  test('создание в журнале → «перенесла» остаётся ложью', () => {
+    expect(detectFalseClaim('Готово, перенесла вашу запись на 14:00',
+      { ...noProof, recentWrite: 'create_booking' })).toBe('completion');
+  });
+  test('recentWrite null/отсутствует → как раньше', () => {
+    expect(detectFalseClaim('Готово, перенесла вашу запись на 14:00', { ...noProof, recentWrite: null })).toBe('completion');
+    expect(detectFalseClaim('Готово, перенесла вашу запись на 14:00', noProof)).toBe('completion');
+  });
+});

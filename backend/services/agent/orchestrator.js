@@ -18,6 +18,7 @@ const promoInterest = require('./promo-interest');
 const adminHours = require('./admin-hours');
 const toolEventsDefault = require('./tool-events');
 const toolMemoryDefault = require('./tool-memory');
+const recentWrite = require('./recent-write');
 const listBookingsDefault = require('./tools/list-client-bookings');
 const bookingsBlock = require('./bookings-block');
 const priceListDefault = require('./price-list-data');
@@ -167,8 +168,11 @@ const REPLY_HAS_TIME = /\b([01]?\d|2[0-3])[:.][0-5]\d\b/;
 //
 // ДЕЙСТВИЕ, которого снимок записей подтвердить не может: перенос (снимок
 // показывает время, но не то, что оно менялось) и правка состава услуг (её в
-// блоке нет вовсе). Остаётся БЕЗУСЛОВНОЙ ложью без успешного write-инструмента —
-// это и есть founding-случай guard'а (claude-haiku «перенесла на 14:00»).
+// блоке нет вовсе). Ложь без успешного write-инструмента — это и есть
+// founding-случай guard'а (claude-haiku «перенесла на 14:00»). Единственное
+// исключение — свежий успешный write в ЖУРНАЛЕ инструментов (proof.recentWrite,
+// см. recent-write.js): инцидент 2026-09-13, rerun после перенесённой в
+// предыдущем прогоне записи правдиво повторил «перенесла» и уехал к администратору.
 const COMPLETION_CLAIM =
   /(перенесл[аио]|перенёс|перенесен[оа]|запись\s+перенесен|добавил[аи]|добавлен[аоы]|убрал[аи]|убран[аоы])/i;
 
@@ -198,16 +202,20 @@ const CANCELLED_STATE_CLAIM = /(отменил[аи]?|отменен[оа]|за�
  * Утверждает ли реплика то, чего ход не подтвердил.
  *
  * @param {string} text склеенные реплики хода.
- * @param {{existsHonest: boolean, cancelledHonest: boolean}} proof сверенное
- *   состояние записей: подтверждено ли «запись есть» / «записи нет».
+ * @param {{existsHonest: boolean, cancelledHonest: boolean, recentWrite?: string|null}} proof
+ *   сверенное состояние записей: подтверждено ли «запись есть» / «записи нет»;
+ *   recentWrite — имя успешного write-инструмента из журнала не старше окна
+ *   (recent-write.js). Подтверждает ТОЛЬКО согласные с ним виды утверждений:
+ *   свежая запись не прикрывает «отменила», свежая отмена — «вы записаны».
  * @returns {'completion'|'booked'|'cancelled'|null} вид утверждения (null — лжи нет).
  *   Вид нужен не только внутри: диспетчер пишет его в лог, иначе разбор упирается
  *   в «неизвестно, что именно модель заявила».
  */
 function detectFalseClaim(text, proof = {}) {
-  if (COMPLETION_CLAIM.test(text)) return 'completion';
-  if (!proof.existsHonest && BOOKED_STATE_CLAIM.test(text)) return 'booked';
-  if (!proof.cancelledHonest && CANCELLED_STATE_CLAIM.test(text)) return 'cancelled';
+  const vouched = recentWrite.vouchesFor(proof.recentWrite);
+  if (!vouched.has('completion') && COMPLETION_CLAIM.test(text)) return 'completion';
+  if (!proof.existsHonest && !vouched.has('booked') && BOOKED_STATE_CLAIM.test(text)) return 'booked';
+  if (!proof.cancelledHonest && !vouched.has('cancelled') && CANCELLED_STATE_CLAIM.test(text)) return 'cancelled';
   return null;
 }
 
@@ -415,10 +423,17 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
   // AGENT_TOOL_MEMORY=false гасит РОВНО это — показ выжимки модели. Запись
   // журнала ниже по ходу идёт при любом значении флага: аварийное выключение
   // памяти не должно лишать нас форензики инцидента, ради которой журнал и заведён.
+  // Из тех же строк — доказательство для анти-ложь-guard'а: свежий успешный
+  // write (recent-write.js). Читается ТОЛЬКО вместе с памятью: при
+  // AGENT_TOOL_MEMORY=false доказательства нет и guard возвращается к прежнему
+  // безусловному недоверию — безопасная сторона (лишний перевод на человека,
+  // а не пропущенная ложь).
   let toolMemoryLines = [];
+  let journalWrite = null;
   if (cfg.AGENT_TOOL_MEMORY) {
     try {
       const rows = await toolEvents.loadRecent(salonId, dialogKey);
+      journalWrite = recentWrite.findRecentWrite(rows, { nowMs });
       const rendered = toolMemory.renderMemory(rows, { nowMs });
       toolMemoryLines = rendered.lines;
       if (rendered.dropped > 0) {
@@ -1031,6 +1046,9 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
     const claimProof = {
       existsHonest: readBookings || bookingsExist === true,
       cancelledHonest: bookingsExist === false,
+      // Успешный write из журнала не старше окна (инцидент 2026-09-13: rerun
+      // правдиво повторил «перенесла» из предыдущего прогона той же серии).
+      recentWrite: journalWrite && journalWrite.tool,
     };
     // ЗАЧЕМ довызов вместо перевода на человека. Блок «АКТУАЛЬНЫЕ ЗАПИСИ
     // ПАЦИЕНТА» прямо говорит модели: запись пропала — ШТАТНАЯ ситуация,
@@ -1229,6 +1247,15 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
     const falseSuccessKind = (!escalated && !writeSucceeded)
       ? detectFalseClaim(allReplies, claimProof) : null;
     const falseSuccess = !!falseSuccessKind;
+    // Телеметрия: утверждение, которое без журнала считалось бы ложью, но
+    // подтверждено свежим write. Только лог — мерить, как часто срабатывает,
+    // и видеть в разборе, какой именно вызов его оправдал.
+    if (!falseSuccess && !escalated && !writeSucceeded && journalWrite) {
+      const wouldBe = detectFalseClaim(allReplies, { ...claimProof, recentWrite: null });
+      if (wouldBe) {
+        logger.info(`dialog ${dialogKey}: утверждение о записи (${wouldBe}) подтверждено журналом — ${journalWrite.tool} ${Math.round(journalWrite.ageMs / 1000)}с назад`);
+      }
+    }
     // bookingFailed: попытка записи была и НЕ увенчалась успехом. Диспетчер по этому
     // сигналу принудительно переведёт на человека, чтобы клиент не завис на «секундочку».
     const bookingFailed = bookingErrored && !bookingSucceeded;
