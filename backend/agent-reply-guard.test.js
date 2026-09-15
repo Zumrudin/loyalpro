@@ -318,6 +318,105 @@ describe('checkStaffAttribution: время чужого мастера выда
   });
 });
 
+// ── Заявление о свободном времени, ничем не подтверждённое в этом ходе ──────
+// Инцидент 2026-09-15 (79775546186): Мила сказала «у главного врача… есть
+// свободное окошко на 12:15» БЕЗ единого вызова get_available_slots — просто
+// повторила число из трёхдневной давности переписки (у оператора и у самой
+// пациентки). Через 2 минуты create_booking на это же время упал.
+describe('checkUnverifiedOffer', () => {
+  test('предложение времени, которого нет в verifiedTimes → unverified_offer', () => {
+    const v = g.checkUnverifiedOffer(
+      'У главного врача Пери Исамудиновны как раз есть свободное окошко на 12:15. Давайте я запишу вас?',
+      { verifiedTimes: new Set() });
+    expect(v).toEqual([{ type: 'unverified_offer', value: '12:15' }]);
+  });
+
+  test('время подтверждено результатом инструмента этого хода — нарушения нет', () => {
+    const v = g.checkUnverifiedOffer('Могу предложить 12:15, записать вас?',
+      { verifiedTimes: new Set(['12:15']) });
+    expect(v).toEqual([]);
+  });
+
+  // Пациент сам назвал время — это НЕ освобождает от проверки (в отличие от
+  // checkStaffAttribution/checkOfferDeviation): там «пациент назвал» защищает
+  // честное ПОДТВЕРЖДЕНИЕ, а здесь модель заявляет НОВЫЙ факт «это свободно» —
+  // ровно инцидент 2026-09-15, где пациентка сама спросила про 12:15.
+  test('время, названное самим пациентом, всё равно требует подтверждения', () => {
+    const v = g.checkUnverifiedOffer('Да, у нас как раз есть свободное окошко на 12:15!',
+      { verifiedTimes: new Set() });
+    expect(v).toEqual([{ type: 'unverified_offer', value: '12:15' }]);
+  });
+
+  test('реплика без предложения времени (нет offer-фразы) — проверка молчит', () => {
+    expect(g.checkUnverifiedOffer('Хорошо, буду ждать вас в 12:15!', { verifiedTimes: new Set() }))
+      .toEqual([]);
+  });
+
+  test('подтверждение уже оформленной записи («записала вас») не считается предложением', () => {
+    expect(g.checkUnverifiedOffer('Готово! Записала вас на 12:15 ✅', { verifiedTimes: new Set() }))
+      .toEqual([]);
+  });
+
+  test('без verifiedTimes (undefined) — трактуется как «ничего не подтверждено»', () => {
+    const v = g.checkUnverifiedOffer('Могу записать вас на 15:00');
+    expect(v).toEqual([{ type: 'unverified_offer', value: '15:00' }]);
+  });
+
+  // Проверка КЛАУЗАМИ, а не по всему тексту разом: время из клаузы про
+  // НЕДОСТУПНОСТЬ («то окошко на 12:15 уже занято») не должно ловиться как
+  // unverified_offer только потому, что где-то дальше в том же ответе есть
+  // офер-фраза с другим, уже подтверждённым временем.
+  test('время в клаузе «уже занято» не путается с офером в соседней клаузе', () => {
+    const v = g.checkUnverifiedOffer(
+      'К сожалению, то окошко на 12:15 уже занято. Но у Пери Исамудиновны есть время на 13:30 или 17:30.',
+      { verifiedTimes: new Set(['13:30', '17:30']) });
+    expect(v).toEqual([]);
+  });
+
+  test('unverified_offer — жёсткое нарушение (требует переписывания)', () => {
+    expect(g.hardViolations([{ type: 'unverified_offer', value: '12:15' }]))
+      .toEqual([{ type: 'unverified_offer', value: '12:15' }]);
+  });
+});
+
+// ── Придуманная причина отказа в записи ─────────────────────────────────────
+// Тот же инцидент: create_booking упал с «время недоступно, причина
+// неизвестна», хендлер явно запретил утверждать «слот только что заняли», а
+// Мила через 4 минуты (без повторного вызова инструмента) написала «пока мы
+// вели переписку, окошко на 12:15 уже заняли».
+describe('checkFabricatedUnavailabilityReason', () => {
+  test('«пока мы вели переписку… заняли» — фабрикация причины', () => {
+    const v = g.checkFabricatedUnavailabilityReason(
+      'Елена, я понимаю ваше желание попасть именно в это время. К сожалению, ' +
+      'пока мы вели переписку, окошко на 12:15 уже заняли.');
+    expect(v).toEqual([{
+      type: 'fabricated_unavailability_reason',
+      value: 'пока мы вели переписку, окошко на 12:15 уже заняли',
+    }]);
+  });
+
+  test('«только что заняли» без «пока мы…» тоже фабрикация', () => {
+    expect(g.checkFabricatedUnavailabilityReason('К сожалению, это время только что заняли.'))
+      .toEqual([{ type: 'fabricated_unavailability_reason', value: 'только что заняли' }]);
+  });
+
+  test('«успели занять» — фабрикация', () => {
+    expect(g.checkFabricatedUnavailabilityReason('Кажется, успели занять это окошко.'))
+      .toEqual([{ type: 'fabricated_unavailability_reason', value: 'успели занять' }]);
+  });
+
+  test('нейтральный отказ БЕЗ версии о причине — норма', () => {
+    expect(g.checkFabricatedUnavailabilityReason(
+      'К сожалению, то окошко на 12:15 уже занято. Но есть время на 13:30 или 17:30.'))
+      .toEqual([]);
+  });
+
+  test('fabricated_unavailability_reason — жёсткое нарушение', () => {
+    expect(g.hardViolations([{ type: 'fabricated_unavailability_reason', value: 'только что заняли' }]))
+      .toEqual([{ type: 'fabricated_unavailability_reason', value: 'только что заняли' }]);
+  });
+});
+
 describe('hardViolations', () => {
   test('taboo_word и id_leak — жёсткие (требуют переписывания)', () => {
     expect(g.hardViolations([

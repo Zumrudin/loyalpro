@@ -282,6 +282,74 @@ function checkGiftRepeat(text, opts = {}) {
   return [{ type: 'gift_repeat', value: clause.trim().slice(0, GIFT_CLAUSE_CAP) }];
 }
 
+// ── Заявление о свободном времени, ничем не подтверждённое в этом ходе ──────
+// Инцидент 2026-09-15 (79775546186): ночью пациентка спросила, верна ли её
+// запись на 12:15 (устно обещанная ЖИВЫМ администратором тремя днями раньше).
+// Мила ответила «у главного врача… есть свободное окошко на 12:15» БЕЗ
+// единого вызова get_available_slots — просто повторила число, всплывавшее в
+// старой переписке у оператора и у самой пациентки. Через 2 минуты попытка
+// create_booking на это же время упала («время недоступно») — слот никогда не
+// проверялся, обещание оказалось пустым. unknown_time тут бессилен по
+// построению: allowedTimes сеется из ВСЕГО транскрипта (JSON.stringify всех
+// сообщений), и «12:15» там уже звучало у обеих сторон — «известное» время не
+// значит «подтверждённое сейчас».
+//
+// Проверяем узкую вещь: реплика ПРЕДЛАГАЕТ время как свободное (не подтверждает
+// уже оформленную запись — та фраза другая, «записала вас», и её ловит
+// falseSuccess), и это время НЕ входит в verifiedTimes — множество времён,
+// реально подтверждённых В ЭТОМ ходе (результаты инструментов + фактическая
+// часть промпта: часы клиники, живые варианты стыковки, журнал действий,
+// сверенные с CRM записи). В отличие от allowedTimes, verifiedTimes НЕ включает
+// сырой текст истории переписки.
+//
+// Патиентские времена здесь НЕ освобождают от проверки (в отличие от
+// checkStaffAttribution/checkOfferDeviation, где «пациент сам назвал время»
+// защищает честное ПОДТВЕРЖДЕНИЕ от цензуры): здесь модель заявляет НОВЫЙ факт
+// «это свободно» — а он либо подтверждён инструментом, либо выдуман, вне
+// зависимости от того, кто первым произнёс число.
+// \w в JS — только ASCII и кириллицу не ловит (см. TABOO_RE выше), поэтому
+// русские суффиксы — через [а-яё]*, а не \w*.
+const AVAILABILITY_OFFER_RE =
+  /(свободн[а-яё]*\s+(?:окошк[а-яё]*|окн[а-яё]*|врем[а-яё]*)|есть\s+(?:свободн[а-яё]*\s+)?(?:окошк[а-яё]*|окн[а-яё]*|врем[а-яё]*)|могу\s+(?:вас\s+)?(?:предложить|записать)|(?:давайте|можем)\s+(?:я\s+)?запиш[а-яё]*|запиш(?:у|ем)\s+вас|записать\s+вас)/iu;
+
+// Проверка КЛАУЗАМИ (тот же приём, что checkGiftRepeat: разбивка по границе
+// предложения с сохранением разделителя lookbehind'ом), а не по всему тексту
+// разом. Иначе честный нейтральный ответ («то окошко на 12:15 уже занято. Но
+// есть время на 13:30 или 17:30») ловил бы «12:15» как unverified_offer: время
+// упомянуто в клаузе про НЕДОСТУПНОСТЬ, а не в клаузе-предложении, и разбор
+// всего текста разом не различает эти два случая.
+function checkUnverifiedOffer(text, opts = {}) {
+  const s = String(text || '');
+  const verified = opts.verifiedTimes;
+  const out = [];
+  for (const clause of s.split(/(?<=[.!?;\n])/)) {
+    if (!AVAILABILITY_OFFER_RE.test(clause)) continue;
+    for (const t of extractTimes(clause)) {
+      if (!verified || !verified.has(t)) out.push({ type: 'unverified_offer', value: t });
+    }
+  }
+  return out;
+}
+
+// ── Придуманная причина отказа в записи ──────────────────────────────────
+// Тот же инцидент: create_booking упал с «время недоступно, причина
+// неизвестна», и хендлер ЯВНО запретил модели выдумывать причину («не
+// утверждай пациенту, что слот «только что заняли»»). Через 4 минуты, БЕЗ
+// повторного вызова инструмента, Мила всё равно написала «пока мы вели
+// переписку, окошко на 12:15 уже заняли» — придумала ровно ту историю, которую
+// инструмент запретил. YClients причину отказа никогда не сообщает, поэтому
+// такая формулировка — фабрикация вне зависимости от того, случился ли провал
+// create_booking в ЭТОМ ходе: цена (клиент решает, что слот увели буквально у
+// него на глазах) одинаковая что «свежая», что пересказанная выдумка.
+const FABRICATED_UNAVAILABILITY_RE =
+  /(пока\s+мы\s+(?:вели\s+переписку|переписывались|общались|разговаривали)[^.!?\n]{0,60}(?:зан[яи]л[а-яё]*|забронир[а-яё]*|взял[а-яё]*)|только\s*что\s+(?:заняли|забронировали|взяли)|успели\s+занять|буквально\s+только\s+что)/iu;
+
+function checkFabricatedUnavailabilityReason(text) {
+  const s = String(text || '');
+  const m = s.match(FABRICATED_UNAVAILABILITY_RE);
+  return m ? [{ type: 'fabricated_unavailability_reason', value: m[0].trim().slice(0, 160) }] : [];
+}
+
 // Жёсткие нарушения — оркестратор просит модель переписать ответ; стилистика
 // (эмодзи, приветствие, offer_bypass, free_day_time, gift_repeat) — только лог.
 //
@@ -290,7 +358,14 @@ function checkGiftRepeat(text, opts = {}) {
 // ДВА раза — оба в инциденте 79166524647, где модель назвала «18 августа 12:00
 // и 14:30» на дату, которую в тот ход вообще не спрашивала у инструмента. Ноль
 // ложных срабатываний против выдуманного времени, согласованного с пациентом.
-const HARD_TYPES = new Set(['taboo_word', 'id_leak', 'unknown_time', 'alien_time_attribution', 'staff_not_working_claim']);
+//
+// unverified_offer и fabricated_unavailability_reason — жёсткие сразу, без
+// периода «сначала лог»: оба — прямая ложь о состоянии записи (инцидент
+// 2026-09-15), а не спорная стилистика вроде offer_bypass/gift_repeat.
+const HARD_TYPES = new Set([
+  'taboo_word', 'id_leak', 'unknown_time', 'alien_time_attribution', 'staff_not_working_claim',
+  'unverified_offer', 'fabricated_unavailability_reason',
+]);
 function hardViolations(violations) {
   return (violations || []).filter(v => HARD_TYPES.has(v.type));
 }
@@ -298,5 +373,6 @@ function hardViolations(violations) {
 module.exports = {
   extractTimes, checkOfferedTimes, checkOfferDeviation, checkFreeDayTime, lintReply, hardViolations,
   checkStaffAttribution, checkStaffNotWorkingClaim, mentionsPerson, checkGiftRepeat, GIFT_RE,
-  OTHER_TIME_REQUEST_RE,
+  OTHER_TIME_REQUEST_RE, checkUnverifiedOffer, checkFabricatedUnavailabilityReason,
+  AVAILABILITY_OFFER_RE, FABRICATED_UNAVAILABILITY_RE,
 };

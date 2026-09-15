@@ -1081,6 +1081,104 @@ describe('reply-guard: чужое время приписано запрошен
   });
 });
 
+// ── Свободное время без проверки инструментом (инцидент 2026-09-15, 79775546186) ──
+// Ночью пациентка спросила, верна ли её запись на 12:15 (устно обещанная живым
+// администратором тремя днями раньше). Мила ответила «есть свободное окошко на
+// 12:15» БЕЗ единого вызова get_available_slots — allowedTimes у старой
+// проверки легализовал бы «12:15», потому что оно уже звучало в истории чата.
+// verifiedTimes сверяется только с фактами ЭТОГО хода, поэтому такую реплику
+// теперь ловит unverified_offer.
+describe('reply-guard: свободное время без проверки инструментом (2026-09-15)', () => {
+  test('ноль вызовов инструментов, время предложено как свободное → корректирующий довызов', async () => {
+    const deps = makeDeps();
+    deps.provider.createMessage
+      .mockResolvedValueOnce(textResp(
+        'У главного врача Пери Исамудиновны как раз есть свободное окошко на 12:15. Давайте я запишу вас?'))
+      .mockResolvedValueOnce(textResp(
+        'Подскажите, пожалуйста, на какое время вам удобно — сейчас проверю свободные слоты.'));
+    const out = await orchestrator.runDialog(1, 'k', { deps, today: '2026-09-15', now: '00:10' });
+    expect(out.replies).toEqual([
+      'Подскажите, пожалуйста, на какое время вам удобно — сейчас проверю свободные слоты.',
+    ]);
+    expect(deps.provider.createMessage).toHaveBeenCalledTimes(2);
+    const fixMsg = deps.provider.createMessage.mock.calls[1][0].messages.slice(-1)[0].content;
+    expect(fixMsg).toContain('12:15');
+    expect(fixMsg).toMatch(/подтвержд/i);
+    expect(deps.provider.createMessage.mock.calls[1][0].tools).toEqual([]);
+  });
+
+  test('то же время подтверждено вызовом инструмента в этом ходе → нарушения нет', async () => {
+    const deps = makeDeps({
+      handlers: { get_available_slots: jest.fn(async () => ({
+        slots: [{ time: '12:15' }], offer_slots: [{ time: '12:15' }],
+      })) },
+    });
+    deps.provider.createMessage
+      .mockResolvedValueOnce(toolResp('get_available_slots', { staff_yc_id: 1, service_yc_id: 1, date: '2026-09-15' }))
+      .mockResolvedValueOnce(textResp('Есть свободное окошко на 12:15. Записать вас?'));
+    const out = await orchestrator.runDialog(1, 'k', { deps, today: '2026-09-15', now: '00:10' });
+    expect(out.replies).toEqual(['Есть свободное окошко на 12:15. Записать вас?']);
+    expect(deps.provider.createMessage).toHaveBeenCalledTimes(2);
+  });
+});
+
+// ── Придуманная причина отказа в записи (тот же инцидент, вторая половина) ──
+// create_booking упал с «время недоступно, причина неизвестна» и явным запретом
+// утверждать «слот только что заняли». Через 4 минуты, БЕЗ повторного вызова
+// инструмента, Мила всё равно написала «пока мы вели переписку… уже заняли».
+describe('reply-guard: придуманная причина отказа (2026-09-15)', () => {
+  test('«пока мы вели переписку… заняли» без нового вызова инструмента → корректирующий довызов', async () => {
+    const deps = makeDeps();
+    deps.provider.createMessage
+      .mockResolvedValueOnce(textResp(
+        'Елена, я понимаю ваше желание попасть именно в это время. К сожалению, ' +
+        'пока мы вели переписку, окошко на 12:15 уже заняли.'))
+      .mockResolvedValueOnce(textResp(
+        'К сожалению, это время уже недоступно. Могу предложить другое — на какое время вам посмотреть?'));
+    const out = await orchestrator.runDialog(1, 'k', { deps, today: '2026-09-15', now: '00:17' });
+    expect(out.replies).toEqual([
+      'К сожалению, это время уже недоступно. Могу предложить другое — на какое время вам посмотреть?',
+    ]);
+    expect(deps.provider.createMessage).toHaveBeenCalledTimes(2);
+    const fixMsg = deps.provider.createMessage.mock.calls[1][0].messages.slice(-1)[0].content;
+    expect(fixMsg).toMatch(/причин/i);
+  });
+
+  // Точное воспроизведение боевого хода 14962: create_booking падает с
+  // offer_slots, ответ нейтральный («то окошко уже занято» + офер ИЗ offer_slots)
+  // — без единой выдуманной причины. Не должен ловиться ни unverified_offer
+  // (клауза-скоуп), ни fabricated_unavailability_reason.
+  test('провал create_booking, нейтральный ответ с offer_slots — нарушения нет', async () => {
+    const deps = makeDeps({
+      // «12:15» уже фигурировало в переписке (как в бою — пациентка сама
+      // называла это время), поэтому unknown_time его не тронет: тест
+      // изолированно проверяет ИМЕННО новые unverified_offer/fabricated_reason.
+      history: { loadTranscript: jest.fn(async () => ({
+        messages: [{ role: 'user', content: 'Запишите меня, пожалуйста, на 15 сентября в 12.15' }],
+        watermark: 100,
+      })) },
+      handlers: {
+        create_booking: jest.fn(async () => ({
+          created: false,
+          error: 'Записать на это время не удалось. Причина неизвестна — не выдумывай её.',
+          offer_slots: [{ time: '13:30' }, { time: '17:30' }],
+          slot_unavailable: true,
+        })),
+      },
+    });
+    const reply = 'Елена, да, я вижу эту переписку. К сожалению, то окошко на 12:15 уже занято.\n\n' +
+      'Но у Пери Исамудиновны сегодня есть время на 13:30 или 17:30. Записать вас на одно из этих времён?';
+    deps.provider.createMessage
+      .mockResolvedValueOnce(toolResp('create_booking',
+        { staff_yc_id: 1910274, service_yc_id: 15394054, datetime: '2026-09-15T12:15:00+03:00' }))
+      .mockResolvedValueOnce(textResp(reply));
+    const out = await orchestrator.runDialog(1, 'k', { deps, today: '2026-09-15', now: '00:12' });
+    expect(out.replies).toEqual([reply]);
+    // Ровно 2 вызова провайдера: без корректирующего довызова reply-guard'а.
+    expect(deps.provider.createMessage).toHaveBeenCalledTimes(2);
+  });
+});
+
 // ── Плотная запись (§8 docs/superpowers/specs/2026-08-06-agent-slot-density-design.md):
 // модель называет время из полного slots МИМО подобранного offer_slots — только
 // лог (offer_bypass), никакого корректирующего довызова. ──

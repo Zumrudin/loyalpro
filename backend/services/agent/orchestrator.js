@@ -152,6 +152,15 @@ function buildHardFixPrompt(hard) {
   if (notWorking.length) {
     parts.push(`говорит, что ${notWorking.join(', ')} занята или всё расписано, но свежий график подтвердил: специалист в этот день НЕ РАБОТАЕТ. Не называй это занятостью`);
   }
+  const unverified = val('unverified_offer');
+  if (unverified.length) {
+    parts.push(`предлагает пациенту как свободное время ${unverified.join(', ')}, которое в этом ходе НИЧЕМ не подтверждено — инструмент проверки слотов не вызывался (или вернул другое). ` +
+      'Убери это время. Если для ответа нужно предложить слот — сначала запроси реальную сетку через инструмент; в ЭТОМ ответе называть неподтверждённое время нельзя');
+  }
+  if (val('fabricated_unavailability_reason').length) {
+    parts.push('придумывает причину, почему время недоступно (например, что его заняли прямо во время вашего разговора) — системе эта причина не известна и ничем не подтверждена. ' +
+      'Извинись нейтрально, без версий о причине, и предложи другое время');
+  }
   return 'СЛУЖЕБНАЯ ПРОВЕРКА (пациент этого не видит): твой последний ответ ' +
     `${parts.join('; а также ')}. В ответе — ТОЛЬКО переписанный текст для пациента.`;
 }
@@ -751,6 +760,16 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
     // Метки времени реплик — НЕ предложенные пациенту времена: без чистки
     // reply-guard считал бы разрешённым любое время отправки сообщения.
     const allowedTimes = new Set(replyGuard.extractTimes(stripAllStamps(JSON.stringify(messages))));
+    // verifiedTimes — СТРОГОЕ подмножество allowedTimes: только времена,
+    // реально подтверждённые В ЭТОМ ходе (фактическая часть промпта ниже +
+    // результаты инструментов в цикле). Сырой текст истории переписки сюда
+    // НЕ попадает. Инцидент 2026-09-15 (79775546186): allowedTimes легализует
+    // любое время, однажды прозвучавшее в чате (у оператора или у самого
+    // пациента), даже если оно никогда не проверялось, — Мила предложила
+    // «свободное окошко на 12:15» из трёхдневной давности переписки, а
+    // create_booking тут же упал. checkUnverifiedOffer в reply-guard сверяется
+    // именно с этим, более строгим множеством.
+    const verifiedTimes = new Set();
     // Из промпта берём ТОЛЬКО фактическую часть (от «ТЕКУЩИЙ КОНТЕКСТ:» и ниже):
     // часы клиники, текущее время, живые варианты стыковки, журнал прошлых ходов,
     // сверенные с CRM записи. Всё, что выше, — правила с ОБРАЗЦАМИ реплик, а в них
@@ -761,6 +780,7 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
     const factualIdx = system.indexOf(FACTUAL_SECTION_MARKER);
     for (const t of replyGuard.extractTimes(factualIdx >= 0 ? system.slice(factualIdx) : system)) {
       allowedTimes.add(t);
+      verifiedTimes.add(t);
     }
     // При новой переписке приветствие — не повтор, а требование промпта:
     // reply-guard иначе пишет repeat_greeting ровно там, где Мила права.
@@ -947,7 +967,7 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
         if (bookingErrored && SLOT_READ_TOOLS.has(tc.name)) recheckedAfterFail = true;
         results.push({ id: tc.id, name: tc.name, result, isError });
         const resultJson = JSON.stringify(result);
-        for (const t of replyGuard.extractTimes(resultJson)) allowedTimes.add(t);
+        for (const t of replyGuard.extractTimes(resultJson)) { allowedTimes.add(t); verifiedTimes.add(t); }
         // Плотная запись (§8 спеки): ограничиваем ИМЕННО результатами, где реально
         // есть offer_slots (get_available_slots и ретрай create_booking при отказе
         // по времени) — не любым tool-вызовом. Иначе время из ответа
@@ -1113,6 +1133,13 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
           patientTimes,
         }),
         ...replyGuard.checkStaffNotWorkingClaim(joined, { staffNotWorking }),
+        // Свободное время, ничем не подтверждённое в этом ходе (инцидент
+        // 2026-09-15, 79775546186): предложила «12:15» из старой переписки,
+        // не вызвав ни разу get_available_slots.
+        ...replyGuard.checkUnverifiedOffer(joined, { verifiedTimes }),
+        // Придуманная причина отказа («пока мы вели переписку… заняли») —
+        // тот же инцидент, вторая половина.
+        ...replyGuard.checkFabricatedUnavailabilityReason(joined),
         // «Консультация в подарок» один раз за диалог — только измерение.
         ...replyGuard.checkGiftRepeat(joined,
           { priorHasGift: replyGuard.GIFT_RE.test(priorAssistantText) }),
