@@ -350,6 +350,38 @@ function checkFabricatedUnavailabilityReason(text) {
   return m ? [{ type: 'fabricated_unavailability_reason', value: m[0].trim().slice(0, 160) }] : [];
 }
 
+// ── Время объявлено занятым, хотя инструмент вернул его свободным ──────────
+// Инцидент 2026-09-16 (79774224184): «Давайте на четверг на 21:30» →
+// get_available_slots вернул 21:30 в slots (offer_slots без day_part — [18:00,
+// 13:00]) → Мила: «окошко на 21:30 уже занято», и запись уехала на 18:00. Ни
+// одна прежняя проверка этого не ловила: offer_bypass намеренно пропускает
+// время, названное пациентом, а checkUnverifiedOffer смотрит только на ложное
+// «свободно». Это зеркало checkUnverifiedOffer с обратной полярностью.
+//
+// freeTimes собирает оркестратор, и множество намеренно УЗКОЕ: времена, названные
+// пациентом ЦИФРАМИ, которые есть в slots КАЖДОЙ одномастерной выдачи хода
+// (пересечение — «у Татьяны 21:30 занято, а у Юлии свободно» законно, когда у
+// Татьяны его в slots нет), и только если в этом ходе не падал write-инструмент
+// (провал reschedule_booking на это время — не выдумка, а факт). Проверка по
+// клаузам, как у checkUnverifiedOffer: «на 19:00 занято. Но есть 21:30» не
+// должно ловить 21:30 из соседнего предложения.
+const UNAVAILABLE_RE =
+  /(занят[а-яё]*|недоступн[а-яё]*|нет\s+свободн[а-яё]*|уже\s+нет|не\s+получ[а-яё]*|не\s+выйдет|не\s+остал[а-яё]*|нет\s+(?:окошк|окн|врем)[а-яё]*)/iu;
+
+function checkFalseUnavailability(text, opts = {}) {
+  const free = opts.freeTimes;
+  if (!free || !free.size) return [];
+  const s = String(text || '');
+  const out = [];
+  for (const clause of s.split(/(?<=[.!?;\n])/)) {
+    if (!UNAVAILABLE_RE.test(clause)) continue;
+    for (const t of extractTimes(clause)) {
+      if (free.has(t)) out.push({ type: 'false_unavailability', value: t });
+    }
+  }
+  return out;
+}
+
 // Жёсткие нарушения — оркестратор просит модель переписать ответ; стилистика
 // (эмодзи, приветствие, offer_bypass, free_day_time, gift_repeat) — только лог.
 //
@@ -365,6 +397,10 @@ function checkFabricatedUnavailabilityReason(text) {
 const HARD_TYPES = new Set([
   'taboo_word', 'id_leak', 'unknown_time', 'alien_time_attribution', 'staff_not_working_claim',
   'unverified_offer', 'fabricated_unavailability_reason',
+  // false_unavailability — тоже прямая ложь о состоянии записи (инцидент
+  // 2026-09-16), жёсткое сразу: множество freeTimes у оркестратора узкое по
+  // построению (см. checkFalseUnavailability), ложных срабатываний не ждём.
+  'false_unavailability',
 ]);
 function hardViolations(violations) {
   return (violations || []).filter(v => HARD_TYPES.has(v.type));
@@ -375,4 +411,5 @@ module.exports = {
   checkStaffAttribution, checkStaffNotWorkingClaim, mentionsPerson, checkGiftRepeat, GIFT_RE,
   OTHER_TIME_REQUEST_RE, checkUnverifiedOffer, checkFabricatedUnavailabilityReason,
   AVAILABILITY_OFFER_RE, FABRICATED_UNAVAILABILITY_RE,
+  checkFalseUnavailability, UNAVAILABLE_RE,
 };

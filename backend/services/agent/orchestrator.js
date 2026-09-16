@@ -157,6 +157,11 @@ function buildHardFixPrompt(hard) {
     parts.push(`предлагает пациенту как свободное время ${unverified.join(', ')}, которое в этом ходе НИЧЕМ не подтверждено — инструмент проверки слотов не вызывался (или вернул другое). ` +
       'Убери это время. Если для ответа нужно предложить слот — сначала запроси реальную сетку через инструмент; в ЭТОМ ответе называть неподтверждённое время нельзя');
   }
+  const falseBusy = val('false_unavailability');
+  if (falseBusy.length) {
+    parts.push(`говорит, что время ${falseBusy.join(', ')} занято или недоступно, но инструмент проверки слотов в ЭТОМ ходе вернул его СВОБОДНЫМ. ` +
+      'Не называй его занятым: подтверди пациенту это время и предложи записать (или перенести) именно на него');
+  }
   if (val('fabricated_unavailability_reason').length) {
     parts.push('придумывает причину, почему время недоступно (например, что его заняли прямо во время вашего разговора) — системе эта причина не известна и ничем не подтверждена. ' +
       'Извинись нейтрально, без версий о причине, и предложи другое время');
@@ -805,6 +810,10 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
     // (сверка «называл ли пациент препарат»). Пересчитывается каждой попыткой,
     // как attachments: перегенерация видит свежую серию.
     toolCtx.patientText = patientText;
+    // ПОСЛЕДНЕЕ сообщение пациента (серия после нашей реплики) — get_available_slots
+    // продвигает названное в нём свободное время в offer_slots (инцидент 2026-09-16).
+    // Именно последнее, а не весь транскрипт: в окне лежат времена старых визитов.
+    toolCtx.patientLastText = stripAllStamps(lastUser ? String(lastUser.content || '') : '');
     // Прошлые реплики Милы (без строк администратора и без меток времени) — для
     // title-dedup («должность один раз за диалог») и телеметрии gift_repeat.
     // Строки с OPERATOR_MARK режутся ПОСТРОЧНО: реплика администратора склеена
@@ -830,6 +839,10 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
     // дня. Только измерение (free_day_time), см. checkFreeDayTime в reply-guard.
     let sawFreeDay = false;
     const staffNotWorking = [];
+    // Полный slots КАЖДОЙ одномастерной выдачи get_available_slots этого хода —
+    // для checkFalseUnavailability (инцидент 2026-09-16: «21:30 занято» при 21:30
+    // в slots). Пересечение множеств считается перед линтом.
+    const singleStaffSlotSets = [];
 
     const replies = [];
     let escalated = false;
@@ -838,6 +851,7 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
     let idleIters = 0;              // итераций подряд, где ВСЕ вызовы — повторы из кэша хода
     let bookingSucceeded = false;   // create_booking вернул успех в этом ходе
     let bookingErrored = false;     // create_booking вернул ошибку в этом ходе
+    let writeErrored = false;       // ЛЮБОЙ write-инструмент вернул ошибку (перенос/правка тоже) — «занято» после него не выдумка
     let writeSucceeded = false;     // любой из WRITE_TOOLS отработал без ошибки в этом ходе
     let lastWrite = null;           // { tool, input } последнего успешного write — для подтверждения
     let degradedAfterWrite = false; // провайдер упал ПОСЛЕ успешной записи → детерминированное подтверждение
@@ -935,6 +949,7 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
         }
         if (!isError && SIDE_EFFECT_TOOLS.has(tc.name)) sideEffect = true;
         if (!isError && WRITE_TOOLS.has(tc.name)) { writeSucceeded = true; lastWrite = { tool: tc.name, input: tc.input }; }
+        if (isError && WRITE_TOOLS.has(tc.name)) writeErrored = true;
         if (!isError && tc.name === 'list_client_bookings') readBookings = true;
         if (tc.name === 'escalate_to_operator' && result && result.escalated) escalated = true;
         if (tc.name === 'create_booking') { if (isError) bookingErrored = true; else bookingSucceeded = true; }
@@ -983,6 +998,13 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
         if (SLOT_READ_TOOLS.has(tc.name)) collectStaffAvailability(result, emptyStaff, availableStaff);
         if (tc.name === 'get_available_slots' && result && result.staff_not_working && result.staff_name) {
           staffNotWorking.push({ name: result.staff_name, nextWorkingDate: result.staff_next_working_date || null });
+        }
+        // Только одномастерная выдача (staff_yc_id в вызове) и только её собственный
+        // slots — окна alternative_staff/staff_options сюда не идут: они про ДРУГОГО
+        // мастера, и «у запрошенного занято» рядом с ними законно.
+        if (tc.name === 'get_available_slots' && !isError && tc.input && tc.input.staff_yc_id
+            && result && Array.isArray(result.slots)) {
+          singleStaffSlotSets.push(new Set(result.slots.map(sl => String(sl && sl.time))));
         }
         // Источник для address-guard — СЫРОЙ текст статьи, а не JSON результата:
         // JSON-эскейп «\n» приклеивает букву n к первому слову следующей строки
@@ -1137,6 +1159,14 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
         // 2026-09-15, 79775546186): предложила «12:15» из старой переписки,
         // не вызвав ни разу get_available_slots.
         ...replyGuard.checkUnverifiedOffer(joined, { verifiedTimes }),
+        // Ложное «занято» (инцидент 2026-09-16, 79774224184): названное пациентом
+        // время есть в slots каждой одномастерной выдачи хода, write не падал, а
+        // реплика объявляет его занятым. Зеркало checkUnverifiedOffer.
+        ...replyGuard.checkFalseUnavailability(joined, {
+          freeTimes: writeErrored ? new Set()
+            : new Set([...patientTimes].filter(t => singleStaffSlotSets.length
+                && singleStaffSlotSets.every(set => set.has(t)))),
+        }),
         // Придуманная причина отказа («пока мы вели переписку… заняли») —
         // тот же инцидент, вторая половина.
         ...replyGuard.checkFabricatedUnavailabilityReason(joined),

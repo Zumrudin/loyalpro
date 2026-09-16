@@ -10,6 +10,7 @@ const eqContext = require('../equipment-context');
 const leadTime = require('../lead-time');
 const density = require('../slot-density');
 const staffSchedule = require('../staff-schedule');
+const patientTime = require('../patient-time');
 
 // Насколько вперёд смотрим график мастера, когда на запрошенную дату у него пусто.
 // Отпуск исчисляется неделями (у PERI — 12–31.08), и вопрос пациента «а когда
@@ -308,6 +309,21 @@ function applyOffer(out, slots, busy, opts) {
   return out;
 }
 
+// Время, названное ПАЦИЕНТОМ в последнем сообщении, и свободное у этого мастера —
+// первым в offer_slots (инцидент 2026-09-16, см. patient-time.js). Мутирует holder
+// (верхний уровень выдачи или элемент alternative_staff) и возвращает найденные
+// времена. free_day при этом снимается: пациент уже назвал конкретное время, и
+// вопрос о половине дня лишний (правило промпта делает для этого исключение), а
+// free_day рядом с непустым offer_slots читался бы как противоречие.
+function applyPatientTime(holder, patientText) {
+  const r = patientTime.promotePatientTime({ slots: holder.slots, offer: holder.offer_slots, patientText });
+  if (!r.matched.length) return [];
+  holder.offer_slots = r.offer;
+  holder.patient_time_free = r.matched;
+  delete holder.free_day;
+  return r.matched;
+}
+
 // У запрошенного мастера пусто → проверяем других исполнителей ЭТОЙ услуги на ту же
 // дату. Инцидент 2026-08-01: «Голливуд» на завтра — модель проверила только Юлию и
 // сказала «окошек нет», хотя у Татьяны было 14:00; клиент сам вытащил альтернативу
@@ -550,10 +566,15 @@ async function run(salonId, input, ctx = {}) {
     const staffName = (staffList.find(m => String(m.yc_id) === String(staffId)) || {}).name || null;
     if (staffName) out.staff_name = staffName;
     if (out.slots.length) {
+      // Названное пациентом свободное время — ДО хинтов: оно снимает free_day, и
+      // хинт про половину дня тогда не нужен.
+      const named = applyPatientTime(out, ctx && ctx.patientLastText);
       // Хинт про пустой день и про занятую половину дня — единственные случаи, где
       // одномастерная выдача что-то ОБЪЯСНЯЕТ модели: время в offer_slots её и так
-      // ведёт (правило промпта «КАКОЕ ВРЕМЯ ПРЕДЛАГАТЬ ПЕРВЫМ»).
-      if (out.free_day) out.hint = HINT_FREE_DAY;
+      // ведёт (правило промпта «КАКОЕ ВРЕМЯ ПРЕДЛАГАТЬ ПЕРВЫМ»). Третий — время,
+      // названное пациентом (инцидент 2026-09-16: модель объявила его занятым).
+      if (named.length) out.hint = patientTime.hintPatientTimeFree(named);
+      else if (out.free_day) out.hint = HINT_FREE_DAY;
       else if (out.day_part_empty) out.hint = HINT_DAY_PART_EMPTY;
       return out;
     }
@@ -575,6 +596,13 @@ async function run(salonId, input, ctx = {}) {
         // на завтра всё занято». Кого проверяли внутри, пациента не касается.
         'Если пациент этого мастера сам не спрашивал (выбрала его ты) — НЕ говори, что у него занято: ' +
         'просто предложи специалиста с окнами и его время, без отчёта о проверке.';
+      // Названное пациентом время, свободное у альтернативы, — первым в ЕЁ offer_slots
+      // (первый ход инцидента 2026-09-16 шёл ровно этой веткой).
+      const namedAlt = new Set();
+      for (const a of out.alternative_staff) {
+        for (const t of applyPatientTime(a, ctx && ctx.patientLastText)) namedAlt.add(t);
+      }
+      if (namedAlt.size) out.hint += ' ' + patientTime.hintPatientTimeFree([...namedAlt]);
       // Тот же случай, что и в staff_options: у альтернативного мастера день может быть
       // пустым, и тогда «время из его offer_slots» назвать физически нечем.
       if (out.alternative_staff.some(a => a.free_day)) out.hint += HINT_FREE_DAY_OPTIONS;

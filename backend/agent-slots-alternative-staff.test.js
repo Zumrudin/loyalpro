@@ -212,3 +212,23 @@ describe('offer_slots у альтернативных специалистов',
     expect(out.hint).toMatch(/offer_slots/);
   });
 });
+
+// Инцидент 2026-09-16 (79774224184), первый ход: запрошенный мастер не работает,
+// окна у альтернативы. Если пациент назвал время и оно свободно у альтернативного
+// мастера — оно должно встать первым в ЕГО offer_slots, иначе модель снова
+// объявит «занято» то, чего нет в подобранной паре.
+describe('get_available_slots — названное пациентом время у альтернативного мастера', () => {
+  test('время из сообщения пациента свободно у альтернативы → первым в её offer_slots', async () => {
+    ycGetStaffSeances.mockImplementation(async (_salon, staffId) => (staffId === 11
+      ? seanceGrid('11:00', '21:00', [['11:00', '21:00']])
+      // услуга тут 60 мин (мок equipment-context) → 21:00 — последний старт смены
+      : seanceGrid('10:00', '22:00', [['12:00', '13:00'], ['18:00', '21:00']])));
+    const out = await slots.run(1, ARGS, { nowMs: NOON, patientLastText: 'давайте на 21:00' });
+    expect(out.slots).toEqual([]);
+    const alt = out.alternative_staff.find(a => a.slots.some(s => s.time === '21:00'));
+    expect(alt).toBeDefined();
+    expect(alt.offer_slots[0].time).toBe('21:00');
+    expect(alt.patient_time_free).toEqual(['21:00']);
+    expect(out.hint).toContain('21:00');
+  });
+});

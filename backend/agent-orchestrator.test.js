@@ -182,7 +182,10 @@ describe('runDialog', () => {
           channel: null, priceIndex: null, attachments: [],
           // patientText — текст сообщений пациента для generic-booking-guard в
           // create_booking (сверка «называл ли пациент препарат»).
-          patientText: expect.any(String) });
+          patientText: expect.any(String),
+          // patientLastText — ПОСЛЕДНЕЕ сообщение пациента: get_available_slots
+          // продвигает названное в нём свободное время в offer_slots (2026-09-16).
+          patientLastText: expect.any(String) });
     expect(out.replies).toContain('Свободно 10:00. Записать?');
     expect(out.sideEffect).toBe(false);
     const secondCallMessages = deps.provider.createMessage.mock.calls[1][0].messages;
@@ -2472,5 +2475,110 @@ describe('предвызов КБ: релевантность статьи и и
       .mockResolvedValueOnce(textResp('Ответ'));
     await orchestrator.runDialog(1, 'k', { deps: d });
     expect(kbHandler).toHaveBeenCalledTimes(2);
+  });
+});
+
+// ── Время объявлено занятым, хотя инструмент вернул его свободным (инцидент 2026-09-16) ──
+// 79774224184: «Давайте на четверг на 21:30» → get_available_slots вернул 21:30 в
+// slots (offer_slots без day_part = [18:00, 13:00]) → Мила: «окошко на 21:30 уже
+// занято», перенесла на 18:00. Промпт-правило «названное пациентом время
+// подтверждай, если оно есть в slots» проиграно; reply-guard теперь сверяет
+// «занято» с выдачей ЭТОГО хода.
+describe('reply-guard: ложное «занято» при свободном времени (2026-09-16)', () => {
+  const transcript = (text) => ({
+    loadTranscript: jest.fn(async () => ({
+      messages: [
+        { role: 'user', content: 'Добрый день, а можно перенести на четверг? Вечер' },
+        { role: 'assistant', content: 'У Юлии есть окошки в 18:00 и 21:30. Перенести к ней?' },
+        { role: 'user', content: text },
+      ],
+      watermark: 100,
+    })),
+  });
+  const slotsResult = () => ({
+    slots: ['10:00', '13:00', '18:00', '21:30'].map(t => ({ time: t, datetime: `2026-09-17T${t}:00+03:00` })),
+    offer_slots: ['18:00', '13:00'].map(t => ({ time: t, datetime: `2026-09-17T${t}:00+03:00` })),
+    source: 'schedule', staff_name: 'Гатауллина Юлия',
+  });
+  const CALL = { staff_yc_id: 1914276, service_yc_id: 9536759, date: '2026-09-17' };
+
+  test('боевой ход: «21:30 уже занято» при 21:30 в slots → корректирующий довызов', async () => {
+    const deps = makeDeps({
+      history: transcript('Давайте на четверг на 21:30'),
+      handlers: { get_available_slots: jest.fn(async () => slotsResult()) },
+    });
+    deps.provider.createMessage
+      .mockResolvedValueOnce(toolResp('get_available_slots', CALL))
+      .mockResolvedValueOnce(textResp(
+        'Виктория, к сожалению, окошко на 21:30 уже занято. Могу предложить на четверг в 18:00 к Юлии. Подойдет это время?'))
+      .mockResolvedValueOnce(textResp('Виктория, 21:30 в четверг свободно. Переношу вашу запись к Юлии на это время?'));
+    const out = await orchestrator.runDialog(1, 'k', { deps, today: '2026-09-16', now: '08:23' });
+    expect(out.replies).toEqual(['Виктория, 21:30 в четверг свободно. Переношу вашу запись к Юлии на это время?']);
+    expect(deps.provider.createMessage).toHaveBeenCalledTimes(3);
+    const fixMsg = deps.provider.createMessage.mock.calls[2][0].messages.slice(-1)[0].content;
+    expect(fixMsg).toContain('21:30');
+    expect(fixMsg).toMatch(/свободн/i);
+    expect(deps.provider.createMessage.mock.calls[2][0].tools).toEqual([]);
+    // Последнее сообщение пациента доехало до инструмента — источник продвижения.
+    expect(deps.registry.handlers.get_available_slots).toHaveBeenCalledWith(1, CALL,
+      expect.objectContaining({ patientLastText: 'Давайте на четверг на 21:30' }));
+  });
+
+  test('честное подтверждение названного времени — без довызова', async () => {
+    const deps = makeDeps({
+      history: transcript('Давайте на четверг на 21:30'),
+      handlers: { get_available_slots: jest.fn(async () => slotsResult()) },
+    });
+    deps.provider.createMessage
+      .mockResolvedValueOnce(toolResp('get_available_slots', CALL))
+      .mockResolvedValueOnce(textResp('Да, 21:30 в четверг свободно. Переношу вашу запись к Юлии?'));
+    const out = await orchestrator.runDialog(1, 'k', { deps, today: '2026-09-16', now: '08:23' });
+    expect(out.replies).toEqual(['Да, 21:30 в четверг свободно. Переношу вашу запись к Юлии?']);
+    expect(deps.provider.createMessage).toHaveBeenCalledTimes(2);
+  });
+
+  // Запись на это время в ЭТОМ ходе упала (slot_unavailable) — «занято» больше не
+  // выдумка: инструмент чтения и инструмент записи разошлись, верим записи.
+  test('reschedule_booking на это время упал в том же ходе → «занято» не нарушение', async () => {
+    const deps = makeDeps({
+      history: transcript('Давайте на четверг на 21:30'),
+      handlers: {
+        get_available_slots: jest.fn(async () => slotsResult()),
+        reschedule_booking: jest.fn(async () => ({
+          rescheduled: false, slot_unavailable: true,
+          error: 'Перенести на это время не удалось. Причина неизвестна — не выдумывай её.',
+        })),
+      },
+    });
+    deps.registry.schemas.push({ name: 'reschedule_booking' });
+    deps.provider.createMessage
+      .mockResolvedValueOnce(toolResp('get_available_slots', CALL, 'c1'))
+      .mockResolvedValueOnce(toolResp('reschedule_booking',
+        { record_id: 1917477468, datetime: '2026-09-17T21:30:00+03:00', staff_yc_id: 1914276 }, 'c2'))
+      .mockResolvedValueOnce(textResp('К сожалению, на 21:30 перенести не получилось. Могу предложить 18:00.'));
+    const out = await orchestrator.runDialog(1, 'k', { deps, today: '2026-09-16', now: '08:23' });
+    expect(out.replies).toEqual(['К сожалению, на 21:30 перенести не получилось. Могу предложить 18:00.']);
+    expect(deps.provider.createMessage).toHaveBeenCalledTimes(3);
+  });
+
+  // Два мастера за ход: у одного 21:30 есть, у другого нет — «у Татьяны 21:30
+  // занято» законно. Время считается свободным, только если свободно во ВСЕХ
+  // одномастерных выдачах хода.
+  test('время свободно не во всех одномастерных выдачах хода → не нарушение', async () => {
+    const deps = makeDeps({
+      history: transcript('Давайте на четверг на 21:30 к Татьяне'),
+      handlers: {
+        get_available_slots: jest.fn(async (_s, input) => (input.staff_yc_id === 3356928
+          ? { slots: [{ time: '18:00' }], offer_slots: [{ time: '18:00' }], staff_name: 'Богатырева Татьяна' }
+          : slotsResult())),
+      },
+    });
+    deps.provider.createMessage
+      .mockResolvedValueOnce(toolResp('get_available_slots', { ...CALL, staff_yc_id: 3356928 }, 'c1'))
+      .mockResolvedValueOnce(toolResp('get_available_slots', CALL, 'c2'))
+      .mockResolvedValueOnce(textResp('У Татьяны на 21:30 занято, но у Юлии 21:30 свободно. Перенести к ней?'));
+    const out = await orchestrator.runDialog(1, 'k', { deps, today: '2026-09-16', now: '08:23' });
+    expect(out.replies).toEqual(['У Татьяны на 21:30 занято, но у Юлии 21:30 свободно. Перенести к ней?']);
+    expect(deps.provider.createMessage).toHaveBeenCalledTimes(3);
   });
 });

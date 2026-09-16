@@ -180,3 +180,53 @@ describe('free_day: у мастера на дату нет ни одной за�
     expect(res.hint).toMatch(/заняты/i);
   });
 });
+
+// ── Время, названное ПАЦИЕНТОМ, свободно → оно и предлагается (инцидент 2026-09-16) ──
+// 79774224184: «Давайте на четверг на 21:30» → инструмент вернул 21:30 в slots,
+// но offer_slots (плотность без day_part) был [18:00, 13:00] — модель прочитала
+// «нет в offer_slots» как «занято». Теперь решение принимает код: названное
+// пациентом свободное время встаёт ПЕРВЫМ в offer_slots и подсвечивается хинтом.
+describe('patient_time_free: время из последнего сообщения пациента', () => {
+  // Занято 12:00–13:00 и 18:30–21:30 → плотность подобрала бы 13:00 и 18:00; 21:30
+  // свободно, но в offer не попадает (край смены анкором не становится).
+  const busyDay = () => grid('10:00', '22:00', [['12:00', '13:00'], ['18:30', '21:30']]);
+
+  test('боевой случай: 21:30 названо пациентом и есть в slots → первым в offer_slots + хинт', async () => {
+    ycGetStaffSeances.mockResolvedValue(busyDay());
+    const res = await tool.run(1, ARGS, { ...CTX, patientLastText: 'Давайте на четверг на 21:30' });
+    expect(res.slots.map(s => s.time)).toContain('21:30');
+    expect(res.offer_slots[0].time).toBe('21:30');
+    expect(res.patient_time_free).toEqual(['21:30']);
+    expect(res.hint).toContain('21:30');
+    expect(res.hint).toMatch(/СВОБОДН/);
+  });
+
+  test('названное время занято → выдача как прежде, поля patient_time_free нет', async () => {
+    ycGetStaffSeances.mockResolvedValue(busyDay());
+    const res = await tool.run(1, ARGS, { ...CTX, patientLastText: 'а на 19:00 можно?' });
+    expect(res.slots.map(s => s.time)).not.toContain('19:00');
+    expect(res.patient_time_free).toBeUndefined();
+    expect(res.offer_slots.map(s => s.time)).toEqual(['13:00', '18:00']);
+    expect(res.hint).toBeUndefined();
+  });
+
+  test('без текста пациента — прежнее поведение', async () => {
+    ycGetStaffSeances.mockResolvedValue(busyDay());
+    const res = await tool.run(1, ARGS, CTX);
+    expect(res.offer_slots.map(s => s.time)).toEqual(['13:00', '18:00']);
+    expect(res.patient_time_free).toBeUndefined();
+  });
+
+  // Пациент назвал конкретное время в пустой день: вопрос о половине дня тут
+  // лишний (правило промпта «ДЕНЬ СВОБОДЕН ЦЕЛИКОМ» само делает исключение для
+  // названного времени), а free_day вместе с непустым offer_slots читался бы
+  // как противоречие.
+  test('свободный день + названное время → free_day снят, время в offer_slots', async () => {
+    ycGetStaffSeances.mockResolvedValue(grid('11:00', '21:00', []));
+    const res = await tool.run(1, ARGS, { ...CTX, patientLastText: 'можно в 15:00?' });
+    expect(res.free_day).toBeUndefined();
+    expect(res.offer_slots.map(s => s.time)).toEqual(['15:00']);
+    expect(res.patient_time_free).toEqual(['15:00']);
+    expect(res.hint).not.toMatch(/половин/i);
+  });
+});

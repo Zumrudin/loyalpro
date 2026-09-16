@@ -477,3 +477,48 @@ describe('checkGiftRepeat', () => {
     expect(hardViolations([{ type: 'gift_repeat', value: 'в подарок' }])).toEqual([]);
   });
 });
+
+// ── Время объявлено занятым, хотя инструмент в этом ходе вернул его свободным ──
+// Инцидент 2026-09-16 (79774224184): «окошко на 21:30 уже занято» при 21:30 в
+// slots той же выдачи. Зеркало checkUnverifiedOffer: там ложное «свободно»,
+// тут ложное «занято». freeTimes собирает оркестратор (см. его тесты).
+describe('checkFalseUnavailability', () => {
+  const { checkFalseUnavailability } = g;
+  const free = new Set(['21:30']);
+
+  test('боевая реплика: «21:30 уже занято» при свободном 21:30 → false_unavailability', () => {
+    const v = checkFalseUnavailability(
+      'Виктория, к сожалению, окошко на 21:30 уже занято. Могу предложить на четверг в 18:00 к Юлии.',
+      { freeTimes: free });
+    expect(v).toEqual([{ type: 'false_unavailability', value: '21:30' }]);
+  });
+
+  test('другие формулировки отказа: «недоступно», «нет свободного», «уже нет», «не получится»', () => {
+    for (const t of [
+      'На 21:30, к сожалению, недоступно.',
+      'В 21:30 нет свободного времени.',
+      'На 21:30 уже нет окошка.',
+      'На 21:30 записать не получится.',
+    ]) {
+      expect(checkFalseUnavailability(t, { freeTimes: free })).toEqual([{ type: 'false_unavailability', value: '21:30' }]);
+    }
+  });
+
+  test('честное подтверждение свободного времени — чисто', () => {
+    expect(checkFalseUnavailability('Да, 21:30 свободно! Перенести вашу запись?', { freeTimes: free })).toEqual([]);
+  });
+
+  test('«занято» про ДРУГОЕ время, свободное названо в другой клаузе — чисто', () => {
+    expect(checkFalseUnavailability('На 19:00 занято. Но есть 21:30 — подойдёт?', { freeTimes: free })).toEqual([]);
+  });
+
+  test('без freeTimes или с пустым множеством — проверка выключена', () => {
+    expect(checkFalseUnavailability('На 21:30 занято.')).toEqual([]);
+    expect(checkFalseUnavailability('На 21:30 занято.', { freeTimes: new Set() })).toEqual([]);
+  });
+
+  test('false_unavailability — жёсткое нарушение (корректирующий довызов)', () => {
+    expect(hardViolations([{ type: 'false_unavailability', value: '21:30' }]))
+      .toEqual([{ type: 'false_unavailability', value: '21:30' }]);
+  });
+});
