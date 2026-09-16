@@ -728,7 +728,19 @@ async function processRecordEvent(payload, salon, settings) {
     if (client.yclients_card_id && salon.yclients_card_type_id) {
       try {
         await ycAccrueCard(salon, client.yclients_card_id, cashback, `Кэшбэк ${pct}% за визит #${ycRecordId}`);
-      } catch(e) { logger.error(`Card accrual error: ${e.message}`); }
+      } catch(e) {
+        // The real YClients write failed — do NOT fall through to crediting bonus_balance
+        // locally, or our DB permanently diverges from the client's actual card (incident
+        // 2026-09-16: a swallowed error here left a client 277+305₽ short and, via the FinOp
+        // balance-reconciliation path below, caused a phantom "redemption" that then denied
+        // her NEXT visit's cashback too). ycAccrueCard has no idempotency key (same caveat as
+        // reminders/bonus.js), so we deliberately do NOT auto-retry — a retry risks a real
+        // double-credit if the call actually succeeded server-side despite a client-side
+        // error/timeout. Terminal-deny instead and surface loudly for manual reconciliation.
+        logger.error(`Card accrual error record=${ycRecordId} client=${client.id} cashback=${cashback} — NOT credited locally, needs manual check: ${e.message}`);
+        await db.query('UPDATE finances_log SET cashback_amount=0,processed=TRUE WHERE yclients_record_id=$1', [ycRecordId]);
+        return;
+      }
     }
 
     await db.query(
@@ -941,6 +953,16 @@ async function _processFinancesOperationLocked(payload, salon) {
          delta < 0 ? `Списание бонусов при оплате визита #${ycRecordId}` : `Начисление бонусов (YClients) #${ycRecordId}`,
          dbRecord?.id || null]
       );
+      if (delta < 0) {
+        // This redemption row is about to feed hasRedemptionTx and can deny this SAME
+        // record's own cashback (incident 2026-09-16: a stale local balance — caused by
+        // an earlier silently-failed ycAccrueCard — got misread here as "client paid with
+        // bonuses" and blocked a legitimate accrual). We can't reliably tell a genuine
+        // checkout redemption apart from balance drift from the data YClients sends us, so
+        // log loudly instead of silently trusting it — this is what let the incident go
+        // unnoticed for a month.
+        logger.warn(`FinOp create: recorded redemption ${delta} for record=${ycRecordId} client=${client.id} — will deny this record's own cashback if not yet decided; verify against real card history if unexpected`);
+      }
       logger.info(`FinOp create: synced balance ${oldBalance} → ${newBalance} for client ${client.name}`);
 
       // Fix Bug 2: if client paid with bonuses (delta<0), revert any prior cashback accrual for this record
