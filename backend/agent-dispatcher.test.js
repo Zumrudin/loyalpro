@@ -947,3 +947,13 @@ describe('ожидание ответа клиента (followup)', () => {
     )).toBe(true);
   });
 });
+
+test('принудительный перевод после провала записи логирует погашенный черновик (переводы строк схлопнуты)', async () => {
+  const d = deps({ orchestrator: { runDialog: jest.fn(async () => (
+    { replies: ['Чтобы закрепить время,\nподскажите номер 🤍'], escalated: false, bookingFailed: true })) } });
+  dispatcher.enqueue(1, 'k', meta, d);
+  await jest.advanceTimersByTimeAsync(1000);
+  const line = mockLogger.warn.mock.calls.map(c => String(c[0])).find(s => /принудительный перевод/.test(s));
+  expect(line).toBeDefined();
+  expect(line).toContain('Чтобы закрепить время, подскажите номер 🤍');
+});

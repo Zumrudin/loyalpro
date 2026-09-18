@@ -469,3 +469,17 @@ test('send_price_list: в памяти остаётся факт отправл�
   })], { nowMs: NOW }).lines[0];
   expect(fail).toMatch(/не отправ/i);
 });
+
+test('needs_phone — единственный error-вызов, который рендерится: модель обязана помнить, НА ЧТО просила номер', () => {
+  const rows = [ev({ tool: 'create_booking', is_error: true,
+    input: { datetime: '2026-08-05T14:00:00+03:00', service_yc_id: 7, staff_yc_id: 55, client_name: 'Анна' },
+    result: { needs_phone: true, invalid_args: true, error: 'Нет номера' }, delivered: true })];
+  const { lines } = renderMemory(rows, { nowMs: NOW });
+  const joined = lines.join('\n');
+  expect(joined).toMatch(/номер/);
+  expect(joined).toMatch(/service_yc_id=7/);
+  expect(joined).toMatch(/staff_yc_id=55/);
+  expect(joined).toMatch(/client_phone/);
+  expect(joined).not.toMatch(/record_id/);
+  expect(joined).not.toMatch(/Анна/);
+});

@@ -11,7 +11,11 @@
 //  • ИСКЛЮЧЕНИЕ: write-инструменты рендерятся при ЛЮБОМ delivered — запись в
 //    YClients существует независимо от судьбы реплики, забыть её опаснее всего;
 //  • ошибочные вызовы (is_error) не рендерятся: провалы уже обработаны
-//    диспетчером в том же ходе (bookingFailed/falseSuccess);
+//    диспетчером в том же ходе (bookingFailed/falseSuccess). ЕДИНСТВЕННОЕ
+//    исключение — create_booking с needs_phone (канал без номера, код сам
+//    спросил номер у пациента): на следующем ходу модель обязана помнить, НА
+//    ЧТО именно просила номер (дата/время/услуга/мастер), иначе после ответа
+//    пациента ей нечего передать в create_booking (инцидент 2026-09-18);
 //  • инструменты из SKIP_TOOLS не рендерятся вовсе (см. список ниже);
 //  • слоты: конкретные времена — только если событию < 30 минут; старше — лишь
 //    факт «смотрела слоты» (иначе память воспроизвела бы инцидент со стухшими
@@ -173,11 +177,18 @@ function compactVisit(v) {
 const EXTRACTORS = {
   create_booking(e) {
     const inp = e.input || {}, res = e.result || {};
-    const bits = [`создала запись record_id=${res.record_id}`];
+    const bits = [];
     if (inp.datetime) bits.push(`на ${fmtDatetime(inp.datetime)}`);
     if (inp.service_yc_id) bits.push(`service_yc_id=${inp.service_yc_id}`);
     if (inp.staff_yc_id) bits.push(`staff_yc_id=${inp.staff_yc_id}`);
-    return bits.join(' ');
+    if (res.needs_phone === true) {
+      // Запись НЕ создана (см. шапку): факт, что номера не было и код его уже
+      // попросил, плюс параметры для повторного вызова. client_name/comment
+      // сюда не идут (PII) — ФИО подставит карточка по номеру.
+      return `запись ${bits.join(' ')} НЕ создана: номера телефона не было, система уже попросила его у пациента — ` +
+        'когда пациент пришлёт номер, повтори create_booking с этими параметрами и client_phone';
+    }
+    return [`создала запись record_id=${res.record_id}`, ...bits].join(' ');
   },
   book_chain(e) {
     const res = e.result || {};
@@ -377,8 +388,11 @@ function renderMemory(rows, opts = {}) {
 
   // SKIP_TOOLS отсеиваются ДО капов: их строки не должны ни попадать в промпт,
   // ни съедать бюджет MAX_EVENTS, ни считаться срезанными в dropped.
+  // needs_phone у create_booking — единственный error, который рендерится
+  // (см. шапку): без него модель на следующем ходу не знает, на что просила номер.
+  const isNeedsPhone = (e) => e.tool === 'create_booking' && e.result && e.result.needs_phone === true;
   const visible = events.filter(e =>
-    !e.isError && !SKIP_TOOLS.has(e.tool) && (e.delivered === true || WRITE_TOOLS.has(e.tool)));
+    (!e.isError || isNeedsPhone(e)) && !SKIP_TOOLS.has(e.tool) && (e.delivered === true || WRITE_TOOLS.has(e.tool)));
 
   // Кап по числу событий: write не срезаются НИКОГДА (даже если их больше
   // MAX_EVENTS — итог тогда осознанно превышает MAX_EVENTS, запись в YClients

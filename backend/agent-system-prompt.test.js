@@ -1836,3 +1836,11 @@ describe('правило цены направления ↔ реальный б
     expect(p).not.toMatch(/ДИАПАЗОНЫ ЦЕН/);
   });
 });
+
+test('канал без номера: промпт отсылает к детерминированному запросу номера, а не велит модели спрашивать самой', () => {
+  const { PROMPT_RULE_MARKER } = require('./services/agent/phone-request');
+  const p = buildSystemPrompt({});
+  expect(p).toContain(PROMPT_RULE_MARKER);
+  expect(p).not.toMatch(/тогда и запроси его/);
+  expect(p).not.toMatch(/запроси контактный номер телефона/);
+});

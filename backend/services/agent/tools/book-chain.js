@@ -108,6 +108,13 @@ async function run(salonId, input, ctx = {}, deps = {}) {
       : 'Ничего не оформлено. Вызови get_sequential_slots заново и предложи свежие варианты, ' +
         'либо предложи услуги отдельными визитами.',
   });
+  // Канал без номера: первое же звено упало на «нет client_phone» ДО обращения в
+  // YClients (проверка номера в create_booking стоит первой), ничего не создано.
+  // Флаг пробрасывается наверх — оркестратор на нём сам спрашивает номер, а не
+  // считает цепочку проваленной (см. phone-request.js). records тут пуст всегда.
+  const needsPhone = (r) => ({
+    needs_phone: true, invalid_args: true, booked_all: false, partial: false, records: [], error: r.error,
+  });
 
   if (offer.booking_mode === 'single_record') {
     // Один мастер, без перерыва: одна запись, услуги добавляются в неё.
@@ -115,6 +122,7 @@ async function run(salonId, input, ctx = {}, deps = {}) {
     let r1;
     try { r1 = await bookOne(first); }
     catch (e) { return fail(first, e.message); }
+    if (r1 && r1.needs_phone) return needsPhone(r1);
     if (!bookedOk(r1)) return fail(first, (r1 && r1.error) || 'запись не создана');
     records.push({ record_id: r1.record_id, service_title: first.service_title, datetime: first.datetime });
     if (rest.length) {
@@ -141,6 +149,7 @@ async function run(salonId, input, ctx = {}, deps = {}) {
     let r;
     try { r = await bookOne(l); }
     catch (e) { return fail(l, e.message); }
+    if (r && r.needs_phone && !records.length) return needsPhone(r);
     if (!bookedOk(r)) return fail(l, (r && r.error) || 'запись не создана');
     records.push({ record_id: r.record_id, service_title: l.service_title, datetime: l.datetime });
   }

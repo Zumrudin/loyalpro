@@ -9,6 +9,7 @@ const leadTime = require('../lead-time');
 const tpLimit = require('../third-party-limit');
 const genericGuard = require('../generic-booking-guard');
 const identity = require('../identity');
+const phoneRequest = require('../phone-request');
 
 // Отказ YClients именно по времени старта («Выбранное время недоступно…»,
 // «мастер занят…»), а не по услуге/токену/клиенту. Только на нём есть смысл
@@ -100,11 +101,12 @@ async function resolveCardName(salonId, { input, ctx, thirdParty, clientPhone })
 async function run(salonId, input, ctx = {}) {
   const clientPhone = String((input && input.client_phone) || ctx.clientPhone || '').trim();
   if (!clientPhone) {
-    return {
-      invalid_args: true,
-      error: 'Нет номера телефона клиента. Если номер известен из диалога — передай его ' +
-        'в client_phone; иначе вежливо запроси номер у клиента и повтори вызов.',
-    };
+    // Канал без номера (Telegram/MAX со скрытым номером), и модель не передала
+    // client_phone. Это НЕ провал записи, а предрешённый ход: номер у пациента
+    // спрашивает оркестратор детерминированно по флагу needs_phone (см. шапку
+    // phone-request.js, инцидент 2026-09-18 — прежний error уводил диалог к
+    // администратору). invalid_args оставлен ради прежнего контракта.
+    return { needs_phone: true, invalid_args: true, error: phoneRequest.NEEDS_PHONE_ERROR };
   }
   const nowMs = (ctx && ctx.nowMs) || Date.now();
   // Анти-абьюз (аудит 2026-08-01): client_phone принимает произвольный номер

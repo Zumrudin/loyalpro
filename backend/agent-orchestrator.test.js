@@ -2582,3 +2582,67 @@ describe('reply-guard: ложное «занято» при свободном �
     expect(deps.provider.createMessage).toHaveBeenCalledTimes(3);
   });
 });
+
+// ── Запись без номера (инцидент 2026-09-18, tdlib 5245186003): create_booking
+// вернул needs_phone → номер спрашивает КОД, провала записи нет, второго прохода
+// провайдера нет. Раньше любой error create_booking давал bookingFailed, а вопрос
+// о номере «переигровкой» не считался → принудительный перевод на человека.
+describe('create_booking → needs_phone', () => {
+  const NEEDS_PHONE = { needs_phone: true, invalid_args: true, error: 'Нет номера телефона клиента.' };
+
+  test('детерминированный вопрос о номере, один проход провайдера, bookingFailed:false', async () => {
+    const deps = makeDeps({
+      handlers: { create_booking: jest.fn(async () => NEEDS_PHONE) },
+      history: { loadTranscript: jest.fn(async () => ({
+        messages: [{ role: 'user', content: 'давайте на пятницу в 17:30' }], watermark: 100 })) },
+    });
+    deps.provider.createMessage
+      .mockResolvedValueOnce(toolResp('create_booking', { staff_yc_id: 1, service_yc_id: 2, datetime: '2026-09-18T17:30:00+03:00' }))
+      .mockResolvedValueOnce(textResp('Секундочку, уточняю детали 🤍'));
+    const out = await orchestrator.runDialog(1, 'k', { deps });
+    expect(deps.provider.createMessage).toHaveBeenCalledTimes(1);
+    expect(out.bookingFailed).toBeFalsy();
+    expect(out.bookingFailRecoverable).toBeFalsy();
+    expect(out.escalated).toBe(false);
+    expect(out.sideEffect).toBe(false);
+    expect(out.replies).toHaveLength(1);
+    expect(out.replies[0]).toMatch(/номер телефона/);
+    expect(out.replies[0]).toContain('18 сентября в 17:30');   // время прозвучало в переписке → разрешено
+  });
+
+  test('время из аргументов модели не звучало в ходе → в вопросе о номере его нет', async () => {
+    const deps = makeDeps({
+      handlers: { create_booking: jest.fn(async () => NEEDS_PHONE) },
+      history: { loadTranscript: jest.fn(async () => ({
+        messages: [{ role: 'user', content: 'давайте, записывайте' }], watermark: 100 })) },
+    });
+    deps.provider.createMessage
+      .mockResolvedValueOnce(toolResp('create_booking', { staff_yc_id: 1, service_yc_id: 2, datetime: '2026-09-18T17:30:00+03:00' }));
+    const out = await orchestrator.runDialog(1, 'k', { deps });
+    expect(out.replies[0]).not.toContain('17:30');
+    expect(out.replies[0]).toContain('это время');
+  });
+
+  test('needs_phone из book_chain — тот же путь', async () => {
+    const deps = makeDeps({
+      handlers: { book_chain: jest.fn(async () => ({ ...NEEDS_PHONE, booked_all: false, partial: false, records: [] })) },
+    });
+    deps.registry.schemas.push({ name: 'book_chain' });
+    deps.provider.createMessage
+      .mockResolvedValueOnce(toolResp('book_chain', { option_id: 'o1' }));
+    const out = await orchestrator.runDialog(1, 'k', { deps });
+    expect(deps.provider.createMessage).toHaveBeenCalledTimes(1);
+    expect(out.bookingFailed).toBeFalsy();
+    expect(out.replies[0]).toMatch(/номер телефона/);
+  });
+
+  test('обычная ошибка create_booking (без needs_phone) по-прежнему bookingFailed', async () => {
+    const deps = makeDeps({ handlers: { create_booking: jest.fn(async () => ({ invalid_args: true, error: 'выдуманный id' })) } });
+    deps.provider.createMessage
+      .mockResolvedValueOnce(toolResp('create_booking', { staff_yc_id: 1, service_yc_id: 2, datetime: 'x', client_phone: '7' }))
+      .mockResolvedValueOnce(textResp('Секундочку 🤍'));
+    const out = await orchestrator.runDialog(1, 'k', { deps });
+    expect(out.bookingFailed).toBe(true);
+    expect(deps.provider.createMessage).toHaveBeenCalledTimes(2);
+  });
+});

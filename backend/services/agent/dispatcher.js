@@ -243,7 +243,10 @@ async function process(salonId, dialogKey, meta, opts = {}) {
           logger.info(`dialog ${dialogKey}: create_booking не удался, но бот переиграл (предложил другое время) — доставляю без перевода`);
           await deliverReplies(replies, res.attachments, res.priceListUrl);
         } else {
-          logger.warn(`dialog ${dialogKey}: create_booking не удался, переигровки нет либо повторный провал — принудительный перевод на человека`);
+          // Погашенный черновик — в лог, как в ветке falseSuccess выше: разбор
+          // инцидента 2026-09-18 упёрся в «неизвестно, что модель написала».
+          const draft = replies.join(' | ').replace(/\s+/g, ' ').slice(0, 500);
+          logger.warn(`dialog ${dialogKey}: create_booking не удался, переигровки нет либо повторный провал — принудительный перевод на человека; погашенный черновик: «${draft}»`);
           await handOverSilently(salonId, dialogKey, meta, send, escalate, 'create_booking не удался — запись не создана автоматически');
         }
       } else if (res.escalated) {

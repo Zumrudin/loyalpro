@@ -13,6 +13,7 @@ const greeting = require('./greeting');
 const addressGuard = require('./address-guard');
 const closing = require('./closing');
 const titleDedup = require('./title-dedup');
+const phoneRequest = require('./phone-request');
 const visitRating = require('./visit-rating');
 const promoInterest = require('./promo-interest');
 const adminHours = require('./admin-hours');
@@ -857,6 +858,10 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
     let degradedAfterWrite = false; // провайдер упал ПОСЛЕ успешной записи → детерминированное подтверждение
     let readBookings = false;       // list_client_bookings отработал → «вы записаны…» может быть честным ответом
     let recheckedAfterFail = false; // после провала create_booking модель перезапросила слоты (добросовестная переигровка)
+    // create_booking/book_chain упали на «нет номера» (needs_phone): ход предрешён —
+    // номер спрашивает код, провала записи нет, второго прохода провайдера нет
+    // (инцидент 2026-09-18, см. phone-request.js). { datetime } — из аргументов вызова.
+    let phoneRequested = null;
     // Единственный легальный источник адреса/контактов клиники — статьи базы
     // знаний, прочитанные В ЭТОМ ходе (address-guard). Транскрипт и журнал
     // действий источниками не считаются: см. шапку address-guard.js.
@@ -952,8 +957,19 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
         if (isError && WRITE_TOOLS.has(tc.name)) writeErrored = true;
         if (!isError && tc.name === 'list_client_bookings') readBookings = true;
         if (tc.name === 'escalate_to_operator' && result && result.escalated) escalated = true;
-        if (tc.name === 'create_booking') { if (isError) bookingErrored = true; else bookingSucceeded = true; }
-        if (tc.name === 'book_chain') {
+        if (tc.name === 'create_booking') {
+          // needs_phone — не провал записи: YClients не звался, ответ предрешён
+          // (см. phoneRequested). Иначе прежняя логика.
+          if (phoneRequest.isNeedsPhone(result)) phoneRequested = { datetime: (tc.input || {}).datetime || null };
+          else if (isError) bookingErrored = true;
+          else bookingSucceeded = true;
+        }
+        if (tc.name === 'book_chain' && phoneRequest.isNeedsPhone(result)) {
+          // Первое звено упало на «нет номера» до YClients, records пуст (см.
+          // book-chain.needsPhone). Время первого звена в input нет (только
+          // option_id) — вопрос уйдёт без времени («это время»).
+          phoneRequested = { datetime: null };
+        } else if (tc.name === 'book_chain') {
           // Частичный успех (partial) = записи уже есть → право на «записала»
           // сохраняется (writeSucceeded) и ход нельзя выбрасывать перегенерацией
           // (sideEffect), но серия считается проваленной (bookingErrored) —
@@ -1025,6 +1041,19 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
         // сразу после эскалации — текстового хода без инструментов больше не будет.
         // Это последнее, что услышит клиент перед переводом на администратора.
         if (resp.text && !replies.includes(resp.text)) replies.push(resp.text);
+        break;
+      }
+      // Запись без номера (канал без телефона): ход предрешён — единственно
+      // верный ответ «подскажите номер», и его отдаёт код, а не второй проход
+      // провайдера (тот же класс, что closing.js/visit-rating: платить за проход
+      // по ~39k-промпту, когда ответ известен, не за что). Эскалация в той же
+      // итерации главнее (ветка выше). Текст без времени, если оно не звучало в
+      // ходе: datetime пришёл из аргументов МОДЕЛИ. Реплику НЕ линтует reply-guard
+      // (детерминированная, см. ниже), но дописки приветствия/представления
+      // проходят как обычно. Инцидент 2026-09-18 (tdlib 5245186003).
+      if (phoneRequested) {
+        logger.info(`dialog ${dialogKey}: запись без номера на канале без телефона — детерминированный запрос номера, без второго прохода провайдера`);
+        replies.push(phoneRequest.buildPhoneRequest({ datetime: phoneRequested.datetime, allowedTimes }));
         break;
       }
       // Модель зациклилась: итерация целиком состоит из ПОВТОРОВ, то есть ни
@@ -1133,7 +1162,10 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
     }
 
     // ── Линт финальной реплики (reply-guard) ──
-    if (replies.length && !degradedAfterWrite) {
+    // Детерминированные реплики (подтверждение записи после падения провайдера,
+    // запрос номера) не линтуются: текст фиксирован кодом, а корректирующий
+    // довызов был бы вторым платным проходом ради собственной строки.
+    if (replies.length && !degradedAfterWrite && !phoneRequested) {
       const joined = replies.join('\n');
       const violations = [
         ...replyGuard.lintReply(joined, { hasPriorAssistant, firstContact }),

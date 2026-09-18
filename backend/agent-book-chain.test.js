@@ -230,3 +230,16 @@ test('generic-booking-guard в book_chain молчит по построению
   // Остальной ctx (идентификация пациента) обязан дойти как раньше.
   expect(d.createBooking.mock.calls[0][2]).toMatchObject({ dialogKey: 'dlg', clientPhone: '79990001122' });
 });
+
+test('первое звено вернуло needs_phone → book_chain пробрасывает флаг, ничего не оформлено', async () => {
+  offers.remember(1, 'dlg', { o5: { booking_mode: 'separate_records', chain: [
+    LINK(101, 7, '2026-07-30T14:00:00+03:00'), LINK(102, 8, '2026-07-30T15:00:00+03:00'),
+  ] } });
+  const d = deps({ createBooking: jest.fn(async () => ({ needs_phone: true, invalid_args: true, error: 'Нет номера' })) });
+  const res = await bookChain.run(1, { option_id: 'o5' }, { dialogKey: 'dlg' }, d);
+  expect(res.needs_phone).toBe(true);
+  expect(res.booked_all).toBe(false);
+  expect(res.partial).toBe(false);
+  expect(res.records).toEqual([]);
+  expect(d.createBooking).toHaveBeenCalledTimes(1);
+});
