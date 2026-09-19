@@ -3,6 +3,7 @@
 const bookingModify = require('../booking-modify');
 const identity = require('../identity');
 const leadTime = require('../lead-time');
+const slotEvidence = require('../slot-evidence');
 
 const schema = {
   name: 'reschedule_booking',
@@ -27,6 +28,25 @@ async function run(salonId, input, ctx = {}) {
   const recordId = input && input.record_id;
   const datetime = input && input.datetime;
   if (!recordId || !datetime) return { invalid_args: true, error: 'Нужны record_id и datetime.' };
+
+  // ДВА гейта до похода в YClients (инцидент 2026-09-19, 79651442032: перенос на
+  // выдуманные 10:00/11:00 без единого слот-вызова и без согласия пациентки):
+  //  (1) время обязано быть в выдаче слот-инструмента этого хода или свежего
+  //      журнала (ctx.slotEvidence, см. slot-evidence.js);
+  //  (2) время обязано звучать цифрами в хвосте диалога (ctx.recentDialogText) —
+  //      пациент назвал его сам или ответил на наше предложение.
+  // Оба — hint-ответы (invalid_args), а не провал записи: оркестратор их не
+  // считает bookingErrored, модель делает пропущенный шаг и повторяет вызов.
+  // Fail-open: без ctx.slotEvidence / recentDialogText (иной вызывающий, тесты)
+  // гейты молчат — прежний контракт.
+  if (ctx.slotEvidence && !ctx.slotEvidence.has(datetime, { staffYcId: input.staff_yc_id })) {
+    return { unverified_slot: true, invalid_args: true,
+      error: slotEvidence.unverifiedSlotHint(datetime, { reschedule: true }) };
+  }
+  if (typeof ctx.recentDialogText === 'string' && !slotEvidence.timeMentioned(datetime, ctx.recentDialogText)) {
+    return { needs_confirmation: true, invalid_args: true,
+      error: slotEvidence.needsConfirmationHint(datetime) };
+  }
 
   // Минимальный срок до визита действует и на перенос: перенести запись на
   // «через час» или поздним вечером на завтра до 12:00 нельзя — специалист
@@ -54,4 +74,11 @@ async function run(salonId, input, ctx = {}) {
   return { rescheduled: true, record_id: res.record_id, datetime: res.datetime };
 }
 
-module.exports = { schema, run };
+// Hint-ответы инструмента: предрешённые подсказки модели, НЕ провал переноса
+// (оркестратор не ставит по ним bookingErrored). Настоящий провал — error без
+// этих флагов (отказ YClients, запись не найдена, чужая запись).
+function isHintResult(res) {
+  return !!(res && (res.invalid_args || res.too_soon || res.unverified_slot || res.needs_confirmation));
+}
+
+module.exports = { schema, run, isHintResult };

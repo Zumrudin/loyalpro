@@ -10,6 +10,7 @@ const tpLimit = require('../third-party-limit');
 const genericGuard = require('../generic-booking-guard');
 const identity = require('../identity');
 const phoneRequest = require('../phone-request');
+const slotEvidence = require('../slot-evidence');
 
 // Отказ YClients именно по времени старта («Выбранное время недоступно…»,
 // «мастер занят…»), а не по услуге/токену/клиенту. Только на нём есть смысл
@@ -180,6 +181,13 @@ async function run(salonId, input, ctx = {}) {
   // раннее время сам, а модель — послушно передать его сюда. Детерминированный
   // отказ до похода в YClients; сообщение — корректирующее, модель предложит
   // допустимое время. Тот же guard срабатывает и внутри book_chain.
+  // Время обязано быть в выдаче слот-инструмента этого хода или свежего журнала
+  // (инцидент 2026-09-19: write на выдуманное время; см. slot-evidence.js).
+  // Hint-ответ без похода в YClients; fail-open без ctx.slotEvidence.
+  if (ctx.slotEvidence && !ctx.slotEvidence.has(input.datetime, { staffYcId: input.staff_yc_id })) {
+    return { unverified_slot: true, invalid_args: true,
+      error: slotEvidence.unverifiedSlotHint(input.datetime) };
+  }
   const v = leadTime.violation(leadTime.moscowNow(nowMs), input.datetime);
   if (v) return { too_soon: true, error: leadTime.violationHint(v) };
   const res = await booking.createBookingRecord(salonId, {

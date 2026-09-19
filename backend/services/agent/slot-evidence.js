@@ -23,6 +23,7 @@
 // Чистый модуль: без БД и HTTP; журнал приходит строками tool-events.loadRecent.
 
 const { SLOT_TIMES_FRESH_MS } = require('./tool-memory');
+const { extractTimes } = require('./reply-guard');
 
 const SLOT_EVIDENCE_TOOLS = new Set([
   'get_available_slots', 'get_sequential_slots', 'get_parallel_slots', 'create_booking',
@@ -124,4 +125,44 @@ function createSlotEvidence() {
   return api;
 }
 
-module.exports = { createSlotEvidence, SLOT_EVIDENCE_TOOLS, extractPairs };
+// ── Согласие пациента: время обязано ЗВУЧАТЬ в хвосте диалога ────────────────
+// Тот же инцидент: слоты могли быть запрошены, но модель переносит, не спросив
+// пациента («пн утро» → сразу 10:00). Детерминированный минимум: HH:MM нового
+// времени (по Москве) встречается цифрами в последних репликах — пациент назвал
+// его сам либо Мила предложила, а пациент ответил на это предложение.
+const MSK_HM = new Intl.DateTimeFormat('ru-RU', {
+  timeZone: 'Europe/Moscow', hour: '2-digit', minute: '2-digit', hour12: false,
+});
+
+function moscowHHMM(datetime) {
+  const ms = toMs(datetime);
+  return Number.isFinite(ms) ? MSK_HM.format(new Date(ms)) : null;
+}
+
+function timeMentioned(datetime, text) {
+  const hm = moscowHHMM(datetime);
+  return !!hm && extractTimes(String(text || '')).includes(hm);
+}
+
+// Тексты hint-ответов — экспортируются ради тестов промпта (связь правила
+// Сценария 3 с кодом) и оркестратора.
+function unverifiedSlotHint(datetime, { reschedule } = {}) {
+  const what = reschedule ? 'перенос' : 'запись';
+  return `Время ${datetime} не подтверждено ни одной выдачей слотов за последние 30 минут — ${what} на него ` +
+    'делать нельзя. Сначала вызови get_available_slots на эту дату' +
+    (reschedule ? ' (со staff_yc_id мастера существующей записи)' : '') +
+    ', затем — если пациент подтвердил конкретное время — повтори вызов с datetime ДОСЛОВНО из выдачи (поле datetime). ' +
+    'Пациенту про эту проверку не пиши.';
+}
+
+function needsConfirmationHint(datetime) {
+  const hm = moscowHHMM(datetime) || datetime;
+  return `Время ${hm} не звучало в последних сообщениях переписки — ни пациент его не называл, ни ты не предлагала. ` +
+    'Перенос делается ТОЛЬКО после явного согласия: назови пациенту это время цифрами, спроси, подходит ли, и вызови ' +
+    'reschedule_booking снова после его ответа «да». Сейчас запись НЕ перенесена — не пиши «перенесла».';
+}
+
+module.exports = {
+  createSlotEvidence, SLOT_EVIDENCE_TOOLS, extractPairs,
+  timeMentioned, moscowHHMM, unverifiedSlotHint, needsConfirmationHint,
+};

@@ -80,7 +80,10 @@ async function run(salonId, input, ctx = {}, deps = {}) {
   // («давайте первый вариант» после показа названий услуг), а обхода
   // patient_named_service в схеме book_chain нет — сработавший guard дал бы
   // невыполнимый hint и зациклил оформление.
-  const { patientText, ...linkCtx } = ctx;
+  // slotEvidence тоже вырезается: старты цепочки живут в кэше вариантов
+  // (option_id), а журнал при AGENT_TOOL_MEMORY=false не читается — гейт
+  // create_booking иначе отверг бы законный вариант ходом позже.
+  const { patientText, slotEvidence, ...linkCtx } = ctx;
   const bookOne = (l) => createBooking(salonId, {
     staff_yc_id: l.staff_yc_id,
     service_yc_id: l.service_yc_id,
