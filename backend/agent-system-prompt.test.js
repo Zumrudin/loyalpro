@@ -1844,3 +1844,14 @@ test('канал без номера: промпт отсылает к дете�
   expect(p).not.toMatch(/тогда и запроси его/);
   expect(p).not.toMatch(/запроси контактный номер телефона/);
 });
+
+// Инцидент 2026-09-19 (79651442032): перенос на выдуманное время без слотов и
+// без согласия. Гейты живут в коде (slot-evidence), а правило Сценария 3
+// обязано называть оба hint-ответа по имени — иначе модель прочтёт их как
+// провал и уйдёт в «извинись и escalate».
+test('перенос: правило Сценария 3 называет hint-ответы unverified_slot и needs_confirmation', () => {
+  const { PROMPT_RULE_MARKERS } = require('./services/agent/slot-evidence');
+  const p = buildSystemPrompt({});
+  for (const m of PROMPT_RULE_MARKERS) expect(p).toContain(m);
+  expect(p).toMatch(/не провал переноса, а пропущенный шаг/);
+});

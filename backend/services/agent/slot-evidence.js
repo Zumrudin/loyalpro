@@ -162,7 +162,12 @@ function needsConfirmationHint(datetime) {
     'reschedule_booking снова после его ответа «да». Сейчас запись НЕ перенесена — не пиши «перенесла».';
 }
 
+// Связь промпта с кодом (Сценарий 3, Шаг 5): правило обязано называть оба
+// hint-ответа по имени — иначе модель прочтёт их как провал и уйдёт в
+// «извинись и escalate». Проверяется в agent-system-prompt.test.js.
+const PROMPT_RULE_MARKERS = ['unverified_slot', 'needs_confirmation'];
+
 module.exports = {
   createSlotEvidence, SLOT_EVIDENCE_TOOLS, extractPairs,
-  timeMentioned, moscowHHMM, unverifiedSlotHint, needsConfirmationHint,
+  timeMentioned, moscowHHMM, unverifiedSlotHint, needsConfirmationHint, PROMPT_RULE_MARKERS,
 };

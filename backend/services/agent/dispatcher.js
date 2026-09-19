@@ -263,14 +263,14 @@ async function process(salonId, dialogKey, meta, opts = {}) {
         const canRecover = res.bookingFailRecoverable
           && !(await priorBookingFailure(salonId, dialogKey));
         if (canRecover) {
-          logger.info(`dialog ${dialogKey}: create_booking не удался, но бот переиграл (предложил другое время) — доставляю без перевода`);
+          logger.info(`dialog ${dialogKey}: запись/перенос не удался, но бот переиграл (предложил другое время) — доставляю без перевода`);
           await deliverReplies(replies, res.attachments, res.priceListUrl);
         } else {
           // Погашенный черновик — в лог, как в ветке falseSuccess выше: разбор
           // инцидента 2026-09-18 упёрся в «неизвестно, что модель написала».
           const draft = replies.join(' | ').replace(/\s+/g, ' ').slice(0, 500);
-          logger.warn(`dialog ${dialogKey}: create_booking не удался, переигровки нет либо повторный провал — принудительный перевод на человека; погашенный черновик: «${draft}»`);
-          await handOverSilently(salonId, dialogKey, meta, send, escalate, 'create_booking не удался — запись не создана автоматически');
+          logger.warn(`dialog ${dialogKey}: запись/перенос не удался, переигровки нет либо повторный провал — принудительный перевод на человека; погашенный черновик: «${draft}»`);
+          await handOverSilently(salonId, dialogKey, meta, send, escalate, 'запись/перенос не удался — изменение не сделано автоматически');
         }
       } else if (res.escalated) {
         // Свежая эскалация: клиент ОБЯЗАН услышать про перевод на администратора.
