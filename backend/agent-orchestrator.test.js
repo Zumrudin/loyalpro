@@ -2919,3 +2919,52 @@ test('стыковка: выходной на запрошенную дату + 
   expect(deps.provider.createMessage).toHaveBeenCalledTimes(2);
   expect(out.replies).toEqual([reply]);
 });
+
+// Третий живой прогон 2026-09-19: «Татьяне на среду, 23 сентября … 10:00» прошло
+// плоскую сверку (10:00 было у Юлии на понедельник в журнале). Теперь время
+// сверяется по паре «дата + мастер», и довызов получает РЕАЛЬНУЮ выдачу даты.
+describe('offer-attribution в оркестраторе: время по паре «дата + мастер»', () => {
+  const NOW = Date.parse('2026-09-19T12:50:00+03:00');   // суббота
+  const slot = (date, t) => ({ time: t, datetime: `${date}T${t}:00+03:00`, seance_length: 3000 });
+  const journal = () => {
+    const stub = makeToolEventsStub();
+    stub.mod.loadRecent = jest.fn(async () => [
+      { tool: 'get_available_slots', input: { staff_yc_id: 3356928, date: '2026-09-21' },
+        result: { slots: [], staff_name: 'Богатырева Татьяна', staff_not_working: true,
+          alternative_staff: [{ staff_yc_id: 1914276, name: 'Гатауллина Юлия', slots: [slot('2026-09-21', '10:00'), slot('2026-09-21', '10:30')] }] },
+        is_error: false, delivered: true, age_ms: 3 * 60 * 1000 },
+      { tool: 'get_sequential_slots', input: { date: '2026-09-23', preferred_staff_yc_id: 3356928 },
+        result: { variants: [{ type: 'same_staff', date: '2026-09-23', staff: [{ yc_id: 3356928, name: 'Богатырева Татьяна' }],
+          starts: ['13:30', '14:00'].map(t => ({ time: t, chain: [{ datetime: `2026-09-23T${t}:00+03:00`, staff_yc_id: 3356928, staff_name: 'Богатырева Татьяна' }] })) }] },
+        is_error: false, delivered: true, age_ms: 2 * 60 * 1000 },
+    ]);
+    return stub;
+  };
+  const msgs = [{ role: 'assistant', content: 'В понедельник у Татьяны выходной.' }, { role: 'user', content: 'Вт время?' }];
+  // Блок памяти в промпте (в бою его рендерит tool-memory из тех же строк журнала):
+  // плоский unverified_offer иначе счёл бы 13:30/14:00 неподтверждёнными.
+  const memory = { renderMemory: jest.fn(() => ({ lines: ['показала: 21.09 Юлия 10:00, 10:30; 23.09 Татьяна 13:30, 14:00'], dropped: 0 })) };
+
+  test('Татьяна + среда + 10:00 (время Юлии с понедельника) → довызов с реальной выдачей среды', async () => {
+    const deps = makeDeps({ toolEvents: journal(), toolMemory: memory, history: { loadTranscript: jest.fn(async () => ({ messages: msgs, watermark: 100 })) } });
+    deps.provider.createMessage
+      .mockResolvedValueOnce(textResp('Либо к вашему мастеру Татьяне на среду, 23 сентября. У неё есть свободное время, например, в 10:00.'))
+      .mockResolvedValueOnce(textResp('К Татьяне на среду, 23 сентября, есть 13:30 или 14:00. Подойдёт?'));
+    const out = await orchestrator.runDialog(1, 'k', { deps, nowMs: NOW });
+    expect(deps.provider.createMessage).toHaveBeenCalledTimes(2);
+    const fix = deps.provider.createMessage.mock.calls[1][0].messages.at(-1).content;
+    expect(fix).toMatch(/на ЭТУ дату у ЭТОГО мастера/);
+    expect(fix).toMatch(/23\.09 10:00 у Богатырева Татьяна/);
+    expect(fix).toMatch(/13:30, 14:00/);
+    expect(out.replies[0]).toMatch(/13:30 или 14:00/);
+  });
+
+  test('честная реплика — Юлия пн 10:00, Татьяна ср 13:30 — без довызова', async () => {
+    const deps = makeDeps({ toolEvents: journal(), toolMemory: memory, history: { loadTranscript: jest.fn(async () => ({ messages: msgs, watermark: 100 })) } });
+    deps.provider.createMessage
+      .mockResolvedValueOnce(textResp('Во вторник у Татьяны выходной. К Юлии в понедельник в 10:00, либо к Татьяне в среду, 23 сентября, в 13:30.'));
+    const out = await orchestrator.runDialog(1, 'k', { deps, nowMs: NOW });
+    expect(deps.provider.createMessage).toHaveBeenCalledTimes(1);
+    expect(out.replies[0]).toMatch(/13:30/);
+  });
+});

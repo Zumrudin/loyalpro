@@ -137,3 +137,32 @@ describe('seedFromJournal', () => {
     expect(ev.size).toBe(0);
   });
 });
+
+// Сверка предложенного времени по паре «дата + мастер» (offer-attribution):
+// evidence хранит и ИМЯ мастера, и отдаёт старты по московской дате.
+describe('slotsOn / имена мастеров', () => {
+  test('старты по дате с именами из всех источников', () => {
+    const ev = createSlotEvidence();
+    ev.add('get_available_slots', { staff_yc_id: 1, date: '2026-09-23' }, {
+      staff_name: 'Богатырева Татьяна', slots: [slot('13:30')],
+      alternative_staff: [{ staff_yc_id: 2, name: 'Гатауллина Юлия', slots: [slot('10:00')] }],
+    });
+    ev.add('get_sequential_slots', {}, { variants: [{ starts: [{ chain: [
+      { datetime: '2026-09-23T14:00:00+03:00', staff_yc_id: 1, staff_name: 'Богатырева Татьяна' }] }] }] });
+    const on = ev.slotsOn('2026-09-23');
+    expect(on).toEqual(expect.arrayContaining([
+      { time: '13:30', staffId: 1, name: 'Богатырева Татьяна' },
+      { time: '10:00', staffId: 2, name: 'Гатауллина Юлия' },
+      { time: '14:00', staffId: 1, name: 'Богатырева Татьяна' },
+    ]));
+    expect(ev.slotsOn('2026-09-24')).toEqual([]);
+    expect(ev.dateKeys()).toEqual(['2026-09-23']);
+  });
+
+  test('дата считается по Москве: 23:30 UTC 22.09 — это 02:30 мск 23.09', () => {
+    const ev = createSlotEvidence();
+    ev.add('get_available_slots', { staff_yc_id: 1 }, { slots: [{ datetime: '2026-09-22T23:30:00Z' }] });
+    expect(ev.dateKeys()).toEqual(['2026-09-23']);
+    expect(ev.slotsOn('2026-09-23')[0].time).toBe('02:30');
+  });
+});

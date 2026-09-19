@@ -39,52 +39,62 @@ function idOrNull(v) {
   return Number.isFinite(n) && n > 0 ? n : null;
 }
 
-// Пары {ms, staff} из результата одного вызова. Ошибочные результаты (error)
-// не считаются: их слоты могли быть частью отказа.
+// Тройки {ms, staff, name} из результата одного вызова. Ошибочные результаты
+// (error) не считаются: их слоты могли быть частью отказа. Имя мастера — для
+// сверки предложенного времени по паре «дата + мастер» (offer-attribution):
+// у get_available_slots оно в staff_name (запрошенный) и name (альтернативы /
+// варианты выбора), у стыковки — staff_name звена; гости get_parallel_slots и
+// available_slots ретрая имени не несут (null — «мастер неизвестен»).
 function extractPairs(tool, input, result) {
   const out = [];
   if (!result || typeof result !== 'object' || result.error) return out;
-  const push = (datetime, staff) => {
+  const push = (datetime, staff, name) => {
     const ms = toMs(datetime);
-    if (Number.isFinite(ms)) out.push({ ms, staff: idOrNull(staff) });
+    if (Number.isFinite(ms)) out.push({ ms, staff: idOrNull(staff), name: (typeof name === 'string' && name.trim()) || null });
   };
-  const pushSlots = (list, staff) => {
-    for (const s of (Array.isArray(list) ? list : [])) if (s) push(s.datetime, staff);
+  const pushSlots = (list, staff, name) => {
+    for (const s of (Array.isArray(list) ? list : [])) if (s) push(s.datetime, staff, name);
   };
   const inputStaff = input && input.staff_yc_id;
 
   if (tool === 'get_available_slots') {
-    pushSlots(result.slots, inputStaff);
+    pushSlots(result.slots, inputStaff, result.staff_name);
     for (const key of ['alternative_staff', 'staff_options']) {
       for (const item of (Array.isArray(result[key]) ? result[key] : [])) {
-        if (item) pushSlots(item.slots, item.staff_yc_id);
+        if (item) pushSlots(item.slots, item.staff_yc_id, item.name);
       }
     }
   } else if (tool === 'get_sequential_slots') {
     for (const v of (Array.isArray(result.variants) ? result.variants : [])) {
       for (const st of (Array.isArray(v && v.starts) ? v.starts : [])) {
         for (const link of (Array.isArray(st && st.chain) ? st.chain : [])) {
-          if (link) push(link.datetime, link.staff_yc_id);
+          if (link) push(link.datetime, link.staff_yc_id, link.staff_name);
         }
       }
     }
   } else if (tool === 'get_parallel_slots') {
     for (const st of (Array.isArray(result.starts) ? result.starts : [])) {
       for (const g of (Array.isArray(st && st.guests) ? st.guests : [])) {
-        if (g) push(g.datetime, g.staff_yc_id);
+        if (g) push(g.datetime, g.staff_yc_id, null);
       }
     }
   } else if (tool === 'create_booking') {
     // Ретрай после отказа YClients по времени кладёт в ответ свежие старты
     // того же мастера (withFreshSlotsOnTimeFailure). Сам отвергнутый datetime
     // из input сюда НЕ попадает.
-    pushSlots(result.available_slots, inputStaff);
+    pushSlots(result.available_slots, inputStaff, null);
   }
   return out;
 }
 
+// Московские дата и время момента — ключи для сверки «дата + мастер».
+const MSK_DATE = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Moscow', year: 'numeric', month: '2-digit', day: '2-digit' });
+function moscowDateKey(ms) { return MSK_DATE.format(new Date(ms)); }
+
 function createSlotEvidence() {
   const byMs = new Map();   // ms → Set<staff|null>
+  const rows = [];          // {ms, staff, name} — для slotsOn (дата + мастер)
+  const seen = new Set();   // дедуп rows по ms|staff|name
   const api = {
     get size() {
       let n = 0;
@@ -96,7 +106,17 @@ function createSlotEvidence() {
       for (const p of extractPairs(tool, input, result)) {
         if (!byMs.has(p.ms)) byMs.set(p.ms, new Set());
         byMs.get(p.ms).add(p.staff);
+        const k = `${p.ms}|${p.staff}|${p.name}`;
+        if (!seen.has(k)) { seen.add(k); rows.push(p); }
       }
+    },
+    // Старты на московскую дату YYYY-MM-DD: [{time:'HH:MM', staffId, name}].
+    slotsOn(dateKey) {
+      return rows.filter(r => moscowDateKey(r.ms) === dateKey)
+        .map(r => ({ time: moscowHHMM(r.ms), staffId: r.staff, name: r.name }));
+    },
+    dateKeys() {
+      return [...new Set(rows.map(r => moscowDateKey(r.ms)))].sort();
     },
     // @param {string} datetime  ISO (или «YYYY-MM-DD HH:MM:SS») из аргументов write
     // @param {{staffYcId?: number}} opts мастер на стороне write (если известен)
@@ -135,7 +155,7 @@ const MSK_HM = new Intl.DateTimeFormat('ru-RU', {
 });
 
 function moscowHHMM(datetime) {
-  const ms = toMs(datetime);
+  const ms = typeof datetime === 'number' ? datetime : toMs(datetime);
   return Number.isFinite(ms) ? MSK_HM.format(new Date(ms)) : null;
 }
 
@@ -169,5 +189,5 @@ const PROMPT_RULE_MARKERS = ['unverified_slot', 'needs_confirmation'];
 
 module.exports = {
   createSlotEvidence, SLOT_EVIDENCE_TOOLS, extractPairs,
-  timeMentioned, moscowHHMM, unverifiedSlotHint, needsConfirmationHint, PROMPT_RULE_MARKERS,
+  timeMentioned, moscowHHMM, moscowDateKey, unverifiedSlotHint, needsConfirmationHint, PROMPT_RULE_MARKERS,
 };

@@ -459,6 +459,8 @@ const HARD_TYPES = new Set([
   // повтор отвергнутого времени — оба прямая причина «здесь просто тратить
   // время», жёсткие сразу.
   'unbacked_unavailability', 'rejected_repeat',
+  // Время не из выдачи на ЭТУ дату у ЭТОГО мастера (offer-attribution.js).
+  'unverified_offer_date',
 ]);
 function hardViolations(violations) {
   return (violations || []).filter(v => HARD_TYPES.has(v.type));
@@ -472,6 +474,7 @@ function hardViolations(violations) {
 const FABRICATION_TYPES = new Set([
   'unknown_time', 'unverified_offer', 'unbacked_unavailability', 'rejected_repeat',
   'false_unavailability', 'alien_time_attribution', 'fabricated_unavailability_reason',
+  'unverified_offer_date',
 ]);
 const SAFE_FALLBACK_TEXT = 'Понимаю вас. Подскажите, пожалуйста, какой день и какая половина дня (утро, день или вечер) ' +
   'вам удобнее — посмотрю свободное время и предложу варианты.';

@@ -27,6 +27,7 @@ const priceList = require('./price-list');
 const { buildSystemPrompt, FACTUAL_SECTION_MARKER } = require('./system-prompt');
 const { buildSystemPromptV2 } = require('./system-prompt-v2');
 const slotEvidenceMod = require('./slot-evidence');
+const offerAttribution = require('./offer-attribution');
 const rescheduleTool = require('./tools/reschedule-booking');
 const schedulePreflight = require('./staff-schedule-preflight');
 const { stripAllStamps, stripStamp } = require('./transcript-time');
@@ -172,6 +173,12 @@ function buildHardFixPrompt(hard) {
   if (unverified.length) {
     parts.push(`предлагает пациенту как свободное время ${unverified.join(', ')}, которое в этом ходе НИЧЕМ не подтверждено — инструмент проверки слотов не вызывался (или вернул другое). ` +
       'Убери это время. Если для ответа нужно предложить слот — сначала запроси реальную сетку через инструмент; в ЭТОМ ответе называть неподтверждённое время нельзя');
+  }
+  const offerDate = val('unverified_offer_date');
+  if (offerDate.length) {
+    parts.push(`называет время, которого на ЭТУ дату у ЭТОГО мастера в выдаче инструментов НЕТ: ${offerDate.join(' | ')}. ` +
+      'Замени его на время из перечисленной рядом реальной выдачи этой даты и этого мастера (если она пуста — время не называй, ' +
+      'предложи запросить другой день) и не приписывай мастеру время другой даты или другого специалиста');
   }
   const falseBusy = val('false_unavailability');
   if (falseBusy.length) {
@@ -1299,6 +1306,10 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
         // ход (инцидент 2026-09-19, ход 1) и повтор времени, от которого
         // пациент только что отказался, без нового вызова (ход 6).
         ...replyGuard.checkUnbackedUnavailability(joined, { slotToolCalled: slotToolCalled || freshSlotJournal, writeErrored }),
+        // Время сверяется по паре «дата + мастер» с evidence этого хода и свежего
+        // журнала (третий живой прогон 2026-09-19: «Татьяна, среда, 10:00» прошло
+        // плоскую сверку, потому что 10:00 было у Юлии на понедельник).
+        ...offerAttribution.checkOfferAttribution(joined, { evidence: toolCtx.slotEvidence, nowMs, patientTimes }),
         ...replyGuard.checkRejectedRepeat(joined,
           { patientLastText: toolCtx.patientLastText, prevOfferTimes, slotToolCalled }),
         // «Консультация в подарок» один раз за диалог — только измерение.
