@@ -247,6 +247,13 @@ test('get_available_dates: свежий график — с часами, уст
   expect(stale.lines[0]).toMatch(/staff_yc_id=55/);
 });
 
+test('get_available_dates: пустой запрошенный период с next_working_date — реальный день в журнал', () => {
+  const res = { schedule: [], working_days_count: 0, next_working_date: '2026-09-23' };
+  const inp = { staff_yc_id: 55, date_from: '2026-09-22', date_to: '2026-09-22' };
+  const line = renderMemory([ev({ tool: 'get_available_dates', input: inp, result: res, age_ms: 10 * MIN })], { nowMs: NOW }).lines[0];
+  expect(line).toMatch(/ближайший реальный рабочий день 2026-09-23/);
+});
+
 test('get_parallel_slots: свежие старты — с временем, устаревшие — только факт', () => {
   const res = { date: '2026-08-05', starts: [{ time: '12:00', guests: [] }, { time: '13:00', guests: [] }] };
   const inp = { date: '2026-08-05', guests: [{ service_yc_id: 1, staff_yc_id: 10 }, { service_yc_id: 2, staff_yc_id: 20 }] };

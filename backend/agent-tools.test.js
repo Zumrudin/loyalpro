@@ -497,13 +497,18 @@ describe('get_available_dates', () => {
       { date: '2026-07-22', is_working: 1, slots: [{ from: '09:00', to: '15:00' }] },
     ]);
     const out = await getDates.run(1, { staff_yc_id: 55, date_from: '2026-07-20', date_to: '2026-07-22' });
-    expect(ycGetStaffSchedule).toHaveBeenCalledWith({ id: 1, yclients_company_id: 100 }, 55, '2026-07-20', '2026-07-22');
+    // запрос к YClients расширен минимум до 14 дней от date_from (2026-08-03),
+    // хотя модель попросила только 3 дня — но ВЫДАЧА (schedule) остаётся в рамках
+    // запрошенного периода, обратная совместимость не ломается.
+    expect(ycGetStaffSchedule).toHaveBeenCalledWith({ id: 1, yclients_company_id: 100 }, 55, '2026-07-20', '2026-08-03');
     // выходной (is_working:0) отфильтрован
     expect(out.schedule).toEqual([
       { date: '2026-07-20', hours: [{ from: '10:00', to: '22:00' }] },
       { date: '2026-07-22', hours: [{ from: '09:00', to: '15:00' }] },
     ]);
     expect(out.working_days_count).toBe(2);
+    expect(out.next_working_date).toBeUndefined();
+    expect(out.hint).toBeUndefined();
   });
   test('без date_from/date_to — период по умолчанию (передаёт две даты)', async () => {
     db.one.mockResolvedValue({ id: 1, yclients_company_id: 100 });
@@ -520,6 +525,42 @@ describe('get_available_dates', () => {
     const out = await getDates.run(1, {});
     expect(out.error).toBeTruthy();
     expect(ycGetStaffSchedule).not.toHaveBeenCalled();
+  });
+
+  test('узкий однодневный запрос на выходной → тул сам проверяет запас и называет ближайший рабочий день', async () => {
+    db.one.mockResolvedValue({ id: 1, yclients_company_id: 100 });
+    // Модель спросила ТОЛЬКО вторник (выходной у мастера), но YClients получает
+    // расширенный до floor-а запрос и среди ответа есть рабочая среда.
+    ycGetStaffSchedule.mockResolvedValue([
+      { date: '2026-09-22', is_working: 0, slots: [] },   // вторник — запрошенный день
+      { date: '2026-09-23', is_working: 1, slots: [{ from: '10:00', to: '20:00' }] },  // среда
+    ]);
+    const out = await getDates.run(1, { staff_yc_id: 55, date_from: '2026-09-22', date_to: '2026-09-22' });
+    expect(ycGetStaffSchedule).toHaveBeenCalledWith({ id: 1, yclients_company_id: 100 }, 55, '2026-09-22', '2026-10-06');
+    expect(out.schedule).toEqual([]);   // выдача осталась в рамках запрошенного дня
+    expect(out.working_days_count).toBe(0);
+    expect(out.next_working_date).toBe('2026-09-23');
+    expect(out.hint).toMatch(/2026-09-23/);
+    expect(out.hint).toMatch(/не предлагай.*по одной догадке/i);
+  });
+
+  test('узкий запрос — рабочих дней нет и во всём запасе (floor) → честно сообщает границу проверки', async () => {
+    db.one.mockResolvedValue({ id: 1, yclients_company_id: 100 });
+    ycGetStaffSchedule.mockResolvedValue([
+      { date: '2026-09-22', is_working: 0, slots: [] },
+      { date: '2026-09-23', is_working: 0, slots: [] },
+    ]);
+    const out = await getDates.run(1, { staff_yc_id: 55, date_from: '2026-09-22', date_to: '2026-09-22' });
+    expect(out.next_working_date).toBeNull();
+    expect(out.schedule_checked_until).toBe('2026-09-23');
+    expect(out.hint).toMatch(/рабочих дней в проверенном периоде не нашлось/);
+  });
+
+  test('широкий запрос (date_to дальше floor-а) НЕ сужается', async () => {
+    db.one.mockResolvedValue({ id: 1, yclients_company_id: 100 });
+    ycGetStaffSchedule.mockResolvedValue([]);
+    await getDates.run(1, { staff_yc_id: 55, date_from: '2026-09-22', date_to: '2026-12-01' });
+    expect(ycGetStaffSchedule).toHaveBeenCalledWith({ id: 1, yclients_company_id: 100 }, 55, '2026-09-22', '2026-12-01');
   });
 });
 

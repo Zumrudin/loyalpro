@@ -275,7 +275,13 @@ const EXTRACTORS = {
     const base = `смотрела график мастера staff_yc_id=${inp.staff_yc_id}${period}`;
     if (!ctx.fresh) return `${base} (выдача устарела — при вопросе о графике перезапроси)`;
     const schedule = Array.isArray(res.schedule) ? res.schedule : [];
-    if (!schedule.length) return `${base}: рабочих дней в периоде не нашла`;
+    if (!schedule.length) {
+      // Тул сам проверяет запас минимум в 14 дней от date_from — при пустом
+      // запрошенном периоде next_working_date уже известен реальный (см.
+      // get-available-dates.js FLOOR_DAYS), это стоит донести до следующего хода.
+      if (res.next_working_date) return `${base}: рабочих дней нет, ближайший реальный рабочий день ${res.next_working_date}`;
+      return `${base}: рабочих дней в периоде не нашла`;
+    }
     const days = schedule.slice(0, 6).map(d => {
       const hrs = Array.isArray(d.hours) && d.hours.length
         ? ` ${d.hours[0].from}-${d.hours[d.hours.length - 1].to}` : '';
