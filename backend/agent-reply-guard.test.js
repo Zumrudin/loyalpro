@@ -522,3 +522,100 @@ describe('checkFalseUnavailability', () => {
       .toEqual([{ type: 'false_unavailability', value: '21:30' }]);
   });
 });
+
+// ── Инцидент 2026-09-19 (79651442032) ─────────────────────────────────────────
+// Ход 1: «Посмотрела расписание Татьяны, на утро понедельника у неё уже всё
+// расписано» — ни одного слот-вызова за ход. unknown_time срезал цифры из
+// черновика, а СЛОВЕСНОЕ утверждение о занятости не ловил никто.
+describe('checkUnbackedUnavailability', () => {
+  const { checkUnbackedUnavailability } = g;
+
+  test('боевая реплика без слот-вызова → unbacked_unavailability с клаузой', () => {
+    const v = checkUnbackedUnavailability(
+      'Посмотрела расписание Татьяны, к сожалению, на утро понедельника у неё уже всё расписано.\n\n' +
+      'Могу предложить перенести ваши визиты на вторник.',
+      { slotToolCalled: false, writeErrored: false });
+    expect(v).toHaveLength(1);
+    expect(v[0].type).toBe('unbacked_unavailability');
+    expect(v[0].value).toMatch(/всё расписано/);
+  });
+
+  test('ход 5: «вечерних окошек нет» без слот-вызова → нарушение', () => {
+    const v = checkUnbackedUnavailability(
+      'Утром в среду, к сожалению, у Татьяны уже всё занято, а вечерних окошек, к сожалению, нет.',
+      { slotToolCalled: false });
+    expect(v.map(x => x.type)).toEqual(['unbacked_unavailability']);
+  });
+
+  test('слот-инструмент вызывался → утверждение подкреплено, чисто', () => {
+    expect(checkUnbackedUnavailability('На утро понедельника всё расписано.', { slotToolCalled: true })).toEqual([]);
+  });
+
+  test('write упал (YClients отказал) → «занято» — факт, чисто', () => {
+    expect(checkUnbackedUnavailability('Это время, к сожалению, уже занято.', { slotToolCalled: false, writeErrored: true })).toEqual([]);
+  });
+
+  test('реплика без утверждений о занятости — чисто', () => {
+    expect(checkUnbackedUnavailability('Подскажите, в какой день и половину дня вам удобнее?', { slotToolCalled: false })).toEqual([]);
+    expect(checkUnbackedUnavailability('Клиника работает ежедневно с 10:00 до 22:00.', { slotToolCalled: false })).toEqual([]);
+  });
+
+  test('«не работает / выходной» — не занятость (это про график, ловится отдельно)', () => {
+    expect(checkUnbackedUnavailability('В понедельник у Татьяны выходной.', { slotToolCalled: false })).toEqual([]);
+  });
+
+  test('по клаузам: две клаузы о занятости — два нарушения', () => {
+    const v = checkUnbackedUnavailability('Утром всё занято. Вечером тоже нет окошек.', { slotToolCalled: false });
+    expect(v).toHaveLength(2);
+  });
+
+  test('жёсткий тип', () => {
+    expect(hardViolations([{ type: 'unbacked_unavailability', value: 'x' }])).toHaveLength(1);
+  });
+});
+
+// Ход 6: «Нет. Днём не могу» → ноль вызовов и повтор тех же 13:30/14:00/14:30.
+describe('checkRejectedRepeat', () => {
+  const { checkRejectedRepeat, isRefusal } = g;
+  const prev = new Set(['13:30', '14:00', '14:30']);
+
+  test('боевая реплика: отказ без цифр + те же времена без нового слот-вызова → rejected_repeat', () => {
+    const v = checkRejectedRepeat(
+      'Понимаю вас. Я могу предложить вам записаться к Татьяне на среду на 13:30, 14:00 или 14:30.',
+      { patientLastText: 'Нет\nДнем не могу', prevOfferTimes: prev, slotToolCalled: false });
+    expect(v).toEqual([{ type: 'rejected_repeat', value: '13:30, 14:00, 14:30' }]);
+  });
+
+  test('слоты перезапрошены → другой день/выдача, чисто', () => {
+    expect(checkRejectedRepeat('Есть 13:30 в четверг.',
+      { patientLastText: 'Нет', prevOfferTimes: prev, slotToolCalled: true })).toEqual([]);
+  });
+
+  test('пациент назвал время цифрами — это не отказ, а выбор', () => {
+    expect(checkRejectedRepeat('Записываю на 14:00.',
+      { patientLastText: 'нет, давайте 14:00', prevOfferTimes: prev, slotToolCalled: false })).toEqual([]);
+  });
+
+  test('реплика без прежних времён — чисто', () => {
+    expect(checkRejectedRepeat('Поняла. Посмотрим другой день — какой удобен?',
+      { patientLastText: 'Не могу', prevOfferTimes: prev, slotToolCalled: false })).toEqual([]);
+  });
+
+  test('без отказа в последнем сообщении — чисто', () => {
+    expect(checkRejectedRepeat('Есть 13:30.',
+      { patientLastText: 'а сколько стоит?', prevOfferTimes: prev, slotToolCalled: false })).toEqual([]);
+  });
+
+  test('isRefusal: формы отказа', () => {
+    for (const t of ['Нет', 'нет.', 'Не могу', 'Днём не могу', 'не подходит', 'Неудобно', 'Не получится', 'никак']) {
+      expect(isRefusal(t)).toBe(true);
+    }
+    for (const t of ['да', 'нет, давайте 14:00', 'а можно утром?', 'Нет, спасибо, запишите на 15.00']) {
+      expect(isRefusal(t)).toBe(false);
+    }
+  });
+
+  test('жёсткий тип', () => {
+    expect(hardViolations([{ type: 'rejected_repeat', value: 'x' }])).toHaveLength(1);
+  });
+});

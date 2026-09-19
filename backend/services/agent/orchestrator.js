@@ -26,6 +26,8 @@ const priceListDefault = require('./price-list-data');
 const priceList = require('./price-list');
 const { buildSystemPrompt, FACTUAL_SECTION_MARKER } = require('./system-prompt');
 const { buildSystemPromptV2 } = require('./system-prompt-v2');
+const slotEvidenceMod = require('./slot-evidence');
+const rescheduleTool = require('./tools/reschedule-booking');
 const schedulePreflight = require('./staff-schedule-preflight');
 const { stripAllStamps, stripStamp } = require('./transcript-time');
 const { createLogger } = require('../../logger');
@@ -163,12 +165,33 @@ function buildHardFixPrompt(hard) {
     parts.push(`говорит, что время ${falseBusy.join(', ')} занято или недоступно, но инструмент проверки слотов в ЭТОМ ходе вернул его СВОБОДНЫМ. ` +
       'Не называй его занятым: подтверди пациенту это время и предложи записать (или перенести) именно на него');
   }
+  const unbacked = val('unbacked_unavailability');
+  if (unbacked.length) {
+    parts.push(`утверждает, что время занято / расписано / окошек нет («${unbacked.join('»; «')}»), но НИ ОДИН инструмент ` +
+      'проверки расписания в этом ходе не вызывался — это выдумка. Убери утверждение о занятости целиком: ' +
+      'не называй никакое время занятым или свободным, честно скажи, что уточнишь расписание, и спроси, ' +
+      'какой день и половина дня удобны');
+  }
+  const rejected = val('rejected_repeat');
+  if (rejected.length) {
+    parts.push(`снова предлагает время ${rejected.join(', ')}, от которого пациент только что отказался, ` +
+      'ничего не перепроверив. Убери эти времена: предложи посмотреть другой день или спроси, какой день ' +
+      'и половина дня удобны — новое время в ЭТОМ ответе не называй');
+  }
   if (val('fabricated_unavailability_reason').length) {
     parts.push('придумывает причину, почему время недоступно (например, что его заняли прямо во время вашего разговора) — системе эта причина не известна и ничем не подтверждена. ' +
       'Извинись нейтрально, без версий о причине, и предложи другое время');
   }
   return 'СЛУЖЕБНАЯ ПРОВЕРКА (пациент этого не видит): твой последний ответ ' +
     `${parts.join('; а также ')}. В ответе — ТОЛЬКО переписанный текст для пациента.`;
+}
+
+// Hint-ответ write-инструмента: предрешённая подсказка модели БЕЗ похода в
+// YClients (номер не известен, время не из выдачи, слишком рано, препарат не
+// назван, невалидный id). Отказом YClients не является — для writeErrored.
+function isWriteHint(res) {
+  return !!(res && (res.invalid_args || res.too_soon || res.needs_phone
+    || res.generic_service_hint || res.unverified_slot || res.needs_confirmation));
 }
 
 // Реплика содержит конкретное время (HH:MM / HH.MM) — модель предлагает слот.
@@ -445,9 +468,13 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
   // а не пропущенная ложь).
   let toolMemoryLines = [];
   let journalWrite = null;
+  // Те же строки засевают slot-evidence (стартов, показанных ходом раньше):
+  // пациент подтверждает время следующим ходом, и write обязан его узнать.
+  let journalRows = [];
   if (cfg.AGENT_TOOL_MEMORY) {
     try {
       const rows = await toolEvents.loadRecent(salonId, dialogKey);
+      journalRows = Array.isArray(rows) ? rows : [];
       journalWrite = recentWrite.findRecentWrite(rows, { nowMs });
       const rendered = toolMemory.renderMemory(rows, { nowMs });
       toolMemoryLines = rendered.lines;
@@ -541,6 +568,12 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
     // черновик, выброшенный из-за нового входящего, обязан унести фото с собой,
     // иначе пациент получит картинку от ответа, которого он не увидит.
     toolCtx.attachments = [];
+    // Старты, реально возвращённые слот-инструментами (инцидент 2026-09-19:
+    // reschedule_booking на выдуманное время без единого слот-вызова). На
+    // попытку, как attachments; засев из свежего журнала — «показала ходом
+    // раньше, пациент подтвердил сейчас». Пополняется после каждого вызова ниже.
+    toolCtx.slotEvidence = slotEvidenceMod.createSlotEvidence();
+    toolCtx.slotEvidence.seedFromJournal(journalRows, { nowMs });
     if (!messages.length) return { replies: [], escalated: false, sideEffect: false };
 
     // Круг взаимных благодарностей: пациенту отвечать уже нечего. Проверка стоит
@@ -815,6 +848,16 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
     // продвигает названное в нём свободное время в offer_slots (инцидент 2026-09-16).
     // Именно последнее, а не весь транскрипт: в окне лежат времена старых визитов.
     toolCtx.patientLastText = stripAllStamps(lastUser ? String(lastUser.content || '') : '');
+    // Хвост диалога (последние три блока: серия пациента, предыдущая реплика
+    // Милы, блок перед ней) — гейт согласия reschedule_booking: время переноса
+    // обязано звучать цифрами здесь (инцидент 2026-09-19).
+    toolCtx.recentDialogText = messages.slice(-3)
+      .map(m => stripAllStamps(String(m.content || '')).trim()).join('\n');
+    // Времена ПРЕДЫДУЩЕЙ реплики Милы — для checkRejectedRepeat (повтор
+    // отвергнутого времени без нового слот-вызова, тот же инцидент, ход 6).
+    const lastAssistant = [...messages].reverse().find(m => m.role === 'assistant');
+    const prevOfferTimes = new Set(replyGuard.extractTimes(
+      stripAllStamps(lastAssistant ? String(lastAssistant.content || '') : '')));
     // Прошлые реплики Милы (без строк администратора и без меток времени) — для
     // title-dedup («должность один раз за диалог») и телеметрии gift_repeat.
     // Строки с OPERATOR_MARK режутся ПОСТРОЧНО: реплика администратора склеена
@@ -858,6 +901,7 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
     let degradedAfterWrite = false; // провайдер упал ПОСЛЕ успешной записи → детерминированное подтверждение
     let readBookings = false;       // list_client_bookings отработал → «вы записаны…» может быть честным ответом
     let recheckedAfterFail = false; // после провала create_booking модель перезапросила слоты (добросовестная переигровка)
+    let slotToolCalled = false;     // в ходе был ХОТЬ ОДИН вызов слот-инструмента (и повтор из кэша тоже) — иначе «занято» ничем не подкреплено
     // create_booking/book_chain упали на «нет номера» (needs_phone): ход предрешён —
     // номер спрашивает код, провала записи нет, второго прохода провайдера нет
     // (инцидент 2026-09-18, см. phone-request.js). { datetime } — из аргументов вызова.
@@ -917,6 +961,7 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
         // хендлер не исполняется и в журнал событие не пишется (см. комментарий
         // у REPEAT_CALL_HINT). Времена/флаги из результата уже собраны первым
         // проходом — повторная обработка ничего не добавит.
+        if (SLOT_READ_TOOLS.has(tc.name)) slotToolCalled = true;
         const repeatKey = SIDE_EFFECT_TOOLS.has(tc.name) ? null : repeatCallKey(tc.name, tc.input);
         if (repeatKey && turnCallCache.has(repeatKey)) {
           const prior = turnCallCache.get(repeatKey);
@@ -944,6 +989,7 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
         if (repeatKey && !isError) turnCallCache.set(repeatKey, result);
         // Журнал tool-цикла: сырые input/result в БД (форензика + память).
         evBuffer.push(tc.name, tc.input, result, isError);
+        toolCtx.slotEvidence.add(tc.name, tc.input, result);
         // Один лог на вызов инструмента (ok/error, длительность, решающие поля
         // без PII). Для исключения уже отработал logger.error выше — второй
         // раз не логируем, чтобы не задваивать одно и то же событие.
@@ -954,13 +1000,27 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
         }
         if (!isError && SIDE_EFFECT_TOOLS.has(tc.name)) sideEffect = true;
         if (!isError && WRITE_TOOLS.has(tc.name)) { writeSucceeded = true; lastWrite = { tool: tc.name, input: tc.input }; }
-        if (isError && WRITE_TOOLS.has(tc.name)) writeErrored = true;
+        // Hint-ответ write-инструмента (too_soon, unverified_slot, needs_phone…) —
+        // не отказ YClients: «занято» после него всё так же ничем не подкреплено.
+        if (isError && WRITE_TOOLS.has(tc.name) && !isWriteHint(result)) writeErrored = true;
         if (!isError && tc.name === 'list_client_bookings') readBookings = true;
         if (tc.name === 'escalate_to_operator' && result && result.escalated) escalated = true;
         if (tc.name === 'create_booking') {
           // needs_phone — не провал записи: YClients не звался, ответ предрешён
           // (см. phoneRequested). Иначе прежняя логика.
           if (phoneRequest.isNeedsPhone(result)) phoneRequested = { datetime: (tc.input || {}).datetime || null };
+          // unverified_slot — предрешённая подсказка «сначала запроси слоты»
+          // (slot-evidence), а не провал записи: YClients не звался.
+          else if (isError && !(result && result.unverified_slot)) bookingErrored = true;
+          else if (!isError) bookingSucceeded = true;
+        }
+        // Перенос — тот же класс провала, что создание (инцидент 2026-09-19:
+        // оба reschedule_booking упали, а bookingErrored ставился только по
+        // create_booking — ни перевода, ни блокировки выдумки «всё расписано»).
+        // Hint-ответы инструмента (unverified_slot / needs_confirmation /
+        // too_soon) провалом не считаются: модель делает пропущенный шаг.
+        if (tc.name === 'reschedule_booking') {
+          if (rescheduleTool.isHintResult(result)) { /* подсказка, не провал */ }
           else if (isError) bookingErrored = true;
           else bookingSucceeded = true;
         }
@@ -1202,6 +1262,12 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
         // Придуманная причина отказа («пока мы вели переписку… заняли») —
         // тот же инцидент, вторая половина.
         ...replyGuard.checkFabricatedUnavailabilityReason(joined),
+        // Словесное «занято/расписано/нет окошек» без единого слот-вызова за
+        // ход (инцидент 2026-09-19, ход 1) и повтор времени, от которого
+        // пациент только что отказался, без нового вызова (ход 6).
+        ...replyGuard.checkUnbackedUnavailability(joined, { slotToolCalled, writeErrored }),
+        ...replyGuard.checkRejectedRepeat(joined,
+          { patientLastText: toolCtx.patientLastText, prevOfferTimes, slotToolCalled }),
         // «Консультация в подарок» один раз за диалог — только измерение.
         ...replyGuard.checkGiftRepeat(joined,
           { priorHasGift: replyGuard.GIFT_RE.test(priorAssistantText) }),

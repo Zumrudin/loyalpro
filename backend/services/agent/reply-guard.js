@@ -382,6 +382,60 @@ function checkFalseUnavailability(text, opts = {}) {
   return out;
 }
 
+// ── Утверждение о занятости без единого слот-вызова за ход ────────────────
+// Инцидент 2026-09-19 (79651442032), ход 1: «Посмотрела расписание Татьяны, на
+// утро понедельника у неё уже всё расписано» — за ход не было НИ ОДНОГО
+// слот-инструмента (только два упавших reschedule_booking на выдуманное время).
+// unknown_time срезал из черновика цифры 11:00/11:30, а словесное «всё
+// расписано» не ловил никто: false_unavailability сверяет конкретное время с
+// конкретной выдачей, здесь же ложен САМ ФАКТ проверки. Отсюда отдельный
+// инвариант: любое «занято/расписано/нет окошек» обязано опираться на вызов
+// слот-инструмента в этом ходу (или на отказ YClients — writeErrored).
+// Клаузы про график («не работает», «выходной») не считаются: это другой факт,
+// он проверяется staff_not_working_claim.
+// ГОТЧА: \b в JS — ASCII-only и на кириллице не срабатывает никогда, границы
+// слов — lookaround'ами по \p{L} (тот же приём, что в address-guard). «нет
+// окошек»/«окошек … нет» добавлены отдельно: UNAVAILABLE_RE ловит только «нет
+// окошк…» (именительный), а родительный «окошек» — мимо.
+const BOOKED_UP_RE = /(вс[её]\s+расписано|(?<![\p{L}])расписан[аоы]?(?![\p{L}])|вс[её]\s+занято|(?<![\p{L}])нет(?![\p{L}])\s+(?:свободн[а-яё]*\s+)?окош[а-яё]*|окош[а-яё]*[^.!?;\n]{0,40}?(?<![\p{L}])нет(?![\p{L}]))/iu;
+
+function checkUnbackedUnavailability(text, opts = {}) {
+  if (opts.slotToolCalled || opts.writeErrored) return [];
+  const s = String(text || '');
+  const out = [];
+  for (const clause of s.split(/(?<=[.!?;\n])/)) {
+    if (!UNAVAILABLE_RE.test(clause) && !BOOKED_UP_RE.test(clause)) continue;
+    out.push({ type: 'unbacked_unavailability', value: clause.trim().slice(0, 120) });
+  }
+  return out;
+}
+
+// ── Повтор времени, от которого пациент только что отказался ──────────────
+// Тот же инцидент, ход 6: «Нет. Днём не могу» → без единого вызова инструмента
+// Мила повторила те же 13:30/14:00/14:30 и предложила пациентке самой выбрать
+// день. Никакая проверка не знала об отказе. Признак узкий: последнее сообщение
+// пациента — отказ БЕЗ цифр (с цифрой это выбор: «нет, давайте 14:00»), реплика
+// содержит время из ПРЕДЫДУЩЕЙ реплики Милы, слот-инструменты не вызывались.
+const REFUSAL_RE = /^\s*(?:нет|никак|не\s+могу|не\s+подходит|не\s+удобно|неудобно|не\s+получится|не\s+годится)(?![\p{L}])|(?<![\p{L}])(?:не\s+могу|не\s+подходит|не\s+удобно|неудобно|не\s+получится|не\s+годится)(?![\p{L}])/iu;
+
+function isRefusal(text) {
+  const s = String(text || '');
+  if (!s.trim() || s.includes('?')) return false;
+  if (extractTimes(s).length) return false;
+  return REFUSAL_RE.test(s);
+}
+
+function checkRejectedRepeat(text, opts = {}) {
+  if (opts.slotToolCalled) return [];
+  const prev = opts.prevOfferTimes;
+  if (!prev || !prev.size || !isRefusal(opts.patientLastText)) return [];
+  const repeated = [];
+  for (const t of extractTimes(String(text || ''))) {
+    if (prev.has(t) && !repeated.includes(t)) repeated.push(t);
+  }
+  return repeated.length ? [{ type: 'rejected_repeat', value: repeated.join(', ') }] : [];
+}
+
 // Жёсткие нарушения — оркестратор просит модель переписать ответ; стилистика
 // (эмодзи, приветствие, offer_bypass, free_day_time, gift_repeat) — только лог.
 //
@@ -401,6 +455,10 @@ const HARD_TYPES = new Set([
   // 2026-09-16), жёсткое сразу: множество freeTimes у оркестратора узкое по
   // построению (см. checkFalseUnavailability), ложных срабатываний не ждём.
   'false_unavailability',
+  // Инцидент 2026-09-19: словесная выдумка о занятости без слот-вызова и
+  // повтор отвергнутого времени — оба прямая причина «здесь просто тратить
+  // время», жёсткие сразу.
+  'unbacked_unavailability', 'rejected_repeat',
 ]);
 function hardViolations(violations) {
   return (violations || []).filter(v => HARD_TYPES.has(v.type));
@@ -412,4 +470,5 @@ module.exports = {
   OTHER_TIME_REQUEST_RE, checkUnverifiedOffer, checkFabricatedUnavailabilityReason,
   AVAILABILITY_OFFER_RE, FABRICATED_UNAVAILABILITY_RE,
   checkFalseUnavailability, UNAVAILABLE_RE,
+  checkUnbackedUnavailability, BOOKED_UP_RE, checkRejectedRepeat, isRefusal, REFUSAL_RE,
 };

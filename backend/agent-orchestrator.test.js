@@ -185,7 +185,11 @@ describe('runDialog', () => {
           patientText: expect.any(String),
           // patientLastText — ПОСЛЕДНЕЕ сообщение пациента: get_available_slots
           // продвигает названное в нём свободное время в offer_slots (2026-09-16).
-          patientLastText: expect.any(String) });
+          patientLastText: expect.any(String),
+          // recentDialogText — хвост диалога для гейта согласия reschedule_booking;
+          // slotEvidence — старты, реально возвращённые слот-инструментами (2026-09-19).
+          recentDialogText: expect.any(String),
+          slotEvidence: expect.objectContaining({ has: expect.any(Function), add: expect.any(Function) }) });
     expect(out.replies).toContain('Свободно 10:00. Записать?');
     expect(out.sideEffect).toBe(false);
     const secondCallMessages = deps.provider.createMessage.mock.calls[1][0].messages;
@@ -2644,5 +2648,175 @@ describe('create_booking → needs_phone', () => {
     const out = await orchestrator.runDialog(1, 'k', { deps });
     expect(out.bookingFailed).toBe(true);
     expect(deps.provider.createMessage).toHaveBeenCalledTimes(2);
+  });
+});
+
+// ── Инцидент 2026-09-19 (79651442032): перенос под гейтами кода ─────────────
+describe('slot-evidence и перенос записи (инцидент 2026-09-19)', () => {
+  const NOW = Date.parse('2026-09-19T09:00:00+03:00');
+  const slot = (t, date = '2026-09-23') => ({ time: t, datetime: `${date}T${t}:00+03:00`, seance_length: 3000 });
+  const rescheduleHandler = jest.fn(async (_s, input, ctx) => {
+    // Боевой гейт живёт в самом инструменте; здесь стаб воспроизводит его контракт
+    // по ctx.slotEvidence, чтобы проверить, ЧТО оркестратор в него кладёт.
+    if (ctx.slotEvidence && !ctx.slotEvidence.has(input.datetime)) {
+      return { unverified_slot: true, invalid_args: true, error: 'сначала слоты' };
+    }
+    return { rescheduled: true, record_id: input.record_id, datetime: input.datetime };
+  });
+
+  function mk(overrides = {}) {
+    const deps = makeDeps({
+      handlers: {
+        get_available_slots: jest.fn(async () => ({ slots: [slot('13:30'), slot('17:00')], offer_slots: [slot('13:30')] })),
+        reschedule_booking: rescheduleHandler,
+        ...(overrides.handlers || {}),
+      },
+      history: { loadTranscript: jest.fn(async () => ({
+        messages: overrides.messages || [{ role: 'user', content: 'Можно перенести на среду?' }], watermark: 100 })) },
+      toolEvents: overrides.toolEvents,
+    });
+    deps.registry.schemas.push({ name: 'reschedule_booking' });
+    return deps;
+  }
+
+  beforeEach(() => rescheduleHandler.mockClear());
+
+  test('evidence пополняется выдачей слотов ЭТОГО хода: слоты → перенос проходит', async () => {
+    const deps = mk();
+    deps.provider.createMessage
+      .mockResolvedValueOnce(toolResp('get_available_slots', { staff_yc_id: 1, service_yc_id: 2, date: '2026-09-23' }))
+      .mockResolvedValueOnce(toolResp('reschedule_booking', { record_id: 5, datetime: '2026-09-23T17:00:00+03:00' }, 'c2'))
+      .mockResolvedValueOnce(textResp('Перенесла вашу запись на среду, 17:00.'));
+    const out = await orchestrator.runDialog(1, 'k', { deps, nowMs: NOW });
+    expect(rescheduleHandler).toHaveBeenCalledTimes(1);
+    expect(out.bookingFailed).toBeFalsy();
+    expect(out.falseSuccess).toBe(false);
+    expect(out.replies[0]).toMatch(/Перенесла/);
+  });
+
+  test('без слот-вызова evidence пуста → hint unverified_slot, это НЕ провал записи', async () => {
+    const deps = mk();
+    deps.provider.createMessage
+      .mockResolvedValueOnce(toolResp('reschedule_booking', { record_id: 5, datetime: '2026-09-21T10:00:00+03:00' }))
+      .mockResolvedValueOnce(textResp('Подскажите, в какой день и половину дня удобнее?'));
+    const out = await orchestrator.runDialog(1, 'k', { deps, nowMs: NOW });
+    expect(rescheduleHandler.mock.results[0].value).resolves.toMatchObject({ unverified_slot: true });
+    expect(out.bookingFailed).toBeFalsy();
+    expect(out.escalated).toBe(false);
+  });
+
+  test('свежий журнал (< 30 мин) засевает evidence: слоты показаны ходом раньше — перенос сейчас проходит', async () => {
+    const stub = makeToolEventsStub();
+    stub.mod.loadRecent = jest.fn(async () => [{
+      tool: 'get_available_slots', input: { staff_yc_id: 1 }, result: { slots: [slot('17:00')] },
+      is_error: false, delivered: true, age_ms: 5 * 60 * 1000,
+    }]);
+    const deps = mk({ toolEvents: stub, messages: [
+      { role: 'assistant', content: 'Есть 17:00 в среду. Подойдёт?' }, { role: 'user', content: 'да' }] });
+    deps.provider.createMessage
+      .mockResolvedValueOnce(toolResp('reschedule_booking', { record_id: 5, datetime: '2026-09-23T17:00:00+03:00' }))
+      .mockResolvedValueOnce(textResp('Перенесла на 17:00.'));
+    const out = await orchestrator.runDialog(1, 'k', { deps, nowMs: NOW });
+    await expect(rescheduleHandler.mock.results[0].value).resolves.toMatchObject({ rescheduled: true });
+    expect(out.falseSuccess).toBe(false);
+  });
+
+  test('протухший журнал (> 30 мин) evidence не засевает', async () => {
+    const stub = makeToolEventsStub();
+    stub.mod.loadRecent = jest.fn(async () => [{
+      tool: 'get_available_slots', input: { staff_yc_id: 1 }, result: { slots: [slot('17:00')] },
+      is_error: false, delivered: true, age_ms: 45 * 60 * 1000,
+    }]);
+    const deps = mk({ toolEvents: stub });
+    deps.provider.createMessage
+      .mockResolvedValueOnce(toolResp('reschedule_booking', { record_id: 5, datetime: '2026-09-23T17:00:00+03:00' }))
+      .mockResolvedValueOnce(textResp('Уточню расписание — какой день удобен?'));
+    await orchestrator.runDialog(1, 'k', { deps, nowMs: NOW });
+    await expect(rescheduleHandler.mock.results[0].value).resolves.toMatchObject({ unverified_slot: true });
+  });
+
+  test('recentDialogText — последние три блока транскрипта без меток времени', async () => {
+    const deps = mk({ messages: [
+      { role: 'user', content: '[19.09 08:00] старое' },
+      { role: 'assistant', content: '[19.09 08:01] совсем старое' },
+      { role: 'user', content: '[19.09 08:02] перенесите' },
+      { role: 'assistant', content: '[19.09 08:03] Есть 17:00, подойдёт?' },
+      { role: 'user', content: '[19.09 08:04] да' },
+    ] });
+    deps.provider.createMessage.mockResolvedValueOnce(toolResp('get_available_slots', { staff_yc_id: 1, service_yc_id: 2, date: '2026-09-23' }))
+      .mockResolvedValueOnce(textResp('ок'));
+    await orchestrator.runDialog(1, 'k', { deps, nowMs: NOW });
+    const ctx = deps.registry.handlers.get_available_slots.mock.calls[0][2];
+    expect(ctx.recentDialogText).toBe('перенесите\nЕсть 17:00, подойдёт?\nда');
+    expect(ctx.recentDialogText).not.toMatch(/\[19\.09/);
+  });
+
+  test('отказ YClients на reschedule_booking → bookingFailed (паритет с create_booking)', async () => {
+    const deps = mk({ handlers: { reschedule_booking: jest.fn(async () => ({ error: 'Превышен лимит запросов' })) } });
+    deps.provider.createMessage
+      .mockResolvedValueOnce(toolResp('reschedule_booking', { record_id: 5, datetime: '2026-09-21T10:00:00+03:00' }))
+      .mockResolvedValueOnce(textResp('Посмотрела расписание, на утро понедельника всё расписано.'));
+    const out = await orchestrator.runDialog(1, 'k', { deps, nowMs: NOW });
+    expect(out.bookingFailed).toBe(true);
+    // Переигровки нет (слоты не перезапрошены, времени в реплике нет) → диспетчер переведёт.
+    expect(out.bookingFailRecoverable).toBe(false);
+  });
+
+  test('успешный перенос после провала того же хода — не провал (bookingSucceeded)', async () => {
+    const h = jest.fn()
+      .mockResolvedValueOnce({ error: 'Превышен лимит запросов' })
+      .mockResolvedValueOnce({ rescheduled: true, record_id: 5, datetime: '2026-09-23T17:00:00+03:00' });
+    const deps = mk({ handlers: { reschedule_booking: h } });
+    deps.provider.createMessage
+      .mockResolvedValueOnce(toolResp('reschedule_booking', { record_id: 5, datetime: '2026-09-23T17:00:00+03:00' }))
+      .mockResolvedValueOnce(toolResp('reschedule_booking', { record_id: 5, datetime: '2026-09-23T17:00:00+03:00' }, 'c2'))
+      .mockResolvedValueOnce(textResp('Перенесла на 17:00.'));
+    const out = await orchestrator.runDialog(1, 'k', { deps, nowMs: NOW });
+    expect(out.bookingFailed).toBe(false);
+    expect(out.falseSuccess).toBe(false);
+  });
+});
+
+describe('reply-guard: «занято» без слот-вызова и повтор отвергнутого (инцидент 2026-09-19)', () => {
+  const NOW = Date.parse('2026-09-19T09:00:00+03:00');
+
+  test('ход 1: «всё расписано» без единого слот-вызова → корректирующий довызов', async () => {
+    const deps = makeDeps({ history: { loadTranscript: jest.fn(async () => ({
+      messages: [{ role: 'user', content: 'Можно перенести на пн утро?' }], watermark: 100 })) } });
+    deps.provider.createMessage
+      .mockResolvedValueOnce(textResp('Посмотрела расписание Татьяны, на утро понедельника у неё уже всё расписано.'))
+      .mockResolvedValueOnce(textResp('Сейчас уточню расписание. Подскажите, в какую половину дня удобнее?'));
+    const out = await orchestrator.runDialog(1, 'k', { deps, nowMs: NOW });
+    expect(deps.provider.createMessage).toHaveBeenCalledTimes(2);
+    const fix = deps.provider.createMessage.mock.calls[1][0].messages.at(-1).content;
+    expect(fix).toMatch(/ни один инструмент/i);
+    expect(fix).toMatch(/всё расписано/);
+    expect(out.replies[0]).toMatch(/уточню расписание/);
+  });
+
+  test('после слот-вызова «всё расписано» — довызова нет', async () => {
+    const deps = makeDeps({ handlers: { get_available_slots: jest.fn(async () => ({ slots: [] })) } });
+    deps.provider.createMessage
+      .mockResolvedValueOnce(toolResp('get_available_slots', { staff_yc_id: 1, service_yc_id: 2, date: '2026-09-21' }))
+      .mockResolvedValueOnce(textResp('На понедельник, к сожалению, всё расписано. Посмотрим другой день?'));
+    await orchestrator.runDialog(1, 'k', { deps, nowMs: NOW });
+    expect(deps.provider.createMessage).toHaveBeenCalledTimes(2);
+  });
+
+  test('ход 6: отказ пациента + повтор времён прошлой реплики без вызовов → довызов', async () => {
+    const deps = makeDeps({ history: { loadTranscript: jest.fn(async () => ({
+      messages: [
+        { role: 'assistant', content: '[19.09 09:27] Есть 13:30, 14:00 и 14:30. Подходит?' },
+        { role: 'user', content: '[19.09 09:27] Нет\nДнем не могу' },
+      ], watermark: 100 })) } });
+    deps.provider.createMessage
+      .mockResolvedValueOnce(textResp('Понимаю. Могу предложить среду на 13:30, 14:00 или 14:30.'))
+      .mockResolvedValueOnce(textResp('Понимаю. Посмотрим другой день — какой удобен?'));
+    const out = await orchestrator.runDialog(1, 'k', { deps, nowMs: NOW });
+    expect(deps.provider.createMessage).toHaveBeenCalledTimes(2);
+    const fix = deps.provider.createMessage.mock.calls[1][0].messages.at(-1).content;
+    expect(fix).toMatch(/только что отказался/);
+    expect(fix).toMatch(/13:30, 14:00, 14:30/);
+    expect(out.replies[0]).toMatch(/другой день/);
   });
 });
