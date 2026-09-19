@@ -21,7 +21,7 @@
 
 `createSlotEvidence()` → объект с `add(tool, input, result)`, `has(datetime, {staffYcId})`, `size`.
 
-- `add` разбирает результаты слот-инструментов и складывает пары `{ms, staffYcId|null}`: `get_available_slots` (`slots[]` со `staff_yc_id` из input, `alternative_staff[].slots` и `staff_options[].slots` со своими `staff_yc_id`), `get_sequential_slots` (`variants[].starts[].chain[]` — `datetime` + `staff_yc_id` звена), `get_parallel_slots` (по фактической форме результата: старты с `datetime`), `create_booking` с `available_slots` (ретрай после отказа YClients, мастер из input). Прочие инструменты игнорируются.
+- `add` разбирает результаты слот-инструментов и складывает пары `{ms, staffYcId|null}`: `get_available_slots` (`slots[]` со `staff_yc_id` из input, `alternative_staff[].slots` и `staff_options[].slots` со своими `staff_yc_id`), `get_sequential_slots` (`variants[].starts[].chain[]` — `datetime` + `staff_yc_id` звена), `get_parallel_slots` (`starts[].guests[]` — `datetime` + `staff_yc_id` гостя), `create_booking` с `available_slots` (ретрай после отказа YClients, мастер из input). Прочие инструменты игнорируются.
 - `has(datetime, {staffYcId})`: сравнение по миллисекундам (`Date.parse`, так «+03:00» и «2026-09-23 17:00:00» совпадают), мастер сверяется, только если известен с ОБЕИХ сторон.
 - `seedFromJournal(rows, {nowMs, maxAgeMs})` — те же строки `tool-events.loadRecent`, что и память (`age_ms`), только не-ошибочные и не старше `SLOT_TIMES_FRESH_MS` (30 мин, константа `tool-memory`). Нужен для «пациент подтвердил ходом позже»: слоты показаны в прошлом ходу, запись — в этом.
 
