@@ -76,6 +76,12 @@ module.exports = {
   AGENT_ADMIN_HOURS: process.env.AGENT_ADMIN_HOURS || '09:00-21:00',
   // Дебаунс серии сообщений (мс) — используется диспетчером в Фазе 2b.
   AGENT_DEBOUNCE_MS: process.env.AGENT_DEBOUNCE_MS ? parseInt(process.env.AGENT_DEBOUNCE_MS, 10) : 5000,
+  // Закрытие окна расписания посреди живого диалога (инцидент 2026-09-19):
+  // входящее вне окна в диалог, где Мила отвечала не позже N минут назад,
+  // переводится на администратора явно (эскалация window_closed + фраза).
+  // 0 — выключено. См. services/agent/window-handover.js.
+  AGENT_WINDOW_HANDOVER_MIN: process.env.AGENT_WINDOW_HANDOVER_MIN != null
+    ? parseInt(process.env.AGENT_WINDOW_HANDOVER_MIN, 10) : 60,
   // User-токен приложения-интеграции LoyalPRO — используется ТОЛЬКО для СОЗДАНИЯ
   // записей, чтобы автор в YClients был «LoyalPRO», а не личная УЗ владельца
   // (иначе created_user_id = владелец yclients_user_token). Чтения слотов/каталога

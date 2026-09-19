@@ -90,7 +90,7 @@ describe('listStaleOperatorPauses', () => {
     expect(await state.listStaleOperatorPauses(1, 90)).toEqual(['a', 'b']);
     const [sql, params] = db.any.mock.calls[0];
     expect(sql).toMatch(/status\s*=\s*'escalated'/i);
-    expect(sql).toMatch(/escalated_reason\s*=\s*'operator_reply'/i);
+    expect(sql).toMatch(/escalated_reason IN \('operator_reply', 'window_closed'\)/i);
     expect(sql).toMatch(/updated_at\s*<\s*now\(\)/i);
     expect(params).toEqual([1, '90']);
   });

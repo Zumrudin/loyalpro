@@ -957,3 +957,61 @@ test('принудительный перевод после провала за
   expect(line).toBeDefined();
   expect(line).toContain('Чтобы закрепить время, подскажите номер 🤍');
 });
+
+// ── Закрытие окна расписания посреди живого диалога (инцидент 2026-09-19) ────
+// 79651442032: в 09:32 (окно до 09:30) «Удобнее, если перезвонит администратор»
+// → gate skip (outside-schedule), ни эскалации, ни фразы, ни подсветки.
+describe('gate outside-schedule → перевод живого диалога', () => {
+  const NOW = Date.now();
+  function wdeps(over = {}) {
+    return deps({
+      settings: { isAllowed: jest.fn(async () => ({ allow: false, reason: 'outside-schedule' })) },
+      dialogState: { get: jest.fn(async () => ({ status: 'bot' })) },
+      history: { lastAgentReplyAt: jest.fn(async () => NOW - 3 * 60 * 1000) },
+      windowHandoverMin: 60,
+      ...over,
+    });
+  }
+  const m = { ...meta, text: 'Удобнее, если перезвонит администратор. Здесь просто тратить время.' };
+
+  test('бот отвечал 3 минуты назад → эскалация window_closed + фраза перевода, прогона нет', async () => {
+    const d = wdeps();
+    dispatcher.enqueue(1, 'k', m, d);
+    await jest.advanceTimersByTimeAsync(1000);
+    expect(d.orchestrator.runDialog).not.toHaveBeenCalled();
+    expect(d.escalate).toHaveBeenCalledWith(1, 'k', 'window_closed');
+    expect(d.send).toHaveBeenCalledTimes(1);
+    expect(d.send.mock.calls[0][1]).toMatch(/Передаю ваш диалог администратору/);
+  });
+
+  test('реплика Милы 5 часов назад → тишина, как раньше', async () => {
+    const d = wdeps({ history: { lastAgentReplyAt: jest.fn(async () => NOW - 5 * 60 * 60 * 1000) } });
+    dispatcher.enqueue(1, 'k', m, d);
+    await jest.advanceTimersByTimeAsync(1000);
+    expect(d.escalate).not.toHaveBeenCalled();
+    expect(d.send).not.toHaveBeenCalled();
+  });
+
+  test('выключено (windowHandoverMin 0) → тишина', async () => {
+    const d = wdeps({ windowHandoverMin: 0 });
+    dispatcher.enqueue(1, 'k', m, d);
+    await jest.advanceTimersByTimeAsync(1000);
+    expect(d.send).not.toHaveBeenCalled();
+  });
+
+  test('«Спасибо» вне окна → тишина (чистая вежливость)', async () => {
+    const d = wdeps();
+    dispatcher.enqueue(1, 'k', { ...meta, text: 'Спасибо' }, d);
+    await jest.advanceTimersByTimeAsync(1000);
+    expect(d.send).not.toHaveBeenCalled();
+    expect(d.escalate).not.toHaveBeenCalled();
+  });
+
+  test('другая причина гейта (whitelist) — ветка не трогается', async () => {
+    const d = wdeps({ settings: { isAllowed: jest.fn(async () => ({ allow: false, reason: 'not-whitelisted' })) } });
+    dispatcher.enqueue(1, 'k', m, d);
+    await jest.advanceTimersByTimeAsync(1000);
+    expect(d.dialogState.get).not.toHaveBeenCalled();
+    expect(d.send).not.toHaveBeenCalled();
+  });
+});

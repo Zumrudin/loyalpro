@@ -252,6 +252,9 @@ router.post('/webhook', async (req, res) => {
             messageId: msg.messageId,
             chatId: msg.chatId,
             chatType: msg.chatType,
+            // Текст последнего входящего — решению о переводе при закрытии окна
+            // (window-handover: «Спасибо» переводить не надо).
+            text: msg.text,
           });
         }
       }

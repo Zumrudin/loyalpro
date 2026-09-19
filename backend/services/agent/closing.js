@@ -80,4 +80,4 @@ function shouldStaySilent(messages) {
   return isPureClosing(prev.content) && isPureClosing(last.content);
 }
 
-module.exports = { shouldStaySilent };
+module.exports = { shouldStaySilent, isPureClosing };

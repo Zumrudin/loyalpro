@@ -18,6 +18,8 @@ const deliveryWatchdog = require('./delivery-watchdog');
 const priceListData = require('./price-list-data');
 const priceList = require('./price-list');
 const followupQueueDefault = require('./followup-queue');
+const windowHandover = require('./window-handover');
+const historyDefault = require('./history');
 const { createLogger } = require('../../logger');
 const logger = createLogger('AgentDispatcher');
 
@@ -179,7 +181,28 @@ async function process(salonId, dialogKey, meta, opts = {}) {
     logger.error(`dialog ${dialogKey} gate failed: ${e.message} — молчим (fail-closed)`);
     return;
   }
-  if (!gate.allow) { logger.info(`gate skip ${dialogKey} (${gate.reason})`); return; }
+  if (!gate.allow) {
+    logger.info(`gate skip ${dialogKey} (${gate.reason})`);
+    // Окно закрылось ПОСРЕДИ живого диалога (инцидент 2026-09-19: «пусть
+    // перезвонит администратор» в 09:32 при окне до 09:30 повисло без ответа и
+    // без подсветки). Диалог, где Мила отвечала только что, явно уходит к
+    // человеку: эскалация window_closed + фраза перевода. Best-effort целиком.
+    if (gate.reason === 'outside-schedule') {
+      try {
+        await windowHandover.onOutsideSchedule(salonId, dialogKey, meta, {
+          state: opts.dialogState || dialogStateDefault,
+          history: opts.history || historyDefault,
+          escalate, send,
+          handoverText: () => adminHours.handoverText(adminOffNow()),
+          maxAgeMs: (opts.windowHandoverMin != null ? opts.windowHandoverMin : config.AGENT_WINDOW_HANDOVER_MIN) * 60 * 1000,
+          logger,
+        });
+      } catch (e) {
+        logger.warn(`dialog ${dialogKey}: перевод по закрытию окна не отработал (${e.message})`);
+      }
+    }
+    return;
+  }
 
   // Пауза «отвечал администратор» протухает на ОТКРЫТИИ окна расписания: если её
   // поставили до начала текущего окна, диалог возвращается боту. Настоящую

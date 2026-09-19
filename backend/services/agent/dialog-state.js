@@ -103,7 +103,7 @@ async function listStaleOperatorPauses(salonId, minutesSinceWindowStart) {
   const rows = await db.any(
     `SELECT dialog_key FROM agent_dialogs
       WHERE salon_id = $1
-        AND status = 'escalated' AND escalated_reason = 'operator_reply'
+        AND status = 'escalated' AND escalated_reason IN ('operator_reply', 'window_closed')
         AND updated_at < now() - ($2 || ' minutes')::interval
       ORDER BY updated_at`,
     [salonId, minutesInterval(minutesSinceWindowStart)]);
@@ -111,7 +111,10 @@ async function listStaleOperatorPauses(salonId, minutesSinceWindowStart) {
 }
 
 // Снять паузу «отвечал администратор» пачкой ключей. Возвращает РЕАЛЬНО снятые.
-//   • трогаем ТОЛЬКО escalated_reason='operator_reply'. Настоящая эскалация
+//   • трогаем ТОЛЬКО escalated_reason IN ('operator_reply','window_closed') —
+//     паузу администратора и перевод по закрытию окна (window-handover.js:
+//     диалог, который бот вёл в момент закрытия окна; на открытии он снова
+//     его). Настоящая эскалация
 //     Милы (escalate_to_operator, «клиент недоволен», «осложнение») остаётся
 //     на человеке навсегда — её снимает только кнопка «Вернуть боту»;
 //   • escalated_reason гасим: блок промпта «диалог вернул тебе администратор»
@@ -126,7 +129,7 @@ async function resumeOperatorPauses(salonId, dialogKeys, minutesSinceWindowStart
     `UPDATE agent_dialogs
         SET status = 'bot', escalated_reason = NULL, updated_at = now()
       WHERE salon_id = $1 AND dialog_key = ANY($2)
-        AND status = 'escalated' AND escalated_reason = 'operator_reply'
+        AND status = 'escalated' AND escalated_reason IN ('operator_reply', 'window_closed')
         AND updated_at < now() - ($3 || ' minutes')::interval
       RETURNING dialog_key`,
     [salonId, keys, minutesInterval(minutesSinceWindowStart)]);

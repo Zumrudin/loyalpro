@@ -630,3 +630,21 @@ describe('lastOutgoingAuthor', () => {
     expect(await history.lastOutgoingAuthor(1, 'k')).toBe(null);
   });
 });
+
+// window-handover (инцидент 2026-09-19): «бот только что вёл этот диалог» =
+// последняя реплика агента не старше N минут.
+describe('lastAgentReplyAt', () => {
+  test('нет реплик агента → null', async () => {
+    db.oneOrNone.mockResolvedValue(null);
+    expect(await history.lastAgentReplyAt(1, 'k')).toBeNull();
+    const [sql, params] = db.oneOrNone.mock.calls[0];
+    expect(sql).toMatch(/authored_by\s*=\s*'agent'/);
+    expect(sql).toMatch(/direction\s*=\s*'outgoing'/);
+    expect(params).toEqual([1, 'k']);
+  });
+
+  test('msg_ts (секунды) → миллисекунды', async () => {
+    db.oneOrNone.mockResolvedValue({ ts: '1789799342' });
+    expect(await history.lastAgentReplyAt(1, 'k')).toBe(1789799342000);
+  });
+});

@@ -345,6 +345,21 @@ async function lastOutgoingAuthor(salonId, dialogKey) {
   return (row && row.author) || null;
 }
 
+// Момент ПОСЛЕДНЕЙ реплики Милы в диалоге (мс) или null. Нужен решению о
+// переводе при закрытии окна расписания (window-handover.js): «бот только что
+// вёл этот диалог» = реплика агента не старше N минут. Строго authored_by='agent'.
+async function lastAgentReplyAt(salonId, dialogKey) {
+  const row = await db.oneOrNone(
+    `SELECT ${MSG_TS_SQL} AS ts FROM chatpush_messages
+      WHERE salon_id = $1 AND ${DIALOG_KEY_SQL} = $2
+        AND direction = 'outgoing' AND authored_by = 'agent'
+      ORDER BY ${MSG_TS_SQL} DESC, id DESC
+      LIMIT 1`,
+    [salonId, dialogKey]);
+  const ts = row ? Number(row.ts) : NaN;
+  return Number.isFinite(ts) && ts > 0 ? ts * 1000 : null;
+}
+
 // Пришло ли входящее новее watermark (во время прогона агента)?
 async function hasIncomingAfter(salonId, dialogKey, watermark) {
   const row = await db.oneOrNone(
@@ -358,6 +373,6 @@ async function hasIncomingAfter(salonId, dialogKey, watermark) {
 
 module.exports = {
   loadTranscript, hasIncomingAfter, hasEverAnswered, hasAgentEverWritten,
-  lastOutgoing, lastOutgoingAuthor,
+  lastOutgoing, lastOutgoingAuthor, lastAgentReplyAt,
   OPERATOR_MARK, AUTHORSHIP_SINCE_TS, stripOperatorMark, markOperatorLines,
 };
