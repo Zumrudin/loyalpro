@@ -187,6 +187,25 @@ describe('filterByDayPart', () => {
     expect(density.filterByDayPart(DAY, 'вечер')).toHaveLength(DAY.length);
     expect(density.filterByDayPart(DAY, null)).toHaveLength(DAY.length);
   });
+
+  // Дизъюнкция («или утро, или ближе к вечеру», инцидент 79651442032) — dayPart
+  // массивом, слот проходит, если попал ХОТЯ БЫ в одну из частей. 14:00 и 16:30
+  // остаются исключены — это и есть «днём», от которого пациентка отказалась
+  // словами «Днем не могу».
+  test('массив частей — объединение, а не пересечение', () => {
+    expect(density.filterByDayPart(DAY, ['morning', 'evening']).map(s => s.time))
+      .toEqual(['11:00', '13:30', '17:00', '20:30']);
+  });
+
+  test('массив с одной неизвестной частью — считается только валидная', () => {
+    expect(density.filterByDayPart(DAY, ['morning', 'обед']).map(s => s.time))
+      .toEqual(['11:00', '13:30']);
+  });
+
+  test('массив без единой валидной части / пустой массив — фильтром не считается', () => {
+    expect(density.filterByDayPart(DAY, ['обед', 'вечер'])).toHaveLength(DAY.length);
+    expect(density.filterByDayPart(DAY, [])).toHaveLength(DAY.length);
+  });
 });
 
 describe('chooseOffer: свободный день, половина дня, деградация', () => {
@@ -260,5 +279,60 @@ describe('chooseOffer: свободный день, половина дня, д�
   test('слотов нет вовсе → ни freeDay, ни времени', () => {
     expect(density.chooseOffer([], [], { busyKnown: true })).toEqual({ offer: [], freeDay: false, dayPartEmpty: false });
     expect(density.chooseOffer(null, null, {})).toEqual({ offer: [], freeDay: false, dayPartEmpty: false });
+  });
+
+  // ── Дизъюнкция «или утро, или вечер» (инцидент 79651442032) ──
+  describe('dayPart массивом — обе части union', () => {
+    // Один блок занятости 09:00–09:30, свободно до и после в пределах утра, и
+    // отдельный блок 12:00–12:30 — у утра ДВА чистых анкора (near=0 у обоих:
+    // 08:30 примыкает к первому блоку, 11:30 — ко второму). У вечера ОДИН анкор
+    // похуже (near=30 у 17:00). Глобальный ранкер без разбивки по частям взял бы
+    // ОБА лучших анкора из утра (near=0 у обоих бьёт near=30 у вечера) и вечер
+    // выпал бы целиком — ровно тот дефект, который эта спека чинит.
+    const busy = density.seancesToBusy(grid('08:00', '20:00',
+      [['09:00', '09:30'], ['12:00', '12:30'], ['18:00', '18:30']]));
+    const slots = ['08:30', '11:30', '17:00'].map(t => at(t));
+
+    test('обе части непустые → в offer есть время и из утра, и из вечера', () => {
+      const r = density.chooseOffer(slots, busy,
+        { busyKnown: true, durationMin: 30, dayPart: ['morning', 'evening'] });
+      const times = r.offer.map(s => s.time);
+      expect(times.some(t => t < '14:00')).toBe(true);
+      expect(times.some(t => t >= '17:00')).toBe(true);
+      expect(r.dayPartEmpty).toBe(false);
+    });
+
+    // Вечер в этой выдаче пуст (BUSY_DAY_SLOTS не заходит за 14:00) — union
+    // непуст только за счёт утра, весь лимит достаётся ему, как одиночному
+    // dayPart: результат обязан совпасть с чистым 'morning'.
+    test('только одна часть непустая → полный лимит достаётся ей, как одиночному dayPart', () => {
+      const single = density.chooseOffer(BUSY_DAY_SLOTS, BUSY_DAY,
+        { busyKnown: true, durationMin: 30, dayPart: 'morning' });
+      const union = density.chooseOffer(BUSY_DAY_SLOTS, BUSY_DAY,
+        { busyKnown: true, durationMin: 30, dayPart: ['morning', 'evening'] });
+      expect(union.offer.map(s => s.time)).toEqual(single.offer.map(s => s.time));
+      expect(union.dayPartEmpty).toBe(false);
+    });
+
+    // Ни утра, ни вечера в выдаче нет вовсе (только середина дня) — dayPartEmpty
+    // на ОБЪЕДИНЕНИИ, тот же контракт, что у одиночной части.
+    test('обе части пусты → dayPartEmpty на объединении', () => {
+      const afternoonOnly = ['15:00', '15:30', '16:00', '16:30'].map(t => at(t));
+      const r = density.chooseOffer(afternoonOnly, [],
+        { busyKnown: true, durationMin: 30, dayPart: ['morning', 'evening'] });
+      expect(r.dayPartEmpty).toBe(true);
+      expect(r.offer.length).toBeGreaterThan(0);
+    });
+
+    // Свободный день (busy=[]) + обе части — края КАЖДОЙ части, freeDay снят
+    // (вопрос о половине дня уже отвечен дизъюнкцией).
+    test('свободный день + обе части → края каждой части, а не повторный вопрос', () => {
+      const r = density.chooseOffer(FREE_DAY, [],
+        { busyKnown: true, durationMin: 30, dayPart: ['morning', 'evening'] });
+      expect(r.freeDay).toBe(false);
+      const times = r.offer.map(s => s.time);
+      expect(times.some(t => t < '14:00')).toBe(true);
+      expect(times.some(t => t >= '17:00')).toBe(true);
+    });
   });
 });

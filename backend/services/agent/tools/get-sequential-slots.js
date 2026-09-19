@@ -12,6 +12,8 @@ const eqContext = require('../equipment-context');
 const seq = require('../sequential');
 const seqOffers = require('../sequential-offers');
 const leadTime = require('../lead-time');
+const density = require('../slot-density');
+const patientTime = require('../patient-time');
 
 // ── Несколько услуг ПОДРЯД одному клиенту («встык»). ────────────────────────
 // Отдельный инструмент, а не «сравни слоты двух услуг сама»: стыковка окон —
@@ -63,6 +65,9 @@ const schema = {
         type: 'string',
         description: 'Если ПЕРВАЯ услуга цепочки УЖЕ забронирована и пациент хочет ДОБАВИТЬ следующие ПОСЛЕ неё, НЕ перенося её — её дата и время в формате YYYY-MM-DDTHH:MM. Тогда первая услуга закрепляется как есть (её слот в графике занят собственной записью), а инструмент ищет стыковку ТОЛЬКО последующих услуг в тот же день. Указывай вместе с preferred_staff_yc_id — мастером уже записанной услуги.',
       },
+      day_part: { type: 'string', enum: ['morning', 'afternoon', 'evening'],
+        description: 'Половина дня, которую назвал пациент — сузить старты цепочки. Не передал — ' +
+          'сама выведется из его слов (и «или утро, или вечер» тоже).' },
     },
     required: ['services', 'date'],
     additionalProperties: false,
@@ -103,6 +108,20 @@ async function run(salonId, input, ctx = {}) {
   if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date) || items.length < 2) {
     return { error: 'Нужны date (YYYY-MM-DD) и минимум две услуги в services.' };
   }
+  // Половина дня — тот же приём, что в get_available_slots (инцидент 2026-09-19,
+  // репродукция 19.09: этот инструмент день_part вообще не читал — первые 4
+  // хронологических старта дня оставались теми же независимо от параметра).
+  // Явный аргумент модели главнее; не передала — читаем из недавних сообщений
+  // ПАЦИЕНТА (ctx.patientRecentTexts, текущее последним); строка или массив
+  // (дизъюнкция «или утро, или вечер»).
+  const recentTexts = (ctx && Array.isArray(ctx.patientRecentTexts))
+    ? ctx.patientRecentTexts : [ctx && ctx.patientLastText];
+  const inferredDayPart = (input && input.day_part) ? null
+    : patientTime.parseDayPartFromRecent(recentTexts);
+  const dayPart = (input && input.day_part) || inferredDayPart || undefined;
+  const dayParts = density.normalizeDayParts(dayPart).map((k) => density.DAY_PARTS[k]);
+  const inDayPart = (startMin) => !dayParts.length
+    || dayParts.some((p) => startMin >= p.from && startMin < p.to);
 
   const salon = await db.oneOrNone(
     `SELECT id, yclients_company_id, yclients_partner_token, yclients_user_token
@@ -317,6 +336,11 @@ async function run(salonId, input, ctx = {}) {
         const entries = await entriesFor(a, day, eqCtx);
         let chains = seq.chainStarts(entries);
         if (dayFloor) chains = chains.filter(c => c.start >= dayFloor);
+        // Половина дня сужает ЭТОТ день — если у него нет старта в нужном окне,
+        // ничего не пушим и цикл САМ продолжит смотреть следующие дни горизонта:
+        // «совпадающее время, а не найдётся — ближайшая ПОДХОДЯЩАЯ дата», без
+        // отдельного механизма (инцидент 2026-09-19).
+        if (dayParts.length) chains = chains.filter(c => inDayPart(c.start));
         if (!chains.length) continue;
         variants.push(buildVariant(a, day, entries, chains.slice(0, MAX_STARTS)));
         datesWithHits.add(day);
@@ -324,7 +348,11 @@ async function run(salonId, input, ctx = {}) {
       }
 
       // «С перерывом» — только для запрошенного дня и только там, где встык не вышло.
-      if (d === 0) {
+      // Половину дня тут НЕ проверяем: bestGapChain отдаёт ОДИН старт без списка
+      // кандидатов, отдельная перепроверка попадания в day_part — расширение вне
+      // рамок этой правки; ход с day_part и одновременно допустимым разрывом >15
+      // мин — крайний случай, которого нет в инцидентных данных.
+      if (d === 0 && !dayParts.length) {
         for (const a of assignments) {
           if (variants.some(v => v.date === day && v.type === a.type)) continue;
           const entries = await entriesFor(a, day, eqCtx);
@@ -372,6 +400,7 @@ async function run(salonId, input, ctx = {}) {
   const out = { requested_date: date, variants: shortlist, performers_by_service: performersByService };
   if (scheduleFailures) out.schedule_degraded = true;
   if (preferredCannot.length) out.preferred_staff_cannot = preferredCannot;
+  if (inferredDayPart) out.day_part_inferred = inferredDayPart;
 
   // Выходной/отпуск у ЗАПИСАННОГО мастера на запрошенную дату (живой прогон
   // 2026-09-19): инструмент молча отдавал варианты на другие даты, и модель

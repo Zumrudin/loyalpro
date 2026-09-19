@@ -468,10 +468,17 @@ async function run(salonId, input, ctx = {}) {
   // Половина дня, названная ПАЦИЕНТОМ. Валидацию делает сам density (незнакомое
   // значение фильтром не считается) — молча сужать выдачу по опечатке модели нельзя.
   // Половина дня: явный аргумент модели главнее; не передала — читаем из СЛОВ
-  // последнего сообщения пациента (инцидент 2026-09-19: «утром» без day_part
-  // дало вечерние offer_slots плотности). Вывод помечается day_part_inferred.
+  // недавних сообщений пациента (инцидент 2026-09-19: «утром» без day_part дало
+  // вечерние offer_slots плотности; ход 6 того же инцидента — «Днем не могу» само
+  // по себе не сужает, но дизъюнкция «или утро, или вечер» звучала двумя
+  // сообщениями раньше). Вывод — строка ИЛИ массив (дизъюнкция), помечается
+  // day_part_inferred. ctx.patientRecentTexts — сообщения пациента, текущее
+  // последним; нет его у вызывающего (обратная совместимость со старыми
+  // тестами/путями) — падаем на одно текущее сообщение, как раньше.
+  const recentTexts = (ctx && Array.isArray(ctx.patientRecentTexts))
+    ? ctx.patientRecentTexts : [ctx && ctx.patientLastText];
   const inferredDayPart = (input && input.day_part) ? null
-    : patientTime.parseDayPart(ctx && ctx.patientLastText);
+    : patientTime.parseDayPartFromRecent(recentTexts);
   const dayPart = (input && input.day_part) || inferredDayPart || undefined;
   const nowMs = (ctx && ctx.nowMs) || Date.now();
   if (!date) return { error: 'Нужна date (YYYY-MM-DD).' };

@@ -187,6 +187,10 @@ describe('runDialog', () => {
           // patientLastText — ПОСЛЕДНЕЕ сообщение пациента: get_available_slots
           // продвигает названное в нём свободное время в offer_slots (2026-09-16).
           patientLastText: expect.any(String),
+          // patientRecentTexts — недавние сообщения ПАЦИЕНТА (текущее последним):
+          // короткая память для половины дня, когда текущее само не даёт сигнала
+          // (инцидент 2026-09-19, ход 6).
+          patientRecentTexts: expect.any(Array),
           // recentDialogText — хвост диалога для гейта согласия reschedule_booking;
           // slotEvidence — старты, реально возвращённые слот-инструментами (2026-09-19).
           recentDialogText: expect.any(String),
@@ -2760,6 +2764,26 @@ describe('slot-evidence и перенос записи (инцидент 2026-09
     const ctx = deps.registry.handlers.get_available_slots.mock.calls[0][2];
     expect(ctx.recentDialogText).toBe('перенесите\nЕсть 17:00, подойдёт?\nда');
     expect(ctx.recentDialogText).not.toMatch(/\[19\.09/);
+  });
+
+  // Инцидент 2026-09-19, ход 6: «Днем не могу» само по себе не сужает половину
+  // дня, но дизъюнкция «или утро, или вечер» звучала двумя сообщениями раньше —
+  // get_available_slots её находит, только если получает недавние сообщения
+  // ПАЦИЕНТА (не Милы) текущим последним.
+  test('patientRecentTexts — сообщения пациента, текущее последним, без реплик Милы', async () => {
+    const deps = mk({ messages: [
+      { role: 'user', content: '[19.09 08:00] Или утро или ближе к вечеру' },
+      { role: 'assistant', content: '[19.09 08:01] на вечер тоже всё расписано, 13:30/14:00/14:30' },
+      { role: 'user', content: '[19.09 08:02] Нет' },
+      { role: 'user', content: '[19.09 08:02] Днем не могу' },
+    ] });
+    deps.provider.createMessage.mockResolvedValueOnce(toolResp('get_available_slots', { staff_yc_id: 1, service_yc_id: 2, date: '2026-09-23' }))
+      .mockResolvedValueOnce(textResp('ок'));
+    await orchestrator.runDialog(1, 'k', { deps, nowMs: NOW });
+    const ctx = deps.registry.handlers.get_available_slots.mock.calls[0][2];
+    expect(ctx.patientRecentTexts).toEqual([
+      'Или утро или ближе к вечеру', 'Нет', 'Днем не могу',
+    ]);
   });
 
   test('отказ YClients на reschedule_booking → bookingFailed (паритет с create_booking)', async () => {

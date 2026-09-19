@@ -255,3 +255,41 @@ describe('day_part из patientLastText, когда модель его не п�
     expect(res.offer_slots.map(s => s.time)).toEqual(['14:00', '18:00']);
   });
 });
+
+// ── Дизъюнкция и короткая память (инцидент 79651442032, ход 3/6 реплея 19.09) ──
+describe('day_part: дизъюнкция «или A или B» и короткая память между ходами', () => {
+  // Один длинный блок занятости в середине дня оставляет свободу и утром, и
+  // вечером — ровно форма дня из инцидента (среда 23.09 у Татьяны).
+  const BUSY_MIDDAY = () => grid('08:00', '20:00', [['09:30', '17:30']]);
+
+  test('дизъюнкция в текущем сообщении → offer_slots совпадает с ОБЕИМИ частями', async () => {
+    ycGetStaffSeances.mockResolvedValue(BUSY_MIDDAY());
+    const res = await tool.run(1, ARGS, { ...CTX, patientLastText: 'Или утро или ближе к вечеру' });
+    expect(res.day_part_inferred).toEqual(['morning', 'evening']);
+    const times = res.offer_slots.map(s => s.time);
+    expect(times.some(t => t < '14:00')).toBe(true);
+    expect(times.some(t => t >= '17:00')).toBe(true);
+    // «Днём» (14:00–17:00) — то, от чего пациентка отказалась, — предлагать нельзя.
+    expect(times.every(t => t < '14:00' || t >= '17:00')).toBe(true);
+  });
+
+  // Ход 6 инцидента: текущее сообщение — чистое отрицание («Днем не могу»), само
+  // по себе даёт null, но дизъюнкция звучала двумя сообщениями раньше.
+  test('«Днем не могу» само по себе не сужает, но помнит дизъюнкцию из истории', async () => {
+    ycGetStaffSeances.mockResolvedValue(BUSY_MIDDAY());
+    const patientRecentTexts = ['Или утро или ближе к вечеру', 'Нет', 'Днем не могу'];
+    const res = await tool.run(1, ARGS, { ...CTX, patientLastText: 'Днем не могу', patientRecentTexts });
+    expect(res.day_part_inferred).toEqual(['morning', 'evening']);
+    const times = res.offer_slots.map(s => s.time);
+    expect(times.some(t => t < '14:00')).toBe(true);
+    expect(times.some(t => t >= '17:00')).toBe(true);
+  });
+
+  // Обратная совместимость: вызывающий код (пока не весь) даёт только
+  // patientLastText без patientRecentTexts — поведение как раньше, без памяти.
+  test('нет patientRecentTexts в ctx → работает только текущее сообщение', async () => {
+    ycGetStaffSeances.mockResolvedValue(BUSY_MIDDAY());
+    const res = await tool.run(1, ARGS, { ...CTX, patientLastText: 'Днем не могу' });
+    expect(res.day_part_inferred).toBeUndefined();
+  });
+});

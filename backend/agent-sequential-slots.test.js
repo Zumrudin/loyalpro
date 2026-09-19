@@ -315,3 +315,70 @@ describe('preferred_staff_not_working', () => {
     expect(yb.ycGetStaffSchedule).not.toHaveBeenCalled();
   });
 });
+
+// ── Половина дня (инцидент 79651442032 — репродукция 19.09 показала, что этот
+// инструмент, в отличие от get_available_slots, day_part вообще не понимал:
+// модель передавала параметр, а первые 4 хронологических старта дня оставались
+// теми же независимо от него). Юлия свободна ТОЛЬКО с 13:30 до 21:00 — ровно
+// форма дня из инцидента (ничего до обеда, полдень свободен).
+describe('get_sequential_slots — половина дня (day_part)', () => {
+  const AFTERNOON_EVENING = grid(13 * 60 + 30, 21 * 60); // 13:30–21:00
+
+  test('без day_part — старты как раньше, с середины дня (13:30, 14:00…)', async () => {
+    ycGetStaffSeances.mockImplementation(async (s, staffId) =>
+      String(staffId) === '11' ? AFTERNOON_EVENING : []);
+    const r = await runTool({ ...baseInput, preferred_staff_yc_id: 11 });
+    expect(r.variants[0].starts.map(st => st.time)).toEqual(['13:30', '14:00', '14:30', '15:00']);
+  });
+
+  test('day_part=evening — только старты с 17:00, середина дня (14:00–17:00) исключена', async () => {
+    ycGetStaffSeances.mockImplementation(async (s, staffId) =>
+      String(staffId) === '11' ? AFTERNOON_EVENING : []);
+    const r = await runTool({ ...baseInput, preferred_staff_yc_id: 11, day_part: 'evening' });
+    const times = r.variants[0].starts.map(st => st.time);
+    expect(times.every(t => t >= '17:00')).toBe(true);
+    expect(times).toContain('17:00');
+  });
+
+  // Дизъюнкция «или утро, или вечер» приходит УЖЕ массивом (инференс из текста
+  // пациента — тот же parseDayPartFromRecent, что у get_available_slots).
+  // День без утра, но с вечером — объединение исключает «днём» (14:00–17:00).
+  test('day_part массивом (через patientRecentTexts) — «днём» исключено из выдачи', async () => {
+    ycGetStaffSeances.mockImplementation(async (s, staffId) =>
+      String(staffId) === '11' ? AFTERNOON_EVENING : []);
+    const ctx = { ...CTX, patientRecentTexts: ['Или утро или ближе к вечеру'] };
+    const r = await tool.run(1, { ...baseInput, preferred_staff_yc_id: 11 }, ctx);
+    expect(r.day_part_inferred).toEqual(['morning', 'evening']);
+    const times = r.variants[0].starts.map(st => st.time);
+    expect(times.every(t => t < '14:00' || t >= '17:00')).toBe(true);
+  });
+
+  test('явный day_part модели главнее выведенного из текста', async () => {
+    ycGetStaffSeances.mockImplementation(async (s, staffId) =>
+      String(staffId) === '11' ? AFTERNOON_EVENING : []);
+    const ctx = { ...CTX, patientRecentTexts: ['Или утро или ближе к вечеру'] };
+    const r = await tool.run(1, { ...baseInput, preferred_staff_yc_id: 11, day_part: 'evening' }, ctx);
+    expect(r.day_part_inferred).toBeUndefined();
+    expect(r.variants[0].starts.map(st => st.time).every(t => t >= '17:00')).toBe(true);
+  });
+
+  // День, на который спросили, не даёт совпадений ВООБЩЕ (Юлия работает только
+  // днём) — поиск продолжается дальше по горизонту и находит вечер СЛЕДУЮЩЕГО
+  // дня, вместо честного «ничего нет» ровно там, где патиентка просила «или
+  // утро, или вечер»: по правилу — «совпадающее время + альтернатива на более
+  // близкую дату».
+  test('на запрошенный день совпадений нет → поиск продолжается на следующий день', async () => {
+    const NEXT = '2026-08-11';
+    ycGetStaffSeances.mockImplementation(async (s, staffId, day) => {
+      if (String(staffId) !== '11') return [];
+      if (day === DATE) return grid(10 * 60, 16 * 60);       // только днём, вечера нет
+      if (day === NEXT) return grid(17 * 60, 21 * 60);       // вечер следующего дня свободен
+      return [];
+    });
+    const r = await runTool({ ...baseInput, preferred_staff_yc_id: 11, day_part: 'evening' });
+    expect(r.variants.some(v => v.date === DATE)).toBe(false);
+    const nextVariant = r.variants.find(v => v.date === NEXT);
+    expect(nextVariant).toBeDefined();
+    expect(nextVariant.starts.map(st => st.time).every(t => t >= '17:00')).toBe(true);
+  });
+});

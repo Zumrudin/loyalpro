@@ -135,15 +135,32 @@ function pickOfferSlots(slots, busy, opts = {}) {
   return out;
 }
 
-// Слоты внутри половины дня, названной ПАЦИЕНТОМ. Незнакомое значение (модель
+// dayPart → массив валидных ключей DAY_PARTS (строка → [ключ], если известен;
+// массив → валидные без дублей; неизвестное значение молча отбрасывается — см.
+// комментарий у filterByDayPart, опечатка модели не должна сужать выдачу).
+function normalizeDayParts(dayPart) {
+  const raw = Array.isArray(dayPart) ? dayPart : [dayPart];
+  const out = [];
+  for (const d of raw) {
+    const key = String(d || '').trim().toLowerCase();
+    if (DAY_PARTS[key] && !out.includes(key)) out.push(key);
+  }
+  return out;
+}
+
+// Слоты внутри половины(-н) дня, названной(-ых) ПАЦИЕНТОМ. dayPart — строка или
+// массив (дизъюнкция «или утро, или вечер», инцидент 79651442032): слот проходит,
+// если попал ХОТЯ БЫ в одну из запрошенных частей (объединение, не пересечение —
+// у DAY_PARTS morning/evening не пересекаются, поэтому «днём», 14:00–17:00,
+// законно выпадает из union('morning','evening')). Незнакомое значение (модель
 // прислала 'утро' или 'day') фильтром не считается — см. DAY_PARTS.
 function filterByDayPart(slots, dayPart) {
   const list = Array.isArray(slots) ? slots : [];
-  const part = DAY_PARTS[String(dayPart || '').trim().toLowerCase()];
-  if (!part) return list;
+  const parts = normalizeDayParts(dayPart).map((k) => DAY_PARTS[k]);
+  if (!parts.length) return list;
   return list.filter((s) => {
     const m = s && s.time ? toMin(s.time) : NaN;
-    return Number.isFinite(m) && m >= part.from && m < part.to;
+    return Number.isFinite(m) && parts.some((part) => m >= part.from && m < part.to);
   });
 }
 
@@ -175,6 +192,27 @@ function pickEdgeSlots(slots, limit = MAX_OFFER_SLOTS) {
 //    промпт честно говорит «в это время занято» и предлагает найденное.
 //  • busyKnown=false (сетка не ответила) — «день свободен» утверждать НЕ на чем:
 //    деградируем в прежнее поведение (самые ранние), а не в вопрос о половине дня.
+//
+// dayPart МАССИВОМ («или утро, или вечер») — представительство ОБЕИХ частей.
+// Если фильтровать по union и потом просто ранжировать единым списком по
+// плотности, глобальный ранкер может выбрать оба времени из ОДНОЙ и той же
+// части (обе тесно прилегают к чужой занятости), даже если вторая часть тоже
+// свободна, — и тогда пациент снова не увидит совпадения со второй половиной
+// своей же просьбы (инцидент 79651442032). Поэтому при ДВУХ валидных частях,
+// когда у ОБЕИХ есть непустой пул, отбор идёт РАЗДЕЛЬНО по каждой части (бюджет
+// делится поровну, минимум 1 каждой) и результаты объединяются в порядке частей.
+// Если пул непуст только у ОДНОЙ — весь лимит достаётся ей целиком, как при
+// одиночном dayPart.
+function offerByParts(effective, parts, pick, limit) {
+  if (parts.length <= 1) return pick(effective, limit);
+  const pools = parts.map((p) => filterByDayPart(effective, p)).filter((p) => p.length);
+  if (pools.length <= 1) return pick(effective, limit);
+  const perPart = Math.max(1, Math.floor(limit / parts.length));
+  const out = [];
+  for (const pool of pools) out.push(...pick(pool, perPart));
+  return out.slice(0, limit);
+}
+
 function chooseOffer(slots, busy, opts = {}) {
   const list = (Array.isArray(slots) ? slots : []).filter(s => s && s.time);
   const none = { offer: [], freeDay: false, dayPartEmpty: false };
@@ -182,19 +220,24 @@ function chooseOffer(slots, busy, opts = {}) {
   const ranges = Array.isArray(busy) ? busy : [];
   const limit = Number(opts.limit) > 0 ? Number(opts.limit) : MAX_OFFER_SLOTS;
   const durationMin = Number(opts.durationMin) || 0;
-  const asked = Boolean(DAY_PARTS[String(opts.dayPart || '').trim().toLowerCase()]);
-  const pool = asked ? filterByDayPart(list, opts.dayPart) : list;
+  const parts = normalizeDayParts(opts.dayPart);
+  const asked = parts.length > 0;
+  const pool = asked ? filterByDayPart(list, parts) : list;
   const dayPartEmpty = asked && !pool.length;
   const effective = dayPartEmpty ? list : pool;
+  // При dayPartEmpty считаем по ОСТАЛЬНОМУ дню целиком — разбивка на части тут
+  // теряет смысл (ни одна из названных частей ничего не дала).
+  const effectiveParts = dayPartEmpty ? [] : parts;
   const freeDay = Boolean(opts.busyKnown) && !ranges.length;
   if (freeDay && !asked) return { offer: [], freeDay: true, dayPartEmpty: false };
   const offer = freeDay
-    ? pickEdgeSlots(effective, limit)
-    : pickOfferSlots(effective, ranges, { durationMin, limit });
+    ? offerByParts(effective, effectiveParts, (pool2, lim) => pickEdgeSlots(pool2, lim), limit)
+    : offerByParts(effective, effectiveParts,
+      (pool2, lim) => pickOfferSlots(pool2, ranges, { durationMin, limit: lim }), limit);
   return { offer, freeDay: false, dayPartEmpty };
 }
 
 module.exports = {
   seancesToBusy, pickOfferSlots, filterByDayPart, pickEdgeSlots, chooseOffer,
-  MAX_OFFER_SLOTS, DAY_PARTS,
+  normalizeDayParts, MAX_OFFER_SLOTS, DAY_PARTS,
 };
