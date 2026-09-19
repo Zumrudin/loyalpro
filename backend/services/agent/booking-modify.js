@@ -5,6 +5,7 @@ const config = require('../../config');
 const { ycGetRecord, ycUpdateRecord } = require('../yclients-records');
 const { ycGetServiceMeta, ycGetServiceCatalog } = require('../yclients');
 const { ycGetDayRecords } = require('../yclients-booking');
+const { withRateLimitRetry } = require('../yclients-retry');
 
 // ── Исполнитель отмены и переноса записи агентом. ──
 // Отмена — НЕ удаление: помечаем «клиент не пришёл» (attendance=-1), режем
@@ -82,7 +83,7 @@ async function cancelBookingRecord(salonId, { dialogKey, recordId, expectedYcCli
   }
 
   try {
-    await ycUpdateRecord(authSalonFor(salon), recordId, {
+    await withRateLimitRetry(() => ycUpdateRecord(authSalonFor(salon), recordId, {
       staff_id: rec.staff_id,
       services,
       client: clientOf(rec),
@@ -90,7 +91,7 @@ async function cancelBookingRecord(salonId, { dialogKey, recordId, expectedYcCli
       seance_length: CANCEL_SEANCE_LENGTH,
       attendance: -1,
       comment: rec.comment || '',
-    });
+    }));
   } catch (e) { return { ok: false, error: e.message }; }
 
   await logEvent(salonId, dialogKey, 'booking_cancelled', 'cancel_booking',
@@ -108,15 +109,17 @@ async function rescheduleBookingRecord(salonId, { dialogKey, recordId, expectedY
   if (!rec || !rec.id) return { ok: false, error: 'Запись не найдена.' };
   if (ownershipError(rec, expectedYcClientId)) return { ok: false, foreign: true, error: ownershipError(rec, expectedYcClientId) };
 
+  // Лимит запросов YClients (429) повторяем: инцидент 2026-09-19 — два переноса
+  // подряд упали на «Превышен лимит… через 0 секунд» без единого повтора.
   try {
-    await ycUpdateRecord(authSalonFor(salon), recordId, {
+    await withRateLimitRetry(() => ycUpdateRecord(authSalonFor(salon), recordId, {
       staff_id: staffYcId || rec.staff_id,
       services: serviceIds(rec),
       client: clientOf(rec),
       datetime,
       seance_length: seanceLength || rec.seance_length,
       comment: rec.comment || '',
-    });
+    }));
   } catch (e) { return { ok: false, error: e.message }; }
 
   await logEvent(salonId, dialogKey, 'booking_rescheduled', 'reschedule_booking',
@@ -199,7 +202,7 @@ async function modifyBookingServices(salonId, {
   }
 
   try {
-    await ycUpdateRecord(authSalonFor(salon), recordId, {
+    await withRateLimitRetry(() => ycUpdateRecord(authSalonFor(salon), recordId, {
       staff_id: rec.staff_id,
       services: ids.map(id => ({ id })),
       client: clientOf(rec),
@@ -207,7 +210,7 @@ async function modifyBookingServices(salonId, {
       seance_length: seanceLength,
       comment: rec.comment || '',
       save_if_busy: false,   // грубая страховка от прочих конфликтов (напр. оборудование)
-    });
+    }));
   } catch (e) { return { ok: false, error: e.message }; }
 
   await logEvent(salonId, dialogKey, 'booking_services_modified', 'modify_booking_services',

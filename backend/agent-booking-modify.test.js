@@ -195,3 +195,35 @@ describe('modifyBookingServices', () => {
     expect(ycr.ycUpdateRecord).not.toHaveBeenCalled();
   });
 });
+
+// Инцидент 2026-09-19 (79651442032): «Превышен лимит запросов… через 0 секунд»
+// на reschedule_booking без единого повтора. Повтор идёт через yclients-retry.
+describe('лимит запросов YClients (429) повторяется', () => {
+  test('reschedule: первая попытка 429, вторая — успех', async () => {
+    jest.useFakeTimers();
+    try {
+      ycr.ycGetRecord.mockResolvedValue(REC);
+      ycr.ycUpdateRecord
+        .mockRejectedValueOnce(new Error('Превышен лимит запросов, попробуйте повторить запрос через 0 секунд.'))
+        .mockResolvedValueOnce({ id: 555 });
+      const p = rescheduleBookingRecord(1, {
+        dialogKey: 'd', recordId: 555, expectedYcClientId: 777, datetime: '2026-07-26T15:00:00+03:00',
+      });
+      await jest.advanceTimersByTimeAsync(1500);
+      const res = await p;
+      expect(res.ok).toBe(true);
+      expect(ycr.ycUpdateRecord).toHaveBeenCalledTimes(2);
+    } finally { jest.useRealTimers(); }
+  });
+
+  test('отказ по времени НЕ повторяется', async () => {
+    ycr.ycGetRecord.mockResolvedValue(REC);
+    ycr.ycUpdateRecord.mockRejectedValue(new Error('Выбранное время недоступно'));
+    const res = await rescheduleBookingRecord(1, {
+      dialogKey: 'd', recordId: 555, expectedYcClientId: 777, datetime: '2026-07-26T15:00:00+03:00',
+    });
+    expect(res.ok).toBe(false);
+    expect(res.error).toMatch(/недоступно/);
+    expect(ycr.ycUpdateRecord).toHaveBeenCalledTimes(1);
+  });
+});

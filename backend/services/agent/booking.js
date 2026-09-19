@@ -3,6 +3,7 @@
 const crypto = require('crypto');
 const { pool } = require('../../db');
 const { ycCreateRecord } = require('../yclients-booking');
+const { withRateLimitRetry } = require('../yclients-retry');
 const { ycGetRecord } = require('../yclients-records');
 const { isRecordAlive } = require('./record-liveness');
 const { createLogger } = require('../../logger');
@@ -121,10 +122,11 @@ async function createBookingRecord(salonId, draft) {
 
     let record;
     try {
-      record = await ycCreateRecord(salon, {
+      // Лимит запросов YClients (429) повторяем с паузой — см. yclients-retry.js.
+      record = await withRateLimitRetry(() => ycCreateRecord(salon, {
         staffYcId, serviceYcIds: [serviceYcId], datetime, seanceLength,
         clientPhone, clientName, comment,
-      });
+      }));
     } catch (e) {
       await client.query('ROLLBACK');
       await logBookingFailure(salonId, draft, e.message);
