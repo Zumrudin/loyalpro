@@ -108,6 +108,10 @@ const BOOKING_STATE_RE = /(?<![\p{L}])(?:вы\s+(?:уже\s+)?записан|в�
 const CLINIC_HOURS_RE = /(?<![\p{L}])с\s+\d{1,2}[:.]\d{2}\s+до\s+\d{1,2}[:.]\d{2}|(?<![\p{L}])работа[а-яё]*/iu;
 // «перенести С 17:30» — старое время, не предложение.
 const FROM_TIME_RE = /(?<![\p{L}])с\s+\d{1,2}[:.]\d{2}/giu;
+// Утверждение о НАЛИЧИИ свободных окон словами (без цифр). Уже, чем
+// AVAILABILITY_OFFER_RE reply-guard'а: «могу предложить посмотреть четверг» —
+// не утверждение о наличии, а «есть свободные окна в четверг» — утверждение.
+const AVAILABILITY_CLAIM_RE = /(?<![\p{L}])(?:есть|имеются|найдутся|остались)\s+(?:свободн[а-яё]*\s+)?(?:окошк|окн|врем)[а-яё]*|свободн[а-яё]*\s+(?:окошк|окн|врем)[а-яё]*/iu;
 
 function fmtDdMm(key) { return `${key.slice(8, 10)}.${key.slice(5, 7)}`; }
 
@@ -173,6 +177,17 @@ function checkOfferAttribution(text, opts = {}) {
     if (skip) continue;
     if (!ctx.date && !ctx.staff) continue;
     const times = extractTimes(clause.replace(FROM_TIME_RE, ' ')).filter(t => !patientTimes.has(t));
+    // Без цифр: «есть свободные окна в четверг» на дату, которой в evidence НЕТ
+    // ВОВСЕ (четвёртый живой прогон 2026-09-19) — выдумка без времени.
+    if (!times.length && ctx.date && AVAILABILITY_CLAIM_RE.test(clause)) {
+      const rows = (ctx.staff ? allRows.filter(r => !r.name || sameName(r.name, ctx.staff)) : allRows)
+        .filter(r => r.date === ctx.date);
+      if (!rows.length) {
+        const value = `${fmtDdMm(ctx.date)}${ctx.staff ? ` у ${ctx.staff}` : ''}: свободных окон на эту дату в выдаче нет вовсе (дата не запрашивалась)`;
+        if (!seen.has(value)) { seen.add(value); out.push({ type: 'unverified_offer_date', value }); }
+      }
+      continue;
+    }
     for (const t of times) {
       const byStaff = (rows) => (ctx.staff ? rows.filter(r => !r.name || sameName(r.name, ctx.staff)) : rows);
       let ok;
