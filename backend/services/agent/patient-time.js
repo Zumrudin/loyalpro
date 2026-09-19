@@ -47,4 +47,29 @@ function hintPatientTimeFree(times) {
     'offer_slots. Подтверждай именно его: НЕ называй его занятым и не предлагай вместо него другое время.';
 }
 
-module.exports = { promotePatientTime, hintPatientTimeFree };
+// ── Половина дня из СЛОВ пациента ───────────────────────────────────────────
+// Инцидент 2026-09-19 (79651442032), ход 3: пациентка просила утро, у мастера
+// свободно с 10:00, а модель назвала 18:00/20:30 — offer_slots плотности без
+// day_part. Границы те же, что у slot-density (morning <14:00, afternoon ≥14:00,
+// evening ≥17:00). Возвращает null, когда сузить нечего или опасно:
+//   • две разные половины в одном тексте («или утро или ближе к вечеру»);
+//   • любое отрицание («утром не могу», «кроме утра», «нет, вечером») —
+//     по нему нельзя понять, ЧТО пациент хочет, только чего не хочет;
+//   • «доброе утро / добрый вечер» — приветствие, не пожелание.
+const DAY_PART_RES = [
+  ['morning', /(?<![\p{L}])(?:с\s+)?утр[ао]м?(?![\p{L}])/iu],
+  ['evening', /(?<![\p{L}])вечер[а-яё]*(?![\p{L}])/iu],
+  ['afternoon', /(?<![\p{L}])(?:дн[её]м|в\s+обед|после\s+обеда)(?![\p{L}])/iu],
+];
+const GREETING_DAY_RE = /(добр(?:ое|ый|ого)\s+(?:утро|утра|вечер|вечера|день|дня))/giu;
+const NEGATION_RE = /(?<![\p{L}])(?:не|нет|кроме)(?![\p{L}])/iu;
+
+function parseDayPart(text) {
+  if (typeof text !== 'string' || !text.trim()) return null;
+  const s = text.replace(GREETING_DAY_RE, ' ');
+  if (NEGATION_RE.test(s)) return null;
+  const found = DAY_PART_RES.filter(([, re]) => re.test(s)).map(([part]) => part);
+  return found.length === 1 ? found[0] : null;
+}
+
+module.exports = { promotePatientTime, hintPatientTimeFree, parseDayPart };

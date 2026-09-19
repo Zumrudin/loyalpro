@@ -64,3 +64,39 @@ describe('hintPatientTimeFree', () => {
     expect(h).toMatch(/занят/i);
   });
 });
+
+// Инцидент 2026-09-19 (79651442032), ход 3: пациентка просила утро, у Юлии
+// свободно с 10:00, а модель предложила 18:00/20:30 из offer_slots плотности —
+// day_part не передала. Половину дня из СЛОВ пациента теперь читает код.
+describe('parseDayPart', () => {
+  test('утро / вечер / день', () => {
+    expect(pt.parseDayPart('Можно перенести на пн утро?')).toBe('morning');
+    expect(pt.parseDayPart('В среду утром возможно?')).toBe('morning');
+    expect(pt.parseDayPart('лучше вечером')).toBe('evening');
+    expect(pt.parseDayPart('ближе к вечеру')).toBe('evening');
+    expect(pt.parseDayPart('днём')).toBe('afternoon');
+    expect(pt.parseDayPart('после обеда')).toBe('afternoon');
+  });
+
+  test('две половины в одном тексте → null (нечего сужать)', () => {
+    expect(pt.parseDayPart('Или утро или ближе к вечеру')).toBeNull();
+  });
+
+  test('отрицание в тексте → null («утром не могу» — не просьба об утре)', () => {
+    expect(pt.parseDayPart('утром не могу')).toBeNull();
+    expect(pt.parseDayPart('кроме утра')).toBeNull();
+    expect(pt.parseDayPart('нет, вечером')).toBeNull();
+  });
+
+  test('без указания половины дня — null; не-строка — null', () => {
+    expect(pt.parseDayPart('Вт время?')).toBeNull();
+    expect(pt.parseDayPart('')).toBeNull();
+    expect(pt.parseDayPart(null)).toBeNull();
+    expect(pt.parseDayPart(['утром'])).toBeNull();
+  });
+
+  test('«доброе утро» — приветствие, не половина дня', () => {
+    expect(pt.parseDayPart('Доброе утро. Можно перенести на пн?')).toBeNull();
+    expect(pt.parseDayPart('Добрый вечер! Есть время в четверг?')).toBeNull();
+  });
+});

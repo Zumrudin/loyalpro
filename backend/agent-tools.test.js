@@ -865,6 +865,24 @@ describe('list_client_bookings', () => {
       record_id: 1, staff_yc_id: 7, staff_name: 'Иванова', services: ['Пилинг'],
     });
   });
+
+  // Инцидент 2026-09-19 (79651442032): запись 1922578164 на 12:30 с services=[]
+  // (артефакт правок администратора 22.08) показана как второй визит — Мила
+  // пыталась её переносить. Пустая запись — не визит.
+  test('запись без услуг (services=[]) отбрасывается; отсутствие поля — нет', async () => {
+    identity.resolveYclientsClientId.mockResolvedValue(777);
+    db.one.mockResolvedValue({ id: 1, yclients_company_id: 100 });
+    const nowMs = Date.parse('2026-09-19T09:00:00+03:00');
+    ycGetClientRecords.mockResolvedValue([
+      { id: 1922530986, datetime: '2026-09-19T12:00:00+03:00', attendance: 0,
+        services: [{ id: 1, title: 'Ноги' }], staff: { id: 7, name: 'Богатырева Татьяна' } },
+      { id: 1922578164, datetime: '2026-09-19T12:30:00+03:00', attendance: 0,
+        services: [], staff: { id: 7, name: 'Богатырева Татьяна' } },
+      { id: 3, datetime: '2026-09-20T12:00:00+03:00', attendance: 0, staff: { id: 7, name: 'Т' } },
+    ]);
+    const out = await listClientBookings.run(1, {}, { clientPhone: '79001112233', nowMs });
+    expect(out.bookings.map(b => b.record_id)).toEqual([1922530986, 3]);
+  });
 });
 
 describe('get_client_visit_history', () => {

@@ -24,4 +24,16 @@ function isRecordAlive(rec) {
   return true;
 }
 
-module.exports = { isRecordAlive };
+/**
+ * Запись без единой услуги — артефакт правок в YClients (инцидент 2026-09-19,
+ * 79651442032: строка 12:30 с services=[] висела с 22.08 и читалась как второй
+ * визит — агент пытался её переносить). Визитом не считается. Отсутствие
+ * самого поля services — НЕ пусто: форма ответа могла его не нести.
+ * @param {object|null} rec
+ * @returns {boolean} true — услуг в записи ровно ноль.
+ */
+function isEmptyRecord(rec) {
+  return !!rec && Array.isArray(rec.services) && rec.services.length === 0;
+}
+
+module.exports = { isRecordAlive, isEmptyRecord };

@@ -3,7 +3,7 @@
 const { db } = require('../../../db');
 const identity = require('../identity');
 const { ycGetClientRecords } = require('../../yclients-records');
-const { isRecordAlive } = require('../record-liveness');
+const { isRecordAlive, isEmptyRecord } = require('../record-liveness');
 
 const schema = {
   name: 'list_client_bookings',
@@ -42,6 +42,8 @@ async function run(salonId, _input, ctx = {}) {
 
   const bookings = recs
     .filter(isRecordAlive)
+    // Пустая запись (services=[]) — не визит: см. record-liveness.isEmptyRecord.
+    .filter(r => !isEmptyRecord(r))
     .filter(r => {
       const t = Date.parse(r.datetime || r.date || '');
       return !Number.isFinite(t) || t >= nowMs;   // прошлое отбрасываем

@@ -230,3 +230,28 @@ describe('patient_time_free: время из последнего сообщен
     expect(res.hint).not.toMatch(/половин/i);
   });
 });
+
+// ── Половина дня из СЛОВ пациента (инцидент 2026-09-19, ход 3) ─────────────
+describe('day_part из patientLastText, когда модель его не передала', () => {
+  test('«В среду утром возможно?» → day_part=morning выведен, day_part_inferred в ответе', async () => {
+    ycGetStaffSeances.mockResolvedValue(grid('11:00', '21:00', [['14:30', '18:00']]));
+    const res = await tool.run(1, ARGS, { ...CTX, patientLastText: 'В среду утром возможно?' });
+    expect(res.day_part_inferred).toBe('morning');
+    // Утро (<14:00): края половины дня, а не вечерний 18:00.
+    expect(res.offer_slots.map(s => s.time).every(t => t < '14:00')).toBe(true);
+  });
+
+  test('явный day_part модели главнее текста', async () => {
+    ycGetStaffSeances.mockResolvedValue(grid('11:00', '21:00', [['14:30', '18:00']]));
+    const res = await tool.run(1, { ...ARGS, day_part: 'evening' }, { ...CTX, patientLastText: 'утром' });
+    expect(res.day_part_inferred).toBeUndefined();
+    expect(res.offer_slots.map(s => s.time)).toEqual(['18:00']);
+  });
+
+  test('текст без половины дня — прежнее поведение, поля нет', async () => {
+    ycGetStaffSeances.mockResolvedValue(grid('11:00', '21:00', [['14:30', '18:00']]));
+    const res = await tool.run(1, ARGS, { ...CTX, patientLastText: 'Вт время?' });
+    expect(res.day_part_inferred).toBeUndefined();
+    expect(res.offer_slots.map(s => s.time)).toEqual(['14:00', '18:00']);
+  });
+});

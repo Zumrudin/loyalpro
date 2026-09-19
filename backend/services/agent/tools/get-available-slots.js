@@ -467,7 +467,12 @@ async function run(salonId, input, ctx = {}) {
   const date = input && input.date;
   // Половина дня, названная ПАЦИЕНТОМ. Валидацию делает сам density (незнакомое
   // значение фильтром не считается) — молча сужать выдачу по опечатке модели нельзя.
-  const dayPart = input && input.day_part;
+  // Половина дня: явный аргумент модели главнее; не передала — читаем из СЛОВ
+  // последнего сообщения пациента (инцидент 2026-09-19: «утром» без day_part
+  // дало вечерние offer_slots плотности). Вывод помечается day_part_inferred.
+  const inferredDayPart = (input && input.day_part) ? null
+    : patientTime.parseDayPart(ctx && ctx.patientLastText);
+  const dayPart = (input && input.day_part) || inferredDayPart || undefined;
   const nowMs = (ctx && ctx.nowMs) || Date.now();
   if (!date) return { error: 'Нужна date (YYYY-MM-DD).' };
   // Услуга обязательна: без неё неизвестна длительность, и старты считались бы
@@ -512,7 +517,9 @@ async function run(salonId, input, ctx = {}) {
       // offer_slots») по нему невыполним: времени там нет. Оговорка дописывается,
       // а не заменяет хинт: в смешанном дне остальные мастера идут как обычно.
       if (options.some(o => o.free_day)) hint += HINT_FREE_DAY_OPTIONS;
-      return { staff_options: options, hint };
+      return inferredDayPart
+        ? { staff_options: options, hint, day_part_inferred: inferredDayPart }
+        : { staff_options: options, hint };
     }
     // Пустой список окон САМ ПО СЕБЕ не означает «времени нет»: недостижимый мастер
     // (сбой YClients) выпадает из выдачи так же, как занятый. Утверждать «свободного
@@ -559,6 +566,7 @@ async function run(salonId, input, ctx = {}) {
   if (!salon || !salon.yclients_company_id) return { error: 'YClients не подключён для салона.' };
   try {
     const out = await computeStaffSlots(salon, staffId, serviceId, date, nowMs, dayPart);
+    if (inferredDayPart) out.day_part_inferred = inferredDayPart;
     // Имя запрошенного мастера едет рядом с его слотами — оно нужно reply-guard'у
     // (checkStaffAttribution): без него оркестратор знает, что выдача пуста, но не
     // знает, ЧЬЯ, и приписанное чужое время сверять не с чем (инцидент 10.08).
