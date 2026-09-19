@@ -10,6 +10,7 @@ jest.mock('./logger', () => ({ createLogger: () => mockLogger }));
 // toolResultMessages берём из aitunnel-провайдера (формат {role:'tool'}).
 const realProvider = require('./services/agent/providers/aitunnel');
 const orchestrator = require('./services/agent/orchestrator');
+const replyGuardMod = require('./services/agent/reply-guard');
 
 // Журнал tool-цикла (agent_tool_events) ходит в БД — во всех тестах он застабан,
 // иначе существующие сценарии полезли бы в реальную базу.
@@ -863,7 +864,9 @@ describe('исчерпание лимита tool-итераций', () => {
   });
 
   test('лимит исчерпан без единой реплики → добивочный вызов БЕЗ инструментов даёт ответ', async () => {
-    const deps = makeDeps();
+    // Времена ответа — из выдачи инструмента: иначе цикл линта (2026-09-19) счёл бы
+    // их выдумкой и подменил бы реплику запасным текстом.
+    const deps = makeDeps({ handlers: { get_available_slots: jest.fn(async () => ({ slots: [{ time: '16:00' }, { time: '18:30' }] })) } });
     deps.provider.createMessage.mockImplementation(async ({ tools }) => {
       if (!tools || tools.length === 0) return textResp('Завтра есть окошки в 16:00 и 18:30.');
       return toolResp('get_available_slots', { date: '2026-07-20' });
@@ -961,16 +964,17 @@ describe('reply-guard в оркестраторе (2026-07-29)', () => {
     expect(fixArgs.tools).toEqual([]);
   });
 
-  test('переписанная реплика всё ещё грязная → отдаём её как есть (без второго ретрая)', async () => {
+  test('переписанная реплика всё ещё грязная → второй довызов; грязная и после него — отдаём как есть', async () => {
     const deps = makeDeps();
     deps.provider.createMessage
       .mockResolvedValueOnce(textResp('В нашем прайсе чистка 6500'))
-      .mockResolvedValueOnce(textResp('Смотрю прайс — 6500'));
+      .mockResolvedValueOnce(textResp('Смотрю прайс — 6500'))
+      .mockResolvedValueOnce(textResp('По прайсу — 6500'));
     const out = await orchestrator.runDialog(1, 'k', { deps, today: '2026-07-29', now: '09:00' });
-    // Доставляется именно переписанная (пусть и грязная) реплика, не исходная.
-    expect(out.replies).toEqual(['Смотрю прайс — 6500']);
-    // Ровно 2 вызова: исходный + один ретрай. Второй раз не переписываем.
-    expect(deps.provider.createMessage).toHaveBeenCalledTimes(2);
+    // Слово-табу — не выдумка о времени: запасной текст не подставляется,
+    // доставляется последняя переписанная реплика (2026-09-19: довызовов до двух).
+    expect(out.replies).toEqual(['По прайсу — 6500']);
+    expect(deps.provider.createMessage).toHaveBeenCalledTimes(3);
   });
 
   test('корректирующий довызов упал → отдаём исходную реплику как есть (без throw)', async () => {
@@ -1135,7 +1139,14 @@ describe('reply-guard: свободное время без проверки и�
 // инструмента, Мила всё равно написала «пока мы вели переписку… уже заняли».
 describe('reply-guard: придуманная причина отказа (2026-09-15)', () => {
   test('«пока мы вели переписку… заняли» без нового вызова инструмента → корректирующий довызов', async () => {
-    const deps = makeDeps();
+    // Как в инциденте: create_booking упал ходом раньше (свежая строка журнала) —
+    // «это время недоступно» в исправленной реплике подкреплено этим провалом.
+    const stub = makeToolEventsStub();
+    stub.mod.loadRecent = jest.fn(async () => [{
+      tool: 'create_booking', input: { datetime: '2026-09-15T12:15:00+03:00' },
+      result: { created: false, error: 'Выбранное время недоступно' }, is_error: true, delivered: true, age_ms: 4 * 60 * 1000,
+    }]);
+    const deps = makeDeps({ toolEvents: stub });
     deps.provider.createMessage
       .mockResolvedValueOnce(textResp(
         'Елена, я понимаю ваше желание попасть именно в это время. К сожалению, ' +
@@ -2818,5 +2829,67 @@ describe('reply-guard: «занято» без слот-вызова и повт
     expect(fix).toMatch(/только что отказался/);
     expect(fix).toMatch(/13:30, 14:00, 14:30/);
     expect(out.replies[0]).toMatch(/другой день/);
+  });
+});
+
+// ── Живой прогон 2026-09-19: исправленная реплика повторно не проверялась ────
+// Довызов без инструментов убирал выдуманное время и СОЧИНЯЛ новое («суббота
+// 26 сентября, 10:00» — у мастера выходной, времени ни в одной выдаче нет).
+describe('reply-guard: повторная проверка после довызова', () => {
+  const NOW = Date.parse('2026-09-19T09:00:00+03:00');
+  const msgs = [{ role: 'assistant', content: 'Есть 13:30 и 14:00.' }, { role: 'user', content: 'Днем не могу' }];
+
+  test('второй довызов, если исправленный текст снова с выдуманным временем', async () => {
+    const deps = makeDeps({ history: { loadTranscript: jest.fn(async () => ({ messages: msgs, watermark: 100 })) } });
+    deps.provider.createMessage
+      .mockResolvedValueOnce(textResp('Могу предложить 18:00 или 18:30.'))
+      .mockResolvedValueOnce(textResp('Может быть, субботу 26 сентября? У Татьяны есть окошки утром, например в 10:00.'))
+      .mockResolvedValueOnce(textResp('Понимаю. Посмотрим другой день — какой удобен?'));
+    const out = await orchestrator.runDialog(1, 'k', { deps, nowMs: NOW });
+    expect(deps.provider.createMessage).toHaveBeenCalledTimes(3);
+    expect(out.replies[0]).toMatch(/другой день/);
+  });
+
+  test('после двух довызовов нарушение осталось → детерминированный запасной текст', async () => {
+    const deps = makeDeps({ history: { loadTranscript: jest.fn(async () => ({ messages: msgs, watermark: 100 })) } });
+    deps.provider.createMessage
+      .mockResolvedValueOnce(textResp('Могу предложить 18:00.'))
+      .mockResolvedValueOnce(textResp('Тогда 19:00?'))
+      .mockResolvedValueOnce(textResp('Или 19:30.'));
+    const out = await orchestrator.runDialog(1, 'k', { deps, nowMs: NOW });
+    expect(deps.provider.createMessage).toHaveBeenCalledTimes(3);
+    expect(out.replies).toHaveLength(1);
+    expect(replyGuardMod.extractTimes(out.replies[0])).toEqual([]);
+    expect(out.replies[0]).toMatch(/день/);
+  });
+
+  test('«всё расписано» без вызова в этом ходу, но со СВЕЖЕЙ выдачей слотов в журнале — подкреплено, довызова нет', async () => {
+    const stub = makeToolEventsStub();
+    stub.mod.loadRecent = jest.fn(async () => [{
+      tool: 'get_sequential_slots', input: { date: '2026-09-23' },
+      result: { variants: [{ type: 'same_staff', date: '2026-09-23', staff: [], starts: [{ time: '13:30', chain: [] }] }] },
+      is_error: false, delivered: true, age_ms: 2 * 60 * 1000,
+    }]);
+    const deps = makeDeps({ toolEvents: stub, history: { loadTranscript: jest.fn(async () => ({
+      messages: [{ role: 'assistant', content: 'Есть 13:30.' }, { role: 'user', content: 'Или утро или ближе к вечеру' }], watermark: 100 })) } });
+    deps.provider.createMessage.mockResolvedValueOnce(textResp('Вечером в среду у Татьяны всё расписано, первая запись возможна с 13:30.'));
+    const out = await orchestrator.runDialog(1, 'k', { deps, nowMs: NOW });
+    expect(deps.provider.createMessage).toHaveBeenCalledTimes(1);
+    expect(out.replies[0]).toMatch(/всё расписано/);
+  });
+
+  test('get_sequential_slots с preferred_staff_not_working → «всё занято» заменяется фактом графика', async () => {
+    const deps = makeDeps({ handlers: { get_sequential_slots: jest.fn(async () => ({
+      requested_date: '2026-09-21', variants: [], preferred_staff_not_working: true,
+      staff_name: 'Богатырева Татьяна', staff_next_working_date: '2026-09-23',
+    })) } });
+    deps.registry.schemas.push({ name: 'get_sequential_slots' });
+    deps.provider.createMessage
+      .mockResolvedValueOnce(toolResp('get_sequential_slots', { date: '2026-09-21', preferred_staff_yc_id: 1, services: [{ service_yc_id: 1 }, { service_yc_id: 2 }] }))
+      .mockResolvedValueOnce(textResp('У Татьяны на утро понедельника всё занято.'));
+    const out = await orchestrator.runDialog(1, 'k', { deps, nowMs: NOW });
+    expect(deps.provider.createMessage).toHaveBeenCalledTimes(2);
+    expect(out.replies[0]).toMatch(/не работает|не принимает|выходн/i);
+    expect(out.replies[0]).not.toMatch(/всё занято/);
   });
 });

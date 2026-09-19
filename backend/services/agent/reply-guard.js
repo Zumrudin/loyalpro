@@ -464,6 +464,21 @@ function hardViolations(violations) {
   return (violations || []).filter(v => HARD_TYPES.has(v.type));
 }
 
+// Нарушения-ВЫДУМКИ о времени/занятости. Если после MAX_REPLY_CORRECTIONS
+// довызовов хотя бы одно осталось, оркестратор доставляет не реплику модели,
+// а SAFE_FALLBACK_TEXT: живой прогон 2026-09-19 показал, что довызов без
+// инструментов убирает названное время и СОЧИНЯЕТ новое («суббота 26 сентября,
+// 10:00» — у мастера выходной), и раньше исправленный текст не проверялся вовсе.
+const FABRICATION_TYPES = new Set([
+  'unknown_time', 'unverified_offer', 'unbacked_unavailability', 'rejected_repeat',
+  'false_unavailability', 'alien_time_attribution', 'fabricated_unavailability_reason',
+]);
+const SAFE_FALLBACK_TEXT = 'Понимаю вас. Подскажите, пожалуйста, какой день и какая половина дня (утро, день или вечер) ' +
+  'вам удобнее — посмотрю свободное время и предложу варианты.';
+function fabricationViolations(violations) {
+  return (violations || []).filter(v => FABRICATION_TYPES.has(v.type));
+}
+
 module.exports = {
   extractTimes, checkOfferedTimes, checkOfferDeviation, checkFreeDayTime, lintReply, hardViolations,
   checkStaffAttribution, checkStaffNotWorkingClaim, mentionsPerson, checkGiftRepeat, GIFT_RE,
@@ -471,4 +486,5 @@ module.exports = {
   AVAILABILITY_OFFER_RE, FABRICATED_UNAVAILABILITY_RE,
   checkFalseUnavailability, UNAVAILABLE_RE,
   checkUnbackedUnavailability, BOOKED_UP_RE, checkRejectedRepeat, isRefusal, REFUSAL_RE,
+  fabricationViolations, FABRICATION_TYPES, SAFE_FALLBACK_TEXT,
 };

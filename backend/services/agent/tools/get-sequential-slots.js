@@ -1,7 +1,8 @@
 'use strict';
 
 const { db } = require('../../../db');
-const { ycGetStaffSeances } = require('../../yclients-booking');
+const { ycGetStaffSeances, ycGetStaffSchedule } = require('../../yclients-booking');
+const staffSchedule = require('../staff-schedule');
 const settings = require('../../agent-settings');
 const svcFilter = require('../service-filter');
 const listServices = require('./list-services');
@@ -28,6 +29,7 @@ const MAX_OTHER_STAFF = 3;     // «универсалов» помимо тек
 const MAX_MIXED_COMBOS = 6;    // потолок комбинаций мастеров в mixed
 const MAX_VARIANTS = 6;        // суммарный потолок вариантов в ответе (диета токенов)
 const DEFAULT_DURATION_MIN = 60;
+const SCHEDULE_HORIZON_DAYS = 30;  // горизонт сверки графика (как у get_available_slots)
 
 const schema = {
   name: 'get_sequential_slots',
@@ -371,6 +373,34 @@ async function run(salonId, input, ctx = {}) {
   if (scheduleFailures) out.schedule_degraded = true;
   if (preferredCannot.length) out.preferred_staff_cannot = preferredCannot;
 
+  // Выходной/отпуск у ЗАПИСАННОГО мастера на запрошенную дату (живой прогон
+  // 2026-09-19): инструмент молча отдавал варианты на другие даты, и модель
+  // читала пустоту на запрошенной как «у Татьяны на понедельник всё занято».
+  // Тот же приём, что staff_not_working в get_available_slots: пустая сетка +
+  // ЯВНОЕ is_working:0 в management /schedule. Сбой графика → ничего (fail-open:
+  // выдуманный отпуск — тот же класс, что «это время только что заняли»).
+  let notWorkingHint = null;
+  if (!anchor && preferredUniversal && !shortlist.some(v => v.type === 'same_staff' && v.date === date)) {
+    const ranges = await getStaffRanges(preferredUniversal.yc_id, date);
+    if (Array.isArray(ranges) && !ranges.length) {
+      let sched = { unknown: true };
+      try {
+        const rows = await ycGetStaffSchedule(salon, preferredUniversal.yc_id, date, addDays(date, SCHEDULE_HORIZON_DAYS));
+        sched = staffSchedule.summarizeWorkingDays(rows, { date });
+      } catch (_) { sched = { unknown: true }; }
+      if (!sched.unknown && !sched.working) {
+        out.preferred_staff_not_working = true;
+        out.staff_name = preferredUniversal.name || null;
+        out.staff_next_working_date = sched.nextWorkingDate || null;
+        const who = preferredUniversal.name ? `Мастер ${preferredUniversal.name}` : 'Записанный мастер';
+        notWorkingHint = `${who} ${date} НЕ РАБОТАЕТ — его нет в графике (выходной или отпуск). У него не «всё занято»: ` +
+          'свободного времени в этот день не существует. Так и скажи пациенту (выходной, а не занятость)' +
+          (sched.nextWorkingDate ? ` и предложи его ближайший приёмный день ${sched.nextWorkingDate} — варианты на него ниже.` : '.') +
+          ' КАТЕГОРИЧЕСКИ НЕЛЬЗЯ называть любое время этой даты как время этого мастера.';
+      }
+    }
+  }
+
   if (anchor) {
     out.anchored = true;
     if (!shortlist.length) {
@@ -409,6 +439,9 @@ async function run(salonId, input, ctx = {}) {
         'может быть неполным, не утверждай, что других вариантов нет.';
     }
   }
+  // Факт выходного — ПЕРВЫМ в хинте (как в get_available_slots): оба факта нужны
+  // одновременно, иначе модель склеит их в «у мастера есть окна».
+  if (notWorkingHint) out.hint = out.hint ? `${notWorkingHint} ${out.hint}` : notWorkingHint;
   return out;
 }
 

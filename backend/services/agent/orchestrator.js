@@ -46,6 +46,8 @@ const MAX_REGEN = 2;   // сколько раз перегенерировать
 // две подряд означают залипание, и каждая следующая — оплаченный проход по
 // ~39k-промпту без единого нового факта (инцидент 2026-09-07).
 const MAX_IDLE_ITERS = 2;
+// Потолок корректирующих довызовов reply-guard на один ход (см. цикл линта).
+const MAX_REPLY_CORRECTIONS = 2;
 
 // Пишущие инструменты: их результат нельзя «выбросить» перегенерацией.
 const SIDE_EFFECT_TOOLS = new Set([
@@ -1075,6 +1077,11 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
         if (tc.name === 'get_available_slots' && result && result.staff_not_working && result.staff_name) {
           staffNotWorking.push({ name: result.staff_name, nextWorkingDate: result.staff_next_working_date || null });
         }
+        // Выходной у записанного мастера в стыковке (живой прогон 2026-09-19):
+        // тот же факт, что staff_not_working у get_available_slots.
+        if (tc.name === 'get_sequential_slots' && result && result.preferred_staff_not_working && result.staff_name) {
+          staffNotWorking.push({ name: result.staff_name, nextWorkingDate: result.staff_next_working_date || null });
+        }
         // Только одномастерная выдача (staff_yc_id в вызове) и только её собственный
         // slots — окна alternative_staff/staff_options сюда не идут: они про ДРУГОГО
         // мастера, и «у запрошенного занято» рядом с ними законно.
@@ -1225,9 +1232,24 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
     // Детерминированные реплики (подтверждение записи после падения провайдера,
     // запрос номера) не линтуются: текст фиксирован кодом, а корректирующий
     // довызов был бы вторым платным проходом ради собственной строки.
+    // «Занято/расписано» подкреплено и СВЕЖЕЙ выдачей слотов из журнала (< 30
+    // мин): блок памяти показывает её модели, и вывод «вечером всё расписано»
+    // из вчерашней... нет — из выдачи предыдущего хода этого же разговора
+    // законен. Без этого guard ловил бы честный пересказ только что
+    // полученных данных (живой прогон 2026-09-19, ход 5).
+    // Свежий ПРОВАЛ write-инструмента в журнале — тоже факт недоступности
+    // (инцидент 2026-09-15: create_booking упал ходом раньше, через 4 минуты
+    // «это время уже недоступно» — правда, а не выдумка).
+    const freshMs = toolMemoryDefault.SLOT_TIMES_FRESH_MS || 30 * 60 * 1000;
+    const freshSlotJournal = journalRows.some(r => r && Number(r.age_ms) < freshMs
+      && ((!r.is_error && SLOT_READ_TOOLS.has(r.tool)) || (r.is_error && WRITE_TOOLS.has(r.tool))));
     if (replies.length && !degradedAfterWrite && !phoneRequested) {
-      const joined = replies.join('\n');
-      const violations = [
+      // Линт — ФУНКЦИЯ от текста: после корректирующего довызова исправленная
+      // реплика проверяется ЗАНОВО (живой прогон 2026-09-19: довызов без
+      // инструментов убирал выдуманное время и сочинял новое, а второй проверки
+      // не было). Довызовов не больше MAX_REPLY_CORRECTIONS; остались выдумки о
+      // времени — детерминированный запасной текст вместо реплики модели.
+      const lint = (joined) => [
         ...replyGuard.lintReply(joined, { hasPriorAssistant, firstContact }),
         ...replyGuard.checkOfferedTimes(joined, allowedTimes),
         // Плотная запись (§8 спеки): только лог, переписывания нет (offer_bypass
@@ -1265,39 +1287,61 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
         // Словесное «занято/расписано/нет окошек» без единого слот-вызова за
         // ход (инцидент 2026-09-19, ход 1) и повтор времени, от которого
         // пациент только что отказался, без нового вызова (ход 6).
-        ...replyGuard.checkUnbackedUnavailability(joined, { slotToolCalled, writeErrored }),
+        ...replyGuard.checkUnbackedUnavailability(joined, { slotToolCalled: slotToolCalled || freshSlotJournal, writeErrored }),
         ...replyGuard.checkRejectedRepeat(joined,
           { patientLastText: toolCtx.patientLastText, prevOfferTimes, slotToolCalled }),
         // «Консультация в подарок» один раз за диалог — только измерение.
         ...replyGuard.checkGiftRepeat(joined,
           { priorHasGift: replyGuard.GIFT_RE.test(priorAssistantText) }),
       ];
-      if (violations.length) {
-        logger.warn(`dialog ${dialogKey}: reply-guard: ${JSON.stringify(violations)}`);
-      }
-      const hard = replyGuard.hardViolations(violations);
-      if (hard.length) {
+      let corrections = 0;
+      for (;;) {
+        const joined = replies.join('\n');
+        const violations = lint(joined);
+        if (violations.length) {
+          logger.warn(`dialog ${dialogKey}: reply-guard${corrections ? ` (после довызова ${corrections})` : ''}: ${JSON.stringify(violations)}`);
+        }
+        const hard = replyGuard.hardViolations(violations);
+        if (!hard.length) break;
         const notWorking = hard.find(v => v.type === 'staff_not_working_claim');
         const fact = notWorking && staffNotWorking.find(item => item.name === notWorking.value);
         if (fact) {
           logger.warn(`dialog ${dialogKey}: «не работает» выдано за «занято» — заменяю ответ фактом графика`);
           replies.length = 0;
           replies.push(schedulePreflight.renderNotWorkingReply(fact.name, fact.nextWorkingDate));
-        } else {
-          // ОДИН корректирующий довызов без инструментов: убрать внутреннюю кухню,
-          // сохранив смысл. Второй раз не переписываем — доставляем как есть (лог уже был).
-          try {
-            const fix = await provider.createMessage({
-              system,
-              messages: convo.concat([{ role: 'user', content: buildHardFixPrompt(hard) }]),
-              tools: [],
-            }, { client: opts.client });
-            if (fix.text) { replies.length = 0; replies.push(fix.text); }
-            else logger.warn(`dialog ${dialogKey}: корректирующий довызов вернул пустой текст — отдаю исходную реплику`);
-          } catch (e) {
-            logger.warn(`dialog ${dialogKey}: корректирующий довызов не удался (${e.message}) — отдаю исходную реплику`);
-          }
+          break;
         }
+        if (corrections >= MAX_REPLY_CORRECTIONS) {
+          const fab = replyGuard.fabricationViolations(hard);
+          // Ложное «записала/перенесла/отменила» запасным текстом НЕ прячем: этим
+          // ведает falseSuccess ниже (перевод на человека) — подмена текста
+          // выключила бы его, а модель, упорно утверждающая запись, которой нет,
+          // должна уйти к администратору, а не получить ещё один ход.
+          const lies = fab.length && detectFalseClaim(joined, claimProof);
+          if (fab.length && !lies) {
+            const draft = joined.replace(/\s+/g, ' ').slice(0, 500);
+            logger.warn(`dialog ${dialogKey}: после ${corrections} довызовов остались выдумки о времени (${fab.map(v => v.type + ':' + v.value).join(', ')}) — детерминированный запасной текст; погашенный черновик: «${draft}»`);
+            replies.length = 0;
+            replies.push(replyGuard.SAFE_FALLBACK_TEXT);
+          } else {
+            logger.warn(`dialog ${dialogKey}: после ${corrections} довызовов нарушения остались (${hard.map(v => v.type).join(', ')}) — доставляю как есть`);
+          }
+          break;
+        }
+        corrections += 1;
+        // Корректирующий довызов без инструментов: убрать выдумку, сохранив смысл.
+        try {
+          const fix = await provider.createMessage({
+            system,
+            messages: convo.concat([{ role: 'user', content: buildHardFixPrompt(hard) }]),
+            tools: [],
+          }, { client: opts.client });
+          if (fix.text) { replies.length = 0; replies.push(fix.text); continue; }
+          logger.warn(`dialog ${dialogKey}: корректирующий довызов вернул пустой текст — отдаю исходную реплику`);
+        } catch (e) {
+          logger.warn(`dialog ${dialogKey}: корректирующий довызов не удался (${e.message}) — отдаю исходную реплику`);
+        }
+        break;
       }
     }
 

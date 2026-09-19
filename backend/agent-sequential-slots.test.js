@@ -9,6 +9,7 @@ jest.mock('./db', () => ({
 }));
 jest.mock('./services/yclients-booking', () => ({
   ycGetStaffSeances: jest.fn(async () => []),
+  ycGetStaffSchedule: jest.fn(async () => []),
 }));
 jest.mock('./services/agent-settings', () => ({ loadServiceFilterSafe: jest.fn(async () => ({})) }));
 jest.mock('./services/agent/service-filter', () => ({ isBookable: jest.fn(() => true) }));
@@ -271,5 +272,46 @@ describe('get_sequential_slots — минимальный срок до визи
     const DAYTIME = { nowMs: Date.parse('2026-08-09T15:00:00+03:00') };
     const r = await tool.run(1, { ...baseInput, preferred_staff_yc_id: 11 }, DAYTIME);
     expect(r.variants[0].starts[0].time).toBe('10:00');
+  });
+});
+
+// ── Выходной у ЗАПИСАННОГО мастера на запрошенную дату (живой прогон 2026-09-19) ──
+// Инструмент молча отдавал варианты на другие даты, а модель читала пустоту на
+// запрошенной как «у Татьяны на понедельник всё занято». Теперь на пустой
+// ветке идёт сверка с management /schedule — тот же приём, что у
+// get_available_slots (staff_not_working).
+describe('preferred_staff_not_working', () => {
+  const yb = require('./services/yclients-booking');
+  const CHAIN = { date: '2026-09-21', preferred_staff_yc_id: TANYA.yc_id, services: [{ service_yc_id: BIO }, { service_yc_id: CLEAN }] };
+
+  test('сетки нет и график говорит is_working:0 → флаг, имя, ближайший день, хинт', async () => {
+    ycGetStaffSeances.mockImplementation(async (_s, staffId, day) =>
+      (String(staffId) === String(TANYA.yc_id) && day === '2026-09-21') ? [] : grid(10 * 60, 14 * 60));
+    yb.ycGetStaffSchedule.mockResolvedValue([
+      { date: '2026-09-21', is_working: 0, slots: [] },
+      { date: '2026-09-22', is_working: 0, slots: [] },
+      { date: '2026-09-23', is_working: 1, slots: [{ from: '10:00', to: '22:00' }] },
+    ]);
+    const res = await runTool(CHAIN);
+    expect(res.preferred_staff_not_working).toBe(true);
+    expect(res.staff_name).toBe('Татьяна');
+    expect(res.staff_next_working_date).toBe('2026-09-23');
+    expect(res.hint).toMatch(/НЕ РАБОТАЕТ/);
+  });
+
+  test('график недоступен → флага нет (fail-open, выдуманный отпуск хуже)', async () => {
+    ycGetStaffSeances.mockImplementation(async (_s, staffId, day) =>
+      (String(staffId) === String(TANYA.yc_id) && day === '2026-09-21') ? [] : grid(10 * 60, 14 * 60));
+    yb.ycGetStaffSchedule.mockRejectedValue(new Error('down'));
+    const res = await runTool(CHAIN);
+    expect(res.preferred_staff_not_working).toBeUndefined();
+  });
+
+  test('мастер работает и варианты на дату есть → флага нет, /schedule не зовётся', async () => {
+    ycGetStaffSeances.mockResolvedValue(grid(10 * 60, 14 * 60));
+    yb.ycGetStaffSchedule.mockClear();
+    const res = await runTool(CHAIN);
+    expect(res.preferred_staff_not_working).toBeUndefined();
+    expect(yb.ycGetStaffSchedule).not.toHaveBeenCalled();
   });
 });
