@@ -120,6 +120,17 @@ function collectStaffAvailability(result, empty, available) {
       for (const item of result[key]) add(item && item.name, item && item.slots);
     }
   }
+  // Стыковка (get_sequential_slots): у мастера каждого варианта со стартами окна
+  // ЕСТЬ (пусть на другой дате — «нашлись хоть где-то за ход»). Без этого
+  // staff_name из preferred_staff_not_working (выходной на ЗАПРОШЕННУЮ дату)
+  // делал бы мастера «пустым», и честное «в среду к ней 13:30» гасилось бы как
+  // чужое время (живой прогон 2026-09-19, второй запуск).
+  if (Array.isArray(result.variants)) {
+    for (const v of result.variants) {
+      const starts = v && v.starts;
+      for (const m of (Array.isArray(v && v.staff) ? v.staff : [])) add(m && m.name, starts);
+    }
+  }
 }
 
 // Инструкция корректирующего довызова по жёстким нарушениям reply-guard. Текст

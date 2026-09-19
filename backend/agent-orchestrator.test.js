@@ -2893,3 +2893,29 @@ describe('reply-guard: повторная проверка после довыз
     expect(out.replies[0]).not.toMatch(/всё занято/);
   });
 });
+
+// Второй живой прогон 2026-09-19: staff_name из preferred_staff_not_working делал
+// мастера «пустым», и честная реплика «во вторник выходной, в среду к ней 13:30»
+// гасилась как чужое время (alien_time_attribution) — вплоть до запасного текста.
+test('стыковка: выходной на запрошенную дату + старты мастера на другую дату → его время законно', async () => {
+  const NOW = Date.parse('2026-09-19T09:00:00+03:00');
+  const deps = makeDeps({ handlers: { get_sequential_slots: jest.fn(async () => ({
+    requested_date: '2026-09-22', preferred_staff_not_working: true,
+    staff_name: 'Богатырева Татьяна', staff_next_working_date: '2026-09-23',
+    variants: [
+      { type: 'same_staff', date: '2026-09-23', staff: [{ yc_id: 1, name: 'Богатырева Татьяна' }],
+        starts: [{ time: '13:30', chain: [{ datetime: '2026-09-23T13:30:00+03:00', staff_yc_id: 1 }] },
+                 { time: '14:00', chain: [{ datetime: '2026-09-23T14:00:00+03:00', staff_yc_id: 1 }] }] },
+      { type: 'other_staff', date: '2026-09-22', staff: [{ yc_id: 2, name: 'Гатауллина Юлия' }],
+        starts: [{ time: '10:00', chain: [{ datetime: '2026-09-22T10:00:00+03:00', staff_yc_id: 2 }] }] },
+    ],
+  })) } });
+  deps.registry.schemas.push({ name: 'get_sequential_slots' });
+  const reply = 'Во вторник, 22 сентября, у Татьяны выходной. Ближайший рабочий день — среда, 23 сентября: могу предложить к ней 13:30 или 14:00. Если принципиален вторник — Юлия в 10:00.';
+  deps.provider.createMessage
+    .mockResolvedValueOnce(toolResp('get_sequential_slots', { date: '2026-09-22', preferred_staff_yc_id: 1, services: [{ service_yc_id: 1 }, { service_yc_id: 2 }] }))
+    .mockResolvedValueOnce(textResp(reply));
+  const out = await orchestrator.runDialog(1, 'k', { deps, nowMs: NOW });
+  expect(deps.provider.createMessage).toHaveBeenCalledTimes(2);
+  expect(out.replies).toEqual([reply]);
+});
