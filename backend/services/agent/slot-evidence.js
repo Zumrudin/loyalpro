@@ -210,10 +210,10 @@ function wrongServiceHint(datetime, recordServiceIds) {
     'Пациенту про эту проверку не пиши.';
 }
 
-// Связь промпта с кодом (Сценарий 3, Шаг 5): правило обязано называть оба
+// Связь промпта с кодом (Сценарий 3, Шаг 5): правило обязано называть все три
 // hint-ответа по имени — иначе модель прочтёт их как провал и уйдёт в
 // «извинись и escalate». Проверяется в agent-system-prompt.test.js.
-const PROMPT_RULE_MARKERS = ['unverified_slot', 'needs_confirmation'];
+const PROMPT_RULE_MARKERS = ['unverified_slot', 'needs_confirmation', 'wrong_service'];
 
 module.exports = {
   createSlotEvidence, SLOT_EVIDENCE_TOOLS, extractPairs,
