@@ -891,6 +891,23 @@ describe('ожидание ответа клиента (followup)', () => {
       1, 'k', meta, followupSettings, expect.objectContaining({ now: expect.any(Date) }));
   });
 
+  test('turnId хода-якоря уходит в schedule (по нему воркер читает журнал инструментов)', async () => {
+    const followupSettings = { followupDelay1Min: 15, followupDelay2Min: 60 };
+    const d = deps({
+      ...followupDeps(),
+      orchestrator: { runDialog: jest.fn(async () => ({ replies: ['Записать вас?'], escalated: false, turnId: 't-9' })) },
+      settings: {
+        isAllowed: jest.fn(async () => ({ allow: true, reason: 'ok' })),
+        getSettings: jest.fn(async () => followupSettings),
+      },
+    });
+    dispatcher.enqueue(1, 'k', meta, d);
+    await jest.advanceTimersByTimeAsync(1000);
+    await flushMicrotasks();
+    expect(d.followupQueue.schedule).toHaveBeenCalledWith(
+      1, 'k', meta, followupSettings, expect.objectContaining({ turnId: 't-9' }));
+  });
+
   test('запись оформлена в этом ходу (writeSucceeded) → followupQueue.schedule НЕ вызван', async () => {
     const d = deps({
       ...followupDeps(),

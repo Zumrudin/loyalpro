@@ -51,6 +51,23 @@ describe('schedule', () => {
     });
   });
 
+  test('turnId хода-якоря пишется в anchor_turn_id и обновляется при перезаводе', async () => {
+    const db = mockDb();
+    await queue.schedule(1, '79200255591', META, SETTINGS, { db, turnId: 'turn-abc' });
+    const { sql, params } = db.calls[0];
+    expect(sql).toMatch(/anchor_turn_id/);
+    expect(sql).toMatch(/DO UPDATE SET[\s\S]*anchor_turn_id\s*=\s*\$8/);
+    // Новый цикл — журнал бонусной фразы прошлого цикла сбрасывается.
+    expect(sql).toMatch(/bonus_kind\s*=\s*NULL/);
+    expect(sql).toMatch(/bonus_balance\s*=\s*NULL/);
+    expect(params[7]).toBe('turn-abc');
+  });
+  test('без turnId — NULL', async () => {
+    const db = mockDb();
+    await queue.schedule(1, '79200255591', META, SETTINGS, { db });
+    expect(db.calls[0].params[7]).toBe(null);
+  });
+
   test('без dialogKey не пишет ничего', async () => {
     const db = mockDb();
     expect(await queue.schedule(1, '', META, SETTINGS, { db })).toBe(false);

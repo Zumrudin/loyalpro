@@ -24,6 +24,8 @@ const CLOSE_STATUSES = new Set(['answered', 'cancelled', 'expired', 'done', 'fai
  * Завести (или перезавести) ожидание ответа после реплики Милы.
  * ON CONFLICT сбрасывает якорь и стадию: свежая реплика начинает отсчёт
  * заново — предыдущее ожидание этим же ответом и закрыто по смыслу.
+ * @param {string} [opts.turnId] turn_id хода-якоря — по нему воркер читает
+ *   журнал инструментов для класса ситуации (бонусный довод)
  * @returns {Promise<boolean>} поставлена ли строка
  */
 async function schedule(salonId, dialogKey, meta = {}, settings = {}, opts = {}) {
@@ -38,10 +40,11 @@ async function schedule(salonId, dialogKey, meta = {}, settings = {}, opts = {})
     await db.query(
       `INSERT INTO agent_followups
          (salon_id, dialog_key, phone, channel, chat_id, anchor_at, next_at,
-          stage, status, close_reason, attempts, last_attempt_at, updated_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,0,'scheduled',NULL,0,NULL,now())
+          anchor_turn_id, stage, status, close_reason, attempts, last_attempt_at, updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,0,'scheduled',NULL,0,NULL,now())
        ON CONFLICT (salon_id, dialog_key) WHERE status='scheduled'
        DO UPDATE SET phone=$3, channel=$4, chat_id=$5, anchor_at=$6, next_at=$7,
+                     anchor_turn_id=$8,
                      stage=0, close_reason=NULL, attempts=0, last_attempt_at=NULL,
                      -- Перезавод — НОВЫЙ цикл ожидания, а не продолжение старого.
                      -- Гашение строки — best-effort (см. close) и при сбое БД
@@ -55,9 +58,10 @@ async function schedule(salonId, dialogKey, meta = {}, settings = {}, opts = {})
                      -- завершённых циклов и так живёт в терминальных строках
                      -- (в этом и смысл частичного уникального индекса).
                      nudge1_at=NULL, final_at=NULL, rendered_text=NULL, error=NULL,
+                     bonus_kind=NULL, bonus_balance=NULL,
                      updated_at=now()`,
       [salonId, dialogKey, meta.phone || null, meta.channel || null, meta.chatId || null,
-       anchor, next]);
+       anchor, next, opts.turnId ? String(opts.turnId) : null]);
     return true;
   } catch (e) {
     log.warn(`dialog ${dialogKey}: не поставить ожидание ответа (${e.message})`);

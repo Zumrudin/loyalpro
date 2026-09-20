@@ -344,7 +344,7 @@ async function process(salonId, dialogKey, meta, opts = {}) {
         const anchorAt = new Date();
         void Promise.resolve()
           .then(() => settings.getSettings(salonId))
-          .then(s => followupQueue.schedule(salonId, dialogKey, meta, s, { now: anchorAt }))
+          .then(s => followupQueue.schedule(salonId, dialogKey, meta, s, { now: anchorAt, turnId }))
           .catch(e => logger.warn(`dialog ${dialogKey}: ожидание ответа не поставлено (${e.message})`));
       }
     }
