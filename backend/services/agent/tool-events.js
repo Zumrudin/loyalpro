@@ -113,6 +113,26 @@ async function loadRecent(salonId, dialogKey, opts = {}) {
   return rows.reverse();
 }
 
+/**
+ * События ОДНОГО хода по turn_id — для классификатора ситуации напоминания
+ * Милы о себе (followup-situation.js). В отличие от loadRecent — best-effort:
+ * пустой журнал даёт класс по тексту реплики, а падение напоминания из-за БД
+ * стоило бы дороже.
+ */
+async function loadTurn(turnId) {
+  if (!turnId) return [];
+  try {
+    return await db.any(
+      `SELECT tool, input, result, is_error
+         FROM agent_tool_events
+        WHERE turn_id = $1
+        ORDER BY id`, [String(turnId)]);
+  } catch (e) {
+    logger.warn(`loadTurn ${turnId}: ${e.message}`);
+    return [];
+  }
+}
+
 /** Удалить строки старше KEEP_DAYS (зовётся кроном 40 4 * * * из server.js). */
 async function cleanup() {
   try {
@@ -126,4 +146,4 @@ async function cleanup() {
   }
 }
 
-module.exports = { createBuffer, markDelivered, loadRecent, cleanup, KEEP_DAYS };
+module.exports = { createBuffer, markDelivered, loadRecent, loadTurn, cleanup, KEEP_DAYS };

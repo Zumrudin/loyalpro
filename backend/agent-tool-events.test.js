@@ -141,6 +141,26 @@ describe('loadRecent', () => {
   });
 });
 
+describe('loadTurn', () => {
+  test('читает события хода по turn_id в порядке id', async () => {
+    db.any.mockResolvedValueOnce([{ tool: 'get_available_slots', input: {}, result: { slots: [1] }, is_error: false }]);
+    const rows = await toolEvents.loadTurn('t-1');
+    expect(rows).toHaveLength(1);
+    const [sql, params] = db.any.mock.calls.at(-1);
+    expect(sql).toMatch(/WHERE turn_id = \$1/);
+    expect(sql).toMatch(/ORDER BY id/);
+    expect(params).toEqual(['t-1']);
+  });
+  test('без turnId — пусто без запроса; сбой БД — пусто с WARN', async () => {
+    const before = db.any.mock.calls.length;
+    expect(await toolEvents.loadTurn(null)).toEqual([]);
+    expect(db.any.mock.calls.length).toBe(before);
+    db.any.mockRejectedValueOnce(new Error('down'));
+    expect(await toolEvents.loadTurn('t-2')).toEqual([]);
+    expect(mockLogger.warn).toHaveBeenCalled();
+  });
+});
+
 describe('cleanup', () => {
   test('удаляет строки старше KEEP_DAYS, сбой проглатывает', async () => {
     db.query.mockResolvedValue({ rows: [] });
