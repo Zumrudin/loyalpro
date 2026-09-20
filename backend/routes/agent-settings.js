@@ -58,6 +58,8 @@ router.put('/settings', adminOnly, async (req, res) => {
       return res.status(400).json({ error: 'Некорректное время расписания' });
     if (e.code === 'BAD_URL')
       return res.status(400).json({ error: 'Ссылка на прайс должна начинаться с http:// или https://' });
+    if (e.code === 'BAD_FOLLOWUP' && /bonus min balance/.test(e.message))
+      return res.status(400).json({ error: 'Минимальный баланс для упоминания бонусов: целое число от 0 до 100000' });
     if (e.code === 'BAD_FOLLOWUP')
       return res.status(400).json({ error: 'Интервалы напоминаний: 0–1440 минут, второй строго больше первого' });
     if (e.code === 'BAD_FOLLOWUP_TIME')
