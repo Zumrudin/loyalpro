@@ -49,6 +49,11 @@ function deps(over = {}) {
     rememberPending: async (salonId, key, text) => { calls.pending.push({ salonId, key, text }); },
     persistWhatsapp: async (salonId, p) => { calls.persisted.push({ salonId, ...p }); },
     emitStatus: (salonId, key, status, stage) => calls.events.push({ salonId, key, status, stage }),
+    // Бонусный довод: по умолчанию карта «недоступна», журнал хода пуст,
+    // недавних фраз не было — то есть дописки НЕТ, старые тесты не затронуты.
+    readCardBalance: async () => ({ status: 'unavailable', reason: 'test' }),
+    loadTurnEvents: async () => [],
+    recentBonusSent: async () => false,
     log: { info() {}, warn() {}, error() {} },
     ...over,
   };
@@ -446,6 +451,119 @@ describe('followup worker: напоминание (stage 0)', () => {
   });
 });
 
+describe('followup worker: бонусный довод (stage 0)', () => {
+  const BONUS_ROW = {
+    followup_bonus_text: 'На карте {balance} бонусов.',
+    followup_welcome_text: 'Дарим 500 баллов при регистрации.',
+    followup_bonus_min_balance: 100,
+    anchor_turn_id: 'turn-1',
+  };
+  // Транскрипт с ценой в реплике Милы — класс price без единого инструмента.
+  const priceTranscript = async () => ({ messages: [
+    { role: 'user', content: 'Сколько стоит биоревитализация?' },
+    { role: 'assistant', content: 'Мария, от 12 000 ₽. Записать вас?' },
+  ] });
+
+  test('держатель карты: фраза дописана отдельным абзацем, журнал в захвате', async () => {
+    const d = deps({ loadTranscript: priceTranscript, readCardBalance: async () => ({ status: 'ok', balance: 3024, cardId: 1 }) });
+    await worker.processOne(row(BONUS_ROW), d);
+    expect(d.calls.sent).toHaveLength(1);
+    expect(d.calls.sent[0].text).toBe('Мария, подскажите, записать вас?\n\nНа карте 3 024 бонусов.');
+    const mark = d.calls.marks.find((m) => /stage\s*=\s*1/.test(m.sql));
+    expect(mark.sql).toMatch(/bonus_kind\s*=\s*\$4/);
+    expect(mark.sql).toMatch(/bonus_balance\s*=\s*\$5/);
+    expect(mark.params[3]).toBe('balance');
+    expect(mark.params[4]).toBe(3024);
+    expect(mark.params[2]).toBe(d.calls.sent[0].text); // rendered_text = весь текст
+  });
+
+  test('без карты → welcome; шаблоны пустые → без фразы и без похода за картой', async () => {
+    const d = deps({ loadTranscript: priceTranscript, readCardBalance: async () => ({ status: 'no_card' }) });
+    await worker.processOne(row(BONUS_ROW), d);
+    expect(d.calls.sent[0].text).toMatch(/\n\nДарим 500 баллов при регистрации\.$/);
+    const mark = d.calls.marks.find((m) => /stage\s*=\s*1/.test(m.sql));
+    expect(mark.params[3]).toBe('welcome');
+    expect(mark.params[4]).toBe(null);
+
+    const calls = [];
+    const d2 = deps({ loadTranscript: priceTranscript, readCardBalance: async () => { calls.push(1); return { status: 'ok', balance: 999 }; } });
+    await worker.processOne(row(), d2); // в row() шаблонов нет
+    expect(calls).toHaveLength(0);
+    expect(d2.calls.sent[0].text).toBe('Мария, подскажите, записать вас?');
+    const mark2 = d2.calls.marks.find((m) => /stage\s*=\s*1/.test(m.sql));
+    expect(mark2.params[3]).toBe(null);
+  });
+
+  test('ситуация clarify по журналу хода → без фразы, карта не читается', async () => {
+    const calls = [];
+    const d = deps({
+      loadTranscript: priceTranscript,
+      loadTurnEvents: async (turnId) => { calls.push(turnId); return [{ tool: 'create_booking', result: { needs_phone: true }, is_error: true }]; },
+      readCardBalance: async () => { throw new Error('не должен зваться'); },
+    });
+    await worker.processOne(row(BONUS_ROW), d);
+    expect(calls).toEqual(['turn-1']);
+    expect(d.calls.sent[0].text).toBe('Мария, подскажите, записать вас?');
+  });
+
+  test('бонусы уже звучали в переписке / недавно слали → без фразы', async () => {
+    const d = deps({
+      loadTranscript: async () => ({ messages: [
+        { role: 'user', content: 'А бонусы у меня есть?' },
+        { role: 'assistant', content: 'Да, 3 024 бонуса. Чистка от 4500 ₽. Записать?' },
+      ] }),
+      readCardBalance: async () => ({ status: 'ok', balance: 3024 }),
+    });
+    await worker.processOne(row(BONUS_ROW), d);
+    expect(d.calls.sent[0].text).not.toMatch(/На карте/);
+
+    const d2 = deps({ loadTranscript: priceTranscript, recentBonusSent: async () => true,
+      readCardBalance: async () => ({ status: 'ok', balance: 3024 }) });
+    await worker.processOne(row(BONUS_ROW), d2);
+    expect(d2.calls.sent[0].text).not.toMatch(/На карте/);
+  });
+
+  test('нет номера → без фразы; исключение в бонусной ветке не ломает отправку', async () => {
+    // Канал без номера — tdlib со скрытым номером: адресат по chat_id
+    // (recipientParams), карту читать не по чему.
+    const calls = [];
+    const d = deps({ loadTranscript: priceTranscript,
+      readCardBalance: async () => { calls.push(1); return { status: 'ok', balance: 3024 }; } });
+    await worker.processOne(row({ ...BONUS_ROW, phone: null, channel: 'tdlib', chat_id: '5245186003' }), d);
+    expect(d.calls.sent).toHaveLength(1);
+    expect(d.calls.sent[0].tdlib_user_id).toBe('5245186003');
+    expect(d.calls.sent[0].text).not.toMatch(/На карте/);
+    expect(calls).toHaveLength(0);
+
+    const d2 = deps({ loadTranscript: priceTranscript, loadTurnEvents: async () => { throw new Error('boom'); } });
+    await worker.processOne(row(BONUS_ROW), d2);
+    expect(d2.calls.sent).toHaveLength(1);
+    expect(d2.calls.sent[0].text).toBe('Мария, подскажите, записать вас?');
+  });
+
+  test('skip модели не стоит похода за картой; финал (stage 1) фразу не получает', async () => {
+    const calls = [];
+    const d = deps({ loadTranscript: priceTranscript,
+      createMessage: async () => ({ text: '{"action":"skip","reason":"попрощались"}' }),
+      readCardBalance: async () => { calls.push(1); return { status: 'ok', balance: 3024 }; } });
+    await worker.processOne(row(BONUS_ROW), d);
+    expect(calls).toHaveLength(0);
+
+    const d2 = deps({ readCardBalance: async () => { calls.push(2); return { status: 'ok', balance: 3024 }; } });
+    await worker.processOne(row({ ...BONUS_ROW, stage: 1 }), d2);
+    expect(calls).toHaveLength(0);
+    expect(d2.calls.sent[0].text).not.toMatch(/На карте/);
+  });
+
+  test('reply-guard и guard времени проверяют текст МОДЕЛИ, а не шаблон салона', async () => {
+    const seen = [];
+    const d = deps({ loadTranscript: priceTranscript, readCardBalance: async () => ({ status: 'ok', balance: 3024 }),
+      lintReply: (text) => { seen.push(text); return []; } });
+    await worker.processOne(row(BONUS_ROW), d);
+    expect(seen).toEqual(['Мария, подскажите, записать вас?']);
+  });
+});
+
 describe('followup worker: финал (stage 1)', () => {
   test('шлёт шаблон и закрывает строку, LLM не зовётся', async () => {
     let llm = 0;
@@ -505,5 +623,11 @@ describe('инварианты', () => {
     expect(worker.LEASE_SQL).toMatch(/followup_delay1_min/);
     expect(worker.LEASE_SQL).toMatch(/followup_final_text/);
     expect(worker.LEASE_SQL).toMatch(/followup_latest_time/);
+  });
+
+  test('LEASE_SQL отдаёт шаблоны бонусного довода и порог', () => {
+    expect(worker.LEASE_SQL).toMatch(/followup_bonus_text/);
+    expect(worker.LEASE_SQL).toMatch(/followup_welcome_text/);
+    expect(worker.LEASE_SQL).toMatch(/followup_bonus_min_balance/);
   });
 });

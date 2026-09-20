@@ -40,6 +40,10 @@ const { hasInventedTime } = require('./followup-guard');
 const { resolveDelays, nextAtFor, isTooLate } = require('./followup-schedule');
 const { CLOSE_STATUSES } = require('./followup-queue');
 const { resolveSalonName } = require('./system-prompt');
+const toolEvents = require('./tool-events');
+const cardBalance = require('../card-balance');
+const { classifySituation, lastOwnReply } = require('./followup-situation');
+const { chooseBonusLine, BONUS_MENTION_RE } = require('./followup-bonus');
 const { createLogger } = require('../../logger');
 
 const log = createLogger('FollowupWorker');
@@ -153,6 +157,27 @@ const defaultDeps = {
     }),
   emitStatus: (salonId, key, status, stage) =>
     chatEvents.emitFollowupStatus(salonId, key, status, stage),
+  // ── Бонусный довод (спека 2026-09-20-agent-followup-bonus-argument) ────
+  // Салон читается тут, а не в LEASE_SQL: карте нужны токены YClients и тип
+  // карты, а тащить их в RETURNING каждой аренды незачем.
+  readCardBalance: async (salonId, phone) => {
+    const salon = await realDb.oneOrNone(
+      `SELECT id, yclients_company_id, yclients_partner_token, yclients_user_token, yclients_card_type_id
+         FROM salons WHERE id=$1`, [salonId]);
+    if (!salon) return { status: 'unavailable', reason: 'no_salon' };
+    return cardBalance.readCardBalance(salon, phone);
+  },
+  loadTurnEvents: (turnId) => toolEvents.loadTurn(turnId),
+  // Правило «не чаще раза в 7 дней на номер» — по журналу ушедших фраз
+  // (bonus_kind пишется только в захвате, то есть только у реально ушедших).
+  recentBonusSent: async (salonId, phone) => {
+    const r = await realDb.oneOrNone(
+      `SELECT 1 FROM agent_followups
+        WHERE salon_id=$1 AND phone=$2 AND bonus_kind IS NOT NULL
+          AND nudge1_at > now() - interval '7 days'
+        LIMIT 1`, [salonId, phone]);
+    return !!r;
+  },
   log,
 };
 
@@ -357,6 +382,49 @@ async function buildNudgeText(d, row, messages) {
   return { text: decision.text };
 }
 
+// ── Бонусный довод к напоминанию ─────────────────────────────────────────────
+// Считается ПОСЛЕ LLM-прохода (skip модели не должен стоить похода в YClients)
+// и ДО захвата строки (bonus_kind/bonus_balance пишутся в том же условном
+// UPDATE — журнал отражает только реально ушедшие фразы). Строго best-effort:
+// любое исключение → напоминание уходит без фразы, с WARN в логе.
+//
+// Гейты от дешёвых к дорогим: шаблоны → номер → ситуация (журнал хода + текст
+// Милы) → «уже звучало» → 7 дней → карта (YClients).
+async function tryBonusLine(d, row, messages, nudgeText) {
+  const settings = {
+    followupBonusText: row.followup_bonus_text,
+    followupWelcomeText: row.followup_welcome_text,
+    followupBonusMinBalance: row.followup_bonus_min_balance,
+  };
+  const none = (why) => ({ line: null, why });
+  try {
+    if (!String(settings.followupBonusText || '').trim() && !String(settings.followupWelcomeText || '').trim())
+      return none('шаблоны пусты');
+    if (!row.phone) return none('номер неизвестен');
+    const events = await d.loadTurnEvents(row.anchor_turn_id);
+    const situation = classifySituation({ events, ownText: lastOwnReply(messages) });
+    if (!situation.bonusOk) return none(`ситуация ${situation.kind}`);
+    const alreadyMentioned = (messages || []).some((m) => BONUS_MENTION_RE.test(String((m && m.content) || '')));
+    if (alreadyMentioned) return none('бонусы уже звучали в переписке');
+    if (await d.recentBonusSent(row.salon_id, row.phone)) return none('фраза уходила за последние 7 дней');
+    const card = await d.readCardBalance(row.salon_id, row.phone);
+    const line = chooseBonusLine({
+      situation, card, settings, alreadyMentioned, recentlySent: false, nudgeText,
+      // Словарь имён салона тут не грузим второй раз (его уже брал
+      // buildNudgeText): {first_name} резолвится базовым словарём, как и в
+      // финальном шаблоне.
+      render: (t) => notifications.renderTemplate(t, {
+        name: row.client_name, salon: row.salon_name, nameDictionary: null,
+      }),
+    });
+    return line ? { line, why: `${line.kind} (ситуация ${situation.kind}, карта ${card.status})` }
+      : none(`ситуация ${situation.kind}, карта ${card.status}${card.balance != null ? ` баланс ${card.balance}` : ''}`);
+  } catch (e) {
+    d.log.warn(`followup #${row.id}: бонусный довод не посчитан (${e.message}) — шлём без него`);
+    return none(`ошибка: ${e.message}`);
+  }
+}
+
 /**
  * Куда слать. Канал берётся СНИМКОМ из строки (он же был у реплики Милы), а
  * адресация — каноническим recipientParams из services/chat.js: у tdlib без
@@ -442,6 +510,7 @@ async function processOne(row, deps = defaultDeps) {
 
     const isFinal = Number(row.stage) >= 1;
     let text;
+    let bonusLine = null;   // бонусный довод, дописанный к напоминанию (только stage 0)
 
     if (isFinal) {
       // Финал — ШАБЛОН салона, без LLM. Дело не в экономии: к 60-й минуте гейт
@@ -467,9 +536,16 @@ async function processOne(row, deps = defaultDeps) {
       // исхода дают systematic skip (см. комментарий у флага в history.js).
       const transcript = await d.loadTranscript(row.salon_id, row.dialog_key,
         { limit: 15, keepTrailingAssistant: true });
-      const built = await buildNudgeText(d, row, (transcript && transcript.messages) || []);
+      const messages = (transcript && transcript.messages) || [];
+      const built = await buildNudgeText(d, row, messages);
       if (built.skip) return finish('cancelled', built.reason);
-      text = built.text;
+      // Бонусный довод — отдельным абзацем ПОСЛЕ текста модели. Одно
+      // сообщение, а не два: второе исходящее подряд заводило бы у Chatpush
+      // отдельную доставку и удвоило бы след в «Чате».
+      const bonus = await tryBonusLine(d, row, messages, built.text);
+      bonusLine = bonus.line;
+      d.log.info(`followup #${row.id}: бонусный довод — ${bonus.why}`);
+      text = bonusLine ? `${built.text}\n\n${bonusLine.text}` : built.text;
     }
 
     // ── 8. Захват строки: последний гейт перед side-effect'ом ──
@@ -500,10 +576,13 @@ async function processOne(row, deps = defaultDeps) {
       marked = await d.db.query(
         `UPDATE agent_followups
             SET stage=1, nudge1_at=NOW(), next_at=$2, rendered_text=$3,
+                bonus_kind=$4, bonus_balance=$5,
                 close_reason=NULL, error=NULL, attempts=0, last_attempt_at=NULL,
                 updated_at=now()
           WHERE id=$1 AND status='scheduled' AND stage=0`,
-        [row.id, finalAt, text]);
+        [row.id, finalAt, text,
+         bonusLine ? bonusLine.kind : null,
+         bonusLine && bonusLine.kind === 'balance' ? bonusLine.balance : null]);
     }
     if (!marked || !marked.rowCount) {
       d.log.info(`followup #${row.id}: строка перехвачена другим исходом — не отправляем`);
@@ -519,7 +598,7 @@ async function processOne(row, deps = defaultDeps) {
     // постфактум — GET /api/v1/delivery/:id (инцидент 2026-08-09). Сторожа
     // доставки у напоминания нет намеренно (см. комментарий выше), поэтому
     // лог здесь — единственный след.
-    d.log.info(`followup #${row.id} ${isFinal ? 'final' : 'nudge'} принято в доставку (delivery=${delivery && delivery.id != null ? delivery.id : 'n/a'}): ${String(text).slice(0, 80)}`);
+    d.log.info(`followup #${row.id} ${isFinal ? 'final' : 'nudge'} принято в доставку (delivery=${delivery && delivery.id != null ? delivery.id : 'n/a'}, bonus=${bonusLine ? bonusLine.kind : 'none'}): ${String(text).slice(0, 80)}`);
 
     // Колонок channel_used/delivery_id в agent_followups нет — журнал доставки
     // для напоминаний не заводился (сторожа доставки у них тоже нет, см. выше),
@@ -615,6 +694,9 @@ const LEASE_SQL = `
     (SELECT s.followup_delay2_min  FROM agent_settings s WHERE s.salon_id = f.salon_id) AS followup_delay2_min,
     (SELECT s.followup_final_text  FROM agent_settings s WHERE s.salon_id = f.salon_id) AS followup_final_text,
     (SELECT s.followup_latest_time FROM agent_settings s WHERE s.salon_id = f.salon_id) AS followup_latest_time,
+    (SELECT s.followup_bonus_text  FROM agent_settings s WHERE s.salon_id = f.salon_id) AS followup_bonus_text,
+    (SELECT s.followup_welcome_text FROM agent_settings s WHERE s.salon_id = f.salon_id) AS followup_welcome_text,
+    (SELECT s.followup_bonus_min_balance FROM agent_settings s WHERE s.salon_id = f.salon_id) AS followup_bonus_min_balance,
     (SELECT sal.name FROM salons sal WHERE sal.id = f.salon_id) AS salon_name,
     (SELECT cl.name FROM clients cl
       WHERE cl.salon_id = f.salon_id AND length(f.phone) >= 10
