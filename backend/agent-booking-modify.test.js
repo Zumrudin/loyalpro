@@ -106,6 +106,45 @@ describe('rescheduleBookingRecord', () => {
     expect(res.ok).toBe(false);
     expect(res.foreign).toBe(true);
   });
+
+  test('слот подтверждён под ДРУГУЮ услугу записи → wrongService, PUT не идёт', async () => {
+    ycr.ycGetRecord.mockResolvedValue(REC); // REC.services = [{ id: 10, title: 'Пилинг' }]
+    const { createSlotEvidence } = require('./services/agent/slot-evidence');
+    const ev = createSlotEvidence();
+    ev.add('get_available_slots', { staff_yc_id: 7, service_yc_id: 999, date: '2026-07-27' },
+      { slots: [{ datetime: '2026-07-27T19:30:00+03:00' }] });
+    const res = await rescheduleBookingRecord(1, {
+      dialogKey: 'd', recordId: 555, expectedYcClientId: 777,
+      datetime: '2026-07-27T19:30:00+03:00', slotEvidence: ev,
+    });
+    expect(res.ok).toBe(false);
+    expect(res.wrongService).toBe(true);
+    expect(res.error).toMatch(/10/);
+    expect(ycr.ycUpdateRecord).not.toHaveBeenCalled();
+  });
+
+  test('слот подтверждён под РЕАЛЬНУЮ услугу записи (id 10) → PUT идёт', async () => {
+    ycr.ycGetRecord.mockResolvedValue(REC);
+    ycr.ycUpdateRecord.mockResolvedValue({ id: 555 });
+    const { createSlotEvidence } = require('./services/agent/slot-evidence');
+    const ev = createSlotEvidence();
+    ev.add('get_available_slots', { staff_yc_id: 7, service_yc_id: 10, date: '2026-07-27' },
+      { slots: [{ datetime: '2026-07-27T19:30:00+03:00' }] });
+    const res = await rescheduleBookingRecord(1, {
+      dialogKey: 'd', recordId: 555, expectedYcClientId: 777,
+      datetime: '2026-07-27T19:30:00+03:00', slotEvidence: ev,
+    });
+    expect(res.ok).toBe(true);
+  });
+
+  test('без slotEvidence (fail-open) — прежнее поведение', async () => {
+    ycr.ycGetRecord.mockResolvedValue(REC);
+    ycr.ycUpdateRecord.mockResolvedValue({ id: 555 });
+    const res = await rescheduleBookingRecord(1, {
+      dialogKey: 'd', recordId: 555, expectedYcClientId: 777, datetime: '2026-07-27T19:30:00+03:00',
+    });
+    expect(res.ok).toBe(true);
+  });
 });
 
 describe('modifyBookingServices', () => {

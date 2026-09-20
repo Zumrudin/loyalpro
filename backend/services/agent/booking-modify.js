@@ -6,6 +6,7 @@ const { ycGetRecord, ycUpdateRecord } = require('../yclients-records');
 const { ycGetServiceMeta, ycGetServiceCatalog } = require('../yclients');
 const { ycGetDayRecords } = require('../yclients-booking');
 const { withRateLimitRetry } = require('../yclients-retry');
+const { wrongServiceHint } = require('./slot-evidence');
 
 // ── Исполнитель отмены и переноса записи агентом. ──
 // Отмена — НЕ удаление: помечаем «клиент не пришёл» (attendance=-1), режем
@@ -99,7 +100,9 @@ async function cancelBookingRecord(salonId, { dialogKey, recordId, expectedYcCli
   return { ok: true, record_id: recordId, no_notify_applied: noNotifyApplied };
 }
 
-async function rescheduleBookingRecord(salonId, { dialogKey, recordId, expectedYcClientId, datetime, staffYcId, seanceLength }) {
+async function rescheduleBookingRecord(salonId, {
+  dialogKey, recordId, expectedYcClientId, datetime, staffYcId, seanceLength, slotEvidence,
+}) {
   const salon = await loadSalon(salonId);
   if (!salon) return { ok: false, error: 'YClients не подключён для салона.' };
 
@@ -108,6 +111,19 @@ async function rescheduleBookingRecord(salonId, { dialogKey, recordId, expectedY
   catch (e) { return { ok: false, error: e.message }; }
   if (!rec || !rec.id) return { ok: false, error: 'Запись не найдена.' };
   if (ownershipError(rec, expectedYcClientId)) return { ok: false, foreign: true, error: ownershipError(rec, expectedYcClientId) };
+
+  // Слот, из которого взят datetime, обязан быть найден по РЕАЛЬНОЙ услуге
+  // этой записи — не по той, что модель (пере)спросила у пациента своими
+  // словами (инцидент 2026-09-19, 79096664042: service_yc_id разошёлся с
+  // записью, совпало лишь длительностью). fail-open без slotEvidence или без
+  // услуг записи (пустая запись сюда обычным путём не доходит).
+  if (slotEvidence) {
+    const recordServiceIds = serviceIds(rec).map(s => Number(s.id)).filter(Boolean);
+    if (recordServiceIds.length
+        && !slotEvidence.has(datetime, { staffYcId: staffYcId || rec.staff_id, serviceYcIds: recordServiceIds })) {
+      return { ok: false, wrongService: true, error: wrongServiceHint(datetime, recordServiceIds) };
+    }
+  }
 
   // Лимит запросов YClients (429) повторяем: инцидент 2026-09-19 — два переноса
   // подряд упали на «Превышен лимит… через 0 секунд» без единого повтора.
