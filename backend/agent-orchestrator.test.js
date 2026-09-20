@@ -2810,6 +2810,17 @@ describe('slot-evidence и перенос записи (инцидент 2026-09
     expect(out.bookingFailed).toBe(false);
     expect(out.falseSuccess).toBe(false);
   });
+
+  test('reschedule_booking wrong_service — hint, не writeErrored (не считается провалом записи)', async () => {
+    const deps = mk({ handlers: {
+      reschedule_booking: jest.fn(async () => ({ invalid_args: true, wrong_service: true, error: 'слот под другую услугу' })),
+    } });
+    deps.provider.createMessage
+      .mockResolvedValueOnce(toolResp('reschedule_booking', { record_id: 5, datetime: '2026-09-25T16:30:00+03:00' }))
+      .mockResolvedValueOnce(textResp('Секунду, уточню ещё раз.'));
+    await orchestrator.runDialog(1, 'k', { deps, nowMs: NOW });
+    expect(deps.provider.createMessage).toHaveBeenCalledTimes(2);
+  });
 });
 
 describe('reply-guard: «занято» без слот-вызова и повтор отвергнутого (инцидент 2026-09-19)', () => {
