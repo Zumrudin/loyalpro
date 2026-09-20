@@ -2811,7 +2811,7 @@ describe('slot-evidence и перенос записи (инцидент 2026-09
     expect(out.falseSuccess).toBe(false);
   });
 
-  test('reschedule_booking wrong_service — hint, не writeErrored (не считается провалом записи)', async () => {
+  test('reschedule_booking wrong_service — исходный tool-call путь не ломается (смок-тест)', async () => {
     const deps = mk({ handlers: {
       reschedule_booking: jest.fn(async () => ({ invalid_args: true, wrong_service: true, error: 'слот под другую услугу' })),
     } });
@@ -2820,6 +2820,37 @@ describe('slot-evidence и перенос записи (инцидент 2026-09
       .mockResolvedValueOnce(textResp('Секунду, уточню ещё раз.'));
     await orchestrator.runDialog(1, 'k', { deps, nowMs: NOW });
     expect(deps.provider.createMessage).toHaveBeenCalledTimes(2);
+  });
+
+  // isWriteHint (orchestrator.js) должен знать про wrong_service: без него
+  // isError && WRITE_TOOLS.has('reschedule_booking') && !isWriteHint(result)
+  // ставит writeErrored=true, а checkUnbackedUnavailability(text, {writeErrored})
+  // именно этим флагом ОБХОДИТСЯ (reply-guard.js) — словесное «занято»/«всё
+  // расписано» без единого слот-вызова за ход проезжало бы к пациенту
+  // непроверенным. За ход не было ни одного get_available_slots и в журнале
+  // (loadRecent) пусто, поэтому единственная причина не поймать «занято» —
+  // именно writeErrored, выставленный wrong_service.
+  //
+  // ГОТЧА: боевой reschedule-booking.js всегда кладёт wrong_service ВМЕСТЕ с
+  // invalid_args:true (см. isHintResult там же) — а invalid_args САМ ПО СЕБЕ
+  // уже входит в isWriteHint и до этого фикса, поэтому результат с ОБОИМИ
+  // полями не отличает старую и новую версию функции (проверено: с таким
+  // результатом тест зеленел и на отменённом фиксе). Тест намеренно даёт
+  // reschedule_booking результат с ОДНИМ wrong_service, без invalid_args, —
+  // это изолирует именно новый терм `|| res.wrong_service` в OR-цепочке.
+  test('wrong_service НЕ выставляет writeErrored: «занято» без слот-вызова всё равно ловится unbacked_unavailability', async () => {
+    const deps = mk({ handlers: {
+      reschedule_booking: jest.fn(async () => ({ wrong_service: true, error: 'слот под другую услугу' })),
+    } });
+    deps.provider.createMessage
+      .mockResolvedValueOnce(toolResp('reschedule_booking', { record_id: 5, datetime: '2026-09-25T16:30:00+03:00' }))
+      .mockResolvedValueOnce(textResp('На этот день, к сожалению, всё расписано.'))
+      .mockResolvedValueOnce(textResp('Уточню варианты и вернусь с точным временем.'));
+    const out = await orchestrator.runDialog(1, 'k', { deps, nowMs: NOW });
+    // writeErrored остаётся false → checkUnbackedUnavailability НЕ обходится →
+    // жёсткое нарушение → корректирующий довызов (3-й createMessage).
+    expect(deps.provider.createMessage).toHaveBeenCalledTimes(3);
+    expect(out.replies[0]).not.toMatch(/расписано/);
   });
 });
 
