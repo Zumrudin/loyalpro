@@ -2898,6 +2898,44 @@ describe('reply-guard: «занято» без слот-вызова и повт
   });
 });
 
+// ── Лишний вопрос «на какую процедуру» при одной записи (2026-09-19, 79096664042) ──
+describe('reply-guard: лишний вопрос про процедуру при одной активной записи', () => {
+  const NOW = Date.parse('2026-09-19T19:01:00+03:00');
+  const REC = {
+    record_id: 1981003965, datetime: '2026-09-20T17:40:00+03:00',
+    services: ['Миотокс 1ед'], staff_name: 'Гаджиева Пери',
+  };
+
+  test('«перенесите на пятницу» + вопрос про процедуру → корректирующий довызов', async () => {
+    const deps = makeDeps({
+      listBookings: { run: jest.fn(async () => ({ bookings: [REC] })) },
+      history: { loadTranscript: jest.fn(async () => ({
+        messages: [{ role: 'user', content: 'Перенесите, пожалуйста, на пятницу' }], watermark: 100 })) },
+    });
+    deps.provider.createMessage
+      .mockResolvedValueOnce(textResp('Здравствуйте! Уточните, пожалуйста, на какую процедуру вас записать в пятницу?'))
+      .mockResolvedValueOnce(textResp('Здравствуйте! На пятницу вам удобнее в первой или во второй половине дня?'));
+    const out = await orchestrator.runDialog(1, 'k', { deps, ctx: { phone: '79096664042' }, nowMs: NOW });
+    expect(deps.provider.createMessage).toHaveBeenCalledTimes(2);
+    const fix = deps.provider.createMessage.mock.calls[1][0].messages.at(-1).content;
+    expect(fix).toMatch(/на какую процедуру/i);
+    expect(fix).toMatch(/1981003965/);
+    expect(out.replies[0]).toMatch(/половине дня/);
+  });
+
+  test('несколько записей — вопрос «какую именно» не трогаем', async () => {
+    const deps = makeDeps({
+      listBookings: { run: jest.fn(async () => ({ bookings: [REC, { ...REC, record_id: 2 }] })) },
+      history: { loadTranscript: jest.fn(async () => ({
+        messages: [{ role: 'user', content: 'Перенесите, пожалуйста, на пятницу' }], watermark: 100 })) },
+    });
+    deps.provider.createMessage
+      .mockResolvedValueOnce(textResp('У вас несколько записей — уточните, какую именно перенести?'));
+    await orchestrator.runDialog(1, 'k', { deps, ctx: { phone: '79096664042' }, nowMs: NOW });
+    expect(deps.provider.createMessage).toHaveBeenCalledTimes(1);
+  });
+});
+
 // ── Живой прогон 2026-09-19: исправленная реплика повторно не проверялась ────
 // Довызов без инструментов убирал выдуманное время и СОЧИНЯЛ новое («суббота
 // 26 сентября, 10:00» — у мастера выходной, времени ни в одной выдаче нет).

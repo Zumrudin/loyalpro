@@ -198,6 +198,14 @@ function buildHardFixPrompt(hard) {
       'ничего не перепроверив. Убери эти времена: предложи посмотреть другой день или спроси, какой день ' +
       'и половина дня удобны — новое время в ЭТОМ ответе не называй');
   }
+  const redundant = val('redundant_procedure_question');
+  if (redundant.length) {
+    parts.push('переспрашивает у пациента, на какую процедуру его записать, хотя у него РОВНО ОДНА ' +
+      `активная запись и он сам попросил её перенести: «${redundant[0]}». Услуга, мастер и запись уже ` +
+      'известны — процедуру не спрашивай. Продолжи со следующего шага переноса: если пациент уже назвал ' +
+      'дату — предложи 1–2 времени по мастеру и услуге именно этой записи; если дату ещё не назвал — спроси ' +
+      'только дату переноса');
+  }
   if (val('fabricated_unavailability_reason').length) {
     parts.push('придумывает причину, почему время недоступно (например, что его заняли прямо во время вашего разговора) — системе эта причина не известна и ничем не подтверждена. ' +
       'Извинись нейтрально, без версий о причине, и предложи другое время');
@@ -1322,6 +1330,11 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
         ...offerAttribution.checkOfferAttribution(joined, { evidence: toolCtx.slotEvidence, nowMs, patientTimes }),
         ...replyGuard.checkRejectedRepeat(joined,
           { patientLastText: toolCtx.patientLastText, prevOfferTimes, slotToolCalled }),
+        // Лишний вопрос «на какую процедуру» при единственной активной записи
+        // и явном намерении её ПЕРЕНЕСТИ (инцидент 2026-09-19, 79096664042):
+        // услуга/мастер/record_id уже в блоке «АКТУАЛЬНЫЕ ЗАПИСИ ПАЦИЕНТА».
+        ...replyGuard.checkRedundantProcedureQuestion(joined,
+          { liveBookings, patientLastText: toolCtx.patientLastText }),
         // «Консультация в подарок» один раз за диалог — только измерение.
         ...replyGuard.checkGiftRepeat(joined,
           { priorHasGift: replyGuard.GIFT_RE.test(priorAssistantText) }),
