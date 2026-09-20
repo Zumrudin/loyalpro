@@ -48,41 +48,47 @@ function idOrNull(v) {
 function extractPairs(tool, input, result) {
   const out = [];
   if (!result || typeof result !== 'object' || result.error) return out;
-  const push = (datetime, staff, name) => {
+  const push = (datetime, staff, name, service) => {
     const ms = toMs(datetime);
-    if (Number.isFinite(ms)) out.push({ ms, staff: idOrNull(staff), name: (typeof name === 'string' && name.trim()) || null });
+    if (Number.isFinite(ms)) {
+      out.push({ ms, staff: idOrNull(staff), name: (typeof name === 'string' && name.trim()) || null,
+        service: idOrNull(service) });
+    }
   };
-  const pushSlots = (list, staff, name) => {
-    for (const s of (Array.isArray(list) ? list : [])) if (s) push(s.datetime, staff, name);
+  const pushSlots = (list, staff, name, service) => {
+    for (const s of (Array.isArray(list) ? list : [])) if (s) push(s.datetime, staff, name, service);
   };
   const inputStaff = input && input.staff_yc_id;
+  const inputService = input && input.service_yc_id;
 
   if (tool === 'get_available_slots') {
-    pushSlots(result.slots, inputStaff, result.staff_name);
+    pushSlots(result.slots, inputStaff, result.staff_name, inputService);
     for (const key of ['alternative_staff', 'staff_options']) {
       for (const item of (Array.isArray(result[key]) ? result[key] : [])) {
-        if (item) pushSlots(item.slots, item.staff_yc_id, item.name);
+        // Один вызов — одна услуга: alternative_staff/staff_options ищут ТУ ЖЕ
+        // услугу у других мастеров, service_yc_id общий для всей выдачи.
+        if (item) pushSlots(item.slots, item.staff_yc_id, item.name, inputService);
       }
     }
   } else if (tool === 'get_sequential_slots') {
     for (const v of (Array.isArray(result.variants) ? result.variants : [])) {
       for (const st of (Array.isArray(v && v.starts) ? v.starts : [])) {
         for (const link of (Array.isArray(st && st.chain) ? st.chain : [])) {
-          if (link) push(link.datetime, link.staff_yc_id, link.staff_name);
+          if (link) push(link.datetime, link.staff_yc_id, link.staff_name, link.service_yc_id);
         }
       }
     }
   } else if (tool === 'get_parallel_slots') {
     for (const st of (Array.isArray(result.starts) ? result.starts : [])) {
       for (const g of (Array.isArray(st && st.guests) ? st.guests : [])) {
-        if (g) push(g.datetime, g.staff_yc_id, null);
+        if (g) push(g.datetime, g.staff_yc_id, null, g.service_yc_id);
       }
     }
   } else if (tool === 'create_booking') {
     // Ретрай после отказа YClients по времени кладёт в ответ свежие старты
     // того же мастера (withFreshSlotsOnTimeFailure). Сам отвергнутый datetime
     // из input сюда НЕ попадает.
-    pushSlots(result.available_slots, inputStaff, null);
+    pushSlots(result.available_slots, inputStaff, null, inputService);
   }
   return out;
 }
@@ -93,8 +99,8 @@ function moscowDateKey(ms) { return MSK_DATE.format(new Date(ms)); }
 
 function createSlotEvidence() {
   const byMs = new Map();   // ms → Set<staff|null>
-  const rows = [];          // {ms, staff, name} — для slotsOn (дата + мастер)
-  const seen = new Set();   // дедуп rows по ms|staff|name
+  const rows = [];          // {ms, staff, name, service} — для slotsOn и service-сверки
+  const seen = new Set();   // дедуп rows по ms|staff|name|service
   const api = {
     get size() {
       let n = 0;
@@ -106,7 +112,7 @@ function createSlotEvidence() {
       for (const p of extractPairs(tool, input, result)) {
         if (!byMs.has(p.ms)) byMs.set(p.ms, new Set());
         byMs.get(p.ms).add(p.staff);
-        const k = `${p.ms}|${p.staff}|${p.name}`;
+        const k = `${p.ms}|${p.staff}|${p.name}|${p.service}`;
         if (!seen.has(k)) { seen.add(k); rows.push(p); }
       }
     },
@@ -119,14 +125,26 @@ function createSlotEvidence() {
       return [...new Set(rows.map(r => moscowDateKey(r.ms)))].sort();
     },
     // @param {string} datetime  ISO (или «YYYY-MM-DD HH:MM:SS») из аргументов write
-    // @param {{staffYcId?: number}} opts мастер на стороне write (если известен)
+    // @param {{staffYcId?: number, serviceYcIds?: number[]}} opts
+    //   serviceYcIds — реальные услуги записи (при переносе); непустой список
+    //   требует, чтобы подтверждающая строка evidence либо не знала услуги
+    //   (fail-open — старый источник без service_yc_id), либо несла ОДНУ из
+    //   перечисленных. Инцидент 2026-09-19 (79096664042): слот найден под
+    //   услугу, которую назвал пациент СВОИМИ словами, а не под ту, что
+    //   реально стоит в переносимой записи — совпало по счастливой случайности
+    //   (одинаковая длительность), а могло и не совпасть.
     has(datetime, opts = {}) {
       const ms = toMs(datetime);
       if (!Number.isFinite(ms) || !byMs.has(ms)) return false;
       const want = idOrNull(opts.staffYcId);
-      if (want === null) return true;
       const set = byMs.get(ms);
-      return set.has(want) || set.has(null);
+      if (want !== null && !(set.has(want) || set.has(null))) return false;
+      const wantServices = Array.isArray(opts.serviceYcIds)
+        ? opts.serviceYcIds.map(idOrNull).filter(v => v !== null)
+        : null;
+      if (!wantServices || !wantServices.length) return true;
+      const matches = rows.filter(r => r.ms === ms && (want === null || r.staff === want || r.staff === null));
+      return matches.some(r => r.service === null || wantServices.includes(r.service));
     },
     // Строки tool-events.loadRecent ({tool,input,result,is_error,age_ms}).
     // Выброшенный черновик (delivered=false) засевает: слот был реален в момент
@@ -182,6 +200,16 @@ function needsConfirmationHint(datetime) {
     'reschedule_booking снова после его ответа «да». Сейчас запись НЕ перенесена — не пиши «перенесла».';
 }
 
+// Гейт booking-modify.rescheduleBookingRecord: слот найден по ДРУГОЙ услуге,
+// чем та, что реально стоит в переносимой записи (инцидент 2026-09-19).
+function wrongServiceHint(datetime, recordServiceIds) {
+  return `Слот ${datetime} подтверждён выдачей get_available_slots, но по ДРУГОЙ услуге, чем в переносимой ` +
+    `записи (её реальные услуги: id ${recordServiceIds.join(', ')}). Перенос ВСЕГДА сохраняет исходную услугу ` +
+    'записи — вызови get_available_slots заново со staff_yc_id и РЕАЛЬНЫМ service_yc_id этой записи (не тем, ' +
+    'что пациент назвал своими словами), и повтори reschedule_booking с datetime ДОСЛОВНО из новой выдачи. ' +
+    'Пациенту про эту проверку не пиши.';
+}
+
 // Связь промпта с кодом (Сценарий 3, Шаг 5): правило обязано называть оба
 // hint-ответа по имени — иначе модель прочтёт их как провал и уйдёт в
 // «извинись и escalate». Проверяется в agent-system-prompt.test.js.
@@ -189,5 +217,6 @@ const PROMPT_RULE_MARKERS = ['unverified_slot', 'needs_confirmation'];
 
 module.exports = {
   createSlotEvidence, SLOT_EVIDENCE_TOOLS, extractPairs,
-  timeMentioned, moscowHHMM, moscowDateKey, unverifiedSlotHint, needsConfirmationHint, PROMPT_RULE_MARKERS,
+  timeMentioned, moscowHHMM, moscowDateKey, unverifiedSlotHint, needsConfirmationHint, wrongServiceHint,
+  PROMPT_RULE_MARKERS,
 };

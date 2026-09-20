@@ -54,6 +54,33 @@ describe('createSlotEvidence.add / has', () => {
     expect(ev.has('2026-09-24T12:00:00+03:00', { staffYcId: 222 })).toBe(true);
   });
 
+  test('service_yc_id сверяется, когда обе стороны его знают', () => {
+    const ev = createSlotEvidence();
+    ev.add('get_available_slots', { staff_yc_id: 3356928, service_yc_id: 15394061, date: '2026-09-25' },
+      { slots: [slot('16:30', '2026-09-25')] });
+    expect(ev.has('2026-09-25T16:30:00+03:00', { staffYcId: 3356928, serviceYcIds: [15394061] })).toBe(true);
+    expect(ev.has('2026-09-25T16:30:00+03:00', { staffYcId: 3356928, serviceYcIds: [9536676] })).toBe(false);
+    // Мастер известен, услуга не проверяется (пустой список) — прежнее поведение.
+    expect(ev.has('2026-09-25T16:30:00+03:00', { staffYcId: 3356928 })).toBe(true);
+  });
+
+  test('evidence без service (старые/журнальные записи) — fail-open по услуге', () => {
+    const ev = createSlotEvidence();
+    ev.add('get_available_slots', { staff_yc_id: 3356928, date: '2026-09-25' },
+      { slots: [slot('16:30', '2026-09-25')] });
+    expect(ev.has('2026-09-25T16:30:00+03:00', { staffYcId: 3356928, serviceYcIds: [15394061] })).toBe(true);
+  });
+
+  test('alternative_staff/staff_options наследуют service_yc_id вызова', () => {
+    const ev = createSlotEvidence();
+    ev.add('get_available_slots', { staff_yc_id: 1, service_yc_id: 15394061, date: '2026-09-22' }, {
+      slots: [],
+      alternative_staff: [{ name: 'Юлия', staff_yc_id: 111, slots: [slot('10:00', '2026-09-22')] }],
+    });
+    expect(ev.has('2026-09-22T10:00:00+03:00', { staffYcId: 111, serviceYcIds: [15394061] })).toBe(true);
+    expect(ev.has('2026-09-22T10:00:00+03:00', { staffYcId: 111, serviceYcIds: [9536676] })).toBe(false);
+  });
+
   test('get_sequential_slots: каждое звено цепочки со своим мастером', () => {
     const ev = createSlotEvidence();
     ev.add('get_sequential_slots', { date: '2026-09-23' }, {
