@@ -119,3 +119,14 @@ test('booking-modify вернул wrongService → hint invalid_args, не пр�
   expect(res.wrong_service).toBe(true);
   expect(tool.isHintResult(res)).toBe(true);
 });
+
+test('slotEvidence из ctx пробрасывается в rescheduleBookingRecord (иначе гейт A2 неактивен)', async () => {
+  const ev = evidenceWith(['17:00']);
+  await tool.run(1, { record_id: 5, datetime: DT }, {
+    clientPhone: '79651442032', nowMs: NOW, slotEvidence: ev,
+    recentDialogText: 'на 17:00',
+  });
+  expect(bookingModify.rescheduleBookingRecord).toHaveBeenCalledWith(
+    1, expect.objectContaining({ slotEvidence: ev })
+  );
+});
