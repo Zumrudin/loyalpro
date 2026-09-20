@@ -444,6 +444,11 @@ describe('hardViolations', () => {
       .toEqual([{ type: 'alien_time_attribution', value: 'Гаджиева Пери' }]);
   });
 
+  test('redundant_procedure_question — жёсткое', () => {
+    expect(g.hardViolations([{ type: 'redundant_procedure_question', value: 'запись' }]))
+      .toEqual([{ type: 'redundant_procedure_question', value: 'запись' }]);
+  });
+
   // Стилистика по-прежнему только лог: переписывание стоит денег и рискует
   // сломать по сути верный ответ.
   test('offer_bypass и free_day_time остаются мягкими', () => {
@@ -617,5 +622,67 @@ describe('checkRejectedRepeat', () => {
 
   test('жёсткий тип', () => {
     expect(hardViolations([{ type: 'rejected_repeat', value: 'x' }])).toHaveLength(1);
+  });
+});
+
+// ── Лишний вопрос «на какую процедуру» при одной активной записи ──────────
+// Инцидент 2026-09-19 (79096664042): пациентка ответила на напоминание о визите
+// «Перенесите, пожалуйста, на пятницу» — у неё РОВНО одна будущая запись, её
+// услуга/мастер/record_id уже в блоке «АКТУАЛЬНЫЕ ЗАПИСИ ПАЦИЕНТА». Мила всё
+// равно спросила «на какую процедуру вас записать», хотя Сценарий 3 Шаг 2
+// прямо запрещает переспрашивать при одной записи.
+describe('checkRedundantProcedureQuestion', () => {
+  const { checkRedundantProcedureQuestion } = g;
+  const ONE_BOOKING = ['20.09 (вс) 17:40 — Миотокс 1ед, мастер Гаджиева Пери [record_id 1981003965]'];
+
+  test('одна запись + «перенесите» от пациента + вопрос про процедуру → нарушение', () => {
+    const v = checkRedundantProcedureQuestion(
+      'Уточните, пожалуйста, на какую процедуру вас записать в пятницу?',
+      { liveBookings: ONE_BOOKING, patientLastText: 'Перенесите, пожалуйста, на пятницу' });
+    expect(v).toEqual([{ type: 'redundant_procedure_question', value: ONE_BOOKING[0] }]);
+  });
+
+  test('вариант «на какую услугу»', () => {
+    const v = checkRedundantProcedureQuestion(
+      'Подскажите, на какую услугу вас записать?',
+      { liveBookings: ONE_BOOKING, patientLastText: 'перенести бы на среду' });
+    expect(v).toHaveLength(1);
+  });
+
+  test('несколько записей → не ловим (там легально уточнять, какую именно)', () => {
+    const v = checkRedundantProcedureQuestion(
+      'На какую процедуру вас записать?',
+      { liveBookings: [...ONE_BOOKING, 'ещё одна запись'], patientLastText: 'Перенесите на пятницу' });
+    expect(v).toEqual([]);
+  });
+
+  test('записей нет вовсе → не ловим', () => {
+    const v = checkRedundantProcedureQuestion(
+      'На какую процедуру вас записать?',
+      { liveBookings: [], patientLastText: 'Перенесите на пятницу' });
+    expect(v).toEqual([]);
+  });
+
+  test('пациент не просил перенос → не ловим (обычный новый вопрос про процедуру законен)', () => {
+    const v = checkRedundantProcedureQuestion(
+      'На какую процедуру вас записать?',
+      { liveBookings: ONE_BOOKING, patientLastText: 'Здравствуйте, хочу записаться' });
+    expect(v).toEqual([]);
+  });
+
+  test('модель спрашивает дату, а не процедуру → не ловим (Шаг 3 законен)', () => {
+    const v = checkRedundantProcedureQuestion(
+      'На какую дату хотите перенести запись?',
+      { liveBookings: ONE_BOOKING, patientLastText: 'Перенесите, пожалуйста, на пятницу' });
+    expect(v).toEqual([]);
+  });
+
+  test('склонения «перенос»/«перенести»/«перенесите» — все ловятся', () => {
+    for (const phrase of ['перенос', 'перенесите', 'перенести', 'переносить', 'перенесла']) {
+      const v = checkRedundantProcedureQuestion(
+        'На какую процедуру вас записать?',
+        { liveBookings: ONE_BOOKING, patientLastText: phrase });
+      expect(v).toHaveLength(1);
+    }
   });
 });

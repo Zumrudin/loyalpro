@@ -436,6 +436,27 @@ function checkRejectedRepeat(text, opts = {}) {
   return repeated.length ? [{ type: 'rejected_repeat', value: repeated.join(', ') }] : [];
 }
 
+// ── Лишний вопрос «на какую процедуру» при ОДНОЙ активной записи ──────────
+// Инцидент 2026-09-19 (79096664042): пациентка ответила на напоминание о визите
+// «Перенесите, пожалуйста, на пятницу» — у неё РОВНО одна будущая запись, услуга,
+// мастер и record_id уже лежат в блоке «АКТУАЛЬНЫЕ ЗАПИСИ ПАЦИЕНТА» промпта, и
+// Сценарий 3 Шаг 2 прямо требует «если запись одна — не переспрашивай». Модель
+// спросила «на какую процедуру вас записать» — вопрос из ветки НОВОЙ записи, не
+// имеющий отношения к переносу существующей. Признак узкий и однозначный: ОДНА
+// живая запись (несколько — там уточнение «какую именно» легально и НЕ ловится)
+// + пациент сам сказал «перенес…»/«перенос…» + реплика буквально спрашивает про
+// процедуру/услугу — ложных срабатываний не ждём.
+const RESCHEDULE_INTENT_RE = /(?<![\p{L}])перен[ео]с[а-яё]*(?![\p{L}])/iu;
+const ASK_PROCEDURE_RE = /(?<![\p{L}])на\s+как[а-яё]*\s+(?:процедур|услуг)[а-яё]*/iu;
+
+function checkRedundantProcedureQuestion(text, opts = {}) {
+  const bookings = opts.liveBookings;
+  if (!Array.isArray(bookings) || bookings.length !== 1) return [];
+  if (!RESCHEDULE_INTENT_RE.test(String(opts.patientLastText || ''))) return [];
+  if (!ASK_PROCEDURE_RE.test(String(text || ''))) return [];
+  return [{ type: 'redundant_procedure_question', value: bookings[0] }];
+}
+
 // Жёсткие нарушения — оркестратор просит модель переписать ответ; стилистика
 // (эмодзи, приветствие, offer_bypass, free_day_time, gift_repeat) — только лог.
 //
@@ -461,6 +482,10 @@ const HARD_TYPES = new Set([
   'unbacked_unavailability', 'rejected_repeat',
   // Время не из выдачи на ЭТУ дату у ЭТОГО мастера (offer-attribution.js).
   'unverified_offer_date',
+  // Лишний вопрос «на какую процедуру» при одной активной записи и явном
+  // намерении её перенести (инцидент 2026-09-19, 79096664042) — тратит время
+  // пациента и уже известно, что открывает путь к сервис-рассинхрону.
+  'redundant_procedure_question',
 ]);
 function hardViolations(violations) {
   return (violations || []).filter(v => HARD_TYPES.has(v.type));
@@ -490,4 +515,5 @@ module.exports = {
   checkFalseUnavailability, UNAVAILABLE_RE,
   checkUnbackedUnavailability, BOOKED_UP_RE, checkRejectedRepeat, isRefusal, REFUSAL_RE,
   fabricationViolations, FABRICATION_TYPES, SAFE_FALLBACK_TEXT,
+  checkRedundantProcedureQuestion, RESCHEDULE_INTENT_RE, ASK_PROCEDURE_RE,
 };
