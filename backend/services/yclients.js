@@ -112,6 +112,37 @@ async function ycGetClientCards(salon, yclClientsId) {
   }
 }
 
+// Тот же запрос, что ycGetClientCards, но БРОСАЕТ при сбое. ycGetClientCards
+// глотает исключения и возвращает [] — потребителю, который по пустому списку
+// делает вывод «карты у клиента нет» (напоминание Милы о себе: приглашение
+// зарегистрироваться), это подложило бы приглашение держателю карты в момент
+// сетевого сбоя. Существующие потребители не переведены: им «[] при сбое»
+// подходит (баланс просто не называется).
+async function ycGetClientCardsStrict(salon, yclClientsId) {
+  const data = await ycGet(salon, `/loyalty/client_cards/${yclClientsId}`);
+  return Array.isArray(data) ? data : [];
+}
+
+// Живой поиск клиента по телефону (POST /clients/search — тот же вызов, что
+// в services/loyalty.js, только с quick_search-фильтром). Возвращает id или
+// null («в YClients такого клиента нет»); при сбое БРОСАЕТ. Нужен там, где
+// нашей БД верить нельзя: новый пациент появляется в clients только после
+// 3-часового синка. Совпадение сверяется по ХВОСТУ номера — quick_search
+// ищет и по имени/почте, и первая строка выдачи не обязана быть нашим номером.
+async function ycSearchClientIdByPhone(salon, phone) {
+  const digits = String(phone || '').replace(/\D/g, '');
+  if (digits.length < 10) return null;
+  const rows = await ycPost(salon, `/company/${salon.yclients_company_id}/clients/search`, {
+    page: 1, count: 20, fields: ['id', 'phone'],
+    filters: [{ type: 'quick_search', state: { value: digits } }],
+  });
+  const hit = (Array.isArray(rows) ? rows : []).find((r) => {
+    const p = String((r && r.phone) || '').replace(/\D/g, '');
+    return p && p.endsWith(digits.slice(-10));
+  });
+  return hit && hit.id != null ? Number(hit.id) : null;
+}
+
 // Абонементы клиента по номеру телефона (формат «79XXXXXXXXX», как в вебхуке).
 // ВАЖНО: параметр называется именно phone — client_phone/client_id дают 400.
 // Остаток посещений: is_united_balance → united_balance_services_count
@@ -387,7 +418,7 @@ function clearServiceCatalogCache(salonId) {
 
 module.exports = {
   ycHeaders, ycGet, ycPost, ycAuth,
-  ycGetCardTypes, ycGetClientCards, ycGetClientAbonements, ycWebLogin, ycGetCardTransactions,
+  ycGetCardTypes, ycGetClientCards, ycGetClientCardsStrict, ycSearchClientIdByPhone, ycGetClientAbonements, ycWebLogin, ycGetCardTransactions,
   parseCardTransactionsHtml, ycAccrueCard, ycListFinanceTransactions, ycSumServicePayments,
   ycWebSessions,
   getTreeCache, setTreeCache, clearTreeCache,
