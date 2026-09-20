@@ -15,6 +15,7 @@
 
 const { ycGetClientCards, ycAccrueCard } = require('../yclients');
 const { pickTier } = require('./tiers');
+const { pickSalonCard } = require('../card-balance');
 const { createLogger } = require('../../logger');
 
 const defaultDeps = {
@@ -46,21 +47,11 @@ async function applyBonus(salon, ycClientId, rawTiers, ruleTitle, deps = default
   catch (e) { d.log.warn(`карты клиента ${ycClientId} недоступны (${e.message}) — без бонусов`); return { ...NO_BONUS_RESULT }; }
   if (!Array.isArray(cards) || !cards.length) return { ...NO_BONUS_RESULT };
 
-  // Карта — СТРОГО типа, настроенного в салоне (ровно как services/loyalty.js
-  // и routes/clients.js): у клиента могут быть карты других программ (например
-  // samosale), и их баланс — не бонусный, называть его и тем более начислять
-  // на него деньги нельзя. Тип из YClients иногда приходит строкой — сравнение
-  // и по значению, и через String().
-  const matching = cards.filter(c => c && c.type
-    && (c.type.id === salon.yclients_card_type_id || String(c.type.id) === String(salon.yclients_card_type_id)));
-  if (!matching.length) return { ...NO_BONUS_RESULT };
-
-  // Карт нужного типа может быть несколько — тай-брейк внутри них по балансу:
-  // именно её клиент и потратит, и именно её баланс честно называть.
-  const card = matching
-    .map(c => ({ id: c && c.id, balance: Number(c && c.balance) || 0 }))
-    .filter(c => c.id != null)
-    .sort((a, b) => b.balance - a.balance)[0];
+  // Карта — СТРОГО типа, настроенного в салоне; выбор вынесен в общий
+  // services/card-balance.pickSalonCard (второй потребитель — бонусный довод в
+  // напоминании Милы о себе). Разъехавшиеся копии означали бы, что одна часть
+  // системы считает клиента держателем карты, а другая — нет.
+  const card = pickSalonCard(cards, salon.yclients_card_type_id);
   if (!card) return { ...NO_BONUS_RESULT };
 
   const tier = pickTier(card.balance, rawTiers);
