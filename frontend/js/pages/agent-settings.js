@@ -20,6 +20,9 @@ async function openAgentSettings() {
     document.getElementById('agent-followup-delay2').value = s.followupDelay2Min ?? 60;
     document.getElementById('agent-followup-latest').value = s.followupLatestTime || '';
     document.getElementById('agent-followup-text').value = s.followupFinalText || '';
+    document.getElementById('agent-followup-bonus-text').value = s.followupBonusText || '';
+    document.getElementById('agent-followup-welcome-text').value = s.followupWelcomeText || '';
+    document.getElementById('agent-followup-bonus-min').value = s.followupBonusMinBalance ?? 100;
     agentToggleSchedule();
     document.querySelectorAll('input[name="agent-mode"]').forEach(r => {
       r.onchange = _agentToggleAllowSection;
@@ -110,6 +113,15 @@ async function saveAgentSettings() {
   const followupDelay2Min = rawDelay2 === '' ? '' : Number(rawDelay2);
   const followupLatestTime = document.getElementById('agent-followup-latest').value;
   const followupFinalText = document.getElementById('agent-followup-text').value;
+  const followupBonusText = document.getElementById('agent-followup-bonus-text').value;
+  const followupWelcomeText = document.getElementById('agent-followup-welcome-text').value;
+  // Пустое поле уходит пустой строкой = «оставить текущее» (pickMinBalance на сервере).
+  const rawMin = document.getElementById('agent-followup-bonus-min').value.trim();
+  const followupBonusMinBalance = rawMin === '' ? '' : Number(rawMin);
+  if (followupBonusMinBalance !== '' && (!Number.isInteger(followupBonusMinBalance) || followupBonusMinBalance < 0 || followupBonusMinBalance > 100000)) {
+    notify('«Минимальный баланс»: введите целое число от 0 до 100000', 'err');
+    return;
+  }
   // Целое и в диапазоне 0..1440 (тот же потолок, что FOLLOWUP_DELAY_MAX на сервере) —
   // дробное или вне диапазона ловим на клиенте, а не отдаём сырую ошибку сервера.
   for (const [label, v] of [['Первое напоминание', followupDelay1Min], ['Финальное сообщение', followupDelay2Min]]) {
@@ -137,6 +149,9 @@ async function saveAgentSettings() {
       followupDelay2Min,
       followupLatestTime,
       followupFinalText,
+      followupBonusText,
+      followupWelcomeText,
+      followupBonusMinBalance,
     });
     notify('Настройки агента сохранены');
     closeAgentSettings();

@@ -1663,6 +1663,19 @@
               <label class="fl">Текст финального сообщения</label>
               <textarea id="agent-followup-text" rows="3" placeholder="Например: Если у вас остались вопросы — просто напишите, буду рада помочь 🙂 (пусто — используется стандартный текст)"></textarea>
             </div>
+            <div class="fg">
+              <label class="fl">Довод про бонусы держателю карты (в первом напоминании)</label>
+              <textarea id="agent-followup-bonus-text" rows="2" placeholder="Например: Кстати, на вашей бонусной карте {balance} бонусов — ими можно оплатить часть визита 🤍 (пусто — не упоминать)"></textarea>
+              <div class="fl" style="opacity:.7;margin-top:4px;font-weight:400">{balance} — баланс карты, {first_name} — имя. Дописывается к напоминанию, только если Мила предлагала время или называла цену, а бонусы в переписке ещё не звучали.</div>
+            </div>
+            <div class="fg">
+              <label class="fl">Приглашение в программу лояльности (пациенту без карты)</label>
+              <textarea id="agent-followup-welcome-text" rows="2" placeholder="Например: Кстати, при регистрации в нашей программе лояльности дарим 500 приветственных баллов — регистрация в Telegram-боте или по QR на сайте. (пусто — не упоминать)"></textarea>
+            </div>
+            <div class="fg" style="max-width:260px">
+              <label class="fl">Минимальный баланс для упоминания</label>
+              <input type="number" id="agent-followup-bonus-min" min="0" max="100000" placeholder="100">
+            </div>
             <div class="fl" style="opacity:.7">0 в первом поле — Мила не напоминает вовсе. Напоминания уходят только внутри окна расписания агента.</div>
           </div>
           <div class="stg-section active" id="agent-allow-section">
@@ -2455,7 +2468,7 @@ function fireConfetti() {
 <script src="js/pages/chat-wait-status.js?v=2026-08-12c"></script>
 <script src="js/pages/chat.js?v=2026-08-19-loadingfix"></script>
 <script src="js/pages/chat-composer.js?v=2026-08-10-mobile"></script>
-<script src="js/pages/agent-settings.js?v=2026-08-12b"></script>
+<script src="js/pages/agent-settings.js?v=2026-09-20"></script>
 <script src="js/pages/patient-portfolio.js?v=2026-06-01e"></script>
 <script src="js/pages/staff-dashboard.js?v=2026-06-11d"></script>
 <script src="js/pages/users.js"></script>
