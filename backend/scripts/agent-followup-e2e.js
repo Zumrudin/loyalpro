@@ -5,8 +5,17 @@
 // строка перешла.
 //
 //   node scripts/agent-followup-e2e.js [--phone 79200255591] [--salon 1]
-//                                      [--stage 1] [--send]
+//                                      [--stage 1] [--send] [--bonus]
 //                                      [--allow-worker-running]
+//
+// --bonus — живая проверка бонусного довода (спека
+// docs/superpowers/specs/2026-09-20-agent-followup-bonus-argument-design.md):
+// на время прогона выставляет ОБА бонусных шаблона салона (и восстанавливает
+// их в finally). Транскрипт скрипта содержит цену в реплике Милы, поэтому
+// класс ситуации — price; исход зависит от карты номера в YClients: держатель
+// карты типа салона → фраза с балансом (bonus_kind='balance'), без карты →
+// приглашение в программу ('welcome'). Без --bonus шаблоны не трогаются, и
+// bonus_kind в итоге строки обязан быть null.
 //
 // По умолчанию НИЧЕГО НЕ ОТПРАВЛЯЕТ: sendMessage, rememberPending и
 // persistWhatsapp застаблены — перехваченный текст печатается в консоль, а не
@@ -82,6 +91,7 @@ const PHONE = val('--phone', '79200255591');
 const SALON_ID = Number(val('--salon', '1'));
 const STAGE = Number(val('--stage', '0')) >= 1 ? 1 : 0;
 const REAL_SEND = flag('--send');
+const BONUS = flag('--bonus');
 const ALLOW_WORKER_RUNNING = flag('--allow-worker-running');
 
 const PM2_PROCESS_NAME = 'loyalpro';
@@ -163,9 +173,11 @@ async function cleanup() {
       await db.query(
         `UPDATE agent_settings
             SET enabled=$2, mode=$3, followup_delay1_min=$4, followup_delay2_min=$5,
+                followup_bonus_text=$6, followup_welcome_text=$7,
                 updated_at=now()
           WHERE salon_id=$1`,
-        [SALON_ID, b.enabled, b.mode, b.followup_delay1_min, b.followup_delay2_min]);
+        [SALON_ID, b.enabled, b.mode, b.followup_delay1_min, b.followup_delay2_min,
+         b.followup_bonus_text, b.followup_welcome_text]);
     }
     console.log('прибрано (строка очереди, тестовые сообщения, настройки салона восстановлены)');
   } catch (e) {
@@ -191,7 +203,8 @@ async function main() {
 
   // ── 1. Настройки салона: читаем и запоминаем ДО изменения ──────────────
   const before = await db.oneOrNone(
-    `SELECT enabled, mode, followup_delay1_min, followup_delay2_min
+    `SELECT enabled, mode, followup_delay1_min, followup_delay2_min,
+            followup_bonus_text, followup_welcome_text
        FROM agent_settings WHERE salon_id=$1`, [SALON_ID]);
   state.settingsBefore = before || null;
   console.log('настройки салона ДО прогона:', before || '(строки agent_settings нет вовсе)');
@@ -203,6 +216,14 @@ async function main() {
        SET enabled=TRUE, mode='all', followup_delay1_min=$2, followup_delay2_min=$3, updated_at=now()`,
     [SALON_ID, DEFAULT_DELAY1_MIN, DEFAULT_DELAY2_MIN]);
   console.log(`настройки салона временно: enabled=true, mode=all, followup_delay1_min=${DEFAULT_DELAY1_MIN}, followup_delay2_min=${DEFAULT_DELAY2_MIN}`);
+  if (BONUS) {
+    await db.query(
+      `UPDATE agent_settings SET followup_bonus_text=$2, followup_welcome_text=$3, updated_at=now() WHERE salon_id=$1`,
+      [SALON_ID,
+       'Кстати, на вашей бонусной карте {balance} бонусов — ими можно оплатить часть визита 🤍',
+       'Кстати, при регистрации в нашей программе лояльности дарим 500 приветственных баллов.']);
+    console.log('настройки салона временно: бонусные шаблоны заданы (--bonus)');
+  }
 
   try {
     // ── 2. Пауза «отвечает оператор» блокирует followup-worker шаг 5 ────
@@ -284,7 +305,8 @@ async function main() {
 
     // ── 6. Итог ───────────────────────────────────────────────────────────
     const after = await db.oneOrNone(
-      `SELECT stage, status, close_reason, rendered_text, error, nudge1_at, final_at, updated_at
+      `SELECT stage, status, close_reason, rendered_text, error, nudge1_at, final_at, updated_at,
+              bonus_kind, bonus_balance
          FROM agent_followups WHERE id=$1`, [row.id]);
     console.log('итог строки:', after);
     console.log(`перехвачено сообщений (не отправлено): ${captured.length}`);
