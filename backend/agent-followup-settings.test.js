@@ -7,6 +7,7 @@ const { pickFollowup } = require('./services/agent-settings');
 const cur = {
   followupDelay1Min: 15, followupDelay2Min: 60,
   followupFinalText: 'старый текст', followupLatestTime: '03:00',
+  followupBonusText: null, followupWelcomeText: null, followupBonusMinBalance: 100,
 };
 
 describe('pickFollowup', () => {
@@ -67,6 +68,35 @@ describe('pickFollowup', () => {
     for (const bad of [true, [15], { min: 15 }]) {
       expect(() => pickFollowup({ followupDelay1Min: bad }, cur)).toThrow(
         expect.objectContaining({ code: 'BAD_FOLLOWUP' }));
+    }
+  });
+
+  // Бонусный довод: тот же щадящий контракт, что у followupFinalText.
+  test('бонусные шаблоны не переданы → остаются текущими', () => {
+    const c = { ...cur, followupBonusText: 'б', followupWelcomeText: 'в', followupBonusMinBalance: 250 };
+    const out = pickFollowup({}, c);
+    expect(out.followupBonusText).toBe('б');
+    expect(out.followupWelcomeText).toBe('в');
+    expect(out.followupBonusMinBalance).toBe(250);
+  });
+  test('пустая строка в бонусном шаблоне — очистка (ветка выключена)', () => {
+    const c = { ...cur, followupBonusText: 'б', followupWelcomeText: 'в' };
+    expect(pickFollowup({ followupBonusText: '' }, c).followupBonusText).toBe(null);
+    expect(pickFollowup({ followupWelcomeText: '   ' }, c).followupWelcomeText).toBe(null);
+  });
+  test('шаблон режется капом 1200', () => {
+    expect(pickFollowup({ followupBonusText: 'x'.repeat(1300) }, cur).followupBonusText).toHaveLength(1200);
+  });
+  test('порог: число и числовая строка проходят, пустое → текущее, дефолт 100', () => {
+    expect(pickFollowup({ followupBonusMinBalance: 0 }, cur).followupBonusMinBalance).toBe(0);
+    expect(pickFollowup({ followupBonusMinBalance: '300' }, cur).followupBonusMinBalance).toBe(300);
+    expect(pickFollowup({ followupBonusMinBalance: '' }, { ...cur, followupBonusMinBalance: 42 }).followupBonusMinBalance).toBe(42);
+    expect(pickFollowup({}, cur).followupBonusMinBalance).toBe(100);
+  });
+  test('порог: bool/массив/дробь/отрицательное/выше потолка → BAD_FOLLOWUP', () => {
+    for (const bad of [true, [100], 1.5, -1, 100001]) {
+      expect(() => pickFollowup({ followupBonusMinBalance: bad }, cur))
+        .toThrow(expect.objectContaining({ code: 'BAD_FOLLOWUP' }));
     }
   });
 });

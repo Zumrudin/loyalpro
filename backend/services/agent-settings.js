@@ -17,6 +17,9 @@ const DEFAULTS = {
   // должен сам начать писать живым пациентам.
   followupDelay1Min: 0, followupDelay2Min: 60,
   followupFinalText: null, followupLatestTime: null,
+  // Бонусный довод в напоминании: пустой шаблон = ветка выключена (дефолт),
+  // порог — ниже него баланс не упоминаем.
+  followupBonusText: null, followupWelcomeText: null, followupBonusMinBalance: 100,
 };
 
 // Строка БД → camelCase-настройки для API и гейта.
@@ -33,6 +36,10 @@ function rowToSettings(row) {
       ? DEFAULTS.followupDelay2Min : Number(row.followup_delay2_min),
     followupFinalText: row.followup_final_text || null,
     followupLatestTime: row.followup_latest_time || null,
+    followupBonusText: row.followup_bonus_text || null,
+    followupWelcomeText: row.followup_welcome_text || null,
+    followupBonusMinBalance: row.followup_bonus_min_balance == null
+      ? DEFAULTS.followupBonusMinBalance : Number(row.followup_bonus_min_balance),
   };
 }
 
@@ -47,9 +54,26 @@ function pickTime(raw, current) {
 // это готовое сообщение живому пациенту, а не служебная строка.
 const FOLLOWUP_TEXT_MAX = 1200;
 const FOLLOWUP_DELAY_MAX = 1440;
+const FOLLOWUP_MIN_BALANCE_MAX = 100000;
 
 function badFollowup(msg) {
   const e = new Error(msg); e.code = 'BAD_FOLLOWUP'; return e;
+}
+
+// Текст шаблона: undefined/null — «не передано», пустая строка — очистка.
+function pickText(raw, current) {
+  if (raw === undefined || raw === null) return current || null;
+  return String(raw).trim().slice(0, FOLLOWUP_TEXT_MAX) || null;
+}
+
+// Порог баланса: та же строгость, что pickDelay (bool/массив/объект
+// отвергаются — Number(true)===1 иначе проезжал бы как порог).
+function pickMinBalance(raw, current) {
+  if (raw === undefined || raw === null || raw === '') return current;
+  if (typeof raw !== 'number' && typeof raw !== 'string') throw badFollowup('bad bonus min balance');
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < 0 || n > FOLLOWUP_MIN_BALANCE_MAX) throw badFollowup('bad bonus min balance');
+  return n;
 }
 
 function pickDelay(raw, current) {
@@ -80,10 +104,7 @@ function pickFollowup(body = {}, cur = {}) {
   // ни на что не влияет, и запрещать его форме незачем.
   if (delay1 > 0 && !(delay2 > delay1))
     throw badFollowup('followup delay2 must be greater than delay1');
-  const rawText = body.followupFinalText;
-  const finalText = rawText === undefined || rawText === null
-    ? (cur.followupFinalText || null)
-    : (String(rawText).trim().slice(0, FOLLOWUP_TEXT_MAX) || null);
+  const finalText = pickText(body.followupFinalText, cur.followupFinalText);
   const rawTime = body.followupLatestTime;
   let latest;
   if (rawTime === undefined || rawTime === null) latest = cur.followupLatestTime || null;
@@ -95,6 +116,10 @@ function pickFollowup(body = {}, cur = {}) {
   return {
     followupDelay1Min: delay1, followupDelay2Min: delay2,
     followupFinalText: finalText, followupLatestTime: latest,
+    followupBonusText: pickText(body.followupBonusText, cur.followupBonusText),
+    followupWelcomeText: pickText(body.followupWelcomeText, cur.followupWelcomeText),
+    followupBonusMinBalance: pickMinBalance(body.followupBonusMinBalance,
+      cur.followupBonusMinBalance ?? DEFAULTS.followupBonusMinBalance),
   };
 }
 
@@ -102,7 +127,8 @@ async function getSettings(salonId) {
   if (!salonId) return { ...DEFAULTS };
   const row = await db.oneOrNone(
     `SELECT enabled, mode, schedule_enabled, schedule_start, schedule_end, price_list_url,
-            followup_delay1_min, followup_delay2_min, followup_final_text, followup_latest_time
+            followup_delay1_min, followup_delay2_min, followup_final_text, followup_latest_time,
+            followup_bonus_text, followup_welcome_text, followup_bonus_min_balance
        FROM agent_settings WHERE salon_id=$1`, [salonId]
   );
   return row ? rowToSettings(row) : { ...DEFAULTS };
@@ -129,17 +155,22 @@ async function updateSettings(salonId, body) {
   const row = await db.one(
     `INSERT INTO agent_settings
        (salon_id, enabled, mode, schedule_enabled, schedule_start, schedule_end, price_list_url,
-        followup_delay1_min, followup_delay2_min, followup_final_text, followup_latest_time, updated_at)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,NOW())
+        followup_delay1_min, followup_delay2_min, followup_final_text, followup_latest_time,
+        followup_bonus_text, followup_welcome_text, followup_bonus_min_balance, updated_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,NOW())
      ON CONFLICT (salon_id) DO UPDATE SET
        enabled=$2, mode=$3, schedule_enabled=$4,
        schedule_start=$5, schedule_end=$6, price_list_url=$7,
        followup_delay1_min=$8, followup_delay2_min=$9,
-       followup_final_text=$10, followup_latest_time=$11, updated_at=NOW()
+       followup_final_text=$10, followup_latest_time=$11,
+       followup_bonus_text=$12, followup_welcome_text=$13, followup_bonus_min_balance=$14,
+       updated_at=NOW()
      RETURNING enabled, mode, schedule_enabled, schedule_start, schedule_end, price_list_url,
-               followup_delay1_min, followup_delay2_min, followup_final_text, followup_latest_time`,
+               followup_delay1_min, followup_delay2_min, followup_final_text, followup_latest_time,
+               followup_bonus_text, followup_welcome_text, followup_bonus_min_balance`,
     [salonId, !!enabled, m, schedOn, start, end, priceUrl,
-     fu.followupDelay1Min, fu.followupDelay2Min, fu.followupFinalText, fu.followupLatestTime]
+     fu.followupDelay1Min, fu.followupDelay2Min, fu.followupFinalText, fu.followupLatestTime,
+     fu.followupBonusText, fu.followupWelcomeText, fu.followupBonusMinBalance]
   );
   return rowToSettings(row);
 }
