@@ -685,4 +685,28 @@ describe('checkRedundantProcedureQuestion', () => {
       expect(v).toHaveLength(1);
     }
   });
+
+  // «переносица» (переносье носа) — обычный термин в клинике филлеров/ринопластики,
+  // делит с «перенос» те же первые 7 букв. Открытый суффикс [а-яё]* ловил его как
+  // намерение перенести запись; закрытый список форм — нет.
+  test('«переносица»/«переносной» в сообщении пациента — НЕ намерение переноса, не ловим', () => {
+    for (const phrase of [
+      'У меня заметная переносица, можно её скорректировать филлером?',
+      'Хочу поправить переносицу',
+      'А переносной аппарат у вас есть?',
+    ]) {
+      const v = checkRedundantProcedureQuestion(
+        'На какую процедуру вас записать?',
+        { liveBookings: ONE_BOOKING, patientLastText: phrase });
+      expect(v).toEqual([]);
+    }
+  });
+
+  test('value в нарушении обрезается до 120 символов, как в остальных проверках файла', () => {
+    const longBooking = 'x'.repeat(200);
+    const v = checkRedundantProcedureQuestion(
+      'На какую процедуру вас записать?',
+      { liveBookings: [longBooking], patientLastText: 'Перенесите на пятницу' });
+    expect(v).toEqual([{ type: 'redundant_procedure_question', value: 'x'.repeat(120) }]);
+  });
 });
