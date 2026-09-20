@@ -54,13 +54,24 @@ describe('createSlotEvidence.add / has', () => {
     expect(ev.has('2026-09-24T12:00:00+03:00', { staffYcId: 222 })).toBe(true);
   });
 
-  test('service_yc_id сверяется, когда обе стороны его знают', () => {
+  test('service_yc_id совпадает — подтверждено', () => {
     const ev = createSlotEvidence();
     ev.add('get_available_slots', { staff_yc_id: 3356928, service_yc_id: 15394061, date: '2026-09-25' },
       { slots: [slot('16:30', '2026-09-25')] });
     expect(ev.has('2026-09-25T16:30:00+03:00', { staffYcId: 3356928, serviceYcIds: [15394061] })).toBe(true);
+  });
+
+  test('service_yc_id не совпадает — не подтверждено', () => {
+    const ev = createSlotEvidence();
+    ev.add('get_available_slots', { staff_yc_id: 3356928, service_yc_id: 15394061, date: '2026-09-25' },
+      { slots: [slot('16:30', '2026-09-25')] });
     expect(ev.has('2026-09-25T16:30:00+03:00', { staffYcId: 3356928, serviceYcIds: [9536676] })).toBe(false);
-    // Мастер известен, услуга не проверяется (пустой список) — прежнее поведение.
+  });
+
+  test('услуга известна на стороне evidence, но НЕ запрошена на стороне write — прежнее поведение', () => {
+    const ev = createSlotEvidence();
+    ev.add('get_available_slots', { staff_yc_id: 3356928, service_yc_id: 15394061, date: '2026-09-25' },
+      { slots: [slot('16:30', '2026-09-25')] });
     expect(ev.has('2026-09-25T16:30:00+03:00', { staffYcId: 3356928 })).toBe(true);
   });
 
@@ -97,6 +108,24 @@ describe('createSlotEvidence.add / has', () => {
     expect(ev.has('2026-09-23T14:20:00+03:00', { staffYcId: 9 })).toBe(false);
   });
 
+  test('get_sequential_slots: service_yc_id звена сверяется отдельно от соседнего звена', () => {
+    const ev = createSlotEvidence();
+    ev.add('get_sequential_slots', { date: '2026-09-23' }, {
+      variants: [{ type: 'same_staff', starts: [{
+        time: '13:30', option_id: 'o1',
+        chain: [
+          { datetime: '2026-09-23T13:30:00+03:00', staff_yc_id: 3356928, service_yc_id: 1 },
+          { datetime: '2026-09-23T14:20:00+03:00', staff_yc_id: 3356928, service_yc_id: 2 },
+        ],
+      }] }],
+    });
+    expect(ev.has('2026-09-23T13:30:00+03:00', { staffYcId: 3356928, serviceYcIds: [1] })).toBe(true);
+    // У этого старта service_yc_id=1, а не 2 (услуга ВТОРОГО звена цепочки).
+    expect(ev.has('2026-09-23T13:30:00+03:00', { staffYcId: 3356928, serviceYcIds: [2] })).toBe(false);
+    expect(ev.has('2026-09-23T14:20:00+03:00', { staffYcId: 3356928, serviceYcIds: [2] })).toBe(true);
+    expect(ev.has('2026-09-23T14:20:00+03:00', { staffYcId: 3356928, serviceYcIds: [1] })).toBe(false);
+  });
+
   test('get_parallel_slots: старты гостей', () => {
     const ev = createSlotEvidence();
     ev.add('get_parallel_slots', { date: '2026-09-23' }, {
@@ -109,6 +138,20 @@ describe('createSlotEvidence.add / has', () => {
     expect(ev.has('2026-09-23T12:00:00+03:00', { staffYcId: 3 })).toBe(false);
   });
 
+  test('get_parallel_slots: service_yc_id гостя сверяется отдельно от соседнего гостя', () => {
+    const ev = createSlotEvidence();
+    ev.add('get_parallel_slots', { date: '2026-09-23' }, {
+      starts: [{ time: '12:00', guests: [
+        { staff_yc_id: 1, datetime: '2026-09-23T12:00:00+03:00', service_yc_id: 10 },
+        { staff_yc_id: 2, datetime: '2026-09-23T12:00:00+03:00', service_yc_id: 20 },
+      ] }],
+    });
+    expect(ev.has('2026-09-23T12:00:00+03:00', { staffYcId: 1, serviceYcIds: [10] })).toBe(true);
+    expect(ev.has('2026-09-23T12:00:00+03:00', { staffYcId: 1, serviceYcIds: [20] })).toBe(false);
+    expect(ev.has('2026-09-23T12:00:00+03:00', { staffYcId: 2, serviceYcIds: [20] })).toBe(true);
+    expect(ev.has('2026-09-23T12:00:00+03:00', { staffYcId: 2, serviceYcIds: [10] })).toBe(false);
+  });
+
   test('create_booking с available_slots после отказа — свежие старты того же мастера', () => {
     const ev = createSlotEvidence();
     ev.add('create_booking', { staff_yc_id: 7, datetime: '2026-09-23T12:00:00+03:00' },
@@ -116,6 +159,14 @@ describe('createSlotEvidence.add / has', () => {
     expect(ev.has('2026-09-23T15:00:00+03:00', { staffYcId: 7 })).toBe(true);
     // Сам отвергнутый старт evidence не становится.
     expect(ev.has('2026-09-23T12:00:00+03:00', { staffYcId: 7 })).toBe(false);
+  });
+
+  test('create_booking: available_slots наследуют service_yc_id вызова', () => {
+    const ev = createSlotEvidence();
+    ev.add('create_booking', { staff_yc_id: 7, service_yc_id: 15394061, datetime: '2026-09-23T12:00:00+03:00' },
+      { created: false, slot_unavailable: true, available_slots: [slot('15:00')] });
+    expect(ev.has('2026-09-23T15:00:00+03:00', { staffYcId: 7, serviceYcIds: [15394061] })).toBe(true);
+    expect(ev.has('2026-09-23T15:00:00+03:00', { staffYcId: 7, serviceYcIds: [9536676] })).toBe(false);
   });
 
   test('прочие инструменты и ошибочные результаты игнорируются', () => {
