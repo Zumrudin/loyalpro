@@ -1592,6 +1592,17 @@ async function runMigrations(client) {
       ADD COLUMN IF NOT EXISTS followup_latest_time VARCHAR(5)
   `).catch(() => {});
 
+  // Бонусный довод в напоминании Милы о себе (спека
+  // docs/superpowers/specs/2026-09-20-agent-followup-bonus-argument-design.md).
+  // Пустой шаблон = ветка выключена; дефолт NULL — выкат сам не начинает
+  // говорить пациентам про бонусы. Порог — ниже него баланс не упоминаем.
+  await client.query(`
+    ALTER TABLE agent_settings
+      ADD COLUMN IF NOT EXISTS followup_bonus_text TEXT,
+      ADD COLUMN IF NOT EXISTS followup_welcome_text TEXT,
+      ADD COLUMN IF NOT EXISTS followup_bonus_min_balance INTEGER NOT NULL DEFAULT 100
+  `).catch(() => {});
+
   // agent_stop_topics — темы, которыми клиника не занимается ВООБЩЕ (даже не
   // консультирует). Отличается от agent_service_rules: там прячутся конкретные
   // yc_service_id, а здесь тема, которой в каталоге может не быть вовсе
@@ -1684,6 +1695,16 @@ async function runMigrations(client) {
   // таблицей. Так же устроены reminder_queue и care_touch_sends.
   await client.query(`
     ALTER TABLE agent_followups ADD COLUMN IF NOT EXISTS error TEXT
+  `).catch(() => {});
+  // anchor_turn_id — turn_id хода-якоря: по нему классификатор ситуации читает
+  // журнал agent_tool_events. bonus_kind/bonus_balance — журнал УШЕДШЕЙ
+  // бонусной фразы (пишутся в момент захвата строки); по ним же правило
+  // «не чаще раза в 7 дней на номер».
+  await client.query(`
+    ALTER TABLE agent_followups
+      ADD COLUMN IF NOT EXISTS anchor_turn_id TEXT,
+      ADD COLUMN IF NOT EXISTS bonus_kind TEXT,
+      ADD COLUMN IF NOT EXISTS bonus_balance INTEGER
   `).catch(() => {});
 
   await client.query(`
