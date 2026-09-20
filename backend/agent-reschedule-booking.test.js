@@ -106,3 +106,16 @@ test('too_soon и провал YClients: too_soon — hint, отказ YClients 
   expect(fail.error).toMatch(/недоступно/);
   expect(tool.isHintResult(fail)).toBe(false);
 });
+
+test('booking-modify вернул wrongService → hint invalid_args, не провал записи', async () => {
+  bookingModify.rescheduleBookingRecord.mockResolvedValueOnce({
+    ok: false, wrongService: true, error: 'Слот найден под другую услугу…',
+  });
+  const res = await tool.run(1, { record_id: 5, datetime: DT }, {
+    clientPhone: '79651442032', nowMs: NOW, slotEvidence: evidenceWith(['17:00']),
+    recentDialogText: 'на 17:00',
+  });
+  expect(res.invalid_args).toBe(true);
+  expect(res.wrong_service).toBe(true);
+  expect(tool.isHintResult(res)).toBe(true);
+});

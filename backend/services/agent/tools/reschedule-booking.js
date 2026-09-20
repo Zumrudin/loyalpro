@@ -69,8 +69,12 @@ async function run(salonId, input, ctx = {}) {
     datetime,
     staffYcId: input.staff_yc_id,
     seanceLength: input.seance_length,
+    slotEvidence: ctx.slotEvidence,
   });
-  if (!res.ok) return { error: res.error, foreign: res.foreign };
+  if (!res.ok) {
+    if (res.wrongService) return { invalid_args: true, wrong_service: true, error: res.error };
+    return { error: res.error, foreign: res.foreign };
+  }
   return { rescheduled: true, record_id: res.record_id, datetime: res.datetime };
 }
 
@@ -78,7 +82,7 @@ async function run(salonId, input, ctx = {}) {
 // (оркестратор не ставит по ним bookingErrored). Настоящий провал — error без
 // этих флагов (отказ YClients, запись не найдена, чужая запись).
 function isHintResult(res) {
-  return !!(res && (res.invalid_args || res.too_soon || res.unverified_slot || res.needs_confirmation));
+  return !!(res && (res.invalid_args || res.too_soon || res.unverified_slot || res.needs_confirmation || res.wrong_service));
 }
 
 module.exports = { schema, run, isHintResult };
