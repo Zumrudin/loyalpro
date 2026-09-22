@@ -382,3 +382,56 @@ describe('get_sequential_slots — половина дня (day_part)', () => {
     expect(nextVariant.starts.map(st => st.time).every(t => t >= '17:00')).toBe(true);
   });
 });
+
+// Инцидент 2026-09-22 (79265824264): у Пери 06.10 занято только 11:30–13:30, всё
+// остальное до 20:00 свободно, пациентка просила 18:00 на цепочку из трёх услуг.
+// Инструмент отдавал ПЕРВЫЕ 4 хронологических старта (13:30…15:00) — 18:00
+// срезал кап, и модель ответила «на 18:00 не помещаются» (ложь). А из четырёх
+// стартов модель взяла 14:30/15:00, оставив дыру 13:30–15:00: плотность на
+// стыковку не считалась вовсе.
+describe('get_sequential_slots — время пациента и плотность (2026-09-22)', () => {
+  // Смена 11:00–20:00, занято 11:30–13:30 (is_free:false — как отдаёт сетка).
+  const busyGrid = (fromMin, toMin) => grid(fromMin, toMin).map(p => ({ ...p, is_free: false }));
+  const PERI_DAY = [...grid(11 * 60, 11 * 60 + 30), ...busyGrid(11 * 60 + 30, 13 * 60 + 30), ...grid(13 * 60 + 30, 20 * 60)];
+  // Цепочка Био(30)+Чистка(90) = 120 мин → старты 13:30…18:00 (10 штук).
+  const PATIENT_18 = 'Запишите пожалуйста на 18.00. Ботокс глаза и меж бровка , увеличение губ.';
+
+  beforeEach(() => {
+    ycGetStaffSeances.mockImplementation(async (s, staffId) => (String(staffId) === '11' ? PERI_DAY : []));
+  });
+
+  test('названное пациентом 18:00 помещается → стоит ПЕРВЫМ в starts, patient_time_free + хинт', async () => {
+    const r = await tool.run(1, { ...baseInput, preferred_staff_yc_id: 11 }, { ...CTX, patientLastText: PATIENT_18 });
+    const v = r.variants[0];
+    expect(v.type).toBe('same_staff');
+    expect(v.starts[0].time).toBe('18:00');
+    expect(v.starts[0].chain[1].datetime).toBe(`${DATE}T18:30:00+03:00`);
+    expect(v.starts.length).toBeLessThanOrEqual(4);          // кап остался, но применяется ПОСЛЕ продвижения
+    expect(r.patient_time_free).toEqual(['18:00']);
+    expect(r.hint).toContain('18:00');
+    expect(r.hint).toMatch(/подтверждай/i);
+    expect(r.hint).toMatch(/book_chain/);                    // базовый хинт про оформление не потерян
+  });
+
+  test('без времени от пациента первым идёт плотное 13:30 (вплотную после блока 11:30–13:30), offer_times', async () => {
+    const r = await tool.run(1, { ...baseInput, preferred_staff_yc_id: 11 }, CTX);
+    const v = r.variants[0];
+    expect(v.offer_times).toEqual(['13:30']);
+    expect(v.starts[0].time).toBe('13:30');
+    expect(v.starts.length).toBe(4);
+    expect(r.patient_time_free).toBeUndefined();
+  });
+
+  test('названное 19:00 в цепочку не помещается → patient_time_free нет, 19:00 в starts нет', async () => {
+    const r = await tool.run(1, { ...baseInput, preferred_staff_yc_id: 11 }, { ...CTX, patientLastText: 'Давайте на 19.00' });
+    expect(r.patient_time_free).toBeUndefined();
+    expect(r.variants[0].starts.map(st => st.time)).not.toContain('19:00');
+  });
+
+  test('день без единой записи (сетка вся свободна) → старты хронологические, offer_times нет', async () => {
+    ycGetStaffSeances.mockImplementation(async (s, staffId) => (String(staffId) === '11' ? grid(13 * 60 + 30, 21 * 60) : []));
+    const r = await tool.run(1, { ...baseInput, preferred_staff_yc_id: 11 }, CTX);
+    expect(r.variants[0].starts.map(st => st.time)).toEqual(['13:30', '14:00', '14:30', '15:00']);
+    expect(r.variants[0].offer_times).toBeUndefined();
+  });
+});

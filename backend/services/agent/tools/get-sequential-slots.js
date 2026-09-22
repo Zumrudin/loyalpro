@@ -195,16 +195,67 @@ async function run(salonId, input, ctx = {}) {
 
   const now = moscowNow(nowMs);
   const seancesCache = new Map();   // `${staffYcId}|${day}` → ranges кресла
+  const seancesRaw = new Map();     // `${staffYcId}|${day}` → сырая сетка (занятость для плотности)
   let scheduleFailures = 0;   // сбои получения графика: не путать «не работает» и «не смогли узнать»
   const getStaffRanges = async (staffYcId, day) => {
     const k = `${staffYcId}|${day}`;
     if (!seancesCache.has(k)) {
       let s = [];
       try { s = await ycGetStaffSeances(salon, staffYcId, day); } catch (_) { s = []; scheduleFailures++; }
+      seancesRaw.set(k, Array.isArray(s) ? s : []);
       seancesCache.set(k, seancesToRanges(s));
     }
     return seancesCache.get(k);
   };
+  // Занятость мастера из УЖЕ загруженной сетки (ни одного лишнего запроса, как в
+  // get_available_slots). busyKnown — сетка получена и непуста: пустая означает
+  // «не работает / API промолчал», и выдавать её за свободный день нельзя.
+  const busyOf = (staffYcId, day) => {
+    const raw = seancesRaw.get(`${staffYcId}|${day}`) || [];
+    return { busy: density.seancesToBusy(raw), busyKnown: raw.length > 0 };
+  };
+
+  // Порядок стартов варианта (инцидент 2026-09-22, 79265824264): раньше уходили
+  // ПЕРВЫЕ 4 хронологических — у Пери свободно было 13:30…18:00, пациентка
+  // просила 18:00, кап срезал его, и модель ответила «не помещается» (ложь), а из
+  // оставшихся взяла 14:30/15:00, оставив дыру после блока 11:30–13:30.
+  // Теперь: (1) время, названное пациентом в ПОСЛЕДНЕМ сообщении, если цепочка
+  // в него помещается, — первым (patient-time.js, тот же приём, что в
+  // get_available_slots); (2) затем плотные старты по занятости мастера
+  // (slot-density.chooseOffer — один на каждый край занятости, свободный день →
+  // ничего, деградация без сетки → ничего); (3) остаток хронологически до
+  // MAX_STARTS. Плотность считается ТОЛЬКО у одномастерных вариантов: у mixed
+  // мастеров несколько, а занятость — вещь одного кресла.
+  // Стоимость слота slot-density читает из seance_length самого слота — сюда
+  // кладём ПОЛНЫЙ span цепочки (с перерывами), а не длину первого звена.
+  const arrangeStarts = (v, assignment, day, patientText) => {
+    const all = v.starts;
+    if (!all.length) return [];
+    const spanSec = (st) => {
+      const last = st.chain[st.chain.length - 1];
+      const startMs = Date.parse(st.chain[0].datetime);
+      const endMs = Date.parse(last.datetime) + (Number(last.seance_length) || 0) * 1000;
+      return (Number.isFinite(startMs) && Number.isFinite(endMs) && endMs > startMs)
+        ? Math.round((endMs - startMs) / 1000) : 0;
+    };
+    const items = all.map(st => ({ time: st.time, seance_length: spanSec(st) }));
+    const oneStaff = new Set(assignment.staff.map(m => String(m.yc_id))).size === 1;
+    let offer = [];
+    if (oneStaff) {
+      const { busy, busyKnown } = busyOf(assignment.staff[0].yc_id, day);
+      offer = density.chooseOffer(items, busy, { busyKnown, dayPart }).offer;
+    }
+    const promoted = patientTime.promotePatientTime({ slots: items, offer, patientText });
+    const order = [];
+    for (const it of promoted.offer) if (!order.includes(it.time)) order.push(it.time);
+    for (const st of all) { if (order.length >= MAX_STARTS) break; if (!order.includes(st.time)) order.push(st.time); }
+    const byTime = new Map(all.map(st => [st.time, st]));
+    v.starts = order.slice(0, MAX_STARTS).map(t => byTime.get(t));
+    const offerTimes = promoted.offer.map(it => it.time);
+    if (offerTimes.length) v.offer_times = offerTimes;
+    return promoted.matched;   // времена пациента, в которые цепочка поместилась
+  };
+  const patientNamed = [];   // времена пациента, в которые цепочка помещается (по всем вариантам)
 
   // entries для sequential.js: окна мастера услуги минус занятость её аппаратов.
   const entriesFor = async (assignment, day, eqCtx) => {
@@ -342,7 +393,14 @@ async function run(salonId, input, ctx = {}) {
         // отдельного механизма (инцидент 2026-09-19).
         if (dayParts.length) chains = chains.filter(c => inDayPart(c.start));
         if (!chains.length) continue;
-        variants.push(buildVariant(a, day, entries, chains.slice(0, MAX_STARTS)));
+        // Кап применяется ПОСЛЕ продвижения времени пациента и плотных стартов —
+        // иначе названное пациентом 18:00 срезалось бы первыми четырьмя (инцидент 22.09).
+        const v = buildVariant(a, day, entries, chains);
+        // Время пациента сверяем ТОЛЬКО на запрошенную дату: 18:00 на другой
+        // день с хинтом «помещается, подтверждай» читалось бы как 18:00 на ту.
+        const matched = arrangeStarts(v, a, day, day === date ? (ctx && ctx.patientLastText) : null);
+        for (const t of matched) if (!patientNamed.includes(t)) patientNamed.push(t);
+        variants.push(v);
         datesWithHits.add(day);
         if (a.type === 'same_staff') foundSameStaff = true;
       }
@@ -459,10 +517,20 @@ async function run(salonId, input, ctx = {}) {
     }
   } else {
     out.hint = 'Предлагай варианты в порядке списка (приоритет — сохранить всё у текущего мастера) и ' +
-      'называй мастера каждой процедуры. Время предлагай ТОЛЬКО из starts. Пациент выбрал вариант — оформляй ' +
+      'называй мастера каждой процедуры. Время предлагай ТОЛЬКО из starts; первым называй время из offer_times ' +
+      'варианта (оно подобрано плотно к записям мастера — почему, пациенту не объясняй), остальные старты — ' +
+      'когда пациент просит другое время. Пациент выбрал вариант — оформляй ' +
       'ОДНИМ вызовом book_chain с option_id этого старта, НЕ через create_booking вручную. Вариант with_gap подавай честно, ' +
       'сразу называя перерыв gap_minutes. Если preferred_staff_cannot непуст — скажи, что текущий мастер ' +
       'эти процедуры не выполняет, и назови исполнителей из performers_by_service.';
+    // Названное пациентом время, в которое цепочка помещается, — ПЕРВЫМ в хинте
+    // (инцидент 22.09: модель прочла срезанный капом список как «не помещается»).
+    if (patientNamed.length) {
+      out.patient_time_free = patientNamed.slice();
+      out.hint = `Пациент сам назвал время ${patientNamed.join(', ')} — цепочка в него ПОМЕЩАЕТСЯ ` +
+        '(этот старт есть в starts и стоит первым). Подтверждай именно его: НЕ называй его занятым, ' +
+        'не говори «не помещается» и не предлагай вместо него другое время. ' + out.hint;
+    }
     if (scheduleFailures) {
       out.hint += ' ВНИМАНИЕ: часть графиков получить не удалось (schedule_degraded) — список вариантов ' +
         'может быть неполным, не утверждай, что других вариантов нет.';

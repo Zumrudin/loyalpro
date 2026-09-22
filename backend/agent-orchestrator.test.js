@@ -2580,6 +2580,44 @@ describe('reply-guard: ложное «занято» при свободном �
     expect(deps.provider.createMessage).toHaveBeenCalledTimes(3);
   });
 
+  // Инцидент 2026-09-22 (79265824264): стыковка трёх услуг у Пери, 18:00 —
+  // законный старт цепочки на запрошенную дату (инструмент ставит его первым в
+  // starts и присылает patient_time_free), а модель написала «на 18:00 все три
+  // процедуры подряд уже не помещаются». freeTimes раньше собирался ТОЛЬКО из
+  // slots get_available_slots — стыковка для guard'а не существовала.
+  test('стыковка: «на 18:00 не помещаются» при 18:00 в starts на запрошенную дату → довызов', async () => {
+    const seqResult = {
+      requested_date: '2026-10-06',
+      variants: [{
+        type: 'same_staff', date: '2026-10-06', staff: [{ yc_id: 1910274, name: 'Гаджиева Пери' }],
+        starts: ['18:00', '13:30', '14:00', '14:30'].map((t, i) => ({
+          time: t, option_id: `o${i + 1}`, gap_minutes: 0, booking_mode: 'single_record',
+          chain: [{ datetime: `2026-10-06T${t}:00+03:00`, staff_yc_id: 1910274, staff_name: 'Гаджиева Пери', service_yc_id: 1, seance_length: 900 }],
+        })),
+        offer_times: ['13:30'],
+      }],
+      patient_time_free: ['18:00'],
+      hint: 'Пациент сам назвал время 18:00 — цепочка помещается. Подтверждай.',
+    };
+    const SEQ_CALL = { date: '2026-10-06', preferred_staff_yc_id: 1910274, services: [{ service_yc_id: 1 }, { service_yc_id: 2 }] };
+    const deps = makeDeps({
+      history: transcript('Запишите пожалуйста на 18.00. Ботокс глаза и меж бровка , увеличение губ.'),
+      handlers: { get_sequential_slots: jest.fn(async () => seqResult) },
+    });
+    deps.registry.schemas.push({ name: 'get_sequential_slots' });
+    deps.provider.createMessage
+      .mockResolvedValueOnce(toolResp('get_sequential_slots', SEQ_CALL))
+      .mockResolvedValueOnce(textResp(
+        'Ирина, к сожалению, на 18:00 все три процедуры подряд уже не помещаются в расписание. Могу предложить 14:30 или 13:30.'))
+      .mockResolvedValueOnce(textResp('Ирина, на 18:00 всё помещается — записываю вас к Пери Исамудиновне на 6 октября в 18:00?'));
+    const out = await orchestrator.runDialog(1, 'k', { deps, today: '2026-09-22', now: '08:34' });
+    expect(out.replies).toEqual(['Ирина, на 18:00 всё помещается — записываю вас к Пери Исамудиновне на 6 октября в 18:00?']);
+    expect(deps.provider.createMessage).toHaveBeenCalledTimes(3);
+    const fixMsg = deps.provider.createMessage.mock.calls[2][0].messages.slice(-1)[0].content;
+    expect(fixMsg).toContain('18:00');
+    expect(deps.provider.createMessage.mock.calls[2][0].tools).toEqual([]);
+  });
+
   // Два мастера за ход: у одного 21:30 есть, у другого нет — «у Татьяны 21:30
   // занято» законно. Время считается свободным, только если свободно во ВСЕХ
   // одномастерных выдачах хода.

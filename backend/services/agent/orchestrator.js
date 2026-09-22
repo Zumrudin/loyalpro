@@ -1125,6 +1125,23 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
             && result && Array.isArray(result.slots)) {
           singleStaffSlotSets.push(new Set(result.slots.map(sl => String(sl && sl.time))));
         }
+        // Стыковка (инцидент 2026-09-22, 79265824264): старты одномастерных
+        // вариантов на ЗАПРОШЕННУЮ дату — те же «свободные окна этого мастера».
+        // Названное пациентом время инструмент ставит в starts первым, если
+        // цепочка в него помещается, поэтому кап на 4 старта тут не мешает:
+        // «на 18:00 не помещается» при 18:00 в starts — ложь по построению.
+        // Мастер назван (preferred_staff_yc_id) → только его same_staff; иначе —
+        // каждый одномастерный вариант (пересечение по every, как у
+        // get_available_slots: «у Пери занято, а у Астемира есть» законно).
+        if (tc.name === 'get_sequential_slots' && !isError && tc.input && tc.input.date
+            && result && Array.isArray(result.variants)) {
+          const preferred = tc.input.preferred_staff_yc_id;
+          for (const v of result.variants) {
+            if (!v || v.date !== tc.input.date || !Array.isArray(v.starts)) continue;
+            if (preferred ? v.type !== 'same_staff' : (v.type !== 'same_staff' && v.type !== 'other_staff')) continue;
+            singleStaffSlotSets.push(new Set(v.starts.map(st => String(st && st.time))));
+          }
+        }
         // Источник для address-guard — СЫРОЙ текст статьи, а не JSON результата:
         // JSON-эскейп «\n» приклеивает букву n к первому слову следующей строки
         // (токен «nгенерала» вместо «генерала» — легальный адрес вырезался бы), а
