@@ -62,6 +62,20 @@ function utcNoonToKey(ms) {
  * @returns {string|null}
  */
 function resolveDate(text, opts = {}) {
+  const r = resolveDateInfo(text, opts);
+  return r ? r.key : null;
+}
+
+/**
+ * То же, что resolveDate, плюс ВИД ссылки: 'explicit' («6 октября», «06.10»),
+ * 'relative' (сегодня/завтра), 'weekday' (только день недели). Вид нужен
+ * checkOfferAttribution: «6 октября, во вторник» режется по запятой на два
+ * фрагмента, и день недели во втором НЕ должен перезаписывать явную дату из
+ * первого (живой прогон 2026-09-22: ближайший вторник оказался СЕГОДНЯ, и честное
+ * «6 октября … 13:30» гасилось как «22.09 13:30»).
+ * @returns {{key:string, kind:'explicit'|'relative'|'weekday'}|null}
+ */
+function resolveDateInfo(text, opts = {}) {
   const s = String(text || '');
   const nowMs = opts.nowMs;
   if (!Number.isFinite(nowMs) || !s.trim()) return null;
@@ -82,26 +96,29 @@ function resolveDate(text, opts = {}) {
     const stem = dm[2].toLowerCase().slice(0, 2) === 'ма' ? 'ма' : dm[2].toLowerCase().slice(0, 3);
     const idx = MONTHS.indexOf(stem);
     const r = idx >= 0 ? withYear(idx + 1, Number(dm[1])) : null;
-    if (r) return r;
+    if (r) return { key: r, kind: 'explicit' };
   }
   const ddmm = s.match(DD_MM_RE);
   if (ddmm) {
     const r = withYear(Number(ddmm[2]), Number(ddmm[1]));
-    if (r) return r;
+    if (r) return { key: r, kind: 'explicit' };
   }
   const low = s.toLowerCase();
   for (const [word, delta] of RELATIVE) {
-    if (low.includes(word)) return utcNoonToKey(today + delta * DAY_MS);
+    if (low.includes(word)) return { key: utcNoonToKey(today + delta * DAY_MS), kind: 'relative' };
   }
   const todayWd = new Date(today).getUTCDay();
   for (const [wd, re] of WEEKDAYS) {
     if (re.test(s)) {
       const delta = (wd - todayWd + 7) % 7;
-      return utcNoonToKey(today + delta * DAY_MS);
+      return { key: utcNoonToKey(today + delta * DAY_MS), kind: 'weekday', weekday: wd };
     }
   }
   return null;
 }
+
+// День недели ключа YYYY-MM-DD (0 — воскресенье, как getUTCDay у полудня UTC).
+function weekdayOf(key) { return new Date(keyToUtcNoon(key)).getUTCDay(); }
 
 // Клаузы, где время — НЕ предложение свободного окна.
 const BOOKING_STATE_RE = /(?<![\p{L}])(?:вы\s+(?:уже\s+)?записан|ваш[а-яё]*\s+запис|запись\s+(?:на|в)\s)/iu;
@@ -158,7 +175,7 @@ function checkOfferAttribution(text, opts = {}) {
 
   const out = [];
   const seen = new Set();
-  const ctx = { date: null, staff: null };
+  const ctx = { date: null, staff: null, dateKind: null };
   // Два уровня. ПРЕДЛОЖЕНИЕ решает, предложение ли это вообще (занятость,
   // часы работы, существующая запись — пропуск целиком: «Вы записаны на
   // воскресенье, 20 сентября, в 17:30» после запятых потерял бы признак).
@@ -170,8 +187,13 @@ function checkOfferAttribution(text, opts = {}) {
       || BOOKING_STATE_RE.test(sentence) || CLINIC_HOURS_RE.test(sentence);
     const fragments = sentence.split(/(?<=,)|(?=(?<![\p{L}])(?:либо|или)(?![\p{L}]))/u);
     for (const clause of fragments) {
-    const d = resolveDate(clause, { nowMs });
-    if (d) ctx.date = d;
+    const d = resolveDateInfo(clause, { nowMs });
+    // Аппозиция «6 октября, во вторник»: день недели, совпадающий с уже
+    // известной ЯВНОЙ датой, описывает тот же день и контекст не двигает.
+    // Не совпадающий («6 октября … , а в среду») — новая ссылка, как раньше.
+    const apposition = d && d.kind === 'weekday' && ctx.date && ctx.dateKind !== 'weekday'
+      && weekdayOf(ctx.date) === d.weekday;
+    if (d && !apposition) { ctx.date = d.key; ctx.dateKind = d.kind; }
     const who = names.length ? lastMentioned(clause, names) : null;
     if (who) ctx.staff = who;
     if (skip) continue;
@@ -215,4 +237,4 @@ function checkOfferAttribution(text, opts = {}) {
   return out;
 }
 
-module.exports = { checkOfferAttribution, resolveDate };
+module.exports = { checkOfferAttribution, resolveDate, resolveDateInfo };
