@@ -805,10 +805,17 @@ async function processRecordEvent(payload, salon, settings) {
       }
     }
 
+    // Свежепривязанная карта: linkClientCard уже положил в total_spent card.paid_amount,
+    // а он к этому моменту ВКЛЮЧАЕТ текущую оплату (FinOp-вебхуки приходят раньше record
+    // update) — прибавлять paidAmount второй раз значило бы удвоить траты и завысить
+    // уровень кэшбэка на следующем визите.
+    // То же с visits_count: card.visits_count уже считает этот визит.
+    const spentDelta = freshlyLinked ? 0 : paidAmount;
+    const visitsDelta = freshlyLinked ? 0 : 1;
     await db.query(
       `UPDATE clients SET bonus_balance=bonus_balance+$1, total_spent=total_spent+$2,
-       visits_count=visits_count+1, loyalty_level=$3, last_visit_at=$4, updated_at=NOW() WHERE id=$5`,
-      [cashback, paidAmount, level.key, data.date || new Date(), client.id]
+       visits_count=visits_count+$6, loyalty_level=$3, last_visit_at=$4, updated_at=NOW() WHERE id=$5`,
+      [cashback, spentDelta, level.key, data.date || new Date(), client.id, visitsDelta]
     );
 
     await db.query(

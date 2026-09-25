@@ -152,3 +152,31 @@ test('карта уже привязана → в YClients за картами �
   expect(ycGet).not.toHaveBeenCalled();
   expect(ycAccrueCard).toHaveBeenCalledWith(SALON, 152063337, 3275, expect.any(String));
 });
+
+test('свежепривязанная карта: total_spent взят из карты (уже с этой оплатой) и повторно на сумму визита НЕ увеличивается', async () => {
+  // FinOp-вебхуки приходят раньше record update, и card.paid_amount к моменту начисления
+  // уже содержит текущую оплату; linkClientCard кладёт его в total_spent. Прибавлять
+  // paidAmount второй раз — удвоить траты и завысить уровень на следующем визите.
+  ycGetClientCardsStrict.mockResolvedValue([{ ...YC_CARD, paid_amount: 192290 }]);
+  ycGet.mockResolvedValue({ loyalty_transactions: [] });
+
+  await processRecordEvent(makePayload(), SALON, SETTINGS);
+
+  const accrualUpdate = db.query.mock.calls.find(c => c[0].includes('bonus_balance=bonus_balance+'));
+  expect(accrualUpdate).toBeTruthy();
+  // второй параметр — прибавка к total_spent
+  expect(accrualUpdate[1][1]).toBe(0);
+});
+
+test('карта была привязана заранее → total_spent увеличивается на сумму визита как раньше', async () => {
+  db.oneOrNone.mockImplementation((sql) => {
+    if (sql.includes('FROM clients')) return Promise.resolve(CLIENT_LINKED);
+    if (sql.includes('FROM records WHERE')) return Promise.resolve(RECORD_ROW);
+    return Promise.resolve(null);
+  });
+
+  await processRecordEvent(makePayload(), SALON, SETTINGS);
+
+  const accrualUpdate = db.query.mock.calls.find(c => c[0].includes('bonus_balance=bonus_balance+'));
+  expect(accrualUpdate[1][1]).toBe(65500);
+});
