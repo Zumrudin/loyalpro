@@ -7,8 +7,14 @@ const { buildClientFio } = require('../utils/client-name');
 const { createLogger } = require('../logger');
 const logger = createLogger('Sync');
 const { recordRevenueOperation } = require('./revenue');
+const { isRateLimitError } = require('./yclients-retry');
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+// Пауза перед повтором страницы /records на «Превышен лимит запросов». Текст
+// YClients «через 0/1 секунд» врёт — лимит МИНУТНЫЙ: на проде 47 прогонов подряд
+// (26.06–25.09.2026) падали на 11–15-й странице, и ретрай 3 с / 6 с не помог ни разу.
+const RECORDS_LIMIT_WAIT_MS = 60_000;
 
 async function getLoyaltySettings(salonId) {
   const row = await db.oneOrNone('SELECT * FROM loyalty_settings WHERE salon_id=$1', [salonId]);
@@ -176,6 +182,89 @@ async function cancelRecordBonuses(recordId, clientId, salonId) {
   );
 }
 
+// ── Общие куски синка ─────────────────────────────────────────────────────────
+// Вынесены из runSync 25.09.2026, потому что появился второй потребитель — ночная
+// сверка (services/yclients-reconcile.js). Правило одно; копия SQL в двух местах
+// молча разъехалась бы.
+
+// Upsert записи YClients в `records` (без начисления — деньги решает вызывающий).
+// Возвращает { id, status, inserted, prev } (prev — прежняя строка при UPDATE)
+// либо null, если у объекта нет id.
+async function upsertRecordFromYc(salonId, ycr, dbClientId, source) {
+  if (!ycr || ycr.id == null) return null;
+  const status  = getRecordStatus(ycr);
+  const recCost = getRecordCost(ycr);
+  const visitDate = String(ycr.date || '').split(' ')[0] || null;
+  const prev = await db.oneOrNone(
+    'SELECT id,status,bonus_processed,client_id FROM records WHERE salon_id=$1 AND yclients_record_id=$2',
+    [salonId, ycr.id]
+  );
+  if (prev) {
+    await db.query(
+      `UPDATE records SET status=$1, raw_payload=$2, amount=$3,
+       visit_datetime=$4, visit_date=$5,
+       services=$6, staff=$7, client_id=COALESCE($8, client_id), updated_at=NOW() WHERE id=$9`,
+      [status, JSON.stringify(ycr), recCost, ycr.date || null, visitDate,
+       JSON.stringify(ycr.services || []), JSON.stringify(ycr.staff || []),
+       dbClientId || null, prev.id]
+    );
+    return { id: prev.id, status, inserted: false, prev };
+  }
+  const ins = await db.one(
+    `INSERT INTO records
+       (salon_id,yclients_record_id,client_id,yclients_client_id,
+        visit_date,visit_datetime,amount,services,staff,status,source,raw_payload)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING id`,
+    [salonId, ycr.id, dbClientId || null, ycr.client?.id || null,
+     visitDate, ycr.date || null, recCost,
+     JSON.stringify(ycr.services || []), JSON.stringify(ycr.staff || []),
+     status, source || 'sync', JSON.stringify(ycr)]
+  );
+  return { id: ins?.id ?? null, status, inserted: true, prev: null };
+}
+
+// last_visit_at клиентов салона из records. Salons rarely use status_id=4
+// ('completed') — most close visits at status_id=3 ('arrived'); both mean the
+// client actually showed up.
+async function refreshLastVisitAt(salonId) {
+  await db.query(`
+    UPDATE clients c
+    SET last_visit_at = sub.last_visit, updated_at = NOW()
+    FROM (
+      SELECT client_id, MAX(visit_datetime) AS last_visit
+      FROM   records
+      WHERE  salon_id = $1 AND status IN ('completed','arrived') AND client_id IS NOT NULL
+      GROUP  BY client_id
+    ) sub
+    WHERE c.id = sub.client_id AND c.salon_id = $1
+  `, [salonId]);
+}
+
+// Привязка транзакций карты без record_id к записи клиента по дате визита.
+async function linkCardTransactionsToRecords(dbClientId) {
+  await db.query(`
+    UPDATE loyalty_card_transactions lct
+    SET record_id = sub.record_id
+    FROM (
+      SELECT DISTINCT ON (lct2.id)
+             lct2.id AS txn_id,
+             r.id    AS record_id
+      FROM   loyalty_card_transactions lct2
+      JOIN   records r
+        ON   r.client_id  = lct2.client_id
+        AND  r.salon_id   = lct2.salon_id
+        AND  r.visit_date  = lct2.txn_date::date
+      WHERE  lct2.client_id  = $1
+        AND  lct2.record_id  IS NULL
+        AND  lct2.txn_date   IS NOT NULL
+        AND  r.visit_date    IS NOT NULL
+        AND  r.status        IN ('completed','confirmed')
+      ORDER BY lct2.id, r.visit_datetime DESC
+    ) sub
+    WHERE lct.id = sub.txn_id
+  `, [dbClientId]);
+}
+
 async function runSync(salon, syncType, userId) {
   const log = await db.one(
     `INSERT INTO sync_logs (salon_id,sync_type,status,initiated_by)
@@ -202,8 +291,8 @@ async function runSync(salon, syncType, userId) {
           break;
         } catch (e) {
           logger.info(`Records page ${rPage} attempt ${attempt} failed: ${e.message}`);
-          if (attempt < 3) await sleep(3000 * attempt);
-          else throw e;
+          if (attempt >= 3) throw e;
+          await sleep(isRateLimitError(e) ? RECORDS_LIMIT_WAIT_MS : 3000 * attempt);
         }
       }
       if (!chunk?.length) break;
@@ -345,76 +434,24 @@ async function runSync(salon, syncType, userId) {
         let clientRecs = 0, clientBonus = 0;
 
         for (const ycr of clientRecords) {
-          const status = getRecordStatus(ycr);
-          const exRec = await db.oneOrNone(
-            'SELECT id,status,bonus_processed FROM records WHERE salon_id=$1 AND yclients_record_id=$2',
-            [salon.id, ycr.id]
-          );
-
-          if (exRec) {
-            const recCost = getRecordCost(ycr);
-            await db.query(
-              `UPDATE records SET status=$1, raw_payload=$2, amount=$3,
-               visit_datetime=$4, visit_date=$5,
-               services=$6, staff=$7, client_id=$8, updated_at=NOW() WHERE id=$9`,
-              [status, JSON.stringify(ycr), recCost,
-               ycr.date || null,
-               String(ycr.date || '').split(' ')[0] || null,
-               JSON.stringify(ycr.services || []), JSON.stringify(ycr.staff || []),
-               dbClientId, exRec.id]
-            );
-            if (status === 'completed' && !exRec.bonus_processed
-                && dbClientId && settings && recCost > 0) {
-              clientBonus += await processCompletedRecord(exRec.id, dbClientId, ycr, salon.id, settings);
-            }
-            if (status === 'cancelled' && exRec.bonus_processed && dbClientId) {
-              await cancelRecordBonuses(exRec.id, dbClientId, salon.id);
-            }
-          } else {
-            const recCost = getRecordCost(ycr);
-            const ins = await db.one(
-              `INSERT INTO records
-                 (salon_id,yclients_record_id,client_id,yclients_client_id,
-                  visit_date,visit_datetime,amount,services,staff,status,source,raw_payload)
-               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'sync',$11) RETURNING id`,
-              [salon.id, ycr.id, dbClientId || null, ycr.client?.id || null,
-               String(ycr.date || '').split(' ')[0] || null, ycr.date || null,
-               recCost, JSON.stringify(ycr.services || []),
-               JSON.stringify(ycr.staff || []), status, JSON.stringify(ycr)]
-            );
-            if (ins && status === 'completed' && dbClientId && settings && recCost > 0) {
-              clientBonus += await processCompletedRecord(ins.id, dbClientId, ycr, salon.id, settings);
-            }
-            clientRecs++;
+          const recCost = getRecordCost(ycr);
+          const up = await upsertRecordFromYc(salon.id, ycr, dbClientId || null, 'sync');
+          if (!up) continue;
+          const { id: recId, status, inserted, prev } = up;
+          if (inserted) clientRecs++;
+          if (status === 'completed' && (inserted || !prev.bonus_processed)
+              && dbClientId && settings && recCost > 0) {
+            clientBonus += await processCompletedRecord(recId, dbClientId, ycr, salon.id, settings);
+          }
+          if (!inserted && status === 'cancelled' && prev.bonus_processed && dbClientId) {
+            await cancelRecordBonuses(recId, dbClientId, salon.id);
           }
         }
 
         rs += clientRecs;
         ba += clientBonus;
 
-        if (dbClientId) {
-          await db.query(`
-            UPDATE loyalty_card_transactions lct
-            SET record_id = sub.record_id
-            FROM (
-              SELECT DISTINCT ON (lct2.id)
-                     lct2.id AS txn_id,
-                     r.id    AS record_id
-              FROM   loyalty_card_transactions lct2
-              JOIN   records r
-                ON   r.client_id  = lct2.client_id
-                AND  r.salon_id   = lct2.salon_id
-                AND  r.visit_date  = lct2.txn_date::date
-              WHERE  lct2.client_id  = $1
-                AND  lct2.record_id  IS NULL
-                AND  lct2.txn_date   IS NOT NULL
-                AND  r.visit_date    IS NOT NULL
-                AND  r.status        IN ('completed','confirmed')
-              ORDER BY lct2.id, r.visit_datetime DESC
-            ) sub
-            WHERE lct.id = sub.txn_id
-          `, [dbClientId]);
-        }
+        if (dbClientId) await linkCardTransactionsToRecords(dbClientId);
 
         retryCount = 0;
         if (cs % 25 === 0 || clientRecs > 0 || clientBonus > 0) {
@@ -442,51 +479,13 @@ async function runSync(salon, syncType, userId) {
     if (orphanRecords.length > 0) {
       logger.info(`Processing ${orphanRecords.length} orphan records (no client)...`);
       for (const ycr of orphanRecords) {
-        const status = getRecordStatus(ycr);
-        const recCost = getRecordCost(ycr);
-        const exRec = await db.oneOrNone(
-          'SELECT id FROM records WHERE salon_id=$1 AND yclients_record_id=$2',
-          [salon.id, ycr.id]
-        );
-        if (exRec) {
-          await db.query(
-            `UPDATE records SET status=$1, raw_payload=$2, amount=$3,
-             visit_date=$4, visit_datetime=$5,
-             services=$6, staff=$7, updated_at=NOW() WHERE id=$8`,
-            [status, JSON.stringify(ycr), recCost,
-             String(ycr.date || '').split(' ')[0] || null, ycr.date || null,
-             JSON.stringify(ycr.services || []), JSON.stringify(ycr.staff || []), exRec.id]
-          );
-        } else {
-          await db.query(
-            `INSERT INTO records
-               (salon_id,yclients_record_id,client_id,yclients_client_id,
-                visit_date,visit_datetime,amount,services,staff,status,source,raw_payload)
-             VALUES ($1,$2,NULL,$3,$4,$5,$6,$7,$8,$9,'sync',$10)`,
-            [salon.id, ycr.id, ycr.client?.id || null,
-             String(ycr.date || '').split(' ')[0] || null, ycr.date || null,
-             recCost, JSON.stringify(ycr.services || []),
-             JSON.stringify(ycr.staff || []), status, JSON.stringify(ycr)]
-          );
-          rs++;
-        }
+        const up = await upsertRecordFromYc(salon.id, ycr, null, 'sync');
+        if (up?.inserted) rs++;
       }
     }
 
     logger.info('Updating last_visit_at from records...');
-    // Salons rarely use status_id=4 ('completed') — most close visits at status_id=3
-    // ('arrived'). Both indicate the client actually showed up.
-    await db.query(`
-      UPDATE clients c
-      SET last_visit_at = sub.last_visit, updated_at = NOW()
-      FROM (
-        SELECT client_id, MAX(visit_datetime) AS last_visit
-        FROM   records
-        WHERE  salon_id = $1 AND status IN ('completed','arrived') AND client_id IS NOT NULL
-        GROUP  BY client_id
-      ) sub
-      WHERE c.id = sub.client_id AND c.salon_id = $1
-    `, [salon.id]);
+    await refreshLastVisitAt(salon.id);
 
     await db.query(
       `UPDATE sync_logs SET status='success',clients_synced=$1,records_synced=$2,
@@ -1056,7 +1055,8 @@ module.exports = {
   sleep,
   getLoyaltySettings, getLevel, calcBonus, getRecordCost, getRecordStatus,
   processCompletedRecord, cancelRecordBonuses,
-  runSync,
+  runSync, RECORDS_LIMIT_WAIT_MS,
+  upsertRecordFromYc, refreshLastVisitAt, linkCardTransactionsToRecords,
   claimRecordProcessing, popCashbackAmount, getCashbackByRecord, revertCashback,
   linkClientCard, visitPaidWithBonuses,
   processRecordEvent, processFinancesOperation,
