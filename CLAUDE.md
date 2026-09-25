@@ -69,8 +69,17 @@ Managed in `server.js`. The whitelist is set via `ALLOWED_ORIGINS` env var (comm
 
 ### Cron jobs (all TZ: Europe/Moscow)
 - `0 10 * * *` — birthday bonuses
-- `0 */3 * * *` — YClients sync + goods categories sync
-- `0 * * * *` — staff data sync
+- `35 4 * * *` — ночная сверка с YClients (`services/yclients-reconcile.js`, см. ниже)
+- `10 */3 * * *` — goods categories sync (на своей минуте: бёрст на `:00` ронял «Заботу» лимитом)
+- `0 * * * *` — staff data sync + goods sales
+- Полного `runSync` в кроне НЕТ с 25.09.2026 — только вручную (`POST /api/sync`, кнопка «Синхронизировать»).
+
+### Синхронизация с YClients: событийно + ночная сверка (с 25.09.2026)
+Спека `docs/superpowers/specs/2026-09-25-yclients-sync-replacement-design.md`, разбор дефектов — `docs/2026-09-25-cashback-accrual-bugs.md`.
+- Полный `runSync` (`services/loyalty.js`: 730 дней записей + карточка и карта КАЖДОГО из 4 300 клиентов, ≈8 800 запросов, 45 мин) с 26.06 падал на лимите YClients в каждом прогоне (11–15-я страница `/records` через ~13 с; лимит МИНУТНЫЙ, сообщение «через 0 секунд» врёт), а в успешные месяцы поставлял 0–11 записей: записи и клиенты давно идут вебхуками. Он же выедал общую квоту у «Заботы» (лимит ежедневно в 12:00) и Милы. Остался РУЧНЫМ (409, пока идёт прогон; ретрай страницы ждёт `RECORDS_LIMIT_WAIT_MS`=60 с) — для подключения салона и разового догона.
+- `client`-вебхук приходит на КАЖДЫЙ оплаченный визит и правку карточки и несёт `spent/paid/visits/surname/patronymic/birth_date` — `routes/webhook.js` пишет их через ОБЩИЙ `services/client-upsert.js` (`upsertClientFromYc`: `total_spent` ПРИСВАИВАЕТСЯ из YClients, `loyalty_level` по `levels`, `yclients_data` целиком; `bonus_balance` и карту не трогает — `balance` в карточке это депозит/долг).
+- Ночная сверка `reconcileDaily` (`services/yclients-reconcile.js`, тесты `yclients-reconcile.test.js`, живая проверка `scripts/yclients-reconcile-e2e.js`): `/records?changed_after=<−2 дня>` → `upsertRecordFromYc(..., 'reconcile')` → клиенты этих записей (≈55/сутки): `/client/{id}` → `upsertClientFromYc`; карта не привязана → `linkClientCard` (тот же, что в начислении), привязана → баланс из `ycGetClientCards`; затем `refreshLastVisitAt` + `linkCardTransactionsToRecords` (общие функции с хвостом `runSync`) и строка `sync_logs` `sync_type='daily'` (дашборд «Синхр.» работает без правок фронта). КЭШБЭК СВЕРКА НЕ НАЧИСЛЯЕТ — деньги только вебхук-путём; оплаченный состоявшийся визит без строки `finances_log` даёт WARN «вебхук по записи N потерян». Ошибка по одному клиенту — WARN и дальше; 3 подряд `error` у daily — WARN; зависшие `running` закрывает `closeStaleSyncRuns` при старте процесса.
+- ГОТЧА ТИПОВ, пойманная живым прогоном: `bonus_balance` INTEGER, `yclients_card_balance` NUMERIC, баланс карты бывает дробным (784.89). Один параметр на обе колонки → «inconsistent types deduced»; без `::numeric` → «invalid input syntax for type integer». До фикса `linkClientCard` НИКОГДА не привязывал карту с дробным балансом (в начислении это выглядело как «сбой YClients → повтор на следующем событии» по кругу). Правило: `bonus_balance=$N::numeric` везде (numeric→integer при присваивании округляется).
 
 ### Database
 PostgreSQL (Beget cloud, SSL). Uses `pg` pool directly — no ORM. Helper `db` object wraps pool with `.query`, `.one`, `.many`, `.any`, `.oneOrNone`. All schema changes go through `migrations.js` using `IF NOT EXISTS` / `DO NOTHING` patterns — never destructive.
