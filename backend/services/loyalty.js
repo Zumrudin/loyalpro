@@ -417,7 +417,7 @@ async function runSync(salon, syncType, userId) {
               await db.query(
                 `UPDATE clients SET
                    yclients_card_id=$1, yclients_card_number=$2, yclients_card_balance=$3,
-                   bonus_balance=$4, updated_at=NOW()
+                   bonus_balance=$4::numeric, updated_at=NOW()
                  WHERE id=$5`,
                 [card.id, card.number || card.loyalty_card_number || null,
                  cardBalance, cardBalance, dbClientId]
@@ -587,9 +587,14 @@ async function linkClientCard(salon, client, settings) {
   const cardNumber  = card.number || card.loyalty_card_number || null;
   const level = settings?.levels ? getLevel(paidAmount, settings.levels) : null;
 
+  // bonus_balance — INTEGER, баланс карты бывает дробным (784.89): без явного
+  // ::numeric pg выводит тип параметра как integer и падает «invalid input syntax
+  // for type integer» — карта не привязывается НИКОГДА, а в начислении это
+  // «сбой YClients → повтор на следующем событии» по кругу (поймано живым
+  // прогоном ночной сверки 25.09; numeric→integer при присваивании округляется).
   return db.one(
     `UPDATE clients SET yclients_card_id=$1,yclients_card_number=$2,yclients_card_balance=$3,
-     bonus_balance=$4,total_spent=$5,visits_count=$6,loyalty_level=$7,updated_at=NOW()
+     bonus_balance=$4::numeric,total_spent=$5,visits_count=$6,loyalty_level=$7,updated_at=NOW()
      WHERE id=$8 RETURNING *`,
     [card.id, cardNumber, cardBalance, cardBalance, paidAmount, visitsCount,
      level?.key || client.loyalty_level, client.id]

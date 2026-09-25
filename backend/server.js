@@ -4,7 +4,7 @@
 const config  = require('./config');
 const { pool, db } = require('./db');
 const { runMigrations } = require('./migrations');
-const { runSync }           = require('./services/loyalty');
+const { reconcileDaily, closeStaleSyncRuns } = require('./services/yclients-reconcile');
 const { syncGoodsCategories } = require('./services/home-care');
 const { syncGoodsCatalog }    = require('./services/yclients-goods-catalog');
 const { syncStaffData, syncGoodsSales } = require('./services/staff');
@@ -152,24 +152,48 @@ cron.schedule('0 10 * * *', async () => {
   } catch (e) { cronLogger.error(`Birthday cron: ${e.message}`); }
 }, { timezone: 'Europe/Moscow' });
 
-cron.schedule('0 */3 * * *', async () => {
-  cronLogger.info('Auto-sync...');
+// Полный runSync из крона УБРАН 25.09.2026 (спека docs/superpowers/specs/
+// 2026-09-25-yclients-sync-replacement-design.md): 8 800 запросов и 45 минут
+// 8 раз в сутки ради данных, которые и так приходят вебхуками; с 26.06 падал на
+// лимите YClients в каждом прогоне и выедал квоту у «Заботы» и Милы. Остался
+// ручным (POST /api/sync). Его место — ночная сверка `35 4` ниже.
+// Категории товаров — на СВОЕЙ минуте: на `:00` уже стартуют syncStaffData +
+// syncGoodsSales (`0 * * * *`), и общий бёрст ронял «Заботу» лимитом в 12:00.
+cron.schedule('10 */3 * * *', async () => {
   try {
     const salons = await db.many(
       `SELECT * FROM salons WHERE is_active=TRUE AND yclients_company_id IS NOT NULL AND yclients_user_token IS NOT NULL`
     );
     for (const salon of salons) {
-      runSync(salon, 'auto').catch(e => cronLogger.error(`AutoSync salon=${salon.id}: ${e.message}`));
       syncGoodsCategories(salon).catch(e => cronLogger.error(`GoodsCatSync salon=${salon.id}: ${e.message}`));
     }
-  } catch (e) { cronLogger.error(`AutoSync cron: ${e.message}`); }
+  } catch (e) { cronLogger.error(`GoodsCatSync cron: ${e.message}`); }
 });
+
+// Ночная сверка с YClients (services/yclients-reconcile.js): записи за 2 дня по
+// changed_after, карточки/карты активных клиентов, last_visit_at. В 04:35 мск в
+// YClients никто не ходит; `40 4` заняты чистками БД. Салоны — последовательно,
+// а не параллельно: квота YClients общая на инстанс.
+cron.schedule('35 4 * * *', async () => {
+  try {
+    const salons = await db.many(
+      `SELECT * FROM salons WHERE is_active=TRUE AND yclients_company_id IS NOT NULL AND yclients_user_token IS NOT NULL`
+    );
+    for (const salon of salons) {
+      try {
+        const r = await reconcileDaily(salon);
+        cronLogger.info(`reconcile salon=${salon.id}: records=${r.records} clients=${r.clients} errors=${r.clientErrors} lost_webhooks=${r.lost.length}`);
+      } catch (e) { cronLogger.error(`reconcile salon=${salon.id}: ${e.message}`); }
+    }
+  } catch (e) { cronLogger.error(`reconcile cron: ${e.message}`); }
+}, { timezone: 'Europe/Moscow' });
 
 // Каталог товаров синхронизируется в СВОЮ минуту, а не вместе с остальными.
 // На минуте 0 по одному салону разом стартовали runSync + syncGoodsCategories
 // + syncStaffData + syncGoodsSales, и общая квота YClients выедалась до того,
 // как каталог доходил до конца списка категорий: хвост категорий падал с
 // «Превышен лимит запросов» в КАЖДОМ прогоне (инцидент 2026-08-02).
+// (runSync из крона убран 25.09.2026, syncGoodsCategories — на `10 */3`.)
 cron.schedule('25 */3 * * *', async () => {
   try {
     const salons = await db.many(
@@ -265,6 +289,10 @@ pool.connect()
   .then(async client => {
     await runMigrations(client);
     client.release();
+    // Прогон синка/сверки, оборванный рестартом, иначе висит running вечно
+    // (27 таких строк на проде с марта 2026).
+    await closeStaleSyncRuns().then(n => { if (n) logger.warn(`sync_logs: закрыто зависших running=${n}`); })
+      .catch(e => logger.warn(`sync_logs: не удалось закрыть зависшие running: ${e.message}`));
     app.listen(PORT, () => {
       logger.info(`Server running on port ${PORT}`);
       logger.info('Webhook: POST /yclients/webhook.v2/:companyId');

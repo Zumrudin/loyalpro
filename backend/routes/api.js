@@ -515,11 +515,19 @@ router.get('/analytics/retention', auth, async (req, res) => {
 });
 
 // ── Sync API ─────────────────────────────────────────────────
+// Полный runSync — ТОЛЬКО отсюда (из крона убран 25.09.2026): ≈45 минут и
+// 8 800 запросов к YClients, для подключения салона и ручного догона. Второй
+// параллельный прогон удвоил бы нагрузку на общую квоту — 409, пока идёт первый
+// (зависшие running закрывает closeStaleSyncRuns при старте процесса).
 router.post('/sync', auth, async (req, res) => {
   try {
     const salon = await db.one('SELECT * FROM salons WHERE id=$1', [req.user.salonId]);
     if (!salon.yclients_company_id || !salon.yclients_user_token)
       return res.status(400).json({ error: 'YClients не настроен. Укажите токены в Настройках.' });
+    const running = await db.oneOrNone(
+      `SELECT id, started_at FROM sync_logs WHERE salon_id=$1 AND status='running'
+       AND sync_type IN ('manual','auto') AND started_at > NOW() - INTERVAL '2 hours' LIMIT 1`, [salon.id]);
+    if (running) return res.status(409).json({ error: 'Синхронизация уже идёт, дождитесь её завершения' });
     res.json({ ok: true, message: 'Синхронизация запущена' });
     runSync(salon, 'manual', req.user.userId).catch(e => logger.error(`Sync trigger: ${e.message}`));
   } catch (e) { res.status(500).json({ error: e.message }); }
@@ -642,7 +650,7 @@ router.post('/bulk-import-card-history', auth, async (req, res) => {
             const lsData = await getLoyaltySettings(salonId);
             const level = lsData?.levels ? getLevel(paidAmount, lsData.levels) : null;
             await db.query(
-              `UPDATE clients SET yclients_card_balance=$1,bonus_balance=$2,total_spent=GREATEST(total_spent,$3),visits_count=GREATEST(visits_count,$4),loyalty_level=COALESCE($5,loyalty_level),updated_at=NOW() WHERE id=$6`,
+              `UPDATE clients SET yclients_card_balance=$1,bonus_balance=$2::numeric,total_spent=GREATEST(total_spent,$3),visits_count=GREATEST(visits_count,$4),loyalty_level=COALESCE($5,loyalty_level),updated_at=NOW() WHERE id=$6`,
               [parseFloat(card.balance||0), parseFloat(card.balance||0), paidAmount, parseInt(card.visits_count||0), level?.key||null, c.id]
             );
           }

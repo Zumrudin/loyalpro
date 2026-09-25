@@ -111,8 +111,12 @@ async function reconcileClient(salon, ycClientId, settings) {
       const cards = await ycGetClientCards(salon, ycClientId);
       const card = cards.find(c => String(c.type?.id) === String(salon.yclients_card_type_id));
       if (card) {
+        // $1::numeric ЯВНО: yclients_card_balance numeric, bonus_balance integer —
+        // один параметр на две колонки разных типов даёт «inconsistent types
+        // deduced for parameter $1» (поймано живым прогоном 25.09, те же грабли,
+        // что п. 8 в docs/2026-09-25-cashback-accrual-bugs.md).
         await db.query(
-          'UPDATE clients SET yclients_card_balance=$1, bonus_balance=$1, updated_at=NOW() WHERE id=$2',
+          'UPDATE clients SET yclients_card_balance=$1::numeric, bonus_balance=$1::numeric, updated_at=NOW() WHERE id=$2',
           [parseFloat(card.balance || 0), row.id]
         );
       }

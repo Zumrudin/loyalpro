@@ -81,6 +81,16 @@ beforeEach(() => {
   ycGetClientCards.mockResolvedValue([]);
 });
 
+test('привязка пишет bonus_balance с явным ::numeric (дробный баланс карты 784.89 иначе роняет UPDATE)', async () => {
+  ycGetClientCardsStrict.mockResolvedValue([{ ...YC_CARD, balance: 784.89 }]);
+  ycGet.mockResolvedValue({ loyalty_transactions: [] });
+  await processRecordEvent(makePayload(), SALON, SETTINGS);
+  const link = db.one.mock.calls.find(c => c[0].includes('yclients_card_id=$1'));
+  expect(link).toBeTruthy();
+  expect(link[0]).toMatch(/bonus_balance=\$4::numeric/);
+  expect(link[1][3]).toBe(784.89);
+});
+
 test('карта есть в YClients, но не в нашей БД → привязывается и кэшбэк начисляется на неё', async () => {
   ycGetClientCardsStrict.mockResolvedValue([YC_CARD]);
   ycGet.mockResolvedValue({ loyalty_transactions: [], payment_transactions: [] });
