@@ -5,7 +5,7 @@ const { getLoyaltySettings, processRecordEvent, processFinancesOperation } = req
 const { handleRecordCreated } = require('../services/notifications');
 const care = require('../services/care/enroll');
 const reminders = require('../services/reminders/enroll');
-const { buildClientFio } = require('../utils/client-name');
+const { upsertClientFromYc } = require('../services/client-upsert');
 const { createLogger } = require('../logger');
 const logger = createLogger('Webhook');
 
@@ -93,15 +93,13 @@ router.post('/webhook.v2/:companyId', async (req, res) => {
         logger.error(`reminders attribution: ${e.message}`));
     }
 
+    // client-вебхук приходит на КАЖДЫЙ оплаченный визит и на правку карточки и
+    // несёт spent/paid/visits/раздельное ФИО — те же поля, что /client/{cid}/{id}.
+    // До 25.09.2026 отсюда брались только ФИО/телефон/почта/ДР, а траты/визиты/
+    // уровень писал ТОЛЬКО runSync (сломан лимитом YClients с 26.06). Правило
+    // разбора одно на вебхук и ночную сверку — services/client-upsert.js.
     if (resourceType === 'client' && payload.data) {
-      const ycRec = payload.data;
-      await db.query(
-        `INSERT INTO clients (salon_id,yclients_client_id,name,phone,email,birthday,synced_at)
-         VALUES ($1,$2,$3,$4,$5,$6,NOW())
-         ON CONFLICT (salon_id,yclients_client_id)
-         DO UPDATE SET name=$3,phone=$4,email=$5,birthday=$6,synced_at=NOW()`,
-        [salon.id, ycRec.id, buildClientFio(ycRec), ycRec.phone, ycRec.email||null, ycRec.birth_date||null]
-      );
+      await upsertClientFromYc(salon.id, payload.data, settings);
     }
 
     if (resourceType === 'finances_operation') {
