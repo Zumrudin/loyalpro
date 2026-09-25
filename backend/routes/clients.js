@@ -2,8 +2,8 @@ const router = require('express').Router();
 const { pool, db } = require('../db');
 const { auth } = require('../middleware/auth');
 const { buildClientsQuery } = require('../clients-query');
-const { ycGet, ycGetClientCards, ycGetCardTransactions, ycWebSessions } = require('../services/yclients');
-const { getLoyaltySettings, getLevel, runSync, sleep } = require('../services/loyalty');
+const { ycGet, ycGetCardTransactions, ycWebSessions } = require('../services/yclients');
+const { getLoyaltySettings, runSync, sleep, linkClientCard } = require('../services/loyalty');
 
 
 // ── Clients ──────────────────────────────────────────────────
@@ -120,25 +120,16 @@ router.post('/:id/sync-card', auth, async (req, res) => {
     const salon = await db.one('SELECT * FROM salons WHERE id=$1', [req.user.salonId]);
     if (!salon.yclients_card_type_id) return res.status(400).json({ error: 'Карта лояльности не выбрана в Настройках' });
 
-    const cards = await ycGetClientCards(salon, client.yclients_client_id);
-    const card = cards.find(c => c.type?.id === salon.yclients_card_type_id || String(c.type?.id) === String(salon.yclients_card_type_id));
-    if (!card) return res.json({ ok: false, message: `Карта типа ${salon.yclients_card_type_id} не найдена` });
-
-    const cardBalance = parseFloat(card.balance || 0);
-    const paidAmount  = parseFloat(card.paid_amount || card.sold_amount || client.total_spent || 0);
-    const visitsCount = parseInt(card.visits_count || client.visits_count || 0);
-    const cardNumber  = card.number || card.loyalty_card_number || null;
-
+    // Одно правило привязки на кнопку и на событийную привязку в начислении
+    // (services/loyalty.js linkClientCard). Кнопка нарочно перепривязывает и уже
+    // связанного клиента — это её смысл («пересинхронизировать баланс»).
     const lsData = await getLoyaltySettings(salon.id);
-    const level  = lsData?.levels ? getLevel(paidAmount, lsData.levels) : null;
+    const updated = await linkClientCard(salon, { ...client, yclients_card_id: null }, lsData);
+    if (!updated) return res.json({ ok: false, message: `Карта типа ${salon.yclients_card_type_id} не найдена` });
 
-    await db.query(
-      `UPDATE clients SET yclients_card_id=$1,yclients_card_number=$2,yclients_card_balance=$3,
-       bonus_balance=$4,total_spent=$5,visits_count=$6,loyalty_level=$7,updated_at=NOW() WHERE id=$8`,
-      [card.id, cardNumber, cardBalance, cardBalance, paidAmount, visitsCount, level?.key || client.loyalty_level, client.id]
-    );
+    const cardBalance = parseFloat(updated.yclients_card_balance || 0);
     const txnsCount = await db.one('SELECT COUNT(*) FROM loyalty_card_transactions WHERE client_id=$1', [client.id]);
-    res.json({ ok: true, cardId: card.id, cardNumber, balance: cardBalance, paidAmount, visitsCount, level: level?.key || client.loyalty_level, transactionsInDb: parseInt(txnsCount.count), message: `Карта синхронизирована. Баланс: ${cardBalance.toLocaleString('ru')} ₽` });
+    res.json({ ok: true, cardId: updated.yclients_card_id, cardNumber: updated.yclients_card_number, balance: cardBalance, paidAmount: parseFloat(updated.total_spent || 0), visitsCount: parseInt(updated.visits_count || 0), level: updated.loyalty_level, transactionsInDb: parseInt(txnsCount.count), message: `Карта синхронизирована. Баланс: ${cardBalance.toLocaleString('ru')} ₽` });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 

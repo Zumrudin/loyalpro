@@ -2,7 +2,7 @@
 // Loyalty & Sync Service
 // ============================================================
 const { pool, db } = require('../db');
-const { ycGet, ycPost, ycGetClientCards, ycAccrueCard } = require('./yclients');
+const { ycGet, ycPost, ycGetClientCards, ycGetClientCardsStrict, ycAccrueCard } = require('./yclients');
 const { buildClientFio } = require('../utils/client-name');
 const { createLogger } = require('../logger');
 const logger = createLogger('Sync');
@@ -566,6 +566,51 @@ async function revertCashback(ycRecordId, salon, clientYcId) {
   logger.info(`reverted ${deduct} for client ${client.name}, record #${ycRecordId}`);
 }
 
+// Событийная привязка карты лояльности. Инцидент 2026-09-25 (79166274373): бот
+// выдал карту в YClients за 8 минут до оплаты, а clients.yclients_card_id остался
+// пустым — связку писал только runSync (падает с 26.06) и ручная кнопка
+// «Синхронизировать карту». События о картах YClients не шлёт вовсе (проверено по
+// 23k вебхуков: resource ∈ record/client/finances_operation/товары/персонал, поле
+// `card` у client-событий всегда пустое), поэтому единственный надёжный момент
+// узнать о карте — само начисление. Берёт карты СТРОГИМ вызовом: обычный
+// ycGetClientCards глотает сбой в [] и «не ответил» стал бы «карты нет», то есть
+// терминальным отказом ровно того класса, что чиним. Возвращает обновлённую строку
+// клиента или null («карты типа салона в YClients нет»); при сбое БРОСАЕТ.
+async function linkClientCard(salon, client, settings) {
+  if (!salon?.yclients_card_type_id || !client?.yclients_client_id) return null;
+  const cards = await ycGetClientCardsStrict(salon, client.yclients_client_id);
+  const card = cards.find(c => String(c.type?.id) === String(salon.yclients_card_type_id));
+  if (!card) return null;
+
+  const cardBalance = parseFloat(card.balance || 0);
+  const paidAmount  = parseFloat(card.paid_amount || card.sold_amount || client.total_spent || 0);
+  const visitsCount = parseInt(card.visits_count || client.visits_count || 0);
+  const cardNumber  = card.number || card.loyalty_card_number || null;
+  const level = settings?.levels ? getLevel(paidAmount, settings.levels) : null;
+
+  return db.one(
+    `UPDATE clients SET yclients_card_id=$1,yclients_card_number=$2,yclients_card_balance=$3,
+     bonus_balance=$4,total_spent=$5,visits_count=$6,loyalty_level=$7,updated_at=NOW()
+     WHERE id=$8 RETURNING *`,
+    [card.id, cardNumber, cardBalance, cardBalance, paidAmount, visitsCount,
+     level?.key || client.loyalty_level, client.id]
+  );
+}
+
+// Оплачен ли визит бонусами — по YClients, а не по нашей loyalty_card_transactions.
+// Нужно ровно для СВЕЖЕПРИВЯЗАННОЙ карты: локальной истории списаний у неё нет по
+// построению — платёжные вебхуки finances_operation приходят на ~60 мс РАНЬШЕ
+// record update paid_full=1 и при пустой связке выходят по «no client or card».
+// /visit/details отдаёт списание на кассе как loyalty_transactions[] с
+// is_loyalty_withdraw=true (type_id=3 «Списание с карты лояльности»); наши
+// начисления через ycAccrueCard там НЕ видны. При сбое БРОСАЕТ: деньги, лучше
+// повторить на следующем событии, чем начислить поверх списания.
+async function visitPaidWithBonuses(salon, ycRecordId, visitId) {
+  if (!visitId) throw new Error(`visit_id отсутствует у записи ${ycRecordId} — не могу проверить оплату бонусами`);
+  const details = await ycGet(salon, `/visit/details/${salon.yclients_company_id}/${ycRecordId}/${visitId}`);
+  return (details?.loyalty_transactions || []).some(t => t.is_loyalty_withdraw === true);
+}
+
 async function processRecordEvent(payload, salon, settings) {
   const data = payload.data || {};
   const status = payload.status;
@@ -671,14 +716,31 @@ async function processRecordEvent(payload, salon, settings) {
       } catch(e) { logger.info(`ycGet failed: ${e.message}`); }
     }
 
+    // Карты в нашей БД нет — спросить YClients прямо сейчас (см. linkClientCard).
+    // Сбой вызова уходит в catch ниже: заявка finances_log освобождается, следующий
+    // вебхук по записи повторит попытку — отказ НЕ терминальный.
+    let freshlyLinked = false;
+    if (!client.yclients_card_id) {
+      const linked = await linkClientCard(salon, client, settings);
+      if (linked) {
+        client = linked;
+        freshlyLinked = true;
+        logger.info(`record=${ycRecordId} linked card ${client.yclients_card_id} to client ${client.id} on accrual`);
+      }
+    }
+
     // Check for redemption: by record_id OR unlinked (record_id IS NULL) on same visit date
-    const hasRedemptionTx = await db.oneOrNone(
+    let hasRedemptionTx = await db.oneOrNone(
       `SELECT 1 FROM loyalty_card_transactions
        WHERE client_id=$1 AND amount<0
        AND (record_id=$2 OR (record_id IS NULL AND $3::date IS NOT NULL AND txn_date::date=$3::date))
        LIMIT 1`,
       [client?.id, record?.id, String(data.date || '').split(' ')[0] || null]
     );
+    if (!hasRedemptionTx && freshlyLinked) {
+      hasRedemptionTx = await visitPaidWithBonuses(salon, ycRecordId, data.visit_id);
+      if (hasRedemptionTx) logger.info(`record=${ycRecordId} paid with bonuses per YClients visit/details (freshly linked card)`);
+    }
 
     let paidAmount = 0;
     let hasDiscount = false;
@@ -989,5 +1051,6 @@ module.exports = {
   processCompletedRecord, cancelRecordBonuses,
   runSync,
   claimRecordProcessing, popCashbackAmount, getCashbackByRecord, revertCashback,
+  linkClientCard, visitPaidWithBonuses,
   processRecordEvent, processFinancesOperation,
 };
