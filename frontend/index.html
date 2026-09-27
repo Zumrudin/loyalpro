@@ -21,7 +21,7 @@
 <script src="js/core/api.js"></script>
 <script src="js/core/theme.js"></script>
 <script src="js/core/auth.js?v=2026-06-02a"></script>
-<script src="js/core/nav.js?v=2026-08-19-dashboard-load"></script>
+<script src="js/core/nav.js?v=2026-09-27-agent-model"></script>
 <link rel="stylesheet" href="css/base.css?v=2026-08-10-mobile">
 <link rel="stylesheet" href="css/features.css?v=2026-08-12c">
 </head>
@@ -472,6 +472,7 @@
         <div class="stg-sep"></div>
         <div class="stg-group">
           <div class="stg-group-lbl">🔗 Интеграция</div>
+          <div class="stg-item" data-sec="agent-model" onclick="navStg('agent-model',this)"><span class="stg-ic">🤖</span>Модель Милы</div>
           <div class="stg-item" data-sec="yclients" onclick="navStg('yclients',this)"><span class="stg-ic">🔌</span>Подключение YClients</div>
           <div class="stg-item" data-sec="loyalty-card" onclick="navStg('loyalty-card',this)"><span class="stg-ic">💳</span>Карта лояльности</div>
           <div class="stg-item" data-sec="webhook" onclick="navStg('webhook',this)"><span class="stg-ic">🔔</span>Webhook URL</div>
@@ -504,6 +505,16 @@
 
       <!-- ═══ CONTENT ═══ -->
       <div class="stg-content">
+        <div class="stg-section" id="stg-agent-model">
+          <div class="stg-hdr">Модель Милы</div>
+          <p id="agent-model-current" role="status">Загрузка состояния…</p>
+          <label class="fl" for="agent-model-select">Модель и канал</label>
+          <select id="agent-model-select" style="width:100%;max-width:560px"></select>
+          <p>При ошибке GPT Мила переходит на Claude Sonnet. Если мост недоступен или обе модели не отвечают — на «Пользу». Выбранный резерв сохраняется; вернуть GPT можно вручную.</p>
+          <p>Ручной выбор действует со следующего запроса. Защита от сбоев остаётся включённой.</p>
+          <button class="btn btn-pri" id="agent-model-save" onclick="saveAgentModel()" disabled>Применить</button>
+          <button class="btn btn-sec" onclick="loadAgentModel()">Обновить</button>
+        </div>
 
         <!-- ── Уровни и кэшбэк ── -->
         <div class="stg-section active" id="stg-loyalty-levels">
@@ -2469,6 +2480,7 @@ function fireConfetti() {
 <script src="js/pages/chat.js?v=2026-08-19-loadingfix"></script>
 <script src="js/pages/chat-composer.js?v=2026-08-10-mobile"></script>
 <script src="js/pages/agent-settings.js?v=2026-09-20"></script>
+<script src="js/pages/agent-model.js?v=2026-09-27"></script>
 <script src="js/pages/patient-portfolio.js?v=2026-06-01e"></script>
 <script src="js/pages/staff-dashboard.js?v=2026-06-11d"></script>
 <script src="js/pages/users.js"></script>

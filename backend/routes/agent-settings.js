@@ -24,6 +24,7 @@ function invalidatePriceIndex(salonId) {
 }
 
 const adminOnly = [auth, requireRole('owner', 'admin')];
+router.use('/model', require('./agent-model'));
 
 // ── multer storage для фото прайс-листа (имя файла собираем сами) ─────────
 const uploadsDir = path.join(__dirname, '../../frontend/uploads');

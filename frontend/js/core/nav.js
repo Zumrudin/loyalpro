@@ -109,6 +109,7 @@ function navStg(id, el) {
   if (id === 'sync-logs') loadSyncLogs();
   if (id === 'app-settings') loadAppSettings();
   if (id === 'staff-profiles') loadStaffProfiles();
+  if (id === 'agent-model') loadAgentModel();
 }
 
 // ── LAUNCH APP ──
@@ -133,6 +134,7 @@ async function launchApp() {
   }
 
   document.getElementById('app').style.display = 'flex';
+  checkAgentModelNotice();
 
   const startPage = applyRoleNav(ME.role);
 
@@ -191,6 +193,7 @@ window.addEventListener('hashchange', () => {
 });
 
 function showLogin() {
+  document.getElementById('agent-model-notice')?.remove();
   localStorage.removeItem('lp_tk');
   document.getElementById('loginScreen').style.display = 'flex';
   document.getElementById('app').style.display = 'none';

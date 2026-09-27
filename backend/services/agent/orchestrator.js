@@ -396,7 +396,7 @@ async function runDialog(salonId, dialogKey, opts = {}) {
 
 async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
   const d = opts.deps || {};
-  const provider = d.provider || providers.getProvider();
+  const provider = d.provider || providers.getProviderForSalon(salonId);
   const history = d.history || historyDefault;
   const state = d.state || stateDefault;
   const identity = d.identity || identityDefault;

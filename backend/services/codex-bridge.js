@@ -2,9 +2,9 @@
 
 // Standalone transport: no app config, database, CRM, dispatcher or message sender.
 const http = require('node:http');
-const { MODEL, MAX_BYTES, ROUTE, authorized, validRequest } = require('./agent/providers/codex-relay-protocol');
+const { MODEL, CLAUDE_MODEL, MAX_BYTES, ROUTE, authorized, validRequest } = require('./agent/providers/codex-relay-protocol');
 
-function createBridge({ secret, generate, concurrency = 2, maxQueue = 8, queueMs = 20000,
+function createBridge({ secret, generate, generateClaude, concurrency = 2, maxQueue = 8, queueMs = 20000,
   maxPerMinute = 60, now = Date.now } = {}) {
   if (!secret || secret.length < 32 || typeof generate !== 'function') throw new Error('BRIDGE_CONFIG');
   let active = 0, count = 0, windowStart = now();
@@ -55,9 +55,13 @@ function createBridge({ secret, generate, concurrency = 2, maxQueue = 8, queueMs
       try { await acquire(); } catch (_) { return reply(res, 429, { error: 'BUSY' }); }
       try {
         if (res.destroyed) return;
-        const result = await generate(data);
+        const claude = data.engine === 'claude';
+        const fn = claude ? generateClaude : generate;
+        if (!fn) throw new Error('ENGINE_UNAVAILABLE');
+        const { engine, ...input } = data;
+        const result = await fn(input);
         const output = { text: result.text, toolCalls: result.toolCalls.map(t => ({ name: t.name, arguments: JSON.stringify(t.input) })) };
-        const payload = { requestId: id, model: MODEL, output };
+        const payload = { requestId: id, model: claude ? CLAUDE_MODEL : MODEL, output };
         if (Buffer.byteLength(JSON.stringify(payload)) > MAX_BYTES) throw new Error('TOO_LARGE');
         reply(res, 200, payload);
       } finally { release(); }

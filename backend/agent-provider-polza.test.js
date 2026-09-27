@@ -186,12 +186,27 @@ describe('polza.createMessage — потолок reasoning', () => {
     expect(res.text).toBe('ок');
     const primary = calls.filter(c => c.model === 'primary');
     const fb = calls.filter(c => c.model === 'anthropic/claude-sonnet-5');
+    expect(res.model).toBe('anthropic/claude-sonnet-5');
     expect(primary[0].reasoning).toEqual({ max_tokens: 512 });
     expect(fb).toHaveLength(1);
     expect(fb[0]).not.toHaveProperty('reasoning');
     // Остальное тело запроса на fallback обязано сохраниться.
     expect(fb[0].messages).toEqual(primary[0].messages);
   });
+});
+
+test('managed fallback bounds SDK retries for both Polza models', async () => {
+  const create = jest.fn()
+    .mockRejectedValueOnce(Object.assign(new Error('synthetic overload'), { status: 529 }))
+    .mockResolvedValueOnce({ choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: 'Hello' } }] });
+  const result = await provider.createMessage({ system: 'Synthetic', messages: [], tools: [] }, {
+    client: { chat: { completions: { create } } }, model: 'primary', fallbackModel: 'backup',
+    maxRetries: 0, sdkMaxRetries: 0, fallbackTimeoutMs: 20000,
+  });
+  expect(create).toHaveBeenCalledTimes(2);
+  expect(create.mock.calls[0][1]).toEqual({ maxRetries: 0 });
+  expect(create.mock.calls[1][1]).toEqual({ maxRetries: 0, timeout: 20000 });
+  expect(result.model).toBe('backup');
 });
 
 describe('polza.toolResultMessages', () => {

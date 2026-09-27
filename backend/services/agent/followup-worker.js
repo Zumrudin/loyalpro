@@ -24,7 +24,7 @@ const { db: realDb } = require('../../db');
 const chatpush = require('../chatpush');
 const { persistWhatsappOutgoing } = require('../chat-persist');
 const agentSettings = require('../agent-settings');
-const { getProvider } = require('./providers');
+const { getProviderForSalon } = require('./providers');
 const history = require('./history');
 const pendingReplies = require('./pending-replies');
 const replyGuard = require('./reply-guard');
@@ -51,13 +51,14 @@ const log = createLogger('FollowupWorker');
 const WORKER_TICK_MS = 60000;
 const LEASE_LIMIT = 20;
 const MAX_ATTEMPTS = 3;
-const RETRY_BACKOFF_S = 180;
+const RETRY_BACKOFF_S = 480;
 // Таймаут LLM-прохода: зависший провайдер не должен держать строку
 // 'scheduled' вечно. Строго МЕНЬШЕ backoff аренды (тот же запас, что в
 // care-/reminders-воркерах) — иначе таймаут-ретрай пересечётся с ещё живым
 // прошлым вызовом в окне аренды. Инвариант закреплён тестом, обе константы
 // экспортируются ровно ради него.
-const LLM_TIMEOUT_MS = 90000;
+// Two bridge attempts (125 s each) + Polza (60 s + 20 s fallback).
+const LLM_TIMEOUT_MS = 360000;
 
 // На сколько откладывается строка, когда отвечать сейчас НЕЛЬЗЯ, но запрет
 // пройдёт сам (аварийный рычаг процесса). Минуты, а не сутки как в «Заботе»:
@@ -134,7 +135,7 @@ const defaultDeps = {
   },
   loadTranscript: (salonId, key, opts) => history.loadTranscript(salonId, key, opts),
   loadNameDictionary: (salonId) => salonNames.load(salonId).catch(() => null),
-  createMessage: (req, opts) => getProvider().createMessage(req, opts),
+  createMessage: (req, opts) => getProviderForSalon(opts.salonId).createMessage(req, opts),
   lintReply: replyGuard.lintReply,
   hardViolations: replyGuard.hardViolations,
   sendMessage: (payload) => chatpush.sendMessage(config.CHATPUSH.instanceToken, payload),
@@ -340,7 +341,7 @@ async function buildNudgeText(d, row, messages) {
     })),
   });
   const raw = await withTimeout(
-    d.createMessage({ system, messages: [{ role: 'user', content: user }] }, {}),
+    d.createMessage({ system, messages: [{ role: 'user', content: user }] }, { salonId: row.salon_id }),
     LLM_TIMEOUT_MS, 'followup LLM');
   const decision = parseCareDecision(raw && raw.text);
   if (decision.action !== 'send') {
@@ -708,7 +709,7 @@ let _tickInFlight = false;
 /**
  * Один тик: аренда до LEASE_LIMIT просроченных строк и последовательная
  * обработка. Guard от наслоения тиков — как в «Заботе» и напоминаниях:
- * медленный прогон (LLM до 90 с на строку) не пускает следующий.
+ * медленный прогон (LLM с резервными каналами до 360 с) не пускает следующий.
  */
 async function processTick(deps = defaultDeps) {
   if (_tickInFlight) return;

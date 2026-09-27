@@ -17,4 +17,13 @@ function getProvider(name) {
   return aitunnel;
 }
 
-module.exports = { getProvider, anthropic, aitunnel, polza };
+function getProviderForSalon(salonId) {
+  const relay = require('./codex-relay');
+  return require('./resilient').createProvider({ salonId,
+    store: require('../model-routing').getStore(),
+    providers: { gpt: relay, claude: relay.createProvider({ engine: 'claude' }), polza },
+    legacy: getProvider(),
+  });
+}
+
+module.exports = { getProvider, getProviderForSalon, anthropic, aitunnel, polza };

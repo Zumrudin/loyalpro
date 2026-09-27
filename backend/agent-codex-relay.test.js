@@ -76,7 +76,7 @@ test('caps concurrency and queue, releases capacity after failure', async () => 
   expect(await second).toBe('RELAY_BUSY');
   release({ text: 'OK', toolCalls: [] }); await first;
   generate.mockRejectedValueOnce(new Error('private-token-and-prompt'));
-  await expect(provider().createMessage(input)).rejects.toThrow('RELAY_UPSTREAM');
+  await expect(provider().createMessage(input)).rejects.toThrow('RELAY_MODEL_FAILED');
   await expect(provider().createMessage(input)).resolves.toMatchObject({ text: 'Hello' });
 });
 test('refuses plaintext URLs outside explicit local test mode', async () => {
@@ -90,7 +90,7 @@ test('rejects oversize request before network', async () => {
 });
 test('revalidates returned tools and never trusts bridge-provided tool arguments', async () => {
   await start(); generate.mockResolvedValue({ text: '', toolCalls: [{ name: 'get_hours', input: { salon_id: 42 } }] });
-  await expect(provider().createMessage(input)).rejects.toMatchObject({ code: 'RELAY_FAILED' });
+  await expect(provider().createMessage(input)).rejects.toMatchObject({ code: 'RELAY_MODEL_FAILED' });
 });
 test.each(['model', 'requestId'])('rejects mismatched response %s', async key => {
   await start();
@@ -108,4 +108,24 @@ test('does not retry or expose private network errors', async () => {
 test('signature is tied to request id and payload', () => {
   const req = signed(); expect(authorized(secret, req.headers, req.body)).toBe(true);
   expect(authorized(secret, { ...req.headers, 'x-mila-request-id': randomUUID() }, req.body)).toBe(false);
+});
+
+test('signed Claude selector uses only Claude, returns normalized tools, leaves GPT untouched', async () => {
+  const generateClaude = jest.fn(async () => ({ text: '', toolCalls: [{ name: 'get_hours', input: {} }] }));
+  await start({ generateClaude });
+  const p = provider({ engine: 'claude' });
+  const result = await p.createMessage(input);
+  expect(result).toMatchObject({ model: 'claude-sonnet', toolCalls: [{ name: 'get_hours', input: {} }] });
+  expect(generateClaude).toHaveBeenCalledWith(input);
+  expect(generate).not.toHaveBeenCalled();
+});
+test('unknown engine rejected before generation', async () => {
+  await start(); const response = await fetch(url, signed({ ...input, engine: 'shell' }));
+  expect(response.status).toBe(400); await response.text();
+  expect(generate).not.toHaveBeenCalled();
+});
+test('proxy 502 is a bridge failure; bounded GENERATION_FAILED is a model failure', async () => {
+  await start();
+  await expect(provider({ fetchImpl: async () => new Response('<html>Bad gateway</html>', { status: 502 }) })
+    .createMessage(input)).rejects.toMatchObject({ code: 'RELAY_UPSTREAM' });
 });

@@ -42,7 +42,8 @@ async function createWithRetry(client, params, o = {}) {
   let lastErr;
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     try {
-      return await client.chat.completions.create(params);
+      return o.sdkMaxRetries === undefined ? await client.chat.completions.create(params)
+        : await client.chat.completions.create(params, { maxRetries: o.sdkMaxRetries });
     } catch (e) {
       lastErr = e;
       if (attempt === maxRetries || !isTransient(e)) throw e;
@@ -63,6 +64,7 @@ async function createMessage({ system, messages, tools }, opts = {}) {
     ? [{ role: 'system', content: [{ type: 'text', text: system, cache_control: { type: 'ephemeral' } }] }, ...messages]
     : messages.slice();
   const primaryModel = opts.model || config.POLZA_CHAT_MODEL;
+  let usedModel = primaryModel;
   const params = {
     model: primaryModel,
     max_tokens: opts.maxTokens || config.AGENT_MAX_TOKENS,
@@ -90,7 +92,7 @@ async function createMessage({ system, messages, tools }, opts = {}) {
   let resp;
   try {
     resp = await createWithRetry(client, params,
-      { maxRetries: opts.maxRetries, retryBaseMs: opts.retryBaseMs });
+      { maxRetries: opts.maxRetries, retryBaseMs: opts.retryBaseMs, sdkMaxRetries: opts.sdkMaxRetries });
   } catch (e) {
     const fallbackModel = opts.fallbackModel !== undefined
       ? opts.fallbackModel : config.POLZA_FALLBACK_MODEL;
@@ -103,7 +105,10 @@ async function createMessage({ system, messages, tools }, opts = {}) {
     // правилам (на 5.x он удалён и отдаёт 400). Цена ошибки — отказ ровно в тот
     // момент, когда основная модель уже упала, то есть fallback'а не будет вовсе.
     const { reasoning: _noReasoningOnFallback, ...fbParams } = params;
-    resp = await client.chat.completions.create({ ...fbParams, model: fallbackModel }, { timeout: fbTimeout });
+    usedModel = fallbackModel;
+    resp = await client.chat.completions.create({ ...fbParams, model: fallbackModel }, {
+      timeout: fbTimeout, ...(opts.sdkMaxRetries === undefined ? {} : { maxRetries: opts.sdkMaxRetries }),
+    });
   }
   // Polza кладёт в usage реальные списания (cost_rub) — логируем каждый ход,
   // чтобы дорогую модель было видно в логах, а не только по кошельку
@@ -120,7 +125,7 @@ async function createMessage({ system, messages, tools }, opts = {}) {
   const toolCalls = (m.tool_calls || []).map(tc => ({
     id: tc.id, name: tc.function.name, input: safeParse(tc.function.arguments),
   }));
-  return { text, toolCalls, stopReason: choice.finish_reason, assistantMsg: m };
+  return { text, toolCalls, stopReason: choice.finish_reason, assistantMsg: m, model: resp.model || usedModel };
 }
 
 // Результаты инструментов → по одному {role:'tool'} на вызов (формат OpenAI).

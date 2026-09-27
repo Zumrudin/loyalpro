@@ -3,6 +3,27 @@
 // ============================================================
 
 async function runMigrations(client) {
+  // Additive, no backfill: selection starts from AGENT_PROVIDER until first use.
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS agent_model_routing (
+      salon_id INTEGER PRIMARY KEY REFERENCES salons(id) ON DELETE CASCADE,
+      active TEXT NOT NULL,
+      revision BIGINT NOT NULL DEFAULT 0,
+      model TEXT,
+      health TEXT NOT NULL DEFAULT 'unverified',
+      last_success_at TIMESTAMPTZ,
+      last_auto JSONB,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS agent_model_notice_reads (
+      salon_id INTEGER NOT NULL REFERENCES salons(id) ON DELETE CASCADE,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      revision BIGINT NOT NULL,
+      PRIMARY KEY (salon_id, user_id)
+    )
+  `);
   // ── Loyalty Settings ───────────────────────────────────────────
   await client.query(`
     ALTER TABLE loyalty_settings

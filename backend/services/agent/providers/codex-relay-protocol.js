@@ -2,6 +2,7 @@
 
 const { createHmac, timingSafeEqual } = require('node:crypto');
 const MODEL = 'gpt-6-sol';
+const CLAUDE_MODEL = 'claude-sonnet';
 const MAX_BYTES = 2 * 1024 * 1024;
 const ROUTE = '/api/mila-codex/v1/message';
 
@@ -24,11 +25,12 @@ function validRequest(data) {
     && Array.isArray(data.tools) && data.tools.length <= 100
     && data.tools.every(t => t && typeof t.name === 'string' && /^[a-zA-Z0-9_-]{1,80}$/.test(t.name)
       && t.input_schema && typeof t.input_schema === 'object' && !Array.isArray(t.input_schema))
-    && Object.keys(data).every(k => ['system', 'messages', 'tools'].includes(k));
+    && (data.engine === undefined || ['gpt', 'claude'].includes(data.engine))
+    && Object.keys(data).every(k => ['system', 'messages', 'tools', 'engine'].includes(k));
 }
 function failure(code) {
   const e = new Error(`Codex relay: ${code}`);
   e.code = code;
   return e;
 }
-module.exports = { MODEL, MAX_BYTES, ROUTE, signature, authorized, validRequest, failure };
+module.exports = { MODEL, CLAUDE_MODEL, MAX_BYTES, ROUTE, signature, authorized, validRequest, failure };
