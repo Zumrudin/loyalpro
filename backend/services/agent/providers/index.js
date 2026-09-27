@@ -9,6 +9,9 @@ const polza = require('./polza');
 // polza.ai (миграция 2026-07-26). 'anthropic' — прямой Anthropic API (откат).
 function getProvider(name) {
   const p = name || config.AGENT_PROVIDER;
+  if (p === 'codex-relay') return require('./codex-relay');
+  // Explicit opt-in; adapter verifies development mode or the isolated test stand.
+  if (p === 'codex') return require('./codex');
   if (p === 'anthropic') return anthropic;
   if (p === 'polza') return polza;
   return aitunnel;

@@ -1,0 +1,31 @@
+[Unit]
+Description=Mila Codex LLM bridge
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/mila-codex-bridge
+# Uses the existing local subscription login. No database or CRM environment.
+EnvironmentFile=/etc/mila-codex-bridge.env
+ExecStart=/usr/bin/env node /opt/mila-codex-bridge/scripts/mila-codex-bridge.js
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=110
+KillMode=control-group
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/root/.codex
+InaccessiblePaths=-/root/loyalpro -/root/loyalpro_new -/root/PeriAiAssistent -/srv -/var/www
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LimitNOFILE=4096
+TasksMax=256
+
+[Install]
+WantedBy=multi-user.target
