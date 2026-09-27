@@ -95,15 +95,63 @@ describe('chain booking incident: truthful staff and enforced choice', () => {
   const rawBooking = { record_id: 909090, datetime: '2026-10-01T15:30:00+03:00',
     services: ['Первая услуга', 'Вторая услуга'], staff_yc_id: 8, staff_name: 'Мария' };
 
-  test('real book_chain: wrong choice is blocked; renewed consent books both intended specialists', async () => {
+  test('existing visits: book_chain asks for transfer consent, then moves original IDs', async () => {
+    const bookChain = require('./services/agent/tools/book-chain');
+    const nowMs = Date.parse('2026-09-30T10:00:00Z');
+    const chain = [
+      { service_yc_id: 101, service_title: 'Услуга А', staff_yc_id: 7, staff_name: 'Анна', datetime: '2026-10-02T15:00:00+03:00', seance_length: 1800 },
+      { service_yc_id: 102, service_title: 'Услуга Б', staff_yc_id: 8, staff_name: 'Мария', datetime: '2026-10-02T15:30:00+03:00', seance_length: 1800 },
+    ];
+    seqOffers.remember(1, 'k', { o1: { booking_mode: 'separate_records', chain } }, { nowMs });
+    const writes = { createBooking: jest.fn(), modifyServices: jest.fn(),
+      rescheduleBooking: jest.fn(async (_salon, input) => ({ rescheduled: true, record_id: input.record_id, datetime: input.datetime })) };
+    let messages = [{ role: 'assistant', content: '2 октября: 15:00 у Анны, затем 15:30 у Марии. Записать?' },
+      { role: 'user', content: 'Да' }];
+    const deps = makeDeps({
+      handlers: { book_chain: (salon, input, ctx) => bookChain.run(salon, input, ctx, writes) },
+      history: { loadTranscript: jest.fn(async () => ({ messages, watermark: 100 })) },
+      listBookings: { run: jest.fn(async () => ({ bookings: chain.map((l, i) => ({
+        ...l, record_id: 501 + i, service_yc_ids: [l.service_yc_id], services: [l.service_title],
+        datetime: l.datetime.replace('10-02', '10-01'),
+      })) })) },
+    });
+    deps.provider.createMessage.mockResolvedValueOnce(toolResp('book_chain', { option_id: 'o1' }));
+    const opts = { deps, nowMs, ctx: { phone: 'test-owner' } };
+    const pending = await orchestrator.runDialog(1, 'k', opts);
+    expect(pending.replies.join('\n')).toContain('Перенести существующие записи');
+    expect(writes.rescheduleBooking).not.toHaveBeenCalled();
+    expect(writes.createBooking).not.toHaveBeenCalled();
+    messages = [...messages, { role: 'assistant', content: pending.replies.join('\n') }, { role: 'user', content: 'Да' }];
+    deps.provider.createMessage.mockResolvedValueOnce(toolResp('book_chain', { option_id: 'o1' }));
+    const moved = await orchestrator.runDialog(1, 'k', opts);
+    expect(moved.writeSucceeded).toBe(true);
+    expect(moved.replies.join('\n')).toContain('Записи перенесены');
+    expect(writes.rescheduleBooking.mock.calls.map(c => c[1].record_id)).toEqual([501, 502]);
+    expect(writes.createBooking).not.toHaveBeenCalled();
+    expect(writes.modifyServices).not.toHaveBeenCalled();
+  });
+
+  test('blocked transfer stops a batch before a fallback create_booking', async () => {
+    const deps = makeDeps({ handlers: { book_chain: jest.fn(async () => ({
+      reschedule_blocked: true, error: 'Исходные записи неоднозначны',
+    })) } });
+    const response = toolResp('book_chain', { option_id: 'o1' });
+    response.toolCalls.push({ id: 'fallback', name: 'create_booking', input: {} });
+    deps.provider.createMessage.mockResolvedValueOnce(response);
+    const result = await orchestrator.runDialog(1, 'k', { deps });
+    expect(deps.registry.handlers.create_booking).not.toHaveBeenCalled();
+    expect(result.bookingFailed).toBe(true);
+    expect(result.replies.join('\n')).toContain('Новые записи не созданы');
+  });
+
+  test.each([false, true])('real book_chain: enforces intended specialists (correct first choice=%s)', async correctFirstChoice => {
     const bookChain = require('./services/agent/tools/book-chain');
     const first = { service_yc_id: 101, service_title: 'Первая услуга', staff_yc_id: 7, staff_name: 'Анна',
       datetime: '2026-10-01T15:00:00+03:00', seance_length: 1800 };
     const second = { ...first, service_yc_id: 102, service_title: 'Вторая услуга', staff_yc_id: 8, staff_name: 'Мария',
       datetime: '2026-10-01T15:30:00+03:00' };
     seqOffers.remember(1, 'k', {
-      o5: { booking_mode: 'single_record', chain: [{ ...first, staff_yc_id: 8, staff_name: 'Мария', datetime: second.datetime },
-        { ...second, datetime: '2026-10-01T16:00:00+03:00' }] },
+      o5: { booking_mode: 'single_record', chain: [{ ...first, staff_yc_id: 8, staff_name: 'Мария' }, second] },
       o13: { booking_mode: 'separate_records', chain: [first, second] },
     }, { nowMs: Date.parse('2026-09-30T10:00:00Z') });
     const writes = { createBooking: jest.fn(async (_salon, input) => ({ created: true, record_id: input.service_yc_id })),
@@ -114,12 +162,13 @@ describe('chain booking incident: truthful staff and enforced choice', () => {
       handlers: { book_chain: (salon, input, ctx) => bookChain.run(salon, input, ctx, writes) },
       history: { loadTranscript: jest.fn(async () => ({ messages, watermark: 100 })) },
     });
-    deps.provider.createMessage.mockResolvedValueOnce(toolResp('book_chain', { option_id: 'o5' }));
-    const rejected = await orchestrator.runDialog(1, 'k', { deps, nowMs: Date.parse('2026-09-30T10:00:00Z') });
-    expect(writes.createBooking).not.toHaveBeenCalled();
-    expect(rejected.replies.join('\n')).toContain('Подтвердите');
-    expect(deps.provider.createMessage.mock.calls[0][0].system.includes('o13 —')).toBe(true);
-    messages = messages.concat([{ role: 'assistant', content: rejected.replies.join('\n') }, { role: 'user', content: 'Да' }]);
+    if (!correctFirstChoice) {
+      deps.provider.createMessage.mockResolvedValueOnce(toolResp('book_chain', { option_id: 'o5' }));
+      const rejected = await orchestrator.runDialog(1, 'k', { deps, nowMs: Date.parse('2026-09-30T10:00:00Z') });
+      expect(writes.createBooking).not.toHaveBeenCalled();
+      expect(rejected.replies.join('\n')).toContain('Подтвердите');
+      messages = messages.concat([{ role: 'assistant', content: rejected.replies.join('\n') }, { role: 'user', content: 'Да' }]);
+    }
     deps.provider.createMessage.mockResolvedValueOnce(toolResp('book_chain', { option_id: 'o13' }));
     const booked = await orchestrator.runDialog(1, 'k', { deps, nowMs: Date.parse('2026-09-30T10:00:00Z') });
     expect(writes.createBooking.mock.calls.map(c => c[1].staff_yc_id)).toEqual([7, 8]);
@@ -127,7 +176,9 @@ describe('chain booking incident: truthful staff and enforced choice', () => {
     expect(booked.writeSucceeded).toBe(true);
     expect(booked.replies.join('\n')).toContain('Анна');
     expect(booked.replies.join('\n')).toContain('Мария');
-    expect(deps.provider.createMessage).toHaveBeenCalledTimes(2);
+    expect(booked.replies.join('\n')).not.toMatch(/Уточним|Подтвердите/);
+    expect(deps.provider.createMessage.mock.calls[0][0].system.includes('o13 —')).toBe(true);
+    expect(deps.provider.createMessage).toHaveBeenCalledTimes(correctFirstChoice ? 1 : 2);
   });
 
   test.each([false, true])('staff clarification uses live CRM facts without LLM (CRM failure=%s)', async failed => {
@@ -276,6 +327,7 @@ describe('runDialog', () => {
       .toHaveBeenCalledWith(1, { staff_yc_id: 55, service_yc_id: 7, date: '2026-07-20' },
         { dialogKey: 'k', clientPhone: '79001112233', clientName: null, nowMs: expect.any(Number),
           channel: null, priceIndex: null, attachments: [], previousAssistantText: '',
+          liveBookings: [], rescheduleRequested: false,
           // patientText — текст сообщений пациента для generic-booking-guard в
           // create_booking (сверка «называл ли пациент препарат»).
           patientText: expect.any(String),

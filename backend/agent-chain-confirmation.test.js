@@ -16,6 +16,51 @@ test('matches the whole chain, preserving staff order and date', () => {
   expect(guard.matchingOffers({ o13: mixed }, '15:00 у Анны')).toEqual([]);
 });
 
+const competingOffers = {
+  sameFirst: { chain: [mixed.chain[0], { ...mixed.chain[1], staff_yc_id: 1, staff_name: 'Анна' }] },
+  sameSecond: { chain: [{ ...mixed.chain[0], staff_yc_id: 2, staff_name: 'Мария' }, mixed.chain[1]] },
+  mixed,
+};
+
+test.each([
+  proposal,
+  '1 октября: первая услуга у Анны в 15:00, затем вторая у Марии в 15:30. Записать?',
+  '1 октября: первая услуга у Анны в **15:00**, затем вторая у Марии в **15:30**. Записать?',
+  '01.10: 15:00 Анна, затем 15:30 Мария. Записать?',
+  'Первая услуга — к Анне. 1 октября: у неё в 15:00, затем у Марии в 15:30. Записать?',
+  `Подтвердите, пожалуйста, этот вариант:\n${guard.formatFacts(mixed.chain).join('\n')}\nЗаписать?`,
+])('does not confuse a mixed offer with same-time single-staff alternatives: %s', text => {
+  expect(guard.matchingOffers(competingOffers, text)).toEqual(['mixed']);
+  expect(guard.validateChoice(competingOffers, 'mixed', { ...ctx, previousAssistantText: text })).toBeNull();
+  for (const id of ['sameFirst', 'sameSecond']) {
+    expect(guard.validateChoice(competingOffers, id, { ...ctx, previousAssistantText: text }).needs_confirmation).toBe(true);
+  }
+});
+
+test('a patient name in a greeting cannot authorize a different specialist', () => {
+  const text = 'Анна, 01.10: обе услуги у Марии, в 15:00 и 15:30. Записать?';
+  expect(guard.validateChoice(competingOffers, 'mixed', { ...ctx, previousAssistantText: text }).needs_confirmation).toBe(true);
+});
+
+test.each([
+  '01.10 у Марии: 15:00 первая услуга, 15:30 вторая. Записать?',
+  '01.10: 15:00 у Марии, затем 15:30 у Марии. Записать?',
+])('still accepts a genuinely single-staff offer: %s', text => {
+  expect(guard.matchingOffers(competingOffers, text)).toEqual(['sameSecond']);
+  expect(guard.validateChoice(competingOffers, 'sameSecond', { ...ctx, previousAssistantText: text })).toBeNull();
+});
+
+test('a shared first name does not resolve genuinely ambiguous specialists', () => {
+  const all = {
+    a: { chain: [link(1, 'Анна Иванова', '15:00')] },
+    b: { chain: [link(2, 'Анна Петрова', '15:00')] },
+  };
+  const ambiguous = { ...ctx, previousAssistantText: '01.10: 15:00 у Анны. Записать?' };
+  expect(guard.validateChoice(all, 'a', ambiguous).needs_confirmation).toBe(true);
+  expect(guard.validateChoice(all, 'a', { ...ambiguous,
+    previousAssistantText: '01.10: 15:00 у Анны Ивановой. Записать?' })).toBeNull();
+});
+
 test.each(['Нет', 'Да, но к другой', 'Да, но в 16:00', 'Да на 02.10', 'Да на 2026-10-02', 'Ты точно меня к Анне записала?', ''])
 ('does not treat changed terms or a question as consent: %s', patientLastText => {
   expect(guard.validateChoice({ o13: mixed }, 'o13', { ...ctx, patientLastText }).needs_confirmation).toBe(true);

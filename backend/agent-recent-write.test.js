@@ -48,6 +48,13 @@ describe('findRecentWrite', () => {
     expect(out).toEqual({ tool: 'cancel_booking', ageMs: 20_000 });
   });
 
+  test('completed chain transfer proves a transfer, ordinary chain creation does not', () => {
+    expect(findRecentWrite([row('book_chain', 5_000, { result: { booked_all: true, rescheduled: true } })], { nowMs: NOW }))
+      .toEqual({ tool: 'reschedule_booking', ageMs: 5_000 });
+    expect(findRecentWrite([row('book_chain', 5_000, { result: { partial: true, rescheduled: true } })], { nowMs: NOW }))
+      .toEqual({ tool: 'book_chain', ageMs: 5_000 });
+  });
+
   test('без nowMs / пустой или битый ввод → null', () => {
     expect(findRecentWrite([row('reschedule_booking', 5_000)], {})).toBe(null);
     expect(findRecentWrite(null, { nowMs: NOW })).toBe(null);

@@ -4,6 +4,7 @@ const bookingModify = require('../booking-modify');
 const identity = require('../identity');
 const leadTime = require('../lead-time');
 const slotEvidence = require('../slot-evidence');
+const writeGuard = require('../booking-write-guard');
 
 const schema = {
   name: 'reschedule_booking',
@@ -33,19 +34,15 @@ async function run(salonId, input, ctx = {}) {
   // выдуманные 10:00/11:00 без единого слот-вызова и без согласия пациентки):
   //  (1) время обязано быть в выдаче слот-инструмента этого хода или свежего
   //      журнала (ctx.slotEvidence, см. slot-evidence.js);
-  //  (2) время обязано звучать цифрами в хвосте диалога (ctx.recentDialogText) —
-  //      пациент назвал его сам или ответил на наше предложение.
+  //  (2) последнее доставленное предложение содержит новую дату и время,
+  //      а последнее сообщение пациента явно подтверждает именно этот слот.
   // Оба — hint-ответы (invalid_args), а не провал записи: оркестратор их не
   // считает bookingErrored, модель делает пропущенный шаг и повторяет вызов.
-  // Fail-open: без ctx.slotEvidence / recentDialogText (иной вызывающий, тесты)
-  // гейты молчат — прежний контракт.
+  // Без контекста согласия перенос запрещён. Для цепочки код передаёт
+  // привязанное к конкретному record_id/слоту подтверждение, не аргумент модели.
   if (ctx.slotEvidence && !ctx.slotEvidence.has(datetime, { staffYcId: input.staff_yc_id })) {
     return { unverified_slot: true, invalid_args: true,
       error: slotEvidence.unverifiedSlotHint(datetime, { reschedule: true }) };
-  }
-  if (typeof ctx.recentDialogText === 'string' && !slotEvidence.timeMentioned(datetime, ctx.recentDialogText)) {
-    return { needs_confirmation: true, invalid_args: true,
-      error: slotEvidence.needsConfirmationHint(datetime) };
   }
 
   // Минимальный срок до визита действует и на перенос: перенести запись на
@@ -53,6 +50,9 @@ async function run(salonId, input, ctx = {}) {
   // выходит в клинику под запись и не успеет (то же правило, что в create_booking).
   const v = leadTime.violation(leadTime.moscowNow((ctx && ctx.nowMs) || Date.now()), datetime);
   if (v) return { too_soon: true, error: leadTime.violationHint(v) };
+
+  const consentRejection = writeGuard.rescheduleRejection(input, ctx);
+  if (consentRejection) return consentRejection;
 
   const expectedYcClientId = await identity.resolveYclientsClientId(salonId, ctx.clientPhone);
   // Fail-closed: без подтверждённого клиента перенос не делаем (гейт
@@ -70,6 +70,7 @@ async function run(salonId, input, ctx = {}) {
     staffYcId: input.staff_yc_id,
     seanceLength: input.seance_length,
     slotEvidence: ctx.slotEvidence,
+    expectedServiceYcIds: ctx.expectedServiceYcIds,
   });
   if (!res.ok) {
     if (res.wrongService) return { invalid_args: true, wrong_service: true, error: res.error };

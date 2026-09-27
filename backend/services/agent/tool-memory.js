@@ -200,7 +200,9 @@ const EXTRACTORS = {
       return `${fmtDatetime(r.datetime)}${fact ? ` ${fact}` : ''} (record_id=${r.record_id})`;
     });
     if (!items.length) return null;
-    const head = res.booked_all ? 'оформила цепочку записей' : 'цепочка записей оформлена ЧАСТИЧНО';
+    const head = res.rescheduled
+      ? (res.booked_all ? 'перенесла существующие записи' : 'существующие записи перенесены ЧАСТИЧНО')
+      : (res.booked_all ? 'оформила цепочку записей' : 'цепочка записей оформлена ЧАСТИЧНО');
     return `${head}: ${items.join('; ')}`;
   },
   cancel_booking(e) {

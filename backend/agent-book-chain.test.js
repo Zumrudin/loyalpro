@@ -13,13 +13,13 @@ const LINK = (svc, staff, dt) => ({
   datetime: dt, seance_length: 3600,
 });
 
-test('different specialists: rejects a same-staff option before any CRM write', async () => {
+test.each([false, true])('different specialists: rejects a same-staff option before any CRM write (same times=%s)', async sameTimes => {
   const first = { ...LINK(101, 7, '2026-10-01T15:00:00+03:00'), staff_name: 'Анна' };
   const second = { ...LINK(102, 8, '2026-10-01T15:30:00+03:00'), staff_name: 'Мария' };
   offers.remember(1, 'dlg', {
     o5: { booking_mode: 'single_record', chain: [
-      { ...first, staff_yc_id: 8, staff_name: 'Мария', datetime: second.datetime },
-      { ...second, datetime: '2026-10-01T16:00:00+03:00' },
+      { ...first, staff_yc_id: 8, staff_name: 'Мария', datetime: sameTimes ? first.datetime : second.datetime },
+      { ...second, datetime: sameTimes ? second.datetime : '2026-10-01T16:00:00+03:00' },
     ] },
     o13: { booking_mode: 'separate_records', chain: [first, second] },
   });

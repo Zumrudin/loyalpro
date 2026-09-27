@@ -67,7 +67,9 @@ function findRecentWrite(rows, opts = {}) {
     if (!isSuccessfulWrite(row)) continue;
     const ageMs = Number(row.age_ms);
     if (!Number.isFinite(ageMs) || ageMs < 0 || ageMs > windowMs) continue;
-    if (!best || ageMs < best.ageMs) best = { tool: row.tool, ageMs };
+    const result = row.tool === 'book_chain' ? parseMaybe(row.result) : null;
+    const tool = result && result.booked_all && result.rescheduled ? 'reschedule_booking' : row.tool;
+    if (!best || ageMs < best.ageMs) best = { tool, ageMs };
   }
   return best;
 }

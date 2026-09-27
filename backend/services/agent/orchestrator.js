@@ -9,6 +9,7 @@ const config = require('../../config');
 const catalogBlockDefault = require('./catalog-block');
 const seqOffers = require('./sequential-offers');
 const chainConfirmation = require('./chain-confirmation');
+const bookingWriteGuard = require('./booking-write-guard');
 const replyGuard = require('./reply-guard');
 const greeting = require('./greeting');
 const addressGuard = require('./address-guard');
@@ -905,6 +906,9 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
     // продвигает названное в нём свободное время в offer_slots (инцидент 2026-09-16).
     // Именно последнее, а не весь транскрипт: в окне лежат времена старых визитов.
     toolCtx.patientLastText = stripAllStamps(lastUser ? String(lastUser.content || '') : '');
+    // Server-read CRM rows, never tool arguments: book_chain must distinguish
+    // an existing visit from a new one even when the final reply is just «Да».
+    toolCtx.liveBookings = liveBookingRows;
     // Недавние сообщения ПАЦИЕНТА (текущее — последним), только его роль —
     // get_available_slots ищет в них половину дня, когда текущее сообщение само
     // по себе не даёт сигнала (отрицание без своей метки, «Нет»), а дизъюнкция
@@ -915,9 +919,11 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
     toolCtx.patientRecentTexts = messages
       .filter(m => m.role === 'user')
       .map(m => stripAllStamps(String(m.content || '')).trim());
-    // Хвост диалога (последние три блока: серия пациента, предыдущая реплика
-    // Милы, блок перед ней) — гейт согласия reschedule_booking: время переноса
-    // обязано звучать цифрами здесь (инцидент 2026-09-19).
+    const bookingIntent = bookingWriteGuard.patientIntent(toolCtx.patientRecentTexts);
+    toolCtx.rescheduleRequested = bookingIntent === 'reschedule' || (!bookingIntent
+      && messages.some(m => /перенес|перенести|перенос|перезапис/iu.test(String(m.content || ''))));
+    // Хвост диалога для контекстных проверок инструментов. Согласие на перенос
+    // проверяется отдельно по previousAssistantText и patientLastText.
     toolCtx.recentDialogText = messages.slice(-3)
       .map(m => stripAllStamps(String(m.content || '')).trim()).join('\n');
     // Времена ПРЕДЫДУЩЕЙ реплики Милы — для checkRejectedRepeat (повтор
@@ -1079,7 +1085,7 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
           if (phoneRequest.isNeedsPhone(result)) phoneRequested = { datetime: (tc.input || {}).datetime || null };
           // unverified_slot — предрешённая подсказка «сначала запроси слоты»
           // (slot-evidence), а не провал записи: YClients не звался.
-          else if (isError && !(result && result.unverified_slot)) bookingErrored = true;
+          else if (isError && !(result && (result.unverified_slot || result.requires_reschedule || result.unverified_existing_bookings || result.needs_confirmation))) bookingErrored = true;
           else if (!isError) bookingSucceeded = true;
         }
         // Перенос — тот же класс провала, что создание (инцидент 2026-09-19:
@@ -1107,7 +1113,7 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
           if (result && result.booked_all) {
             bookingSucceeded = true; writeSucceeded = true;
             const first = (result.records || [])[0] || {};
-            lastWrite = { tool: 'create_booking', input: { datetime: first.datetime, client_name: (tc.input || {}).client_name } };
+            lastWrite = { tool: result.rescheduled ? 'reschedule_booking' : 'create_booking', input: { record_id: first.record_id, datetime: first.datetime, client_name: (tc.input || {}).client_name } };
           } else if (result && (result.partial || result.failed_at)) {
             bookingErrored = true;
             if (result.partial) {
@@ -1117,7 +1123,7 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
               // «всё оформила» про частичную бронь.
               writeSucceeded = true;
               const first = (result.records || [])[0] || {};
-              lastWrite = { tool: 'create_booking', input: { datetime: first.datetime, client_name: (tc.input || {}).client_name } };
+              lastWrite = { tool: result.rescheduled ? 'reschedule_booking' : 'create_booking', input: { record_id: first.record_id, datetime: first.datetime, client_name: (tc.input || {}).client_name } };
             }
           } else if (result && !result.option_expired && !result.needs_confirmation) {
             bookingErrored = true;
@@ -1128,12 +1134,16 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
         if (tc.name === 'book_chain' && result) {
           if (result.booked_all || result.partial) {
             directChainReply = chainConfirmation.confirmationReply(result);
+          } else if (result.reschedule_blocked) {
+            directChainReply = 'Не удалось безопасно перенести существующие записи. Новые записи не созданы. Требуется помощь администратора.';
           } else if (result.needs_confirmation) {
             const ids = result.matching_option_ids || [];
             const option = ids.length === 1 && seqOffers.take(salonId, dialogKey, ids[0], { nowMs });
             const facts = option && chainConfirmation.formatFacts(option.chain);
             directChainReply = facts && facts.length
-              ? `Подтвердите, пожалуйста, этот вариант:\n${facts.join('\n')}\nЗаписать?`
+              ? (result.reschedule_confirmation
+                ? `Перенести существующие записи на это время?\n${facts.join('\n')}`
+                : `Подтвердите, пожалуйста, этот вариант:\n${facts.join('\n')}\nЗаписать?`)
               : 'Уточним выбранный вариант: на какую дату, время и к каким специалистам вас записать?';
           }
           // Stop the batch: a second write cannot bypass rejection or add a duplicate.

@@ -14,6 +14,9 @@ const createBk = require('./create-booking');
 const bookingModify = require('../booking-modify');
 const offers = require('../sequential-offers');
 const confirmation = require('../chain-confirmation');
+const chainReschedule = require('../chain-reschedule');
+const rescheduleBk = require('./reschedule-booking');
+const writeGuard = require('../booking-write-guard');
 
 // Доверенный modify для book_chain: record_id получен из НАШЕГО createBooking
 // (не от LLM), поэтому ownership-гейт modify_booking_services тут не нужен и
@@ -75,6 +78,13 @@ async function run(salonId, input, ctx = {}, deps = {}) {
   const rejection = confirmation.validateChoice(
     offers.peek(salonId, ctx.dialogKey, { nowMs: ctx.nowMs }), input.option_id, ctx);
   if (rejection) return rejection;
+  const transfer = chainReschedule.plan(offer, input, ctx);
+  if (transfer) {
+    if (transfer.error) return transfer;
+    const result = await chainReschedule.execute(salonId, transfer, ctx, deps.rescheduleBooking || rescheduleBk.run);
+    if (result.booked_all) offers.markBooked(salonId, ctx.dialogKey, input.option_id, { nowMs: ctx.nowMs });
+    return result;
+  }
   // Якорный режим: первая услуга уже записана — её не создаём и не двигаем.
   const items = (offer.chain || []).filter(l => !l.already_booked);
   if (!items.length) return { error: 'В выбранном варианте нет услуг для оформления.' };
@@ -94,7 +104,7 @@ async function run(salonId, input, ctx = {}, deps = {}) {
     datetime: l.datetime,
     seance_length: l.seance_length,
     ...common,
-  }, linkCtx);
+  }, Object.prototype.hasOwnProperty.call(ctx, 'liveBookings') ? writeGuard.withNewChainLink(linkCtx, l) : linkCtx);
 
   // Идемпотентный ретрай (take() не потребляет offer, повтор book_chain с тем же
   // option_id — штатный сценарий): createBookingRecord на дубль отдаёт

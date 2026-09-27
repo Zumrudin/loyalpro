@@ -1,0 +1,134 @@
+'use strict';
+
+const { extractTimes } = require('./reply-guard');
+const { resolveDate } = require('./offer-attribution');
+const { stripAllStamps } = require('./transcript-time');
+const { moscowDateKey, moscowHHMM } = require('./slot-evidence');
+
+// Capabilities are server-only Symbols, bound to exact targets. Tool JSON cannot
+// opt out of consent or turn a rejected transfer into creation.
+const CHAIN_MOVE = Symbol('confirmed chain transfer');
+const CHAIN_CREATE = Symbol('confirmed new chain link');
+const MONTH = '(?:январ|феврал|март|апрел|ма[йя]|июн|июл|август|сентябр|октябр|ноябр|декабр)[а-яё]*';
+const DATE = new RegExp(`\\d{4}-\\d{2}-\\d{2}|(?<![\\d:.])\\d{1,2}\\.(?:0[1-9]|1[0-2])(?:\\.\\d{4})?(?![\\d:.])|(?<![:\\d])\\d{1,2}\\s+${MONTH}(?:\\s+\\d{4}(?:\\s*года)?)?`, 'giu');
+const RELATIVE = /(?<!\p{L})(?:послезавтра|завтра|сегодня)(?!\p{L})/giu;
+const WEEKDAY = /(?<!\p{L})(?:понедельник|вторник|сред[ауе]|четверг|пятниц[ауе]|суббот[ауе]|воскресенье)(?!\p{L})/giu;
+const TIME = /(?<!\d)(?:[01]?\d|2[0-3])[:.][0-5]\d(?!\d)/g;
+const clean = s => stripAllStamps(String(s || '')).replace(/\*/g, '').trim();
+
+function datesIn(text, nowMs) {
+  const keys = [];
+  let rest = clean(text).replace(DATE, raw => {
+    let key = /^\d{4}-/.test(raw) ? raw : resolveDate(raw, { nowMs });
+    const year = /(?:\.|\s)(\d{4})(?:\s*года)?$/.exec(raw);
+    if (key && year) key = `${year[1]}${key.slice(4)}`;
+    const day = /^\d{4}-/.test(raw) ? Number(raw.slice(8, 10)) : Number(/^\d+/.exec(raw)[0]);
+    if (!key || Number(key.slice(8, 10)) !== day) key = 'invalid';
+    keys.push(key);
+    return ' ';
+  });
+  rest = rest.replace(RELATIVE, raw => { keys.push(resolveDate(raw, { nowMs })); return ' '; });
+  const hasDate = keys.length > 0;
+  rest = rest.replace(WEEKDAY, raw => {
+    if (!hasDate) keys.push(resolveDate(raw, { nowMs }));
+    return ' ';
+  });
+  return { keys: [...new Set(keys)], rest };
+}
+
+function transferConfirmed(targets, ctx, multiple = false, allowAdditional = false) {
+  const previous = clean(ctx.previousAssistantText);
+  const patient = clean(ctx.patientLastText).toLowerCase().replace(/ё/g, 'е');
+  const nowMs = ctx.nowMs || Date.now();
+  if (!targets.length || targets.some(t => !Number.isFinite(Date.parse(t.datetime)))) return false;
+  if (!previous || !patient || /\?/.test(patient)) return false;
+  // «Да» after a negative proposal is not affirmative consent to move.
+  if (/(?<!\p{L})не(?!\p{L})[^.!?\n]{0,60}перен|без\s+перен|не\s+подходит|не\s*удоб/iu.test(previous)) return false;
+  // A short «Да» cannot choose a day from a shorthand date list.
+  if (/\d\s*(?:или|и|[,–—-])\s*\d{1,2}\s+[а-яё]/iu.test(previous)) return false;
+  if (!allowAdditional && /дополнител|нов(?:ая|ую)\s+запис/iu.test(previous)) return false;
+  const proposal = datesIn(previous, nowMs);
+  const answer = datesIn(patient, nowMs);
+  const targetDates = targets.map(t => moscowDateKey(Date.parse(t.datetime)));
+  if (proposal.keys.length !== 1 || targetDates.some(d => d !== proposal.keys[0])) return false;
+  if (answer.keys.length && (answer.keys.length !== 1 || answer.keys[0] !== proposal.keys[0])) return false;
+  const offered = [...new Set(extractTimes(previous))];
+  const selected = [...new Set(extractTimes(patient))];
+  const required = [...new Set(targets.map(t => moscowHHMM(t.datetime)))];
+  if (required.some(t => !t || !offered.includes(t))) return false;
+  const words = answer.rest.replace(TIME, ' ').match(/[а-яa-z]+/giu) || [];
+  const allowed = new Set(['да', 'давайте', 'пожалуйста', 'хорошо', 'ок', 'окей', 'подходит',
+    'подтверждаю', 'согласен', 'согласна', 'все', 'верно', 'перенеси', 'перенесите', 'переносите',
+    'на', 'в', 'это', 'время', 'меня']);
+  if (words.some(w => !allowed.has(w)) || /\d/.test(answer.rest.replace(TIME, ' '))) return false;
+  const affirmative = words.some(w => ['да', 'давайте', 'хорошо', 'ок', 'окей', 'подходит', 'подтверждаю',
+    'согласен', 'согласна', 'перенеси', 'перенесите', 'переносите', 'верно'].includes(w));
+  if (!affirmative && !selected.length) return false;
+  if (selected.length) return selected.length === required.length && selected.every(t => required.includes(t));
+  return affirmative && offered.length === required.length && (multiple || offered.length === 1);
+}
+
+function withChainTransfer(ctx, targets) {
+  return transferConfirmed(targets, ctx, true) ? { ...ctx, [CHAIN_MOVE]: targets } : ctx;
+}
+
+function rescheduleRejection(input, ctx) {
+  const bound = ctx[CHAIN_MOVE];
+  if (bound && bound.some(t => t.record_id === input.record_id && t.datetime === input.datetime
+      && t.staff_yc_id === input.staff_yc_id)) return null;
+  const moveIntent = ctx.rescheduleRequested || /перенес|перенести|перенос|перезапис/iu.test(clean(ctx.previousAssistantText));
+  if (moveIntent && transferConfirmed([input], ctx)) return null;
+  return { needs_confirmation: true, invalid_args: true,
+    error: `Перенос на ${input.datetime} не подтверждён. Назови одну новую дату и конкретное время, дождись явного согласия. Не создавай новую запись вместо переноса.` };
+}
+
+function patientIntent(texts) {
+  for (const text of [...(texts || [])].reverse()) {
+    const s = clean(text).toLowerCase();
+    if (/перенес|перенести|перенос|перезапис/iu.test(s)
+        && !/(?<!\p{L})не(?!\p{L})[^.!?\n]{0,40}перен|без\s+перен/iu.test(s)) return 'reschedule';
+    if (/\?|(?<!\p{L})(?:нет|не)(?!\p{L})/iu.test(s)) return null;
+    if (/дополнительн[а-яё]*\s+запис|ещ[её]\s+одн[а-яё]*\s+запис|прежн[а-яё]*\s+(?:запис[а-яё]*\s+)?остав/iu.test(s)) return 'additional';
+    if (/хочу\s+запис|(?<!\p{L})запиши(?:те)?(?!\p{L})|нов(?:ая|ую)\s+запис/iu.test(s)) return 'new';
+  }
+  return null;
+}
+
+function withNewChainLink(ctx, input) { return { ...ctx, [CHAIN_CREATE]: input }; }
+
+function creationRejection(input, ctx) {
+  const scope = Object.prototype.hasOwnProperty.call(ctx, 'liveBookings');
+  const intent = patientIntent([...(ctx.patientRecentTexts || []), ctx.patientLastText]);
+  const link = ctx[CHAIN_CREATE];
+  const trustedLink = link && link.service_yc_id === input.service_yc_id && link.datetime === input.datetime;
+  const previous = clean(ctx.previousAssistantText);
+  const offeredTransfer = /перенести|перенес[её]м|переносим/iu.test(previous)
+    && !/(?<!\p{L})не(?!\p{L})[^.!?\n]{0,60}перен|без\s+перен/iu.test(previous);
+  const moving = intent === 'reschedule' || offeredTransfer
+    || (!['additional', 'new'].includes(intent) && ctx.rescheduleRequested);
+  const blocked = { requires_reschedule: true, invalid_args: true,
+    error: 'Создание новой записи вместо переноса запрещено. Используй исходный record_id из list_client_bookings и reschedule_booking после подтверждения. Для отдельного дополнительного визита требуется явный запрос пациента.' };
+  if (moving && !trustedLink) return blocked;
+  if (!scope) return null; // Existing non-dialog internal callers retain their contract.
+  if (!Array.isArray(ctx.liveBookings) || ctx.liveBookings.some(b => !Array.isArray(b.service_yc_ids) || !b.service_yc_ids.length)) {
+    return { unverified_existing_bookings: true, invalid_args: true,
+      error: 'Не удалось проверить существующие записи. Сначала проверь list_client_bookings; пока не создавай новую запись.' };
+  }
+  const matches = ctx.liveBookings.filter(b => b.service_yc_ids.some(id => Number(id) === Number(input.service_yc_id)));
+  const identical = matches.filter(b => b.service_yc_ids.length === 1
+    && Number(b.staff_yc_id) === Number(input.staff_yc_id) && Date.parse(b.datetime) === Date.parse(input.datetime));
+  if (identical.length === 1 && identical[0].record_id) {
+    return { created: false, duplicate: true, record_id: identical[0].record_id };
+  }
+  if (matches.length) {
+    if (intent !== 'additional') return blocked;
+    if (!/дополнител|ещ[её]\s+одн|прежн[а-яё]*\s+(?:запис[а-яё]*\s+)?остав/iu.test(previous)
+        || !transferConfirmed([input], ctx, false, true)) {
+      return { needs_confirmation: true, invalid_args: true,
+        error: 'Подтверди отдельный дополнительный визит на конкретную дату и время с сохранением прежней записи. Дождись согласия.' };
+    }
+  }
+  return null;
+}
+
+module.exports = { creationRejection, rescheduleRejection, withChainTransfer, withNewChainLink, transferConfirmed, patientIntent };

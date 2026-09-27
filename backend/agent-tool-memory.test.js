@@ -137,6 +137,15 @@ test('экстрактор book_chain: частичная цепочка пом�
   expect(renderMemory(rows, { nowMs: NOW }).lines[0]).toMatch(/ЧАСТИЧНО/);
 });
 
+test.each([true, false])('chain transfer is remembered as a transfer (complete=%s)', booked_all => {
+  const rows = [ev({ tool: 'book_chain', result: { booked_all, partial: !booked_all, rescheduled: true,
+    records: [{ record_id: 501, datetime: '2026-08-05T14:00:00+03:00' }] } })];
+  const line = renderMemory(rows, { nowMs: NOW }).lines[0];
+  expect(line).toMatch(/перенес/);
+  expect(line).not.toMatch(/оформила|оформлена/);
+  if (!booked_all) expect(line).toMatch(/ЧАСТИЧНО/);
+});
+
 test('история визитов: счётчик и первые визиты', () => {
   const rows = [ev({ tool: 'get_client_visit_history', result: { visits: [{ date: '2026-07-01', services: [{ title: 'Чистка' }] }, { date: '2026-06-01', services: [{ title: 'Пилинг' }] }] } })];
   const line = renderMemory(rows, { nowMs: NOW }).lines[0];

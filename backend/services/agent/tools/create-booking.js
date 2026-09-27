@@ -11,6 +11,8 @@ const genericGuard = require('../generic-booking-guard');
 const identity = require('../identity');
 const phoneRequest = require('../phone-request');
 const slotEvidence = require('../slot-evidence');
+const writeGuard = require('../booking-write-guard');
+const listBookings = require('./list-client-bookings');
 
 // Отказ YClients именно по времени старта («Выбранное время недоступно…»,
 // «мастер занят…»), а не по услуге/токену/клиенту. Только на нём есть смысл
@@ -110,11 +112,26 @@ async function run(salonId, input, ctx = {}) {
     return { needs_phone: true, invalid_args: true, error: phoneRequest.NEEDS_PHONE_ERROR };
   }
   const nowMs = (ctx && ctx.nowMs) || Date.now();
+  const thirdParty = tpLimit.isThirdParty(input && input.client_phone, ctx.clientPhone);
+  let guardCtx = ctx;
+  // Never compare a guest's request against the owner's visits. Their history
+  // is loaded through the same tenant-scoped service, not supplied by the model.
+  if (thirdParty && Object.prototype.hasOwnProperty.call(ctx, 'liveBookings')) {
+    const intentRejection = writeGuard.creationRejection(input, { ...ctx, liveBookings: [] });
+    if (intentRejection) return intentRejection;
+    let rows = null;
+    try {
+      const res = await listBookings.run(salonId, {}, { clientPhone, nowMs });
+      if (res && !res.error && res.reason !== 'no_yclients' && Array.isArray(res.bookings)) rows = res.bookings;
+    } catch (_) { /* Unknown is not an empty list. */ }
+    guardCtx = { ...ctx, liveBookings: rows };
+  }
+  const creationRejection = writeGuard.creationRejection(input, guardCtx);
+  if (creationRejection) return creationRejection;
   // Анти-абьюз (аудит 2026-08-01): client_phone принимает произвольный номер
   // («запись другого человека») — без лимита один диалог насоздаёт записей на
   // чужие номера. Не больше LIMIT РАЗНЫХ посторонних номеров за сутки; повторная
   // запись на уже записанный номер (цепочка услуг гостю) проходит всегда.
-  const thirdParty = tpLimit.isThirdParty(input && input.client_phone, ctx.clientPhone);
   const clientName = await resolveCardName(salonId, { input, ctx, thirdParty, clientPhone });
   if (thirdParty && !tpLimit.allowed(salonId, ctx.dialogKey || clientPhone, clientPhone, nowMs)) {
     return {

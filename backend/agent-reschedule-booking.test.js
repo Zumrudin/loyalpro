@@ -22,6 +22,7 @@ beforeEach(() => jest.clearAllMocks());
 // «Сейчас» — далеко до слота, чтобы lead-time не мешал.
 const NOW = Date.parse('2026-09-19T09:00:00+03:00');
 const DT = '2026-09-23T17:00:00+03:00';
+const CONSENT = { previousAssistantText: 'Перенести на 23 сентября 2026 в 17:00?', patientLastText: 'Да' };
 const slot = (t) => ({ time: t, datetime: `2026-09-23T${t}:00+03:00`, seance_length: 3000 });
 
 function evidenceWith(times, staff = 3356928) {
@@ -29,6 +30,17 @@ function evidenceWith(times, staff = 3356928) {
   ev.add('get_available_slots', { staff_yc_id: staff, date: '2026-09-23' }, { slots: times.map(slot) });
   return ev;
 }
+
+test('chain source services reach the CRM revalidation through server context', async () => {
+  const result = await tool.run(1, { record_id: 5, datetime: DT }, {
+    ...CONSENT, clientPhone: 'test-owner', nowMs: NOW, expectedServiceYcIds: [101],
+    slotEvidence: evidenceWith(['17:00']), recentDialogText: 'Перенести на 17:00?',
+  });
+  expect(result.rescheduled).toBe(true);
+  expect(bookingModify.rescheduleBookingRecord).toHaveBeenCalledWith(1, expect.objectContaining({
+    recordId: 5, expectedYcClientId: 777, expectedServiceYcIds: [101],
+  }));
+});
 
 test('боевой случай: слоты не запрашивались → unverified_slot, YClients не зовётся', async () => {
   const res = await tool.run(1, { record_id: 1922530986, datetime: '2026-09-21T10:00:00+03:00' }, {
@@ -58,16 +70,19 @@ test('время в выдаче И названо пациентом → пер
   const res = await tool.run(1, { record_id: 5, datetime: DT }, {
     clientPhone: '79651442032', nowMs: NOW, slotEvidence: evidenceWith(['13:30', '17:00']),
     recentDialogText: 'Мила: есть 13:30 и 17:00, что удобнее?\nПациент: 17.00',
+    previousAssistantText: '23 сентября есть 13:30 и 17:00, на какое время перенести?', patientLastText: '17.00',
   });
   expect(res.rescheduled).toBe(true);
   expect(tool.isHintResult(res)).toBe(false);
   expect(bookingModify.rescheduleBookingRecord).toHaveBeenCalledTimes(1);
 });
 
-test('время предложила Мила, пациент ответил «да» — цифра в её реплике достаточна', async () => {
+test('Мила предложила дату и время, пациент ответил «да» — перенос разрешён', async () => {
   const res = await tool.run(1, { record_id: 5, datetime: DT }, {
     clientPhone: '79651442032', nowMs: NOW, slotEvidence: evidenceWith(['17:00']),
     recentDialogText: '[19.09 09:03] В среду у Татьяны есть окошко в 17:00. Подойдёт?\nДа, давайте',
+    previousAssistantText: '[19.09 09:03] В среду у Татьяны есть окошко в 17:00. Подойдёт?', patientLastText: 'Да, давайте',
+    rescheduleRequested: true,
   });
   expect(res.rescheduled).toBe(true);
 });
@@ -89,9 +104,10 @@ test('смена мастера: staff_yc_id сверяется с владел�
   expect(res.unverified_slot).toBe(true);
 });
 
-test('fail-open: без slotEvidence и recentDialogText в ctx — прежний контракт', async () => {
+test('без серверного контекста согласия перенос запрещён', async () => {
   const res = await tool.run(1, { record_id: 5, datetime: DT }, { clientPhone: '79651442032', nowMs: NOW });
-  expect(res.rescheduled).toBe(true);
+  expect(res.needs_confirmation).toBe(true);
+  expect(bookingModify.rescheduleBookingRecord).not.toHaveBeenCalled();
 });
 
 test('too_soon и провал YClients: too_soon — hint, отказ YClients — провал', async () => {
@@ -102,7 +118,7 @@ test('too_soon и провал YClients: too_soon — hint, отказ YClients 
   expect(tool.isHintResult(soon)).toBe(true);
 
   bookingModify.rescheduleBookingRecord.mockResolvedValueOnce({ ok: false, error: 'Выбранное время недоступно' });
-  const fail = await tool.run(1, { record_id: 5, datetime: DT }, { clientPhone: '79651442032', nowMs: NOW });
+  const fail = await tool.run(1, { record_id: 5, datetime: DT }, { ...CONSENT, clientPhone: '79651442032', nowMs: NOW });
   expect(fail.error).toMatch(/недоступно/);
   expect(tool.isHintResult(fail)).toBe(false);
 });
@@ -112,7 +128,7 @@ test('booking-modify вернул wrongService → hint invalid_args, не пр�
     ok: false, wrongService: true, error: 'Слот найден под другую услугу…',
   });
   const res = await tool.run(1, { record_id: 5, datetime: DT }, {
-    clientPhone: '79651442032', nowMs: NOW, slotEvidence: evidenceWith(['17:00']),
+    ...CONSENT, clientPhone: '79651442032', nowMs: NOW, slotEvidence: evidenceWith(['17:00']),
     recentDialogText: 'на 17:00',
   });
   expect(res.invalid_args).toBe(true);
@@ -123,7 +139,7 @@ test('booking-modify вернул wrongService → hint invalid_args, не пр�
 test('slotEvidence из ctx пробрасывается в rescheduleBookingRecord (иначе гейт A2 неактивен)', async () => {
   const ev = evidenceWith(['17:00']);
   await tool.run(1, { record_id: 5, datetime: DT }, {
-    clientPhone: '79651442032', nowMs: NOW, slotEvidence: ev,
+    ...CONSENT, clientPhone: '79651442032', nowMs: NOW, slotEvidence: ev,
     recentDialogText: 'на 17:00',
   });
   expect(bookingModify.rescheduleBookingRecord).toHaveBeenCalledWith(

@@ -7,6 +7,7 @@ const { ycGetServiceMeta, ycGetServiceCatalog } = require('../yclients');
 const { ycGetDayRecords } = require('../yclients-booking');
 const { withRateLimitRetry } = require('../yclients-retry');
 const { wrongServiceHint } = require('./slot-evidence');
+const { isRecordAlive } = require('./record-liveness');
 
 // ── Исполнитель отмены и переноса записи агентом. ──
 // Отмена — НЕ удаление: помечаем «клиент не пришёл» (attendance=-1), режем
@@ -57,7 +58,7 @@ function clientOf(rec) {
 
 // Проверка принадлежности записи клиенту. Возвращает строку-ошибку или null.
 function ownershipError(rec, expectedYcClientId) {
-  if (expectedYcClientId && rec.client && Number(rec.client.id) !== Number(expectedYcClientId)) {
+  if (expectedYcClientId && (!rec.client || Number(rec.client.id) !== Number(expectedYcClientId))) {
     return 'Запись принадлежит другому клиенту.';
   }
   return null;
@@ -101,7 +102,7 @@ async function cancelBookingRecord(salonId, { dialogKey, recordId, expectedYcCli
 }
 
 async function rescheduleBookingRecord(salonId, {
-  dialogKey, recordId, expectedYcClientId, datetime, staffYcId, seanceLength, slotEvidence,
+  dialogKey, recordId, expectedYcClientId, datetime, staffYcId, seanceLength, slotEvidence, expectedServiceYcIds,
 }) {
   const salon = await loadSalon(salonId);
   if (!salon) return { ok: false, error: 'YClients не подключён для салона.' };
@@ -111,6 +112,22 @@ async function rescheduleBookingRecord(salonId, {
   catch (e) { return { ok: false, error: e.message }; }
   if (!rec || !rec.id) return { ok: false, error: 'Запись не найдена.' };
   if (ownershipError(rec, expectedYcClientId)) return { ok: false, foreign: true, error: ownershipError(rec, expectedYcClientId) };
+
+  // A chain is bound to exact source services. Re-read before PUT so a change
+  // or cancellation between offer/confirmation cannot move an unrelated visit.
+  if (!isRecordAlive(rec)) {
+    return { ok: false, inactive: true, error: 'Исходная запись отменена или удалена. Перенос не выполнен.' };
+  }
+  if (expectedServiceYcIds) {
+    const actual = serviceIds(rec).map(s => Number(s.id)).sort((a, b) => a - b);
+    const expected = expectedServiceYcIds.map(Number).sort((a, b) => a - b);
+    if (!expectedYcClientId || !rec.client || Number(rec.client.id) !== Number(expectedYcClientId)) {
+      return { ok: false, foreign: true, error: 'Не удалось подтвердить владельца записи.' };
+    }
+    if (!expected.length || JSON.stringify(actual) !== JSON.stringify(expected)) {
+      return { ok: false, wrongService: true, error: 'Состав или состояние исходной записи изменились. Перенос не выполнен.' };
+    }
+  }
 
   // Слот, из которого взят datetime, обязан быть найден по РЕАЛЬНОЙ услуге
   // этой записи — не по той, что модель (пере)спросила у пациента своими
@@ -123,6 +140,12 @@ async function rescheduleBookingRecord(salonId, {
         && !slotEvidence.has(datetime, { staffYcId: staffYcId || rec.staff_id, serviceYcIds: recordServiceIds })) {
       return { ok: false, wrongService: true, error: wrongServiceHint(datetime, recordServiceIds) };
     }
+  }
+
+  if (Date.parse(rec.datetime) === Date.parse(datetime)
+      && Number(rec.staff_id) === Number(staffYcId || rec.staff_id)
+      && Number(rec.seance_length) === Number(seanceLength || rec.seance_length)) {
+    return { ok: true, already: true, record_id: rec.id, datetime };
   }
 
   // Лимит запросов YClients (429) повторяем: инцидент 2026-09-19 — два переноса

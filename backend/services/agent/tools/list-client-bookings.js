@@ -52,6 +52,7 @@ async function run(salonId, _input, ctx = {}) {
       record_id: r.id,
       datetime: r.datetime || r.date || null,
       services: (Array.isArray(r.services) ? r.services : []).map(s => s.title).filter(Boolean),
+      service_yc_ids: (Array.isArray(r.services) ? r.services : []).map(s => Number(s.id)).filter(Boolean),
       staff_yc_id: r.staff_id || (r.staff && r.staff.id) || null,
       staff_name: (r.staff && r.staff.name) || null,
     }));

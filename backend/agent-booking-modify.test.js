@@ -80,6 +80,42 @@ describe('cancelBookingRecord', () => {
 });
 
 describe('rescheduleBookingRecord', () => {
+  test.each([{ deleted: true }, { attendance: -1 }, { client: null }])
+  ('ordinary transfer rejects inactive or unverifiable source: %j', async change => {
+    ycr.ycGetRecord.mockResolvedValue({ ...REC, ...change });
+    const result = await rescheduleBookingRecord(1, { recordId: REC.id, expectedYcClientId: 777,
+      datetime: '2026-10-02T15:00:00+03:00' });
+    expect(result.ok).toBe(false);
+    expect(ycr.ycUpdateRecord).not.toHaveBeenCalled();
+  });
+
+  test.each([
+    { services: [{ id: 99 }] }, { services: [] }, { deleted: true },
+    { attendance: -1 }, { client: null }, { client: { id: 888 } },
+  ])('chain source changed or cannot be verified: no PUT (%j)', async change => {
+    ycr.ycGetRecord.mockResolvedValue({ ...REC, ...change });
+    const res = await rescheduleBookingRecord(1, { dialogKey: 'd', recordId: REC.id,
+      expectedYcClientId: 777, expectedServiceYcIds: [10], datetime: '2026-10-02T15:00:00+03:00' });
+    expect(res.ok).toBe(false);
+    expect(ycr.ycUpdateRecord).not.toHaveBeenCalled();
+  });
+
+  test('retry of a completed chain link does not repeat PUT or notification', async () => {
+    ycr.ycGetRecord.mockResolvedValue(REC);
+    const res = await rescheduleBookingRecord(1, { dialogKey: 'd', recordId: REC.id,
+      expectedYcClientId: 777, expectedServiceYcIds: [10], datetime: REC.datetime,
+      staffYcId: REC.staff_id, seanceLength: REC.seance_length });
+    expect(res).toMatchObject({ ok: true, already: true, record_id: REC.id });
+    expect(ycr.ycUpdateRecord).not.toHaveBeenCalled();
+  });
+  test('ordinary transfer retry does not repeat PUT either', async () => {
+    ycr.ycGetRecord.mockResolvedValue(REC);
+    const result = await rescheduleBookingRecord(1, { recordId: REC.id, expectedYcClientId: 777,
+      datetime: REC.datetime, staffYcId: REC.staff_id, seanceLength: REC.seance_length });
+    expect(result).toMatchObject({ ok: true, already: true, record_id: REC.id });
+    expect(ycr.ycUpdateRecord).not.toHaveBeenCalled();
+  });
+
   test('PUT нового datetime, услуги и мастер сохраняются', async () => {
     ycr.ycGetRecord.mockResolvedValue(REC);
     ycr.ycUpdateRecord.mockResolvedValue({ id: 555 });

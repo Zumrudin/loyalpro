@@ -903,7 +903,7 @@ describe('list_client_bookings', () => {
     const out = await listClientBookings.run(1, {}, { clientPhone: '79001112233', nowMs });
     expect(out.bookings).toHaveLength(1);
     expect(out.bookings[0]).toMatchObject({
-      record_id: 1, staff_yc_id: 7, staff_name: 'Иванова', services: ['Пилинг'],
+      record_id: 1, staff_yc_id: 7, staff_name: 'Иванова', services: ['Пилинг'], service_yc_ids: [10],
     });
   });
 
@@ -1023,6 +1023,7 @@ describe('cancel_booking', () => {
 });
 
 describe('reschedule_booking', () => {
+  const consent = { previousAssistantText: 'Перенести на 26 июля 2026 в 15:00?', patientLastText: 'Да' };
   test('нет datetime → invalid_args', async () => {
     const out = await rescheduleBooking.run(1, { record_id: 555 }, { clientPhone: '79001112233' });
     expect(out.invalid_args).toBe(true);
@@ -1032,7 +1033,7 @@ describe('reschedule_booking', () => {
   test('без подтверждённого клиента → unverified, переноса нет (fail-closed)', async () => {
     identity.resolveYclientsClientId.mockResolvedValue(null);
     const out = await rescheduleBooking.run(1,
-      { record_id: 555, datetime: '2026-07-26T15:00:00+03:00' }, { clientPhone: '79001112233' });
+      { record_id: 555, datetime: '2026-07-26T15:00:00+03:00' }, { ...consent, clientPhone: '79001112233' });
     expect(out.unverified).toBe(true);
     expect(out.rescheduled).toBeUndefined();
     expect(bookingModify.rescheduleBookingRecord).not.toHaveBeenCalled();
@@ -1045,7 +1046,7 @@ describe('reschedule_booking', () => {
     });
     const out = await rescheduleBooking.run(1,
       { record_id: 555, datetime: '2026-07-26T15:00:00+03:00' },
-      { clientPhone: '79001112233', dialogKey: 'd' });
+      { ...consent, clientPhone: '79001112233', dialogKey: 'd' });
     expect(out.rescheduled).toBe(true);
     expect(out.datetime).toBe('2026-07-26T15:00:00+03:00');
     expect(bookingModify.rescheduleBookingRecord.mock.calls[0][1]).toMatchObject({
@@ -1057,7 +1058,7 @@ describe('reschedule_booking', () => {
     identity.resolveYclientsClientId.mockResolvedValue(777);
     bookingModify.rescheduleBookingRecord.mockResolvedValue({ ok: false, error: 'занято' });
     const out = await rescheduleBooking.run(1,
-      { record_id: 555, datetime: '2026-07-26T15:00:00+03:00' }, { clientPhone: '79001112233' });
+      { record_id: 555, datetime: '2026-07-26T15:00:00+03:00' }, { ...consent, clientPhone: '79001112233' });
     expect(out.rescheduled).toBeUndefined();
     expect(out.error).toBe('занято');
   });

@@ -11,9 +11,40 @@ const stem = word => word.replace(/(?:ой|ей|а|я|ы|и|е|у|ю)$/u, '');
 const sameName = (a, b) => stem(a).length >= 3 && stem(b).length >= 3
   && stem(a) === stem(b);
 
+function mentionedStaff(offers, text) {
+  const staff = new Map();
+  for (const offer of Object.values(offers || {})) {
+    for (const link of Array.isArray(offer && offer.chain) ? offer.chain : []) {
+      staff.set(String(link.staff_yc_id), words(link.staff_name));
+    }
+  }
+  const normalized = String(text || '').toLowerCase().replace(/ё/g, 'е').replace(/\*/g, '');
+  const tokens = [...normalized.matchAll(/[а-яa-z]+/g)];
+  const mentions = [];
+  let previousEnd = -1;
+  for (const token of tokens) {
+    const prefix = normalized.slice(0, token.index);
+    // Only explicit staff references: «у Анны Ивановой», «к Анне»,
+    // «15:00 Анна». A patient's name in a greeting is not a staff choice.
+    const startsMention = /(?:^|[^а-яa-z])(?:у|к)\s+$/.test(prefix)
+      || /\b\d{1,2}:\d{2}\s*(?:[—–-]\s*)?$/.test(prefix)
+      || /(?:^|[^а-яa-z])специалист\s*:\s*$/.test(prefix);
+    const continuesMention = previousEnd >= 0 && /^\s+$/.test(normalized.slice(previousEnd, token.index));
+    const ids = [...staff].filter(([, names]) => names.some(n => sameName(n, token[0]))).map(([id]) => id);
+    if (ids.length && (startsMention || continuesMention)) {
+      mentions.push(ids);
+      previousEnd = token.index + token[0].length;
+    } else {
+      previousEnd = -1;
+    }
+  }
+  return mentions;
+}
+
 function matchingOffers(offers, text) {
   const times = extractTimes(String(text || ''));
   const tokens = words(text);
+  const mentions = mentionedStaff(offers, text);
   const dates = [...String(text || '').matchAll(/\b(\d{1,2})\.(\d{2})(?:\.\d{4})?\b/g)]
     .filter(m => Number(m[1]) <= 31 && Number(m[2]) >= 1 && Number(m[2]) <= 12)
     .map(m => `${m[1].padStart(2, '0')}.${m[2]}`);
@@ -24,6 +55,12 @@ function matchingOffers(offers, text) {
   }
   return Object.entries(offers || {}).filter(([, offer]) => {
     if (!offer || !Array.isArray(offer.chain) || !offer.chain.length) return false;
+    // Subsequence matching alone accepts «Anna then Maria» as «both Maria»:
+    // it finds Maria later in the text and skips the name for the second link.
+    // Every explicitly named specialist must be represented in the chain.
+    // Shared names keep all possible IDs, so genuine ambiguity stays blocked.
+    const staffIds = new Set(offer.chain.map(link => String(link.staff_yc_id)));
+    if (mentions.some(ids => !ids.some(id => staffIds.has(id)))) return false;
     const dt = String(offer.chain[0].datetime || '');
     if (dates.length && !dates.includes(`${dt.slice(8, 10)}.${dt.slice(5, 7)}`)) return false;
     let timePos = 0;
@@ -93,6 +130,9 @@ function formatFacts(records) {
 function confirmationReply(result) {
   const lines = formatFacts(result && result.records);
   if (!lines.length) return null;
+  if (result.rescheduled) {
+    return `${result.booked_all ? 'Записи перенесены:' : 'Удалось перенести только часть записей:'}\n${lines.join('\n')}`;
+  }
   return `${result.booked_all ? 'Запись оформлена:' : 'Удалось оформить только часть записи:'}\n${lines.join('\n')}`;
 }
 
