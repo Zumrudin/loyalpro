@@ -13,6 +13,7 @@
 const createBk = require('./create-booking');
 const bookingModify = require('../booking-modify');
 const offers = require('../sequential-offers');
+const confirmation = require('../chain-confirmation');
 
 // Доверенный modify для book_chain: record_id получен из НАШЕГО createBooking
 // (не от LLM), поэтому ownership-гейт modify_booking_services тут не нужен и
@@ -57,7 +58,7 @@ async function run(salonId, input, ctx = {}, deps = {}) {
   const createBooking = deps.createBooking || createBk.run;
   const modifyServices = deps.modifyServices || trustedModify;
 
-  const offer = offers.take(salonId, ctx.dialogKey, input && input.option_id);
+  const offer = offers.take(salonId, ctx.dialogKey, input && input.option_id, { nowMs: ctx.nowMs });
   if (!offer) {
     return {
       option_expired: true,
@@ -71,6 +72,9 @@ async function run(salonId, input, ctx = {}, deps = {}) {
     client_phone: input.client_phone,
     client_name: input.client_name,
   };
+  const rejection = confirmation.validateChoice(
+    offers.peek(salonId, ctx.dialogKey, { nowMs: ctx.nowMs }), input.option_id, ctx);
+  if (rejection) return rejection;
   // Якорный режим: первая услуга уже записана — её не создаём и не двигаем.
   const items = (offer.chain || []).filter(l => !l.already_booked);
   if (!items.length) return { error: 'В выбранном варианте нет услуг для оформления.' };
@@ -127,7 +131,7 @@ async function run(salonId, input, ctx = {}, deps = {}) {
     catch (e) { return fail(first, e.message); }
     if (r1 && r1.needs_phone) return needsPhone(r1);
     if (!bookedOk(r1)) return fail(first, (r1 && r1.error) || 'запись не создана');
-    records.push({ record_id: r1.record_id, service_title: first.service_title, datetime: first.datetime });
+    records.push(confirmation.recordFact(first, r1.record_id));
     if (rest.length) {
       let r2;
       try {
@@ -138,11 +142,13 @@ async function run(salonId, input, ctx = {}, deps = {}) {
       } catch (e) { return fail(rest[0], e.message); }
       if (!r2 || !r2.modified) return fail(rest[0], (r2 && r2.error) || 'услуги не добавились в запись');
       records[0].services_count = r2.services_count;
+      records[0].services = items.map(l => l.service_title);
+      records[0].service_yc_ids = items.map(l => l.service_yc_id);
     }
     // Вариант оформлен — снимаем его с витрины активных вариантов в промпте
     // (кэш живёт до 30 минут, слот теперь занят нашей же записью). take его
     // по-прежнему отдаёт: повторный book_chain тем же option_id идемпотентен.
-    offers.markBooked(salonId, ctx.dialogKey, input.option_id);
+    offers.markBooked(salonId, ctx.dialogKey, input.option_id, { nowMs: ctx.nowMs });
     return { booked_all: true, records };
   }
 
@@ -154,9 +160,9 @@ async function run(salonId, input, ctx = {}, deps = {}) {
     catch (e) { return fail(l, e.message); }
     if (r && r.needs_phone && !records.length) return needsPhone(r);
     if (!bookedOk(r)) return fail(l, (r && r.error) || 'запись не создана');
-    records.push({ record_id: r.record_id, service_title: l.service_title, datetime: l.datetime });
+    records.push(confirmation.recordFact(l, r.record_id));
   }
-  offers.markBooked(salonId, ctx.dialogKey, input.option_id);
+  offers.markBooked(salonId, ctx.dialogKey, input.option_id, { nowMs: ctx.nowMs });
   return { booked_all: true, records };
 }
 

@@ -89,6 +89,101 @@ const toolResp = (name, input, id = 'c1', text = '') => ({
     tool_calls: [{ id, type: 'function', function: { name, arguments: JSON.stringify(input) } }] },
 });
 
+describe('chain booking incident: truthful staff and enforced choice', () => {
+  const seqOffers = require('./services/agent/sequential-offers');
+  afterEach(() => seqOffers._reset());
+  const rawBooking = { record_id: 909090, datetime: '2026-10-01T15:30:00+03:00',
+    services: ['Первая услуга', 'Вторая услуга'], staff_yc_id: 8, staff_name: 'Мария' };
+
+  test('real book_chain: wrong choice is blocked; renewed consent books both intended specialists', async () => {
+    const bookChain = require('./services/agent/tools/book-chain');
+    const first = { service_yc_id: 101, service_title: 'Первая услуга', staff_yc_id: 7, staff_name: 'Анна',
+      datetime: '2026-10-01T15:00:00+03:00', seance_length: 1800 };
+    const second = { ...first, service_yc_id: 102, service_title: 'Вторая услуга', staff_yc_id: 8, staff_name: 'Мария',
+      datetime: '2026-10-01T15:30:00+03:00' };
+    seqOffers.remember(1, 'k', {
+      o5: { booking_mode: 'single_record', chain: [{ ...first, staff_yc_id: 8, staff_name: 'Мария', datetime: second.datetime },
+        { ...second, datetime: '2026-10-01T16:00:00+03:00' }] },
+      o13: { booking_mode: 'separate_records', chain: [first, second] },
+    }, { nowMs: Date.parse('2026-09-30T10:00:00Z') });
+    const writes = { createBooking: jest.fn(async (_salon, input) => ({ created: true, record_id: input.service_yc_id })),
+      modifyServices: jest.fn() };
+    let messages = [{ role: 'assistant', content: '01.10: 15:00 у Анны, затем 15:30 у Марии. Записать?' },
+      { role: 'user', content: 'Да' }];
+    const deps = makeDeps({
+      handlers: { book_chain: (salon, input, ctx) => bookChain.run(salon, input, ctx, writes) },
+      history: { loadTranscript: jest.fn(async () => ({ messages, watermark: 100 })) },
+    });
+    deps.provider.createMessage.mockResolvedValueOnce(toolResp('book_chain', { option_id: 'o5' }));
+    const rejected = await orchestrator.runDialog(1, 'k', { deps, nowMs: Date.parse('2026-09-30T10:00:00Z') });
+    expect(writes.createBooking).not.toHaveBeenCalled();
+    expect(rejected.replies.join('\n')).toContain('Подтвердите');
+    expect(deps.provider.createMessage.mock.calls[0][0].system.includes('o13 —')).toBe(true);
+    messages = messages.concat([{ role: 'assistant', content: rejected.replies.join('\n') }, { role: 'user', content: 'Да' }]);
+    deps.provider.createMessage.mockResolvedValueOnce(toolResp('book_chain', { option_id: 'o13' }));
+    const booked = await orchestrator.runDialog(1, 'k', { deps, nowMs: Date.parse('2026-09-30T10:00:00Z') });
+    expect(writes.createBooking.mock.calls.map(c => c[1].staff_yc_id)).toEqual([7, 8]);
+    expect(writes.modifyServices).not.toHaveBeenCalled();
+    expect(booked.writeSucceeded).toBe(true);
+    expect(booked.replies.join('\n')).toContain('Анна');
+    expect(booked.replies.join('\n')).toContain('Мария');
+    expect(deps.provider.createMessage).toHaveBeenCalledTimes(2);
+  });
+
+  test.each([false, true])('staff clarification uses live CRM facts without LLM (CRM failure=%s)', async failed => {
+    const deps = makeDeps({
+      history: { loadTranscript: jest.fn(async () => ({ messages: [
+        { role: 'assistant', content: 'Вы записаны к Анне и Марии.' },
+        { role: 'user', content: 'Ты меня к Анне записала?' },
+      ], watermark: 100 })) },
+      listBookings: { run: jest.fn(async () => failed ? { error: 'unavailable' } : { bookings: [rawBooking] }) },
+    });
+    const out = await orchestrator.runDialog(1, 'k', { deps, ctx: { phone: '79990000000' } });
+    expect(deps.provider.createMessage).not.toHaveBeenCalled();
+    expect(deps.listBookings.run).toHaveBeenCalledWith(1, {}, expect.objectContaining({ clientPhone: '79990000000' }));
+    const text = out.replies.join('\n');
+    expect(text).not.toContain('Анне');
+    expect(text).not.toContain('909090');
+    if (failed) expect(text).toContain('Не удалось проверить');
+    else { expect(text).toContain('Мария'); expect(text).toContain('Первая услуга, Вторая услуга'); }
+    expect(out.sideEffect).toBe(false);
+  });
+
+  test('rejected chain stops a batch before a fallback create_booking can bypass it', async () => {
+    const deps = makeDeps({ handlers: { book_chain: jest.fn(async () => ({
+      error: 'unconfirmed', needs_confirmation: true, matching_option_ids: ['o13'], records: [],
+    })) } });
+    seqOffers.remember(1, 'k', { o13: { chain: [
+      { ...rawBooking, service_title: 'Первая услуга', staff_name: 'Анна', staff_yc_id: 7 },
+      { ...rawBooking, service_title: 'Вторая услуга', datetime: '2026-10-01T16:00:00+03:00' },
+    ] } });
+    const response = toolResp('book_chain', { option_id: 'o5' });
+    response.toolCalls.push({ id: 'c2', name: 'create_booking', input: {} });
+    deps.provider.createMessage.mockResolvedValueOnce(response);
+    const out = await orchestrator.runDialog(1, 'k', { deps });
+    expect(deps.registry.handlers.create_booking).not.toHaveBeenCalled();
+    expect(deps.provider.createMessage).toHaveBeenCalledTimes(1);
+    expect(out.replies.join('\n')).toContain('Подтвердите');
+    expect(out.replies.join('\n')).toContain('Анна');
+    expect(out.replies.join('\n')).toContain('Мария');
+    expect(out.sideEffect).toBe(false);
+    expect(out.bookingFailed).toBe(false);
+    expect(out.falseSuccess).toBe(false);
+  });
+
+  test('successful chain confirmation comes from tool facts without a model rewrite', async () => {
+    const deps = makeDeps({ handlers: { book_chain: jest.fn(async () => ({
+      booked_all: true, records: [rawBooking],
+    })) } });
+    deps.provider.createMessage.mockResolvedValueOnce(toolResp('book_chain', { option_id: 'o5' }));
+    const out = await orchestrator.runDialog(1, 'k', { deps });
+    expect(deps.provider.createMessage).toHaveBeenCalledTimes(1);
+    expect(out.replies.join('\n')).toContain('Мария');
+    expect(out.replies.join('\n')).toContain('Первая услуга, Вторая услуга');
+    expect(out.writeSucceeded).toBe(true);
+  });
+});
+
 describe('runDialog', () => {
   test('AGENT_PROMPT_VERSION=v2 выбирает компактный сценарный промпт без изменения tool-цикла', async () => {
     const deps = makeDeps({
@@ -180,7 +275,7 @@ describe('runDialog', () => {
     expect(deps.registry.handlers.get_available_slots)
       .toHaveBeenCalledWith(1, { staff_yc_id: 55, service_yc_id: 7, date: '2026-07-20' },
         { dialogKey: 'k', clientPhone: '79001112233', clientName: null, nowMs: expect.any(Number),
-          channel: null, priceIndex: null, attachments: [],
+          channel: null, priceIndex: null, attachments: [], previousAssistantText: '',
           // patientText — текст сообщений пациента для generic-booking-guard в
           // create_booking (сверка «называл ли пациент препарат»).
           patientText: expect.any(String),

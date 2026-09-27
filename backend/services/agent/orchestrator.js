@@ -8,6 +8,7 @@ const identityDefault = require('./identity');
 const config = require('../../config');
 const catalogBlockDefault = require('./catalog-block');
 const seqOffers = require('./sequential-offers');
+const chainConfirmation = require('./chain-confirmation');
 const replyGuard = require('./reply-guard');
 const greeting = require('./greeting');
 const addressGuard = require('./address-guard');
@@ -522,12 +523,14 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
   // null = сверки не было (нет номера, сбой YClients) → блока нет, как раньше;
   // ПУСТОЙ массив = сверка прошла, записей нет — это утверждение, а не молчание.
   let liveBookings = null;
+  let liveBookingRows = null;
   if (ctx.phone) {
     try {
       const res = await (d.listBookings || listBookingsDefault)
         .run(salonId, {}, { clientPhone: ctx.phone, nowMs });
       // reason no_yclients / error — «не знаем», а не «записей нет»: молчим.
       if (res && Array.isArray(res.bookings) && !res.error && res.reason !== 'no_yclients') {
+        liveBookingRows = res.bookings;
         const rendered = bookingsBlock.renderBookings(res.bookings, { nowMs });
         liveBookings = rendered.lines;
         if (rendered.dropped > 0) {
@@ -813,6 +816,32 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
     const promptBuilder = cfg.AGENT_PROMPT_VERSION === 'v2'
       ? buildSystemPromptV2 : buildSystemPrompt;
     const lastUser = [...messages].reverse().find(m => m && m.role === 'user');
+    const previousAssistant = [...messages].reverse().find(m => m && m.role === 'assistant');
+    toolCtx.previousAssistantText = stripAllStamps(previousAssistant ? String(previousAssistant.content || '') : '');
+    try {
+      const liveOffers = seqOffers.peek(salonId, dialogKey, { nowMs });
+      promptOpts.activeOffers = seqOffers.renderOffers(liveOffers, {
+        nowMs, preferredIds: chainConfirmation.matchingOffers(liveOffers, toolCtx.previousAssistantText),
+      });
+    } catch (_) { promptOpts.activeOffers = []; }
+    if (chainConfirmation.isBookingCheck(lastUser && stripAllStamps(lastUser.content))) {
+      // Record the automatic read as evidence for this direct answer too.
+      evBuffer.push('list_client_bookings', {}, liveBookingRows === null
+        ? { error: 'booking_check_unavailable' } : { bookings: liveBookingRows }, liveBookingRows === null);
+      const facts = liveBookingRows === null ? null : chainConfirmation.formatFacts(liveBookingRows);
+      const reply = facts === null
+        ? 'Не удалось проверить фактические записи. Сейчас не могу подтвердить специалиста — нужна проверка администратора.'
+        : facts.length ? `По актуальным данным записи оформлены так:\n${facts.join('\n')}`
+          : 'По актуальным данным будущих записей на ваш номер нет.';
+      if (await history.hasIncomingAfter(salonId, dialogKey, watermark)) {
+        await evBuffer.flush(false);
+        continue;
+      }
+      await state.setWatermark(salonId, dialogKey, watermark);
+      await evBuffer.flush(null);
+      return { replies: [reply], escalated: false, sideEffect: false, writeSucceeded: false,
+        turnId: evBuffer.turnId, attachments: toolCtx.attachments };
+    }
     const system = promptBuilder({
       ...promptOpts, session, firstContact, firstAgentReply, leadingClinic,
       promoBlock: promoKb ? promoKb.context : null,
@@ -944,6 +973,7 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
     // номер спрашивает код, провала записи нет, второго прохода провайдера нет
     // (инцидент 2026-09-18, см. phone-request.js). { datetime } — из аргументов вызова.
     let phoneRequested = null;
+    let directChainReply = null;
     // Единственный легальный источник адреса/контактов клиники — статьи базы
     // знаний, прочитанные В ЭТОМ ходе (address-guard). Транскрипт и журнал
     // действий источниками не считаются: см. шапку address-guard.js.
@@ -1089,12 +1119,26 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
               const first = (result.records || [])[0] || {};
               lastWrite = { tool: 'create_booking', input: { datetime: first.datetime, client_name: (tc.input || {}).client_name } };
             }
-          } else if (result && !result.option_expired) {
+          } else if (result && !result.option_expired && !result.needs_confirmation) {
             bookingErrored = true;
           }
         }
         if (bookingErrored && SLOT_READ_TOOLS.has(tc.name)) recheckedAfterFail = true;
         results.push({ id: tc.id, name: tc.name, result, isError });
+        if (tc.name === 'book_chain' && result) {
+          if (result.booked_all || result.partial) {
+            directChainReply = chainConfirmation.confirmationReply(result);
+          } else if (result.needs_confirmation) {
+            const ids = result.matching_option_ids || [];
+            const option = ids.length === 1 && seqOffers.take(salonId, dialogKey, ids[0], { nowMs });
+            const facts = option && chainConfirmation.formatFacts(option.chain);
+            directChainReply = facts && facts.length
+              ? `Подтвердите, пожалуйста, этот вариант:\n${facts.join('\n')}\nЗаписать?`
+              : 'Уточним выбранный вариант: на какую дату, время и к каким специалистам вас записать?';
+          }
+          // Stop the batch: a second write cannot bypass rejection or add a duplicate.
+          if (directChainReply) break;
+        }
         const resultJson = JSON.stringify(result);
         for (const t of replyGuard.extractTimes(resultJson)) { allowedTimes.add(t); verifiedTimes.add(t); }
         // Плотная запись (§8 спеки): ограничиваем ИМЕННО результатами, где реально
@@ -1154,6 +1198,11 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
         }
       }
       for (const m of provider.toolResultMessages(results)) convo.push(m);
+      if (directChainReply) {
+        replies.length = 0;
+        replies.push(directChainReply);
+        break;
+      }
       if (escalated) {
         // Текст, написанный В ТОМ ЖЕ ходе, что и escalate_to_operator (прощание /
         // честный отчёт о частичной записи цепочки), иначе теряется: ветка выше
@@ -1296,7 +1345,7 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
     const freshMs = toolMemoryDefault.SLOT_TIMES_FRESH_MS || 30 * 60 * 1000;
     const freshSlotJournal = journalRows.some(r => r && Number(r.age_ms) < freshMs
       && ((!r.is_error && SLOT_READ_TOOLS.has(r.tool)) || (r.is_error && WRITE_TOOLS.has(r.tool))));
-    if (replies.length && !degradedAfterWrite && !phoneRequested) {
+    if (replies.length && !degradedAfterWrite && !phoneRequested && !directChainReply) {
       // Линт — ФУНКЦИЯ от текста: после корректирующего довызова исправленная
       // реплика проверяется ЗАНОВО (живой прогон 2026-09-19: довызов без
       // инструментов убирал выдуманное время и сочинял новое, а второй проверки

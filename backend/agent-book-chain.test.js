@@ -13,6 +13,29 @@ const LINK = (svc, staff, dt) => ({
   datetime: dt, seance_length: 3600,
 });
 
+test('different specialists: rejects a same-staff option before any CRM write', async () => {
+  const first = { ...LINK(101, 7, '2026-10-01T15:00:00+03:00'), staff_name: 'Анна' };
+  const second = { ...LINK(102, 8, '2026-10-01T15:30:00+03:00'), staff_name: 'Мария' };
+  offers.remember(1, 'dlg', {
+    o5: { booking_mode: 'single_record', chain: [
+      { ...first, staff_yc_id: 8, staff_name: 'Мария', datetime: second.datetime },
+      { ...second, datetime: '2026-10-01T16:00:00+03:00' },
+    ] },
+    o13: { booking_mode: 'separate_records', chain: [first, second] },
+  });
+  const ctx = { ...CTX, previousAssistantText: '01.10: 15:00 у Анны, 15:30 у Марии. Записать?', patientLastText: 'Да' };
+  const d = deps();
+  const wrong = await bookChain.run(1, { option_id: 'o5' }, ctx, d);
+  expect(wrong.needs_confirmation).toBe(true);
+  expect(wrong.matching_option_ids).toEqual(['o13']);
+  expect(d.createBooking).not.toHaveBeenCalled();
+  expect(d.modifyServices).not.toHaveBeenCalled();
+  const correct = await bookChain.run(1, { option_id: 'o13' }, ctx, d);
+  expect(correct.booked_all).toBe(true);
+  expect(correct.records.map(r => r.staff_yc_id)).toEqual([7, 8]);
+  expect(correct.records.map(r => r.service_yc_id)).toEqual([101, 102]);
+});
+
 function deps(overrides = {}) {
   return {
     createBooking: jest.fn(async () => ({ created: true, record_id: 555 })),

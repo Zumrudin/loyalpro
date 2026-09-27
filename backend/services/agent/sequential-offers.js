@@ -119,8 +119,10 @@ const optionNum = (id) => {
 function renderOffers(offers, opts = {}) {
   if (!offers || typeof offers !== 'object') return [];
   const now = opts.nowMs || Date.now();
+  const preferred = new Set(opts.preferredIds || []);
   const ids = Object.keys(offers).sort((a, b) =>
-    (optionNum(a) - optionNum(b)) || (a < b ? -1 : a > b ? 1 : 0));
+    (Number(preferred.has(b)) - Number(preferred.has(a)))
+    || (optionNum(a) - optionNum(b)) || (a < b ? -1 : a > b ? 1 : 0));
   const lines = [];
   for (const id of ids) {
     if (lines.length >= MAX_RENDERED_OPTIONS) break;   // режем ХВОСТ: первые варианты приоритетнее (same_staff идёт первым)

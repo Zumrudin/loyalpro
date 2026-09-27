@@ -1,4 +1,5 @@
 'use strict';
+const { sanitizeLine } = require('./sanitize');
 
 // ── Память Милы между ходами: детерминированная выжимка журнала инструментов ──
 // Чистый модуль: вход — строки agent_tool_events (tool-events.loadRecent),
@@ -193,7 +194,11 @@ const EXTRACTORS = {
   book_chain(e) {
     const res = e.result || {};
     const recs = Array.isArray(res.records) ? res.records : [];
-    const items = recs.slice(0, 4).map(r => `${fmtDatetime(r.datetime)} (record_id=${r.record_id})`);
+    const items = recs.slice(0, 4).map(r => {
+      const services = Array.isArray(r.services) ? r.services.join(', ') : r.service_title;
+      const fact = [services, r.staff_name].filter(Boolean).map(v => sanitizeLine(v, 180)).join(' — ');
+      return `${fmtDatetime(r.datetime)}${fact ? ` ${fact}` : ''} (record_id=${r.record_id})`;
+    });
     if (!items.length) return null;
     const head = res.booked_all ? 'оформила цепочку записей' : 'цепочка записей оформлена ЧАСТИЧНО';
     return `${head}: ${items.join('; ')}`;
