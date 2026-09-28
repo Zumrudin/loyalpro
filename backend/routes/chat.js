@@ -238,15 +238,59 @@ async function pauseAgent(salonId, key) {
 // для другого. Это ветка для WhatsApp/MAX по номеру, когда в этот канал клиент
 // ещё не писал; Telegram без своего chat_id так не адресуется (recipientParams
 // вернёт null → 422), что и правильно — «холодный» tdlib инициировать нельзя.
+// reply_to — id последнего ВХОДЯЩЕГО в этом канале: отправка уходит ответом на
+// него, ровно как реплика Милы (dispatcher.defaultSend всегда шлёт
+// replyToMessageId входящего). Инцидент 2026-09-18 (tdlib 5245186003, номер
+// скрыт, не в контактах): отправка по одному tdlib_user_id без reply_to
+// получила от Chatpush «Невозможно доставить», повтор того же текста с reply_to
+// дошёл. Механизм НЕ ДОКАЗАН (в тестовый чат, где собеседник в контактах, обе
+// формы доходят; 13.08 в чужой чат без reply_to дошло через 7 мин после
+// входящего) — рабочая версия: tdlib теряет peer собеседника со скрытым
+// номером спустя часы, а ответ на его сообщение находит peer заново. Поэтому
+// reply_to берётся ТОЛЬКО из того же канала: id сообщения WhatsApp в tdlib
+// бессмысленен, фолбэк по номеру идёт без него.
 async function resolveRecipient(salonId, key, channel) {
   const q = (extra, params) => db.oneOrNone(`
-    SELECT phone, chat_id FROM chatpush_messages
+    SELECT phone, chat_id, external_message_id AS reply_to FROM chatpush_messages
     WHERE salon_id = $1 AND ${DIALOG_KEY_SQL} = $2 AND direction = 'incoming' ${extra}
     ORDER BY msg_ts DESC NULLS LAST LIMIT 1`, params);
   const exact = await q('AND channel = $3', [salonId, key, channel]);
-  if (exact) return exact;
+  if (exact) return { phone: exact.phone, chat_id: exact.chat_id, reply_to: exact.reply_to || null };
   const any = await q('', [salonId, key]);
-  return any ? { phone: any.phone, chat_id: null } : null;
+  return any ? { phone: any.phone, chat_id: null, reply_to: null } : null;
+}
+
+// Судьба ручной отправки: `delivery.status_description = Принято` — это очередь,
+// а не доставка. Сторож `agent_reply_deliveries` ручные отправки не покрывает
+// (повторять чужой текст автоматически нельзя), поэтому хотя бы ОДНА отложенная
+// проверка `GET /api/v1/delivery/:id` с WARN в лог: инцидент 2026-09-18 разбирался
+// по delivery id из HTTP-ответа, который нигде не сохранялся. Таймер unref —
+// не держит процесс; deps — для тестов (jest fake timers + стаб статуса).
+const DELIVERY_CHECK_MS = 30 * 1000;
+const DELIVERY_STATUS_UNDELIVERABLE = 5;          // «Невозможно доставить» (проверено живьём 18.09)
+const DELIVERY_FAILED_RE = /невозможно|ошибк|не доставлен|failed|error/i;
+function scheduleDeliveryCheck(deliveryId, { key, channel, kind = 'message' } = {}, deps = {}) {
+  if (!deliveryId) return null;
+  const get = deps.getDeliveryStatus
+    || ((id) => chatpush.getDeliveryStatus(config.CHATPUSH.instanceToken, id));
+  const delay = deps.delayMs != null ? deps.delayMs : DELIVERY_CHECK_MS;
+  const t = setTimeout(async () => {
+    try {
+      const d = await get(deliveryId);
+      const st = (d && d.status) || {};
+      const failed = Number(st.status_id) === DELIVERY_STATUS_UNDELIVERABLE
+        || DELIVERY_FAILED_RE.test(String(st.description || ''));
+      if (failed) {
+        logger.warn(`operator ${kind} ${channel} to ${key}: delivery=${deliveryId} НЕ ДОСТАВЛЕНО (${st.status_id} ${st.description}) — эха не будет, клиент сообщение не получил`);
+      } else {
+        logger.info(`operator ${kind} ${channel} to ${key}: delivery=${deliveryId} status=${st.status_id} ${st.description}`);
+      }
+    } catch (e) {
+      logger.warn(`operator ${kind} ${channel} to ${key}: delivery=${deliveryId} статус не получен (${e.message})`);
+    }
+  }, delay);
+  if (t && typeof t.unref === 'function') t.unref();
+  return t;
 }
 
 // POST /api/chat/dialogs/:key/send — ручной ответ оператора. body: {text, channel}.
@@ -267,12 +311,15 @@ router.post('/dialogs/:key/send', adminOnly, async (req, res) => {
     const params = rcp && recipientParams(channel, { ...rcp, isGroup: isGroupKey(key) });
     if (!params) return res.status(422).json({ error: 'Не найден получатель для этого канала' });
 
-    const delivery = await chatpush.sendMessage(config.CHATPUSH.instanceToken, { text, ...params });
+    const delivery = await chatpush.sendMessage(config.CHATPUSH.instanceToken, {
+      text, ...params, replyToMessageId: rcp.reply_to || undefined,
+    });
     await pauseAgent(salonId, key);
     // Эхо этой отправки придёт как обычное outgoing — пометим автора заранее,
     // чтобы в транскрипте Милы оно не выглядело её собственной репликой.
     await authorship.remember(salonId, key, text, 'operator');
-    logger.info(`operator sent ${channel} to ${key}: ${text.slice(0, 60)}`);
+    logger.info(`operator sent ${channel} to ${key}: delivery=${delivery && delivery.id} reply_to=${rcp.reply_to || '-'} ${text.slice(0, 60)}`);
+    scheduleDeliveryCheck(delivery && delivery.id, { key, channel });
     if (channel === 'whatsapp') {
       try {
         await persistWhatsappOutgoing(salonId, {
@@ -339,7 +386,9 @@ router.post('/dialogs/:key/send-file', adminOnly, chatUpload.single('file'), asy
     // Подпись к файлу приедет эхом отдельным текстом — помечаем её автором так же,
     // как обычную отправку оператора.
     if (caption) await authorship.remember(salonId, key, caption, 'operator');
-    logger.info(`operator sent file ${channel} to ${key}: ${req.file.originalname} (${req.file.size} b)`);
+    // reply_to сюда не идёт: у send_file в доке Chatpush параметра reply_to_message_id нет.
+    logger.info(`operator sent file ${channel} to ${key}: delivery=${delivery && delivery.id} ${req.file.originalname} (${req.file.size} b)`);
+    scheduleDeliveryCheck(delivery && delivery.id, { key, channel, kind: 'file' });
     if (channel === 'whatsapp') {
       try {
         // file_url null: ссылку на медиа Chatpush отдаёт только в эхе (которого
@@ -359,3 +408,5 @@ router.post('/dialogs/:key/send-file', adminOnly, chatUpload.single('file'), asy
 });
 
 module.exports = router;
+// Для юнит-тестов (chat-route-send.test.js): адресация и проверка доставки без HTTP.
+module.exports._internals = { resolveRecipient, scheduleDeliveryCheck, DELIVERY_STATUS_UNDELIVERABLE };
