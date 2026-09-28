@@ -7,6 +7,7 @@ function mockDb(result = { rowCount: 1, rows: [] }) {
   const calls = [];
   return {
     calls,
+    any: async () => [],
     query: async (sql, params) => { calls.push({ sql, params }); return result; },
     oneOrNone: async (sql, params) => { calls.push({ sql, params }); return result.rows[0] || null; },
   };
@@ -75,7 +76,7 @@ describe('schedule', () => {
   });
 
   test('сбой БД не бросает наружу — ход клиента важнее строки очереди', async () => {
-    const db = { query: async () => { throw new Error('db down'); } };
+    const db = { any: async () => [], query: async () => { throw new Error('db down'); } };
     await expect(queue.schedule(1, 'k', META, SETTINGS, { db })).resolves.toBe(false);
   });
 });
@@ -97,7 +98,7 @@ describe('close', () => {
   });
 
   test('сбой БД не бросает наружу', async () => {
-    const db = { query: async () => { throw new Error('db down'); } };
+    const db = { any: async () => [], query: async () => { throw new Error('db down'); } };
     await expect(queue.close(1, 'k', 'answered', 'client_replied', { db })).resolves.toBe(false);
   });
 });

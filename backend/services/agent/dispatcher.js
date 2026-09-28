@@ -1,6 +1,7 @@
 'use strict';
 
 const config = require('../../config');
+const chatEvents = require('../chat-events');
 const agentSettings = require('../agent-settings');
 const chatpush = require('../chatpush');
 const { recipientParams } = require('../chat');
@@ -322,11 +323,21 @@ async function process(salonId, dialogKey, meta, opts = {}) {
       // причине: веток отправки в process() уже пять, и отдельный вызов рядом с
       // каждой рано или поздно забыли бы. Best-effort и без await — строка
       // очереди не должна задерживать возврат из хода.
+      const followupStopReason = res && (res.followupStopReason
+        || (res.conversationComplete ? 'visit_confirmed' : null));
+      if (followupStopReason) {
+        void Promise.resolve().then(() => followupQueue.close(
+          salonId, dialogKey, 'cancelled', followupStopReason))
+          .then(closed => { if (closed) chatEvents.emitFollowupStatus(salonId, dialogKey, 'cancelled', 0); })
+          .catch(() => logger.warn('Could not close completed confirmation followup'));
+      }
       if (followupQueue.shouldAwaitReply({
         delivered: deliveredReplies,
         writeSucceeded: res && res.writeSucceeded,
         escalated: res && res.escalated,
         silent: res && res.silent,
+        conversationComplete: res && res.conversationComplete,
+        followupStopReason,
       })) {
         // Promise.resolve().then(...) ОБЯЗАТЕЛЕН — не упрощать в прямой вызов
         // settings.getSettings(salonId).then(...): прямой вызов, если метода нет

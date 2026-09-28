@@ -9,7 +9,9 @@
 // Юнит-тесты: agent-followup-queue.test.js
 // ============================================================
 
+const chatEvents = require('../chat-events');
 const { db: realDb } = require('../../db');
+const { loadStopReason } = require('./followup-policy');
 const { resolveDelays, nextAtFor } = require('./followup-schedule');
 const { createLogger } = require('../../logger');
 
@@ -37,6 +39,14 @@ async function schedule(salonId, dialogKey, meta = {}, settings = {}, opts = {})
   const next = nextAtFor({ anchorAt: anchor, stage: 0, delay1Min: delay1, delay2Min: delay2 });
   if (!next) return false;
   try {
+    // Check immediately before scheduling; a delayed system acknowledgement
+    // may have arrived while the agent was composing/delivering its reply.
+    const stopReason = await loadStopReason(db, salonId, dialogKey);
+    if (stopReason) {
+      const closed = await close(salonId, dialogKey, 'cancelled', stopReason, { db });
+      if (closed) chatEvents.emitFollowupStatus(salonId, dialogKey, 'cancelled', 0);
+      return false;
+    }
     await db.query(
       `INSERT INTO agent_followups
          (salon_id, dialog_key, phone, channel, chat_id, anchor_at, next_at,
@@ -113,7 +123,7 @@ async function close(salonId, dialogKey, status, reason, opts = {}) {
  * отсекается skip-ом LLM-прохода воркера.
  */
 function shouldAwaitReply(res = {}) {
-  return !!res.delivered && !res.writeSucceeded && !res.escalated && !res.silent;
+  return !!res.delivered && !res.writeSucceeded && !res.escalated && !res.silent && !res.conversationComplete && !res.followupStopReason;
 }
 
 module.exports = { schedule, close, shouldAwaitReply, CLOSE_STATUSES };

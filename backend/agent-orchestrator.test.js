@@ -3257,3 +3257,22 @@ describe('offer-attribution в оркестраторе: время по пар�
     expect(out.replies[0]).toMatch(/13:30/);
   });
 });
+
+test('trusted completed confirmation is returned without claiming a booking write', async () => {
+  const deps = makeDeps({ history: { conversationComplete: jest.fn(async () => true) } });
+  deps.provider.createMessage.mockResolvedValue(textResp('Ждём вас!'));
+  const out = await orchestrator.runDialog(17, 'synthetic-dialog', { deps });
+  expect(out.conversationComplete).toBe(true);
+  expect(out.writeSucceeded).toBe(false);
+  expect(deps.history.conversationComplete).toHaveBeenCalledWith(17, 'synthetic-dialog');
+});
+
+test('illness blocks followups without pretending that a pending cancellation is complete', async () => {
+  const deps = makeDeps({ history: { followupStopReason: jest.fn(async () => 'client_unavailable') } });
+  deps.provider.createMessage.mockResolvedValue(textResp('Уточните, пожалуйста, время записи.'));
+  const out = await orchestrator.runDialog(17, 'synthetic-dialog', { deps });
+  expect(out.followupStopReason).toBe('client_unavailable');
+  expect(out.conversationComplete).toBe(false);
+  expect(out.writeSucceeded).toBe(false);
+  expect(out.replies.length).toBeGreaterThan(0);
+});

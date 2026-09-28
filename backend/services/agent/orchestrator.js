@@ -1594,7 +1594,15 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
     // INSERT, он не найдёт ни одной строки — все read-события хода навсегда
     // останутся невидимыми для памяти.
     await evBuffer.flush(null);
-    return { replies, escalated, sideEffect, exhausted, falseSuccess, falseSuccessKind,
+    // Only trusted message context can mark a completed confirmation. The
+    // queue checks again and fails closed if its context read is unavailable.
+    const followupStopReason = typeof history.followupStopReason === 'function'
+      ? await history.followupStopReason(salonId, dialogKey).catch(() => null)
+      : (typeof history.conversationComplete === 'function'
+        && await history.conversationComplete(salonId, dialogKey).catch(() => false)
+        ? 'visit_confirmed' : null);
+    const conversationComplete = followupStopReason === 'visit_confirmed';
+    return { conversationComplete, followupStopReason, replies, escalated, sideEffect, exhausted, falseSuccess, falseSuccessKind,
       bookingFailed, bookingFailRecoverable, degradedAfterWrite, turnId: evBuffer.turnId,
       attachments: toolCtx.attachments,
       // Ссылка на прайс салона — диспетчеру, чтобы досылать её пациенту, когда

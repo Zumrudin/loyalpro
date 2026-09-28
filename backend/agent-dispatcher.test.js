@@ -908,6 +908,39 @@ describe('ожидание ответа клиента (followup)', () => {
       1, 'k', meta, followupSettings, expect.objectContaining({ turnId: 't-9' }));
   });
 
+  test('illness stops nudges but still delivers the ordinary cancellation clarification', async () => {
+    const d = deps({
+      ...followupDeps(),
+      orchestrator: { runDialog: jest.fn(async () => ({
+        replies: ['Уточните время записи.'], followupStopReason: 'client_unavailable',
+        conversationComplete: false, writeSucceeded: false,
+      })) },
+    });
+    d.followupQueue.close = jest.fn(async () => true);
+    dispatcher.enqueue(1, 'k', meta, d);
+    await jest.advanceTimersByTimeAsync(1000);
+    await flushMicrotasks();
+    expect(d.followupQueue.schedule).not.toHaveBeenCalled();
+    expect(d.followupQueue.close).toHaveBeenCalledWith(1, 'k', 'cancelled', 'client_unavailable');
+    expect(d.send).toHaveBeenCalledTimes(1);
+  });
+
+  test('completed confirmation closes waiting and never schedules it again', async () => {
+    const d = deps({
+      ...followupDeps(),
+      orchestrator: { runDialog: jest.fn(async () => ({
+        replies: ['Ждём вас!'], conversationComplete: true, writeSucceeded: false,
+      })) },
+    });
+    d.followupQueue.close = jest.fn(async () => true);
+    dispatcher.enqueue(1, 'k', meta, d);
+    await jest.advanceTimersByTimeAsync(1000);
+    await flushMicrotasks();
+    expect(d.followupQueue.schedule).not.toHaveBeenCalled();
+    expect(d.followupQueue.close).toHaveBeenCalledWith(1, 'k', 'cancelled', 'visit_confirmed');
+    expect(d.send).toHaveBeenCalledTimes(1);
+  });
+
   test('запись оформлена в этом ходу (writeSucceeded) → followupQueue.schedule НЕ вызван', async () => {
     const d = deps({
       ...followupDeps(),

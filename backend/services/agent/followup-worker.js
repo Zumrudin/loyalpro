@@ -38,6 +38,7 @@ const { parseCareDecision } = require('../care/decision');
 const { buildFollowupPrompt } = require('./followup-prompt');
 const { hasInventedTime } = require('./followup-guard');
 const { resolveDelays, nextAtFor, isTooLate } = require('./followup-schedule');
+const { loadStopReason } = require('./followup-policy');
 const { CLOSE_STATUSES } = require('./followup-queue');
 const { resolveSalonName } = require('./system-prompt');
 const toolEvents = require('./tool-events');
@@ -206,8 +207,8 @@ async function closeRow(d, row, status, reason) {
   if (!CLOSE_STATUSES.has(status)) throw new Error(`bad status: ${status}`);
   await d.db.query(
     `UPDATE agent_followups SET status=$2, close_reason=$3, updated_at=now()
-      WHERE id=$1 AND status='scheduled'`,
-    [row.id, status, reason ? String(reason).slice(0, 300) : null]);
+      WHERE id=$1 AND salon_id=$4 AND status='scheduled'`,
+    [row.id, status, reason ? String(reason).slice(0, 300) : null, row.salon_id]);
   safeEmit(d, row, status, Number(row.stage) || 0);
 }
 
@@ -504,6 +505,11 @@ async function processOne(row, deps = defaultDeps) {
       return finish('answered', 'client_replied');
     }
 
+    // Both nudge and final must stop after a completed visit confirmation.
+    // DB errors reach the retry path: do not send without this check.
+    const stopReason = await loadStopReason(d.db, row.salon_id, row.dialog_key);
+    if (stopReason) return finish('cancelled', stopReason);
+
     // Слать некуда (канал не сохранился, у tdlib нет ни номера, ни chat_id) —
     // проверяем ДО платного прохода: исход всё равно предрешён.
     const recipient = await resolveRecipient(d, row);
@@ -554,6 +560,9 @@ async function processOne(row, deps = defaultDeps) {
     // гейтов выше — условие status/stage это ловит. Стадия и срок финала
     // записываются ДО отправки: падение процесса между захватом и sendMessage
     // означает потерянное сообщение, а не дубль.
+    // The system acknowledgement can arrive during LLM generation.
+    const lateStopReason = await loadStopReason(d.db, row.salon_id, row.dialog_key);
+    if (lateStopReason) return finish('cancelled', lateStopReason);
     let marked;
     if (isFinal) {
       marked = await d.db.query(

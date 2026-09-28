@@ -372,6 +372,10 @@ async function hasIncomingAfter(salonId, dialogKey, watermark) {
 }
 
 module.exports = {
+  followupStopReason: (salonId, dialogKey) => require('./followup-policy')
+    .loadStopReason(db, salonId, dialogKey),
+  conversationComplete: (salonId, dialogKey) => require('./visit-confirmation')
+    .loadConversationComplete(db, salonId, dialogKey),
   loadTranscript, hasIncomingAfter, hasEverAnswered, hasAgentEverWritten,
   lastOutgoing, lastOutgoingAuthor, lastAgentReplyAt,
   OPERATOR_MARK, AUTHORSHIP_SINCE_TS, stripOperatorMark, markOperatorLines,

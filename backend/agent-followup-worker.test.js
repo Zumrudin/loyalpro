@@ -631,3 +631,48 @@ describe('инварианты', () => {
     expect(worker.LEASE_SQL).toMatch(/followup_bonus_min_balance/);
   });
 });
+
+// Synthetic reminder exchange; no patient data or external calls.
+function confirmedVisitRows() {
+  return [
+    { direction: 'outgoing', authored_by: 'system', text: 'Напоминаем о записи. Для подтверждения отправьте +.', msg_ts: 1000 },
+    { direction: 'incoming', text: '+', msg_ts: 1020 },
+    { direction: 'outgoing', authored_by: 'system', text: 'Ваша запись подтверждена. Спасибо!', msg_ts: 1030 },
+    { direction: 'outgoing', authored_by: 'agent', text: 'Ждём вас завтра!', msg_ts: 1040 },
+  ].reverse();
+}
+test.each([0, 1])('confirmed visit cancels stage %s without sending or generating', async stage => {
+  const d = deps(); d.db.any = async () => confirmedVisitRows();
+  d.createMessage = jest.fn();
+  await worker.processOne(row({ stage }), d);
+  expect(d.calls.sent).toHaveLength(0);
+  expect(d.createMessage).not.toHaveBeenCalled();
+  expect(reasons(d)).toContain('visit_confirmed');
+});
+test('acknowledgement arriving during generation stops the nudge', async () => {
+  const d = deps(); let reads = 0;
+  d.db.any = async () => ++reads === 1 ? [] : confirmedVisitRows();
+  await worker.processOne(row(), d);
+  expect(reads).toBe(2);
+  expect(d.calls.sent).toHaveLength(0);
+  expect(reasons(d)).toContain('visit_confirmed');
+});
+test('confirmation context read failure never sends a final message', async () => {
+  const d = deps(); d.db.any = async () => { throw new Error('test read unavailable'); };
+  await worker.processOne(row({ stage: 1 }), d);
+  expect(d.calls.sent).toHaveLength(0);
+  expect(d.calls.marks.some(m => /SET status='done'/.test(m.sql))).toBe(false);
+});
+
+test.each([0, 1])('illness stops followup stage %s even before cancellation is done', async stage => {
+  const d = deps();
+  d.db.any = async () => [
+    { direction: 'outgoing', authored_by: 'agent', text: 'Уточните, какую запись отменить?', msg_ts: 1010 },
+    { direction: 'incoming', text: 'Простудилась и не смогу приехать. Отмените запись.', msg_ts: 1000 },
+  ];
+  d.createMessage = jest.fn();
+  await worker.processOne(row({ stage }), d);
+  expect(d.calls.sent).toHaveLength(0);
+  expect(d.createMessage).not.toHaveBeenCalled();
+  expect(reasons(d)).toContain('client_unavailable');
+});
