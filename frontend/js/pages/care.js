@@ -277,7 +277,7 @@ function careRenderTouches() {
           <span class="bc-chip ${strict ? 'on' : ''}" onclick="careTouchMode(${i}, 'strict')">📋 Готовый текст</span>
         </div>
         <span class="care-touch-modehint">${strict
-          ? 'Уйдёт дословно; Мила подставит имя и решит, уместно ли касание.'
+          ? 'Уйдёт дословно, имя вместо [Имя] подставит система; Мила решает только, уместно ли касание сейчас.'
           : 'Мила напишет текст сама по смыслу заготовки.'}</span>
       </div>
       <textarea class="bc-textarea" rows="3" maxlength="2000"

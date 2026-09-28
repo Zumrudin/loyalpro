@@ -29,7 +29,8 @@ const guard = [auth, requireRole('owner', 'admin')];
 const TIME_RE = /^([01]\d|2[0-3]):([0-5]\d)$/;
 
 // Режим текста касания: 'free' — Мила пишет сама по заготовке смысла,
-// 'strict' — intent_text уходит как готовый текст (см. care-prompt.js).
+// 'strict' — intent_text уходит как готовый текст: рендерит код (care/strict-text.js),
+// модель его не видит и решает только «слать ли» (см. care-prompt.js).
 const TEXT_MODES = ['free', 'strict'];
 
 // Статусы (enum'ов в БД нет — whitelist здесь):

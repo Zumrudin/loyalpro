@@ -173,6 +173,84 @@ describe('care worker processOne', () => {
     const declined = deps.db.query.mock.calls.find(c => c[0].includes(`'declined'`));
     expect(declined).toBeTruthy();
   });
+  // Инцидент 2026-09-28 (79164831407): модель гасила касание «как самочувствие»
+  // из-за будущей записи. Данные о записях в промпт больше не идут, а
+  // stop_program/completed от модели не имеет права завершить цепочку.
+  test('будущие записи из loadClientRecords в промпт НЕ попадают', async () => {
+    const { deps } = makeDeps({
+      loadClientRecords: jest.fn(async () => ({
+        completedAfter: [],
+        future: [{ datetime: '2026-09-01 12:00:00', attendance: 0, services: [{ id: 99, title: 'Чистка лица' }], staff: { name: 'Юлия' } }],
+      })),
+    });
+    await worker.processOne(row, deps);
+    const [req] = deps.createMessage.mock.calls[0];
+    const prompt = req.system + '\n' + req.messages.map(m => m.content).join('\n');
+    expect(prompt).not.toContain('Чистка лица');
+    expect(prompt).not.toContain('БУДУЩИЕ ЗАПИСИ');
+    expect(deps.sendMessage).toHaveBeenCalled();
+  });
+  test('LLM stop_program completed («уже записан») → касание skipped, enrollment НЕ completed, WARN', async () => {
+    const { deps } = makeDeps({
+      createMessage: jest.fn(async () => ({ text: '{"action":"stop_program","status":"completed","reason":"пациент уже записан на следующий визит"}' })),
+    });
+    deps.db.oneOrNone = jest.fn(async () => ({ '?column?': 1 }));   // ещё есть scheduled-касания
+    await worker.processOne(row, deps);
+    expect(deps.sendMessage).not.toHaveBeenCalled();
+    const completed = deps.db.query.mock.calls.find(c => c[0].includes(`'completed'`));
+    expect(completed).toBeFalsy();
+    const skipped = deps.db.query.mock.calls.find(c => c[0].includes(`'skipped'`));
+    expect(skipped).toBeTruthy();
+    expect(skipped[1][1]).toContain('уже записан');
+    expect(deps.log.warn).toHaveBeenCalledWith(expect.stringContaining('stop_program/completed'));
+  });
+  // 2026-09-28: в strict текст рендерит КОД из intent_text с подстановкой имени;
+  // модель его не видит, её text (если прислала) игнорируется.
+  test('strict: уходит текст салона с подставленным именем, а не текст модели', async () => {
+    const { deps } = makeDeps({
+      createMessage: jest.fn(async () => ({ text: '{"action":"send","text":"Свой текст модели","reason":"ок"}' })),
+    });
+    const strictRow = { ...row, text_mode: 'strict', intent_text: '[Имя], здравствуйте!\nКак самочувствие после процедуры? Увлажняйте губы.' };
+    await worker.processOne(strictRow, deps);
+    const expected = 'Анна, здравствуйте!\nКак самочувствие после процедуры? Увлажняйте губы.';
+    expect(deps.sendMessage).toHaveBeenCalledWith(expect.objectContaining({ text: expected }));
+    expect(deps.rememberPending).toHaveBeenCalledWith(5, '79200255591', expected);
+    const [req] = deps.createMessage.mock.calls[0];
+    expect(req.messages[0].content).not.toContain('Увлажняйте губы');
+    const sent = deps.db.query.mock.calls.find(c => c[0].includes(`'sent'`));
+    expect(sent[1][2]).toBe(expected);                       // rendered_text — то, что реально ушло
+  });
+  test('strict: send без text от модели → отправка текста салона', async () => {
+    const { deps } = makeDeps({
+      createMessage: jest.fn(async () => ({ text: '{"action":"send","reason":"жалоб нет"}' })),
+    });
+    await worker.processOne({ ...row, text_mode: 'strict', intent_text: 'Добрый день, [Имя]! Как вы?' }, deps);
+    expect(deps.sendMessage).toHaveBeenCalledWith(expect.objectContaining({ text: 'Добрый день, Анна! Как вы?' }));
+  });
+  test('strict: имя неизвестно → обращение убрано, текст уходит', async () => {
+    const { deps } = makeDeps({
+      createMessage: jest.fn(async () => ({ text: '{"action":"send","reason":"ок"}' })),
+    });
+    await worker.processOne({ ...row, client_name: '+79200255591', text_mode: 'strict', intent_text: '[Имя], здравствуйте! Как вы?' }, deps);
+    expect(deps.sendMessage).toHaveBeenCalledWith(expect.objectContaining({ text: 'Здравствуйте! Как вы?' }));
+  });
+  test('strict: пустой готовый текст → skipped, не отправка', async () => {
+    const { deps } = makeDeps({
+      createMessage: jest.fn(async () => ({ text: '{"action":"send","reason":"ок"}' })),
+    });
+    await worker.processOne({ ...row, text_mode: 'strict', intent_text: '   ' }, deps);
+    expect(deps.sendMessage).not.toHaveBeenCalled();
+    const skipped = deps.db.query.mock.calls.find(c => c[0].includes(`'skipped'`));
+    expect(skipped).toBeTruthy();
+  });
+  test('strict: skip/escalate модели по переписке по-прежнему действуют', async () => {
+    const { deps } = makeDeps({
+      createMessage: jest.fn(async () => ({ text: '{"action":"escalate","reason":"отёк"}' })),
+    });
+    await worker.processOne({ ...row, text_mode: 'strict', intent_text: '[Имя], как вы?' }, deps);
+    expect(deps.sendMessage).not.toHaveBeenCalled();
+    expect(deps.escalateDialog).toHaveBeenCalled();
+  });
   test('LLM вернул мусор → fail-safe skipped', async () => {
     const { deps } = makeDeps({ createMessage: jest.fn(async () => ({ text: 'ой' })) });
     await worker.processOne(row, deps);

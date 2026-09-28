@@ -32,9 +32,21 @@ describe('parseCareDecision', () => {
     const d = parseCareDecision('{"action":"stop_program","status":"declined","reason":"просил не писать"}');
     expect(d).toEqual({ action: 'stop_program', status: 'declined', reason: 'просил не писать' });
   });
-  test('stop_program с левым статусом → stopped', () => {
+  // 2026-09-28: stop_program законен ТОЛЬКО как отказ пациента («не пишите»).
+  // «completed» («уже записан / цель достигнута») из контракта убран — будущая
+  // запись не повод завершать программу; любой другой статус понижается до skip
+  // ЭТОГО касания: цепочка живёт, следующее касание уйдёт.
+  test('stop_program/completed → понижен до skip, цепочка не завершается', () => {
+    const d = parseCareDecision('{"action":"stop_program","status":"completed","reason":"уже записан"}');
+    expect(d).toEqual({ action: 'skip', reason: 'уже записан', downgraded: 'stop_program/completed' });
+  });
+  test('stop_program с левым статусом → понижен до skip', () => {
     const d = parseCareDecision('{"action":"stop_program","status":"banana","reason":"x"}');
-    expect(d.status).toBe('stopped');
+    expect(d).toMatchObject({ action: 'skip', downgraded: 'stop_program/banana' });
+  });
+  test('stop_program без статуса → понижен до skip', () => {
+    const d = parseCareDecision('{"action":"stop_program","reason":"x"}');
+    expect(d).toMatchObject({ action: 'skip', downgraded: 'stop_program/none' });
   });
   test('escalate с reason разбирается', () => {
     const d = parseCareDecision('{"action":"escalate","reason":"жалоба на отёк после процедуры"}');
@@ -43,6 +55,28 @@ describe('parseCareDecision', () => {
   test('escalate без reason тоже валиден (reason пустой)', () => {
     const d = parseCareDecision('{"action":"escalate"}');
     expect(d).toEqual({ action: 'escalate', reason: '' });
+  });
+});
+
+describe('parseCareDecision — режим готового текста ({ strict: true })', () => {
+  // Модель в strict текста не видит и не пишет — send без text законен,
+  // текст подставит код (renderStrictText). Присланный моделью text игнорируется.
+  test('strict: send без text → send, text=null', () => {
+    const d = parseCareDecision('{"action":"send","reason":"жалоб нет"}', { strict: true });
+    expect(d).toEqual({ action: 'send', text: null, reason: 'жалоб нет' });
+  });
+  test('strict: присланный моделью text отбрасывается', () => {
+    const d = parseCareDecision('{"action":"send","text":"Свой текст","reason":"ок"}', { strict: true });
+    expect(d).toEqual({ action: 'send', text: null, reason: 'ок' });
+  });
+  test('не strict: send без text по-прежнему fail-safe skip', () => {
+    expect(parseCareDecision('{"action":"send","reason":"x"}')).toMatchObject({ action: 'skip', failSafe: true });
+    expect(parseCareDecision('{"action":"send","reason":"x"}', { strict: false })).toMatchObject({ action: 'skip', failSafe: true });
+  });
+  test('strict: skip/escalate/stop_program разбираются как обычно', () => {
+    expect(parseCareDecision('{"action":"escalate","reason":"отёк"}', { strict: true })).toEqual({ action: 'escalate', reason: 'отёк' });
+    expect(parseCareDecision('{"action":"stop_program","status":"declined","reason":"не пишите"}', { strict: true }))
+      .toEqual({ action: 'stop_program', status: 'declined', reason: 'не пишите' });
   });
 });
 

@@ -30,6 +30,8 @@ const chatEvents = require('../chat-events');
 const context = require('./context');
 const { buildCarePrompt } = require('./care-prompt');
 const { parseCareDecision } = require('./decision');
+const { renderStrictText } = require('./strict-text');
+const { resolveGivenName } = require('../../utils/person-name');
 const { plusOneDay } = require('./schedule');
 const { createLogger } = require('../../logger');
 
@@ -279,17 +281,16 @@ async function processOne(row, deps = defaultDeps) {
       text: stripOperatorMark(typeof m.content === 'string' ? m.content
         : (Array.isArray(m.content) ? m.content.map(b => b.text || '').join(' ') : '')),
     })).filter(m => m.text);
-    const futureBookings = records.future.map(r => ({
-      datetime: r.datetime || r.date || '',
-      services: (Array.isArray(r.services) ? r.services : []).map(s => s.title).filter(Boolean),
-      staff_name: (r.staff && r.staff.name) || null,
-    }));
+    // records.future в промпт НЕ идёт (решение салона 2026-09-28): будущая
+    // запись — не повод молчать, см. шапку care-prompt.js. loadClientRecords
+    // остаётся ради ретеншн-проверки по СОСТОЯВШЕМУСЯ повторному визиту выше.
+    const strict = row.text_mode === 'strict';
+    const nameDictionary = await salonNames.load(sid).catch(() => null);
     const { system, user } = buildCarePrompt({
-      salonName: row.salon_name, clientName: row.client_name,
-      nameDictionary: await salonNames.load(sid).catch(() => null),
+      salonName: row.salon_name, clientName: row.client_name, nameDictionary,
       touch: { title: row.touch_title, intent_text: row.intent_text, text_mode: row.text_mode },
       enrollment: { staff_name: row.staff_name, visit_at: row.visit_at, services: row.visit_services },
-      transcript: trList, futureBookings,
+      transcript: trList,
     });
     // maxTokens — дефолт провайдера (AGENT_MAX_TOKENS, 4096), как у основного
     // агента. Урок e2e-смоука 2026-08-03: ручной бюджет 1200 (посчитанный под
@@ -312,7 +313,7 @@ async function processOne(row, deps = defaultDeps) {
         }),
       ]);
     } finally { clearTimeout(llmTimer); }
-    const decision = parseCareDecision(resp && resp.text);
+    const decision = parseCareDecision(resp && resp.text, { strict });
 
     if (decision.action === 'escalate') {
       // Осложнение в переписке: касание НЕ отправляем, к пациенту как можно
@@ -329,10 +330,22 @@ async function processOne(row, deps = defaultDeps) {
       return finish('cancelled', `Мила: ${decision.reason}`);
     }
     if (decision.action === 'skip') {
+      // downgraded — модель вернула stop_program с не-declined статусом
+      // («уже записан» и т.п.): касание пропущено, но цепочка НЕ завершена.
+      if (decision.downgraded) {
+        d.log.warn(`send #${row.id}: ${decision.downgraded} понижен до skip (цепочка живёт): ${decision.reason}`);
+      }
       return finish('skipped', `Мила: ${decision.reason}`);
     }
 
-    const viol = d.hardViolations(d.lintReply(decision.text, {}));
+    // strict: текст пациенту рендерит КОД из шаблона салона (модель его не
+    // видела, см. strict-text.js); имя — тот же resolveGivenName, что в промпте.
+    let text = decision.text;
+    if (strict) {
+      text = renderStrictText(row.intent_text, resolveGivenName(row.client_name, { dictionary: nameDictionary }));
+      if (!text) return finish('skipped', 'strict: готовый текст пуст или длиннее лимита');
+    }
+    const viol = d.hardViolations(d.lintReply(text, {}));
     if (viol.length) {
       return finish('skipped', `reply-guard: ${viol.map(v => v.type).join(',')}`);
     }
@@ -365,7 +378,7 @@ async function processOne(row, deps = defaultDeps) {
           SET status='sent', sent_at=NOW(), error=NULL, decision_reason=$2,
               rendered_text=$3, routing=$4::jsonb
         WHERE id=$1 AND status='scheduled'`,
-      [row.id, `Мила: ${decision.reason}`, decision.text, JSON.stringify(routing)]);
+      [row.id, `Мила: ${decision.reason}`, text, JSON.stringify(routing)]);
     if (!marked || !marked.rowCount) {
       // Строкой владеет другой исход (cancelled/skipped/…) — не отправляем и
       // ничего не откатываем (перезапись чужого терминального статуса хуже
@@ -376,7 +389,7 @@ async function processOne(row, deps = defaultDeps) {
     sentMarked = true;
 
     // 2) отправка.
-    const delivery = await d.sendMessage({ text: decision.text, phone: row.phone, dispatchRouting: routing });
+    const delivery = await d.sendMessage({ text, phone: row.phone, dispatchRouting: routing });
     delivered = true;
     // Единственный след для разбора «ушло дважды / не ушло» — пишется до
     // любых пост-обработок.
@@ -390,9 +403,9 @@ async function processOne(row, deps = defaultDeps) {
     ).catch(e => d.log.error(`persist delivery #${row.id}: ${e.message}`));
 
     // Транскрипт/чат: pending до прихода эха; whatsapp эха не шлёт — персист сразу.
-    d.rememberPending(sid, row.phone, decision.text);
+    d.rememberPending(sid, row.phone, text);
     if (channelUsed === 'whatsapp') {
-      await d.persistWhatsapp(sid, { delivery, phone: row.phone, text: decision.text })
+      await d.persistWhatsapp(sid, { delivery, phone: row.phone, text })
         .catch(e => d.log.error(`persist wa: ${e.message}`));
     }
     d.log.info(`sent #${row.id} enrollment=${row.enrollment_id} routing=[${routing.join(',')}]`);

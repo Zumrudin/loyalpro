@@ -13,7 +13,6 @@ const base = {
     { direction: 'incoming', text: 'Здравствуйте, хочу записаться' },
     { direction: 'outgoing', text: 'Записала вас на 2 августа' },
   ],
-  futureBookings: [{ datetime: '2026-08-20 14:00:00', services: ['Чистка'], staff_name: 'Юлия' }],
 };
 
 describe('buildCarePrompt', () => {
@@ -23,18 +22,29 @@ describe('buildCarePrompt', () => {
     expect(system).toContain('stop_program');
     expect(system).toContain('медицинск'); // запрет мед. советов
   });
-  test('user: интент, врач, услуги визита, транскрипт, будущие записи', () => {
+  test('user: интент, врач, услуги визита, транскрипт', () => {
     const { user } = buildCarePrompt(base);
     expect(user).toContain('Узнать самочувствие');
     expect(user).toContain('Гаджиева Пери');
     expect(user).toContain('Биоревитализация');
     expect(user).toContain('хочу записаться');
-    expect(user).toContain('Чистка');
   });
-  test('пустой транскрипт и записи не ломают сборку', () => {
-    const { user } = buildCarePrompt({ ...base, transcript: [], futureBookings: [] });
+  test('пустой транскрипт не ломает сборку', () => {
+    const { user } = buildCarePrompt({ ...base, transcript: [] });
     expect(user).toContain('переписки не было');
-    expect(user).toContain('будущих записей нет');
+  });
+  // Решение салона 2026-09-28 (инцидент 79164831407): будущая запись — не повод
+  // молчать. Данных о записях модели не даём вовсе — отказать по данным, которых
+  // нет, нельзя (детерминированная защита, а не ещё одно правило промпта).
+  test('будущие записи в промпт НЕ попадают, даже если переданы по старому контракту', () => {
+    const { system, user } = buildCarePrompt({
+      ...base,
+      futureBookings: [{ datetime: '2026-08-20 14:00:00', services: ['Чистка'], staff_name: 'Юлия' }],
+    });
+    expect(user).not.toContain('БУДУЩИЕ ЗАПИСИ');
+    expect(user).not.toContain('Чистка');
+    expect(user).not.toContain('20.08.2026');
+    expect(system).not.toContain('status="completed"');
   });
   test('имя клиента опционально', () => {
     const { user } = buildCarePrompt({ ...base, clientName: null });
@@ -65,9 +75,17 @@ describe('buildCarePrompt — правила промпта (по одному �
     const { system } = buildCarePrompt(base);
     expect(system).toContain('action="skip" с причиной');
   });
-  test('правило 6: подходящий визит уже есть → stop_program/completed', () => {
+  test('правило 5: единственный повод не писать — пациент сам написал о проблеме по ЭТОЙ процедуре', () => {
     const { system } = buildCarePrompt(base);
-    expect(system).toContain('status="completed"');
+    expect(system).toMatch(/ЕДИНСТВЕННЫЙ повод не писать/);
+  });
+  test('правило 6: будущая запись пациента — НЕ повод молчать и не повод завершать программу', () => {
+    const { system } = buildCarePrompt(base);
+    // \w в JS — только ASCII, кириллицу им не ловить.
+    expect(system).toMatch(/Будущая запись пациента[\s\S]{0,160}НЕ повод молчать/);
+    expect(system).toMatch(/НЕ повод завершать программу/);
+    expect(system).not.toContain('status="completed"');
+    expect(system).not.toMatch(/не предлагай запись/);
   });
   test('правило 7: просил не писать → stop_program/declined', () => {
     const { system } = buildCarePrompt(base);
@@ -118,10 +136,9 @@ describe('buildCarePrompt — устойчивость и формат дат', 
   test('без touch/enrollment сборка не бросает исключение', () => {
     expect(() => buildCarePrompt({ salonName: 'PERI CLINIC', clientName: 'Анна' })).not.toThrow();
   });
-  test('дата будущей записи в том же формате, что и дата якорного визита', () => {
+  test('дата якорного визита — по Москве, дд.мм.гггг, чч:мм', () => {
     const { user } = buildCarePrompt(base);
-    expect(user).toContain('02.08.2026, 14:00'); // визит
-    expect(user).toContain('20.08.2026, 14:00'); // будущая запись
+    expect(user).toContain('02.08.2026, 14:00'); // визит (11:00Z = 14:00 мск)
   });
 });
 
@@ -135,13 +152,25 @@ describe('buildCarePrompt — режим готового текста (text_mod
     expect(system).not.toContain('ГОТОВЫЙ ТЕКСТ');
   });
 
-  test('strict: текст подан как готовый и запрещено менять смысл', () => {
+  // 2026-09-28: готовый текст модели НЕ показывается — на проде она трижды
+  // эскалировала касание «губы» из-за фразы салона «Активнее увлажняйте губы»
+  // (правило 2 о мед-советах применялось к тексту, который написала клиника).
+  // Текст подставляет код (strict-text.js), модель решает только «слать ли».
+  test('strict: готовый текст в промпт НЕ попадает, модель решает только отправлять ли', () => {
     const { system, user } = buildCarePrompt(strict);
-    expect(user).toContain('ГОТОВЫЙ ТЕКСТ КАСАНИЯ (отправить дословно');
-    expect(user).toContain(tpl);
+    expect(user).not.toContain(tpl);
+    expect(user).not.toContain('повторить процедуру');
     expect(user).not.toContain('перескажи своими словами');
+    expect(user).toContain('Т+7');                       // тема касания — из названия
     expect(system).toContain('ГОТОВЫЙ ТЕКСТ');
-    expect(system).toContain('Правило 1 (тон и длина)');
+    expect(system).toMatch(/не видишь/);
+    expect(system).toContain('{"action":"send","reason":"<кратко почему>"}');
+    expect(system).not.toContain('"text":"<сообщение>"');
+  });
+
+  test('strict: содержание текста клиники — не предмет оценки (правило 2 к нему не применяется)', () => {
+    const { system } = buildCarePrompt(strict);
+    expect(system).toMatch(/содержани[ея][^\n]*не оцениваешь|не оцениваешь[^\n]*содержани/i);
   });
 
   test('strict сохраняет мед-правила и JSON-контракт (решение «слать ли» остаётся за Милой)', () => {
@@ -151,14 +180,11 @@ describe('buildCarePrompt — режим готового текста (text_mod
     expect(system).toContain('stop_program');
   });
 
-  test('strict поднимает лимит текста до 1200 символов (в свободном режиме 400)', () => {
+  test('свободный режим: заготовка режется до 400 символов', () => {
     const long = 'а'.repeat(1500);
     const free = buildCarePrompt({ ...base, touch: { intent_text: long } }).user;
-    const str  = buildCarePrompt({ ...base, touch: { intent_text: long, text_mode: 'strict' } }).user;
     expect(free).toContain('а'.repeat(400));
     expect(free).not.toContain('а'.repeat(401));
-    expect(str).toContain('а'.repeat(1200));
-    expect(str).not.toContain('а'.repeat(1201));
   });
 
   test('неизвестный режим трактуется как свободный (fail-safe)', () => {
