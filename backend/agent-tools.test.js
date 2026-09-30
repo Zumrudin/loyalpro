@@ -1023,7 +1023,8 @@ describe('cancel_booking', () => {
 });
 
 describe('reschedule_booking', () => {
-  const consent = { previousAssistantText: 'Перенести на 26 июля 2026 в 15:00?', patientLastText: 'Да' };
+  const consent = { previousAssistantText: 'Перенести на 26 июля 2026 в 15:00?', patientLastText: 'Да',
+    recentDialogText: 'Перенести на 26 июля 2026 в 15:00?\nДа' };
   test('нет datetime → invalid_args', async () => {
     const out = await rescheduleBooking.run(1, { record_id: 555 }, { clientPhone: '79001112233' });
     expect(out.invalid_args).toBe(true);
@@ -1033,7 +1034,7 @@ describe('reschedule_booking', () => {
   test('без подтверждённого клиента → unverified, переноса нет (fail-closed)', async () => {
     identity.resolveYclientsClientId.mockResolvedValue(null);
     const out = await rescheduleBooking.run(1,
-      { record_id: 555, datetime: '2026-07-26T15:00:00+03:00' }, { ...consent, clientPhone: '79001112233' });
+      { record_id: 555, datetime: '2026-07-26T15:00:00+03:00', patient_confirmed: true }, { ...consent, clientPhone: '79001112233' });
     expect(out.unverified).toBe(true);
     expect(out.rescheduled).toBeUndefined();
     expect(bookingModify.rescheduleBookingRecord).not.toHaveBeenCalled();
@@ -1045,7 +1046,7 @@ describe('reschedule_booking', () => {
       ok: true, record_id: 555, datetime: '2026-07-26T15:00:00+03:00',
     });
     const out = await rescheduleBooking.run(1,
-      { record_id: 555, datetime: '2026-07-26T15:00:00+03:00' },
+      { record_id: 555, datetime: '2026-07-26T15:00:00+03:00', patient_confirmed: true },
       { ...consent, clientPhone: '79001112233', dialogKey: 'd' });
     expect(out.rescheduled).toBe(true);
     expect(out.datetime).toBe('2026-07-26T15:00:00+03:00');
@@ -1058,7 +1059,7 @@ describe('reschedule_booking', () => {
     identity.resolveYclientsClientId.mockResolvedValue(777);
     bookingModify.rescheduleBookingRecord.mockResolvedValue({ ok: false, error: 'занято' });
     const out = await rescheduleBooking.run(1,
-      { record_id: 555, datetime: '2026-07-26T15:00:00+03:00' }, { ...consent, clientPhone: '79001112233' });
+      { record_id: 555, datetime: '2026-07-26T15:00:00+03:00', patient_confirmed: true }, { ...consent, clientPhone: '79001112233' });
     expect(out.rescheduled).toBeUndefined();
     expect(out.error).toBe('занято');
   });

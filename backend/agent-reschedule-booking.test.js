@@ -32,7 +32,7 @@ function evidenceWith(times, staff = 3356928) {
 }
 
 test('chain source services reach the CRM revalidation through server context', async () => {
-  const result = await tool.run(1, { record_id: 5, datetime: DT }, {
+  const result = await tool.run(1, { record_id: 5, datetime: DT, patient_confirmed: true }, {
     ...CONSENT, clientPhone: 'test-owner', nowMs: NOW, expectedServiceYcIds: [101],
     slotEvidence: evidenceWith(['17:00']), recentDialogText: 'Перенести на 17:00?',
   });
@@ -67,7 +67,7 @@ test('время в выдаче, но в диалоге не звучало →
 });
 
 test('время в выдаче И названо пациентом → перенос идёт', async () => {
-  const res = await tool.run(1, { record_id: 5, datetime: DT }, {
+  const res = await tool.run(1, { record_id: 5, datetime: DT, patient_confirmed: true }, {
     clientPhone: '79651442032', nowMs: NOW, slotEvidence: evidenceWith(['13:30', '17:00']),
     recentDialogText: 'Мила: есть 13:30 и 17:00, что удобнее?\nПациент: 17.00',
     previousAssistantText: '23 сентября есть 13:30 и 17:00, на какое время перенести?', patientLastText: '17.00',
@@ -78,7 +78,7 @@ test('время в выдаче И названо пациентом → пер
 });
 
 test('Мила предложила дату и время, пациент ответил «да» — перенос разрешён', async () => {
-  const res = await tool.run(1, { record_id: 5, datetime: DT }, {
+  const res = await tool.run(1, { record_id: 5, datetime: DT, patient_confirmed: true }, {
     clientPhone: '79651442032', nowMs: NOW, slotEvidence: evidenceWith(['17:00']),
     recentDialogText: '[19.09 09:03] В среду у Татьяны есть окошко в 17:00. Подойдёт?\nДа, давайте',
     previousAssistantText: '[19.09 09:03] В среду у Татьяны есть окошко в 17:00. Подойдёт?', patientLastText: 'Да, давайте',
@@ -118,7 +118,7 @@ test('too_soon и провал YClients: too_soon — hint, отказ YClients 
   expect(tool.isHintResult(soon)).toBe(true);
 
   bookingModify.rescheduleBookingRecord.mockResolvedValueOnce({ ok: false, error: 'Выбранное время недоступно' });
-  const fail = await tool.run(1, { record_id: 5, datetime: DT }, { ...CONSENT, clientPhone: '79651442032', nowMs: NOW });
+  const fail = await tool.run(1, { record_id: 5, datetime: DT, patient_confirmed: true }, { ...CONSENT, recentDialogText: 'на 17:00', clientPhone: '79651442032', nowMs: NOW });
   expect(fail.error).toMatch(/недоступно/);
   expect(tool.isHintResult(fail)).toBe(false);
 });
@@ -127,7 +127,7 @@ test('booking-modify вернул wrongService → hint invalid_args, не пр�
   bookingModify.rescheduleBookingRecord.mockResolvedValueOnce({
     ok: false, wrongService: true, error: 'Слот найден под другую услугу…',
   });
-  const res = await tool.run(1, { record_id: 5, datetime: DT }, {
+  const res = await tool.run(1, { record_id: 5, datetime: DT, patient_confirmed: true }, {
     ...CONSENT, clientPhone: '79651442032', nowMs: NOW, slotEvidence: evidenceWith(['17:00']),
     recentDialogText: 'на 17:00',
   });
@@ -138,11 +138,65 @@ test('booking-modify вернул wrongService → hint invalid_args, не пр�
 
 test('slotEvidence из ctx пробрасывается в rescheduleBookingRecord (иначе гейт A2 неактивен)', async () => {
   const ev = evidenceWith(['17:00']);
-  await tool.run(1, { record_id: 5, datetime: DT }, {
+  await tool.run(1, { record_id: 5, datetime: DT, patient_confirmed: true }, {
     ...CONSENT, clientPhone: '79651442032', nowMs: NOW, slotEvidence: ev,
     recentDialogText: 'на 17:00',
   });
   expect(bookingModify.rescheduleBookingRecord).toHaveBeenCalledWith(
     1, expect.objectContaining({ slotEvidence: ev })
   );
+});
+
+// Инцидент 2026-09-30 (79110624600, tdlib): пациентка четырежды подтвердила
+// перенос («Да», «Да», «Переносим», «Подтверждаю»), а гейт согласия каждый раз
+// отвечал needs_confirmation. Согласие восстанавливалось РАЗБОРОМ реплики Милы:
+// в ней обязана была стоять ровно одна дата, а она писала «с 9 октября на
+// 10 октября»; «Переносим» вдобавок не входило в белый список слов. Теперь
+// согласие определяет МОДЕЛЬ (patient_confirmed), код сверяет только факты.
+describe('согласие на перенос определяет модель (2026-09-30)', () => {
+  const NOW30 = Date.parse('2026-09-30T07:19:30+03:00');
+  const DT10 = '2026-10-10T14:00:00+03:00';
+  const ev10 = () => {
+    const ev = createSlotEvidence();
+    ev.add('get_available_slots', { staff_yc_id: 3356928, date: '2026-10-10' },
+      { slots: [{ time: '14:00', datetime: DT10, seance_length: 3600 }] });
+    return ev;
+  };
+  const ASK = 'В субботу, 10 октября, в 14:00 у Татьяны свободно. Перенести Вашу запись на капельницу «Золушка» с 9 октября на это время?';
+  const turn = (patient, previous = ASK) => ({
+    clientPhone: '79110624600', nowMs: NOW30, slotEvidence: ev10(), rescheduleRequested: true,
+    previousAssistantText: previous, patientLastText: patient,
+    recentDialogText: `14:00\n${previous}\n${patient}`,
+  });
+
+  test.each([
+    ['Да', ASK],
+    ['Переносим', 'Виктория, перенос пока не оформлен. Подтвердите, пожалуйста: переносим запись с 9 октября на субботу, 10 октября, 14:00 к Татьяне?'],
+    ['Ага, супер, так и сделаем', ASK],
+  ])('боевой случай: «%s» при двух датах в вопросе Милы → перенос идёт', async (patient, previous) => {
+    const res = await tool.run(1, { record_id: 1977813858, datetime: DT10, patient_confirmed: true }, turn(patient, previous));
+    expect(res.rescheduled).toBe(true);
+    expect(bookingModify.rescheduleBookingRecord).toHaveBeenCalledTimes(1);
+  });
+
+  test.each([[false], [undefined], ['true']])('patient_confirmed=%p → needs_confirmation, YClients не зовётся', async flag => {
+    const res = await tool.run(1, { record_id: 1977813858, datetime: DT10, patient_confirmed: flag }, turn('Да'));
+    expect(res.needs_confirmation).toBe(true);
+    expect(res.error).toMatch(/patient_confirmed/);
+    expect(tool.isHintResult(res)).toBe(true);
+    expect(bookingModify.rescheduleBookingRecord).not.toHaveBeenCalled();
+  });
+
+  test('флаг есть, но время в переписке не звучало → needs_confirmation с этим временем', async () => {
+    const res = await tool.run(1, { record_id: 1977813858, datetime: DT10, patient_confirmed: true },
+      { ...turn('Да'), recentDialogText: 'Можно перенести на субботу?\nДа, посмотрю.\nДа' });
+    expect(res.needs_confirmation).toBe(true);
+    expect(res.error).toMatch(/14:00/);
+    expect(bookingModify.rescheduleBookingRecord).not.toHaveBeenCalled();
+  });
+
+  test('схема требует patient_confirmed', () => {
+    expect(tool.schema.input_schema.required).toContain('patient_confirmed');
+    expect(tool.schema.input_schema.properties.patient_confirmed.type).toBe('boolean');
+  });
 });

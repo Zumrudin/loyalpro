@@ -5,12 +5,15 @@ const identity = require('../identity');
 const leadTime = require('../lead-time');
 const slotEvidence = require('../slot-evidence');
 const writeGuard = require('../booking-write-guard');
+const { createLogger } = require('../../../logger');
+const logger = createLogger('AgentReschedule');
 
 const schema = {
   name: 'reschedule_booking',
   description: 'ПЕРЕНЕСТИ запись пациента на новое время. record_id бери из list_client_bookings; ' +
     'datetime — ТОЧНУЮ строку из get_available_slots.datetime (…+03:00), не собирай вручную. ' +
-    'Вызывать ТОЛЬКО после того, как пациент подтвердил новый слот. По умолчанию услуга и мастер ' +
+    'Вызывать ТОЛЬКО после того, как пациент подтвердил новый слот; согласие оцениваешь ты сама и ' +
+    'передаёшь в patient_confirmed. По умолчанию услуга и мастер ' +
     'сохраняются (staff_yc_id передавай, только если пациент меняет мастера).',
   input_schema: {
     type: 'object',
@@ -19,8 +22,9 @@ const schema = {
       datetime:      { type: 'string',  description: 'ISO datetime нового слота из get_available_slots.datetime (с +03:00).' },
       staff_yc_id:   { type: 'integer', description: 'Новый мастер (необязательно; по умолчанию прежний).' },
       seance_length: { type: 'integer', description: 'Длительность из слота, если известна (необязательно).' },
+      patient_confirmed: { type: 'boolean', description: 'true — пациент в переписке явно согласился перенести запись именно на это время (любыми словами: «да», «переносим», «подходит», сам назвал это время). false — согласия ещё не было, или пациент только спрашивает, сомневается, меняет условия.' },
     },
-    required: ['record_id', 'datetime'],
+    required: ['record_id', 'datetime', 'patient_confirmed'],
     additionalProperties: false,
   },
 };
@@ -34,8 +38,9 @@ async function run(salonId, input, ctx = {}) {
   // выдуманные 10:00/11:00 без единого слот-вызова и без согласия пациентки):
   //  (1) время обязано быть в выдаче слот-инструмента этого хода или свежего
   //      журнала (ctx.slotEvidence, см. slot-evidence.js);
-  //  (2) последнее доставленное предложение содержит новую дату и время,
-  //      а последнее сообщение пациента явно подтверждает именно этот слот.
+  //  (2) согласие пациента: его определяет МОДЕЛЬ (patient_confirmed), код
+  //      сверяет лишь, что новое время звучало в переписке цифрами
+  //      (инцидент 2026-09-30, см. booking-write-guard.rescheduleRejection).
   // Оба — hint-ответы (invalid_args), а не провал записи: оркестратор их не
   // считает bookingErrored, модель делает пропущенный шаг и повторяет вызов.
   // Без контекста согласия перенос запрещён. Для цепочки код передаёт
@@ -53,6 +58,9 @@ async function run(salonId, input, ctx = {}) {
 
   const consentRejection = writeGuard.rescheduleRejection(input, ctx);
   if (consentRejection) return consentRejection;
+  if (writeGuard.strictMismatch(input, ctx)) {
+    logger.info(`dialog ${ctx.dialogKey || ctx.clientPhone}: перенос ${recordId} на ${datetime} — согласие по флагу модели, строгая проверка текста отказала бы`);
+  }
 
   const expectedYcClientId = await identity.resolveYclientsClientId(salonId, ctx.clientPhone);
   // Fail-closed: без подтверждённого клиента перенос не делаем (гейт

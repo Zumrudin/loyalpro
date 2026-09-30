@@ -107,8 +107,15 @@ test.each([
   { previousAssistantText: 'Перенести на 15:00?' },
   { previousAssistantText: 'Не будем переносить существующую запись. 2 октября в 15:00?' },
   { previousAssistantText: 'Перенос на 2 октября в 15:00 вам не подходит?' },
-])('single transfer rejects unconfirmed terms: %j', async patch => {
-  const result = await move.run(1, { record_id: 501, datetime: DT }, { ...ctx(), ...patch });
+])('strict text check (chain transfers, telemetry) rejects unconfirmed terms: %j', patch => {
+  // С 2026-09-30 обычный перенос идёт по флагу модели patient_confirmed; строгий
+  // разбор текста остался у цепочек/доп. визита и телеметрией (strictMismatch).
+  const c = { ...ctx(), ...patch };
+  expect(guard.transferConfirmed([{ record_id: 501, datetime: DT }], c)).toBe(false);
+  expect(guard.strictMismatch({ record_id: 501, datetime: DT }, c)).toBe(true);
+});
+test('single transfer without patient_confirmed is rejected', async () => {
+  const result = await move.run(1, { record_id: 501, datetime: DT }, ctx());
   expect(result.needs_confirmation).toBe(true);
   expect(modify.rescheduleBookingRecord).not.toHaveBeenCalled();
 });
@@ -118,16 +125,19 @@ test('missing consent context fails closed', async () => {
   expect(modify.rescheduleBookingRecord).not.toHaveBeenCalled();
 });
 test.each(['Да', 'Да, пожалуйста', 'Подтверждаю', '15:00', 'Давайте на 15.00'])('confirmed transfer: %s', async patientLastText => {
-  const result = await move.run(1, { record_id: 501, datetime: DT }, { ...ctx(), patientLastText });
+  const c = { ...ctx(), patientLastText };
+  expect(guard.transferConfirmed([{ record_id: 501, datetime: DT }], c)).toBe(true);
+  expect(guard.strictMismatch({ record_id: 501, datetime: DT }, c)).toBe(false);
+  const result = await move.run(1, { record_id: 501, datetime: DT, patient_confirmed: true }, c);
   expect(result.rescheduled).toBe(true);
 });
 test('explicit time selects one of several times on a single offered date', async () => {
-  const result = await move.run(1, { record_id: 501, datetime: DT }, { ...ctx(), patientLastText: '15:00',
-    previousAssistantText: '2 октября есть 15:00 или 16:00. На какое время перенести?' });
-  expect(result.rescheduled).toBe(true);
+  const c = { ...ctx(), patientLastText: '15:00',
+    previousAssistantText: '2 октября есть 15:00 или 16:00. На какое время перенести?' };
+  expect(guard.transferConfirmed([{ record_id: 501, datetime: DT }], c)).toBe(true);
 });
 test('equivalent UTC timestamp uses the Moscow date and time', async () => {
-  const result = await move.run(1, { record_id: 501, datetime: '2026-10-02T12:00:00Z' }, ctx());
+  const result = await move.run(1, { record_id: 501, datetime: '2026-10-02T12:00:00Z', patient_confirmed: true }, ctx());
   expect(result.rescheduled).toBe(true);
 });
 

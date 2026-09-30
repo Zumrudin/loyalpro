@@ -72,14 +72,38 @@ function withChainTransfer(ctx, targets) {
   return transferConfirmed(targets, ctx, true) ? { ...ctx, [CHAIN_MOVE]: targets } : ctx;
 }
 
+// Согласие на ОБЫЧНЫЙ перенос определяет МОДЕЛЬ (patient_confirmed), а не разбор
+// реплик. Инцидент 2026-09-30 (79110624600): пациентка четырежды подтвердила
+// перенос, а transferConfirmed отказывал — в вопросе Милы стояли две даты
+// («с 9 октября на 10 октября»), а «Переносим» не входило в белый список слов.
+// Любой список слов согласия заведомо неполон, поэтому код сверяет только
+// ФАКТЫ: флаг выставлен и новое время звучало в переписке цифрами (слот и
+// принадлежность записи проверяются отдельно — slot-evidence, booking-modify).
+// Строгая проверка оставлена ТЕЛЕМЕТРИЕЙ (strictMismatch → лог в инструменте):
+// мерить, как часто модель подтверждает там, где текст согласия не показывает.
+// Цепочка по-прежнему идёт серверной capability CHAIN_MOVE, не флагом модели.
 function rescheduleRejection(input, ctx) {
   const bound = ctx[CHAIN_MOVE];
   if (bound && bound.some(t => t.record_id === input.record_id && t.datetime === input.datetime
       && t.staff_yc_id === input.staff_yc_id)) return null;
+  const hhmm = moscowHHMM(input.datetime);
+  const when = hhmm ? `${input.datetime} (${hhmm})` : input.datetime;
+  if (input.patient_confirmed !== true) {
+    return { needs_confirmation: true, invalid_args: true,
+      error: `Перенос на ${when} не подтверждён: patient_confirmed не равен true. Если пациент УЖЕ явно согласился на это время (любыми словами) — повтори вызов с patient_confirmed:true, не переспрашивай. Если согласия ещё не было — назови дату и время и спроси. Не создавай новую запись вместо переноса.` };
+  }
+  if (!hhmm || !extractTimes(clean(ctx.recentDialogText)).includes(hhmm)) {
+    return { needs_confirmation: true, invalid_args: true,
+      error: `Перенос на ${when} не подтверждён: это время ещё не звучало в переписке. Назови пациенту дату и время цифрами и дождись согласия. Не создавай новую запись вместо переноса.` };
+  }
+  return null;
+}
+
+// Телеметрия для прохода по флагу модели: что сказала бы прежняя строгая проверка.
+function strictMismatch(input, ctx) {
+  if (ctx[CHAIN_MOVE]) return false;
   const moveIntent = ctx.rescheduleRequested || /перенес|перенести|перенос|перезапис/iu.test(clean(ctx.previousAssistantText));
-  if (moveIntent && transferConfirmed([input], ctx)) return null;
-  return { needs_confirmation: true, invalid_args: true,
-    error: `Перенос на ${input.datetime} не подтверждён. Назови одну новую дату и конкретное время, дождись явного согласия. Не создавай новую запись вместо переноса.` };
+  return !(moveIntent && transferConfirmed([input], ctx));
 }
 
 function patientIntent(texts) {
@@ -131,4 +155,4 @@ function creationRejection(input, ctx) {
   return null;
 }
 
-module.exports = { creationRejection, rescheduleRejection, withChainTransfer, withNewChainLink, transferConfirmed, patientIntent };
+module.exports = { creationRejection, rescheduleRejection, strictMismatch, withChainTransfer, withNewChainLink, transferConfirmed, patientIntent };
