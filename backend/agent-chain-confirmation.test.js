@@ -124,3 +124,71 @@ test.each(['gap', 'different-staff', 'separate', 'wrong-start', 'ambiguous', 'wr
 test('semantic consent cannot authorize a different specialist with the same times', () => {
   expect(guard.validateChoice(competingOffers, 'sameSecond', ctx, { patient_confirmed: true }).needs_confirmation).toBe(true);
 });
+
+// Регрессия 2026-10-02: «Давайте на 16:00, запишите» после реплики с ДВУМЯ вариантами
+// одного специалиста и «первый вариант» после двух цепочек требовали второго «да».
+describe('выбор пациента среди нескольких показанных вариантов', () => {
+  const dt = (t) => `2026-10-15T${t}:00+03:00`;
+  const two = [
+    { staff_yc_id: 5, staff_name: 'Юлия', service_yc_id: 1, service_title: 'А', datetime: dt('16:00'), seance_length: 3600 },
+    { staff_yc_id: 5, staff_name: 'Юлия', service_yc_id: 2, service_title: 'Б', datetime: dt('17:00'), seance_length: 3600 },
+  ];
+  const later = two.map((l, i) => ({ ...l, datetime: dt(i ? '14:00' : '13:00') }));
+  const opts = { late: { booking_mode: 'single_record', chain: two }, early: { booking_mode: 'single_record', chain: later } };
+  const text = '15 октября Юлия проведёт обе процедуры подряд: начало в 16:00 или в 13:00. Какое время удобнее?';
+  const c = (patient, extra = {}) => ({ previousAssistantText: text, patientLastText: patient, ...extra });
+  const input = { patient_confirmed: true };
+
+  test('время пациента, совпадающее с началом варианта и с option_id, выбирает вариант', () => {
+    expect(guard.validateChoice(opts, 'late', c('Давайте на 16:00, запишите.'), input)).toBeNull();
+    expect(guard.validateChoice(opts, 'early', c('Давайте на 13:00, запишите.'), input)).toBeNull();
+  });
+  test('option_id, расходящийся со временем пациента, не проходит', () => {
+    expect(guard.validateChoice(opts, 'early', c('Давайте на 16:00, запишите.'), input).needs_confirmation).toBe(true);
+  });
+  test('время второй услуги не выбирает вариант', () => {
+    expect(guard.validateChoice(opts, 'late', c('Давайте в 17:00'), input)).not.toBeNull();
+  });
+  test('без времени и порядкового номера вариант не выбирается', () => {
+    expect(guard.validateChoice(opts, 'late', c('Да, запишите'), input).needs_confirmation).toBe(true);
+  });
+  test('«первый вариант» работает только если совпал с option_id в порядке показа', () => {
+    const t = '15 октября: 1) 16:00 Юлия, затем 17:00 Юлия; 2) 13:00 Юлия, затем 14:00 Юлия. Какой вариант?';
+    const cc = p => ({ previousAssistantText: t, patientLastText: p });
+    expect(guard.validateChoice(opts, 'late', cc('Первый вариант, пожалуйста'), input)).toBeNull();
+    expect(guard.validateChoice(opts, 'early', cc('Второй вариант'), input)).toBeNull();
+    expect(guard.validateChoice(opts, 'early', cc('Первый вариант, пожалуйста'), input).needs_confirmation).toBe(true);
+  });
+});
+
+test('времена старых записей из уточнения не делают чужой вариант совпадающим', () => {
+  const l = (t, id) => ({ staff_yc_id: 3, staff_name: 'Татьяна', service_yc_id: id, service_title: `С${id}`,
+    datetime: `2026-10-31T${t}:00+03:00`, seance_length: 3600 });
+  const opts = { evening: { booking_mode: 'single_record', chain: [l('18:00', 1), l('19:00', 2)] },
+    morning: { booking_mode: 'single_record', chain: [l('10:00', 1), l('11:00', 2)] } };
+  const prev = `У Вас уже есть запись:\n30.10 (пт) 10:00 — С1, С2.\nПеренести её или оформить дополнительный визит?\n${guard.VARIANT_MARK}\n${guard.formatFacts(opts.evening.chain).join('\n')}`;
+  expect(guard.validateChoice(opts, 'evening', { previousAssistantText: prev, patientLastText: 'Дополнительный визит, прежние записи оставьте.' }, { patient_confirmed: true })).toBeNull();
+});
+
+test('вариант с названными временами всех звеньев приоритетнее совпавшего лишь по началу', () => {
+  const l = (t, id) => ({ staff_yc_id: 5, staff_name: 'Юлия', service_yc_id: id, service_title: `С${id}`,
+    datetime: `2026-10-29T${t}:00+03:00`, seance_length: 3600 });
+  const opts = { a: { booking_mode: 'single_record', chain: [l('13:00', 1), l('14:00', 2)] },
+    b: { booking_mode: 'single_record', chain: [l('14:00', 1), l('15:00', 2)] } };
+  const text = '29 октября у Юлии: Золушка с 13:00, затем лифтинг с 14:00. Подойдёт?';
+  expect(guard.matchingOffers(opts, text)).toEqual(['a']);
+  expect(guard.validateChoice(opts, 'a', { previousAssistantText: text, patientLastText: 'Да, записывайте' }, { patient_confirmed: true })).toBeNull();
+  expect(guard.validateChoice(opts, 'b', { previousAssistantText: text, patientLastText: 'Да, записывайте' }, { patient_confirmed: true }).needs_confirmation).toBe(true);
+});
+
+test('имя специалиста и дата в ответе пациента выбирают вариант среди одинаковых времён', () => {
+  const l = (staff, name, day, t, id) => ({ staff_yc_id: staff, staff_name: name, service_yc_id: id, service_title: `С${id}`,
+    datetime: `2026-10-${day}T${t}:00+03:00`, seance_length: 3600 });
+  const opts = { yulia: { booking_mode: 'single_record', chain: [l(5, 'Юлия', 29, '13:00', 1), l(5, 'Юлия', 29, '14:00', 2)] },
+    tanya: { booking_mode: 'single_record', chain: [l(6, 'Татьяна', 28, '13:00', 1), l(6, 'Татьяна', 28, '14:00', 2)] } };
+  const text = '28 октября у Юлии выходной, 29 октября она свободна в 13:00. Если важна среда, у Татьяны есть 13:00. Какой вариант?';
+  const ask = (patient, id) => guard.validateChoice(opts, id, { previousAssistantText: text, patientLastText: patient }, { patient_confirmed: true });
+  expect(ask('К Юлии 29 октября на 13:00, запишите.', 'yulia')).toBeNull();
+  expect(ask('К Юлии 29 октября на 13:00, запишите.', 'tanya').needs_confirmation).toBe(true);
+  expect(ask('Давайте на 13:00', 'yulia').needs_confirmation).toBe(true);
+});

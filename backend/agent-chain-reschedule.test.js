@@ -154,3 +154,38 @@ test('semantic flag does not turn consent to creation into consent to a transfer
   expect(result.reschedule_confirmation).toBe(true);
   expect(d.rescheduleBooking).not.toHaveBeenCalled();
 });
+
+// Регрессия 2026-10-02: услуга варианта уже записана → вопрос пациенту, а не тупик
+// «передай администратору»; «дополнительно» ведёт в создание, перенос не подменяется.
+describe('услуга варианта уже записана у пациента', () => {
+  const askCtx = (over = {}) => ({ ...ctx(), liveBookings: [bookings[0]],
+    previousAssistantText: '2 октября: 15:00 у Анны, затем 15:30 у Марии. Записать?', ...over });
+
+  test('без явного намерения возвращается уточнение с существующей записью, ничего не пишется', async () => {
+    const d = deps();
+    const result = await tool.run(1, { option_id: 'o1' }, askCtx(), d);
+    expect(result).toMatchObject({ needs_confirmation: true, existing_overlap: true, matching_option_ids: ['o1'] });
+    expect(result.existing_records.map(r => r.record_id)).toEqual([501]);
+    expect(d.createBooking).not.toHaveBeenCalled();
+    expect(d.rescheduleBooking).not.toHaveBeenCalled();
+  });
+
+  test('одна запись с обеими услугами тоже уточняется, а не блокируется', async () => {
+    const d = deps();
+    const result = await tool.run(1, { option_id: 'o1' }, askCtx({ liveBookings: [{ ...bookings[0], service_yc_ids: [101, 102] }] }), d);
+    expect(result.existing_overlap).toBe(true);
+  });
+
+  test('явное «дополнительно, прежнюю оставьте» после вопроса создаёт новый визит', async () => {
+    const d = deps();
+    d.createBooking.mockResolvedValue({ created: true, record_id: 900 });
+    const result = await tool.run(1, { option_id: 'o1', patient_confirmed: true }, askCtx({
+      patientLastText: 'Дополнительный визит, прежнюю запись оставьте',
+      previousAssistantText: 'Перенести её на новое время или оформить дополнительный визит, сохранив прежнюю запись? 2 октября: 15:00 у Анны, затем 15:30 у Марии.',
+    }), d);
+    expect(result.booked_all).toBe(true);
+    expect(d.createBooking).toHaveBeenCalledTimes(2);
+    expect(d.rescheduleBooking).not.toHaveBeenCalled();
+    expect(d.createBooking.mock.calls[0][1].patient_confirmed).toBe(true);
+  });
+});

@@ -22,6 +22,21 @@ function plan(offer, input, ctx) {
   if (!Array.isArray(ctx.liveBookings)) return refuse();
   if (ctx.liveBookings.some(b => !Array.isArray(b.service_yc_ids) || !b.service_yc_ids.length)) return refuse();
   const items = offer.chain.filter(l => !l.already_booked);
+  // Услуга варианта УЖЕ записана, а пациент не сказал, что хочет перенос или
+  // отдельный визит: это вопрос к пациенту, а не тупик. «Перенести» ведёт в
+  // обычный перенос (Сценарий 3), «дополнительно» — в создание нового визита.
+  const overlap = () => {
+    const mine = b => (b.service_yc_ids || []).map(Number);
+    const existing = ctx.liveBookings.filter(b => items.some(l => mine(b).includes(Number(l.service_yc_id))));
+    return { needs_confirmation: true, existing_overlap: true, matching_option_ids: [input.option_id],
+      existing_records: existing.map(b => ({ record_id: b.record_id, datetime: b.datetime,
+        service_yc_ids: mine(b) })),
+      booked_all: false, records: [],
+      error: 'У пациента уже есть запись на услугу из этого варианта. Спроси: перенести её или оформить дополнительный визит с сохранением прежней. Новые записи не создавались.' };
+  };
+  const wantsAdditional = writeGuard.patientIntent([...(ctx.patientRecentTexts || []), ctx.patientLastText]) === 'additional'
+    && /дополнител|ещ[её]\s+одн|прежн[а-яё]*\s+(?:запис[а-яё]*\s+)?остав/iu.test(String(ctx.previousAssistantText || ''));
+  if (!offer.reschedulePlan && wantsAdditional) return null;
   const ids = b => (b.service_yc_ids || []).map(Number);
   const candidates = items.map(l => ctx.liveBookings.filter(b => ids(b).includes(Number(l.service_yc_id))));
   if (!offer.reschedulePlan && candidates.every(rows => !rows.length)) {
@@ -30,6 +45,12 @@ function plan(offer, input, ctx) {
   }
   // No mixed create+move transaction: stop before the first external effect.
   if (offer.anchored || items.length !== offer.chain.length) return refuse();
+  if (!offer.reschedulePlan && !isTransferProposal(ctx.previousAssistantText)) {
+    const oneToOne = candidates.every(rows => rows.length === 1)
+      && new Set(candidates.map(rows => String(rows[0].record_id))).size === items.length
+      && candidates.every((rows, i) => (rows[0].service_yc_ids || []).length === 1);
+    if (!oneToOne) return overlap();
+  }
   let sources;
   if (offer.reschedulePlan) {
     sources = offer.reschedulePlan.map(id => ctx.liveBookings.find(b => String(b.record_id) === String(id)));

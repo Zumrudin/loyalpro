@@ -6,6 +6,12 @@ const { extractTimes } = require('./reply-guard');
 const { fmtWhen } = require('./bookings-block');
 const { sanitizeLine } = require('./sanitize');
 
+// Уточнение «уже есть запись» перечисляет СТАРЫЕ записи (даты, время) перед новым
+// вариантом. Их времена не должны сопоставляться с кэшем вариантов: иначе чужой
+// вариант, начинающийся в то же время, что и старая запись, делает выбор неоднозначным.
+const VARIANT_MARK = 'Новый вариант:';
+const variantPart = text => { const t = String(text || ''), i = t.lastIndexOf(VARIANT_MARK); return i >= 0 ? t.slice(i + VARIANT_MARK.length) : t; };
+
 const words = text => String(text || '').toLowerCase().replace(/ё/g, 'е').match(/[а-яa-z]+/g) || [];
 const stem = word => word.replace(/(?:ой|ей|а|я|ы|и|е|у|ю)$/u, '');
 const sameName = (a, b) => stem(a).length >= 3 && stem(b).length >= 3
@@ -41,10 +47,7 @@ function mentionedStaff(offers, text) {
   return mentions;
 }
 
-function matchingOffers(offers, text) {
-  const times = extractTimes(String(text || ''));
-  const tokens = words(text);
-  const mentions = mentionedStaff(offers, text);
+function datesIn(text) {
   const dates = [...String(text || '').matchAll(/\b(\d{1,2})\.(\d{2})(?:\.\d{4})?\b/g)]
     .filter(m => Number(m[1]) <= 31 && Number(m[2]) >= 1 && Number(m[2]) <= 12)
     .map(m => `${m[1].padStart(2, '0')}.${m[2]}`);
@@ -53,29 +56,40 @@ function matchingOffers(offers, text) {
     const month = months.findIndex((v, i) => i === 4 ? /^(май|мая)$/.test(m[2]) : m[2].startsWith(v));
     if (month >= 0) dates.push(`${m[1].padStart(2, '0')}.${String(month + 1).padStart(2, '0')}`);
   }
-  return Object.entries(offers || {}).filter(([, offer]) => {
+  return dates;
+}
+
+function matchingOffers(offers, text, { loose = false } = {}) {
+  const times = extractTimes(String(text || ''));
+  const tokens = words(text);
+  const mentions = mentionedStaff(offers, text);
+  const dates = datesIn(text);
+  const fullyNamed = new Set();
+  const matched = Object.entries(offers || {}).filter(([id, offer]) => {
     if (!offer || !Array.isArray(offer.chain) || !offer.chain.length) return false;
     // Subsequence matching alone accepts «Anna then Maria» as «both Maria»:
     // it finds Maria later in the text and skips the name for the second link.
     // Every explicitly named specialist must be represented in the chain.
     // Shared names keep all possible IDs, so genuine ambiguity stays blocked.
     const staffIds = new Set(offer.chain.map(link => String(link.staff_yc_id)));
-    if (mentions.some(ids => !ids.some(id => staffIds.has(id)))) return false;
+    if (!loose && mentions.some(ids => !ids.some(id => staffIds.has(id)))) return false;
     const dt = String(offer.chain[0].datetime || '');
     if (dates.length && !dates.includes(`${dt.slice(8, 10)}.${dt.slice(5, 7)}`)) return false;
     // One continuous visit with one specialist is presented by its start.
     // Separate specialists, gaps and explicitly listed starts retain full checks.
-    const compact = offer.booking_mode === 'single_record' && times.length === 1
+    const compact = offer.booking_mode === 'single_record' && times.length >= 1
       && offer.chain.every((link, i, chain) => String(link.staff_yc_id) === String(chain[0].staff_yc_id)
         && (!i || (Number(chain[i - 1].seance_length) > 0
           && Date.parse(link.datetime) === Date.parse(chain[i - 1].datetime) + Number(chain[i - 1].seance_length) * 1000)));
     let timePos = 0;
     let namePos = 0;
     let previousStaff = null;
+    let everyTimeNamed = true;
     for (const link of offer.chain) {
       const time = /T(\d{2}:\d{2})/.exec(link.datetime || '');
       const pos = time ? times.indexOf(time[1], timePos) : -1;
       if (pos < 0 && !(compact && timePos > 0)) return false;
+      if (pos < 0) everyTimeNamed = false;
       if (pos >= 0) timePos = pos + 1;
       if (String(link.staff_yc_id) !== previousStaff) {
         const names = words(link.staff_name);
@@ -85,8 +99,57 @@ function matchingOffers(offers, text) {
         previousStaff = String(link.staff_yc_id);
       }
     }
+    if (everyTimeNamed) fullyNamed.add(id);
     return true;
   }).map(([id]) => id);
+  // Вариант, у которого названы ВСЕ времена, точнее варианта, совпавшего лишь по
+  // началу визита: время второй услуги из реплики не должно делать «стартом»
+  // чужой вариант.
+  const full = matched.filter(id => fullyNamed.has(id));
+  return full.length ? full : matched;
+}
+
+const ORDINALS = [/(?<![а-яё])перв/u, /(?<![а-яё])втор/u, /(?<![а-яё])трет/u, /(?<![а-яё])четв[её]рт/u];
+
+// В прошлой реплике могло быть показано несколько вариантов. Выбор пациента
+// («давайте на 16:00», «первый вариант») снимает неоднозначность только когда
+// он СОВПАДАЕТ с option_id модели: код проверяет согласованность двух сигналов,
+// а не подставляет вариант сам.
+function resolveAmongMatching(matching, offers, optionId, patientText, previousText, { needDiscriminator = false } = {}) {
+  if (matching.length === 1 && !needDiscriminator) return matching[0];
+  if (matching.length < 1 || !matching.includes(optionId)) return null;
+  // Имя специалиста и дата из ответа пациента («К Юлии 29 октября») сужают выбор.
+  const staffMentions = mentionedStaff(offers, patientText);
+  const patientDates = datesIn(patientText);
+  const narrowed = matching.filter(id => {
+    const chain = (offers[id] || {}).chain || [];
+    const staffIds = new Set(chain.map(l => String(l.staff_yc_id)));
+    const dt = String((chain[0] || {}).datetime || '');
+    return staffMentions.every(ids => ids.some(x => staffIds.has(x)))
+      && (!patientDates.length || patientDates.includes(`${dt.slice(8, 10)}.${dt.slice(5, 7)}`));
+  });
+  if (!narrowed.includes(optionId)) return null;
+  if (narrowed.length === 1 && (staffMentions.length || patientDates.length)) return optionId;
+  if (needDiscriminator && narrowed.length === 1 && extractTimes(patientText).length) return optionId;
+  matching = narrowed;
+  const startOf = id => (((offers[id] || {}).chain || [])[0] || {}).datetime || '';
+  const patientTimes = extractTimes(patientText);
+  if (patientTimes.length) {
+    const byTime = matching.filter(id => patientTimes.every(t =>
+      ((offers[id] || {}).chain || []).some(l => (l.datetime || '').slice(11, 16) === t)));
+    // Время пациента обязано быть НАЧАЛОМ варианта: «в 17:00» не выбирает вариант,
+    // у которого 17:00 — вторая услуга.
+    const starts = byTime.filter(id => patientTimes.includes(startOf(id).slice(11, 16)));
+    return starts.length === 1 ? starts[0] : null;
+  }
+  const ordinal = ORDINALS.findIndex(re => re.test(patientText));
+  if (ordinal < 0 || ORDINALS.filter(re => re.test(patientText)).length !== 1) return null;
+  const shown = extractTimes(String(previousText || ''));
+  const order = [...matching].sort((a, b) => {
+    const pa = shown.indexOf(startOf(a).slice(11, 16)), pb = shown.indexOf(startOf(b).slice(11, 16));
+    return pa - pb || Date.parse(startOf(a)) - Date.parse(startOf(b));
+  });
+  return order[ordinal] === optionId ? optionId : null;
 }
 
 function validateChoice(offers, optionId, ctx, input = {}) {
@@ -104,11 +167,18 @@ function validateChoice(offers, optionId, ctx, input = {}) {
   // callers retain their previous contract; false/string values never fall back.
   const consent = Object.prototype.hasOwnProperty.call(input, 'patient_confirmed')
     ? input.patient_confirmed === true && !!text : legacyConsent;
-  const matching = matchingOffers(offers, ctx.previousAssistantText);
+  const matching = matchingOffers(offers, variantPart(ctx.previousAssistantText));
   const patientTimes = extractTimes(text);
   const selected = offers && offers[optionId];
   const chainTimes = (selected && selected.chain || []).map(l => (l.datetime || '').slice(11, 16));
-  if (consent && matching.length === 1 && matching[0] === optionId
+  // Реплика с вариантами РАЗНЫХ специалистов не совпадает ни с одним вариантом по
+  // строгому правилу. Тогда ответ пациента сам должен указать вариант (имя, дату,
+  // время или номер): без этого запасной режим не включается.
+  const pool = matching.length === 1 ? matching
+    : matchingOffers(offers, variantPart(ctx.previousAssistantText), { loose: true });
+  const resolved = consent ? resolveAmongMatching(pool, offers || {}, optionId, text, variantPart(ctx.previousAssistantText),
+    { needDiscriminator: matching.length !== 1 }) : null;
+  if (consent && resolved === optionId
       && patientTimes.every(t => chainTimes.includes(t))) return null;
   return {
     needs_confirmation: true, booked_all: false, records: [],
@@ -137,6 +207,15 @@ function formatFacts(records) {
   }).filter(Boolean);
 }
 
+function formatExisting(records, chain) {
+  const titles = new Map((chain || []).map(l => [Number(l.service_yc_id), l.service_title]));
+  return (records || []).map(r => {
+    const when = fmtWhen(r.datetime);
+    const names = (r.service_yc_ids || []).map(id => titles.get(Number(id))).filter(Boolean);
+    return when && names.length ? `${when} — ${names.map(n => sanitizeLine(n, 180)).join(', ')}.` : null;
+  }).filter(Boolean);
+}
+
 function confirmationReply(result) {
   const lines = formatFacts(result && result.records);
   if (!lines.length) return null;
@@ -153,4 +232,4 @@ function isBookingCheck(text) {
   return /запис/u.test(s) && /к кому|у кого|к какому|к разным|к одному|точно|проверь|проверить|правильно|ты.*к\s|вы.*к\s|меня.*к\s|я.*к\s|(?:^|\s)к\s.+запис|запис(?:ала|али|ан[аы]?|аны).*к\s/u.test(s);
 }
 
-module.exports = { matchingOffers, validateChoice, recordFact, confirmationReply, formatFacts, isBookingCheck };
+module.exports = { VARIANT_MARK, matchingOffers, validateChoice, recordFact, formatExisting, confirmationReply, formatFacts, isBookingCheck };

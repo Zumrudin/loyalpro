@@ -1145,7 +1145,11 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
             const ids = result.matching_option_ids || [];
             const option = seqOffers.take(salonId, dialogKey, ids.length === 1 ? ids[0] : tc.input.option_id, { nowMs });
             const facts = option && chainConfirmation.formatFacts(option.chain);
-            directChainReply = facts && facts.length
+            const existingFacts = result.existing_overlap && option
+              ? chainConfirmation.formatExisting(result.existing_records, option.chain) : [];
+            directChainReply = result.existing_overlap && facts && facts.length && existingFacts.length
+              ? `У Вас уже есть запись:\n${existingFacts.join('\n')}\nПеренести её на новое время или оформить дополнительный визит, сохранив прежнюю запись? ${chainConfirmation.VARIANT_MARK}\n${facts.join('\n')}`
+              : facts && facts.length
               ? (result.reschedule_confirmation
                 ? `Перенести существующие записи на это время?\n${facts.join('\n')}`
                 : `Подтвердите, пожалуйста, этот вариант:\n${facts.join('\n')}\nЗаписать?`)

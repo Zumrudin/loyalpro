@@ -105,6 +105,7 @@ async function run(salonId, input, ctx = {}, deps = {}) {
     service_yc_id: l.service_yc_id,
     datetime: l.datetime,
     seance_length: l.seance_length,
+    ...(input.patient_confirmed === true ? { patient_confirmed: true } : {}),
     ...common,
   }, Object.prototype.hasOwnProperty.call(ctx, 'liveBookings') ? writeGuard.withNewChainLink(linkCtx, l) : linkCtx);
 
