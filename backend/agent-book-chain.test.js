@@ -266,3 +266,23 @@ test('первое звено вернуло needs_phone → book_chain проб
   expect(res.records).toEqual([]);
   expect(d.createBooking).toHaveBeenCalledTimes(1);
 });
+
+
+test.each(['single_record', 'separate_records', 'anchored'])('semantic consent completes %s through book_chain', async mode => {
+  const chain = [
+    { ...LINK(101, 7, '2026-11-05T15:00:00+03:00'), staff_name: 'Анна' },
+    { ...LINK(102, mode === 'separate_records' ? 8 : 7, '2026-11-05T16:00:00+03:00'),
+      staff_name: mode === 'separate_records' ? 'Мария' : 'Анна' },
+  ];
+  if (mode === 'anchored') chain[0].already_booked = true;
+  offers.remember(1, 'synthetic', { chosen: { chain, booking_mode: mode === 'separate_records' ? mode : 'single_record', anchored: mode === 'anchored' } });
+  const d = deps();
+  const c = { dialogKey: 'synthetic', clientPhone: 'test-client', patientLastText: 'Отлично, оформляйте, благодарю',
+    previousAssistantText: mode === 'separate_records'
+      ? '5 ноября в 15:00 у Анны, затем в 16:00 у Марии. Записать?'
+      : '5 ноября у Анны в 15:00, обе услуги подряд. Записать?' };
+  const result = await bookChain.run(1, { option_id: 'chosen', patient_confirmed: true }, c, d);
+  expect(result.booked_all).toBe(true);
+  expect(d.createBooking).toHaveBeenCalledTimes(mode === 'separate_records' ? 2 : 1);
+  if (mode === 'anchored') expect(d.createBooking.mock.calls[0][1].service_yc_id).toBe(102);
+});

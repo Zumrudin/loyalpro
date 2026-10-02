@@ -63,14 +63,20 @@ function matchingOffers(offers, text) {
     if (mentions.some(ids => !ids.some(id => staffIds.has(id)))) return false;
     const dt = String(offer.chain[0].datetime || '');
     if (dates.length && !dates.includes(`${dt.slice(8, 10)}.${dt.slice(5, 7)}`)) return false;
+    // One continuous visit with one specialist is presented by its start.
+    // Separate specialists, gaps and explicitly listed starts retain full checks.
+    const compact = offer.booking_mode === 'single_record' && times.length === 1
+      && offer.chain.every((link, i, chain) => String(link.staff_yc_id) === String(chain[0].staff_yc_id)
+        && (!i || (Number(chain[i - 1].seance_length) > 0
+          && Date.parse(link.datetime) === Date.parse(chain[i - 1].datetime) + Number(chain[i - 1].seance_length) * 1000)));
     let timePos = 0;
     let namePos = 0;
     let previousStaff = null;
     for (const link of offer.chain) {
       const time = /T(\d{2}:\d{2})/.exec(link.datetime || '');
       const pos = time ? times.indexOf(time[1], timePos) : -1;
-      if (pos < 0) return false;
-      timePos = pos + 1;
+      if (pos < 0 && !(compact && timePos > 0)) return false;
+      if (pos >= 0) timePos = pos + 1;
       if (String(link.staff_yc_id) !== previousStaff) {
         const names = words(link.staff_name);
         const idx = tokens.findIndex((token, i) => i >= namePos && names.some(n => sameName(n, token)));
@@ -83,17 +89,21 @@ function matchingOffers(offers, text) {
   }).map(([id]) => id);
 }
 
-function validateChoice(offers, optionId, ctx) {
+function validateChoice(offers, optionId, ctx, input = {}) {
   // Non-dialog internal callers retain the existing contract. The orchestrator
   // always supplies these server-derived fields, never tool arguments.
   if (!Object.prototype.hasOwnProperty.call(ctx, 'previousAssistantText')) return null;
   const text = String(ctx.patientLastText || '').trim().toLowerCase();
-  const consent = /^(да(?:[\s,!\.]+|$)|давайте|соглас[енна]|подтверждаю|запиш|записыва|подходит|хорошо|ок(?:ей)?(?:[\s.!]+|$))/u.test(text)
+  const legacyConsent = /^(да(?:[\s,!\.]+|$)|давайте|соглас[енна]|подтверждаю|запиш|записыва|подходит|хорошо|ок(?:ей)?(?:[\s.!]+|$))/u.test(text)
     && !/(?:^|\s)(?:не|нет)(?:\s|[,!.]|$)|\?/u.test(text)
     && words(text).every(w => ['да', 'давайте', 'пожалуйста', 'запиши', 'запишите', 'записывай',
       'записывайте', 'меня', 'нас', 'на', 'в', 'это', 'время', 'хорошо', 'ок', 'окей', 'подходит',
       'все', 'верно', 'подтверждаю', 'согласна', 'согласен'].includes(w))
     && !/\d/u.test(text.replace(/\b\d{1,2}:\d{2}\b/g, ''));
+  // New tool calls use semantic consent, as ordinary reschedules do. Legacy
+  // callers retain their previous contract; false/string values never fall back.
+  const consent = Object.prototype.hasOwnProperty.call(input, 'patient_confirmed')
+    ? input.patient_confirmed === true && !!text : legacyConsent;
   const matching = matchingOffers(offers, ctx.previousAssistantText);
   const patientTimes = extractTimes(text);
   const selected = offers && offers[optionId];

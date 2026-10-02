@@ -95,3 +95,32 @@ test('confirmation contains actual staff and all services, but no internal ident
   expect(text).not.toContain('Мария');
   expect(text).not.toContain('987654');
 });
+
+// Continuous multi-service visit: only its start was offered to the patient.
+const compactOffer = { booking_mode: 'single_record', chain: [
+  { ...link(1, 'Анна', '15:00'), seance_length: 1800 },
+  { ...link(1, 'Анна', '15:30'), service_yc_id: 2, seance_length: 900 },
+] };
+const compactCtx = { previousAssistantText: '1 октября у Анны в 15:00: обе услуги подряд без перерыва. Записать?', patientLastText: 'Да' };
+test.each(['Да', 'Запишите меня на 1 число просто', 'Давайте оформим, спасибо', 'Первый вариант подходит'])
+('semantic consent accepts continuous visit: %s', patientLastText => {
+  expect(guard.validateChoice({ one: compactOffer }, 'one', { ...compactCtx, patientLastText }, { patient_confirmed: true })).toBeNull();
+});
+test.each([false, 'true', null])('semantic consent must be boolean true: %p', patient_confirmed => {
+  expect(guard.validateChoice({ one: compactOffer }, 'one', compactCtx, { patient_confirmed }).needs_confirmation).toBe(true);
+});
+test.each(['gap', 'different-staff', 'separate', 'wrong-start', 'ambiguous', 'wrong-date'])
+('compact proposal does not bypass facts: %s', kind => {
+  const offer = JSON.parse(JSON.stringify(compactOffer));
+  const all = { one: offer };
+  if (kind === 'gap') offer.chain[1].datetime = '2026-10-01T16:00:00+03:00';
+  if (kind === 'different-staff') Object.assign(offer.chain[1], { staff_yc_id: 2, staff_name: 'Мария' });
+  if (kind === 'separate') offer.booking_mode = 'separate_records';
+  if (kind === 'wrong-start') offer.chain[0].datetime = '2026-10-01T14:00:00+03:00';
+  if (kind === 'ambiguous') all.two = offer;
+  if (kind === 'wrong-date') offer.chain.forEach(l => { l.datetime = l.datetime.replace('10-01', '10-02'); });
+  expect(guard.validateChoice(all, 'one', compactCtx, { patient_confirmed: true }).needs_confirmation).toBe(true);
+});
+test('semantic consent cannot authorize a different specialist with the same times', () => {
+  expect(guard.validateChoice(competingOffers, 'sameSecond', ctx, { patient_confirmed: true }).needs_confirmation).toBe(true);
+});

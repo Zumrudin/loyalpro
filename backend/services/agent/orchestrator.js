@@ -980,6 +980,7 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
     // (инцидент 2026-09-18, см. phone-request.js). { datetime } — из аргументов вызова.
     let phoneRequested = null;
     let directChainReply = null;
+    let confirmationBlocked = false;
     // Единственный легальный источник адреса/контактов клиники — статьи базы
     // знаний, прочитанные В ЭТОМ ходе (address-guard). Транскрипт и журнал
     // действий источниками не считаются: см. шапку address-guard.js.
@@ -1064,6 +1065,10 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
         // Журнал tool-цикла: сырые input/result в БД (форензика + память).
         evBuffer.push(tc.name, tc.input, result, isError);
         toolCtx.slotEvidence.add(tc.name, tc.input, result);
+        if (['create_booking', 'book_chain', 'reschedule_booking'].includes(tc.name)) {
+          if (result && result.needs_confirmation) confirmationBlocked = true;
+          if (result && (result.created || result.duplicate || result.booked_all || result.rescheduled)) confirmationBlocked = false;
+        }
         // Один лог на вызов инструмента (ok/error, длительность, решающие поля
         // без PII). Для исключения уже отработал logger.error выше — второй
         // раз не логируем, чтобы не задваивать одно и то же событие.
@@ -1138,13 +1143,13 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
             directChainReply = 'Не удалось безопасно перенести существующие записи. Новые записи не созданы. Требуется помощь администратора.';
           } else if (result.needs_confirmation) {
             const ids = result.matching_option_ids || [];
-            const option = ids.length === 1 && seqOffers.take(salonId, dialogKey, ids[0], { nowMs });
+            const option = seqOffers.take(salonId, dialogKey, ids.length === 1 ? ids[0] : tc.input.option_id, { nowMs });
             const facts = option && chainConfirmation.formatFacts(option.chain);
             directChainReply = facts && facts.length
               ? (result.reschedule_confirmation
                 ? `Перенести существующие записи на это время?\n${facts.join('\n')}`
                 : `Подтвердите, пожалуйста, этот вариант:\n${facts.join('\n')}\nЗаписать?`)
-              : 'Уточним выбранный вариант: на какую дату, время и к каким специалистам вас записать?';
+              : 'Выбранный вариант устарел. Нужно заново проверить доступное время перед оформлением записи.';
           }
           // Stop the batch: a second write cannot bypass rejection or add a duplicate.
           if (directChainReply) break;
@@ -1596,7 +1601,7 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
     await evBuffer.flush(null);
     // Only trusted message context can mark a completed confirmation. The
     // queue checks again and fails closed if its context read is unavailable.
-    const followupStopReason = typeof history.followupStopReason === 'function'
+    const followupStopReason = confirmationBlocked ? 'booking_confirmation_required' : typeof history.followupStopReason === 'function'
       ? await history.followupStopReason(salonId, dialogKey).catch(() => null)
       : (typeof history.conversationComplete === 'function'
         && await history.conversationComplete(salonId, dialogKey).catch(() => false)

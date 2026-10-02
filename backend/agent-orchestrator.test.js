@@ -222,6 +222,26 @@ describe('chain booking incident: truthful staff and enforced choice', () => {
     expect(out.falseSuccess).toBe(false);
   });
 
+  test('unmatched proposal recovers the selected full offer and stops followups', async () => {
+    const deps = makeDeps({ handlers: { book_chain: jest.fn(async () => ({
+      error: 'unconfirmed', needs_confirmation: true, matching_option_ids: [], records: [],
+    })) } });
+    seqOffers.remember(1, 'k', { selected: { chain: [
+      { ...rawBooking, service_title: 'Первая услуга', staff_name: 'Анна', staff_yc_id: 7 },
+      { ...rawBooking, service_title: 'Вторая услуга', datetime: '2026-10-01T16:00:00+03:00' },
+    ] } });
+    const response = toolResp('book_chain', { option_id: 'selected', patient_confirmed: true });
+    response.toolCalls.push({ id: 'fallback', name: 'create_booking', input: {} });
+    deps.provider.createMessage.mockResolvedValueOnce(response);
+    const out = await orchestrator.runDialog(1, 'k', { deps });
+    expect(out.replies.join(' ')).toContain('Первая услуга');
+    expect(out.replies.join(' ')).toContain('Вторая услуга');
+    expect(out.replies.join(' ')).not.toContain('на какую дату');
+    expect(out.followupStopReason).toBe('booking_confirmation_required');
+    expect(out.conversationComplete).toBe(false);
+    expect(deps.registry.handlers.create_booking).not.toHaveBeenCalled();
+  });
+
   test('successful chain confirmation comes from tool facts without a model rewrite', async () => {
     const deps = makeDeps({ handlers: { book_chain: jest.fn(async () => ({
       booked_all: true, records: [rawBooking],

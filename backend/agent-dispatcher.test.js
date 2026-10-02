@@ -908,11 +908,11 @@ describe('ожидание ответа клиента (followup)', () => {
       1, 'k', meta, followupSettings, expect.objectContaining({ turnId: 't-9' }));
   });
 
-  test('illness stops nudges but still delivers the ordinary cancellation clarification', async () => {
+  test.each(['client_unavailable', 'booking_confirmation_required'])('stop reason %s closes nudges but delivers the clarification', async reason => {
     const d = deps({
       ...followupDeps(),
       orchestrator: { runDialog: jest.fn(async () => ({
-        replies: ['Уточните время записи.'], followupStopReason: 'client_unavailable',
+        replies: ['Уточните время записи.'], followupStopReason: reason,
         conversationComplete: false, writeSucceeded: false,
       })) },
     });
@@ -921,7 +921,7 @@ describe('ожидание ответа клиента (followup)', () => {
     await jest.advanceTimersByTimeAsync(1000);
     await flushMicrotasks();
     expect(d.followupQueue.schedule).not.toHaveBeenCalled();
-    expect(d.followupQueue.close).toHaveBeenCalledWith(1, 'k', 'cancelled', 'client_unavailable');
+    expect(d.followupQueue.close).toHaveBeenCalledWith(1, 'k', 'cancelled', reason);
     expect(d.send).toHaveBeenCalledTimes(1);
   });
 

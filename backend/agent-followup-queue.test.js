@@ -132,3 +132,9 @@ describe('shouldAwaitReply', () => {
     expect(queue.shouldAwaitReply()).toBe(false);
   });
 });
+
+
+test('a blocked booking confirmation must not start a reminder loop', () => {
+  expect(queue.shouldAwaitReply({ delivered: true, writeSucceeded: false, escalated: false,
+    followupStopReason: 'booking_confirmation_required' })).toBe(false);
+});

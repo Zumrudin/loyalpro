@@ -136,3 +136,21 @@ test('a disappeared source cannot be silently replaced by a different record on 
   expect(d.rescheduleBooking).not.toHaveBeenCalled();
   expect(d.createBooking).not.toHaveBeenCalled();
 });
+
+
+test('semantic chain transfer accepts natural consent and old/new dates, preserving source IDs', async () => {
+  const d = deps();
+  const c = { ...ctx(), patientLastText: 'Переносим, спасибо вам',
+    previousAssistantText: 'Перенести записи с 1 октября на 2 октября: 15:00 у Анны, затем 15:30 у Марии?' };
+  const result = await tool.run(1, { option_id: 'o1', patient_confirmed: true }, c, d);
+  expect(result).toMatchObject({ booked_all: true, rescheduled: true });
+  expect(d.rescheduleBooking.mock.calls.map(call => call[1].record_id)).toEqual([501, 502]);
+  expect(d.createBooking).not.toHaveBeenCalled();
+});
+test('semantic flag does not turn consent to creation into consent to a transfer', async () => {
+  const d = deps();
+  const result = await tool.run(1, { option_id: 'o1', patient_confirmed: true },
+    { ...ctx(), previousAssistantText: '2 октября: 15:00 у Анны, затем 15:30 у Марии. Записать?' }, d);
+  expect(result.reschedule_confirmation).toBe(true);
+  expect(d.rescheduleBooking).not.toHaveBeenCalled();
+});

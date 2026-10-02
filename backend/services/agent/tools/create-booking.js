@@ -30,6 +30,7 @@ const schema = {
   input_schema: {
     type: 'object',
     properties: {
+      patient_confirmed: { type: 'boolean', description: 'true только после согласия пациента по смыслу на эту запись (включая отдельный дополнительный визит или запись гостя). При вопросе, отказе или изменении условий не ставь true.' },
       staff_yc_id:   { type: 'integer', description: 'YClients-id мастера.' },
       service_yc_id: { type: 'integer', description: 'YClients-id услуги.' },
       datetime:      { type: 'string',  description: 'ISO datetime слота — передавай ТОЧНУЮ строку из ' +
@@ -48,7 +49,7 @@ const schema = {
         'САМ явно назвал этот конкретный препарат/филлер в переписке (в том числе своими словами ' +
         'или кириллицей). Без явного упоминания пациентом — не ставь.' },
     },
-    required: ['staff_yc_id', 'service_yc_id', 'datetime'],
+    required: ['staff_yc_id', 'service_yc_id', 'datetime', 'patient_confirmed'],
     additionalProperties: false,
   },
 };

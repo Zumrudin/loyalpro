@@ -46,12 +46,13 @@ const schema = {
   input_schema: {
     type: 'object',
     properties: {
+      patient_confirmed: { type: 'boolean', description: 'true только после согласия пациента по смыслу на выбранные услуги, специалиста, дату и время. Отказ, вопрос или изменение условий не являются согласием.' },
       option_id: { type: 'string', description: 'option_id выбранного старта из последнего ответа get_sequential_slots.' },
       comment: { type: 'string', description: 'ОБЯЗАТЕЛЬНО: краткий контекст обращения для администратора (как в create_booking).' },
       client_phone: { type: 'string', description: 'Телефон, если записываем другого человека (иначе не передавай — подставится сам).' },
       client_name: { type: 'string', description: 'Имя пациента, если известно.' },
     },
-    required: ['option_id'],
+    required: ['option_id', 'patient_confirmed'],
     additionalProperties: false,
   },
 };
@@ -76,12 +77,13 @@ async function run(salonId, input, ctx = {}, deps = {}) {
     client_name: input.client_name,
   };
   const rejection = confirmation.validateChoice(
-    offers.peek(salonId, ctx.dialogKey, { nowMs: ctx.nowMs }), input.option_id, ctx);
+    offers.peek(salonId, ctx.dialogKey, { nowMs: ctx.nowMs }), input.option_id, ctx, input);
   if (rejection) return rejection;
-  const transfer = chainReschedule.plan(offer, input, ctx);
+  const consentCtx = { ...ctx, patientConfirmed: input.patient_confirmed, bookingMode: offer.booking_mode };
+  const transfer = chainReschedule.plan(offer, input, consentCtx);
   if (transfer) {
     if (transfer.error) return transfer;
-    const result = await chainReschedule.execute(salonId, transfer, ctx, deps.rescheduleBooking || rescheduleBk.run);
+    const result = await chainReschedule.execute(salonId, transfer, consentCtx, deps.rescheduleBooking || rescheduleBk.run);
     if (result.booked_all) offers.markBooked(salonId, ctx.dialogKey, input.option_id, { nowMs: ctx.nowMs });
     return result;
   }

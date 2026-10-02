@@ -50,12 +50,17 @@ function transferConfirmed(targets, ctx, multiple = false, allowAdditional = fal
   const proposal = datesIn(previous, nowMs);
   const answer = datesIn(patient, nowMs);
   const targetDates = targets.map(t => moscowDateKey(Date.parse(t.datetime)));
-  if (proposal.keys.length !== 1 || targetDates.some(d => d !== proposal.keys[0])) return false;
-  if (answer.keys.length && (answer.keys.length !== 1 || answer.keys[0] !== proposal.keys[0])) return false;
+  const semantic = ctx.patientConfirmed === true;
+  if (semantic ? targetDates.some(d => !proposal.keys.includes(d))
+    : proposal.keys.length !== 1 || targetDates.some(d => d !== proposal.keys[0])) return false;
+  if (answer.keys.length && (answer.keys.length !== 1 || !targetDates.includes(answer.keys[0]))) return false;
   const offered = [...new Set(extractTimes(previous))];
   const selected = [...new Set(extractTimes(patient))];
   const required = [...new Set(targets.map(t => moscowHHMM(t.datetime)))];
-  if (required.some(t => !t || !offered.includes(t))) return false;
+  const compact = multiple && ctx.bookingMode === 'single_record' && offered.length === 1
+    && targets.every(t => t.staff_yc_id === targets[0].staff_yc_id);
+  if ((compact ? required.slice(0, 1) : required).some(t => !t || !offered.includes(t))) return false;
+  if (semantic) return selected.every(t => required.includes(t));
   const words = answer.rest.replace(TIME, ' ').match(/[а-яa-z]+/giu) || [];
   const allowed = new Set(['да', 'давайте', 'пожалуйста', 'хорошо', 'ок', 'окей', 'подходит',
     'подтверждаю', 'согласен', 'согласна', 'все', 'верно', 'перенеси', 'перенесите', 'переносите',
@@ -81,20 +86,25 @@ function withChainTransfer(ctx, targets) {
 // принадлежность записи проверяются отдельно — slot-evidence, booking-modify).
 // Строгая проверка оставлена ТЕЛЕМЕТРИЕЙ (strictMismatch → лог в инструменте):
 // мерить, как часто модель подтверждает там, где текст согласия не показывает.
-// Цепочка по-прежнему идёт серверной capability CHAIN_MOVE, не флагом модели.
+// Цепочка получает серверную capability CHAIN_MOVE только после проверки
+// выбранного варианта и исходных записей; флаг модели сам её не создаёт.
 function rescheduleRejection(input, ctx) {
   const bound = ctx[CHAIN_MOVE];
   if (bound && bound.some(t => t.record_id === input.record_id && t.datetime === input.datetime
       && t.staff_yc_id === input.staff_yc_id)) return null;
+  return confirmationRejection(input, ctx, 'Перенос');
+}
+
+function confirmationRejection(input, ctx, operation = 'Оформление записи') {
   const hhmm = moscowHHMM(input.datetime);
   const when = hhmm ? `${input.datetime} (${hhmm})` : input.datetime;
   if (input.patient_confirmed !== true) {
     return { needs_confirmation: true, invalid_args: true,
-      error: `Перенос на ${when} не подтверждён: patient_confirmed не равен true. Если пациент УЖЕ явно согласился на это время (любыми словами) — повтори вызов с patient_confirmed:true, не переспрашивай. Если согласия ещё не было — назови дату и время и спроси. Не создавай новую запись вместо переноса.` };
+      error: `${operation} на ${when} не подтверждён: patient_confirmed не равен true. Если пациент УЖЕ явно согласился на это время (любыми словами) — повтори вызов с patient_confirmed:true, не переспрашивай. Если согласия ещё не было — назови дату и время и спроси. Тип операции менять нельзя.` };
   }
-  if (!hhmm || !extractTimes(clean(ctx.recentDialogText)).includes(hhmm)) {
+  if (!hhmm || !extractTimes(clean(ctx.recentDialogText || ctx.previousAssistantText)).includes(hhmm)) {
     return { needs_confirmation: true, invalid_args: true,
-      error: `Перенос на ${when} не подтверждён: это время ещё не звучало в переписке. Назови пациенту дату и время цифрами и дождись согласия. Не создавай новую запись вместо переноса.` };
+      error: `${operation} на ${when} не подтверждён: это время ещё не звучало в переписке. Назови пациенту дату и время цифрами и дождись согласия. Тип операции менять нельзя.` };
   }
   return null;
 }
@@ -146,11 +156,15 @@ function creationRejection(input, ctx) {
   }
   if (matches.length) {
     if (intent !== 'additional') return blocked;
-    if (!/дополнител|ещ[её]\s+одн|прежн[а-яё]*\s+(?:запис[а-яё]*\s+)?остав/iu.test(previous)
-        || !transferConfirmed([input], ctx, false, true)) {
+    if ((Object.prototype.hasOwnProperty.call(input, 'patient_confirmed') && input.patient_confirmed !== true)
+        || !/дополнител|ещ[её]\s+одн|прежн[а-яё]*\s+(?:запис[а-яё]*\s+)?остав/iu.test(previous)
+        || !transferConfirmed([input], { ...ctx, patientConfirmed: input.patient_confirmed }, false, true)) {
       return { needs_confirmation: true, invalid_args: true,
-        error: 'Подтверди отдельный дополнительный визит на конкретную дату и время с сохранением прежней записи. Дождись согласия.' };
+        error: 'Для отдельного дополнительного визита явно предложи дату и время с сохранением прежней записи. Если пациент уже согласился по смыслу, повтори вызов с patient_confirmed:true без нового вопроса. Иначе дождись согласия.' };
     }
+  }
+  if (!trustedLink && Object.prototype.hasOwnProperty.call(input, 'patient_confirmed')) {
+    return confirmationRejection(input, ctx);
   }
   return null;
 }

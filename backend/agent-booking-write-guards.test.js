@@ -165,3 +165,58 @@ test('model arguments cannot fabricate chain consent', async () => {
   expect(result.needs_confirmation).toBe(true);
   expect(modify.rescheduleBookingRecord).not.toHaveBeenCalled();
 });
+
+
+test.each(['new', 'additional', 'guest'])('semantic consent creates a %s visit without a word whitelist', async kind => {
+  const c = { ...ctx(), rescheduleRequested: false, patientLastText: 'Отлично, оформляйте, спасибо',
+    liveBookings: kind === 'additional' ? [source] : [],
+    previousAssistantText: kind === 'additional'
+      ? 'Дополнительная запись на 2 октября в 15:00, прежнюю оставляем. Записать?'
+      : '2 октября в 15:00. Записать?',
+    patientRecentTexts: kind === 'additional' ? ['Хочу ещё одну запись, прежнюю оставьте'] : [],
+  };
+  const result = await create.run(1, { ...input, patient_confirmed: true,
+    ...(kind === 'guest' ? { client_phone: 'test-guest', client_name: 'Гость' } : {}) }, c);
+  expect(result.created).toBe(true);
+  expect(booking.createBookingRecord).toHaveBeenCalledTimes(1);
+});
+test.each([false, 'true', null])('new booking rejects invalid confirmation flag %p', async patient_confirmed => {
+  const result = await create.run(1, { ...input, patient_confirmed }, { ...ctx(),
+    liveBookings: [], rescheduleRequested: false, previousAssistantText: '2 октября в 15:00. Записать?' });
+  expect(result.needs_confirmation).toBe(true);
+  expect(booking.createBookingRecord).not.toHaveBeenCalled();
+});
+test('semantic consent cannot invent an unmentioned start', async () => {
+  const result = await create.run(1, { ...input, patient_confirmed: true, datetime: DT.replace('15:00', '16:00') },
+    { ...ctx(), liveBookings: [], rescheduleRequested: false, previousAssistantText: '2 октября в 15:00. Записать?' });
+  expect(result.needs_confirmation).toBe(true);
+  expect(booking.createBookingRecord).not.toHaveBeenCalled();
+});
+
+
+test.each(['separate_records', 'single_record'])('semantic chain transfer reaches CRM guard (%s)', async booking_mode => {
+  const links = [
+    { service_yc_id: 101, staff_yc_id: 7, staff_name: 'Анна', service_title: 'Услуга А', datetime: DT, seance_length: 1800 },
+    { service_yc_id: 102, staff_yc_id: booking_mode === 'single_record' ? 7 : 8,
+      staff_name: booking_mode === 'single_record' ? 'Анна' : 'Мария', service_title: 'Услуга Б',
+      datetime: DT.replace('15:00', '15:30'), seance_length: 1800 },
+  ];
+  const c = { ...ctx(), patientLastText: 'Переносим, благодарю',
+    previousAssistantText: booking_mode === 'single_record'
+      ? 'Перенести с 1 октября на 2 октября к Анне в 15:00, обе услуги подряд?'
+      : 'Перенести с 1 октября на 2 октября: 15:00 у Анны, затем 15:30 у Марии?',
+    liveBookings: [source, { ...source, record_id: 502, service_yc_ids: [102] }],
+  };
+  offers.remember(1, c.dialogKey, { o1: { chain: links, booking_mode } }, { nowMs: NOW });
+  const result = await chainTool.run(1, { option_id: 'o1', patient_confirmed: true }, c);
+  expect(result).toMatchObject({ booked_all: true, rescheduled: true });
+  expect(modify.rescheduleBookingRecord.mock.calls.map(call => call[1].recordId)).toEqual([501, 502]);
+  expect(booking.createBookingRecord).not.toHaveBeenCalled();
+});
+test.each([false, 'true'])('additional visit rejects invalid semantic consent %p', async patient_confirmed => {
+  const result = await create.run(1, { ...input, patient_confirmed }, { ...ctx(), rescheduleRequested: false,
+    previousAssistantText: 'Дополнительная запись на 2 октября в 15:00, прежнюю оставляем. Записать?',
+    patientRecentTexts: ['Хочу ещё одну запись, прежнюю оставьте'] });
+  expect(result.needs_confirmation).toBe(true);
+  expect(booking.createBookingRecord).not.toHaveBeenCalled();
+});
