@@ -5,6 +5,7 @@ const { buildClientsQuery } = require('../clients-query');
 const { ycGet, ycGetClientCards, ycGetCardTransactions, ycWebSessions } = require('../services/yclients');
 const { getLoyaltySettings, getLevel, runSync, sleep } = require('../services/loyalty');
 const { computeStaffMetrics } = require('../services/staff');
+const { loadMessengerStats, summarize: summarizeMessengerStats } = require('../services/messenger-stats');
 const { createLogger } = require('../logger');
 const logger = createLogger('API');
 
@@ -489,6 +490,20 @@ router.get('/analytics/bonuses', auth, async (req, res) => {
     );
     res.json(rows);
   } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Блок «Переписки в мессенджерах» на дашборде. Грузится фронтом отдельным
+// запросом (как /analytics/bonuses): сбой здесь не должен ронять дашборд.
+router.get('/analytics/messengers', auth, async (req, res) => {
+  try {
+    const sid = req.user.salonId;
+    const { from, to } = resolvePeriod(req);
+    const rows = await loadMessengerStats(sid, from, to);
+    res.json(summarizeMessengerStats(rows, { from, to }));
+  } catch (e) {
+    logger.warn(`analytics/messengers: ${e.message}`);
+    res.status(500).json({ error: e.message });
+  }
 });
 
 router.get('/analytics/retention', auth, async (req, res) => {
