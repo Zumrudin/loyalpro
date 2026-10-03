@@ -1,5 +1,7 @@
 // backend/messenger-stats.test.js
 'use strict';
+// TZ закреплён в jest.config.js (globalSetup): фикстура «Date в локальную полночь»
+// ловит баг dateKey только при TZ с положительным смещением, на UTC-хосте она зелёная.
 const { summarize, channelLabel, eachDate } = require('./services/messenger-stats');
 
 describe('messenger-stats: channelLabel', () => {
@@ -72,6 +74,7 @@ describe('messenger-stats: summarize', () => {
   });
 
   test('дата из pg может прийти объектом Date — нормализуется к YYYY-MM-DD', () => {
+    expect(new Date(2026, 9, 2).getTimezoneOffset()).toBe(-180); // TZ закреплён в jest.config.js
     const r = summarize([{ date: new Date(2026, 9, 2), channel: 'max', dialogs: 1, client_first: 1, client_first_no_phone: 0, booked_same_day: 0, booked_by_agent: 0 }],
       { from: '2026-10-02', to: '2026-10-02' });
     expect(r.daily).toEqual([{ date: '2026-10-02', clientFirst: 1, bookedSameDay: 0 }]);
