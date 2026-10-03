@@ -23,6 +23,12 @@ function channelLabel(channel) {
   return Object.hasOwn(CHANNEL_LABELS, channel) ? CHANNEL_LABELS[channel] : String(channel);
 }
 
+// Ряд по дням строится в памяти (eachDate), поэтому длину периода ограничиваем.
+const MAX_PERIOD_DAYS = 731;
+function periodDays(from, to) {
+  return Math.round((Date.parse(to + 'T00:00:00Z') - Date.parse(from + 'T00:00:00Z')) / 86400000) + 1;
+}
+
 // Перечисление дат включительно; арифметика в UTC — та же, что в resolvePeriod
 // (routes/api.js), чтобы локальная TZ сервера не влияла на перечисление.
 function eachDate(from, to) {
@@ -161,4 +167,4 @@ async function loadMessengerStats(salonId, from, to, deps = {}) {
   return db.any(MESSENGER_STATS_SQL, [salonId, from, to]);
 }
 
-module.exports = { summarize, channelLabel, eachDate, CHANNEL_LABELS, MESSENGER_STATS_SQL, loadMessengerStats };
+module.exports = { summarize, channelLabel, eachDate, periodDays, MAX_PERIOD_DAYS, CHANNEL_LABELS, MESSENGER_STATS_SQL, loadMessengerStats };

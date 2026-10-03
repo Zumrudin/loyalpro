@@ -5,7 +5,7 @@ const { buildClientsQuery } = require('../clients-query');
 const { ycGet, ycGetClientCards, ycGetCardTransactions, ycWebSessions } = require('../services/yclients');
 const { getLoyaltySettings, getLevel, runSync, sleep } = require('../services/loyalty');
 const { computeStaffMetrics } = require('../services/staff');
-const { loadMessengerStats, summarize: summarizeMessengerStats } = require('../services/messenger-stats');
+const { loadMessengerStats, summarize: summarizeMessengerStats, periodDays, MAX_PERIOD_DAYS } = require('../services/messenger-stats');
 const { createLogger } = require('../logger');
 const logger = createLogger('API');
 
@@ -498,6 +498,10 @@ router.get('/analytics/messengers', auth, async (req, res) => {
   try {
     const sid = req.user.salonId;
     const { from, to } = resolvePeriod(req);
+    const days = periodDays(from, to);
+    if (!(days >= 1 && days <= MAX_PERIOD_DAYS)) {
+      return res.status(400).json({ error: `период не больше ${MAX_PERIOD_DAYS} дней` });
+    }
     const rows = await loadMessengerStats(sid, from, to);
     res.json(summarizeMessengerStats(rows, { from, to }));
   } catch (e) {

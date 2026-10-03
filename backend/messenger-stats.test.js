@@ -2,7 +2,7 @@
 'use strict';
 // TZ закреплён в jest.config.js (globalSetup): фикстура «Date в локальную полночь»
 // ловит баг dateKey только при TZ с положительным смещением, на UTC-хосте она зелёная.
-const { summarize, channelLabel, eachDate } = require('./services/messenger-stats');
+const { summarize, channelLabel, eachDate, periodDays } = require('./services/messenger-stats');
 
 describe('messenger-stats: channelLabel', () => {
   test('известные каналы получают человеческие имена, прочие — как есть', () => {
@@ -21,6 +21,16 @@ describe('messenger-stats: eachDate', () => {
   });
   test('один день → один элемент', () => {
     expect(eachDate('2026-10-03', '2026-10-03')).toEqual(['2026-10-03']);
+  });
+});
+
+describe('messenger-stats: periodDays', () => {
+  test('считает дни включительно', () => {
+    expect(periodDays('2026-10-01', '2026-10-03')).toBe(3);
+    expect(periodDays('2026-10-03', '2026-10-03')).toBe(1);
+  });
+  test('битая дата → NaN', () => {
+    expect(Number.isNaN(periodDays('x', '2026-10-03'))).toBe(true);
   });
 });
 
