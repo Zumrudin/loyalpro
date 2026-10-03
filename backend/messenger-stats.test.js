@@ -80,3 +80,27 @@ describe('messenger-stats: summarize', () => {
     expect(r.daily).toEqual([{ date: '2026-10-02', clientFirst: 1, bookedSameDay: 0 }]);
   });
 });
+
+describe('messenger-stats: loadMessengerStats', () => {
+  const { loadMessengerStats, MESSENGER_STATS_SQL } = require('./services/messenger-stats');
+
+  test('передаёт salon_id, from, to параметрами $1..$3 и отдаёт строки db.any', async () => {
+    const calls = [];
+    const db = { any: async (sql, params) => { calls.push({ sql, params }); return [{ date: '2026-10-01', channel: 'tdlib', dialogs: 1, client_first: 1, client_first_no_phone: 0, booked_same_day: 0, booked_by_agent: 0 }]; } };
+    const rows = await loadMessengerStats(7, '2026-10-01', '2026-10-03', { db });
+    expect(calls).toHaveLength(1);
+    expect(calls[0].sql).toBe(MESSENGER_STATS_SQL);
+    expect(calls[0].params).toEqual([7, '2026-10-01', '2026-10-03']);
+    expect(rows).toHaveLength(1);
+  });
+
+  test('SQL исключает автоуведомления и группы и использует ключ диалога «Чата»', () => {
+    expect(MESSENGER_STATS_SQL).toMatch(/authored_by,\s*''\)\s*<>\s*'system'/);
+    expect(MESSENGER_STATS_SQL).toMatch(/NOT LIKE '-%'/);
+    expect(MESSENGER_STATS_SQL).toMatch(/NOT LIKE '%@g\.us'/);
+    expect(MESSENGER_STATS_SQL).toMatch(/create_date/);
+    // Ключ диалога — ТОТ ЖЕ, что в services/chat.js (одно правило на систему).
+    const { DIALOG_KEY_SQL } = require('./services/chat');
+    expect(MESSENGER_STATS_SQL).toContain(DIALOG_KEY_SQL);
+  });
+});

@@ -77,4 +77,81 @@ function summarize(rows, { from, to }) {
   return { period: { from, to }, totals, byChannel, daily: [...byDay.values()] };
 }
 
-module.exports = { summarize, channelLabel, eachDate, CHANNEL_LABELS };
+const { DIALOG_KEY_SQL } = require('./chat');
+
+// $1 salon_id, $2 from 'YYYY-MM-DD', $3 to 'YYYY-MM-DD' (включительно, мск).
+// Экспортируется ради живого EXPLAIN ANALYZE на дев-БД (как LEASE_SQL воркеров).
+// Телефон клиента сверяется по последним 10 цифрам: в clients лежит '+7…',
+// в chatpush_messages — '7…' без плюса. records.status NULL не бывает
+// (проверено на деве: 0 из 13 612), поэтому `<> 'deleted'` без COALESCE.
+const MESSENGER_STATS_SQL = `
+WITH m AS (
+  SELECT
+    ${DIALOG_KEY_SQL} AS dkey,
+    (to_timestamp(msg_ts) AT TIME ZONE 'Europe/Moscow')::date AS d,
+    channel, direction, msg_ts, id,
+    NULLIF(right(regexp_replace(COALESCE(phone,''), '\\D', '', 'g'), 10), '') AS p10
+  FROM chatpush_messages
+  WHERE salon_id = $1
+    AND msg_ts IS NOT NULL
+    AND (to_timestamp(msg_ts) AT TIME ZONE 'Europe/Moscow')::date BETWEEN $2::date AND $3::date
+    AND COALESCE(chat_id,'') NOT LIKE '-%'
+    AND COALESCE(chat_id,'') NOT LIKE '%@g.us'
+    AND COALESCE(chat_id,'') NOT LIKE '%@broadcast'
+    AND COALESCE(authored_by,'') <> 'system'
+),
+firsts AS (
+  SELECT DISTINCT ON (dkey, d) dkey, d, direction AS first_dir, channel AS first_channel
+  FROM m ORDER BY dkey, d, msg_ts, id
+),
+phones AS (
+  SELECT dkey, d, max(p10) AS p10 FROM m GROUP BY dkey, d
+),
+dd AS (
+  SELECT f.dkey, f.d, f.first_dir, f.first_channel, p.p10
+  FROM firsts f JOIN phones p USING (dkey, d)
+),
+cl AS (
+  SELECT dd.dkey, dd.d, c.id AS client_id, c.yclients_client_id
+  FROM dd JOIN clients c
+    ON c.salon_id = $1 AND dd.p10 IS NOT NULL
+   AND c.phone = ANY (ARRAY['+7' || dd.p10, '7' || dd.p10, '8' || dd.p10, dd.p10])
+),
+rec AS (
+  SELECT r.client_id, r.yclients_client_id,
+         left(r.raw_payload->>'create_date', 10) AS cd,
+         EXISTS (SELECT 1 FROM agent_events e
+                  WHERE e.salon_id = r.salon_id AND e.kind = 'booking_created'
+                    AND e.payload->>'record_id' = r.yclients_record_id::text) AS by_agent
+  FROM records r
+  WHERE r.salon_id = $1 AND r.status <> 'deleted'
+    AND left(r.raw_payload->>'create_date', 10) BETWEEN $2 AND $3
+),
+flags AS (
+  SELECT dd.*,
+    EXISTS (SELECT 1 FROM cl JOIN rec
+              ON rec.client_id = cl.client_id
+              OR (rec.yclients_client_id IS NOT NULL AND rec.yclients_client_id = cl.yclients_client_id)
+            WHERE cl.dkey = dd.dkey AND cl.d = dd.d AND rec.cd = dd.d::text) AS booked,
+    EXISTS (SELECT 1 FROM cl JOIN rec
+              ON rec.client_id = cl.client_id
+              OR (rec.yclients_client_id IS NOT NULL AND rec.yclients_client_id = cl.yclients_client_id)
+            WHERE cl.dkey = dd.dkey AND cl.d = dd.d AND rec.cd = dd.d::text AND rec.by_agent) AS booked_by_agent
+  FROM dd
+)
+SELECT d::text AS date, first_channel AS channel,
+  COUNT(*)::int AS dialogs,
+  COUNT(*) FILTER (WHERE first_dir = 'incoming')::int AS client_first,
+  COUNT(*) FILTER (WHERE first_dir = 'incoming' AND p10 IS NULL)::int AS client_first_no_phone,
+  COUNT(*) FILTER (WHERE first_dir = 'incoming' AND booked)::int AS booked_same_day,
+  COUNT(*) FILTER (WHERE first_dir = 'incoming' AND booked_by_agent)::int AS booked_by_agent
+FROM flags
+GROUP BY d, first_channel
+ORDER BY d, first_channel`;
+
+async function loadMessengerStats(salonId, from, to, deps = {}) {
+  const db = deps.db || require('../db').db;
+  return db.any(MESSENGER_STATS_SQL, [salonId, from, to]);
+}
+
+module.exports = { summarize, channelLabel, eachDate, CHANNEL_LABELS, MESSENGER_STATS_SQL, loadMessengerStats };
