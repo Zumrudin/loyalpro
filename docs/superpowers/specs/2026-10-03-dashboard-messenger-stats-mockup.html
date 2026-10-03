@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Макет: статистика переписок на дашборде</title>
+<link rel="stylesheet" href="file:///root/loyalpro/frontend/css/base.css">
+<link rel="stylesheet" href="file:///root/loyalpro/frontend/css/features.css">
+<script src="file:///root/loyalpro/frontend/vendor/chart.umd.min.js"></script>
+<style>
+  body{background:var(--bg);color:var(--t1);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,sans-serif;padding:24px;margin:0}
+  .wrap{max-width:1180px;margin:0 auto}
+  .mock-note{font-size:11px;color:var(--t3);margin:0 0 12px}
+  /* ── новый блок ── */
+  .msg-head{display:flex;align-items:baseline;justify-content:space-between;margin:26px 0 12px}
+  .msg-head .ttl{font-size:16px;font-weight:700}
+  .msg-head .sub{font-size:11.5px;color:var(--t3)}
+  .msg-tiles{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:14px}
+  .msg-tiles .sv{display:flex;align-items:baseline;gap:8px}
+  .msg-pct{font-size:13px;font-weight:700;color:var(--a)}
+  .msg-tiles .sd .dot{display:inline-block;width:8px;height:8px;border-radius:2px;margin-right:5px;vertical-align:1px}
+  /* таблица по мессенджерам */
+  .msg-tbl{width:100%;border-collapse:collapse;font-size:12.5px}
+  .msg-tbl th{font-size:10.5px;font-weight:500;color:var(--t3);text-align:right;padding:0 0 10px 12px;border-bottom:1px solid var(--bd);white-space:nowrap}
+  .msg-tbl th:first-child{text-align:left;padding-left:0}
+  .msg-tbl td{padding:11px 0 11px 12px;border-bottom:1px solid var(--bd);text-align:right;vertical-align:middle}
+  .msg-tbl td:first-child{text-align:left;padding-left:0}
+  .msg-tbl tr:last-child td{border-bottom:none}
+  .msg-tbl tr.total td{font-weight:700;border-top:2px solid var(--bd)}
+  .ch{display:inline-flex;align-items:center;gap:7px;font-weight:600}
+  .ch i{width:22px;height:22px;border-radius:6px;display:inline-flex;align-items:center;justify-content:center;font-size:11px;font-weight:800;color:#fff;font-style:normal}
+  .ch-wa i{background:#25d366}.ch-tg i{background:#2aabee}.ch-max i{background:#7b5cff}.ch-all i{background:var(--t3)}
+  .conv{display:inline-flex;align-items:center;gap:8px;justify-content:flex-end}
+  .conv .pb{width:70px;height:6px;background:var(--bg);border:1px solid var(--bd);border-radius:4px;overflow:hidden}
+  .conv .pf{height:100%;background:var(--a);border-radius:4px}
+  .conv b{min-width:34px;text-align:right}
+  .msg-foot{font-size:11px;color:var(--t3);margin-top:12px;line-height:1.5}
+  .legend{display:flex;gap:14px;font-size:11px;color:var(--t2);font-weight:400}
+  .legend span::before{content:"";display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:5px;vertical-align:-1px;background:var(--lg)}
+  @media(max-width:900px){.msg-tiles{grid-template-columns:1fr}.g32{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <p class="mock-note">МАКЕТ · блок встаёт на страницу «Обзор» ниже карточек «Клиентов в базе…», над «Выручка по дням». Цифры — реальный замер дев-базы за 30 дней.</p>
+
+  <!-- существующая шапка дашборда, для контекста -->
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
+    <div style="font-size:16px;font-weight:700">Обзор</div>
+    <div class="pb-wrap"><div class="pb-btns">
+      <button class="pb-btn">Сегодня</button><button class="pb-btn">Неделя</button>
+      <button class="pb-btn active">Месяц</button><button class="pb-btn">Период</button>
+    </div></div>
+  </div>
+  <div class="sg mb" style="grid-template-columns:repeat(5,1fr);opacity:.45">
+    <div class="sc"><div class="sl">Клиентов в базе</div><div class="sv">4 313</div><div class="sd up">+38 первичных за период</div></div>
+    <div class="sc"><div class="sl">Клиентов с картой лояльности</div><div class="sv">1 902</div><div class="sd">44% от всех клиентов</div></div>
+    <div class="sc"><div class="sl">Активных бонусов</div><div class="sv">612 480</div><div class="sd">начислено 42 100 · списано 18 300</div></div>
+    <div class="sc"><div class="sl">Подписаны в Telegram</div><div class="sv">1 377</div><div class="sd">32% от всех клиентов</div></div>
+    <div class="sc"><div class="sl">ROI программы</div><div class="sv" style="color:var(--a)">15x</div><div class="sd">выручка / начисления</div></div>
+  </div>
+
+  <!-- ══════════ НОВЫЙ БЛОК ══════════ -->
+  <div class="msg-head">
+    <div class="ttl">Переписки в мессенджерах</div>
+    <div class="sub">за 04.09 – 03.10 · WhatsApp, Telegram, MAX</div>
+  </div>
+
+  <div class="msg-tiles">
+    <div class="sc"><div class="sl">Диалогов за период</div><div class="sv">716</div><div class="sd">дней общения с клиентами · без автоуведомлений</div></div>
+    <div class="sc"><div class="sl">Клиент написал первым</div><div class="sv">386 <span class="msg-pct" style="color:var(--t3);font-weight:500">54% диалогов</span></div><div class="sd"><span class="dot" style="background:#3b82f6"></span>30 из них без номера телефона</div></div>
+    <div class="sc"><div class="sl">Записались в тот же день</div><div class="sv">154 <span class="msg-pct">40%</span></div><div class="sd"><span class="dot" style="background:var(--a)"></span>из написавших первыми · 61 запись оформила Мила</div></div>
+  </div>
+
+  <div class="g32 mb">
+    <div class="card">
+      <div class="ct"><span>Написали первыми и записались по дням</span>
+        <div class="legend"><span style="--lg:#3b82f6">Написали первыми</span><span style="--lg:var(--a)">Записались в тот же день</span></div></div>
+      <div style="height:220px"><canvas id="msgChart"></canvas></div>
+    </div>
+    <div class="card">
+      <div class="ct">По мессенджерам</div>
+      <table class="msg-tbl">
+        <thead><tr><th>Канал</th><th>Диалогов</th><th>Первым</th><th>Записались</th><th>Конверсия</th></tr></thead>
+        <tbody>
+          <tr><td><span class="ch ch-tg"><i>TG</i>Telegram</span></td><td>382</td><td>201</td><td>81</td><td><span class="conv"><span class="pb"><span class="pf" style="width:40%;display:block"></span></span><b>40%</b></span></td></tr>
+          <tr><td><span class="ch ch-wa"><i>WA</i>WhatsApp</span></td><td>164</td><td>102</td><td>39</td><td><span class="conv"><span class="pb"><span class="pf" style="width:38%;display:block"></span></span><b>38%</b></span></td></tr>
+          <tr><td><span class="ch ch-max"><i>M</i>MAX</span></td><td>170</td><td>83</td><td>34</td><td><span class="conv"><span class="pb"><span class="pf" style="width:41%;display:block"></span></span><b>41%</b></span></td></tr>
+          <tr class="total"><td><span class="ch ch-all"><i>Σ</i>Все каналы</span></td><td>716</td><td>386</td><td>154</td><td><span class="conv"><span class="pb"><span class="pf" style="width:40%;display:block"></span></span><b>40%</b></span></td></tr>
+        </tbody>
+      </table>
+      <div class="msg-foot">Диалог считается за день. «Первым» — первое сообщение дня от клиента, автоуведомления YClients не в счёт. «Записались» — запись в YClients создана в тот же день (кем угодно).</div>
+    </div>
+  </div>
+
+  <!-- существующий блок ниже, для контекста -->
+  <div class="g32 mb" style="opacity:.45">
+    <div class="card"><div class="ct">Выручка по дням</div><div style="height:120px;display:flex;align-items:center;justify-content:center;color:var(--t3);font-size:12px">… существующий график …</div></div>
+    <div class="card"><div class="ct">Уровни клиентов</div></div>
+  </div>
+</div>
+
+<script>
+const dark = document.documentElement.getAttribute('data-theme') === 'dark';
+const GREEN = dark ? '#00a87c' : '#00c896', BLUE = '#3b82f6';
+const ink = dark ? '#8b949e' : '#57606a';
+const days = []; const first = []; const booked = [];
+let seed = 7; const rnd = () => (seed = (seed * 9301 + 49297) % 233280) / 233280;
+for (let i = 29; i >= 0; i--) { const d = new Date(2026, 9, 3); d.setDate(d.getDate() - i);
+  days.push(d.getDate() + '.' + (d.getMonth() + 1));
+  const f = Math.round(7 + rnd() * 14); first.push(f); booked.push(Math.round(f * (0.3 + rnd() * 0.2))); }
+new Chart(document.getElementById('msgChart'), {
+  type: 'bar',
+  data: { labels: days, datasets: [
+    { label: 'Написали первыми', data: first, backgroundColor: BLUE, borderRadius: { topLeft: 4, topRight: 4 }, borderSkipped: 'bottom', barPercentage: 0.85, categoryPercentage: 0.8 },
+    { label: 'Записались в тот же день', data: booked, backgroundColor: GREEN, borderRadius: { topLeft: 4, topRight: 4 }, borderSkipped: 'bottom', barPercentage: 0.85, categoryPercentage: 0.8 } ] },
+  options: { responsive: true, maintainAspectRatio: false, interaction: { mode: 'index', intersect: false },
+    plugins: { legend: { display: false }, tooltip: { callbacks: { footer: items => { const f = items[0]?.raw || 0, b = items[1]?.raw || 0; return f ? 'Конверсия ' + Math.round(b / f * 100) + '%' : ''; } } } },
+    scales: { x: { grid: { display: false }, ticks: { maxTicksLimit: 15, font: { size: 10 }, color: ink } },
+              y: { beginAtZero: true, grid: { color: dark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.04)' }, ticks: { precision: 0, font: { size: 10 }, color: ink } } } }
+});
+</script>
+</body>
+</html>
