@@ -9,9 +9,12 @@
 // первым» — первое неслужебное сообщение дня входящее. «Записался в тот же
 // день» — у клиента с этим телефоном есть запись YClients, СОЗДАННАЯ в этот
 // день (raw_payload->>'create_date', московское локальное время), статус не
-// 'deleted'. records.created_at для этого не годится: это время вставки нашей
-// строки (у source='sync' — время синка).
+// 'deleted'. records.created_at как ДЕНЬ записи не годится: это время вставки
+// нашей строки (у source='sync' — время синка), — но как НИЖНЯЯ ГРАНИЦА
+// выборки годится и в SQL ниже используется (см. комментарий у CTE rec).
 // ============================================================
+
+const { DIALOG_KEY_SQL } = require('./chat');
 
 const CHANNEL_LABELS = { tdlib: 'Telegram', whatsapp: 'WhatsApp', max: 'MAX' };
 
@@ -77,13 +80,12 @@ function summarize(rows, { from, to }) {
   return { period: { from, to }, totals, byChannel, daily: [...byDay.values()] };
 }
 
-const { DIALOG_KEY_SQL } = require('./chat');
-
 // $1 salon_id, $2 from 'YYYY-MM-DD', $3 to 'YYYY-MM-DD' (включительно, мск).
-// Экспортируется ради живого EXPLAIN ANALYZE на дев-БД (как LEASE_SQL воркеров).
+// Экспортируется ради живого EXPLAIN ANALYZE на дев-БД (как LEASE_SQL воркеров):
+// scripts/messenger-stats-explain.js. Порог спеки — ≤300 мс на месячном периоде.
 // Телефон клиента сверяется по последним 10 цифрам: в clients лежит '+7…',
-// в chatpush_messages — '7…' без плюса. records.status NULL не бывает
-// (проверено на деве: 0 из 13 612), поэтому `<> 'deleted'` без COALESCE.
+// в chatpush_messages — '7…' без плюса. День везде сравнивается как текст через
+// to_char(d,'YYYY-MM-DD'), а не d::text — тот зависит от DateStyle сессии.
 const MESSENGER_STATS_SQL = `
 WITH m AS (
   SELECT
@@ -100,16 +102,11 @@ WITH m AS (
     AND COALESCE(chat_id,'') NOT LIKE '%@broadcast'
     AND COALESCE(authored_by,'') <> 'system'
 ),
-firsts AS (
-  SELECT DISTINCT ON (dkey, d) dkey, d, direction AS first_dir, channel AS first_channel
-  FROM m ORDER BY dkey, d, msg_ts, id
-),
-phones AS (
-  SELECT dkey, d, max(p10) AS p10 FROM m GROUP BY dkey, d
-),
+-- p10 берётся из первого сообщения дня: по построению DIALOG_KEY_SQL dkey = phone,
+-- когда номер есть, поэтому у всех сообщений диалог-дня p10 один и тот же.
 dd AS (
-  SELECT f.dkey, f.d, f.first_dir, f.first_channel, p.p10
-  FROM firsts f JOIN phones p USING (dkey, d)
+  SELECT DISTINCT ON (dkey, d) dkey, d, direction AS first_dir, channel AS first_channel, p10
+  FROM m ORDER BY dkey, d, msg_ts, id
 ),
 cl AS (
   SELECT dd.dkey, dd.d, c.id AS client_id, c.yclients_client_id
@@ -117,6 +114,10 @@ cl AS (
     ON c.salon_id = $1 AND dd.p10 IS NOT NULL
    AND c.phone = ANY (ARRAY['+7' || dd.p10, '7' || dd.p10, '8' || dd.p10, dd.p10])
 ),
+-- created_at не годится как ДЕНЬ записи (время вставки нашей строки), но годится
+-- как НИЖНЯЯ граница: строка не может появиться раньше create_date; запас сутки
+-- на расхождение часов. Без этой границы rec читает весь records с детоастом
+-- raw_payload (O(всех записей), ~130 мс на 13 тыс. строк).
 rec AS (
   SELECT r.client_id, r.yclients_client_id,
          left(r.raw_payload->>'create_date', 10) AS cd,
@@ -124,23 +125,28 @@ rec AS (
                   WHERE e.salon_id = r.salon_id AND e.kind = 'booking_created'
                     AND e.payload->>'record_id' = r.yclients_record_id::text) AS by_agent
   FROM records r
-  WHERE r.salon_id = $1 AND r.status <> 'deleted'
+  WHERE r.salon_id = $1 AND COALESCE(r.status,'') <> 'deleted'
+    AND r.created_at >= ($2::date::timestamp AT TIME ZONE 'Europe/Moscow') - interval '1 day'
     -- ::text обязателен: pg уже вывел тип $2/$3 как date из CTE m, без него «text >= date».
     AND left(r.raw_payload->>'create_date', 10) BETWEEN $2::text AND $3::text
 ),
+-- MATERIALIZED обязателен (PG ≥ 12): без него планировщик перезапускает агрегат
+-- на каждый диалог-день (loops ≈ число диалог-дней), и выигрыша перед
+-- коррелированными EXISTS нет.
+booked AS MATERIALIZED (
+  SELECT x.dkey, x.d, bool_or(x.by_agent) AS by_agent FROM (
+    SELECT cl.dkey, cl.d, rec.by_agent FROM cl JOIN rec
+      ON rec.client_id = cl.client_id AND rec.cd = to_char(cl.d, 'YYYY-MM-DD')
+    UNION ALL
+    SELECT cl.dkey, cl.d, rec.by_agent FROM cl JOIN rec
+      ON rec.yclients_client_id = cl.yclients_client_id AND rec.cd = to_char(cl.d, 'YYYY-MM-DD')
+  ) x GROUP BY x.dkey, x.d
+),
 flags AS (
-  SELECT dd.*,
-    EXISTS (SELECT 1 FROM cl JOIN rec
-              ON rec.client_id = cl.client_id
-              OR (rec.yclients_client_id IS NOT NULL AND rec.yclients_client_id = cl.yclients_client_id)
-            WHERE cl.dkey = dd.dkey AND cl.d = dd.d AND rec.cd = dd.d::text) AS booked,
-    EXISTS (SELECT 1 FROM cl JOIN rec
-              ON rec.client_id = cl.client_id
-              OR (rec.yclients_client_id IS NOT NULL AND rec.yclients_client_id = cl.yclients_client_id)
-            WHERE cl.dkey = dd.dkey AND cl.d = dd.d AND rec.cd = dd.d::text AND rec.by_agent) AS booked_by_agent
-  FROM dd
+  SELECT dd.*, (b.dkey IS NOT NULL) AS booked, COALESCE(b.by_agent, false) AS booked_by_agent
+  FROM dd LEFT JOIN booked b USING (dkey, d)
 )
-SELECT d::text AS date, first_channel AS channel,
+SELECT to_char(d, 'YYYY-MM-DD') AS date, first_channel AS channel,
   COUNT(*)::int AS dialogs,
   COUNT(*) FILTER (WHERE first_dir = 'incoming')::int AS client_first,
   COUNT(*) FILTER (WHERE first_dir = 'incoming' AND p10 IS NULL)::int AS client_first_no_phone,
