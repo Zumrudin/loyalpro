@@ -125,7 +125,8 @@ rec AS (
                     AND e.payload->>'record_id' = r.yclients_record_id::text) AS by_agent
   FROM records r
   WHERE r.salon_id = $1 AND r.status <> 'deleted'
-    AND left(r.raw_payload->>'create_date', 10) BETWEEN $2 AND $3
+    -- ::text обязателен: pg уже вывел тип $2/$3 как date из CTE m, без него «text >= date».
+    AND left(r.raw_payload->>'create_date', 10) BETWEEN $2::text AND $3::text
 ),
 flags AS (
   SELECT dd.*,
