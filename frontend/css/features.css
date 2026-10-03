@@ -1061,3 +1061,32 @@ body.kb-editor .kb-admin-only { display: inline-flex; }
 .as-price-item-actions { display:flex; align-items:center; justify-content:center; gap:8px; padding:6px 4px; flex-wrap:wrap; }
 .as-price-up:disabled, .as-price-down:disabled { opacity:.3; cursor:default; }
 .as-price-up:disabled:hover, .as-price-down:disabled:hover { text-decoration:none; }
+
+/* ── Дашборд: блок «Переписки в мессенджерах» ─────────────────────────────── */
+.msg-head{display:flex;align-items:baseline;justify-content:space-between;margin:26px 0 12px}
+.msg-head .ttl{font-size:16px;font-weight:700}
+.msg-head .sub{font-size:11.5px;color:var(--t3)}
+.msg-tiles{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
+.msg-tiles .sv{display:flex;align-items:baseline;gap:8px}
+.msg-pct{font-size:13px;font-weight:700;color:var(--a)}
+.msg-pct-muted{color:var(--t3);font-weight:500}
+.msg-tiles .sd .dot{display:inline-block;width:8px;height:8px;border-radius:2px;margin-right:5px;vertical-align:1px}
+.msg-legend{display:flex;gap:14px;font-size:11px;color:var(--t2);font-weight:400}
+.msg-legend span::before{content:"";display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:5px;vertical-align:-1px;background:var(--lg)}
+.msg-tbl{width:100%;border-collapse:collapse;font-size:12.5px}
+.msg-tbl th{font-size:10.5px;font-weight:500;color:var(--t3);text-align:right;padding:0 0 10px 12px;border-bottom:1px solid var(--bd);white-space:nowrap}
+.msg-tbl th:first-child{text-align:left;padding-left:0}
+.msg-tbl td{padding:11px 0 11px 12px;border-bottom:1px solid var(--bd);text-align:right;vertical-align:middle}
+.msg-tbl td:first-child{text-align:left;padding-left:0}
+.msg-tbl tr:last-child td{border-bottom:none}
+.msg-tbl tr.total td{font-weight:700;border-top:2px solid var(--bd)}
+.msg-tbl td.empty{text-align:center}
+.msg-tbl .ch{display:inline-flex;align-items:center;gap:7px;font-weight:600;white-space:nowrap}
+.msg-tbl .ch i{width:22px;height:22px;border-radius:6px;display:inline-flex;align-items:center;justify-content:center;font-size:11px;font-weight:800;color:#fff;font-style:normal;flex:none}
+.msg-tbl .ch-wa i{background:#25d366}.msg-tbl .ch-tg i{background:#2aabee}.msg-tbl .ch-max i{background:#7b5cff}.msg-tbl .ch-all i{background:var(--t3)}
+.msg-tbl .conv{display:inline-flex;align-items:center;gap:8px;justify-content:flex-end}
+.msg-tbl .conv .pb{width:70px;height:6px;background:var(--bg);border:1px solid var(--bd);border-radius:4px;overflow:hidden;display:inline-block}
+.msg-tbl .conv .pf{height:100%;background:var(--a);border-radius:4px;display:block}
+.msg-tbl .conv b{min-width:34px;text-align:right}
+.msg-foot{font-size:11px;color:var(--t3);margin-top:12px;line-height:1.5}
+@media(max-width:900px){.msg-tiles{grid-template-columns:1fr}}

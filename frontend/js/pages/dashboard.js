@@ -240,7 +240,7 @@ function buildLvlDash(dist, total) {
 }
 
 function showDashSkeleton() {
-  const ids = ['ds1', 'ds2', 'ds3', 'ds5', 'ds6', 'an1', 'an2', 'an3', 'an4', 'an5'];
+  const ids = ['ds1', 'ds2', 'ds3', 'ds5', 'ds6', 'an1', 'an2', 'an3', 'an4', 'an5', 'msgDialogs', 'msgFirst', 'msgBooked'];
   ids.forEach(id => {
     const el = document.getElementById(id);
     if (el) el.innerHTML = '<span class="sk sk-val"></span>';
@@ -320,6 +320,11 @@ async function loadDashboard() {
     } catch (e) {
       console.warn('Bonus chart failed:', e);
       buildBfChart([]);
+    }
+    // Блок «Переписки в мессенджерах» — отдельная ручка, свой try/catch внутри:
+    // сбой статистики переписок не должен гасить остальной дашборд.
+    if (typeof loadMessengerStats === 'function') {
+      await loadMessengerStats(q, formatPeriodLabel(dashRange.from, dashRange.to));
     }
     buildLvlChart(d.levelDist);
     if (d.syncStatus?.finished_at) {

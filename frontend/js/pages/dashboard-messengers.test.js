@@ -59,6 +59,19 @@ test('msgTileTexts: нули и отсутствие Милы/без номер�
   assert.strictEqual(t.bookedSub, 'из написавших первыми');
 });
 
+// Устойчивость к пустому ответу ручки и к имени канала из прототипа Object:
+// бейдж берётся только у СОБСТВЕННЫХ свойств карты (hasOwnProperty.call, а не `in`).
+test('null-входы не роняют помощники; канал «constructor» не достаёт бейдж из прототипа', () => {
+  const rows = msgChannelRows(null, null);
+  assert.strictEqual(rows.length, 1);
+  assert.strictEqual(rows[0].isTotal, true);
+  assert.deepStrictEqual(msgTileTexts(null), { firstShare: '', firstSub: 'все с номером телефона', bookedPct: '', bookedSub: 'из написавших первыми' });
+  assert.deepStrictEqual(msgChartSeries(null), { labels: [], first: [], booked: [] });
+  const ctor = msgChannelRows([{ channel: 'constructor', dialogs: 1, clientFirst: 1, bookedSameDay: 0 }], {})[0];
+  assert.strictEqual(ctor.short, 'CO');
+  assert.strictEqual(ctor.cls, 'ch-all');
+});
+
 test('бейджи известных каналов', () => {
   assert.deepStrictEqual(MSG_CHANNEL_BADGE.whatsapp, { short: 'WA', cls: 'ch-wa' });
   assert.deepStrictEqual(MSG_CHANNEL_BADGE.max, { short: 'M', cls: 'ch-max' });
