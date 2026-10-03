@@ -17,10 +17,11 @@ const CHANNEL_LABELS = { tdlib: 'Telegram', whatsapp: 'WhatsApp', max: 'MAX' };
 
 function channelLabel(channel) {
   if (channel == null || channel === '') return '—';
-  return CHANNEL_LABELS[channel] || String(channel);
+  return Object.hasOwn(CHANNEL_LABELS, channel) ? CHANNEL_LABELS[channel] : String(channel);
 }
 
-// Перечисление дат включительно; арифметика в UTC, чтобы DST не съел день.
+// Перечисление дат включительно; арифметика в UTC — та же, что в resolvePeriod
+// (routes/api.js), чтобы локальная TZ сервера не влияла на перечисление.
 function eachDate(from, to) {
   const out = [];
   const d = new Date(from + 'T00:00:00Z');
@@ -33,22 +34,26 @@ function eachDate(from, to) {
 }
 
 function dateKey(v) {
-  if (v instanceof Date) return v.toISOString().slice(0, 10);
+  // pg отдаёт DATE как Date в ЛОКАЛЬНУЮ полночь (TZ сервера Europe/Moscow) — ISO-строка дала бы вчера.
+  if (v instanceof Date) {
+    const p = x => String(x).padStart(2, '0');
+    return `${v.getFullYear()}-${p(v.getMonth() + 1)}-${p(v.getDate())}`;
+  }
   return String(v).slice(0, 10);
 }
 
-const n = v => Number(v) || 0;
+const num = v => Number(v) || 0;
 
 function emptyStat() {
   return { dialogs: 0, clientFirst: 0, clientFirstNoPhone: 0, bookedSameDay: 0, bookedByAgent: 0 };
 }
 
 function addRow(acc, r) {
-  acc.dialogs += n(r.dialogs);
-  acc.clientFirst += n(r.client_first);
-  acc.clientFirstNoPhone += n(r.client_first_no_phone);
-  acc.bookedSameDay += n(r.booked_same_day);
-  acc.bookedByAgent += n(r.booked_by_agent);
+  acc.dialogs += num(r.dialogs);
+  acc.clientFirst += num(r.client_first);
+  acc.clientFirstNoPhone += num(r.client_first_no_phone);
+  acc.bookedSameDay += num(r.booked_same_day);
+  acc.bookedByAgent += num(r.booked_by_agent);
 }
 
 // rows: [{date, channel, dialogs, client_first, client_first_no_phone, booked_same_day, booked_by_agent}]
@@ -63,7 +68,7 @@ function summarize(rows, { from, to }) {
     if (!byChannelMap.has(ch)) byChannelMap.set(ch, { channel: ch, label: channelLabel(ch), ...emptyStat() });
     addRow(byChannelMap.get(ch), r);
     const day = byDay.get(dateKey(r.date));
-    if (day) { day.clientFirst += n(r.client_first); day.bookedSameDay += n(r.booked_same_day); }
+    if (day) { day.clientFirst += num(r.client_first); day.bookedSameDay += num(r.booked_same_day); }
   }
 
   const byChannel = [...byChannelMap.values()]

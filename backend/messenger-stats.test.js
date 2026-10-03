@@ -56,6 +56,11 @@ describe('messenger-stats: summarize', () => {
     }
   });
 
+  test('ряд по дням в сумме совпадает с итогами (ничего не потеряно молча)', () => {
+    expect(out.daily.reduce((s, d) => s + d.clientFirst, 0)).toBe(out.totals.clientFirst);
+    expect(out.daily.reduce((s, d) => s + d.bookedSameDay, 0)).toBe(out.totals.bookedSameDay);
+  });
+
   test('пустой вход → нули, пустые каналы, ряд из нулей', () => {
     const e = summarize([], { from: '2026-10-02', to: '2026-10-03' });
     expect(e.totals).toEqual({ dialogs: 0, clientFirst: 0, clientFirstNoPhone: 0, bookedSameDay: 0, bookedByAgent: 0 });
@@ -67,7 +72,7 @@ describe('messenger-stats: summarize', () => {
   });
 
   test('дата из pg может прийти объектом Date — нормализуется к YYYY-MM-DD', () => {
-    const r = summarize([{ date: new Date('2026-10-02T00:00:00Z'), channel: 'max', dialogs: 1, client_first: 1, client_first_no_phone: 0, booked_same_day: 0, booked_by_agent: 0 }],
+    const r = summarize([{ date: new Date(2026, 9, 2), channel: 'max', dialogs: 1, client_first: 1, client_first_no_phone: 0, booked_same_day: 0, booked_by_agent: 0 }],
       { from: '2026-10-02', to: '2026-10-02' });
     expect(r.daily).toEqual([{ date: '2026-10-02', clientFirst: 1, bookedSameDay: 0 }]);
   });
