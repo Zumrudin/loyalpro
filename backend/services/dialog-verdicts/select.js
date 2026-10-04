@@ -6,16 +6,38 @@
 
 const num = v => (v == null ? null : Number(v));
 
+function integer(v, name) {
+  if (v == null) return null;
+  if (typeof v === 'bigint') return v;
+  if (typeof v === 'number') {
+    if (!Number.isInteger(v)) throw new TypeError(`${name} must be an integer`);
+    if (!Number.isSafeInteger(v)) throw new RangeError(`${name} number must be a safe integer`);
+    return BigInt(v);
+  }
+  if (typeof v === 'string' && /^-?\d+$/.test(v)) return BigInt(v);
+  throw new TypeError(`${name} must be an integer`);
+}
+
 function pickPending(rows, { recompute = false, onlyStale = false, sinceTs = null, taxonomyVersion } = {}) {
   const out = [];
   for (const r of rows || []) {
-    if (sinceTs != null && num(r.max_ts) < sinceTs) continue;
+    let maxTs;
+    if (sinceTs != null) {
+      maxTs = integer(r.max_ts, 'max_ts');
+      if (maxTs == null || maxTs < integer(sinceTs, 'sinceTs')) continue;
+    }
     const has = r.verdict_id != null;
     if (onlyStale) {
       if (has && (num(r.taxonomy_version) < taxonomyVersion || r.status === 'other')) out.push(r);
       continue;
     }
-    if (recompute || !has || num(r.max_ts) > num(r.source_max_ts)) out.push(r);
+    if (recompute || !has) {
+      out.push(r);
+      continue;
+    }
+    maxTs = maxTs === undefined ? integer(r.max_ts, 'max_ts') : maxTs;
+    const sourceMaxTs = integer(r.source_max_ts, 'source_max_ts');
+    if (maxTs != null && (sourceMaxTs == null || maxTs > sourceMaxTs)) out.push(r);
   }
   return out;
 }
@@ -31,6 +53,8 @@ function groupByDayDesc(rows) {
 }
 
 function chunks(arr, size) {
+  if (typeof size !== 'number') throw new TypeError('size must be a number');
+  if (!Number.isInteger(size) || size <= 0) throw new RangeError('size must be a positive integer');
   const out = [];
   for (let i = 0; i < (arr || []).length; i += size) out.push(arr.slice(i, i + size));
   return out;

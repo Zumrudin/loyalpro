@@ -31,6 +31,15 @@ describe('pickPending', () => {
   test('sinceTs отсекает диалог-дни без свежих сообщений', () => {
     const rows = [row({ dkey: 'new', max_ts: '1759500000' }), row({ dkey: 'stale', max_ts: '1759000000' })];
     expect(pickPending(rows, { ...cur, sinceTs: 1759400000 }).map(r => r.dkey)).toEqual(['new']);
+    expect(pickPending(rows, { ...cur, sinceTs: '1759400000' }).map(r => r.dkey)).toEqual(['new']);
+  });
+  test('сравнивает pg bigint точно за пределами MAX_SAFE_INTEGER', () => {
+    const rows = [
+      row({ dkey: 'changed', max_ts: '9007199254740993', verdict_id: 1, source_max_ts: '9007199254740992' }),
+      row({ dkey: 'same', max_ts: '9007199254740992', verdict_id: 2, source_max_ts: '9007199254740992' }),
+    ];
+    expect(pickPending(rows, cur).map(r => r.dkey)).toEqual(['changed']);
+    expect(pickPending(rows, { ...cur, sinceTs: '9007199254740993' }).map(r => r.dkey)).toEqual(['changed']);
   });
 });
 
@@ -42,5 +51,9 @@ describe('groupByDayDesc / chunks', () => {
   test('chunks режет по размеру', () => {
     expect(chunks([1, 2, 3, 4, 5], 2)).toEqual([[1, 2], [3, 4], [5]]);
     expect(chunks([], 2)).toEqual([]);
+  });
+  test('chunks отклоняет невалидный размер', () => {
+    for (const size of [0, -1, 1.5, NaN]) expect(() => chunks([1], size)).toThrow(RangeError);
+    expect(() => chunks([1], '2')).toThrow(TypeError);
   });
 });
