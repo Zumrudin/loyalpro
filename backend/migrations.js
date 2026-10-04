@@ -1777,14 +1777,27 @@ async function runMigrations(client) {
   // CREATE TABLE IF NOT EXISTS не дополняет уже существующую таблицу. Этот блок
   // чинит частично применённую раннюю версию миграции перед добавлением FK.
   await client.query(`
-    DO $$ BEGIN
-      IF NOT EXISTS (
-        SELECT 1 FROM pg_constraint
+    DO $$
+    DECLARE constraint_def TEXT;
+    BEGIN
+      SELECT pg_get_constraintdef(oid) INTO constraint_def
+        FROM pg_constraint
         WHERE conrelid = 'dialog_verdict_runs'::regclass
-          AND conname = 'dialog_verdict_runs_salon_id_id_key'
-      ) THEN
-        ALTER TABLE dialog_verdict_runs
-          ADD CONSTRAINT dialog_verdict_runs_salon_id_id_key UNIQUE (salon_id, id);
+          AND conname = 'dialog_verdict_runs_salon_id_id_key';
+      IF constraint_def IS NULL THEN
+        BEGIN
+          ALTER TABLE dialog_verdict_runs
+            ADD CONSTRAINT dialog_verdict_runs_salon_id_id_key UNIQUE (salon_id, id);
+        EXCEPTION WHEN duplicate_object THEN
+          NULL; -- параллельный migrator мог успеть добавить тот же constraint
+        END;
+        SELECT pg_get_constraintdef(oid) INTO constraint_def
+          FROM pg_constraint
+          WHERE conrelid = 'dialog_verdict_runs'::regclass
+            AND conname = 'dialog_verdict_runs_salon_id_id_key';
+      END IF;
+      IF replace(constraint_def, ' ', '') IS DISTINCT FROM 'UNIQUE(salon_id,id)' THEN
+        RAISE EXCEPTION 'dialog_verdict_runs_salon_id_id_key has unexpected definition: %', constraint_def;
       END IF;
     END $$
   `);
@@ -1827,16 +1840,30 @@ async function runMigrations(client) {
   // без FK. NO ACTION осознанно сохраняет salon_id NOT NULL: составной SET NULL
   // попытался бы обнулить и tenant key. Удаление салона каскадно удаляет обе таблицы.
   await client.query(`
-    DO $$ BEGIN
-      IF NOT EXISTS (
-        SELECT 1 FROM pg_constraint
+    DO $$
+    DECLARE constraint_def TEXT;
+    BEGIN
+      SELECT pg_get_constraintdef(oid) INTO constraint_def
+        FROM pg_constraint
         WHERE conrelid = 'dialog_verdicts'::regclass
-          AND conname = 'dialog_verdicts_run_fk'
-      ) THEN
-        ALTER TABLE dialog_verdicts
-          ADD CONSTRAINT dialog_verdicts_run_fk
-          FOREIGN KEY (salon_id, run_id)
-          REFERENCES dialog_verdict_runs (salon_id, id) ON DELETE NO ACTION;
+          AND conname = 'dialog_verdicts_run_fk';
+      IF constraint_def IS NULL THEN
+        BEGIN
+          ALTER TABLE dialog_verdicts
+            ADD CONSTRAINT dialog_verdicts_run_fk
+            FOREIGN KEY (salon_id, run_id)
+            REFERENCES dialog_verdict_runs (salon_id, id) ON DELETE NO ACTION;
+        EXCEPTION WHEN duplicate_object THEN
+          NULL; -- параллельный migrator мог успеть добавить тот же constraint
+        END;
+        SELECT pg_get_constraintdef(oid) INTO constraint_def
+          FROM pg_constraint
+          WHERE conrelid = 'dialog_verdicts'::regclass
+            AND conname = 'dialog_verdicts_run_fk';
+      END IF;
+      IF replace(constraint_def, ' ', '') IS DISTINCT FROM
+          'FOREIGNKEY(salon_id,run_id)REFERENCESdialog_verdict_runs(salon_id,id)' THEN
+        RAISE EXCEPTION 'dialog_verdicts_run_fk has unexpected definition: %', constraint_def;
       END IF;
     END $$
   `);
