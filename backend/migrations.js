@@ -1752,6 +1752,14 @@ async function runMigrations(client) {
   `).catch(() => {});
 
   // ── Вердикты ИИ по перепискам (спека docs/superpowers/specs/2026-10-04-dialog-verdicts-design.md) ──
+  // Session lock, а не pg_advisory_xact_lock: client.query ниже работает в
+  // autocommit, и xact-lock отпустился бы после первого же DDL. Один и тот же
+  // client удерживает lock до конца всего feature-блока и сериализует первые
+  // параллельные старты процесса.
+  const verdictMigrationLockKey = [1280266064, 20261004];
+  await client.query('SELECT pg_advisory_lock($1, $2)', verdictMigrationLockKey);
+  let verdictMigrationError;
+  try {
   // Журнал создаётся первым: dialog_verdicts ссылается на него составным FK,
   // чтобы run_id никогда не мог сослаться на прогон другого салона.
   await client.query(`
@@ -1871,6 +1879,22 @@ async function runMigrations(client) {
     CREATE INDEX IF NOT EXISTS dialog_verdicts_day_idx
       ON dialog_verdicts (salon_id, day, channel, status)
   `);
+  } catch (error) {
+    verdictMigrationError = error;
+    throw error;
+  } finally {
+    try {
+      const unlock = await client.query(
+        'SELECT pg_advisory_unlock($1, $2) AS unlocked',
+        verdictMigrationLockKey
+      );
+      if (!unlock.rows[0]?.unlocked) throw new Error('dialog verdict migration advisory lock was not held');
+    } catch (unlockError) {
+      // Не маскируем исходную ошибку DDL ошибкой освобождения lock. Если DDL
+      // прошёл, сбой unlock сам обязан остановить startup.
+      if (!verdictMigrationError) throw unlockError;
+    }
+  }
 }
 
 module.exports = { runMigrations };
