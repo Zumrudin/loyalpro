@@ -188,6 +188,32 @@ cron.schedule('35 4 * * *', async () => {
   } catch (e) { cronLogger.error(`reconcile cron: ${e.message}`); }
 }, { timezone: 'Europe/Moscow' });
 
+// Вердикты ИИ по перепискам (services/dialog-verdicts, спека 2026-10-04): дважды
+// в день, ОБА раза вне окна Милы 22:00–09:30 — анализ делит с ней мост dev
+// (2 слота), и утренний прогон в 09:45 застаёт мост свободным. Окно отбора
+// 36 часов: вчера и сегодня с запасом; диалог-день без новых сообщений с
+// прошлого вердикта повторно не отправляется. Салоны последовательно.
+const runDialogVerdictsCron = async () => {
+  if (!config.DIALOG_VERDICTS) return;
+  try {
+    const salons = await db.many(`SELECT id FROM salons WHERE is_active=TRUE`);
+    const msk = (shift) => new Date(Date.now() + shift * 86400e3).toLocaleDateString('sv-SE', { timeZone: 'Europe/Moscow' });
+    for (const s of salons) {
+      try {
+        const r = await require('./services/dialog-verdicts/run').runVerdicts(
+          { salonId: s.id, from: msk(-2), to: msk(0), trigger: 'cron', sinceHours: 36 });
+        const res = await r.done;
+        cronLogger.info(`dialog verdicts salon=${s.id}: к анализу=${res.requested} ок=${res.analyzed} сбой=${res.failed} модель=${res.model}`);
+      } catch (e) {
+        if (e.code === 'RUN_IN_PROGRESS') cronLogger.warn(`dialog verdicts salon=${s.id}: пропуск тика, идёт ручной прогон`);
+        else cronLogger.error(`dialog verdicts salon=${s.id}: ${require('./services/dialog-verdicts/errors').safeError(e)}`);
+      }
+    }
+  } catch (e) { cronLogger.error(`dialog verdicts cron: ${require('./services/dialog-verdicts/errors').safeError(e)}`); }
+};
+cron.schedule('45 9 * * *', runDialogVerdictsCron, { timezone: 'Europe/Moscow' });
+cron.schedule('30 21 * * *', runDialogVerdictsCron, { timezone: 'Europe/Moscow' });
+
 // Каталог товаров синхронизируется в СВОЮ минуту, а не вместе с остальными.
 // На минуте 0 по одному салону разом стартовали runSync + syncGoodsCategories
 // + syncStaffData + syncGoodsSales, и общая квота YClients выедалась до того,
@@ -291,6 +317,10 @@ pool.connect()
     client.release();
     // Прогон синка/сверки, оборванный рестартом, иначе висит running вечно
     // (27 таких строк на проде с марта 2026).
+    for (const salon of await db.any('SELECT id FROM salons')) {
+      await require('./services/dialog-verdicts/store').closeStaleRuns(salon.id)
+        .catch(() => logger.warn('dialog_verdict_runs: stale run cleanup failed'));
+    }
     await closeStaleSyncRuns().then(n => { if (n) logger.warn(`sync_logs: закрыто зависших running=${n}`); })
       .catch(e => logger.warn(`sync_logs: не удалось закрыть зависшие running: ${e.message}`));
     app.listen(PORT, () => {

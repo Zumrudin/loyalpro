@@ -1,7 +1,7 @@
 // frontend/js/pages/dashboard-messengers.test.js
 const { test } = require('node:test');
 const assert = require('node:assert');
-const { msgPct, msgChannelRows, msgChartSeries, msgTileTexts, MSG_CHANNEL_BADGE } = require('./dashboard-messengers');
+const { msgPct, msgChannelRows, MSG_VERDICT_COLS, msgTableColumns, msgTileTexts, MSG_CHANNEL_BADGE } = require('./dashboard-messengers');
 
 test('msgPct: округлённый процент, при нулевом знаменателе — прочерк', () => {
   assert.strictEqual(msgPct(81, 201), '40%');
@@ -10,20 +10,37 @@ test('msgPct: округлённый процент, при нулевом зн�
   assert.strictEqual(msgPct(undefined, undefined), '—');
 });
 
-test('msgChannelRows: строка на канал + итоговая, бейдж и конверсия', () => {
+test('msgChannelRows: строка на канал + итоговая, бейдж, конверсия и вердикты', () => {
+  const v = { booked: 10, declined: 3, pending: 5, reschedule: 1, question: 2, broadcast_reply: 4, no_dialog: 6, other: 1, unanalyzed: 350 };
   const byChannel = [
-    { channel: 'tdlib', label: 'Telegram', dialogs: 382, clientFirst: 201, clientFirstNoPhone: 27, bookedSameDay: 81, bookedByAgent: 30 },
+    { channel: 'tdlib', label: 'Telegram', dialogs: 382, clientFirst: 201, clientFirstNoPhone: 27, bookedSameDay: 81, bookedByAgent: 30, verdicts: v },
     { channel: 'max_bot', label: 'max_bot', dialogs: 3, clientFirst: 1, clientFirstNoPhone: 0, bookedSameDay: 0, bookedByAgent: 0 },
   ];
-  const totals = { dialogs: 385, clientFirst: 202, clientFirstNoPhone: 27, bookedSameDay: 81, bookedByAgent: 30 };
+  const totals = { dialogs: 385, clientFirst: 202, clientFirstNoPhone: 27, bookedSameDay: 81, bookedByAgent: 30, verdicts: v };
   const rows = msgChannelRows(byChannel, totals);
   assert.strictEqual(rows.length, 3);
-  assert.deepStrictEqual(rows[0], { label: 'Telegram', short: 'TG', cls: 'ch-tg', dialogs: 382, clientFirst: 201, bookedSameDay: 81, conv: '40%', convPct: 40, isTotal: false });
-  // незнакомый канал — бейдж из первых двух букв, нейтральный класс
+  assert.deepStrictEqual(rows[0], { label: 'Telegram', short: 'TG', cls: 'ch-tg', channel: 'tdlib', dialogs: 382, clientFirst: 201, bookedSameDay: 81, conv: '40%', convPct: 40, isTotal: false, verdicts: v });
+  // незнакомый канал — бейдж из первых двух букв, нейтральный класс; без verdicts — нули
   assert.strictEqual(rows[1].short, 'MA');
   assert.strictEqual(rows[1].cls, 'ch-all');
   assert.strictEqual(rows[1].conv, '0%');
-  assert.deepStrictEqual(rows[2], { label: 'Все каналы', short: 'Σ', cls: 'ch-all', dialogs: 385, clientFirst: 202, bookedSameDay: 81, conv: '40%', convPct: 40, isTotal: true });
+  assert.deepStrictEqual(rows[1].verdicts, { booked: 0, declined: 0, pending: 0, reschedule: 0, question: 0, broadcast_reply: 0, no_dialog: 0, other: 0, unanalyzed: 0 });
+  assert.strictEqual(rows[2].isTotal, true);
+  assert.strictEqual(rows[2].channel, '');
+  assert.strictEqual(rows[2].conv, '40%');
+});
+
+test('MSG_VERDICT_COLS совпадает с таксономией бэкенда (плюс unanalyzed последним)', () => {
+  const { STATUS_CODES, UNANALYZED } = require('../../../backend/services/dialog-verdicts/taxonomy');
+  assert.deepStrictEqual(MSG_VERDICT_COLS.map(c => c.code), [...STATUS_CODES, UNANALYZED]);
+  for (const c of MSG_VERDICT_COLS) { assert.ok(c.short); assert.ok(c.title); }
+});
+
+test('msgTableColumns: четыре колонки факта, затем статусы', () => {
+  const cols = msgTableColumns();
+  assert.deepStrictEqual(cols.slice(0, 5).map(c => c.key), ['label', 'dialogs', 'clientFirst', 'bookedSameDay', 'conv']);
+  assert.strictEqual(cols.length, 5 + MSG_VERDICT_COLS.length);
+  assert.strictEqual(cols[5].key, 'v:booked');
 });
 
 test('msgChannelRows: без каналов — только итог с нулями', () => {
@@ -34,14 +51,6 @@ test('msgChannelRows: без каналов — только итог с нул�
   assert.strictEqual(rows[0].convPct, 0);
 });
 
-test('msgChartSeries: подписи d.m и два ряда чисел', () => {
-  const s = msgChartSeries([
-    { date: '2026-09-04', clientFirst: 12, bookedSameDay: 5 },
-    { date: '2026-10-01', clientFirst: '3', bookedSameDay: '1' },
-  ]);
-  assert.deepStrictEqual(s, { labels: ['4.9', '1.10'], first: [12, 3], booked: [5, 1] });
-  assert.deepStrictEqual(msgChartSeries([]), { labels: [], first: [], booked: [] });
-});
 
 test('msgTileTexts: подписи трёх плиток', () => {
   const t = msgTileTexts({ dialogs: 716, clientFirst: 386, clientFirstNoPhone: 30, bookedSameDay: 154, bookedByAgent: 61 });
@@ -66,7 +75,6 @@ test('null-входы не роняют помощники; канал «constru
   assert.strictEqual(rows.length, 1);
   assert.strictEqual(rows[0].isTotal, true);
   assert.deepStrictEqual(msgTileTexts(null), { firstShare: '', firstSub: 'все с номером телефона', bookedPct: '', bookedSub: 'из написавших первыми' });
-  assert.deepStrictEqual(msgChartSeries(null), { labels: [], first: [], booked: [] });
   const ctor = msgChannelRows([{ channel: 'constructor', dialogs: 1, clientFirst: 1, bookedSameDay: 0 }], {})[0];
   assert.strictEqual(ctor.short, 'CO');
   assert.strictEqual(ctor.cls, 'ch-all');

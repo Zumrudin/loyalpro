@@ -7,7 +7,7 @@
 //   node scripts/dashboard-messengers-visual.js
 //
 // Проверяет: блок отрисован на периоде «Месяц» (плитки с числами, в таблице
-// каналы + итог, у графика есть canvas), переключение на «Сегодня» перерисовывает
+// каналы + итог, таблица содержит колонки статусов), переключение на «Сегодня» перерисовывает
 // без ошибок страницы, тёмная тема не ломает вёрстку, на телефоне (390x844)
 // карточки не шире страницы. Скриншоты:
 //   /tmp/dashboard-messengers-light.png, -today.png, -dark.png, -mobile.png
@@ -73,11 +73,11 @@ async function main() {
     const month = await page.evaluate(() => ({
       tiles: ['msgDialogs', 'msgFirst', 'msgBooked'].map(id => document.getElementById(id).textContent),
       rows: document.querySelectorAll('#msgTbody tr').length,
-      hasCanvas: !!document.getElementById('msgChart'),
+      ths: document.querySelectorAll('#msgThead th').length,
       sub: document.getElementById('msgPeriodSub').textContent,
     }));
     if (month.rows < 2) fail(`в таблице ${month.rows} строк — ожидались каналы + итог`);
-    if (!month.hasCanvas) fail('нет canvas графика');
+    if (month.ths !== 14) fail('нет 14 колонок таблицы');
     if (!/за .+·/.test(month.sub)) fail(`подпись периода пуста: «${month.sub}»`);
     ok(`месяц: плитки ${month.tiles.join(' / ')}, строк в таблице ${month.rows}, подпись «${month.sub}»`);
     await shot('light');
@@ -106,11 +106,11 @@ async function main() {
     await cascaded();
     const mob = await page.evaluate(() => {
       const pw = document.getElementById('page-dashboard').getBoundingClientRect().width;
-      const cards = [...document.querySelectorAll('.msg-g32 > .card')].map(c => c.getBoundingClientRect().width);
+      const cards = [...document.querySelectorAll('.msg-card')].map(c => c.getBoundingClientRect().width);
       const tbl = document.querySelector('.msg-tbl');
       return { pw, cards, tblScroll: tbl ? tbl.scrollWidth : 0, tblClient: tbl ? tbl.clientWidth : 0 };
     });
-    if (!mob.cards.length) fail('на телефоне нет карточек .msg-g32 > .card');
+    if (!mob.cards.length) fail('на телефоне нет карточек .msg-card');
     const wide = mob.cards.filter(w => w > mob.pw + 1);
     if (wide.length) fail(`на телефоне карточки шире страницы (${mob.pw}px): ${wide.join(', ')}`);
     ok(`телефон: страница ${mob.pw}px, карточки ${mob.cards.map(Math.round).join('/')}px, таблица scroll ${mob.tblScroll} / client ${mob.tblClient}`);

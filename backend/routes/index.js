@@ -69,6 +69,8 @@ module.exports = function mountRoutes(app) {
   app.use('/api/reminders',         require('./reminders'));
   app.use('/api/medical-cert',      require('./medical-cert'));
 
+  app.use('/api/analytics/messengers/verdicts', require('./dialog-verdicts'));
+
   // ── Clients CRUD at /api/clients (has /:id — must be specific prefix) ──
   app.use('/api/clients',           require('./clients'));
 

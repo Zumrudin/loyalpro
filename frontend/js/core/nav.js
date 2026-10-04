@@ -38,6 +38,7 @@ function _navAllowed(p) {
 // под-страницы, у которых нет своего .tn (напр. генератор справки внутри «Справок»).
 function navTo(p, opts) {
   opts = opts || {};
+  if (typeof vdStop === 'function') vdStop();
   closeMenu();                         // закрыть drawer, если переход был из него
   // Живой опрос чата жив только на своей странице — гасим при любом переходе
   // (страница «Чат» перезапустит его через loadChat).
@@ -176,7 +177,8 @@ window.addEventListener('hashchange', () => {
   const arg = rest.length ? decodeURIComponent(rest.join('/')) : null;
   if (!page) return;
   if (page === _navPage) {
-    // Тот же раздел — сменился только хвост. Сейчас он есть только у чата.
+    // Тот же раздел — сменился только хвост. Хвост есть у чата и у дашборда.
+    if (page === 'dashboard' && typeof dashboardOnHashArg === 'function') dashboardOnHashArg(arg);
     if (page === 'chat' && typeof chatOnHashArg === 'function') chatOnHashArg(arg);
     return;
   }
@@ -193,6 +195,7 @@ window.addEventListener('hashchange', () => {
 });
 
 function showLogin() {
+  if (typeof vdStop === 'function') vdStop();
   document.getElementById('agent-model-notice')?.remove();
   localStorage.removeItem('lp_tk');
   document.getElementById('loginScreen').style.display = 'flex';
