@@ -129,8 +129,19 @@ const BOOKED_CTE_SQL = `
       ON rec.yclients_client_id = cl.yclients_client_id AND rec.cd = to_char(cl.d, 'YYYY-MM-DD')
   ) x GROUP BY x.dkey, x.d`;
 
+// Коды — внутренние константы таксономии; проверка не позволяет случайно
+// превратить их в SQL-идентификаторы/литералы с произвольными символами.
+for (const code of STATUS_CODES) {
+  if (!/^[a-z_]+$/.test(code)) throw new Error(`Unsafe verdict status code: ${code}`);
+}
+const KNOWN_VERDICT_STATUSES_SQL = STATUS_CODES.map(code => `'${code}'`).join(', ');
 const VERDICT_COLS_SQL = STATUS_CODES
-  .map(code => `COUNT(*) FILTER (WHERE vstatus = '${code}')::int AS v_${code}`)
+  .map(code => {
+    const predicate = code === 'other'
+      ? `vstatus = 'other' OR (vstatus IS NOT NULL AND vstatus NOT IN (${KNOWN_VERDICT_STATUSES_SQL}))`
+      : `vstatus = '${code}'`;
+    return `COUNT(*) FILTER (WHERE ${predicate})::int AS v_${code}`;
+  })
   .concat([`COUNT(*) FILTER (WHERE vstatus IS NULL)::int AS v_${UNANALYZED}`])
   .join(',\n  ');
 

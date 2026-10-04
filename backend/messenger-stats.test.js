@@ -101,6 +101,14 @@ describe('messenger-stats: вердикты', () => {
     expect(MESSENGER_STATS_SQL).toContain('AS v_unanalyzed');
   });
 
+  test('неизвестный non-null статус попадает в other, но не в unanalyzed', () => {
+    const known = STATUS_CODES.map(c => `'${c}'`).join(', ');
+    expect(MESSENGER_STATS_SQL).toContain(
+      `vstatus = 'other' OR (vstatus IS NOT NULL AND vstatus NOT IN (${known}))`);
+    expect(MESSENGER_STATS_SQL).toContain(
+      'COUNT(*) FILTER (WHERE vstatus IS NULL)::int AS v_unanalyzed');
+  });
+
   test('общие фрагменты экспортируются и подставляются', () => {
     expect(PERSONAL_NON_SYSTEM_SQL).toContain(`<> 'system'`);
     expect(phoneFormsSql('x.p10')).toBe(`ARRAY['+7' || x.p10, '7' || x.p10, '8' || x.p10, x.p10]`);
