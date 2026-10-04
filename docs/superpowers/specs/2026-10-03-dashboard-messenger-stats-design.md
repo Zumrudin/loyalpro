@@ -171,9 +171,10 @@ MAX 83 → 34 (клиент первым → записались в тот же
   `document.documentElement.getAttribute('data-theme')`.
 - Пустые данные (0 диалогов) — плитки «0», таблица «Нет данных», график пустой.
 
-**`frontend/js/pages/dashboard.js`** — `loadDashboard` после основного ответа
-зовёт `loadMessengerStats(q)` в своём `try/catch` (сбой → `console.warn` +
-пустой блок, дашборд живёт); `showDashSkeleton` получает id новых плиток.
+**`frontend/js/pages/dashboard.js`** — `loadDashboard` стартует
+`loadMessengerStats(q)` ДО `await` основного запроса (параллельно) и дожидается
+его перед каскадом карточек; внутри свой `try/catch` (сбой → `console.warn` +
+прочерки, дашборд живёт); `showDashSkeleton` получает id новых плиток.
 
 Мобильная вёрстка: плитки в столбик при ≤ 900 px (`.msg-tiles`), `.g32` уже
 складывается существующим правилом при ≤ 1100 px.
