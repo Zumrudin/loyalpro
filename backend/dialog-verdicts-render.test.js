@@ -29,6 +29,13 @@ describe('BOOKING_NOTICE_RE', () => {
     expect(BOOKING_NOTICE_RE.test('Здравствуйте!\nНапоминаем о записи в «PERI CLINIC»\nВаша запись 09.10.2026 19:00')).toBe(false);
     expect(BOOKING_NOTICE_RE.test('✅ Ваша запись подтверждена.\nБудем ждать вас!')).toBe(false);
   });
+  test('не ловит близкие по виду служебные тексты и текст не с начала', () => {
+    expect(BOOKING_NOTICE_RE.test('Вы записаны на прием в «PERI CLINIC».')).toBe(false);                                        // нет даты и времени
+    expect(BOOKING_NOTICE_RE.test('Здравствуйте! Вы записаны на прием 09.10.2026 19:00 в «PERI CLINIC».')).toBe(false);          // фраза не с начала: якорь ^
+    expect(BOOKING_NOTICE_RE.test(' Вы записаны на прием 09.10.2026 19:00 в «PERI CLINIC».')).toBe(false);                      // ведущий пробел: якорь намеренно без trim
+    expect(BOOKING_NOTICE_RE.test('Ваша запись в «PERI CLINIC» перенесена.\nНовое время записи 09.10.2026 в 19:00')).toBe(false); // уведомление о переносе
+    expect(BOOKING_NOTICE_RE.test('❌ Ваша запись в «PERI CLINIC» 09.10.2026 в 19:00 отменена🙁')).toBe(false);                  // уведомление об отмене
+  });
 });
 
 const { renderDialogDay, detectNotified, nextDay, MSG_MAX, DAY_MAX, TAIL_MAX } =
@@ -112,5 +119,9 @@ describe('detectNotified / nextDay', () => {
     expect(detectNotified([{ ...notice, day: '2026-10-03', authored_by: null }], '2026-10-03')).toBe(false);
     expect(detectNotified([{ ...notice, day: '2026-10-03', direction: 'incoming' }], '2026-10-03')).toBe(false);
     expect(detectNotified([], '2026-10-03')).toBe(false);
+  });
+  test('системное сообщение с другим текстом (напоминание о записи) → false', () => {
+    const reminder = { direction: 'outgoing', authored_by: 'system', day: '2026-10-03', text: 'Здравствуйте!\nНапоминаем о записи в «PERI CLINIC»' };
+    expect(detectNotified([reminder], '2026-10-03')).toBe(false);
   });
 });
