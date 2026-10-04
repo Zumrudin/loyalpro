@@ -10,8 +10,14 @@
 // Обрезки: сообщение 600, диалог-день 4000; при переполнении первым уходит
 // хвост, затем НАЧАЛО дня (исход разговора — в конце). Санитизация — та же
 // sanitizeLine, что у промпта Милы (текст сообщений клиент-контролируемый).
+// ВХОД: сообщения ОДНОГО диалога по возрастанию времени (msg_ts, id). dayMessages —
+// сообщения того московского дня, который оцениваем; tailMessages — ТОЛЬКО более
+// ранние дни (строки следующего дня сюда не попадают: они нужны лишь detectNotified,
+// а он принимает ВСЕ загруженные строки диалога, включая следующий день).
+// day и m.day — текст 'YYYY-MM-DD' (московская дата), а не pg Date.
 // ============================================================
 const { sanitizeLine } = require('../agent/sanitize');
+const { isMedia } = require('../chat');
 const { BOOKING_NOTICE_RE } = require('./taxonomy');
 
 const MSG_MAX = 600;
@@ -25,14 +31,10 @@ function role(m) {
   return m.authored_by === 'system' ? 'авто' : 'клиника';
 }
 
-function isTextType(m) {
-  return !m.msg_type || /text/i.test(String(m.msg_type));
-}
-
 // Одна строка транскрипта или '' (пустое сообщение пропускается).
 function line(m) {
   let t = sanitizeLine(m.text, MSG_MAX);
-  if (!t && !isTextType(m)) t = '[файл]';
+  if (!t && isMedia(m.msg_type)) t = '[файл]';
   return t ? `${role(m)}: ${t}` : '';
 }
 
