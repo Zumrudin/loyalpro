@@ -1750,6 +1750,64 @@ async function runMigrations(client) {
     ON agent_events (salon_id, idempotency_key)
     WHERE idempotency_key IS NOT NULL
   `).catch(() => {});
+
+  // ── Вердикты ИИ по перепискам (спека docs/superpowers/specs/2026-10-04-dialog-verdicts-design.md) ──
+  // Единица — диалог-день (dialog_key + московская дата). Вечерний прогон делает
+  // UPSERT поверх утреннего по UNIQUE (salon_id, dialog_key, day). source_max_ts —
+  // max(msg_ts) сообщений дня на момент прогона: по нему плановый прогон решает,
+  // менялся ли диалог-день. phone — номер диалога (NULL у tdlib/MAX без номера),
+  // по нему список контактов берёт имя из clients. booked_crm — тот же критерий,
+  // что «записались» в статистике переписок; notified — авто «Вы записаны на прием».
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS dialog_verdicts (
+      id BIGSERIAL PRIMARY KEY,
+      salon_id INTEGER NOT NULL REFERENCES salons(id) ON DELETE CASCADE,
+      dialog_key TEXT NOT NULL,
+      channel TEXT,
+      phone TEXT,
+      day DATE NOT NULL,
+      status TEXT NOT NULL,
+      label TEXT,
+      note TEXT,
+      notified BOOLEAN NOT NULL DEFAULT FALSE,
+      booked_crm BOOLEAN NOT NULL DEFAULT FALSE,
+      taxonomy_version INTEGER NOT NULL,
+      model TEXT,
+      run_id BIGINT,
+      source_max_ts BIGINT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE (salon_id, dialog_key, day)
+    )
+  `).catch(() => {});
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS dialog_verdicts_day_idx
+      ON dialog_verdicts (salon_id, day, channel, status)
+  `).catch(() => {});
+  // Журнал прогонов: кнопка показывает последний, разбор ночного сбоя — любой.
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS dialog_verdict_runs (
+      id BIGSERIAL PRIMARY KEY,
+      salon_id INTEGER NOT NULL REFERENCES salons(id) ON DELETE CASCADE,
+      trigger TEXT NOT NULL,
+      period_from DATE NOT NULL,
+      period_to DATE NOT NULL,
+      recompute BOOLEAN NOT NULL DEFAULT FALSE,
+      status TEXT NOT NULL DEFAULT 'running',
+      requested INTEGER NOT NULL DEFAULT 0,
+      analyzed INTEGER NOT NULL DEFAULT 0,
+      failed INTEGER NOT NULL DEFAULT 0,
+      batches INTEGER NOT NULL DEFAULT 0,
+      model TEXT,
+      error TEXT,
+      started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      finished_at TIMESTAMPTZ
+    )
+  `).catch(() => {});
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS dialog_verdict_runs_salon_idx
+      ON dialog_verdict_runs (salon_id, id DESC)
+  `).catch(() => {});
 }
 
 module.exports = { runMigrations };

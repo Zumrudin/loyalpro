@@ -168,6 +168,9 @@ module.exports = {
   // не стартует), строки очереди пишутся всегда — иначе у инцидента не будет
   // журнала.
   AGENT_FOLLOWUP: process.env.AGENT_FOLLOWUP !== 'false',
+  // Вердикты ИИ по перепискам: DIALOG_VERDICTS=false гасит РОВНО плановые прогоны
+  // (крон 09:45 и 21:30 мск), кнопка «Проанализировать» работает всегда.
+  DIALOG_VERDICTS: process.env.DIALOG_VERDICTS !== 'false',
   // Провайдер базы знаний: 'aitunnel' | 'gemini' (старый релей/прямой вызов, откат).
   KB_PROVIDER:          process.env.KB_PROVIDER          || 'aitunnel',
 
