@@ -1752,6 +1752,47 @@ async function runMigrations(client) {
   `).catch(() => {});
 
   // ── Вердикты ИИ по перепискам (спека docs/superpowers/specs/2026-10-04-dialog-verdicts-design.md) ──
+  // Журнал создаётся первым: dialog_verdicts ссылается на него составным FK,
+  // чтобы run_id никогда не мог сослаться на прогон другого салона.
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS dialog_verdict_runs (
+      id BIGSERIAL PRIMARY KEY,
+      salon_id INTEGER NOT NULL REFERENCES salons(id) ON DELETE CASCADE,
+      trigger TEXT NOT NULL,
+      period_from DATE NOT NULL,
+      period_to DATE NOT NULL,
+      recompute BOOLEAN NOT NULL DEFAULT FALSE,
+      status TEXT NOT NULL DEFAULT 'running',
+      requested INTEGER NOT NULL DEFAULT 0,
+      analyzed INTEGER NOT NULL DEFAULT 0,
+      failed INTEGER NOT NULL DEFAULT 0,
+      batches INTEGER NOT NULL DEFAULT 0,
+      model TEXT,
+      error TEXT,
+      started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      finished_at TIMESTAMPTZ,
+      CONSTRAINT dialog_verdict_runs_salon_id_id_key UNIQUE (salon_id, id)
+    )
+  `);
+  // CREATE TABLE IF NOT EXISTS не дополняет уже существующую таблицу. Этот блок
+  // чинит частично применённую раннюю версию миграции перед добавлением FK.
+  await client.query(`
+    DO $$ BEGIN
+      IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conrelid = 'dialog_verdict_runs'::regclass
+          AND conname = 'dialog_verdict_runs_salon_id_id_key'
+      ) THEN
+        ALTER TABLE dialog_verdict_runs
+          ADD CONSTRAINT dialog_verdict_runs_salon_id_id_key UNIQUE (salon_id, id);
+      END IF;
+    END $$
+  `);
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS dialog_verdict_runs_salon_idx
+      ON dialog_verdict_runs (salon_id, id DESC)
+  `);
+
   // Единица — диалог-день (dialog_key + московская дата). Вечерний прогон делает
   // UPSERT поверх утреннего по UNIQUE (salon_id, dialog_key, day). source_max_ts —
   // max(msg_ts) сообщений дня на момент прогона: по нему плановый прогон решает,
@@ -1777,37 +1818,32 @@ async function runMigrations(client) {
       source_max_ts BIGINT,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      UNIQUE (salon_id, dialog_key, day)
+      UNIQUE (salon_id, dialog_key, day),
+      CONSTRAINT dialog_verdicts_run_fk FOREIGN KEY (salon_id, run_id)
+        REFERENCES dialog_verdict_runs (salon_id, id) ON DELETE NO ACTION
     )
-  `).catch(() => {});
+  `);
+  // Идемпотентное дополнение для случая, когда таблица успела создаться версией
+  // без FK. NO ACTION осознанно сохраняет salon_id NOT NULL: составной SET NULL
+  // попытался бы обнулить и tenant key. Удаление салона каскадно удаляет обе таблицы.
+  await client.query(`
+    DO $$ BEGIN
+      IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conrelid = 'dialog_verdicts'::regclass
+          AND conname = 'dialog_verdicts_run_fk'
+      ) THEN
+        ALTER TABLE dialog_verdicts
+          ADD CONSTRAINT dialog_verdicts_run_fk
+          FOREIGN KEY (salon_id, run_id)
+          REFERENCES dialog_verdict_runs (salon_id, id) ON DELETE NO ACTION;
+      END IF;
+    END $$
+  `);
   await client.query(`
     CREATE INDEX IF NOT EXISTS dialog_verdicts_day_idx
       ON dialog_verdicts (salon_id, day, channel, status)
-  `).catch(() => {});
-  // Журнал прогонов: кнопка показывает последний, разбор ночного сбоя — любой.
-  await client.query(`
-    CREATE TABLE IF NOT EXISTS dialog_verdict_runs (
-      id BIGSERIAL PRIMARY KEY,
-      salon_id INTEGER NOT NULL REFERENCES salons(id) ON DELETE CASCADE,
-      trigger TEXT NOT NULL,
-      period_from DATE NOT NULL,
-      period_to DATE NOT NULL,
-      recompute BOOLEAN NOT NULL DEFAULT FALSE,
-      status TEXT NOT NULL DEFAULT 'running',
-      requested INTEGER NOT NULL DEFAULT 0,
-      analyzed INTEGER NOT NULL DEFAULT 0,
-      failed INTEGER NOT NULL DEFAULT 0,
-      batches INTEGER NOT NULL DEFAULT 0,
-      model TEXT,
-      error TEXT,
-      started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      finished_at TIMESTAMPTZ
-    )
-  `).catch(() => {});
-  await client.query(`
-    CREATE INDEX IF NOT EXISTS dialog_verdict_runs_salon_idx
-      ON dialog_verdict_runs (salon_id, id DESC)
-  `).catch(() => {});
+  `);
 }
 
 module.exports = { runMigrations };
