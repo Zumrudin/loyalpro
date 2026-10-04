@@ -8,6 +8,13 @@ const { STATUS_CODES } = require('./taxonomy');
 
 const NOTE_MAX = 120;
 const LABEL_MAX = 60;
+const REASON_MAX = 20;
+const DIAGNOSTIC_TOKEN_MAX = 30;
+
+function diagnosticToken(value) {
+  const token = sanitizeLine(value, DIAGNOSTIC_TOKEN_MAX);
+  return /^[A-Za-z0-9_-]+$/.test(token) ? token : '[некорректный формат]';
+}
 
 function extractJson(text) {
   let s = String(text == null ? '' : text).trim();
@@ -26,20 +33,24 @@ function parseVerdicts(text, expectedIds) {
   const list = data && Array.isArray(data.verdicts) ? data.verdicts : null;
   if (!list) return { ok: false, reasons: ['нет массива verdicts'] };
   const reasons = [];
+  const addReason = reason => {
+    if (reasons.length < REASON_MAX) reasons.push(reason);
+  };
   const seen = new Map();
   for (const v of list) {
-    if (!v || typeof v.id !== 'string') { reasons.push('элемент без id'); continue; }
-    if (!expectedIds.includes(v.id)) { reasons.push(`неизвестный id ${v.id}`); continue; }
-    if (seen.has(v.id)) { reasons.push(`id ${v.id} повторяется`); continue; }
+    if (reasons.length >= REASON_MAX) break;
+    if (!v || typeof v.id !== 'string') { addReason('элемент без id'); continue; }
+    if (!expectedIds.includes(v.id)) { addReason(`неизвестный id ${diagnosticToken(v.id)}`); continue; }
+    if (seen.has(v.id)) { addReason(`id ${diagnosticToken(v.id)} повторяется`); continue; }
     const status = String(v.status == null ? '' : v.status).trim().toLowerCase();
-    if (!STATUS_CODES.includes(status)) { reasons.push(`${v.id}: статус «${sanitizeLine(v.status, 30)}» вне списка`); continue; }
+    if (!STATUS_CODES.includes(status)) { addReason(`${diagnosticToken(v.id)}: статус «${diagnosticToken(v.status)}» вне списка`); continue; }
     const label = sanitizeLine(v.label, LABEL_MAX) || null;
-    if (status === 'other' && !label) { reasons.push(`${v.id}: other без label`); continue; }
+    if (status === 'other' && !label) { addReason(`${diagnosticToken(v.id)}: other без label`); continue; }
     seen.set(v.id, { id: v.id, status, label: status === 'other' ? label : null, note: sanitizeLine(v.note, NOTE_MAX) || null });
   }
-  for (const id of expectedIds) if (!seen.has(id)) reasons.push(`нет вердикта для ${id}`);
+  for (const id of expectedIds) if (!seen.has(id)) addReason(`нет вердикта для ${diagnosticToken(id)}`);
   if (reasons.length) return { ok: false, reasons };
   return { ok: true, verdicts: expectedIds.map(id => seen.get(id)) };
 }
 
-module.exports = { parseVerdicts, extractJson, NOTE_MAX, LABEL_MAX };
+module.exports = { parseVerdicts, extractJson, NOTE_MAX, LABEL_MAX, REASON_MAX };

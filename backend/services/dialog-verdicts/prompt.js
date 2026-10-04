@@ -4,6 +4,10 @@
 // (providers/codex-instructions.md) говорит модели «ты отвечаешь за Милу», и без
 // этого абзаца ответ мог бы оказаться репликой клиенту вместо JSON.
 const { STATUSES } = require('./taxonomy');
+const { sanitizeLine } = require('../agent/sanitize');
+
+const RETRY_REASONS_MAX = 12;
+const RETRY_REASON_MAX = 120;
 
 const SYSTEM_PROMPT = `Ты — аналитик переписок косметологической клиники. Ты НЕ отвечаешь клиенту и не пишешь сообщений: ты только классифицируешь уже состоявшиеся разговоры.
 
@@ -30,7 +34,11 @@ function buildUserMessage(items) {
 }
 
 function retrySuffix(reasons) {
-  return `\n\nВ прошлый раз ответ был невалиден: ${reasons.join('; ')}. Верни корректный JSON по форме из инструкции, с каждым id ровно один раз.`;
+  const safe = (Array.isArray(reasons) ? reasons : [])
+    .slice(0, RETRY_REASONS_MAX)
+    .map(reason => sanitizeLine(reason, RETRY_REASON_MAX))
+    .filter(Boolean);
+  return `\n\nВ прошлый раз ответ был невалиден: ${safe.join('; ')}. Верни корректный JSON по форме из инструкции, с каждым id ровно один раз.`;
 }
 
-module.exports = { SYSTEM_PROMPT, buildUserMessage, retrySuffix };
+module.exports = { SYSTEM_PROMPT, buildUserMessage, retrySuffix, RETRY_REASONS_MAX, RETRY_REASON_MAX };
