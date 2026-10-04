@@ -96,3 +96,26 @@ test('dashboard.js и dashboard-messengers.js живут в одной глоб�
   assert.strictEqual(typeof ctx.loadDashboard, 'function');
   assert.strictEqual(ctx.msgPct(1, 4), '25%');
 });
+
+// Ошибка ручки (400 «период не больше 731 дней») доходит до подписи плитки
+// текстом, а не глотается в «нет данных»; без причины — прежняя заглушка.
+test('loadMessengerStats: текст ошибки ручки попадает в подпись плитки через textContent', async () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const vm = require('node:vm');
+  const els = {};
+  const el = id => (els[id] ||= { textContent: '', innerHTML: '' });
+  const ctx = vm.createContext({
+    console: { warn() {} },
+    document: { getElementById: el, documentElement: { getAttribute: () => null } },
+    esc: s => String(s),
+    animateCount() {},
+    api: async () => { throw new Error('период не больше 731 дней'); },
+  });
+  vm.runInContext(fs.readFileSync(path.join(__dirname, 'dashboard-messengers.js'), 'utf8'), ctx);
+  await ctx.loadMessengerStats('?from=2020-01-01&to=2026-10-03', 'x');
+  assert.strictEqual(el('msgDialogsSub').textContent, 'период не больше 731 дней');
+  assert.strictEqual(el('msgDialogs').textContent, '—');
+  ctx.clearMessengerStats();
+  assert.strictEqual(el('msgDialogsSub').textContent, 'нет данных за период');
+});

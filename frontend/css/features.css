@@ -1090,3 +1090,13 @@ body.kb-editor .kb-admin-only { display: inline-flex; }
 .msg-tbl .conv b{min-width:34px;text-align:right}
 .msg-foot{font-size:11px;color:var(--t3);margin-top:12px;line-height:1.5}
 @media(max-width:900px){.msg-tiles{grid-template-columns:1fr}}
+/* Карточки ряда — grid-элементы с min-width:auto: min-content таблицы (пять колонок
+   ≈ 420px) растягивал ОБЕ карточки шире вьюпорта телефона (464px при 390), и
+   overflow-x:auto на самой таблице этого не отменяет — нужен min-width:0 на элементе сетки. */
+.msg-g32>.card{min-width:0}
+/* Телефон: таблица скроллится ВНУТРИ карточки, полоска конверсии и подпись канала ужимаются. */
+@media(max-width:700px){
+  .msg-tbl{display:block;overflow-x:auto}
+  .msg-tbl .ch{white-space:normal}
+  .msg-tbl .conv .pb{width:40px}
+}

@@ -259,6 +259,10 @@ async function loadDashboard() {
       dashRange.from = r.from; dashRange.to = r.to;
     }
     const q = '?from=' + dashRange.from + '&to=' + dashRange.to;
+    // Блок «Переписки в мессенджерах» — отдельная ручка, стартует ПАРАЛЛЕЛЬНО
+    // основному запросу; свой try/catch внутри: сбой не гасит остальной дашборд.
+    const msgP = typeof loadMessengerStats === 'function'
+      ? loadMessengerStats(q, formatPeriodLabel(dashRange.from, dashRange.to)) : null;
     const d = await api('GET', '/api/analytics/dashboard' + q);
     const s = d.stats;
     const periodSuffix = 'за ' + formatPeriodLabel(dashRange.from, dashRange.to);
@@ -321,12 +325,9 @@ async function loadDashboard() {
       console.warn('Bonus chart failed:', e);
       buildBfChart([]);
     }
-    // Блок «Переписки в мессенджерах» — отдельная ручка, свой try/catch внутри:
-    // сбой статистики переписок не должен гасить остальной дашборд.
-    if (typeof loadMessengerStats === 'function') {
-      await loadMessengerStats(q, formatPeriodLabel(dashRange.from, dashRange.to));
-    }
     buildLvlChart(d.levelDist);
+    // Плитки переписок должны быть заполнены до каскада карточек.
+    if (msgP) await msgP;
     if (d.syncStatus?.finished_at) {
       const _syncTxt = 'Синхр.: ' + timeSince(d.syncStatus.finished_at);
       document.getElementById('syncSt').textContent = _syncTxt;

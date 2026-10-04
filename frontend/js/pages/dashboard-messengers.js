@@ -147,10 +147,12 @@ function renderMessengerStats(data, periodLabel) {
 }
 
 // Пустое/аварийное состояние: блок не прячем, показываем прочерки.
-function clearMessengerStats() {
+// reason — текст ошибки ручки (например, 400 «период не больше 731 дней»):
+// пользователь читает причину, а не безликое «нет данных». Только textContent.
+function clearMessengerStats(reason) {
   ['msgDialogs', 'msgFirst', 'msgBooked'].forEach(id => msgSetText(id, '—'));
   ['msgFirstShare', 'msgBookedPct', 'msgPeriodSub'].forEach(id => msgSetText(id, ''));
-  msgSetText('msgDialogsSub', 'нет данных за период');
+  msgSetText('msgDialogsSub', reason || 'нет данных за период');
   msgSetSub('msgFirstSub', '', '');
   msgSetSub('msgBookedSub', '', '');
   renderMessengerTable([]);
@@ -164,7 +166,7 @@ async function loadMessengerStats(q, periodLabel) {
     renderMessengerStats(data, periodLabel);
   } catch (e) {
     console.warn('Messenger stats failed:', e);
-    clearMessengerStats();
+    clearMessengerStats(e && e.message);
   }
 }
 
