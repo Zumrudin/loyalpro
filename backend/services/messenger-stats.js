@@ -15,6 +15,7 @@
 // ============================================================
 
 const { DIALOG_KEY_SQL } = require('./chat');
+const { STATUS_CODES, UNANALYZED } = require('./dialog-verdicts/taxonomy');
 
 const CHANNEL_LABELS = { tdlib: 'Telegram', whatsapp: 'WhatsApp', max: 'MAX' };
 
@@ -53,8 +54,16 @@ function dateKey(v) {
 
 const num = v => Number(v) || 0;
 
+const VERDICT_KEYS = [...STATUS_CODES, UNANALYZED];
+
+function emptyVerdicts() {
+  const verdicts = {};
+  for (const key of VERDICT_KEYS) verdicts[key] = 0;
+  return verdicts;
+}
+
 function emptyStat() {
-  return { dialogs: 0, clientFirst: 0, clientFirstNoPhone: 0, bookedSameDay: 0, bookedByAgent: 0 };
+  return { dialogs: 0, clientFirst: 0, clientFirstNoPhone: 0, bookedSameDay: 0, bookedByAgent: 0, verdicts: emptyVerdicts() };
 }
 
 function addRow(acc, r) {
@@ -63,6 +72,7 @@ function addRow(acc, r) {
   acc.clientFirstNoPhone += num(r.client_first_no_phone);
   acc.bookedSameDay += num(r.booked_same_day);
   acc.bookedByAgent += num(r.booked_by_agent);
+  for (const key of VERDICT_KEYS) acc.verdicts[key] += num(r['v_' + key]);
 }
 
 // rows: [{date, channel, dialogs, client_first, client_first_no_phone, booked_same_day, booked_by_agent}]
@@ -86,6 +96,44 @@ function summarize(rows, { from, to }) {
   return { period: { from, to }, totals, byChannel, daily: [...byDay.values()] };
 }
 
+// Общие SQL-фрагменты переиспользует dialog-verdicts/store.js. Множество
+// диалог-дней и критерий записи должны совпадать со статистикой.
+const PERSONAL_NON_SYSTEM_SQL = `COALESCE(chat_id,'') NOT LIKE '-%'
+    AND COALESCE(chat_id,'') NOT LIKE '%@g.us'
+    AND COALESCE(chat_id,'') NOT LIKE '%@broadcast'
+    AND COALESCE(authored_by,'') <> 'system'`;
+
+function phoneFormsSql(p10Expr) {
+  return `ARRAY['+7' || ${p10Expr}, '7' || ${p10Expr}, '8' || ${p10Expr}, ${p10Expr}]`;
+}
+
+function recCteSql({ salon, from, to }) {
+  return `
+  SELECT r.client_id, r.yclients_client_id,
+         left(r.raw_payload->>'create_date', 10) AS cd,
+         EXISTS (SELECT 1 FROM agent_events e
+                  WHERE e.salon_id = r.salon_id AND e.kind = 'booking_created'
+                    AND e.payload->>'record_id' = r.yclients_record_id::text) AS by_agent
+  FROM records r
+  WHERE r.salon_id = ${salon} AND COALESCE(r.status,'') <> 'deleted'
+    AND r.created_at >= (${from}::date::timestamp AT TIME ZONE 'Europe/Moscow') - interval '1 day'
+    AND left(r.raw_payload->>'create_date', 10) BETWEEN ${from}::text AND ${to}::text`;
+}
+
+const BOOKED_CTE_SQL = `
+  SELECT x.dkey, x.d, bool_or(x.by_agent) AS by_agent FROM (
+    SELECT cl.dkey, cl.d, rec.by_agent FROM cl JOIN rec
+      ON rec.client_id = cl.client_id AND rec.cd = to_char(cl.d, 'YYYY-MM-DD')
+    UNION ALL
+    SELECT cl.dkey, cl.d, rec.by_agent FROM cl JOIN rec
+      ON rec.yclients_client_id = cl.yclients_client_id AND rec.cd = to_char(cl.d, 'YYYY-MM-DD')
+  ) x GROUP BY x.dkey, x.d`;
+
+const VERDICT_COLS_SQL = STATUS_CODES
+  .map(code => `COUNT(*) FILTER (WHERE vstatus = '${code}')::int AS v_${code}`)
+  .concat([`COUNT(*) FILTER (WHERE vstatus IS NULL)::int AS v_${UNANALYZED}`])
+  .join(',\n  ');
+
 // $1 salon_id, $2 from 'YYYY-MM-DD', $3 to 'YYYY-MM-DD' (включительно, мск).
 // Экспортируется ради живого EXPLAIN ANALYZE на дев-БД (как LEASE_SQL воркеров):
 // scripts/messenger-stats-explain.js. Порог спеки — ≤300 мс на месячном периоде.
@@ -103,10 +151,7 @@ WITH m AS (
   WHERE salon_id = $1
     AND msg_ts IS NOT NULL
     AND (to_timestamp(msg_ts) AT TIME ZONE 'Europe/Moscow')::date BETWEEN $2::date AND $3::date
-    AND COALESCE(chat_id,'') NOT LIKE '-%'
-    AND COALESCE(chat_id,'') NOT LIKE '%@g.us'
-    AND COALESCE(chat_id,'') NOT LIKE '%@broadcast'
-    AND COALESCE(authored_by,'') <> 'system'
+    AND ${PERSONAL_NON_SYSTEM_SQL}
 ),
 -- p10 берётся из первого сообщения дня: по построению DIALOG_KEY_SQL dkey = phone,
 -- когда номер есть, поэтому у всех сообщений диалог-дня p10 один и тот же.
@@ -118,46 +163,33 @@ cl AS (
   SELECT dd.dkey, dd.d, c.id AS client_id, c.yclients_client_id
   FROM dd JOIN clients c
     ON c.salon_id = $1 AND dd.p10 IS NOT NULL
-   AND c.phone = ANY (ARRAY['+7' || dd.p10, '7' || dd.p10, '8' || dd.p10, dd.p10])
+   AND c.phone = ANY (${phoneFormsSql('dd.p10')})
 ),
 -- created_at не годится как ДЕНЬ записи (время вставки нашей строки), но годится
 -- как НИЖНЯЯ граница: строка не может появиться раньше create_date; запас сутки
 -- на расхождение часов. Без этой границы rec читает весь records с детоастом
 -- raw_payload (O(всех записей), ~130 мс на 13 тыс. строк).
-rec AS (
-  SELECT r.client_id, r.yclients_client_id,
-         left(r.raw_payload->>'create_date', 10) AS cd,
-         EXISTS (SELECT 1 FROM agent_events e
-                  WHERE e.salon_id = r.salon_id AND e.kind = 'booking_created'
-                    AND e.payload->>'record_id' = r.yclients_record_id::text) AS by_agent
-  FROM records r
-  WHERE r.salon_id = $1 AND COALESCE(r.status,'') <> 'deleted'
-    AND r.created_at >= ($2::date::timestamp AT TIME ZONE 'Europe/Moscow') - interval '1 day'
-    -- ::text обязателен: pg уже вывел тип $2/$3 как date из CTE m, без него «text >= date».
-    AND left(r.raw_payload->>'create_date', 10) BETWEEN $2::text AND $3::text
+rec AS (${recCteSql({ salon: '$1', from: '$2', to: '$3' })}
 ),
 -- MATERIALIZED обязателен (PG ≥ 12): без него планировщик перезапускает агрегат
 -- на каждый диалог-день (loops ≈ число диалог-дней), и выигрыша перед
 -- коррелированными EXISTS нет.
-booked AS MATERIALIZED (
-  SELECT x.dkey, x.d, bool_or(x.by_agent) AS by_agent FROM (
-    SELECT cl.dkey, cl.d, rec.by_agent FROM cl JOIN rec
-      ON rec.client_id = cl.client_id AND rec.cd = to_char(cl.d, 'YYYY-MM-DD')
-    UNION ALL
-    SELECT cl.dkey, cl.d, rec.by_agent FROM cl JOIN rec
-      ON rec.yclients_client_id = cl.yclients_client_id AND rec.cd = to_char(cl.d, 'YYYY-MM-DD')
-  ) x GROUP BY x.dkey, x.d
+booked AS MATERIALIZED (${BOOKED_CTE_SQL}
 ),
 flags AS (
-  SELECT dd.*, (b.dkey IS NOT NULL) AS booked, COALESCE(b.by_agent, false) AS booked_by_agent
+  SELECT dd.*, (b.dkey IS NOT NULL) AS booked, COALESCE(b.by_agent, false) AS booked_by_agent,
+         v.status AS vstatus
   FROM dd LEFT JOIN booked b USING (dkey, d)
+  LEFT JOIN dialog_verdicts v
+    ON v.salon_id = $1 AND v.dialog_key = dd.dkey AND v.day = dd.d
 )
 SELECT to_char(d, 'YYYY-MM-DD') AS date, first_channel AS channel,
   COUNT(*)::int AS dialogs,
   COUNT(*) FILTER (WHERE first_dir = 'incoming')::int AS client_first,
   COUNT(*) FILTER (WHERE first_dir = 'incoming' AND p10 IS NULL)::int AS client_first_no_phone,
   COUNT(*) FILTER (WHERE first_dir = 'incoming' AND booked)::int AS booked_same_day,
-  COUNT(*) FILTER (WHERE first_dir = 'incoming' AND booked_by_agent)::int AS booked_by_agent
+  COUNT(*) FILTER (WHERE first_dir = 'incoming' AND booked_by_agent)::int AS booked_by_agent,
+  ${VERDICT_COLS_SQL}
 FROM flags
 GROUP BY d, first_channel
 ORDER BY d, first_channel`;
@@ -167,4 +199,8 @@ async function loadMessengerStats(salonId, from, to, deps = {}) {
   return db.any(MESSENGER_STATS_SQL, [salonId, from, to]);
 }
 
-module.exports = { summarize, channelLabel, eachDate, periodDays, MAX_PERIOD_DAYS, CHANNEL_LABELS, MESSENGER_STATS_SQL, loadMessengerStats };
+module.exports = {
+  summarize, channelLabel, eachDate, periodDays, MAX_PERIOD_DAYS, CHANNEL_LABELS,
+  MESSENGER_STATS_SQL, loadMessengerStats, PERSONAL_NON_SYSTEM_SQL,
+  phoneFormsSql, recCteSql, BOOKED_CTE_SQL, VERDICT_KEYS, emptyVerdicts,
+};

@@ -52,11 +52,16 @@ if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to)) {
     `${c.label}:${c.dialogs}/${c.clientFirst}/${c.bookedSameDay}/${c.bookedByAgent}`).join(' ') || '(пусто)');
   console.log(`daily ${s.daily.length} дн.`);
 
-  const bad = rows.filter(r =>
-    !(Number(r.dialogs) >= Number(r.client_first)
+  const bad = rows.filter(r => {
+    const verdictSum = Object.keys(r)
+      .filter(key => key.startsWith('v_'))
+      .reduce((sum, key) => sum + Number(r[key] || 0), 0);
+    return !(Number(r.dialogs) >= Number(r.client_first)
       && Number(r.client_first) >= Number(r.booked_same_day)
       && Number(r.booked_same_day) >= Number(r.booked_by_agent)
-      && Number(r.client_first_no_phone) <= Number(r.client_first)));
+      && Number(r.client_first_no_phone) <= Number(r.client_first)
+      && verdictSum === Number(r.dialogs));
+  });
   if (bad.length) {
     console.error(`ИНВАРИАНТ НАРУШЕН в ${bad.length} строк(ах):`, JSON.stringify(bad.slice(0, 5)));
     process.exit(1);

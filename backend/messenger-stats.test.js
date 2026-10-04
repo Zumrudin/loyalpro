@@ -43,13 +43,13 @@ describe('messenger-stats: summarize', () => {
   const out = summarize(rows, { from: '2026-10-01', to: '2026-10-03' });
 
   test('итоги — суммы по всем строкам, строки pg приводятся к числам', () => {
-    expect(out.totals).toEqual({ dialogs: 11, clientFirst: 6, clientFirstNoPhone: 1, bookedSameDay: 3, bookedByAgent: 1 });
+    expect(out.totals).toMatchObject({ dialogs: 11, clientFirst: 6, clientFirstNoPhone: 1, bookedSameDay: 3, bookedByAgent: 1 });
     expect(out.period).toEqual({ from: '2026-10-01', to: '2026-10-03' });
   });
 
   test('разрез по каналам: метка, сортировка по dialogs убыванию', () => {
     expect(out.byChannel.map(c => c.channel)).toEqual(['tdlib', 'whatsapp']);
-    expect(out.byChannel[0]).toEqual({ channel: 'tdlib', label: 'Telegram', dialogs: 9, clientFirst: 4, clientFirstNoPhone: 1, bookedSameDay: 2, bookedByAgent: 1 });
+    expect(out.byChannel[0]).toMatchObject({ channel: 'tdlib', label: 'Telegram', dialogs: 9, clientFirst: 4, clientFirstNoPhone: 1, bookedSameDay: 2, bookedByAgent: 1 });
   });
 
   test('ряд по дням покрывает каждый день периода, пустые дни — нулями', () => {
@@ -75,7 +75,7 @@ describe('messenger-stats: summarize', () => {
 
   test('пустой вход → нули, пустые каналы, ряд из нулей', () => {
     const e = summarize([], { from: '2026-10-02', to: '2026-10-03' });
-    expect(e.totals).toEqual({ dialogs: 0, clientFirst: 0, clientFirstNoPhone: 0, bookedSameDay: 0, bookedByAgent: 0 });
+    expect(e.totals).toMatchObject({ dialogs: 0, clientFirst: 0, clientFirstNoPhone: 0, bookedSameDay: 0, bookedByAgent: 0 });
     expect(e.byChannel).toEqual([]);
     expect(e.daily).toEqual([
       { date: '2026-10-02', clientFirst: 0, bookedSameDay: 0 },
@@ -88,6 +88,48 @@ describe('messenger-stats: summarize', () => {
     const r = summarize([{ date: new Date(2026, 9, 2), channel: 'max', dialogs: 1, client_first: 1, client_first_no_phone: 0, booked_same_day: 0, booked_by_agent: 0 }],
       { from: '2026-10-02', to: '2026-10-02' });
     expect(r.daily).toEqual([{ date: '2026-10-02', clientFirst: 1, bookedSameDay: 0 }]);
+  });
+});
+
+describe('messenger-stats: вердикты', () => {
+  const { MESSENGER_STATS_SQL, PERSONAL_NON_SYSTEM_SQL, phoneFormsSql, recCteSql, BOOKED_CTE_SQL } = require('./services/messenger-stats');
+  const { STATUS_CODES } = require('./services/dialog-verdicts/taxonomy');
+
+  test('SQL сводки джойнит dialog_verdicts и считает колонку на каждый статус плюс unanalyzed', () => {
+    expect(MESSENGER_STATS_SQL).toContain('LEFT JOIN dialog_verdicts');
+    for (const c of STATUS_CODES) expect(MESSENGER_STATS_SQL).toContain(`AS v_${c}`);
+    expect(MESSENGER_STATS_SQL).toContain('AS v_unanalyzed');
+  });
+
+  test('общие фрагменты экспортируются и подставляются', () => {
+    expect(PERSONAL_NON_SYSTEM_SQL).toContain(`<> 'system'`);
+    expect(phoneFormsSql('x.p10')).toBe(`ARRAY['+7' || x.p10, '7' || x.p10, '8' || x.p10, x.p10]`);
+    const rec = recCteSql({ salon: '$1', from: '$3', to: '$3' });
+    expect(rec).toContain('r.salon_id = $1');
+    expect(rec).toContain('BETWEEN $3::text AND $3::text');
+    expect(BOOKED_CTE_SQL).toContain('FROM cl JOIN rec');
+    expect(MESSENGER_STATS_SQL).toContain(recCteSql({ salon: '$1', from: '$2', to: '$3' }));
+    expect(MESSENGER_STATS_SQL).toContain(BOOKED_CTE_SQL);
+  });
+
+  test('summarize собирает verdicts по каналу и в итогах; сумма статусов равна dialogs', () => {
+    const rows = [
+      { date: '2026-10-01', channel: 'tdlib', dialogs: 5, client_first: 3, client_first_no_phone: 0, booked_same_day: 2, booked_by_agent: 0,
+        v_booked: 2, v_declined: 1, v_pending: 0, v_reschedule: 0, v_question: 1, v_broadcast_reply: 0, v_no_dialog: 0, v_other: 0, v_unanalyzed: 1 },
+      { date: '2026-10-02', channel: 'tdlib', dialogs: '2', client_first: '1', client_first_no_phone: '0', booked_same_day: '0', booked_by_agent: '0',
+        v_booked: '0', v_declined: '0', v_pending: '1', v_reschedule: '0', v_question: '0', v_broadcast_reply: '0', v_no_dialog: '0', v_other: '0', v_unanalyzed: '1' },
+    ];
+    const out = summarize(rows, { from: '2026-10-01', to: '2026-10-02' });
+    expect(out.byChannel[0].verdicts).toEqual({ booked: 2, declined: 1, pending: 1, reschedule: 0, question: 1, broadcast_reply: 0, no_dialog: 0, other: 0, unanalyzed: 2 });
+    expect(out.totals.verdicts).toEqual(out.byChannel[0].verdicts);
+    const sum = Object.values(out.totals.verdicts).reduce((a, b) => a + b, 0);
+    expect(sum).toBe(out.totals.dialogs);
+  });
+
+  test('строки без v_* колонок (старый вызов) дают нули, а не NaN', () => {
+    const out = summarize([{ date: '2026-10-01', channel: 'max', dialogs: 1, client_first: 1, client_first_no_phone: 0, booked_same_day: 0, booked_by_agent: 0 }], { from: '2026-10-01', to: '2026-10-01' });
+    expect(out.totals.verdicts.booked).toBe(0);
+    expect(out.totals.verdicts.unanalyzed).toBe(0);
   });
 });
 
