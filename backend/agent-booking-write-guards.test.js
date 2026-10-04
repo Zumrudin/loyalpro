@@ -64,6 +64,44 @@ test('explicitly changing the target phone cannot bypass transfer intent', async
   expect(booking.createBookingRecord).not.toHaveBeenCalled();
 });
 
+test.each([
+  'Да, запишите на отдельный новый визит 2 октября в 15:00. Визит 1 октября остаётся.',
+  'Да, нужна ещё одна отдельная запись на 2 октября в 15:00.',
+])('additional visit wording preserves the existing booking: %s', async patientLastText => {
+  const result = await create.run(1, { ...input, patient_confirmed: true }, {
+    ...ctx(), rescheduleRequested: false, patientLastText,
+    patientRecentTexts: ['Мне нужна дополнительная запись', patientLastText],
+    previousAssistantText: 'Дополнительный визит 2 октября в 15:00, прежнюю запись сохраняем. Записать?',
+  });
+  expect(result.created).toBe(true);
+  expect(booking.createBookingRecord).toHaveBeenCalledTimes(1);
+  expect(modify.rescheduleBookingRecord).not.toHaveBeenCalled();
+});
+
+test.each(['Нет, отдельный новый визит не нужен', 'Можно ещё одну отдельную запись?',
+  'Перенесите запись вместо дополнительного визита'])('additional wording does not bypass refusal or transfer: %s', async patientLastText => {
+  const result = await create.run(1, { ...input, patient_confirmed: true }, {
+    ...ctx(), rescheduleRequested: false, patientLastText,
+    patientRecentTexts: ['Мне нужна дополнительная запись', patientLastText],
+    previousAssistantText: 'Дополнительный визит 2 октября в 15:00, прежнюю запись сохраняем. Записать?',
+  });
+  expect(result.error).toBeTruthy();
+  expect(booking.createBookingRecord).not.toHaveBeenCalled();
+});
+
+test.each([
+  'Да, отдельный новый визит 2 октября в 15:00. Визит 3 октября остаётся.',
+  'Да, отдельный новый визит 3 октября в 15:00. Визит 1 октября остаётся.',
+  'Да, отдельный новый визит 2 октября в 15:00 или 3 октября в 15:00.',
+])('preserving a visit cannot hide unknown or conflicting target dates: %s', async patientLastText => {
+  const result = await create.run(1, { ...input, patient_confirmed: true }, {
+    ...ctx(), rescheduleRequested: false, patientLastText,
+    previousAssistantText: 'Дополнительный визит 2 октября в 15:00, прежнюю запись сохраняем. Записать?',
+  });
+  expect(result.needs_confirmation).toBe(true);
+  expect(booking.createBookingRecord).not.toHaveBeenCalled();
+});
+
 test('a later refusal cannot reuse an older additional-booking request', async () => {
   const result = await create.run(1, input, { ...ctx(), rescheduleRequested: false,
     previousAssistantText: 'Дополнительная запись на 2 октября в 15:00?', patientLastText: 'Нет',

@@ -5,6 +5,7 @@
 const { extractTimes } = require('./reply-guard');
 const { fmtWhen } = require('./bookings-block');
 const { sanitizeLine } = require('./sanitize');
+const { mentionsAdditionalVisit } = require('./additional-visit');
 
 // Уточнение «уже есть запись» перечисляет СТАРЫЕ записи (даты, время) перед новым
 // вариантом. Их времена не должны сопоставляться с кэшем вариантов: иначе чужой
@@ -228,6 +229,7 @@ function confirmationReply(result) {
 function isBookingCheck(text) {
   const s = String(text || '').toLowerCase();
   // A read-only question about an existing appointment, never a change request.
+  if (mentionsAdditionalVisit(s)) return false;
   if (/перенес|перенос|отмен|перезап|запиши|запишите|записаться|запишусь|хочу запис|мам|муж|жен[ау]|подруг/u.test(s)) return false;
   return /запис/u.test(s) && /к кому|у кого|к какому|к разным|к одному|точно|проверь|проверить|правильно|ты.*к\s|вы.*к\s|меня.*к\s|я.*к\s|(?:^|\s)к\s.+запис|запис(?:ала|али|ан[аы]?|аны).*к\s/u.test(s);
 }

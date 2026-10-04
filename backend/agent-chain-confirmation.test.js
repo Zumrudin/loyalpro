@@ -96,6 +96,14 @@ test('confirmation contains actual staff and all services, but no internal ident
   expect(text).not.toContain('987654');
 });
 
+test.each([
+  'Услуга А, к Анне 2 октября после 14:00. Это отдельная новая запись, запись на 1 октября оставляем.',
+  'Мне нужна ещё одна отдельная запись на услугу А к Анне. Прежнюю запись сохраните.',
+  'Да, подтверждаю дополнительную запись на 2 октября в 15:00 к Анне. Прежнюю запись оставляем.',
+])('additional visit must reach the dialog handler: %s', text => {
+  expect(guard.isBookingCheck(text)).toBe(false);
+});
+
 // Continuous multi-service visit: only its start was offered to the patient.
 const compactOffer = { booking_mode: 'single_record', chain: [
   { ...link(1, 'Анна', '15:00'), seance_length: 1800 },

@@ -200,6 +200,21 @@ describe('chain booking incident: truthful staff and enforced choice', () => {
     expect(out.sideEffect).toBe(false);
   });
 
+  test.each([
+    'Мне нужна ещё одна отдельная запись к Анне. Прежнюю запись сохраните.',
+    'Подтверждаю дополнительную запись к Анне. Прежнюю запись оставляем.',
+  ])('additional request reaches the provider instead of a CRM status shortcut: %s', async content => {
+    const deps = makeDeps({
+      history: { loadTranscript: jest.fn(async () => ({ messages: [{ role: 'user', content }], watermark: 100 })) },
+      listBookings: { run: jest.fn(async () => ({ bookings: [rawBooking] })) },
+    });
+    deps.provider.createMessage.mockResolvedValueOnce({ text: 'На какую дату нужен дополнительный визит?', toolCalls: [] });
+    const out = await orchestrator.runDialog(1, 'k', { deps, ctx: { phone: 'test-owner' } });
+    expect(deps.provider.createMessage).toHaveBeenCalledTimes(1);
+    expect(out.replies.join('\n')).toContain('дополнительный визит');
+    expect(deps.registry.handlers.create_booking).not.toHaveBeenCalled();
+  });
+
   test('rejected chain stops a batch before a fallback create_booking can bypass it', async () => {
     const deps = makeDeps({ handlers: { book_chain: jest.fn(async () => ({
       error: 'unconfirmed', needs_confirmation: true, matching_option_ids: ['o13'], records: [],

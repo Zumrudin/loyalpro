@@ -4,6 +4,7 @@ const { extractTimes } = require('./reply-guard');
 const { resolveDate } = require('./offer-attribution');
 const { stripAllStamps } = require('./transcript-time');
 const { moscowDateKey, moscowHHMM } = require('./slot-evidence');
+const { mentionsAdditionalVisit } = require('./additional-visit');
 
 // Capabilities are server-only Symbols, bound to exact targets. Tool JSON cannot
 // opt out of consent or turn a rejected transfer into creation.
@@ -15,6 +16,18 @@ const RELATIVE = /(?<!\p{L})(?:послезавтра|завтра|сегодн�
 const WEEKDAY = /(?<!\p{L})(?:понедельник|вторник|сред[ауе]|четверг|пятниц[ауе]|суббот[ауе]|воскресенье)(?!\p{L})/giu;
 const TIME = /(?<!\d)(?:[01]?\d|2[0-3])[:.][0-5]\d(?!\d)/g;
 const clean = s => stripAllStamps(String(s || '')).replace(/\*/g, '').trim();
+
+// A separate sentence preserving a verified old visit is not a second choice
+// of date for the new one. Do not discard unknown dates or mixed instructions.
+const RETAINED_VISIT = new RegExp(`(^|[.!?]\\s+|\\n)\\s*(?:визит|запись|при[её]м)\\s+(?:на\\s+)?(${DATE.source})\\s+(?:оста[её]тся|оставляем|сохраняем)(?=[.!?](?:\\s|$)|$)`, 'giu');
+function withoutRetainedVisit(text, ctx, nowMs) {
+  const existingDates = new Set((Array.isArray(ctx.liveBookings) ? ctx.liveBookings : [])
+    .map(b => Date.parse(b.datetime)).filter(Number.isFinite).map(ms => moscowDateKey(ms)));
+  return text.replace(RETAINED_VISIT, (whole, boundary, date) => {
+    const { keys } = datesIn(date, nowMs);
+    return keys.length === 1 && existingDates.has(keys[0]) ? boundary : whole;
+  });
+}
 
 function datesIn(text, nowMs) {
   const keys = [];
@@ -48,7 +61,7 @@ function transferConfirmed(targets, ctx, multiple = false, allowAdditional = fal
   if (/\d\s*(?:или|и|[,–—-])\s*\d{1,2}\s+[а-яё]/iu.test(previous)) return false;
   if (!allowAdditional && /дополнител|нов(?:ая|ую)\s+запис/iu.test(previous)) return false;
   const proposal = datesIn(previous, nowMs);
-  const answer = datesIn(patient, nowMs);
+  const answer = datesIn(allowAdditional ? withoutRetainedVisit(patient, ctx, nowMs) : patient, nowMs);
   const targetDates = targets.map(t => moscowDateKey(Date.parse(t.datetime)));
   const semantic = ctx.patientConfirmed === true;
   if (semantic ? targetDates.some(d => !proposal.keys.includes(d))
@@ -122,7 +135,7 @@ function patientIntent(texts) {
     if (/перенес|перенести|перенос|перезапис/iu.test(s)
         && !/(?<!\p{L})не(?!\p{L})[^.!?\n]{0,40}перен|без\s+перен/iu.test(s)) return 'reschedule';
     if (/\?|(?<!\p{L})(?:нет|не)(?!\p{L})/iu.test(s)) return null;
-    if (/дополнительн[а-яё]*\s+запис|ещ[её]\s+одн[а-яё]*\s+запис|прежн[а-яё]*\s+(?:запис[а-яё]*\s+)?остав/iu.test(s)) return 'additional';
+    if (mentionsAdditionalVisit(s)) return 'additional';
     if (/хочу\s+запис|(?<!\p{L})запиши(?:те)?(?!\p{L})|нов(?:ая|ую)\s+запис/iu.test(s)) return 'new';
   }
   return null;
@@ -157,7 +170,8 @@ function creationRejection(input, ctx) {
   if (matches.length) {
     if (intent !== 'additional') return blocked;
     if ((Object.prototype.hasOwnProperty.call(input, 'patient_confirmed') && input.patient_confirmed !== true)
-        || !/дополнител|ещ[её]\s+одн|прежн[а-яё]*\s+(?:запис[а-яё]*\s+)?остав/iu.test(previous)
+        || (!mentionsAdditionalVisit(previous)
+          && !/дополнител|ещ[её]\s+одн|прежн[а-яё]*\s+(?:запис[а-яё]*\s+)?остав/iu.test(previous))
         || !transferConfirmed([input], { ...ctx, patientConfirmed: input.patient_confirmed }, false, true)) {
       return { needs_confirmation: true, invalid_args: true,
         error: 'Для отдельного дополнительного визита явно предложи дату и время с сохранением прежней записи. Если пациент уже согласился по смыслу, повтори вызов с patient_confirmed:true без нового вопроса. Иначе дождись согласия.' };
