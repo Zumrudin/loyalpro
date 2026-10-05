@@ -6,6 +6,7 @@ const agentSettings = require('../agent-settings');
 const chatpush = require('../chatpush');
 const { recipientParams } = require('../chat');
 const orchestratorDefault = require('./orchestrator');
+const additionalProposals = require('./additional-proposals');
 const bookingEvents = require('./booking');
 const pendingReplies = require('./pending-replies');
 const dialogStateDefault = require('./dialog-state');
@@ -127,6 +128,7 @@ async function process(salonId, dialogKey, meta, opts = {}) {
   // когда отправка упала на середине серии.
   let turnId = null;
   let deliveredReplies = false;
+  let additionalProposalId = null;
   // ЕДИНАЯ точка доставки реплик модели. ЗАЧЕМ хелпер, а не цикл по месту: веток
   // отправки в process() уже три, и файл обрастает новой примерно после каждого
   // инцидента. Забытый рядом с четвёртым циклом флаг дал бы МОЛЧАЛИВЫЙ false —
@@ -134,7 +136,11 @@ async function process(salonId, dialogKey, meta, opts = {}) {
   // тот инцидент, ради которого журнал и заводится. Ни компилятор, ни тесты этого
   // не поймают, поэтому флаг выставляет сама естественная запись отправки.
   const deliverReplies = async (list, attachments, priceListUrl) => {
-    for (const text of list) await send(meta, text);
+    let acceptedAll = true;
+    for (const text of list) {
+      const receipt = await send(meta, text);
+      if (!receipt || receipt.id == null) acceptedAll = false;
+    }
     // РАЗМЕН (находка C3 ревью): deliveredReplies считается ТОЛЬКО по тексту,
     // а не по фото ниже. Это осознанно, а не забытая деталь: markDelivered —
     // вердикт на ВЕСЬ ход в целом (см. finally в process()), и если бы упавшее
@@ -147,6 +153,9 @@ async function process(salonId, dialogKey, meta, opts = {}) {
     // случая опирается на лог ниже (fileUrl+категория+причина) — правь его
     // одновременно с любой правкой этого места.
     deliveredReplies = list.length > 0;
+    if (deliveredReplies && acceptedAll && additionalProposalId) {
+      additionalProposals.markSent(salonId, dialogKey, additionalProposalId, list);
+    }
     // Вложения ВНУТРИ хелпера намеренно: веток, где реплики не доставляются,
     // уже пять, и отдельный вызов рядом с ними рано или поздно забыли бы —
     // фото ушло бы к погашенной лжи или к выброшенному черновику.
@@ -236,6 +245,7 @@ async function process(salonId, dialogKey, meta, opts = {}) {
       // Инвариант: при СВЕЖЕЙ эскалации клиент никогда не остаётся без сообщения.
       const replies = (res.replies || []).filter((t) => t && t.trim());
       turnId = res.turnId || null;
+      additionalProposalId = res.additionalProposalId || null;
       if (res.alreadyEscalated) {
         // Диалог уже у оператора — бот молчит, не переотправляем объявление о переводе
         // на каждое последующее входящее (иначе фраза перевода спамит клиента).

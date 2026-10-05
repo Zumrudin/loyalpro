@@ -1,0 +1,1414 @@
+{
+  "runId": "structured-live-1791191015995",
+  "scenarios": [
+    {
+      "scenario": "problem-baseline",
+      "replyDates": [
+        "9 октября"
+      ],
+      "additionalMention": false,
+      "preservedMention": false,
+      "unavailableMention": false,
+      "proposal": false,
+      "calls": [
+        {
+          "tool": "get_available_slots",
+          "proposal": false,
+          "prepared": false,
+          "error": false,
+          "code": [],
+          "created": false,
+          "rescheduled": false,
+          "booked_all": false,
+          "duplicate": false,
+          "record_ids": []
+        }
+      ],
+      "replyCount": 1,
+      "question": true,
+      "times": [
+        "16:00"
+      ],
+      "needsPhone": false,
+      "escalated": false,
+      "followupStopReason": null,
+      "writeSucceeded": false,
+      "falseSuccess": false,
+      "records": []
+    },
+    {
+      "scenario": "problem-baseline",
+      "replyDates": [
+        "9 октября"
+      ],
+      "additionalMention": false,
+      "preservedMention": false,
+      "unavailableMention": false,
+      "proposal": false,
+      "calls": [
+        {
+          "tool": "get_available_slots",
+          "proposal": false,
+          "prepared": false,
+          "error": false,
+          "code": [],
+          "created": false,
+          "rescheduled": false,
+          "booked_all": false,
+          "duplicate": false,
+          "record_ids": []
+        },
+        {
+          "tool": "create_booking",
+          "pc": true,
+          "requested_datetime": "2026-10-09T16:00:00+03:00",
+          "proposal": false,
+          "prepared": false,
+          "error": false,
+          "code": [],
+          "created": true,
+          "rescheduled": false,
+          "booked_all": false,
+          "duplicate": false,
+          "record_ids": [
+            2015590746
+          ]
+        }
+      ],
+      "replyCount": 1,
+      "question": false,
+      "times": [
+        "16:00"
+      ],
+      "needsPhone": false,
+      "escalated": false,
+      "followupStopReason": null,
+      "writeSucceeded": true,
+      "falseSuccess": false,
+      "records": [
+        {
+          "id": 2015590746,
+          "datetime": "2026-10-09T16:00:00+03:00",
+          "staff": 3356928,
+          "services": [
+            12496006
+          ],
+          "test": true
+        },
+        {
+          "id": 2015207973,
+          "datetime": "2026-10-09T16:00:00+03:00",
+          "staff": 3356928,
+          "services": [
+            12496006
+          ],
+          "test": false
+        }
+      ]
+    },
+    {
+      "scenario": "additional-no-transfer",
+      "replyDates": [
+        "20.10.2026"
+      ],
+      "additionalMention": true,
+      "preservedMention": true,
+      "unavailableMention": false,
+      "proposal": true,
+      "calls": [
+        {
+          "tool": "get_available_slots",
+          "proposal": false,
+          "prepared": false,
+          "error": false,
+          "code": [],
+          "created": false,
+          "rescheduled": false,
+          "booked_all": false,
+          "duplicate": false,
+          "record_ids": []
+        },
+        {
+          "tool": "prepare_additional_booking",
+          "requested_datetime": "2026-10-20T18:30:00+03:00",
+          "proposal": false,
+          "prepared": true,
+          "error": false,
+          "code": [],
+          "created": false,
+          "rescheduled": false,
+          "booked_all": false,
+          "duplicate": false,
+          "record_ids": []
+        }
+      ],
+      "replyCount": 1,
+      "question": true,
+      "times": [
+        "18:30"
+      ],
+      "needsPhone": false,
+      "escalated": false,
+      "followupStopReason": "booking_confirmation_required",
+      "writeSucceeded": false,
+      "falseSuccess": false,
+      "records": [
+        {
+          "id": 2015590746,
+          "datetime": "2026-10-09T16:00:00+03:00",
+          "staff": 3356928,
+          "services": [
+            12496006
+          ],
+          "test": true
+        },
+        {
+          "id": 2015207973,
+          "datetime": "2026-10-09T16:00:00+03:00",
+          "staff": 3356928,
+          "services": [
+            12496006
+          ],
+          "test": false
+        }
+      ]
+    },
+    {
+      "scenario": "additional-no-transfer",
+      "replyDates": [
+        "20 октября",
+        "9 октября"
+      ],
+      "additionalMention": true,
+      "preservedMention": false,
+      "unavailableMention": false,
+      "proposal": false,
+      "calls": [
+        {
+          "tool": "create_booking",
+          "pc": true,
+          "requested_datetime": "2026-10-20T18:30:00+03:00",
+          "proposal": true,
+          "prepared": false,
+          "error": false,
+          "code": [],
+          "created": true,
+          "rescheduled": false,
+          "booked_all": false,
+          "duplicate": false,
+          "record_ids": [
+            2015595447
+          ]
+        }
+      ],
+      "replyCount": 1,
+      "question": false,
+      "times": [
+        "18:30",
+        "16:00"
+      ],
+      "needsPhone": false,
+      "escalated": false,
+      "followupStopReason": null,
+      "writeSucceeded": true,
+      "falseSuccess": false,
+      "records": [
+        {
+          "id": 2015595447,
+          "datetime": "2026-10-20T18:30:00+03:00",
+          "staff": 3356928,
+          "services": [
+            12496006
+          ],
+          "test": true
+        },
+        {
+          "id": 2015590746,
+          "datetime": "2026-10-09T16:00:00+03:00",
+          "staff": 3356928,
+          "services": [
+            12496006
+          ],
+          "test": true
+        },
+        {
+          "id": 2015207973,
+          "datetime": "2026-10-09T16:00:00+03:00",
+          "staff": 3356928,
+          "services": [
+            12496006
+          ],
+          "test": false
+        }
+      ]
+    },
+    {
+      "scenario": "additional-unavailable-without-transfer",
+      "replyDates": [
+        "16 октября",
+        "18 октября",
+        "20 октября"
+      ],
+      "additionalMention": false,
+      "preservedMention": false,
+      "unavailableMention": false,
+      "proposal": false,
+      "calls": [],
+      "replyCount": 1,
+      "question": true,
+      "times": [],
+      "needsPhone": false,
+      "escalated": false,
+      "followupStopReason": null,
+      "writeSucceeded": false,
+      "falseSuccess": false,
+      "records": [
+        {
+          "id": 2015595447,
+          "datetime": "2026-10-20T18:30:00+03:00",
+          "staff": 3356928,
+          "services": [
+            12496006
+          ],
+          "test": true
+        },
+        {
+          "id": 2015590746,
+          "datetime": "2026-10-09T16:00:00+03:00",
+          "staff": 3356928,
+          "services": [
+            12496006
+          ],
+          "test": true
+        },
+        {
+          "id": 2015207973,
+          "datetime": "2026-10-09T16:00:00+03:00",
+          "staff": 3356928,
+          "services": [
+            12496006
+          ],
+          "test": false
+        }
+      ]
+    },
+    {
+      "scenario": "additional-unavailable-without-transfer",
+      "replyDates": [
+        "18.10.2026"
+      ],
+      "additionalMention": true,
+      "preservedMention": true,
+      "unavailableMention": false,
+      "proposal": true,
+      "calls": [
+        {
+          "tool": "get_available_slots",
+          "proposal": false,
+          "prepared": false,
+          "error": false,
+          "code": [],
+          "created": false,
+          "rescheduled": false,
+          "booked_all": false,
+          "duplicate": false,
+          "record_ids": []
+        },
+        {
+          "tool": "prepare_additional_booking",
+          "requested_datetime": "2026-10-18T17:00:00+03:00",
+          "proposal": false,
+          "prepared": true,
+          "error": false,
+          "code": [],
+          "created": false,
+          "rescheduled": false,
+          "booked_all": false,
+          "duplicate": false,
+          "record_ids": []
+        }
+      ],
+      "replyCount": 1,
+      "question": true,
+      "times": [
+        "17:00"
+      ],
+      "needsPhone": false,
+      "escalated": false,
+      "followupStopReason": "booking_confirmation_required",
+      "writeSucceeded": false,
+      "falseSuccess": false,
+      "records": [
+        {
+          "id": 2015595447,
+          "datetime": "2026-10-20T18:30:00+03:00",
+          "staff": 3356928,
+          "services": [
+            12496006
+          ],
+          "test": true
+        },
+        {
+          "id": 2015590746,
+          "datetime": "2026-10-09T16:00:00+03:00",
+          "staff": 3356928,
+          "services": [
+            12496006
+          ],
+          "test": true
+        },
+        {
+          "id": 2015207973,
+          "datetime": "2026-10-09T16:00:00+03:00",
+          "staff": 3356928,
+          "services": [
+            12496006
+          ],
+          "test": false
+        }
+      ]
+    },
+    {
+      "scenario": "additional-unavailable-without-transfer",
+      "replyDates": [
+        "18 октября",
+        "20 октября"
+      ],
+      "additionalMention": true,
+      "preservedMention": false,
+      "unavailableMention": false,
+      "proposal": false,
+      "calls": [
+        {
+          "tool": "create_booking",
+          "pc": true,
+          "requested_datetime": "2026-10-18T17:00:00+03:00",
+          "proposal": true,
+          "prepared": false,
+          "error": false,
+          "code": [],
+          "created": true,
+          "rescheduled": false,
+          "booked_all": false,
+          "duplicate": false,
+          "record_ids": [
+            2015599155
+          ]
+        }
+      ],
+      "replyCount": 1,
+      "question": false,
+      "times": [
+        "17:00"
+      ],
+      "needsPhone": false,
+      "escalated": false,
+      "followupStopReason": null,
+      "writeSucceeded": true,
+      "falseSuccess": false,
+      "records": [
+        {
+          "id": 2015595447,
+          "datetime": "2026-10-20T18:30:00+03:00",
+          "staff": 3356928,
+          "services": [
+            12496006
+          ],
+          "test": true
+        },
+        {
+          "id": 2015599155,
+          "datetime": "2026-10-18T17:00:00+03:00",
+          "staff": 3356928,
+          "services": [
+            12496006
+          ],
+          "test": true
+        },
+        {
+          "id": 2015590746,
+          "datetime": "2026-10-09T16:00:00+03:00",
+          "staff": 3356928,
+          "services": [
+            12496006
+          ],
+          "test": true
+        },
+        {
+          "id": 2015207973,
+          "datetime": "2026-10-09T16:00:00+03:00",
+          "staff": 3356928,
+          "services": [
+            12496006
+          ],
+          "test": false
+        }
+      ]
+    },
+    {
+      "scenario": "repeat-confirmation-no-duplicate",
+      "replyDates": [
+        "18 октября",
+        "9 октября"
+      ],
+      "additionalMention": false,
+      "preservedMention": false,
+      "unavailableMention": false,
+      "proposal": false,
+      "calls": [],
+      "replyCount": 1,
+      "question": false,
+      "times": [
+        "17:00",
+        "16:00"
+      ],
+      "needsPhone": false,
+      "escalated": false,
+      "followupStopReason": null,
+      "writeSucceeded": false,
+      "falseSuccess": false,
+      "records": [
+        {
+          "id": 2015595447,
+          "datetime": "2026-10-20T18:30:00+03:00",
+          "staff": 3356928,
+          "services": [
+            12496006
+          ],
+          "test": true
+        },
+        {
+          "id": 2015599155,
+          "datetime": "2026-10-18T17:00:00+03:00",
+          "staff": 3356928,
+          "services": [
+            12496006
+          ],
+          "test": true
+        },
+        {
+          "id": 2015590746,
+          "datetime": "2026-10-09T16:00:00+03:00",
+          "staff": 3356928,
+          "services": [
+            12496006
+          ],
+          "test": true
+        },
+        {
+          "id": 2015207973,
+          "datetime": "2026-10-09T16:00:00+03:00",
+          "staff": 3356928,
+          "services": [
+            12496006
+          ],
+          "test": false
+        }
+      ]
+    },
+    {
+      "scenario": "question-refusal-no-write",
+      "replyDates": [
+        "22 октября"
+      ],
+      "additionalMention": false,
+      "preservedMention": false,
+      "unavailableMention": false,
+      "proposal": false,
+      "calls": [
+        {
+          "tool": "get_available_slots",
+          "proposal": false,
+          "prepared": false,
+          "error": false,
+          "code": [],
+          "created": false,
+          "rescheduled": false,
+          "booked_all": false,
+          "duplicate": false,
+          "record_ids": []
+        },
+        {
+          "tool": "prepare_additional_booking",
+          "requested_datetime": "2026-10-22T18:00:00+03:00",
+          "proposal": false,
+          "prepared": false,
+          "error": true,
+          "code": [],
+          "created": false,
+          "rescheduled": false,
+          "booked_all": false,
+          "duplicate": false,
+          "record_ids": []
+        }
+      ],
+      "replyCount": 1,
+      "question": true,
+      "times": [
+        "18:00",
+        "17:30",
+        "19:00"
+      ],
+      "needsPhone": false,
+      "escalated": false,
+      "followupStopReason": null,
+      "writeSucceeded": false,
+      "falseSuccess": false,
+      "records": [
+        {
+          "id": 2015595447,
+          "datetime": "2026-10-20T18:30:00+03:00",
+          "staff": 3356928,
+          "services": [
+            12496006
+          ],
+          "test": true
+        },
+        {
+          "id": 2015599155,
+          "datetime": "2026-10-18T17:00:00+03:00",
+          "staff": 3356928,
+          "services": [
+            12496006
+          ],
+          "test": true
+        },
+        {
+          "id": 2015590746,
+          "datetime": "2026-10-09T16:00:00+03:00",
+          "staff": 3356928,
+          "services": [
+            12496006
+          ],
+          "test": true
+        },
+        {
+          "id": 2015207973,
+          "datetime": "2026-10-09T16:00:00+03:00",
+          "staff": 3356928,
+          "services": [
+            12496006
+          ],
+          "test": false
+        }
+      ]
+    },
+    {
+      "scenario": "question-refusal-no-write",
+      "replyDates": [
+        "22.10.2026"
+      ],
+      "additionalMention": true,
+      "preservedMention": true,
+      "unavailableMention": false,
+      "proposal": true,
+      "calls": [
+        {
+          "tool": "get_available_slots",
+          "proposal": false,
+          "prepared": false,
+          "error": false,
+          "code": [],
+          "created": false,
+          "rescheduled": false,
+          "booked_all": false,
+          "duplicate": false,
+          "record_ids": []
+        },
+        {
+          "tool": "prepare_additional_booking",
+          "requested_datetime": "2026-10-22T19:00:00+03:00",
+          "proposal": false,
+          "prepared": true,
+          "error": false,
+          "code": [],
+          "created": false,
+          "rescheduled": false,
+          "booked_all": false,
+          "duplicate": false,
+          "record_ids": []
+        }
+      ],
+      "replyCount": 1,
+      "question": true,
+      "times": [
+        "19:00"
+      ],
+      "needsPhone": false,
+      "escalated": false,
+      "followupStopReason": "booking_confirmation_required",
+      "writeSucceeded": false,
+      "falseSuccess": false,
+      "records": [
+        {
+          "id": 2015595447,
+          "datetime": "2026-10-20T18:30:00+03:00",
+          "staff": 3356928,
+          "services": [
+            12496006
+          ],
+          "test": true
+        },
+        {
+          "id": 2015599155,
+          "datetime": "2026-10-18T17:00:00+03:00",
+          "staff": 3356928,
+          "services": [
+            12496006
+          ],
+          "test": true
+        },
+        {
+          "id": 2015590746,
+          "datetime": "2026-10-09T16:00:00+03:00",
+          "staff": 3356928,
+          "services": [
+            12496006
+          ],
+          "test": true
+        },
+        {
+          "id": 2015207973,
+          "datetime": "2026-10-09T16:00:00+03:00",
+          "staff": 3356928,
+          "services": [
+            12496006
+          ],
+          "test": false
+        }
+      ]
+    },
+    {
+      "scenario": "question-refusal-no-write",
+      "replyDates": [
+        "22 октября"
+      ],
+      "additionalMention": false,
+      "preservedMention": false,
+      "unavailableMention": false,
+      "proposal": false,
+      "calls": [],
+      "replyCount": 1,
+      "question": false,
+      "times": [],
+      "needsPhone": false,
+      "escalated": false,
+      "followupStopReason": null,
+      "writeSucceeded": false,
+      "falseSuccess": false,
+      "records": [
+        {
+          "id": 2015595447,
+          "datetime": "2026-10-20T18:30:00+03:00",
+          "staff": 3356928,
+          "services": [
+            12496006
+          ],
+          "test": true
+        },
+        {
+          "id": 2015599155,
+          "datetime": "2026-10-18T17:00:00+03:00",
+          "staff": 3356928,
+          "services": [
+            12496006
+          ],
+          "test": true
+        },
+        {
+          "id": 2015590746,
+          "datetime": "2026-10-09T16:00:00+03:00",
+          "staff": 3356928,
+          "services": [
+            12496006
+          ],
+          "test": true
+        },
+        {
+          "id": 2015207973,
+          "datetime": "2026-10-09T16:00:00+03:00",
+          "staff": 3356928,
+          "services": [
+            12496006
+          ],
+          "test": false
+        }
+      ]
+    },
+    {
+      "scenario": "question-refusal-no-write",
+      "replyDates": [
+        "22 октября"
+      ],
+      "additionalMention": false,
+      "preservedMention": false,
+      "unavailableMention": false,
+      "proposal": false,
+      "calls": [],
+      "replyCount": 1,
+      "question": false,
+      "times": [],
+      "needsPhone": false,
+      "escalated": false,
+      "followupStopReason": null,
+      "writeSucceeded": false,
+      "falseSuccess": false,
+      "records": [
+        {
+          "id": 2015595447,
+          "datetime": "2026-10-20T18:30:00+03:00",
+          "staff": 3356928,
+          "services": [
+            12496006
+          ],
+          "test": true
+        },
+        {
+          "id": 2015599155,
+          "datetime": "2026-10-18T17:00:00+03:00",
+          "staff": 3356928,
+          "services": [
+            12496006
+          ],
+          "test": true
+        },
+        {
+          "id": 2015590746,
+          "datetime": "2026-10-09T16:00:00+03:00",
+          "staff": 3356928,
+          "services": [
+            12496006
+          ],
+          "test": true
+        },
+        {
+          "id": 2015207973,
+          "datetime": "2026-10-09T16:00:00+03:00",
+          "staff": 3356928,
+          "services": [
+            12496006
+          ],
+          "test": false
+        }
+      ]
+    },
+    {
+      "scenario": "basic-reschedule-same-record",
+      "replyDates": [
+        "22 октября"
+      ],
+      "additionalMention": false,
+      "preservedMention": false,
+      "unavailableMention": false,
+      "proposal": false,
+      "calls": [
+        {
+          "tool": "list_client_bookings",
+          "proposal": false,
+          "prepared": false,
+          "error": true,
+          "code": [],
+          "created": false,
+          "rescheduled": false,
+          "booked_all": false,
+          "duplicate": false,
+          "record_ids": []
+        },
+        {
+          "tool": "list_client_bookings",
+          "proposal": false,
+          "prepared": false,
+          "error": true,
+          "code": [],
+          "created": false,
+          "rescheduled": false,
+          "booked_all": false,
+          "duplicate": false,
+          "record_ids": []
+        },
+        {
+          "tool": "get_available_slots",
+          "proposal": false,
+          "prepared": false,
+          "error": true,
+          "code": [],
+          "created": false,
+          "rescheduled": false,
+          "booked_all": false,
+          "duplicate": false,
+          "record_ids": []
+        },
+        {
+          "tool": "list_client_bookings",
+          "proposal": false,
+          "prepared": false,
+          "error": false,
+          "code": [],
+          "created": false,
+          "rescheduled": false,
+          "booked_all": false,
+          "duplicate": false,
+          "record_ids": []
+        },
+        {
+          "tool": "get_available_slots",
+          "proposal": false,
+          "prepared": false,
+          "error": false,
+          "code": [],
+          "created": false,
+          "rescheduled": false,
+          "booked_all": false,
+          "duplicate": false,
+          "record_ids": []
+        },
+        {
+          "tool": "reschedule_booking",
+          "pc": true,
+          "requested_datetime": "2026-10-22T19:00:00+03:00",
+          "proposal": false,
+          "prepared": false,
+          "error": false,
+          "code": [],
+          "created": false,
+          "rescheduled": true,
+          "booked_all": false,
+          "duplicate": false,
+          "record_ids": [
+            2015595447
+          ]
+        }
+      ],
+      "replyCount": 1,
+      "question": false,
+      "times": [
+        "19:00"
+      ],
+      "needsPhone": false,
+      "escalated": false,
+      "followupStopReason": null,
+      "writeSucceeded": true,
+      "falseSuccess": false,
+      "records": [
+        {
+          "id": 2015595447,
+          "datetime": "2026-10-22T19:00:00+03:00",
+          "staff": 3356928,
+          "services": [
+            12496006
+          ],
+          "test": true
+        },
+        {
+          "id": 2015599155,
+          "datetime": "2026-10-18T17:00:00+03:00",
+          "staff": 3356928,
+          "services": [
+            12496006
+          ],
+          "test": true
+        },
+        {
+          "id": 2015590746,
+          "datetime": "2026-10-09T16:00:00+03:00",
+          "staff": 3356928,
+          "services": [
+            12496006
+          ],
+          "test": true
+        },
+        {
+          "id": 2015207973,
+          "datetime": "2026-10-09T16:00:00+03:00",
+          "staff": 3356928,
+          "services": [
+            12496006
+          ],
+          "test": false
+        }
+      ]
+    },
+    {
+      "scenario": "basic-new-consultation",
+      "replyDates": [
+        "27 октября",
+        "29 октября"
+      ],
+      "additionalMention": false,
+      "preservedMention": false,
+      "unavailableMention": false,
+      "proposal": false,
+      "calls": [
+        {
+          "tool": "get_available_slots",
+          "proposal": false,
+          "prepared": false,
+          "error": false,
+          "code": [],
+          "created": false,
+          "rescheduled": false,
+          "booked_all": false,
+          "duplicate": false,
+          "record_ids": []
+        },
+        {
+          "tool": "get_available_slots",
+          "proposal": false,
+          "prepared": false,
+          "error": false,
+          "code": [],
+          "created": false,
+          "rescheduled": false,
+          "booked_all": false,
+          "duplicate": false,
+          "record_ids": []
+        }
+      ],
+      "replyCount": 1,
+      "question": true,
+      "times": [
+        "15:00"
+      ],
+      "needsPhone": false,
+      "escalated": false,
+      "followupStopReason": null,
+      "writeSucceeded": false,
+      "falseSuccess": false,
+      "records": [
+        {
+          "id": 2015595447,
+          "datetime": "2026-10-22T19:00:00+03:00",
+          "staff": 3356928,
+          "services": [
+            12496006
+          ],
+          "test": true
+        },
+        {
+          "id": 2015599155,
+          "datetime": "2026-10-18T17:00:00+03:00",
+          "staff": 3356928,
+          "services": [
+            12496006
+          ],
+          "test": true
+        },
+        {
+          "id": 2015590746,
+          "datetime": "2026-10-09T16:00:00+03:00",
+          "staff": 3356928,
+          "services": [
+            12496006
+          ],
+          "test": true
+        },
+        {
+          "id": 2015207973,
+          "datetime": "2026-10-09T16:00:00+03:00",
+          "staff": 3356928,
+          "services": [
+            12496006
+          ],
+          "test": false
+        }
+      ]
+    },
+    {
+      "scenario": "basic-new-consultation",
+      "replyDates": [
+        "29 октября"
+      ],
+      "additionalMention": false,
+      "preservedMention": false,
+      "unavailableMention": false,
+      "proposal": false,
+      "calls": [
+        {
+          "tool": "get_available_slots",
+          "proposal": false,
+          "prepared": false,
+          "error": false,
+          "code": [],
+          "created": false,
+          "rescheduled": false,
+          "booked_all": false,
+          "duplicate": false,
+          "record_ids": []
+        },
+        {
+          "tool": "create_booking",
+          "pc": true,
+          "requested_datetime": "2026-10-29T15:00:00+03:00",
+          "proposal": false,
+          "prepared": false,
+          "error": false,
+          "code": [],
+          "created": true,
+          "rescheduled": false,
+          "booked_all": false,
+          "duplicate": false,
+          "record_ids": [
+            2015612850
+          ]
+        }
+      ],
+      "replyCount": 1,
+      "question": false,
+      "times": [
+        "15:00"
+      ],
+      "needsPhone": false,
+      "escalated": false,
+      "followupStopReason": null,
+      "writeSucceeded": true,
+      "falseSuccess": false,
+      "records": [
+        {
+          "id": 2015612850,
+          "datetime": "2026-10-29T15:00:00+03:00",
+          "staff": 5708379,
+          "services": [
+            9536723
+          ],
+          "test": true
+        },
+        {
+          "id": 2015595447,
+          "datetime": "2026-10-22T19:00:00+03:00",
+          "staff": 3356928,
+          "services": [
+            12496006
+          ],
+          "test": true
+        },
+        {
+          "id": 2015599155,
+          "datetime": "2026-10-18T17:00:00+03:00",
+          "staff": 3356928,
+          "services": [
+            12496006
+          ],
+          "test": true
+        },
+        {
+          "id": 2015590746,
+          "datetime": "2026-10-09T16:00:00+03:00",
+          "staff": 3356928,
+          "services": [
+            12496006
+          ],
+          "test": true
+        },
+        {
+          "id": 2015207973,
+          "datetime": "2026-10-09T16:00:00+03:00",
+          "staff": 3356928,
+          "services": [
+            12496006
+          ],
+          "test": false
+        }
+      ]
+    },
+    {
+      "scenario": "basic-time-reschedule",
+      "replyDates": [
+        "29 октября"
+      ],
+      "additionalMention": false,
+      "preservedMention": false,
+      "unavailableMention": false,
+      "proposal": false,
+      "calls": [
+        {
+          "tool": "get_available_slots",
+          "proposal": false,
+          "prepared": false,
+          "error": false,
+          "code": [],
+          "created": false,
+          "rescheduled": false,
+          "booked_all": false,
+          "duplicate": false,
+          "record_ids": []
+        }
+      ],
+      "replyCount": 1,
+      "question": true,
+      "times": [
+        "16:00",
+        "15:00"
+      ],
+      "needsPhone": false,
+      "escalated": false,
+      "followupStopReason": null,
+      "writeSucceeded": false,
+      "falseSuccess": false,
+      "records": [
+        {
+          "id": 2015612850,
+          "datetime": "2026-10-29T15:00:00+03:00",
+          "staff": 5708379,
+          "services": [
+            9536723
+          ],
+          "test": true
+        },
+        {
+          "id": 2015595447,
+          "datetime": "2026-10-22T19:00:00+03:00",
+          "staff": 3356928,
+          "services": [
+            12496006
+          ],
+          "test": true
+        },
+        {
+          "id": 2015599155,
+          "datetime": "2026-10-18T17:00:00+03:00",
+          "staff": 3356928,
+          "services": [
+            12496006
+          ],
+          "test": true
+        },
+        {
+          "id": 2015590746,
+          "datetime": "2026-10-09T16:00:00+03:00",
+          "staff": 3356928,
+          "services": [
+            12496006
+          ],
+          "test": true
+        },
+        {
+          "id": 2015207973,
+          "datetime": "2026-10-09T16:00:00+03:00",
+          "staff": 3356928,
+          "services": [
+            12496006
+          ],
+          "test": false
+        }
+      ]
+    },
+    {
+      "scenario": "basic-time-reschedule",
+      "replyDates": [
+        "29 октября"
+      ],
+      "additionalMention": false,
+      "preservedMention": false,
+      "unavailableMention": false,
+      "proposal": false,
+      "calls": [
+        {
+          "tool": "get_available_slots",
+          "proposal": false,
+          "prepared": false,
+          "error": false,
+          "code": [],
+          "created": false,
+          "rescheduled": false,
+          "booked_all": false,
+          "duplicate": false,
+          "record_ids": []
+        },
+        {
+          "tool": "reschedule_booking",
+          "pc": true,
+          "requested_datetime": "2026-10-29T16:00:00+03:00",
+          "proposal": false,
+          "prepared": false,
+          "error": false,
+          "code": [],
+          "created": false,
+          "rescheduled": true,
+          "booked_all": false,
+          "duplicate": false,
+          "record_ids": [
+            2015612850
+          ]
+        }
+      ],
+      "replyCount": 1,
+      "question": false,
+      "times": [
+        "16:00"
+      ],
+      "needsPhone": false,
+      "escalated": false,
+      "followupStopReason": null,
+      "writeSucceeded": true,
+      "falseSuccess": false,
+      "records": [
+        {
+          "id": 2015612850,
+          "datetime": "2026-10-29T16:00:00+03:00",
+          "staff": 5708379,
+          "services": [
+            9536723
+          ],
+          "test": true
+        },
+        {
+          "id": 2015595447,
+          "datetime": "2026-10-22T19:00:00+03:00",
+          "staff": 3356928,
+          "services": [
+            12496006
+          ],
+          "test": true
+        },
+        {
+          "id": 2015599155,
+          "datetime": "2026-10-18T17:00:00+03:00",
+          "staff": 3356928,
+          "services": [
+            12496006
+          ],
+          "test": true
+        },
+        {
+          "id": 2015590746,
+          "datetime": "2026-10-09T16:00:00+03:00",
+          "staff": 3356928,
+          "services": [
+            12496006
+          ],
+          "test": true
+        },
+        {
+          "id": 2015207973,
+          "datetime": "2026-10-09T16:00:00+03:00",
+          "staff": 3356928,
+          "services": [
+            12496006
+          ],
+          "test": false
+        }
+      ]
+    }
+  ],
+  "created": [
+    2015590746,
+    2015595447,
+    2015599155,
+    2015612850
+  ],
+  "verifications": [
+    {
+      "at": "2026-10-05T09:13:27.728Z",
+      "records": [
+        {
+          "id": 2015612850,
+          "datetime": "2026-10-29T16:00:00+03:00",
+          "staff": 5708379,
+          "services": [
+            9536723
+          ],
+          "test": true
+        },
+        {
+          "id": 2015595447,
+          "datetime": "2026-10-22T19:00:00+03:00",
+          "staff": 3356928,
+          "services": [
+            12496006
+          ],
+          "test": true
+        },
+        {
+          "id": 2015599155,
+          "datetime": "2026-10-18T17:00:00+03:00",
+          "staff": 3356928,
+          "services": [
+            12496006
+          ],
+          "test": true
+        },
+        {
+          "id": 2015590746,
+          "datetime": "2026-10-09T16:00:00+03:00",
+          "staff": 3356928,
+          "services": [
+            12496006
+          ],
+          "test": true
+        },
+        {
+          "id": 2015207973,
+          "datetime": "2026-10-09T16:00:00+03:00",
+          "staff": 3356928,
+          "services": [
+            12496006
+          ],
+          "test": false
+        }
+      ],
+      "owners_verified": true
+    }
+  ],
+  "baseline": [],
+  "mode": "real production model and CRM; process-local candidate overlay; in-memory conversation; simulated reply delivery",
+  "models_observed": [
+    "claude-sonnet"
+  ],
+  "candidate_sha256": {
+    "additional-proposals.js": "83622674a236a6e3638dcd318868d2ebf9ac46701144f30d15f149afcf4e623e",
+    "booking-write-guard.js": "de783c88f0b6f50d189511546b1148656e54338b8d342693878c71678d7cf138",
+    "orchestrator.js": "d06ed650787b46b73a354ed411fcc329f518c18727848a7cf28e4994129910f6",
+    "dispatcher.js": "43720be735e792a9ab29e7255883e5b446c8958337c0fefd3dc5c4ba9a243998",
+    "slot-evidence.js": "a6913084fdbd1fb1e7da6bc6e3ff7ff2399f57e6464879f616149714b163a7ac",
+    "tools/create-booking.js": "71fc6ed9b7e061ea3cfbd629f0974cd1e30ab7265dd7589815cb1bfbeb13a07c",
+    "tools/index.js": "f65b0956b4b89ac4d0692639601a99dffc5f238728a2b783e61f4cd52d9982f9",
+    "tools/prepare-additional-booking.js": "eb82706e253d331ca71f28077ca7ccadd28cc46e17af22c7a5637dff7c729306"
+  },
+  "cleanup_status": "completed after explicit user approval",
+  "unexpected_restored_record": {
+    "id": 2015207973,
+    "datetime": "2026-10-09T16:00:00+03:00",
+    "absent_from_active_baseline": true,
+    "after_first_creation": {
+      "attendance": 0,
+      "deleted": false
+    },
+    "not_created_by_model_this_run": true
+  },
+  "limits": [
+    "Messenger delivery and dispatcher gates not exercised in live run",
+    "Three transient CRM read errors recovered within the date-reschedule turn; exact causes not retained",
+    "One rejected prepare request for 22 October 18:00; model offered alternatives and prepared 19:00"
+  ],
+  "cleanup": {
+    "at": "2026-10-05T09:23:31.230Z",
+    "cancelled": [
+      {
+        "id": 2015590746,
+        "attendance": -1,
+        "deleted": false
+      },
+      {
+        "id": 2015207973,
+        "attendance": -1,
+        "deleted": false
+      },
+      {
+        "id": 2015599155,
+        "attendance": -1,
+        "deleted": false
+      },
+      {
+        "id": 2015595447,
+        "attendance": -1,
+        "deleted": false
+      },
+      {
+        "id": 2015612850,
+        "attendance": -1,
+        "deleted": false
+      }
+    ],
+    "active_future_count": 0
+  }
+}

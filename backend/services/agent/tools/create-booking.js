@@ -13,6 +13,7 @@ const phoneRequest = require('../phone-request');
 const slotEvidence = require('../slot-evidence');
 const writeGuard = require('../booking-write-guard');
 const listBookings = require('./list-client-bookings');
+const proposals = require('../additional-proposals');
 
 // Отказ YClients именно по времени старта («Выбранное время недоступно…»,
 // «мастер занят…»), а не по услуге/токену/клиенту. Только на нём есть смысл
@@ -30,6 +31,7 @@ const schema = {
   input_schema: {
     type: 'object',
     properties: {
+      proposal_id: { type: 'string', description: 'Для дополнительного визита: ID доставленного серверного предложения prepare_additional_booking из контекста. Все параметры должны совпадать. При изменении условий сначала подготовь новое предложение.' },
       patient_confirmed: { type: 'boolean', description: 'true только после согласия пациента по смыслу на эту запись (включая отдельный дополнительный визит или запись гостя). При вопросе, отказе или изменении условий не ставь true.' },
       staff_yc_id:   { type: 'integer', description: 'YClients-id мастера.' },
       service_yc_id: { type: 'integer', description: 'YClients-id услуги.' },
@@ -115,6 +117,11 @@ async function run(salonId, input, ctx = {}) {
   const nowMs = (ctx && ctx.nowMs) || Date.now();
   const thirdParty = tpLimit.isThirdParty(input && input.client_phone, ctx.clientPhone);
   let guardCtx = ctx;
+  if (Object.prototype.hasOwnProperty.call(input, 'proposal_id')) {
+    const rejection = proposals.rejection(salonId, input, ctx);
+    if (rejection) return rejection;
+    guardCtx = writeGuard.withAdditionalProposal(ctx, input);
+  }
   // Never compare a guest's request against the owner's visits. Their history
   // is loaded through the same tenant-scoped service, not supplied by the model.
   if (thirdParty && Object.prototype.hasOwnProperty.call(ctx, 'liveBookings')) {

@@ -1,0 +1,377 @@
+{
+  "production_commit": "e5bb7ad",
+  "mode": "live production model and CRM; isolated in-memory conversation; no messenger delivery",
+  "result": "1 of 2 passed",
+  "run1": {
+    "runId": "consent-live-1791150221704",
+    "scenarios": [
+      {
+        "scenario": "additional-after-fix-1",
+        "replyDates": [
+          "9 октября",
+          "13 октября"
+        ],
+        "additionalMention": true,
+        "preservedMention": false,
+        "calls": [
+          {
+            "tool": "get_available_slots",
+            "error": false,
+            "code": [],
+            "created": false,
+            "rescheduled": false,
+            "booked_all": false,
+            "duplicate": false,
+            "record_ids": []
+          }
+        ],
+        "replyCount": 1,
+        "question": true,
+        "times": [
+          "14:00",
+          "18:00",
+          "20:00"
+        ],
+        "needsPhone": false,
+        "escalated": false,
+        "followupStopReason": null,
+        "writeSucceeded": false,
+        "falseSuccess": false,
+        "records": [
+          {
+            "id": 2014806606,
+            "datetime": "2026-10-09T16:00:00+03:00",
+            "staff": 3356928,
+            "services": [
+              12496006
+            ],
+            "test": false
+          }
+        ]
+      },
+      {
+        "scenario": "additional-after-fix-1",
+        "replyDates": [
+          "13 октября",
+          "9 октября"
+        ],
+        "additionalMention": true,
+        "preservedMention": false,
+        "calls": [
+          {
+            "tool": "get_available_slots",
+            "error": false,
+            "code": [],
+            "created": false,
+            "rescheduled": false,
+            "booked_all": false,
+            "duplicate": false,
+            "record_ids": []
+          },
+          {
+            "tool": "create_booking",
+            "error": true,
+            "code": [
+              "needs_confirmation"
+            ],
+            "created": false,
+            "rescheduled": false,
+            "booked_all": false,
+            "duplicate": false,
+            "record_ids": []
+          },
+          {
+            "tool": "create_booking",
+            "error": true,
+            "code": [
+              "needs_confirmation"
+            ],
+            "created": false,
+            "rescheduled": false,
+            "booked_all": false,
+            "duplicate": false,
+            "record_ids": []
+          }
+        ],
+        "replyCount": 1,
+        "question": false,
+        "times": [
+          "16:00"
+        ],
+        "needsPhone": false,
+        "escalated": false,
+        "followupStopReason": "booking_confirmation_required",
+        "writeSucceeded": false,
+        "falseSuccess": false,
+        "records": [
+          {
+            "id": 2014806606,
+            "datetime": "2026-10-09T16:00:00+03:00",
+            "staff": 3356928,
+            "services": [
+              12496006
+            ],
+            "test": false
+          }
+        ]
+      },
+      {
+        "scenario": "additional-after-fix-1",
+        "replyDates": [
+          "13 октября",
+          "9 октября"
+        ],
+        "additionalMention": true,
+        "preservedMention": false,
+        "calls": [
+          {
+            "tool": "get_available_slots",
+            "error": false,
+            "code": [],
+            "created": false,
+            "rescheduled": false,
+            "booked_all": false,
+            "duplicate": false,
+            "record_ids": []
+          },
+          {
+            "tool": "create_booking",
+            "error": true,
+            "code": [
+              "needs_confirmation"
+            ],
+            "created": false,
+            "rescheduled": false,
+            "booked_all": false,
+            "duplicate": false,
+            "record_ids": []
+          },
+          {
+            "tool": "create_booking",
+            "error": true,
+            "code": [
+              "needs_confirmation"
+            ],
+            "created": false,
+            "rescheduled": false,
+            "booked_all": false,
+            "duplicate": false,
+            "record_ids": []
+          }
+        ],
+        "replyCount": 1,
+        "question": false,
+        "times": [
+          "18:00",
+          "16:00"
+        ],
+        "needsPhone": false,
+        "escalated": false,
+        "followupStopReason": "booking_confirmation_required",
+        "writeSucceeded": false,
+        "falseSuccess": false,
+        "records": [
+          {
+            "id": 2014806606,
+            "datetime": "2026-10-09T16:00:00+03:00",
+            "staff": 3356928,
+            "services": [
+              12496006
+            ],
+            "test": false
+          }
+        ]
+      }
+    ],
+    "created": [],
+    "verifications": [
+      {
+        "at": "2026-10-04T21:47:05.136Z",
+        "records": [
+          {
+            "id": 2014806606,
+            "datetime": "2026-10-09T16:00:00+03:00",
+            "staff": 3356928,
+            "services": [
+              12496006
+            ],
+            "test": false
+          }
+        ],
+        "owners_verified": true
+      }
+    ],
+    "baseline": [
+      {
+        "id": 2014806606,
+        "datetime": "2026-10-09T16:00:00+03:00",
+        "staff": 3356928,
+        "services": [
+          12496006
+        ],
+        "test": false
+      }
+    ]
+  },
+  "run2": {
+    "runId": "consent-live-1791150426044",
+    "scenarios": [
+      {
+        "scenario": "additional-after-fix-2",
+        "replyDates": [
+          "9 октября",
+          "13 октября"
+        ],
+        "additionalMention": true,
+        "preservedMention": true,
+        "calls": [
+          {
+            "tool": "get_available_slots",
+            "error": false,
+            "code": [],
+            "created": false,
+            "rescheduled": false,
+            "booked_all": false,
+            "duplicate": false,
+            "record_ids": []
+          }
+        ],
+        "replyCount": 1,
+        "question": true,
+        "times": [
+          "14:00",
+          "18:00",
+          "20:00"
+        ],
+        "needsPhone": false,
+        "escalated": false,
+        "followupStopReason": null,
+        "writeSucceeded": false,
+        "falseSuccess": false,
+        "records": [
+          {
+            "id": 2014806606,
+            "datetime": "2026-10-09T16:00:00+03:00",
+            "staff": 3356928,
+            "services": [
+              12496006
+            ],
+            "test": false
+          }
+        ]
+      },
+      {
+        "scenario": "additional-after-fix-2",
+        "replyDates": [
+          "13 октября",
+          "9 октября"
+        ],
+        "additionalMention": true,
+        "preservedMention": false,
+        "calls": [
+          {
+            "tool": "get_available_slots",
+            "error": false,
+            "code": [],
+            "created": false,
+            "rescheduled": false,
+            "booked_all": false,
+            "duplicate": false,
+            "record_ids": []
+          },
+          {
+            "tool": "create_booking",
+            "error": false,
+            "code": [],
+            "created": true,
+            "rescheduled": false,
+            "booked_all": false,
+            "duplicate": false,
+            "record_ids": [
+              2014870386
+            ]
+          }
+        ],
+        "replyCount": 1,
+        "question": false,
+        "times": [
+          "18:00"
+        ],
+        "needsPhone": false,
+        "escalated": false,
+        "followupStopReason": null,
+        "writeSucceeded": true,
+        "falseSuccess": false,
+        "records": [
+          {
+            "id": 2014870386,
+            "datetime": "2026-10-13T18:00:00+03:00",
+            "staff": 3356928,
+            "services": [
+              12496006
+            ],
+            "test": true
+          },
+          {
+            "id": 2014806606,
+            "datetime": "2026-10-09T16:00:00+03:00",
+            "staff": 3356928,
+            "services": [
+              12496006
+            ],
+            "test": false
+          }
+        ]
+      }
+    ],
+    "created": [
+      2014870386
+    ],
+    "verifications": [
+      {
+        "at": "2026-10-04T21:48:32.063Z",
+        "records": [
+          {
+            "id": 2014870386,
+            "datetime": "2026-10-13T18:00:00+03:00",
+            "staff": 3356928,
+            "services": [
+              12496006
+            ],
+            "test": true
+          },
+          {
+            "id": 2014806606,
+            "datetime": "2026-10-09T16:00:00+03:00",
+            "staff": 3356928,
+            "services": [
+              12496006
+            ],
+            "test": false
+          }
+        ],
+        "owners_verified": true
+      }
+    ],
+    "baseline": [
+      {
+        "id": 2014806606,
+        "datetime": "2026-10-09T16:00:00+03:00",
+        "staff": 3356928,
+        "services": [
+          12496006
+        ],
+        "test": false
+      }
+    ]
+  },
+  "remaining_issue": "First live run rejected four create_booking calls with needs_confirmation across two explicit confirmations. Exact failing predicate not captured; second independent run succeeded with patient_confirmed=true and transferConfirmed=true.",
+  "cleanup": {
+    "status": "previous_run_cancelled_and_verified",
+    "record_ids": [
+      2014806606,
+      2014870386
+    ],
+    "verified_date": "2026-10-05"
+  }
+}

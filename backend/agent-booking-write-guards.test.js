@@ -25,6 +25,95 @@ const ctx = () => ({ dialogKey: 'guards-test', clientPhone: 'test-owner', nowMs:
   recentDialogText: 'Перенести запись на 2 октября в 15:00? Да', rescheduleRequested: true });
 beforeEach(() => { jest.clearAllMocks(); offers._reset(); });
 
+describe('additional consent is independent of preserving the old visit', () => {
+  const preserved = [
+    'Запись на 1 октября сохраняем.',
+    'Запись на 1 октября не переносим.',
+    'Запись на 1 октября не трогаем.',
+    'Без переноса записи на 1 октября.',
+  ];
+  test.each(preserved)('accepts consent after proposal: %s', async keep => {
+    const result = await create.run(1, { ...input, patient_confirmed: true }, {
+      ...ctx(), rescheduleRequested: false,
+      patientRecentTexts: ['Хочу дополнительную запись'],
+      previousAssistantText: `${keep} Дополнительный визит 2 октября в 15:00. Записать?`,
+    });
+    expect(result.created).toBe(true);
+    expect(booking.createBookingRecord).toHaveBeenCalledTimes(1);
+    expect(modify.rescheduleBookingRecord).not.toHaveBeenCalled();
+  });
+  test.each(preserved)('accepts patient preserving the old visit: %s', async keep => {
+    const patientLastText = `Да, дополнительный визит 2 октября в 15:00. ${keep}`;
+    const result = await create.run(1, { ...input, patient_confirmed: true }, {
+      ...ctx(), rescheduleRequested: false, patientLastText,
+      patientRecentTexts: [patientLastText],
+      previousAssistantText: 'Дополнительный визит 2 октября в 15:00, прежнюю запись сохраняем. Записать?',
+    });
+    expect(result.created).toBe(true);
+    expect(booking.createBookingRecord).toHaveBeenCalledTimes(1);
+  });
+  test.each([
+    [{ patient_confirmed: false }, {}, 'confirmation_flag_missing'],
+    [{}, { previousAssistantText: 'Дополнительный визит 3 октября в 15:00. Записать?' }, 'date_not_offered'],
+    [{}, { previousAssistantText: 'Дополнительный визит 2 октября в 16:00. Записать?' }, 'time_not_offered'],
+    [{}, { patientLastText: 'Да, дополнительный визит 3 октября в 15:00' }, 'date_conflict'],
+    [{}, { patientLastText: 'Да, дополнительный визит 2 октября в 16:00' }, 'time_conflict'],
+    [{}, { previousAssistantText: 'Старую запись не переносим. Дополнительную запись на 2 октября в 15:00 не оформляем.' }, 'negative_proposal'],
+  ])('reports a specific consent rejection (%s, %s)', async (patch, context, reason) => {
+    const result = await create.run(1, { ...input, patient_confirmed: true, ...patch }, {
+      ...ctx(), rescheduleRequested: false,
+      patientRecentTexts: ['Хочу дополнительную запись'],
+      previousAssistantText: 'Дополнительный визит 2 октября в 15:00. Записать?', ...context,
+    });
+    expect(result).toMatchObject({ needs_confirmation: true, confirmation_reason: reason });
+    expect(booking.createBookingRecord).not.toHaveBeenCalled();
+  });
+  test.each([
+    'Прежнюю запись не переносим, дополнительная запись не нужна',
+    'Нет, дополнительный визит не нужен',
+    'Отмените дополнительный визит',
+    'Дополнительный визит в это время неудобен',
+    'Перенесите вместо дополнительной записи',
+  ])('does not treat a refusal or change as consent: %s', async patientLastText => {
+    const result = await create.run(1, { ...input, patient_confirmed: true }, {
+      ...ctx(), rescheduleRequested: false, patientLastText,
+      patientRecentTexts: ['Хочу дополнительную запись', patientLastText],
+      previousAssistantText: 'Запись на 1 октября сохраняем. Дополнительная запись 2 октября в 15:00?',
+    });
+    expect(result.error).toBeTruthy();
+    expect(booking.createBookingRecord).not.toHaveBeenCalled();
+  });
+  test.each([
+    'Да, дополнительный визит 2 октября в 15:00. Запись на 3 октября не переносим.',
+    'Да, дополнительный визит 2 октября в 15:00. Запись на 1 октября в 16:00 не переносим.',
+    'Да, дополнительный визит 3 октября в 15:00. Запись на 1 октября не переносим.',
+  ])('does not discard an unverified retained visit or a changed target: %s', async patientLastText => {
+    const result = await create.run(1, { ...input, patient_confirmed: true }, {
+      ...ctx(), rescheduleRequested: false, patientLastText,
+      patientRecentTexts: [patientLastText],
+      previousAssistantText: 'Дополнительный визит 2 октября в 15:00. Записать?',
+    });
+    expect(result.error).toBeTruthy();
+    expect(booking.createBookingRecord).not.toHaveBeenCalled();
+  });
+  test('old time does not become an offered time for the new visit', async () => {
+    const result = await create.run(1, { ...input, patient_confirmed: true }, {
+      ...ctx(), rescheduleRequested: false, patientRecentTexts: ['Хочу дополнительную запись'],
+      previousAssistantText: 'Запись на 1 октября в 15:00 не переносим. Дополнительный визит 2 октября в 16:00. Записать?',
+    });
+    expect(result).toMatchObject({ needs_confirmation: true, confirmation_reason: 'time_not_offered' });
+    expect(booking.createBookingRecord).not.toHaveBeenCalled();
+  });
+  test('short consent cannot choose one of two offered dates', async () => {
+    const result = await create.run(1, { ...input, patient_confirmed: true }, {
+      ...ctx(), rescheduleRequested: false, patientRecentTexts: ['Хочу дополнительную запись'],
+      previousAssistantText: 'Дополнительный визит 2 октября в 15:00 или 3 октября в 16:00. Записать?',
+    });
+    expect(result).toMatchObject({ needs_confirmation: true, confirmation_reason: 'ambiguous_proposal' });
+    expect(booking.createBookingRecord).not.toHaveBeenCalled();
+  });
+});
+
 test('direct create cannot turn a transfer into a new visit', async () => {
   const result = await create.run(1, input, ctx());
   expect(result.requires_reschedule).toBe(true);

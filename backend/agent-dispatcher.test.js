@@ -1065,3 +1065,36 @@ describe('gate outside-schedule → перевод живого диалога',
     expect(d.send).not.toHaveBeenCalled();
   });
 });
+
+describe('additional proposal delivery', () => {
+  const proposals = require('./services/agent/additional-proposals');
+  afterEach(() => proposals._reset());
+  function setup(sendFailure = false) {
+    const nowMs = Date.now();
+    const ctx = { patientWatermark: nowMs / 1000 + 5, dialogKey: 'k', nowMs, clientPhone: 'test-owner', liveBookings: [] };
+    const p = proposals.prepare(1, ctx, { service_yc_id: 101, staff_yc_id: 7, datetime: '2099-10-18T17:00:00+03:00' }, 'Синтетическое предложение дополнительного визита. Оформить?');
+    const d = deps({ persistOwn: jest.fn(async () => {}), deliveryLog: { record: jest.fn(async () => {}) },
+      followupQueue: { shouldAwaitReply: () => false }, send: jest.fn(async () => ({ id: 'synthetic-receipt' })), orchestrator: { runDialog: jest.fn(async () => ({ replies: [p.text], additionalProposalId: p.id })) },
+      ...(sendFailure ? { send: jest.fn(async () => { throw new Error('synthetic delivery failure'); }) } : {}) });
+    return { ctx, p, d };
+  }
+  test('successful send activates the exact proposal', async () => {
+    const { ctx, p, d } = setup();
+    dispatcher.enqueue(1, 'k', meta, d);
+    await jest.advanceTimersByTimeAsync(1000);
+    expect(proposals.offered(1, { ...ctx, previousAssistantText: p.text }).id).toBe(p.id);
+  });
+  test('missing delivery receipt never activates the draft', async () => {
+    const { ctx, p, d } = setup();
+    d.send.mockResolvedValue(null);
+    dispatcher.enqueue(1, 'k', meta, d);
+    await jest.advanceTimersByTimeAsync(1000);
+    expect(proposals.offered(1, { ...ctx, previousAssistantText: p.text })).toBeNull();
+  });
+  test('failed send never activates the draft', async () => {
+    const { ctx, p, d } = setup(true);
+    dispatcher.enqueue(1, 'k', meta, d);
+    await jest.advanceTimersByTimeAsync(1000);
+    expect(proposals.offered(1, { ...ctx, previousAssistantText: p.text })).toBeNull();
+  });
+});

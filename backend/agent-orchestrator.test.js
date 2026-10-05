@@ -215,6 +215,32 @@ describe('chain booking incident: truthful staff and enforced choice', () => {
     expect(deps.registry.handlers.create_booking).not.toHaveBeenCalled();
   });
 
+  test.each(['Да', 'Да, дополнительный визит 2 октября в 15:00. Запись на 1 октября не переносим.'])
+  ('unstructured additional consent requires a server proposal: %s', async patientText => {
+    const guard = require('./services/agent/booking-write-guard');
+    const write = jest.fn(async () => ({ created: true, record_id: 900 }));
+    const old = { ...rawBooking, service_yc_ids: [101], datetime: '2026-10-01T15:00:00+03:00' };
+    const deps = makeDeps({
+      handlers: { create_booking: async (salon, input, ctx) => guard.creationRejection(input, ctx) || write(salon, input) },
+      history: { loadTranscript: jest.fn(async () => ({ messages: [
+        { role: 'user', content: 'Хочу дополнительный визит к Анне' },
+        { role: 'assistant', content: 'Запись на 1 октября не переносим. Дополнительный визит 2 октября в 15:00. Записать?' },
+        { role: 'user', content: patientText },
+      ], watermark: 100 })) },
+      listBookings: { run: jest.fn(async () => ({ bookings: [old] })) },
+    });
+    deps.provider.createMessage.mockResolvedValueOnce(toolResp('create_booking', {
+      service_yc_id: 101, staff_yc_id: 7, datetime: '2026-10-02T15:00:00+03:00', patient_confirmed: true,
+    })).mockResolvedValueOnce({ text: 'Дополнительная запись оформлена.', toolCalls: [] });
+    const out = await orchestrator.runDialog(1, 'k', {
+      deps, nowMs: Date.parse('2026-09-30T10:00:00Z'), ctx: { phone: 'test-owner' },
+    });
+    expect(write).not.toHaveBeenCalled();
+    expect(out.writeSucceeded).toBe(false);
+    expect(out.followupStopReason).toBe('booking_confirmation_required');
+    expect(old.datetime).toBe('2026-10-01T15:00:00+03:00');
+  });
+
   test('rejected chain stops a batch before a fallback create_booking can bypass it', async () => {
     const deps = makeDeps({ handlers: { book_chain: jest.fn(async () => ({
       error: 'unconfirmed', needs_confirmation: true, matching_option_ids: ['o13'], records: [],
@@ -362,6 +388,7 @@ describe('runDialog', () => {
       .toHaveBeenCalledWith(1, { staff_yc_id: 55, service_yc_id: 7, date: '2026-07-20' },
         { dialogKey: 'k', clientPhone: '79001112233', clientName: null, nowMs: expect.any(Number),
           channel: null, priceIndex: null, attachments: [], previousAssistantText: '',
+          additionalProposalId: null, requireStructuredAdditional: true, patientWatermark: 100,
           liveBookings: [], rescheduleRequested: false,
           // patientText — текст сообщений пациента для generic-booking-guard в
           // create_booking (сверка «называл ли пациент препарат»).
@@ -3310,4 +3337,86 @@ test('illness blocks followups without pretending that a pending cancellation is
   expect(out.conversationComplete).toBe(false);
   expect(out.writeSucceeded).toBe(false);
   expect(out.replies.length).toBeGreaterThan(0);
+});
+
+describe('structured additional proposal lifecycle', () => {
+  const proposals = require('./services/agent/additional-proposals');
+  const nowMs = Date.parse('2026-10-05T09:00:00Z');
+  const target = { service_yc_id: 101, staff_yc_id: 7, datetime: '2026-10-18T17:00:00+03:00' };
+  const old = { record_id: 501, service_yc_ids: [101], staff_yc_id: 7,
+    datetime: '2026-10-09T16:00:00+03:00', services: ['Тестовая услуга'], staff_name: 'Тестовый специалист' };
+  const offerText = 'Дополнительный визит: Тестовая услуга, Тестовый специалист, 18.10.2026 в 17:00. Все прежние записи сохраняем. Оформить?';
+  afterEach(() => proposals._reset());
+  test('prepare ends tool batch; undelivered offer cannot appear as actionable context', async () => {
+    const prepare = jest.fn(async (salon, args, ctx) => {
+      const p = proposals.prepare(salon, ctx, args, offerText);
+      return { proposal_id: p.id, proposal_text: p.text };
+    });
+    const deps = makeDeps({ handlers: { prepare_additional_booking: prepare },
+      listBookings: { run: jest.fn(async () => ({ bookings: [old] })) } });
+    const response = toolResp('prepare_additional_booking', target);
+    response.toolCalls.push({ id: 'bad', name: 'create_booking', input: { ...target, patient_confirmed: true } });
+    deps.provider.createMessage.mockResolvedValueOnce(response);
+    const out = await orchestrator.runDialog(1, 'structured', { deps, nowMs, ctx: { phone: 'test-owner' } });
+    expect(out.additionalProposalId).toBeTruthy();
+    expect(out.replies.join('\n')).toContain(offerText);
+    expect(deps.registry.handlers.create_booking).not.toHaveBeenCalled();
+    expect(deps.provider.createMessage).toHaveBeenCalledTimes(1);
+    expect(out.falseSuccess).toBe(false);
+    expect(proposals.offered(1, { dialogKey: 'structured', nowMs, clientPhone: 'test-owner', previousAssistantText: out.replies.join('\n') })).toBeNull();
+  });
+  test('delivered offer reaches prompt and server context on the next patient turn', async () => {
+    const ctx = { dialogKey: 'structured', nowMs, clientPhone: 'test-owner', liveBookings: [old], patientWatermark: nowMs / 1000 + 2 };
+    const p = proposals.prepare(1, ctx, target, offerText);
+    proposals.markSent(1, 'structured', p.id, [offerText], nowMs);
+    const guard = require('./services/agent/booking-write-guard');
+    const write = jest.fn(async () => ({ created: true, record_id: 900 }));
+    const handler = jest.fn(async (salon, args, toolCtx) => {
+      const rejection = proposals.rejection(salon, args, toolCtx);
+      if (rejection) return rejection;
+      return guard.creationRejection(args, guard.withAdditionalProposal(toolCtx, args)) || write();
+    });
+    const deps = makeDeps({ handlers: { create_booking: handler },
+      listBookings: { run: jest.fn(async () => ({ bookings: [old] })) },
+      history: { loadTranscript: jest.fn(async () => ({ messages: [
+        { role: 'user', content: 'Хочу ещё один визит. Старую запись не переносим.' },
+        { role: 'assistant', content: offerText },
+        { role: 'user', content: 'Да, старую запись не трогаем' },
+      ], watermark: nowMs / 1000 + 2 })) } });
+    deps.provider.createMessage.mockResolvedValueOnce(toolResp('create_booking', { ...target, proposal_id: p.id, patient_confirmed: true }))
+      .mockResolvedValueOnce(textResp('Дополнительная запись оформлена.'));
+    const out = await orchestrator.runDialog(1, 'structured', { deps, nowMs, ctx: { phone: 'test-owner' } });
+    expect(deps.provider.createMessage.mock.calls[0][0].system).toContain(p.id);
+    expect(handler.mock.calls[0][2].additionalProposalId).toBe(p.id);
+    expect(write).toHaveBeenCalledTimes(1);
+    expect(out.writeSucceeded).toBe(true);
+  });
+  test('additional confirmation cannot be repurposed to move an existing visit', async () => {
+    const ctx = { dialogKey: 'structured', nowMs, clientPhone: 'test-owner', liveBookings: [old] };
+    const p = proposals.prepare(1, ctx, target, offerText);
+    proposals.markSent(1, 'structured', p.id, [offerText], nowMs);
+    const move = jest.fn(async () => ({ rescheduled: true }));
+    const deps = makeDeps({ handlers: { reschedule_booking: move },
+      listBookings: { run: jest.fn(async () => ({ bookings: [old] })) },
+      history: { loadTranscript: jest.fn(async () => ({ messages: [
+        { role: 'user', content: 'Нужен дополнительный визит' },
+        { role: 'assistant', content: offerText },
+        { role: 'user', content: 'Да' },
+      ], watermark: nowMs / 1000 + 2 })) } });
+    deps.provider.createMessage.mockResolvedValueOnce(toolResp('reschedule_booking', { record_id: 501, datetime: target.datetime, patient_confirmed: true }))
+      .mockResolvedValueOnce(textResp('Вы подтверждаете дополнительный визит?'));
+    const out = await orchestrator.runDialog(1, 'structured', { deps, nowMs, ctx: { phone: 'test-owner' } });
+    expect(move).not.toHaveBeenCalled();
+    expect(out.writeSucceeded).toBe(false);
+    expect(out.followupStopReason).toBe('booking_confirmation_required');
+  });
+  test('identical rejected write is not executed again in the model loop', async () => {
+    const write = jest.fn(async () => ({ needs_confirmation: true, invalid_args: true, error: 'Нужно предложение' }));
+    const deps = makeDeps({ handlers: { create_booking: write } });
+    deps.provider.createMessage.mockResolvedValueOnce(toolResp('create_booking', target))
+      .mockResolvedValueOnce(toolResp('create_booking', target))
+      .mockResolvedValueOnce(textResp('Уточните, нужен ли дополнительный визит.'));
+    await orchestrator.runDialog(1, 'structured', { deps, nowMs });
+    expect(write).toHaveBeenCalledTimes(1);
+  });
 });

@@ -8,6 +8,7 @@ const identityDefault = require('./identity');
 const config = require('../../config');
 const catalogBlockDefault = require('./catalog-block');
 const seqOffers = require('./sequential-offers');
+const additionalProposals = require('./additional-proposals');
 const chainConfirmation = require('./chain-confirmation');
 const bookingWriteGuard = require('./booking-write-guard');
 const replyGuard = require('./reply-guard');
@@ -571,6 +572,7 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
   // пациента: модель не переспрашивает уже известный номер, а инструмент подставит его сам.
   const toolCtx = {
     dialogKey,
+    requireStructuredAdditional: true,
     clientPhone: ctx.phone,
     clientName,
     nowMs,
@@ -825,7 +827,10 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
         nowMs, preferredIds: chainConfirmation.matchingOffers(liveOffers, toolCtx.previousAssistantText),
       });
     } catch (_) { promptOpts.activeOffers = []; }
-    if (chainConfirmation.isBookingCheck(lastUser && stripAllStamps(lastUser.content))) {
+    toolCtx.patientWatermark = watermark;
+    const additionalOffer = additionalProposals.offered(salonId, toolCtx);
+    toolCtx.additionalProposalId = additionalOffer ? additionalOffer.id : null;
+    if (!additionalOffer && chainConfirmation.isBookingCheck(lastUser && stripAllStamps(lastUser.content))) {
       // Record the automatic read as evidence for this direct answer too.
       evBuffer.push('list_client_bookings', {}, liveBookingRows === null
         ? { error: 'booking_check_unavailable' } : { bookings: liveBookingRows }, liveBookingRows === null);
@@ -847,7 +852,7 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
       ...promptOpts, session, firstContact, firstAgentReply, leadingClinic,
       promoBlock: promoKb ? promoKb.context : null,
       lastUserText: lastUser && lastUser.content,
-    });
+    }) + additionalProposals.prompt(additionalOffer);
 
     // Допустимые времена для финальной реплики: всё, что реально всплывало в
     // этом ходе — история диалога (клиент сам называл время / мы уже предлагали),
@@ -980,6 +985,8 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
     // (инцидент 2026-09-18, см. phone-request.js). { datetime } — из аргументов вызова.
     let phoneRequested = null;
     let directChainReply = null;
+    let additionalProposalId = null;
+    const rejectedConfirmationCalls = new Map();
     let confirmationBlocked = false;
     // Единственный легальный источник адреса/контактов клиники — статьи базы
     // знаний, прочитанные В ЭТОМ ходе (address-guard). Транскрипт и журнал
@@ -1052,19 +1059,31 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
         let result;
         let threw = false;
         try {
-          result = handler
-            ? await handler(salonId, tc.input, toolCtx)
-            : { error: `Неизвестный инструмент: ${tc.name}` };
+          const confirmationKey = tc.name === 'create_booking' ? repeatCallKey(tc.name, tc.input) : null;
+          result = additionalProposals.operationRejection(tc.name, tc.input, toolCtx)
+            || (confirmationKey && rejectedConfirmationCalls.has(confirmationKey)
+              ? rejectedConfirmationCalls.get(confirmationKey) : handler
+              ? await handler(salonId, tc.input, toolCtx)
+              : { error: `Неизвестный инструмент: ${tc.name}` });
         } catch (e) {
           threw = true;
           logger.error(`dialog ${dialogKey}: tool ${tc.name} ${Date.now() - startedAt}ms error ${String(e.message).slice(0, 120)}`);
           result = { error: e.message };
+        }
+        if (tc.name === 'create_booking' && result && result.needs_confirmation) {
+          rejectedConfirmationCalls.set(repeatCallKey(tc.name, tc.input), result);
         }
         const isError = !!(result && result.error);
         if (repeatKey && !isError) turnCallCache.set(repeatKey, result);
         // Журнал tool-цикла: сырые input/result в БД (форензика + память).
         evBuffer.push(tc.name, tc.input, result, isError);
         toolCtx.slotEvidence.add(tc.name, tc.input, result);
+        if (tc.name === 'prepare_additional_booking' && result && result.proposal_id && result.proposal_text && !isError) {
+          additionalProposalId = result.proposal_id;
+          directChainReply = result.proposal_text;
+          confirmationBlocked = true;
+          break;
+        }
         if (['create_booking', 'book_chain', 'reschedule_booking'].includes(tc.name)) {
           if (result && result.needs_confirmation) confirmationBlocked = true;
           if (result && (result.created || result.duplicate || result.booked_all || result.rescheduled)) confirmationBlocked = false;
@@ -1613,6 +1632,7 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
     const conversationComplete = followupStopReason === 'visit_confirmed';
     return { conversationComplete, followupStopReason, replies, escalated, sideEffect, exhausted, falseSuccess, falseSuccessKind,
       bookingFailed, bookingFailRecoverable, degradedAfterWrite, turnId: evBuffer.turnId,
+      additionalProposalId,
       attachments: toolCtx.attachments,
       // Ссылка на прайс салона — диспетчеру, чтобы досылать её пациенту, когда
       // НИ ОДНО фото не ушло (см. price-list.photoFailureText). Живёт рядом с

@@ -10,6 +10,8 @@ const { mentionsAdditionalVisit } = require('./additional-visit');
 // opt out of consent or turn a rejected transfer into creation.
 const CHAIN_MOVE = Symbol('confirmed chain transfer');
 const CHAIN_CREATE = Symbol('confirmed new chain link');
+const ADDITIONAL = Symbol('confirmed additional proposal');
+function withAdditionalProposal(ctx, input) { return { ...ctx, [ADDITIONAL]: input }; }
 const MONTH = '(?:январ|феврал|март|апрел|ма[йя]|июн|июл|август|сентябр|октябр|ноябр|декабр)[а-яё]*';
 const DATE = new RegExp(`\\d{4}-\\d{2}-\\d{2}|(?<![\\d:.])\\d{1,2}\\.(?:0[1-9]|1[0-2])(?:\\.\\d{4})?(?![\\d:.])|(?<![:\\d])\\d{1,2}\\s+${MONTH}(?:\\s+\\d{4}(?:\\s*года)?)?`, 'giu');
 const RELATIVE = /(?<!\p{L})(?:послезавтра|завтра|сегодня)(?!\p{L})/giu;
@@ -47,6 +49,77 @@ function datesIn(text, nowMs) {
     return ' ';
   });
   return { keys: [...new Set(keys)], rest };
+}
+
+// Remove only an explicit preservation clause referring to a live CRM visit.
+// Negation about the new visit (or an unknown old date/time) must remain visible.
+const OLD_REFERENCE = `(?:(?:прежн|стар|существующ)[а-яё]*\\s+)?(?:запис[а-яё]*|визит[а-яё]*|при[её]м[а-яё]*)(?:\\s+(?:на\\s+)?(?:${DATE.source})(?:\\s+в\\s+${TIME.source})?)?`;
+const KEEP_ACTION = '(?:не\\s+(?:переносим|переносите|переносить|трогаем|трогайте|трогать)|сохраняем|сохраните|оставляем|оставьте|оста[её]тся)';
+const KEEP_CLAUSE = new RegExp(`(?<!\\p{L})(?:${OLD_REFERENCE}\\s+${KEEP_ACTION}|без\\s+переноса\\s+${OLD_REFERENCE})(?=\\s*(?:[,;.!?\\n]|$))`, 'giu');
+function withoutPreservedBooking(text, ctx) {
+  const nowMs = ctx.nowMs || Date.now();
+  const live = (Array.isArray(ctx.liveBookings) ? ctx.liveBookings : [])
+    .filter(b => b && Number.isFinite(Date.parse(b.datetime)));
+  return clean(text).replace(KEEP_CLAUSE, clause => {
+    const dates = datesIn(clause, nowMs).keys;
+    const times = extractTimes(clause);
+    if (!dates.length && !/(?:прежн|стар|существующ)[а-яё]*\s/iu.test(clause)) return clause;
+    const verified = live.some(b => (!dates.length || (dates.length === 1
+      && dates[0] === moscowDateKey(Date.parse(b.datetime))))
+      && times.every(t => t === moscowHHMM(b.datetime)));
+    return verified ? ' ' : clause;
+  });
+}
+
+const ADDITIONAL_REASONS = {
+  confirmation_flag_missing: 'Нет подтверждения: patient_confirmed должен быть true только после согласия пациента.',
+  missing_context: 'Нет предложения или ответа пациента. Предложи конкретный дополнительный визит и дождись согласия.',
+  patient_refusal: 'В ответе пациента есть отказ или отмена. Не создавай запись.',
+  patient_question: 'Пациент задал вопрос. Ответь и дождись согласия на дополнительный визит.',
+  negative_proposal: 'Предложение содержит отрицание нового визита. Уточни, нужен ли он пациенту.',
+  additional_not_offered: 'Дополнительный визит с сохранением прежней записи ещё не предложен явно.',
+  invalid_datetime: 'Дата или время новой записи некорректны.',
+  date_not_offered: 'Дата новой записи не была предложена. Согласуй дату.',
+  date_conflict: 'Дата в ответе пациента не совпадает с выбранным новым визитом или неоднозначна.',
+  time_not_offered: 'Время новой записи не было предложено. Согласуй время.',
+  time_conflict: 'Время в ответе пациента отличается от выбранного нового визита.',
+  ambiguous_proposal: 'Предложено несколько дат или времён без однозначного выбора. Уточни вариант.',
+  consent_unclear: 'Согласие на дополнительный визит не установлено. Уточни согласие.',
+};
+function additionalConfirmationRejection(input, ctx) {
+  const reject = reason => ({ needs_confirmation: true, invalid_args: true,
+    confirmation_reason: reason, error: ADDITIONAL_REASONS[reason] });
+  const semantic = input.patient_confirmed === true;
+  if (Object.prototype.hasOwnProperty.call(input, 'patient_confirmed') && !semantic) return reject('confirmation_flag_missing');
+  const previous = withoutPreservedBooking(ctx.previousAssistantText, ctx);
+  const patient = withoutPreservedBooking(ctx.patientLastText, ctx).toLowerCase();
+  if (!previous.trim() || !patient.trim()) return reject('missing_context');
+  if (/(?<!\p{L})(?:нет|не)(?!\p{L})|отмен|неудоб/iu.test(patient)) return reject('patient_refusal');
+  if (/\?/.test(patient)) return reject('patient_question');
+  if (/(?<!\p{L})(?:не|нет)(?!\p{L})|без\s+перен|неудоб/iu.test(previous)) return reject('negative_proposal');
+  if (!mentionsAdditionalVisit(clean(ctx.previousAssistantText))
+      && !/дополнител|ещ[её]\s+одн|прежн[а-яё]*\s+(?:запис[а-яё]*\s+)?остав/iu.test(ctx.previousAssistantText || '')) return reject('additional_not_offered');
+  if (!Number.isFinite(Date.parse(input.datetime))) return reject('invalid_datetime');
+  const day = moscowDateKey(Date.parse(input.datetime)), time = moscowHHMM(input.datetime);
+  const nowMs = ctx.nowMs || Date.now();
+  const proposal = datesIn(previous, nowMs), answer = datesIn(patient, nowMs);
+  if (!proposal.keys.includes(day)) return reject('date_not_offered');
+  if (answer.keys.some(d => d !== day)) return reject('date_conflict');
+  const offered = [...new Set(extractTimes(previous))], selected = [...new Set(extractTimes(patient))];
+  if (!offered.includes(time)) return reject('time_not_offered');
+  if (selected.some(t => t !== time)) return reject('time_conflict');
+  if ((proposal.keys.length > 1 && answer.keys.length !== 1)
+      || (offered.length > 1 && selected.length !== 1)
+      || /\d\s*(?:или|и|[,–—-])\s*\d{1,2}\s+[а-яё]/iu.test(previous)) return reject('ambiguous_proposal');
+  if (!semantic) {
+    // Compatibility for internal callers without a model consent flag.
+    const words = answer.rest.replace(TIME, ' ').match(/[а-яa-z]+/giu) || [];
+    const allowed = new Set(['да', 'давайте', 'пожалуйста', 'хорошо', 'ок', 'окей', 'подходит',
+      'подтверждаю', 'согласен', 'согласна', 'все', 'всё', 'верно', 'на', 'в', 'это', 'время', 'меня']);
+    if (words.some(w => !allowed.has(w)) || /\d/.test(answer.rest.replace(TIME, ' '))
+        || (!selected.length && !words.some(w => /^(да|давайте|хорошо|ок|окей|подходит|подтверждаю|согласен|согласна|верно)$/.test(w)))) return reject('consent_unclear');
+  }
+  return null;
 }
 
 function transferConfirmed(targets, ctx, multiple = false, allowAdditional = false) {
@@ -129,12 +202,12 @@ function strictMismatch(input, ctx) {
   return !(moveIntent && transferConfirmed([input], ctx));
 }
 
-function patientIntent(texts) {
+function patientIntent(texts, ctx = {}) {
   for (const text of [...(texts || [])].reverse()) {
-    const s = clean(text).toLowerCase();
+    const s = withoutPreservedBooking(text, ctx).toLowerCase();
     if (/перенес|перенести|перенос|перезапис/iu.test(s)
         && !/(?<!\p{L})не(?!\p{L})[^.!?\n]{0,40}перен|без\s+перен/iu.test(s)) return 'reschedule';
-    if (/\?|(?<!\p{L})(?:нет|не)(?!\p{L})/iu.test(s)) return null;
+    if (/\?|отмен|(?<!\p{L})(?:нет|не)(?!\p{L})/iu.test(s)) return null;
     if (mentionsAdditionalVisit(s)) return 'additional';
     if (/хочу\s+запис|(?<!\p{L})запиши(?:те)?(?!\p{L})|нов(?:ая|ую)\s+запис/iu.test(s)) return 'new';
   }
@@ -145,17 +218,21 @@ function withNewChainLink(ctx, input) { return { ...ctx, [CHAIN_CREATE]: input }
 
 function creationRejection(input, ctx) {
   const scope = Object.prototype.hasOwnProperty.call(ctx, 'liveBookings');
-  const intent = patientIntent([...(ctx.patientRecentTexts || []), ctx.patientLastText]);
+  const intent = patientIntent([...(ctx.patientRecentTexts || []), ctx.patientLastText], ctx);
   const link = ctx[CHAIN_CREATE];
   const trustedLink = link && link.service_yc_id === input.service_yc_id && link.datetime === input.datetime;
   const previous = clean(ctx.previousAssistantText);
   const offeredTransfer = /перенести|перенес[её]м|переносим/iu.test(previous)
     && !/(?<!\p{L})не(?!\p{L})[^.!?\n]{0,60}перен|без\s+перен/iu.test(previous);
+  const additional = ctx[ADDITIONAL];
+  const trustedAdditional = additional && additional.proposal_id === input.proposal_id
+    && additional.datetime === input.datetime && additional.staff_yc_id === input.staff_yc_id
+    && additional.service_yc_id === input.service_yc_id;
   const moving = intent === 'reschedule' || offeredTransfer
     || (!['additional', 'new'].includes(intent) && ctx.rescheduleRequested);
   const blocked = { requires_reschedule: true, invalid_args: true,
     error: 'Создание новой записи вместо переноса запрещено. Используй исходный record_id из list_client_bookings и reschedule_booking после подтверждения. Для отдельного дополнительного визита требуется явный запрос пациента.' };
-  if (moving && !trustedLink) return blocked;
+  if (moving && !trustedLink && !trustedAdditional) return blocked;
   if (!scope) return null; // Existing non-dialog internal callers retain their contract.
   if (!Array.isArray(ctx.liveBookings) || ctx.liveBookings.some(b => !Array.isArray(b.service_yc_ids) || !b.service_yc_ids.length)) {
     return { unverified_existing_bookings: true, invalid_args: true,
@@ -167,15 +244,15 @@ function creationRejection(input, ctx) {
   if (identical.length === 1 && identical[0].record_id) {
     return { created: false, duplicate: true, record_id: identical[0].record_id };
   }
+  if (trustedAdditional) return null;
+  if (matches.length && ctx.requireStructuredAdditional && !trustedLink) {
+    return { needs_confirmation: true, invalid_args: true, confirmation_reason: 'structured_proposal_required',
+      error: 'Для дополнительного визита вызови prepare_additional_booking. Сервер покажет конкретный вариант пациенту; после его согласия используй create_booking с proposal_id. Если пациент просит перенос, используй reschedule_booking.' };
+  }
   if (matches.length) {
     if (intent !== 'additional') return blocked;
-    if ((Object.prototype.hasOwnProperty.call(input, 'patient_confirmed') && input.patient_confirmed !== true)
-        || (!mentionsAdditionalVisit(previous)
-          && !/дополнител|ещ[её]\s+одн|прежн[а-яё]*\s+(?:запис[а-яё]*\s+)?остав/iu.test(previous))
-        || !transferConfirmed([input], { ...ctx, patientConfirmed: input.patient_confirmed }, false, true)) {
-      return { needs_confirmation: true, invalid_args: true,
-        error: 'Для отдельного дополнительного визита явно предложи дату и время с сохранением прежней записи. Если пациент уже согласился по смыслу, повтори вызов с patient_confirmed:true без нового вопроса. Иначе дождись согласия.' };
-    }
+    const rejection = additionalConfirmationRejection(input, ctx);
+    if (rejection) return rejection;
   }
   if (!trustedLink && Object.prototype.hasOwnProperty.call(input, 'patient_confirmed')) {
     return confirmationRejection(input, ctx);
@@ -183,4 +260,4 @@ function creationRejection(input, ctx) {
   return null;
 }
 
-module.exports = { creationRejection, rescheduleRejection, strictMismatch, withChainTransfer, withNewChainLink, transferConfirmed, patientIntent };
+module.exports = { withAdditionalProposal, creationRejection, rescheduleRejection, strictMismatch, withChainTransfer, withNewChainLink, transferConfirmed, patientIntent };

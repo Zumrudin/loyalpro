@@ -12,6 +12,7 @@ const getSeqSlot = require('./get-sequential-slots');
 const getDates  = require('./get-available-dates');
 const getClient = require('./get-client');
 const createBk  = require('./create-booking');
+const prepareAdditional = require('./prepare-additional-booking');
 const bookChain = require('./book-chain');
 const escalate  = require('./escalate-to-operator');
 const listBookings = require('./list-client-bookings');
@@ -25,7 +26,7 @@ const svcMasters = require('./get-service-masters');
 const sendPrice = require('./send-price-list');
 
 const tools = [searchKb, listSvc, listStaff, getSlots, getParSlot, getSeqSlot, getDates, getClient,
-  createBk, bookChain, listBookings, visitHistory, cancelBk, reschedBk, modifySvc,
+  createBk, prepareAdditional, bookChain, listBookings, visitHistory, cancelBk, reschedBk, modifySvc,
   bonusBal, abonement, sendPrice, escalate];
 
 function build(list) {

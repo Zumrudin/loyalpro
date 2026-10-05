@@ -144,7 +144,9 @@ function createSlotEvidence() {
         : null;
       if (!wantServices || !wantServices.length) return true;
       const matches = rows.filter(r => r.ms === ms && (want === null || r.staff === want || r.staff === null));
-      return matches.some(r => r.service === null || wantServices.includes(r.service));
+      return matches.some(r => opts.requireExact
+        ? r.staff === want && wantServices.includes(r.service)
+        : r.service === null || wantServices.includes(r.service));
     },
     // Строки tool-events.loadRecent ({tool,input,result,is_error,age_ms}).
     // Выброшенный черновик (delivered=false) засевает: слот был реален в момент
