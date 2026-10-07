@@ -754,3 +754,29 @@ describe('телеметрия продаж (07.10.2026)', () => {
     expect(checkQuestionInsteadOfOffer('Есть 15:30 и 16:00, записать?', { slotToolCalled: false, patientLastText: 'запишите' })).toEqual([]);
   });
 });
+
+describe('телеметрия продаж — ложные срабатывания (07.10.2026)', () => {
+  const { checkPriceWithoutNextStep, checkQuestionInsteadOfOffer, hardViolations, FABRICATION_TYPES } = require('./services/agent/reply-guard');
+
+  test('цена + конкретное время без вопроса — это предложение, не «цена без шага»', () => {
+    expect(checkPriceWithoutNextStep('Чистка 6 500 ₽. Есть время в четверг 15:30.')).toEqual([]);
+    expect(checkPriceWithoutNextStep('Стоимость 6500 ₽, запишу вас на четверг.')).toEqual([]);
+  });
+
+  test('«никакой день» — не вопрос о дне', () => {
+    expect(checkQuestionInsteadOfOffer('Никакой день не подходит, увы.',
+      { slotToolCalled: false, patientLastText: 'запишите меня' })).toEqual([]);
+  });
+
+  test('«Какие дни удобны» ловится', () => {
+    expect(checkQuestionInsteadOfOffer('Какие дни вам удобны.',
+      { slotToolCalled: false, patientLastText: 'хочу записаться на чистку' })).toHaveLength(1);
+  });
+
+  test('новые типы мягкие — не в HARD_TYPES и не в FABRICATION_TYPES', () => {
+    for (const t of ['price_without_next_step', 'question_instead_of_offer']) {
+      expect(hardViolations([{ type: t, value: "x" }])).toEqual([]);
+      expect(FABRICATION_TYPES.has(t)).toBe(false);
+    }
+  });
+});
