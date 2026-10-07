@@ -26,11 +26,17 @@
 // ============================================================
 const { detectPromptScenarios, SCENARIOS } = require('./prompt-scenarios');
 const { stripAllStamps } = require('./transcript-time');
+const { extractTimes } = require('./reply-guard');
 
 const MAX_FACT_CHARS = 600;
 const MAX_QUERY_CHARS = 200;
 const STEM_LEN = 4;
-const TIME_RE = /\d{1,2}:\d{2}/;
+// «Есть время» — РОВНО по правилу reply-guard (extractTimes: «10:00» И
+// «10.00», но не дата «11.08»): важно то, что засеет allowedTimes, а не своя
+// копия регулярки, которая разъедется с ним.
+function hasTime(text) {
+  return extractTimes(text).length > 0;
+}
 // Хвост контекста buildKnowledgeContext (agent-rag.js) — цены из каталога, не
 // статья: цены модель берёт из каталога промпта.
 const SERVICES_HEADER_RE = /^АКТУАЛЬНЫЕ УСЛУГИ И ЦЕНЫ:/;
@@ -86,8 +92,8 @@ function stems(userText) {
 }
 
 function dropTimedSentences(line) {
-  if (!TIME_RE.test(line)) return line;
-  return line.split(/(?<=[.!?…])\s+/).filter(s => !TIME_RE.test(s)).join(' ').trim();
+  if (!hasTime(line)) return line;
+  return line.split(/(?<=[.!?…])\s+/).filter(s => !hasTime(s)).join(' ').trim();
 }
 
 /**
@@ -101,18 +107,27 @@ function pickServiceFact(context, userText) {
   const titleIdx = lines.findIndex(Boolean);
   if (titleIdx < 0) return null;
   const title = lines[titleIdx];
-  if (SERVICES_HEADER_RE.test(title) || TIME_RE.test(title)) return null;
+  if (SERVICES_HEADER_RE.test(title) || hasTime(title)) return null;
   const titleLc = norm(title);
   const st = stems(userText);
   if (!st.length || !st.some(s => titleLc.includes(s))) return null;
 
+  // Берём ТОЛЬКО первый абзац топ-чанка: chunkArticle склеивает абзацы через
+  // пустую строку, buildKnowledgeContext — чанки тоже через пустую строку, и
+  // границу «абзац той же статьи / чанк другой статьи» по тексту не отличить.
+  // Для «одного факта» первого абзаца достаточно, а чужая статья не протечёт.
   const body = [];
   let total = 0;
+  let started = false;
   for (const raw of lines.slice(titleIdx + 1)) {
-    if (!raw) continue;
+    if (!raw) {
+      if (started) break;
+      continue;
+    }
     if (SERVICES_HEADER_RE.test(raw)) break;
     // Следующий чанк той же статьи начинается с того же заголовка — дальше не читаем.
-    if (body.length && raw === title) break;
+    if (started && raw === title) break;
+    started = true;
     const l = dropTimedSentences(raw);
     if (!l) continue;
     const piece = l.slice(0, MAX_FACT_CHARS - total);
@@ -124,4 +139,4 @@ function pickServiceFact(context, userText) {
   return { title, text: body.join('\n').slice(0, MAX_FACT_CHARS) };
 }
 
-module.exports = { wantsServiceFact, kbQuery, pickServiceFact, MAX_FACT_CHARS, ALIASES };
+module.exports = { wantsServiceFact, kbQuery, pickServiceFact, hasTime, MAX_FACT_CHARS, ALIASES };

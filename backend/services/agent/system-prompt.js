@@ -10,6 +10,7 @@ const { sanitizeLine, sanitizeName } = require('./sanitize');
 const { buildProductAvailabilityRule } = require('./product-availability-rule');
 const { detectPromptScenarios } = require('./prompt-scenarios');
 const { PRICE_FOLLOWTHROUGH, renderSalesTail } = require('./sales-modules');
+const { hasTime } = require('./service-fact');
 
 // Правило-переходник режима AGENT_CATALOG_IN_PROMPT: правила ниже по тексту
 // ссылаются на list_services (они выверены живыми тестами — не переписываем),
@@ -168,9 +169,10 @@ function buildSystemPrompt(opts = {}) {
   const serviceFact = opts.serviceFact && typeof opts.serviceFact === 'object'
     && typeof opts.serviceFact.text === 'string' && opts.serviceFact.text.trim()
     ? {
-      title: sanitizeLine(opts.serviceFact.title, 120),
+      // Заголовок со временем не рендерим вовсе (тот же allowedTimes).
+      title: hasTime(opts.serviceFact.title) ? '' : sanitizeLine(opts.serviceFact.title, 120),
       lines: String(opts.serviceFact.text).split('\n')
-        .filter(l => !/\d{1,2}:\d{2}/.test(l))
+        .filter(l => !hasTime(l))
         .map(l => sanitizeLine(l, 400)).filter(Boolean).slice(0, 12),
     } : null;
   // Сценарий продажи по последнему сообщению (prompt-scenarios): хвостовой
@@ -634,7 +636,7 @@ function buildSystemPrompt(opts = {}) {
     // префикса. Модель берёт отсюда ОДИН факт по правилу о цене.
     ...(serviceFact && serviceFact.lines.length ? [
       ``,
-      `СПРАВКА ОБ УСЛУГЕ (найдена автоматически в базе знаний по вопросу пациента; статья «${serviceFact.title}»):`,
+      `СПРАВКА ОБ УСЛУГЕ (найдена автоматически в базе знаний по вопросу пациента${serviceFact.title ? `; статья «${serviceFact.title}»` : ''}):`,
       ...serviceFact.lines.map(l => `- ${l}`),
       `Используй отсюда не больше ОДНОГО факта и только если он относится к услуге из вопроса. Повторно вызывать search_knowledge_base ради этой услуги не нужно.`,
     ] : []),

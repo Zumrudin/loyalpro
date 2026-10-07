@@ -1914,6 +1914,14 @@ describe('консультативная продажа в v1 (07.10.2026)', () 
     expect(withFact).toContain(FACT_HEADER);
   });
 
+  test('справка: точечное время «10.00» и время в заголовке не рендерятся', () => {
+    const p = buildSystemPrompt({ ...BASE, lastUserText: 'Сколько стоит чистка?',
+      serviceFact: { title: 'Чистка с 9.30', text: 'Входит уход.\nПриём с 10.00 до 21.00' } });
+    const block = p.slice(p.indexOf(FACT_HEADER));
+    expect(block).toContain('Входит уход.');
+    expect(block).not.toMatch(/10\.00|21\.00|9\.30/);
+  });
+
   test('пустая или битая справка блока не даёт', () => {
     for (const serviceFact of [null, 'строка', { title: 'X', text: '' }, { title: 'X', text: 'с 10:00 до 21:00' }]) {
       expect(buildSystemPrompt({ ...BASE, serviceFact })).not.toContain(FACT_HEADER);

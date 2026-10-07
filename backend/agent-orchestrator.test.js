@@ -3477,6 +3477,51 @@ describe('предвызов КБ: справка об услуге', () => {
     expect(deps.provider.createMessage.mock.calls[0][0].system).not.toContain(FACT_HEAD);
   });
 
+  test('перегенерация с другим вопросом о цене → справка заменяется, без устаревшей', async () => {
+    const CHIST = 'Чистка лица\nУльтразвук и механика.';
+    const PIL = 'Пилинг\nХимический пилинг ретиноевый.';
+    let loads = 0;
+    let checks = 0;
+    const kbHandler = jest.fn(async (_s, { query }) => ({ found: true, sources: [],
+      context: /пилинг/i.test(query) ? PIL : CHIST }));
+    const deps = makeDeps({
+      history: {
+        loadTranscript: jest.fn(async () => ({ watermark: 100 + loads,
+          messages: [{ role: 'user', content: ++loads === 1 ? 'Сколько стоит чистка?' : 'А сколько стоит пилинг?' }] })),
+        hasIncomingAfter: jest.fn(async () => (++checks === 1)),
+      },
+      handlers: { search_knowledge_base: kbHandler },
+    });
+    deps.provider.createMessage
+      .mockResolvedValueOnce({ assistantMsg: { role: 'assistant', content: 'ок' }, toolCalls: [], text: 'Первый' })
+      .mockResolvedValueOnce({ assistantMsg: { role: 'assistant', content: 'ок' }, toolCalls: [], text: 'Второй' });
+    await orchestrator.runDialog(1, '79001112233', { deps });
+    expect(kbHandler).toHaveBeenCalledTimes(2);
+    const sys2 = deps.provider.createMessage.mock.calls[1][0].system;
+    expect(sys2).toContain('Химический пилинг');
+    expect(sys2).not.toContain('Ультразвук и механика');
+  });
+
+  test('перегенерация с тем же вопросом → повторного похода в КБ нет', async () => {
+    let checks = 0;
+    const { deps, kbHandler } = factDeps('Сколько стоит чистка?', { found: true, context: CTX, sources: [] });
+    deps.history.hasIncomingAfter = jest.fn(async () => (++checks === 1));
+    deps.provider.createMessage.mockReset();
+    deps.provider.createMessage.mockResolvedValue(
+      { assistantMsg: { role: 'assistant', content: 'ок' }, toolCalls: [], text: 'Ответ' });
+    await orchestrator.runDialog(1, '79001112233', { deps });
+    expect(deps.provider.createMessage).toHaveBeenCalledTimes(2);
+    expect(kbHandler).toHaveBeenCalledTimes(1);
+    expect(deps.provider.createMessage.mock.calls[1][0].system).toContain(FACT_HEAD);
+  });
+
+  test('v2-промпт → предвызова нет', async () => {
+    const { deps, kbHandler } = factDeps('Сколько стоит чистка?', { found: true, context: CTX, sources: [] });
+    deps.config = { ...require('./config'), AGENT_PROMPT_VERSION: 'v2', AGENT_CATALOG_IN_PROMPT: false };
+    await orchestrator.runDialog(1, '79001112233', { deps });
+    expect(kbHandler).not.toHaveBeenCalled();
+  });
+
   test('справка пишется в журнал tool-событий', async () => {
     const stub = makeToolEventsStub();
     const { deps } = factDeps('Сколько стоит чистка?', { found: true, context: CTX, sources: [] });

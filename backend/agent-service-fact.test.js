@@ -43,6 +43,25 @@ describe('pickServiceFact', () => {
     expect(f.text).toContain('В стоимость входит уход после чистки.');
   });
 
+  test('точечная форма времени «10.00» тоже выбрасывается, дата «11.08» — нет', () => {
+    const ctx = 'Чистка лица\nУльтразвук. Приём с 10.00 до 21.00. Акция до 11.08 включительно.';
+    const f = pickServiceFact(ctx, 'чистка');
+    expect(f.text).toContain('Ультразвук.');
+    expect(f.text).not.toMatch(/10\.00|21\.00/);
+    expect(f.text).toContain('11.08');
+  });
+
+  test('заголовок с временем → null', () => {
+    expect(pickServiceFact('Чистка с 10.00\nУльтразвук.', 'чистка')).toBeNull();
+  });
+
+  test('короткий топ-чанк: текст второй статьи (после пустой строки) не протекает', () => {
+    const ctx = 'Чистка лица\nУльтразвуковая чистка.\n\nЛазерная эпиляция\nДиодный лазер, подходит для загорелой кожи.';
+    const f = pickServiceFact(ctx, 'чистка');
+    expect(f.text).toBe('Ультразвуковая чистка.');
+    expect(f.text).not.toContain('Диодный');
+  });
+
   test('заголовок топ-чанка не про запрос → null (fail-closed)', () => {
     expect(pickServiceFact(CTX, 'Сколько стоит ботокс?')).toBeNull();
   });

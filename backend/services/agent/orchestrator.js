@@ -595,7 +595,7 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
   let serviceFact = null;      // { title, text } из предвызова КБ (service-fact)
   let serviceFactKb = null;    // сырой ответ КБ — источник адреса для address-guard
   let serviceFactQuery = null; // аргументы предвызова — журнал и кэш повторов
-  let serviceFactChecked = false;
+  let serviceFactCheckedQuery = null; // запрос, по которому уже ходили в КБ в этом ходу
 
   for (let attempt = 0; attempt <= MAX_REGEN; attempt++) {
     // leadingClinic — сообщения клиники, срезанные из НАЧАЛА транскрипта
@@ -734,28 +734,38 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
 
     // Справка об услуге на вопросе о цене / «не знаю, что выбрать» — КБ зовёт
     // код до первого прохода (service-fact.js, тот же приём, что промо выше).
-    // Один раз на ход, переживает перегенерации; fail-open — блока просто нет.
-    // Флаг «проверено» ставится только при реальном походе в КБ: перегенерация
-    // с новым вопросом о цене в серии должна получить свой шанс.
-    if (cfg.AGENT_SERVICE_FACT_PREFETCH && !serviceFactChecked) {
+    // Ключ — kbQuery ТЕКУЩЕГО последнего сообщения пациента: перегенерация с
+    // тем же вопросом в КБ повторно не ходит, а с другим (в серию дописали новый
+    // вопрос — или уже не о цене) прежняя справка сбрасывается, иначе в промпт
+    // ушла бы справка о прошлой услуге. Fail-open — блока просто нет.
+    // v2 блок не рендерит (factualTail не берёт хвост справки) — там предвызов
+    // был бы лишним походом в эмбеддинги и фантомным событием журнала.
+    if (cfg.AGENT_SERVICE_FACT_PREFETCH && cfg.AGENT_PROMPT_VERSION !== 'v2') {
       const lastUserForFact = [...messages].reverse().find(m => m && m.role === 'user');
       const lastUserFactText = lastUserForFact && typeof lastUserForFact.content === 'string'
         ? lastUserForFact.content : '';
-      if (serviceFactMod.wantsServiceFact(lastUserFactText) && registry.handlers['search_knowledge_base']) {
-        serviceFactChecked = true;
-        const factQuery = { query: serviceFactMod.kbQuery(lastUserFactText) };
-        try {
-          const kb = await registry.handlers['search_knowledge_base'](salonId, factQuery, toolCtx);
-          const picked = kb && kb.found && typeof kb.context === 'string'
-            ? serviceFactMod.pickServiceFact(kb.context, lastUserFactText) : null;
-          if (picked) {
-            serviceFact = picked;
-            serviceFactKb = kb;
-            serviceFactQuery = factQuery;
+      const curFactQuery = serviceFactMod.wantsServiceFact(lastUserFactText)
+        ? serviceFactMod.kbQuery(lastUserFactText) : null;
+      if (curFactQuery !== serviceFactCheckedQuery) {
+        serviceFact = null;
+        serviceFactKb = null;
+        serviceFactQuery = null;
+        serviceFactCheckedQuery = curFactQuery;
+        if (curFactQuery && registry.handlers['search_knowledge_base']) {
+          const factQuery = { query: curFactQuery };
+          try {
+            const kb = await registry.handlers['search_knowledge_base'](salonId, factQuery, toolCtx);
+            const picked = kb && kb.found && typeof kb.context === 'string'
+              ? serviceFactMod.pickServiceFact(kb.context, lastUserFactText) : null;
+            if (picked) {
+              serviceFact = picked;
+              serviceFactKb = kb;
+              serviceFactQuery = factQuery;
+            }
+            logger.info(`dialog ${dialogKey}: справка об услуге — ${picked ? `статья «${picked.title}»` : 'не найдена'}`);
+          } catch (e) {
+            logger.warn(`dialog ${dialogKey}: предвызов справки об услуге не удался (${e.message}) — без блока`);
           }
-          logger.info(`dialog ${dialogKey}: справка об услуге — ${picked ? `статья «${picked.title}»` : 'не найдена'}`);
-        } catch (e) {
-          logger.warn(`dialog ${dialogKey}: предвызов справки об услуге не удался (${e.message}) — без блока`);
         }
       }
     }
@@ -1039,6 +1049,10 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
     let kbSourceText = promoKb && typeof promoKb.context === 'string' ? promoKb.context : '';
     // Справка об услуге из предвызова — такой же легальный источник адреса,
     // как статья об акции (сырой context, не JSON.stringify — готча promo).
+    // ОСОЗНАННО: предвызов РАСШИРЯЕТ источники address-guard на ВЕСЬ сырой
+    // context КБ (а не только на отобранный факт). Это безопасно: там только
+    // реальные статьи салона, т.е. легализуются лишь настоящие адреса — ровно
+    // то, что дал бы собственный вызов search_knowledge_base моделью.
     if (serviceFactKb && typeof serviceFactKb.context === 'string') kbSourceText += `\n${serviceFactKb.context}`;
     // Кэш вызовов ЭТОГО хода для дедупа повторов (см. REPEAT_CALL_HINT).
     // Предвызов засеваем сразу: модель может позвать search_knowledge_base с тем
