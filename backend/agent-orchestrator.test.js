@@ -3186,6 +3186,34 @@ describe('reply-guard: лишний вопрос про процедуру пр�
 // ── Живой прогон 2026-09-19: исправленная реплика повторно не проверялась ────
 // Довызов без инструментов убирал выдуманное время и СОЧИНЯЛ новое («суббота
 // 26 сентября, 10:00» — у мастера выходной, времени ни в одной выдаче нет).
+describe('телеметрия продаж — только исходный черновик (07.10.2026)', () => {
+  const NOW = Date.parse('2026-09-19T09:00:00+03:00');
+  const msgs = [{ role: 'user', content: 'Хочу записаться на чистку на завтра' }];
+  const salesWarns = () => mockLogger.warn.mock.calls.map(c => String(c[0]))
+    .filter(l => /question_instead_of_offer|price_without_next_step/.test(l));
+
+  test('исходный черновик с вопросом о дне — question_instead_of_offer в логе', async () => {
+    mockLogger.warn.mockClear();
+    const deps = makeDeps({ history: { loadTranscript: jest.fn(async () => ({ messages: msgs, watermark: 100 })) } });
+    deps.provider.createMessage.mockResolvedValueOnce(textResp('Какой день и половина дня вам удобнее?'));
+    await orchestrator.runDialog(1, 'k', { deps, nowMs: NOW });
+    expect(salesWarns()).toHaveLength(1);
+  });
+
+  test('исправленный довызовом текст («какой день…») телеметрию продаж не раздувает', async () => {
+    mockLogger.warn.mockClear();
+    const deps = makeDeps({ history: { loadTranscript: jest.fn(async () => ({ messages: msgs, watermark: 100 })) } });
+    deps.provider.createMessage
+      .mockResolvedValueOnce(textResp('Могу предложить 18:00.'))
+      .mockResolvedValueOnce(textResp('Какой день и половина дня вам удобнее?'));
+    const out = await orchestrator.runDialog(1, 'k', { deps, nowMs: NOW });
+    expect(deps.provider.createMessage).toHaveBeenCalledTimes(2);
+    expect(out.replies[0]).toMatch(/Какой день/);
+    expect(mockLogger.warn.mock.calls.some(c => /после довызова 1/.test(String(c[0])))).toBe(false);
+    expect(salesWarns()).toEqual([]);
+  });
+});
+
 describe('reply-guard: повторная проверка после довызова', () => {
   const NOW = Date.parse('2026-09-19T09:00:00+03:00');
   const msgs = [{ role: 'assistant', content: 'Есть 13:30 и 14:00.' }, { role: 'user', content: 'Днем не могу' }];

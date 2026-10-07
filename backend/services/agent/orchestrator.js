@@ -1443,7 +1443,11 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
       // инструментов убирал выдуманное время и сочинял новое, а второй проверки
       // не было). Довызовов не больше MAX_REPLY_CORRECTIONS; остались выдумки о
       // времени — детерминированный запасной текст вместо реплики модели.
-      const lint = (joined) => [
+      // salesTelemetry — только на ИСХОДНОМ черновике: исправленный довызовом
+      // текст пишется по buildHardFixPrompt («спроси день и половину дня»), и
+      // считать его «вопросом вместо предложения» значило бы раздувать метрику
+      // нашей же инструкцией (SAFE_FALLBACK_TEXT не линтуется вовсе).
+      const lint = (joined, { salesTelemetry = true } = {}) => [
         ...replyGuard.lintReply(joined, { hasPriorAssistant, firstContact }),
         ...replyGuard.checkOfferedTimes(joined, allowedTimes),
         // Плотная запись (§8 спеки): только лог, переписывания нет (offer_bypass
@@ -1497,14 +1501,16 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
         ...replyGuard.checkGiftRepeat(joined,
           { priorHasGift: replyGuard.GIFT_RE.test(priorAssistantText) }),
         // Телеметрия продаж (07.10.2026) — только лог, см. шапку в reply-guard.
-        ...replyGuard.checkPriceWithoutNextStep(joined),
-        ...replyGuard.checkQuestionInsteadOfOffer(joined,
-          { slotToolCalled: slotToolCalled || freshSlotJournal, patientLastText: toolCtx.patientLastText }),
+        ...(salesTelemetry ? [
+          ...replyGuard.checkPriceWithoutNextStep(joined),
+          ...replyGuard.checkQuestionInsteadOfOffer(joined,
+            { slotToolCalled: slotToolCalled || freshSlotJournal, patientLastText: toolCtx.patientLastText }),
+        ] : []),
       ];
       let corrections = 0;
       for (;;) {
         const joined = replies.join('\n');
-        const violations = lint(joined);
+        const violations = lint(joined, { salesTelemetry: corrections === 0 });
         if (violations.length) {
           logger.warn(`dialog ${dialogKey}: reply-guard${corrections ? ` (после довызова ${corrections})` : ''}: ${JSON.stringify(violations)}`);
         }

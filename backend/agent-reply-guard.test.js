@@ -781,3 +781,20 @@ describe('телеметрия продаж — ложные срабатыва�
     }
   });
 });
+
+describe('телеметрия продаж — правки ревью (07.10.2026)', () => {
+  const { checkPriceWithoutNextStep, checkQuestionInsteadOfOffer } = require('./services/agent/reply-guard');
+  const booking = { slotToolCalled: false, patientLastText: 'хочу записаться на чистку' };
+
+  test('«предлож» и время через точку — шаг после цены', () => {
+    expect(checkPriceWithoutNextStep('Чистка 6 500 ₽. Могу предложить четверг.')).toEqual([]);
+    expect(checkPriceWithoutNextStep('Чистка 6 500 ₽. Есть четверг 15.30.')).toEqual([]);
+    // «6.500» — не время: хвостовая цифра отсекает ложный шаг
+    expect(checkPriceWithoutNextStep('Чистка 6.500 ₽.')).toHaveLength(1);
+  });
+
+  test('«Какая дата удобна» — вопрос о дне', () => {
+    expect(checkQuestionInsteadOfOffer('Какая дата вам удобна.', booking))
+      .toEqual([{ type: 'question_instead_of_offer', value: 'Какая дата вам удобна.' }]);
+  });
+});
