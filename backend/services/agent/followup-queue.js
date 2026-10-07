@@ -13,6 +13,7 @@ const chatEvents = require('../chat-events');
 const { db: realDb } = require('../../db');
 const { loadStopReason } = require('./followup-policy');
 const { resolveDelays, nextAtFor } = require('./followup-schedule');
+const { normalizePhoneKey } = require('../agent-gate');
 const { createLogger } = require('../../logger');
 
 const log = createLogger('Followup');
@@ -117,13 +118,33 @@ async function close(salonId, dialogKey, status, reason, opts = {}) {
  * знает только телефон клиента, а ключ диалога у tdlib/MAX может быть chat_id.
  * Используется на `record create` (запись сделал администратор или сама Мила
  * — во втором случае строка уже погашена диспетчером, UPDATE ничего не найдёт).
- * Номер — в форме normalizePhoneKey (`79…`), так же хранится agent_followups.phone.
+ * agent_followups.phone пишется из СЫРОГО meta.phone вебхука Chatpush (на деве
+ * все российские номера там `7XXXXXXXXXX`, но гарантии формата нет), поэтому
+ * сверяем со всеми ходовыми формами (`phoneVariants`): канон, +7…, 8…, 10 цифр
+ * и входная строка как есть. Что хранит schedule() — не трогаем (его читают
+ * воркер и «Чат»).
  * Статус всегда 'cancelled'. SSE `followup_status` уходит здесь, по dialog_key
  * КАЖДОЙ погашенной строки (RETURNING): чип в «Чате» адресуется ключом диалога,
  * и событие с номером вместо chat_id не нашло бы диалог tdlib/MAX.
  * Best-effort: сбой БД → 0.
  * @returns {Promise<number>} сколько строк погашено
  */
+function phoneVariants(phone) {
+  const raw = String(phone || '').trim();
+  const key = normalizePhoneKey(raw);
+  const out = new Set();
+  if (raw) out.add(raw);
+  if (key) {
+    out.add(key);
+    if (/^7\d{10}$/.test(key)) {
+      out.add('+' + key);
+      out.add('8' + key.slice(1));
+      out.add(key.slice(1));
+    }
+  }
+  return [...out];
+}
+
 async function closeByPhone(salonId, phone, reason, opts = {}) {
   const db = opts.db || realDb;
   if (!salonId || !phone) return 0;
@@ -131,9 +152,9 @@ async function closeByPhone(salonId, phone, reason, opts = {}) {
     const r = await db.query(
       `UPDATE agent_followups
           SET status = 'cancelled', close_reason = $3, updated_at = now()
-        WHERE salon_id = $1 AND phone = $2 AND status = 'scheduled'
+        WHERE salon_id = $1 AND phone = ANY($2::text[]) AND status = 'scheduled'
         RETURNING dialog_key`,
-      [salonId, String(phone), reason || null]);
+      [salonId, phoneVariants(phone), reason || null]);
     for (const row of (r && r.rows) || []) {
       try { chatEvents.emitFollowupStatus(salonId, row.dialog_key, 'cancelled', 0); }
       catch (e) { log.warn(`followup closeByPhone SSE ${row.dialog_key}: ${e.message}`); }
@@ -159,4 +180,4 @@ function shouldAwaitReply(res = {}) {
   return !!res.delivered && !res.writeSucceeded && !res.escalated && !res.silent && !res.conversationComplete && !res.followupStopReason;
 }
 
-module.exports = { schedule, close, closeByPhone, shouldAwaitReply, CLOSE_STATUSES };
+module.exports = { schedule, close, closeByPhone, phoneVariants, shouldAwaitReply, CLOSE_STATUSES };

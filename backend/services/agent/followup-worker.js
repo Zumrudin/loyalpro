@@ -46,7 +46,7 @@ const cardBalance = require('../card-balance');
 const { classifySituation, lastOwnReply } = require('./followup-situation');
 const { chooseBonusLine, BONUS_MENTION_RE } = require('./followup-bonus');
 const rag = require('../agent-rag');
-const { pickServiceFact, kbQuery } = require('./service-fact');
+const { pickServiceFact, kbQuery, SERVICE_FACT_TIMEOUT_MS, withTimeout } = require('./service-fact');
 const { createLogger } = require('../../logger');
 
 const log = createLogger('FollowupWorker');
@@ -62,10 +62,7 @@ const RETRY_BACKOFF_S = 480;
 // экспортируются ровно ради него.
 // Two bridge attempts (125 s each) + Polza (60 s + 20 s fallback).
 const LLM_TIMEOUT_MS = 360000;
-// Поход в RAG за справкой (эмбеддинг запроса + поиск): справка — украшение,
-// и зависший RAG не должен съедать бюджет LLM_TIMEOUT_MS. По таймауту —
-// напоминание без справки (fail-open).
-const SERVICE_FACT_TIMEOUT_MS = 8000;
+// Таймаут похода в RAG за справкой — общий с оркестратором (service-fact.js).
 
 // На сколько откладывается строка, когда отвечать сейчас НЕЛЬЗЯ, но запрет
 // пройдёт сам (аварийный рычаг процесса). Минуты, а не сутки как в «Заботе»:
@@ -266,17 +263,6 @@ async function deferRow(d, row, minutes, reason) {
       WHERE id = $1 AND status = 'scheduled'`,
     [row.id, Math.max(1, Math.ceil(Number(minutes) || 1)), reason || null]);
   d.log.info(`followup #${row.id}: отложено на ${minutes} мин (${reason})`);
-}
-
-function withTimeout(promise, ms, label) {
-  let t;
-  return Promise.race([
-    Promise.resolve(promise).finally(() => clearTimeout(t)),
-    new Promise((_, rej) => {
-      t = setTimeout(() => rej(new Error(`${label} timeout ${ms}ms`)), ms);
-      if (t.unref) t.unref();
-    }),
-  ]);
 }
 
 /**

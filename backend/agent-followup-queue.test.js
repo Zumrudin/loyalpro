@@ -147,9 +147,27 @@ describe('closeByPhone (запись в CRM)', () => {
     expect(n).toBe(2);
     expect(calls[0].sql).toMatch(/UPDATE agent_followups/);
     expect(calls[0].sql).toMatch(/status\s*=\s*'cancelled'/);
-    expect(calls[0].sql).toMatch(/phone\s*=\s*\$2/);
+    expect(calls[0].sql).toMatch(/phone\s*=\s*ANY\(\$2/);
     expect(calls[0].sql).toMatch(/status\s*=\s*'scheduled'/);
-    expect(calls[0].params).toEqual([1, '79200255591', 'booked_in_crm']);
+    expect(calls[0].params[0]).toBe(1);
+    expect(calls[0].params[2]).toBe('booked_in_crm');
+  });
+
+  test('номер сверяется со ВСЕМИ формами: строка могла лечь сырым meta.phone', async () => {
+    for (const input of ['79200255591', '+7 (920) 025-55-91', '89200255591', '9200255591']) {
+      const calls = [];
+      const db = { query: async (sql, params) => { calls.push(params); return { rowCount: 0, rows: [] }; } };
+      await queue.closeByPhone(1, input, 'booked_in_crm', { db });
+      expect(calls[0][1]).toEqual(expect.arrayContaining(
+        ['79200255591', '+79200255591', '89200255591', '9200255591']));
+    }
+  });
+
+  test('нероссийский номер — только как есть (и в цифрах), без выдуманных РФ-форм', async () => {
+    const calls = [];
+    const db = { query: async (sql, params) => { calls.push(params); return { rowCount: 0, rows: [] }; } };
+    await queue.closeByPhone(1, '+994501234567', 'x', { db });
+    expect(calls[0][1].sort()).toEqual(['+994501234567', '994501234567']);
   });
 
   test('SSE-событие уходит по КЛЮЧУ ДИАЛОГА каждой погашенной строки, а не по номеру', async () => {

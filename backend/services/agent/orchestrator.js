@@ -754,7 +754,12 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
         if (curFactQuery && registry.handlers['search_knowledge_base']) {
           const factQuery = { query: curFactQuery };
           try {
-            const kb = await registry.handlers['search_knowledge_base'](salonId, factQuery, toolCtx);
+            // Таймаут — общий с воркером напоминаний: buildKnowledgeContext
+            // может ждать эмбеддинг и живой YClients /services (30 с axios), а
+            // ход стоит ДО первого прохода провайдера. Таймаут = catch ниже.
+            const kb = await serviceFactMod.withTimeout(
+              registry.handlers['search_knowledge_base'](salonId, factQuery, toolCtx),
+              d.serviceFactTimeoutMs || serviceFactMod.SERVICE_FACT_TIMEOUT_MS, 'service fact KB');
             const picked = kb && kb.found && typeof kb.context === 'string'
               ? serviceFactMod.pickServiceFact(kb.context, lastUserFactText) : null;
             if (picked) {

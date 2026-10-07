@@ -139,4 +139,25 @@ function pickServiceFact(context, userText) {
   return { title, text: body.join('\n').slice(0, MAX_FACT_CHARS) };
 }
 
-module.exports = { wantsServiceFact, kbQuery, pickServiceFact, hasTime, MAX_FACT_CHARS, ALIASES };
+// Поход в RAG за справкой (эмбеддинг запроса + поиск, у buildKnowledgeContext
+// внутри бывает и живой YClients /services с 30-секундным axios): справка —
+// украшение, зависший RAG не должен держать ни ход Милы до первого прохода
+// провайдера, ни бюджет LLM у напоминания. Одна константа на оба потребителя
+// (оркестратор и followup-worker). По таймауту — без справки (fail-open).
+const SERVICE_FACT_TIMEOUT_MS = 8000;
+
+function withTimeout(promise, ms, label) {
+  let t;
+  return Promise.race([
+    Promise.resolve(promise).finally(() => clearTimeout(t)),
+    new Promise((_, rej) => {
+      t = setTimeout(() => rej(new Error(`${label} timeout ${ms}ms`)), ms);
+      if (t.unref) t.unref();
+    }),
+  ]);
+}
+
+module.exports = {
+  wantsServiceFact, kbQuery, pickServiceFact, hasTime, MAX_FACT_CHARS, ALIASES,
+  SERVICE_FACT_TIMEOUT_MS, withTimeout,
+};

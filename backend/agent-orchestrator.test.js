@@ -3505,6 +3505,21 @@ describe('предвызов КБ: справка об услуге', () => {
     expect(deps.provider.createMessage.mock.calls[0][0].system).not.toContain(FACT_HEAD);
   });
 
+  test('зависшая КБ обрывается таймаутом → ход штатный, без блока', async () => {
+    const { deps } = factDeps('Сколько стоит чистка?', null);
+    deps.registry.handlers.search_knowledge_base = jest.fn(() => new Promise(() => {}));
+    deps.serviceFactTimeoutMs = 20;
+    const res = await orchestrator.runDialog(1, '79001112233', { deps });
+    expect(res.replies).toEqual(['Ответ']);
+    expect(deps.provider.createMessage.mock.calls[0][0].system).not.toContain(FACT_HEAD);
+  });
+
+  test('таймаут справки общий с воркером напоминаний', () => {
+    const sf = require('./services/agent/service-fact');
+    expect(sf.SERVICE_FACT_TIMEOUT_MS).toBe(require('./services/agent/followup-worker').SERVICE_FACT_TIMEOUT_MS);
+    expect(sf.SERVICE_FACT_TIMEOUT_MS).toBeLessThanOrEqual(10000);
+  });
+
   test('перегенерация с другим вопросом о цене → справка заменяется, без устаревшей', async () => {
     const CHIST = 'Чистка лица\nУльтразвук и механика.';
     const PIL = 'Пилинг\nХимический пилинг ретиноевый.';
