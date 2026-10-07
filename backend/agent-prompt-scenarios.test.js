@@ -37,4 +37,14 @@ describe('detectPromptScenarios', () => {
     expect(detectPromptScenarios('Доброе утро! Подскажите адрес')).toEqual([SCENARIOS.CLINIC]);
     expect(detectPromptScenarios('Какая подготовка нужна?')).toEqual([SCENARIOS.MEDICAL]);
   });
+
+  test('отрицание перед «дорого»/«сомнева» — не сомнение', () => {
+    expect(detectPromptScenarios('А это не дорого?')).not.toContain(SCENARIOS.OBJECTION);
+    expect(detectPromptScenarios('Вроде не очень дорого')).not.toContain(SCENARIOS.OBJECTION);
+    expect(detectPromptScenarios('Не сомневаюсь, запишите')).not.toContain(SCENARIOS.OBJECTION);
+    expect(detectPromptScenarios('Не сомневайтесь')).not.toContain(SCENARIOS.OBJECTION);
+    // «не» как часть слова отрицанием не считается
+    expect(detectPromptScenarios('Мне дорого')).toEqual([SCENARIOS.OBJECTION]);
+    expect(detectPromptScenarios('Сомневаюсь пока')).toEqual([SCENARIOS.OBJECTION]);
+  });
 });
