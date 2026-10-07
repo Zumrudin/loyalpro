@@ -67,6 +67,9 @@ module.exports = {
   // Ключ Anthropic. Claude не гео-блокируется на dev (Финляндия) — прямой вызов.
   ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY || '',
   AGENT_LLM_MODEL:   process.env.AGENT_LLM_MODEL   || 'claude-opus-4-8',
+  // Служебные алерты (services/ops-alert.js). Пусто → только лог ERROR.
+  OPS_ALERT_TELEGRAM_TOKEN: process.env.OPS_ALERT_TELEGRAM_TOKEN || '',
+  OPS_ALERT_TELEGRAM_CHAT_ID: process.env.OPS_ALERT_TELEGRAM_CHAT_ID || '',
   AGENT_MAX_TOKENS:  process.env.AGENT_MAX_TOKENS ? parseInt(process.env.AGENT_MAX_TOKENS, 10) : 4096,
   // v1 — действующий полный промпт; v2 — компактная сценарная версия.
   // Не принимаем значение из пользовательского ввода: переключение только env.

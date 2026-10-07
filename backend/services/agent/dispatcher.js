@@ -22,6 +22,7 @@ const priceList = require('./price-list');
 const followupQueueDefault = require('./followup-queue');
 const windowHandover = require('./window-handover');
 const historyDefault = require('./history');
+const opsAlert = require('../ops-alert');
 const { createLogger } = require('../../logger');
 const logger = createLogger('AgentDispatcher');
 
@@ -375,6 +376,14 @@ async function process(salonId, dialogKey, meta, opts = {}) {
     }
   } catch (e) {
     logger.error(`dialog ${dialogKey} process failed: ${e.message}`);
+    // Баланс провайдера кончился — это не сбой одного диалога, а глухая Мила
+    // на часы (инцидент 10–11.09.2026). Без PII: ключ диалога не кладём.
+    // Не await: алерт не должен задерживать ответ пациенту; notify не бросает.
+    try {
+      if (opsAlert.isPaymentError(e)) {
+        void opsAlert.notify('provider_402', `салон ${salonId}: провайдер LLM отвечает 402/«недостаточно средств» — Мила переводит диалоги на администратора`);
+      }
+    } catch (_) { /* best-effort */ }
     // Тот же инвариант на аварийном пути: упавший прогон не должен обернуться
     // тишиной в чате. Гейт сюда не попадает — он отсекается до running-блока.
     await handOverSilently(salonId, dialogKey, meta, send, escalate,
