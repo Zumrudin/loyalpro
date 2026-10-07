@@ -184,6 +184,10 @@ const defaultDeps = {
   // вебхук), без похода в YClients. created_at строки ≈ момент создания
   // записи (вставка вебхуком), этого достаточно как «после якоря». Номер в
   // clients лежит в разных формах (`+7…`), отсюда набор вариантов.
+  // Живая запись — те же признаки, что у вебхук-пути (deleted / attendance=-1):
+  // статусы records на деве — arrived/no_show/waiting/confirmed/deleted
+  // (no_show всегда с attendance=-1, deleted — с deleted=true); 'cancelled'
+  // не встречается и исключён впрок.
   bookedSinceAnchor: async (salonId, phone, anchorAt) => {
     const p10 = String(phone || '').replace(/\D/g, '').slice(-10);
     if (p10.length !== 10) return false;
@@ -192,7 +196,9 @@ const defaultDeps = {
       `SELECT 1 FROM records r
          JOIN clients c ON c.id = r.client_id AND c.salon_id = r.salon_id
         WHERE r.salon_id = $1 AND c.phone = ANY($2::text[])
-          AND COALESCE(r.status,'') <> 'deleted'
+          AND COALESCE(r.status,'') NOT IN ('deleted','no_show','cancelled')
+          AND COALESCE(r.raw_payload->>'deleted','') <> 'true'
+          AND COALESCE(r.raw_payload->>'attendance','') <> '-1'
           AND r.created_at >= $3
         LIMIT 1`, [salonId, forms, anchorAt]);
     return !!r;
@@ -522,8 +528,6 @@ async function processOne(row, deps = defaultDeps) {
       return finish('answered', 'client_replied');
     }
 
-    // Both nudge and final must stop after a completed visit confirmation.
-    // DB errors reach the retry path: do not send without this check.
     // ── 6a. Клиента записали в CRM после якоря (администратор/Мила) ──
     // Вторая половина гашения по записи (первая — вебхук record create,
     // followup-queue.closeByPhone): вебхук мог потеряться или прийти с
@@ -537,6 +541,8 @@ async function processOne(row, deps = defaultDeps) {
       d.log.warn(`followup #${row.id}: проверка записи в CRM не удалась (${e.message}) — продолжаем`);
     }
 
+    // Both nudge and final must stop after a completed visit confirmation.
+    // DB errors reach the retry path: do not send without this check.
     const stopReason = await loadStopReason(d.db, row.salon_id, row.dialog_key);
     if (stopReason) return finish('cancelled', stopReason);
 

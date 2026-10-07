@@ -86,6 +86,25 @@ describe('followup worker: гейты', () => {
     expect(sqls(d)).toMatch(/SET status=\$2/);
   });
 
+  test('боевой bookedSinceAnchor: отменённые/неявки/удалённые записью не считаются', async () => {
+    const realDb = require('./db').db;
+    const spy = jest.spyOn(realDb, 'oneOrNone').mockResolvedValue(null);
+    try {
+      const anchor = new Date('2026-08-11T10:00:00.000Z');
+      expect(await worker.defaultDeps.bookedSinceAnchor(1, '79200255591', anchor)).toBe(false);
+      const [sql, params] = spy.mock.calls[0];
+      expect(sql).toMatch(/r\.salon_id = \$1/);
+      expect(sql).toMatch(/NOT IN \('deleted','no_show','cancelled'\)/);
+      expect(sql).toMatch(/raw_payload->>'deleted'/);
+      expect(sql).toMatch(/raw_payload->>'attendance','\'\) <> '-1'/);
+      expect(params).toEqual([1, ['+79200255591', '79200255591', '89200255591', '9200255591'], anchor]);
+      // Номер короче 10 цифр — без запроса.
+      spy.mockClear();
+      expect(await worker.defaultDeps.bookedSinceAnchor(1, '123', anchor)).toBe(false);
+      expect(spy).not.toHaveBeenCalled();
+    } finally { spy.mockRestore(); }
+  });
+
   test('сбой проверки записи — fail-open, напоминание уходит', async () => {
     const d = deps({ bookedSinceAnchor: async () => { throw new Error('db down'); } });
     await worker.processOne(row(), d);
