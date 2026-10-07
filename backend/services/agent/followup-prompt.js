@@ -43,6 +43,10 @@ const { fmtMskDate } = require('../care/care-prompt');
 // рядом с самой константой OPERATOR_MARK (правка по ревью 2026-08-12: раньше
 // было три побайтово одинаковых копии).
 const { stripOperatorMark } = require('./history');
+// «Есть ли время» — ТО ЖЕ правило, что у reply-guard.extractTimes («10:00» и
+// «10.00», но не дата «11.08»), через service-fact.hasTime: своя узкая
+// регулярка разъехалась бы с followup-guard и пропустила точечную форму.
+const { hasTime } = require('./service-fact');
 
 // Хвост, а не весь транскрипт: длинная переписка повышает шанс, что модель
 // зацепится за старую, уже закрытую тему вместо той, на которой пациент
@@ -56,10 +60,12 @@ const MAX_MSG_LEN = 600;
  * @param {string}   o.clientName        ФИО из карточки (в обращение уходит только имя)
  * @param {object}   [o.nameDictionary]  словарь имён салона (utils/salon-names)
  * @param {object[]} o.transcript        [{direction:'incoming'|'outgoing', text}]
+ * @param {{title:string,text:string}} [o.serviceFact] справка из КБ (service-fact.pickServiceFact),
+ *                                     единственный разрешённый источник НОВОГО факта
  * @param {number}   [o.nowMs]           «сегодня» для промпта (тесты фиксируют)
  * @returns {{system:string, user:string}}
  */
-function buildFollowupPrompt({ salonName, clientName, nameDictionary, transcript, nowMs = Date.now() } = {}) {
+function buildFollowupPrompt({ salonName, clientName, nameDictionary, transcript, serviceFact, nowMs = Date.now() } = {}) {
   const salon = sanitizeLine(salonName, 80) || 'клиника';
   // Только ЛИЧНОЕ имя: в карточке лежит ФИО целиком, и напоминание уходило бы
   // с обращением по фамилии или имени-отчеству (инцидент 2026-08-04).
@@ -79,7 +85,11 @@ function buildFollowupPrompt({ salonName, clientName, nameDictionary, transcript
     `   на котором остановился разговор.`,
     `2. НЕ называй никаких НОВЫХ фактов: времени сеансов, цен, названий услуг —`,
     `   инструментов у тебя сейчас нет, проверить их негде. Опирайся ТОЛЬКО на`,
-    `   то, что уже прозвучало в переписке ниже; ничего нового не придумывай.`,
+    `   то, что уже прозвучало в переписке ниже,`,
+    `   кроме фактов из блока «СПРАВКА ОБ УСЛУГЕ» (если он есть): оттуда можно`,
+    `   взять ОДИН факт, который делает напоминание полезным («в стоимость`,
+    `   входит…», «процедура занимает…»), и только если в переписке это ещё не`,
+    `   обсуждали. Ничего другого не придумывай.`,
     `3. Обращение по имени — не больше одного раза, только если имя известно.`,
     `4. Эмодзи — максимум один, можно совсем без него.`,
     `5. Промолчать (action="skip"), если последняя реплика Милы была ОТКАЗОМ`,
@@ -130,12 +140,31 @@ function buildFollowupPrompt({ salonName, clientName, nameDictionary, transcript
   // ответил, — модель молча получит ЛОЖНУЮ предпосылку и не сможет её
   // заметить: транскрипт ей передаётся, но фраза в user-промпте настаивает
   // на трактовке «пациент молчит», даже если сам транскрипт говорит другое.
+  // Справка об услуге (Task 5 «консультативных продаж»): найдена КОДОМ в КБ
+  // (воркер, только класс ситуации price). Текст статьи пишет салон, но в
+  // промпт он идёт построчно через sanitizeLine — как всё остальное. Строки со
+  // временем выбрасываются ВТОРЫЙ раз (первый — pickServiceFact): followup-guard
+  // пропускает время, только если его уже называла Мила, и время из справки
+  // означало бы молча погашенное напоминание — лучше не давать повода.
+  const fact = serviceFact && typeof serviceFact === 'object' && typeof serviceFact.text === 'string'
+    ? {
+      title: sanitizeLine(serviceFact.title, 120),
+      lines: serviceFact.text.split('\n')
+        .filter((l) => !hasTime(l))
+        .map((l) => sanitizeLine(l, 400)).filter(Boolean).slice(0, 8),
+    } : null;
+
   const user = [
     `Сегодня ${fmtMskDate(nowMs)} (мск).`,
     `Пациент: ${name || '(имя неизвестно — пиши без обращения по имени)'}.`,
     ``,
     `ПЕРЕПИСКА (хронологически, последняя реплика — твоя, пациент на неё не ответил):`,
     tr,
+    ...(fact && fact.lines.length ? [
+      ``,
+      `СПРАВКА ОБ УСЛУГЕ (статья «${fact.title}», найдена автоматически; единственный разрешённый источник нового факта):`,
+      ...fact.lines.map((l) => `- ${l}`),
+    ] : []),
     ``,
     `Реши: напомнить ли о себе. Ответ — только JSON.`,
   ].join('\n');

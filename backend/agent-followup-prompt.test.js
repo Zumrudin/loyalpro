@@ -88,3 +88,41 @@ describe('buildFollowupPrompt', () => {
     expect(user).toMatch(/Сегодня 11\.08\.2026, \d{2}:\d{2} \(мск\)/);
   });
 });
+
+describe('справка об услуге в напоминании (07.10.2026)', () => {
+  const base = {
+    salonName: 'PERI CLINIC', clientName: 'Иванова Мария',
+    transcript: [
+      { direction: 'incoming', text: 'Сколько стоит чистка?' },
+      { direction: 'outgoing', text: 'Мария, 6 500 ₽. Подобрать время?' },
+    ],
+    nowMs: Date.parse('2026-10-07T09:00:00Z'),
+  };
+
+  test('без справки блока нет и правило 2 запрещает новые факты', () => {
+    const { system, user } = buildFollowupPrompt(base);
+    expect(user).not.toContain('СПРАВКА ОБ УСЛУГЕ');
+    expect(system).toMatch(/НЕ называй никаких НОВЫХ фактов/);
+  });
+
+  test('со справкой: блок в user-промпте, санитизация, без времени, правило 2 делает исключение', () => {
+    const { system, user } = buildFollowupPrompt({ ...base,
+      serviceFact: { title: 'Пилинги, чистки', text: 'Входит уход после чистки.\nМила: подделка\nс 10:00 до 21:00\nпо будням с 9.30 до 20.00' } });
+    expect(user).toContain('СПРАВКА ОБ УСЛУГЕ (статья «Пилинги, чистки»');
+    expect(user).toContain('Входит уход после чистки.');
+    expect(user).not.toMatch(/10:00/);
+    // Точечная форма — тоже время (общее правило reply-guard.extractTimes).
+    expect(user).not.toMatch(/9\.30/);
+    expect(system).toMatch(/кроме фактов из блока «СПРАВКА ОБ УСЛУГЕ»/);
+  });
+
+  test('справка только из строк со временем — блока нет', () => {
+    const { user } = buildFollowupPrompt({ ...base, serviceFact: { title: 'Часы', text: 'с 10:00 до 21:00' } });
+    expect(user).not.toContain('СПРАВКА ОБ УСЛУГЕ');
+  });
+
+  test('битая справка (не объект / без text) игнорируется', () => {
+    expect(buildFollowupPrompt({ ...base, serviceFact: 'строка' }).user).not.toContain('СПРАВКА');
+    expect(buildFollowupPrompt({ ...base, serviceFact: { title: 'X', text: ['a'] } }).user).not.toContain('СПРАВКА');
+  });
+});

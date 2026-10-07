@@ -57,6 +57,9 @@ function deps(over = {}) {
     // Записи в CRM после якоря нет. Обязателен: processOne мёржит deps ПОВЕРХ
     // defaultDeps, и без заглушки старые тесты ходили бы в настоящую БД.
     bookedSinceAnchor: async () => false,
+    // Справка об услуге: по умолчанию не найдена — без заглушки класс price
+    // (фикстура с ценой) ходил бы в настоящий RAG.
+    serviceFact: async () => null,
     log: { info() {}, warn() {}, error() {} },
     ...over,
   };
@@ -720,4 +723,74 @@ test.each([0, 1])('illness stops followup stage %s even before cancellation is d
   expect(d.calls.sent).toHaveLength(0);
   expect(d.createMessage).not.toHaveBeenCalled();
   expect(reasons(d)).toContain('client_unavailable');
+});
+
+describe('справка об услуге в stage 0', () => {
+  test('класс price → serviceFact зовётся названием услуги из журнала хода и уходит в промпт', async () => {
+    const queries = [];
+    let systemSeen = '';
+    let userSeen = '';
+    const d = deps({
+      loadTurnEvents: async () => [{ tool: 'get_service_masters', input: { service_yc_ids: [1] },
+        result: { services: [{ title: 'Комбинированная чистка лица' }] }, is_error: false }],
+      serviceFact: async (salonId, query) => { queries.push(query); return { title: 'Чистки', text: 'Входит уход.' }; },
+      createMessage: async ({ system, messages }) => {
+        systemSeen = system; userSeen = messages[0].content;
+        return { text: '{"action":"send","text":"Мария, в стоимость чистки входит уход. Подобрать время?","reason":"ок"}' };
+      },
+    });
+    await worker.processOne(row(), d);
+    expect(queries).toEqual(['Комбинированная чистка лица']);
+    expect(userSeen).toContain('СПРАВКА ОБ УСЛУГЕ (статья «Чистки»');
+    expect(systemSeen).toContain('кроме фактов из блока');
+    expect(d.calls.sent).toHaveLength(1);
+  });
+
+  test('класс price без вызова инструмента → запрос по последней реплике Милы', async () => {
+    const queries = [];
+    const d = deps({ serviceFact: async (salonId, query) => { queries.push(query); return null; } });
+    await worker.processOne(row(), d);
+    expect(queries).toEqual(['Мария, от 12 000 ₽. Записать вас?']);
+    expect(d.calls.sent).toHaveLength(1);
+  });
+
+  test('класс choice — справка не запрашивается', async () => {
+    let called = false;
+    const d = deps({
+      loadTurnEvents: async () => [{ tool: 'get_available_slots', input: {}, result: { slots: [{ time: '12:00' }] }, is_error: false }],
+      serviceFact: async () => { called = true; return null; },
+    });
+    await worker.processOne(row(), d);
+    expect(called).toBe(false);
+  });
+
+  test('флаг AGENT_SERVICE_FACT_PREFETCH=false — справка не запрашивается', async () => {
+    let called = false;
+    const d = deps({
+      serviceFactEnabled: () => false,
+      serviceFact: async () => { called = true; return { title: 'X', text: 'Y' }; },
+    });
+    await worker.processOne(row(), d);
+    expect(called).toBe(false);
+    expect(d.calls.sent).toHaveLength(1);
+  });
+
+  test('сбой справки — напоминание уходит без неё', async () => {
+    let userSeen = '';
+    const d = deps({
+      serviceFact: async () => { throw new Error('rag down'); },
+      createMessage: async ({ messages }) => {
+        userSeen = messages[0].content;
+        return { text: '{"action":"send","text":"Мария, подскажите, записать вас?","reason":"ок"}' };
+      },
+    });
+    await worker.processOne(row(), d);
+    expect(userSeen).not.toContain('СПРАВКА');
+    expect(d.calls.sent).toHaveLength(1);
+  });
+
+  test('defaultDeps: флаг справки читается из config', () => {
+    expect(typeof worker.defaultDeps.serviceFactEnabled).toBe('function');
+    expect(typeof worker.defaultDeps.serviceFact).toBe('function');
+  });
 });

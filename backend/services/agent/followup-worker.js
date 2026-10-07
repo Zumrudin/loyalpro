@@ -45,6 +45,8 @@ const toolEvents = require('./tool-events');
 const cardBalance = require('../card-balance');
 const { classifySituation, lastOwnReply } = require('./followup-situation');
 const { chooseBonusLine, BONUS_MENTION_RE } = require('./followup-bonus');
+const rag = require('../agent-rag');
+const { pickServiceFact } = require('./service-fact');
 const { createLogger } = require('../../logger');
 
 const log = createLogger('FollowupWorker');
@@ -203,6 +205,15 @@ const defaultDeps = {
         LIMIT 1`, [salonId, forms, anchorAt]);
     return !!r;
   },
+  // Справка об услуге для напоминания (Task 5 «консультативных продаж»): тот
+  // же RAG, что у search_knowledge_base и предвызова оркестратора, и тот же
+  // отбор по заголовку (service-fact.pickServiceFact). Флаг общий с
+  // предвызовом оркестратора — один рычаг гасит справку везде.
+  serviceFactEnabled: () => config.AGENT_SERVICE_FACT_PREFETCH,
+  serviceFact: async (salonId, query) => {
+    const { context } = await rag.buildKnowledgeContext(salonId, query, {});
+    return pickServiceFact(context, query);
+  },
   log,
 };
 
@@ -346,12 +357,53 @@ function stripLeadingGreeting(text) {
   return { text: out, stripped: m[0].trim() };
 }
 
+// ── Справка об услуге к напоминанию ──────────────────────────────────────────
+// Что спросить у КБ: названия услуг из результата get_service_masters хода-
+// якоря (точнее всего), иначе последняя реплика Милы (в catalogMode цена идёт
+// без вызова инструмента). Класс ситуации — общий classifySituation; справку
+// ищем ТОЛЬКО в классе price (после цены — «что входит», а не новый факт
+// посреди выбора времени или переноса).
+function serviceFactQuery(events, ownText) {
+  const titles = [];
+  for (const e of Array.isArray(events) ? events : []) {
+    if (!e || e.tool !== 'get_service_masters' || e.is_error) continue;
+    const list = e.result && Array.isArray(e.result.services) ? e.result.services : [];
+    for (const s of list) if (s && typeof s.title === 'string' && s.title.trim()) titles.push(s.title.trim());
+  }
+  if (titles.length) return titles.slice(0, 3).join(', ');
+  return String(ownText || '').replace(/\s+/g, ' ').trim().slice(0, 200);
+}
+
+// Строго best-effort (fail-open): сбой журнала/RAG → напоминание без справки.
+// Стоит ПЕРЕД LLM-проходом (справка — часть промпта), то есть после всех
+// дешёвых гейтов processOne: поход в RAG только для строк, которые и так
+// дошли до платного прохода.
+async function tryServiceFact(d, row, messages, turnEvents) {
+  if (typeof d.serviceFact !== 'function') return null;
+  if (typeof d.serviceFactEnabled === 'function' && !d.serviceFactEnabled()) return null;
+  try {
+    const events = await turnEvents();
+    const ownText = lastOwnReply(messages);
+    if (classifySituation({ events, ownText }).kind !== 'price') return null;
+    const query = serviceFactQuery(events, ownText);
+    if (!query) return null;
+    const fact = await d.serviceFact(row.salon_id, query);
+    d.log.info(`followup #${row.id}: справка об услуге — ${fact ? `«${fact.title}»` : 'не найдена'}`);
+    return fact || null;
+  } catch (e) {
+    d.log.warn(`followup #${row.id}: справка об услуге не получена (${e.message}) — без неё`);
+    return null;
+  }
+}
+
 /**
  * Текст напоминания (stage 0) через LLM.
  * @returns {{text:string}|{skip:true, reason:string}}
  */
-async function buildNudgeText(d, row, messages) {
+async function buildNudgeText(d, row, messages, turnEvents) {
+  const serviceFact = await tryServiceFact(d, row, messages, turnEvents);
   const { system, user } = buildFollowupPrompt({
+    serviceFact,
     // Тот же резолвер, что у системного промпта Милы: собственный дефолт
     // разъехался бы с тем, как она называет клинику (готча greeting.js).
     salonName: resolveSalonName(row.salon_name),
@@ -415,7 +467,7 @@ async function buildNudgeText(d, row, messages) {
 //
 // Гейты от дешёвых к дорогим: шаблоны → номер → ситуация (журнал хода + текст
 // Милы) → «уже звучало» → 7 дней → карта (YClients).
-async function tryBonusLine(d, row, messages, nudgeText) {
+async function tryBonusLine(d, row, messages, nudgeText, turnEvents) {
   const settings = {
     followupBonusText: row.followup_bonus_text,
     followupWelcomeText: row.followup_welcome_text,
@@ -426,7 +478,7 @@ async function tryBonusLine(d, row, messages, nudgeText) {
     if (!String(settings.followupBonusText || '').trim() && !String(settings.followupWelcomeText || '').trim())
       return none('шаблоны пусты');
     if (!row.phone) return none('номер неизвестен');
-    const events = await d.loadTurnEvents(row.anchor_turn_id);
+    const events = await turnEvents();
     const situation = classifySituation({ events, ownText: lastOwnReply(messages) });
     if (!situation.bonusOk) return none(`ситуация ${situation.kind}`);
     const alreadyMentioned = (messages || []).some((m) => BONUS_MENTION_RE.test(String((m && m.content) || '')));
@@ -580,12 +632,18 @@ async function processOne(row, deps = defaultDeps) {
       const transcript = await d.loadTranscript(row.salon_id, row.dialog_key,
         { limit: 15, keepTrailingAssistant: true });
       const messages = (transcript && transcript.messages) || [];
-      const built = await buildNudgeText(d, row, messages);
+      // Журнал хода-якоря нужен и справке (до LLM), и бонусному доводу (после)
+      // — читаем его не больше одного раза и лениво: при выключенных фичах
+      // в БД не ходим вовсе. Отклонённый промис переиспользуется: обе фичи
+      // fail-open и одинаково уходят «без дописки».
+      let turnEventsP = null;
+      const turnEvents = () => (turnEventsP ||= Promise.resolve().then(() => d.loadTurnEvents(row.anchor_turn_id)));
+      const built = await buildNudgeText(d, row, messages, turnEvents);
       if (built.skip) return finish('cancelled', built.reason);
       // Бонусный довод — отдельным абзацем ПОСЛЕ текста модели. Одно
       // сообщение, а не два: второе исходящее подряд заводило бы у Chatpush
       // отдельную доставку и удвоило бы след в «Чате».
-      const bonus = await tryBonusLine(d, row, messages, built.text);
+      const bonus = await tryBonusLine(d, row, messages, built.text, turnEvents);
       bonusLine = bonus.line;
       d.log.info(`followup #${row.id}: бонусный довод — ${bonus.why}`);
       text = bonusLine ? `${built.text}\n\n${bonusLine.text}` : built.text;
