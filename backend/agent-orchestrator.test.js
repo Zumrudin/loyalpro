@@ -3420,3 +3420,68 @@ describe('structured additional proposal lifecycle', () => {
     expect(write).toHaveBeenCalledTimes(1);
   });
 });
+
+// ── Справка об услуге: предвызов КБ кодом на вопросе о цене (07.10.2026) ──
+describe('предвызов КБ: справка об услуге', () => {
+  const FACT_HEAD = 'СПРАВКА ОБ УСЛУГЕ (найдена автоматически';
+  const CTX = 'Чистка лица\nУльтразвук и механика, уход после процедуры.\nПриём с 10:00 до 21:00.';
+  function factDeps(text, kbResult) {
+    const kbHandler = jest.fn(async () => kbResult);
+    const deps = makeDeps({
+      history: {
+        loadTranscript: jest.fn(async () => ({ messages: [{ role: 'user', content: text }], watermark: 500 })),
+        lastOutgoingAuthor: jest.fn(async () => 'agent'),
+      },
+      handlers: { search_knowledge_base: kbHandler },
+    });
+    deps.provider.createMessage.mockResolvedValue(
+      { assistantMsg: { role: 'assistant', content: 'ок' }, toolCalls: [], text: 'Ответ' });
+    return { deps, kbHandler };
+  }
+
+  test('вопрос о цене → КБ вызвана кодом, справка в промпте без ЧЧ:ММ', async () => {
+    const { deps, kbHandler } = factDeps('Сколько стоит чистка лица?', { found: true, context: CTX, sources: [] });
+    await orchestrator.runDialog(1, '79001112233', { deps });
+    expect(kbHandler).toHaveBeenCalledWith(1, { query: 'Сколько стоит чистка лица?' }, expect.any(Object));
+    const system = deps.provider.createMessage.mock.calls[0][0].system;
+    expect(system).toContain(FACT_HEAD);
+    const block = system.slice(system.indexOf(FACT_HEAD));
+    expect(block).toContain('Ультразвук и механика');
+    expect(block).not.toMatch(/10:00/);
+  });
+
+  test('статья не про услугу из вопроса → блока нет', async () => {
+    const { deps } = factDeps('Сколько стоит ботокс?', { found: true, context: CTX, sources: [] });
+    await orchestrator.runDialog(1, '79001112233', { deps });
+    expect(deps.provider.createMessage.mock.calls[0][0].system).not.toContain(FACT_HEAD);
+  });
+
+  test('не вопрос о цене → предвызова нет', async () => {
+    const { deps, kbHandler } = factDeps('Запишите на пятницу', { found: true, context: CTX, sources: [] });
+    await orchestrator.runDialog(1, '79001112233', { deps });
+    expect(kbHandler).not.toHaveBeenCalled();
+  });
+
+  test('AGENT_SERVICE_FACT_PREFETCH=false → предвызова нет', async () => {
+    const { deps, kbHandler } = factDeps('Сколько стоит чистка?', { found: true, context: CTX, sources: [] });
+    deps.config = { ...require('./config'), AGENT_SERVICE_FACT_PREFETCH: false };
+    await orchestrator.runDialog(1, '79001112233', { deps });
+    expect(kbHandler).not.toHaveBeenCalled();
+  });
+
+  test('сбой КБ → ход штатный, без блока', async () => {
+    const { deps } = factDeps('Сколько стоит чистка?', null);
+    deps.registry.handlers.search_knowledge_base = jest.fn(async () => { throw new Error('rag down'); });
+    const res = await orchestrator.runDialog(1, '79001112233', { deps });
+    expect(res.replies).toEqual(['Ответ']);
+    expect(deps.provider.createMessage.mock.calls[0][0].system).not.toContain(FACT_HEAD);
+  });
+
+  test('справка пишется в журнал tool-событий', async () => {
+    const stub = makeToolEventsStub();
+    const { deps } = factDeps('Сколько стоит чистка?', { found: true, context: CTX, sources: [] });
+    deps.toolEvents = stub.mod;
+    await orchestrator.runDialog(1, '79001112233', { deps });
+    expect(stub.buffers[0].push.mock.calls.map(c => c[0])).toContain('search_knowledge_base');
+  });
+});

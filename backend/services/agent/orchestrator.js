@@ -19,6 +19,7 @@ const titleDedup = require('./title-dedup');
 const phoneRequest = require('./phone-request');
 const visitRating = require('./visit-rating');
 const promoInterest = require('./promo-interest');
+const serviceFactMod = require('./service-fact');
 const adminHours = require('./admin-hours');
 const toolEventsDefault = require('./tool-events');
 const toolMemoryDefault = require('./tool-memory');
@@ -591,6 +592,10 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
   const PROMO_QUERY = { query: 'спецпредложение месяца, акция' };
   let promoKb = null;
   let promoChecked = false;
+  let serviceFact = null;      // { title, text } из предвызова КБ (service-fact)
+  let serviceFactKb = null;    // сырой ответ КБ — источник адреса для address-guard
+  let serviceFactQuery = null; // аргументы предвызова — журнал и кэш повторов
+  let serviceFactChecked = false;
 
   for (let attempt = 0; attempt <= MAX_REGEN; attempt++) {
     // leadingClinic — сообщения клиники, срезанные из НАЧАЛА транскрипта
@@ -727,6 +732,36 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
     // ставится тому буферу, чья попытка реально вернулась.
     if (promoKb) evBuffer.push('search_knowledge_base', PROMO_QUERY, promoKb, false);
 
+    // Справка об услуге на вопросе о цене / «не знаю, что выбрать» — КБ зовёт
+    // код до первого прохода (service-fact.js, тот же приём, что промо выше).
+    // Один раз на ход, переживает перегенерации; fail-open — блока просто нет.
+    // Флаг «проверено» ставится только при реальном походе в КБ: перегенерация
+    // с новым вопросом о цене в серии должна получить свой шанс.
+    if (cfg.AGENT_SERVICE_FACT_PREFETCH && !serviceFactChecked) {
+      const lastUserForFact = [...messages].reverse().find(m => m && m.role === 'user');
+      const lastUserFactText = lastUserForFact && typeof lastUserForFact.content === 'string'
+        ? lastUserForFact.content : '';
+      if (serviceFactMod.wantsServiceFact(lastUserFactText) && registry.handlers['search_knowledge_base']) {
+        serviceFactChecked = true;
+        const factQuery = { query: serviceFactMod.kbQuery(lastUserFactText) };
+        try {
+          const kb = await registry.handlers['search_knowledge_base'](salonId, factQuery, toolCtx);
+          const picked = kb && kb.found && typeof kb.context === 'string'
+            ? serviceFactMod.pickServiceFact(kb.context, lastUserFactText) : null;
+          if (picked) {
+            serviceFact = picked;
+            serviceFactKb = kb;
+            serviceFactQuery = factQuery;
+          }
+          logger.info(`dialog ${dialogKey}: справка об услуге — ${picked ? `статья «${picked.title}»` : 'не найдена'}`);
+        } catch (e) {
+          logger.warn(`dialog ${dialogKey}: предвызов справки об услуге не удался (${e.message}) — без блока`);
+        }
+      }
+    }
+    // В журнал — на КАЖДОЙ попытке, как промо: буфер пересоздаётся.
+    if (serviceFactKb) evBuffer.push('search_knowledge_base', serviceFactQuery, serviceFactKb, false);
+
     const convo = messages.slice();
 
     // Первое в истории обращение: приветствие и представление держались только
@@ -851,6 +886,7 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
     const system = promptBuilder({
       ...promptOpts, session, firstContact, firstAgentReply, leadingClinic,
       promoBlock: promoKb ? promoKb.context : null,
+      serviceFact,
       lastUserText: lastUser && lastUser.content,
     }) + additionalProposals.prompt(additionalOffer);
 
@@ -1001,12 +1037,16 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
     // обратную сторону так же плохо: числа обвязки («sources»:[6]) сверяются
     // ТОЧНО и легализовали бы выдуманный номер дома 6.
     let kbSourceText = promoKb && typeof promoKb.context === 'string' ? promoKb.context : '';
+    // Справка об услуге из предвызова — такой же легальный источник адреса,
+    // как статья об акции (сырой context, не JSON.stringify — готча promo).
+    if (serviceFactKb && typeof serviceFactKb.context === 'string') kbSourceText += `\n${serviceFactKb.context}`;
     // Кэш вызовов ЭТОГО хода для дедупа повторов (см. REPEAT_CALL_HINT).
     // Предвызов засеваем сразу: модель может позвать search_knowledge_base с тем
     // же запросом вопреки блоку промпта — второй поход в RAG за тем же ответом
     // не нужен, ей вернётся прежний результат с REPEAT_CALL_HINT.
     const turnCallCache = new Map();
     if (promoKb) turnCallCache.set(repeatCallKey('search_knowledge_base', PROMO_QUERY), promoKb);
+    if (serviceFactKb) turnCallCache.set(repeatCallKey('search_knowledge_base', serviceFactQuery), serviceFactKb);
 
     for (let i = 0; i < MAX_ITERS; i++) {
       let resp;

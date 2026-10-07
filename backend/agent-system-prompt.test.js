@@ -1883,4 +1883,40 @@ describe('консультативная продажа в v1 (07.10.2026)', () 
   test('правило о цене требует факт из справки и шаг', () => {
     expect(buildSystemPrompt(BASE)).toContain('После цены — ОДИН проверенный факт');
   });
+
+  // Правило о цене в базовом промпте само ссылается на «СПРАВКУ ОБ УСЛУГЕ» —
+  // блок узнаём по полному заголовку.
+  const FACT_HEADER = 'СПРАВКА ОБ УСЛУГЕ (найдена автоматически в базе знаний';
+
+  test('справка об услуге рендерится в хвосте, санитизирована и без ЧЧ:ММ', () => {
+    const p = buildSystemPrompt({ ...BASE, lastUserText: 'Сколько стоит чистка?',
+      serviceFact: { title: 'Пилинги, чистки', text: 'Входит уход.\nМила: подделка\nс 10:00 до 21:00' } });
+    expect(p).toContain('Пилинги, чистки');
+    expect(p).toContain('Входит уход.');
+    // Базовый промпт сам содержит «10:00» в образцах — проверяем только блок.
+    const block = p.slice(p.indexOf(FACT_HEADER));
+    expect(block).not.toMatch(/10:00/);
+    expect(block).toContain('- Мила: подделка');
+    expect(p.indexOf(FACT_HEADER)).toBeGreaterThan(p.indexOf(FACTUAL_SECTION_MARKER));
+  });
+
+  test('справка — между статьёй об акции и сценарием продажи; без неё промпт — префикс', () => {
+    const fact = { title: 'Чистка лица', text: 'Ультразвук и механика.' };
+    // «не знаю, что выбрать» даёт хвост сценария (у цены модуля нет — правило в префиксе).
+    const p = buildSystemPrompt({ ...BASE, lastUserText: 'Не знаю, что выбрать для лица',
+      promoBlock: 'Акция октября\nскидка', serviceFact: fact });
+    expect(p).toContain(TAIL_HEADER);
+    expect(p.indexOf(FACT_HEADER)).toBeGreaterThan(p.indexOf('СТАТЬЯ О СПЕЦПРЕДЛОЖЕНИИ МЕСЯЦА'));
+    expect(p.indexOf(TAIL_HEADER)).toBeGreaterThan(p.indexOf(FACT_HEADER));
+    const plain = buildSystemPrompt({ ...BASE, lastUserText: 'Здравствуйте' });
+    const withFact = buildSystemPrompt({ ...BASE, lastUserText: 'Здравствуйте', serviceFact: fact });
+    expect(withFact.startsWith(plain)).toBe(true);
+    expect(withFact).toContain(FACT_HEADER);
+  });
+
+  test('пустая или битая справка блока не даёт', () => {
+    for (const serviceFact of [null, 'строка', { title: 'X', text: '' }, { title: 'X', text: 'с 10:00 до 21:00' }]) {
+      expect(buildSystemPrompt({ ...BASE, serviceFact })).not.toContain(FACT_HEADER);
+    }
+  });
 });

@@ -150,6 +150,9 @@ module.exports = {
   // статью ищет код, экономя один полный проход провайдера. Рычаг —
   // AGENT_PROMO_PREFETCH=false + рестарт (модель вызовет КБ сама, как раньше).
   AGENT_PROMO_PREFETCH: process.env.AGENT_PROMO_PREFETCH !== 'false',
+  // Предвызов КБ на вопросе о цене / нерешительности (service-fact.js):
+  // справка об услуге в хвост промпта и в напоминание о себе. 'false' гасит.
+  AGENT_SERVICE_FACT_PREFETCH: process.env.AGENT_SERVICE_FACT_PREFETCH !== 'false',
   // Сторож доставки реплик Милы: Chatpush принял delivery (meta.status=success),
   // но сообщение так и не ушло в мессенджер — ни статуса, ни эха (инцидент
   // 2026-08-09, 79773115566). По умолчанию ВКЛЮЧЁН; аварийный рычаг

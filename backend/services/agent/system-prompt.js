@@ -162,6 +162,17 @@ function buildSystemPrompt(opts = {}) {
   // провайдера). Кап 4000 символов; построчная санитизация — как leadingClinic.
   const promoBlock = typeof opts.promoBlock === 'string' && opts.promoBlock.trim()
     ? opts.promoBlock.trim().slice(0, 4000) : null;
+  // Справка об услуге из предвызова КБ (service-fact.js, подкладывает
+  // оркестратор). Строки с ЧЧ:ММ режем ещё раз здесь — правило одно, но блок
+  // стоит в фактической части и засевает allowedTimes.
+  const serviceFact = opts.serviceFact && typeof opts.serviceFact === 'object'
+    && typeof opts.serviceFact.text === 'string' && opts.serviceFact.text.trim()
+    ? {
+      title: sanitizeLine(opts.serviceFact.title, 120),
+      lines: String(opts.serviceFact.text).split('\n')
+        .filter(l => !/\d{1,2}:\d{2}/.test(l))
+        .map(l => sanitizeLine(l, 400)).filter(Boolean).slice(0, 12),
+    } : null;
   // Сценарий продажи по последнему сообщению (prompt-scenarios): хвостовой
   // блок v1 с модулем из sales-modules. salesTail:false — v2 кладёт модули сам.
   const salesTail = opts.salesTail === false ? []
@@ -618,6 +629,14 @@ function buildSystemPrompt(opts = {}) {
       `СТАТЬЯ О СПЕЦПРЕДЛОЖЕНИИ МЕСЯЦА (найдена автоматически: пациент коротко согласился на сообщение об акции):`,
       ...promoBlock.split('\n').map(l => sanitizeLine(l, 400)).filter(Boolean),
       `Расскажи о предложении по правилу «СПЕЦПРЕДЛОЖЕНИЕ МЕСЯЦА» — ТОЛЬКО тем, что есть в этой статье. Повторно вызывать search_knowledge_base не нужно.`,
+    ] : []),
+    // Справка об услуге — после акции, до сценария продажи: тот же инвариант
+    // префикса. Модель берёт отсюда ОДИН факт по правилу о цене.
+    ...(serviceFact && serviceFact.lines.length ? [
+      ``,
+      `СПРАВКА ОБ УСЛУГЕ (найдена автоматически в базе знаний по вопросу пациента; статья «${serviceFact.title}»):`,
+      ...serviceFact.lines.map(l => `- ${l}`),
+      `Используй отсюда не больше ОДНОГО факта и только если он относится к услуге из вопроса. Повторно вызывать search_knowledge_base ради этой услуги не нужно.`,
     ] : []),
     // Сценарий продажи — после статьи об акции, ПОСЛЕДНИМ: промпт без блока
     // обязан остаться префиксом промпта с блоком (кэш провайдера). Текст
