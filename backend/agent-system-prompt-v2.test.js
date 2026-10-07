@@ -52,4 +52,16 @@ describe('buildSystemPromptV2', () => {
     expect(p).toMatch(/Не сообщай и не меняй данные третьих лиц/i);
     expect(p).toMatch(/Мужская лазерная эпиляция не проводится/i);
   });
+
+  test('сомнение подключает модуль продаж один раз (без дубля в хвосте v1)', () => {
+    const p = buildSystemPromptV2({ ...BASE, lastUserText: 'Дорого как-то, подумаю' });
+    expect(p).toContain('СЦЕНАРИИ ЭТОГО СООБЩЕНИЯ: objection.');
+    expect(p).toContain('СОМНЕНИЕ («дорого», «подумаю», «сравниваю»)');
+    expect(p).not.toContain('СЦЕНАРИЙ ЭТОГО СООБЩЕНИЯ (КОНСУЛЬТАТИВНАЯ ПРОДАЖА):');
+  });
+
+  test('модуль цены требует факт и шаг после цифры', () => {
+    const p = buildSystemPromptV2({ ...BASE, lastUserText: 'Сколько стоит чистка?' });
+    expect(p).toContain('После цены — ОДИН проверенный факт');
+  });
 });

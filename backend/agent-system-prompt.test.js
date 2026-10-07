@@ -1855,3 +1855,32 @@ test('перенос: правило Сценария 3 называет hint-о
   for (const m of PROMPT_RULE_MARKERS) expect(p).toContain(m);
   expect(p).toMatch(/не провал переноса, а пропущенный шаг/);
 });
+
+describe('консультативная продажа в v1 (07.10.2026)', () => {
+  const { buildSystemPrompt, FACTUAL_SECTION_MARKER } = require('./services/agent/system-prompt');
+  const { TAIL_HEADER } = require('./services/agent/sales-modules');
+  const BASE = { salonName: 'Тестовая клиника', today: '2026-10-07', now: '12:00' };
+
+  test('без сценария продаж хвостового блока нет, промпт без блока — ПРЕФИКС промпта с блоком', () => {
+    const plain = buildSystemPrompt({ ...BASE, lastUserText: 'Здравствуйте' });
+    const withTail = buildSystemPrompt({ ...BASE, lastUserText: 'Дорого, подумаю' });
+    expect(plain).not.toContain(TAIL_HEADER);
+    expect(withTail).toContain(TAIL_HEADER);
+    expect(withTail.startsWith(plain)).toBe(true);
+  });
+
+  test('блок стоит после маркера фактической части и после статьи об акции', () => {
+    const p = buildSystemPrompt({ ...BASE, lastUserText: 'напишу сама', promoBlock: 'Акция октября\nскидка' });
+    expect(p.indexOf(TAIL_HEADER)).toBeGreaterThan(p.indexOf(FACTUAL_SECTION_MARKER));
+    expect(p.indexOf(TAIL_HEADER)).toBeGreaterThan(p.indexOf('СТАТЬЯ О СПЕЦПРЕДЛОЖЕНИИ МЕСЯЦА'));
+  });
+
+  test('salesTail:false выключает хвост (нужно v2)', () => {
+    const p = buildSystemPrompt({ ...BASE, lastUserText: 'Дорого', salesTail: false });
+    expect(p).not.toContain(TAIL_HEADER);
+  });
+
+  test('правило о цене требует факт из справки и шаг', () => {
+    expect(buildSystemPrompt(BASE)).toContain('После цены — ОДИН проверенный факт');
+  });
+});
