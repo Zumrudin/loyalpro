@@ -46,7 +46,17 @@ const { stripOperatorMark } = require('./history');
 // «Есть ли время» — ТО ЖЕ правило, что у reply-guard.extractTimes («10:00» и
 // «10.00», но не дата «11.08»), через service-fact.hasTime: своя узкая
 // регулярка разъехалась бы с followup-guard и пропустила точечную форму.
+// Плюс собственная детекция followup-guard (collectTimes): именно он —
+// потребитель текста напоминания, и у него точечная пара шире («14.10» для
+// него время, для extractTimes — дата). Строка, которую guard прочтёт как
+// время, в справку не попадает: иначе модель могла бы её процитировать, а
+// guard молча погасил бы напоминание как «выдуманное время».
 const { hasTime } = require('./service-fact');
+const { collectTimes } = require('./followup-guard');
+
+function anyTime(text) {
+  return hasTime(text) || collectTimes(String(text || '')).length > 0;
+}
 
 // Хвост, а не весь транскрипт: длинная переписка повышает шанс, что модель
 // зацепится за старую, уже закрытую тему вместо той, на которой пациент
@@ -147,10 +157,11 @@ function buildFollowupPrompt({ salonName, clientName, nameDictionary, transcript
   // пропускает время, только если его уже называла Мила, и время из справки
   // означало бы молча погашенное напоминание — лучше не давать повода.
   const fact = serviceFact && typeof serviceFact === 'object' && typeof serviceFact.text === 'string'
+      && !anyTime(serviceFact.title)
     ? {
       title: sanitizeLine(serviceFact.title, 120),
       lines: serviceFact.text.split('\n')
-        .filter((l) => !hasTime(l))
+        .filter((l) => !anyTime(l))
         .map((l) => sanitizeLine(l, 400)).filter(Boolean).slice(0, 8),
     } : null;
 

@@ -746,11 +746,44 @@ describe('справка об услуге в stage 0', () => {
     expect(d.calls.sent).toHaveLength(1);
   });
 
-  test('класс price без вызова инструмента → запрос по последней реплике Милы', async () => {
+  test('класс price без вызова инструмента → запрос по ВОПРОСУ ПАЦИЕНТА, не по реплике Милы', async () => {
     const queries = [];
     const d = deps({ serviceFact: async (salonId, query) => { queries.push(query); return null; } });
     await worker.processOne(row(), d);
-    expect(queries).toEqual(['Мария, от 12 000 ₽. Записать вас?']);
+    expect(queries).toEqual(['Сколько стоит биоревитализация?']);
+    expect(d.calls.sent).toHaveLength(1);
+  });
+
+  test('вопроса пациента в окне нет → справка не запрашивается', async () => {
+    let called = false;
+    const d = deps({
+      loadTranscript: async () => ({ messages: [{ role: 'assistant', content: 'Мария, от 12 000 ₽. Записать вас?' }] }),
+      serviceFact: async () => { called = true; return { title: 'X', text: 'Y' }; },
+    });
+    await worker.processOne(row(), d);
+    expect(called).toBe(false);
+  });
+
+  test('словарь Милы («консультация в подарок») не легализует статью «Консультация …»', async () => {
+    const { pickServiceFact } = require('./services/agent/service-fact');
+    const ctx = 'Консультация врача-косметолога\nПервичная консультация проводится бесплатно.';
+    const mila = 'Мария, биоревитализация от 12 000 ₽, консультация в подарок. Записать вас?';
+    // Контроль: по реплике Милы фильтр заголовка прошёл бы — ровно дефект.
+    expect(pickServiceFact(ctx, mila)).not.toBeNull();
+    let userSeen = '';
+    const d = deps({
+      loadTranscript: async () => ({ messages: [
+        { role: 'user', content: 'Сколько стоит биоревитализация?' },
+        { role: 'assistant', content: mila },
+      ] }),
+      serviceFact: async (salonId, query) => pickServiceFact(ctx, query),
+      createMessage: async ({ messages }) => {
+        userSeen = messages[0].content;
+        return { text: '{"action":"send","text":"Мария, подскажите, записать вас?","reason":"ок"}' };
+      },
+    });
+    await worker.processOne(row(), d);
+    expect(userSeen).not.toContain('СПРАВКА');
     expect(d.calls.sent).toHaveLength(1);
   });
 
@@ -787,6 +820,25 @@ describe('справка об услуге в stage 0', () => {
     await worker.processOne(row(), d);
     expect(userSeen).not.toContain('СПРАВКА');
     expect(d.calls.sent).toHaveLength(1);
+  });
+
+  test('defaultDeps.serviceFact: зависший RAG обрывается таймаутом (fail-open выше)', async () => {
+    jest.useFakeTimers();
+    try {
+      let w;
+      jest.isolateModules(() => {
+        jest.doMock('./services/agent-rag', () => ({ buildKnowledgeContext: () => new Promise(() => {}) }));
+        w = require('./services/agent/followup-worker');
+      });
+      expect(w.SERVICE_FACT_TIMEOUT_MS).toBeLessThanOrEqual(10000);
+      const p = w.defaultDeps.serviceFact(1, 'чистка');
+      const assertion = expect(p).rejects.toThrow(/timeout/);
+      jest.advanceTimersByTime(w.SERVICE_FACT_TIMEOUT_MS + 1);
+      await assertion;
+    } finally {
+      jest.dontMock('./services/agent-rag');
+      jest.useRealTimers();
+    }
   });
 
   test('defaultDeps: флаг справки читается из config', () => {

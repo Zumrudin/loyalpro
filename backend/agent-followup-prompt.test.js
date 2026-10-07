@@ -116,6 +116,15 @@ describe('справка об услуге в напоминании (07.10.2026
     expect(system).toMatch(/кроме фактов из блока «СПРАВКА ОБ УСЛУГЕ»/);
   });
 
+  test('время по правилу followup-guard («14.10») тоже вырезается — и из строк, и из заголовка', () => {
+    const { user } = buildFollowupPrompt({ ...base,
+      serviceFact: { title: 'Пилинги', text: 'Входит уход.\nприём до 14.10' } });
+    expect(user).toContain('Входит уход.');
+    expect(user).not.toMatch(/14\.10/);
+    const t = buildFollowupPrompt({ ...base, serviceFact: { title: 'Акция до 18.30', text: 'Входит уход.' } });
+    expect(t.user).not.toContain('СПРАВКА');
+  });
+
   test('справка только из строк со временем — блока нет', () => {
     const { user } = buildFollowupPrompt({ ...base, serviceFact: { title: 'Часы', text: 'с 10:00 до 21:00' } });
     expect(user).not.toContain('СПРАВКА ОБ УСЛУГЕ');

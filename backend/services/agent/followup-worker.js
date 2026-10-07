@@ -46,7 +46,7 @@ const cardBalance = require('../card-balance');
 const { classifySituation, lastOwnReply } = require('./followup-situation');
 const { chooseBonusLine, BONUS_MENTION_RE } = require('./followup-bonus');
 const rag = require('../agent-rag');
-const { pickServiceFact } = require('./service-fact');
+const { pickServiceFact, kbQuery } = require('./service-fact');
 const { createLogger } = require('../../logger');
 
 const log = createLogger('FollowupWorker');
@@ -62,6 +62,10 @@ const RETRY_BACKOFF_S = 480;
 // экспортируются ровно ради него.
 // Two bridge attempts (125 s each) + Polza (60 s + 20 s fallback).
 const LLM_TIMEOUT_MS = 360000;
+// Поход в RAG за справкой (эмбеддинг запроса + поиск): справка — украшение,
+// и зависший RAG не должен съедать бюджет LLM_TIMEOUT_MS. По таймауту —
+// напоминание без справки (fail-open).
+const SERVICE_FACT_TIMEOUT_MS = 8000;
 
 // На сколько откладывается строка, когда отвечать сейчас НЕЛЬЗЯ, но запрет
 // пройдёт сам (аварийный рычаг процесса). Минуты, а не сутки как в «Заботе»:
@@ -211,7 +215,8 @@ const defaultDeps = {
   // предвызовом оркестратора — один рычаг гасит справку везде.
   serviceFactEnabled: () => config.AGENT_SERVICE_FACT_PREFETCH,
   serviceFact: async (salonId, query) => {
-    const { context } = await rag.buildKnowledgeContext(salonId, query, {});
+    const { context } = await withTimeout(
+      rag.buildKnowledgeContext(salonId, query, {}), SERVICE_FACT_TIMEOUT_MS, 'service fact RAG');
     return pickServiceFact(context, query);
   },
   log,
@@ -358,12 +363,26 @@ function stripLeadingGreeting(text) {
 }
 
 // ── Справка об услуге к напоминанию ──────────────────────────────────────────
-// Что спросить у КБ: названия услуг из результата get_service_masters хода-
-// якоря (точнее всего), иначе последняя реплика Милы (в catalogMode цена идёт
-// без вызова инструмента). Класс ситуации — общий classifySituation; справку
-// ищем ТОЛЬКО в классе price (после цены — «что входит», а не новый факт
-// посреди выбора времени или переноса).
-function serviceFactQuery(events, ownText) {
+// Что спросить у КБ (этот же текст — вход фильтра pickServiceFact по
+// заголовку): названия услуг из результата get_service_masters хода-якоря
+// (точнее всего), иначе ВОПРОС ПАЦИЕНТА — последний user-блок перед репликой
+// Милы, через тот же kbQuery, что у предвызова оркестратора. Реплику Милы
+// входом НЕ берём никогда: в catalogMode (прод) это основной путь, а её
+// словарь («консультация в подарок», «запишу», «время», имена мастеров)
+// легализовал бы по заголовку любую общую статью вроде «Консультация
+// врача-косметолога». Нет вопроса пациента → справки нет.
+// Класс ситуации — общий classifySituation; справку ищем ТОЛЬКО в классе
+// price (после цены — «что входит», а не новый факт посреди выбора времени).
+function lastPatientText(messages) {
+  const arr = Array.isArray(messages) ? messages : [];
+  for (let i = arr.length - 1; i >= 0; i--) {
+    const m = arr[i];
+    if (m && m.role === 'user' && typeof m.content === 'string') return m.content;
+  }
+  return '';
+}
+
+function serviceFactQuery(events, messages) {
   const titles = [];
   for (const e of Array.isArray(events) ? events : []) {
     if (!e || e.tool !== 'get_service_masters' || e.is_error) continue;
@@ -371,7 +390,7 @@ function serviceFactQuery(events, ownText) {
     for (const s of list) if (s && typeof s.title === 'string' && s.title.trim()) titles.push(s.title.trim());
   }
   if (titles.length) return titles.slice(0, 3).join(', ');
-  return String(ownText || '').replace(/\s+/g, ' ').trim().slice(0, 200);
+  return kbQuery(lastPatientText(messages));
 }
 
 // Строго best-effort (fail-open): сбой журнала/RAG → напоминание без справки.
@@ -385,7 +404,7 @@ async function tryServiceFact(d, row, messages, turnEvents) {
     const events = await turnEvents();
     const ownText = lastOwnReply(messages);
     if (classifySituation({ events, ownText }).kind !== 'price') return null;
-    const query = serviceFactQuery(events, ownText);
+    const query = serviceFactQuery(events, messages);
     if (!query) return null;
     const fact = await d.serviceFact(row.salon_id, query);
     d.log.info(`followup #${row.id}: справка об услуге — ${fact ? `«${fact.title}»` : 'не найдена'}`);
@@ -848,5 +867,5 @@ module.exports = {
   processOne, processTick, startFollowupWorker, defaultDeps,
   LEASE_SQL, DEFAULT_FINAL_TEXT, DEFER_MINUTES, MIN_FINAL_GAP_MIN, MAX_ATTEMPTS,
   // Экспорт ради инварианта в тестах: таймаут строго меньше backoff аренды.
-  LLM_TIMEOUT_MS, RETRY_BACKOFF_S,
+  LLM_TIMEOUT_MS, RETRY_BACKOFF_S, SERVICE_FACT_TIMEOUT_MS,
 };
