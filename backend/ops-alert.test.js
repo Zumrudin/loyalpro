@@ -9,6 +9,10 @@ describe('ops-alert', () => {
     expect(isPaymentError(new Error('insufficient_quota'))).toBe(true);
     expect(isPaymentError(new Error('ECONNRESET'))).toBe(false);
     expect(isPaymentError(null)).toBe(false);
+    expect(isPaymentError({ response: { status: 402 }, message: 'x' })).toBe(true);
+    expect(isPaymentError(new Error('insufficient permissions'))).toBe(false);
+    expect(isPaymentError(new Error('Key (salon_id)=(402) is not present'))).toBe(false);
+    expect(isPaymentError(new Error('record 1402 not found'))).toBe(false);
   });
 
   test('шлёт раз в час на ключ, без транспорта — только лог', async () => {
@@ -31,6 +35,10 @@ describe('ops-alert', () => {
     const b = createAlerter({ transport: null, log: { warn: (m) => warned.push(m), error: (m) => warned.push(m) } });
     expect(await b.notify('k', 'текст')).toBe(false);
     expect(warned.join('\n')).toMatch(/транспорт алертов не настроен/);
+    const before = warned.length;
+    now += 3600_001;
+    await b.notify('k', 'текст');
+    expect(warned.slice(before).filter(m => /не настроен/.test(m))).toHaveLength(0); // раз на процесс
   });
 
   test('падение транспорта не бросает наружу и не раскрывает токен', async () => {
@@ -41,5 +49,23 @@ describe('ops-alert', () => {
     });
     await expect(a.notify('k', 't')).resolves.toBe(false);
     expect(warned.join('\n')).not.toContain('SECRET');
+  });
+
+  test('упавшая отправка не сжигает час: повтор пробует снова', async () => {
+    let fail = true;
+    const a = createAlerter({
+      transport: async () => { if (fail) throw new Error('tg down'); },
+      log: { warn() {}, error() {} },
+    });
+    expect(await a.notify('k', 't')).toBe(false);
+    fail = false;
+    expect(await a.notify('k', 't')).toBe(true);
+  });
+
+  test('в кулдауне ERROR не пишется', async () => {
+    const errs = [];
+    const a = createAlerter({ transport: async () => {}, log: { warn() {}, error: (m) => errs.push(m) } });
+    await a.notify('k', 't'); await a.notify('k', 't'); await a.notify('k', 't');
+    expect(errs).toHaveLength(1);
   });
 });

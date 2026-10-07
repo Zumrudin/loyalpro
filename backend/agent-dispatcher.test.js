@@ -1098,3 +1098,28 @@ describe('additional proposal delivery', () => {
     expect(proposals.offered(1, { ...ctx, previousAssistantText: p.text })).toBeNull();
   });
 });
+
+test('402 провайдера → алерт ровно один раз без PII, перевод на администратора выполнен', async () => {
+  const opsAlert = { isPaymentError: require('./services/ops-alert').isPaymentError, notify: jest.fn(async () => true) };
+  const d = deps({
+    opsAlert,
+    orchestrator: { runDialog: jest.fn(async () => { throw Object.assign(new Error('402 Недостаточно средств'), { status: 402 }); }) },
+  });
+  await dispatcher.process(1, 'dialog-key-xyz', meta, d);
+  expect(opsAlert.notify).toHaveBeenCalledTimes(1);
+  const [key, text] = opsAlert.notify.mock.calls[0];
+  expect(key).toBe('provider_402');
+  expect(text).not.toContain('dialog-key-xyz');
+  expect(text).not.toContain(meta.phone);
+  expect(d.escalate).toHaveBeenCalled();
+});
+
+test('не-платёжная ошибка провайдера → алерта нет', async () => {
+  const opsAlert = { isPaymentError: require('./services/ops-alert').isPaymentError, notify: jest.fn(async () => true) };
+  const d = deps({
+    opsAlert,
+    orchestrator: { runDialog: jest.fn(async () => { throw new Error('ECONNRESET'); }) },
+  });
+  await dispatcher.process(1, 'k', meta, d);
+  expect(opsAlert.notify).not.toHaveBeenCalled();
+});

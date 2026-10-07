@@ -380,8 +380,9 @@ async function process(salonId, dialogKey, meta, opts = {}) {
     // на часы (инцидент 10–11.09.2026). Без PII: ключ диалога не кладём.
     // Не await: алерт не должен задерживать ответ пациенту; notify не бросает.
     try {
-      if (opsAlert.isPaymentError(e)) {
-        void opsAlert.notify('provider_402', `салон ${salonId}: провайдер LLM отвечает 402/«недостаточно средств» — Мила переводит диалоги на администратора`);
+      const alerts = opts.opsAlert || opsAlert;
+      if (alerts.isPaymentError(e)) {
+        void alerts.notify('provider_402', `салон ${salonId}: провайдер LLM отвечает 402/«недостаточно средств» — Мила переводит диалоги на администратора`);
       }
     } catch (_) { /* best-effort */ }
     // Тот же инвариант на аварийном пути: упавший прогон не должен обернуться
