@@ -751,6 +751,7 @@ describe('телеметрия продаж (07.10.2026)', () => {
     const q = 'Какой день вам удобнее?';
     expect(checkQuestionInsteadOfOffer(q, { slotToolCalled: true, patientLastText: 'запишите к Татьяне' })).toEqual([]);
     expect(checkQuestionInsteadOfOffer(q, { slotToolCalled: false, patientLastText: 'сколько стоит чистка' })).toEqual([]);
+    expect(checkQuestionInsteadOfOffer('Доброе утро или добрый день! Чем помочь?', { slotToolCalled: false, patientLastText: 'запишите' })).toEqual([]);
     expect(checkQuestionInsteadOfOffer('Есть 15:30 и 16:00, записать?', { slotToolCalled: false, patientLastText: 'запишите' })).toEqual([]);
   });
 });

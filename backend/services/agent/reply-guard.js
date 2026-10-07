@@ -6,6 +6,8 @@
 // id (правило 9), повторное приветствие, перебор эмодзи. Оркестратор по
 // жёстким нарушениям делает ОДИН корректирующий довызов, остальное — лог.
 
+const { detectPromptScenarios, SCENARIOS } = require('./prompt-scenarios');
+
 const TIME_RE = /\b([01]?\d|2[0-3])[:.]([0-5]\d)\b/g;
 
 // ISO datetime (book_chain.records[].datetime и т.п.): «2026-07-30T10:30:00+03:00».
@@ -495,7 +497,7 @@ const PRICE_SUM_RE = /\d[\d\s ]*\s?(?:₽|руб)/iu;            // та же �
 // («есть 15:30» после цены — уже предложение, хоть и без «?»).
 const NEXT_STEP_RE = /\?|запис[аи]|запиш|подобр|подберу|консультац|удобн|окошк|свободн|подарок|входит|длится|проход|(?<!\d)\d{1,2}:\d{2}(?!\d)/iu;
 // Граница слева lookbehind'ом: \b в JS ASCII-only («никакой день» — не вопрос).
-const ASK_DAY_RE = /(?<![\p{L}\p{N}])(?:как(?:ой|ую|ое|ие))\s+(?:день|дн|дат|врем|половин)|(?<![\p{L}\p{N}])утро\s+или|(?<![\p{L}\p{N}])(?:утром|днём|днем|вечером)\s+(?:или|удобн)/iu;
+const ASK_DAY_RE = /(?<![\p{L}\p{N}])(?:как(?:ой|ую|ое|ие))\s+(?:день|дн|дат|врем|половин)|(?<!доброе\s+)(?<![\p{L}\p{N}])утро\s+или|(?<![\p{L}\p{N}])(?:утром|днём|днем|вечером)\s+(?:или|удобн)/iu;
 const SALES_CLAUSE_CAP = 160;
 
 function checkPriceWithoutNextStep(text) {
@@ -512,7 +514,6 @@ function checkQuestionInsteadOfOffer(text, opts = {}) {
   if (opts.slotToolCalled) return [];
   const s = String(text || '');
   if (!ASK_DAY_RE.test(s)) return [];
-  const { detectPromptScenarios, SCENARIOS } = require('./prompt-scenarios');
   if (!detectPromptScenarios(String(opts.patientLastText || '')).includes(SCENARIOS.BOOKING)) return [];
   const clause = s.split(/(?<=[.!?;\n])/).find(part => ASK_DAY_RE.test(part)) || s;
   return [{ type: 'question_instead_of_offer', value: clause.trim().slice(0, SALES_CLAUSE_CAP) }];

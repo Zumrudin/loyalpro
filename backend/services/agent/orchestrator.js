@@ -1499,7 +1499,7 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
         // Телеметрия продаж (07.10.2026) — только лог, см. шапку в reply-guard.
         ...replyGuard.checkPriceWithoutNextStep(joined),
         ...replyGuard.checkQuestionInsteadOfOffer(joined,
-          { slotToolCalled, patientLastText: toolCtx.patientLastText }),
+          { slotToolCalled: slotToolCalled || freshSlotJournal, patientLastText: toolCtx.patientLastText }),
       ];
       let corrections = 0;
       for (;;) {
