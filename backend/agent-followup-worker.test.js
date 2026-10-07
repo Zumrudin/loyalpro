@@ -54,6 +54,9 @@ function deps(over = {}) {
     readCardBalance: async () => ({ status: 'unavailable', reason: 'test' }),
     loadTurnEvents: async () => [],
     recentBonusSent: async () => false,
+    // Записи в CRM после якоря нет. Обязателен: processOne мёржит deps ПОВЕРХ
+    // defaultDeps, и без заглушки старые тесты ходили бы в настоящую БД.
+    bookedSinceAnchor: async () => false,
     log: { info() {}, warn() {}, error() {} },
     ...over,
   };
@@ -66,6 +69,29 @@ const reasons = (d) => d.calls.marks.map((m) => m.params).flat().map(String).joi
 const sqls = (d) => d.calls.marks.map((m) => m.sql).join(' ');
 
 describe('followup worker: гейты', () => {
+  test('запись в CRM после якоря гасит строку до LLM-прохода (booked_in_crm)', async () => {
+    let llmCalled = false;
+    const d = deps({
+      bookedSinceAnchor: async (salonId, phone, anchorAt) => {
+        expect(salonId).toBe(1); expect(phone).toBe('79200255591');
+        expect(anchorAt).toEqual(new Date('2026-08-11T10:00:00.000Z'));
+        return true;
+      },
+      createMessage: async () => { llmCalled = true; return { text: '{}' }; },
+    });
+    await worker.processOne(row(), d);
+    expect(llmCalled).toBe(false);
+    expect(d.calls.sent).toHaveLength(0);
+    expect(reasons(d)).toMatch(/booked_in_crm/);
+    expect(sqls(d)).toMatch(/SET status=\$2/);
+  });
+
+  test('сбой проверки записи — fail-open, напоминание уходит', async () => {
+    const d = deps({ bookedSinceAnchor: async () => { throw new Error('db down'); } });
+    await worker.processOne(row(), d);
+    expect(d.calls.sent).toHaveLength(1);
+  });
+
   test('выключенный env-рычаг ОТКЛАДЫВАЕТ, а не гасит строку', async () => {
     const d = deps({ followupEnabled: () => false });
     await worker.processOne(row(), d);

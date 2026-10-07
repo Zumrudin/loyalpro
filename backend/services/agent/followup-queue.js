@@ -113,6 +113,39 @@ async function close(salonId, dialogKey, status, reason, opts = {}) {
 }
 
 /**
+ * Погасить ожидание ответа по НОМЕРУ (а не по ключу диалога): вебхук YClients
+ * знает только телефон клиента, а ключ диалога у tdlib/MAX может быть chat_id.
+ * Используется на `record create` (запись сделал администратор или сама Мила
+ * — во втором случае строка уже погашена диспетчером, UPDATE ничего не найдёт).
+ * Номер — в форме normalizePhoneKey (`79…`), так же хранится agent_followups.phone.
+ * Статус всегда 'cancelled'. SSE `followup_status` уходит здесь, по dialog_key
+ * КАЖДОЙ погашенной строки (RETURNING): чип в «Чате» адресуется ключом диалога,
+ * и событие с номером вместо chat_id не нашло бы диалог tdlib/MAX.
+ * Best-effort: сбой БД → 0.
+ * @returns {Promise<number>} сколько строк погашено
+ */
+async function closeByPhone(salonId, phone, reason, opts = {}) {
+  const db = opts.db || realDb;
+  if (!salonId || !phone) return 0;
+  try {
+    const r = await db.query(
+      `UPDATE agent_followups
+          SET status = 'cancelled', close_reason = $3, updated_at = now()
+        WHERE salon_id = $1 AND phone = $2 AND status = 'scheduled'
+        RETURNING dialog_key`,
+      [salonId, String(phone), reason || null]);
+    for (const row of (r && r.rows) || []) {
+      try { chatEvents.emitFollowupStatus(salonId, row.dialog_key, 'cancelled', 0); }
+      catch (e) { log.warn(`followup closeByPhone SSE ${row.dialog_key}: ${e.message}`); }
+    }
+    return (r && r.rowCount) || 0;
+  } catch (e) {
+    log.warn(`followup closeByPhone ${phone}: ${e.message}`);
+    return 0;
+  }
+}
+
+/**
  * Ждём ли ответа клиента после этого хода.
  *
  * Три из четырёх утверждённых исключений сюда даже не доходят и это НЕ
@@ -126,4 +159,4 @@ function shouldAwaitReply(res = {}) {
   return !!res.delivered && !res.writeSucceeded && !res.escalated && !res.silent && !res.conversationComplete && !res.followupStopReason;
 }
 
-module.exports = { schedule, close, shouldAwaitReply, CLOSE_STATUSES };
+module.exports = { schedule, close, closeByPhone, shouldAwaitReply, CLOSE_STATUSES };

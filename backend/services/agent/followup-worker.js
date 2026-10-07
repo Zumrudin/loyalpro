@@ -180,6 +180,23 @@ const defaultDeps = {
         LIMIT 1`, [salonId, phone]);
     return !!r;
   },
+  // Запись в CRM после якоря — по НАШЕЙ таблице records (её кладёт тот же
+  // вебхук), без похода в YClients. created_at строки ≈ момент создания
+  // записи (вставка вебхуком), этого достаточно как «после якоря». Номер в
+  // clients лежит в разных формах (`+7…`), отсюда набор вариантов.
+  bookedSinceAnchor: async (salonId, phone, anchorAt) => {
+    const p10 = String(phone || '').replace(/\D/g, '').slice(-10);
+    if (p10.length !== 10) return false;
+    const forms = [`+7${p10}`, `7${p10}`, `8${p10}`, p10];
+    const r = await realDb.oneOrNone(
+      `SELECT 1 FROM records r
+         JOIN clients c ON c.id = r.client_id AND c.salon_id = r.salon_id
+        WHERE r.salon_id = $1 AND c.phone = ANY($2::text[])
+          AND COALESCE(r.status,'') <> 'deleted'
+          AND r.created_at >= $3
+        LIMIT 1`, [salonId, forms, anchorAt]);
+    return !!r;
+  },
   log,
 };
 
@@ -507,6 +524,19 @@ async function processOne(row, deps = defaultDeps) {
 
     // Both nudge and final must stop after a completed visit confirmation.
     // DB errors reach the retry path: do not send without this check.
+    // ── 6a. Клиента записали в CRM после якоря (администратор/Мила) ──
+    // Вторая половина гашения по записи (первая — вебхук record create,
+    // followup-queue.closeByPhone): вебхук мог потеряться или прийти с
+    // номером в другой форме. Fail-open: сбой проверки не должен стоить напоминания.
+    try {
+      if (row.phone && typeof d.bookedSinceAnchor === 'function'
+          && await d.bookedSinceAnchor(row.salon_id, row.phone, row.anchor_at)) {
+        return finish('cancelled', 'booked_in_crm');
+      }
+    } catch (e) {
+      d.log.warn(`followup #${row.id}: проверка записи в CRM не удалась (${e.message}) — продолжаем`);
+    }
+
     const stopReason = await loadStopReason(d.db, row.salon_id, row.dialog_key);
     if (stopReason) return finish('cancelled', stopReason);
 

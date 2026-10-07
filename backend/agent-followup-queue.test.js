@@ -138,3 +138,37 @@ test('a blocked booking confirmation must not start a reminder loop', () => {
   expect(queue.shouldAwaitReply({ delivered: true, writeSucceeded: false, escalated: false,
     followupStopReason: 'booking_confirmation_required' })).toBe(false);
 });
+
+describe('closeByPhone (запись в CRM)', () => {
+  test('гасит все scheduled-строки салона по номеру одним UPDATE', async () => {
+    const calls = [];
+    const db = { query: async (sql, params) => { calls.push({ sql, params }); return { rowCount: 2, rows: [] }; } };
+    const n = await queue.closeByPhone(1, '79200255591', 'booked_in_crm', { db });
+    expect(n).toBe(2);
+    expect(calls[0].sql).toMatch(/UPDATE agent_followups/);
+    expect(calls[0].sql).toMatch(/status\s*=\s*'cancelled'/);
+    expect(calls[0].sql).toMatch(/phone\s*=\s*\$2/);
+    expect(calls[0].sql).toMatch(/status\s*=\s*'scheduled'/);
+    expect(calls[0].params).toEqual([1, '79200255591', 'booked_in_crm']);
+  });
+
+  test('SSE-событие уходит по КЛЮЧУ ДИАЛОГА каждой погашенной строки, а не по номеру', async () => {
+    const chatEvents = require('./services/chat-events');
+    const spy = jest.spyOn(chatEvents, 'emitFollowupStatus').mockImplementation(() => {});
+    try {
+      const db = { query: async () => ({ rowCount: 2, rows: [{ dialog_key: '79200255591' }, { dialog_key: '298342940' }] }) };
+      await queue.closeByPhone(1, '79200255591', 'booked_in_crm', { db });
+      expect(spy.mock.calls).toEqual([
+        [1, '79200255591', 'cancelled', 0],
+        [1, '298342940', 'cancelled', 0],
+      ]);
+    } finally { spy.mockRestore(); }
+  });
+
+  test('без номера или салона — 0 и без запроса; сбой БД — 0', async () => {
+    const db = { query: async () => { throw new Error('boom'); } };
+    expect(await queue.closeByPhone(1, '', 'x', { db })).toBe(0);
+    expect(await queue.closeByPhone(null, '79200255591', 'x', { db })).toBe(0);
+    expect(await queue.closeByPhone(1, '79200255591', 'x', { db })).toBe(0);
+  });
+});

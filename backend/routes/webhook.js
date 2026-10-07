@@ -6,6 +6,8 @@ const { handleRecordCreated } = require('../services/notifications');
 const care = require('../services/care/enroll');
 const reminders = require('../services/reminders/enroll');
 const { upsertClientFromYc } = require('../services/client-upsert');
+const followupQueue = require('../services/agent/followup-queue');
+const { normalizePhoneKey } = require('../services/agent-gate');
 const { createLogger } = require('../logger');
 const logger = createLogger('Webhook');
 
@@ -91,6 +93,20 @@ router.post('/webhook.v2/:companyId', async (req, res) => {
         logger.error(`reminders enroll: ${e.message}`));
       await reminders.handleAttribution(salon, payload).catch(e =>
         logger.error(`reminders attribution: ${e.message}`));
+      // Ожидание ответа Милы гасится ЗАПИСЬЮ в CRM: клиента записал
+      // администратор (по телефону/в приложении) — напоминать «удалось ли
+      // посмотреть?» уже не о чем. Только живое создание: отмена/удаление
+      // ожидания не трогают. SSE по ключу диалога шлёт сам closeByPhone.
+      // Свой catch — как у соседей.
+      if (payload.status === 'create' && payload.data && payload.data.deleted !== true
+          && Number(payload.data.attendance) !== -1) {
+        const fuPhone = normalizePhoneKey(payload.data.client && payload.data.client.phone);
+        if (fuPhone) {
+          await followupQueue.closeByPhone(salon.id, fuPhone, 'booked_in_crm')
+            .then(n => { if (n) logger.info(`followup: ${n} ожидани(е/я) погашено записью в CRM`); })
+            .catch(e => logger.warn(`followup close by booking: ${e.message}`));
+        }
+      }
     }
 
     // client-вебхук приходит на КАЖДЫЙ оплаченный визит и на правку карточки и
