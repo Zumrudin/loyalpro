@@ -787,6 +787,49 @@ describe('справка об услуге в stage 0', () => {
     expect(d.calls.sent).toHaveLength(1);
   });
 
+  test('пациент не назвал услугу («Сколько стоит?»), Мила — «консультация в подарок» → справки нет', async () => {
+    const { pickServiceFact } = require('./services/agent/service-fact');
+    const ctx = 'Консультация врача-косметолога\nПервичная консультация проводится бесплатно.';
+    let userSeen = '';
+    const d = deps({
+      loadTranscript: async () => ({ messages: [
+        { role: 'user', content: 'Сколько стоит?' },
+        { role: 'assistant', content: 'Мария, от 12 000 ₽, консультация в подарок. Записать вас?' },
+      ] }),
+      serviceFact: async (salonId, query) => pickServiceFact(ctx, query),
+      createMessage: async ({ messages }) => {
+        userSeen = messages[0].content;
+        return { text: '{"action":"send","text":"Мария, подскажите, записать вас?","reason":"ок"}' };
+      },
+    });
+    await worker.processOne(row(), d);
+    expect(userSeen).not.toContain('СПРАВКА');
+    expect(d.calls.sent).toHaveLength(1);
+  });
+
+  test('пациент спросил «сколько стоит чистка?» → статья «Чистка лица» уходит в промпт', async () => {
+    const { pickServiceFact } = require('./services/agent/service-fact');
+    const ctx = 'Чистка лица\nВ стоимость входит уходовая маска.';
+    const queries = [];
+    let userSeen = '';
+    const d = deps({
+      loadTranscript: async () => ({ messages: [
+        { role: 'user', content: 'сколько стоит чистка?' },
+        { role: 'assistant', content: 'Мария, от 5 000 ₽, консультация в подарок. Записать вас?' },
+      ] }),
+      serviceFact: async (salonId, query) => { queries.push(query); return pickServiceFact(ctx, query); },
+      createMessage: async ({ messages }) => {
+        userSeen = messages[0].content;
+        return { text: '{"action":"send","text":"Мария, в чистку входит маска. Записать вас?","reason":"ок"}' };
+      },
+    });
+    await worker.processOne(row(), d);
+    expect(queries).toEqual(['сколько стоит чистка?']);
+    expect(userSeen).toContain('СПРАВКА ОБ УСЛУГЕ (статья «Чистка лица»');
+    expect(userSeen).toContain('уходовая маска');
+    expect(d.calls.sent).toHaveLength(1);
+  });
+
   test('класс choice — справка не запрашивается', async () => {
     let called = false;
     const d = deps({
