@@ -725,3 +725,32 @@ describe('checkRedundantProcedureQuestion', () => {
     expect(v).toEqual([{ type: 'redundant_procedure_question', value: 'x'.repeat(120) }]);
   });
 });
+
+describe('телеметрия продаж (07.10.2026)', () => {
+  const { checkPriceWithoutNextStep, checkQuestionInsteadOfOffer } = require('./services/agent/reply-guard');
+
+  test('цена без факта и без шага — price_without_next_step', () => {
+    const v = checkPriceWithoutNextStep('Чистка лица стоит 6 500 ₽.');
+    expect(v).toEqual([{ type: 'price_without_next_step', value: 'Чистка лица стоит 6 500 ₽.' }]);
+  });
+
+  test('цена + шаг или вопрос — чисто', () => {
+    expect(checkPriceWithoutNextStep('Чистка 6 500 ₽. Подобрать время?')).toEqual([]);
+    expect(checkPriceWithoutNextStep('Чистка 6 500 ₽, в стоимость входит уход. Хотите записаться?')).toEqual([]);
+    expect(checkPriceWithoutNextStep('Консультация в подарок, чистка 6500 руб')).toEqual([]);
+    expect(checkPriceWithoutNextStep('Здравствуйте! Чем могу помочь?')).toEqual([]);
+  });
+
+  test('вопрос о дне без слот-вызова на запросе записи — question_instead_of_offer', () => {
+    const v = checkQuestionInsteadOfOffer('Какой день и половина дня вам удобнее?',
+      { slotToolCalled: false, patientLastText: 'Когда можно попасть к Татьяне на плазмолифтинг?' });
+    expect(v).toEqual([{ type: 'question_instead_of_offer', value: 'Какой день и половина дня вам удобнее?' }]);
+  });
+
+  test('слоты вызывались или пациент не просил записи — чисто', () => {
+    const q = 'Какой день вам удобнее?';
+    expect(checkQuestionInsteadOfOffer(q, { slotToolCalled: true, patientLastText: 'запишите к Татьяне' })).toEqual([]);
+    expect(checkQuestionInsteadOfOffer(q, { slotToolCalled: false, patientLastText: 'сколько стоит чистка' })).toEqual([]);
+    expect(checkQuestionInsteadOfOffer('Есть 15:30 и 16:00, записать?', { slotToolCalled: false, patientLastText: 'запишите' })).toEqual([]);
+  });
+});

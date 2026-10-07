@@ -1496,6 +1496,10 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
         // «Консультация в подарок» один раз за диалог — только измерение.
         ...replyGuard.checkGiftRepeat(joined,
           { priorHasGift: replyGuard.GIFT_RE.test(priorAssistantText) }),
+        // Телеметрия продаж (07.10.2026) — только лог, см. шапку в reply-guard.
+        ...replyGuard.checkPriceWithoutNextStep(joined),
+        ...replyGuard.checkQuestionInsteadOfOffer(joined,
+          { slotToolCalled, patientLastText: toolCtx.patientLastText }),
       ];
       let corrections = 0;
       for (;;) {

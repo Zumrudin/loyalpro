@@ -497,6 +497,36 @@ function checkRedundantProcedureQuestion(text, opts = {}) {
 // unverified_offer и fabricated_unavailability_reason — жёсткие сразу, без
 // периода «сначала лог»: оба — прямая ложь о состоянии записи (инцидент
 // 2026-09-15), а не спорная стилистика вроде offer_bypass/gift_repeat.
+// ── Телеметрия консультативной продажи (07.10.2026) — ТОЛЬКО ЛОГ ───────────
+// Воронка 02.10: «цена → тишина» (8 из 12 молчаливых потерь) и «вопрос вместо
+// предложения» (8 диалогов ушли администратору). Оба сигнала детерминированы,
+// но не доказывают ошибку в каждом случае (уточнить день иногда необходимо),
+// поэтому не HARD_TYPES: сначала измерить частоту, потом решать.
+const PRICE_SUM_RE = /\d[\d\s ]*\s?(?:₽|руб)/iu;            // та же форма, что PRICE_TEXT_RE в followup-situation
+const NEXT_STEP_RE = /\?|записа|подобр|подберу|консультац|удобн|окошк|свободн|подарок|входит|длится|проход/iu;
+const ASK_DAY_RE = /(?:как(?:ой|ую|ое|ие)|на\s+как(?:ой|ую|ое))\s+(?:день|дат|врем|половин)|утро\s+или|(?:утром|днём|днем|вечером)\s+(?:или|удобн)/iu;
+const SALES_CLAUSE_CAP = 160;
+
+function checkPriceWithoutNextStep(text) {
+  const s = String(text || '');
+  if (!PRICE_SUM_RE.test(s)) return [];
+  if (NEXT_STEP_RE.test(s)) return [];
+  const clause = s.split(/(?<=[.!?;\n])/).find(part => PRICE_SUM_RE.test(part)) || s;
+  return [{ type: 'price_without_next_step', value: clause.trim().slice(0, SALES_CLAUSE_CAP) }];
+}
+
+// patientLastText — последнее сообщение пациента (toolCtx.patientLastText);
+// «просил записи» — сценарий BOOKING детектора prompt-scenarios.
+function checkQuestionInsteadOfOffer(text, opts = {}) {
+  if (opts.slotToolCalled) return [];
+  const s = String(text || '');
+  if (!ASK_DAY_RE.test(s)) return [];
+  const { detectPromptScenarios, SCENARIOS } = require('./prompt-scenarios');
+  if (!detectPromptScenarios(String(opts.patientLastText || '')).includes(SCENARIOS.BOOKING)) return [];
+  const clause = s.split(/(?<=[.!?;\n])/).find(part => ASK_DAY_RE.test(part)) || s;
+  return [{ type: 'question_instead_of_offer', value: clause.trim().slice(0, SALES_CLAUSE_CAP) }];
+}
+
 const HARD_TYPES = new Set([
   'taboo_word', 'id_leak', 'unknown_time', 'alien_time_attribution', 'staff_not_working_claim',
   'unverified_offer', 'fabricated_unavailability_reason',
@@ -544,4 +574,5 @@ module.exports = {
   checkUnbackedUnavailability, BOOKED_UP_RE, checkRejectedRepeat, isRefusal, REFUSAL_RE,
   fabricationViolations, FABRICATION_TYPES, SAFE_FALLBACK_TEXT,
   checkRedundantProcedureQuestion, RESCHEDULE_INTENT_RE, ASK_PROCEDURE_RE,
+  checkPriceWithoutNextStep, checkQuestionInsteadOfOffer,
 };
