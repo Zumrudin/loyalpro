@@ -26,7 +26,7 @@
 // ============================================================
 const { detectPromptScenarios, SCENARIOS } = require('./prompt-scenarios');
 const { stripAllStamps } = require('./transcript-time');
-const { extractTimes } = require('./reply-guard');
+const { extractTimes, PRICE_SUM_RE } = require('./reply-guard');
 
 const MAX_FACT_CHARS = 600;
 const MAX_QUERY_CHARS = 200;
@@ -96,6 +96,47 @@ function dropTimedSentences(line) {
   return line.split(/(?<=[.!?…])\s+/).filter(s => !hasTime(s)).join(' ').trim();
 }
 
+// ── Отбор ОПИСАТЕЛЬНОГО абзаца топ-чанка (живой прогон 08.10.2026) ─────────
+// Первый абзац реальных статей — мусор для пациента: редакторская пометка
+// («Цены в статье обновлены в строгом соответствии с представленным
+// прайс-листом.» — статьи 5 и 7), разделитель `---`, markdown-заголовок, строка
+// прайса «* **Подбородок** — 4 000 ₽ (врач)…». Брать первый абзац значило
+// дописывать пометку пациенту (price-followthrough) и класть её в промпт
+// напоминания. Теперь — первый абзац из ОПИСАТЕЛЬНЫХ строк: законченное
+// предложение ≥40 символов, без списка/заголовка/сумм/служебных слов, вне
+// разделов «Кто выполняет», «Стоимость», «Показания/Противопоказания»,
+// «Подготовка», «Ссылка» и FAQ-вопросов. Нет такого — null (блока нет).
+const LIST_RE = /^(?:[*\-•#>]|\d+[.)](?:\s|$)|---)/u;
+// «обновлен(ы/а/о)» — целым словом: «по обновлению кожи» — описание, не пометка.
+const META_RE = /стать[еяи]|прайс|(?<![\p{L}])обновлен[аоы]?(?![\p{L}])|актуальн|уточняйте|(?<![\p{L}])см\.|ссылк/iu;
+// «руб» — только рубли («рубл…», «руб.», «руб»), не «рубцы/рубцов».
+const MONEY_RE = /₽|(?<![\p{L}])руб(?:л|\.|(?![\p{L}]))/iu;
+const SKIP_SECTION_RE = /кто\s+выполня|стоимост|цен[аыуе]|противопоказ|показани|подготовк|ссылк/iu;
+const SENTENCE_END_RE = /[.!…]$/u;
+// Строка-«заголовок» (не markdown, без конечной пунктуации) — это первая строка
+// СЛЕДУЮЩЕГО чанка (chunkArticle префиксит заголовок статьи без точки): граница
+// топ-чанка, дальше чужой текст.
+const PLAIN_END_RE = /[.!?…:;»)]$/u;
+const MIN_DESCRIPTIVE = 40;
+const MAX_PARAGRAPHS = 12;
+
+function stripEmphasis(line) {
+  return String(line || '').replace(/\*\*|__|`/g, '').replace(/\s+/g, ' ').trim();
+}
+
+function isMarkdownLine(raw) {
+  return LIST_RE.test(raw) || raw.startsWith('**');
+}
+
+function isDescriptive(raw) {
+  if (!raw || isMarkdownLine(raw)) return false;
+  // Непарные ** — остаток разметки (обрезанный жирный ярлык), не текст.
+  if ((raw.match(/\*\*/g) || []).length % 2) return false;
+  if (PRICE_SUM_RE.test(raw) || MONEY_RE.test(raw) || META_RE.test(raw)) return false;
+  const text = stripEmphasis(raw);
+  return text.length >= MIN_DESCRIPTIVE && SENTENCE_END_RE.test(text);
+}
+
 /**
  * @param {string} context — выдача search_knowledge_base (kb.context)
  * @param {string} userText — последнее сообщение пациента
@@ -112,31 +153,39 @@ function pickServiceFact(context, userText) {
   const st = stems(userText);
   if (!st.length || !st.some(s => titleLc.includes(s))) return null;
 
-  // Берём ТОЛЬКО первый абзац топ-чанка: chunkArticle склеивает абзацы через
-  // пустую строку, buildKnowledgeContext — чанки тоже через пустую строку, и
-  // границу «абзац той же статьи / чанк другой статьи» по тексту не отличить.
-  // Для «одного факта» первого абзаца достаточно, а чужая статья не протечёт.
-  const body = [];
-  let total = 0;
-  let started = false;
+  // Идём по строкам ТОЛЬКО топ-чанка. Границы: блок цен каталога, повтор
+  // заголовка (следующий чанк той же статьи), строка-заголовок чужого чанка
+  // (PLAIN_END_RE), и страховочный кап по числу абзацев. Берём первый абзац
+  // из подряд идущих описательных строк — один факт, а не пересказ статьи.
+  const chosen = [];
+  let section = '';
+  let paragraphs = 0;
+  let inPara = false;
   for (const raw of lines.slice(titleIdx + 1)) {
     if (!raw) {
-      if (started) break;
+      if (chosen.length) break;
+      if (inPara) { inPara = false; if (++paragraphs >= MAX_PARAGRAPHS) break; }
       continue;
     }
-    if (SERVICES_HEADER_RE.test(raw)) break;
-    // Следующий чанк той же статьи начинается с того же заголовка — дальше не читаем.
-    if (started && raw === title) break;
-    started = true;
+    if (SERVICES_HEADER_RE.test(raw) || raw === title) break;
+    if (!isMarkdownLine(raw) && !PLAIN_END_RE.test(stripEmphasis(raw))) break;
+    inPara = true;
+    if (raw.startsWith('#')) {
+      if (chosen.length) break;
+      section = raw;
+      continue;
+    }
+    const skipSection = section && (SKIP_SECTION_RE.test(section) || section.endsWith('?'));
     const l = dropTimedSentences(raw);
-    if (!l) continue;
-    const piece = l.slice(0, MAX_FACT_CHARS - total);
-    body.push(piece);
-    total += piece.length + 1;
-    if (total >= MAX_FACT_CHARS) break;
+    if (skipSection || !isDescriptive(l)) {
+      if (chosen.length) break;
+      continue;
+    }
+    chosen.push(stripEmphasis(l));
+    if (chosen.join('\n').length >= MAX_FACT_CHARS) break;
   }
-  if (!body.length) return null;
-  return { title, text: body.join('\n').slice(0, MAX_FACT_CHARS) };
+  if (!chosen.length) return null;
+  return { title, text: chosen.join('\n').slice(0, MAX_FACT_CHARS) };
 }
 
 // Поход в RAG за справкой (эмбеддинг запроса + поиск, у buildKnowledgeContext
@@ -159,5 +208,6 @@ function withTimeout(promise, ms, label) {
 
 module.exports = {
   wantsServiceFact, kbQuery, pickServiceFact, hasTime, MAX_FACT_CHARS, ALIASES,
+  META_RE, MONEY_RE, stripEmphasis,
   SERVICE_FACT_TIMEOUT_MS, withTimeout,
 };

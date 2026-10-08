@@ -18,13 +18,14 @@
 // ============================================================
 const { detectPromptScenarios, SCENARIOS } = require('./prompt-scenarios');
 const { PRICE_SUM_RE, NEXT_STEP_RE } = require('./reply-guard');
-const { hasTime } = require('./service-fact');
+const { hasTime, META_RE, MONEY_RE, stripEmphasis } = require('./service-fact');
 const { parseDayPart } = require('./patient-time');
 const { resolveDateInfo } = require('./offer-attribution');
 
 // Шаг — вопрос без времени и эмодзи: время здесь назвать нечем (слотов в
 // этом ходе не смотрели), а эмодзи у реплики модели своё уже может быть.
-const STEP_QUESTION = 'Подобрать вам удобное время для записи?';
+// «Вам» с заглавной — так пишет Мила (живой прогон 08.10.2026).
+const STEP_QUESTION = 'Подобрать Вам удобное время для записи?';
 const MAX_FACT_SENTENCE = 180;
 const MIN_FACT_SENTENCE = 20;
 // Перечень цен, а не ответ про одну услугу: ≥3 разных суммы ИЛИ ≥2 разных
@@ -96,7 +97,11 @@ function isPriceList(text) {
 function factSentence(text) {
   const firstLine = String(text || '').split('\n').map(l => l.trim()).find(Boolean);
   if (!firstLine) return null;
-  const sentence = firstLine.split(SENTENCE_SPLIT_RE)[0].trim();
+  // Вторая линия обороны поверх pickServiceFact: строки прайса и редакторские
+  // пометки статьи («Цены в статье обновлены…») пациенту не дописываем ни при
+  // какой форме справки; остаток markdown-выделения срезается.
+  if (/^[*\-•#>]/u.test(firstLine) || MONEY_RE.test(firstLine) || META_RE.test(firstLine)) return null;
+  const sentence = stripEmphasis(firstLine).split(SENTENCE_SPLIT_RE)[0].trim();
   if (sentence.length < MIN_FACT_SENTENCE || sentence.length > MAX_FACT_SENTENCE) return null;
   if (!/[.!…]$/.test(sentence) || ABBREV_END_RE.test(sentence)) return null;
   if (!/^[\p{Lu}\p{N}«"]/u.test(sentence)) return null;

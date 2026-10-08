@@ -809,7 +809,7 @@ describe('справка об услуге в stage 0', () => {
 
   test('пациент спросил «сколько стоит чистка?» → статья «Чистка лица» уходит в промпт', async () => {
     const { pickServiceFact } = require('./services/agent/service-fact');
-    const ctx = 'Чистка лица\nВ стоимость входит уходовая маска.';
+    const ctx = 'Чистка лица\nВ процедуру чистки входит уходовая маска по типу кожи.';
     const queries = [];
     let userSeen = '';
     const d = deps({

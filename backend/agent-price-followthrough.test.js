@@ -156,4 +156,39 @@ describe('applyPriceFollowthrough', () => {
   test('пустая серия → без изменений', () => {
     expect(pf.applyPriceFollowthrough([], { patientLastText: ASK }).reason).toBe('no_reply');
   });
+
+  test('пометка статьи / строка прайса / markdown в справке — не дописываются', () => {
+    expect(pf.factSentence('Цены в статье обновлены в строгом соответствии с представленным прайс-листом.')).toBeNull();
+    expect(pf.factSentence('* **Подбородок** — 4 000 ₽ (врач) / 5 000 ₽ (гл. врач) · 15 мин')).toBeNull();
+    expect(pf.factSentence('Стоимость указана в рублях за одну зону обработки.')).toBeNull();
+    expect(pf.factSentence('Сглаживает рубцы постакне и растяжки на коже.')).toBe('Сглаживает рубцы постакне и растяжки на коже.');
+    expect(pf.factSentence('Гибридный лазер **Pacer One Pro** для эпиляции любых волос.'))
+      .toBe('Гибридный лазер Pacer One Pro для эпиляции любых волос.');
+  });
 });
+
+// Офлайн-повтор ценового кейса живого прогона 08.10.2026 на РЕАЛЬНЫХ чанках КБ:
+// справка (pickServiceFact) → дописка (applyPriceFollowthrough).
+describe('реальные чанки КБ → итоговая реплика', () => {
+  const { REAL } = require('./services/agent/__fixtures__/kb-real-chunks');
+  const { pickServiceFact } = require('./services/agent/service-fact');
+
+  test('Volnewmer: факт — описание аппарата, не пометка о ценах', () => {
+    const ask = 'Здравствуйте! Сколько стоит Volnewmer?';
+    const fact = pickServiceFact(REAL.volnewmer, ask);
+    const r = pf.applyPriceFollowthrough(['Volnewmer — от 81 000 ₽ за 400 линий.'], { patientLastText: ask, serviceFact: fact });
+    expect(r.replies).toEqual(['Volnewmer — от 81 000 ₽ за 400 линий. '
+      + 'Инновационный монополярный радиочастотный аппарат нового поколения от создателей Ultraformer. '
+      + 'Подобрать Вам удобное время для записи?']);
+  });
+
+  test('чистка лица: факт — описание процедуры', () => {
+    const ask = 'Сколько стоит чистка лица?';
+    const fact = pickServiceFact(REAL.cleaning, ask);
+    const r = pf.applyPriceFollowthrough(['Комбинированная чистка лица стоит 6 500 ₽.'], { patientLastText: ask, serviceFact: fact });
+    expect(r.replies).toEqual(['Комбинированная чистка лица стоит 6 500 ₽. '
+      + 'Профессиональное очищение кожи с индивидуальным сочетанием атравматических, ультразвуковых и механических этапов. '
+      + 'Подобрать Вам удобное время для записи?']);
+  });
+});
+
