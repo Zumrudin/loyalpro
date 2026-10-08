@@ -1691,7 +1691,7 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
         && !falseSuccess && !phoneRequested && !degradedAfterWrite && !directChainReply && !replyReplaced
         && !(bookingErrored && !bookingSucceeded)) {
       const pf = priceFollowthrough.applyPriceFollowthrough(replies,
-        { patientLastText: toolCtx.patientLastText, serviceFact });
+        { patientLastText: toolCtx.patientLastText, serviceFact, nowMs });
       if (pf.addedFact || pf.addedStep) {
         replies.length = 0;
         replies.push(...pf.replies);

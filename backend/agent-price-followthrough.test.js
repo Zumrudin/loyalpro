@@ -24,11 +24,25 @@ describe('applyPriceFollowthrough', () => {
     expect(r.replies[0]).toBe(`${BARE} ${pf.STEP_QUESTION}`);
   });
 
-  test('шаг уже есть (любой «?») → только факт', () => {
-    const r = pf.applyPriceFollowthrough([`${BARE} Хотите записаться?`], { patientLastText: ASK, serviceFact: FACT });
+  test('шаг уже есть (любой «?») → факт ПЕРЕД первым вопросом', () => {
+    const r = pf.applyPriceFollowthrough([`${BARE} Хотите записаться? Есть и утро, и вечер.`], { patientLastText: ASK, serviceFact: FACT });
     expect(r.addedStep).toBe(false);
     expect(r.addedFact).toBe(true);
-    expect(r.replies[0]).toBe(`${BARE} Хотите записаться? Ультразвук и механика, уход после процедуры.`);
+    expect(r.replies[0]).toBe(`${BARE} Ультразвук и механика, уход после процедуры. Хотите записаться? Есть и утро, и вечер.`);
+  });
+
+  test('вопрос первым предложением → чистого места нет, факт не добавляется', () => {
+    const reply = 'Хотите записаться? Чистка стоит 6 500 ₽.';
+    const r = pf.applyPriceFollowthrough([reply], { patientLastText: ASK, serviceFact: FACT });
+    expect(r.addedFact).toBe(false);
+    expect(r.replies).toEqual([reply]);
+    expect(pf.insertFact(reply, 'Факт.')).toBeNull();
+  });
+
+  test('вопрос в более ранней реплике серии → факт не добавляется', () => {
+    const r = pf.applyPriceFollowthrough(['Анна, вам для себя?', BARE], { patientLastText: ASK, serviceFact: FACT });
+    expect(r.addedFact).toBe(false);
+    expect(r.addedStep).toBe(false);
   });
 
   test('факт уже передан своими словами → без факта', () => {
@@ -59,6 +73,45 @@ describe('applyPriceFollowthrough', () => {
       serviceFact: { title: 'Чистка лица', text: 'Приём с 10:00 до 21:00 ежедневно в клинике.' } });
     expect(r.addedFact).toBe(false);
     expect(r.addedStep).toBe(true);
+  });
+
+  test('сокращения не рвут предложение и не дают огрызка', () => {
+    expect(pf.factSentence('Курс занимает ок. 6–8 сеансов.')).toBe('Курс занимает ок. 6–8 сеансов.');
+    expect(pf.factSentence('Процедура проводится с 18 лет, т.е. только для взрослых.'))
+      .toBe('Процедура проводится с 18 лет, т.е. только для взрослых.');
+    expect(pf.factSentence('Эффект заметен после первого сеанса, длится ок.')).toBeNull();
+    expect(pf.factSentence('Сеанс длится в среднем сорок мин.')).toBeNull();
+    expect(pf.factSentence('Подходит для всех типов кожи, т.е.')).toBeNull();
+    // Обычные короткие окончания — не сокращения.
+    expect(pf.factSentence('Включает ультразвук и уход для лица.')).toBe('Включает ультразвук и уход для лица.');
+    expect(pf.factSentence('Эффект сохраняется до года.')).toBe('Эффект сохраняется до года.');
+  });
+
+  test('медицинское содержание не дописывается', () => {
+    expect(pf.factSentence('Противопоказания: острые воспаления кожи.')).toBeNull();
+    expect(pf.factSentence('Во время беременности процедура не проводится.')).toBeNull();
+    expect(pf.factSentence('Побочные эффекты встречаются крайне редко.')).toBeNull();
+    expect(pf.factSentence('После процедуры нельзя загорать неделю.')).toBeNull();
+  });
+
+  test('пациент назвал день/дату/половину дня → без шага', () => {
+    for (const t of ['Сколько стоит чистка? Хочу в пятницу', 'Сколько стоит чистка на 12.10?',
+      'Сколько стоит чистка, если вечером?', 'Сколько стоит чистка завтра?']) {
+      const r = pf.applyPriceFollowthrough([BARE], { patientLastText: t, serviceFact: null, nowMs: Date.parse('2026-10-08T10:00:00+03:00') });
+      expect(r.addedStep).toBe(false);
+    }
+  });
+
+  test('цена «определит врач / индивидуально» → без шага', () => {
+    for (const reply of ['От 15 500 ₽, точную стоимость определит врач.', 'От 15 500 ₽, препарат подбирается индивидуально.']) {
+      const r = pf.applyPriceFollowthrough([reply], { patientLastText: ASK, serviceFact: null });
+      expect(r.addedStep).toBe(false);
+    }
+  });
+
+  test('«скидки» без вопроса о цене → не триггер', () => {
+    const r = pf.applyPriceFollowthrough([BARE], { patientLastText: 'А скидки на чистку есть?', serviceFact: FACT });
+    expect(r.reason).toBe('not_price');
   });
 
   test('берётся только первое предложение первой строки', () => {
@@ -92,8 +145,12 @@ describe('applyPriceFollowthrough', () => {
     const list = 'Чистка — 6 500 ₽, пилинг — 4 000 ₽, массаж — 3 000 ₽.';
     const r = pf.applyPriceFollowthrough([list], { patientLastText: 'Какие цены на уход?', serviceFact: FACT });
     expect(r.reason).toBe('price_list');
-    // Две суммы (диапазон) — ещё ответ про одну услугу.
-    expect(pf.distinctSums('от 15 500 ₽ до 26 000 ₽')).toBe(2);
+    // Две суммы в одной строке (диапазон) — ещё ответ про одну услугу.
+    expect(pf.isPriceList('от 15 500 ₽ до 26 000 ₽')).toBe(false);
+    // Две разные суммы столбиком — уже прайс.
+    expect(pf.isPriceList('Чистка — 6 500 ₽\nПилинг — 4 000 ₽')).toBe(true);
+    const r2 = pf.applyPriceFollowthrough(['Чистка — 6 500 ₽', 'Пилинг — 4 000 ₽'], { patientLastText: 'Какие цены?', serviceFact: FACT });
+    expect(r2.reason).toBe('price_list');
   });
 
   test('пустая серия → без изменений', () => {

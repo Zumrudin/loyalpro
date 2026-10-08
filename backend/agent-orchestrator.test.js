@@ -3273,6 +3273,57 @@ describe('reply-guard: повторная проверка после довыз
   });
 });
 
+// Реплика, подменённая кодом (запасной текст / факт графика), — не ответ модели
+// о цене: price-followthrough её не трогает (флаг replyReplaced), даже если
+// пациент спрашивал цену. Шпион доказывает, что гейт не вызывался вовсе.
+describe('price-followthrough не трогает реплику, подменённую кодом', () => {
+  const NOW = Date.parse('2026-09-19T09:00:00+03:00');
+  const pfMod = require('./services/agent/price-followthrough');
+  let spy;
+  beforeEach(() => { spy = jest.spyOn(pfMod, 'applyPriceFollowthrough'); });
+  afterEach(() => spy.mockRestore());
+
+  test('контроль: обычная реплика о цене проходит через гейт', async () => {
+    const deps = makeDeps({ history: { loadTranscript: jest.fn(async () => ({
+      messages: [{ role: 'user', content: 'Сколько стоит чистка?' }], watermark: 100 })) } });
+    deps.provider.createMessage.mockResolvedValueOnce(textResp('Чистка стоит 6 500 ₽.'));
+    const out = await orchestrator.runDialog(1, 'k', { deps, nowMs: NOW });
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(out.replies[0]).toContain(pfMod.STEP_QUESTION);
+  });
+
+  test('SAFE_FALLBACK_TEXT → гейт не вызывается', async () => {
+    const deps = makeDeps({ history: { loadTranscript: jest.fn(async () => ({ messages: [
+      { role: 'assistant', content: 'Есть 13:30 и 14:00.' },
+      { role: 'user', content: 'Сколько стоит чистка? Днем не могу' }], watermark: 100 })) } });
+    deps.provider.createMessage
+      .mockResolvedValueOnce(textResp('Чистка стоит 6 500 ₽, могу предложить 18:00.'))
+      .mockResolvedValueOnce(textResp('Чистка стоит 6 500 ₽. Тогда 19:00.'))
+      .mockResolvedValueOnce(textResp('Чистка стоит 6 500 ₽. Или 19:30.'));
+    const out = await orchestrator.runDialog(1, 'k', { deps, nowMs: NOW });
+    expect(out.replies).toEqual([replyGuardMod.SAFE_FALLBACK_TEXT]);
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  test('факт графика вместо «всё занято» → гейт не вызывается', async () => {
+    const deps = makeDeps({
+      history: { loadTranscript: jest.fn(async () => ({
+        messages: [{ role: 'user', content: 'Сколько стоит чистка с пилингом у Татьяны в понедельник?' }], watermark: 100 })) },
+      handlers: { get_sequential_slots: jest.fn(async () => ({
+        requested_date: '2026-09-21', variants: [], preferred_staff_not_working: true,
+        staff_name: 'Богатырева Татьяна', staff_next_working_date: '2026-09-23',
+      })) },
+    });
+    deps.registry.schemas.push({ name: 'get_sequential_slots' });
+    deps.provider.createMessage
+      .mockResolvedValueOnce(toolResp('get_sequential_slots', { date: '2026-09-21', preferred_staff_yc_id: 1, services: [{ service_yc_id: 1 }, { service_yc_id: 2 }] }))
+      .mockResolvedValueOnce(textResp('Стоит 9 000 ₽, но у Татьяны на понедельник всё занято.'));
+    const out = await orchestrator.runDialog(1, 'k', { deps, nowMs: NOW });
+    expect(out.replies[0]).toMatch(/не работает|не принимает|выходн/i);
+    expect(spy).not.toHaveBeenCalled();
+  });
+});
+
 // Второй живой прогон 2026-09-19: staff_name из preferred_staff_not_working делал
 // мастера «пустым», и честная реплика «во вторник выходной, в среду к ней 13:30»
 // гасилась как чужое время (alien_time_attribution) — вплоть до запасного текста.
