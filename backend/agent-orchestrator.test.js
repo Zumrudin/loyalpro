@@ -3545,6 +3545,39 @@ describe('предвызов КБ: справка об услуге', () => {
     expect(sys2).not.toContain('Ультразвук и механика');
   });
 
+  test('голая цена + справка → оркестратор дописывает факт и шаг', async () => {
+    const { deps } = factDeps('Сколько стоит чистка лица?', { found: true, context: CTX, sources: [] });
+    deps.provider.createMessage.mockReset();
+    deps.provider.createMessage.mockResolvedValue(
+      { assistantMsg: { role: 'assistant', content: 'ок' }, toolCalls: [], text: 'Чистка лица стоит 6 500 ₽.' });
+    const res = await orchestrator.runDialog(1, '79001112233', { deps });
+    const pfMod = require('./services/agent/price-followthrough');
+    expect(res.replies).toEqual([`Чистка лица стоит 6 500 ₽. Ультразвук и механика, уход после процедуры. ${pfMod.STEP_QUESTION}`]);
+  });
+
+  test('AGENT_PRICE_FOLLOWTHROUGH=false → голая цена уходит как есть', async () => {
+    const { deps } = factDeps('Сколько стоит чистка лица?', { found: true, context: CTX, sources: [] });
+    deps.config = { ...require('./config'), AGENT_PRICE_FOLLOWTHROUGH: false };
+    deps.provider.createMessage.mockReset();
+    deps.provider.createMessage.mockResolvedValue(
+      { assistantMsg: { role: 'assistant', content: 'ок' }, toolCalls: [], text: 'Чистка лица стоит 6 500 ₽.' });
+    const res = await orchestrator.runDialog(1, '79001112233', { deps });
+    expect(res.replies).toEqual(['Чистка лица стоит 6 500 ₽.']);
+  });
+
+  test('ход с успешной записью → цена не дописывается', async () => {
+    const { deps } = factDeps('Сколько стоит чистка лица?', { found: true, context: CTX, sources: [] });
+    deps.registry.handlers.cancel_booking = jest.fn(async () => ({ cancelled: true, record_id: 5 }));
+    deps.provider.createMessage.mockReset();
+    deps.provider.createMessage
+      .mockResolvedValueOnce({ assistantMsg: { role: 'assistant', content: 'ок' }, text: '',
+        toolCalls: [{ id: 't1', name: 'cancel_booking', input: { record_id: 5 } }] })
+      .mockResolvedValue({ assistantMsg: { role: 'assistant', content: 'ок' }, toolCalls: [], text: 'Чистка лица стоит 6 500 ₽.' });
+    const res = await orchestrator.runDialog(1, '79001112233', { deps });
+    expect(res.writeSucceeded).toBe(true);
+    expect(res.replies).toEqual(['Чистка лица стоит 6 500 ₽.']);
+  });
+
   test('перегенерация с тем же вопросом → повторного похода в КБ нет', async () => {
     let checks = 0;
     const { deps, kbHandler } = factDeps('Сколько стоит чистка?', { found: true, context: CTX, sources: [] });

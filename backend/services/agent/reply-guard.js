@@ -580,4 +580,6 @@ module.exports = {
   fabricationViolations, FABRICATION_TYPES, SAFE_FALLBACK_TEXT,
   checkRedundantProcedureQuestion, RESCHEDULE_INTENT_RE, ASK_PROCEDURE_RE,
   checkPriceWithoutNextStep, checkQuestionInsteadOfOffer,
+  // price-followthrough.js: тот же признак суммы и шага, что у телеметрии.
+  PRICE_SUM_RE, NEXT_STEP_RE,
 };

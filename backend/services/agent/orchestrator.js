@@ -20,6 +20,7 @@ const phoneRequest = require('./phone-request');
 const visitRating = require('./visit-rating');
 const promoInterest = require('./promo-interest');
 const serviceFactMod = require('./service-fact');
+const priceFollowthrough = require('./price-followthrough');
 const adminHours = require('./admin-hours');
 const toolEventsDefault = require('./tool-events');
 const toolMemoryDefault = require('./tool-memory');
@@ -1039,6 +1040,7 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
     let additionalProposalId = null;
     const rejectedConfirmationCalls = new Map();
     let confirmationBlocked = false;
+    let replyReplaced = false;      // реплика модели заменена кодом (запасной текст / факт графика)
     // Единственный легальный источник адреса/контактов клиники — статьи базы
     // знаний, прочитанные В ЭТОМ ходе (address-guard). Транскрипт и журнал
     // действий источниками не считаются: см. шапку address-guard.js.
@@ -1527,6 +1529,7 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
           logger.warn(`dialog ${dialogKey}: «не работает» выдано за «занято» — заменяю ответ фактом графика`);
           replies.length = 0;
           replies.push(schedulePreflight.renderNotWorkingReply(fact.name, fact.nextWorkingDate));
+          replyReplaced = true;
           break;
         }
         if (corrections >= MAX_REPLY_CORRECTIONS) {
@@ -1541,6 +1544,7 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
             logger.warn(`dialog ${dialogKey}: после ${corrections} довызовов остались выдумки о времени (${fab.map(v => v.type + ':' + v.value).join(', ')}) — детерминированный запасной текст; погашенный черновик: «${draft}»`);
             replies.length = 0;
             replies.push(replyGuard.SAFE_FALLBACK_TEXT);
+            replyReplaced = true;
           } else {
             logger.warn(`dialog ${dialogKey}: после ${corrections} довызовов нарушения остались (${hard.map(v => v.type).join(', ')}) — доставляю как есть`);
           }
@@ -1671,6 +1675,28 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
       const wouldBe = detectFalseClaim(allReplies, { ...claimProof, recentWrite: null });
       if (wouldBe) {
         logger.info(`dialog ${dialogKey}: утверждение о записи (${wouldBe}) подтверждено журналом — ${journalWrite.tool} ${Math.round(journalWrite.ageMs / 1000)}с назад`);
+      }
+    }
+    // «Цена → факт → шаг» (price-followthrough.js): промпт-правило
+    // PRICE_FOLLOWTHROUGH живой пробник провалил 3/3 — модель отвечает голой
+    // цифрой. Дописка к ПОСЛЕДНЕЙ реплике серии: дословное предложение из
+    // справки КБ (если факта в ответе нет) и вопрос о записи (если шага нет).
+    // Место — ПОСЛЕДНЕЕ изменение текста, после reply-guard и falseSuccess:
+    // дописка не линтуется (довызов не «исправит» наш текст, времени и сумм в
+    // ней нет по построению — allowedTimes она не засевает и hard-типы не
+    // задевает), а решение «ложь → к администратору» уже принято по тексту
+    // модели. Ход с записью/эскалацией/подменённой кодом репликой или с
+    // провалом записи не трогаем: там цена — не главное сообщение.
+    if (cfg.AGENT_PRICE_FOLLOWTHROUGH && replies.length && !escalated && !sideEffect && !writeSucceeded
+        && !falseSuccess && !phoneRequested && !degradedAfterWrite && !directChainReply && !replyReplaced
+        && !(bookingErrored && !bookingSucceeded)) {
+      const pf = priceFollowthrough.applyPriceFollowthrough(replies,
+        { patientLastText: toolCtx.patientLastText, serviceFact });
+      if (pf.addedFact || pf.addedStep) {
+        replies.length = 0;
+        replies.push(...pf.replies);
+        const what = [pf.addedFact ? `+fact «${serviceFact.title}»` : null, pf.addedStep ? '+step' : null].filter(Boolean).join('/');
+        logger.info(`dialog ${dialogKey}: price-followthrough: ${what}`);
       }
     }
     // bookingFailed: попытка записи была и НЕ увенчалась успехом. Диспетчер по этому
