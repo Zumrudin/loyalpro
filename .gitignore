@@ -35,3 +35,5 @@ frontend/uploads/kb_*
 frontend/uploads/salon_logo_*
 frontend/uploads/pricelist_*
 .superpowers/
+gateway/data/
+frontend/uploads/gateway/
