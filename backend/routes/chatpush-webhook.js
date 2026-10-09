@@ -7,6 +7,12 @@
 // (см. services/chatpush.createWebhook). Секрет едет в `?key=` — Chatpush не
 // подписывает тело, поэтому сверяем ключ из URL, как в YClients-вебхуке.
 //
+// Второй маунт того же роутера — для НАШЕГО шлюза (gateway/):
+//   https://<host>/gateway/webhook?key=<GATEWAY_WEBHOOK_SECRET>
+// Шлюз шлёт события в том же формате Chatpush, `payload.customer_id` =
+// messenger_accounts.id. Провайдер определяется по точке монтирования
+// (providerOf), секрет у каждого свой, салон — по реестру messenger_accounts.
+//
 // Фаза 1: принимаем и СОХРАНЯЕМ всё (chatpush_events + chatpush_messages).
 // Авто-ответ — только если CHATPUSH_AGENT_ENABLED=true (по умолчанию выкл).
 //
@@ -25,6 +31,7 @@ const authorship = require('../services/outgoing-authorship');
 const dialogState = require('../services/agent/dialog-state');
 const chatPersist = require('../services/chat-persist');
 const followupQueue = require('../services/agent/followup-queue');
+const accounts = require('../services/messaging/accounts');
 
 // Текстовые типы разных каналов: WhatsApp/MAX → 'text', tdlib/Telegram → 'formattedText'.
 const AGENT_TEXT_TYPES = new Set(['text', 'formattedText']);
@@ -32,12 +39,30 @@ const { createLogger } = require('../logger');
 const logger = createLogger('ChatpushWebhook');
 
 /**
- * Сверить общий секрет из `?key=` (timing-safe). Пустой секрет → legacy-режим
- * (принимаем без проверки), чтобы доставка не ломалась до настройки.
+ * Провайдер — из точки монтирования: тот же роутер стоит на /chatpush и /gateway
+ * (routes/index.js). У каждого свой секрет и своя строка «кто прислал» в
+ * messenger_accounts (provider, external_id).
+ */
+function providerOf(req) {
+  return String(req.baseUrl || '').startsWith('/gateway') ? 'gateway' : 'chatpush';
+}
+
+/**
+ * Сверить общий секрет СВОЕГО провайдера из `?key=` (timing-safe). У Chatpush
+ * пустой секрет → legacy-режим (принимаем без проверки), чтобы доставка не
+ * ломалась до настройки. У шлюза legacy-режима нет: это наш собственный
+ * процесс, секрет задаётся при установке.
  */
 function verifySecret(req) {
-  const secret = config.CHATPUSH.webhookSecret;
-  if (!secret) return { ok: true, mode: 'legacy' };
+  const provider = providerOf(req);
+  const secret = provider === 'gateway'
+    ? config.MESSAGING_GATEWAY.webhookSecret
+    : config.CHATPUSH.webhookSecret;
+  if (!secret) {
+    return provider === 'gateway'
+      ? { ok: false, reason: 'gateway secret not configured' }
+      : { ok: true, mode: 'legacy' };
+  }
 
   const provided = typeof req.query.key === 'string' ? req.query.key : '';
   if (!provided) return { ok: false, reason: 'missing key' };
@@ -48,18 +73,6 @@ function verifySecret(req) {
   return crypto.timingSafeEqual(a, b)
     ? { ok: true, mode: 'verified' }
     : { ok: false, reason: 'key mismatch' };
-}
-
-/**
- * Инстанс (customer_id) → salon_id. Фаза 1 — single-tenant из env
- * (CHATPUSH_CUSTOMER_ID / CHATPUSH_SALON_ID). Если не настроено — null
- * (событие всё равно сохраняем, но без привязки к салону).
- * TODO: заменить колонкой salons.chatpush_customer_id для мультисалона.
- */
-function resolveSalonId(customerId) {
-  const { customerId: cfgCustomer, salonId } = config.CHATPUSH;
-  if (salonId && (!cfgCustomer || cfgCustomer === customerId)) return salonId;
-  return null;
 }
 
 /**
@@ -88,7 +101,7 @@ router.post('/webhook', async (req, res) => {
 
   const sig = verifySecret(req);
   if (!sig.ok) {
-    logger.warn(`webhook key check failed: ${sig.reason}`);
+    logger.warn(`webhook key check failed (${providerOf(req)}): ${sig.reason}`);
     return res.status(401).json({ error: 'invalid key' });
   }
   if (sig.mode === 'legacy') {
@@ -101,7 +114,9 @@ router.post('/webhook', async (req, res) => {
   const body = req.body || {};
   const msg = chatpush.parseMessageEvent(body);          // сообщение (in/out) или null
   const customerId = body.payload?.instance?.customer_id ?? msg?.customerId ?? null;
-  const salonId = resolveSalonId(customerId);
+  // Салон — по реестру messenger_accounts (provider, external_id); у Chatpush
+  // при отсутствии строки — прежний env-фолбэк (accounts.resolveSalon).
+  const salonId = await accounts.resolveSalon(providerOf(req), customerId);
 
   // 1) СЫРОЙ лог любого события — до обработки.
   let eventId = null;
@@ -268,3 +283,5 @@ router.post('/webhook', async (req, res) => {
 });
 
 module.exports = router;
+module.exports.verifySecret = verifySecret;
+module.exports.providerOf = providerOf;

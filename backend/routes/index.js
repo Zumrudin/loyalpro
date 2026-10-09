@@ -11,6 +11,9 @@ module.exports = function mountRoutes(app) {
 
   // ── Chatpush webhook — входящие сообщения (no JWT) ──────────
   app.use('/chatpush', require('./chatpush-webhook'));
+  // Тот же приёмник для нашего шлюза (gateway/): события в формате Chatpush,
+  // свой секрет (GATEWAY_WEBHOOK_SECRET), салон — по messenger_accounts.
+  app.use('/gateway', require('./chatpush-webhook'));
 
   // ── Публичная форма заявки на справку (БЕЗ JWT — монтируем до guard) ──
   app.use(require('./public-cert-request'));
