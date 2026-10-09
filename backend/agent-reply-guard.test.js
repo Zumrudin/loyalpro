@@ -741,6 +741,11 @@ describe('телеметрия продаж (07.10.2026)', () => {
     expect(checkPriceWithoutNextStep('Здравствуйте! Чем могу помочь?')).toEqual([]);
   });
 
+  test('описание состава и длительности не маскирует цену без следующего шага', () => {
+    expect(checkPriceWithoutNextStep('Чистка 6 500 ₽. Входит уход, процедура длится час.'))
+      .toEqual([expect.objectContaining({ type: 'price_without_next_step' })]);
+  });
+
   test('вопрос о дне без слот-вызова на запросе записи — question_instead_of_offer', () => {
     const v = checkQuestionInsteadOfOffer('Какой день и половина дня вам удобнее?',
       { slotToolCalled: false, patientLastText: 'Когда можно попасть к Татьяне на плазмолифтинг?' });

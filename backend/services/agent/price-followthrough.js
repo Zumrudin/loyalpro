@@ -16,16 +16,13 @@
 // утверждение, запасной текст…) и флаг AGENT_PRICE_FOLLOWTHROUGH проверяет
 // оркестратор — у него эти факты, здесь их не продублировать без копий.
 // ============================================================
-const { detectPromptScenarios, SCENARIOS } = require('./prompt-scenarios');
-const { PRICE_SUM_RE, NEXT_STEP_RE } = require('./reply-guard');
+const { detectPromptScenarios, SCENARIOS, isPriceQuestion } = require('./prompt-scenarios');
+const { PRICE_SUM_RE } = require('./reply-guard');
+const { STEP_QUESTION, hasBookingInvitation } = require('./booking-interest');
 const { hasTime, META_RE, MONEY_RE, stripEmphasis } = require('./service-fact');
 const { parseDayPart } = require('./patient-time');
 const { resolveDateInfo } = require('./offer-attribution');
 
-// Шаг — вопрос без времени и эмодзи: время здесь назвать нечем (слотов в
-// этом ходе не смотрели), а эмодзи у реплики модели своё уже может быть.
-// «Вам» с заглавной — так пишет Мила (живой прогон 08.10.2026).
-const STEP_QUESTION = 'Подобрать Вам удобное время для записи?';
 const MAX_FACT_SENTENCE = 180;
 const MIN_FACT_SENTENCE = 20;
 // Перечень цен, а не ответ про одну услугу: ≥3 разных суммы ИЛИ ≥2 разных
@@ -44,10 +41,6 @@ const STOP_STEMS = new Set([
 ]);
 
 const SUM_RE_G = new RegExp(PRICE_SUM_RE.source, 'giu');
-// Вопрос пациента именно о цене. Сценарий PRICE шире: в нём и «скидк» —
-// «есть скидки?» это вопрос об акции, голой цены услуги там нет, и «факт об
-// услуге + подобрать время?» был бы ответом не на то.
-const PRICE_QUESTION_RE = /(?:цен[аыуе]|стоимост|сколько\s+(?:стоит|стоят|будет)|прайс|поч[её]м)/iu;
 // Граница предложения — только перед заглавной/кавычкой: «ок. 6–8 сеансов»,
 // «т.е. только для взрослых» не рвутся на сокращении.
 const SENTENCE_SPLIT_RE = /(?<=[.!?…])\s+(?=[\p{Lu}«"])/u;
@@ -149,7 +142,7 @@ function insertFact(text, sentence) {
 
 /**
  * @param {string[]} replies — финальные реплики хода (серия отдельных сообщений)
- * @param {{patientLastText?:string, serviceFact?:{title:string,text:string}|null, nowMs?:number}} opts
+ * @param {{patientLastText?:string, serviceFact?:{title:string,text:string}|null, nowMs?:number, allowStep?:boolean}} opts
  * @returns {{replies:string[], addedFact:boolean, addedStep:boolean, reason:string|null}}
  */
 function applyPriceFollowthrough(replies, opts = {}) {
@@ -158,7 +151,8 @@ function applyPriceFollowthrough(replies, opts = {}) {
   if (!list.length || !String(list[list.length - 1] || '').trim()) return unchanged('no_reply');
   const patientText = String(opts.patientLastText || '');
   const sc = detectPromptScenarios(patientText);
-  if (!sc.includes(SCENARIOS.PRICE) || !PRICE_QUESTION_RE.test(patientText)) return unchanged('not_price');
+  // PRICE also routes discounts; the shared price predicate deliberately does not.
+  if (!isPriceQuestion(patientText)) return unchanged('not_price');
   // Пациент одновременно просит записать — Мила уже ведёт запись, «подобрать
   // время?» поверх неё лишнее.
   if (sc.includes(SCENARIOS.BOOKING) || sc.includes(SCENARIOS.MANAGE_BOOKING)) return unchanged('booking');
@@ -183,7 +177,7 @@ function applyPriceFollowthrough(replies, opts = {}) {
   // Шаг судим по ИСХОДНОЙ реплике: факт из справки может содержать «входит»/
   // «длится», и считать его шагом значило бы снова оставить цену без
   // предложения записаться.
-  const addedStep = !NEXT_STEP_RE.test(joined) && !INDIVIDUAL_PRICE_RE.test(joined)
+  const addedStep = opts.allowStep !== false && !joined.includes('?') && !hasBookingInvitation(joined) && !INDIVIDUAL_PRICE_RE.test(joined)
     && !patientNamedWhen(patientText, opts.nowMs);
   if (addedStep) out[last] = `${String(out[last]).trimEnd()} ${STEP_QUESTION}`;
   if (!addedFact && !addedStep) return unchanged('complete');

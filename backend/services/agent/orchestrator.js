@@ -21,6 +21,7 @@ const visitRating = require('./visit-rating');
 const promoInterest = require('./promo-interest');
 const serviceFactMod = require('./service-fact');
 const priceFollowthrough = require('./price-followthrough');
+const bookingInterest = require('./booking-interest');
 const adminHours = require('./admin-hours');
 const toolEventsDefault = require('./tool-events');
 const toolMemoryDefault = require('./tool-memory');
@@ -602,8 +603,8 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
     // leadingClinic — сообщения клиники, срезанные из НАЧАЛА транскрипта
     // (провайдер требует user первым). Инцидент 2026-08-10 (79776646672): так
     // потерялся опрос об оценке визита, и «5» приехала в модель без вопроса.
-    const { messages, watermark, session, leadingClinic } = await history.loadTranscript(
-      salonId, dialogKey, { limit: 20, withTime: true });
+    const { messages, watermark, session, leadingClinic, conversation } = await history.loadTranscript(
+      salonId, dialogKey, { limit: 20, withTime: true, nowMs });
     // Буфер вложений ЭТОЙ попытки. Пересоздаётся на каждой перегенерации:
     // черновик, выброшенный из-за нового входящего, обязан унести фото с собой,
     // иначе пациент получит картинку от ответа, которого он не увидит.
@@ -1687,16 +1688,37 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
     // задевает), а решение «ложь → к администратору» уже принято по тексту
     // модели. Ход с записью/эскалацией/подменённой кодом репликой или с
     // провалом записи не трогаем: там цена — не главное сообщение.
-    if (cfg.AGENT_PRICE_FOLLOWTHROUGH && replies.length && !escalated && !sideEffect && !writeSucceeded
+    if ((cfg.AGENT_PRICE_FOLLOWTHROUGH || cfg.AGENT_CONTEXTUAL_BOOKING_OFFERS) && replies.length && !escalated && !sideEffect && !writeSucceeded
         && !falseSuccess && !phoneRequested && !degradedAfterWrite && !directChainReply && !replyReplaced
         && !(bookingErrored && !bookingSucceeded)) {
-      const pf = priceFollowthrough.applyPriceFollowthrough(replies,
-        { patientLastText: toolCtx.patientLastText, serviceFact, nowMs });
+      const policy = bookingInterest.bookingInterest({
+        patientLastText: toolCtx.patientLastText, replyText: replies.join('\n'), conversation, nowMs,
+        hasBookings: !!(liveBookingRows && liveBookingRows.length),
+        bookingInProgress: slotToolCalled || !!additionalOffer,
+        hasServiceEvidence: !!(serviceFact || kbSourceText), stopTopics: opts.stopTopics,
+      });
+      const deduped = bookingInterest.removeRepeatedOffer(replies, policy);
+      if (deduped !== replies) {
+        replies.length = 0;
+        replies.push(...deduped);
+      }
+      const pf = cfg.AGENT_PRICE_FOLLOWTHROUGH
+        ? priceFollowthrough.applyPriceFollowthrough(replies,
+          { patientLastText: toolCtx.patientLastText, serviceFact, nowMs, allowStep: policy.allowStep })
+        : { addedFact: false, addedStep: false };
       if (pf.addedFact || pf.addedStep) {
         replies.length = 0;
         replies.push(...pf.replies);
         const what = [pf.addedFact ? `+fact «${serviceFact.title}»` : null, pf.addedStep ? '+step' : null].filter(Boolean).join('/');
         logger.info(`dialog ${dialogKey}: price-followthrough: ${what}`);
+      }
+      if (cfg.AGENT_CONTEXTUAL_BOOKING_OFFERS) {
+        const offered = bookingInterest.applyContextualOffer(replies, policy);
+        if (offered !== replies) {
+          replies.length = 0;
+          replies.push(...offered);
+          logger.info('contextual-booking-offer: added');
+        }
       }
     }
     // bookingFailed: попытка записи была и НЕ увенчалась успехом. Диспетчер по этому

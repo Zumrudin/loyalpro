@@ -244,7 +244,11 @@ async function loadTranscript(salonId, dialogKey, opts = {}) {
   while (messages.length && messages[0].role === 'assistant') {
     leadingClinic.push(messages.shift().content);
   }
-  return { messages, watermark, session, leadingClinic };
+  // Separate from provider messages: offer policy needs authorship and raw
+  // chronology before leading messages are cut and late echo is moved.
+  const conversation = rows.map(({ direction, text, authored_by, msg_ts }) =>
+    ({ direction, text, authored_by, msg_ts }));
+  return { messages, watermark, session, leadingClinic, conversation };
 }
 
 // Отвечали ли этому пациенту хоть раз за ВСЮ историю диалога?

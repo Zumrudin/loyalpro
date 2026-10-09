@@ -8,6 +8,37 @@ const history = require('./services/agent/history');
 beforeEach(() => jest.clearAllMocks());
 
 describe('loadTranscript', () => {
+  test('контекст интереса сохраняет время, авторство и срезанные ведущие ответы', async () => {
+    const nowMs = Date.parse('2026-10-09T20:00:00+03:00');
+    const rows = [
+      { direction: 'outgoing', text: 'Подобрать время?', msg_ts: nowMs / 1000 - 60, authored_by: 'agent' },
+      { direction: 'incoming', text: 'А пилинг входит?', msg_ts: nowMs / 1000, authored_by: null },
+    ];
+    db.any.mockResolvedValue([...rows].reverse());
+    const result = await history.loadTranscript(2, 'synthetic-dialog', { withTime: true, nowMs });
+    expect(result.conversation).toEqual(rows);
+    expect(result.messages).toHaveLength(1);
+    expect(result.messages[0].role).toBe('user');
+    expect(db.any.mock.calls[0][1]).toEqual([2, 'synthetic-dialog', 20]);
+  });
+
+  test('недоставленное эхо из pending учитывается как предыдущее приглашение', async () => {
+    const pending = require('./services/agent/pending-replies');
+    const nowMs = Date.parse('2026-10-09T20:00:00+03:00');
+    const peek = jest.spyOn(pending, 'peek').mockReturnValue([
+      { text: 'Подобрать время?', ts: nowMs / 1000 - 30 },
+    ]);
+    try {
+      db.any.mockResolvedValue([
+        { direction: 'incoming', text: 'А пилинг входит?', msg_ts: nowMs / 1000, authored_by: null },
+      ]);
+      const result = await history.loadTranscript(2, 'synthetic-dialog', { nowMs });
+      expect(result.conversation[0]).toEqual(expect.objectContaining({
+        direction: 'outgoing', text: 'Подобрать время?', authored_by: 'agent',
+      }));
+      expect(peek).toHaveBeenCalledWith(2, 'synthetic-dialog', nowMs);
+    } finally { peek.mockRestore(); }
+  });
   test('incoming→user, outgoing→assistant, серия склеивается, watermark = max incoming ts', async () => {
     // db.any возвращает по msg_ts DESC (как в SQL) — модуль сам развернёт.
     db.any.mockResolvedValue([

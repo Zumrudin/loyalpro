@@ -1,8 +1,27 @@
 'use strict';
 
-const { SCENARIOS, detectPromptScenarios } = require('./services/agent/prompt-scenarios');
+const { SCENARIOS, detectPromptScenarios, isPriceQuestion } = require('./services/agent/prompt-scenarios');
 
 describe('detectPromptScenarios', () => {
+  test.each([
+    'Сколько у вас стоит чистка лица?', 'А сколько будет стоить пилинг?',
+    'Сколько стоят процедуры?', 'Во сколько обойдётся чистка?',
+    'По цене подскажите про массаж', 'А по деньгам сколько выйдет?',
+    'Почём чистка?', 'Какая стоимость консультации?', 'Какой ценник на уход?',
+    'Чистка стоит сколько?',
+  ])('разговорная цена: %s', text => {
+    expect(isPriceQuestion(text)).toBe(true);
+    expect(detectPromptScenarios(text)).toContain(SCENARIOS.PRICE);
+    expect(require('./services/agent/service-fact').wantsServiceFact(text)).toBe(true);
+  });
+
+  test.each(['Сколько длится чистка?', 'Сколько у вас врачей?', 'Во сколько приём?',
+    'Сколько нужно процедур?', 'Сколько держится эффект?', 'Где стоит аппарат?', 'Оцените результат',
+    'Сколько времени стоит выделить?', 'Сколько ещё процедур стоит пройти?'])
+  ('количество и время не становятся ценой: %s', text => {
+    expect(isPriceQuestion(text)).toBe(false);
+    expect(detectPromptScenarios(text)).not.toContain(SCENARIOS.PRICE);
+  });
   test('определяет несколько независимых намерений последнего сообщения', () => {
     expect(detectPromptScenarios('Сколько стоит чистка и можно записаться завтра?'))
       .toEqual([SCENARIOS.BOOKING, SCENARIOS.PRICE]);

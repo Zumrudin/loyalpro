@@ -89,6 +89,107 @@ const toolResp = (name, input, id = 'c1', text = '') => ({
     tool_calls: [{ id, type: 'function', function: { name, arguments: JSON.stringify(input) } }] },
 });
 
+describe('контекстные приглашения: реальный оркестратор, синтетическая история', () => {
+  const NOW = Date.parse('2026-10-09T20:00:00+03:00');
+  const { STEP_QUESTION } = require('./services/agent/booking-interest');
+  const kb = { found: true, context: 'Чистка лица\nПроцедура включает очищение кожи и завершающий уход.' };
+  const base = [
+    { direction: 'incoming', text: 'Расскажите про чистку лица', msg_ts: NOW / 1000 - 180 },
+    { direction: 'outgoing', text: 'Процедура включает очищение кожи.', authored_by: 'agent', msg_ts: NOW / 1000 - 150 },
+  ];
+  function setup(patient = 'А пилинг входит?', prior = base) {
+    const conversation = [...prior, { direction: 'incoming', text: patient, msg_ts: NOW / 1000 }];
+    const snapshot = () => ({ conversation, watermark: NOW / 1000,
+      messages: conversation.map(r => ({ role: r.direction === 'incoming' ? 'user' : 'assistant', content: r.text })) });
+    const deps = makeDeps({
+      history: { loadTranscript: jest.fn(async () => snapshot()) },
+      handlers: { search_knowledge_base: jest.fn(async () => kb) },
+    });
+    deps.config = { ...require('./config'), AGENT_PRICE_FOLLOWTHROUGH: true,
+      AGENT_CONTEXTUAL_BOOKING_OFFERS: true, AGENT_SERVICE_FACT_PREFETCH: true };
+    return { deps, conversation, snapshot };
+  }
+  function answer(deps, text = 'Пилинг оплачивается отдельно.') {
+    deps.provider.createMessage.mockResolvedValueOnce(toolResp('search_knowledge_base', { query: 'чистка' }))
+      .mockResolvedValueOnce(textResp(text));
+  }
+
+  test('интерес → ответ и одно приглашение → ещё один ценовой вопрос без повторения', async () => {
+    const { deps, conversation } = setup();
+    answer(deps);
+    const first = await orchestrator.runDialog(2, 'synthetic-interest', { deps, nowMs: NOW });
+    expect(first.replies).toEqual([`Пилинг оплачивается отдельно. ${STEP_QUESTION}`]);
+    conversation.push({ direction: 'outgoing', text: first.replies[0], authored_by: 'agent', msg_ts: NOW / 1000 + 5 },
+      { direction: 'incoming', text: 'А сколько у вас стоит чистка?', msg_ts: NOW / 1000 + 10 });
+    // Even if the model repeats the generic invitation, preserve just the answer.
+    deps.provider.createMessage.mockResolvedValueOnce(textResp(`Чистка стоит 6 500 ₽. ${STEP_QUESTION}`));
+    const next = await orchestrator.runDialog(2, 'synthetic-interest', { deps, nowMs: NOW + 10000 });
+    expect(next.replies.join('\n')).toContain('6 500 ₽');
+    expect(next.replies.join('\n')).not.toContain(STEP_QUESTION);
+    expect(deps.registry.handlers.create_booking).not.toHaveBeenCalled();
+    expect(deps.registry.handlers.get_available_slots).not.toHaveBeenCalled();
+    expect(deps.history.loadTranscript).toHaveBeenCalledWith(2, 'synthetic-interest', expect.any(Object));
+  });
+
+  test('разговорная цена с первого хода запускает справку и приглашение', async () => {
+    const { deps } = setup('Сколько у вас будет стоить чистка лица?', []);
+    deps.provider.createMessage.mockResolvedValueOnce(textResp('Чистка стоит 6 500 ₽.'));
+    const out = await orchestrator.runDialog(2, 'synthetic-price', { deps, nowMs: NOW });
+    expect(out.replies.join('\n')).toContain(STEP_QUESTION);
+    expect(deps.registry.handlers.search_knowledge_base).toHaveBeenCalledWith(2, expect.any(Object), expect.any(Object));
+    expect(deps.provider.createMessage).toHaveBeenCalledTimes(1);
+  });
+
+  test.each(['Какая подготовка нужна?', 'Сколько стоит чистка при беременности?', 'Подумаю, а пилинг входит?'])
+  ('медицинский вопрос или сомнение не получает автоматическую продажу: %s', async patient => {
+    const { deps } = setup(patient);
+    answer(deps, 'Этот вопрос решает врач после осмотра.');
+    const out = await orchestrator.runDialog(2, 'synthetic-sensitive', { deps, nowMs: NOW });
+    expect(out.replies.join('\n')).not.toContain(STEP_QUESTION);
+  });
+
+  test('запись в CRM исключает инициативное предложение', async () => {
+    const { deps } = setup();
+    deps.listBookings.run.mockResolvedValue({ bookings: [{ record_id: 123, datetime: '2026-10-10T14:00:00+03:00', services: ['Чистка'] }] });
+    answer(deps);
+    const out = await orchestrator.runDialog(2, 'synthetic-booked', { deps, nowMs: NOW, ctx: { phone: 'synthetic-client' } });
+    expect(out.replies).toEqual(['Пилинг оплачивается отдельно.']);
+  });
+
+  test('отказ во время генерации проверяется по новой истории', async () => {
+    const { deps, snapshot } = setup();
+    const before = snapshot();
+    const after = { ...before,
+      messages: [...before.messages, { role: 'user', content: 'Пока не нужно, я просто узнаю' }],
+      conversation: [...before.conversation, { direction: 'incoming', text: 'Пока не нужно, я просто узнаю', msg_ts: NOW / 1000 + 1 }],
+    };
+    deps.history.loadTranscript.mockResolvedValueOnce(before).mockResolvedValueOnce(after);
+    deps.history.hasIncomingAfter.mockResolvedValueOnce(true).mockResolvedValue(false);
+    deps.provider.createMessage.mockResolvedValueOnce(textResp('Пилинг оплачивается отдельно.'))
+      .mockResolvedValueOnce(textResp('Хорошо, отвечу на Ваши вопросы.'));
+    const out = await orchestrator.runDialog(2, 'synthetic-regeneration', { deps, nowMs: NOW });
+    expect(out.replies).toEqual(['Хорошо, отвечу на Ваши вопросы.']);
+    expect(deps.history.loadTranscript).toHaveBeenCalledTimes(2);
+  });
+
+  test('флаг выключает многоходовую дописку, цена управляется отдельно', async () => {
+    const { deps } = setup();
+    deps.config.AGENT_CONTEXTUAL_BOOKING_OFFERS = false;
+    answer(deps);
+    const out = await orchestrator.runDialog(2, 'synthetic-disabled', { deps, nowMs: NOW });
+    expect(out.replies).toEqual(['Пилинг оплачивается отдельно.']);
+  });
+
+  test('эскалация не получает предложение записи', async () => {
+    const { deps } = setup();
+    deps.provider.createMessage.mockResolvedValueOnce(toolResp('escalate_to_operator', { reason: 'synthetic escalation' }))
+      .mockResolvedValueOnce(textResp('Вам поможет администратор.'));
+    const out = await orchestrator.runDialog(2, 'synthetic-escalation', { deps, nowMs: NOW });
+    expect(out.escalated).toBe(true);
+    expect(out.replies.join('\n')).not.toContain(STEP_QUESTION);
+  });
+});
+
 describe('chain booking incident: truthful staff and enforced choice', () => {
   const seqOffers = require('./services/agent/sequential-offers');
   afterEach(() => seqOffers._reset());

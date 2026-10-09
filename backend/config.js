@@ -160,6 +160,8 @@ module.exports = {
   // оркестратор дописывает предложение из справки КБ и вопрос о записи.
   // Промпт-правило пробник провалил 3/3 (07.10.2026). 'false' гасит.
   AGENT_PRICE_FOLLOWTHROUGH: process.env.AGENT_PRICE_FOLLOWTHROUGH !== 'false',
+  // Multi-turn interest → one invitation within the recent conversation.
+  AGENT_CONTEXTUAL_BOOKING_OFFERS: process.env.AGENT_CONTEXTUAL_BOOKING_OFFERS !== 'false',
   // Сторож доставки реплик Милы: Chatpush принял delivery (meta.status=success),
   // но сообщение так и не ушло в мессенджер — ни статуса, ни эха (инцидент
   // 2026-08-09, 79773115566). По умолчанию ВКЛЮЧЁН; аварийный рычаг
