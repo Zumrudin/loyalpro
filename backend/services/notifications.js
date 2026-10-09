@@ -252,7 +252,10 @@ async function processTick() {
         phone: row.phone,
         dispatchRouting: routing,
       });
-      const channelUsed = (delivery && (delivery.channel || delivery.messenger)) || routing[0] || null;
+      // delivery.channels — каналы ТОГО аккаунта, через который transport реально отправил
+      // (при фолбэке на другой аккаунт routing[0] был бы неверен).
+      const channelUsed = (delivery && (delivery.channel || delivery.messenger))
+        || (delivery && Array.isArray(delivery.channels) && delivery.channels[0]) || routing[0] || null;
       await db.query(
         `UPDATE notification_sends
             SET status='sent', sent_at=NOW(), error=NULL,

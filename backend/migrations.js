@@ -1489,12 +1489,28 @@ async function runMigrations(client) {
       await client.query(`
         INSERT INTO messenger_accounts (salon_id, provider, channel, external_id, api_base, token, status, display_name)
         SELECT $1, 'chatpush', ch, $2, $3, $4, 'active', 'Chatpush (из env)'
-          FROM unnest(ARRAY['whatsapp','tdlib','max']) AS ch
+          FROM unnest(ARRAY['whatsapp','tdlib','telegram','max','max_bot','notify']) AS ch
          WHERE NOT EXISTS (SELECT 1 FROM messenger_accounts WHERE salon_id = $1)
       `, [cp.salonId, cp.customerId != null ? String(cp.customerId) : null, cp.apiBase, cp.instanceToken])
         .catch(e => console.warn('[migrations] messenger_accounts seed failed:', e.message));
     }
   }
+
+  // Догон КАНАЛОВ у уже засеянного Chatpush-салона: первый сид (09.10.2026)
+  // заводил только whatsapp/tdlib/max, а инстанс Chatpush роутит ещё
+  // telegram (бот), max_bot и notify — дефолтный routing автоуведомлений и
+  // «Заботы» это ['telegram','whatsapp']. Без строки канал выпадает из
+  // transport молча. Добавляем ТОЛЬКО каналы, у которых нет строки ЛЮБОГО
+  // статуса (выключенный админкой канал не воскрешаем), креды копируем из
+  // существующей Chatpush-строки салона. Идемпотентно.
+  await client.query(`
+    INSERT INTO messenger_accounts (salon_id, provider, channel, external_id, api_base, token, status, display_name)
+    SELECT src.salon_id, 'chatpush', ch, src.external_id, src.api_base, src.token, 'active', src.display_name
+      FROM (SELECT DISTINCT ON (salon_id) salon_id, external_id, api_base, token, display_name
+              FROM messenger_accounts WHERE provider = 'chatpush' ORDER BY salon_id, id) src
+     CROSS JOIN unnest(ARRAY['whatsapp','tdlib','telegram','max','max_bot','notify']) AS ch
+     WHERE NOT EXISTS (SELECT 1 FROM messenger_accounts m WHERE m.salon_id = src.salon_id AND m.channel = ch)
+  `).catch(e => console.warn('[migrations] messenger_accounts channel backfill failed:', e.message));
 
   // ── gateway_deliveries / gateway_contacts — таблицы ШЛЮЗА (gateway/) ────
   // Живут в той же БД: один источник правды, бэкенд их только создаёт.

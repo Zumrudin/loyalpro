@@ -12,6 +12,8 @@ const mockLogger = { info: jest.fn(), warn: jest.fn(), error: jest.fn() };
 jest.mock('./logger', () => ({ createLogger: () => mockLogger }));
 const mockDb = { oneOrNone: jest.fn(), any: jest.fn(async () => []), query: jest.fn(async () => ({ rows: [] })) };
 jest.mock('./db', () => ({ db: mockDb, pool: {} }));
+const mockTransport = { getDeliveryStatus: jest.fn(async () => ({ status: { status_id: 2, description: 'Отправлено' } })), sendMessage: jest.fn(), sendFile: jest.fn() };
+jest.mock('./services/messaging/transport', () => mockTransport);
 
 const { _internals } = require('./routes/chat');
 const { resolveRecipient, scheduleDeliveryCheck, DELIVERY_STATUS_UNDELIVERABLE } = _internals;
@@ -62,6 +64,12 @@ describe('scheduleDeliveryCheck', () => {
     await jest.advanceTimersByTimeAsync(1000);
     expect(mockLogger.warn).not.toHaveBeenCalled();
     expect(mockLogger.info.mock.calls.map(c => String(c[0])).some(s => /delivery=1\b/.test(s))).toBe(true);
+  });
+
+  test('дефолтный getter спрашивает статус через transport у аккаунта, которым ушло (salonId, accountId)', async () => {
+    scheduleDeliveryCheck(5, { key: 'k', channel: 'tdlib', salonId: 1, accountId: 9 }, { delayMs: 1000 });
+    await jest.advanceTimersByTimeAsync(1000);
+    expect(mockTransport.getDeliveryStatus).toHaveBeenCalledWith(1, 'tdlib', 5, { accountId: 9 });
   });
 
   test('Chatpush не ответил → WARN, исключение наружу не уходит', async () => {

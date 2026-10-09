@@ -460,3 +460,17 @@ describe('таймаут LLM и backoff аренды', () => {
     expect(worker.LLM_TIMEOUT_MS).toBeLessThan(worker.RETRY_BACKOFF_S * 1000);
   });
 });
+
+// Task 5 (2026-10-09): отправка идёт через services/messaging/transport по
+// аккаунту салона; salonId — адресат transport и в тело запроса провайдеру
+// попадать НЕ должен (иначе уедет в query-string Chatpush как salonId=1).
+describe('defaultDeps.sendMessage → transport по салону', () => {
+  test('salonId снимается с payload и уходит первым аргументом', async () => {
+    const transport = require('./services/messaging/transport');
+    const spy = jest.spyOn(transport, 'sendMessage').mockResolvedValue({ id: 1 });
+    try {
+      await worker.defaultDeps.sendMessage({ salonId: 7, text: 't', phone: '79001112233', dispatchRouting: ['tdlib'] });
+      expect(spy).toHaveBeenCalledWith(7, { text: 't', phone: '79001112233', dispatchRouting: ['tdlib'] });
+    } finally { spy.mockRestore(); }
+  });
+});

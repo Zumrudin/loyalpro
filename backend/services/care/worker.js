@@ -397,7 +397,10 @@ async function processOne(row, deps = defaultDeps) {
     d.log.info(`delivered #${row.id} delivery=${delivery && delivery.id}`);
 
     // 3) best-effort дозапись реквизитов доставки (падение — не катастрофа).
-    const channelUsed = (delivery && (delivery.channel || delivery.messenger)) || routing[0] || null;
+    // delivery.channels — каналы ТОГО аккаунта, через который transport реально отправил
+      // (при фолбэке на другой аккаунт routing[0] был бы неверен).
+      const channelUsed = (delivery && (delivery.channel || delivery.messenger))
+        || (delivery && Array.isArray(delivery.channels) && delivery.channels[0]) || routing[0] || null;
     await db.query(
       `UPDATE care_touch_sends SET delivery_id=$2, channel_used=$3 WHERE id=$1`,
       [row.id, delivery && delivery.id != null ? String(delivery.id) : null, channelUsed]

@@ -160,7 +160,7 @@ async function sweep(deps = {}) {
         if (await st.hasRetry(row.id)) { await st.setStatus(row.id, 'retried'); continue; }
         logger.error(`реплика не подтверждена за ${thresholdMin} мин (dialog ${row.dialog_key}, ${row.channel}, delivery ${row.delivery_id}) — повторяю отправку: «${String(row.text).replace(/\s+/g, ' ').slice(0, 500)}»`);
         const delivery = await send(row);
-        if (!delivery || delivery.id == null) throw new Error('повтор не принят Chatpush');
+        if (!delivery || delivery.id == null) throw new Error('повтор не принят мессенджером');
         // Порядок важен: сначала НОВАЯ строка журнала (иначе повтор, не попавший
         // в журнал, никто уже не проверит), потом закрываем старую.
         await st.insert({

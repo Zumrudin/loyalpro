@@ -44,6 +44,15 @@ test('серия из двух сообщений в окне дебаунса �
   expect(d.send).toHaveBeenCalledWith(meta, 'Здравствуйте!');
 });
 
+test('process кладёт salonId в meta — defaultSend шлёт по аккаунту ЭТОГО салона', async () => {
+  const d = deps();
+  const m = { phone: '79001112233', channel: 'whatsapp', messageId: 'm1' };
+  dispatcher.enqueue(7, 'k7', m, d);
+  await jest.advanceTimersByTimeAsync(1000);
+  expect(d.send).toHaveBeenCalledTimes(1);
+  expect(d.send.mock.calls[0][0]).toMatchObject({ salonId: 7, phone: '79001112233' });
+});
+
 test('гейт запретил → прогон не запускается', async () => {
   const d = deps({ settings: { isAllowed: jest.fn(async () => ({ allow: false, reason: 'whitelist' })) } });
   dispatcher.enqueue(1, 'k', meta, d);
