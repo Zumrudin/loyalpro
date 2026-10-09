@@ -64,7 +64,7 @@ test('setTempId / findByTempId: связка временного id TDLib с д
   await d.setTempId(12, 99001);
   assert.match(calls[0][0], /SET tdlib_temp_id=\$2/); assert.deepEqual(calls[0][1], [12, 99001]);
   assert.equal(await d.findByTempId(7, 99001), 12);
-  assert.match(calls[1][0], /WHERE account_id=\$1 AND tdlib_temp_id=\$2 AND status_id=\$3/);
-  assert.deepEqual(calls[1][1], [7, 99001, 1]);
+  assert.match(calls[1][0], /WHERE account_id=\$1 AND tdlib_temp_id=\$2/);
+  assert.deepEqual(calls[1][1], [7, 99001, 1, 5, 'шлюз перезапущен, исход неизвестен']);
   assert.equal(await d.findByTempId(7, 5), null);
 });

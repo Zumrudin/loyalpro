@@ -300,14 +300,20 @@ class TelegramClient {
   async downloadToPublic(file) {
     if (file.size && file.size > MAX_MEDIA_BYTES) throw new Error(`файл ${file.size} байт больше лимита ${MAX_MEDIA_BYTES}`);
     const f = await this.client.invoke({ _: 'downloadFile', file_id: file.id, priority: 1, offset: 0, limit: 0, synchronous: true });
-    const src = f && f.local && f.local.path;
-    if (!src || !fs.existsSync(src)) throw new Error('файл не скачан');
-    const dir = path.join(this.d.config.PUBLIC_FILES_DIR, String(this.id));
-    fs.mkdirSync(dir, { recursive: true });
-    const name = `${Date.now()}_${crypto.randomBytes(8).toString('hex')}${safeExt(file.mimeType)}`;
-    fs.copyFileSync(src, path.join(dir, name));
-    this.client.invoke({ _: 'deleteFile', file_id: file.id }).catch(() => {});
-    return `${this.d.config.PUBLIC_FILES_URL}/${this.id}/${name}`;
+    try {
+      const src = f && f.local && f.local.path;
+      if (!src || !fs.existsSync(src)) throw new Error('файл не скачан');
+      // Размер до скачивания мог быть неизвестен (0) — перепроверяем по факту.
+      const actual = Number((f && f.size) || 0) || fs.statSync(src).size;
+      if (actual > MAX_MEDIA_BYTES) throw new Error(`файл ${actual} байт больше лимита ${MAX_MEDIA_BYTES}`);
+      const dir = path.join(this.d.config.PUBLIC_FILES_DIR, String(this.id));
+      fs.mkdirSync(dir, { recursive: true });
+      const name = `${Date.now()}_${crypto.randomBytes(8).toString('hex')}${safeExt(file.mimeType)}`;
+      fs.copyFileSync(src, path.join(dir, name));
+      return `${this.d.config.PUBLIC_FILES_URL}/${this.id}/${name}`;
+    } finally {
+      this.client.invoke({ _: 'deleteFile', file_id: file.id }).catch(() => {});
+    }
   }
 
   // ── Получатель ───────────────────────────────────────────────

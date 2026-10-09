@@ -9,6 +9,8 @@ const STATUS = {
   FAILED:   [5, 'Невозможно доставить'],    // ровно 5: его проверяет backend/routes/chat.js
 };
 
+const STALE_REASON = 'шлюз перезапущен, исход неизвестен';
+
 function makeDeliveries(db) {
   async function create({ accountId, chatId, phone, kind, text }) {
     const row = await db.oneOrNone(
@@ -34,7 +36,7 @@ function makeDeliveries(db) {
   // таких строк уже не узнать — закрываем как «Невозможно доставить», чтобы
   // сторож бэкенда (agent_reply_deliveries) не ждал их вечно. Частичный индекс
   // gateway_deliveries_pending_idx (status_id=1) — ровно под этот запрос.
-  async function failStale(accountId, minutes = 10, reason = 'шлюз перезапущен, исход неизвестен') {
+  async function failStale(accountId, minutes = 10, reason = STALE_REASON) {
     const r = await db.query(
       `UPDATE gateway_deliveries SET status_id=$2, description=$3, error=$4, updated_at=NOW()
         WHERE account_id=$1 AND status_id=$5 AND created_at < NOW() - ($6 || ' minutes')::interval`,
@@ -49,10 +51,16 @@ function makeDeliveries(db) {
     await db.query(`UPDATE gateway_deliveries SET tdlib_temp_id=$2, updated_at=NOW() WHERE id=$1`, [id, tempId]);
   }
 
+  // Ищем «Принято» И строки, закрытые failStale (их реальный исход пришёл позже
+  // рестарта): иначе досланное TDLib сообщение осталось бы «Невозможно
+  // доставить» в журнале при реально ушедшем тексте.
   async function findByTempId(accountId, tempId) {
     const r = await db.oneOrNone(
-      `SELECT id FROM gateway_deliveries WHERE account_id=$1 AND tdlib_temp_id=$2 AND status_id=$3 ORDER BY id DESC LIMIT 1`,
-      [accountId, tempId, STATUS.ACCEPTED[0]]);
+      `SELECT id FROM gateway_deliveries
+        WHERE account_id=$1 AND tdlib_temp_id=$2
+          AND (status_id=$3 OR (status_id=$4 AND error=$5))
+        ORDER BY id DESC LIMIT 1`,
+      [accountId, tempId, STATUS.ACCEPTED[0], STATUS.FAILED[0], STALE_REASON]);
     return r ? Number(r.id) : null;
   }
 
@@ -72,7 +80,7 @@ function getDefault() {
 }
 
 module.exports = {
-  makeDeliveries, parseId, STATUS,
+  makeDeliveries, parseId, STATUS, STALE_REASON,
   create: (...a) => getDefault().create(...a),
   setStatus: (...a) => getDefault().setStatus(...a),
   get: (...a) => getDefault().get(...a),
