@@ -30,14 +30,21 @@ function routingOf(payload) {
   return Array.isArray(r) ? r : [r].filter(Boolean);
 }
 
+function accountKey(creds) {
+  return `${creds.provider}|${String(creds.apiBase || '').replace(/\/+$/, '')}|${creds.token}`;
+}
+
 async function groupsFor(salonId, routing) {
   const groups = [];
   const skipped = [];
   for (const ch of routing) {
     const creds = await accounts.credentialsFor(salonId, ch);
     if (!creds) { skipped.push(ch); continue; }
+    // Один и тот же АККАУНТ ПРОВАЙДЕРА, а не одна строка: сид Chatpush заводит
+    // шесть строк (по каналу) с одним токеном — иначе ['telegram','whatsapp']
+    // уходили бы двумя вызовами и фолбэк Chatpush между каналами терялся.
     const last = groups[groups.length - 1];
-    if (last && String(last.creds.id) === String(creds.id)) last.channels.push(ch);
+    if (last && accountKey(last.creds) === accountKey(creds)) last.channels.push(ch);
     else groups.push({ creds, channels: [ch] });
   }
   if (skipped.length) logger.debug(`salon ${salonId}: нет аккаунта для каналов [${skipped.join(',')}] — пропущены`);

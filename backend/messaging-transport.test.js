@@ -66,6 +66,24 @@ describe('sendMessage', () => {
   });
 });
 
+describe('группировка по аккаунту провайдера, а не по строке', () => {
+  test('шесть Chatpush-строк с одним токеном (сид) → ОДИН вызов с полным routing', async () => {
+    accounts.credentialsFor.mockImplementation(async (s, ch) => ({ id: { whatsapp: 1, tdlib: 2, telegram: 4 }[ch], provider: 'chatpush', apiBase: 'https://api.chatpush.ru', token: 'CP', channel: ch }));
+    chatpush.sendMessage.mockResolvedValueOnce({ id: 1 });
+    await transport.sendMessage(1, { text: 'hi', phone: 'p', dispatchRouting: ['telegram', 'whatsapp', 'tdlib'] });
+    expect(chatpush.sendMessage).toHaveBeenCalledTimes(1);
+    expect(chatpush.sendMessage.mock.calls[0][1].dispatchRouting).toEqual(['telegram', 'whatsapp', 'tdlib']);
+  });
+  test('тот же токен, но другой провайдер/адрес → отдельные вызовы', async () => {
+    accounts.credentialsFor.mockImplementation(async (s, ch) => (ch === 'tdlib'
+      ? { id: 9, provider: 'gateway', apiBase: 'http://127.0.0.1:3002', token: 'CP', channel: ch }
+      : { id: 1, provider: 'chatpush', apiBase: 'https://api.chatpush.ru', token: 'CP', channel: ch }));
+    chatpush.sendMessage.mockRejectedValueOnce(Object.assign(new Error('422'), { status: 422 })).mockResolvedValueOnce({ id: 'g1' });
+    await transport.sendMessage(1, { text: 'hi', phone: 'p', dispatchRouting: ['whatsapp', 'tdlib'] });
+    expect(chatpush.sendMessage).toHaveBeenCalledTimes(2);
+  });
+});
+
 describe('sendFile / getDeliveryStatus', () => {
   test('sendFile идёт по первому каналу с аккаунтом', async () => {
     accounts.credentialsFor.mockResolvedValueOnce({ ...GW, channel: 'tdlib' });
