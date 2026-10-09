@@ -12,5 +12,10 @@ module.exports = {
       FRONTEND_URL: 'http://217.114.0.254:3001',
       TZ: 'Europe/Moscow'
     }
+  }, {
+    name: 'loyalpro-gateway',
+    script: '/var/www/loyalpro/gateway/server.js',
+    cwd: '/var/www/loyalpro/gateway',
+    env: { NODE_ENV: 'production', PORT: 3002, TZ: 'Europe/Moscow' }
   }]
 }
