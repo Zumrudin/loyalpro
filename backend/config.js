@@ -63,6 +63,17 @@ module.exports = {
     salonId:       process.env.CHATPUSH_SALON_ID ? parseInt(process.env.CHATPUSH_SALON_ID, 10) : null,
   },
 
+  // Свой шлюз мессенджеров (gateway/). url — внутренний адрес (отправка идёт
+  // по Chatpush-совместимому API шлюза), secret — заголовок X-Gateway-Secret
+  // для внутреннего API (старт/авторизация аккаунтов), webhookSecret — ?key=
+  // у /gateway/webhook, которым шлюз шлёт события в бэкенд. Пусто → шлюз
+  // не подключён, подключать Telegram из админки нельзя (503).
+  MESSAGING_GATEWAY: {
+    url:           process.env.MESSAGING_GATEWAY_URL           || '',
+    secret:        process.env.MESSAGING_GATEWAY_SECRET        || '',
+    webhookSecret: process.env.GATEWAY_WEBHOOK_SECRET          || '',
+  },
+
   // ── ИИ-агент-администратор (диалог + запись). Движок — Claude tool-calling. ──
   // Ключ Anthropic. Claude не гео-блокируется на dev (Финляндия) — прямой вызов.
   ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY || '',
