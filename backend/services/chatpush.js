@@ -21,6 +21,19 @@ const logger = createLogger('Chatpush');
 const { apiBase, apiKey, instanceToken } = config.CHATPUSH;
 
 /**
+ * Креды отправки: строка — Bearer-токен инстанса Chatpush (apiBase из config,
+ * прежний контракт), объект {apiBase, token} — любой Chatpush-совместимый
+ * провайдер (наш шлюз gateway/ говорит на том же API). Источник объектов —
+ * services/messaging/accounts.credentialsFor.
+ */
+function authOf(creds) {
+  if (creds && typeof creds === 'object') {
+    return { base: (creds.apiBase || apiBase).replace(/\/+$/, ''), token: creds.token };
+  }
+  return { base: apiBase, token: creds };
+}
+
+/**
  * Собрать query-string. Массивы кодируются повторяющимся ключом `k[]=v` —
  * именно этого ждёт Chatpush для `types[]` / `dispatch_routing[]` / `phones_numbers[]`
  * (в curl-примерах доки для этого стоит флаг `-g`, отключающий globbing скобок).
@@ -61,9 +74,11 @@ function apiError(op, e) {
  * Отправить одно сообщение. Каналы и порядок — в `dispatchRouting`
  * (whatsapp | tdlib | telegram | notify | max | max_bot). Прочие поля доки
  * (sender_name, scheduled_at, external_id, avito_chat_id, …) — через `extra`.
+ * @param creds строка-токен инстанса ИЛИ объект {apiBase, token}.
  * @returns объект `delivery` из ответа.
  */
-async function sendMessage(instanceToken, { text, phone, dispatchRouting, replyToMessageId, ...extra }) {
+async function sendMessage(creds, { text, phone, dispatchRouting, replyToMessageId, ...extra }) {
+  const { base, token } = authOf(creds);
   const query = qs({
     text,
     phone,
@@ -73,8 +88,8 @@ async function sendMessage(instanceToken, { text, phone, dispatchRouting, replyT
   });
   let data;
   try {
-    ({ data } = await axios.post(`${apiBase}/api/v1/delivery?${query}`, null, {
-      headers: { Authorization: `Bearer ${instanceToken}` },
+    ({ data } = await axios.post(`${base}/api/v1/delivery?${query}`, null, {
+      headers: { Authorization: `Bearer ${token}` },
       timeout: 30000,
     }));
   } catch (e) { throw apiError('delivery', e); }
@@ -90,9 +105,11 @@ async function sendMessage(instanceToken, { text, phone, dispatchRouting, replyT
  * Фото <10 МБ уходит нативной картинкой (type=image), иначе документом;
  * `caption` — подпись (whatsapp). Node 20: FormData/Blob глобальные,
  * axios 1.x их понимает без пакета form-data.
+ * @param creds строка-токен инстанса ИЛИ объект {apiBase, token}.
  * @returns объект `delivery` из ответа.
  */
-async function sendFile(instanceToken, { fileName, caption, type, phone, dispatchRouting, ...extra }, buffer, mimeType) {
+async function sendFile(creds, { fileName, caption, type, phone, dispatchRouting, ...extra }, buffer, mimeType) {
+  const { base, token } = authOf(creds);
   const query = qs({
     file_name: fileName,
     caption,
@@ -105,8 +122,8 @@ async function sendFile(instanceToken, { fileName, caption, type, phone, dispatc
   form.append('file', new Blob([buffer], { type: mimeType || 'application/octet-stream' }), fileName);
   let data;
   try {
-    ({ data } = await axios.post(`${apiBase}/api/v1/send_file?${query}`, form, {
-      headers: { Authorization: `Bearer ${instanceToken}` },
+    ({ data } = await axios.post(`${base}/api/v1/send_file?${query}`, form, {
+      headers: { Authorization: `Bearer ${token}` },
       timeout: 120000,
       maxBodyLength: Infinity,
     }));
@@ -117,10 +134,11 @@ async function sendFile(instanceToken, { fileName, caption, type, phone, dispatc
   return data.delivery;
 }
 
-/** Статус ранее отправленного сообщения. */
-async function getDeliveryStatus(instanceToken, id) {
-  const { data } = await axios.get(`${apiBase}/api/v1/delivery/${id}`, {
-    headers: { Authorization: `Bearer ${instanceToken}` },
+/** Статус ранее отправленного сообщения. creds — строка-токен или {apiBase, token}. */
+async function getDeliveryStatus(creds, id) {
+  const { base, token } = authOf(creds);
+  const { data } = await axios.get(`${base}/api/v1/delivery/${id}`, {
+    headers: { Authorization: `Bearer ${token}` },
     timeout: 15000,
   });
   return data.delivery;
