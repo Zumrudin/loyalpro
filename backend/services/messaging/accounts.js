@@ -82,6 +82,8 @@ async function credentialsFor(salonId, channel) {
 }
 
 async function credentialsById(id) {
+  // env-фолбэк отдаёт accountId 'env' — в integer-колонку его не пускаем.
+  if (!Number.isInteger(Number(id))) return null;
   try {
     const row = await db.oneOrNone(
       `SELECT id, provider, channel, api_base, token FROM messenger_accounts WHERE id = $1`, [id]);

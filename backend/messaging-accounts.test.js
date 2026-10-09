@@ -185,6 +185,11 @@ describe('credentialsById', () => {
     expect(await accounts.credentialsById(5)).toBeNull();
     expect(require('./logger').__log.warn).toHaveBeenCalled();
   });
+  test("'env' → null без запроса в БД", async () => {
+    expect(await accounts.credentialsById('env')).toBeNull();
+    expect(db.oneOrNone).not.toHaveBeenCalled();
+    expect(require('./logger').__log.warn).not.toHaveBeenCalled();
+  });
   test('без кэша: два вызова — два запроса', async () => {
     db.oneOrNone.mockResolvedValue({ id: 5, provider: 'chatpush', channel: 'tdlib', api_base: 'x', token: 't' });
     await accounts.credentialsById(5);
