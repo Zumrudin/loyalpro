@@ -2721,6 +2721,8 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 
 - [ ] **Step 2: Слить ветку и установить шлюз**
 
+ВНИМАНИЕ (финальное ревью 09.10.2026): `ecosystem.config.js` указывает на `/var/www/loyalpro/…`, а по заметкам о деплое прод живёт в `/root/loyalpro_new/` — перед `pm2 start` сверить реальный каталог прода (`pm2 describe loyalpro` → `exec cwd`) и запускать шлюз с ТЕМ ЖЕ корнем (`cd <корень>/gateway && PORT=3002 pm2 start server.js --name loyalpro-gateway --kill-timeout 15000`), иначе поднимется устаревшая копия. Проверить nginx прода: если `/uploads` отдаётся nginx напрямую (минуя Express), заголовки `nosniff`/`attachment` для `/uploads/gateway` надо продублировать в nginx-блоке. Переключение канала теперь происходит ТОЛЬКО после `auth_state='ready'` (строка шлюза живёт в `pending`), а вебхук игнорирует сообщения неактивного провайдера — но из Chatpush всё равно выйти (шаг 4.3), чтобы не копить лишние сырые события.
+
 `git pull` в `/var/www/loyalpro` (или актуальный каталог прода из memory `deploy_prod_setup`), `cd gateway && npm ci --omit=dev`, создать `gateway/.env` (TG_API_ID/HASH те же, `DATABASE_URL` прода, секреты сгенерировать `openssl rand -hex 24` ×2), в `backend/.env` добавить `MESSAGING_GATEWAY_URL`, `MESSAGING_GATEWAY_SECRET`, `GATEWAY_WEBHOOK_SECRET`. `mkdir -p frontend/uploads/gateway`.
 
 - [ ] **Step 3: Поднять бэкенд с миграцией, затем шлюз**
