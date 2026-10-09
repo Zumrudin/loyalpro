@@ -39,4 +39,24 @@ const botDb = {
   any:       async (sql, p) => { const r = await botPool.query(sql, p); return r.rows; },
 };
 
-module.exports = { pool, db, botDb };
+// Транзакция на выделенном клиенте пула: fn(client) → результат. Коммит при
+// успехе, откат при исключении, клиент возвращается в пул всегда. ЗАЧЕМ: смена
+// активного аккаунта мессенджера — два UPDATE/INSERT под частичным UNIQUE
+// (salon_id, channel) WHERE status='active': между ними канал не должен
+// остаться без активной строки, а упавший второй шаг — откатить первый.
+async function withTransaction(fn) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const out = await fn(client);
+    await client.query('COMMIT');
+    return out;
+  } catch (e) {
+    try { await client.query('ROLLBACK'); } catch (_) { /* соединение могло умереть */ }
+    throw e;
+  } finally {
+    client.release();
+  }
+}
+
+module.exports = { pool, db, botDb, withTransaction };
