@@ -1,0 +1,34 @@
+'use strict';
+// node --test: файл подключается обычным <script>, поэтому грузим его в vm
+// с пустыми window/document — проверяем только чистые помощники.
+const { test } = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('fs');
+const vm = require('vm');
+const ctx = { window: {}, document: {}, console };
+vm.createContext(ctx);
+vm.runInContext(fs.readFileSync(__dirname + '/messaging-accounts.js', 'utf8'), ctx);
+
+test('msgAccStateLabel', () => {
+  assert.equal(ctx.msgAccStateLabel({ provider: 'chatpush', status: 'active' }), 'Chatpush · активен');
+  assert.equal(ctx.msgAccStateLabel({ provider: 'chatpush', status: 'disabled' }), 'Chatpush · отключён');
+  assert.equal(ctx.msgAccStateLabel({ provider: 'gateway', status: 'active', auth_state: 'ready', phone: '79250177778' }), 'Свой шлюз · подключён · +79250177778');
+  assert.equal(ctx.msgAccStateLabel({ provider: 'gateway', status: 'active', auth_state: 'wait_code' }), 'Свой шлюз · ждёт код');
+  assert.equal(ctx.msgAccStateLabel({ provider: 'gateway', status: 'active', auth_state: 'error', auth_error: 'PHONE_CODE_INVALID' }), 'Свой шлюз · ошибка · PHONE_CODE_INVALID');
+  assert.equal(ctx.msgAccStateLabel({ provider: 'gateway', status: 'disabled', auth_state: 'logged_out' }), 'Свой шлюз · отключён');
+});
+
+test('msgAccNextStep — какой ввод показывать по состоянию', () => {
+  assert.equal(ctx.msgAccNextStep('wait_phone'), 'phone');
+  assert.equal(ctx.msgAccNextStep('wait_code'), 'code');
+  assert.equal(ctx.msgAccNextStep('wait_password'), 'password');
+  assert.equal(ctx.msgAccNextStep('ready'), null);
+  assert.equal(ctx.msgAccNextStep('logged_out'), null);
+  assert.equal(ctx.msgAccNextStep('error'), null);
+  assert.equal(ctx.msgAccNextStep('starting'), 'wait');
+  assert.equal(ctx.msgAccNextStep(undefined), 'wait');
+});
+
+test('MSG_ACC_CHANNEL покрывает все каналы Chatpush', () => {
+  assert.deepEqual(Object.keys(vm.runInContext('MSG_ACC_CHANNEL', ctx)).sort(), ['max', 'max_bot', 'notify', 'tdlib', 'telegram', 'whatsapp']);
+});

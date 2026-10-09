@@ -111,6 +111,7 @@ function navStg(id, el) {
   if (id === 'app-settings') loadAppSettings();
   if (id === 'staff-profiles') loadStaffProfiles();
   if (id === 'agent-model') loadAgentModel();
+  if (id === 'messengers') loadMessagingAccounts();
 }
 
 // ── LAUNCH APP ──
