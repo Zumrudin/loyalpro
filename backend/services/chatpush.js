@@ -24,13 +24,17 @@ const { apiBase, apiKey, instanceToken } = config.CHATPUSH;
  * Креды отправки: строка — Bearer-токен инстанса Chatpush (apiBase из config,
  * прежний контракт), объект {apiBase, token} — любой Chatpush-совместимый
  * провайдер (наш шлюз gateway/ говорит на том же API). Источник объектов —
- * services/messaging/accounts.credentialsFor.
+ * services/messaging/accounts.credentialsFor. Нет кредов (null — канал не
+ * подключён) или объект без apiBase/token → бросаем сразу, до HTTP: иначе
+ * токен шлюза ушёл бы на api.chatpush.ru, а null стал бы «Bearer null».
  */
 function authOf(creds) {
   if (creds && typeof creds === 'object') {
-    return { base: (creds.apiBase || apiBase).replace(/\/+$/, ''), token: creds.token };
+    if (!creds.token || !creds.apiBase) throw new Error('chatpush: креды без apiBase/token');
+    return { base: String(creds.apiBase).replace(/\/+$/, ''), token: creds.token };
   }
-  return { base: apiBase, token: creds };
+  if (!creds) throw new Error('chatpush: нет кредов отправки (канал не подключён?)');
+  return { base: String(apiBase).replace(/\/+$/, ''), token: creds };
 }
 
 /**
