@@ -108,15 +108,16 @@ async function getDeliveryStatus(salonId, channel, deliveryId, opts = {}) {
   requireSalon(salonId);
   let creds = null;
   if (opts && opts.accountId !== undefined && opts.accountId !== null) {
-    creds = await accounts.credentialsById(opts.accountId);
+    creds = await accounts.credentialsById(salonId, opts.accountId);
   }
   if (!creds) creds = await accounts.credentialsFor(salonId, chatpush.replyRoutingFor(channel));
   if (!creds) return null;
   return chatpush.getDeliveryStatus(creds, deliveryId);
 }
 
-// Есть ли куда слать вообще (гейт запуска воркеров вместо проверки env-токена).
-// Гейт запуска воркеров: нужен env-токен ИЛИ url шлюза. Салон, у которого аккаунты только в БД без одного из этих env, воркеры не запустит — осознанно, пока таких салонов нет.
+// Гейт запуска воркеров (вместо проверки env-токена): нужен env-токен ИЛИ url
+// шлюза. Салон, у которого аккаунты только в БД без одного из этих env, воркеры
+// не запустит — осознанно, пока таких салонов нет.
 function configured() {
   return !!((config.CHATPUSH && config.CHATPUSH.instanceToken) || (config.MESSAGING_GATEWAY && config.MESSAGING_GATEWAY.url));
 }

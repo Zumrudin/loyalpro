@@ -190,7 +190,7 @@ describe('ревью: at-most-once, лог, accountId', () => {
     accounts.credentialsById.mockResolvedValueOnce({ ...GW, channel: 'tdlib' });
     chatpush.getDeliveryStatus.mockResolvedValueOnce({ id: 'g1' });
     expect(await transport.getDeliveryStatus(1, 'tdlib', 'g1', { accountId: 9 })).toEqual({ id: 'g1' });
-    expect(accounts.credentialsById).toHaveBeenCalledWith(9);
+    expect(accounts.credentialsById).toHaveBeenCalledWith(1, 9);
     expect(accounts.credentialsFor).not.toHaveBeenCalled();
     expect(chatpush.getDeliveryStatus.mock.calls[0][0]).toMatchObject({ token: 'GW' });
   });

@@ -168,32 +168,32 @@ describe('listForSalon', () => {
 });
 
 describe('credentialsById', () => {
-  test('строка chatpush → креды с api_base строки, любой статус, без фильтра по салону', async () => {
+  test('строка chatpush → креды с api_base строки, любой статус, скоуп по салону', async () => {
     db.oneOrNone.mockResolvedValueOnce({ id: 5, provider: 'chatpush', channel: 'tdlib', api_base: 'https://row.base', token: 'ROW' });
-    expect(await accounts.credentialsById(5)).toEqual({ id: 5, provider: 'chatpush', channel: 'tdlib', apiBase: 'https://row.base', token: 'ROW' });
+    expect(await accounts.credentialsById(1, 5)).toEqual({ id: 5, provider: 'chatpush', channel: 'tdlib', apiBase: 'https://row.base', token: 'ROW' });
     const [sql, params] = db.oneOrNone.mock.calls[0];
-    expect(sql).toMatch(/WHERE id = \$1/);
+    expect(sql).toMatch(/WHERE id = \$1 AND salon_id = \$2/);
     expect(sql).not.toMatch(/status/);
-    expect(params).toEqual([5]);
+    expect(params).toEqual([5, 1]);
   });
   test('строки нет → null', async () => {
     db.oneOrNone.mockResolvedValueOnce(null);
-    expect(await accounts.credentialsById(404)).toBeNull();
+    expect(await accounts.credentialsById(1, 404)).toBeNull();
   });
   test('сбой БД → null без исключения, warn', async () => {
     db.oneOrNone.mockRejectedValueOnce(new Error('db down'));
-    expect(await accounts.credentialsById(5)).toBeNull();
+    expect(await accounts.credentialsById(1, 5)).toBeNull();
     expect(require('./logger').__log.warn).toHaveBeenCalled();
   });
   test("'env' → null без запроса в БД", async () => {
-    expect(await accounts.credentialsById('env')).toBeNull();
+    expect(await accounts.credentialsById(1, 'env')).toBeNull();
     expect(db.oneOrNone).not.toHaveBeenCalled();
     expect(require('./logger').__log.warn).not.toHaveBeenCalled();
   });
   test('без кэша: два вызова — два запроса', async () => {
     db.oneOrNone.mockResolvedValue({ id: 5, provider: 'chatpush', channel: 'tdlib', api_base: 'x', token: 't' });
-    await accounts.credentialsById(5);
-    await accounts.credentialsById(5);
+    await accounts.credentialsById(1, 5);
+    await accounts.credentialsById(1, 5);
     expect(db.oneOrNone).toHaveBeenCalledTimes(2);
   });
 });

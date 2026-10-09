@@ -12,7 +12,7 @@
 // resolveSalon(provider, externalId) → salon_id | null
 //   Обратная задача для вебхука: от кого пришло событие.
 //   Порядок: активная строка, затем самая свежая.
-// credentialsById(id) → креды конкретной строки (ЛЮБОЙ статус, без кэша):
+// credentialsById(salonId, id) → креды конкретной строки салона (ЛЮБОЙ статус, без кэша):
 //   проверка судьбы уже отправленного сообщения должна идти через тот аккаунт,
 //   которым оно ушло, даже если канал с тех пор переключили или выключили.
 // Кэш 60 с по ключу salon:channel — функция зовётся на каждую отправку.
@@ -81,14 +81,16 @@ async function credentialsFor(salonId, channel) {
   return value;
 }
 
-async function credentialsById(id) {
+async function credentialsById(salonId, id) {
   // env-фолбэк отдаёт accountId 'env' — в integer-колонку его не пускаем.
   if (!Number.isInteger(Number(id))) return null;
+  if (salonId === undefined || salonId === null) return null;
   try {
+    // Скоуп по salon_id обязателен (правило проекта): чужой accountId не отдаём.
     const row = await db.oneOrNone(
-      `SELECT id, provider, channel, api_base, token FROM messenger_accounts WHERE id = $1`, [id]);
+      `SELECT id, provider, channel, api_base, token FROM messenger_accounts WHERE id = $1 AND salon_id = $2`, [id, salonId]);
     if (!row) return null;
-    const value = rowToCreds(row, '(по id)');
+    const value = rowToCreds(row, salonId);
     return value ? Object.freeze(value) : null;
   } catch (e) {
     logger.warn(`credentialsById(${id}): ошибка БД — ${e.message}`);
