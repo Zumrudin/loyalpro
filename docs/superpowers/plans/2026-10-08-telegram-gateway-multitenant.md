@@ -2055,7 +2055,7 @@ class TelegramClient {
       } catch (_) { userId = null; }
     }
     if (!userId) {
-      const r = await this.client.invoke({ _: 'importContacts', contacts: [{ _: 'contact', phone_number: '+' + p, first_name: 'Клиент', last_name: '', user_id: 0 }] });
+      const r = await this.client.invoke({ _: 'importContacts', contacts: [{ _: 'importedContact', phone_number: '+' + p, first_name: 'Клиент', last_name: '' }] });
       userId = r && r.user_ids && r.user_ids[0];
     }
     if (!userId) throw new Error(`номер ${p} не найден в Telegram`);
@@ -2090,9 +2090,10 @@ class TelegramClient {
     const chatId = await this.resolveChatId({ tdlibUserId, phone });
     const deliveryId = await deliveries.create({ accountId: this.id, chatId, phone: mapper.normalizePhone(phone), kind: 'file', text: caption || fileName });
     const cap = { _: 'formattedText', text: caption || '', entities: [] };
+    const local = { _: 'inputFileLocal', path: filePath };
     const content = type === 'image'
-      ? { _: 'inputMessagePhoto', photo: { _: 'inputFileLocal', path: filePath }, caption: cap }
-      : { _: 'inputMessageDocument', document: { _: 'inputFileLocal', path: filePath }, caption: cap };
+      ? { _: 'inputMessagePhoto', photo: { _: 'inputPhoto', photo: local }, caption: cap }
+      : { _: 'inputMessageDocument', document: { _: 'inputDocument', document: local }, caption: cap };
     try {
       const msg = await this.client.invoke({ _: 'sendMessage', chat_id: chatId, input_message_content: content });
       this.pendingSends.set(msg.id, deliveryId);

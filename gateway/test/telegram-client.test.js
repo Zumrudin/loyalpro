@@ -82,6 +82,7 @@ test('автомат авторизации: wait_phone → шаг phone → wai
   assert.equal(r2.authState, 'wait_code');
   assert.match(r2.error, /PHONE_CODE_INVALID/);
   assert.deepEqual(repoCalls.at(-1), ['setAuth', 42, 'wait_code', { error: 'PHONE_CODE_INVALID' }]);
+  assert.equal(tg.status().error, 'PHONE_CODE_INVALID');
 
   assert.deepEqual(await tg.authStep({}), { authState: 'wait_code', error: 'пустой шаг' });
 });
@@ -183,6 +184,8 @@ test('resolveChatId по номеру: кэш → поиск → importContacts 
   assert.equal(client.calls.some(c => c._ === 'searchUserByPhoneNumber'), false);
 
   assert.equal(await tg.resolveChatId({ phone: '89001112233' }), 555);        // поиск упал → importContacts
+  const imp = client.calls.find(c => c._ === 'importContacts');
+  assert.deepEqual(imp.contacts, [{ _: 'importedContact', phone_number: '+79001112233', first_name: 'Клиент', last_name: '' }]);
   assert.deepEqual(repoCalls.at(-1), ['rememberContact', 42, '79001112233', 555]);
 
   await assert.rejects(tg.resolveChatId({ phone: '79000000000' }), (e) => e.status === 422 && /не найден в Telegram/.test(e.message));
@@ -197,9 +200,10 @@ test('sendFile: фото → inputMessagePhoto, документ → inputMessag
   await tg.sendFile({ filePath: '/tmp/b.pdf', fileName: 'b.pdf', caption: '', type: 'document', tdlibUserId: '777' });
   const sends = client.calls.filter(c => c._ === 'sendMessage');
   assert.equal(sends[0].input_message_content._, 'inputMessagePhoto');
-  assert.equal(sends[0].input_message_content.photo.path, '/tmp/a.jpg');
+  assert.deepEqual(sends[0].input_message_content.photo, { _: 'inputPhoto', photo: { _: 'inputFileLocal', path: '/tmp/a.jpg' } });
   assert.equal(sends[0].input_message_content.caption.text, 'прайс');
   assert.equal(sends[1].input_message_content._, 'inputMessageDocument');
+  assert.deepEqual(sends[1].input_message_content.document, { _: 'inputDocument', document: { _: 'inputFileLocal', path: '/tmp/b.pdf' } });
   assert.equal(delCalls[0][1].kind, 'file'); assert.equal(delCalls[1][1].text, 'b.pdf');
 });
 

@@ -68,6 +68,7 @@ class TelegramClient {
     this.id = account.id;
     this.log = createLogger(`TG#${account.id}`);
     this.authState = 'starting';
+    this.lastAuthError = null;
     this.ownPhone = mapper.normalizePhone(account.phone);
     this.me = null;
     this.pendingSends = new Map();   // временный id сообщения TDLib → id доставки
@@ -135,7 +136,7 @@ class TelegramClient {
     const s = step || {};
     try {
       if (s.phone) {
-        await this.client.invoke({ _: 'setAuthenticationPhoneNumber', phone_number: '+' + s.phone });
+        await this.client.invoke({ _: 'setAuthenticationPhoneNumber', phone_number: '+' + String(s.phone).replace(/^\+/, '') });
       } else if (s.code) {
         await this.client.invoke({ _: 'checkAuthenticationCode', code: s.code });
       } else if (s.password) {
@@ -144,10 +145,12 @@ class TelegramClient {
         return { authState: this.authState, error: 'пустой шаг' };
       }
       await this.waitStateChange(this.authState, AUTH_STEP_WAIT_MS);
+      this.lastAuthError = null;
       await this.d.repo.setAuth(this.id, this.authState, { error: null });
       return { authState: this.authState, error: null };
     } catch (e) {
       const msg = (e && e.message) || String(e);
+      this.lastAuthError = msg;
       await this.d.repo.setAuth(this.id, this.authState, { error: msg });
       return { authState: this.authState, error: msg };
     }
@@ -166,7 +169,7 @@ class TelegramClient {
   }
 
   status() {
-    return { authState: this.authState, phone: this.ownPhone, displayName: this.me ? mapper.fullName(this.me) : null, error: null };
+    return { authState: this.authState, phone: this.ownPhone, displayName: this.me ? mapper.fullName(this.me) : null, error: this.lastAuthError };
   }
 
   // ── Входящие/эхо ─────────────────────────────────────────────
@@ -252,7 +255,8 @@ class TelegramClient {
       } catch (_) { userId = null; }
     }
     if (!userId) {
-      const r = await this.client.invoke({ _: 'importContacts', contacts: [{ _: 'contact', phone_number: '+' + p, first_name: 'Клиент', last_name: '', user_id: 0 }] });
+      // TDLib 1.8.67: contacts — importedContact (без user_id); ответ importedContacts.user_ids, 0 = номера нет в Telegram.
+      const r = await this.client.invoke({ _: 'importContacts', contacts: [{ _: 'importedContact', phone_number: '+' + p, first_name: 'Клиент', last_name: '' }] });
       userId = r && r.user_ids && r.user_ids[0];
     }
     if (!userId) throw Object.assign(new Error(`номер ${p} не найден в Telegram`), { status: 422 });
@@ -287,9 +291,11 @@ class TelegramClient {
     const chatId = await this.resolveChatId({ tdlibUserId, phone });
     const deliveryId = await this.d.deliveries.create({ accountId: this.id, chatId, phone: mapper.normalizePhone(phone), kind: 'file', text: caption || fileName });
     const cap = { _: 'formattedText', text: caption || '', entities: [] };
+    // TDLib 1.8.67: файл обёрнут в inputPhoto/inputDocument, внутри — InputFile.
+    const local = { _: 'inputFileLocal', path: filePath };
     const content = type === 'image'
-      ? { _: 'inputMessagePhoto', photo: { _: 'inputFileLocal', path: filePath }, caption: cap }
-      : { _: 'inputMessageDocument', document: { _: 'inputFileLocal', path: filePath }, caption: cap };
+      ? { _: 'inputMessagePhoto', photo: { _: 'inputPhoto', photo: local }, caption: cap }
+      : { _: 'inputMessageDocument', document: { _: 'inputDocument', document: local }, caption: cap };
     await this.invokeSend({ _: 'sendMessage', chat_id: chatId, input_message_content: content }, deliveryId);
     return deliveryId;
   }
