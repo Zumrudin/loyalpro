@@ -27,6 +27,9 @@ function msgAccNextStep(authState) {
 }
 
 let _msgAccPoll = null;
+let _msgAccBusy = false;
+let _msgAccStickyError = null;   // ошибка отправки шага; живёт, пока authState не изменится
+let _msgAccLastState = null;
 let _msgAccCurrent = null;   // id подключаемого gateway-аккаунта
 
 async function loadMessagingAccounts() {
@@ -58,7 +61,11 @@ async function loadMessagingAccounts() {
     }
     if (!r.accounts.length) root.textContent = 'Аккаунтов нет.';
     const connectBtn = document.getElementById('msg-acc-connect-tg');
-    if (connectBtn) connectBtn.disabled = !r.gatewayConfigured;
+    if (connectBtn) {
+      const busy = r.accounts.some(a => a.provider === 'gateway' && a.status === 'active');
+      connectBtn.disabled = !r.gatewayConfigured || busy;
+      connectBtn.title = busy ? 'Telegram уже подключается через свой шлюз' : '';
+    }
     const note = document.getElementById('msg-acc-gw-note');
     if (note) note.textContent = r.gatewayConfigured ? '' : 'Свой шлюз не настроен на сервере (MESSAGING_GATEWAY_URL).';
   } catch (e) {
@@ -92,27 +99,39 @@ function msgAccRenderStep(authState, error) {
 async function msgAccSendStep(field) {
   const input = document.getElementById('msg-acc-' + field);
   const value = input ? input.value : '';
-  if (!value) return;
+  if (!value || !_msgAccCurrent) return;
   try {
     const r = await api('POST', `/api/messaging/accounts/${_msgAccCurrent}/auth`, { [field]: value });
     if (input && field !== 'phone') input.value = '';
+    _msgAccStickyError = null;
+    _msgAccLastState = r.authState;
     msgAccRenderStep(r.authState, r.error);
     if (r.authState === 'ready') await loadMessagingAccounts();
   } catch (e) {
+    _msgAccStickyError = e.message;   // шаг не сбрасываем — можно повторить ввод
     const err = document.getElementById('msg-acc-error');
-    if (err) err.textContent = e.message;   // шаг не сбрасываем — можно повторить ввод
+    if (err) err.textContent = e.message;
+  } finally {
+    if (field === 'password' && input) input.value = '';
   }
 }
 
 function msgAccStartPolling() {
   if (_msgAccPoll) clearInterval(_msgAccPoll);
   _msgAccPoll = setInterval(async () => {
-    if (!_msgAccCurrent || document.body.dataset.page !== 'settings') { clearInterval(_msgAccPoll); _msgAccPoll = null; return; }
+    const sec = document.getElementById('stg-messengers');
+    if (!_msgAccCurrent || document.body.dataset.page !== 'settings' || !sec || !sec.classList.contains('active')) {
+      clearInterval(_msgAccPoll); _msgAccPoll = null; return;
+    }
+    if (_msgAccBusy) return;
+    _msgAccBusy = true;
     try {
       const s = await api('GET', `/api/messaging/accounts/${_msgAccCurrent}/status`);
-      msgAccRenderStep(s.authState, s.error);
+      if (s.authState !== _msgAccLastState) { _msgAccStickyError = null; _msgAccLastState = s.authState; }
+      msgAccRenderStep(s.authState, _msgAccStickyError || s.error);
       if (s.authState === 'ready') await loadMessagingAccounts();
     } catch (_) { /* следующий тик */ }
+    finally { _msgAccBusy = false; }
   }, 2000);
 }
 

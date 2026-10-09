@@ -554,17 +554,17 @@
             <div data-step="wait">Запускаем сессию…</div>
             <div data-step="phone">
               <label class="fl" for="msg-acc-phone">Номер телефона аккаунта Telegram клиники</label>
-              <input id="msg-acc-phone" placeholder="+7 900 000-00-00" style="max-width:280px">
+              <input id="msg-acc-phone" autocomplete="tel" placeholder="+7 900 000-00-00" style="max-width:280px">
               <button class="btn btn-pri" onclick="msgAccSendStep('phone')">Отправить код</button>
             </div>
             <div data-step="code">
               <label class="fl" for="msg-acc-code">Код из Telegram (придёт в приложение на телефоне)</label>
-              <input id="msg-acc-code" inputmode="numeric" style="max-width:160px">
+              <input id="msg-acc-code" autocomplete="one-time-code" inputmode="numeric" style="max-width:160px">
               <button class="btn btn-pri" onclick="msgAccSendStep('code')">Подтвердить</button>
             </div>
             <div data-step="password">
               <label class="fl" for="msg-acc-password">Пароль двухэтапной проверки</label>
-              <input id="msg-acc-password" type="password" style="max-width:280px">
+              <input id="msg-acc-password" autocomplete="new-password" type="password" style="max-width:280px">
               <button class="btn btn-pri" onclick="msgAccSendStep('password')">Войти</button>
             </div>
             <p id="msg-acc-error" style="color:#c33"></p>
@@ -2536,7 +2536,7 @@ function fireConfetti() {
 <script src="js/pages/chat-composer.js?v=2026-08-10-mobile"></script>
 <script src="js/pages/agent-settings.js?v=2026-09-20"></script>
 <script src="js/pages/agent-model.js?v=2026-09-27"></script>
-<script src="js/pages/messaging-accounts.js?v=2026-10-09a"></script>
+<script src="js/pages/messaging-accounts.js?v=2026-10-09b"></script>
 <script src="js/pages/patient-portfolio.js?v=2026-06-01e"></script>
 <script src="js/pages/staff-dashboard.js?v=2026-06-11d"></script>
 <script src="js/pages/users.js"></script>
