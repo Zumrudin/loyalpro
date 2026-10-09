@@ -150,7 +150,11 @@ router.post('/webhook', async (req, res) => {
   // (ON CONFLICT (salon_id, …) с NULL не срабатывает) и задваивалась бы на
   // каждом повторе; агенту без салона отвечать некуда.
   if (salonId == null) {
-    logger.warn(`unknown account: ${provider}/${customerId} type=${body.type} — событие сохранено без салона, сообщение не разбираем`);
+    // Служебные события Chatpush (message_status и т.п.) исторически приходят без
+    // customer_id и салона — это штатно, WARN на каждое было бы шумом; для
+    // СООБЩЕНИЙ и для любого события шлюза это признак битой настройки аккаунта.
+    const line = `unknown account: ${provider}/${customerId} type=${body.type} — событие сохранено без салона, сообщение не разбираем`;
+    if (provider === 'chatpush' && !msg) logger.debug(line); else logger.warn(line);
     if (eventId) {
       try { await db.query('UPDATE chatpush_events SET processed=TRUE WHERE id=$1', [eventId]); } catch {}
     }
