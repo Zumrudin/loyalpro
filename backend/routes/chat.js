@@ -11,7 +11,7 @@ const { db } = require('../db');
 const multer = require('multer');
 const config = require('../config');
 const { auth, requireRole, authOrQuery } = require('../middleware/auth');
-const chatpush = require('../services/chatpush');
+const transport = require('../services/messaging/transport');
 const { messagePreview, isGroupKey, recipientParams, DIALOG_KEY_SQL } = require('../services/chat');
 const { createLogger } = require('../logger');
 const logger = createLogger('Chat');
@@ -269,10 +269,12 @@ async function resolveRecipient(salonId, key, channel) {
 const DELIVERY_CHECK_MS = 30 * 1000;
 const DELIVERY_STATUS_UNDELIVERABLE = 5;          // «Невозможно доставить» (проверено живьём 18.09)
 const DELIVERY_FAILED_RE = /невозможно|ошибк|не доставлен|failed|error/i;
-function scheduleDeliveryCheck(deliveryId, { key, channel, kind = 'message' } = {}, deps = {}) {
+// salonId/accountId: статус спрашиваем у ТОГО аккаунта, которым ушло сообщение
+// (transport кладёт accountId в delivery), иначе — у текущего аккаунта канала.
+function scheduleDeliveryCheck(deliveryId, { key, channel, kind = 'message', salonId, accountId } = {}, deps = {}) {
   if (!deliveryId) return null;
   const get = deps.getDeliveryStatus
-    || ((id) => chatpush.getDeliveryStatus(config.CHATPUSH.instanceToken, id));
+    || ((id) => transport.getDeliveryStatus(salonId, channel, id, { accountId }));
   const delay = deps.delayMs != null ? deps.delayMs : DELIVERY_CHECK_MS;
   const t = setTimeout(async () => {
     try {
@@ -311,7 +313,7 @@ router.post('/dialogs/:key/send', adminOnly, async (req, res) => {
     const params = rcp && recipientParams(channel, { ...rcp, isGroup: isGroupKey(key) });
     if (!params) return res.status(422).json({ error: 'Не найден получатель для этого канала' });
 
-    const delivery = await chatpush.sendMessage(config.CHATPUSH.instanceToken, {
+    const delivery = await transport.sendMessage(salonId, {
       text, ...params, replyToMessageId: rcp.reply_to || undefined,
     });
     await pauseAgent(salonId, key);
@@ -319,7 +321,7 @@ router.post('/dialogs/:key/send', adminOnly, async (req, res) => {
     // чтобы в транскрипте Милы оно не выглядело её собственной репликой.
     await authorship.remember(salonId, key, text, 'operator');
     logger.info(`operator sent ${channel} to ${key}: delivery=${delivery && delivery.id} reply_to=${rcp.reply_to || '-'} ${text.slice(0, 60)}`);
-    scheduleDeliveryCheck(delivery && delivery.id, { key, channel });
+    scheduleDeliveryCheck(delivery && delivery.id, { key, channel, salonId, accountId: delivery && delivery.accountId });
     if (channel === 'whatsapp') {
       try {
         await persistWhatsappOutgoing(salonId, {
@@ -379,7 +381,7 @@ router.post('/dialogs/:key/send-file', adminOnly, chatUpload.single('file'), asy
     // Имя обязано содержать расширение (требование Chatpush); кириллицу не шлём.
     const ext = (req.file.originalname.match(/\.[A-Za-z0-9]+$/) || [''])[0] || '';
     const fileName = `file_${Date.now()}${ext}`;
-    const delivery = await chatpush.sendFile(config.CHATPUSH.instanceToken, {
+    const delivery = await transport.sendFile(salonId, {
       fileName, caption, type: isImage ? 'image' : 'document', ...params,
     }, req.file.buffer, req.file.mimetype);
     await pauseAgent(salonId, key);
@@ -388,7 +390,7 @@ router.post('/dialogs/:key/send-file', adminOnly, chatUpload.single('file'), asy
     if (caption) await authorship.remember(salonId, key, caption, 'operator');
     // reply_to сюда не идёт: у send_file в доке Chatpush параметра reply_to_message_id нет.
     logger.info(`operator sent file ${channel} to ${key}: delivery=${delivery && delivery.id} ${req.file.originalname} (${req.file.size} b)`);
-    scheduleDeliveryCheck(delivery && delivery.id, { key, channel, kind: 'file' });
+    scheduleDeliveryCheck(delivery && delivery.id, { key, channel, kind: 'file', salonId, accountId: delivery && delivery.accountId });
     if (channel === 'whatsapp') {
       try {
         // file_url null: ссылку на медиа Chatpush отдаёт только в эхе (которого

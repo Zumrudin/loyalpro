@@ -3,7 +3,7 @@
 const config = require('../../config');
 const chatEvents = require('../chat-events');
 const agentSettings = require('../agent-settings');
-const chatpush = require('../chatpush');
+const transport = require('../messaging/transport');
 const { recipientParams } = require('../chat');
 const orchestratorDefault = require('./orchestrator');
 const additionalProposals = require('./additional-proposals');
@@ -74,6 +74,10 @@ async function process(salonId, dialogKey, meta, opts = {}) {
     logger.info(`skip ${dialogKey}: групповой чат — агент отвечает только в личной переписке`);
     return;
   }
+  // Отправка идёт по аккаунту САЛОНА (services/messaging/transport): defaultSend
+  // читает салон из meta. Мутируем meta, а не копируем: опции/тесты передают
+  // тот же объект в send(meta, …) и ждут его же.
+  if (meta && meta.salonId == null) meta.salonId = salonId;
   const k = keyOf(salonId, dialogKey);
   const settings = opts.settings || agentSettings;
   const orchestrator = opts.orchestrator || orchestratorDefault;
@@ -422,10 +426,9 @@ async function defaultPriorBookingFailure(salonId, dialogKey) {
   return n > 1;
 }
 
-// Отправка одной реплики обратно клиенту через chatpush.
+// Отправка одной реплики обратно клиенту — по аккаунту салона (transport).
 async function defaultSend(meta, text) {
-  const token = config.CHATPUSH.instanceToken;
-  if (!token) { logger.error('CHATPUSH_INSTANCE_TOKEN not set — cannot reply'); return; }
+  if (meta.salonId == null) { logger.error('defaultSend: meta.salonId не задан — некуда слать'); return null; }
   const params = recipientParams(meta.channel, {
     phone: meta.phone,
     chat_id: meta.chatId,
@@ -435,7 +438,7 @@ async function defaultSend(meta, text) {
     logger.error(`нет получателя для ответа ${meta.channel} phone=${meta.phone || ''} chatId=${meta.chatId || ''}`);
     return null;
   }
-  const delivery = await chatpush.sendMessage(token, {
+  const delivery = await transport.sendMessage(meta.salonId, {
     text,
     ...params,
     replyToMessageId: meta.messageId,
@@ -470,8 +473,7 @@ async function defaultPersistOwn(salonId, dialogKey, meta, text, delivery) {
 // Отправка одного фото прайса. Файл читается price-list-data (единственное
 // место, где живёт путь к uploads и гейт «только /uploads/»).
 async function defaultSendFile(meta, att) {
-  const token = config.CHATPUSH.instanceToken;
-  if (!token) { logger.error('CHATPUSH_INSTANCE_TOKEN not set — cannot send price photo'); return null; }
+  if (meta.salonId == null) { logger.error('defaultSendFile: meta.salonId не задан — некуда слать'); return null; }
   const params = recipientParams(meta.channel, {
     phone: meta.phone,
     chat_id: meta.chatId,
@@ -485,7 +487,7 @@ async function defaultSendFile(meta, att) {
   if (!buf) { logger.warn(`фото прайса не найдено на диске: ${att.fileUrl}`); return null; }
   // Имя обязано содержать расширение (требование Chatpush); кириллицу не шлём.
   const ext = (String(att.fileName || '').match(/\.[A-Za-z0-9]+$/) || ['.jpg'])[0];
-  const delivery = await chatpush.sendFile(token, {
+  const delivery = await transport.sendFile(meta.salonId, {
     fileName: `price_${Date.now()}${ext}`,
     type: 'image',
     ...params,

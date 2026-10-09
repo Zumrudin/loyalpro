@@ -20,6 +20,7 @@
 const { db } = require('../db');
 const config = require('../config');
 const chatpush = require('./chatpush');
+const transport = require('./messaging/transport');
 const { normalizePhoneKey } = require('./agent-gate');
 const { ycGet } = require('./yclients');
 const { persistWhatsappOutgoing } = require('./chat-persist');
@@ -246,7 +247,7 @@ async function processTick() {
     try {
       const last = await lastIncomingChannel(row.salon_id, row.phone).catch(() => null);
       const routing = resolveRouting(row.channels, row.prefer_last_channel, last);
-      const delivery = await chatpush.sendMessage(config.CHATPUSH.instanceToken, {
+      const delivery = await transport.sendMessage(row.salon_id, {
         text: row.rendered_text,
         phone: row.phone,
         dispatchRouting: routing,
@@ -299,8 +300,8 @@ let _workerRunning = false;
 function startNotificationWorker() {
   if (_workerRunning) return;
   _workerRunning = true;
-  if (!config.CHATPUSH.instanceToken) {
-    log.warn('CHATPUSH_INSTANCE_TOKEN is not set — notification worker disabled');
+  if (!transport.configured()) {
+    log.warn('ни CHATPUSH_INSTANCE_TOKEN, ни MESSAGING_GATEWAY_URL не заданы — notification worker disabled');
     return;
   }
   setInterval(() => {

@@ -585,35 +585,44 @@ describe('журнал доставок и своя строка в «Чате»
 // delivery.id в логе — единственный способ узнать судьбу сообщения постфактум
 // (GET /api/v1/delivery/:id). Без него разбор 09.08 упёрся в стену: чужие id
 // отдают 404, а свои разрежены среди глобальной нумерации Chatpush.
-test('defaultSend пишет delivery_id в лог', async () => {
-  const chatpush = require('./services/chatpush');
-  const config = require('./config');
-  const prevToken = config.CHATPUSH.instanceToken;
-  config.CHATPUSH.instanceToken = 'tok';
-  const spy = jest.spyOn(chatpush, 'sendMessage').mockResolvedValue({ id: 376412700 });
+// Отправка идёт через services/messaging/transport по аккаунту САЛОНА:
+// defaultSend читает салон из meta.salonId (process() кладёт его сам).
+test('defaultSend пишет delivery_id в лог и шлёт через transport по салону', async () => {
+  const transport = require('./services/messaging/transport');
+  const spy = jest.spyOn(transport, 'sendMessage').mockResolvedValue({ id: 376412700 });
   try {
-    const out = await dispatcher.defaultSend(meta, 'Здравствуйте!');
+    const out = await dispatcher.defaultSend({ ...meta, salonId: 1 }, 'Здравствуйте!');
     expect(out).toEqual({ id: 376412700 });
+    expect(spy).toHaveBeenCalledWith(1, expect.objectContaining({ text: 'Здравствуйте!' }));
     expect(mockLogger.info).toHaveBeenCalledWith(expect.stringContaining('delivery=376412700'));
   } finally {
     spy.mockRestore();
-    config.CHATPUSH.instanceToken = prevToken;
+  }
+});
+
+test('defaultSend без meta.salonId → null, ERROR в лог, отправки нет', async () => {
+  const transport = require('./services/messaging/transport');
+  const spy = jest.spyOn(transport, 'sendMessage');
+  try {
+    const out = await dispatcher.defaultSend({ ...meta, salonId: undefined }, 'Здравствуйте!');
+    expect(out).toBeNull();
+    expect(spy).not.toHaveBeenCalled();
+    expect(mockLogger.error).toHaveBeenCalledWith(expect.stringContaining('salonId'));
+  } finally {
+    spy.mockRestore();
   }
 });
 
 test('defaultSend: MAX без телефона адресуется по max_user_id из chatId', async () => {
-  const chatpush = require('./services/chatpush');
-  const config = require('./config');
-  const prevToken = config.CHATPUSH.instanceToken;
-  config.CHATPUSH.instanceToken = 'tok';
-  const spy = jest.spyOn(chatpush, 'sendMessage').mockResolvedValue({ id: 55303820 });
+  const transport = require('./services/messaging/transport');
+  const spy = jest.spyOn(transport, 'sendMessage').mockResolvedValue({ id: 55303820 });
   try {
     const out = await dispatcher.defaultSend(
-      { phone: null, channel: 'max', messageId: 'm-max-1', chatId: '55303820' },
+      { salonId: 1, phone: null, channel: 'max', messageId: 'm-max-1', chatId: '55303820' },
       'Здравствуйте!'
     );
     expect(out).toEqual({ id: 55303820 });
-    expect(spy).toHaveBeenCalledWith('tok', expect.objectContaining({
+    expect(spy).toHaveBeenCalledWith(1, expect.objectContaining({
       text: 'Здравствуйте!',
       dispatchRouting: ['max'],
       max_user_id: '55303820',
@@ -622,7 +631,6 @@ test('defaultSend: MAX без телефона адресуется по max_use
     expect(spy.mock.calls[0][1]).not.toHaveProperty('phone');
   } finally {
     spy.mockRestore();
-    config.CHATPUSH.instanceToken = prevToken;
   }
 });
 
@@ -722,58 +730,47 @@ describe('фото прайса', () => {
 describe('defaultSendFile / defaultPersistOwnFile', () => {
   const ATT = { nodeKey: 'c12', category: 'Лазерная эпиляция', fileUrl: '/uploads/a.jpg', fileName: 'a.jpg', mimeType: 'image/jpeg' };
 
-  test('нет токена → null, ERROR в лог, отправки нет', async () => {
-    const chatpush = require('./services/chatpush');
-    const config = require('./config');
-    const prevToken = config.CHATPUSH.instanceToken;
-    config.CHATPUSH.instanceToken = '';
-    const sendFileSpy = jest.spyOn(chatpush, 'sendFile');
+  test('нет meta.salonId → null, ERROR в лог, отправки нет', async () => {
+    const transport = require('./services/messaging/transport');
+    const sendFileSpy = jest.spyOn(transport, 'sendFile');
     try {
-      const out = await dispatcher.defaultSendFile(meta, ATT);
+      const out = await dispatcher.defaultSendFile({ ...meta, salonId: undefined }, ATT);
       expect(out).toBeNull();
       expect(sendFileSpy).not.toHaveBeenCalled();
-      expect(mockLogger.error).toHaveBeenCalledWith(expect.stringContaining('CHATPUSH_INSTANCE_TOKEN'));
+      expect(mockLogger.error).toHaveBeenCalledWith(expect.stringContaining('salonId'));
     } finally {
       sendFileSpy.mockRestore();
-      config.CHATPUSH.instanceToken = prevToken;
     }
   });
 
   test('файла нет на диске → null, WARN в лог, отправки нет', async () => {
-    const chatpush = require('./services/chatpush');
-    const config = require('./config');
+    const transport = require('./services/messaging/transport');
     const priceListData = require('./services/agent/price-list-data');
-    const prevToken = config.CHATPUSH.instanceToken;
-    config.CHATPUSH.instanceToken = 'tok';
     const readSpy = jest.spyOn(priceListData, 'readPhotoBuffer').mockResolvedValue(null);
-    const sendFileSpy = jest.spyOn(chatpush, 'sendFile');
+    const sendFileSpy = jest.spyOn(transport, 'sendFile');
     try {
-      const out = await dispatcher.defaultSendFile(meta, ATT);
+      const out = await dispatcher.defaultSendFile({ ...meta, salonId: 1 }, ATT);
       expect(out).toBeNull();
       expect(sendFileSpy).not.toHaveBeenCalled();
       expect(mockLogger.warn).toHaveBeenCalledWith(expect.stringContaining(ATT.fileUrl));
     } finally {
       readSpy.mockRestore();
       sendFileSpy.mockRestore();
-      config.CHATPUSH.instanceToken = prevToken;
     }
   });
 
-  test('успешный путь → зовёт chatpush.sendFile с ожидаемой формой аргументов, пишет delivery=<id> в лог', async () => {
-    const chatpush = require('./services/chatpush');
-    const config = require('./config');
+  test('успешный путь → зовёт transport.sendFile по салону с ожидаемой формой аргументов, пишет delivery=<id> в лог', async () => {
+    const transport = require('./services/messaging/transport');
     const priceListData = require('./services/agent/price-list-data');
-    const prevToken = config.CHATPUSH.instanceToken;
-    config.CHATPUSH.instanceToken = 'tok';
     const buf = Buffer.from('fake-image');
     const readSpy = jest.spyOn(priceListData, 'readPhotoBuffer').mockResolvedValue(buf);
-    const sendFileSpy = jest.spyOn(chatpush, 'sendFile').mockResolvedValue({ id: 999 });
+    const sendFileSpy = jest.spyOn(transport, 'sendFile').mockResolvedValue({ id: 999 });
     try {
-      const out = await dispatcher.defaultSendFile(meta, ATT);
+      const out = await dispatcher.defaultSendFile({ ...meta, salonId: 1 }, ATT);
       expect(out).toEqual({ id: 999 });
       expect(readSpy).toHaveBeenCalledWith(ATT.fileUrl);
       expect(sendFileSpy).toHaveBeenCalledWith(
-        'tok',
+        1,
         expect.objectContaining({
           type: 'image',
           phone: meta.phone,
@@ -787,27 +784,23 @@ describe('defaultSendFile / defaultPersistOwnFile', () => {
     } finally {
       readSpy.mockRestore();
       sendFileSpy.mockRestore();
-      config.CHATPUSH.instanceToken = prevToken;
     }
   });
 
   test('MAX без телефона → файл уходит по max_user_id из chatId', async () => {
-    const chatpush = require('./services/chatpush');
-    const config = require('./config');
+    const transport = require('./services/messaging/transport');
     const priceListData = require('./services/agent/price-list-data');
-    const prevToken = config.CHATPUSH.instanceToken;
-    config.CHATPUSH.instanceToken = 'tok';
     const buf = Buffer.from('fake-image');
     const readSpy = jest.spyOn(priceListData, 'readPhotoBuffer').mockResolvedValue(buf);
-    const sendFileSpy = jest.spyOn(chatpush, 'sendFile').mockResolvedValue({ id: 1001 });
+    const sendFileSpy = jest.spyOn(transport, 'sendFile').mockResolvedValue({ id: 1001 });
     try {
       const out = await dispatcher.defaultSendFile(
-        { phone: null, channel: 'max', messageId: 'm-max-1', chatId: '55303820' },
+        { salonId: 1, phone: null, channel: 'max', messageId: 'm-max-1', chatId: '55303820' },
         ATT
       );
       expect(out).toEqual({ id: 1001 });
       expect(sendFileSpy).toHaveBeenCalledWith(
-        'tok',
+        1,
         expect.objectContaining({
           type: 'image',
           max_user_id: '55303820',
@@ -820,7 +813,6 @@ describe('defaultSendFile / defaultPersistOwnFile', () => {
     } finally {
       readSpy.mockRestore();
       sendFileSpy.mockRestore();
-      config.CHATPUSH.instanceToken = prevToken;
     }
   });
 

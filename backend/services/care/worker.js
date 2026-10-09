@@ -15,7 +15,7 @@
 
 const config = require('../../config');
 const { db: realDb } = require('../../db');
-const chatpush = require('../chatpush');
+const transport = require('../messaging/transport');
 const { persistWhatsappOutgoing } = require('../chat-persist');
 const agentSettings = require('../agent-settings');
 const { getProvider } = require('../agent/providers');
@@ -80,7 +80,7 @@ const defaultDeps = {
   createMessage: (req, opts) => getProvider().createMessage(req, opts),
   lintReply: replyGuard.lintReply,
   hardViolations: replyGuard.hardViolations,
-  sendMessage: (payload) => chatpush.sendMessage(config.CHATPUSH.instanceToken, payload),
+  sendMessage: (payload) => transport.sendMessage(payload.salonId, payload),
   lastIncomingChannel: notifications.lastIncomingChannel,
   rememberPending: async (salonId, key, text) => {
     pendingReplies.remember(salonId, key, text);
@@ -389,7 +389,7 @@ async function processOne(row, deps = defaultDeps) {
     sentMarked = true;
 
     // 2) отправка.
-    const delivery = await d.sendMessage({ text, phone: row.phone, dispatchRouting: routing });
+    const delivery = await d.sendMessage({ salonId: row.salon_id, text, phone: row.phone, dispatchRouting: routing });
     delivered = true;
     // Единственный след для разбора «ушло дважды / не ушло» — пишется до
     // любых пост-обработок.
@@ -506,8 +506,8 @@ let _running = false;
 function startCareWorker() {
   if (_running) return;
   _running = true;
-  if (!config.CHATPUSH.instanceToken) {
-    log.warn('CHATPUSH_INSTANCE_TOKEN is not set — care worker disabled');
+  if (!transport.configured()) {
+    log.warn('ни CHATPUSH_INSTANCE_TOKEN, ни MESSAGING_GATEWAY_URL не заданы — care worker disabled');
     return;
   }
   setInterval(() => { processTick().catch(e => log.error(`tick: ${e.message}`)); }, WORKER_TICK_MS);

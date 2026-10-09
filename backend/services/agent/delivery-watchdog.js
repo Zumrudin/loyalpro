@@ -197,9 +197,8 @@ async function sweep(deps = {}) {
 }
 
 async function defaultResend(row) {
-  const token = configDefault.CHATPUSH.instanceToken;
-  if (!token) throw new Error('CHATPUSH_INSTANCE_TOKEN не задан');
-  return chatpush.sendMessage(token, {
+  const transport = require('../messaging/transport');
+  return transport.sendMessage(row.salon_id, {
     text: row.text,
     phone: row.phone,
     dispatchRouting: [chatpush.replyRoutingFor(row.channel)],

@@ -21,7 +21,7 @@
 
 const config = require('../../config');
 const { db: realDb } = require('../../db');
-const chatpush = require('../chatpush');
+const transport = require('../messaging/transport');
 const { persistWhatsappOutgoing } = require('../chat-persist');
 const agentSettings = require('../agent-settings');
 const { getProviderForSalon } = require('./providers');
@@ -142,7 +142,7 @@ const defaultDeps = {
   createMessage: (req, opts) => getProviderForSalon(opts.salonId).createMessage(req, opts),
   lintReply: replyGuard.lintReply,
   hardViolations: replyGuard.hardViolations,
-  sendMessage: (payload) => chatpush.sendMessage(config.CHATPUSH.instanceToken, payload),
+  sendMessage: (payload) => transport.sendMessage(payload.salonId, payload),
   lastIncomingChannel: notifications.lastIncomingChannel,
   // Тот же путь, что у реплики диспетчера (services/agent/dispatcher.js send):
   //  • pendingReplies — иначе следующий ход Милы не увидит собственное
@@ -700,7 +700,7 @@ async function processOne(row, deps = defaultDeps) {
     captured = true;
 
     // ── 9. Отправка ────────────────────────────────────────────
-    const delivery = await d.sendMessage({ text, ...recipient });
+    const delivery = await d.sendMessage({ salonId: row.salon_id, text, ...recipient });
     delivered = true;
     // delivery.id в логе ОБЯЗАТЕЛЕН: meta.status=success означает лишь
     // «принято в очередь», и единственный способ узнать судьбу сообщения
@@ -835,8 +835,8 @@ let _running = false;
 function startFollowupWorker() {
   if (_running) return;
   _running = true;
-  if (!config.CHATPUSH.instanceToken) {
-    log.warn('CHATPUSH_INSTANCE_TOKEN is not set — followup worker disabled');
+  if (!transport.configured()) {
+    log.warn('ни CHATPUSH_INSTANCE_TOKEN, ни MESSAGING_GATEWAY_URL не заданы — followup worker disabled');
     return;
   }
   // Аварийный рычаг гасит РОВНО отправки: строки очереди пишутся всегда, иначе
