@@ -7,14 +7,25 @@
 // пишется в messenger_accounts.auth_state, чтобы фронт мог опрашивать.
 // setTdlibParameters tdl 8 шлёт САМ на authorizationStateWaitTdlibParameters
 // (проверено по node_modules/tdl/dist/client.js, _handleAuthInit) — руками не
-// дублируем.
+// дублируем. Состояние до шага захватываем ДО invoke: TDLib присылает новое
+// updateAuthorizationState раньше ответа «ok», иначе каждый шаг ждал бы 8 с.
 // Входящие и исходящие (в т.ч. набранные администратором в телефоне) идут
 // в бэкенд вебхуком в форме Chatpush (lib/mapper). Наши собственные отправки
 // получают delivery_id: эхо для них берём из updateMessageSendSucceeded, а
 // updateNewMessage с sending_state (ещё не отправлено) пропускаем — иначе
-// одно сообщение легло бы в «Чат» дважды.
+// одно сообщение легло бы в «Чат» дважды. Временный id сообщения пишется и
+// в gateway_deliveries.tdlib_temp_id: после рестарта шлюза TDLib досылает
+// отправленное, и позднее updateMessageSendSucceeded находит доставку по БД.
+// Порядок: события одного чата обрабатываются ПОСЛЕДОВАТЕЛЬНО (цепочка
+// промисов на chat_id) — иначе текст, пришедший сразу за фото, обгонял бы
+// его в транскрипте, пока фото качается.
 // Сообщения старше MAX_MESSAGE_AGE_S (6 ч) в бэкенд НЕ идут: после долгого
 // простоя шлюза TDLib отдаёт накопившееся, и Мила отвечала бы на вчерашнее.
+// Каналы (chatTypeSupergroup.is_channel) и секретные чаты не форвардим.
+// Медиа: расширение файла — ТОЛЬКО из белого списка по MIME (имя файла задаёт
+// собеседник, а каталог отдаётся статикой в origin админки — .html/.svg были
+// бы stored XSS), кап MAX_MEDIA_BYTES, в группах медиа не качаем, после
+// копирования файл удаляется из кэша TDLib.
 // Зависимости инжектятся (deps) — автомат и отправка покрыты тестами без TDLib.
 // ============================================================
 const fs = require('fs');
@@ -24,7 +35,24 @@ const mapper = require('./mapper');
 const { createLogger } = require('../logger');
 
 const MAX_MESSAGE_AGE_S = 6 * 60 * 60;
+const MAX_MEDIA_BYTES = 20 * 1024 * 1024;
 const AUTH_STEP_WAIT_MS = 8000;
+
+// Расширение по MIME: ничего из имени файла собеседника. Неизвестный тип → .bin.
+const EXT_BY_MIME = {
+  'image/jpeg': '.jpg', 'image/png': '.png', 'image/webp': '.webp', 'image/gif': '.gif',
+  'application/pdf': '.pdf',
+  'audio/ogg': '.ogg', 'audio/mpeg': '.mp3', 'audio/mp4': '.m4a', 'audio/x-m4a': '.m4a',
+  'video/mp4': '.mp4', 'video/quicktime': '.mov',
+  'application/msword': '.doc',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document': '.docx',
+  'application/vnd.ms-excel': '.xls',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': '.xlsx',
+  'text/plain': '.txt',
+};
+function safeExt(mimeType) {
+  return EXT_BY_MIME[String(mimeType || '').toLowerCase().split(';')[0].trim()] || '.bin';
+}
 
 const AUTH_MAP = {
   authorizationStateWaitTdlibParameters: 'starting',
@@ -61,6 +89,15 @@ function defaultDeps() {
   };
 }
 
+// Ошибка TDLib → HTTP-статус для публичного API: FLOOD_WAIT — 429 (повторять
+// позже, не долбить), остальное про получателя/номер — 422.
+function tdlibError(prefix, e) {
+  const msg = (e && e.message) || String(e);
+  const err = new Error(`${prefix}: ${msg}`);
+  err.status = /FLOOD_WAIT|Too Many Requests/i.test(msg) ? 429 : 422;
+  return err;
+}
+
 class TelegramClient {
   constructor(account, deps = {}) {
     this.d = { ...defaultDeps(), ...deps };
@@ -72,6 +109,7 @@ class TelegramClient {
     this.ownPhone = mapper.normalizePhone(account.phone);
     this.me = null;
     this.pendingSends = new Map();   // временный id сообщения TDLib → id доставки
+    this.chatQueues = new Map();     // chat_id → хвост цепочки обработки
     this.client = null;
     this.closed = false;
   }
@@ -112,14 +150,19 @@ class TelegramClient {
 
   async onAuthState(st) {
     const mapped = AUTH_MAP[st._] || 'error';
-    this.authState = mapped;
     this.log.info(`auth: ${st._}`);
-    if (st._ === 'authorizationStateWaitTdlibParameters') return;   // tdl отправит параметры сам
+    if (st._ === 'authorizationStateWaitTdlibParameters') { this.authState = mapped; return; }   // tdl отправит параметры сам
     if (st._ === 'authorizationStateReady') {
-      this.me = await this.client.invoke({ _: 'getMe' });
-      this.ownPhone = mapper.normalizePhone(this.me.phone_number) || this.ownPhone;
-      await this.d.repo.setAuth(this.id, 'ready', { error: null, phone: this.ownPhone, displayName: mapper.fullName(this.me) });
-      this.log.info(`готов: ${this.ownPhone} (${mapper.fullName(this.me)})`);
+      try {
+        this.me = await this.client.invoke({ _: 'getMe' });
+        this.ownPhone = mapper.normalizePhone(this.me.phone_number) || this.ownPhone;
+      } catch (e) {
+        this.log.error(`getMe не удался (${e.message}) — работаем без своего номера`);
+      }
+      await this.d.repo.setAuth(this.id, 'ready', { error: null, phone: this.ownPhone, displayName: this.me ? mapper.fullName(this.me) : null });
+      this.authState = 'ready';   // отправки разрешаем только после записи состояния в БД
+      this.lastAuthError = null;
+      this.log.info(`готов: ${this.ownPhone || '?'} (${this.me ? mapper.fullName(this.me) : '?'})`);
       // Доставки, повисшие в «Принято» с прошлого запуска, — их исход уже не узнать.
       try {
         const n = await this.d.deliveries.failStale(this.id);
@@ -127,16 +170,24 @@ class TelegramClient {
       } catch (e) { this.log.warn(`failStale: ${e.message}`); }
       return;
     }
+    this.authState = mapped;
     if (st._ === 'authorizationStateClosed') this.closed = true;
-    await this.d.repo.setAuth(this.id, mapped);
+    // Неподдерживаемые состояния (e-mail, регистрация, подтверждение с другого
+    // устройства) — в auth_error, чтобы администратор видел, что произошло.
+    const error = mapped === 'error' ? `неподдерживаемое состояние ${st._}` : null;
+    if (error) this.lastAuthError = error;
+    if (error) await this.d.repo.setAuth(this.id, mapped, { error });
+    else await this.d.repo.setAuth(this.id, mapped);
   }
 
   // Шаг авторизации из админки. Ошибка TDLib (неверный код/пароль) → в auth_error и в ответ.
   async authStep(step) {
     const s = step || {};
+    const prev = this.authState;   // ДО invoke: новое состояние приходит раньше ответа
     try {
       if (s.phone) {
-        await this.client.invoke({ _: 'setAuthenticationPhoneNumber', phone_number: '+' + String(s.phone).replace(/^\+/, '') });
+        const p = mapper.normalizePhone(s.phone) || String(s.phone).replace(/\D/g, '');
+        await this.client.invoke({ _: 'setAuthenticationPhoneNumber', phone_number: '+' + p });
       } else if (s.code) {
         await this.client.invoke({ _: 'checkAuthenticationCode', code: s.code });
       } else if (s.password) {
@@ -144,7 +195,7 @@ class TelegramClient {
       } else {
         return { authState: this.authState, error: 'пустой шаг' };
       }
-      await this.waitStateChange(this.authState, AUTH_STEP_WAIT_MS);
+      await this.waitStateChange(prev, AUTH_STEP_WAIT_MS);
       this.lastAuthError = null;
       await this.d.repo.setAuth(this.id, this.authState, { error: null });
       return { authState: this.authState, error: null };
@@ -156,12 +207,13 @@ class TelegramClient {
     }
   }
 
-  // TDLib отвечает на шаг до прихода нового состояния — дождёмся его (или таймаута).
+  // Ждём смены состояния относительно prev (или таймаута). Часы — реальные:
+  // инжектируемый now() в тестах может стоять на месте.
   waitStateChange(prev, ms) {
     return new Promise((resolve) => {
-      const t0 = this.d.now();
+      const t0 = Date.now();
       const tick = () => {
-        if (this.authState !== prev || this.d.now() - t0 > ms) return resolve();
+        if (this.authState !== prev || Date.now() - t0 > ms) return resolve();
         setTimeout(tick, 100);
       };
       tick();
@@ -172,6 +224,14 @@ class TelegramClient {
     return { authState: this.authState, phone: this.ownPhone, displayName: this.me ? mapper.fullName(this.me) : null, error: this.lastAuthError };
   }
 
+  // События одного чата — строго по очереди.
+  enqueueChat(chatId, fn) {
+    const prev = this.chatQueues.get(chatId) || Promise.resolve();
+    const next = prev.then(fn, fn);
+    this.chatQueues.set(chatId, next.catch(() => {}));
+    return next;
+  }
+
   // ── Входящие/эхо ─────────────────────────────────────────────
   async onNewMessage(message) {
     if (this.authState !== 'ready') return;
@@ -180,69 +240,88 @@ class TelegramClient {
       this.log.warn(`пропущено сообщение ${message.chat_id}:${message.id} старше ${MAX_MESSAGE_AGE_S / 3600} ч (date=${message.date})`);
       return;
     }
-    await this.emitMessage(message, null);
+    return this.enqueueChat(message.chat_id, () => this.emitMessage(message, null));
+  }
+
+  async deliveryFor(oldMessageId) {
+    let deliveryId = this.pendingSends.get(oldMessageId) || null;
+    this.pendingSends.delete(oldMessageId);
+    if (!deliveryId) {
+      // Рестарт между отправкой и подтверждением: связка только в БД.
+      try { deliveryId = await this.d.deliveries.findByTempId(this.id, oldMessageId); }
+      catch (e) { this.log.warn(`findByTempId(${oldMessageId}): ${e.message}`); }
+    }
+    return deliveryId;
   }
 
   async onSendSucceeded({ message, old_message_id }) {
-    const deliveryId = this.pendingSends.get(old_message_id) || null;
-    this.pendingSends.delete(old_message_id);
+    const deliveryId = await this.deliveryFor(old_message_id);
     if (deliveryId) await this.d.deliveries.setStatus(deliveryId, this.d.deliveries.STATUS.SENT, { tdlibMessageId: message.id });
-    await this.emitMessage(message, deliveryId ? `g${deliveryId}` : null);
+    else this.log.warn(`SendSucceeded без доставки (temp id ${old_message_id}) — эхо уйдёт без delivery_id`);
+    return this.enqueueChat(message.chat_id, () => this.emitMessage(message, deliveryId ? `g${deliveryId}` : null));
   }
 
   async onSendFailed({ old_message_id, error }) {
-    const deliveryId = this.pendingSends.get(old_message_id) || null;
-    this.pendingSends.delete(old_message_id);
+    const deliveryId = await this.deliveryFor(old_message_id);
     const text = error ? `${error.code} ${error.message}` : 'send failed';
     this.log.warn(`отправка не удалась (delivery g${deliveryId || '?'}): ${text}`);
     if (deliveryId) await this.d.deliveries.setStatus(deliveryId, this.d.deliveries.STATUS.FAILED, { error: text });
   }
 
   async emitMessage(message, deliveryId) {
-    const chat = await this.client.invoke({ _: 'getChat', chat_id: message.chat_id });
+    const tag = `${message.chat_id}:${message.id}`;
+    let chat;
+    try { chat = await this.client.invoke({ _: 'getChat', chat_id: message.chat_id }); }
+    catch (e) { this.log.error(`getChat ${tag}: ${e.message} — сообщение потеряно`); return; }
+    if (mapper.isChannel(chat)) return;        // посты каналов — не переписка
+    const group = mapper.isGroupChat(chat);
     let peer = null;
-    if (mapper.isGroupChat(chat)) {
+    if (group) {
       const uid = message.sender_id && message.sender_id._ === 'messageSenderUser' ? message.sender_id.user_id : null;
       peer = uid ? await this.client.invoke({ _: 'getUser', user_id: uid }).catch(() => null) : null;
     } else if (chat.type && chat.type._ === 'chatTypePrivate') {
-      peer = await this.client.invoke({ _: 'getUser', user_id: chat.type.user_id });
+      peer = await this.client.invoke({ _: 'getUser', user_id: chat.type.user_id })
+        .catch(e => { this.log.warn(`getUser ${tag}: ${e.message} — без номера и имени`); return null; });
     } else {
       return; // секретные чаты и прочее не поддерживаем
     }
     const content = mapper.contentOf(message.content);
     let fileUrl = null;
-    if (content.file) {
+    if (content.file && !group) {
       try { fileUrl = await this.downloadToPublic(content.file); }
-      catch (e) { this.log.warn(`медиа ${message.chat_id}:${message.id} не скачано (${e.message})`); }
+      catch (e) { this.log.warn(`медиа ${tag} не скачано (${e.message})`); }
     }
     const body = mapper.buildWebhookBody({ accountId: this.id, ownPhone: this.ownPhone, message, chat, peer, deliveryId, fileUrl });
     await this.d.webhook.sendSafe(body);
   }
 
-  // Скачать файл TDLib и положить в публичный каталог под случайным именем.
+  // Скачать файл TDLib и положить в публичный каталог под случайным именем с
+  // расширением из белого списка по MIME. Кэш TDLib чистим сразу.
   async downloadToPublic(file) {
+    if (file.size && file.size > MAX_MEDIA_BYTES) throw new Error(`файл ${file.size} байт больше лимита ${MAX_MEDIA_BYTES}`);
     const f = await this.client.invoke({ _: 'downloadFile', file_id: file.id, priority: 1, offset: 0, limit: 0, synchronous: true });
     const src = f && f.local && f.local.path;
     if (!src || !fs.existsSync(src)) throw new Error('файл не скачан');
-    const byMime = { 'image/jpeg': '.jpg', 'audio/ogg': '.ogg', 'video/mp4': '.mp4', 'application/pdf': '.pdf' };
-    const ext = (file.fileName && path.extname(file.fileName)) || byMime[file.mimeType] || path.extname(src) || '';
     const dir = path.join(this.d.config.PUBLIC_FILES_DIR, String(this.id));
     fs.mkdirSync(dir, { recursive: true });
-    const name = `${Date.now()}_${crypto.randomBytes(8).toString('hex')}${ext}`;
+    const name = `${Date.now()}_${crypto.randomBytes(8).toString('hex')}${safeExt(file.mimeType)}`;
     fs.copyFileSync(src, path.join(dir, name));
+    this.client.invoke({ _: 'deleteFile', file_id: file.id }).catch(() => {});
     return `${this.d.config.PUBLIC_FILES_URL}/${this.id}/${name}`;
   }
 
   // ── Получатель ───────────────────────────────────────────────
   // chat_id = user_id для лички (TDLib). По номеру: кэш gateway_contacts →
-  // searchUserByPhoneNumber → importContacts (добавляет в контакты аккаунта —
-  // так же делает Chatpush). 0 в user_ids = номера нет в Telegram.
+  // searchUserByPhoneNumber → importContacts (добавляет контакт «Клиент» в
+  // адресную книгу аккаунта клиники — так же делает Chatpush; побочный эффект
+  // осознанный). 0 в user_ids = номера нет в Telegram. FLOOD_WAIT на поиске
+  // не маскируем importContacts'ом — отдаём 429 сразу.
   async resolveChatId({ tdlibUserId, phone }) {
     if (tdlibUserId) {
       const id = Number(tdlibUserId);
       if (!Number.isFinite(id) || id === 0) throw Object.assign(new Error(`некорректный tdlib_user_id ${tdlibUserId}`), { status: 422 });
-      if (id < 0) return id;                     // группа: chat_id как есть
-      const chat = await this.client.invoke({ _: 'createPrivateChat', user_id: id, force: false });
+      if (id < 0) return id;                     // группа: chat_id как есть, существование проверит sendMessage
+      const chat = await this.client.invoke({ _: 'createPrivateChat', user_id: id, force: false }).catch(e => { throw tdlibError('createPrivateChat', e); });
       return chat.id;
     }
     const p = mapper.normalizePhone(phone);
@@ -252,16 +331,20 @@ class TelegramClient {
       try {
         const u = await this.client.invoke({ _: 'searchUserByPhoneNumber', phone_number: '+' + p });
         userId = u && u.id;
-      } catch (_) { userId = null; }
+      } catch (e) {
+        if (/FLOOD_WAIT/i.test(e && e.message)) throw tdlibError('searchUserByPhoneNumber', e);
+        userId = null;
+      }
     }
     if (!userId) {
       // TDLib 1.8.67: contacts — importedContact (без user_id); ответ importedContacts.user_ids, 0 = номера нет в Telegram.
-      const r = await this.client.invoke({ _: 'importContacts', contacts: [{ _: 'importedContact', phone_number: '+' + p, first_name: 'Клиент', last_name: '' }] });
+      const r = await this.client.invoke({ _: 'importContacts', contacts: [{ _: 'importedContact', phone_number: '+' + p, first_name: 'Клиент', last_name: '' }] })
+        .catch(e => { throw tdlibError('importContacts', e); });
       userId = r && r.user_ids && r.user_ids[0];
     }
     if (!userId) throw Object.assign(new Error(`номер ${p} не найден в Telegram`), { status: 422 });
     await this.d.repo.rememberContact(this.id, p, userId);
-    const chat = await this.client.invoke({ _: 'createPrivateChat', user_id: userId, force: false });
+    const chat = await this.client.invoke({ _: 'createPrivateChat', user_id: userId, force: false }).catch(e => { throw tdlibError('createPrivateChat', e); });
     return chat.id;
   }
 
@@ -301,19 +384,25 @@ class TelegramClient {
   }
 
   async invokeSend(req, deliveryId) {
+    let msg;
     try {
-      const msg = await this.client.invoke(req);
-      this.pendingSends.set(msg.id, deliveryId);
+      msg = await this.client.invoke(req);
     } catch (e) {
-      await this.d.deliveries.setStatus(deliveryId, this.d.deliveries.STATUS.FAILED, { error: e.message });
-      throw Object.assign(new Error(`TDLib: ${e.message}`), { status: 422 });
+      const err = tdlibError('TDLib', e);
+      try { await this.d.deliveries.setStatus(deliveryId, this.d.deliveries.STATUS.FAILED, { error: e.message }); }
+      catch (e2) { this.log.error(`delivery g${deliveryId}: статус FAILED не записан (${e2.message})`); }
+      throw err;
     }
+    this.pendingSends.set(msg.id, deliveryId);
+    try { await this.d.deliveries.setTempId(deliveryId, msg.id); }
+    catch (e) { this.log.warn(`delivery g${deliveryId}: temp id не записан (${e.message})`); }
   }
 
   async logout() {
     try { await this.client.invoke({ _: 'logOut' }); } catch (_) { /* уже разлогинен */ }
     try { await this.client.close(); } catch (_) { /* уже закрыт */ }
     this.closed = true;
+    this.pendingSends.clear();
     fs.rmSync(this.dirs().base, { recursive: true, force: true });
     await this.d.repo.setAuth(this.id, 'logged_out');
   }
@@ -321,7 +410,8 @@ class TelegramClient {
   async close() {
     try { await this.client.close(); } catch (_) { /* уже закрыт */ }
     this.closed = true;
+    this.pendingSends.clear();
   }
 }
 
-module.exports = { TelegramClient, AUTH_MAP, MAX_MESSAGE_AGE_S };
+module.exports = { TelegramClient, AUTH_MAP, MAX_MESSAGE_AGE_S, MAX_MEDIA_BYTES, safeExt, EXT_BY_MIME };

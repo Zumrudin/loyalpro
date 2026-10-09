@@ -29,12 +29,12 @@ test('contentOf: фото → самый большой размер, подпи
   const c = m.contentOf({ _: 'messagePhoto', caption: { text: 'подпись' },
     photo: { sizes: [{ type: 's', width: 100, photo: { id: 1 } }, { type: 'y', width: 800, photo: { id: 2 } }] } });
   assert.equal(c.type, 'image'); assert.equal(c.text, 'подпись');
-  assert.deepEqual(c.file, { id: 2, mimeType: 'image/jpeg', fileName: null });
+  assert.deepEqual(c.file, { id: 2, mimeType: 'image/jpeg', fileName: null, size: 0 });
 });
 
 test('contentOf: документ и голосовое', () => {
   const d = m.contentOf({ _: 'messageDocument', caption: { text: '' }, document: { file_name: 'a.pdf', mime_type: 'application/pdf', document: { id: 5 } } });
-  assert.deepEqual(d, { type: 'document', text: '', file: { id: 5, mimeType: 'application/pdf', fileName: 'a.pdf' } });
+  assert.deepEqual(d, { type: 'document', text: '', file: { id: 5, mimeType: 'application/pdf', fileName: 'a.pdf', size: 0 } });
   const v = m.contentOf({ _: 'messageVoiceNote', voice_note: { mime_type: 'audio/ogg', voice: { id: 6 } } });
   assert.equal(v.type, 'voice'); assert.equal(v.file.id, 6);
 });
@@ -129,13 +129,13 @@ test('normalizePhone: международные номера не получа�
 
 test('contentOf: video / videoNote / audio / animation / sticker', () => {
   assert.deepEqual(m.contentOf({ _: 'messageVideo', caption: { text: 'в' }, video: { mime_type: 'video/mp4', file_name: 'v.mp4', video: { id: 1 } } }),
-    { type: 'video', text: 'в', file: { id: 1, mimeType: 'video/mp4', fileName: 'v.mp4' } });
+    { type: 'video', text: 'в', file: { id: 1, mimeType: 'video/mp4', fileName: 'v.mp4', size: 0 } });
   assert.deepEqual(m.contentOf({ _: 'messageVideoNote', video_note: { video: { id: 2 } } }),
-    { type: 'video', text: '', file: { id: 2, mimeType: 'video/mp4', fileName: null } });
+    { type: 'video', text: '', file: { id: 2, mimeType: 'video/mp4', fileName: null, size: 0 } });
   assert.deepEqual(m.contentOf({ _: 'messageAudio', caption: { text: 'а' }, audio: { file_name: 'a.mp3', audio: { id: 3 } } }),
-    { type: 'audio', text: 'а', file: { id: 3, mimeType: 'audio/mpeg', fileName: 'a.mp3' } });
+    { type: 'audio', text: 'а', file: { id: 3, mimeType: 'audio/mpeg', fileName: 'a.mp3', size: 0 } });
   assert.deepEqual(m.contentOf({ _: 'messageAnimation', caption: { text: '' }, animation: { animation: { id: 4 } } }),
-    { type: 'video', text: '', file: { id: 4, mimeType: 'video/mp4', fileName: null } });
+    { type: 'video', text: '', file: { id: 4, mimeType: 'video/mp4', fileName: null, size: 0 } });
   assert.deepEqual(m.contentOf({ _: 'messageSticker' }), { type: 'sticker', text: '', file: null });
   assert.deepEqual(m.contentOf({ _: 'messageContact' }), { type: 'contact', text: '', file: null });
   assert.deepEqual(m.contentOf({}), { type: 'unsupported', text: '', file: null });
@@ -179,4 +179,15 @@ test('buildWebhookBody: исходящее в группе → recipient пус�
   assert.equal(body.payload.recipient_phone_number, null);
   assert.equal(body.payload.recipient_username, null);
   assert.equal(body.payload.sender_phone_number, '79250177778');
+});
+
+test('contentOf: size из size/expected_size файла TDLib', () => {
+  const c = m.contentOf({ _: 'messageDocument', caption: { text: '' }, document: { mime_type: 'application/pdf', document: { id: 5, size: 0, expected_size: 777 } } });
+  assert.equal(c.file.size, 777);
+  assert.equal(m.contentOf({ _: 'messageDocument', document: { document: { id: 6, size: 42 } } }).file.size, 42);
+});
+test('isChannel: супергруппа с is_channel — канал, без — нет', () => {
+  assert.equal(m.isChannel({ type: { _: 'chatTypeSupergroup', is_channel: true } }), true);
+  assert.equal(m.isChannel({ type: { _: 'chatTypeSupergroup', is_channel: false } }), false);
+  assert.equal(m.isChannel({ type: { _: 'chatTypePrivate' } }), false);
 });

@@ -56,3 +56,15 @@ test('failStale: гасит «Принято» старше N минут у ак
   assert.match(calls[0][0], /WHERE account_id=\$1 AND status_id=\$5 AND created_at < NOW\(\)/);
   assert.deepEqual(calls[0][1], [7, 5, 'Невозможно доставить', 'шлюз перезапущен, исход неизвестен', 1, '10']);
 });
+
+test('setTempId / findByTempId: связка временного id TDLib с доставкой (только «Принято»)', async () => {
+  const calls = [];
+  const db = { oneOrNone: async (sql, p) => { calls.push([sql, p]); return p[1] === 99001 ? { id: 12 } : null; }, query: async (sql, p) => { calls.push([sql, p]); return { rowCount: 1 }; } };
+  const d = makeDeliveries(db);
+  await d.setTempId(12, 99001);
+  assert.match(calls[0][0], /SET tdlib_temp_id=\$2/); assert.deepEqual(calls[0][1], [12, 99001]);
+  assert.equal(await d.findByTempId(7, 99001), 12);
+  assert.match(calls[1][0], /WHERE account_id=\$1 AND tdlib_temp_id=\$2 AND status_id=\$3/);
+  assert.deepEqual(calls[1][1], [7, 99001, 1]);
+  assert.equal(await d.findByTempId(7, 5), null);
+});

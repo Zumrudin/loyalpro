@@ -25,6 +25,9 @@ function parseCompositeId(s) {
   return mm ? { chatId: Number(mm[1]), messageId: Number(mm[2]) } : null;
 }
 
+// Размер файла TDLib: size точный, expected_size — оценка до скачивания.
+function fileSize(f) { return Number((f && (f.size || f.expected_size)) || 0); }
+
 function largestPhoto(photo) {
   const sizes = (photo && photo.sizes) || [];
   let best = null;
@@ -42,35 +45,35 @@ function contentOf(content) {
       return { type: 'formattedText', text: (c.text && c.text.text) || '', file: null };
     case 'messagePhoto': {
       const f = largestPhoto(c.photo);
-      return { type: 'image', text: (c.caption && c.caption.text) || '', file: f ? { id: f.id, mimeType: 'image/jpeg', fileName: null } : null };
+      return { type: 'image', text: (c.caption && c.caption.text) || '', file: f ? { id: f.id, mimeType: 'image/jpeg', fileName: null, size: fileSize(f) } : null };
     }
     case 'messageDocument': {
       const d = c.document || {};
       return { type: 'document', text: (c.caption && c.caption.text) || '',
-        file: d.document ? { id: d.document.id, mimeType: d.mime_type || 'application/octet-stream', fileName: d.file_name || null } : null };
+        file: d.document ? { id: d.document.id, mimeType: d.mime_type || 'application/octet-stream', fileName: d.file_name || null, size: fileSize(d.document) } : null };
     }
     case 'messageVoiceNote': {
       const v = c.voice_note || {};
-      return { type: 'voice', text: (c.caption && c.caption.text) || '', file: v.voice ? { id: v.voice.id, mimeType: v.mime_type || 'audio/ogg', fileName: null } : null };
+      return { type: 'voice', text: (c.caption && c.caption.text) || '', file: v.voice ? { id: v.voice.id, mimeType: v.mime_type || 'audio/ogg', fileName: null, size: fileSize(v.voice) } : null };
     }
     case 'messageVideo': {
       const v = c.video || {};
       return { type: 'video', text: (c.caption && c.caption.text) || '',
-        file: v.video ? { id: v.video.id, mimeType: v.mime_type || 'video/mp4', fileName: v.file_name || null } : null };
+        file: v.video ? { id: v.video.id, mimeType: v.mime_type || 'video/mp4', fileName: v.file_name || null, size: fileSize(v.video) } : null };
     }
     case 'messageVideoNote': {
       const v = c.video_note || {};
-      return { type: 'video', text: '', file: v.video ? { id: v.video.id, mimeType: 'video/mp4', fileName: null } : null };
+      return { type: 'video', text: '', file: v.video ? { id: v.video.id, mimeType: 'video/mp4', fileName: null, size: fileSize(v.video) } : null };
     }
     case 'messageAudio': {
       const a = c.audio || {};
       return { type: 'audio', text: (c.caption && c.caption.text) || '',
-        file: a.audio ? { id: a.audio.id, mimeType: a.mime_type || 'audio/mpeg', fileName: a.file_name || null } : null };
+        file: a.audio ? { id: a.audio.id, mimeType: a.mime_type || 'audio/mpeg', fileName: a.file_name || null, size: fileSize(a.audio) } : null };
     }
     case 'messageAnimation': {
       const a = c.animation || {};
       return { type: 'video', text: (c.caption && c.caption.text) || '',
-        file: a.animation ? { id: a.animation.id, mimeType: a.mime_type || 'video/mp4', fileName: a.file_name || null } : null };
+        file: a.animation ? { id: a.animation.id, mimeType: a.mime_type || 'video/mp4', fileName: a.file_name || null, size: fileSize(a.animation) } : null };
     }
     default: {
       // Прочее (стикер, контакт, геопозиция…): тип = имя TDLib без префикса
@@ -84,6 +87,12 @@ function contentOf(content) {
 function isGroupChat(chat) {
   const t = chat && chat.type && chat.type._;
   return t === 'chatTypeBasicGroup' || t === 'chatTypeSupergroup';
+}
+
+// Канал Telegram — тоже chatTypeSupergroup, но с is_channel: посты каналов, на
+// которые подписан аккаунт клиники, в бэкенд не идут (это не переписка).
+function isChannel(chat) {
+  return !!(chat && chat.type && chat.type._ === 'chatTypeSupergroup' && chat.type.is_channel);
 }
 
 function fullName(user) {
@@ -143,4 +152,4 @@ function deliveryStatus(row) {
   return { id: `g${row.id}`, status: { status_id: Number(row.status_id), description: row.description }, error: row.error || null };
 }
 
-module.exports = { normalizePhone, compositeId, parseCompositeId, contentOf, buildWebhookBody, deliveryStatus, isGroupChat, fullName };
+module.exports = { normalizePhone, compositeId, parseCompositeId, contentOf, buildWebhookBody, deliveryStatus, isGroupChat, isChannel, fullName };

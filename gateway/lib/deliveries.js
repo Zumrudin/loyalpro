@@ -42,7 +42,21 @@ function makeDeliveries(db) {
     return r && r.rowCount != null ? r.rowCount : 0;
   }
 
-  return { create, setStatus, get, failStale };
+  // Временный id сообщения TDLib (ответ sendMessage) → в строку доставки: после
+  // рестарта шлюза in-memory связка теряется, а updateMessageSendSucceeded по
+  // досланному сообщению приходит с этим id — доставка находится по колонке.
+  async function setTempId(id, tempId) {
+    await db.query(`UPDATE gateway_deliveries SET tdlib_temp_id=$2, updated_at=NOW() WHERE id=$1`, [id, tempId]);
+  }
+
+  async function findByTempId(accountId, tempId) {
+    const r = await db.oneOrNone(
+      `SELECT id FROM gateway_deliveries WHERE account_id=$1 AND tdlib_temp_id=$2 AND status_id=$3 ORDER BY id DESC LIMIT 1`,
+      [accountId, tempId, STATUS.ACCEPTED[0]]);
+    return r ? Number(r.id) : null;
+  }
+
+  return { create, setStatus, get, failStale, setTempId, findByTempId };
 }
 
 function parseId(s) {
@@ -63,4 +77,6 @@ module.exports = {
   setStatus: (...a) => getDefault().setStatus(...a),
   get: (...a) => getDefault().get(...a),
   failStale: (...a) => getDefault().failStale(...a),
+  setTempId: (...a) => getDefault().setTempId(...a),
+  findByTempId: (...a) => getDefault().findByTempId(...a),
 };

@@ -1553,6 +1553,11 @@ async function runMigrations(client) {
     CREATE INDEX IF NOT EXISTS gateway_deliveries_pending_idx
       ON gateway_deliveries (id) WHERE status_id = 1
   `).catch(() => {});
+  // Временный id сообщения TDLib (ответ sendMessage): после рестарта шлюза
+  // in-memory связка «временный id → доставка» теряется, а
+  // updateMessageSendSucceeded по дослан­ному после рестарта сообщению приходит
+  // с этим id — доставка закрывается по колонке.
+  await client.query(`ALTER TABLE gateway_deliveries ADD COLUMN IF NOT EXISTS tdlib_temp_id BIGINT`).catch(() => {});
   // Подтверждение ищется по delivery_id в СЫРЫХ событиях: и статус доставки
   // (message_status), и эхо кладут его в payload.payload.delivery_id. Фильтровать
   // такой поиск по salon_id НЕЛЬЗЯ — у message_status salon_id всегда NULL

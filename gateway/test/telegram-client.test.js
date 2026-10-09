@@ -218,3 +218,127 @@ test('logout: logOut + close, каталог данных удалён, auth_sta
   assert.deepEqual(repoCalls.at(-1), ['setAuth', 42, 'logged_out']);
   assert.equal(tg.closed, true);
 });
+
+// ── Правки по ревью качества (2026-10-09) ────────────────────────────────
+
+test('safeExt: расширение только из белого списка по MIME, неизвестное → .bin', () => {
+  const { safeExt } = require('../lib/telegram-client');
+  assert.equal(safeExt('image/jpeg'), '.jpg');
+  assert.equal(safeExt('application/pdf; charset=binary'), '.pdf');
+  assert.equal(safeExt('text/html'), '.bin');
+  assert.equal(safeExt('image/svg+xml'), '.bin');
+  assert.equal(safeExt(undefined), '.bin');
+});
+
+test('медиа: скачано, скопировано под случайным именем с .jpg (имя файла x.html игнорируется), кэш TDLib очищен; слишком большое — без file_data', async () => {
+  const { tmp, tg, client, hooks } = (() => {
+    const base = fs.mkdtempSync(path.join(os.tmpdir(), 'gw-media-'));
+    const src = path.join(base, 'src.bin'); fs.writeFileSync(src, 'IMG');
+    const s = setup({
+      getMe: ME,
+      getChat: { id: 5, type: { _: 'chatTypePrivate', user_id: 5 } },
+      getUser: { id: 5, phone_number: '79001112233', first_name: 'Иван' },
+      downloadFile: { local: { path: src } },
+      deleteFile: {},
+    });
+    return { ...s, tmp: base };
+  })();
+  await tg.start(); await client.emit(ready);
+  const photoMsg = (extra) => ({ _: 'updateNewMessage', message: { id: 8, chat_id: 5, is_outgoing: false, date: 1_700_000_000,
+    content: { _: 'messageDocument', caption: { text: '' }, document: { file_name: 'x.html', mime_type: 'image/jpeg', document: { id: 77, size: extra.size } } } } });
+  await client.emit(photoMsg({ size: 1000 }));
+  const fd = hooks.at(-1).payload.message.file_data;
+  assert.ok(fd, 'file_data есть');
+  assert.match(fd.download_url, /^\/uploads\/gateway\/42\/\d+_[0-9a-f]{16}\.jpg$/);
+  const pub = path.join(tg.d.config.PUBLIC_FILES_DIR, '42');
+  assert.equal(fs.readdirSync(pub).length, 1);
+  assert.ok(client.calls.some(c => c._ === 'deleteFile' && c.file_id === 77), 'кэш TDLib очищен');
+
+  await client.emit(photoMsg({ size: 999_999_999 }));
+  assert.equal(hooks.at(-1).payload.message.file_data, undefined, 'большой файл — без file_data');
+  assert.equal(client.calls.filter(c => c._ === 'downloadFile').length, 1, 'большой файл не качали');
+  fs.rmSync(tmp, { recursive: true, force: true });
+});
+
+test('группа: входящее с номером участника, медиа в группе не качаем; канал пропускаем', async () => {
+  const { tg, client, hooks } = setup({
+    getMe: ME,
+    getChat: (req) => (req.chat_id === -100555
+      ? { id: -100555, type: { _: 'chatTypeSupergroup', supergroup_id: 555, is_channel: false } }
+      : { id: -100777, type: { _: 'chatTypeSupergroup', supergroup_id: 777, is_channel: true } }),
+    getUser: { id: 9, phone_number: '79001112233', first_name: 'Участник' },
+  });
+  await tg.start(); await client.emit(ready);
+  await client.emit({ _: 'updateNewMessage', message: { id: 1, chat_id: -100555, is_outgoing: false, date: 1_700_000_000, sender_id: { _: 'messageSenderUser', user_id: 9 },
+    content: { _: 'messagePhoto', caption: { text: 'фото' }, photo: { sizes: [{ width: 10, photo: { id: 3, size: 10 } }] } } } });
+  const p = hooks.at(-1).payload;
+  assert.equal(p.chat_type, 'group'); assert.equal(p.sender_phone_number, '79001112233');
+  assert.equal(p.message.file_data, undefined); assert.equal(client.calls.some(c => c._ === 'downloadFile'), false);
+  await client.emit({ _: 'updateNewMessage', message: { id: 2, chat_id: -100777, is_outgoing: false, date: 1_700_000_000, content: { _: 'messageText', text: { text: 'пост' } } } });
+  assert.equal(hooks.length, 1, 'канал не форвардим');
+});
+
+test('администратор написал с телефона: outgoing без sending_state → эхо БЕЗ delivery_id (пауза бота на бэкенде)', async () => {
+  const { tg, client, hooks } = setup({ getMe: ME, getChat: { id: 777, type: { _: 'chatTypePrivate', user_id: 777 } }, getUser: { id: 777, phone_number: '79001112233', first_name: 'Иван' } });
+  await tg.start(); await client.emit(ready);
+  await client.emit({ _: 'updateNewMessage', message: { id: 3, chat_id: 777, is_outgoing: true, date: 1_700_000_000, content: { _: 'messageText', text: { text: 'Добрый день, это администратор' } } } });
+  const p = hooks.at(-1).payload;
+  assert.equal(p.direction, 'outgoing'); assert.equal(p.delivery_id, null); assert.equal(p.recipient_phone_number, '79001112233');
+});
+
+test('SendSucceeded с неизвестным old_message_id (рестарт) → доставка находится по tdlib_temp_id в БД', async () => {
+  const delCalls = [];
+  const { tg, client, hooks } = setup({ getMe: ME, getChat: { id: 777, type: { _: 'chatTypePrivate', user_id: 777 } }, getUser: { id: 777, phone_number: '', first_name: 'Иван' } }, {
+    deliveries: { STATUS: { SENT: [2, 'Отправлено'], FAILED: [5, 'x'] }, failStale: async () => 0,
+      findByTempId: async (acc, tmp) => { delCalls.push(['find', acc, tmp]); return tmp === 555 ? 31 : null; },
+      setStatus: async (...a) => { delCalls.push(['setStatus', ...a]); } },
+  });
+  await tg.start(); await client.emit(ready);
+  await client.emit({ _: 'updateMessageSendSucceeded', old_message_id: 555, message: { id: 9, chat_id: 777, is_outgoing: true, date: 1_700_000_000, content: { _: 'messageText', text: { text: 'x' } } } });
+  assert.deepEqual(delCalls[0], ['find', 42, 555]);
+  assert.deepEqual(delCalls[1], ['setStatus', 31, [2, 'Отправлено'], { tdlibMessageId: 9 }]);
+  assert.equal(hooks.at(-1).payload.delivery_id, 'g31');
+  await client.emit({ _: 'updateMessageSendSucceeded', old_message_id: 556, message: { id: 10, chat_id: 777, is_outgoing: true, date: 1_700_000_000, content: { _: 'messageText', text: { text: 'y' } } } });
+  assert.equal(hooks.at(-1).payload.delivery_id, null, 'нет связки — эхо без delivery_id');
+});
+
+test('sendText пишет tdlib_temp_id в доставку (связка переживает рестарт)', async () => {
+  const delCalls = [];
+  const { tg, client } = setup({ getMe: ME, createPrivateChat: { id: 777 }, sendMessage: { id: 99001, chat_id: 777 } }, {
+    deliveries: { STATUS: { FAILED: [5, 'x'] }, failStale: async () => 0, create: async () => 12, setTempId: async (...a) => { delCalls.push(['setTempId', ...a]); } },
+  });
+  await tg.start(); await client.emit(ready);
+  await tg.sendText({ text: 'x', tdlibUserId: '777' });
+  assert.deepEqual(delCalls, [['setTempId', 12, 99001]]);
+});
+
+test('authStep: новое состояние приходит РАНЬШЕ ответа invoke — шаг не ждёт таймаута', async () => {
+  const { tg, client } = setup({
+    setAuthenticationPhoneNumber: async () => { await client.emit({ _: 'updateAuthorizationState', authorization_state: { _: 'authorizationStateWaitCode' } }); return {}; },
+  });
+  await tg.start();
+  await client.emit({ _: 'updateAuthorizationState', authorization_state: { _: 'authorizationStateWaitPhoneNumber' } });
+  const t0 = Date.now();
+  const r = await tg.authStep({ phone: '+7 900 111-22-33' });
+  assert.ok(Date.now() - t0 < 2000, `ждали ${Date.now() - t0} мс`);
+  assert.equal(r.authState, 'wait_code');
+  assert.equal(client.calls.find(c => c._ === 'setAuthenticationPhoneNumber').phone_number, '+79001112233');
+});
+
+test('неподдерживаемое состояние авторизации → error + текст в auth_error; getUser в личке упал → сообщение всё равно уходит', async () => {
+  const { tg, client, repoCalls, hooks } = setup({ getMe: ME, getChat: { id: 5, type: { _: 'chatTypePrivate', user_id: 5 } }, getUser: new Error('USER_ID_INVALID') });
+  await tg.start();
+  await client.emit({ _: 'updateAuthorizationState', authorization_state: { _: 'authorizationStateWaitEmailAddress' } });
+  assert.equal(tg.authState, 'error');
+  assert.deepEqual(repoCalls.at(-1), ['setAuth', 42, 'error', { error: 'неподдерживаемое состояние authorizationStateWaitEmailAddress' }]);
+  await client.emit(ready);
+  await client.emit({ _: 'updateNewMessage', message: { id: 1, chat_id: 5, is_outgoing: false, date: 1_700_000_000, content: { _: 'messageText', text: { text: 'hi' } } } });
+  assert.equal(hooks.length, 1); assert.equal(hooks[0].payload.sender_phone_number, null);
+});
+
+test('resolveChatId: FLOOD_WAIT на поиске → 429 без importContacts', async () => {
+  const { tg, client } = setup({ getMe: ME, searchUserByPhoneNumber: new Error('Too Many Requests: retry after 30 (FLOOD_WAIT_30)') });
+  await tg.start(); await client.emit(ready);
+  await assert.rejects(tg.resolveChatId({ phone: '79001112233' }), (e) => e.status === 429);
+  assert.equal(client.calls.some(c => c._ === 'importContacts'), false);
+});
