@@ -30,7 +30,6 @@ const DEFAULT_LOADERS = {
 
 const DEFAULT_UPLOAD_LIMIT = 50 * 1024 * 1024;
 const TMP_SAFETY_MS = 30 * 60 * 1000;     // страховка, если TDLib так и не подтвердил отправку
-const KNOWN_EXTS = new Set(Object.values(EXT_BY_MIME));
 
 // Query-параметры Chatpush: dispatch_routing[] — массив; qs() бэкенда кодирует `k[]=v`.
 // Нет в query — берём из тела (длинный текст не влезает в строку запроса).
@@ -46,6 +45,11 @@ function q(req, name) {
 // Имя файла уходит в Telegram как имя документа, поэтому его сохраняем — но без
 // путей, управляющих символов и «чужих» расширений: расширение не из EXT_BY_MIME
 // получает хвост по фактическому MIME (evil.html + image/jpeg → evil.html.jpg).
+// Имя файла для Telegram (идёт собеседнику как имя документа, НЕ в наш
+// публичный каталог — XSS-риска тут нет, поэтому своё расширение документа
+// сохраняем: pptx/zip из «Чата» не должны приезжать как deck.pptx.bin).
+// Расширение по MIME добавляем только когда своего нет. Режем СТЕМ, не имя
+// целиком, чтобы длинное имя не теряло расширение.
 function safeFileName(name, mimeType) {
   let n = String(name || '')
     .replace(/[\/\\]/g, '_')
@@ -53,12 +57,14 @@ function safeFileName(name, mimeType) {
     .replace(/[^\w.\- а-яА-ЯёЁ()]/g, '_')
     .replace(/\.{2,}/g, '.')
     .replace(/^\.+/, '')
-    .slice(0, 100)
     .trim();
-  if (!n) n = 'file';
-  const ext = path.extname(n).toLowerCase();
-  if (!KNOWN_EXTS.has(ext)) n += safeExt(mimeType);
-  return n;
+  let ext = path.extname(n).toLowerCase();
+  if (!/^\.[a-z0-9]{1,8}$/.test(ext)) ext = '';
+  let stem = ext ? n.slice(0, -ext.length) : n;
+  stem = stem.slice(0, 100).replace(/[. ]+$/, '');
+  if (!stem) stem = 'file';
+  if (!ext) ext = safeExt(mimeType);
+  return stem + ext;
 }
 
 function removeTmp(file) {
@@ -227,6 +233,9 @@ if (require.main === module) {
   const config = require('./config');
   const registry = require('./lib/registry');
   const swept = sweepTmp(path.join(config.DATA_DIR, 'tmp'), 60);
+  // Повторно раз в час: после рестарта TDLib досылает отложенное, а связка
+  // pendingFiles в памяти уже пуста — такие файлы иначе жили бы до следующего рестарта.
+  setInterval(() => { try { sweepTmp(path.join(config.DATA_DIR, 'tmp'), 120); } catch (_) {} }, 60 * 60 * 1000).unref();
   if (swept) logger.info(`sweepTmp: удалено ${swept} старых временных файлов`);
   const app = createApp();
   // maxHeaderSize 64 КБ: text Chatpush-клиент шлёт в query, длинная реплика не влезает в дефолтные 16 КБ.

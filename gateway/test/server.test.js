@@ -105,8 +105,21 @@ test('send_file: file_name с обходом пути остаётся внут�
     assert.ok(path.resolve(c.filePath).startsWith(tmpRoot), c.filePath);
     assert.ok(!path.basename(c.filePath).includes('..'), c.filePath);
   }
-  assert.equal(path.basename(calls[1].filePath), 'evil.html.jpg');
+  // Своё расширение сохраняется (файл идёт в Telegram, не в наш публичный каталог).
+  assert.equal(path.basename(calls[1].filePath), 'evil.html');
   assert.equal(path.basename(calls[2].filePath), 'price.pdf');
+});
+
+test('safeFileName: pptx/zip без .bin, длинное имя режется по стему, пустое/точки → file.<ext по MIME>', () => {
+  const { safeFileName } = require('../server');
+  assert.equal(safeFileName('deck.pptx', 'application/octet-stream'), 'deck.pptx');
+  assert.equal(safeFileName('archive.zip', 'application/zip'), 'archive.zip');
+  assert.equal(safeFileName('x'.repeat(150) + '.pdf', 'application/octet-stream'), 'x'.repeat(100) + '.pdf');
+  assert.equal(safeFileName('', 'application/pdf'), 'file.pdf');
+  assert.equal(safeFileName('..', 'image/jpeg'), 'file.jpg');
+  assert.equal(safeFileName('.htaccess', 'text/plain'), 'htaccess.txt');
+  assert.equal(safeFileName('../../etc/passwd', 'text/plain'), '_._etc_passwd.txt');
+  assert.equal(safeFileName('Прайс 2026.pdf', 'application/pdf'), 'Прайс 2026.pdf');
 });
 
 test('send_file: файл больше лимита → 413; без файла → 422', async () => {
