@@ -65,7 +65,10 @@ describe('createTelegramAccount', () => {
     gw.start.mockResolvedValueOnce({ authState: 'wait_code' });
     expect(await createTelegramAccount(1)).toEqual({ id: 7, authState: 'wait_code', status: 'pending' });
     expect(require('./db').withTransaction).not.toHaveBeenCalled();
-    expect(db.query).not.toHaveBeenCalled();
+    // Повтор кнопки дозаполняет external_id, если первый раз второй UPDATE не прошёл.
+    expect(db.query).toHaveBeenCalledTimes(1);
+    expect(db.query.mock.calls[0][0]).toMatch(/SET external_id = COALESCE\(external_id, \$1\)/);
+    expect(db.query.mock.calls[0][1]).toEqual(['7', 7]);
   });
 
   test('шлюз не стартовал → строка остаётся pending, ошибка наружу', async () => {

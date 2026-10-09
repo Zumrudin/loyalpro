@@ -180,8 +180,7 @@ class TelegramClient {
       // Свежая сессия не знает старых собеседников, пока их чаты не загружены:
       // createPrivateChat по user_id диалога со скрытым номером падал бы «user
       // not found» (класс инцидента 2026-09-18). 404 = всё уже загружено.
-      this.client.invoke({ _: 'loadChats', chat_list: { _: 'chatListMain' }, limit: 200 })
-        .catch(e => this.log.debug(`loadChats: ${e && e.message}`));
+      this.loadAllChats().catch(e => this.log.debug(`loadChats: ${e && e.message}`));
       // Доставки, повисшие в «Принято» с прошлого запуска, — их исход уже не узнать.
       try {
         const n = await this.d.deliveries.failStale(this.id);
@@ -197,6 +196,15 @@ class TelegramClient {
     if (error) this.lastAuthError = error;
     if (error) await this.d.repo.setAuth(this.id, mapped, { error });
     else await this.d.repo.setAuth(this.id, mapped);
+  }
+
+  // loadChats подгружает список порциями, пока TDLib не ответит 404 («всё
+  // загружено»); потолок итераций — страховка от бесконечного цикла.
+  async loadAllChats() {
+    for (let i = 0; i < 20; i++) {
+      try { await this.client.invoke({ _: 'loadChats', chat_list: { _: 'chatListMain' }, limit: 200 }); }
+      catch (e) { if (/404/.test(String(e && (e.code || e.message)))) return; throw e; }
+    }
   }
 
   // Шаг авторизации из админки. Ошибка TDLib (неверный код/пароль) → в auth_error и в ответ.

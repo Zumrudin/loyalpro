@@ -57,6 +57,9 @@ async function createTelegramAccount(salonId) {
       ORDER BY (status = 'active') DESC, id DESC LIMIT 1`,
     [salonId]);
   if (existing) {
+    // Повтор кнопки после сбоя второго UPDATE при создании: external_id мог
+    // остаться NULL — без него входящие шлюза не резолвились бы в салон.
+    await db.query(`UPDATE messenger_accounts SET external_id = COALESCE(external_id, $1) WHERE id = $2`, [String(existing.id), existing.id]);
     const st = await gw.start(existing.id);
     return { id: existing.id, authState: st.authState, status: existing.status };
   }
