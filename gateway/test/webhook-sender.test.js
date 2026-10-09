@@ -1,7 +1,7 @@
 'use strict';
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { makeSender } = require('../lib/webhook-sender');
+const { makeSender, makeSafe } = require('../lib/webhook-sender');
 
 test('успех с первой попытки', async () => {
   const calls = [];
@@ -20,11 +20,13 @@ test('повторяет до 3 раз с растущей паузой, пот�
   assert.deepEqual(sleeps, [500, 1000]);
 });
 
-test('401 от бэкенда не повторяется (неверный секрет)', async () => {
-  let n = 0;
-  const send = makeSender({ url: 'u', post: async () => { n++; const e = new Error('401'); e.response = { status: 401 }; throw e; }, sleep: async () => {}, attempts: 3 });
-  await assert.rejects(send({}), /401/);
-  assert.equal(n, 1);
+test('4xx кроме 408/429 не повторяются', async () => {
+  for (const st of [401, 404]) {
+    let n = 0;
+    const send = makeSender({ url: 'u', post: async () => { n++; const e = new Error(String(st)); e.response = { status: st }; throw e; }, sleep: async () => {}, attempts: 3 });
+    await assert.rejects(send({}), new RegExp(String(st)));
+    assert.equal(n, 1);
+  }
 });
 
 test('503 (бэкенд просит повторить) → повтор', async () => {
@@ -32,4 +34,14 @@ test('503 (бэкенд просит повторить) → повтор', asyn
   const send = makeSender({ url: 'u', post: async () => { n++; if (n < 2) { const e = new Error('503'); e.response = { status: 503 }; throw e; } return { status: 200 }; }, sleep: async () => {}, attempts: 3 });
   await send({});
   assert.equal(n, 2);
+});
+
+test('makeSafe глотает ошибку и логирует идентификаторы события', async () => {
+  const lines = [];
+  const safe = makeSafe(async () => { const e = new Error('down'); e.response = { status: 503 }; throw e; }, { error: (m) => lines.push(m) });
+  await safe({ type: 't', payload: { customer_id: 42, direction: 'incoming', message: { id: '5:1' } } });
+  assert.equal(lines.length, 1);
+  assert.match(lines[0], /acc=42/);
+  assert.match(lines[0], /msg=5:1/);
+  assert.match(lines[0], /status=503/);
 });

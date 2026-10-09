@@ -32,7 +32,11 @@ function makeDeliveries(db) {
   return { create, setStatus, get };
 }
 
-function parseId(s) { const mm = /^g(\d+)$/.exec(String(s || '')); return mm ? Number(mm[1]) : null; }
+function parseId(s) {
+  const mm = /^g(\d{1,15})$/.exec(String(s || ''));
+  const n = mm ? Number(mm[1]) : 0;
+  return n > 0 ? n : null;
+}
 
 let defaultInstance = null;
 function getDefault() {

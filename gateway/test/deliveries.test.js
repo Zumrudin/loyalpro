@@ -16,6 +16,8 @@ test('parseId: g<n> → n, иначе null', () => {
   assert.equal(parseId('12'), null);
   assert.equal(parseId('gx'), null);
   assert.equal(parseId(null), null);
+  assert.equal(parseId('g0'), null);
+  assert.equal(parseId('g' + '1'.repeat(20)), null);
 });
 
 test('STATUS: 5 — «Невозможно доставить» (его проверяет бэкенд)', () => {
@@ -39,4 +41,9 @@ test('create → id строки; setStatus обновляет статус/ош
   assert.equal(row.id, 12);
   assert.match(db.calls[3][0], /WHERE id=\$1 AND account_id=\$2/);
   assert.equal(await d.get(2, 99), null);
+});
+
+test('create бросает, если INSERT не вернул строку', async () => {
+  const d = makeDeliveries({ oneOrNone: async () => null, query: async () => ({}) });
+  await assert.rejects(d.create({ accountId: 1, chatId: 5, phone: 'p', kind: 'text', text: 't' }), /не вернул id/);
 });

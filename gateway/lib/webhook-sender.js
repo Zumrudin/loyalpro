@@ -7,6 +7,14 @@ const axios = require('axios');
 const { createLogger } = require('../logger');
 const logger = createLogger('Webhook');
 
+// Повторяем только то, что может пройти со второй попытки: сеть/таймаут (нет
+// ответа), 5xx, 408, 429. Прочие 4xx (401 — неверный секрет, 400, 404…) — не лечатся.
+function isRetryable(e) {
+  const st = e && e.response && e.response.status;
+  if (!st) return true;
+  return st >= 500 || st === 408 || st === 429;
+}
+
 function makeSender({ url, post, sleep, attempts = 3 } = {}) {
   const doPost = post || ((u, body) => axios.post(u, body, { timeout: 10000 }));
   const doSleep = sleep || ((ms) => new Promise(r => setTimeout(r, ms)));
@@ -16,8 +24,7 @@ function makeSender({ url, post, sleep, attempts = 3 } = {}) {
       try { await doPost(url, body); return; }
       catch (e) {
         lastErr = e;
-        const st = e.response && e.response.status;
-        if (st === 401) throw e;
+        if (!isRetryable(e)) throw e;
         if (i < attempts) await doSleep(500 * i);
       }
     }
@@ -32,9 +39,17 @@ function getDefault() {
 }
 
 async function send(body) { return getDefault()(body); }
-async function sendSafe(body) {
-  try { await send(body); }
-  catch (e) { logger.error(`вебхук не доставлен в бэкенд: ${e.message} (type=${body && body.type})`); }
+// Обёртка «не бросает»: ошибка логируется с идентификаторами события.
+function makeSafe(sendFn, log) {
+  return async function sendSafe(body) {
+    try { await sendFn(body); }
+    catch (e) {
+      const p = (body && body.payload) || {};
+      const m = p.message || {};
+      log.error(`вебхук не доставлен в бэкенд: ${e.message} status=${(e.response && e.response.status) || '-'} acc=${p.customer_id} dir=${p.direction} msg=${m.id} delivery=${p.delivery_id || '-'}`);
+    }
+  };
 }
+const sendSafe = makeSafe(send, logger);
 
-module.exports = { makeSender, send, sendSafe };
+module.exports = { makeSender, makeSafe, isRetryable, send, sendSafe };
