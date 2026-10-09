@@ -15,7 +15,15 @@ function isRetryable(e) {
   return st >= 500 || st === 408 || st === 429;
 }
 
-function makeSender({ url, post, sleep, attempts = 3 } = {}) {
+// Пауза между попытками: бэкенд перезапускается при каждом выкате (pm2 restart
+// ≈ 10–20 с), а TDLib апдейт уже отдал — короткие повторы теряли бы входящие.
+// Расписание ≈ 2,5 минуты суммарно; очередь чата на это время стоит, порядок
+// сохраняется.
+const RETRY_DELAYS_MS = [500, 1000, 2000, 5000, 10000, 20000, 30000, 30000, 30000];
+const DEFAULT_ATTEMPTS = RETRY_DELAYS_MS.length + 1;
+function delayFor(attempt) { return RETRY_DELAYS_MS[Math.min(attempt - 1, RETRY_DELAYS_MS.length - 1)]; }
+
+function makeSender({ url, post, sleep, attempts = DEFAULT_ATTEMPTS } = {}) {
   const doPost = post || ((u, body) => axios.post(u, body, { timeout: 10000 }));
   const doSleep = sleep || ((ms) => new Promise(r => setTimeout(r, ms)));
   return async function send(body) {
@@ -25,7 +33,7 @@ function makeSender({ url, post, sleep, attempts = 3 } = {}) {
       catch (e) {
         lastErr = e;
         if (!isRetryable(e)) throw e;
-        if (i < attempts) await doSleep(500 * i);
+        if (i < attempts) await doSleep(delayFor(i));
       }
     }
     throw lastErr;
@@ -52,4 +60,4 @@ function makeSafe(sendFn, log) {
 }
 const sendSafe = makeSafe(send, logger);
 
-module.exports = { makeSender, makeSafe, isRetryable, send, sendSafe };
+module.exports = { makeSender, RETRY_DELAYS_MS, DEFAULT_ATTEMPTS, makeSafe, isRetryable, send, sendSafe };

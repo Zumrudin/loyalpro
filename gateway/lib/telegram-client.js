@@ -36,6 +36,10 @@ const { createLogger } = require('../logger');
 
 const MAX_MESSAGE_AGE_S = 6 * 60 * 60;
 const MAX_MEDIA_BYTES = 20 * 1024 * 1024;
+// importContacts Telegram лимитирует жёстко и помечает аккаунты за массовый
+// импорт — это живой аккаунт клиники. Сверх суточного капа → 429, transport
+// уйдёт на другой канал.
+const IMPORT_CONTACTS_PER_DAY = 50;
 const AUTH_STEP_WAIT_MS = 8000;
 
 // Расширение по MIME: ничего из имени файла собеседника. Неизвестный тип → .bin.
@@ -114,6 +118,7 @@ class TelegramClient {
     this.ownPhone = mapper.normalizePhone(account.phone);
     this.me = null;
     this.pendingSends = new Map();   // временный id сообщения TDLib → id доставки
+    this.imports = { day: null, count: 0 };
     this.pendingFiles = new Map();   // временный id сообщения TDLib → временный файл send_file
     this.chatQueues = new Map();     // chat_id → хвост цепочки обработки
     this.client = null;
@@ -172,6 +177,11 @@ class TelegramClient {
       this.authState = 'ready';   // отправки разрешаем только после записи состояния в БД
       this.lastAuthError = null;
       this.log.info(`готов: ${this.ownPhone || '?'} (${this.me ? mapper.fullName(this.me) : '?'})`);
+      // Свежая сессия не знает старых собеседников, пока их чаты не загружены:
+      // createPrivateChat по user_id диалога со скрытым номером падал бы «user
+      // not found» (класс инцидента 2026-09-18). 404 = всё уже загружено.
+      this.client.invoke({ _: 'loadChats', chat_list: { _: 'chatListMain' }, limit: 200 })
+        .catch(e => this.log.debug(`loadChats: ${e && e.message}`));
       // Доставки, повисшие в «Принято» с прошлого запуска, — их исход уже не узнать.
       try {
         const n = await this.d.deliveries.failStale(this.id);
@@ -355,6 +365,12 @@ class TelegramClient {
       }
     }
     if (!userId) {
+      const day = new Date(this.d.now()).toISOString().slice(0, 10);
+      if (this.imports.day !== day) this.imports = { day, count: 0 };
+      if (this.imports.count >= IMPORT_CONTACTS_PER_DAY) {
+        throw Object.assign(new Error(`суточный лимит импорта контактов (${IMPORT_CONTACTS_PER_DAY}) исчерпан`), { status: 429 });
+      }
+      this.imports.count++;
       // TDLib 1.8.67: contacts — importedContact (без user_id); ответ importedContacts.user_ids, 0 = номера нет в Telegram.
       const r = await this.client.invoke({ _: 'importContacts', contacts: [{ _: 'importedContact', phone_number: '+' + p, first_name: 'Клиент', last_name: '' }] })
         .catch(e => { throw tdlibError('importContacts', e); });
@@ -439,4 +455,4 @@ class TelegramClient {
   }
 }
 
-module.exports = { TelegramClient, AUTH_MAP, MAX_MESSAGE_AGE_S, MAX_MEDIA_BYTES, safeExt, EXT_BY_MIME };
+module.exports = { TelegramClient, AUTH_MAP, MAX_MESSAGE_AGE_S, MAX_MEDIA_BYTES, IMPORT_CONTACTS_PER_DAY, safeExt, EXT_BY_MIME };

@@ -370,3 +370,23 @@ test('dirsFor: статический путь каталога аккаунта
   const { tg, tmp } = setup();
   assert.deepEqual(TelegramClient.dirsFor({ DATA_DIR: tmp }, 42), tg.dirs());
 });
+
+test('ready → loadChats (best-effort, ошибка 404 «всё загружено» глотается)', async () => {
+  const { tg, client } = setup({ getMe: ME, loadChats: new Error('404 Not Found') });
+  await tg.start(); await client.emit(ready);
+  await new Promise(r => setTimeout(r, 5));
+  const lc = client.calls.find(c => c._ === 'loadChats');
+  assert.deepEqual(lc, { _: 'loadChats', chat_list: { _: 'chatListMain' }, limit: 200 });
+  assert.equal(tg.authState, 'ready');
+});
+
+test('importContacts: суточный кап → 429 без вызова TDLib', async () => {
+  const { IMPORT_CONTACTS_PER_DAY } = require('../lib/telegram-client');
+  let imports = 0;
+  const { tg, client } = setup({ getMe: ME, searchUserByPhoneNumber: new Error('USER_NOT_FOUND'), importContacts: () => { imports++; return { user_ids: [1000 + imports] }; }, createPrivateChat: (r) => ({ id: r.user_id }) });
+  await tg.start(); await client.emit(ready);
+  for (let i = 0; i < IMPORT_CONTACTS_PER_DAY; i++) await tg.resolveChatId({ phone: `7900000${String(i).padStart(4, '0')}` });
+  assert.equal(imports, IMPORT_CONTACTS_PER_DAY);
+  await assert.rejects(tg.resolveChatId({ phone: '79009999999' }), (e) => e.status === 429 && /лимит импорта/.test(e.message));
+  assert.equal(imports, IMPORT_CONTACTS_PER_DAY, 'сверх капа TDLib не зовём');
+});

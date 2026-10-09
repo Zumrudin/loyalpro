@@ -12,8 +12,11 @@ async function get(id) {
   return db.oneOrNone(`SELECT * FROM messenger_accounts WHERE id=$1 AND provider='gateway'`, [id]);
 }
 
+// 'pending' — аккаунт заведён из админки, но канал на него ещё не переключён
+// (переключается бэкендом по auth_state='ready'): клиент поднимать надо, иначе
+// авторизацию нечем вести. Отправки идут только через 'active' (byToken).
 async function listActive() {
-  return db.any(`SELECT * FROM messenger_accounts WHERE provider='gateway' AND channel='tdlib' AND status='active' ORDER BY id`);
+  return db.any(`SELECT * FROM messenger_accounts WHERE provider='gateway' AND channel='tdlib' AND status IN ('active','pending') ORDER BY id`);
 }
 
 async function byToken(token) {

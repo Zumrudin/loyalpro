@@ -45,3 +45,13 @@ test('makeSafe глотает ошибку и логирует идентифи�
   assert.match(lines[0], /msg=5:1/);
   assert.match(lines[0], /status=503/);
 });
+
+test('расписание повторов растёт до 30 с и переживает рестарт бэкенда (~2,5 мин суммарно)', async () => {
+  const { RETRY_DELAYS_MS, DEFAULT_ATTEMPTS } = require('../lib/webhook-sender');
+  const sleeps = [];
+  const send = makeSender({ url: 'u', post: async () => { const e = new Error('503'); e.response = { status: 503 }; throw e; }, sleep: async (ms) => { sleeps.push(ms); } });
+  await assert.rejects(send({}), /503/);
+  assert.equal(sleeps.length, DEFAULT_ATTEMPTS - 1);
+  assert.deepEqual(sleeps, RETRY_DELAYS_MS);
+  assert.ok(RETRY_DELAYS_MS.reduce((a, b) => a + b, 0) >= 120000, 'не меньше двух минут');
+});
