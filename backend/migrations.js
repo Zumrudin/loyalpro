@@ -1483,6 +1483,7 @@ async function runMigrations(client) {
   // Повторный запуск ничего не делает (NOT EXISTS). После сида env остаётся
   // только запасным путём.
   {
+    // Строки НЕ удалять, только status='disabled': удаление всех строк салона вернёт сид из env на рестарте.
     const cp = require('./config').CHATPUSH;
     if (cp.salonId && cp.instanceToken) {
       await client.query(`
@@ -1491,7 +1492,7 @@ async function runMigrations(client) {
           FROM unnest(ARRAY['whatsapp','tdlib','max']) AS ch
          WHERE NOT EXISTS (SELECT 1 FROM messenger_accounts WHERE salon_id = $1)
       `, [cp.salonId, cp.customerId != null ? String(cp.customerId) : null, cp.apiBase, cp.instanceToken])
-        .catch(() => {});
+        .catch(e => console.warn('[migrations] messenger_accounts seed failed:', e.message));
     }
   }
 
@@ -1521,6 +1522,16 @@ async function runMigrations(client) {
       created_at TIMESTAMP DEFAULT NOW(),
       PRIMARY KEY (account_id, phone)
     )
+  `).catch(() => {});
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS gateway_deliveries_account_idx
+      ON gateway_deliveries (account_id, id)
+  `).catch(() => {});
+  // Незакрытые доставки (status_id=1 «Принято»): рестарт шлюза теряет in-memory
+  // связку «временный id сообщения → доставка», и такие строки надо уметь найти.
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS gateway_deliveries_pending_idx
+      ON gateway_deliveries (id) WHERE status_id = 1
   `).catch(() => {});
   // Подтверждение ищется по delivery_id в СЫРЫХ событиях: и статус доставки
   // (message_status), и эхо кладут его в payload.payload.delivery_id. Фильтровать
