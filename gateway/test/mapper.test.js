@@ -39,8 +39,8 @@ test('contentOf: документ и голосовое', () => {
   assert.equal(v.type, 'voice'); assert.equal(v.file.id, 6);
 });
 
-test('contentOf: прочее → unsupported без файла', () => {
-  assert.deepEqual(m.contentOf({ _: 'messageSticker' }), { type: 'unsupported', text: '', file: null });
+test('contentOf: прочее → тип по имени TDLib без файла', () => {
+  assert.deepEqual(m.contentOf({ _: 'messageSticker' }), { type: 'sticker', text: '', file: null });
 });
 
 test('buildWebhookBody: входящее личное', () => {
@@ -83,7 +83,7 @@ test('buildWebhookBody: исходящее с delivery_id, номер собес
 
 test('buildWebhookBody: группа → chat_type group, номер участника в sender', () => {
   const body = m.buildWebhookBody({
-    accountId: 1, ownPhone: '7',
+    accountId: 1, ownPhone: '79250177778',
     message: { id: 3, chat_id: -100555, is_outgoing: false, date: 1, content: { _: 'messageText', text: { text: 'x' } }, sender_id: { _: 'messageSenderUser', user_id: 9 } },
     chat: { type: { _: 'chatTypeSupergroup', supergroup_id: 555 } },
     peer: { id: 9, phone_number: '79001112233', first_name: 'Участник', last_name: '' },
@@ -120,4 +120,63 @@ test('buildWebhookBody: медиа без скачанного файла → б
 test('deliveryStatus: маппинг в форму Chatpush', () => {
   assert.deepEqual(m.deliveryStatus({ id: 12, status_id: 6, description: 'Принято', error: null }),
     { id: 'g12', status: { status_id: 6, description: 'Принято' }, error: null });
+});
+
+test('normalizePhone: международные номера не получают лишнюю 7', () => {
+  assert.equal(m.normalizePhone('6591234567'), '6591234567');
+  assert.equal(m.normalizePhone('9001112233'), '79001112233');
+});
+
+test('contentOf: video / videoNote / audio / animation / sticker', () => {
+  assert.deepEqual(m.contentOf({ _: 'messageVideo', caption: { text: 'в' }, video: { mime_type: 'video/mp4', file_name: 'v.mp4', video: { id: 1 } } }),
+    { type: 'video', text: 'в', file: { id: 1, mimeType: 'video/mp4', fileName: 'v.mp4' } });
+  assert.deepEqual(m.contentOf({ _: 'messageVideoNote', video_note: { video: { id: 2 } } }),
+    { type: 'video', text: '', file: { id: 2, mimeType: 'video/mp4', fileName: null } });
+  assert.deepEqual(m.contentOf({ _: 'messageAudio', caption: { text: 'а' }, audio: { file_name: 'a.mp3', audio: { id: 3 } } }),
+    { type: 'audio', text: 'а', file: { id: 3, mimeType: 'audio/mpeg', fileName: 'a.mp3' } });
+  assert.deepEqual(m.contentOf({ _: 'messageAnimation', caption: { text: '' }, animation: { animation: { id: 4 } } }),
+    { type: 'video', text: '', file: { id: 4, mimeType: 'video/mp4', fileName: null } });
+  assert.deepEqual(m.contentOf({ _: 'messageSticker' }), { type: 'sticker', text: '', file: null });
+  assert.deepEqual(m.contentOf({ _: 'messageContact' }), { type: 'contact', text: '', file: null });
+  assert.deepEqual(m.contentOf({}), { type: 'unsupported', text: '', file: null });
+});
+
+test('contentOf: подпись голосового', () => {
+  const v = m.contentOf({ _: 'messageVoiceNote', caption: { text: 'гс' }, voice_note: { voice: { id: 6 } } });
+  assert.equal(v.text, 'гс');
+});
+
+const priv = { type: { _: 'chatTypePrivate', user_id: 5 } };
+const txt = { _: 'messageText', text: { text: 'x' } };
+
+test('buildWebhookBody: peer null в группе, ownPhone null, date 0', () => {
+  const body = m.buildWebhookBody({
+    accountId: 1, ownPhone: null,
+    message: { id: 3, chat_id: -100555, is_outgoing: false, date: 0, content: txt },
+    chat: { type: { _: 'chatTypeBasicGroup', basic_group_id: 555 } }, peer: null, deliveryId: null, fileUrl: null,
+  });
+  assert.equal(body.payload.chat_type, 'group');
+  assert.equal(body.payload.chat_id, '-100555');
+  assert.equal(body.payload.sender_phone_number, null);
+  assert.equal(body.payload.sender_name, null);
+  assert.equal(body.payload.recipient_phone_number, null);
+  assert.equal(body.payload.timestamp, null);
+});
+
+test('buildWebhookBody: reply без chat_id → chat_id сообщения; message_id 0 → null', () => {
+  const mk = (reply_to) => m.buildWebhookBody({ accountId: 1, ownPhone: '7', message: { id: 3, chat_id: 5, is_outgoing: false, date: 1, reply_to, content: txt }, chat: priv, peer: null, deliveryId: null, fileUrl: null }).payload.message.reply_to_message_id;
+  assert.equal(mk({ _: 'messageReplyToMessage', message_id: 9 }), '5:9');
+  assert.equal(mk({ _: 'messageReplyToMessage', chat_id: 0, message_id: 0 }), null);
+});
+
+test('buildWebhookBody: исходящее в группе → recipient пуст', () => {
+  const body = m.buildWebhookBody({
+    accountId: 1, ownPhone: '79250177778',
+    message: { id: 3, chat_id: -100555, is_outgoing: true, date: 1, content: txt },
+    chat: { type: { _: 'chatTypeSupergroup', supergroup_id: 555 } },
+    peer: { id: 9, phone_number: '79001112233', first_name: 'У', last_name: '' }, deliveryId: 'g1', fileUrl: null,
+  });
+  assert.equal(body.payload.recipient_phone_number, null);
+  assert.equal(body.payload.recipient_username, null);
+  assert.equal(body.payload.sender_phone_number, '79250177778');
 });

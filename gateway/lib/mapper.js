@@ -9,7 +9,9 @@ function normalizePhone(raw) {
   let d = String(raw || '').replace(/\D/g, '');
   if (!d) return null;
   if (d.length === 11 && d[0] === '8') d = '7' + d.slice(1);
-  if (d.length === 10) d = '7' + d;
+  // TDLib отдаёт полные международные номера: 7 дописываем только российскому
+  // мобильному без кода страны (10 цифр, начинается с 9).
+  if (d.length === 10 && d[0] === '9') d = '7' + d;
   return d.length >= 10 && d.length <= 15 ? d : null;
 }
 
@@ -49,15 +51,33 @@ function contentOf(content) {
     }
     case 'messageVoiceNote': {
       const v = c.voice_note || {};
-      return { type: 'voice', text: '', file: v.voice ? { id: v.voice.id, mimeType: v.mime_type || 'audio/ogg', fileName: null } : null };
+      return { type: 'voice', text: (c.caption && c.caption.text) || '', file: v.voice ? { id: v.voice.id, mimeType: v.mime_type || 'audio/ogg', fileName: null } : null };
     }
     case 'messageVideo': {
       const v = c.video || {};
       return { type: 'video', text: (c.caption && c.caption.text) || '',
         file: v.video ? { id: v.video.id, mimeType: v.mime_type || 'video/mp4', fileName: v.file_name || null } : null };
     }
-    default:
-      return { type: 'unsupported', text: '', file: null };
+    case 'messageVideoNote': {
+      const v = c.video_note || {};
+      return { type: 'video', text: '', file: v.video ? { id: v.video.id, mimeType: 'video/mp4', fileName: null } : null };
+    }
+    case 'messageAudio': {
+      const a = c.audio || {};
+      return { type: 'audio', text: (c.caption && c.caption.text) || '',
+        file: a.audio ? { id: a.audio.id, mimeType: a.mime_type || 'audio/mpeg', fileName: a.file_name || null } : null };
+    }
+    case 'messageAnimation': {
+      const a = c.animation || {};
+      return { type: 'video', text: (c.caption && c.caption.text) || '',
+        file: a.animation ? { id: a.animation.id, mimeType: a.mime_type || 'video/mp4', fileName: a.file_name || null } : null };
+    }
+    default: {
+      // Прочее (стикер, контакт, геопозиция…): тип = имя TDLib без префикса
+      // 'message', в нижнем регистре. Бэкенд считает медиа всё без 'text' в типе.
+      const mm = /^message(.+)$/.exec(c._ || '');
+      return { type: mm ? mm[1].toLowerCase() : 'unsupported', text: '', file: null };
+    }
   }
 }
 
@@ -80,9 +100,13 @@ function buildWebhookBody({ accountId, ownPhone, message, chat, peer, deliveryId
   const msg = message || {};
   const content = contentOf(msg.content);
   const outgoing = !!msg.is_outgoing;
+  // У исходящего в группе нет единственного получателя: наш номер на клиентскую
+  // сторону класть нельзя.
+  const groupOut = outgoing && isGroupChat(chat);
   const peerPhone = normalizePhone(peer && peer.phone_number);
   const peerName = fullName(peer);
-  const replyTo = msg.reply_to && msg.reply_to._ === 'messageReplyToMessage'
+  // message_id 0 — ответ на сообщение из неизвестного чата: ссылаться не на что.
+  const replyTo = msg.reply_to && msg.reply_to._ === 'messageReplyToMessage' && msg.reply_to.message_id
     ? compositeId(msg.reply_to.chat_id != null ? msg.reply_to.chat_id : msg.chat_id, msg.reply_to.message_id) : null;
   const m = {
     id: compositeId(msg.chat_id, msg.id),
@@ -104,9 +128,9 @@ function buildWebhookBody({ accountId, ownPhone, message, chat, peer, deliveryId
       chat_id: String(msg.chat_id),
       chat_type: isGroupChat(chat) ? 'group' : 'person',
       sender_phone_number: outgoing ? (ownPhone || null) : peerPhone,
-      recipient_phone_number: outgoing ? peerPhone : (ownPhone || null),
+      recipient_phone_number: groupOut ? null : (outgoing ? peerPhone : (ownPhone || null)),
       sender_name: outgoing ? null : peerName,
-      recipient_username: outgoing ? peerName : null,
+      recipient_username: outgoing && !groupOut ? peerName : null,
       delivery_id: deliveryId || null,
       timestamp: msg.date || null,
       message: m,
