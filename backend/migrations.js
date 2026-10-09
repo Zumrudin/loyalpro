@@ -1304,6 +1304,9 @@ async function runMigrations(client) {
     CREATE INDEX IF NOT EXISTS idx_chatpush_events_received
       ON chatpush_events (salon_id, received_at DESC)
   `).catch(() => {});
+  // provider ('chatpush' | 'gateway') — из точки монтирования вебхука, не из тела.
+  await client.query(`ALTER TABLE chatpush_events ADD COLUMN IF NOT EXISTS provider VARCHAR(16)`).catch(() => {});
+  await client.query(`ALTER TABLE chatpush_messages ADD COLUMN IF NOT EXISTS provider VARCHAR(16)`).catch(() => {});
 
   // chatpush_messages — нормализованные сообщения (входящие + исходящие-эхо).
   // client_id nullable: клиент может быть ещё не сматчен по номеру.

@@ -135,6 +135,11 @@ describe('resolveSalon', () => {
     expect(await accounts.resolveSalon('chatpush', 777)).toBe(1);
     expect(await accounts.resolveSalon('gateway', 777)).toBeNull();
   });
+  test('strict: сбой БД пробрасывается (вебхук шлюза ответит 503); без strict → null', async () => {
+    db.oneOrNone.mockRejectedValue(new Error('db down'));
+    await expect(accounts.resolveSalon('gateway', 9, { strict: true })).rejects.toThrow('db down');
+    expect(await accounts.resolveSalon('gateway', 9)).toBeNull();
+  });
   test('chatpush с externalId=null при заданном customerId → null', async () => {
     expect(await accounts.resolveSalon('chatpush', null)).toBeNull();
   });

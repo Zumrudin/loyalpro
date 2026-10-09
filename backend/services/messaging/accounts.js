@@ -9,7 +9,8 @@
 //   у салона без единой строки в таблице и только для CHATPUSH_SALON_ID (чужому
 //   салону чужой токен не подставляем). Строки не удаляются, а выключаются
 //   (status='disabled'), поэтому выключенный канал = null, а не env.
-// resolveSalon(provider, externalId) → salon_id | null
+// resolveSalon(provider, externalId, {strict}) → salon_id | null
+//   strict=true: сбой БД ПРОБРАСЫВАЕТСЯ (вебхук шлюза отвечает 503 → повтор).
 //   Обратная задача для вебхука: от кого пришло событие.
 //   Порядок: активная строка, затем самая свежая.
 // credentialsById(salonId, id) → креды конкретной строки салона (ЛЮБОЙ статус, без кэша):
@@ -98,7 +99,7 @@ async function credentialsById(salonId, id) {
   }
 }
 
-async function resolveSalon(provider, externalId) {
+async function resolveSalon(provider, externalId, opts = {}) {
   if (externalId === undefined || externalId === null) return provider === 'chatpush' ? envSalon(null) : null;
   try {
     const row = await db.oneOrNone(
@@ -107,6 +108,9 @@ async function resolveSalon(provider, externalId) {
       [provider, String(externalId)]);
     if (row) return row.salon_id;
   } catch (e) {
+    // strict: вызывающий умеет повторить (вебхук шлюза отвечает 503) — сбой БД
+    // не должен превращаться в «неизвестный аккаунт».
+    if (opts.strict) throw e;
     logger.warn(`resolveSalon(${provider},${externalId}): ошибка БД — ${e.message}`);
   }
   return provider === 'chatpush' ? envSalon(externalId) : null;

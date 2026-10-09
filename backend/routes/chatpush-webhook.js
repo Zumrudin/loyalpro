@@ -17,6 +17,8 @@
 // Авто-ответ — только если CHATPUSH_AGENT_ENABLED=true (по умолчанию выкл).
 //
 // Монтируется ДО JWT-guard (routes/index.js), рядом с /yclients.
+// ВНИМАНИЕ: один и тот же экземпляр роутера смонтирован на /chatpush И /gateway —
+// любой новый маршрут, добавленный сюда, становится доступен под ОБОИМИ путями.
 // ============================================================
 const router = require('express').Router();
 const crypto = require('crypto');
@@ -108,28 +110,51 @@ router.post('/webhook', async (req, res) => {
     logger.warn('legacy unauthenticated webhook accepted — set CHATPUSH_WEBHOOK_SECRET and register the URL with ?key=<secret> to enable enforcement');
   }
 
+  const provider = providerOf(req);
+  const body = req.body || {};
+  const msg = chatpush.parseMessageEvent(body);          // сообщение (in/out) или null
+  // Плоская форма (tdlib, наш шлюз — в т.ч. НЕ-сообщения: статусы) кладёт
+  // customer_id прямо в payload.
+  const customerId = body.payload?.instance?.customer_id ?? body.payload?.customer_id ?? msg?.customerId ?? null;
+  // Салон — по реестру messenger_accounts (provider, external_id); у Chatpush
+  // при отсутствии строки — прежний env-фолбэк (accounts.resolveSalon).
+  let salonId = null;
+  if (provider === 'gateway') {
+    // Свой шлюз повторяет вебхук при не-2xx: салон резолвим ДО ответа, сбой БД →
+    // 503 (повтор), неизвестный аккаунт → 200 + WARN (повтор не поможет).
+    try { salonId = await accounts.resolveSalon('gateway', customerId, { strict: true }); }
+    catch (e) { logger.error(`gateway webhook: salon lookup failed (${e.message}) — 503`); return res.status(503).json({ error: 'retry' }); }
+  }
+
   // ACK немедленно — Chatpush (как и YClients) ретраит при таймауте.
   res.json({ ok: true });
 
-  const body = req.body || {};
-  const msg = chatpush.parseMessageEvent(body);          // сообщение (in/out) или null
-  const customerId = body.payload?.instance?.customer_id ?? msg?.customerId ?? null;
-  // Салон — по реестру messenger_accounts (provider, external_id); у Chatpush
-  // при отсутствии строки — прежний env-фолбэк (accounts.resolveSalon).
-  const salonId = await accounts.resolveSalon(providerOf(req), customerId);
+  if (provider !== 'gateway') salonId = await accounts.resolveSalon('chatpush', customerId);
 
   // 1) СЫРОЙ лог любого события — до обработки.
   let eventId = null;
   try {
     const row = await db.one(
-      `INSERT INTO chatpush_events (salon_id, customer_id, type, direction, external_message_id, phone, payload)
-       VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id`,
+      `INSERT INTO chatpush_events (salon_id, customer_id, type, direction, external_message_id, phone, payload, provider)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id`,
       [salonId, customerId, body.type || null, msg?.direction || null,
-       msg?.messageId || null, msg?.phone || null, JSON.stringify(body)]
+       msg?.messageId || null, msg?.phone || null, JSON.stringify(body), provider]
     );
     eventId = row?.id || null;
   } catch (e) {
     logger.error(`event log failed: ${e.message}`);
+  }
+
+  // Салон не определён — событие осталось в сыром логе, но сообщение не
+  // разбираем: строка chatpush_messages с NULL-салоном не дедупится
+  // (ON CONFLICT (salon_id, …) с NULL не срабатывает) и задваивалась бы на
+  // каждом повторе; агенту без салона отвечать некуда.
+  if (salonId == null) {
+    logger.warn(`unknown account: ${provider}/${customerId} type=${body.type} — событие сохранено без салона, сообщение не разбираем`);
+    if (eventId) {
+      try { await db.query('UPDATE chatpush_events SET processed=TRUE WHERE id=$1', [eventId]); } catch {}
+    }
+    return;
   }
 
   try {
@@ -170,13 +195,13 @@ router.post('/webhook', async (req, res) => {
       const ins = await db.query(
         `INSERT INTO chatpush_messages
            (salon_id, client_id, customer_id, channel, direction, external_message_id, reply_to_message_id,
-            msg_type, text, file_url, mime_type, sender_name, phone, chat_id, msg_ts, authored_by)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+            msg_type, text, file_url, mime_type, sender_name, phone, chat_id, msg_ts, authored_by, provider)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
          ON CONFLICT (salon_id, external_message_id) DO NOTHING
          RETURNING id`,
         [salonId, clientId, customerId, msg.channel, msg.direction, msg.messageId, msg.replyToMessageId,
          msg.type, msg.text, msg.fileUrl, msg.mimeType, msg.senderName, msg.phone, msg.chatId, msg.timestamp,
-         authoredBy]
+         authoredBy, provider]
       );
       storedNew = ins.rowCount > 0;
       logger.info(`stored ${msg.direction} ${msg.channel} ${msg.phone || ''}${clientId ? ` (client #${clientId})` : ''}: ${(msg.text || '').slice(0, 60)}`);
