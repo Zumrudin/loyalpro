@@ -11,6 +11,8 @@ const MSG_ACC_AUTH = { starting: 'запускается', wait_phone: 'ждёт
 function msgAccStateLabel(a) {
   if (a.provider === 'chatpush') return 'Chatpush · ' + (a.status === 'active' ? 'активен' : 'отключён');
   const parts = ['Свой шлюз'];
+  // pending: шлюз авторизуется, канал пока обслуживает прежний аккаунт.
+  if (a.status === 'pending') return 'Свой шлюз · подключается · ' + (MSG_ACC_AUTH[a.auth_state] || a.auth_state);
   if (a.status !== 'active') { parts.push('отключён'); return parts.join(' · '); }
   parts.push(MSG_ACC_AUTH[a.auth_state] || a.auth_state || 'неизвестно');
   if (a.auth_state === 'ready' && a.phone) parts.push('+' + a.phone);
@@ -46,13 +48,15 @@ async function loadMessagingAccounts() {
       const ch = document.createElement('b'); ch.textContent = MSG_ACC_CHANNEL[a.channel] || a.channel;
       const st = document.createElement('span'); st.textContent = ' — ' + msgAccStateLabel(a);
       row.append(ch, st);
-      if (a.provider === 'gateway' && a.status === 'active') {
+      const live = a.status === 'active' || a.status === 'pending';
+      if (a.provider === 'gateway' && live) {
         const btn = document.createElement('button'); btn.className = 'btn btn-sec'; btn.textContent = 'Отключить';
         btn.onclick = () => msgAccLogout(a.id);
         row.append(' ', btn);
-        if (a.auth_state !== 'ready') { _msgAccCurrent = a.id; msgAccStartPolling(); }
+        // pending+ready (шлюз вошёл, пока страница была закрыта): тик /status продвинет строку.
+        if (a.status === 'pending' || a.auth_state !== 'ready') { _msgAccCurrent = a.id; msgAccStartPolling(); }
       }
-      if (a.status !== 'active') {
+      if (!live) {
         const btn = document.createElement('button'); btn.className = 'btn btn-sec'; btn.textContent = 'Сделать активным';
         btn.onclick = () => msgAccActivate(a.id);
         row.append(' ', btn);
@@ -62,7 +66,7 @@ async function loadMessagingAccounts() {
     if (!r.accounts.length) root.textContent = 'Аккаунтов нет.';
     const connectBtn = document.getElementById('msg-acc-connect-tg');
     if (connectBtn) {
-      const busy = r.accounts.some(a => a.provider === 'gateway' && a.status === 'active');
+      const busy = r.accounts.some(a => a.provider === 'gateway' && (a.status === 'active' || a.status === 'pending'));
       connectBtn.disabled = !r.gatewayConfigured || busy;
       connectBtn.title = busy ? 'Telegram уже подключается через свой шлюз' : '';
     }
@@ -74,7 +78,7 @@ async function loadMessagingAccounts() {
 }
 
 async function msgAccConnectTelegram() {
-  if (!confirm('Telegram салона будет переключён с Chatpush на свой шлюз. Продолжить?')) return;
+  if (!confirm('Подключить Telegram салона к своему шлюзу? Канал переключится с Chatpush, когда вход будет подтверждён. Продолжить?')) return;
   try {
     const r = await api('POST', '/api/messaging/accounts/telegram');
     _msgAccCurrent = r.id;

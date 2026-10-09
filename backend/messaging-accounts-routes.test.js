@@ -14,7 +14,8 @@ jest.mock('./logger', () => ({ createLogger: () => ({ info: jest.fn(), warn: jes
 const { db } = require('./db');
 const gw = require('./services/messaging/gateway-client');
 const accounts = require('./services/messaging/accounts');
-const { createTelegramAccount, parseAuthStep, activateAccount } = require('./routes/messaging-accounts');
+const router = require('./routes/messaging-accounts');
+const { createTelegramAccount, parseAuthStep, activateAccount, promoteIfReady } = router;
 
 beforeEach(() => { jest.clearAllMocks(); mockClient.query.mockReset(); });
 
@@ -33,45 +34,153 @@ describe('parseAuthStep', () => {
 });
 
 describe('createTelegramAccount', () => {
-  test('в ОДНОЙ транзакции: гасит активную tdlib-строку, вставляет gateway-строку с external_id=id; после коммита — start и сброс кэша', async () => {
-    db.oneOrNone.mockResolvedValueOnce(null);                       // активной gateway-строки нет
-    mockClient.query
-      .mockResolvedValueOnce({ rowCount: 1 })                        // UPDATE … disabled
-      .mockResolvedValueOnce({ rows: [{ id: 42 }], rowCount: 1 })    // INSERT … RETURNING id
-      .mockResolvedValueOnce({ rowCount: 1 });                       // UPDATE external_id
+  test('НИЧЕГО не гасит: вставляет pending-строку без транзакции, external_id=id, сброс кэша, start', async () => {
+    db.oneOrNone
+      .mockResolvedValueOnce(null)                                   // gateway-строки active/pending нет
+      .mockResolvedValueOnce({ id: 42 });                            // INSERT … RETURNING id
+    db.query.mockResolvedValueOnce({ rowCount: 1 });                 // UPDATE external_id
     gw.start.mockResolvedValueOnce({ authState: 'wait_phone' });
     const out = await createTelegramAccount(1);
-    expect(out).toEqual({ id: 42, authState: 'wait_phone' });
-    const { withTransaction } = require('./db');
-    expect(withTransaction).toHaveBeenCalledTimes(1);
-    const [disableSql, disableParams] = mockClient.query.mock.calls[0];
-    expect(disableSql).toMatch(/UPDATE messenger_accounts SET status = 'disabled'/);
-    expect(disableParams).toEqual([1, 'tdlib']);
-    const [insSql, insParams] = mockClient.query.mock.calls[1];
+    expect(out).toEqual({ id: 42, authState: 'wait_phone', status: 'pending' });
+    expect(require('./db').withTransaction).not.toHaveBeenCalled();
+    const [selSql] = db.oneOrNone.mock.calls[0];
+    expect(selSql).toMatch(/status IN \('active', ?'pending'\)/);
+    const [insSql, insParams] = db.oneOrNone.mock.calls[1];
     expect(insSql).toMatch(/INSERT INTO messenger_accounts/);
+    expect(insSql).toMatch(/'pending'/);
     expect(insParams[0]).toBe(1);
-    expect(insParams[1]).toMatch(/^[0-9a-f]{48}$/);                  // token
-    const [extSql, extParams] = mockClient.query.mock.calls[2];
+    expect(insParams[1]).toMatch(/^[0-9a-f]{48}$/);
+    const allSql = [...db.query.mock.calls, ...mockClient.query.mock.calls].map(c => c[0]).join('\n');
+    expect(allSql).not.toMatch(/SET status = 'disabled'/);
+    const [extSql, extParams] = db.query.mock.calls[0];
     expect(extSql).toMatch(/SET external_id = \$1 WHERE id = \$2/);
     expect(extParams).toEqual(['42', 42]);
-    expect(gw.start).toHaveBeenCalledWith(42);
     expect(accounts.invalidate).toHaveBeenCalled();
-    // start зовётся ПОСЛЕ транзакции (строка уже закоммичена и видна шлюзу)
-    expect(gw.start.mock.invocationCallOrder[0]).toBeGreaterThan(withTransaction.mock.invocationCallOrder[0]);
+    expect(gw.start).toHaveBeenCalledWith(42);
+    expect(gw.start.mock.invocationCallOrder[0]).toBeGreaterThan(db.query.mock.invocationCallOrder[0]);
   });
 
-  test('активная gateway-строка уже есть → идемпотентно: start по ней, без транзакции', async () => {
-    db.oneOrNone.mockResolvedValueOnce({ id: 7 });
-    gw.start.mockResolvedValueOnce({ authState: 'ready' });
-    expect(await createTelegramAccount(1)).toEqual({ id: 7, authState: 'ready' });
+  test('gateway-строка active/pending уже есть → идемпотентно: start по ней', async () => {
+    db.oneOrNone.mockResolvedValueOnce({ id: 7, status: 'pending' });
+    gw.start.mockResolvedValueOnce({ authState: 'wait_code' });
+    expect(await createTelegramAccount(1)).toEqual({ id: 7, authState: 'wait_code', status: 'pending' });
+    expect(require('./db').withTransaction).not.toHaveBeenCalled();
+    expect(db.query).not.toHaveBeenCalled();
+  });
+
+  test('шлюз не стартовал → строка остаётся pending, ошибка наружу', async () => {
+    db.oneOrNone.mockResolvedValueOnce(null).mockResolvedValueOnce({ id: 43 });
+    db.query.mockResolvedValueOnce({ rowCount: 1 });
+    gw.start.mockRejectedValueOnce(Object.assign(new Error('шлюз: ECONNREFUSED'), { status: 502 }));
+    await expect(createTelegramAccount(1)).rejects.toThrow(/ECONNREFUSED/);
+  });
+});
+
+describe('promoteIfReady', () => {
+  test('pending gateway + ready → activateAccount (транзакция: гасит прочие, активирует) → active', async () => {
+    mockClient.query.mockResolvedValueOnce({ rowCount: 1 }).mockResolvedValueOnce({ rowCount: 1 });
+    const st = await promoteIfReady(1, { id: 42, provider: 'gateway', channel: 'tdlib', status: 'pending' }, 'ready');
+    expect(st).toBe('active');
+    expect(require('./db').withTransaction).toHaveBeenCalledTimes(1);
+    expect(mockClient.query.mock.calls[0][0]).toMatch(/SET status = 'disabled'/);
+    expect(mockClient.query.mock.calls[0][1]).toEqual([1, 'tdlib', 42]);
+    expect(mockClient.query.mock.calls[1][0]).toMatch(/SET status = 'active'/);
+  });
+  test('pending + wait_code → ничего, статус pending', async () => {
+    expect(await promoteIfReady(1, { id: 42, provider: 'gateway', channel: 'tdlib', status: 'pending' }, 'wait_code')).toBe('pending');
+    expect(require('./db').withTransaction).not.toHaveBeenCalled();
+  });
+  test('уже active → ничего', async () => {
+    expect(await promoteIfReady(1, { id: 42, provider: 'gateway', channel: 'tdlib', status: 'active' }, 'ready')).toBe('active');
+    expect(require('./db').withTransaction).not.toHaveBeenCalled();
+  });
+});
+
+describe('HTTP-ручки', () => {
+  const route = (method, path) => router.stack.find(l => l.route && l.route.path === path && l.route.methods[method]).route.stack.slice(-1)[0].handle;
+  const fakeRes = () => ({ status: jest.fn().mockReturnThis(), json: jest.fn() });
+  const req = (id, body) => ({ params: { id: String(id) }, body: body || {}, user: { salonId: 1 } });
+
+  test('auth: ready на pending-строке → продвижение, в ответе status=active', async () => {
+    db.oneOrNone.mockResolvedValueOnce({ id: 42, provider: 'gateway', channel: 'tdlib', status: 'pending' });
+    gw.auth.mockResolvedValueOnce({ authState: 'ready', phone: '79001112233' });
+    mockClient.query.mockResolvedValue({ rowCount: 1 });
+    const res = fakeRes();
+    await route('post', '/accounts/:id/auth')(req(42, { code: '12345' }), res);
+    expect(res.json).toHaveBeenCalledWith({ authState: 'ready', phone: '79001112233', status: 'active' });
+    expect(require('./db').withTransaction).toHaveBeenCalledTimes(1);
+  });
+
+  test('status: pending + wait_code → status=pending, без записи', async () => {
+    db.oneOrNone.mockResolvedValueOnce({ id: 42, provider: 'gateway', channel: 'tdlib', status: 'pending' });
+    gw.status.mockResolvedValueOnce({ authState: 'wait_code' });
+    const res = fakeRes();
+    await route('get', '/accounts/:id/status')(req(42), res);
+    expect(res.json).toHaveBeenCalledWith({ authState: 'wait_code', status: 'pending' });
     expect(require('./db').withTransaction).not.toHaveBeenCalled();
   });
 
-  test('шлюз не стартовал → строка остаётся, ошибка наружу (клиент увидит текст шлюза)', async () => {
-    db.oneOrNone.mockResolvedValueOnce(null);
-    mockClient.query.mockResolvedValueOnce({ rowCount: 1 }).mockResolvedValueOnce({ rows: [{ id: 43 }], rowCount: 1 }).mockResolvedValueOnce({ rowCount: 1 });
-    gw.start.mockRejectedValueOnce(Object.assign(new Error('шлюз: ECONNREFUSED'), { status: 502 }));
-    await expect(createTelegramAccount(1)).rejects.toThrow(/ECONNREFUSED/);
+  test('logout: канал остался без активной → восстанавливается прежний chatpush-аккаунт', async () => {
+    db.oneOrNone
+      .mockResolvedValueOnce({ id: 42, provider: 'gateway', channel: 'tdlib', status: 'active' })   // ownRow
+      .mockResolvedValueOnce(null)                                                                  // активной нет
+      .mockResolvedValueOnce({ id: 3 });                                                            // прежний
+    db.query.mockResolvedValueOnce({ rowCount: 1 });
+    gw.logout.mockResolvedValueOnce({});
+    mockClient.query.mockResolvedValue({ rowCount: 1 });
+    const res = fakeRes();
+    await route('post', '/accounts/:id/logout')(req(42), res);
+    expect(res.json).toHaveBeenCalledWith({ ok: true, restored: 3 });
+    const [prevSql, prevParams] = db.oneOrNone.mock.calls[2];
+    expect(prevSql).toMatch(/provider <> \$3/);
+    expect(prevSql).toMatch(/ORDER BY updated_at DESC LIMIT 1/);
+    expect(prevParams).toEqual([1, 'tdlib', 'gateway']);
+    expect(mockClient.query.mock.calls[1][0]).toMatch(/SET status = 'active'/);
+    expect(mockClient.query.mock.calls[1][1]).toEqual([3, 1]);
+  });
+
+  test('logout: активная строка канала уже есть → ничего не восстанавливаем', async () => {
+    db.oneOrNone
+      .mockResolvedValueOnce({ id: 42, provider: 'gateway', channel: 'tdlib', status: 'pending' })
+      .mockResolvedValueOnce({ id: 3 });
+    db.query.mockResolvedValueOnce({ rowCount: 1 });
+    gw.logout.mockResolvedValueOnce({});
+    const res = fakeRes();
+    await route('post', '/accounts/:id/logout')(req(42), res);
+    expect(res.json).toHaveBeenCalledWith({ ok: true, restored: null });
+    expect(require('./db').withTransaction).not.toHaveBeenCalled();
+  });
+
+  test('activate gateway-строки без ready → 409, ничего не пишется', async () => {
+    db.oneOrNone.mockResolvedValueOnce({ id: 42, provider: 'gateway', channel: 'tdlib', status: 'disabled' });
+    gw.start.mockResolvedValueOnce({ authState: 'wait_code' });
+    gw.status.mockResolvedValueOnce({ authState: 'wait_code' });
+    const res = fakeRes();
+    await route('post', '/accounts/:id/activate')(req(42), res);
+    expect(res.status).toHaveBeenCalledWith(409);
+    expect(res.json).toHaveBeenCalledWith({ error: 'аккаунт шлюза не авторизован' });
+    expect(require('./db').withTransaction).not.toHaveBeenCalled();
+    expect(db.query).not.toHaveBeenCalled();
+  });
+
+  test('activate gateway-строки с ready → activateAccount', async () => {
+    db.oneOrNone.mockResolvedValueOnce({ id: 42, provider: 'gateway', channel: 'tdlib', status: 'disabled' });
+    gw.start.mockResolvedValueOnce({ authState: 'ready' });
+    gw.status.mockResolvedValueOnce({ authState: 'ready' });
+    mockClient.query.mockResolvedValue({ rowCount: 1 });
+    const res = fakeRes();
+    await route('post', '/accounts/:id/activate')(req(42), res);
+    expect(res.json).toHaveBeenCalledWith({ ok: true });
+    expect(require('./db').withTransaction).toHaveBeenCalledTimes(1);
+  });
+
+  test('activate chatpush-строки — без шлюза', async () => {
+    db.oneOrNone.mockResolvedValueOnce({ id: 3, provider: 'chatpush', channel: 'tdlib', status: 'disabled' });
+    mockClient.query.mockResolvedValue({ rowCount: 1 });
+    const res = fakeRes();
+    await route('post', '/accounts/:id/activate')(req(3), res);
+    expect(gw.start).not.toHaveBeenCalled();
+    expect(res.json).toHaveBeenCalledWith({ ok: true });
   });
 });
 

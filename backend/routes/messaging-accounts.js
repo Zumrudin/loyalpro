@@ -5,12 +5,14 @@
 // статус, отключение, возврат канала на другой аккаунт. Chatpush-строки
 // создаются сидом/руками в БД — у них авторизация на стороне Chatpush, здесь
 // они только видны.
-// ПЕРЕКЛЮЧЕНИЕ КАНАЛА — ОДНА ТРАНЗАКЦИЯ (db.withTransaction): на (salon_id, channel) активная строка
+// ПЕРЕКЛЮЧЕНИЕ КАНАЛА — ОДНА ТРАНЗАКЦИЯ (activateAccount): на (salon_id, channel) активная строка
 // одна (частичный уникальный индекс), порядок обязателен — сначала disable
-// старой, потом insert/activate новой, и оба шага либо проходят вместе, либо
-// откатываются: иначе сбой между ними оставил бы канал БЕЗ активной строки
-// (Telegram салона молчит до вмешательства человека), а между INSERT и
-// UPDATE external_id входящее событие шлюза не резолвилось бы в салон.
+// старой, потом activate новой, и оба шага либо проходят вместе, либо
+// откатываются: иначе сбой между ними оставил бы канал БЕЗ активной строки.
+// Новый аккаунт шлюза заводится 'pending' (шлюз его поднимает, отправки идут
+// через прежний активный) и становится активным ТОЛЬКО на ready
+// (promoteIfReady из /auth и /status); отключение активного шлюза возвращает
+// канал прежнему аккаунту другого провайдера.
 // ============================================================
 const router = require('express').Router();
 const crypto = require('crypto');
@@ -41,38 +43,35 @@ function parseAuthStep(body) {
   return null;
 }
 
-// Завести gateway-аккаунт Telegram у салона (идемпотентно: активная
-// gateway-строка уже есть → просто start по ней). Прежний провайдер tdlib
-// гасится В ТОЙ ЖЕ транзакции — подключение Telegram к шлюзу = переключение
-// канала. Шлюз стартует ПОСЛЕ коммита — иначе он прочитал бы строку, которой
-// ещё не видно; его сбой строку не откатывает (повтор кнопки идемпотентен).
+// Завести gateway-аккаунт Telegram у салона. Строка заводится в статусе
+// 'pending': шлюз её поднимает (active|pending), но канал НЕ переключается —
+// Chatpush продолжает обслуживать Telegram, пока шлюз не дойдёт до ready
+// (promoteIfReady). Иначе Telegram салона был мёртв от клика до принятого
+// кода, а при брошенном мастере — навсегда. Идемпотентно: gateway-строка
+// active/pending уже есть → start по ней. Шлюз стартует ПОСЛЕ записи
+// external_id; его сбой строку не удаляет (повтор кнопки идемпотентен).
 async function createTelegramAccount(salonId) {
   const existing = await db.oneOrNone(
-    `SELECT id FROM messenger_accounts WHERE salon_id = $1 AND channel = 'tdlib' AND provider = 'gateway' AND status = 'active'`,
+    `SELECT id, status FROM messenger_accounts
+      WHERE salon_id = $1 AND channel = 'tdlib' AND provider = 'gateway' AND status IN ('active','pending')
+      ORDER BY (status = 'active') DESC, id DESC LIMIT 1`,
     [salonId]);
   if (existing) {
     const st = await gw.start(existing.id);
-    return { id: existing.id, authState: st.authState };
+    return { id: existing.id, authState: st.authState, status: existing.status };
   }
   const token = crypto.randomBytes(24).toString('hex');
-  const id = await withTransaction(async (client) => {
-    await client.query(
-      `UPDATE messenger_accounts SET status = 'disabled', updated_at = NOW()
-        WHERE salon_id = $1 AND channel = $2 AND status = 'active'`,
-      [salonId, 'tdlib']);
-    const ins = await client.query(
-      `INSERT INTO messenger_accounts (salon_id, token, provider, channel, status, auth_state, display_name)
-       VALUES ($1, $2, 'gateway', 'tdlib', 'active', 'starting', 'Telegram (свой шлюз)')
-       RETURNING id`,
-      [salonId, token]);
-    const newId = ins.rows && ins.rows[0] && ins.rows[0].id;
-    if (!newId) throw new Error('строка аккаунта не вставилась');
-    await client.query(`UPDATE messenger_accounts SET external_id = $1 WHERE id = $2`, [String(newId), newId]);
-    return newId;
-  });
+  const ins = await db.oneOrNone(
+    `INSERT INTO messenger_accounts (salon_id, token, provider, channel, status, auth_state, display_name)
+     VALUES ($1, $2, 'gateway', 'tdlib', 'pending', 'starting', 'Telegram (свой шлюз)')
+     RETURNING id`,
+    [salonId, token]);
+  const id = ins && ins.id;
+  if (!id) throw new Error('строка аккаунта не вставилась');
+  await db.query(`UPDATE messenger_accounts SET external_id = $1 WHERE id = $2`, [String(id), id]);
   accounts.invalidate();
   const st = await gw.start(id);
-  return { id, authState: st.authState };
+  return { id, authState: st.authState, status: 'pending' };
 }
 
 // Сделать строку активной для её канала (откат на Chatpush и обратно).
@@ -87,6 +86,17 @@ async function activateAccount(salonId, id, channel) {
       [id, salonId]);
   });
   accounts.invalidate();
+}
+
+// Шлюз дошёл до ready на pending-строке → переключить канал на неё (та же
+// транзакция, что «Сделать активным»). Возвращает актуальный статус строки.
+async function promoteIfReady(salonId, row, authState) {
+  if (row.provider === 'gateway' && row.status === 'pending' && authState === 'ready') {
+    await activateAccount(salonId, row.id, row.channel);
+    logger.info(`канал ${row.channel} салона ${salonId} переключён на шлюз (аккаунт #${row.id})`);
+    return 'active';
+  }
+  return row.status;
 }
 
 async function ownRow(salonId, id) {
@@ -108,9 +118,8 @@ router.get('/accounts', adminOnly, async (req, res) => {
 });
 
 router.post('/accounts/telegram', adminOnly, async (req, res) => {
-  // Проверка ДО транзакции: иначе ненастроенный шлюз узнался бы только в
-  // gw.start ПОСЛЕ коммита — tdlib-канал салона уже переключён на строку,
-  // которую обслуживать некому.
+  // Проверка ДО вставки: иначе ненастроенный шлюз узнался бы только в
+  // gw.start — после того как строку уже завели.
   if (!config.MESSAGING_GATEWAY.url) return res.status(503).json({ error: 'шлюз мессенджеров не настроен (MESSAGING_GATEWAY_URL)' });
   try { res.json(await createTelegramAccount(req.user.salonId)); }
   catch (e) { logger.error(`create telegram: ${e.message}`); res.status(e.status || 500).json({ error: e.message }); }
@@ -123,7 +132,9 @@ router.post('/accounts/:id/auth', adminOnly, async (req, res) => {
   try {
     const row = await ownRow(req.user.salonId, id);
     if (!row || row.provider !== 'gateway') return res.status(404).json({ error: 'Аккаунт не найден' });
-    res.json(await gw.auth(id, step));
+    const r = await gw.auth(id, step);
+    const status = await promoteIfReady(req.user.salonId, row, r && r.authState);
+    res.json({ ...r, status });
   } catch (e) { logger.error(`auth #${id}: ${e.message}`); res.status(e.status || 500).json({ error: e.message }); }
 });
 
@@ -133,7 +144,9 @@ router.get('/accounts/:id/status', adminOnly, async (req, res) => {
     const row = await ownRow(req.user.salonId, id);
     if (!row) return res.status(404).json({ error: 'Аккаунт не найден' });
     if (row.provider !== 'gateway') return res.json({ authState: null, provider: row.provider, status: row.status });
-    res.json(await gw.status(id));
+    const r = await gw.status(id);
+    const status = await promoteIfReady(req.user.salonId, row, r && r.authState);
+    res.json({ ...r, status });
   } catch (e) { logger.error(`status #${id}: ${e.message}`); res.status(e.status || 500).json({ error: e.message }); }
 });
 
@@ -146,7 +159,27 @@ router.post('/accounts/:id/logout', adminOnly, async (req, res) => {
     await db.query(`UPDATE messenger_accounts SET status = 'disabled', auth_state = 'logged_out', updated_at = NOW() WHERE id = $1 AND salon_id = $2`,
       [id, req.user.salonId]);
     accounts.invalidate();
-    res.json({ ok: true });
+    // Канал остался без активной строки (отключили активный шлюз) → вернуть
+    // прежний аккаунт другого провайдера (Chatpush), иначе Telegram салона молчит.
+    let restored = null;
+    const active = await db.oneOrNone(
+      `SELECT id FROM messenger_accounts WHERE salon_id = $1 AND channel = $2 AND status = 'active' LIMIT 1`,
+      [req.user.salonId, row.channel]);
+    if (!active) {
+      const prev = await db.oneOrNone(
+        `SELECT id FROM messenger_accounts
+          WHERE salon_id = $1 AND channel = $2 AND status = 'disabled' AND provider <> $3
+          ORDER BY updated_at DESC LIMIT 1`,
+        [req.user.salonId, row.channel, row.provider]);
+      if (prev) {
+        await activateAccount(req.user.salonId, prev.id, row.channel);
+        restored = prev.id;
+        logger.info(`шлюз #${id} отключён: канал ${row.channel} салона ${req.user.salonId} возвращён на аккаунт #${prev.id}`);
+      } else {
+        logger.warn(`шлюз #${id} отключён: у канала ${row.channel} салона ${req.user.salonId} нет аккаунта для возврата — канал без активной строки`);
+      }
+    }
+    res.json({ ok: true, restored });
   } catch (e) { logger.error(`logout #${id}: ${e.message}`); res.status(e.status || 500).json({ error: e.message }); }
 });
 
@@ -155,12 +188,19 @@ router.post('/accounts/:id/activate', adminOnly, async (req, res) => {
   try {
     const row = await ownRow(req.user.salonId, id);
     if (!row) return res.status(404).json({ error: 'Аккаунт не найден' });
+    if (row.provider === 'gateway') {
+      // Не переключать канал на неавторизованную сессию — Telegram замолчал бы.
+      await gw.start(id);   // идемпотентно: поднять сессию, если шлюз её не держит
+      const st = await gw.status(id);
+      if (!st || st.authState !== 'ready') return res.status(409).json({ error: 'аккаунт шлюза не авторизован' });
+    }
     await activateAccount(req.user.salonId, id, row.channel);
     res.json({ ok: true });
-  } catch (e) { logger.error(`activate #${id}: ${e.message}`); res.status(500).json({ error: e.message }); }
+  } catch (e) { logger.error(`activate #${id}: ${e.message}`); res.status(e.status || 500).json({ error: e.message }); }
 });
 
 module.exports = router;
 module.exports.parseAuthStep = parseAuthStep;
 module.exports.createTelegramAccount = createTelegramAccount;
 module.exports.activateAccount = activateAccount;
+module.exports.promoteIfReady = promoteIfReady;

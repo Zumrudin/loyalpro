@@ -5,7 +5,7 @@ jest.mock('./config', () => ({
   MESSAGING_GATEWAY: { webhookSecret: 'gwsecret' },
 }));
 jest.mock('./db', () => ({ db: { query: jest.fn(), one: jest.fn(), oneOrNone: jest.fn(), any: jest.fn() } }));
-jest.mock('./services/messaging/accounts', () => ({ resolveSalon: jest.fn() }));
+jest.mock('./services/messaging/accounts', () => ({ resolveSalon: jest.fn(), credentialsFor: jest.fn() }));
 jest.mock('./services/agent/dispatcher', () => ({ enqueue: jest.fn() }));
 jest.mock('./services/chat-events', () => ({ emit: jest.fn(), emitFollowupStatus: jest.fn() }));
 jest.mock('./services/outgoing-authorship', () => ({ classify: jest.fn().mockResolvedValue(null) }));
@@ -38,6 +38,7 @@ const messageInserts = () => db.query.mock.calls.filter(c => /INSERT INTO chatpu
 
 beforeEach(() => {
   jest.clearAllMocks();
+  accounts.credentialsFor.mockResolvedValue(null);
   db.one.mockResolvedValue({ id: 101 });
   db.oneOrNone.mockResolvedValue(null);
   db.query.mockImplementation(async sql => (/INSERT INTO chatpush_messages/.test(sql)
@@ -103,4 +104,42 @@ test('/chatpush: сначала ответ, потом резолв салона
   expect(eventInserts()[0][1]).toContain('chatpush');
   expect(messageInserts()[0][1]).toContain('chatpush');
   expect(messageInserts()[0][1][0]).toBe(1);
+});
+
+describe('канал салона обслуживает другой провайдер (переключение tdlib)', () => {
+  test('/chatpush tdlib-сообщение, а канал на шлюзе → событие сохранено, сообщение не разбираем', async () => {
+    accounts.resolveSalon.mockResolvedValue(1);
+    accounts.credentialsFor.mockResolvedValue({ id: 42, provider: 'gateway', channel: 'tdlib' });
+    await handle({ baseUrl: '/chatpush', query: { key: 'cpsecret' }, body: flatBody(46594) }, fakeRes());
+    expect(accounts.credentialsFor).toHaveBeenCalledWith(1, 'tdlib');
+    expect(eventInserts()).toHaveLength(1);
+    expect(messageInserts()).toHaveLength(0);
+    expect(dispatcher.enqueue).not.toHaveBeenCalled();
+    expect(db.query).toHaveBeenCalledWith(expect.stringMatching(/SET processed=TRUE/), [101]);
+    expect(log.info).toHaveBeenCalledWith(expect.stringMatching(/skip chatpush tdlib message: канал салона 1 обслуживает gateway \(аккаунт #42\)/));
+  });
+
+  test('/gateway сообщение, а канал на Chatpush → пропуск', async () => {
+    accounts.resolveSalon.mockResolvedValue(3);
+    accounts.credentialsFor.mockResolvedValue({ id: 5, provider: 'chatpush', channel: 'tdlib' });
+    await handle({ baseUrl: '/gateway', query: { key: 'gwsecret' }, body: flatBody(9) }, fakeRes());
+    expect(eventInserts()).toHaveLength(1);
+    expect(messageInserts()).toHaveLength(0);
+    expect(dispatcher.enqueue).not.toHaveBeenCalled();
+  });
+
+  test('тот же провайдер → обычная обработка', async () => {
+    accounts.resolveSalon.mockResolvedValue(3);
+    accounts.credentialsFor.mockResolvedValue({ id: 9, provider: 'gateway', channel: 'tdlib' });
+    await handle({ baseUrl: '/gateway', query: { key: 'gwsecret' }, body: flatBody(9) }, fakeRes());
+    expect(messageInserts()).toHaveLength(1);
+    expect(dispatcher.enqueue).toHaveBeenCalled();
+  });
+
+  test('сбой credentialsFor → обычная обработка (fail-open)', async () => {
+    accounts.resolveSalon.mockResolvedValue(3);
+    accounts.credentialsFor.mockRejectedValue(new Error('db down'));
+    await handle({ baseUrl: '/gateway', query: { key: 'gwsecret' }, body: flatBody(9) }, fakeRes());
+    expect(messageInserts()).toHaveLength(1);
+  });
 });

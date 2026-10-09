@@ -161,6 +161,23 @@ router.post('/webhook', async (req, res) => {
     return;
   }
 
+  // Переключение канала (Chatpush ↔ свой шлюз): пока прежний провайдер ещё
+  // залогинен в тот же Telegram, его события тоже резолвятся в салон, и одно
+  // входящее легло бы в переписку и к агенту ДВАЖДЫ. Сообщение разбираем
+  // только от провайдера АКТИВНОЙ строки канала; сбой реестра — fail-open
+  // (кэш credentialsFor 60 с — допустимое окно).
+  if (msg) {
+    const ch = chatpush.replyRoutingFor(msg.channel);
+    const active = await accounts.credentialsFor(salonId, ch).catch(() => null);
+    if (active && active.provider !== provider) {
+      logger.info(`skip ${provider} ${msg.channel} message: канал салона ${salonId} обслуживает ${active.provider} (аккаунт #${active.id}) — событие сохранено, сообщение не разбираем`);
+      if (eventId) {
+        try { await db.query('UPDATE chatpush_events SET processed=TRUE WHERE id=$1', [eventId]); } catch {}
+      }
+      return;
+    }
+  }
+
   try {
     // Вставилось ли НОВОЕ сообщение (а не дубль ретрая) — гейтит авто-ответ ниже.
     let storedNew = false;

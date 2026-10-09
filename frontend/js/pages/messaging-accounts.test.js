@@ -16,6 +16,8 @@ test('msgAccStateLabel', () => {
   assert.equal(ctx.msgAccStateLabel({ provider: 'gateway', status: 'active', auth_state: 'wait_code' }), 'Свой шлюз · ждёт код');
   assert.equal(ctx.msgAccStateLabel({ provider: 'gateway', status: 'active', auth_state: 'error', auth_error: 'PHONE_CODE_INVALID' }), 'Свой шлюз · ошибка · PHONE_CODE_INVALID');
   assert.equal(ctx.msgAccStateLabel({ provider: 'gateway', status: 'disabled', auth_state: 'logged_out' }), 'Свой шлюз · отключён');
+  assert.equal(ctx.msgAccStateLabel({ provider: 'gateway', status: 'pending', auth_state: 'wait_code' }), 'Свой шлюз · подключается · ждёт код');
+  assert.equal(ctx.msgAccStateLabel({ provider: 'gateway', status: 'pending', auth_state: 'starting' }), 'Свой шлюз · подключается · запускается');
 });
 
 test('msgAccNextStep — какой ввод показывать по состоянию', () => {
