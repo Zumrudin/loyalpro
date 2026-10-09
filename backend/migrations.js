@@ -1507,7 +1507,7 @@ async function runMigrations(client) {
     INSERT INTO messenger_accounts (salon_id, provider, channel, external_id, api_base, token, status, display_name)
     SELECT src.salon_id, 'chatpush', ch, src.external_id, src.api_base, src.token, 'active', src.display_name
       FROM (SELECT DISTINCT ON (salon_id) salon_id, external_id, api_base, token, display_name
-              FROM messenger_accounts WHERE provider = 'chatpush' ORDER BY salon_id, id) src
+              FROM messenger_accounts WHERE provider = 'chatpush' AND status = 'active' ORDER BY salon_id, id) src
      CROSS JOIN unnest(ARRAY['whatsapp','tdlib','telegram','max','max_bot','notify']) AS ch
      WHERE NOT EXISTS (SELECT 1 FROM messenger_accounts m WHERE m.salon_id = src.salon_id AND m.channel = ch)
   `).catch(e => console.warn('[migrations] messenger_accounts channel backfill failed:', e.message));
