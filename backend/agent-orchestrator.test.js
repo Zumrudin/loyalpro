@@ -3529,6 +3529,29 @@ describe('предвызов КБ: справка об услуге', () => {
     expect(block).not.toMatch(/10:00/);
   });
 
+  test('обзор процедур не попадает ни в справку, ни в готовый ответ', async () => {
+    const { REAL } = require('./services/agent/__fixtures__/kb-real-chunks');
+    const { deps } = factDeps('Сколько стоит чистка лица?', { found: true, context: REAL.peels, sources: [] });
+    const reply = 'Чистка лица стоит 6 500 ₽, длительность около 90 минут. Могу подобрать время для записи.';
+    deps.provider.createMessage.mockResolvedValue(textResp(reply));
+    const result = await orchestrator.runDialog(1, 'synthetic-service-fact', { deps });
+    expect(deps.provider.createMessage.mock.calls[0][0].system).not.toContain(FACT_HEAD);
+    expect(result.replies).toEqual([reply]);
+  });
+
+  test('справка по конкретной услуге доступна модели, цельный ответ сохраняется', async () => {
+    const { REAL } = require('./services/agent/__fixtures__/kb-real-chunks');
+    const { deps } = factDeps('Сколько стоит чистка лица?', { found: true, context: REAL.cleaning, sources: [] });
+    const reply = 'Комбинированная чистка лица — 6 500 ₽. Этапы очищения специалист подбирает по состоянию кожи. Подобрать время?';
+    deps.provider.createMessage.mockResolvedValue(textResp(reply));
+    const result = await orchestrator.runDialog(1, 'synthetic-service-fact', { deps });
+    const system = deps.provider.createMessage.mock.calls[0][0].system;
+    expect(system).toContain(FACT_HEAD);
+    expect(system).toContain('Профессиональное очищение кожи');
+    expect(system).toContain('именно к процедуре, цену которой называешь');
+    expect(result.replies).toEqual([reply]);
+  });
+
   test('статья не про услугу из вопроса → блока нет', async () => {
     const { deps } = factDeps('Сколько стоит ботокс?', { found: true, context: CTX, sources: [] });
     await orchestrator.runDialog(1, '79001112233', { deps });
@@ -3596,14 +3619,14 @@ describe('предвызов КБ: справка об услуге', () => {
     expect(sys2).not.toContain('Ультразвук и механика');
   });
 
-  test('голая цена + справка → оркестратор дописывает факт и шаг', async () => {
+  test('голая цена + справка → оркестратор дописывает только шаг', async () => {
     const { deps } = factDeps('Сколько стоит чистка лица?', { found: true, context: CTX, sources: [] });
     deps.provider.createMessage.mockReset();
     deps.provider.createMessage.mockResolvedValue(
       { assistantMsg: { role: 'assistant', content: 'ок' }, toolCalls: [], text: 'Чистка лица стоит 6 500 ₽.' });
     const res = await orchestrator.runDialog(1, '79001112233', { deps });
     const pfMod = require('./services/agent/price-followthrough');
-    expect(res.replies).toEqual([`Чистка лица стоит 6 500 ₽. Ультразвук и механика, уход после процедуры. ${pfMod.STEP_QUESTION}`]);
+    expect(res.replies).toEqual([`Чистка лица стоит 6 500 ₽. ${pfMod.STEP_QUESTION}`]);
   });
 
   test('AGENT_PRICE_FOLLOWTHROUGH=false → голая цена уходит как есть', async () => {

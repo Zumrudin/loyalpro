@@ -59,6 +59,8 @@ const STOP_PREFIXES = [
   'знаю', 'выбра', 'выбор', 'посовет', 'помоги', 'подойд', 'подбер', 'лучш',
   'хочу', 'хотел', 'можно', 'нужн', 'мне', 'для', 'что', 'как', 'это', 'эта',
   'здравств', 'добр', 'пожалуйст', 'спасиб', 'процедур', 'услуг', 'сеанс',
+  // Совпадение зоны не означает совпадение услуги («массаж лица» ≠ «чистка лица»).
+  'лиц', 'кож', 'спин', 'ше', 'декольт', 'тел', 'зон',
 ];
 
 function wantsServiceFact(lastUserText) {
@@ -89,6 +91,21 @@ function stems(userText) {
     }
   }
   return [...out];
+}
+
+// Справка — об одной процедуре. У обзорной статьи нельзя приписывать
+// общий вводный абзац отдельной позиции прайса. Несколько зон одной услуги
+// допустимы; названия неизвестных направлений в перечне отвергаем тоже.
+const ZONE_ONLY_RE = /^(?:лица?|спин[аы]|ше[яи]|декольте|тела|рук[иа]?|ног[иа]?|живота|ягодиц)$/u;
+function isSingleServiceTitle(title, userText) {
+  const subject = norm(title).replace(/\([^)]*\)/g, '');
+  const parts = subject.split(/[,;/]|\s+и\s+/u).map(s => s.trim()).filter(Boolean);
+  if (parts.filter(p => !ZONE_ONLY_RE.test(p)).length !== 1) return false;
+  // При названном виде чистки общий стем «чист» недостаточен.
+  const variants = ['комбинирован', 'ультразвуков', 'атравматическ', 'механическ'];
+  const query = norm(userText);
+  if (/чист/u.test(query) && variants.some(v => query.includes(v) && !subject.includes(v))) return false;
+  return true;
 }
 
 function dropTimedSentences(line) {
@@ -148,7 +165,7 @@ function pickServiceFact(context, userText) {
   const titleIdx = lines.findIndex(Boolean);
   if (titleIdx < 0) return null;
   const title = lines[titleIdx];
-  if (SERVICES_HEADER_RE.test(title) || hasTime(title)) return null;
+  if (SERVICES_HEADER_RE.test(title) || hasTime(title) || !isSingleServiceTitle(title, userText)) return null;
   const titleLc = norm(title);
   const st = stems(userText);
   if (!st.length || !st.some(s => titleLc.includes(s))) return null;

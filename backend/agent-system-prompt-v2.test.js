@@ -62,6 +62,6 @@ describe('buildSystemPromptV2', () => {
 
   test('модуль цены требует факт и шаг после цифры', () => {
     const p = buildSystemPromptV2({ ...BASE, lastUserText: 'Сколько стоит чистка?' });
-    expect(p).toContain('После цены — ОДИН проверенный факт');
+    expect(p).toContain('После цены естественно впиши ОДИН проверенный факт');
   });
 });

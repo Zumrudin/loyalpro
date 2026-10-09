@@ -7,12 +7,12 @@ const ASK = 'Здравствуйте! Сколько стоит чистка л
 const BARE = 'Комбинированная чистка лица стоит 6 500 ₽.';
 
 describe('applyPriceFollowthrough', () => {
-  test('голая цена + справка → факт и шаг в конце последней реплики', () => {
+  test('голая цена + справка → только шаг, факт остаётся задачей модели', () => {
     const r = pf.applyPriceFollowthrough(['Анна, здравствуйте!', BARE], { patientLastText: ASK, serviceFact: FACT });
-    expect(r.addedFact).toBe(true);
+    expect(r.addedFact).toBe(false);
     expect(r.addedStep).toBe(true);
     expect(r.replies[0]).toBe('Анна, здравствуйте!');
-    expect(r.replies[1]).toBe(`${BARE} Ультразвук и механика, уход после процедуры. ${pf.STEP_QUESTION}`);
+    expect(r.replies[1]).toBe(`${BARE} ${pf.STEP_QUESTION}`);
     // Дописанное не тянет время и не делает телеметрию «цена без шага».
     expect(replyGuard.extractTimes(r.replies.join('\n'))).toEqual([]);
     expect(replyGuard.checkPriceWithoutNextStep(r.replies.join('\n'))).toEqual([]);
@@ -24,11 +24,11 @@ describe('applyPriceFollowthrough', () => {
     expect(r.replies[0]).toBe(`${BARE} ${pf.STEP_QUESTION}`);
   });
 
-  test('шаг уже есть (любой «?») → факт ПЕРЕД первым вопросом', () => {
+  test('шаг уже есть → готовый ответ не меняется', () => {
     const r = pf.applyPriceFollowthrough([`${BARE} Хотите записаться? Есть и утро, и вечер.`], { patientLastText: ASK, serviceFact: FACT });
     expect(r.addedStep).toBe(false);
-    expect(r.addedFact).toBe(true);
-    expect(r.replies[0]).toBe(`${BARE} Ультразвук и механика, уход после процедуры. Хотите записаться? Есть и утро, и вечер.`);
+    expect(r.addedFact).toBe(false);
+    expect(r.replies[0]).toBe(`${BARE} Хотите записаться? Есть и утро, и вечер.`);
   });
 
   test('вопрос первым предложением → чистого места нет, факт не добавляется', () => {
@@ -168,27 +168,36 @@ describe('applyPriceFollowthrough', () => {
 });
 
 // Офлайн-повтор ценового кейса живого прогона 08.10.2026 на РЕАЛЬНЫХ чанках КБ:
-// справка (pickServiceFact) → дописка (applyPriceFollowthrough).
+// справка остаётся входом модели, applyPriceFollowthrough добавляет только шаг.
 describe('реальные чанки КБ → итоговая реплика', () => {
   const { REAL } = require('./services/agent/__fixtures__/kb-real-chunks');
   const { pickServiceFact } = require('./services/agent/service-fact');
 
-  test('Volnewmer: факт — описание аппарата, не пометка о ценах', () => {
+  test('Volnewmer: подходящий факт не приклеивается к ответу кодом', () => {
     const ask = 'Здравствуйте! Сколько стоит Volnewmer?';
     const fact = pickServiceFact(REAL.volnewmer, ask);
     const r = pf.applyPriceFollowthrough(['Volnewmer — от 81 000 ₽ за 400 линий.'], { patientLastText: ask, serviceFact: fact });
     expect(r.replies).toEqual(['Volnewmer — от 81 000 ₽ за 400 линий. '
-      + 'Инновационный монополярный радиочастотный аппарат нового поколения от создателей Ultraformer. '
       + 'Подобрать Вам удобное время для записи?']);
   });
 
-  test('чистка лица: факт — описание процедуры', () => {
+  test('чистка лица: подходящий факт не приклеивается к ответу кодом', () => {
     const ask = 'Сколько стоит чистка лица?';
     const fact = pickServiceFact(REAL.cleaning, ask);
     const r = pf.applyPriceFollowthrough(['Комбинированная чистка лица стоит 6 500 ₽.'], { patientLastText: ask, serviceFact: fact });
     expect(r.replies).toEqual(['Комбинированная чистка лица стоит 6 500 ₽. '
-      + 'Профессиональное очищение кожи с индивидуальным сочетанием атравматических, ультразвуковых и механических этапов. '
       + 'Подобрать Вам удобное время для записи?']);
   });
 });
 
+
+test('цена, длительность и предложение записи не получают обзор процедур в конце', () => {
+  const { REAL } = require('./services/agent/__fixtures__/kb-real-chunks');
+  const reply = `${BARE} Длительность — около 90 минут. Могу подобрать удобное время для записи.`;
+  const result = pf.applyPriceFollowthrough([reply], {
+    patientLastText: ASK,
+    serviceFact: { title: 'Пилинги, чистки и карбокситерапия', text: REAL.peels.split('\n')[3] },
+  });
+  expect(result.replies).toEqual([reply]);
+  expect(result.addedFact).toBe(false);
+});

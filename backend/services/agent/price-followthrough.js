@@ -1,20 +1,10 @@
 'use strict';
 // ============================================================
-// «Цена → факт → шаг» — ДЕТЕРМИНИРОВАННАЯ дописка оркестратора.
-// ЧИСТЫЙ модуль: ни БД, ни сети. Тесты: agent-price-followthrough.test.js.
-//
-// ЗАЧЕМ: главная молчаливая потеря воронки 02.10.2026 — «цена → тишина».
-// Промпт-правило PRICE_FOLLOWTHROUGH (sales-modules.js) живой пробник
-// scripts/agent-sales-probe.js провалил 3/3 (07.10.2026): справка об услуге
-// в промпте есть, а модель отвечает голой цифрой («…чистка лица стоит
-// 6 500 ₽.»), в 2/3 — ещё и без следующего шага. По мораторию на новые
-// промпт-правила такие дефекты закрываются кодом: факт берётся ДОСЛОВНО из
-// справки КБ (serviceFact, предвызов service-fact.js), шаг — одна константа.
-//
-// Модуль решает только по ТЕКСТУ (сценарий сообщения пациента, суммы в
-// реплике, есть ли уже факт/шаг). Состояние хода (запись, эскалация, ложное
-// утверждение, запасной текст…) и флаг AGENT_PRICE_FOLLOWTHROUGH проверяет
-// оркестратор — у него эти факты, здесь их не продублировать без копий.
+// После ответа о цене код может добавить только следующий шаг.
+// Факт из КБ формулирует модель внутри цельного ответа: дословная дописка
+// общего абзаца создавала ложное впечатление состава оплачиваемой услуги.
+// serviceFact и addedFact оставлены в контракте для совместимости;
+// addedFact всегда false. Чистые экспортируемые помощники сохранены.
 // ============================================================
 const { detectPromptScenarios, SCENARIOS } = require('./prompt-scenarios');
 const { PRICE_SUM_RE, NEXT_STEP_RE } = require('./reply-guard');
@@ -168,21 +158,8 @@ function applyPriceFollowthrough(replies, opts = {}) {
 
   const out = list.slice();
   const last = out.length - 1;
-  let addedFact = false;
-  const fact = opts.serviceFact;
-  if (fact && typeof fact.text === 'string') {
-    const sentence = factSentence(fact.text);
-    // Вопрос в ДРУГОЙ реплике серии (не последней) — факт в конце последней
-    // встал бы после него; чистого места нет.
-    const earlierQuestion = list.slice(0, last).some(t => String(t || '').includes('?'));
-    if (sentence && !earlierQuestion && !factAlreadyConveyed(joined, sentence, { title: fact.title, patientText })) {
-      const withFact = insertFact(out[last], sentence);
-      if (withFact) { out[last] = withFact; addedFact = true; }
-    }
-  }
-  // Шаг судим по ИСХОДНОЙ реплике: факт из справки может содержать «входит»/
-  // «длится», и считать его шагом значило бы снова оставить цену без
-  // предложения записаться.
+  // Никаких вставок факта после генерации, даже если справка передана.
+  const addedFact = false;
   const addedStep = !NEXT_STEP_RE.test(joined) && !INDIVIDUAL_PRICE_RE.test(joined)
     && !patientNamedWhen(patientText, opts.nowMs);
   if (addedStep) out[last] = `${String(out[last]).trimEnd()} ${STEP_QUESTION}`;
