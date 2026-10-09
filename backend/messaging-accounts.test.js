@@ -166,3 +166,29 @@ describe('listForSalon', () => {
     expect(rows[0]).toMatchObject({ id: 1, provider: 'chatpush', channel: 'tdlib', status: 'active' });
   });
 });
+
+describe('credentialsById', () => {
+  test('строка chatpush → креды с api_base строки, любой статус, без фильтра по салону', async () => {
+    db.oneOrNone.mockResolvedValueOnce({ id: 5, provider: 'chatpush', channel: 'tdlib', api_base: 'https://row.base', token: 'ROW' });
+    expect(await accounts.credentialsById(5)).toEqual({ id: 5, provider: 'chatpush', channel: 'tdlib', apiBase: 'https://row.base', token: 'ROW' });
+    const [sql, params] = db.oneOrNone.mock.calls[0];
+    expect(sql).toMatch(/WHERE id = \$1/);
+    expect(sql).not.toMatch(/status/);
+    expect(params).toEqual([5]);
+  });
+  test('строки нет → null', async () => {
+    db.oneOrNone.mockResolvedValueOnce(null);
+    expect(await accounts.credentialsById(404)).toBeNull();
+  });
+  test('сбой БД → null без исключения, warn', async () => {
+    db.oneOrNone.mockRejectedValueOnce(new Error('db down'));
+    expect(await accounts.credentialsById(5)).toBeNull();
+    expect(require('./logger').__log.warn).toHaveBeenCalled();
+  });
+  test('без кэша: два вызова — два запроса', async () => {
+    db.oneOrNone.mockResolvedValue({ id: 5, provider: 'chatpush', channel: 'tdlib', api_base: 'x', token: 't' });
+    await accounts.credentialsById(5);
+    await accounts.credentialsById(5);
+    expect(db.oneOrNone).toHaveBeenCalledTimes(2);
+  });
+});

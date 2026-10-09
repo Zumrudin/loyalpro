@@ -12,6 +12,9 @@
 // resolveSalon(provider, externalId) → salon_id | null
 //   Обратная задача для вебхука: от кого пришло событие.
 //   Порядок: активная строка, затем самая свежая.
+// credentialsById(id) → креды конкретной строки (ЛЮБОЙ статус, без кэша):
+//   проверка судьбы уже отправленного сообщения должна идти через тот аккаунт,
+//   которым оно ушло, даже если канал с тех пор переключили или выключили.
 // Кэш 60 с по ключу salon:channel — функция зовётся на каждую отправку.
 // Сбой БД НЕ кэшируется: отдаём прежнее (протухшее) значение, если оно есть,
 // иначе env-фолбэк без записи в кэш — иначе минута «чужих» кредов после сбоя.
@@ -78,6 +81,19 @@ async function credentialsFor(salonId, channel) {
   return value;
 }
 
+async function credentialsById(id) {
+  try {
+    const row = await db.oneOrNone(
+      `SELECT id, provider, channel, api_base, token FROM messenger_accounts WHERE id = $1`, [id]);
+    if (!row) return null;
+    const value = rowToCreds(row, '(по id)');
+    return value ? Object.freeze(value) : null;
+  } catch (e) {
+    logger.warn(`credentialsById(${id}): ошибка БД — ${e.message}`);
+    return null;
+  }
+}
+
 async function resolveSalon(provider, externalId) {
   if (externalId === undefined || externalId === null) return provider === 'chatpush' ? envSalon(null) : null;
   try {
@@ -109,4 +125,4 @@ async function listForSalon(salonId) {
 
 function invalidate() { cache.clear(); }
 
-module.exports = { credentialsFor, resolveSalon, listForSalon, invalidate, TTL_MS };
+module.exports = { credentialsFor, credentialsById, resolveSalon, listForSalon, invalidate, TTL_MS };
