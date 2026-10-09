@@ -5,17 +5,25 @@
 // credentialsFor(salonId, channel) → {id, provider, channel, apiBase, token}
 //   Куда и с каким токеном слать в ЭТОМ канале ЭТОГО салона. У провайдера
 //   'gateway' apiBase всегда из config.MESSAGING_GATEWAY.url (адрес шлюза —
-//   настройка процесса, а не салона). Нет строки → legacy-фолбэк на env ТОЛЬКО
-//   для салона CHATPUSH_SALON_ID (чужому салону чужой токен не подставляем).
+//   настройка процесса, а не салона; не задан → null). Фолбэк на env — только
+//   у салона без единой строки в таблице и только для CHATPUSH_SALON_ID (чужому
+//   салону чужой токен не подставляем). Строки не удаляются, а выключаются
+//   (status='disabled'), поэтому выключенный канал = null, а не env.
 // resolveSalon(provider, externalId) → salon_id | null
 //   Обратная задача для вебхука: от кого пришло событие.
+//   Порядок: активная строка, затем самая свежая.
 // Кэш 60 с по ключу salon:channel — функция зовётся на каждую отправку.
+// Сбой БД НЕ кэшируется: отдаём прежнее (протухшее) значение, если оно есть,
+// иначе env-фолбэк без записи в кэш — иначе минута «чужих» кредов после сбоя.
 // ============================================================
 const { db } = require('../../db');
 const config = require('../../config');
+const { createLogger } = require('../../logger');
+const logger = createLogger('MessagingAccounts');
 
 const TTL_MS = 60 * 1000;
 const cache = new Map();   // `${salonId}:${channel}` → { at, value }
+let gatewayUrlWarned = false;
 
 function envCreds(salonId, channel) {
   const cp = config.CHATPUSH || {};
@@ -23,13 +31,20 @@ function envCreds(salonId, channel) {
   return { id: 'env', provider: 'chatpush', channel, apiBase: cp.apiBase, token: cp.instanceToken };
 }
 
-function rowToCreds(row) {
+function rowToCreds(row, salonId) {
   const gw = config.MESSAGING_GATEWAY || {};
+  if (row.provider === 'gateway' && !gw.url) {
+    if (!gatewayUrlWarned) {
+      gatewayUrlWarned = true;
+      logger.warn(`gateway-аккаунт #${row.id} у салона ${salonId}, но MESSAGING_GATEWAY_URL не задан`);
+    }
+    return null;
+  }
   return {
     id: row.id,
     provider: row.provider,
     channel: row.channel,
-    apiBase: row.provider === 'gateway' ? (gw.url || '') : (row.api_base || (config.CHATPUSH || {}).apiBase || ''),
+    apiBase: row.provider === 'gateway' ? gw.url : (row.api_base || (config.CHATPUSH || {}).apiBase || ''),
     token: row.token,
   };
 }
@@ -46,10 +61,19 @@ async function credentialsFor(salonId, channel) {
         WHERE salon_id = $1 AND channel = $2 AND status = 'active'
         LIMIT 1`,
       [salonId, channel]);
-    value = row ? rowToCreds(row) : envCreds(salonId, channel);
-  } catch (_) {
-    value = envCreds(salonId, channel);
+    if (row) {
+      value = rowToCreds(row, salonId);
+    } else {
+      const any = await db.oneOrNone(
+        `SELECT 1 FROM messenger_accounts WHERE salon_id = $1 LIMIT 1`, [salonId]);
+      value = any ? null : envCreds(salonId, channel);
+    }
+  } catch (e) {
+    logger.warn(`credentialsFor(${salonId},${channel}): ошибка БД — ${e.message}`);
+    if (hit) return hit.value;
+    return envCreds(salonId, channel);
   }
+  if (value) Object.freeze(value);
   cache.set(key, { at: Date.now(), value });
   return value;
 }
@@ -58,10 +82,13 @@ async function resolveSalon(provider, externalId) {
   if (externalId === undefined || externalId === null) return provider === 'chatpush' ? envSalon(null) : null;
   try {
     const row = await db.oneOrNone(
-      `SELECT salon_id FROM messenger_accounts WHERE provider = $1 AND external_id = $2 LIMIT 1`,
+      `SELECT salon_id FROM messenger_accounts WHERE provider = $1 AND external_id = $2
+        ORDER BY (status = 'active') DESC, id DESC LIMIT 1`,
       [provider, String(externalId)]);
     if (row) return row.salon_id;
-  } catch (_) { /* fallback ниже */ }
+  } catch (e) {
+    logger.warn(`resolveSalon(${provider},${externalId}): ошибка БД — ${e.message}`);
+  }
   return provider === 'chatpush' ? envSalon(externalId) : null;
 }
 

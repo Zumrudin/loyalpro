@@ -5,6 +5,10 @@ jest.mock('./config', () => ({
   CHATPUSH: { apiBase: 'https://api.chatpush.ru', instanceToken: 'ENVTOKEN', customerId: 777, salonId: 1 },
   MESSAGING_GATEWAY: { url: 'http://127.0.0.1:3002', secret: 's', webhookSecret: 'w' },
 }));
+jest.mock('./logger', () => {
+  const log = { warn: jest.fn(), info: jest.fn(), error: jest.fn(), debug: jest.fn() };
+  return { createLogger: () => log, __log: log };
+});
 
 const { db } = require('./db');
 const accounts = require('./services/messaging/accounts');
@@ -30,13 +34,13 @@ describe('credentialsFor', () => {
   });
 
   test('строки нет, салон из env → legacy-креды из env', async () => {
-    db.oneOrNone.mockResolvedValueOnce(null);
+    db.oneOrNone.mockResolvedValueOnce(null).mockResolvedValueOnce(null);
     const c = await accounts.credentialsFor(1, 'whatsapp');
     expect(c).toEqual({ id: 'env', provider: 'chatpush', channel: 'whatsapp', apiBase: 'https://api.chatpush.ru', token: 'ENVTOKEN' });
   });
 
   test('строки нет, чужой салон → null (не подставлять чужой токен)', async () => {
-    db.oneOrNone.mockResolvedValueOnce(null);
+    db.oneOrNone.mockResolvedValueOnce(null).mockResolvedValueOnce(null);
     expect(await accounts.credentialsFor(2, 'whatsapp')).toBeNull();
   });
 
@@ -57,7 +61,84 @@ describe('credentialsFor', () => {
   });
 });
 
+describe('credentialsFor — ревью', () => {
+  afterEach(() => { jest.restoreAllMocks(); });
+
+  test('TTL: через 61 с снова идёт в БД', async () => {
+    const row = { id: 5, provider: 'chatpush', channel: 'max', api_base: 'x', token: 't' };
+    db.oneOrNone.mockResolvedValue(row);
+    const t0 = 1_000_000;
+    const spy = jest.spyOn(Date, 'now').mockReturnValue(t0);
+    await accounts.credentialsFor(1, 'max');
+    spy.mockReturnValue(t0 + 61 * 1000);
+    await accounts.credentialsFor(1, 'max');
+    expect(db.oneOrNone).toHaveBeenCalledTimes(2);
+  });
+
+  test('сбой БД не кэшируется: следующий вызов берёт строку', async () => {
+    db.oneOrNone
+      .mockRejectedValueOnce(new Error('db down'))
+      .mockResolvedValueOnce({ id: 5, provider: 'chatpush', channel: 'tdlib', api_base: 'https://a', token: 'ROW' });
+    expect((await accounts.credentialsFor(1, 'tdlib')).token).toBe('ENVTOKEN');
+    const c = await accounts.credentialsFor(1, 'tdlib');
+    expect(c.token).toBe('ROW');
+    expect(db.oneOrNone).toHaveBeenCalledTimes(2);
+    expect(require('./logger').__log.warn).toHaveBeenCalled();
+  });
+
+  test('сбой БД при протухшем кэше → прежнее значение, не env', async () => {
+    db.oneOrNone.mockResolvedValueOnce({ id: 5, provider: 'chatpush', channel: 'tdlib', api_base: 'https://a', token: 'ROW' });
+    const t0 = 2_000_000;
+    const spy = jest.spyOn(Date, 'now').mockReturnValue(t0);
+    await accounts.credentialsFor(1, 'tdlib');
+    spy.mockReturnValue(t0 + 61 * 1000);
+    db.oneOrNone.mockRejectedValueOnce(new Error('db down'));
+    const c = await accounts.credentialsFor(1, 'tdlib');
+    expect(c.token).toBe('ROW');
+    expect(c.id).toBe(5);
+  });
+
+  test('у салона есть строки, но активной по каналу нет → null (канал выключен)', async () => {
+    db.oneOrNone.mockResolvedValueOnce(null).mockResolvedValueOnce({ '?column?': 1 });
+    expect(await accounts.credentialsFor(1, 'tdlib')).toBeNull();
+    const [sql, params] = db.oneOrNone.mock.calls[1];
+    expect(sql).toMatch(/SELECT 1 FROM messenger_accounts WHERE salon_id = \$1/);
+    expect(params).toEqual([1]);
+  });
+
+  test('gateway-строка при пустом MESSAGING_GATEWAY.url → null', async () => {
+    const cfg = require('./config');
+    const prev = cfg.MESSAGING_GATEWAY.url;
+    cfg.MESSAGING_GATEWAY.url = '';
+    try {
+      db.oneOrNone.mockResolvedValueOnce({ id: 9, provider: 'gateway', channel: 'tdlib', api_base: null, token: 'GW' });
+      expect(await accounts.credentialsFor(1, 'tdlib')).toBeNull();
+    } finally {
+      cfg.MESSAGING_GATEWAY.url = prev;
+    }
+  });
+
+  test('результат заморожен', async () => {
+    db.oneOrNone.mockResolvedValueOnce({ id: 5, provider: 'chatpush', channel: 'tdlib', api_base: 'https://a', token: 'ROW' });
+    expect(Object.isFrozen(await accounts.credentialsFor(1, 'tdlib'))).toBe(true);
+  });
+});
+
 describe('resolveSalon', () => {
+  test('SQL: активная строка и самая свежая первыми', async () => {
+    db.oneOrNone.mockResolvedValueOnce({ salon_id: 3 });
+    await accounts.resolveSalon('gateway', 12);
+    expect(db.oneOrNone.mock.calls[0][0]).toMatch(/ORDER BY \(status = 'active'\) DESC, id DESC/);
+  });
+  test('сбой БД → chatpush с совпавшим customer = env-салон, gateway = null', async () => {
+    db.oneOrNone.mockRejectedValue(new Error('db down'));
+    expect(await accounts.resolveSalon('chatpush', 777)).toBe(1);
+    expect(await accounts.resolveSalon('gateway', 777)).toBeNull();
+  });
+  test('chatpush с externalId=null при заданном customerId → null', async () => {
+    expect(await accounts.resolveSalon('chatpush', null)).toBeNull();
+  });
+
   test('по (provider, external_id) из БД', async () => {
     db.oneOrNone.mockResolvedValueOnce({ salon_id: 3 });
     expect(await accounts.resolveSalon('gateway', 12)).toBe(3);
