@@ -54,6 +54,11 @@ function safeExt(mimeType) {
   return EXT_BY_MIME[String(mimeType || '').toLowerCase().split(';')[0].trim()] || '.bin';
 }
 
+// Временный файл send_file лежит в собственном каталоге tmp/<hex>/ — убираем и его.
+function removeTmpFile(f) {
+  fs.rm(f, { force: true }, () => { fs.rmdir(path.dirname(f), () => {}); });
+}
+
 const AUTH_MAP = {
   authorizationStateWaitTdlibParameters: 'starting',
   authorizationStateWaitPhoneNumber: 'wait_phone',
@@ -109,15 +114,19 @@ class TelegramClient {
     this.ownPhone = mapper.normalizePhone(account.phone);
     this.me = null;
     this.pendingSends = new Map();   // временный id сообщения TDLib → id доставки
+    this.pendingFiles = new Map();   // временный id сообщения TDLib → временный файл send_file
     this.chatQueues = new Map();     // chat_id → хвост цепочки обработки
     this.client = null;
     this.closed = false;
   }
 
-  dirs() {
-    const base = path.join(this.d.config.DATA_DIR, `acc-${this.id}`);
+  // Статический вариант — реестру: проверить, есть ли сессия у НЕ запущенного аккаунта.
+  static dirsFor(config, id) {
+    const base = path.join(config.DATA_DIR, `acc-${id}`);
     return { db: path.join(base, 'db'), files: path.join(base, 'files'), base };
   }
+
+  dirs() { return TelegramClient.dirsFor(this.d.config, this.id); }
 
   async start() {
     const dirs = this.dirs();
@@ -244,6 +253,9 @@ class TelegramClient {
   }
 
   async deliveryFor(oldMessageId) {
+    // Отправка завершена (успех или отказ) — временный файл send_file TDLib больше не нужен.
+    const f = this.pendingFiles.get(oldMessageId);
+    if (f) { this.pendingFiles.delete(oldMessageId); removeTmpFile(f); }
     let deliveryId = this.pendingSends.get(oldMessageId) || null;
     this.pendingSends.delete(oldMessageId);
     if (!deliveryId) {
@@ -385,21 +397,26 @@ class TelegramClient {
     const content = type === 'image'
       ? { _: 'inputMessagePhoto', photo: { _: 'inputPhoto', photo: local }, caption: cap }
       : { _: 'inputMessageDocument', document: { _: 'inputDocument', document: local }, caption: cap };
-    await this.invokeSend({ _: 'sendMessage', chat_id: chatId, input_message_content: content }, deliveryId);
+    await this.invokeSend({ _: 'sendMessage', chat_id: chatId, input_message_content: content }, deliveryId, filePath);
     return deliveryId;
   }
 
-  async invokeSend(req, deliveryId) {
+  // filePath — временный файл send_file: TDLib читает его асинхронно ПОСЛЕ ответа
+  // sendMessage, поэтому удаляем только по SendSucceeded/SendFailed (deliveryFor)
+  // или сразу, если sendMessage отвергнут.
+  async invokeSend(req, deliveryId, filePath) {
     let msg;
     try {
       msg = await this.client.invoke(req);
     } catch (e) {
+      if (filePath) removeTmpFile(filePath);
       const err = tdlibError('TDLib', e);
       try { await this.d.deliveries.setStatus(deliveryId, this.d.deliveries.STATUS.FAILED, { error: e.message }); }
       catch (e2) { this.log.error(`delivery g${deliveryId}: статус FAILED не записан (${e2.message})`); }
       throw err;
     }
     this.pendingSends.set(msg.id, deliveryId);
+    if (filePath) this.pendingFiles.set(msg.id, filePath);
     try { await this.d.deliveries.setTempId(deliveryId, msg.id); }
     catch (e) { this.log.warn(`delivery g${deliveryId}: temp id не записан (${e.message})`); }
   }
@@ -409,6 +426,7 @@ class TelegramClient {
     try { await this.client.close(); } catch (_) { /* уже закрыт */ }
     this.closed = true;
     this.pendingSends.clear();
+    this.pendingFiles.clear();   // остаток подберёт sweepTmp при следующем старте
     fs.rmSync(this.dirs().base, { recursive: true, force: true });
     await this.d.repo.setAuth(this.id, 'logged_out');
   }
@@ -417,6 +435,7 @@ class TelegramClient {
     try { await this.client.close(); } catch (_) { /* уже закрыт */ }
     this.closed = true;
     this.pendingSends.clear();
+    this.pendingFiles.clear();   // остаток подберёт sweepTmp при следующем старте
   }
 }
 

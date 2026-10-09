@@ -2,6 +2,9 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const http = require('http');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
 const { createApp } = require('../server');
 
 function fakeTg(overrides = {}) {
@@ -10,9 +13,9 @@ function fakeTg(overrides = {}) {
 function deps(over = {}) {
   const tg = fakeTg(over.tg);
   return {
-    config: { INTERNAL_SECRET: 'sec', DATA_DIR: require('os').tmpdir() },
+    config: { INTERNAL_SECRET: 'sec', DATA_DIR: require('os').tmpdir(), ...(over.config || {}) },
     repo: { byToken: async (t) => (t === 'TOK' ? { id: 7 } : null), get: async (id) => (id === 7 ? { id: 7, auth_state: 'logged_out', phone: null, display_name: null, auth_error: null } : null) },
-    registry: { get: (id) => (Number(id) === 7 ? tg : null), start: async (id) => { if (id !== 7) { const e = new Error('аккаунт не найден'); e.status = 404; throw e; } return tg; }, logout: async () => {}, _clients: new Map([[7, tg]]) },
+    registry: { get: (id) => (Number(id) === 7 ? tg : null), start: async (id) => { if (id !== 7) { const e = new Error('аккаунт не найден'); e.status = 404; throw e; } return tg; }, logout: async () => {}, list: () => [{ id: tg.id, authState: tg.authState }] },
     deliveries: { parseId: (s) => (/^g(\d+)$/.test(s) ? Number(s.slice(1)) : null), get: async (acc, id) => (id === 12 && acc === 7 ? { id: 12, status_id: 2, description: 'Отправлено', error: null } : null) },
     mapper: { deliveryStatus: (row) => ({ id: `g${row.id}`, status: { status_id: row.status_id, description: row.description }, error: row.error }) },
     ...over.deps,
@@ -66,7 +69,7 @@ test('GET /api/v1/delivery/:id: своя → статус; чужая/битый
 
 test('POST /api/v1/send_file: multipart file → sendFile с путём временного файла, delivery g13', async () => {
   const calls = [];
-  const app = createApp(deps({ tg: { sendFile: async (a) => { calls.push(a); return 13; } } }));
+  const app = createApp(fileDeps(calls));
   const boundary = 'XBOUNDARY';
   const raw = [`--${boundary}`, 'Content-Disposition: form-data; name="file"; filename="a.jpg"', 'Content-Type: image/jpeg', '', 'JPEGDATA', `--${boundary}--`, ''].join('\r\n');
   const r = await call(app, 'POST', '/api/v1/send_file?file_name=a.jpg&caption=hi&type=image&phone=79001112233&dispatch_routing[]=tdlib',
@@ -74,7 +77,81 @@ test('POST /api/v1/send_file: multipart file → sendFile с путём врем
   assert.equal(r.status, 200);
   assert.equal(r.json.delivery.id, 'g13');
   assert.equal(calls[0].fileName, 'a.jpg'); assert.equal(calls[0].caption, 'hi'); assert.equal(calls[0].type, 'image'); assert.equal(calls[0].phone, '79001112233');
-  assert.ok(require('fs').existsSync(calls[0].filePath) || true, 'временный файл существовал на момент вызова');
+  assert.equal(path.basename(calls[0].filePath), 'a.jpg', 'имя документа доходит до Telegram');
+  assert.match(calls[0].filePath, /[\\/]tmp[\\/][0-9a-f]{16}[\\/]a\.jpg$/);
+  assert.equal(calls[0].exists, true, 'временный файл существовал на момент вызова');
+});
+
+function multipart(name, mime, data) {
+  const boundary = 'XBOUNDARY';
+  return { boundary, raw: [`--${boundary}`, `Content-Disposition: form-data; name="file"; filename="${name}"`, `Content-Type: ${mime}`, '', data, `--${boundary}--`, ''].join('\r\n') };
+}
+function fileDeps(calls, config) {
+  return deps({ config, tg: { sendFile: async (a) => { calls.push({ ...a, exists: fs.existsSync(a.filePath) }); return 13; } } });
+}
+
+test('send_file: file_name с обходом пути остаётся внутри tmp; чужое расширение → +расширение по MIME; без расширения — тоже', async () => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gw-srv-'));
+  const calls = [];
+  const app = createApp(fileDeps(calls, { DATA_DIR: dataDir }));
+  const H = (b) => ({ authorization: 'Bearer TOK', 'content-type': `multipart/form-data; boundary=${b}` });
+  for (const [fname, mime] of [['../../x', 'image/jpeg'], ['evil.html', 'image/jpeg'], ['price', 'application/pdf']]) {
+    const m = multipart('a.bin', mime, 'DATA');
+    const r = await call(app, 'POST', `/api/v1/send_file?file_name=${encodeURIComponent(fname)}&type=document&phone=1`, { headers: H(m.boundary), raw: m.raw });
+    assert.equal(r.status, 200);
+  }
+  const tmpRoot = path.join(dataDir, 'tmp') + path.sep;
+  for (const c of calls) {
+    assert.ok(path.resolve(c.filePath).startsWith(tmpRoot), c.filePath);
+    assert.ok(!path.basename(c.filePath).includes('..'), c.filePath);
+  }
+  assert.equal(path.basename(calls[1].filePath), 'evil.html.jpg');
+  assert.equal(path.basename(calls[2].filePath), 'price.pdf');
+});
+
+test('send_file: файл больше лимита → 413; без файла → 422', async () => {
+  const calls = [];
+  const app = createApp(fileDeps(calls, { UPLOAD_LIMIT_BYTES: 100 }));
+  const m = multipart('a.jpg', 'image/jpeg', 'X'.repeat(500));
+  const r = await call(app, 'POST', '/api/v1/send_file?file_name=a.jpg&phone=1', { headers: { authorization: 'Bearer TOK', 'content-type': `multipart/form-data; boundary=${m.boundary}` }, raw: m.raw });
+  assert.equal(r.status, 413); assert.equal(r.json.meta.status, 'error');
+  const r2 = await call(app, 'POST', '/api/v1/send_file?file_name=a.jpg&phone=1', { headers: { authorization: 'Bearer TOK' } });
+  assert.equal(r2.status, 422);
+  assert.equal(calls.length, 0);
+});
+
+test('сбой БД при проверке токена → 503, а не 401', async () => {
+  const d = deps(); d.repo.byToken = async () => { throw new Error('ECONNREFUSED'); };
+  const r = await call(createApp(d), 'POST', '/api/v1/delivery?text=x&phone=1', { headers: { authorization: 'Bearer TOK' } });
+  assert.equal(r.status, 503); assert.equal(r.json.meta.status, 'error');
+});
+
+test('статус доставки читается и без живого клиента', async () => {
+  const d = deps(); d.registry.get = () => null;
+  const r = await call(createApp(d), 'GET', '/api/v1/delivery/g12', { headers: { authorization: 'Bearer TOK' } });
+  assert.equal(r.status, 200); assert.equal(r.json.delivery.id, 'g12');
+});
+
+test('POST /api/v1/delivery: text из JSON-тела, когда в query его нет; объект в query игнорируется', async () => {
+  const calls = [];
+  const app = createApp(deps({ tg: { sendText: async (a) => { calls.push(a); return 12; } } }));
+  const r = await call(app, 'POST', '/api/v1/delivery', { headers: { authorization: 'Bearer TOK' }, body: { text: 'из тела', phone: '1' } });
+  assert.equal(r.status, 200);
+  assert.equal(calls[0].text, 'из тела'); assert.equal(calls[0].phone, '1');
+  const r2 = await call(app, 'POST', '/api/v1/delivery?text[a]=b&phone=1', { headers: { authorization: 'Bearer TOK' } });
+  assert.equal(r2.status, 422);
+});
+
+test('sweepTmp: удаляет старые файлы и каталоги, свежие оставляет', () => {
+  const { sweepTmp } = require('../server');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gw-sweep-'));
+  const oldDir = path.join(dir, 'aaaa'); fs.mkdirSync(oldDir); fs.writeFileSync(path.join(oldDir, 'x.jpg'), '1');
+  const fresh = path.join(dir, 'fresh.jpg'); fs.writeFileSync(fresh, '1');
+  const past = new Date(Date.now() - 2 * 60 * 60 * 1000);
+  fs.utimesSync(path.join(oldDir, 'x.jpg'), past, past); fs.utimesSync(oldDir, past, past);
+  sweepTmp(dir, 60);
+  assert.equal(fs.existsSync(oldDir), false);
+  assert.equal(fs.existsSync(fresh), true);
 });
 
 test('internal API: без секрета 401; start/auth/status/logout', async () => {

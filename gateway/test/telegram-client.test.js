@@ -342,3 +342,31 @@ test('resolveChatId: FLOOD_WAIT на поиске → 429 без importContacts'
   await assert.rejects(tg.resolveChatId({ phone: '79001112233' }), (e) => e.status === 429);
   assert.equal(client.calls.some(c => c._ === 'importContacts'), false);
 });
+
+test('sendFile: временный файл удаляется после updateMessageSendSucceeded, при ошибке TDLib — сразу', async () => {
+  const { tg, client } = setup({
+    getMe: ME, createPrivateChat: { id: 777 },
+    sendMessage: (() => { let n = 0; return async () => { n++; if (n === 2) throw new Error('FILE_PART_INVALID'); return { id: 99100, chat_id: 777 }; }; })(),
+  });
+  await tg.start(); await client.emit(ready);
+  const dir1 = fs.mkdtempSync(path.join(os.tmpdir(), 'gw-up-'));
+  const f1 = path.join(dir1, 'a.jpg'); fs.writeFileSync(f1, 'JPEG');
+  await tg.sendFile({ filePath: f1, fileName: 'a.jpg', caption: '', type: 'image', tdlibUserId: '777' });
+  assert.ok(fs.existsSync(f1), 'до подтверждения файл нужен TDLib');
+  await client.emit({ _: 'updateMessageSendSucceeded', old_message_id: 99100, message: { id: 1048577, chat_id: 777, is_outgoing: true, date: 1_700_000_000, content: { _: 'messageText', text: { text: '' } } } });
+  await new Promise(r => setTimeout(r, 50));
+  assert.equal(fs.existsSync(f1), false);
+  assert.equal(fs.existsSync(dir1), false);
+  assert.equal(tg.pendingFiles.size, 0);
+
+  const dir2 = fs.mkdtempSync(path.join(os.tmpdir(), 'gw-up-'));
+  const f2 = path.join(dir2, 'b.pdf'); fs.writeFileSync(f2, 'PDF');
+  await assert.rejects(tg.sendFile({ filePath: f2, fileName: 'b.pdf', caption: '', type: 'document', tdlibUserId: '777' }), /FILE_PART_INVALID/);
+  await new Promise(r => setTimeout(r, 50));
+  assert.equal(fs.existsSync(f2), false);
+});
+
+test('dirsFor: статический путь каталога аккаунта совпадает с dirs()', () => {
+  const { tg, tmp } = setup();
+  assert.deepEqual(TelegramClient.dirsFor({ DATA_DIR: tmp }, 42), tg.dirs());
+});

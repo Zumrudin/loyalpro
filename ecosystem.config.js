@@ -16,6 +16,8 @@ module.exports = {
     name: 'loyalpro-gateway',
     script: '/var/www/loyalpro/gateway/server.js',
     cwd: '/var/www/loyalpro/gateway',
+    // Корректное закрытие клиентов TDLib (closeAll) успевает до SIGKILL.
+    kill_timeout: 15000,
     env: { NODE_ENV: 'production', PORT: 3002, TZ: 'Europe/Moscow' }
   }]
 }

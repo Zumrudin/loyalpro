@@ -9,8 +9,11 @@
 // ============================================================
 const express = require('express');
 const multer = require('multer');
+const http = require('http');
+const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
+const { EXT_BY_MIME, safeExt } = require('./lib/telegram-client');
 const { bearerOf, internalOk, chatpushError } = require('./lib/http-auth');
 const { createLogger } = require('./logger');
 const logger = createLogger('Server');
@@ -25,8 +28,57 @@ const DEFAULT_LOADERS = {
   mapper: () => require('./lib/mapper'),
 };
 
+const DEFAULT_UPLOAD_LIMIT = 50 * 1024 * 1024;
+const TMP_SAFETY_MS = 30 * 60 * 1000;     // страховка, если TDLib так и не подтвердил отправку
+const KNOWN_EXTS = new Set(Object.values(EXT_BY_MIME));
+
 // Query-параметры Chatpush: dispatch_routing[] — массив; qs() бэкенда кодирует `k[]=v`.
-function q(req, name) { const v = req.query[name]; return Array.isArray(v) ? v[0] : (v == null ? undefined : String(v)); }
+// Нет в query — берём из тела (длинный текст не влезает в строку запроса).
+// Объект (qs extended: `text[a]=b`) — не значение, а мусор: undefined.
+function q(req, name) {
+  let v = req.query[name];
+  if (v === undefined && req.body && typeof req.body === 'object') v = req.body[name];
+  if (Array.isArray(v)) v = v[0];
+  if (v == null || typeof v === 'object') return undefined;
+  return String(v);
+}
+
+// Имя файла уходит в Telegram как имя документа, поэтому его сохраняем — но без
+// путей, управляющих символов и «чужих» расширений: расширение не из EXT_BY_MIME
+// получает хвост по фактическому MIME (evil.html + image/jpeg → evil.html.jpg).
+function safeFileName(name, mimeType) {
+  let n = String(name || '')
+    .replace(/[\/\\]/g, '_')
+    .replace(/[\u0000-\u001f\u007f]/g, '')
+    .replace(/[^\w.\- а-яА-ЯёЁ()]/g, '_')
+    .replace(/\.{2,}/g, '.')
+    .replace(/^\.+/, '')
+    .slice(0, 100)
+    .trim();
+  if (!n) n = 'file';
+  const ext = path.extname(n).toLowerCase();
+  if (!KNOWN_EXTS.has(ext)) n += safeExt(mimeType);
+  return n;
+}
+
+function removeTmp(file) {
+  fs.rm(file, { force: true }, () => { fs.rmdir(path.dirname(file), () => {}); });
+}
+
+// Остатки прошлых запусков (процесс упал до подтверждения отправки).
+function sweepTmp(dir, maxAgeMin = 60) {
+  let entries;
+  try { entries = fs.readdirSync(dir); } catch (_) { return 0; }
+  const cutoff = Date.now() - maxAgeMin * 60 * 1000;
+  let removed = 0;
+  for (const e of entries) {
+    const p = path.join(dir, e);
+    try {
+      if (fs.statSync(p).mtimeMs < cutoff) { fs.rmSync(p, { recursive: true, force: true }); removed++; }
+    } catch (_) { /* исчез между readdir и stat */ }
+  }
+  return removed;
+}
 
 function createApp(deps = {}) {
   const d = { ...deps };
@@ -38,22 +90,44 @@ function createApp(deps = {}) {
 
   const tmpDir = path.join(d.config.DATA_DIR, 'tmp');
   fs.mkdirSync(tmpDir, { recursive: true });
-  const upload = multer({ dest: tmpDir, limits: { fileSize: 50 * 1024 * 1024 } });
+  // Каждый файл — в своём tmp/<hex>/: имя документа сохраняем, коллизий нет.
+  const storage = multer.diskStorage({
+    destination(req, file, cb) {
+      const dir = path.join(tmpDir, crypto.randomBytes(8).toString('hex'));
+      req._uploadDir = dir;
+      fs.mkdir(dir, { recursive: true }, (err) => cb(err, dir));
+    },
+    filename(req, file, cb) {
+      cb(null, safeFileName(q(req, 'file_name') || file.originalname, file.mimetype));
+    },
+  });
+  const upload = multer({ storage, limits: { fileSize: d.config.UPLOAD_LIMIT_BYTES || DEFAULT_UPLOAD_LIMIT } });
 
   // ── Публичный API: Bearer = messenger_accounts.token ─────────────────
-  async function accountAuth(req, res, next) {
+  // Сбой БД — 503, а не 401: бэкенд не должен читать это как «токен отозван».
+  async function tokenAuth(req, res, next) {
     const token = bearerOf(req);
-    const row = token ? await d.repo.byToken(token).catch(() => null) : null;
+    let row;
+    try { row = token ? await d.repo.byToken(token) : null; }
+    catch (e) {
+      logger.warn(`проверка токена: ${e.message}`);
+      return res.status(503).json(chatpushError('gateway db unavailable'));
+    }
     if (!row) return res.status(401).json(chatpushError('unauthorized'));
-    const client = d.registry.get(row.id);
+    req.account = row;
+    next();
+  }
+  // Отправке нужен живой клиент TDLib; статусу доставки — нет (он в БД).
+  function requireClient(req, res, next) {
+    const client = d.registry.get(req.account.id);
     if (!client) return res.status(422).json(chatpushError('аккаунт не запущен'));
-    req.account = row; req.tg = client;
+    req.tg = client;
     next();
   }
 
   const accepted = (id) => ({ meta: { status: 'success' }, delivery: { id: `g${id}`, channel: 'tdlib', status: { status_id: 1, description: 'Принято' } } });
 
-  app.post('/api/v1/delivery', accountAuth, async (req, res) => {
+  app.post('/api/v1/delivery', tokenAuth, requireClient, async (req, res) => {
     try {
       const text = q(req, 'text') || '';
       if (!text.trim()) return res.status(422).json(chatpushError('пустой text'));
@@ -70,29 +144,32 @@ function createApp(deps = {}) {
   function uploadFile(req, res, next) {
     upload.single('file')(req, res, (err) => {
       if (!err) return next();
+      // multer сам удаляет недописанный файл; пустой каталог — наш.
+      if (req._uploadDir) fs.rmdir(req._uploadDir, () => {});
       const status = err.code === 'LIMIT_FILE_SIZE' ? 413 : 422;
       res.status(status).json(chatpushError(err.message));
     });
   }
 
-  app.post('/api/v1/send_file', accountAuth, uploadFile, async (req, res) => {
+  app.post('/api/v1/send_file', tokenAuth, requireClient, uploadFile, async (req, res) => {
     const tmp = req.file && req.file.path;
     try {
       if (!tmp) return res.status(422).json(chatpushError('нет файла'));
-      const fileName = q(req, 'file_name') || req.file.originalname || 'file';
+      const fileName = path.basename(tmp);
       const id = await req.tg.sendFile({ filePath: tmp, fileName, caption: q(req, 'caption') || '', type: q(req, 'type') || 'document', phone: q(req, 'phone'), tdlibUserId: q(req, 'tdlib_user_id') });
       logger.info(`#${req.account.id} send_file g${id} ${fileName}`);
       res.json(accepted(id));
+      // Файл удалит клиент TDLib по SendSucceeded/SendFailed; таймер — страховка.
+      setTimeout(() => removeTmp(tmp), TMP_SAFETY_MS).unref();
     } catch (e) {
+      // До sendMessage дело не дошло (или он отвергнут) — файл никому не нужен.
+      if (tmp) removeTmp(tmp);
       logger.warn(`#${req.account.id} send_file failed: ${e.message}`);
       res.status(e.status || 500).json(chatpushError(e.message));
-    } finally {
-      // TDLib копирует файл при sendMessage; временный убираем с задержкой.
-      if (tmp) setTimeout(() => fs.rm(tmp, { force: true }, () => {}), 60 * 1000).unref();
     }
   });
 
-  app.get('/api/v1/delivery/:id', accountAuth, async (req, res) => {
+  app.get('/api/v1/delivery/:id', tokenAuth, async (req, res) => {
     try {
       const id = d.deliveries.parseId(req.params.id);
       if (!id) return res.status(404).json(chatpushError('not found'));
@@ -141,7 +218,7 @@ function createApp(deps = {}) {
     catch (e) { res.status(500).json({ error: e.message }); }
   });
   // Без авторизации: шлюз слушает только 127.0.0.1, а ответ — лишь id и состояние.
-  app.get('/health', (req, res) => res.json({ ok: true, accounts: [...d.registry._clients.values()].map(c => ({ id: c.id, authState: c.authState })) }));
+  app.get('/health', (req, res) => res.json({ ok: true, accounts: d.registry.list() }));
 
   return app;
 }
@@ -149,14 +226,25 @@ function createApp(deps = {}) {
 if (require.main === module) {
   const config = require('./config');
   const registry = require('./lib/registry');
+  const swept = sweepTmp(path.join(config.DATA_DIR, 'tmp'), 60);
+  if (swept) logger.info(`sweepTmp: удалено ${swept} старых временных файлов`);
   const app = createApp();
-  app.listen(config.PORT, '127.0.0.1', () => {
+  // maxHeaderSize 64 КБ: text Chatpush-клиент шлёт в query, длинная реплика не влезает в дефолтные 16 КБ.
+  const server = http.createServer({ maxHeaderSize: 64 * 1024 }, app);
+  server.listen(config.PORT, '127.0.0.1', () => {
     logger.info(`gateway слушает 127.0.0.1:${config.PORT}`);
     registry.startAllActive().catch(e => logger.error(`startAllActive: ${e.message}`));
   });
+  let shuttingDown = false;
   for (const sig of ['SIGINT', 'SIGTERM']) {
-    process.on(sig, () => { registry.closeAll().finally(() => process.exit(0)); });
+    process.on(sig, () => {
+      if (shuttingDown) return;
+      shuttingDown = true;
+      logger.info(`${sig}: закрываем HTTP и клиентов TDLib`);
+      server.close();
+      registry.closeAll().finally(() => process.exit(0));
+    });
   }
 }
 
-module.exports = { createApp };
+module.exports = { createApp, sweepTmp, safeFileName };
