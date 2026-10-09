@@ -142,7 +142,8 @@ const defaultDeps = {
   createMessage: (req, opts) => getProviderForSalon(opts.salonId).createMessage(req, opts),
   lintReply: replyGuard.lintReply,
   hardViolations: replyGuard.hardViolations,
-  sendMessage: (payload) => transport.sendMessage(payload.salonId, payload),
+  // salonId — адресат transport, в тело запроса провайдеру не уходит.
+  sendMessage: ({ salonId, ...payload }) => transport.sendMessage(salonId, payload),
   lastIncomingChannel: notifications.lastIncomingChannel,
   // Тот же путь, что у реплики диспетчера (services/agent/dispatcher.js send):
   //  • pendingReplies — иначе следующий ход Милы не увидит собственное

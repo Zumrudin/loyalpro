@@ -80,7 +80,8 @@ const defaultDeps = {
   createMessage: (req, opts) => getProvider().createMessage(req, opts),
   lintReply: replyGuard.lintReply,
   hardViolations: replyGuard.hardViolations,
-  sendMessage: (payload) => transport.sendMessage(payload.salonId, payload),
+  // salonId — адресат transport, в тело запроса провайдеру не уходит.
+  sendMessage: ({ salonId, ...payload }) => transport.sendMessage(salonId, payload),
   lastIncomingChannel: notifications.lastIncomingChannel,
   rememberPending: async (salonId, key, text) => {
     pendingReplies.remember(salonId, key, text);
