@@ -1444,6 +1444,84 @@ async function runMigrations(client) {
     CREATE INDEX IF NOT EXISTS agent_reply_deliveries_pending_idx
       ON agent_reply_deliveries (id) WHERE status = 'pending'
   `).catch(() => {});
+  // ── messenger_accounts — аккаунты мессенджеров по салонам (2026-10) ─────
+  // Одна строка = один КАНАЛ одного салона у одного провайдера. До этого токен
+  // Chatpush и связка «инстанс → салон» жили в env и второй салон подключить
+  // было нельзя. provider: 'chatpush' (external_id = customer_id инстанса,
+  // token = Bearer инстанса) | 'gateway' (наш шлюз: external_id = id этой же
+  // строки, token генерируется бэкендом). На (salon_id, channel) активная
+  // строка одна — переключение Telegram с Chatpush на шлюз = disable старой +
+  // новая строка, откат — обратно.
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS messenger_accounts (
+      id SERIAL PRIMARY KEY,
+      salon_id INTEGER NOT NULL REFERENCES salons(id) ON DELETE CASCADE,
+      provider VARCHAR(16) NOT NULL,
+      channel VARCHAR(16) NOT NULL,
+      external_id VARCHAR(64),
+      api_base VARCHAR(200),
+      token VARCHAR(200) NOT NULL,
+      status VARCHAR(16) NOT NULL DEFAULT 'active',
+      display_name VARCHAR(120),
+      phone VARCHAR(32),
+      auth_state VARCHAR(32),
+      auth_error TEXT,
+      created_at TIMESTAMP DEFAULT NOW(),
+      updated_at TIMESTAMP DEFAULT NOW()
+    )
+  `).catch(() => {});
+  await client.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS messenger_accounts_active_channel_idx
+      ON messenger_accounts (salon_id, channel) WHERE status = 'active'
+  `).catch(() => {});
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS messenger_accounts_external_idx
+      ON messenger_accounts (provider, external_id)
+  `).catch(() => {});
+  // Сид из env: у салона, настроенного в CHATPUSH_SALON_ID, ещё нет ни одной
+  // строки → заводим три канала Chatpush с токеном из env ОДНИМ запросом.
+  // Повторный запуск ничего не делает (NOT EXISTS). После сида env остаётся
+  // только запасным путём.
+  {
+    const cp = require('./config').CHATPUSH;
+    if (cp.salonId && cp.instanceToken) {
+      await client.query(`
+        INSERT INTO messenger_accounts (salon_id, provider, channel, external_id, api_base, token, status, display_name)
+        SELECT $1, 'chatpush', ch, $2, $3, $4, 'active', 'Chatpush (из env)'
+          FROM unnest(ARRAY['whatsapp','tdlib','max']) AS ch
+         WHERE NOT EXISTS (SELECT 1 FROM messenger_accounts WHERE salon_id = $1)
+      `, [cp.salonId, cp.customerId != null ? String(cp.customerId) : null, cp.apiBase, cp.instanceToken])
+        .catch(() => {});
+    }
+  }
+
+  // ── gateway_deliveries / gateway_contacts — таблицы ШЛЮЗА (gateway/) ────
+  // Живут в той же БД: один источник правды, бэкенд их только создаёт.
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS gateway_deliveries (
+      id BIGSERIAL PRIMARY KEY,
+      account_id INTEGER NOT NULL REFERENCES messenger_accounts(id) ON DELETE CASCADE,
+      chat_id BIGINT,
+      phone VARCHAR(32),
+      kind VARCHAR(16) NOT NULL DEFAULT 'text',
+      text TEXT,
+      status_id SMALLINT NOT NULL DEFAULT 1,
+      description VARCHAR(64) NOT NULL DEFAULT 'Принято',
+      tdlib_message_id BIGINT,
+      error TEXT,
+      created_at TIMESTAMP DEFAULT NOW(),
+      updated_at TIMESTAMP DEFAULT NOW()
+    )
+  `).catch(() => {});
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS gateway_contacts (
+      account_id INTEGER NOT NULL REFERENCES messenger_accounts(id) ON DELETE CASCADE,
+      phone VARCHAR(32) NOT NULL,
+      user_id BIGINT NOT NULL,
+      created_at TIMESTAMP DEFAULT NOW(),
+      PRIMARY KEY (account_id, phone)
+    )
+  `).catch(() => {});
   // Подтверждение ищется по delivery_id в СЫРЫХ событиях: и статус доставки
   // (message_status), и эхо кладут его в payload.payload.delivery_id. Фильтровать
   // такой поиск по salon_id НЕЛЬЗЯ — у message_status salon_id всегда NULL
