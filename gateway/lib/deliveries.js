@@ -29,7 +29,20 @@ function makeDeliveries(db) {
     return db.oneOrNone(`SELECT * FROM gateway_deliveries WHERE id=$1 AND account_id=$2`, [id, accountId]);
   }
 
-  return { create, setStatus, get };
+  // Доставки, зависшие в «Принято» дольше minutes минут: связка «временный id
+  // сообщения → доставка» живёт в памяти процесса, после рестарта шлюза исход
+  // таких строк уже не узнать — закрываем как «Невозможно доставить», чтобы
+  // сторож бэкенда (agent_reply_deliveries) не ждал их вечно. Частичный индекс
+  // gateway_deliveries_pending_idx (status_id=1) — ровно под этот запрос.
+  async function failStale(accountId, minutes = 10, reason = 'шлюз перезапущен, исход неизвестен') {
+    const r = await db.query(
+      `UPDATE gateway_deliveries SET status_id=$2, description=$3, error=$4, updated_at=NOW()
+        WHERE account_id=$1 AND status_id=$5 AND created_at < NOW() - ($6 || ' minutes')::interval`,
+      [accountId, STATUS.FAILED[0], STATUS.FAILED[1], reason, STATUS.ACCEPTED[0], String(minutes)]);
+    return r && r.rowCount != null ? r.rowCount : 0;
+  }
+
+  return { create, setStatus, get, failStale };
 }
 
 function parseId(s) {
@@ -49,4 +62,5 @@ module.exports = {
   create: (...a) => getDefault().create(...a),
   setStatus: (...a) => getDefault().setStatus(...a),
   get: (...a) => getDefault().get(...a),
+  failStale: (...a) => getDefault().failStale(...a),
 };

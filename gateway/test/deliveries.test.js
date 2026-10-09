@@ -47,3 +47,12 @@ test('create бросает, если INSERT не вернул строку', as
   const d = makeDeliveries({ oneOrNone: async () => null, query: async () => ({}) });
   await assert.rejects(d.create({ accountId: 1, chatId: 5, phone: 'p', kind: 'text', text: 't' }), /не вернул id/);
 });
+
+test('failStale: гасит «Принято» старше N минут у аккаунта, возвращает число строк', async () => {
+  const calls = [];
+  const db = { oneOrNone: async () => null, query: async (sql, p) => { calls.push([sql, p]); return { rowCount: 3 }; } };
+  const d = makeDeliveries(db);
+  assert.equal(await d.failStale(7, 10), 3);
+  assert.match(calls[0][0], /WHERE account_id=\$1 AND status_id=\$5 AND created_at < NOW\(\)/);
+  assert.deepEqual(calls[0][1], [7, 5, 'Невозможно доставить', 'шлюз перезапущен, исход неизвестен', 1, '10']);
+});
