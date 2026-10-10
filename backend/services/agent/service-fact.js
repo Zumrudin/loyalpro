@@ -11,9 +11,9 @@
 // код находит статью заранее и кладёт её в хвост промпта.
 //
 // ФИЛЬТР РЕЛЕВАНТНОСТИ ОБЯЗАТЕЛЕН: у retrieveChunks порога нет, выдача
-// непуста всегда. Судим по ЗАГОЛОВКУ топ-чанка (chunkArticle префиксит
+// непуста всегда. Судим по ЗАГОЛОВКУ каждого чанка (chunkArticle префиксит
 // `${title}\n` к каждому чанку, buildKnowledgeContext склеивает по убыванию
-// релевантности → первая непустая строка = заголовок лучшего чанка): он обязан
+// релевантности; границы передаются отдельно в fragments): он обязан
 // делить стем хотя бы с одним словом пациента (или с его алиасом). Служебные
 // слова вопроса («сколько», «стоит», «цена»…) в сверке не участвуют — иначе
 // статья «Стоимость консультации» легализовалась бы на любой вопрос о цене.
@@ -157,9 +157,26 @@ function isDescriptive(raw) {
 /**
  * @param {string} context — выдача search_knowledge_base (kb.context)
  * @param {string} userText — последнее сообщение пациента
+ * @param {Array<{start:number,end:number}>} [fragments] границы найденных чанков
  * @returns {{title:string, text:string}|null}
  */
-function pickServiceFact(context, userText) {
+function pickServiceFact(context, userText, fragments) {
+  if (typeof context !== 'string' || !context.trim()) return null;
+  // Старые вызывающие/моки без метаданных сохраняют контракт: один топ-чанк.
+  // Не угадываем границы по markdown: заголовок может повторяться, содержать
+  // скобки или совпадать с названием раздела внутри статьи.
+  if (fragments === undefined) return pickFactFromChunk(context, userText);
+  if (!Array.isArray(fragments)) return null;
+  for (const f of fragments) {
+    if (!f || !Number.isInteger(f.start) || !Number.isInteger(f.end)
+      || f.start < 0 || f.end <= f.start || f.end > context.length) continue;
+    const fact = pickFactFromChunk(context.slice(f.start, f.end), userText);
+    if (fact) return fact;
+  }
+  return null;
+}
+
+function pickFactFromChunk(context, userText) {
   if (typeof context !== 'string' || !context.trim()) return null;
   const lines = context.split('\n').map(l => l.trim());
   const titleIdx = lines.findIndex(Boolean);

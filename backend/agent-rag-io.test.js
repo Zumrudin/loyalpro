@@ -151,3 +151,23 @@ describe('buildKnowledgeContext', () => {
     expect(ctx.sources).toEqual([]);
   });
 });
+
+test('границы фрагментов сохраняют порядок поиска и не включают блок живых цен', async () => {
+  kb.embedText.mockResolvedValue([1, 0, 0]);
+  const content = ['  Чистка лица\nОписание первого фрагмента.  ', 'Чистка лица\nОписание второго фрагмента.'];
+  db.any.mockImplementation(async sql => {
+    if (/FROM kb_chunks[\s\S]*embedding/i.test(sql) && !/search_vector/i.test(sql)) {
+      return content.map((text, i) => ({ id: i + 10, article_id: 1, content: text, embedding: [1, 0, 0], embed_norm: 1 }));
+    }
+    if (/kb_article_links/i.test(sql)) return [{ entity_yc_id: 555 }];
+    return [];
+  });
+  db.oneOrNone.mockResolvedValue({ id: 1, yclients_company_id: 100 });
+  yc.ycGet.mockResolvedValue([{ id: 555, title: 'Чистка', price_min: 6500 }]);
+  const result = await rag.buildKnowledgeContext(1, 'чистка');
+  expect(result.fragments.map(f => result.context.slice(f.start, f.end))).toEqual(content.map(s => s.trim()));
+  expect(result.fragments.map(f => f.article_id)).toEqual([1, 1]);
+  expect(result.context.slice(result.fragments[1].end)).toContain('АКТУАЛЬНЫЕ УСЛУГИ И ЦЕНЫ:');
+  const limited = await rag.buildKnowledgeContext(1, 'чистка', { budget: content[0].trim().length + 2 });
+  expect(limited.fragments).toHaveLength(1);
+});

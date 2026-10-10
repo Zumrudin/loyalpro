@@ -111,4 +111,20 @@ function removeRepeatedOffer(replies, policy) {
   return out.length && out.join('\n') !== replies.join('\n') ? out : replies;
 }
 
-module.exports = { STEP_QUESTION, hasBookingInvitation, bookingInterest, applyContextualOffer, removeRepeatedOffer };
+// Напоминание после законченного ответа о цене, в котором приглашение было
+// пропущено. Используем ту же политику отказов/медицинских тем/повторов.
+// Не меняем уточняющий вопрос и не повторяем приглашение, уже данное в ответе.
+function needsPriceFollowupOffer(messages) {
+  const list = Array.isArray(messages) ? messages : [];
+  const last = list[list.length - 1];
+  if (!last || last.role !== 'assistant') return false;
+  const replyText = String(last.content || '');
+  const patient = [...list].reverse().find(m => m.role === 'user');
+  if (!patient || !isPriceQuestion(patient.content) || replyText.includes('?')
+    || !/\d[\d\s]*\s?(?:₽|руб)/iu.test(replyText) || hasBookingInvitation(replyText)) return false;
+  return bookingInterest({ patientLastText: patient.content, replyText,
+    conversation: list.map(m => ({ direction: m.role === 'user' ? 'incoming' : 'outgoing', text: m.content })),
+  }).allowStep;
+}
+
+module.exports = { needsPriceFollowupOffer, STEP_QUESTION, hasBookingInvitation, bookingInterest, applyContextualOffer, removeRepeatedOffer };

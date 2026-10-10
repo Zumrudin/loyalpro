@@ -124,6 +124,7 @@ async function loadTranscript(salonId, dialogKey, opts = {}) {
   // доставляет с задержкой; WhatsApp эхо не шлёт вовсе). Без них повторный прогон
   // видит серию клиента «без ответа» и отвечает заново (инцидент 2026-07-31).
   // Дедуп по тексту: если эхо уже в выборке — pending-копия не подмешивается.
+  pendingReplies.acknowledge(salonId, dialogKey, rows.filter(r => r.direction === 'outgoing'));
   const pending = pendingReplies.peek(salonId, dialogKey, opts.nowMs || Date.now());
   if (pending.length) {
     const echoed = new Set(rows.filter((r) => r.direction === 'outgoing').map((r) => r.text));

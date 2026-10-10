@@ -763,7 +763,7 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
               registry.handlers['search_knowledge_base'](salonId, factQuery, toolCtx),
               d.serviceFactTimeoutMs || serviceFactMod.SERVICE_FACT_TIMEOUT_MS, 'service fact KB');
             const picked = kb && kb.found && typeof kb.context === 'string'
-              ? serviceFactMod.pickServiceFact(kb.context, lastUserFactText) : null;
+              ? serviceFactMod.pickServiceFact(kb.context, lastUserFactText, kb.fragments) : null;
             if (picked) {
               serviceFact = picked;
               serviceFactKb = kb;

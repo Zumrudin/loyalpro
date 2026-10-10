@@ -27,6 +27,7 @@ const agentSettings = require('../agent-settings');
 const { getProviderForSalon } = require('./providers');
 const history = require('./history');
 const pendingReplies = require('./pending-replies');
+const { needsPriceFollowupOffer, hasBookingInvitation, STEP_QUESTION } = require('./booking-interest');
 const replyGuard = require('./reply-guard');
 const chatEvents = require('../chat-events');
 const authorship = require('../outgoing-authorship');
@@ -212,9 +213,9 @@ const defaultDeps = {
   // предвызовом оркестратора — один рычаг гасит справку везде.
   serviceFactEnabled: () => config.AGENT_SERVICE_FACT_PREFETCH,
   serviceFact: async (salonId, query) => {
-    const { context } = await withTimeout(
+    const { context, fragments } = await withTimeout(
       rag.buildKnowledgeContext(salonId, query, {}), SERVICE_FACT_TIMEOUT_MS, 'service fact RAG');
-    return pickServiceFact(context, query);
+    return pickServiceFact(context, query, fragments);
   },
   log,
 };
@@ -407,8 +408,9 @@ async function tryServiceFact(d, row, messages, turnEvents) {
  */
 async function buildNudgeText(d, row, messages, turnEvents) {
   const serviceFact = await tryServiceFact(d, row, messages, turnEvents);
+  const offerBooking = needsPriceFollowupOffer(messages);
   const { system, user } = buildFollowupPrompt({
-    serviceFact,
+    serviceFact, offerBooking,
     // Тот же резолвер, что у системного промпта Милы: собственный дефолт
     // разъехался бы с тем, как она называет клинику (готча greeting.js).
     salonName: resolveSalonName(row.salon_name),
@@ -447,6 +449,12 @@ async function buildNudgeText(d, row, messages, turnEvents) {
   }
   const viol = d.hardViolations(d.lintReply(decision.text, {}));
   if (viol.length) return { skip: true, reason: `reply-guard: ${viol.map((v) => v.type).join(',')}` };
+
+  // Модель может снова задать общий вопрос вместо пропущенного шага.
+  // Только после send и всех проверок: skip и запреты не обходятся.
+  if (offerBooking && !hasBookingInvitation(decision.text)) {
+    return { text: STEP_QUESTION };
+  }
 
   // Повторное приветствие (см. stripLeadingGreeting выше). Условие «Мила уже
   // здоровалась раньше» обязательно: у самого первого напоминания в переписке

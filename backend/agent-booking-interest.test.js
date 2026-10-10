@@ -120,3 +120,29 @@ test('повторное шаблонное приглашение модели 
   expect(removeRepeatedOffer([`${answer} ${STEP_QUESTION}`], { reason: 'sensitive_or_active' }))
     .toEqual([`${answer} ${STEP_QUESTION}`]);
 });
+
+describe('пропущенное приглашение после цены в напоминании', () => {
+  const { needsPriceFollowupOffer } = require('./services/agent/booking-interest');
+  const tr = [
+    { role: 'user', content: 'Сколько стоит чистка?' },
+    { role: 'assistant', content: 'Чистка — 6500 ₽, длительность 90 минут.' },
+  ];
+  test('цена и длительность без следующего шага → предложить запись', () => {
+    expect(needsPriceFollowupOffer(tr)).toBe(true);
+  });
+  test.each([
+    [{ role: 'assistant', content: STEP_QUESTION }],
+    [{ role: 'user', content: 'Пока не хочу записываться' }],
+    [{ role: 'user', content: 'У меня аллергия' }],
+    [{ role: 'assistant', content: 'Вы уже записаны на приём.' }],
+  ])('старое приглашение, отказ, медицинский контекст или запись → без нового шага (%#)', (...args) => {
+    const prior = args[0];
+    expect(needsPriceFollowupOffer([prior, ...tr])).toBe(false);
+  });
+  test('уточняющий вопрос и уже предложенная запись остаются без дописки', () => {
+    for (const text of ['От 6500 ₽. Какая зона интересует?', `Чистка — 6500 ₽. ${STEP_QUESTION}`]) {
+      expect(needsPriceFollowupOffer([tr[0], { role: 'assistant', content: text }])).toBe(false);
+    }
+    expect(needsPriceFollowupOffer(tr.slice(0, 1))).toBe(false);
+  });
+});

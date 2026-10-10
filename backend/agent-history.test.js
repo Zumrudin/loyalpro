@@ -679,3 +679,25 @@ describe('lastAgentReplyAt', () => {
     expect(await history.lastAgentReplyAt(1, 'k')).toBe(1789799342000);
   });
 });
+
+test('сохранённое приглашение после удаления истории не возвращается из pending', async () => {
+  const pending = require('./services/agent/pending-replies');
+  const { bookingInterest } = require('./services/agent/booking-interest');
+  pending._reset();
+  const nowMs = Date.parse('2026-10-10T00:00:00+03:00');
+  const text = 'Подобрать Вам удобное время для записи?';
+  pending.remember(1, 'synthetic-history-reset', text, nowMs - 60000);
+  db.any.mockResolvedValueOnce([
+    { direction: 'outgoing', text, authored_by: 'agent', msg_ts: nowMs / 1000 - 60 },
+    { direction: 'incoming', text: 'Сколько стоит чистка?', msg_ts: nowMs / 1000 - 90 },
+  ]);
+  await history.loadTranscript(1, 'synthetic-history-reset', { nowMs, keepTrailingAssistant: true });
+  db.any.mockResolvedValueOnce([
+    { direction: 'incoming', text: 'Сколько стоит чистка?', msg_ts: nowMs / 1000 },
+  ]);
+  const tr = await history.loadTranscript(1, 'synthetic-history-reset', { nowMs });
+  expect(tr.conversation).toHaveLength(1);
+  expect(bookingInterest({ conversation: tr.conversation, patientLastText: 'Сколько стоит чистка?',
+    replyText: 'Чистка стоит 6500 ₽.', nowMs }).allowStep).toBe(true);
+  pending._reset();
+});

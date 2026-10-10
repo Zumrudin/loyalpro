@@ -86,6 +86,15 @@ describe('search_knowledge_base', () => {
     expect(out.context).toContain('Ботокс');
     expect(out.sources).toEqual([1]);
   });
+  test('границы найденных фрагментов передаются без изменения в ответ инструмента', async () => {
+    const { cleaningSearchResult } = require('./services/agent/__fixtures__/kb-real-chunks');
+    const result = cleaningSearchResult();
+    rag.buildKnowledgeContext.mockResolvedValue(result);
+    const out = await searchKb.run(17, { query: 'Сколько стоит чистка лица?' });
+    expect(out.fragments).toEqual(result.fragments);
+    expect(out.context).toBe(result.context);
+    expect(rag.buildKnowledgeContext).toHaveBeenCalledWith(17, 'Сколько стоит чистка лица?', {});
+  });
   test('пусто → found:false', async () => {
     rag.buildKnowledgeContext.mockResolvedValue({ context: '', sources: [] });
     const out = await searchKb.run(1, { query: 'нет' });

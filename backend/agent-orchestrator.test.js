@@ -3630,6 +3630,18 @@ describe('предвызов КБ: справка об услуге', () => {
     expect(block).not.toMatch(/10:00/);
   });
 
+  test('справка берётся из третьего подходящего фрагмента, не из общего первого', async () => {
+    const { cleaningSearchResult } = require('./services/agent/__fixtures__/kb-real-chunks');
+    const { deps, kbHandler } = factDeps('Сколько стоит чистка лица?', { found: true, ...cleaningSearchResult() });
+    await orchestrator.runDialog(1, 'synthetic-ranked-facts', { deps });
+    const system = deps.provider.createMessage.mock.calls[0][0].system;
+    const block = system.slice(system.indexOf(FACT_HEAD));
+    expect(block).toContain('Профессиональное очищение кожи');
+    expect(block).toContain('Комбинированная чистка лица и спины');
+    expect(block).not.toContain('Эстетические процедуры по обновлению');
+    expect(kbHandler).toHaveBeenCalledTimes(1);
+  });
+
   test('обзор процедур не попадает ни в справку, ни в готовый ответ', async () => {
     const { REAL } = require('./services/agent/__fixtures__/kb-real-chunks');
     const { deps } = factDeps('Сколько стоит чистка лица?', { found: true, context: REAL.peels, sources: [] });
