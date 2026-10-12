@@ -16,7 +16,11 @@ class FakeClient {
   async close() { this.closed = true; }
 }
 stub('accounts-repo', { get: async (id) => ({ id, channel: 'tdlib' }), setAuth: async () => {}, listActive: async () => [] });
+class FakeWa extends FakeClient {}
+FakeClient.dirsFor = (cfg, id) => ({ base: path.join(cfg.DATA_DIR, `acc-${id}`), db: path.join(cfg.DATA_DIR, `acc-${id}`, 'db') });
+FakeWa.dirsFor = (cfg, id) => ({ base: path.join(cfg.DATA_DIR, `acc-${id}`), wa: path.join(cfg.DATA_DIR, `acc-${id}`, 'wa') });
 stub('telegram-client', { TelegramClient: FakeClient });
+stub('whatsapp-client', { WhatsappClient: FakeWa });
 const registry = require('../lib/registry');
 
 test('start: живой клиент тот же; закрытый сам по себе — пересоздаётся', async () => {
@@ -27,4 +31,10 @@ test('start: живой клиент тот же; закрытый сам по �
   assert.notEqual(b, a);
   assert.equal(b.n, 2);
   assert.equal(registry.get(5), b);
+});
+
+test('clientClassFor: tdlib → Telegram, whatsapp → WhatsApp, прочее → 422', () => {
+  assert.equal(registry.clientClassFor({ channel: 'tdlib' }), FakeClient);
+  assert.equal(registry.clientClassFor({ channel: 'whatsapp' }), FakeWa);
+  assert.throws(() => registry.clientClassFor({ channel: 'max' }), e => e.status === 422);
 });

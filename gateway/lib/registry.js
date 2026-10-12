@@ -3,16 +3,24 @@
 const fs = require('fs');
 const repo = require('./accounts-repo');
 const { TelegramClient } = require('./telegram-client');
+const { WhatsappClient } = require('./whatsapp-client');
 const { createLogger } = require('../logger');
 const logger = createLogger('Registry');
 
 const clients = new Map();
 const starting = new Map();   // id → промис запуска: параллельный start не создаёт второй TDLib на тот же каталог
 
+// Класс клиента по каналу строки. Неизвестный канал — ошибка, а не молчаливый Telegram.
+function clientClassFor(account) {
+  if (account.channel === 'tdlib') return TelegramClient;
+  if (account.channel === 'whatsapp') return WhatsappClient;
+  throw Object.assign(new Error(`канал ${account.channel} шлюзом не поддерживается`), { status: 422 });
+}
+
 async function doStart(id) {
   const account = await repo.get(id);
   if (!account) throw Object.assign(new Error('аккаунт не найден'), { status: 404 });
-  const c = new TelegramClient(account);
+  const c = new (clientClassFor(account))(account);
   clients.set(id, c);
   try { await c.start(); }
   catch (e) { clients.delete(id); throw e; }
@@ -54,11 +62,13 @@ async function logout(id) {
   let c = clients.get(id);
   if (!c) {
     const config = require('../config');
-    const dirs = TelegramClient.dirsFor(config, id);
-    if (fs.existsSync(dirs.db)) {
+    // Каталог один (acc-<id>), но признак сессии у каналов свой: db / wa.
+    const tgDirs = TelegramClient.dirsFor(config, id);
+    const waDirs = WhatsappClient.dirsFor(config, id);
+    if (fs.existsSync(tgDirs.db) || fs.existsSync(waDirs.wa)) {
       c = await start(id);
     } else {
-      fs.rmSync(dirs.base, { recursive: true, force: true });
+      fs.rmSync(tgDirs.base, { recursive: true, force: true });
       await repo.setAuth(id, 'logged_out');
       return;
     }
@@ -81,4 +91,4 @@ async function closeAll() {
   for (const r of results) if (r.status === 'rejected') logger.warn(`закрытие клиента: ${r.reason && r.reason.message}`);
 }
 
-module.exports = { start, get, list, stop, logout, startAllActive, closeAll, _clients: clients };
+module.exports = { clientClassFor, start, get, list, stop, logout, startAllActive, closeAll, _clients: clients };

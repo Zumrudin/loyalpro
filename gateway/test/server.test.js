@@ -175,7 +175,7 @@ test('internal API: без секрета 401; start/auth/status/logout', async 
   assert.equal((await call(app, 'POST', '/internal/accounts/8/start', { headers: H })).status, 404);
   assert.deepEqual((await call(app, 'POST', '/internal/accounts/7/auth', { headers: H, body: { phone: '79001112233' } })).json, { authState: 'wait_code', error: null });
   assert.equal((await call(app, 'POST', '/internal/accounts/8/auth', { headers: H, body: { code: '1' } })).status, 404);
-  assert.deepEqual((await call(app, 'GET', '/internal/accounts/7/status', { headers: H })).json, { authState: 'ready', phone: '79250177778', displayName: 'Клиника', error: null });
+  assert.deepEqual((await call(app, 'GET', '/internal/accounts/7/status', { headers: H })).json, { authState: 'ready', phone: '79250177778', displayName: 'Клиника', error: null, qr: null, pairingCode: null });
   assert.deepEqual((await call(app, 'POST', '/internal/accounts/7/logout', { headers: H })).json, { ok: true });
 });
 
@@ -183,11 +183,28 @@ test('GET /internal/accounts/:id/status без живого клиента → �
   const d = deps(); d.registry.get = () => null;
   const app = createApp(d);
   const H = { 'x-gateway-secret': 'sec' };
-  assert.deepEqual((await call(app, 'GET', '/internal/accounts/7/status', { headers: H })).json, { authState: 'logged_out', phone: null, displayName: null, error: null });
+  assert.deepEqual((await call(app, 'GET', '/internal/accounts/7/status', { headers: H })).json, { authState: 'logged_out', phone: null, displayName: null, error: null, qr: null, pairingCode: null });
   assert.equal((await call(app, 'GET', '/internal/accounts/9/status', { headers: H })).status, 404);
 });
 
 test('GET /health — без авторизации, перечисляет аккаунты', async () => {
   const r = await call(createApp(deps()), 'GET', '/health');
   assert.deepEqual(r.json, { ok: true, accounts: [{ id: 7, authState: 'ready' }] });
+});
+
+test('accepted(): channel из строки аккаунта (whatsapp), а не константа tdlib', async () => {
+  const d = deps({ deps: { repo: { byToken: async (t) => (t === 'TOK' ? { id: 7, channel: 'whatsapp' } : null), get: async () => null } } });
+  const r = await call(createApp(d), 'POST', '/api/v1/delivery?text=hi&phone=79001112233', { headers: { authorization: 'Bearer TOK' } });
+  assert.equal(r.status, 200);
+  assert.equal(r.json.delivery.channel, 'whatsapp');
+});
+
+test('GET /internal/accounts/:id/status: qr и pairingCode прокидываются, у Telegram — null', async () => {
+  const d = deps({ tg: { status: () => ({ authState: 'wait_qr', phone: null, displayName: null, error: null, qr: 'data:image/png;base64,AAA', pairingCode: 'ABCDEFGH' }) } });
+  const r = await call(createApp(d), 'GET', '/internal/accounts/7/status', { headers: { 'x-gateway-secret': 'sec' } });
+  assert.equal(r.json.qr, 'data:image/png;base64,AAA');
+  assert.equal(r.json.pairingCode, 'ABCDEFGH');
+  const t = await call(createApp(deps({ tg: { status: () => ({ authState: 'ready', phone: '1', displayName: 'x', error: null }) } })), 'GET', '/internal/accounts/7/status', { headers: { 'x-gateway-secret': 'sec' } });
+  assert.equal(t.json.qr, null);
+  assert.equal(t.json.pairingCode, null);
 });

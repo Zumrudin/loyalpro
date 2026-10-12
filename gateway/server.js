@@ -131,7 +131,7 @@ function createApp(deps = {}) {
     next();
   }
 
-  const accepted = (id) => ({ meta: { status: 'success' }, delivery: { id: `g${id}`, channel: 'tdlib', status: { status_id: 1, description: 'Принято' } } });
+  const accepted = (id, account) => ({ meta: { status: 'success' }, delivery: { id: `g${id}`, channel: (account && account.channel) || 'tdlib', status: { status_id: 1, description: 'Принято' } } });
 
   app.post('/api/v1/delivery', tokenAuth, requireClient, async (req, res) => {
     try {
@@ -139,7 +139,7 @@ function createApp(deps = {}) {
       if (!text.trim()) return res.status(422).json(chatpushError('пустой text'));
       const id = await req.tg.sendText({ text, phone: q(req, 'phone'), tdlibUserId: q(req, 'tdlib_user_id'), replyToMessageId: q(req, 'reply_to_message_id') });
       logger.info(`#${req.account.id} delivery g${id} → ${q(req, 'phone') || q(req, 'tdlib_user_id')}: ${text.slice(0, 60)}`);
-      res.json(accepted(id));
+      res.json(accepted(id, req.account));
     } catch (e) {
       logger.warn(`#${req.account.id} delivery failed: ${e.message}`);
       res.status(e.status || 500).json(chatpushError(e.message));
@@ -162,9 +162,9 @@ function createApp(deps = {}) {
     try {
       if (!tmp) return res.status(422).json(chatpushError('нет файла'));
       const fileName = path.basename(tmp);
-      const id = await req.tg.sendFile({ filePath: tmp, fileName, caption: q(req, 'caption') || '', type: q(req, 'type') || 'document', phone: q(req, 'phone'), tdlibUserId: q(req, 'tdlib_user_id') });
+      const id = await req.tg.sendFile({ filePath: tmp, fileName, caption: q(req, 'caption') || '', type: q(req, 'type') || 'document', phone: q(req, 'phone'), tdlibUserId: q(req, 'tdlib_user_id'), mimeType: req.file.mimetype });
       logger.info(`#${req.account.id} send_file g${id} ${fileName}`);
-      res.json(accepted(id));
+      res.json(accepted(id, req.account));
       // Файл удалит клиент TDLib по SendSucceeded/SendFailed; таймер — страховка.
       setTimeout(() => removeTmp(tmp), TMP_SAFETY_MS).unref();
     } catch (e) {
@@ -212,10 +212,11 @@ function createApp(deps = {}) {
     const id = idOf(req); if (!id) return res.status(400).json({ error: 'bad id' });
     try {
       const c = d.registry.get(id);
-      if (c) return res.json(c.status());
+      // qr/pairingCode есть только у WhatsApp; Telegram получает null.
+      if (c) return res.json({ qr: null, pairingCode: null, ...c.status() });
       const row = await d.repo.get(id);
       if (!row) return res.status(404).json({ error: 'not found' });
-      res.json({ authState: row.auth_state || 'logged_out', phone: row.phone, displayName: row.display_name, error: row.auth_error });
+      res.json({ authState: row.auth_state || 'logged_out', phone: row.phone, displayName: row.display_name, error: row.auth_error, qr: null, pairingCode: null });
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
   app.post('/internal/accounts/:id/logout', internalAuth, async (req, res) => {
@@ -243,6 +244,18 @@ if (require.main === module) {
   server.listen(config.PORT, '127.0.0.1', () => {
     logger.info(`gateway слушает 127.0.0.1:${config.PORT}`);
     registry.startAllActive().catch(e => logger.error(`startAllActive: ${e.message}`));
+  });
+  // Baileys иногда роняет необработанный reject из своих обработчиков (CB:success и т.п.):
+  // без перехвата Node 20+ завершил бы процесс вместе с боевыми Telegram-сессиями.
+  process.on('unhandledRejection', (reason) => {
+    const e = reason instanceof Error ? reason : new Error(String(reason));
+    logger.error(`unhandledRejection: ${e.message}\n${e.stack || ''}`);
+  });
+  // После uncaughtException состояние процесса не определено — логируем и выходим,
+  // pm2 поднимет заново (штатное поведение Node сохраняем).
+  process.on('uncaughtException', (e) => {
+    try { logger.error(`uncaughtException: ${e && e.message}\n${(e && e.stack) || ''}`); } catch (_) { /* логгер сам упал */ }
+    process.exit(1);
   });
   let shuttingDown = false;
   for (const sig of ['SIGINT', 'SIGTERM']) {
