@@ -34,7 +34,16 @@ let _msgAccBusy = false;
 let _msgAccStickyError = null;   // ошибка отправки шага; живёт, пока authState не изменится
 let _msgAccLastState = null;
 let _msgAccCurrent = null;   // id подключаемого gateway-аккаунта
+let _msgAccStatus = null;    // status строки (active|pending) — от него зависит, можно ли «Запустить заново»
 let _msgAccChannel = null;   // канал подключаемого аккаунта ('tdlib' | 'whatsapp') — для «Запустить заново»
+
+// «Запустить заново»: WhatsApp — просто повторный start (POST идемпотентен, logout не нужен и вреден);
+// Telegram — logout+start, и только для pending: у active logout удалит рабочую сессию.
+function msgAccRestartPlan(channel, status) {
+  if (channel === 'whatsapp') return { show: true, logout: false };
+  if (channel === 'tdlib' && status === 'pending') return { show: true, logout: true };
+  return { show: false, logout: false };
+}
 
 // Занят ли шлюз ЭТИМ каналом (кнопки Telegram и WhatsApp независимы).
 function msgAccGatewayBusy(rows, channel) {
@@ -63,12 +72,12 @@ async function loadMessagingAccounts() {
       const live = a.status === 'active' || a.status === 'pending';
       if (a.provider === 'gateway' && live) {
         const btn = document.createElement('button'); btn.className = 'btn btn-sec'; btn.textContent = 'Отключить';
-        btn.onclick = () => msgAccLogout(a.id);
+        btn.onclick = () => msgAccLogout(a.id, a.channel);
         row.append(' ', btn);
         // pending+ready (шлюз вошёл, пока страница была закрыта): тик /status продвинет строку.
-        if (a.status === 'pending' || a.auth_state !== 'ready') { _msgAccCurrent = a.id; _msgAccChannel = a.channel; msgAccStartPolling(); }
+        if (a.status === 'pending' || a.auth_state !== 'ready') { _msgAccCurrent = a.id; _msgAccChannel = a.channel; _msgAccStatus = a.status; msgAccStartPolling(); }
       }
-      if (!live) {
+      if (!live && a.auth_state !== 'logged_out') {
         const btn = document.createElement('button'); btn.className = 'btn btn-sec'; btn.textContent = 'Сделать активным';
         btn.onclick = () => msgAccActivate(a.id);
         row.append(' ', btn);
@@ -100,9 +109,10 @@ async function msgAccStart(channel) {
     const r = await api('POST', `/api/messaging/accounts/${channel === 'whatsapp' ? 'whatsapp' : 'telegram'}`);
     _msgAccCurrent = r.id;
     _msgAccChannel = channel;
+    _msgAccStatus = r.status;
     _msgAccStickyError = null;
     _msgAccLastState = r.authState;
-    msgAccRenderStep(r.authState, null, r);
+    msgAccRenderStep(r.authState, null, { qr: null, pairingCode: null });
     msgAccStartPolling();
     await loadMessagingAccounts();
   } catch (e) { alert('Не удалось начать подключение: ' + e.message); }
@@ -113,10 +123,13 @@ function msgAccConnectWhatsapp() { return msgAccConnect('whatsapp'); }
 // После ошибки (например «QR не отсканирован») — отключить зависший аккаунт и начать заново.
 async function msgAccRestart() {
   const id = _msgAccCurrent, channel = _msgAccChannel;
-  if (!id || !channel) return;
-  try {
-    await api('POST', `/api/messaging/accounts/${id}/logout`);
-  } catch (e) { alert('Не удалось сбросить прежнюю попытку: ' + e.message); return; }
+  const plan = msgAccRestartPlan(channel, _msgAccStatus);
+  if (!id || !channel || !plan.show) return;
+  if (plan.logout) {
+    if (!confirm('Сбросить неудавшуюся попытку подключения и начать заново?')) return;
+    try { await api('POST', `/api/messaging/accounts/${id}/logout`); }
+    catch (e) { alert('Не удалось сбросить прежнюю попытку: ' + e.message); return; }
+  }
   await msgAccStart(channel);
 }
 
@@ -130,7 +143,7 @@ function msgAccRenderStep(authState, error, extra) {
   // Ошибку показываем, даже когда шагов ввода больше нет (error/logged_out).
   box.style.display = (step || error) ? '' : 'none';
   const restart = document.getElementById('msg-acc-restart');
-  if (restart) restart.style.display = (authState === 'error' && _msgAccCurrent) ? '' : 'none';
+  if (restart) restart.style.display = (authState === 'error' && _msgAccCurrent && msgAccRestartPlan(_msgAccChannel, _msgAccStatus).show) ? '' : 'none';
   if (extra && step === 'qr') {
     // qr === undefined — поле не пришло (ответ /auth), оставляем как есть; null — идёт переподключение.
     const img = document.getElementById('msg-acc-qr-img');
@@ -186,8 +199,8 @@ function msgAccStartPolling() {
   }, 2000);
 }
 
-async function msgAccLogout(id) {
-  if (!confirm('Отключить Telegram от своего шлюза? Сессия будет удалена.')) return;
+async function msgAccLogout(id, channel) {
+  if (!confirm(`Отключить ${MSG_ACC_CHANNEL[channel] || 'аккаунт'} от своего шлюза? Сессия будет удалена.`)) return;
   try { await api('POST', `/api/messaging/accounts/${id}/logout`); await loadMessagingAccounts(); }
   catch (e) { alert('Не удалось отключить: ' + e.message); }
 }

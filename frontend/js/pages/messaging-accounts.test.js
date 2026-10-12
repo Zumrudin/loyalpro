@@ -53,3 +53,11 @@ test('msgAccQrSrc: только PNG data-URL', () => {
   assert.equal(ctx.msgAccQrSrc('data:image/svg+xml;base64,AAAA'), null);
   assert.equal(ctx.msgAccQrSrc('data:image/png;base64,AA" onerror="x'), null);
 });
+
+test('msgAccRestartPlan: без logout у WhatsApp, Telegram только pending', () => {
+  assert.deepEqual({ ...ctx.msgAccRestartPlan('whatsapp', 'active') }, { show: true, logout: false });
+  assert.deepEqual({ ...ctx.msgAccRestartPlan('whatsapp', 'pending') }, { show: true, logout: false });
+  assert.deepEqual({ ...ctx.msgAccRestartPlan('tdlib', 'pending') }, { show: true, logout: true });
+  assert.equal(ctx.msgAccRestartPlan('tdlib', 'active').show, false);
+  assert.equal(ctx.msgAccRestartPlan('tdlib', null).show, false);
+});
