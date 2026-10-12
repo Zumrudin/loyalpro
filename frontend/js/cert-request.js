@@ -4,6 +4,8 @@
   const slug = location.pathname.split('/').filter(Boolean).pop();
   const base = `/api/public/cert-requests/${encodeURIComponent(slug)}`;
   const $ = (id) => document.getElementById(id);
+  let ready = false;
+  let consentRevision = null;
 
   const TEXT_FIELDS = [
     'payer_last', 'payer_first', 'payer_middle', 'payer_birthdate', 'payer_inn',
@@ -16,6 +18,7 @@
   const FIELD_MESSAGES = {
     report_year: 'Выберите отчётный год.',
     consent: 'Поставьте отметку о согласии на обработку персональных данных.',
+    consent_version: 'Редакция согласия изменилась. Обновите страницу и подтвердите новое согласие.',
     payer_name: 'Укажите фамилию, имя и отчество получателя справки.',
     payer_birthdate: 'Укажите дату рождения получателя.',
     payer_adult: 'Получателем справки (плательщиком) может быть только совершеннолетний — 18 лет и старше.',
@@ -122,9 +125,16 @@
       const cfg = await (await fetch(`${base}/config`)).json();
       $('cr-clinic').textContent = cfg.clinicName || '';
       $('cr-policy').href = cfg.policyUrl || '#';
+      consentRevision = cfg.consent;
+      if (slug === 'clinic-1' && (!consentRevision || !/^[a-f0-9]{64}$/.test(consentRevision.sha256) ||
+          typeof consentRevision.version !== 'string' || !consentRevision.url?.startsWith('https://www.peri-clinic.ru/'))) throw new Error('consent');
+      $('cr-consent-document').href = consentRevision?.url || cfg.policyUrl || '#';
+      $('cr-consent').checked = false;
       $('cr-report_year').innerHTML = cfg.years.map((y) => `<option value="${y}">${y}</option>`).join('');
       $('cr-relationship').innerHTML =
         '<option value="">—</option>' + cfg.relationships.map((r) => `<option value="${r.code}">${r.label}</option>`).join('');
+      ready = true;
+      $('cr-submit').disabled = false;
     } catch {
       $('cr-error').textContent = 'Не удалось загрузить форму. Обновите страницу.';
     }
@@ -139,10 +149,13 @@
 
   async function submit(ev) {
     ev.preventDefault();
+    if (!ready) return;
     $('cr-error').innerHTML = '';
     const same = $('cr-payer_is_patient').checked;
     const body = { report_year: Number($('cr-report_year').value), payer_is_patient: same,
-      consent: $('cr-consent').checked, relationship: $('cr-relationship').value, website: $('cr-website').value };
+      consent: $('cr-consent').checked,
+      consent_version: consentRevision?.version, consent_sha256: consentRevision?.sha256,
+      relationship: $('cr-relationship').value, website: $('cr-website').value };
     for (const f of TEXT_FIELDS) body[f] = $('cr-' + f).value.trim();
     body.payer_doc_type_code = '21'; // получатель справки — всегда паспорт РФ
 
@@ -158,7 +171,10 @@
       const resp = await fetch(base, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
       const data = await resp.json().catch(() => ({}));
       if (!resp.ok) {
-        if (data.error === 'validation') showErrors(data.fields);
+        if (data.error === 'validation') {
+          showErrors(data.fields);
+          if (data.fields?.includes('consent_version')) { ready = false; $('cr-consent').checked = false; }
+        }
         else $('cr-error').textContent = data.error === 'too_many_requests'
           ? 'Слишком много заявок с этого устройства. Попробуйте позже.'
           : 'Не удалось отправить заявку. Повторите попытку.';
@@ -169,7 +185,7 @@
       if (data.applicationToken) $('cr-download').href = `${base}/application/${data.applicationToken}`;
     } catch {
       $('cr-error').textContent = 'Сеть недоступна. Повторите попытку.';
-    } finally { btn.disabled = false; btn.textContent = 'Отправить заявку'; }
+    } finally { btn.disabled = !ready; btn.textContent = 'Отправить заявку'; }
   }
 
   init();

@@ -98,15 +98,15 @@
 
         <div class="fg chk">
           <input type="checkbox" id="cr-consent">
-          <label for="cr-consent">Я согласен(на) на обработку персональных данных в соответствии с
-            <a id="cr-policy" href="#" target="_blank">политикой</a> (152-ФЗ) *</label>
+          <label for="cr-consent">Даю <a id="cr-consent-document" href="#" target="_blank" rel="noopener">согласие на обработку персональных данных для подготовки справки</a> *</label>
         </div>
 
         <!-- honeypot: скрыто от людей -->
+        <p class="note"><a id="cr-policy" href="#" target="_blank" rel="noopener">Политика обработки персональных данных</a></p>
         <input class="hp" id="cr-website" tabindex="-1" autocomplete="off" placeholder="Не заполняйте">
 
         <div id="cr-error" class="err"></div>
-        <button id="cr-submit" type="submit">Отправить заявку</button>
+        <button id="cr-submit" disabled type="submit">Отправить заявку</button>
       </form>
     </div>
 

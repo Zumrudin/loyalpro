@@ -8,6 +8,7 @@ const cfg = require('../config');
 const { db } = require('../db');
 const { createLogger } = require('../logger');
 const svc = require('../services/cert-request');
+const consent = require('../services/cert-consent');
 
 const logger = createLogger('CertRequestPublic');
 
@@ -63,7 +64,9 @@ router.get('/api/public/cert-requests/:slug/config', async (req, res) => {
   try {
     const salon = await svc.resolveSalonBySlug({ db, slug: req.params.slug });
     if (!salon) return res.status(404).json({ error: 'not_found' });
+    res.setHeader('Cache-Control', 'no-store');
     res.json({
+      consent: consent.publicConfig(salon),
       clinicName: cfg.MEDICAL_CERT_CLINIC.org_name,
       years: availableYears(),
       relationships: Object.entries(svc.RELATIONSHIP_LABELS).map(([code, label]) => ({ code, label })),
@@ -90,7 +93,8 @@ router.post('/api/public/cert-requests/:slug', async (req, res) => {
     const samePerson = b.payer_is_patient === true || b.payer_is_patient === '1' || b.payer_is_patient === 'true';
     const year = Number(b.report_year);
     if (!availableYears().includes(year)) errors.push('report_year');
-    if (!b.consent) errors.push('consent');
+    const consentError = consent.validate(salon, b);
+    if (consentError) errors.push(consentError);
 
     // Плательщик (получатель справки) — всегда совершеннолетний, документ — паспорт РФ.
     if (!b.payer_last || !b.payer_first || !b.payer_middle) errors.push('payer_name');
@@ -128,6 +132,7 @@ router.post('/api/public/cert-requests/:slug', async (req, res) => {
     const { clientId } = await svc.matchPatient({ db, salonId: salon.id, phone: matchPhone });
     const amount = await svc.computeYearAmount({ db, salonId: salon.id, clientId, year });
 
+    const acceptedDocument = consent.evidence(salon);
     const row = await db.one(
       `INSERT INTO cert_requests (
          salon_id, status, report_year, payer_is_patient,
@@ -135,14 +140,14 @@ router.post('/api/public/cert-requests/:slug', async (req, res) => {
          payer_doc_type_code, payer_doc_serie_number, payer_doc_issue_date, payer_phone, payer_email,
          patient_last, patient_first, patient_middle, patient_birthdate, patient_inn,
          patient_doc_type_code, patient_doc_serie_number, patient_doc_issue_date, patient_phone,
-         relationship, matched_client_id, computed_amount, consent_at, ip, user_agent
+         relationship, matched_client_id, computed_amount, consent_at, ip, user_agent, consent_document
        ) VALUES (
          $1,'new',$2,$3,
          $4,$5,$6,$7,$8,
          $9,$10,$11,$12,$13,
          $14,$15,$16,$17,$18,
          $19,$20,$21,$22,
-         $23,$24,$25, now(), $26, $27
+         $23,$24,$25, now(), $26, $27, $28::jsonb
        ) RETURNING id`,
       [
         salon.id, year, samePerson,
@@ -153,6 +158,7 @@ router.post('/api/public/cert-requests/:slug', async (req, res) => {
         samePerson ? null : patientDocType, samePerson ? null : ((b.patient_doc_serie_number || '').trim() || null),
         samePerson ? null : dateOrNull(b.patient_doc_date), samePerson ? null : patientPhone, // поле формы patient_doc_date → колонка patient_doc_issue_date
         samePerson ? null : b.relationship, clientId, amount, ip, String(req.headers['user-agent'] || '').slice(0, 400),
+        acceptedDocument ? JSON.stringify(acceptedDocument) : null,
       ]);
 
     const token = appTokens.put({ requestId: row.id, salonId: salon.id });

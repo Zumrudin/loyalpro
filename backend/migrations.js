@@ -1222,6 +1222,10 @@ async function runMigrations(client) {
       WHERE matched_client_id IS NOT NULL
   `).catch(() => {});
 
+  // Existing requests deliberately remain NULL: their accepted revision is unknown.
+  // Do not swallow this migration failure; new requests must not lose consent evidence.
+  await client.query(`ALTER TABLE cert_requests ADD COLUMN IF NOT EXISTS consent_document JSONB`);
+
   // ── Разовый патч координат активных бланков (стр. 2 + перенос наименования) ──
   // Применяется один раз на шаблон (маркер _p2patch_v1), чтобы не затирать
   // ручную калибровку. Только добавляет недостающие поля / выравнивает секции.
