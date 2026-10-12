@@ -1703,6 +1703,7 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 
 ### Task 11: Выкат на прод — 🟣 Fable, по шагам руками, с владельцем
 
+- [ ] 0. Убедиться, что на проде уже есть фикс ложной паузы от уведомлений YClients на шлюзе (`services/outgoing-authorship.js` с `provider` в `classify`, миграция `idx_chatpush_messages_sys_out` — делается параллельной сессией 12.10.2026): без него после переключения WhatsApp каждое «Вы записаны на прием…» поставит диалог на паузу «ответил оператор».
 - [ ] 1. Слить ветку в `main`, на проде `cd /root/loyalpro_new && git stash && git pull --ff-only && git stash pop`; `cd gateway && npm ci --omit=dev` (нужен `git` для `libsignal` — на проде есть, 2.43); `pm2 restart loyalpro-gateway`, `PORT=3001 pm2 restart loyalpro` (миграция добавит колонку).
 - [ ] 2. Владелец: прод-админка → Настройки → Мессенджеры → «Подключить WhatsApp напрямую» → сканирует QR с телефона клиники (+79250177778) ИЛИ вводит код привязки. Ждать `ready` → лог бэкенда «канал whatsapp салона 1 переключён на шлюз».
 - [ ] 3. Проверить первое входящее и первый ответ Милы (`pm2 logs loyalpro-gateway`, `agent_reply_deliveries`, «Чат»).
