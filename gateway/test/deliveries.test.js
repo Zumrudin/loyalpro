@@ -68,3 +68,15 @@ test('setTempId / findByTempId: связка временного id TDLib с д
   assert.deepEqual(calls[1][1], [7, 99001, 1, 5, 'шлюз перезапущен, исход неизвестен']);
   assert.equal(await d.findByTempId(7, 5), null);
 });
+
+test('setProviderMessageId / findByProviderMessageId: связка по строковому id Baileys', async () => {
+  const calls = [];
+  const db = { query: async (sql, p) => { calls.push([sql, p]); return { rowCount: 1 }; }, oneOrNone: async (sql, p) => { calls.push([sql, p]); return { id: 7 }; } };
+  const d = makeDeliveries(db);
+  await d.setProviderMessageId(7, '3EB0ABC');
+  assert.match(calls[0][0], /SET provider_message_id=\$2/);
+  assert.deepEqual(calls[0][1], [7, '3EB0ABC']);
+  assert.equal(await d.findByProviderMessageId(9, '3EB0ABC'), 7);
+  assert.match(calls[1][0], /provider_message_id=\$2/);
+  assert.equal(calls[1][1][0], 9);
+});

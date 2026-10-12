@@ -64,7 +64,21 @@ function makeDeliveries(db) {
     return r ? Number(r.id) : null;
   }
 
-  return { create, setStatus, get, failStale, setTempId, findByTempId };
+  // WhatsApp: id сообщения строковый (key.id) — та же роль, что у tdlib_temp_id.
+  async function setProviderMessageId(id, providerMessageId) {
+    await db.query(`UPDATE gateway_deliveries SET provider_message_id=$2, updated_at=NOW() WHERE id=$1`, [id, providerMessageId]);
+  }
+  async function findByProviderMessageId(accountId, providerMessageId) {
+    const r = await db.oneOrNone(
+      `SELECT id FROM gateway_deliveries
+        WHERE account_id=$1 AND provider_message_id=$2
+          AND (status_id=$3 OR (status_id=$4 AND error=$5))
+        ORDER BY id DESC LIMIT 1`,
+      [accountId, providerMessageId, STATUS.ACCEPTED[0], STATUS.FAILED[0], STALE_REASON]);
+    return r ? Number(r.id) : null;
+  }
+
+  return { create, setStatus, get, failStale, setTempId, findByTempId, setProviderMessageId, findByProviderMessageId };
 }
 
 function parseId(s) {
@@ -87,4 +101,6 @@ module.exports = {
   failStale: (...a) => getDefault().failStale(...a),
   setTempId: (...a) => getDefault().setTempId(...a),
   findByTempId: (...a) => getDefault().findByTempId(...a),
+  setProviderMessageId: (...a) => getDefault().setProviderMessageId(...a),
+  findByProviderMessageId: (...a) => getDefault().findByProviderMessageId(...a),
 };

@@ -16,7 +16,7 @@ async function get(id) {
 // (переключается бэкендом по auth_state='ready'): клиент поднимать надо, иначе
 // авторизацию нечем вести. Отправки идут только через 'active' (byToken).
 async function listActive() {
-  return db.any(`SELECT * FROM messenger_accounts WHERE provider='gateway' AND channel='tdlib' AND status IN ('active','pending') ORDER BY id`);
+  return db.any(`SELECT * FROM messenger_accounts WHERE provider='gateway' AND channel IN ('tdlib','whatsapp') AND status IN ('active','pending') ORDER BY id`);
 }
 
 async function byToken(token) {
@@ -44,4 +44,11 @@ async function rememberContact(accountId, phone, userId) {
     [accountId, phone, userId]);
 }
 
-module.exports = { get, listActive, byToken, setAuth, contactUserId, rememberContact };
+// WhatsApp: LID → телефон (user_id хранит числовую часть LID, см. миграцию).
+async function phoneByLid(accountId, lid) {
+  if (!lid) return null;
+  const r = await db.oneOrNone(`SELECT phone FROM gateway_contacts WHERE account_id=$1 AND user_id=$2`, [accountId, lid]);
+  return r ? r.phone : null;
+}
+
+module.exports = { get, listActive, byToken, setAuth, contactUserId, rememberContact, phoneByLid };
