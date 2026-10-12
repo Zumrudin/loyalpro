@@ -127,7 +127,7 @@ describe('buildKnowledgeContext', () => {
         return [{ id: 10, article_id: 1, content: 'Ботокс: разглаживает морщины', embedding: [1, 0, 0], embed_norm: 1 }];
       }
       if (/search_vector/i.test(sql)) return [];
-      if (/kb_article_links/i.test(sql)) return [{ entity_yc_id: 555 }];
+      if (/kb_article_links/i.test(sql)) return [{ article_id: 1, entity_yc_id: 555 }];
       return [];
     });
     db.oneOrNone.mockResolvedValue({ id: 1, yclients_company_id: 100 });
@@ -141,6 +141,57 @@ describe('buildKnowledgeContext', () => {
     expect(ctx.context).toMatch(/5000/);
     expect(ctx.context).not.toContain('Массаж');   // не связана со статьёй
     expect(ctx.sources).toContain(1);   // article_id
+  });
+
+  test('для связанной услуги удаляет статическую цену статьи и оставляет живую цену YClients', async () => {
+    kb.embedText.mockResolvedValue([1, 0, 0]);
+    db.any.mockImplementation(async (sql) => {
+      if (/FROM kb_chunks[\s\S]*embedding/i.test(sql) && !/search_vector/i.test(sql)) {
+        return [{
+          id: 10,
+          article_id: 1,
+          content: 'Ботулинотерапия\nОписание процедуры.\n- Лоб — 4 000 ₽.\nПодбор выполняет врач.',
+          embedding: [1, 0, 0],
+          embed_norm: 1,
+        }];
+      }
+      if (/search_vector/i.test(sql)) return [];
+      if (/kb_article_links/i.test(sql)) return [{ article_id: 1, entity_yc_id: 555 }];
+      return [];
+    });
+    db.oneOrNone.mockResolvedValue({ id: 1, yclients_company_id: 100 });
+    yc.ycGet.mockResolvedValue([
+      { id: 555, title: 'Ботулинотерапия', price_min: 6500, price_max: 6500, duration: 30 },
+    ]);
+
+    const ctx = await rag.buildKnowledgeContext(1, 'ботокс');
+
+    expect(ctx.context).toContain('Описание процедуры.');
+    expect(ctx.context).toContain('Подбор выполняет врач.');
+    expect(ctx.context).not.toContain('4 000 ₽');
+    expect(ctx.context).toContain('6500 ₽');
+  });
+
+  test('при вопросе о цене удаляет статическую сумму даже без kb_article_links', async () => {
+    kb.embedText.mockResolvedValue([1, 0, 0]);
+    db.any.mockImplementation(async (sql) => {
+      if (/FROM kb_chunks[\s\S]*embedding/i.test(sql) && !/search_vector/i.test(sql)) {
+        return [{
+          id: 10,
+          article_id: 1,
+          content: 'Чистка лица\nОписание процедуры.\nСтоимость — 6 500 ₽.\nПодбор выполняет специалист.',
+          embedding: [1, 0, 0],
+          embed_norm: 1,
+        }];
+      }
+      return [];
+    });
+
+    const ctx = await rag.buildKnowledgeContext(1, 'сколько стоит чистка лица');
+
+    expect(ctx.context).toContain('Описание процедуры.');
+    expect(ctx.context).toContain('Подбор выполняет специалист.');
+    expect(ctx.context).not.toContain('6 500 ₽');
   });
 
   test('нет чанков → пустой контекст', async () => {

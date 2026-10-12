@@ -193,14 +193,18 @@ const CONTEXT_CHAR_BUDGET = 12000;
 // Живые цены/длительность услуг, привязанных к статьям через kb_article_links.
 // Цен в БД нет (services_config хранит только теги) → тянем из YClients live по
 // entity_yc_id. Любая ошибка/отсутствие интеграции → [] (контекст без блока цен).
-async function liveServicesForArticles(salonId, articleIds) {
+async function serviceLinksForArticles(salonId, articleIds) {
   if (!articleIds.length) return [];
-  const links = await db.any(
-    `SELECT DISTINCT entity_yc_id
+  return db.any(
+    `SELECT DISTINCT article_id, entity_yc_id
        FROM kb_article_links
       WHERE salon_id = $1 AND entity_type = 'service'
         AND article_id = ANY($2::int[])`,
     [salonId, articleIds]);
+}
+
+async function liveServicesForArticles(salonId, articleIds, opts = {}) {
+  const links = opts.links || await serviceLinksForArticles(salonId, articleIds);
   if (!links.length) return [];
   const wanted = new Set(links.map(l => String(l.entity_yc_id)));
   try {
@@ -219,6 +223,21 @@ async function liveServicesForArticles(salonId, articleIds) {
   } catch (_) {
     return [];   // YClients недоступен → контекст без цен
   }
+}
+
+// Старые статьи могут содержать зафиксированные цены. Для статей, связанных с
+// услугами YClients, такие строки не передаём Миле: единственным источником сумм
+// остаётся живой блок, который buildKnowledgeContext добавляет ниже.
+const STATIC_SERVICE_PRICE_RE = /\d[\d\s]*(?:[–—-]\s*\d[\d\s]*)?\s*(?:₽|руб(?:\.|л(?:ей|я|ь)?))/iu;
+const PRICE_QUERY_RE = /(?:цен[аыуе]|стоимост|сколько\s+стоит|поч[её]м|прайс)/iu;
+
+function stripStaticServicePrices(content) {
+  return String(content || '')
+    .split('\n')
+    .filter(line => !STATIC_SERVICE_PRICE_RE.test(line))
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
 }
 
 // Формат строки цены из услуги: "Ботулинотерапия — 5000–8000 ₽, 30 мин".
@@ -241,12 +260,17 @@ async function buildKnowledgeContext(salonId, query, opts = {}) {
   if (!chunks.length) return { context: '', sources: [], fragments: [] };
 
   const articleIds = [...new Set(chunks.map(c => c.article_id))];
-  const services = await liveServicesForArticles(salonId, articleIds);
+  const links = await serviceLinksForArticles(salonId, articleIds);
+  const linkedArticleIds = new Set(links.map(link => Number(link.article_id)));
+  const services = await liveServicesForArticles(salonId, articleIds, { links });
+  const priceQuery = PRICE_QUERY_RE.test(query);
 
   let context = '';
   const fragments = [];
   for (const c of chunks) {
-    const content = String(c.content || '').trim();
+    const content = String((priceQuery || linkedArticleIds.has(Number(c.article_id))
+      ? stripStaticServicePrices(c.content)
+      : c.content) || '').trim();
     if (!content) continue;
     const block = `${content}\n\n`;
     if (context.length + block.length > budget) break;
@@ -265,5 +289,6 @@ module.exports = {
   DEFAULT_MAX_CHARS, CONTEXT_CHAR_BUDGET, chunkArticle, hashChunk,
   vectorNorm, cosineSim, reciprocalRankFusion,
   reembedArticle, retrieveChunks,
-  liveServicesForArticles, formatServiceLine, buildKnowledgeContext,
+  serviceLinksForArticles, liveServicesForArticles, formatServiceLine,
+  stripStaticServicePrices, PRICE_QUERY_RE, buildKnowledgeContext,
 };
