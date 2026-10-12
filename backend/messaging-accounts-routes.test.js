@@ -33,47 +33,44 @@ describe('parseAuthStep', () => {
   test('ничего → null', () => expect(parseAuthStep({})).toBeNull());
 });
 
+// Клиент транзакции: [advisory-lock, SELECT existing, (INSERT, UPDATE external_id) | UPDATE external_id].
+const txn = (...results) => { results.forEach(r => mockClient.query.mockResolvedValueOnce(r)); };
+const LOCK = { rows: [] };
+
 describe('createTelegramAccount', () => {
-  test('НИЧЕГО не гасит: вставляет pending-строку без транзакции, external_id=id, сброс кэша, start', async () => {
-    db.oneOrNone
-      .mockResolvedValueOnce(null)                                   // gateway-строки active/pending нет
-      .mockResolvedValueOnce({ id: 42 });                            // INSERT … RETURNING id
-    db.query.mockResolvedValueOnce({ rowCount: 1 });                 // UPDATE external_id
+  test('НИЧЕГО не гасит: под advisory-локом вставляет pending-строку, external_id=id, сброс кэша, start', async () => {
+    txn(LOCK, { rows: [] }, { rows: [{ id: 42 }] }, { rowCount: 1 });
     gw.start.mockResolvedValueOnce({ authState: 'wait_phone' });
     const out = await createTelegramAccount(1);
     expect(out).toEqual({ id: 42, authState: 'wait_phone', status: 'pending' });
-    expect(require('./db').withTransaction).not.toHaveBeenCalled();
-    const [selSql] = db.oneOrNone.mock.calls[0];
-    expect(selSql).toMatch(/status IN \('active', ?'pending'\)/);
-    const [insSql, insParams] = db.oneOrNone.mock.calls[1];
-    expect(insSql).toMatch(/INSERT INTO messenger_accounts/);
-    expect(insSql).toMatch(/'pending'/);
-    expect(insParams[0]).toBe(1);
-    expect(insParams[1]).toMatch(/^[0-9a-f]{48}$/);
-    const allSql = [...db.query.mock.calls, ...mockClient.query.mock.calls].map(c => c[0]).join('\n');
-    expect(allSql).not.toMatch(/SET status = 'disabled'/);
-    const [extSql, extParams] = db.query.mock.calls[0];
-    expect(extSql).toMatch(/SET external_id = \$1 WHERE id = \$2/);
-    expect(extParams).toEqual(['42', 42]);
+    const calls = mockClient.query.mock.calls;
+    expect(calls[0][0]).toMatch(/pg_advisory_xact_lock/);
+    expect(calls[0][1]).toEqual(['gateway-account:1:tdlib']);
+    expect(calls[1][0]).toMatch(/status IN \('active', ?'pending'\)/);
+    expect(calls[2][0]).toMatch(/INSERT INTO messenger_accounts/);
+    expect(calls[2][0]).toMatch(/'pending'/);
+    expect(calls[2][1][0]).toBe(1);
+    expect(calls[2][1][1]).toMatch(/^[0-9a-f]{48}$/);
+    expect(calls.map(c => c[0]).join('\n')).not.toMatch(/SET status = 'disabled'/);
+    expect(calls[3][0]).toMatch(/SET external_id = \$1 WHERE id = \$2/);
+    expect(calls[3][1]).toEqual(['42', 42]);
     expect(accounts.invalidate).toHaveBeenCalled();
     expect(gw.start).toHaveBeenCalledWith(42);
-    expect(gw.start.mock.invocationCallOrder[0]).toBeGreaterThan(db.query.mock.invocationCallOrder[0]);
   });
 
-  test('gateway-строка active/pending уже есть → идемпотентно: start по ней', async () => {
-    db.oneOrNone.mockResolvedValueOnce({ id: 7, status: 'pending' });
+  test('gateway-строка active/pending уже есть → идемпотентно: start по ней, без INSERT', async () => {
+    txn(LOCK, { rows: [{ id: 7, status: 'pending' }] }, { rowCount: 1 });
     gw.start.mockResolvedValueOnce({ authState: 'wait_code' });
     expect(await createTelegramAccount(1)).toEqual({ id: 7, authState: 'wait_code', status: 'pending' });
-    expect(require('./db').withTransaction).not.toHaveBeenCalled();
+    const calls = mockClient.query.mock.calls;
+    expect(calls.map(c => c[0]).join('\n')).not.toMatch(/INSERT/);
     // Повтор кнопки дозаполняет external_id, если первый раз второй UPDATE не прошёл.
-    expect(db.query).toHaveBeenCalledTimes(1);
-    expect(db.query.mock.calls[0][0]).toMatch(/SET external_id = COALESCE\(external_id, \$1\)/);
-    expect(db.query.mock.calls[0][1]).toEqual(['7', 7]);
+    expect(calls[2][0]).toMatch(/SET external_id = COALESCE\(external_id, \$1\)/);
+    expect(calls[2][1]).toEqual(['7', 7]);
   });
 
   test('шлюз не стартовал → строка остаётся pending, ошибка наружу', async () => {
-    db.oneOrNone.mockResolvedValueOnce(null).mockResolvedValueOnce({ id: 43 });
-    db.query.mockResolvedValueOnce({ rowCount: 1 });
+    txn(LOCK, { rows: [] }, { rows: [{ id: 43 }] }, { rowCount: 1 });
     gw.start.mockRejectedValueOnce(Object.assign(new Error('шлюз: ECONNREFUSED'), { status: 502 }));
     await expect(createTelegramAccount(1)).rejects.toThrow(/ECONNREFUSED/);
   });
@@ -102,30 +99,31 @@ describe('promoteIfReady', () => {
 describe('createGatewayAccount(whatsapp)', () => {
   const { createGatewayAccount } = router;
   test('вставляет pending-строку channel=whatsapp с display_name WhatsApp, external_id=id, start', async () => {
-    db.oneOrNone.mockResolvedValueOnce(null).mockResolvedValueOnce({ id: 43 });
+    txn(LOCK, { rows: [] }, { rows: [{ id: 43 }] }, { rowCount: 1 });
     gw.start.mockResolvedValue({ authState: 'starting' });
     const r = await createGatewayAccount(1, 'whatsapp');
     expect(r).toEqual({ id: 43, authState: 'starting', status: 'pending' });
-    const ins = db.oneOrNone.mock.calls[1];
-    expect(ins[0]).toMatch(/'gateway', 'whatsapp', 'pending'/);
-    expect(ins[0]).toMatch(/WhatsApp \(свой шлюз\)/);
-    expect(db.oneOrNone.mock.calls[0][1]).toEqual([1, 'whatsapp']);
+    const calls = mockClient.query.mock.calls;
+    expect(calls[2][0]).toMatch(/'gateway', 'whatsapp', 'pending'/);
+    expect(calls[2][0]).toMatch(/WhatsApp \(свой шлюз\)/);
+    expect(calls[1][1]).toEqual([1, 'whatsapp']);
+    expect(calls[0][1]).toEqual(['gateway-account:1:whatsapp']);
     expect(gw.start).toHaveBeenCalledWith(43);
   });
   test('неизвестный канал → ошибка 400 без запросов', async () => {
     await expect(createGatewayAccount(1, 'max')).rejects.toMatchObject({ status: 400 });
-    expect(db.oneOrNone).not.toHaveBeenCalled();
+    expect(mockClient.query).not.toHaveBeenCalled();
   });
   test('createTelegramAccount = createGatewayAccount(…, tdlib)', async () => {
-    db.oneOrNone.mockResolvedValueOnce(null).mockResolvedValueOnce({ id: 44 });
+    txn(LOCK, { rows: [] }, { rows: [{ id: 44 }] }, { rowCount: 1 });
     gw.start.mockResolvedValue({ authState: 'starting' });
     await createTelegramAccount(1);
-    expect(db.oneOrNone.mock.calls[0][1]).toEqual([1, 'tdlib']);
+    expect(mockClient.query.mock.calls[1][1]).toEqual([1, 'tdlib']);
   });
   test('POST /accounts/whatsapp и qr/pairingCode проходят через /auth и /status', async () => {
     const route = (method, path) => router.stack.find(l => l.route && l.route.path === path && l.route.methods[method]).route.stack.slice(-1)[0].handle;
     const fakeRes = () => ({ status: jest.fn().mockReturnThis(), json: jest.fn() });
-    db.oneOrNone.mockResolvedValueOnce(null).mockResolvedValueOnce({ id: 45 });
+    txn(LOCK, { rows: [] }, { rows: [{ id: 45 }] }, { rowCount: 1 });
     gw.start.mockResolvedValue({ authState: 'wait_qr' });
     let res = fakeRes();
     await route('post', '/accounts/whatsapp')({ body: {}, user: { salonId: 1 } }, res);

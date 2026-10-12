@@ -220,6 +220,12 @@ router.post('/webhook', async (req, res) => {
       // сессия) классификатор узнаёт по шаблонам салона (инцидент 2026-10-12).
       const authoredBy = msg.direction === 'outgoing'
         ? await authorship.classify(salonId, msg.text, { viaApi: !!msg.deliveryId, provider }) : null;
+      // Эхо СВОЕГО шлюза по WhatsApp приходит сразу после sock.sendMessage — может
+      // обогнать персист отправителя (api:<delivery_id>, services/chat-persist).
+      // Кладём эхо под ТОТ ЖЕ ключ: кто бы ни пришёл вторым, он упирается в
+      // UNIQUE (salon_id, external_message_id), а не задваивает сообщение.
+      const externalId = (provider === 'gateway' && msg.channel === 'whatsapp' && msg.direction === 'outgoing' && msg.deliveryId)
+        ? chatpush.ownOutgoingExternalId(msg.deliveryId) : msg.messageId;
       const ins = await db.query(
         `INSERT INTO chatpush_messages
            (salon_id, client_id, customer_id, channel, direction, external_message_id, reply_to_message_id,
@@ -227,7 +233,7 @@ router.post('/webhook', async (req, res) => {
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
          ON CONFLICT (salon_id, external_message_id) DO NOTHING
          RETURNING id`,
-        [salonId, clientId, customerId, msg.channel, msg.direction, msg.messageId, msg.replyToMessageId,
+        [salonId, clientId, customerId, msg.channel, msg.direction, externalId, msg.replyToMessageId,
          msg.type, msg.text, msg.fileUrl, msg.mimeType, msg.senderName, msg.phone, msg.chatId, msg.timestamp,
          authoredBy, provider]
       );

@@ -313,20 +313,22 @@ router.post('/dialogs/:key/send', adminOnly, async (req, res) => {
     const params = rcp && recipientParams(channel, { ...rcp, isGroup: isGroupKey(key) });
     if (!params) return res.status(422).json({ error: 'Не найден получатель для этого канала' });
 
+    // Эхо этой отправки придёт как обычное outgoing — пометим автора заранее,
+    // чтобы в транскрипте Милы оно не выглядело её собственной репликой. ДО
+    // отправки: эхо шлюза может прийти раньше, чем вернётся sendMessage; запись
+    // от упавшей отправки безвредна (TTL, совпадения по тексту нет).
+    await authorship.remember(salonId, key, text, 'operator');
     const delivery = await transport.sendMessage(salonId, {
       text, ...params, replyToMessageId: rcp.reply_to || undefined,
     });
     await pauseAgent(salonId, key);
-    // Эхо этой отправки придёт как обычное outgoing — пометим автора заранее,
-    // чтобы в транскрипте Милы оно не выглядело её собственной репликой.
-    await authorship.remember(salonId, key, text, 'operator');
     logger.info(`operator sent ${channel} to ${key}: delivery=${delivery && delivery.id} reply_to=${rcp.reply_to || '-'} ${text.slice(0, 60)}`);
     scheduleDeliveryCheck(delivery && delivery.id, { key, channel, salonId, accountId: delivery && delivery.accountId });
     if (channel === 'whatsapp') {
       try {
         await persistWhatsappOutgoing(salonId, {
           delivery, phone: params.phone, chatId: rcp.chat_id || null,
-          text, msgType: 'text', fileUrl: null, mimeType: null,
+          text, msgType: 'text', fileUrl: null, mimeType: null, authoredBy: 'operator',
         });
       } catch (e) { logger.error(`persist whatsapp outgoing failed: ${e.message}`); }
     }
@@ -381,13 +383,13 @@ router.post('/dialogs/:key/send-file', adminOnly, chatUpload.single('file'), asy
     // Имя обязано содержать расширение (требование Chatpush); кириллицу не шлём.
     const ext = (req.file.originalname.match(/\.[A-Za-z0-9]+$/) || [''])[0] || '';
     const fileName = `file_${Date.now()}${ext}`;
+    // Подпись к файлу приедет эхом отдельным текстом — помечаем её автором так же,
+    // как обычную отправку оператора (до отправки: эхо шлюза может обогнать ответ).
+    if (caption) await authorship.remember(salonId, key, caption, 'operator');
     const delivery = await transport.sendFile(salonId, {
       fileName, caption, type: isImage ? 'image' : 'document', ...params,
     }, req.file.buffer, req.file.mimetype);
     await pauseAgent(salonId, key);
-    // Подпись к файлу приедет эхом отдельным текстом — помечаем её автором так же,
-    // как обычную отправку оператора.
-    if (caption) await authorship.remember(salonId, key, caption, 'operator');
     // reply_to сюда не идёт: у send_file в доке Chatpush параметра reply_to_message_id нет.
     logger.info(`operator sent file ${channel} to ${key}: delivery=${delivery && delivery.id} ${req.file.originalname} (${req.file.size} b)`);
     scheduleDeliveryCheck(delivery && delivery.id, { key, channel, kind: 'file', salonId, accountId: delivery && delivery.accountId });
@@ -398,7 +400,7 @@ router.post('/dialogs/:key/send-file', adminOnly, chatUpload.single('file'), asy
         await persistWhatsappOutgoing(salonId, {
           delivery, phone: params.phone, chatId: rcp.chat_id || null,
           text: caption || ('📎 ' + req.file.originalname),
-          msgType: isImage ? 'image' : 'document', fileUrl: null, mimeType: req.file.mimetype,
+          msgType: isImage ? 'image' : 'document', fileUrl: null, mimeType: req.file.mimetype, authoredBy: 'operator',
         });
       } catch (e) { logger.error(`persist whatsapp outgoing file failed: ${e.message}`); }
     }

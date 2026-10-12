@@ -110,11 +110,11 @@ async function process(salonId, dialogKey, meta, opts = {}) {
     catch (e) { logger.warn(`dialog ${dialogKey}: фото прайса не легло в «Чат» (${e.message})`); }
   };
   const send = async (m, text) => {
+    // Журнал авторства — ДО отправки: эхо шлюза может прийти раньше возврата
+    // rawSend. Без await: доставка не ждёт служебной записи. remember не бросает.
+    authorLog.remember(salonId, dialogKey, text, 'agent');
     const out = await rawSend(m, text);
     pendingReplies.remember(salonId, dialogKey, text);
-    // Без await: доставка следующей реплики не должна ждать служебной записи, а
-    // эхо приходит секундами-минутами позже вставки. remember сам не бросает.
-    authorLog.remember(salonId, dialogKey, text, 'agent');
     try { await persistOwn(salonId, dialogKey, m, text, out); }
     catch (e) { logger.warn(`dialog ${dialogKey}: своя реплика не легла в «Чат» (${e.message})`); }
     try { await deliveryLog.record(salonId, dialogKey, m, text, out); }

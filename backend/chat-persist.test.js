@@ -53,3 +53,27 @@ test('успешный персист исходящего подтвержда�
   expect(pending.peek(1, key)).toHaveLength(1);
   pending._reset();
 });
+
+describe('персист vs эхо шлюза (гонка api:<delivery_id>)', () => {
+  const { persistWhatsappOutgoing } = require('./services/chat-persist');
+  const chatEvents = require('./services/chat-events');
+  test('конфликт с уже лежащим эхом: authored_by поправляется (DO UPDATE), SSE не дублируется', async () => {
+    const spy = jest.spyOn(chatEvents, 'emit').mockImplementation(() => {});
+    db.query.mockResolvedValueOnce({ rowCount: 1, rows: [{ id: 5, inserted: false }] });
+    await persistWhatsappOutgoing(1, { delivery: { id: 'g12' }, phone: '79001112233', chatId: null, text: 'hi', msgType: 'text', authoredBy: 'agent' });
+    const [sql, params] = db.query.mock.calls[0];
+    expect(sql).toMatch(/ON CONFLICT \(salon_id, external_message_id\) DO UPDATE SET authored_by = EXCLUDED\.authored_by/);
+    expect(sql).toMatch(/WHERE EXCLUDED\.authored_by IS NOT NULL/);
+    expect(params[3]).toBe('api:g12');
+    expect(params[11]).toBe('agent');
+    expect(spy).not.toHaveBeenCalled();
+    spy.mockRestore();
+  });
+  test('персист первым: вставка, SSE уходит', async () => {
+    const spy = jest.spyOn(chatEvents, 'emit').mockImplementation(() => {});
+    db.query.mockResolvedValueOnce({ rowCount: 1, rows: [{ id: 6, inserted: true }] });
+    await persistWhatsappOutgoing(1, { delivery: { id: 'g13' }, phone: '79001112233', chatId: null, text: 'hi', msgType: 'text', authoredBy: 'agent' });
+    expect(spy).toHaveBeenCalledTimes(1);
+    spy.mockRestore();
+  });
+});

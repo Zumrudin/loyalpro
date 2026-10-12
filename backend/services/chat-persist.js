@@ -22,7 +22,8 @@ const logger = createLogger('Chat');
 // без этого сообщение живёт лишь оптимистичным пузырём и пропадает после
 // перезагрузки. tdlib/max эхо шлют исправно, их сохраняет вебхук — не трогаем.
 // external_message_id = api:<delivery_id>: если эхо вернётся, вебхук дедупит по
-// нему (chatpush.deliveryIdFromWhatsappEchoId). ON CONFLICT — на случай гонки.
+// нему (chatpush.deliveryIdFromWhatsappEchoId). Эхо СВОЕГО шлюза может прийти РАНЬШЕ этого персиста — вебхук кладёт его под
+// тот же ключ api:<delivery_id>; ON CONFLICT тогда лишь поправляет authored_by.
 // authoredBy — кто автор строки (`agent` | `operator` | `system` | null). До
 // 09.08.2026 персист его не выставлял вовсе, потому что им пользовались только
 // пути, чьё эхо всё равно приходило и проставляло автора само. Реплики Милы в
@@ -49,12 +50,14 @@ async function persistWhatsappOutgoing(salonId, { delivery, phone, chatId, text,
        (salon_id, client_id, customer_id, channel, direction, external_message_id,
         msg_type, text, file_url, mime_type, phone, chat_id, msg_ts, authored_by)
      VALUES ($1,$2,$3,'whatsapp','outgoing',$4,$5,$6,$7,$8,$9,$10,$11,$12)
-     ON CONFLICT (salon_id, external_message_id) DO NOTHING
-     RETURNING id`,
+     ON CONFLICT (salon_id, external_message_id) DO UPDATE SET authored_by = EXCLUDED.authored_by
+       WHERE EXCLUDED.authored_by IS NOT NULL AND chatpush_messages.authored_by IS DISTINCT FROM EXCLUDED.authored_by
+     RETURNING id, (xmax = 0) AS inserted`,
     [salonId, clientId, config.CHATPUSH.customerId, externalId,
      msgType, text || '', fileUrl, mimeType, phone, chatId, ts, authoredBy]
   );
-  if (ins.rowCount > 0) {
+  // inserted=false — строку первым положило эхо шлюза: автора поправили, но в SSE она уже ушла.
+  if (ins.rowCount > 0 && ins.rows[0].inserted !== false) {
     pendingReplies.acknowledge(salonId, dialogKey({ phone, chat_id: chatId }), [{ text, msg_ts: ts }]);
     chatEvents.emit(salonId, {
       type: 'message',

@@ -188,3 +188,18 @@ test('/chatpush whatsapp: числовой delivery_id и устаревший _
   await handle({ baseUrl: '/chatpush', query: { key: 'cpsecret' }, body: legacy }, fakeRes());
   expect(messageInserts()).toHaveLength(0);
 });
+
+test('/gateway whatsapp: эхо раньше персиста кладётся под api:<delivery_id> (общий ключ с persistWhatsappOutgoing)', async () => {
+  accounts.resolveSalon.mockResolvedValue(3);
+  accounts.credentialsFor.mockResolvedValue({ id: 9, provider: 'gateway' });
+  await handle({ baseUrl: '/gateway', query: { key: 'gwsecret' }, body: waEcho('g12', 'true_79001112233@s.whatsapp.net_OUT1') }, fakeRes());
+  expect(messageInserts()).toHaveLength(1);
+  expect(messageInserts()[0][1][5]).toBe('api:g12');
+});
+
+test('/gateway whatsapp: входящее и эхо без delivery_id сохраняют собственный id сообщения', async () => {
+  accounts.resolveSalon.mockResolvedValue(3);
+  accounts.credentialsFor.mockResolvedValue({ id: 9, provider: 'gateway' });
+  await handle({ baseUrl: '/gateway', query: { key: 'gwsecret' }, body: waEcho(null, 'true_x_APP1') }, fakeRes());
+  expect(messageInserts()[0][1][5]).toBe('true_x_APP1');
+});

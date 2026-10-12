@@ -57,30 +57,38 @@ const GATEWAY_CHANNELS = { tdlib: 'Telegram (свой шлюз)', whatsapp: 'Wha
 async function createGatewayAccount(salonId, channel) {
   const displayName = GATEWAY_CHANNELS[channel];
   if (!displayName) throw Object.assign(new Error(`канал ${channel} через шлюз не подключается`), { status: 400 });
-  const existing = await db.oneOrNone(
-    `SELECT id, status FROM messenger_accounts
-      WHERE salon_id = $1 AND channel = $2 AND provider = 'gateway' AND status IN ('active','pending')
-      ORDER BY (status = 'active') DESC, id DESC LIMIT 1`,
-    [salonId, channel]);
-  if (existing) {
-    // Повтор кнопки после сбоя второго UPDATE при создании: external_id мог
-    // остаться NULL — без него входящие шлюза не резолвились бы в салон.
-    await db.query(`UPDATE messenger_accounts SET external_id = COALESCE(external_id, $1) WHERE id = $2`, [String(existing.id), existing.id]);
-    const st = await gw.start(existing.id);
-    return { id: existing.id, authState: st.authState, status: existing.status };
-  }
-  const token = crypto.randomBytes(24).toString('hex');
-  const ins = await db.oneOrNone(
-    `INSERT INTO messenger_accounts (salon_id, token, provider, channel, status, auth_state, display_name)
-     VALUES ($1, $2, 'gateway', '${channel}', 'pending', 'starting', '${displayName}')
-     RETURNING id`,
-    [salonId, token]);
-  const id = ins && ins.id;
-  if (!id) throw new Error('строка аккаунта не вставилась');
-  await db.query(`UPDATE messenger_accounts SET external_id = $1 WHERE id = $2`, [String(id), id]);
-  accounts.invalidate();
-  const st = await gw.start(id);
-  return { id, authState: st.authState, status: 'pending' };
+  // Выбор-и-вставка под advisory-локом (salon+channel): два одновременных клика
+  // иначе оба увидели бы «строки нет» и завели две pending-строки. Лок транзакционный
+  // (снимается на COMMIT); уникальный индекс не вводим — не проверено, что на проде
+  // нет дублей.
+  const created = await withTransaction(async (client) => {
+    await client.query(`SELECT pg_advisory_xact_lock(hashtext($1))`, [`gateway-account:${salonId}:${channel}`]);
+    const found = await client.query(
+      `SELECT id, status FROM messenger_accounts
+        WHERE salon_id = $1 AND channel = $2 AND provider = 'gateway' AND status IN ('active','pending')
+        ORDER BY (status = 'active') DESC, id DESC LIMIT 1`,
+      [salonId, channel]);
+    const existing = found.rows[0];
+    if (existing) {
+      // Повтор кнопки после сбоя: external_id мог остаться NULL — без него
+      // входящие шлюза не резолвились бы в салон.
+      await client.query(`UPDATE messenger_accounts SET external_id = COALESCE(external_id, $1) WHERE id = $2`, [String(existing.id), existing.id]);
+      return { id: existing.id, status: existing.status, fresh: false };
+    }
+    const token = crypto.randomBytes(24).toString('hex');
+    const ins = await client.query(
+      `INSERT INTO messenger_accounts (salon_id, token, provider, channel, status, auth_state, display_name)
+       VALUES ($1, $2, 'gateway', '${channel}', 'pending', 'starting', '${displayName}')
+       RETURNING id`,
+      [salonId, token]);
+    const id = ins.rows[0] && ins.rows[0].id;
+    if (!id) throw new Error('строка аккаунта не вставилась');
+    await client.query(`UPDATE messenger_accounts SET external_id = $1 WHERE id = $2`, [String(id), id]);
+    return { id, status: 'pending', fresh: true };
+  });
+  if (created.fresh) accounts.invalidate();
+  const st = await gw.start(created.id);
+  return { id: created.id, authState: st.authState, status: created.status };
 }
 const createTelegramAccount = (salonId) => createGatewayAccount(salonId, 'tdlib');
 
