@@ -74,3 +74,23 @@ test('контракт: медиа → fileUrl и mimeType', () => {
   assert.equal(e.text, 'см');
   assert.equal(e.type, 'image');
 });
+
+test('wa-mapper: тело разбирается backend chatpush.parseMessageEvent как whatsapp incoming с номером и chat_id', () => {
+  const wa = require('../lib/wa-mapper');
+  const msg = { key: { remoteJid: '46810865385627@lid', fromMe: false, id: '3EB0', senderPn: '79001112233@s.whatsapp.net' }, pushName: 'Иван', messageTimestamp: 1700000000, message: { conversation: 'Привет' } };
+  const body = wa.buildWebhookBody({ accountId: 9, ownPhone: '79250177778', msg, peerPhone: '79001112233', deliveryId: null, fileUrl: null });
+  const parsed = chatpush.parseMessageEvent(body);
+  assert.equal(parsed.channel, 'whatsapp');
+  assert.equal(parsed.direction, 'incoming');
+  assert.equal(parsed.customerId, 9);
+  assert.equal(parsed.phone, '79001112233');
+  assert.equal(parsed.chatId, '79001112233@c.us');
+  assert.equal(parsed.messageId, 'false_46810865385627@lid_3EB0');
+  assert.equal(parsed.text, 'Привет');
+  assert.equal(parsed.deliveryId, null);
+  const out = wa.buildWebhookBody({ accountId: 9, ownPhone: '79250177778', msg: { ...msg, key: { remoteJid: '79001112233@s.whatsapp.net', fromMe: true, id: 'X' } }, peerPhone: '79001112233', deliveryId: 'g12', fileUrl: null });
+  const po = chatpush.parseMessageEvent(out);
+  assert.equal(po.direction, 'outgoing');
+  assert.equal(po.phone, '79001112233');
+  assert.equal(po.deliveryId, 'g12');
+});
