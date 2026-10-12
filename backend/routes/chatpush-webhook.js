@@ -188,7 +188,10 @@ router.post('/webhook', async (req, res) => {
       // т.к. Chatpush перестал слать по ним эхо. Если эхо всё же придёт — дедупим
       // по delivery_id, зашитому в id (`_d<delivery>THISISBOT`), чтобы не задвоить.
       if (msg.channel === 'whatsapp' && msg.direction === 'outgoing' && salonId) {
-        const dId = chatpush.deliveryIdFromWhatsappEchoId(msg.messageId);
+        // Chatpush кладёт delivery_id и в payload, и в id эха (`_d<id>THISISBOT`);
+        // наш шлюз — только в payload (id у него 'g<n>', регэксп его не ловит).
+        // Событие уже записано в chatpush_events выше — сторож доставки его видит.
+        const dId = msg.deliveryId || chatpush.deliveryIdFromWhatsappEchoId(msg.messageId);
         if (dId) {
           const dup = await db.oneOrNone(
             'SELECT 1 FROM chatpush_messages WHERE salon_id=$1 AND external_message_id=$2',

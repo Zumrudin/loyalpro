@@ -99,6 +99,50 @@ describe('promoteIfReady', () => {
   });
 });
 
+describe('createGatewayAccount(whatsapp)', () => {
+  const { createGatewayAccount } = router;
+  test('вставляет pending-строку channel=whatsapp с display_name WhatsApp, external_id=id, start', async () => {
+    db.oneOrNone.mockResolvedValueOnce(null).mockResolvedValueOnce({ id: 43 });
+    gw.start.mockResolvedValue({ authState: 'starting' });
+    const r = await createGatewayAccount(1, 'whatsapp');
+    expect(r).toEqual({ id: 43, authState: 'starting', status: 'pending' });
+    const ins = db.oneOrNone.mock.calls[1];
+    expect(ins[0]).toMatch(/'gateway', 'whatsapp', 'pending'/);
+    expect(ins[0]).toMatch(/WhatsApp \(свой шлюз\)/);
+    expect(db.oneOrNone.mock.calls[0][1]).toEqual([1, 'whatsapp']);
+    expect(gw.start).toHaveBeenCalledWith(43);
+  });
+  test('неизвестный канал → ошибка 400 без запросов', async () => {
+    await expect(createGatewayAccount(1, 'max')).rejects.toMatchObject({ status: 400 });
+    expect(db.oneOrNone).not.toHaveBeenCalled();
+  });
+  test('createTelegramAccount = createGatewayAccount(…, tdlib)', async () => {
+    db.oneOrNone.mockResolvedValueOnce(null).mockResolvedValueOnce({ id: 44 });
+    gw.start.mockResolvedValue({ authState: 'starting' });
+    await createTelegramAccount(1);
+    expect(db.oneOrNone.mock.calls[0][1]).toEqual([1, 'tdlib']);
+  });
+  test('POST /accounts/whatsapp и qr/pairingCode проходят через /auth и /status', async () => {
+    const route = (method, path) => router.stack.find(l => l.route && l.route.path === path && l.route.methods[method]).route.stack.slice(-1)[0].handle;
+    const fakeRes = () => ({ status: jest.fn().mockReturnThis(), json: jest.fn() });
+    db.oneOrNone.mockResolvedValueOnce(null).mockResolvedValueOnce({ id: 45 });
+    gw.start.mockResolvedValue({ authState: 'wait_qr' });
+    let res = fakeRes();
+    await route('post', '/accounts/whatsapp')({ body: {}, user: { salonId: 1 } }, res);
+    expect(res.json).toHaveBeenCalledWith({ id: 45, authState: 'wait_qr', status: 'pending' });
+    db.oneOrNone.mockResolvedValueOnce({ id: 45, provider: 'gateway', channel: 'whatsapp', status: 'pending' });
+    gw.auth.mockResolvedValueOnce({ authState: 'wait_qr', pairingCode: 'ABCDEFGH', error: null });
+    res = fakeRes();
+    await route('post', '/accounts/:id/auth')({ params: { id: '45' }, body: { phone: '79001112233' }, user: { salonId: 1 } }, res);
+    expect(res.json).toHaveBeenCalledWith({ authState: 'wait_qr', pairingCode: 'ABCDEFGH', error: null, status: 'pending' });
+    db.oneOrNone.mockResolvedValueOnce({ id: 45, provider: 'gateway', channel: 'whatsapp', status: 'pending' });
+    gw.status.mockResolvedValueOnce({ authState: 'wait_qr', qr: 'data:image/png;base64,AA', pairingCode: null });
+    res = fakeRes();
+    await route('get', '/accounts/:id/status')({ params: { id: '45' }, body: {}, user: { salonId: 1 } }, res);
+    expect(res.json).toHaveBeenCalledWith({ authState: 'wait_qr', qr: 'data:image/png;base64,AA', pairingCode: null, status: 'pending' });
+  });
+});
+
 describe('HTTP-ручки', () => {
   const route = (method, path) => router.stack.find(l => l.route && l.route.path === path && l.route.methods[method]).route.stack.slice(-1)[0].handle;
   const fakeRes = () => ({ status: jest.fn().mockReturnThis(), json: jest.fn() });

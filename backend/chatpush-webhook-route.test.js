@@ -163,3 +163,28 @@ test('/gateway: исходящее эхо → classify получает provider
   expect(text).toBe('Рекомендации после процедуры');
   expect(opts).toEqual({ viaApi: false, provider: 'gateway' });
 });
+
+const waEcho = (deliveryId, id) => ({ type: 'whatsapp_incoming_msg', payload: { customer_id: 9, provider: 'gateway', delivery_id: deliveryId,
+  new_message: { direction: 'outgoing', chat_id: '79001112233@c.us', chat_phone: '79001112233', sender_phone_number: '79250177778', recipient_phone_number: '79001112233',
+    message: { id, type: 'text', text: 'hi', timestamp: 1 } } } });
+const dupFor = key => async (sql, p) => (/external_message_id=\$2/.test(sql) && p[1] === key ? { 1: 1 } : null);
+
+test('/gateway whatsapp: эхо своей отправки с delivery_id g12 дедупится по строке api:g12, событие залогировано', async () => {
+  accounts.resolveSalon.mockResolvedValue(3);
+  accounts.credentialsFor.mockResolvedValue({ id: 9, provider: 'gateway' });
+  db.oneOrNone.mockImplementation(dupFor('api:g12'));
+  await handle({ baseUrl: '/gateway', query: { key: 'gwsecret' }, body: waEcho('g12', 'true_79001112233@s.whatsapp.net_OUT1') }, fakeRes());
+  expect(eventInserts()).toHaveLength(1);
+  expect(messageInserts()).toHaveLength(0);
+  expect(log.debug).toHaveBeenCalledWith(expect.stringMatching(/skip echo of own whatsapp send \(delivery g12\)/));
+});
+
+test('/chatpush whatsapp: числовой delivery_id и устаревший _d…THISISBOT по-прежнему дедупятся', async () => {
+  accounts.resolveSalon.mockResolvedValue(3);
+  db.oneOrNone.mockImplementation(dupFor('api:399368073'));
+  await handle({ baseUrl: '/chatpush', query: { key: 'cpsecret' }, body: waEcho(399368073, 'true_x_OUT') }, fakeRes());
+  expect(messageInserts()).toHaveLength(0);
+  const legacy = waEcho(null, 'true_46810865385627@lid_d399368073THISISBOT');
+  await handle({ baseUrl: '/chatpush', query: { key: 'cpsecret' }, body: legacy }, fakeRes());
+  expect(messageInserts()).toHaveLength(0);
+});
