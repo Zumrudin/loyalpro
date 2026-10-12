@@ -6,7 +6,7 @@
 // POST /accounts/:id/logout, POST /accounts/:id/activate (routes/messaging-accounts.js).
 
 const MSG_ACC_CHANNEL = { whatsapp: 'WhatsApp', tdlib: 'Telegram', telegram: 'Telegram-бот', max: 'MAX', max_bot: 'MAX-бот', notify: 'Notify (ВК/ОК)' };
-const MSG_ACC_AUTH = { starting: 'запускается', wait_phone: 'ждёт номер', wait_code: 'ждёт код', wait_password: 'ждёт пароль', ready: 'подключён', logged_out: 'отключён', error: 'ошибка' };
+const MSG_ACC_AUTH = { starting: 'запускается', wait_phone: 'ждёт номер', wait_code: 'ждёт код', wait_password: 'ждёт пароль', wait_qr: 'ждёт сканирования QR', ready: 'подключён', logged_out: 'отключён', error: 'ошибка' };
 
 function msgAccStateLabel(a) {
   if (a.provider === 'chatpush') return 'Chatpush · ' + (a.status === 'active' ? 'активен' : 'отключён');
@@ -24,6 +24,7 @@ function msgAccNextStep(authState) {
   if (authState === 'wait_phone') return 'phone';
   if (authState === 'wait_code') return 'code';
   if (authState === 'wait_password') return 'password';
+  if (authState === 'wait_qr') return 'qr';
   if (authState === 'ready' || authState === 'logged_out' || authState === 'error') return null;
   return 'wait';
 }
@@ -33,6 +34,17 @@ let _msgAccBusy = false;
 let _msgAccStickyError = null;   // ошибка отправки шага; живёт, пока authState не изменится
 let _msgAccLastState = null;
 let _msgAccCurrent = null;   // id подключаемого gateway-аккаунта
+let _msgAccChannel = null;   // канал подключаемого аккаунта ('tdlib' | 'whatsapp') — для «Запустить заново»
+
+// Занят ли шлюз ЭТИМ каналом (кнопки Telegram и WhatsApp независимы).
+function msgAccGatewayBusy(rows, channel) {
+  return rows.some(a => a.provider === 'gateway' && a.channel === channel && (a.status === 'active' || a.status === 'pending'));
+}
+
+// В <img src> пускаем только PNG data-URL: строка приходит с сервера.
+function msgAccQrSrc(qr) {
+  return (typeof qr === 'string' && /^data:image\/png;base64,[A-Za-z0-9+\/=]+$/.test(qr)) ? qr : null;
+}
 
 async function loadMessagingAccounts() {
   const root = document.getElementById('msg-acc-list');
@@ -54,7 +66,7 @@ async function loadMessagingAccounts() {
         btn.onclick = () => msgAccLogout(a.id);
         row.append(' ', btn);
         // pending+ready (шлюз вошёл, пока страница была закрыта): тик /status продвинет строку.
-        if (a.status === 'pending' || a.auth_state !== 'ready') { _msgAccCurrent = a.id; msgAccStartPolling(); }
+        if (a.status === 'pending' || a.auth_state !== 'ready') { _msgAccCurrent = a.id; _msgAccChannel = a.channel; msgAccStartPolling(); }
       }
       if (!live) {
         const btn = document.createElement('button'); btn.className = 'btn btn-sec'; btn.textContent = 'Сделать активным';
@@ -64,11 +76,12 @@ async function loadMessagingAccounts() {
       root.appendChild(row);
     }
     if (!r.accounts.length) root.textContent = 'Аккаунтов нет.';
-    const connectBtn = document.getElementById('msg-acc-connect-tg');
-    if (connectBtn) {
-      const busy = r.accounts.some(a => a.provider === 'gateway' && (a.status === 'active' || a.status === 'pending'));
+    for (const [btnId, channel, label] of [['msg-acc-connect-tg', 'tdlib', 'Telegram'], ['msg-acc-connect-wa', 'whatsapp', 'WhatsApp']]) {
+      const connectBtn = document.getElementById(btnId);
+      if (!connectBtn) continue;
+      const busy = msgAccGatewayBusy(r.accounts, channel);
       connectBtn.disabled = !r.gatewayConfigured || busy;
-      connectBtn.title = busy ? 'Telegram уже подключается через свой шлюз' : '';
+      connectBtn.title = busy ? `${label} уже подключается через свой шлюз` : '';
     }
     const note = document.getElementById('msg-acc-gw-note');
     if (note) note.textContent = r.gatewayConfigured ? '' : 'Свой шлюз не настроен на сервере (MESSAGING_GATEWAY_URL).';
@@ -77,18 +90,37 @@ async function loadMessagingAccounts() {
   }
 }
 
-async function msgAccConnectTelegram() {
-  if (!confirm('Подключить Telegram салона к своему шлюзу? Канал переключится с Chatpush, когда вход будет подтверждён. Продолжить?')) return;
+async function msgAccConnect(channel) {
+  const label = channel === 'whatsapp' ? 'WhatsApp' : 'Telegram';
+  if (!confirm(`Подключить ${label} салона к своему шлюзу? Канал переключится с Chatpush, когда вход будет подтверждён. Продолжить?`)) return;
+  await msgAccStart(channel);
+}
+async function msgAccStart(channel) {
   try {
-    const r = await api('POST', '/api/messaging/accounts/telegram');
+    const r = await api('POST', `/api/messaging/accounts/${channel === 'whatsapp' ? 'whatsapp' : 'telegram'}`);
     _msgAccCurrent = r.id;
-    msgAccRenderStep(r.authState, null);
+    _msgAccChannel = channel;
+    _msgAccStickyError = null;
+    _msgAccLastState = r.authState;
+    msgAccRenderStep(r.authState, null, r);
     msgAccStartPolling();
     await loadMessagingAccounts();
   } catch (e) { alert('Не удалось начать подключение: ' + e.message); }
 }
+function msgAccConnectTelegram() { return msgAccConnect('tdlib'); }
+function msgAccConnectWhatsapp() { return msgAccConnect('whatsapp'); }
 
-function msgAccRenderStep(authState, error) {
+// После ошибки (например «QR не отсканирован») — отключить зависший аккаунт и начать заново.
+async function msgAccRestart() {
+  const id = _msgAccCurrent, channel = _msgAccChannel;
+  if (!id || !channel) return;
+  try {
+    await api('POST', `/api/messaging/accounts/${id}/logout`);
+  } catch (e) { alert('Не удалось сбросить прежнюю попытку: ' + e.message); return; }
+  await msgAccStart(channel);
+}
+
+function msgAccRenderStep(authState, error, extra) {
   const box = document.getElementById('msg-acc-wizard');
   if (!box) return;
   const step = msgAccNextStep(authState);
@@ -97,19 +129,34 @@ function msgAccRenderStep(authState, error) {
   box.querySelectorAll('[data-step]').forEach(el => { el.style.display = el.dataset.step === step ? '' : 'none'; });
   // Ошибку показываем, даже когда шагов ввода больше нет (error/logged_out).
   box.style.display = (step || error) ? '' : 'none';
+  const restart = document.getElementById('msg-acc-restart');
+  if (restart) restart.style.display = (authState === 'error' && _msgAccCurrent) ? '' : 'none';
+  if (extra && step === 'qr') {
+    // qr === undefined — поле не пришло (ответ /auth), оставляем как есть; null — идёт переподключение.
+    const img = document.getElementById('msg-acc-qr-img');
+    const wait = document.getElementById('msg-acc-qr-wait');
+    if (extra.qr !== undefined) {
+      const src = msgAccQrSrc(extra.qr);
+      if (img) { if (src) { img.src = src; img.style.display = ''; } else { img.removeAttribute('src'); img.style.display = 'none'; } }
+      if (wait) wait.style.display = src ? 'none' : '';
+    }
+    const pc = document.getElementById('msg-acc-pairing-code');
+    if (pc && extra.pairingCode !== undefined) pc.textContent = extra.pairingCode ? 'Код для ввода на телефоне: ' + extra.pairingCode : '';
+  }
   if (!step && _msgAccPoll) { clearInterval(_msgAccPoll); _msgAccPoll = null; }
 }
 
 async function msgAccSendStep(field) {
   const input = document.getElementById('msg-acc-' + field);
+  const bodyKey = field === 'wa-phone' ? 'phone' : field;
   const value = input ? input.value : '';
   if (!value || !_msgAccCurrent) return;
   try {
-    const r = await api('POST', `/api/messaging/accounts/${_msgAccCurrent}/auth`, { [field]: value });
-    if (input && field !== 'phone') input.value = '';
+    const r = await api('POST', `/api/messaging/accounts/${_msgAccCurrent}/auth`, { [bodyKey]: value });
+    if (input && bodyKey !== 'phone') input.value = '';
     _msgAccStickyError = null;
     _msgAccLastState = r.authState;
-    msgAccRenderStep(r.authState, r.error);
+    msgAccRenderStep(r.authState, r.error, { pairingCode: r.pairingCode });
     if (r.authState === 'ready') await loadMessagingAccounts();
   } catch (e) {
     _msgAccStickyError = e.message;   // шаг не сбрасываем — можно повторить ввод
@@ -132,7 +179,7 @@ function msgAccStartPolling() {
     try {
       const s = await api('GET', `/api/messaging/accounts/${_msgAccCurrent}/status`);
       if (s.authState !== _msgAccLastState) { _msgAccStickyError = null; _msgAccLastState = s.authState; }
-      msgAccRenderStep(s.authState, _msgAccStickyError || s.error);
+      msgAccRenderStep(s.authState, _msgAccStickyError || s.error, s);
       if (s.authState === 'ready') await loadMessagingAccounts();
     } catch (_) { /* следующий тик */ }
     finally { _msgAccBusy = false; }

@@ -34,3 +34,22 @@ test('msgAccNextStep — какой ввод показывать по сост�
 test('MSG_ACC_CHANNEL покрывает все каналы Chatpush', () => {
   assert.deepEqual(Object.keys(vm.runInContext('MSG_ACC_CHANNEL', ctx)).sort(), ['max', 'max_bot', 'notify', 'tdlib', 'telegram', 'whatsapp']);
 });
+
+test('msgAccNextStep: wait_qr → qr', () => {
+  assert.equal(ctx.msgAccNextStep('wait_qr'), 'qr');
+});
+test('msgAccStateLabel: wait_qr и WhatsApp', () => {
+  assert.equal(ctx.msgAccStateLabel({ provider: 'gateway', status: 'pending', auth_state: 'wait_qr', channel: 'whatsapp' }), 'Свой шлюз · подключается · ждёт сканирования QR');
+});
+test('msgAccGatewayBusy: занят только свой канал', () => {
+  const rows = [{ provider: 'gateway', channel: 'tdlib', status: 'active' }, { provider: 'chatpush', channel: 'whatsapp', status: 'active' }];
+  assert.equal(ctx.msgAccGatewayBusy(rows, 'tdlib'), true);
+  assert.equal(ctx.msgAccGatewayBusy(rows, 'whatsapp'), false);
+});
+test('msgAccQrSrc: только PNG data-URL', () => {
+  assert.equal(ctx.msgAccQrSrc('data:image/png;base64,iVBOR+/=='), 'data:image/png;base64,iVBOR+/==');
+  assert.equal(ctx.msgAccQrSrc(null), null);
+  assert.equal(ctx.msgAccQrSrc('javascript:alert(1)'), null);
+  assert.equal(ctx.msgAccQrSrc('data:image/svg+xml;base64,AAAA'), null);
+  assert.equal(ctx.msgAccQrSrc('data:image/png;base64,AA" onerror="x'), null);
+});
