@@ -102,10 +102,21 @@ function store() {
     // сохранена под старым (external_message_id = api:<id>). Перецепляем её на
     // новый id, иначе эхо повтора не сдедупится и один и тот же ответ ляжет в
     // переписку дважды. Только whatsapp: остальные каналы при отправке не персистим.
+    // Эхо СВОЕГО шлюза приходит почти сразу и ложится под api:<новый id> (тот же
+    // ключ, что у персиста) — тогда UPDATE упёрся бы в UNIQUE (salon_id,
+    // external_message_id) и в «Чате» остались бы две строки. Если строка под
+    // новым id уже есть, старую удаляем, иначе перецепляем. Один оператор, обе
+    // ветки видят один снимок и взаимоисключимы.
     async repointChatRow(salonId, oldDeliveryId, newDeliveryId) {
       await db.query(
-        `UPDATE chatpush_messages SET external_message_id = $3
-          WHERE salon_id = $1 AND external_message_id = $2`,
+        `WITH del AS (
+           DELETE FROM chatpush_messages
+            WHERE salon_id = $1 AND external_message_id = $2
+              AND EXISTS (SELECT 1 FROM chatpush_messages WHERE salon_id = $1 AND external_message_id = $3)
+         )
+         UPDATE chatpush_messages SET external_message_id = $3
+          WHERE salon_id = $1 AND external_message_id = $2
+            AND NOT EXISTS (SELECT 1 FROM chatpush_messages WHERE salon_id = $1 AND external_message_id = $3)`,
         [salonId, chatpush.ownOutgoingExternalId(oldDeliveryId),
          chatpush.ownOutgoingExternalId(newDeliveryId)]);
     },
@@ -224,4 +235,4 @@ async function cleanup(days = 30) {
   }
 }
 
-module.exports = { record, sweep, decide, cleanup, MAX_RETRY_AGE_MIN, BATCH };
+module.exports = { _store: store, record, sweep, decide, cleanup, MAX_RETRY_AGE_MIN, BATCH };
