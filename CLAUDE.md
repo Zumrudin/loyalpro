@@ -131,6 +131,18 @@ API calls go through `core/api.js` which attaches JWT from localStorage automati
 ### Multi-salon
 All DB tables have `salon_id` FK to `salons`. Every API route resolves the salon from `req.user.salon_id`. Never run queries without scoping to `salon_id`.
 
+### Свой шлюз мессенджеров (gateway/)
+
+- **WhatsApp через шлюз (с 2026-10):** `gateway/lib/whatsapp-client.js` (Baileys 6.7.24, ТОЧНАЯ версия — 7.x это rc с нативной зависимостью), тот же интерфейс, что у `TelegramClient`, класс выбирает `registry.clientClassFor` по `messenger_accounts.channel`. Сессия — `data/acc-<id>/wa` (`useMultiFileAuthState`). Авторизация: `auth_state='wait_qr'`, QR data-URL в `/internal/accounts/:id/status`, код привязки по номеру — `authStep({phone})`. Вебхук — ВЛОЖЕННАЯ WhatsApp-форма Chatpush (`new_message`), `chat_id` `<phone>@c.us` | `<lid>@lid` (номер неизвестен — ответить нельзя, см. спеку §6) | `<id>@g.us`. ГОТЧА LID: WhatsApp адресует чаты LID-ами, номер — из `key.senderPn`/`participantPn`, иначе кэш `gateway_contacts` (`user_id` = LID). Эхо своей отправки шлюз СИНТЕЗИРУЕТ из результата `sendMessage` (append-апсерт того же `key.id` пропускается); бэкенд дедупит его по `msg.deliveryId` (`routes/chatpush-webhook.js`), `_d<id>THISISBOT` — запасной путь Chatpush. `reply_to` в WhatsApp игнорируется. Риск: неофициальный клиент, как и Chatpush — пауза темпа и дневные лимиты обязательны. Спека `docs/superpowers/specs/2026-10-12-whatsapp-gateway-design.md`, план `docs/superpowers/plans/2026-10-12-whatsapp-gateway.md`.
+  - Baileys 6.7.24 is ESM: require() works only on Node ≥20.19 (prod 20.20.2 OK).
+  - Offline messages come as messages.upsert type 'append' (not only 'notify'), the client accepts both; 6 h age filter applies.
+  - onWhatsApp returns [] for non-WhatsApp numbers (never exists:false) → 422; exception → fail-open send.
+  - No SERVER_ACK messages.update for 1:1 chats → delivery is marked «Отправлено» when sendMessage resolves (setStatusIf only from «Принято»); ERROR update → «Невозможно доставить».
+  - Echo of our own send is stored by the backend webhook under external_message_id 'api:<delivery_id>' (same key as persistWhatsappOutgoing) because the gateway echo can arrive BEFORE the backend persists its send; ON CONFLICT corrects authored_by; authorship journal is written BEFORE sending.
+  - QR wizard stops after 5 unscanned QR rounds (only 408 «QR refs attempts ended» counts) → auth_state 'error'; restart = start again without logout.
+  - gateway/server.js logs unhandledRejection without exiting (Baileys must not kill Telegram sessions); uncaughtException → log + exit(1).
+  - Live spike (gateway/scripts/whatsapp-spike.js) is NOT yet run — senderPn on LID chats, append echo, statuses must be confirmed with the owner before prod.
+
 ## Tools
 
 ### Database queries
