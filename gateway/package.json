@@ -2,7 +2,7 @@
   "name": "loyalpro-gateway",
   "version": "0.1.0",
   "private": true,
-  "description": "LoyalPro — собственный шлюз мессенджеров (Telegram через TDLib), Chatpush-совместимый API",
+  "description": "LoyalPro — собственный шлюз мессенджеров (Telegram через TDLib, WhatsApp через Baileys), Chatpush-совместимый API",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
@@ -10,12 +10,15 @@
   },
   "engines": { "node": ">=20" },
   "dependencies": {
+    "@whiskeysockets/baileys": "6.7.24",
     "axios": "^1.6.0",
     "dotenv": "^16.3.0",
     "express": "^4.18.2",
     "multer": "^2.1.1",
     "pg": "^8.11.3",
+    "pino": "^9.6.0",
     "prebuilt-tdlib": "td-1.8.67",
+    "qrcode": "^1.5.4",
     "tdl": "^8.1.0"
   }
 }

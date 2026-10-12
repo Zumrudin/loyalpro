@@ -1558,6 +1558,17 @@ async function runMigrations(client) {
       PRIMARY KEY (account_id, phone)
     )
   `).catch(() => {});
+  // WhatsApp-шлюз (2026-10-12): id сообщения у Baileys строковый (key.id) —
+  // связка «наша отправка → доставка» после рестарта, как tdlib_temp_id у TDLib.
+  await client.query(`ALTER TABLE gateway_deliveries ADD COLUMN IF NOT EXISTS provider_message_id VARCHAR(64)`).catch(() => {});
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS gateway_deliveries_provider_msg_idx
+      ON gateway_deliveries (account_id, provider_message_id) WHERE provider_message_id IS NOT NULL
+  `).catch(() => {});
+  // Обратный поиск LID → телефон (WhatsApp): user_id хранит числовую часть LID.
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS gateway_contacts_user_idx ON gateway_contacts (account_id, user_id)
+  `).catch(() => {});
   await client.query(`
     CREATE INDEX IF NOT EXISTS gateway_deliveries_account_idx
       ON gateway_deliveries (account_id, id)
