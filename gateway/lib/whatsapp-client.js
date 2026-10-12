@@ -55,18 +55,28 @@ const OWN_SEND_TTL_MS = 30 * 60 * 1000;
 const SENT_CACHE_MAX = 500;
 const RECONNECT_MS = [2000, 5000, 10000, 30000, 60000];
 // Мастер подключения брошен: QR (или код привязки) крутится, никто не входит.
-// После стольких раундов QR без open — стоп, auth_state='error'; новый старт из
-// админки (registry.start пересоздаёт закрытый клиент) начинает заново.
+// Раунд = закрытие сокета Baileys «QR refs attempts ended» (408 timedOut;
+// connectionLost — тоже 408, поэтому различаем по тексту ошибки, socket.js).
+// 515 restartRequired после удачного входа, close после isNewLogin и обрывы
+// сети раундами НЕ считаются. После MAX_QR_ROUNDS раундов — стоп,
+// auth_state='error'; новый старт из админки (registry.start пересоздаёт
+// закрытый клиент) начинает заново.
 const MAX_QR_ROUNDS = 5;
+const QR_EXHAUSTED_RE = /QR refs attempts ended/i;
 const QR_ABANDONED_ERROR = 'QR не отсканирован — подключение остановлено, запустите заново';
 // Отправка медиа: у Baileys таймаута загрузки по умолчанию нет.
 const MEDIA_UPLOAD_TIMEOUT_MS = 60 * 1000;
 // Сколько fromMe-апсерт ждёт отправок в пути в тот же чат.
 const INFLIGHT_WAIT_MS = 30 * 1000;
+// Скачивание входящего медиа целиком: дольше — обрываем HTTP (AbortController),
+// сообщение уходит в бэкенд без файла. Иначе зависший поток навсегда
+// останавливал бы очередь событий чата.
+const MEDIA_DOWNLOAD_DEADLINE_MS = 90 * 1000;
+const MEDIA_HTTP_TIMEOUT_MS = 30 * 1000;   // axios timeout: до заголовков ответа
 const STATUS_ERROR = 0;              // WAMessageStatus.ERROR
 // DisconnectReason Baileys 6.7.24 (lib/Types/index.js) — константой, чтобы
 // тесты не грузили библиотеку.
-const DISCONNECT = { loggedOut: 401, forbidden: 403, connectionReplaced: 440, restartRequired: 515 };
+const DISCONNECT = { loggedOut: 401, forbidden: 403, timedOut: 408, connectionReplaced: 440, restartRequired: 515 };
 const TERMINAL_ERRORS = {
   [DISCONNECT.connectionReplaced]: 'сессию WhatsApp открыл другой процесс (connectionReplaced) — переподключение остановлено',
   [DISCONNECT.forbidden]: 'WhatsApp запретил доступ (forbidden) — номер мог быть заблокирован',
@@ -106,13 +116,15 @@ async function defaultCreateSocket(authDir, { getMessage } = {}) {
 
 // Поток, а не буфер: размер считаем по факту байтами (fileLength задаёт
 // отправитель и может врать), превышение лимита обрывает скачивание.
-function defaultDownloadMedia(msg, sock) {
+// signal/timeout уходят в axios: downloadMediaMessage(…, {options}) →
+// downloadContentFromMessage → getHttpStream({...options}) (Utils/messages-media.js).
+function defaultDownloadMedia(msg, sock, { signal, timeout } = {}) {
   const b = baileys();
   const pino = require('pino');
   const ctx = { logger: pino({ level: 'silent' }) };
   // Протухшая ссылка (404/410) — Baileys просит переотправку медиа у телефона.
   if (sock && typeof sock.updateMediaMessage === 'function') ctx.reuploadRequest = sock.updateMediaMessage;
-  return b.downloadMediaMessage(msg, 'stream', {}, ctx);
+  return b.downloadMediaMessage(msg, 'stream', { options: { signal, timeout } }, ctx);
 }
 
 function defaultDeps() {
@@ -156,7 +168,8 @@ class WhatsappClient {
     this.connected = false;
     this.closed = false;
     this.reconnects = 0;
-    this.qrRounds = 0;              // закрытий подряд в wait_qr без open
+    this.qrRounds = 0;              // раундов QR («QR refs attempts ended») без open
+    this.newLogin = false;          // isNewLogin: вход состоялся, ждём 515 и open
     this.ownLid = null;
     this.ownSends = new Map();       // key.id → {deliveryId, ts}
     this.inflight = new Map();       // jid → Set промисов отправок, ещё не зарегистрированных в ownSends
@@ -206,6 +219,7 @@ class WhatsappClient {
   }
 
   async onConnection(u) {
+    if (u.isNewLogin) { this.newLogin = true; this.log.info('вход по QR/коду выполнен, ждём переподключения'); }
     if (u.qr) {
       this.qr = await this.d.qrToDataUrl(u.qr).catch(e => { this.log.warn(`qr: ${e.message}`); return null; });
       if (this.authState !== 'wait_qr') { this.authState = 'wait_qr'; await this.d.repo.setAuth(this.id, 'wait_qr', { error: null }); }
@@ -217,7 +231,7 @@ class WhatsappClient {
       this.ownLid = mapper.lidOfJid(me.lid) || null;
       this.ownPhone = mapper.phoneOfJid(me.id) || this.ownPhone;
       this.displayName = me.name || null;
-      this.qr = null; this.pairingCode = null; this.reconnects = 0; this.qrRounds = 0;
+      this.qr = null; this.pairingCode = null; this.reconnects = 0; this.qrRounds = 0; this.newLogin = false;
       this.connected = true;          // входящие офлайн-очереди принимаем сразу, не дожидаясь записи в БД
       await this.d.repo.setAuth(this.id, 'ready', { error: null, phone: this.ownPhone, displayName: this.displayName });
       this.authState = 'ready';   // отправки разрешаем только после записи состояния в БД
@@ -254,7 +268,9 @@ class WhatsappClient {
       }
       // Старый QR/код привязки к новому сокету не относятся — не показываем их.
       this.qr = null; this.pairingCode = null;
-      if (this.authState === 'wait_qr' && ++this.qrRounds >= MAX_QR_ROUNDS) {
+      const errMsg = String((u.lastDisconnect && u.lastDisconnect.error && u.lastDisconnect.error.message) || '');
+      const qrExhausted = this.authState === 'wait_qr' && !this.newLogin && code === DR.timedOut && QR_EXHAUSTED_RE.test(errMsg);
+      if (qrExhausted && ++this.qrRounds >= MAX_QR_ROUNDS) {
         this.closed = true;
         this.detach();
         this.authState = 'error'; this.lastAuthError = QR_ABANDONED_ERROR;
@@ -397,19 +413,37 @@ class WhatsappClient {
     // Заявленный размер — только ранний отказ; по факту считаем байты потока.
     if (media.size && media.size > (this.d.maxMediaBytes || MAX_MEDIA_BYTES)) throw new Error(`файл ${media.size} байт больше лимита`);
     const max = this.d.maxMediaBytes || MAX_MEDIA_BYTES;
-    const src = await this.d.downloadMedia(msg, this.sock);
+    const deadline = this.d.mediaDownloadDeadlineMs || MEDIA_DOWNLOAD_DEADLINE_MS;
+    const ac = new AbortController();
+    let abortErr = null;
+    const abort = (msgText) => { if (!ac.signal.aborted) { abortErr = new Error(msgText); ac.abort(abortErr); } };
+    // Отмена рвёт и ожидание ответа, и поток: pipe() Baileys ошибку HTTP-ответа
+    // в Transform не пробрасывает — без явного destroy for await висел бы вечно.
+    const aborted = new Promise((_, rej) => ac.signal.addEventListener('abort', () => rej(abortErr), { once: true }));
+    aborted.catch(() => {});
+    const timer = setTimeout(() => abort(`скачивание медиа дольше ${Math.round(deadline / 1000)} с — прервано`), deadline);
+    let src = null;
     let buf;
-    if (Buffer.isBuffer(src)) buf = src;
-    else {
-      const chunks = []; let total = 0;
-      try {
-        for await (const chunk of src) {
+    try {
+      src = await Promise.race([this.d.downloadMedia(msg, this.sock, { signal: ac.signal, timeout: MEDIA_HTTP_TIMEOUT_MS }), aborted]);
+      if (Buffer.isBuffer(src)) buf = src;
+      else {
+        const stream = src;
+        ac.signal.addEventListener('abort', () => { if (typeof stream.destroy === 'function') stream.destroy(abortErr); }, { once: true });
+        const chunks = []; let total = 0;
+        for await (const chunk of stream) {
           total += chunk.length;
-          if (total > max) throw new Error(`файл больше лимита ${max} байт — скачивание прервано`);
+          if (total > max) { abort(`файл больше лимита ${max} байт — скачивание прервано`); throw abortErr; }
           chunks.push(chunk);
         }
-      } finally { if (src && typeof src.destroy === 'function' && !src.destroyed) src.destroy(); }
-      buf = Buffer.concat(chunks);
+        buf = Buffer.concat(chunks);
+      }
+    } catch (e) {
+      throw abortErr || e;
+    } finally {
+      clearTimeout(timer);
+      if (!buf) abort('скачивание медиа не завершено');      // закрыть HTTP-ответ при любом сбое
+      if (src && !Buffer.isBuffer(src) && typeof src.destroy === 'function' && !src.destroyed) src.destroy();
     }
     if (!buf || !buf.length) throw new Error('пустой файл');
     if (buf.length > max) throw new Error(`файл ${buf.length} байт больше лимита ${max}`);
@@ -558,4 +592,4 @@ class WhatsappClient {
   }
 }
 
-module.exports = { WhatsappClient, MAX_MESSAGE_AGE_S, RECONNECT_MS, DISCONNECT, MAX_QR_ROUNDS, MEDIA_UPLOAD_TIMEOUT_MS };
+module.exports = { WhatsappClient, MAX_MESSAGE_AGE_S, RECONNECT_MS, DISCONNECT, MAX_QR_ROUNDS, MEDIA_UPLOAD_TIMEOUT_MS, MEDIA_DOWNLOAD_DEADLINE_MS };

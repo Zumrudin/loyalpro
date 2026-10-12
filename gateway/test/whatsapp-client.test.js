@@ -12,7 +12,7 @@ const fs = require('fs');
 const path = require('path');
 const { EventEmitter } = require('events');
 const { Readable } = require('stream');
-const { WhatsappClient, MAX_MESSAGE_AGE_S, MAX_QR_ROUNDS, MEDIA_UPLOAD_TIMEOUT_MS } = require('../lib/whatsapp-client');
+const { WhatsappClient, MAX_MESSAGE_AGE_S, MAX_QR_ROUNDS, MEDIA_UPLOAD_TIMEOUT_MS, MEDIA_DOWNLOAD_DEADLINE_MS } = require('../lib/whatsapp-client');
 
 function fakeSock(over = {}) {
   const ev = new EventEmitter();
@@ -426,7 +426,7 @@ test('ревью #6: QR/код сбрасываются на реконнект�
   for (let i = 0; i < MAX_QR_ROUNDS; i++) {
     sock.ev.emit('connection.update', { qr: 'Q' + i }); await ticks(2);
     if (i === 0) { await wa.authStep({ phone: '79200255591' }); assert.equal(wa.status().pairingCode, 'ABCDEFGH'); }
-    sock.ev.emit('connection.update', { connection: 'close', lastDisconnect: { error: { output: { statusCode: 408 } } } });
+    sock.ev.emit('connection.update', { connection: 'close', lastDisconnect: { error: { message: 'QR refs attempts ended', output: { statusCode: 408 } } } });
     await ticks(3);
     if (i < MAX_QR_ROUNDS - 1) { assert.equal(wa.qr, null); assert.equal(wa.pairingCode, null); }
   }
@@ -479,4 +479,90 @@ test('ревью #9: медиа качается потоком, лимит по
   await ticks(6);
   const fd = hooks[1].payload.new_message.message.file_data;
   assert.equal(fs.readFileSync(path.join(tmp, 'pub', '42', path.basename(fd.download_url)), 'utf8'), 'abcd');
+});
+
+// ── Ре-ревью 8765a2c ────────────────────────────────────────────
+
+const qrExhausted = { connection: 'close', lastDisconnect: { error: { message: 'QR refs attempts ended', output: { statusCode: 408 } } } };
+
+test('ре-ревью #1: удачный вход на последнем раунде QR (isNewLogin → 515 → open) не обрывается в error', async () => {
+  let created = 0;
+  const { wa, sock } = setup();
+  wa.d.createSocket = async () => { created++; return { sock, saveCreds: async () => {} }; };
+  await wa.start();
+  for (let i = 0; i < MAX_QR_ROUNDS - 1; i++) {
+    sock.ev.emit('connection.update', { qr: 'Q' + i }); await ticks(2);
+    sock.ev.emit('connection.update', qrExhausted); await ticks(3);
+  }
+  sock.ev.emit('connection.update', { qr: 'LAST' }); await ticks(2);
+  sock.ev.emit('connection.update', { isNewLogin: true, qr: undefined }); await ticks(2);
+  sock.ev.emit('connection.update', { connection: 'close', lastDisconnect: { error: { message: 'Stream Errored (restart required)', output: { statusCode: 515 } } } });
+  await ticks(3);
+  assert.notEqual(wa.authState, 'error');
+  assert.equal(created, MAX_QR_ROUNDS + 1);
+  sock.ev.emit('connection.update', { connection: 'open' }); await ticks(2);
+  assert.equal(wa.authState, 'ready');
+});
+
+test('ре-ревью #1: 515 и обрывы сети (408 «Connection was lost») в wait_qr раундами не считаются', async () => {
+  const { wa, sock } = setup();
+  await wa.start();
+  sock.ev.emit('connection.update', { qr: 'Q' }); await ticks(2);
+  for (let i = 0; i < MAX_QR_ROUNDS + 2; i++) {
+    sock.ev.emit('connection.update', { connection: 'close', lastDisconnect: { error: { message: 'Connection was lost', output: { statusCode: 408 } } } });
+    await ticks(3);
+    sock.ev.emit('connection.update', { connection: 'close', lastDisconnect: { error: { output: { statusCode: 515 } } } });
+    await ticks(3);
+  }
+  assert.equal(wa.authState, 'wait_qr');
+  assert.equal(wa.closed, false);
+});
+
+test('ре-ревью #2: зависшее скачивание медиа обрывается по дедлайну, сообщение уходит без файла, очередь чата живёт', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const { wa, sock, hooks } = setup();
+  let signal = null; let opts = null;
+  wa.d.downloadMedia = async (m, s, o) => { opts = o; signal = o.signal; return new Readable({ read() {} }); };   // ни байта
+  await wa.start(); sock.ev.emit('connection.update', { connection: 'open' }); await ticks(2);
+  const jid = '79001112233@s.whatsapp.net';
+  sock.ev.emit('messages.upsert', { type: 'notify', messages: [
+    { key: { remoteJid: jid, fromMe: false, id: 'M1' }, messageTimestamp: 1_700_000_000, message: { imageMessage: { mimetype: 'image/jpeg' } } },
+    { key: { remoteJid: jid, fromMe: false, id: 'M2' }, messageTimestamp: 1_700_000_000, message: { conversation: 'после фото' } },
+  ] });
+  await ticks(6);
+  assert.equal(hooks.length, 0);
+  assert.ok(opts.timeout > 0);
+  t.mock.timers.tick(MEDIA_DOWNLOAD_DEADLINE_MS);
+  await ticks(8);
+  assert.equal(signal.aborted, true);
+  assert.equal(hooks.length, 2);
+  assert.equal(hooks[0].payload.new_message.message.file_data, undefined);
+  assert.equal(hooks[1].payload.new_message.message.text, 'после фото');
+});
+
+test('ре-ревью #2: ответ не пришёл вовсе (промис downloadMedia висит) — тоже дедлайн', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const { wa, sock, hooks } = setup();
+  wa.d.downloadMedia = () => new Promise(() => {});
+  await wa.start(); sock.ev.emit('connection.update', { connection: 'open' }); await ticks(2);
+  sock.ev.emit('messages.upsert', { type: 'notify', messages: [{ key: { remoteJid: '79001112233@s.whatsapp.net', fromMe: false, id: 'M' }, messageTimestamp: 1_700_000_000, message: { imageMessage: { mimetype: 'image/jpeg' } } }] });
+  await ticks(4);
+  t.mock.timers.tick(MEDIA_DOWNLOAD_DEADLINE_MS);
+  await ticks(6);
+  assert.equal(hooks.length, 1);
+});
+
+test('ре-ревью #2: превышение лимита отменяет HTTP (signal.aborted), удачное скачивание — без отмены и без висящего таймера', async () => {
+  const { wa, sock, hooks } = setup();
+  wa.d.maxMediaBytes = 10;
+  const signals = [];
+  wa.d.downloadMedia = async (m, s, o) => { signals.push(o.signal); return Readable.from(m.key.id === 'BIG' ? [Buffer.alloc(6), Buffer.alloc(6)] : [Buffer.from('ok')]); };
+  await open(wa, sock);
+  sock.ev.emit('messages.upsert', { type: 'notify', messages: [{ key: { remoteJid: '79001112233@s.whatsapp.net', fromMe: false, id: 'BIG' }, messageTimestamp: 1_700_000_000, message: { imageMessage: { mimetype: 'image/jpeg' } } }] });
+  await ticks(6);
+  assert.equal(signals[0].aborted, true);
+  assert.equal(hooks[0].payload.new_message.message.file_data, undefined);
+  sock.ev.emit('messages.upsert', { type: 'notify', messages: [{ key: { remoteJid: '79001112233@s.whatsapp.net', fromMe: false, id: 'SMALL' }, messageTimestamp: 1_700_000_000, message: { imageMessage: { mimetype: 'image/jpeg' } } }] });
+  await ticks(6);
+  assert.ok(hooks[1].payload.new_message.message.file_data);
 });
