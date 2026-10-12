@@ -155,3 +155,40 @@ describe('справка относится к одной процедуре', (
       .toContain('Профессиональное очищение кожи');
   });
 });
+
+describe('все найденные фрагменты с явными границами', () => {
+  function result(contents) {
+    let context = '';
+    const fragments = contents.map((content, i) => {
+      const start = context.length;
+      context += `${content}\n\n`;
+      return { article_id: i + 1, start, end: start + content.length };
+    });
+    return { context: context.trimEnd(), fragments };
+  }
+  const priceOnly = 'Комбинированная чистка лица и спины\n## Стоимость\nЧистка — 6500 ₽.';
+  test('обзор первым, прайс вторым, полезное описание третьим → факт о чистке', () => {
+    const { context, fragments } = result([REAL.peels, priceOnly, REAL.cleaning, REAL.laser]);
+    expect(pickServiceFact(context, 'Сколько стоит чистка лица?', fragments))
+      .toEqual(pickServiceFact(REAL.cleaning, 'Сколько стоит чистка лица?'));
+  });
+  test('после неполного фрагмента нельзя взять описание чужой процедуры', () => {
+    const { context, fragments } = result([priceOnly, REAL.laser, REAL.peels]);
+    expect(pickServiceFact(context, 'Сколько стоит чистка лица?', fragments)).toBeNull();
+  });
+  test('первый подходящий фрагмент сохраняет приоритет поиска', () => {
+    const { context, fragments } = result([REAL.cleaning, 'Чистка лица\nДругой достаточно длинный описательный абзац о чистке лица.']);
+    expect(pickServiceFact(context, 'Сколько стоит чистка лица?', fragments)?.text)
+      .toContain('Профессиональное очищение кожи');
+  });
+  test('повтор заголовка и заголовок со скобками не склеивают чужие статьи', () => {
+    const { context, fragments } = result([priceOnly, 'Другая процедура (аппарат)\nОписание другой процедуры не относится к чистке лица.', REAL.cleaning]);
+    expect(pickServiceFact(context, 'Сколько стоит чистка лица?', fragments)?.title)
+      .toBe('Комбинированная чистка лица и спины');
+  });
+  test('пустые и повреждённые границы не приводят к выбору текста всего контекста', () => {
+    for (const fragments of [[], [null], [{ start: -1, end: 99999 }], [{ start: 0, end: 99999 }]]) {
+      expect(pickServiceFact(REAL.cleaning, 'Сколько стоит чистка лица?', fragments)).toBeNull();
+    }
+  });
+});

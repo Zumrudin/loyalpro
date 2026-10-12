@@ -234,19 +234,23 @@ function formatServiceLine(s) {
 }
 
 // Собирает grounded-контекст для агента: релевантные чанки + блок живых цен.
-// Возвращает { context, sources: number[] (article_id) }.
+// Возвращает context, sources и границы fragments внутри context (без дубля текста).
 async function buildKnowledgeContext(salonId, query, opts = {}) {
   const budget = opts.budget || CONTEXT_CHAR_BUDGET;
   const chunks = await retrieveChunks(salonId, query, { limit: opts.limit || 4 });
-  if (!chunks.length) return { context: '', sources: [] };
+  if (!chunks.length) return { context: '', sources: [], fragments: [] };
 
   const articleIds = [...new Set(chunks.map(c => c.article_id))];
   const services = await liveServicesForArticles(salonId, articleIds);
 
   let context = '';
+  const fragments = [];
   for (const c of chunks) {
-    const block = `${c.content}\n\n`;
+    const content = String(c.content || '').trim();
+    if (!content) continue;
+    const block = `${content}\n\n`;
     if (context.length + block.length > budget) break;
+    fragments.push({ article_id: c.article_id, start: context.length, end: context.length + content.length });
     context += block;
   }
   if (services.length) {
@@ -254,7 +258,7 @@ async function buildKnowledgeContext(salonId, query, opts = {}) {
       services.map(formatServiceLine).join('\n') + '\n';
   }
 
-  return { context: context.trim(), sources: articleIds };
+  return { context: context.trimEnd(), sources: articleIds, fragments };
 }
 
 module.exports = {

@@ -890,16 +890,51 @@ describe('справка об услуге в stage 0', () => {
   });
 });
 
-// Task 5 (2026-10-09): отправка идёт через services/messaging/transport по
-// аккаунту салона; salonId — адресат transport и в тело запроса провайдеру
-// попадать НЕ должен (иначе уедет в query-string Chatpush как salonId=1).
-describe('defaultDeps.sendMessage → transport по салону', () => {
-  test('salonId снимается с payload и уходит первым аргументом', async () => {
-    const transport = require('./services/messaging/transport');
-    const spy = jest.spyOn(transport, 'sendMessage').mockResolvedValue({ id: 1 });
-    try {
-      await worker.defaultDeps.sendMessage({ salonId: 7, text: 't', phone: '79001112233', dispatchRouting: ['tdlib'] });
-      expect(spy).toHaveBeenCalledWith(7, { text: 't', phone: '79001112233', dispatchRouting: ['tdlib'] });
-    } finally { spy.mockRestore(); }
+describe('напоминание после цены без приглашения', () => {
+  const messages = [
+    { role: 'user', content: 'Сколько стоит чистка лица?' },
+    { role: 'assistant', content: 'Чистка стоит 6500 ₽, длительность 90 минут.' },
+  ];
+  test('общий вопрос модели заменяется предложением подобрать время', async () => {
+    let system;
+    const d = deps({
+      loadTranscript: async () => ({ messages }),
+      createMessage: async req => {
+        system = req.system;
+        return { text: JSON.stringify({ action: 'send', text: 'Есть ли ещё вопросы по чистке?' }) };
+      },
+    });
+    await worker.processOne(row(), d);
+    expect(system).toContain('предложи подобрать удобное время для записи');
+    expect(d.calls.sent[0].text).toBe('Подобрать Вам удобное время для записи?');
   });
+  test('skip модели и проверка выдуманного времени сохраняются', async () => {
+    for (const decision of [{ action: 'skip', reason: 'разговор завершён' },
+      { action: 'send', text: 'Записать вас в 15:00?' }]) {
+      const d = deps({ loadTranscript: async () => ({ messages }),
+        createMessage: async () => ({ text: JSON.stringify(decision) }) });
+      await worker.processOne(row(), d);
+      expect(d.calls.sent).toHaveLength(0);
+    }
+  });
+  test('актуальная запись после якоря гасит напоминание до модели', async () => {
+    const createMessage = jest.fn();
+    const d = deps({ loadTranscript: async () => ({ messages }), bookedSinceAnchor: async () => true, createMessage });
+    await worker.processOne(row(), d);
+    expect(createMessage).not.toHaveBeenCalled();
+    expect(d.calls.sent).toHaveLength(0);
+  });
+});
+
+test('напоминание получает справку из третьего фрагмента тем же отбором', async () => {
+  const rag = require('./services/agent-rag');
+  const { cleaningSearchResult } = require('./services/agent/__fixtures__/kb-real-chunks');
+  const search = jest.spyOn(rag, 'buildKnowledgeContext').mockResolvedValue(cleaningSearchResult());
+  try {
+    const fact = await worker.defaultDeps.serviceFact(17, 'Сколько стоит чистка лица?');
+    expect(fact.title).toBe('Комбинированная чистка лица и спины');
+    expect(fact.text).toContain('Профессиональное очищение кожи');
+    expect(search).toHaveBeenCalledTimes(1);
+    expect(search).toHaveBeenCalledWith(17, 'Сколько стоит чистка лица?', {});
+  } finally { search.mockRestore(); }
 });

@@ -38,3 +38,12 @@ test('_reset очищает всё', () => {
   pending._reset();
   expect(pending.peek(1, 'k', 101_000)).toEqual([]);
 });
+
+test('подтверждение хранения ограничено салоном, диалогом и временем отправки', () => {
+  for (const [salon, key] of [[1, 'a'], [2, 'a'], [1, 'b']]) pending.remember(salon, key, 'Подобрать время?', 100000);
+  pending.remember(1, 'a', 'Подобрать время?', 200000);
+  pending.acknowledge(1, 'a', [{ text: 'Подобрать время?', msg_ts: 100 }]);
+  expect(pending.peek(1, 'a', 201000)).toEqual([{ text: 'Подобрать время?', ts: 200 }]);
+  expect(pending.peek(2, 'a', 201000)).toHaveLength(1);
+  expect(pending.peek(1, 'b', 201000)).toHaveLength(1);
+});

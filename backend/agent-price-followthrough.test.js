@@ -7,6 +7,18 @@ const ASK = 'Здравствуйте! Сколько стоит чистка л
 const BARE = 'Комбинированная чистка лица стоит 6 500 ₽.';
 
 describe('applyPriceFollowthrough', () => {
+  test('разговорный вопрос включает дописку, описание не подменяет приглашение', () => {
+    const reply = `${BARE} В процедуру входит уход, она длится около часа.`;
+    const r = pf.applyPriceFollowthrough([reply], { patientLastText: 'Сколько у вас будет стоить чистка?' });
+    expect(r.replies).toEqual([`${reply} ${pf.STEP_QUESTION}`]);
+  });
+
+  test('история запрещает повтор шага; факт не дописывается кодом', () => {
+    const r = pf.applyPriceFollowthrough([BARE], { patientLastText: ASK, serviceFact: FACT, allowStep: false });
+    expect(r.addedStep).toBe(false);
+    expect(r.addedFact).toBe(false);
+    expect(r.replies.join(' ')).not.toContain(pf.STEP_QUESTION);
+  });
   test('голая цена + справка → только шаг, факт остаётся задачей модели', () => {
     const r = pf.applyPriceFollowthrough(['Анна, здравствуйте!', BARE], { patientLastText: ASK, serviceFact: FACT });
     expect(r.addedFact).toBe(false);

@@ -70,4 +70,18 @@ const REAL = {
   ].join('\n'),
 };
 
-module.exports = { REAL };
+// Регрессия 10.10: общий раздел → фрагмент прайса → описание нужной чистки.
+function cleaningSearchResult() {
+  const contents = [REAL.peels,
+    'Комбинированная чистка лица и спины\n## Стоимость\nЧистка — 6500 ₽.',
+    REAL.cleaning, REAL.laser];
+  let context = '';
+  const fragments = contents.map((content, i) => {
+    const start = context.length;
+    context += `${content}\n\n`;
+    return { article_id: [27, 43, 43, 11][i], start, end: start + content.length };
+  });
+  return { context: context.trimEnd(), fragments, sources: [27, 43, 11] };
+}
+
+module.exports = { REAL, cleaningSearchResult };

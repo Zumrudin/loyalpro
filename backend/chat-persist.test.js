@@ -35,3 +35,21 @@ describe('adoptPhoneForChat', () => {
     expect(db.query).not.toHaveBeenCalled();
   });
 });
+
+test('успешный персист исходящего подтверждает pending, ошибка БД сохраняет резерв', async () => {
+  const pending = require('./services/agent/pending-replies');
+  const { persistWhatsappOutgoing } = require('./services/chat-persist');
+  const { dialogKey } = require('./services/chat');
+  const key = dialogKey({ chat_id: 'synthetic-persist' });
+  const text = 'Подобрать время?';
+  pending._reset();
+  pending.remember(1, key, text);
+  db.query.mockResolvedValueOnce({ rowCount: 1, rows: [{ id: 1 }] });
+  await persistWhatsappOutgoing(1, { delivery: { id: 'synthetic' }, chatId: 'synthetic-persist', text, msgType: 'text' });
+  expect(pending.peek(1, key)).toEqual([]);
+  pending.remember(1, key, text);
+  db.query.mockRejectedValueOnce(new Error('synthetic database failure'));
+  await expect(persistWhatsappOutgoing(1, { delivery: { id: 'synthetic-2' }, chatId: 'synthetic-persist', text, msgType: 'text' })).rejects.toThrow();
+  expect(pending.peek(1, key)).toHaveLength(1);
+  pending._reset();
+});

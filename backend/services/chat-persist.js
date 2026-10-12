@@ -13,6 +13,7 @@ const { phoneMatchCandidates, dialogKey } = require('./chat');
 const { isGroupChatId } = require('./agent/group-chat');
 const chatpush = require('./chatpush');
 const chatEvents = require('./chat-events');
+const pendingReplies = require('./agent/pending-replies');
 const { createLogger } = require('../logger');
 const logger = createLogger('Chat');
 
@@ -54,6 +55,7 @@ async function persistWhatsappOutgoing(salonId, { delivery, phone, chatId, text,
      msgType, text || '', fileUrl, mimeType, phone, chatId, ts, authoredBy]
   );
   if (ins.rowCount > 0) {
+    pendingReplies.acknowledge(salonId, dialogKey({ phone, chat_id: chatId }), [{ text, msg_ts: ts }]);
     chatEvents.emit(salonId, {
       type: 'message',
       dialogKey: dialogKey({ phone, chat_id: chatId }),

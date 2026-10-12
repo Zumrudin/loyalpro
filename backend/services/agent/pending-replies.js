@@ -43,7 +43,20 @@ function peek(salonId, dialogKey, nowMs = Date.now()) {
   return alive.map((e) => ({ text: e.text, ts: Math.floor(e.atMs / 1000) }));
 }
 
+// Удаляем только уже сохранённые ответы. Само подтверждение доставки ещё
+// не доказывает наличие строки в истории. Старое эхо не гасит более новую
+// отправку такого же текста; чужие салоны/диалоги имеют отдельные ключи.
+function acknowledge(salonId, dialogKey, rows) {
+  const k = keyOf(salonId, dialogKey);
+  const list = store.get(k);
+  if (!list) return;
+  const remaining = list.filter(e => !(rows || []).some(r => r && r.text === e.text
+    && Number.isFinite(Number(r.msg_ts)) && Number(r.msg_ts) > 0
+    && Number(r.msg_ts) >= Math.floor(e.atMs / 1000)));
+  if (remaining.length) store.set(k, remaining); else store.delete(k);
+}
+
 // Сброс — только для тестов.
 function _reset() { store.clear(); }
 
-module.exports = { remember, peek, _reset };
+module.exports = { remember, peek, acknowledge, _reset };

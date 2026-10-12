@@ -124,6 +124,7 @@ async function loadTranscript(salonId, dialogKey, opts = {}) {
   // доставляет с задержкой; WhatsApp эхо не шлёт вовсе). Без них повторный прогон
   // видит серию клиента «без ответа» и отвечает заново (инцидент 2026-07-31).
   // Дедуп по тексту: если эхо уже в выборке — pending-копия не подмешивается.
+  pendingReplies.acknowledge(salonId, dialogKey, rows.filter(r => r.direction === 'outgoing'));
   const pending = pendingReplies.peek(salonId, dialogKey, opts.nowMs || Date.now());
   if (pending.length) {
     const echoed = new Set(rows.filter((r) => r.direction === 'outgoing').map((r) => r.text));
@@ -244,7 +245,11 @@ async function loadTranscript(salonId, dialogKey, opts = {}) {
   while (messages.length && messages[0].role === 'assistant') {
     leadingClinic.push(messages.shift().content);
   }
-  return { messages, watermark, session, leadingClinic };
+  // Separate from provider messages: offer policy needs authorship and raw
+  // chronology before leading messages are cut and late echo is moved.
+  const conversation = rows.map(({ direction, text, authored_by, msg_ts }) =>
+    ({ direction, text, authored_by, msg_ts }));
+  return { messages, watermark, session, leadingClinic, conversation };
 }
 
 // Отвечали ли этому пациенту хоть раз за ВСЮ историю диалога?

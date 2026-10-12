@@ -30,6 +30,7 @@ const chatEvents = require('../services/chat-events');
 const dispatcher = require('../services/agent/dispatcher');
 const groupChat = require('../services/agent/group-chat');
 const authorship = require('../services/outgoing-authorship');
+const pendingReplies = require('../services/agent/pending-replies');
 const dialogState = require('../services/agent/dialog-state');
 const chatPersist = require('../services/chat-persist');
 const followupQueue = require('../services/agent/followup-queue');
@@ -225,6 +226,10 @@ router.post('/webhook', async (req, res) => {
          authoredBy, provider]
       );
       storedNew = ins.rowCount > 0;
+      if (storedNew && msg.direction === 'outgoing') {
+        pendingReplies.acknowledge(salonId, chatDialogKey({ phone: msg.phone, chat_id: msg.chatId }),
+          [{ text: msg.text, msg_ts: msg.timestamp }]);
+      }
       logger.info(`stored ${msg.direction} ${msg.channel} ${msg.phone || ''}${clientId ? ` (client #${clientId})` : ''}: ${(msg.text || '').slice(0, 60)}`);
 
       // Номер клиента стал известен посреди переписки (Telegram/MAX скрывают его,
