@@ -75,9 +75,30 @@ async function remember(salonId, dialogKey, text, author) {
  * Проверено на боевых payload'ах: у всех автоуведомлений и реплик Милы
  * delivery_id заполнен, у живых сообщений администраторов — пуст.
  *
- * @param {{viaApi?: boolean}} opts viaApi — сообщение ушло через API Chatpush
- *   (см. chatpush.parseMessageEvent().deliveryId). По умолчанию false —
- *   консервативно, как до появления признака.
+ * СВОЙ ШЛЮЗ (provider='gateway', с 12.10.2026): у эха шлюза delivery_id есть
+ * ТОЛЬКО у того, что отправил сам шлюз. Автоуведомления YClients по-прежнему
+ * уходят через Chatpush (его Telegram-сессия живёт параллельно нашей), TDLib
+ * показывает их нам как обычное исходящее С ДРУГОЙ СЕССИИ — без delivery_id и
+ * неотличимо от текста, набранного администратором в приложении. Инцидент
+ * 2026-10-12 (79296135814, первый час после переключения Telegram прода на
+ * шлюз): «Спасибо что посетили… оцените» и «Рекомендации после процедуры»
+ * легли как 'operator', диалог встал на паузу, оценка «5» пришла уже на
+ * паузу — ровно класс инцидента 2026-08-04, ~19 таких уведомлений в день.
+ * Структурного признака у чужой сессии в TDLib нет, поэтому для шлюза
+ * включается ВТОРОЙ источник — ШАБЛОНЫ, которым САЛОН уже учился: тексты,
+ * ранее пришедшие эхом Chatpush с delivery_id и не из нашего журнала (то есть
+ * API-отправки сторонней интеграции). Сверка по НОРМАЛИЗОВАННОМУ тексту
+ * (числа → #, ссылки → <url>, пробелы схлопнуты): дата/время/телефон в шаблоне
+ * меняются, остальное дословно. Учимся только у Chatpush-эха (provider <>
+ * 'gateway'): новый шаблон YClients после ухода из Chatpush узнан не будет и
+ * пойдёт как 'operator' — прежняя, безопасная сторона (лишняя пауза, а не
+ * Мила поверх живого человека). Риск «администратор набрал руками тот же
+ * многострочный шаблон с датой и ссылками» принят как пренебрежимый.
+ *
+ * @param {{viaApi?: boolean, provider?: string}} opts viaApi — сообщение ушло
+ *   через API с delivery_id (см. chatpush.parseMessageEvent().deliveryId);
+ *   provider — 'chatpush' | 'gateway', источник эха. По умолчанию оба пусты —
+ *   консервативно, как до появления признаков.
  * @returns {Promise<'agent'|'system'|'operator'|null>} null — текста нет или БД недоступна.
  */
 async function classify(salonId, text, opts = {}) {
@@ -93,9 +114,51 @@ async function classify(salonId, text, opts = {}) {
     // Журнал главнее признака доставки: наша отправка из админки тоже идёт через
     // API, но она — именно ответ оператора, и пауза после неё обязательна.
     if (row) return row.author;
-    return opts.viaApi ? 'system' : 'operator';
+    if (opts.viaApi) return 'system';
+    if (opts.provider === 'gateway' && await isKnownNotificationTemplate(salonId, text)) return 'system';
+    return 'operator';
   } catch (e) {
     return null;
+  }
+}
+
+// Нормализация текста для сверки с шаблоном — ОДНО выражение на обе стороны
+// сравнения (колонка и параметр), чтобы копии не разъехались: числа → #,
+// ссылки → <url>, пробелы схлопнуты, края обрезаны. Горизонт обучения —
+// TEMPLATE_LOOKBACK_DAYS: шаблоны YClients живут месяцами, а старые записи
+// до выката журнала авторства (05.08.2026) помечены 'system' неточно.
+const TEMPLATE_LOOKBACK_DAYS = 180;
+// Дешёвый префильтр ДО регэкспов: живой EXPLAIN на дев-БД — 4 000 исходящих
+// 'system' за полгода, три regexp_replace на каждой строке давали ~100 мс на
+// КАЖДЫЙ промах (а промах — это каждый ответ администратора из приложения,
+// ~30 в день). PG упорядочивает условия по стоимости, равенство префикса
+// отсекает чужие шаблоны до регэкспов. ДОПУЩЕНИЕ: первые символы шаблона не
+// содержат переменных чисел — у всех 10 шаблонов прода так; иначе шаблон
+// не узнаётся и уходит как 'operator' (безопасная сторона).
+const TEMPLATE_PREFIX_LEN = 12;
+const normSql = (expr) =>
+  `btrim(regexp_replace(regexp_replace(regexp_replace(${expr}, 'https?://\\S+', '<url>', 'g'), '[0-9]+', '#', 'g'), '\\s+', ' ', 'g'))`;
+
+/**
+ * Приходил ли этому салону ТАКОЙ ЖЕ (с точностью до чисел и ссылок) текст эхом
+ * Chatpush как автоуведомление (authored_by='system', не из нашего журнала —
+ * см. classify). FAIL-CLOSED в сторону 'operator': сбой БД → false, то есть
+ * прежнее поведение (пауза), а не молчаливое «это автоуведомление».
+ */
+async function isKnownNotificationTemplate(salonId, text) {
+  try {
+    const row = await db.oneOrNone(
+      `SELECT 1 AS ok FROM chatpush_messages
+        WHERE salon_id = $1 AND direction = 'outgoing' AND authored_by = 'system'
+          AND provider IS DISTINCT FROM 'gateway'
+          AND created_at > NOW() - INTERVAL '${TEMPLATE_LOOKBACK_DAYS} days'
+          AND left(text, ${TEMPLATE_PREFIX_LEN}) = left($2::text, ${TEMPLATE_PREFIX_LEN})
+          AND ${normSql('text')} = ${normSql('$2::text')}
+        LIMIT 1`,
+      [salonId, String(text)]);
+    return !!row;
+  } catch (e) {
+    return false;
   }
 }
 
@@ -107,4 +170,4 @@ async function cleanup() {
   } catch (e) { /* уборка не критична */ }
 }
 
-module.exports = { textKey, remember, classify, cleanup, KEEP_HOURS };
+module.exports = { textKey, remember, classify, cleanup, isKnownNotificationTemplate, KEEP_HOURS, TEMPLATE_LOOKBACK_DAYS, TEMPLATE_PREFIX_LEN };

@@ -96,3 +96,55 @@ describe('classify', () => {
     expect(await authorship.classify(1, 'любой текст')).toBeNull();
   });
 });
+
+describe('classify: эхо своего шлюза без delivery_id (инцидент 2026-10-12)', () => {
+  const tpl = 'Спасибо что посетили «PERI CLINIC»! Просим Вас оценить обслуживание, отправив в ответ сообщение с цифрой от 2 до 5';
+  // Первый oneOrNone — журнал outgoing_authored, второй — сверка с шаблонами салона.
+  const journal = (row) => db.oneOrNone.mockResolvedValueOnce(row);
+  const templates = (row) => db.oneOrNone.mockResolvedValueOnce(row);
+
+  test('gateway + текст совпал с шаблоном автоуведомления салона → system (пауза не ставится)', async () => {
+    journal(null); templates({ ok: 1 });
+    expect(await authorship.classify(1, tpl, { provider: 'gateway' })).toBe('system');
+    const [sql, params] = db.oneOrNone.mock.calls[1];
+    expect(sql).toMatch(/FROM chatpush_messages/);
+    expect(sql).toMatch(/authored_by = 'system'/);
+    expect(sql).toMatch(/provider IS DISTINCT FROM 'gateway'/);
+    expect(sql).toMatch(/regexp_replace/);
+    expect(params).toEqual([1, tpl]);
+  });
+
+  test('gateway + шаблон не найден → operator, как раньше', async () => {
+    journal(null); templates(null);
+    expect(await authorship.classify(1, 'Добрый день! Да, 14:00 свободно', { provider: 'gateway' })).toBe('operator');
+  });
+
+  test('chatpush без delivery_id → operator БЕЗ сверки с шаблонами (там признак структурный)', async () => {
+    journal(null);
+    expect(await authorship.classify(1, tpl, { provider: 'chatpush' })).toBe('operator');
+    expect(db.oneOrNone).toHaveBeenCalledTimes(1);
+  });
+
+  test('gateway + delivery_id → system без сверки с шаблонами (своя отправка через шлюз)', async () => {
+    journal(null);
+    expect(await authorship.classify(1, 'любой текст', { provider: 'gateway', viaApi: true })).toBe('system');
+    expect(db.oneOrNone).toHaveBeenCalledTimes(1);
+  });
+
+  test('журнал главнее шаблонов: наш оператор из админки → operator', async () => {
+    journal({ author: 'operator' });
+    expect(await authorship.classify(1, tpl, { provider: 'gateway' })).toBe('operator');
+    expect(db.oneOrNone).toHaveBeenCalledTimes(1);
+  });
+
+  test('сбой БД в сверке шаблонов → operator (fail-closed: лишняя пауза, а не Мила поверх человека)', async () => {
+    journal(null); db.oneOrNone.mockRejectedValueOnce(new Error('db down'));
+    expect(await authorship.classify(1, tpl, { provider: 'gateway' })).toBe('operator');
+  });
+
+  test('без provider поведение прежнее: operator, одна выборка', async () => {
+    journal(null);
+    expect(await authorship.classify(1, tpl)).toBe('operator');
+    expect(db.oneOrNone).toHaveBeenCalledTimes(1);
+  });
+});

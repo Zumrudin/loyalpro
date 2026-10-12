@@ -143,3 +143,23 @@ describe('канал салона обслуживает другой прова
     expect(messageInserts()).toHaveLength(1);
   });
 });
+
+test('/gateway: исходящее эхо → classify получает provider=gateway (шаблоны автоуведомлений, 2026-10-12)', async () => {
+  const authorship = require('./services/outgoing-authorship');
+  accounts.resolveSalon.mockResolvedValue(1);
+  const res = fakeRes();
+  const body = {
+    type: 'tdlib_incoming_msg',
+    payload: {
+      customer_id: 9, direction: 'outgoing', chat_id: '5', chat_type: 'person',
+      sender_phone_number: '79250177778', recipient_phone_number: '79001112233', delivery_id: null,
+      message: { id: '5:2', type: 'formattedText', text: 'Рекомендации после процедуры', timestamp: 2 },
+    },
+  };
+  await handle({ baseUrl: '/gateway', query: { key: 'gwsecret' }, body }, res);
+  expect(authorship.classify).toHaveBeenCalledTimes(1);
+  const [salonId, text, opts] = authorship.classify.mock.calls[0];
+  expect(salonId).toBe(1);
+  expect(text).toBe('Рекомендации после процедуры');
+  expect(opts).toEqual({ viaApi: false, provider: 'gateway' });
+});

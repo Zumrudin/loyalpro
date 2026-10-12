@@ -1360,6 +1360,17 @@ async function runMigrations(client) {
         msg_ts DESC)
   `).catch(() => {});
 
+  // Шаблоны автоуведомлений салона для классификации эха СВОЕГО шлюза
+  // (services/outgoing-authorship.isKnownNotificationTemplate, 12.10.2026):
+  // запрос фильтрует исходящие 'system' салона за 180 дней и сравнивает
+  // нормализованный текст — без индекса это seq scan всей таблицы на каждом
+  // исходящем без delivery_id (ответ администратора из приложения).
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS idx_chatpush_messages_sys_out
+      ON chatpush_messages (salon_id, created_at DESC)
+      WHERE direction = 'outgoing' AND authored_by = 'system'
+  `).catch(() => {});
+
   // Кто автор исходящего сообщения: 'agent' (Мила), 'system' (автоуведомление,
   // касание «Заботы»), 'operator' (живой администратор), NULL — сообщения до
   // введения журнала. Эхо Chatpush одинаково для всех, поэтому автора мы

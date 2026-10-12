@@ -212,8 +212,11 @@ router.post('/webhook', async (req, res) => {
       // YClients уходят тем же каналом, и без этого признака они были неотличимы
       // от живого администратора (инцидент 2026-08-04: «Вы записаны на прием…»
       // после записи Милы ставило её же диалог на паузу).
+      // provider: у эха СВОЕГО шлюза delivery_id есть только у наших отправок,
+      // автоуведомления YClients (идут через Chatpush, видны TDLib как чужая
+      // сессия) классификатор узнаёт по шаблонам салона (инцидент 2026-10-12).
       const authoredBy = msg.direction === 'outgoing'
-        ? await authorship.classify(salonId, msg.text, { viaApi: !!msg.deliveryId }) : null;
+        ? await authorship.classify(salonId, msg.text, { viaApi: !!msg.deliveryId, provider }) : null;
       const ins = await db.query(
         `INSERT INTO chatpush_messages
            (salon_id, client_id, customer_id, channel, direction, external_message_id, reply_to_message_id,
