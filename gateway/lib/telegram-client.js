@@ -30,33 +30,17 @@
 // ============================================================
 const fs = require('fs');
 const path = require('path');
-const crypto = require('crypto');
 const mapper = require('./mapper');
 const { createLogger } = require('../logger');
 
 const MAX_MESSAGE_AGE_S = 6 * 60 * 60;
-const MAX_MEDIA_BYTES = 20 * 1024 * 1024;
 // importContacts Telegram лимитирует жёстко и помечает аккаунты за массовый
 // импорт — это живой аккаунт клиники. Сверх суточного капа → 429, transport
 // уйдёт на другой канал.
 const IMPORT_CONTACTS_PER_DAY = 50;
 const AUTH_STEP_WAIT_MS = 8000;
 
-// Расширение по MIME: ничего из имени файла собеседника. Неизвестный тип → .bin.
-const EXT_BY_MIME = {
-  'image/jpeg': '.jpg', 'image/png': '.png', 'image/webp': '.webp', 'image/gif': '.gif',
-  'application/pdf': '.pdf',
-  'audio/ogg': '.ogg', 'audio/mpeg': '.mp3', 'audio/mp4': '.m4a', 'audio/x-m4a': '.m4a',
-  'video/mp4': '.mp4', 'video/quicktime': '.mov',
-  'application/msword': '.doc',
-  'application/vnd.openxmlformats-officedocument.wordprocessingml.document': '.docx',
-  'application/vnd.ms-excel': '.xls',
-  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': '.xlsx',
-  'text/plain': '.txt',
-};
-function safeExt(mimeType) {
-  return EXT_BY_MIME[String(mimeType || '').toLowerCase().split(';')[0].trim()] || '.bin';
-}
+const { MAX_MEDIA_BYTES, EXT_BY_MIME, safeExt, publicFileName } = require('./media');
 
 // Временный файл send_file лежит в собственном каталоге tmp/<hex>/ — убираем и его.
 function removeTmpFile(f) {
@@ -338,7 +322,7 @@ class TelegramClient {
       if (actual > MAX_MEDIA_BYTES) throw new Error(`файл ${actual} байт больше лимита ${MAX_MEDIA_BYTES}`);
       const dir = path.join(this.d.config.PUBLIC_FILES_DIR, String(this.id));
       fs.mkdirSync(dir, { recursive: true });
-      const name = `${Date.now()}_${crypto.randomBytes(8).toString('hex')}${safeExt(file.mimeType)}`;
+      const name = publicFileName(file.mimeType);
       fs.copyFileSync(src, path.join(dir, name));
       return `${this.d.config.PUBLIC_FILES_URL}/${this.id}/${name}`;
     } finally {
