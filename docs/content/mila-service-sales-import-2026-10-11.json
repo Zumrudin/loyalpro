@@ -1,0 +1,146 @@
+{
+  "database": "loyalpro",
+  "salon_id": 1,
+  "takes": 48,
+  "articles": 29,
+  "article_updates": 29,
+  "chunk_updates": 47,
+  "backup_path": "/root/.local/state/loyalpro/kb-sales-backups/loyalpro-1791707724788.json",
+  "verified": true,
+  "completed_at": "2026-10-11T08:35:36.601Z",
+  "content_sha256": "699d704aa20b0c7fa9e82c40b5a9bcceec055d7a20e43e2f6a05daf5bf0a1577",
+  "retrieval_probes": [
+    {
+      "query": "Что даёт Lumecca для ровного тона кожи?",
+      "expected_article": 5,
+      "article_found": true,
+      "sales_take_found": true,
+      "returned_articles": [
+        5
+      ]
+    },
+    {
+      "query": "Morpheus8 плотность кожи и рубцы постакне",
+      "expected_article": 6,
+      "article_found": true,
+      "sales_take_found": true,
+      "returned_articles": [
+        6
+      ]
+    },
+    {
+      "query": "Volnewmer чёткий овал без микроигл",
+      "expected_article": 7,
+      "article_found": true,
+      "sales_take_found": true,
+      "returned_articles": [
+        7,
+        6,
+        45
+      ]
+    },
+    {
+      "query": "Tesla Former мышечный тонус",
+      "expected_article": 8,
+      "article_found": true,
+      "sales_take_found": true,
+      "returned_articles": [
+        8,
+        45
+      ]
+    },
+    {
+      "query": "Beautylizer гладкая кожа и целлюлит",
+      "expected_article": 10,
+      "article_found": true,
+      "sales_take_found": true,
+      "returned_articles": [
+        10
+      ]
+    },
+    {
+      "query": "Лазерная эпиляция реже бриться",
+      "expected_article": 11,
+      "article_found": true,
+      "sales_take_found": true,
+      "returned_articles": [
+        11
+      ]
+    },
+    {
+      "query": "ProFacial Голливуд что входит в уход",
+      "expected_article": 12,
+      "article_found": true,
+      "sales_take_found": true,
+      "returned_articles": [
+        12
+      ]
+    },
+    {
+      "query": "HELEO4 восстановление кожи",
+      "expected_article": 13,
+      "article_found": true,
+      "sales_take_found": true,
+      "returned_articles": [
+        13
+      ]
+    },
+    {
+      "query": "Биоревитализация увлажнение кожи",
+      "expected_article": 16,
+      "article_found": true,
+      "sales_take_found": true,
+      "returned_articles": [
+        16
+      ]
+    },
+    {
+      "query": "Коррекция губ форма и объём",
+      "expected_article": 19,
+      "article_found": true,
+      "sales_take_found": true,
+      "returned_articles": [
+        19
+      ]
+    },
+    {
+      "query": "Forlle Sparkling экспресс уход",
+      "expected_article": 26,
+      "article_found": true,
+      "sales_take_found": true,
+      "returned_articles": [
+        26,
+        12
+      ]
+    },
+    {
+      "query": "Комбинированная чистка лица комедоны",
+      "expected_article": 43,
+      "article_found": true,
+      "sales_take_found": true,
+      "returned_articles": [
+        43,
+        45
+      ]
+    }
+  ],
+  "checks": {
+    "unit_tests": {
+      "command": "cd backend && npx jest kb-import-sales-takes --runInBand",
+      "passed": 3
+    },
+    "repeat_dry_run": {
+      "article_updates": 0,
+      "chunk_updates": 0
+    },
+    "unchanged_original_article_bytes": true,
+    "full_agent_dialogue": "not_run",
+    "browser_ui": "not_run; no UI changes"
+  },
+  "files_added": [
+    "backend/scripts/kb-import-sales-takes.js",
+    "backend/kb-import-sales-takes.test.js",
+    "docs/content/mila-service-sales-import-2026-10-11.json"
+  ],
+  "recovery": "Backup contains the original 29 article bodies and their index chunks. Restore only salon_id=1 and those article IDs in a transaction, checking for newer edits first. Restore/rebuild the corresponding index in the same operation. No schema or service restart needed."
+}
