@@ -27,6 +27,16 @@ function makeDeliveries(db) {
       [id, statusId, description, tdlibMessageId, error]);
   }
 
+  // Условный переход: только если строка ещё в fromStatusId. WhatsApp ставит
+  // «Отправлено» по возврату sendMessage, а отказ сервера (bad ack → FAILED)
+  // может прийти раньше — безусловный UPDATE перетёр бы FAILED. → true, если обновлено.
+  async function setStatusIf(id, fromStatusId, [statusId, description], { error = null } = {}) {
+    const r = await db.query(
+      `UPDATE gateway_deliveries SET status_id=$3, description=$4, error=$5, updated_at=NOW() WHERE id=$1 AND status_id=$2`,
+      [id, fromStatusId, statusId, description, error]);
+    return !!(r && r.rowCount);
+  }
+
   async function get(accountId, id) {
     return db.oneOrNone(`SELECT * FROM gateway_deliveries WHERE id=$1 AND account_id=$2`, [id, accountId]);
   }
@@ -78,7 +88,7 @@ function makeDeliveries(db) {
     return r ? Number(r.id) : null;
   }
 
-  return { create, setStatus, get, failStale, setTempId, findByTempId, setProviderMessageId, findByProviderMessageId };
+  return { create, setStatus, setStatusIf, get, failStale, setTempId, findByTempId, setProviderMessageId, findByProviderMessageId };
 }
 
 function parseId(s) {
@@ -97,6 +107,7 @@ module.exports = {
   makeDeliveries, parseId, STATUS, STALE_REASON,
   create: (...a) => getDefault().create(...a),
   setStatus: (...a) => getDefault().setStatus(...a),
+  setStatusIf: (...a) => getDefault().setStatusIf(...a),
   get: (...a) => getDefault().get(...a),
   failStale: (...a) => getDefault().failStale(...a),
   setTempId: (...a) => getDefault().setTempId(...a),

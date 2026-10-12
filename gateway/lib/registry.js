@@ -21,7 +21,13 @@ async function doStart(id) {
 
 function start(id) {
   id = Number(id);
-  if (clients.has(id) && !starting.has(id)) return Promise.resolve(clients.get(id));
+  if (clients.has(id) && !starting.has(id)) {
+    const c = clients.get(id);
+    // Клиент, остановившийся сам (WhatsApp: разлогин с телефона, брошенный
+    // мастер QR, 440/403), повторный «Подключить» поднимает заново.
+    if (!c.closed) return Promise.resolve(c);
+    clients.delete(id);
+  }
   if (starting.has(id)) return starting.get(id);
   const p = doStart(id).finally(() => starting.delete(id));
   starting.set(id, p);

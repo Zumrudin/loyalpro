@@ -5,13 +5,14 @@
 // Поведение фейка сверено с исходником Baileys 6.7.24 (node_modules):
 // onWhatsApp ОТФИЛЬТРОВЫВАЕТ номера без WhatsApp (exists:false не приходит),
 // сообщения из офлайн-очереди приходят upsert'ом type:'append'.
-const { test } = require('node:test');
+const { test, mock } = require('node:test');
 const assert = require('node:assert/strict');
 const os = require('os');
 const fs = require('fs');
 const path = require('path');
 const { EventEmitter } = require('events');
-const { WhatsappClient, MAX_MESSAGE_AGE_S } = require('../lib/whatsapp-client');
+const { Readable } = require('stream');
+const { WhatsappClient, MAX_MESSAGE_AGE_S, MAX_QR_ROUNDS, MEDIA_UPLOAD_TIMEOUT_MS } = require('../lib/whatsapp-client');
 
 function fakeSock(over = {}) {
   const ev = new EventEmitter();
@@ -48,6 +49,7 @@ function setup(over = {}) {
       STATUS: { ACCEPTED: [1, 'Принято'], SENT: [2, 'Отправлено'], FAILED: [5, 'Невозможно доставить'] },
       create: async (row) => { delCalls.push(['create', row]); return 12; },
       setStatus: async (...a) => { delCalls.push(['setStatus', ...a]); },
+      setStatusIf: async (...a) => { delCalls.push(['setStatusIf', ...a]); return true; },
       setProviderMessageId: async (...a) => { delCalls.push(['setProviderMessageId', ...a]); },
       findByProviderMessageId: async () => null,
       failStale: async () => 0,
@@ -230,7 +232,7 @@ test('sendText: onWhatsApp → sendMessage в <phone>@s.whatsapp.net, доста
   assert.deepEqual(delCalls.find(c => c[0] === 'setProviderMessageId'), ['setProviderMessageId', 12, 'OUT1']);
   // Baileys не шлёт messages.update со SERVER_ACK для лички (только DELIVERY_ACK
   // по квитанции устройства) — «Отправлено» ставим по успешному sendMessage.
-  assert.deepEqual(delCalls.find(c => c[0] === 'setStatus'), ['setStatus', 12, [2, 'Отправлено']]);
+  assert.deepEqual(delCalls.find(c => c[0] === 'setStatusIf'), ['setStatusIf', 12, 1, [2, 'Отправлено']]);
   assert.equal(hooks.length, 1);
   assert.equal(hooks[0].payload.delivery_id, 'g12');
   assert.equal(hooks[0].payload.new_message.direction, 'outgoing');
@@ -355,4 +357,126 @@ test('close: сокет закрыт, close-событие после него �
   sock.ev.emit('connection.update', { connection: 'close', lastDisconnect: { error: undefined } });
   await ticks(3);
   assert.equal(created, 1);
+});
+
+// ── Ревью 724cfa6 ───────────────────────────────────────────────
+
+test('ревью #1: close() во время создания сокета при реконнекте — сокет гасится, open не оживляет клиент', async () => {
+  let release; let n = 0;
+  const { wa, sock, repoCalls } = setup();
+  const sock2 = fakeSock();
+  wa.d.createSocket = async () => { n++; if (n === 1) return { sock, saveCreds: async () => {} }; await new Promise(r => { release = r; }); return { sock: sock2, saveCreds: async () => {} }; };
+  await open(wa, sock);
+  sock.ev.emit('connection.update', { connection: 'close', lastDisconnect: { error: { output: { statusCode: 428 } } } });
+  await ticks(3);
+  await wa.close();
+  release(); await ticks(3);
+  assert.ok(sock2.calls.some(c => c[0] === 'end'));
+  assert.equal(sock2.ev.listenerCount('connection.update'), 0);
+  const before = repoCalls.length;
+  wa.onConnection({ connection: 'open' }); await ticks(2);
+  assert.equal(repoCalls.length, before);
+});
+
+test('ревью #3: sendMessage получает mediaUploadTimeoutMs; зависшая отправка в ДРУГОЙ чат не держит эхо оператора', async () => {
+  const opts = [];
+  const { wa, sock, hooks } = setup();
+  sock.sendMessage = async (jid, content, o) => { opts.push(o); return new Promise(() => {}); };   // зависла
+  await open(wa, sock);
+  wa.sendText({ text: 'x', phone: '79001112233' }).catch(() => {});
+  await ticks(3);
+  assert.equal(opts[0].mediaUploadTimeoutMs, MEDIA_UPLOAD_TIMEOUT_MS);
+  sock.ev.emit('messages.upsert', { type: 'notify', messages: [{ key: { remoteJid: '79005556677@s.whatsapp.net', fromMe: true, id: 'H' }, messageTimestamp: 1_700_000_000, message: { conversation: 'руками' } }] });
+  await ticks(4);
+  assert.equal(hooks.length, 1);
+});
+
+test('ревью #3: зависшая отправка в ТОТ ЖЕ чат держит fromMe не дольше 30 с', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const { wa, sock, hooks } = setup();
+  sock.sendMessage = async () => new Promise(() => {});
+  await wa.start(); sock.ev.emit('connection.update', { connection: 'open' });
+  await ticks(2);
+  wa.sendText({ text: 'x', phone: '79001112233' }).catch(() => {});
+  await ticks(3);
+  sock.ev.emit('messages.upsert', { type: 'notify', messages: [{ key: { remoteJid: '79001112233@s.whatsapp.net', fromMe: true, id: 'H' }, messageTimestamp: 1_700_000_000, message: { conversation: 'руками' } }] });
+  await ticks(4);
+  assert.equal(hooks.length, 0);
+  t.mock.timers.tick(30_000);
+  await ticks(4);
+  assert.equal(hooks.length, 1);
+});
+
+test('ревью #5: сообщение, сброшенное после close-события (реконнект), не теряется', async () => {
+  const { wa, sock, hooks } = setup();
+  wa.d.sleep = () => new Promise(() => {});
+  await open(wa, sock);
+  sock.ev.emit('connection.update', { connection: 'close', lastDisconnect: { error: { output: { statusCode: 428 } } } });
+  await ticks(2);
+  sock.ev.emit('messages.upsert', { type: 'notify', messages: [{ key: { remoteJid: '79001112233@s.whatsapp.net', fromMe: false, id: 'LATE' }, messageTimestamp: 1_700_000_000, message: { conversation: 'поздно' } }] });
+  await ticks(3);
+  assert.equal(hooks.length, 1);
+});
+
+test('ревью #6: QR/код сбрасываются на реконнекте; после MAX_QR_ROUNDS раундов без входа — error, реконнектов нет', async () => {
+  let created = 0;
+  const { wa, sock, repoCalls } = setup();
+  wa.d.createSocket = async () => { created++; return { sock, saveCreds: async () => {} }; };
+  await wa.start();
+  for (let i = 0; i < MAX_QR_ROUNDS; i++) {
+    sock.ev.emit('connection.update', { qr: 'Q' + i }); await ticks(2);
+    if (i === 0) { await wa.authStep({ phone: '79200255591' }); assert.equal(wa.status().pairingCode, 'ABCDEFGH'); }
+    sock.ev.emit('connection.update', { connection: 'close', lastDisconnect: { error: { output: { statusCode: 408 } } } });
+    await ticks(3);
+    if (i < MAX_QR_ROUNDS - 1) { assert.equal(wa.qr, null); assert.equal(wa.pairingCode, null); }
+  }
+  assert.equal(wa.authState, 'error');
+  assert.match(wa.status().error, /QR/);
+  assert.equal(created, MAX_QR_ROUNDS);   // старт + (MAX-1) реконнектов, после последнего — нет
+  assert.equal(repoCalls.at(-1)[2], 'error');
+  assert.equal(wa.closed, true);          // registry.start пересоздаст клиент
+});
+
+test('ревью #7: отправка в канонический jid из onWhatsApp, jid кэшируется', async () => {
+  const { wa, sock, hooks } = setup();
+  sock.onWhatsApp = async (p) => { sock.calls.push(['onWhatsApp', p]); return [{ jid: '79001112299:0@s.whatsapp.net', exists: true }]; };
+  await open(wa, sock);
+  await wa.sendText({ text: 'a', phone: '79001112233' });
+  await wa.sendText({ text: 'b', phone: '79001112233' });
+  const sends = sock.calls.filter(c => c[0] === 'sendMessage');
+  assert.deepEqual(sends.map(c => c[1]), ['79001112299@s.whatsapp.net', '79001112299@s.whatsapp.net']);
+  assert.equal(sock.calls.filter(c => c[0] === 'onWhatsApp').length, 1);
+  await ticks(3);
+  assert.equal(hooks[0].payload.new_message.recipient_phone_number, '79001112299');
+});
+
+test('ревью #8: сообщения в чат с самим собой (свой номер / свой LID) не форвардятся', async () => {
+  const { wa, sock, hooks } = setup();
+  sock.user.lid = '999:3@lid';
+  await open(wa, sock);
+  sock.ev.emit('messages.upsert', { type: 'notify', messages: [
+    { key: { remoteJid: '79250177778@s.whatsapp.net', fromMe: true, id: 'S1' }, messageTimestamp: 1_700_000_000, message: { conversation: 'заметка' } },
+    { key: { remoteJid: '999@lid', fromMe: true, id: 'S2' }, messageTimestamp: 1_700_000_000, message: { conversation: 'заметка' } },
+  ] });
+  await ticks(4);
+  assert.equal(hooks.length, 0);
+});
+
+test('ревью #9: медиа качается потоком, лимит по факту байтов (fileLength врёт) → файл не сохранён', async () => {
+  const { wa, sock, hooks, tmp } = setup();
+  wa.d.maxMediaBytes = 10;
+  let destroyed = false;
+  wa.d.downloadMedia = async () => { const s = Readable.from([Buffer.alloc(6), Buffer.alloc(6), Buffer.alloc(6)]); s.on('close', () => { destroyed = true; }); return s; };
+  await open(wa, sock);
+  sock.ev.emit('messages.upsert', { type: 'notify', messages: [{ key: { remoteJid: '79001112233@s.whatsapp.net', fromMe: false, id: 'BIG' }, messageTimestamp: 1_700_000_000, message: { imageMessage: { mimetype: 'image/jpeg', fileLength: 5 } } }] });
+  await ticks(6);
+  assert.equal(hooks.length, 1);
+  assert.equal(hooks[0].payload.new_message.message.file_data, undefined);
+  assert.ok(!fs.existsSync(path.join(tmp, 'pub', '42')) || fs.readdirSync(path.join(tmp, 'pub', '42')).length === 0);
+  assert.ok(destroyed);
+  wa.d.downloadMedia = async () => Readable.from([Buffer.from('ab'), Buffer.from('cd')]);
+  sock.ev.emit('messages.upsert', { type: 'notify', messages: [{ key: { remoteJid: '79001112233@s.whatsapp.net', fromMe: false, id: 'OK' }, messageTimestamp: 1_700_000_000, message: { imageMessage: { mimetype: 'image/jpeg' } } }] });
+  await ticks(6);
+  const fd = hooks[1].payload.new_message.message.file_data;
+  assert.equal(fs.readFileSync(path.join(tmp, 'pub', '42', path.basename(fd.download_url)), 'utf8'), 'abcd');
 });

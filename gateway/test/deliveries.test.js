@@ -80,3 +80,13 @@ test('setProviderMessageId / findByProviderMessageId: связка по стро
   assert.match(calls[1][0], /provider_message_id=\$2/);
   assert.equal(calls[1][1][0], 9);
 });
+
+test('setStatusIf: UPDATE только из ожидаемого статуса (FAILED не перетирается SENT)', async () => {
+  const db = fakeDb();
+  const d = makeDeliveries(db);
+  assert.equal(await d.setStatusIf(12, STATUS.ACCEPTED[0], STATUS.SENT), true);
+  assert.match(db.calls[0][0], /WHERE id=\$1 AND status_id=\$2/);
+  assert.deepEqual(db.calls[0][1], [12, 1, 2, 'Отправлено', null]);
+  db.query = async (sql, p) => { db.calls.push([sql, p]); return { rowCount: 0 }; };
+  assert.equal(await d.setStatusIf(12, STATUS.ACCEPTED[0], STATUS.SENT), false);
+});

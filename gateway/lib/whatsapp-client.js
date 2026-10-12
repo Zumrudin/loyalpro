@@ -21,7 +21,8 @@
 // 'append' — заглушки без контента (contentOf → null).
 // Свои отправки Baileys дублирует 'append' (emitOwnEvents) на process.nextTick
 // ПОСЛЕ relayMessage — порядок относительно возврата sendMessage не
-// гарантирован. Поэтому fromMe-апсерты ждут завершения всех отправок в пути и
+// гарантирован. Поэтому fromMe-апсерты ждут отправок в пути В ТОТ ЖЕ ЧАТ (не
+// дольше INFLIGHT_WAIT_MS; загрузка медиа ограничена MEDIA_UPLOAD_TIMEOUT_MS) и
 // сверяются с ownSends (key.id → доставка, живёт OWN_SEND_TTL_MS независимо от
 // статусов): своё — пропускаем, эхо синтезируем САМИ из результата
 // sendMessage. fromMe БЕЗ нашей доставки = администратор набрал на телефоне →
@@ -32,7 +33,8 @@
 // Статусы: Baileys НЕ присылает messages.update со SERVER_ACK для лички
 // (серверный ack эмитится только при ошибке, status=ERROR; ≥2 приходит лишь
 // квитанцией устройства получателя — DELIVERY_ACK, которой может не быть
-// сутками). Поэтому «Отправлено» ставим по успешному sendMessage (сообщение
+// сутками). Поэтому «Отправлено» ставим по успешному sendMessage (только из
+// «Принято» — bad ack мог успеть раньше; сообщение
 // ушло в сокет), messages.update ERROR → «Невозможно доставить», sendMessage
 // бросил → «Невозможно доставить». Иначе доставка висела бы в «Принято» и
 // failStale на следующем старте ложно закрыл бы её как недоставленную.
@@ -52,6 +54,15 @@ const EXISTS_TTL_MS = 24 * 60 * 60 * 1000;
 const OWN_SEND_TTL_MS = 30 * 60 * 1000;
 const SENT_CACHE_MAX = 500;
 const RECONNECT_MS = [2000, 5000, 10000, 30000, 60000];
+// Мастер подключения брошен: QR (или код привязки) крутится, никто не входит.
+// После стольких раундов QR без open — стоп, auth_state='error'; новый старт из
+// админки (registry.start пересоздаёт закрытый клиент) начинает заново.
+const MAX_QR_ROUNDS = 5;
+const QR_ABANDONED_ERROR = 'QR не отсканирован — подключение остановлено, запустите заново';
+// Отправка медиа: у Baileys таймаута загрузки по умолчанию нет.
+const MEDIA_UPLOAD_TIMEOUT_MS = 60 * 1000;
+// Сколько fromMe-апсерт ждёт отправок в пути в тот же чат.
+const INFLIGHT_WAIT_MS = 30 * 1000;
 const STATUS_ERROR = 0;              // WAMessageStatus.ERROR
 // DisconnectReason Baileys 6.7.24 (lib/Types/index.js) — константой, чтобы
 // тесты не грузили библиотеку.
@@ -93,13 +104,15 @@ async function defaultCreateSocket(authDir, { getMessage } = {}) {
   return { sock, saveCreds };
 }
 
+// Поток, а не буфер: размер считаем по факту байтами (fileLength задаёт
+// отправитель и может врать), превышение лимита обрывает скачивание.
 function defaultDownloadMedia(msg, sock) {
   const b = baileys();
   const pino = require('pino');
   const ctx = { logger: pino({ level: 'silent' }) };
   // Протухшая ссылка (404/410) — Baileys просит переотправку медиа у телефона.
   if (sock && typeof sock.updateMediaMessage === 'function') ctx.reuploadRequest = sock.updateMediaMessage;
-  return b.downloadMediaMessage(msg, 'buffer', {}, ctx);
+  return b.downloadMediaMessage(msg, 'stream', {}, ctx);
 }
 
 function defaultDeps() {
@@ -112,12 +125,14 @@ function defaultDeps() {
     webhook: require('./webhook-sender'),
     config: require('../config'),
     disconnectReason: DISCONNECT,
+    maxMediaBytes: MAX_MEDIA_BYTES,
     now: () => Date.now(),
     sleep: (ms) => new Promise(r => setTimeout(r, ms)),
   };
 }
 
 function httpError(message, status) { return Object.assign(new Error(message), { status }); }
+function normJid(jid) { return String(jid).replace(/:\d+@/, '@'); }
 function disconnectCode(u) {
   const e = u && u.lastDisconnect && u.lastDisconnect.error;
   return e && e.output && e.output.statusCode;
@@ -141,10 +156,12 @@ class WhatsappClient {
     this.connected = false;
     this.closed = false;
     this.reconnects = 0;
+    this.qrRounds = 0;              // закрытий подряд в wait_qr без open
+    this.ownLid = null;
     this.ownSends = new Map();       // key.id → {deliveryId, ts}
-    this.inflight = new Set();       // промисы отправок, ещё не зарегистрированных в ownSends
+    this.inflight = new Map();       // jid → Set промисов отправок, ещё не зарегистрированных в ownSends
     this.sentCache = new Map();      // key.id → message (для getMessage при повторе)
-    this.existsCache = new Map();    // phone → ts (onWhatsApp подтвердил)
+    this.existsCache = new Map();    // phone → {jid, ts} (onWhatsApp подтвердил, jid канонический)
     this.chatQueues = new Map();
   }
 
@@ -165,6 +182,9 @@ class WhatsappClient {
     if (this.closed) return;
     const getMessage = async (key) => (key && this.sentCache.get(key.id)) || undefined;
     const { sock, saveCreds } = await this.d.createSocket(this.dirs().wa, { getMessage });
+    // close() мог случиться, пока сокет создавался (реконнект) — такой сокет
+    // не оживляем, иначе его open записал бы 'ready' закрытому клиенту.
+    if (this.closed) { try { sock.end(undefined); } catch (_) { /* уже закрыт */ } return; }
     this.detach();
     this.sock = sock; this.saveCreds = saveCreds;
     const guard = (name, fn) => (...a) => Promise.resolve().then(() => fn.apply(this, a)).catch(e => this.log.error(`${name}: ${e.message}`));
@@ -192,10 +212,12 @@ class WhatsappClient {
       return;
     }
     if (u.connection === 'open') {
+      if (this.closed) return;
       const me = (this.sock && this.sock.user) || {};
+      this.ownLid = mapper.lidOfJid(me.lid) || null;
       this.ownPhone = mapper.phoneOfJid(me.id) || this.ownPhone;
       this.displayName = me.name || null;
-      this.qr = null; this.pairingCode = null; this.reconnects = 0;
+      this.qr = null; this.pairingCode = null; this.reconnects = 0; this.qrRounds = 0;
       this.connected = true;          // входящие офлайн-очереди принимаем сразу, не дожидаясь записи в БД
       await this.d.repo.setAuth(this.id, 'ready', { error: null, phone: this.ownPhone, displayName: this.displayName });
       this.authState = 'ready';   // отправки разрешаем только после записи состояния в БД
@@ -228,6 +250,16 @@ class WhatsappClient {
         this.authState = 'error'; this.lastAuthError = terminal; this.qr = null; this.pairingCode = null;
         this.log.error(terminal);
         await this.d.repo.setAuth(this.id, 'error', { error: terminal });
+        return;
+      }
+      // Старый QR/код привязки к новому сокету не относятся — не показываем их.
+      this.qr = null; this.pairingCode = null;
+      if (this.authState === 'wait_qr' && ++this.qrRounds >= MAX_QR_ROUNDS) {
+        this.closed = true;
+        this.detach();
+        this.authState = 'error'; this.lastAuthError = QR_ABANDONED_ERROR;
+        this.log.warn(`${QR_ABANDONED_ERROR} (${this.qrRounds} раундов QR)`);
+        await this.d.repo.setAuth(this.id, 'error', { error: QR_ABANDONED_ERROR });
         return;
       }
       await this.reconnect();
@@ -290,23 +322,44 @@ class WhatsappClient {
 
   // ── Входящие/эхо ─────────────────────────────────────────────
   async onUpsert({ messages, type } = {}) {
-    if (!this.connected) return;
+    // Только closed: сообщение, сброшенное сокетом уже после close, мы
+    // квитировали — WhatsApp его не передоставит, терять нельзя.
+    if (this.closed) return;
     if (type !== 'notify' && type !== 'append') return;
     for (const msg of messages || []) {
       const key = (msg && msg.key) || {};
       if (!key.remoteJid || mapper.isSkippedJid(key.remoteJid)) continue;
+      if (this.isSelfChat(key.remoteJid)) continue;                 // «Избранное» — не переписка с клиентом
       const ts = mapper.tsOf(msg.messageTimestamp);
       if (ts && this.d.now() / 1000 - ts > MAX_MESSAGE_AGE_S) { this.log.warn(`пропущено ${key.remoteJid}:${key.id} старше ${MAX_MESSAGE_AGE_S / 3600} ч`); continue; }
       if (!mapper.contentOf(msg.message)) continue;                 // служебное/заглушка
       this.enqueueChat(key.remoteJid, async () => {
         if (key.fromMe) {
           // Своя отправка могла ещё не вернуться из sendMessage — ждём, потом сверяем.
-          if (this.inflight.size) await Promise.allSettled([...this.inflight]);
+          await this.waitInflight(key.remoteJid);
           if (this.ownSends.has(key.id)) return;                    // эхо уже синтезировано
         }
         await this.emitMessage(msg, null);
       }).catch(e => this.log.error(`сообщение ${key.remoteJid}:${key.id}: ${e.message}`));
     }
+  }
+
+  isSelfChat(jid) {
+    if (mapper.isGroupJid(jid)) return false;
+    const p = mapper.phoneOfJid(jid); const l = mapper.lidOfJid(jid);
+    return !!((p && p === this.ownPhone) || (l && l === this.ownLid));
+  }
+
+  // Ждём отправок в пути в ЭТОТ чат (append своей отправки может обогнать
+  // возврат sendMessage), но не дольше INFLIGHT_WAIT_MS: зависшая отправка не
+  // должна стопорить очередь чата.
+  async waitInflight(jid) {
+    const set = this.inflight.get(normJid(jid));
+    if (!set || !set.size) return;
+    let timer;
+    const timeout = new Promise(r => { timer = setTimeout(r, INFLIGHT_WAIT_MS); });
+    try { await Promise.race([Promise.allSettled([...set]), timeout]); }
+    finally { clearTimeout(timer); }
   }
 
   async resolvePeerPhone(key) {
@@ -326,10 +379,10 @@ class WhatsappClient {
     return phone;
   }
 
-  async emitMessage(msg, deliveryId) {
+  async emitMessage(msg, deliveryId, knownPhone = null) {
     const key = msg.key || {};
     const group = mapper.isGroupJid(key.remoteJid);
-    const phone = await this.resolvePeerPhone(key);
+    const phone = knownPhone || await this.resolvePeerPhone(key);
     const content = mapper.contentOf(msg.message);
     let fileUrl = null;
     if (content && content.media && !group) {
@@ -341,10 +394,25 @@ class WhatsappClient {
   }
 
   async downloadToPublic(msg, media) {
-    if (media.size && media.size > MAX_MEDIA_BYTES) throw new Error(`файл ${media.size} байт больше лимита ${MAX_MEDIA_BYTES}`);
-    const buf = await this.d.downloadMedia(msg, this.sock);
+    // Заявленный размер — только ранний отказ; по факту считаем байты потока.
+    if (media.size && media.size > (this.d.maxMediaBytes || MAX_MEDIA_BYTES)) throw new Error(`файл ${media.size} байт больше лимита`);
+    const max = this.d.maxMediaBytes || MAX_MEDIA_BYTES;
+    const src = await this.d.downloadMedia(msg, this.sock);
+    let buf;
+    if (Buffer.isBuffer(src)) buf = src;
+    else {
+      const chunks = []; let total = 0;
+      try {
+        for await (const chunk of src) {
+          total += chunk.length;
+          if (total > max) throw new Error(`файл больше лимита ${max} байт — скачивание прервано`);
+          chunks.push(chunk);
+        }
+      } finally { if (src && typeof src.destroy === 'function' && !src.destroyed) src.destroy(); }
+      buf = Buffer.concat(chunks);
+    }
     if (!buf || !buf.length) throw new Error('пустой файл');
-    if (buf.length > MAX_MEDIA_BYTES) throw new Error(`файл ${buf.length} байт больше лимита ${MAX_MEDIA_BYTES}`);
+    if (buf.length > max) throw new Error(`файл ${buf.length} байт больше лимита ${max}`);
     const dir = path.join(this.d.config.PUBLIC_FILES_DIR, String(this.id));
     fs.mkdirSync(dir, { recursive: true });
     const name = publicFileName(media.mimeType, this.d.now());
@@ -382,15 +450,17 @@ class WhatsappClient {
     const p = normalizePhone(phone);
     if (!p) throw httpError('нет получателя: phone обязателен', 422);
     const hit = this.existsCache.get(p);
-    if (!hit || this.d.now() - hit > EXISTS_TTL_MS) {
-      let res;
-      try { res = await this.sock.onWhatsApp(p); }
-      catch (e) { this.log.warn(`onWhatsApp(${p}): ${e.message} — шлём без проверки`); res = undefined; }
-      if (Array.isArray(res)) {
-        const r = res.find(x => x && x.exists);
-        if (!r) throw httpError(`номер ${p} не в WhatsApp`, 422);
-        this.existsCache.set(p, this.d.now());
-      }
+    if (hit && this.d.now() - hit.ts <= EXISTS_TTL_MS) return { jid: hit.jid, phone: p };
+    let res;
+    try { res = await this.sock.onWhatsApp(p); }
+    catch (e) { this.log.warn(`onWhatsApp(${p}): ${e.message} — шлём без проверки`); res = undefined; }
+    if (Array.isArray(res)) {
+      const r = res.find(x => x && x.exists);
+      if (!r) throw httpError(`номер ${p} не в WhatsApp`, 422);
+      // Канонический jid от WhatsApp (номер мог быть записан не так, как его знает WA).
+      const jid = typeof r.jid === 'string' && r.jid.includes('@') ? normJid(r.jid) : `${p}@s.whatsapp.net`;
+      this.existsCache.set(p, { jid, ts: this.d.now() });
+      return { jid, phone: p };
     }
     return { jid: `${p}@s.whatsapp.net`, phone: p };
   }
@@ -399,7 +469,7 @@ class WhatsappClient {
     this.requireReady();
     const { jid, phone: p } = await this.resolveJid(phone);
     const deliveryId = await this.d.deliveries.create({ accountId: this.id, chatId: null, phone: p, kind: 'text', text });
-    await this.invokeSend(jid, { text }, deliveryId);
+    await this.invokeSend(jid, { text }, deliveryId, p);
     return deliveryId;
   }
 
@@ -421,17 +491,19 @@ class WhatsappClient {
       ? { image: buf, caption: caption || '', ...(mime && /^image\//.test(mime) ? { mimetype: mime } : {}) }
       : { document: buf, mimetype: mime || 'application/octet-stream', fileName: fileName || 'file', caption: caption || '' };
     const deliveryId = await this.d.deliveries.create({ accountId: this.id, chatId: null, phone: p, kind: 'file', text: caption || fileName });
-    await this.invokeSend(jid, content, deliveryId);
+    await this.invokeSend(jid, content, deliveryId, p);
     return deliveryId;
   }
 
-  async invokeSend(jid, content, deliveryId) {
+  async invokeSend(jid, content, deliveryId, phone) {
     let done;
     const settled = new Promise(r => { done = r; });
-    this.inflight.add(settled);
+    const key = normJid(jid);
+    if (!this.inflight.has(key)) this.inflight.set(key, new Set());
+    this.inflight.get(key).add(settled);
     try {
       let sent;
-      try { sent = await this.sock.sendMessage(jid, content); }
+      try { sent = await this.sock.sendMessage(jid, content, { mediaUploadTimeoutMs: MEDIA_UPLOAD_TIMEOUT_MS }); }
       catch (e) {
         try { await this.d.deliveries.setStatus(deliveryId, this.d.deliveries.STATUS.FAILED, { error: e.message }); }
         catch (e2) { this.log.error(`delivery g${deliveryId}: статус FAILED не записан (${e2.message})`); }
@@ -450,7 +522,8 @@ class WhatsappClient {
       if (msgId) {
         try { await this.d.deliveries.setProviderMessageId(deliveryId, msgId); } catch (e) { this.log.warn(`delivery g${deliveryId}: provider_message_id не записан (${e.message})`); }
       }
-      try { await this.d.deliveries.setStatus(deliveryId, this.d.deliveries.STATUS.SENT); }
+      // Только из «Принято»: отказ сервера (bad ack) мог прийти раньше этой строки.
+      try { await this.d.deliveries.setStatusIf(deliveryId, this.d.deliveries.STATUS.ACCEPTED[0], this.d.deliveries.STATUS.SENT); }
       catch (e) { this.log.warn(`delivery g${deliveryId}: статус SENT не записан (${e.message})`); }
       // Эхо своей отправки — сами, не ждём append-апсерта библиотеки.
       const echo = {
@@ -458,9 +531,10 @@ class WhatsappClient {
         message: sent && sent.message ? sent.message : (content.text !== undefined ? { conversation: content.text } : {}),
         messageTimestamp: mapper.tsOf(sent && sent.messageTimestamp) || Math.floor(this.d.now() / 1000),
       };
-      this.enqueueChat(jid, () => this.emitMessage(echo, `g${deliveryId}`)).catch(e => this.log.warn(`эхо g${deliveryId}: ${e.message}`));
+      this.enqueueChat(jid, () => this.emitMessage(echo, `g${deliveryId}`, mapper.phoneOfJid(jid) || phone)).catch(e => this.log.warn(`эхо g${deliveryId}: ${e.message}`));
     } finally {
-      this.inflight.delete(settled);
+      const set = this.inflight.get(key);
+      if (set) { set.delete(settled); if (!set.size) this.inflight.delete(key); }
       done();
     }
   }
@@ -484,4 +558,4 @@ class WhatsappClient {
   }
 }
 
-module.exports = { WhatsappClient, MAX_MESSAGE_AGE_S, RECONNECT_MS, DISCONNECT };
+module.exports = { WhatsappClient, MAX_MESSAGE_AGE_S, RECONNECT_MS, DISCONNECT, MAX_QR_ROUNDS, MEDIA_UPLOAD_TIMEOUT_MS };
