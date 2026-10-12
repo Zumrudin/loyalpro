@@ -19,8 +19,12 @@
 | `scripts/gateway-telegram-e2e.js --phone 79250177778` | delivery `g1` (accountId 8), эхо #20136 `authored_by='agent'`, `provider='gateway'`, составной id, статус по аккаунту `2 «Отправлено»`, событие #25955 с `delivery_id=g1` в `chatpush_events` (сторож доставки подтвердит) |
 | Рестарт `pm2 restart loyalpro-gateway` | сессия поднялась без кода: `Closed` → `WaitTdlibParameters` → `Ready` за ~1 с, `/health` → `accounts:[{id:8, ready}]` |
 
+## Дополнительно проверено 12.10.2026 (сессия loyalpro-46)
+| Шаг | Результат |
+|---|---|
+| Отправка файла через шлюз (`transport.sendFile` → `POST /api/v1/send_file` → `inputMessagePhoto`), картинка 6 219 байт на 79250177778 | delivery `g2` (accountId 8), статус по аккаунту `2 «Отправлено»` через 8 с; путь «Чата» (`routes/chat.js` send-file) использует тот же `transport.sendFile` |
+
 ## Не проверено (руками, нужен UI/JWT)
-- Отправка файла из «Чата» в этот диалог (`send_file` → `inputMessageDocument`/`inputMessagePhoto`).
 - Входящее фото от пациента → `/uploads/gateway/8/…jpg` в «Чате».
 - Ответ в диалог со скрытым номером (`tdlib_user_id`), в т.ч. тому, кто не писал после входа шлюза (`loadChats`).
 - Входящее во время `pm2 restart loyalpro` (повторы вебхука ~2,5 мин).
