@@ -239,3 +239,127 @@ test('logout: LOGOUT, транспорт закрыт, сессия удален
 test('dirsFor: data/acc-<id>/max', () => {
   assert.deepEqual(MaxClient.dirsFor({ DATA_DIR: '/d' }, 7), { max: '/d/acc-7/max', base: '/d/acc-7' });
 });
+
+// ── Входящие (Task 5) ────────────────────────────────────────
+const MSG = (over = {}) => ({ id: '117418041090250363', sender: PEER, time: 1_700_000_000_000, type: 'USER', text: 'Здравствуйте', attaches: [], ...over });
+async function ready(over = {}) {
+  const s = setup({ session: { loginToken: 'T' }, ...over });
+  await s.client.start();
+  assert.equal(s.client.authState, 'ready');
+  return s;
+}
+
+test('входящее личное: push 128 квитирован, вебхук max_incoming_msg с chat_id = id собеседника, номером и именем из кэша LOGIN', async () => {
+  const s = await ready();
+  s.last().push(128, { chatId: DIALOG, message: MSG(), unread: 1, mark: 1 });
+  await s.tick(10);
+  assert.deepEqual(s.last().acks, [[128, 1, { chatId: DIALOG, messageId: '117418041090250363' }]]);
+  assert.equal(s.hooks.length, 1);
+  const p = s.hooks[0].payload;
+  assert.equal(s.hooks[0].type, 'max_incoming_msg');
+  assert.equal(p.direction, 'incoming'); assert.equal(p.chat_id, String(PEER)); assert.equal(p.chat_type, 'person');
+  assert.equal(p.sender_phone_number, '79164942855'); assert.equal(p.sender_name, 'Mary'); assert.equal(p.recipient_phone_number, '79200255591');
+  assert.equal(p.customer_id, 9); assert.equal(p.provider, 'gateway'); assert.equal(p.delivery_id, null);
+  assert.equal(p.message.text, 'Здравствуйте'); assert.equal(p.message.type, 'text'); assert.equal(p.timestamp, 1_700_000_000);
+  await s.client.close();
+});
+
+test('незнакомый собеседник (чата нет в снимке): peer из XOR, CONTACT_INFO один раз → имя/номер, контакт записан в gateway_contacts; номер скрыт → null, затем из БД', async () => {
+  const OTHER = 777;
+  let infos = 0;
+  const s = await ready({ handlers: { 32: (p) => { infos++; return { contacts: p.contactIds[0] === OTHER ? [{ id: OTHER, phone: 79001112233, names: [{ firstName: 'Анна', lastName: 'П' }] }] : [{ id: p.contactIds[0] }] }; } }, knownIds: { 888: '79009998877' } });
+  s.last().push(128, { chatId: OWNER ^ OTHER, message: MSG({ id: '1', sender: OTHER }) });
+  s.last().push(128, { chatId: OWNER ^ OTHER, message: MSG({ id: '2', sender: OTHER }) });
+  await s.tick(10);
+  assert.equal(infos, 1);
+  assert.equal(s.hooks.length, 2);
+  assert.equal(s.hooks[0].payload.chat_id, '777'); assert.equal(s.hooks[0].payload.sender_phone_number, '79001112233'); assert.equal(s.hooks[0].payload.sender_name, 'Анна П');
+  assert.ok(s.repoCalls.some(c => c[0] === 'rememberContact' && c[2] === '79001112233' && c[3] === '777'));
+  s.last().push(128, { chatId: OWNER ^ 888, message: MSG({ id: '3', sender: 888 }) });
+  await s.tick(10);
+  assert.equal(s.hooks[2].payload.sender_phone_number, '79009998877');   // CONTACT_INFO без номера → gateway_contacts
+  assert.equal(s.hooks[2].payload.chat_id, '888');
+  await s.client.close();
+});
+
+test('фильтры: SYSTEM, правка (status), старше 6 ч, канал, «Избранное» (chatId 0), своя отправка (ownSends) — в бэкенд не идут', async () => {
+  const s = await ready();
+  s.client.chats.set(-5, { id: -5, type: 'CHANNEL', title: 'Канал' });
+  s.client.ownSends.set('OWN1', { deliveryId: 1, ts: s.deps.now() });
+  const t = s.last();
+  t.push(128, { chatId: DIALOG, message: MSG({ id: 'a', type: 'SYSTEM' }) });
+  t.push(128, { chatId: DIALOG, message: MSG({ id: 'b', status: 'EDITED' }) });
+  t.push(128, { chatId: DIALOG, message: MSG({ id: 'c', time: 1_700_000_000_000 - 7 * 3600 * 1000 }) });
+  t.push(128, { chatId: -5, message: MSG({ id: 'd', sender: 42 }) });
+  t.push(128, { chatId: 0, message: MSG({ id: 'e', sender: OWNER }) });
+  t.push(128, { chatId: DIALOG, message: MSG({ id: 'OWN1', sender: OWNER }) });
+  t.push(128, { chatId: DIALOG, message: MSG({ id: 'f', text: '', attaches: [{ _type: 'CONTROL', event: 'new' }] }) });
+  await s.tick(10);
+  assert.equal(s.hooks.length, 0);
+  assert.equal(t.acks.length, 7);         // квитируем всё, даже то, что не форвардим
+  await s.client.close();
+});
+
+test('своё сообщение с телефона (sender === ownerId) → outgoing без delivery_id, номер клиента в recipient_phone_number', async () => {
+  const s = await ready();
+  s.last().push(128, { chatId: DIALOG, message: MSG({ id: 'o1', sender: OWNER, text: 'ответ админа' }) });
+  await s.tick(10);
+  const p = s.hooks[0].payload;
+  assert.equal(p.direction, 'outgoing'); assert.equal(p.delivery_id, null);
+  assert.equal(p.recipient_phone_number, '79164942855'); assert.equal(p.sender_phone_number, '79200255591'); assert.equal(p.chat_id, String(PEER));
+  await s.client.close();
+});
+
+test('группа: chat_type group, chat_id = id чата, номер участника из кэша, медиа не качается; NOTIF_CHAT пополняет снимок', async () => {
+  const s = await ready();
+  s.last().push(135, { chat: { id: -72962629261478, type: 'CHAT', title: 'Админы', participants: { [OWNER]: 1, [PEER]: 1, 555: 1 } } });
+  s.last().push(128, { chatId: -72962629261478, message: MSG({ id: 'g1', sender: PEER, text: 'в группу', attaches: [{ _type: 'PHOTO', baseUrl: 'https://i/g' }] }) });
+  await s.tick(10);
+  const p = s.hooks[0].payload;
+  assert.equal(p.chat_type, 'group'); assert.equal(p.chat_id, '-72962629261478'); assert.equal(p.chat_name, 'Админы');
+  assert.equal(p.sender_phone_number, '79164942855'); assert.equal(p.sender_name, 'Mary');
+  assert.equal(p.message.type, 'image'); assert.equal(p.message.file_data, undefined);
+  assert.equal(s.mediaCalls.length, 0);
+  await s.client.close();
+});
+
+test('фото в личке: baseUrl скачан в публичный каталог с расширением по фактическому MIME, file_data в вебхуке; файл — FILE_DOWNLOAD → url', async () => {
+  const s = await ready({ handlers: { 88: (p) => ({ url: `https://fd/${p.fileId}`, unsafe: false }) } });
+  s.last().push(128, { chatId: DIALOG, message: MSG({ id: 'p1', text: 'см', attaches: [{ _type: 'PHOTO', baseUrl: 'https://i/1', photoId: 1 }] }) });
+  await s.tick(10);
+  const fd = s.hooks[0].payload.message.file_data;
+  assert.match(fd.download_url, /^\/uploads\/gateway\/9\/\d+_[0-9a-f]{16}\.webp$/);
+  assert.equal(fd.mime_type, 'image/webp'); assert.equal(fd.caption, 'см');
+  assert.ok(fs.existsSync(path.join(s.tmp, 'pub', '9', path.basename(fd.download_url))));
+  assert.deepEqual(s.mediaCalls[0], ['download', 'https://i/1']);
+  s.deps.media.download = async (url) => { s.mediaCalls.push(['download', url]); return { buf: Buffer.from('%PDF'), mimeType: null }; };
+  s.last().push(128, { chatId: DIALOG, message: MSG({ id: 'f1', text: '', attaches: [{ _type: 'FILE', fileId: 42, name: 'Прайс.pdf', size: 4 }] }) });
+  await s.tick(10);
+  assert.deepEqual(s.last().calls.find(c => c[0] === 88)[1], { fileId: 42, chatId: DIALOG, messageId: 'f1' });
+  assert.deepEqual(s.mediaCalls[1], ['download', 'https://fd/42']);
+  const fd2 = s.hooks[1].payload.message.file_data;
+  assert.match(fd2.download_url, /\.pdf$/); assert.equal(fd2.mime_type, 'application/pdf'); assert.equal(fd2.file_name, 'Прайс.pdf');
+  await s.client.close();
+});
+
+test('медиа не скачалось (ошибка/лимит) → сообщение уходит без file_data; заявленный размер больше кэпа — без запроса', async () => {
+  const s = await ready();
+  s.deps.media.download = async () => { throw new Error('HTTP 500'); };
+  s.last().push(128, { chatId: DIALOG, message: MSG({ id: 'p2', attaches: [{ _type: 'PHOTO', baseUrl: 'https://i/2' }] }) });
+  s.last().push(128, { chatId: DIALOG, message: MSG({ id: 'f2', attaches: [{ _type: 'FILE', fileId: 1, name: 'big.pdf', size: 50 * 1024 * 1024 }] }) });
+  await s.tick(10);
+  assert.equal(s.hooks.length, 2);
+  assert.equal(s.hooks[0].payload.message.file_data, undefined); assert.equal(s.hooks[0].payload.message.type, 'image');
+  assert.equal(s.hooks[1].payload.message.file_data, undefined);
+  assert.equal(s.last().calls.some(c => c[0] === 88), false);
+  await s.client.close();
+});
+
+test('пока LOGIN не прошёл (connected=false), push сообщений игнорируется', async () => {
+  const s = setup({ handlers: { 288: () => ({ qrLink: 'L', trackId: 't', ttl: 1, pollingInterval: 5000, expiresAt: 1_700_000_120_000 }), 289: () => ({ status: {} }) } });
+  await s.client.start();
+  s.last().push(128, { chatId: DIALOG, message: MSG() });
+  await s.tick(5);
+  assert.equal(s.hooks.length, 0);
+  await s.client.close();
+});

@@ -377,6 +377,97 @@ class MaxClient {
     }
   }
 
+  // ── Входящие ─────────────────────────────────────────────────
+  async onMessage(chatId, message) {
+    if (!this.connected || this.ownerId === null || !message) return;
+    const id = String(message.id);
+    this.pruneOwnSends();
+    if (this.ownSends.has(id)) return;                     // наша отправка — эхо уже синтезировано
+    if (chatId === 0) return;                              // «Избранное» (чат с собой)
+    const chat = this.chats.get(chatId) || null;
+    if (mapper.isChannel(chat)) return;                    // каналы не форвардим (как рассылки WhatsApp)
+    if (!mapper.contentOf(message)) return;                // служебное / правка / пусто
+    const ts = mapper.tsSeconds(message.time);
+    if (ts && Math.floor(this.d.now() / 1000) - ts > MAX_MESSAGE_AGE_S) return;
+    await this.emitMessage(chatId, message, null);
+  }
+
+  // Общий путь входящих и синтезированного эха своей отправки.
+  async emitMessage(chatId, message, deliveryId) {
+    const chat = this.chats.get(chatId) || null;
+    const group = mapper.isGroupChat({ chatId, chat });
+    const outgoing = Number(message.sender) === this.ownerId;
+    let peerId = null;
+    if (group) {
+      peerId = outgoing ? null : Number(message.sender);
+    } else {
+      peerId = mapper.peerIdOf({ chatId, chat, ownerId: this.ownerId });
+      if (chat && chat.participants && this.diag.xor++ === 0) {
+        const x = mapper.xorId(chatId, this.ownerId);
+        this.log.info(`диалог ${chatId}: участник ${peerId}, XOR даёт ${x} — ${x === peerId ? 'совпадает' : 'НЕ совпадает'}`);
+      }
+      if (peerId === this.ownerId) return;                 // чат с собой
+    }
+    const peer = peerId !== null ? await this.resolveContact(peerId) : null;
+    const content = mapper.contentOf(message) || { type: 'unsupported', text: '', media: null };
+    let fileUrl = null;
+    if (content.media && !group) {
+      try {
+        const dl = await this.downloadToPublic(chatId, message, content.media);
+        fileUrl = dl.fileUrl;
+        if (dl.mimeType) content.media.mimeType = dl.mimeType;
+      } catch (e) { this.log.warn(`медиа ${chatId}:${message.id} не скачано (${e.message})`); }
+    }
+    const body = mapper.buildWebhookBody({ accountId: this.id, ownPhone: this.ownPhone, ownerId: this.ownerId, chatId, chat, message, peer, deliveryId, fileUrl, content });
+    await this.d.webhook.sendSafe(body);
+  }
+
+  // Кэш → CONTACT_INFO (один раз на id) → gateway_contacts (номер, когда MAX его скрыл).
+  async resolveContact(userId) {
+    const id = Number(userId);
+    const hit = this.contacts.get(id);
+    if (hit && hit.phone) return hit;
+    let info = hit || null;
+    if (!info && this.transport && this.connected) {
+      try {
+        const r = await this.transport.request(Op.CONTACT_INFO, { contactIds: [id] });
+        const c = r && Array.isArray(r.contacts) ? r.contacts.find(x => x && Number(x.id) === id) : null;
+        if (c) info = this.rememberContactInfo(c);
+      } catch (e) { this.log.warn(`CONTACT_INFO(${id}): ${e.message}`); }
+    }
+    if (!info) info = { id, phone: null, name: null };
+    if (!info.phone) {
+      try {
+        const p = await this.d.repo.phoneByUserId(this.id, String(id));
+        if (p) info = { ...info, phone: p };
+      } catch (e) { this.log.warn(`phoneByUserId(${id}): ${e.message}`); }
+    }
+    this.contacts.set(id, info);
+    return info;
+  }
+
+  // Фото — по baseUrl; файл — временный URL через FILE_DOWNLOAD. Кап по заявленному
+  // размеру (ранний отказ) и по факту (media.download); расширение — только из
+  // белого списка по MIME (публичный каталог отдаётся статикой в origin админки).
+  async downloadToPublic(chatId, message, media) {
+    const max = this.d.maxMediaBytes || MAX_MEDIA_BYTES;
+    if (media.size && media.size > max) throw new Error(`файл ${media.size} байт больше лимита ${max}`);
+    let url = media.url;
+    if (!url && media.kind === 'FILE' && media.fileId !== null && media.fileId !== undefined) {
+      const r = await this.transport.request(Op.FILE_DOWNLOAD, { fileId: media.fileId, chatId, messageId: String(message.id) });
+      url = r && r.url;
+    }
+    if (!url) throw new Error('нет ссылки на файл');
+    const { buf, mimeType: headerMime } = await this.d.media.download(url, { http: this.d.http, maxBytes: max, timeoutMs: MEDIA_DOWNLOAD_TIMEOUT_MS });
+    const declared = media.mimeType && media.mimeType !== 'application/octet-stream' ? media.mimeType : null;
+    const mimeType = (media.kind === 'FILE' && declared) ? declared : (headerMime || declared || media.mimeType);
+    const dir = path.join(this.d.config.PUBLIC_FILES_DIR, String(this.id));
+    fs.mkdirSync(dir, { recursive: true });
+    const name = publicFileName(mimeType, this.d.now());
+    fs.writeFileSync(path.join(dir, name), buf);
+    return { fileUrl: `${this.d.config.PUBLIC_FILES_URL}/${this.id}/${name}`, mimeType };
+  }
+
   status() {
     return {
       authState: this.authState, phone: this.ownPhone, displayName: this.displayName, error: this.lastAuthError,
