@@ -30,6 +30,16 @@
 // Телефон собеседника — wa-mapper.peerPhone (remoteJid → senderPn → кэш LID).
 // У СВОИХ сообщений senderPn/senderLid — НАШИ (класс инцидента 2026-08-10:
 // свой номер под видом клиентского), поэтому для fromMe в личке они не берутся.
+// Кэш LID наполняется ЗАРАНЕЕ, а не только входящими (senderPn): прод 13.10.2026
+// — администратор написал с телефона пациенту, который после привязки ещё не
+// писал, эхо ушло как '<lid>@lid' без номера, и в «Чате» вырос безымянный
+// диалог. Источники номера: контакты app-state (contactAction.lidJid →
+// contacts.upsert/update), сырой пакет своего сообщения с другого устройства
+// (recipient=<lid> + peer_recipient_pn|recipient_pn — Baileys 6.7.24 эти
+// атрибуты в key не кладёт) и chats.phoneNumberShare. Первичную синхронизацию
+// app-state Baileys сам НЕ делает, если история отключена (Socket/chats.js:
+// doAppStateSync зовётся только при shouldProcessHistoryMsg) — её запускает
+// initialAppStateSync, один раз на сессию (creds.accountSyncCounter).
 // Статусы: Baileys НЕ присылает messages.update со SERVER_ACK для лички
 // (серверный ack эмитится только при ошибке, status=ERROR; ≥2 приходит лишь
 // квитанцией устройства получателя — DELIVERY_ACK, которой может не быть
@@ -74,6 +84,16 @@ const INFLIGHT_WAIT_MS = 30 * 1000;
 const MEDIA_DOWNLOAD_DEADLINE_MS = 90 * 1000;
 const MEDIA_HTTP_TIMEOUT_MS = 30 * 1000;   // axios timeout: до заголовков ответа
 const STATUS_ERROR = 0;              // WAMessageStatus.ERROR
+// Номер получателя в сыром пакете своего сообщения (другое устройство аккаунта).
+const RECIPIENT_PN_ATTRS = ['peer_recipient_pn', 'recipient_pn'];
+// Сколько раз написать в лог атрибуты пакета, где номера получателя НЕТ, — чтобы
+// узнать по живому трафику, что WhatsApp туда кладёт, но не засорять лог.
+const RAW_DIAG_MAX = 3;
+const LID_CACHE_MAX = 50000;
+// Первичная синхронизация app-state — не сразу после open: сначала офлайн-очередь.
+const APP_STATE_SYNC_DELAY_MS = 60 * 1000;
+// Коллекция app-state с контактами (Utils/chat-utils.js: 'contact' → critical_unblock_low).
+const CONTACTS_COLLECTION = 'critical_unblock_low';
 // DisconnectReason Baileys 6.7.24 (lib/Types/index.js) — константой, чтобы
 // тесты не грузили библиотеку.
 const DISCONNECT = { loggedOut: 401, forbidden: 403, timedOut: 408, connectionReplaced: 440, restartRequired: 515 };
@@ -176,6 +196,11 @@ class WhatsappClient {
     this.sentCache = new Map();      // key.id → message (для getMessage при повторе)
     this.existsCache = new Map();    // phone → {jid, ts} (onWhatsApp подтвердил, jid канонический)
     this.chatQueues = new Map();
+    this.lidPhones = new Map();      // lid → phone: синхронно, раньше записи в БД (пакет обгоняет INSERT)
+    this.wsHandlers = [];            // [ws, event, fn] — сырые узлы протокола
+    this.rawPnAttr = null;           // каким атрибутом пришёл номер получателя (для лога, один раз)
+    this.rawDiagLeft = RAW_DIAG_MAX;
+    this.appStateSyncSock = null;    // сокет, для которого синхронизация уже запланирована
   }
 
   static dirsFor(config, id) {
@@ -210,6 +235,16 @@ class WhatsappClient {
     on('messages.upsert', guard('messages.upsert', this.onUpsert));
     on('messages.update', guard('messages.update', this.onUpdates));
     on('chats.phoneNumberShare', guard('phoneNumberShare', this.onPhoneShare));
+    on('contacts.upsert', guard('contacts.upsert', this.onContacts));
+    on('contacts.update', guard('contacts.update', this.onContacts));
+    // Сырые узлы: Baileys регистрирует свой CB:message раньше нашего, но разбор
+    // у него асинхронный — наш синхронный слушатель успевает положить номер в
+    // lidPhones до того, как разобранное сообщение дойдёт до onUpsert.
+    if (sock.ws && typeof sock.ws.on === 'function') {
+      const raw = (node) => { try { this.onRawMessage(node); } catch (e) { this.log.warn(`сырой пакет: ${e.message}`); } };
+      sock.ws.on('CB:message', raw);
+      this.wsHandlers.push([sock.ws, 'CB:message', raw]);
+    }
   }
 
   // Слушатели прежнего сокета снимаем: события умершего сокета не должны
@@ -219,6 +254,10 @@ class WhatsappClient {
       try { (s.ev.off || s.ev.removeListener).call(s.ev, ev, fn); } catch (_) { /* нет off */ }
     }
     this.handlers = [];
+    for (const [ws, ev, fn] of this.wsHandlers) {
+      try { (ws.off || ws.removeListener).call(ws, ev, fn); } catch (_) { /* нет off */ }
+    }
+    this.wsHandlers = [];
   }
 
   async onConnection(u) {
@@ -237,6 +276,7 @@ class WhatsappClient {
       this.authState = 'ready';   // отправки разрешаем только после записи состояния в БД
       this.lastAuthError = null;
       this.log.info(`готов: ${this.ownPhone || '?'} (${this.displayName || '?'})`);
+      this.scheduleAppStateSync();
       try {
         const n = await this.d.deliveries.failStale(this.id);
         if (n) this.log.warn(`закрыто ${n} доставок, зависших с прошлого запуска`);
@@ -296,7 +336,123 @@ class WhatsappClient {
 
   async onPhoneShare({ lid, jid } = {}) {
     const phone = mapper.phoneOfJid(jid); const l = mapper.lidOfJid(lid);
-    if (phone && l && phone !== this.ownPhone) await this.d.repo.rememberContact(this.id, phone, l);
+    if (phone && l && phone !== this.ownPhone) {
+      this.rememberLidLocal(l, phone);
+      await this.d.repo.rememberContact(this.id, phone, l);
+    }
+  }
+
+  // ── Номер по LID заранее ─────────────────────────────────────
+  rememberLidLocal(lid, phone) {
+    if (this.lidPhones.has(lid)) this.lidPhones.delete(lid);        // свежие — в хвост (вытесняем самые старые)
+    this.lidPhones.set(lid, phone);
+    if (this.lidPhones.size > LID_CACHE_MAX) this.lidPhones.delete(this.lidPhones.keys().next().value);
+  }
+
+  // Память обновляется СИНХРОННО (до первого await) — вызывающий из сырого
+  // пакета рассчитывает, что номер виден сразу. В БД — одной пачкой.
+  // Другой номер для уже известного LID не перезаписываем: чужой номер увёл бы
+  // реплику администратора в диалог другого пациента — это хуже безымянного
+  // диалога. Расхождение видно по WARN (только счётчик, без номеров).
+  async learnPairs(pairs, source) {
+    this.refreshIdentity();
+    const fresh = [];
+    let conflicts = 0;
+    for (const { phone, lid } of pairs || []) {
+      if (!phone || !lid || phone === this.ownPhone || lid === this.ownLid) continue;
+      const known = this.lidPhones.get(lid);
+      if (known === phone) continue;
+      if (known) { conflicts++; continue; }
+      this.rememberLidLocal(lid, phone);
+      fresh.push({ phone, userId: lid });
+    }
+    if (conflicts) this.log.warn(`номера по LID (${source}): ${conflicts} расхождений с уже известными — оставлены прежние`);
+    if (!fresh.length) return 0;
+    this.log.info(`номера по LID: +${fresh.length} (${source})`);
+    try { await this.d.repo.rememberContacts(this.id, fresh); }
+    catch (e) { this.log.warn(`номера по LID (${source}) не сохранены в БД: ${e.message}`); }
+    return fresh.length;
+  }
+
+  // contacts.upsert/update: у контакта из app-state id — номер, lid — его LID;
+  // у контакта из истории бывает наоборот (id — LID, jid — номер).
+  async onContacts(list) {
+    const pairs = [];
+    for (const c of Array.isArray(list) ? list : []) {
+      if (!c) continue;
+      const phone = mapper.phoneOfJid(c.jid) || mapper.phoneOfJid(c.id);
+      const lid = mapper.lidOfJid(c.lid) || mapper.lidOfJid(c.id);
+      if (phone && lid) pairs.push({ phone, lid });
+    }
+    await this.learnPairs(pairs, 'контакты');
+  }
+
+  // Своё сообщение, отправленное с ДРУГОГО устройства аккаунта (телефон клиники),
+  // приходит пакетом с recipient=<собеседник>. Входящие (recipient нет) и группы
+  // сюда не относятся: там номер даёт senderPn/participantPn в key.
+  onRawMessage(node) {
+    const at = (node && node.attrs) || {};
+    const lid = mapper.lidOfJid(at.recipient);
+    if (!lid) return;
+    const attr = RECIPIENT_PN_ATTRS.find(k => mapper.phoneOfJid(at[k]));
+    if (attr) {
+      if (this.rawPnAttr !== attr) { this.rawPnAttr = attr; this.log.info(`номер получателя своего сообщения приходит в пакете (${attr})`); }
+      this.learnPairs([{ phone: mapper.phoneOfJid(at[attr]), lid }], 'пакет своего сообщения')
+        .catch(e => this.log.warn(`номер из пакета: ${e.message}`));
+    } else if (this.rawDiagLeft > 0) {
+      this.rawDiagLeft--;
+      this.log.info(`своё сообщение в LID-чат без номера в пакете; атрибуты: ${Object.keys(at).join(',')}`);
+    }
+  }
+
+  // Первичная синхронизация app-state (контакты с LID), которую Baileys при
+  // выключенной истории не делает. Один раз на сессию: признак — тот же
+  // creds.accountSyncCounter, что ставит сам Baileys. creds.update НЕ эмитим —
+  // слушатель Baileys на него шлёт presence с пустым именем (Socket/socket.js);
+  // пишем поле в те же creds и сохраняем saveCreds.
+  scheduleAppStateSync() {
+    const sock = this.sock;
+    if (!sock || this.appStateSyncSock === sock) return;
+    this.appStateSyncSock = sock;
+    const delay = this.d.appStateSyncDelayMs != null ? this.d.appStateSyncDelayMs : APP_STATE_SYNC_DELAY_MS;
+    Promise.resolve(this.d.sleep(delay))
+      .then(() => this.initialAppStateSync(sock))
+      .catch(e => this.log.warn(`app-state: ${e.message}`));
+  }
+
+  async initialAppStateSync(sock) {
+    if (this.closed || !this.connected || this.sock !== sock) return;
+    const creds = sock.authState && sock.authState.creds;
+    if (!creds || creds.accountSyncCounter) return;                 // уже синхронизирован
+    if (!creds.myAppStateKeyId) { this.log.info('app-state: ключей синхронизации от телефона ещё нет — контакты подтянутся позже'); return; }
+    if (typeof sock.resyncAppState !== 'function') return;
+    const names = this.d.appStatePatchNames || baileys().ALL_WA_PATCH_NAMES;
+    this.log.info(`app-state: первичная синхронизация (${names.join(',')}) — контакты с номерами по LID`);
+    try {
+      await sock.resyncAppState(names, true);
+      // Сбой расшифровки коллекции Baileys глотает (resyncAppState не бросает,
+      // версия остаётся пустой) — тогда «сделано» не ставим, повторим на
+      // следующем подключении.
+      const ks = sock.authState && sock.authState.keys;
+      const st = ks && typeof ks.get === 'function'
+        ? await Promise.resolve(ks.get('app-state-sync-version', [CONTACTS_COLLECTION])).catch(() => null) : null;
+      if (!(st && st[CONTACTS_COLLECTION] && st[CONTACTS_COLLECTION].version)) {
+        this.log.warn(`app-state: коллекция контактов (${CONTACTS_COLLECTION}) не синхронизировалась — повтор при следующем подключении`);
+        return;
+      }
+      creds.accountSyncCounter = (creds.accountSyncCounter || 0) + 1;
+      if (this.saveCreds) await Promise.resolve(this.saveCreds()).catch(e => this.log.warn(`saveCreds: ${e.message}`));
+      // Сколько номеров дали контакты — строкой «номера по LID: +N (контакты)»
+      // после flush: до него contacts.upsert лежит в буфере Baileys.
+      this.log.info('app-state: синхронизировано');
+    } catch (e) {
+      this.log.warn(`app-state: синхронизация не удалась (${e.message}) — повтор при следующем подключении`);
+    } finally {
+      // resyncAppState включает буфер событий Baileys и сам его НЕ сбрасывает
+      // (Utils/event-buffer.js createBufferedFunction) — без flush контакты и
+      // сообщения ждали бы следующего пакета.
+      try { if (sock.ev && typeof sock.ev.flush === 'function') sock.ev.flush(); } catch (_) { /* сокет мёртв */ }
+    }
   }
 
   // Шаг из админки: для WhatsApp это только запрос кода привязки по номеру.
@@ -423,13 +579,19 @@ class WhatsappClient {
     // У своих сообщений в личке sender* — наши; оставляем только remoteJid.
     const k = key.fromMe && !group ? { remoteJid: key.remoteJid, fromMe: true } : key;
     const lid = mapper.lidOfJid(group ? k.participant : k.remoteJid);
-    let cached = null;
-    if (lid) { try { cached = await this.d.repo.phoneByLid(this.id, lid); } catch (e) { this.log.warn(`phoneByLid ${lid}: ${e.message}`); } }
+    let cached = lid ? (this.lidPhones.get(lid) || null) : null;
+    if (lid && !cached) {
+      try {
+        cached = await this.d.repo.phoneByLid(this.id, lid);
+        if (cached) this.rememberLidLocal(lid, cached);
+      } catch (e) { this.log.warn(`phoneByLid ${lid}: ${e.message}`); }
+    }
     let phone = mapper.peerPhone(k, (l) => (l && l === lid ? cached : null));
     if (phone && phone === this.ownPhone && !group) phone = null;   // свой номер клиентом не бывает
     // Увидели LID и номер вместе — запоминаем для следующих сообщений без senderPn.
     const seenLid = group ? (mapper.lidOfJid(k.participantLid) || lid) : (mapper.lidOfJid(k.senderLid) || lid);
     if (phone && seenLid && !(seenLid === lid && cached) && !key.fromMe) {
+      this.rememberLidLocal(seenLid, phone);
       await Promise.resolve(this.d.repo.rememberContact(this.id, phone, seenLid)).catch(e => this.log.warn(`rememberContact: ${e.message}`));
     }
     return phone;

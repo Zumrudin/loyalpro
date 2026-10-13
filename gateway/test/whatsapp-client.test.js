@@ -19,6 +19,7 @@ function fakeSock(over = {}) {
   const calls = [];
   return {
     ev, calls,
+    ws: new EventEmitter(),             // сырые узлы протокола ('CB:message'), как sock.ws у Baileys
     user: { id: '79250177778:12@s.whatsapp.net', name: 'Клиника' },
     authState: { creds: { registered: false } },
     async sendMessage(jid, content) { calls.push(['sendMessage', jid, content]); return { key: { remoteJid: jid, fromMe: true, id: 'OUT1' }, message: content.text !== undefined ? { conversation: content.text } : { imageMessage: { caption: content.caption || '', mimetype: 'image/jpeg' } }, messageTimestamp: 1700000100 }; },
@@ -44,6 +45,7 @@ function setup(over = {}) {
       setAuth: async (...a) => { repoCalls.push(['setAuth', ...a]); },
       phoneByLid: async () => over.lidPhone || null,
       rememberContact: async (...a) => { repoCalls.push(['rememberContact', ...a]); },
+      rememberContacts: async (...a) => { repoCalls.push(['rememberContacts', ...a]); },
     },
     deliveries: {
       STATUS: { ACCEPTED: [1, 'Принято'], SENT: [2, 'Отправлено'], FAILED: [5, 'Невозможно доставить'] },
@@ -57,6 +59,8 @@ function setup(over = {}) {
     webhook: { sendSafe: async (b) => { hooks.push(b); } },
     now: () => 1_700_000_000_000,
     sleep: async () => {},
+    appStatePatchNames: ['critical_block', 'critical_unblock_low'],
+    ...(over.deps || {}),
   };
   const wa = new WhatsappClient({ id: 42, phone: null }, deps);
   return { wa, sock, repoCalls, delCalls, hooks, tmp };
@@ -610,4 +614,170 @@ test('пустой текст без медиа (в т.ч. служебное п
   await ticks(6);
   assert.equal(hooks.length, 1);
   assert.equal(hooks[0].payload.new_message.message.type, 'image');
+});
+
+// ── Номер собеседника по LID ЗАРАНЕЕ (13.10.2026, прод): администратор написал с
+// телефона клиники пациенту, который после привязки ещё не писал, — эхо ушло
+// в бэкенд как '<lid>@lid' без номера, и в «Чате» появился безымянный диалог.
+// Номер WhatsApp отдаёт связанным устройствам: в контактах (app-state,
+// contactAction.lidJid) и в сыром пакете своего сообщения (атрибут *_pn).
+
+test('LID: contacts.upsert — пары номер↔LID запоминаются пачкой; без lid, свой номер — пропуск', async () => {
+  const { wa, sock, repoCalls } = setup();
+  await open(wa, sock);
+  sock.ev.emit('contacts.upsert', [
+    { id: '79001112233@s.whatsapp.net', lid: '111@lid', name: 'Анна' },
+    { id: '222@lid', jid: '79004445566@s.whatsapp.net' },
+    { id: '79007778899@s.whatsapp.net', name: 'без LID' },
+    { id: '79250177778@s.whatsapp.net', lid: '999@lid' },             // свой номер клиентом не бывает
+  ]);
+  await ticks(3);
+  const calls = repoCalls.filter(c => c[0] === 'rememberContacts');
+  assert.equal(calls.length, 1);
+  assert.deepEqual(calls[0], ['rememberContacts', 42, [{ phone: '79001112233', userId: '111' }, { phone: '79004445566', userId: '222' }]]);
+});
+
+test('LID: contacts.update с lid тоже учит; повтор уже известной пары БД не трогает', async () => {
+  const { wa, sock, repoCalls } = setup();
+  await open(wa, sock);
+  sock.ev.emit('contacts.update', [{ id: '79001112233@s.whatsapp.net', lid: '111@lid' }]);
+  await ticks(3);
+  sock.ev.emit('contacts.update', [{ id: '79001112233@s.whatsapp.net', lid: '111@lid' }]);
+  await ticks(3);
+  assert.equal(repoCalls.filter(c => c[0] === 'rememberContacts').length, 1);
+});
+
+test('LID: номер из контактов используется для своего сообщения с телефона — эхо с номером, а не <lid>@lid', async () => {
+  const { wa, sock, hooks } = setup();                              // phoneByLid в БД пусто
+  await open(wa, sock);
+  sock.ev.emit('contacts.upsert', [{ id: '79001112233@s.whatsapp.net', lid: '777@lid' }]);
+  await ticks(3);
+  sock.ev.emit('messages.upsert', { type: 'notify', messages: [{ key: { remoteJid: '777@lid', fromMe: true, id: 'HAND4', senderPn: '79250177778@s.whatsapp.net' }, messageTimestamp: 1_700_000_000, message: { conversation: 'Вы записаны' } }] });
+  await ticks(4);
+  const nm = hooks[0].payload.new_message;
+  assert.equal(nm.direction, 'outgoing');
+  assert.equal(nm.chat_id, '79001112233@c.us');
+  assert.equal(nm.recipient_phone_number, '79001112233');
+});
+
+test('LID: сырой пакет своего сообщения с другого устройства (recipient=<lid>, peer_recipient_pn / recipient_pn) → номер известен до разбора сообщения', async () => {
+  const { wa, sock, hooks, repoCalls } = setup();
+  await open(wa, sock);
+  sock.ws.emit('CB:message', { tag: 'message', attrs: { id: 'HAND5', from: '79250177778@s.whatsapp.net', recipient: '777@lid', type: 'text', peer_recipient_pn: '79001112233@s.whatsapp.net' } });
+  sock.ws.emit('CB:message', { tag: 'message', attrs: { id: 'HAND6', from: '79250177778@s.whatsapp.net', recipient: '888@lid', type: 'text', recipient_pn: '79004445566@s.whatsapp.net' } });
+  // Сразу следом (без ожидания записи в БД) — разобранное сообщение
+  sock.ev.emit('messages.upsert', { type: 'notify', messages: [{ key: { remoteJid: '777@lid', fromMe: true, id: 'HAND5' }, messageTimestamp: 1_700_000_000, message: { conversation: 'Добрый день' } }] });
+  await ticks(4);
+  assert.equal(hooks[0].payload.new_message.chat_id, '79001112233@c.us');
+  const saved = repoCalls.filter(c => c[0] === 'rememberContacts').flatMap(c => c[2]);
+  assert.deepEqual(saved, [{ phone: '79001112233', userId: '777' }, { phone: '79004445566', userId: '888' }]);
+});
+
+test('LID: сырой пакет без номера получателя, входящий пакет, группа — ничего не учим; эхо остаётся <lid>@lid', async () => {
+  const { wa, sock, hooks, repoCalls } = setup();
+  await open(wa, sock);
+  sock.ws.emit('CB:message', { tag: 'message', attrs: { id: 'X1', from: '79250177778@s.whatsapp.net', recipient: '777@lid', type: 'text' } });
+  sock.ws.emit('CB:message', { tag: 'message', attrs: { id: 'X2', from: '777@lid', sender_pn: '79001112233@s.whatsapp.net', type: 'text' } });
+  sock.ws.emit('CB:message', { tag: 'message', attrs: { id: 'X3', from: '120363@g.us', participant: '777@lid', participant_pn: '79001112233@s.whatsapp.net' } });
+  sock.ws.emit('CB:message', { tag: 'message', attrs: { id: 'X4', from: '79250177778@s.whatsapp.net', recipient: '777@lid', peer_recipient_pn: '79250177778@s.whatsapp.net' } }); // свой номер
+  sock.ws.emit('CB:message', null);
+  sock.ev.emit('messages.upsert', { type: 'notify', messages: [{ key: { remoteJid: '777@lid', fromMe: true, id: 'X1' }, messageTimestamp: 1_700_000_000, message: { conversation: 'a' } }] });
+  await ticks(4);
+  assert.equal(hooks[0].payload.new_message.chat_id, '777@lid');
+  assert.ok(!repoCalls.some(c => c[0] === 'rememberContacts'));
+});
+
+test('LID: слушатель сырых пакетов снимается вместе с сокетом (реконнект не удваивает обработку)', async () => {
+  const { wa, sock } = setup();
+  await open(wa, sock);
+  assert.equal(sock.ws.listenerCount('CB:message'), 1);
+  wa.detach();
+  assert.equal(sock.ws.listenerCount('CB:message'), 0);
+});
+
+function appStateSock({ creds, resync, contactsVersion = 7 } = {}) {
+  const c = { me: { id: '79250177778:12@s.whatsapp.net', lid: '279666862632979:12@lid' }, ...creds };
+  const resyncCalls = []; let flushes = 0;
+  return {
+    resyncCalls, get flushes() { return flushes; },
+    sockOver: {
+      authState: { creds: c, keys: { get: async (type, ids) => (type === 'app-state-sync-version' && contactsVersion ? { critical_unblock_low: { version: contactsVersion } } : {}) } },
+      async resyncAppState(names, initial) { resyncCalls.push([names, initial]); if (resync) await resync(); },
+    },
+    attachFlush(sock) { sock.ev.flush = () => { flushes++; return true; }; },
+    creds: c,
+  };
+}
+
+test('app-state: ни разу не синхронизирован (accountSyncCounter=0), ключи есть → resyncAppState(все коллекции, initial) один раз, flush, счётчик сохранён', async () => {
+  const st = appStateSock({ creds: { myAppStateKeyId: 'AAAA', accountSyncCounter: 0 } });
+  let saved = 0;
+  const { wa, sock } = setup({ sock: st.sockOver });
+  st.attachFlush(sock);
+  wa.d.createSocket = async () => ({ sock, saveCreds: async () => { saved++; } });
+  await open(wa, sock);
+  await ticks(6);
+  assert.deepEqual(st.resyncCalls, [[['critical_block', 'critical_unblock_low'], true]]);
+  assert.equal(st.flushes, 1);                                      // буфер событий Baileys не остаётся включённым
+  assert.equal(st.creds.accountSyncCounter, 1);
+  assert.ok(saved >= 1);
+  sock.ev.emit('connection.update', { connection: 'open' });       // повторный open того же сокета
+  await ticks(6);
+  assert.equal(st.resyncCalls.length, 1);
+});
+
+test('app-state: уже синхронизирован или нет ключей от телефона → не зовём', async () => {
+  for (const creds of [{ myAppStateKeyId: 'AAAA', accountSyncCounter: 1 }, { accountSyncCounter: 0 }]) {
+    const st = appStateSock({ creds });
+    const { wa, sock } = setup({ sock: st.sockOver });
+    await open(wa, sock);
+    await ticks(6);
+    assert.equal(st.resyncCalls.length, 0, JSON.stringify(creds));
+  }
+});
+
+test('app-state: resyncAppState бросил → без падения, счётчик не тронут (повтор при следующем подключении), flush всё равно', async () => {
+  const st = appStateSock({ creds: { myAppStateKeyId: 'AAAA' }, resync: async () => { throw new Error('timed out'); } });
+  const { wa, sock } = setup({ sock: st.sockOver });
+  st.attachFlush(sock);
+  await open(wa, sock);
+  await ticks(6);
+  assert.equal(st.resyncCalls.length, 1);
+  assert.equal(st.creds.accountSyncCounter, undefined);
+  assert.equal(st.flushes, 1);
+  assert.equal(wa.authState, 'ready');
+});
+
+test('app-state: сокет закрылся, пока ждали задержку → не зовём', async () => {
+  let release;
+  const st = appStateSock({ creds: { myAppStateKeyId: 'AAAA' } });
+  const { wa, sock } = setup({ sock: st.sockOver, deps: { sleep: () => new Promise(r => { release = r; }) } });
+  await open(wa, sock);
+  await wa.close();
+  release();
+  await ticks(6);
+  assert.equal(st.resyncCalls.length, 0);
+});
+
+test('LID: другой номер для уже известного LID не перезаписывает прежний (чужой номер хуже безымянного диалога)', async () => {
+  const { wa, sock, hooks, repoCalls } = setup();
+  await open(wa, sock);
+  sock.ev.emit('contacts.upsert', [{ id: '79001112233@s.whatsapp.net', lid: '777@lid' }]);
+  await ticks(3);
+  sock.ws.emit('CB:message', { tag: 'message', attrs: { id: 'C1', from: '79250177778@s.whatsapp.net', recipient: '777@lid', peer_recipient_pn: '79009990000@s.whatsapp.net' } });
+  sock.ev.emit('messages.upsert', { type: 'notify', messages: [{ key: { remoteJid: '777@lid', fromMe: true, id: 'C1' }, messageTimestamp: 1_700_000_000, message: { conversation: 'a' } }] });
+  await ticks(4);
+  assert.equal(hooks[0].payload.new_message.chat_id, '79001112233@c.us');
+  assert.equal(repoCalls.filter(c => c[0] === 'rememberContacts').length, 1);
+});
+
+test('app-state: resyncAppState прошёл, но коллекция контактов не получила версию (Baileys глотает сбой расшифровки) → счётчик не ставим, повтор при следующем подключении', async () => {
+  const st = appStateSock({ creds: { myAppStateKeyId: 'AAAA' }, contactsVersion: 0 });
+  const { wa, sock } = setup({ sock: st.sockOver });
+  st.attachFlush(sock);
+  await open(wa, sock);
+  await ticks(6);
+  assert.equal(st.resyncCalls.length, 1);
+  assert.equal(st.creds.accountSyncCounter, undefined);
+  assert.equal(st.flushes, 1);
 });

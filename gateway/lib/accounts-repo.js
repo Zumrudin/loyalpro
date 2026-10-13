@@ -44,6 +44,26 @@ async function rememberContact(accountId, phone, userId) {
     [accountId, phone, userId]);
 }
 
+// Пачка пар «номер → user_id» одним запросом: контакты WhatsApp при первичной
+// синхронизации приходят сотнями. Дубль номера в одном INSERT … ON CONFLICT DO
+// UPDATE Postgres отвергает («cannot affect row a second time») — схлопываем,
+// побеждает последняя пара.
+const CONTACTS_BATCH = 500;
+async function rememberContacts(accountId, pairs) {
+  const byPhone = new Map();
+  for (const p of pairs || []) if (p && p.phone && p.userId != null && p.userId !== '') byPhone.set(p.phone, p.userId);
+  const list = [...byPhone];
+  for (let i = 0; i < list.length; i += CONTACTS_BATCH) {
+    const chunk = list.slice(i, i + CONTACTS_BATCH);
+    const params = [accountId];
+    const values = chunk.map(([phone, userId]) => { params.push(phone, userId); return `($1,$${params.length - 1},$${params.length})`; });
+    await db.query(
+      `INSERT INTO gateway_contacts (account_id, phone, user_id) VALUES ${values.join(',')}
+       ON CONFLICT (account_id, phone) DO UPDATE SET user_id=EXCLUDED.user_id`,
+      params);
+  }
+}
+
 // WhatsApp: LID → телефон (user_id хранит числовую часть LID, см. миграцию).
 async function phoneByLid(accountId, lid) {
   if (!lid) return null;
@@ -51,4 +71,4 @@ async function phoneByLid(accountId, lid) {
   return r ? r.phone : null;
 }
 
-module.exports = { get, listActive, byToken, setAuth, contactUserId, rememberContact, phoneByLid };
+module.exports = { get, listActive, byToken, setAuth, contactUserId, rememberContact, rememberContacts, phoneByLid, CONTACTS_BATCH };
