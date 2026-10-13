@@ -491,6 +491,148 @@ class MaxClient {
     for (const [id, v] of this.ownSends) if (v.ts < cutoff) this.ownSends.delete(id);
   }
 
+  // ── Отправка ─────────────────────────────────────────────────
+  requireReady() {
+    if (this.authState !== 'ready') throw httpError(`аккаунт не авторизован (${this.authState})`, 422);
+    if (!this.connected || !this.transport || !this.transport.isOpen) throw httpError('нет соединения с MAX (переподключение)', 422);
+  }
+
+  // Клиентский id сообщения — миллисекунды, монотонно (PyMax _next_cid).
+  nextCid() {
+    const now = this.d.now();
+    this.cidPrev = Math.max(now, this.cidPrev + 1);
+    return this.cidPrev;
+  }
+
+  // → {chatId, peerId, phone}. max_user_id главнее номера: это id диалога из нашей
+  // БД (положительный — собеседник, отрицательный — группа как есть). По номеру:
+  // кэш контактов → gateway_contacts → CONTACT_INFO_BY_PHONE. Ничего не отправлено →
+  // 422, чтобы transport ушёл на следующий канал каскада.
+  async resolveChat({ maxUserId, phone }) {
+    const p = normalizePhone(phone);
+    if (maxUserId !== undefined && maxUserId !== null && String(maxUserId) !== '') {
+      const n = Number(maxUserId);
+      if (!Number.isInteger(n) || n === 0) throw httpError(`некорректный max_user_id ${maxUserId}`, 422);
+      if (n < 0) return { chatId: n, peerId: null, phone: p };
+      return { chatId: mapper.xorId(this.ownerId, n), peerId: n, phone: p };
+    }
+    if (!p) throw httpError('нет получателя: ни max_user_id, ни phone', 422);
+    let userId = null;
+    for (const c of this.contacts.values()) if (c.phone === p) { userId = c.id; break; }
+    if (!userId) {
+      try { userId = await this.d.repo.contactUserId(this.id, p); }
+      catch (e) { this.log.warn(`contactUserId(${p}): ${e.message}`); }
+    }
+    if (!userId) {
+      try {
+        const r = await this.transport.request(Op.CONTACT_INFO_BY_PHONE, { phone: '+' + p });
+        const c = r && r.contact;
+        if (c && c.id !== undefined && c.id !== null) {
+          userId = Number(c.id);
+          this.rememberContactInfo({ ...c, phone: c.phone || p });
+        }
+      } catch (e) {
+        throw httpError(`номер ${p} не найден в MAX (${e.code || e.message})`, 422);
+      }
+    }
+    if (!userId) throw httpError(`номер ${p} не найден в MAX`, 422);
+    return { chatId: mapper.xorId(this.ownerId, Number(userId)), peerId: Number(userId), phone: p };
+  }
+
+  async sendText({ text, phone, maxUserId, replyToMessageId }) {
+    this.requireReady();
+    const { chatId, phone: p } = await this.resolveChat({ maxUserId, phone });
+    const deliveryId = await this.d.deliveries.create({ accountId: this.id, chatId, phone: p, kind: 'text', text });
+    const message = { text: String(text), cid: this.nextCid(), elements: [], attaches: [] };
+    // reply только на id MAX (строка цифр); составной id Telegram-эпохи или
+    // числовой id Chatpush-эпохи другого канала просто игнорируется.
+    if (replyToMessageId && /^\d{1,30}$/.test(String(replyToMessageId))) message.link = { type: 'REPLY', messageId: String(replyToMessageId) };
+    await this.invokeSend(chatId, message, deliveryId);
+    return deliveryId;
+  }
+
+  // Временный файл read + rm сразу (как WhatsApp): ЧИТАЕМ ДО создания доставки.
+  // Фото (type=image с image/* MIME) — PHOTO_UPLOAD + multipart; остальное —
+  // FILE_UPLOAD + сырой POST + ожидание NOTIF_ATTACH.
+  async sendFile({ filePath, fileName, caption, type, phone, maxUserId, mimeType }) {
+    this.requireReady();
+    let buf;
+    try { buf = fs.readFileSync(filePath); }
+    catch (e) { throw httpError(`файл не прочитан: ${e.message}`, 422); }
+    finally {
+      try { fs.rmSync(filePath, { force: true }); } catch (_) { /* подберёт страховочный таймер server.js */ }
+      fs.rmdir(path.dirname(filePath), () => {});
+    }
+    const { chatId, phone: p } = await this.resolveChat({ maxUserId, phone });
+    const mime = mimeType || mapper.mimeOfName(fileName);
+    let attaches;
+    if (type === 'image' && /^image\//.test(mime)) {
+      const r = await this.transport.request(Op.PHOTO_UPLOAD, { count: 1 }).catch(e => { throw httpError(`MAX PHOTO_UPLOAD: ${e.message}`, 422); });
+      if (!r || !r.url) throw httpError('MAX PHOTO_UPLOAD: нет URL загрузки', 422);
+      const token = await this.d.media.uploadPhoto(r.url, buf, fileName, mime, { http: this.d.http }).catch(e => { throw httpError(`MAX: ${e.message}`, 422); });
+      attaches = [{ _type: 'PHOTO', photoToken: token }];
+    } else {
+      const r = await this.transport.request(Op.FILE_UPLOAD, { count: 1 }).catch(e => { throw httpError(`MAX FILE_UPLOAD: ${e.message}`, 422); });
+      const info = r && Array.isArray(r.info) && r.info[0];
+      if (!info || !info.url) throw httpError('MAX FILE_UPLOAD: нет слота загрузки', 422);
+      const ready = this.waitFileReady(info.fileId);
+      try { await this.d.media.uploadFile(info.url, buf, fileName || 'file', { http: this.d.http }); }
+      catch (e) { this.cancelFileWait(info.fileId); throw httpError(`MAX: ${e.message}`, 422); }
+      await ready;
+      attaches = [{ _type: 'FILE', fileId: info.fileId }];
+    }
+    const deliveryId = await this.d.deliveries.create({ accountId: this.id, chatId, phone: p, kind: 'file', text: caption || fileName });
+    await this.invokeSend(chatId, { text: caption || '', cid: this.nextCid(), elements: [], attaches }, deliveryId);
+    return deliveryId;
+  }
+
+  // Готовность файла — push NOTIF_ATTACH {fileId}. Не пришёл за FILE_READY_TIMEOUT_MS —
+  // шлём всё равно: MSG_SEND ответит attachment.not.ready, invokeSend повторит.
+  waitFileReady(fileId) {
+    const key = String(fileId);
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        this.fileWaiters.delete(key);
+        this.log.warn(`файл ${key}: NOTIF_ATTACH не пришёл за ${(this.d.fileReadyTimeoutMs || FILE_READY_TIMEOUT_MS) / 1000} с — отправляем без подтверждения`);
+        resolve();
+      }, this.d.fileReadyTimeoutMs || FILE_READY_TIMEOUT_MS);
+      // Без unref: ожидание — часть активной отправки, оно обязано пережить тихий
+      // цикл событий (иначе промис повис бы навсегда).
+      this.fileWaiters.set(key, () => { clearTimeout(timer); this.fileWaiters.delete(key); resolve(); });
+    });
+  }
+  cancelFileWait(fileId) { const w = this.fileWaiters.get(String(fileId)); if (w) w(); }
+
+  async invokeSend(chatId, message, deliveryId) {
+    let res;
+    for (let attempt = 0; ; attempt++) {
+      try { res = await this.transport.request(Op.MSG_SEND, { chatId, message, notify: true }); break; }
+      catch (e) {
+        if (e.code === 'attachment.not.ready' && attempt === 0) { await this.d.sleep(ATTACH_RETRY_MS); continue; }
+        try { await this.d.deliveries.setStatus(deliveryId, this.d.deliveries.STATUS.FAILED, { error: e.message }); }
+        catch (e2) { this.log.error(`delivery g${deliveryId}: статус FAILED не записан (${e2.message})`); }
+        // Таймаут/обрыв — исход неизвестен (503: transport НЕ уйдёт на другой канал);
+        // отказ сервера — ничего не ушло (422/429).
+        const unknown = e.code === 'timeout' || e.code === 'transport_closed';
+        const rate = /rate|limit|too\.?many|flood/i.test(String(e.code || e.message));
+        throw httpError(`MAX: ${e.message}`, unknown ? 503 : (rate ? 429 : 422));
+      }
+    }
+    const sent = (res && res.message) || {};
+    const msgId = sent.id !== undefined && sent.id !== null ? String(sent.id) : null;
+    if (msgId) {
+      this.pruneOwnSends();
+      this.ownSends.set(msgId, { deliveryId, ts: this.d.now() });
+      try { await this.d.deliveries.setProviderMessageId(deliveryId, msgId); }
+      catch (e) { this.log.warn(`delivery g${deliveryId}: provider_message_id не записан (${e.message})`); }
+    }
+    try { await this.d.deliveries.setStatusIf(deliveryId, this.d.deliveries.STATUS.ACCEPTED[0], this.d.deliveries.STATUS.SENT); }
+    catch (e) { this.log.warn(`delivery g${deliveryId}: статус SENT не записан (${e.message})`); }
+    // Эхо своей отправки — из ответа сервера, не ждём push (он может и не прийти).
+    const echo = { ...sent, id: msgId || `g${deliveryId}`, sender: this.ownerId, time: sent.time || this.d.now(), type: 'USER', text: sent.text !== undefined ? sent.text : message.text, attaches: sent.attaches || message.attaches };
+    this.enqueueChat(chatId, () => this.emitMessage(chatId, echo, `g${deliveryId}`)).catch(e => this.log.warn(`эхо g${deliveryId}: ${e.message}`));
+  }
+
   // ── Завершение ───────────────────────────────────────────────
   async logout() {
     this.closed = true;

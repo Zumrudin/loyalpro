@@ -363,3 +363,118 @@ test('пока LOGIN не прошёл (connected=false), push сообщени�
   assert.equal(s.hooks.length, 0);
   await s.client.close();
 });
+
+// ── Отправка (Task 6) ────────────────────────────────────────
+const SENT = (p) => ({ chatId: p.chatId, message: { id: '117418999', sender: OWNER, time: 1_700_000_050_000, type: 'USER', text: p.message.text, attaches: p.message.attaches || [] }, unread: 0, mark: 0 });
+
+test('sendText по max_user_id: chatId = ownerId XOR id, кадр MSG_SEND, доставка g12 «Отправлено» с provider_message_id, эхо с delivery_id; push того же id пропущен', async () => {
+  const s = await ready({ handlers: { 64: (p) => SENT(p) } });
+  const id = await s.client.sendText({ text: 'Здравствуйте!', maxUserId: String(PEER), phone: '79164942855', replyToMessageId: '117418041090250363' });
+  assert.equal(id, 12);
+  const send = s.last().calls.find(c => c[0] === 64)[1];
+  assert.equal(send.chatId, DIALOG); assert.equal(send.notify, true);
+  assert.equal(send.message.text, 'Здравствуйте!'); assert.deepEqual(send.message.attaches, []); assert.deepEqual(send.message.elements, []);
+  assert.equal(typeof send.message.cid, 'number'); assert.deepEqual(send.message.link, { type: 'REPLY', messageId: '117418041090250363' });
+  assert.deepEqual(s.delCalls[0], ['create', { accountId: 9, chatId: DIALOG, phone: '79164942855', kind: 'text', text: 'Здравствуйте!' }]);
+  assert.deepEqual(s.delCalls.find(c => c[0] === 'setProviderMessageId'), ['setProviderMessageId', 12, '117418999']);
+  assert.deepEqual(s.delCalls.find(c => c[0] === 'setStatusIf').slice(0, 4), ['setStatusIf', 12, 1, [2, 'Отправлено']]);
+  await s.tick(10);
+  assert.equal(s.hooks.length, 1);
+  const p = s.hooks[0].payload;
+  assert.equal(p.direction, 'outgoing'); assert.equal(p.delivery_id, 'g12'); assert.equal(p.message.id, '117418999'); assert.equal(p.recipient_phone_number, '79164942855'); assert.equal(p.chat_id, String(PEER));
+  s.last().push(128, { chatId: DIALOG, message: { id: '117418999', sender: OWNER, time: 1_700_000_050_000, type: 'USER', text: 'Здравствуйте!' } });
+  await s.tick(10);
+  assert.equal(s.hooks.length, 1);
+  await s.client.close();
+});
+
+test('cid монотонный даже при одинаковом now; reply_to не числовой (составной id Telegram) → без link; отрицательный max_user_id → группа как есть', async () => {
+  const s = await ready({ handlers: { 64: (p) => SENT(p) } });
+  await s.client.sendText({ text: 'a', maxUserId: PEER, replyToMessageId: '5245186003:10' });
+  await s.client.sendText({ text: 'b', maxUserId: '-72962629261478' });
+  const sends = s.last().calls.filter(c => c[0] === 64).map(c => c[1]);
+  assert.equal(sends[0].message.link, undefined);
+  assert.ok(sends[1].message.cid > sends[0].message.cid);
+  assert.equal(sends[1].chatId, -72962629261478);
+  assert.equal(s.delCalls.filter(c => c[0] === 'create')[1][1].chatId, -72962629261478);
+  await s.client.close();
+});
+
+test('sendText по номеру: кэш контактов → без поиска; gateway_contacts → без поиска; иначе CONTACT_INFO_BY_PHONE (+7…) и контакт запомнен; не найден → 422 без доставки', async () => {
+  let lookups = 0;
+  const s = await ready({ knownPhones: { 79009998877: 888 }, handlers: { 64: (p) => SENT(p), 46: (p) => { lookups++; return p.phone === '+79005556677' ? { contact: { id: 999, names: [{ name: 'Новый' }] } } : Object.assign(new Error('MAX op 46: contact.not.found'), { code: 'contact.not.found' }); } } });
+  await s.client.sendText({ text: 'a', phone: '+7 (916) 494-28-55' });     // Mary из LOGIN.contacts
+  await s.client.sendText({ text: 'b', phone: '79009998877' });            // из gateway_contacts
+  assert.equal(lookups, 0);
+  await s.client.sendText({ text: 'c', phone: '79005556677' });
+  assert.equal(lookups, 1);
+  const sends = s.last().calls.filter(c => c[0] === 64).map(c => c[1].chatId);
+  assert.deepEqual(sends, [OWNER ^ PEER, OWNER ^ 888, OWNER ^ 999]);
+  assert.ok(s.repoCalls.some(c => c[0] === 'rememberContact' && c[2] === '79005556677' && c[3] === '999'));
+  const n = s.delCalls.length;
+  await assert.rejects(s.client.sendText({ text: 'd', phone: '70000000000' }), (e) => e.status === 422 && /не найден в MAX/.test(e.message));
+  assert.equal(s.delCalls.length, n);
+  await assert.rejects(s.client.sendText({ text: 'd' }), (e) => e.status === 422);
+  await s.client.close();
+});
+
+test('не ready / нет соединения → 422 до создания доставки; MSG_SEND отверг → FAILED + 422; таймаут → FAILED + 503; rate limit → 429', async () => {
+  const s = await ready({ handlers: { 64: (p) => (p.message.text === 'limit' ? Object.assign(new Error('MAX op 64: too.many.requests'), { code: 'too.many.requests' }) : p.message.text === 'slow' ? Object.assign(new Error('MAX op 64: нет ответа'), { code: 'timeout' }) : Object.assign(new Error('MAX op 64: chat.denied'), { code: 'chat.denied' })) } });
+  await assert.rejects(s.client.sendText({ text: 'x', maxUserId: PEER }), (e) => e.status === 422 && /chat\.denied/.test(e.message));
+  assert.deepEqual(s.delCalls.find(c => c[0] === 'setStatus').slice(0, 3), ['setStatus', 12, [5, 'Невозможно доставить']]);
+  await assert.rejects(s.client.sendText({ text: 'slow', maxUserId: PEER }), (e) => e.status === 503);
+  await assert.rejects(s.client.sendText({ text: 'limit', maxUserId: PEER }), (e) => e.status === 429);
+  s.last().isOpen = false; s.client.connected = false;
+  const n = s.delCalls.length;
+  await assert.rejects(s.client.sendText({ text: 'y', maxUserId: PEER }), (e) => e.status === 422 && /переподключение/.test(e.message));
+  assert.equal(s.delCalls.length, n);
+  await s.client.close();
+  const q = setup({ handlers: { 288: () => ({ qrLink: 'L', trackId: 't', ttl: 1, pollingInterval: 5000, expiresAt: 1_700_000_120_000 }), 289: () => ({ status: {} }) } });
+  await q.client.start();
+  await assert.rejects(q.client.sendText({ text: 'z', maxUserId: PEER }), (e) => e.status === 422 && /не авторизован/.test(e.message));
+  await q.client.close();
+});
+
+test('sendFile image: PHOTO_UPLOAD → uploadPhoto → attaches PHOTO с токеном, подпись в text; временный файл удалён', async () => {
+  const s = await ready({ handlers: { 64: (p) => SENT(p), 80: () => ({ url: 'https://iu/upload?photoIds=1' }) } });
+  const dir = fs.mkdtempSync(path.join(s.tmp, 'tmp-')); const f = path.join(dir, 'a.jpg'); fs.writeFileSync(f, 'JPG');
+  const id = await s.client.sendFile({ filePath: f, fileName: 'a.jpg', caption: 'прайс', type: 'image', maxUserId: PEER, mimeType: 'image/jpeg' });
+  assert.equal(id, 12);
+  assert.equal(fs.existsSync(f), false);
+  assert.deepEqual(s.mediaCalls[0], ['uploadPhoto', 'https://iu/upload?photoIds=1', 'a.jpg', 3]);
+  const send = s.last().calls.find(c => c[0] === 64)[1];
+  assert.deepEqual(send.message.attaches, [{ _type: 'PHOTO', photoToken: 'PHOTOTOKEN' }]); assert.equal(send.message.text, 'прайс');
+  assert.deepEqual(s.delCalls[0][1], { accountId: 9, chatId: DIALOG, phone: null, kind: 'file', text: 'прайс' });
+  await s.client.close();
+});
+
+test('sendFile документ: FILE_UPLOAD → uploadFile → ждёт NOTIF_ATTACH {fileId} → attaches FILE; без push — отправка после таймаута ожидания', async () => {
+  const s = await ready({ handlers: { 64: (p) => SENT(p), 87: () => ({ info: [{ url: 'https://fu/upload', fileId: 42, token: 't' }] }) } });
+  s.deps.media.uploadFile = async (url, buf, name) => { s.mediaCalls.push(['uploadFile', url, name, buf.length]); setImmediate(() => s.last().push(136, { fileId: 42 })); };
+  const dir = fs.mkdtempSync(path.join(s.tmp, 'tmp-')); const f = path.join(dir, 'p.pdf'); fs.writeFileSync(f, '%PDF');
+  await s.client.sendFile({ filePath: f, fileName: 'Прайс.pdf', caption: '', type: 'document', maxUserId: PEER });
+  assert.deepEqual(s.mediaCalls[0], ['uploadFile', 'https://fu/upload', 'Прайс.pdf', 4]);
+  assert.deepEqual(s.last().calls.find(c => c[0] === 64)[1].message.attaches, [{ _type: 'FILE', fileId: 42 }]);
+  assert.equal(s.delCalls[0][1].text, 'Прайс.pdf');
+  s.deps.media.uploadFile = async () => {};                       // push 136 не придёт — ждём fileReadyTimeoutMs (20 мс в тестах)
+  const f2 = path.join(fs.mkdtempSync(path.join(s.tmp, 'tmp-')), 'q.pdf'); fs.writeFileSync(f2, '%PDF');   // первый каталог клиент уже удалил вместе с файлом
+  const t0 = Date.now();
+  await s.client.sendFile({ filePath: f2, fileName: 'q.pdf', type: 'document', maxUserId: PEER });
+  assert.ok(Date.now() - t0 >= 15);
+  assert.equal(s.last().calls.filter(c => c[0] === 64).length, 2);
+  await s.client.close();
+});
+
+test('attachment.not.ready → пауза и один повтор MSG_SEND; файл не читается → 422 без доставки и без загрузки', async () => {
+  let tries = 0;
+  const s = await ready({ handlers: { 64: (p) => (++tries === 1 ? Object.assign(new Error('MAX op 64: attachment.not.ready'), { code: 'attachment.not.ready' }) : SENT(p)), 80: () => ({ url: 'u' }) } });
+  const dir = fs.mkdtempSync(path.join(s.tmp, 'tmp-')); const f = path.join(dir, 'a.png'); fs.writeFileSync(f, 'PNG');
+  await s.client.sendFile({ filePath: f, fileName: 'a.png', type: 'image', maxUserId: PEER, mimeType: 'image/png' });
+  assert.equal(tries, 2);
+  assert.deepEqual(s.delCalls.find(c => c[0] === 'setStatusIf').slice(0, 4), ['setStatusIf', 12, 1, [2, 'Отправлено']]);
+  const n = s.delCalls.length;
+  await assert.rejects(s.client.sendFile({ filePath: path.join(dir, 'nope.pdf'), fileName: 'nope.pdf', type: 'document', maxUserId: PEER }), (e) => e.status === 422 && /не прочитан/.test(e.message));
+  assert.equal(s.delCalls.length, n);
+  assert.equal(s.mediaCalls.length, 1);
+  await s.client.close();
+});
