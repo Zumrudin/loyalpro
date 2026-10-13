@@ -15,4 +15,9 @@ module.exports = {
   PUBLIC_FILES_DIR: process.env.GATEWAY_PUBLIC_FILES_DIR || path.join(__dirname, '../frontend/uploads/gateway'),
   PUBLIC_FILES_URL: process.env.GATEWAY_PUBLIC_FILES_URL || '/uploads/gateway',
   TDLIB_VERBOSITY: parseInt(process.env.TDLIB_VERBOSITY || '1', 10),
+  // MAX (веб-протокол). appVersion веб-клиента — единственный «фингерпринт», который
+  // сервер может объявить устаревшим; меняется env без правки кода.
+  MAX_WS_URL: process.env.MAX_WS_URL || 'wss://ws-api.oneme.ru/websocket',
+  MAX_WEB_APP_VERSION: process.env.MAX_WEB_APP_VERSION || '26.5.5',
+  MAX_REQUEST_TIMEOUT_MS: parseInt(process.env.MAX_REQUEST_TIMEOUT_MS || '20000', 10),
 };
