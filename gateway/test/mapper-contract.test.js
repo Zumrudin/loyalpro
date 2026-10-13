@@ -94,3 +94,22 @@ test('wa-mapper: тело разбирается backend chatpush.parseMessageEv
   assert.equal(po.phone, '79001112233');
   assert.equal(po.deliveryId, 'g12');
 });
+
+test('max-mapper: тело разбирается backend chatpush.parseMessageEvent как max incoming/outgoing с номером и chat_id', () => {
+  const mx = require('../lib/max-mapper');
+  const OWNER = 10001, PEER = 11478793;
+  const base = { accountId: 9, ownPhone: '79250177778', ownerId: OWNER, chatId: OWNER ^ PEER, chat: { type: 'DIALOG', participants: { [OWNER]: 1, [PEER]: 1 } }, fileUrl: null };
+  const inc = chatpush.parseMessageEvent(mx.buildWebhookBody({ ...base, message: { id: '117418041090250363', sender: PEER, time: 1791657121000, type: 'USER', text: 'Привет', link: { type: 'REPLY', message: { id: '117418041090250300' } } }, peer: { id: PEER, phone: '79164942855', name: 'Mary' }, deliveryId: null }));
+  assert.equal(inc.channel, 'max'); assert.equal(inc.direction, 'incoming'); assert.equal(inc.customerId, 9);
+  assert.equal(inc.messageId, '117418041090250363'); assert.equal(inc.replyToMessageId, '117418041090250300');
+  assert.equal(inc.phone, '79164942855'); assert.equal(inc.chatId, String(PEER)); assert.equal(inc.chatType, 'person');
+  assert.equal(inc.senderName, 'Mary'); assert.equal(inc.text, 'Привет'); assert.equal(inc.timestamp, 1791657121); assert.equal(inc.deliveryId, null);
+  const out = chatpush.parseMessageEvent(mx.buildWebhookBody({ ...base, message: { id: '2', sender: OWNER, time: 1791657121000, type: 'USER', text: 'ok' }, peer: { id: PEER, phone: '79164942855', name: 'Mary' }, deliveryId: 'g12' }));
+  assert.equal(out.direction, 'outgoing'); assert.equal(out.phone, '79164942855'); assert.equal(out.deliveryId, 'g12'); assert.equal(out.chatId, String(PEER));
+  const hidden = chatpush.parseMessageEvent(mx.buildWebhookBody({ ...base, message: { id: '3', sender: OWNER, time: 1, type: 'USER', text: 'ok' }, peer: { id: PEER, phone: null, name: null }, deliveryId: 'g1' }));
+  assert.equal(hidden.phone, null);
+  const media = chatpush.parseMessageEvent(mx.buildWebhookBody({ ...base, message: { id: '4', sender: PEER, time: 1, type: 'USER', text: 'см', attaches: [{ _type: 'PHOTO', baseUrl: 'u' }] }, peer: { id: PEER }, deliveryId: null, fileUrl: '/uploads/gateway/9/a.webp', content: { type: 'image', text: 'см', media: { kind: 'PHOTO', url: 'u', fileId: null, fileName: null, mimeType: 'image/webp', size: 0 } } }));
+  assert.equal(media.fileUrl, '/uploads/gateway/9/a.webp'); assert.equal(media.mimeType, 'image/webp'); assert.equal(media.type, 'image'); assert.equal(media.text, 'см');
+  const group = chatpush.parseMessageEvent(mx.buildWebhookBody({ ...base, chatId: -72962629261478, chat: { type: 'CHAT', title: 'Админы' }, message: { id: '5', sender: 555, time: 1, type: 'USER', text: 'x' }, peer: { id: 555, phone: '79001112233', name: 'Аня' }, deliveryId: null }));
+  assert.equal(group.chatType, 'group'); assert.equal(group.chatId, '-72962629261478'); assert.equal(group.phone, '79001112233');
+});
