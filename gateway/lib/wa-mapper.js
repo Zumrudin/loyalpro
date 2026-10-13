@@ -67,13 +67,22 @@ function unwrap(message) {
 function contentOf(message) {
   const m = unwrap(message);
   if (!m || typeof m !== 'object') return null;
-  const keys = Object.keys(m).filter(k => !SKIP.has(k));
-  if (m.conversation !== undefined) return { type: 'text', text: String(m.conversation || ''), media: null };
-  if (m.extendedTextMessage) return { type: 'text', text: String(m.extendedTextMessage.text || ''), media: null };
-  const ct = keys.find(k => /Message$/.test(k) && m[k] && typeof m[k] === 'object');
+  // Декодированный proto (protobufjs) держит ВСЕ поля на прототипе со
+  // значением null: `m.conversation !== undefined` истинно у ЛЮБОГО сообщения,
+  // и фото/служебное читались бы пустым текстом. Поэтому — только непустые строки
+  // и только собственные ключи (Object.keys не видит прототип).
+  const strOf = (v) => (typeof v === 'string' ? v : '');
+  const keys = Object.keys(m).filter(k => !SKIP.has(k) && m[k] !== null && m[k] !== undefined);
+  const conv = strOf(m.conversation);
+  if (conv.trim()) return { type: 'text', text: conv, media: null };
+  const ext = m.extendedTextMessage && strOf(m.extendedTextMessage.text);
+  if (ext && ext.trim()) return { type: 'text', text: ext, media: null };
+  // Пустой текст без медиа в чат ничего не несёт — служебное.
+  const ct = keys.find(k => /Message$/.test(k) && k !== 'extendedTextMessage' && typeof m[k] === 'object');
   if (!ct) return null;
   const c = m[ct];
-  const mediaOf = (mime, fileName) => ({ contentType: ct, mimeType: String(mime || '').split(';')[0].trim() || 'application/octet-stream', fileName: fileName || null, size: Number(c.fileLength || 0) });
+  const size = tsOf(c.fileLength) || 0;   // uint64 → Long у декодированного proto
+  const mediaOf = (mime, fileName) => ({ contentType: ct, mimeType: String(mime || '').split(';')[0].trim() || 'application/octet-stream', fileName: fileName || null, size });
   switch (ct) {
     case 'imageMessage':    return { type: 'image', text: String(c.caption || ''), media: mediaOf(c.mimetype || 'image/jpeg') };
     case 'documentMessage': return { type: 'document', text: String(c.caption || ''), media: mediaOf(c.mimetype, c.fileName) };

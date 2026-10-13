@@ -202,7 +202,10 @@ class WhatsappClient {
     this.sock = sock; this.saveCreds = saveCreds;
     const guard = (name, fn) => (...a) => Promise.resolve().then(() => fn.apply(this, a)).catch(e => this.log.error(`${name}: ${e.message}`));
     const on = (ev, fn) => { sock.ev.on(ev, fn); this.handlers.push([sock, ev, fn]); };
-    on('creds.update', () => { Promise.resolve(saveCreds()).catch(e => this.log.error(`saveCreds: ${e.message}`)); });
+    on('creds.update', (update) => {
+      Promise.resolve(saveCreds()).catch(e => this.log.error(`saveCreds: ${e.message}`));
+      if (update && update.me) this.onOwnIdentityUpdate(update.me).catch(e => this.log.warn(`identity: ${e.message}`));
+    });
     on('connection.update', guard('connection.update', this.onConnection));
     on('messages.upsert', guard('messages.upsert', this.onUpsert));
     on('messages.update', guard('messages.update', this.onUpdates));
@@ -227,10 +230,7 @@ class WhatsappClient {
     }
     if (u.connection === 'open') {
       if (this.closed) return;
-      const me = (this.sock && this.sock.user) || {};
-      this.ownLid = mapper.lidOfJid(me.lid) || null;
-      this.ownPhone = mapper.phoneOfJid(me.id) || this.ownPhone;
-      this.displayName = me.name || null;
+      this.refreshIdentity();
       this.qr = null; this.pairingCode = null; this.reconnects = 0; this.qrRounds = 0; this.newLogin = false;
       this.connected = true;          // входящие офлайн-очереди принимаем сразу, не дожидаясь записи в БД
       await this.d.repo.setAuth(this.id, 'ready', { error: null, phone: this.ownPhone, displayName: this.displayName });
@@ -360,8 +360,48 @@ class WhatsappClient {
     }
   }
 
+  // ── Своя личность (номер, LID, имя) ─────────────────────────────
+  // Baileys 6.7.24: при привязке (pair-success, Utils/validate-connection.js
+  // configureSuccessfulPairing) creds.me = {id, name: bizName} — БЕЗ lid, имя у
+  // личного аккаунта пустое (а requestPairingCode ставит заглушку name:'~').
+  // lid приходит на входе: CB:success → creds.update {me:{...me, lid}}, затем
+  // connection 'open' (Socket/socket.js); имя — позже, creds.update по
+  // pushName своего сообщения (Socket/chats.js) или app-state. Сокет сам делает
+  // Object.assign(creds, update), а sock.user — живой геттер на creds.me. Поэтому
+  // личность читаем ЛЕНИВО из сокета в момент проверки и обновляем на каждом
+  // creds.update с me: снимок на 'open' мог быть неполным (живой прогон
+  // 12.10.2026: «готов: 7920… (?)», и сообщения чата с самим собой по нашему
+  // LID ушли в бэкенд как исходящие).
+  liveMe() {
+    const s = this.sock;
+    if (!s) return null;
+    return s.user || (s.authState && s.authState.creds && s.authState.creds.me) || null;
+  }
+
+  refreshIdentity(me = this.liveMe()) {
+    if (!me) return false;
+    const before = `${this.ownPhone}|${this.ownLid}|${this.displayName}`;
+    this.ownPhone = mapper.phoneOfJid(me.id) || this.ownPhone;
+    this.ownLid = mapper.lidOfJid(me.lid) || this.ownLid;
+    // Имя — как есть (у владельца может быть «.»); пусто и заглушка Baileys '~' — неизвестно.
+    const name = typeof me.name === 'string' && me.name.trim() && me.name !== '~' ? me.name : null;
+    if (name) this.displayName = name;
+    return before !== `${this.ownPhone}|${this.ownLid}|${this.displayName}`;
+  }
+
+  async onOwnIdentityUpdate(me) {
+    const merged = { ...(this.liveMe() || {}), ...me };
+    const prevName = this.displayName; const prevPhone = this.ownPhone;
+    if (!this.refreshIdentity(merged)) return;
+    this.log.info(`своя личность: ${this.ownPhone || '?'} lid=${this.ownLid || '?'} (${this.displayName || '?'})`);
+    if (this.authState === 'ready' && (this.displayName !== prevName || this.ownPhone !== prevPhone)) {
+      await this.d.repo.setAuth(this.id, 'ready', { error: null, phone: this.ownPhone, displayName: this.displayName });
+    }
+  }
+
   isSelfChat(jid) {
     if (mapper.isGroupJid(jid)) return false;
+    this.refreshIdentity();
     const p = mapper.phoneOfJid(jid); const l = mapper.lidOfJid(jid);
     return !!((p && p === this.ownPhone) || (l && l === this.ownLid));
   }

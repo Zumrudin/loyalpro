@@ -566,3 +566,48 @@ test('ре-ревью #2: превышение лимита отменяет HTT
   await ticks(6);
   assert.ok(hooks[1].payload.new_message.message.file_data);
 });
+
+// ── Живой прогон 12.10.2026: чат с самим собой по нашему LID ───────
+
+test('личность: lid появился в creds ПОСЛЕ open (sock.user без lid) — чат с собой по LID всё равно не форвардится', async () => {
+  const { wa, sock, hooks } = setup();
+  sock.user = { id: '79200255591:47@s.whatsapp.net' };            // на open ни lid, ни имени
+  await open(wa, sock);
+  sock.user.lid = '117162547122258:47@lid';                        // Object.assign(creds, update) внутри Baileys
+  sock.ev.emit('messages.upsert', { type: 'append', messages: [{ key: { remoteJid: '117162547122258@lid', fromMe: true, id: 'SELF1' }, messageTimestamp: 1_700_000_000, message: { conversation: 'заметка' } }] });
+  await ticks(4);
+  assert.equal(hooks.length, 0);
+});
+
+test('личность: creds.update с me → lid/имя обновлены, имя «.» сохранено в БД; пустое имя и «~» — null', async () => {
+  const { wa, sock, repoCalls, hooks } = setup();
+  sock.user = { id: '79200255591:47@s.whatsapp.net', name: '~' };
+  await open(wa, sock);
+  assert.equal(wa.status().displayName, null);
+  sock.ev.emit('creds.update', { me: { id: '79200255591:47@s.whatsapp.net', lid: '117162547122258:47@lid', name: '.' } });
+  await ticks(3);
+  assert.equal(wa.status().displayName, '.');
+  assert.equal(wa.ownLid, '117162547122258');
+  assert.deepEqual(repoCalls.at(-1), ['setAuth', 42, 'ready', { error: null, phone: '79200255591', displayName: '.' }]);
+  const n = repoCalls.length;
+  sock.ev.emit('creds.update', { me: { id: '79200255591:47@s.whatsapp.net', lid: '117162547122258:47@lid', name: '.' } });
+  await ticks(3);
+  assert.equal(repoCalls.length, n);                               // ничего не поменялось — БД не трогаем
+  sock.ev.emit('messages.upsert', { type: 'notify', messages: [{ key: { remoteJid: '117162547122258@lid', fromMe: true, id: 'S' }, messageTimestamp: 1_700_000_000, message: { conversation: 'x' } }] });
+  await ticks(4);
+  assert.equal(hooks.length, 0);
+});
+
+test('пустой текст без медиа (в т.ч. служебное после привязки) в бэкенд не идёт; медиа без подписи — идёт', async () => {
+  const { wa, sock, hooks } = setup();
+  await open(wa, sock);
+  const jid = '79001112233@s.whatsapp.net';
+  sock.ev.emit('messages.upsert', { type: 'notify', messages: [
+    { key: { remoteJid: jid, fromMe: true, id: 'E1' }, messageTimestamp: 1_700_000_000, message: { conversation: '', messageContextInfo: {} } },
+    { key: { remoteJid: jid, fromMe: false, id: 'E2' }, messageTimestamp: 1_700_000_000, message: { extendedTextMessage: { text: '  ' } } },
+    { key: { remoteJid: jid, fromMe: false, id: 'P' }, messageTimestamp: 1_700_000_000, message: { imageMessage: { mimetype: 'image/jpeg' } } },
+  ] });
+  await ticks(6);
+  assert.equal(hooks.length, 1);
+  assert.equal(hooks[0].payload.new_message.message.type, 'image');
+});

@@ -117,3 +117,26 @@ test('buildWebhookBody: группа — chat_type group, номер участ�
 test('deliveryStatus — форма Chatpush', () => {
   assert.deepEqual(m.deliveryStatus({ id: 3, status_id: 2, description: 'Отправлено', error: null }), { id: 'g3', status: { status_id: 2, description: 'Отправлено' }, error: null });
 });
+
+// Живой прогон 12.10.2026: декодированный proto держит поля на ПРОТОТИПЕ со
+// значением null — `conversation !== undefined` давал пустой «текст» любому сообщению.
+function protoLike(own) {
+  const P = { conversation: null, imageMessage: null, extendedTextMessage: null, protocolMessage: null, messageContextInfo: null };
+  return Object.assign(Object.create(P), own);
+}
+
+test('contentOf: декодированный proto (поля-null на прототипе) — фото не становится пустым текстом', () => {
+  const r = m.contentOf(protoLike({ imageMessage: { mimetype: 'image/jpeg', caption: '', fileLength: { toNumber: () => 1234 } }, messageContextInfo: {} }));
+  assert.equal(r.type, 'image');
+  assert.equal(r.media.size, 1234);
+  assert.equal(m.contentOf(protoLike({ conversation: 'привет' })).text, 'привет');
+});
+
+test('contentOf: пустой/пробельный текст без медиа и служебное proto → null', () => {
+  assert.equal(m.contentOf(protoLike({ protocolMessage: { type: 3 }, messageContextInfo: {} })), null);
+  assert.equal(m.contentOf({ conversation: '', messageContextInfo: { deviceListMetadata: {} } }), null);
+  assert.equal(m.contentOf({ conversation: '   ' }), null);
+  assert.equal(m.contentOf({ extendedTextMessage: {} }), null);
+  assert.equal(m.contentOf({ extendedTextMessage: { text: ' \n' } }), null);
+  assert.equal(m.contentOf({ imageMessage: { mimetype: 'image/jpeg' } }).type, 'image');   // медиа без подписи — остаётся
+});
