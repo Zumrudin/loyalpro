@@ -1,12 +1,22 @@
 'use strict';
-// Настройки → «Мессенджеры»: аккаунты салона и подключение Telegram через свой
-// шлюз (телефон → код → пароль 2FA). Чистые помощники наверху — под node --test.
-// API: GET /api/messaging/accounts, POST /accounts/telegram,
+// Настройки → «Мессенджеры»: аккаунты салона и подключение Telegram, WhatsApp и MAX
+// через свой шлюз (телефон → код → пароль 2FA; QR). Чистые помощники наверху — под node --test.
+// API: GET /api/messaging/accounts, POST /accounts/{telegram|whatsapp|max},
 // POST /accounts/:id/auth {phone|code|password}, GET /accounts/:id/status,
 // POST /accounts/:id/logout, POST /accounts/:id/activate (routes/messaging-accounts.js).
 
 const MSG_ACC_CHANNEL = { whatsapp: 'WhatsApp', tdlib: 'Telegram', telegram: 'Telegram-бот', max: 'MAX', max_bot: 'MAX-бот', notify: 'Notify (ВК/ОК)' };
 const MSG_ACC_AUTH = { starting: 'запускается', wait_phone: 'ждёт номер', wait_code: 'ждёт код', wait_password: 'ждёт пароль', wait_qr: 'ждёт сканирования QR', ready: 'подключён', logged_out: 'отключён', error: 'ошибка' };
+// Кнопки «Подключить … напрямую»: [id кнопки, канал, подпись].
+const MSG_ACC_CONNECT_BUTTONS = [['msg-acc-connect-tg', 'tdlib', 'Telegram'], ['msg-acc-connect-wa', 'whatsapp', 'WhatsApp'], ['msg-acc-connect-max', 'max', 'MAX']];
+function msgAccConnectLabel(channel) { return (MSG_ACC_CONNECT_BUTTONS.find(b => b[1] === channel) || [])[2] || channel; }
+// Путь ручки POST /api/messaging/accounts/<path>.
+function msgAccGatewayPath(channel) { return channel === 'tdlib' ? 'telegram' : channel; }
+// Подпись над QR: где взять сканер в приложении.
+function msgAccQrHint(channel) {
+  if (channel === 'max') return 'Откройте MAX на телефоне клиники → Профиль → Устройства → Подключить устройство и отсканируйте QR:';
+  return 'Откройте WhatsApp на телефоне клиники → Связанные устройства → Привязка устройства и отсканируйте QR:';
+}
 
 function msgAccStateLabel(a) {
   if (a.provider === 'chatpush') return 'Chatpush · ' + (a.status === 'active' ? 'активен' : 'отключён');
@@ -35,17 +45,17 @@ let _msgAccStickyError = null;   // ошибка отправки шага; жи
 let _msgAccLastState = null;
 let _msgAccCurrent = null;   // id подключаемого gateway-аккаунта
 let _msgAccStatus = null;    // status строки (active|pending) — от него зависит, можно ли «Запустить заново»
-let _msgAccChannel = null;   // канал подключаемого аккаунта ('tdlib' | 'whatsapp') — для «Запустить заново»
+let _msgAccChannel = null;   // канал подключаемого аккаунта ('tdlib' | 'whatsapp' | 'max') — для «Запустить заново»
 
-// «Запустить заново»: WhatsApp — просто повторный start (POST идемпотентен, logout не нужен и вреден);
+// «Запустить заново»: WhatsApp и MAX — просто повторный start (POST идемпотентен, logout не нужен и вреден);
 // Telegram — logout+start, и только для pending: у active logout удалит рабочую сессию.
 function msgAccRestartPlan(channel, status) {
-  if (channel === 'whatsapp') return { show: true, logout: false };
+  if (channel === 'whatsapp' || channel === 'max') return { show: true, logout: false };
   if (channel === 'tdlib' && status === 'pending') return { show: true, logout: true };
   return { show: false, logout: false };
 }
 
-// Занят ли шлюз ЭТИМ каналом (кнопки Telegram и WhatsApp независимы).
+// Занят ли шлюз ЭТИМ каналом (кнопки Telegram, WhatsApp и MAX независимы).
 function msgAccGatewayBusy(rows, channel) {
   return rows.some(a => a.provider === 'gateway' && a.channel === channel && (a.status === 'active' || a.status === 'pending'));
 }
@@ -85,7 +95,7 @@ async function loadMessagingAccounts() {
       root.appendChild(row);
     }
     if (!r.accounts.length) root.textContent = 'Аккаунтов нет.';
-    for (const [btnId, channel, label] of [['msg-acc-connect-tg', 'tdlib', 'Telegram'], ['msg-acc-connect-wa', 'whatsapp', 'WhatsApp']]) {
+    for (const [btnId, channel, label] of MSG_ACC_CONNECT_BUTTONS) {
       const connectBtn = document.getElementById(btnId);
       if (!connectBtn) continue;
       const busy = msgAccGatewayBusy(r.accounts, channel);
@@ -100,13 +110,13 @@ async function loadMessagingAccounts() {
 }
 
 async function msgAccConnect(channel) {
-  const label = channel === 'whatsapp' ? 'WhatsApp' : 'Telegram';
+  const label = msgAccConnectLabel(channel);
   if (!confirm(`Подключить ${label} салона к своему шлюзу? Канал переключится с Chatpush, когда вход будет подтверждён. Продолжить?`)) return;
   await msgAccStart(channel);
 }
 async function msgAccStart(channel) {
   try {
-    const r = await api('POST', `/api/messaging/accounts/${channel === 'whatsapp' ? 'whatsapp' : 'telegram'}`);
+    const r = await api('POST', `/api/messaging/accounts/${msgAccGatewayPath(channel)}`);
     _msgAccCurrent = r.id;
     _msgAccChannel = channel;
     _msgAccStatus = r.status;
@@ -119,6 +129,7 @@ async function msgAccStart(channel) {
 }
 function msgAccConnectTelegram() { return msgAccConnect('tdlib'); }
 function msgAccConnectWhatsapp() { return msgAccConnect('whatsapp'); }
+function msgAccConnectMax() { return msgAccConnect('max'); }
 
 // После ошибки (например «QR не отсканирован») — отключить зависший аккаунт и начать заново.
 async function msgAccRestart() {
@@ -145,6 +156,12 @@ function msgAccRenderStep(authState, error, extra) {
   const restart = document.getElementById('msg-acc-restart');
   if (restart) restart.style.display = (authState === 'error' && _msgAccCurrent && msgAccRestartPlan(_msgAccChannel, _msgAccStatus).show) ? '' : 'none';
   if (extra && step === 'qr') {
+    const hint = document.getElementById('msg-acc-qr-hint');
+    if (hint) hint.textContent = msgAccQrHint(_msgAccChannel);
+    const waOnly = document.getElementById('msg-acc-qr-wa-only');
+    if (waOnly) waOnly.style.display = _msgAccChannel === 'whatsapp' ? '' : 'none';
+    const maxOnly = document.getElementById('msg-acc-qr-max-only');
+    if (maxOnly) maxOnly.style.display = _msgAccChannel === 'max' ? '' : 'none';
     // qr === undefined — поле не пришло (ответ /auth), оставляем как есть; null — идёт переподключение.
     const img = document.getElementById('msg-acc-qr-img');
     const wait = document.getElementById('msg-acc-qr-wait');
@@ -161,7 +178,7 @@ function msgAccRenderStep(authState, error, extra) {
 
 async function msgAccSendStep(field) {
   const input = document.getElementById('msg-acc-' + field);
-  const bodyKey = field === 'wa-phone' ? 'phone' : field;
+  const bodyKey = (field === 'wa-phone' || field === 'max-phone') ? 'phone' : field;
   const value = input ? input.value : '';
   if (!value || !_msgAccCurrent) return;
   try {

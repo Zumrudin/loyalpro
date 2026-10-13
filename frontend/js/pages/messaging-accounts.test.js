@@ -61,3 +61,23 @@ test('msgAccRestartPlan: без logout у WhatsApp, Telegram только pendin
   assert.equal(ctx.msgAccRestartPlan('tdlib', 'active').show, false);
   assert.equal(ctx.msgAccRestartPlan('tdlib', null).show, false);
 });
+
+test('msgAccRestartPlan: MAX — как WhatsApp (повторный start без logout)', () => {
+  assert.deepEqual({ ...ctx.msgAccRestartPlan('max', 'pending') }, { show: true, logout: false });
+  assert.deepEqual({ ...ctx.msgAccRestartPlan('max', 'active') }, { show: true, logout: false });
+});
+test('msgAccGatewayPath / msgAccConnectLabel: канал → путь ручки и подпись', () => {
+  assert.equal(ctx.msgAccGatewayPath('tdlib'), 'telegram');
+  assert.equal(ctx.msgAccGatewayPath('whatsapp'), 'whatsapp');
+  assert.equal(ctx.msgAccGatewayPath('max'), 'max');
+  assert.equal(ctx.msgAccConnectLabel('max'), 'MAX');
+  assert.equal(ctx.msgAccConnectLabel('tdlib'), 'Telegram');
+});
+test('msgAccQrHint: подсказка QR зависит от канала', () => {
+  assert.match(ctx.msgAccQrHint('max'), /Устройства/);
+  assert.match(ctx.msgAccQrHint('whatsapp'), /Связанные устройства/);
+});
+test('MSG_ACC_CONNECT_BUTTONS: три кнопки — tdlib, whatsapp, max', () => {
+  // spread: массив из vm-realm имеет чужой Array.prototype, strict deepEqual его отверг бы
+  assert.deepEqual([...vm.runInContext('MSG_ACC_CONNECT_BUTTONS', ctx)].map(b => b[1]), ['tdlib', 'whatsapp', 'max']);
+});

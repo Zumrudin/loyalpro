@@ -2434,7 +2434,8 @@ test('msgAccQrHint: подсказка QR зависит от канала', () 
   assert.match(ctx.msgAccQrHint('whatsapp'), /Связанные устройства/);
 });
 test('MSG_ACC_CONNECT_BUTTONS: три кнопки — tdlib, whatsapp, max', () => {
-  assert.deepEqual(vm.runInContext('MSG_ACC_CONNECT_BUTTONS', ctx).map(b => b[1]), ['tdlib', 'whatsapp', 'max']);
+  // spread: массив из vm-realm имеет чужой Array.prototype, strict deepEqual его отверг бы
+  assert.deepEqual([...vm.runInContext('MSG_ACC_CONNECT_BUTTONS', ctx)].map(b => b[1]), ['tdlib', 'whatsapp', 'max']);
 });
 ```
 

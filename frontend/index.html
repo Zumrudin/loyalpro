@@ -546,11 +546,12 @@
 
         <div class="stg-section" id="stg-messengers">
           <div class="stg-hdr">Мессенджеры</div>
-          <p>Через какие аккаунты салон получает и отправляет сообщения. Telegram и WhatsApp можно подключить напрямую (свой шлюз), остальные каналы пока идут через Chatpush.</p>
+          <p>Через какие аккаунты салон получает и отправляет сообщения. Telegram, WhatsApp и MAX можно подключить напрямую (свой шлюз), остальные каналы пока идут через Chatpush.</p>
           <div id="msg-acc-list">Загрузка…</div>
           <p id="msg-acc-gw-note" style="opacity:.7"></p>
           <button class="btn btn-pri" id="msg-acc-connect-tg" onclick="msgAccConnectTelegram()">Подключить Telegram напрямую</button>
           <button class="btn btn-pri" id="msg-acc-connect-wa" onclick="msgAccConnectWhatsapp()">Подключить WhatsApp напрямую</button>
+          <button class="btn btn-pri" id="msg-acc-connect-max" onclick="msgAccConnectMax()">Подключить MAX напрямую</button>
           <div id="msg-acc-wizard" style="display:none;margin-top:12px">
             <div data-step="wait">Запускаем сессию…</div>
             <div data-step="phone">
@@ -559,7 +560,7 @@
               <button class="btn btn-pri" onclick="msgAccSendStep('phone')">Отправить код</button>
             </div>
             <div data-step="code">
-              <label class="fl" for="msg-acc-code">Код из Telegram (придёт в приложение на телефоне)</label>
+              <label class="fl" for="msg-acc-code">Код подтверждения (придёт в приложение на телефоне или SMS)</label>
               <input id="msg-acc-code" autocomplete="one-time-code" inputmode="numeric" style="max-width:160px">
               <button class="btn btn-pri" onclick="msgAccSendStep('code')">Подтвердить</button>
             </div>
@@ -569,13 +570,20 @@
               <button class="btn btn-pri" onclick="msgAccSendStep('password')">Войти</button>
             </div>
             <div data-step="qr">
-              <p>Откройте WhatsApp на телефоне клиники → <b>Связанные устройства</b> → <b>Привязка устройства</b> и отсканируйте QR:</p>
-              <img id="msg-acc-qr-img" alt="QR для привязки WhatsApp" style="display:none;width:240px;height:240px;border:1px solid #ddd;border-radius:8px">
+              <p id="msg-acc-qr-hint">Откройте приложение на телефоне клиники и отсканируйте QR:</p>
+              <img id="msg-acc-qr-img" alt="QR для привязки устройства" style="display:none;width:240px;height:240px;border:1px solid #ddd;border-radius:8px">
               <p id="msg-acc-qr-wait" style="opacity:.8">Обновляю QR… (идёт переподключение, до минуты)</p>
-              <p style="opacity:.8;margin-top:10px">Нет возможности сканировать? Введите номер WhatsApp клиники — получите код, его вводят на телефоне в «Привязка по номеру телефона».</p>
-              <input id="msg-acc-wa-phone" autocomplete="tel" placeholder="+7 900 000-00-00" style="max-width:280px">
-              <button class="btn btn-sec" onclick="msgAccSendStep('wa-phone')">Получить код привязки</button>
-              <p id="msg-acc-pairing-code" style="font-size:18px;font-weight:600;letter-spacing:2px"></p>
+              <div id="msg-acc-qr-wa-only">
+                <p style="opacity:.8;margin-top:10px">Нет возможности сканировать? Введите номер WhatsApp клиники — получите код, его вводят на телефоне в «Привязка по номеру телефона».</p>
+                <input id="msg-acc-wa-phone" autocomplete="tel" placeholder="+7 900 000-00-00" style="max-width:280px">
+                <button class="btn btn-sec" onclick="msgAccSendStep('wa-phone')">Получить код привязки</button>
+                <p id="msg-acc-pairing-code" style="font-size:18px;font-weight:600;letter-spacing:2px"></p>
+              </div>
+              <div id="msg-acc-qr-max-only" style="display:none">
+                <p style="opacity:.8;margin-top:10px">Если QR недоступен: введите номер MAX клиники — придёт SMS с кодом, затем при необходимости пароль. (Вход по номеру в MAX живьём не проверялся — предпочтителен QR.)</p>
+                <input id="msg-acc-max-phone" autocomplete="tel" placeholder="+7 900 000-00-00" style="max-width:280px">
+                <button class="btn btn-sec" onclick="msgAccSendStep('max-phone')">Отправить код из SMS</button>
+              </div>
             </div>
             <p id="msg-acc-error" style="color:#c33"></p>
             <button class="btn btn-sec" id="msg-acc-restart" style="display:none" onclick="msgAccRestart()">Запустить заново</button>
@@ -2547,7 +2555,7 @@ function fireConfetti() {
 <script src="js/pages/chat-composer.js?v=2026-08-10-mobile"></script>
 <script src="js/pages/agent-settings.js?v=2026-09-20"></script>
 <script src="js/pages/agent-model.js?v=2026-09-27"></script>
-<script src="js/pages/messaging-accounts.js?v=2026-10-12b"></script>
+<script src="js/pages/messaging-accounts.js?v=2026-10-13"></script>
 <script src="js/pages/patient-portfolio.js?v=2026-06-01e"></script>
 <script src="js/pages/staff-dashboard.js?v=2026-06-11d"></script>
 <script src="js/pages/users.js"></script>
