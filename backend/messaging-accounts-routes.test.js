@@ -110,9 +110,29 @@ describe('createGatewayAccount(whatsapp)', () => {
     expect(calls[0][1]).toEqual(['gateway-account:1:whatsapp']);
     expect(gw.start).toHaveBeenCalledWith(43);
   });
+  test('channel=max: pending-строка с display_name «MAX (свой шлюз)», лок gateway-account:1:max', async () => {
+    txn(LOCK, { rows: [] }, { rows: [{ id: 46 }] }, { rowCount: 1 });
+    gw.start.mockResolvedValue({ authState: 'starting' });
+    const r = await createGatewayAccount(1, 'max');
+    expect(r).toEqual({ id: 46, authState: 'starting', status: 'pending' });
+    const calls = mockClient.query.mock.calls;
+    expect(calls[2][0]).toMatch(/'gateway', 'max', 'pending', 'starting', 'MAX \(свой шлюз\)'/);
+    expect(calls[1][1]).toEqual([1, 'max']);
+    expect(calls[0][1]).toEqual(['gateway-account:1:max']);
+    expect(gw.start).toHaveBeenCalledWith(46);
+  });
   test('неизвестный канал → ошибка 400 без запросов', async () => {
-    await expect(createGatewayAccount(1, 'max')).rejects.toMatchObject({ status: 400 });
+    await expect(createGatewayAccount(1, 'max_bot')).rejects.toMatchObject({ status: 400 });
     expect(mockClient.query).not.toHaveBeenCalled();
+  });
+  test('POST /accounts/max заводит gateway-аккаунт канала max', async () => {
+    const route = (method, path) => router.stack.find(l => l.route && l.route.path === path && l.route.methods[method]).route.stack.slice(-1)[0].handle;
+    const res = { status: jest.fn().mockReturnThis(), json: jest.fn() };
+    txn(LOCK, { rows: [] }, { rows: [{ id: 47 }] }, { rowCount: 1 });
+    gw.start.mockResolvedValue({ authState: 'wait_qr' });
+    await route('post', '/accounts/max')({ body: {}, user: { salonId: 1 } }, res);
+    expect(res.json).toHaveBeenCalledWith({ id: 47, authState: 'wait_qr', status: 'pending' });
+    expect(mockClient.query.mock.calls[1][1]).toEqual([1, 'max']);
   });
   test('createTelegramAccount = createGatewayAccount(…, tdlib)', async () => {
     txn(LOCK, { rows: [] }, { rows: [{ id: 44 }] }, { rowCount: 1 });

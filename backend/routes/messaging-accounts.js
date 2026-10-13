@@ -45,9 +45,9 @@ function parseAuthStep(body) {
 
 // Каналы, которые подключаются через свой шлюз. channel/displayName
 // интерполируются в SQL ТОЛЬКО отсюда — пользовательский ввод туда не попадает.
-const GATEWAY_CHANNELS = { tdlib: 'Telegram (свой шлюз)', whatsapp: 'WhatsApp (свой шлюз)' };
+const GATEWAY_CHANNELS = { tdlib: 'Telegram (свой шлюз)', whatsapp: 'WhatsApp (свой шлюз)', max: 'MAX (свой шлюз)' };
 
-// Завести gateway-аккаунт канала (Telegram или WhatsApp) у салона. Строка
+// Завести gateway-аккаунт канала (Telegram, WhatsApp или MAX) у салона. Строка
 // заводится в статусе 'pending': шлюз её поднимает (active|pending), но канал НЕ
 // переключается — Chatpush продолжает обслуживать канал, пока шлюз не дойдёт до
 // ready (promoteIfReady). Иначе канал салона был бы мёртв от клика до принятого
@@ -147,6 +147,12 @@ router.post('/accounts/whatsapp', adminOnly, async (req, res) => {
   if (!config.MESSAGING_GATEWAY.url) return res.status(503).json({ error: 'шлюз мессенджеров не настроен (MESSAGING_GATEWAY_URL)' });
   try { res.json(await createGatewayAccount(req.user.salonId, 'whatsapp')); }
   catch (e) { logger.error(`create whatsapp: ${e.message}`); res.status(e.status || 500).json({ error: e.message }); }
+});
+
+router.post('/accounts/max', adminOnly, async (req, res) => {
+  if (!config.MESSAGING_GATEWAY.url) return res.status(503).json({ error: 'шлюз мессенджеров не настроен (MESSAGING_GATEWAY_URL)' });
+  try { res.json(await createGatewayAccount(req.user.salonId, 'max')); }
+  catch (e) { logger.error(`create max: ${e.message}`); res.status(e.status || 500).json({ error: e.message }); }
 });
 
 router.post('/accounts/:id/auth', adminOnly, async (req, res) => {
