@@ -2,7 +2,7 @@
   "name": "loyalpro-gateway",
   "version": "0.1.0",
   "private": true,
-  "description": "LoyalPro — собственный шлюз мессенджеров (Telegram через TDLib, WhatsApp через Baileys), Chatpush-совместимый API",
+  "description": "LoyalPro — собственный шлюз мессенджеров (Telegram через TDLib, WhatsApp через Baileys, MAX через веб-протокол), Chatpush-совместимый API",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",

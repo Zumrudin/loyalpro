@@ -16,7 +16,7 @@ async function get(id) {
 // (переключается бэкендом по auth_state='ready'): клиент поднимать надо, иначе
 // авторизацию нечем вести. Отправки идут только через 'active' (byToken).
 async function listActive() {
-  return db.any(`SELECT * FROM messenger_accounts WHERE provider='gateway' AND channel IN ('tdlib','whatsapp') AND status IN ('active','pending') ORDER BY id`);
+  return db.any(`SELECT * FROM messenger_accounts WHERE provider='gateway' AND channel IN ('tdlib','whatsapp','max') AND status IN ('active','pending') ORDER BY id`);
 }
 
 async function byToken(token) {
@@ -71,4 +71,7 @@ async function phoneByLid(accountId, lid) {
   return r ? r.phone : null;
 }
 
-module.exports = { get, listActive, byToken, setAuth, contactUserId, rememberContact, rememberContacts, phoneByLid, CONTACTS_BATCH };
+// MAX: user_id = id пользователя MAX (тот же столбец, что LID у WhatsApp).
+const phoneByUserId = phoneByLid;
+
+module.exports = { get, listActive, byToken, setAuth, contactUserId, rememberContact, rememberContacts, phoneByLid, phoneByUserId, CONTACTS_BATCH };

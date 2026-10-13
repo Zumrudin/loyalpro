@@ -1,9 +1,10 @@
 'use strict';
-// Аккаунт → живой TelegramClient. При старте процесса поднимаем все активные.
+// Аккаунт → живой клиент канала (Telegram/WhatsApp/MAX). При старте процесса поднимаем все активные.
 const fs = require('fs');
 const repo = require('./accounts-repo');
 const { TelegramClient } = require('./telegram-client');
 const { WhatsappClient } = require('./whatsapp-client');
+const { MaxClient } = require('./max-client');
 const { createLogger } = require('../logger');
 const logger = createLogger('Registry');
 
@@ -14,6 +15,7 @@ const starting = new Map();   // id → промис запуска: парал�
 function clientClassFor(account) {
   if (account.channel === 'tdlib') return TelegramClient;
   if (account.channel === 'whatsapp') return WhatsappClient;
+  if (account.channel === 'max') return MaxClient;
   throw Object.assign(new Error(`канал ${account.channel} шлюзом не поддерживается`), { status: 422 });
 }
 
@@ -62,10 +64,11 @@ async function logout(id) {
   let c = clients.get(id);
   if (!c) {
     const config = require('../config');
-    // Каталог один (acc-<id>), но признак сессии у каналов свой: db / wa.
+    // Каталог один (acc-<id>), но признак сессии у каналов свой: db / wa / max.
     const tgDirs = TelegramClient.dirsFor(config, id);
     const waDirs = WhatsappClient.dirsFor(config, id);
-    if (fs.existsSync(tgDirs.db) || fs.existsSync(waDirs.wa)) {
+    const maxDirs = MaxClient.dirsFor(config, id);
+    if (fs.existsSync(tgDirs.db) || fs.existsSync(waDirs.wa) || fs.existsSync(maxDirs.max)) {
       c = await start(id);
     } else {
       fs.rmSync(tgDirs.base, { recursive: true, force: true });

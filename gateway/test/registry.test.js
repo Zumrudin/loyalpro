@@ -21,6 +21,9 @@ FakeClient.dirsFor = (cfg, id) => ({ base: path.join(cfg.DATA_DIR, `acc-${id}`),
 FakeWa.dirsFor = (cfg, id) => ({ base: path.join(cfg.DATA_DIR, `acc-${id}`), wa: path.join(cfg.DATA_DIR, `acc-${id}`, 'wa') });
 stub('telegram-client', { TelegramClient: FakeClient });
 stub('whatsapp-client', { WhatsappClient: FakeWa });
+class FakeMax extends FakeClient {}
+FakeMax.dirsFor = (cfg, id) => ({ base: path.join(cfg.DATA_DIR, `acc-${id}`), max: path.join(cfg.DATA_DIR, `acc-${id}`, 'max') });
+stub('max-client', { MaxClient: FakeMax });
 const registry = require('../lib/registry');
 
 test('start: живой клиент тот же; закрытый сам по себе — пересоздаётся', async () => {
@@ -33,8 +36,9 @@ test('start: живой клиент тот же; закрытый сам по �
   assert.equal(registry.get(5), b);
 });
 
-test('clientClassFor: tdlib → Telegram, whatsapp → WhatsApp, прочее → 422', () => {
+test('clientClassFor: tdlib → Telegram, whatsapp → WhatsApp, max → MAX, прочее → 422', () => {
   assert.equal(registry.clientClassFor({ channel: 'tdlib' }), FakeClient);
   assert.equal(registry.clientClassFor({ channel: 'whatsapp' }), FakeWa);
-  assert.throws(() => registry.clientClassFor({ channel: 'max' }), e => e.status === 422);
+  assert.equal(registry.clientClassFor({ channel: 'max' }), FakeMax);
+  assert.throws(() => registry.clientClassFor({ channel: 'max_bot' }), e => e.status === 422);
 });

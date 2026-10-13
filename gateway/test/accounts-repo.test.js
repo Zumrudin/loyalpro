@@ -11,10 +11,15 @@ require.cache[dbPath] = { id: dbPath, filename: dbPath, loaded: true, exports: {
 } } };
 const repo = require('../lib/accounts-repo');
 
-test('listActive: оба канала шлюза, статусы active|pending', async () => {
+test('listActive: все три канала шлюза, статусы active|pending', async () => {
   await repo.listActive();
-  assert.match(calls.at(-1)[0], /channel IN \('tdlib','whatsapp'\)/);
+  assert.match(calls.at(-1)[0], /channel IN \('tdlib','whatsapp','max'\)/);
   assert.match(calls.at(-1)[0], /status IN \('active','pending'\)/);
+});
+test('phoneByUserId — тот же запрос, что phoneByLid (user_id = id пользователя MAX)', async () => {
+  assert.equal(await repo.phoneByUserId(9, '11478793'), '79001112233');
+  assert.match(calls.at(-1)[0], /FROM gateway_contacts WHERE account_id=\$1 AND user_id=\$2/);
+  assert.deepEqual(calls.at(-1)[1], [9, '11478793']);
 });
 test('phoneByLid: ищет в gateway_contacts по account_id и user_id', async () => {
   assert.equal(await repo.phoneByLid(9, '46810865385627'), '79001112233');

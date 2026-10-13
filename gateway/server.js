@@ -1,6 +1,6 @@
 'use strict';
 // ============================================================
-// LoyalPro Gateway — Chatpush-совместимый API поверх TDLib (контракт: план
+// LoyalPro Gateway — Chatpush-совместимый API поверх TDLib / Baileys / веб-протокола MAX (контракт: план
 // docs/superpowers/plans/2026-10-08-telegram-gateway-multitenant.md, раздел
 // «Контракт шлюза»). Публичный API: Bearer = messenger_accounts.token;
 // внутренний (/internal/*): заголовок X-Gateway-Secret. Слушает ТОЛЬКО
@@ -137,8 +137,8 @@ function createApp(deps = {}) {
     try {
       const text = q(req, 'text') || '';
       if (!text.trim()) return res.status(422).json(chatpushError('пустой text'));
-      const id = await req.tg.sendText({ text, phone: q(req, 'phone'), tdlibUserId: q(req, 'tdlib_user_id'), replyToMessageId: q(req, 'reply_to_message_id') });
-      logger.info(`#${req.account.id} delivery g${id} → ${q(req, 'phone') || q(req, 'tdlib_user_id')}: ${text.slice(0, 60)}`);
+      const id = await req.tg.sendText({ text, phone: q(req, 'phone'), tdlibUserId: q(req, 'tdlib_user_id'), maxUserId: q(req, 'max_user_id'), replyToMessageId: q(req, 'reply_to_message_id') });
+      logger.info(`#${req.account.id} delivery g${id} → ${q(req, 'phone') || q(req, 'tdlib_user_id') || q(req, 'max_user_id')}: ${text.slice(0, 60)}`);
       res.json(accepted(id, req.account));
     } catch (e) {
       logger.warn(`#${req.account.id} delivery failed: ${e.message}`);
@@ -162,7 +162,7 @@ function createApp(deps = {}) {
     try {
       if (!tmp) return res.status(422).json(chatpushError('нет файла'));
       const fileName = path.basename(tmp);
-      const id = await req.tg.sendFile({ filePath: tmp, fileName, caption: q(req, 'caption') || '', type: q(req, 'type') || 'document', phone: q(req, 'phone'), tdlibUserId: q(req, 'tdlib_user_id'), mimeType: req.file.mimetype });
+      const id = await req.tg.sendFile({ filePath: tmp, fileName, caption: q(req, 'caption') || '', type: q(req, 'type') || 'document', phone: q(req, 'phone'), tdlibUserId: q(req, 'tdlib_user_id'), maxUserId: q(req, 'max_user_id'), mimeType: req.file.mimetype });
       logger.info(`#${req.account.id} send_file g${id} ${fileName}`);
       res.json(accepted(id, req.account));
       // Файл удалит клиент TDLib по SendSucceeded/SendFailed; таймер — страховка.
@@ -212,7 +212,7 @@ function createApp(deps = {}) {
     const id = idOf(req); if (!id) return res.status(400).json({ error: 'bad id' });
     try {
       const c = d.registry.get(id);
-      // qr/pairingCode есть только у WhatsApp; Telegram получает null.
+      // qr — у WhatsApp и MAX, pairingCode — только у WhatsApp; Telegram получает null.
       if (c) return res.json({ qr: null, pairingCode: null, ...c.status() });
       const row = await d.repo.get(id);
       if (!row) return res.status(404).json({ error: 'not found' });

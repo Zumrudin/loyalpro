@@ -43,7 +43,7 @@ test('POST /api/v1/delivery: без Bearer → 401; с токеном → delive
   const r = await call(app, 'POST', '/api/v1/delivery?text=hi&phone=79001112233&dispatch_routing[]=tdlib&reply_to_message_id=5:1', { headers: { authorization: 'Bearer TOK' } });
   assert.equal(r.status, 200);
   assert.deepEqual(r.json, { meta: { status: 'success' }, delivery: { id: 'g12', channel: 'tdlib', status: { status_id: 1, description: 'Принято' } } });
-  assert.deepEqual(calls[0], { text: 'hi', phone: '79001112233', tdlibUserId: undefined, replyToMessageId: '5:1' });
+  assert.deepEqual(calls[0], { text: 'hi', phone: '79001112233', tdlibUserId: undefined, maxUserId: undefined, replyToMessageId: '5:1' });
 });
 
 test('POST /api/v1/delivery: пустой text → 422; ошибка со status 429 от клиента → 429 с meta.error', async () => {
@@ -207,4 +207,21 @@ test('GET /internal/accounts/:id/status: qr и pairingCode прокидываю�
   const t = await call(createApp(deps({ tg: { status: () => ({ authState: 'ready', phone: '1', displayName: 'x', error: null }) } })), 'GET', '/internal/accounts/7/status', { headers: { 'x-gateway-secret': 'sec' } });
   assert.equal(t.json.qr, null);
   assert.equal(t.json.pairingCode, null);
+});
+
+test('POST /api/v1/delivery и send_file: max_user_id прокидывается в клиент как maxUserId, channel из строки аккаунта', async () => {
+  const calls = [];
+  const maxRepo = { byToken: async (t) => (t === 'TOK' ? { id: 7, channel: 'max' } : null), get: async () => null };
+  const app = createApp(deps({ tg: { sendText: async (a) => { calls.push(a); return 12; } }, deps: { repo: maxRepo } }));
+  const r = await call(app, 'POST', '/api/v1/delivery?text=hi&phone=79001112233&max_user_id=11478793&dispatch_routing[]=max', { headers: { authorization: 'Bearer TOK' } });
+  assert.equal(r.status, 200);
+  assert.equal(r.json.delivery.channel, 'max');
+  assert.equal(calls[0].maxUserId, '11478793'); assert.equal(calls[0].phone, '79001112233');
+  const fcalls = [];
+  const fapp = createApp(deps({ tg: { sendFile: async (a) => { fcalls.push(a); return 13; } }, deps: { repo: maxRepo } }));
+  const { boundary, raw } = multipart('a.pdf', 'application/pdf', '%PDF');
+  const fr = await call(fapp, 'POST', '/api/v1/send_file?file_name=a.pdf&phone=1&max_user_id=5&type=document&dispatch_routing[]=max',
+    { headers: { authorization: 'Bearer TOK', 'content-type': `multipart/form-data; boundary=${boundary}` }, raw });
+  assert.equal(fr.status, 200);
+  assert.equal(fcalls[0].maxUserId, '5');
 });
