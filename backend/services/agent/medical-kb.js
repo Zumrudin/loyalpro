@@ -17,6 +17,7 @@
 // ============================================================
 const { stripAllStamps } = require('./transcript-time');
 const { detectPromptScenarios, SCENARIOS, isPriceQuestion } = require('./prompt-scenarios');
+const serviceFact = require('./service-fact');
 
 function norm(text) {
   return stripAllStamps(String(text)).toLowerCase().replace(/ё/g, 'е');
@@ -84,4 +85,57 @@ function wantsMedicalKb(text) {
   return !isPriceQuestion(s);
 }
 
-module.exports = { detectRedFlag, buildRedFlagReply, wantsMedicalKb };
+
+// ── К каким статьям относится вопрос ─────────────────────────────────────────
+// Стемы и бытовые названия — ОБЩИЕ со справкой об услуге (service-fact.stems);
+// поверх — медицинские стоп-префиксы: «терапия» в вопросе иначе притянула бы
+// все «…терапии» из заголовков, «уход после» — статью-биографию косметолога
+// («опыт, уход за кожей…»), «консультация» — «Консультации и диагностика».
+const MEDICAL_STOP_PREFIXES = [
+  'терап', 'лечен', 'после', 'перед', 'курс', 'интерв', 'эффект', 'резуль', 'врач',
+  'уход', 'опыт', 'консул', 'диагн', 'делат', 'сделал', 'прошл', 'больш', 'месяц',
+  'недел', 'смысл', 'вообщ', 'втор', 'есть',
+];
+// Трёхбуквенный стем («без», «или») совпадает с чем попало внутри заголовка;
+// «губ» — единственный короткий законный (алиас «губы»/«губ»).
+const SHORT_STEMS_OK = new Set(['губ']);
+
+function matchTitles(text, titles) {
+  if (typeof text !== 'string' || !Array.isArray(titles) || !titles.length) return [];
+  const st = serviceFact.stems(text, MEDICAL_STOP_PREFIXES)
+    .filter(s => s.length >= 4 || SHORT_STEMS_OK.has(s));
+  if (!st.length) return [];
+  return titles.filter(t => typeof t === 'string' && t.trim()
+    && st.some(s => serviceFact.norm(t).includes(s)));
+}
+
+const MAX_COMBINED_QUERY = 300;
+
+/**
+ * @param {string[]} userBlocks тексты пациента от ПОСЛЕДНЕГО к ранним (метки
+ *   времени срезаются здесь же — serviceFact.kbQuery)
+ * @param {string[]} titles заголовки опубликованных статей салона
+ * @returns {{query:string, titles:string[]}|null}
+ */
+function buildMedicalQuery(userBlocks, titles) {
+  const blocks = (Array.isArray(userBlocks) ? userBlocks : []).slice(0, 3)
+    .map(b => serviceFact.kbQuery(b)).filter(Boolean);
+  if (!blocks.length) return null;
+  const last = blocks[0];
+  // Запрос из одного сообщения — РОВНО kbQuery, как у справки об услуге:
+  // совпавший запрос оркестратор берёт из уже сделанного поиска.
+  const own = matchTitles(last, titles);
+  if (own.length) return { query: last, titles: own };
+  for (const prev of blocks.slice(1)) {
+    const t = matchTitles(prev, titles);
+    if (!t.length) continue;
+    const room = Math.max(0, MAX_COMBINED_QUERY - last.length - 1);
+    return { query: `${prev.slice(0, room)} ${last}`.trim().slice(-MAX_COMBINED_QUERY), titles: t };
+  }
+  return null;
+}
+
+module.exports = {
+  detectRedFlag, buildRedFlagReply, wantsMedicalKb,
+  matchTitles, buildMedicalQuery, MEDICAL_STOP_PREFIXES,
+};
