@@ -3,11 +3,29 @@
 // handleRecordEvent(salon, payload, nowMs) — зовётся из routes/webhook.js на
 // КАЖДОМ record-событии YClients. Обновляет notification_record_state, по
 // разнице со старым состоянием классифицирует событие и ставит job'ы по
-// совпавшим правилам. Пропуски (нет телефона, ЧС) — строки skipped с причиной:
-// «почему не пришло» разбирается по журналу. Запись, созданную Милой, пропуском
-// НЕ является: «Вы записаны» уходит и по ней (решение владельца 14.10.2026).
-// Режим off → только состояние (нужно, чтобы при включении shadow/live перенос
-// и «пришёл» распознавались сразу, а не с первого события после включения).
+// совпавшим правилам. Пропуски (нет телефона, ЧС, недоступный каталог) — строки
+// skipped с причиной: «почему не пришло» разбирается по журналу. Запись, созданную
+// Милой, пропуском НЕ является: «Вы записаны» уходит и по ней (решение владельца
+// 14.10.2026). Режим off (и любой неизвестный — 'Live', 'on', пусто) → только
+// состояние: нужно, чтобы при включении shadow/live перенос и «пришёл» распознавались
+// сразу, а не с первого события после включения. Режим — строка в БД, и опечатка
+// не должна молча включать боевую отправку: сверка идёт с 'shadow' и 'live' целиком.
+//
+// БЛОКИРОВКА ПО КЛИЕНТУ. YClients отмечает «пришёл» по всем записям визита за
+// миллисекунды; без сериализации два вебхука одного клиента одновременно проходят
+// проверки «опрос/приглашение уже были» (оба видят пусто) и оба ставят строку.
+// Весь handleRecordEvent идёт под pg_advisory_lock на ВЫДЕЛЕННОМ соединении пула (замок
+// сессионный, как в loyalty.withRecordLock). Ключ — (салон, клиент YClients || телефон);
+// пространство отдельное — двухкличевая форма (NOTIFY_LOCK_NS, hashtext(ключ)), а замки
+// кэшбэка однокличевые, пересечься не могут. Ни id, ни телефона — без блокировки.
+// Не удалось ВЗЯТЬ замок — обрабатываем без него (потерянное «Вы записаны» хуже редкого
+// дубля, а ключ job'а дубли тоже режет); не удалось ОТПУСТИТЬ — соединение уничтожается,
+// вместе с ним уходит и замок. Два следствия «замок = соединение пула», от которых защищаемся:
+//  • внешний HTTP (каталог услуг YClients, таймаут 30 с без повторов) выполняется ДО замка, а не под
+//    ним — иначе при лимите YClients вебхуки держали бы соединения по полминуты;
+//  • одновременно под замками не больше LOCK_SLOTS вебхуков: каждому нужно соединение под замок и ещё
+//    одно для запросов, и пачка вебхуков РАЗНЫХ клиентов (массовый перенос записей) без предела заняла бы
+//    все 10 соединений пула замками — работать было бы нечем, встало бы и остальное приложение.
 //
 // ПАРИТЕТ С YCLIENTS/CHATPUSH (классификатор сверен с 8 634 реальными вебхуками и
 // тем, что Chatpush реально отправил). Отступать от этих правил — значит слать
@@ -18,15 +36,26 @@
 //  • record_cancelled шлётся ТОЛЬКО на отметку «клиент не придёт» (attendance -1) до
 //    начала визита. on_no_show = «слать, когда поставили «клиент не придёт» до начала
 //    визита; удаление не уведомляет — как YClients» (у Chatpush 0 писем «отменена» на
-//    58 удалений). Запланированное (pending) гасится при ЛЮБОЙ отмене, письмо или нет.
+//    58 удалений). Запланированное (pending) гасится при ЛЮБОЙ отмене, письмо или нет;
+//    возврат записи (restored) гасит ещё и не ушедшее письмо об отмене («не придёт» и
+//    возврат через 5 с иначе оставляли его в очереди).
 //  • Возврат из отмены (restored) и перенос туда-обратно (A→B→A) возвращают
 //    напоминание: ключ job'а (правило, запись, момент визита) у A уже занят погашенной
 //    строкой, и insertJob её ОЖИВЛЯЕТ (ON CONFLICT … DO UPDATE … WHERE status='cancelled').
 //    Строки в другом статусе (sent/pending/shadow/…) не трогаются — дубля не будет.
 //  • visit_review — не чаще раза в 30 дней на телефон (иначе несколько записей одного
 //    дня дают несколько опросов): повтор ложится строкой skipped с причиной.
+//  • visit_review и visit_after — только про СВЕЖИЙ визит: «пришёл», внесённый задним числом
+//    (прошло больше 12 ч после конца визита), опроса не порождает — на retro-«пришёл» Chatpush
+//    не ответил ни разу.
+//  • first_visit — приглашение в лояльность — ставится при СОЗДАНИИ записи клиенту без прошлых
+//    визитов, а не на «пришёл». Данные: Chatpush шлёт его через секунды после create (85 из 92
+//    за 2 минуты) клиенту без визитов и не шлёт клиентам с визитами (0 из 776). Привязка к
+//    «пришёл» (как было в плане) опаздывала бы на часы и дни и не доходила бы до записавшихся,
+//    которые так и не пришли. Это промо, не транзакционное письмо: ночью (тихие часы) не шлём.
+//    Не чаще раза на телефон: повтор ложится строкой skipped.
 // ============================================================
-const { db } = require('../../db');
+const { db, pool } = require('../../db');
 const { createLogger } = require('../../logger');
 const settingsSvc = require('./settings');
 const ev = require('./events');
@@ -36,7 +65,20 @@ const salonNames = require('../../utils/salon-names');
 
 const log = createLogger('NotifyEnroll');
 
+// Опрос и рекомендации — не позже этого срока после КОНЦА визита (начало + длительность).
+const AFTER_VISIT_MAX_AGE_MS = 12 * 3600 * 1000;
+// Первый ключ двухкличевого advisory lock ('NOTF'). Не salon_id (agent/booking.js берёт пару
+// (salon_id, хэш диалога)) и не ключ миграции вердиктов (1280266064).
+const NOTIFY_LOCK_NS = 1313821766;
+// Предел одновременных обработчиков под замком (3 замка + до 3 рабочих соединений из 10 в пуле).
+const LOCK_SLOTS = 3;
+let slotsBusy = 0;
+const slotQueue = [];
+
+const STALE_VISIT_REASON = 'визит завершился более 12 ч назад (внесён задним числом)';
 const REVIEW_REPEAT_REASON = 'опрос уже был за 30 дней';
+const INVITE_REPEAT_REASON = 'приглашение уже отправлялось';
+const CATALOG_REASON = 'каталог услуг YClients недоступен';
 
 async function loadState(salonId, recordId) {
   const row = await db.oneOrNone(
@@ -71,7 +113,8 @@ async function cancelPending(salonId, recordId, reason, onlyTypes = null) {
  * Один job на (правило, запись, момент визита). Повтор вебхука — тот же ключ: если строка в
  * работе или уже обработана, ничего не меняется; если она ПОГАШЕНА (перенос, отмена «не придёт»
  * и возврат), её оживляем свежими значениями — иначе перенос A→B→A оставил бы визит A без
- * напоминания (ключ A занят погашенной строкой). Аренду, каскад и счётчики попыток сбрасываем.
+ * напоминания (ключ A занят погашенной строкой). Сбрасываем аренду, каскад, счётчики попыток и
+ * следы отправки/сверки: оживший job не должен выглядеть отправленным или уже сверенным.
  * Порядок параметров — контракт с тестами и backfillReminders (Task 11).
  */
 async function insertJob(salonId, rule, snap, client, scheduledMs, text, extra = {}) {
@@ -84,6 +127,7 @@ async function insertJob(salonId, rule, snap, client, scheduledMs, text, extra =
         meta=EXCLUDED.meta, decision_reason=EXCLUDED.decision_reason, phone=EXCLUDED.phone,
         rule_title=EXCLUDED.rule_title, client_id=EXCLUDED.client_id, attachment_url=EXCLUDED.attachment_url,
         attempts=0, error=NULL, last_attempt_at=NULL, routing=NULL, cascade_pos=0, cascade_log='[]'::jsonb,
+        sent_at=NULL, channel_used=NULL, delivery_id=NULL, account_id=NULL, check_at=NULL, confirmed_at=NULL,
         created_at=NOW()
      WHERE notification_jobs.status='cancelled'`,
     [salonId, rule.id, rule.trigger_type, rule.title, snap.recordId,
@@ -96,18 +140,19 @@ async function insertJob(salonId, rule, snap, client, scheduledMs, text, extra =
 }
 
 /**
- * Сколько состоявшихся визитов клиента начались не позже этого. Саму запись исключаем по id, а
- * сравнение «не позже» (<=) нужно для записей на ОДИН момент к разным мастерам: пока для первой
- * ставится приглашение, вторая видит первую как прошлый визит и второго приглашения не получает.
- * 'completed' — тоже состоявшийся (status_id 4), как в refreshLastVisitAt.
+ * Сколько состоявшихся визитов у клиента YClients (arrived/completed — 'completed' это status_id 4,
+ * как в refreshLastVisitAt), не считая самой записи. Клиент берётся из вебхука, а не из нашей
+ * таблицы clients: у новичка строки там может ещё не быть, а у постоянного — не хватать из-за сбоя
+ * синка, и по clients.id приглашение ушло бы не тому. Индекс — idx_records_salon_yc_client.
+ * Нет id клиента → истории не узнать, считаем 0 (повтор ограничит «раз на телефон»).
  */
-async function priorArrivedVisits(salonId, clientId, recordId, beforeMs) {
-  if (!clientId) return 0;
+async function pastVisitsCount(salonId, clientYcId, recordId) {
+  if (clientYcId == null) return 0;
   const row = await db.oneOrNone(
     `SELECT count(*)::int AS n FROM records
-      WHERE salon_id = $1 AND client_id = $2 AND status IN ('arrived','completed')
-        AND yclients_record_id <> $3 AND visit_datetime <= $4`,
-    [salonId, clientId, recordId, new Date(beforeMs)]);
+      WHERE salon_id = $1 AND yclients_client_id = $2 AND status IN ('arrived','completed')
+        AND yclients_record_id <> $3`,
+    [salonId, clientYcId, recordId]);
   return row ? Number(row.n) : 0;
 }
 
@@ -123,71 +168,221 @@ async function recentReviewExists(salonId, phone) {
   return !!row;
 }
 
+/** Приглашали ли этот телефон в программу лояльности (в работе, отправлено или теневое) — без срока давности. */
+async function inviteAlreadySent(salonId, phone) {
+  const row = await db.oneOrNone(
+    `SELECT 1 AS hit FROM notification_jobs
+      WHERE salon_id = $1 AND phone = $2 AND trigger_type = 'first_visit'
+        AND status IN ('pending','sent','shadow')
+      LIMIT 1`,
+    [salonId, phone]);
+  return !!row;
+}
+
 // 0 — законное значение (валидация правила 0..1440), поэтому `|| 5` нельзя: он превращал 0 в 5.
 const delayOf = (rule, dflt) => (rule.delay_minutes == null ? dflt : rule.delay_minutes);
 
-async function handleRecordEvent(salon, payload, nowMs = Date.now()) {
+// ── условия правила при возможно недоступном каталоге услуг ──
+// Категорий в вебхуке нет, их даёт каталог YClients (rules.getServiceCategoryMap). При сбое он отдаёт ПУСТУЮ
+// карту (и не кэширует её), и «категория не совпала» становится неотличимой от «каталога нет». Поэтому
+// правило оценивается дважды: как есть (категория без каталога — ложь) и с обезвреженными категориями
+// (ids: [] не ограничивает). Истина в первом — правило подходит при любом каталоге; ложь во втором — не
+// подходит при любом; между ними исход зависит от каталога, и это skipped с причиной, а не молчание.
+const YES = 'yes';
+const NO = 'no';
+const NEEDS_CATALOG = 'catalog';
+const hasCategoryCondition = (c) => !!c && Array.isArray(c.items)
+  && c.items.some((it) => it && it.type === 'category' && Array.isArray(it.ids) && it.ids.length > 0);
+const neutralizeCategories = (c) => ({ ...c, items: c.items.map((it) => (it && it.type === 'category' ? { ...it, ids: [] } : it)) });
+
+async function takeSlot() {
+  if (slotsBusy < LOCK_SLOTS) { slotsBusy += 1; return; }
+  await new Promise((resolve) => slotQueue.push(resolve));   // место передаётся ожидающему целиком (slotsBusy не меняется)
+}
+function freeSlot() {
+  const next = slotQueue.shift();
+  if (next) next(); else slotsBusy -= 1;
+}
+
+/**
+ * Каталог услуг YClients для оценки условий по категориям: { map, down }. Запрашивается ДО замка. Пустая
+ * карта — сбой (rules.getServiceCategoryMap при ошибке YClients отдаёт пустую и не кэширует её), а не
+ * «категорий нет»; бросок трактуется так же. У записи без услуг искать нечего — каталог не нужен.
+ */
+async function loadCatalog(salon, snap) {
+  if (!snap.services.length) return { map: new Map(), down: false };
+  try {
+    const map = await getServiceCategoryMap(salon);
+    if (map instanceof Map && map.size > 0) return { map, down: false };
+  } catch (e) { log.warn(`каталог услуг: ${e.message}`); }
+  return { map: new Map(), down: true };
+}
+
+/**
+ * Выполняет fn под сессионным advisory lock клиента. who === null → без блокировки.
+ * Замок держит ВЫДЕЛЕННОЕ соединение: через db.query (пул) он отпустился бы вместе с соединением
+ * ещё до начала работы.
+ */
+async function withClientLock(salonId, who, fn) {
+  if (!who) return fn();
+  await takeSlot();
+  try {
+    return await lockedRun(salonId, who, fn);
+  } finally {
+    freeSlot();
+  }
+}
+
+async function lockedRun(salonId, who, fn) {
+  const args = [NOTIFY_LOCK_NS, `${salonId}:${who}`];
+  let lockClient = null;
+  let held = false;
+  let destroy = false;
+  try {
+    try {
+      lockClient = await pool.connect();
+      await lockClient.query('SELECT pg_advisory_lock($1, hashtext($2))', args);
+      held = true;
+    } catch (e) {
+      destroy = true;     // состояние соединения неизвестно (запрос на замок мог остаться висеть на сервере)
+      log.warn(`блокировка клиента ${args[1]} не взята (${e.message}) — обрабатываем без неё`);
+    }
+    try {
+      return await fn();
+    } finally {
+      if (held) {
+        try {
+          await lockClient.query('SELECT pg_advisory_unlock($1, hashtext($2))', args);
+        } catch (e) {
+          destroy = true; // замок сессионный: закрытие соединения снимает его на стороне сервера
+          log.warn(`блокировка клиента ${args[1]} не отпущена (${e.message}) — соединение закрываем`);
+        }
+      }
+    }
+  } finally {
+    if (lockClient) lockClient.release(destroy ? new Error('advisory lock cleanup failed') : undefined);
+  }
+}
+
+async function handleRecordEvent(salon, payload, nowMs) {
   const snap = ev.recordSnapshot(payload);
   if (!Number.isInteger(snap.recordId)) return;
+  const who = snap.clientYcId != null ? `c${snap.clientYcId}` : (snap.phone ? `p${snap.phone}` : null);
+  const catalog = await loadCatalog(salon, snap);   // внешний HTTP — до замка, см. шапку
+  // «Сейчас» берём уже ПОД замком: ожидание очереди могло занять время.
+  return withClientLock(salon.id, who, () => enrollEvent(salon, snap, Number.isFinite(nowMs) ? nowMs : Date.now(), catalog));
+}
+
+async function enrollEvent(salon, snap, now, catalog) {
   const salonId = salon.id;
   const prev = await loadState(salonId, snap.recordId);
   const kinds = ev.classifyRecordEvent(prev, snap);
   await saveState(salonId, snap);
 
   const cfg = await settingsSvc.getSettings(salonId);
-  if (cfg.mode === 'off') return;
+  if (cfg.mode !== 'shadow' && cfg.mode !== 'live') return;
 
   // Отмена/перенос гасят запланированное ВСЕГДА, даже без правил на эти события и даже когда
-  // письма об отмене не будет (удаление записи).
+  // письма об отмене не будет (удаление записи). При переносе гасится только напоминание: приглашение
+  // новому клиенту привязано к созданию записи, а не ко времени визита.
   if (kinds.cancelled) await cancelPending(salonId, snap.recordId, 'запись отменена');
-  if (kinds.rescheduled) await cancelPending(salonId, snap.recordId, 'запись перенесена', ['visit_reminder', 'first_visit']);
+  if (kinds.rescheduled) await cancelPending(salonId, snap.recordId, 'запись перенесена', ['visit_reminder']);
+  if (kinds.restored) await cancelPending(salonId, snap.recordId, 'запись восстановлена', ['record_cancelled']);
 
   const rules = await db.any(
     'SELECT * FROM notification_rules WHERE salon_id = $1 AND is_enabled = TRUE', [salonId]);
   if (!rules.length) return;
 
-  const catMap = await getServiceCategoryMap(salon).catch(() => new Map());
+  const catalogDown = catalog.down;
   const serviceIds = snap.services.map((s) => s.id);
   const ctx = { staffId: snap.staffId, serviceIds,
-    categoryIds: [...new Set(serviceIds.map((id) => catMap.get(String(id))).filter(Boolean))] };
-  const matches = (r) => { try { return evaluateRule(r.conditions, ctx); } catch (e) { log.warn(`rule #${r.id}: ${e.message}`); return false; } };
+    categoryIds: [...new Set(serviceIds.map((id) => catalog.map.get(String(id))).filter(Boolean))] };
+  const judge = (rule) => {
+    try {
+      if (evaluateRule(rule.conditions, ctx)) return YES;
+      if (catalogDown && hasCategoryCondition(rule.conditions) && evaluateRule(neutralizeCategories(rule.conditions), ctx)) return NEEDS_CATALOG;
+      return NO;
+    } catch (e) { log.warn(`rule #${rule.id}: ${e.message}`); return NO; }
+  };
 
   const client = snap.clientYcId ? await db.oneOrNone(
     'SELECT id, name, is_blacklisted FROM clients WHERE salon_id = $1 AND yclients_client_id = $2', [salonId, snap.clientYcId]) : null;
   const renderCtx = buildRenderCtx(snap, salon, client, { nameDictionary: await salonNames.load(salonId).catch(() => null) });
 
   // Мгновенные письма — только про будущий визит (паритет с Chatpush, см. шапку).
-  const visitAhead = snap.visitAt != null && snap.visitAt > nowMs;
+  const visitAhead = snap.visitAt != null && snap.visitAt > now;
+  // Опрос и рекомендации — только про свежий визит. Момент визита не разобран → свежесть не проверить,
+  // ставим как раньше.
+  const visitEnd = snap.visitAt != null ? snap.visitAt + snap.seanceLength * 1000 : null;
+  const visitStale = visitEnd != null && now - visitEnd > AFTER_VISIT_MAX_AGE_MS;
   const baseSkipReason = !snap.phone ? 'нет телефона клиента'
     : (client && client.is_blacklisted ? 'клиент в чёрном списке' : null);
-  const put = async (rule, atMs, { meta, reason } = {}) => {
-    const skip = baseSkipReason || reason || null;
+
+  /**
+   * Ставит job по правилу. when — момент отправки (мс) или функция (вызывается ПОСЛЕ проверки условий,
+   * null → ставить нечего). gate — тихий отсев без строки (false → строки нет вовсе). reason — ленивая
+   * причина skipped, спрашивается только если строка ещё не помечена пропуском: дешёвое раньше дорогого
+   * (запрос в БД) — чёрный список, каталог, затем специфика типа.
+   */
+  const fire = async (rule, when, { gate, reason } = {}) => {
+    const verdict = judge(rule);
+    if (verdict === NO) return;
+    const atMs = typeof when === 'function' ? when() : when;
+    if (atMs == null) return;
+    if (gate && !(await gate())) return;
+    const skip = baseSkipReason || (verdict === NEEDS_CATALOG ? CATALOG_REASON : null) || (reason ? await reason() : null);
     const text = renderTemplate(rule.message_template, renderCtx);
-    return insertJob(salonId, rule, snap, client, atMs, text, skip ? { status: 'skipped', reason: skip } : { meta });
+    await insertJob(salonId, rule, snap, client, atMs, text, skip ? { status: 'skipped', reason: skip } : {});
   };
 
   const applyRule = async (rule) => {
-    const t = rule.trigger_type;
-    if (t === 'record_created' && kinds.created && visitAhead && matches(rule)) await put(rule, nowMs);
-    if (t === 'record_rescheduled' && kinds.rescheduled && visitAhead && matches(rule)) await put(rule, nowMs);
-    // Удаление записи не уведомляет: noShow = отметка «не придёт» БЕЗ удаления (events.classifyRecordEvent).
-    if (t === 'record_cancelled' && kinds.noShow && visitAhead && rule.on_no_show !== false && matches(rule)) await put(rule, nowMs);
-
-    if (t === 'visit_reminder' && (kinds.created || kinds.rescheduled || kinds.restored) && matches(rule)) {
-      const at = ev.reminderAt(snap, rule, cfg, nowMs);
-      if (at != null) await put(rule, at); else log.info(`reminder rule=${rule.id} record=${snap.recordId}: момент уже прошёл — не ставим`);
-    }
-    if (t === 'visit_review' && kinds.arrived && matches(rule)) {
-      const repeat = !baseSkipReason && await recentReviewExists(salonId, snap.phone);
-      await put(rule, ev.applyQuietHours(ev.afterVisitAt(snap, delayOf(rule, 5), nowMs), cfg),
-        { reason: repeat ? REVIEW_REPEAT_REASON : null });
-    }
-    if (t === 'visit_after' && kinds.arrived && matches(rule)) {
-      await put(rule, ev.applyQuietHours(ev.afterVisitAt(snap, delayOf(rule, 7), nowMs), cfg));
-    }
-    if (t === 'first_visit' && kinds.arrived && matches(rule)) {
-      const prior = await priorArrivedVisits(salonId, client && client.id, snap.recordId, snap.visitAt != null ? snap.visitAt : nowMs);
-      if (prior === 0) await put(rule, nowMs); else log.info(`first_visit rule=${rule.id} record=${snap.recordId}: уже был ${prior} визит(ов) — пропуск`);
+    switch (rule.trigger_type) {
+      case 'record_created':
+        if (kinds.created && visitAhead) await fire(rule, now);
+        break;
+      case 'record_rescheduled':
+        if (kinds.rescheduled && visitAhead) await fire(rule, now);
+        break;
+      case 'record_cancelled':
+        // Удаление записи не уведомляет: noShow = отметка «не придёт» БЕЗ удаления (events.classifyRecordEvent).
+        if (kinds.noShow && visitAhead && rule.on_no_show !== false) await fire(rule, now);
+        break;
+      case 'visit_reminder':
+        if (!(kinds.created || kinds.rescheduled || kinds.restored)) break;
+        await fire(rule, () => {
+          const at = ev.reminderAt(snap, rule, cfg, now);
+          if (at == null) log.info(`reminder rule=${rule.id} record=${snap.recordId}: момент уже прошёл — не ставим`);
+          return at;
+        });
+        break;
+      case 'visit_review':
+        if (!kinds.arrived) break;
+        await fire(rule, () => ev.applyQuietHours(ev.afterVisitAt(snap, delayOf(rule, 5), now), cfg), {
+          reason: async () => {
+            if (visitStale) return STALE_VISIT_REASON;
+            return (await recentReviewExists(salonId, snap.phone)) ? REVIEW_REPEAT_REASON : null;
+          },
+        });
+        break;
+      case 'visit_after':
+        if (!kinds.arrived) break;
+        await fire(rule, () => ev.applyQuietHours(ev.afterVisitAt(snap, delayOf(rule, 7), now), cfg), {
+          reason: async () => (visitStale ? STALE_VISIT_REASON : null),
+        });
+        break;
+      case 'first_visit':
+        if (!(kinds.created && visitAhead)) break;
+        await fire(rule, () => ev.applyQuietHours(now, cfg), {
+          gate: async () => {
+            const n = await pastVisitsCount(salonId, snap.clientYcId, snap.recordId);
+            if (n > 0) log.info(`first_visit rule=${rule.id} record=${snap.recordId}: у клиента уже ${n} визит(ов) — приглашения нет`);
+            return n === 0;
+          },
+          reason: async () => ((await inviteAlreadySent(salonId, snap.phone)) ? INVITE_REPEAT_REASON : null),
+        });
+        break;
+      default:
+        break;
     }
   };
 
@@ -202,4 +397,4 @@ async function handleRecordEvent(salon, payload, nowMs = Date.now()) {
   }
 }
 
-module.exports = { handleRecordEvent, cancelPending, _loadState: loadState };
+module.exports = { handleRecordEvent, cancelPending, AFTER_VISIT_MAX_AGE_MS, NOTIFY_LOCK_NS, LOCK_SLOTS, _loadState: loadState };

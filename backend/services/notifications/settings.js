@@ -4,9 +4,11 @@
 const { db } = require('../../db');
 const { CASCADE_CHANNELS } = require('./cascade');
 
+// Заморожено ГЛУБОКО: Object.freeze неглубокий, и незамороженный массив default_channels отдавался бы всем
+// салонам одной ссылкой — push/sort/reverse у одного вызывающего портил бы дефолт остальным.
 const DEFAULTS = Object.freeze({
   mode: 'off',
-  default_channels: ['tdlib', 'whatsapp', 'max'],
+  default_channels: Object.freeze(['tdlib', 'whatsapp', 'max']),
   prefer_last_channel: true,
   quiet_from: '21:00',
   quiet_to: '09:00',
@@ -20,11 +22,21 @@ const MODES = ['off', 'shadow', 'live'];
 const TTL_MS = 30 * 1000;
 const cache = new Map();
 
+/**
+ * Дефолты + строка салона. У каждого салона СВОЯ замороженная копия порядка каскада: ни ссылка на
+ * DEFAULTS, ни массив из строки БД наружу не уходят. Битое значение (не массив) → дефолтный порядок.
+ */
+function build(salonId, row) {
+  const merged = { ...DEFAULTS, ...(row || {}), salon_id: salonId };
+  merged.default_channels = Object.freeze([...(Array.isArray(merged.default_channels) ? merged.default_channels : DEFAULTS.default_channels)]);
+  return Object.freeze(merged);
+}
+
 async function getSettings(salonId) {
   const hit = cache.get(salonId);
   if (hit && Date.now() - hit.at < TTL_MS) return hit.value;
   const row = await db.oneOrNone('SELECT * FROM notification_settings WHERE salon_id = $1', [salonId]);
-  const value = Object.freeze({ ...DEFAULTS, ...(row || {}), salon_id: salonId });
+  const value = build(salonId, row);
   cache.set(salonId, { at: Date.now(), value });
   return value;
 }

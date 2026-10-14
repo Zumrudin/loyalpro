@@ -37,6 +37,54 @@ describe('getSettings', () => {
     const s = await settings.getSettings(1);
     expect(() => { 'use strict'; s.mode = 'live'; }).toThrow();
   });
+
+  // Object.freeze неглубокий: без заморозки массива default_channels из DEFAULTS отдавался бы ВСЕМ салонам
+  // одной и той же ссылкой, и push/sort/reverse у одного вызывающего портил бы дефолт всем остальным.
+  describe('дефолты нельзя испортить мутацией выдачи', () => {
+    const DEFAULT_ORDER = ['tdlib', 'whatsapp', 'max'];
+    test('DEFAULTS заморожены глубоко', () => {
+      expect(Object.isFrozen(settings.DEFAULTS)).toBe(true);
+      expect(Object.isFrozen(settings.DEFAULTS.default_channels)).toBe(true);
+      expect(settings.DEFAULTS.default_channels).toEqual(DEFAULT_ORDER);
+    });
+    test('мутация default_channels у одного салона не меняет дефолт и других салонов', async () => {
+      const a = await settings.getSettings(1);
+      for (const mutate of [(arr) => arr.push('sms'), (arr) => arr.reverse(), (arr) => arr.sort(), (arr) => arr.splice(0, 1), (arr) => { arr[0] = 'x'; }]) {
+        try { mutate(a.default_channels); } catch (_) { /* заморожено: бросает TypeError — тоже защита */ }
+      }
+      const b = await settings.getSettings(2);
+      expect(b.default_channels).toEqual(DEFAULT_ORDER);
+      expect(a.default_channels).toEqual(DEFAULT_ORDER);
+      expect(settings.DEFAULTS.default_channels).toEqual(DEFAULT_ORDER);
+    });
+    test('у каждого салона своя копия массива, а не ссылка на DEFAULTS', async () => {
+      const a = await settings.getSettings(1);
+      const b = await settings.getSettings(2);
+      expect(a.default_channels).not.toBe(settings.DEFAULTS.default_channels);
+      expect(a.default_channels).not.toBe(b.default_channels);
+      expect(Object.isFrozen(a.default_channels)).toBe(true);
+    });
+    test('массив из строки БД копируется: правка исходного row не доходит до кэша', async () => {
+      const fromDb = ['max', 'tdlib'];
+      db.oneOrNone.mockResolvedValue({ salon_id: 1, default_channels: fromDb });
+      const s = await settings.getSettings(1);
+      fromDb.push('whatsapp');
+      expect(s.default_channels).toEqual(['max', 'tdlib']);
+      expect(Object.isFrozen(s.default_channels)).toBe(true);
+    });
+    test('битый default_channels в БД (не массив) → дефолтный порядок, а не падение каскада', async () => {
+      for (const junk of [null, 'tdlib', { 0: 'max' }, 7]) {
+        settings.invalidate();
+        db.oneOrNone.mockResolvedValue({ salon_id: 1, default_channels: junk });
+        expect((await settings.getSettings(1)).default_channels).toEqual(DEFAULT_ORDER);
+      }
+    });
+    test('updateSettings без default_channels сохраняет текущий порядок (замороженный массив не мешает)', async () => {
+      db.oneOrNone.mockResolvedValue({ salon_id: 1, default_channels: ['max', 'tdlib'] });
+      await settings.updateSettings(1, { mode: 'shadow' });
+      expect(JSON.parse(written()[2])).toEqual(['max', 'tdlib']);
+    });
+  });
 });
 
 describe('updateSettings', () => {

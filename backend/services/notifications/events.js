@@ -76,13 +76,20 @@ function recordSnapshot(payload) {
  * Перенос записи, которая остаётся отменённой, переносом не считается (isCancelledNow).
  * restored — запись вернули из отмены (снята отметка «не придёт» или запись снова живая):
  * напоминания, погашенные отменой, надо поставить заново. Оба вида могут выпасть вместе.
+ *
+ * created НЕ требует отсутствия prev: update может прийти раньше create (в реальных вебхуках
+ * 3 записи из 1 363, на 14–411 мс позже), и к приходу create состояние уже сохранено — с условием
+ * «нет prev» письмо «Вы записаны» терялось бы. Дубль create тоже даст created; повтор режет
+ * уникальный ключ job-а (правило, запись, момент визита), а не классификатор.
+ * create никогда не бывает переносом: время в нём отличается от уже известного только когда
+ * сообщения пришли не по порядку, и «перенесена на <старое время>» вдобавок к «Вы записаны» — ложь.
  */
 function classifyRecordEvent(prev, snap) {
   const wasCancelled = !!(prev && (prev.deleted || Number(prev.attendance) === -1));
   const isCancelledNow = snap.deleted || snap.attendance === -1;
   const cancelled = isCancelledNow && !wasCancelled;
-  const created = !prev && snap.status === 'create' && !isCancelledNow;
-  const rescheduled = !!prev && !isCancelledNow
+  const created = snap.status === 'create' && !isCancelledNow;
+  const rescheduled = !!prev && snap.status !== 'create' && !isCancelledNow
     && prev.visitAt != null && snap.visitAt != null && prev.visitAt !== snap.visitAt;
   const restored = !!prev && wasCancelled && !isCancelledNow;
   const arrived = !snap.deleted && snap.attendance === 1 && !(prev && Number(prev.attendance) === 1);

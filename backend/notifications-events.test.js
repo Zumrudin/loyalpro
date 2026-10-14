@@ -92,6 +92,32 @@ describe('classifyRecordEvent', () => {
     const upd = ev.recordSnapshot({ ...base, status: 'update' });
     expect(ev.classifyRecordEvent(null, upd).created).toBe(false);
   });
+
+  // update может прийти РАНЬШЕ create (в реальных вебхуках 3 записи из 1 363, на 14–411 мс): тогда к
+  // приходу create состояние уже сохранено, и «нет prev» как условие created потеряло бы «Вы записаны».
+  describe('create при уже известном состоянии записи', () => {
+    const upd = (over) => ev.recordSnapshot({ ...base, status: 'update', data: { ...base.data, ...over } });
+    test('update опередил create → created (письмо «Вы записаны» не теряется)', () => {
+      const early = upd({});
+      expect(ev.classifyRecordEvent(early, snap)).toMatchObject({ created: true, rescheduled: false, cancelled: false, restored: false });
+    });
+    test('дубль create тоже created — повтор режет уникальный ключ job-а, а не классификатор', () => {
+      expect(ev.classifyRecordEvent(snap, snap).created).toBe(true);
+    });
+    test('create по записи, которая уже отменена (create несёт отмену) → не created', () => {
+      const cancelled = ev.recordSnapshot({ ...base, status: 'create', data: { ...base.data, attendance: -1 } });
+      expect(ev.classifyRecordEvent(upd({}), cancelled).created).toBe(false);
+      const deleted = ev.recordSnapshot({ ...base, status: 'create', data: { ...base.data, deleted: true } });
+      expect(ev.classifyRecordEvent(upd({}), deleted).created).toBe(false);
+    });
+    test('create никогда не означает перенос: время в create отличается от известного → rescheduled=false', () => {
+      const early = upd({ datetime: '2026-10-21T10:00:00+03:00' });
+      expect(ev.classifyRecordEvent(early, snap)).toMatchObject({ created: true, rescheduled: false });
+    });
+    test('не create (update) при известном состоянии по-прежнему не created', () => {
+      expect(ev.classifyRecordEvent(snap, upd({})).created).toBe(false);
+    });
+  });
   test('смена datetime → rescheduled', () => {
     const moved = ev.recordSnapshot({ ...base, status: 'update', data: { ...base.data, datetime: '2026-10-21T10:00:00+03:00' } });
     expect(ev.classifyRecordEvent(snap, moved)).toMatchObject({ rescheduled: true, created: false });
