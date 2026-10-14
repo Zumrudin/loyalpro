@@ -30,6 +30,21 @@ describe('renderTemplate', () => {
     expect(renderTemplate('Привет, {first_name}!', {})).toBe('Привет, !');
     expect(renderTemplate('Привет, {date}{end_time}{record_link}{rating_links}!')).toBe('Привет, !');
   });
+
+  // String.replace трактует в СТРОКЕ-заменителе $&, $1, $$, $`, $' как спецпоследовательности
+  // («$&» вставило бы сам плейсхолдер, «$$» схлопнулось бы в «$»), а значения приходят
+  // извне: имя из карточки, название услуги из YClients, ссылки. Подставлять надо дословно.
+  test('значения с $&, $1, $$, $`, $\' подставляются дословно', () => {
+    const tricky = {
+      name: 'Иванова $$ Анна Петровна', date: '20.10.2026', time: '13:30', end_time: '14:30',
+      services: 'Пилинг $$ и маска $1', staff: "Т$'ана $`", salon: 'PERI $& CLINIC',
+      record_link: 'https://x/?a=$1&b=$&', rating_links: 'Яндекс https://ya.cc/$$1',
+    };
+    const out = renderTemplate('{name}|{services}|{staff}|{salon}|{record_link}|{rating_links}', tricky);
+    expect(out).toBe([tricky.name, tricky.services, tricky.staff, tricky.salon, tricky.record_link, tricky.rating_links].join('|'));
+    // отдельно: «$&» в ссылке не должно вернуть в текст сам плейсхолдер
+    expect(renderTemplate('{record_link}', { record_link: 'https://x/?a=$1&b=$&' })).toBe('https://x/?a=$1&b=$&');
+  });
 });
 
 describe('buildRenderCtx', () => {

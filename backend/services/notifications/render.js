@@ -32,17 +32,21 @@ function renderTemplate(text, ctx) {
   // «Вихарева, добрый вечер!». Имя не опознано → подстановка пустая, а осиротевшая
   // запятая в начале строки убирается ниже (иначе «, добрый день!»).
   const firstName = resolveGivenName(c.name, { dictionary: c.nameDictionary }) || '';
+  // Значения подставляются ФУНКЦИЯМИ-заменителями, а не строками: строка-заменитель в
+  // String.replace трактует $&, $1, $$, $`, $' как спецпоследовательности («$&» вставило бы
+  // сам плейсхолдер, «$$» схлопнулось бы в «$», «$'» затянуло бы кусок соседнего текста), а
+  // значения приходят извне — имя из карточки, название услуги, ссылки. Функция отдаёт дословно.
   return String(text)
-    .replace(/\{name\}/g,         c.name || '')
-    .replace(/\{first_name\}/g,   firstName)
-    .replace(/\{date\}/g,         c.date || '')
-    .replace(/\{time\}/g,         c.time || '')
-    .replace(/\{end_time\}/g,     c.end_time || '')
-    .replace(/\{services\}/g,     c.services || '')
-    .replace(/\{staff\}/g,        c.staff || '')
-    .replace(/\{salon\}/g,        c.salon || '')
-    .replace(/\{record_link\}/g,  c.record_link || '')
-    .replace(/\{rating_links\}/g, c.rating_links || '')
+    .replace(/\{name\}/g,         () => c.name || '')
+    .replace(/\{first_name\}/g,   () => firstName)
+    .replace(/\{date\}/g,         () => c.date || '')
+    .replace(/\{time\}/g,         () => c.time || '')
+    .replace(/\{end_time\}/g,     () => c.end_time || '')
+    .replace(/\{services\}/g,     () => c.services || '')
+    .replace(/\{staff\}/g,        () => c.staff || '')
+    .replace(/\{salon\}/g,        () => c.salon || '')
+    .replace(/\{record_link\}/g,  () => c.record_link || '')
+    .replace(/\{rating_links\}/g, () => c.rating_links || '')
     // «{first_name}, добрый день!» без имени → «Добрый день!», а не «, добрый день!».
     .replace(/^[ \t]*,\s*(\p{L})/gmu, (_, ch) => ch.toUpperCase());
 }
