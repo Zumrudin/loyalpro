@@ -57,6 +57,44 @@ describe('detectRedFlag — только при контексте процед�
   });
 });
 
+describe('detectRedFlag — порядок слов и словоформы (правки ревью)', () => {
+  test.each([
+    ['опухли губы и горло', 'breathing'],
+    ['отекли губы и горло', 'breathing'],
+    ['опухли губы и язык', 'breathing'],
+    ['распухло горло', 'breathing'],
+    ['язык распух', 'breathing'],
+    ['отёк гортани', 'breathing'],
+    ['отечность горла', 'breathing'],
+    ['отёчность языка', 'breathing'],
+    ['дышать тяжело', 'breathing'],
+    ['Дышать трудно', 'breathing'],
+    ['пятно побелело после укола', 'skin_blanching'],
+    ['губа побелела и синяк', 'skin_blanching'],
+    ['Зрение стало хуже', 'vision'],
+    ['размытое зрение', 'vision'],
+    ['после филлера плохо вижу', 'vision'],
+    ['не вижу левым глазом', 'vision'],
+    ['стала хуже видеть', 'vision'],
+    ['потемнело в глазах после укола', 'vision'],
+    ['после ботокса 38.5', 'fever'],
+    ['у меня 39 после укола', 'fever'],
+    ['Температура под 39 после укола', 'fever'],
+    ['т 38 после филлера', 'fever'],
+    ['вчера был ботокс, сегодня температура 39', 'fever'],
+    ['Ботокс вчера, сейчас 39 и озноб', 'fever'],
+  ])('«%s» → %s', (text, kind) => {
+    expect(mk.detectRedFlag(text)).toEqual({ kind });
+  });
+
+  test.each([
+    'после процедуры 38 минут ждать?',
+    'не видела ваше сообщение',
+  ])('«%s» → нет', (text) => {
+    expect(mk.detectRedFlag(text)).toBeNull();
+  });
+});
+
 describe('buildRedFlagReply', () => {
   test.each([false, true])('adminOff=%s: объявляет перевод (диспетчер не дошлёт вторую фразу)', (adminOff) => {
     expect(mk.buildRedFlagReply({ adminOff })).toMatch(HANDOVER_ANNOUNCED_RE);
@@ -117,6 +155,14 @@ describe('matchTitles', () => {
 
   test('медицинские стоп-слова не притягивают заголовки («терапия», «уход после», «консультация»)', () => {
     expect(mk.matchTitles('какая терапия после консультации и уход после', PROD_TITLES)).toEqual([]);
+  });
+
+  test('«фото» целым словом не притягивает фотоомоложение', () => {
+    expect(mk.matchTitles('Вот фото, опухло', PROD_TITLES)).toEqual([]);
+    expect(mk.matchTitles('отправлю фото, опухло после ботокса', PROD_TITLES))
+      .toEqual(PROD_TITLES.filter(t => /Ботулинотерап/.test(t)));
+    expect(mk.matchTitles('скинула фотку и фотографию', PROD_TITLES)).toEqual([]);
+    expect(mk.matchTitles('хочу фотоомоложение', PROD_TITLES)).toEqual(['LUMECCA — IPL фотоомоложение (InMode)']);
   });
 
   test('процедура не названа → []', () => {
