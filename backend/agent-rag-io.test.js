@@ -222,3 +222,36 @@ test('границы фрагментов сохраняют порядок по
   const limited = await rag.buildKnowledgeContext(1, 'чистка', { budget: content[0].trim().length + 2 });
   expect(limited.fragments).toHaveLength(1);
 });
+
+describe('listArticleTitles', () => {
+  beforeEach(() => rag._resetTitlesCache());
+
+  test('опубликованные и не внутренние — тот же WHERE, что у поиска', async () => {
+    db.any.mockResolvedValueOnce([{ title: ' Ботулинотерапия ' }, { title: '' }, { title: 'Биоревитализация и Мезотерапия' }]);
+    const titles = await rag.listArticleTitles(1);
+    expect(titles).toEqual(['Ботулинотерапия', 'Биоревитализация и Мезотерапия']);
+    const [sql, params] = db.any.mock.calls[0];
+    expect(sql).toMatch(/is_published\s*=\s*true/);
+    expect(sql).toMatch(/internal_only\s*=\s*false/);
+    expect(sql).toMatch(/salon_id\s*=\s*\$1/);
+    expect(params).toEqual([1]);
+  });
+
+  test('кэш 60 с на салон', async () => {
+    db.any.mockResolvedValue([{ title: 'A' }]);
+    await rag.listArticleTitles(1, { nowMs: 1000 });
+    await rag.listArticleTitles(1, { nowMs: 50000 });
+    expect(db.any).toHaveBeenCalledTimes(1);
+    await rag.listArticleTitles(2, { nowMs: 50000 });
+    expect(db.any).toHaveBeenCalledTimes(2);
+    await rag.listArticleTitles(1, { nowMs: 62000 });
+    expect(db.any).toHaveBeenCalledTimes(3);
+  });
+
+  test('сбой БД бросает наружу (fail-open делает оркестратор) и не кэшируется', async () => {
+    db.any.mockRejectedValueOnce(new Error('db down'));
+    await expect(rag.listArticleTitles(1)).rejects.toThrow('db down');
+    db.any.mockResolvedValueOnce([{ title: 'A' }]);
+    await expect(rag.listArticleTitles(1)).resolves.toEqual(['A']);
+  });
+});
