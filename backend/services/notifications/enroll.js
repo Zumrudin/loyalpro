@@ -10,22 +10,39 @@
 // состояние: нужно, чтобы при включении shadow/live перенос и «пришёл» распознавались
 // сразу, а не с первого события после включения. Режим — строка в БД, и опечатка
 // не должна молча включать боевую отправку: сверка идёт с 'shadow' и 'live' целиком.
+// В режиме off не читаются даже правила, а каталог услуг YClients не запрашивается вовсе
+// (внешний HTTP под общим лимитом YClients, сбой не кэшируется): он нужен только в shadow/live
+// и только если среди включённых правил есть условие по категории и у записи есть услуги.
+// Настройки (кэш 30 с) и правила читаются ДО замка — по ним решается, нужен ли каталог.
+//
+// ПОЗДНИЙ create. create при уже известном состоянии записи — это либо update, опередивший
+// create (3 записи из 1 363, на 14–411 мс), либо поздний дубль, и его снимок несёт данные момента
+// создания. Состояние по нему НЕ перезаписывается, а из видов события остаётся только created
+// (events.isLateCreate): «Вы записаны» и напоминание ставятся (дубли режет ключ job'а), а то, что
+// случилось с записью после создания — отмена, перенос, приход, — остаётся в состоянии, и воркер,
+// сверяющийся именно с ним, гасит устаревшие job'ы. Иначе дубль возвращал бы из отмены, гасил
+// неушедшее письмо об отмене и откатывал состояние на «живая» — а воркеру сверяться стало бы не с чем.
 //
 // БЛОКИРОВКА ПО КЛИЕНТУ. YClients отмечает «пришёл» по всем записям визита за
 // миллисекунды; без сериализации два вебхука одного клиента одновременно проходят
 // проверки «опрос/приглашение уже были» (оба видят пусто) и оба ставят строку.
-// Весь handleRecordEvent идёт под pg_advisory_lock на ВЫДЕЛЕННОМ соединении пула (замок
+// Работа с записью идёт под pg_advisory_lock на ВЫДЕЛЕННОМ соединении пула (замок
 // сессионный, как в loyalty.withRecordLock). Ключ — (салон, клиент YClients || телефон);
 // пространство отдельное — двухкличевая форма (NOTIFY_LOCK_NS, hashtext(ключ)), а замки
 // кэшбэка однокличевые, пересечься не могут. Ни id, ни телефона — без блокировки.
 // Не удалось ВЗЯТЬ замок — обрабатываем без него (потерянное «Вы записаны» хуже редкого
 // дубля, а ключ job'а дубли тоже режет); не удалось ОТПУСТИТЬ — соединение уничтожается,
-// вместе с ним уходит и замок. Два следствия «замок = соединение пула», от которых защищаемся:
+// вместе с ним уходит и замок. «Замок = соединение пула» даёт три следствия, от которых защищаемся:
 //  • внешний HTTP (каталог услуг YClients, таймаут 30 с без повторов) выполняется ДО замка, а не под
 //    ним — иначе при лимите YClients вебхуки держали бы соединения по полминуты;
 //  • одновременно под замками не больше LOCK_SLOTS вебхуков: каждому нужно соединение под замок и ещё
 //    одно для запросов, и пачка вебхуков РАЗНЫХ клиентов (массовый перенос записей) без предела заняла бы
-//    все 10 соединений пула замками — работать было бы нечем, встало бы и остальное приложение.
+//    все 10 соединений пула замками — работать было бы нечем, встало бы и остальное приложение. Ожидание
+//    места не дольше SLOT_WAIT_MS (30 с), дальше — обработка без замка и WARN;
+//  • ожидающий замка вебхук держит соединение, а держатель может застрять: перед pg_advisory_lock на
+//    выделенном соединении выставляется SET lock_timeout = '15s' (на advisory lock он распространяется),
+//    после взятия замка — RESET (соединение вернётся в общий пул). Тайм-аут (55P03) → обработка без
+//    замка и WARN, соединение отдаётся пулу сразу, до работы.
 //
 // ПАРИТЕТ С YCLIENTS/CHATPUSH (классификатор сверен с 8 634 реальными вебхуками и
 // тем, что Chatpush реально отправил). Отступать от этих правил — значит слать
@@ -74,6 +91,11 @@ const NOTIFY_LOCK_NS = 1313821766;
 const LOCK_SLOTS = 3;
 let slotsBusy = 0;
 const slotQueue = [];
+// Сколько ждать места под замок; не дождались — работаем без замка (WARN).
+const SLOT_WAIT_MS = 30 * 1000;
+// Сколько ждать сам замок на выделенном соединении (SET lock_timeout); не дождались — работаем без замка (WARN).
+const LOCK_TIMEOUT_MS = 15 * 1000;
+const LOCK_NOT_AVAILABLE = '55P03';   // SQLSTATE lock_not_available — «canceling statement due to lock timeout»
 
 const STALE_VISIT_REASON = 'визит завершился более 12 ч назад (внесён задним числом)';
 const REVIEW_REPEAT_REASON = 'опрос уже был за 30 дней';
@@ -195,22 +217,38 @@ const hasCategoryCondition = (c) => !!c && Array.isArray(c.items)
   && c.items.some((it) => it && it.type === 'category' && Array.isArray(it.ids) && it.ids.length > 0);
 const neutralizeCategories = (c) => ({ ...c, items: c.items.map((it) => (it && it.type === 'category' ? { ...it, ids: [] } : it)) });
 
-async function takeSlot() {
-  if (slotsBusy < LOCK_SLOTS) { slotsBusy += 1; return; }
-  await new Promise((resolve) => slotQueue.push(resolve));   // место передаётся ожидающему целиком (slotsBusy не меняется)
+// Ожидание места под замок: true — место получено (его надо вернуть freeSlot), false — не дождались за SLOT_WAIT_MS
+// и в очереди не остались (место ушедшему не передаётся, учёт мест не страдает).
+function takeSlot() {
+  if (slotsBusy < LOCK_SLOTS) { slotsBusy += 1; return Promise.resolve(true); }
+  return new Promise((resolve) => {
+    const waiter = {};
+    waiter.grant = () => { clearTimeout(waiter.timer); resolve(true); };   // место передаётся целиком (slotsBusy не меняется)
+    waiter.timer = setTimeout(() => {
+      const i = slotQueue.indexOf(waiter);
+      if (i !== -1) slotQueue.splice(i, 1);
+      resolve(false);
+    }, SLOT_WAIT_MS);
+    if (typeof waiter.timer.unref === 'function') waiter.timer.unref();
+    slotQueue.push(waiter);
+  });
 }
 function freeSlot() {
   const next = slotQueue.shift();
-  if (next) next(); else slotsBusy -= 1;
+  if (next) next.grant(); else slotsBusy -= 1;
 }
 
+// Настройки и правила нужны ДО замка, поэтому «режим включён» проверяется в двух местах одним предикатом.
+const isActiveMode = (cfg) => !!cfg && (cfg.mode === 'shadow' || cfg.mode === 'live');
+
 /**
- * Каталог услуг YClients для оценки условий по категориям: { map, down }. Запрашивается ДО замка. Пустая
- * карта — сбой (rules.getServiceCategoryMap при ошибке YClients отдаёт пустую и не кэширует её), а не
- * «категорий нет»; бросок трактуется так же. У записи без услуг искать нечего — каталог не нужен.
+ * Каталог услуг YClients для оценки условий по категориям: { map, down }. Запрашивается ДО замка и только
+ * по нужде: среди включённых правил есть условие по категории И у записи есть услуги (в режиме off правила
+ * не читаются вовсе, и каталога нет). Пустая карта — сбой (rules.getServiceCategoryMap при ошибке YClients
+ * отдаёт пустую и не кэширует её), а не «категорий нет»; бросок трактуется так же.
  */
-async function loadCatalog(salon, snap) {
-  if (!snap.services.length) return { map: new Map(), down: false };
+async function loadCatalog(salon, snap, rules) {
+  if (!snap.services.length || !rules.some((r) => hasCategoryCondition(r.conditions))) return { map: new Map(), down: false };
   try {
     const map = await getServiceCategoryMap(salon);
     if (map instanceof Map && map.size > 0) return { map, down: false };
@@ -221,11 +259,14 @@ async function loadCatalog(salon, snap) {
 /**
  * Выполняет fn под сессионным advisory lock клиента. who === null → без блокировки.
  * Замок держит ВЫДЕЛЕННОЕ соединение: через db.query (пул) он отпустился бы вместе с соединением
- * ещё до начала работы.
+ * ещё до начала работы. Места под замок и сам замок ждём ограниченно, не дождались — fn без замка.
  */
 async function withClientLock(salonId, who, fn) {
   if (!who) return fn();
-  await takeSlot();
+  if (!(await takeSlot())) {
+    log.warn(`блокировка клиента ${salonId}:${who}: нет места под замок за ${SLOT_WAIT_MS / 1000} с — обрабатываем без неё`);
+    return fn();
+  }
   try {
     return await lockedRun(salonId, who, fn);
   } finally {
@@ -239,48 +280,72 @@ async function lockedRun(salonId, who, fn) {
   let held = false;
   let destroy = false;
   try {
-    try {
-      lockClient = await pool.connect();
-      await lockClient.query('SELECT pg_advisory_lock($1, hashtext($2))', args);
-      held = true;
-    } catch (e) {
+    lockClient = await pool.connect();
+    // Ожидание замка ограничено на самом выделенном соединении: застрявший держатель не должен держать пул
+    // (ожидающий вебхук занимает соединение). lock_timeout распространяется и на advisory lock.
+    await lockClient.query(`SET lock_timeout = '${LOCK_TIMEOUT_MS / 1000}s'`);
+    await lockClient.query('SELECT pg_advisory_lock($1, hashtext($2))', args);
+    held = true;
+  } catch (e) {
+    if (e && e.code === LOCK_NOT_AVAILABLE) {
+      log.warn(`блокировка клиента ${args[1]} не получена за ${LOCK_TIMEOUT_MS / 1000} с — обрабатываем без неё`);
+    } else {
       destroy = true;     // состояние соединения неизвестно (запрос на замок мог остаться висеть на сервере)
-      log.warn(`блокировка клиента ${args[1]} не взята (${e.message}) — обрабатываем без неё`);
+      log.warn(`блокировка клиента ${args[1]} не взята (${e && e.message}) — обрабатываем без неё`);
     }
+  }
+  if (lockClient) {
+    // Сброс — ВСЕГДА, и при успехе, и при тайм-ауте: соединение вернётся в общий пул, и чужие запросы
+    // не должны унаследовать наш лимит. Не удалось сбросить — соединение выбрасываем.
     try {
-      return await fn();
-    } finally {
-      if (held) {
-        try {
-          await lockClient.query('SELECT pg_advisory_unlock($1, hashtext($2))', args);
-        } catch (e) {
-          destroy = true; // замок сессионный: закрытие соединения снимает его на стороне сервера
-          log.warn(`блокировка клиента ${args[1]} не отпущена (${e.message}) — соединение закрываем`);
-        }
-      }
+      await lockClient.query('RESET lock_timeout');
+    } catch (e) {
+      destroy = true;
+      log.warn(`сброс lock_timeout не удался (${e && e.message}) — соединение закрываем`);
     }
+  }
+  if (!held) {
+    // Замка нет — соединение ни к чему: отдаём пулу ДО работы, обработке оно нужнее держателя-неудачника.
+    if (lockClient) lockClient.release(destroy ? new Error('advisory lock failed') : undefined);
+    return fn();
+  }
+  try {
+    return await fn();
   } finally {
-    if (lockClient) lockClient.release(destroy ? new Error('advisory lock cleanup failed') : undefined);
+    try {
+      await lockClient.query('SELECT pg_advisory_unlock($1, hashtext($2))', args);
+    } catch (e) {
+      destroy = true; // замок сессионный: закрытие соединения снимает его на стороне сервера
+      log.warn(`блокировка клиента ${args[1]} не отпущена (${e && e.message}) — соединение закрываем`);
+    }
+    lockClient.release(destroy ? new Error('advisory lock cleanup failed') : undefined);
   }
 }
 
 async function handleRecordEvent(salon, payload, nowMs) {
   const snap = ev.recordSnapshot(payload);
   if (!Number.isInteger(snap.recordId)) return;
+  const salonId = salon.id;
   const who = snap.clientYcId != null ? `c${snap.clientYcId}` : (snap.phone ? `p${snap.phone}` : null);
-  const catalog = await loadCatalog(salon, snap);   // внешний HTTP — до замка, см. шапку
+  // ДО замка: настройки (кэш 30 с), правила и каталог услуг — внешний HTTP не должен держать соединение пула,
+  // а в режиме off не нужны ни правила, ни каталог.
+  const cfg = await settingsSvc.getSettings(salonId);
+  const rules = isActiveMode(cfg)
+    ? await db.any('SELECT * FROM notification_rules WHERE salon_id = $1 AND is_enabled = TRUE', [salonId])
+    : [];
+  const catalog = await loadCatalog(salon, snap, rules);
   // «Сейчас» берём уже ПОД замком: ожидание очереди могло занять время.
-  return withClientLock(salon.id, who, () => enrollEvent(salon, snap, Number.isFinite(nowMs) ? nowMs : Date.now(), catalog));
+  return withClientLock(salonId, who, () => enrollEvent(salon, snap, Number.isFinite(nowMs) ? nowMs : Date.now(), { cfg, rules, catalog }));
 }
 
-async function enrollEvent(salon, snap, now, catalog) {
+async function enrollEvent(salon, snap, now, { cfg, rules, catalog }) {
   const salonId = salon.id;
   const prev = await loadState(salonId, snap.recordId);
   const kinds = ev.classifyRecordEvent(prev, snap);
-  await saveState(salonId, snap);
+  // Поздний create (состояние уже есть) несёт старые данные — состояние по нему не перезаписываем.
+  if (!ev.isLateCreate(prev, snap)) await saveState(salonId, snap);
 
-  const cfg = await settingsSvc.getSettings(salonId);
-  if (cfg.mode !== 'shadow' && cfg.mode !== 'live') return;
+  if (!isActiveMode(cfg)) return;
 
   // Отмена/перенос гасят запланированное ВСЕГДА, даже без правил на эти события и даже когда
   // письма об отмене не будет (удаление записи). При переносе гасится только напоминание: приглашение
@@ -289,8 +354,6 @@ async function enrollEvent(salon, snap, now, catalog) {
   if (kinds.rescheduled) await cancelPending(salonId, snap.recordId, 'запись перенесена', ['visit_reminder']);
   if (kinds.restored) await cancelPending(salonId, snap.recordId, 'запись восстановлена', ['record_cancelled']);
 
-  const rules = await db.any(
-    'SELECT * FROM notification_rules WHERE salon_id = $1 AND is_enabled = TRUE', [salonId]);
   if (!rules.length) return;
 
   const catalogDown = catalog.down;
@@ -397,4 +460,7 @@ async function enrollEvent(salon, snap, now, catalog) {
   }
 }
 
-module.exports = { handleRecordEvent, cancelPending, AFTER_VISIT_MAX_AGE_MS, NOTIFY_LOCK_NS, LOCK_SLOTS, _loadState: loadState };
+module.exports = {
+  handleRecordEvent, cancelPending, _loadState: loadState,
+  AFTER_VISIT_MAX_AGE_MS, NOTIFY_LOCK_NS, LOCK_SLOTS, SLOT_WAIT_MS, LOCK_TIMEOUT_MS,
+};

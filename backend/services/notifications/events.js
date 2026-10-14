@@ -67,6 +67,19 @@ function recordSnapshot(payload) {
 }
 
 /**
+ * create при уже известном состоянии записи (prev есть) — либо update, опередивший create (в реальных
+ * вебхуках 3 записи из 1 363, на 14–411 мс), либо поздний дубль. Снимок такого create несёт данные МОМЕНТА
+ * СОЗДАНИЯ, а не нынешние, поэтому по нему классификатор отдаёт один вид — created («запись создана»), а
+ * enroll не перезаписывает по нему состояние: иначе дубль «возвращал» бы из отмены (restored), «переносил»
+ * на старое время (rescheduled), «отменял» (cancelled), «отмечал приход» (arrived/confirmed) по давно
+ * устаревшему снимку и откатывал состояние на «живая, на старом времени» — а воркер, сверяющийся именно с
+ * состоянием, ничего бы уже не поймал.
+ */
+function isLateCreate(prev, snap) {
+  return !!prev && snap.status === 'create';
+}
+
+/**
  * prev — прошлое состояние (строка notification_record_state, приведённая к
  * полям снимка: visitAt, attendance, deleted) или null.
  *
@@ -77,19 +90,21 @@ function recordSnapshot(payload) {
  * restored — запись вернули из отмены (снята отметка «не придёт» или запись снова живая):
  * напоминания, погашенные отменой, надо поставить заново. Оба вида могут выпасть вместе.
  *
- * created НЕ требует отсутствия prev: update может прийти раньше create (в реальных вебхуках
- * 3 записи из 1 363, на 14–411 мс позже), и к приходу create состояние уже сохранено — с условием
- * «нет prev» письмо «Вы записаны» терялось бы. Дубль create тоже даст created; повтор режет
- * уникальный ключ job-а (правило, запись, момент визита), а не классификатор.
- * create никогда не бывает переносом: время в нём отличается от уже известного только когда
- * сообщения пришли не по порядку, и «перенесена на <старое время>» вдобавок к «Вы записаны» — ложь.
+ * created НЕ требует отсутствия prev: update может прийти раньше create, и к приходу create состояние
+ * уже сохранено — с условием «нет prev» письмо «Вы записаны» терялось бы. Дубль create тоже даст
+ * created; повтор режет уникальный ключ job-а (правило, запись, момент визита), а не классификатор.
+ * Поздний create (isLateCreate) других видов не порождает вовсе — create никогда не бывает переносом,
+ * возвратом, отменой или приходом.
  */
 function classifyRecordEvent(prev, snap) {
   const wasCancelled = !!(prev && (prev.deleted || Number(prev.attendance) === -1));
   const isCancelledNow = snap.deleted || snap.attendance === -1;
-  const cancelled = isCancelledNow && !wasCancelled;
   const created = snap.status === 'create' && !isCancelledNow;
-  const rescheduled = !!prev && snap.status !== 'create' && !isCancelledNow
+  if (isLateCreate(prev, snap)) {
+    return { created, rescheduled: false, restored: false, cancelled: false, noShow: false, arrived: false, confirmed: false };
+  }
+  const cancelled = isCancelledNow && !wasCancelled;
+  const rescheduled = !!prev && !isCancelledNow
     && prev.visitAt != null && snap.visitAt != null && prev.visitAt !== snap.visitAt;
   const restored = !!prev && wasCancelled && !isCancelledNow;
   const arrived = !snap.deleted && snap.attendance === 1 && !(prev && Number(prev.attendance) === 1);
@@ -147,4 +162,4 @@ function afterVisitAt(snap, delayMinutes, nowMs) {
   return Math.max(end, nowMs) + delayMs;
 }
 
-module.exports = { parseVisitAt, recordSnapshot, classifyRecordEvent, applyQuietHours, reminderAt, afterVisitAt, MSK_OFFSET_MS };
+module.exports = { parseVisitAt, recordSnapshot, classifyRecordEvent, isLateCreate, applyQuietHours, reminderAt, afterVisitAt, MSK_OFFSET_MS };

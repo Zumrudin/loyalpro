@@ -1,6 +1,7 @@
 'use strict';
+const mockLog = { info: jest.fn(), warn: jest.fn(), error: jest.fn() };
 jest.mock('./db', () => ({ db: { any: jest.fn(), oneOrNone: jest.fn(), query: jest.fn() }, pool: { connect: jest.fn() } }));
-jest.mock('./logger', () => ({ createLogger: () => ({ info: jest.fn(), warn: jest.fn(), error: jest.fn() }) }));
+jest.mock('./logger', () => ({ createLogger: () => mockLog }));
 jest.mock('./services/notifications/settings', () => ({ getSettings: jest.fn() }));
 jest.mock('./services/notifications/rules', () => ({
   ...jest.requireActual('./services/notifications/rules'),
@@ -94,10 +95,12 @@ function fakeTables(rules, { yieldIO = false, quiet = [null, null] } = {}) {
 }
 const jobOf = (jobs, trigger, visitIso) => jobs.find((j) => j.trigger === trigger && new Date(j.visit).getTime() === at(visitIso));
 
+const flush = () => new Promise((resolve) => setImmediate(resolve));
+const newLockClient = () => ({ query: jest.fn(async () => ({ rows: [{ unlocked: true }] })), release: jest.fn() });
 let lockClient;
 beforeEach(() => {
   jest.clearAllMocks();
-  lockClient = { query: jest.fn(async () => ({ rows: [{ unlocked: true }] })), release: jest.fn() };
+  lockClient = newLockClient();
   pool.connect.mockReset();
   pool.connect.mockResolvedValue(lockClient);
   rulesMock.getServiceCategoryMap.mockReset();
@@ -130,6 +133,7 @@ describe('режим', () => {
     expect(inserts()).toHaveLength(0);
     expect(cancels()).toHaveLength(0);
     expect(db.any).not.toHaveBeenCalled();
+    expect(rulesMock.getServiceCategoryMap).not.toHaveBeenCalled();
   });
 
   test('режим не задан вовсе (поля нет в настройках) → как off', async () => {
@@ -324,11 +328,26 @@ describe('мгновенные письма не уходят задним чи�
 // ── update опередил create ──
 describe('update раньше create', () => {
   const A = '2026-10-25T12:00:00+03:00';
+  const B = '2026-10-26T15:00:00+03:00';
+  const stateWrites = () => db.query.mock.calls.filter(([sql]) => /INSERT INTO notification_record_state/.test(sql));
+
   test('к приходу create состояние уже сохранено → «Вы записаны» и напоминание всё равно ставятся', async () => {
     setup({ prev: prevOf(A), rules: [rule(), rule({ id: 2, trigger_type: 'visit_reminder' })] });
     await enroll.handleRecordEvent(salon, payload({ datetime: A }), NOW);
     expect(inserts().map((p) => p[2]).sort()).toEqual(['record_created', 'visit_reminder']);
     expect(cancels()).toHaveLength(0);
+  });
+
+  test('состояние при этом НЕ перезаписывается: create несёт данные момента создания, а не нынешние', async () => {
+    setup({ prev: prevOf(A), rules: [rule()] });
+    await enroll.handleRecordEvent(salon, payload({ datetime: A }), NOW);
+    expect(stateWrites()).toHaveLength(0);
+  });
+
+  test('create без известного состояния сохраняет его как обычно', async () => {
+    setup({ rules: [rule()] });
+    await enroll.handleRecordEvent(salon, payload({ datetime: A }), NOW);
+    expect(stateWrites()).toHaveLength(1);
   });
 
   test('дубль create не плодит строк: ключ (правило, запись, визит) тот же', async () => {
@@ -343,6 +362,71 @@ describe('update раньше create', () => {
     setup({ prev: prevOf(A), rules: [rule({ id: 3, trigger_type: 'record_rescheduled' })] });
     await enroll.handleRecordEvent(salon, payload({ datetime: '2026-10-26T15:00:00+03:00' }), NOW);   // create с иным временем — не перенос
     expect(inserts()).toHaveLength(0);
+  });
+
+  // Поздний дубль create (состояние давно известно, запись жила своей жизнью) раньше «возвращал из отмены»,
+  // гасил неушедшее письмо об отмене и переписывал состояние на «живая» — и staleReason воркера этого уже не ловил,
+  // потому что сверяется как раз с состоянием.
+  describe('поздний дубль create не портит то, что случилось с записью после создания', () => {
+    const cancelRule = () => rule({ id: 4, trigger_type: 'record_cancelled' });
+
+    test('запись отменена («не придёт»): состояние остаётся отменённым, письмо об отмене не гасится, restored не срабатывает', async () => {
+      const { jobs, states } = fakeTables([rule(), rule({ id: 2, trigger_type: 'visit_reminder' }), cancelRule()]);
+      await enroll.handleRecordEvent(salon, payload({ datetime: A }), NOW);                                           // создание
+      await enroll.handleRecordEvent(salon, payload({ datetime: A, attendance: -1 }, 'update'), NOW + 3600e3);       // «не придёт» → письмо
+      expect(jobOf(jobs, 'record_cancelled', A).status).toBe('pending');
+      const before = JSON.stringify([...states.entries()]);
+      db.query.mockClear();
+      await enroll.handleRecordEvent(salon, payload({ datetime: A }), NOW + 3600e3 + 20 * 60e3);                    // поздний дубль create
+      expect(JSON.stringify([...states.entries()])).toBe(before);
+      expect(states.get(100).attendance).toBe(-1);
+      expect(jobOf(jobs, 'record_cancelled', A).status).toBe('pending');                                              // письмо не погашено
+      expect(cancels()).toHaveLength(0);                                                                              // ни одного гашения от дубля
+    });
+
+    test('запись удалена: то же — состояние «удалена», гашений нет', async () => {
+      const { states } = fakeTables([rule(), cancelRule()]);
+      await enroll.handleRecordEvent(salon, payload({ datetime: A }), NOW);
+      await enroll.handleRecordEvent(salon, payload({ datetime: A, deleted: true }, 'delete'), NOW + 3600e3);
+      db.query.mockClear();
+      await enroll.handleRecordEvent(salon, payload({ datetime: A }), NOW + 7200e3);
+      expect(states.get(100).deleted).toBe(true);
+      expect(cancels()).toHaveLength(0);
+      expect(db.query.mock.calls.some(([sql]) => /INSERT INTO notification_record_state/.test(sql))).toBe(false);
+    });
+
+    test('запись перенесена A→B: состояние остаётся на B, «перенесена» от дубля не рождается', async () => {
+      const { jobs, states } = fakeTables([rule({ id: 3, trigger_type: 'record_rescheduled' }), rule({ id: 2, trigger_type: 'visit_reminder' })]);
+      await enroll.handleRecordEvent(salon, payload({ datetime: A }), NOW);
+      await enroll.handleRecordEvent(salon, payload({ datetime: B }, 'update'), NOW + 3600e3);
+      expect(jobOf(jobs, 'record_rescheduled', B).status).toBe('pending');
+      const lettersBefore = jobs.filter((j) => j.trigger === 'record_rescheduled').length;
+      await enroll.handleRecordEvent(salon, payload({ datetime: A }), NOW + 7200e3);                                  // поздний дубль create(A)
+      expect(new Date(states.get(100).visit_datetime).getTime()).toBe(at(B));
+      expect(jobs.filter((j) => j.trigger === 'record_rescheduled')).toHaveLength(lettersBefore);
+    });
+
+    test('у дубля ничего не «приходит» и не «подтверждается» (старый снимок с attendance 1 / 2)', async () => {
+      setup({ prev: prevOf(A), rules: [rule({ id: 5, trigger_type: 'visit_review' }), rule({ id: 6, trigger_type: 'visit_after' })] });
+      await enroll.handleRecordEvent(salon, payload({ datetime: A, attendance: 1 }), at('2026-10-25T13:00:00+03:00'));
+      expect(inserts()).toHaveLength(0);
+    });
+
+    test('дубль, несущий отмену, ничего не отменяет: состояние живо, гашений нет', async () => {
+      setup({ prev: prevOf(A), rules: [cancelRule()] });
+      await enroll.handleRecordEvent(salon, payload({ datetime: A, attendance: -1 }), NOW);
+      expect(cancels()).toHaveLength(0);
+      expect(inserts()).toHaveLength(0);
+      expect(db.query.mock.calls.some(([sql]) => /INSERT INTO notification_record_state/.test(sql))).toBe(false);
+    });
+
+    test('«update раньше create» на уже отменённой записи: job\'ы ставятся, а гасит их воркер — по состоянию, которое осталось отменённым', async () => {
+      setup({ prev: prevOf(A, { attendance: -1 }), rules: [rule(), rule({ id: 2, trigger_type: 'visit_reminder' })] });
+      await enroll.handleRecordEvent(salon, payload({ datetime: A }), NOW);
+      expect(inserts().map((p) => p[2]).sort()).toEqual(['record_created', 'visit_reminder']);
+      expect(cancels()).toHaveLength(0);
+      expect(db.query.mock.calls.some(([sql]) => /INSERT INTO notification_record_state/.test(sql))).toBe(false);
+    });
   });
 });
 
@@ -829,29 +913,109 @@ test('событие без id записи игнорируется целик�
   expect(pool.connect).not.toHaveBeenCalled();
 });
 
+// ── каталог услуг YClients: только по нужде ──
+// Каталог — внешний HTTP (30 с, сбой не кэшируется) под общим лимитом YClients. В режиме off («только состояние»)
+// и без правил с условием по категории он не нужен вовсе.
+describe('каталог услуг YClients запрашивается только по нужде', () => {
+  const catRule = (over) => rule({ conditions: { logic: 'and', items: [{ type: 'category', ids: [10] }] }, ...over });
+
+  test('режим off — ни одного вызова каталога, даже когда правило с категорией есть, а услуги у записи есть', async () => {
+    setup({ mode: 'off', rules: [catRule()] });
+    await enroll.handleRecordEvent(salon, payload(), NOW);
+    expect(rulesMock.getServiceCategoryMap).not.toHaveBeenCalled();
+    expect(db.any).not.toHaveBeenCalled();                                // и правила в этом режиме не читаются
+    expect(db.query.mock.calls.some(([sql]) => /INSERT INTO notification_record_state/.test(sql))).toBe(true);   // состояние пишется
+  });
+
+  test.each(['Live', 'on', '', null])('неизвестный режим %p — тоже ни одного вызова каталога', async (mode) => {
+    setup({ mode, rules: [catRule()] });
+    await enroll.handleRecordEvent(salon, payload(), NOW);
+    expect(rulesMock.getServiceCategoryMap).not.toHaveBeenCalled();
+  });
+
+  test.each(['live', 'shadow'])('режим %s и правило с условием по категории → каталог запрашивается ОДИН раз на событие', async (mode) => {
+    setup({ mode, rules: [catRule({ id: 1 }), catRule({ id: 2, trigger_type: 'visit_reminder' })] });
+    await enroll.handleRecordEvent(salon, payload(), NOW);
+    expect(rulesMock.getServiceCategoryMap).toHaveBeenCalledTimes(1);
+    expect(inserts()).toHaveLength(2);
+  });
+
+  test('среди включённых правил нет условия по категории → каталог не нужен (мастер, услуга, пустые условия)', async () => {
+    setup({ rules: [
+      rule({ id: 1 }),
+      rule({ id: 2, conditions: { logic: 'and', items: [{ type: 'staff', ids: [55] }] } }),
+      rule({ id: 3, conditions: { logic: 'or', items: [{ type: 'service', ids: [1] }] } }),
+    ] });
+    await enroll.handleRecordEvent(salon, payload(), NOW);
+    expect(rulesMock.getServiceCategoryMap).not.toHaveBeenCalled();
+    expect(inserts()).toHaveLength(3);
+  });
+
+  test('условие по категории без id категорией не считается — каталог не нужен', async () => {
+    setup({ rules: [rule({ conditions: { logic: 'and', items: [{ type: 'category', ids: [] }] } })] });
+    await enroll.handleRecordEvent(salon, payload(), NOW);
+    expect(rulesMock.getServiceCategoryMap).not.toHaveBeenCalled();
+    expect(inserts()).toHaveLength(1);
+  });
+
+  test('правил нет вовсе → каталога нет', async () => {
+    setup({ rules: [] });
+    await enroll.handleRecordEvent(salon, payload(), NOW);
+    expect(rulesMock.getServiceCategoryMap).not.toHaveBeenCalled();
+  });
+
+  test('правило с категорией есть, но у записи нет услуг → каталог не нужен', async () => {
+    setup({ rules: [catRule()] });
+    await enroll.handleRecordEvent(salon, payload({ services: [] }), NOW);
+    expect(rulesMock.getServiceCategoryMap).not.toHaveBeenCalled();
+  });
+
+  test('запрос каталога идёт ДО замка: внешний HTTP (таймаут 30 с) не держит соединение пула', async () => {
+    setup({ rules: [catRule()] });
+    await enroll.handleRecordEvent(salon, payload(), NOW);
+    expect(rulesMock.getServiceCategoryMap).toHaveBeenCalledTimes(1);
+    expect(rulesMock.getServiceCategoryMap.mock.invocationCallOrder[0]).toBeLessThan(pool.connect.mock.invocationCallOrder[0]);
+    expect(rulesMock.getServiceCategoryMap.mock.invocationCallOrder[0]).toBeLessThan(lockClient.query.mock.invocationCallOrder[0]);
+  });
+});
+
 // ── блокировка по клиенту ──
 // YClients отмечает «пришёл» по всем записям визита за миллисекунды. Без сериализации два вебхука одного клиента
 // одновременно проходят проверки «опрос/приглашение уже были» (оба видят пусто) и оба ставят строку.
 describe('блокировка по клиенту (advisory lock)', () => {
   const LOCK = /pg_advisory_lock\(\$1, hashtext\(\$2\)\)/;
   const UNLOCK = /pg_advisory_unlock\(\$1, hashtext\(\$2\)\)/;
-  const dbCalls = () => [db.oneOrNone, db.query, db.any].flatMap((f) => f.mock.invocationCallOrder);
+  const SET_TIMEOUT = "SET lock_timeout = '15s'";
+  const RESET_TIMEOUT = 'RESET lock_timeout';
+  const kind = (sql) => {
+    if (LOCK.test(sql)) return 'lock';
+    if (UNLOCK.test(sql)) return 'unlock';
+    if (sql === SET_TIMEOUT) return 'set';
+    return sql === RESET_TIMEOUT ? 'reset' : '?';
+  };
+  const lockSeq = () => lockClient.query.mock.calls.map(([sql]) => kind(sql));
+  // работа с записью под замком: состояние, клиент, постановка job'ов (настройки и правила читаются ДО замка)
+  const workCalls = () => [db.oneOrNone, db.query].flatMap((f) => f.mock.invocationCallOrder);
 
-  test('берётся ДО любой работы с БД и отпускается ПОСЛЕ; ключ — салон и клиент YClients, пространство отдельное', async () => {
+  test('порядок: настройки и правила — до замка; SET lock_timeout → lock → RESET до работы с записью, unlock после; ключ — салон и клиент YClients', async () => {
     setup({ rules: [rule(), rule({ id: 2, trigger_type: 'visit_reminder' })] });
     await enroll.handleRecordEvent(salon, payload(), NOW);
     expect(pool.connect).toHaveBeenCalledTimes(1);
+    expect(lockSeq()).toEqual(['set', 'lock', 'reset', 'unlock']);
     const calls = lockClient.query.mock.calls;
-    expect(calls).toHaveLength(2);
-    expect(calls[0][0]).toMatch(LOCK);
-    expect(calls[0][1]).toEqual([enroll.NOTIFY_LOCK_NS, '1:c7']);
-    expect(calls[1][0]).toMatch(UNLOCK);
+    expect(calls[0]).toEqual([SET_TIMEOUT]);                              // на ВЫДЕЛЕННОМ соединении, до самого lock
     expect(calls[1][1]).toEqual([enroll.NOTIFY_LOCK_NS, '1:c7']);
-    const [lockedAt, unlockedAt] = lockClient.query.mock.invocationCallOrder;
-    expect(lockedAt).toBeLessThan(Math.min(...dbCalls()));
-    expect(unlockedAt).toBeGreaterThan(Math.max(...dbCalls()));
+    expect(calls[3][1]).toEqual([enroll.NOTIFY_LOCK_NS, '1:c7']);
+    const [setAt, lockAt, resetAt, unlockAt] = lockClient.query.mock.invocationCallOrder;
+    expect(setAt).toBeLessThan(lockAt);
+    expect(settings.getSettings).toHaveBeenCalledTimes(1);                // настройки читаются один раз и до замка
+    expect(settings.getSettings.mock.invocationCallOrder[0]).toBeLessThan(setAt);
+    expect(db.any.mock.invocationCallOrder[0]).toBeLessThan(setAt);       // правила — тоже
+    expect(lockAt).toBeLessThan(Math.min(...workCalls()));
+    expect(resetAt).toBeLessThan(Math.min(...workCalls()));               // лимит сбрасывается сразу после взятия замка
+    expect(unlockAt).toBeGreaterThan(Math.max(...workCalls()));
     expect(lockClient.release).toHaveBeenCalledTimes(1);
-    expect(lockClient.release.mock.calls[0][0]).toBeUndefined();         // соединение вернулось в пул целым
+    expect(lockClient.release.mock.calls[0][0]).toBeUndefined();          // соединение вернулось в пул целым
   });
 
   test('пространство ключей не пересекается с блокировками кэшбэка (их ключ — один bigint, у нас пара int)', () => {
@@ -864,48 +1028,139 @@ describe('блокировка по клиенту (advisory lock)', () => {
   test.each([
     ['загрузка состояния', () => db.oneOrNone.mockRejectedValue(new Error('db down'))],
     ['запись состояния', () => db.query.mockRejectedValue(new Error('db down'))],
-    ['чтение настроек', () => settings.getSettings.mockRejectedValue(new Error('db down'))],
+    ['запрос клиента', () => {
+      const base = db.oneOrNone.getMockImplementation();
+      db.oneOrNone.mockImplementation(async (sql, p) => { if (/FROM clients/.test(sql)) throw new Error('db down'); return base(sql, p); });
+    }],
   ])('исключение (%s): блокировка отпускается, клиент возвращается в пул, ошибка пробрасывается', async (_, breakIt) => {
     setup({ rules: [rule()] });
     breakIt();
     await expect(enroll.handleRecordEvent(salon, payload(), NOW)).rejects.toThrow('db down');
-    expect(lockClient.query.mock.calls.map(([sql]) => (LOCK.test(sql) ? 'lock' : (UNLOCK.test(sql) ? 'unlock' : '?')))).toEqual(['lock', 'unlock']);
+    expect(lockSeq()).toEqual(['set', 'lock', 'reset', 'unlock']);
     expect(lockClient.release).toHaveBeenCalledTimes(1);
     expect(lockClient.release.mock.calls[0][0]).toBeUndefined();
+  });
+
+  test.each([
+    ['чтение настроек', () => settings.getSettings.mockRejectedValue(new Error('db down'))],
+    ['чтение правил', () => db.any.mockRejectedValue(new Error('db down'))],
+  ])('сбой до замка (%s): ошибка пробрасывается, соединение под замок не берётся', async (_, breakIt) => {
+    setup({ rules: [rule()] });
+    breakIt();
+    await expect(enroll.handleRecordEvent(salon, payload(), NOW)).rejects.toThrow('db down');
+    expect(pool.connect).not.toHaveBeenCalled();
   });
 
   test('ключ: без id клиента — по номеру; другой салон — другой ключ', async () => {
     setup({ rules: [rule()] });
     await enroll.handleRecordEvent(salon, payload({ client: { phone: '79200255591', name: 'Анна' } }), NOW);
-    expect(lockClient.query.mock.calls[0][1]).toEqual([enroll.NOTIFY_LOCK_NS, '1:p79200255591']);
-    jest.clearAllMocks(); lockClient = { query: jest.fn(async () => ({ rows: [] })), release: jest.fn() }; pool.connect.mockResolvedValue(lockClient);
+    expect(lockClient.query.mock.calls[1][1]).toEqual([enroll.NOTIFY_LOCK_NS, '1:p79200255591']);
+    jest.clearAllMocks(); lockClient = newLockClient(); pool.connect.mockResolvedValue(lockClient);
     setup({ rules: [rule()] });
     await enroll.handleRecordEvent({ ...salon, id: 2 }, payload(), NOW);
-    expect(lockClient.query.mock.calls[0][1]).toEqual([enroll.NOTIFY_LOCK_NS, '2:c7']);
+    expect(lockClient.query.mock.calls[1][1]).toEqual([enroll.NOTIFY_LOCK_NS, '2:c7']);
   });
 
-  test('каталог услуг запрашивается ДО блокировки: внешний HTTP (таймаут 30 с) не держит соединение пула', async () => {
+  test('нет ни id клиента, ни номера → без блокировки, обработка идёт', async () => {
     setup({ rules: [rule()] });
-    await enroll.handleRecordEvent(salon, payload(), NOW);
-    expect(rulesMock.getServiceCategoryMap).toHaveBeenCalledTimes(1);
-    expect(rulesMock.getServiceCategoryMap.mock.invocationCallOrder[0]).toBeLessThan(pool.connect.mock.invocationCallOrder[0]);
-    expect(rulesMock.getServiceCategoryMap.mock.invocationCallOrder[0]).toBeLessThan(lockClient.query.mock.invocationCallOrder[0]);
+    await enroll.handleRecordEvent(salon, payload({ client: { phone: '', name: 'Анна' } }), NOW);
+    expect(pool.connect).not.toHaveBeenCalled();
+    expect(inserts()).toHaveLength(1);                                    // skipped «нет телефона клиента»
   });
 
-  test('у записи без услуг каталог не запрашивается: искать нечего, категория честно не совпадает (а не «каталог недоступен»)', async () => {
-    setup({ rules: [rule({ conditions: { logic: 'and', items: [{ type: 'category', ids: [10] }] } })] });
-    await enroll.handleRecordEvent(salon, payload({ services: [] }), NOW);
-    expect(rulesMock.getServiceCategoryMap).not.toHaveBeenCalled();
-    expect(inserts()).toHaveLength(0);
+  // Ожидающий замка вебхук держит соединение пула; застрявший держатель не должен держать пул бесконечно.
+  describe('ожидание замка ограничено: lock_timeout 15 с на выделенном соединении', () => {
+    const timeoutError = () => Object.assign(new Error('canceling statement due to lock timeout'), { code: '55P03' });
+    const failOn = (re, err) => lockClient.query.mockImplementation(async (sql) => { if (re.test(sql)) throw err; return { rows: [] }; });
+
+    test('константы: 15 с в SQL, без обёрток', () => {
+      expect(enroll.LOCK_TIMEOUT_MS).toBe(15000);
+      expect(SET_TIMEOUT).toBe(`SET lock_timeout = '${enroll.LOCK_TIMEOUT_MS / 1000}s'`);
+    });
+
+    test('таймаут (55P03): обработка без замка, WARN, лимит сброшен, соединение возвращено в пул целым и ДО работы', async () => {
+      setup({ rules: [rule()] });
+      failOn(LOCK, timeoutError());
+      await enroll.handleRecordEvent(salon, payload(), NOW);
+      expect(lockSeq()).toEqual(['set', 'lock', 'reset']);                 // unlock не нужен: замка нет
+      expect(inserts()).toHaveLength(1);                                   // событие обработано
+      expect(mockLog.warn).toHaveBeenCalledWith(expect.stringMatching(/не получена за 15 с/));
+      expect(lockClient.release).toHaveBeenCalledTimes(1);
+      expect(lockClient.release.mock.calls[0][0]).toBeUndefined();         // сброс удался — соединение не выбрасываем
+      expect(lockClient.release.mock.invocationCallOrder[0]).toBeLessThan(Math.min(...workCalls()));   // обработке оно нужнее
+    });
+
+    test('таймаут, но RESET не прошёл → соединение уничтожается (лимит не должен утечь в пул)', async () => {
+      setup({ rules: [rule()] });
+      lockClient.query.mockImplementation(async (sql) => {
+        if (LOCK.test(sql)) throw timeoutError();
+        if (sql === RESET_TIMEOUT) throw new Error('connection lost');
+        return { rows: [] };
+      });
+      await enroll.handleRecordEvent(salon, payload(), NOW);
+      expect(inserts()).toHaveLength(1);
+      expect(lockClient.release.mock.calls[0][0]).toBeTruthy();
+    });
+
+    test('не удалось взять замок по другой причине: без него, соединение уничтожается', async () => {
+      setup({ rules: [rule()] });
+      failOn(LOCK, new Error('connection lost'));
+      await enroll.handleRecordEvent(salon, payload(), NOW);
+      expect(inserts()).toHaveLength(1);
+      expect(lockClient.query.mock.calls.some(([sql]) => UNLOCK.test(sql))).toBe(false);
+      expect(lockClient.release.mock.calls[0][0]).toBeTruthy();
+    });
+
+    test('SET lock_timeout не прошёл → замок не берём вовсе (без лимита ждать нельзя), соединение уничтожается', async () => {
+      setup({ rules: [rule()] });
+      failOn(/^SET lock_timeout/, new Error('connection lost'));
+      await enroll.handleRecordEvent(salon, payload(), NOW);
+      expect(lockClient.query.mock.calls.some(([sql]) => LOCK.test(sql))).toBe(false);
+      expect(inserts()).toHaveLength(1);
+      expect(lockClient.release.mock.calls[0][0]).toBeTruthy();
+    });
+
+    test('замок взят, но RESET не прошёл: работа идёт под замком, замок отпускается, соединение уничтожается', async () => {
+      setup({ rules: [rule()] });
+      failOn(/^RESET lock_timeout/, new Error('connection lost'));
+      await enroll.handleRecordEvent(salon, payload(), NOW);
+      expect(lockSeq()).toEqual(['set', 'lock', 'reset', 'unlock']);
+      expect(inserts()).toHaveLength(1);
+      expect(lockClient.release.mock.calls[0][0]).toBeTruthy();
+    });
+
+    test('нет соединения для блокировки (пул исчерпан) → тоже без неё', async () => {
+      setup({ rules: [rule()] });
+      pool.connect.mockRejectedValue(new Error('timeout exceeded when trying to connect'));
+      await enroll.handleRecordEvent(salon, payload(), NOW);
+      expect(inserts()).toHaveLength(1);
+    });
   });
 
+  test('не удалось отпустить: клиент уничтожается (release с ошибкой), результат обработки не теряется', async () => {
+    setup({ rules: [rule()] });
+    lockClient.query.mockImplementation(async (sql) => { if (UNLOCK.test(sql)) throw new Error('connection lost'); return { rows: [] }; });
+    await expect(enroll.handleRecordEvent(salon, payload(), NOW)).resolves.toBeUndefined();
+    expect(inserts()).toHaveLength(1);
+    expect(lockClient.release).toHaveBeenCalledTimes(1);
+    expect(lockClient.release.mock.calls[0][0]).toBeTruthy();
+  });
+
+  test('не удалось отпустить после исключения: пробрасывается исходная ошибка, а не ошибка отпускания', async () => {
+    setup({ rules: [rule()] });
+    db.oneOrNone.mockRejectedValue(new Error('db down'));
+    lockClient.query.mockImplementation(async (sql) => { if (UNLOCK.test(sql)) throw new Error('connection lost'); return { rows: [] }; });
+    await expect(enroll.handleRecordEvent(salon, payload(), NOW)).rejects.toThrow('db down');
+    expect(lockClient.release.mock.calls[0][0]).toBeTruthy();
+  });
+
+  // ── число одновременных обработчиков под замками ──
   test('под замками одновременно не больше LOCK_SLOTS вебхуков (пул общий с приложением); остальные ждут очереди без соединения', async () => {
     let active = 0; let maxActive = 0; const grants = [];
     pool.connect.mockImplementation(() => new Promise((resolve) => {
       grants.push(() => { active += 1; maxActive = Math.max(maxActive, active); resolve({ query: jest.fn(async () => ({ rows: [] })), release: jest.fn(() => { active -= 1; }) }); });
     }));
     setup({ rules: [rule()] });
-    const flush = () => new Promise((resolve) => setImmediate(resolve));
     let done = 0;
     const runs = [1, 2, 3, 4, 5, 6].map((i) => enroll.handleRecordEvent(salon,
       payload({ id: i, client: { id: i, phone: `7920000000${i}`, name: 'А' } }), NOW).then(() => { done += 1; }));
@@ -925,7 +1180,6 @@ describe('блокировка по клиенту (advisory lock)', () => {
       grants.push(() => resolve({ query: jest.fn(async () => ({ rows: [] })), release: jest.fn() }));
     }));
     setup({ rules: [rule()] });
-    const flush = () => new Promise((resolve) => setImmediate(resolve));
     const run = (i) => enroll.handleRecordEvent(salon, payload({ id: i, client: { id: i, phone: `7920000000${i}`, name: 'А' } }), NOW);
     const runs = [run(1), run(2), run(3), run(4)];
     await flush();
@@ -955,44 +1209,85 @@ describe('блокировка по клиенту (advisory lock)', () => {
     expect(inserts()).toHaveLength(1);
   });
 
-  test('нет ни id клиента, ни номера → без блокировки, обработка идёт', async () => {
-    setup({ rules: [rule()] });
-    await enroll.handleRecordEvent(salon, payload({ client: { phone: '', name: 'Анна' } }), NOW);
-    expect(pool.connect).not.toHaveBeenCalled();
-    expect(inserts()).toHaveLength(1);                                    // skipped «нет телефона клиента»
-  });
+  // ── ожидание места ограничено 30 с ──
+  describe('ожидание места под замок не дольше 30 с, дальше — обработка без замка', () => {
+    // setImmediate/nextTick не подменяем: flush() и разбор промисов должны работать как обычно
+    beforeEach(() => { jest.useFakeTimers({ doNotFake: ['setImmediate', 'nextTick', 'queueMicrotask'] }); });
+    afterEach(() => { jest.useRealTimers(); });
+    const hangingConnect = () => {
+      const grants = [];
+      pool.connect.mockImplementation(() => new Promise((resolve) => { grants.push(() => resolve(newLockClient())); }));
+      return grants;
+    };
+    const run = (i) => enroll.handleRecordEvent(salon, payload({ id: i, client: { id: i, phone: `7920000000${i}`, name: 'А' } }), NOW);
 
-  test('не удалось отпустить: клиент уничтожается (release с ошибкой), результат обработки не теряется', async () => {
-    setup({ rules: [rule()] });
-    lockClient.query.mockImplementation(async (sql) => { if (UNLOCK.test(sql)) throw new Error('connection lost'); return { rows: [] }; });
-    await expect(enroll.handleRecordEvent(salon, payload(), NOW)).resolves.toBeUndefined();
-    expect(inserts()).toHaveLength(1);
-    expect(lockClient.release).toHaveBeenCalledTimes(1);
-    expect(lockClient.release.mock.calls[0][0]).toBeTruthy();
-  });
+    test('константа: 30 с', () => {
+      expect(enroll.SLOT_WAIT_MS).toBe(30000);
+    });
 
-  test('не удалось отпустить после исключения: пробрасывается исходная ошибка, а не ошибка отпускания', async () => {
-    setup({ rules: [rule()] });
-    db.oneOrNone.mockRejectedValue(new Error('db down'));
-    lockClient.query.mockImplementation(async (sql) => { if (UNLOCK.test(sql)) throw new Error('connection lost'); return { rows: [] }; });
-    await expect(enroll.handleRecordEvent(salon, payload(), NOW)).rejects.toThrow('db down');
-    expect(lockClient.release.mock.calls[0][0]).toBeTruthy();
-  });
+    test('все места заняты: четвёртый ждёт ровно 30 с, затем обрабатывается без замка и без соединения, с WARN', async () => {
+      const grants = hangingConnect();
+      setup({ rules: [rule()] });
+      const holders = [run(1), run(2), run(3)];                             // три места заняты (зависли на pool.connect)
+      await flush();
+      expect(pool.connect).toHaveBeenCalledTimes(enroll.LOCK_SLOTS);
+      let fourthDone = false;
+      const fourth = run(4).then(() => { fourthDone = true; });
+      await flush();
+      await jest.advanceTimersByTimeAsync(enroll.SLOT_WAIT_MS - 1);
+      await flush();
+      expect(fourthDone).toBe(false);                                       // 29,999 с — ещё ждёт
+      expect(inserts().filter((p) => p[4] === 4)).toHaveLength(0);
+      await jest.advanceTimersByTimeAsync(1);
+      await fourth;
+      expect(inserts().filter((p) => p[4] === 4)).toHaveLength(1);          // событие обработано
+      expect(pool.connect).toHaveBeenCalledTimes(enroll.LOCK_SLOTS);        // под замок соединение не просили
+      expect(mockLog.warn).toHaveBeenCalledWith(expect.stringMatching(/нет места под замок за 30 с/));
+      // учёт мест цел: ушедший по тайм-ауту место не занимал, в очереди не остался и свободным не «возвращает»
+      while (grants.length) grants.shift()();
+      await Promise.all(holders);
+      const more = [5, 6, 7].map(run);                                       // все три места снова свободны
+      await flush();
+      expect(pool.connect).toHaveBeenCalledTimes(enroll.LOCK_SLOTS + 3);
+      for (let i = 0; i < 20 && grants.length; i += 1) { while (grants.length) grants.shift()(); await flush(); }
+      await Promise.all(more);
+    });
 
-  test('не удалось взять блокировку: событие обрабатывается без неё (уведомление важнее дедупа), соединение уничтожается', async () => {
-    setup({ rules: [rule()] });
-    lockClient.query.mockImplementation(async (sql) => { if (LOCK.test(sql)) throw new Error('connection lost'); return { rows: [] }; });
-    await enroll.handleRecordEvent(salon, payload(), NOW);
-    expect(inserts()).toHaveLength(1);
-    expect(lockClient.query.mock.calls.some(([sql]) => UNLOCK.test(sql))).toBe(false);
-    expect(lockClient.release.mock.calls[0][0]).toBeTruthy();
-  });
+    test('место, полученное до тайм-аута, таймер за собой не оставляет', async () => {
+      const grants = hangingConnect();
+      setup({ rules: [rule()] });
+      const runs = [run(1), run(2), run(3), run(4)];                         // четвёртый встаёт в очередь с таймером
+      await flush();
+      expect(jest.getTimerCount()).toBe(1);
+      let done = 0;
+      runs.forEach((p) => p.then(() => { done += 1; }));
+      for (let i = 0; i < 200 && done < 4; i += 1) { while (grants.length) grants.shift()(); await flush(); }
+      await Promise.all(runs);
+      expect(jest.getTimerCount()).toBe(0);
+      expect(mockLog.warn).not.toHaveBeenCalled();
+    });
 
-  test('нет соединения для блокировки (пул исчерпан) → тоже без неё', async () => {
-    setup({ rules: [rule()] });
-    pool.connect.mockRejectedValue(new Error('timeout exceeded when trying to connect'));
-    await enroll.handleRecordEvent(salon, payload(), NOW);
-    expect(inserts()).toHaveLength(1);
+    test('тайм-аут одного ожидающего не мешает следующему: передача идёт тому, кто ещё ждёт', async () => {
+      const grants = hangingConnect();
+      setup({ rules: [rule()] });
+      const holders = [run(1), run(2), run(3)];
+      await flush();
+      const early = run(4);                                                   // встал в очередь первым
+      await flush();
+      await jest.advanceTimersByTimeAsync(20000);
+      const late = run(5);                                                    // встал на 20-й секунде
+      await flush();
+      await jest.advanceTimersByTimeAsync(10000);                             // 30 с у early истекли, у late — 10 с
+      await early;
+      expect(inserts().filter((p) => p[4] === 4)).toHaveLength(1);
+      expect(inserts().filter((p) => p[4] === 5)).toHaveLength(0);
+      grants.shift()();                                                       // первый держатель закончил → место достаётся late
+      await flush();
+      expect(pool.connect).toHaveBeenCalledTimes(enroll.LOCK_SLOTS + 1);
+      for (let i = 0; i < 50; i += 1) { while (grants.length) grants.shift()(); await flush(); }
+      await Promise.all([...holders, late]);
+      expect(inserts().filter((p) => p[4] === 5)).toHaveLength(1);
+    });
   });
 
   // Менеджер блокировок: pg_advisory_lock ждёт, пока предыдущий владелец того же ключа не отпустит.
@@ -1000,11 +1295,12 @@ describe('блокировка по клиенту (advisory lock)', () => {
     const held = new Set(); const waiting = new Map();
     return () => ({
       query: jest.fn(async (sql, p) => {
-        const key = `${p[0]}:${p[1]}`;
         if (LOCK.test(sql)) {
+          const key = `${p[0]}:${p[1]}`;
           while (held.has(key)) await new Promise((resolve) => { if (!waiting.has(key)) waiting.set(key, []); waiting.get(key).push(resolve); });
           held.add(key);
         } else if (UNLOCK.test(sql)) {
+          const key = `${p[0]}:${p[1]}`;
           held.delete(key);
           const next = (waiting.get(key) || []).shift();
           if (next) next();
@@ -1044,8 +1340,8 @@ describe('блокировка по клиенту (advisory lock)', () => {
     pool.connect.mockImplementation(async () => make());
     setup({ rules: [rule()] });
     const done = [];
-    const run = (clientId, phone) => enroll.handleRecordEvent(salon, payload({ id: clientId, client: { id: clientId, phone, name: 'А' } }), NOW).then(() => done.push(clientId));
-    await Promise.all([run(11, '79200000011'), run(12, '79200000012')]);
+    const runOne = (clientId, phone) => enroll.handleRecordEvent(salon, payload({ id: clientId, client: { id: clientId, phone, name: 'А' } }), NOW).then(() => done.push(clientId));
+    await Promise.all([runOne(11, '79200000011'), runOne(12, '79200000012')]);
     expect(done.sort()).toEqual([11, 12]);
     expect(pool.connect).toHaveBeenCalledTimes(2);
   });

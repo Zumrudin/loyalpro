@@ -117,6 +117,42 @@ describe('classifyRecordEvent', () => {
     test('не create (update) при известном состоянии по-прежнему не created', () => {
       expect(ev.classifyRecordEvent(snap, upd({})).created).toBe(false);
     });
+
+    // create при известном состоянии — это либо update, опередивший create, либо ПОЗДНИЙ ДУБЛЬ. Снимок такого create
+    // несёт данные момента создания, а не нынешние, поэтому по нему ничего, кроме «запись создана», сказать нельзя:
+    // иначе дубль «возвращал» из отмены, «переносил» на старое время и «отмечал приход» задним числом.
+    describe('поздний create (prev есть): из всех видов остаётся только created', () => {
+      const createSnap = (over) => ev.recordSnapshot({ ...base, status: 'create', data: { ...base.data, ...over } });
+      const ALL_OFF = { rescheduled: false, restored: false, cancelled: false, noShow: false, arrived: false, confirmed: false };
+
+      test('prev отменён («не придёт»), create живой → created, но НЕ restored', () => {
+        expect(ev.classifyRecordEvent(upd({ attendance: -1 }), createSnap({}))).toEqual({ created: true, ...ALL_OFF });
+      });
+      test('prev удалён, create живой → created, но НЕ restored', () => {
+        expect(ev.classifyRecordEvent(upd({ deleted: true }), createSnap({}))).toEqual({ created: true, ...ALL_OFF });
+      });
+      test('prev на другом времени → created, но НЕ rescheduled', () => {
+        expect(ev.classifyRecordEvent(upd({ datetime: '2026-10-22T09:00:00+03:00' }), createSnap({}))).toEqual({ created: true, ...ALL_OFF });
+      });
+      test('create с attendance=1 / 2 (старый снимок) при prev=0 → НЕ arrived / НЕ confirmed', () => {
+        expect(ev.classifyRecordEvent(upd({ attendance: 0 }), createSnap({ attendance: 1 }))).toEqual({ created: true, ...ALL_OFF });
+        expect(ev.classifyRecordEvent(upd({ attendance: 0 }), createSnap({ attendance: 2 }))).toEqual({ created: true, ...ALL_OFF });
+      });
+      test('create несёт отмену (deleted / attendance -1) → не created и НЕ cancelled/noShow', () => {
+        expect(ev.classifyRecordEvent(upd({}), createSnap({ attendance: -1 }))).toEqual({ created: false, ...ALL_OFF });
+        expect(ev.classifyRecordEvent(upd({}), createSnap({ deleted: true }))).toEqual({ created: false, ...ALL_OFF });
+      });
+      test('prev нет — create разбирается как раньше (created, остальное по снимку)', () => {
+        expect(ev.classifyRecordEvent(null, createSnap({ attendance: 1 }))).toMatchObject({ created: true, arrived: true });
+        expect(ev.classifyRecordEvent(null, createSnap({ attendance: -1 }))).toMatchObject({ created: false, cancelled: true, noShow: true });
+      });
+      test('isLateCreate: только create при известном состоянии', () => {
+        expect(ev.isLateCreate(upd({}), createSnap({}))).toBe(true);
+        expect(ev.isLateCreate(null, createSnap({}))).toBe(false);
+        expect(ev.isLateCreate(upd({}), upd({}))).toBe(false);
+        expect(ev.isLateCreate(null, upd({}))).toBe(false);
+      });
+    });
   });
   test('смена datetime → rescheduled', () => {
     const moved = ev.recordSnapshot({ ...base, status: 'update', data: { ...base.data, datetime: '2026-10-21T10:00:00+03:00' } });
