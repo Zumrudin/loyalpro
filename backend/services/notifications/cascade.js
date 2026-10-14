@@ -41,7 +41,9 @@ function canonPhone(phone) {
  */
 function peerId(chats, channel) {
   const raw = chats && chats[channel] != null ? String(chats[channel]).trim() : '';
-  return /^\d+$/.test(raw) ? raw : null;
+  // 0, ведущие нули и сверхдлинные числа шлюз не примет (422) — тогда терялся бы
+  // откат tdlib на номер.
+  return /^[1-9]\d{0,17}$/.test(raw) ? raw : null;
 }
 
 /**

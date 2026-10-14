@@ -55,7 +55,7 @@ describe('recipientFor', () => {
 // 'e2e-chat' и прочее нечисловое — мусор. Негодный id = «id неизвестен».
 describe('recipientFor: id чата — только число', () => {
   const BAD_IDS = ['-1003759304044', '-5', 'g:-1003759304044', 'g:385578542', 'e2e-chat', '385578542x',
-    '385 578542', '3.85', '+385578542', '', '   '];
+    '385 578542', '3.85', '+385578542', '', '   ', '0', '007', '1234567890123456789'];
 
   test.each(BAD_IDS)('Telegram: id %j неизвестен → откат на номер', (bad) => {
     expect(recipientFor('tdlib', '79200255591', { tdlib: bad })).toEqual({ dispatchRouting: ['tdlib'], phone: '79200255591' });
