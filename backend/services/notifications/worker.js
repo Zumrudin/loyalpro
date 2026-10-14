@@ -60,6 +60,10 @@ const REVIEW_REPEAT_DAYS = 30;
 // процесса или режима off копится очередь, и «Вы записаны…» двухдневной давности хуже молчания.
 // Простой короче порога работе не мешает. visit_reminder меряется по визиту, а не по этому порогу.
 const MAX_LATENESS_MS = 12 * 3600 * 1000;
+// Тестовая отправка (meta.test) — действие администратора «прямо сейчас», он ждёт её секунды. Строка, провисевшая
+// дольше (процесс лежал, режим был off и его потом включили), уже не то, что просили, и уйти не должна. Это
+// единственная проверка, которую тест не обходит: по записи и по давности визита его по-прежнему не сверяем.
+const TEST_MAX_AGE_MS = 30 * 60 * 1000;
 // Статус 5 при сверке доказателен, только если сверка идёт вскоре после отправки: шлюз закрывает
 // «Принято» старше 10 минут как «исход неизвестен», позже настоящий отказ от такого закрытия не
 // отличить. Восемь минут — с запасом до этих десяти.
@@ -178,10 +182,15 @@ async function releaseLease(job) {
  *    начался (job.visit_datetime <= now); остальные типы — когда строка опоздала больше чем на
  *    MAX_LATENESS_MS (now − scheduled_at). Продолжение каскада после «Невозможно доставить»
  *    тоже меряется от исходного scheduled_at: сверка его не сбрасывает.
- * Тестовая отправка (meta.test) не проверяется вовсе — ни по записи, ни по давности.
+ * Тестовая отправка (meta.test) не проверяется ни по записи, ни по давности визита, ни по чёрному списку;
+ * единственное исключение — её собственный возраст: старше TEST_MAX_AGE_MS (30 мин) → «тестовая отправка
+ * устарела» (нет момента — не выдумываем, как и у остальных типов).
  */
 async function staleReason(job) {
-  if (job.meta && job.meta.test) return null;
+  if (job.meta && job.meta.test) {
+    const dueMs = job.scheduled_at ? new Date(job.scheduled_at).getTime() : NaN;
+    return Date.now() - dueMs > TEST_MAX_AGE_MS ? 'тестовая отправка устарела' : null;
+  }
   const t = job.trigger_type;
 
   const now = Date.now();
@@ -509,4 +518,4 @@ function startNotificationWorker() {
   log.info(`Notification worker started (tick=${TICK_MS}ms)`);
 }
 
-module.exports = { processTick, processOne, checkDeliveries, startNotificationWorker, LEASE_SQL, CHECK_SQL, staleReason, MAX_LATENESS_MS, CHECK_MAX_AGE_MS };
+module.exports = { processTick, processOne, checkDeliveries, startNotificationWorker, LEASE_SQL, CHECK_SQL, staleReason, MAX_LATENESS_MS, CHECK_MAX_AGE_MS, TEST_MAX_AGE_MS };

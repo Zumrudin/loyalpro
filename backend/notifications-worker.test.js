@@ -672,12 +672,16 @@ describe('устаревшее после простоя процесса', () =
     });
   });
 
-  describe('тестовая отправка (meta.test) — исключение из обоих правил', () => {
-    test('опоздание трое суток → уходит', async () => {
-      setup({ jobs: [job({ trigger_type: 'visit_review', yclients_record_id: 0, visit_datetime: null, meta: { test: true }, scheduled_at: ago(3 * 24 * HOUR) })] });
-      await worker.processTick();
-      expect(calls()).toEqual(['tdlib']);
-      expect(wasCancelled()).toBe(false);
+  // Тест — действие администратора «прямо сейчас»: правил давности визита/записи он не знает, но СВОЙ возраст
+  // проверяется. Воркер не арендует строки салона в off, и без этой страховки тест, поставленный в off (или
+  // провисевший простой процесса), ушёл бы при включении боевого режима сколько угодно позже.
+  describe('тестовая отправка (meta.test) — исключение из обоих правил, кроме собственного возраста', () => {
+    const { TEST_MAX_AGE_MS } = worker;
+    const testJob = (over = {}) => job({ trigger_type: 'visit_review', yclients_record_id: 0, visit_datetime: null, meta: { test: true }, ...over });
+    const STALE_RE = /^тестовая отправка устарела$/;
+
+    test('порог — 30 минут, константа экспортируется (границы в тестах выражены через неё)', () => {
+      expect(TEST_MAX_AGE_MS).toBe(30 * 60 * 1000);
     });
 
     test('напоминание с визитом в прошлом → уходит', async () => {
@@ -685,6 +689,73 @@ describe('устаревшее после простоя процесса', () =
       await worker.processTick();
       expect(calls()).toEqual(['tdlib']);
       expect(wasCancelled()).toBe(false);
+    });
+
+    test('моложе порога уходит, даже когда запись отменена, клиент в чёрном списке и опрос «уже отправлялся»', async () => {
+      setup({ jobs: [testJob({ scheduled_at: ago(TEST_MAX_AGE_MS - 60 * 1000) })],
+        st: state({ deleted: true, attendance: -1 }), blacklisted: true, sibling: { id: 99 } });
+      await worker.processTick();
+      expect(calls()).toEqual(['tdlib']);
+      expect(wasCancelled()).toBe(false);
+      expect(db.oneOrNone).not.toHaveBeenCalled();     // остальные перепроверки по-прежнему не гоняются
+    });
+
+    test.each([
+      ['31 минута', TEST_MAX_AGE_MS + 60 * 1000],
+      ['3 часа', 3 * HOUR],
+      ['трое суток (раньше уходило: правило 12 ч тест не касалось)', 3 * 24 * HOUR],
+    ])('старше порога (%s) → cancelled «тестовая отправка устарела»: не отправляется, остальные проверки не гоняются', async (_label, age) => {
+      setup({ jobs: [testJob({ id: 7, scheduled_at: ago(age) })] });
+      await worker.processTick();
+      expect(transport.sendMessage).not.toHaveBeenCalled();
+      expect(updates(/SET status='sent', sent_at/)).toHaveLength(0);     // даже не захватывали
+      expect(wasCancelled(STALE_RE)).toBe(true);
+      expect(statusUpdates().filter((p) => p[1] === 'cancelled').map((p) => p[0])).toEqual([7]);
+      expect(db.oneOrNone).not.toHaveBeenCalled();
+    });
+
+    test.each(['record_created', 'record_rescheduled', 'record_cancelled', 'visit_reminder', 'visit_review', 'visit_after', 'first_visit'])(
+      '%s: порог один для всех типов (29 минут уходит, 31 — гасится)', async (type) => {
+        const mk = (age) => job({ trigger_type: type, yclients_record_id: 0, visit_datetime: null, meta: { test: true }, scheduled_at: ago(age) });
+        setup({ jobs: [mk(29 * 60 * 1000)] });
+        await worker.processTick();
+        expect(calls()).toEqual(['tdlib']);
+        expect(wasCancelled()).toBe(false);
+
+        setup({ jobs: [mk(31 * 60 * 1000)] });
+        await worker.processTick();
+        expect(transport.sendMessage).not.toHaveBeenCalled();
+        expect(wasCancelled(STALE_RE)).toBe(true);
+      });
+
+    describe('граница (staleReason напрямую, время подменено)', () => {
+      const T0 = Date.parse('2026-10-14T12:00:00+03:00');
+      let nowSpy;
+      beforeEach(() => { nowSpy = jest.spyOn(Date, 'now').mockReturnValue(T0); });
+      afterEach(() => nowSpy.mockRestore());
+
+      test('ровно TEST_MAX_AGE_MS — ещё свежа (строгое «больше»), на миллисекунду старше — устарела', async () => {
+        expect(await worker.staleReason(testJob({ scheduled_at: new Date(T0 - TEST_MAX_AGE_MS) }))).toBeNull();
+        expect(await worker.staleReason(testJob({ scheduled_at: new Date(T0 - TEST_MAX_AGE_MS - 1) }))).toBe('тестовая отправка устарела');
+      });
+
+      test('нет scheduled_at / не разобралось — возраст не выдумываем (как у остальных типов)', async () => {
+        expect(await worker.staleReason(testJob({ scheduled_at: null }))).toBeNull();
+        expect(await worker.staleReason(testJob({ scheduled_at: 'не дата' }))).toBeNull();
+      });
+
+      test('строка из БД приходит Date/ISO-строкой — обе формы читаются', async () => {
+        const old = T0 - TEST_MAX_AGE_MS - 1000;
+        expect(await worker.staleReason(testJob({ scheduled_at: new Date(old).toISOString() }))).toBe('тестовая отправка устарела');
+        expect(await worker.staleReason(testJob({ scheduled_at: new Date(old) }))).toBe('тестовая отправка устарела');
+      });
+
+      test('обычная (не тестовая) строка порогом в 30 минут не затронута: 3 часа опоздания у record_created ещё не «устарело»', async () => {
+        db.oneOrNone.mockReset();
+        db.oneOrNone.mockResolvedValue(null);
+        const r = await worker.staleReason(job({ trigger_type: 'record_created', scheduled_at: new Date(T0 - 3 * HOUR) }));
+        expect(r).toBeNull();
+      });
     });
   });
 });
