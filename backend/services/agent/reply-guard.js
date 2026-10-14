@@ -520,6 +520,30 @@ function checkQuestionInsteadOfOffer(text, opts = {}) {
   return [{ type: 'question_instead_of_offer', value: clause.trim().slice(0, SALES_CLAUSE_CAP) }];
 }
 
+// ── Медицинский предвызов КБ (14.10.2026) — ТОЛЬКО ЛОГ ──────────────────────
+// Блок «СВЕДЕНИЯ ИЗ БАЗЫ ЗНАНИЙ…» был, а в реплике нет ни одного содержательного
+// стема (≥5 букв), общего со строками блока, — модель ответила мимо статьи.
+// Слова заголовка статьи и вопроса пациента в сверку не идут: их модель
+// повторила бы и без чтения блока. Не HARD_TYPES: сначала измерить.
+// Своя токенизация, без service-fact: тот сам требует reply-guard (цикл).
+const MED_STEM_LEN = 5;
+const MED_STOP_PREFIXES = ['котор', 'может', 'можно', 'также', 'очень', 'тольк', 'здрав', 'пожал',
+  'спаси', 'подск', 'напиш', 'сейча', 'обычн', 'клини'];
+function medStems(text) {
+  return new Set((String(text || '').toLowerCase().replace(/ё/g, 'е').match(/\p{L}{5,}/gu) || [])
+    .map(w => w.slice(0, MED_STEM_LEN))
+    .filter(s => !MED_STOP_PREFIXES.some(p => s.startsWith(p))));
+}
+function checkMedicalKbUsage(text, opts = {}) {
+  const lines = Array.isArray(opts.medicalKbLines) ? opts.medicalKbLines : null;
+  if (!lines || !lines.length) return [];
+  const exclude = new Set([...medStems((opts.titles || []).join(' ')), ...medStems(opts.patientText)]);
+  const block = [...medStems(lines.join(' '))].filter(s => !exclude.has(s));
+  const reply = medStems(text);
+  if (block.some(s => reply.has(s))) return [];
+  return [{ type: 'medical_kb_unused', value: String(text || '').replace(/\s+/g, ' ').trim().slice(0, SALES_CLAUSE_CAP) }];
+}
+
 // Жёсткие нарушения — оркестратор просит модель переписать ответ; стилистика
 // (эмодзи, приветствие, offer_bypass, free_day_time, gift_repeat) — только лог.
 //
@@ -579,7 +603,7 @@ module.exports = {
   checkUnbackedUnavailability, BOOKED_UP_RE, checkRejectedRepeat, isRefusal, REFUSAL_RE,
   fabricationViolations, FABRICATION_TYPES, SAFE_FALLBACK_TEXT,
   checkRedundantProcedureQuestion, RESCHEDULE_INTENT_RE, ASK_PROCEDURE_RE,
-  checkPriceWithoutNextStep, checkQuestionInsteadOfOffer,
+  checkPriceWithoutNextStep, checkQuestionInsteadOfOffer, checkMedicalKbUsage,
   // price-followthrough.js: тот же признак суммы и шага, что у телеметрии.
   PRICE_SUM_RE, NEXT_STEP_RE,
 };

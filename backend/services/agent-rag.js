@@ -285,10 +285,34 @@ async function buildKnowledgeContext(salonId, query, opts = {}) {
   return { context: context.trimEnd(), sources: articleIds, fragments };
 }
 
+// Заголовки опубликованных не внутренних статей — для медицинского предвызова
+// (medical-kb.matchTitles). WHERE тот же, что у retrieveChunks. TTL-кэш 60 с
+// на салон: зовётся на каждом медицинском ходу. Оркестратор зовёт через
+// объект модуля (rag.listArticleTitles) — живой пробник подменяет его вместе с
+// buildKnowledgeContext на прод-КБ.
+const TITLES_TTL_MS = 60 * 1000;
+const titlesCache = new Map();
+
+async function listArticleTitles(salonId, opts = {}) {
+  const now = opts.nowMs || Date.now();
+  const hit = titlesCache.get(salonId);
+  if (hit && now - hit.at < TITLES_TTL_MS) return hit.titles;
+  const rows = await db.any(
+    `SELECT title FROM kb_articles
+      WHERE salon_id = $1 AND is_published = true AND internal_only = false
+      ORDER BY id`, [salonId]);
+  const titles = rows.map(r => String((r && r.title) || '').trim()).filter(Boolean);
+  titlesCache.set(salonId, { at: now, titles });
+  return titles;
+}
+
+function _resetTitlesCache() { titlesCache.clear(); }
+
 module.exports = {
   DEFAULT_MAX_CHARS, CONTEXT_CHAR_BUDGET, chunkArticle, hashChunk,
   vectorNorm, cosineSim, reciprocalRankFusion,
   reembedArticle, retrieveChunks,
   serviceLinksForArticles, liveServicesForArticles, formatServiceLine,
   stripStaticServicePrices, PRICE_QUERY_RE, buildKnowledgeContext,
+  listArticleTitles, _resetTitlesCache,
 };
