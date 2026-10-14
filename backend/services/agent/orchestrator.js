@@ -28,6 +28,7 @@ const toolEventsDefault = require('./tool-events');
 const toolMemoryDefault = require('./tool-memory');
 const recentWrite = require('./recent-write');
 const listBookingsDefault = require('./tools/list-client-bookings');
+const ragDefault = require('../agent-rag');
 const bookingsBlock = require('./bookings-block');
 const priceListDefault = require('./price-list-data');
 const priceList = require('./price-list');
@@ -599,6 +600,14 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
   let serviceFactKb = null;    // сырой ответ КБ — источник адреса для address-guard
   let serviceFactQuery = null; // аргументы предвызова — журнал и кэш повторов
   let serviceFactCheckedQuery = null; // запрос, по которому уже ходили в КБ в этом ходу
+  // Сырые ответы КБ предвызовов этого хода по тексту запроса: медицинский
+  // предвызов берёт результат справки об услуге, если запрос совпал (второго
+  // поиска нет). Переживает перегенерации, как и сами предвызовы.
+  const kbPrefetchRaw = new Map();
+  let medicalKb = null;            // { titles, lines, raw } из medical-kb.pickMedicalFragments
+  let medicalKbResult = null;      // сырой ответ инструмента — журнал, кэш повторов, address-guard
+  let medicalKbQuery = null;       // { query } — аргументы для журнала и кэша
+  let medicalCheckedKey;           // kbQuery последнего сообщения, по которому уже решали (undefined — ещё нет)
 
   for (let attempt = 0; attempt <= MAX_REGEN; attempt++) {
     // leadingClinic — сообщения клиники, срезанные из НАЧАЛА транскрипта
@@ -794,6 +803,7 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
             const kb = await serviceFactMod.withTimeout(
               registry.handlers['search_knowledge_base'](salonId, factQuery, toolCtx),
               d.serviceFactTimeoutMs || serviceFactMod.SERVICE_FACT_TIMEOUT_MS, 'service fact KB');
+            if (kb && kb.found) kbPrefetchRaw.set(curFactQuery, kb);
             const picked = kb && kb.found && typeof kb.context === 'string'
               ? serviceFactMod.pickServiceFact(kb.context, lastUserFactText, kb.fragments) : null;
             if (picked) {
@@ -810,6 +820,67 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
     }
     // В журнал — на КАЖДОЙ попытке, как промо: буфер пересоздаётся.
     if (serviceFactKb) evBuffer.push('search_knowledge_base', serviceFactQuery, serviceFactKb, false);
+
+    // Медицинский вопрос — статью КБ ищет код до первого прохода провайдера
+    // (medical-kb.js; спека 2026-10-13-mila-medical-kb-first). Живой прогон
+    // 13.10: модель 3/3 не звала КБ, хотя прямой ответ был в статье. Порядок:
+    // детектор → заголовки статей → запрос (процедура из этого или предыдущего
+    // сообщения) → поиск → отбор фрагментов нужной статьи. Ключ — kbQuery
+    // ТЕКУЩЕГО последнего сообщения (как у справки): перегенерация с тем же
+    // вопросом в КБ не идёт, с другим — блок сбрасывается. Заголовки и поиск
+    // под ОДНИМ таймаутом: listArticleTitles — запрос в БД, и зависший пул не
+    // должен держать ход. Любой сбой → без блока, ход как до фичи (fail-open):
+    // правило «СНАЧАЛА БАЗА» велит модели искать самой. v2 блок не рендерит.
+    // Результат ВОЗВРАЩАЕТСЯ из async-функции, а не пишется в переменные хода
+    // изнутри: после таймаута withTimeout отпускает ход, но функция работает
+    // дальше — запись изнутри легла бы ПОСЛЕ catch и всплыла бы на следующей
+    // перегенерации блоком, которого этот ход не дождался.
+    if (cfg.AGENT_MEDICAL_KB_PREFETCH && cfg.AGENT_PROMPT_VERSION !== 'v2') {
+      const userBlocks = [...messages].reverse()
+        .filter(m => m && m.role === 'user' && typeof m.content === 'string')
+        .slice(0, 3).map(m => stripAllStamps(m.content));
+      const lastMedText = userBlocks[0] || '';
+      const curMedKey = medicalKbMod.wantsMedicalKb(lastMedText) ? serviceFactMod.kbQuery(lastMedText) : null;
+      if (curMedKey !== medicalCheckedKey) {
+        medicalKb = null;
+        medicalKbResult = null;
+        medicalKbQuery = null;
+        medicalCheckedKey = curMedKey;
+        if (curMedKey && registry.handlers['search_knowledge_base']) {
+          let found = null;
+          try {
+            found = await serviceFactMod.withTimeout((async () => {
+              const titles = await (d.rag || ragDefault).listArticleTitles(salonId);
+              const q = medicalKbMod.buildMedicalQuery(userBlocks, titles);
+              if (!q) return { outcome: 'процедура не определена' };
+              let kb = kbPrefetchRaw.get(q.query);
+              if (!kb) {
+                kb = await registry.handlers['search_knowledge_base'](salonId, { query: q.query }, toolCtx);
+                if (kb && kb.found) kbPrefetchRaw.set(q.query, kb);
+              }
+              if (!kb || !kb.found) return { outcome: kb && kb.degraded ? 'база не ответила' : 'ничего не найдено' };
+              const picked = medicalKbMod.pickMedicalFragments(kb, q.titles);
+              if (!picked) return { outcome: 'найдено не о той процедуре' };
+              return { picked, kb, query: { query: q.query },
+                outcome: `статья ${picked.titles.map(t => `«${t}»`).join(', ')}` };
+            })(), d.serviceFactTimeoutMs || serviceFactMod.SERVICE_FACT_TIMEOUT_MS, 'medical KB');
+          } catch (e) {
+            found = { outcome: `база не ответила (${e.message})` };
+          }
+          if (found.picked) {
+            medicalKb = found.picked;
+            medicalKbResult = found.kb;
+            medicalKbQuery = found.query;
+          }
+          logger.info(`dialog ${dialogKey}: медицинский вопрос — сведения из базы: ${found.outcome}`);
+        }
+      }
+    }
+    // В журнал — на КАЖДОЙ попытке (буфер пересоздаётся). Общий со справкой
+    // поиск уже записан строкой выше — второй строкой его не дублируем.
+    if (medicalKbResult && medicalKbResult !== serviceFactKb) {
+      evBuffer.push('search_knowledge_base', medicalKbQuery, medicalKbResult, false);
+    }
 
     const convo = messages.slice();
 
@@ -936,6 +1007,7 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
       ...promptOpts, session, firstContact, firstAgentReply, leadingClinic,
       promoBlock: promoKb ? promoKb.context : null,
       serviceFact,
+      medicalKb: medicalKb ? { titles: medicalKb.titles, lines: medicalKb.lines } : null,
       lastUserText: lastUser && lastUser.content,
     }) + additionalProposals.prompt(additionalOffer);
 
@@ -1094,6 +1166,11 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
     // реальные статьи салона, т.е. легализуются лишь настоящие адреса — ровно
     // то, что дал бы собственный вызов search_knowledge_base моделью.
     if (serviceFactKb && typeof serviceFactKb.context === 'string') kbSourceText += `\n${serviceFactKb.context}`;
+    // Сведения медицинского предвызова — тоже законный источник адреса
+    // (address-guard); сырой context, не JSON.stringify (готча promo).
+    if (medicalKbResult && medicalKbResult !== serviceFactKb && typeof medicalKbResult.context === 'string') {
+      kbSourceText += `\n${medicalKbResult.context}`;
+    }
     // Кэш вызовов ЭТОГО хода для дедупа повторов (см. REPEAT_CALL_HINT).
     // Предвызов засеваем сразу: модель может позвать search_knowledge_base с тем
     // же запросом вопреки блоку промпта — второй поход в RAG за тем же ответом
@@ -1101,6 +1178,7 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
     const turnCallCache = new Map();
     if (promoKb) turnCallCache.set(repeatCallKey('search_knowledge_base', PROMO_QUERY), promoKb);
     if (serviceFactKb) turnCallCache.set(repeatCallKey('search_knowledge_base', serviceFactQuery), serviceFactKb);
+    if (medicalKbResult) turnCallCache.set(repeatCallKey('search_knowledge_base', medicalKbQuery), medicalKbResult);
 
     for (let i = 0; i < MAX_ITERS; i++) {
       let resp;
@@ -1545,6 +1623,12 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
           ...replyGuard.checkPriceWithoutNextStep(joined),
           ...replyGuard.checkQuestionInsteadOfOffer(joined,
             { slotToolCalled: slotToolCalled || freshSlotJournal, patientLastText: toolCtx.patientLastText }),
+          // Медицинский предвызов (14.10.2026): блок был, ответ мимо — только лог.
+          ...replyGuard.checkMedicalKbUsage(joined, {
+            medicalKbLines: medicalKb ? medicalKb.lines : null,
+            titles: medicalKb ? medicalKb.titles : [],
+            patientText: toolCtx.patientLastText,
+          }),
         ] : []),
       ];
       let corrections = 0;
