@@ -1,4 +1,5 @@
 'use strict';
+const { execFileSync } = require('child_process');
 const ev = require('./services/notifications/events');
 
 const base = {
@@ -30,6 +31,55 @@ describe('recordSnapshot', () => {
   test('без datetime берёт date как московское время', () => {
     const s = ev.recordSnapshot({ ...base, data: { ...base.data, datetime: undefined } });
     expect(s.visitAt).toBe(T('2026-10-20T13:30:00+03:00'));
+  });
+  const phoneOf = (raw) => ev.recordSnapshot({ ...base, data: { ...base.data, client: { id: 7, phone: raw } } }).phone;
+  test('телефон — только канон 7XXXXXXXXXX: 8→7, 10-значное ядро дополняется, прочее → null', () => {
+    expect(phoneOf('89200255591')).toBe('79200255591');
+    expect(phoneOf('9200255591')).toBe('79200255591');
+    expect(phoneOf('+7 (920) 025-55-91')).toBe('79200255591');
+  });
+  test('мусор вместо телефона → null, а не truthy «7»', () => {
+    // normalizePhoneKey('+7') отдаёт '7' — строка истинна, и job вставился бы без адресата.
+    for (const junk of ['+7', '7', '8', '123', '', null, undefined, 'нет', '375291234567', '19171234567']) {
+      expect(phoneOf(junk)).toBeNull();
+    }
+    expect(ev.recordSnapshot({ ...base, data: { ...base.data, client: undefined } }).phone).toBeNull();
+  });
+});
+
+describe('parseVisitAt', () => {
+  const MSK = T('2026-10-20T13:30:00+03:00');
+  test('смещение в строке главнее: +03:00, +0300, Z, чужой пояс', () => {
+    expect(ev.parseVisitAt('2026-10-20T13:30:00+03:00', '')).toBe(MSK);
+    expect(ev.parseVisitAt('2026-10-20T13:30:00+0300', '')).toBe(MSK);
+    expect(ev.parseVisitAt('2026-10-20T10:30:00Z', '')).toBe(MSK);
+    expect(ev.parseVisitAt('2026-10-20T15:30:00+05:00', '')).toBe(MSK);
+    expect(ev.parseVisitAt('2026-10-20T05:30:00-05:00', '')).toBe(MSK);
+  });
+  test('datetime БЕЗ смещения — московские стенные часы, а не пояс процесса', () => {
+    expect(ev.parseVisitAt('2026-10-20T13:30:00', '')).toBe(MSK);
+    expect(ev.parseVisitAt('2026-10-20 13:30:00', '')).toBe(MSK);
+    expect(ev.parseVisitAt('2026-10-20T13:30', '')).toBe(MSK);
+  });
+  test('на UTC-хосте (дев-сервер) то же самое: Date.parse без смещения читает ЛОКАЛЬНОЕ время', () => {
+    // Jest идёт в TZ=Europe/Moscow (globalSetup), и там ошибка невидима: локальное время = московское.
+    // Поэтому проверка — в дочернем процессе с TZ=UTC.
+    const out = execFileSync(process.execPath, ['-e',
+      `const ev = require(${JSON.stringify(require.resolve('./services/notifications/events'))});
+       process.stdout.write(JSON.stringify([ev.parseVisitAt('2026-10-20T13:30:00', ''), ev.parseVisitAt('2026-10-20 13:30:00', ''),
+         ev.parseVisitAt('2026-10-20T13:30:00+03:00', '')]));`],
+    { env: { ...process.env, TZ: 'UTC' }, encoding: 'utf8' });
+    expect(JSON.parse(out)).toEqual([MSK, MSK, MSK]);
+  });
+  test('нет или мусор в datetime → берётся date (московское время)', () => {
+    expect(ev.parseVisitAt(undefined, '2026-10-20 13:30:00')).toBe(MSK);
+    expect(ev.parseVisitAt('', '2026-10-20 13:30:00')).toBe(MSK);
+    expect(ev.parseVisitAt('вчера', '2026-10-20 13:30:00')).toBe(MSK);
+  });
+  test('ничего разборчивого → null', () => {
+    expect(ev.parseVisitAt(undefined, undefined)).toBeNull();
+    expect(ev.parseVisitAt('', '')).toBeNull();
+    expect(ev.parseVisitAt('2026-10-20', '2026-10-20')).toBeNull();
   });
 });
 
@@ -64,30 +114,82 @@ describe('classifyRecordEvent', () => {
     const c = ev.recordSnapshot({ ...base, status: 'update', data: { ...base.data, attendance: 2 } });
     expect(ev.classifyRecordEvent(snap, c).confirmed).toBe(true);
   });
+
+  // Записи «клиент не придёт» (attendance -1) администратор переносит и одним действием снимает отметку:
+  // в реальных вебхуках это 12 случаев из 344 (prev {-1, визит A} → {0, визит B}).
+  describe('отмена, перенос и возврат из отмены', () => {
+    const upd = (over) => ev.recordSnapshot({ ...base, status: 'update', data: { ...base.data, ...over } });
+    const noShow = upd({ attendance: -1 });
+    const MOVED = { datetime: '2026-10-27T17:00:00+03:00', date: '2026-10-27 17:00:00' };
+
+    test('перенос + снятие «не придёт» одним update → rescheduled (и restored), не cancelled', () => {
+      const k = ev.classifyRecordEvent(noShow, upd({ attendance: 0, ...MOVED }));
+      expect(k).toMatchObject({ rescheduled: true, restored: true, cancelled: false, created: false });
+    });
+    test('снятие «не придёт» без смены времени → restored, но не rescheduled', () => {
+      expect(ev.classifyRecordEvent(noShow, upd({ attendance: 0 })))
+        .toMatchObject({ restored: true, rescheduled: false, cancelled: false });
+    });
+    test('возврат удалённой записи (deleted → живая) → restored', () => {
+      const del = upd({ deleted: true });
+      expect(ev.classifyRecordEvent(del, upd({ deleted: false }))).toMatchObject({ restored: true, cancelled: false });
+    });
+    test('перенос записи, которая ОСТАЁТСЯ отменённой, → ни rescheduled, ни restored', () => {
+      const k = ev.classifyRecordEvent(noShow, upd({ attendance: -1, ...MOVED }));
+      expect(k).toMatchObject({ rescheduled: false, restored: false, cancelled: false });
+    });
+    test('restored: нет prev → нет; живая запись без отмены в прошлом → нет; отмена сейчас → нет', () => {
+      expect(ev.classifyRecordEvent(null, upd({ attendance: 0 })).restored).toBe(false);
+      expect(ev.classifyRecordEvent(snap, upd({ attendance: 0 })).restored).toBe(false);
+      expect(ev.classifyRecordEvent(snap, noShow).restored).toBe(false);
+      expect(ev.classifyRecordEvent(noShow, noShow).restored).toBe(false);
+    });
+    test('перенос обычной живой записи по-прежнему rescheduled, restored=false', () => {
+      expect(ev.classifyRecordEvent(snap, upd({ ...MOVED }))).toMatchObject({ rescheduled: true, restored: false });
+    });
+  });
 });
 
 describe('reminderAt', () => {
   const snap = ev.recordSnapshot(base);           // визит 20.10 13:30 мск
+  const NOW = T('2026-10-18T10:00:00+03:00');
+  const DAY_BEFORE = T('2026-10-19T13:30:00+03:00');
   test('за hours_before правила', () => {
-    expect(ev.reminderAt(snap, { hours_before: 24 }, {}, T('2026-10-18T10:00:00+03:00')))
-      .toBe(T('2026-10-19T13:30:00+03:00'));
+    expect(ev.reminderAt(snap, { hours_before: 24 }, {}, NOW)).toBe(DAY_BEFORE);
+    expect(ev.reminderAt(snap, { hours_before: 48 }, {}, NOW)).toBe(T('2026-10-18T13:30:00+03:00'));
   });
-  test('sms_before записи перекрывает правило', () => {
-    const s = { ...snap, smsBefore: 2 };
-    expect(ev.reminderAt(s, { hours_before: 24 }, {}, T('2026-10-18T10:00:00+03:00')))
-      .toBe(T('2026-10-20T11:30:00+03:00'));
+  test('sms_before записи не влияет — правило главнее', () => {
+    // В вебхуках sms_before — дефолт компании (24 или 0), а не выбор клиента; Chatpush шлёт ровно за
+    // 24 ч и при sms_before=0. Поэтому поле записи напоминание НЕ сдвигает ни вперёд, ни назад.
+    for (const smsBefore of [2, 0, 24, 72]) {
+      expect(ev.reminderAt({ ...snap, smsBefore }, { hours_before: 24 }, {}, NOW)).toBe(DAY_BEFORE);
+    }
+    expect(ev.reminderAt({ ...snap, smsBefore: 2 }, { hours_before: 48 }, {}, NOW)).toBe(T('2026-10-18T13:30:00+03:00'));
+  });
+  test('hours_before не задан, не число или ≤ 0 → 24 часа', () => {
+    for (const hours_before of [undefined, null, 0, -3, NaN, 'abc', Infinity]) {
+      expect(ev.reminderAt(snap, { hours_before }, {}, NOW)).toBe(DAY_BEFORE);
+    }
+    expect(ev.reminderAt(snap, undefined, {}, NOW)).toBe(DAY_BEFORE);
+    expect(ev.reminderAt(snap, { hours_before: '12' }, {}, NOW)).toBe(T('2026-10-20T01:30:00+03:00'));
   });
   test('момент уже прошёл → null (YClients тоже не шлёт)', () => {
     expect(ev.reminderAt(snap, { hours_before: 24 }, {}, T('2026-10-19T14:00:00+03:00'))).toBeNull();
   });
+  test('нечисловой момент визита или «сейчас» → null, а не NaN в SQL', () => {
+    expect(ev.reminderAt({ ...snap, visitAt: NaN }, { hours_before: 24 }, {}, NOW)).toBeNull();
+    expect(ev.reminderAt({ ...snap, visitAt: null }, { hours_before: 24 }, {}, NOW)).toBeNull();
+    expect(ev.reminderAt(snap, { hours_before: 24 }, {}, NaN)).toBeNull();
+  });
   test('тихие часы сдвигают на quiet_to', () => {
     const night = { ...snap, visitAt: T('2026-10-20T23:00:00+03:00') };  // напоминание в 23:00 19.10
-    expect(ev.reminderAt(night, { hours_before: 24 }, { quiet_from: '22:00', quiet_to: '09:00' }, T('2026-10-18T10:00:00+03:00')))
+    expect(ev.reminderAt(night, { hours_before: 24 }, { quiet_from: '22:00', quiet_to: '09:00' }, NOW))
       .toBe(T('2026-10-20T09:00:00+03:00'));
   });
   test('сдвиг тихими часами за момент визита → null', () => {
-    const early = { ...snap, visitAt: T('2026-10-20T08:00:00+03:00'), smsBefore: 2 };
-    expect(ev.reminderAt(early, { hours_before: 24 }, { quiet_from: '22:00', quiet_to: '09:00' }, T('2026-10-18T10:00:00+03:00'))).toBeNull();
+    // визит в 08:00, напоминание за 2 ч = 06:00 — в тихих часах; сдвиг на 09:00 уехал бы за сам визит
+    const early = { ...snap, visitAt: T('2026-10-20T08:00:00+03:00') };
+    expect(ev.reminderAt(early, { hours_before: 2 }, { quiet_from: '22:00', quiet_to: '09:00' }, NOW)).toBeNull();
   });
 });
 
@@ -98,6 +200,21 @@ describe('afterVisitAt', () => {
   });
   test('«пришёл» поставлен после окончания → от now', () => {
     expect(ev.afterVisitAt(snap, 5, T('2026-10-20T15:00:00+03:00'))).toBe(T('2026-10-20T15:05:00+03:00'));
+  });
+  test('нечисловой delay → 0, без NaN', () => {
+    const now = T('2026-10-20T13:40:00+03:00');
+    const END = T('2026-10-20T14:30:00+03:00');
+    for (const bad of [undefined, null, '', 'abc', NaN, {}, Infinity, -5]) {
+      const at = ev.afterVisitAt(snap, bad, now);
+      expect(Number.isNaN(at)).toBe(false);
+      expect(at).toBe(END);
+    }
+    expect(ev.afterVisitAt(snap, '7', now)).toBe(END + 7 * 60000);
+  });
+  test('нет момента визита или длительности → от now / от начала визита, без NaN', () => {
+    const now = T('2026-10-20T13:40:00+03:00');
+    expect(ev.afterVisitAt({ ...snap, visitAt: null }, 5, now)).toBe(now + 5 * 60000);
+    expect(ev.afterVisitAt({ ...snap, seanceLength: undefined }, 0, now)).toBe(now);
   });
 });
 
