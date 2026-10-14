@@ -83,6 +83,8 @@ function setup({ jobs = [], checks = [], st = state(), mode = 'live', captured =
   chatPersist.persistWhatsappOutgoing.mockImplementation(async () => {});
   fs.existsSync.mockReset();
   fs.existsSync.mockImplementation((p) => (isUpload(p) ? true : realFs.existsSync(p)));
+  fs.readFileSync.mockReset();
+  fs.readFileSync.mockImplementation((p, ...rest) => (isUpload(p) ? Buffer.from('img') : realFs.readFileSync(p, ...rest)));
 }
 const calls = () => transport.sendMessage.mock.calls.map(([, p]) => p.dispatchRouting[0]);
 const updates = (re) => db.query.mock.calls.filter(([sql]) => re.test(sql)).map(([, p]) => p);
@@ -161,6 +163,54 @@ describe('отправка и каскад', () => {
     expect(statusUpdates().some((p) => p[1] === 'failed')).toBe(true);
   });
 
+  describe('сбой соединения до отправки запроса — однозначный отказ на уровне воркера', () => {
+    const connErr = (code) => Object.assign(new Error(`connect ${code} 127.0.0.1:3002`), { code });
+
+    test.each(['ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN'])('%s на шаге → следующий мессенджер: соединения не было, запрос никуда не уходил', async (code) => {
+      setup({ jobs: [job()] });
+      transport.sendMessage.mockImplementationOnce(async () => { throw connErr(code); });
+      await worker.processTick();
+      expect(calls()).toEqual(['tdlib', 'whatsapp']);
+      const log = JSON.parse(updates(/SET channel_used=\$2/)[0].find((v) => typeof v === 'string' && v.startsWith('[')));
+      expect(log.map((s) => s.res)).toEqual(['rejected', 'sent']);
+    });
+
+    test('шлюз лежит (ECONNREFUSED на всех шагах) → исчерпанный каскад возвращает строку в pending на повтор, а не в failed', async () => {
+      setup({ jobs: [job({ attempts: 1 })] });
+      transport.sendMessage.mockImplementation(async () => { throw connErr('ECONNREFUSED'); });
+      await worker.processTick();
+      expect(calls()).toEqual(['tdlib', 'whatsapp', 'max']);
+      expect(statusUpdates().some((p) => p[1] === 'pending')).toBe(true);
+      expect(statusUpdates().some((p) => p[1] === 'failed')).toBe(false);
+    });
+
+    test('шлюз лежит и попытки кончились → failed (бесконечного повтора нет)', async () => {
+      setup({ jobs: [job({ attempts: 3 })] });
+      transport.sendMessage.mockImplementation(async () => { throw connErr('ENOTFOUND'); });
+      await worker.processTick();
+      expect(statusUpdates().some((p) => p[1] === 'failed')).toBe(true);
+    });
+
+    test('файл (sendFile): ECONNREFUSED — тоже отказ без отправки, каскад идёт дальше', async () => {
+      setup({ jobs: [job({ trigger_type: 'visit_after', attachment_url: '/uploads/notify_1_6_1.jpg' })], st: state({ attendance: 1 }) });
+      transport.sendFile.mockImplementationOnce(async () => { throw connErr('ECONNREFUSED'); });
+      await worker.processTick();
+      expect(transport.sendFile.mock.calls.map(([, p]) => p.dispatchRouting[0])).toEqual(['tdlib', 'whatsapp']);
+    });
+
+    // ECONNRESET в набор «соединение не установлено» сознательно НЕ входит: сокет мог оборваться
+    // уже после того, как запрос ушёл (и шлюз его принял) — повтор в другой мессенджер дал бы дубль.
+    test.each(['ECONNRESET', 'ETIMEDOUT', 'ECONNABORTED', 'EPIPE'])('%s — неоднозначен (запрос мог уйти до обрыва): каскад останавливается, failed', async (code) => {
+      setup({ jobs: [job()] });
+      transport.sendMessage.mockImplementationOnce(async () => { throw connErr(code); });
+      await worker.processTick();
+      expect(calls()).toEqual(['tdlib']);
+      const p = statusUpdates().find((x) => x[1] === 'failed');
+      expect(p).toBeDefined();
+      expect(p[2]).toMatch(/неоднозначн/);
+    });
+  });
+
   test('все мессенджеры отказали, попытки остались → pending для повтора (sent_at от захвата снимается)', async () => {
     setup({ jobs: [job({ attempts: 1 })] });
     transport.sendMessage.mockImplementation(async () => { throw rej('нет'); });
@@ -194,6 +244,20 @@ describe('отправка и каскад', () => {
     expect(calls()).toEqual(['whatsapp']);
   });
 
+  test('каскад пересобран (это не продолжение) → цикл идёт с нуля, даже если в строке остался cascade_pos', async () => {
+    setup({ jobs: [job({ cascade_pos: 2, routing: null })] });
+    await worker.processTick();
+    expect(calls()).toEqual(['tdlib']);
+    expect(updates(/SET channel_used=\$2/)[0]).toEqual(expect.arrayContaining(['tdlib', 0]));
+  });
+
+  test('routing пуст ([]) при cascade_pos > 0 — тоже не продолжение: с нуля, по настройкам', async () => {
+    setup({ jobs: [job({ cascade_pos: 1, routing: [] })], conv: { lastChannel: 'max', chats: {} } });
+    await worker.processTick();
+    expect(calls()).toEqual(['max']);
+    expect(updates(/SET channel_used=\$2/)[0]).toEqual(expect.arrayContaining(['max', 0]));
+  });
+
   test('пустой каскад в настройках → failed с понятной причиной', async () => {
     setup({ jobs: [job()], order: [] });
     await worker.processTick();
@@ -222,6 +286,18 @@ describe('отправка и каскад', () => {
     expect(transport.sendMessage).not.toHaveBeenCalled();
     const p = statusUpdates().find((x) => x[1] === 'pending');
     expect(p[2]).toMatch(/tdlib=rejected, whatsapp=rejected, max=rejected/);
+  });
+
+  test.each(['EACCES', 'EISDIR', 'EMFILE'])('файл вложения не читается (%s) — локальный отказ, а не «могло уйти»: каскад идёт дальше, failed не ставится', async (code) => {
+    setup({ jobs: [job({ trigger_type: 'visit_after', attachment_url: '/uploads/notify_1_6_1.jpg' })], st: state({ attendance: 1 }) });
+    fs.readFileSync.mockImplementation(() => { throw Object.assign(new Error(`${code}: cannot read file`), { code }); });
+    await worker.processTick();
+    expect(transport.sendFile).not.toHaveBeenCalled();
+    expect(transport.sendMessage).not.toHaveBeenCalled();
+    const p = statusUpdates().find((x) => x[1] === 'pending');
+    expect(p[2]).toMatch(/tdlib=rejected, whatsapp=rejected, max=rejected/);
+    expect(JSON.parse(p[5])[0].err).toMatch(/не читается/);
+    expect(statusUpdates().some((x) => x[1] === 'failed')).toBe(false);
   });
 });
 
@@ -473,6 +549,13 @@ describe('перепроверка состояния записи перед о
       expect(q[0]).toMatch(/id <> \$4/);
     });
 
+    test('считается и failed с sent_at: письмо могло дойти (неоднозначный сбой оставляет метку захвата)', async () => {
+      setup({ jobs: [job({ trigger_type: 'visit_review' })], st: state({ attendance: 1 }) });
+      await worker.processTick();
+      const q = db.oneOrNone.mock.calls.find(([sql]) => /FROM notification_jobs/.test(sql));
+      expect(q[0]).toMatch(/\(status IN \('sent','shadow'\) OR \(status = 'failed' AND sent_at IS NOT NULL\)\)/);
+    });
+
     test.each(['record_created', 'record_rescheduled', 'record_cancelled', 'visit_reminder', 'visit_after'])('%s: проверки «раз на телефон» нет — таких писем у клиента может быть много', async (type) => {
       setup({ jobs: [job({ trigger_type: type })], st: state({ attendance: type === 'visit_after' ? 1 : (type === 'record_cancelled' ? -1 : 0) }), sibling: { id: 1 } });
       await worker.processTick();
@@ -574,10 +657,18 @@ describe('устаревшее после простоя процесса', () =
       expect(calls()).toEqual(['tdlib']);
     });
 
-    test('продолжение каскада после «Невозможно доставить» не устаревает (сверка ставит scheduled_at = сейчас)', async () => {
-      setup({ jobs: [job({ cascade_pos: 1, routing: ['max', 'tdlib'], scheduled_at: ago(1000) })] });
+    test('продолжение каскада свежей строки уходит', async () => {
+      setup({ jobs: [job({ cascade_pos: 1, routing: ['max', 'tdlib'], scheduled_at: ago(10 * 60 * 1000) })] });
       await worker.processTick();
       expect(calls()).toEqual(['tdlib']);
+    });
+
+    // Сверка доставки scheduled_at НЕ сбрасывает: иначе продолжение обходило бы эту защиту.
+    test('продолжение каскада НЕ обходит защиту: исходный scheduled_at старше порога → «устарело»', async () => {
+      setup({ jobs: [job({ cascade_pos: 1, routing: ['max', 'tdlib'], scheduled_at: ago(MAX_LATENESS_MS + 5 * 60 * 1000) })] });
+      await worker.processTick();
+      expect(transport.sendMessage).not.toHaveBeenCalled();
+      expect(wasCancelled(/^устарело: опоздание 12 ч$/)).toBe(true);
     });
   });
 
@@ -595,6 +686,157 @@ describe('устаревшее после простоя процесса', () =
       expect(calls()).toEqual(['tdlib']);
       expect(wasCancelled()).toBe(false);
     });
+  });
+});
+
+describe('тихие часы в момент отправки (отложенные типы)', () => {
+  // Подменяется только Date: промисы и таймеры работают как обычно.
+  const ALL_BUT_DATE = ['hrtime', 'nextTick', 'performance', 'queueMicrotask', 'requestAnimationFrame', 'cancelAnimationFrame',
+    'requestIdleCallback', 'cancelIdleCallback', 'setImmediate', 'clearImmediate', 'setInterval', 'clearInterval', 'setTimeout', 'clearTimeout'];
+  const at = (iso) => jest.useFakeTimers({ now: Date.parse(iso), doNotFake: ALL_BUT_DATE });   // вызывать ДО job(): ago() читает Date.now()
+  afterEach(() => jest.useRealTimers());
+  const QUIET = { quiet_from: '21:00', quiet_to: '09:00' };
+  const NIGHT = '2026-10-14T23:30:00+03:00';
+  const MORNING_MS = Date.parse('2026-10-15T09:00:00+03:00');
+  const DEFERRED = ['visit_reminder', 'visit_review', 'visit_after', 'first_visit'];
+  const IMMEDIATE = ['record_created', 'record_rescheduled', 'record_cancelled'];
+  const okState = (type) => state({ attendance: type === 'record_cancelled' ? -1 : (type === 'visit_review' || type === 'visit_after' ? 1 : 0) });
+  const deferUpdates = () => updates(/SET scheduled_at=\$2/);
+
+  test.each(DEFERRED)('%s ночью → не отправляется: scheduled_at сдвигается на конец тихих часов, попытка откатывается, статус остаётся pending', async (type) => {
+    at(NIGHT);
+    setup({ jobs: [job({ id: 9, trigger_type: type, attempts: 2 })], st: okState(type), cfgOver: QUIET });
+    await worker.processTick();
+    expect(transport.sendMessage).not.toHaveBeenCalled();
+    expect(updates(/SET status='sent', sent_at/)).toHaveLength(0);   // даже не захватывали
+    expect(statusUpdates()).toHaveLength(0);                          // ни cancelled, ни failed, ни pending
+    const d = deferUpdates();
+    expect(d).toHaveLength(1);
+    expect(d[0][0]).toBe(9);
+    expect(new Date(d[0][1]).getTime()).toBe(MORNING_MS);
+    expect(d[0][2]).toMatch(/^тихие часы: отправка перенесена на 15\.10 09:00$/);
+    const [sql] = db.query.mock.calls.find(([q]) => /SET scheduled_at=\$2/.test(q));
+    expect(sql).toMatch(/attempts = GREATEST\(attempts-1,0\)/);
+    expect(sql).toMatch(/WHERE id=\$1 AND status='pending'/);
+  });
+
+  test.each(DEFERRED)('%s днём → уходит как обычно', async (type) => {
+    at('2026-10-14T12:00:00+03:00');
+    setup({ jobs: [job({ trigger_type: type })], st: okState(type), cfgOver: QUIET });
+    await worker.processTick();
+    expect(calls()).toEqual(['tdlib']);
+    expect(deferUpdates()).toHaveLength(0);
+  });
+
+  test.each(IMMEDIATE)('%s ночью → уходит сразу (мгновенные типы тихие часы не сдвигают)', async (type) => {
+    at(NIGHT);
+    setup({ jobs: [job({ trigger_type: type })], st: okState(type), cfgOver: QUIET });
+    await worker.processTick();
+    expect(calls()).toEqual(['tdlib']);
+    expect(deferUpdates()).toHaveLength(0);
+  });
+
+  test('окно через полночь: в 03:00 отправка переносится на 09:00 того же дня', async () => {
+    at('2026-10-15T03:00:00+03:00');
+    setup({ jobs: [job({ trigger_type: 'visit_review' })], st: okState('visit_review'), cfgOver: QUIET });
+    await worker.processTick();
+    expect(new Date(deferUpdates()[0][1]).getTime()).toBe(MORNING_MS);
+  });
+
+  test('границы окна: 21:00 — уже тихие часы, 09:00 — уже нет', async () => {
+    at('2026-10-14T21:00:00+03:00');
+    setup({ jobs: [job({ trigger_type: 'visit_review' })], st: okState('visit_review'), cfgOver: QUIET });
+    await worker.processTick();
+    expect(deferUpdates()).toHaveLength(1);
+    jest.useRealTimers();
+    at('2026-10-15T09:00:00+03:00');
+    setup({ jobs: [job({ trigger_type: 'visit_review' })], st: okState('visit_review'), cfgOver: QUIET });
+    await worker.processTick();
+    expect(deferUpdates()).toHaveLength(0);
+    expect(calls()).toEqual(['tdlib']);
+  });
+
+  describe('visit_reminder: если тихие часы кончаются не раньше визита, напоминание бессмысленно', () => {
+    test('визит в 08:00, тихие часы до 09:00 → cancelled «тихие часы до начала визита»', async () => {
+      at(NIGHT);
+      const visit = new Date('2026-10-15T08:00:00+03:00');
+      setup({ jobs: [job({ trigger_type: 'visit_reminder', visit_datetime: visit })], st: state({ visit_datetime: visit }), cfgOver: QUIET });
+      await worker.processTick();
+      expect(transport.sendMessage).not.toHaveBeenCalled();
+      expect(wasCancelled(/^тихие часы до начала визита$/)).toBe(true);
+      expect(deferUpdates()).toHaveLength(0);
+    });
+
+    test('визит ровно в 09:00 (>= конца тихих часов) → тоже cancelled', async () => {
+      at(NIGHT);
+      const visit = new Date('2026-10-15T09:00:00+03:00');
+      setup({ jobs: [job({ trigger_type: 'visit_reminder', visit_datetime: visit })], st: state({ visit_datetime: visit }), cfgOver: QUIET });
+      await worker.processTick();
+      expect(wasCancelled(/^тихие часы до начала визита$/)).toBe(true);
+    });
+
+    test('визит в 09:01 → напоминание переносится на 09:00', async () => {
+      at(NIGHT);
+      const visit = new Date('2026-10-15T09:01:00+03:00');
+      setup({ jobs: [job({ trigger_type: 'visit_reminder', visit_datetime: visit })], st: state({ visit_datetime: visit }), cfgOver: QUIET });
+      await worker.processTick();
+      expect(new Date(deferUpdates()[0][1]).getTime()).toBe(MORNING_MS);
+      expect(wasCancelled()).toBe(false);
+    });
+  });
+
+  test('сначала перепроверка: отменённая ночью запись отменяется, а не откладывается до утра', async () => {
+    at(NIGHT);
+    setup({ jobs: [job({ trigger_type: 'visit_reminder' })], st: state({ deleted: true }), cfgOver: QUIET });
+    await worker.processTick();
+    expect(wasCancelled(/^запись отменена к моменту отправки$/)).toBe(true);
+    expect(deferUpdates()).toHaveLength(0);
+  });
+
+  test('тестовая отправка (meta.test) тихие часы не сдвигают: админ ждёт её «в течение 10 с»', async () => {
+    at(NIGHT);
+    setup({ jobs: [job({ trigger_type: 'visit_review', yclients_record_id: 0, visit_datetime: null, meta: { test: true } })], cfgOver: QUIET });
+    await worker.processTick();
+    expect(calls()).toEqual(['tdlib']);
+    expect(deferUpdates()).toHaveLength(0);
+  });
+
+  test('shadow: ночью строка тоже переносится (журнал тени повторяет боевое поведение), shadow-строки нет', async () => {
+    at(NIGHT);
+    setup({ jobs: [job({ trigger_type: 'visit_review' })], st: okState('visit_review'), mode: 'shadow', cfgOver: QUIET });
+    await worker.processTick();
+    expect(deferUpdates()).toHaveLength(1);
+    expect(statusUpdates().some((p) => p[1] === 'shadow')).toBe(false);
+  });
+
+  test('off: тихие часы ни при чём (режим off просто возвращает попытку)', async () => {
+    at(NIGHT);
+    setup({ jobs: [job({ trigger_type: 'visit_review' })], mode: 'off', cfgOver: QUIET });
+    await worker.processTick();
+    expect(deferUpdates()).toHaveLength(0);
+  });
+
+  test('тихие часы не заданы или заданы одинаковые границы → ничего не сдвигается', async () => {
+    at(NIGHT);
+    setup({ jobs: [job({ trigger_type: 'visit_review' })], st: okState('visit_review') });
+    await worker.processTick();
+    expect(calls()).toEqual(['tdlib']);
+    setup({ jobs: [job({ trigger_type: 'visit_review' })], st: okState('visit_review'), cfgOver: { quiet_from: '21:00', quiet_to: '21:00' } });
+    await worker.processTick();
+    expect(calls()).toEqual(['tdlib']);
+    expect(deferUpdates()).toHaveLength(0);
+  });
+
+  test('сбой записи переноса не отправляет сообщение и возвращает строку на повтор', async () => {
+    at(NIGHT);
+    setup({ jobs: [job({ trigger_type: 'visit_review', attempts: 1 })], st: okState('visit_review'), cfgOver: QUIET });
+    db.query.mockImplementation(async (sql) => {
+      if (/SET scheduled_at=\$2/.test(sql)) throw new Error('db blip');
+      return { rowCount: 1, rows: [] };
+    });
+    await worker.processTick();
+    expect(transport.sendMessage).not.toHaveBeenCalled();
+    expect(statusUpdates().some((p) => p[1] === 'pending')).toBe(true);
   });
 });
 
@@ -746,7 +988,104 @@ describe('сбои до отправки', () => {
 });
 
 describe('сверка доставки', () => {
-  const chk = (over = {}) => ({ id: 7, salon_id: 1, channel_used: 'tdlib', delivery_id: 'g12', account_id: '8', cascade_pos: 0, routing: ['tdlib', 'whatsapp'], ...over });
+  const { CHECK_MAX_AGE_MS } = worker;
+  const MIN = 60 * 1000;
+  // sent_at по умолчанию — «две минуты назад», как при обычной сверке через CHECK_DELAY_S.
+  const chk = (over = {}) => ({ id: 7, salon_id: 1, channel_used: 'tdlib', delivery_id: 'g12', account_id: '8', cascade_pos: 0, routing: ['tdlib', 'whatsapp'], sent_at: ago(2 * MIN), ...over });
+  const flips = () => updates(/SET status=\$2, cascade_pos=\$3/);
+  const stepLogs = () => updates(/SET cascade_log = cascade_log \|\| \$2::jsonb\s+WHERE id=\$1 AND status='sent'/);
+  const FAILED5 = { id: 'g12', status: { status_id: 5, description: 'Невозможно доставить' } };
+
+  test('порог «поздней» сверки — 8 минут (шлюз закрывает зависшие «Принято» через 10), константа экспортируется', () => {
+    expect(CHECK_MAX_AGE_MS).toBe(8 * MIN);
+  });
+
+  test('продолжение НЕ сбрасывает scheduled_at (иначе обходит защиту «опоздание > 12 ч»), но делает строку сразу доступной для аренды', async () => {
+    setup({ checks: [chk()] });
+    transport.getDeliveryStatus.mockResolvedValue(FAILED5);
+    await worker.processTick();
+    const [sql] = db.query.mock.calls.find(([s]) => /SET status=\$2, cascade_pos=\$3/.test(s));
+    expect(sql).not.toMatch(/scheduled_at/);
+    expect(sql).toMatch(/attempts=0, last_attempt_at=NULL/);
+  });
+
+  test('поздняя сверка (с отправки больше 8 мин): каскад НЕ продолжается, строка остаётся sent, в журнале шаг undeliverable_unknown', async () => {
+    setup({ checks: [chk({ sent_at: ago(CHECK_MAX_AGE_MS + 2 * MIN) })] });
+    transport.getDeliveryStatus.mockResolvedValue(FAILED5);
+    await worker.processTick();
+    expect(flips()).toHaveLength(0);
+    const l = stepLogs();
+    expect(l).toHaveLength(1);
+    expect(l[0][0]).toBe(7);
+    const steps = JSON.parse(l[0][1]);
+    expect(steps).toHaveLength(1);
+    expect(steps[0]).toMatchObject({ ch: 'tdlib', res: 'undeliverable_unknown' });
+    expect(steps[0].err).toMatch(/10 мин/);
+    expect(transport.sendMessage).not.toHaveBeenCalled();
+  });
+
+  test('граница: 7 мин 30 с после отправки — ещё продолжаем, 8 мин 30 с — уже нет', async () => {
+    setup({ checks: [chk({ sent_at: ago(CHECK_MAX_AGE_MS - 30 * 1000) })] });
+    transport.getDeliveryStatus.mockResolvedValue(FAILED5);
+    await worker.processTick();
+    expect(flips()[0].slice(0, 3)).toEqual([7, 'pending', 1]);
+    setup({ checks: [chk({ sent_at: ago(CHECK_MAX_AGE_MS + 30 * 1000) })] });
+    transport.getDeliveryStatus.mockResolvedValue(FAILED5);
+    await worker.processTick();
+    expect(flips()).toHaveLength(0);
+  });
+
+  test('шлюз: «исход неизвестен» в error (failStale при старте закрыл доставку) → не продолжаем, шаг undeliverable_unknown', async () => {
+    setup({ checks: [chk()] });
+    transport.getDeliveryStatus.mockResolvedValue({ ...FAILED5, error: 'шлюз перезапущен, исход неизвестен' });
+    await worker.processTick();
+    expect(flips()).toHaveLength(0);
+    const steps = JSON.parse(stepLogs()[0][1]);
+    expect(steps[0]).toMatchObject({ ch: 'tdlib', res: 'undeliverable_unknown' });
+    expect(steps[0].err).toMatch(/исход неизвестен/);
+  });
+
+  test('«исход неизвестен» в описании статуса — тоже не продолжаем (регистр не важен)', async () => {
+    setup({ checks: [chk()] });
+    transport.getDeliveryStatus.mockResolvedValue({ status: { status_id: 5, description: 'Исход неизвестен' } });
+    await worker.processTick();
+    expect(flips()).toHaveLength(0);
+    expect(stepLogs()).toHaveLength(1);
+  });
+
+  test('настоящий отказ (шлюз: error без «исход неизвестен», свежая сверка) → нормальное продолжение со следующего мессенджера', async () => {
+    setup({ checks: [chk()] });
+    transport.getDeliveryStatus.mockResolvedValue({ ...FAILED5, error: '400 USER_IS_BLOCKED' });
+    await worker.processTick();
+    expect(flips()[0].slice(0, 3)).toEqual([7, 'pending', 1]);
+    expect(stepLogs()).toHaveLength(0);
+  });
+
+  test('время отправки неизвестно (sent_at пуст) — свежесть не доказать, не продолжаем', async () => {
+    setup({ checks: [chk({ sent_at: null })] });
+    transport.getDeliveryStatus.mockResolvedValue(FAILED5);
+    await worker.processTick();
+    expect(flips()).toHaveLength(0);
+    expect(JSON.parse(stepLogs()[0][1])[0].res).toBe('undeliverable_unknown');
+  });
+
+  test('поздний статус 5 на последнем мессенджере — тоже не failed: строка остаётся sent', async () => {
+    setup({ checks: [chk({ channel_used: 'whatsapp', cascade_pos: 1, sent_at: ago(CHECK_MAX_AGE_MS + 5 * MIN) })] });
+    transport.getDeliveryStatus.mockResolvedValue(FAILED5);
+    await worker.processTick();
+    expect(flips()).toHaveLength(0);
+  });
+
+  test('сбой записи шага undeliverable_unknown не теряет сверку остальных', async () => {
+    setup({ checks: [chk({ id: 7, sent_at: ago(CHECK_MAX_AGE_MS + MIN) }), chk({ id: 8, delivery_id: 'g14' })] });
+    transport.getDeliveryStatus.mockResolvedValue(FAILED5);
+    db.query.mockImplementation(async (sql, p) => {
+      if (/SET cascade_log = cascade_log \|\| \$2::jsonb\s+WHERE id=\$1 AND status='sent'/.test(sql) && p[0] === 7) throw new Error('db blip');
+      return { rowCount: 1, rows: [] };
+    });
+    await expect(worker.processTick()).resolves.toBeUndefined();
+    expect(flips().map((p) => p[0])).toEqual([8]);
+  });
 
   test('статус 5 → строка снова pending со следующей позиции', async () => {
     setup({ checks: [chk()] });
@@ -826,11 +1165,15 @@ describe('SQL аренды и сверки', () => {
     expect(worker.LEASE_SQL).toMatch(/RETURNING j\.\*/);
   });
 
+  test('аренда берёт строки только салонов с режимом shadow/live (off и неизвестный режим не арендуются вовсе)', () => {
+    expect(worker.LEASE_SQL).toMatch(/AND salon_id IN \(SELECT salon_id FROM notification_settings WHERE mode IN \('shadow','live'\)\)/);
+  });
+
   test('сверка: забираем строку, обнуляя check_at; только sent с назначенной сверкой', () => {
     expect(worker.CHECK_SQL).toMatch(/SET check_at = NULL/);
     expect(worker.CHECK_SQL).toMatch(/status = 'sent' AND check_at IS NOT NULL AND check_at <= NOW\(\)/);
     expect(worker.CHECK_SQL).toMatch(/ORDER BY check_at ASC\s+LIMIT \$1\s+FOR UPDATE SKIP LOCKED/);
-    expect(worker.CHECK_SQL).toMatch(/RETURNING id, salon_id, channel_used, delivery_id, account_id, cascade_pos, routing/);
+    expect(worker.CHECK_SQL).toMatch(/RETURNING id, salon_id, channel_used, delivery_id, account_id, cascade_pos, routing, sent_at/);
   });
 });
 

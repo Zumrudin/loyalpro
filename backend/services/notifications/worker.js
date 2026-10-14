@@ -6,18 +6,29 @@
 // отправка), захват mark-before-send (at-most-once, как в «Заботе»).
 //
 // Отправка — КАСКАДОМ (cascade.js): шаг = один мессенджер. Следующий шаг — только
-// после ОДНОЗНАЧНОГО отказа (transport.isDefiniteRejection: 4xx, «нет аккаунта»,
-// номер скрыт/не найден). Таймаут/5xx останавливают каскад: сообщение могло уйти,
-// а дубль в другом мессенджере хуже пропуска.
+// после ОДНОЗНАЧНОГО отказа: transport.isDefiniteRejection (4xx, «нет аккаунта», номер
+// скрыт/не найден) или сбой соединения ДО отправки запроса (CONNECT_FAIL_CODES).
+// Таймаут/5xx останавливают каскад: сообщение могло уйти, а дубль в другом мессенджере
+// хуже пропуска.
 //
-// Через CHECK_DELAY_S после отправки — сверка статуса доставки: «Невозможно
-// доставить» (status_id 5) возвращает строку в очередь со следующего шага. Ошибка
-// чтения статуса считается «доставлено»: повтор в другой мессенджер дал бы дубль.
+// Через CHECK_DELAY_S после отправки — сверка статуса доставки: «Невозможно доставить»
+// (status_id 5) возвращает строку в очередь со следующего шага, но только пока исход
+// ясен. Статус 5 у нашего шлюза бывает и «исход неизвестен»: при старте шлюз закрывает
+// зависшие «Принято» старше 10 минут (gateway/lib/deliveries.js, failStale), а сверка
+// после простоя воркера не отличит такое закрытие от настоящего отказа. Исход не доказан
+// (текст «исход неизвестен» или с отправки прошло больше CHECK_MAX_AGE_MS) — строка
+// остаётся sent, в журнале шаг undeliverable_unknown: пропущенное письмо дешевле дубля.
+// При продолжении scheduled_at НЕ сбрасывается — иначе оно обходило бы защиту от
+// устаревшего (MAX_LATENESS_MS). Ошибка чтения статуса считается «доставлено».
 //
-// Режим салона: live и shadow — работа; off и ЛЮБОЕ другое значение (fail-closed)
-// — строка остаётся pending. Аренда уже прибавила attempts, и в off попытку
-// ВОЗВРАЩАЕМ: иначе она копилась бы раз в минуту, и после включения live первый же
-// сбой давал бы failed.
+// Режим салона: live и shadow — работа. Аренда берёт строки только таких салонов
+// (LEASE_SQL), так что off и неизвестный режим не арендуются вовсе. Если режим сменился
+// между арендой и обработкой (кэш настроек 30 с), страховка: off и ЛЮБОЕ другое значение
+// (fail-closed) оставляют строку pending, а прибавленную арендой попытку ВОЗВРАЩАЮТ.
+//
+// Отложенные типы (visit_reminder, visit_review, visit_after, first_visit) в тихие часы не
+// отправляются: scheduled_at сдвигается на их конец. Мгновенные «создана/перенесена/отменена»
+// тихие часы не трогают — иначе ночная запись Милы осталась бы без подтверждения до утра.
 //
 // ВАЖНО для at-most-once: после реальной отправки внутри цикла ничего не должно
 // бросать. Строка, упавшая в общий catch processTick, возвращается в pending и
@@ -31,6 +42,7 @@ const transport = require('../messaging/transport');
 const settingsSvc = require('./settings');
 const { lastConversation } = require('./rules');
 const { buildCascade, recipientFor } = require('./cascade');
+const { applyQuietHours } = require('./events');
 const pendingReplies = require('../agent/pending-replies');
 const authorship = require('../outgoing-authorship');
 const { persistWhatsappOutgoing } = require('../chat-persist');
@@ -48,6 +60,21 @@ const REVIEW_REPEAT_DAYS = 30;
 // процесса или режима off копится очередь, и «Вы записаны…» двухдневной давности хуже молчания.
 // Простой короче порога работе не мешает. visit_reminder меряется по визиту, а не по этому порогу.
 const MAX_LATENESS_MS = 12 * 3600 * 1000;
+// Статус 5 при сверке доказателен, только если сверка идёт вскоре после отправки: шлюз закрывает
+// «Принято» старше 10 минут как «исход неизвестен», позже настоящий отказ от такого закрытия не
+// отличить. Восемь минут — с запасом до этих десяти.
+const CHECK_MAX_AGE_MS = 8 * 60 * 1000;
+// Явный признак «исход неизвестен» в ответе шлюза: delivery.error (STALE_REASON в gateway/lib/deliveries.js:
+// «шлюз перезапущен, исход неизвестен»; описание статуса при этом обычное «Невозможно доставить»).
+const UNKNOWN_OUTCOME_RE = /исход неизвестен/i;
+// Коды сбоя «соединение не установлено»: до шлюза/Chatpush не дошёл ни один байт запроса, поэтому это
+// однозначный отказ, и каскад идёт к следующему мессенджеру (а исчерпанный — возвращается в pending
+// с бэкоффом, а не в failed). ECONNRESET сюда сознательно НЕ входит: сокет мог оборваться уже ПОСЛЕ
+// того, как запрос ушёл и шлюз его принял, — повтор в другом мессенджере дал бы дубль. То же для
+// ETIMEDOUT/ECONNABORTED (таймаут) и EPIPE (запись в уже оборванное соединение).
+const CONNECT_FAIL_CODES = new Set(['ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN']);
+// Типы, которые не должны уходить в тихие часы (мгновенные — «создана/перенесена/отменена» — уходят сразу).
+const DEFERRED_TYPES = new Set(['visit_reminder', 'visit_review', 'visit_after', 'first_visit']);
 const uploadsDir = path.join(__dirname, '../../../frontend/uploads');
 const MIME = { '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.webp': 'image/webp', '.pdf': 'application/pdf' };
 const EMPTY_CONV = Object.freeze({ lastChannel: null, chats: {} });
@@ -60,7 +87,9 @@ const ONCE_PER_PHONE = {
   first_visit: { days: null, reason: 'приглашение уже отправлялось' },
 };
 
-// После правки — живой EXPLAIN на дев-БД (юнит-моки SQL не проверяют).
+// После правки — живой EXPLAIN на дев-БД с bound-параметрами (юнит-моки SQL не проверяют).
+// salon_id IN (…): строки салонов в off, без строки настроек или с неизвестным режимом не арендуются
+// вовсе — не крутятся раз в минуту и не занимают пачку (BATCH) впереди строк работающих салонов.
 const LEASE_SQL = `
   UPDATE notification_jobs j
      SET attempts = j.attempts + 1, last_attempt_at = NOW()
@@ -68,6 +97,7 @@ const LEASE_SQL = `
      SELECT id FROM notification_jobs
       WHERE status = 'pending' AND scheduled_at <= NOW()
         AND (last_attempt_at IS NULL OR last_attempt_at < NOW() - make_interval(secs => $1))
+        AND salon_id IN (SELECT salon_id FROM notification_settings WHERE mode IN ('shadow','live'))
       ORDER BY scheduled_at ASC, id ASC
       LIMIT $2
       FOR UPDATE SKIP LOCKED)
@@ -82,9 +112,16 @@ const CHECK_SQL = `
       ORDER BY check_at ASC
       LIMIT $1
       FOR UPDATE SKIP LOCKED)
-   RETURNING id, salon_id, channel_used, delivery_id, account_id, cascade_pos, routing`;
+   RETURNING id, salon_id, channel_used, delivery_id, account_id, cascade_pos, routing, sent_at`;
 
 const step = (ch, res, err) => ({ ch, res, ...(err ? { err: String(err).slice(0, 200) } : {}), at: new Date().toISOString() });
+
+const pad2 = (n) => String(n).padStart(2, '0');
+/** 'ДД.ММ ЧЧ:ММ' по Москве (без перевода часов — смещение фиксировано, как в events.js). */
+function mskLabel(ms) {
+  const d = new Date(ms + 3 * 3600 * 1000);
+  return `${pad2(d.getUTCDate())}.${pad2(d.getUTCMonth() + 1)} ${pad2(d.getUTCHours())}:${pad2(d.getUTCMinutes())}`;
+}
 
 /**
  * Смена статуса строки. Переход допустим только из pending (до захвата) и sent (после
@@ -100,6 +137,19 @@ async function setStatus(id, status, extra = {}) {
       WHERE id=$1 AND status IN ('pending','sent')`,
     [id, status, extra.error || null, extra.reason || null, extra.routing ? JSON.stringify(extra.routing) : null,
      JSON.stringify(extra.steps || []), extra.clearSentAt === true]);
+}
+
+/**
+ * Перенос на момент atMs (конец тихих часов): строка остаётся pending, scheduled_at уходит вперёд —
+ * аренда её не возьмёт, пока время не придёт, — а прибавленная арендой попытка возвращается (отправки
+ * не было). Давность (MAX_LATENESS_MS) после этого меряется от нового момента: это законный сдвиг.
+ */
+async function deferTo(job, atMs) {
+  await db.query(
+    `UPDATE notification_jobs SET scheduled_at=$2, attempts = GREATEST(attempts-1,0), decision_reason=$3
+      WHERE id=$1 AND status='pending'`,
+    [job.id, new Date(atMs), `тихие часы: отправка перенесена на ${mskLabel(atMs)}`]);
+  log.info(`#${job.id} ${job.trigger_type} тихие часы — перенесено на ${mskLabel(atMs)}`);
 }
 
 /** Режим off: аренда прибавила attempts, а попытки отправки не было — возвращаем. Не бросает. */
@@ -121,11 +171,13 @@ async function releaseLease(job) {
  *    Chatpush по подтверждённым не напоминает) гасят. first_visit с переносом НЕ сверяется —
  *    он ставится при создании записи и уходит сразу.
  *  • visit_review/visit_after: нужен attendance=1.
- *  • Любое: клиент в чёрном списке; visit_review/first_visit — «раз на телефон» (ONCE_PER_PHONE).
+ *  • Любое: клиент в чёрном списке; visit_review/first_visit — «раз на телефон» (ONCE_PER_PHONE):
+ *    считаются sent, shadow и failed с sent_at (неоднозначный сбой оставляет метку захвата —
+ *    письмо могло дойти; исчерпанный каскад метку снимает, там отправки не было).
  *  • Давность (проверяется первой, до обращений к БД): напоминание теряет смысл, когда визит уже
  *    начался (job.visit_datetime <= now); остальные типы — когда строка опоздала больше чем на
  *    MAX_LATENESS_MS (now − scheduled_at). Продолжение каскада после «Невозможно доставить»
- *    не устаревает: сверка ставит scheduled_at = сейчас.
+ *    тоже меряется от исходного scheduled_at: сверка его не сбрасывает.
  * Тестовая отправка (meta.test) не проверяется вовсе — ни по записи, ни по давности.
  */
 async function staleReason(job) {
@@ -175,7 +227,8 @@ async function staleReason(job) {
     const dup = await db.oneOrNone(
       `SELECT id FROM notification_jobs
         WHERE salon_id = $1 AND phone = $2 AND trigger_type = $3 AND id <> $4
-          AND status IN ('sent','shadow') AND COALESCE(meta->>'test','') <> 'true'
+          AND (status IN ('sent','shadow') OR (status = 'failed' AND sent_at IS NOT NULL))
+          AND COALESCE(meta->>'test','') <> 'true'
           AND ($5::int IS NULL OR COALESCE(sent_at, scheduled_at) > NOW() - make_interval(days => $5::int))
         LIMIT 1`,
       [job.salon_id, job.phone, t, job.id, once.days]);
@@ -198,8 +251,13 @@ async function deliver(job, target) {
     // 400 — однозначный отказ: файла нет ни для одного мессенджера, но каскад честно пройдёт
     // все шаги и строка уйдёт в failed после последней попытки.
     if (!fs.existsSync(att.abs)) throw Object.assign(new Error(`файл вложения не найден: ${att.fileName}`), { status: 400 });
+    // Ошибка чтения (EACCES, EISDIR, …) — тоже локальный отказ: до сети дело не дошло. Сырая fs-ошибка
+    // несёт code и поэтому читалась бы как «неоднозначная» (могло уйти) и останавливала каскад.
+    let buf;
+    try { buf = fs.readFileSync(att.abs); }
+    catch (e) { throw Object.assign(new Error(`файл вложения не читается: ${att.fileName} (${e.code || e.message})`), { status: 400 }); }
     return transport.sendFile(job.salon_id, { ...target, fileName: att.fileName, caption: job.rendered_text, type: att.type },
-      fs.readFileSync(att.abs), att.mime);
+      buf, att.mime);
   }
   return transport.sendMessage(job.salon_id, { ...target, text: job.rendered_text });
 }
@@ -259,7 +317,9 @@ async function conversationOf(job) {
 
 async function processOne(job, cfg) {
   const mode = cfg && cfg.mode;
-  // live и shadow — работа. off и любое другое значение — fail-closed: ждём.
+  // live и shadow — работа. off и любое другое значение — fail-closed: ждём. Сюда строка такого салона
+  // попадает редко (LEASE_SQL их не арендует): режим сменился между арендой и обработкой или кэш
+  // настроек (30 с) отстал. Отсюда и откат попытки — страховка.
   if (mode !== 'live' && mode !== 'shadow') { await releaseLease(job); return; }
 
   const stale = await staleReason(job);
@@ -267,6 +327,24 @@ async function processOne(job, cfg) {
     await setStatus(job.id, 'cancelled', { reason: stale });
     log.info(`#${job.id} ${job.trigger_type} record=${job.yclients_record_id} cancelled: ${stale}`);
     return;
+  }
+
+  // Тихие часы в момент отправки — только отложенные типы. Постановка в очередь их уже учла (enroll),
+  // но строка могла стать due позже: повтор после сбоя, простой воркера. Тестовые отправки не сдвигаем —
+  // админ ждёт их «в течение 10 с». Работает и в shadow: тень повторяет боевое поведение.
+  if (DEFERRED_TYPES.has(job.trigger_type) && !(job.meta && job.meta.test)) {
+    const now = Date.now();
+    const quietEnd = applyQuietHours(now, cfg);
+    if (quietEnd > now) {
+      // Напоминание, которое после тихих часов уже не успевает до визита, бессмысленно (как в events.reminderAt).
+      if (job.trigger_type === 'visit_reminder' && job.visit_datetime && quietEnd >= new Date(job.visit_datetime).getTime()) {
+        await setStatus(job.id, 'cancelled', { reason: 'тихие часы до начала визита' });
+        log.info(`#${job.id} visit_reminder record=${job.yclients_record_id} cancelled: тихие часы до начала визита`);
+      } else {
+        await deferTo(job, quietEnd);
+      }
+      return;
+    }
   }
 
   const conv = await conversationOf(job);
@@ -296,7 +374,10 @@ async function processOne(job, cfg) {
   if (!cap.rowCount) { log.info(`#${job.id}: захват не удался — строка уже не pending`); return; }
 
   const steps = [];
-  for (let pos = Number(job.cascade_pos) || 0; pos < cascade.length; pos++) {
+  // Пересобранный каскад (не продолжение) идёт с нуля, даже если в строке остался cascade_pos:
+  // позиция относится к ПРЕЖНЕМУ порядку, и в новом она пропустила бы первые мессенджеры.
+  const startPos = continuing ? Number(job.cascade_pos) : 0;
+  for (let pos = startPos; pos < cascade.length; pos++) {
     const ch = cascade[pos];
     const target = recipientFor(ch, job.phone, conv.chats || {});
     if (!target) { steps.push(step(ch, 'no_recipient')); continue; }
@@ -305,7 +386,9 @@ async function processOne(job, cfg) {
       delivery = await deliver(job, target);
     } catch (e) {
       const msg = String((e && e.message) || e);
-      if (!transport.isDefiniteRejection(e)) {
+      // Однозначный отказ: ответ транспорта (4xx, «нет аккаунта») ИЛИ сбой соединения до отправки запроса.
+      const definite = transport.isDefiniteRejection(e) || CONNECT_FAIL_CODES.has(e && e.code);
+      if (!definite) {
         steps.push(step(ch, 'ambiguous', msg));
         log.warn(`#${job.id} ${ch} ambiguous, cascade stopped: ${msg}`);
         // Не записался failed → строка остаётся sent (захват): повторной отправки не будет.
@@ -346,10 +429,37 @@ async function checkOne(r) {
     return;
   }
   if (!st || !st.status || Number(st.status.status_id) !== UNDELIVERABLE_STATUS_ID) return;
+
+  // Статус 5 ещё не значит «точно не доставлено». Шлюз: delivery = { id, status: { status_id, description },
+  // error } — причина закрытия лежит в error, а описание у статуса 5 всегда «Невозможно доставить»;
+  // у Chatpush поля error нет. Дальше по каскаду идём, только если исход доказан: нет явного
+  // «исход неизвестен» и сверка не опоздала (после простоя воркера настоящий отказ не отличить от
+  // закрытия зависших «Принято» — failStale шлюза — а повтор в другом мессенджере дал бы дубль).
+  const ageMs = r.sent_at ? Date.now() - new Date(r.sent_at).getTime() : NaN;
+  let unproven = null;
+  if (UNKNOWN_OUTCOME_RE.test(`${st.error || ''} ${st.status.description || ''}`)) {
+    unproven = 'шлюз закрыл доставку как «исход неизвестен» — сообщение могло дойти';
+  } else if (!(ageMs <= CHECK_MAX_AGE_MS)) {
+    unproven = Number.isFinite(ageMs)
+      ? `статус 5 увидели через ${Math.floor(ageMs / 60000)} мин после отправки (порог ${CHECK_MAX_AGE_MS / 60000} мин; шлюз закрывает зависшие «Принято» через 10 мин) — исход не доказан`
+      : 'время отправки неизвестно — свежесть статуса 5 не доказать';
+  }
+  if (unproven) {
+    // Строка остаётся sent: ни повтора, ни failed. Только след в журнале.
+    await db.query(
+      `UPDATE notification_jobs SET cascade_log = cascade_log || $2::jsonb
+        WHERE id=$1 AND status='sent'`,
+      [r.id, JSON.stringify([step(r.channel_used, 'undeliverable_unknown', unproven)])]);
+    log.warn(`#${r.id} ${r.channel_used} статус 5, но исход не доказан (${unproven}) — каскад не продолжаем`);
+    return;
+  }
+
   const next = (Number(r.cascade_pos) || 0) + 1;
   const hasNext = Array.isArray(r.routing) && next < r.routing.length;
+  // scheduled_at НЕ трогаем: с ним продолжение обходило бы защиту «опоздание > MAX_LATENESS_MS».
+  // last_attempt_at=NULL — строка сразу доступна для аренды.
   await db.query(
-    `UPDATE notification_jobs SET status=$2, cascade_pos=$3, scheduled_at=NOW(), attempts=0, last_attempt_at=NULL,
+    `UPDATE notification_jobs SET status=$2, cascade_pos=$3, attempts=0, last_attempt_at=NULL,
         error=$4, cascade_log = cascade_log || $5::jsonb
       WHERE id=$1 AND status='sent'`,
     [r.id, hasNext ? 'pending' : 'failed', hasNext ? next : Number(r.cascade_pos) || 0,
@@ -399,4 +509,4 @@ function startNotificationWorker() {
   log.info(`Notification worker started (tick=${TICK_MS}ms)`);
 }
 
-module.exports = { processTick, processOne, checkDeliveries, startNotificationWorker, LEASE_SQL, CHECK_SQL, staleReason, MAX_LATENESS_MS };
+module.exports = { processTick, processOne, checkDeliveries, startNotificationWorker, LEASE_SQL, CHECK_SQL, staleReason, MAX_LATENESS_MS, CHECK_MAX_AGE_MS };
