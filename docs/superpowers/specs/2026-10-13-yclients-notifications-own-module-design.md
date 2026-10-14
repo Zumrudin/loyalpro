@@ -1,6 +1,6 @@
 # Свой модуль уведомлений YClients вместо Chatpush — исследование и дизайн
 
-Дата: 2026-10-13 · Статус: черновик на утверждение владельцем (решения, требующие его слова, собраны в §7)
+Дата: 2026-10-13 · Статус: утверждено владельцем 14.10.2026 (решения — §7), план реализации `docs/superpowers/plans/2026-10-13-yclients-notifications-own-module.md`
 
 ## 1. Цель
 
@@ -41,7 +41,7 @@ Chatpush подключён в YClients как приложение «Интег
 1. Chatpush — не только транспорт. При выходе из него пропадут слой B целиком и слой A для всех каналов (YClients без провайдера уведомлений в мессенджеры не шлёт; у него есть только свой бесплатный официальный канал MAX с нередактируемыми шаблонами и бесплатный e-mail).
 2. Все триггеры слоя A у нас уже есть в виде вебхуков YClients (`routes/webhook.js`, `resource=record`: `status create/update/delete`, поля `datetime`, `seance_length`, `attendance`, `deleted`, `sms_before`, `services`, `staff`, `client`, `created_user_id`). Напоминание «за N часов» требует планировщика — тот же приём, что у очередей «Заботы» и напоминаний о повторном визите.
 3. Ответы пациентов уже приходят в наш вебхук мессенджера (`routes/chatpush-webhook.js`, и для Telegram — через наш шлюз). Детекторы уже написаны: `services/agent/visit-confirmation.js` (чистое подтверждение после напоминания — список фраз обкатан на 28.09 replay) и `services/agent/visit-rating.js` (`detectRating`/`isRatingSurvey`). Статус «Подтвердил» ставится существующим `yclients-records.updateAttendance(salon, id, 2)`.
-4. Транспорт есть: `services/messaging/transport.js` + `messenger_accounts` (каскад по каналам, at-most-once фолбэк, `sendFile`). Пробел — **MAX** (29 % служебных отправок): свой шлюз его не поддерживает, у MAX нет официального API для «номерного» аккаунта, только Bot API. Это главное продуктовое решение владельца (§7).
+4. Транспорт есть: `services/messaging/transport.js` + `messenger_accounts` (каскад по каналам, at-most-once фолбэк, `sendFile`). Все три канала клиники уже идут через наш шлюз: Telegram с 12.10, WhatsApp с 13.10, MAX с 14.10.2026. Пробела по каналам нет.
 5. Конфликт с Милой уже существует и будет разрешён этим модулем: сегодня на «5» отвечает Chatpush, а `visit-rating.js` Милы молчит (специально, чтобы не было двух благодарностей); на «2–3» Мила извиняется и переводит на администратора, Chatpush параллельно спрашивает «что не устроило». После замены ответ на цифру даёт наш модуль ДО Милы, одна реплика.
 
 ### 2.3 Что у нас уже есть (переиспользуем, не переписываем)
@@ -51,7 +51,6 @@ Chatpush подключён в YClients как приложение «Интег
 - Образцы очередей с арендой `FOR UPDATE SKIP LOCKED`, mark-before-send, `send-pacing`, `daily-limit` (считает `notification_sends` — при переезде на новую таблицу запрос надо перевести).
 - Персист исходящего в транскрипт Милы: `pendingReplies.remember` + `persistWhatsappOutgoing` + `authorship.remember(...,'system')` — уже делается в v1-воркере.
 - Загрузка картинок с проверкой сигнатуры (`utils/upload-validator`, образец `routes/agent-settings.js` price-photos).
-- SMS: `services/sms.js` умеет только OTP через smsc.ru — нужен общий `sendSms`.
 
 ## 3. Требования
 
@@ -68,11 +67,11 @@ Chatpush подключён в YClients как приложение «Интег
 | `first_visit` | начало первого состоявшегося/начавшегося визита клиента (нет прошлых `arrived`) | шаблон (приглашение в лояльность) |
 | `birthday` | 10:00 мск за `days_before` дней (задел, вне первого выката) | — |
 
-**R2. Ответы пациентов, без LLM, до Милы:** чистое подтверждение после напоминания → `attendance=2` в YClients + отбивка «✅ Ваша запись подтверждена»; чистая цифра 2–5 после опроса → сохранить оценку, ответить по порогу (≥4 — благодарность со ссылками, <4 — «что не устроило» + перевод диалога на администратора), оценка видна в админке. Всё — авторством `system`.
+**R2. Ответы пациентов, без LLM, до Милы:** чистое подтверждение после напоминания → `attendance=2` в YClients + отбивка «✅ Ваша запись подтверждена»; чистая цифра 2–5 после опроса → сохранить оценку и ответить по полосе: 5 — благодарность со ссылками на отзывы, 4 — «что можно улучшить» без перевода, 2–3 — «что не устроило» + перевод диалога на администратора. Оценки видны в админке. Всё — авторством `system`.
 
-**R3. Каналы:** каскад правила через `transport` (дефолт салона `tdlib → whatsapp → max`), необязательный последний шаг **SMS** (smsc.ru) с отдельным коротким текстом; канал клиента «откуда писал последним» — первым (как v1).
+**R3. Каналы:** каскад правила через `transport` (дефолт салона `tdlib → whatsapp → max`), только мессенджеры, SMS нет; канал клиента «откуда писал последним» — первым (как v1).
 
-**R4. Админка:** правила по типам, настройки салона (тексты отбивок, порог, ссылки на отзывы, SMS вкл/выкл, тихие часы — по умолчанию выкл. для паритета), журнал с фильтрами, тест на свой номер, выгрузка оценок.
+**R4. Админка:** правила по типам, настройки салона (режим, тексты отбивок и трёх полос оценки, перевод при 2–3, тихие часы — по умолчанию 21:00–09:00), журнал с фильтрами, тест на свой номер, просмотр оценок.
 
 **R5. Идемпотентность и журнал:** один job на (правило, запись, момент визита); перенос переигрывает напоминание; отмена гасит всё запланированное; at-most-once.
 
@@ -90,9 +89,9 @@ Chatpush подключён в YClients как приложение «Интег
 
 ### 5.1 Данные (`migrations.js`, только `IF NOT EXISTS`/`ADD COLUMN IF NOT EXISTS`)
 
-`notification_rules` — новые колонки: `hours_before INT`, `delay_minutes INT`, `attachment_url TEXT`, `attachment_name TEXT`, `sms_text TEXT`, `skip_integration_user BOOL DEFAULT FALSE`, `on_no_show BOOL DEFAULT TRUE`, `ask_confirmation BOOL DEFAULT TRUE`. Значения `trigger_type` — из таблицы R1.
+`notification_rules` — новые колонки: `hours_before INT`, `delay_minutes INT`, `attachment_url TEXT`, `attachment_name TEXT`, `on_no_show BOOL DEFAULT TRUE`, `ask_confirmation BOOL DEFAULT TRUE`. Значения `trigger_type` — из таблицы R1. Флага «не слать по записям Милы» нет: «Вы записаны» уходит всем (решение владельца).
 
-`notification_settings` (одна строка на салон): `salon_id PK`, `mode VARCHAR DEFAULT 'off'` (`off|shadow|live`), `default_channels JSONB`, `sms_enabled BOOL DEFAULT FALSE`, `quiet_from/quiet_to VARCHAR(5)` (NULL = выкл.), `confirm_reply_text`, `rating_threshold INT DEFAULT 4`, `rating_high_text`, `rating_low_text`, `rating_escalate_low BOOL DEFAULT TRUE`, `integration_user_ids JSONB` (кто «Мила»; дефолт — из `project_yclients_integration_user`).
+`notification_settings` (одна строка на салон): `salon_id PK`, `mode VARCHAR DEFAULT 'off'` (`off|shadow|live`), `default_channels JSONB`, `quiet_from/quiet_to VARCHAR(5) DEFAULT '21:00'/'09:00'`, `confirm_reply_text`, `rating_high_text` (5), `rating_mid_text` (4), `rating_low_text` (2–3), `rating_escalate_low BOOL DEFAULT TRUE`. Тихие часы сдвигают только отложенные типы (напоминание, опрос, рекомендации); мгновенные «создана/перенесена/отменена» уходят сразу — иначе ночная запись Милы ждала бы подтверждения до утра.
 
 `notification_jobs` (очередь + журнал): `id, salon_id, rule_id (ON DELETE SET NULL) , rule_title, trigger_type, yclients_record_id, visit_datetime TIMESTAMPTZ, client_id, phone, scheduled_at TIMESTAMPTZ, status (pending|sent|skipped|cancelled|failed|shadow), attempts, error, rendered_text, attachment_url, routing, channel_used, delivery_id, confirmed_at, decision_reason, created_at, sent_at, last_attempt_at`. `UNIQUE (rule_id, yclients_record_id, visit_datetime)` — перенос даёт новый ключ (старый `pending` гасится `cancelled/rescheduled`), повтор вебхука — `DO NOTHING`. Частичные индексы `(scheduled_at, id) WHERE status='pending'`, `(salon_id, sent_at DESC) WHERE status='sent'` (под `send-pacing`/`daily-limit` — их запросы переводятся с `notification_sends` на `notification_jobs`).
 
@@ -105,9 +104,8 @@ Chatpush подключён в YClients как приложение «Интег
 - `events.js` — чистое: `classifyRecordEvent(prevState, payload)` → `created | rescheduled | cancelled | arrived | confirmed | other`; `visitEnd(payload)`; `scheduleFor(trigger, rule, payload, now)` → `scheduled_at` (напоминание: `datetime − hours`, где `hours = sms_before записи > 0 ? sms_before : rule.hours_before`; если момент уже прошёл — не ставим, кроме `created` менее чем за час до визита → не напоминаем вовсе, как YClients); тихие часы (если включены) сдвигают на `quiet_to`. Тесты без БД.
 - `render.js` — `renderTemplate` (v1) + новые плейсхолдеры `{datetime}`, `{end_time}`, `{record_link}` (short_link из вебхука), `{rating_links}`; тот же `resolveGivenName`.
 - `enroll.js` — `handleRecordEvent(salon, payload)` (заменяет `handleRecordCreated` в `routes/webhook.js`, свой try/catch): обновляет state, классифицирует, для `created/rescheduled/cancelled` кладёт немедленные job'ы по совпавшим правилам; для `created/rescheduled` ставит `visit_reminder` (перенос: гасит старый `pending`); для `cancelled` гасит все `pending` записи; для `arrived` ставит `visit_review`, `visit_after` (по условиям, `delay_minutes` от окончания визита) и `first_visit` (нет прошлых `arrived` у клиента в `records`/state). Пропуски (нет телефона, ЧС, интеграционный пользователь) — `skipped` с причиной в журнале, как v1.
-- `worker.js` — тик 10 с, аренда due `pending` (`FOR UPDATE SKIP LOCKED`, `attempts+1`, бэкофф 60 с, 3 попытки), **перепроверка перед отправкой** (`visit_reminder`: запись в state жива и `visit_datetime` совпадает; `visit_review/visit_after`: `attendance=1` и не `deleted`; любая: телефон не в ЧС), режим салона `shadow` → строка `shadow` с текстом, без отправки; `live` → mark-before-send (`UPDATE … WHERE status='pending'` → `sent`), `transport.sendMessage/sendFile` с каскадом, при определённом отказе всех мессенджер-каналов и `sms_enabled` → `sms.sendSms(phone, sms_text || rendered_text)`; затем `pendingReplies.remember` + `authorship.remember('system')` + `persistWhatsappOutgoing` (как v1). Сторож доставки не подключается (как у «Заботы»).
+- `worker.js` — тик 10 с, аренда due `pending` (`FOR UPDATE SKIP LOCKED`, `attempts+1`, бэкофф 60 с, 3 попытки), **перепроверка перед отправкой** (`visit_reminder`: запись в state жива и `visit_datetime` совпадает; `visit_review/visit_after`: `attendance=1` и не `deleted`; любая: телефон не в ЧС), режим салона `shadow` → строка `shadow` с текстом, без отправки; `live` → mark-before-send (`UPDATE … WHERE status='pending'` → `sent`), `transport.sendMessage/sendFile` с каскадом; при однозначном отказе (4xx) — повтор до 3 попыток, при таймауте/5xx — `failed` без повтора (сообщение могло уйти); затем `pendingReplies.remember` + `authorship.remember('system')` + `persistWhatsappOutgoing` (как v1). Сторож доставки не подключается (как у «Заботы»).
 - `replies.js` — `handleIncoming(salonId, msg)` зовётся из `routes/chatpush-webhook.js` после сохранения входящего и ДО `dispatcher.enqueue`, только личные чаты, только текст. (1) Подтверждение: последнее исходящее диалога — наш `visit_reminder` с `ask_confirmation` (ищем `notification_jobs` по телефону/ключу, `sent` ≤ 48 ч, `confirmed_at IS NULL`) и текст — чистое подтверждение (`visit-confirmation.js` детектор, вынесенный в общий модуль) → `updateAttendance(…, 2)` → отбивка `confirm_reply_text` через `transport` (system) → `confirmed_at`. Сбой YClients → отбивку не шлём, ход уходит Миле как раньше (она умеет свериться и ответить). (2) Оценка: последнее исходящее — наш `visit_review` и текст — чистая цифра 2–5 (`visit-rating.detectRating`) → `visit_ratings` upsert → текст по порогу → низкая: `escalate_to_operator`-путь (`dialogState` + `emitAgentStatus`, причина `low_rating`) и текст с обещанием связаться. Возвращает `handled:true` — вебхук не ставит Милу в очередь; `visit-rating.js` в оркестраторе остаётся страховкой (если наш модуль выключен — прежнее поведение).
-- `sms.js` (существующий) — добавить `sendSms(phone, text)` на том же smsc.ru.
 
 ### 5.3 API `routes/notification-rules.js` (расширение, owner/admin)
 
@@ -115,31 +113,31 @@ Chatpush подключён в YClients как приложение «Интег
 
 ### 5.4 Фронт
 
-Вкладка «Автоуведомления» на странице «Рассылки» становится полноценной: слева типы (чипы с тумблерами), карточка правила с полями по типу (часы до / минуты после / вложение / флаги), конструктор условий (`conditions-editor.js`, ns `ntf`), порядок каналов + SMS; блок «Ответы пациентов» (тексты отбивок, порог, ссылки); блок «Режим»: выкл / тень / боевой с подписью, что это значит; журнал (фильтр по типу/статусу/дню, из job'ов) и таблица оценок. Бамп `?v=`.
+Вкладка «Автоуведомления» на странице «Рассылки» становится полноценной: слева типы (чипы с тумблерами), карточка правила с полями по типу (часы до / минуты после / вложение / флаги), конструктор условий (`conditions-editor.js`, ns `ntf`), порядок каналов; блок «Ответы пациентов» (текст подтверждения, тексты трёх полос оценки, перевод при 2–3); блок «Режим»: выкл / тень / боевой с подписью, что это значит; журнал (фильтр по типу/статусу/дню, из job'ов) и таблица оценок. Бамп `?v=`.
 
 ### 5.5 Переход (runbook, часть плана)
 
 1. Выкат с `mode='off'`. Задать правила и тексты — 1:1 с Chatpush (тексты и картинки заранее выгружаются скриптом из `chatpush_messages`: подписанные URL картинок живут 7 дней, поэтому выгрузка — первая задача плана).
 2. `mode='shadow'` на 3–5 дней: `GET /parity` сверяет по типам «мы создали бы N / Chatpush отправил M» и тексты.
-3. Включить WhatsApp-шлюз на проде (отдельный план) и решить MAX (§7).
+3. В первый день тени — догон напоминаний по визитам, записанным до включения модуля (`scripts/notifications-backfill-reminders.js`).
 4. `mode='live'` и в тот же момент в YClients: «Интеграции → Уведомления → CHATPUSH» — отключить (или выключить соответствующие типы уведомлений клиенту), чтобы не было дублей. Ответы «Подтверждаю»/«5» с этого момента обрабатываем мы.
 5. Наблюдение по журналу; откат — `mode='off'` + включить приложение в YClients обратно.
 6. Выход из Telegram в кабинете Chatpush (шаг 4.3 плана шлюза, до сих пор заблокированный именно уведомлениями), затем отказ от подписки.
 
 ## 6. Тестирование
 
-- Jest на чистые модули: классификация событий (create/перенос/отмена/не пришёл/пришёл/повтор вебхука), расчёт `scheduled_at` (24 ч, `sms_before`, тихие часы, «уже поздно»), рендер плейсхолдеров, детекторы ответов (переиспользуем сьюты `agent-visit-confirmation`, `agent-visit-rating`), выбор маршрута и SMS-фолбэк, перепроверка перед отправкой, `shadow`.
+- Jest на чистые модули: классификация событий (create/перенос/отмена/не пришёл/пришёл/повтор вебхука), расчёт `scheduled_at` (24 ч, `sms_before`, тихие часы, «уже поздно»), рендер плейсхолдеров, детекторы ответов (переиспользуем сьюты `agent-visit-confirmation`, `agent-visit-rating`), выбор маршрута и повтор/отказ транспорта, догон напоминаний, перепроверка перед отправкой, `shadow`.
 - Живой EXPLAIN аренды на дев-БД (правило проекта для `LEASE_SQL`).
 - Живые скрипты: `scripts/notifications-e2e.js` (запись на тестовый номер через YClients → created/reminder/перенос/отмена; отправка застаблена, `--send` шлёт), `scripts/notifications-replies-e2e.js` («Подтверждаю» → `attendance=2`; «5»/«3» → оценка и ответы), `scripts/notifications-parity.js` (теневая сверка). UI — `scripts/notifications-ui-e2e.js` (headless-Chrome).
 
-## 7. Решения, которые нужны от владельца
+## 7. Решения владельца (14.10.2026)
 
-1. **MAX (29 % служебных отправок).** Варианты: (а) оставить Chatpush только для MAX до появления своего клиента MAX — отказ от Chatpush неполный; (б) подключить официальный канал MAX в YClients (бесплатно, но шаблоны YClients нередактируемы, а ответы «Подтверждаю»/«5» уйдут в чат YClients, не к нам); (в) не слать в MAX — клиенты MAX получат WhatsApp/Telegram/SMS по каскаду. Рекомендация: (в) с SMS-фолбэком, пока нет своего клиента MAX.
-2. **SMS-фолбэк через smsc.ru** — включать ли (стоимость ~3–4 ₽/сообщение; по данным это единицы процентов клиентов без мессенджера).
-3. **Порог «плохой оценки»**: Chatpush считал «что не устроило» для 2–4, Мила переводит на администратора при 2–3. Предлагаю: 2–3 — перевод на администратора + текст; 4 — текст «что можно улучшить» без перевода; 5 — благодарность со ссылками.
-4. **«Вы записаны» для записей, созданных Милой** — слать (паритет) или нет (она и так подтверждает текстом).
-5. **Тихие часы** для напоминаний (сегодня YClients шлёт и в 21:00–22:00) — включать ли.
-6. Подтверждение, что доступ в кабинет Chatpush не нужен: все тексты и картинки восстановлены из БД (§2.1), настройки каскада известны по данным.
+1. **MAX** — свой клиент MAX реализован и на проде с 14.10.2026; уведомления в MAX идут через наш шлюз, как Telegram и WhatsApp.
+2. **SMS-фолбэк** — не нужен. Каскад только по мессенджерам.
+3. **Оценка визита** — три полосы: 5 — благодарность со ссылками на отзывы; 4 — «что можно улучшить» без перевода; 2–3 — «что не устроило» и перевод на администратора.
+4. **«Вы записаны» по записям Милы** — слать, как и всем.
+5. **Тихие часы** — включить, по умолчанию 21:00–09:00, только для отложенных типов.
+6. Доступ в кабинет Chatpush не потребовался: тексты и картинки восстановлены из БД (§2.1).
 
 ## 8. Вне scope
 

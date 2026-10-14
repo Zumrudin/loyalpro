@@ -4,9 +4,11 @@
 
 **Goal:** Служебные уведомления клиентам по событиям записи YClients (создание, перенос, отмена, напоминание за N часов, опрос после визита, рекомендации по услуге с фото, приглашение в лояльность при первом визите) и обработка ответов на них («Подтверждаю» → статус «Подтвердил» в YClients, «5» → оценка и благодарность) генерирует и шлёт LoyalPro сам, через `services/messaging/transport.js`, с теневым режимом для сверки с Chatpush до переключения.
 
-**Architecture:** v1-модуль `services/notifications.js` (правила + условия + каскад каналов + воркер) разбирается на папку `services/notifications/` и расширяется: `trigger_type` получает семь значений, очередь переезжает в `notification_jobs` со `scheduled_at` (старая `notification_sends` остаётся историей), детерминированное различение событий записи ведёт собственная таблица `notification_record_state`, ответы пациентов перехватываются в `routes/chatpush-webhook.js` ДО постановки Милы в очередь. Настройки салона (режим off/shadow/live, тексты отбивок, порог оценки, SMS) — `notification_settings`.
+**Architecture:** v1-модуль `services/notifications.js` (правила + условия + каскад каналов + воркер) разбирается на папку `services/notifications/` и расширяется: `trigger_type` получает семь значений, очередь переезжает в `notification_jobs` со `scheduled_at` (старая `notification_sends` остаётся историей), детерминированное различение событий записи ведёт собственная таблица `notification_record_state`, ответы пациентов перехватываются в `routes/chatpush-webhook.js` ДО постановки Милы в очередь. Настройки салона (режим off/shadow/live, тексты отбивок по полосам оценки, тихие часы) — `notification_settings`. Каналы — только мессенджеры через свой шлюз (Telegram, WhatsApp, MAX); SMS нет.
 
-**Tech Stack:** Node 20, Express, PostgreSQL (`pg`, без ORM), Jest (`npx jest <имя>` в `backend/`, TZ=Europe/Moscow через global-setup), multer, smsc.ru (SMS), существующие `transport`/`messenger_accounts`/шлюз.
+**Решения владельца (14.10.2026), план их уже учитывает:** MAX идёт через СВОЙ шлюз (на проде с 14.10), отдельного решения не нужно; SMS-фолбэка нет; оценка — три полосы: 5 → благодарность со ссылками, 4 → «что улучшить» без перевода, 2–3 → «что не устроило» + перевод на администратора; «Вы записаны» уходит и по записям, созданным Милой (флага исключения нет); тихие часы включены по умолчанию 21:00–09:00 и сдвигают только ОТЛОЖЕННЫЕ уведомления (напоминание, опрос, рекомендации) — мгновенные «создана/перенесена/отменена» уходят сразу, иначе ночная запись Милы осталась бы без подтверждения до утра.
+
+**Tech Stack:** Node 20, Express, PostgreSQL (`pg`, без ORM), Jest (`npx jest <имя>` в `backend/`, TZ=Europe/Moscow через global-setup), multer, существующие `transport`/`messenger_accounts`/шлюз.
 
 Спека: `docs/superpowers/specs/2026-10-13-yclients-notifications-own-module-design.md`.
 
@@ -24,7 +26,7 @@
 
 **Статус «Подтвердил» в YClients** — `services/yclients-records.updateAttendance(salon, ycRecordId, 2)` (PUT `/record/{cid}/{id}` только с `attendance`; бросает при отказе). `salon` — строка `salons` (`id, name, yclients_company_id, yclients_user_token …`), грузится `db.oneOrNone('SELECT * FROM salons WHERE id=$1')`.
 
-**Правила проекта (CLAUDE.md), нарушать нельзя:** миграции только `IF NOT EXISTS`/`ADD COLUMN IF NOT EXISTS`, ничего деструктивного; каждый запрос со `salon_id`; `db.one` НЕ бросает на пустой выборке (возвращает `null`); Jest-тесты лежат в `backend/*.test.js` и мокают `./db` через `jest.mock`; бамп `?v=` при правке JS фронта (`frontend/index.html`); рестарт дева `PORT=3001 pm2 restart loyalpro`; SQL-проверки через MCP `mcp__postgres__query`; коммит — на задачу, сообщение по-русски, последняя строка `Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>`. После правок SQL аренды (`FOR UPDATE SKIP LOCKED`, скалярные подзапросы) — живой EXPLAIN на дев-БД, юнит-моки валидность SQL не проверяют.
+**Правила проекта (CLAUDE.md), нарушать нельзя:** миграции только `IF NOT EXISTS`/`ADD COLUMN IF NOT EXISTS`, ничего деструктивного; каждый запрос со `salon_id`; `db.one` НЕ бросает на пустой выборке (возвращает `null`); Jest-тесты лежат в `backend/*.test.js` и мокают `./db` через `jest.mock`; бамп `?v=` при правке JS фронта (`frontend/index.html`); рестарт дева `PORT=3001 pm2 restart loyalpro`; SQL-проверки через MCP `mcp__postgres__query`; коммит — на задачу, сообщение по-русски, последняя строка `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`. После правок SQL аренды (`FOR UPDATE SKIP LOCKED`, скалярные подзапросы) — живой EXPLAIN на дев-БД, юнит-моки валидность SQL не проверяют.
 
 **Контракт модуля (задачи ссылаются на него):**
 
@@ -47,7 +49,7 @@ kinds (events.classifyRecordEvent): { created, rescheduled, cancelled, noShow, a
 - `backend/services/notifications/render.js` — плейсхолдеры шаблона (переезд `renderTemplate` + новые).
 - `backend/services/notifications/rules.js` — `evaluateRule`, `resolveRouting`, карта услуга→категория, `lastIncomingChannel` (переезд из v1 без изменений).
 - `backend/services/notifications/enroll.js` — `handleRecordEvent`: состояние записи, постановка/гашение job'ов.
-- `backend/services/notifications/worker.js` — аренда, перепроверка, тень/боевой режим, отправка, SMS-фолбэк, журнал.
+- `backend/services/notifications/worker.js` — аренда, перепроверка, тень/боевой режим, отправка, журнал.
 - `backend/services/notifications/replies.js` — перехват «Подтверждаю»/оценки.
 - `backend/services/notifications/settings.js` — чтение/запись `notification_settings` с дефолтами.
 - `backend/notifications-events.test.js`, `notifications-render.test.js`, `notifications-enroll.test.js`, `notifications-worker.test.js`, `notifications-replies.test.js`, `notifications-routes.test.js`.
@@ -62,9 +64,8 @@ kinds (events.classifyRecordEvent): { created, rescheduled, cancelled, noShow, a
 - `backend/routes/webhook.js:5,82-84` — `handleRecordEvent` на любом `record`-событии.
 - `backend/routes/chatpush-webhook.js:~322` — перехват ответов.
 - `backend/routes/notification-rules.js` — новые поля правил, `/settings`, `/jobs`, `/:id/attachment`, `/:id/test`, `/ratings`, `/parity`.
-- `backend/services/messaging/transport.js:132` — экспорт `isDefiniteRejection`.
+- `backend/services/messaging/transport.js:132` — экспорт `isDefiniteRejection` (решает, можно ли повторить отправку).
 - `backend/services/messaging/send-pacing.js:50` — учесть `notification_jobs`.
-- `backend/services/sms.js` — общий `sendSms(phone, text)`.
 - `frontend/index.html:1110-1125, 2559` — разметка вкладки, подключение `notifications.js`.
 - `CLAUDE.md` — раздел «Уведомления YClients».
 
@@ -167,7 +168,7 @@ Expected: `JPEG image data` у каждого файла.
 cd /root/loyalpro && git add backend/scripts/chatpush-notifications-harvest.js docs/notifications/chatpush-templates-2026-10-13.md
 git commit -m "chore(notifications): выгрузка текстов и картинок уведомлений Chatpush для переноса
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
 ---
@@ -192,8 +193,6 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
     'delay_minutes INTEGER',
     'attachment_url TEXT',
     'attachment_name VARCHAR(255)',
-    'sms_text TEXT',
-    'skip_integration_user BOOLEAN NOT NULL DEFAULT FALSE',
     'on_no_show BOOLEAN NOT NULL DEFAULT TRUE',
     'ask_confirmation BOOLEAN NOT NULL DEFAULT TRUE',
   ]) {
@@ -205,15 +204,13 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
       salon_id             INTEGER PRIMARY KEY REFERENCES salons(id) ON DELETE CASCADE,
       mode                 VARCHAR(10) NOT NULL DEFAULT 'off',
       default_channels     JSONB NOT NULL DEFAULT '["tdlib","whatsapp","max"]'::jsonb,
-      sms_enabled          BOOLEAN NOT NULL DEFAULT FALSE,
-      quiet_from           VARCHAR(5),
-      quiet_to             VARCHAR(5),
+      quiet_from           VARCHAR(5) DEFAULT '21:00',
+      quiet_to             VARCHAR(5) DEFAULT '09:00',
       confirm_reply_text   TEXT NOT NULL DEFAULT '✅ Ваша запись подтверждена.\nБудем ждать вас!',
-      rating_threshold     INTEGER NOT NULL DEFAULT 4,
       rating_high_text     TEXT NOT NULL DEFAULT 'Спасибо за отличную оценку нашей работы! 🙏🏻',
+      rating_mid_text      TEXT NOT NULL DEFAULT 'Спасибо за оценку! Подскажите, пожалуйста, что нам стоит улучшить? Мы обязательно учтём.',
       rating_low_text      TEXT NOT NULL DEFAULT 'Благодарим Вас за оценку.\nНе могли бы Вы рассказать, что именно Вас не устроило? Мы постараемся принять меры и, по возможности, исправить данную ситуацию.',
       rating_escalate_low  BOOLEAN NOT NULL DEFAULT TRUE,
-      integration_user_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
       updated_at           TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `).catch(() => {});
@@ -234,7 +231,6 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
       attempts            INTEGER NOT NULL DEFAULT 0,
       error               TEXT,
       rendered_text       TEXT NOT NULL,
-      sms_text            TEXT,
       attachment_url      TEXT,
       routing             JSONB,
       channel_used        VARCHAR(30),
@@ -339,7 +335,7 @@ Expected: PASS (если тест сверяет текст SQL — поправ
 cd /root/loyalpro && git add backend/migrations.js backend/services/messaging/send-pacing.js backend/messaging-send-pacing.test.js
 git commit -m "feat(notifications): таблицы notification_settings/jobs/record_state, visit_ratings; новые поля правил
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
 ---
@@ -596,7 +592,7 @@ Expected: PASS, 17 тестов.
 cd /root/loyalpro && git add backend/services/notifications/events.js backend/notifications-events.test.js
 git commit -m "feat(notifications): чистый модуль событий записи — снимок, классификация, моменты отправки
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
 ---
@@ -705,7 +701,7 @@ function buildRenderCtx(snap, salon, client, extra) {
 module.exports = { renderTemplate, buildRenderCtx, fmtMsk };
 ```
 
-- [ ] **Step 4: Создать `rules.js`** — ПЕРЕНЕСТИ без изменений из `services/notifications.js` функции `evaluateRule`, `resolveRouting`, константу `ALLOWED_CHANNELS` (добавить в неё `'sms'`), `getServiceCategoryMap` (с кэшем `_catMapCache`/`CAT_MAP_TTL`), `lastIncomingChannel`, `splitVisitDatetime`. Импорты: `const { db } = require('../../db'); const chatpush = require('../chatpush'); const { ycGet } = require('../yclients');`. Экспорт: `{ evaluateRule, resolveRouting, ALLOWED_CHANNELS, getServiceCategoryMap, lastIncomingChannel, splitVisitDatetime }`.
+- [ ] **Step 4: Создать `rules.js`** — ПЕРЕНЕСТИ без изменений из `services/notifications.js` функции `evaluateRule`, `resolveRouting`, константу `ALLOWED_CHANNELS`, `getServiceCategoryMap` (с кэшем `_catMapCache`/`CAT_MAP_TTL`), `lastIncomingChannel`, `splitVisitDatetime`. Импорты: `const { db } = require('../../db'); const chatpush = require('../chatpush'); const { ycGet } = require('../yclients');`. Экспорт: `{ evaluateRule, resolveRouting, ALLOWED_CHANNELS, getServiceCategoryMap, lastIncomingChannel, splitVisitDatetime }`.
 
 - [ ] **Step 5: Фасад** — в `services/notifications.js` удалить перенесённые функции и `renderTemplate`, вместо них в начале файла:
 
@@ -729,7 +725,7 @@ Expected: PASS (care/reminders импортируют `getServiceCategoryMap`/`l
 cd /root/loyalpro && git add backend/services/notifications.js backend/services/notifications/render.js backend/services/notifications/rules.js backend/notifications-render.test.js
 git commit -m "refactor(notifications): чистые помощники v1 вынесены в services/notifications/, новые плейсхолдеры
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
 ---
@@ -753,15 +749,13 @@ const { db } = require('../../db');
 const DEFAULTS = Object.freeze({
   mode: 'off',
   default_channels: ['tdlib', 'whatsapp', 'max'],
-  sms_enabled: false,
-  quiet_from: null,
-  quiet_to: null,
+  quiet_from: '21:00',
+  quiet_to: '09:00',
   confirm_reply_text: '✅ Ваша запись подтверждена.\nБудем ждать вас!',
-  rating_threshold: 4,
   rating_high_text: 'Спасибо за отличную оценку нашей работы! 🙏🏻',
+  rating_mid_text: 'Спасибо за оценку! Подскажите, пожалуйста, что нам стоит улучшить? Мы обязательно учтём.',
   rating_low_text: 'Благодарим Вас за оценку.\nНе могли бы Вы рассказать, что именно Вас не устроило? Мы постараемся принять меры и, по возможности, исправить данную ситуацию.',
   rating_escalate_low: true,
-  integration_user_ids: [],
 });
 const MODES = ['off', 'shadow', 'live'];
 const TTL_MS = 30 * 1000;
@@ -787,28 +781,24 @@ async function updateSettings(salonId, patch) {
   const next = {
     mode: MODES.includes(patch.mode) ? patch.mode : cur.mode,
     default_channels: Array.isArray(patch.default_channels) ? patch.default_channels.map(String) : cur.default_channels,
-    sms_enabled: typeof patch.sms_enabled === 'boolean' ? patch.sms_enabled : cur.sms_enabled,
     quiet_from: 'quiet_from' in patch ? hm(patch.quiet_from) : cur.quiet_from,
     quiet_to: 'quiet_to' in patch ? hm(patch.quiet_to) : cur.quiet_to,
     confirm_reply_text: typeof patch.confirm_reply_text === 'string' ? patch.confirm_reply_text.slice(0, 2000) : cur.confirm_reply_text,
-    rating_threshold: Number.isInteger(patch.rating_threshold) && patch.rating_threshold >= 2 && patch.rating_threshold <= 5 ? patch.rating_threshold : cur.rating_threshold,
     rating_high_text: typeof patch.rating_high_text === 'string' ? patch.rating_high_text.slice(0, 2000) : cur.rating_high_text,
+    rating_mid_text: typeof patch.rating_mid_text === 'string' ? patch.rating_mid_text.slice(0, 2000) : cur.rating_mid_text,
     rating_low_text: typeof patch.rating_low_text === 'string' ? patch.rating_low_text.slice(0, 2000) : cur.rating_low_text,
     rating_escalate_low: typeof patch.rating_escalate_low === 'boolean' ? patch.rating_escalate_low : cur.rating_escalate_low,
-    integration_user_ids: Array.isArray(patch.integration_user_ids) ? patch.integration_user_ids.map(Number).filter(Number.isInteger) : cur.integration_user_ids,
   };
   await db.query(
-    `INSERT INTO notification_settings (salon_id, mode, default_channels, sms_enabled, quiet_from, quiet_to,
-        confirm_reply_text, rating_threshold, rating_high_text, rating_low_text, rating_escalate_low, integration_user_ids, updated_at)
-     VALUES ($1,$2,$3::jsonb,$4,$5,$6,$7,$8,$9,$10,$11,$12::jsonb,NOW())
+    `INSERT INTO notification_settings (salon_id, mode, default_channels, quiet_from, quiet_to,
+        confirm_reply_text, rating_high_text, rating_mid_text, rating_low_text, rating_escalate_low, updated_at)
+     VALUES ($1,$2,$3::jsonb,$4,$5,$6,$7,$8,$9,$10,NOW())
      ON CONFLICT (salon_id) DO UPDATE SET mode=EXCLUDED.mode, default_channels=EXCLUDED.default_channels,
-        sms_enabled=EXCLUDED.sms_enabled, quiet_from=EXCLUDED.quiet_from, quiet_to=EXCLUDED.quiet_to,
-        confirm_reply_text=EXCLUDED.confirm_reply_text, rating_threshold=EXCLUDED.rating_threshold,
-        rating_high_text=EXCLUDED.rating_high_text, rating_low_text=EXCLUDED.rating_low_text,
-        rating_escalate_low=EXCLUDED.rating_escalate_low, integration_user_ids=EXCLUDED.integration_user_ids, updated_at=NOW()`,
-    [salonId, next.mode, JSON.stringify(next.default_channels), next.sms_enabled, next.quiet_from, next.quiet_to,
-     next.confirm_reply_text, next.rating_threshold, next.rating_high_text, next.rating_low_text,
-     next.rating_escalate_low, JSON.stringify(next.integration_user_ids)]);
+        quiet_from=EXCLUDED.quiet_from, quiet_to=EXCLUDED.quiet_to, confirm_reply_text=EXCLUDED.confirm_reply_text,
+        rating_high_text=EXCLUDED.rating_high_text, rating_mid_text=EXCLUDED.rating_mid_text,
+        rating_low_text=EXCLUDED.rating_low_text, rating_escalate_low=EXCLUDED.rating_escalate_low, updated_at=NOW()`,
+    [salonId, next.mode, JSON.stringify(next.default_channels), next.quiet_from, next.quiet_to,
+     next.confirm_reply_text, next.rating_high_text, next.rating_mid_text, next.rating_low_text, next.rating_escalate_low]);
   cache.delete(salonId);
   return getSettings(salonId);
 }
@@ -840,10 +830,10 @@ const payload = (over = {}, status = 'create') => ({ status, data: {
   services: [{ id: 1, title: 'Пилинг' }], created_user_id: 13287477, ...over } });
 const rule = (over) => ({ id: 1, title: 'r', trigger_type: 'record_created', conditions: { logic: 'and', items: [] },
   message_template: '{first_name}, вы записаны {date} {time}', channels: ['tdlib'], prefer_last_channel: true,
-  hours_before: 24, delay_minutes: 5, skip_integration_user: false, on_no_show: true, ask_confirmation: true, ...over });
+  hours_before: 24, delay_minutes: 5, on_no_show: true, ask_confirmation: true, ...over });
 
 function setup({ prev = null, rules = [], client = { id: 9, name: 'Иванова Анна', is_blacklisted: false }, mode = 'live' } = {}) {
-  settings.getSettings.mockResolvedValue({ mode, quiet_from: null, quiet_to: null, integration_user_ids: [12017996], default_channels: ['tdlib'] });
+  settings.getSettings.mockResolvedValue({ mode, quiet_from: null, quiet_to: null, default_channels: ['tdlib'] });
   db.oneOrNone.mockImplementation(async (sql) => {
     if (/FROM notification_record_state/.test(sql)) return prev;
     if (/FROM clients/.test(sql)) return client;
@@ -882,10 +872,25 @@ test('условия правила не совпали → job нет', async (
   expect(inserts()).toHaveLength(0);
 });
 
-test('skip_integration_user: запись создана Милой → skipped с причиной', async () => {
-  setup({ rules: [rule({ skip_integration_user: true })] });
+test('запись, созданная Милой (интеграционный пользователь), получает «Вы записаны» как любая', async () => {
+  setup({ rules: [rule()] });
   await enroll.handleRecordEvent(salon, payload({ created_user_id: 12017996 }), NOW);
-  expect(inserts()[0][9]).toBe('skipped');
+  expect(inserts()[0][9]).toBe('pending');
+});
+
+test('тихие часы сдвигают опрос, но не «Вы записаны»', async () => {
+  const prev = { visit_datetime: new Date('2026-10-20T20:00:00+03:00'), attendance: 0, deleted: false };
+  setup({ prev, rules: [rule({ id: 5, trigger_type: 'visit_review', delay_minutes: 5 })] });
+  settings.getSettings.mockResolvedValue({ mode: 'live', quiet_from: '21:00', quiet_to: '09:00', default_channels: ['tdlib'] });
+  const late = Date.parse('2026-10-20T21:10:00+03:00');
+  await enroll.handleRecordEvent(salon, payload({ datetime: '2026-10-20T20:00:00+03:00', attendance: 1 }, 'update'), late);
+  expect(new Date(inserts()[0][6]).getTime()).toBe(Date.parse('2026-10-21T09:00:00+03:00'));
+  jest.clearAllMocks();
+  setup({ rules: [rule()] });
+  settings.getSettings.mockResolvedValue({ mode: 'live', quiet_from: '21:00', quiet_to: '09:00', default_channels: ['tdlib'] });
+  const night = Date.parse('2026-10-20T23:30:00+03:00');
+  await enroll.handleRecordEvent(salon, payload(), night);
+  expect(new Date(inserts()[0][6]).getTime()).toBe(night);
 });
 
 test('чёрный список → skipped', async () => {
@@ -1010,13 +1015,13 @@ async function cancelPending(salonId, recordId, reason, onlyTypes = null) {
 async function insertJob(salonId, rule, snap, client, scheduledMs, text, extra = {}) {
   const res = await db.query(
     `INSERT INTO notification_jobs (salon_id, rule_id, trigger_type, rule_title, yclients_record_id, visit_datetime, scheduled_at,
-        client_id, rendered_text, status, phone, attachment_url, sms_text, meta, decision_reason)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14::jsonb,$15)
+        client_id, rendered_text, status, phone, attachment_url, meta, decision_reason)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13::jsonb,$14)
      ON CONFLICT (rule_id, yclients_record_id, COALESCE(visit_datetime, 'epoch'::timestamptz)) DO NOTHING`,
     [salonId, rule.id, rule.trigger_type, rule.title, snap.recordId,
      snap.visitAt != null ? new Date(snap.visitAt) : null, new Date(scheduledMs),
      client ? client.id : null, text, extra.status || 'pending', snap.phone, rule.attachment_url || null,
-     rule.sms_text || null, JSON.stringify({ askConfirmation: !!rule.ask_confirmation, ...(extra.meta || {}) }),
+     JSON.stringify({ askConfirmation: !!rule.ask_confirmation, ...(extra.meta || {}) }),
      extra.reason || null]);
   if (res.rowCount) log.info(`job ${rule.trigger_type} rule=${rule.id} record=${snap.recordId} → ${extra.status || 'pending'}${extra.reason ? ': ' + extra.reason : ''}`);
   return res.rowCount || 0;
@@ -1059,12 +1064,10 @@ async function handleRecordEvent(salon, payload, nowMs = Date.now()) {
   const client = snap.clientYcId ? await db.oneOrNone(
     'SELECT id, name, is_blacklisted FROM clients WHERE salon_id = $1 AND yclients_client_id = $2', [salonId, snap.clientYcId]) : null;
   const renderCtx = buildRenderCtx(snap, salon, client, { nameDictionary: await salonNames.load(salonId).catch(() => null) });
-  const integrationIds = new Set((cfg.integration_user_ids || []).map(Number));
 
   const skipReasonFor = (rule) => {
     if (!snap.phone) return 'нет телефона клиента';
     if (client && client.is_blacklisted) return 'клиент в чёрном списке';
-    if (rule.skip_integration_user && snap.createdUserId != null && integrationIds.has(snap.createdUserId)) return 'запись создана интеграцией (Мила)';
     return null;
   };
   const put = async (rule, atMs, meta) => {
@@ -1104,7 +1107,7 @@ module.exports = { handleRecordEvent, cancelPending, _loadState: loadState };
 - [ ] **Step 5: Тесты зелёные**
 
 Run: `cd /root/loyalpro/backend && npx jest notifications-enroll`
-Expected: PASS, 10 тестов. Если индекс параметров в `insertJob` разошёлся с ожиданиями (`[2]` trigger, `[6]` scheduled_at, `[8]` text, `[9]` status, `[11]` attachment) — поправить ТЕСТ под реальный порядок, не наоборот.
+Expected: PASS, 11 тестов. Если индекс параметров в `insertJob` разошёлся с ожиданиями (`[2]` trigger, `[6]` scheduled_at, `[8]` text, `[9]` status, `[11]` attachment) — поправить ТЕСТ под реальный порядок, не наоборот.
 
 - [ ] **Step 6: Фасад и хук вебхука**
 
@@ -1131,47 +1134,21 @@ Expected: PASS (сьюты вебхука, если есть, мокают `hand
 cd /root/loyalpro && git add backend/services/notifications/settings.js backend/services/notifications/enroll.js backend/services/notifications.js backend/routes/webhook.js backend/notifications-enroll.test.js
 git commit -m "feat(notifications): состояние записи и постановка job'ов по событиям YClients (создание/перенос/отмена/пришёл)
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
 ---
 
-### Task 6: Воркер `worker.js` — аренда, перепроверка, тень/боевой, SMS-фолбэк
+### Task 6: Воркер `worker.js` — аренда, перепроверка, тень/боевой, каскад мессенджеров
 
 **Files:**
 - Create: `backend/services/notifications/worker.js`
-- Modify: `backend/services/sms.js` (общий `sendSms`), `backend/services/messaging/transport.js:132` (экспорт `isDefiniteRejection`), `backend/services/notifications.js` (`startNotificationWorker` → новый воркер; старый `processTick` удалить)
+- Modify: `backend/services/messaging/transport.js:132` (экспорт `isDefiniteRejection`), `backend/services/notifications.js` (`startNotificationWorker` → новый воркер; старый `processTick` удалить)
 - Test: `backend/notifications-worker.test.js`
 
-- [ ] **Step 1: `sendSms` в `services/sms.js`**
+- [ ] **Step 1: Экспорт `isDefiniteRejection`** — в `transport.js` последнюю строку заменить на `module.exports = { sendMessage, sendFile, getDeliveryStatus, configured, isDefiniteRejection };`.
 
-Добавить перед `module.exports`:
-
-```js
-/**
- * Общая отправка SMS через smsc.ru. Возвращает { id, cost } или бросает.
- * Без SMSC_LOGIN/SMSC_PASSWORD — бросает (фолбэк уведомлений должен увидеть отказ,
- * а не «успех» с логом).
- */
-async function sendSms(phone, text) {
-  const login = process.env.SMSC_LOGIN;
-  const password = process.env.SMSC_PASSWORD;
-  if (!login || !password) throw new Error('SMSC_LOGIN/SMSC_PASSWORD не заданы');
-  const { data } = await axios.get(SMSC_URL, {
-    params: { login, psw: password, phones: normalizePhoneForSms(phone), mes: String(text).slice(0, 800), fmt: 3, charset: 'utf-8' },
-    timeout: 10000,
-  });
-  if (data.error_code) throw new Error(`SMSC ${data.error_code}: ${data.error}`);
-  logger.info(`SMS → ${normalizePhoneForSms(phone)} id=${data.id} cost=${data.cost}`);
-  return { id: data.id, cost: data.cost };
-}
-```
-
-и `module.exports = { sendOtpSms, sendSms, getBalance, normalizePhoneForSms };`.
-
-- [ ] **Step 2: Экспорт `isDefiniteRejection`** — в `transport.js` последнюю строку заменить на `module.exports = { sendMessage, sendFile, getDeliveryStatus, configured, isDefiniteRejection };`.
-
-- [ ] **Step 3: Падающие тесты воркера**
+- [ ] **Step 2: Падающие тесты воркера**
 
 ```js
 'use strict';
@@ -1180,9 +1157,8 @@ jest.mock('./services/messaging/transport', () => ({
   sendMessage: jest.fn(), sendFile: jest.fn(), configured: () => true,
   isDefiniteRejection: (e) => !!(e && e.status >= 400 && e.status < 500),
 }));
-jest.mock('./services/sms', () => ({ sendSms: jest.fn() }));
 jest.mock('./services/notifications/settings', () => ({ getSettings: jest.fn() }));
-jest.mock('./services/notifications/rules', () => ({ lastIncomingChannel: jest.fn(async () => null), resolveRouting: jest.requireActual('./services/notifications/rules').resolveRouting, ALLOWED_CHANNELS: ['telegram','whatsapp','tdlib','max','max_bot','notify','sms'] }));
+jest.mock('./services/notifications/rules', () => ({ lastIncomingChannel: jest.fn(async () => null), resolveRouting: jest.requireActual('./services/notifications/rules').resolveRouting, ALLOWED_CHANNELS: ['telegram','whatsapp','tdlib','max','max_bot','notify'] }));
 jest.mock('./services/agent/pending-replies', () => ({ remember: jest.fn() }));
 jest.mock('./services/outgoing-authorship', () => ({ remember: jest.fn(async () => {}) }));
 jest.mock('./services/chat-persist', () => ({ persistWhatsappOutgoing: jest.fn(async () => {}) }));
@@ -1190,18 +1166,17 @@ jest.mock('fs', () => ({ ...jest.requireActual('fs'), readFileSync: jest.fn(() =
 
 const { db } = require('./db');
 const transport = require('./services/messaging/transport');
-const sms = require('./services/sms');
 const settings = require('./services/notifications/settings');
 const authorship = require('./services/outgoing-authorship');
 const worker = require('./services/notifications/worker');
 
 const job = (over = {}) => ({ id: 1, salon_id: 1, rule_id: 1, trigger_type: 'record_created', yclients_record_id: 100,
-  visit_datetime: new Date('2026-10-20T13:30:00+03:00'), phone: '79200255591', rendered_text: 'Текст', sms_text: null,
+  visit_datetime: new Date('2026-10-20T13:30:00+03:00'), phone: '79200255591', rendered_text: 'Текст',
   attachment_url: null, attempts: 1, meta: {}, channels: ['tdlib', 'whatsapp'], prefer_last_channel: true, ...over });
 const state = (over = {}) => ({ visit_datetime: new Date('2026-10-20T13:30:00+03:00'), attendance: 0, deleted: false, ...over });
 
-function setup({ jobs, st = state(), mode = 'live', smsEnabled = false, captured = 1 } = {}) {
-  settings.getSettings.mockResolvedValue({ mode, sms_enabled: smsEnabled, default_channels: ['tdlib', 'whatsapp'] });
+function setup({ jobs, st = state(), mode = 'live', captured = 1 } = {}) {
+  settings.getSettings.mockResolvedValue({ mode, default_channels: ['tdlib', 'whatsapp'] });
   db.any.mockImplementation(async (sql) => (/UPDATE notification_jobs/.test(sql) ? jobs : []));
   db.oneOrNone.mockImplementation(async (sql) => (/FROM notification_record_state/.test(sql) ? st : (/FROM clients/.test(sql) ? { is_blacklisted: false } : null)));
   db.query.mockImplementation(async (sql) => ({ rowCount: /SET status='sent'/.test(sql) ? captured : 1, rows: [] }));
@@ -1253,20 +1228,18 @@ test('вложение → sendFile с подписью', async () => {
   expect(transport.sendMessage).not.toHaveBeenCalled();
 });
 
-test('все мессенджеры отказали (4xx) и SMS включён → SMS, channel_used=sms', async () => {
-  setup({ jobs: [job({ sms_text: 'Коротко' })], smsEnabled: true });
+test('все мессенджеры отказали (4xx), попытка не последняя → строка снова pending для повтора', async () => {
+  setup({ jobs: [job({ attempts: 1 })] });
   transport.sendMessage.mockRejectedValue(Object.assign(new Error('422'), { status: 422 }));
-  sms.sendSms.mockResolvedValue({ id: 'sms1' });
   await worker.processTick();
-  expect(sms.sendSms).toHaveBeenCalledWith('79200255591', 'Коротко');
-  expect(statusUpdates().some((c) => /SET status='sent'/.test(c.sql) && c.p.includes('sms'))).toBe(true);
+  expect(statusUpdates().some((c) => /SET status=\$2/.test(c.sql) && c.p[1] === 'pending')).toBe(true);
 });
 
-test('таймаут транспорта → SMS НЕ шлём (могло уйти), строка остаётся failed/pending', async () => {
-  setup({ jobs: [job()], smsEnabled: true });
+test('таймаут транспорта → без повтора (сообщение могло уйти), строка failed', async () => {
+  setup({ jobs: [job()] });
   transport.sendMessage.mockRejectedValue(new Error('timeout'));
   await worker.processTick();
-  expect(sms.sendSms).not.toHaveBeenCalled();
+  expect(statusUpdates().some((c) => /SET status=\$2/.test(c.sql) && c.p[1] === 'failed')).toBe(true);
 });
 
 test('захват не удался (строку уже отменили) → отправки нет', async () => {
@@ -1282,12 +1255,12 @@ test('тестовая строка (meta.test) не перепроверяет 
 });
 ```
 
-- [ ] **Step 4: Убедиться, что падает**
+- [ ] **Step 3: Убедиться, что падает**
 
 Run: `cd /root/loyalpro/backend && npx jest notifications-worker`
 Expected: FAIL — модуль не найден.
 
-- [ ] **Step 5: `worker.js`**
+- [ ] **Step 4: `worker.js`**
 
 ```js
 'use strict';
@@ -1296,13 +1269,12 @@ Expected: FAIL — модуль не найден.
 // записи ПЕРЕД отправкой (напоминание о перенесённой/отменённой записи — хуже
 // молчания), режим салона (off → ждём, shadow → журнал без отправки, live →
 // отправка), захват mark-before-send (at-most-once, как в «Заботе»), каскад
-// каналов через transport, SMS-фолбэк только при ОДНОЗНАЧНОМ отказе мессенджеров.
+// каналов через transport; повтор только при ОДНОЗНАЧНОМ отказе (4xx), таймаут/5xx — failed.
 // ============================================================
 const fs = require('fs');
 const path = require('path');
 const { db } = require('../../db');
 const transport = require('../messaging/transport');
-const sms = require('../sms');
 const settingsSvc = require('./settings');
 const { resolveRouting, lastIncomingChannel } = require('./rules');
 const pendingReplies = require('../agent/pending-replies');
@@ -1363,7 +1335,7 @@ async function staleReason(job) {
 }
 
 async function deliver(job, routing) {
-  const base = { phone: job.phone, dispatchRouting: routing.filter((c) => c !== 'sms') };
+  const base = { phone: job.phone, dispatchRouting: routing };
   if (job.attachment_url) {
     const fileName = path.basename(job.attachment_url);
     const abs = path.join(uploadsDir, fileName);
@@ -1414,18 +1386,8 @@ async function processOne(job, cfg) {
     log.info(`#${job.id} ${job.trigger_type} record=${job.yclients_record_id} sent via ${channelUsed} delivery=${delivery && delivery.id}`);
     await afterSend(job, channelUsed, delivery);
   } catch (e) {
+    if (delivered) return;   // упала запись журнала после отправки — статус sent уже стоит с захвата
     const definite = transport.isDefiniteRejection(e);
-    if (definite && cfg.sms_enabled && routing.includes('sms')) {
-      try {
-        const r = await sms.sendSms(job.phone, job.sms_text || job.rendered_text);
-        delivered = true;
-        await setStatus(job.id, 'sent', { channelUsed: 'sms', deliveryId: r.id, error: `мессенджеры: ${e.message}` });
-        log.info(`#${job.id} sent via SMS after messenger reject (${e.message})`);
-        await afterSend(job, 'sms', null);
-        return;
-      } catch (e2) { log.warn(`#${job.id} SMS failed: ${e2.message}`); }
-    }
-    if (delivered) return;
     const final = job.attempts >= MAX_ATTEMPTS || !definite;   // таймаут/5xx: повторять нельзя — могло уйти
     await setStatus(job.id, final ? 'failed' : 'pending', { error: String(e.message || e).slice(0, 500) });
     log.warn(`#${job.id} attempt ${job.attempts}/${MAX_ATTEMPTS} failed (${definite ? '4xx' : 'не 4xx — без повтора'}): ${e.message}`);
@@ -1461,9 +1423,9 @@ function startNotificationWorker() {
 module.exports = { processTick, processOne, startNotificationWorker, LEASE_SQL, staleReason };
 ```
 
-- [ ] **Step 6: Фасад** — в `services/notifications.js` удалить `processTick`/старый `startNotificationWorker`/`lastIncomingChannel`-дубликаты и экспортировать `startNotificationWorker: require('./notifications/worker').startNotificationWorker`. Файл должен остаться тонким (≈30 строк): импорты папки и `module.exports` с прежними именами плюс `handleRecordEvent`.
+- [ ] **Step 5: Фасад** — в `services/notifications.js` удалить `processTick`/старый `startNotificationWorker`/`lastIncomingChannel`-дубликаты и экспортировать `startNotificationWorker: require('./notifications/worker').startNotificationWorker`. Файл должен остаться тонким (≈30 строк): импорты папки и `module.exports` с прежними именами плюс `handleRecordEvent`.
 
-- [ ] **Step 7: Тесты и живой EXPLAIN**
+- [ ] **Step 6: Тесты и живой EXPLAIN**
 
 Run: `cd /root/loyalpro/backend && npx jest notifications-worker notifications-enroll notifications-render`
 Expected: PASS.
@@ -1479,18 +1441,18 @@ EXPLAIN UPDATE notification_jobs j SET attempts = j.attempts + 1, last_attempt_a
 ```
 Expected: план без ошибки, `Index Scan using idx_notification_jobs_due`.
 
-- [ ] **Step 8: Рестарт дева и проверка старта воркера**
+- [ ] **Step 7: Рестарт дева и проверка старта воркера**
 
 Run: `cd /root/loyalpro/backend && PORT=3001 pm2 restart loyalpro && sleep 4 && pm2 logs loyalpro --lines 40 --nostream | grep -i "notification worker"`
 Expected: `Notification worker started (tick=10000ms)`.
 
-- [ ] **Step 9: Commit**
+- [ ] **Step 8: Commit**
 
 ```bash
-cd /root/loyalpro && git add backend/services/notifications/worker.js backend/services/notifications.js backend/services/sms.js backend/services/messaging/transport.js backend/notifications-worker.test.js
-git commit -m "feat(notifications): воркер очереди — перепроверка записи, теневой режим, каскад, SMS-фолбэк
+cd /root/loyalpro && git add backend/services/notifications/worker.js backend/services/notifications.js backend/services/messaging/transport.js backend/notifications-worker.test.js
+git commit -m "feat(notifications): воркер очереди — перепроверка записи, теневой режим, каскад мессенджеров
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
 ---
@@ -1531,9 +1493,9 @@ const SURVEY = 'Спасибо что посетили «PERI CLINIC»! Прос
 const msg = (text, over = {}) => ({ direction: 'incoming', channel: 'tdlib', phone: '79200255591', chatId: '123', type: 'text', text, ...over });
 const salon = { id: 1, yclients_company_id: 5 };
 
-function setup({ last, job, mode = 'live', threshold = 4, escalate = true }) {
-  settings.getSettings.mockResolvedValue({ mode, confirm_reply_text: '✅ Подтверждено', rating_threshold: threshold,
-    rating_high_text: 'Спасибо!', rating_low_text: 'Что не так?', rating_escalate_low: escalate });
+function setup({ last, job, mode = 'live', escalate = true }) {
+  settings.getSettings.mockResolvedValue({ mode, confirm_reply_text: '✅ Подтверждено',
+    rating_high_text: 'Спасибо!', rating_mid_text: 'Что улучшить?', rating_low_text: 'Что не так?', rating_escalate_low: escalate });
   history.lastOutgoing.mockResolvedValue(last);
   db.oneOrNone.mockImplementation(async (sql) => (/FROM salons/.test(sql) ? salon : (/FROM notification_jobs/.test(sql) ? job : null)));
   db.query.mockResolvedValue({ rowCount: 1, rows: [] });
@@ -1588,6 +1550,13 @@ test('«3» → текст «что не так» и перевод на адм�
   expect(dialogState.setStatus).toHaveBeenCalledWith(1, '79200255591', 'escalated', 'low_rating');
 });
 
+test('«4» → текст «что улучшить», без перевода на администратора', async () => {
+  setup({ last: { author: 'system', text: SURVEY }, job: { id: 11, yclients_record_id: 100, client_id: 9 } });
+  expect(await replies.handleIncoming(1, msg('4'))).toEqual({ handled: true, kind: 'rating', rating: 4 });
+  expect(transport.sendMessage).toHaveBeenCalledWith(1, expect.objectContaining({ text: 'Что улучшить?' }));
+  expect(dialogState.setStatus).not.toHaveBeenCalled();
+});
+
 test('цифра со словами («5, спасибо!») → Миле', async () => {
   setup({ last: { author: 'system', text: SURVEY }, job: { id: 11, yclients_record_id: 100 } });
   expect(await replies.handleIncoming(1, msg('5, спасибо большое!'))).toEqual({ handled: false });
@@ -1612,8 +1581,8 @@ Expected: FAIL — модуль не найден.
 // ============================================================
 // Ответы пациентов на НАШИ уведомления, без LLM, до Милы:
 //  • чистое подтверждение после напоминания → YClients attendance=2 + отбивка;
-//  • чистая цифра 2–5 после опроса → visit_ratings + текст по порогу,
-//    низкая оценка → диалог на администратора.
+//  • чистая цифра 2–5 после опроса → visit_ratings + текст по полосе (5 / 4 / 2–3),
+//    2–3 → диалог на администратора, 4 → без перевода.
 // Условие ДВУХЧАСТНОЕ (как в visit-rating.js): последнее исходящее диалога —
 // авторства system и по тексту именно напоминание/опрос, И есть наш job этого
 // типа по телефону. Иначе → { handled:false }, ход уходит Миле как раньше.
@@ -1691,8 +1660,11 @@ async function handleRating(salonId, msg, rating, cfg) {
      ON CONFLICT (salon_id, yclients_record_id) DO UPDATE SET rating=EXCLUDED.rating, created_at=NOW()`,
     [salonId, job.yclients_record_id, job.client_id || null, msg.phone, rating, job.id]);
   await db.query('UPDATE notification_jobs SET confirmed_at = NOW() WHERE id = $1', [job.id]);
-  const low = rating < Number(cfg.rating_threshold || 4);
-  await sendSystem(salonId, msg, low ? cfg.rating_low_text : cfg.rating_high_text);
+  // Полосы утверждены владельцем 14.10.2026: 5 — благодарность (со ссылками на отзывы),
+  // 4 — «что улучшить» без перевода, 2–3 — «что не устроило» и перевод на администратора.
+  const low = rating <= 3;
+  const text = rating === 5 ? cfg.rating_high_text : rating === 4 ? cfg.rating_mid_text : cfg.rating_low_text;
+  await sendSystem(salonId, msg, text);
   if (low && cfg.rating_escalate_low) {
     const key = dialogKeyOf(msg);
     try {
@@ -1733,7 +1705,7 @@ module.exports = { handleIncoming };
 - [ ] **Step 4: Тесты зелёные**
 
 Run: `cd /root/loyalpro/backend && npx jest notifications-replies`
-Expected: PASS, 9 тестов. Если `groupChat.isGroupMessage` ожидает другую форму (`chat_type`) — свериться с `services/agent/group-chat.js` и поправить вызов, не тест.
+Expected: PASS, 10 тестов. Если `groupChat.isGroupMessage` ожидает другую форму (`chat_type`) — свериться с `services/agent/group-chat.js` и поправить вызов, не тест.
 
 - [ ] **Step 5: Перехват в вебхуке** — в `routes/chatpush-webhook.js` добавить `const notifyReplies = require('../services/notifications/replies');` к импортам и заменить блок `if (config.CHATPUSH.agentEnabled && storedNew && …)` на:
 
@@ -1770,7 +1742,7 @@ Expected: PASS (в `chatpush-webhook-route.test.js` добавить `jest.mock(
 cd /root/loyalpro && git add backend/services/notifications/replies.js backend/routes/chatpush-webhook.js backend/notifications-replies.test.js backend/chatpush-webhook-route.test.js
 git commit -m "feat(notifications): ответы на напоминание и опрос — статус «Подтвердил» в YClients и оценка визита без LLM
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
 ---
@@ -1805,13 +1777,13 @@ test('visit_review/visit_after: delay_minutes 0..1440', () => {
   expect(parseRuleBody(ok({ triggerType: 'visit_review', delayMinutes: 5 })).value.delayMinutes).toBe(5);
   expect(parseRuleBody(ok({ triggerType: 'visit_after', delayMinutes: -1 })).error).toMatch(/минут/i);
 });
-test('sms в каналах допустим только последним', () => {
-  expect(parseRuleBody(ok({ channels: ['sms', 'tdlib'] })).error).toMatch(/SMS/);
-  expect(parseRuleBody(ok({ channels: ['tdlib', 'sms'] })).value.channels).toEqual(['tdlib', 'sms']);
+test('неизвестный канал (в т.ч. sms) отбрасывается', () => {
+  expect(parseRuleBody(ok({ channels: ['sms'] })).error).toMatch(/канал/i);
+  expect(parseRuleBody(ok({ channels: ['tdlib', 'sms', 'max'] })).value.channels).toEqual(['tdlib', 'max']);
 });
-test('флаги и sms_text нормализуются', () => {
-  const v = parseRuleBody(ok({ skipIntegrationUser: true, onNoShow: false, askConfirmation: false, smsText: ' Кратко ' })).value;
-  expect(v).toMatchObject({ skipIntegrationUser: true, onNoShow: false, askConfirmation: false, smsText: 'Кратко' });
+test('флаги нормализуются', () => {
+  const v = parseRuleBody(ok({ onNoShow: false, askConfirmation: false })).value;
+  expect(v).toMatchObject({ onNoShow: false, askConfirmation: false });
 });
 ```
 
@@ -1884,21 +1856,17 @@ function parseRuleBody(body) {
 
   const channels = (Array.isArray(b.channels) ? b.channels : []).filter((ch) => ALLOWED_CHANNELS.includes(ch));
   if (!channels.length) return { error: 'Выберите хотя бы один канал отправки' };
-  const smsIdx = channels.indexOf('sms');
-  if (smsIdx !== -1 && smsIdx !== channels.length - 1) return { error: 'SMS может быть только последним каналом каскада' };
 
   const hoursBefore = triggerType === 'visit_reminder' ? intIn(b.hoursBefore, 1, 72, 24) : null;
   if (triggerType === 'visit_reminder' && hoursBefore == null) return { error: 'Часы до визита: число от 1 до 72' };
   const delayMinutes = (triggerType === 'visit_review' || triggerType === 'visit_after') ? intIn(b.delayMinutes, 0, 1440, 5) : null;
   if ((triggerType === 'visit_review' || triggerType === 'visit_after') && delayMinutes == null) return { error: 'Минут после визита: число от 0 до 1440' };
 
-  const smsText = b.smsText == null ? null : String(b.smsText).trim().slice(0, 800) || null;
   return {
     value: {
       title, triggerType, messageTemplate: template, conditions: { logic, items }, channels,
       preferLastChannel: b.preferLastChannel !== false, isEnabled: b.isEnabled !== false,
-      hoursBefore, delayMinutes, smsText,
-      skipIntegrationUser: b.skipIntegrationUser === true,
+      hoursBefore, delayMinutes,
       onNoShow: b.onNoShow !== false,
       askConfirmation: b.askConfirmation !== false,
     },
@@ -1910,10 +1878,10 @@ function parseRuleBody(body) {
 
 ```js
 const RULE_COLS = `title, is_enabled, trigger_type, conditions, message_template, channels, prefer_last_channel,
-  hours_before, delay_minutes, sms_text, skip_integration_user, on_no_show, ask_confirmation`;
+  hours_before, delay_minutes, on_no_show, ask_confirmation`;
 function ruleParams(v) {
   return [v.title, v.isEnabled, v.triggerType, JSON.stringify(v.conditions), v.messageTemplate, JSON.stringify(v.channels),
-    v.preferLastChannel, v.hoursBefore, v.delayMinutes, v.smsText, v.skipIntegrationUser, v.onNoShow, v.askConfirmation];
+    v.preferLastChannel, v.hoursBefore, v.delayMinutes, v.onNoShow, v.askConfirmation];
 }
 
 router.get('/', guard, async (req, res) => {
@@ -1936,7 +1904,7 @@ router.post('/', guard, async (req, res) => {
     if (error) return res.status(400).json({ error });
     const rule = await db.one(
       `INSERT INTO notification_rules (salon_id, ${RULE_COLS}, created_by)
-       VALUES ($1,$2,$3,$4,$5::jsonb,$6,$7::jsonb,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING *`,
+       VALUES ($1,$2,$3,$4,$5::jsonb,$6,$7::jsonb,$8,$9,$10,$11,$12,$13) RETURNING *`,
       [req.user.salonId, ...ruleParams(value), req.user.id]);
     res.json({ ok: true, rule });
   } catch (e) { log.error(`create: ${e.message}`); res.status(500).json({ error: e.message }); }
@@ -1950,8 +1918,8 @@ router.put('/:id', guard, async (req, res) => {
     if (error) return res.status(400).json({ error });
     const rule = await db.oneOrNone(
       `UPDATE notification_rules SET title=$3, is_enabled=$4, trigger_type=$5, conditions=$6::jsonb, message_template=$7,
-          channels=$8::jsonb, prefer_last_channel=$9, hours_before=$10, delay_minutes=$11, sms_text=$12,
-          skip_integration_user=$13, on_no_show=$14, ask_confirmation=$15, updated_at=NOW()
+          channels=$8::jsonb, prefer_last_channel=$9, hours_before=$10, delay_minutes=$11,
+          on_no_show=$12, ask_confirmation=$13, updated_at=NOW()
         WHERE id=$1 AND salon_id=$2 RETURNING *`,
       [id, req.user.salonId, ...ruleParams(value)]);
     if (!rule) return res.status(404).json({ error: 'not found' });
@@ -2100,9 +2068,9 @@ router.post('/:id/test', guard, async (req, res) => {
       services: 'Тестовая услуга', staff: 'Мастер', salon: 'Салон', record_link: 'https://example.com', rating_links: '' });
     const row = await db.one(
       `INSERT INTO notification_jobs (salon_id, rule_id, rule_title, trigger_type, yclients_record_id, visit_datetime, phone, scheduled_at,
-          rendered_text, sms_text, attachment_url, meta, decision_reason)
-       VALUES ($1,$2,$3,$4,0,NULL,$5,NOW(),$6,$7,$8,'{"test":true}'::jsonb,'тестовая отправка') RETURNING id`,
-      [req.user.salonId, rule.id, rule.title, rule.trigger_type, phone, text, rule.sms_text, rule.attachment_url]);
+          rendered_text, attachment_url, meta, decision_reason)
+       VALUES ($1,$2,$3,$4,0,NULL,$5,NOW(),$6,$7,'{"test":true}'::jsonb,'тестовая отправка') RETURNING id`,
+      [req.user.salonId, rule.id, rule.title, rule.trigger_type, phone, text, rule.attachment_url]);
     res.json({ ok: true, jobId: row.id, mode: cfg.mode,
       note: cfg.mode === 'live' ? 'уйдёт в течение 10 с' : `режим «${cfg.mode}»: строка попадёт в журнал без отправки` });
   } catch (e) { res.status(500).json({ error: e.message }); }
@@ -2138,7 +2106,7 @@ Expected: 200 на всех, у `parity` семь строк с `chatpush > 0` �
 cd /root/loyalpro && git add backend/routes/notification-rules.js backend/notifications-routes.test.js
 git commit -m "feat(notifications): API — типы правил, настройки салона, журнал job'ов, вложения, тест, оценки, паритет
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
 ---
@@ -2189,7 +2157,7 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
       </div>
 ```
 
-Модалки (в конец `page-broadcasts`): `ntEditor` (поля: название, тип `<select id="ntType">`, блок `ntTypeFields` (часы до / минуты после / вложение / флаги), условия `<div id="ntConds"></div>`, текст `<textarea id="ntText">` с кнопками переменных, каналы `<div id="ntChannels"></div>` + чекбокс `prefer_last_channel`, SMS-текст, кнопки «Сохранить», «🧪 Тест», «Удалить») и `ntSettings` (режим, каналы по умолчанию, SMS, тихие часы, тексты отбивок, порог, перевод на администратора, id интеграционных пользователей). Разметка модалок — по образцу `nrEditor` v1 (классы `modal`, `fg`/`fl`, `btn-pri`).
+Модалки (в конец `page-broadcasts`): `ntEditor` (поля: название, тип `<select id="ntType">`, блок `ntTypeFields` (часы до / минуты после / вложение / флаги), условия `<div id="ntConds"></div>`, текст `<textarea id="ntText">` с кнопками переменных, каналы `<div id="ntChannels"></div>` + чекбокс `prefer_last_channel`, кнопки «Сохранить», «🧪 Тест», «Удалить») и `ntSettings` (режим, каналы по умолчанию, тихие часы `ntsQuietFrom`/`ntsQuietTo`, текст подтверждения `ntsConfirm`, тексты оценок `ntsHigh` (5) / `ntsMid` (4) / `ntsLow` (2–3), чекбокс перевода на администратора при 2–3 `ntsEscalate`). Разметка модалок — по образцу `nrEditor` v1 (классы `modal`, `fg`/`fl`, `btn-pri`).
 
 - [ ] **Step 2: `notifications.js`** (ключевые функции; остальное — по образцу `broadcast-rules.js`):
 
@@ -2206,7 +2174,7 @@ const NT_TYPES = {
   visit_after:       { lbl: 'Рекомендации после процедуры', hint: 'По услугам, с картинкой' },
   first_visit:       { lbl: 'Первый визит',            hint: 'Приглашение в программу лояльности' },
 };
-const NT_CH = { tdlib: 'Telegram (номер)', whatsapp: 'WhatsApp', max: 'MAX', telegram: 'Telegram (бот)', max_bot: 'MAX (бот)', notify: 'ВК/ОК', sms: 'SMS (последним)' };
+const NT_CH = { tdlib: 'Telegram (номер)', whatsapp: 'WhatsApp', max: 'MAX', telegram: 'Telegram (бот)', max_bot: 'MAX (бот)', notify: 'ВК/ОК' };
 const NT_ST = { pending: ['В очереди', '#9ca3af'], sent: ['Отправлено', '#10b981'], shadow: ['Тень', '#6366f1'],
   skipped: ['Пропущено', '#f59e0b'], cancelled: ['Отменено', '#9ca3af'], failed: ['Ошибка', '#ef4444'] };
 let _ntRules = [], _ntSettings = null, _ntDicts = null, _ntEditId = null, _ntChannels = [], _ntLoaded = false;
@@ -2263,7 +2231,6 @@ function ntRuleSummary(r) {
   if (r.trigger_type === 'visit_reminder') parts.push(`за ${r.hours_before || 24} ч${r.ask_confirmation ? ', с подтверждением' : ''}`);
   if (r.trigger_type === 'visit_review' || r.trigger_type === 'visit_after') parts.push(`через ${r.delay_minutes ?? 5} мин после визита`);
   if (r.trigger_type === 'record_cancelled') parts.push(r.on_no_show ? 'и при «не пришёл»' : 'без «не пришёл»');
-  if (r.skip_integration_user) parts.push('кроме записей Милы');
   const items = (r.conditions && r.conditions.items) || [];
   parts.push(items.length ? `условий: ${items.length} (${r.conditions.logic === 'or' ? 'ИЛИ' : 'И'})` : 'любая запись');
   return parts.join(' · ');
@@ -2273,11 +2240,10 @@ async function ntToggle(id) { await api(`/notification-rules/${id}/toggle`, { me
 function ntOpenEditor(id, type) {
   _ntEditId = id;
   const r = id ? _ntRules.find(x => x.id === id) : { trigger_type: type || 'record_created', channels: _ntSettings.default_channels, conditions: { logic: 'and', items: [] },
-    message_template: '', prefer_last_channel: true, hours_before: 24, delay_minutes: 5, on_no_show: true, ask_confirmation: true, skip_integration_user: false, sms_text: '' };
+    message_template: '', prefer_last_channel: true, hours_before: 24, delay_minutes: 5, on_no_show: true, ask_confirmation: true };
   document.getElementById('ntTitle').value = r.title || '';
   document.getElementById('ntType').value = r.trigger_type;
   document.getElementById('ntText').value = r.message_template || '';
-  document.getElementById('ntSmsText').value = r.sms_text || '';
   document.getElementById('ntPreferLast').checked = r.prefer_last_channel !== false;
   _ntChannels = [...(r.channels || [])];
   ntRenderTypeFields(r); ntRenderChannels();
@@ -2297,7 +2263,6 @@ function ntRenderTypeFields(r) {
     ${r.attachment_url ? `<div><img src="${esc(r.attachment_url)}" style="max-height:120px;border-radius:8px"> <button class="btn" onclick="ntDeleteAttachment()">Убрать</button></div>` : ''}
     <input type="file" id="ntFile" accept="image/*" ${_ntEditId ? '' : 'disabled title="Сначала сохраните правило"'}></div>`;
   if (t === 'record_cancelled') html += `<label><input type="checkbox" id="ntNoShow" ${r.on_no_show !== false ? 'checked' : ''}> Слать и при статусе «клиент не пришёл»</label>`;
-  if (t === 'record_created') html += `<label><input type="checkbox" id="ntSkipInt" ${r.skip_integration_user ? 'checked' : ''}> Не слать, если запись создала Мила (она подтверждает сама)</label>`;
   box.innerHTML = html;
 }
 function ntRenderChannels() {
@@ -2312,11 +2277,10 @@ function ntInsertVar(tok) { const ta = document.getElementById('ntText'); const 
 async function ntSave() {
   const t = document.getElementById('ntType').value;
   const g = (id) => document.getElementById(id);
-  const body = { title: g('ntTitle').value, triggerType: t, messageTemplate: g('ntText').value, smsText: g('ntSmsText').value,
+  const body = { title: g('ntTitle').value, triggerType: t, messageTemplate: g('ntText').value,
     conditions: condGet('ntf'), channels: _ntChannels, preferLastChannel: g('ntPreferLast').checked,
     hoursBefore: g('ntHours') ? Number(g('ntHours').value) : undefined, delayMinutes: g('ntDelay') ? Number(g('ntDelay').value) : undefined,
-    askConfirmation: g('ntAsk') ? g('ntAsk').checked : true, onNoShow: g('ntNoShow') ? g('ntNoShow').checked : true,
-    skipIntegrationUser: g('ntSkipInt') ? g('ntSkipInt').checked : false };
+    askConfirmation: g('ntAsk') ? g('ntAsk').checked : true, onNoShow: g('ntNoShow') ? g('ntNoShow').checked : true };
   try {
     const res = _ntEditId ? await api(`/notification-rules/${_ntEditId}`, { method: 'PUT', body })
       : await api('/notification-rules', { method: 'POST', body });
@@ -2364,16 +2328,16 @@ async function ntLoadParity() {
 
 function ntOpenSettings() {
   const s = _ntSettings; const g = (id) => document.getElementById(id);
-  g('ntsMode').value = s.mode; g('ntsSms').checked = !!s.sms_enabled; g('ntsQuietFrom').value = s.quiet_from || ''; g('ntsQuietTo').value = s.quiet_to || '';
-  g('ntsConfirm').value = s.confirm_reply_text; g('ntsThreshold').value = s.rating_threshold; g('ntsHigh').value = s.rating_high_text; g('ntsLow').value = s.rating_low_text;
-  g('ntsEscalate').checked = !!s.rating_escalate_low; g('ntsIntIds').value = (s.integration_user_ids || []).join(', ');
+  g('ntsMode').value = s.mode; g('ntsQuietFrom').value = s.quiet_from || ''; g('ntsQuietTo').value = s.quiet_to || '';
+  g('ntsConfirm').value = s.confirm_reply_text; g('ntsHigh').value = s.rating_high_text; g('ntsMid').value = s.rating_mid_text; g('ntsLow').value = s.rating_low_text;
+  g('ntsEscalate').checked = !!s.rating_escalate_low;
   g('ntSettings').classList.add('open');
 }
 async function ntSaveSettings() {
   const g = (id) => document.getElementById(id);
-  const body = { mode: g('ntsMode').value, sms_enabled: g('ntsSms').checked, quiet_from: g('ntsQuietFrom').value || null, quiet_to: g('ntsQuietTo').value || null,
-    confirm_reply_text: g('ntsConfirm').value, rating_threshold: Number(g('ntsThreshold').value), rating_high_text: g('ntsHigh').value, rating_low_text: g('ntsLow').value,
-    rating_escalate_low: g('ntsEscalate').checked, integration_user_ids: g('ntsIntIds').value.split(/[,\s]+/).filter(Boolean).map(Number) };
+  const body = { mode: g('ntsMode').value, quiet_from: g('ntsQuietFrom').value || null, quiet_to: g('ntsQuietTo').value || null,
+    confirm_reply_text: g('ntsConfirm').value, rating_high_text: g('ntsHigh').value, rating_mid_text: g('ntsMid').value, rating_low_text: g('ntsLow').value,
+    rating_escalate_low: g('ntsEscalate').checked };
   if (body.mode === 'live' && _ntSettings.mode !== 'live' && !confirm('Включить боевой режим? Уведомления начнут уходить клиентам. Убедитесь, что Chatpush отключён в YClients (Интеграции → Уведомления), иначе клиенты получат дубли.')) return;
   try { _ntSettings = await api('/notification-rules/settings', { method: 'PUT', body }); notify('Сохранено'); g('ntSettings').classList.remove('open'); ntRenderMode(); }
   catch (e) { notify(e.message, 'error'); }
@@ -2397,7 +2361,7 @@ Expected: PASS.
 cd /root/loyalpro && git add frontend/index.html frontend/js/pages/notifications.js frontend/js/pages/notifications.test.js frontend/js/core/api.js
 git commit -m "feat(notifications): вкладка «Уведомления» — правила по типам, настройки, журнал, оценки, сверка с Chatpush
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
 ---
@@ -2405,7 +2369,8 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 ### Task 10: Живые проверки, runbook переключения, документация
 
 **Files:**
-- Create: `backend/scripts/notifications-e2e.js`, `backend/scripts/notifications-replies-e2e.js`
+- Create: `backend/scripts/notifications-e2e.js`, `backend/scripts/notifications-replies-e2e.js`, `backend/scripts/notifications-backfill-reminders.js`
+- Modify: `backend/services/notifications/enroll.js` (экспорт `backfillReminders`), `backend/notifications-enroll.test.js`
 - Create: `docs/2026-10-13-notifications-cutover-runbook.md`
 - Modify: `CLAUDE.md` (новый раздел), `docs/superpowers/specs/2026-10-13-yclients-notifications-own-module-design.md` (статус)
 
@@ -2413,58 +2378,166 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 
 - [ ] **Step 2: `notifications-replies-e2e.js`** — in-process: вставляет `sent`-job `visit_reminder` по тестовому номеру с `yclients_record_id` живой тестовой записи, кладёт в `chatpush_messages` исходящее `system` с текстом напоминания, зовёт `replies.handleIncoming` с «Подтверждаю» → проверяет `attendance=2` через `ycGetRecord` и `confirmed_at`; затем job `visit_review` + «5» и «3» → строки `visit_ratings`, у «3» — `agent_dialogs.status='escalated'`. Отправка отбивки застаблена (`--send` шлёт). Чистит за собой.
 
-- [ ] **Step 3: Runbook** `docs/2026-10-13-notifications-cutover-runbook.md`:
+- [ ] **Step 3: Догон напоминаний по уже существующим записям.** ЗАЧЕМ: `visit_reminder` ставится только на событии создания/переноса, а записи в клинике делают на недели вперёд. Без догона все визиты, записанные ДО включения тени, остались бы без нашего напоминания после отключения Chatpush. Догон запускается ОДИН раз — в начале тени (runbook, шаг 2), дальше новые записи идут вебхуком.
+
+Тест (дописать в `backend/notifications-enroll.test.js`):
+
+```js
+describe('backfillReminders', () => {
+  const rec = (over = {}) => ({ id: 200, datetime: '2026-10-25T12:00:00+03:00', seance_length: 3600, attendance: 0, deleted: false,
+    sms_before: 0, client: { id: 7, phone: '79200255591', name: 'Анна' }, staff: { id: 55, name: 'Татьяна' },
+    services: [{ id: 1, title: 'Пилинг' }], ...over });
+  test('будущая живая запись → напоминание за 24 ч; прошедшая и отменённая — нет', async () => {
+    setup({ rules: [rule({ id: 2, trigger_type: 'visit_reminder' })] });
+    const r = await enroll.backfillReminders(salon, [
+      rec(), rec({ id: 201, datetime: '2026-10-17T12:00:00+03:00' }), rec({ id: 202, attendance: -1 }), rec({ id: 203, deleted: true }),
+    ], NOW);
+    expect(r).toEqual({ scanned: 4, eligible: 1, queued: 1 });
+    expect(inserts().map((p) => p[4])).toEqual([200]);
+    expect(new Date(inserts()[0][6]).getTime()).toBe(Date.parse('2026-10-24T12:00:00+03:00'));
+  });
+  test('dryRun ничего не пишет в очередь', async () => {
+    setup({ rules: [rule({ id: 2, trigger_type: 'visit_reminder' })] });
+    const r = await enroll.backfillReminders(salon, [rec()], NOW, { dryRun: true });
+    expect(r).toEqual({ scanned: 1, eligible: 1, queued: 0 });
+    expect(inserts()).toHaveLength(0);
+  });
+});
+```
+
+Реализация — в конец `backend/services/notifications/enroll.js` (переиспользует локальные `saveState`/`insertJob`), и `backfillReminders` добавить в `module.exports`:
+
+```js
+/**
+ * Догон напоминаний: records — живые записи YClients (форма data из /records).
+ * Только visit_reminder и только будущие неотменённые визиты; момент — тот же
+ * reminderAt, что у вебхука (тихие часы, sms_before). Повтор безопасен:
+ * UNIQUE (правило, запись, момент визита) + ON CONFLICT DO NOTHING.
+ */
+async function backfillReminders(salon, records, nowMs = Date.now(), { dryRun = false } = {}) {
+  const salonId = salon.id;
+  const cfg = await settingsSvc.getSettings(salonId);
+  const rules = await db.any(
+    `SELECT * FROM notification_rules WHERE salon_id = $1 AND is_enabled = TRUE AND trigger_type = 'visit_reminder'`, [salonId]);
+  const out = { scanned: records.length, eligible: 0, queued: 0 };
+  if (!rules.length) return out;
+  const catMap = await getServiceCategoryMap(salon).catch(() => new Map());
+  const nameDictionary = await salonNames.load(salonId).catch(() => null);
+  for (const rec of records) {
+    const snap = ev.recordSnapshot({ status: 'update', data: rec });
+    if (!Number.isInteger(snap.recordId) || snap.deleted || snap.attendance === -1 || snap.visitAt == null || snap.visitAt <= nowMs) continue;
+    if (!dryRun) await saveState(salonId, snap);
+    if (!snap.phone) continue;
+    const client = snap.clientYcId ? await db.oneOrNone(
+      'SELECT id, name, is_blacklisted FROM clients WHERE salon_id = $1 AND yclients_client_id = $2', [salonId, snap.clientYcId]) : null;
+    if (client && client.is_blacklisted) continue;
+    const serviceIds = snap.services.map((x) => x.id);
+    const ctx = { staffId: snap.staffId, serviceIds,
+      categoryIds: [...new Set(serviceIds.map((id) => catMap.get(String(id))).filter(Boolean))] };
+    const renderCtx = buildRenderCtx(snap, salon, client, { nameDictionary });
+    for (const rule of rules) {
+      let ok = false;
+      try { ok = evaluateRule(rule.conditions, ctx); } catch (e) { log.warn(`rule #${rule.id}: ${e.message}`); }
+      if (!ok) continue;
+      const at = ev.reminderAt(snap, rule, cfg, nowMs);
+      if (at == null) continue;
+      out.eligible += 1;
+      if (!dryRun) out.queued += await insertJob(salonId, rule, snap, client, at,
+        renderTemplate(rule.message_template, renderCtx), { meta: { backfill: true } });
+    }
+  }
+  return out;
+}
+```
+
+Скрипт `backend/scripts/notifications-backfill-reminders.js` (по умолчанию сухой прогон, `--write` ставит в очередь):
+
+```js
+'use strict';
+// Разовый догон напоминаний о визите по записям, созданным ДО включения модуля.
+// Запуск: cd backend && node scripts/notifications-backfill-reminders.js --salon=1 [--days=60] [--write]
+const { db, pool } = require('../db');
+const { ycGet } = require('../services/yclients');
+const { backfillReminders } = require('../services/notifications/enroll');
+
+const args = Object.fromEntries(process.argv.slice(2).map((a) => {
+  const m = a.match(/^--([^=]+)=(.*)$/); return m ? [m[1], m[2]] : [a.replace(/^--/, ''), true];
+}));
+const ymd = (d) => new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Moscow' }).format(d);
+
+(async () => {
+  const salon = await db.oneOrNone('SELECT * FROM salons WHERE id = $1', [Number(args.salon || 1)]);
+  if (!salon) throw new Error('салон не найден');
+  const days = Math.min(Math.max(Number(args.days || 60), 1), 180);
+  const records = [];
+  for (let page = 1; page <= 50; page++) {
+    const batch = await ycGet(salon, `/records/${salon.yclients_company_id}`, {
+      start_date: ymd(new Date()), end_date: ymd(new Date(Date.now() + days * 86400000)), count: 200, page });
+    if (!Array.isArray(batch) || !batch.length) break;
+    records.push(...batch);
+  }
+  const r = await backfillReminders(salon, records, Date.now(), { dryRun: !args.write });
+  console.log(`${args.write ? 'WRITE' : 'DRY-RUN'}: записей ${r.scanned}, подходят под правила ${r.eligible}, поставлено ${r.queued}`);
+  await pool.end();
+})().catch((e) => { console.error(e); process.exit(1); });
+```
+
+Run: `cd /root/loyalpro/backend && npx jest notifications-enroll` → PASS (13 тестов); затем на деве `node scripts/notifications-backfill-reminders.js --salon=1` → строка `DRY-RUN: записей N, подходят …, поставлено 0` без ошибок.
+
+- [ ] **Step 4: Runbook** `docs/2026-10-13-notifications-cutover-runbook.md`:
 
 ```markdown
 # Переключение уведомлений YClients с Chatpush на LoyalPro — порядок действий
 
-Предусловия: прод на коммите с модулем; `pm2 loyalpro` перезапущен (миграции прошли); WhatsApp-шлюз на проде
-(план 2026-10-12-whatsapp-gateway) ИЛИ WhatsApp оставлен на Chatpush до его выката; решение по MAX принято (§7 спеки).
+Предусловия: прод на коммите с модулем; `pm2 loyalpro` перезапущен (миграции прошли); все три канала клиники
+(Telegram #8, WhatsApp #9, MAX) уже идут через наш шлюз — Chatpush нужен только как источник уведомлений YClients.
 
 1. Админка → Рассылка → Автоуведомления → Настройки: режим «выключен». Завести правила по типам, тексты и картинки —
    из docs/notifications/chatpush-templates-2026-10-13.md и frontend/uploads/notify_seed (картинки загрузить в правила
    visit_after с условием «услуга/категория» по названию файла: Ботулинотерапия → категория «Ботулинотерапия» и т.д.).
-   Каскад каналов: tdlib → whatsapp → max (→ sms, если включён). Тексты отбивок и порог оценки — в Настройках.
-2. Режим «тень» на 3–5 дней. Каждый день: вкладка «Сверка с Chatpush» (или GET /api/notification-rules/parity?days=1):
+   Каскад каналов: tdlib → whatsapp → max. В Настройках: текст подтверждения («✅ Ваша запись подтверждена…»),
+   тексты оценок — 5: текст Chatpush «Спасибо за отличную оценку… Яндекс … 2ГИС … 500 бонусов», 4: «что улучшить»,
+   2–3: «что не устроило» (перевод на администратора включён); тихие часы 21:00–09:00.
+2. Режим «тень» на 3–5 дней. В первый же день: `node scripts/notifications-backfill-reminders.js --salon=1` (сухой
+   прогон, проверить числа), затем с `--write` — напоминания по визитам, записанным до включения модуля. Каждый день: вкладка «Сверка с Chatpush» (или GET /api/notification-rules/parity?days=1):
    план ≈ Chatpush по каждому типу; расхождения разбирать по журналу (skipped/cancelled с причинами). Проверить тексты
    job'ов глазами: подстановки имени/даты/услуг.
-3. Тест на свой номер по каждому правилу (🧪 Тест) — в режиме «тень» строка ляжет в журнал; для реальной проверки
-   доставки временно «боевой» + тест + «тень» обратно (10 с окна — очередь пуста, чужие строки не уйдут? НЕТ: в «боевом»
-   уйдут ВСЕ due-строки. Поэтому реальную доставку проверять на деве скриптом notifications-e2e.js --send).
+3. Тест на свой номер (🧪 Тест) в режиме «тень» показывает только текст в журнале — реальную доставку на проде НЕ
+   проверять переключением в «боевой»: в нём уйдут ВСЕ due-строки клиентов. Доставку проверять на деве скриптом
+   notifications-e2e.js --send.
 4. Переключение (в рабочее время, когда администратор на месте):
    a. YClients → Настройки → Интеграции → Уведомления → CHATPUSH (MessengeRocket) → «Отключить» (или выключить типы
       «Клиенту: …» по одному). С этого момента Chatpush ничего не шлёт.
-   b. Админка → Настройки → режим «боевой». Pending-строки, накопленные в тени? Их нет — тень пишет строки как shadow.
-      Напоминания на ближайшие 24 ч: YClients уже отправил их через Chatpush ДО отключения, наш модуль поставил бы их
-      только для записей, созданных после включения, — ПРОВАЛ покрытия на сутки. Закрыть: скриптом
-      notifications-backfill-reminders.js (из notification_record_state взять записи с visit_datetime в (now+1ч, now+24ч)
-      без job'а visit_reminder и поставить их на now+5 мин — ИЛИ принять сутки без вторых напоминаний; решение владельца).
+   b. Сразу же Админка → Настройки → режим «боевой». Что прошло в тени, уже лежит в журнале как shadow (это отправил
+      Chatpush); будущие строки (напоминания, в т.ч. из догона шага 2) остаются pending и уйдут от нас. Окно между a и b
+      держать в пределах минут: за него не уйдёт ничего, кроме мгновенных «создана/перенесена/отменена» по записям
+      этих минут (их можно отправить тестом руками по журналу shadow).
    c. Наблюдать журнал и `backend/logs`: первые «Подтверждаю» → `attendance=2` в YClients (видно в журнале записи),
       первые «5» → вкладка «Оценки».
 5. Откат: режим «выключен» + включить CHATPUSH в YClients обратно.
-6. Через неделю стабильной работы: выйти из Telegram в кабинете Chatpush (теперь безопасно — уведомления в Telegram
+6. Через неделю стабильной работы: выйти из Telegram/WhatsApp/MAX в кабинете Chatpush (теперь безопасно — уведомления в Telegram
    шлём мы), затем MAX/WhatsApp по решению §7, затем отказ от подписки Chatpush.
 ```
 
-- [ ] **Step 4: CLAUDE.md** — добавить раздел после «Исходящие автоуведомления (`services/notifications.js`)…» в блоке AI-агента:
+- [ ] **Step 5: CLAUDE.md** — добавить раздел после «Исходящие автоуведомления (`services/notifications.js`)…» в блоке AI-агента:
 
 ```markdown
 ### Уведомления YClients своими силами (с 2026-10-13, замена Chatpush)
-Спека `docs/superpowers/specs/2026-10-13-yclients-notifications-own-module-design.md`, план `docs/superpowers/plans/2026-10-13-yclients-notifications-own-module.md`, runbook `docs/2026-10-13-notifications-cutover-runbook.md`. Модуль `services/notifications/` (events → render → rules → enroll → worker → replies → settings), фасад `services/notifications.js`. Семь `trigger_type` (создана/перенесена/отменена/напоминание за N ч/опрос после визита/рекомендации по услуге с картинкой/первый визит), очередь `notification_jobs` (UNIQUE правило+запись+момент визита; перенос = новый ключ), состояние записи `notification_record_state` (перенос распознаётся по нему — `records` к моменту хука уже перезаписан), настройки `notification_settings` с режимом `off|shadow|live`. Ответы «Подтверждаю»/«5» перехватывает `replies.handleIncoming` в `routes/chatpush-webhook.js` ДО `dispatcher.enqueue`, ТОЛЬКО в `live` (в тени отвечает Chatpush); условие двухчастное — последнее исходящее `system` и по тексту напоминание/опрос + наш `sent`-job по телефону; сбой YClients на подтверждении → ход Миле. Воркер перепроверяет состояние записи ПЕРЕД отправкой; SMS-фолбэк только при однозначном отказе мессенджеров (4xx), таймаут → без повтора. Паритет с Chatpush — `GET /api/notification-rules/parity`.
+Спека `docs/superpowers/specs/2026-10-13-yclients-notifications-own-module-design.md`, план `docs/superpowers/plans/2026-10-13-yclients-notifications-own-module.md`, runbook `docs/2026-10-13-notifications-cutover-runbook.md`. Модуль `services/notifications/` (events → render → rules → enroll → worker → replies → settings), фасад `services/notifications.js`. Семь `trigger_type` (создана/перенесена/отменена/напоминание за N ч/опрос после визита/рекомендации по услуге с картинкой/первый визит), очередь `notification_jobs` (UNIQUE правило+запись+момент визита; перенос = новый ключ), состояние записи `notification_record_state` (перенос распознаётся по нему — `records` к моменту хука уже перезаписан), настройки `notification_settings` с режимом `off|shadow|live`. Ответы «Подтверждаю»/«5» перехватывает `replies.handleIncoming` в `routes/chatpush-webhook.js` ДО `dispatcher.enqueue`, ТОЛЬКО в `live` (в тени отвечает Chatpush); условие двухчастное — последнее исходящее `system` и по тексту напоминание/опрос + наш `sent`-job по телефону; сбой YClients на подтверждении → ход Миле. Воркер перепроверяет состояние записи ПЕРЕД отправкой; каналы — только мессенджеры через свой шлюз (SMS нет, решение 14.10.2026); повтор только при однозначном отказе (4xx), таймаут → failed без повтора. Оценка: 5 — благодарность, 4 — «что улучшить», 2–3 — «что не устроило» + перевод на администратора. Тихие часы (дефолт 21:00–09:00) сдвигают только отложенные типы. Визиты, записанные до включения, догоняются `scripts/notifications-backfill-reminders.js`. Паритет с Chatpush — `GET /api/notification-rules/parity`.
 ```
 
-- [ ] **Step 5: Прогнать всё**
+- [ ] **Step 6: Прогнать всё**
 
 Run: `cd /root/loyalpro/backend && npx jest notifications messaging-send-pacing chatpush-webhook-route care-worker reminders-worker 2>&1 | tail -8`
 Expected: все сьюты PASS. Затем `node scripts/notifications-e2e.js` и `node scripts/notifications-replies-e2e.js` на деве (без `--send`) — PASS по всем шагам.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
-cd /root/loyalpro && git add backend/scripts/notifications-e2e.js backend/scripts/notifications-replies-e2e.js docs/2026-10-13-notifications-cutover-runbook.md CLAUDE.md docs/superpowers/specs/2026-10-13-yclients-notifications-own-module-design.md
-git commit -m "docs(notifications): живые проверки, runbook переключения с Chatpush, раздел CLAUDE.md
+cd /root/loyalpro && git add backend/scripts/notifications-e2e.js backend/scripts/notifications-replies-e2e.js backend/scripts/notifications-backfill-reminders.js backend/services/notifications/enroll.js backend/notifications-enroll.test.js docs/2026-10-13-notifications-cutover-runbook.md CLAUDE.md docs/superpowers/specs/2026-10-13-yclients-notifications-own-module-design.md
+git commit -m "feat(notifications): догон напоминаний, живые проверки, runbook переключения с Chatpush, раздел CLAUDE.md
 
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
 ---
@@ -2472,10 +2545,10 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 ## Самопроверка плана против спеки
 
 - R1 типы: Task 5 (`enroll`), Task 8 (`TRIGGER_TYPES`); `birthday` — вне первого выката (спека §8).
-- R2 ответы: Task 7; порог и перевод — `notification_settings` (Task 2/5).
-- R3 каналы и SMS: Task 6 (`resolveRouting`, `sendSms`, `isDefiniteRejection`); `sms` в `ALLOWED_CHANNELS` — Task 4.
+- R2 ответы: Task 7; полосы оценки 5/4/2–3 и перевод при 2–3 — `notification_settings` (Task 2/5), тест на «4» в Task 7.
+- R3 каналы: Task 6 (`resolveRouting`, `isDefiniteRejection`); SMS нет по решению владельца.
 - R4 админка: Task 9; тест на свой номер, оценки — Task 8/9.
 - R5 идемпотентность: уникальный индекс Task 2, гашение при переносе/отмене Task 5, mark-before-send Task 6.
 - R6 тень и переход: режимы Task 5/6, паритет Task 8/9, runbook Task 10.
-- Открытые решения владельца (спека §7) план не предрешает: MAX и SMS включаются настройками; порог оценки — настройка; «Вы записаны» для записей Милы — флаг правила; тихие часы — настройка, по умолчанию выкл.
-- Известная дыра покрытия при переключении (напоминания на ближайшие сутки) описана в runbook, п. 4b.
+- Решения владельца 14.10.2026 учтены: MAX — свой шлюз; SMS нет; оценки 5/4/2–3; «Вы записаны» и для записей Милы (флага исключения нет, тест в Task 5); тихие часы 21:00–09:00 по умолчанию, только для отложенных типов (тест в Task 5).
+- Напоминания по записям, созданным до включения модуля, — догон `backfillReminders` (Task 10, шаг 3; runbook, шаг 2).
