@@ -4,7 +4,7 @@
 
 **Goal:** Служебные уведомления клиентам по событиям записи YClients (создание, перенос, отмена, напоминание за N часов, опрос после визита, рекомендации по услуге с фото, приглашение в лояльность при первом визите) и обработка ответов на них («Подтверждаю» → статус «Подтвердил» в YClients, «5» → оценка и благодарность) генерирует и шлёт LoyalPro сам, через `services/messaging/transport.js`, с теневым режимом для сверки с Chatpush до переключения.
 
-**Architecture:** v1-модуль `services/notifications.js` (правила + условия + каскад каналов + воркер) разбирается на папку `services/notifications/` и расширяется: `trigger_type` получает семь значений, очередь переезжает в `notification_jobs` со `scheduled_at` (старая `notification_sends` остаётся историей), детерминированное различение событий записи ведёт собственная таблица `notification_record_state`, ответы пациентов перехватываются в `routes/chatpush-webhook.js` ДО постановки Милы в очередь. Настройки салона (режим off/shadow/live, тексты отбивок по полосам оценки, тихие часы) — `notification_settings`. Каналы — только мессенджеры через свой шлюз (Telegram, WhatsApp, MAX); SMS нет.
+**Architecture:** v1-модуль `services/notifications.js` (правила + условия + каскад каналов + воркер) разбирается на папку `services/notifications/` и расширяется: `trigger_type` получает семь значений, очередь переезжает в `notification_jobs` со `scheduled_at` (старая `notification_sends` остаётся историей), детерминированное различение событий записи ведёт собственная таблица `notification_record_state`, ответы пациентов перехватываются в `routes/chatpush-webhook.js` ДО постановки Милы в очередь. Настройки салона (режим off/shadow/live, тексты отбивок по полосам оценки, тихие часы) — `notification_settings`. Каналы — только мессенджеры через свой шлюз (Telegram, WhatsApp, MAX); SMS нет. Отправка — КАСКАДОМ: порядок мессенджеров и флаг «сначала мессенджер последней переписки» — глобальные настройки салона (Task 6).
 
 **Решения владельца (14.10.2026), план их уже учитывает:** MAX идёт через СВОЙ шлюз (на проде с 14.10), отдельного решения не нужно; SMS-фолбэка нет; оценка — три полосы: 5 → благодарность со ссылками, 4 → «что улучшить» без перевода, 2–3 → «что не устроило» + перевод на администратора; «Вы записаны» уходит и по записям, созданным Милой (флага исключения нет); тихие часы включены по умолчанию 21:00–09:00 и сдвигают только ОТЛОЖЕННЫЕ уведомления (напоминание, опрос, рекомендации) — мгновенные «создана/перенесена/отменена» уходят сразу, иначе ночная запись Милы осталась бы без подтверждения до утра.
 
@@ -47,12 +47,13 @@ kinds (events.classifyRecordEvent): { created, rescheduled, cancelled, noShow, a
 - `backend/scripts/chatpush-notifications-harvest.js` — выгрузка текстов шаблонов и картинок «Рекомендации» из `chatpush_messages` (подписанные URL живут 7 дней — задача №1 по сроку).
 - `backend/services/notifications/events.js` — чистое: снимок записи, классификация события, расчёт моментов отправки, тихие часы.
 - `backend/services/notifications/render.js` — плейсхолдеры шаблона (переезд `renderTemplate` + новые).
-- `backend/services/notifications/rules.js` — `evaluateRule`, `resolveRouting`, карта услуга→категория, `lastIncomingChannel` (переезд из v1 без изменений).
+- `backend/services/notifications/rules.js` — `evaluateRule`, `resolveRouting`, карта услуга→категория, `lastIncomingChannel` (переезд из v1 без изменений) + `lastConversation` (Task 6).
 - `backend/services/notifications/enroll.js` — `handleRecordEvent`: состояние записи, постановка/гашение job'ов.
-- `backend/services/notifications/worker.js` — аренда, перепроверка, тень/боевой режим, отправка, журнал.
+- `backend/services/notifications/cascade.js` — чистое: порядок каскада (настройки + последняя переписка), адресат на каждом шаге.
+- `backend/services/notifications/worker.js` — аренда, перепроверка, тень/боевой режим, каскадная отправка, сверка доставки, журнал.
 - `backend/services/notifications/replies.js` — перехват «Подтверждаю»/оценки.
 - `backend/services/notifications/settings.js` — чтение/запись `notification_settings` с дефолтами.
-- `backend/notifications-events.test.js`, `notifications-render.test.js`, `notifications-enroll.test.js`, `notifications-worker.test.js`, `notifications-replies.test.js`, `notifications-routes.test.js`.
+- `backend/notifications-events.test.js`, `notifications-render.test.js`, `notifications-enroll.test.js`, `notifications-cascade.test.js`, `notifications-worker.test.js`, `notifications-replies.test.js`, `notifications-routes.test.js`.
 - `backend/scripts/notifications-parity.js`, `backend/scripts/notifications-e2e.js`, `backend/scripts/notifications-replies-e2e.js`.
 - `frontend/js/pages/notifications.js` — новая вкладка (заменяет `broadcast-rules.js`, тот остаётся на диске, но из `index.html` снимается).
 - `docs/notifications/chatpush-templates-2026-10-13.md` — выгруженные тексты (результат задачи 1).
@@ -203,7 +204,8 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
     CREATE TABLE IF NOT EXISTS notification_settings (
       salon_id             INTEGER PRIMARY KEY REFERENCES salons(id) ON DELETE CASCADE,
       mode                 VARCHAR(10) NOT NULL DEFAULT 'off',
-      default_channels     JSONB NOT NULL DEFAULT '["tdlib","whatsapp","max"]'::jsonb,
+      default_channels     JSONB NOT NULL DEFAULT '["tdlib","whatsapp","max"]'::jsonb,   -- порядок каскада
+      prefer_last_channel  BOOLEAN NOT NULL DEFAULT TRUE,   -- мессенджер последней переписки первым
       quiet_from           VARCHAR(5) DEFAULT '21:00',
       quiet_to             VARCHAR(5) DEFAULT '09:00',
       confirm_reply_text   TEXT NOT NULL DEFAULT '✅ Ваша запись подтверждена.\nБудем ждать вас!',
@@ -232,9 +234,13 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
       error               TEXT,
       rendered_text       TEXT NOT NULL,
       attachment_url      TEXT,
-      routing             JSONB,
+      routing             JSONB,                     -- рассчитанный каскад этой отправки
+      cascade_pos         INTEGER NOT NULL DEFAULT 0,  -- с какого шага (продолжение после «Невозможно доставить»)
+      cascade_log         JSONB NOT NULL DEFAULT '[]'::jsonb,  -- шаги [{ch,res,err?,at}]
       channel_used        VARCHAR(30),
       delivery_id         VARCHAR(120),
+      account_id          VARCHAR(40),               -- аккаунт, которым ушло (для сверки доставки)
+      check_at            TIMESTAMPTZ,               -- когда сверить статус доставки
       meta                JSONB NOT NULL DEFAULT '{}'::jsonb,
       confirmed_at        TIMESTAMPTZ,
       decision_reason     TEXT,
@@ -253,6 +259,10 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
   await client.query(`
     CREATE INDEX IF NOT EXISTS idx_notification_jobs_due
       ON notification_jobs (scheduled_at, id) WHERE status = 'pending'
+  `).catch(() => {});
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS idx_notification_jobs_check
+      ON notification_jobs (check_at) WHERE status = 'sent' AND check_at IS NOT NULL
   `).catch(() => {});
   await client.query(`
     CREATE INDEX IF NOT EXISTS idx_notification_jobs_record
@@ -601,7 +611,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 
 **Files:**
 - Create: `backend/services/notifications/render.js`, `backend/services/notifications/rules.js`
-- Modify: `backend/services/notifications.js` (фасад — пока только ре-экспорт; воркер v1 остаётся до Task 6)
+- Modify: `backend/services/notifications.js` (фасад — пока только ре-экспорт; воркер v1 остаётся до Task 7)
 - Test: `backend/notifications-render.test.js`; существующий `backend/notifications.test.js` должен остаться зелёным
 
 - [ ] **Step 1: Падающий тест рендера**
@@ -734,6 +744,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 
 **Files:**
 - Create: `backend/services/notifications/settings.js`, `backend/services/notifications/enroll.js`
+- Зависимость: `settings.js` импортирует `CASCADE_CHANNELS` из `cascade.js` (Task 6). Если Task 5 делается первой — создать `cascade.js` с одной строкой `module.exports = { CASCADE_CHANNELS: ['tdlib', 'whatsapp', 'max'] };`, Task 6 её дополнит.
 - Modify: `backend/services/notifications.js` (экспорт `handleRecordEvent`, алиас `handleRecordCreated`)
 - Modify: `backend/routes/webhook.js:5,80-84`
 - Test: `backend/notifications-enroll.test.js`
@@ -749,6 +760,7 @@ const { db } = require('../../db');
 const DEFAULTS = Object.freeze({
   mode: 'off',
   default_channels: ['tdlib', 'whatsapp', 'max'],
+  prefer_last_channel: true,
   quiet_from: '21:00',
   quiet_to: '09:00',
   confirm_reply_text: '✅ Ваша запись подтверждена.\nБудем ждать вас!',
@@ -758,6 +770,7 @@ const DEFAULTS = Object.freeze({
   rating_escalate_low: true,
 });
 const MODES = ['off', 'shadow', 'live'];
+const { CASCADE_CHANNELS } = require('./cascade');
 const TTL_MS = 30 * 1000;
 const cache = new Map();
 
@@ -780,7 +793,12 @@ async function updateSettings(salonId, patch) {
   const cur = await getSettings(salonId);
   const next = {
     mode: MODES.includes(patch.mode) ? patch.mode : cur.mode,
-    default_channels: Array.isArray(patch.default_channels) ? patch.default_channels.map(String) : cur.default_channels,
+    // Порядок каскада: только мессенджеры шлюза, без дублей. Пустой список законен
+    // (воркер тогда не шлёт и пишет причину), но не через «не передано».
+    default_channels: Array.isArray(patch.default_channels)
+      ? [...new Set(patch.default_channels.map(String))].filter((c) => CASCADE_CHANNELS.includes(c))
+      : cur.default_channels,
+    prefer_last_channel: typeof patch.prefer_last_channel === 'boolean' ? patch.prefer_last_channel : cur.prefer_last_channel,
     quiet_from: 'quiet_from' in patch ? hm(patch.quiet_from) : cur.quiet_from,
     quiet_to: 'quiet_to' in patch ? hm(patch.quiet_to) : cur.quiet_to,
     confirm_reply_text: typeof patch.confirm_reply_text === 'string' ? patch.confirm_reply_text.slice(0, 2000) : cur.confirm_reply_text,
@@ -791,14 +809,16 @@ async function updateSettings(salonId, patch) {
   };
   await db.query(
     `INSERT INTO notification_settings (salon_id, mode, default_channels, quiet_from, quiet_to,
-        confirm_reply_text, rating_high_text, rating_mid_text, rating_low_text, rating_escalate_low, updated_at)
-     VALUES ($1,$2,$3::jsonb,$4,$5,$6,$7,$8,$9,$10,NOW())
+        confirm_reply_text, rating_high_text, rating_mid_text, rating_low_text, rating_escalate_low, prefer_last_channel, updated_at)
+     VALUES ($1,$2,$3::jsonb,$4,$5,$6,$7,$8,$9,$10,$11,NOW())
      ON CONFLICT (salon_id) DO UPDATE SET mode=EXCLUDED.mode, default_channels=EXCLUDED.default_channels,
+        prefer_last_channel=EXCLUDED.prefer_last_channel,
         quiet_from=EXCLUDED.quiet_from, quiet_to=EXCLUDED.quiet_to, confirm_reply_text=EXCLUDED.confirm_reply_text,
         rating_high_text=EXCLUDED.rating_high_text, rating_mid_text=EXCLUDED.rating_mid_text,
         rating_low_text=EXCLUDED.rating_low_text, rating_escalate_low=EXCLUDED.rating_escalate_low, updated_at=NOW()`,
     [salonId, next.mode, JSON.stringify(next.default_channels), next.quiet_from, next.quiet_to,
-     next.confirm_reply_text, next.rating_high_text, next.rating_mid_text, next.rating_low_text, next.rating_escalate_low]);
+     next.confirm_reply_text, next.rating_high_text, next.rating_mid_text, next.rating_low_text, next.rating_escalate_low,
+     next.prefer_last_channel]);
   cache.delete(salonId);
   return getSettings(salonId);
 }
@@ -1139,7 +1159,196 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 
 ---
 
-### Task 6: Воркер `worker.js` — аренда, перепроверка, тень/боевой, каскад мессенджеров
+### Task 6: Каскад мессенджеров — чистый модуль `cascade.js` и адресаты клиента
+
+Как работает каскад (утверждено владельцем 14.10.2026):
+- Порядок мессенджеров задаётся ОДИН РАЗ в настройках салона (`notification_settings.default_channels`, например `tdlib → whatsapp → max`). Правила свой порядок не задают; колонки v1 `notification_rules.channels`/`prefer_last_channel` остаются в таблице и больше не читаются.
+- Глобальный флаг `notification_settings.prefer_last_channel` (по умолчанию ВКЛ): мессенджер, из которого пациент писал последним, ставится первым, остальные идут по настроенному порядку. Мессенджер, которого нет в настроенном порядке, не добавляется — администратор его выключил.
+- Каждый шаг каскада — ОДИН мессенджер, отдельный вызов `transport`. Шаг пропускается, если адресата в этом мессенджере нет (нет номера и не известен id чата). Шаг переходит к следующему, если мессенджер ОДНОЗНАЧНО отказал: номер скрыт или не найден (шлюз отвечает 422), аккаунт не готов, нет аккаунта у салона. Таймаут и 5xx каскад ОСТАНАВЛИВАЮТ: сообщение могло уже уйти, и следующий мессенджер дал бы пациенту дубль (правило at-most-once проекта).
+- Через 2 минуты после успешной отправки воркер сверяет статус доставки (`GET /api/v1/delivery/:id` через `transport.getDeliveryStatus`). Статус 5 «Невозможно доставить» продолжает каскад со следующего мессенджера. Любой другой статус или ошибка чтения — сообщение считаем доставленным.
+- Адресат по мессенджеру: WhatsApp — номер; Telegram — id чата собеседника, если он известен из переписки (так доходит и при скрытом номере), иначе номер; MAX — номер плюс id собеседника, если известен (шлюз сам сверяет их).
+- Весь путь пишется в `notification_jobs.cascade_log` (jsonb-массив шагов `{ch, res, err?, at}`, `res` ∈ `no_recipient | rejected | ambiguous | sent | undeliverable`) и виден в журнале админки.
+
+**Files:**
+- Create: `backend/services/notifications/cascade.js`
+- Modify: `backend/services/notifications/rules.js` (добавить `lastConversation`)
+- Test: `backend/notifications-cascade.test.js`
+
+- [ ] **Step 1: Падающие тесты**
+
+```js
+'use strict';
+const { buildCascade, recipientFor, CASCADE_CHANNELS } = require('./services/notifications/cascade');
+
+describe('buildCascade', () => {
+  test('порядок из настроек, без дублей и неизвестных каналов', () => {
+    expect(buildCascade(['tdlib', 'whatsapp', 'tdlib', 'sms', 'max'])).toEqual(['tdlib', 'whatsapp', 'max']);
+  });
+  test('мессенджер последней переписки встаёт первым', () => {
+    expect(buildCascade(['tdlib', 'whatsapp', 'max'], { preferLast: true, lastChannel: 'max' })).toEqual(['max', 'tdlib', 'whatsapp']);
+  });
+  test('флаг выключен — последняя переписка не влияет', () => {
+    expect(buildCascade(['tdlib', 'whatsapp'], { preferLast: false, lastChannel: 'whatsapp' })).toEqual(['tdlib', 'whatsapp']);
+  });
+  test('мессенджер последней переписки выключен в настройках — не добавляется', () => {
+    expect(buildCascade(['tdlib', 'whatsapp'], { preferLast: true, lastChannel: 'max' })).toEqual(['tdlib', 'whatsapp']);
+  });
+  test('пустые/битые настройки → пустой каскад', () => {
+    expect(buildCascade(null)).toEqual([]);
+    expect(buildCascade('tdlib')).toEqual([]);
+  });
+  test('поддерживаемые каналы — ровно три мессенджера шлюза', () => {
+    expect(CASCADE_CHANNELS).toEqual(['tdlib', 'whatsapp', 'max']);
+  });
+});
+
+describe('recipientFor', () => {
+  test('WhatsApp — только по номеру', () => {
+    expect(recipientFor('whatsapp', '79200255591', {})).toEqual({ dispatchRouting: ['whatsapp'], phone: '79200255591' });
+    expect(recipientFor('whatsapp', null, { whatsapp: 'x' })).toBeNull();
+  });
+  test('Telegram — id собеседника главнее номера (скрытый номер)', () => {
+    expect(recipientFor('tdlib', '79200255591', { tdlib: '385578542' })).toEqual({ dispatchRouting: ['tdlib'], tdlib_user_id: '385578542' });
+    expect(recipientFor('tdlib', '79200255591', {})).toEqual({ dispatchRouting: ['tdlib'], phone: '79200255591' });
+  });
+  test('MAX — номер и id собеседника вместе', () => {
+    expect(recipientFor('max', '79200255591', { max: '62232990' })).toEqual({ dispatchRouting: ['max'], phone: '79200255591', max_user_id: '62232990' });
+    expect(recipientFor('max', '79200255591', {})).toEqual({ dispatchRouting: ['max'], phone: '79200255591' });
+  });
+  test('номер нормализуется к 7XXXXXXXXXX, мусор — нет адресата', () => {
+    expect(recipientFor('whatsapp', '+7 (920) 025-55-91', {})).toEqual({ dispatchRouting: ['whatsapp'], phone: '79200255591' });
+    expect(recipientFor('whatsapp', '12345', {})).toBeNull();
+    expect(recipientFor('tdlib', '', {})).toBeNull();
+  });
+  test('неизвестный канал → null', () => {
+    expect(recipientFor('sms', '79200255591', {})).toBeNull();
+  });
+});
+```
+
+- [ ] **Step 2: Убедиться, что падает**
+
+Run: `cd /root/loyalpro/backend && npx jest notifications-cascade`
+Expected: FAIL — модуль не найден.
+
+- [ ] **Step 3: `cascade.js`**
+
+```js
+'use strict';
+// ============================================================
+// Каскад мессенджеров для уведомлений — чистая часть, без БД и сети.
+// Порядок задаётся в настройках салона; флаг «сначала мессенджер последней
+// переписки» переставляет его первым. Каждый шаг — один мессенджер; адресат
+// шага строит recipientFor (null = в этом мессенджере писать некому, шаг
+// пропускается). Решение «идти ли к следующему шагу» принимает воркер по
+// transport.isDefiniteRejection — здесь только порядок и адресаты.
+// ============================================================
+const CASCADE_CHANNELS = ['tdlib', 'whatsapp', 'max'];
+
+function buildCascade(order, { preferLast = false, lastChannel = null } = {}) {
+  const base = [];
+  for (const ch of Array.isArray(order) ? order : []) {
+    if (CASCADE_CHANNELS.includes(ch) && !base.includes(ch)) base.push(ch);
+  }
+  if (preferLast && lastChannel && base.includes(lastChannel)) {
+    return [lastChannel, ...base.filter((c) => c !== lastChannel)];
+  }
+  return base;
+}
+
+function canonPhone(phone) {
+  const d = String(phone || '').replace(/\D/g, '');
+  if (d.length === 11 && (d[0] === '7' || d[0] === '8')) return '7' + d.slice(1);
+  if (d.length === 10) return '7' + d;
+  return null;
+}
+
+/**
+ * chats — { tdlib?: '<id собеседника>', max?: '<id собеседника>' } из переписки
+ * (rules.lastConversation). Группы туда не попадают по построению.
+ */
+function recipientFor(channel, phone, chats = {}) {
+  const p = canonPhone(phone);
+  const chat = chats && chats[channel] ? String(chats[channel]) : null;
+  if (channel === 'whatsapp') return p ? { dispatchRouting: ['whatsapp'], phone: p } : null;
+  if (channel === 'tdlib') {
+    // Известный id чата доходит и до собеседника со скрытым номером; по номеру
+    // TDLib находит только тех, кто номер не прячет (иначе шлюз отвечает 422).
+    if (chat) return { dispatchRouting: ['tdlib'], tdlib_user_id: chat };
+    return p ? { dispatchRouting: ['tdlib'], phone: p } : null;
+  }
+  if (channel === 'max') {
+    if (!p && !chat) return null;
+    const out = { dispatchRouting: ['max'] };
+    if (p) out.phone = p;
+    if (chat) out.max_user_id = chat;   // шлюз сверяет видимый номер контакта с номером
+    return out;
+  }
+  return null;
+}
+
+module.exports = { buildCascade, recipientFor, canonPhone, CASCADE_CHANNELS };
+```
+
+- [ ] **Step 4: `lastConversation` в `rules.js`** — добавить функцию и экспорт:
+
+```js
+/**
+ * Что известно о переписке с клиентом: мессенджер, из которого он писал
+ * последним (входящие — наши же уведомления не должны сами себя продвигать),
+ * и id личных чатов Telegram/MAX по этому номеру (адресация при скрытом номере).
+ * Номер сравнивается во всех формах, в которых он лежит в chatpush_messages.
+ */
+async function lastConversation(salonId, phone) {
+  const p10 = String(phone || '').replace(/\D/g, '').slice(-10);
+  if (p10.length !== 10) return { lastChannel: null, chats: {} };
+  const forms = ['7' + p10, '+7' + p10, '8' + p10, p10];
+  const rows = await db.any(
+    `SELECT DISTINCT ON (channel) channel, chat_id
+       FROM chatpush_messages
+      WHERE salon_id = $1 AND phone = ANY($2)
+        AND channel IN ('tdlib','max') AND COALESCE(chat_id,'') <> ''
+        AND chat_id NOT LIKE '-%' AND chat_id NOT LIKE 'g:%'
+      ORDER BY channel, msg_ts DESC NULLS LAST`,
+    [salonId, forms]);
+  const chats = {};
+  for (const r of rows) chats[r.channel] = r.chat_id;
+  const last = await db.oneOrNone(
+    `SELECT channel FROM chatpush_messages
+      WHERE salon_id = $1 AND phone = ANY($2) AND direction = 'incoming'
+      ORDER BY msg_ts DESC NULLS LAST LIMIT 1`,
+    [salonId, forms]);
+  return { lastChannel: last ? chatpush.replyRoutingFor(last.channel) : null, chats };
+}
+```
+
+и в `module.exports` добавить `lastConversation`.
+
+- [ ] **Step 5: Тесты и живой EXPLAIN**
+
+Run: `cd /root/loyalpro/backend && npx jest notifications-cascade`
+Expected: PASS, 11 тестов.
+
+Живая проверка на дев-БД (MCP `mcp__postgres__query`) — запрос с номером тестового клиента и проверка плана (должен идти по индексу `chatpush_messages`, а не полным сканом; если скан — добавить в Task 2 `CREATE INDEX IF NOT EXISTS idx_chatpush_messages_salon_phone ON chatpush_messages (salon_id, phone, msg_ts DESC)`):
+```sql
+EXPLAIN ANALYZE SELECT DISTINCT ON (channel) channel, chat_id FROM chatpush_messages
+ WHERE salon_id = 1 AND phone = ANY(ARRAY['79200255591','+79200255591','89200255591','9200255591'])
+   AND channel IN ('tdlib','max') AND COALESCE(chat_id,'') <> '' AND chat_id NOT LIKE '-%' AND chat_id NOT LIKE 'g:%'
+ ORDER BY channel, msg_ts DESC NULLS LAST
+```
+
+- [ ] **Step 6: Commit**
+
+```bash
+cd /root/loyalpro && git add backend/services/notifications/cascade.js backend/services/notifications/rules.js backend/notifications-cascade.test.js
+git commit -m "feat(notifications): каскад мессенджеров — порядок из настроек, последняя переписка первой, адресаты по каналу
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+```
+
+---
+
+### Task 7: Воркер `worker.js` — аренда, перепроверка, тень/боевой, каскадная отправка, сверка доставки
 
 **Files:**
 - Create: `backend/services/notifications/worker.js`
@@ -1154,11 +1363,11 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 'use strict';
 jest.mock('./db', () => ({ db: { any: jest.fn(), oneOrNone: jest.fn(), query: jest.fn() } }));
 jest.mock('./services/messaging/transport', () => ({
-  sendMessage: jest.fn(), sendFile: jest.fn(), configured: () => true,
+  sendMessage: jest.fn(), sendFile: jest.fn(), getDeliveryStatus: jest.fn(), configured: () => true,
   isDefiniteRejection: (e) => !!(e && e.status >= 400 && e.status < 500),
 }));
 jest.mock('./services/notifications/settings', () => ({ getSettings: jest.fn() }));
-jest.mock('./services/notifications/rules', () => ({ lastIncomingChannel: jest.fn(async () => null), resolveRouting: jest.requireActual('./services/notifications/rules').resolveRouting, ALLOWED_CHANNELS: ['telegram','whatsapp','tdlib','max','max_bot','notify'] }));
+jest.mock('./services/notifications/rules', () => ({ lastConversation: jest.fn() }));
 jest.mock('./services/agent/pending-replies', () => ({ remember: jest.fn() }));
 jest.mock('./services/outgoing-authorship', () => ({ remember: jest.fn(async () => {}) }));
 jest.mock('./services/chat-persist', () => ({ persistWhatsappOutgoing: jest.fn(async () => {}) }));
@@ -1167,79 +1376,130 @@ jest.mock('fs', () => ({ ...jest.requireActual('fs'), readFileSync: jest.fn(() =
 const { db } = require('./db');
 const transport = require('./services/messaging/transport');
 const settings = require('./services/notifications/settings');
+const rules = require('./services/notifications/rules');
 const authorship = require('./services/outgoing-authorship');
 const worker = require('./services/notifications/worker');
 
 const job = (over = {}) => ({ id: 1, salon_id: 1, rule_id: 1, trigger_type: 'record_created', yclients_record_id: 100,
   visit_datetime: new Date('2026-10-20T13:30:00+03:00'), phone: '79200255591', rendered_text: 'Текст',
-  attachment_url: null, attempts: 1, meta: {}, channels: ['tdlib', 'whatsapp'], prefer_last_channel: true, ...over });
+  attachment_url: null, attempts: 1, meta: {}, cascade_pos: 0, routing: null, ...over });
 const state = (over = {}) => ({ visit_datetime: new Date('2026-10-20T13:30:00+03:00'), attendance: 0, deleted: false, ...over });
+const rej = (msg) => Object.assign(new Error(msg), { status: 422 });
 
-function setup({ jobs, st = state(), mode = 'live', captured = 1 } = {}) {
-  settings.getSettings.mockResolvedValue({ mode, default_channels: ['tdlib', 'whatsapp'] });
-  db.any.mockImplementation(async (sql) => (/UPDATE notification_jobs/.test(sql) ? jobs : []));
+function setup({ jobs = [], checks = [], st = state(), mode = 'live', captured = 1, order = ['tdlib', 'whatsapp', 'max'],
+  preferLast = true, conv = { lastChannel: null, chats: {} } } = {}) {
+  settings.getSettings.mockResolvedValue({ mode, default_channels: order, prefer_last_channel: preferLast });
+  rules.lastConversation.mockResolvedValue(conv);
+  db.any.mockImplementation(async (sql) => (/SET check_at = NULL/.test(sql) ? checks : (/SET attempts = j.attempts/.test(sql) ? jobs : [])));
   db.oneOrNone.mockImplementation(async (sql) => (/FROM notification_record_state/.test(sql) ? st : (/FROM clients/.test(sql) ? { is_blacklisted: false } : null)));
-  db.query.mockImplementation(async (sql) => ({ rowCount: /SET status='sent'/.test(sql) ? captured : 1, rows: [] }));
-  transport.sendMessage.mockResolvedValue({ id: 555, channel: 'tdlib' });
-  transport.sendFile.mockResolvedValue({ id: 556, channel: 'tdlib' });
+  db.query.mockImplementation(async (sql) => ({ rowCount: /SET status='sent', sent_at/.test(sql) ? captured : 1, rows: [] }));
+  transport.sendMessage.mockImplementation(async (salonId, p) => ({ id: 555, channel: p.dispatchRouting[0], accountId: 8 }));
+  transport.sendFile.mockImplementation(async (salonId, p) => ({ id: 556, channel: p.dispatchRouting[0], accountId: 8 }));
 }
-const statusUpdates = () => db.query.mock.calls.map(([sql, p]) => ({ sql, p })).filter((c) => /UPDATE notification_jobs/.test(c.sql));
+const calls = () => transport.sendMessage.mock.calls.map(([, p]) => p.dispatchRouting[0]);
+const updates = (re) => db.query.mock.calls.filter(([sql]) => re.test(sql)).map(([, p]) => p);
 beforeEach(() => jest.clearAllMocks());
 
-test('live: отправка, журнал sent, персист в транскрипт как system', async () => {
+test('первый мессенджер каскада принял → один вызов, журнал sent, сверка доставки через 2 мин', async () => {
   setup({ jobs: [job()] });
   await worker.processTick();
-  expect(transport.sendMessage).toHaveBeenCalledWith(1, expect.objectContaining({ text: 'Текст', phone: '79200255591', dispatchRouting: ['tdlib', 'whatsapp'] }));
-  expect(statusUpdates().some((c) => /SET status='sent'/.test(c.sql))).toBe(true);
+  expect(calls()).toEqual(['tdlib']);
+  const sent = updates(/SET channel_used=\$2/)[0];
+  expect(sent).toEqual(expect.arrayContaining(['tdlib', '555', '8', 0]));
   expect(authorship.remember).toHaveBeenCalledWith(1, '79200255591', 'Текст', 'system');
 });
 
-test('shadow: отправки нет, строка shadow с текстом', async () => {
-  setup({ jobs: [job()], mode: 'shadow' });
+test('мессенджер последней переписки идёт первым', async () => {
+  setup({ jobs: [job()], conv: { lastChannel: 'max', chats: {} } });
   await worker.processTick();
-  expect(transport.sendMessage).not.toHaveBeenCalled();
-  expect(statusUpdates().some((c) => /SET status='shadow'/.test(c.sql))).toBe(true);
+  expect(calls()).toEqual(['max']);
 });
 
-test('off: строка откладывается без отправки (pending)', async () => {
+test('номер скрыт в Telegram (422) → следующий мессенджер того же каскада', async () => {
+  setup({ jobs: [job()] });
+  transport.sendMessage.mockImplementationOnce(async () => { throw rej('Telegram: контакт по номеру не найден'); });
+  await worker.processTick();
+  expect(calls()).toEqual(['tdlib', 'whatsapp']);
+  const log = JSON.parse(updates(/SET channel_used=\$2/)[0].find((v) => typeof v === 'string' && v.startsWith('[')));
+  expect(log.map((s) => s.res)).toEqual(['rejected', 'sent']);
+});
+
+test('Telegram с известным id чата адресуется по id, а не по номеру', async () => {
+  setup({ jobs: [job()], conv: { lastChannel: null, chats: { tdlib: '385578542' } } });
+  await worker.processTick();
+  expect(transport.sendMessage.mock.calls[0][1]).toMatchObject({ dispatchRouting: ['tdlib'], tdlib_user_id: '385578542' });
+});
+
+test('таймаут на шаге → каскад останавливается, failed (могло уйти — дубль хуже)', async () => {
+  setup({ jobs: [job()] });
+  transport.sendMessage.mockImplementationOnce(async () => { throw new Error('timeout of 30000ms exceeded'); });
+  await worker.processTick();
+  expect(calls()).toEqual(['tdlib']);
+  expect(updates(/SET status=\$2/).some((p) => p[1] === 'failed')).toBe(true);
+});
+
+test('все мессенджеры отказали, попытки остались → pending для повтора', async () => {
+  setup({ jobs: [job({ attempts: 1 })] });
+  transport.sendMessage.mockImplementation(async () => { throw rej('нет'); });
+  await worker.processTick();
+  expect(calls()).toEqual(['tdlib', 'whatsapp', 'max']);
+  expect(updates(/SET status=\$2/).some((p) => p[1] === 'pending')).toBe(true);
+});
+
+test('продолжение каскада после «Невозможно доставить» идёт с сохранённой позиции', async () => {
+  setup({ jobs: [job({ cascade_pos: 1, routing: ['max', 'tdlib', 'whatsapp'] })] });
+  await worker.processTick();
+  expect(calls()).toEqual(['tdlib']);
+});
+
+test('сверка доставки: статус 5 → строка снова pending со следующей позиции', async () => {
+  setup({ checks: [{ id: 7, salon_id: 1, channel_used: 'tdlib', delivery_id: 'g12', account_id: '8', cascade_pos: 0, routing: ['tdlib', 'whatsapp'] }] });
+  transport.getDeliveryStatus.mockResolvedValue({ id: 'g12', status: { status_id: 5, description: 'Невозможно доставить' } });
+  await worker.processTick();
+  expect(transport.getDeliveryStatus).toHaveBeenCalledWith(1, 'tdlib', 'g12', { accountId: '8' });
+  const p = updates(/SET status=\$2, cascade_pos=\$3/)[0];
+  expect(p.slice(0, 3)).toEqual([7, 'pending', 1]);
+});
+
+test('сверка доставки: статус 5 на последнем мессенджере → failed', async () => {
+  setup({ checks: [{ id: 7, salon_id: 1, channel_used: 'whatsapp', delivery_id: 'g13', account_id: '9', cascade_pos: 1, routing: ['tdlib', 'whatsapp'] }] });
+  transport.getDeliveryStatus.mockResolvedValue({ status: { status_id: 5 } });
+  await worker.processTick();
+  expect(updates(/SET status=\$2, cascade_pos=\$3/)[0].slice(0, 3)).toEqual([7, 'failed', 1]);
+});
+
+test('сверка доставки: статус не 5 или ошибка чтения — ничего не меняем', async () => {
+  setup({ checks: [{ id: 7, salon_id: 1, channel_used: 'tdlib', delivery_id: 'g12', account_id: '8', cascade_pos: 0, routing: ['tdlib', 'whatsapp'] }] });
+  transport.getDeliveryStatus.mockRejectedValue(new Error('500'));
+  await worker.processTick();
+  expect(updates(/SET status=\$2, cascade_pos=\$3/)).toHaveLength(0);
+});
+
+test('shadow: отправки нет, строка shadow с рассчитанным каскадом', async () => {
+  setup({ jobs: [job()], mode: 'shadow', conv: { lastChannel: 'whatsapp', chats: {} } });
+  await worker.processTick();
+  expect(transport.sendMessage).not.toHaveBeenCalled();
+  const p = updates(/SET status=\$2/).find((x) => x[1] === 'shadow');
+  expect(JSON.parse(p[4])).toEqual(['whatsapp', 'tdlib', 'max']);
+});
+
+test('off: строка остаётся pending без отправки', async () => {
   setup({ jobs: [job()], mode: 'off' });
   await worker.processTick();
   expect(transport.sendMessage).not.toHaveBeenCalled();
-  expect(statusUpdates().some((c) => /SET status='sent'|SET status='shadow'/.test(c.sql))).toBe(false);
 });
 
 test('напоминание: запись перенесена после постановки → cancelled, без отправки', async () => {
   setup({ jobs: [job({ trigger_type: 'visit_reminder' })], st: state({ visit_datetime: new Date('2026-10-21T10:00:00+03:00') }) });
   await worker.processTick();
   expect(transport.sendMessage).not.toHaveBeenCalled();
-  expect(statusUpdates().some((c) => /SET status='cancelled'/.test(c.sql))).toBe(true);
+  expect(updates(/SET status=\$2/).some((p) => p[1] === 'cancelled')).toBe(true);
 });
 
-test('опрос: клиент снят со статуса «пришёл» → cancelled', async () => {
-  setup({ jobs: [job({ trigger_type: 'visit_review' })], st: state({ attendance: 0 }) });
-  await worker.processTick();
-  expect(transport.sendMessage).not.toHaveBeenCalled();
-});
-
-test('вложение → sendFile с подписью', async () => {
+test('вложение → sendFile с подписью в первый мессенджер каскада', async () => {
   setup({ jobs: [job({ trigger_type: 'visit_after', attachment_url: '/uploads/notify_1_6_1.jpg' })] });
   await worker.processTick();
-  expect(transport.sendFile).toHaveBeenCalledWith(1, expect.objectContaining({ caption: 'Текст', type: 'image', fileName: 'notify_1_6_1.jpg' }), expect.any(Buffer), 'image/jpeg');
-  expect(transport.sendMessage).not.toHaveBeenCalled();
-});
-
-test('все мессенджеры отказали (4xx), попытка не последняя → строка снова pending для повтора', async () => {
-  setup({ jobs: [job({ attempts: 1 })] });
-  transport.sendMessage.mockRejectedValue(Object.assign(new Error('422'), { status: 422 }));
-  await worker.processTick();
-  expect(statusUpdates().some((c) => /SET status=\$2/.test(c.sql) && c.p[1] === 'pending')).toBe(true);
-});
-
-test('таймаут транспорта → без повтора (сообщение могло уйти), строка failed', async () => {
-  setup({ jobs: [job()] });
-  transport.sendMessage.mockRejectedValue(new Error('timeout'));
-  await worker.processTick();
-  expect(statusUpdates().some((c) => /SET status=\$2/.test(c.sql) && c.p[1] === 'failed')).toBe(true);
+  expect(transport.sendFile).toHaveBeenCalledWith(1, expect.objectContaining({ caption: 'Текст', type: 'image', fileName: 'notify_1_6_1.jpg', dispatchRouting: ['tdlib'] }), expect.any(Buffer), 'image/jpeg');
 });
 
 test('захват не удался (строку уже отменили) → отправки нет', async () => {
@@ -1248,10 +1508,10 @@ test('захват не удался (строку уже отменили) → 
   expect(transport.sendMessage).not.toHaveBeenCalled();
 });
 
-test('тестовая строка (meta.test) не перепроверяет состояние записи', async () => {
-  setup({ jobs: [job({ trigger_type: 'visit_reminder', yclients_record_id: 0, meta: { test: true } })], st: null });
+test('пустой каскад в настройках → failed с понятной причиной', async () => {
+  setup({ jobs: [job()], order: [] });
   await worker.processTick();
-  expect(transport.sendMessage).toHaveBeenCalled();
+  expect(updates(/SET status=\$2/).some((p) => p[1] === 'failed' && /ни один мессенджер/.test(p[2]))).toBe(true);
 });
 ```
 
@@ -1268,15 +1528,20 @@ Expected: FAIL — модуль не найден.
 // Воркер уведомлений: аренда due-строк notification_jobs, перепроверка состояния
 // записи ПЕРЕД отправкой (напоминание о перенесённой/отменённой записи — хуже
 // молчания), режим салона (off → ждём, shadow → журнал без отправки, live →
-// отправка), захват mark-before-send (at-most-once, как в «Заботе»), каскад
-// каналов через transport; повтор только при ОДНОЗНАЧНОМ отказе (4xx), таймаут/5xx — failed.
+// отправка), захват mark-before-send (at-most-once, как в «Заботе»).
+// Отправка — КАСКАДОМ (cascade.js): шаг = один мессенджер. Следующий шаг —
+// только после ОДНОЗНАЧНОГО отказа (4xx: номер скрыт/не найден, аккаунт не
+// готов). Таймаут/5xx останавливают каскад: сообщение могло уйти.
+// Через CHECK_DELAY_S после отправки — сверка статуса доставки: «Невозможно
+// доставить» (status_id 5) возвращает строку в очередь со следующего шага.
 // ============================================================
 const fs = require('fs');
 const path = require('path');
 const { db } = require('../../db');
 const transport = require('../messaging/transport');
 const settingsSvc = require('./settings');
-const { resolveRouting, lastIncomingChannel } = require('./rules');
+const { lastConversation } = require('./rules');
+const { buildCascade, recipientFor } = require('./cascade');
 const pendingReplies = require('../agent/pending-replies');
 const authorship = require('../outgoing-authorship');
 const { persistWhatsappOutgoing } = require('../chat-persist');
@@ -1287,12 +1552,12 @@ const TICK_MS = 10 * 1000;
 const MAX_ATTEMPTS = 3;
 const RETRY_BACKOFF_S = 60;
 const BATCH = 10;
+const CHECK_DELAY_S = 120;
+const UNDELIVERABLE_STATUS_ID = 5;
 const uploadsDir = path.join(__dirname, '../../../frontend/uploads');
 const MIME = { '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.webp': 'image/webp', '.pdf': 'application/pdf' };
 
-// Колонки правила — скалярными подзапросами: JOIN на цель UPDATE в PG запрещён
-// («invalid reference to FROM-clause entry»); юнит-моки SQL не проверяют —
-// после правки обязателен живой EXPLAIN на дев-БД.
+// После правки — живой EXPLAIN на дев-БД (юнит-моки SQL не проверяют).
 const LEASE_SQL = `
   UPDATE notification_jobs j
      SET attempts = j.attempts + 1, last_attempt_at = NOW()
@@ -1303,17 +1568,28 @@ const LEASE_SQL = `
       ORDER BY scheduled_at ASC, id ASC
       LIMIT $2
       FOR UPDATE SKIP LOCKED)
-   RETURNING j.*,
-     (SELECT r.channels FROM notification_rules r WHERE r.id = j.rule_id) AS channels,
-     (SELECT r.prefer_last_channel FROM notification_rules r WHERE r.id = j.rule_id) AS prefer_last_channel`;
+   RETURNING j.*`;
+
+// Сверка доставки: строку «забираем», обнуляя check_at, — второй тик её не увидит.
+const CHECK_SQL = `
+  UPDATE notification_jobs SET check_at = NULL
+   WHERE id IN (
+     SELECT id FROM notification_jobs
+      WHERE status = 'sent' AND check_at IS NOT NULL AND check_at <= NOW()
+      ORDER BY check_at ASC
+      LIMIT $1
+      FOR UPDATE SKIP LOCKED)
+   RETURNING id, salon_id, channel_used, delivery_id, account_id, cascade_pos, routing`;
+
+const step = (ch, res, err) => ({ ch, res, ...(err ? { err: String(err).slice(0, 200) } : {}), at: new Date().toISOString() });
 
 async function setStatus(id, status, extra = {}) {
   await db.query(
     `UPDATE notification_jobs SET status=$2, error=$3, decision_reason=COALESCE($4, decision_reason),
-        routing=COALESCE($5::jsonb, routing), channel_used=COALESCE($6, channel_used), delivery_id=COALESCE($7, delivery_id)
+        routing=COALESCE($5::jsonb, routing), cascade_log = cascade_log || $6::jsonb
       WHERE id=$1`,
     [id, status, extra.error || null, extra.reason || null, extra.routing ? JSON.stringify(extra.routing) : null,
-     extra.channelUsed || null, extra.deliveryId != null ? String(extra.deliveryId) : null]);
+     JSON.stringify(extra.steps || [])]);
 }
 
 /** Перепроверка по состоянию записи. Возвращает причину отмены или null. */
@@ -1334,17 +1610,19 @@ async function staleReason(job) {
   return null;
 }
 
-async function deliver(job, routing) {
-  const base = { phone: job.phone, dispatchRouting: routing };
+/** target — адресат одного шага из cascade.recipientFor. */
+async function deliver(job, target) {
   if (job.attachment_url) {
     const fileName = path.basename(job.attachment_url);
     const abs = path.join(uploadsDir, fileName);
+    // 400 — однозначный отказ: файла нет ни для одного мессенджера, но каскад
+    // честно пройдёт все шаги и строка уйдёт в failed с этой причиной.
     if (!fs.existsSync(abs)) throw Object.assign(new Error(`файл вложения не найден: ${fileName}`), { status: 400 });
     const ext = path.extname(fileName).toLowerCase();
     const type = ext === '.pdf' ? 'document' : 'image';
-    return transport.sendFile(job.salon_id, { ...base, fileName, caption: job.rendered_text, type }, fs.readFileSync(abs), MIME[ext] || 'application/octet-stream');
+    return transport.sendFile(job.salon_id, { ...target, fileName, caption: job.rendered_text, type }, fs.readFileSync(abs), MIME[ext] || 'application/octet-stream');
   }
-  return transport.sendMessage(job.salon_id, { ...base, text: job.rendered_text });
+  return transport.sendMessage(job.salon_id, { ...target, text: job.rendered_text });
 }
 
 async function afterSend(job, channelUsed, delivery) {
@@ -1362,35 +1640,92 @@ async function processOne(job, cfg) {
   const stale = await staleReason(job);
   if (stale) { await setStatus(job.id, 'cancelled', { reason: stale }); log.info(`#${job.id} ${job.trigger_type} cancelled: ${stale}`); return; }
 
-  const last = job.prefer_last_channel ? await lastIncomingChannel(job.salon_id, job.phone).catch(() => null) : null;
-  const routing = resolveRouting(Array.isArray(job.channels) && job.channels.length ? job.channels : cfg.default_channels, job.prefer_last_channel, last);
+  const conv = await lastConversation(job.salon_id, job.phone).catch(() => ({ lastChannel: null, chats: {} }));
+  // Продолжение после «Невозможно доставить» идёт по СОХРАНЁННОМУ каскаду: порядок
+  // не должен меняться посреди одной отправки.
+  const continuing = Number(job.cascade_pos) > 0 && Array.isArray(job.routing) && job.routing.length;
+  const cascade = continuing ? job.routing
+    : buildCascade(cfg.default_channels, { preferLast: cfg.prefer_last_channel !== false, lastChannel: conv.lastChannel });
+  if (!cascade.length) {
+    await setStatus(job.id, 'failed', { error: 'в настройках не выбран ни один мессенджер для каскада' });
+    return;
+  }
 
   if (cfg.mode === 'shadow') {
-    await setStatus(job.id, 'shadow', { routing, reason: 'теневой режим: не отправлено' });
-    log.info(`#${job.id} ${job.trigger_type} shadow routing=[${routing.join(',')}]`);
+    await setStatus(job.id, 'shadow', { routing: cascade, reason: 'теневой режим: не отправлено' });
+    log.info(`#${job.id} ${job.trigger_type} shadow cascade=[${cascade.join(',')}]`);
     return;
   }
 
   // Захват ДО отправки: если строку отменили между арендой и этим моментом — не шлём.
   const cap = await db.query(
     `UPDATE notification_jobs SET status='sent', sent_at=NOW(), routing=$2::jsonb WHERE id=$1 AND status='pending'`,
-    [job.id, JSON.stringify(routing)]);
+    [job.id, JSON.stringify(cascade)]);
   if (!cap.rowCount) { log.info(`#${job.id}: захват не удался — строка уже не pending`); return; }
 
-  let delivered = false;
-  try {
-    const delivery = await deliver(job, routing);
-    const channelUsed = (delivery && (delivery.channel || (Array.isArray(delivery.channels) && delivery.channels[0]))) || routing[0];
-    delivered = true;
-    await setStatus(job.id, 'sent', { channelUsed, deliveryId: delivery && delivery.id });
-    log.info(`#${job.id} ${job.trigger_type} record=${job.yclients_record_id} sent via ${channelUsed} delivery=${delivery && delivery.id}`);
-    await afterSend(job, channelUsed, delivery);
-  } catch (e) {
-    if (delivered) return;   // упала запись журнала после отправки — статус sent уже стоит с захвата
-    const definite = transport.isDefiniteRejection(e);
-    const final = job.attempts >= MAX_ATTEMPTS || !definite;   // таймаут/5xx: повторять нельзя — могло уйти
-    await setStatus(job.id, final ? 'failed' : 'pending', { error: String(e.message || e).slice(0, 500) });
-    log.warn(`#${job.id} attempt ${job.attempts}/${MAX_ATTEMPTS} failed (${definite ? '4xx' : 'не 4xx — без повтора'}): ${e.message}`);
+  const steps = [];
+  for (let pos = Number(job.cascade_pos) || 0; pos < cascade.length; pos++) {
+    const ch = cascade[pos];
+    const target = recipientFor(ch, job.phone, conv.chats);
+    if (!target) { steps.push(step(ch, 'no_recipient')); continue; }
+    let delivery;
+    try {
+      delivery = await deliver(job, target);
+    } catch (e) {
+      const msg = String((e && e.message) || e);
+      if (!transport.isDefiniteRejection(e)) {
+        steps.push(step(ch, 'ambiguous', msg));
+        await setStatus(job.id, 'failed', { steps,
+          error: `${ch}: неоднозначный сбой (${msg}) — дальше по каскаду не идём, сообщение могло уйти` });
+        log.warn(`#${job.id} ${ch} ambiguous, cascade stopped: ${msg}`);
+        return;
+      }
+      steps.push(step(ch, 'rejected', msg));
+      log.info(`#${job.id} ${ch} отказал (${msg}) — следующий мессенджер`);
+      continue;
+    }
+    // Отправлено. Ошибки ниже не должны вернуть строку в очередь — отсюда отдельный catch.
+    steps.push(step(ch, 'sent'));
+    await db.query(
+      `UPDATE notification_jobs SET channel_used=$2, delivery_id=$3, account_id=$4, cascade_pos=$5,
+          check_at = NOW() + make_interval(secs => $6), error=NULL, cascade_log = cascade_log || $7::jsonb
+        WHERE id=$1`,
+      [job.id, ch, delivery && delivery.id != null ? String(delivery.id) : null,
+       delivery && delivery.accountId != null ? String(delivery.accountId) : null, pos, CHECK_DELAY_S, JSON.stringify(steps)])
+      .catch((e) => log.error(`#${job.id} journal after send: ${e.message}`));
+    log.info(`#${job.id} ${job.trigger_type} record=${job.yclients_record_id} sent via ${ch} (шаг ${pos + 1}/${cascade.length}) delivery=${delivery && delivery.id}`);
+    await afterSend(job, ch, delivery);
+    return;
+  }
+
+  const final = job.attempts >= MAX_ATTEMPTS;
+  await setStatus(job.id, final ? 'failed' : 'pending', { steps,
+    error: `ни один мессенджер не принял: ${steps.map((s) => `${s.ch}=${s.res}`).join(', ')}` });
+  log.warn(`#${job.id} cascade exhausted (attempt ${job.attempts}/${MAX_ATTEMPTS})`);
+}
+
+async function checkDeliveries() {
+  const rows = await db.any(CHECK_SQL, [BATCH]);
+  for (const r of rows) {
+    let st;
+    try {
+      st = await transport.getDeliveryStatus(r.salon_id, r.channel_used, r.delivery_id, { accountId: r.account_id });
+    } catch (e) {
+      // Не знаем судьбу — считаем доставленным: повтор в другой мессенджер дал бы дубль.
+      log.warn(`#${r.id} delivery check failed: ${e.message}`);
+      continue;
+    }
+    if (!st || !st.status || Number(st.status.status_id) !== UNDELIVERABLE_STATUS_ID) continue;
+    const next = (Number(r.cascade_pos) || 0) + 1;
+    const hasNext = Array.isArray(r.routing) && next < r.routing.length;
+    await db.query(
+      `UPDATE notification_jobs SET status=$2, cascade_pos=$3, scheduled_at=NOW(), attempts=0, last_attempt_at=NULL,
+          error=$4, cascade_log = cascade_log || $5::jsonb
+        WHERE id=$1 AND status='sent'`,
+      [r.id, hasNext ? 'pending' : 'failed', hasNext ? next : Number(r.cascade_pos) || 0,
+       `${r.channel_used}: «Невозможно доставить»${hasNext ? ' — следующий мессенджер' : ' — мессенджеры закончились'}`,
+       JSON.stringify([step(r.channel_used, 'undeliverable')])]);
+    log.info(`#${r.id} ${r.channel_used} не доставлено → ${hasNext ? `шаг ${next + 1}` : 'failed'}`);
   }
 }
 
@@ -1405,6 +1740,7 @@ async function processTick() {
       await setStatus(row.id, row.attempts >= MAX_ATTEMPTS ? 'failed' : 'pending', { error: String(e.message).slice(0, 500) }).catch(() => {});
     }
   }
+  await checkDeliveries().catch((e) => log.error(`delivery checks: ${e.message}`));
 }
 
 let _running = false; let _inFlight = false;
@@ -1420,26 +1756,31 @@ function startNotificationWorker() {
   log.info(`Notification worker started (tick=${TICK_MS}ms)`);
 }
 
-module.exports = { processTick, processOne, startNotificationWorker, LEASE_SQL, staleReason };
+module.exports = { processTick, processOne, checkDeliveries, startNotificationWorker, LEASE_SQL, CHECK_SQL, staleReason };
 ```
+
+ГОТЧА в `processTick`: строка, захваченная в `sent`, но упавшая в общем `catch` (исключение вне цикла каскада), вернётся в `pending` и уйдёт повторно — это допустимо только потому, что внутри цикла каждый вызов транспорта обёрнут своим `try`, и после реальной отправки код дальше не бросает (журнал — со своим `.catch`, `afterSend` всё глотает). Не добавлять в цикл после `deliver` ничего, что может бросить.
 
 - [ ] **Step 5: Фасад** — в `services/notifications.js` удалить `processTick`/старый `startNotificationWorker`/`lastIncomingChannel`-дубликаты и экспортировать `startNotificationWorker: require('./notifications/worker').startNotificationWorker`. Файл должен остаться тонким (≈30 строк): импорты папки и `module.exports` с прежними именами плюс `handleRecordEvent`.
 
 - [ ] **Step 6: Тесты и живой EXPLAIN**
 
-Run: `cd /root/loyalpro/backend && npx jest notifications-worker notifications-enroll notifications-render`
-Expected: PASS.
+Run: `cd /root/loyalpro/backend && npx jest notifications-worker notifications-cascade notifications-enroll notifications-render`
+Expected: PASS (воркер — 16 тестов). Если индекс параметров в `updates(...)` разошёлся с SQL — поправить ТЕСТ под реальный порядок, не наоборот.
 
-Живой EXPLAIN (MCP `mcp__postgres__query`, дев-БД):
+Живой EXPLAIN обоих запросов (MCP `mcp__postgres__query`, дев-БД):
 ```sql
 EXPLAIN UPDATE notification_jobs j SET attempts = j.attempts + 1, last_attempt_at = NOW()
  WHERE j.id IN (SELECT id FROM notification_jobs WHERE status='pending' AND scheduled_at <= NOW()
    AND (last_attempt_at IS NULL OR last_attempt_at < NOW() - make_interval(secs => 60))
    ORDER BY scheduled_at ASC, id ASC LIMIT 10 FOR UPDATE SKIP LOCKED)
- RETURNING j.*, (SELECT r.channels FROM notification_rules r WHERE r.id = j.rule_id) AS channels,
-   (SELECT r.prefer_last_channel FROM notification_rules r WHERE r.id = j.rule_id) AS prefer_last_channel
+ RETURNING j.*;
+EXPLAIN UPDATE notification_jobs SET check_at = NULL
+ WHERE id IN (SELECT id FROM notification_jobs WHERE status='sent' AND check_at IS NOT NULL AND check_at <= NOW()
+   ORDER BY check_at ASC LIMIT 10 FOR UPDATE SKIP LOCKED)
+ RETURNING id, salon_id, channel_used, delivery_id, account_id, cascade_pos, routing;
 ```
-Expected: план без ошибки, `Index Scan using idx_notification_jobs_due`.
+Expected: планы без ошибок, `idx_notification_jobs_due` и `idx_notification_jobs_check`.
 
 - [ ] **Step 7: Рестарт дева и проверка старта воркера**
 
@@ -1450,14 +1791,14 @@ Expected: `Notification worker started (tick=10000ms)`.
 
 ```bash
 cd /root/loyalpro && git add backend/services/notifications/worker.js backend/services/notifications.js backend/services/messaging/transport.js backend/notifications-worker.test.js
-git commit -m "feat(notifications): воркер очереди — перепроверка записи, теневой режим, каскад мессенджеров
+git commit -m "feat(notifications): воркер очереди — каскадная отправка по мессенджерам, сверка доставки, теневой режим
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
 ---
 
-### Task 7: `replies.js` — «Подтверждаю» → статус в YClients, цифра → оценка; перехват в вебхуке мессенджера
+### Task 8: `replies.js` — «Подтверждаю» → статус в YClients, цифра → оценка; перехват в вебхуке мессенджера
 
 **Files:**
 - Create: `backend/services/notifications/replies.js`
@@ -1620,6 +1961,7 @@ async function lastJob(salonId, phone, type, hours) {
     [salonId, phone, type, hours]);
 }
 
+// Ответ идёт в ТОТ мессенджер, где пациент написал, — без каскада: адресат известен точно.
 async function sendSystem(salonId, msg, text) {
   const rp = recipientParams(msg.channel, { phone: msg.phone, chat_id: msg.chatId });
   if (!rp) throw new Error('нет адресата для ответа');
@@ -1747,7 +2089,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 
 ---
 
-### Task 8: API — новые поля правил, настройки, журнал job'ов, вложение, тест, оценки, паритет
+### Task 9: API — новые поля правил, настройки, журнал job'ов, вложение, тест, оценки, паритет
 
 **Files:**
 - Modify: `backend/routes/notification-rules.js` (весь файл; `parseRuleBody` остаётся экспортируемой чистой функцией)
@@ -1761,7 +2103,7 @@ jest.mock('./db', () => ({ db: {} }));
 jest.mock('./services/yclients', () => ({ ycGet: jest.fn() }));
 const { parseRuleBody, TRIGGER_TYPES } = require('./routes/notification-rules');
 
-const ok = (over = {}) => ({ title: 'r', messageTemplate: 'Текст', channels: ['tdlib'], triggerType: 'record_created', ...over });
+const ok = (over = {}) => ({ title: 'r', messageTemplate: 'Текст', triggerType: 'record_created', ...over });
 
 test('типы триггеров известны', () => {
   expect(TRIGGER_TYPES).toEqual(['record_created', 'record_rescheduled', 'record_cancelled', 'visit_reminder', 'visit_review', 'visit_after', 'first_visit']);
@@ -1777,9 +2119,10 @@ test('visit_review/visit_after: delay_minutes 0..1440', () => {
   expect(parseRuleBody(ok({ triggerType: 'visit_review', delayMinutes: 5 })).value.delayMinutes).toBe(5);
   expect(parseRuleBody(ok({ triggerType: 'visit_after', delayMinutes: -1 })).error).toMatch(/минут/i);
 });
-test('неизвестный канал (в т.ч. sms) отбрасывается', () => {
-  expect(parseRuleBody(ok({ channels: ['sms'] })).error).toMatch(/канал/i);
-  expect(parseRuleBody(ok({ channels: ['tdlib', 'sms', 'max'] })).value.channels).toEqual(['tdlib', 'max']);
+test('каналы у правила не задаются — каскад общий для салона (настройки)', () => {
+  const v = parseRuleBody(ok({ channels: ['max'], preferLastChannel: false })).value;
+  expect(v).not.toHaveProperty('channels');
+  expect(v).not.toHaveProperty('preferLastChannel');
 });
 test('флаги нормализуются', () => {
   const v = parseRuleBody(ok({ onNoShow: false, askConfirmation: false })).value;
@@ -1808,7 +2151,6 @@ const multer = require('multer');
 const { auth, requireRole } = require('../middleware/auth');
 const { db } = require('../db');
 const { ycGet } = require('../services/yclients');
-const { ALLOWED_CHANNELS } = require('../services/notifications/rules');
 const settingsSvc = require('../services/notifications/settings');
 const { imageFileFilter, validateImageBuffer } = require('../utils/upload-validator');
 const { createLogger } = require('../logger');
@@ -1854,8 +2196,9 @@ function parseRuleBody(body) {
     if (ids.length) items.push({ type: it.type, ids });
   }
 
-  const channels = (Array.isArray(b.channels) ? b.channels : []).filter((ch) => ALLOWED_CHANNELS.includes(ch));
-  if (!channels.length) return { error: 'Выберите хотя бы один канал отправки' };
+  // Каналов у правила нет: порядок каскада и «сначала мессенджер последней
+  // переписки» — общие настройки салона (notification_settings). Колонки v1
+  // notification_rules.channels/prefer_last_channel остаются в таблице и не читаются.
 
   const hoursBefore = triggerType === 'visit_reminder' ? intIn(b.hoursBefore, 1, 72, 24) : null;
   if (triggerType === 'visit_reminder' && hoursBefore == null) return { error: 'Часы до визита: число от 1 до 72' };
@@ -1864,8 +2207,8 @@ function parseRuleBody(body) {
 
   return {
     value: {
-      title, triggerType, messageTemplate: template, conditions: { logic, items }, channels,
-      preferLastChannel: b.preferLastChannel !== false, isEnabled: b.isEnabled !== false,
+      title, triggerType, messageTemplate: template, conditions: { logic, items },
+      isEnabled: b.isEnabled !== false,
       hoursBefore, delayMinutes,
       onNoShow: b.onNoShow !== false,
       askConfirmation: b.askConfirmation !== false,
@@ -1877,11 +2220,11 @@ function parseRuleBody(body) {
 Маршруты правил (`GET /`, `POST /`, `PUT /:id`, `POST /:id/toggle`, `DELETE /:id`) — как в v1, но INSERT/UPDATE пишут новые колонки:
 
 ```js
-const RULE_COLS = `title, is_enabled, trigger_type, conditions, message_template, channels, prefer_last_channel,
+const RULE_COLS = `title, is_enabled, trigger_type, conditions, message_template,
   hours_before, delay_minutes, on_no_show, ask_confirmation`;
 function ruleParams(v) {
-  return [v.title, v.isEnabled, v.triggerType, JSON.stringify(v.conditions), v.messageTemplate, JSON.stringify(v.channels),
-    v.preferLastChannel, v.hoursBefore, v.delayMinutes, v.onNoShow, v.askConfirmation];
+  return [v.title, v.isEnabled, v.triggerType, JSON.stringify(v.conditions), v.messageTemplate,
+    v.hoursBefore, v.delayMinutes, v.onNoShow, v.askConfirmation];
 }
 
 router.get('/', guard, async (req, res) => {
@@ -1904,7 +2247,7 @@ router.post('/', guard, async (req, res) => {
     if (error) return res.status(400).json({ error });
     const rule = await db.one(
       `INSERT INTO notification_rules (salon_id, ${RULE_COLS}, created_by)
-       VALUES ($1,$2,$3,$4,$5::jsonb,$6,$7::jsonb,$8,$9,$10,$11,$12,$13) RETURNING *`,
+       VALUES ($1,$2,$3,$4,$5::jsonb,$6,$7,$8,$9,$10,$11) RETURNING *`,
       [req.user.salonId, ...ruleParams(value), req.user.id]);
     res.json({ ok: true, rule });
   } catch (e) { log.error(`create: ${e.message}`); res.status(500).json({ error: e.message }); }
@@ -1918,8 +2261,7 @@ router.put('/:id', guard, async (req, res) => {
     if (error) return res.status(400).json({ error });
     const rule = await db.oneOrNone(
       `UPDATE notification_rules SET title=$3, is_enabled=$4, trigger_type=$5, conditions=$6::jsonb, message_template=$7,
-          channels=$8::jsonb, prefer_last_channel=$9, hours_before=$10, delay_minutes=$11,
-          on_no_show=$12, ask_confirmation=$13, updated_at=NOW()
+          hours_before=$8, delay_minutes=$9, on_no_show=$10, ask_confirmation=$11, updated_at=NOW()
         WHERE id=$1 AND salon_id=$2 RETURNING *`,
       [id, req.user.salonId, ...ruleParams(value)]);
     if (!rule) return res.status(404).json({ error: 'not found' });
@@ -1955,7 +2297,7 @@ router.get('/jobs', guard, async (req, res) => {
     const page = Math.max(0, parseInt(req.query.page || '0', 10) || 0);
     const items = await db.any(
       `SELECT j.id, j.rule_id, j.rule_title, j.trigger_type, j.yclients_record_id, j.visit_datetime, j.phone, j.status,
-              j.attempts, j.error, j.rendered_text, j.attachment_url, j.routing, j.channel_used, j.delivery_id,
+              j.attempts, j.error, j.rendered_text, j.attachment_url, j.routing, j.cascade_log, j.channel_used, j.delivery_id,
               j.scheduled_at, j.sent_at, j.created_at, j.confirmed_at, j.decision_reason, c.name AS client_name
          FROM notification_jobs j LEFT JOIN clients c ON c.id = j.client_id
         WHERE j.salon_id = $1
@@ -2093,8 +2435,8 @@ Expected: PASS, 6 тестов.
 ```bash
 T=<jwt>; H="Authorization: Bearer $T"; B=http://localhost:3001/api/notification-rules
 curl -s -H "$H" $B/settings | head -c 300; echo
-curl -s -H "$H" -X PUT $B/settings -H 'Content-Type: application/json' -d '{"mode":"shadow"}' | head -c 200; echo
-curl -s -H "$H" -X POST $B -H 'Content-Type: application/json' -d '{"title":"Напоминание","triggerType":"visit_reminder","hoursBefore":24,"messageTemplate":"Напоминаем о записи {date} в {time}. Пожалуйста, подтвердите визит","channels":["tdlib","whatsapp"]}'; echo
+curl -s -H "$H" -X PUT $B/settings -H 'Content-Type: application/json' -d '{"mode":"shadow","default_channels":["max","tdlib","sms","tdlib"],"prefer_last_channel":true}' | head -c 300; echo   # → default_channels ["max","tdlib"]
+curl -s -H "$H" -X POST $B -H 'Content-Type: application/json' -d '{"title":"Напоминание","triggerType":"visit_reminder","hoursBefore":24,"messageTemplate":"Напоминаем о записи {date} в {time}. Пожалуйста, подтвердите визит"}'; echo
 curl -s -H "$H" "$B/jobs?status=shadow" | head -c 300; echo
 curl -s -H "$H" "$B/parity?days=7"; echo
 ```
@@ -2111,7 +2453,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 
 ---
 
-### Task 9: Фронт — вкладка «Уведомления» (правила по типам, настройки, журнал, оценки)
+### Task 10: Фронт — вкладка «Уведомления» (правила по типам, настройки, журнал, оценки)
 
 **Files:**
 - Create: `frontend/js/pages/notifications.js`
@@ -2157,7 +2499,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
       </div>
 ```
 
-Модалки (в конец `page-broadcasts`): `ntEditor` (поля: название, тип `<select id="ntType">`, блок `ntTypeFields` (часы до / минуты после / вложение / флаги), условия `<div id="ntConds"></div>`, текст `<textarea id="ntText">` с кнопками переменных, каналы `<div id="ntChannels"></div>` + чекбокс `prefer_last_channel`, кнопки «Сохранить», «🧪 Тест», «Удалить») и `ntSettings` (режим, каналы по умолчанию, тихие часы `ntsQuietFrom`/`ntsQuietTo`, текст подтверждения `ntsConfirm`, тексты оценок `ntsHigh` (5) / `ntsMid` (4) / `ntsLow` (2–3), чекбокс перевода на администратора при 2–3 `ntsEscalate`). Разметка модалок — по образцу `nrEditor` v1 (классы `modal`, `fg`/`fl`, `btn-pri`).
+Модалки (в конец `page-broadcasts`): `ntEditor` (поля: название, тип `<select id="ntType">`, блок `ntTypeFields` (часы до / минуты после / вложение / флаги), условия `<div id="ntConds"></div>`, текст `<textarea id="ntText">` с кнопками переменных, кнопки «Сохранить», «🧪 Тест», «Удалить») и `ntSettings` (режим; блок «Каскад отправки»: `<div id="ntsChannels"></div>` — чипы Telegram/WhatsApp/MAX с номером шага, клик включает/выключает, стрелки ↑/↓ меняют порядок, и чекбокс `ntsPreferLast` «Сначала мессенджер, в котором клиент писал последним»; тихие часы `ntsQuietFrom`/`ntsQuietTo`, текст подтверждения `ntsConfirm`, тексты оценок `ntsHigh` (5) / `ntsMid` (4) / `ntsLow` (2–3), чекбокс перевода на администратора при 2–3 `ntsEscalate`). Разметка модалок — по образцу `nrEditor` v1 (классы `modal`, `fg`/`fl`, `btn-pri`).
 
 - [ ] **Step 2: `notifications.js`** (ключевые функции; остальное — по образцу `broadcast-rules.js`):
 
@@ -2174,10 +2516,11 @@ const NT_TYPES = {
   visit_after:       { lbl: 'Рекомендации после процедуры', hint: 'По услугам, с картинкой' },
   first_visit:       { lbl: 'Первый визит',            hint: 'Приглашение в программу лояльности' },
 };
-const NT_CH = { tdlib: 'Telegram (номер)', whatsapp: 'WhatsApp', max: 'MAX', telegram: 'Telegram (бот)', max_bot: 'MAX (бот)', notify: 'ВК/ОК' };
+const NT_CH = { tdlib: 'Telegram', whatsapp: 'WhatsApp', max: 'MAX' };   // ровно CASCADE_CHANNELS бэкенда
+const NT_STEP = { no_recipient: 'нет адресата', rejected: 'отказ', ambiguous: 'сбой', sent: 'отправлено', undeliverable: 'не доставлено' };
 const NT_ST = { pending: ['В очереди', '#9ca3af'], sent: ['Отправлено', '#10b981'], shadow: ['Тень', '#6366f1'],
   skipped: ['Пропущено', '#f59e0b'], cancelled: ['Отменено', '#9ca3af'], failed: ['Ошибка', '#ef4444'] };
-let _ntRules = [], _ntSettings = null, _ntDicts = null, _ntEditId = null, _ntChannels = [], _ntLoaded = false;
+let _ntRules = [], _ntSettings = null, _ntDicts = null, _ntEditId = null, _ntCascade = [], _ntLoaded = false;
 
 function bcSwitchTab(tab) {
   document.getElementById('bcTab-once').style.display  = tab === 'once'  ? '' : 'none';
@@ -2204,7 +2547,7 @@ async function ntLoad() {
 function ntRenderMode() {
   const m = _ntSettings.mode;
   const txt = m === 'live' ? '🟢 боевой — уведомления уходят клиентам' : m === 'shadow' ? '🟡 теневой — строки пишутся в журнал, отправки нет' : '⚪ выключен';
-  document.getElementById('ntModeLine').textContent = 'Режим: ' + txt;
+  document.getElementById('ntModeLine').textContent = 'Режим: ' + txt + ' · Каскад: ' + ntCascadeLine();
 }
 function ntRenderRules() {
   const byType = {};
@@ -2220,7 +2563,7 @@ function ntRenderRules() {
           <label class="switch"><input type="checkbox" ${r.is_enabled ? 'checked' : ''} onchange="ntToggle(${r.id})"><span></span></label>
           <div style="flex:1;cursor:pointer" onclick="ntOpenEditor(${r.id})">
             <div>${esc(r.title)} ${r.attachment_url ? '📎' : ''}</div>
-            <div class="muted" style="font-size:12px">${esc(ntRuleSummary(r))} · каналы: ${(r.channels || []).map(c => NT_CH[c] || c).join(' → ')}</div>
+            <div class="muted" style="font-size:12px">${esc(ntRuleSummary(r))}</div>
           </div>
           <div class="muted" style="font-size:12px">✅ ${r.sent_count} · 🟡 ${r.shadow_count} · ⏳ ${r.pending_count} · ❌ ${r.failed_count}</div>
         </div>`).join('') || '<div class="muted" style="padding:8px 0;font-size:12px">Правил нет</div>'}
@@ -2235,18 +2578,20 @@ function ntRuleSummary(r) {
   parts.push(items.length ? `условий: ${items.length} (${r.conditions.logic === 'or' ? 'ИЛИ' : 'И'})` : 'любая запись');
   return parts.join(' · ');
 }
+function ntCascadeLine() {
+  const order = (_ntSettings.default_channels || []).map((c) => NT_CH[c] || c).join(' → ') || 'не задан';
+  return (_ntSettings.prefer_last_channel ? 'мессенджер последней переписки, затем ' : '') + order;
+}
 async function ntToggle(id) { await api(`/notification-rules/${id}/toggle`, { method: 'POST' }); await ntLoad(); }
 
 function ntOpenEditor(id, type) {
   _ntEditId = id;
-  const r = id ? _ntRules.find(x => x.id === id) : { trigger_type: type || 'record_created', channels: _ntSettings.default_channels, conditions: { logic: 'and', items: [] },
-    message_template: '', prefer_last_channel: true, hours_before: 24, delay_minutes: 5, on_no_show: true, ask_confirmation: true };
+  const r = id ? _ntRules.find(x => x.id === id) : { trigger_type: type || 'record_created', conditions: { logic: 'and', items: [] },
+    message_template: '', hours_before: 24, delay_minutes: 5, on_no_show: true, ask_confirmation: true };
   document.getElementById('ntTitle').value = r.title || '';
   document.getElementById('ntType').value = r.trigger_type;
   document.getElementById('ntText').value = r.message_template || '';
-  document.getElementById('ntPreferLast').checked = r.prefer_last_channel !== false;
-  _ntChannels = [...(r.channels || [])];
-  ntRenderTypeFields(r); ntRenderChannels();
+  ntRenderTypeFields(r);
   condSet('ntf', r.conditions, _ntDicts); condRender('ntf', 'ntConds');
   document.getElementById('ntTestBtn').style.display = id ? '' : 'none';
   document.getElementById('ntDeleteBtn').style.display = id ? '' : 'none';
@@ -2265,20 +2610,25 @@ function ntRenderTypeFields(r) {
   if (t === 'record_cancelled') html += `<label><input type="checkbox" id="ntNoShow" ${r.on_no_show !== false ? 'checked' : ''}> Слать и при статусе «клиент не пришёл»</label>`;
   box.innerHTML = html;
 }
-function ntRenderChannels() {
-  document.getElementById('ntChannels').innerHTML = Object.entries(NT_CH).map(([c, l]) => {
-    const i = _ntChannels.indexOf(c);
-    return `<span class="chip ${i >= 0 ? 'on' : ''}" onclick="ntToggleChannel('${c}')">${i >= 0 ? (i + 1) + '. ' : ''}${esc(l)}</span>`;
-  }).join(' ');
+// Каскад — в модалке настроек: включённые мессенджеры с номером шага, стрелки меняют порядок.
+function ntRenderCascade() {
+  const on = _ntCascade, off = Object.keys(NT_CH).filter((c) => !on.includes(c));
+  document.getElementById('ntsChannels').innerHTML =
+    on.map((c, i) => `<span class="chip on">${i + 1}. ${esc(NT_CH[c])}
+      <button class="btn btn-xs" onclick="ntMoveCh(${i},-1)" ${i === 0 ? 'disabled' : ''}>↑</button>
+      <button class="btn btn-xs" onclick="ntMoveCh(${i},1)" ${i === on.length - 1 ? 'disabled' : ''}>↓</button>
+      <button class="btn btn-xs" onclick="ntToggleCh('${c}')">✕</button></span>`).join(' ')
+    + off.map((c) => ` <span class="chip" onclick="ntToggleCh('${c}')">+ ${esc(NT_CH[c])}</span>`).join('');
 }
-function ntToggleChannel(c) { const i = _ntChannels.indexOf(c); if (i >= 0) _ntChannels.splice(i, 1); else _ntChannels.push(c); ntRenderChannels(); }
+function ntToggleCh(c) { const i = _ntCascade.indexOf(c); if (i >= 0) _ntCascade.splice(i, 1); else _ntCascade.push(c); ntRenderCascade(); }
+function ntMoveCh(i, d) { const j = i + d; if (j < 0 || j >= _ntCascade.length) return; [_ntCascade[i], _ntCascade[j]] = [_ntCascade[j], _ntCascade[i]]; ntRenderCascade(); }
 function ntInsertVar(tok) { const ta = document.getElementById('ntText'); const s = ta.selectionStart; ta.value = ta.value.slice(0, s) + tok + ta.value.slice(ta.selectionEnd); ta.focus(); }
 
 async function ntSave() {
   const t = document.getElementById('ntType').value;
   const g = (id) => document.getElementById(id);
   const body = { title: g('ntTitle').value, triggerType: t, messageTemplate: g('ntText').value,
-    conditions: condGet('ntf'), channels: _ntChannels, preferLastChannel: g('ntPreferLast').checked,
+    conditions: condGet('ntf'),
     hoursBefore: g('ntHours') ? Number(g('ntHours').value) : undefined, delayMinutes: g('ntDelay') ? Number(g('ntDelay').value) : undefined,
     askConfirmation: g('ntAsk') ? g('ntAsk').checked : true, onNoShow: g('ntNoShow') ? g('ntNoShow').checked : true };
   try {
@@ -2305,7 +2655,8 @@ async function ntLoadJobs() {
   document.getElementById('ntJobsList').innerHTML = items.length ? `<table class="tbl"><thead><tr><th>Когда</th><th>Тип</th><th>Клиент</th><th>Статус</th><th>Текст</th></tr></thead><tbody>` +
     items.map(j => `<tr><td>${esc(ntFmt(j.status === 'pending' ? j.scheduled_at : (j.sent_at || j.created_at)))}</td><td>${esc((NT_TYPES[j.trigger_type] || {}).lbl || j.trigger_type)}</td>
       <td>${esc(j.client_name || '')}<div class="muted">${esc(j.phone || '')}</div></td>
-      <td><span style="color:${NT_ST[j.status][1]}">${NT_ST[j.status][0]}</span>${j.channel_used ? ' · ' + esc(j.channel_used) : ''}${j.confirmed_at ? ' · ✅ ответ' : ''}<div class="muted" style="font-size:11px">${esc(j.decision_reason || j.error || '')}</div>
+      <td><span style="color:${NT_ST[j.status][1]}">${NT_ST[j.status][0]}</span>${j.channel_used ? ' · ' + esc(NT_CH[j.channel_used] || j.channel_used) : ''}
+        <div class="muted" style="font-size:11px">${(j.cascade_log || []).map((x) => esc((NT_CH[x.ch] || x.ch) + ': ' + (NT_STEP[x.res] || x.res))).join(' → ')}</div>${j.confirmed_at ? ' · ✅ ответ' : ''}<div class="muted" style="font-size:11px">${esc(j.decision_reason || j.error || '')}</div>
         ${j.status === 'pending' ? `<button class="btn btn-xs" onclick="ntCancelJob(${j.id})">Отменить</button>` : ''}</td>
       <td style="white-space:pre-wrap;max-width:420px;font-size:12px">${esc(j.rendered_text)}${j.attachment_url ? ' 📎' : ''}</td></tr>`).join('') + '</tbody></table>'
     : '<div class="muted">Пусто</div>';
@@ -2328,6 +2679,7 @@ async function ntLoadParity() {
 
 function ntOpenSettings() {
   const s = _ntSettings; const g = (id) => document.getElementById(id);
+  _ntCascade = [...(s.default_channels || [])]; ntRenderCascade(); g('ntsPreferLast').checked = s.prefer_last_channel !== false;
   g('ntsMode').value = s.mode; g('ntsQuietFrom').value = s.quiet_from || ''; g('ntsQuietTo').value = s.quiet_to || '';
   g('ntsConfirm').value = s.confirm_reply_text; g('ntsHigh').value = s.rating_high_text; g('ntsMid').value = s.rating_mid_text; g('ntsLow').value = s.rating_low_text;
   g('ntsEscalate').checked = !!s.rating_escalate_low;
@@ -2335,7 +2687,8 @@ function ntOpenSettings() {
 }
 async function ntSaveSettings() {
   const g = (id) => document.getElementById(id);
-  const body = { mode: g('ntsMode').value, quiet_from: g('ntsQuietFrom').value || null, quiet_to: g('ntsQuietTo').value || null,
+  if (!_ntCascade.length && !confirm('В каскаде не выбран ни один мессенджер — уведомления не будут уходить. Сохранить?')) return;
+  const body = { mode: g('ntsMode').value, default_channels: _ntCascade, prefer_last_channel: g('ntsPreferLast').checked, quiet_from: g('ntsQuietFrom').value || null, quiet_to: g('ntsQuietTo').value || null,
     confirm_reply_text: g('ntsConfirm').value, rating_high_text: g('ntsHigh').value, rating_mid_text: g('ntsMid').value, rating_low_text: g('ntsLow').value,
     rating_escalate_low: g('ntsEscalate').checked };
   if (body.mode === 'live' && _ntSettings.mode !== 'live' && !confirm('Включить боевой режим? Уведомления начнут уходить клиентам. Убедитесь, что Chatpush отключён в YClients (Интеграции → Уведомления), иначе клиенты получат дубли.')) return;
@@ -2366,7 +2719,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 
 ---
 
-### Task 10: Живые проверки, runbook переключения, документация
+### Task 11: Живые проверки, runbook переключения, документация
 
 **Files:**
 - Create: `backend/scripts/notifications-e2e.js`, `backend/scripts/notifications-replies-e2e.js`, `backend/scripts/notifications-backfill-reminders.js`
@@ -2374,7 +2727,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 - Create: `docs/2026-10-13-notifications-cutover-runbook.md`
 - Modify: `CLAUDE.md` (новый раздел), `docs/superpowers/specs/2026-10-13-yclients-notifications-own-module-design.md` (статус)
 
-- [ ] **Step 1: `notifications-e2e.js`** — без отправок (транспорт застаблен `--send` включает): (1) временно ставит салону режим `live` и правила всех семи типов на тестовый номер `79200255591` (тексты из `docs/notifications/chatpush-templates-2026-10-13.md`), (2) через `yclients-booking.ycCreateRecord` создаёт запись на завтра 12:00 → ждёт тик → в `notification_jobs` есть `record_created` (sent) и `visit_reminder` (pending, `scheduled_at` = завтра 12:00 − 24 ч → уже прошло → ОЖИДАЕМ, что job'а НЕТ, а в логе «момент уже прошёл»; для проверки напоминания создаётся вторая запись на послезавтра), (3) переносит запись `ycUpdateRecord` → старое напоминание `cancelled/перенесена`, новое `pending`, `record_rescheduled` sent, (4) ставит `attendance=1` → `visit_review` pending на конец визита + 5 мин, (5) удаляет запись → `record_cancelled` sent, все pending → cancelled; (6) `finally`: возвращает режим и правила салона как было, удаляет записи YClients. Образец структуры — `scripts/reminders-e2e.js` (отказ при `pm2` online без `--allow-worker-running`, потому что боевой тик дева арендует строки первым).
+- [ ] **Step 1: `notifications-e2e.js`** — без отправок (транспорт застаблен `--send` включает): (1) временно ставит салону режим `live` и правила всех семи типов на тестовый номер `79200255591` (тексты из `docs/notifications/chatpush-templates-2026-10-13.md`), (2) через `yclients-booking.ycCreateRecord` создаёт запись на завтра 12:00 → ждёт тик → в `notification_jobs` есть `record_created` (sent) и `visit_reminder` (pending, `scheduled_at` = завтра 12:00 − 24 ч → уже прошло → ОЖИДАЕМ, что job'а НЕТ, а в логе «момент уже прошёл»; для проверки напоминания создаётся вторая запись на послезавтра), (3) переносит запись `ycUpdateRecord` → старое напоминание `cancelled/перенесена`, новое `pending`, `record_rescheduled` sent, (4) ставит `attendance=1` → `visit_review` pending на конец визита + 5 мин, (5) удаляет запись → `record_cancelled` sent, все pending → cancelled; (6) КАСКАД: временно ставит в настройках порядок `max → tdlib` и номер, которого нет в MAX (`--cascade-phone`, по умолчанию 79200255591 — до привязки дева к MAX), → в `cascade_log` строки шаги `max: rejected` (или `no_recipient`), `tdlib: sent`; второй прогон с `prefer_last_channel=true` и тестовым входящим из WhatsApp в `chatpush_messages` → первый шаг `whatsapp`; (7) `finally`: возвращает режим и правила салона как было, удаляет записи YClients. Образец структуры — `scripts/reminders-e2e.js` (отказ при `pm2` online без `--allow-worker-running`, потому что боевой тик дева арендует строки первым).
 
 - [ ] **Step 2: `notifications-replies-e2e.js`** — in-process: вставляет `sent`-job `visit_reminder` по тестовому номеру с `yclients_record_id` живой тестовой записи, кладёт в `chatpush_messages` исходящее `system` с текстом напоминания, зовёт `replies.handleIncoming` с «Подтверждаю» → проверяет `attendance=2` через `ycGetRecord` и `confirmed_at`; затем job `visit_review` + «5» и «3» → строки `visit_ratings`, у «3» — `agent_dialogs.status='escalated'`. Отправка отбивки застаблена (`--send` шлёт). Чистит за собой.
 
@@ -2495,7 +2848,7 @@ Run: `cd /root/loyalpro/backend && npx jest notifications-enroll` → PASS (13 �
 1. Админка → Рассылка → Автоуведомления → Настройки: режим «выключен». Завести правила по типам, тексты и картинки —
    из docs/notifications/chatpush-templates-2026-10-13.md и frontend/uploads/notify_seed (картинки загрузить в правила
    visit_after с условием «услуга/категория» по названию файла: Ботулинотерапия → категория «Ботулинотерапия» и т.д.).
-   Каскад каналов: tdlib → whatsapp → max. В Настройках: текст подтверждения («✅ Ваша запись подтверждена…»),
+   Настройки → «Каскад отправки»: Telegram → WhatsApp → MAX, «Сначала мессенджер последней переписки» — ВКЛ. Там же: текст подтверждения («✅ Ваша запись подтверждена…»),
    тексты оценок — 5: текст Chatpush «Спасибо за отличную оценку… Яндекс … 2ГИС … 500 бонусов», 4: «что улучшить»,
    2–3: «что не устроило» (перевод на администратора включён); тихие часы 21:00–09:00.
 2. Режим «тень» на 3–5 дней. В первый же день: `node scripts/notifications-backfill-reminders.js --salon=1` (сухой
@@ -2512,7 +2865,7 @@ Run: `cd /root/loyalpro/backend && npx jest notifications-enroll` → PASS (13 �
       Chatpush); будущие строки (напоминания, в т.ч. из догона шага 2) остаются pending и уйдут от нас. Окно между a и b
       держать в пределах минут: за него не уйдёт ничего, кроме мгновенных «создана/перенесена/отменена» по записям
       этих минут (их можно отправить тестом руками по журналу shadow).
-   c. Наблюдать журнал и `backend/logs`: первые «Подтверждаю» → `attendance=2` в YClients (видно в журнале записи),
+   c. Наблюдать журнал и `backend/logs`: колонку каскада в журнале (`отказ → отправлено` у клиентов со скрытым номером — норма), первые «Подтверждаю» → `attendance=2` в YClients (видно в журнале записи),
       первые «5» → вкладка «Оценки».
 5. Откат: режим «выключен» + включить CHATPUSH в YClients обратно.
 6. Через неделю стабильной работы: выйти из Telegram/WhatsApp/MAX в кабинете Chatpush (теперь безопасно — уведомления в Telegram
@@ -2544,11 +2897,11 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 
 ## Самопроверка плана против спеки
 
-- R1 типы: Task 5 (`enroll`), Task 8 (`TRIGGER_TYPES`); `birthday` — вне первого выката (спека §8).
-- R2 ответы: Task 7; полосы оценки 5/4/2–3 и перевод при 2–3 — `notification_settings` (Task 2/5), тест на «4» в Task 7.
-- R3 каналы: Task 6 (`resolveRouting`, `isDefiniteRejection`); SMS нет по решению владельца.
-- R4 админка: Task 9; тест на свой номер, оценки — Task 8/9.
-- R5 идемпотентность: уникальный индекс Task 2, гашение при переносе/отмене Task 5, mark-before-send Task 6.
-- R6 тень и переход: режимы Task 5/6, паритет Task 8/9, runbook Task 10.
+- R1 типы: Task 5 (`enroll`), Task 9 (`TRIGGER_TYPES`); `birthday` — вне первого выката (спека §8).
+- R2 ответы: Task 8; полосы оценки 5/4/2–3 и перевод при 2–3 — `notification_settings` (Task 2/5), тест на «4» в Task 8.
+- R3 каналы и каскад: Task 6 (`cascade.js`: порядок из настроек, последняя переписка первой, адресат по каналу, `lastConversation`), Task 7 (шаг = один мессенджер, переход только при однозначном отказе, сверка доставки через 2 мин и продолжение со следующего шага), Task 2 (колонки), Task 9/10 (настройки и журнал каскада); SMS нет по решению владельца. Ответы на «Подтверждаю»/оценку (Task 8) каскад не используют — уходят в тот мессенджер, где пациент ответил.
+- R4 админка: Task 10; тест на свой номер, оценки — Task 9/10.
+- R5 идемпотентность: уникальный индекс Task 2, гашение при переносе/отмене Task 5, mark-before-send Task 7.
+- R6 тень и переход: режимы Task 5/7, паритет Task 9/10, runbook Task 11.
 - Решения владельца 14.10.2026 учтены: MAX — свой шлюз; SMS нет; оценки 5/4/2–3; «Вы записаны» и для записей Милы (флага исключения нет, тест в Task 5); тихие часы 21:00–09:00 по умолчанию, только для отложенных типов (тест в Task 5).
-- Напоминания по записям, созданным до включения модуля, — догон `backfillReminders` (Task 10, шаг 3; runbook, шаг 2).
+- Напоминания по записям, созданным до включения модуля, — догон `backfillReminders` (Task 11, шаг 3; runbook, шаг 2).
