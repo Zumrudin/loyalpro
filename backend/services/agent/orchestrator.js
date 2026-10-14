@@ -604,6 +604,13 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
   // предвызов берёт результат справки об услуге, если запрос совпал (второго
   // поиска нет). Переживает перегенерации, как и сами предвызовы.
   const kbPrefetchRaw = new Map();
+  // Запросы, по которым предвызов этого хода уже упёрся в таймаут/сбой/
+  // degraded. Медицинский предвызов строит ТОТ ЖЕ запрос, что справка («Сколько
+  // стоит био при беременности?»), и без этой отметки шёл бы в зависшую КБ
+  // второй раз под своим таймаутом — до ~16 с до первого прохода провайдера и
+  // два одинаковых поиска в полёте. «Не нашлось» сюда не пишем: это ответ базы,
+  // медицинский предвызов по-прежнему ищет сам (заголовки у него свои).
+  const kbPrefetchUnanswered = new Set();
   let medicalKb = null;            // { titles, lines, raw } из medical-kb.pickMedicalFragments
   let medicalKbResult = null;      // сырой ответ инструмента — журнал, кэш повторов, address-guard
   let medicalKbQuery = null;       // { query } — аргументы для журнала и кэша
@@ -804,6 +811,7 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
               registry.handlers['search_knowledge_base'](salonId, factQuery, toolCtx),
               d.serviceFactTimeoutMs || serviceFactMod.SERVICE_FACT_TIMEOUT_MS, 'service fact KB');
             if (kb && kb.found) kbPrefetchRaw.set(curFactQuery, kb);
+            else if (kb && kb.degraded) kbPrefetchUnanswered.add(curFactQuery);
             const picked = kb && kb.found && typeof kb.context === 'string'
               ? serviceFactMod.pickServiceFact(kb.context, lastUserFactText, kb.fragments) : null;
             if (picked) {
@@ -813,6 +821,7 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
             }
             logger.info(`dialog ${dialogKey}: справка об услуге — ${picked ? `статья «${picked.title}»` : 'не найдена'}`);
           } catch (e) {
+            kbPrefetchUnanswered.add(curFactQuery);
             logger.warn(`dialog ${dialogKey}: предвызов справки об услуге не удался (${e.message}) — без блока`);
           }
         }
@@ -853,6 +862,7 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
               const titles = await (d.rag || ragDefault).listArticleTitles(salonId);
               const q = medicalKbMod.buildMedicalQuery(userBlocks, titles);
               if (!q) return { outcome: 'процедура не определена' };
+              if (kbPrefetchUnanswered.has(q.query)) return { outcome: 'база не ответила (тот же запрос у справки)' };
               let kb = kbPrefetchRaw.get(q.query);
               if (!kb) {
                 kb = await registry.handlers['search_knowledge_base'](salonId, { query: q.query }, toolCtx);
@@ -1625,7 +1635,14 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
             { slotToolCalled: slotToolCalled || freshSlotJournal, patientLastText: toolCtx.patientLastText }),
           // Медицинский предвызов (14.10.2026): блок был, ответ мимо — только лог.
           ...replyGuard.checkMedicalKbUsage(joined, {
-            medicalKbLines: medicalKb ? medicalKb.lines : null,
+            // Тот же фильтр, что у рендера блока в system-prompt.js: сверяем
+            // ответ с тем, что модель реально видела, а не с сырыми строками
+            // (pickMedicalFragments режет время/суммы ДО stripEmphasis/среза и
+            // не трогает строку-метку «Заголовок»: — набор мог разойтись).
+            medicalKbLines: medicalKb
+              ? medicalKb.lines.filter(l => typeof l === 'string'
+                && !serviceFactMod.hasTime(l) && !replyGuard.PRICE_SUM_RE.test(l))
+              : null,
             titles: medicalKb ? medicalKb.titles : [],
             patientText: toolCtx.patientLastText,
           }),

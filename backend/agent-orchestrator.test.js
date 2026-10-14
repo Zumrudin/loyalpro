@@ -3958,6 +3958,18 @@ describe('медицинский вопрос — база знаний пред
     expect(systemOf(deps)).toContain(HEAD);
   });
 
+  test('вопрос и о цене, и медицинский, КБ зависла → второго поиска нет, ход без блока', async () => {
+    const text = 'Сколько стоит био при беременности?';
+    const { deps } = medDeps(text, null);
+    const hung = jest.fn(() => new Promise(() => {}));
+    deps.registry.handlers.search_knowledge_base = hung;
+    deps.serviceFactTimeoutMs = 20;
+    const res = await orchestrator.runDialog(1, 'k', { deps });
+    expect(hung).toHaveBeenCalledTimes(1);
+    expect(res.replies).toEqual(['Ответ']);
+    expect(systemOf(deps)).not.toContain(HEAD);
+  });
+
   test('перегенерация с тем же вопросом → КБ один раз, блок на обеих попытках', async () => {
     const { deps, kbHandler } = medDeps(Q1013, medicalSearchResult(['bio0']));
     let checks = 0;
