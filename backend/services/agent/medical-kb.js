@@ -16,6 +16,7 @@
 // Текст нормализуется: нижний регистр, ё→е — регулярки ниже пишутся без «ё».
 // ============================================================
 const { stripAllStamps } = require('./transcript-time');
+const { detectPromptScenarios, SCENARIOS, isPriceQuestion } = require('./prompt-scenarios');
 
 function norm(text) {
   return stripAllStamps(String(text)).toLowerCase().replace(/ё/g, 'е');
@@ -66,4 +67,21 @@ function buildRedFlagReply(opts = {}) {
     : `${head} Срочно передаю ваше сообщение администратору клиники, чтобы с вами как можно скорее связался врач.`;
 }
 
-module.exports = { detectRedFlag, buildRedFlagReply };
+// ── Нужна ли база: сильные маркеры — всегда, слабые — кроме записи/цены ─────
+// Слабые («можно ли», «курс», «как проходит») в сообщении о записи/переносе —
+// про время, а на вопросе о цене работает справка об услуге (service-fact).
+const STRONG_RE = /(?<![\p{L}])(?:противопоказ|показан|беремен|лактац|кормлю\s+грудью|грудн[\p{L}]*\s+вскармлив|гв(?![\p{L}])|диабет|аллерг|герпес|антибиотик|лекарств|таблетк|отек|опух|покрасн|синяк|гематом|болит|боль(?![\p{L}])|сып[ьи](?![\p{L}])|высып|зуд|жжет|шелуш|бугор|шишк|комоч|асимметр|онемел|реабилит|уход\s+после)/u;
+const WEAK_RE = /(?<![\p{L}])(?:можно\s+ли|стоит\s+ли|есть\s+ли\s+(?:вообще\s+)?смысл|курс|интервал|перерыв|сколько\s+(?:нужно\s+)?(?:процедур|сеанс)|как\s+часто|подготов|после\s+процедур|загар|загора|бан[яюи](?![\p{L}])|саун|спорт|алкогол|как\s+проходит|сколько\s+длится|эффект|результат|сколько\s+держит|больно)/u;
+
+function wantsMedicalKb(text) {
+  if (typeof text !== 'string') return false;
+  const s = norm(text);
+  if (!s.trim()) return false;
+  if (STRONG_RE.test(s)) return true;
+  if (!WEAK_RE.test(s)) return false;
+  const sc = detectPromptScenarios(s);
+  if (sc.includes(SCENARIOS.BOOKING) || sc.includes(SCENARIOS.MANAGE_BOOKING)) return false;
+  return !isPriceQuestion(s);
+}
+
+module.exports = { detectRedFlag, buildRedFlagReply, wantsMedicalKb };
