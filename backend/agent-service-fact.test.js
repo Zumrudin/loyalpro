@@ -192,3 +192,30 @@ describe('все найденные фрагменты с явными гран�
     }
   });
 });
+
+describe('общие стемы и латинские алиасы (медицинский предвызов, 2026-10-14)', () => {
+  const sf = require('./services/agent/service-fact');
+
+  test('stems экспортируется; extraStops отсекает слова по началу токена', () => {
+    expect(sf.stems('терапия губ')).toEqual(expect.arrayContaining(['терап', 'губ']));
+    expect(sf.stems('терапия губ', ['терап'])).not.toContain('терап');
+    expect(sf.stems('терапия губ', ['терап'])).toContain('губ');
+  });
+
+  test.each([
+    ['морфеус', 'morpheus'], ['люмекка', 'lumecca'], ['люмека', 'lumecca'],
+    ['волньюмер', 'volnewmer'], ['пладуо', 'pladuo'], ['профейшл', 'profacial'],
+    ['профешл', 'profacial'], ['хелео', 'heleo'], ['тесла', 'tesla'],
+    ['бьютилайзер', 'beautylizer'], ['стилаж', 'stylage'], ['белотеро', 'belotero'],
+  ])('«%s» → стем «%s»', (word, stem) => {
+    expect(sf.stems(`Сколько стоит ${word}?`)).toContain(stem);
+  });
+
+  test('справка находится по кириллическому названию латинского аппарата', () => {
+    const ctx = 'STYLAGE M Lidocaine — филлер на гиалуроновой кислоте\n'
+      + 'Филлер средней плотности для коррекции носогубных складок и восполнения объёма.';
+    const fact = sf.pickServiceFact(ctx, 'Сколько стоит стилаж?');
+    expect(fact).toEqual({ title: 'STYLAGE M Lidocaine — филлер на гиалуроновой кислоте',
+      text: 'Филлер средней плотности для коррекции носогубных складок и восполнения объёма.' });
+  });
+});
