@@ -19,12 +19,17 @@ function setup(over = {}) {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'gw-max-'));
   const handlers = { 6: () => ({ location: 'FI', 'phone-auth-enabled': true }), 19: () => PROFILE, ...(over.handlers || {}) };
   const transports = [];
+  let connectFails = 0;
   class FakeTransport extends EventEmitter {
     constructor(opts) { super(); this.opts = opts; this.calls = []; this.acks = []; this.isOpen = false; this.closedByUs = false; transports.push(this); }
-    async connect() { if (over.connectError) throw new Error(over.connectError); this.isOpen = true; }
+    async connect() {
+      if (over.connectError) throw new Error(over.connectError);
+      if (connectFails < (over.connectFailures || 0)) { connectFails++; throw new Error('ECONNREFUSED'); }
+      this.isOpen = true;
+    }
     async request(opcode, payload) {
       this.calls.push([opcode, payload]);
-      if (!this.isOpen) throw Object.assign(new Error('соединение с MAX закрыто'), { code: 'transport_closed' });
+      if (!this.isOpen) throw Object.assign(new Error('соединение с MAX закрыто'), { code: 'transport_closed', sent: false });
       const h = handlers[opcode];
       if (!h) return {};
       const r = await h(payload, this);
@@ -54,6 +59,7 @@ function setup(over = {}) {
     repo: {
       setAuth: async (...a) => { repoCalls.push(['setAuth', ...a]); },
       rememberContact: async (...a) => { repoCalls.push(['rememberContact', ...a]); },
+      rememberContacts: async (...a) => { repoCalls.push(['rememberContacts', ...a]); },
       contactUserId: async (acc, phone) => (over.knownPhones || {})[phone] || null,
       phoneByUserId: async (acc, uid) => (over.knownIds || {})[String(uid)] || null,
     },
@@ -105,14 +111,15 @@ test('QR отсканирован: QR_POLL loginAvailable → QR_LOGIN → LOGIN
   await s.tick(20);
   assert.equal(s.client.authState, 'ready');
   const t = s.last();
-  assert.deepEqual(t.calls.find(c => c[0] === 19)[1], { token: 'TOK', chatsCount: 200, interactive: true, chatsSync: 0, contactsSync: 0, presenceSync: -1, draftsSync: 0 });
+  assert.deepEqual(t.calls.find(c => c[0] === 19)[1], { token: 'TOK', chatsCount: 40, interactive: true, chatsSync: 0, contactsSync: 0, presenceSync: -1, draftsSync: 0 });
   assert.equal(s.sessions.data.loginToken, 'TOK'); assert.equal(s.sessions.data.ownerId, OWNER); assert.equal(s.sessions.data.phone, '79200255591');
   assert.equal(s.client.ownerId, OWNER); assert.equal(s.client.ownPhone, '79200255591'); assert.equal(s.client.displayName, 'Тест');
   const ready = lastAuth(s.repoCalls);
   assert.deepEqual(ready.slice(0, 3), ['setAuth', 9, 'ready']); assert.equal(ready[3].phone, '79200255591'); assert.equal(ready[3].displayName, 'Тест');
   assert.equal(s.client.status().qr, null);
   assert.deepEqual(s.client.contacts.get(PEER), { id: PEER, phone: '79164942855', name: 'Mary' });
-  assert.ok(s.repoCalls.some(c => c[0] === 'rememberContact' && c[2] === '79164942855' && c[3] === String(PEER)));
+  assert.deepEqual(s.repoCalls.find(c => c[0] === 'rememberContacts'), ['rememberContacts', 9, [{ phone: '79164942855', userId: String(PEER) }]], 'контакты LOGIN — одной пачкой, а не запросом на каждый');
+  assert.equal(s.repoCalls.some(c => c[0] === 'rememberContact'), false);
   await s.client.close();
 });
 
@@ -236,8 +243,8 @@ test('logout: LOGOUT, транспорт закрыт, сессия удален
   assert.equal(c.client.closed, true);
 });
 
-test('dirsFor: data/acc-<id>/max', () => {
-  assert.deepEqual(MaxClient.dirsFor({ DATA_DIR: '/d' }, 7), { max: '/d/acc-7/max', base: '/d/acc-7' });
+test('dirsFor: data/acc-<id>/max и файл сессии', () => {
+  assert.deepEqual(MaxClient.dirsFor({ DATA_DIR: '/d' }, 7), { max: '/d/acc-7/max', base: '/d/acc-7', session: '/d/acc-7/max/session.json' });
 });
 
 // ── Входящие (Task 5) ────────────────────────────────────────
@@ -476,5 +483,97 @@ test('attachment.not.ready → пауза и один повтор MSG_SEND; ф�
   await assert.rejects(s.client.sendFile({ filePath: path.join(dir, 'nope.pdf'), fileName: 'nope.pdf', type: 'document', maxUserId: PEER }), (e) => e.status === 422 && /не прочитан/.test(e.message));
   assert.equal(s.delCalls.length, n);
   assert.equal(s.mediaCalls.length, 1);
+  await s.client.close();
+});
+
+// ── Правки самопроверки (14.10.2026) ─────────────────────────
+test('start: сервер MAX недоступен при первом подключении → start() не бросает, реконнект в фоне входит по токену', async () => {
+  const s = setup({ session: { loginToken: 'T' }, connectFailures: 2 });
+  await s.client.start();
+  await s.tick(20);
+  assert.equal(s.client.authState, 'ready');
+  assert.equal(s.transports.length, 3);
+  await s.client.close();
+});
+
+test('QR_START отвергнут сервером (не обрыв) → error, клиент закрыт — «Запустить заново» начнёт с начала', async () => {
+  const s = setup({ handlers: { 288: () => Object.assign(new Error('MAX op 288: too.many.requests'), { code: 'too.many.requests' }) } });
+  await s.client.start();
+  assert.equal(s.client.authState, 'error');
+  assert.equal(s.client.closed, true);
+  assert.match(lastAuth(s.repoCalls)[3].error, /too\.many\.requests/);
+});
+
+test('LOGIN после выдачи токена упал (таймаут) → не новый QR, а реконнект и вход по сохранённому токену', async () => {
+  let logins = 0, qrStarts = 0;
+  const s = setup({ handlers: {
+    288: () => { qrStarts++; return { qrLink: 'L', trackId: 't1', ttl: 120000, pollingInterval: 5000, expiresAt: 1_700_000_120_000 }; },
+    289: () => ({ status: { loginAvailable: true } }),
+    291: () => ({ tokenAttrs: { LOGIN: { token: 'TOK' } } }),
+    19: () => (++logins === 1 ? Object.assign(new Error('MAX op 19: нет ответа'), { code: 'timeout' }) : PROFILE),
+  } });
+  await s.client.start();
+  await s.tick(30);
+  assert.equal(s.client.authState, 'ready');
+  assert.equal(qrStarts, 1);
+  assert.equal(logins, 2);
+  assert.equal(s.sessions.data.loginToken, 'TOK');
+  assert.equal(s.transports.length, 2);
+  await s.client.close();
+});
+
+test('своё push, пришедшее ДО ответа MSG_SEND, не становится эхом оператора: эхо одно — синтезированное, с delivery_id', async () => {
+  const s = await ready({ handlers: { 64: (p, t) => {
+    // Сервер разослал сообщение всем сессиям раньше, чем ответил на MSG_SEND.
+    t.push(128, { chatId: p.chatId, message: { id: '117418999', sender: OWNER, time: 1_700_000_050_000, type: 'USER', text: p.message.text } });
+    return new Promise(r => setImmediate(() => r(SENT(p))));
+  } } });
+  await s.client.sendText({ text: 'Ответ Милы', maxUserId: PEER });
+  await s.tick(10);
+  assert.equal(s.hooks.length, 1);
+  assert.equal(s.hooks[0].payload.delivery_id, 'g12');
+  assert.equal(s.client.inflight.size, 0);
+  await s.client.close();
+});
+
+test('max_user_id + номер диалога: номер контакта расходится → шлём по номеру; совпадает или скрыт приватностью → по id', async () => {
+  let lookups = 0;
+  const s = await ready({ handlers: {
+    64: (p) => SENT(p),
+    32: (p) => ({ contacts: [p.contactIds[0] === 777 ? { id: 777, phone: 79001112233, names: [{ name: 'Чужой' }] } : { id: p.contactIds[0], names: [{ name: 'Скрытый' }] }] }),
+    46: (p) => { lookups++; return p.phone === '+79005556677' ? { contact: { id: 999 } } : Object.assign(new Error('MAX op 46: not.found'), { code: 'not.found' }); },
+  } });
+  await s.client.sendText({ text: 'a', maxUserId: 777, phone: '79005556677' });
+  assert.equal(lookups, 1);
+  await s.client.sendText({ text: 'b', maxUserId: PEER, phone: '79164942855' });
+  await s.client.sendText({ text: 'c', maxUserId: 555, phone: '79001110000' });
+  assert.equal(lookups, 1);
+  assert.deepEqual(s.last().calls.filter(c => c[0] === 64).map(c => c[1].chatId), [OWNER ^ 999, OWNER ^ PEER, OWNER ^ 555]);
+  await s.client.close();
+});
+
+test('MSG_SEND: transport_closed до отправки кадра (sent:false) → 422; после отправки (sent:true) → 503', async () => {
+  const s = await ready({ handlers: { 64: (p) => Object.assign(new Error('соединение с MAX закрыто'), { code: 'transport_closed', sent: p.message.text === 'after' }) } });
+  await assert.rejects(s.client.sendText({ text: 'before', maxUserId: PEER }), (e) => e.status === 422);
+  await assert.rejects(s.client.sendText({ text: 'after', maxUserId: PEER }), (e) => e.status === 503);
+  await s.client.close();
+});
+
+test('sendFile: клиент закрыт во время загрузки файла → 422 без доставки', async () => {
+  const s = await ready({ handlers: { 87: () => ({ info: [{ url: 'https://fu/upload', fileId: 42, token: 't' }] }) } });
+  s.deps.media.uploadFile = async () => { await s.client.close(); };
+  const dir = fs.mkdtempSync(path.join(s.tmp, 'tmp-')); const f = path.join(dir, 'p.pdf'); fs.writeFileSync(f, '%PDF');
+  await assert.rejects(s.client.sendFile({ filePath: f, fileName: 'p.pdf', type: 'document', maxUserId: PEER }), (e) => e.status === 422);
+  assert.equal(s.delCalls.filter(c => c[0] === 'create').length, 0);
+});
+
+test('фото: CDN отдал application/octet-stream → MIME по сигнатуре JPEG → .jpg в публичном каталоге', async () => {
+  const s = await ready();
+  const jpeg = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(32)]);
+  s.deps.media.download = async () => ({ buf: jpeg, mimeType: 'application/octet-stream' });
+  s.last().push(128, { chatId: DIALOG, message: MSG({ id: 'p9', attaches: [{ _type: 'PHOTO', baseUrl: 'https://i/9' }] }) });
+  await s.tick(10);
+  const fd = s.hooks[0].payload.message.file_data;
+  assert.match(fd.download_url, /\.jpg$/); assert.equal(fd.mime_type, 'image/jpeg');
   await s.client.close();
 });

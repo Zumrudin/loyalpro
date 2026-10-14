@@ -36,3 +36,14 @@ test('uploadFile: сырые байты, content-disposition (кириллица
   assert.equal(media.contentDisposition('a.pdf'), 'attachment; filename=a.pdf');
   await assert.rejects(media.uploadFile('u', Buffer.from('x'), 'a', { http: async () => ({ status: 413, data: '' }) }), /HTTP 413/);
 });
+
+test('sniffImageMime: JPEG/PNG/WEBP/GIF по сигнатуре, прочее и короткий буфер → null', () => {
+  const pad = (b) => Buffer.concat([b, Buffer.alloc(16)]);
+  assert.equal(media.sniffImageMime(pad(Buffer.from([0xff, 0xd8, 0xff, 0xe0]))), 'image/jpeg');
+  assert.equal(media.sniffImageMime(pad(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))), 'image/png');
+  assert.equal(media.sniffImageMime(pad(Buffer.concat([Buffer.from('RIFF'), Buffer.alloc(4), Buffer.from('WEBP')]))), 'image/webp');
+  assert.equal(media.sniffImageMime(pad(Buffer.from('GIF89a'))), 'image/gif');
+  assert.equal(media.sniffImageMime(pad(Buffer.from('%PDF-1.7'))), null);
+  assert.equal(media.sniffImageMime(Buffer.from([0xff, 0xd8])), null);
+  assert.equal(media.sniffImageMime(null), null);
+});

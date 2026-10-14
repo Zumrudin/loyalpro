@@ -10,6 +10,7 @@ class FakeWs extends EventEmitter {
   constructor(url, opts) { super(); this.url = url; this.opts = opts; this.sent = []; this.closed = false; FakeWs.last = this; setImmediate(() => this.emit('open')); }
   send(data, cb) { this.sent.push(JSON.parse(data)); if (cb) cb(); }
   close() { this.closed = true; setImmediate(() => this.emit('close', 1000, Buffer.from(''))); }
+  terminate() { this.terminated = true; setImmediate(() => this.emit('close', 1006, Buffer.from(''))); }
   reply(frame) { this.emit('message', Buffer.from(JSON.stringify({ ver: 11, ...frame }))); }
 }
 const mk = (o = {}) => new MaxTransport({ url: 'wss://x/websocket', WebSocket: FakeWs, pingIntervalMs: 0, requestTimeoutMs: 50, ...o });
@@ -19,6 +20,7 @@ test('connect: заголовки UA/Origin; request шлёт кадр ver 11 cm
   await t.connect();
   assert.equal(FakeWs.last.opts.headers.Origin, 'https://web.max.ru');
   assert.match(FakeWs.last.opts.headers['User-Agent'], /Chrome/);
+  assert.equal(FakeWs.last.opts.handshakeTimeout, 15000, 'без таймаута рукопожатия зависший TCP-connect вешал бы start() навсегда');
   const p1 = t.request(6, { deviceId: 'd' });
   const p2 = t.request(288);
   assert.deepEqual(FakeWs.last.sent[0], { ver: 11, cmd: 0, seq: 0, opcode: 6, payload: { deviceId: 'd' } });
@@ -62,10 +64,10 @@ test('закрытие сервером: висящие запросы отве�
   t.on('close', (code) => closes.push(code));
   const p = t.request(19, {});
   FakeWs.last.emit('close', 1006, Buffer.from('gone'));
-  await assert.rejects(p, (e) => e.code === 'transport_closed');
+  await assert.rejects(p, (e) => e.code === 'transport_closed' && e.sent === true);   // кадр ушёл — исход неизвестен
   assert.deepEqual(closes, [1006]);
   assert.equal(t.isOpen, false);
-  await assert.rejects(t.request(1), (e) => e.code === 'transport_closed');
+  await assert.rejects(t.request(1), (e) => e.code === 'transport_closed' && e.sent === false);   // не отправляли вовсе
   const t2 = mk(); await t2.connect();
   t2.on('close', () => closes.push('own'));
   t2.close();
@@ -74,12 +76,12 @@ test('закрытие сервером: висящие запросы отве�
   assert.equal(FakeWs.last.closed, true);
 });
 
-test('PING раз в pingIntervalMs с interactive:false; битый кадр → error, не падение', async () => {
+test('PING раз в pingIntervalMs с interactive:true (как max-account-api и PyMax); битый кадр → error, не падение', async () => {
   const t = mk({ pingIntervalMs: 5 }); await t.connect();
   const errs = []; t.on('error', (e) => errs.push(e.message));
   await new Promise(r => setTimeout(r, 20));
   const ping = FakeWs.last.sent.find(f => f.opcode === 1);
-  assert.deepEqual(ping.payload, { interactive: false });
+  assert.deepEqual(ping.payload, { interactive: true });
   FakeWs.last.emit('message', Buffer.from('{not json'));
   assert.equal(errs.length, 1);
   t.close();
@@ -88,4 +90,33 @@ test('PING раз в pingIntervalMs с interactive:false; битый кадр �
 test('connect: ошибка до open → reject', async () => {
   class BadWs extends EventEmitter { constructor() { super(); setImmediate(() => this.emit('error', new Error('ECONNREFUSED'))); } send() {} close() {} }
   await assert.rejects(new MaxTransport({ url: 'wss://x', WebSocket: BadWs, pingIntervalMs: 0 }).connect(), /ECONNREFUSED/);
+});
+
+test('полуоткрытое соединение: PING без ответа maxPingFailures раз подряд → terminate → событие close (клиент переподключится)', async () => {
+  const t = mk({ pingIntervalMs: 5, requestTimeoutMs: 3 }); await t.connect();
+  const closes = []; const errs = [];
+  t.on('close', (code) => closes.push(code));
+  t.on('error', (e) => errs.push(e.message));
+  try {
+    await new Promise(r => setTimeout(r, 60));
+    assert.equal(FakeWs.last.terminated, true);
+    assert.deepEqual(closes, [1006]);
+    assert.equal(t.isOpen, false);
+    assert.ok(errs.some(m => /PING/.test(m)), 'причина разрыва в логе');
+  } finally { t.close(); }
+});
+
+test('ответ на PING (в т.ч. ошибкой сервера) обнуляет счётчик — живое соединение не рвём', async () => {
+  const t = mk({ pingIntervalMs: 5, requestTimeoutMs: 3, maxPingFailures: 2 }); await t.connect();
+  t.on('error', () => {});
+  // Отвечаем на каждый второй PING: подряд без ответа никогда не больше одного.
+  let n = 0;
+  const origSend = FakeWs.last.send.bind(FakeWs.last);
+  const ws = FakeWs.last;
+  ws.send = (data, cb) => { origSend(data, cb); const f = JSON.parse(data); if (f.opcode === 1 && (n++ % 2 === 0)) setImmediate(() => ws.reply({ cmd: 3, seq: f.seq, opcode: 1, payload: { error: 'x' } })); };
+  try {
+    await new Promise(r => setTimeout(r, 60));
+    assert.notEqual(ws.terminated, true);
+    assert.equal(t.isOpen, true);
+  } finally { t.close(); }
 });

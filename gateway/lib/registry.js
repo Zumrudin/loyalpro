@@ -64,11 +64,13 @@ async function logout(id) {
   let c = clients.get(id);
   if (!c) {
     const config = require('../config');
-    // Каталог один (acc-<id>), но признак сессии у каналов свой: db / wa / max.
+    // Каталог один (acc-<id>), но признак сессии у каналов свой: db / wa / файл
+    // сессии MAX. У MAX именно файл, а не каталог: каталог создаётся на старте и
+    // без входа — по нему запуск начал бы бессмысленный QR-раунд.
     const tgDirs = TelegramClient.dirsFor(config, id);
     const waDirs = WhatsappClient.dirsFor(config, id);
     const maxDirs = MaxClient.dirsFor(config, id);
-    if (fs.existsSync(tgDirs.db) || fs.existsSync(waDirs.wa) || fs.existsSync(maxDirs.max)) {
+    if (fs.existsSync(tgDirs.db) || fs.existsSync(waDirs.wa) || fs.existsSync(maxDirs.session)) {
       c = await start(id);
     } else {
       fs.rmSync(tgDirs.base, { recursive: true, force: true });

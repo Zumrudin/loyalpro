@@ -46,4 +46,16 @@ async function uploadFile(url, buf, fileName, { http }) {
   if (res.status !== 200) throw new Error(`загрузка файла: HTTP ${res.status}`);
 }
 
-module.exports = { download, uploadPhoto, uploadFile, contentDisposition, BASE_HEADERS };
+// Фото: MIME по сигнатуре файла, а не по Content-Type CDN — его поведение живьём
+// не проверено, а 'application/octet-stream' дал бы в публичном каталоге .bin
+// вместо картинки в «Чате». null — не картинка из белого списка.
+function sniffImageMime(buf) {
+  if (!buf || buf.length < 12) return null;
+  if (buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) return 'image/jpeg';
+  if (buf[0] === 0x89 && buf.toString('latin1', 1, 4) === 'PNG') return 'image/png';
+  if (buf.toString('latin1', 0, 4) === 'RIFF' && buf.toString('latin1', 8, 12) === 'WEBP') return 'image/webp';
+  if (buf.toString('latin1', 0, 4) === 'GIF8') return 'image/gif';
+  return null;
+}
+
+module.exports = { download, uploadPhoto, uploadFile, contentDisposition, sniffImageMime, BASE_HEADERS };

@@ -2,7 +2,9 @@
 // Разовая живая проверка веб-протокола MAX через НАШ клиент: QR в файл, сырые
 // push-кадры в лог, по флагу — одна отправка. Ничего не пишет в БД (repo/deliveries
 // подменены), вебхук печатает в консоль.
-//   node scripts/max-spike.js [--to 79250177778] [--text 'spike'] [--file /path/a.jpg]
+//   node scripts/max-spike.js [--to 79250177778] [--text 'spike'] [--file /path/a.jpg] [--expect-owner 62232990]
+// --expect-owner: id этого номера в пространстве Chatpush (у +79200255591 — 62232990 по
+// chatpush_events) — совпадение доказывает, что старые chat_id годятся для отправки.
 // Сессия — data/spike-max (удалить после спайка).
 const path = require('path');
 const fs = require('fs');
@@ -29,6 +31,8 @@ const client = new MaxClient({ id: 0, channel: 'max', phone: null }, deps);
     if (st.authState === 'ready' && !timer.sent) {
       timer.sent = true;
       log('READY', JSON.stringify(st), 'ownerId=', client.ownerId, 'chats=', client.chats.size, 'contacts=', client.contacts.size);
+      const expect = arg('--expect-owner');
+      if (expect) log(String(client.ownerId) === String(expect) ? `ID СОВПАДАЕТ с Chatpush (${expect}) — пространство id общее` : `ID НЕ СОВПАДАЕТ: Chatpush ${expect}, наш ${client.ownerId} — отправку по max_user_id не выкатывать`);
       const to = arg('--to');
       if (to) {
         try { log('sendText →', await client.sendText({ text: arg('--text') || 'spike ' + Date.now(), phone: to })); } catch (e) { log('sendText ERR', e.status, e.message); }

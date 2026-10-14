@@ -26,6 +26,8 @@ const path = require('path');
 const mapper = require('./max-mapper');
 const { normalizePhone } = require('./mapper');
 const { MAX_MEDIA_BYTES, publicFileName } = require('./media');
+const { sniffImageMime } = require('./max/media');
+const { FILE: SESSION_FILE } = require('./max/session');
 const { Op, webUserAgent, isTokenRevoked, DEFAULT_WS_URL } = require('./max/protocol');
 const { createLogger } = require('../logger');
 
@@ -38,7 +40,12 @@ const OWN_SEND_TTL_MS = 30 * 60 * 1000;
 const FILE_READY_TIMEOUT_MS = 60 * 1000;
 const ATTACH_RETRY_MS = 2000;
 const MEDIA_DOWNLOAD_TIMEOUT_MS = 90 * 1000;
-const LOGIN_CHATS_COUNT = 200;
+// Как оба референса (max-account-api chatsCount 40, PyMax WebSyncPayload 40):
+// большее значение живьём не проверено, а отказ LOGIN стоил бы входа целиком.
+// Снимок чатов нужен только для участников диалога — есть запасной путь XOR.
+const LOGIN_CHATS_COUNT = 40;
+// Сколько своё push-сообщение ждёт отправок в пути в тот же чат.
+const INFLIGHT_WAIT_MS = 30 * 1000;
 const CONTACTS_CACHE_MAX = 20000;
 
 function defaultDeps() {
@@ -88,13 +95,15 @@ class MaxClient {
     this.ownSends = new Map();       // message.id → {deliveryId, ts}
     this.chatQueues = new Map();
     this.fileWaiters = new Map();    // fileId → resolve() ожидания NOTIF_ATTACH
+    this.inflight = new Map();       // chatId → Set промисов отправок, ещё не узнанных по ответу MSG_SEND
     this.cidPrev = 0;
     this.diag = { xor: 0, hello: 0 };
   }
 
   static dirsFor(config, id) {
     const base = path.join(config.DATA_DIR, `acc-${id}`);
-    return { max: path.join(base, 'max'), base };
+    const max = path.join(base, 'max');
+    return { max, base, session: path.join(max, SESSION_FILE) };
   }
   dirs() { return MaxClient.dirsFor(this.d.config, this.id); }
 
@@ -102,8 +111,27 @@ class MaxClient {
     fs.mkdirSync(this.dirs().max, { recursive: true });
     await this.d.repo.setAuth(this.id, 'starting');
     this.sess = this.d.session.load(this.dirs().max);
-    await this.connect();
+    try { await this.connect(); }
+    catch (e) {
+      // registry.startAllActive зовёт start() один раз при старте процесса: сдайся
+      // клиент здесь (сеть, MAX недоступен) — аккаунт не поднялся бы до следующего
+      // рестарта шлюза. Поэтому — фоновый реконнект, как после обрыва.
+      this.lastAuthError = e.message;
+      this.log.error(`подключение не удалось: ${e.message} — переподключаемся в фоне`);
+      this.d.repo.setAuth(this.id, this.authState, { error: e.message }).catch(() => {});
+      this.reconnect().catch(err => this.log.error(`реконнект: ${err.message}`));
+    }
     this.log.info('клиент запущен');
+  }
+
+  // Слушатели снятого транспорта убираем (его события не должны трогать клиента),
+  // но 'error' глушим заглушкой: EventEmitter без слушателя бросил бы исключение
+  // на позднем событии сокета и уронил процесс вместе с Telegram/WhatsApp.
+  static retire(t) {
+    if (!t) return;
+    t.removeAllListeners();
+    t.on('error', () => {});
+    try { t.close(); } catch (_) { /* уже закрыт */ }
   }
 
   // ── Соединение ───────────────────────────────────────────────
@@ -112,7 +140,7 @@ class MaxClient {
     const t = new this.d.Transport({ url: this.d.config.MAX_WS_URL || DEFAULT_WS_URL, requestTimeoutMs: this.d.config.MAX_REQUEST_TIMEOUT_MS });
     const old = this.transport;
     this.transport = t;
-    if (old) { old.removeAllListeners(); try { old.close(); } catch (_) { /* уже закрыт */ } }
+    MaxClient.retire(old);
     t.on('push', (f) => { if (this.transport === t) this.onPush(f).catch(e => this.log.error(`push op ${f && f.opcode}: ${e.message}`)); });
     t.on('close', (code, reason) => { if (this.transport === t) this.onClose(code, reason).catch(e => this.log.error(`close: ${e.message}`)); });
     t.on('error', (e) => this.log.warn(`транспорт: ${e.message}`));
@@ -186,7 +214,13 @@ class MaxClient {
     if (++this.qrRounds > MAX_QR_ROUNDS) { await this.fail(QR_ABANDONED_ERROR, { stop: true }); return; }
     let r;
     try { r = await this.transport.request(Op.QR_START); }
-    catch (e) { this.log.warn(`QR_START: ${e.message}`); return; }     // обрыв → onClose → реконнект → новый раунд
+    catch (e) {
+      if (e.code === 'transport_closed') { this.log.warn(`QR_START: ${e.message}`); return; }   // обрыв → onClose → реконнект → новый раунд
+      // Сервер отверг выдачу QR (лимит, устаревший клиент, молчание) — ждать нечего:
+      // ошибка в админку, «Запустить заново» начнёт с начала.
+      await this.fail(`QR_START: ${e.message}`, { stop: true });
+      return;
+    }
     if (!r || !r.trackId || !r.qrLink) { await this.fail('QR_START: ответ без trackId/qrLink', { stop: false }); return; }
     const track = {
       trackId: r.trackId,
@@ -234,7 +268,13 @@ class MaxClient {
       this.sess.loginToken = String(token);
       this.saveSession();
       this.sms = null; this.passwordTrackId = null; this.passwordHint = null; this.qr = null; this.qrTrack = null;
-      await this.login();
+      try { await this.login(); }
+      catch (e) {
+        // Токен уже выдан и сохранён: повторять QR/код бессмысленно — переподключаемся
+        // и входим по токену (тот же путь, что после рестарта шлюза).
+        this.log.warn(`LOGIN после входа не прошёл (${e.message}) — переподключаемся с сохранённым токеном`);
+        this.reconnect().catch(err => this.log.error(`реконнект: ${err.message}`));
+      }
       return;
     }
     const ch = res && res.passwordChallenge;
@@ -309,7 +349,15 @@ class MaxClient {
     Object.assign(this.sess, { ownerId: this.ownerId, phone: this.ownPhone, displayName: this.displayName });
     this.saveSession();
     for (const c of (r && r.chats) || []) if (c && c.id !== undefined && c.id !== null) this.chats.set(Number(c.id), c);
-    for (const c of (r && r.contacts) || []) this.rememberContactInfo(c);
+    // Контакты LOGIN — одной пачкой: при первом входе их сотни, запрос на каждый
+    // на каждом рестарте шлюза был бы лишней нагрузкой на БД.
+    const pairs = [];
+    for (const c of (r && r.contacts) || []) {
+      const prevPhone = c && c.id !== undefined && c.id !== null ? (this.contacts.get(Number(c.id)) || {}).phone : undefined;
+      const info = this.rememberContactInfo(c, { persist: false });
+      if (info && info.phone && info.phone !== prevPhone && info.id !== this.ownerId) pairs.push({ phone: info.phone, userId: String(info.id) });
+    }
+    if (pairs.length) this.d.repo.rememberContacts(this.id, pairs).catch(e => this.log.warn(`rememberContacts: ${e.message}`));
     this.connected = true;
     this.qr = null; this.qrTrack = null; this.reconnects = 0; this.qrRounds = 0;
     await this.setState('ready', { error: null, phone: this.ownPhone, displayName: this.displayName });
@@ -331,7 +379,7 @@ class MaxClient {
 
   // Контакт из LOGIN/CONTACT_INFO/NOTIF_PROFILE → кэш и gateway_contacts (номер виден
   // не всегда — приватность; свой номер не пишем).
-  rememberContactInfo(c) {
+  rememberContactInfo(c, { persist = true } = {}) {
     if (!c || c.id === undefined || c.id === null) return null;
     const id = Number(c.id);
     const phone = c.phone !== undefined && c.phone !== null && c.phone !== '' ? normalizePhone(String(c.phone)) : null;
@@ -341,7 +389,7 @@ class MaxClient {
     const info = { id, phone: phone || prev.phone || null, name: name || prev.name || null };
     if (!this.contacts.has(id) && this.contacts.size >= CONTACTS_CACHE_MAX) this.contacts.delete(this.contacts.keys().next().value);
     this.contacts.set(id, info);
-    if (phone && phone !== prev.phone && id !== this.ownerId) {
+    if (persist && phone && phone !== prev.phone && id !== this.ownerId) {
       this.d.repo.rememberContact(this.id, phone, String(id)).catch(e => this.log.warn(`rememberContact: ${e.message}`));
     }
     return info;
@@ -381,15 +429,32 @@ class MaxClient {
   async onMessage(chatId, message) {
     if (!this.connected || this.ownerId === null || !message) return;
     const id = String(message.id);
-    this.pruneOwnSends();
-    if (this.ownSends.has(id)) return;                     // наша отправка — эхо уже синтезировано
     if (chatId === 0) return;                              // «Избранное» (чат с собой)
     const chat = this.chats.get(chatId) || null;
     if (mapper.isChannel(chat)) return;                    // каналы не форвардим (как рассылки WhatsApp)
     if (!mapper.contentOf(message)) return;                // служебное / правка / пусто
     const ts = mapper.tsSeconds(message.time);
     if (ts && Math.floor(this.d.now() / 1000) - ts > MAX_MESSAGE_AGE_S) return;
+    this.pruneOwnSends();
+    if (this.ownSends.has(id)) return;                     // наша отправка — эхо уже синтезировано
+    if (Number(message.sender) === this.ownerId && this.inflight.has(chatId)) {
+      // Сервер может разослать нашу отправку всем сессиям РАНЬШЕ, чем ответит на
+      // MSG_SEND. Без ожидания она ушла бы в бэкенд «набранной на телефоне» (без
+      // delivery_id), а журнал авторства ещё мог не лечь → ложная пауза Милы на её же
+      // реплике. Ждём отправки в этот чат (не дольше INFLIGHT_WAIT_MS) и сверяемся снова.
+      await this.waitInflight(chatId);
+      if (this.ownSends.has(id)) return;
+    }
     await this.emitMessage(chatId, message, null);
+  }
+
+  async waitInflight(chatId) {
+    const set = this.inflight.get(chatId);
+    if (!set || !set.size) return;
+    let timer;
+    const timeout = new Promise(r => { timer = setTimeout(r, this.d.inflightWaitMs || INFLIGHT_WAIT_MS); });
+    try { await Promise.race([Promise.allSettled([...set]), timeout]); }
+    finally { clearTimeout(timer); }
   }
 
   // Общий путь входящих и синтезированного эха своей отправки.
@@ -460,7 +525,11 @@ class MaxClient {
     if (!url) throw new Error('нет ссылки на файл');
     const { buf, mimeType: headerMime } = await this.d.media.download(url, { http: this.d.http, maxBytes: max, timeoutMs: MEDIA_DOWNLOAD_TIMEOUT_MS });
     const declared = media.mimeType && media.mimeType !== 'application/octet-stream' ? media.mimeType : null;
-    const mimeType = (media.kind === 'FILE' && declared) ? declared : (headerMime || declared || media.mimeType);
+    let mimeType;
+    // Фото — по сигнатуре: Content-Type CDN живьём не проверен, а octet-stream дал бы .bin.
+    if (media.kind === 'PHOTO') mimeType = sniffImageMime(buf) || (/^image\//i.test(headerMime || '') ? headerMime : 'image/jpeg');
+    else if (media.kind === 'FILE') mimeType = declared || headerMime || media.mimeType;
+    else mimeType = headerMime || declared || media.mimeType;
     const dir = path.join(this.d.config.PUBLIC_FILES_DIR, String(this.id));
     fs.mkdirSync(dir, { recursive: true });
     const name = publicFileName(mimeType, this.d.now());
@@ -514,8 +583,23 @@ class MaxClient {
       const n = Number(maxUserId);
       if (!Number.isInteger(n) || n === 0) throw httpError(`некорректный max_user_id ${maxUserId}`, 422);
       if (n < 0) return { chatId: n, peerId: null, phone: p };
+      if (p) {
+        // Защита от отправки не тому человеку: max_user_id приходит из chat_id диалога
+        // (в т.ч. эпохи Chatpush). Видимый номер контакта, не совпадающий с номером
+        // диалога, значит, что id указывает на другого человека — источник правды
+        // номер. Номер скрыт приватностью — доверяем id, как это делал Chatpush.
+        const c = await this.resolveContact(n);
+        if (c && c.phone && c.phone !== p) {
+          this.log.warn(`max_user_id ${n}: номер контакта ${c.phone} не совпадает с номером диалога ${p} — отправляем по номеру`);
+          return this.resolveByPhone(p);
+        }
+      }
       return { chatId: mapper.xorId(this.ownerId, n), peerId: n, phone: p };
     }
+    return this.resolveByPhone(p);
+  }
+
+  async resolveByPhone(p) {
     if (!p) throw httpError('нет получателя: ни max_user_id, ни phone', 422);
     let userId = null;
     for (const c of this.contacts.values()) if (c.phone === p) { userId = c.id; break; }
@@ -581,6 +665,9 @@ class MaxClient {
       await ready;
       attaches = [{ _type: 'FILE', fileId: info.fileId }];
     }
+    // Пока грузили файл, соединение могло упасть или клиент закрыться: проверяем ДО
+    // создания доставки — ничего не ушло, 422 оставляет каскаду другой канал.
+    this.requireReady();
     const deliveryId = await this.d.deliveries.create({ accountId: this.id, chatId, phone: p, kind: 'file', text: caption || fileName });
     await this.invokeSend(chatId, { text: caption || '', cid: this.nextCid(), elements: [], attaches }, deliveryId);
     return deliveryId;
@@ -604,6 +691,19 @@ class MaxClient {
   cancelFileWait(fileId) { const w = this.fileWaiters.get(String(fileId)); if (w) w(); }
 
   async invokeSend(chatId, message, deliveryId) {
+    let done;
+    const settled = new Promise(r => { done = r; });
+    if (!this.inflight.has(chatId)) this.inflight.set(chatId, new Set());
+    this.inflight.get(chatId).add(settled);
+    try { await this.sendAndEcho(chatId, message, deliveryId, done); }
+    finally {
+      done();
+      const set = this.inflight.get(chatId);
+      if (set) { set.delete(settled); if (!set.size) this.inflight.delete(chatId); }
+    }
+  }
+
+  async sendAndEcho(chatId, message, deliveryId, markKnown) {
     let res;
     for (let attempt = 0; ; attempt++) {
       try { res = await this.transport.request(Op.MSG_SEND, { chatId, message, notify: true }); break; }
@@ -611,9 +711,9 @@ class MaxClient {
         if (e.code === 'attachment.not.ready' && attempt === 0) { await this.d.sleep(ATTACH_RETRY_MS); continue; }
         try { await this.d.deliveries.setStatus(deliveryId, this.d.deliveries.STATUS.FAILED, { error: e.message }); }
         catch (e2) { this.log.error(`delivery g${deliveryId}: статус FAILED не записан (${e2.message})`); }
-        // Таймаут/обрыв — исход неизвестен (503: transport НЕ уйдёт на другой канал);
-        // отказ сервера — ничего не ушло (422/429).
-        const unknown = e.code === 'timeout' || e.code === 'transport_closed';
+        // Таймаут/обрыв после отправки кадра — исход неизвестен (503: transport НЕ уйдёт
+        // на другой канал); кадр не уходил (sent:false) или сервер отказал — 422/429.
+        const unknown = e.code === 'timeout' || (e.code === 'transport_closed' && e.sent !== false);
         const rate = /rate|limit|too\.?many|flood/i.test(String(e.code || e.message));
         throw httpError(`MAX: ${e.message}`, unknown ? 503 : (rate ? 429 : 422));
       }
@@ -623,6 +723,7 @@ class MaxClient {
     if (msgId) {
       this.pruneOwnSends();
       this.ownSends.set(msgId, { deliveryId, ts: this.d.now() });
+      markKnown();   // push этого id теперь узнаётся по ownSends — ждущий onMessage может сверяться
       try { await this.d.deliveries.setProviderMessageId(deliveryId, msgId); }
       catch (e) { this.log.warn(`delivery g${deliveryId}: provider_message_id не записан (${e.message})`); }
     }
@@ -650,10 +751,10 @@ class MaxClient {
     this.qrTrack = null;
     const t = this.transport;
     this.transport = null;
-    if (t) { t.removeAllListeners(); try { t.close(); } catch (_) { /* уже закрыт */ } }
+    MaxClient.retire(t);
     for (const w of this.fileWaiters.values()) w();
     this.ownSends.clear();
   }
 }
 
-module.exports = { MaxClient, MAX_MESSAGE_AGE_S, RECONNECT_MS, MAX_QR_ROUNDS, QR_ABANDONED_ERROR, FILE_READY_TIMEOUT_MS, ATTACH_RETRY_MS, MEDIA_DOWNLOAD_TIMEOUT_MS, LOGIN_CHATS_COUNT };
+module.exports = { MaxClient, MAX_MESSAGE_AGE_S, RECONNECT_MS, MAX_QR_ROUNDS, QR_ABANDONED_ERROR, FILE_READY_TIMEOUT_MS, ATTACH_RETRY_MS, MEDIA_DOWNLOAD_TIMEOUT_MS, LOGIN_CHATS_COUNT, INFLIGHT_WAIT_MS };
