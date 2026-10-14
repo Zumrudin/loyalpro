@@ -44,6 +44,10 @@ const BATCH = 10;
 const CHECK_DELAY_S = 120;
 const UNDELIVERABLE_STATUS_ID = 5;
 const REVIEW_REPEAT_DAYS = 30;
+// Опоздание строки (now − scheduled_at), после которого письмо уже не отправляется: после простоя
+// процесса или режима off копится очередь, и «Вы записаны…» двухдневной давности хуже молчания.
+// Простой короче порога работе не мешает. visit_reminder меряется по визиту, а не по этому порогу.
+const MAX_LATENESS_MS = 12 * 3600 * 1000;
 const uploadsDir = path.join(__dirname, '../../../frontend/uploads');
 const MIME = { '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.webp': 'image/webp', '.pdf': 'application/pdf' };
 const EMPTY_CONV = Object.freeze({ lastChannel: null, chats: {} });
@@ -118,11 +122,26 @@ async function releaseLease(job) {
  *    он ставится при создании записи и уходит сразу.
  *  • visit_review/visit_after: нужен attendance=1.
  *  • Любое: клиент в чёрном списке; visit_review/first_visit — «раз на телефон» (ONCE_PER_PHONE).
- * Тестовая отправка (meta.test) не проверяется вовсе.
+ *  • Давность (проверяется первой, до обращений к БД): напоминание теряет смысл, когда визит уже
+ *    начался (job.visit_datetime <= now); остальные типы — когда строка опоздала больше чем на
+ *    MAX_LATENESS_MS (now − scheduled_at). Продолжение каскада после «Невозможно доставить»
+ *    не устаревает: сверка ставит scheduled_at = сейчас.
+ * Тестовая отправка (meta.test) не проверяется вовсе — ни по записи, ни по давности.
  */
 async function staleReason(job) {
   if (job.meta && job.meta.test) return null;
   const t = job.trigger_type;
+
+  const now = Date.now();
+  if (t === 'visit_reminder') {
+    // Нет момента визита / он не разобрался (NaN) — «уже начался» не выдумываем.
+    const visitMs = job.visit_datetime ? new Date(job.visit_datetime).getTime() : NaN;
+    if (visitMs <= now) return 'визит уже начался';
+  } else {
+    const dueMs = job.scheduled_at ? new Date(job.scheduled_at).getTime() : NaN;
+    if (now - dueMs > MAX_LATENESS_MS) return `устарело: опоздание ${Math.floor((now - dueMs) / 3600000)} ч`;
+  }
+
   const st = await db.oneOrNone(
     'SELECT visit_datetime, attendance, deleted FROM notification_record_state WHERE salon_id=$1 AND yclients_record_id=$2',
     [job.salon_id, job.yclients_record_id]);
@@ -380,4 +399,4 @@ function startNotificationWorker() {
   log.info(`Notification worker started (tick=${TICK_MS}ms)`);
 }
 
-module.exports = { processTick, processOne, checkDeliveries, startNotificationWorker, LEASE_SQL, CHECK_SQL, staleReason };
+module.exports = { processTick, processOne, checkDeliveries, startNotificationWorker, LEASE_SQL, CHECK_SQL, staleReason, MAX_LATENESS_MS };

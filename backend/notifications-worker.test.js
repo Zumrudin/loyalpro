@@ -43,8 +43,10 @@ const worker = require('./services/notifications/worker');
 const DAY = 24 * 3600 * 1000;
 // Визит — в будущем относительно НАСТОЯЩЕГО времени (дата в тесте не должна протухнуть).
 const VISIT = new Date(Date.now() + 7 * DAY);
+const HOUR = 3600 * 1000;
+const ago = (ms) => new Date(Date.now() - ms);
 const job = (over = {}) => ({ id: 1, salon_id: 1, rule_id: 1, trigger_type: 'record_created', yclients_record_id: 100,
-  visit_datetime: VISIT, phone: '79200255591', rendered_text: 'Текст',
+  visit_datetime: VISIT, scheduled_at: ago(5000), phone: '79200255591', rendered_text: 'Текст',
   attachment_url: null, attempts: 1, meta: {}, cascade_pos: 0, routing: null, ...over });
 const state = (over = {}) => ({ visit_datetime: VISIT, attendance: 0, deleted: false, ...over });
 const rej = (msg) => Object.assign(new Error(msg), { status: 422 });
@@ -476,6 +478,122 @@ describe('перепроверка состояния записи перед о
       await worker.processTick();
       expect(db.oneOrNone.mock.calls.some(([sql]) => /FROM notification_jobs/.test(sql))).toBe(false);
       expect(calls()).toEqual(['tdlib']);
+    });
+  });
+});
+
+describe('устаревшее после простоя процесса', () => {
+  const { MAX_LATENESS_MS } = worker;
+  // Состояние записи, при котором письмо ПО ЗАПИСИ ушло бы: отменить его может только давность.
+  const goodState = (type) => state({ attendance: type === 'record_cancelled' ? -1 : (type === 'visit_review' || type === 'visit_after' ? 1 : 0) });
+  const OTHER_TYPES = ['record_created', 'record_rescheduled', 'record_cancelled', 'visit_review', 'visit_after', 'first_visit'];
+
+  test('порог — 12 часов, константа экспортируется (границы в тестах выражены через неё)', () => {
+    expect(MAX_LATENESS_MS).toBe(12 * HOUR);
+  });
+
+  describe('visit_reminder: гасит не давность строки, а наступивший визит', () => {
+    test('визит начался минуту назад → cancelled «визит уже начался», без отправки', async () => {
+      const visit = ago(60 * 1000);
+      setup({ jobs: [job({ trigger_type: 'visit_reminder', visit_datetime: visit, scheduled_at: ago(2 * HOUR) })], st: state({ visit_datetime: visit }) });
+      await worker.processTick();
+      expect(transport.sendMessage).not.toHaveBeenCalled();
+      expect(wasCancelled(/^визит уже начался$/)).toBe(true);
+      expect(updates(/SET status='sent', sent_at/)).toHaveLength(0);   // даже не захватывали
+    });
+
+    test('визит давно позади (после простоя в несколько суток) → cancelled «визит уже начался»', async () => {
+      const visit = ago(3 * 24 * HOUR);
+      setup({ jobs: [job({ trigger_type: 'visit_reminder', visit_datetime: visit, scheduled_at: ago(4 * 24 * HOUR) })], st: state({ visit_datetime: visit }) });
+      await worker.processTick();
+      expect(transport.sendMessage).not.toHaveBeenCalled();
+      expect(wasCancelled(/^визит уже начался$/)).toBe(true);
+    });
+
+    test('до визита ещё минута → напоминание уходит', async () => {
+      const visit = new Date(Date.now() + 60 * 1000);
+      setup({ jobs: [job({ trigger_type: 'visit_reminder', visit_datetime: visit, scheduled_at: ago(10 * 1000) })], st: state({ visit_datetime: visit }) });
+      await worker.processTick();
+      expect(calls()).toEqual(['tdlib']);
+    });
+
+    test('строка просрочена на 30 ч, но визит впереди → уходит (правило опоздания к напоминанию не применяется)', async () => {
+      const visit = new Date(Date.now() + 3 * HOUR);
+      setup({ jobs: [job({ trigger_type: 'visit_reminder', visit_datetime: visit, scheduled_at: ago(30 * HOUR) })], st: state({ visit_datetime: visit }) });
+      await worker.processTick();
+      expect(calls()).toEqual(['tdlib']);
+      expect(wasCancelled()).toBe(false);
+    });
+
+    test('у строки нет момента визита → «визит уже начался» не выдумывается', async () => {
+      setup({ jobs: [job({ trigger_type: 'visit_reminder', visit_datetime: null })], st: state({ visit_datetime: null }) });
+      await worker.processTick();
+      expect(calls()).toEqual(['tdlib']);
+    });
+  });
+
+  describe('остальные типы: опоздание больше 12 ч → «устарело»', () => {
+    test.each(OTHER_TYPES)('%s: опоздание 12 ч 5 мин → cancelled «устарело: опоздание 12 ч», без отправки', async (type) => {
+      setup({ jobs: [job({ trigger_type: type, scheduled_at: ago(MAX_LATENESS_MS + 5 * 60 * 1000) })], st: goodState(type) });
+      await worker.processTick();
+      expect(transport.sendMessage).not.toHaveBeenCalled();
+      expect(wasCancelled(/^устарело: опоздание 12 ч$/)).toBe(true);
+      expect(updates(/SET status='sent', sent_at/)).toHaveLength(0);
+    });
+
+    test.each(OTHER_TYPES)('%s: опоздание 11 ч 55 мин (простой короче порога) → уходит', async (type) => {
+      setup({ jobs: [job({ trigger_type: type, scheduled_at: ago(MAX_LATENESS_MS - 5 * 60 * 1000) })], st: goodState(type) });
+      await worker.processTick();
+      expect(calls()).toEqual(['tdlib']);
+      expect(wasCancelled()).toBe(false);
+    });
+
+    test('число часов в причине — настоящее опоздание (двое суток → «опоздание 50 ч»)', async () => {
+      setup({ jobs: [job({ scheduled_at: ago(50 * HOUR + 10 * 60 * 1000) })] });
+      await worker.processTick();
+      expect(wasCancelled(/^устарело: опоздание 50 ч$/)).toBe(true);
+    });
+
+    test('shadow: устаревшая строка тоже cancelled, а не shadow (теневой журнал не врёт про «отправили бы»)', async () => {
+      setup({ jobs: [job({ scheduled_at: ago(MAX_LATENESS_MS + 60 * 60 * 1000) })], mode: 'shadow' });
+      await worker.processTick();
+      expect(wasCancelled(/^устарело: опоздание 13 ч$/)).toBe(true);
+      expect(statusUpdates().some((p) => p[1] === 'shadow')).toBe(false);
+    });
+
+    test('off: устаревшую строку не трогаем (режим off ничего не решает, попытка возвращается)', async () => {
+      setup({ jobs: [job({ id: 3, scheduled_at: ago(3 * 24 * HOUR) })], mode: 'off' });
+      await worker.processTick();
+      expect(statusUpdates()).toHaveLength(0);
+      expect(db.query.mock.calls.filter(([sql]) => /GREATEST\(attempts-1,0\)/.test(sql)).map(([, p]) => p)).toEqual([[3]]);
+    });
+
+    test('строка без scheduled_at устаревшей не считается (нечем мерить — не гасим)', async () => {
+      setup({ jobs: [job({ scheduled_at: null })] });
+      await worker.processTick();
+      expect(calls()).toEqual(['tdlib']);
+    });
+
+    test('продолжение каскада после «Невозможно доставить» не устаревает (сверка ставит scheduled_at = сейчас)', async () => {
+      setup({ jobs: [job({ cascade_pos: 1, routing: ['max', 'tdlib'], scheduled_at: ago(1000) })] });
+      await worker.processTick();
+      expect(calls()).toEqual(['tdlib']);
+    });
+  });
+
+  describe('тестовая отправка (meta.test) — исключение из обоих правил', () => {
+    test('опоздание трое суток → уходит', async () => {
+      setup({ jobs: [job({ trigger_type: 'visit_review', yclients_record_id: 0, visit_datetime: null, meta: { test: true }, scheduled_at: ago(3 * 24 * HOUR) })] });
+      await worker.processTick();
+      expect(calls()).toEqual(['tdlib']);
+      expect(wasCancelled()).toBe(false);
+    });
+
+    test('напоминание с визитом в прошлом → уходит', async () => {
+      setup({ jobs: [job({ trigger_type: 'visit_reminder', yclients_record_id: 0, visit_datetime: ago(2 * HOUR), meta: { test: true } })] });
+      await worker.processTick();
+      expect(calls()).toEqual(['tdlib']);
+      expect(wasCancelled()).toBe(false);
     });
   });
 });
