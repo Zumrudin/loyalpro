@@ -4,11 +4,14 @@
 // карта услуга → категория, последний входящий канал клиента.
 // Переезд из services/notifications.js (v1) БЕЗ изменений поведения — этим
 // пользуются «Забота», напоминания и followup Милы через фасад.
+// Новое здесь одно — lastConversation (адресаты каскада мессенджеров, cascade.js).
 // Фасад из этой папки НЕ импортируем: он сам импортирует нас (цикл).
 // ============================================================
 const { db } = require('../../db');
 const chatpush = require('../chatpush');
 const { ycGet } = require('../yclients');
+const { canonPhone } = require('./cascade');
+const { isGroupChatId } = require('../agent/group-chat');
 
 // Значения dispatch_routing Chatpush, которые разрешаем в правиле.
 const ALLOWED_CHANNELS = ['telegram', 'whatsapp', 'tdlib', 'max', 'max_bot', 'notify'];
@@ -100,11 +103,50 @@ async function lastIncomingChannel(salonId, phone) {
   return row ? chatpush.replyRoutingFor(row.channel) : null;
 }
 
+/**
+ * Что известно о переписке с клиентом: мессенджер, из которого он писал
+ * последним (только входящие — наши же уведомления не должны сами себя
+ * продвигать), и id личных чатов Telegram/MAX по этому номеру (адресация при
+ * скрытом номере). Номер ищется во всех формах, в которых он лежит в
+ * chatpush_messages.
+ *
+ * Группы в chats не попадают. SQL отсекает их ДО DISTINCT ON: иначе свежее
+ * сообщение участника в рабочей группе (там phone = номер УЧАСТНИКА) вытеснило
+ * бы его личный чат. Общий признак agent/group-chat.isGroupChatId — последнее
+ * слово: он шире SQL (WhatsApp-jid @g.us/@broadcast), и своей копии правила тут
+ * нет. Индекс — idx_chatpush_messages_dialog (salon_id, phone, msg_ts DESC).
+ */
+async function lastConversation(salonId, phone) {
+  const canon = canonPhone(phone);
+  if (!canon) return { lastChannel: null, chats: {} };
+  const p10 = canon.slice(1);
+  const forms = ['7' + p10, '+7' + p10, '8' + p10, p10];
+  const rows = await db.any(
+    `SELECT DISTINCT ON (channel) channel, chat_id
+       FROM chatpush_messages
+      WHERE salon_id = $1 AND phone = ANY($2)
+        AND channel IN ('tdlib','max') AND COALESCE(chat_id,'') <> ''
+        AND chat_id NOT LIKE '-%' AND chat_id NOT LIKE 'g:%'
+      ORDER BY channel, msg_ts DESC NULLS LAST`,
+    [salonId, forms]);
+  const chats = {};
+  for (const r of rows) {
+    if (!isGroupChatId(r.chat_id)) chats[r.channel] = r.chat_id;
+  }
+  const last = await db.oneOrNone(
+    `SELECT channel FROM chatpush_messages
+      WHERE salon_id = $1 AND phone = ANY($2) AND direction = 'incoming'
+      ORDER BY msg_ts DESC NULLS LAST LIMIT 1`,
+    [salonId, forms]);
+  return { lastChannel: last ? chatpush.replyRoutingFor(last.channel) : null, chats };
+}
+
 module.exports = {
   evaluateRule,
   resolveRouting,
   ALLOWED_CHANNELS,
   getServiceCategoryMap,
   lastIncomingChannel,
+  lastConversation,
   splitVisitDatetime,
 };
