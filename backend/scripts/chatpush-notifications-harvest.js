@@ -8,13 +8,16 @@
 //   --days — окно выборки (и для текстов, и для картинок);
 //   --min  — сколько раз текст должен встретиться, чтобы попасть в выгрузку (по умолчанию 3).
 //            Редкие автоответы (например, на низкую оценку — 2 раза за всю историю) требуют --min=2;
-//   --md   — куда писать СЫРУЮ выгрузку текстов (по умолчанию frontend/uploads/notify_seed/templates-raw.md).
+//   --md   — куда писать СЫРУЮ выгрузку текстов (по умолчанию <tmp>/chatpush-templates-raw.md, вне репозитория).
 //
-// ПОРЯДОК РАБОТЫ С md. Сырой md скрипт пишет в игнорируемый git путь: authored_by='system' — это не
-// только уведомления YClients/Chatpush, но и НАШИ исходящие (касания «Заботы» с именами пациентов,
-// реплики Милы, рассылки). Курированный docs/notifications/chatpush-templates-2026-10-13.md ведётся
-// ВРУЧНУЮ: из сырого файла в него переносят только служебные уведомления; имён пациентов в репозитории
-// быть не должно. Скрипт этот файл не пишет и отказывается писать в него через --md.
+// ПОРЯДОК РАБОТЫ С md. В сырой выгрузке (authored_by='system') не только уведомления YClients/Chatpush,
+// но и НАШИ исходящие: касания «Заботы» с именами пациентов, реплики Милы, рассылки. Поэтому скрипт
+// пишет её вне репозитория, а не в docs/ и не во frontend/: frontend/ целиком раздаётся сервером
+// статикой без авторизации (templates-raw.md в frontend/uploads/notify_seed отдавался по HTTP 200), так что
+// даже игнорируемый git файл там — утечка имён; путь внутри frontend/ скрипт отвергает. Курированный
+// docs/notifications/chatpush-templates-2026-10-13.md ведётся ВРУЧНУЮ: из сырого файла в него переносят
+// только служебные уведомления; имён пациентов в репозитории быть не должно. Скрипт этот файл не пишет
+// и отказывается писать в него через --md.
 //
 // КАРТИНКИ. Ссылки берутся из двух источников: chatpush_messages и сырых событий chatpush_events
 // (исходящие, file_data.caption «Рекомендации после…»). Второй обязателен: когда канал переехал на
@@ -29,6 +32,7 @@
 // (записи, которых в этот раз не видно, не теряются), скачанное проверяется по сигнатуре
 // (JPEG/PNG/WEBP), иначе WARN и файл не сохраняется.
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const axios = require('axios');
 const { db, pool } = require('../db');
@@ -53,8 +57,10 @@ const minCount = intArg('min', 3);
 const outDir = path.join(__dirname, '../../frontend/uploads/notify_seed');
 const curatedDoc = path.join(__dirname, '../../docs/notifications/chatpush-templates-2026-10-13.md');
 if (args.md !== undefined && (typeof args.md !== 'string' || !args.md)) fail('--md требует путь: --md=<файл>');
-const mdPath = args.md ? path.resolve(args.md) : path.join(outDir, 'templates-raw.md');
+const mdPath = args.md ? path.resolve(args.md) : path.join(os.tmpdir(), 'chatpush-templates-raw.md');
+const webRoot = path.resolve(__dirname, '../../frontend');   // раздаётся express.static без авторизации
 if (mdPath === path.resolve(curatedDoc)) fail('--md не может указывать на курированный docs/notifications/chatpush-templates-2026-10-13.md: он ведётся вручную');
+if (mdPath === webRoot || mdPath.startsWith(webRoot + path.sep)) fail('--md не может лежать в frontend/: каталог раздаётся сервером статикой без авторизации, а в сыром md имена пациентов');
 const manifestPath = path.join(outDir, 'manifest.json');
 
 function slug(s) { return String(s).replace(/[^\p{L}\p{N}._-]+/gu, '_').slice(0, 80); }
