@@ -3981,6 +3981,30 @@ describe('медицинский вопрос — база знаний пред
     expect(systemOf(deps, 1)).toContain(HEAD);
   });
 
+  test('перегенерация с ДРУГИМ вопросом → блок пересобран по новому запросу', async () => {
+    const Q2 = 'А лазерная эпиляция при ГВ можно?';
+    const bio = medicalSearchResult(['bio0']);
+    const laser = medicalSearchResult(['laser']);
+    const { deps, kbHandler } = medDeps('Кормлю грудью, можно мне био?', bio);
+    kbHandler.mockImplementation(async (_s, input) => (/лазер/i.test(input.query) ? laser : bio));
+    let loads = 0;
+    deps.history.loadTranscript = jest.fn(async () => ({ watermark: 900, messages: [
+      { role: 'user', content: ++loads === 1 ? 'Кормлю грудью, можно мне био?' : Q2 },
+    ] }));
+    let checks = 0;
+    deps.history.hasIncomingAfter = jest.fn(async () => (++checks === 1));
+    deps.provider.createMessage.mockReset();
+    deps.provider.createMessage.mockResolvedValueOnce(textResp('Первый')).mockResolvedValueOnce(textResp('Второй'));
+    await orchestrator.runDialog(1, 'k', { deps });
+    expect(kbHandler).toHaveBeenCalledTimes(2);
+    expect(kbHandler.mock.calls[1][1].query).toBe(Q2);
+    const first = systemOf(deps, 0).slice(systemOf(deps, 0).indexOf(HEAD));
+    const second = systemOf(deps, 1).slice(systemOf(deps, 1).indexOf(HEAD));
+    expect(first).toContain('Биоревитализация и Мезотерапия');
+    expect(second).toContain('Лазерная эпиляция');
+    expect(second).not.toContain('курс из 3–5 процедур');
+  });
+
   test('адрес из статьи сведений — законный источник address-guard', async () => {
     const kb = medicalSearchResult(['bio0']);
     kb.context += '\n\nБиоревитализация и Мезотерапия\nАдрес: ул. Генерала Белова, 28 к. 3.';
