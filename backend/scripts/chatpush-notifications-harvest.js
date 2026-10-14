@@ -230,7 +230,7 @@ function loadManifest() {
     lines.push('', '### Не получены (подписанная ссылка протухла или недоступна)', '',
       ...missing.map((m) => `- ${m.file} — ${m.sends} отправок; ${m.why}`));
   }
-  fs.writeFileSync(mdPath, lines.join('\n') + '\n');
+  fs.writeFileSync(mdPath, lines.join('\n') + '\n', { mode: 0o600 });   // в сыром md имена пациентов
   console.log(`templates: ${templates.length}; photos: saved ${saved.length}, already had ${have.length}, missing ${missing.length}, пропущено разовых файлов с именем-идентификатором: ${oneOff.size}; raw md → ${mdPath}`);
   await pool.end();
 })().catch((e) => { console.error(e); process.exit(1); });
