@@ -1,0 +1,238 @@
+'use strict';
+// ============================================================
+// Ответы пациентов на НАШИ уведомления — без LLM и ДО Милы:
+//  • чистое подтверждение («Подтверждаю», «+», «Буду») после напоминания → YClients attendance=2
+//    («Подтвердил») + отбивка;
+//  • чистая цифра 2–5 после опроса → visit_ratings + текст по полосе (5 / 4 / 2–3);
+//    2–3 → диалог на администратора ТЕМ ЖЕ инструментом escalate_to_operator, что у Милы
+//    (agent_dialogs + каскад «Заботы» + agent_events + SSE + гашение напоминания Милы о себе).
+//
+// Условие ДВУХЧАСТНОЕ (как в visit-rating.js): последнее исходящее диалога — авторства system и по
+// тексту именно напоминание/опрос, И есть наш sent-job этого типа по телефону. Одного автора мало:
+// под 'system' идут и «Вы записаны на прием…», и касания «Заботы». Иначе → { handled:false }, ход
+// уходит Миле как раньше.
+//
+// Работает ТОЛЬКО в режиме live: в shadow/off ответы ведёт Chatpush, и наша отбивка легла бы
+// поверх его отбивки. Неизвестное значение режима — НЕ live (fail-closed). Салон без строки
+// notification_settings получает дефолты (режим off), поэтому на деве, куда приходят настоящие
+// сообщения пациентов, модуль ничего не делает, пока режим не включён вручную.
+//
+// ИДЕМПОТЕНТНОСТЬ. Пациент может прислать «5» или «Подтверждаю» дважды подряд, а два вебхука —
+// идти параллельно. Поэтому job СНАЧАЛА захватывается атомарно (UPDATE … SET confirmed_at = NOW()
+// WHERE id = $1 AND confirmed_at IS NULL), и отвечает только захвативший: остальные получают
+// { handled:true, kind:'duplicate' } — молча, без отправки и без Милы (две отбивки подряд хуже
+// тишины). По той же причине поиск job'а НЕ фильтрует confirmed_at: иначе повтор после первого
+// ответа не нашёл бы job и ушёл Миле.
+//  • Подтверждение: захват → YClients. Отказ YClients → захват СНЯТ (следующее «Подтверждаю» снова
+//    дойдёт до YClients), ход Миле: она умеет свериться с записью и ответить.
+//  • Оценка: захват → visit_ratings → отбивка → перевод на администратора при 2–3. Не записалась
+//    оценка → захват снят, ход Миле (её детерминированная ветка ответит на цифру сама).
+//  • Отбивка — последний шаг: после неё ничего не бросает (запись в YClients/БД уже сделана,
+//    исключение отдало бы ход Миле, и пациент получил бы второй ответ).
+// ============================================================
+const { db } = require('../../db');
+const { createLogger } = require('../../logger');
+const settingsSvc = require('./settings');
+const history = require('../agent/history');
+const { isPureConfirmation, isReminder } = require('../agent/visit-confirmation');
+const { parseRating, isRatingSurvey } = require('../agent/visit-rating');
+const { updateAttendance } = require('../yclients-records');
+const transport = require('../messaging/transport');
+const { recipientParams } = require('../chat');
+const { normalizePhoneKey } = require('../agent-gate');
+const pendingReplies = require('../agent/pending-replies');
+const authorship = require('../outgoing-authorship');
+const { persistWhatsappOutgoing } = require('../chat-persist');
+const dialogState = require('../agent/dialog-state');
+const escalateTool = require('../agent/tools/escalate-to-operator');
+const groupChat = require('../agent/group-chat');
+
+const log = createLogger('NotifyReplies');
+const TEXT_TYPES = new Set(['text', 'formattedText']);
+const CONFIRM_WINDOW_H = 48;        // напоминание старше двух суток подтверждением не считается
+const RATING_WINDOW_H = 7 * 24;     // на опрос отвечают и через несколько дней
+const LOW_RATING_REASON = 'low_rating';
+const NOT_HANDLED = Object.freeze({ handled: false });
+const DUPLICATE = Object.freeze({ handled: true, kind: 'duplicate' });
+
+// Ключ диалога — как у вебхука и диспетчера: сырой номер, иначе chat_id.
+function dialogKeyOf(msg) {
+  return (msg.phone && String(msg.phone).trim()) || msg.chatId || null;
+}
+
+// В notification_jobs.phone лежит канон 7XXXXXXXXXX, а msg.phone приходит в форме мессенджера
+// ('89200255591', '+7…'): ищем по канону, а сырой номер оставляем адресату и ключу диалога.
+// Тестовые отправки правила (yclients_record_id = 0) не ищем: подтверждать в YClients нечего, а в
+// visit_ratings легла бы «оценка записи 0».
+async function lastJob(salonId, phoneKey, type, hours) {
+  return db.oneOrNone(
+    `SELECT id, yclients_record_id, client_id, visit_datetime, meta FROM notification_jobs
+      WHERE salon_id = $1 AND phone = $2 AND trigger_type = $3 AND status = 'sent'
+        AND yclients_record_id > 0
+        AND sent_at > NOW() - make_interval(hours => $4)
+      ORDER BY sent_at DESC LIMIT 1`,
+    [salonId, phoneKey, type, hours]);
+}
+
+/** Атомарный захват job'а. true — этот ответ первый; false — job уже обработан (повтор/параллельный вебхук). */
+async function claim(salonId, jobId) {
+  const r = await db.query(
+    'UPDATE notification_jobs SET confirmed_at = NOW() WHERE id = $1 AND salon_id = $2 AND confirmed_at IS NULL RETURNING id',
+    [jobId, salonId]);
+  return !!(r && r.rowCount > 0);
+}
+
+/** Снять свой захват: ответ не удалось обработать, job снова свободен для следующего. Не бросает. */
+async function unclaim(salonId, jobId) {
+  try {
+    await db.query('UPDATE notification_jobs SET confirmed_at = NULL WHERE id = $1 AND salon_id = $2', [jobId, salonId]);
+  } catch (e) {
+    log.error(`job ${jobId}: захват не снят (${e.message}) — следующий ответ пациента будет считаться повтором`);
+  }
+}
+
+/**
+ * Отбивка пациенту — в ТОТ мессенджер, где он написал, без каскада: адресат известен точно.
+ * Не бросает (см. шапку): сбой отправки уходит в лог.
+ */
+async function sendReply(salonId, msg, text) {
+  if (!text || !String(text).trim()) return;
+  const key = dialogKeyOf(msg);
+  try {
+    const rp = recipientParams(msg.channel, { phone: msg.phone, chat_id: msg.chatId });
+    if (!rp) throw new Error('нет адресата для ответа');
+    // Журнал авторства — ДО отправки: эхо шлюза может прийти раньше, чем вернётся sendMessage, и без
+    // записи выглядело бы ответом живого администратора (пауза Милы, инцидент 04.08).
+    try { await authorship.remember(salonId, key, text, 'system'); }
+    catch (e) { log.error(`authorship ${key}: ${e.message}`); }
+    const delivery = await transport.sendMessage(salonId, { ...rp, text, replyToMessageId: msg.messageId });
+    // Сообщение УЖЕ ушло: всё ниже best-effort и ничего не бросает.
+    try { pendingReplies.remember(salonId, key, text); }
+    catch (e) { log.error(`pending ${key}: ${e.message}`); }
+    if (msg.channel === 'whatsapp') {   // WhatsApp эха не шлёт — кладём в «Чат» сами
+      try {
+        await persistWhatsappOutgoing(salonId, { delivery, phone: msg.phone, chatId: msg.chatId, text, msgType: 'text', authoredBy: 'system' });
+      } catch (e) { log.error(`persist wa ${key}: ${e.message}`); }
+    }
+  } catch (e) {
+    log.error(`отбивка не ушла (${msg.channel}, ${key}): ${e.message}`);
+  }
+}
+
+/** Низкая оценка → диалог на администратора. Не бросает. */
+async function escalateToAdmin(salonId, key) {
+  try {
+    await dialogState.getOrCreate(salonId, key);   // UPDATE инструмента по несуществующей строке ничего бы не менял
+    await escalateTool.run(salonId, { reason: LOW_RATING_REASON }, { dialogKey: key });
+  } catch (e) {
+    log.error(`диалог ${key}: низкая оценка не переведена на администратора (${e.message})`);
+  }
+}
+
+/**
+ * Напоминание могло устареть, пока пациент собирался ответить. «Подтверждаю» на такое не должно ни
+ * подтверждать СТАРОЕ время, ни откатывать в YClients «Пришёл» до «Подтвердил»: отвечает Мила, у
+ * неё есть блок актуальных записей. Данных нет (момент визита не разобран, состояния записи нет —
+ * создана до выката) → не мешаем, «устарело» не выдумываем.
+ */
+async function staleReminder(salonId, job) {
+  const visitMs = job.visit_datetime ? new Date(job.visit_datetime).getTime() : NaN;
+  if (visitMs <= Date.now()) return 'визит уже начался';
+  const st = await db.oneOrNone(
+    'SELECT visit_datetime, attendance, deleted FROM notification_record_state WHERE salon_id = $1 AND yclients_record_id = $2',
+    [salonId, job.yclients_record_id]);
+  if (!st) return null;
+  if (st.deleted || Number(st.attendance) === -1) return 'запись отменена';
+  if (Number(st.attendance) === 1) return 'пациент уже отмечен как пришедший';
+  if (Number.isFinite(visitMs) && st.visit_datetime && new Date(st.visit_datetime).getTime() !== visitMs) return 'запись перенесена';
+  return null;
+}
+
+async function handleConfirmation(salonId, msg, cfg, phoneKey) {
+  const job = await lastJob(salonId, phoneKey, 'visit_reminder', CONFIRM_WINDOW_H);
+  if (!job || !(job.meta && job.meta.askConfirmation)) return NOT_HANDLED;
+  const stale = await staleReminder(salonId, job);
+  if (stale) {
+    log.info(`record ${job.yclients_record_id}: подтверждение на устаревшее напоминание (${stale}) — ход Миле`);
+    return NOT_HANDLED;
+  }
+  const salon = await db.oneOrNone('SELECT * FROM salons WHERE id = $1', [salonId]);
+  if (!salon) return NOT_HANDLED;
+  if (!(await claim(salonId, job.id))) {
+    log.info(`record ${job.yclients_record_id}: повторное подтверждение (${msg.channel}) — уже обработано, молчим`);
+    return DUPLICATE;
+  }
+  try {
+    await updateAttendance(salon, Number(job.yclients_record_id), 2);
+  } catch (e) {
+    await unclaim(salonId, job.id);
+    log.warn(`record ${job.yclients_record_id}: YClients не принял подтверждение (${e.message}) — ход Миле`);
+    return NOT_HANDLED;
+  }
+  log.info(`record ${job.yclients_record_id} подтверждён пациентом (${msg.channel})`);
+  await sendReply(salonId, msg, cfg.confirm_reply_text);
+  return { handled: true, kind: 'confirmed' };
+}
+
+async function handleRating(salonId, msg, rating, cfg, phoneKey) {
+  const job = await lastJob(salonId, phoneKey, 'visit_review', RATING_WINDOW_H);
+  if (!job) return NOT_HANDLED;
+  if (!(await claim(salonId, job.id))) {
+    log.info(`record ${job.yclients_record_id}: повторная оценка ${rating} (${msg.channel}) — уже обработано, молчим`);
+    return DUPLICATE;
+  }
+  try {
+    await db.query(
+      `INSERT INTO visit_ratings (salon_id, yclients_record_id, client_id, phone, rating, source_job_id)
+       VALUES ($1,$2,$3,$4,$5,$6)
+       ON CONFLICT (salon_id, yclients_record_id)
+       DO UPDATE SET rating = EXCLUDED.rating, source_job_id = EXCLUDED.source_job_id, created_at = NOW()`,
+      [salonId, Number(job.yclients_record_id), job.client_id || null, phoneKey, rating, job.id]);
+  } catch (e) {
+    await unclaim(salonId, job.id);
+    log.error(`record ${job.yclients_record_id}: оценка ${rating} не записалась (${e.message}) — ход Миле`);
+    return NOT_HANDLED;
+  }
+  // Полосы утверждены владельцем 14.10.2026: 5 — благодарность (со ссылками на отзывы),
+  // 4 — «что улучшить» без перевода, 2–3 — «что не устроило» и перевод на администратора.
+  const low = rating <= 3;
+  const escalating = low && !!cfg.rating_escalate_low;
+  const text = rating === 5 ? cfg.rating_high_text : rating === 4 ? cfg.rating_mid_text : cfg.rating_low_text;
+  log.info(`record ${job.yclients_record_id}: оценка ${rating}${low ? ` (низкая${escalating ? ' → администратор' : ''})` : ''}`);
+  await sendReply(salonId, msg, text);
+  if (escalating) await escalateToAdmin(salonId, dialogKeyOf(msg));
+  return { handled: true, kind: 'rating', rating };
+}
+
+/**
+ * msg — объект входящего из routes/chatpush-webhook.js (chatpush.parseMessageEvent).
+ * @returns {Promise<{handled:boolean, kind?:string, rating?:number}>} handled:true — ответ обработан
+ *   здесь, Милу ставить в очередь НЕ нужно; handled:false — ход Миле как обычно. Не бросает.
+ */
+async function handleIncoming(salonId, msg) {
+  try {
+    if (!salonId || !msg || msg.direction !== 'incoming' || !TEXT_TYPES.has(msg.type)) return NOT_HANDLED;
+    if (groupChat.isGroupMessage(msg)) return NOT_HANDLED;
+    const text = typeof msg.text === 'string' ? msg.text.trim() : '';
+    const phoneKey = normalizePhoneKey(msg.phone);
+    if (!text || !phoneKey) return NOT_HANDLED;
+    // Дешёвые чистые проверки — ДО любого обращения к БД: сюда попадает КАЖДОЕ входящее салона, а
+    // подтверждением или оценкой бывают единицы.
+    const confirming = isPureConfirmation(text);
+    const rating = confirming ? null : parseRating(text);
+    if (!confirming && rating == null) return NOT_HANDLED;
+    const cfg = await settingsSvc.getSettings(salonId);
+    if (!cfg || cfg.mode !== 'live') return NOT_HANDLED;
+    const last = await history.lastOutgoing(salonId, dialogKeyOf(msg));
+    if (!last || last.author !== 'system') return NOT_HANDLED;
+    if (confirming) {
+      return isReminder(last.text) ? await handleConfirmation(salonId, msg, cfg, phoneKey) : NOT_HANDLED;
+    }
+    return isRatingSurvey(last.text) ? await handleRating(salonId, msg, rating, cfg, phoneKey) : NOT_HANDLED;
+  } catch (e) {
+    log.error(`handleIncoming: ${e.message}`);   // fail-open: ход уходит Миле
+    return NOT_HANDLED;
+  }
+}
+
+module.exports = { handleIncoming };

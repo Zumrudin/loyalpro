@@ -35,6 +35,7 @@ const dialogState = require('../services/agent/dialog-state');
 const chatPersist = require('../services/chat-persist');
 const followupQueue = require('../services/agent/followup-queue');
 const accounts = require('../services/messaging/accounts');
+const notifyReplies = require('../services/notifications/replies');
 
 // Текстовые типы разных каналов: WhatsApp/MAX → 'text', tdlib/Telegram → 'formattedText'.
 const AGENT_TEXT_TYPES = new Set(['text', 'formattedText']);
@@ -305,6 +306,26 @@ router.post('/webhook', async (req, res) => {
       await db.query('UPDATE chatpush_events SET processed=TRUE WHERE id=$1', [eventId]);
     }
 
+    // 3а) Ответ на НАШЕ уведомление («Подтверждаю» после напоминания, цифра после опроса)
+    //    обрабатывается детерминированно и Миле не достаётся: иначе пациент получил бы два
+    //    ответа — наш и её. Только по НОВОМУ входящему (storedNew: повтор вебхука не должен
+    //    обработать ответ дважды). Внутри — режим live (в off/shadow ответы ведёт Chatpush и
+    //    модуль возвращает {handled:false}), двухчастное условие «последнее исходящее — наше
+    //    напоминание/опрос» и атомарный захват job'а от повторов. Не зависит от флага агента:
+    //    Мила может быть выключена, а подтверждение визита всё равно должно дойти до YClients.
+    //    Свой try: сбой модуля не должен лишить пациента ответа Милы (и не попасть в
+    //    chatpush_events.error — сообщение сохранено штатно).
+    let notifyHandled = false;
+    if (storedNew && salonId && msg && msg.direction === 'incoming') {
+      try {
+        const r = await notifyReplies.handleIncoming(salonId, msg);
+        notifyHandled = !!(r && r.handled);
+        if (notifyHandled) logger.info(`notify reply: ${r.kind}${r.rating ? ' ' + r.rating : ''} — Мила не вызывается`);
+      } catch (e) {
+        logger.error(`notify reply failed: ${e.message} — ход уходит Миле`);
+      }
+    }
+
     // 3) Авто-ответ агента — при глобальном флаге (env kill-switch) И только на
     //    ВХОДЯЩЕЕ текстовое сообщение. Гейт допуска (per-salon вкл/выкл + бело/чёрный
     //    список), дебаунс серии, ReAct-цикл и отправка — внутри диспетчера.
@@ -314,6 +335,7 @@ router.post('/webhook', async (req, res) => {
     //    переписку с этим участником. Сообщение при этом сохранено и видно в «Чате» —
     //    в группе отвечает только человек.
     if (
+      !notifyHandled &&
       config.CHATPUSH.agentEnabled &&
       storedNew &&
       msg && msg.direction === 'incoming' &&
