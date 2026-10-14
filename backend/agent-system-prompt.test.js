@@ -1950,3 +1950,63 @@ describe('консультативная продажа в v1 (07.10.2026)', () 
     }
   });
 });
+
+describe('блок «СВЕДЕНИЯ ИЗ БАЗЫ ЗНАНИЙ ПО ВОПРОСУ ПАЦИЕНТА» (медицинский предвызов)', () => {
+  const HEAD = 'СВЕДЕНИЯ ИЗ БАЗЫ ЗНАНИЙ ПО ВОПРОСУ ПАЦИЕНТА';
+  // Само название упоминается и в правилах раздела «МЕДИЦИНСКИЕ ГРАНИЦЫ» —
+  // сам блок узнаём по заголовку с «(найдены».
+  const HEAD_AT = `${HEAD} (найдены`;
+  const medicalKb = {
+    titles: ['Биоревитализация и Мезотерапия'],
+    lines: ['«Биоревитализация и Мезотерапия»:', '* Рекомендуется курс из 3–5 процедур с интервалом в 2–4 недели',
+      'Приём с 10:00 до 21:00.', '* REVI EYE — 15 500 ₽', 'строка\nс переводом'],
+  };
+  // salesTail:false — сценарий продажи всегда последний и одинаков в обоих
+  // промптах; без него инвариант формулируется без оговорок.
+  const base = { lastUserText: 'Есть ли смысл делать био?', salesTail: false };
+  const { TAIL_HEADER } = require('./services/agent/sales-modules');
+
+  test('промпт без блока — префикс промпта с блоком (кэш провайдера)', () => {
+    const without = buildSystemPrompt(base);
+    const withBlock = buildSystemPrompt({ ...base, medicalKb });
+    expect(withBlock.startsWith(without)).toBe(true);
+    expect(withBlock).toContain(HEAD_AT);
+  });
+
+  test('после справки об услуге, до сценария продажи', () => {
+    // «не знаю, что выбрать» → сценарий undecided, у него есть модуль продажи
+    // (у price модуля нет — SALES_MODULES = objection/undecided).
+    const p = buildSystemPrompt({ lastUserText: 'Не знаю, что выбрать: био или мезо?', medicalKb,
+      serviceFact: { title: 'Биоревитализация и Мезотерапия', text: 'Инъекционное введение препаратов.' } });
+    const iFact = p.indexOf('СПРАВКА ОБ УСЛУГЕ');
+    const iMed = p.indexOf(HEAD_AT);
+    const iSales = p.indexOf(TAIL_HEADER);
+    expect(iFact).toBeGreaterThan(0);
+    expect(iMed).toBeGreaterThan(iFact);
+    expect(iSales).toBeGreaterThan(iMed);
+  });
+
+  test('заголовок, строки, инструкция; без ЧЧ:ММ и сумм; переводы строк схлопнуты', () => {
+    const p = buildSystemPrompt({ ...base, medicalKb });
+    const block = p.slice(p.indexOf(HEAD_AT));
+    expect(block).toContain(`${HEAD} (найдены автоматически; статья «Биоревитализация и Мезотерапия»):`);
+    expect(block).toContain('* Рекомендуется курс из 3–5 процедур с интервалом в 2–4 недели');
+    expect(block).toContain('Отвечай по правилу «МЕДИЦИНСКИЕ ГРАНИЦЫ» — только тем, что здесь написано.');
+    expect(block).toContain('тот же запрос повторять не нужно');
+    const own = block.slice(0, block.indexOf('тот же запрос повторять не нужно'));
+    expect(own).not.toMatch(/\d{1,2}:\d{2}/);
+    expect(own).not.toMatch(/₽/);
+    expect(own).toContain('строка с переводом');
+  });
+
+  test('несколько статей — «статьи «…», «…»»', () => {
+    const p = buildSystemPrompt({ ...base, medicalKb: { titles: ['A', 'B'], lines: ['«A»:', 'x'] } });
+    expect(p).toContain(`${HEAD} (найдены автоматически; статьи «A», «B»):`);
+  });
+
+  test('пустые/битые данные — блока нет', () => {
+    for (const m of [null, {}, { titles: ['A'], lines: [] }, { titles: ['A'], lines: ['Приём в 10:00.'] }]) {
+      expect(buildSystemPrompt({ ...base, medicalKb: m })).not.toContain(HEAD_AT);
+    }
+  });
+});

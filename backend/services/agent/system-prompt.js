@@ -11,6 +11,7 @@ const { buildProductAvailabilityRule } = require('./product-availability-rule');
 const { detectPromptScenarios } = require('./prompt-scenarios');
 const { PRICE_FOLLOWTHROUGH, renderSalesTail } = require('./sales-modules');
 const { hasTime } = require('./service-fact');
+const { PRICE_SUM_RE } = require('./reply-guard');
 
 // Правило-переходник режима AGENT_CATALOG_IN_PROMPT: правила ниже по тексту
 // ссылаются на list_services (они выверены живыми тестами — не переписываем),
@@ -174,6 +175,16 @@ function buildSystemPrompt(opts = {}) {
       lines: String(opts.serviceFact.text).split('\n')
         .filter(l => !hasTime(l))
         .map(l => sanitizeLine(l, 400)).filter(Boolean).slice(0, 12),
+    } : null;
+  // Сведения из КБ на медицинском вопросе (medical-kb.js, подкладывает
+  // оркестратор). Строки с ЧЧ:ММ и суммами режем ещё раз здесь: блок стоит в
+  // фактической части и засевает allowedTimes, а цены — только из каталога.
+  const medicalKb = opts.medicalKb && typeof opts.medicalKb === 'object' && Array.isArray(opts.medicalKb.lines)
+    ? {
+      titles: (Array.isArray(opts.medicalKb.titles) ? opts.medicalKb.titles : [])
+        .filter(t => !hasTime(t)).map(t => sanitizeLine(t, 120)).filter(Boolean),
+      lines: opts.medicalKb.lines.filter(l => typeof l === 'string' && !hasTime(l) && !PRICE_SUM_RE.test(l))
+        .map(l => sanitizeLine(l, 400)).filter(Boolean),
     } : null;
   // Сценарий продажи по последнему сообщению (prompt-scenarios): хвостовой
   // блок v1 с модулем из sales-modules. salesTail:false — v2 кладёт модули сам.
@@ -642,6 +653,15 @@ function buildSystemPrompt(opts = {}) {
       `СПРАВКА ОБ УСЛУГЕ (найдена автоматически в базе знаний по вопросу пациента${serviceFact.title ? `; статья «${serviceFact.title}»` : ''}):`,
       ...serviceFact.lines.map(l => `- ${l}`),
       `Впиши не больше ОДНОГО факта в цельный ответ перед предложением записи, только если он относится именно к процедуре, цену которой называешь. При несовпадении вида процедуры пропусти справку. Не перечисляй соседние услуги и не повторяй уже названную длительность. Повторно вызывать search_knowledge_base ради этой услуги не нужно.`,
+    ] : []),
+    // Сведения из КБ по медицинскому вопросу — после справки, до сценария
+    // продажи: промпт без блока обязан остаться префиксом промпта с блоком.
+    ...(medicalKb && medicalKb.lines.length ? [
+      ``,
+      `СВЕДЕНИЯ ИЗ БАЗЫ ЗНАНИЙ ПО ВОПРОСУ ПАЦИЕНТА (найдены автоматически${medicalKb.titles.length
+        ? `; ${medicalKb.titles.length > 1 ? 'статьи' : 'статья'} ${medicalKb.titles.map(t => `«${t}»`).join(', ')}` : ''}):`,
+      ...medicalKb.lines,
+      `Отвечай по правилу «МЕДИЦИНСКИЕ ГРАНИЦЫ» — только тем, что здесь написано. Если сведения о другой процедуре или не отвечают на вопрос — вызови search_knowledge_base со своим запросом; тот же запрос повторять не нужно.`,
     ] : []),
     // Сценарий продажи — после статьи об акции, ПОСЛЕДНИМ: промпт без блока
     // обязан остаться префиксом промпта с блоком (кэш провайдера). Текст
