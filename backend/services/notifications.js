@@ -1,124 +1,45 @@
 // ============================================================
-// Автоуведомления по событиям (v1: создание записи)
+// Автоуведомления по событиям записи YClients — ФАСАД
 // ============================================================
 //
 // Правила живут в notification_rules (условия по специалисту/категории/услугам,
-// объединяемые И или ИЛИ). Вебхук YClients при status='create' зовёт
-// handleRecordCreated: правила дёшево оцениваются в памяти, совпавшие кладут
-// строку в notification_sends (очередь+журнал, дедуп UNIQUE (rule_id, record_id)).
+// объединяемые И или ИЛИ). Модуль разобран на папку services/notifications/:
+//   events.js   — снимок записи из вебхука, классификация события, моменты отправки;
+//   render.js   — renderTemplate (плейсхолдеры шаблона);
+//   rules.js    — evaluateRule, resolveRouting, ALLOWED_CHANNELS, splitVisitDatetime,
+//                 getServiceCategoryMap (категорий в payload записи нет — только
+//                 services[].id, маппинг строится из каталога YClients), lastIncomingChannel;
+//   settings.js — настройки салона (режим off/shadow/live, тихие часы, тексты отбивок);
+//   enroll.js   — handleRecordEvent: на КАЖДОМ record-вебхуке (routes/webhook.js) ведёт
+//                 состояние записи и ставит job'ы в notification_jobs (заменил v1-handleRecordCreated).
+// Отсюда они ре-экспортируются под ПРЕЖНИМИ именами — на них завязаны «Забота»,
+// напоминания, followup Милы, роуты и server.js.
 //
-// Отправляет отдельный воркер (startNotificationWorker, по образцу
-// broadcast-воркера): выбирает pending, определяет каскад каналов Chatpush и
-// шлёт через sendMessage. Канал по умолчанию — тот, откуда клиент писал в
-// последний раз (chatpush_messages, direction='incoming'); если клиент не
-// писал — каскад из правила как настроен.
-//
-// ФАСАД. Чистые помощники переехали в services/notifications/ и ре-экспортируются
-// отсюда под ПРЕЖНИМИ именами — на них завязаны «Забота», напоминания, followup
-// Милы, роуты и server.js:
-//   rules.js  — evaluateRule, resolveRouting, ALLOWED_CHANNELS, splitVisitDatetime,
-//               getServiceCategoryMap (категорий в payload записи нет — только
-//               services[].id, маппинг строится из каталога YClients), lastIncomingChannel;
-//   render.js — renderTemplate.
-// Здесь остаются v1-обработчик handleRecordCreated и воркер отправки.
+// Здесь остаётся ТОЛЬКО v1-воркер отправки (startNotificationWorker): он читает
+// notification_sends, которую больше никто не наполняет, и уйдёт вместе с Task 7
+// (воркер по notification_jobs). Канал по умолчанию — тот, откуда клиент писал в
+// последний раз (chatpush_messages, direction='incoming'); если клиент не писал —
+// каскад из правила как настроен.
 
 const { db } = require('../db');
 const config = require('../config');
 const transport = require('./messaging/transport');
-const { normalizePhoneKey } = require('./agent-gate');
 const { persistWhatsappOutgoing } = require('./chat-persist');
 const pendingReplies = require('./agent/pending-replies');
 const authorship = require('./outgoing-authorship');
-const salonNames = require('../utils/salon-names');
 const { createLogger } = require('../logger');
 
-// Без промежуточных `rules`/`render`: локальная `const rules` (строки из БД) в
-// handleRecordCreated затеняла бы одноимённый модуль.
 const {
   evaluateRule, resolveRouting, ALLOWED_CHANNELS, getServiceCategoryMap, lastIncomingChannel, splitVisitDatetime,
 } = require('./notifications/rules');
 const { renderTemplate } = require('./notifications/render');
+const enroll = require('./notifications/enroll');
 
 const log = createLogger('Notifications');
 
 const WORKER_TICK_MS   = 3000;
 const MAX_ATTEMPTS     = 3;
 const RETRY_BACKOFF_S  = 60;   // пауза между попытками одной строки
-
-// ── обработка события «создание записи» ────────────────────────
-
-/**
- * Вызывается из routes/webhook.js после processRecordEvent, только при
- * payload.status === 'create'. Своя обработка ошибок у вызывающего —
- * сбой уведомлений не должен ломать начисление кэшбэка.
- */
-async function handleRecordCreated(salon, payload) {
-  const data = payload.data || {};
-  const ycRecordId = data.id;
-  if (!ycRecordId) return;
-
-  const rules = await db.any(
-    `SELECT * FROM notification_rules
-      WHERE salon_id = $1 AND is_enabled = TRUE AND trigger_type = 'record_created'`,
-    [salon.id]
-  );
-  if (!rules.length) return;
-
-  const serviceIds = (Array.isArray(data.services) ? data.services : [])
-    .map(s => s && s.id).filter(v => v != null);
-  const catMap = await getServiceCategoryMap(salon).catch(() => new Map());
-  const ctx = {
-    staffId:     data.staff && data.staff.id != null ? data.staff.id : null,
-    serviceIds,
-    categoryIds: [...new Set(serviceIds.map(id => catMap.get(String(id))).filter(Boolean))],
-  };
-
-  const matched = rules.filter(r => {
-    try { return evaluateRule(r.conditions, ctx); }
-    catch (e) { log.warn(`rule #${r.id} evaluate failed: ${e.message}`); return false; }
-  });
-  if (!matched.length) return;
-
-  const phone = normalizePhoneKey(data.client && data.client.phone);
-  const client = await db.oneOrNone(
-    `SELECT id, name, is_blacklisted FROM clients
-      WHERE salon_id = $1 AND yclients_client_id = $2`,
-    [salon.id, data.client && data.client.id]
-  );
-
-  // Причина пропуска фиксируется в журнале — иначе «почему не пришло» не разобрать.
-  let skipReason = null;
-  if (!phone) skipReason = 'нет телефона клиента';
-  else if (client && client.is_blacklisted) skipReason = 'клиент в чёрном списке';
-
-  const dt = splitVisitDatetime(data.date);
-  const renderCtx = {
-    name:     (client && client.name) || (data.client && data.client.name) || '',
-    // Словарь имён салона — чтобы редкое имя из карточки попало в {first_name},
-    // а не потерялось. Недоступен → работает базовый список (fail-open).
-    nameDictionary: await salonNames.load(salon.id).catch(() => null),
-    date:     dt.date,
-    time:     dt.time,
-    services: (Array.isArray(data.services) ? data.services : []).map(s => s && s.title).filter(Boolean).join(', '),
-    staff:    (data.staff && data.staff.name) || '',
-    salon:    salon.name || '',
-  };
-
-  for (const r of matched) {
-    const res = await db.query(
-      `INSERT INTO notification_sends
-         (salon_id, rule_id, yclients_record_id, client_id, phone, status, error, rendered_text)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
-       ON CONFLICT (rule_id, yclients_record_id) DO NOTHING`,
-      [salon.id, r.id, ycRecordId, client ? client.id : null, phone || null,
-       skipReason ? 'skipped' : 'pending', skipReason,
-       renderTemplate(r.message_template, renderCtx)]
-    );
-    if (res.rowCount) {
-      log.info(`rule #${r.id} matched record=${ycRecordId} → ${skipReason ? 'skipped: ' + skipReason : 'queued'}`);
-    }
-  }
-}
 
 // ── воркер отправки ────────────────────────────────────────────
 
@@ -214,7 +135,7 @@ function startNotificationWorker() {
 }
 
 module.exports = {
-  handleRecordCreated,
+  handleRecordEvent: enroll.handleRecordEvent,
   startNotificationWorker,
   ALLOWED_CHANNELS,
   // чистые хелперы — для роутов и тестов

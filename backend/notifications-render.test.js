@@ -83,13 +83,17 @@ describe('фасад services/notifications.js', () => {
   const render = require('./services/notifications/render');
 
   test('все прежние экспорты на месте', () => {
+    // handleRecordCreated (v1, только status=create) заменён на handleRecordEvent (Task 5):
+    // он зовётся на КАЖДОМ record-событии и живёт в notifications/enroll.js.
     for (const name of [
-      'handleRecordCreated', 'startNotificationWorker', 'ALLOWED_CHANNELS', 'evaluateRule',
+      'handleRecordEvent', 'startNotificationWorker', 'ALLOWED_CHANNELS', 'evaluateRule',
       'renderTemplate', 'resolveRouting', 'splitVisitDatetime', 'getServiceCategoryMap',
       'lastIncomingChannel', '_lastIncomingChannel',
     ]) {
       expect(facade[name]).toBeDefined();
     }
+    expect(facade.handleRecordCreated).toBeUndefined();
+    expect(facade.handleRecordEvent).toBe(require('./services/notifications/enroll').handleRecordEvent);
   });
 
   test('значения — те же объекты, что в модулях (а не копии)', () => {
