@@ -18,6 +18,7 @@
 const { stripAllStamps } = require('./transcript-time');
 const { detectPromptScenarios, SCENARIOS, isPriceQuestion } = require('./prompt-scenarios');
 const serviceFact = require('./service-fact');
+const { PRICE_SUM_RE } = require('./reply-guard');
 
 function norm(text) {
   return stripAllStamps(String(text)).toLowerCase().replace(/ё/g, 'е');
@@ -135,7 +136,62 @@ function buildMedicalQuery(userBlocks, titles) {
   return null;
 }
 
+// ── Отбор фрагментов выдачи search_knowledge_base ────────────────────────────
+// Режем kb.context по kb.fragments (границы чанков, agent-rag) и оставляем
+// фрагменты статей из titles. Хвост «АКТУАЛЬНЫЕ УСЛУГИ И ЦЕНЫ» в fragments не
+// входит по построению. Строки с суммами — вон (цены только из каталога),
+// со временем ЧЧ:ММ — вон (блок стоит после «ТЕКУЩИЙ КОНТЕКСТ:» и засевал бы
+// allowedTimes reply-guard). Каждому фрагменту — строка-метка «Заголовок»:
+// в блоке бывает несколько статей.
+const MAX_MEDICAL_CHARS = 6000;
+const MAX_LINE_CHARS = 400;   // тот же кап, что у sanitizeLine в промпте
+
+function isValidFragment(f, len) {
+  return f && Number.isInteger(f.start) && Number.isInteger(f.end)
+    && f.start >= 0 && f.end > f.start && f.end <= len;
+}
+
+/** @returns {{titles:string[], lines:string[], raw:string}|null} */
+function pickMedicalFragments(kb, titles) {
+  if (!kb || typeof kb.context !== 'string' || !Array.isArray(kb.fragments)) return null;
+  const want = new Set((Array.isArray(titles) ? titles : []).map(t => String(t).trim()).filter(Boolean));
+  if (!want.size) return null;
+  const lines = [];
+  const used = [];
+  let size = 0;
+  for (const f of kb.fragments) {
+    if (!isValidFragment(f, kb.context.length)) continue;
+    const rows = kb.context.slice(f.start, f.end).split('\n').map(l => l.trim());
+    const ti = rows.findIndex(Boolean);
+    if (ti < 0 || !want.has(rows[ti])) continue;
+    const title = rows[ti];
+    const body = rows.slice(ti + 1)
+      .filter(l => l && l !== '---' && l.replace(/^#+\s*/, '') !== title)
+      .filter(l => !serviceFact.hasTime(l) && !PRICE_SUM_RE.test(l) && !serviceFact.MONEY_RE.test(l))
+      .map(l => serviceFact.stripEmphasis(l).slice(0, MAX_LINE_CHARS)).filter(Boolean);
+    // Метка фрагмента + столько строк, сколько влезает в общий кап. Ни одна
+    // строка не влезла — фрагмент не берём вовсе (висячая метка без текста
+    // читалась бы как «статья пустая»), и дальше смотреть незачем.
+    const label = `«${title}»:`;
+    let room = MAX_MEDICAL_CHARS - size - (label.length + 1);
+    const take = [];
+    for (const l of body) {
+      if (l.length + 1 > room) break;
+      take.push(l);
+      room -= l.length + 1;
+    }
+    if (!take.length) { if (body.length) break; continue; }
+    lines.push(label, ...take);
+    size = MAX_MEDICAL_CHARS - room;
+    if (!used.includes(title)) used.push(title);
+    if (take.length < body.length) break;
+  }
+  if (!used.length) return null;
+  return { titles: used, lines, raw: kb.context };
+}
+
 module.exports = {
   detectRedFlag, buildRedFlagReply, wantsMedicalKb,
   matchTitles, buildMedicalQuery, MEDICAL_STOP_PREFIXES,
+  pickMedicalFragments, MAX_MEDICAL_CHARS,
 };

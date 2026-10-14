@@ -163,3 +163,56 @@ describe('buildMedicalQuery', () => {
     expect(mk.buildMedicalQuery(['био'], [])).toBeNull();
   });
 });
+
+const { medicalSearchResult } = require('./services/agent/__fixtures__/kb-medical-chunks');
+
+describe('pickMedicalFragments', () => {
+  const BIO = 'Биоревитализация и Мезотерапия';
+  const LASER = 'Лазерная эпиляция — Pacer One Pro (755/808/1064 нм)';
+
+  test('оставляет фрагменты нужной статьи, режет чужую, цены и хвост каталога', () => {
+    const kb = medicalSearchResult(['bio0', 'laser', 'bio1'], { servicesTail: true });
+    const r = mk.pickMedicalFragments(kb, [BIO]);
+    expect(r.titles).toEqual([BIO]);
+    expect(r.raw).toBe(kb.context);
+    const text = r.lines.join('\n');
+    expect(text).toContain('Рекомендуется курс из 3–5 процедур с интервалом в 2–4 недели');
+    expect(text).toContain('* Беременность и лактация');
+    expect(text).not.toContain('Pacer');           // чужая статья
+    expect(text).not.toMatch(/₽|REVI/);           // цены — только из каталога
+    expect(text).not.toContain('АКТУАЛЬНЫЕ УСЛУГИ');
+    expect(text).not.toContain('**');             // разметка жирного снята
+    expect(r.lines[0]).toBe(`«${BIO}»:`);         // заголовок фрагмента — строкой-меткой
+    expect(r.lines.filter(l => l === `«${BIO}»:`)).toHaveLength(2);
+    expect(r.lines).not.toContain(`# ${BIO}`);    // дубль заголовка markdown снят
+  });
+
+  test('строки со временем ЧЧ:ММ выбрасываются (засевали бы allowedTimes)', () => {
+    const r = mk.pickMedicalFragments(medicalSearchResult(['laser']), [LASER]);
+    expect(r.lines.join('\n')).not.toMatch(/10:00/);
+    expect(r.lines.join('\n')).toContain('без боли и ожогов');
+  });
+
+  test('кап 6000 символов; строка — не длиннее 400; метка без строк не остаётся', () => {
+    const body = Array.from({ length: 400 }, (_, i) => `Описание процедуры подробно, пункт ${i}.`).join('\n');
+    const context = `${BIO}\n${body}\n${'х'.repeat(900)}`;
+    const r = mk.pickMedicalFragments({ context, fragments: [{ start: 0, end: context.length }] }, [BIO]);
+    expect(r.lines.join('\n').length).toBeLessThanOrEqual(6000);
+    expect(r.lines.every(l => l.length <= 400)).toBe(true);
+    // второй фрагмент, не влезший целиком, не оставляет висячую метку «Заголовок»:
+    const two = medicalSearchResult(['bio0']);
+    const ctx2 = `${context}\n\n${two.context}`;
+    const r2 = mk.pickMedicalFragments({ context: ctx2, fragments: [{ start: 0, end: context.length },
+      { start: context.length + 2, end: ctx2.length }] }, [BIO]);
+    expect(r2.lines[r2.lines.length - 1]).not.toMatch(/^«.*»:$/);
+  });
+
+  test('нет fragments / битые границы / ничего нужного → null', () => {
+    const kb = medicalSearchResult(['laser']);
+    expect(mk.pickMedicalFragments({ context: kb.context }, [LASER])).toBeNull();
+    expect(mk.pickMedicalFragments({ context: kb.context, fragments: [{ start: 5, end: 1 }] }, [LASER])).toBeNull();
+    expect(mk.pickMedicalFragments(kb, [BIO])).toBeNull();
+    expect(mk.pickMedicalFragments(kb, [])).toBeNull();
+    expect(mk.pickMedicalFragments(null, [BIO])).toBeNull();
+  });
+});
