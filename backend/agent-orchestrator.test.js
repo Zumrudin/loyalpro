@@ -3793,3 +3793,61 @@ describe('предвызов КБ: справка об услуге', () => {
     expect(stub.buffers[0].push.mock.calls.map(c => c[0])).toContain('search_knowledge_base');
   });
 });
+
+describe('опасный признак после процедуры — перевод кодом, без модели', () => {
+  const rfDeps = (text, extra = {}) => makeDeps({
+    history: { loadTranscript: jest.fn(async () => ({ messages: [{ role: 'user', content: text }], watermark: 700 })) },
+    ...extra,
+  });
+
+  test('«побелела кожа» → escalate, готовый текст, провайдер и журнал не трогаются', async () => {
+    const deps = rfDeps('После филлера побелела кожа на губе');
+    const res = await orchestrator.runDialog(1, '79001112233', { deps, now: '12:00' });
+    expect(deps.provider.createMessage).not.toHaveBeenCalled();
+    expect(deps.registry.handlers.escalate_to_operator).toHaveBeenCalledWith(
+      1, { reason: 'опасный признак после процедуры (skin_blanching)' }, expect.any(Object));
+    expect(res).toMatchObject({ escalated: true, sideEffect: true });
+    expect(res.replies).toEqual([require('./services/agent/medical-kb').buildRedFlagReply({ adminOff: false })]);
+    expect(deps.state.setWatermark).toHaveBeenCalledWith(1, '79001112233', 700);
+    expect(deps.toolEvents.createBuffer).not.toHaveBeenCalled();
+  });
+
+  test('ночью — вариант с 103/112', async () => {
+    const deps = rfDeps('задыхаюсь после укола');
+    const res = await orchestrator.runDialog(1, 'k', { deps, now: '23:30' });
+    expect(res.replies[0]).toMatch(/103 или 112/);
+  });
+
+  test('перевод не записался → ход к модели, ватермарк ставит штатный путь', async () => {
+    const deps = rfDeps('После филлера побелела кожа на губе');
+    deps.registry.handlers.escalate_to_operator = jest.fn(async () => { throw new Error('db down'); });
+    deps.provider.createMessage.mockResolvedValue(textResp('Ответ'));
+    const res = await orchestrator.runDialog(1, 'k', { deps });
+    expect(deps.provider.createMessage).toHaveBeenCalled();
+    expect(res.replies).toEqual(['Ответ']);
+  });
+
+  test('escalated:false → тоже к модели', async () => {
+    const deps = rfDeps('задыхаюсь', { handlers: { escalate_to_operator: jest.fn(async () => ({ escalated: false })) } });
+    deps.provider.createMessage.mockResolvedValue(textResp('Ответ'));
+    await orchestrator.runDialog(1, 'k', { deps });
+    expect(deps.provider.createMessage).toHaveBeenCalled();
+  });
+
+  test('AGENT_MEDICAL_RED_FLAGS=false → к модели, без эскалации кодом', async () => {
+    const deps = rfDeps('задыхаюсь');
+    deps.config = { ...require('./config'), AGENT_MEDICAL_RED_FLAGS: false };
+    deps.provider.createMessage.mockResolvedValue(textResp('Ответ'));
+    await orchestrator.runDialog(1, 'k', { deps });
+    expect(deps.registry.handlers.escalate_to_operator).not.toHaveBeenCalled();
+    expect(deps.provider.createMessage).toHaveBeenCalled();
+  });
+
+  test('обычная жалоба без опасного признака → к модели', async () => {
+    const deps = rfDeps('После Lumecca покраснение 2 дня, это нормально?');
+    deps.provider.createMessage.mockResolvedValue(textResp('Ответ'));
+    await orchestrator.runDialog(1, 'k', { deps });
+    expect(deps.registry.handlers.escalate_to_operator).not.toHaveBeenCalled();
+    expect(deps.provider.createMessage).toHaveBeenCalled();
+  });
+});

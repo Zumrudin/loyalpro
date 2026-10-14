@@ -20,6 +20,7 @@ const phoneRequest = require('./phone-request');
 const visitRating = require('./visit-rating');
 const promoInterest = require('./promo-interest');
 const serviceFactMod = require('./service-fact');
+const medicalKbMod = require('./medical-kb');
 const priceFollowthrough = require('./price-followthrough');
 const bookingInterest = require('./booking-interest');
 const adminHours = require('./admin-hours');
@@ -690,6 +691,37 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
           }
           logger.error(`dialog ${dialogKey}: оценка визита ${rating} — перевод не состоялся, отдаю ход модели`);
         }
+      }
+    }
+
+    // Опасный признак после процедуры (кожа побелела, трудно дышать, зрение,
+    // жар/гной/нарастающая боль после процедуры) — перевод на администратора
+    // КОДОМ, без базы и без модели (спека 2026-10-13-mila-medical-kb-first,
+    // решение владельца №5; список признаков утверждает врач). Приём тот же,
+    // что у низкой оценки визита: эскалация — УСЛОВИЕ готового текста (он сам
+    // объявляет перевод, HANDOVER_ANNOUNCED_RE), не записалась — ход идёт к
+    // модели, и правило «ЖАЛОБА ПОСЛЕ ПРОЦЕДУРЫ» переведёт сама. Стоит ДО
+    // буфера журнала: ход без инструментов модели записи не заводит.
+    if (cfg.AGENT_MEDICAL_RED_FLAGS && registry.handlers['escalate_to_operator']) {
+      const lastUserRf = [...messages].reverse().find(m => m && m.role === 'user');
+      const flag = medicalKbMod.detectRedFlag(lastUserRf && typeof lastUserRf.content === 'string'
+        ? lastUserRf.content : '');
+      if (flag) {
+        let escalatedOk = false;
+        try {
+          const res = await registry.handlers['escalate_to_operator'](salonId,
+            { reason: `опасный признак после процедуры (${flag.kind})` }, toolCtx);
+          escalatedOk = !!(res && res.escalated);
+        } catch (e) {
+          logger.error(`dialog ${dialogKey}: эскалация по опасному признаку не записалась (${e.message})`);
+        }
+        if (escalatedOk) {
+          logger.warn(`dialog ${dialogKey}: опасный признак после процедуры (${flag.kind}) — перевод на администратора без LLM`);
+          await state.setWatermark(salonId, dialogKey, watermark);
+          return { replies: [medicalKbMod.buildRedFlagReply({ adminOff: promptOpts.adminOffHours })],
+            escalated: true, sideEffect: true };
+        }
+        logger.error(`dialog ${dialogKey}: опасный признак (${flag.kind}) — перевод не состоялся, отдаю ход модели`);
       }
     }
 
