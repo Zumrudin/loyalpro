@@ -8,7 +8,7 @@ test('опкоды веб-протокола MAX (сверены с max-account-
   assert.deepEqual(p.CMD, { REQUEST: 0, RESPONSE: 1, ERROR: 3 });
   assert.equal(p.Op.HELLO, 6); assert.equal(p.Op.LOGIN, 19); assert.equal(p.Op.MSG_SEND, 64);
   assert.equal(p.Op.NOTIF_MESSAGE, 128); assert.equal(p.Op.QR_START, 288); assert.equal(p.Op.QR_LOGIN, 291);
-  assert.equal(p.Op.AUTH_CHECK_PASSWORD, 115); assert.equal(p.Op.CONTACT_INFO_BY_PHONE, 46);
+  assert.equal(p.Op.AUTH_CHECK_PASSWORD, 115); assert.equal(p.Op.CONTACT_INFO_BY_PHONE, 46); assert.equal(p.Op.CHAT_HISTORY, 49);
 });
 
 test('webUserAgent: WEB-профиль с переданной версией, дефолт 26.5.5', () => {

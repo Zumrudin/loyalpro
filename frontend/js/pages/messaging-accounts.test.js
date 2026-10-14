@@ -63,8 +63,28 @@ test('msgAccRestartPlan: без logout у WhatsApp, Telegram только pendin
 });
 
 test('msgAccRestartPlan: MAX — как WhatsApp (повторный start без logout)', () => {
-  assert.deepEqual({ ...ctx.msgAccRestartPlan('max', 'pending') }, { show: true, logout: false });
-  assert.deepEqual({ ...ctx.msgAccRestartPlan('max', 'active') }, { show: true, logout: false });
+  assert.deepEqual({ ...ctx.msgAccRestartPlan('max', 'pending', 'error') }, { show: true, logout: false });
+  assert.deepEqual({ ...ctx.msgAccRestartPlan('max', 'active', 'error') }, { show: true, logout: false });
+});
+
+test('msgAccRestartPlan: MAX на шаге кода/пароля — сброс с logout (шаги привязаны к соединению, токена ещё нет)', () => {
+  assert.deepEqual({ ...ctx.msgAccRestartPlan('max', 'pending', 'wait_code') }, { show: true, logout: true });
+  assert.deepEqual({ ...ctx.msgAccRestartPlan('max', 'active', 'wait_password') }, { show: true, logout: true });
+  // Telegram и WhatsApp на тех же шагах — по-прежнему
+  assert.deepEqual({ ...ctx.msgAccRestartPlan('tdlib', 'pending', 'wait_code') }, { show: true, logout: true });
+  assert.equal(ctx.msgAccRestartPlan('tdlib', 'active', 'wait_code').show, false);
+  assert.deepEqual({ ...ctx.msgAccRestartPlan('whatsapp', 'pending', 'wait_qr') }, { show: true, logout: false });
+});
+
+test('msgAccRestartVisible: после ошибки — по плану; на шагах кода/пароля — только MAX', () => {
+  assert.equal(ctx.msgAccRestartVisible('max', 'pending', 'wait_code'), true);
+  assert.equal(ctx.msgAccRestartVisible('max', 'pending', 'wait_password'), true);
+  assert.equal(ctx.msgAccRestartVisible('max', 'pending', 'wait_qr'), false);
+  assert.equal(ctx.msgAccRestartVisible('max', 'pending', 'error'), true);
+  assert.equal(ctx.msgAccRestartVisible('tdlib', 'pending', 'wait_code'), false);
+  assert.equal(ctx.msgAccRestartVisible('tdlib', 'active', 'error'), false);
+  assert.equal(ctx.msgAccRestartVisible('whatsapp', 'active', 'error'), true);
+  assert.equal(ctx.msgAccRestartVisible('max', 'pending', 'ready'), false);
 });
 test('msgAccGatewayPath / msgAccConnectLabel: канал → путь ручки и подпись', () => {
   assert.equal(ctx.msgAccGatewayPath('tdlib'), 'telegram');

@@ -47,3 +47,10 @@ test('sniffImageMime: JPEG/PNG/WEBP/GIF по сигнатуре, прочее и
   assert.equal(media.sniffImageMime(Buffer.from([0xff, 0xd8])), null);
   assert.equal(media.sniffImageMime(null), null);
 });
+
+test('download: общий дедлайн — зависшая отдача обрывается по timeoutMs через AbortSignal (timeout axios — лишь простой сокета)', async () => {
+  let got;
+  const http = (o) => new Promise((_, reject) => { got = o; o.signal.addEventListener('abort', () => reject(Object.assign(new Error('canceled'), { code: 'ERR_CANCELED' }))); });
+  await assert.rejects(media.download('https://i/slow', { http, maxBytes: 100, timeoutMs: 20 }), /не уложилось в 20 мс/);
+  assert.ok(got.signal instanceof AbortSignal);
+});

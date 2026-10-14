@@ -1,8 +1,10 @@
 'use strict';
 // Сессия веб-клиента MAX — один JSON в data/acc-<id>/max/session.json:
-// {deviceId, loginToken, ownerId, phone, displayName}. deviceId создаётся один
-// раз и живёт с токеном (токен привязан к нему — PyMax/max-account-api).
+// {deviceId, loginToken, ownerId, phone, displayName, aliveAt}. deviceId создаётся один
+// раз и живёт с токеном (токен привязан к нему — PyMax/max-account-api); aliveAt —
+// граница догона сообщений после рестарта (max-client markAlive).
 // Запись атомарная (tmp + rename): шлюз может упасть посреди записи при рестарте.
+// Права 0600: в файле токен входа в аккаунт клиники.
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
@@ -20,7 +22,8 @@ function load(dir) {
 function save(dir, data) {
   fs.mkdirSync(dir, { recursive: true });
   const tmp = path.join(dir, `${FILE}.${process.pid}.tmp`);
-  fs.writeFileSync(tmp, JSON.stringify(data, null, 2));
+  fs.writeFileSync(tmp, JSON.stringify(data, null, 2), { mode: 0o600 });
+  fs.chmodSync(tmp, 0o600);          // tmp, оставшийся от упавшей записи, мог иметь другие права
   fs.renameSync(tmp, path.join(dir, FILE));
 }
 

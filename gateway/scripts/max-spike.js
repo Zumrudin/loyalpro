@@ -15,7 +15,7 @@ const dataDir = path.join(__dirname, '../data/spike-max');
 const config = { ...require('../config'), DATA_DIR: dataDir, PUBLIC_FILES_DIR: path.join(dataDir, 'pub'), PUBLIC_FILES_URL: '/spike' };
 const deps = {
   config,
-  repo: { setAuth: async (id, st, x) => log('setAuth', st, JSON.stringify(x || {})), rememberContact: async (...a) => log('rememberContact', a.slice(1)), contactUserId: async () => null, phoneByUserId: async () => null },
+  repo: { setAuth: async (id, st, x) => log('setAuth', st, JSON.stringify(x || {})), rememberContact: async (...a) => log('rememberContact', a.slice(1)), rememberContacts: async (id, pairs) => log('rememberContacts', pairs.length), contactUserId: async () => null, phoneByUserId: async () => null },
   deliveries: { STATUS: { ACCEPTED: [1, 'Принято'], SENT: [2, 'Отправлено'], FAILED: [5, 'Невозможно доставить'] }, create: async (r) => { log('delivery create', JSON.stringify(r)); return 1; }, setStatus: async (...a) => log('delivery status', JSON.stringify(a)), setStatusIf: async (...a) => { log('delivery statusIf', JSON.stringify(a)); return true; }, setProviderMessageId: async (...a) => log('delivery pmid', JSON.stringify(a)), failStale: async () => 0 },
   webhook: { sendSafe: async (b) => log('WEBHOOK', JSON.stringify(b)) },
 };

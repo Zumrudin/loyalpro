@@ -114,3 +114,10 @@ test('mimeOfName: по расширению из белого списка, ин
   assert.equal(m.mimeOfName('x.exe'), 'application/octet-stream');
   assert.equal(m.mimeOfName(null), 'application/octet-stream');
 });
+
+test('contentOf: незнакомый status — обычное сообщение (новое терять нельзя); allowEdited (догон истории) пропускает правку, но не удаление; регистр не важен', () => {
+  assert.deepEqual(m.contentOf({ type: 'USER', text: 'новое', status: 'PENDING' }), { type: 'text', text: 'новое', media: null });
+  assert.deepEqual(m.contentOf({ type: 'USER', text: 'правка', status: 'EDITED' }, { allowEdited: true }), { type: 'text', text: 'правка', media: null });
+  assert.equal(m.contentOf({ type: 'USER', text: 'x', status: 'REMOVED' }, { allowEdited: true }), null);
+  assert.equal(m.contentOf({ type: 'USER', text: 'x', status: 'edited' }), null);
+});

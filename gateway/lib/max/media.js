@@ -10,8 +10,18 @@ const { WEB_ORIGIN, HEADER_USER_AGENT } = require('./protocol');
 
 const BASE_HEADERS = { Origin: WEB_ORIGIN, Referer: WEB_ORIGIN + '/', 'User-Agent': HEADER_USER_AGENT };
 
+// timeout axios в Node — простой сокета, а не общий срок: «капельная» отдача держала бы
+// скачивание (а с ним очередь сообщений чата) сколько угодно. Общий дедлайн — AbortSignal.
 async function download(url, { http, maxBytes, timeoutMs }) {
-  const res = await http({ method: 'get', url, responseType: 'arraybuffer', timeout: timeoutMs, maxContentLength: maxBytes, maxBodyLength: maxBytes, headers: BASE_HEADERS, validateStatus: null });
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), timeoutMs);
+  let res;
+  try {
+    res = await http({ method: 'get', url, responseType: 'arraybuffer', timeout: timeoutMs, signal: ac.signal, maxContentLength: maxBytes, maxBodyLength: maxBytes, headers: BASE_HEADERS, validateStatus: null });
+  } catch (e) {
+    if (ac.signal.aborted) throw new Error(`скачивание не уложилось в ${timeoutMs} мс`);
+    throw e;
+  } finally { clearTimeout(timer); }
   if (res.status !== 200) throw new Error(`скачивание: HTTP ${res.status}`);
   const buf = Buffer.from(res.data || '');
   if (!buf.length) throw new Error('пустой файл');

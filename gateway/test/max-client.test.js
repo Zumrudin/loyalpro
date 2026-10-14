@@ -3,20 +3,25 @@
 // Проверяем автомат авторизации (QR-раунды и лимит, номер → код → пароль),
 // LOGIN (ротация и отзыв токена), реконнект, входящие/эхо/фильтры, отправку
 // текста и файлов, статусы доставок, logout/close.
-const { test } = require('node:test');
+const { test, after } = require('node:test');
 const assert = require('node:assert/strict');
 const os = require('os');
 const fs = require('fs');
 const path = require('path');
 const { EventEmitter } = require('events');
-const { MaxClient, MAX_QR_ROUNDS, QR_ABANDONED_ERROR, FILE_READY_TIMEOUT_MS } = require('../lib/max-client');
+const { MaxClient, MAX_QR_ROUNDS, QR_ABANDONED_ERROR, FILE_READY_TIMEOUT_MS, ATTACH_RETRY_MS } = require('../lib/max-client');
 
 const OWNER = 10001, PEER = 11478793;
 const DIALOG = OWNER ^ PEER;
 const PROFILE = { profile: { contact: { id: OWNER, phone: 79200255591, names: [{ name: 'Тест', type: 'ONEME' }] } }, chats: [{ id: DIALOG, type: 'DIALOG', participants: { [OWNER]: 1, [PEER]: 1 } }], contacts: [{ id: PEER, phone: 79164942855, names: [{ name: 'Mary' }] }] };
 
+// Каталоги тестов убираем за собой: раньше каждый прогон оставлял в /tmp сотню gw-max-*.
+const TMP_DIRS = [];
+after(() => { for (const d of TMP_DIRS) fs.rmSync(d, { recursive: true, force: true }); });
+
 function setup(over = {}) {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'gw-max-'));
+  TMP_DIRS.push(tmp);
   const handlers = { 6: () => ({ location: 'FI', 'phone-auth-enabled': true }), 19: () => PROFILE, ...(over.handlers || {}) };
   const transports = [];
   let connectFails = 0;
@@ -123,15 +128,16 @@ test('QR отсканирован: QR_POLL loginAvailable → QR_LOGIN → LOGIN
   await s.client.close();
 });
 
-test('QR истёк → новый QR_START; после MAX_QR_ROUNDS раундов без входа — error и клиент закрыт', async () => {
+test('QR истёк → новый QR_START; после MAX_QR_ROUNDS истёкших раундов без входа — error и клиент закрыт', async () => {
   let starts = 0;
   const s = setup({ handlers: {
-    288: () => ({ qrLink: 'L' + (++starts), trackId: 't' + starts, ttl: 120000, pollingInterval: 5000, expiresAt: 1_700_000_000_000 + starts * 1000 }),
+    288: () => ({ qrLink: 'L' + (++starts), trackId: 't' + starts, ttl: 120000, pollingInterval: 5000 }),
     289: () => ({ status: {} }),
   } });
+  // Каждый шаг опроса — +61 с: раунд (ttl 120 с) истекает на второй проверке.
+  s.client.d.sleep = () => { s.advance(61_000); return new Promise(r => setImmediate(r)); };
   await s.client.start();
-  s.advance(60_000);            // любой трек уже истёк → каждая проверка начинает новый раунд
-  await s.tick(40);
+  await s.tick(60);
   assert.equal(starts, MAX_QR_ROUNDS);
   assert.equal(s.client.authState, 'error');
   assert.equal(s.client.closed, true);
@@ -362,12 +368,14 @@ test('медиа не скачалось (ошибка/лимит) → сооб�
   await s.client.close();
 });
 
-test('пока LOGIN не прошёл (connected=false), push сообщений игнорируется', async () => {
-  const s = setup({ handlers: { 288: () => ({ qrLink: 'L', trackId: 't', ttl: 1, pollingInterval: 5000, expiresAt: 1_700_000_120_000 }), 289: () => ({ status: {} }) } });
+test('push сообщения без входа (wait_qr) ждёт входа не дольше loginWaitMs и пропускается', async () => {
+  const s = setup({ handlers: { 288: () => ({ qrLink: 'L', trackId: 't', ttl: 120000, pollingInterval: 5000 }), 289: () => ({ status: {} }) } });
+  s.client.d.loginWaitMs = 5;
   await s.client.start();
   s.last().push(128, { chatId: DIALOG, message: MSG() });
-  await s.tick(5);
+  await new Promise(r => setTimeout(r, 40));
   assert.equal(s.hooks.length, 0);
+  assert.equal(s.client.connWaiters.size, 0);
   await s.client.close();
 });
 
@@ -456,19 +464,21 @@ test('sendFile image: PHOTO_UPLOAD → uploadPhoto → attaches PHOTO с ток�
 });
 
 test('sendFile документ: FILE_UPLOAD → uploadFile → ждёт NOTIF_ATTACH {fileId} → attaches FILE; без push — отправка после таймаута ожидания', async () => {
-  const s = await ready({ handlers: { 64: (p) => SENT(p), 87: () => ({ info: [{ url: 'https://fu/upload', fileId: 42, token: 't' }] }) } });
+  let nextFileId = 41;
+  const s = await ready({ handlers: { 64: (p) => SENT(p), 87: () => ({ info: [{ url: 'https://fu/upload', fileId: ++nextFileId, token: 't' }] }) } });
   s.deps.media.uploadFile = async (url, buf, name) => { s.mediaCalls.push(['uploadFile', url, name, buf.length]); setImmediate(() => s.last().push(136, { fileId: 42 })); };
   const dir = fs.mkdtempSync(path.join(s.tmp, 'tmp-')); const f = path.join(dir, 'p.pdf'); fs.writeFileSync(f, '%PDF');
   await s.client.sendFile({ filePath: f, fileName: 'Прайс.pdf', caption: '', type: 'document', maxUserId: PEER });
   assert.deepEqual(s.mediaCalls[0], ['uploadFile', 'https://fu/upload', 'Прайс.pdf', 4]);
   assert.deepEqual(s.last().calls.find(c => c[0] === 64)[1].message.attaches, [{ _type: 'FILE', fileId: 42 }]);
   assert.equal(s.delCalls[0][1].text, 'Прайс.pdf');
-  s.deps.media.uploadFile = async () => {};                       // push 136 не придёт — ждём fileReadyTimeoutMs (20 мс в тестах)
+  s.deps.media.uploadFile = async () => {};                       // push 136 для fileId 43 не придёт — отправка по таймауту ожидания (fileReadyTimeoutMs, 20 мс в тестах)
   const f2 = path.join(fs.mkdtempSync(path.join(s.tmp, 'tmp-')), 'q.pdf'); fs.writeFileSync(f2, '%PDF');   // первый каталог клиент уже удалил вместе с файлом
-  const t0 = Date.now();
   await s.client.sendFile({ filePath: f2, fileName: 'q.pdf', type: 'document', maxUserId: PEER });
-  assert.ok(Date.now() - t0 >= 15);
-  assert.equal(s.last().calls.filter(c => c[0] === 64).length, 2);
+  const sends = s.last().calls.filter(c => c[0] === 64);
+  assert.equal(sends.length, 2);
+  assert.deepEqual(sends[1][1].message.attaches, [{ _type: 'FILE', fileId: 43 }]);
+  assert.equal(s.client.fileWaiters.size, 0);
   await s.client.close();
 });
 
@@ -575,5 +585,270 @@ test('фото: CDN отдал application/octet-stream → MIME по сигна
   await s.tick(10);
   const fd = s.hooks[0].payload.message.file_data;
   assert.match(fd.download_url, /\.jpg$/); assert.equal(fd.mime_type, 'image/jpeg');
+  await s.client.close();
+});
+
+// ── Правки ревью (14.10.2026) ────────────────────────────────
+const T0 = 1_700_000_000_000;
+const PARTS = { [OWNER]: 1, [PEER]: 1 };
+
+// Логгер шлюза пишет в console.* — перехватываем, чтобы проверить диагностику.
+async function captureLogs(fn) {
+  const lines = [];
+  const orig = { log: console.log, warn: console.warn, error: console.error };
+  console.log = (m) => lines.push(String(m)); console.warn = (m) => lines.push(String(m)); console.error = (m) => lines.push(String(m));
+  try { await fn(); } finally { Object.assign(console, orig); }
+  return lines;
+}
+
+test('БД не принимает запись состояния → клиент всё равно ready, LOGIN ровно один (нет шторма реконнектов); БД ожила — состояние дописывается при следующей активности', async () => {
+  let logins = 0;
+  const s = setup({ session: { loginToken: 'T' }, handlers: { 19: () => { logins++; return PROFILE; } } });
+  const okSetAuth = s.deps.repo.setAuth;
+  s.deps.repo.setAuth = async () => { throw new Error('connect ECONNREFUSED db'); };
+  await s.client.start();
+  await s.tick(20);
+  assert.equal(s.client.authState, 'ready');
+  assert.equal(logins, 1);
+  assert.equal(s.transports.length, 1);
+  s.deps.repo.setAuth = okSetAuth;
+  s.advance(61_000);
+  s.last().push(135, { chat: { id: OWNER ^ 5, type: 'DIALOG' } });
+  await s.tick(5);
+  assert.deepEqual(lastAuth(s.repoCalls).slice(0, 3), ['setAuth', 9, 'ready']);
+  assert.equal(lastAuth(s.repoCalls)[3].phone, '79200255591');
+  await s.client.close();
+});
+
+test('repo без rememberContacts/rememberContact (как фейк спайка) — вход не падает: запись контактов только по возможности', async () => {
+  const s = setup({ session: { loginToken: 'T' }, handlers: { 32: () => ({ contacts: [{ id: 777, phone: 79001112233 }] }) } });
+  delete s.deps.repo.rememberContacts; delete s.deps.repo.rememberContact;
+  await s.client.start();
+  assert.equal(s.client.authState, 'ready');
+  assert.equal(s.transports.length, 1);
+  s.last().push(128, { chatId: OWNER ^ 777, message: MSG({ id: 'rc', sender: 777 }) });
+  await s.tick(10);
+  assert.equal(s.hooks.length, 1);
+  await s.client.close();
+});
+
+test('QR_START без trackId/qrLink → error и клиент закрыт (раньше висел в starting без QR)', async () => {
+  const s = setup({ handlers: { 288: () => ({ ttl: 120000 }) } });
+  await s.client.start();
+  assert.equal(s.client.authState, 'error');
+  assert.equal(s.client.closed, true);
+  assert.match(lastAuth(s.repoCalls)[3].error, /trackId/);
+});
+
+test('обрывы в wait_qr не сжигают QR-раунды; бэкофф сбрасывается после выданного QR', async () => {
+  let starts = 0;
+  const s = setup({ handlers: { 288: () => ({ qrLink: 'L' + (++starts), trackId: 't' + starts, ttl: 120000, pollingInterval: 5000 }), 289: () => ({ status: {} }) } });
+  await s.client.start();
+  for (let i = 0; i <= MAX_QR_ROUNDS; i++) { s.last().serverClose(1006); await s.tick(10); }
+  assert.equal(starts, MAX_QR_ROUNDS + 2);
+  assert.equal(s.client.authState, 'wait_qr');
+  assert.equal(s.client.closed, false);
+  assert.equal(s.client.qrRounds, 0);
+  assert.equal(s.client.reconnects, 0);
+  await s.client.close();
+});
+
+test('срок QR — по ttl от своих часов: expiresAt сервера в прошлом (рассинхрон часов) не обрывает раунд сразу', async () => {
+  let starts = 0;
+  const s = setup({ handlers: { 288: () => ({ qrLink: 'L', trackId: 't' + (++starts), ttl: 120000, pollingInterval: 5000, expiresAt: T0 - 3_600_000 }), 289: () => ({ status: {} }) } });
+  await s.client.start();
+  await s.tick(30);
+  assert.equal(starts, 1);
+  assert.equal(s.client.authState, 'wait_qr');
+  await s.client.close();
+});
+
+test('LOGIN без id профиля: берём ownerId из сессии; нет и там → error (без своего id ни входящих, ни отправки)', async () => {
+  const noId = { ...PROFILE, profile: { contact: { phone: 79200255591, names: [{ name: 'Тест' }] } } };
+  const a = setup({ session: { loginToken: 'T', ownerId: OWNER }, handlers: { 19: () => noId } });
+  await a.client.start();
+  assert.equal(a.client.authState, 'ready');
+  assert.equal(a.client.ownerId, OWNER);
+  await a.client.close();
+  const b = setup({ session: { loginToken: 'T' }, handlers: { 19: () => noId } });
+  await b.client.start();
+  assert.equal(b.client.authState, 'error');
+  assert.equal(b.client.closed, true);
+  assert.match(lastAuth(b.repoCalls)[3].error, /id профиля/);
+});
+
+test('push сообщения раньше ответа LOGIN не теряется: ждёт входа и уходит в бэкенд с номером из LOGIN', async () => {
+  const s = setup({ session: { loginToken: 'T' }, handlers: { 19: (p, t) => {
+    t.push(128, { chatId: DIALOG, message: MSG({ id: 'early' }) });
+    return new Promise(r => setImmediate(() => r(PROFILE)));
+  } } });
+  await s.client.start();
+  await s.tick(10);
+  assert.equal(s.client.authState, 'ready');
+  assert.deepEqual(s.hooks.map(h => h.payload.message.id), ['early']);
+  assert.equal(s.hooks[0].payload.sender_phone_number, '79164942855');
+  await s.client.close();
+});
+
+test('догон после обрыва: история только чатов с активностью после обрыва (не каналы, не тихие) → новые сообщения по порядку, правка из истории проходит, удалённое — нет; граница сдвинута; поздний push того же id не дублирует; повторный обрыв без новых сообщений историю не запрашивает', async () => {
+  const histories = [];
+  let logins = 0;
+  const chatsAfter = [
+    { id: DIALOG, type: 'DIALOG', participants: PARTS, lastMessage: { id: 'n2', time: T0 + 70_000, sender: PEER } },
+    { id: OWNER ^ 4242, type: 'DIALOG', participants: { [OWNER]: 1, 4242: 1 }, lastMessage: { id: 'q', time: T0 - 3_600_000, sender: 4242 } },
+    { id: -9, type: 'CHANNEL', lastMessage: { id: 'c', time: T0 + 65_000, sender: 1 } },
+  ];
+  const s = await ready({ handlers: {
+    19: () => (++logins === 1 ? PROFILE : { ...PROFILE, chats: chatsAfter }),
+    49: (p) => {
+      histories.push(p);
+      return { messages: [
+        MSG({ id: 'n2', time: T0 + 70_000, text: 'второе' }),
+        MSG({ id: 'gone', time: T0 + 65_000, status: 'REMOVED' }),
+        MSG({ id: 'old', time: T0 - 3_600_000 }),
+        MSG({ id: 'n1', time: T0 + 60_000, text: 'первое (испр.)', status: 'EDITED' }),
+      ] };
+    },
+  } });
+  assert.equal(histories.length, 0);                 // первый вход — без догона
+  s.advance(10_000);
+  s.last().serverClose(1006);
+  s.advance(70_000);                                 // пока лежали, пришли n1 и n2
+  await s.tick(30);
+  assert.equal(s.client.authState, 'ready');
+  assert.deepEqual(histories, [{ chatId: DIALOG, from: T0 + 80_000, forward: 0, backward: 30, getMessages: true }]);
+  assert.deepEqual(s.hooks.map(h => h.payload.message.id), ['n1', 'n2']);
+  assert.equal(s.hooks[0].payload.message.text, 'первое (испр.)');
+  assert.equal(s.hooks[0].payload.sender_phone_number, '79164942855');
+  assert.equal(s.client.gapSince, null);
+  assert.equal(s.sessions.data.aliveAt, T0 + 80_000);
+  s.last().push(128, { chatId: DIALOG, message: MSG({ id: 'n2', time: T0 + 70_000, text: 'второе' }) });
+  await s.tick(10);
+  assert.equal(s.hooks.length, 2);
+  s.advance(10_000);
+  s.last().serverClose(1006);
+  s.advance(5_000);
+  await s.tick(30);
+  assert.equal(s.client.authState, 'ready');
+  assert.equal(histories.length, 1);                 // последнее сообщение чата уже переслано
+  assert.equal(s.client.gapSince, null);
+  await s.client.close();
+});
+
+test('рестарт процесса: граница догона — aliveAt из сессии; первый вход (aliveAt нет) догона не делает и ставит границу', async () => {
+  const chats = [{ id: DIALOG, type: 'DIALOG', participants: PARTS, lastMessage: { id: 'z', time: T0 - 60_000, sender: PEER } }];
+  let histories = 0;
+  const handlers = { 19: () => ({ ...PROFILE, chats }), 49: () => { histories++; return { messages: [MSG({ id: 'z', time: T0 - 60_000 })] }; } };
+  const a = setup({ session: { loginToken: 'T' }, handlers });
+  await a.client.start(); await a.tick(10);
+  assert.equal(histories, 0);
+  assert.equal(a.sessions.data.aliveAt, T0);
+  await a.client.close();
+  const b = setup({ session: { loginToken: 'T', aliveAt: T0 - 5 * 60_000 }, handlers });
+  await b.client.start(); await b.tick(20);
+  assert.equal(histories, 1);
+  assert.deepEqual(b.hooks.map(h => h.payload.message.id), ['z']);
+  assert.equal(b.sessions.data.aliveAt, T0);
+  await b.client.close();
+});
+
+test('обрыв посреди догона: граница не сдвигается — следующий вход догоняет с прежней', async () => {
+  let h = 0, logins = 0;
+  const chats = [{ id: DIALOG, type: 'DIALOG', participants: PARTS, lastMessage: { id: 'n1', time: T0 + 60_000, sender: PEER } }];
+  const s = await ready({ handlers: {
+    19: () => (++logins === 1 ? PROFILE : { ...PROFILE, chats }),
+    49: (p, t) => {
+      if (++h === 1) { t.serverClose(1006); return Object.assign(new Error('соединение с MAX закрыто'), { code: 'transport_closed', sent: true }); }
+      return { messages: [MSG({ id: 'n1', time: T0 + 60_000 })] };
+    },
+  } });
+  s.advance(10_000); s.last().serverClose(1006); s.advance(70_000);
+  await s.tick(40);
+  assert.equal(h, 2);
+  assert.deepEqual(s.hooks.map(x => x.payload.message.id), ['n1']);
+  assert.equal(s.client.gapSince, null);
+  assert.equal(s.client.authState, 'ready');
+  await s.client.close();
+});
+
+test('сообщение с незнакомым status — в бэкенд (новое сообщение терять нельзя), status в лог один раз; EDITED/REMOVED из push режутся', async () => {
+  const s = await ready();
+  const lines = await captureLogs(async () => {
+    s.last().push(128, { chatId: DIALOG, message: MSG({ id: 'u1', status: 'PENDING' }) });
+    s.last().push(128, { chatId: DIALOG, message: MSG({ id: 'u2', status: 'PENDING' }) });
+    s.last().push(128, { chatId: DIALOG, message: MSG({ id: 'e1', status: 'EDITED' }) });
+    s.last().push(128, { chatId: DIALOG, message: MSG({ id: 'r1', status: 'REMOVED' }) });
+    await s.tick(10);
+  });
+  assert.deepEqual(s.hooks.map(h => h.payload.message.id), ['u1', 'u2']);
+  assert.equal(lines.filter(l => /status=PENDING/.test(l)).length, 1);
+  await s.client.close();
+});
+
+test('диагностика по одному разу: своё сообщение с телефона и видимость номера в CONTACT_INFO', async () => {
+  const s = await ready({ handlers: { 32: (p) => ({ contacts: [{ id: p.contactIds[0], names: [{ name: 'Без номера' }] }] }) } });
+  const lines = await captureLogs(async () => {
+    s.last().push(128, { chatId: DIALOG, message: MSG({ id: 'o1', sender: OWNER }) });
+    s.last().push(128, { chatId: DIALOG, message: MSG({ id: 'o2', sender: OWNER }) });
+    s.last().push(128, { chatId: OWNER ^ 31337, message: MSG({ id: 'h1', sender: 31337 }) });
+    s.last().push(128, { chatId: OWNER ^ 31338, message: MSG({ id: 'h2', sender: 31338 }) });
+    await s.tick(10);
+  });
+  assert.equal(s.hooks.length, 4);
+  assert.equal(lines.filter(l => /своё сообщение с телефона/.test(l)).length, 1);
+  assert.equal(lines.filter(l => /CONTACT_INFO.*скрыт/.test(l)).length, 1);
+  await s.client.close();
+});
+
+test('соединение пропало, пока искали получателя → 422 «нет соединения» без доставки (а не TypeError и не «номер не найден»)', async () => {
+  const s = await ready({ handlers: { 64: (p) => SENT(p), 32: async () => { await s.client.close(); return { contacts: [] }; } } });
+  s.deps.repo.contactUserId = async () => { s.client.connected = false; return null; };
+  await assert.rejects(s.client.sendText({ text: 'x', phone: '79005556677' }), (e) => e.status === 422 && /нет соединения/.test(e.message));
+  s.client.connected = true;
+  await assert.rejects(s.client.sendText({ text: 'y', maxUserId: 777, phone: '79001110000' }), (e) => e.status === 422);
+  assert.equal(s.delCalls.filter(c => c[0] === 'create').length, 0);
+});
+
+test('кэш контактов ограничен и на CONTACT_INFO, и на запасном пути (номер из gateway_contacts / скрыт)', async () => {
+  const s = await ready({ handlers: { 32: (p) => ({ contacts: p.contactIds[0] % 2 ? [] : [{ id: p.contactIds[0], phone: 79000000000 + p.contactIds[0] }] }) } });
+  s.client.d.contactsCacheMax = 3;
+  for (const id of [501, 502, 503, 504, 505, 506]) s.last().push(128, { chatId: OWNER ^ id, message: MSG({ id: 'm' + id, sender: id }) });
+  await s.tick(20);
+  assert.equal(s.hooks.length, 6);
+  assert.ok(s.client.contacts.size <= 3, `в кэше ${s.client.contacts.size}`);
+  await s.client.close();
+});
+
+test('ожидание отправки в пути — от таймаута запроса: 2×MAX_REQUEST_TIMEOUT_MS + пауза повтора вложения + запас', () => {
+  const s = setup();
+  assert.equal(s.client.inflightWaitMs(), 2 * 100 + ATTACH_RETRY_MS + 5000);
+});
+
+test('logout при обрыве (токен есть, соединения нет): LOGOUT не уходит — WARN, что устройство останется в «Устройствах» MAX', async () => {
+  const s = await ready();
+  s.last().isOpen = false; s.client.connected = false;
+  const lines = await captureLogs(() => s.client.logout());
+  assert.equal(s.last().calls.some(c => c[0] === 20), false);
+  assert.ok(lines.some(l => /\[WARN\].*LOGOUT.*не отправлен/.test(l)));
+  assert.equal(s.client.authState, 'logged_out');
+  assert.equal(s.sessions.removed, 1);
+});
+
+test('обрыв, пока вход ещё дописывается (ready пишется в БД), не теряет реконнект: цикл делает ещё круг', async () => {
+  const s = setup({ session: { loginToken: 'T' } });
+  await s.client.start();
+  const okSetAuth = s.deps.repo.setAuth;
+  let dropped = false;
+  s.deps.repo.setAuth = async (...a) => {
+    await okSetAuth(...a);
+    if (a[1] === 'ready' && !dropped && s.transports.length === 2) { dropped = true; s.last().serverClose(1006); }
+  };
+  s.last().serverClose(1006);
+  await s.tick(30);
+  assert.equal(dropped, true);
+  assert.equal(s.transports.length, 3);
+  assert.equal(s.client.authState, 'ready');
+  assert.equal(s.client.connected, true);
+  assert.equal(s.client.reconnecting, false);
   await s.client.close();
 });

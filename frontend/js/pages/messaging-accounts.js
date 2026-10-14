@@ -49,10 +49,20 @@ let _msgAccChannel = null;   // канал подключаемого аккау
 
 // «Запустить заново»: WhatsApp и MAX — просто повторный start (POST идемпотентен, logout не нужен и вреден);
 // Telegram — logout+start, и только для pending: у active logout удалит рабочую сессию.
-function msgAccRestartPlan(channel, status) {
+// MAX на шаге кода/пароля (SMS не пришло, номер ошибочный) — logout+start: шаги привязаны
+// к соединению шлюза, повторный start вернул бы тот же шаг; токена входа ещё нет — сбрасывать нечего.
+function msgAccRestartPlan(channel, status, authState) {
+  if (channel === 'max' && (authState === 'wait_code' || authState === 'wait_password')) return { show: true, logout: true };
   if (channel === 'whatsapp' || channel === 'max') return { show: true, logout: false };
   if (channel === 'tdlib' && status === 'pending') return { show: true, logout: true };
   return { show: false, logout: false };
+}
+
+// Кнопка видна после ошибки (если план её разрешает), а у MAX — ещё и на шагах кода/пароля:
+// иначе из «ждём код» нельзя было вернуться к QR.
+function msgAccRestartVisible(channel, status, authState) {
+  if (authState === 'error') return msgAccRestartPlan(channel, status, authState).show;
+  return channel === 'max' && (authState === 'wait_code' || authState === 'wait_password');
 }
 
 // Занят ли шлюз ЭТИМ каналом (кнопки Telegram, WhatsApp и MAX независимы).
@@ -134,7 +144,7 @@ function msgAccConnectMax() { return msgAccConnect('max'); }
 // После ошибки (например «QR не отсканирован») — отключить зависший аккаунт и начать заново.
 async function msgAccRestart() {
   const id = _msgAccCurrent, channel = _msgAccChannel;
-  const plan = msgAccRestartPlan(channel, _msgAccStatus);
+  const plan = msgAccRestartPlan(channel, _msgAccStatus, _msgAccLastState);
   if (!id || !channel || !plan.show) return;
   if (plan.logout) {
     if (!confirm('Сбросить неудавшуюся попытку подключения и начать заново?')) return;
@@ -154,7 +164,7 @@ function msgAccRenderStep(authState, error, extra) {
   // Ошибку показываем, даже когда шагов ввода больше нет (error/logged_out).
   box.style.display = (step || error) ? '' : 'none';
   const restart = document.getElementById('msg-acc-restart');
-  if (restart) restart.style.display = (authState === 'error' && _msgAccCurrent && msgAccRestartPlan(_msgAccChannel, _msgAccStatus).show) ? '' : 'none';
+  if (restart) restart.style.display = (_msgAccCurrent && msgAccRestartVisible(_msgAccChannel, _msgAccStatus, authState)) ? '' : 'none';
   if (extra && step === 'qr') {
     const hint = document.getElementById('msg-acc-qr-hint');
     if (hint) hint.textContent = msgAccQrHint(_msgAccChannel);

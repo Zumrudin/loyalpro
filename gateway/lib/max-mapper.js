@@ -39,11 +39,16 @@ function isChannel(chat) { return !!(chat && chat.type === 'CHANNEL'); }
 function mimeOfName(name) { return MIME_BY_EXT[path.extname(String(name || '')).toLowerCase()] || 'application/octet-stream'; }
 
 // → {type, text, media:{kind, url, fileId, fileName, mimeType, size}|null} | null (не форвардим).
-function contentOf(message) {
+// status есть только у ре-броадкаста: REMOVED — удаление (не форвардим никогда), EDITED —
+// правка: в push это повтор уже пересланного, а в истории (догон, allowEdited) —
+// сообщение, которого мы ещё не видели. Незнакомый status — не повод терять сообщение
+// (набор значений у MAX не исчерпывающий, max-account-api types.ts MessageStatus).
+function contentOf(message, { allowEdited = false } = {}) {
   const m = message && typeof message === 'object' ? message : null;
   if (!m) return null;
   if (m.type && m.type !== 'USER') return null;      // SYSTEM/CONTROL — служебное
-  if (m.status) return null;                         // EDITED/REMOVED — ре-броадкаст, не новое сообщение
+  const status = m.status ? String(m.status).toUpperCase() : null;
+  if (status === 'REMOVED' || (status === 'EDITED' && !allowEdited)) return null;
   const text = typeof m.text === 'string' ? m.text : '';
   const attaches = Array.isArray(m.attaches) ? m.attaches.filter(a => a && typeof a === 'object') : [];
   const kinds = attaches.map(a => String(a._type || '').toUpperCase());
