@@ -803,3 +803,31 @@ describe('телеметрия продаж — правки ревью (07.10.2
       .toEqual([{ type: 'question_instead_of_offer', value: 'Какая дата вам удобна.' }]);
   });
 });
+
+describe('checkMedicalKbUsage (только лог)', () => {
+  const { checkMedicalKbUsage, hardViolations } = require('./services/agent/reply-guard');
+  const lines = ['«Биоревитализация и Мезотерапия»:', '* Рекомендуется курс из 3–5 процедур с интервалом в 2–4 недели'];
+  const titles = ['Биоревитализация и Мезотерапия'];
+  const patientText = 'Есть ли смысл делать био, если после второй процедуры прошло больше месяца?';
+
+  test('ответ по блоку — нарушения нет', () => {
+    expect(checkMedicalKbUsage('Обычно рекомендуют курс из 3–5 процедур с интервалом 2–4 недели.',
+      { medicalKbLines: lines, titles, patientText })).toEqual([]);
+  });
+
+  test('ответ мимо блока — medical_kb_unused, мягкий тип', () => {
+    const v = checkMedicalKbUsage('Это оценит врач на консультации.', { medicalKbLines: lines, titles, patientText });
+    expect(v).toEqual([{ type: 'medical_kb_unused', value: 'Это оценит врач на консультации.' }]);
+    expect(hardViolations(v)).toEqual([]);
+  });
+
+  test('общие слова с заголовком и с вопросом пациента не считаются использованием', () => {
+    expect(checkMedicalKbUsage('Биоревитализация после второй процедуры — уточнит доктор.',
+      { medicalKbLines: lines, titles, patientText })).toHaveLength(1);
+  });
+
+  test('блока не было — молчит', () => {
+    expect(checkMedicalKbUsage('что угодно', { medicalKbLines: null })).toEqual([]);
+    expect(checkMedicalKbUsage('что угодно', {})).toEqual([]);
+  });
+});
