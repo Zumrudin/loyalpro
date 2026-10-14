@@ -33,12 +33,25 @@ function canonPhone(phone) {
 }
 
 /**
+ * id личного чата собеседника из переписки — только ЧИСЛО (после trim), иначе null
+ * («id неизвестен»). Отрицательный id шлюз считает группой, и карточка записи
+ * пациента ушла бы в группу; «g:…» — ключ диалога админки; «e2e-chat» и прочее
+ * нечисловое — мусор. Это последний рубеж: lastConversation группы уже отсекает,
+ * но адресат строится из любого объекта chats, и доверять его содержимому нельзя.
+ */
+function peerId(chats, channel) {
+  const raw = chats && chats[channel] != null ? String(chats[channel]).trim() : '';
+  return /^\d+$/.test(raw) ? raw : null;
+}
+
+/**
  * chats — { tdlib?: '<id собеседника>', max?: '<id собеседника>' } из переписки
- * (rules.lastConversation). Группы туда не попадают по построению.
+ * (rules.lastConversation). Негодный (нечисловой) id считается неизвестным: для
+ * Telegram откат на номер, для MAX — без max_user_id.
  */
 function recipientFor(channel, phone, chats = {}) {
   const p = canonPhone(phone);
-  const chat = chats && chats[channel] ? String(chats[channel]) : null;
+  const chat = peerId(chats, channel);
   if (channel === 'whatsapp') return p ? { dispatchRouting: ['whatsapp'], phone: p } : null;
   if (channel === 'tdlib') {
     // Известный id чата доходит и до собеседника со скрытым номером; по номеру

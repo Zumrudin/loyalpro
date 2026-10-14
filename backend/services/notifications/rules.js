@@ -104,17 +104,26 @@ async function lastIncomingChannel(salonId, phone) {
 }
 
 /**
- * Что известно о переписке с клиентом: мессенджер, из которого он писал
- * последним (только входящие — наши же уведомления не должны сами себя
- * продвигать), и id личных чатов Telegram/MAX по этому номеру (адресация при
- * скрытом номере). Номер ищется во всех формах, в которых он лежит в
- * chatpush_messages.
+ * Что известно о переписке с клиентом: мессенджер его последней ЛИЧНОЙ переписки
+ * (только входящие — наши же уведомления не должны сами себя продвигать) и id
+ * личных чатов Telegram/MAX по этому номеру (адресация при скрытом номере).
+ * Номер ищется во всех формах, в которых он лежит в chatpush_messages.
  *
- * Группы в chats не попадают. SQL отсекает их ДО DISTINCT ON: иначе свежее
- * сообщение участника в рабочей группе (там phone = номер УЧАСТНИКА) вытеснило
- * бы его личный чат. Общий признак agent/group-chat.isGroupChatId — последнее
- * слово: он шире SQL (WhatsApp-jid @g.us/@broadcast), и своей копии правила тут
- * нет. Индекс — idx_chatpush_messages_dialog (salon_id, phone, msg_ts DESC).
+ * Группы не попадают ни в chats, ни в lastChannel. SQL отсекает tdlib/MAX-группы
+ * ('-…' и ключ админки 'g:…') ДО выбора строк: иначе свежее сообщение участника
+ * в рабочей группе (там phone = номер УЧАСТНИКА) вытеснило бы его личный чат из
+ * DISTINCT ON, а окно входящих забилось бы групповыми. Общий признак
+ * agent/group-chat.isGroupChatId — последнее слово: он шире SQL (WhatsApp-jid
+ * @g.us/@broadcast; запрос входящих не ограничен каналами, так что там это
+ * реально встречается), и своей копии правила тут нет. Поэтому входящие берутся
+ * окном LIMIT 20, а первая личная строка выбирается в JS; окно, целиком забитое
+ * WhatsApp-группами, даёт lastChannel=null (порядок по настройкам салона).
+ * Пустой chat_id — личное (как в DIALOG_KEY_SQL), поэтому COALESCE: «NULL NOT LIKE»
+ * дало бы NULL и выбросило такую строку.
+ *
+ * msg_ts в секундах: две реплики одной секунды без тай-брейка отдавали бы случайную
+ * строку, потому в обоих ORDER BY — id DESC. Индекс — idx_chatpush_messages_dialog
+ * (salon_id, phone, msg_ts DESC).
  */
 async function lastConversation(salonId, phone) {
   const canon = canonPhone(phone);
@@ -127,17 +136,20 @@ async function lastConversation(salonId, phone) {
       WHERE salon_id = $1 AND phone = ANY($2)
         AND channel IN ('tdlib','max') AND COALESCE(chat_id,'') <> ''
         AND chat_id NOT LIKE '-%' AND chat_id NOT LIKE 'g:%'
-      ORDER BY channel, msg_ts DESC NULLS LAST`,
+      ORDER BY channel, msg_ts DESC NULLS LAST, id DESC`,
     [salonId, forms]);
   const chats = {};
   for (const r of rows) {
     if (!isGroupChatId(r.chat_id)) chats[r.channel] = r.chat_id;
   }
-  const last = await db.oneOrNone(
-    `SELECT channel FROM chatpush_messages
+  const incoming = await db.any(
+    `SELECT channel, chat_id FROM chatpush_messages
       WHERE salon_id = $1 AND phone = ANY($2) AND direction = 'incoming'
-      ORDER BY msg_ts DESC NULLS LAST LIMIT 1`,
+        AND COALESCE(chat_id,'') NOT LIKE '-%' AND COALESCE(chat_id,'') NOT LIKE 'g:%'
+      ORDER BY msg_ts DESC NULLS LAST, id DESC
+      LIMIT 20`,
     [salonId, forms]);
+  const last = incoming.find((r) => !isGroupChatId(r.chat_id));
   return { lastChannel: last ? chatpush.replyRoutingFor(last.channel) : null, chats };
 }
 
