@@ -1,11 +1,13 @@
 'use strict';
 // Темп плановых отправок: «не чаще одного сообщения раз в N минут». Счётчик
-// ОБЩИЙ на ВСЕ ТРИ плановые очереди салона — напоминания о повторном визите,
-// касания «Заботы» и автоуведомления (`notification_sends`): WhatsApp
-// блокирует НОМЕР, а не правило или очередь, поэтому считать надо всё, что
-// уходит с одного инстанса Chatpush. Тот же UNION, что в соседнем
-// daily-limit.js («1 плановое сообщение клиенту в день»), только без фильтра
-// по телефону: тут ограничивается темп, а не адресат.
+// ОБЩИЙ на ВСЕ плановые очереди салона — ЧЕТЫРЕ таблицы: напоминания о
+// повторном визите (`reminder_queue`), касания «Заботы» (`care_touch_sends`) и
+// автоуведомления — v1 (`notification_sends`) и v2 (`notification_jobs`, свой
+// модуль вместо Chatpush): WhatsApp блокирует НОМЕР, а не правило или очередь,
+// поэтому считать надо всё, что уходит с одного инстанса мессенджера. Набор
+// очередей СОЗНАТЕЛЬНО шире, чем в соседнем daily-limit.js («1 плановое
+// сообщение клиенту в день»: там только две, автоуведомления не входят — см.
+// его шапку), и фильтра по телефону тут нет: ограничивается темп, а не адресат.
 //
 // ЧЕГО ЭТА ПРОВЕРКА НЕ ДАЁТ:
 //  - это чтение перед действием без блокировки, и защита ПРОЦЕССНАЯ (прод —
@@ -33,14 +35,15 @@
 // принимает вызывающий — воркер напоминаний там fail-CLOSED (не смог
 // прочитать счётчик → откладывает строку, а не шлёт вслепую).
 
-// greatest() от ТРЁХ отдельных max(), а не max() поверх UNION ALL: под каждую
-// из трёх очередей заведён частичный индекс (salon_id, sent_at DESC) WHERE
-// status='sent', но агрегат над UNION PostgreSQL к «взять первую строку
-// индекса» не сводит — живой EXPLAIN ANALYZE показывал Append со сканом ВСЕХ
-// строк status='sent' каждой таблицы. Три скалярных подзапроса превращаются в
-// InitPlan → Limit → Index Only Scan, то есть по одной строке на таблицу.
-// greatest() игнорирует NULL-аргументы; все три NULL → NULL — это штатное
-// «салон ещё ничего не слал», его разбирает lastPlannedSendAt.
+// greatest() от ЧЕТЫРЁХ отдельных max(), а не max() поверх UNION ALL: под каждую
+// из четырёх очередей заведён частичный индекс (salon_id, sent_at DESC) WHERE
+// status='sent' (у notification_jobs — idx_notification_jobs_sent), но агрегат
+// над UNION PostgreSQL к «взять первую строку индекса» не сводит — живой
+// EXPLAIN ANALYZE показывал Append со сканом ВСЕХ строк status='sent' каждой
+// таблицы. Четыре скалярных подзапроса превращаются в InitPlan → Limit → Index
+// Only Scan, то есть по одной строке на таблицу. greatest() игнорирует
+// NULL-аргументы; все четыре NULL → NULL — это штатное «салон ещё ничего не
+// слал», его разбирает lastPlannedSendAt.
 const LAST_SENT_SQL = `
   SELECT greatest(
     (SELECT max(s.sent_at) FROM care_touch_sends s
@@ -48,7 +51,9 @@ const LAST_SENT_SQL = `
     (SELECT max(q.sent_at) FROM reminder_queue q
       WHERE q.salon_id = $1 AND q.status = 'sent'),
     (SELECT max(n.sent_at) FROM notification_sends n
-      WHERE n.salon_id = $1 AND n.status = 'sent')
+      WHERE n.salon_id = $1 AND n.status = 'sent'),
+    (SELECT max(j.sent_at) FROM notification_jobs j
+      WHERE j.salon_id = $1 AND j.status = 'sent')
   ) AS last_at`;
 
 /** Когда салон последний раз отправлял плановое сообщение. Date | null. */

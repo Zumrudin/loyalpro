@@ -906,6 +906,139 @@ async function runMigrations(client) {
       ON notification_sends (salon_id, sent_at DESC) WHERE status = 'sent'
   `).catch(() => {});
 
+  // ── Уведомления YClients своими силами (замена Chatpush, 2026-10-13) ──
+  // Спека docs/superpowers/specs/2026-10-13-yclients-notifications-own-module-design.md.
+  // notification_rules получает новые trigger_type и поля; очередь — notification_jobs
+  // (notification_sends остаётся историей v1, воркер её больше не читает).
+  for (const col of [
+    'hours_before INTEGER',
+    'delay_minutes INTEGER',
+    'attachment_url TEXT',
+    'attachment_name VARCHAR(255)',
+    'on_no_show BOOLEAN NOT NULL DEFAULT TRUE',
+    'ask_confirmation BOOLEAN NOT NULL DEFAULT TRUE',
+  ]) {
+    await client.query(`ALTER TABLE notification_rules ADD COLUMN IF NOT EXISTS ${col}`).catch(() => {});
+  }
+
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS notification_settings (
+      salon_id             INTEGER PRIMARY KEY REFERENCES salons(id) ON DELETE CASCADE,
+      mode                 VARCHAR(10) NOT NULL DEFAULT 'off',
+      default_channels     JSONB NOT NULL DEFAULT '["tdlib","whatsapp","max"]'::jsonb,   -- порядок каскада
+      prefer_last_channel  BOOLEAN NOT NULL DEFAULT TRUE,   -- мессенджер последней переписки первым
+      quiet_from           VARCHAR(5) DEFAULT '21:00',
+      quiet_to             VARCHAR(5) DEFAULT '09:00',
+      confirm_reply_text   TEXT NOT NULL DEFAULT '✅ Ваша запись подтверждена.\nБудем ждать вас!',
+      rating_high_text     TEXT NOT NULL DEFAULT 'Спасибо за отличную оценку нашей работы! 🙏🏻',
+      rating_mid_text      TEXT NOT NULL DEFAULT 'Спасибо за оценку! Подскажите, пожалуйста, что нам стоит улучшить? Мы обязательно учтём.',
+      rating_low_text      TEXT NOT NULL DEFAULT 'Благодарим Вас за оценку.\nНе могли бы Вы рассказать, что именно Вас не устроило? Мы постараемся принять меры и, по возможности, исправить данную ситуацию.',
+      rating_escalate_low  BOOLEAN NOT NULL DEFAULT TRUE,
+      updated_at           TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `).catch(() => {});
+
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS notification_jobs (
+      id                  BIGSERIAL PRIMARY KEY,
+      salon_id            INTEGER NOT NULL REFERENCES salons(id) ON DELETE CASCADE,
+      rule_id             INTEGER REFERENCES notification_rules(id) ON DELETE SET NULL,
+      rule_title          VARCHAR(255),
+      trigger_type        VARCHAR(40) NOT NULL,
+      yclients_record_id  BIGINT NOT NULL DEFAULT 0,
+      visit_datetime      TIMESTAMPTZ,
+      client_id           INTEGER REFERENCES clients(id) ON DELETE SET NULL,
+      phone               VARCHAR(32),
+      scheduled_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      status              VARCHAR(20) NOT NULL DEFAULT 'pending',
+      attempts            INTEGER NOT NULL DEFAULT 0,
+      error               TEXT,
+      rendered_text       TEXT NOT NULL,
+      attachment_url      TEXT,
+      routing             JSONB,                     -- рассчитанный каскад этой отправки
+      cascade_pos         INTEGER NOT NULL DEFAULT 0,  -- с какого шага (продолжение после «Невозможно доставить»)
+      cascade_log         JSONB NOT NULL DEFAULT '[]'::jsonb,  -- шаги [{ch,res,err?,at}]
+      channel_used        VARCHAR(30),
+      delivery_id         VARCHAR(120),
+      account_id          VARCHAR(40),               -- аккаунт, которым ушло (для сверки доставки)
+      check_at            TIMESTAMPTZ,               -- когда сверить статус доставки
+      meta                JSONB NOT NULL DEFAULT '{}'::jsonb,
+      confirmed_at        TIMESTAMPTZ,
+      decision_reason     TEXT,
+      last_attempt_at     TIMESTAMPTZ,
+      created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      sent_at             TIMESTAMPTZ
+    )
+  `).catch(() => {});
+  // Один job на (правило, запись, момент визита): перенос даёт новый ключ,
+  // повтор вебхука — DO NOTHING. visit_datetime NULL у тестовых отправок —
+  // уникальность по NULL не работает, поэтому COALESCE на эпоху.
+  await client.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_notification_jobs_rule_record_visit
+      ON notification_jobs (rule_id, yclients_record_id, COALESCE(visit_datetime, 'epoch'::timestamptz))
+  `).catch(() => {});
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS idx_notification_jobs_due
+      ON notification_jobs (scheduled_at, id) WHERE status = 'pending'
+  `).catch(() => {});
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS idx_notification_jobs_check
+      ON notification_jobs (check_at) WHERE status = 'sent' AND check_at IS NOT NULL
+  `).catch(() => {});
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS idx_notification_jobs_record
+      ON notification_jobs (salon_id, yclients_record_id)
+  `).catch(() => {});
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS idx_notification_jobs_phone_sent
+      ON notification_jobs (salon_id, phone, sent_at DESC) WHERE status = 'sent'
+  `).catch(() => {});
+  // Под send-pacing.js: MAX(sent_at) по салону — как idx_notification_sends_sent выше.
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS idx_notification_jobs_sent
+      ON notification_jobs (salon_id, sent_at DESC) WHERE status = 'sent'
+  `).catch(() => {});
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS idx_notification_jobs_journal
+      ON notification_jobs (salon_id, created_at DESC)
+  `).catch(() => {});
+
+  // Последнее известное состояние записи — чтобы отличать перенос (datetime
+  // изменился) от прочих update: records к моменту хука уже перезаписан
+  // processRecordEvent, прежнего значения там нет.
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS notification_record_state (
+      salon_id            INTEGER NOT NULL REFERENCES salons(id) ON DELETE CASCADE,
+      yclients_record_id  BIGINT NOT NULL,
+      visit_datetime      TIMESTAMPTZ,
+      seance_length       INTEGER,
+      attendance          INTEGER NOT NULL DEFAULT 0,
+      deleted             BOOLEAN NOT NULL DEFAULT FALSE,
+      services            JSONB NOT NULL DEFAULT '[]'::jsonb,
+      staff_id            BIGINT,
+      client_yc_id        BIGINT,
+      phone               VARCHAR(32),
+      created_user_id     BIGINT,
+      updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      PRIMARY KEY (salon_id, yclients_record_id)
+    )
+  `).catch(() => {});
+
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS visit_ratings (
+      id                  BIGSERIAL PRIMARY KEY,
+      salon_id            INTEGER NOT NULL REFERENCES salons(id) ON DELETE CASCADE,
+      yclients_record_id  BIGINT NOT NULL,
+      client_id           INTEGER REFERENCES clients(id) ON DELETE SET NULL,
+      phone               VARCHAR(32),
+      rating              SMALLINT NOT NULL,
+      comment             TEXT,
+      source_job_id       BIGINT,
+      created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE (salon_id, yclients_record_id)
+    )
+  `).catch(() => {});
+
   // ── Отдел заботы: программы касаний после состоявшегося визита ──
   // Программа = условия отбора визита (как в notification_rules) + цепочка
   // касаний care_touches. На каждый подходящий визит заводится care_enrollments,
