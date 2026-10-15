@@ -10,10 +10,11 @@ const FRONT = path.join(__dirname, '..', '..');            // frontend/
 const BACK = path.join(__dirname, '..', '..', '..', 'backend');
 
 // Контекст как у браузера: window — это сам глобальный объект; localStorage нужен api.js на верхнем уровне.
-function browserContext() {
+function browserContext(extra = {}) {
   const ctx = vm.createContext({
     console, URLSearchParams,                  // браузерные глобали, которыми пользуются помощники
     localStorage: { getItem: () => null, setItem() {}, removeItem() {} },
+    ...extra,
   });
   ctx.window = ctx;
   return ctx;
@@ -24,11 +25,17 @@ function run(ctx, file, src) {
 // Объекты из vm-контекста — из другой «реальности» (чужие Object/Array.prototype): deepStrictEqual их не сравнит.
 const plain = (x) => JSON.parse(JSON.stringify(x));
 
-// Один контекст на все помощники: файл грузится ровно так же, как в браузере.
-const ctx = browserContext();
-for (const f of ['core/utils.js', 'core/api.js', 'js/pages/conditions-editor.js', 'js/pages/broadcasts.js', 'js/pages/notifications.js']) {
-  run(ctx, f, fs.readFileSync(path.join(FRONT, f.startsWith('core/') ? `js/${f}` : f), 'utf8'));
+// Страница как в браузере: те же файлы в том же порядке в одном контексте.
+function loadPage(extra) {
+  const c = browserContext(extra);
+  for (const f of ['core/utils.js', 'core/api.js', 'js/pages/conditions-editor.js', 'js/pages/broadcasts.js', 'js/pages/notifications.js']) {
+    run(c, f, fs.readFileSync(path.join(FRONT, f.startsWith('core/') ? `js/${f}` : f), 'utf8'));
+  }
+  return c;
 }
+
+// Один контекст на все чистые помощники (документа в нём нет).
+const ctx = loadPage();
 const k = (name) => vm.runInContext(name, ctx);            // const верхнего уровня не попадает в свойства контекста
 
 // ── глобальная область ────────────────────────────────────────────────────────────────────────
@@ -420,4 +427,289 @@ test('подсказки типов — тексты, утверждённые �
   assert.match(T.first_visit.hint, /при создании первой записи/);
   assert.match(T.record_created.hint, /только для будущих визитов/);
   assert.match(T.record_rescheduled.hint, /только для будущих визитов/);
+});
+
+// ── ответы сервера: отмена job'а и тумблер ────────────────────────────────────────────────────
+
+test('ntCancelOutcome: {ok:false} — не «Отправка отменена»', () => {
+  assert.deepStrictEqual(plain(ctx.ntCancelOutcome({ ok: true })), { text: 'Отправка отменена', type: 'ok' });
+  const no = { text: 'Строка уже не в очереди (ушла или отменена)', type: 'err' };
+  for (const reply of [{ ok: false }, {}, null, undefined]) assert.deepStrictEqual(plain(ctx.ntCancelOutcome(reply)), no);
+});
+
+test('ntToggleMessage: при выключении показывает cancelledJobs, если поле есть', () => {
+  const on = { rule: { is_enabled: true }, cancelledJobs: 0 };
+  assert.strictEqual(ctx.ntToggleMessage(on), 'Правило включено');                          // 0 при включении — не новость
+  const off = (n) => ({ rule: { is_enabled: false }, ...(n === undefined ? {} : { cancelledJobs: n }) });
+  assert.strictEqual(ctx.ntToggleMessage(off(3)), 'Правило выключено. Погашено в очереди: 3');
+  assert.strictEqual(ctx.ntToggleMessage(off(0)), 'Правило выключено. Погашено в очереди: 0');   // поле есть — говорим как есть
+  assert.strictEqual(ctx.ntToggleMessage(off()), 'Правило выключено');                        // старый бэкенд без поля
+  assert.strictEqual(ctx.ntToggleMessage(off('3')), 'Правило выключено');                     // не число — не подставляем
+  assert.strictEqual(ctx.ntToggleMessage(null), 'Правило выключено');
+});
+
+// ── обработчики с подменёнными api/notify: что реально сказано пользователю и перечитано ───────
+
+// Заглушка document для esc(): в браузере он строится на DOM (textContent → innerHTML), а в vm документа нет.
+// Сериализация текстового узла та же: & < > и NBSP, кавычки НЕ экранируются. getElementById хранит «элементы»
+// по id — из них читаем то, что скрипт записал в innerHTML.
+function domPage() {
+  const els = {};
+  const htmlEscape = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\u00a0/g, '&nbsp;');
+  const document = {
+    createElement() { let text = ''; return { set textContent(v) { text = String(v); }, get innerHTML() { return htmlEscape(text); } }; },
+    getElementById(id) {
+      return els[id] || (els[id] = { id, innerHTML: '', textContent: '', value: '', placeholder: '', style: {}, className: '',
+        classList: { toggle() {}, add() {}, remove() {}, contains: () => false } });
+    },
+  };
+  const page = loadPage({ document, confirm: () => true });
+  page.els = els;
+  return page;
+}
+
+// Подменяем то, что ходит в сеть/на экран, и считаем вызовы. Функции-объявления верхнего уровня — свойства
+// глобального объекта: вызовы внутри скрипта находят подмену при каждом обращении.
+function stubPage(reply, confirmAnswer = true) {
+  const page = domPage();
+  const log = { api: [], notify: [], loads: 0, jobsLoads: 0, renders: 0 };
+  page.__log = log; page.__reply = reply; page.confirm = () => confirmAnswer;
+  vm.runInContext(`
+    api = async (m, p) => { __log.api.push([m, p]); return __reply; };
+    notify = (t, ty) => { __log.notify.push([t, ty]); };
+    ntLoad = async () => { __log.loads++; };
+    ntLoadJobs = async () => { __log.jobsLoads++; };
+    ntRenderRules = () => { __log.renders++; };`, page);
+  return { page, log };
+}
+
+test('ntCancelJob: {ok:false} → «Строка уже не в очереди…» и перерисовка журнала, не «Отправка отменена»', async () => {
+  const lost = stubPage({ ok: false });
+  await lost.page.ntCancelJob(5);
+  assert.deepStrictEqual(plain(lost.log.notify), [['Строка уже не в очереди (ушла или отменена)', 'err']]);
+  assert.strictEqual(lost.log.jobsLoads, 1);
+  assert.deepStrictEqual(plain(lost.log.api), [['POST', '/api/notification-rules/jobs/5/cancel']]);
+
+  const done = stubPage({ ok: true });
+  await done.page.ntCancelJob(5);
+  assert.deepStrictEqual(plain(done.log.notify), [['Отправка отменена', 'ok']]);
+  assert.strictEqual(done.log.jobsLoads, 1);
+
+  const declined = stubPage({ ok: true }, false);          // отказ от confirm — ни запроса, ни сообщений
+  await declined.page.ntCancelJob(5);
+  assert.deepStrictEqual(plain(declined.log), { api: [], notify: [], loads: 0, jobsLoads: 0, renders: 0 });
+});
+
+test('ntToggle: после тумблера список перечитывается, cancelledJobs показан; отказ от confirm ничего не шлёт', async () => {
+  const rules = '_ntRules = [{ id: 7, is_enabled: true, pending_count: 2 }, { id: 8, is_enabled: false, pending_count: 0 }];';
+  const off = stubPage({ ok: true, rule: { is_enabled: false }, cancelledJobs: 2 });
+  vm.runInContext(rules, off.page);
+  await off.page.ntToggle(7);
+  assert.deepStrictEqual(plain(off.log.notify).map((n) => n[0]), ['Правило выключено. Погашено в очереди: 2']);
+  assert.strictEqual(off.log.loads, 1, 'список правил не перечитан');
+  assert.deepStrictEqual(plain(off.log.api), [['POST', '/api/notification-rules/7/toggle']]);
+
+  const on = stubPage({ ok: true, rule: { is_enabled: true }, cancelledJobs: 0 });     // включение: confirm не нужен
+  vm.runInContext(rules, on.page);
+  let asked = false;
+  on.page.confirm = () => { asked = true; return true; };
+  await on.page.ntToggle(8);
+  assert.strictEqual(asked, false);
+  assert.deepStrictEqual(plain(on.log.notify).map((n) => n[0]), ['Правило включено']);
+  assert.strictEqual(on.log.loads, 1);
+
+  const declined = stubPage({ ok: true, rule: { is_enabled: false }, cancelledJobs: 2 }, false);
+  vm.runInContext(rules, declined.page);
+  await declined.page.ntToggle(7);
+  assert.deepStrictEqual(plain(declined.log.api), []);
+  assert.strictEqual(declined.log.loads, 0);
+  assert.strictEqual(declined.log.renders, 1, 'тумблер должен вернуться к состоянию модели');
+});
+
+// ── экранирование: XSS-фикстуры через настоящие рендеры ───────────────────────────────────────
+
+// Строки, которыми ломают разметку и JS-литерал: сущность, раскодируемая в кавычку ДО JS-разбора; кавычки обоих
+// видов; обратный слэш; закрывающий тег; перевод строки и разделитель строк.
+const HOSTILE = [
+  "&#39;);canary();//", "');canary();//", '");canary();("', "\\');canary();//", '&amp;#39;);canary();//', '&quot;);canary();//',
+  '</script><img src=x onerror=canary()>', "a\nb\u2028c", '\'"&<>', '"><img src=x onerror=canary()>',
+];
+
+// Раскодирование значения атрибута ровно так, как это делает HTML-парсер: ОДИН проход по сущностям.
+const decodeAttr = (v) => v.replace(/&(#x[0-9a-fA-F]+|#\d+|amp|lt|gt|quot|apos);/g, (m, e) => {
+  if (e[0] === '#') return String.fromCodePoint(e[1] === 'x' || e[1] === 'X' ? parseInt(e.slice(2), 16) : parseInt(e.slice(1), 10));
+  return { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'" }[e];
+});
+
+// Разбор разметки без браузера: теги с атрибутами в двойных кавычках (так пишет сам скрипт).
+function tokens(html) {
+  const re = /<(\/?)([a-zA-Z][a-zA-Z0-9]*)((?:\s+[a-zA-Z_:][-a-zA-Z0-9_:.]*(?:="[^"]*")?)*)\s*>/g;
+  const out = [];
+  let m;
+  while ((m = re.exec(html))) {
+    const attrs = {};
+    for (const a of m[3].matchAll(/\s+([a-zA-Z_:][-a-zA-Z0-9_:.]*)(?:="([^"]*)")?/g)) attrs[a[1]] = a[2] === undefined ? '' : a[2];
+    out.push({ close: m[1] === '/', tag: m[2].toLowerCase(), attrs });
+  }
+  return out;
+}
+
+const TAGS_OK = new Set(['a', 'b', 'button', 'code', 'div', 'img', 'input', 'label', 'span', 'td', 'tr']);
+const ATTRS_OK = new Set(['alt', 'accept', 'checked', 'class', 'data-ch', 'data-id', 'data-label', 'data-status', 'data-type', 'disabled',
+  'href', 'id', 'max', 'min', 'onchange', 'onclick', 'rel', 'src', 'step', 'style', 'target', 'title', 'type', 'value']);
+
+/** Разметка не содержит ничего, кроме своих тегов и атрибутов: ни вставленного тега, ни нового атрибута (onerror=…). */
+function assertStructure(html, what) {
+  const toks = tokens(html);
+  const lt = (html.match(/</g) || []).length;
+  assert.strictEqual(lt, toks.length, `${what}: есть '<', не разобранный как свой тег (вставленный тег или пробитая кавычка)`);
+  for (const t of toks) {
+    assert.ok(TAGS_OK.has(t.tag), `${what}: чужой тег <${t.tag}>`);
+    for (const name of Object.keys(t.attrs)) assert.ok(ATTRS_OK.has(name), `${what}: чужой атрибут ${name} у <${t.tag}>`);
+  }
+  return toks;
+}
+
+/** Исполняет каждый on*-обработчик (после раскодирования сущностей) в песочнице: вызов своей функции записывается,
+ *  всё постороннее (canary/alert или ReferenceError на чужом имени) — провал. */
+function runHandlers(html) {
+  const calls = [];
+  let stray = 0;
+  for (const t of tokens(html)) {
+    for (const [name, raw] of Object.entries(t.attrs)) {
+      if (!name.startsWith('on')) continue;
+      const code = decodeAttr(raw);
+      const sandbox = { alert() { stray++; }, canary() { stray++; } };
+      const callee = /^([A-Za-z_]\w*)\(/.exec(code);
+      if (callee) sandbox[callee[1]] = (...args) => calls.push({ fn: callee[1], args });
+      try { vm.runInNewContext(code, sandbox, { timeout: 200 }); } catch (e) { stray++; }
+    }
+  }
+  return { calls, stray };
+}
+
+test('ntJsArg / ntAttr: враждебные значения не выходят ни из атрибута, ни из JS-литерала', () => {
+  const page = domPage();
+  const ntAttr = vm.runInContext('ntAttr', page), ntJsArg = vm.runInContext('ntJsArg', page);   // const верхнего уровня — не свойство контекста
+  for (const s of HOSTILE) {
+    const html = `<a title="${ntAttr(s)}" onclick="f('${ntJsArg(s)}')">x</a>`;
+    const [a] = assertStructure(html, JSON.stringify(s)).filter((t) => t.tag === 'a');
+    assert.strictEqual(decodeAttr(a.attrs.title), s, 'значение атрибута искажено');
+    const { calls, stray } = runHandlers(html);
+    assert.strictEqual(stray, 0, `в обработчике исполнился посторонний код: ${JSON.stringify(s)}`);
+    assert.deepStrictEqual(plain(calls), [{ fn: 'f', args: [s] }], `аргумент обработчика искажён: ${JSON.stringify(s)}`);
+  }
+});
+
+test('прежний ntJsArg (escAttr(escJs(s))) на «&#39;);…» исполнял код — тест это ловит', () => {
+  const page = domPage();
+  const old = (s) => page.escAttr(page.escJs(s));
+  const html = `<a onclick="f('${old(HOSTILE[0])}')">x</a>`;
+  assert.ok(runHandlers(html).stray > 0, 'уязвимость не воспроизвелась: тест не отличает безопасный ntJsArg от небезопасного');
+});
+
+test('ntUploadHref: только наш каталог загрузок', () => {
+  assert.strictEqual(ctx.ntUploadHref('/uploads/notify_1_2_3.jpg'), '/uploads/notify_1_2_3.jpg');
+  assert.strictEqual(ctx.ntUploadHref('/uploads/notify_seed/Пилинг.jpg'), '/uploads/notify_seed/Пилинг.jpg');
+  for (const bad of ['javascript:canary()', 'https://evil.example/x.jpg', '//evil.example/x.jpg', '/uploads', '/uploadsX/a.jpg',
+    'uploads/a.jpg', '/uploads/../etc/passwd', '/other/uploads/a.jpg', '', null, undefined, 5, {}]) {
+    assert.strictEqual(ctx.ntUploadHref(bad), '', `пропущено: ${JSON.stringify(bad)}`);
+  }
+});
+
+test('ntRuleRow с XSS-фикстурой: свои теги и атрибуты, обработчики вызывают только свои функции', () => {
+  const page = domPage();
+  const evil = '<img src=x onerror=canary()>"\'&#39;);canary();//';
+  vm.runInContext(`_ntDicts = { staff: [], categories: [], services: [{ id: 1, title: ${JSON.stringify(evil)}, category_id: 0 }] };`, page);
+  const rule = {
+    id: 7, title: evil, is_enabled: false, trigger_type: 'visit_reminder', hours_before: 24, ask_confirmation: true,
+    attachment_url: '"><script>canary()</script>', sent_count: 2, shadow_count: 1, pending_count: 3, failed_count: 1,
+    conditions: { logic: 'and', items: [{ type: 'service', ids: [1, '"><img src=x onerror=canary()>'] }] },
+  };
+  const html = page.ntRuleRow(rule);
+  assertStructure(html, 'ntRuleRow');
+  assert.ok(html.includes('&lt;img src=x onerror=canary()&gt;'), 'название правила не экранировано как текст');
+  assert.ok(html.includes('care-st-stopped'), 'выключенное правило без бейджа');
+  const { calls, stray } = runHandlers(html);
+  assert.strictEqual(stray, 0);
+  assert.deepStrictEqual(plain(calls).map((c) => [c.fn, ...c.args]), [['ntToggle', 7], ['ntOpenEditor', 7], ['ntOpenEditor', 7]]);
+
+  // id приходит из БД числом; строка с кодом после Number() — NaN, а не исполняемый хвост
+  const html2 = page.ntRuleRow({ ...rule, id: '7);canary();//' });
+  assertStructure(html2, 'ntRuleRow (id-строка)');
+  const r2 = runHandlers(html2);
+  assert.strictEqual(r2.stray, 0);
+  assert.ok(plain(r2.calls).every((c) => Number.isNaN(c.args[0]) || c.args[0] === null), 'id не превратился в NaN');
+});
+
+test('ntTypeCard: неизвестный тип из БД — без кнопки добавления, название экранировано', () => {
+  const page = domPage();
+  const html = page.ntTypeCard('<img src=x onerror=canary()>', [{ id: 1, title: 'T', trigger_type: 'x', is_enabled: true, conditions: null }]);
+  assertStructure(html, 'ntTypeCard');
+  assert.ok(!/ntOpenEditor\(null/.test(html), 'у неизвестного типа не должно быть «+ Правило»');
+  assert.strictEqual(runHandlers(html).stray, 0);
+});
+
+test('ntJobRow с XSS-фикстурой: свои теги и атрибуты, ссылка вложения — только на /uploads/', () => {
+  const page = domPage();
+  const job = {
+    id: '5', status: 'pending', trigger_type: 'visit_reminder', rule_title: '<b onmouseover=canary()>x</b>',
+    client_name: '<img src=x onerror=canary()>', phone: '"><script>canary()</script>', yclients_record_id: '0',
+    rendered_text: '<script>canary()</script>"\'&#39;);canary();//', attachment_url: 'javascript:canary()',
+    cascade_log: [{ ch: 'tdlib', res: 'rejected', err: '"><img src=x onerror=canary()>' }, { ch: '<x>', res: '<y>' }],
+    error: '<i>e</i>', decision_reason: null, confirmed_at: '2026-10-14T10:00:00Z', channel_used: '<z>',
+    visit_datetime: '2026-10-15T10:00:00Z', scheduled_at: '2026-10-15T08:00:00Z', created_at: '2026-10-14T10:00:00Z', sent_at: null,
+  };
+  let html = page.ntJobRow(job);
+  assertStructure(html, 'ntJobRow');
+  assert.ok(html.includes('&lt;script&gt;canary()&lt;/script&gt;'), 'текст сообщения не экранирован');
+  assert.ok(!/<a\b/.test(html), 'для javascript: не должно быть ссылки');
+  assert.ok(html.includes('📎'), 'признак вложения пропал');
+  let r = runHandlers(html);
+  assert.strictEqual(r.stray, 0);
+  assert.deepStrictEqual(plain(r.calls), [{ fn: 'ntCancelJob', args: [5] }]);
+
+  // пустое значение вложения — без значка; id как строка с кодом не исполняется
+  assert.ok(!page.ntJobRow({ ...job, attachment_url: null }).includes('📎'));
+  html = page.ntJobRow({ ...job, id: '5);canary();//' });
+  assertStructure(html, 'ntJobRow (id-строка)');
+  r = runHandlers(html);
+  assert.strictEqual(r.stray, 0);
+
+  // свой каталог — ссылка есть; чужой/обходной — нет
+  const link = (url) => { const h = page.ntJobRow({ ...job, attachment_url: url }); assertStructure(h, url); return tokens(h).find((t) => t.tag === 'a'); };
+  assert.strictEqual(decodeAttr(link('/uploads/notify_1_2_3.jpg').attrs.href), '/uploads/notify_1_2_3.jpg');
+  for (const bad of ['https://evil.example/x.jpg', '//evil.example/x.jpg', '/uploads/../etc/passwd', 'data:text/html,<script>']) {
+    assert.strictEqual(link(bad), undefined, `ссылка на ${bad}`);
+  }
+});
+
+test('ntRenderTypeFields: превью картинки — только для /uploads/, «Убрать картинку» остаётся', () => {
+  const page = domPage();
+  const render = (url, name) => {
+    page.ntRenderTypeFields({ trigger_type: 'visit_after', delay_minutes: 5, attachment_url: url, attachment_name: name });
+    const html = page.els.ntTypeFields.innerHTML;
+    assertStructure(html, 'ntRenderTypeFields');
+    return html;
+  };
+  assert.match(render('/uploads/notify_1_2_3.jpg', '<b>a.jpg</b>'), /<img src="\/uploads\/notify_1_2_3\.jpg"/);
+  const bad = render('javascript:canary()', '"><img src=x onerror=canary()>');
+  assert.ok(!/<img/.test(bad), 'для javascript: не должно быть <img>');
+  assert.ok(bad.includes('Убрать картинку'), 'без превью удалить вложение стало бы нечем');
+  assert.ok(bad.includes('&lt;img src=x onerror=canary()&gt;'), 'имя файла не экранировано');
+  assert.ok(!/<img/.test(render(null, null)));
+  assert.strictEqual(runHandlers(bad).stray, 0);
+});
+
+test('ntRenderCascade: враждебный идентификатор мессенджера из настроек не исполняется', () => {
+  const page = domPage();
+  vm.runInContext(`_ntCascade = [${JSON.stringify(HOSTILE[0])}, 'tdlib'];`, page);
+  page.ntRenderCascade();
+  const html = page.els.ntsChannels.innerHTML;
+  assertStructure(html, 'ntRenderCascade');
+  const { calls, stray } = runHandlers(html);
+  assert.strictEqual(stray, 0);
+  const toggles = plain(calls).filter((c) => c.fn === 'ntToggleCh').map((c) => c.args[0]);
+  assert.ok(toggles.includes(HOSTILE[0]), 'аргумент ntToggleCh искажён');
+  assert.ok(plain(calls).some((c) => c.fn === 'ntMoveCh'));
 });

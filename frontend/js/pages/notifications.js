@@ -105,8 +105,16 @@ const NT_EMPTY_CASCADE_CONFIRM = 'В каскаде не выбран ни од�
 // ═══ 2. Чистые помощники ═══════════════════════════════════════════════════
 
 // Значение для атрибута HTML (esc — & < >, escAttr — кавычки) и для строкового аргумента инлайн-обработчика.
+// Строка в атрибуте-обработчике (onclick и т.п.) проходит ДВА разбора: сперва HTML раскодирует сущности, потом JS читает
+// литерал. Поэтому после escJs обязателен esc (иначе «&#39;);…» декодируется в кавычку и код исполняется), а потом escAttr.
 const ntAttr = (s) => escAttr(esc(s));
-const ntJsArg = (s) => escAttr(escJs(s));
+const ntJsArg = (s) => escAttr(esc(escJs(s)));
+
+// Ссылка на файл вложения — только наш каталог загрузок: значение приходит из БД, и «javascript:…» или чужой
+// адрес в href/src не должны попадать в разметку. '..' режем: он уводит из /uploads/ на другие пути сайта.
+function ntUploadHref(url) {
+  return typeof url === 'string' && url.startsWith('/uploads/') && !url.includes('..') ? url : '';
+}
 
 function ntTypeLabel(t) { return (NT_TYPES[t] || {}).lbl || t || '—'; }
 
@@ -208,6 +216,20 @@ function ntCascadePath(log) { return ntCascadeSteps(log).map((s) => s.text).join
 function ntJobWhen(j) {
   if (j.status === 'pending') return { ts: j.scheduled_at, plan: true };
   return { ts: j.sent_at || j.scheduled_at || j.created_at, plan: false };
+}
+
+/** Ответ POST /jobs/:id/cancel: {ok:false} — строка уже не pending (ушла, отменена воркером или другим админом). */
+function ntCancelOutcome(d) {
+  return d && d.ok
+    ? { text: 'Отправка отменена', type: 'ok' }
+    : { text: 'Строка уже не в очереди (ушла или отменена)', type: 'err' };
+}
+
+/** Ответ POST /:id/toggle: при выключении сервер возвращает cancelledJobs — сколько запланированных отправок погашено. */
+function ntToggleMessage(d) {
+  if (d && d.rule && d.rule.is_enabled) return 'Правило включено';
+  const n = d && d.cancelledJobs;
+  return 'Правило выключено' + (typeof n === 'number' && Number.isFinite(n) ? `. Погашено в очереди: ${n}` : '');
 }
 
 function ntReplyLabel(type) {
@@ -458,7 +480,7 @@ function ntRuleRow(r) {
   const counts = [['sent_count', '✅', 'Отправлено клиентам'], ['shadow_count', '🟡', 'В тени: записано в журнал без отправки'],
     ['pending_count', '⏳', 'Ждут отправки'], ['failed_count', '❌', 'Ошибок отправки']]
     .filter(([k]) => Number(r[k]) > 0)
-    .map(([k, ico, tip]) => `<span class="care-stat" title="${escAttr(tip)}">${ico} <b>${Number(r[k])}</b></span>`).join('');
+    .map(([k, ico, tip]) => `<span class="care-stat" title="${ntAttr(tip)}">${ico} <b>${Number(r[k])}</b></span>`).join('');
   return `<div class="nt-rule" data-id="${id}">
     <label class="tgl" title="${on ? 'Выключить правило' : 'Включить правило'}"><input type="checkbox" ${on ? 'checked' : ''}
       onchange="ntToggle(${id})"><span class="ts"></span></label>
@@ -481,7 +503,7 @@ async function ntToggle(id) {
   }
   try {
     const d = await api('POST', `/api/notification-rules/${id}/toggle`);
-    notify(d && d.rule && d.rule.is_enabled ? 'Правило включено' : 'Правило выключено');
+    notify(ntToggleMessage(d));
   } catch (e) {
     notify(e.message || 'Не удалось переключить', 'err');
   }
@@ -573,7 +595,7 @@ function ntRenderTypeFields(r) {
   if (t === 'visit_after') {
     const has = !!r.attachment_url;
     html += `<div class="fg"><label class="fl">Картинка к сообщению (JPEG, PNG или WEBP, до 5 МБ)</label>
-      ${has ? `<div class="nt-att"><img src="${ntAttr(r.attachment_url)}" alt="Картинка правила">
+      ${has ? `<div class="nt-att">${ntUploadHref(r.attachment_url) ? `<img src="${ntAttr(r.attachment_url)}" alt="Картинка правила">` : ''}
           <div><div class="care-meta" style="margin:0 0 6px">${esc(r.attachment_name || 'файл')}</div>
           <button class="btn btn-sec btn-sm" type="button" onclick="ntDeleteAttachment()">Убрать картинку</button></div></div>` : ''}
       <input type="file" id="ntFile" accept="image/jpeg,image/png,image/webp" onchange="ntOnFile(this)">
@@ -873,8 +895,9 @@ function ntJobRow(j) {
   const reason = j.decision_reason || j.error || '';
   const text = j.rendered_text || '';
   const isTest = String(j.yclients_record_id) === '0';     // BIGINT приходит строкой; у тестовых отправок id записи 0
-  const att = j.attachment_url
-    ? ` <a href="${ntAttr(j.attachment_url)}" target="_blank" rel="noopener" title="Открыть картинку">📎</a>` : '';
+  const attHref = ntUploadHref(j.attachment_url);
+  const att = attHref ? ` <a href="${ntAttr(attHref)}" target="_blank" rel="noopener" title="Открыть картинку">📎</a>`
+    : j.attachment_url ? ' <span title="К сообщению приложена картинка">📎</span>' : '';       // чужой/странный адрес — без ссылки
   return `<tr data-id="${Number(j.id)}" data-status="${ntAttr(j.status)}">
     <td data-label="Когда"><span>${esc(ntFmt(when.ts))}${when.plan ? ' <span class="nt-plan">(план)</span>' : ''}</span></td>
     <td class="mtbl-title"><b>${esc(who)}</b>${j.client_name && j.phone ? `<div class="care-meta" style="margin-top:2px">${esc(j.phone)}</div>` : ''}</td>
@@ -890,9 +913,10 @@ function ntJobRow(j) {
 async function ntCancelJob(id) {
   if (!confirm('Отменить запланированную отправку?')) return;
   try {
-    await api('POST', `/api/notification-rules/jobs/${id}/cancel`);
-    notify('Отправка отменена');
-    await ntLoadJobs();
+    const d = await api('POST', `/api/notification-rules/jobs/${id}/cancel`);
+    const o = ntCancelOutcome(d);        // {ok:false} — строки уже нет в очереди: «отменено» говорить нельзя
+    notify(o.text, o.type);
+    await ntLoadJobs();                  // в обоих случаях журнал показывает фактическое состояние
   } catch (e) {
     notify(e.message || 'Не удалось отменить', 'err');
   }
