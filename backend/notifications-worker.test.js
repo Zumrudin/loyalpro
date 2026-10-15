@@ -55,7 +55,8 @@ const realFs = jest.requireActual('fs');
 const isUpload = (p) => String(p).includes('/uploads/');
 
 function setup({ jobs = [], checks = [], st = state(), mode = 'live', captured = 1, order = ['tdlib', 'whatsapp', 'max'],
-  preferLast = true, conv = { lastChannel: null, chats: {} }, blacklisted = false, sibling = null, cfgOver = {} } = {}) {
+  preferLast = true, conv = { lastChannel: null, chats: {} }, blacklisted = false, sibling = null, cfgOver = {},
+  rule = { is_enabled: true } } = {}) {
   settings.getSettings.mockReset();
   settings.getSettings.mockResolvedValue({ mode, default_channels: order, prefer_last_channel: preferLast, ...cfgOver });
   rules.lastConversation.mockReset();
@@ -64,6 +65,7 @@ function setup({ jobs = [], checks = [], st = state(), mode = 'live', captured =
   db.any.mockImplementation(async (sql) => (/SET check_at = NULL/.test(sql) ? checks : (/SET attempts = j.attempts/.test(sql) ? jobs : [])));
   db.oneOrNone.mockReset();
   db.oneOrNone.mockImplementation(async (sql) => {
+    if (/FROM notification_rules/.test(sql)) return rule;      // строка правила job'а; null — правила нет
     if (/FROM notification_record_state/.test(sql)) return st;
     if (/FROM clients/.test(sql)) return { is_blacklisted: blacklisted };
     if (/FROM notification_jobs/.test(sql)) return sibling;
@@ -565,6 +567,96 @@ describe('перепроверка состояния записи перед о
   });
 });
 
+// job — снимок: текст и вложение уже в строке, правило воркер не читает. Без этой проверки отправка
+// переживала бы и удаление правила (rule_id → NULL по ON DELETE SET NULL), и его выключение.
+describe('правило удалено или выключено после постановки job\'а', () => {
+  const ALL_TYPES = ['record_created', 'record_rescheduled', 'record_cancelled', 'visit_reminder', 'visit_review', 'visit_after', 'first_visit'];
+  const okState = (type) => state({ attendance: type === 'record_cancelled' ? -1 : (type === 'visit_review' || type === 'visit_after' ? 1 : 0) });
+  const ruleQueries = () => db.oneOrNone.mock.calls.filter(([sql]) => /FROM notification_rules/.test(sql));
+  const noOtherChecks = () => db.oneOrNone.mock.calls.filter(([sql]) => !/FROM notification_rules/.test(sql));
+
+  test.each(ALL_TYPES)('%s: правило выключено → cancelled «правило выключено», без отправки', async (type) => {
+    setup({ jobs: [job({ id: 4, trigger_type: type })], st: okState(type), rule: { is_enabled: false } });
+    await worker.processTick();
+    expect(transport.sendMessage).not.toHaveBeenCalled();
+    expect(updates(/SET status='sent', sent_at/)).toHaveLength(0);          // даже не захватывали
+    expect(wasCancelled(/^правило выключено$/)).toBe(true);
+    expect(statusUpdates().filter((p) => p[1] === 'cancelled').map((p) => p[0])).toEqual([4]);
+  });
+
+  test.each(ALL_TYPES)('%s: rule_id = NULL (правило удалено) → cancelled «правило удалено», в БД за правилом не ходим', async (type) => {
+    setup({ jobs: [job({ id: 5, trigger_type: type, rule_id: null })], st: okState(type) });
+    await worker.processTick();
+    expect(transport.sendMessage).not.toHaveBeenCalled();
+    expect(wasCancelled(/^правило удалено$/)).toBe(true);
+    expect(ruleQueries()).toHaveLength(0);
+  });
+
+  test('rule_id указывает на несуществующее правило (удалили между арендой и проверкой) → «правило удалено»', async () => {
+    setup({ jobs: [job({ rule_id: 77 })], rule: null });
+    await worker.processTick();
+    expect(transport.sendMessage).not.toHaveBeenCalled();
+    expect(wasCancelled(/^правило удалено$/)).toBe(true);
+  });
+
+  test('правило включено → отправка идёт как обычно', async () => {
+    setup({ jobs: [job()], rule: { is_enabled: true } });
+    await worker.processTick();
+    expect(calls()).toEqual(['tdlib']);
+    expect(wasCancelled()).toBe(false);
+  });
+
+  test('запрос правила один на job и скоуплен: id правила и salon_id самой строки', async () => {
+    setup({ jobs: [job({ rule_id: 7, salon_id: 3 })] });
+    await worker.processTick();
+    const q = ruleQueries();
+    expect(q).toHaveLength(1);
+    expect(q[0][0]).toMatch(/WHERE id=\$1 AND salon_id=\$2/);
+    expect(q[0][1]).toEqual([7, 3]);
+  });
+
+  test('shadow: выключенное правило тоже гасит строку (в журнал тени «shadow» не попадает)', async () => {
+    setup({ jobs: [job()], mode: 'shadow', rule: { is_enabled: false } });
+    await worker.processTick();
+    expect(wasCancelled(/^правило выключено$/)).toBe(true);
+    expect(statusUpdates().some((p) => p[1] === 'shadow')).toBe(false);
+  });
+
+  test('давность решает раньше и без БД: опоздавшая строка гасится по давности, правило не запрашивается', async () => {
+    const { MAX_LATENESS_MS } = worker;
+    setup({ jobs: [job({ scheduled_at: ago(MAX_LATENESS_MS + 60 * 1000) })], rule: { is_enabled: false } });
+    await worker.processTick();
+    expect(wasCancelled(/^устарело: опоздание/)).toBe(true);
+    expect(db.oneOrNone).not.toHaveBeenCalled();
+  });
+
+  test('проверка правила идёт ДО остальных запросов в БД: выключенное правило не тянет за собой чтение записи/клиента', async () => {
+    setup({ jobs: [job({ trigger_type: 'visit_review' })], st: okState('visit_review'), rule: { is_enabled: false } });
+    await worker.processTick();
+    expect(wasCancelled(/^правило выключено$/)).toBe(true);
+    expect(noOtherChecks()).toHaveLength(0);
+  });
+
+  describe('тестовая отправка (meta.test) к правилу не привязана', () => {
+    const testJob = (over = {}) => job({ trigger_type: 'visit_review', yclients_record_id: 0, visit_datetime: null, meta: { test: true }, ...over });
+
+    test('правило выключено — тест всё равно уходит (выключенное правило как раз и тестируют)', async () => {
+      setup({ jobs: [testJob()], rule: { is_enabled: false } });
+      await worker.processTick();
+      expect(calls()).toEqual(['tdlib']);
+      expect(wasCancelled()).toBe(false);
+      expect(db.oneOrNone).not.toHaveBeenCalled();
+    });
+
+    test('правило удалено (rule_id = NULL) — тест всё равно уходит', async () => {
+      setup({ jobs: [testJob({ rule_id: null })], rule: null });
+      await worker.processTick();
+      expect(calls()).toEqual(['tdlib']);
+      expect(wasCancelled()).toBe(false);
+    });
+  });
+});
+
 describe('устаревшее после простоя процесса', () => {
   const { MAX_LATENESS_MS } = worker;
   // Состояние записи, при котором письмо ПО ЗАПИСИ ушло бы: отменить его может только давность.
@@ -751,8 +843,7 @@ describe('устаревшее после простоя процесса', () =
       });
 
       test('обычная (не тестовая) строка порогом в 30 минут не затронута: 3 часа опоздания у record_created ещё не «устарело»', async () => {
-        db.oneOrNone.mockReset();
-        db.oneOrNone.mockResolvedValue(null);
+        setup({});      // штатные ответы БД: правило включено, состояния записи нет, клиент не в чёрном списке
         const r = await worker.staleReason(job({ trigger_type: 'record_created', scheduled_at: new Date(T0 - 3 * HOUR) }));
         expect(r).toBeNull();
       });

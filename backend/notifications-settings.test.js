@@ -88,16 +88,37 @@ describe('getSettings', () => {
 });
 
 describe('updateSettings', () => {
-  test('режим: только off|shadow|live, чужое значение игнорируется', async () => {
+  // Опечатка в переключателе, который включает отправку живым клиентам, не должна молча сохраняться как «режим
+  // не менялся»: админ увидел бы 200 и считал бы, что режим переключён. Поэтому чужое значение — BAD_MODE (400 в API).
+  test('режим: только off|shadow|live; чужое значение → BAD_MODE и ничего не пишется', async () => {
     await settings.updateSettings(1, { mode: 'live' });
     expect(written()[1]).toBe('live');
     settings.invalidate(); db.query.mockClear();
-    await settings.updateSettings(1, { mode: 'turbo' });
-    expect(written()[1]).toBe('off');
+    for (const bad of ['turbo', 'Live', 'LIVE', '', null, 7, true, ['live'], {}]) {
+      await expect(settings.updateSettings(1, { mode: bad })).rejects.toMatchObject({ code: 'BAD_MODE' });
+    }
+    expect(db.query).not.toHaveBeenCalled();
+  });
+  test('режим не передан (нет ключа или undefined) → остаётся прежний, это не ошибка', async () => {
+    db.oneOrNone.mockResolvedValue({ salon_id: 1, mode: 'shadow' });
+    await settings.updateSettings(1, { prefer_last_channel: false });
+    expect(written()[1]).toBe('shadow');
+    settings.invalidate(); db.query.mockClear();
+    await settings.updateSettings(1, { mode: undefined });
+    expect(written()[1]).toBe('shadow');
   });
   test('порядок каскада: только известные мессенджеры, без дублей, порядок сохраняется', async () => {
     await settings.updateSettings(1, { default_channels: ['max', 'sms', 'tdlib', 'max', 'telegram'] });
     expect(JSON.parse(written()[2])).toEqual(['max', 'tdlib']);
+  });
+  test('порядок каскада: мусорные ЭЛЕМЕНТЫ массива отфильтровываются (это не ошибка), а не-массив → BAD_CHANNELS и ничего не пишется', async () => {
+    await settings.updateSettings(1, { default_channels: [1, null, {}, 'max'] });
+    expect(JSON.parse(written()[2])).toEqual(['max']);
+    settings.invalidate(); db.query.mockClear();
+    for (const bad of ['tdlib', 'tdlib,max', null, 7, true, { 0: 'max' }]) {
+      await expect(settings.updateSettings(1, { default_channels: bad })).rejects.toMatchObject({ code: 'BAD_CHANNELS' });
+    }
+    expect(db.query).not.toHaveBeenCalled();
   });
   test('пустой каскад законен, но «не передано» оставляет прежний', async () => {
     await settings.updateSettings(1, { default_channels: [] });

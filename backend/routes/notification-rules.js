@@ -12,9 +12,9 @@
 //   GET    /parity         паритет с Chatpush (теневой режим): наши job'ы против исходящих Chatpush по типу
 //   GET    /dictionaries   специалисты, категории и услуги для пикеров условий
 //   POST   /               создать правило
-//   PUT    /:id            обновить правило
-//   POST   /:id/toggle     включить/выключить
-//   DELETE /:id            удалить (pending-job'ы гасятся, история остаётся, файл вложения удаляется)
+//   PUT    /:id            обновить правило (isEnabled не передан → включённость не меняется; выключено → очередь гасится)
+//   POST   /:id/toggle     включить/выключить (выключение гасит pending-очередь правила в той же транзакции)
+//   DELETE /:id            удалить (одна транзакция: pending-job'ы гасятся, история остаётся; файл вложения удаляется)
 //   GET    /:id/jobs       журнал job'ов правила
 //   POST   /:id/attachment  загрузить/заменить вложение (multipart, поле file; visit_after)
 //   DELETE /:id/attachment
@@ -31,7 +31,7 @@ const path = require('path');
 const fs = require('fs');
 const multer = require('multer');
 const { auth, requireRole } = require('../middleware/auth');
-const { db } = require('../db');
+const { db, withTransaction } = require('../db');
 const { ycGet } = require('../services/yclients');
 const settingsSvc = require('../services/notifications/settings');
 const { ALLOWED_CHANNELS } = require('../services/notifications/rules');
@@ -43,6 +43,21 @@ const log = createLogger('NotificationRules');
 const guard = [auth, requireRole('owner', 'admin')];
 const TRIGGER_TYPES = ['record_created', 'record_rescheduled', 'record_cancelled', 'visit_reminder', 'visit_review', 'visit_after', 'first_visit'];
 const JOB_STATUSES = ['pending', 'sent', 'shadow', 'skipped', 'cancelled', 'failed'];
+
+// Тело 500 видит владелец салона (и любой, кто украл его токен): строка подключения, имя таблицы, текст драйвера
+// ему ни к чему. Наружу — общий текст, подробность — в лог (как routes/reminders.js и routes/care.js).
+const INTERNAL_ERROR = 'Внутренняя ошибка';
+function fail(res, where, e) {
+  log.error(`${where}: ${e && e.message}`);
+  return res.status(500).json({ error: INTERNAL_ERROR });
+}
+
+// Ошибки валидации сервиса настроек → 400 с понятным текстом (сообщение самого исключения наружу не уходит).
+const SETTINGS_ERRORS = {
+  BAD_TIME: 'Тихие часы: формат ЧЧ:ММ',
+  BAD_MODE: 'Режим: off, shadow или live',
+  BAD_CHANNELS: 'Порядок каскада: список мессенджеров (массив)',
+};
 
 // Шаблоны LIKE для служебных исходящих Chatpush по типу уведомления. Сверены с реальными текстами
 // (docs/notifications/chatpush-templates-2026-10-13.md, тест notifications-routes.test.js читает этот файл):
@@ -140,6 +155,32 @@ function idParam(v, max = 2147483647) {
   return n >= 1 && n <= max ? n : null;
 }
 
+// YYYY-MM-DD, существующая календарная дата. Одного регэкспа мало: '2026-02-31' его проходит, а `$4::date`
+// в PostgreSQL на такой строке падает («date/time field value out of range») → был 500. Невозможная дата, как и
+// неверный формат, фильтр просто не включает. Годы 0000–0099 Date.UTC сдвигает в 1900-е — они отсекаются сверкой.
+function calendarDate(v) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(v || ''));
+  if (!m) return null;
+  const y = Number(m[1]); const mo = Number(m[2]); const d = Number(m[3]);
+  const dt = new Date(Date.UTC(y, mo - 1, d));
+  return dt.getUTCFullYear() === y && dt.getUTCMonth() === mo - 1 && dt.getUTCDate() === d ? m[0] : null;
+}
+
+/**
+ * Выключенное правило не должно отправлять: job — снимок, воркер правило сам не читает (в staleReason есть и
+ * проверка «правило выключено» на момент отправки, но очередь гасим сразу — счётчики и журнал показывают правду,
+ * а не дожидаются due-времени). Вызывается ВНУТРИ транзакции, в которой правило получило новое состояние:
+ * сбой гашения откатывает и само переключение. Включение погашенное не воскрешает.
+ * Условие — по ИТОГОВОМУ состоянию правила, поэтому PUT выключенного правила (без isEnabled) тоже безвреден.
+ */
+async function cancelQueueIfDisabled(client, ruleId, salonId, rule) {
+  if (rule.is_enabled !== false) return 0;
+  const r = await client.query(
+    "UPDATE notification_jobs SET status='cancelled', decision_reason='правило выключено' WHERE rule_id=$1 AND salon_id=$2 AND status='pending'",
+    [ruleId, salonId]);
+  return r.rowCount || 0;
+}
+
 function intIn(v, min, max, dflt) {
   if (v == null || v === '') return dflt;
   const n = Number(v);
@@ -172,6 +213,14 @@ function parseRuleBody(body) {
   // салона (notification_settings). Колонки v1 notification_rules.channels/prefer_last_channel остаются
   // в таблице и не читаются.
 
+  // null = «не передано»: PUT оставляет состояние как есть (иначе правка текста выключенного правила включала бы его
+  // обратно), POST включает. Не-булево — ошибка: опечатка в переключателе отправки не должна молча сработать как «вкл».
+  let isEnabled = null;
+  if (b.isEnabled != null) {
+    if (typeof b.isEnabled !== 'boolean') return { error: 'isEnabled: true или false' };
+    isEnabled = b.isEnabled;
+  }
+
   const hoursBefore = triggerType === 'visit_reminder' ? intIn(b.hoursBefore, 1, 72, 24) : null;
   if (triggerType === 'visit_reminder' && hoursBefore == null) return { error: 'Часы до визита: число от 1 до 72' };
   const delayMinutes = (triggerType === 'visit_review' || triggerType === 'visit_after') ? intIn(b.delayMinutes, 0, 1440, 5) : null;
@@ -180,7 +229,7 @@ function parseRuleBody(body) {
   return {
     value: {
       title, triggerType, messageTemplate: template, conditions: { logic, items },
-      isEnabled: b.isEnabled !== false,
+      isEnabled,
       hoursBefore, delayMinutes,
       onNoShow: b.onNoShow !== false,
       askConfirmation: b.askConfirmation !== false,
@@ -205,14 +254,13 @@ const JOB_COLS = `j.id, j.rule_id, j.rule_title, j.trigger_type, j.yclients_reco
 // ── настройки салона ──
 router.get('/settings', guard, async (req, res) => {
   try { res.json(await settingsSvc.getSettings(req.user.salonId)); }
-  catch (e) { log.error(`settings get: ${e.message}`); res.status(500).json({ error: e.message }); }
+  catch (e) { fail(res, 'settings get', e); }
 });
 router.put('/settings', guard, async (req, res) => {
   try { res.json(await settingsSvc.updateSettings(req.user.salonId, req.body || {})); }
   catch (e) {
-    if (e.code === 'BAD_TIME') return res.status(400).json({ error: 'Тихие часы: формат ЧЧ:ММ' });
-    log.error(`settings put: ${e.message}`);
-    res.status(500).json({ error: e.message });
+    if (e && Object.prototype.hasOwnProperty.call(SETTINGS_ERRORS, e.code)) return res.status(400).json({ error: SETTINGS_ERRORS[e.code] });
+    fail(res, 'settings put', e);
   }
 });
 
@@ -221,7 +269,7 @@ router.get('/jobs', guard, async (req, res) => {
   try {
     const type = TRIGGER_TYPES.includes(req.query.type) ? req.query.type : null;
     const status = JOB_STATUSES.includes(req.query.status) ? req.query.status : null;
-    const date = /^\d{4}-\d{2}-\d{2}$/.test(String(req.query.date || '')) ? req.query.date : null;
+    const date = calendarDate(req.query.date);
     const page = Math.min(Math.max(0, parseInt(req.query.page || '0', 10) || 0), 10000);
     const items = await db.any(
       `SELECT ${JOB_COLS}
@@ -234,7 +282,7 @@ router.get('/jobs', guard, async (req, res) => {
         LIMIT 100 OFFSET $5`,
       [req.user.salonId, type, status, date, page * 100]);
     res.json({ items, page });
-  } catch (e) { log.error(`jobs: ${e.message}`); res.status(500).json({ error: e.message }); }
+  } catch (e) { fail(res, 'jobs', e); }
 });
 router.post('/jobs/:id/cancel', guard, async (req, res) => {
   try {
@@ -244,7 +292,7 @@ router.post('/jobs/:id/cancel', guard, async (req, res) => {
       `UPDATE notification_jobs SET status='cancelled', decision_reason='отменено администратором'
         WHERE id=$1 AND salon_id=$2 AND status='pending'`, [id, req.user.salonId]);
     res.json({ ok: !!r.rowCount });
-  } catch (e) { log.error(`job cancel: ${e.message}`); res.status(500).json({ error: e.message }); }
+  } catch (e) { fail(res, 'job cancel', e); }
 });
 
 // ── оценки визитов ──
@@ -259,7 +307,7 @@ router.get('/ratings', guard, async (req, res) => {
               count(*) FILTER (WHERE rating >= 4)::int AS high, count(*) FILTER (WHERE rating < 4)::int AS low
          FROM visit_ratings WHERE salon_id = $1 AND created_at > NOW() - interval '30 days'`, [req.user.salonId]);
     res.json({ items, stats });
-  } catch (e) { log.error(`ratings: ${e.message}`); res.status(500).json({ error: e.message }); }
+  } catch (e) { fail(res, 'ratings', e); }
 });
 
 // ── паритет с Chatpush: наши job'ы против служебных исходящих Chatpush по типу ──
@@ -302,7 +350,7 @@ router.get('/parity', guard, async (req, res) => {
       };
     });
     res.json({ days, items });
-  } catch (e) { log.error(`parity: ${e.message}`); res.status(500).json({ error: e.message }); }
+  } catch (e) { fail(res, 'parity', e); }
 });
 
 // Справочники для пикеров условий: специалисты из staff_members, категории и услуги — из booking-каталога
@@ -340,10 +388,7 @@ router.get('/dictionaries', guard, async (req, res) => {
     }
 
     res.json({ staff, categories, services, channels: ALLOWED_CHANNELS });
-  } catch (e) {
-    log.error(`dictionaries: ${e.message}`);
-    res.status(500).json({ error: e.message });
-  }
+  } catch (e) { fail(res, 'dictionaries', e); }
 });
 
 // ════════════ правила ════════════
@@ -366,19 +411,21 @@ router.get('/', guard, async (req, res) => {
         WHERE r.salon_id = $1 ORDER BY r.trigger_type, r.id`,
       [req.user.salonId]);
     res.json({ rules, triggerTypes: TRIGGER_TYPES });
-  } catch (e) { log.error(`list: ${e.message}`); res.status(500).json({ error: e.message }); }
+  } catch (e) { fail(res, 'list', e); }
 });
 
 router.post('/', guard, async (req, res) => {
   try {
     const { error, value } = parseRuleBody(req.body);
     if (error) return res.status(400).json({ error });
+    // Дефолт «включено» живёт только здесь: parseRuleBody отдаёт null, когда isEnabled не передан (для PUT это
+    // «оставить как есть»).
     const rule = await db.one(
       `INSERT INTO notification_rules (salon_id, ${RULE_COLS}, created_by)
        VALUES ($1,$2,$3,$4,$5::jsonb,$6,$7,$8,$9,$10,$11) RETURNING *`,
-      [req.user.salonId, ...ruleParams(value), req.user.userId ?? null]);
+      [req.user.salonId, ...ruleParams({ ...value, isEnabled: value.isEnabled !== false }), req.user.userId ?? null]);
     res.json({ ok: true, rule });
-  } catch (e) { log.error(`create: ${e.message}`); res.status(500).json({ error: e.message }); }
+  } catch (e) { fail(res, 'create', e); }
 });
 
 router.put('/:id', guard, async (req, res) => {
@@ -387,47 +434,73 @@ router.put('/:id', guard, async (req, res) => {
     if (!id) return res.status(400).json({ error: 'bad id' });
     const { error, value } = parseRuleBody(req.body);
     if (error) return res.status(400).json({ error });
-    const rule = await db.oneOrNone(
-      `UPDATE notification_rules SET title=$3, is_enabled=$4, trigger_type=$5, conditions=$6::jsonb, message_template=$7,
-          hours_before=$8, delay_minutes=$9, on_no_show=$10, ask_confirmation=$11, updated_at=NOW()
-        WHERE id=$1 AND salon_id=$2 RETURNING *`,
-      [id, req.user.salonId, ...ruleParams(value)]);
-    if (!rule) return res.status(404).json({ error: 'not found' });
-    res.json({ ok: true, rule });
-  } catch (e) { log.error(`update: ${e.message}`); res.status(500).json({ error: e.message }); }
+    const salonId = req.user.salonId;
+    // is_enabled=COALESCE($4, is_enabled): isEnabled не передан → null → состояние не трогаем (правка текста
+    // выключенного правила его не включает). Правило стало (или осталось) выключенным — гасим его очередь в той же
+    // транзакции.
+    const out = await withTransaction(async (client) => {
+      const r = await client.query(
+        `UPDATE notification_rules SET title=$3, is_enabled=COALESCE($4, is_enabled), trigger_type=$5, conditions=$6::jsonb, message_template=$7,
+            hours_before=$8, delay_minutes=$9, on_no_show=$10, ask_confirmation=$11, updated_at=NOW()
+          WHERE id=$1 AND salon_id=$2 RETURNING *`,
+        [id, salonId, ...ruleParams(value)]);
+      const rule = r.rows[0];
+      if (!rule) return null;
+      return { rule, cancelledJobs: await cancelQueueIfDisabled(client, id, salonId, rule) };
+    });
+    if (!out) return res.status(404).json({ error: 'not found' });
+    res.json({ ok: true, rule: out.rule, cancelledJobs: out.cancelledJobs });
+  } catch (e) { fail(res, 'update', e); }
 });
 
 router.post('/:id/toggle', guard, async (req, res) => {
   try {
     const id = idParam(req.params.id);
     if (!id) return res.status(400).json({ error: 'bad id' });
-    const rule = await db.oneOrNone(
-      `UPDATE notification_rules
-          SET is_enabled = NOT is_enabled, updated_at = NOW()
-        WHERE id=$1 AND salon_id=$2
-        RETURNING *`,
-      [id, req.user.salonId]);
-    if (!rule) return res.status(404).json({ error: 'not found' });
-    res.json({ ok: true, rule });
-  } catch (e) { log.error(`toggle: ${e.message}`); res.status(500).json({ error: e.message }); }
+    const salonId = req.user.salonId;
+    // Переключение и гашение очереди — одна транзакция: «правило выключено», но с живой очередью, не бывает.
+    const out = await withTransaction(async (client) => {
+      const r = await client.query(
+        `UPDATE notification_rules
+            SET is_enabled = NOT is_enabled, updated_at = NOW()
+          WHERE id=$1 AND salon_id=$2
+          RETURNING *`,
+        [id, salonId]);
+      const rule = r.rows[0];
+      if (!rule) return null;
+      return { rule, cancelledJobs: await cancelQueueIfDisabled(client, id, salonId, rule) };
+    });
+    if (!out) return res.status(404).json({ error: 'not found' });
+    res.json({ ok: true, rule: out.rule, cancelledJobs: out.cancelledJobs });
+  } catch (e) { fail(res, 'toggle', e); }
 });
 
 router.delete('/:id', guard, async (req, res) => {
   try {
     const id = idParam(req.params.id);
     if (!id) return res.status(400).json({ error: 'bad id' });
+    const salonId = req.user.salonId;
     // Воркер правило не читает (job живёт своим текстом и вложением), а FK notification_jobs.rule_id —
-    // ON DELETE SET NULL: история остаётся, но запланированная отправка пережила бы правило. Поэтому
-    // pending-job'ы гасим ДО удаления, пока их ещё можно найти по rule_id (в v1 их уносило каскадом).
-    await db.query(
-      `UPDATE notification_jobs SET status='cancelled', decision_reason='правило удалено'
-        WHERE rule_id=$1 AND salon_id=$2 AND status='pending'`, [id, req.user.salonId]);
-    const rule = await db.oneOrNone(
-      'DELETE FROM notification_rules WHERE id=$1 AND salon_id=$2 RETURNING attachment_url', [id, req.user.salonId]);
-    if (!rule) return res.status(404).json({ error: 'not found' });
-    safeUnlink(rule.attachment_url);
+    // ON DELETE SET NULL: история остаётся, но запланированная отправка пережила бы правило. Поэтому одна транзакция:
+    //  1) блокируем строку правила (FOR UPDATE): параллельная постановка job'а берёт на неё FK-замок и ждёт нас,
+    //     а после коммита получает отказ FK — «осиротевший» pending не появляется;
+    //  2) гасим pending-job'ы, пока их ещё можно найти по rule_id (после удаления он станет NULL);
+    //  3) удаляем правило. Сбой на любом шаге откатывает всё: правило не остаётся без очереди и наоборот.
+    const gone = await withTransaction(async (client) => {
+      const sel = await client.query(
+        'SELECT attachment_url FROM notification_rules WHERE id=$1 AND salon_id=$2 FOR UPDATE', [id, salonId]);
+      const rule = sel.rows[0];
+      if (!rule) return null;
+      await client.query(
+        "UPDATE notification_jobs SET status='cancelled', decision_reason='правило удалено' WHERE rule_id=$1 AND salon_id=$2 AND status='pending'",
+        [id, salonId]);
+      await client.query('DELETE FROM notification_rules WHERE id=$1 AND salon_id=$2', [id, salonId]);
+      return rule;
+    });
+    if (!gone) return res.status(404).json({ error: 'not found' });
+    safeUnlink(gone.attachment_url);      // только после коммита: при откате файл остаётся у уцелевшего правила
     res.json({ ok: true });
-  } catch (e) { log.error(`delete: ${e.message}`); res.status(500).json({ error: e.message }); }
+  } catch (e) { fail(res, 'delete', e); }
 });
 
 // Журнал job'ов одного правила (свежие сверху).
@@ -444,7 +517,7 @@ router.get('/:id/jobs', guard, async (req, res) => {
         LIMIT $3`,
       [id, req.user.salonId, limit]);
     res.json({ items });
-  } catch (e) { log.error(`rule jobs: ${e.message}`); res.status(500).json({ error: e.message }); }
+  } catch (e) { fail(res, 'rule jobs', e); }
 });
 
 // ── вложение правила (visit_after): multipart, поле file ──
@@ -483,8 +556,7 @@ router.post('/:id/attachment', guard, (req, res) => {
       res.json({ ok: true, attachmentUrl: fileUrl });
     } catch (e) {
       if (written && !committed) safeUnlink(fileUrl);
-      log.error(`attachment upload: ${e.message}`);
-      res.status(500).json({ error: e.message });
+      fail(res, 'attachment upload', e);
     }
   });
 });
@@ -499,7 +571,7 @@ router.delete('/:id/attachment', guard, async (req, res) => {
     await db.query('UPDATE notification_rules SET attachment_url=NULL, attachment_name=NULL, updated_at=NOW() WHERE id=$1 AND salon_id=$2', [id, salonId]);
     await releaseOldAttachment(id, salonId, old.attachment_url, null);
     res.json({ ok: true });
-  } catch (e) { log.error(`attachment delete: ${e.message}`); res.status(500).json({ error: e.message }); }
+  } catch (e) { fail(res, 'attachment delete', e); }
 });
 
 // ── тест на свой номер: job «сейчас», тем же воркером; перепроверку состояния записи пропускает
@@ -544,7 +616,7 @@ router.post('/:id/test', guard, async (req, res) => {
        RETURNING id`,
       [req.user.salonId, rule.id, rule.title, rule.trigger_type, phone, text, rule.attachment_url]);
     res.json({ ok: true, jobId: row.id, mode: cfg.mode, note: TEST_NOTES[cfg.mode] });
-  } catch (e) { log.error(`test: ${e.message}`); res.status(500).json({ error: e.message }); }
+  } catch (e) { fail(res, 'test', e); }
 });
 
 module.exports = router;

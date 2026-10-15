@@ -182,9 +182,14 @@ async function releaseLease(job) {
  *    начался (job.visit_datetime <= now); остальные типы — когда строка опоздала больше чем на
  *    MAX_LATENESS_MS (now − scheduled_at). Продолжение каскада после «Невозможно доставить»
  *    тоже меряется от исходного scheduled_at: сверка его не сбрасывает.
- * Тестовая отправка (meta.test) не проверяется ни по записи, ни по давности визита, ни по чёрному списку;
- * единственное исключение — её собственный возраст: старше TEST_MAX_AGE_MS (30 мин) → «тестовая отправка
- * устарела» (нет момента — не выдумываем, как и у остальных типов).
+ *  • Правило (сразу после давности, одним запросом по id и salon_id): job — снимок, текст и вложение уже в
+ *    строке, правило воркер не читает, и без этой проверки отправка пережила бы и удаление правила
+ *    (rule_id → NULL по ON DELETE SET NULL; нет и самой строки — то же), и его выключение. Удалено →
+ *    «правило удалено», выключено → «правило выключено». Строка, не доказавшая «включено», не уходит.
+ * Тестовая отправка (meta.test) не проверяется ни по записи, ни по давности визита, ни по чёрному списку,
+ * ни по правилу (выключенное правило как раз и тестируют); единственное исключение — её собственный
+ * возраст: старше TEST_MAX_AGE_MS (30 мин) → «тестовая отправка устарела» (нет момента — не выдумываем,
+ * как и у остальных типов).
  */
 async function staleReason(job) {
   if (job.meta && job.meta.test) {
@@ -202,6 +207,11 @@ async function staleReason(job) {
     const dueMs = job.scheduled_at ? new Date(job.scheduled_at).getTime() : NaN;
     if (now - dueMs > MAX_LATENESS_MS) return `устарело: опоздание ${Math.floor((now - dueMs) / 3600000)} ч`;
   }
+
+  if (job.rule_id == null) return 'правило удалено';
+  const rule = await db.oneOrNone('SELECT is_enabled FROM notification_rules WHERE id=$1 AND salon_id=$2', [job.rule_id, job.salon_id]);
+  if (!rule) return 'правило удалено';
+  if (!rule.is_enabled) return 'правило выключено';
 
   const st = await db.oneOrNone(
     'SELECT visit_datetime, attendance, deleted FROM notification_record_state WHERE salon_id=$1 AND yclients_record_id=$2',

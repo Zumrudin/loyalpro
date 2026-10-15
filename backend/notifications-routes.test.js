@@ -16,15 +16,25 @@ const http = require('http');
 const express = require('express');
 
 const mockDb = { any: jest.fn(), one: jest.fn(), oneOrNone: jest.fn(), query: jest.fn() };
-jest.mock('./db', () => ({ db: mockDb }));
+// Транзакция: настоящий withTransaction (db.js) делает BEGIN/COMMIT/ROLLBACK на клиенте пула; здесь fn получает
+// заглушку клиента, и тесты видят порядок и параметры его запросов (откат при сбое проверяет db.js, не этот файл).
+const mockClient = { query: jest.fn() };
+const mockWithTx = jest.fn(async (fn) => fn(mockClient));
+jest.mock('./db', () => ({ db: mockDb, withTransaction: (...a) => mockWithTx(...a) }));
 
 const mockYcGet = jest.fn();
 jest.mock('./services/yclients', () => ({ ycGet: (...a) => mockYcGet(...a) }));
 
+// Настоящий requireRole (middleware/auth) без .env: config грузится ради одного JWT_SECRET.
+jest.mock('./config', () => ({ JWT_SECRET: 'test-secret-test-secret-test-secret-0123456789' }));
+
 // В боевом JWT лежит { userId, salonId, role } — поля `id` НЕТ (v1 писал created_by = req.user.id = undefined).
+// Пользователя запроса задаёт тест (mockUser). auth подменён, проверка роли — НАСТОЯЩАЯ: тест гарда
+// закрепляет, что пускают ровно owner и admin, а не «хоть какой-то второй middleware в stack».
+let mockUser = { salonId: 1, userId: 42, role: 'owner' };
 jest.mock('./middleware/auth', () => ({
-  auth: (req, res, next) => { req.user = { salonId: 1, userId: 42, role: 'owner' }; next(); },
-  requireRole: () => (req, res, next) => next(),
+  auth: (req, res, next) => { req.user = { ...mockUser }; next(); },
+  requireRole: jest.requireActual('./middleware/auth').requireRole,
 }));
 
 const mockSettings = { getSettings: jest.fn(), updateSettings: jest.fn() };
@@ -38,9 +48,8 @@ jest.mock('./services/notifications/rules', () => ({
   ALLOWED_CHANNELS: ['telegram', 'whatsapp', 'tdlib', 'max', 'max_bot', 'notify'],
 }));
 
-jest.mock('./logger', () => ({
-  createLogger: () => ({ info() {}, warn() {}, error() {}, debug() {} }),
-}));
+const mockLog = { info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() };
+jest.mock('./logger', () => ({ createLogger: () => mockLog }));
 
 const router = require('./routes/notification-rules');
 const { parseRuleBody, TRIGGER_TYPES, PARITY_PATTERNS, sniffImageExt, ownAttachmentFile } = router;
@@ -73,6 +82,19 @@ test('каналы у правила не задаются — каскад об
 test('флаги нормализуются', () => {
   const v = parseRuleBody(ok({ onNoShow: false, askConfirmation: false })).value;
   expect(v).toMatchObject({ onNoShow: false, askConfirmation: false });
+});
+// null = «не передано»: PUT его не трогает (иначе правка текста выключенного правила его включала бы),
+// а дефолт «включено» живёт только в POST.
+test('isEnabled: не передан → null; true/false как есть', () => {
+  expect(parseRuleBody(ok()).value.isEnabled).toBeNull();
+  expect(parseRuleBody(ok({ isEnabled: null })).value.isEnabled).toBeNull();
+  expect(parseRuleBody(ok({ isEnabled: true })).value.isEnabled).toBe(true);
+  expect(parseRuleBody(ok({ isEnabled: false })).value.isEnabled).toBe(false);
+});
+test('isEnabled: не-булево значение → ошибка (опечатка в переключателе отправки не должна молча сработать как «вкл»)', () => {
+  for (const bad of ['false', 'true', 'no', 0, 1, [], {}, [false]]) {
+    expect({ bad, error: parseRuleBody(ok({ isEnabled: bad })).error }).toEqual({ bad, error: expect.stringMatching(/isEnabled/) });
+  }
 });
 test('пустые название/текст и неизвестный тип условия отвергаются', () => {
   expect(parseRuleBody(ok({ title: '  ' })).error).toMatch(/название/i);
@@ -197,10 +219,35 @@ test('порядок: статические пути объявлены РАН�
   }
 });
 
-test('гард: у каждого маршрута до обработчика стоят auth и проверка роли', () => {
-  for (const l of routeLayers()) {
-    expect({ path: l.route.path, handlers: l.route.stack.length >= 3 }).toEqual({ path: l.route.path, handlers: true });
-  }
+// Прогон одного middleware «как Express»: что он ответил и позвал ли next.
+function runMw(handle, user) {
+  const out = { status: null, nextCalled: false };
+  const res = { status(c) { out.status = c; return this; }, json() { return this; } };
+  handle({ user }, res, () => { out.nextCalled = true; });
+  return out;
+}
+
+describe('гард: owner и admin, больше никто', () => {
+  test('у каждого маршрута первым стоит auth, вторым — проверка роли, и только потом обработчик', () => {
+    const { auth } = require('./middleware/auth');
+    for (const l of routeLayers()) {
+      expect({ path: l.route.path, n: l.route.stack.length >= 3 }).toEqual({ path: l.route.path, n: true });
+      expect({ path: l.route.path, first: l.route.stack[0].handle === auth }).toEqual({ path: l.route.path, first: true });
+    }
+  });
+
+  test('проверка роли на КАЖДОМ маршруте пускает owner и admin и режет остальных (specialist, admin_cashier, пусто, без user) → 403', () => {
+    for (const l of routeLayers()) {
+      const mw = l.route.stack[1].handle;
+      for (const role of ['owner', 'admin']) {
+        expect({ path: l.route.path, role, ...runMw(mw, { role }) }).toEqual({ path: l.route.path, role, status: null, nextCalled: true });
+      }
+      for (const role of ['specialist', 'admin_cashier', 'superadmin', 'OWNER', '', null, undefined]) {
+        expect({ path: l.route.path, role, ...runMw(mw, { role }) }).toEqual({ path: l.route.path, role, status: 403, nextCalled: false });
+      }
+      expect({ path: l.route.path, ...runMw(mw, undefined) }).toEqual({ path: l.route.path, status: 403, nextCalled: false });
+    }
+  });
 });
 
 // ───────────────────────── HTTP ─────────────────────────
@@ -221,7 +268,38 @@ beforeAll((done) => {
 afterAll((done) => { server.close(done); });
 
 beforeEach(() => {
-  for (const f of [mockDb.any, mockDb.one, mockDb.oneOrNone, mockDb.query, mockYcGet, mockSettings.getSettings, mockSettings.updateSettings]) f.mockReset();
+  mockUser = { salonId: 1, userId: 42, role: 'owner' };
+  for (const f of [mockDb.any, mockDb.one, mockDb.oneOrNone, mockDb.query, mockClient.query, mockYcGet, mockSettings.getSettings, mockSettings.updateSettings]) f.mockReset();
+  mockWithTx.mockClear();                                    // реализация (fn(mockClient)) остаётся
+  for (const f of Object.values(mockLog)) f.mockClear();
+});
+
+// То же, но по HTTP через весь стек: специалист не доходит ни до БД, ни до настроек ни на одном маршруте.
+describe('гард по HTTP: чужая роль получает 403 на каждом маршруте и ничего не затрагивает', () => {
+  const allRoutes = () => routeLayers().flatMap((l) => methodsOf(l).map((m) => [m.toUpperCase(), l.route.path.replace(/:id/g, '5')]));
+
+  test.each(['specialist', 'admin_cashier'])('роль %s', async (role) => {
+    mockUser = { salonId: 1, userId: 9, role };
+    const routes = allRoutes();
+    expect(routes.length).toBeGreaterThan(15);
+    for (const [method, p] of routes) {
+      const r = await call(method, p === '/' ? '' : p, method === 'GET' || method === 'DELETE' ? undefined : {});
+      expect({ method, p, status: r.status }).toEqual({ method, p, status: 403 });
+    }
+    expect(mockDb.any).not.toHaveBeenCalled();
+    expect(mockDb.one).not.toHaveBeenCalled();
+    expect(mockDb.oneOrNone).not.toHaveBeenCalled();
+    expect(mockDb.query).not.toHaveBeenCalled();
+    expect(mockWithTx).not.toHaveBeenCalled();
+    expect(mockSettings.getSettings).not.toHaveBeenCalled();
+    expect(mockSettings.updateSettings).not.toHaveBeenCalled();
+  });
+
+  test.each(['owner', 'admin'])('роль %s проходит гард', async (role) => {
+    mockUser = { salonId: 1, userId: 9, role };
+    mockSettings.getSettings.mockResolvedValue({ mode: 'off' });
+    expect((await call('GET', '/settings')).status).toBe(200);
+  });
 });
 
 async function call(method, p, body) {
@@ -229,6 +307,14 @@ async function call(method, p, body) {
   if (body !== undefined) { init.headers['content-type'] = 'application/json'; init.body = JSON.stringify(body); }
   const r = await fetch(`${baseUrl}${p}`, init);
   return { status: r.status, body: await r.json().catch(() => null) };
+}
+
+// Ответ клиента транзакции на UPDATE … RETURNING *: строка правила либо пусто (нет правила / чужой салон).
+const txRows = (rule) => ({ rows: rule ? [rule] : [], rowCount: rule ? 1 : 0 });
+// Гашение очереди правила — ровно этот запрос (при выключении и при удалении отличается только причина).
+function expectCancelSql(sql, reason) {
+  expect(String(sql).replace(/\s+/g, ' ').trim())
+    .toBe(`UPDATE notification_jobs SET status='cancelled', decision_reason='${reason}' WHERE rule_id=$1 AND salon_id=$2 AND status='pending'`);
 }
 
 describe('настройки салона', () => {
@@ -249,13 +335,26 @@ describe('настройки салона', () => {
     expect(mockDb.oneOrNone).not.toHaveBeenCalled();      // обработчик PUT /:id (UPDATE правила) не вызывался
   });
 
-  test('PUT /settings: неверный формат тихих часов → 400, прочие сбои → 500', async () => {
-    mockSettings.updateSettings.mockRejectedValueOnce(Object.assign(new Error('bad time'), { code: 'BAD_TIME' }));
-    expect((await call('PUT', '/settings', { quiet_from: '25:00' })).status).toBe(400);
-    mockSettings.updateSettings.mockRejectedValueOnce(new Error('db down'));
+  // Ошибки валидации сервиса настроек — 400 с понятным текстом (раньше чужой mode и не-массив в каскаде молча
+  // игнорировались: админ получал 200 при несохранённом переключателе отправки).
+  test.each([
+    ['BAD_TIME', { quiet_from: '25:00' }, /Тихие часы/],
+    ['BAD_MODE', { mode: 'turbo' }, /off, shadow или live/],
+    ['BAD_CHANNELS', { default_channels: 'tdlib' }, /массив/],
+  ])('PUT /settings: %s → 400 с текстом', async (code, patch, textRe) => {
+    mockSettings.updateSettings.mockRejectedValueOnce(Object.assign(new Error('internal ' + code), { code }));
+    const r = await call('PUT', '/settings', patch);
+    expect(r.status).toBe(400);
+    expect(r.body.error).toMatch(textRe);
+    expect(r.body.error).not.toMatch(/internal/);        // сообщение исключения наружу не уходит
+  });
+
+  test('PUT /settings: прочие сбои → 500 с общим текстом, подробность — в лог (не в ответ)', async () => {
+    mockSettings.updateSettings.mockRejectedValueOnce(new Error('db down: postgres://user:pass@host/db'));
     const r = await call('PUT', '/settings', { mode: 'off' });
     expect(r.status).toBe(500);
-    expect(r.body.error).toBe('db down');
+    expect(r.body).toEqual({ error: 'Внутренняя ошибка' });
+    expect(mockLog.error).toHaveBeenCalledWith(expect.stringContaining('db down'));
   });
 
   test('мусор вместо id → 400, а не уход в БД (PUT /jobs, POST /abc/toggle)', async () => {
@@ -264,6 +363,7 @@ describe('настройки салона', () => {
     expect((await call('DELETE', '/0')).status).toBe(400);
     expect(mockDb.oneOrNone).not.toHaveBeenCalled();
     expect(mockDb.query).not.toHaveBeenCalled();
+    expect(mockWithTx).not.toHaveBeenCalled();
   });
 });
 
@@ -298,56 +398,220 @@ describe('правила', () => {
     expect(mockDb.one).not.toHaveBeenCalled();
   });
 
-  test('PUT /:id: UPDATE скоупится салоном; нет такого правила → 404', async () => {
-    mockDb.oneOrNone.mockResolvedValueOnce({ id: 5, title: 'r' });
-    const good = await call('PUT', '/5', ok({ triggerType: 'visit_review', delayMinutes: 10 }));
-    expect(good.status).toBe(200);
-    const [sql, params] = mockDb.oneOrNone.mock.calls[0];
-    expect(sql).toMatch(/WHERE id=\$1 AND salon_id=\$2/);
-    expect(params.slice(0, 2)).toEqual([5, 1]);
-    expect(params).toContain('visit_review');
-    expect(params).toContain(10);
+  describe('PUT /:id', () => {
+    const put = (id, body) => call('PUT', `/${id}`, body);
 
-    mockDb.oneOrNone.mockResolvedValueOnce(null);
-    expect((await call('PUT', '/6', ok())).status).toBe(404);
+    test('UPDATE в транзакции и со скоупом по салону; нет такого правила → 404, очередь не трогается', async () => {
+      mockClient.query.mockResolvedValueOnce(txRows({ id: 5, is_enabled: true }));
+      const good = await put(5, ok({ triggerType: 'visit_review', delayMinutes: 10 }));
+      expect(good.status).toBe(200);
+      expect(mockWithTx).toHaveBeenCalledTimes(1);
+      const [sql, params] = mockClient.query.mock.calls[0];
+      expect(sql).toMatch(/UPDATE notification_rules SET/);
+      expect(sql).toMatch(/WHERE id=\$1 AND salon_id=\$2/);
+      expect(params.slice(0, 2)).toEqual([5, 1]);
+      expect(params).toContain('visit_review');
+      expect(params).toContain(10);
+
+      mockClient.query.mockReset();
+      mockClient.query.mockResolvedValueOnce(txRows(null));
+      expect((await put(6, ok())).status).toBe(404);
+      expect(mockClient.query).toHaveBeenCalledTimes(1);         // правила нет — гасить нечего
+    });
+
+    // Редактор присылает правило целиком, но переключатель «включено» живёт отдельно; прежний дефолт
+    // `isEnabled !== false` включал выключенное правило при любой правке текста.
+    test('БЕЗ isEnabled выключенное правило не включается: параметр null и is_enabled=COALESCE($4, is_enabled)', async () => {
+      mockClient.query.mockResolvedValueOnce(txRows({ id: 5, is_enabled: false })).mockResolvedValueOnce({ rowCount: 0 });
+      const r = await put(5, ok({ triggerType: 'visit_review' }));
+      expect(r.status).toBe(200);
+      expect(r.body.rule.is_enabled).toBe(false);
+      const [sql, params] = mockClient.query.mock.calls[0];
+      expect(sql).toMatch(/is_enabled=COALESCE\(\$4, is_enabled\)/);
+      expect(params[3]).toBeNull();
+    });
+
+    test('isEnabled:false → параметр false; правило стало выключенным → его pending-очередь гасится («правило выключено»)', async () => {
+      mockClient.query.mockResolvedValueOnce(txRows({ id: 5, is_enabled: false })).mockResolvedValueOnce({ rowCount: 4 });
+      const r = await put(5, ok({ isEnabled: false }));
+      expect(r.status).toBe(200);
+      expect(r.body.cancelledJobs).toBe(4);
+      expect(mockClient.query.mock.calls[0][1][3]).toBe(false);
+      expectCancelSql(mockClient.query.mock.calls[1][0], 'правило выключено');
+      expect(mockClient.query.mock.calls[1][1]).toEqual([5, 1]);
+      expect(mockWithTx).toHaveBeenCalledTimes(1);               // UPDATE правила и гашение — одна транзакция
+    });
+
+    test('isEnabled:true → параметр true, очередь не трогается', async () => {
+      mockClient.query.mockResolvedValueOnce(txRows({ id: 5, is_enabled: true }));
+      const r = await put(5, ok({ isEnabled: true }));
+      expect(r.status).toBe(200);
+      expect(r.body.cancelledJobs).toBe(0);
+      expect(mockClient.query.mock.calls[0][1][3]).toBe(true);
+      expect(mockClient.query).toHaveBeenCalledTimes(1);
+    });
+
+    test('правка включённого правила без isEnabled очередь не трогает', async () => {
+      mockClient.query.mockResolvedValueOnce(txRows({ id: 5, is_enabled: true }));
+      expect((await put(5, ok())).status).toBe(200);
+      expect(mockClient.query).toHaveBeenCalledTimes(1);
+    });
+
+    test('скоуп по салону: у пользователя салона 7 и правка, и гашение идут с salon_id = 7', async () => {
+      mockUser = { salonId: 7, userId: 9, role: 'admin' };
+      mockClient.query.mockResolvedValueOnce(txRows({ id: 5, is_enabled: false })).mockResolvedValueOnce({ rowCount: 1 });
+      await put(5, ok({ isEnabled: false }));
+      expect(mockClient.query.mock.calls[0][1].slice(0, 2)).toEqual([5, 7]);
+      expect(mockClient.query.mock.calls[1][1]).toEqual([5, 7]);
+    });
+
+    test('isEnabled не булево → 400 без транзакции', async () => {
+      expect((await put(5, ok({ isEnabled: 'false' }))).status).toBe(400);
+      expect(mockWithTx).not.toHaveBeenCalled();
+    });
+
+    test('сбой гашения очереди → 500 без ответа об успехе (боевой withTransaction откатит и UPDATE правила)', async () => {
+      mockClient.query.mockResolvedValueOnce(txRows({ id: 5, is_enabled: false })).mockRejectedValueOnce(new Error('deadlock detected'));
+      const r = await put(5, ok({ isEnabled: false }));
+      expect(r).toEqual({ status: 500, body: { error: 'Внутренняя ошибка' } });
+    });
   });
 
-  test('POST /:id/toggle переключает правило своего салона', async () => {
-    mockDb.oneOrNone.mockResolvedValueOnce({ id: 5, is_enabled: false });
-    const r = await call('POST', '/5/toggle');
-    expect(r.body).toEqual({ ok: true, rule: { id: 5, is_enabled: false } });
-    expect(mockDb.oneOrNone.mock.calls[0][1]).toEqual([5, 1]);
-    mockDb.oneOrNone.mockResolvedValueOnce(null);
-    expect((await call('POST', '/6/toggle')).status).toBe(404);
+  describe('POST / и isEnabled', () => {
+    test('не передан → правило создаётся ВКЛЮЧЁННЫМ (дефолт живёт только в POST); false → выключенным', async () => {
+      mockDb.one.mockResolvedValue({ id: 7 });
+      await call('POST', '/', ok());
+      expect(mockDb.one.mock.calls[0][1][2]).toBe(true);        // $3 is_enabled
+      await call('POST', '/', ok({ isEnabled: false }));
+      expect(mockDb.one.mock.calls[1][1][2]).toBe(false);
+      await call('POST', '/', ok({ isEnabled: true }));
+      expect(mockDb.one.mock.calls[2][1][2]).toBe(true);
+    });
+
+    test('isEnabled не булево → 400, в БД не пишем', async () => {
+      expect((await call('POST', '/', ok({ isEnabled: 'nope' }))).status).toBe(400);
+      expect(mockDb.one).not.toHaveBeenCalled();
+    });
   });
 
-  test('DELETE /:id: pending-job\'ы гасятся ДО удаления (после него rule_id станет NULL), файл вложения удаляется', async () => {
-    const file = 'notify_1_909091_1760000000001.jpg';
-    fs.writeFileSync(path.join(uploadsDir, file), JPEG);
-    try {
-      mockDb.query.mockResolvedValue({ rowCount: 2 });
-      mockDb.oneOrNone.mockResolvedValueOnce({ attachment_url: `/uploads/${file}` });
-      const r = await call('DELETE', '/909091');
-      expect(r).toEqual({ status: 200, body: { ok: true } });
+  describe('POST /:id/toggle', () => {
+    test('включено → выключено: правило переключено и его pending-очередь погашена одной транзакцией, оба запроса со скоупом по салону', async () => {
+      mockClient.query.mockResolvedValueOnce(txRows({ id: 5, is_enabled: false })).mockResolvedValueOnce({ rowCount: 3 });
+      const r = await call('POST', '/5/toggle');
+      expect(r).toEqual({ status: 200, body: { ok: true, rule: { id: 5, is_enabled: false }, cancelledJobs: 3 } });
+      expect(mockWithTx).toHaveBeenCalledTimes(1);
+      const [toggleSql, toggleParams] = mockClient.query.mock.calls[0];
+      expect(toggleSql).toMatch(/SET is_enabled = NOT is_enabled/);
+      expect(toggleSql).toMatch(/WHERE id=\$1 AND salon_id=\$2/);
+      expect(toggleParams).toEqual([5, 1]);
+      expectCancelSql(mockClient.query.mock.calls[1][0], 'правило выключено');
+      expect(mockClient.query.mock.calls[1][1]).toEqual([5, 1]);
+      expect(mockClient.query.mock.invocationCallOrder[0]).toBeLessThan(mockClient.query.mock.invocationCallOrder[1]);
+    });
 
-      const [cancelSql, cancelParams] = mockDb.query.mock.calls[0];
-      expect(cancelSql).toMatch(/UPDATE notification_jobs/);
-      expect(cancelSql).toMatch(/status\s*=\s*'cancelled'/);
-      expect(cancelSql).toMatch(/status\s*=\s*'pending'/);
-      expect(cancelParams).toEqual([909091, 1]);
-      const [delSql, delParams] = mockDb.oneOrNone.mock.calls[0];
-      expect(delSql).toMatch(/DELETE FROM notification_rules WHERE id=\$1 AND salon_id=\$2 RETURNING attachment_url/);
-      expect(delParams).toEqual([909091, 1]);
-      expect(mockDb.query.mock.invocationCallOrder[0]).toBeLessThan(mockDb.oneOrNone.mock.invocationCallOrder[0]);
+    test('выключено → включено: очередь не трогается (погашенное не воскрешается)', async () => {
+      mockClient.query.mockResolvedValueOnce(txRows({ id: 5, is_enabled: true }));
+      const r = await call('POST', '/5/toggle');
+      expect(r).toEqual({ status: 200, body: { ok: true, rule: { id: 5, is_enabled: true }, cancelledJobs: 0 } });
+      expect(mockClient.query).toHaveBeenCalledTimes(1);
+    });
 
-      expect(await waitUntilGone(path.join(uploadsDir, file))).toBe(true);
-    } finally { rmQuiet(path.join(uploadsDir, file)); }
+    test('нет такого правила (или оно чужого салона) → 404, гасить нечего', async () => {
+      mockClient.query.mockResolvedValueOnce(txRows(null));
+      expect((await call('POST', '/6/toggle')).status).toBe(404);
+      expect(mockClient.query).toHaveBeenCalledTimes(1);
+    });
+
+    test('скоуп по салону: у пользователя салона 7 переключение и гашение идут с salon_id = 7', async () => {
+      mockUser = { salonId: 7, userId: 9, role: 'owner' };
+      mockClient.query.mockResolvedValueOnce(txRows({ id: 5, is_enabled: false })).mockResolvedValueOnce({ rowCount: 1 });
+      await call('POST', '/5/toggle');
+      expect(mockClient.query.mock.calls[0][1]).toEqual([5, 7]);
+      expect(mockClient.query.mock.calls[1][1]).toEqual([5, 7]);
+    });
+
+    test('сбой гашения очереди → 500, а не «правило выключено» (иначе в журнале осталась бы живая очередь выключенного правила)', async () => {
+      mockClient.query.mockResolvedValueOnce(txRows({ id: 5, is_enabled: false })).mockRejectedValueOnce(new Error('connection lost'));
+      const r = await call('POST', '/5/toggle');
+      expect(r).toEqual({ status: 500, body: { error: 'Внутренняя ошибка' } });
+    });
   });
 
-  test('DELETE /:id: чужое/несуществующее правило → 404, файлы не трогаются', async () => {
-    mockDb.query.mockResolvedValue({ rowCount: 0 });
-    mockDb.oneOrNone.mockResolvedValueOnce(null);
-    expect((await call('DELETE', '/909092')).status).toBe(404);
+  describe('DELETE /:id', () => {
+    // Одна транзакция: блокировка строки правила (параллельная постановка job'а с FK на правило ждёт нас и
+    // после коммита получает отказ FK, а не «осиротевший» pending) → гашение pending (после удаления rule_id
+    // станет NULL по ON DELETE SET NULL, и найти их по правилу будет нельзя) → удаление.
+    test('SELECT … FOR UPDATE → гашение pending («правило удалено») → DELETE, всё в одной транзакции; файл вложения убирается ПОСЛЕ неё', async () => {
+      const file = 'notify_1_909091_1760000000001.jpg';
+      fs.writeFileSync(path.join(uploadsDir, file), JPEG);
+      try {
+        mockClient.query
+          .mockResolvedValueOnce({ rows: [{ attachment_url: `/uploads/${file}` }], rowCount: 1 })
+          .mockResolvedValueOnce({ rowCount: 2 })
+          .mockResolvedValueOnce({ rowCount: 1 });
+        const r = await call('DELETE', '/909091');
+        expect(r).toEqual({ status: 200, body: { ok: true } });
+        expect(mockWithTx).toHaveBeenCalledTimes(1);
+
+        const q = mockClient.query.mock.calls;
+        expect(q).toHaveLength(3);
+        expect(q[0][0]).toMatch(/SELECT attachment_url FROM notification_rules WHERE id=\$1 AND salon_id=\$2 FOR UPDATE/);
+        expect(q[0][1]).toEqual([909091, 1]);
+        expectCancelSql(q[1][0], 'правило удалено');
+        expect(q[1][1]).toEqual([909091, 1]);
+        expect(q[2][0]).toMatch(/DELETE FROM notification_rules WHERE id=\$1 AND salon_id=\$2/);
+        expect(q[2][1]).toEqual([909091, 1]);
+        expect(mockDb.query).not.toHaveBeenCalled();             // вне транзакции ничего не пишется
+
+        expect(await waitUntilGone(path.join(uploadsDir, file))).toBe(true);
+      } finally { rmQuiet(path.join(uploadsDir, file)); }
+    });
+
+    test('чужое/несуществующее правило → 404: один SELECT, ни гашения, ни удаления', async () => {
+      mockClient.query.mockResolvedValueOnce({ rows: [], rowCount: 0 });
+      expect((await call('DELETE', '/909092')).status).toBe(404);
+      expect(mockClient.query).toHaveBeenCalledTimes(1);
+    });
+
+    test('сбой DELETE → 500 и файл вложения НЕ удалён (правило осталось, транзакция откатится)', async () => {
+      const file = 'notify_1_909093_1760000000002.jpg';
+      fs.writeFileSync(path.join(uploadsDir, file), JPEG);
+      try {
+        mockClient.query
+          .mockResolvedValueOnce({ rows: [{ attachment_url: `/uploads/${file}` }], rowCount: 1 })
+          .mockResolvedValueOnce({ rowCount: 1 })
+          .mockRejectedValueOnce(new Error('update or delete violates foreign key'));
+        const r = await call('DELETE', '/909093');
+        expect(r).toEqual({ status: 500, body: { error: 'Внутренняя ошибка' } });
+        await new Promise((res) => setTimeout(res, 150));
+        expect(fs.existsSync(path.join(uploadsDir, file))).toBe(true);
+      } finally { rmQuiet(path.join(uploadsDir, file)); }
+    });
+
+    // Файл правила убирается только когда транзакция реально зафиксирована: упавший COMMIT откатывает DELETE,
+    // правило остаётся и должно сохранить свою картинку (unlink необратим).
+    test('сбой КОММИТА после успешного DELETE → 500, файл вложения НЕ удалён', async () => {
+      const file = 'notify_1_909094_1760000000003.jpg';
+      fs.writeFileSync(path.join(uploadsDir, file), JPEG);
+      try {
+        mockClient.query
+          .mockResolvedValueOnce({ rows: [{ attachment_url: `/uploads/${file}` }], rowCount: 1 })
+          .mockResolvedValue({ rowCount: 1 });
+        mockWithTx.mockImplementationOnce(async (fn) => { await fn(mockClient); throw new Error('could not serialize access'); });
+        const r = await call('DELETE', '/909094');
+        expect(r).toEqual({ status: 500, body: { error: 'Внутренняя ошибка' } });
+        expect(mockClient.query).toHaveBeenCalledTimes(3);       // все три запроса выполнены, упал именно коммит
+        await new Promise((res) => setTimeout(res, 150));
+        expect(fs.existsSync(path.join(uploadsDir, file))).toBe(true);
+      } finally { rmQuiet(path.join(uploadsDir, file)); }
+    });
+
+    test('скоуп по салону: у пользователя салона 7 все три запроса идут с salon_id = 7', async () => {
+      mockUser = { salonId: 7, userId: 9, role: 'owner' };
+      mockClient.query.mockResolvedValueOnce({ rows: [{ attachment_url: null }], rowCount: 1 }).mockResolvedValue({ rowCount: 0 });
+      await call('DELETE', '/5');
+      expect(mockClient.query.mock.calls.map((c) => c[1])).toEqual([[5, 7], [5, 7], [5, 7]]);
+    });
   });
 
   test('GET /:id/jobs: журнал одного правила, скоуп по салону, лимит ограничен', async () => {
@@ -397,6 +661,22 @@ describe('журнал job\'ов', () => {
 
     await call('GET', '/jobs?type=birthday&status=zzz&date=14.10.2026&page=-5');
     expect(mockDb.any.mock.calls[1][1]).toEqual([1, null, null, null, 0]);
+  });
+
+  // Регэксп YYYY-MM-DD пропускает '2026-02-31', а `$4::date` в PG на нём падает → раньше был 500.
+  // Несуществующая дата, как и неверный формат, просто не включает фильтр.
+  test.each(['2026-02-31', '2026-02-29', '2026-04-31', '2026-13-01', '2026-00-10', '2026-10-00', '2026-10-32', '0000-01-01', '0050-01-01'])(
+    'GET /jobs?date=%s — несуществующая календарная дата: фильтр не включается, ответ 200 (не 500)', async (date) => {
+      mockDb.any.mockResolvedValue([]);
+      const r = await call('GET', `/jobs?date=${date}`);
+      expect(r.status).toBe(200);
+      expect(mockDb.any.mock.calls[0][1][3]).toBeNull();
+    });
+
+  test.each(['2026-02-28', '2024-02-29', '2026-12-31', '2026-01-01'])('GET /jobs?date=%s — настоящая дата проходит в запрос как есть', async (date) => {
+    mockDb.any.mockResolvedValue([]);
+    expect((await call('GET', `/jobs?date=${date}`)).status).toBe(200);
+    expect(mockDb.any.mock.calls[0][1][3]).toBe(date);
   });
 
   test('POST /jobs/:id/cancel: гасит только pending своего салона', async () => {
@@ -451,6 +731,47 @@ describe('оценки и паритет', () => {
     expect((await call('GET', '/parity?days=-3')).body.days).toBe(1);
     expect((await call('GET', '/parity?days=abc')).body.days).toBe(7);
     expect((await call('GET', '/parity')).body.days).toBe(7);
+  });
+});
+
+// Тело 500 видит владелец салона (и любой, кто украл его токен): строка подключения, имя таблицы, текст
+// драйвера в ответе не нужны. Общий текст наружу, подробность — в лог (как routes/reminders.js, routes/care.js).
+describe('500 без внутренностей: общий текст в ответе, подробность — в лог', () => {
+  const LEAK = 'SECRET postgres://user:pass@10.0.0.5/loyalpro password authentication failed';
+  const boom = () => new Error(LEAK);
+  const rejected = (fn) => () => fn().mockRejectedValue(boom());
+  const cases = [
+    ['GET /settings', 'GET', '/settings', undefined, rejected(() => mockSettings.getSettings)],
+    ['GET /jobs', 'GET', '/jobs', undefined, rejected(() => mockDb.any)],
+    ['POST /jobs/:id/cancel', 'POST', '/jobs/5/cancel', undefined, rejected(() => mockDb.query)],
+    ['GET /ratings', 'GET', '/ratings', undefined, rejected(() => mockDb.any)],
+    ['GET /parity', 'GET', '/parity', undefined, rejected(() => mockDb.any)],
+    ['GET /dictionaries', 'GET', '/dictionaries', undefined, rejected(() => mockDb.oneOrNone)],
+    ['GET /', 'GET', '/', undefined, rejected(() => mockDb.any)],
+    ['POST /', 'POST', '/', { title: 'r', messageTemplate: 'x' }, rejected(() => mockDb.one)],
+    ['PUT /:id', 'PUT', '/5', { title: 'r', messageTemplate: 'x' }, () => mockWithTx.mockRejectedValueOnce(boom())],
+    ['POST /:id/toggle', 'POST', '/5/toggle', undefined, () => mockWithTx.mockRejectedValueOnce(boom())],
+    ['DELETE /:id', 'DELETE', '/5', undefined, () => mockWithTx.mockRejectedValueOnce(boom())],
+    ['GET /:id/jobs', 'GET', '/5/jobs', undefined, rejected(() => mockDb.any)],
+    ['DELETE /:id/attachment', 'DELETE', '/5/attachment', undefined, rejected(() => mockDb.oneOrNone)],
+    ['POST /:id/test', 'POST', '/5/test', { phone: '79200255591' }, rejected(() => mockDb.oneOrNone)],
+  ];
+
+  test.each(cases)('%s', async (_name, method, p, body, arrange) => {
+    arrange();
+    const r = await call(method, p, body);
+    expect(r.status).toBe(500);
+    expect(r.body).toEqual({ error: 'Внутренняя ошибка' });
+    expect(JSON.stringify(r.body)).not.toContain('SECRET');
+    expect(mockLog.error).toHaveBeenCalledWith(expect.stringContaining('SECRET'));      // подробность осталась в логе
+  });
+
+  test('POST /:id/attachment', async () => {
+    mockDb.oneOrNone.mockRejectedValue(boom());
+    const r = await upload(5, JPEG, 'a.jpg', 'image/jpeg');
+    expect(r.status).toBe(500);
+    expect(r.body).toEqual({ error: 'Внутренняя ошибка' });
+    expect(mockLog.error).toHaveBeenCalledWith(expect.stringContaining('SECRET'));
   });
 });
 

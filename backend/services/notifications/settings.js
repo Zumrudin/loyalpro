@@ -47,8 +47,16 @@ function hm(v) {
   return String(v);
 }
 
+/** Ошибка валидации с кодом: route отдаёт по коду 400 (как BAD_TIME у тихих часов). */
+function invalid(code, message) { const e = new Error(message); e.code = code; return e; }
+
 async function updateSettings(salonId, patch) {
   const p = patch || {};
+  // Чужой режим и не-массив в каскаде раньше молча игнорировались: админ получал 200 при несохранённом
+  // переключателе отправки живым клиентам. «Не передано» (undefined) по-прежнему оставляет прежнее значение;
+  // мусорные ЭЛЕМЕНТЫ массива каскада отфильтровываются ниже и ошибкой не считаются.
+  if (p.mode !== undefined && !MODES.includes(p.mode)) throw invalid('BAD_MODE', 'bad mode');
+  if (p.default_channels !== undefined && !Array.isArray(p.default_channels)) throw invalid('BAD_CHANNELS', 'bad channels');
   const cur = await getSettings(salonId);
   const next = {
     mode: MODES.includes(p.mode) ? p.mode : cur.mode,
