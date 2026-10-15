@@ -71,6 +71,21 @@
 //    «пришёл» (как было в плане) опаздывала бы на часы и дни и не доходила бы до записавшихся,
 //    которые так и не пришли. Это промо, не транзакционное письмо: ночью (тихие часы) не шлём.
 //    Не чаще раза на телефон: повтор ложится строкой skipped.
+//
+// ДОГОН (backfillReminders, разово: scripts/notifications-backfill-reminders.js). visit_reminder ставится на
+// create/перенос/возврат, а записи в клинике делают на недели вперёд: без догона визиты, записанные ДО включения
+// модуля, остались бы без нашего напоминания после ухода Chatpush. Правила те же, что у вебхука, — но без
+// «пропущенных» строк в журнале (их были бы сотни): только visit_reminder; визит в будущем; не отменён (attendance -1 /
+// deleted) и не подтверждён (attendance 2 — по подтверждённым напоминаний нет, воркер всё равно погасил бы такую
+// строку); момент — reminderAt (hours_before правила, sms_before записи игнорируется, тихие часы); условия правила и
+// чёрный список как у enroll. Три отличия от вебхука, и все про то, что выгрузка /records — не событие:
+//  • состояние записи пишется ТОЛЬКО если строки ещё нет (DO NOTHING): выгрузка снята в какой-то момент, вебхуки идут
+//    непрерывно, и перезапись откатила бы более свежее состояние. Писать его всё же нужно — без него перенос записи,
+//    созданной до выката, не распознался бы (prev = null) и клиент остался бы без напоминания на новое время;
+//  • погашенный job НЕ оживляется (reviveCancelled:false): «добавить недостающее», а не «восстановить» — иначе повторный
+//    запуск вернул бы напоминание, отменённое администратором;
+//  • каталог категорий недоступен, а у правила условие по категории → исключение ДО записи: вебхук в этом случае пишет
+//    skipped с причиной, а для пачки это были бы сотни запертых ключей (повторный запуск их уже не поставит).
 // ============================================================
 const { db, pool } = require('../../db');
 const { createLogger } = require('../../logger');
@@ -109,15 +124,23 @@ async function loadState(salonId, recordId) {
   return { ...row, visitAt: row.visit_datetime ? new Date(row.visit_datetime).getTime() : null };
 }
 
-async function saveState(salonId, snap) {
+const STATE_OVERWRITE_SQL = `DO UPDATE SET visit_datetime=EXCLUDED.visit_datetime,
+        seance_length=EXCLUDED.seance_length, attendance=EXCLUDED.attendance, deleted=EXCLUDED.deleted,
+        services=EXCLUDED.services, staff_id=EXCLUDED.staff_id, client_yc_id=EXCLUDED.client_yc_id,
+        phone=COALESCE(EXCLUDED.phone, notification_record_state.phone), created_user_id=EXCLUDED.created_user_id, updated_at=NOW()`;
+
+/**
+ * Состояние записи. onlyIfAbsent — для догона (backfillReminders): строка, которая уже есть, НЕ трогается.
+ * Выгрузка /records снята в какой-то момент, а вебхуки идут непрерывно; перезапись из неё откатила бы более
+ * свежее состояние (перенос, «не придёт»), и воркер, сверяющийся именно с состоянием, ничего бы уже не поймал.
+ * Вебхук, наоборот, всегда перезаписывает: его снимок и есть самое свежее.
+ */
+async function saveState(salonId, snap, { onlyIfAbsent = false } = {}) {
   await db.query(
     `INSERT INTO notification_record_state (salon_id, yclients_record_id, visit_datetime, seance_length, attendance, deleted,
         services, staff_id, client_yc_id, phone, created_user_id, updated_at)
      VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9,$10,$11,NOW())
-     ON CONFLICT (salon_id, yclients_record_id) DO UPDATE SET visit_datetime=EXCLUDED.visit_datetime,
-        seance_length=EXCLUDED.seance_length, attendance=EXCLUDED.attendance, deleted=EXCLUDED.deleted,
-        services=EXCLUDED.services, staff_id=EXCLUDED.staff_id, client_yc_id=EXCLUDED.client_yc_id,
-        phone=COALESCE(EXCLUDED.phone, notification_record_state.phone), created_user_id=EXCLUDED.created_user_id, updated_at=NOW()`,
+     ON CONFLICT (salon_id, yclients_record_id) ${onlyIfAbsent ? 'DO NOTHING' : STATE_OVERWRITE_SQL}`,
     [salonId, snap.recordId, snap.visitAt != null ? new Date(snap.visitAt) : null, snap.seanceLength, snap.attendance,
      snap.deleted, JSON.stringify(snap.services), snap.staffId, snap.clientYcId, snap.phone, snap.createdUserId]);
 }
@@ -131,13 +154,24 @@ async function cancelPending(salonId, recordId, reason, onlyTypes = null) {
   return res.rowCount || 0;
 }
 
+const REVIVE_CANCELLED_SQL = `DO UPDATE SET status=EXCLUDED.status, scheduled_at=EXCLUDED.scheduled_at, rendered_text=EXCLUDED.rendered_text,
+        meta=EXCLUDED.meta, decision_reason=EXCLUDED.decision_reason, phone=EXCLUDED.phone,
+        rule_title=EXCLUDED.rule_title, client_id=EXCLUDED.client_id, attachment_url=EXCLUDED.attachment_url,
+        attempts=0, error=NULL, last_attempt_at=NULL, routing=NULL, cascade_pos=0, cascade_log='[]'::jsonb,
+        sent_at=NULL, channel_used=NULL, delivery_id=NULL, account_id=NULL, check_at=NULL, confirmed_at=NULL,
+        created_at=NOW()
+     WHERE notification_jobs.status='cancelled'`;
+
 /**
  * Один job на (правило, запись, момент визита). Повтор вебхука — тот же ключ: если строка в
  * работе или уже обработана, ничего не меняется; если она ПОГАШЕНА (перенос, отмена «не придёт»
  * и возврат), её оживляем свежими значениями — иначе перенос A→B→A оставил бы визит A без
  * напоминания (ключ A занят погашенной строкой). Сбрасываем аренду, каскад, счётчики попыток и
  * следы отправки/сверки: оживший job не должен выглядеть отправленным или уже сверенным.
- * Порядок параметров — контракт с тестами и backfillReminders (Task 11).
+ * Порядок параметров — контракт с тестами и backfillReminders.
+ * extra.reviveCancelled === false (догон) — погашенную строку НЕ оживлять: ключ занят — значит ничего не делаем.
+ * Догон — «добавить недостающее», а не «восстановить»; оживление погашенного там вернуло бы напоминание,
+ * которое администратор отменил руками («отменено администратором»), при повторном запуске скрипта.
  */
 async function insertJob(salonId, rule, snap, client, scheduledMs, text, extra = {}) {
   const res = await db.query(
@@ -145,13 +179,7 @@ async function insertJob(salonId, rule, snap, client, scheduledMs, text, extra =
         client_id, rendered_text, status, phone, attachment_url, meta, decision_reason)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13::jsonb,$14)
      ON CONFLICT (rule_id, yclients_record_id, COALESCE(visit_datetime, 'epoch'::timestamptz))
-     DO UPDATE SET status=EXCLUDED.status, scheduled_at=EXCLUDED.scheduled_at, rendered_text=EXCLUDED.rendered_text,
-        meta=EXCLUDED.meta, decision_reason=EXCLUDED.decision_reason, phone=EXCLUDED.phone,
-        rule_title=EXCLUDED.rule_title, client_id=EXCLUDED.client_id, attachment_url=EXCLUDED.attachment_url,
-        attempts=0, error=NULL, last_attempt_at=NULL, routing=NULL, cascade_pos=0, cascade_log='[]'::jsonb,
-        sent_at=NULL, channel_used=NULL, delivery_id=NULL, account_id=NULL, check_at=NULL, confirmed_at=NULL,
-        created_at=NOW()
-     WHERE notification_jobs.status='cancelled'`,
+     ${extra.reviveCancelled === false ? 'DO NOTHING' : REVIVE_CANCELLED_SQL}`,
     [salonId, rule.id, rule.trigger_type, rule.title, snap.recordId,
      snap.visitAt != null ? new Date(snap.visitAt) : null, new Date(scheduledMs),
      client ? client.id : null, text, extra.status || 'pending', snap.phone, rule.attachment_url || null,
@@ -460,7 +488,87 @@ async function enrollEvent(salon, snap, now, { cfg, rules, catalog }) {
   }
 }
 
+/**
+ * Догон напоминаний (см. шапку): records — записи YClients в форме элемента GET /records/{cid} (она совпадает с
+ * data вебхука). Возвращает счётчики { scanned, eligible, queued, rules, skipped }: rules — сколько включённых правил
+ * visit_reminder у салона (0 → догонять нечего, записи даже не разбираются, skipped пуст), eligible — пар «запись × правило»,
+ * которым нашлось место в очереди, queued — сколько строк реально легло (повтор даёт 0: ключ занят), skipped — по записям,
+ * с причиной (past — визит уже начался/момент не разобран, cancelled, confirmed, noPhone, blacklisted, noRule — условия
+ * ни одного правила не совпали, tooSoon — момент напоминания уже прошёл). dryRun ничего не пишет (только читает).
+ * Бросает, если каталог категорий нужен и недоступен, и при сбое БД: частично выполненный догон безопасно повторить.
+ */
+async function backfillReminders(salon, records, nowMs = Date.now(), { dryRun = false } = {}) {
+  const salonId = salon.id;
+  const list = Array.isArray(records) ? records : [];
+  const skipped = { past: 0, cancelled: 0, confirmed: 0, noPhone: 0, blacklisted: 0, noRule: 0, tooSoon: 0 };
+  const out = { scanned: list.length, eligible: 0, queued: 0, rules: 0, skipped };
+  const cfg = await settingsSvc.getSettings(salonId);
+  const rules = await db.any(
+    `SELECT * FROM notification_rules WHERE salon_id = $1 AND is_enabled = TRUE AND trigger_type = 'visit_reminder'`, [salonId]);
+  out.rules = rules.length;
+  if (!rules.length) return out;
+
+  // Каталог категорий — только если он нужен какому-то правилу. Один раз на весь догон (вебхуку он нужен на каждое
+  // событие, здесь — на пачку). Недоступный каталог (getServiceCategoryMap отдаёт пустую карту, а не бросает) — стоп.
+  let catMap = new Map();
+  if (rules.some((r) => hasCategoryCondition(r.conditions))) {
+    try { catMap = await getServiceCategoryMap(salon); } catch (e) { log.warn(`каталог услуг: ${e.message}`); }
+    if (!(catMap instanceof Map) || catMap.size === 0) {
+      throw new Error(`${CATALOG_REASON}: условия правил по категории не проверить, догон остановлен — повторите позже`);
+    }
+  }
+  const nameDictionary = await salonNames.load(salonId).catch(() => null);
+  const clients = new Map();   // карточка клиента — один раз на клиента YClients (записей у одного клиента много)
+
+  for (const rec of list) {
+    const snap = ev.recordSnapshot({ status: 'update', data: rec });
+    if (!Number.isInteger(snap.recordId)) continue;
+    if (snap.deleted || snap.attendance === -1) { skipped.cancelled += 1; continue; }
+    if (snap.visitAt == null || snap.visitAt <= nowMs) { skipped.past += 1; continue; }
+    // Состояние — для ВСЕХ будущих живых записей, и для тех, кому напоминание не положено: перенос такой записи
+    // обязан распознаться вебхуком. Строка уже есть — не трогаем (см. шапку).
+    if (!dryRun) await saveState(salonId, snap, { onlyIfAbsent: true });
+    if (snap.attendance === 2) { skipped.confirmed += 1; continue; }
+    if (!snap.phone) { skipped.noPhone += 1; continue; }
+
+    let client = null;
+    if (snap.clientYcId != null) {
+      if (!clients.has(snap.clientYcId)) {
+        clients.set(snap.clientYcId, await db.oneOrNone(
+          'SELECT id, name, is_blacklisted FROM clients WHERE salon_id = $1 AND yclients_client_id = $2', [salonId, snap.clientYcId]));
+      }
+      client = clients.get(snap.clientYcId);
+    }
+    if (client && client.is_blacklisted) { skipped.blacklisted += 1; continue; }
+
+    const serviceIds = snap.services.map((s) => s.id);
+    const ctx = { staffId: snap.staffId, serviceIds,
+      categoryIds: [...new Set(serviceIds.map((id) => catMap.get(String(id))).filter(Boolean))] };
+    const matched = rules.filter((rule) => {
+      try { return evaluateRule(rule.conditions, ctx); } catch (e) { log.warn(`rule #${rule.id}: ${e.message}`); return false; }
+    });
+    if (!matched.length) { skipped.noRule += 1; continue; }
+
+    const renderCtx = buildRenderCtx(snap, salon, client, { nameDictionary });
+    let planned = 0;
+    for (const rule of matched) {
+      const at = ev.reminderAt(snap, rule, cfg, nowMs);
+      if (at == null) continue;
+      planned += 1;
+      out.eligible += 1;
+      if (!dryRun) {
+        out.queued += await insertJob(salonId, rule, snap, client, at, renderTemplate(rule.message_template, renderCtx),
+          { meta: { backfill: true }, reviveCancelled: false });
+      }
+    }
+    if (!planned) skipped.tooSoon += 1;
+  }
+  log.info(`догон напоминаний salon=${salonId}${dryRun ? ' (сухой прогон)' : ''}: записей ${out.scanned}, подходят ${out.eligible}, `
+    + `поставлено ${out.queued}, пропущено ${JSON.stringify(skipped)}`);
+  return out;
+}
+
 module.exports = {
-  handleRecordEvent, cancelPending, _loadState: loadState,
+  handleRecordEvent, backfillReminders, cancelPending, _loadState: loadState,
   AFTER_VISIT_MAX_AGE_MS, NOTIFY_LOCK_NS, LOCK_SLOTS, SLOT_WAIT_MS, LOCK_TIMEOUT_MS,
 };

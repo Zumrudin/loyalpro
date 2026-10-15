@@ -71,6 +71,8 @@ function fakeTables(rules, { yieldIO = false, quiet = [null, null] } = {}) {
   db.query.mockImplementation(async (sql, p) => {
     await tick();
     if (/INSERT INTO notification_record_state/.test(sql)) {
+      // DO NOTHING (догон): строка уже есть — не трогаем, rowCount 0, как в PostgreSQL.
+      if (/DO NOTHING/.test(sql) && states.has(p[1])) return { rowCount: 0, rows: [] };
       states.set(p[1], { visit_datetime: p[2], attendance: p[4], deleted: p[5] });
       return { rowCount: 1, rows: [] };
     }
@@ -1344,5 +1346,258 @@ describe('блокировка по клиенту (advisory lock)', () => {
     await Promise.all([runOne(11, '79200000011'), runOne(12, '79200000012')]);
     expect(done.sort()).toEqual([11, 12]);
     expect(pool.connect).toHaveBeenCalledTimes(2);
+  });
+});
+
+// ── догон напоминаний по записям, созданным ДО включения модуля ──
+// ЗАЧЕМ: visit_reminder ставится только на событии создания/переноса, а записи в клинике делают на недели вперёд.
+// Без догона визиты, записанные до включения тени, остались бы без нашего напоминания после отключения Chatpush.
+// Правила — те же, что у вебхука (enroll): только будущий неотменённый и неподтверждённый визит, момент — reminderAt
+// (hours_before правила, тихие часы), условия правила и чёрный список. Форма записи — элемент /records/{cid}.
+describe('backfillReminders', () => {
+  const rec = (over = {}) => ({ id: 200, datetime: '2026-10-25T12:00:00+03:00', seance_length: 3600, attendance: 0, deleted: false,
+    sms_before: 0, client: { id: 7, phone: '79200255591', name: 'Анна' }, staff: { id: 55, name: 'Татьяна' },
+    services: [{ id: 1, title: 'Пилинг' }], ...over });
+  const reminder = (over) => rule({ id: 2, trigger_type: 'visit_reminder', ...over });
+  const byCategory = { logic: 'and', items: [{ type: 'category', ids: [10] }] };      // услуга 1 → категория 10 (мок каталога)
+  const stateWrites = () => db.query.mock.calls.filter(([sql]) => /INSERT INTO notification_record_state/.test(sql));
+  const metaOf = (p) => JSON.parse(p[12]);
+  const msk = (iso) => at(iso);
+
+  test('будущая живая запись → напоминание за 24 ч; прошедшая, «не придёт» и удалённая — нет', async () => {
+    setup({ rules: [reminder()] });
+    const r = await enroll.backfillReminders(salon, [
+      rec(), rec({ id: 201, datetime: '2026-10-17T12:00:00+03:00' }), rec({ id: 202, attendance: -1 }), rec({ id: 203, deleted: true }),
+    ], NOW);
+    expect(r).toMatchObject({ scanned: 4, eligible: 1, queued: 1, rules: 1 });
+    expect(r.skipped).toMatchObject({ past: 1, cancelled: 2 });
+    expect(inserts().map((p) => p[4])).toEqual([200]);
+    expect(inserts()[0][2]).toBe('visit_reminder');
+    expect(inserts()[0][9]).toBe('pending');
+    expect(new Date(inserts()[0][6]).getTime()).toBe(msk('2026-10-24T12:00:00+03:00'));
+    expect(inserts()[0][8]).toContain('25.10.2026 12:00');          // текст отрисован так же, как у вебхука
+    expect(metaOf(inserts()[0])).toEqual({ askConfirmation: true, backfill: true });
+  });
+
+  test('подтверждённая запись (attendance=2) не догоняется: по подтверждённым напоминаний нет, но состояние сохраняется', async () => {
+    setup({ rules: [reminder()] });
+    const r = await enroll.backfillReminders(salon, [rec({ attendance: 2 })], NOW);
+    expect(r).toMatchObject({ scanned: 1, eligible: 0, queued: 0 });
+    expect(r.skipped.confirmed).toBe(1);
+    expect(inserts()).toHaveLength(0);
+    expect(stateWrites()).toHaveLength(1);                           // перенос такой записи должен распознаться вебхуком
+  });
+
+  test('dryRun ничего не пишет: ни job\'ов, ни состояния — но считает так же', async () => {
+    setup({ rules: [reminder()] });
+    const r = await enroll.backfillReminders(salon, [rec()], NOW, { dryRun: true });
+    expect(r).toMatchObject({ scanned: 1, eligible: 1, queued: 0 });
+    expect(db.query).not.toHaveBeenCalled();
+  });
+
+  test('состояние пишется ТОЛЬКО если строки ещё нет: выгрузка не откатывает более свежее состояние от вебхуков', async () => {
+    const { states } = fakeTables([reminder()]);
+    const fresher = new Date(msk('2026-10-27T15:00:00+03:00'));     // вебхук успел перенести запись, а выгрузка снята раньше
+    states.set(200, { visit_datetime: fresher, attendance: 0, deleted: false });
+    await enroll.backfillReminders(salon, [rec(), rec({ id: 210 })], NOW);
+    expect(states.get(200).visit_datetime).toBe(fresher);            // не перезаписано
+    expect(states.has(210)).toBe(true);                              // а у записи без состояния — появилось
+    const sql = stateWrites()[0][0].replace(/\s+/g, ' ');
+    expect(sql).toMatch(/ON CONFLICT \(salon_id, yclients_record_id\) DO NOTHING/);
+    expect(sql).not.toMatch(/DO UPDATE/);
+  });
+
+  test('обычный вебхук состояние по-прежнему ПЕРЕЗАПИСЫВАЕТ (DO NOTHING — только у догона)', async () => {
+    setup({ rules: [reminder()] });
+    await enroll.handleRecordEvent(salon, payload(), NOW);
+    const sql = stateWrites()[0][0].replace(/\s+/g, ' ');
+    expect(sql).toMatch(/ON CONFLICT \(salon_id, yclients_record_id\) DO UPDATE SET/);
+    expect(sql).not.toMatch(/DO NOTHING/);
+  });
+
+  test('повторный запуск безопасен: второй прогон ничего не ставит и не плодит строк', async () => {
+    const { jobs } = fakeTables([reminder()]);
+    const first = await enroll.backfillReminders(salon, [rec()], NOW);
+    const second = await enroll.backfillReminders(salon, [rec()], NOW + 60e3);
+    expect(first.queued).toBe(1);
+    expect(second).toMatchObject({ eligible: 1, queued: 0 });
+    expect(jobs).toHaveLength(1);
+  });
+
+  test('погашенный job догон не оживляет (отменён администратором, правило выключали): оживление — дело вебхука', async () => {
+    const { jobs } = fakeTables([reminder()]);
+    await enroll.backfillReminders(salon, [rec()], NOW);
+    jobs[0].status = 'cancelled'; jobs[0].reason = 'отменено администратором';
+    const again = await enroll.backfillReminders(salon, [rec()], NOW + 60e3);
+    expect(again.queued).toBe(0);
+    expect(jobs[0].status).toBe('cancelled');
+    expect(jobs[0].reason).toBe('отменено администратором');
+    const sql = db.query.mock.calls.filter(([s]) => /INSERT INTO notification_jobs/.test(s)).pop()[0].replace(/\s+/g, ' ');
+    expect(sql).toMatch(/\) DO NOTHING/);
+    expect(sql).not.toMatch(/DO UPDATE/);
+  });
+
+  test('напоминание, уже поставленное вебхуком (то же правило, запись и визит), не дублируется', async () => {
+    const { jobs } = fakeTables([reminder()]);
+    await enroll.handleRecordEvent(salon, payload({ id: 200, datetime: '2026-10-25T12:00:00+03:00' }), NOW);
+    expect(jobs).toHaveLength(1);
+    const r = await enroll.backfillReminders(salon, [rec()], NOW);
+    expect(r.queued).toBe(0);
+    expect(jobs).toHaveLength(1);
+  });
+
+  test('после догона перенос записи распознаётся: старое напоминание гасится, новое встаёт на новое время', async () => {
+    const { jobs } = fakeTables([reminder(), rule({ id: 3, trigger_type: 'record_rescheduled' })]);
+    await enroll.backfillReminders(salon, [rec()], NOW);             // состояние записано догоном
+    const A = '2026-10-25T12:00:00+03:00';
+    const B = '2026-10-27T15:00:00+03:00';
+    await enroll.handleRecordEvent(salon, payload({ id: 200, datetime: B }, 'update'), NOW + 3600e3);
+    expect(jobOf(jobs, 'visit_reminder', A).status).toBe('cancelled');
+    expect(jobOf(jobs, 'visit_reminder', B).status).toBe('pending');
+    expect(jobOf(jobs, 'record_rescheduled', B).status).toBe('pending');
+  });
+
+  test('условия правила применяются как у вебхука: мастер и категория', async () => {
+    setup({ rules: [reminder({ conditions: { logic: 'and', items: [{ type: 'staff', ids: [999] }] } })] });
+    let r = await enroll.backfillReminders(salon, [rec()], NOW);
+    expect(r).toMatchObject({ eligible: 0, queued: 0 });
+    expect(r.skipped.noRule).toBe(1);
+    setup({ rules: [reminder({ conditions: byCategory })] });
+    r = await enroll.backfillReminders(salon, [rec()], NOW);
+    expect(r).toMatchObject({ eligible: 1, queued: 1 });
+    setup({ rules: [reminder({ conditions: { logic: 'and', items: [{ type: 'category', ids: [99] }] } })] });
+    r = await enroll.backfillReminders(salon, [rec({ id: 201 })], NOW);
+    expect(r).toMatchObject({ eligible: 0, queued: 0 });
+  });
+
+  test('два подходящих правила → по job\'у на каждое (ключ включает правило)', async () => {
+    setup({ rules: [reminder({ id: 2 }), reminder({ id: 3, hours_before: 48 })] });
+    const r = await enroll.backfillReminders(salon, [rec()], NOW);
+    expect(r).toMatchObject({ eligible: 2, queued: 2 });
+    expect(inserts().map((p) => [p[1], new Date(p[6]).getTime()])).toEqual([
+      [2, msk('2026-10-24T12:00:00+03:00')], [3, msk('2026-10-23T12:00:00+03:00')]]);
+  });
+
+  describe('каталог категорий', () => {
+    test('правила без условия по категории каталог не трогают', async () => {
+      setup({ rules: [reminder(), reminder({ id: 3, conditions: { logic: 'and', items: [{ type: 'staff', ids: [55] }] } })] });
+      await enroll.backfillReminders(salon, [rec(), rec({ id: 201 })], NOW);
+      expect(rulesMock.getServiceCategoryMap).not.toHaveBeenCalled();
+    });
+
+    test('есть условие по категории → каталог запрашивается ОДИН раз на весь догон, а не на запись', async () => {
+      setup({ rules: [reminder({ conditions: byCategory })] });
+      const r = await enroll.backfillReminders(salon, [rec(), rec({ id: 201 }), rec({ id: 202 })], NOW);
+      expect(r.queued).toBe(3);
+      expect(rulesMock.getServiceCategoryMap).toHaveBeenCalledTimes(1);
+    });
+
+    test.each([
+      ['пустой каталог (сбой YClients)', () => rulesMock.getServiceCategoryMap.mockImplementation(async () => new Map())],
+      ['каталог бросил', () => rulesMock.getServiceCategoryMap.mockImplementation(async () => { throw new Error('YClients 429'); })],
+    ])('%s при условии по категории → догон останавливается ДО записи: молчаливое «не подошло» оставило бы клиентов без напоминания', async (_, breakIt) => {
+      breakIt();
+      setup({ rules: [reminder({ conditions: byCategory })] });
+      await expect(enroll.backfillReminders(salon, [rec()], NOW)).rejects.toThrow(/каталог услуг/);
+      expect(db.query).not.toHaveBeenCalled();
+    });
+
+    test('dryRun при недоступном каталоге тоже останавливается: цифры без категорий соврали бы', async () => {
+      rulesMock.getServiceCategoryMap.mockImplementation(async () => new Map());
+      setup({ rules: [reminder({ conditions: byCategory })] });
+      await expect(enroll.backfillReminders(salon, [rec()], NOW, { dryRun: true })).rejects.toThrow(/каталог услуг/);
+    });
+  });
+
+  test('без телефона и клиент из чёрного списка — напоминания нет', async () => {
+    setup({ rules: [reminder()] });
+    let r = await enroll.backfillReminders(salon, [
+      rec({ client: { id: 7, phone: '', name: 'Анна' } }), rec({ id: 201, client: { id: 7, phone: '+7', name: 'Анна' } })], NOW);
+    expect(r).toMatchObject({ eligible: 0, queued: 0 });
+    expect(r.skipped.noPhone).toBe(2);
+    setup({ rules: [reminder()], client: { id: 9, name: 'X', is_blacklisted: true } });
+    r = await enroll.backfillReminders(salon, [rec()], NOW);
+    expect(r).toMatchObject({ eligible: 0, queued: 0 });
+    expect(r.skipped.blacklisted).toBe(1);
+    expect(inserts()).toHaveLength(0);
+  });
+
+  test('карточка клиента читается один раз на клиента, а не на запись', async () => {
+    setup({ rules: [reminder()] });
+    await enroll.backfillReminders(salon, [rec(), rec({ id: 201 }), rec({ id: 202 })], NOW);
+    expect(db.oneOrNone.mock.calls.filter(([sql]) => /FROM clients/.test(sql))).toHaveLength(1);
+  });
+
+  describe('момент напоминания', () => {
+    test('hours_before правила; sms_before записи игнорируется (в вебхуках это дефолт компании, а не выбор клиента)', async () => {
+      setup({ rules: [reminder({ hours_before: 48 })] });
+      await enroll.backfillReminders(salon, [rec({ sms_before: 24 }), rec({ id: 201, sms_before: 0 }), rec({ id: 202, sms_before: 2 })], NOW);
+      expect(inserts().map((p) => new Date(p[6]).getTime())).toEqual(Array(3).fill(msk('2026-10-23T12:00:00+03:00')));
+      jest.clearAllMocks(); pool.connect.mockResolvedValue(lockClient);
+      setup({ rules: [reminder({ hours_before: null })] });
+      await enroll.backfillReminders(salon, [rec({ sms_before: 2 })], NOW);
+      expect(new Date(inserts()[0][6]).getTime()).toBe(msk('2026-10-24T12:00:00+03:00'));    // не задано → 24 ч
+    });
+
+    test('визит ближе, чем hours_before: момент уже прошёл → не ставим (как у вебхука), состояние всё равно сохраняется', async () => {
+      setup({ rules: [reminder()] });
+      const r = await enroll.backfillReminders(salon, [rec({ datetime: '2026-10-19T08:00:00+03:00' })], NOW);   // завтра 08:00 → момент был вчера
+      expect(r).toMatchObject({ eligible: 0, queued: 0 });
+      expect(r.skipped.tooSoon).toBe(1);
+      expect(inserts()).toHaveLength(0);
+      expect(stateWrites()).toHaveLength(1);
+    });
+
+    test('тихие часы сдвигают момент на их конец, как в вебхуке', async () => {
+      setup({ quiet: ['21:00', '09:00'], rules: [reminder()] });
+      await enroll.backfillReminders(salon, [rec({ datetime: '2026-10-25T07:00:00+03:00' })], NOW);    // 24 ч до — 24.10 07:00, тихие часы
+      expect(new Date(inserts()[0][6]).getTime()).toBe(msk('2026-10-24T09:00:00+03:00'));
+    });
+
+    test('момент визита не разобран → записи нет вовсе', async () => {
+      setup({ rules: [reminder()] });
+      const r = await enroll.backfillReminders(salon, [rec({ datetime: undefined, date: undefined })], NOW);
+      expect(r).toMatchObject({ eligible: 0, queued: 0 });
+      expect(db.query).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('правила', () => {
+    test('берутся только ВКЛЮЧЁННЫЕ правила visit_reminder ЭТОГО салона', async () => {
+      setup({ rules: [reminder()] });
+      await enroll.backfillReminders(salon, [rec()], NOW);
+      const call = db.any.mock.calls.find(([s]) => /FROM notification_rules/.test(s));
+      const norm = call[0].replace(/\s+/g, ' ');
+      expect(norm).toMatch(/salon_id = \$1/);
+      expect(norm).toMatch(/is_enabled = TRUE/);
+      expect(norm).toMatch(/trigger_type = 'visit_reminder'/);
+      expect(call[1]).toEqual([1]);
+    });
+
+    test('правил нет → не пишется ничего, даже состояние; настройки и каталог не нужны', async () => {
+      setup({ rules: [] });
+      const r = await enroll.backfillReminders(salon, [rec(), rec({ id: 201 })], NOW);
+      expect(r).toMatchObject({ scanned: 2, eligible: 0, queued: 0, rules: 0 });
+      expect(db.query).not.toHaveBeenCalled();
+      expect(rulesMock.getServiceCategoryMap).not.toHaveBeenCalled();
+    });
+
+    test('режим салона догон не проверяет: строки ляжут в очередь и заработают при включении shadow/live', async () => {
+      setup({ mode: 'off', rules: [reminder()] });
+      const r = await enroll.backfillReminders(salon, [rec()], NOW);
+      expect(r.queued).toBe(1);
+    });
+  });
+
+  test('записи не массивом → пусто, без исключения', async () => {
+    setup({ rules: [reminder()] });
+    await expect(enroll.backfillReminders(salon, undefined, NOW)).resolves.toMatchObject({ scanned: 0, eligible: 0, queued: 0 });
+    await expect(enroll.backfillReminders(salon, null, NOW)).resolves.toMatchObject({ scanned: 0, queued: 0 });
+  });
+
+  test('запись без id пропускается молча (остальные обрабатываются)', async () => {
+    setup({ rules: [reminder()] });
+    const r = await enroll.backfillReminders(salon, [{ datetime: '2026-10-25T12:00:00+03:00' }, null, rec()], NOW);
+    expect(r).toMatchObject({ scanned: 3, eligible: 1, queued: 1 });
   });
 });
