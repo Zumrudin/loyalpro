@@ -1154,3 +1154,60 @@ body.kb-editor .kb-admin-only { display: inline-flex; }
   body.vd-dialog-open #page-dashboard{animation:none;transform:none}
   body.vd-dialog-open .msg-card{transform:none!important}
 }
+
+/* ═══ «УВЕДОМЛЕНИЯ» — вкладка «Автоуведомления» страницы «Рассылки» (js/pages/notifications.js) ═══
+   Карточки типов — тот же .bc-row, что у «Заботы»; таблицы журнала/оценок/сверки — .mtbl (карточки на
+   телефоне); здесь только то, чего нет в общих классах. */
+.nt-subtabs{max-width:640px}
+.nt-subtabs .tab{white-space:nowrap}
+.nt-banner{padding:10px 14px;border:1px solid var(--bd);border-left:3px solid var(--warn);border-radius:8px;
+  background:var(--card);font-size:12.5px;color:var(--t2);margin-bottom:12px;line-height:1.45}
+.nt-type-head{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;margin-bottom:4px}
+.nt-type-head b{font-size:13.5px}
+.nt-type-head .btn{flex:none}
+.nt-rule{display:flex;align-items:center;gap:12px;padding:10px 0;border-top:1px solid var(--bd);flex-wrap:wrap}
+.nt-rule-main{flex:1 1 240px;min-width:0;cursor:pointer}
+.nt-rule-main:hover .care-card-title b{color:var(--a)}
+.nt-stats{margin-top:0}
+.nt-norules{margin-top:0;padding:8px 0 2px;border-top:1px solid var(--bd)}
+/* чекбоксы: глобальное input{width:100%} растянуло бы галку на всю строку (тот же приём, что у remBonusEnabled) */
+.nt-check{display:flex;align-items:flex-start;gap:8px;margin-top:10px;font-size:12.5px;line-height:1.35;cursor:pointer}
+.nt-check input{width:16px;height:16px;flex:none;margin-top:1px;cursor:pointer}
+.nt-att{display:flex;align-items:center;gap:12px;margin-bottom:8px}
+.nt-att img{max-width:160px;max-height:110px;object-fit:cover;border-radius:8px;border:1px solid var(--bd)}
+.nt-warn{font-size:11.5px;line-height:1.4;color:#d97706;margin-top:6px}
+.nt-path{font-size:11px;line-height:1.35;color:var(--t3);margin-top:3px}
+.nt-ok{color:#10b981}
+.nt-text{white-space:pre-wrap;word-break:break-word;font-size:12px;max-width:360px}
+/* каскад в настройках: чип включённого мессенджера со стрелками */
+.nt-ch{display:inline-flex;align-items:center;gap:4px;cursor:default}
+.nt-ch-btn{border:none;background:rgba(255,255,255,.25);color:#fff;border-radius:6px;min-width:20px;height:20px;
+  padding:0 4px;font-size:11px;line-height:1;cursor:pointer}
+.nt-ch-btn:disabled{opacity:.35;cursor:default}
+.nt-filters{margin-bottom:12px;align-items:center}
+.nt-filters input[type=date]{width:auto}
+.nt-pager{display:flex;align-items:center;justify-content:center;gap:12px;padding:12px 0;font-size:12.5px;color:var(--t3)}
+.nt-row2{display:flex;gap:12px}
+.nt-row2 .fg{flex:1;min-width:0}
+.bc-textarea.nt-ta-sm{min-height:64px}
+.nt-plan{font-size:11px;color:var(--t3)}
+/* Тёмная тема. Глобальные .modal / input / select / .tab.active остаются «светлыми» (белый фон при светлом
+   тексте) во всём приложении; здесь чиним только то, что принадлежит этой вкладке: её модалки, фильтры и панели
+   вкладок страницы «Рассылки». */
+[data-theme="dark"] .nt-modal{background:var(--card)}
+[data-theme="dark"] .nt-modal input,[data-theme="dark"] .nt-modal select,
+[data-theme="dark"] .nt-filters input,[data-theme="dark"] .nt-filters select{background:var(--bg);color:var(--t1);border-color:var(--bd)}
+[data-theme="dark"] .nt-modal input[type=time],[data-theme="dark"] .nt-filters input[type=date]{color-scheme:dark}
+[data-theme="dark"] #page-broadcasts .tab.active{background:var(--card)}
+@media(max-width:700px){
+  [data-theme="dark"] .nt-modal .mh,[data-theme="dark"] .nt-modal .bc-actions{background:var(--card)}
+}
+@media(max-width:700px){
+  /* четыре подписи в одну строку не помещаются — сетка 2×2, как у вкладок «Заботы» */
+  .nt-subtabs{display:grid;grid-template-columns:1fr 1fr;gap:4px;max-width:none}
+  .nt-subtabs .tab{padding:9px 6px;font-size:12px}
+  .nt-rule{gap:8px}
+  .nt-text{max-width:none}
+  .nt-filters select,.nt-filters input[type=date]{flex:1 1 140px;min-width:0;width:auto}
+  .nt-att{flex-direction:column;align-items:flex-start}
+}

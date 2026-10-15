@@ -23,7 +23,7 @@
 <script src="js/core/auth.js?v=2026-06-02a"></script>
 <script src="js/core/nav.js?v=2026-10-09-msgacc"></script>
 <link rel="stylesheet" href="css/base.css?v=2026-08-10-mobile">
-<link rel="stylesheet" href="css/features.css?v=2026-10-04-verdicts1">
+<link rel="stylesheet" href="css/features.css?v=2026-10-14-notify1">
 </head>
 <body>
 
@@ -1137,12 +1137,59 @@
       <div id="bcTab-rules" style="display:none">
         <div class="bc-head">
           <div>
-            <div class="bc-head-title">🔁 Автоуведомления</div>
-            <div class="bc-head-sub">Постоянные уведомления по событию «создание записи»</div>
+            <div class="bc-head-title">🔁 Уведомления клиентам по записям YClients</div>
+            <div class="bc-head-sub" id="ntModeLine">Режим: —</div>
           </div>
-          <button class="btn btn-pri" onclick="nrOpenEditor()">+ Новое правило</button>
+          <div class="care-acts">
+            <button class="btn btn-sec" id="ntSettingsBtn" onclick="ntOpenSettings()">⚙️ Настройки</button>
+            <button class="btn btn-pri" id="ntAddBtn" onclick="ntOpenEditor()">+ Правило</button>
+          </div>
         </div>
-        <div id="nrList" class="empty">Загрузка…</div>
+
+        <div class="tabs nt-subtabs" id="ntSubTabs">
+          <button class="tab active" id="ntSubBtn-rules" onclick="ntSub('rules')">Правила</button>
+          <button class="tab" id="ntSubBtn-jobs" onclick="ntSub('jobs')">Журнал</button>
+          <button class="tab" id="ntSubBtn-ratings" onclick="ntSub('ratings')">Оценки</button>
+          <button class="tab" id="ntSubBtn-parity" onclick="ntSub('parity')">Сверка с Chatpush</button>
+        </div>
+
+        <div id="ntSub-rules" class="empty">Загрузка…</div>
+
+        <div id="ntSub-jobs" style="display:none">
+          <div class="care-filters nt-filters">
+            <select id="ntJobType" onchange="ntJobsFilterChanged()"><option value="">Все типы</option></select>
+            <select id="ntJobStatus" onchange="ntJobsFilterChanged()">
+              <option value="">Все статусы</option>
+              <option value="pending">В очереди</option>
+              <option value="sent">Отправлено</option>
+              <option value="shadow">Тень</option>
+              <option value="skipped">Пропущено</option>
+              <option value="cancelled">Отменено</option>
+              <option value="failed">Ошибка</option>
+            </select>
+            <input type="date" id="ntJobDate" onchange="ntJobsFilterChanged()" title="День отправки (по плану)">
+            <button class="btn btn-sec btn-sm" onclick="ntJobsReset()">Сбросить</button>
+          </div>
+          <div id="ntJobsList"></div>
+          <div id="ntJobsPager"></div>
+        </div>
+
+        <div id="ntSub-ratings" style="display:none">
+          <div id="ntRatingsBody"></div>
+        </div>
+
+        <div id="ntSub-parity" style="display:none">
+          <div class="care-filters nt-filters">
+            <label class="care-touch-lbl">период
+              <select id="ntParityDays" onchange="ntLoadParity()" style="width:auto">
+                <option value="7" selected>7 дней</option>
+                <option value="14">14 дней</option>
+                <option value="30">30 дней</option>
+              </select>
+            </label>
+          </div>
+          <div id="ntParityBody"></div>
+        </div>
       </div>
     </div>
 
@@ -1241,36 +1288,42 @@
       </div>
     </div>
 
-    <!-- ═══ NOTIFICATION RULE EDITOR MODAL ═══ -->
-    <div id="nrEditorOv" class="ov" onclick="if(event.target===this)nrCloseEditor()">
-      <div class="modal bc-modal">
+    <!-- ═══ NOTIFICATION RULE EDITOR MODAL (notifications.js) ═══ -->
+    <div id="ntEditorOv" class="ov" onclick="if(event.target===this)ntCloseEditor()">
+      <div class="modal bc-modal nt-modal">
         <div class="mh">
-          <div class="mt" id="nrEditorTitle">Новое правило</div>
-          <button class="mc" onclick="nrCloseEditor()">✕</button>
+          <div class="mt" id="ntEditorTitle">Новое правило</div>
+          <button class="mc" onclick="ntCloseEditor()">✕</button>
         </div>
         <div class="bc-modal-body">
 
           <div class="bc-section">
             <div class="fg">
               <label class="fl">Название правила</label>
-              <input id="nrTitle" type="text" maxlength="255" placeholder="напр. Запись на лазерную эпиляцию">
+              <input id="ntTitle" type="text" maxlength="255" placeholder="напр. Напоминание за сутки">
             </div>
+            <div class="fg" style="margin-bottom:0">
+              <label class="fl">Тип уведомления</label>
+              <select id="ntType" onchange="ntOnTypeChange()"></select>
+              <div class="bc-section-hint" id="ntTypeHint" style="margin:6px 0 0"></div>
+            </div>
+            <div id="ntTypeFields" style="margin-top:12px"></div>
           </div>
 
           <div class="bc-section">
-            <div class="bc-section-title">Условия (событие: создание записи)</div>
+            <div class="bc-section-title">Условия</div>
             <div class="bc-section-hint">
-              Без условий правило срабатывает на любую новую запись.
+              Без условий правило срабатывает на любую запись.
               Внутри одного условия значения объединяются через ИЛИ.
             </div>
-            <div id="nrConds"></div>
+            <div id="ntfConds"></div>
             <div style="display:flex;align-items:center;gap:14px;margin-top:8px;flex-wrap:wrap">
-              <button class="btn btn-sec btn-sm" onclick="nrAddCond()">+ Условие</button>
-              <div id="nrLogicWrap" style="display:none;align-items:center;gap:8px">
+              <button class="btn btn-sec btn-sm" onclick="condAdd('ntf')">+ Условие</button>
+              <div id="ntfLogicWrap" style="display:none;align-items:center;gap:8px">
                 <span style="font-size:12px;color:var(--t3)">Объединять условия:</span>
                 <div class="bc-chip-row">
-                  <span class="bc-chip on" id="nrLogic-and" onclick="nrSetLogic('and')">И</span>
-                  <span class="bc-chip" id="nrLogic-or" onclick="nrSetLogic('or')">ИЛИ</span>
+                  <span class="bc-chip on" id="ntfLogic-and" onclick="condSetLogic('ntf','and')">И</span>
+                  <span class="bc-chip" id="ntfLogic-or" onclick="condSetLogic('ntf','or')">ИЛИ</span>
                 </div>
               </div>
             </div>
@@ -1279,50 +1332,130 @@
           <div class="bc-section">
             <div class="bc-section-title">Текст сообщения</div>
             <div class="bc-section-hint">
-              Эмодзи поддерживаются. Разметка WhatsApp: *жирный*, _курсив_.<br>
-              Подстановки:
-              <code onclick="nrInsertVar('{first_name}')">{first_name}</code>
-              <code onclick="nrInsertVar('{name}')">{name}</code>
-              <code onclick="nrInsertVar('{date}')">{date}</code>
-              <code onclick="nrInsertVar('{time}')">{time}</code>
-              <code onclick="nrInsertVar('{services}')">{services}</code>
-              <code onclick="nrInsertVar('{staff}')">{staff}</code>
-              <code onclick="nrInsertVar('{salon}')">{salon}</code>
+              Эмодзи поддерживаются. Подстановки (клик — вставить в текст):
+              <span id="ntVars"></span>
             </div>
-            <textarea id="nrText" class="bc-textarea" rows="6" maxlength="4000"
-              placeholder="Здравствуйте, {first_name}! Вы записаны {date} в {time} на «{services}» к мастеру {staff} 💜"></textarea>
-            <div class="bc-char-count"><span id="nrCharCount">0</span> / 4000</div>
-          </div>
-
-          <div class="bc-section">
-            <div class="bc-section-title">Каналы отправки</div>
-            <div class="bc-section-hint">
-              Кликайте в нужном порядке — это порядок каскада: не доставили в первый, пробуем следующий.
+            <textarea id="ntText" class="bc-textarea" rows="6" maxlength="4000" oninput="ntTextChanged()"></textarea>
+            <div class="bc-char-count"><span id="ntCharCount">0</span> / 4000</div>
+            <div id="ntTextWarn"></div>
+            <div class="bc-section-hint" style="margin:6px 0 0">
+              Правка текста действует на новые события: уже запланированные отправки уйдут со старым текстом.
             </div>
-            <div id="nrChannels" class="bc-chip-row"></div>
-            <label style="display:flex;align-items:center;gap:8px;margin-top:10px;font-size:12.5px;cursor:pointer">
-              <input type="checkbox" id="nrPreferLast" checked>
-              Сначала — канал, из которого клиент писал в последний раз
-            </label>
           </div>
 
           <div class="bc-actions">
-            <button class="btn btn-sec" onclick="nrCloseEditor()">Отмена</button>
-            <button id="nrSaveBtn" class="btn btn-pri" onclick="nrSave()">Сохранить</button>
+            <button class="btn btn-sec btn-dng" id="ntDeleteBtn" onclick="ntDelete()" style="margin-right:auto">🗑 Удалить</button>
+            <button class="btn btn-sec" id="ntTestBtn" onclick="ntOpenTest()">🧪 Тест</button>
+            <button class="btn btn-sec" onclick="ntCloseEditor()">Отмена</button>
+            <button id="ntSaveBtn" class="btn btn-pri" onclick="ntSave()">Сохранить</button>
           </div>
         </div>
       </div>
     </div>
 
-    <!-- ═══ NOTIFICATION RULE LOG MODAL ═══ -->
-    <div id="nrLogOv" class="ov" onclick="if(event.target===this)nrCloseLog()">
-      <div class="modal bc-modal">
+    <!-- ═══ NOTIFICATION TEST SEND MODAL (поверх редактора: в DOM после него) ═══ -->
+    <div id="ntTestOv" class="ov" onclick="if(event.target===this)ntCloseTest()">
+      <div class="modal nt-modal">
         <div class="mh">
-          <div class="mt" id="nrLogTitle">Журнал отправок</div>
-          <button class="mc" onclick="nrCloseLog()">✕</button>
+          <div class="mt">Тестовая отправка</div>
+          <button class="mc" onclick="ntCloseTest()">✕</button>
         </div>
-        <div class="bc-modal-body" id="nrLogBody">
-          <div class="empty">Загрузка…</div>
+        <div class="bc-modal-body">
+          <div class="bc-section-hint" style="margin:0">
+            Правило уйдёт на указанный номер тем же воркером, что и в бою, с тестовыми данными
+            (имя «Тест Тестовна», дата 31.12.2026, время 12:00). Берётся СОХРАНЁННАЯ версия правила —
+            сначала сохраните правки. В режиме «тень» строка попадёт в журнал без отправки,
+            в «боевом» — реально уйдёт на номер, в выключенном тест не работает.
+          </div>
+          <div class="fg" style="max-width:240px;margin-bottom:0">
+            <label class="fl">Номер телефона</label>
+            <input id="ntTestPhone" type="tel" placeholder="79200255591">
+          </div>
+          <div id="ntTestResult" class="empty" style="padding:12px 0">Укажите номер и нажмите «Отправить тест»</div>
+          <div class="bc-actions">
+            <button class="btn btn-sec" onclick="ntCloseTest()">Закрыть</button>
+            <button class="btn btn-pri" id="ntTestSendBtn" onclick="ntRunTest()">Отправить тест</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══ NOTIFICATION SETTINGS MODAL (notifications.js) ═══ -->
+    <div id="ntSettingsOv" class="ov" onclick="if(event.target===this)ntCloseSettings()">
+      <div class="modal bc-modal nt-modal">
+        <div class="mh">
+          <div class="mt">⚙️ Настройки уведомлений</div>
+          <button class="mc" onclick="ntCloseSettings()">✕</button>
+        </div>
+        <div class="bc-modal-body">
+
+          <div class="bc-section">
+            <div class="bc-section-title">Режим</div>
+            <select id="ntsMode" onchange="ntRenderModeHint()">
+              <option value="off">⚪ Выключен</option>
+              <option value="shadow">🟡 Тень — пишем в журнал, клиентам не отправляем</option>
+              <option value="live">🟢 Боевой — уходит клиентам</option>
+            </select>
+            <div class="bc-section-hint" id="ntsModeHint" style="margin:8px 0 0"></div>
+          </div>
+
+          <div class="bc-section">
+            <div class="bc-section-title">Каскад отправки</div>
+            <div class="bc-section-hint">
+              Включённые мессенджеры идут по порядку: не вышло в первый — пробуем следующий.
+              Стрелки меняют порядок, ✕ выключает, «+» включает.
+            </div>
+            <div id="ntsChannels" class="bc-chip-row"></div>
+            <label class="nt-check">
+              <input type="checkbox" id="ntsPreferLast">
+              <span>Сначала мессенджер, в котором клиент писал последним</span>
+            </label>
+          </div>
+
+          <div class="bc-section">
+            <div class="bc-section-title">Тихие часы</div>
+            <div class="bc-section-hint">
+              В это окно не уходят напоминание, опрос, рекомендации и приглашение в программу лояльности —
+              отправка сдвигается на конец окна. «Создана / перенесена / отменена» уходят сразу.
+              Оба поля пустые — тихих часов нет.
+            </div>
+            <div class="nt-row2">
+              <div class="fg" style="margin-bottom:0"><label class="fl">С</label><input type="time" id="ntsQuietFrom"></div>
+              <div class="fg" style="margin-bottom:0"><label class="fl">До</label><input type="time" id="ntsQuietTo"></div>
+            </div>
+          </div>
+
+          <div class="bc-section">
+            <div class="bc-section-title">Ответы пациентам</div>
+            <div class="bc-section-hint">
+              Отправляются автоматически в боевом режиме, когда пациент отвечает на напоминание или опрос.
+            </div>
+            <div class="fg">
+              <label class="fl">Ответ «Подтверждаю» (визит подтверждён)</label>
+              <textarea id="ntsConfirm" class="bc-textarea nt-ta-sm" rows="2" maxlength="2000"></textarea>
+            </div>
+            <div class="fg">
+              <label class="fl">Оценка 5 (сюда можно добавить ссылки на отзывы)</label>
+              <textarea id="ntsHigh" class="bc-textarea nt-ta-sm" rows="2" maxlength="2000"></textarea>
+            </div>
+            <div class="fg">
+              <label class="fl">Оценка 4 («что можно улучшить», без перевода на администратора)</label>
+              <textarea id="ntsMid" class="bc-textarea nt-ta-sm" rows="2" maxlength="2000"></textarea>
+            </div>
+            <div class="fg">
+              <label class="fl">Оценка 2–3 («что не устроило»)</label>
+              <textarea id="ntsLow" class="bc-textarea nt-ta-sm" rows="2" maxlength="2000"></textarea>
+            </div>
+            <label class="nt-check">
+              <input type="checkbox" id="ntsEscalate">
+              <span>При оценке 2–3 передавать диалог администратору (красная подсветка в «Чате»)</span>
+            </label>
+          </div>
+
+          <div class="bc-actions">
+            <button class="btn btn-sec" onclick="ntCloseSettings()">Отмена</button>
+            <button id="ntsSaveBtn" class="btn btn-pri" onclick="ntSaveSettings()">Сохранить</button>
+          </div>
         </div>
       </div>
     </div>
@@ -2564,8 +2697,8 @@ function fireConfetti() {
 <script src="js/pages/dashboard-messengers.js?v=2026-10-04-verdicts1"></script>
 <script src="js/pages/dashboard-verdicts.js?v=2026-10-04-verdicts1"></script>
 <script src="js/pages/broadcasts.js?v=2026-06-13c"></script>
-<script src="js/pages/broadcast-rules.js?v=2026-08-02a"></script>
 <script src="js/pages/conditions-editor.js?v=2026-08-07a"></script>
+<script src="js/pages/notifications.js?v=2026-10-14a"></script>
 <script src="js/pages/care.js?v=2026-08-07a"></script>
 <script src="js/pages/reminders-plan.js?v=2026-08-09a"></script>
 <script src="js/pages/reminders.js?v=2026-08-19a"></script>
