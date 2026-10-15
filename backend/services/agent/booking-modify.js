@@ -7,7 +7,8 @@ const { ycGetServiceMeta, ycGetServiceCatalog } = require('../yclients');
 const { ycGetDayRecords } = require('../yclients-booking');
 const { withRateLimitRetry } = require('../yclients-retry');
 const { wrongServiceHint } = require('./slot-evidence');
-const { isRecordAlive } = require('./record-liveness');
+const { isRecordAlive, isEmptyRecord } = require('./record-liveness');
+const { normalizePhoneKey } = require('../agent-gate');
 
 // ── Исполнитель отмены и переноса записи агентом. ──
 // Отмена — НЕ удаление: помечаем «клиент не пришёл» (attendance=-1), режем
@@ -62,6 +63,63 @@ function ownershipError(rec, expectedYcClientId) {
     return 'Запись принадлежит другому клиенту.';
   }
   return null;
+}
+
+// Владелец записи по ТЕЛЕФОНУ: подтверждение идёт по ответу пациента из мессенджера, а у ответа нет
+// YClients-id клиента — только номер. Совпадение номера в записи сейчас с номером, на который ушло
+// напоминание, отсекает запись, которую администратор успел переписать на другого клиента. У клиента
+// записи нет телефона — проверять нечем, не блокируем; нет самого клиента — владельца не подтвердить.
+function phoneOwnershipError(rec, expectedPhone) {
+  const expected = normalizePhoneKey(expectedPhone);
+  if (!expected) return null;
+  if (!rec.client) return 'Не удалось подтвердить владельца записи.';
+  const actual = normalizePhoneKey(rec.client.phone);
+  return actual && actual !== expected ? 'Запись принадлежит другому клиенту.' : null;
+}
+
+/**
+ * Подтверждение визита пациентом (ответ «Подтверждаю» на напоминание, services/notifications/replies.js):
+ * статус «Подтвердил» (attendance=2). PUT /record только с {attendance} YClients отвергает (422, как и везде
+ * в этом модуле нужен ПОЛНЫЙ набор: мастер, услуги, client, время), поэтому тело собирается из текущей
+ * записи — как у отмены. Ничего не бросает: отказ — { ok:false, error }, и вызывающий отдаёт ход Миле.
+ *  • записи нет / не своя (expectedYcClientId, expectedPhone) → ok:false;
+ *  • уже «Подтвердил» → { ok:true, already:true } без PUT (повтор безвреден);
+ *  • отменена/удалена/без услуг или уже «Пришёл» → ok:false: ни воскрешать, ни откатывать статус нельзя.
+ * @param {number} salonId
+ * @param {number} recordId id записи YClients
+ * @param {{expectedYcClientId?: number, expectedPhone?: string}} [opts] проверка владельца (необязательна)
+ */
+async function confirmBookingRecord(salonId, recordId, { expectedYcClientId, expectedPhone } = {}) {
+  const salon = await loadSalon(salonId);
+  if (!salon) return { ok: false, error: 'YClients не подключён для салона.' };
+
+  let rec;
+  try { rec = await ycGetRecord(salon, recordId); }
+  catch (e) { return { ok: false, error: e.message }; }
+  if (!rec || !rec.id) return { ok: false, error: 'Запись не найдена.' };
+  const foreign = ownershipError(rec, expectedYcClientId) || phoneOwnershipError(rec, expectedPhone);
+  if (foreign) return { ok: false, foreign: true, error: foreign };
+
+  if (!isRecordAlive(rec)) return { ok: false, inactive: true, error: 'Запись отменена или удалена — подтверждать нечего.' };
+  if (isEmptyRecord(rec)) return { ok: false, inactive: true, error: 'В записи нет услуг — подтверждать нечего.' };
+  if (Number(rec.attendance) === 2) return { ok: true, already: true, record_id: rec.id };
+  if (Number(rec.attendance) === 1) {
+    return { ok: false, arrived: true, error: 'Пациент уже отмечен как пришедший — статус не меняем.' };
+  }
+
+  try {
+    await withRateLimitRetry(() => ycUpdateRecord(authSalonFor(salon), recordId, {
+      staff_id: rec.staff_id,
+      services: serviceIds(rec),
+      client: clientOf(rec),
+      datetime: rec.datetime,
+      seance_length: rec.seance_length,
+      attendance: 2,
+      comment: rec.comment || '',
+    }));
+  } catch (e) { return { ok: false, error: e.message }; }
+
+  return { ok: true, record_id: recordId };
 }
 
 async function cancelBookingRecord(salonId, { dialogKey, recordId, expectedYcClientId, noNotifyServiceId }) {
@@ -258,5 +316,5 @@ async function modifyBookingServices(salonId, {
 }
 
 module.exports = {
-  cancelBookingRecord, rescheduleBookingRecord, modifyBookingServices, CANCEL_SEANCE_LENGTH,
+  cancelBookingRecord, rescheduleBookingRecord, modifyBookingServices, confirmBookingRecord, CANCEL_SEANCE_LENGTH,
 };

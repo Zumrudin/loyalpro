@@ -1,7 +1,10 @@
 'use strict';
 // Ответы пациентов на НАШИ уведомления (services/notifications/replies.js): «Подтверждаю» после
-// напоминания → attendance=2 в YClients + отбивка, цифра 2–5 после опроса → visit_ratings + текст
-// по полосе. Работает ТОЛЬКО в режиме live; всё, что модуль не берёт, уходит Миле как раньше.
+// напоминания → «Подтвердил» в YClients (полный PUT, booking-modify.confirmBookingRecord) + отбивка,
+// цифра 2–5 после опроса → visit_ratings + текст по полосе. Работает ТОЛЬКО в режиме live; всё, что
+// модуль не берёт, уходит Миле как раньше. Ответ перехватывается лишь на НАШЕ письмо: текст
+// последнего исходящего обязан совпасть с текстом job'а, а в диалоге не должно быть живого контекста
+// (Мила или администратор рядом с письмом) — иначе «Да» могло быть ответом им.
 jest.mock('./db', () => ({ db: { any: jest.fn(), oneOrNone: jest.fn(), query: jest.fn() } }));
 jest.mock('./logger', () => {
   const log = { warn: jest.fn(), info: jest.fn(), error: jest.fn(), debug: jest.fn() };
@@ -9,9 +12,9 @@ jest.mock('./logger', () => {
 });
 jest.mock('./services/notifications/settings', () => ({ getSettings: jest.fn() }));
 jest.mock('./services/agent/history', () => ({ lastOutgoing: jest.fn() }));
-jest.mock('./services/yclients-records', () => ({ updateAttendance: jest.fn() }));
+jest.mock('./services/agent/booking-modify', () => ({ confirmBookingRecord: jest.fn() }));
 jest.mock('./services/messaging/transport', () => ({ sendMessage: jest.fn() }));
-jest.mock('./services/agent/pending-replies', () => ({ remember: jest.fn() }));
+jest.mock('./services/agent/pending-replies', () => ({ remember: jest.fn(), peek: jest.fn() }));
 jest.mock('./services/outgoing-authorship', () => ({ remember: jest.fn() }));
 jest.mock('./services/chat-persist', () => ({ persistWhatsappOutgoing: jest.fn() }));
 jest.mock('./services/agent/dialog-state', () => ({ getOrCreate: jest.fn() }));
@@ -23,13 +26,14 @@ const { db } = require('./db');
 const { __log: log } = require('./logger');
 const settings = require('./services/notifications/settings');
 const history = require('./services/agent/history');
-const yc = require('./services/yclients-records');
+const booking = require('./services/agent/booking-modify');
 const transport = require('./services/messaging/transport');
 const pendingReplies = require('./services/agent/pending-replies');
 const authorship = require('./services/outgoing-authorship');
 const persist = require('./services/chat-persist');
 const dialogState = require('./services/agent/dialog-state');
 const escalate = require('./services/agent/tools/escalate-to-operator');
+const { DIALOG_KEY_SQL } = require('./services/chat');
 const replies = require('./services/notifications/replies');
 
 const REMINDER = 'Здравствуйте!\nНапоминаем о записи в «PERI CLINIC»\nВаша запись 14.10.2026 в 13:30\nПожалуйста, подтвердите визит';
@@ -38,9 +42,12 @@ const KEY = '79200255591';
 const DAY = 24 * 3600 * 1000;
 const msg = (text, over = {}) => ({ direction: 'incoming', channel: 'tdlib', phone: KEY, chatId: '123', chatType: 'person',
   messageId: 'm-1', type: 'text', text, ...over });
-const salon = { id: 1, yclients_company_id: 5 };
-const REM_JOB = { id: 10, yclients_record_id: 100, meta: { askConfirmation: true } };
-const REV_JOB = { id: 11, yclients_record_id: 100, client_id: 9, meta: {} };
+// Момент отправки письма фиксирован: с ним сравниваются времена реплик из pending-replies и окно
+// «живого диалога». rendered_text job'а обязан совпасть с последним исходящим диалога.
+const SENT_AT = new Date('2026-10-13T10:00:00Z');
+const SENT_SEC = Math.floor(SENT_AT.getTime() / 1000);
+const REM_JOB = { id: 10, yclients_record_id: 100, meta: { askConfirmation: true }, rendered_text: REMINDER, sent_at: SENT_AT };
+const REV_JOB = { id: 11, yclients_record_id: 100, client_id: 9, meta: {}, rendered_text: SURVEY, sent_at: SENT_AT };
 const FROM_SYSTEM = (text) => ({ author: 'system', text });
 
 const CAPTURE = /SET confirmed_at\s*=\s*NOW\(\)/;
@@ -49,18 +56,19 @@ const INSERT_RATING = /INSERT INTO visit_ratings/;
 
 /**
  * last — последнее исходящее диалога; job — что вернёт поиск job'а; capture — сколько строк захватил
- * UPDATE confirmed_at (0 = job уже захвачен другим ответом); state — notification_record_state.
+ * UPDATE confirmed_at (0 = job уже захвачен другим ответом); state — notification_record_state;
+ * context — строка, которую вернёт поиск исходящих Милы/администратора рядом с письмом (null — таких нет).
  */
-function setup({ last = null, job = null, mode = 'live', capture = 1, state = null, cfg = {} } = {}) {
+function setup({ last = null, job = null, mode = 'live', capture = 1, state = null, context = null, cfg = {} } = {}) {
   settings.getSettings.mockResolvedValue({
     mode, confirm_reply_text: '✅ Подтверждено', rating_high_text: 'Спасибо!',
     rating_mid_text: 'Что улучшить?', rating_low_text: 'Что не так?', rating_escalate_low: true, ...cfg,
   });
   history.lastOutgoing.mockResolvedValue(last);
   db.oneOrNone.mockImplementation(async (sql) => {
-    if (/FROM salons/.test(sql)) return salon;
     if (/FROM notification_jobs/.test(sql)) return job;
     if (/FROM notification_record_state/.test(sql)) return state;
+    if (/FROM chatpush_messages/.test(sql)) return context;
     return null;
   });
   db.query.mockImplementation(async (sql) => (CAPTURE.test(sql) ? { rowCount: capture, rows: [] } : { rowCount: 1, rows: [] }));
@@ -72,7 +80,7 @@ const queryOrder = (re) => {
 };
 const jobLookup = () => db.oneOrNone.mock.calls.find(([sql]) => /FROM notification_jobs/.test(sql));
 const nothingTouched = () => {
-  expect(yc.updateAttendance).not.toHaveBeenCalled();
+  expect(booking.confirmBookingRecord).not.toHaveBeenCalled();
   expect(transport.sendMessage).not.toHaveBeenCalled();
   expect(escalate.run).not.toHaveBeenCalled();
   expect(queries(INSERT_RATING)).toHaveLength(0);
@@ -85,7 +93,8 @@ beforeEach(() => {
   persist.persistWhatsappOutgoing.mockResolvedValue(undefined);
   dialogState.getOrCreate.mockResolvedValue({});
   escalate.run.mockResolvedValue({ escalated: true, reason: 'low_rating' });
-  yc.updateAttendance.mockResolvedValue({});
+  booking.confirmBookingRecord.mockResolvedValue({ ok: true, record_id: 100 });
+  pendingReplies.peek.mockReturnValue([]);
 });
 
 describe('режим салона: перехват только в live', () => {
@@ -148,11 +157,11 @@ describe('подтверждение визита', () => {
     expect(r).toEqual({ handled: true, kind: 'confirmed' });
     expect(queries(CAPTURE)).toHaveLength(1);
     expect(queries(CAPTURE)[0][1]).toEqual([10, 1]);   // job и салон: захват тоже со salon_id
-    expect(yc.updateAttendance).toHaveBeenCalledWith(salon, 100, 2);
+    expect(booking.confirmBookingRecord).toHaveBeenCalledWith(1, 100, { expectedPhone: KEY });
     expect(transport.sendMessage).toHaveBeenCalledWith(1, expect.objectContaining({
       text: '✅ Подтверждено', phone: KEY, dispatchRouting: ['tdlib'], replyToMessageId: 'm-1' }));
     // Захват — ДО обращения к YClients (иначе второй ответ успел бы пройти тем же путём).
-    expect(queryOrder(CAPTURE)).toBeLessThan(yc.updateAttendance.mock.invocationCallOrder[0]);
+    expect(queryOrder(CAPTURE)).toBeLessThan(booking.confirmBookingRecord.mock.invocationCallOrder[0]);
     expect(queries(RELEASE)).toHaveLength(0);
     expect(log.info).toHaveBeenCalledWith(expect.stringMatching(/record 100.*подтвержд/));
   });
@@ -168,6 +177,8 @@ describe('подтверждение визита', () => {
     expect(transport.sendMessage).toHaveBeenCalledWith(1, expect.objectContaining({ phone: '8 (920) 025-55-91' }));
     expect(authorship.remember).toHaveBeenCalledWith(1, '8 (920) 025-55-91', '✅ Подтверждено', 'system');
     expect(pendingReplies.remember).toHaveBeenCalledWith(1, '8 (920) 025-55-91', '✅ Подтверждено');
+    // Владелец записи сверяется по канону номера (в записи YClients номер в своей форме).
+    expect(booking.confirmBookingRecord).toHaveBeenCalledWith(1, 100, { expectedPhone: KEY });
   });
 
   test.each([['89200255591'], ['+79200255591'], ['9200255591']])('номер %s → поиск job по 79200255591', async (phone) => {
@@ -183,6 +194,8 @@ describe('подтверждение визита', () => {
     expect(sql).toMatch(/status\s*=\s*'sent'/);
     expect(sql).toMatch(/yclients_record_id\s*>\s*0/);
     expect(sql).toMatch(/salon_id\s*=\s*\$1/);
+    expect(sql).toMatch(/rendered_text/);   // строгая связь с письмом
+    expect(sql).toMatch(/sent_at/);         // окно живого диалога считается от момента отправки
     expect(sql).not.toMatch(/confirmed_at\s+IS\s+NULL/i);
   });
 
@@ -217,7 +230,7 @@ describe('подтверждение визита', () => {
   test('пустой текст отбивки → ничего не шлём, но подтверждение засчитано', async () => {
     setup({ last: FROM_SYSTEM(REMINDER), job: REM_JOB, cfg: { confirm_reply_text: '   ' } });
     expect(await replies.handleIncoming(1, msg('Подтверждаю'))).toEqual({ handled: true, kind: 'confirmed' });
-    expect(yc.updateAttendance).toHaveBeenCalledWith(salon, 100, 2);
+    expect(booking.confirmBookingRecord).toHaveBeenCalledWith(1, 100, { expectedPhone: KEY });
     expect(transport.sendMessage).not.toHaveBeenCalled();
   });
 
@@ -232,7 +245,7 @@ describe('подтверждение визита', () => {
 
   test('YClients отказал → захват снят, отбивки нет, ход уходит Миле', async () => {
     setup({ last: FROM_SYSTEM(REMINDER), job: REM_JOB });
-    yc.updateAttendance.mockRejectedValue(new Error('429'));
+    booking.confirmBookingRecord.mockResolvedValue({ ok: false, error: '429' });
     expect(await replies.handleIncoming(1, msg('+'))).toEqual({ handled: false });
     expect(transport.sendMessage).not.toHaveBeenCalled();
     expect(queries(RELEASE)).toHaveLength(1);
@@ -249,10 +262,10 @@ describe('подтверждение визита', () => {
       if (RELEASE.test(sql)) held = false;
       return { rowCount: 1, rows: [] };
     });
-    yc.updateAttendance.mockRejectedValueOnce(new Error('429')).mockResolvedValueOnce({});
+    booking.confirmBookingRecord.mockResolvedValueOnce({ ok: false, error: '429' }).mockResolvedValueOnce({ ok: true, record_id: 100 });
     expect(await replies.handleIncoming(1, msg('Подтверждаю'))).toEqual({ handled: false });
     expect(await replies.handleIncoming(1, msg('Подтверждаю'))).toEqual({ handled: true, kind: 'confirmed' });
-    expect(yc.updateAttendance).toHaveBeenCalledTimes(2);
+    expect(booking.confirmBookingRecord).toHaveBeenCalledTimes(2);
     expect(transport.sendMessage).toHaveBeenCalledTimes(1);
   });
 
@@ -274,7 +287,7 @@ describe('подтверждение визита', () => {
     });
     expect(await replies.handleIncoming(1, msg('Подтверждаю', { messageId: 'm-1' }))).toEqual({ handled: true, kind: 'confirmed' });
     expect(await replies.handleIncoming(1, msg('Подтверждаю', { messageId: 'm-2' }))).toEqual({ handled: true, kind: 'duplicate' });
-    expect(yc.updateAttendance).toHaveBeenCalledTimes(1);
+    expect(booking.confirmBookingRecord).toHaveBeenCalledTimes(1);
     expect(transport.sendMessage).toHaveBeenCalledTimes(1);
   });
 
@@ -290,7 +303,7 @@ describe('подтверждение визита', () => {
       replies.handleIncoming(1, msg('Подтверждаю', { messageId: 'm-2' })),
     ]);
     expect([a.kind, b.kind].sort()).toEqual(['confirmed', 'duplicate']);
-    expect(yc.updateAttendance).toHaveBeenCalledTimes(1);
+    expect(booking.confirmBookingRecord).toHaveBeenCalledTimes(1);
     expect(transport.sendMessage).toHaveBeenCalledTimes(1);
   });
 
@@ -335,12 +348,42 @@ describe('подтверждение визита', () => {
     nothingTouched();
   });
 
-  test('салон не нашёлся → Миле, захвата нет', async () => {
+  test('id записи из BIGINT приходит строкой → в confirmBookingRecord уходит числом', async () => {
+    setup({ last: FROM_SYSTEM(REMINDER), job: { ...REM_JOB, yclients_record_id: '100' } });
+    await replies.handleIncoming(1, msg('Подтверждаю'));
+    expect(booking.confirmBookingRecord).toHaveBeenCalledWith(1, 100, { expectedPhone: KEY });
+  });
+
+  test('confirmBookingRecord бросил (контракт — не бросать, но страхуемся) → захват снят, ход Миле', async () => {
     setup({ last: FROM_SYSTEM(REMINDER), job: REM_JOB });
-    db.oneOrNone.mockImplementation(async (sql) => (/FROM notification_jobs/.test(sql) ? REM_JOB : null));
+    booking.confirmBookingRecord.mockRejectedValue(new Error('boom'));
     expect(await replies.handleIncoming(1, msg('Подтверждаю'))).toEqual({ handled: false });
-    expect(queries(CAPTURE)).toHaveLength(0);
-    nothingTouched();
+    expect(queries(RELEASE)).toHaveLength(1);
+    expect(transport.sendMessage).not.toHaveBeenCalled();
+    expect(log.warn).toHaveBeenCalledWith(expect.stringMatching(/boom/));
+  });
+
+  test.each([
+    ['запись отменена или удалена', { ok: false, inactive: true, error: 'Запись отменена или удалена — подтверждать нечего.' }],
+    ['пациент уже отмечен «пришёл»', { ok: false, arrived: true, error: 'Пациент уже отмечен как пришедший' }],
+    ['запись не своя', { ok: false, foreign: true, error: 'Запись принадлежит другому клиенту.' }],
+    ['ответ без ok', {}],
+    ['пустой ответ', undefined],
+  ])('confirmBookingRecord: %s → захват снят, отбивки нет, ход Миле', async (_name, result) => {
+    setup({ last: FROM_SYSTEM(REMINDER), job: REM_JOB });
+    booking.confirmBookingRecord.mockResolvedValue(result);
+    expect(await replies.handleIncoming(1, msg('Подтверждаю'))).toEqual({ handled: false });
+    expect(queries(RELEASE)).toHaveLength(1);
+    expect(queries(RELEASE)[0][1]).toEqual([10, 1]);
+    expect(transport.sendMessage).not.toHaveBeenCalled();
+  });
+
+  test('запись уже «Подтвердил» в YClients (already) → отбивка уходит, захват остаётся', async () => {
+    setup({ last: FROM_SYSTEM(REMINDER), job: REM_JOB });
+    booking.confirmBookingRecord.mockResolvedValue({ ok: true, already: true, record_id: 100 });
+    expect(await replies.handleIncoming(1, msg('Подтверждаю'))).toEqual({ handled: true, kind: 'confirmed' });
+    expect(transport.sendMessage).toHaveBeenCalledWith(1, expect.objectContaining({ text: '✅ Подтверждено' }));
+    expect(queries(RELEASE)).toHaveLength(0);
   });
 
   describe('устаревшее напоминание не подтверждаем (не откатываем «Пришёл», не подтверждаем старое время)', () => {
@@ -368,12 +411,236 @@ describe('подтверждение визита', () => {
     ])('%s → подтверждаем', async (_name, state) => {
       setup({ last: FROM_SYSTEM(REMINDER), job, state });
       expect(await replies.handleIncoming(1, msg('Подтверждаю'))).toEqual({ handled: true, kind: 'confirmed' });
-      expect(yc.updateAttendance).toHaveBeenCalledWith(salon, 100, 2);
+      expect(booking.confirmBookingRecord).toHaveBeenCalledWith(1, 100, { expectedPhone: KEY });
     });
 
     test('у job нет момента визита (не разобран) → «уже начался» не выдумываем', async () => {
       setup({ last: FROM_SYSTEM(REMINDER), job: REM_JOB, state: null });
       expect(await replies.handleIncoming(1, msg('Подтверждаю'))).toEqual({ handled: true, kind: 'confirmed' });
+    });
+  });
+});
+
+describe('строгая связь: ответ засчитывается только на НАШЕ письмо (последнее исходящее == текст job)', () => {
+  test('последнее исходящее — другое напоминание, не письмо этого job → Миле, захвата нет', async () => {
+    const other = REMINDER.replace('14.10.2026 в 13:30', '15.10.2026 в 10:00');
+    setup({ last: FROM_SYSTEM(other), job: REM_JOB });
+    expect(await replies.handleIncoming(1, msg('Подтверждаю'))).toEqual({ handled: false });
+    expect(queries(CAPTURE)).toHaveLength(0);
+    nothingTouched();
+    expect(log.info).toHaveBeenCalledWith(expect.stringMatching(/не наше письмо/));
+  });
+
+  test('две записи: последнее исходящее — письмо первой, а свежий sent-job — второй → Миле (чужую запись не подтверждаем)', async () => {
+    const second = { ...REM_JOB, id: 12, yclients_record_id: 101, rendered_text: REMINDER.replace('13:30', '15:00') };
+    setup({ last: FROM_SYSTEM(REMINDER), job: second });
+    expect(await replies.handleIncoming(1, msg('Подтверждаю'))).toEqual({ handled: false });
+    expect(queries(CAPTURE)).toHaveLength(0);
+    nothingTouched();
+  });
+
+  test('тестовое/чужое письмо с тем же телефоном и другим текстом не подтверждает боевую запись', async () => {
+    setup({ last: FROM_SYSTEM('Напоминаем о записи (тест): подтвердите визит'), job: REM_JOB });
+    expect(await replies.handleIncoming(1, msg('Подтверждаю'))).toEqual({ handled: false });
+    nothingTouched();
+  });
+
+  test('тот же текст с другими пробелами и переводами строк (так его отдаёт эхо мессенджера) → наше письмо', async () => {
+    const echoed = `  ${REMINDER.replace(/\n/g, '\r\n\n ').replace(/ /g, '  ')} \n`;
+    setup({ last: FROM_SYSTEM(echoed), job: REM_JOB });
+    expect(await replies.handleIncoming(1, msg('Подтверждаю'))).toEqual({ handled: true, kind: 'confirmed' });
+  });
+
+  test('и наоборот: пробелы в тексте job разошлись с эхом → всё равно наше письмо', async () => {
+    setup({ last: FROM_SYSTEM(REMINDER), job: { ...REM_JOB, rendered_text: `${REMINDER}\n\n` .replace(/\n/g, '  \n') } });
+    expect(await replies.handleIncoming(1, msg('Подтверждаю'))).toEqual({ handled: true, kind: 'confirmed' });
+  });
+
+  test('слова не нормализуются: другая дата в тексте — уже другое письмо', async () => {
+    setup({ last: FROM_SYSTEM(REMINDER.replace('13:30', '13:31')), job: REM_JOB });
+    expect(await replies.handleIncoming(1, msg('Подтверждаю'))).toEqual({ handled: false });
+  });
+
+  test.each([[''], ['   '], [null], [undefined]])('у job нет текста (%p) → связь не доказана, Миле', async (text) => {
+    setup({ last: FROM_SYSTEM(REMINDER), job: { ...REM_JOB, rendered_text: text } });
+    expect(await replies.handleIncoming(1, msg('Подтверждаю'))).toEqual({ handled: false });
+    nothingTouched();
+  });
+
+  test('оценка: последнее исходящее — другой опрос, не письмо этого job → Миле, захвата нет', async () => {
+    setup({ last: FROM_SYSTEM(`${SURVEY} (повторно)`), job: REV_JOB });
+    expect(await replies.handleIncoming(1, msg('5'))).toEqual({ handled: false });
+    expect(queries(CAPTURE)).toHaveLength(0);
+    nothingTouched();
+  });
+
+  test('оценка: пробелы и переводы строк эха не мешают', async () => {
+    setup({ last: FROM_SYSTEM(`\n ${SURVEY.replace(/ /g, '   ')}\r\n`), job: REV_JOB });
+    expect(await replies.handleIncoming(1, msg('5'))).toEqual({ handled: true, kind: 'rating', rating: 5 });
+  });
+});
+
+describe('контекст живого диалога: «Да», адресованное Миле или администратору, не перехватываем', () => {
+  // Эмуляция запроса «исходящие Милы/администратора с msg_ts >= $3»: проверяет и роли, и границу окна.
+  function withHistory(rows) {
+    const base = db.oneOrNone.getMockImplementation();
+    db.oneOrNone.mockImplementation(async (sql, params) => {
+      if (/FROM chatpush_messages/.test(sql)) {
+        const hit = rows.find((r) => r.ts >= params[2] && ['agent', 'operator'].includes(r.authored_by));
+        return hit ? { hit: 1 } : null;
+      }
+      return base(sql, params);
+    });
+  }
+  const dbLookup = () => db.oneOrNone.mock.calls.find(([sql]) => /FROM chatpush_messages/.test(sql));
+
+  test('окно — именованная константа, 60 минут', () => {
+    expect(replies.LIVE_DIALOG_WINDOW_MIN).toBe(60);
+  });
+
+  describe('реплика, ещё не попавшая в БД (pending-replies)', () => {
+    test('после письма ушла реплика Милы, эхо которой ещё не в БД → Миле, захвата нет', async () => {
+      setup({ last: FROM_SYSTEM(REMINDER), job: REM_JOB });
+      pendingReplies.peek.mockReturnValue([{ text: 'Перенести вас на пятницу, 15:00?', ts: SENT_SEC + 90 }]);
+      expect(await replies.handleIncoming(1, msg('Да'))).toEqual({ handled: false });
+      expect(queries(CAPTURE)).toHaveLength(0);
+      nothingTouched();
+      expect(pendingReplies.peek).toHaveBeenCalledWith(1, KEY);
+      expect(log.info).toHaveBeenCalledWith(expect.stringMatching(/живой диалог|после письма/));
+    });
+
+    test('реплика ушла в ту же секунду, что и письмо → тоже Миле', async () => {
+      setup({ last: FROM_SYSTEM(REMINDER), job: REM_JOB });
+      pendingReplies.peek.mockReturnValue([{ text: 'Перенести на 15:00?', ts: SENT_SEC }]);
+      expect(await replies.handleIncoming(1, msg('Да'))).toEqual({ handled: false });
+    });
+
+    test('реплика была ДО письма (её эхо, видимо, не пришло) → этот guard молчит', async () => {
+      setup({ last: FROM_SYSTEM(REMINDER), job: REM_JOB });
+      pendingReplies.peek.mockReturnValue([{ text: 'Перенести на 15:00?', ts: SENT_SEC - 5 }]);
+      expect(await replies.handleIncoming(1, msg('Подтверждаю'))).toEqual({ handled: true, kind: 'confirmed' });
+    });
+
+    test('в pending лежит само письмо (воркер запоминает отправленное) → не чужая реплика', async () => {
+      setup({ last: FROM_SYSTEM(REMINDER), job: REM_JOB });
+      pendingReplies.peek.mockReturnValue([{ text: REMINDER, ts: SENT_SEC + 1 }]);
+      expect(await replies.handleIncoming(1, msg('Подтверждаю'))).toEqual({ handled: true, kind: 'confirmed' });
+    });
+
+    test('текст письма в pending с другими пробелами — всё равно своё', async () => {
+      setup({ last: FROM_SYSTEM(REMINDER), job: REM_JOB });
+      pendingReplies.peek.mockReturnValue([{ text: ` ${REMINDER.replace(/\n/g, '\r\n')} `, ts: SENT_SEC + 1 }]);
+      expect(await replies.handleIncoming(1, msg('Подтверждаю'))).toEqual({ handled: true, kind: 'confirmed' });
+    });
+
+    test('наша же отбивка в pending (эхо ещё не пришло) — не живой диалог: повтор «Подтверждаю» узнаётся как duplicate', async () => {
+      setup({ last: FROM_SYSTEM(REMINDER), job: REM_JOB, capture: 0 });
+      pendingReplies.peek.mockReturnValue([{ text: '✅ Подтверждено', ts: SENT_SEC + 30 }]);
+      expect(await replies.handleIncoming(1, msg('Подтверждаю'))).toEqual({ handled: true, kind: 'duplicate' });
+      nothingTouched();
+    });
+
+    test.each([['Спасибо!'], ['Что улучшить?'], ['Что не так?']])(
+      'оценка: наша отбивка «%s» в pending не считается живым диалогом — повтор цифры узнаётся как duplicate', async (text) => {
+        setup({ last: FROM_SYSTEM(SURVEY), job: REV_JOB, capture: 0 });
+        pendingReplies.peek.mockReturnValue([{ text, ts: SENT_SEC + 30 }]);
+        expect(await replies.handleIncoming(1, msg('4'))).toEqual({ handled: true, kind: 'duplicate' });
+      });
+
+    test('смотрим оба ключа диалога: сырой номер вебхука и канон (воркер запоминает письмо под каноном)', async () => {
+      setup({ last: FROM_SYSTEM(REMINDER), job: REM_JOB });
+      await replies.handleIncoming(1, msg('Подтверждаю', { phone: '89200255591' }));
+      expect(pendingReplies.peek).toHaveBeenCalledWith(1, '89200255591');
+      expect(pendingReplies.peek).toHaveBeenCalledWith(1, KEY);
+    });
+
+    test('чужая реплика под каноническим ключом (другое письмо воркера после нашего) → Миле', async () => {
+      setup({ last: FROM_SYSTEM(REMINDER), job: REM_JOB });
+      pendingReplies.peek.mockImplementation((salonId, key) => (key === KEY ? [{ text: 'Вы записаны на 16.10', ts: SENT_SEC + 10 }] : []));
+      expect(await replies.handleIncoming(1, msg('Да', { phone: '89200255591' }))).toEqual({ handled: false });
+      nothingTouched();
+    });
+
+    test('оценка: реплика Милы после опроса, эхо ещё не в БД → Миле', async () => {
+      setup({ last: FROM_SYSTEM(SURVEY), job: REV_JOB });
+      pendingReplies.peek.mockReturnValue([{ text: 'Какой вариант вам подходит: 2 или 3?', ts: SENT_SEC + 60 }]);
+      expect(await replies.handleIncoming(1, msg('3'))).toEqual({ handled: false });
+      expect(queries(CAPTURE)).toHaveLength(0);
+      nothingTouched();
+    });
+  });
+
+  describe('Мила или администратор писали рядом с письмом (chatpush_messages)', () => {
+    test('«Перенести на пт 15:00?» от Милы за 30 минут до напоминания, затем «Да» → Миле', async () => {
+      setup({ last: FROM_SYSTEM(REMINDER), job: REM_JOB });
+      withHistory([{ authored_by: 'agent', ts: SENT_SEC - 30 * 60 }]);
+      expect(await replies.handleIncoming(1, msg('Да'))).toEqual({ handled: false });
+      expect(queries(CAPTURE)).toHaveLength(0);
+      nothingTouched();
+      expect(log.info).toHaveBeenCalledWith(expect.stringMatching(/живой диалог|Мила|администратор/));
+    });
+
+    test('то же с администратором (authored_by=operator)', async () => {
+      setup({ last: FROM_SYSTEM(REMINDER), job: REM_JOB });
+      withHistory([{ authored_by: 'operator', ts: SENT_SEC - 10 * 60 }]);
+      expect(await replies.handleIncoming(1, msg('Да'))).toEqual({ handled: false });
+      nothingTouched();
+    });
+
+    test('запрос: свой салон, ключ диалога как у индекса, только исходящие agent/operator, окно открыто вперёд', async () => {
+      setup({ last: FROM_SYSTEM(REMINDER), job: REM_JOB });
+      await replies.handleIncoming(1, msg('Подтверждаю'));
+      const [sql, params] = dbLookup();
+      expect(sql).toMatch(/salon_id\s*=\s*\$1/);
+      expect(sql).toContain(DIALOG_KEY_SQL);
+      expect(sql).toMatch(/direction\s*=\s*'outgoing'/);
+      expect(sql).toMatch(/authored_by\s+IN\s*\(\s*'agent'\s*,\s*'operator'\s*\)/);
+      expect(sql).toMatch(/>=\s*\$3/);
+      expect(sql).not.toMatch(/<=?\s*\$\d/);   // верхней границы нет: «после письма» тоже ловится
+      // ключ диалога, начало окна (60 минут до отправки письма)
+      expect(params).toEqual([1, KEY, SENT_SEC - replies.LIVE_DIALOG_WINDOW_MIN * 60]);
+    });
+
+    test('граница окна: 59 минут до письма — живой диалог, 61 минута — нет', async () => {
+      setup({ last: FROM_SYSTEM(REMINDER), job: REM_JOB });
+      withHistory([{ authored_by: 'agent', ts: SENT_SEC - 59 * 60 }]);
+      expect(await replies.handleIncoming(1, msg('Да'))).toEqual({ handled: false });
+
+      setup({ last: FROM_SYSTEM(REMINDER), job: REM_JOB });
+      withHistory([{ authored_by: 'agent', ts: SENT_SEC - 61 * 60 }]);
+      expect(await replies.handleIncoming(1, msg('Да'))).toEqual({ handled: true, kind: 'confirmed' });
+    });
+
+    test('Мила писала уже ПОСЛЕ письма (эхо легло в БД) → Миле', async () => {
+      setup({ last: FROM_SYSTEM(REMINDER), job: REM_JOB });
+      withHistory([{ authored_by: 'agent', ts: SENT_SEC + 120 }]);
+      expect(await replies.handleIncoming(1, msg('Да'))).toEqual({ handled: false });
+    });
+
+    test('рядом только наши автоуведомления (system) и NULL-авторство → живого диалога нет', async () => {
+      setup({ last: FROM_SYSTEM(REMINDER), job: REM_JOB });
+      withHistory([{ authored_by: 'system', ts: SENT_SEC - 5 * 60 }, { authored_by: null, ts: SENT_SEC - 5 * 60 }]);
+      expect(await replies.handleIncoming(1, msg('Да'))).toEqual({ handled: true, kind: 'confirmed' });
+    });
+
+    test('никто не писал → подтверждаем (запрос выполнен)', async () => {
+      setup({ last: FROM_SYSTEM(REMINDER), job: REM_JOB });
+      expect(await replies.handleIncoming(1, msg('Да'))).toEqual({ handled: true, kind: 'confirmed' });
+      expect(dbLookup()).toBeDefined();
+    });
+
+    test('guard срабатывает ДО захвата, записи в YClients и отбивки', async () => {
+      setup({ last: FROM_SYSTEM(REMINDER), job: REM_JOB, context: { hit: 1 } });
+      expect(await replies.handleIncoming(1, msg('Да'))).toEqual({ handled: false });
+      expect(db.query).not.toHaveBeenCalled();
+      nothingTouched();
+      expect(authorship.remember).not.toHaveBeenCalled();
+    });
+
+    test('оценка: цифра после опроса однозначна — окно «до письма» не применяется, запрос в историю не идёт', async () => {
+      setup({ last: FROM_SYSTEM(SURVEY), job: REV_JOB, context: { hit: 1 } });
+      expect(await replies.handleIncoming(1, msg('5'))).toEqual({ handled: true, kind: 'rating', rating: 5 });
+      expect(dbLookup()).toBeUndefined();
     });
   });
 });
@@ -562,6 +829,32 @@ describe('оценка визита', () => {
     expect(jobLookup()[1][3]).toBe(168);
     expect(jobLookup()[0]).toMatch(/yclients_record_id\s*>\s*0/);
   });
+
+  test('диалог уже на операторе (status=escalated) → инструмент не зовём: прежняя причина (complication) не затирается', async () => {
+    setup({ last: FROM_SYSTEM(SURVEY), job: REV_JOB });
+    dialogState.getOrCreate.mockResolvedValue({ status: 'escalated', escalated_reason: 'complication' });
+    expect(await replies.handleIncoming(1, msg('2'))).toEqual({ handled: true, kind: 'rating', rating: 2 });
+    expect(dialogState.getOrCreate).toHaveBeenCalledWith(1, KEY);
+    expect(escalate.run).not.toHaveBeenCalled();
+    // оценка записана и текст пациенту уходит как обычно
+    expect(queries(INSERT_RATING)).toHaveLength(1);
+    expect(transport.sendMessage).toHaveBeenCalledWith(1, expect.objectContaining({ text: 'Что не так?' }));
+    expect(log.info).toHaveBeenCalledWith(expect.stringMatching(/уже на операторе.*complication/));
+  });
+
+  test.each([['bot'], ['closed'], [undefined], [null]])('диалог в статусе %p → переводим на администратора', async (status) => {
+    setup({ last: FROM_SYSTEM(SURVEY), job: REV_JOB });
+    dialogState.getOrCreate.mockResolvedValue({ status });
+    await replies.handleIncoming(1, msg('3'));
+    expect(escalate.run).toHaveBeenCalledWith(1, { reason: 'low_rating' }, { dialogKey: KEY });
+  });
+
+  test('getOrCreate вернул пустоту → считаем, что диалог не на операторе, переводим', async () => {
+    setup({ last: FROM_SYSTEM(SURVEY), job: REV_JOB });
+    dialogState.getOrCreate.mockResolvedValue(null);
+    await replies.handleIncoming(1, msg('3'));
+    expect(escalate.run).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('что модуль не берёт', () => {
@@ -605,6 +898,26 @@ describe('что модуль не берёт', () => {
 });
 
 describe('fail-open: любой сбой → ход уходит Миле, исключение наружу не летит', () => {
+  test('сбой чтения pending-replies', async () => {
+    setup({ last: FROM_SYSTEM(REMINDER), job: REM_JOB });
+    pendingReplies.peek.mockImplementation(() => { throw new Error('pending broken'); });
+    expect(await replies.handleIncoming(1, msg('Подтверждаю'))).toEqual({ handled: false });
+    expect(log.error).toHaveBeenCalledWith(expect.stringMatching(/pending broken/));
+    nothingTouched();
+  });
+
+  test('сбой запроса «писали ли Мила/администратор рядом» — YClients не трогаем', async () => {
+    setup({ last: FROM_SYSTEM(REMINDER), job: REM_JOB });
+    const base = db.oneOrNone.getMockImplementation();
+    db.oneOrNone.mockImplementation(async (sql, p) => {
+      if (/FROM chatpush_messages/.test(sql)) throw new Error('db down');
+      return base(sql, p);
+    });
+    expect(await replies.handleIncoming(1, msg('Подтверждаю'))).toEqual({ handled: false });
+    nothingTouched();
+    expect(queries(CAPTURE)).toHaveLength(0);
+  });
+
   test('сбой чтения настроек', async () => {
     setup({ last: FROM_SYSTEM(REMINDER), job: REM_JOB });
     settings.getSettings.mockRejectedValue(new Error('db down'));

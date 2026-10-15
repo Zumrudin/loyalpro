@@ -15,7 +15,7 @@ const { pool } = require('./db');
 const ycr = require('./services/yclients-records');
 const yc = require('./services/yclients');
 const yb = require('./services/yclients-booking');
-const { cancelBookingRecord, rescheduleBookingRecord, modifyBookingServices, CANCEL_SEANCE_LENGTH } =
+const { cancelBookingRecord, rescheduleBookingRecord, modifyBookingServices, confirmBookingRecord, CANCEL_SEANCE_LENGTH } =
   require('./services/agent/booking-modify');
 
 const SALON_ROW = {
@@ -300,5 +300,166 @@ describe('лимит запросов YClients (429) повторяется', ()
     expect(res.ok).toBe(false);
     expect(res.error).toMatch(/недоступно/);
     expect(ycr.ycUpdateRecord).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ── confirmBookingRecord: «Подтвердил» (attendance=2) по ответу пациента на напоминание ──
+// PUT /record только с {attendance} YClients отвергает (422 — как и везде в этом модуле, нужен ПОЛНЫЙ
+// набор: мастер, услуги, client, время), поэтому тело собирается из текущей записи, как у отмены.
+describe('confirmBookingRecord', () => {
+  const FULL_BODY = {
+    staff_id: 7, services: [{ id: 10 }], client: { id: 777, phone: '79001112233', name: 'Аня' },
+    datetime: '2026-07-25T12:00:00+03:00', seance_length: 3600, attendance: 2, comment: 'старый',
+  };
+
+  test('ставит attendance=2 ПОЛНЫМ PUT: мастер, услуги, клиент, время, длительность и комментарий сохраняются', async () => {
+    ycr.ycGetRecord.mockResolvedValue(REC);
+    ycr.ycUpdateRecord.mockResolvedValue({ id: 555 });
+    const res = await confirmBookingRecord(1, 555);
+    expect(res).toEqual({ ok: true, record_id: 555 });
+    expect(ycr.ycUpdateRecord).toHaveBeenCalledTimes(1);
+    const [salon, recordId, body] = ycr.ycUpdateRecord.mock.calls[0];
+    expect(salon.yclients_company_id).toBe(100);
+    expect(recordId).toBe(555);
+    expect(body).toEqual(FULL_BODY);   // ровно эти поля: ни меньше (422), ни лишнего
+  });
+
+  test('запись читается ДО PUT, а не берётся на веру (GET по id и салону)', async () => {
+    ycr.ycGetRecord.mockResolvedValue(REC);
+    ycr.ycUpdateRecord.mockResolvedValue({ id: 555 });
+    await confirmBookingRecord(1, 555);
+    expect(ycr.ycGetRecord).toHaveBeenCalledWith(expect.objectContaining({ yclients_company_id: 100 }), 555);
+    expect(ycr.ycGetRecord.mock.invocationCallOrder[0]).toBeLessThan(ycr.ycUpdateRecord.mock.invocationCallOrder[0]);
+  });
+
+  test('комментарий пустой/отсутствует → пустая строка, остальное как есть', async () => {
+    ycr.ycGetRecord.mockResolvedValue({ ...REC, comment: undefined });
+    ycr.ycUpdateRecord.mockResolvedValue({ id: 555 });
+    await confirmBookingRecord(1, 555);
+    expect(ycr.ycUpdateRecord.mock.calls[0][2]).toEqual({ ...FULL_BODY, comment: '' });
+  });
+
+  test('уже «Подтвердил» (attendance 2) → ok/already, без PUT', async () => {
+    ycr.ycGetRecord.mockResolvedValue({ ...REC, attendance: 2 });
+    const res = await confirmBookingRecord(1, 555);
+    expect(res).toEqual({ ok: true, already: true, record_id: 555 });
+    expect(ycr.ycUpdateRecord).not.toHaveBeenCalled();
+  });
+
+  test.each([
+    ['«не пришёл» (attendance -1)', { attendance: -1 }],
+    ['запись удалена (deleted)', { deleted: true }],
+    ['удалена, хотя когда-то была подтверждена', { deleted: true, attendance: 2 }],
+    ['в записи не осталось услуг (артефакт правок)', { services: [] }],
+  ])('%s → ok:false, не подтверждаем, без PUT', async (_name, change) => {
+    ycr.ycGetRecord.mockResolvedValue({ ...REC, ...change });
+    const res = await confirmBookingRecord(1, 555);
+    expect(res.ok).toBe(false);
+    expect(res.error).toBeTruthy();
+    expect(ycr.ycUpdateRecord).not.toHaveBeenCalled();
+  });
+
+  test('пациент уже отмечен «пришёл» (attendance 1) → ok:false: статус «Пришёл» не откатываем до «Подтвердил»', async () => {
+    ycr.ycGetRecord.mockResolvedValue({ ...REC, attendance: 1 });
+    const res = await confirmBookingRecord(1, 555);
+    expect(res.ok).toBe(false);
+    expect(res.arrived).toBe(true);
+    expect(ycr.ycUpdateRecord).not.toHaveBeenCalled();
+  });
+
+  test.each([[null], [{}], [{ id: 0 }]])('записи нет (%j) → ошибка, без PUT', async (rec) => {
+    ycr.ycGetRecord.mockResolvedValue(rec);
+    const res = await confirmBookingRecord(1, 555);
+    expect(res).toMatchObject({ ok: false, error: 'Запись не найдена.' });
+    expect(ycr.ycUpdateRecord).not.toHaveBeenCalled();
+  });
+
+  test('GET упал → ok:false с текстом, без PUT', async () => {
+    ycr.ycGetRecord.mockRejectedValue(new Error('YClients 404'));
+    const res = await confirmBookingRecord(1, 555);
+    expect(res).toEqual({ ok: false, error: 'YClients 404' });
+    expect(ycr.ycUpdateRecord).not.toHaveBeenCalled();
+  });
+
+  test('салон без подключения к YClients → ok:false, в YClients не ходим', async () => {
+    pool.query.mockImplementation(() => Promise.resolve({ rows: [{ ...SALON_ROW, yclients_company_id: null }] }));
+    const res = await confirmBookingRecord(1, 555);
+    expect(res.ok).toBe(false);
+    expect(ycr.ycGetRecord).not.toHaveBeenCalled();
+    expect(ycr.ycUpdateRecord).not.toHaveBeenCalled();
+  });
+
+  test('чужая запись по id клиента → foreign, без PUT', async () => {
+    ycr.ycGetRecord.mockResolvedValue(REC);   // client.id 777
+    const res = await confirmBookingRecord(1, 555, { expectedYcClientId: 888 });
+    expect(res).toMatchObject({ ok: false, foreign: true });
+    expect(ycr.ycUpdateRecord).not.toHaveBeenCalled();
+  });
+
+  test('свой клиент по id → подтверждаем', async () => {
+    ycr.ycGetRecord.mockResolvedValue(REC);
+    ycr.ycUpdateRecord.mockResolvedValue({ id: 555 });
+    expect(await confirmBookingRecord(1, 555, { expectedYcClientId: 777 })).toEqual({ ok: true, record_id: 555 });
+  });
+
+  test('чужая запись по телефону (запись переписали на другого клиента) → foreign, без PUT', async () => {
+    ycr.ycGetRecord.mockResolvedValue(REC);   // телефон записи 79001112233
+    const res = await confirmBookingRecord(1, 555, { expectedPhone: '79200255591' });
+    expect(res).toMatchObject({ ok: false, foreign: true });
+    expect(ycr.ycUpdateRecord).not.toHaveBeenCalled();
+  });
+
+  test.each([['79001112233'], ['89001112233'], ['+7 (900) 111-22-33'], ['9001112233']])(
+    'телефон записи совпадает с ожидаемым независимо от формата (%s) → подтверждаем', async (expectedPhone) => {
+      ycr.ycGetRecord.mockResolvedValue({ ...REC, client: { ...REC.client, phone: '+7 900 111-22-33' } });
+      ycr.ycUpdateRecord.mockResolvedValue({ id: 555 });
+      expect((await confirmBookingRecord(1, 555, { expectedPhone })).ok).toBe(true);
+    });
+
+  test('у записи нет клиента вовсе, а владельца надо проверить → foreign, без PUT', async () => {
+    ycr.ycGetRecord.mockResolvedValue({ ...REC, client: null });
+    const res = await confirmBookingRecord(1, 555, { expectedPhone: '79001112233' });
+    expect(res).toMatchObject({ ok: false, foreign: true });
+    expect(ycr.ycUpdateRecord).not.toHaveBeenCalled();
+  });
+
+  test('в записи у клиента нет телефона → проверять нечем, не блокируем', async () => {
+    ycr.ycGetRecord.mockResolvedValue({ ...REC, client: { id: 777, name: 'Аня' } });
+    ycr.ycUpdateRecord.mockResolvedValue({ id: 555 });
+    expect((await confirmBookingRecord(1, 555, { expectedPhone: '79200255591' })).ok).toBe(true);
+  });
+
+  test('лимит запросов YClients (429) повторяется, как у отмены и переноса', async () => {
+    jest.useFakeTimers();
+    try {
+      ycr.ycGetRecord.mockResolvedValue(REC);
+      ycr.ycUpdateRecord
+        .mockRejectedValueOnce(new Error('Превышен лимит запросов, попробуйте повторить запрос через 0 секунд.'))
+        .mockResolvedValueOnce({ id: 555 });
+      const p = confirmBookingRecord(1, 555);
+      await jest.advanceTimersByTimeAsync(1500);
+      expect(await p).toEqual({ ok: true, record_id: 555 });
+      expect(ycr.ycUpdateRecord).toHaveBeenCalledTimes(2);
+    } finally { jest.useRealTimers(); }
+  });
+
+  test('отказ YClients по существу (422) → ok:false с текстом, без повторов', async () => {
+    ycr.ycGetRecord.mockResolvedValue(REC);
+    ycr.ycUpdateRecord.mockRejectedValue(new Error('Не передан обязательный параметр client'));
+    const res = await confirmBookingRecord(1, 555);
+    expect(res).toEqual({ ok: false, error: 'Не передан обязательный параметр client' });
+    expect(ycr.ycUpdateRecord).toHaveBeenCalledTimes(1);
+  });
+
+  test('запись под учёткой интеграции, если она задана (автор изменения — LoyalPRO)', async () => {
+    const config = require('./config');
+    const prev = config.YCLIENTS_INTEGRATION_USER_TOKEN;
+    config.YCLIENTS_INTEGRATION_USER_TOKEN = 'integration-token';
+    try {
+      ycr.ycGetRecord.mockResolvedValue(REC);
+      ycr.ycUpdateRecord.mockResolvedValue({ id: 555 });
+      await confirmBookingRecord(1, 555);
+      expect(ycr.ycUpdateRecord.mock.calls[0][0].yclients_user_token).toBe('integration-token');
+    } finally { config.YCLIENTS_INTEGRATION_USER_TOKEN = prev; }
   });
 });
