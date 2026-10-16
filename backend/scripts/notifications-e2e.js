@@ -38,7 +38,7 @@
 // --synthetic — без YClients: записи выдумываются и «ходят» в памяти (id ≥ 9 млрд), для отладки самого скрипта.
 // Всё созданное (правила, задания, состояние записей) удаляется в finally по id; в конце — сверка, что следов нет.
 // ============================================================
-const { execFileSync } = require('child_process');
+const { assertWorkerStopped } = require('./notifications-e2e-worker-guard');
 const axios = require('axios');
 const { db, pool } = require('../db');
 const config = require('../config');
@@ -74,25 +74,7 @@ function guardAgainstLiveWorker() {
     console.warn('⚠️  --allow-worker-running: проверка pm2-процесса дева ОБОЙДЕНА осознанно.');
     return;
   }
-  let status = null;
-  try {
-    const list = JSON.parse(execFileSync('pm2', ['jlist'], { encoding: 'utf8', timeout: 10000 }));
-    const proc = (list || []).find((p) => p && p.name === PM2_NAME);
-    status = proc && proc.pm2_env && proc.pm2_env.status;
-  } catch (e) {
-    console.warn(`⚠️  не удалось спросить pm2 (${e.message}) — проверка процесса дева ПРОПУЩЕНА`);
-    return;
-  }
-  if (status === 'online') {
-    console.error([
-      '', `ОТКАЗ: pm2-процесс «${PM2_NAME}» сейчас ONLINE.`,
-      'Его обработчик вебхуков YClients гоняется с этим скриптом за notification_record_state.',
-      '  1) pm2 stop ' + PM2_NAME,
-      '  2) node scripts/notifications-e2e.js',
-      `  3) PORT=3001 pm2 restart ${PM2_NAME} && ss -ltnp | grep 3001`, '',
-    ].join('\n'));
-    process.exit(2);
-  }
+  assertWorkerStopped(PM2_NAME);
 }
 
 // ── ловушки: запись в БД и отправка мимо заглушек ────────────

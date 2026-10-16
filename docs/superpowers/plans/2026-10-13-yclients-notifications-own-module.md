@@ -1,5 +1,14 @@
 # Свой модуль уведомлений YClients вместо Chatpush — план реализации
 
+> **Статус на 15.10.2026:** T1–T11 реализованы в `feat/notifications-own-module`.
+> Заключительная проверка продолжена после остановки Claude Code по лимиту API;
+> исправлена проверка остановки PM2 в E2E. Backend: 42 набора / 1419 тестов;
+> frontend: 116 тестов. Выкат и включение отправок не выполнялись.
+> Единый журнал завершения и оставшаяся эксплуатационная очередь:
+> [отчёт 15.10.2026](../../2026-10-15-notifications-execution-status.md).
+> Чекбоксы ниже — исходный рецепт реализации, а не текущая очередь задач.
+
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Служебные уведомления клиентам по событиям записи YClients (создание, перенос, отмена, напоминание за N часов, опрос после визита, рекомендации по услуге с фото, приглашение в лояльность при первом визите) и обработка ответов на них («Подтверждаю» → статус «Подтвердил» в YClients, «5» → оценка и благодарность) генерирует и шлёт LoyalPro сам, через `services/messaging/transport.js`, с теневым режимом для сверки с Chatpush до переключения.
