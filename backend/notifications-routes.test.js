@@ -41,6 +41,8 @@ const mockSettings = { getSettings: jest.fn(), updateSettings: jest.fn() };
 jest.mock('./services/notifications/settings', () => ({
   getSettings: (...a) => mockSettings.getSettings(...a),
   updateSettings: (...a) => mockSettings.updateSettings(...a),
+  // чистая сверка пилотного номера — боевая, копия правила в моке разъехалась бы с settings.js
+  isPilotPhone: jest.requireActual('./services/notifications/settings').isPilotPhone,
 }));
 
 // rules.js тянет chatpush/config (JWT_SECRET из env) — тесту это ни к чему.
@@ -341,6 +343,7 @@ describe('настройки салона', () => {
     ['BAD_TIME', { quiet_from: '25:00' }, /Тихие часы/],
     ['BAD_MODE', { mode: 'turbo' }, /off, shadow или live/],
     ['BAD_CHANNELS', { default_channels: 'tdlib' }, /массив/],
+    ['BAD_PILOT_PHONES', { pilot_phones: '79200255591' }, /Пилотные номера.*массив/],
   ])('PUT /settings: %s → 400 с текстом', async (code, patch, textRe) => {
     mockSettings.updateSettings.mockRejectedValueOnce(Object.assign(new Error('internal ' + code), { code }));
     const r = await call('PUT', '/settings', patch);
@@ -830,6 +833,17 @@ describe('POST /:id/test', () => {
     };
     expect(await note('live')).toMatch(/10 с/);
     expect(await note('shadow')).toMatch(/без отправки/);
+  });
+
+  test('shadow + номер в pilot_phones → ответ говорит, что тест РЕАЛЬНО уйдёт', async () => {
+    mockDb.oneOrNone.mockResolvedValueOnce(RULE);
+    mockSettings.getSettings.mockResolvedValueOnce({ mode: 'shadow', pilot_phones: ['79200255591'] });
+    mockDb.one.mockResolvedValueOnce({ id: 1 });
+    const r = await call('POST', '/5/test', { phone: '8 920 025-55-91' });
+    expect(r.status).toBe(200);
+    expect(r.body.note).toMatch(/пилот/);
+    expect(r.body.note).toMatch(/10 с/);
+    expect(r.body.note).not.toMatch(/без отправки/);
   });
 
   // Воркер не арендует строки салонов в off: тест висел бы pending, а у meta.test нет проверки давности

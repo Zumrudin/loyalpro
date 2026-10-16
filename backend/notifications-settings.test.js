@@ -152,3 +152,55 @@ describe('updateSettings', () => {
     expect(s.mode).toBe('shadow');                         // после записи перечитано из БД, не из старого кэша
   });
 });
+
+// ── Пилотные номера: в режиме shadow письма уходят ТОЛЬКО им, остальные — журнал ──────────────
+// ЗАЧЕМ: дев получает реальные вебхуки клиники, и «проверить доставку на себе» иначе означало бы live
+// для всех пациентов. Тот же список пригодится для пилота на сотрудниках перед переключением прода.
+describe('pilot_phones', () => {
+  test('дефолт — пустой замороженный список', async () => {
+    const s = await settings.getSettings(1);
+    expect(s.pilot_phones).toEqual([]);
+    expect(Object.isFrozen(s.pilot_phones)).toBe(true);
+    expect(Object.isFrozen(settings.DEFAULTS.pilot_phones)).toBe(true);
+  });
+  test('isPilotPhone: сверка по каноническому номеру (8→7, +7, скобки), пустой список и нет cfg → false', () => {
+    const cfg = { pilot_phones: ['79200255591'] };
+    expect(settings.isPilotPhone(cfg, '79200255591')).toBe(true);
+    expect(settings.isPilotPhone(cfg, '89200255591')).toBe(true);
+    expect(settings.isPilotPhone(cfg, '+7 (920) 025-55-91')).toBe(true);
+    expect(settings.isPilotPhone(cfg, '79990000001')).toBe(false);
+    expect(settings.isPilotPhone(cfg, '')).toBe(false);
+    expect(settings.isPilotPhone(cfg, null)).toBe(false);
+    expect(settings.isPilotPhone({ pilot_phones: [] }, '79200255591')).toBe(false);
+    expect(settings.isPilotPhone(null, '79200255591')).toBe(false);
+    expect(settings.isPilotPhone({ pilot_phones: 'мусор' }, '79200255591')).toBe(false);
+  });
+  test('битый pilot_phones в БД (не массив) → пустой список, а не падение воркера', async () => {
+    db.oneOrNone.mockResolvedValue({ salon_id: 1, mode: 'shadow', pilot_phones: { a: 1 } });
+    expect((await settings.getSettings(1)).pilot_phones).toEqual([]);
+  });
+  test('updateSettings: номера нормализуются (8→7, только цифры), мусор и дубли выбрасываются, пишется 12-м параметром', async () => {
+    await settings.updateSettings(1, { pilot_phones: ['8 (920) 025-55-91', '+79200255591', 'мусор', '12345', '7 999 000-00-01', 79990000001] });
+    const p = written();
+    expect(JSON.parse(p[11])).toEqual(['79200255591', '79990000001']);
+  });
+  test('updateSettings: не-массив → BAD_PILOT_PHONES и ничего не пишется; не передано → прежний список', async () => {
+    for (const bad of ['79200255591', 7, true, {}, null]) {
+      await expect(settings.updateSettings(1, { pilot_phones: bad })).rejects.toMatchObject({ code: 'BAD_PILOT_PHONES' });
+    }
+    expect(db.query).not.toHaveBeenCalled();
+    db.oneOrNone.mockResolvedValue({ salon_id: 1, mode: 'shadow', pilot_phones: ['79200255591'] });
+    await settings.updateSettings(1, { prefer_last_channel: false });
+    expect(JSON.parse(written()[11])).toEqual(['79200255591']);
+  });
+  test('updateSettings: пустой массив — осознанная очистка списка', async () => {
+    db.oneOrNone.mockResolvedValue({ salon_id: 1, mode: 'shadow', pilot_phones: ['79200255591'] });
+    await settings.updateSettings(1, { pilot_phones: [] });
+    expect(JSON.parse(written()[11])).toEqual([]);
+  });
+  test('updateSettings: список режется до 50 номеров', async () => {
+    const many = Array.from({ length: 60 }, (_, i) => String(79000000000 + i));
+    await settings.updateSettings(1, { pilot_phones: many });
+    expect(JSON.parse(written()[11])).toHaveLength(50);
+  });
+});

@@ -77,7 +77,7 @@ const NT_MODES = {
   },
   shadow: {
     icon: '🟡', name: 'тень', line: 'теневой — строки пишутся в журнал, отправки нет',
-    desc: 'Тень: события обрабатываются, тексты ложатся в журнал со статусом «Тень», клиентам ничего не уходит. Режим для сверки с Chatpush (вкладка «Сверка с Chatpush»).',
+    desc: 'Тень: события обрабатываются, тексты ложатся в журнал со статусом «Тень», клиентам ничего не уходит. Режим для сверки с Chatpush (вкладка «Сверка с Chatpush»). Исключение — пилотные номера ниже: им письма уходят по-настоящему, их ответы обрабатываем мы.',
   },
   live: {
     icon: '🟢', name: 'боевой', line: 'боевой — уведомления уходят клиентам',
@@ -338,6 +338,19 @@ function ntQuietError(from, to) {
   return null;
 }
 
+/** Текст поля «пилотные номера» → канонические 7XXXXXXXXXX (8→7, 10 цифр → +7), без дублей и мусора. */
+function ntParsePilotPhones(text) {
+  const out = [];
+  for (const part of String(text || '').split(/[\n,;]+/)) {
+    let d = part.replace(/\D/g, '');
+    if (d.length === 10) d = '7' + d;
+    if (d.length === 11 && d[0] === '8') d = '7' + d.slice(1);
+    if (/^7\d{10}$/.test(d) && !out.includes(d)) out.push(d);
+  }
+  return out;
+}
+function ntPilotPhonesText(list) { return (Array.isArray(list) ? list : []).join('\n'); }
+
 /** Тело PUT /settings из значений формы + порядок каскада. */
 function ntBuildSettingsBody(f, cascade) {
   return {
@@ -345,6 +358,7 @@ function ntBuildSettingsBody(f, cascade) {
     quiet_from: f.quietFrom || null, quiet_to: f.quietTo || null,
     confirm_reply_text: f.confirm, rating_high_text: f.high, rating_mid_text: f.mid, rating_low_text: f.low,
     rating_escalate_low: !!f.escalate,
+    pilot_phones: ntParsePilotPhones(f.pilotPhones),
   };
 }
 
@@ -765,6 +779,7 @@ async function ntOpenSettings() {
   ntRenderCascade();
   document.getElementById('ntsPreferLast').checked = s.prefer_last_channel !== false;
   set('ntsMode', s.mode);
+  set('ntsPilotPhones', ntPilotPhonesText(s.pilot_phones));
   set('ntsQuietFrom', s.quiet_from);
   set('ntsQuietTo', s.quiet_to);
   set('ntsConfirm', s.confirm_reply_text);
@@ -817,6 +832,7 @@ async function ntSaveSettings() {
     quietFrom: v('ntsQuietFrom'), quietTo: v('ntsQuietTo'),
     confirm: v('ntsConfirm'), high: v('ntsHigh'), mid: v('ntsMid'), low: v('ntsLow'),
     escalate: document.getElementById('ntsEscalate').checked,
+    pilotPhones: v('ntsPilotPhones'),
   }, _ntCascade);
   const err = ntSettingsError(body);
   if (err) { notify(err, 'err'); return; }

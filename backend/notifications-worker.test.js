@@ -13,7 +13,11 @@ jest.mock('./services/messaging/transport', () => ({
     return !!e && !e.status && !e.code;
   },
 }));
-jest.mock('./services/notifications/settings', () => ({ getSettings: jest.fn() }));
+jest.mock('./services/notifications/settings', () => ({
+  getSettings: jest.fn(),
+  // чистая сверка номера — боевая: мок с собственной копией правила разъехался бы с settings.js
+  isPilotPhone: jest.requireActual('./services/notifications/settings').isPilotPhone,
+}));
 jest.mock('./services/notifications/rules', () => ({ lastConversation: jest.fn() }));
 jest.mock('./services/agent/pending-replies', () => ({ remember: jest.fn() }));
 jest.mock('./services/outgoing-authorship', () => ({ remember: jest.fn(async () => {}) }));
@@ -313,6 +317,40 @@ describe('режим салона', () => {
     expect(JSON.parse(p[4])).toEqual(['whatsapp', 'tdlib', 'max']);
     expect(updates(/SET status='sent', sent_at/)).toHaveLength(0);   // захвата в тени нет
     expect(authorship.remember).not.toHaveBeenCalled();
+  });
+
+  // Пилотные номера: shadow для всех, кроме списка — тем уходит по-настоящему. Так дев проверяет доставку на
+  // своём номере, пока реальные пациенты клиники (дев получает те же вебхуки) остаются в журнале тени.
+  test('shadow + номер в pilot_phones → боевой путь: захват sent, отправка, авторство (как live)', async () => {
+    setup({ jobs: [job({ phone: '79200255591' })], mode: 'shadow', cfgOver: { pilot_phones: ['79200255591'] } });
+    await worker.processTick();
+    expect(calls()).toEqual(['tdlib']);
+    expect(updates(/SET status='sent', sent_at/)).toHaveLength(1);
+    expect(statusUpdates().some((x) => x[1] === 'shadow')).toBe(false);
+    expect(authorship.remember).toHaveBeenCalledWith(1, '79200255591', 'Текст', 'system');
+  });
+  test('shadow + номер НЕ в pilot_phones → тень, отправки нет', async () => {
+    setup({ jobs: [job({ phone: '79160000001' })], mode: 'shadow', cfgOver: { pilot_phones: ['79200255591'] } });
+    await worker.processTick();
+    expect(transport.sendMessage).not.toHaveBeenCalled();
+    expect(statusUpdates().some((x) => x[1] === 'shadow')).toBe(true);
+  });
+  test('shadow + пилотный номер в строке записан в другой форме (+7…) → всё равно уходит', async () => {
+    setup({ jobs: [job({ phone: '+79200255591' })], mode: 'shadow', cfgOver: { pilot_phones: ['79200255591'] } });
+    await worker.processTick();
+    expect(calls()).toEqual(['tdlib']);
+  });
+  test('shadow + пилотный номер: перепроверка перед отправкой НЕ обходится (отменённая запись → cancelled)', async () => {
+    setup({ jobs: [job()], mode: 'shadow', st: state({ deleted: true }), cfgOver: { pilot_phones: ['79200255591'] } });
+    await worker.processTick();
+    expect(transport.sendMessage).not.toHaveBeenCalled();
+    expect(wasCancelled()).toBe(true);
+  });
+  test('off + номер в pilot_phones → ничего: список действует только в shadow', async () => {
+    setup({ jobs: [job()], mode: 'off', cfgOver: { pilot_phones: ['79200255591'] } });
+    await worker.processTick();
+    expect(transport.sendMessage).not.toHaveBeenCalled();
+    expect(statusUpdates()).toHaveLength(0);
   });
 
   test('shadow: перепроверка работает, как в бою (отменённая запись → cancelled, а не shadow)', async () => {

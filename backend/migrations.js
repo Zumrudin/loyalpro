@@ -934,9 +934,12 @@ async function runMigrations(client) {
       rating_mid_text      TEXT NOT NULL DEFAULT 'Спасибо за оценку! Подскажите, пожалуйста, что нам стоит улучшить? Мы обязательно учтём.',
       rating_low_text      TEXT NOT NULL DEFAULT 'Благодарим Вас за оценку.\nНе могли бы Вы рассказать, что именно Вас не устроило? Мы постараемся принять меры и, по возможности, исправить данную ситуацию.',
       rating_escalate_low  BOOLEAN NOT NULL DEFAULT TRUE,
+      pilot_phones         JSONB NOT NULL DEFAULT '[]'::jsonb,   -- shadow: слать только этим номерам
       updated_at           TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `).catch(() => {});
+  // Пилотные номера (16.10.2026): в shadow письма уходят ТОЛЬКО им, остальные — журнал тени.
+  await client.query(`ALTER TABLE notification_settings ADD COLUMN IF NOT EXISTS pilot_phones JSONB NOT NULL DEFAULT '[]'::jsonb`).catch(() => {});
 
   await client.query(`
     CREATE TABLE IF NOT EXISTS notification_jobs (

@@ -319,7 +319,9 @@ async function handleIncoming(salonId, msg) {
     const rating = confirming ? null : parseRating(text);
     if (!confirming && rating == null) return NOT_HANDLED;
     const cfg = await settingsSvc.getSettings(salonId);
-    if (!cfg || cfg.mode !== 'live') return NOT_HANDLED;
+    // live — все; shadow — только пилотные номера (им письма реально уходят, см. worker.js); off — никто.
+    const live = !!cfg && (cfg.mode === 'live' || (cfg.mode === 'shadow' && settingsSvc.isPilotPhone(cfg, phoneKey)));
+    if (!live) return NOT_HANDLED;
     const last = await history.lastOutgoing(salonId, dialogKeyOf(msg));
     if (!last || last.author !== 'system') return NOT_HANDLED;
     if (confirming) {

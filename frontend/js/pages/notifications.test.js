@@ -372,12 +372,20 @@ test('настройки: тихие часы, пустые ответы, воп
   assert.match(ctx.ntQuietError('', '09:00'), /оба поля/);
   assert.match(ctx.ntQuietError('09:00', '09:00'), /нулевой длины/);
 
-  const form = { mode: 'off', preferLast: true, quietFrom: '21:00', quietTo: '09:00', confirm: 'a', high: 'b', mid: 'c', low: 'd', escalate: true };
+  const form = { mode: 'off', preferLast: true, quietFrom: '21:00', quietTo: '09:00', confirm: 'a', high: 'b', mid: 'c', low: 'd', escalate: true,
+    pilotPhones: '8 (920) 025-55-91\n+7 999 000-00-01, мусор; 79200255591' };
   const body = plain(ctx.ntBuildSettingsBody(form, ['max', 'tdlib']));
   assert.deepStrictEqual(body, {
     mode: 'off', default_channels: ['max', 'tdlib'], prefer_last_channel: true, quiet_from: '21:00', quiet_to: '09:00',
     confirm_reply_text: 'a', rating_high_text: 'b', rating_mid_text: 'c', rating_low_text: 'd', rating_escalate_low: true,
+    pilot_phones: ['79200255591', '79990000001'],
   });
+  // пилотные номера: текст поля → канонические 7XXXXXXXXXX, разделители — перенос строки, запятая, точка с запятой
+  assert.deepStrictEqual(plain(ctx.ntParsePilotPhones('')), []);
+  assert.deepStrictEqual(plain(ctx.ntParsePilotPhones('9200255591')), ['79200255591']);   // 10 цифр — без кода страны
+  assert.deepStrictEqual(plain(ctx.ntParsePilotPhones('12345, abc')), []);
+  assert.strictEqual(ctx.ntPilotPhonesText(['79200255591', '79990000001']), '79200255591\n79990000001');
+  assert.strictEqual(ctx.ntPilotPhonesText(null), '');
   // пустые тихие часы уходят null: бэкенд читает 'quiet_from' in p
   const noQuiet = plain(ctx.ntBuildSettingsBody({ ...form, quietFrom: '', quietTo: '' }, []));
   assert.strictEqual(noQuiet.quiet_from, null);

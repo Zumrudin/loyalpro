@@ -377,7 +377,9 @@ async function processOne(job, cfg) {
     return;
   }
 
-  if (mode === 'shadow') {
+  // Пилотный номер в shadow идёт боевым путём (захват, каскад, сверка доставки): так доставку проверяют
+  // на своём номере, пока реальные пациенты остаются в тени. Перепроверки выше он не обходит.
+  if (mode === 'shadow' && !settingsSvc.isPilotPhone(cfg, job.phone)) {
     await setStatus(job.id, 'shadow', { routing: cascade, reason: 'теневой режим: не отправлено' });
     log.info(`#${job.id} ${job.trigger_type} shadow cascade=[${cascade.join(',')}]`);
     return;

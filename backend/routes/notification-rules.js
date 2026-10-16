@@ -4,7 +4,7 @@
 // ============================================================
 //
 //   GET    /               правила салона со счётчиками job'ов (sent/shadow/pending/failed)
-//   GET    /settings       настройки салона: режим off/shadow/live, каскад, тихие часы, тексты отбивок
+//   GET    /settings       настройки салона: режим off/shadow/live, каскад, тихие часы, тексты отбивок, пилотные номера
 //   PUT    /settings
 //   GET    /jobs           журнал job'ов: ?type=&status=&date=YYYY-MM-DD&page=
 //   POST   /jobs/:id/cancel  отменить запланированный (pending) job
@@ -57,6 +57,7 @@ const SETTINGS_ERRORS = {
   BAD_TIME: 'Тихие часы: формат ЧЧ:ММ',
   BAD_MODE: 'Режим: off, shadow или live',
   BAD_CHANNELS: 'Порядок каскада: список мессенджеров (массив)',
+  BAD_PILOT_PHONES: 'Пилотные номера: список номеров (массив)',
 };
 
 // Шаблоны LIKE для служебных исходящих Chatpush по типу уведомления. Сверены с реальными текстами
@@ -583,6 +584,7 @@ router.delete('/:id/attachment', guard, async (req, res) => {
 const TEST_NOTES = {
   live: 'уйдёт в течение 10 с',
   shadow: 'режим «shadow»: строка попадёт в журнал без отправки',
+  pilot: 'режим «shadow», номер в пилотном списке: уйдёт в течение 10 с',
 };
 const TEST_OFF_ERROR = 'Модуль выключен: тестовая отправка не уйдёт. Переключите режим в «тень» (текст попадёт в журнал) или «боевой»';
 router.post('/:id/test', guard, async (req, res) => {
@@ -615,7 +617,8 @@ router.post('/:id/test', guard, async (req, res) => {
           client_id=NULL, created_at=NOW()
        RETURNING id`,
       [req.user.salonId, rule.id, rule.title, rule.trigger_type, phone, text, rule.attachment_url]);
-    res.json({ ok: true, jobId: row.id, mode: cfg.mode, note: TEST_NOTES[cfg.mode] });
+    const pilot = cfg.mode === 'shadow' && settingsSvc.isPilotPhone(cfg, phone);
+    res.json({ ok: true, jobId: row.id, mode: cfg.mode, note: pilot ? TEST_NOTES.pilot : TEST_NOTES[cfg.mode] });
   } catch (e) { fail(res, 'test', e); }
 });
 

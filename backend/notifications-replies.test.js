@@ -10,7 +10,10 @@ jest.mock('./logger', () => {
   const log = { warn: jest.fn(), info: jest.fn(), error: jest.fn(), debug: jest.fn() };
   return { createLogger: () => log, __log: log };
 });
-jest.mock('./services/notifications/settings', () => ({ getSettings: jest.fn() }));
+jest.mock('./services/notifications/settings', () => ({
+  getSettings: jest.fn(),
+  isPilotPhone: jest.requireActual('./services/notifications/settings').isPilotPhone,
+}));
 jest.mock('./services/agent/history', () => ({ lastOutgoing: jest.fn() }));
 jest.mock('./services/agent/booking-modify', () => ({ confirmBookingRecord: jest.fn() }));
 jest.mock('./services/messaging/transport', () => ({ sendMessage: jest.fn() }));
@@ -151,6 +154,27 @@ describe('режим салона: перехват только в live', () =>
 });
 
 describe('подтверждение визита', () => {
+  // Пилотные номера: в shadow перехватываем ответы ТОЛЬКО их — иначе на деве «Подтверждаю» тестового номера
+  // ушло бы Миле, и половина сценария (статус в YClients, отбивка) была бы непроверяема.
+  test('shadow + номер в pilot_phones → перехват работает как в live', async () => {
+    setup({ last: FROM_SYSTEM(REMINDER), job: REM_JOB, mode: 'shadow', cfg: { pilot_phones: ['79200255591'] } });
+    const r = await replies.handleIncoming(1, msg('Подтверждаю'));
+    expect(r.handled).toBe(true);
+    expect(booking.confirmBookingRecord).toHaveBeenCalled();
+  });
+  test('shadow + номер НЕ в pilot_phones → Миле, ничего не трогаем', async () => {
+    setup({ last: FROM_SYSTEM(REMINDER), job: REM_JOB, mode: 'shadow', cfg: { pilot_phones: ['79990000001'] } });
+    const r = await replies.handleIncoming(1, msg('Подтверждаю'));
+    expect(r.handled).toBe(false);
+    expect(booking.confirmBookingRecord).not.toHaveBeenCalled();
+    expect(db.query).not.toHaveBeenCalled();
+  });
+  test('off + номер в pilot_phones → Миле: список действует только в shadow', async () => {
+    setup({ last: FROM_SYSTEM(REMINDER), job: REM_JOB, mode: 'off', cfg: { pilot_phones: ['79200255591'] } });
+    expect((await replies.handleIncoming(1, msg('Подтверждаю'))).handled).toBe(false);
+    expect(booking.confirmBookingRecord).not.toHaveBeenCalled();
+  });
+
   test('после нашего напоминания: захват → attendance=2 → отбивка ответом на сообщение пациента', async () => {
     setup({ last: FROM_SYSTEM(REMINDER), job: REM_JOB });
     const r = await replies.handleIncoming(1, msg('Здравствуйте, подтверждаю'));
