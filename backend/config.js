@@ -78,6 +78,11 @@ module.exports = {
   // Ключ Anthropic. Claude не гео-блокируется на dev (Финляндия) — прямой вызов.
   ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY || '',
   AGENT_LLM_MODEL:   process.env.AGENT_LLM_MODEL   || 'claude-opus-4-8',
+  // Адрес Telegram Bot API для ВСЕХ отправок бэкенда (рассылки, алерты, OTP) — других мест,
+  // где он назван, быть не должно (telegram-api-base.test.js). На проде — релей через дев
+  // (Финляндия): канал прод (РФ) → api.telegram.org теряет пакеты (18.10.2026), там
+  // http://127.0.0.1:8095 — обратный SSH-туннель tg-relay-tunnel с дева. Пусто → напрямую.
+  TELEGRAM_API_BASE: (process.env.TELEGRAM_API_BASE || 'https://api.telegram.org').replace(/\/+$/, ''),
   // Служебные алерты (services/ops-alert.js). Пусто → только лог ERROR.
   OPS_ALERT_TELEGRAM_TOKEN: process.env.OPS_ALERT_TELEGRAM_TOKEN || '',
   OPS_ALERT_TELEGRAM_CHAT_ID: process.env.OPS_ALERT_TELEGRAM_CHAT_ID || '',

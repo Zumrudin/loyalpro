@@ -69,6 +69,12 @@ Mobile clients use a separate auth path: `routes/mobile-auth.js` + `routes/mobil
 ### CORS
 Managed in `server.js`. The whitelist is set via `ALLOWED_ORIGINS` env var (comma-separated) or falls back to hardcoded defaults. To add an origin, set `ALLOWED_ORIGINS` in the environment — do not edit the hardcoded list unless adding a permanent default.
 
+### Telegram-боты — только с дев-стенда (с 18.10.2026)
+Канал прод (РФ) → `api.telegram.org` теряет пакеты (ping 10 %, до 37 % TCP-соединений ждут повтора SYN; до YClients и Google — 0): ответ бота лояльности клиенту пропал на `ConnectTimeout`. Решение владельца — всё, что ходит в Bot API, выходит в интернет с дева (89.125.92.223, Финляндия).
+- Python-боты (отдельный репо `Zumrudin/loyalty-telegram-bot`): `@PERICLINIC_bot` (`mybot`) и поздравления с ДР (`birthday_bot`) — systemd на ДЕВЕ, `/root/bot_project`, логи `journalctl -u mybot|birthday_bot`. В юнитах `TZ=Europe/Moscow` обязателен: хост в UTC, а APScheduler (08:50) и «у кого ДР сегодня» считаются по локальной зоне. База бота `n8n_db` — через туннель `loyalpro-db-tunnel` (`127.0.0.1:5433`). На проде юниты отключены и заперты drop-in'ом `ConditionPathExists=!/root/bot_project/MOVED_TO_DEV`: второй поллер того же токена = 409, второй `birthday_bot` = двойное начисление бонусов. Админка бота `peri_admin` осталась на проде.
+- Бэкенд (рассылки `services/broadcast.js`, алерты `services/ops-alert.js`, OTP) берёт адрес Bot API ТОЛЬКО из `config.TELEGRAM_API_BASE` — зашитый `api.telegram.org` ловит `telegram-api-base.test.js`. На проде `TELEGRAM_API_BASE=http://127.0.0.1:8095` — обратный SSH-туннель `tg-relay-tunnel` (systemd на деве, соединение открывает дев) → nginx на деве `sites-available/telegram-relay.conf` (только loopback, `access_log off` — токены в URL) → `api.telegram.org`. Лежит дев или туннель — отправки бэкенда сразу падают `ECONNREFUSED`; фолбэка на прямой путь нет намеренно. На деве переменная не задана — там напрямую.
+- Шлюз TDLib (`gateway/`, аккаунт клиники) — не бот, остаётся на проде.
+
 ### Cron jobs (all TZ: Europe/Moscow)
 - `0 10 * * *` — birthday bonuses
 - `35 4 * * *` — ночная сверка с YClients (`services/yclients-reconcile.js`, см. ниже)
