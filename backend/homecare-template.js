@@ -370,7 +370,12 @@ html, body {
   z-index: 0;
   opacity: 1;
 }
-.watermark img { width:100%; height:100%; object-fit:contain; opacity:0.10; }
+/* Загруженный фоновый логотип рендерится как <img class="watermark"> (см. wmHtml),
+   поэтому правило-потомок .watermark img до него не доставало: картинка шла
+   с opacity:1, 440×440 и без object-fit. Селектор img.watermark — по самому тегу.
+   Размер +40 % (440→616) и непрозрачность −50 % — просьба салона 18.10.2026.
+   SVG-лотос (fallback без картинки) живёт в <div class="watermark"> и не меняется. */
+img.watermark { width:616px; height:616px; object-fit:contain; opacity:0.5; }
 
 /* ─── CONTENT ─── */
 .content { position: relative; z-index: 1; }
