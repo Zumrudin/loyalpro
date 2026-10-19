@@ -311,7 +311,89 @@ async function loadPeriod(salonId, from, to) {
   };
 }
 
+// ── Справочники (роуты /api/economics) ───────────────────────────────────────
+// is_archived НЕ фильтруем: upsertCatalogGood вставляет новые товары архивными
+// (чтобы «Домашний уход» их не подхватил), а в экономике они нужны все.
+async function listGoods(salonId, { search = '', onlyConsumables = false } = {}) {
+  const params = [salonId];
+  let where = 'c.salon_id = $1';
+  if (search) { params.push(`%${String(search).replace(/[\\%_]/g, '\\$&')}%`); where += ` AND c.title ILIKE $${params.length}`; }
+  if (onlyConsumables) where += ` AND EXISTS (SELECT 1 FROM goods_transactions t WHERE t.salon_id = c.salon_id AND t.good_id = c.yclients_good_id AND t.type_id = 2 AND t.deleted_at IS NULL)`;
+  return db.any(`
+    SELECT c.yclients_good_id AS good_id, c.title, c.category_title, c.unit, c.service_unit, c.unit_equals, c.actual_cost, c.unit_actual_cost,
+           c.last_receipt_price, c.last_receipt_at, o.unit_price AS override_price, o.note AS override_note
+    FROM yclients_goods_catalog c
+    LEFT JOIN goods_price_overrides o ON o.salon_id = c.salon_id AND o.good_id = c.yclients_good_id
+    WHERE ${where} ORDER BY c.title LIMIT 1000`, params);
+}
+async function listReceipts(salonId, goodId) {
+  return db.any(`
+    SELECT yclients_txn_id, create_date, amount, cost, cost_per_unit, discount, supplier_title, unit_title, operation_unit_type
+    FROM goods_transactions WHERE salon_id = $1 AND good_id = $2 AND type_id = 3 AND deleted_at IS NULL
+    ORDER BY create_date DESC LIMIT 100`, [salonId, goodId]);
+}
+async function setPriceOverride(salonId, goodId, unitPrice, note, userId) {
+  if (unitPrice === null) { await db.query('DELETE FROM goods_price_overrides WHERE salon_id=$1 AND good_id=$2', [salonId, goodId]); return; }
+  await db.query(`
+    INSERT INTO goods_price_overrides (salon_id, good_id, unit_price, note, updated_by, updated_at) VALUES ($1, $2, $3, $4, $5, NOW())
+    ON CONFLICT (salon_id, good_id) DO UPDATE SET unit_price = EXCLUDED.unit_price, note = EXCLUDED.note, updated_by = EXCLUDED.updated_by, updated_at = NOW()`,
+  [salonId, goodId, unitPrice, note ? String(note).slice(0, 500) : null, userId || null]);
+}
+async function listTechCards(salonId) {
+  return db.any(`
+    SELECT c.id, c.yc_card_id, c.title, c.items, c.source, c.synced_at, c.updated_at,
+           (SELECT count(*)::int FROM service_tech_cards l WHERE l.tech_card_id = c.id AND l.salon_id = c.salon_id) AS links
+    FROM tech_cards c WHERE c.salon_id = $1 ORDER BY c.source, c.title`, [salonId]);
+}
+async function insertManualCard(salonId, card) {
+  const r = await db.one(`INSERT INTO tech_cards (salon_id, yc_card_id, title, items, source, updated_at) VALUES ($1, NULL, $2, $3::jsonb, 'manual', NOW()) RETURNING id`,
+    [salonId, card.title, JSON.stringify(card.items)]);
+  return r ? r.id : null;
+}
+async function updateManualCard(salonId, id, card) {
+  const r = await db.query(`UPDATE tech_cards SET title=$3, items=$4::jsonb, updated_at=NOW() WHERE salon_id=$1 AND id=$2 AND source='manual'`, [salonId, id, card.title, JSON.stringify(card.items)]);
+  return r.rowCount > 0;
+}
+async function deleteManualCard(salonId, id) {
+  const r = await db.query(`DELETE FROM tech_cards WHERE salon_id=$1 AND id=$2 AND source='manual'`, [salonId, id]);
+  return r.rowCount > 0;
+}
+async function techCardExists(salonId, id) {
+  return !!(await db.oneOrNone('SELECT 1 FROM tech_cards WHERE salon_id=$1 AND id=$2', [salonId, id]));
+}
+async function clearServiceTechCard(salonId, serviceYcId, staffYcId) {
+  await db.query(`DELETE FROM service_tech_cards WHERE salon_id=$1 AND service_yc_id=$2 AND COALESCE(staff_yc_id,0) = COALESCE($3::bigint,0)`, [salonId, serviceYcId, staffYcId]);
+}
+async function listPayRules(salonId) { return db.any(PAY_RULES_SQL, [salonId]); }
+async function insertPayRule(salonId, v) {
+  const r = await db.one(`INSERT INTO staff_pay_rules (salon_id, staff_yc_id, service_yc_id, category_yc_id, percent, base, fixed_per_visit, valid_from, valid_to, note)
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id`, [salonId, v.staff_yc_id, v.service_yc_id, v.category_yc_id, v.percent, v.base, v.fixed_per_visit, v.valid_from, v.valid_to, v.note]);
+  return r ? r.id : null;
+}
+async function updatePayRule(salonId, id, v) {
+  const r = await db.query(`UPDATE staff_pay_rules SET staff_yc_id=$3, service_yc_id=$4, category_yc_id=$5, percent=$6, base=$7, fixed_per_visit=$8, valid_from=$9, valid_to=$10, note=$11, updated_at=NOW()
+    WHERE salon_id=$1 AND id=$2`, [salonId, id, v.staff_yc_id, v.service_yc_id, v.category_yc_id, v.percent, v.base, v.fixed_per_visit, v.valid_from, v.valid_to, v.note]);
+  return r.rowCount > 0;
+}
+async function deletePayRule(salonId, id) { const r = await db.query('DELETE FROM staff_pay_rules WHERE salon_id=$1 AND id=$2', [salonId, id]); return r.rowCount > 0; }
+async function getSettings(salonId) { return normSettings(await db.oneOrNone(SETTINGS_SQL, [salonId])); }
+async function saveSettings(salonId, v) {
+  await db.query(`INSERT INTO economics_settings (salon_id, payroll_multiplier, pay_base_includes_bonuses, allocation_driver, usn_rate, acquiring, updated_at)
+    VALUES ($1,$2,$3,$4,$5,$6::jsonb,NOW())
+    ON CONFLICT (salon_id) DO UPDATE SET payroll_multiplier=EXCLUDED.payroll_multiplier, pay_base_includes_bonuses=EXCLUDED.pay_base_includes_bonuses,
+      allocation_driver=EXCLUDED.allocation_driver, usn_rate=EXCLUDED.usn_rate, acquiring=EXCLUDED.acquiring, updated_at=NOW()`,
+  [salonId, v.payroll_multiplier, v.pay_base_includes_bonuses, v.allocation_driver, v.usn_rate, JSON.stringify(v.acquiring)]);
+}
+/** Кассы салона за 12 месяцев — для формы эквайринга. */
+async function listAccounts(salonId) {
+  const rows = await db.any(`SELECT account_title, count(*)::int AS n FROM revenue_operations WHERE salon_id=$1 AND category='services'
+    AND operation_date >= (CURRENT_DATE - INTERVAL '12 months') AND account_title IS NOT NULL GROUP BY 1 ORDER BY 2 DESC`, [salonId]);
+  return rows.map(r => ({ title: r.account_title, operations: r.n }));
+}
+
 module.exports = { upsertCatalogGood, upsertGoodsTransaction, refreshLastReceipt, refreshAllLastReceipts, TXN_COLS,
   upsertTechCard, upsertServiceTechCard, listTechCardIdsByYc, listRecordsToLearn, RECORDS_TO_LEARN_SQL,
   loadPeriod, normSettings, DEFAULT_SETTINGS, RECORDS_SQL, CONSUMABLES_SQL, PAYMENTS_SQL, RECEIPTS_SQL, CATALOG_SQL,
-  OVERRIDES_SQL, CARDS_SQL, LINKS_SQL, PAY_RULES_SQL, SETTINGS_SQL, FIXED_SQL, EQUIPMENT_SQL, CAPACITY_SQL };
+  OVERRIDES_SQL, CARDS_SQL, LINKS_SQL, PAY_RULES_SQL, SETTINGS_SQL, FIXED_SQL, EQUIPMENT_SQL, CAPACITY_SQL,
+  listGoods, listReceipts, setPriceOverride, listTechCards, insertManualCard, updateManualCard, deleteManualCard, techCardExists,
+  clearServiceTechCard, listPayRules, insertPayRule, updatePayRule, deletePayRule, getSettings, saveSettings, listAccounts };

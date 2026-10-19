@@ -72,6 +72,7 @@ module.exports = function mountRoutes(app) {
   app.use('/api/care',              require('./care'));
   app.use('/api/reminders',         require('./reminders'));
   app.use('/api/medical-cert',      require('./medical-cert'));
+  app.use('/api/economics',         require('./economics'));
 
   app.use('/api/analytics/messengers/verdicts', require('./dialog-verdicts'));
 
