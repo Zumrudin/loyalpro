@@ -10,7 +10,7 @@ const puppeteer = require('puppeteer');
 
 const OUT = process.env.ECON_SHOTS || '/tmp/econ-fix2';
 const svc = (key, label, o) => ({ key, label, visits: 0, revenue: 0, materials_used: 0, doctor_cost: 0, acquiring_cost: 0, contribution: 0, overhead: 0,
-  equipment_cost: 0, operating_profit: 0, usn_estimate: 0, hours: 0, materials_estimated_rows: 0, discount: 0, bonus_redeemed: 0, bonus_in_revenue: 0,
+  equipment_cost: 0, operating_profit: 0, usn_estimate: 0, hours: 0, materials_estimated_rows: 0, first_cost: 0, discount: 0, bonus_redeemed: 0, bonus_applied: 0,
   coverage: { rows: 1, with_consumables: 1, with_tech_card: 1, no_pay_rule: 0, no_price_goods: [], acquiring_estimated: 0 }, ...o });
 const services = [
   svc(101, 'Биоревитализация Profhilo', { visits: 12, revenue: 298000, materials_used: 96000, doctor_cost: 52000, acquiring_cost: 5900, contribution: 144100, contribution_pct: 0.4836,
@@ -22,7 +22,7 @@ const services = [
     overhead: 16000, equipment_cost: 0, operating_profit: -3700, operating_pct: -0.103, hours: 12, profit_per_hour: 1025,
     coverage: { rows: 8, with_consumables: 0, with_tech_card: 0, no_pay_rule: 3, no_price_goods: [7, 9], acquiring_estimated: 0 } }),
 ];
-const summary = { revenue: 415000, visits: 48, hours: 36, bonus_redeemed: 7800, bonus_in_revenue: 0, contribution: 218400, contribution_pct: 0.526,
+const summary = { revenue: 415000, visits: 48, hours: 36, bonus_redeemed: 7800, bonus_applied: 7800, contribution: 218400, contribution_pct: 0.526,
   operating_profit: 148400, operating_pct: 0.357, usn_estimate: 22260, rate_minute_fact: 25.9, rate_minute_capacity: 9.4, idle_cost: 36000,
   coverage: { consumables_share: 0.66, services_without_tech_card: 1, services_total: 3, goods_without_price: [7, 9], staff_without_pay_rule: 1 },
   // Task 22: по одному каждого вида + тег в названии (экранирование)
@@ -33,13 +33,13 @@ const summary = { revenue: 415000, visits: 48, hours: 36, bonus_redeemed: 7800, 
     { type: 'price_jump', good_id: 8, good_title: 'Гель для УЗИ', prev: 0.15, prev_at: '2026-08-05', last: 0.19, ratio: 1.27, at: '2026-09-05' },
   ] };
 const detail = {
-  service: { ...services[0], price: 298000, discount: 4000, bonus_in_revenue: 0, materials_fact: 90000, materials_norm: 96000, doctor_pay: 40000,
+  service: { ...services[0], first_cost: 309800, price: 298000, discount: 4000, bonus_redeemed: 7800, bonus_applied: 7800, materials_fact: 90000, materials_norm: 96000, doctor_pay: 40000,
     coverage: { acquiring_estimated: 1 }, usn_estimate: 18900 },
   byStaff: [{ label: 'Пери <i>Исамудиновна</i>', visits: 8, revenue: 208000, materials_used: 64000, doctor_cost: 36000, contribution: 104000, contribution_pct: 0.5 },
     { label: 'Татьяна', visits: 4, revenue: 90000, materials_used: 32000, doctor_cost: 16000, contribution: 40100, contribution_pct: 0.4456 }],
-  visits: [{ record_id: 1, visit_date: '2026-10-15', staff_name: 'Татьяна', price: 23400, bonus_redeemed: 2600, revenue: 23400, materials_used: 8000, doctor_cost: 4300,
+  visits: [{ record_id: 1, visit_date: '2026-10-15', staff_name: 'Татьяна', first_cost: 26000, price: 23400, discount: 0, bonus_redeemed: 2600, bonus_applied: 2600, revenue: 23400, materials_used: 8000, doctor_cost: 4300,
     acquiring_cost: 470, contribution: 10630, minutes: 45, materials_estimated: true, no_price_goods: [7], no_pay_rule: false, acquiring_estimated: false },
-  { record_id: 2, visit_date: '2026-10-10', staff_name: 'Пери', price: 26000, bonus_redeemed: 0, revenue: 26000, materials_used: 30000, doctor_cost: 4300,
+  { record_id: 2, visit_date: '2026-10-10', staff_name: 'Пери', first_cost: 26000, price: 26000, discount: 0, bonus_redeemed: 0, bonus_applied: 0, revenue: 26000, materials_used: 30000, doctor_cost: 4300,
     acquiring_cost: 520, contribution: -8820, minutes: 45, no_price_goods: [], acquiring_estimated: true }],
   settings: { payroll_multiplier: 1.302, allocation_driver: 'minutes' },
 };

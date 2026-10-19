@@ -22,7 +22,7 @@ function ecoSort(rows, key, dir) {
   });
 }
 
-const ECO_SUM_KEYS = ['visits', 'revenue', 'discount', 'bonus_redeemed', 'materials_used', 'materials_norm', 'doctor_cost', 'acquiring_cost',
+const ECO_SUM_KEYS = ['visits', 'revenue', 'first_cost', 'discount', 'bonus_redeemed', 'bonus_applied', 'materials_used', 'materials_norm', 'doctor_cost', 'acquiring_cost',
   'contribution', 'overhead', 'equipment_cost', 'operating_profit', 'usn_estimate', 'hours', 'materials_estimated_rows'];
 function ecoTotals(groups) {
   const t = {};
@@ -128,23 +128,27 @@ function ecoSummaryTiles(s) {
 }
 
 /**
- * Статьи детализации услуги (сверху вниз). price — сумма к оплате после скидок (cost_to_pay);
- * часть списанных бонусов YClients уже вычел в ней, поэтому из выручки вычитается только
- * bonus_in_revenue, а bonus_redeemed (всё списанное) — справочно в примечании.
+ * Статьи детализации услуги (сверху вниз). Выручка = price (cost_to_pay — к оплате
+ * деньгами, YClients уже вычел из неё и скидки, и бонусы; правило 19.10.2026). Прайс
+ * (first_cost) раскладывается: − скидки − бонусами (bonus_applied — часть списанного,
+ * объясняющая разрыв до прайса) = выручка. Бонус сверх разрыва (bonus_redeemed −
+ * bonus_applied: списания за товары, дрейф баланса) — только в примечании.
  * {label, value, note, total} — строки без HTML.
  */
 function ecoDetailLines(s, settings) {
   const st = settings || {};
   const cov = s.coverage || {};
-  const redeemed = Number(s.bonus_redeemed) || 0, inRev = Number(s.bonus_in_revenue) || 0;
+  const redeemed = Number(s.bonus_redeemed) || 0, applied = Number(s.bonus_applied) || 0;
+  const other = Math.max(0, redeemed - applied);
   const bonusNote = redeemed > 0
-    ? `списано ${ecoMoney(redeemed)}${redeemed - inRev > 0 ? `, из них ${ecoMoney(redeemed - inRev)} уже учтено YClients в сумме к оплате` : ''}`
+    ? `всего списано ${ecoMoney(redeemed)}${other > 0.005 ? `, из них ${ecoMoney(other)} вне стоимости услуг (товары, прочие списания)` : ''}`
     : 'бонусы не списывались';
   const L = (label, value, note, total) => ({ label, value, note: note || '', total: !!total });
   return [
-    L('Стоимость услуг (к оплате, после скидок)', ecoMoney(s.price), `скидки ${ecoMoney(s.discount)} — справочно`),
-    L('− бонусы, не учтённые в сумме к оплате', ecoMoney(inRev), bonusNote),
-    L('= Выручка', ecoMoney(s.revenue), '', true),
+    L('Стоимость услуг по прайсу', ecoMoney(s.first_cost), ''),
+    L('− скидки', ecoMoney(s.discount), 'разрыв до прайса, не объяснённый бонусами'),
+    L('− оплачено бонусами', ecoMoney(applied), bonusNote),
+    L('= Выручка (к оплате деньгами)', ecoMoney(s.revenue), 'cost_to_pay YClients — бонусы и скидки уже вычтены', true),
     L('− Материалы', ecoMoney(s.materials_used), `факт ${ecoMoney(s.materials_fact)} · норма ${ecoMoney(s.materials_norm)} · строк по норме: ${ecoNum(s.materials_estimated_rows)}`),
     L('− Оплата врача', ecoMoney(s.doctor_cost), `на руки ${ecoMoney(s.doctor_pay)} × множитель ФОТ ${ecoNum(st.payroll_multiplier, 3)}`),
     L('− Эквайринг', ecoMoney(s.acquiring_cost), `строк по средней доле: ${ecoNum(cov.acquiring_estimated)}`),

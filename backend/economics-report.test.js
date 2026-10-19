@@ -70,7 +70,7 @@ test('coverage: услуги периода с покрытием, техкар�
   expect(c.services).toEqual([expect.objectContaining({ service_yc_id: 10, title: 'S10', visits: 1, consumables_share: 1, tech_card: null, suggestions: [] })]);
   expect(c.cards).toHaveLength(1);
 });
-test('бонусы: выручка = цена − bonus_in_revenue; уже вычтенные YClients в cost_to_pay второй раз не вычитаются', async () => {
+test('бонусы: выручка = cost_to_pay; бонус показан как bonus_applied по разрыву до прайса, второй раз не вычитается', async () => {
   store.loadPeriod.mockImplementation(async () => {
     const p = period();
     p.records = [
@@ -81,9 +81,10 @@ test('бонусы: выручка = цена − bonus_in_revenue; уже вы�
   });
   const d = await report.serviceDetail(SALON, 10, '2026-09-01', '2026-09-30');
   const byId = Object.fromEntries(d.visits.map(v => [v.record_id, v]));
-  expect(byId[1]).toEqual(expect.objectContaining({ price: 1000, bonus_redeemed: 100, bonus_in_revenue: 100, revenue: 900 }));
-  expect(byId[2]).toEqual(expect.objectContaining({ price: 900, bonus_redeemed: 100, bonus_in_revenue: 0, revenue: 900 }));
-  expect(d.service.revenue).toBe(1800);
+  expect(byId[1]).toEqual(expect.objectContaining({ price: 1000, first_cost: 1000, bonus_redeemed: 100, bonus_applied: 0, revenue: 1000 }));
+  expect(byId[2]).toEqual(expect.objectContaining({ price: 900, first_cost: 1000, bonus_redeemed: 100, bonus_applied: 100, discount: 0, revenue: 900 }));
+  expect(d.service.revenue).toBe(1900);
+  expect(d.service.first_cost).toBe(2000);
 });
 
 test('ревью: категория «инд.» услуги (нет в priced) берётся из management-каталога → категорийное правило оплаты матчится', async () => {
