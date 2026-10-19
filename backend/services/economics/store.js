@@ -69,4 +69,18 @@ async function refreshAllLastReceipts(salonId) {
   return n;
 }
 
-module.exports = { upsertGoodsTransaction, refreshLastReceipt, refreshAllLastReceipts, TXN_COLS };
+/** Апсерт экономических колонок товара; дерево категорий (category_*) не трогает. */
+async function upsertCatalogGood(salonId, g) {
+  await db.query(`
+    INSERT INTO yclients_goods_catalog (salon_id, yclients_good_id, title, unit, service_unit, unit_equals,
+      actual_cost, unit_actual_cost, stock, last_seen_at, updated_at)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, NOW(), NOW())
+    ON CONFLICT (salon_id, yclients_good_id) DO UPDATE SET
+      title = CASE WHEN EXCLUDED.title <> '' THEN EXCLUDED.title ELSE yclients_goods_catalog.title END,
+      unit = EXCLUDED.unit, service_unit = EXCLUDED.service_unit, unit_equals = EXCLUDED.unit_equals,
+      actual_cost = EXCLUDED.actual_cost, unit_actual_cost = EXCLUDED.unit_actual_cost, stock = EXCLUDED.stock,
+      last_seen_at = NOW(), updated_at = NOW()
+  `, [salonId, g.good_id, g.title || '', g.unit, g.service_unit, g.unit_equals, g.actual_cost, g.unit_actual_cost, JSON.stringify(g.stock || [])]);
+}
+
+module.exports = { upsertCatalogGood, upsertGoodsTransaction, refreshLastReceipt, refreshAllLastReceipts, TXN_COLS };
