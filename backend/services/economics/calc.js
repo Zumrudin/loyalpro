@@ -27,6 +27,9 @@ function buildRows(record, ctx) {
       id: Number(s.id), title: String(s.title || ''),
       price: n(has(s.cost_to_pay) ? s.cost_to_pay : s.cost),
       first_cost: n(has(s.first_cost) ? s.first_cost : s.cost),
+      // Разрыв «после скидки» − «к оплате деньгами»: то, что YClients уже покрыл
+      // лояльностью ВНУТРИ cost_to_pay. Нет cost или cost_to_pay — разрыва нет.
+      netted: has(s.cost) && has(s.cost_to_pay) ? n(s.cost) - n(s.cost_to_pay) : 0,
     })).filter(s => s.id);
   if (!services.length) return [];
   const staffId = has(record.staff_yc_id) ? Number(record.staff_yc_id) : null;
@@ -38,7 +41,17 @@ function buildRows(record, ctx) {
   const techCardFor = (ctx && ctx.techCardFor) || (() => null);
   const prices = services.map(s => s.price);
   const minutes = splitMinutes(record.seance_length, services.map(s => durations.get(String(s.id)) || 0));
-  const bonusParts = splitByWeights(n(record.bonus_redeemed), prices);
+  // Бонусы (§3.1): cost_to_pay в YClients — сумма к оплате деньгами, и списанные бонусы
+  // бывают уже вычтены в нём (Profhilo 26000 → cost_to_pay 23400 при списании 2600), а
+  // бывают списаны способом оплаты при cost_to_pay = cost. Из выручки вычитается только
+  // НЕ учтённая в cost_to_pay часть: max(0, bonus − max(0, Σcost − Σcost_to_pay)) по записи.
+  // bonus_redeemed строки — фактически списанное (для показа), bonus_in_revenue — вычтенное.
+  // ОСОЗНАННО: абонементный визит (cost_to_pay 0 при cost 6000) даёт выручку 0 —
+  // признавать ли долю абонемента выручкой визита, решает владелец (отдельный вопрос).
+  const bonusRedeemed = n(record.bonus_redeemed);
+  const netted = Math.max(0, services.reduce((a, s) => a + s.netted, 0));
+  const bonusParts = splitByWeights(bonusRedeemed, prices);
+  const bonusRevParts = splitByWeights(Math.max(0, bonusRedeemed - netted), prices);
 
   // Списания (§3.2): со своей услугой — на её строку; без service_id (или с service_id,
   // которого в записи нет) — на запись, делятся между услугами по доле цены.
@@ -91,7 +104,8 @@ function buildRows(record, ctx) {
     const materials_norm = norm ? norm.cost : null;
     const materials_used = hasCons ? materials_fact : (norm ? norm.cost : 0);
     const bonus = bonusParts[i];
-    const revenue = s.price - bonus;
+    const bonusInRevenue = bonusRevParts[i];
+    const revenue = s.price - bonusInRevenue;
     const { categoryId, rule } = rules[i];
     const dp = doctorPay({ price: s.price, revenue, materials_used }, rule ? { ...rule, fixed_per_visit: fixedShare[i] } : null, settings);
     const noPriceGoods = [...new Set([...o.noPrice, ...rec.noPrice, ...(hasCons ? [] : (norm ? norm.noPrice : []))])]
@@ -101,7 +115,7 @@ function buildRows(record, ctx) {
       service_yc_id: s.id, service_title: s.title, category_yc_id: categoryId,
       price: s.price, first_cost: s.first_cost, discount: Math.max(0, s.first_cost - s.price),
       minutes: minutes[i], hours: minutes[i] / 60,
-      bonus_redeemed: bonus, revenue,
+      bonus_redeemed: bonus, bonus_in_revenue: bonusInRevenue, revenue,
       materials_fact, materials_yc_cost: o.yc + recYc[i], materials_norm, materials_used,
       materials_estimated: !hasCons && !!norm, no_materials_data: !hasCons && !norm,
       has_consumables: hasCons, has_tech_card: !!card, no_price_goods: noPriceGoods,
@@ -154,7 +168,7 @@ function applyOverhead(rows, { driver = 'minutes', fixedTotal = 0, equipment = [
   return rows;
 }
 
-const SUM_FIELDS = ['price', 'discount', 'bonus_redeemed', 'revenue', 'materials_fact', 'materials_yc_cost', 'materials_used',
+const SUM_FIELDS = ['price', 'discount', 'bonus_redeemed', 'bonus_in_revenue', 'revenue', 'materials_fact', 'materials_yc_cost', 'materials_used',
   'doctor_pay', 'doctor_cost', 'acquiring_cost', 'contribution', 'overhead', 'equipment_cost', 'operating_profit', 'usn_estimate', 'minutes'];
 
 /** Группировка строк (§3.7). keyFn/labelFn — по услуге, по услуге×сотруднику и т.д. Суммы округлены на выдаче. */

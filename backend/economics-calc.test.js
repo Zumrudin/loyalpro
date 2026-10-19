@@ -183,6 +183,46 @@ describe('норма и флаги покрытия', () => {
   });
 });
 
+describe('бонусы, уже вычтенные YClients в cost_to_pay (дев-БД Q3 2026)', () => {
+  const base = { ...RECORD, consumables: [], payments: [] };
+  test('cost_to_pay = cost − бонус (1881121110, Profhilo) → бонус второй раз не вычитается', () => {
+    const [r] = C.buildRows({ ...base, services: [{ id: 9536380, title: 'Profhilo', cost: 26000, cost_to_pay: 23400, first_cost: 26000 }], bonus_redeemed: 2600 }, ctx());
+    expect(r.price).toBe(23400);
+    expect(r.bonus_redeemed).toBe(2600);
+    expect(r.bonus_in_revenue).toBe(0);
+    expect(r.revenue).toBe(23400);
+  });
+  test('cost_to_pay = cost, бонусы списаны способом оплаты → вычитаются', () => {
+    const [r] = C.buildRows({ ...base, services: [{ id: 9536380, title: 'A', cost: 10000, cost_to_pay: 10000, first_cost: 10000 }], bonus_redeemed: 1500 }, ctx());
+    expect(r.bonus_redeemed).toBe(1500);
+    expect(r.bonus_in_revenue).toBe(1500);
+    expect(r.revenue).toBe(8500);
+  });
+  test('частично: разрыв записи 1000 при бонусе 1500 → вычитается 500, делится по цене', () => {
+    const rows = C.buildRows({ ...base, services: [
+      { id: 9536380, title: 'A', cost: 8000, cost_to_pay: 7000, first_cost: 8000 },
+      { id: 25013124, title: 'B', cost: 3000, cost_to_pay: 3000, first_cost: 3000 },
+    ], bonus_redeemed: 1500 }, ctx());
+    expect(rows[0].bonus_in_revenue + rows[1].bonus_in_revenue).toBeCloseTo(500, 2);
+    expect(rows[0].bonus_in_revenue).toBeCloseTo(350, 2); expect(rows[1].bonus_in_revenue).toBeCloseTo(150, 2);
+    expect(rows[0].bonus_redeemed + rows[1].bonus_redeemed).toBeCloseTo(1500, 2);
+    expect(rows[0].revenue).toBeCloseTo(6650, 2); expect(rows[1].revenue).toBeCloseTo(2850, 2);
+  });
+  test('абонемент: cost_to_pay 0 без бонусов → выручка 0 (осознанно, вопрос владельцу)', () => {
+    const [r] = C.buildRows({ ...base, services: [{ id: 9536380, title: 'Tesla former Аб', cost: 6000, cost_to_pay: 0, first_cost: 6000 }], bonus_redeemed: 0 }, ctx());
+    expect(r.revenue).toBe(0); expect(r.bonus_in_revenue).toBe(0);
+  });
+  test('эталон 2049113510 (без поля cost) — бонус вычитается целиком, bonus_in_revenue = bonus_redeemed', () => {
+    const rows = C.buildRows(RECORD, ctx());
+    expect(rows[0].bonus_in_revenue).toBeCloseTo(818.18, 2); expect(rows[1].bonus_in_revenue).toBeCloseTo(181.82, 2);
+  });
+  test('bonus_in_revenue суммируется в aggregate и summary', () => {
+    const rows = C.finalizeRows(C.buildRows(RECORD, ctx()));
+    expect(C.SUM_FIELDS).toContain('bonus_in_revenue');
+    expect(C.summary(rows).bonus_in_revenue).toBe(1000);
+  });
+});
+
 describe('applyOverhead + aggregate', () => {
   function rowsFixture() {
     const rows = C.buildRows(RECORD, ctx());
