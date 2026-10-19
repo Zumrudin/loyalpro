@@ -143,3 +143,51 @@ function ecoVisitFlags(v) {
   if (v.acquiring_estimated) out.push('нет оплат');
   return out;
 }
+
+/** Количество без хвостовых нулей (до 2 знаков). */
+function ecoQty(v) { return ecoNum(v, Math.abs(Number(v) * 100 % 100) < 1e-9 ? 0 : (Math.abs(Number(v) * 100 % 10) < 1e-9 ? 1 : 2)); }
+
+/** Единица списания товара + подпись пересчёта упаковки: {main, sub}. */
+function ecoGoodsUnit(g) {
+  const main = g.service_unit || g.unit || '';
+  const eq = Number(g.unit_equals);
+  const sub = g.unit && Number.isFinite(eq) && eq > 0 && eq !== 1 ? `1 ${g.unit} = ${ecoQty(eq)} ${g.service_unit || ''}`.trim() : '';
+  return { main, sub };
+}
+
+/** Состав техкарты одной строкой (текст, без HTML). */
+function ecoCardItemsText(items) {
+  return (items || []).map(i => `${i.title || ('товар ' + i.good_id)} × ${ecoQty(i.amount)}${i.unit ? ' ' + i.unit : ''}`).join('; ');
+}
+
+function ecoCoverageHint(s) { return `${ecoNum(s.visits)} визитов · списания у ${ecoPct(s.consumables_share)}`; }
+
+function ecoParseNumber(v) {
+  if (typeof v === 'number') return v;
+  const s = String(v === null || v === undefined ? '' : v).trim().replace(',', '.');
+  return s === '' || !Number.isFinite(Number(s)) ? NaN : Number(s);
+}
+
+/** Ручная цена единицы: пусто → снять (null), число > 0 → value, иначе error. */
+function ecoPriceValue(raw) {
+  if (String(raw === null || raw === undefined ? '' : raw).trim() === '') return { value: null };
+  const n = ecoParseNumber(raw);
+  if (!(n > 0) || n > 1e7) return { error: 'Цена — число больше 0 (пусто — снять)' };
+  return { value: n };
+}
+
+/** Проверка формы ручной нормы до отправки. rows: [{goodId, amount, unit}] из полей. */
+function ecoParseManualItems(title, rows) {
+  const t = String(title || '').trim();
+  if (!t) return { error: 'Укажите название нормы' };
+  if (!rows || !rows.length) return { error: 'Добавьте хотя бы одну позицию' };
+  const items = [];
+  for (const [i, r] of rows.entries()) {
+    const gid = ecoParseNumber(r.goodId);
+    const amount = ecoParseNumber(r.amount);
+    if (!Number.isInteger(gid) || gid <= 0) return { error: `Позиция ${i + 1}: выберите товар` };
+    if (!(amount > 0)) return { error: `Позиция ${i + 1}: количество больше 0` };
+    items.push({ goodId: gid, amount, unit: String(r.unit || '').trim() });
+  }
+  return { value: { title: t, items } };
+}

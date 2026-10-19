@@ -136,3 +136,36 @@ test('ecoVisitFlags: флаги визита в детализации', () => {
   assert.deepStrictEqual(plain(ctx.ecoVisitFlags({ no_materials_data: true })), ['нет данных о материалах']);
   assert.deepStrictEqual(plain(ctx.ecoVisitFlags({})), []);
 });
+
+test('ecoGoodsUnit: единица списания и пересчёт упаковки', () => {
+  assert.deepStrictEqual(plain(ctx.ecoGoodsUnit({ unit: 'уп', service_unit: 'мл', unit_equals: 50 })), { main: 'мл', sub: '1 уп = 50 мл' });
+  assert.deepStrictEqual(plain(ctx.ecoGoodsUnit({ unit: 'шт', service_unit: 'шт', unit_equals: 1 })), { main: 'шт', sub: '' });
+  assert.deepStrictEqual(plain(ctx.ecoGoodsUnit({ unit: 'шт' })), { main: 'шт', sub: '' });
+  assert.deepStrictEqual(plain(ctx.ecoGoodsUnit({})), { main: '', sub: '' });
+});
+
+test('ecoCardItemsText: состав техкарты без HTML, товар без названия — по id', () => {
+  assert.strictEqual(ctx.ecoCardItemsText([{ title: 'Гель', amount: 2.5, unit: 'мл' }, { good_id: 77, amount: 1 }]), 'Гель × 2,5 мл; товар 77 × 1');
+  assert.strictEqual(ctx.ecoCardItemsText(null), '');
+});
+
+test('ecoParseManualItems: проверка формы нормы до отправки', () => {
+  const ok = plain(ctx.ecoParseManualItems(' Чистка ', [{ goodId: '12', amount: '1,5', unit: ' мл ' }]));
+  assert.deepStrictEqual(ok, { value: { title: 'Чистка', items: [{ goodId: 12, amount: 1.5, unit: 'мл' }] } });
+  assert.match(ctx.ecoParseManualItems('', [{ goodId: '1', amount: '1' }]).error, /название/i);
+  assert.match(ctx.ecoParseManualItems('x', []).error, /позици/i);
+  assert.match(ctx.ecoParseManualItems('x', [{ goodId: '', amount: '1' }]).error, /Позиция 1.*товар/);
+  assert.match(ctx.ecoParseManualItems('x', [{ goodId: '3', amount: '0' }]).error, /Позиция 1.*количество/);
+  assert.match(ctx.ecoParseManualItems('x', [{ goodId: '3', amount: '1' }, { goodId: '3', amount: 'abc' }]).error, /Позиция 2/);
+});
+
+test('ecoPriceValue: пустое — снять, мусор и ≤0 — ошибка', () => {
+  assert.deepStrictEqual(plain(ctx.ecoPriceValue('')), { value: null });
+  assert.deepStrictEqual(plain(ctx.ecoPriceValue(' 12,5 ')), { value: 12.5 });
+  assert.ok(ctx.ecoPriceValue('0').error);
+  assert.ok(ctx.ecoPriceValue('abc').error);
+});
+
+test('ecoCoverageHint: подпись услуги в покрытии', () => {
+  assert.strictEqual(ctx.ecoCoverageHint({ visits: 12, consumables_share: 0.5 }), '12 визитов · списания у 50,0%');
+});

@@ -121,8 +121,152 @@ async function ecoOpenService(serviceId) {
     if (el.scrollIntoView) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
   } catch (e) { if (qs === ecoQs()) el.innerHTML = `<div class="empty">Ошибка: ${esc(e.message)}</div>`; }
 }
-function ecoLoadGoods() {}
-function ecoLoadTechCards() {}
+
+// ── Материалы ──
+// Шапка с поиском рисуется один раз (иначе перерисовка съедает фокус поля), перерисовывается только тело.
+let _ecoGoodsSeq = 0;
+async function ecoLoadGoods() {
+  const el = document.getElementById('ecoGoods');
+  if (!document.getElementById('ecoGoodsBody')) {
+    el.className = '';
+    el.innerHTML = `<div class="bc-head"><div><div class="bc-head-title">🧴 Материалы</div><div class="bc-head-sub">Цена единицы списания: последняя закупка → ручная → себестоимость YClients</div></div>
+        <div class="eco-toolbar"><input id="ecoGoodsSearch" placeholder="Поиск…" onkeydown="if(event.key==='Enter')ecoLoadGoods()"><label class="eco-check"><input type="checkbox" id="ecoGoodsOnly" checked onchange="ecoLoadGoods()"> только расходники</label></div></div>
+      <div class="card eco-card-flush"><div class="tw"><table class="mtbl eco-tbl"><thead><tr><th>Товар</th><th>Ед. списания</th><th class="num">Последняя закупка</th><th class="num">Себест. YClients</th><th class="num">Ручная цена</th><th></th></tr></thead><tbody id="ecoGoodsBody"></tbody></table></div></div>`;
+  }
+  const body = document.getElementById('ecoGoodsBody');
+  const q = document.getElementById('ecoGoodsSearch').value;
+  const only = document.getElementById('ecoGoodsOnly').checked;
+  const seq = ++_ecoGoodsSeq;
+  body.innerHTML = '<tr><td colspan="6" class="empty">Загрузка…</td></tr>';
+  try {
+    const r = await api('GET', `/api/economics/goods?search=${encodeURIComponent(q)}&only_consumables=${only ? 1 : 0}`);
+    if (seq !== _ecoGoodsSeq) return; // поиск уже сменился — ответ устарел
+    _eco.goods = r.goods || [];
+    body.innerHTML = _eco.goods.map(g => {
+      const u = ecoGoodsUnit(g);
+      return `<tr>
+      <td>${esc(g.title)}<div class="eco-kpi-sub">${esc(g.category_title || '')}</div></td>
+      <td>${esc(u.main)}${u.sub ? `<div class="eco-kpi-sub">${esc(u.sub)}</div>` : ''}</td>
+      <td class="num">${g.last_receipt_price != null ? ecoNum(g.last_receipt_price, 2) : '—'}${g.last_receipt_at ? `<div class="eco-kpi-sub">${esc(String(g.last_receipt_at).slice(0, 10))}</div>` : ''}</td>
+      <td class="num">${g.unit_actual_cost != null ? ecoNum(g.unit_actual_cost, 2) : '—'}</td>
+      <td class="num"><input type="text" inputmode="decimal" class="eco-price" value="${g.override_price != null ? escAttr(String(g.override_price)) : ''}" placeholder="—" onchange="ecoSavePrice(${Number(g.good_id)}, this)"></td>
+      <td><button class="btn btn-sm" onclick="ecoShowReceipts(${Number(g.good_id)}, this)">История</button></td>
+    </tr>`;
+    }).join('') || '<tr><td colspan="6" class="empty">Ничего не найдено</td></tr>';
+  } catch (e) { if (seq === _ecoGoodsSeq) body.innerHTML = `<tr><td colspan="6" class="empty">Ошибка: ${esc(e.message)}</td></tr>`; }
+}
+async function ecoSavePrice(goodId, input) {
+  const p = ecoPriceValue(input.value);
+  if (p.error) { notify(p.error, 'err'); return ecoLoadGoods(); }
+  try {
+    await api('PUT', `/api/economics/goods/${Number(goodId)}/price`, { unitPrice: p.value });
+    _eco.report = null; notify(p.value === null ? 'Ручная цена снята' : 'Ручная цена сохранена');
+  } catch (e) { notify('Ошибка: ' + e.message, 'err'); }
+}
+async function ecoShowReceipts(goodId, btn) {
+  const tr = btn.closest('tr');
+  const next = tr.nextElementSibling;
+  if (next && next.classList.contains('eco-receipts')) { next.remove(); return; }
+  try {
+    const r = await api('GET', `/api/economics/goods/${Number(goodId)}/receipts`);
+    if (tr.nextElementSibling && tr.nextElementSibling.classList.contains('eco-receipts')) return; // двойной клик
+    const rows = (r.receipts || []).map(x => `<tr><td>${esc(String(x.create_date).slice(0, 10))}</td><td class="num">${ecoQty(x.amount)} ${esc(x.unit_title || '')}</td><td class="num">${ecoNum(x.cost_per_unit, 2)}</td><td class="num">${ecoNum(x.discount, 2)}%</td><td class="num">${ecoMoney(x.cost)}</td><td>${esc(x.supplier_title || '')}</td></tr>`).join('');
+    tr.insertAdjacentHTML('afterend', `<tr class="eco-receipts"><td colspan="6"><div class="tw"><table class="mtbl eco-tbl"><thead><tr><th>Дата</th><th class="num">Кол-во</th><th class="num">Цена за ед.</th><th class="num">Скидка</th><th class="num">Сумма</th><th>Поставщик</th></tr></thead><tbody>${rows || '<tr><td colspan="6" class="empty">Поступлений нет</td></tr>'}</tbody></table></div></td></tr>`);
+  } catch (e) { notify('Ошибка: ' + e.message, 'err'); }
+}
+
+// ── Техкарты и покрытие ──
+let _ecoCardsSeq = 0;
+async function ecoLoadTechCards() {
+  const el = document.getElementById('ecoTechCards');
+  const qs = ecoQs(); const seq = ++_ecoCardsSeq;
+  try {
+    const [cov, cards] = await Promise.all([api('GET', `/api/economics/coverage?${qs}`), api('GET', '/api/economics/tech-cards')]);
+    if (seq !== _ecoCardsSeq || qs !== ecoQs()) return;
+    el.className = '';
+    _eco.cards = cards.cards || [];
+    const cardOpts = (sel) => `<option value="">— выбрать техкарту —</option>` + _eco.cards.map(c => `<option value="${Number(c.id)}" ${sel === c.id ? 'selected' : ''}>${esc(c.title)}${c.source === 'manual' ? ' (норма LoyalPro)' : ''}</option>`).join('');
+    const rows = (cov.services || []).map(s => {
+      const tc = s.tech_card; const sid = Number(s.service_yc_id);
+      const sugg = (s.suggestions || []).map(x => `<button class="btn btn-sm" onclick="ecoLinkCard(${sid}, ${Number(x.tech_card_id)})">Похоже: ${esc(x.title)}</button>`).join(' ');
+      return `<tr>
+        <td>${esc(s.title)}<div class="eco-kpi-sub">${esc(ecoCoverageHint(s))}</div></td>
+        <td>${tc ? `<b>${esc(tc.title)}</b> <span class="badge eco-badge-muted">${esc(tc.source)}${tc.staff_yc_id ? ' · сотрудник ' + esc(String(tc.staff_yc_id)) : ''}</span><div class="eco-kpi-sub">${esc(ecoCardItemsText(tc.items))}</div>` : `<span class="badge eco-badge-warn">нет техкарты</span> ${sugg}`}</td>
+        <td><div class="eco-actions">
+          <select onchange="ecoLinkCard(${sid}, this.value)">${cardOpts(tc ? tc.id : null)}</select>
+          <button class="btn btn-sm" data-staff="${escAttr((s.staff_yc_ids || []).join(','))}" onclick="ecoLookupCard(${sid}, this)" title="default_for_staff_and_service по каждому исполнителю (≤4 вызова)">Найти в YClients</button>
+          ${tc && tc.source === 'manual' ? `<button class="btn btn-sm" onclick="ecoLinkCard(${sid}, null)">Отвязать</button>` : ''}
+        </div></td></tr>`;
+    }).join('');
+    const manual = _eco.cards.filter(c => c.source === 'manual').map(c => `<tr><td>${esc(c.title)}</td><td class="eco-kpi-sub">${esc(ecoCardItemsText(c.items))}</td><td class="num">${ecoNum(c.links)}</td><td><button class="btn btn-sm" onclick="ecoDeleteManual(${Number(c.id)})">Удалить</button></td></tr>`).join('');
+    const open = document.getElementById('ecoManualForm');
+    const keepForm = open && open.firstChild ? open : null; // открытую форму переносим узлом — набранные значения сохраняются
+    if (keepForm) keepForm.remove();
+    el.innerHTML = `<div class="bc-head"><div><div class="bc-head-title">📋 Техкарты и покрытие</div><div class="bc-head-sub">Услуги периода: есть ли норма и доля визитов со списаниями — рабочий список «что заполнить в YClients»</div></div>
+        <div class="eco-toolbar"><button class="btn btn-sm" onclick="ecoSyncCards()">⟳ Импорт из YClients</button><button class="btn btn-sm btn-pri" onclick="ecoNewManual()">+ Завести норму</button></div></div>
+      <div class="card eco-card-flush"><div class="tw"><table class="mtbl eco-tbl"><thead><tr><th>Услуга</th><th>Техкарта</th><th>Привязка</th></tr></thead><tbody>${rows || '<tr><td colspan="3" class="empty">Визитов в периоде нет</td></tr>'}</tbody></table></div></div>
+      <div id="ecoManualForm"></div>
+      <h4 class="eco-h4">Нормы LoyalPro (ручные)</h4>
+      <div class="card eco-card-flush"><div class="tw"><table class="mtbl eco-tbl"><thead><tr><th>Название</th><th>Состав</th><th class="num">Привязок</th><th></th></tr></thead><tbody>${manual || '<tr><td colspan="4" class="empty">Ручных норм нет</td></tr>'}</tbody></table></div></div>
+      <div class="eco-kpi-sub" style="margin-top:8px">Импортированных техкарт YClients: ${_eco.cards.filter(c => c.source === 'yclients').length} (только чтение; состав — в YClients).</div>`;
+    if (keepForm) document.getElementById('ecoManualForm').replaceWith(keepForm);
+  } catch (e) { if (seq === _ecoCardsSeq) el.innerHTML = `<div class="empty">Ошибка: ${esc(e.message)}</div>`; }
+}
+async function ecoLinkCard(serviceId, cardId) {
+  try { await api('PUT', `/api/economics/services/${Number(serviceId)}/tech-card`, { techCardId: cardId ? Number(cardId) : null }); _eco.report = null; notify('Привязка сохранена'); ecoLoadTechCards(); }
+  catch (e) { notify('Ошибка: ' + e.message, 'err'); ecoLoadTechCards(); }
+}
+async function ecoLookupCard(serviceId, btn) {
+  const staffIds = String(btn.dataset.staff || '').split(',').filter(Boolean).map(Number);
+  if (!staffIds.length) return notify('У услуги в периоде нет исполнителей', 'err');
+  btn.disabled = true;
+  try {
+    const r = await api('POST', `/api/economics/services/${Number(serviceId)}/tech-card/lookup`, { staffYcIds: staffIds });
+    _eco.report = null;
+    const found = r.found || [];
+    notify(found.length ? `Найдено: ${found.map(f => f.title).join(', ')}` : `Проверено исполнителей: ${r.checked}, техкарты в YClients нет`, found.length ? undefined : 'err');
+    ecoLoadTechCards();
+  } catch (e) { btn.disabled = false; notify('Ошибка: ' + e.message, 'err'); }
+}
+async function ecoSyncCards() {
+  try { const r = await api('POST', '/api/economics/tech-cards/sync'); _eco.report = null; notify(`Импортировано техкарт: ${ecoNum(r.cards)}`); ecoLoadTechCards(); }
+  catch (e) { notify('Ошибка: ' + e.message, 'err'); }
+}
+async function ecoNewManual() {
+  const box = document.getElementById('ecoManualForm');
+  box.innerHTML = `<div class="card eco-detail">
+    <div class="fg"><label class="fl">Название нормы</label><input id="ecoManTitle" placeholder="Например: Чистка лица — расходники"></div>
+    <div id="ecoManItems"></div>
+    <button class="btn btn-sm" onclick="ecoManAddItem()">+ Позиция</button>
+    <div class="eco-actions" style="margin-top:10px"><button class="btn btn-sm btn-pri" onclick="ecoSaveManual()">Сохранить</button><button class="btn btn-sm" onclick="document.getElementById('ecoManualForm').innerHTML=''">Отмена</button></div></div>`;
+  if (!_eco.consGoods) { try { _eco.consGoods = (await api('GET', '/api/economics/goods?only_consumables=1')).goods || []; } catch { _eco.consGoods = []; } }
+  ecoManAddItem();
+}
+function ecoManAddItem() {
+  const box = document.getElementById('ecoManItems'); if (!box) return;
+  const goods = _eco.consGoods || [];
+  const opts = '<option value="">— товар —</option>' + goods.map(g => `<option value="${Number(g.good_id)}" data-unit="${escAttr(ecoGoodsUnit(g).main)}">${esc(g.title)}</option>`).join('');
+  box.insertAdjacentHTML('beforeend', `<div class="eco-form eco-man-item">
+    <div class="fg"><label class="fl">Товар</label>${goods.length ? `<select class="eco-man-good" onchange="ecoManPickGood(this)">${opts}</select>` : '<input class="eco-man-good" inputmode="numeric" placeholder="id товара YClients">'}</div>
+    <div class="fg"><label class="fl">Количество</label><input class="eco-man-amount" inputmode="decimal"></div>
+    <div class="fg"><label class="fl">Единица</label><input class="eco-man-unit" placeholder="мл / ед. / шт."></div></div>`);
+}
+function ecoManPickGood(sel) {
+  const u = sel.closest('.eco-man-item').querySelector('.eco-man-unit');
+  const opt = sel.options[sel.selectedIndex];
+  if (u && !u.value && opt && opt.dataset.unit) u.value = opt.dataset.unit;
+}
+async function ecoSaveManual() {
+  const rows = [...document.querySelectorAll('.eco-man-item')].map(d => ({ goodId: d.querySelector('.eco-man-good').value, amount: d.querySelector('.eco-man-amount').value, unit: d.querySelector('.eco-man-unit').value }));
+  const p = ecoParseManualItems(document.getElementById('ecoManTitle').value, rows);
+  if (p.error) return notify(p.error, 'err');
+  try { await api('POST', '/api/economics/tech-cards', p.value); _eco.report = null; notify('Норма сохранена'); document.getElementById('ecoManualForm').innerHTML = ''; ecoLoadTechCards(); }
+  catch (e) { notify('Ошибка: ' + e.message, 'err'); }
+}
+async function ecoDeleteManual(id) {
+  if (!confirm('Удалить норму? Привязки к ней тоже удалятся.')) return;
+  try { await api('DELETE', `/api/economics/tech-cards/${Number(id)}`); _eco.report = null; ecoLoadTechCards(); } catch (e) { notify('Ошибка: ' + e.message, 'err'); }
+}
 function ecoLoadPay() {}
 function ecoLoadFixed() {}
 function ecoLoadEquipment() {}
