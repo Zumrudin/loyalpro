@@ -358,7 +358,8 @@ async function ycGetServiceCatalog(salon, staffIds = []) {
 // Здесь же — ПЕРСОНАЛЬНЫЕ ЦЕНЫ МАСТЕРОВ (staff[].price): это единственное место
 // в API, где они есть (booking-каталог отдаёт всем базовую цену услуги).
 // Возвращает { resourceIdsByService: Map<svcIdStr,[resIdStr]>, durationByService: Map<svcIdStr,сек>,
-//              staffPricesByService: Map<svcIdStr, Map<staffIdStr,{price_min,price_max}>> }.
+//              staffPricesByService: Map<svcIdStr, Map<staffIdStr,{price_min,price_max}>>,
+//              categoryByService: Map<svcIdStr, catId|null> }.
 const _svcMetaCache = {};                    // salonId → { ts, data }
 const SVC_META_TTL = 10 * 60 * 1000;         // мета меняется редко
 
@@ -384,10 +385,24 @@ function staffPricesFromServices(raw) {
   return byService;
 }
 
+// Категория КАЖДОЙ услуги management-каталога, включая «инд.» (без цены) —
+// booking-каталог ycGetServiceCatalog().priced их отфильтровывает.
+function categoriesFromServices(raw) {
+  const out = new Map();
+  if (!Array.isArray(raw)) return out;
+  for (const s of raw) {
+    if (!s || s.id == null) continue;
+    const c = Number(s.category_id);
+    out.set(String(s.id), Number.isFinite(c) && c > 0 ? c : null);
+  }
+  return out;
+}
+
 async function ycGetServiceMeta(salon) {
   const cid = salon && salon.yclients_company_id;
   const empty = {
     resourceIdsByService: new Map(), durationByService: new Map(), staffPricesByService: new Map(),
+    categoryByService: new Map(),
   };
   if (!cid) return empty;
 
@@ -403,7 +418,8 @@ async function ycGetServiceMeta(salon) {
     resourceIdsByService.set(String(s.id), (Array.isArray(s.resources) ? s.resources : []).map(String));
     durationByService.set(String(s.id), Number(s.duration) || 0);
   }
-  const data = { resourceIdsByService, durationByService, staffPricesByService: staffPricesFromServices(raw) };
+  const data = { resourceIdsByService, durationByService, staffPricesByService: staffPricesFromServices(raw),
+    categoryByService: categoriesFromServices(raw) };
   _svcMetaCache[salon.id] = { ts: Date.now(), data };
   return data;
 }
@@ -422,5 +438,5 @@ module.exports = {
   parseCardTransactionsHtml, ycAccrueCard, ycListFinanceTransactions, ycSumServicePayments,
   ycWebSessions,
   getTreeCache, setTreeCache, clearTreeCache,
-  ycGetServiceCatalog, clearServiceCatalogCache, ycGetServiceMeta, hasAnyPrice, staffPricesFromServices,
+  ycGetServiceCatalog, clearServiceCatalogCache, ycGetServiceMeta, hasAnyPrice, staffPricesFromServices, categoriesFromServices,
 };

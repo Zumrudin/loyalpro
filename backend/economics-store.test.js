@@ -145,3 +145,64 @@ describe('loadPeriod', () => {
     expect(store.normSettings({ usn_rate: '0' }).usn_rate).toBe(0);
   });
 });
+
+// ── Правки по ревью (19.10.2026) ────────────────────────────────────────────
+describe('ревью: списания бонусов без наших отмен кэшбэка', () => {
+  test('RECORDS_SQL: redemption с «отмена» в названии не считается списанием (как дашборд routes/api.js)', () => {
+    expect(store.RECORDS_SQL).toMatch(/t\.type = 'redemption'\s+AND COALESCE\(t\.title, ''\) NOT ILIKE '%отмена%'/);
+  });
+});
+
+describe('ревью: upsertCatalogGood не лезет в «Домашний уход»', () => {
+  const G = { good_id: 7, title: 'Шприц', unit: 'уп.', service_unit: 'шт', unit_equals: 10, actual_cost: 100, unit_actual_cost: 10, stock: [] };
+  test('новая строка вставляется архивной (is_archived TRUE), не попадает в выпадашку специалистов', async () => {
+    await store.upsertCatalogGood(1, G);
+    const [sql] = db.query.mock.calls[0];
+    expect(sql).toMatch(/is_archived[\s\S]*VALUES[\s\S]*TRUE/);
+  });
+  test('на конфликте обновляются только экономические колонки: is_archived/category_*/last_seen_at не трогаются, title — только у строки без категории', async () => {
+    await store.upsertCatalogGood(1, G);
+    const [sql] = db.query.mock.calls[0];
+    const upd = sql.split(/DO UPDATE SET/)[1];
+    expect(upd).not.toMatch(/is_archived|category_id\s*=|category_title|last_seen_at/);
+    expect(upd).toMatch(/title = CASE WHEN yclients_goods_catalog\.category_id IS NULL AND EXCLUDED\.title <> ''/);
+    for (const c of ['unit', 'service_unit', 'unit_equals', 'actual_cost', 'unit_actual_cost', 'stock']) expect(upd).toMatch(new RegExp(`\\b${c} = EXCLUDED\\.${c}\\b`));
+  });
+});
+
+describe('ревью: upsertGoodsTransaction защищён от порядка событий', () => {
+  test('колонки перезаписываются только при входящем last_change_date >= сохранённого (NULL с любой стороны — обновлять)', async () => {
+    await store.upsertGoodsTransaction(1, ROW, { status: 'update', source: 'reconcile' });
+    const [sql] = db.query.mock.calls[0];
+    expect(sql).toMatch(/EXCLUDED\.last_change_date IS NULL OR goods_transactions\.last_change_date IS NULL OR EXCLUDED\.last_change_date >= goods_transactions\.last_change_date/);
+    expect(sql).toMatch(/amount = CASE WHEN \(/);
+  });
+  test('не-delete снимает deleted_at только при last_change_date строго новее удаления', async () => {
+    await store.upsertGoodsTransaction(1, ROW, { status: 'update', source: 'reconcile' });
+    const [sql] = db.query.mock.calls[0];
+    expect(sql).not.toMatch(/deleted_at = NULL/);
+    expect(sql).toMatch(/EXCLUDED\.last_change_date > GREATEST\(goods_transactions\.deleted_at, goods_transactions\.last_change_date\)/);
+  });
+  test('delete ставит deleted_at всегда, даже если событие старее сохранённого', async () => {
+    await store.upsertGoodsTransaction(1, ROW, { status: 'delete', source: 'webhook' });
+    const [sql] = db.query.mock.calls[0];
+    expect(sql).not.toMatch(/DO UPDATE SET[\s\S]*\bWHERE\b/);
+    expect(sql).toMatch(/deleted_at = COALESCE\(\$\d+::timestamptz, NOW\(\)\)\s*$/m);
+  });
+});
+
+describe('ревью: refreshLastReceipt', () => {
+  test('приход без даты не побеждает датированный: ORDER BY create_date DESC NULLS LAST', async () => {
+    await store.refreshLastReceipt(1, 7);
+    const sel = db.oneOrNone.mock.calls.find(c => /FROM goods_transactions/.test(c[0]));
+    expect(sel[0]).toMatch(/ORDER BY create_date DESC NULLS LAST/);
+  });
+  test('приход во флаконах без unit_equals → цена не пишется (null), а не цена флакона', async () => {
+    db.oneOrNone
+      .mockResolvedValueOnce({ unit_equals: null })
+      .mockResolvedValueOnce({ create_date: '2026-10-18T12:10:00.000Z', amount: '1', cost: '26000', operation_unit_type: 1 });
+    await store.refreshLastReceipt(1, 7);
+    const upd = db.query.mock.calls.find(c => /UPDATE yclients_goods_catalog/.test(c[0]));
+    expect(upd[1][2]).toBeNull();
+  });
+});

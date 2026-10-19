@@ -13,7 +13,16 @@ const { createLogger } = require('../../logger');
 const logger = createLogger('EconomicsReport');
 
 const TTL_MS = 60_000;
-const _cache = new Map();   // `${salonId}|${from}|${to}` → { ts, data }
+const CACHE_MAX = 50;       // кап ключей: период свободный, без вытеснения кэш рос бы без конца
+const _cache = new Map();   // `${salonId}|${from}|${to}` → { ts, data }; порядок вставки = возраст
+
+function cachePut(key, data) {
+  const now = Date.now();
+  for (const [k, v] of _cache) if (now - v.ts >= TTL_MS) _cache.delete(k);
+  _cache.delete(key);
+  _cache.set(key, { ts: now, data });
+  while (_cache.size > CACHE_MAX) _cache.delete(_cache.keys().next().value);
+}
 
 function invalidate(salonId) {
   if (salonId === undefined) { _cache.clear(); return; }
@@ -26,11 +35,17 @@ async function loadServiceMeta(salon) {
   try {
     const meta = await ycGetServiceMeta(salon);
     if (meta && meta.durationByService) out.durations = meta.durationByService;
+    // Категории всех услуг, включая «инд.»: booking-каталог (priced ниже) их не
+    // отдаёт, и категорийные правила оплаты на них не матчились бы. Та же
+    // кэшированная выгрузка /company/{cid}/services/ — без лишнего запроса.
+    if (meta && meta.categoryByService) for (const [k, v] of meta.categoryByService) out.categories.set(k, v);
   } catch (e) { logger.warn(`service meta: ${e.message}`); }
   try {
     const cat = await ycGetServiceCatalog(salon);
     for (const s of (cat && cat.priced) || []) {
-      out.categories.set(String(s.id), s.category_id != null ? Number(s.category_id) : null);
+      if (!out.categories.has(String(s.id)) || out.categories.get(String(s.id)) == null) {
+        out.categories.set(String(s.id), s.category_id != null ? Number(s.category_id) : null);
+      }
       out.titles.set(String(s.id), s.title || '');
     }
     if (cat && cat.staffIdsByService) out.staffByService = cat.staffIdsByService;
@@ -78,7 +93,7 @@ async function buildReport(salon, from, to, { force = false } = {}) {
   const hit = _cache.get(key);
   if (!force && hit && Date.now() - hit.ts < TTL_MS) return hit.data;
   const data = await compute(salon, from, to);
-  _cache.set(key, { ts: Date.now(), data });
+  cachePut(key, data);
   return data;
 }
 
@@ -121,4 +136,4 @@ async function coverage(salon, from, to) {
   return { services, cards };
 }
 
-module.exports = { buildReport, serviceDetail, coverage, invalidate, loadServiceMeta, TTL_MS };
+module.exports = { buildReport, serviceDetail, coverage, invalidate, loadServiceMeta, TTL_MS, CACHE_MAX, _cacheSize: () => _cache.size };

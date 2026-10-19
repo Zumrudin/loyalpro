@@ -12,8 +12,13 @@ function receiptUnitPrice(txn, unitEquals) {
   const cost = Number(txn.cost);
   if (!(amount > 0) || !Number.isFinite(cost) || cost < 0) return null;
   let per = cost / amount;
-  const eq = Number(unitEquals);
-  if (Number(txn.operation_unit_type) === 1 && eq > 0) per = per / eq;
+  if (Number(txn.operation_unit_type) === 1) {
+    // Приход в единицах продажи без коэффициента — цена флакона, а не мл/ед.
+    // списания: null, и unitPriceAsOf провалится к ручной цене/каталогу.
+    const eq = Number(unitEquals);
+    if (!(eq > 0)) return null;
+    per = per / eq;
+  }
   return round4(per);
 }
 

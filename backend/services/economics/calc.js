@@ -27,6 +27,10 @@ function buildRows(record, ctx) {
       id: Number(s.id), title: String(s.title || ''),
       price: n(has(s.cost_to_pay) ? s.cost_to_pay : s.cost),
       first_cost: n(has(s.first_cost) ? s.first_cost : s.cost),
+      // Цена после скидки, ДО бонусов: cost (YClients вычитает бонусы уже из него
+      // в cost_to_pay). Нет cost — price. Нужна базе оплаты при
+      // pay_base_includes_bonuses и скидке (first_cost − cost).
+      gross: n(has(s.cost) ? s.cost : (has(s.cost_to_pay) ? s.cost_to_pay : s.cost)),
       // Разрыв «после скидки» − «к оплате деньгами»: то, что YClients уже покрыл
       // лояльностью ВНУТРИ cost_to_pay. Нет cost или cost_to_pay — разрыва нет.
       netted: has(s.cost) && has(s.cost_to_pay) ? n(s.cost) - n(s.cost_to_pay) : 0,
@@ -54,10 +58,16 @@ function buildRows(record, ctx) {
   const bonusRevParts = splitByWeights(Math.max(0, bonusRedeemed - netted), prices);
 
   // Списания (§3.2): со своей услугой — на её строку; без service_id (или с service_id,
-  // которого в записи нет) — на запись, делятся между услугами по доле цены.
+  // которого в записи нет) — на запись, делятся между услугами по доле цены. Услуга,
+  // стоящая в записи несколько раз, получает ОДНУ корзину: её списания делятся между
+  // её строками по цене (иначе каждая строка получала бы весь факт).
   const cons = Array.isArray(record.consumables) ? record.consumables : [];
   const hasCons = cons.length > 0;
-  const own = new Map(services.map(s => [s.id, { fact: 0, yc: 0, noPrice: [] }]));
+  const own = new Map();
+  services.forEach((s, i) => {
+    if (!own.has(s.id)) own.set(s.id, { fact: 0, yc: 0, noPrice: [], idx: [] });
+    own.get(s.id).idx.push(i);
+  });
   const rec = { fact: 0, yc: 0, noPrice: [] };
   for (const t of cons) {
     const qty = Math.abs(n(t.amount));
@@ -67,6 +77,14 @@ function buildRows(record, ctx) {
     target.fact += qty * n(p.price);
     target.yc += Math.abs(n(t.cost));
     if (!(n(p.price) > 0) && qty > 0) target.noPrice.push(goodId);
+  }
+  const ownFact = services.map(() => 0);
+  const ownYc = services.map(() => 0);
+  for (const o of own.values()) {
+    const w = o.idx.map(i => prices[i]);
+    const f = o.idx.length === 1 ? [o.fact] : splitByWeights(o.fact, w);
+    const y = o.idx.length === 1 ? [o.yc] : splitByWeights(o.yc, w);
+    o.idx.forEach((i, k) => { ownFact[i] = f[k]; ownYc[i] = y[k]; });
   }
   const recFact = splitByWeights(rec.fact, prices);
   const recYc = splitByWeights(rec.yc, prices);
@@ -98,7 +116,7 @@ function buildRows(record, ctx) {
 
   return services.map((s, i) => {
     const o = own.get(s.id);
-    const materials_fact = o.fact + recFact[i];
+    const materials_fact = ownFact[i] + recFact[i];
     const card = techCardFor(s.id, staffId);
     const norm = card ? normCost(card, priceFn, date) : null;
     const materials_norm = norm ? norm.cost : null;
@@ -107,16 +125,18 @@ function buildRows(record, ctx) {
     const bonusInRevenue = bonusRevParts[i];
     const revenue = s.price - bonusInRevenue;
     const { categoryId, rule } = rules[i];
-    const dp = doctorPay({ price: s.price, revenue, materials_used }, rule ? { ...rule, fixed_per_visit: fixedShare[i] } : null, settings);
+    // price для doctorPay — база «до бонусов» (pay_base_includes_bonuses): cost, а не
+    // cost_to_pay, из которого YClients уже вычел бонусы (Profhilo 26000 → 23400).
+    const dp = doctorPay({ price: s.gross, revenue, materials_used }, rule ? { ...rule, fixed_per_visit: fixedShare[i] } : null, settings);
     const noPriceGoods = [...new Set([...o.noPrice, ...rec.noPrice, ...(hasCons ? [] : (norm ? norm.noPrice : []))])]
       .map(Number).sort((a, b) => a - b);
     return {
       record_id: record.record_id, visit_date: date, staff_yc_id: staffId, staff_name: record.staff_name || '',
       service_yc_id: s.id, service_title: s.title, category_yc_id: categoryId,
-      price: s.price, first_cost: s.first_cost, discount: Math.max(0, s.first_cost - s.price),
+      price: s.price, first_cost: s.first_cost, discount: Math.max(0, s.first_cost - s.gross),
       minutes: minutes[i], hours: minutes[i] / 60,
       bonus_redeemed: bonus, bonus_in_revenue: bonusInRevenue, revenue,
-      materials_fact, materials_yc_cost: o.yc + recYc[i], materials_norm, materials_used,
+      materials_fact, materials_yc_cost: ownYc[i] + recYc[i], materials_norm, materials_used,
       materials_estimated: !hasCons && !!norm, no_materials_data: !hasCons && !norm,
       has_consumables: hasCons, has_tech_card: !!card, no_price_goods: noPriceGoods,
       pay_rule_id: rule ? rule.id : null, pay_base: dp.base, doctor_pay: dp.pay, doctor_cost: dp.cost, no_pay_rule: dp.noRule,

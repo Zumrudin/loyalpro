@@ -15,7 +15,15 @@ const TXN_COLS = [
 
 /**
  * Апсерт строки goods_transactions. status 'delete' ставит deleted_at (строка
- * остаётся — форензика), create/update снимают deleted_at (сверка вернула живую).
+ * остаётся — форензика), create/update снимают его, только если событие НОВЕЕ
+ * удаления (сверка вернула живую строку после удаления).
+ * Защита от порядка: вебхук и ночная сверка приходят в произвольном порядке, и
+ * старый снимок не должен перетирать новый. Колонки перезаписываются, только если
+ * входящий last_change_date >= сохранённого (NULL с любой стороны — как раньше,
+ * перезапись). delete ставит deleted_at ВСЕГДА. Признака удаления в строке API
+ * /storages/transactions нет (проверено по raw на деве 19.10.2026: ключи
+ * amount…unit, ни deleted, ни status), поэтому сверка удалений не видит —
+ * только вебхук goods_operations_* status=delete.
  * @param {number} salonId
  * @param {object} row — результат goods-events.parseTransaction
  * @param {{status:'create'|'update'|'delete', source:'webhook'|'reconcile'|'backfill', deletedAt?:string}} opts
@@ -29,13 +37,21 @@ async function upsertGoodsTransaction(salonId, row, opts) {
   const placeholders = TXN_COLS.map((c, i) => `$${i + 3}${c === 'raw' ? '::jsonb' : ''}`).join(', ');
   const nSrc = TXN_COLS.length + 3;
   const nDel = TXN_COLS.length + 4;
-  const sets = TXN_COLS.map(c => `${c} = EXCLUDED.${c}`).join(', ');
+  const T = 'goods_transactions';
+  const fresh = `(EXCLUDED.last_change_date IS NULL OR ${T}.last_change_date IS NULL OR EXCLUDED.last_change_date >= ${T}.last_change_date)`;
+  const sets = [...TXN_COLS, 'source'].map(c => `${c} = CASE WHEN ${fresh} THEN EXCLUDED.${c} ELSE ${T}.${c} END`).join(',\n      ');
+  const delSet = status === 'delete'
+    ? `COALESCE($${nDel}::timestamptz, NOW())`
+    : `CASE WHEN ${T}.deleted_at IS NULL THEN NULL
+        WHEN EXCLUDED.last_change_date > GREATEST(${T}.deleted_at, ${T}.last_change_date) THEN NULL
+        ELSE ${T}.deleted_at END`;
   const sql = `
     INSERT INTO goods_transactions (salon_id, yclients_txn_id, ${colList}, source, deleted_at)
     VALUES ($1, $2, ${placeholders}, $${nSrc}, ${status === 'delete' ? `COALESCE($${nDel}::timestamptz, NOW())` : `$${nDel}::timestamptz`})
     ON CONFLICT (salon_id, yclients_txn_id) DO UPDATE SET
-      ${sets}, source = EXCLUDED.source, updated_at = NOW(),
-      deleted_at = ${status === 'delete' ? `COALESCE($${nDel}::timestamptz, NOW())` : 'NULL'}
+      ${sets},
+      updated_at = NOW(),
+      deleted_at = ${delSet}
   `;
   await db.query(sql, params);
   return { deleted: status === 'delete' };
@@ -48,7 +64,7 @@ async function refreshLastReceipt(salonId, goodId) {
   const last = await db.oneOrNone(
     `SELECT create_date, amount, cost, operation_unit_type FROM goods_transactions
      WHERE salon_id=$1 AND good_id=$2 AND type_id=3 AND deleted_at IS NULL AND amount > 0
-     ORDER BY create_date DESC, yclients_txn_id DESC LIMIT 1`, [salonId, goodId]);
+     ORDER BY create_date DESC NULLS LAST, yclients_txn_id DESC LIMIT 1`, [salonId, goodId]);
   const price = last ? receiptUnitPrice(last, cat && cat.unit_equals) : null;
   const at = last ? last.create_date : null;
   await db.query(
@@ -69,17 +85,27 @@ async function refreshAllLastReceipts(salonId) {
   return n;
 }
 
-/** Апсерт экономических колонок товара; дерево категорий (category_*) не трогает. */
+/**
+ * Апсерт экономических колонок товара. Таблица общая с «Домашним уходом»
+ * (services/yclients-goods-catalog.js ведёт category_id/category_title/title/
+ * article/last_seen_at/is_archived, routes/home-care.js показывает всё NOT
+ * is_archived), а /goods без category_id отдаёт и расходники. Поэтому:
+ * НОВАЯ строка, вставленная экономикой, — is_archived=TRUE (в выпадашку
+ * специалистов не попадает; синк home-care, встретив товар в своей категории,
+ * сам поставит is_archived=FALSE и категорию). На конфликте — только свои
+ * колонки; title обновляется лишь у строки без категории (её ведёт экономика),
+ * last_seen_at не трогается — по нему home-care архивирует пропавшие из категории.
+ */
 async function upsertCatalogGood(salonId, g) {
   await db.query(`
     INSERT INTO yclients_goods_catalog (salon_id, yclients_good_id, title, unit, service_unit, unit_equals,
-      actual_cost, unit_actual_cost, stock, last_seen_at, updated_at)
-    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, NOW(), NOW())
+      actual_cost, unit_actual_cost, stock, is_archived, last_seen_at, updated_at)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, TRUE, NOW(), NOW())
     ON CONFLICT (salon_id, yclients_good_id) DO UPDATE SET
-      title = CASE WHEN EXCLUDED.title <> '' THEN EXCLUDED.title ELSE yclients_goods_catalog.title END,
+      title = CASE WHEN yclients_goods_catalog.category_id IS NULL AND EXCLUDED.title <> '' THEN EXCLUDED.title ELSE yclients_goods_catalog.title END,
       unit = EXCLUDED.unit, service_unit = EXCLUDED.service_unit, unit_equals = EXCLUDED.unit_equals,
       actual_cost = EXCLUDED.actual_cost, unit_actual_cost = EXCLUDED.unit_actual_cost, stock = EXCLUDED.stock,
-      last_seen_at = NOW(), updated_at = NOW()
+      updated_at = NOW()
   `, [salonId, g.good_id, g.title || '', g.unit, g.service_unit, g.unit_equals, g.actual_cost, g.unit_actual_cost, JSON.stringify(g.stock || [])]);
 }
 
@@ -156,6 +182,9 @@ const DEFAULT_SETTINGS = Object.freeze({
 // — это ВНУТРЕННИЙ records.id (его ставит loyalty.linkCardTransactionsToRecords),
 // у части старых строк — yclients_record_id (так же сверяет дашборд, routes/api.js);
 // сравнение только с yclients_record_id не находило на деве ни одного списания.
+// «Отмена кэшбэка за визит #N» (loyalty.revertCashback) тоже type='redemption' с
+// record_id — это наш откат начисления, а не оплата визита бонусами; исключается
+// тем же признаком, что у дашборда (routes/api.js: title ILIKE '%отмена%').
 const RECORDS_SQL = `
   SELECT r.yclients_record_id AS record_id,
          to_char(r.visit_date, 'YYYY-MM-DD') AS visit_date,
@@ -168,6 +197,7 @@ const RECORDS_SQL = `
   LEFT JOIN LATERAL (
     SELECT SUM(ABS(t.amount)) AS bonus_redeemed FROM loyalty_card_transactions t
     WHERE t.salon_id = r.salon_id AND t.record_id IN (r.id, r.yclients_record_id) AND t.type = 'redemption'
+      AND COALESCE(t.title, '') NOT ILIKE '%отмена%'
   ) b ON TRUE
   WHERE r.salon_id = $1 AND r.visit_date BETWEEN $2::date AND $3::date
     AND r.raw_payload->>'attendance' = '1'

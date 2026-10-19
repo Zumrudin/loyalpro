@@ -85,3 +85,26 @@ test('бонусы: выручка = цена − bonus_in_revenue; уже вы�
   expect(byId[2]).toEqual(expect.objectContaining({ price: 900, bonus_redeemed: 100, bonus_in_revenue: 0, revenue: 900 }));
   expect(d.service.revenue).toBe(1800);
 });
+
+test('ревью: категория «инд.» услуги (нет в priced) берётся из management-каталога → категорийное правило оплаты матчится', async () => {
+  yc.ycGetServiceMeta.mockResolvedValue({ durationByService: new Map([['10', 3600]]), categoryByService: new Map([['10', 200]]) });
+  yc.ycGetServiceCatalog.mockResolvedValue({ priced: [] });
+  store.loadPeriod.mockImplementation(async () => {
+    const p = period();
+    p.payRules = [{ id: 7, staff_yc_id: null, service_yc_id: null, category_yc_id: 200, percent: 50, base: 'gross', fixed_per_visit: 0, valid_from: null, valid_to: null }];
+    return p;
+  });
+  const r = await report.buildReport(SALON, '2026-09-01', '2026-09-30');
+  expect(r.rows[0].category_yc_id).toBe(200);
+  expect(r.rows[0].pay_rule_id).toBe(7);
+  expect(r.rows[0].doctor_cost).toBe(500);
+});
+test('ревью: кэш отчёта ограничен (кап), протухшие вытесняются', async () => {
+  for (let i = 0; i < report.CACHE_MAX + 10; i++) await report.buildReport(SALON, '2026-09-01', `2026-09-${String(10 + (i % 20)).padStart(2, '0')}-${i}`);
+  expect(report._cacheSize()).toBeLessThanOrEqual(report.CACHE_MAX);
+  const now = Date.now();
+  const spy = jest.spyOn(Date, 'now').mockReturnValue(now + report.TTL_MS + 1);
+  await report.buildReport(SALON, '2026-01-01', '2026-01-31');
+  expect(report._cacheSize()).toBe(1);
+  spy.mockRestore();
+});

@@ -170,7 +170,7 @@ describe('норма и флаги покрытия', () => {
     expect(rows[0].hours).toBe(0.75);
     expect(C.buildRows({ ...RECORD, services: [] }, c)).toEqual([]);
   });
-  test('скидка = first_cost − cost_to_pay, справочно; без cost_to_pay берётся cost', () => {
+  test('скидка = first_cost − cost (нет cost → − cost_to_pay), справочно; без cost_to_pay цена = cost', () => {
     const rows = C.buildRows({ ...RECORD, services: [
       { id: 9536380, title: 'A', cost_to_pay: 20000, first_cost: 22500 },
       { id: 25013124, title: 'B', cost: 5000 },
@@ -316,5 +316,33 @@ describe('applyOverhead + aggregate', () => {
     expect(empty.visits).toBe(0);
     expect(empty.rate_minute_fact).toBe(0);
     expect(empty.contribution_pct).toBeNull();
+  });
+});
+
+describe('ревью: база оплаты, скидка, свои списания повторной услуги', () => {
+  const base = { ...RECORD, consumables: [], payments: [] };
+  test('pay_base_includes_bonuses → база ДО бонусов = cost (Profhilo: cost 26000, cost_to_pay 23400, бонусы 2600 → 26000)', () => {
+    const c = ctx(); c.settings.pay_base_includes_bonuses = true;
+    const [r] = C.buildRows({ ...base, services: [{ id: 9536380, title: 'Profhilo', cost: 26000, cost_to_pay: 23400, first_cost: 26000 }], bonus_redeemed: 2600 }, c);
+    expect(r.pay_base).toBe(26000);
+    expect(r.doctor_pay).toBe(7800);
+    c.settings.pay_base_includes_bonuses = false;
+    const [r2] = C.buildRows({ ...base, services: [{ id: 9536380, title: 'Profhilo', cost: 26000, cost_to_pay: 23400, first_cost: 26000 }], bonus_redeemed: 2600 }, c);
+    expect(r2.pay_base).toBe(23400);
+  });
+  test('скидка = first_cost − cost (бонусы, вычтенные в cost_to_pay, скидкой не считаются)', () => {
+    const [r] = C.buildRows({ ...base, services: [{ id: 9536380, title: 'Profhilo', cost: 26000, cost_to_pay: 23400, first_cost: 26000 }], bonus_redeemed: 2600 }, ctx());
+    expect(r.discount).toBe(0);
+    const [r2] = C.buildRows({ ...base, services: [{ id: 9536380, title: 'A', cost: 18000, cost_to_pay: 17000, first_cost: 20000 }], bonus_redeemed: 1000 }, ctx());
+    expect(r2.discount).toBe(2000);
+  });
+  test('одна услуга дважды в записи: её списания делятся между строками по цене, а не целиком в каждую', () => {
+    const rows = C.buildRows({ ...base,
+      services: [{ id: 9536380, title: 'A', cost_to_pay: 3000, first_cost: 3000 }, { id: 9536380, title: 'A', cost_to_pay: 1000, first_cost: 1000 }],
+      consumables: [{ good_id: 1, service_id: 9536380, amount: -1, cost: 5267 }] }, ctx());
+    expect(rows[0].materials_fact + rows[1].materials_fact).toBeCloseTo(5267, 2);
+    expect(rows[0].materials_fact).toBeCloseTo(3950.25, 2);
+    expect(rows[1].materials_fact).toBeCloseTo(1316.75, 2);
+    expect(rows[0].materials_yc_cost + rows[1].materials_yc_cost).toBeCloseTo(5267, 2);
   });
 });

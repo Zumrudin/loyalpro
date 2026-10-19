@@ -19,10 +19,11 @@ describe('receiptUnitPrice', () => {
 });
 
 describe('unitPriceAsOf', () => {
+  // В единице списания (2): цена за единицу не зависит от unit_equals каталога.
   const receipts = [
-    R('2026-02-01T10:00:00.000Z', 10, 1000),
-    R('2026-05-01T10:00:00.000Z', 10, 1200),
-    R('2026-09-01T10:00:00.000Z', 10, 1500),
+    R('2026-02-01T10:00:00.000Z', 10, 1000, 2),
+    R('2026-05-01T10:00:00.000Z', 10, 1200, 2),
+    R('2026-09-01T10:00:00.000Z', 10, 1500, 2),
   ];
   test('берётся последнее поступление с датой ≤ визита', () => {
     expect(unitPriceAsOf({ receipts, date: '2026-06-15' })).toEqual({ price: 120, source: 'receipt', at: '2026-05-01T10:00:00.000Z' });
@@ -41,7 +42,7 @@ describe('unitPriceAsOf', () => {
     expect(unitPriceAsOf({ receipts: rs, date: '2026-02-01', catalogRow: { unit_equals: 10 } }).price).toBe(10);
   });
   test('даты сравниваются по московскому дню (Date-объекты из pg)', () => {
-    const rs = [R(new Date('2026-05-01T21:30:00.000Z'), 1, 100)];
+    const rs = [R(new Date('2026-05-01T21:30:00.000Z'), 1, 100, 2)];
     expect(unitPriceAsOf({ receipts: rs, date: '2026-05-01' }).source).toBe('none');
     expect(unitPriceAsOf({ receipts: rs, date: '2026-05-02' }).price).toBe(100);
   });
@@ -51,4 +52,17 @@ test('mskDay', () => {
   expect(mskDay('2026-05-01T21:30:00.000Z')).toBe('2026-05-02');
   expect(mskDay('2026-05-01')).toBe('2026-05-01');
   expect(mskDay(null)).toBeNull();
+});
+
+describe('ревью: приход в единицах продажи без unit_equals', () => {
+  test('operation_unit_type 1 и unit_equals нет/0 → null (цена флакона ≠ цена мл)', () => {
+    expect(receiptUnitPrice(R('2026-03-21', 1, 26000, 1), null)).toBeNull();
+    expect(receiptUnitPrice(R('2026-03-21', 1, 26000, 1), 0)).toBeNull();
+    expect(receiptUnitPrice(R('2026-03-21', 1, 26000, 1), undefined)).toBeNull();
+  });
+  test('unitPriceAsOf проваливается к ручной цене / себестоимости каталога', () => {
+    const rs = [R('2026-03-21', 1, 26000, 1)];
+    expect(unitPriceAsOf({ receipts: rs, date: '2026-04-01', override: { unit_price: 2600 } })).toEqual({ price: 2600, source: 'override' });
+    expect(unitPriceAsOf({ receipts: rs, date: '2026-04-01', catalogRow: { unit_equals: null, unit_actual_cost: 2500 } })).toEqual({ price: 2500, source: 'catalog' });
+  });
 });
