@@ -82,3 +82,64 @@ function ecoPeriodPreset(preset, today) {
 }
 
 function ecoTodayMsk() { return new Date().toLocaleDateString('sv-SE', { timeZone: 'Europe/Moscow' }); }
+
+/** Следующее состояние сортировки по клику на заголовок. Новая колонка — desc (крупные сверху), «Услуга» — asc. */
+function ecoSortNext(state, key) {
+  if (!ECO_SERVICE_COLS.some(c => c.key === key)) return { sortKey: state.sortKey, sortDir: state.sortDir };
+  if (state.sortKey === key) return { sortKey: key, sortDir: state.sortDir === 'desc' ? 'asc' : 'desc' };
+  return { sortKey: key, sortDir: key === 'label' ? 'asc' : 'desc' };
+}
+
+/** Плитки сводки периода: {kpi, title, sub} — строки уже отформатированы, без HTML. */
+function ecoSummaryTiles(s) {
+  const c = s.coverage || {};
+  const bonus = Number(s.bonus_redeemed) > 0 ? ` · бонусов списано ${ecoMoney(s.bonus_redeemed)}` : '';
+  return [
+    { kpi: ecoMoney(s.revenue), title: 'Выручка', sub: `${ecoNum(s.visits)} визитов · ${ecoNum(s.hours, 0)} ч${bonus}` },
+    { kpi: ecoMoney(s.contribution), title: 'Маржинальная прибыль', sub: ecoPct(s.contribution_pct) },
+    { kpi: ecoMoney(s.operating_profit), title: 'Операционная прибыль', sub: `${ecoPct(s.operating_pct)} · УСН ≈ ${ecoMoney(s.usn_estimate)}` },
+    { kpi: `${ecoNum(s.rate_minute_fact, 1)} ₽`, title: 'Ставка минуты (факт)',
+      sub: Number(s.rate_minute_capacity) > 0 ? `при полной загрузке ${ecoNum(s.rate_minute_capacity, 1)} ₽ · простой ${ecoMoney(s.idle_cost)}` : 'график сотрудников не загружен' },
+    { kpi: ecoPct(c.consumables_share), title: 'Визитов со списаниями', sub: `${ecoNum(c.services_without_tech_card)} из ${ecoNum(c.services_total)} услуг без техкарты` },
+    { kpi: ecoNum((c.goods_without_price || []).length), title: 'Товаров без цены', sub: `${ecoNum(c.staff_without_pay_rule)} сотрудников без правила оплаты` },
+  ];
+}
+
+/**
+ * Статьи детализации услуги (сверху вниз). price — сумма к оплате после скидок (cost_to_pay);
+ * часть списанных бонусов YClients уже вычел в ней, поэтому из выручки вычитается только
+ * bonus_in_revenue, а bonus_redeemed (всё списанное) — справочно в примечании.
+ * {label, value, note, total} — строки без HTML.
+ */
+function ecoDetailLines(s, settings) {
+  const st = settings || {};
+  const cov = s.coverage || {};
+  const redeemed = Number(s.bonus_redeemed) || 0, inRev = Number(s.bonus_in_revenue) || 0;
+  const bonusNote = redeemed > 0
+    ? `списано ${ecoMoney(redeemed)}${redeemed - inRev > 0 ? `, из них ${ecoMoney(redeemed - inRev)} уже учтено YClients в сумме к оплате` : ''}`
+    : 'бонусы не списывались';
+  const L = (label, value, note, total) => ({ label, value, note: note || '', total: !!total });
+  return [
+    L('Стоимость услуг (к оплате, после скидок)', ecoMoney(s.price), `скидки ${ecoMoney(s.discount)} — справочно`),
+    L('− бонусы, не учтённые в сумме к оплате', ecoMoney(inRev), bonusNote),
+    L('= Выручка', ecoMoney(s.revenue), '', true),
+    L('− Материалы', ecoMoney(s.materials_used), `факт ${ecoMoney(s.materials_fact)} · норма ${ecoMoney(s.materials_norm)} · строк по норме: ${ecoNum(s.materials_estimated_rows)}`),
+    L('− Оплата врача', ecoMoney(s.doctor_cost), `на руки ${ecoMoney(s.doctor_pay)} × множитель ФОТ ${ecoNum(st.payroll_multiplier, 3)}`),
+    L('− Эквайринг', ecoMoney(s.acquiring_cost), `строк по средней доле: ${ecoNum(cov.acquiring_estimated)}`),
+    L('= Маржинальная прибыль', ecoMoney(s.contribution), ecoPct(s.contribution_pct), true),
+    L('− Постоянные расходы', ecoMoney(s.overhead), `драйвер: ${st.allocation_driver === 'visits' ? 'поровну на визит' : 'по минутам'}`),
+    L('− Аппараты', ecoMoney(s.equipment_cost), ''),
+    L('= Операционная прибыль', ecoMoney(s.operating_profit), `${ecoPct(s.operating_pct)} · УСН ≈ ${ecoMoney(s.usn_estimate)} · марж. прибыль ${ecoMoney(s.profit_per_hour)}/час`, true),
+  ];
+}
+
+/** Флаги визита в детализации — короткие подписи. */
+function ecoVisitFlags(v) {
+  const out = [];
+  if (v.materials_estimated) out.push('оценка материалов');
+  if (v.no_materials_data) out.push('нет данных о материалах');
+  if (v.no_price_goods && v.no_price_goods.length) out.push(`без цены: ${v.no_price_goods.length}`);
+  if (v.no_pay_rule) out.push('нет правила оплаты');
+  if (v.acquiring_estimated) out.push('нет оплат');
+  return out;
+}

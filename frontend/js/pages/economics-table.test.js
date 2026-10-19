@@ -79,3 +79,60 @@ test('все <script> index.html в одном vm-контексте без ко
     catch (e) { if (e instanceof SyntaxError) throw new Error(`${s}: ${e.message}`); /* рантайм-ошибки заглушек DOM не интересуют */ }
   }
 });
+
+test('ecoSortNext: повторный клик меняет направление, новая колонка — desc, «Услуга» — asc', () => {
+  assert.deepStrictEqual(plain(ctx.ecoSortNext({ sortKey: 'revenue', sortDir: 'desc' }, 'revenue')), { sortKey: 'revenue', sortDir: 'asc' });
+  assert.deepStrictEqual(plain(ctx.ecoSortNext({ sortKey: 'revenue', sortDir: 'asc' }, 'revenue')), { sortKey: 'revenue', sortDir: 'desc' });
+  assert.deepStrictEqual(plain(ctx.ecoSortNext({ sortKey: 'revenue', sortDir: 'asc' }, 'contribution_pct')), { sortKey: 'contribution_pct', sortDir: 'desc' });
+  assert.deepStrictEqual(plain(ctx.ecoSortNext({ sortKey: 'revenue', sortDir: 'desc' }, 'label')), { sortKey: 'label', sortDir: 'asc' });
+  // неизвестная колонка не ломает состояние
+  assert.deepStrictEqual(plain(ctx.ecoSortNext({ sortKey: 'revenue', sortDir: 'desc' }, 'evil')), { sortKey: 'revenue', sortDir: 'desc' });
+});
+
+test('ecoSummaryTiles: шесть плиток, бонусы показаны, нет графика — подпись', () => {
+  const tiles = plain(ctx.ecoSummaryTiles({
+    revenue: 100000, visits: 40, hours: 52.4, bonus_redeemed: 3000, bonus_in_revenue: 1000,
+    contribution: 60000, contribution_pct: 0.6, operating_profit: 20000, operating_pct: 0.2, usn_estimate: 6000,
+    rate_minute_fact: 12.34, rate_minute_capacity: 0, idle_cost: null,
+    coverage: { consumables_share: 0.5, services_without_tech_card: 3, services_total: 10, goods_without_price: [1, 2], staff_without_pay_rule: 1 },
+  }));
+  assert.strictEqual(tiles.length, 6);
+  assert.strictEqual(tiles[0].kpi, '100 000 ₽');
+  assert.match(tiles[0].sub, /40 визитов/);
+  assert.match(tiles[0].sub, /бонусов списано 3 000 ₽/);
+  assert.match(tiles[3].sub, /график сотрудников не загружен/);
+  assert.strictEqual(tiles[4].kpi, '50,0%');
+  assert.strictEqual(tiles[5].kpi, '2');
+  const withCap = plain(ctx.ecoSummaryTiles({ rate_minute_fact: 10, rate_minute_capacity: 5, idle_cost: 1500, coverage: {} }));
+  assert.match(withCap[3].sub, /простой 1 500 ₽/);
+});
+
+test('ecoDetailLines: выручка = цена − бонусы, не учтённые YClients; списанное показано отдельно', () => {
+  const lines = plain(ctx.ecoDetailLines({
+    price: 23400, discount: 500, bonus_redeemed: 2600, bonus_in_revenue: 0, revenue: 23400,
+    materials_used: 4000, materials_fact: 4000, materials_norm: 3500, materials_estimated_rows: 0,
+    doctor_pay: 5000, doctor_cost: 6510, acquiring_cost: 400, coverage: { acquiring_estimated: 0 },
+    contribution: 12490, contribution_pct: 0.5337, overhead: 3000, equipment_cost: 500,
+    operating_profit: 8990, operating_pct: 0.384, usn_estimate: 1404, profit_per_hour: 6000,
+  }, { payroll_multiplier: 1.302, allocation_driver: 'minutes' }));
+  const byLabel = Object.fromEntries(lines.map(l => [l.label, l]));
+  const bonus = lines[1];
+  assert.match(bonus.label, /бонус/i);
+  assert.strictEqual(bonus.value, '0 ₽', 'вычитается bonus_in_revenue, а не bonus_redeemed');
+  assert.match(bonus.note, /списано 2 600 ₽/);
+  assert.match(bonus.note, /2 600 ₽ уже учтено YClients/);
+  assert.strictEqual(byLabel['= Выручка'].value, '23 400 ₽');
+  assert.ok(byLabel['= Выручка'].total);
+  assert.match(lines[0].note, /скидки 500 ₽/);
+  assert.match(byLabel['− Постоянные расходы'].note, /по минутам/);
+  assert.strictEqual(lines.filter(l => l.total).length, 3);
+  const visitsDriver = plain(ctx.ecoDetailLines({ coverage: {} }, { allocation_driver: 'visits' }));
+  assert.match(visitsDriver.find(l => l.label === '− Постоянные расходы').note, /на визит/);
+});
+
+test('ecoVisitFlags: флаги визита в детализации', () => {
+  assert.deepStrictEqual(plain(ctx.ecoVisitFlags({ materials_estimated: true, no_materials_data: false, no_price_goods: [1, 2], no_pay_rule: true, acquiring_estimated: true })),
+    ['оценка материалов', 'без цены: 2', 'нет правила оплаты', 'нет оплат']);
+  assert.deepStrictEqual(plain(ctx.ecoVisitFlags({ no_materials_data: true })), ['нет данных о материалах']);
+  assert.deepStrictEqual(plain(ctx.ecoVisitFlags({})), []);
+});
