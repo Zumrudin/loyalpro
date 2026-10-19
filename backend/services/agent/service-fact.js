@@ -50,6 +50,12 @@ const ALIASES = {
   'био': 'биоревит', 'мезо': 'мезотерап',
   'полимолочк': 'полимолочн', 'коллаген': 'коллаген',
   'плазм': 'плазм', 'чистк': 'чист', 'пилинг': 'пилинг',
+  // Латинские названия аппаратов и брендов: в заголовках статей они латиницей,
+  // пациент пишет кириллицей. Ключ — начало токена («люмек» ловит и «люмекка»,
+  // и частое «люмека»).
+  'морфеус': 'morpheus', 'люмек': 'lumecca', 'волнью': 'volnewmer', 'пладуо': 'pladuo',
+  'профейш': 'profacial', 'профешл': 'profacial', 'хелео': 'heleo', 'тесла': 'tesla',
+  'бьютилайз': 'beautylizer', 'стилаж': 'stylage', 'белотеро': 'belotero',
 };
 
 // Слова самого вопроса (цена/выбор) и служебные — стемами в сверке заголовка
@@ -81,10 +87,12 @@ function tokens(text) {
   return norm(text).match(/[\p{L}]{3,}/gu) || [];
 }
 
-function stems(userText) {
+// extraStops — стоп-префиксы вызывающего (medical-kb добавляет свои: «терапия»
+// в вопросе иначе притянула бы все «…терапии» из заголовков).
+function stems(userText, extraStops = []) {
   const out = new Set();
   for (const t of tokens(userText)) {
-    if (STOP_PREFIXES.some(p => t.startsWith(p))) continue;
+    if (STOP_PREFIXES.some(p => t.startsWith(p)) || extraStops.some(p => t.startsWith(p))) continue;
     out.add(t.slice(0, Math.min(t.length, STEM_LEN + 1)));
     for (const [alias, stem] of Object.entries(ALIASES)) {
       if (t.startsWith(alias)) out.add(stem);
@@ -242,6 +250,6 @@ function withTimeout(promise, ms, label) {
 
 module.exports = {
   wantsServiceFact, kbQuery, pickServiceFact, hasTime, MAX_FACT_CHARS, ALIASES,
-  META_RE, MONEY_RE, stripEmphasis,
+  META_RE, MONEY_RE, stripEmphasis, stems, norm,
   SERVICE_FACT_TIMEOUT_MS, withTimeout,
 };

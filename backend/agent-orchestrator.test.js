@@ -76,6 +76,9 @@ function makeDeps(overrides = {}) {
     // Индекс прайс-листов ходит в БД и в YClients. Стаб «прайсов нет» —
     // дефолт для всех сценариев, которые про них ничего не утверждают.
     priceListData: { loadPriceIndex: jest.fn(async () => null), ...overrides.priceListData },
+    // Заголовки статей КБ для медицинского предвызова ходят в БД — стаб
+    // «статей нет»: процедура не определится, блока не будет.
+    rag: { listArticleTitles: jest.fn(async () => []), ...overrides.rag },
   };
 }
 
@@ -3791,5 +3794,247 @@ describe('предвызов КБ: справка об услуге', () => {
     deps.toolEvents = stub.mod;
     await orchestrator.runDialog(1, '79001112233', { deps });
     expect(stub.buffers[0].push.mock.calls.map(c => c[0])).toContain('search_knowledge_base');
+  });
+});
+
+describe('опасный признак после процедуры — перевод кодом, без модели', () => {
+  const rfDeps = (text, extra = {}) => makeDeps({
+    history: { loadTranscript: jest.fn(async () => ({ messages: [{ role: 'user', content: text }], watermark: 700 })) },
+    ...extra,
+  });
+
+  test('«побелела кожа» → escalate, готовый текст, провайдер и журнал не трогаются', async () => {
+    const deps = rfDeps('После филлера побелела кожа на губе');
+    const res = await orchestrator.runDialog(1, '79001112233', { deps, now: '12:00' });
+    expect(deps.provider.createMessage).not.toHaveBeenCalled();
+    expect(deps.registry.handlers.escalate_to_operator).toHaveBeenCalledWith(
+      1, { reason: 'опасный признак после процедуры (skin_blanching)' }, expect.any(Object));
+    expect(res).toMatchObject({ escalated: true, sideEffect: true });
+    expect(res.replies).toEqual([require('./services/agent/medical-kb').buildRedFlagReply({ adminOff: false })]);
+    expect(deps.state.setWatermark).toHaveBeenCalledWith(1, '79001112233', 700);
+    expect(deps.toolEvents.createBuffer).not.toHaveBeenCalled();
+  });
+
+  test('ночью — вариант с 103/112', async () => {
+    const deps = rfDeps('задыхаюсь после укола');
+    const res = await orchestrator.runDialog(1, 'k', { deps, now: '23:30' });
+    expect(res.replies[0]).toMatch(/103 или 112/);
+  });
+
+  test('перевод не записался → ход к модели, ватермарк ставит штатный путь', async () => {
+    const deps = rfDeps('После филлера побелела кожа на губе');
+    deps.registry.handlers.escalate_to_operator = jest.fn(async () => { throw new Error('db down'); });
+    deps.provider.createMessage.mockResolvedValue(textResp('Ответ'));
+    const res = await orchestrator.runDialog(1, 'k', { deps });
+    expect(deps.provider.createMessage).toHaveBeenCalled();
+    expect(res.replies).toEqual(['Ответ']);
+  });
+
+  test('escalated:false → тоже к модели', async () => {
+    const deps = rfDeps('задыхаюсь', { handlers: { escalate_to_operator: jest.fn(async () => ({ escalated: false })) } });
+    deps.provider.createMessage.mockResolvedValue(textResp('Ответ'));
+    await orchestrator.runDialog(1, 'k', { deps });
+    expect(deps.provider.createMessage).toHaveBeenCalled();
+  });
+
+  test('AGENT_MEDICAL_RED_FLAGS=false → к модели, без эскалации кодом', async () => {
+    const deps = rfDeps('задыхаюсь');
+    deps.config = { ...require('./config'), AGENT_MEDICAL_RED_FLAGS: false };
+    deps.provider.createMessage.mockResolvedValue(textResp('Ответ'));
+    await orchestrator.runDialog(1, 'k', { deps });
+    expect(deps.registry.handlers.escalate_to_operator).not.toHaveBeenCalled();
+    expect(deps.provider.createMessage).toHaveBeenCalled();
+  });
+
+  test('обычная жалоба без опасного признака → к модели', async () => {
+    const deps = rfDeps('После Lumecca покраснение 2 дня, это нормально?');
+    deps.provider.createMessage.mockResolvedValue(textResp('Ответ'));
+    await orchestrator.runDialog(1, 'k', { deps });
+    expect(deps.registry.handlers.escalate_to_operator).not.toHaveBeenCalled();
+    expect(deps.provider.createMessage).toHaveBeenCalled();
+  });
+});
+
+describe('медицинский вопрос — база знаний предвызовом кода', () => {
+  // Название блока упоминается и в правилах «МЕДИЦИНСКИЕ ГРАНИЦЫ» — сам блок
+  // узнаём по заголовку с «(найдены», как в agent-system-prompt.test.js.
+  const HEAD = 'СВЕДЕНИЯ ИЗ БАЗЫ ЗНАНИЙ ПО ВОПРОСУ ПАЦИЕНТА (найдены';
+  const { medicalSearchResult, PROD_TITLES } = require('./services/agent/__fixtures__/kb-medical-chunks');
+  const Q1013 = 'Есть ли вообще смысл делать био, если после второй процедуры прошло больше месяца?';
+
+  function medDeps(text, kbResult, { te, titles = PROD_TITLES } = {}) {
+    const kbHandler = jest.fn(async () => kbResult);
+    const deps = makeDeps({
+      history: { loadTranscript: jest.fn(async () => ({ messages: [{ role: 'user', content: text }], watermark: 900 })) },
+      handlers: { search_knowledge_base: kbHandler },
+      ...(te ? { toolEvents: te } : {}),
+    });
+    deps.rag = { listArticleTitles: jest.fn(async () => titles) };
+    deps.provider.createMessage.mockResolvedValue(textResp('Ответ'));
+    return { deps, kbHandler };
+  }
+  const systemOf = (deps, i = 0) => deps.provider.createMessage.mock.calls[i][0].system;
+
+  test('вопрос 13.10 → КБ вызвана кодом, в промпте статья #16 без чужой статьи', async () => {
+    const { deps, kbHandler } = medDeps(Q1013, medicalSearchResult(['bio0', 'laser', 'bio1']));
+    await orchestrator.runDialog(1, '79001112233', { deps });
+    expect(deps.rag.listArticleTitles).toHaveBeenCalledWith(1);
+    expect(kbHandler).toHaveBeenCalledWith(1, { query: Q1013 }, expect.any(Object));
+    const block = systemOf(deps).slice(systemOf(deps).indexOf(HEAD));
+    expect(block).toContain('статья «Биоревитализация и Мезотерапия»');
+    expect(block).toContain('курс из 3–5 процедур с интервалом в 2–4 недели');
+    expect(block).not.toContain('Pacer');
+    expect(block).not.toMatch(/₽/);
+  });
+
+  test('процедура в предыдущем сообщении — запрос «то + последнее»', async () => {
+    const { deps, kbHandler } = medDeps('', medicalSearchResult(['bio0']));
+    deps.history.loadTranscript = jest.fn(async () => ({ watermark: 900, messages: [
+      { role: 'user', content: 'Хочу на биоревитализацию' },
+      { role: 'assistant', content: 'Подскажу!' },
+      { role: 'user', content: 'А при диабете можно?' },
+    ] }));
+    await orchestrator.runDialog(1, 'k', { deps });
+    expect(kbHandler).toHaveBeenCalledWith(1, { query: 'Хочу на биоревитализацию А при диабете можно?' }, expect.any(Object));
+    expect(systemOf(deps)).toContain(HEAD);
+  });
+
+  test('найдено не о той процедуре → блока нет', async () => {
+    const { deps } = medDeps(Q1013, medicalSearchResult(['laser']));
+    await orchestrator.runDialog(1, 'k', { deps });
+    expect(systemOf(deps)).not.toContain(HEAD);
+  });
+
+  test('процедура не определена → КБ не вызывается', async () => {
+    const { deps, kbHandler } = medDeps('у меня бугорок', medicalSearchResult(['lips']));
+    await orchestrator.runDialog(1, 'k', { deps });
+    expect(kbHandler).not.toHaveBeenCalled();
+  });
+
+  test('не медицинский вопрос → ни заголовков, ни КБ', async () => {
+    const { deps, kbHandler } = medDeps('Запишите на пятницу', medicalSearchResult(['bio0']));
+    await orchestrator.runDialog(1, 'k', { deps });
+    expect(deps.rag.listArticleTitles).not.toHaveBeenCalled();
+    expect(kbHandler).not.toHaveBeenCalled();
+  });
+
+  test.each([
+    ['заголовки упали', (d) => { d.rag.listArticleTitles = jest.fn(async () => { throw new Error('db down'); }); }],
+    ['КБ упала', (d) => { d.registry.handlers.search_knowledge_base = jest.fn(async () => { throw new Error('rag down'); }); }],
+    ['КБ зависла', (d) => { d.registry.handlers.search_knowledge_base = jest.fn(() => new Promise(() => {})); d.serviceFactTimeoutMs = 20; }],
+    ['заголовки зависли', (d) => { d.rag.listArticleTitles = jest.fn(() => new Promise(() => {})); d.serviceFactTimeoutMs = 20; }],
+    ['ответ без fragments', (d) => { d.registry.handlers.search_knowledge_base = jest.fn(async () => ({ found: true, context: 'Биоревитализация и Мезотерапия\nтекст', sources: [] })); }],
+  ])('%s → ход штатный, без блока', async (_label, breakIt) => {
+    const { deps } = medDeps(Q1013, medicalSearchResult(['bio0']));
+    breakIt(deps);
+    const res = await orchestrator.runDialog(1, 'k', { deps });
+    expect(res.replies).toEqual(['Ответ']);
+    expect(systemOf(deps)).not.toContain(HEAD);
+  });
+
+  test('журнал попытки получает событие search_knowledge_base', async () => {
+    const te = makeToolEventsStub();
+    const kb = medicalSearchResult(['bio0']);
+    const { deps } = medDeps(Q1013, kb, { te });
+    await orchestrator.runDialog(1, 'k', { deps });
+    expect(te.buffers[0].push).toHaveBeenCalledWith('search_knowledge_base', { query: Q1013 }, kb, false);
+  });
+
+  test('модель повторила тот же запрос → второго похода в КБ нет', async () => {
+    const { deps, kbHandler } = medDeps(Q1013, medicalSearchResult(['bio0']));
+    deps.provider.createMessage.mockReset();
+    deps.provider.createMessage
+      .mockResolvedValueOnce(toolResp('search_knowledge_base', { query: Q1013 }))
+      .mockResolvedValueOnce(textResp('Ответ'));
+    await orchestrator.runDialog(1, 'k', { deps });
+    expect(kbHandler).toHaveBeenCalledTimes(1);
+  });
+
+  test('вопрос и о цене, и медицинский → один поиск на справку и сведения', async () => {
+    const text = 'Сколько стоит био при беременности?';
+    const { deps, kbHandler } = medDeps(text, medicalSearchResult(['bio0', 'bio1']));
+    await orchestrator.runDialog(1, 'k', { deps });
+    expect(kbHandler).toHaveBeenCalledTimes(1);
+    expect(systemOf(deps)).toContain(HEAD);
+  });
+
+  test('вопрос и о цене, и медицинский, КБ зависла → второго поиска нет, ход без блока', async () => {
+    const text = 'Сколько стоит био при беременности?';
+    const { deps } = medDeps(text, null);
+    const hung = jest.fn(() => new Promise(() => {}));
+    deps.registry.handlers.search_knowledge_base = hung;
+    deps.serviceFactTimeoutMs = 20;
+    const res = await orchestrator.runDialog(1, 'k', { deps });
+    expect(hung).toHaveBeenCalledTimes(1);
+    expect(res.replies).toEqual(['Ответ']);
+    expect(systemOf(deps)).not.toContain(HEAD);
+  });
+
+  test('перегенерация с тем же вопросом → КБ один раз, блок на обеих попытках', async () => {
+    const { deps, kbHandler } = medDeps(Q1013, medicalSearchResult(['bio0']));
+    let checks = 0;
+    deps.history.hasIncomingAfter = jest.fn(async () => (++checks === 1));
+    deps.provider.createMessage.mockReset();
+    deps.provider.createMessage.mockResolvedValueOnce(textResp('Первый')).mockResolvedValueOnce(textResp('Второй'));
+    await orchestrator.runDialog(1, 'k', { deps });
+    expect(kbHandler).toHaveBeenCalledTimes(1);
+    expect(systemOf(deps, 1)).toContain(HEAD);
+  });
+
+  test('перегенерация с ДРУГИМ вопросом → блок пересобран по новому запросу', async () => {
+    const Q2 = 'А лазерная эпиляция при ГВ можно?';
+    const bio = medicalSearchResult(['bio0']);
+    const laser = medicalSearchResult(['laser']);
+    const { deps, kbHandler } = medDeps('Кормлю грудью, можно мне био?', bio);
+    kbHandler.mockImplementation(async (_s, input) => (/лазер/i.test(input.query) ? laser : bio));
+    let loads = 0;
+    deps.history.loadTranscript = jest.fn(async () => ({ watermark: 900, messages: [
+      { role: 'user', content: ++loads === 1 ? 'Кормлю грудью, можно мне био?' : Q2 },
+    ] }));
+    let checks = 0;
+    deps.history.hasIncomingAfter = jest.fn(async () => (++checks === 1));
+    deps.provider.createMessage.mockReset();
+    deps.provider.createMessage.mockResolvedValueOnce(textResp('Первый')).mockResolvedValueOnce(textResp('Второй'));
+    await orchestrator.runDialog(1, 'k', { deps });
+    expect(kbHandler).toHaveBeenCalledTimes(2);
+    expect(kbHandler.mock.calls[1][1].query).toBe(Q2);
+    const first = systemOf(deps, 0).slice(systemOf(deps, 0).indexOf(HEAD));
+    const second = systemOf(deps, 1).slice(systemOf(deps, 1).indexOf(HEAD));
+    expect(first).toContain('Биоревитализация и Мезотерапия');
+    expect(second).toContain('Лазерная эпиляция');
+    expect(second).not.toContain('курс из 3–5 процедур');
+  });
+
+  test('адрес из статьи сведений — законный источник address-guard', async () => {
+    const kb = medicalSearchResult(['bio0']);
+    kb.context += '\n\nБиоревитализация и Мезотерапия\nАдрес: ул. Генерала Белова, 28 к. 3.';
+    kb.fragments.push({ article_id: 16, start: kb.context.lastIndexOf('Биоревитализация'), end: kb.context.length });
+    const { deps } = medDeps(Q1013, kb);
+    deps.provider.createMessage.mockResolvedValue(textResp('Курс 3–5 процедур. Наш адрес: ул. Генерала Белова, 28 к. 3.'));
+    const res = await orchestrator.runDialog(1, 'k', { deps });
+    expect(res.replies.join(' ')).toContain('Генерала Белова, 28');
+  });
+
+  test('AGENT_MEDICAL_KB_PREFETCH=false → предвызова нет', async () => {
+    const { deps, kbHandler } = medDeps(Q1013, medicalSearchResult(['bio0']));
+    deps.config = { ...require('./config'), AGENT_MEDICAL_KB_PREFETCH: false };
+    await orchestrator.runDialog(1, 'k', { deps });
+    expect(kbHandler).not.toHaveBeenCalled();
+  });
+
+  test('v2 → предвызова нет', async () => {
+    const { deps, kbHandler } = medDeps(Q1013, medicalSearchResult(['bio0']));
+    deps.config = { ...require('./config'), AGENT_PROMPT_VERSION: 'v2', AGENT_CATALOG_IN_PROMPT: false };
+    await orchestrator.runDialog(1, 'k', { deps });
+    expect(deps.rag.listArticleTitles).not.toHaveBeenCalled();
+    expect(kbHandler).not.toHaveBeenCalled();
+  });
+
+  test('ответ мимо сведений → medical_kb_unused в логе reply-guard', async () => {
+    const { deps } = medDeps(Q1013, medicalSearchResult(['bio0']));
+    deps.provider.createMessage.mockResolvedValue(textResp('Это оценит доктор на приёме.'));
+    mockLogger.warn.mockClear();
+    await orchestrator.runDialog(1, 'k', { deps });
+    expect(mockLogger.warn.mock.calls.some(c => /medical_kb_unused/.test(c[0]))).toBe(true);
   });
 });

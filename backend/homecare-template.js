@@ -174,7 +174,14 @@ function buildHomeCareHtml(prescription, config = {}) {
     ? `Курс: <b>${escHtml(periodStartTxt)}</b> → <b>${escHtml(periodEndTxt)}</b>`
     : '';
 
-  // Водяной знак
+  // Водяной знак — ОДИН на документ, вставляется в хвост body ПОСЛЕ всех страниц,
+  // а не в каждую .page. ЗАЧЕМ: он position:fixed, и в экранном превью копии со
+  // всех страниц ложились в одну точку вьюпорта, а непрозрачный фон каждой
+  // следующей .page (position:relative) прятал копии предыдущих — на стыке страниц
+  // знак выше стыка был темнее (две копии по 0.5 = 0.75), ниже светлее (0.5);
+  // при opacity:1 это было невидимо. В печати fixed-элемент и так повторяется на
+  // каждой странице; после страниц он рисуется поверх их фона (тот же слой z-auto,
+  // порядок по дереву), контент выше за счёт .content { z-index:1 }.
   const wmHtml = C.wmImageUrl
     ? `<img src="${C.wmImageUrl}" class="watermark" alt="">`
     : `<div class="watermark">${buildLotusSvg(C.accentColor)}</div>`;
@@ -224,7 +231,6 @@ function buildHomeCareHtml(prescription, config = {}) {
   function buildPage(docTitle, bodyHtml) {
     return `
   <div class="page">
-    ${wmHtml}
     <div class="content">
       ${buildPageHeader(docTitle)}
       ${bodyHtml}
@@ -370,7 +376,12 @@ html, body {
   z-index: 0;
   opacity: 1;
 }
-.watermark img { width:100%; height:100%; object-fit:contain; opacity:0.10; }
+/* Загруженный фоновый логотип рендерится как <img class="watermark"> (см. wmHtml),
+   поэтому правило-потомок .watermark img до него не доставало: картинка шла
+   с opacity:1, 440×440 и без object-fit. Селектор img.watermark — по самому тегу.
+   Размер +40 % (440→616) и непрозрачность −50 % — просьба салона 18.10.2026.
+   SVG-лотос (fallback без картинки) живёт в <div class="watermark"> и не меняется. */
+img.watermark { width:616px; height:616px; object-fit:contain; opacity:0.5; }
 
 /* ─── CONTENT ─── */
 .content { position: relative; z-index: 1; }
@@ -644,6 +655,7 @@ html, body {
 <body>
 
 ${pagesHtml}
+${wmHtml}
 
 <div class="no-print">
   <button class="btn-print-go" onclick="window.print()">🖨 Печать / PDF</button>

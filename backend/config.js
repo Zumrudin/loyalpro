@@ -167,6 +167,14 @@ module.exports = {
   // Предвызов КБ на вопросе о цене / нерешительности (service-fact.js):
   // справка об услуге в хвост промпта и в напоминание о себе. 'false' гасит.
   AGENT_SERVICE_FACT_PREFETCH: process.env.AGENT_SERVICE_FACT_PREFETCH !== 'false',
+  // Медицинский вопрос — статью КБ ищет код до ответа модели (medical-kb.js),
+  // блок «СВЕДЕНИЯ ИЗ БАЗЫ ЗНАНИЙ ПО ВОПРОСУ ПАЦИЕНТА» в хвосте промпта.
+  // 'false' + рестарт гасит; правила промпта флагом НЕ откатываются — без
+  // предвызова правило «СНАЧАЛА БАЗА» велит модели искать в базе самой.
+  AGENT_MEDICAL_KB_PREFETCH: process.env.AGENT_MEDICAL_KB_PREFETCH !== 'false',
+  // Опасный признак после процедуры (кожа побелела, дыхание, зрение, жар…) —
+  // перевод на администратора кодом, без базы и без модели. 'false' гасит.
+  AGENT_MEDICAL_RED_FLAGS: process.env.AGENT_MEDICAL_RED_FLAGS !== 'false',
   // «Цена → факт → шаг» кодом (price-followthrough.js): к голой цене
   // оркестратор дописывает предложение из справки КБ и вопрос о записи.
   // Промпт-правило пробник провалил 3/3 (07.10.2026). 'false' гасит.
@@ -194,6 +202,9 @@ module.exports = {
   // Вердикты ИИ по перепискам: DIALOG_VERDICTS=false гасит РОВНО плановые прогоны
   // (крон 09:45 и 21:30 мск), кнопка «Проанализировать» работает всегда.
   DIALOG_VERDICTS: process.env.DIALOG_VERDICTS !== 'false',
+  // Экономика процедур: ночной синк YClients (каталог, техкарты, сверка транзакций).
+  // 'false' гасит ТОЛЬКО крон; вебхуки и ручной POST /api/economics/sync работают.
+  ECONOMICS_SYNC: process.env.ECONOMICS_SYNC !== 'false',
   // Провайдер базы знаний: 'aitunnel' | 'gemini' (старый релей/прямой вызов, откат).
   KB_PROVIDER:          process.env.KB_PROVIDER          || 'aitunnel',
 

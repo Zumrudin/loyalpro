@@ -2171,6 +2171,186 @@ async function runMigrations(client) {
       if (!verdictMigrationError) throw unlockError;
     }
   }
+
+  // ── Экономика процедур (спека docs/superpowers/specs/2026-10-18-procedure-economics-design.md, §5) ──
+  // Товарные транзакции YClients: списания расходников (type_id 2), приходы (3),
+  // продажи, списания-потери. delete ставит deleted_at, строка остаётся (форензика).
+  // client.* из payload НЕ пишется (PII).
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS goods_transactions (
+      id                  BIGSERIAL PRIMARY KEY,
+      salon_id            INT NOT NULL REFERENCES salons(id) ON DELETE CASCADE,
+      yclients_txn_id     BIGINT NOT NULL,
+      document_id         BIGINT,
+      type_id             SMALLINT,
+      type_title          VARCHAR(100),
+      good_id             BIGINT,
+      good_title          VARCHAR(500),
+      storage_id          BIGINT,
+      unit_title          VARCHAR(50),
+      operation_unit_type SMALLINT,
+      amount              NUMERIC(14,4) NOT NULL DEFAULT 0,
+      cost_per_unit       NUMERIC(14,4),
+      cost                NUMERIC(14,2),
+      discount            NUMERIC(8,2),
+      record_id           BIGINT,
+      service_id          BIGINT,
+      service_title       VARCHAR(500),
+      master_id           BIGINT,
+      supplier_title      VARCHAR(255),
+      create_date         TIMESTAMPTZ,
+      last_change_date    TIMESTAMPTZ,
+      deleted_at          TIMESTAMPTZ,
+      source              VARCHAR(16) NOT NULL DEFAULT 'webhook',
+      raw                 JSONB,
+      created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE (salon_id, yclients_txn_id)
+    )
+  `).catch(() => {});
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS idx_goods_txn_record
+      ON goods_transactions (salon_id, record_id) WHERE deleted_at IS NULL AND record_id IS NOT NULL
+  `).catch(() => {});
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS idx_goods_txn_good_type_date
+      ON goods_transactions (salon_id, good_id, type_id, create_date DESC) WHERE deleted_at IS NULL
+  `).catch(() => {});
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS idx_goods_txn_salon_date
+      ON goods_transactions (salon_id, create_date) WHERE deleted_at IS NULL
+  `).catch(() => {});
+  // Списания бонусов по записи читаются отчётом по (salon_id, record_id).
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS idx_lct_salon_record
+      ON loyalty_card_transactions (salon_id, record_id) WHERE record_id IS NOT NULL
+  `).catch(() => {});
+
+  // Каталог товаров: единицы, себестоимость YClients, остатки, последняя закупка.
+  for (const col of [
+    'unit VARCHAR(50)', 'service_unit VARCHAR(50)', 'unit_equals NUMERIC(14,4)',
+    'actual_cost NUMERIC(14,4)', 'unit_actual_cost NUMERIC(14,4)', 'stock JSONB',
+    'last_receipt_price NUMERIC(14,4)', 'last_receipt_at TIMESTAMPTZ',
+  ]) {
+    await client.query(`ALTER TABLE yclients_goods_catalog ADD COLUMN IF NOT EXISTS ${col}`).catch(() => {});
+  }
+
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS goods_price_overrides (
+      salon_id   INT NOT NULL REFERENCES salons(id) ON DELETE CASCADE,
+      good_id    BIGINT NOT NULL,
+      unit_price NUMERIC(14,4) NOT NULL,
+      note       VARCHAR(500),
+      updated_by INT,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      PRIMARY KEY (salon_id, good_id)
+    )
+  `).catch(() => {});
+
+  // Техкарты: импорт YClients (yc_card_id) и нормы LoyalPro (source='manual', yc_card_id NULL).
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS tech_cards (
+      id         SERIAL PRIMARY KEY,
+      salon_id   INT NOT NULL REFERENCES salons(id) ON DELETE CASCADE,
+      yc_card_id BIGINT,
+      title      VARCHAR(500) NOT NULL DEFAULT '',
+      items      JSONB NOT NULL DEFAULT '[]',
+      source     VARCHAR(16) NOT NULL DEFAULT 'yclients',
+      synced_at  TIMESTAMPTZ,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `).catch(() => {});
+  await client.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_tech_cards_yc
+      ON tech_cards (salon_id, yc_card_id) WHERE yc_card_id IS NOT NULL
+  `).catch(() => {});
+
+  // Привязка техкарты к услуге (и, опционально, сотруднику). UNIQUE через COALESCE —
+  // NULL в staff_yc_id иначе не участвует в UNIQUE и дубли «для всех» проходили бы.
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS service_tech_cards (
+      id            SERIAL PRIMARY KEY,
+      salon_id      INT NOT NULL REFERENCES salons(id) ON DELETE CASCADE,
+      service_yc_id BIGINT NOT NULL,
+      staff_yc_id   BIGINT,
+      tech_card_id  INT NOT NULL REFERENCES tech_cards(id) ON DELETE CASCADE,
+      source        VARCHAR(16) NOT NULL DEFAULT 'learned',
+      updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `).catch(() => {});
+  await client.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_service_tech_cards
+      ON service_tech_cards (salon_id, service_yc_id, COALESCE(staff_yc_id, 0))
+  `).catch(() => {});
+
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS staff_pay_rules (
+      id              SERIAL PRIMARY KEY,
+      salon_id        INT NOT NULL REFERENCES salons(id) ON DELETE CASCADE,
+      staff_yc_id     BIGINT,
+      service_yc_id   BIGINT,
+      category_yc_id  BIGINT,
+      percent         NUMERIC(6,2) NOT NULL DEFAULT 0,
+      base            VARCHAR(20) NOT NULL DEFAULT 'gross',
+      fixed_per_visit NUMERIC(12,2) NOT NULL DEFAULT 0,
+      valid_from      DATE,
+      valid_to        DATE,
+      note            VARCHAR(500),
+      created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `).catch(() => {});
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS idx_staff_pay_rules_salon ON staff_pay_rules (salon_id)
+  `).catch(() => {});
+
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS economics_settings (
+      salon_id                  INT PRIMARY KEY REFERENCES salons(id) ON DELETE CASCADE,
+      payroll_multiplier        NUMERIC(6,3) NOT NULL DEFAULT 1.30,
+      pay_base_includes_bonuses BOOLEAN NOT NULL DEFAULT FALSE,
+      allocation_driver         VARCHAR(16) NOT NULL DEFAULT 'minutes',
+      usn_rate                  NUMERIC(5,2) NOT NULL DEFAULT 15,
+      acquiring                 JSONB NOT NULL DEFAULT '{}',
+      updated_at                TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `).catch(() => {});
+
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS fixed_costs (
+      id           SERIAL PRIMARY KEY,
+      salon_id     INT NOT NULL REFERENCES salons(id) ON DELETE CASCADE,
+      category     VARCHAR(64) NOT NULL,
+      title        VARCHAR(255) NOT NULL DEFAULT '',
+      amount_month NUMERIC(14,2) NOT NULL DEFAULT 0,
+      month_from   DATE NOT NULL,
+      month_to     DATE,
+      note         VARCHAR(500),
+      created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `).catch(() => {});
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS idx_fixed_costs_salon_month ON fixed_costs (salon_id, month_from)
+  `).catch(() => {});
+
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS equipment (
+      id                  SERIAL PRIMARY KEY,
+      salon_id            INT NOT NULL REFERENCES salons(id) ON DELETE CASCADE,
+      name                VARCHAR(255) NOT NULL,
+      purchase_price      NUMERIC(14,2) NOT NULL DEFAULT 0,
+      purchase_date       DATE,
+      useful_life_months  INT NOT NULL DEFAULT 60,
+      residual_pct        NUMERIC(5,2) NOT NULL DEFAULT 0,
+      maintenance_monthly NUMERIC(12,2) NOT NULL DEFAULT 0,
+      service_ids         JSONB NOT NULL DEFAULT '[]',
+      is_active           BOOLEAN NOT NULL DEFAULT TRUE,
+      note                VARCHAR(500),
+      created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `).catch(() => {});
 }
 
 module.exports = { runMigrations };

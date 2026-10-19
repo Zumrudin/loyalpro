@@ -57,3 +57,13 @@ describe('staffPricesFromServices — персональные цены маст
     expect(staffPricesFromServices([{ id: 7 }]).size).toBe(0);
   });
 });
+
+describe('categoriesFromServices — категории всех услуг из management-каталога (включая «инд.»)', () => {
+  const { categoriesFromServices } = require('./services/yclients');
+  test('Map svcIdStr → category_id; нет категории → null; мусор → пусто', () => {
+    const m = categoriesFromServices([{ id: 10, category_id: 200 }, { id: 11 }, null]);
+    expect(m.get('10')).toBe(200);
+    expect(m.get('11')).toBeNull();
+    expect(categoriesFromServices(null).size).toBe(0);
+  });
+});

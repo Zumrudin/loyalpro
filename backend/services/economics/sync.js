@@ -1,0 +1,280 @@
+'use strict';
+// Ночной проход экономики процедур: каталог товаров → техкарты → сверка товарных
+// транзакций → обучение привязок техкарт → пересчёт «последней закупки».
+// Квота YClients минутная и общая с Милой/«Заботой»: ≈33 запроса на салон,
+// крон 5 5 * * * мск (после сверки записей 35 4 и чистки 40 4). Каждый шаг в
+// своём try/catch — ошибка одного не останавливает остальные. Прогон идемпотентен.
+const { ycGet } = require('../yclients');
+const { withRateLimitRetry } = require('../yclients-retry');
+const store = require('./store');
+const { parseTransaction } = require('./goods-events');
+const { parseYcCard } = require('./tech-cards');
+const { createLogger } = require('../../logger');
+const logger = createLogger('EconomicsSync');
+
+const PAGE = 100;
+const MAX_GOODS_PAGES = 50;         // 5 000 товаров — на порядок больше 467 у PERI
+const PAGE_PAUSE_MS = 400;
+const RETRY = { retries: 2, delayMs: 60_000 };
+const defaultSleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+function num(v) { if (v === null || v === undefined || v === '') return null; const n = Number(v); return Number.isFinite(n) ? n : null; }
+
+function parseCatalogGood(g) {
+  const id = num(g && (g.good_id !== undefined ? g.good_id : g.id));
+  if (!id) return null;
+  return {
+    good_id: id,
+    title: typeof g.title === 'string' ? g.title.slice(0, 500) : '',
+    unit: typeof g.unit_short_title === 'string' ? g.unit_short_title.slice(0, 50) : null,
+    service_unit: typeof g.service_unit_short_title === 'string' ? g.service_unit_short_title.slice(0, 50) : null,
+    unit_equals: num(g.unit_equals),
+    actual_cost: num(g.actual_cost),
+    unit_actual_cost: num(g.unit_actual_cost),
+    stock: (Array.isArray(g.actual_amounts) ? g.actual_amounts : [])
+      .map(a => ({ storage_id: num(a.storage_id), amount: num(a.amount) })).filter(a => a.storage_id),
+  };
+}
+
+/** GET /goods/{cid}?count=100&page=N до пустой страницы (БЕЗ category_id — иначе не весь каталог). */
+async function syncGoodsCatalog(salon, opts = {}) {
+  const sleep = opts.sleep || defaultSleep;
+  const cid = salon.yclients_company_id;
+  let pages = 0, goods = 0;
+  for (let page = 1; page <= MAX_GOODS_PAGES; page++) {
+    const chunk = await withRateLimitRetry(() => ycGet(salon, `/goods/${cid}`, { count: PAGE, page }), RETRY);
+    pages++;
+    if (!Array.isArray(chunk) || !chunk.length) return { pages, goods };
+    for (const g of chunk) {
+      const row = parseCatalogGood(g);
+      if (!row) continue;
+      await store.upsertCatalogGood(salon.id, row);
+      goods++;
+    }
+    await sleep(PAGE_PAUSE_MS);
+  }
+  logger.warn(`salon=${salon.id}: каталог товаров упёрся в кап ${MAX_GOODS_PAGES} страниц`);
+  return { pages, goods };
+}
+
+// ── Товарные транзакции: сверка (крон) и догон истории (скрипт) ─────────────
+const RECONCILE_DAYS = 2;
+const MAX_TXN_PAGES = 200;          // 20 000 транзакций за запрос — месяц у PERI ≈ 1 700
+
+/** Московская дата 'YYYY-MM-DD' (со сдвигом в сутках). */
+function mskDate(now = new Date(), shiftDays = 0) {
+  const d = new Date(now.getTime() + shiftDays * 86400000);
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Moscow' }).format(d);
+}
+
+/**
+ * Постранично читает /storages/transactions с заданными params и апсертит.
+ * Идёт до ПУСТОЙ страницы (count YClients не обязан соблюдать — тот же приём,
+ * что у /goods). Строка, которую не разобрать или не записать, — skipped + WARN:
+ * иначе одна битая строка в окне changed_after роняла бы сверку каждую ночь.
+ */
+async function pullTransactions(salon, params, source, sleep, dryRun = false) {
+  const cid = salon.yclients_company_id;
+  let pages = 0, upserted = 0, skipped = 0, receipts = 0;
+  const receiptGoods = new Set();
+  for (let page = 1; page <= MAX_TXN_PAGES; page++) {
+    const chunk = await withRateLimitRetry(
+      () => ycGet(salon, `/storages/transactions/${cid}`, { ...params, page, count: PAGE }), RETRY);
+    pages++;
+    if (!Array.isArray(chunk) || !chunk.length) break;
+    for (const t of chunk) {
+      const row = parseTransaction(t);
+      if (!row) { skipped++; continue; }
+      try {
+        if (!dryRun) await store.upsertGoodsTransaction(salon.id, row, { status: 'update', source });
+      } catch (e) {
+        skipped++;
+        logger.warn(`salon=${salon.id}: транзакция ${row.yclients_txn_id} не записана: ${e.message}`);
+        continue;
+      }
+      upserted++;
+      if (Number(row.type_id) === 3 && row.good_id) { receipts++; receiptGoods.add(row.good_id); }
+    }
+    if (page === MAX_TXN_PAGES) logger.warn(`salon=${salon.id}: транзакции упёрлись в кап ${MAX_TXN_PAGES} страниц (${JSON.stringify(params)})`);
+    await sleep(PAGE_PAUSE_MS);
+  }
+  return { pages, upserted, skipped, receipts, receiptGoods };
+}
+
+/**
+ * Крон: changed_after = начало суток (мск) сегодня − 2 дня (потерянные вебхуки,
+ * правки задним числом). ГОТЧА, пойманная живым запросом 19.10.2026: голую дату
+ * ('2026-10-17') YClients МОЛЧА ИГНОРИРУЕТ и отдаёт всю историю (даже '2030-01-01'
+ * давал полную страницу) — фильтр по last_change_date работает только с временем
+ * ('2026-10-17T00:00:00'). start_date/end_date догона голую дату понимают.
+ */
+async function reconcileGoodsTransactions(salon, opts = {}) {
+  const sleep = opts.sleep || defaultSleep;
+  const changedAfter = `${mskDate(opts.now || new Date(), -RECONCILE_DAYS)}T00:00:00`;
+  const r = await pullTransactions(salon, { changed_after: changedAfter }, 'reconcile', sleep);
+  for (const goodId of r.receiptGoods) {
+    await Promise.resolve().then(() => store.refreshLastReceipt(salon.id, goodId))
+      .catch(e => logger.warn(`last receipt good=${goodId}: ${e.message}`));
+  }
+  logger.info(`salon=${salon.id}: сверка транзакций changed_after=${changedAfter}: ${r.upserted} строк, ${r.skipped} пропущено`);
+  return { pages: r.pages, upserted: r.upserted, skipped: r.skipped, receipts: r.receipts };
+}
+
+/** [[start,end], …] по календарным месяцам внутри [from, to] (включительно). */
+function monthRanges(from, to) {
+  const out = [];
+  let cur = from;
+  while (cur <= to) {
+    const [y, m] = cur.split('-').map(Number);
+    const lastDay = new Date(Date.UTC(y, m, 0)).getUTCDate();
+    const end = `${cur.slice(0, 7)}-${String(lastDay).padStart(2, '0')}`;
+    out.push([cur, end < to ? end : to]);
+    cur = new Date(Date.UTC(y, m, 1)).toISOString().slice(0, 10);
+  }
+  return out;
+}
+
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+/** Разовый догон истории помесячно (start_date/end_date); только ручным скриптом.
+ *  opts.dryRun — читать и разбирать, но в БД не писать (дефолт скрипта). */
+async function backfillGoodsTransactions(salon, opts = {}) {
+  const sleep = opts.sleep || defaultSleep;
+  const from = opts.from;
+  const to = opts.to || mskDate(new Date());
+  if (!DATE_RE.test(from || '') || !DATE_RE.test(to) || from > to) throw new Error('backfill: from/to в формате YYYY-MM-DD, from <= to');
+  let months = 0, upserted = 0, skipped = 0;
+  for (const [start, end] of monthRanges(from, to)) {
+    const r = await pullTransactions(salon, { start_date: start, end_date: end }, 'backfill', sleep, !!opts.dryRun);
+    months++; upserted += r.upserted; skipped += r.skipped;
+    logger.info(`salon=${salon.id}: догон ${start}..${end}: ${r.upserted} строк`);
+    if (opts.onMonth) opts.onMonth({ start, end, pages: r.pages, upserted: r.upserted, skipped: r.skipped, receipts: r.receipts });
+  }
+  if (!opts.dryRun) await store.refreshAllLastReceipts(salon.id);
+  return { months, upserted, skipped };
+}
+
+// ── Техкарты: импорт, обучение привязок по факту, поиск по запросу ──────────
+const MAX_CARD_PAGES = 20;          // 2 000 карт; у PERI 81 (19.10.2026) — одна страница + пустая
+const MAX_LEARN_CALLS = 15;         // record_consumables за ночь (бюджет квоты из спеки)
+const MAX_LOOKUP_STAFF = 4;         // default_for_staff_and_service — по исполнителю
+
+/** GET /technological_cards/{cid}/?count=100&page=N до пустой страницы → tech_cards. */
+async function syncTechCards(salon, opts = {}) {
+  const sleep = opts.sleep || defaultSleep;
+  const cid = salon.yclients_company_id;
+  let pages = 0, cards = 0, skipped = 0;
+  for (let page = 1; page <= MAX_CARD_PAGES; page++) {
+    const chunk = await withRateLimitRetry(() => ycGet(salon, `/technological_cards/${cid}/`, { count: PAGE, page }), RETRY);
+    pages++;
+    if (!Array.isArray(chunk) || !chunk.length) return { pages, cards, skipped };
+    for (const c of chunk) {
+      const card = parseYcCard(c);
+      if (!card) { skipped++; continue; }
+      await store.upsertTechCard(salon.id, card);
+      cards++;
+    }
+    await sleep(PAGE_PAUSE_MS);
+  }
+  logger.warn(`salon=${salon.id}: техкарты упёрлись в кап ${MAX_CARD_PAGES} страниц`);
+  return { pages, cards, skipped };
+}
+
+/**
+ * Обучение привязок по фактам: вчерашние (мск) состоявшиеся записи со списаниями и
+ * непривязанной услугой → record_consumables. Ответ — строка на КАЖДУЮ услугу
+ * записи; у услуги без техкарты technological_cards пуст. Пара пишется с
+ * сотрудником записи, source='learned' (старшие источники апсерт не перетирает).
+ * Карта, которой нет в tech_cards (заведена после импорта), — unknownCards: её
+ * подхватит следующий ночной импорт, а привязку — следующая запись.
+ */
+async function learnTechCardLinks(salon, opts = {}) {
+  const sleep = opts.sleep || defaultSleep;
+  const day = mskDate(opts.now || new Date(), -1);
+  const recs = await store.listRecordsToLearn(salon.id, day, MAX_LEARN_CALLS);
+  const byYc = await store.listTechCardIdsByYc(salon.id);
+  let linked = 0, unknownCards = 0;
+  for (const rec of recs) {
+    let data;
+    try {
+      data = await withRateLimitRetry(() => ycGet(salon, `/technological_cards/record_consumables/${salon.yclients_company_id}/${rec.record_id}/`), RETRY);
+    } catch (e) { logger.warn(`salon=${salon.id}: record_consumables ${rec.record_id}: ${e.message}`); continue; }
+    for (const entry of Array.isArray(data) ? data : []) {
+      const serviceYcId = num(entry && entry.service_id);
+      if (!serviceYcId) continue;
+      for (const c of Array.isArray(entry.technological_cards) ? entry.technological_cards : []) {
+        const techCardId = byYc.get(String(num(c && c.id)));
+        if (!techCardId) { unknownCards++; continue; }
+        await store.upsertServiceTechCard(salon.id, { serviceYcId, staffYcId: num(rec.staff_yc_id) || null, techCardId, source: 'learned' });
+        linked++;
+      }
+    }
+    await sleep(PAGE_PAUSE_MS);
+  }
+  return { records: recs.length, linked, unknownCards };
+}
+
+/** По запросу из админки: default_for_staff_and_service по каждому исполнителю услуги (≤ 4). Нет карты — null. */
+async function lookupTechCardForService(salon, serviceYcId, staffYcIds, opts = {}) {
+  const sleep = opts.sleep || defaultSleep;
+  const found = [];
+  const staff = (staffYcIds || []).slice(0, MAX_LOOKUP_STAFF);
+  for (const staffYcId of staff) {
+    const data = await withRateLimitRetry(
+      () => ycGet(salon, `/technological_cards/default_for_staff_and_service/${salon.yclients_company_id}/${staffYcId}/${serviceYcId}/`), RETRY)
+      .catch(e => { logger.warn(`salon=${salon.id}: lookup staff=${staffYcId} service=${serviceYcId}: ${e.message}`); return null; });
+    const card = parseYcCard(data);
+    if (card) {
+      const techCardId = await store.upsertTechCard(salon.id, card);
+      if (techCardId) {
+        await store.upsertServiceTechCard(salon.id, { serviceYcId, staffYcId, techCardId, source: 'lookup' });
+        found.push({ staffYcId, techCardId, title: card.title });
+      }
+    }
+    await sleep(PAGE_PAUSE_MS);
+  }
+  return { checked: staff.length, found };
+}
+
+const _inFlight = new Set();   // salonId
+function isRunning(salonId) { return _inFlight.has(salonId); }
+
+/**
+ * Общая занятость салона: ночной проход, ручной /sync и ручной импорт техкарт
+ * взаимно исключаются (иначе двойной клик или клик во время ночного прогона
+ * гоняли бы одни и те же страницы YClients параллельно и делили лимит).
+ * Занято — Error с code 'BUSY' (ручки отдают 409). Процессная защита, не распределённая.
+ */
+async function runExclusive(salonId, fn) {
+  if (_inFlight.has(salonId)) throw Object.assign(new Error('Синхронизация уже идёт'), { code: 'BUSY' });
+  _inFlight.add(salonId);
+  try { return await fn(); } finally { _inFlight.delete(salonId); }
+}
+
+/** Ночной проход; каждый шаг в своём try/catch. Возвращает счётчики и ошибки по шагам. */
+async function runNightly(salon, opts = {}) {
+  return runExclusive(salon.id, async () => {
+  const out = { steps: {}, errors: {} };
+  const step = async (name, fn) => { try { out.steps[name] = await fn(); } catch (e) { out.errors[name] = e.message; logger.warn(`salon=${salon.id} ${name}: ${e.message}`); } };
+    await step('catalog', () => syncGoodsCatalog(salon, opts));
+    await step('techCards', () => syncTechCards(salon, opts));
+    await step('transactions', () => reconcileGoodsTransactions(salon, opts));
+    await step('learn', () => learnTechCardLinks(salon, opts));
+    await step('lastReceipts', () => store.refreshAllLastReceipts(salon.id));
+    out.ok = Object.keys(out.errors).length === 0;
+    logger.info(`salon=${salon.id}: ночной проход ${out.ok ? 'ok' : 'с ошибками'}: ${JSON.stringify(out.steps)} ${JSON.stringify(out.errors)}`);
+    return out;
+  });
+}
+
+/** Итог зарплаты сотрудника за период по версии YClients (только для сверки, не для расчёта).
+ *  salary: null, если YClients не отдал число — «нет данных», не 0. */
+async function fetchStaffSalary(salon, staffYcId, dateFrom, dateTo) {
+  const d = await withRateLimitRetry(() => ycGet(salon, `/company/${salon.yclients_company_id}/salary/period/staff/${staffYcId}/`, { date_from: dateFrom, date_to: dateTo }), RETRY);
+  const salary = d && d.salary !== null && d.salary !== undefined && d.salary !== '' ? Number(d.salary) : NaN;
+  return { salary: Number.isFinite(salary) ? salary : null, working_hours_count: Number(d && d.working_hours_count) || 0, services_sum: Number(d && d.services_sum) || 0 };
+}
+
+module.exports = { fetchStaffSalary, syncGoodsCatalog, parseCatalogGood, MAX_GOODS_PAGES, PAGE, RETRY, PAGE_PAUSE_MS, defaultSleep, num,
+  reconcileGoodsTransactions, backfillGoodsTransactions, monthRanges, mskDate, RECONCILE_DAYS, MAX_TXN_PAGES,
+  syncTechCards, learnTechCardLinks, lookupTechCardForService, MAX_CARD_PAGES, MAX_LEARN_CALLS, MAX_LOOKUP_STAFF, runNightly, isRunning, runExclusive };
