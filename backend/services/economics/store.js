@@ -391,7 +391,47 @@ async function listAccounts(salonId) {
   return rows.map(r => ({ title: r.account_title, operations: r.n }));
 }
 
-module.exports = { upsertCatalogGood, upsertGoodsTransaction, refreshLastReceipt, refreshAllLastReceipts, TXN_COLS,
+
+// ── постоянные расходы и аппараты (CRUD для /api/economics) ──
+async function listFixedCosts(salonId) { return db.any(FIXED_SQL, [salonId]); }
+async function insertFixedCost(salonId, v) {
+  const r = await db.one(`INSERT INTO fixed_costs (salon_id, category, title, amount_month, month_from, month_to, note) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id`,
+    [salonId, v.category, v.title, v.amount_month, v.month_from, v.month_to, v.note]);
+  return r.id;
+}
+async function updateFixedCost(salonId, id, v) {
+  const r = await db.query(`UPDATE fixed_costs SET category=$3, title=$4, amount_month=$5, month_from=$6, month_to=$7, note=$8, updated_at=NOW() WHERE salon_id=$1 AND id=$2`,
+    [salonId, id, v.category, v.title, v.amount_month, v.month_from, v.month_to, v.note]);
+  return r.rowCount > 0;
+}
+async function deleteFixedCost(salonId, id) { const r = await db.query('DELETE FROM fixed_costs WHERE salon_id=$1 AND id=$2', [salonId, id]); return r.rowCount > 0; }
+/** Скопировать строки, действующие в месяце from, как новые строки месяца to (month_from = month_to = to). Возвращает число вставленных. */
+async function copyFixedCosts(salonId, fromMonth, toMonth) {
+  const r = await db.query(`
+    INSERT INTO fixed_costs (salon_id, category, title, amount_month, month_from, month_to, note)
+    SELECT salon_id, category, title, amount_month, $3::date, $3::date, note FROM fixed_costs
+    WHERE salon_id = $1 AND month_from <= $2::date AND (month_to IS NULL OR month_to >= $2::date)
+      AND NOT EXISTS (SELECT 1 FROM fixed_costs f2 WHERE f2.salon_id = fixed_costs.salon_id AND f2.category = fixed_costs.category AND f2.title = fixed_costs.title AND f2.month_from = $3::date)`,
+    [salonId, fromMonth, toMonth]);
+  return r.rowCount;
+}
+async function listEquipment(salonId) { return db.any(EQUIPMENT_SQL, [salonId]); }
+async function insertEquipment(salonId, v) {
+  const r = await db.one(`INSERT INTO equipment (salon_id, name, purchase_price, purchase_date, useful_life_months, residual_pct, maintenance_monthly, service_ids, is_active, note)
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9,$10) RETURNING id`,
+    [salonId, v.name, v.purchase_price, v.purchase_date, v.useful_life_months, v.residual_pct, v.maintenance_monthly, JSON.stringify(v.service_ids), v.is_active, v.note]);
+  return r.id;
+}
+async function updateEquipment(salonId, id, v) {
+  const r = await db.query(`UPDATE equipment SET name=$3, purchase_price=$4, purchase_date=$5, useful_life_months=$6, residual_pct=$7, maintenance_monthly=$8, service_ids=$9::jsonb, is_active=$10, note=$11, updated_at=NOW()
+    WHERE salon_id=$1 AND id=$2`, [salonId, id, v.name, v.purchase_price, v.purchase_date, v.useful_life_months, v.residual_pct, v.maintenance_monthly, JSON.stringify(v.service_ids), v.is_active, v.note]);
+  return r.rowCount > 0;
+}
+async function deleteEquipment(salonId, id) { const r = await db.query('DELETE FROM equipment WHERE salon_id=$1 AND id=$2', [salonId, id]); return r.rowCount > 0; }
+
+module.exports = { listFixedCosts, insertFixedCost, updateFixedCost, deleteFixedCost, copyFixedCosts,
+  listEquipment, insertEquipment, updateEquipment, deleteEquipment, FIXED_CATEGORIES: require('./fixed-categories').FIXED_CATEGORIES,
+  upsertCatalogGood, upsertGoodsTransaction, refreshLastReceipt, refreshAllLastReceipts, TXN_COLS,
   upsertTechCard, upsertServiceTechCard, listTechCardIdsByYc, listRecordsToLearn, RECORDS_TO_LEARN_SQL,
   loadPeriod, normSettings, DEFAULT_SETTINGS, RECORDS_SQL, CONSUMABLES_SQL, PAYMENTS_SQL, RECEIPTS_SQL, CATALOG_SQL,
   OVERRIDES_SQL, CARDS_SQL, LINKS_SQL, PAY_RULES_SQL, SETTINGS_SQL, FIXED_SQL, EQUIPMENT_SQL, CAPACITY_SQL,

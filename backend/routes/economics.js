@@ -10,6 +10,9 @@ const { db } = require('../db');
 const store = require('../services/economics/store');
 const report = require('../services/economics/report');
 const sync = require('../services/economics/sync');
+const { FIXED_CATEGORIES } = require('../services/economics/fixed-categories');
+const { EQUIPMENT_SEED } = require('../services/economics/equipment-seed');
+const { equipmentMonthly } = require('../services/economics/allocation');
 const { createLogger } = require('../logger');
 const logger = createLogger('EconomicsAPI');
 
@@ -273,6 +276,63 @@ router.post('/sync', async (req, res) => {
   } catch (e) { if (e.code === 'BUSY') return res.status(409).json({ error: e.message }); fail(res, 'sync')(e); }
 });
 
+// ── постоянные расходы и аппараты ──
+// Число: только number/string, пустая строка — не число (Number('') === 0 молча пропустил бы).
+const numOf = (v) => ((typeof v === 'number' || typeof v === 'string') && String(v).trim() !== '' ? Number(v) : NaN);
+function parseMonth(s) { return /^\d{4}-(0[1-9]|1[0-2])$/.test(String(s || '')) ? `${s}-01` : null; }
+function parseFixedCost(b) {
+  b = b || {};
+  if (!FIXED_CATEGORIES.includes(b.category)) return { error: 'Неизвестная категория расходов' };
+  const amount = numOf(b.amountMonth);
+  if (!Number.isFinite(amount) || amount < 0 || amount > 1e9) return { error: 'Сумма в месяц ≥ 0' };
+  const mf = parseMonth(b.monthFrom); if (!mf) return { error: 'Месяц начала в формате YYYY-MM' };
+  const mt = b.monthTo ? parseMonth(b.monthTo) : null; if (b.monthTo && !mt) return { error: 'Месяц окончания в формате YYYY-MM' };
+  if (mt && mt < mf) return { error: 'Период: конец раньше начала' };
+  return { value: { category: b.category, title: String(b.title || '').trim().slice(0, 255), amount_month: amount, month_from: mf, month_to: mt, note: String(b.note || '').slice(0, 500) } };
+}
+function parseEquipment(b) {
+  b = b || {};
+  const name = typeof b.name === 'string' ? b.name.trim() : '';
+  if (!name || name.length > 255) return { error: 'Название 1–255 символов' };
+  const price = numOf(b.purchasePrice); if (!Number.isFinite(price) || price < 0 || price > 1e9) return { error: 'Цена покупки ≥ 0' };
+  const pd = b.purchaseDate || null; if (pd && !isDate(pd)) return { error: 'Дата покупки YYYY-MM-DD' };
+  const life = b.usefulLifeMonths === undefined ? 60 : numOf(b.usefulLifeMonths);
+  if (!Number.isInteger(life) || life < 1 || life > 240) return { error: 'Срок службы 1–240 месяцев' };
+  const res = b.residualPct === undefined ? 0 : numOf(b.residualPct); if (!Number.isFinite(res) || res < 0 || res > 100) return { error: 'Остаточная стоимость 0–100 %' };
+  const mm = b.maintenanceMonthly === undefined ? 0 : numOf(b.maintenanceMonthly); if (!Number.isFinite(mm) || mm < 0 || mm > 1e9) return { error: 'ТО в месяц ≥ 0' };
+  if (b.serviceIds !== undefined && !Array.isArray(b.serviceIds)) return { error: 'service_ids — список' };
+  const ids = (b.serviceIds || []).map(optInt);
+  if (ids.some(x => !x)) return { error: 'service_ids — целые id услуг' };
+  return { value: { name, purchase_price: price, purchase_date: pd, useful_life_months: life, residual_pct: res, maintenance_monthly: mm, service_ids: [...new Set(ids)], is_active: b.isActive !== false, note: String(b.note || '').slice(0, 500) } };
+}
+
+const crud = (prefix, { list, parse, insert, update, remove, decorate }) => {
+  router.get(`/${prefix}`, async (req, res) => { try { const rows = await list(req.user.salonId); res.json({ rows: decorate ? rows.map(decorate) : rows }); } catch (e) { fail(res, prefix)(e); } });
+  router.post(`/${prefix}`, async (req, res) => {
+    const p = parse(req.body); if (p.error) return res.status(400).json({ error: p.error });
+    try { const id = await insert(req.user.salonId, p.value); report.invalidate(req.user.salonId); res.json({ id }); } catch (e) { fail(res, prefix + ' create')(e); }
+  });
+  router.put(`/${prefix}/:id(\\d+)`, async (req, res) => {
+    const p = parse(req.body); if (p.error) return res.status(400).json({ error: p.error });
+    try { const ok = await update(req.user.salonId, idParam(req.params.id), p.value); if (!ok) return res.status(404).json({ error: 'Не найдено' }); report.invalidate(req.user.salonId); res.json({ ok: true }); }
+    catch (e) { fail(res, prefix + ' update')(e); }
+  });
+  router.delete(`/${prefix}/:id(\\d+)`, async (req, res) => {
+    try { const ok = await remove(req.user.salonId, idParam(req.params.id)); if (!ok) return res.status(404).json({ error: 'Не найдено' }); report.invalidate(req.user.salonId); res.json({ ok: true }); }
+    catch (e) { fail(res, prefix + ' delete')(e); }
+  });
+};
+// Статические пути объявлены ДО crud с /:id.
+router.post('/fixed-costs/copy', async (req, res) => {
+  const from = parseMonth(req.query.from), to = parseMonth(req.query.to);
+  if (!from || !to) return res.status(400).json({ error: 'from и to в формате YYYY-MM' });
+  try { const n = await store.copyFixedCosts(req.user.salonId, from, to); report.invalidate(req.user.salonId); res.json({ copied: n }); } catch (e) { fail(res, 'fixed copy')(e); }
+});
+crud('fixed-costs', { list: (s) => store.listFixedCosts(s), parse: parseFixedCost, insert: (s, v) => store.insertFixedCost(s, v), update: (s, i, v) => store.updateFixedCost(s, i, v), remove: (s, i) => store.deleteFixedCost(s, i) });
+router.get('/equipment/seed', (req, res) => res.json({ seed: EQUIPMENT_SEED }));
+crud('equipment', { list: (s) => store.listEquipment(s), parse: parseEquipment, insert: (s, v) => store.insertEquipment(s, v), update: (s, i, v) => store.updateEquipment(s, i, v), remove: (s, i) => store.deleteEquipment(s, i),
+  decorate: (e) => ({ ...e, monthly: equipmentMonthly(e) }) });
+
 module.exports = router;
 module.exports.parsePayRule = parsePayRule;
 module.exports.parseSettings = parseSettings;
@@ -280,3 +340,7 @@ module.exports.parsePriceBody = parsePriceBody;
 module.exports.parseManualCard = parseManualCard;
 module.exports.parsePeriodDays = parsePeriodDays;
 module.exports.resolvePeriod = resolvePeriod;
+module.exports.parseFixedCost = parseFixedCost;
+module.exports.parseEquipment = parseEquipment;
+module.exports.parseMonth = parseMonth;
+module.exports.FIXED_CATEGORIES = FIXED_CATEGORIES;

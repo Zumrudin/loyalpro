@@ -13,6 +13,8 @@ jest.mock('./services/economics/store', () => ({
   getSettings: jest.fn(), saveSettings: jest.fn(), listAccounts: jest.fn(), setPriceOverride: jest.fn(),
   insertManualCard: jest.fn(), updateManualCard: jest.fn(), deleteManualCard: jest.fn(), techCardExists: jest.fn(),
   upsertServiceTechCard: jest.fn(), clearServiceTechCard: jest.fn(), listGoods: jest.fn(), listReceipts: jest.fn(), listTechCards: jest.fn(),
+  listFixedCosts: jest.fn(), insertFixedCost: jest.fn(), updateFixedCost: jest.fn(), deleteFixedCost: jest.fn(), copyFixedCosts: jest.fn(),
+  listEquipment: jest.fn(), insertEquipment: jest.fn(), updateEquipment: jest.fn(), deleteEquipment: jest.fn(),
 }));
 jest.mock('./services/economics/report', () => ({ buildReport: jest.fn(), serviceDetail: jest.fn(), coverage: jest.fn(), invalidate: jest.fn() }));
 jest.mock('./services/economics/sync', () => ({ isRunning: jest.fn(() => false), runNightly: jest.fn(), syncTechCards: jest.fn(), lookupTechCardForService: jest.fn() }));
@@ -21,7 +23,7 @@ const store = require('./services/economics/store');
 const report = require('./services/economics/report');
 const sync = require('./services/economics/sync');
 const router = require('./routes/economics');
-const { parsePayRule, parseSettings, parsePriceBody, parseManualCard, parsePeriodDays } = router;
+const { parsePayRule, parseSettings, parsePriceBody, parseManualCard, parsePeriodDays, parseFixedCost, parseEquipment, parseMonth } = router;
 
 // Прогон запроса через настоящий router без HTTP.
 function call(method, url, { user = { role: 'owner', salonId: 1, userId: 9 }, body, query } = {}) {
@@ -164,5 +166,73 @@ describe('роутер без HTTP', () => {
     sync.isRunning.mockReturnValue(true);
     expect((await call('POST', '/sync')).status).toBe(409);
     expect(sync.runNightly).not.toHaveBeenCalled();
+  });
+});
+
+describe('parseFixedCost', () => {
+  test('категория из списка, сумма ≥ 0, месяцы YYYY-MM → первое число', () => {
+    expect(parseFixedCost({ category: 'rent', title: 'Аренда', amountMonth: 300000, monthFrom: '2026-01', monthTo: null }).value)
+      .toEqual({ category: 'rent', title: 'Аренда', amount_month: 300000, month_from: '2026-01-01', month_to: null, note: '' });
+    expect(parseFixedCost({ category: 'x', amountMonth: 1, monthFrom: '2026-01' }).error).toMatch(/категори/i);
+    expect(parseFixedCost({ category: 'rent', amountMonth: -1, monthFrom: '2026-01' }).error).toMatch(/сумм/i);
+    expect(parseFixedCost({ category: 'rent', amountMonth: '', monthFrom: '2026-01' }).error).toMatch(/сумм/i);
+    expect(parseFixedCost({ category: 'rent', amountMonth: 1, monthFrom: '2026-13' }).error).toMatch(/месяц/i);
+    expect(parseFixedCost({ category: 'rent', amountMonth: 1, monthFrom: '2026-05', monthTo: '2026-04' }).error).toMatch(/период/i);
+  });
+});
+describe('parseEquipment', () => {
+  test('название, цена ≥ 0, срок 1–240, остаточная 0–100, ТО ≥ 0, service_ids — целые', () => {
+    expect(parseEquipment({ name: 'Lumecca', purchasePrice: 5050000, purchaseDate: '2025-01-15', usefulLifeMonths: 60, residualPct: 10, maintenanceMonthly: 20000, serviceIds: [1, '2'], isActive: true }).value)
+      .toEqual({ name: 'Lumecca', purchase_price: 5050000, purchase_date: '2025-01-15', useful_life_months: 60, residual_pct: 10, maintenance_monthly: 20000, service_ids: [1, 2], is_active: true, note: '' });
+    expect(parseEquipment({ name: '', purchasePrice: 1 }).error).toBeTruthy();
+    expect(parseEquipment({ name: 'X', purchasePrice: 1, usefulLifeMonths: 0 }).error).toBeTruthy();
+    expect(parseEquipment({ name: 'X', purchasePrice: 1, serviceIds: ['a'] }).error).toBeTruthy();
+    expect(parseEquipment({ name: 'X', purchasePrice: 1, purchaseDate: '2025-02-30' }).error).toBeTruthy();
+    expect(parseEquipment({ name: 'X', purchasePrice: '' }).error).toBeTruthy();
+  });
+});
+test('parseMonth', () => { expect(parseMonth('2026-09')).toBe('2026-09-01'); expect(parseMonth('2026-9')).toBeNull(); });
+
+describe('fixed-costs / equipment ручки', () => {
+  beforeEach(() => jest.clearAllMocks());
+  const fc = { category: 'rent', amountMonth: 100, monthFrom: '2026-01' };
+  test('не владелец — 403', async () => {
+    expect((await call('GET', '/fixed-costs', { user: { role: 'admin', salonId: 1 } })).status).toBe(403);
+    expect((await call('GET', '/equipment', { user: { role: 'admin', salonId: 1 } })).status).toBe(403);
+  });
+  test('POST fixed-costs: 400 на мусор, 200 + invalidate', async () => {
+    expect((await call('POST', '/fixed-costs', { body: { category: 'zzz' } })).status).toBe(400);
+    store.insertFixedCost.mockResolvedValue(7);
+    const r = await call('POST', '/fixed-costs', { body: fc });
+    expect(r.body).toEqual({ id: 7 });
+    expect(store.insertFixedCost.mock.calls[0][0]).toBe(1);
+    expect(report.invalidate).toHaveBeenCalledWith(1);
+  });
+  test('PUT/DELETE: 404 если нет строки; нецифровой id не матчится', async () => {
+    store.updateFixedCost.mockResolvedValue(false);
+    expect((await call('PUT', '/fixed-costs/5', { body: fc })).status).toBe(404);
+    store.deleteFixedCost.mockResolvedValue(true);
+    expect((await call('DELETE', '/fixed-costs/5')).status).toBe(200);
+    expect((await call('DELETE', '/fixed-costs/abc')).status).toBe(404);
+    expect(store.deleteFixedCost).toHaveBeenCalledWith(1, 5);
+  });
+  test('POST /fixed-costs/copy: статический путь, from/to обязательны', async () => {
+    expect((await call('POST', '/fixed-costs/copy', { query: { from: '2026-09' } })).status).toBe(400);
+    store.copyFixedCosts.mockResolvedValue(3);
+    const r = await call('POST', '/fixed-costs/copy', { query: { from: '2026-09', to: '2026-10' } });
+    expect(r.body).toEqual({ copied: 3 });
+    expect(store.copyFixedCosts).toHaveBeenCalledWith(1, '2026-09-01', '2026-10-01');
+  });
+  test('GET /equipment: добавляет monthly; /equipment/seed — до :id', async () => {
+    store.listEquipment.mockResolvedValue([{ id: 1, purchase_price: 6000, residual_pct: 0, useful_life_months: 60, maintenance_monthly: 10 }]);
+    const r = await call('GET', '/equipment');
+    expect(r.body.rows[0].monthly).toEqual({ depreciation: 100, maintenance: 10, total: 110 });
+    const s = await call('GET', '/equipment/seed');
+    expect(s.body.seed.length).toBe(10);
+  });
+  test('POST equipment: 400 / 200', async () => {
+    expect((await call('POST', '/equipment', { body: { name: '' } })).status).toBe(400);
+    store.insertEquipment.mockResolvedValue(2);
+    expect((await call('POST', '/equipment', { body: { name: 'A', purchasePrice: 10 } })).body).toEqual({ id: 2 });
   });
 });
