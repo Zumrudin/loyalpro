@@ -155,6 +155,38 @@ function ecoDetailLines(s, settings) {
   ];
 }
 
+/** Русское множественное число: 1 визит, 3 визита, 12 визитов. */
+function ecoPlural(n, one, few, many) {
+  const a = Math.abs(Math.trunc(Number(n) || 0)), m10 = a % 10, m100 = a % 100;
+  if (m10 === 1 && m100 !== 11) return one;
+  if (m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14)) return few;
+  return many;
+}
+
+/**
+ * Предупреждения периода (Task 22) → [{type, text}] без HTML; неизвестный тип пропускается.
+ * Сервер выдаёт только доказуемое данными: визит без списаний — у услуги с техкартой и в
+ * день, когда в салоне списания были; перерасход — против полной нормы по своим списаниям;
+ * товар без цены — из реальных списаний; скачок цены — два сопоставимых прихода.
+ */
+function ecoWarningLines(list) {
+  const out = [];
+  for (const x of Array.isArray(list) ? list : []) {
+    let text = null;
+    if (x.type === 'no_consumables') {
+      text = `«${x.service_title}»: ${ecoNum(x.count)} ${ecoPlural(x.count, 'визит', 'визита', 'визитов')} без списаний, хотя у услуги есть техкарта${x.last_date ? ` (последний ${ecoMskDate(x.last_date)})` : ''}`;
+    } else if (x.type === 'overrun') {
+      text = `«${x.service_title}», визит ${ecoMskDate(x.visit_date)}${x.staff_name ? ` (${x.staff_name})` : ''}: материалы ${ecoMoney(x.fact)} при норме ${ecoMoney(x.norm)} — ×${ecoQty(x.ratio)}`;
+    } else if (x.type === 'no_price') {
+      text = `Товар без цены: «${x.good_title}» — списан в ${ecoNum(x.visits)} ${ecoPlural(x.visits, 'визите', 'визитах', 'визитах')}, цены нет ни в приходах, ни вручную, ни в каталоге`;
+    } else if (x.type === 'price_jump') {
+      text = `Цена поступления выросла: «${x.good_title}» ${ecoQty(x.prev)} → ${ecoQty(x.last)} ₽ за ед. списания (×${ecoQty(x.ratio)}; приход ${ecoMskDate(x.at)} против ${ecoMskDate(x.prev_at)})`;
+    }
+    if (text) out.push({ type: x.type, text });
+  }
+  return out;
+}
+
 /** Флаги визита в детализации — короткие подписи. */
 function ecoVisitFlags(v) {
   const out = [];

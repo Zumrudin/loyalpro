@@ -1159,6 +1159,8 @@ body.kb-editor .kb-admin-only { display: inline-flex; }
 .eco-tabs{max-width:980px}
 .eco-summary{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-bottom:14px}
 .eco-summary>.sc{min-width:0}
+.eco-warnings{margin-bottom:14px;padding:12px 14px;border-left:3px solid var(--warn,#e0a100)}.eco-warnings-head{font-weight:700;margin-bottom:6px}
+.eco-warnings ul{margin:0 0 8px 0;padding-left:4px;list-style:none;font-size:12.5px;line-height:1.5}.eco-warnings li{overflow-wrap:anywhere}
 .eco-kpi{font-size:20px;font-weight:700}.eco-kpi-sub{font-size:12px;color:var(--t3);margin-top:2px}
 .eco-tbl th{white-space:nowrap}.eco-tbl-sort th{cursor:pointer;user-select:none}.eco-tbl th.sorted::after{content:' ▾';opacity:.6}.eco-tbl th.sorted.asc::after{content:' ▴'}
 .eco-tbl td.num,.eco-tbl th.num{text-align:right;font-variant-numeric:tabular-nums}

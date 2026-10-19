@@ -346,3 +346,138 @@ describe('ревью: база оплаты, скидка, свои списан
     expect(rows[0].materials_yc_cost + rows[1].materials_yc_cost).toBeCloseTo(5267, 2);
   });
 });
+
+describe('buildRows: поля для предупреждений (Task 22)', () => {
+  test('no_price_consumed — только товары РЕАЛЬНЫХ списаний; товар без цены из нормы туда не попадает', () => {
+    const c = ctx();
+    c.techCardFor = (sid) => (sid === 9536380 ? { items: [{ good_id: 1, amount: 1 }, { good_id: 5, amount: 2 }] } : null);
+    const est = C.buildRows({ ...RECORD, consumables: [] }, c);
+    expect(est[0].no_price_goods).toEqual([5]);              // покрытие — как раньше
+    expect(est[0].no_price_consumed).toEqual([]);            // но не «списан без цены»
+    expect(est[0].norm_complete).toBe(false);                // в норме товар без цены
+    const fact = C.buildRows({ ...RECORD, consumables: [{ good_id: 5, service_id: 9536380, amount: -1, cost: 1 }] }, ctx());
+    expect(fact[0].no_price_consumed).toEqual([5]);
+  });
+  test('norm_complete — норма есть и все её товары с ценой; fact_shared — в факте доля общих списаний записи на разные услуги', () => {
+    const c = ctx();
+    c.techCardFor = (sid) => (sid === 9536380 ? { items: [{ good_id: 1, amount: 1 }] } : null);
+    const rows = C.buildRows(RECORD, c);                     // перчатки без service_id на 2 услуги
+    expect(rows[0].norm_complete).toBe(true);
+    expect(rows[0].fact_shared).toBe(true);
+    expect(rows[1].norm_complete).toBe(false);               // нормы нет
+    const own = C.buildRows({ ...RECORD, consumables: RECORD.consumables.filter(t => t.service_id) }, c);
+    expect(own[0].fact_shared).toBe(false);
+    const single = C.buildRows({ ...RECORD, services: [RECORD.services[0]] }, c);
+    expect(single[0].fact_shared).toBe(false);               // одна услуга — делить не с кем
+  });
+});
+
+describe('warnings (Task 22): только то, что доказуемо данными', () => {
+  const base = { record_id: 1, visit_date: '2026-09-10', staff_name: 'A', service_yc_id: 10, service_title: 'S', has_consumables: true, has_tech_card: true,
+    materials_fact: 100, materials_norm: 100, norm_complete: true, fact_shared: false, no_price_goods: [], no_price_consumed: [] };
+  const P = { from: '2026-09-01', to: '2026-09-30', today: '2026-10-19' };
+  const run = (rows, extra = {}) => C.warnings(rows, { receiptsByGood: new Map(), catalogByGood: new Map(), ...P, ...extra });
+
+  test('визит без списаний — только у услуги с нормой (техкарта с товарами); одна запись считается один раз', () => {
+    const w = run([
+      { ...base, record_id: 1, has_consumables: false },
+      { ...base, record_id: 1, has_consumables: false },                         // та же услуга дважды в записи
+      { ...base, record_id: 2, has_consumables: false, visit_date: '2026-09-12' },
+      { ...base, record_id: 4, service_yc_id: 11, has_consumables: false, has_tech_card: false, materials_norm: null },
+      { ...base, record_id: 5, service_yc_id: 12, has_consumables: false, has_tech_card: true, materials_norm: null }, // карта без товаров
+      { ...base, record_id: 6, service_yc_id: 13 }, { ...base, record_id: 7, service_yc_id: 13, visit_date: '2026-09-12' }, // в эти дни списания в салоне были
+    ]);
+    expect(w.filter(x => x.type === 'no_consumables')).toEqual([
+      { type: 'no_consumables', service_yc_id: 10, service_title: 'S', count: 2, record_ids: [1, 2], last_date: '2026-09-12' },
+    ]);
+  });
+  test('день без единого списания в салоне — не предупреждение: это дыра синка, а не «не списали»', () => {
+    const rows = [
+      { ...base, record_id: 1, has_consumables: false, visit_date: '2026-09-05' },          // в этот день списаний нет ни у кого
+      { ...base, record_id: 2, has_consumables: false, visit_date: '2026-09-02' },
+      { ...base, record_id: 3, service_yc_id: 99, has_tech_card: false, materials_norm: null, visit_date: '2026-09-02' }, // списания в этот день есть
+    ];
+    expect(run(rows).filter(w => w.type === 'no_consumables').map(w => w.record_ids)).toEqual([[2]]);
+  });
+  test('визит сегодня/в будущем без списаний — не предупреждение (списание ещё могут провести)', () => {
+    const w = run([{ ...base, has_consumables: false, visit_date: '2026-10-19' }, { ...base, record_id: 2, visit_date: '2026-10-19', materials_norm: null, has_tech_card: false }], { from: '2026-10-01', to: '2026-10-31' });
+    expect(w).toEqual([]);
+  });
+  test('перерасход > 20 % против ПОЛНОЙ нормы и только по своим списаниям услуги', () => {
+    const w = run([
+      { ...base, record_id: 2, materials_fact: 130 },
+      { ...base, record_id: 3, materials_fact: 119 },                             // +19 % — нет
+      { ...base, record_id: 6, materials_fact: 500, norm_complete: false },       // норма неполная — сравнивать нечестно
+      { ...base, record_id: 7, materials_fact: 500, fact_shared: true },          // факт — доля общих списаний
+      { ...base, record_id: 8, materials_fact: 500, materials_norm: null, has_tech_card: false },
+      { ...base, record_id: 9, materials_fact: 500, has_consumables: false },
+    ]);
+    expect(w.filter(x => x.type === 'overrun')).toEqual([
+      { type: 'overrun', service_yc_id: 10, service_title: 'S', record_id: 2, visit_date: '2026-09-10', staff_name: 'A', fact: 130, norm: 100, ratio: 1.3 },
+    ]);
+  });
+  test('товар без цены — только из реальных списаний периода; визиты считаются по записям', () => {
+    const w = run([
+      { ...base, record_id: 3, no_price_consumed: [7], no_price_goods: [7] },
+      { ...base, record_id: 3, service_yc_id: 11, no_price_consumed: [7], no_price_goods: [7] },
+      { ...base, record_id: 4, no_price_consumed: [], no_price_goods: [9] },      // только в норме — нет
+    ], { catalogByGood: new Map([[7, { title: 'G7' }]]) });
+    expect(w.filter(x => x.type === 'no_price')).toEqual([{ type: 'no_price', good_id: 7, good_title: 'G7', visits: 1 }]);
+  });
+  test('скачок цены прихода ≥ 20 %: последний приход в периоде против предыдущего СОПОСТАВИМОГО', () => {
+    const receiptsByGood = new Map([
+      [7, [{ create_date: '2026-09-05T09:00:00Z', amount: 1, cost: 130, operation_unit_type: 2 }, { create_date: '2026-08-05T09:00:00Z', amount: 1, cost: 100, operation_unit_type: 2 }]],
+      [8, [{ create_date: '2026-09-05', amount: 1, cost: 105, operation_unit_type: 2 }, { create_date: '2026-08-05', amount: 1, cost: 100, operation_unit_type: 2 }]],
+      // флакон без unit_equals — несопоставим, пропускается; сравнение с приходом до него
+      [9, [{ create_date: '2026-09-20', amount: 2, cost: 300, operation_unit_type: 2 }, { create_date: '2026-09-01', amount: 1, cost: 5000, operation_unit_type: 1 }, { create_date: '2026-07-01', amount: 1, cost: 100, operation_unit_type: 2 }]],
+      // флаконы, пересчёт через unit_equals: 10 мл по 1000 → 100/мл; затем 150/мл
+      [10, [{ create_date: '2026-09-10', amount: 2, cost: 300, operation_unit_type: 2 }, { create_date: '2026-06-01', amount: 1, cost: 1000, operation_unit_type: 1 }]],
+      // только приход в упаковках без коэффициента — нечего сравнивать
+      [11, [{ create_date: '2026-09-10', amount: 1, cost: 900, operation_unit_type: 1 }, { create_date: '2026-06-01', amount: 1, cost: 100, operation_unit_type: 2 }]],
+      // один приход — нет истории
+      [12, [{ create_date: '2026-09-10', amount: 1, cost: 900, operation_unit_type: 2 }]],
+      // последний приход до периода — не про этот период
+      [13, [{ create_date: '2026-08-10', amount: 1, cost: 900, operation_unit_type: 2 }, { create_date: '2026-06-01', amount: 1, cost: 100, operation_unit_type: 2 }]],
+      // два прихода в один день: средняя за день (100+200)/2=150 против 100
+      [14, [{ create_date: '2026-09-10T08:00:00Z', amount: 1, cost: 100, operation_unit_type: 2 }, { create_date: '2026-09-10T12:00:00Z', amount: 1, cost: 200, operation_unit_type: 2 }, { create_date: '2026-08-01', amount: 1, cost: 100, operation_unit_type: 2 }]],
+      // бесплатный образец (cost 0) не база для сравнения
+      [15, [{ create_date: '2026-09-10', amount: 1, cost: 100, operation_unit_type: 2 }, { create_date: '2026-08-01', amount: 1, cost: 0, operation_unit_type: 2 }]],
+    ]);
+    const catalogByGood = new Map([[7, { title: 'G7', unit_equals: 1 }], [9, { title: 'G9', unit_equals: null }], [10, { title: 'G10', unit_equals: 10 }], [11, { title: 'G11', unit_equals: 0 }], [14, { title: 'G14' }]]);
+    const w = run([], { receiptsByGood, catalogByGood }).filter(x => x.type === 'price_jump');
+    expect(w).toEqual([
+      { type: 'price_jump', good_id: 9, good_title: 'G9', prev: 100, prev_at: '2026-07-01', last: 150, ratio: 1.5, at: '2026-09-20' },
+      { type: 'price_jump', good_id: 10, good_title: 'G10', prev: 100, prev_at: '2026-06-01', last: 150, ratio: 1.5, at: '2026-09-10' },
+      { type: 'price_jump', good_id: 14, good_title: 'G14', prev: 100, prev_at: '2026-08-01', last: 150, ratio: 1.5, at: '2026-09-10' },
+      { type: 'price_jump', good_id: 7, good_title: 'G7', prev: 100, prev_at: '2026-08-05', last: 130, ratio: 1.3, at: '2026-09-05' },
+    ]);
+  });
+  test('пусто → []', () => { expect(run([])).toEqual([]); });
+});
+
+describe('количество услуги в записи (amount) — живой прогон предупреждений 19.10.2026', () => {
+  // Запись 1900695399 (дев-БД): «Revi strong 2 ml» amount 2, first_cost 24000 (за единицу),
+  // cost 48000; списано 2 шприца при техкарте на 1. Без учёта amount — ложный «перерасход ×2».
+  const rec = { record_id: 1900695399, visit_date: '2026-09-08', staff_yc_id: 1, staff_name: 'П', seance_length: 3600,
+    services: [{ id: 9536663, title: 'Revi strong 2 ml', amount: 2, first_cost: 24000, cost: 43200, cost_to_pay: 43200 }],
+    consumables: [{ good_id: 1, service_id: 9536663, amount: -2, cost: 10534 }], bonus_redeemed: 0, payments: [] };
+  test('норма техкарты умножается на количество; first_cost — за единицу, скидка считается от first_cost × amount', () => {
+    const c = ctx(); c.techCardFor = () => ({ items: [{ good_id: 1, amount: 1 }] });
+    const [row] = C.buildRows(rec, c);
+    expect(row.materials_norm).toBe(5267 * 2);
+    expect(row.materials_fact).toBe(5267 * 2);
+    expect(row.first_cost).toBe(48000);
+    expect(row.discount).toBe(4800);
+    expect(C.warnings([row], { from: '2026-09-01', to: '2026-09-30' }).filter(w => w.type === 'overrun')).toEqual([]);
+    const [est] = C.buildRows({ ...rec, consumables: [] }, c);
+    expect(est.materials_used).toBe(5267 * 2);              // оценка по норме — тоже на 2 единицы
+  });
+  test('нет amount / мусор → количество 1', () => {
+    const c = ctx(); c.techCardFor = () => ({ items: [{ good_id: 1, amount: 1 }] });
+    for (const amount of [undefined, null, 0, -1, 'x']) {
+      const [row] = C.buildRows({ ...rec, services: [{ ...rec.services[0], amount }] }, c);
+      expect(row.materials_norm).toBe(5267);
+      expect(row.first_cost).toBe(24000);
+    }
+  });
+});

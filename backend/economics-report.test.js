@@ -167,3 +167,19 @@ describe('payrollCheck', () => {
     expect(c.rows[0].diff).toBe(300);
   });
 });
+
+test('summary.warnings: предупреждения периода в сводке (визит без списаний при норме, товар без цены из списаний)', async () => {
+  store.loadPeriod.mockImplementation(async () => {
+    const p = period();
+    p.records.push({ record_id: 2, visit_date: '2026-09-11', staff_yc_id: 5, staff_name: 'A', seance_length: 1800,
+      services: [{ id: 11, title: 'S11', cost_to_pay: 500, first_cost: 500 }], bonus_redeemed: 0, consumables: [], payments: [] });
+    p.records[0].consumables.push({ good_id: 99, service_id: 10, amount: -1, cost: 0 });
+    p.records[1].visit_date = '2026-09-10';             // в тот же день у записи 1 списания есть
+    return p;
+  });
+  const r = await report.buildReport(SALON, '2026-09-01', '2026-09-30');
+  expect(r.summary.warnings).toEqual([
+    { type: 'no_consumables', service_yc_id: 11, service_title: 'S11', count: 1, record_ids: [2], last_date: '2026-09-10' },
+    { type: 'no_price', good_id: 99, good_title: 'товар 99', visits: 1 },
+  ]);
+});

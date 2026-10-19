@@ -24,7 +24,14 @@ const services = [
 ];
 const summary = { revenue: 415000, visits: 48, hours: 36, bonus_redeemed: 7800, bonus_in_revenue: 0, contribution: 218400, contribution_pct: 0.526,
   operating_profit: 148400, operating_pct: 0.357, usn_estimate: 22260, rate_minute_fact: 25.9, rate_minute_capacity: 9.4, idle_cost: 36000,
-  coverage: { consumables_share: 0.66, services_without_tech_card: 1, services_total: 3, goods_without_price: [7, 9], staff_without_pay_rule: 1 } };
+  coverage: { consumables_share: 0.66, services_without_tech_card: 1, services_total: 3, goods_without_price: [7, 9], staff_without_pay_rule: 1 },
+  // Task 22: по одному каждого вида + тег в названии (экранирование)
+  warnings: [
+    { type: 'no_consumables', service_yc_id: 10, service_title: 'Ботулинотерапия <b>лоб</b>', count: 3, record_ids: [1, 2, 3], last_date: '2026-09-28' },
+    { type: 'overrun', service_yc_id: 11, service_title: 'Биоревитализация Profhilo', record_id: 9, visit_date: '2026-09-12', staff_name: 'Гаджиева Пери', fact: 13500, norm: 10534, ratio: 1.28 },
+    { type: 'no_price', good_id: 21232086, good_title: 'Игла 0.3 х 13', visits: 10 },
+    { type: 'price_jump', good_id: 8, good_title: 'Гель для УЗИ', prev: 0.15, prev_at: '2026-08-05', last: 0.19, ratio: 1.27, at: '2026-09-05' },
+  ] };
 const detail = {
   service: { ...services[0], price: 298000, discount: 4000, bonus_in_revenue: 0, materials_fact: 90000, materials_norm: 96000, doctor_pay: 40000,
     coverage: { acquiring_estimated: 1 }, usn_estimate: 18900 },
@@ -139,7 +146,16 @@ async function main() {
     assert.equal(await firstLabel(), 'Биоревитализация Profhilo');
     assert.equal(await page.$$eval('#ecoServices td.eco-neg', e => e.length) >= 1, true);
     console.log('PASS: сводка 6 плиток, 13 колонок, итог, сортировка, экранирование');
+    assert.equal(await page.$$eval('#ecoWarnings li', e => e.length), 4);
+    assert.equal(await page.$$eval('#ecoWarnings b', e => e.length), 0);
+    const wtxt = await page.$eval('#ecoWarnings', e => e.textContent);
+    assert.ok(wtxt.includes('Предупреждения (4)'));
+    assert.ok(wtxt.includes('«Ботулинотерапия <b>лоб</b>»: 3 визита без списаний'));
+    assert.ok(wtxt.includes('визит 12.09.2026 (Гаджиева Пери)'));
+    assert.ok(wtxt.includes('приход 05.09.2026 против 05.08.2026'));
+    console.log('PASS: предупреждения — 4 вида, экранирование, московские даты');
     await page.screenshot({ path: `${OUT}/services-light.png`, fullPage: true });
+    await (await page.$('#ecoWarnings')).screenshot({ path: `${OUT}/warnings-light.png` });
 
     // ── Материалы ──
     await page.evaluate(() => { document.documentElement.removeAttribute('data-theme'); });
@@ -345,6 +361,7 @@ async function main() {
     await page.evaluate(() => document.documentElement.setAttribute('data-theme', 'dark'));
     await new Promise(r => setTimeout(r, 800)); // дождаться transition темы
     await page.screenshot({ path: `${OUT}/detail-dark.png`, fullPage: true });
+    const wb = await page.$('#ecoWarnings'); await wb.screenshot({ path: `${OUT}/warnings-dark.png` });
     await page.click('#ecoTabBtn-tech-cards'); await page.waitForSelector('#ecoTechCards table');
     await new Promise(r => setTimeout(r, 800));
     await page.screenshot({ path: `${OUT}/techcards-dark.png`, fullPage: true });
@@ -363,6 +380,7 @@ async function main() {
     assert.ok(overflow <= 0, `страница шире экрана на ${overflow}px`);
     assert.ok(await page.$eval('#ecoServices .tw', e => e.scrollWidth > e.clientWidth), 'таблица листается внутри .tw');
     await page.screenshot({ path: `${OUT}/services-390.png`, fullPage: true });
+    await (await page.$('#ecoWarnings')).screenshot({ path: `${OUT}/warnings-390.png` });
     console.log('PASS: 390px — сводка в 2 колонки, таблица листается в .tw, страница не шире экрана');
     const tabsBox = await page.$eval('.eco-tabs', e => ({ sw: e.scrollWidth, cw: e.clientWidth, right: e.getBoundingClientRect().right }));
     assert.ok(tabsBox.right <= 390 + 1, `полоса вкладок вылезает за экран: ${JSON.stringify(tabsBox)}`);

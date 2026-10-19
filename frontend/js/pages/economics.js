@@ -61,22 +61,37 @@ async function ecoLoadServices() {
   try {
     if (!_eco.report) {
       box.className = ''; box.innerHTML = '<div class="empty">Загрузка…</div>'; sum.innerHTML = '';
+      ecoRenderWarnings([], document.getElementById('ecoWarnings'));
       const r = await api('GET', `/api/economics/services?${qs}`);
       if (qs !== ecoQs()) return; // период сменили, пока шёл запрос — ответ устарел
       _eco.report = r;
     }
     box.className = '';
     ecoRenderSummary(_eco.report.summary || {}, sum);
+    ecoRenderWarnings((_eco.report.summary || {}).warnings, document.getElementById('ecoWarnings'));
     ecoRenderServices(_eco.report.services || [], box);
   } catch (e) {
     if (qs !== ecoQs()) return;
     box.innerHTML = `<div class="empty">Ошибка: ${esc(e.message)}</div>`; sum.innerHTML = '';
+    ecoRenderWarnings([], document.getElementById('ecoWarnings'));
   }
 }
 
 function ecoRenderSummary(s, el) {
   el.innerHTML = ecoSummaryTiles(s).map(t =>
     `<div class="sc"><div class="eco-kpi">${esc(t.kpi)}</div><div>${esc(t.title)}</div>${t.sub ? `<div class="eco-kpi-sub">${esc(t.sub)}</div>` : ''}</div>`).join('');
+}
+
+const ECO_WARN_MAX = 30;
+const ECO_WARN_ICON = { no_consumables: '📦', overrun: '📈', no_price: '🏷️', price_jump: '💹' };
+function ecoRenderWarnings(list, el) {
+  if (!el) return;
+  const lines = ecoWarningLines(list);
+  if (!lines.length) { el.innerHTML = ''; return; }
+  const items = lines.slice(0, ECO_WARN_MAX).map(l => `<li><span aria-hidden="true">${ECO_WARN_ICON[l.type] || '•'}</span> ${esc(l.text)}</li>`).join('');
+  const more = lines.length > ECO_WARN_MAX ? `<li class="eco-kpi-sub">… и ещё ${lines.length - ECO_WARN_MAX}</li>` : '';
+  el.innerHTML = `<div class="card eco-warnings"><div class="eco-warnings-head">⚠️ Предупреждения (${lines.length})</div><ul>${items}${more}</ul>
+    <div class="eco-kpi-sub">Только то, что видно в данных: нет техкарты, нормы или сопоставимых приходов — предупреждения нет. Дни, когда в салоне не было ни одного списания, не проверяются (вероятно, данные не загружены).</div></div>`;
 }
 
 function ecoRenderServices(groups, el) {

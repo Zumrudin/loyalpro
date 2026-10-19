@@ -281,3 +281,38 @@ test('второе ревью п.9: ecoDictsCacheable — пустой/degraded 
   assert.strictEqual(ctx.ecoDictsCacheable({ services: [], staff: [], categories: [] }), false);
   assert.strictEqual(ctx.ecoDictsCacheable(null), false);
 });
+
+test('Task 22: ecoWarningLines — тексты предупреждений без HTML, даты по Москве, порядок как у сервера', () => {
+  const lines = plain(ctx.ecoWarningLines([
+    { type: 'no_consumables', service_yc_id: 10, service_title: 'Ботокс <лоб>', count: 3, record_ids: [1, 2, 3], last_date: '2026-09-12' },
+    { type: 'overrun', service_yc_id: 10, service_title: 'S', record_id: 7, visit_date: '2026-09-10', staff_name: 'Пери', fact: 1300, norm: 1000, ratio: 1.3 },
+    { type: 'no_price', good_id: 7, good_title: 'Игла', visits: 10 },
+    { type: 'price_jump', good_id: 8, good_title: 'Гель', prev: 100, prev_at: '2026-08-05', last: 130.5, ratio: 1.31, at: '2026-09-05' },
+    { type: 'чужое' },
+  ]));
+  assert.deepStrictEqual(lines, [
+    { type: 'no_consumables', text: '«Ботокс <лоб>»: 3 визита без списаний, хотя у услуги есть техкарта (последний 12.09.2026)' },
+    { type: 'overrun', text: '«S», визит 10.09.2026 (Пери): материалы 1 300 ₽ при норме 1 000 ₽ — ×1,3' },
+    { type: 'no_price', text: 'Товар без цены: «Игла» — списан в 10 визитах, цены нет ни в приходах, ни вручную, ни в каталоге' },
+    { type: 'price_jump', text: 'Цена поступления выросла: «Гель» 100 → 130,5 ₽ за ед. списания (×1,31; приход 05.09.2026 против 05.08.2026)' },
+  ]);
+  assert.deepStrictEqual(plain(ctx.ecoWarningLines(null)), []);
+  assert.strictEqual(ctx.ecoPlural(1, 'визит', 'визита', 'визитов'), 'визит');
+  assert.strictEqual(ctx.ecoPlural(12, 'визит', 'визита', 'визитов'), 'визитов');
+  assert.strictEqual(ctx.ecoPlural(22, 'визит', 'визита', 'визитов'), 'визита');
+});
+
+test('Task 22: ecoRenderWarnings — экранирует и режет список', () => {
+  // esc() из utils.js ходит в DOM: минимальный document с семантикой textContent → innerHTML.
+  ctx.document = { createElement: () => { let t = ''; return { set textContent(v) { t = String(v); }, get innerHTML() { return t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); } }; } };
+  const el = { innerHTML: '' };
+  const w = Array.from({ length: 35 }, (_, i) => ({ type: 'no_price', good_id: i, good_title: `<b>${i}</b>`, visits: 1 }));
+  ctx.ecoRenderWarnings(w, el);
+  assert.ok(el.innerHTML.includes('Предупреждения (35)'));
+  assert.ok(el.innerHTML.includes('&lt;b&gt;0&lt;/b&gt;'));
+  assert.ok(!el.innerHTML.includes('<b>0</b>'));
+  assert.ok(el.innerHTML.includes('… и ещё 5'));
+  ctx.ecoRenderWarnings([], el);
+  assert.strictEqual(el.innerHTML, '');
+  delete ctx.document;
+});

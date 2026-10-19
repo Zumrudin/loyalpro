@@ -5,7 +5,7 @@
 // аппараты и недоступный каталог YClients дают нули и флаги, не ошибку.
 const store = require('./store');
 const calc = require('./calc');
-const { unitPriceAsOf } = require('./price');
+const { unitPriceAsOf, mskDay } = require('./price');
 const { pickTechCard, suggestLinks } = require('./tech-cards');
 const { periodFixedCosts, equipmentPeriodCost, daysInMonth, r2 } = require('./allocation');
 const sync = require('./sync');
@@ -94,6 +94,7 @@ async function compute(salon, from, to) {
     .map(g => ({ ...g, service_yc_id: Number(g.key.split('|')[0]), staff_yc_id: Number(g.key.split('|')[1]) || null }));
   const summary = { ...calc.summary(rows, { fixedTotal: fixed.total, capacityMinutes: data.capacityMinutes, driver, equipmentTotal }),
     fixed_by_category: fixed.byCategory, equipment: equipment.map(e => ({ id: e.id, name: e.name, period_cost: e.periodCost })) };
+  summary.warnings = calc.warnings(rows, { receiptsByGood: data.receiptsByGood, catalogByGood: data.catalogByGood, from, to, today: mskDay(new Date()) });
   return { from, to, rows, byService, byServiceStaff, summary, settings: data.settings, meta, data };
 }
 
