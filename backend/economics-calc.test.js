@@ -23,7 +23,8 @@ const ctx = () => ({
   durations: new Map(), categories: new Map([['25013124', 100]]),
   priceFn: (goodId) => ({ price: PRICES[goodId] ?? 0, source: PRICES[goodId] ? 'receipt' : 'none' }),
   techCardFor: () => null,
-  payRules: [{ id: 1, staff_yc_id: null, service_yc_id: null, category_yc_id: null, percent: 30, base: 'gross', fixed_per_visit: 0, valid_from: null, valid_to: null }],
+  pay: { assignments: [{ id: 1, staff_yc_id: 1910274, scheme_id: 1, valid_from: null, valid_to: null }],
+    schemes: [{ id: 1, lines: [{ percent: 30, base: 'gross', payroll_multiplier: null, fixed_per_visit: 0, categories: [], services: [] }] }] },
   settings: { payroll_multiplier: 1.3, pay_base_includes_bonuses: false, acquiring: { 'Расчетный счет': 1.5 } },
 });
 
@@ -115,15 +116,22 @@ describe('норма и флаги покрытия', () => {
     expect(rows[0].materials_fact).toBeCloseTo(5267 * 22500 / 27500, 2);
     expect(rows[1].materials_fact).toBeCloseTo(5267 - 4309.36, 2);
   });
-  test('нет правила оплаты → 0 и no_pay_rule', () => {
-    const c = ctx(); c.payRules = [];
+  test('нет назначения → 0 и no_pay_rule; pay_scheme_id null', () => {
+    const c = ctx(); c.pay = { assignments: [], schemes: c.pay.schemes };
     const rows = C.buildRows(RECORD, c);
     expect(rows[0].doctor_cost).toBe(0);
     expect(rows[0].no_pay_rule).toBe(true);
+    expect(rows[0].pay_scheme_id).toBeNull(); expect(rows[0].pay_line_idx).toBeNull();
+  });
+  test('услуга вне линий схемы без «остальных» → no_pay_rule только у неё', () => {
+    const c = ctx();
+    c.pay.schemes = [{ id: 1, lines: [{ percent: 30, base: 'gross', payroll_multiplier: null, fixed_per_visit: 0, categories: [], services: [9536380] }] }];
+    const rows = C.buildRows(RECORD, c);
+    expect(rows[0].no_pay_rule).toBe(false); expect(rows[1].no_pay_rule).toBe(true);
   });
   test('база net_of_materials вычитает materials_used; pay_base_includes_bonuses → база price', () => {
     const c = ctx();
-    c.payRules = [{ id: 2, staff_yc_id: null, service_yc_id: null, category_yc_id: null, percent: 30, base: 'net_of_materials', fixed_per_visit: 0 }];
+    c.pay.schemes = [{ id: 1, lines: [{ percent: 30, base: 'net_of_materials', payroll_multiplier: null, fixed_per_visit: 0, categories: [], services: [] }] }];
     let rows = C.buildRows(RECORD, c);
     expect(rows[0].pay_base).toBeCloseTo(22500 - 5387.63, 2);
     expect(rows[0].doctor_pay).toBeCloseTo((22500 - 5387.63) * 0.3, 2);
@@ -131,26 +139,51 @@ describe('норма и флаги покрытия', () => {
     rows = C.buildRows(RECORD, c);
     expect(rows[0].pay_base).toBeCloseTo(22500 - 5387.63, 2);
   });
-  test('fixed_per_visit — ОДИН раз на запись: у общего правила делится между строками записи по цене', () => {
+  test('коэффициент ФОТ линии главнее настроек салона', () => {
     const c = ctx();
-    c.payRules = [{ id: 3, staff_yc_id: 1910274, service_yc_id: null, category_yc_id: null, percent: 0, base: 'gross', fixed_per_visit: 500 }];
+    c.pay.schemes = [{ id: 1, lines: [{ percent: 10, base: 'gross', payroll_multiplier: 1.494, fixed_per_visit: 0, categories: [], services: [] }] }];
+    const rows = C.buildRows(RECORD, c);
+    expect(rows[0].doctor_pay).toBeCloseTo(2250, 2);
+    expect(rows[0].doctor_cost).toBeCloseTo(2250 * 1.494, 2);
+  });
+  test('fixed_per_visit — ОДИН раз на запись: у линии «остальные» делится между строками записи по цене', () => {
+    const c = ctx();
+    c.pay.schemes = [{ id: 1, lines: [{ percent: 0, base: 'gross', payroll_multiplier: null, fixed_per_visit: 500, categories: [], services: [] }] }];
     const rows = C.buildRows(RECORD, c);
     expect(rows[0].doctor_pay).toBeCloseTo(409.09, 2);
     expect(rows[1].doctor_pay).toBeCloseTo(90.91, 2);
     expect(rows[0].doctor_pay + rows[1].doctor_pay).toBeCloseTo(500, 6);
     expect(rows[0].doctor_cost).toBeCloseTo(409.09 * 1.3, 2);
   });
-  test('fixed_per_visit у правила на конкретную услугу — целиком на её строку, другая строка по своему правилу', () => {
+  test('fixed_per_visit у линии на конкретную услугу — целиком на её строку, другая строка по «остальным»', () => {
     const c = ctx();
-    c.payRules = [
-      { id: 1, staff_yc_id: null, service_yc_id: null, category_yc_id: null, percent: 30, base: 'gross', fixed_per_visit: 0 },
-      { id: 4, staff_yc_id: null, service_yc_id: 25013124, category_yc_id: null, percent: 10, base: 'gross', fixed_per_visit: 300 },
-    ];
+    c.pay.schemes = [{ id: 1, lines: [
+      { percent: 30, base: 'gross', payroll_multiplier: null, fixed_per_visit: 0, categories: [], services: [] },
+      { percent: 10, base: 'gross', payroll_multiplier: null, fixed_per_visit: 300, categories: [], services: [25013124] },
+    ] }];
     const rows = C.buildRows(RECORD, c);
-    expect(rows[0].pay_rule_id).toBe(1);
+    expect(rows[0].pay_scheme_id).toBe(1); expect(rows[0].pay_line_idx).toBe(0);
     expect(rows[0].doctor_pay).toBeCloseTo(22500 * 0.3, 2);
-    expect(rows[1].pay_rule_id).toBe(4);
+    expect(rows[1].pay_scheme_id).toBe(1); expect(rows[1].pay_line_idx).toBe(1);
     expect(rows[1].doctor_pay).toBeCloseTo(5000 * 0.1 + 300, 2);
+  });
+  test('приоритет: услуга в линии бьёт категорию той же услуги; категория бьёт «остальные»', () => {
+    const c = ctx(); // category 100 у ботулинотерапии 25013124
+    c.pay.schemes = [{ id: 1, lines: [
+      { percent: 5, base: 'gross', payroll_multiplier: null, fixed_per_visit: 0, categories: [], services: [] },
+      { percent: 15, base: 'gross', payroll_multiplier: null, fixed_per_visit: 0, categories: [100], services: [] },
+      { percent: 20, base: 'gross', payroll_multiplier: null, fixed_per_visit: 0, categories: [], services: [25013124] },
+    ] }];
+    let rows = C.buildRows(RECORD, c);
+    expect(rows[1].pay_line_idx).toBe(2); expect(rows[1].doctor_pay).toBeCloseTo(1000, 2);
+    expect(rows[0].pay_line_idx).toBe(0); expect(rows[0].doctor_pay).toBeCloseTo(1125, 2);
+    c.pay.schemes[0].lines.pop();
+    rows = C.buildRows(RECORD, c);
+    expect(rows[1].pay_line_idx).toBe(1); expect(rows[1].doctor_pay).toBeCloseTo(750, 2);
+  });
+  test('назначение, не действующее на дату визита → no_pay_rule', () => {
+    const c = ctx(); c.pay.assignments = [{ id: 1, staff_yc_id: 1910274, scheme_id: 1, valid_from: '2026-11-01', valid_to: null }];
+    expect(C.buildRows(RECORD, c)[0].no_pay_rule).toBe(true);
   });
   test('нет оплат → эквайринг по средней доле периода, estimated', () => {
     const rows = C.buildRows({ ...RECORD, payments: [] }, ctx());
