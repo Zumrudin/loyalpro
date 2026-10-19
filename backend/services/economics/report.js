@@ -75,7 +75,7 @@ function buildCtx(data, meta) {
     const link = pickTechCard(data.links, serviceId, staffId);
     return link ? data.cards.get(link.tech_card_id) || null : null;
   };
-  return { durations: meta.durations, categories: meta.categories, priceFn, techCardFor, payRules: data.payRules, settings: data.settings };
+  return { durations: meta.durations, categories: meta.categories, priceFn, techCardFor, pay: data.pay, settings: data.settings };
 }
 
 async function compute(salon, from, to) {
@@ -120,7 +120,7 @@ async function serviceDetail(salon, serviceId, from, to) {
     record_id: x.record_id, visit_date: x.visit_date, staff_name: x.staff_name, price: x.price, first_cost: x.first_cost, discount: x.discount, bonus_redeemed: x.bonus_redeemed, bonus_applied: x.bonus_applied,
     revenue: x.revenue, materials_used: x.materials_used, materials_fact: x.materials_fact, materials_norm: x.materials_norm, materials_yc_cost: x.materials_yc_cost,
     materials_estimated: x.materials_estimated, no_materials_data: x.no_materials_data, no_price_goods: x.no_price_goods,
-    doctor_cost: x.doctor_cost, no_pay_rule: x.no_pay_rule, acquiring_cost: x.acquiring_cost, acquiring_estimated: x.acquiring_estimated,
+    doctor_cost: x.doctor_cost, no_pay_rule: x.no_pay_rule, pay_scheme_id: x.pay_scheme_id, pay_line_idx: x.pay_line_idx, acquiring_cost: x.acquiring_cost, acquiring_estimated: x.acquiring_estimated,
     contribution: x.contribution, overhead: x.overhead, equipment_cost: x.equipment_cost, operating_profit: x.operating_profit, minutes: x.minutes,
   })).sort((a, b) => b.visit_date.localeCompare(a.visit_date) || b.record_id - a.record_id);
   return { service, byStaff, visits, settings: r.settings };

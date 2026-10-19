@@ -4,7 +4,7 @@
 // копейки появляются только там, где делится общая сумма (splitByWeights: доли
 // сходятся с итогом) и на выдаче агрегатов (r2).
 const { splitByWeights, splitMinutes, allocate, r2 } = require('./allocation');
-const { pickRule, doctorPay } = require('./pay-rules');
+const { resolvePay, doctorPay } = require('./pay-rules');
 const { normCost } = require('./tech-cards');
 const { receiptUnitPrice, mskDay, writeoffQty } = require('./price');
 
@@ -17,7 +17,7 @@ const has = (v) => v !== undefined && v !== null;
  *   services:[{id,title,cost_to_pay,first_cost,cost}], consumables:[{good_id, service_id|null, amount, cost, cost_per_unit, unit_equals}],
  *   bonus_redeemed, payments:[{amount, account_title}] }
  * ctx = { durations: Map<svcIdStr,сек>, categories: Map<svcIdStr,catId>, priceFn(goodId,date)→{price,source},
- *   techCardFor(serviceId, staffId)→card|null, payRules:[…],
+ *   techCardFor(serviceId, staffId)→card|null, pay:{assignments, schemes},
  *   settings:{payroll_multiplier, pay_base_includes_bonuses, acquiring:{[account_title]:pct}} }
  * Эквайринг без привязанных оплат остаётся null — его дооценивает finalizeRows
  * (нужна средняя доля периода), там же считается маржинальная прибыль.
@@ -109,19 +109,19 @@ function buildRows(record, ctx) {
   const acqTotal = payments.reduce((a, p) => a + n(p.amount) * (n(pct[p.account_title]) / 100), 0);
   const acqParts = splitByWeights(acqTotal, prices);
 
-  // Правило оплаты (§3.3) выбирается на каждую строку; fixed_per_visit — «за визит»,
-  // поэтому у правила, под которое попало несколько строк ОДНОЙ записи, фикс берётся
-  // один раз и делится между ними по цене (иначе общее правило сотрудника с фиксом
-  // начисляло бы его на каждую услугу записи).
-  const rules = services.map(s => {
+  // Линия схемы оплаты выбирается на каждую строку (спека 2026-10-19, §3); fixed_per_visit —
+  // «за визит», поэтому у линии, под которую попало несколько строк ОДНОЙ записи, фикс
+  // берётся один раз и делится между ними по цене (иначе линия «остальные услуги» с
+  // фиксом начисляла бы его на каждую услугу записи).
+  const hits = services.map(s => {
     const categoryId = categories.has(String(s.id)) ? categories.get(String(s.id)) : null;
-    return { categoryId, rule: pickRule((ctx && ctx.payRules) || [], { staffId, serviceId: s.id, categoryId, date }) };
+    return { categoryId, hit: resolvePay(ctx && ctx.pay, { staffId, serviceId: s.id, categoryId, date }) };
   });
   const fixedShare = services.map(() => 0);
-  const byRule = new Map();
-  rules.forEach((r, i) => { if (r.rule) { const k = String(r.rule.id); if (!byRule.has(k)) byRule.set(k, []); byRule.get(k).push(i); } });
-  for (const idx of byRule.values()) {
-    const fixed = n(rules[idx[0]].rule.fixed_per_visit);
+  const byLine = new Map();
+  hits.forEach((h, i) => { if (h.hit) { const k = `${h.hit.schemeId}:${h.hit.lineIdx}`; if (!byLine.has(k)) byLine.set(k, []); byLine.get(k).push(i); } });
+  for (const idx of byLine.values()) {
+    const fixed = n(hits[idx[0]].hit.line.fixed_per_visit);
     if (idx.length === 1 || !fixed) { idx.forEach(i => { fixedShare[i] = fixed; }); continue; }
     const parts = splitByWeights(fixed, idx.map(i => prices[i]));
     idx.forEach((i, k) => { fixedShare[i] = parts[k]; });
@@ -138,10 +138,10 @@ function buildRows(record, ctx) {
     const bonus = bonusParts[i];
     const bonusApplied = bonusAppliedParts[i];
     const revenue = s.price;
-    const { categoryId, rule } = rules[i];
+    const { categoryId, hit } = hits[i];
     // price для doctorPay — база «до бонусов» (pay_base_includes_bonuses): к оплате плюс
     // бонусы, которые YClients уже вычел из неё (Profhilo 23400 + 2600 → 26000).
-    const dp = doctorPay({ price: s.price + bonusApplied, revenue, materials_used }, rule ? { ...rule, fixed_per_visit: fixedShare[i] } : null, settings);
+    const dp = doctorPay({ price: s.price + bonusApplied, revenue, materials_used }, hit ? { ...hit.line, fixed_per_visit: fixedShare[i] } : null, settings);
     const noPriceConsumed = [...new Set([...o.noPrice, ...rec.noPrice])].map(Number).sort((a, b) => a - b);
     const noPriceGoods = [...new Set([...noPriceConsumed, ...(hasCons ? [] : (norm ? norm.noPrice : []))])]
       .map(Number).sort((a, b) => a - b);
@@ -157,7 +157,7 @@ function buildRows(record, ctx) {
       // Для предупреждений (Task 22): товары без цены именно из РЕАЛЬНЫХ списаний;
       // норма посчитана по всем своим товарам; факт строки включает долю общих списаний.
       no_price_consumed: noPriceConsumed, norm_complete: !!norm && norm.noPrice.length === 0, fact_shared: factShared,
-      pay_rule_id: rule ? rule.id : null, pay_base: dp.base, doctor_pay: dp.pay, doctor_cost: dp.cost, no_pay_rule: dp.noRule,
+      pay_scheme_id: hit ? hit.schemeId : null, pay_line_idx: hit ? hit.lineIdx : null, pay_base: dp.base, doctor_pay: dp.pay, doctor_cost: dp.cost, no_pay_rule: dp.noRule,
       has_payments: payments.length > 0,
       acquiring_cost: payments.length ? acqParts[i] : null, acquiring_estimated: payments.length === 0,
       contribution: null, contribution_pct: null,

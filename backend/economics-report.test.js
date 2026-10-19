@@ -19,7 +19,8 @@ function period() {
     receiptsByGood: new Map([[7, [{ create_date: '2026-09-01T10:00:00Z', amount: 2, cost: 100, operation_unit_type: 2 }]]]),
     catalogByGood: new Map([[7, { unit_equals: 1, unit_actual_cost: 45 }], [8, { unit_actual_cost: 12 }]]),
     overridesByGood: new Map(),
-    payRules: [{ id: 1, staff_yc_id: null, service_yc_id: null, category_yc_id: null, percent: 10, base: 'gross', fixed_per_visit: 0, valid_from: null, valid_to: null }],
+    pay: { assignments: [{ id: 1, staff_yc_id: 5, scheme_id: 1, valid_from: null, valid_to: null }],
+      schemes: [{ id: 1, lines: [{ percent: 10, base: 'gross', payroll_multiplier: null, fixed_per_visit: 0, categories: [], services: [] }] }] },
     settings: { payroll_multiplier: 1, pay_base_includes_bonuses: false, allocation_driver: 'minutes', usn_rate: 15, acquiring: {} },
     fixedCosts: [{ id: 1, category: 'rent', amount_month: 3000, month_from: '2026-01-01', month_to: null }],
     equipment: [], capacityMinutes: 600,
@@ -92,12 +93,12 @@ test('ревью: категория «инд.» услуги (нет в priced)
   yc.ycGetServiceCatalog.mockResolvedValue({ priced: [] });
   store.loadPeriod.mockImplementation(async () => {
     const p = period();
-    p.payRules = [{ id: 7, staff_yc_id: null, service_yc_id: null, category_yc_id: 200, percent: 50, base: 'gross', fixed_per_visit: 0, valid_from: null, valid_to: null }];
+    p.pay.schemes = [{ id: 7, lines: [{ percent: 50, base: 'gross', payroll_multiplier: null, fixed_per_visit: 0, categories: [200], services: [] }] }]; p.pay.assignments = [{ id: 1, staff_yc_id: 5, scheme_id: 7, valid_from: null, valid_to: null }];
     return p;
   });
   const r = await report.buildReport(SALON, '2026-09-01', '2026-09-30');
   expect(r.rows[0].category_yc_id).toBe(200);
-  expect(r.rows[0].pay_rule_id).toBe(7);
+  expect(r.rows[0].pay_scheme_id).toBe(7); expect(r.rows[0].pay_line_idx).toBe(0);
   expect(r.rows[0].doctor_cost).toBe(500);
 });
 test('ревью: кэш отчёта ограничен (кап), протухшие вытесняются', async () => {
@@ -159,7 +160,7 @@ describe('payrollCheck', () => {
     store.loadPeriod.mockImplementation(async () => {
       const p = period();
       p.records[0].services = [{ id: 10, title: 'S10', cost_to_pay: 1000, first_cost: 1000 }, { id: 11, title: 'S11', cost_to_pay: 1000, first_cost: 1000 }];
-      p.payRules = [{ id: 1, staff_yc_id: null, service_yc_id: null, category_yc_id: null, percent: 0, base: 'gross', fixed_per_visit: 300, valid_from: null, valid_to: null }];
+      p.pay.schemes = [{ id: 1, lines: [{ percent: 0, base: 'gross', payroll_multiplier: null, fixed_per_visit: 300, categories: [], services: [] }] }];
       return p;
     });
     const c = await report.payrollCheck(SALON, '2026-09');
