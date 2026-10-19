@@ -141,5 +141,147 @@ async function listRecordsToLearn(salonId, day, limit) {
   return db.any(RECORDS_TO_LEARN_SQL, [salonId, day, limit]);
 }
 
+// ── Загрузчики отчёта (задача 11) ────────────────────────────────────────────
+// Форма выхода — ровно вход calc.buildRows/report.js: числа уже приведены
+// (pg отдаёт bigint/numeric строками), даты — 'YYYY-MM-DD' по Москве.
+
+const DEFAULT_SETTINGS = Object.freeze({
+  payroll_multiplier: 1.3, pay_base_includes_bonuses: false, allocation_driver: 'minutes', usn_rate: 15, acquiring: Object.freeze({}),
+});
+
+// Состоявшиеся визиты периода: attendance=1, не удалены (у YClients удалённая
+// запись может держать attendance=1 — отсюда обе проверки). Мастер — из staff,
+// запасной путь raw_payload.staff_id. Списания бонусов по записи — LATERAL по
+// частичному индексу idx_lct_salon_record. ГОТЧА: loyalty_card_transactions.record_id
+// — это ВНУТРЕННИЙ records.id (его ставит loyalty.linkCardTransactionsToRecords),
+// у части старых строк — yclients_record_id (так же сверяет дашборд, routes/api.js);
+// сравнение только с yclients_record_id не находило на деве ни одного списания.
+const RECORDS_SQL = `
+  SELECT r.yclients_record_id AS record_id,
+         to_char(r.visit_date, 'YYYY-MM-DD') AS visit_date,
+         COALESCE(NULLIF(r.staff->>'id',''), NULLIF(r.raw_payload->>'staff_id',''))::bigint AS staff_yc_id,
+         COALESCE(r.staff->>'name', r.specialist_name, '') AS staff_name,
+         COALESCE(NULLIF(r.raw_payload->>'seance_length','')::int, 0) AS seance_length,
+         COALESCE(r.services, '[]'::jsonb) AS services,
+         COALESCE(b.bonus_redeemed, 0) AS bonus_redeemed
+  FROM records r
+  LEFT JOIN LATERAL (
+    SELECT SUM(ABS(t.amount)) AS bonus_redeemed FROM loyalty_card_transactions t
+    WHERE t.salon_id = r.salon_id AND t.record_id IN (r.id, r.yclients_record_id) AND t.type = 'redemption'
+  ) b ON TRUE
+  WHERE r.salon_id = $1 AND r.visit_date BETWEEN $2::date AND $3::date
+    AND r.raw_payload->>'attendance' = '1'
+    AND COALESCE(r.status, '') <> 'deleted'
+    AND COALESCE(r.raw_payload->>'deleted', 'false') <> 'true'
+  ORDER BY r.visit_date, r.yclients_record_id`;
+
+const CONSUMABLES_SQL = `
+  SELECT t.record_id, t.service_id, t.good_id, t.good_title, t.amount, t.cost, t.cost_per_unit, t.unit_title
+  FROM goods_transactions t WHERE t.salon_id = $1 AND t.type_id = 2 AND t.deleted_at IS NULL
+    AND t.record_id = ANY($2::bigint[])
+  ORDER BY t.record_id, t.yclients_txn_id`;
+
+const PAYMENTS_SQL = `
+  SELECT yclients_record_id AS record_id, amount, account_title
+  FROM revenue_operations WHERE salon_id = $1 AND category = 'services' AND yclients_record_id = ANY($2::bigint[])`;
+
+// Приходы до конца дня $3 по Москве: create_date — timestamptz, граница считается
+// явно, а не через TimeZone сессии пула.
+const RECEIPTS_SQL = `
+  SELECT good_id, create_date, amount, cost, operation_unit_type
+  FROM goods_transactions WHERE salon_id = $1 AND type_id = 3 AND deleted_at IS NULL AND amount > 0
+    AND good_id = ANY($2::bigint[])
+    AND create_date < (($3::date + 1)::timestamp AT TIME ZONE 'Europe/Moscow')
+  ORDER BY good_id, create_date DESC`;
+
+const CATALOG_SQL = `
+  SELECT yclients_good_id AS good_id, title, unit, service_unit, unit_equals, actual_cost, unit_actual_cost, last_receipt_price, last_receipt_at
+  FROM yclients_goods_catalog WHERE salon_id = $1 AND yclients_good_id = ANY($2::bigint[])`;
+
+const OVERRIDES_SQL = `SELECT good_id, unit_price, note FROM goods_price_overrides WHERE salon_id = $1`;
+const CARDS_SQL = `SELECT id, yc_card_id, title, items, source, synced_at, updated_at FROM tech_cards WHERE salon_id = $1`;
+const LINKS_SQL = `SELECT service_yc_id, staff_yc_id, tech_card_id, source, updated_at FROM service_tech_cards WHERE salon_id = $1`;
+const PAY_RULES_SQL = `
+  SELECT id, staff_yc_id, service_yc_id, category_yc_id, percent, base, fixed_per_visit,
+         to_char(valid_from, 'YYYY-MM-DD') AS valid_from, to_char(valid_to, 'YYYY-MM-DD') AS valid_to, note
+  FROM staff_pay_rules WHERE salon_id = $1 ORDER BY id`;
+const SETTINGS_SQL = `SELECT payroll_multiplier, pay_base_includes_bonuses, allocation_driver, usn_rate, acquiring FROM economics_settings WHERE salon_id = $1`;
+const FIXED_SQL = `
+  SELECT id, category, title, amount_month, to_char(month_from, 'YYYY-MM-DD') AS month_from, to_char(month_to, 'YYYY-MM-DD') AS month_to, note
+  FROM fixed_costs WHERE salon_id = $1 ORDER BY month_from, id`;
+const EQUIPMENT_SQL = `
+  SELECT id, name, purchase_price, to_char(purchase_date, 'YYYY-MM-DD') AS purchase_date, useful_life_months, residual_pct,
+         maintenance_monthly, service_ids, is_active, note
+  FROM equipment WHERE salon_id = $1 ORDER BY id`;
+const CAPACITY_SQL = `SELECT COALESCE(SUM(work_minutes), 0) AS minutes FROM staff_schedule WHERE salon_id = $1 AND date BETWEEN $2::date AND $3::date`;
+
+const N = (v) => (v === null || v === undefined || v === '' ? null : Number(v));
+const toInt = N;
+
+function normSettings(s) {
+  if (!s) return { ...DEFAULT_SETTINGS, acquiring: {} };
+  const usn = N(s.usn_rate);
+  return {
+    payroll_multiplier: N(s.payroll_multiplier) || DEFAULT_SETTINGS.payroll_multiplier,
+    pay_base_includes_bonuses: !!s.pay_base_includes_bonuses,
+    allocation_driver: s.allocation_driver === 'visits' ? 'visits' : 'minutes',
+    usn_rate: Number.isFinite(usn) ? usn : DEFAULT_SETTINGS.usn_rate,
+    acquiring: s.acquiring && typeof s.acquiring === 'object' && !Array.isArray(s.acquiring) ? { ...s.acquiring } : {},
+  };
+}
+
+function pushTo(map, k, v) { if (!map.has(k)) map.set(k, []); map.get(k).push(v); }
+
+/** Всё, что нужно отчёту за период, одним проходом. Типы приведены к числам. */
+async function loadPeriod(salonId, from, to) {
+  const recs = await db.any(RECORDS_SQL, [salonId, from, to]);
+  const ids = recs.map(r => toInt(r.record_id));
+  const [cons, pays] = ids.length
+    ? await Promise.all([db.any(CONSUMABLES_SQL, [salonId, ids]), db.any(PAYMENTS_SQL, [salonId, ids])])
+    : [[], []];
+  const consBy = new Map(); const paysBy = new Map();
+  for (const c of cons) pushTo(consBy, toInt(c.record_id), { good_id: toInt(c.good_id), service_id: toInt(c.service_id), amount: N(c.amount), cost: N(c.cost) });
+  for (const p of pays) pushTo(paysBy, toInt(p.record_id), { amount: N(p.amount), account_title: p.account_title || '' });
+  const records = recs.map(r => {
+    const id = toInt(r.record_id);
+    return {
+      record_id: id, visit_date: r.visit_date, staff_yc_id: toInt(r.staff_yc_id), staff_name: r.staff_name || '',
+      seance_length: Number(r.seance_length) || 0, services: Array.isArray(r.services) ? r.services : [],
+      bonus_redeemed: N(r.bonus_redeemed) || 0, consumables: consBy.get(id) || [], payments: paysBy.get(id) || [],
+    };
+  });
+
+  const [cardRows, linkRows, payRuleRows, settingsRow, fixedRows, eqRows, capRow, overrideRows] = await Promise.all([
+    db.any(CARDS_SQL, [salonId]), db.any(LINKS_SQL, [salonId]), db.any(PAY_RULES_SQL, [salonId]),
+    db.oneOrNone(SETTINGS_SQL, [salonId]), db.any(FIXED_SQL, [salonId]), db.any(EQUIPMENT_SQL, [salonId]),
+    db.oneOrNone(CAPACITY_SQL, [salonId, from, to]), db.any(OVERRIDES_SQL, [salonId]),
+  ]);
+  const cards = new Map(cardRows.map(c => [Number(c.id), { ...c, id: Number(c.id), yc_card_id: toInt(c.yc_card_id), items: Array.isArray(c.items) ? c.items : [] }]));
+  const links = linkRows.map(l => ({ ...l, service_yc_id: toInt(l.service_yc_id), staff_yc_id: toInt(l.staff_yc_id), tech_card_id: toInt(l.tech_card_id) }));
+
+  const goodIds = new Set();
+  for (const c of cons) if (c.good_id) goodIds.add(toInt(c.good_id));
+  for (const card of cards.values()) for (const it of card.items) if (it && Number(it.good_id) > 0) goodIds.add(Number(it.good_id));
+  const goodList = [...goodIds];
+  const [receiptRows, catalogRows] = goodList.length
+    ? await Promise.all([db.any(RECEIPTS_SQL, [salonId, goodList, to]), db.any(CATALOG_SQL, [salonId, goodList])])
+    : [[], []];
+  const receiptsByGood = new Map();
+  for (const r of receiptRows) pushTo(receiptsByGood, toInt(r.good_id), { create_date: r.create_date, amount: N(r.amount), cost: N(r.cost), operation_unit_type: toInt(r.operation_unit_type) });
+  const catalogByGood = new Map(catalogRows.map(c => [toInt(c.good_id), { ...c, good_id: toInt(c.good_id), unit_equals: N(c.unit_equals), unit_actual_cost: N(c.unit_actual_cost), actual_cost: N(c.actual_cost), last_receipt_price: N(c.last_receipt_price) }]));
+  const overridesByGood = new Map(overrideRows.map(o => [toInt(o.good_id), { unit_price: N(o.unit_price), note: o.note }]));
+
+  return {
+    from, to, records, cards, links, receiptsByGood, catalogByGood, overridesByGood,
+    payRules: payRuleRows.map(r => ({ ...r, staff_yc_id: toInt(r.staff_yc_id), service_yc_id: toInt(r.service_yc_id), category_yc_id: toInt(r.category_yc_id), percent: N(r.percent), fixed_per_visit: N(r.fixed_per_visit) })),
+    settings: normSettings(settingsRow),
+    fixedCosts: fixedRows.map(f => ({ ...f, amount_month: N(f.amount_month) })),
+    equipment: eqRows.map(e => ({ ...e, purchase_price: N(e.purchase_price), residual_pct: N(e.residual_pct), maintenance_monthly: N(e.maintenance_monthly), service_ids: Array.isArray(e.service_ids) ? e.service_ids.map(Number) : [] })),
+    capacityMinutes: capRow ? Number(capRow.minutes) || 0 : 0,
+  };
+}
+
 module.exports = { upsertCatalogGood, upsertGoodsTransaction, refreshLastReceipt, refreshAllLastReceipts, TXN_COLS,
-  upsertTechCard, upsertServiceTechCard, listTechCardIdsByYc, listRecordsToLearn, RECORDS_TO_LEARN_SQL };
+  upsertTechCard, upsertServiceTechCard, listTechCardIdsByYc, listRecordsToLearn, RECORDS_TO_LEARN_SQL,
+  loadPeriod, normSettings, DEFAULT_SETTINGS, RECORDS_SQL, CONSUMABLES_SQL, PAYMENTS_SQL, RECEIPTS_SQL, CATALOG_SQL,
+  OVERRIDES_SQL, CARDS_SQL, LINKS_SQL, PAY_RULES_SQL, SETTINGS_SQL, FIXED_SQL, EQUIPMENT_SQL, CAPACITY_SQL };

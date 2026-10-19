@@ -87,3 +87,61 @@ describe('техкарты', () => {
     expect(params).toEqual([1, '2026-10-17', 15]);
   });
 });
+
+describe('loadPeriod', () => {
+  test('собирает записи с consumables/payments, товары, карты, правила, настройки, бюджет, аппараты, мощность', async () => {
+    db.any.mockImplementation(async (sql, params) => {
+      if (/FROM records r/.test(sql)) return [{ record_id: '1', visit_date: '2026-09-10', staff_yc_id: '5', staff_name: 'A', seance_length: 3600,
+        services: [{ id: 10, cost_to_pay: 1000 }], bonus_redeemed: '100' }];
+      if (/FROM goods_transactions t WHERE t.salon_id = \$1 AND t.type_id = 2/.test(sql)) { expect(params[1]).toEqual([1]); return [{ record_id: '1', service_id: '10', good_id: '7', amount: '-1', cost: '50' }]; }
+      if (/FROM revenue_operations/.test(sql)) return [{ record_id: '1', amount: '1000', account_title: 'Расчетный счет' }];
+      if (/FROM tech_cards/.test(sql)) return [{ id: 3, yc_card_id: '36', title: 'C', items: [{ good_id: 8, amount: 2 }], source: 'yclients' }];
+      if (/FROM service_tech_cards/.test(sql)) return [{ service_yc_id: '10', staff_yc_id: null, tech_card_id: 3, source: 'learned' }];
+      if (/type_id = 3/.test(sql)) { expect(new Set(params[1])).toEqual(new Set([7, 8])); return [{ good_id: '7', create_date: new Date('2026-09-01T10:00:00Z'), amount: '2', cost: '100', operation_unit_type: 1 }]; }
+      if (/FROM yclients_goods_catalog/.test(sql)) return [{ good_id: '7', title: 'G', unit_equals: '1', unit_actual_cost: '45' }];
+      if (/FROM goods_price_overrides/.test(sql)) return [{ good_id: '8', unit_price: '9' }];
+      if (/FROM staff_pay_rules/.test(sql)) return [{ id: 1, percent: '30', base: 'gross', fixed_per_visit: '0', valid_from: null, valid_to: null, staff_yc_id: null, service_yc_id: null, category_yc_id: null }];
+      if (/FROM fixed_costs/.test(sql)) return [{ id: 1, category: 'rent', amount_month: '1000', month_from: '2026-01-01', month_to: null }];
+      if (/FROM equipment/.test(sql)) return [{ id: 1, name: 'L', purchase_price: '100', purchase_date: '2025-01-01', useful_life_months: 60, residual_pct: '0', maintenance_monthly: '0', service_ids: [10], is_active: true }];
+      return [];
+    });
+    db.oneOrNone.mockImplementation(async (sql) => {
+      if (/FROM economics_settings/.test(sql)) return { payroll_multiplier: '1.3', pay_base_includes_bonuses: false, allocation_driver: 'minutes', usn_rate: '15', acquiring: { 'Расчетный счет': 1.5 } };
+      if (/FROM staff_schedule/.test(sql)) return { minutes: '58415' };
+      return null;
+    });
+    const d = await store.loadPeriod(1, '2026-09-01', '2026-09-30');
+    expect(d.records).toHaveLength(1);
+    const r = d.records[0];
+    expect(r.record_id).toBe(1); expect(r.staff_yc_id).toBe(5); expect(r.bonus_redeemed).toBe(100);
+    expect(r.consumables).toEqual([{ good_id: 7, service_id: 10, amount: -1, cost: 50 }]);
+    expect(r.payments).toEqual([{ amount: 1000, account_title: 'Расчетный счет' }]);
+    expect(d.receiptsByGood.get(7)).toHaveLength(1);
+    expect(d.catalogByGood.get(7).unit_actual_cost).toBe(45);
+    expect(d.overridesByGood.get(8).unit_price).toBe(9);
+    expect(d.cards.get(3).title).toBe('C');
+    expect(d.links[0].service_yc_id).toBe(10);
+    expect(d.payRules[0].percent).toBe(30);
+    expect(d.settings.payroll_multiplier).toBe(1.3);
+    expect(d.settings.acquiring).toEqual({ 'Расчетный счет': 1.5 });
+    expect(d.fixedCosts[0].amount_month).toBe(1000);
+    expect(d.equipment[0].service_ids).toEqual([10]);
+    expect(d.capacityMinutes).toBe(58415);
+    // Все запросы скоупятся салоном: первый параметр — salon_id.
+    for (const [, params] of [...db.any.mock.calls, ...db.oneOrNone.mock.calls]) expect(params[0]).toBe(1);
+  });
+  test('пустой период и нет настроек → дефолты и пустые коллекции, без запросов по id', async () => {
+    db.any.mockResolvedValue([]); db.oneOrNone.mockResolvedValue(null);
+    const d = await store.loadPeriod(1, '2026-09-01', '2026-09-30');
+    expect(d.records).toEqual([]);
+    expect(d.settings).toEqual(store.DEFAULT_SETTINGS);
+    expect(d.capacityMinutes).toBe(0);
+    expect(db.any.mock.calls.some(([sql]) => /FROM revenue_operations|type_id = 3/.test(sql))).toBe(false);
+  });
+  test('normSettings: мусор → дефолты, acquiring не разделяется с DEFAULT_SETTINGS', () => {
+    const s = store.normSettings({ payroll_multiplier: null, allocation_driver: 'x', usn_rate: '6', acquiring: null });
+    expect(s).toEqual({ ...store.DEFAULT_SETTINGS, usn_rate: 6 });
+    expect(s.acquiring).not.toBe(store.DEFAULT_SETTINGS.acquiring);
+    expect(store.normSettings({ usn_rate: '0' }).usn_rate).toBe(0);
+  });
+});
