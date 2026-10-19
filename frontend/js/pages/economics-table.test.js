@@ -223,3 +223,46 @@ test('ecoRuleScopeParts: область правила', () => {
   assert.deepStrictEqual(plain(ctx.ecoRuleScopeParts({})), []);
   assert.deepStrictEqual(plain(ctx.ecoRuleScopeParts({ staff_yc_id: 1, category_yc_id: 3 })), [['сотрудник', 1], ['категория', 3]]);
 });
+
+test('ECO_FIXED_CATS совпадает с FIXED_CATEGORIES бэкенда', () => {
+  const { FIXED_CATEGORIES } = require('../../../backend/services/economics/fixed-categories');
+  assert.strictEqual(Object.keys(plain(k('ECO_FIXED_CATS'))).length, 9);
+  assert.deepStrictEqual(Object.keys(plain(k('ECO_FIXED_CATS'))).sort(), [...FIXED_CATEGORIES].sort());
+});
+
+test('ecoNextMonth / ecoFixedForMonth / ecoFixedMonths', () => {
+  assert.strictEqual(ctx.ecoNextMonth('2026-10'), '2026-11');
+  assert.strictEqual(ctx.ecoNextMonth('2026-12'), '2027-01');
+  const rows = [{ month_from: '2026-01-01', month_to: null, amount_month: '300000.00' }, { month_from: '2026-03-01', month_to: '2026-05-01', amount_month: '1000' }];
+  assert.strictEqual(plain(ctx.ecoFixedForMonth(rows, '2026-04')).length, 2);
+  assert.strictEqual(plain(ctx.ecoFixedForMonth(rows, '2026-06')).length, 1);
+  assert.strictEqual(plain(ctx.ecoFixedForMonth(rows, '2025-12')).length, 0);
+  assert.deepStrictEqual(plain(ctx.ecoFixedMonths(rows, '2026-10-18')), ['2026-10', '2026-03', '2026-01']);
+  assert.strictEqual(ctx.ecoFixedTotal(rows), 301000);
+});
+
+test('ecoParseFixedForm: тело как у parseFixedCost', () => {
+  const ok = plain(ctx.ecoParseFixedForm({ category: 'rent', title: ' Аренда ', amount: '300 000'.replace(' ', ''), from: '2026-01', to: '', note: '' }));
+  assert.deepStrictEqual(ok.value, { category: 'rent', title: 'Аренда', amountMonth: 300000, monthFrom: '2026-01', monthTo: null, note: '' });
+  assert.ok(ctx.ecoParseFixedForm({ category: 'x', amount: '1', from: '2026-01' }).error);
+  assert.ok(ctx.ecoParseFixedForm({ category: 'rent', amount: '', from: '2026-01' }).error, 'пустая сумма — не 0');
+  assert.ok(ctx.ecoParseFixedForm({ category: 'rent', amount: '-5', from: '2026-01' }).error);
+  assert.ok(ctx.ecoParseFixedForm({ category: 'rent', amount: '5', from: '2026-13' }).error);
+  assert.ok(ctx.ecoParseFixedForm({ category: 'rent', amount: '5', from: '2026-05', to: '2026-04' }).error);
+  assert.ok(ctx.ecoParseFixedForm({ category: '__proto__', amount: '5', from: '2026-05' }).error);
+  assert.strictEqual(ctx.ecoParseFixedForm({ category: 'rent', amount: '1,5', from: '2026-05', to: '2026-06' }).value.amountMonth, 1.5);
+});
+
+test('ecoParseEquipmentForm: тело как у parseEquipment', () => {
+  const ok = plain(ctx.ecoParseEquipmentForm({ name: ' Lumecca ', price: '5050000', date: '', life: '60', residual: '', maint: '', serviceIds: ['5', 5, '7'], active: '1', note: '' }));
+  assert.deepStrictEqual(ok.value, { name: 'Lumecca', purchasePrice: 5050000, purchaseDate: null, usefulLifeMonths: 60, residualPct: 0, maintenanceMonthly: 0, serviceIds: [5, 7], isActive: true, note: '' });
+  assert.strictEqual(ctx.ecoParseEquipmentForm({ name: 'A', price: '1', life: '12', serviceIds: [], active: '0' }).value.isActive, false);
+  for (const bad of [{ name: '' }, { price: '' }, { price: 'x' }, { life: '0' }, { life: '12.5' }, { life: '241' }, { residual: '101' }, { maint: '-1' }, { date: '2026-02-30' }, { serviceIds: ['abc'] }, { serviceIds: ['0'] }]) {
+    const f = { name: 'A', price: '10', life: '60', serviceIds: [], ...bad };
+    assert.ok(ctx.ecoParseEquipmentForm(f).error, JSON.stringify(bad));
+  }
+});
+
+test('ecoSeedBody: строка сида → тело POST', () => {
+  assert.deepStrictEqual(plain(ctx.ecoSeedBody({ name: 'X', purchase_price: 0, useful_life_months: 36, note: 'n' })), { name: 'X', purchasePrice: 0, usefulLifeMonths: 36, note: 'n', serviceIds: [] });
+});

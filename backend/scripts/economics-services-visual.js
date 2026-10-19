@@ -1,14 +1,14 @@
 'use strict';
-// Изолированная визуальная проверка вкладок «Экономика → Услуги / Материалы / Техкарты / Оплата труда / Настройки»: настоящие разметка/CSS/JS
+// Изолированная визуальная проверка вкладок «Экономика → Услуги / Материалы / Техкарты / Оплата труда / Постоянные расходы / Аппараты / Настройки»: настоящие разметка/CSS/JS
 // страницы, синтетические ответы /api/economics/*. Без сессий, БД, YClients и отправок.
-// node scripts/economics-services-visual.js   → скриншоты в /tmp/econ18/
+// node scripts/economics-services-visual.js   → скриншоты в /tmp/econ20/
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const express = require('express');
 const puppeteer = require('puppeteer');
 
-const OUT = '/tmp/econ18';
+const OUT = '/tmp/econ20';
 const svc = (key, label, o) => ({ key, label, visits: 0, revenue: 0, materials_used: 0, doctor_cost: 0, acquiring_cost: 0, contribution: 0, overhead: 0,
   equipment_cost: 0, operating_profit: 0, usn_estimate: 0, hours: 0, materials_estimated_rows: 0, discount: 0, bonus_redeemed: 0, bonus_in_revenue: 0,
   coverage: { rows: 1, with_consumables: 1, with_tech_card: 1, no_pay_rule: 0, no_price_goods: [], acquiring_estimated: 0 }, ...o });
@@ -61,7 +61,7 @@ async function main() {
   const block = index.slice(start, index.indexOf('</div>', end) + 6) + '</div>';
   const app = express();
   app.use(express.json());
-  app.use('/api/economics', (q, _r, n) => { if (q.method !== 'GET' || /goods|tech-cards|coverage|pay-rules|settings|sync/.test(q.path)) calls.push(`${q.method} ${q.originalUrl}${q.body && Object.keys(q.body).length ? ' ' + JSON.stringify(q.body) : ''}`); n(); });
+  app.use('/api/economics', (q, _r, n) => { if (q.method !== 'GET' || /goods|tech-cards|coverage|pay-rules|settings|sync|fixed-costs|equipment/.test(q.path)) calls.push(`${q.method} ${q.originalUrl}${q.body && Object.keys(q.body).length ? ' ' + JSON.stringify(q.body) : ''}`); n(); });
   app.get('/api/economics/goods', (q, res) => res.json({ goods: goods.filter(g => g.title.toLowerCase().includes(String(q.query.search || '').toLowerCase())) }));
   app.get('/api/economics/goods/:id/receipts', (_q, res) => res.json({ receipts }));
   app.put('/api/economics/goods/:id/price', (_q, res) => res.json({ ok: true }));
@@ -78,6 +78,20 @@ async function main() {
   app.post('/api/economics/pay-rules', (q, res) => { rules.push({ id: 3, staff_yc_id: q.body.staffYcId, service_yc_id: q.body.serviceYcId, category_yc_id: q.body.categoryYcId, percent: String(q.body.percent), base: q.body.base, fixed_per_visit: String(q.body.fixedPerVisit), valid_from: q.body.validFrom, valid_to: q.body.validTo, note: q.body.note }); res.json({ id: 3 }); });
   app.put('/api/economics/pay-rules/:id', (_q, res) => res.json({ ok: true }));
   app.delete('/api/economics/pay-rules/:id', (q, res) => { rules = rules.filter(r => r.id !== Number(q.params.id)); res.json({ ok: true }); });
+  let fixed = [{ id: 1, category: 'rent', title: 'Аренда <b>2 этаж</b>', amount_month: '300000.00', month_from: '2026-01-01', month_to: null, note: 'Договор <i>№5</i>' },
+    { id: 2, category: 'admin', title: 'Администраторы', amount_month: '150000.00', month_from: '2026-09-01', month_to: '2026-10-01', note: '' }];
+  app.get('/api/economics/fixed-costs', (_q, res) => res.json({ rows: fixed }));
+  app.post('/api/economics/fixed-costs/copy', (q, res) => res.json({ copied: q.query.from === '2026-10' ? 2 : 0 }));
+  app.post('/api/economics/fixed-costs', (q, res) => { fixed.push({ id: 3, category: q.body.category, title: q.body.title, amount_month: String(q.body.amountMonth), month_from: q.body.monthFrom + '-01', month_to: q.body.monthTo ? q.body.monthTo + '-01' : null, note: q.body.note }); res.json({ id: 3 }); });
+  app.put('/api/economics/fixed-costs/:id', (_q, res) => res.json({ ok: true }));
+  app.delete('/api/economics/fixed-costs/:id', (q, res) => { fixed = fixed.filter(r => r.id !== Number(q.params.id)); res.json({ ok: true }); });
+  let equip = [];
+  const eqMonthly = (b) => ({ total: Math.round(b.purchasePrice * (1 - (b.residualPct || 0) / 100) / b.usefulLifeMonths + (b.maintenanceMonthly || 0)) });
+  app.get('/api/economics/equipment/seed', (_q, res) => res.json({ seed: [{ name: 'Lumecca (InMode)', purchase_price: 5050000, useful_life_months: 60, note: 'prosalonoff' }, { name: 'PlaDuo', purchase_price: 0, useful_life_months: 60, note: 'цена не найдена' }] }));
+  app.get('/api/economics/equipment', (_q, res) => res.json({ rows: equip.map(e => ({ ...e, monthly: eqMonthly({ purchasePrice: e.purchase_price, residualPct: e.residual_pct, usefulLifeMonths: e.useful_life_months, maintenanceMonthly: e.maintenance_monthly }) })) }));
+  app.post('/api/economics/equipment', (q, res) => { const b = q.body; equip.push({ id: equip.length + 1, name: b.name, purchase_price: String(b.purchasePrice), purchase_date: b.purchaseDate || null, useful_life_months: b.usefulLifeMonths, residual_pct: String(b.residualPct || 0), maintenance_monthly: String(b.maintenanceMonthly || 0), service_ids: b.serviceIds, is_active: b.isActive !== false, note: b.note }); res.json({ id: equip.length }); });
+  app.put('/api/economics/equipment/:id', (_q, res) => res.json({ ok: true }));
+  app.delete('/api/economics/equipment/:id', (q, res) => { equip = equip.filter(r => r.id !== Number(q.params.id)); res.json({ ok: true }); });
   app.get('/api/economics/settings', (_q, res) => res.json({ settings: settingsState, accounts: [{ title: 'Расчетный счет', operations: 120 }, { title: 'Касса <u>1</u>', operations: 40 }] }));
   app.put('/api/economics/settings', (q, res) => res.json({ ok: true, settings: q.body }));
   app.post('/api/economics/sync', (_q, res) => res.json({ ok: false, steps: {}, errors: { catalog: 'лимит' } }));
@@ -223,6 +237,62 @@ async function main() {
     await new Promise(r => setTimeout(r, 300));
     assert.match(await page.evaluate(() => window._notes.join('\n')), /Синхронизация с ошибками: catalog\|err/);
     console.log('PASS: Настройки — кассы, проверка диапазонов, тело PUT, синк');
+    // ── Постоянные расходы ──
+    await page.evaluate(() => { document.documentElement.removeAttribute('data-theme'); window._notes.length = 0; });
+    await page.click('#ecoTabBtn-fixed');
+    await page.waitForSelector('#ecoFixed table tbody tr td:not(.empty)');
+    assert.equal(await page.$$eval('#ecoFixed .card', e => e.length), 3, 'блоки: 2026-10 (сегодня), 2026-09, 2026-01');
+    assert.equal(await page.$$eval('#ecoFixed b, #ecoFixed i', e => e.length), 0, 'теги в названии/заметке экранированы');
+    assert.match(await page.$eval('#ecoFixed', e => e.textContent), /2026-10 · 450 000 ₽ в месяц/);
+    assert.match(await page.$eval('#ecoFixed', e => e.textContent), /Аренда <b>2 этаж<\/b>/);
+    await page.screenshot({ path: `${OUT}/fixed-light.png`, fullPage: true });
+    await clickBtn('#ecoFixed button', '+ Статья');
+    await page.waitForSelector('#ecoFAmount');
+    await clickBtn('#ecoFixedForm button', 'Сохранить'); // пустая сумма
+    assert.match(await page.evaluate(() => window._notes.join('\n')), /Сумма в месяц/);
+    await page.select('#ecoFCat', 'cleaning'); await page.type('#ecoFTitle', 'Уборка'); await page.type('#ecoFAmount', '25000,5');
+    await clickBtn('#ecoFixedForm button', 'Сохранить');
+    await new Promise(r => setTimeout(r, 400));
+    assert.ok(calls.some(c => c.startsWith('POST /api/economics/fixed-costs ') && c.includes('"category":"cleaning"') && c.includes('"amountMonth":25000.5') && c.includes('"monthFrom":"2026-10"') && c.includes('"monthTo":null')), 'статья ушла в формате бэкенда');
+    await clickBtn('#ecoFixed button', 'Скопировать в 2026-11');
+    await new Promise(r => setTimeout(r, 400));
+    assert.ok(calls.some(c => c.startsWith('POST /api/economics/fixed-costs/copy?from=2026-10&to=2026-11')), 'копирование месяца');
+    assert.match(await page.evaluate(() => window._notes.join('\n')), /Скопировано статей: 2 → 2026-11/);
+    page.once('dialog', d => d.accept());
+    await page.$$eval('#ecoFixed tbody tr:last-child button', bs => bs.find(b => b.textContent === 'Удалить').click());
+    await new Promise(r => setTimeout(r, 400));
+    assert.ok(calls.some(c => c.startsWith('DELETE /api/economics/fixed-costs/')));
+    console.log('PASS: Постоянные расходы — блоки по месяцам, экранирование, проверка формы, POST/копирование/DELETE');
+
+    // ── Аппараты ──
+    await page.click('#ecoTabBtn-equipment');
+    await page.waitForSelector('#ecoEqSeed');
+    assert.match(await page.$eval('#ecoEquipment', e => e.textContent), /Реестр пуст/);
+    await page.click('#ecoEqSeed');
+    await page.waitForFunction(() => document.querySelectorAll('#ecoEquipment tbody tr').length === 2 && !document.querySelector('#ecoEquipment tbody td.empty'));
+    assert.ok(calls.filter(c => c.startsWith('POST /api/economics/equipment ')).length === 2, 'сид — два POST');
+    assert.match(await page.$eval('#ecoEquipment tbody', e => e.textContent), /84 167 ₽/, 'Lumecca: 5 050 000 / 60');
+    assert.equal(await page.$$eval('#ecoEquipment .eco-badge-warn', e => e.length), 2, 'без привязки к услугам — бейдж');
+    await page.$$eval('#ecoEquipment button', bs => bs.find(b => b.textContent === 'Изменить').click());
+    await page.waitForSelector('#ecoESvc');
+    await page.select('#ecoESvc', '101', '103');
+    await page.$eval('#ecoELife', e => { e.value = '12.5'; });
+    await clickBtn('#ecoEqForm button', 'Сохранить');
+    assert.match(await page.evaluate(() => window._notes.join('\n')), /Срок службы/);
+    await page.$eval('#ecoELife', e => { e.value = '60'; });
+    await page.screenshot({ path: `${OUT}/equipment-light.png`, fullPage: true });
+    await clickBtn('#ecoEqForm button', 'Сохранить');
+    await new Promise(r => setTimeout(r, 400));
+    assert.ok(calls.some(c => c.startsWith('PUT /api/economics/equipment/1 ') && c.includes('"serviceIds":[101,103]') && c.includes('"usefulLifeMonths":60') && c.includes('"purchasePrice":5050000')), 'привязка услуг ушла числами');
+    console.log('PASS: Аппараты — сид, расчёт в месяц, привязка услуг, проверка формы');
+    assert.equal(await page.evaluate(() => _eco.report), null, 'отчёт сброшен после мутаций');
+    await page.evaluate(() => document.documentElement.setAttribute('data-theme', 'dark'));
+    await new Promise(r => setTimeout(r, 800));
+    await page.screenshot({ path: `${OUT}/equipment-dark.png`, fullPage: true });
+    await page.click('#ecoTabBtn-fixed'); await page.waitForSelector('#ecoFixed table'); await new Promise(r => setTimeout(r, 800));
+    await page.screenshot({ path: `${OUT}/fixed-dark.png`, fullPage: true });
+    await page.evaluate(() => document.documentElement.removeAttribute('data-theme'));
+
     // после сохранения отчёт «Услуг» перезапрашивается
     const before = await page.evaluate(() => _eco.report);
     assert.equal(before, null, 'кэш отчёта сброшен после сохранения');
@@ -268,7 +338,7 @@ async function main() {
     const tabsBox = await page.$eval('.eco-tabs', e => ({ sw: e.scrollWidth, cw: e.clientWidth, right: e.getBoundingClientRect().right }));
     assert.ok(tabsBox.right <= 390 + 1, `полоса вкладок вылезает за экран: ${JSON.stringify(tabsBox)}`);
     assert.ok(tabsBox.sw > tabsBox.cw, 'полоса вкладок листается горизонтально');
-    for (const t of ['goods', 'tech-cards', 'pay', 'settings']) {
+    for (const t of ['goods', 'tech-cards', 'pay', 'fixed', 'equipment', 'settings']) {
       await page.click(`#ecoTabBtn-${t}`); await new Promise(r => setTimeout(r, 500));
       const ov = await page.evaluate(() => document.documentElement.scrollWidth - innerWidth);
       assert.ok(ov <= 0, `${t}: страница шире экрана на ${ov}px`);

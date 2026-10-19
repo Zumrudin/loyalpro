@@ -258,3 +258,73 @@ function ecoParseSettingsForm(f) {
   }
   return { value: { payrollMultiplier: mult, payBaseIncludesBonuses: f.base === '1', allocationDriver: f.driver, usnRate: usn, acquiring } };
 }
+
+// ── Постоянные расходы и аппараты (task 20) ──
+// Список статей совпадает с backend/services/economics/fixed-categories.js (тест паритета).
+const ECO_FIXED_CATS = { rent: 'Аренда', admin: 'Администраторы (с налогами)', cleaning: 'Уборка', utilities: 'Коммунальные', software: 'ПО и подписки', marketing: 'Маркетинг', accounting: 'Бухгалтерия', medwaste: 'Медотходы и стерилизация', other: 'Прочее' };
+
+/** 'YYYY-MM' → следующий месяц 'YYYY-MM'. */
+function ecoNextMonth(m) {
+  const [y, mo] = String(m).split('-').map(Number);
+  return mo === 12 ? `${y + 1}-01` : `${y}-${String(mo + 1).padStart(2, '0')}`;
+}
+function ecoIsMonth(s) { return typeof s === 'string' && /^\d{4}-(0[1-9]|1[0-2])$/.test(s); }
+
+/** Строки бюджета, действующие в месяце m ('YYYY-MM'): month_from ≤ m ≤ month_to (пусто = бессрочно). */
+function ecoFixedForMonth(rows, m) {
+  return (rows || []).filter(x => x.month_from.slice(0, 7) <= m && (!x.month_to || x.month_to.slice(0, 7) >= m));
+}
+/** Месяцы для блоков: все начала статей + текущий, новые сверху. Бессрочные статьи видны в блоках от начала. */
+function ecoFixedMonths(rows, today) {
+  const set = new Set((rows || []).map(x => x.month_from.slice(0, 7)));
+  set.add(String(today).slice(0, 7));
+  return [...set].sort().reverse();
+}
+function ecoFixedTotal(rows) { return rows.reduce((a, x) => a + Number(x.amount_month), 0); }
+
+/** Форма статьи → тело POST/PUT /fixed-costs (как parseFixedCost). f — строки из полей. */
+function ecoParseFixedForm(f) {
+  if (!Object.prototype.hasOwnProperty.call(ECO_FIXED_CATS, f.category)) return { error: 'Выберите статью расходов' };
+  const amount = ecoStrictNumber(f.amount);
+  if (!(amount >= 0 && amount <= 1e9)) return { error: 'Сумма в месяц — число от 0' };
+  const from = String(f.from || '').trim(), to = String(f.to || '').trim();
+  if (!ecoIsMonth(from)) return { error: 'Укажите месяц начала' };
+  if (to && !ecoIsMonth(to)) return { error: 'Неверный месяц окончания' };
+  if (to && to < from) return { error: 'Период: конец раньше начала' };
+  const title = String(f.title || '').trim();
+  if (title.length > 255) return { error: 'Название — не длиннее 255 символов' };
+  const note = String(f.note || '').trim();
+  if (note.length > 500) return { error: 'Заметка — не длиннее 500 символов' };
+  return { value: { category: f.category, title, amountMonth: amount, monthFrom: from, monthTo: to || null, note } };
+}
+
+/** Форма аппарата → тело POST/PUT /equipment (как parseEquipment). serviceIds — массив строк/чисел. */
+function ecoParseEquipmentForm(f) {
+  const name = String(f.name || '').trim();
+  if (!name || name.length > 255) return { error: 'Название — от 1 до 255 символов' };
+  const price = ecoStrictNumber(f.price);
+  if (!(price >= 0 && price <= 1e9)) return { error: 'Цена покупки — число от 0' };
+  const date = String(f.date || '').trim() || null;
+  if (date && !ecoIsDate(date)) return { error: 'Неверная дата покупки' };
+  const life = ecoStrictNumber(f.life);
+  if (!Number.isInteger(life) || life < 1 || life > 240) return { error: 'Срок службы — целое число месяцев от 1 до 240' };
+  const resRaw = String(f.residual === null || f.residual === undefined ? '' : f.residual).trim();
+  const residual = resRaw === '' ? 0 : ecoStrictNumber(resRaw);
+  if (!(residual >= 0 && residual <= 100)) return { error: 'Остаточная стоимость — от 0 до 100 %' };
+  const mRaw = String(f.maint === null || f.maint === undefined ? '' : f.maint).trim();
+  const maint = mRaw === '' ? 0 : ecoStrictNumber(mRaw);
+  if (!(maint >= 0 && maint <= 1e9)) return { error: 'ТО в месяц — число от 0' };
+  const ids = [];
+  for (const s of (f.serviceIds || [])) {
+    const id = Number(s);
+    if (!Number.isInteger(id) || id <= 0) return { error: 'Некорректная услуга в привязке' };
+    if (!ids.includes(id)) ids.push(id);
+  }
+  const note = String(f.note || '').trim();
+  if (note.length > 500) return { error: 'Заметка — не длиннее 500 символов' };
+  return { value: { name, purchasePrice: price, purchaseDate: date, usefulLifeMonths: life, residualPct: residual, maintenanceMonthly: maint, serviceIds: ids, isActive: f.active !== false && f.active !== '0', note } };
+}
+/** Строка сида → тело POST /equipment. */
+function ecoSeedBody(s) {
+  return { name: s.name, purchasePrice: s.purchase_price, usefulLifeMonths: s.useful_life_months, note: s.note || '', serviceIds: [] };
+}

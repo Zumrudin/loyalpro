@@ -368,5 +368,116 @@ async function ecoRunSync() {
   } catch (e) { notify('Ошибка: ' + e.message, 'err'); }
   finally { if (btn) btn.disabled = false; }
 }
-function ecoLoadFixed() {}
-function ecoLoadEquipment() {}
+
+// ── Постоянные расходы ──
+let _ecoFixSeq = 0;
+async function ecoLoadFixed() {
+  const el = document.getElementById('ecoFixed'); const seq = ++_ecoFixSeq;
+  try {
+    const r = await api('GET', '/api/economics/fixed-costs');
+    if (seq !== _ecoFixSeq) return;
+    el.className = '';
+    _eco.fixed = r.rows || [];
+    const blocks = ecoFixedMonths(_eco.fixed, ecoTodayMsk()).map(m => {
+      const rows = ecoFixedForMonth(_eco.fixed, m);
+      const tr = rows.map(x => `<tr><td>${esc(ECO_FIXED_CATS[x.category] || x.category)}</td><td>${esc(x.title)}${x.note ? `<div class="eco-kpi-sub">${esc(x.note)}</div>` : ''}</td><td class="num">${ecoMoney(x.amount_month)}</td><td>${esc(x.month_from.slice(0, 7))} — ${x.month_to ? esc(x.month_to.slice(0, 7)) : '…'}</td><td><div class="eco-actions"><button class="btn btn-sm" onclick="ecoEditFixed(${Number(x.id)})">Изменить</button><button class="btn btn-sm" onclick="ecoDeleteFixed(${Number(x.id)})">Удалить</button></div></td></tr>`).join('');
+      return `<div class="card eco-card-flush" style="margin-bottom:12px"><div class="bc-head" style="padding:12px 16px 0"><div class="bc-head-title">${esc(m)} · ${ecoMoney(ecoFixedTotal(rows))} в месяц</div><button class="btn btn-sm" onclick="ecoCopyFixed('${escAttr(m)}')">Скопировать в ${esc(ecoNextMonth(m))}</button></div>
+        <div class="tw"><table class="eco-tbl"><thead><tr><th>Статья</th><th>Название</th><th class="num">В месяц</th><th>Действует</th><th></th></tr></thead><tbody>${tr || '<tr><td colspan="5" class="empty">Статей нет</td></tr>'}</tbody></table></div></div>`;
+    }).join('');
+    el.innerHTML = `<div class="bc-head"><div><div class="bc-head-title">🏢 Постоянные расходы</div><div class="bc-head-sub">Помесячный бюджет по статьям. В отчёте делится по минутам визитов (или поровну) с учётом доли дней месяца в периоде</div></div><button class="btn btn-sm btn-pri" onclick="ecoEditFixed(null)">+ Статья</button></div><div id="ecoFixedForm"></div>${blocks}`;
+  } catch (e) { if (seq === _ecoFixSeq) el.innerHTML = `<div class="empty">Ошибка: ${esc(e.message)}</div>`; }
+}
+function ecoEditFixed(id) {
+  const x = id ? (_eco.fixed || []).find(f => Number(f.id) === Number(id)) : { category: 'rent', title: '', amount_month: '', month_from: ecoTodayMsk().slice(0, 7) + '-01', month_to: null, note: '' };
+  if (!x) return notify('Статья не найдена — обновите вкладку', 'err');
+  const cats = Object.entries(ECO_FIXED_CATS).map(([k, v]) => `<option value="${escAttr(k)}" ${x.category === k ? 'selected' : ''}>${esc(v)}</option>`).join('');
+  document.getElementById('ecoFixedForm').innerHTML = `<div class="card eco-detail" style="margin-bottom:12px"><div class="eco-form">
+    <div class="fg"><label class="fl">Статья</label><select id="ecoFCat">${cats}</select></div>
+    <div class="fg"><label class="fl">Название</label><input id="ecoFTitle" maxlength="255" value="${escAttr(x.title)}" placeholder="Аренда, 2 этаж"></div>
+    <div class="fg"><label class="fl">Сумма в месяц, ₽</label><input id="ecoFAmount" type="text" inputmode="decimal" value="${escAttr(String(x.amount_month === '' ? '' : Number(x.amount_month)))}"></div>
+    <div class="fg"><label class="fl">С месяца</label><input id="ecoFFrom" type="month" value="${escAttr(x.month_from.slice(0, 7))}"></div>
+    <div class="fg"><label class="fl">По месяц (пусто — бессрочно)</label><input id="ecoFTo" type="month" value="${escAttr(x.month_to ? x.month_to.slice(0, 7) : '')}"></div>
+    <div class="fg"><label class="fl">Заметка</label><input id="ecoFNote" maxlength="500" value="${escAttr(x.note || '')}"></div>
+    </div><div class="eco-actions" style="margin-top:10px"><button class="btn btn-sm btn-pri" id="ecoFSave" onclick="ecoSaveFixed(${id ? Number(id) : 'null'})">Сохранить</button><button class="btn btn-sm" onclick="document.getElementById('ecoFixedForm').innerHTML=''">Отмена</button></div></div>`;
+}
+async function ecoSaveFixed(id) {
+  const v = (i) => document.getElementById(i).value;
+  const p = ecoParseFixedForm({ category: v('ecoFCat'), title: v('ecoFTitle'), amount: v('ecoFAmount'), from: v('ecoFFrom'), to: v('ecoFTo'), note: v('ecoFNote') });
+  if (p.error) return notify(p.error, 'err');
+  const btn = document.getElementById('ecoFSave'); if (btn) btn.disabled = true;
+  try { await api(id ? 'PUT' : 'POST', id ? `/api/economics/fixed-costs/${Number(id)}` : '/api/economics/fixed-costs', p.value); _eco.report = null; notify('Сохранено'); ecoLoadFixed(); }
+  catch (e) { if (btn) btn.disabled = false; notify('Ошибка: ' + e.message, 'err'); }
+}
+async function ecoDeleteFixed(id) {
+  if (!confirm('Удалить статью?')) return;
+  try { await api('DELETE', `/api/economics/fixed-costs/${Number(id)}`); _eco.report = null; ecoLoadFixed(); } catch (e) { notify('Ошибка: ' + e.message, 'err'); }
+}
+async function ecoCopyFixed(month) {
+  if (!ecoIsMonth(month)) return;
+  const next = ecoNextMonth(month);
+  try { const r = await api('POST', `/api/economics/fixed-costs/copy?from=${month}&to=${next}`); _eco.report = null; notify(`Скопировано статей: ${ecoNum(r.copied)} → ${next}`); ecoLoadFixed(); }
+  catch (e) { notify('Ошибка: ' + e.message, 'err'); }
+}
+
+// ── Аппараты ──
+let _ecoEqSeq = 0;
+async function ecoLoadEquipment() {
+  const el = document.getElementById('ecoEquipment'); const seq = ++_ecoEqSeq;
+  try {
+    const [r, d] = await Promise.all([api('GET', '/api/economics/equipment'), ecoDicts()]);
+    if (seq !== _ecoEqSeq) return;
+    el.className = '';
+    _eco.equipment = r.rows || [];
+    const svcNames = (ids) => (ids || []).length ? (ids || []).map(id => esc(ecoDictName(d.services, id))).join(', ') : '<span class="badge eco-badge-warn">не привязан</span>';
+    const rows = _eco.equipment.map(e => `<tr${e.is_active ? '' : ' style="opacity:.5"'}><td>${esc(e.name)}${e.is_active ? '' : ' <span class="badge eco-badge-muted">не активен</span>'}${e.note ? `<div class="eco-kpi-sub">${esc(e.note)}</div>` : ''}</td><td class="num">${ecoMoney(e.purchase_price)}</td><td>${esc(e.purchase_date || '—')}</td><td class="num">${ecoNum(e.useful_life_months)}</td><td class="num">${ecoNum(Number(e.residual_pct), 1)}%</td><td class="num">${ecoMoney(e.maintenance_monthly)}</td><td class="num eco-strong">${ecoMoney(e.monthly && e.monthly.total !== undefined ? e.monthly.total : e.monthly)}</td><td>${svcNames(e.service_ids)}</td><td><div class="eco-actions"><button class="btn btn-sm" onclick="ecoEditEq(${Number(e.id)})">Изменить</button><button class="btn btn-sm" onclick="ecoDeleteEq(${Number(e.id)})">Удалить</button></div></td></tr>`).join('');
+    el.innerHTML = `<div class="bc-head"><div><div class="bc-head-title">🔬 Аппараты</div><div class="bc-head-sub">В месяц = (цена − остаточная) / срок + ТО. Делится только между визитами привязанных услуг. Насадки и картриджи — в техкартах, здесь не дублировать</div></div>
+      <div class="eco-actions">${_eco.equipment.length ? '' : '<button class="btn btn-sm" id="ecoEqSeed" onclick="ecoSeedEq()">Заполнить списком с сайта</button>'}<button class="btn btn-sm btn-pri" onclick="ecoEditEq(null)">+ Аппарат</button></div></div>
+      <div id="ecoEqForm"></div>
+      <div class="card eco-card-flush"><div class="tw"><table class="eco-tbl"><thead><tr><th>Аппарат</th><th class="num">Цена</th><th>Куплен</th><th class="num">Срок, мес</th><th class="num">Остаточная</th><th class="num">ТО/мес</th><th class="num">В месяц</th><th>Услуги</th><th></th></tr></thead><tbody>${rows || '<tr><td colspan="9" class="empty">Реестр пуст — нажмите «Заполнить списком с сайта» или добавьте аппарат</td></tr>'}</tbody></table></div></div>`;
+  } catch (e) { if (seq === _ecoEqSeq) el.innerHTML = `<div class="empty">Ошибка: ${esc(e.message)}</div>`; }
+}
+async function ecoSeedEq() {
+  const btn = document.getElementById('ecoEqSeed'); if (btn) btn.disabled = true;
+  let done = 0;
+  try {
+    const { seed } = await api('GET', '/api/economics/equipment/seed');
+    for (const s of seed) { await api('POST', '/api/economics/equipment', ecoSeedBody(s)); done++; }
+    _eco.report = null; notify(`Добавлено аппаратов: ${done}. Проверьте цены и привяжите услуги`);
+  } catch (e) { notify(`Добавлено ${done}, затем ошибка: ${e.message}`, 'err'); }
+  finally { _eco.report = null; ecoLoadEquipment(); }
+}
+async function ecoEditEq(id) {
+  let d;
+  try { d = await ecoDicts(); } catch (e) { return notify('Ошибка: ' + e.message, 'err'); }
+  const x = id ? (_eco.equipment || []).find(e => Number(e.id) === Number(id)) : { name: '', purchase_price: '', purchase_date: '', useful_life_months: 60, residual_pct: 0, maintenance_monthly: 0, service_ids: [], is_active: true, note: '' };
+  if (!x) return notify('Аппарат не найден — обновите вкладку', 'err');
+  const sel = (x.service_ids || []).map(String);
+  const known = new Set((d.services || []).map(s => String(s.id)));
+  const missing = sel.filter(i => !known.has(i)).map(i => `<option value="${escAttr(i)}" selected>id ${esc(i)} (нет в справочнике)</option>`).join('');
+  const opts = missing + (d.services || []).map(s => `<option value="${escAttr(String(s.id))}" ${sel.includes(String(s.id)) ? 'selected' : ''}>${esc(s.title)}</option>`).join('');
+  const num = (v) => escAttr(v === '' || v === null || v === undefined ? '' : String(Number(v)));
+  document.getElementById('ecoEqForm').innerHTML = `<div class="card eco-detail" style="margin-bottom:12px"><div class="eco-form">
+    <div class="fg"><label class="fl">Название</label><input id="ecoEName" maxlength="255" value="${escAttr(x.name)}"></div>
+    <div class="fg"><label class="fl">Цена покупки, ₽</label><input id="ecoEPrice" type="text" inputmode="decimal" value="${num(x.purchase_price)}"></div>
+    <div class="fg"><label class="fl">Дата покупки</label><input id="ecoEDate" type="date" value="${escAttr(x.purchase_date || '')}"></div>
+    <div class="fg"><label class="fl">Срок службы, мес</label><input id="ecoELife" type="text" inputmode="numeric" value="${escAttr(String(x.useful_life_months))}"></div>
+    <div class="fg"><label class="fl">Остаточная, %</label><input id="ecoERes" type="text" inputmode="decimal" value="${num(x.residual_pct)}"></div>
+    <div class="fg"><label class="fl">ТО в месяц, ₽</label><input id="ecoEMaint" type="text" inputmode="decimal" value="${num(x.maintenance_monthly)}"></div>
+    <div class="fg"><label class="fl">Активен</label><select id="ecoEActive"><option value="1" ${x.is_active ? 'selected' : ''}>да</option><option value="0" ${!x.is_active ? 'selected' : ''}>нет</option></select></div>
+    <div class="fg" style="grid-column:1/-1"><label class="fl">Услуги (Ctrl/⌘ — несколько)</label><select id="ecoESvc" multiple size="8">${opts}</select></div>
+    <div class="fg" style="grid-column:1/-1"><label class="fl">Заметка</label><input id="ecoENote" maxlength="500" value="${escAttr(x.note || '')}"></div>
+    </div><div class="eco-actions" style="margin-top:10px"><button class="btn btn-sm btn-pri" id="ecoESave" onclick="ecoSaveEq(${id ? Number(id) : 'null'})">Сохранить</button><button class="btn btn-sm" onclick="document.getElementById('ecoEqForm').innerHTML=''">Отмена</button></div></div>`;
+}
+async function ecoSaveEq(id) {
+  const v = (i) => document.getElementById(i).value;
+  const p = ecoParseEquipmentForm({ name: v('ecoEName'), price: v('ecoEPrice'), date: v('ecoEDate'), life: v('ecoELife'), residual: v('ecoERes'), maint: v('ecoEMaint'), active: v('ecoEActive'), note: v('ecoENote'),
+    serviceIds: [...document.getElementById('ecoESvc').selectedOptions].map(o => o.value) });
+  if (p.error) return notify(p.error, 'err');
+  const btn = document.getElementById('ecoESave'); if (btn) btn.disabled = true;
+  try { await api(id ? 'PUT' : 'POST', id ? `/api/economics/equipment/${Number(id)}` : '/api/economics/equipment', p.value); _eco.report = null; notify('Сохранено'); ecoLoadEquipment(); }
+  catch (e) { if (btn) btn.disabled = false; notify('Ошибка: ' + e.message, 'err'); }
+}
+async function ecoDeleteEq(id) {
+  if (!confirm('Удалить аппарат?')) return;
+  try { await api('DELETE', `/api/economics/equipment/${Number(id)}`); _eco.report = null; ecoLoadEquipment(); } catch (e) { notify('Ошибка: ' + e.message, 'err'); }
+}
