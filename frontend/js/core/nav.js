@@ -79,6 +79,7 @@ function navTo(p, opts) {
   if (p === 'cert-requests')  loadCertRequests();
   if (p === 'knowledge-base') loadKnowledgeBase();
   if (p === 'agent-services') loadAgentServices();
+  if (p === 'economics')      loadEconomics();
 }
 
 // ── ROLE-BASED NAV ──

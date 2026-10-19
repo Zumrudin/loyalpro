@@ -1154,3 +1154,20 @@ body.kb-editor .kb-admin-only { display: inline-flex; }
   body.vd-dialog-open #page-dashboard{animation:none;transform:none}
   body.vd-dialog-open .msg-card{transform:none!important}
 }
+
+/* ── Экономика процедур ── */
+.eco-tabs{max-width:980px}
+.eco-summary{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-bottom:14px}
+.eco-summary>.sc{min-width:0}
+.eco-kpi{font-size:20px;font-weight:700}.eco-kpi-sub{font-size:12px;color:var(--t3);margin-top:2px}
+.eco-tbl th{cursor:pointer;white-space:nowrap;user-select:none}.eco-tbl th.sorted::after{content:' ▾';opacity:.6}.eco-tbl th.sorted.asc::after{content:' ▴'}
+.eco-tbl td.num,.eco-tbl th.num{text-align:right;font-variant-numeric:tabular-nums}
+.eco-tbl tr.eco-total td{font-weight:700;border-top:2px solid var(--bd)}
+.eco-tbl tr.eco-row{cursor:pointer}.eco-tbl tr.eco-row:hover{background:var(--bg)}
+.eco-neg{color:#ef4444}.eco-strong{font-weight:600}
+.eco-badge-warn{background:#fef3c7;color:#92400e}.eco-badge-err{background:#fee2e2;color:#991b1b}.eco-badge-muted{background:var(--bg);color:var(--t3)}
+.eco-flags{display:flex;gap:4px;flex-wrap:wrap;margin-top:3px}
+.eco-form{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;align-items:end}
+.eco-form .fg{margin-bottom:0}
+.eco-detail{margin-top:14px}
+@media(max-width:700px){.eco-summary{grid-template-columns:1fr 1fr}.eco-form{grid-template-columns:1fr}}
