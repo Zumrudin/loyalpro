@@ -1,0 +1,87 @@
+'use strict';
+jest.mock('./services/economics/store', () => ({ loadPeriod: jest.fn() }));
+jest.mock('./services/yclients', () => ({ ycGetServiceMeta: jest.fn(), ycGetServiceCatalog: jest.fn() }));
+const mockLog = { info: jest.fn(), warn: jest.fn(), error: jest.fn() };
+jest.mock('./logger', () => ({ createLogger: () => mockLog }));
+const store = require('./services/economics/store');
+const yc = require('./services/yclients');
+const report = require('./services/economics/report');
+
+const SALON = { id: 1, yclients_company_id: '668791' };
+function period() {
+  return {
+    from: '2026-09-01', to: '2026-09-30',
+    records: [{ record_id: 1, visit_date: '2026-09-10', staff_yc_id: 5, staff_name: 'A', seance_length: 3600,
+      services: [{ id: 10, title: 'S10', cost_to_pay: 1000, first_cost: 1000 }], bonus_redeemed: 0,
+      consumables: [{ good_id: 7, service_id: 10, amount: -2, cost: 90 }], payments: [] }],
+    cards: new Map([[3, { id: 3, title: 'C', items: [{ good_id: 8, amount: 1 }], source: 'yclients' }]]),
+    links: [{ service_yc_id: 11, staff_yc_id: null, tech_card_id: 3, source: 'learned' }],
+    receiptsByGood: new Map([[7, [{ create_date: '2026-09-01T10:00:00Z', amount: 2, cost: 100, operation_unit_type: 2 }]]]),
+    catalogByGood: new Map([[7, { unit_equals: 1, unit_actual_cost: 45 }], [8, { unit_actual_cost: 12 }]]),
+    overridesByGood: new Map(),
+    payRules: [{ id: 1, staff_yc_id: null, service_yc_id: null, category_yc_id: null, percent: 10, base: 'gross', fixed_per_visit: 0, valid_from: null, valid_to: null }],
+    settings: { payroll_multiplier: 1, pay_base_includes_bonuses: false, allocation_driver: 'minutes', usn_rate: 15, acquiring: {} },
+    fixedCosts: [{ id: 1, category: 'rent', amount_month: 3000, month_from: '2026-01-01', month_to: null }],
+    equipment: [], capacityMinutes: 600,
+  };
+}
+beforeEach(() => {
+  jest.clearAllMocks(); report.invalidate();
+  store.loadPeriod.mockImplementation(async () => period());
+  yc.ycGetServiceMeta.mockResolvedValue({ durationByService: new Map([['10', 3600]]) });
+  yc.ycGetServiceCatalog.mockResolvedValue({ priced: [{ id: 10, title: 'S10 full', category_id: 100 }, { id: 11, title: 'S11', category_id: 100 }] });
+});
+
+test('buildReport: строки, услуги, услуга×сотрудник, сводка; цена по приходу; постоянные за месяц целиком', async () => {
+  const r = await report.buildReport(SALON, '2026-09-01', '2026-09-30');
+  expect(r.rows).toHaveLength(1);
+  expect(r.rows[0].materials_fact).toBe(100);           // 2 × 50 (приход 100/2)
+  expect(r.rows[0].doctor_cost).toBe(100);
+  expect(r.rows[0].overhead).toBe(3000);
+  expect(r.byService[0].key).toBe(10);
+  expect(r.byServiceStaff[0].key).toBe('10|5');
+  expect(r.summary.rate_minute_fact).toBe(50);
+  expect(r.summary.rate_minute_capacity).toBe(5);
+  expect(r.summary.coverage.services_without_tech_card).toBe(1);
+});
+test('кэш 60 с на ключ salon+from+to; invalidate сбрасывает', async () => {
+  await report.buildReport(SALON, '2026-09-01', '2026-09-30');
+  await report.buildReport(SALON, '2026-09-01', '2026-09-30');
+  expect(store.loadPeriod).toHaveBeenCalledTimes(1);
+  report.invalidate(1);
+  await report.buildReport(SALON, '2026-09-01', '2026-09-30');
+  expect(store.loadPeriod).toHaveBeenCalledTimes(2);
+});
+test('сбой каталога YClients не роняет отчёт (длительности/категории пустые)', async () => {
+  yc.ycGetServiceMeta.mockRejectedValue(new Error('429')); yc.ycGetServiceCatalog.mockRejectedValue(new Error('429'));
+  const r = await report.buildReport(SALON, '2026-09-01', '2026-09-30');
+  expect(r.rows[0].minutes).toBe(60);
+  expect(mockLog.warn).toHaveBeenCalled();
+});
+test('serviceDetail: статьи, по сотрудникам, визиты; неизвестная услуга → null', async () => {
+  const d = await report.serviceDetail(SALON, 10, '2026-09-01', '2026-09-30');
+  expect(d.service.label).toBe('S10');
+  expect(d.byStaff[0].label).toBe('A');
+  expect(d.visits[0].record_id).toBe(1);
+  expect(await report.serviceDetail(SALON, 999, '2026-09-01', '2026-09-30')).toBeNull();
+});
+test('coverage: услуги периода с покрытием, техкартой и подсказками по названию', async () => {
+  const c = await report.coverage(SALON, '2026-09-01', '2026-09-30');
+  expect(c.services).toEqual([expect.objectContaining({ service_yc_id: 10, title: 'S10', visits: 1, consumables_share: 1, tech_card: null, suggestions: [] })]);
+  expect(c.cards).toHaveLength(1);
+});
+test('бонусы: выручка = цена − bonus_in_revenue; уже вычтенные YClients в cost_to_pay второй раз не вычитаются', async () => {
+  store.loadPeriod.mockImplementation(async () => {
+    const p = period();
+    p.records = [
+      { ...p.records[0], record_id: 1, bonus_redeemed: 100, services: [{ id: 10, title: 'S10', cost: 1000, cost_to_pay: 1000, first_cost: 1000 }] },
+      { ...p.records[0], record_id: 2, bonus_redeemed: 100, services: [{ id: 10, title: 'S10', cost: 1000, cost_to_pay: 900, first_cost: 1000 }] },
+    ];
+    return p;
+  });
+  const d = await report.serviceDetail(SALON, 10, '2026-09-01', '2026-09-30');
+  const byId = Object.fromEntries(d.visits.map(v => [v.record_id, v]));
+  expect(byId[1]).toEqual(expect.objectContaining({ price: 1000, bonus_redeemed: 100, bonus_in_revenue: 100, revenue: 900 }));
+  expect(byId[2]).toEqual(expect.objectContaining({ price: 900, bonus_redeemed: 100, bonus_in_revenue: 0, revenue: 900 }));
+  expect(d.service.revenue).toBe(1800);
+});
