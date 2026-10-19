@@ -1,14 +1,14 @@
 'use strict';
-// Изолированная визуальная проверка вкладок «Экономика → Услуги / Материалы / Техкарты»: настоящие разметка/CSS/JS
+// Изолированная визуальная проверка вкладок «Экономика → Услуги / Материалы / Техкарты / Оплата труда / Настройки»: настоящие разметка/CSS/JS
 // страницы, синтетические ответы /api/economics/*. Без сессий, БД, YClients и отправок.
-// node scripts/economics-services-visual.js   → скриншоты в /tmp/econ17/
+// node scripts/economics-services-visual.js   → скриншоты в /tmp/econ18/
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const express = require('express');
 const puppeteer = require('puppeteer');
 
-const OUT = '/tmp/econ17';
+const OUT = '/tmp/econ18';
 const svc = (key, label, o) => ({ key, label, visits: 0, revenue: 0, materials_used: 0, doctor_cost: 0, acquiring_cost: 0, contribution: 0, overhead: 0,
   equipment_cost: 0, operating_profit: 0, usn_estimate: 0, hours: 0, materials_estimated_rows: 0, discount: 0, bonus_redeemed: 0, bonus_in_revenue: 0,
   coverage: { rows: 1, with_consumables: 1, with_tech_card: 1, no_pay_rule: 0, no_price_goods: [], acquiring_estimated: 0 }, ...o });
@@ -61,7 +61,7 @@ async function main() {
   const block = index.slice(start, index.indexOf('</div>', end) + 6) + '</div>';
   const app = express();
   app.use(express.json());
-  app.use('/api/economics', (q, _r, n) => { if (q.method !== 'GET' || /goods|tech-cards|coverage/.test(q.path)) calls.push(`${q.method} ${q.originalUrl}${q.body && Object.keys(q.body).length ? ' ' + JSON.stringify(q.body) : ''}`); n(); });
+  app.use('/api/economics', (q, _r, n) => { if (q.method !== 'GET' || /goods|tech-cards|coverage|pay-rules|settings|sync/.test(q.path)) calls.push(`${q.method} ${q.originalUrl}${q.body && Object.keys(q.body).length ? ' ' + JSON.stringify(q.body) : ''}`); n(); });
   app.get('/api/economics/goods', (q, res) => res.json({ goods: goods.filter(g => g.title.toLowerCase().includes(String(q.query.search || '').toLowerCase())) }));
   app.get('/api/economics/goods/:id/receipts', (_q, res) => res.json({ receipts }));
   app.put('/api/economics/goods/:id/price', (_q, res) => res.json({ ok: true }));
@@ -70,6 +70,17 @@ async function main() {
   app.put('/api/economics/services/:id/tech-card', (_q, res) => res.json({ ok: true }));
   app.post('/api/economics/services/:id/tech-card/lookup', (_q, res) => res.json({ checked: 2, found: [] }));
   app.post('/api/economics/tech-cards', (_q, res) => res.json({ id: 3 }));
+  let rules = [{ id: 1, staff_yc_id: null, service_yc_id: null, category_yc_id: null, percent: '30.00', base: 'gross', fixed_per_visit: '0.00', valid_from: null, valid_to: null, note: 'По умолчанию <b>салон</b>' },
+    { id: 2, staff_yc_id: 1, service_yc_id: 101, category_yc_id: null, percent: '45.50', base: 'net_of_materials', fixed_per_visit: '500.00', valid_from: '2026-01-01', valid_to: null, note: '' }];
+  let settingsState = { payroll_multiplier: '1.300', pay_base_includes_bonuses: false, allocation_driver: 'minutes', usn_rate: '15.00', acquiring: { 'Расчетный счет': 1.5, 'Старая касса': 2 } };
+  app.get('/api/notification-rules/dictionaries', (_q, res) => res.json({ staff: [{ id: 1, name: 'Пери <i>Исамудиновна</i>' }, { id: 2, name: 'Татьяна' }], services: [{ id: 101, title: 'Биоревитализация Profhilo' }, { id: 103, title: 'Чистка лица' }], categories: [{ id: 9, title: 'Эпиляция' }] }));
+  app.get('/api/economics/pay-rules', (_q, res) => res.json({ rules }));
+  app.post('/api/economics/pay-rules', (q, res) => { rules.push({ id: 3, staff_yc_id: q.body.staffYcId, service_yc_id: q.body.serviceYcId, category_yc_id: q.body.categoryYcId, percent: String(q.body.percent), base: q.body.base, fixed_per_visit: String(q.body.fixedPerVisit), valid_from: q.body.validFrom, valid_to: q.body.validTo, note: q.body.note }); res.json({ id: 3 }); });
+  app.put('/api/economics/pay-rules/:id', (_q, res) => res.json({ ok: true }));
+  app.delete('/api/economics/pay-rules/:id', (q, res) => { rules = rules.filter(r => r.id !== Number(q.params.id)); res.json({ ok: true }); });
+  app.get('/api/economics/settings', (_q, res) => res.json({ settings: settingsState, accounts: [{ title: 'Расчетный счет', operations: 120 }, { title: 'Касса <u>1</u>', operations: 40 }] }));
+  app.put('/api/economics/settings', (q, res) => res.json({ ok: true, settings: q.body }));
+  app.post('/api/economics/sync', (_q, res) => res.json({ ok: false, steps: {}, errors: { catalog: 'лимит' } }));
   app.get('/api/economics/services', (_q, res) => res.json({ services, summary, settings: detail.settings }));
   app.get('/api/economics/services/:id', (_q, res) => res.json(detail));
   app.get('/', (_q, res) => res.type('html').send(`<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -152,6 +163,76 @@ async function main() {
     assert.ok(calls.some(c => c.startsWith('POST /api/economics/tech-cards ') && c.includes('"goodId":7') && c.includes('"amount":1.5')), 'норма ушла');
     console.log('PASS: Техкарты — покрытие, подсказки, lookup, форма нормы с проверкой и подстановкой единицы');
 
+    // ── Оплата труда ──
+    await page.evaluate(() => { document.documentElement.removeAttribute('data-theme'); window._notes.length = 0; });
+    await page.click('#ecoTabBtn-pay');
+    await page.waitForSelector('#ecoPay table tbody tr td:not(.empty)');
+    assert.equal(await page.$$eval('#ecoPay tbody tr', e => e.length), 2);
+    assert.equal(await page.$$eval('#ecoPay b, #ecoPay i', e => e.length), 0, 'теги в заметке/имени экранированы');
+    assert.match(await page.$eval('#ecoPay tbody', e => e.textContent), /салон по умолчанию/);
+    assert.match(await page.$eval('#ecoPay tbody', e => e.textContent), /сотрудник: Пери <i>Исамудиновна<\/i> · услуга: Биоревитализация Profhilo/);
+    assert.match(await page.$eval('#ecoPay tbody', e => e.textContent), /45,50%/);
+    const clickBtn = (sel, text) => page.$$eval(sel, (bs, t) => bs.find(b => b.textContent === t).click(), text);
+    await clickBtn('#ecoPay button', '+ Правило');
+    await page.waitForSelector('#ecoRPct');
+    await page.$eval('#ecoRPct', e => { e.value = '150'; });
+    await clickBtn('#ecoRuleForm button', 'Сохранить');
+    assert.match(await page.evaluate(() => window._notes.join('\n')), /Процент/);
+    await page.select('#ecoRService', '103'); await page.select('#ecoRCat', '9');
+    await page.$eval('#ecoRPct', e => { e.value = '20,5'; });
+    await clickBtn('#ecoRuleForm button', 'Сохранить');
+    assert.match(await page.evaluate(() => window._notes.join('\n')), /услугу, либо на категорию/);
+    await page.select('#ecoRCat', '');
+    await page.select('#ecoRStaff', '2'); await page.select('#ecoRBase', 'net_of_materials');
+    await page.screenshot({ path: `${OUT}/pay-light.png`, fullPage: true });
+    await clickBtn('#ecoRuleForm button', 'Сохранить');
+    await page.waitForFunction(() => document.querySelectorAll('#ecoPay tbody tr').length === 3);
+    assert.ok(calls.some(c => c.startsWith('POST /api/economics/pay-rules') && c.includes('"staffYcId":2') && c.includes('"serviceYcId":103') && c.includes('"categoryYcId":null') && c.includes('"percent":20.5') && c.includes('"base":"net_of_materials"') && c.includes('"fixedPerVisit":0')), 'правило ушло в формате бэкенда');
+    await clickBtn('#ecoPay button', 'Изменить');
+    await page.waitForSelector('#ecoRPct');
+    assert.equal(await page.$eval('#ecoRPct', e => e.value), '30');
+    await clickBtn('#ecoRuleForm button', 'Сохранить');
+    await new Promise(r => setTimeout(r, 300));
+    assert.ok(calls.some(c => c.startsWith('PUT /api/economics/pay-rules/1 ')), 'правка уходит PUT');
+    page.once('dialog', d => d.accept());
+    await page.$$eval('#ecoPay tbody tr:last-child button', bs => bs.find(b => b.textContent === 'Удалить').click());
+    await new Promise(r => setTimeout(r, 400));
+    assert.ok(calls.some(c => c.startsWith('DELETE /api/economics/pay-rules/3')));
+    console.log('PASS: Оплата труда — список, экранирование, проверка формы, POST/PUT/DELETE в формате бэкенда');
+
+    // ── Настройки ──
+    await page.click('#ecoTabBtn-settings');
+    await page.waitForSelector('#ecoSettings .eco-acq');
+    assert.equal(await page.$$eval('#ecoSettings .eco-acq', e => e.length), 3, 'кассы из оплат + сохранённая «Старая касса»');
+    assert.equal(await page.$$eval('#ecoSettings u', e => e.length), 0, 'название кассы экранировано');
+    assert.equal(await page.$eval('#ecoSMult', e => e.value), '1.3');
+    await page.screenshot({ path: `${OUT}/settings-light.png`, fullPage: true });
+    await page.$eval('#ecoSUsn', e => { e.value = '70'; });
+    await clickBtn('#ecoSettings button', 'Сохранить');
+    assert.match(await page.evaluate(() => window._notes.join('\n')), /УСН/);
+    await page.$eval('#ecoSUsn', e => { e.value = '6'; });
+    await page.select('#ecoSBase', '1'); await page.select('#ecoSDriver', 'visits');
+    await page.$$eval('.eco-acq', es => { es[1].value = '1,8'; });
+    await clickBtn('#ecoSettings button', 'Сохранить');
+    await new Promise(r => setTimeout(r, 300));
+    const put = calls.find(c => c.startsWith('PUT /api/economics/settings'));
+    assert.ok(put, 'настройки ушли');
+    const body = JSON.parse(put.slice(put.indexOf('{')));
+    assert.deepEqual(body, { payrollMultiplier: 1.3, payBaseIncludesBonuses: true, allocationDriver: 'visits', usnRate: 6, acquiring: { 'Расчетный счет': 1.5, 'Касса <u>1</u>': 1.8, 'Старая касса': 2 } });
+    await clickBtn('#ecoSettings button', '⟳ Синхронизировать с YClients сейчас');
+    await new Promise(r => setTimeout(r, 300));
+    assert.match(await page.evaluate(() => window._notes.join('\n')), /Синхронизация с ошибками: catalog\|err/);
+    console.log('PASS: Настройки — кассы, проверка диапазонов, тело PUT, синк');
+    // после сохранения отчёт «Услуг» перезапрашивается
+    const before = await page.evaluate(() => _eco.report);
+    assert.equal(before, null, 'кэш отчёта сброшен после сохранения');
+    await page.evaluate(() => document.documentElement.setAttribute('data-theme', 'dark'));
+    await new Promise(r => setTimeout(r, 800));
+    await page.screenshot({ path: `${OUT}/settings-dark.png`, fullPage: true });
+    await page.click('#ecoTabBtn-pay'); await page.waitForSelector('#ecoPay table'); await new Promise(r => setTimeout(r, 800));
+    await page.screenshot({ path: `${OUT}/pay-dark.png`, fullPage: true });
+    await page.evaluate(() => document.documentElement.removeAttribute('data-theme'));
+
     await page.click('#ecoTabBtn-services');
     await page.waitForSelector('#ecoServices tr.eco-total');
     await page.click('#ecoServices tbody tr.eco-row');
@@ -187,7 +268,7 @@ async function main() {
     const tabsBox = await page.$eval('.eco-tabs', e => ({ sw: e.scrollWidth, cw: e.clientWidth, right: e.getBoundingClientRect().right }));
     assert.ok(tabsBox.right <= 390 + 1, `полоса вкладок вылезает за экран: ${JSON.stringify(tabsBox)}`);
     assert.ok(tabsBox.sw > tabsBox.cw, 'полоса вкладок листается горизонтально');
-    for (const t of ['goods', 'tech-cards']) {
+    for (const t of ['goods', 'tech-cards', 'pay', 'settings']) {
       await page.click(`#ecoTabBtn-${t}`); await new Promise(r => setTimeout(r, 500));
       const ov = await page.evaluate(() => document.documentElement.scrollWidth - innerWidth);
       assert.ok(ov <= 0, `${t}: страница шире экрана на ${ov}px`);

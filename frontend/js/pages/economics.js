@@ -267,7 +267,106 @@ async function ecoDeleteManual(id) {
   if (!confirm('Удалить норму? Привязки к ней тоже удалятся.')) return;
   try { await api('DELETE', `/api/economics/tech-cards/${Number(id)}`); _eco.report = null; ecoLoadTechCards(); } catch (e) { notify('Ошибка: ' + e.message, 'err'); }
 }
-function ecoLoadPay() {}
+// ── Оплата труда ──
+let _ecoPaySeq = 0;
+function ecoScopeText(r, d) {
+  const lists = { 'сотрудник': d.staff, 'услуга': d.services, 'категория': d.categories };
+  return ecoRuleScopeParts(r).map(([kind, id]) => `${kind}: ${ecoDictName(lists[kind], id)}`).join(' · ') || 'салон по умолчанию';
+}
+async function ecoLoadPay() {
+  const el = document.getElementById('ecoPay'); const seq = ++_ecoPaySeq;
+  try {
+    const [r, d] = await Promise.all([api('GET', '/api/economics/pay-rules'), ecoDicts()]);
+    if (seq !== _ecoPaySeq) return;
+    el.className = '';
+    _eco.rules = r.rules || [];
+    const rows = _eco.rules.map(x => `<tr><td>${esc(ecoScopeText(x, d))}${x.note ? `<div class="eco-kpi-sub">${esc(x.note)}</div>` : ''}</td><td class="num">${ecoNum(Number(x.percent), 2)}%</td><td>${x.base === 'net_of_materials' ? 'выручка − материалы' : 'выручка'}</td><td class="num">${ecoMoney(x.fixed_per_visit)}</td><td>${esc(x.valid_from || '…')} — ${esc(x.valid_to || '…')}</td><td><div class="eco-actions"><button class="btn btn-sm" onclick="ecoEditRule(${Number(x.id)})">Изменить</button><button class="btn btn-sm" onclick="ecoDeleteRule(${Number(x.id)})">Удалить</button></div></td></tr>`).join('');
+    el.innerHTML = `<div class="bc-head"><div><div class="bc-head-title">👩‍⚕️ Оплата труда</div><div class="bc-head-sub">Приоритет: услуга → категория → сотрудник → салон. Сотрудник без правила — оплата 0 и флаг в отчёте</div></div><button class="btn btn-sm btn-pri" onclick="ecoEditRule(null)">+ Правило</button></div>
+      <div id="ecoRuleForm"></div>
+      <div class="card eco-card-flush"><div class="tw"><table class="mtbl eco-tbl"><thead><tr><th>Область</th><th class="num">%</th><th>База</th><th class="num">Фикс/визит</th><th>Период</th><th></th></tr></thead><tbody>${rows || '<tr><td colspan="6" class="empty">Правил нет — оплата врача в отчёте равна 0</td></tr>'}</tbody></table></div></div>`;
+  } catch (e) { if (seq === _ecoPaySeq) el.innerHTML = `<div class="empty">Ошибка: ${esc(e.message)}</div>`; }
+}
+async function ecoEditRule(id) {
+  let d;
+  try { d = await ecoDicts(); } catch (e) { return notify('Ошибка: ' + e.message, 'err'); }
+  const x = id ? (_eco.rules || []).find(r => Number(r.id) === Number(id)) : { percent: 30, base: 'gross', fixed_per_visit: 0 };
+  if (!x) return notify('Правило не найдено — обновите вкладку', 'err');
+  const opt = (list, sel, label) => {
+    const items = list || [];
+    const missing = sel && !items.some(i => String(i.id) === String(sel)) ? `<option value="${escAttr(String(sel))}" selected>id ${esc(String(sel))} (нет в справочнике)</option>` : '';
+    return `<option value="">${label}</option>` + missing + items.map(i => `<option value="${escAttr(String(i.id))}" ${String(sel) === String(i.id) ? 'selected' : ''}>${esc(i.name || i.title)}</option>`).join('');
+  };
+  document.getElementById('ecoRuleForm').innerHTML = `<div class="card eco-detail"><div class="eco-form">
+    <div class="fg"><label class="fl">Сотрудник</label><select id="ecoRStaff">${opt(d.staff, x.staff_yc_id, '— все —')}</select></div>
+    <div class="fg"><label class="fl">Услуга</label><select id="ecoRService">${opt(d.services, x.service_yc_id, '— любая —')}</select></div>
+    <div class="fg"><label class="fl">Категория</label><select id="ecoRCat">${opt(d.categories, x.category_yc_id, '— любая —')}</select></div>
+    <div class="fg"><label class="fl">Процент</label><input id="ecoRPct" type="text" inputmode="decimal" value="${escAttr(String(Number(x.percent)))}"></div>
+    <div class="fg"><label class="fl">База</label><select id="ecoRBase"><option value="gross" ${x.base !== 'net_of_materials' ? 'selected' : ''}>от выручки</option><option value="net_of_materials" ${x.base === 'net_of_materials' ? 'selected' : ''}>выручка − материалы</option></select></div>
+    <div class="fg"><label class="fl">Фикс за визит, ₽</label><input id="ecoRFixed" type="text" inputmode="decimal" value="${escAttr(String(Number(x.fixed_per_visit) || 0))}"></div>
+    <div class="fg"><label class="fl">Действует с</label><input id="ecoRFrom" type="date" value="${escAttr(x.valid_from || '')}"></div>
+    <div class="fg"><label class="fl">по</label><input id="ecoRTo" type="date" value="${escAttr(x.valid_to || '')}"></div>
+    <div class="fg"><label class="fl">Заметка</label><input id="ecoRNote" maxlength="500" value="${escAttr(x.note || '')}"></div>
+    </div><div class="eco-kpi-sub" style="margin-top:6px">Правило — либо на услугу, либо на категорию. Период можно не заполнять.</div>
+    <div class="eco-actions" style="margin-top:10px"><button class="btn btn-sm btn-pri" id="ecoRSave" onclick="ecoSaveRule(${id ? Number(id) : 'null'})">Сохранить</button><button class="btn btn-sm" onclick="document.getElementById('ecoRuleForm').innerHTML=''">Отмена</button></div></div>`;
+}
+async function ecoSaveRule(id) {
+  const v = (i) => document.getElementById(i).value;
+  const p = ecoParseRuleForm({ staff: v('ecoRStaff'), service: v('ecoRService'), category: v('ecoRCat'), percent: v('ecoRPct'), base: v('ecoRBase'), fixed: v('ecoRFixed'), from: v('ecoRFrom'), to: v('ecoRTo'), note: v('ecoRNote') });
+  if (p.error) return notify(p.error, 'err');
+  const btn = document.getElementById('ecoRSave'); if (btn) btn.disabled = true;
+  try {
+    await api(id ? 'PUT' : 'POST', id ? `/api/economics/pay-rules/${Number(id)}` : '/api/economics/pay-rules', p.value);
+    _eco.report = null; notify('Правило сохранено'); ecoLoadPay();
+  } catch (e) { if (btn) btn.disabled = false; notify('Ошибка: ' + e.message, 'err'); }
+}
+async function ecoDeleteRule(id) {
+  if (!confirm('Удалить правило?')) return;
+  try { await api('DELETE', `/api/economics/pay-rules/${Number(id)}`); _eco.report = null; ecoLoadPay(); } catch (e) { notify('Ошибка: ' + e.message, 'err'); }
+}
+
+// ── Настройки ──
+let _ecoSetSeq = 0;
+async function ecoLoadSettings() {
+  const el = document.getElementById('ecoSettings'); const seq = ++_ecoSetSeq;
+  try {
+    const r = await api('GET', '/api/economics/settings');
+    if (seq !== _ecoSetSeq) return;
+    el.className = '';
+    const s = r.settings || {}; const stored = s.acquiring || {};
+    const accounts = (r.accounts || []).map(a => ({ title: a.title, ops: a.operations }));
+    // кассы, которые есть в настройках, но в оплатах за 12 месяцев уже не встречаются, не теряем при сохранении
+    for (const k of Object.keys(stored)) if (!accounts.some(a => a.title === k)) accounts.push({ title: k, ops: null });
+    const acc = accounts.map(a => `<div class="fg"><label class="fl">${esc(a.title)} <span class="eco-kpi-sub">${a.ops === null ? '(нет оплат за 12 мес.)' : `(${ecoNum(a.ops)} оп.)`}</span></label><input class="eco-acq" data-account="${escAttr(a.title)}" type="text" inputmode="decimal" value="${escAttr(String(stored[a.title] ?? 0))}"></div>`).join('');
+    const sel = (cond) => (cond ? 'selected' : '');
+    el.innerHTML = `<div class="card"><div class="bc-head-title">⚙️ Настройки расчёта</div>
+      <div class="eco-form" style="margin-top:12px;align-items:start">
+        <div class="fg"><label class="fl">Множитель налогов на ФОТ</label><input id="ecoSMult" type="text" inputmode="decimal" value="${escAttr(String(Number(s.payroll_multiplier)))}"><div class="eco-kpi-sub">1,30 — взносы 30 %. Если процент врача «на руки» — 1,494 (= 1,30 / 0,87)</div></div>
+        <div class="fg"><label class="fl">База процента врача</label><select id="ecoSBase"><option value="0" ${sel(!s.pay_base_includes_bonuses)}>выручка (после списания бонусов)</option><option value="1" ${sel(s.pay_base_includes_bonuses)}>стоимость услуг до вычета бонусов (как схемы YClients)</option></select></div>
+        <div class="fg"><label class="fl">Драйвер постоянных расходов</label><select id="ecoSDriver"><option value="minutes" ${sel(s.allocation_driver !== 'visits')}>по минутам визита (рекомендуется)</option><option value="visits" ${sel(s.allocation_driver === 'visits')}>поровну на визит</option></select><div class="eco-kpi-sub">По минутам: аренду и администратора потребляет время кабинета. «Поровну» нагружает 15-минутную процедуру как 90-минутную.</div></div>
+        <div class="fg"><label class="fl">Ставка УСН, %</label><input id="ecoSUsn" type="text" inputmode="decimal" value="${escAttr(String(Number(s.usn_rate)))}"><div class="eco-kpi-sub">Оценка от положительной операционной прибыли услуги</div></div>
+      </div>
+      <h4 class="eco-h4">Эквайринг по кассам, %</h4>
+      <div class="eco-kpi-sub" style="margin-bottom:8px">Кассы — из оплат за 12 месяцев. С 2026 года комиссия по картам облагается НДС 22 % — закладывайте в процент. Наличные — 0. Допустимо 0–10.</div>
+      <div class="eco-form">${acc || '<div class="eco-kpi-sub">Оплат по услугам пока нет</div>'}</div>
+      <div class="eco-actions" style="margin-top:14px"><button class="btn btn-pri" id="ecoSSave" onclick="ecoSaveSettings()">Сохранить</button><button class="btn" id="ecoSSync" onclick="ecoRunSync()">⟳ Синхронизировать с YClients сейчас</button></div></div>`;
+  } catch (e) { if (seq === _ecoSetSeq) el.innerHTML = `<div class="empty">Ошибка: ${esc(e.message)}</div>`; }
+}
+async function ecoSaveSettings() {
+  const acquiring = [...document.querySelectorAll('.eco-acq')].map(i => ({ account: i.dataset.account, value: i.value }));
+  const p = ecoParseSettingsForm({ mult: document.getElementById('ecoSMult').value, base: document.getElementById('ecoSBase').value, driver: document.getElementById('ecoSDriver').value, usn: document.getElementById('ecoSUsn').value, acquiring });
+  if (p.error) return notify(p.error, 'err');
+  const btn = document.getElementById('ecoSSave'); if (btn) btn.disabled = true;
+  try { await api('PUT', '/api/economics/settings', p.value); _eco.report = null; notify('Настройки сохранены'); }
+  catch (e) { notify('Ошибка: ' + e.message, 'err'); }
+  finally { if (btn) btn.disabled = false; }
+}
+async function ecoRunSync() {
+  const btn = document.getElementById('ecoSSync'); if (btn) btn.disabled = true;
+  try {
+    const r = await api('POST', '/api/economics/sync'); _eco.report = null;
+    notify(r.ok ? 'Синхронизация выполнена' : 'Синхронизация с ошибками: ' + Object.keys(r.errors || {}).join(', '), r.ok ? undefined : 'err');
+  } catch (e) { notify('Ошибка: ' + e.message, 'err'); }
+  finally { if (btn) btn.disabled = false; }
+}
 function ecoLoadFixed() {}
 function ecoLoadEquipment() {}
-function ecoLoadSettings() {}

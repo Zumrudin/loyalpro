@@ -169,3 +169,57 @@ test('ecoPriceValue: пустое — снять, мусор и ≤0 — оши�
 test('ecoCoverageHint: подпись услуги в покрытии', () => {
   assert.strictEqual(ctx.ecoCoverageHint({ visits: 12, consumables_share: 0.5 }), '12 визитов · списания у 50,0%');
 });
+
+test('ecoIsDate: только реальные YYYY-MM-DD', () => {
+  assert.strictEqual(ctx.ecoIsDate('2026-10-18'), true);
+  assert.strictEqual(ctx.ecoIsDate('2026-02-30'), false);
+  assert.strictEqual(ctx.ecoIsDate('18.10.2026'), false);
+  assert.strictEqual(ctx.ecoIsDate(''), false);
+  assert.strictEqual(ctx.ecoIsDate(null), false);
+});
+
+const ruleForm = (o) => ({ staff: '', service: '', category: '', percent: '30', base: 'gross', fixed: '', from: '', to: '', note: '', ...o });
+test('ecoParseRuleForm: тело ровно как у parsePayRule бэкенда', () => {
+  assert.deepStrictEqual(plain(ctx.ecoParseRuleForm(ruleForm({ staff: '12', percent: '27,5', fixed: '500', from: '2026-01-01', to: '2026-12-31', note: ' x ' }))),
+    { value: { staffYcId: 12, serviceYcId: null, categoryYcId: null, percent: 27.5, base: 'gross', fixedPerVisit: 500, validFrom: '2026-01-01', validTo: '2026-12-31', note: 'x' } });
+  const def = plain(ctx.ecoParseRuleForm(ruleForm({ base: 'net_of_materials' })));
+  assert.strictEqual(def.value.fixedPerVisit, 0);
+  assert.strictEqual(def.value.staffYcId, null);
+  assert.strictEqual(def.value.base, 'net_of_materials');
+});
+test('ecoParseRuleForm: ошибки', () => {
+  assert.match(ctx.ecoParseRuleForm(ruleForm({ service: '5', category: '6' })).error, /услуг.*категори/i);
+  assert.match(ctx.ecoParseRuleForm(ruleForm({ percent: '' })).error, /процент/i);
+  assert.match(ctx.ecoParseRuleForm(ruleForm({ percent: '101' })).error, /процент/i);
+  assert.match(ctx.ecoParseRuleForm(ruleForm({ percent: '-1' })).error, /процент/i);
+  assert.match(ctx.ecoParseRuleForm(ruleForm({ percent: 'abc' })).error, /процент/i);
+  assert.match(ctx.ecoParseRuleForm(ruleForm({ base: 'x' })).error, /баз/i);
+  assert.match(ctx.ecoParseRuleForm(ruleForm({ fixed: '-5' })).error, /фикс/i);
+  assert.match(ctx.ecoParseRuleForm(ruleForm({ from: '2026-13-01' })).error, /дат/i);
+  assert.match(ctx.ecoParseRuleForm(ruleForm({ from: '2026-05-02', to: '2026-05-01' })).error, /период/i);
+  assert.match(ctx.ecoParseRuleForm(ruleForm({ staff: '0' })).error, /сотрудник/i);
+  assert.ok(ctx.ecoParseRuleForm(ruleForm({ note: 'я'.repeat(501) })).error);
+});
+
+const setForm = (o) => ({ mult: '1,3', base: '0', driver: 'minutes', usn: '15', acquiring: [], ...o });
+test('ecoParseSettingsForm: тело как у parseSettings', () => {
+  const r = plain(ctx.ecoParseSettingsForm(setForm({ base: '1', driver: 'visits', usn: '6', acquiring: [{ account: 'Расчетный счет', value: '1,5' }, { account: 'Наличные', value: '' }] })));
+  assert.deepStrictEqual(r, { value: { payrollMultiplier: 1.3, payBaseIncludesBonuses: true, allocationDriver: 'visits', usnRate: 6, acquiring: { 'Расчетный счет': 1.5, 'Наличные': 0 } } });
+  assert.strictEqual(plain(ctx.ecoParseSettingsForm(setForm())).value.payBaseIncludesBonuses, false);
+});
+test('ecoParseSettingsForm: ошибки', () => {
+  assert.match(ctx.ecoParseSettingsForm(setForm({ mult: '0,9' })).error, /множител/i);
+  assert.match(ctx.ecoParseSettingsForm(setForm({ mult: '3,1' })).error, /множител/i);
+  assert.match(ctx.ecoParseSettingsForm(setForm({ mult: '' })).error, /множител/i);
+  assert.match(ctx.ecoParseSettingsForm(setForm({ driver: 'x' })).error, /драйвер/i);
+  assert.match(ctx.ecoParseSettingsForm(setForm({ usn: '' })).error, /усн/i);
+  assert.match(ctx.ecoParseSettingsForm(setForm({ usn: '51' })).error, /усн/i);
+  assert.match(ctx.ecoParseSettingsForm(setForm({ acquiring: [{ account: 'A', value: '11' }] })).error, /«A»/);
+  assert.match(ctx.ecoParseSettingsForm(setForm({ acquiring: [{ account: 'A', value: 'x' }] })).error, /«A»/);
+  assert.ok(ctx.ecoParseSettingsForm(setForm({ acquiring: [{ account: '__proto__', value: '1' }] })).error);
+  assert.ok(ctx.ecoParseSettingsForm(setForm({ acquiring: Array.from({ length: 51 }, (_, i) => ({ account: 'k' + i, value: '1' })) })).error);
+});
+test('ecoRuleScopeParts: область правила', () => {
+  assert.deepStrictEqual(plain(ctx.ecoRuleScopeParts({})), []);
+  assert.deepStrictEqual(plain(ctx.ecoRuleScopeParts({ staff_yc_id: 1, category_yc_id: 3 })), [['сотрудник', 1], ['категория', 3]]);
+});

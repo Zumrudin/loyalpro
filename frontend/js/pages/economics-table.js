@@ -191,3 +191,70 @@ function ecoParseManualItems(title, rows) {
   }
   return { value: { title: t, items } };
 }
+
+/** Реальная календарная дата 'YYYY-MM-DD'. */
+function ecoIsDate(s) {
+  if (typeof s !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(s)) return false;
+  const d = new Date(s + 'T00:00:00Z');
+  return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === s;
+}
+/** Строгое число из поля формы: «12», «12,5», «-3»; пусто/мусор/0x10/1e3 → NaN. */
+function ecoStrictNumber(v) {
+  const s = String(v === null || v === undefined ? '' : v).trim();
+  return /^-?\d+([.,]\d+)?$/.test(s) ? Number(s.replace(',', '.')) : NaN;
+}
+function ecoOptId(v, label) {
+  const s = String(v === null || v === undefined ? '' : v).trim();
+  if (s === '') return { value: null };
+  if (!/^\d{1,15}$/.test(s) || Number(s) <= 0) return { error: `${label}: некорректный идентификатор` };
+  return { value: Number(s) };
+}
+
+/** Форма правила оплаты → тело POST/PUT /pay-rules (то, что принимает parsePayRule). f — строки из полей. */
+function ecoParseRuleForm(f) {
+  const staff = ecoOptId(f.staff, 'Сотрудник'), service = ecoOptId(f.service, 'Услуга'), cat = ecoOptId(f.category, 'Категория');
+  for (const x of [staff, service, cat]) if (x.error) return { error: x.error };
+  if (service.value !== null && cat.value !== null) return { error: 'Правило либо на услугу, либо на категорию — не на обе сразу' };
+  const percent = ecoStrictNumber(f.percent);
+  if (!(percent >= 0 && percent <= 100)) return { error: 'Процент — число от 0 до 100' };
+  if (f.base !== 'gross' && f.base !== 'net_of_materials') return { error: 'Выберите базу процента' };
+  const fixedRaw = String(f.fixed === null || f.fixed === undefined ? '' : f.fixed).trim();
+  const fixed = fixedRaw === '' ? 0 : ecoStrictNumber(fixedRaw);
+  if (!(fixed >= 0 && fixed <= 1e7)) return { error: 'Фикс за визит — число от 0' };
+  const from = String(f.from || '').trim() || null, to = String(f.to || '').trim() || null;
+  if ((from && !ecoIsDate(from)) || (to && !ecoIsDate(to))) return { error: 'Неверная дата' };
+  if (from && to && from > to) return { error: 'Период: начало позже конца' };
+  const note = String(f.note || '').trim();
+  if (note.length > 500) return { error: 'Заметка — не длиннее 500 символов' };
+  return { value: { staffYcId: staff.value, serviceYcId: service.value, categoryYcId: cat.value, percent, base: f.base, fixedPerVisit: fixed, validFrom: from, validTo: to, note } };
+}
+
+/** Область правила как пары [тип, id] для подписи (имена подставляет страница). Пусто — «салон по умолчанию». */
+function ecoRuleScopeParts(r) {
+  const out = [];
+  if (r.staff_yc_id) out.push(['сотрудник', r.staff_yc_id]);
+  if (r.service_yc_id) out.push(['услуга', r.service_yc_id]);
+  if (r.category_yc_id) out.push(['категория', r.category_yc_id]);
+  return out;
+}
+
+/** Форма настроек → тело PUT /settings. f: {mult, base:'0'|'1', driver, usn, acquiring:[{account, value}]}. */
+function ecoParseSettingsForm(f) {
+  const mult = ecoStrictNumber(f.mult);
+  if (!(mult >= 1 && mult <= 3)) return { error: 'Множитель налогов на ФОТ — от 1 до 3' };
+  if (f.driver !== 'minutes' && f.driver !== 'visits') return { error: 'Выберите драйвер постоянных расходов' };
+  const usn = ecoStrictNumber(f.usn);
+  if (!(usn >= 0 && usn <= 50)) return { error: 'Ставка УСН — от 0 до 50 %' };
+  const rows = f.acquiring || [];
+  if (rows.length > 50) return { error: 'Слишком много касс (не больше 50)' };
+  const acquiring = {};
+  for (const r of rows) {
+    const key = String(r.account || '').slice(0, 128);
+    if (!key || key === '__proto__') return { error: 'Недопустимое название кассы' };
+    const raw = String(r.value === null || r.value === undefined ? '' : r.value).trim();
+    const pct = raw === '' ? 0 : ecoStrictNumber(raw);
+    if (!(pct >= 0 && pct <= 10)) return { error: `Эквайринг «${key}»: процент от 0 до 10` };
+    acquiring[key] = pct;
+  }
+  return { value: { payrollMultiplier: mult, payBaseIncludesBonuses: f.base === '1', allocationDriver: f.driver, usnRate: usn, acquiring } };
+}
