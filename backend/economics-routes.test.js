@@ -319,3 +319,20 @@ test('второе ревью: невозможная дата в правиле
   expect(parsePayRule({ staffYcId: 5, percent: 30, base: 'gross', validFrom: '9999-99-99' }).error).toMatch(/дат/i);
   expect(parseEquipment({ name: 'A', purchasePrice: 1, purchaseDate: '2026-13-45' }).error).toMatch(/дат/i);
 });
+
+describe('GET /payroll-check', () => {
+  test('месяц обязателен и проверяется — 400 без вызова отчёта', async () => {
+    report.payrollCheck = jest.fn();
+    expect((await call('GET', '/payroll-check', { query: {} })).status).toBe(400);
+    expect((await call('GET', '/payroll-check', { query: { month: '2026-13' } })).status).toBe(400);
+    expect(report.payrollCheck).not.toHaveBeenCalled();
+  });
+  test('валидный месяц → отчёт по салону', async () => {
+    const { db } = require('./db');
+    db.oneOrNone.mockResolvedValue({ id: 1, yclients_company_id: '1' });
+    report.payrollCheck = jest.fn().mockResolvedValue({ month: '2026-09', rows: [] });
+    const r = await call('GET', '/payroll-check', { query: { month: '2026-09' } });
+    expect(r.status).toBe(200);
+    expect(report.payrollCheck).toHaveBeenCalledWith(expect.objectContaining({ id: 1 }), '2026-09');
+  });
+});

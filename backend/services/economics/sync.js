@@ -267,6 +267,14 @@ async function runNightly(salon, opts = {}) {
   });
 }
 
-module.exports = { syncGoodsCatalog, parseCatalogGood, MAX_GOODS_PAGES, PAGE, RETRY, PAGE_PAUSE_MS, defaultSleep, num,
+/** Итог зарплаты сотрудника за период по версии YClients (только для сверки, не для расчёта).
+ *  salary: null, если YClients не отдал число — «нет данных», не 0. */
+async function fetchStaffSalary(salon, staffYcId, dateFrom, dateTo) {
+  const d = await withRateLimitRetry(() => ycGet(salon, `/company/${salon.yclients_company_id}/salary/period/staff/${staffYcId}/`, { date_from: dateFrom, date_to: dateTo }), RETRY);
+  const salary = d && d.salary !== null && d.salary !== undefined && d.salary !== '' ? Number(d.salary) : NaN;
+  return { salary: Number.isFinite(salary) ? salary : null, working_hours_count: Number(d && d.working_hours_count) || 0, services_sum: Number(d && d.services_sum) || 0 };
+}
+
+module.exports = { fetchStaffSalary, syncGoodsCatalog, parseCatalogGood, MAX_GOODS_PAGES, PAGE, RETRY, PAGE_PAUSE_MS, defaultSleep, num,
   reconcileGoodsTransactions, backfillGoodsTransactions, monthRanges, mskDate, RECONCILE_DAYS, MAX_TXN_PAGES,
   syncTechCards, learnTechCardLinks, lookupTechCardForService, MAX_CARD_PAGES, MAX_LEARN_CALLS, MAX_LOOKUP_STAFF, runNightly, isRunning, runExclusive };

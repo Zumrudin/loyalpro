@@ -302,8 +302,23 @@ async function ecoLoadPay() {
     const rows = _eco.rules.map(x => `<tr><td>${esc(ecoScopeText(x, d))}${x.note ? `<div class="eco-kpi-sub">${esc(x.note)}</div>` : ''}</td><td class="num">${ecoNum(Number(x.percent), 2)}%</td><td>${x.base === 'net_of_materials' ? 'выручка − материалы' : 'выручка'}</td><td class="num">${ecoMoney(x.fixed_per_visit)}</td><td>${esc(x.valid_from || '…')} — ${esc(x.valid_to || '…')}</td><td><div class="eco-actions"><button class="btn btn-sm" onclick="ecoEditRule(${Number(x.id)})">Изменить</button><button class="btn btn-sm" onclick="ecoDeleteRule(${Number(x.id)})">Удалить</button></div></td></tr>`).join('');
     el.innerHTML = `<div class="bc-head"><div><div class="bc-head-title">👩‍⚕️ Оплата труда</div><div class="bc-head-sub">Приоритет: услуга → категория → сотрудник → салон. Сотрудник без правила — оплата 0 и флаг в отчёте</div></div><button class="btn btn-sm btn-pri" onclick="ecoEditRule(null)">+ Правило</button></div>
       <div id="ecoRuleForm"></div>
-      <div class="card eco-card-flush"><div class="tw"><table class="mtbl eco-tbl"><thead><tr><th>Область</th><th class="num">%</th><th>База</th><th class="num">Фикс/визит</th><th>Период</th><th></th></tr></thead><tbody>${rows || '<tr><td colspan="6" class="empty">Правил нет — оплата врача в отчёте равна 0</td></tr>'}</tbody></table></div></div>`;
+      <div class="card eco-card-flush"><div class="tw"><table class="mtbl eco-tbl"><thead><tr><th>Область</th><th class="num">%</th><th>База</th><th class="num">Фикс/визит</th><th>Период</th><th></th></tr></thead><tbody>${rows || '<tr><td colspan="6" class="empty">Правил нет — оплата врача в отчёте равна 0</td></tr>'}</tbody></table></div></div>
+      <div class="card" style="margin-top:14px"><div class="bc-head"><div class="bc-head-title">Сверка с YClients</div><div><input type="month" id="ecoPcMonth" value="${escAttr(ecoTodayMsk().slice(0, 7))}"> <button class="btn btn-sm" onclick="ecoPayrollCheck()">Сверить</button></div></div><div id="ecoPcBody" class="eco-kpi-sub">Наш расчёт оплаты по процедурам против итога «Расчёт зарплат» YClients за месяц. Ничего не пересчитывает; по одному запросу в YClients на сотрудника.</div></div>`;
   } catch (e) { if (seq === _ecoPaySeq) el.innerHTML = `<div class="empty">Ошибка: ${esc(e.message)}</div>`; }
+}
+let _ecoPcSeq = 0;
+async function ecoPayrollCheck() {
+  const el = document.getElementById('ecoPcBody'); const seq = ++_ecoPcSeq;
+  const month = document.getElementById('ecoPcMonth').value;
+  if (!/^\d{4}-\d{2}$/.test(month)) { el.textContent = 'Выберите месяц'; return; }
+  el.textContent = 'Считаем… (по запросу на каждого сотрудника)';
+  try {
+    const r = await api('GET', `/api/economics/payroll-check?month=${encodeURIComponent(month)}`);
+    if (seq !== _ecoPcSeq) return;
+    const nodata = (t) => `<span class="eco-kpi-sub" title="${escAttr(t || 'YClients не отдал значение')}">нет данных</span>`;
+    const body = (r.rows || []).map(x => `<tr><td>${esc(x.staff_name)}${x.no_pay_rule_rows ? `<div class="eco-kpi-sub">без правила оплаты: ${ecoNum(x.no_pay_rule_rows)} стр.</div>` : ''}</td><td class="num">${ecoNum(x.visits)}</td><td class="num">${ecoMoney(x.our_pay)}</td><td class="num">${x.yc_salary === null || x.yc_salary === undefined ? nodata(x.error) : ecoMoney(x.yc_salary)}</td><td class="num ${x.diff < 0 ? 'eco-neg' : ''}">${x.diff === null || x.diff === undefined ? '—' : ecoMoney(x.diff)}</td></tr>`).join('');
+    el.innerHTML = `<div class="tw"><table class="mtbl eco-tbl"><thead><tr><th>Сотрудник</th><th class="num">Визитов</th><th class="num">Наш расчёт</th><th class="num">YClients</th><th class="num">Разница</th></tr></thead><tbody>${body || '<tr><td colspan="5" class="empty">За месяц нет визитов</td></tr>'}</tbody></table></div>${r.truncated ? '<div class="eco-kpi-sub">Показаны не все сотрудники (кап запросов)</div>' : ''}`;
+  } catch (e) { if (seq === _ecoPcSeq) el.textContent = 'Ошибка: ' + e.message; }
 }
 async function ecoEditRule(id) {
   let d;

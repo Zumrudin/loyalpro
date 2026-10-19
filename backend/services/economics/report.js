@@ -7,7 +7,8 @@ const store = require('./store');
 const calc = require('./calc');
 const { unitPriceAsOf } = require('./price');
 const { pickTechCard, suggestLinks } = require('./tech-cards');
-const { periodFixedCosts, equipmentPeriodCost } = require('./allocation');
+const { periodFixedCosts, equipmentPeriodCost, daysInMonth, r2 } = require('./allocation');
+const sync = require('./sync');
 const { ycGetServiceMeta, ycGetServiceCatalog } = require('../yclients');
 const { createLogger } = require('../../logger');
 const logger = createLogger('EconomicsReport');
@@ -145,4 +146,25 @@ async function coverage(salon, from, to) {
   return { services, cards };
 }
 
-module.exports = { buildReport, serviceDetail, coverage, invalidate, loadServiceMeta, TTL_MS, CACHE_MAX, _cacheSize: () => _cache.size };
+const MAX_PAYROLL_STAFF = 40;   // по запросу в YClients на сотрудника — кап на случай разросшегося штата
+
+/** Σ doctor_pay по сотруднику за месяц (строки calc: фикс за визит уже поделён на запись)
+ *  против salary/period YClients. Нет ответа YClients → yc_salary/diff = null. */
+async function payrollCheck(salon, month) {
+  const from = `${month}-01`, to = `${month}-${String(daysInMonth(month)).padStart(2, '0')}`;
+  const r = await buildReport(salon, from, to);
+  const byStaff = calc.aggregate(r.rows.filter(x => x.staff_yc_id != null), x => x.staff_yc_id, x => x.staff_name)
+    .sort((a, b) => b.doctor_pay - a.doctor_pay);
+  const rows = [];
+  for (const g of byStaff.slice(0, MAX_PAYROLL_STAFF)) {
+    let yc = null, error = null;
+    try { yc = await sync.fetchStaffSalary(salon, g.key, from, to); } catch (e) { error = e.message || 'ошибка'; }
+    const ycSalary = yc && yc.salary !== null && yc.salary !== undefined ? yc.salary : null;
+    rows.push({ staff_yc_id: g.key, staff_name: g.label, visits: g.visits, our_pay: g.doctor_pay, our_cost: g.doctor_cost,
+      no_pay_rule_rows: g.coverage.no_pay_rule,
+      yc_salary: ycSalary, yc_hours: yc ? yc.working_hours_count : null, diff: ycSalary === null ? null : r2(g.doctor_pay - ycSalary), error });
+  }
+  return { month, from, to, rows, truncated: byStaff.length > MAX_PAYROLL_STAFF };
+}
+
+module.exports = { payrollCheck, buildReport, serviceDetail, coverage, invalidate, loadServiceMeta, TTL_MS, CACHE_MAX, _cacheSize: () => _cache.size };

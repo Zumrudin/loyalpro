@@ -300,6 +300,16 @@ router.post('/sync', async (req, res) => {
   } catch (e) { if (e.code === 'BUSY') return res.status(409).json({ error: e.message }); fail(res, 'sync')(e); }
 });
 
+// ── сверка оплаты врача с «Расчётом зарплат» YClients (ничего не пересчитывает) ──
+router.get('/payroll-check', async (req, res) => {
+  const m = parseMonth(req.query.month);
+  if (!m) return res.status(400).json({ error: 'month в формате YYYY-MM' });
+  try {
+    const salon = await salonOr404(req, res); if (!salon) return;
+    res.json(await report.payrollCheck(salon, m.slice(0, 7)));
+  } catch (e) { fail(res, 'payroll-check')(e); }
+});
+
 // ── постоянные расходы и аппараты ──
 // Число: только number/string, пустая строка — не число (Number('') === 0 молча пропустил бы).
 const numOf = (v) => ((typeof v === 'number' || typeof v === 'string') && String(v).trim() !== '' ? Number(v) : NaN);

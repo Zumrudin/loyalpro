@@ -134,3 +134,36 @@ describe('второе ревью п.8: отчёт, посчитанный во 
     expect(store.loadPeriod).toHaveBeenCalledTimes(2);
   });
 });
+
+describe('payrollCheck', () => {
+  const sync = require('./services/economics/sync');
+  afterEach(() => jest.restoreAllMocks());
+  test('наша оплата по сотрудникам за месяц против salary YClients', async () => {
+    jest.spyOn(sync, 'fetchStaffSalary').mockResolvedValue({ salary: 150, working_hours_count: 20 });
+    const c = await report.payrollCheck(SALON, '2026-09');
+    expect(c.month).toBe('2026-09');
+    expect(c.rows).toEqual([expect.objectContaining({ staff_yc_id: 5, staff_name: 'A', our_pay: 100, yc_salary: 150, diff: -50, error: null })]);
+    expect(sync.fetchStaffSalary).toHaveBeenCalledWith(SALON, 5, '2026-09-01', '2026-09-30');
+  });
+  test('YClients не ответил или не отдал salary → «нет данных» (null), а не 0 и не расхождение', async () => {
+    jest.spyOn(sync, 'fetchStaffSalary').mockRejectedValue(new Error('429'));
+    let c = await report.payrollCheck(SALON, '2026-09');
+    expect(c.rows[0]).toEqual(expect.objectContaining({ our_pay: 100, yc_salary: null, diff: null, error: '429' }));
+    sync.fetchStaffSalary.mockResolvedValue({ salary: null, working_hours_count: 0 });
+    c = await report.payrollCheck(SALON, '2026-09');
+    expect(c.rows[0]).toEqual(expect.objectContaining({ yc_salary: null, diff: null }));
+  });
+  test('фикс за визит берётся один раз на запись (строки calc), а не за каждую услугу', async () => {
+    jest.spyOn(sync, 'fetchStaffSalary').mockResolvedValue({ salary: 0, working_hours_count: 0 });
+    store.loadPeriod.mockImplementation(async () => {
+      const p = period();
+      p.records[0].services = [{ id: 10, title: 'S10', cost_to_pay: 1000, first_cost: 1000 }, { id: 11, title: 'S11', cost_to_pay: 1000, first_cost: 1000 }];
+      p.payRules = [{ id: 1, staff_yc_id: null, service_yc_id: null, category_yc_id: null, percent: 0, base: 'gross', fixed_per_visit: 300, valid_from: null, valid_to: null }];
+      return p;
+    });
+    const c = await report.payrollCheck(SALON, '2026-09');
+    expect(c.rows[0].our_pay).toBe(300);
+    expect(c.rows[0].yc_salary).toBe(0);   // честный 0 из YClients — это число, не «нет данных»
+    expect(c.rows[0].diff).toBe(300);
+  });
+});
