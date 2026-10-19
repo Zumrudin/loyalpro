@@ -17,4 +17,36 @@ function receiptUnitPrice(txn, unitEquals) {
   return round4(per);
 }
 
-module.exports = { receiptUnitPrice, round4 };
+
+const MSK = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Moscow' });
+/** 'YYYY-MM-DD' по Москве из Date/ISO/'YYYY-MM-DD'; null для пустого. */
+function mskDay(v) {
+  if (v === null || v === undefined || v === '') return null;
+  if (typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v)) return v;
+  const d = v instanceof Date ? v : new Date(v);
+  return Number.isFinite(d.getTime()) ? MSK.format(d) : null;
+}
+
+/**
+ * Правило §3.2: 1) последний приход <= date (cost/amount/unit_equals), 2) ручная
+ * цена goods_price_overrides, 3) unit_actual_cost каталога, 4) 0 + source 'none'
+ * (в отчёте — флаг «товар без цены»).
+ */
+function unitPriceAsOf({ receipts = [], override = null, catalogRow = null, date }) {
+  const day = mskDay(date);
+  const eq = catalogRow ? catalogRow.unit_equals : null;
+  const cands = (receipts || [])
+    .filter(r => r && Number(r.amount) > 0 && (!day || mskDay(r.create_date) <= day))
+    .sort((a, b) => String(mskDay(b.create_date)).localeCompare(String(mskDay(a.create_date))));
+  for (const r of cands) {
+    const p = receiptUnitPrice(r, eq);
+    if (p !== null && p > 0) return { price: p, source: 'receipt', at: r.create_date };
+  }
+  const ov = override && Number(override.unit_price);
+  if (ov > 0) return { price: ov, source: 'override' };
+  const uac = catalogRow && Number(catalogRow.unit_actual_cost);
+  if (uac > 0) return { price: uac, source: 'catalog' };
+  return { price: 0, source: 'none' };
+}
+
+module.exports = { receiptUnitPrice, unitPriceAsOf, mskDay, round4 };
