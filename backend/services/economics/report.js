@@ -117,7 +117,7 @@ async function serviceDetail(salon, serviceId, from, to) {
   const [service] = calc.aggregate(rows, () => sid, x => x.service_title);
   const byStaff = calc.aggregate(rows, x => x.staff_yc_id, x => x.staff_name).sort((a, b) => b.revenue - a.revenue);
   const visits = rows.map(x => ({
-    record_id: x.record_id, visit_date: x.visit_date, staff_name: x.staff_name, price: x.price, discount: x.discount, bonus_redeemed: x.bonus_redeemed, bonus_in_revenue: x.bonus_in_revenue,
+    record_id: x.record_id, visit_date: x.visit_date, staff_name: x.staff_name, price: x.price, first_cost: x.first_cost, discount: x.discount, bonus_redeemed: x.bonus_redeemed, bonus_applied: x.bonus_applied,
     revenue: x.revenue, materials_used: x.materials_used, materials_fact: x.materials_fact, materials_norm: x.materials_norm, materials_yc_cost: x.materials_yc_cost,
     materials_estimated: x.materials_estimated, no_materials_data: x.no_materials_data, no_price_goods: x.no_price_goods,
     doctor_cost: x.doctor_cost, no_pay_rule: x.no_pay_rule, acquiring_cost: x.acquiring_cost, acquiring_estimated: x.acquiring_estimated,

@@ -86,6 +86,16 @@ describe('техкарты', () => {
     expect(sql).toMatch(/t\.type_id = 2 AND t\.deleted_at IS NULL/);
     expect(params).toEqual([1, '2026-10-17', 15]);
   });
+  test('listWriteoffGapDays: дни с визитами, у которых ни одно списание не привязано к записи; числа приведены', async () => {
+    db.any.mockResolvedValueOnce([{ day: '2026-10-08', visits: '9' }, { day: '2026-10-02', visits: '18' }]);
+    const r = await store.listWriteoffGapDays(1, '2026-09-19', '2026-10-18');
+    const [sql, params] = db.any.mock.calls[0];
+    expect(sql).toBe(store.GAP_DAYS_SQL);
+    expect(sql).toMatch(/HAVING bool_and\(NOT EXISTS/);
+    expect(sql).toMatch(/t\.record_id = r\.yclients_record_id AND t\.type_id = 2 AND t\.deleted_at IS NULL/);
+    expect(params).toEqual([1, '2026-09-19', '2026-10-18']);
+    expect(r).toEqual([{ day: '2026-10-08', visits: 9 }, { day: '2026-10-02', visits: 18 }]);
+  });
 });
 
 describe('loadPeriod', () => {

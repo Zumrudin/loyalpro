@@ -4,7 +4,7 @@ jest.mock('./services/yclients', () => ({ ycGet: jest.fn() }));
 jest.mock('./services/economics/store', () => ({
   upsertGoodsTransaction: jest.fn(), refreshLastReceipt: jest.fn(), refreshAllLastReceipts: jest.fn(),
   upsertCatalogGood: jest.fn(), upsertTechCard: jest.fn(), upsertServiceTechCard: jest.fn(),
-  listTechCardIdsByYc: jest.fn(), listRecordsToLearn: jest.fn(),
+  listTechCardIdsByYc: jest.fn(), listRecordsToLearn: jest.fn(), listWriteoffGapDays: jest.fn(),
 }));
 const mockLog = { info: jest.fn(), warn: jest.fn(), error: jest.fn() };
 jest.mock('./logger', () => ({ createLogger: () => mockLog }));
@@ -71,6 +71,51 @@ describe('reconcileGoodsTransactions', () => {
     const r = await sync.reconcileGoodsTransactions(SALON, { sleep: noSleep });
     expect(r.upserted).toBe(1);
     expect(r.skipped).toBe(1);
+  });
+});
+
+describe('healGoodsGaps: дни с визитами без единого списания дотягиваются start_date/end_date', () => {
+  test('dayRanges: соседние дни склеиваются, свежие первыми', () => {
+    expect(sync.dayRanges(['2026-10-02', '2026-10-16', '2026-10-14', '2026-10-15', '2026-10-08', '2026-10-08']))
+      .toEqual([['2026-10-14', '2026-10-16'], ['2026-10-08', '2026-10-08'], ['2026-10-02', '2026-10-02']]);
+    expect(sync.dayRanges([])).toEqual([]);
+  });
+  test('окно 30 дней до вчера, диапазоны по пробелам, source=reconcile, кап MAX_GAP_RANGES, приходы пересчитывают закупку', async () => {
+    store.listWriteoffGapDays.mockResolvedValue([
+      { day: '2026-10-16', visits: 16 }, { day: '2026-10-15', visits: 8 }, { day: '2026-10-08', visits: 9 },
+      { day: '2026-10-02', visits: 18 }, { day: '2026-09-25', visits: 5 },
+    ]);
+    const calls = [];
+    ycGet.mockImplementation(async (s, path, params) => {
+      expect(path).toBe('/storages/transactions/668791');
+      calls.push([params.start_date, params.end_date, params.page]);
+      if (params.page !== 1) return [];
+      if (params.start_date === '2026-10-08') return [];                       // и правда пусто
+      return [{ id: Number(params.start_date.slice(8)), type_id: 2, amount: '-1', cost: '5', good: { id: 9, title: 'G' }, record_id: 77 },
+        { id: 100 + Number(params.start_date.slice(8)), type_id: 3, amount: '2', cost: '10', good: { id: 9, title: 'G' } }];
+    });
+    const r = await sync.healGoodsGaps(SALON, { now: new Date('2026-10-19T12:00:00+03:00'), sleep: noSleep });
+    expect(store.listWriteoffGapDays).toHaveBeenCalledWith(1, '2026-09-19', '2026-10-18');
+    expect(calls.filter(c => c[2] === 1).map(c => [c[0], c[1]])).toEqual([['2026-10-15', '2026-10-16'], ['2026-10-08', '2026-10-08'], ['2026-10-02', '2026-10-02']]);
+    expect(r).toEqual({ gapDays: 5, ranges: 3, healed: 2, upserted: 4 });
+    expect(store.upsertGoodsTransaction).toHaveBeenCalledWith(1, expect.objectContaining({ yclients_txn_id: 15 }), { status: 'update', source: 'reconcile' });
+    expect(store.refreshLastReceipt).toHaveBeenCalledTimes(1);
+    expect(store.refreshLastReceipt).toHaveBeenCalledWith(1, 9);
+  });
+  test('пробелов нет — ни одного запроса в YClients', async () => {
+    store.listWriteoffGapDays.mockResolvedValue([]);
+    const r = await sync.healGoodsGaps(SALON, { sleep: noSleep });
+    expect(ycGet).not.toHaveBeenCalled();
+    expect(r).toEqual({ gapDays: 0, ranges: 0, healed: 0, upserted: 0 });
+  });
+  test('runNightly зовёт шаг gaps после сверки транзакций', async () => {
+    ycGet.mockResolvedValue([]);
+    store.listWriteoffGapDays.mockResolvedValue([]);
+    store.listRecordsToLearn.mockResolvedValue([]);
+    store.listTechCardIdsByYc.mockResolvedValue(new Map());
+    const r = await sync.runNightly(SALON, { sleep: noSleep });
+    expect(Object.keys(r.steps)).toEqual(['catalog', 'techCards', 'transactions', 'gaps', 'learn', 'lastReceipts']);
+    expect(r.steps.gaps).toEqual({ gapDays: 0, ranges: 0, healed: 0, upserted: 0 });
   });
 });
 

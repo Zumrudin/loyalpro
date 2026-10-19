@@ -120,6 +120,55 @@ async function reconcileGoodsTransactions(salon, opts = {}) {
   return { pages: r.pages, upserted: r.upserted, skipped: r.skipped, receipts: r.receipts };
 }
 
+// ── Самолечение пробелов списаний ───────────────────────────────────────────
+const GAP_LOOKBACK_DAYS = 30;
+const MAX_GAP_RANGES = 3;           // диапазонов за ночь — квота общая с Милой
+
+/** Соседние даты 'YYYY-MM-DD' (любой порядок) → [[start,end], …], свежие первыми. */
+function dayRanges(days) {
+  const sorted = [...new Set(days)].sort();
+  const out = [];
+  for (const d of sorted) {
+    const last = out[out.length - 1];
+    const next = last ? new Date(Date.parse(`${last[1]}T00:00:00Z`) + 86400000).toISOString().slice(0, 10) : null;
+    if (last && d === next) last[1] = d; else out.push([d, d]);
+  }
+  return out.reverse();
+}
+
+/**
+ * Дни за последние GAP_LOOKBACK_DAYS (до вчера включительно) с состоявшимися визитами
+ * и БЕЗ единого списания по записям → start_date/end_date по диапазонам соседних дней,
+ * не больше MAX_GAP_RANGES за ночь, свежие первыми. ЗАЧЕМ: сверка changed_after=−2 дня
+ * закрывает только потерянные вебхуки последних суток; простой процесса, деплой без
+ * обработчика или откат ветки оставляли дыру навсегда (дев 19.10.2026: 01–16.10 пусто
+ * при 170 визитах). День, где в клинике и правда ничего не списали, перепроверяется
+ * каждую ночь — бесплатной отметки «проверено» у нас нет; кап диапазонов это ограничивает.
+ */
+async function healGoodsGaps(salon, opts = {}) {
+  const sleep = opts.sleep || defaultSleep;
+  const now = opts.now || new Date();
+  const to = mskDate(now, -1);
+  const from = mskDate(now, -GAP_LOOKBACK_DAYS);
+  const gaps = await store.listWriteoffGapDays(salon.id, from, to);
+  const ranges = dayRanges(gaps.map(g => g.day)).slice(0, MAX_GAP_RANGES);
+  let upserted = 0, healed = 0;
+  const receiptGoods = new Set();
+  for (const [start, end] of ranges) {
+    const r = await pullTransactions(salon, { start_date: start, end_date: end }, 'reconcile', sleep);
+    upserted += r.upserted;
+    if (r.upserted) healed++;
+    for (const g of r.receiptGoods) receiptGoods.add(g);
+    logger.info(`salon=${salon.id}: пробел списаний ${start}..${end}: ${r.upserted} строк`);
+  }
+  for (const goodId of receiptGoods) {
+    await Promise.resolve().then(() => store.refreshLastReceipt(salon.id, goodId))
+      .catch(e => logger.warn(`last receipt good=${goodId}: ${e.message}`));
+  }
+  if (gaps.length) logger.info(`salon=${salon.id}: дней без списаний за ${from}..${to}: ${gaps.length}, проверено диапазонов ${ranges.length}, пополнено ${healed}`);
+  return { gapDays: gaps.length, ranges: ranges.length, healed, upserted };
+}
+
 /** [[start,end], …] по календарным месяцам внутри [from, to] (включительно). */
 function monthRanges(from, to) {
   const out = [];
@@ -259,6 +308,7 @@ async function runNightly(salon, opts = {}) {
     await step('catalog', () => syncGoodsCatalog(salon, opts));
     await step('techCards', () => syncTechCards(salon, opts));
     await step('transactions', () => reconcileGoodsTransactions(salon, opts));
+    await step('gaps', () => healGoodsGaps(salon, opts));
     await step('learn', () => learnTechCardLinks(salon, opts));
     await step('lastReceipts', () => store.refreshAllLastReceipts(salon.id));
     out.ok = Object.keys(out.errors).length === 0;
@@ -277,4 +327,5 @@ async function fetchStaffSalary(salon, staffYcId, dateFrom, dateTo) {
 
 module.exports = { fetchStaffSalary, syncGoodsCatalog, parseCatalogGood, MAX_GOODS_PAGES, PAGE, RETRY, PAGE_PAUSE_MS, defaultSleep, num,
   reconcileGoodsTransactions, backfillGoodsTransactions, monthRanges, mskDate, RECONCILE_DAYS, MAX_TXN_PAGES,
+  healGoodsGaps, dayRanges, GAP_LOOKBACK_DAYS, MAX_GAP_RANGES,
   syncTechCards, learnTechCardLinks, lookupTechCardForService, MAX_CARD_PAGES, MAX_LEARN_CALLS, MAX_LOOKUP_STAFF, runNightly, isRunning, runExclusive };

@@ -91,7 +91,7 @@ test('ecoSortNext: повторный клик меняет направлени
 
 test('ecoSummaryTiles: шесть плиток, бонусы показаны, нет графика — подпись', () => {
   const tiles = plain(ctx.ecoSummaryTiles({
-    revenue: 100000, visits: 40, hours: 52.4, bonus_redeemed: 3000, bonus_in_revenue: 1000,
+    revenue: 100000, visits: 40, hours: 52.4, bonus_redeemed: 3000, bonus_applied: 1000,
     contribution: 60000, contribution_pct: 0.6, operating_profit: 20000, operating_pct: 0.2, usn_estimate: 6000,
     rate_minute_fact: 12.34, rate_minute_capacity: 0, idle_cost: null,
     coverage: { consumables_share: 0.5, services_without_tech_card: 3, services_total: 10, goods_without_price: [1, 2], staff_without_pay_rule: 1 },
@@ -107,28 +107,30 @@ test('ecoSummaryTiles: шесть плиток, бонусы показаны, �
   assert.match(withCap[3].sub, /простой 1 500 ₽/);
 });
 
-test('ecoDetailLines: выручка = цена − бонусы, не учтённые YClients; списанное показано отдельно', () => {
+test('ecoDetailLines: прайс → − скидки → − бонусами → = выручка (к оплате деньгами); бонус сверх разрыва — справочно', () => {
   const lines = plain(ctx.ecoDetailLines({
-    price: 23400, discount: 500, bonus_redeemed: 2600, bonus_in_revenue: 0, revenue: 23400,
+    first_cost: 26000, price: 23400, discount: 0, bonus_redeemed: 3000, bonus_applied: 2600, revenue: 23400,
     materials_used: 4000, materials_fact: 4000, materials_norm: 3500, materials_estimated_rows: 0,
     doctor_pay: 5000, doctor_cost: 6510, acquiring_cost: 400, coverage: { acquiring_estimated: 0 },
     contribution: 12490, contribution_pct: 0.5337, overhead: 3000, equipment_cost: 500,
     operating_profit: 8990, operating_pct: 0.384, usn_estimate: 1404, profit_per_hour: 6000,
   }, { payroll_multiplier: 1.302, allocation_driver: 'minutes' }));
   const byLabel = Object.fromEntries(lines.map(l => [l.label, l]));
-  const bonus = lines[1];
-  assert.match(bonus.label, /бонус/i);
-  assert.strictEqual(bonus.value, '0 ₽', 'вычитается bonus_in_revenue, а не bonus_redeemed');
-  assert.match(bonus.note, /списано 2 600 ₽/);
-  assert.match(bonus.note, /2 600 ₽ уже учтено YClients/);
-  assert.strictEqual(byLabel['= Выручка'].value, '23 400 ₽');
-  assert.ok(byLabel['= Выручка'].total);
-  assert.match(lines[0].note, /скидки 500 ₽/);
-  assert.match(byLabel['− Постоянные расходы'].note, /по минутам/);
-  assert.strictEqual(lines.filter(l => l.total).length, 3);
-  const visitsDriver = plain(ctx.ecoDetailLines({ coverage: {} }, { allocation_driver: 'visits' }));
-  assert.match(visitsDriver.find(l => l.label === '− Постоянные расходы').note, /на визит/);
+  assert.match(lines[0].label, /прайс/i);
+  assert.strictEqual(lines[0].value, '26 000 ₽');
+  assert.match(lines[1].label, /скидк/i);
+  assert.strictEqual(lines[1].value, '0 ₽');
+  assert.match(lines[2].label, /бонус/i);
+  assert.strictEqual(lines[2].value, '2 600 ₽', 'вычитается bonus_applied — часть бонуса в разрыве до прайса');
+  assert.match(lines[2].note, /всего списано 3 000 ₽/);
+  assert.match(lines[2].note, /400 ₽ вне стоимости услуг/);
+  assert.match(byLabel['= Выручка (к оплате деньгами)'].value, /23 400 ₽/);
+  assert.ok(byLabel['= Выручка (к оплате деньгами)'].total);
+  assert.strictEqual(lines.some(l => /не учтённые в сумме к оплате/.test(l.label)), false);
+  const noBonus = plain(ctx.ecoDetailLines({ first_cost: 1000, price: 1000, discount: 0, bonus_redeemed: 0, bonus_applied: 0, revenue: 1000, coverage: {} }, {}));
+  assert.match(noBonus[2].note, /не списывались/);
 });
+
 
 test('ecoVisitFlags: флаги визита в детализации', () => {
   assert.deepStrictEqual(plain(ctx.ecoVisitFlags({ materials_estimated: true, no_materials_data: false, no_price_goods: [1, 2], no_pay_rule: true, acquiring_estimated: true })),
@@ -284,6 +286,7 @@ test('второе ревью п.9: ecoDictsCacheable — пустой/degraded 
 
 test('Task 22: ecoWarningLines — тексты предупреждений без HTML, даты по Москве, порядок как у сервера', () => {
   const lines = plain(ctx.ecoWarningLines([
+    { type: 'sync_gap', days: ['2026-10-01', '2026-10-08', '2026-10-16'], visits: 170 },
     { type: 'no_consumables', service_yc_id: 10, service_title: 'Ботокс <лоб>', count: 3, record_ids: [1, 2, 3], last_date: '2026-09-12' },
     { type: 'overrun', service_yc_id: 10, service_title: 'S', record_id: 7, visit_date: '2026-09-10', staff_name: 'Пери', fact: 1300, norm: 1000, ratio: 1.3 },
     { type: 'no_price', good_id: 7, good_title: 'Игла', visits: 10 },
@@ -291,6 +294,7 @@ test('Task 22: ecoWarningLines — тексты предупреждений б�
     { type: 'чужое' },
   ]));
   assert.deepStrictEqual(lines, [
+    { type: 'sync_gap', text: 'Списания не загружены за 3 дня (01.10.2026 – 16.10.2026, 170 визитов): ни у одной записи этих дней нет списаний YClients — материалы по ним показаны по норме; ночной проход дотянет данные сам, вручную — догон scripts/economics-backfill-goods.js' },
     { type: 'no_consumables', text: '«Ботокс <лоб>»: 3 визита без списаний, хотя у услуги есть техкарта (последний 12.09.2026)' },
     { type: 'overrun', text: '«S», визит 10.09.2026 (Пери): материалы 1 300 ₽ при норме 1 000 ₽ — ×1,3' },
     { type: 'no_price', text: 'Товар без цены: «Игла» — списан в 10 визитах, цены нет ни в приходах, ни вручную, ни в каталоге' },

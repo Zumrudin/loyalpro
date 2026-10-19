@@ -35,7 +35,7 @@ describe('buildRows + finalizeRows на визите 2049113510', () => {
     expect(rows).toHaveLength(2);
     expect(bel.minutes).toBe(30); expect(btx.minutes).toBe(30);
     expect(bel.bonus_redeemed).toBeCloseTo(818.18, 2); expect(btx.bonus_redeemed).toBeCloseTo(181.82, 2);
-    expect(bel.revenue).toBeCloseTo(21681.82, 2); expect(btx.revenue).toBeCloseTo(4818.18, 2);
+    expect(bel.revenue).toBe(22500); expect(btx.revenue).toBe(5000);
     expect(bel.discount).toBe(0);
   });
   test('материалы: факт по услуге + доля записи; у второй услуги только доля записи, но это факт (списания по записи есть)', () => {
@@ -48,9 +48,9 @@ describe('buildRows + finalizeRows на визите 2049113510', () => {
     expect(bel.has_consumables).toBe(true);
   });
   test('оплата врача 30 % gross × 1.3; категория берётся из ctx', () => {
-    expect(bel.doctor_pay).toBeCloseTo(6504.55, 2);
-    expect(bel.doctor_cost).toBeCloseTo(8455.91, 2);
-    expect(btx.doctor_cost).toBeCloseTo(1879.09, 2);
+    expect(bel.doctor_pay).toBeCloseTo(6750, 2);
+    expect(bel.doctor_cost).toBeCloseTo(8775, 2);
+    expect(btx.doctor_cost).toBeCloseTo(1950, 2);
     expect(bel.no_pay_rule).toBe(false);
     expect(btx.category_yc_id).toBe(100);
   });
@@ -60,9 +60,9 @@ describe('buildRows + finalizeRows на визите 2049113510', () => {
     expect(bel.acquiring_estimated).toBe(false);
   });
   test('маржинальная прибыль и %', () => {
-    expect(bel.contribution).toBeCloseTo(7500.78, 2);
-    expect(btx.contribution).toBeCloseTo(2863.73, 2);
-    expect(bel.contribution_pct).toBeCloseTo(7500.78 / 21681.82, 4);
+    expect(bel.contribution).toBeCloseTo(7999.87, 2);
+    expect(btx.contribution).toBeCloseTo(2974.64, 2);
+    expect(bel.contribution_pct).toBeCloseTo(7999.87 / 22500, 4);
   });
 });
 
@@ -125,8 +125,8 @@ describe('норма и флаги покрытия', () => {
     const c = ctx();
     c.payRules = [{ id: 2, staff_yc_id: null, service_yc_id: null, category_yc_id: null, percent: 30, base: 'net_of_materials', fixed_per_visit: 0 }];
     let rows = C.buildRows(RECORD, c);
-    expect(rows[0].pay_base).toBeCloseTo(21681.82 - 5387.63, 2);
-    expect(rows[0].doctor_pay).toBeCloseTo((21681.82 - 5387.63) * 0.3, 2);
+    expect(rows[0].pay_base).toBeCloseTo(22500 - 5387.63, 2);
+    expect(rows[0].doctor_pay).toBeCloseTo((22500 - 5387.63) * 0.3, 2);
     c.settings.pay_base_includes_bonuses = true;
     rows = C.buildRows(RECORD, c);
     expect(rows[0].pay_base).toBeCloseTo(22500 - 5387.63, 2);
@@ -148,15 +148,15 @@ describe('норма и флаги покрытия', () => {
     ];
     const rows = C.buildRows(RECORD, c);
     expect(rows[0].pay_rule_id).toBe(1);
-    expect(rows[0].doctor_pay).toBeCloseTo(21681.82 * 0.3, 2);
+    expect(rows[0].doctor_pay).toBeCloseTo(22500 * 0.3, 2);
     expect(rows[1].pay_rule_id).toBe(4);
-    expect(rows[1].doctor_pay).toBeCloseTo(4818.18 * 0.1 + 300, 2);
+    expect(rows[1].doctor_pay).toBeCloseTo(5000 * 0.1 + 300, 2);
   });
   test('нет оплат → эквайринг по средней доле периода, estimated', () => {
     const rows = C.buildRows({ ...RECORD, payments: [] }, ctx());
     C.finalizeRows(rows, { avgAcquiringRate: 0.012 });
     expect(rows[0].acquiring_estimated).toBe(true);
-    expect(rows[0].acquiring_cost).toBeCloseTo(21681.82 * 0.012, 2);
+    expect(rows[0].acquiring_cost).toBeCloseTo(22500 * 0.012, 2);
   });
   test('оплаты есть, но касса без процента → эквайринг 0, не оценка', () => {
     const rows = C.buildRows({ ...RECORD, payments: [{ amount: 27500, account_title: 'Касса' }] }, ctx());
@@ -167,10 +167,10 @@ describe('норма и флаги покрытия', () => {
   });
   test('avgAcquiringRate: Σ эквайринг / Σ выручка по строкам с оплатами', () => {
     const rows = C.buildRows(RECORD, ctx());
-    expect(C.avgAcquiringRate(rows)).toBeCloseTo(412.5 / 26500, 6);
+    expect(C.avgAcquiringRate(rows)).toBeCloseTo(412.5 / 27500, 6);
     expect(C.avgAcquiringRate([])).toBe(0);
     const noPay = C.buildRows({ ...RECORD, record_id: 2, payments: [] }, ctx());
-    expect(C.avgAcquiringRate([...rows, ...noPay])).toBeCloseTo(412.5 / 26500, 6);
+    expect(C.avgAcquiringRate([...rows, ...noPay])).toBeCloseTo(412.5 / 27500, 6);
   });
   test('длительности каталога делят минуты; нет услуг → []', () => {
     const c = ctx(); c.durations = new Map([['9536380', 2700], ['25013124', 900]]);
@@ -179,8 +179,8 @@ describe('норма и флаги покрытия', () => {
     expect(rows[0].hours).toBe(0.75);
     expect(C.buildRows({ ...RECORD, services: [] }, c)).toEqual([]);
   });
-  test('скидка = first_cost − cost (нет cost → − cost_to_pay), справочно; без cost_to_pay цена = cost', () => {
-    const rows = C.buildRows({ ...RECORD, services: [
+  test('скидка = прайс − к оплате без бонусов, справочно; без cost_to_pay цена = cost', () => {
+    const rows = C.buildRows({ ...RECORD, bonus_redeemed: 0, services: [
       { id: 9536380, title: 'A', cost_to_pay: 20000, first_cost: 22500 },
       { id: 25013124, title: 'B', cost: 5000 },
     ] }, ctx());
@@ -192,43 +192,79 @@ describe('норма и флаги покрытия', () => {
   });
 });
 
-describe('бонусы, уже вычтенные YClients в cost_to_pay (дев-БД Q3 2026)', () => {
+// Правило с 19.10.2026 (разбор 2006141556, docs/superpowers/plans/2026-10-19-economics-bugfix-bonus-and-writeoff-gap.md):
+// выручка = cost_to_pay ВСЕГДА — YClients уже вычел и скидки, и бонусы (платёжные операции
+// по записи равны cost_to_pay в 254 визитах из 256 за квартал). Бонус распределяется по
+// разрывам first_cost×amount − cost_to_pay услуг (bonus_applied), остаток разрыва — скидка.
+describe('бонусы: выручка = cost_to_pay, бонус объясняет разрыв до прайса (дев-БД 01.07–18.10.2026)', () => {
   const base = { ...RECORD, consumables: [], payments: [] };
-  test('cost_to_pay = cost − бонус (1881121110, Profhilo) → бонус второй раз не вычитается', () => {
+  // Боташев 08.10.2026 10:00: бонус 1500 вычтен в cost И cost_to_pay всех услуг, discount 0.
+  const BOTASHEV = [
+    { id: 9536663, title: 'Revi strong 2 ml', amount: 1, discount: 0, first_cost: 21000, cost: 20300, cost_to_pay: 20300 },
+    { id: 15394048, title: 'Ботулинотерапия Лоб + межбровье', amount: 1, discount: 0, first_cost: 14000, cost: 13533.33, cost_to_pay: 13533.33 },
+    { id: 15394051, title: 'Ботулинотерапия Подбородок', amount: 1, discount: 0, first_cost: 4000, cost: 3866.67, cost_to_pay: 3866.67 },
+    { id: 15394054, title: 'Ботулинотерапия Уголки глаз', amount: 1, discount: 0, first_cost: 6000, cost: 5800, cost_to_pay: 5800 },
+  ];
+  test('эталон 2006141556: Revi strong — прайс 21000, скидка 0, бонусами 700, выручка 20300; бонус второй раз не вычитается', () => {
+    const rows = C.buildRows({ ...base, record_id: 2006141556, services: BOTASHEV, bonus_redeemed: 1500 }, ctx());
+    const revi = rows[0];
+    expect(revi.first_cost).toBe(21000);
+    expect(revi.price).toBe(20300);
+    expect(revi.discount).toBeCloseTo(0, 6);
+    expect(revi.bonus_applied).toBeCloseTo(700, 2);
+    expect(revi.bonus_redeemed).toBeCloseTo(700, 2);
+    expect(revi.revenue).toBe(20300);
+    expect(rows.reduce((a, r) => a + r.bonus_applied, 0)).toBeCloseTo(1500, 2);
+    expect(rows.reduce((a, r) => a + r.revenue, 0)).toBeCloseTo(43500, 2);
+    expect(rows.reduce((a, r) => a + r.discount, 0)).toBeCloseTo(0, 6);
+  });
+  test('бонус вычтен только в cost_to_pay (1881121110, Profhilo: cost 26000 → 23400) — выручка 23400, бонусами 2600, скидка 0', () => {
     const [r] = C.buildRows({ ...base, services: [{ id: 9536380, title: 'Profhilo', cost: 26000, cost_to_pay: 23400, first_cost: 26000 }], bonus_redeemed: 2600 }, ctx());
-    expect(r.price).toBe(23400);
-    expect(r.bonus_redeemed).toBe(2600);
-    expect(r.bonus_in_revenue).toBe(0);
-    expect(r.revenue).toBe(23400);
+    expect(r.price).toBe(23400); expect(r.revenue).toBe(23400);
+    expect(r.bonus_applied).toBe(2600); expect(r.discount).toBe(0);
   });
-  test('cost_to_pay = cost, бонусы списаны способом оплаты → вычитаются', () => {
+  test('разрыва нет, а бонус по записи есть (деньгами заплачен полный прайс: товары/дрейф баланса) — выручка НЕ уменьшается', () => {
     const [r] = C.buildRows({ ...base, services: [{ id: 9536380, title: 'A', cost: 10000, cost_to_pay: 10000, first_cost: 10000 }], bonus_redeemed: 1500 }, ctx());
+    expect(r.revenue).toBe(10000);
+    expect(r.bonus_applied).toBe(0);
     expect(r.bonus_redeemed).toBe(1500);
-    expect(r.bonus_in_revenue).toBe(1500);
-    expect(r.revenue).toBe(8500);
   });
-  test('частично: разрыв записи 1000 при бонусе 1500 → вычитается 500, делится по цене', () => {
+  test('разрыв больше бонуса: остаток разрыва — скидка (first 20000, к оплате 17000, бонус 1000 → скидка 2000)', () => {
+    const [r] = C.buildRows({ ...base, services: [{ id: 9536380, title: 'A', cost: 18000, cost_to_pay: 17000, first_cost: 20000 }], bonus_redeemed: 1000 }, ctx());
+    expect(r.revenue).toBe(17000); expect(r.bonus_applied).toBe(1000); expect(r.discount).toBe(2000);
+  });
+  test('разрыв меньше бонуса: бонус ложится по разрывам услуг, не по цене; услуга без разрыва бонуса не получает', () => {
     const rows = C.buildRows({ ...base, services: [
       { id: 9536380, title: 'A', cost: 8000, cost_to_pay: 7000, first_cost: 8000 },
       { id: 25013124, title: 'B', cost: 3000, cost_to_pay: 3000, first_cost: 3000 },
     ], bonus_redeemed: 1500 }, ctx());
-    expect(rows[0].bonus_in_revenue + rows[1].bonus_in_revenue).toBeCloseTo(500, 2);
-    expect(rows[0].bonus_in_revenue).toBeCloseTo(350, 2); expect(rows[1].bonus_in_revenue).toBeCloseTo(150, 2);
+    expect(rows[0].bonus_applied).toBeCloseTo(1000, 2); expect(rows[1].bonus_applied).toBe(0);
+    expect(rows[0].discount).toBeCloseTo(0, 6); expect(rows[1].discount).toBe(0);
+    expect(rows[0].revenue).toBe(7000); expect(rows[1].revenue).toBe(3000);
     expect(rows[0].bonus_redeemed + rows[1].bonus_redeemed).toBeCloseTo(1500, 2);
-    expect(rows[0].revenue).toBeCloseTo(6650, 2); expect(rows[1].revenue).toBeCloseTo(2850, 2);
   });
-  test('абонемент: cost_to_pay 0 без бонусов → выручка 0 (осознанно, вопрос владельцу)', () => {
+  test('количество услуги умножает прайс: first_cost 10500 × 2, к оплате 20300, бонус 700 → прайс 21000, бонусами 700', () => {
+    const [r] = C.buildRows({ ...base, services: [{ id: 9536663, title: 'Revi strong 2 ml', amount: 2, first_cost: 10500, cost: 20300, cost_to_pay: 20300 }], bonus_redeemed: 700 }, ctx());
+    expect(r.first_cost).toBe(21000); expect(r.bonus_applied).toBe(700); expect(r.revenue).toBe(20300);
+  });
+  test('абонемент: cost_to_pay 0 без бонусов → выручка 0, разрыв до прайса показан скидкой (осознанно, вопрос владельцу)', () => {
     const [r] = C.buildRows({ ...base, services: [{ id: 9536380, title: 'Tesla former Аб', cost: 6000, cost_to_pay: 0, first_cost: 6000 }], bonus_redeemed: 0 }, ctx());
-    expect(r.revenue).toBe(0); expect(r.bonus_in_revenue).toBe(0);
+    expect(r.revenue).toBe(0); expect(r.bonus_applied).toBe(0); expect(r.discount).toBe(6000);
   });
-  test('эталон 2049113510 (без поля cost) — бонус вычитается целиком, bonus_in_revenue = bonus_redeemed', () => {
+  test('эталон 2049113510 (cost_to_pay = first_cost, бонус 1000): выручка = cost_to_pay, бонус справочно по доле цены', () => {
     const rows = C.buildRows(RECORD, ctx());
-    expect(rows[0].bonus_in_revenue).toBeCloseTo(818.18, 2); expect(rows[1].bonus_in_revenue).toBeCloseTo(181.82, 2);
+    expect(rows[0].revenue).toBe(22500); expect(rows[1].revenue).toBe(5000);
+    expect(rows[0].bonus_applied).toBe(0); expect(rows[1].bonus_applied).toBe(0);
+    expect(rows[0].bonus_redeemed).toBeCloseTo(818.18, 2); expect(rows[1].bonus_redeemed).toBeCloseTo(181.82, 2);
   });
-  test('bonus_in_revenue суммируется в aggregate и summary', () => {
-    const rows = C.finalizeRows(C.buildRows(RECORD, ctx()));
-    expect(C.SUM_FIELDS).toContain('bonus_in_revenue');
-    expect(C.summary(rows).bonus_in_revenue).toBe(1000);
+  test('bonus_applied и first_cost суммируются в aggregate и summary; bonus_in_revenue больше нет', () => {
+    const rows = C.finalizeRows(C.buildRows({ ...base, record_id: 2006141556, services: BOTASHEV, bonus_redeemed: 1500 }, ctx()));
+    expect(C.SUM_FIELDS).toContain('bonus_applied');
+    expect(C.SUM_FIELDS).toContain('first_cost');
+    expect(C.SUM_FIELDS).not.toContain('bonus_in_revenue');
+    const s = C.summary(rows);
+    expect(s.bonus_applied).toBe(1500); expect(s.first_cost).toBe(45000); expect(s.revenue).toBe(43500); expect(s.price).toBe(43500);
+    expect(rows[0]).not.toHaveProperty('bonus_in_revenue');
   });
 });
 
@@ -243,11 +279,11 @@ describe('applyOverhead + aggregate', () => {
     C.applyOverhead(rows, { driver: 'minutes', fixedTotal: 600, equipment: [{ id: 1, name: 'Laser', service_ids: [25013124], periodCost: 100 }], usnRate: 15 });
     expect(rows[0].overhead).toBe(300); expect(rows[1].overhead).toBe(300);
     expect(rows[0].equipment_cost).toBe(0); expect(rows[1].equipment_cost).toBe(100);
-    expect(rows[0].operating_profit).toBeCloseTo(7500.78 - 300, 2);
-    expect(rows[1].operating_profit).toBeCloseTo(2863.73 - 400, 2);
-    expect(rows[0].usn_estimate).toBeCloseTo((7500.78 - 300) * 0.15, 2);
-    expect(rows[0].profit_per_hour).toBeCloseTo(7500.78 / 0.5, 2);
-    expect(rows[0].operating_pct).toBeCloseTo((7500.78 - 300) / 21681.82, 4);
+    expect(rows[0].operating_profit).toBeCloseTo(7999.87 - 300, 2);
+    expect(rows[1].operating_profit).toBeCloseTo(2974.64 - 400, 2);
+    expect(rows[0].usn_estimate).toBeCloseTo((7999.87 - 300) * 0.15, 2);
+    expect(rows[0].profit_per_hour).toBeCloseTo(7999.87 / 0.5, 2);
+    expect(rows[0].operating_pct).toBeCloseTo((7999.87 - 300) / 22500, 4);
   });
   test('драйвер visits — поровну; убыток → УСН 0', () => {
     const rows = rowsFixture();
@@ -271,13 +307,13 @@ describe('applyOverhead + aggregate', () => {
     const bel = g.find(x => x.key === 9536380);
     expect(bel.label).toBe('Belotero lips contur 0,6 ml');
     expect(bel.visits).toBe(1);
-    expect(bel.revenue).toBeCloseTo(21681.82, 2);
+    expect(bel.revenue).toBeCloseTo(22500, 2);
     expect(bel.materials_used).toBeCloseTo(5387.63, 2);
     expect(bel.materials_estimated_rows).toBe(0);
-    expect(bel.contribution).toBeCloseTo(7500.78, 2);
-    expect(bel.contribution_pct).toBeCloseTo(7500.78 / 21681.82, 4);
+    expect(bel.contribution).toBeCloseTo(7999.87, 2);
+    expect(bel.contribution_pct).toBeCloseTo(7999.87 / 22500, 4);
     expect(bel.hours).toBe(0.5);
-    expect(bel.profit_per_hour).toBeCloseTo(15001.56, 2);
+    expect(bel.profit_per_hour).toBeCloseTo(15999.74, 2);
     expect(bel.coverage).toEqual({ rows: 1, with_consumables: 1, with_tech_card: 0, no_pay_rule: 0, no_price_goods: [], acquiring_estimated: 0 });
   });
   test('aggregate: две записи одной услуги → visits 2, оценка материалов и товары без цены собираются', () => {
@@ -310,7 +346,7 @@ describe('applyOverhead + aggregate', () => {
     expect(s.rate_minute_capacity).toBe(5);
     expect(s.idle_cost).toBe(300);                 // 600 − 5 × 60
     expect(s.visits).toBe(1);
-    expect(s.revenue).toBeCloseTo(26500, 2);
+    expect(s.revenue).toBeCloseTo(27500, 2);
     expect(s.overhead).toBe(600);
     expect(s.coverage.consumables_share).toBe(1);
     expect(s.coverage.services_without_tech_card).toBe(2);
@@ -330,16 +366,18 @@ describe('applyOverhead + aggregate', () => {
 
 describe('ревью: база оплаты, скидка, свои списания повторной услуги', () => {
   const base = { ...RECORD, consumables: [], payments: [] };
-  test('pay_base_includes_bonuses → база ДО бонусов = cost (Profhilo: cost 26000, cost_to_pay 23400, бонусы 2600 → 26000)', () => {
+  test('pay_base_includes_bonuses → база ДО бонусов = cost_to_pay + bonus_applied (Profhilo 23400+2600 → 26000; Revi 20300+700 → 21000)', () => {
     const c = ctx(); c.settings.pay_base_includes_bonuses = true;
     const [r] = C.buildRows({ ...base, services: [{ id: 9536380, title: 'Profhilo', cost: 26000, cost_to_pay: 23400, first_cost: 26000 }], bonus_redeemed: 2600 }, c);
     expect(r.pay_base).toBe(26000);
     expect(r.doctor_pay).toBe(7800);
+    const [revi] = C.buildRows({ ...base, services: [{ id: 9536663, title: 'Revi', cost: 20300, cost_to_pay: 20300, first_cost: 21000 }], bonus_redeemed: 700 }, c);
+    expect(revi.pay_base).toBe(21000);
     c.settings.pay_base_includes_bonuses = false;
     const [r2] = C.buildRows({ ...base, services: [{ id: 9536380, title: 'Profhilo', cost: 26000, cost_to_pay: 23400, first_cost: 26000 }], bonus_redeemed: 2600 }, c);
     expect(r2.pay_base).toBe(23400);
   });
-  test('скидка = first_cost − cost (бонусы, вычтенные в cost_to_pay, скидкой не считаются)', () => {
+  test('скидка = разрыв до прайса минус бонус (Profhilo: разрыв 2600 = бонус → 0; A: разрыв 3000, бонус 1000 → 2000)', () => {
     const [r] = C.buildRows({ ...base, services: [{ id: 9536380, title: 'Profhilo', cost: 26000, cost_to_pay: 23400, first_cost: 26000 }], bonus_redeemed: 2600 }, ctx());
     expect(r.discount).toBe(0);
     const [r2] = C.buildRows({ ...base, services: [{ id: 9536380, title: 'A', cost: 18000, cost_to_pay: 17000, first_cost: 20000 }], bonus_redeemed: 1000 }, ctx());
@@ -407,6 +445,20 @@ describe('warnings (Task 22): только то, что доказуемо да�
       { ...base, record_id: 3, service_yc_id: 99, has_tech_card: false, materials_norm: null, visit_date: '2026-09-02' }, // списания в этот день есть
     ];
     expect(run(rows).filter(w => w.type === 'no_consumables').map(w => w.record_ids)).toEqual([[2]]);
+  });
+  test('sync_gap: дни без единого списания в салоне перечислены одной строкой — визиты по записям, сегодня не считается, первым в списке', () => {
+    const rows = [
+      { ...base, record_id: 1, has_consumables: false, visit_date: '2026-09-05' },
+      { ...base, record_id: 1, service_yc_id: 11, has_consumables: false, visit_date: '2026-09-05' }, // та же запись, вторая услуга
+      { ...base, record_id: 4, has_consumables: false, visit_date: '2026-09-03' },
+      { ...base, record_id: 2, has_consumables: false, visit_date: '2026-09-02' },
+      { ...base, record_id: 3, service_yc_id: 99, has_tech_card: false, materials_norm: null, visit_date: '2026-09-02' }, // списания в этот день есть
+      { ...base, record_id: 9, has_consumables: false, visit_date: '2026-10-19' },                                      // сегодня
+    ];
+    const w = run(rows, { from: '2026-09-01', to: '2026-10-31' });
+    expect(w[0]).toEqual({ type: 'sync_gap', days: ['2026-09-03', '2026-09-05'], visits: 2 });
+    expect(w.filter(x => x.type === 'sync_gap')).toHaveLength(1);
+    expect(run([{ ...base, record_id: 1 }]).filter(x => x.type === 'sync_gap')).toEqual([]);
   });
   test('визит сегодня/в будущем без списаний — не предупреждение (списание ещё могут провести)', () => {
     const w = run([{ ...base, has_consumables: false, visit_date: '2026-10-19' }, { ...base, record_id: 2, visit_date: '2026-10-19', materials_norm: null, has_tech_card: false }], { from: '2026-10-01', to: '2026-10-31' });

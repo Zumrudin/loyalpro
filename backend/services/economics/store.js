@@ -167,6 +167,28 @@ async function listRecordsToLearn(salonId, day, limit) {
   return db.any(RECORDS_TO_LEARN_SQL, [salonId, day, limit]);
 }
 
+// Дни периода с состоявшимися визитами, у которых НИ У ОДНОЙ записи нет живого
+// списания (type_id 2) — пробел загрузки, а не «не списали» (дев, октябрь 2026:
+// вебхуки до выката ветки обрабатывал старый код, сверка changed_after=−2 дня дыру
+// 01–16.10 не закрывала никогда). Тот же признак, что has_consumables в calc:
+// связь списания с записью по record_id (idx_goods_txn_record), а не по дате операции.
+// Выдача — 'YYYY-MM-DD', свежие сверху.
+const GAP_DAYS_SQL = `
+    SELECT to_char(r.visit_date, 'YYYY-MM-DD') AS day, count(*)::int AS visits
+    FROM records r
+    WHERE r.salon_id = $1 AND r.visit_date BETWEEN $2::date AND $3::date
+      AND r.raw_payload->>'attendance' = '1' AND COALESCE(r.status,'') <> 'deleted'
+      AND COALESCE(r.raw_payload->>'deleted', 'false') <> 'true'
+    GROUP BY r.visit_date
+    HAVING bool_and(NOT EXISTS (SELECT 1 FROM goods_transactions t WHERE t.salon_id = r.salon_id
+      AND t.record_id = r.yclients_record_id AND t.type_id = 2 AND t.deleted_at IS NULL))
+    ORDER BY r.visit_date DESC`;
+
+async function listWriteoffGapDays(salonId, from, to) {
+  const rows = await db.any(GAP_DAYS_SQL, [salonId, from, to]);
+  return rows.map(r => ({ day: r.day, visits: Number(r.visits) || 0 }));
+}
+
 // ── Загрузчики отчёта (задача 11) ────────────────────────────────────────────
 // Форма выхода — ровно вход calc.buildRows/report.js: числа уже приведены
 // (pg отдаёт bigint/numeric строками), даты — 'YYYY-MM-DD' по Москве.
@@ -477,7 +499,7 @@ async function deleteEquipment(salonId, id) { const r = await db.query('DELETE F
 module.exports = { listFixedCosts, insertFixedCost, updateFixedCost, deleteFixedCost, copyFixedCosts,
   listEquipment, insertEquipment, updateEquipment, deleteEquipment, FIXED_CATEGORIES: require('./fixed-categories').FIXED_CATEGORIES,
   upsertCatalogGood, upsertGoodsTransaction, refreshLastReceipt, refreshAllLastReceipts, TXN_COLS,
-  upsertTechCard, upsertServiceTechCard, listTechCardIdsByYc, listRecordsToLearn, RECORDS_TO_LEARN_SQL,
+  upsertTechCard, upsertServiceTechCard, listTechCardIdsByYc, listRecordsToLearn, RECORDS_TO_LEARN_SQL, listWriteoffGapDays, GAP_DAYS_SQL,
   loadPeriod, normSettings, DEFAULT_SETTINGS, RECORDS_SQL, CONSUMABLES_SQL, PAYMENTS_SQL, RECEIPTS_SQL, CATALOG_SQL,
   OVERRIDES_SQL, CARDS_SQL, LINKS_SQL, PAY_RULES_SQL, SETTINGS_SQL, FIXED_SQL, EQUIPMENT_SQL, CAPACITY_SQL,
   listGoods, listReceipts, setPriceOverride, listTechCards, insertManualCard, updateManualCard, deleteManualCard, techCardExists,
