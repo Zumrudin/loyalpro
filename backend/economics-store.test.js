@@ -206,3 +206,18 @@ describe('ревью: refreshLastReceipt', () => {
     expect(upd[1][2]).toBeNull();
   });
 });
+
+describe('второе ревью п.2: copyFixedCosts не дублирует строки, уже действующие в целевом месяце', () => {
+  beforeEach(() => jest.clearAllMocks());
+  test('from == to — 0 копий без запроса', async () => {
+    expect(await store.copyFixedCosts(1, '2026-10-01', '2026-10-01')).toBe(0);
+    expect(db.query).not.toHaveBeenCalled();
+  });
+  test('SQL исключает строки, действующие в to (бессрочные и с month_to ≥ to)', async () => {
+    db.query.mockResolvedValue({ rowCount: 2 });
+    expect(await store.copyFixedCosts(1, '2026-09-01', '2026-10-01')).toBe(2);
+    const sql = db.query.mock.calls[0][0].replace(/\s+/g, ' ');
+    expect(sql).toMatch(/NOT \(\s*fc\.month_from <= \$3::date AND \(fc\.month_to IS NULL OR fc\.month_to >= \$3::date\)\s*\)/);
+    expect(db.query.mock.calls[0][1]).toEqual([1, '2026-09-01', '2026-10-01']);
+  });
+});

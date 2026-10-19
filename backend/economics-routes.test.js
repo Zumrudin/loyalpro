@@ -15,9 +15,11 @@ jest.mock('./services/economics/store', () => ({
   upsertServiceTechCard: jest.fn(), clearServiceTechCard: jest.fn(), listGoods: jest.fn(), listReceipts: jest.fn(), listTechCards: jest.fn(),
   listFixedCosts: jest.fn(), insertFixedCost: jest.fn(), updateFixedCost: jest.fn(), deleteFixedCost: jest.fn(), copyFixedCosts: jest.fn(),
   listEquipment: jest.fn(), insertEquipment: jest.fn(), updateEquipment: jest.fn(), deleteEquipment: jest.fn(),
+  listDictionaryStaff: jest.fn(), listRecentServices: jest.fn(),
 }));
 jest.mock('./services/economics/report', () => ({ buildReport: jest.fn(), serviceDetail: jest.fn(), coverage: jest.fn(), invalidate: jest.fn() }));
-jest.mock('./services/economics/sync', () => ({ isRunning: jest.fn(() => false), runNightly: jest.fn(), syncTechCards: jest.fn(), lookupTechCardForService: jest.fn() }));
+jest.mock('./services/economics/sync', () => ({ isRunning: jest.fn(() => false), runNightly: jest.fn(), syncTechCards: jest.fn(), lookupTechCardForService: jest.fn(),
+  runExclusive: jest.fn(async (sid, fn) => fn()) }));
 
 const store = require('./services/economics/store');
 const report = require('./services/economics/report');
@@ -235,4 +237,85 @@ describe('fixed-costs / equipment ручки', () => {
     store.insertEquipment.mockResolvedValue(2);
     expect((await call('POST', '/equipment', { body: { name: 'A', purchasePrice: 10 } })).body).toEqual({ id: 2 });
   });
+});
+
+describe('второе ревью', () => {
+  const { db } = require('./db');
+  const yc = require('./services/yclients');
+  beforeEach(() => { jest.clearAllMocks(); sync.isRunning.mockReturnValue(false); db.oneOrNone.mockResolvedValue({ id: 1, yclients_company_id: '1' }); });
+
+  test('п.1: огромный period — 400 на /services, /services/:id, /coverage (без падения процесса)', async () => {
+    for (const url of ['/services', '/services/10', '/coverage']) {
+      const r = await call('GET', url, { query: { period: '99999999999999999' } });
+      expect(r.status).toBe(400);
+    }
+    expect(report.buildReport).not.toHaveBeenCalled();
+    expect(report.serviceDetail).not.toHaveBeenCalled();
+    expect(report.coverage).not.toHaveBeenCalled();
+  });
+  test('п.10: экономика принимает period=day (значение дашборда)', async () => {
+    report.buildReport.mockResolvedValue({ byService: [], byServiceStaff: [], summary: {}, settings: {} });
+    const r = await call('GET', '/services', { query: { period: 'day' } });
+    expect(r.status).toBe(200);
+    expect(r.body.from).toBe(r.body.to);
+  });
+  test('п.2: копирование месяца в самого себя — 400, store не зовётся', async () => {
+    const r = await call('POST', '/fixed-costs/copy', { query: { from: '2026-10', to: '2026-10' } });
+    expect(r.status).toBe(400);
+    expect(store.copyFixedCosts).not.toHaveBeenCalled();
+  });
+  test('п.4: импорт техкарт идёт под общей занятостью салона; занято — 409', async () => {
+    sync.syncTechCards.mockResolvedValue({ cards: 3 });
+    const ok = await call('POST', '/tech-cards/sync');
+    expect(ok.status).toBe(200);
+    expect(sync.runExclusive).toHaveBeenCalledWith(1, expect.any(Function));
+    sync.runExclusive.mockRejectedValueOnce(Object.assign(new Error('синк уже идёт'), { code: 'BUSY' }));
+    const busy = await call('POST', '/tech-cards/sync');
+    expect(busy.status).toBe(409);
+  });
+  test('п.6: отвязка — явный DELETE, снимает только ручную; ответ говорит, было ли что снимать', async () => {
+    store.clearServiceTechCard.mockResolvedValueOnce(1);
+    const r = await call('DELETE', '/services/10/tech-card', { query: { staffYcId: '3' } });
+    expect(r).toEqual({ status: 200, body: { ok: true, removed: 1 } });
+    expect(store.clearServiceTechCard).toHaveBeenCalledWith(1, 10, 3);
+    expect(report.invalidate).toHaveBeenCalledWith(1);
+    store.clearServiceTechCard.mockResolvedValueOnce(0);
+    report.invalidate.mockClear();
+    const n = await call('DELETE', '/services/10/tech-card');
+    expect(n.body).toEqual({ ok: true, removed: 0 });
+    expect(store.clearServiceTechCard).toHaveBeenLastCalledWith(1, 10, null);
+    expect(report.invalidate).not.toHaveBeenCalled();
+  });
+  test('п.6: PUT без techCardId больше ничего не удаляет — 400', async () => {
+    const r = await call('PUT', '/services/10/tech-card', { body: { techCardId: null } });
+    expect(r.status).toBe(400);
+    expect(store.clearServiceTechCard).not.toHaveBeenCalled();
+  });
+  test('п.7/9: /dictionaries — management-каталог + staff салона + услуги из записей; сбой YClients → degraded', async () => {
+    yc.ycGetServiceMeta.mockResolvedValue({ titleByService: new Map([['10', 'Чистка'], ['11', 'Пилинг']]), categoryByService: new Map([['10', 100], ['11', 101]]) });
+    yc.ycGetServiceCatalog.mockResolvedValue({ priced: [], categories: [{ id: 100, title: 'Косметология' }] });
+    store.listDictionaryStaff.mockResolvedValue([{ id: 5, name: 'Юлия', is_active: true }]);
+    store.listRecentServices.mockResolvedValue([{ id: 12, title: 'Старая услуга', category_id: null }, { id: 10, title: 'дубль', category_id: 100 }]);
+    const r = await call('GET', '/dictionaries');
+    expect(r.status).toBe(200);
+    expect(r.body.degraded).toBe(false);
+    expect(store.listDictionaryStaff).toHaveBeenCalledWith(1);
+    expect(store.listRecentServices).toHaveBeenCalledWith(1);
+    expect(r.body.services.map(s => s.id)).toEqual(expect.arrayContaining([10, 11, 12]));
+    expect(r.body.services.find(s => s.id === 10).title).toBe('Чистка');
+    expect(r.body.categories.map(c => c.id).sort()).toEqual([100, 101]);
+    expect(r.body.staff).toEqual([{ id: 5, name: 'Юлия', is_active: true }]);
+
+    yc.ycGetServiceMeta.mockResolvedValue({ titleByService: new Map(), categoryByService: new Map() });
+    yc.ycGetServiceCatalog.mockResolvedValue({ priced: [], categories: [] });
+    const d = await call('GET', '/dictionaries');
+    expect(d.status).toBe(200);
+    expect(d.body.degraded).toBe(true);
+    expect(d.body.services.map(s => s.id).sort()).toEqual([10, 12]); // из записей — остаются
+  });
+});
+
+test('второе ревью: невозможная дата в правиле оплаты — 400, а не RangeError', () => {
+  expect(parsePayRule({ staffYcId: 5, percent: 30, base: 'gross', validFrom: '9999-99-99' }).error).toMatch(/дат/i);
+  expect(parseEquipment({ name: 'A', purchasePrice: 1, purchaseDate: '2026-13-45' }).error).toMatch(/дат/i);
 });

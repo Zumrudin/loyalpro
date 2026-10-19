@@ -24,8 +24,16 @@ function cachePut(key, data) {
   while (_cache.size > CACHE_MAX) _cache.delete(_cache.keys().next().value);
 }
 
+// Поколения: invalidate чистит готовые записи, но отчёт, который СЧИТАЛСЯ во
+// время мутации, иначе положил бы в кэш устаревший результат на TTL. Расчёт
+// пишет в кэш, только если поколение салона (и общее) не сдвинулось с его начала.
+const _gen = new Map();     // String(salonId) → n
+let _epoch = 0;             // invalidate() без салона
+const genOf = (salonId) => `${_epoch}|${_gen.get(String(salonId)) || 0}`;
+
 function invalidate(salonId) {
-  if (salonId === undefined) { _cache.clear(); return; }
+  if (salonId === undefined) { _cache.clear(); _epoch++; return; }
+  _gen.set(String(salonId), (_gen.get(String(salonId)) || 0) + 1);
   for (const k of [..._cache.keys()]) if (k.startsWith(`${salonId}|`)) _cache.delete(k);
 }
 
@@ -92,8 +100,9 @@ async function buildReport(salon, from, to, { force = false } = {}) {
   const key = `${salon.id}|${from}|${to}`;
   const hit = _cache.get(key);
   if (!force && hit && Date.now() - hit.ts < TTL_MS) return hit.data;
+  const gen = genOf(salon.id);
   const data = await compute(salon, from, to);
-  cachePut(key, data);
+  if (genOf(salon.id) === gen) cachePut(key, data);
   return data;
 }
 

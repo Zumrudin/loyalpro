@@ -239,13 +239,23 @@ async function lookupTechCardForService(salon, serviceYcId, staffYcIds, opts = {
 const _inFlight = new Set();   // salonId
 function isRunning(salonId) { return _inFlight.has(salonId); }
 
+/**
+ * Общая занятость салона: ночной проход, ручной /sync и ручной импорт техкарт
+ * взаимно исключаются (иначе двойной клик или клик во время ночного прогона
+ * гоняли бы одни и те же страницы YClients параллельно и делили лимит).
+ * Занято — Error с code 'BUSY' (ручки отдают 409). Процессная защита, не распределённая.
+ */
+async function runExclusive(salonId, fn) {
+  if (_inFlight.has(salonId)) throw Object.assign(new Error('Синхронизация уже идёт'), { code: 'BUSY' });
+  _inFlight.add(salonId);
+  try { return await fn(); } finally { _inFlight.delete(salonId); }
+}
+
 /** Ночной проход; каждый шаг в своём try/catch. Возвращает счётчики и ошибки по шагам. */
 async function runNightly(salon, opts = {}) {
-  if (_inFlight.has(salon.id)) throw Object.assign(new Error('синк уже идёт'), { code: 'BUSY' });
-  _inFlight.add(salon.id);
+  return runExclusive(salon.id, async () => {
   const out = { steps: {}, errors: {} };
   const step = async (name, fn) => { try { out.steps[name] = await fn(); } catch (e) { out.errors[name] = e.message; logger.warn(`salon=${salon.id} ${name}: ${e.message}`); } };
-  try {
     await step('catalog', () => syncGoodsCatalog(salon, opts));
     await step('techCards', () => syncTechCards(salon, opts));
     await step('transactions', () => reconcileGoodsTransactions(salon, opts));
@@ -254,9 +264,9 @@ async function runNightly(salon, opts = {}) {
     out.ok = Object.keys(out.errors).length === 0;
     logger.info(`salon=${salon.id}: ночной проход ${out.ok ? 'ok' : 'с ошибками'}: ${JSON.stringify(out.steps)} ${JSON.stringify(out.errors)}`);
     return out;
-  } finally { _inFlight.delete(salon.id); }
+  });
 }
 
 module.exports = { syncGoodsCatalog, parseCatalogGood, MAX_GOODS_PAGES, PAGE, RETRY, PAGE_PAUSE_MS, defaultSleep, num,
   reconcileGoodsTransactions, backfillGoodsTransactions, monthRanges, mskDate, RECONCILE_DAYS, MAX_TXN_PAGES,
-  syncTechCards, learnTechCardLinks, lookupTechCardForService, MAX_CARD_PAGES, MAX_LEARN_CALLS, MAX_LOOKUP_STAFF, runNightly, isRunning };
+  syncTechCards, learnTechCardLinks, lookupTechCardForService, MAX_CARD_PAGES, MAX_LEARN_CALLS, MAX_LOOKUP_STAFF, runNightly, isRunning, runExclusive };

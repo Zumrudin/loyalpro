@@ -359,7 +359,7 @@ async function ycGetServiceCatalog(salon, staffIds = []) {
 // в API, где они есть (booking-каталог отдаёт всем базовую цену услуги).
 // Возвращает { resourceIdsByService: Map<svcIdStr,[resIdStr]>, durationByService: Map<svcIdStr,сек>,
 //              staffPricesByService: Map<svcIdStr, Map<staffIdStr,{price_min,price_max}>>,
-//              categoryByService: Map<svcIdStr, catId|null> }.
+//              categoryByService: Map<svcIdStr, catId|null>, titleByService: Map<svcIdStr, title> }.
 const _svcMetaCache = {};                    // salonId → { ts, data }
 const SVC_META_TTL = 10 * 60 * 1000;         // мета меняется редко
 
@@ -402,7 +402,7 @@ async function ycGetServiceMeta(salon) {
   const cid = salon && salon.yclients_company_id;
   const empty = {
     resourceIdsByService: new Map(), durationByService: new Map(), staffPricesByService: new Map(),
-    categoryByService: new Map(),
+    categoryByService: new Map(), titleByService: new Map(),
   };
   if (!cid) return empty;
 
@@ -414,12 +414,14 @@ async function ycGetServiceMeta(salon) {
 
   const resourceIdsByService = new Map();
   const durationByService = new Map();
+  const titleByService = new Map();   // названия ВСЕХ услуг (booking-каталог отдаёт только онлайн-записываемые)
   for (const s of raw) {
     resourceIdsByService.set(String(s.id), (Array.isArray(s.resources) ? s.resources : []).map(String));
     durationByService.set(String(s.id), Number(s.duration) || 0);
+    if (s && s.id != null) titleByService.set(String(s.id), String(s.title || ''));
   }
   const data = { resourceIdsByService, durationByService, staffPricesByService: staffPricesFromServices(raw),
-    categoryByService: categoriesFromServices(raw) };
+    categoryByService: categoriesFromServices(raw), titleByService };
   _svcMetaCache[salon.id] = { ts: Date.now(), data };
   return data;
 }

@@ -14,14 +14,18 @@ const { FIXED_CATEGORIES } = require('../services/economics/fixed-categories');
 const { EQUIPMENT_SEED } = require('../services/economics/equipment-seed');
 const { equipmentMonthly } = require('../services/economics/allocation');
 const { createLogger } = require('../logger');
+const { resolvePeriod: resolvePeriodShared, isCalendarDate } = require('../utils/period');
+const { ycGetServiceMeta, ycGetServiceCatalog } = require('../services/yclients');
+const { buildDictionaries } = require('../services/economics/dictionaries');
 const logger = createLogger('EconomicsAPI');
 
 const MAX_PERIOD_DAYS = 731;
-const ISO = /^\d{4}-\d{2}-\d{2}$/;
 const PAY_BASES = ['gross', 'net_of_materials'];
 const DRIVERS = ['minutes', 'visits'];
 
-const isDate = (s) => ISO.test(String(s || '')) && new Date(s + 'T00:00:00Z').toISOString().slice(0, 10) === s;
+// Безопасная проверка (общая с utils/period): '9999-99-99' раньше давал Invalid Date →
+// toISOString() бросал RangeError до try асинхронного хендлера.
+const isDate = isCalendarDate;
 // null/''/undefined → null; положительное целое → число; иначе NaN.
 const optInt = (v) => {
   if (v === null || v === undefined || v === '') return null;
@@ -32,20 +36,9 @@ const optInt = (v) => {
 };
 function parsePeriodDays(from, to) { return Math.round((Date.parse(to) - Date.parse(from)) / 86400000) + 1; }
 
-// Период — тот же выбор, что у дашборда (from/to или period=today|week|month|quarter|N).
-function resolvePeriod(req) {
-  const todayMsk = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Moscow' }).format(new Date());
-  let { from, to } = req.query || {};
-  if (isDate(from) && isDate(to)) { if (from > to) [from, to] = [to, from]; return { from, to }; }
-  const preset = String((req.query || {}).period || '').toLowerCase();
-  const addDays = (iso, n) => { const d = new Date(iso + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); };
-  if (preset === 'today') return { from: todayMsk, to: todayMsk };
-  if (preset === 'week') { const dow = new Date(todayMsk + 'T00:00:00Z').getUTCDay(); return { from: addDays(todayMsk, -(dow === 0 ? 6 : dow - 1)), to: todayMsk }; }
-  if (preset === 'month') return { from: todayMsk.slice(0, 8) + '01', to: todayMsk };
-  if (preset === 'quarter') { const m = Number(todayMsk.slice(5, 7)); const qm = String(Math.floor((m - 1) / 3) * 3 + 1).padStart(2, '0'); return { from: `${todayMsk.slice(0, 4)}-${qm}-01`, to: todayMsk }; }
-  const days = Math.max(1, Number.parseInt((req.query || {}).period || '30', 10) || 30);
-  return { from: addDays(todayMsk, -(days - 1)), to: todayMsk };
-}
+// Период — общий помощник с дашбордом (utils/period.js): from/to или
+// period=today|day|week|month|quarter|N. Мусор бросает PeriodError → 400.
+function resolvePeriod(req) { return resolvePeriodShared((req && req.query) || {}); }
 
 function parsePayRule(b) {
   b = b || {};
@@ -112,8 +105,11 @@ function parseManualCard(b) {
 async function salonOf(req) {
   return db.oneOrNone('SELECT * FROM salons WHERE id=$1', [req.user.salonId]);
 }
+// Синхронный и не бросающий: зовётся до try асинхронного хендлера (Express 4
+// не ловит rejection — исключение здесь уронило бы процесс).
 function periodOr400(req, res) {
-  const p = resolvePeriod(req);
+  let p;
+  try { p = resolvePeriod(req); } catch (e) { res.status(400).json({ error: 'Некорректный период' }); return null; }
   const days = parsePeriodDays(p.from, p.to);
   if (!(days >= 1 && days <= MAX_PERIOD_DAYS)) { res.status(400).json({ error: `Период не больше ${MAX_PERIOD_DAYS} дней` }); return null; }
   return p;
@@ -179,15 +175,17 @@ router.put('/goods/:goodId(\\d+)/price', async (req, res) => {
 router.get('/tech-cards', async (req, res) => {
   try { res.json({ cards: await store.listTechCards(req.user.salonId) }); } catch (e) { fail(res, 'tech-cards')(e); }
 });
+// Под общей занятостью салона (sync.runExclusive): ручной импорт, ручной /sync и
+// ночной проход взаимно исключаются — двойной клик или клик ночью дают 409.
 router.post('/tech-cards/sync', async (req, res) => {
   const sid = req.user.salonId;
   if (sync.isRunning(sid)) return res.status(409).json({ error: 'Синхронизация уже идёт' });
   try {
     const salon = await salonOr404(req, res); if (!salon) return;
-    const r = await sync.syncTechCards(salon);
+    const r = await sync.runExclusive(sid, () => sync.syncTechCards(salon));
     report.invalidate(sid);
     res.json(r);
-  } catch (e) { fail(res, 'tech-cards sync')(e); }
+  } catch (e) { if (e.code === 'BUSY') return res.status(409).json({ error: e.message }); fail(res, 'tech-cards sync')(e); }
 });
 router.post('/tech-cards', async (req, res) => {
   const p = parseManualCard(req.body); if (p.error) return res.status(400).json({ error: p.error });
@@ -213,15 +211,25 @@ router.put('/services/:serviceId(\\d+)/tech-card', async (req, res) => {
   const sid = req.user.salonId; const serviceYcId = idParam(req.params.serviceId);
   const b = req.body || {};
   const staff = optInt(b.staffYcId); if (Number.isNaN(staff)) return res.status(400).json({ error: 'staffYcId — целое' });
+  // Отвязка — только явным DELETE (ниже): пустой techCardId раньше молча удалял привязку.
+  const cardId = optInt(b.techCardId);
+  if (!cardId) return res.status(400).json({ error: 'Нужен techCardId (снять привязку — DELETE)' });
   try {
-    if (b.techCardId === null || b.techCardId === undefined) { await store.clearServiceTechCard(sid, serviceYcId, staff); }
-    else {
-      const cardId = optInt(b.techCardId);
-      if (!cardId || !(await store.techCardExists(sid, cardId))) return res.status(400).json({ error: 'Техкарта не найдена' });
-      await store.upsertServiceTechCard(sid, { serviceYcId, staffYcId: staff, techCardId: cardId, source: 'manual' });
-    }
+    if (!(await store.techCardExists(sid, cardId))) return res.status(400).json({ error: 'Техкарта не найдена' });
+    await store.upsertServiceTechCard(sid, { serviceYcId, staffYcId: staff, techCardId: cardId, source: 'manual' });
     report.invalidate(sid); res.json({ ok: true });
   } catch (e) { fail(res, 'service tech-card')(e); }
+});
+// Снять РУЧНУЮ привязку (?staffYcId= — для сотрудника, без него — общую). removed=0 —
+// ручной привязки не было (выученные/найденные не снимаются: ночной проход вернул бы их).
+router.delete('/services/:serviceId(\\d+)/tech-card', async (req, res) => {
+  const sid = req.user.salonId; const serviceYcId = idParam(req.params.serviceId);
+  const staff = optInt((req.query || {}).staffYcId); if (Number.isNaN(staff)) return res.status(400).json({ error: 'staffYcId — целое' });
+  try {
+    const removed = await store.clearServiceTechCard(sid, serviceYcId, staff);
+    if (removed) report.invalidate(sid);
+    res.json({ ok: true, removed });
+  } catch (e) { fail(res, 'service tech-card clear')(e); }
 });
 router.post('/services/:serviceId(\\d+)/tech-card/lookup', async (req, res) => {
   const staffIds = (Array.isArray(req.body && req.body.staffYcIds) ? req.body.staffYcIds : []).map(optInt).filter(x => x && !Number.isNaN(x));
@@ -231,6 +239,22 @@ router.post('/services/:serviceId(\\d+)/tech-card/lookup', async (req, res) => {
     const r = await sync.lookupTechCardForService(salon, idParam(req.params.serviceId), staffIds);
     report.invalidate(req.user.salonId); res.json(r);
   } catch (e) { fail(res, 'tech-card lookup')(e); }
+});
+
+// ── справочники для правил оплаты и аппаратов ──
+router.get('/dictionaries', async (req, res) => {
+  try {
+    const salon = await salonOr404(req, res); if (!salon) return;
+    const [meta, catalog, staff, recentServices] = await Promise.all([
+      ycGetServiceMeta(salon).catch(e => { logger.warn(`dictionaries meta: ${e.message}`); return null; }),
+      ycGetServiceCatalog(salon).catch(e => { logger.warn(`dictionaries catalog: ${e.message}`); return null; }),
+      store.listDictionaryStaff(salon.id),
+      store.listRecentServices(salon.id),
+    ]);
+    const d = buildDictionaries({ meta, catalog, staff, recentServices });
+    if (d.degraded) logger.warn(`salon=${salon.id}: справочник услуг без каталога YClients (degraded)`);
+    res.json(d);
+  } catch (e) { fail(res, 'dictionaries')(e); }
 });
 
 // ── правила оплаты ──
@@ -326,6 +350,7 @@ const crud = (prefix, { list, parse, insert, update, remove, decorate }) => {
 router.post('/fixed-costs/copy', async (req, res) => {
   const from = parseMonth(req.query.from), to = parseMonth(req.query.to);
   if (!from || !to) return res.status(400).json({ error: 'from и to в формате YYYY-MM' });
+  if (from === to) return res.status(400).json({ error: 'Месяц-источник и целевой совпадают' });
   try { const n = await store.copyFixedCosts(req.user.salonId, from, to); report.invalidate(req.user.salonId); res.json({ copied: n }); } catch (e) { fail(res, 'fixed copy')(e); }
 });
 crud('fixed-costs', { list: (s) => store.listFixedCosts(s), parse: parseFixedCost, insert: (s, v) => store.insertFixedCost(s, v), update: (s, i, v) => store.updateFixedCost(s, i, v), remove: (s, i) => store.deleteFixedCost(s, i) });

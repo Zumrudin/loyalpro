@@ -361,8 +361,38 @@ async function deleteManualCard(salonId, id) {
 async function techCardExists(salonId, id) {
   return !!(await db.oneOrNone('SELECT 1 FROM tech_cards WHERE salon_id=$1 AND id=$2', [salonId, id]));
 }
+/**
+ * Снять РУЧНУЮ привязку услуги (для сотрудника или без него). Выученные/найденные
+ * привязки (learned/lookup) не трогаем: ночной проход вернул бы их, а пользователь
+ * видел бы «снято». Возвращает число удалённых строк (0 — снимать было нечего).
+ */
 async function clearServiceTechCard(salonId, serviceYcId, staffYcId) {
-  await db.query(`DELETE FROM service_tech_cards WHERE salon_id=$1 AND service_yc_id=$2 AND COALESCE(staff_yc_id,0) = COALESCE($3::bigint,0)`, [salonId, serviceYcId, staffYcId]);
+  const r = await db.query(`DELETE FROM service_tech_cards WHERE salon_id=$1 AND service_yc_id=$2 AND COALESCE(staff_yc_id,0) = COALESCE($3::bigint,0)
+    AND source = 'manual'`, [salonId, serviceYcId, staffYcId]);
+  return r.rowCount;
+}
+
+// Справочники «Экономики»: сотрудники салона (включая уволенных — на них могут
+// ссылаться правила оплаты) и услуги, встречавшиеся в записях за 12 месяцев
+// (услуги нет в каталоге YClients — удалена/архивирована, а визиты по ней были).
+const DICT_STAFF_SQL = `SELECT yclients_staff_id::bigint AS id, name, specialization, is_active
+  FROM staff_members WHERE salon_id = $1 AND yclients_staff_id IS NOT NULL
+  ORDER BY is_active DESC, name`;
+const RECENT_SERVICES_SQL = `
+  SELECT DISTINCT ON (s->>'id') (s->>'id')::bigint AS id, COALESCE(s->>'title', '') AS title,
+         CASE WHEN (s->>'category_id') ~ '^[0-9]{1,18}$' THEN (s->>'category_id')::bigint END AS category_id
+  FROM records r
+  CROSS JOIN LATERAL jsonb_array_elements(CASE WHEN jsonb_typeof(r.services) = 'array' THEN r.services ELSE '[]'::jsonb END) s
+  WHERE r.salon_id = $1 AND r.visit_date >= (CURRENT_DATE - INTERVAL '12 months')
+    AND (s->>'id') ~ '^[0-9]{1,18}$'
+  ORDER BY s->>'id', r.visit_date DESC`;
+async function listDictionaryStaff(salonId) {
+  const rows = await db.any(DICT_STAFF_SQL, [salonId]);
+  return rows.map(r => ({ id: Number(r.id), name: r.name || '', specialization: r.specialization || null, is_active: r.is_active !== false }));
+}
+async function listRecentServices(salonId) {
+  const rows = await db.any(RECENT_SERVICES_SQL, [salonId]);
+  return rows.map(r => ({ id: Number(r.id), title: r.title || '', category_id: r.category_id != null ? Number(r.category_id) : null }));
 }
 async function listPayRules(salonId) { return db.any(PAY_RULES_SQL, [salonId]); }
 async function insertPayRule(salonId, v) {
@@ -405,13 +435,22 @@ async function updateFixedCost(salonId, id, v) {
   return r.rowCount > 0;
 }
 async function deleteFixedCost(salonId, id) { const r = await db.query('DELETE FROM fixed_costs WHERE salon_id=$1 AND id=$2', [salonId, id]); return r.rowCount > 0; }
-/** Скопировать строки, действующие в месяце from, как новые строки месяца to (month_from = month_to = to). Возвращает число вставленных. */
+/**
+ * Скопировать строки, действующие в месяце from, как новые строки месяца to
+ * (month_from = month_to = to). Строку, которая УЖЕ действует в to (бессрочную
+ * или с month_to ≥ to), не копируем — иначе в to она посчиталась бы дважды; то же
+ * для пары категория+название, у которой в to уже есть действующая строка.
+ * from == to — ничего. Возвращает число вставленных.
+ */
 async function copyFixedCosts(salonId, fromMonth, toMonth) {
+  if (fromMonth === toMonth) return 0;
   const r = await db.query(`
     INSERT INTO fixed_costs (salon_id, category, title, amount_month, month_from, month_to, note)
-    SELECT salon_id, category, title, amount_month, $3::date, $3::date, note FROM fixed_costs
-    WHERE salon_id = $1 AND month_from <= $2::date AND (month_to IS NULL OR month_to >= $2::date)
-      AND NOT EXISTS (SELECT 1 FROM fixed_costs f2 WHERE f2.salon_id = fixed_costs.salon_id AND f2.category = fixed_costs.category AND f2.title = fixed_costs.title AND f2.month_from = $3::date)`,
+    SELECT fc.salon_id, fc.category, fc.title, fc.amount_month, $3::date, $3::date, fc.note FROM fixed_costs fc
+    WHERE fc.salon_id = $1 AND fc.month_from <= $2::date AND (fc.month_to IS NULL OR fc.month_to >= $2::date)
+      AND NOT (fc.month_from <= $3::date AND (fc.month_to IS NULL OR fc.month_to >= $3::date))
+      AND NOT EXISTS (SELECT 1 FROM fixed_costs f2 WHERE f2.salon_id = fc.salon_id AND f2.category = fc.category AND f2.title = fc.title
+        AND f2.month_from <= $3::date AND (f2.month_to IS NULL OR f2.month_to >= $3::date))`,
     [salonId, fromMonth, toMonth]);
   return r.rowCount;
 }
@@ -436,4 +475,4 @@ module.exports = { listFixedCosts, insertFixedCost, updateFixedCost, deleteFixed
   loadPeriod, normSettings, DEFAULT_SETTINGS, RECORDS_SQL, CONSUMABLES_SQL, PAYMENTS_SQL, RECEIPTS_SQL, CATALOG_SQL,
   OVERRIDES_SQL, CARDS_SQL, LINKS_SQL, PAY_RULES_SQL, SETTINGS_SQL, FIXED_SQL, EQUIPMENT_SQL, CAPACITY_SQL,
   listGoods, listReceipts, setPriceOverride, listTechCards, insertManualCard, updateManualCard, deleteManualCard, techCardExists,
-  clearServiceTechCard, listPayRules, insertPayRule, updatePayRule, deletePayRule, getSettings, saveSettings, listAccounts };
+  clearServiceTechCard, listDictionaryStaff, listRecentServices, DICT_STAFF_SQL, RECENT_SERVICES_SQL, listPayRules, insertPayRule, updatePayRule, deletePayRule, getSettings, saveSettings, listAccounts };

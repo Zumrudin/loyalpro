@@ -108,3 +108,29 @@ test('ревью: кэш отчёта ограничен (кап), протух�
   expect(report._cacheSize()).toBe(1);
   spy.mockRestore();
 });
+
+describe('второе ревью п.8: отчёт, посчитанный во время мутации, не попадает в кэш', () => {
+  test('invalidate посреди buildReport — следующий вызов пересчитывает', async () => {
+    let release; const gate = new Promise(r => { release = r; });
+    store.loadPeriod.mockImplementationOnce(async () => { await gate; return period(); });
+    const p = report.buildReport(SALON, '2026-09-01', '2026-09-30');
+    report.invalidate(1);           // мутация пришла, пока отчёт считался
+    release(); await p;
+    await report.buildReport(SALON, '2026-09-01', '2026-09-30');
+    expect(store.loadPeriod).toHaveBeenCalledTimes(2);
+  });
+  test('без мутации кэш работает как раньше', async () => {
+    await report.buildReport(SALON, '2026-09-01', '2026-09-30');
+    await report.buildReport(SALON, '2026-09-01', '2026-09-30');
+    expect(store.loadPeriod).toHaveBeenCalledTimes(1);
+  });
+  test('invalidate() без салона тоже отменяет запись идущего расчёта', async () => {
+    let release; const gate = new Promise(r => { release = r; });
+    store.loadPeriod.mockImplementationOnce(async () => { await gate; return period(); });
+    const p = report.buildReport(SALON, '2026-09-01', '2026-09-30');
+    report.invalidate();
+    release(); await p;
+    await report.buildReport(SALON, '2026-09-01', '2026-09-30');
+    expect(store.loadPeriod).toHaveBeenCalledTimes(2);
+  });
+});

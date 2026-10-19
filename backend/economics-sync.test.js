@@ -184,3 +184,25 @@ describe('lookupTechCardForService', () => {
     expect(r).toEqual({ checked: sync.MAX_LOOKUP_STAFF, found: [] });
   });
 });
+
+describe('второе ревью п.4: общая занятость салона (ручной импорт техкарт ⟂ /sync ⟂ ночной)', () => {
+  test('runExclusive при идущем runNightly — BUSY; после окончания — снова можно', async () => {
+    let release; const gate = new Promise(r => { release = r; });
+    ycGet.mockImplementation(async () => { await gate; return []; });
+    store.refreshAllLastReceipts.mockResolvedValue(0);
+    const nightly = sync.runNightly(SALON, { sleep: noSleep });
+    expect(sync.isRunning(1)).toBe(true);
+    await expect(sync.runExclusive(1, async () => 'x')).rejects.toMatchObject({ code: 'BUSY' });
+    release(); await nightly;
+    expect(sync.isRunning(1)).toBe(false);
+    await expect(sync.runExclusive(1, async () => 'ok')).resolves.toBe('ok');
+  });
+  test('ручной импорт держит занятость: ночной в это время — BUSY; ошибка внутри снимает занятость', async () => {
+    let release; const gate = new Promise(r => { release = r; });
+    const manual = sync.runExclusive(1, () => gate);
+    await expect(sync.runNightly(SALON, { sleep: noSleep })).rejects.toMatchObject({ code: 'BUSY' });
+    release('done'); await expect(manual).resolves.toBe('done');
+    await expect(sync.runExclusive(1, async () => { throw new Error('boom'); })).rejects.toThrow('boom');
+    expect(sync.isRunning(1)).toBe(false);
+  });
+});
