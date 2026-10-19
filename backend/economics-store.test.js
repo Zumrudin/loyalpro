@@ -48,3 +48,42 @@ describe('refreshLastReceipt', () => {
     expect(upd[1]).toEqual([1, 7, null, null]);
   });
 });
+
+describe('техкарты', () => {
+  test('upsertTechCard: UPSERT по (salon_id, yc_card_id), items jsonb, возвращает id', async () => {
+    db.oneOrNone.mockResolvedValueOnce({ id: 11 });
+    const id = await store.upsertTechCard(1, { yc_card_id: 5, title: 'A', items: [{ good_id: 1, amount: 2 }] });
+    expect(id).toBe(11);
+    const [sql, params] = db.oneOrNone.mock.calls[0];
+    expect(sql).toMatch(/ON CONFLICT \(salon_id, yc_card_id\) WHERE yc_card_id IS NOT NULL DO UPDATE/);
+    expect(params).toEqual([1, 5, 'A', JSON.stringify([{ good_id: 1, amount: 2 }])]);
+  });
+  test('upsertTechCard: нет строки → null', async () => {
+    expect(await store.upsertTechCard(1, { yc_card_id: 5, title: 'A', items: [] })).toBeNull();
+  });
+  test('upsertServiceTechCard: младший источник не перетирает старший (manual > lookup > learned)', async () => {
+    await store.upsertServiceTechCard(1, { serviceYcId: 10, techCardId: 3, source: 'learned' });
+    const [sql, params] = db.query.mock.calls[0];
+    expect(sql).toMatch(/ON CONFLICT \(salon_id, service_yc_id, COALESCE\(staff_yc_id, 0\)\) DO UPDATE/);
+    expect(sql).toMatch(/WHERE \(CASE service_tech_cards\.source WHEN 'manual' THEN 0 WHEN 'lookup' THEN 1 ELSE 2 END\)\s*>=\s*\(CASE EXCLUDED\.source WHEN 'manual' THEN 0 WHEN 'lookup' THEN 1 ELSE 2 END\)/);
+    expect(params).toEqual([1, 10, null, 3, 'learned']);
+  });
+  test('upsertServiceTechCard: неизвестный источник отвергается', async () => {
+    await expect(store.upsertServiceTechCard(1, { serviceYcId: 10, techCardId: 3, source: 'yclients' })).rejects.toThrow(/source/);
+    expect(db.query).not.toHaveBeenCalled();
+  });
+  test('listTechCardIdsByYc → Map по строковому yc_card_id', async () => {
+    db.any.mockResolvedValueOnce([{ id: 11, yc_card_id: '36069' }]);
+    const m = await store.listTechCardIdsByYc(1);
+    expect(m.get('36069')).toBe(11);
+    expect(db.any.mock.calls[0][1]).toEqual([1]);
+  });
+  test('listRecordsToLearn: состоявшиеся записи дня со списаниями и непривязанной услугой', async () => {
+    await store.listRecordsToLearn(1, '2026-10-17', 15);
+    const [sql, params] = db.any.mock.calls[0];
+    expect(sql).toBe(store.RECORDS_TO_LEARN_SQL);
+    expect(sql).toMatch(/r\.visit_date = \$2::date/);
+    expect(sql).toMatch(/t\.type_id = 2 AND t\.deleted_at IS NULL/);
+    expect(params).toEqual([1, '2026-10-17', 15]);
+  });
+});

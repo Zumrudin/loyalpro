@@ -8,6 +8,7 @@ const { ycGet } = require('../yclients');
 const { withRateLimitRetry } = require('../yclients-retry');
 const store = require('./store');
 const { parseTransaction } = require('./goods-events');
+const { parseYcCard } = require('./tech-cards');
 const { createLogger } = require('../../logger');
 const logger = createLogger('EconomicsSync');
 
@@ -153,5 +154,88 @@ async function backfillGoodsTransactions(salon, opts = {}) {
   return { months, upserted, skipped };
 }
 
+// ── Техкарты: импорт, обучение привязок по факту, поиск по запросу ──────────
+const MAX_CARD_PAGES = 20;          // 2 000 карт; у PERI 81 (19.10.2026) — одна страница + пустая
+const MAX_LEARN_CALLS = 15;         // record_consumables за ночь (бюджет квоты из спеки)
+const MAX_LOOKUP_STAFF = 4;         // default_for_staff_and_service — по исполнителю
+
+/** GET /technological_cards/{cid}/?count=100&page=N до пустой страницы → tech_cards. */
+async function syncTechCards(salon, opts = {}) {
+  const sleep = opts.sleep || defaultSleep;
+  const cid = salon.yclients_company_id;
+  let pages = 0, cards = 0, skipped = 0;
+  for (let page = 1; page <= MAX_CARD_PAGES; page++) {
+    const chunk = await withRateLimitRetry(() => ycGet(salon, `/technological_cards/${cid}/`, { count: PAGE, page }), RETRY);
+    pages++;
+    if (!Array.isArray(chunk) || !chunk.length) return { pages, cards, skipped };
+    for (const c of chunk) {
+      const card = parseYcCard(c);
+      if (!card) { skipped++; continue; }
+      await store.upsertTechCard(salon.id, card);
+      cards++;
+    }
+    await sleep(PAGE_PAUSE_MS);
+  }
+  logger.warn(`salon=${salon.id}: техкарты упёрлись в кап ${MAX_CARD_PAGES} страниц`);
+  return { pages, cards, skipped };
+}
+
+/**
+ * Обучение привязок по фактам: вчерашние (мск) состоявшиеся записи со списаниями и
+ * непривязанной услугой → record_consumables. Ответ — строка на КАЖДУЮ услугу
+ * записи; у услуги без техкарты technological_cards пуст. Пара пишется с
+ * сотрудником записи, source='learned' (старшие источники апсерт не перетирает).
+ * Карта, которой нет в tech_cards (заведена после импорта), — unknownCards: её
+ * подхватит следующий ночной импорт, а привязку — следующая запись.
+ */
+async function learnTechCardLinks(salon, opts = {}) {
+  const sleep = opts.sleep || defaultSleep;
+  const day = mskDate(opts.now || new Date(), -1);
+  const recs = await store.listRecordsToLearn(salon.id, day, MAX_LEARN_CALLS);
+  const byYc = await store.listTechCardIdsByYc(salon.id);
+  let linked = 0, unknownCards = 0;
+  for (const rec of recs) {
+    let data;
+    try {
+      data = await withRateLimitRetry(() => ycGet(salon, `/technological_cards/record_consumables/${salon.yclients_company_id}/${rec.record_id}/`), RETRY);
+    } catch (e) { logger.warn(`salon=${salon.id}: record_consumables ${rec.record_id}: ${e.message}`); continue; }
+    for (const entry of Array.isArray(data) ? data : []) {
+      const serviceYcId = num(entry && entry.service_id);
+      if (!serviceYcId) continue;
+      for (const c of Array.isArray(entry.technological_cards) ? entry.technological_cards : []) {
+        const techCardId = byYc.get(String(num(c && c.id)));
+        if (!techCardId) { unknownCards++; continue; }
+        await store.upsertServiceTechCard(salon.id, { serviceYcId, staffYcId: num(rec.staff_yc_id) || null, techCardId, source: 'learned' });
+        linked++;
+      }
+    }
+    await sleep(PAGE_PAUSE_MS);
+  }
+  return { records: recs.length, linked, unknownCards };
+}
+
+/** По запросу из админки: default_for_staff_and_service по каждому исполнителю услуги (≤ 4). Нет карты — null. */
+async function lookupTechCardForService(salon, serviceYcId, staffYcIds, opts = {}) {
+  const sleep = opts.sleep || defaultSleep;
+  const found = [];
+  const staff = (staffYcIds || []).slice(0, MAX_LOOKUP_STAFF);
+  for (const staffYcId of staff) {
+    const data = await withRateLimitRetry(
+      () => ycGet(salon, `/technological_cards/default_for_staff_and_service/${salon.yclients_company_id}/${staffYcId}/${serviceYcId}/`), RETRY)
+      .catch(e => { logger.warn(`salon=${salon.id}: lookup staff=${staffYcId} service=${serviceYcId}: ${e.message}`); return null; });
+    const card = parseYcCard(data);
+    if (card) {
+      const techCardId = await store.upsertTechCard(salon.id, card);
+      if (techCardId) {
+        await store.upsertServiceTechCard(salon.id, { serviceYcId, staffYcId, techCardId, source: 'lookup' });
+        found.push({ staffYcId, techCardId, title: card.title });
+      }
+    }
+    await sleep(PAGE_PAUSE_MS);
+  }
+  return { checked: staff.length, found };
+}
+
 module.exports = { syncGoodsCatalog, parseCatalogGood, MAX_GOODS_PAGES, PAGE, RETRY, PAGE_PAUSE_MS, defaultSleep, num,
-  reconcileGoodsTransactions, backfillGoodsTransactions, monthRanges, mskDate, RECONCILE_DAYS, MAX_TXN_PAGES };
+  reconcileGoodsTransactions, backfillGoodsTransactions, monthRanges, mskDate, RECONCILE_DAYS, MAX_TXN_PAGES,
+  syncTechCards, learnTechCardLinks, lookupTechCardForService, MAX_CARD_PAGES, MAX_LEARN_CALLS, MAX_LOOKUP_STAFF };

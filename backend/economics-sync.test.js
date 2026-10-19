@@ -116,3 +116,71 @@ describe('backfillGoodsTransactions dryRun', () => {
     expect(store.refreshAllLastReceipts).not.toHaveBeenCalled();
   });
 });
+
+describe('syncTechCards', () => {
+  test('постранично, каждая карта → upsertTechCard', async () => {
+    ycGet.mockImplementation(async (s, p, params) => { expect(p).toBe('/technological_cards/668791/'); return params.page === 1 ? [{ id: 1, title: 'A', technological_card_items: [{ good_id: 5, amount: 1 }] }, { id: 'bad' }] : []; });
+    store.upsertTechCard.mockResolvedValue(11);
+    const r = await sync.syncTechCards(SALON, { sleep: noSleep });
+    expect(r).toEqual({ pages: 2, cards: 1, skipped: 1 });
+    expect(store.upsertTechCard).toHaveBeenCalledWith(1, { yc_card_id: 1, title: 'A', items: [{ good_id: 5, amount: 1, unit: null, price_at_sync: null, title: null }] });
+  });
+  test('кап страниц — не больше MAX_CARD_PAGES', async () => {
+    ycGet.mockResolvedValue([{ id: 1, title: 'A', technological_card_items: [] }]);
+    const r = await sync.syncTechCards(SALON, { sleep: noSleep });
+    expect(r.pages).toBe(sync.MAX_CARD_PAGES);
+    expect(mockLog.warn).toHaveBeenCalled();
+  });
+});
+
+describe('learnTechCardLinks', () => {
+  test('по вчерашним записям: record_consumables → привязка learned по services[].technological_cards[]', async () => {
+    store.listRecordsToLearn.mockResolvedValue([{ record_id: 500, staff_yc_id: 7 }]);
+    store.listTechCardIdsByYc.mockResolvedValue(new Map([['36069', 11]]));
+    ycGet.mockResolvedValue([
+      { service_id: 21558, record_id: 500, technological_cards: [{ id: 36069, title: 'X', technological_card_items: [] }], consumables: [] },
+      { service_id: 21559, record_id: 500, technological_cards: [], consumables: [] },   // услуга без техкарты
+    ]);
+    const r = await sync.learnTechCardLinks(SALON, { now: new Date('2026-10-18T12:00:00+03:00'), sleep: noSleep });
+    expect(store.listRecordsToLearn).toHaveBeenCalledWith(1, '2026-10-17', sync.MAX_LEARN_CALLS);
+    expect(ycGet).toHaveBeenCalledWith(SALON, '/technological_cards/record_consumables/668791/500/');
+    expect(store.upsertServiceTechCard).toHaveBeenCalledTimes(1);
+    expect(store.upsertServiceTechCard).toHaveBeenCalledWith(1, { serviceYcId: 21558, staffYcId: 7, techCardId: 11, source: 'learned' });
+    expect(r).toEqual({ records: 1, linked: 1, unknownCards: 0 });
+  });
+  test('карта не импортирована → unknownCards, привязки нет', async () => {
+    store.listRecordsToLearn.mockResolvedValue([{ record_id: 500, staff_yc_id: 7 }]);
+    store.listTechCardIdsByYc.mockResolvedValue(new Map());
+    ycGet.mockResolvedValue([{ service_id: 1, technological_cards: [{ id: 999 }] }]);
+    const r = await sync.learnTechCardLinks(SALON, { sleep: noSleep });
+    expect(r.unknownCards).toBe(1);
+    expect(store.upsertServiceTechCard).not.toHaveBeenCalled();
+  });
+  test('сбой одного record_consumables — WARN и дальше', async () => {
+    store.listRecordsToLearn.mockResolvedValue([{ record_id: 500, staff_yc_id: 7 }, { record_id: 501, staff_yc_id: 7 }]);
+    store.listTechCardIdsByYc.mockResolvedValue(new Map([['5', 11]]));
+    ycGet.mockRejectedValueOnce(Object.assign(new Error('boom'), { status: 500 }))
+      .mockResolvedValueOnce([{ service_id: 3, technological_cards: [{ id: 5 }] }]);
+    const r = await sync.learnTechCardLinks(SALON, { sleep: noSleep });
+    expect(r).toEqual({ records: 2, linked: 1, unknownCards: 0 });
+    expect(mockLog.warn).toHaveBeenCalled();
+  });
+});
+
+describe('lookupTechCardForService', () => {
+  test('по каждому исполнителю ≤ 4 вызова, найденная карта импортируется и привязывается lookup', async () => {
+    store.upsertTechCard.mockResolvedValue(12);
+    ycGet.mockImplementation(async (s, p) => (p.endsWith('/5/10/') ? { id: 77, title: 'C', technological_card_items: [] } : null));
+    const r = await sync.lookupTechCardForService(SALON, 10, [5, 6], { sleep: noSleep });
+    expect(ycGet).toHaveBeenCalledTimes(2);
+    expect(ycGet).toHaveBeenCalledWith(SALON, '/technological_cards/default_for_staff_and_service/668791/5/10/');
+    expect(store.upsertServiceTechCard).toHaveBeenCalledWith(1, { serviceYcId: 10, staffYcId: 5, techCardId: 12, source: 'lookup' });
+    expect(r).toEqual({ checked: 2, found: [{ staffYcId: 5, techCardId: 12, title: 'C' }] });
+  });
+  test('кап исполнителей MAX_LOOKUP_STAFF', async () => {
+    ycGet.mockResolvedValue(null);
+    const r = await sync.lookupTechCardForService(SALON, 10, [1, 2, 3, 4, 5, 6], { sleep: noSleep });
+    expect(ycGet).toHaveBeenCalledTimes(sync.MAX_LOOKUP_STAFF);
+    expect(r).toEqual({ checked: sync.MAX_LOOKUP_STAFF, found: [] });
+  });
+});

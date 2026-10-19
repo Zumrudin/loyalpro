@@ -83,4 +83,63 @@ async function upsertCatalogGood(salonId, g) {
   `, [salonId, g.good_id, g.title || '', g.unit, g.service_unit, g.unit_equals, g.actual_cost, g.unit_actual_cost, JSON.stringify(g.stock || [])]);
 }
 
-module.exports = { upsertCatalogGood, upsertGoodsTransaction, refreshLastReceipt, refreshAllLastReceipts, TXN_COLS };
+// ── Техкарты и привязки ─────────────────────────────────────────────────────
+
+/** Импорт карты YClients: UPSERT по (salon_id, yc_card_id). Возвращает id (или null). */
+async function upsertTechCard(salonId, card) {
+  const r = await db.oneOrNone(`
+    INSERT INTO tech_cards (salon_id, yc_card_id, title, items, source, synced_at, updated_at)
+    VALUES ($1, $2, $3, $4::jsonb, 'yclients', NOW(), NOW())
+    ON CONFLICT (salon_id, yc_card_id) WHERE yc_card_id IS NOT NULL DO UPDATE SET
+      title = EXCLUDED.title, items = EXCLUDED.items, synced_at = NOW(), updated_at = NOW()
+    RETURNING id`, [salonId, card.yc_card_id, card.title, JSON.stringify(card.items || [])]);
+  return r ? r.id : null;
+}
+
+const LINK_SOURCES = new Set(['manual', 'lookup', 'learned']);
+// Ранг источника в SQL — зеркало tech-cards.SOURCE_RANK (manual > lookup > learned).
+const rankSql = (col) => `(CASE ${col} WHEN 'manual' THEN 0 WHEN 'lookup' THEN 1 ELSE 2 END)`;
+
+/**
+ * Привязка услуга(+сотрудник) → техкарта. Перезапись — только источником НЕ
+ * МЛАДШЕ существующего: manual перетирает всё, lookup — lookup/learned,
+ * learned — только learned. Иначе ночное обучение по факту затирало бы
+ * найденную в YClients или выбранную владельцем карту.
+ */
+async function upsertServiceTechCard(salonId, { serviceYcId, staffYcId = null, techCardId, source }) {
+  if (!LINK_SOURCES.has(source)) throw new Error(`upsertServiceTechCard: неизвестный source ${source}`);
+  await db.query(`
+    INSERT INTO service_tech_cards (salon_id, service_yc_id, staff_yc_id, tech_card_id, source, updated_at)
+    VALUES ($1, $2, $3, $4, $5, NOW())
+    ON CONFLICT (salon_id, service_yc_id, COALESCE(staff_yc_id, 0)) DO UPDATE SET
+      tech_card_id = EXCLUDED.tech_card_id, source = EXCLUDED.source, updated_at = NOW()
+    WHERE ${rankSql('service_tech_cards.source')} >= ${rankSql('EXCLUDED.source')}`,
+  [salonId, serviceYcId, staffYcId, techCardId, source]);
+}
+
+/** Map String(yc_card_id) → tech_cards.id. */
+async function listTechCardIdsByYc(salonId) {
+  const rows = await db.any('SELECT id, yc_card_id FROM tech_cards WHERE salon_id=$1 AND yc_card_id IS NOT NULL', [salonId]);
+  return new Map(rows.map(r => [String(r.yc_card_id), r.id]));
+}
+
+// Состоявшиеся записи дня со списаниями, у которых хоть одна пара (услуга, сотрудник)
+// ещё не привязана ни к одной техкарте, — кандидаты на record_consumables.
+const RECORDS_TO_LEARN_SQL = `
+    SELECT r.yclients_record_id AS record_id, (r.staff->>'id')::bigint AS staff_yc_id
+    FROM records r
+    WHERE r.salon_id = $1 AND r.visit_date = $2::date AND r.raw_payload->>'attendance' = '1'
+      AND COALESCE(r.status,'') <> 'deleted'
+      AND EXISTS (SELECT 1 FROM goods_transactions t WHERE t.salon_id = r.salon_id AND t.record_id = r.yclients_record_id AND t.type_id = 2 AND t.deleted_at IS NULL)
+      AND EXISTS (
+        SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(r.services) = 'array' THEN r.services ELSE '[]'::jsonb END) s
+        WHERE NOT EXISTS (SELECT 1 FROM service_tech_cards l WHERE l.salon_id = r.salon_id
+          AND l.service_yc_id = (s->>'id')::bigint AND (l.staff_yc_id IS NULL OR l.staff_yc_id = (r.staff->>'id')::bigint)))
+    ORDER BY r.yclients_record_id LIMIT $3`;
+
+async function listRecordsToLearn(salonId, day, limit) {
+  return db.any(RECORDS_TO_LEARN_SQL, [salonId, day, limit]);
+}
+
+module.exports = { upsertCatalogGood, upsertGoodsTransaction, refreshLastReceipt, refreshAllLastReceipts, TXN_COLS,
+  upsertTechCard, upsertServiceTechCard, listTechCardIdsByYc, listRecordsToLearn, RECORDS_TO_LEARN_SQL };
