@@ -6,7 +6,7 @@
 const { splitByWeights, splitMinutes, allocate, r2 } = require('./allocation');
 const { pickRule, doctorPay } = require('./pay-rules');
 const { normCost } = require('./tech-cards');
-const { receiptUnitPrice, mskDay } = require('./price');
+const { receiptUnitPrice, mskDay, writeoffQty } = require('./price');
 
 const n = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
 const has = (v) => v !== undefined && v !== null;
@@ -14,7 +14,7 @@ const has = (v) => v !== undefined && v !== null;
 /**
  * Одна запись → строки по услугам (§3.1–3.5).
  * record = { record_id, visit_date:'YYYY-MM-DD', staff_yc_id, staff_name, seance_length (сек),
- *   services:[{id,title,cost_to_pay,first_cost,cost}], consumables:[{good_id, service_id|null, amount, cost}],
+ *   services:[{id,title,cost_to_pay,first_cost,cost}], consumables:[{good_id, service_id|null, amount, cost, cost_per_unit, unit_equals}],
  *   bonus_redeemed, payments:[{amount, account_title}] }
  * ctx = { durations: Map<svcIdStr,сек>, categories: Map<svcIdStr,catId>, priceFn(goodId,date)→{price,source},
  *   techCardFor(serviceId, staffId)→card|null, payRules:[…],
@@ -76,7 +76,8 @@ function buildRows(record, ctx) {
   });
   const rec = { fact: 0, yc: 0, noPrice: [] };
   for (const t of cons) {
-    const qty = Math.abs(n(t.amount));
+    // amount бывает в единицах продажи — writeoffQty приводит к единице списания (цене priceFn).
+    const qty = writeoffQty(t, t.unit_equals);
     const goodId = Number(t.good_id);
     const p = priceFn(goodId, date) || { price: 0 };
     const target = own.get(Number(t.service_id)) || rec;

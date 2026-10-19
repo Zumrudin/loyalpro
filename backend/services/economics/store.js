@@ -270,7 +270,7 @@ async function loadPeriod(salonId, from, to) {
     ? await Promise.all([db.any(CONSUMABLES_SQL, [salonId, ids]), db.any(PAYMENTS_SQL, [salonId, ids])])
     : [[], []];
   const consBy = new Map(); const paysBy = new Map();
-  for (const c of cons) pushTo(consBy, toInt(c.record_id), { good_id: toInt(c.good_id), service_id: toInt(c.service_id), amount: N(c.amount), cost: N(c.cost) });
+  for (const c of cons) pushTo(consBy, toInt(c.record_id), { good_id: toInt(c.good_id), service_id: toInt(c.service_id), amount: N(c.amount), cost: N(c.cost), cost_per_unit: N(c.cost_per_unit) });
   for (const p of pays) pushTo(paysBy, toInt(p.record_id), { amount: N(p.amount), account_title: p.account_title || '' });
   const records = recs.map(r => {
     const id = toInt(r.record_id);
@@ -299,6 +299,12 @@ async function loadPeriod(salonId, from, to) {
   const receiptsByGood = new Map();
   for (const r of receiptRows) pushTo(receiptsByGood, toInt(r.good_id), { create_date: r.create_date, amount: N(r.amount), cost: N(r.cost), operation_unit_type: toInt(r.operation_unit_type) });
   const catalogByGood = new Map(catalogRows.map(c => [toInt(c.good_id), { ...c, good_id: toInt(c.good_id), unit_equals: N(c.unit_equals), unit_actual_cost: N(c.unit_actual_cost), actual_cost: N(c.actual_cost), last_receipt_price: N(c.last_receipt_price) }]));
+  // unit_equals каталога — в каждое списание: calc.writeoffQty пересчитывает amount,
+  // записанный YClients в единицах продажи (см. price.writeoffQty).
+  for (const r of records) for (const c of r.consumables) {
+    const cat = catalogByGood.get(c.good_id);
+    c.unit_equals = cat ? cat.unit_equals : null;
+  }
   const overridesByGood = new Map(overrideRows.map(o => [toInt(o.good_id), { unit_price: N(o.unit_price), note: o.note }]));
 
   return {

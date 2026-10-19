@@ -22,6 +22,26 @@ function receiptUnitPrice(txn, unitEquals) {
   return round4(per);
 }
 
+/**
+ * Количество строки СПИСАНИЯ (type_id 2) в единицах списания (мл, шт.). YClients у
+ * части списаний хранит amount в ЕДИНИЦАХ ПРОДАЖИ (упаковка/рулон/флакон), хотя
+ * operation_unit_type=2 и unit — единица списания; cost_per_unit при этом — цена
+ * единицы списания, а cost — верная сумма (дев, сентябрь 2026: ~943 из 2611 строк;
+ * «Ватные диски» −0.1667 × 16.35 ₽ = cost 327 ⇒ 0.1667 × 120 = 20 шт). Доказательство —
+ * только по cost: гипотеза «×unit_equals» сходится с cost (допуск max(0.05 ₽, 1 %)),
+ * а «как есть» — нет. Нет unit_equals>1 / cost / cost_per_unit — как есть (не гадаем).
+ */
+function writeoffQty(txn, unitEquals) {
+  const q = Math.abs(Number(txn && txn.amount));
+  if (!txn || !Number.isFinite(q)) return 0;
+  const eq = Number(unitEquals);
+  const cpu = Number(txn.cost_per_unit);
+  const cost = Math.abs(Number(txn.cost));
+  if (!(eq > 1) || !(cpu > 0) || !(cost > 0)) return q;
+  const tol = Math.max(0.05, cost * 0.01);
+  if (Math.abs(q * eq * cpu - cost) <= tol && Math.abs(q * cpu - cost) > tol) return round4(q * eq);
+  return q;
+}
 
 const MSK = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Moscow' });
 /** 'YYYY-MM-DD' по Москве из Date/ISO/'YYYY-MM-DD'; null для пустого. */
@@ -54,4 +74,4 @@ function unitPriceAsOf({ receipts = [], override = null, catalogRow = null, date
   return { price: 0, source: 'none' };
 }
 
-module.exports = { receiptUnitPrice, unitPriceAsOf, mskDay, round4 };
+module.exports = { writeoffQty, receiptUnitPrice, unitPriceAsOf, mskDay, round4 };

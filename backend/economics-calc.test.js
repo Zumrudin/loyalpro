@@ -101,6 +101,15 @@ describe('норма и флаги покрытия', () => {
     expect(rows[0].has_consumables).toBe(true);
     expect(rows[0].materials_estimated).toBe(false);
   });
+  test('списание в единицах продажи пересчитывается через unit_equals (простынь 0.01 рулона = 1 шт)', () => {
+    const c = ctx(); c.priceFn = () => ({ price: 6.79, source: 'receipt' });
+    const rows = C.buildRows({ ...RECORD, consumables: [
+      { good_id: 9, service_id: 9536380, amount: -0.01, cost_per_unit: 6.79, cost: 6.79, unit_equals: 100 },
+      { good_id: 9, service_id: 9536380, amount: -1, cost_per_unit: 6.79, cost: 6.79, unit_equals: 100 },
+    ] }, c);
+    expect(rows[0].materials_fact).toBeCloseTo(13.58, 2);
+    expect(rows[0].materials_yc_cost).toBeCloseTo(13.58, 2);
+  });
   test('списание с service_id, которого нет в записи, делится как списание на запись', () => {
     const rows = C.buildRows({ ...RECORD, consumables: [{ good_id: 1, service_id: 999, amount: -1, cost: 5267 }] }, ctx());
     expect(rows[0].materials_fact).toBeCloseTo(5267 * 22500 / 27500, 2);

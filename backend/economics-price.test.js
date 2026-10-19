@@ -66,3 +66,34 @@ describe('ревью: приход в единицах продажи без uni
     expect(unitPriceAsOf({ receipts: rs, date: '2026-04-01', catalogRow: { unit_equals: null, unit_actual_cost: 2500 } })).toEqual({ price: 2500, source: 'catalog' });
   });
 });
+
+// Количество списания (дев, сентябрь 2026): часть списаний YClients хранит amount в
+// ЕДИНИЦАХ ПРОДАЖИ, хотя operation_unit_type=2, а cost_per_unit — цена единицы списания.
+describe('writeoffQty', () => {
+  const { writeoffQty } = require('./services/economics/price');
+  test('ватные диски: 0.1667 упаковки × 120 = 20 шт (20 × 16.35 = 327)', () => {
+    expect(writeoffQty({ amount: -0.1667, cost_per_unit: 16.35, cost: 327 }, 120)).toBeCloseTo(20, 1);
+  });
+  test('одноразовая простынь: 0.01 рулона × 100 = 1 шт', () => {
+    expect(writeoffQty({ amount: -0.01, cost_per_unit: 6.79, cost: 6.79 }, 100)).toBeCloseTo(1, 6);
+  });
+  test('гель для УЗИ 5 кг: 0.012 × 5000 = 60 мл', () => {
+    expect(writeoffQty({ amount: -0.012, cost_per_unit: 0.15, cost: 9.07 }, 5000)).toBeCloseTo(60, 6);
+  });
+  test('нормальная строка (уже в единицах списания) не трогается', () => {
+    expect(writeoffQty({ amount: -1, cost_per_unit: 6.79, cost: 6.79 }, 100)).toBe(1);
+  });
+  test('нет unit_equals / cost / cost_per_unit — как есть', () => {
+    expect(writeoffQty({ amount: -0.01, cost_per_unit: 6.79, cost: 6.79 }, null)).toBe(0.01);
+    expect(writeoffQty({ amount: -0.01, cost_per_unit: 6.79, cost: 6.79 }, 1)).toBe(0.01);
+    expect(writeoffQty({ amount: -0.01, cost: 6.79 }, 100)).toBe(0.01);
+    expect(writeoffQty({ amount: -0.01, cost_per_unit: 6.79, cost: 0 }, 100)).toBe(0.01);
+  });
+  test('ни одна гипотеза не сходится с cost — как есть', () => {
+    expect(writeoffQty({ amount: -0.5, cost_per_unit: 10, cost: 77 }, 100)).toBe(0.5);
+  });
+  test('пустой/битый amount → 0', () => {
+    expect(writeoffQty({ amount: null }, 100)).toBe(0);
+    expect(writeoffQty(null, 100)).toBe(0);
+  });
+});

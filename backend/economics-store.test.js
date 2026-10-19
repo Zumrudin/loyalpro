@@ -93,7 +93,7 @@ describe('loadPeriod', () => {
     db.any.mockImplementation(async (sql, params) => {
       if (/FROM records r/.test(sql)) return [{ record_id: '1', visit_date: '2026-09-10', staff_yc_id: '5', staff_name: 'A', seance_length: 3600,
         services: [{ id: 10, cost_to_pay: 1000 }], bonus_redeemed: '100' }];
-      if (/FROM goods_transactions t WHERE t.salon_id = \$1 AND t.type_id = 2/.test(sql)) { expect(params[1]).toEqual([1]); return [{ record_id: '1', service_id: '10', good_id: '7', amount: '-1', cost: '50' }]; }
+      if (/FROM goods_transactions t WHERE t.salon_id = \$1 AND t.type_id = 2/.test(sql)) { expect(params[1]).toEqual([1]); return [{ record_id: '1', service_id: '10', good_id: '7', amount: '-1', cost: '50', cost_per_unit: '50' }]; }
       if (/FROM revenue_operations/.test(sql)) return [{ record_id: '1', amount: '1000', account_title: 'Расчетный счет' }];
       if (/FROM tech_cards/.test(sql)) return [{ id: 3, yc_card_id: '36', title: 'C', items: [{ good_id: 8, amount: 2 }], source: 'yclients' }];
       if (/FROM service_tech_cards/.test(sql)) return [{ service_yc_id: '10', staff_yc_id: null, tech_card_id: 3, source: 'learned' }];
@@ -114,7 +114,7 @@ describe('loadPeriod', () => {
     expect(d.records).toHaveLength(1);
     const r = d.records[0];
     expect(r.record_id).toBe(1); expect(r.staff_yc_id).toBe(5); expect(r.bonus_redeemed).toBe(100);
-    expect(r.consumables).toEqual([{ good_id: 7, service_id: 10, amount: -1, cost: 50 }]);
+    expect(r.consumables).toEqual([{ good_id: 7, service_id: 10, amount: -1, cost: 50, cost_per_unit: 50, unit_equals: 1 }]);
     expect(r.payments).toEqual([{ amount: 1000, account_title: 'Расчетный счет' }]);
     expect(d.receiptsByGood.get(7)).toHaveLength(1);
     expect(d.catalogByGood.get(7).unit_actual_cost).toBe(45);
