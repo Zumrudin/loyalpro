@@ -1,14 +1,14 @@
 'use strict';
 // Изолированная визуальная проверка вкладок «Экономика → Услуги / Материалы / Техкарты / Оплата труда / Постоянные расходы / Аппараты / Настройки»: настоящие разметка/CSS/JS
 // страницы, синтетические ответы /api/economics/*. Без сессий, БД, YClients и отправок.
-// node scripts/economics-services-visual.js   → скриншоты в /tmp/econ20/
+// node scripts/economics-services-visual.js   → скриншоты в $ECON_SHOTS или /tmp/econ-fix2/
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const express = require('express');
 const puppeteer = require('puppeteer');
 
-const OUT = '/tmp/econ20';
+const OUT = process.env.ECON_SHOTS || '/tmp/econ-fix2';
 const svc = (key, label, o) => ({ key, label, visits: 0, revenue: 0, materials_used: 0, doctor_cost: 0, acquiring_cost: 0, contribution: 0, overhead: 0,
   equipment_cost: 0, operating_profit: 0, usn_estimate: 0, hours: 0, materials_estimated_rows: 0, discount: 0, bonus_redeemed: 0, bonus_in_revenue: 0,
   coverage: { rows: 1, with_consumables: 1, with_tech_card: 1, no_pay_rule: 0, no_price_goods: [], acquiring_estimated: 0 }, ...o });
@@ -39,10 +39,10 @@ const detail = {
 
 
 const goods = [
-  { good_id: 7, title: 'Гель <u>Profhilo</u>', category_title: 'Мезопрепараты', unit: 'уп', service_unit: 'мл', unit_equals: 2, unit_actual_cost: 1200, last_receipt_price: 1350.5, last_receipt_at: '2026-10-02T00:00:00.000Z', override_price: null },
+  { good_id: 7, title: 'Гель <u>Profhilo</u>', category_title: 'Мезопрепараты', unit: 'уп', service_unit: 'мл', unit_equals: 2, unit_actual_cost: 1200, last_receipt_price: 1350.5, last_receipt_at: '2026-10-01T21:30:00.000Z', override_price: null },
   { good_id: 9, title: 'Перчатки нитриловые', category_title: 'Расходники', unit: 'пара', service_unit: 'пара', unit_equals: 1, unit_actual_cost: 12, last_receipt_price: null, last_receipt_at: null, override_price: 15 },
 ];
-const receipts = [{ yclients_txn_id: 1, create_date: '2026-10-02T09:00:00.000Z', amount: 10, cost: 27010, cost_per_unit: 2701, discount: 5, supplier_title: 'ООО <b>Мед</b>', unit_title: 'уп' }];
+const receipts = [{ yclients_txn_id: 1, create_date: '2026-10-18T22:30:00.000Z', amount: 10, cost: 27010, cost_per_unit: 2701, discount: 5, supplier_title: 'ООО <b>Мед</b>', unit_title: 'уп' }];
 const cards = [
   { id: 1, yc_card_id: 55, title: 'Чистка лица (YC)', source: 'yclients', links: 1, items: [{ good_id: 9, title: 'Перчатки нитриловые', amount: 2, unit: 'пара' }] },
   { id: 2, yc_card_id: null, title: 'Норма <i>биоревит</i>', source: 'manual', links: 0, items: [{ good_id: 7, title: 'Гель Profhilo', amount: 1.5, unit: 'мл' }] },
@@ -61,19 +61,28 @@ async function main() {
   const block = index.slice(start, index.indexOf('</div>', end) + 6) + '</div>';
   const app = express();
   app.use(express.json());
-  app.use('/api/economics', (q, _r, n) => { if (q.method !== 'GET' || /goods|tech-cards|coverage|pay-rules|settings|sync|fixed-costs|equipment/.test(q.path)) calls.push(`${q.method} ${q.originalUrl}${q.body && Object.keys(q.body).length ? ' ' + JSON.stringify(q.body) : ''}`); n(); });
+  app.use('/api/economics', (q, _r, n) => { if (q.method !== 'GET' || /goods|tech-cards|coverage|pay-rules|settings|sync|fixed-costs|equipment|dictionaries/.test(q.path)) calls.push(`${q.method} ${q.originalUrl}${q.body && Object.keys(q.body).length ? ' ' + JSON.stringify(q.body) : ''}`); n(); });
   app.get('/api/economics/goods', (q, res) => res.json({ goods: goods.filter(g => g.title.toLowerCase().includes(String(q.query.search || '').toLowerCase())) }));
   app.get('/api/economics/goods/:id/receipts', (_q, res) => res.json({ receipts }));
   app.put('/api/economics/goods/:id/price', (_q, res) => res.json({ ok: true }));
   app.get('/api/economics/tech-cards', (_q, res) => res.json({ cards }));
   app.get('/api/economics/coverage', (_q, res) => res.json({ ...coverage }));
   app.put('/api/economics/services/:id/tech-card', (_q, res) => res.json({ ok: true }));
+  app.delete('/api/economics/services/:id/tech-card', (_q, res) => res.json({ ok: true, removed: 1 }));
   app.post('/api/economics/services/:id/tech-card/lookup', (_q, res) => res.json({ checked: 2, found: [] }));
   app.post('/api/economics/tech-cards', (_q, res) => res.json({ id: 3 }));
   let rules = [{ id: 1, staff_yc_id: null, service_yc_id: null, category_yc_id: null, percent: '30.00', base: 'gross', fixed_per_visit: '0.00', valid_from: null, valid_to: null, note: 'По умолчанию <b>салон</b>' },
     { id: 2, staff_yc_id: 1, service_yc_id: 101, category_yc_id: null, percent: '45.50', base: 'net_of_materials', fixed_per_visit: '500.00', valid_from: '2026-01-01', valid_to: null, note: '' }];
   let settingsState = { payroll_multiplier: '1.300', pay_base_includes_bonuses: false, allocation_driver: 'minutes', usn_rate: '15.00', acquiring: { 'Расчетный счет': 1.5, 'Старая касса': 2 } };
-  app.get('/api/notification-rules/dictionaries', (_q, res) => res.json({ staff: [{ id: 1, name: 'Пери <i>Исамудиновна</i>' }, { id: 2, name: 'Татьяна' }], services: [{ id: 101, title: 'Биоревитализация Profhilo' }, { id: 103, title: 'Чистка лица' }], categories: [{ id: 9, title: 'Эпиляция' }] }));
+  let dictCalls = 0;
+  app.get('/api/notification-rules/dictionaries', (_q, res) => res.status(410).json({ error: 'экономика не должна ходить сюда' }));
+  app.get('/api/economics/dictionaries', (_q, res) => {
+    dictCalls++;
+    // первый ответ — YClients «не ответил» (degraded): фронт не должен его закэшировать
+    if (dictCalls === 1) return res.json({ staff: [{ id: 1, name: 'Пери <i>Исамудиновна</i>', is_active: true }], services: [], categories: [], degraded: true });
+    res.json({ staff: [{ id: 1, name: 'Пери <i>Исамудиновна</i>', is_active: true }, { id: 2, name: 'Татьяна', is_active: true }, { id: 4, name: 'Уволенная', is_active: false }],
+      services: [{ id: 101, title: 'Биоревитализация Profhilo', in_catalog: true }, { id: 103, title: 'Чистка лица', in_catalog: true }, { id: 104, title: 'Старая услуга', in_catalog: false }], categories: [{ id: 9, title: 'Эпиляция' }], degraded: false });
+  });
   app.get('/api/economics/pay-rules', (_q, res) => res.json({ rules }));
   app.post('/api/economics/pay-rules', (q, res) => { rules.push({ id: 3, staff_yc_id: q.body.staffYcId, service_yc_id: q.body.serviceYcId, category_yc_id: q.body.categoryYcId, percent: String(q.body.percent), base: q.body.base, fixed_per_visit: String(q.body.fixedPerVisit), valid_from: q.body.validFrom, valid_to: q.body.validTo, note: q.body.note }); res.json({ id: 3 }); });
   app.put('/api/economics/pay-rules/:id', (_q, res) => res.json({ ok: true }));
@@ -143,6 +152,8 @@ async function main() {
     await page.click('#ecoGoodsBody tr button');
     await page.waitForSelector('tr.eco-receipts');
     assert.equal(await page.$$eval('tr.eco-receipts b', e => e.length), 0, 'поставщик экранирован');
+    assert.match(await page.$eval('tr.eco-receipts tbody td', e => e.textContent), /^19\.10\.2026$/, 'дата прихода — московская (22:30Z → 19.10)');
+    assert.match(await page.$eval('#ecoGoodsBody', e => e.textContent), /02\.10\.2026/, 'последняя закупка — московская дата');
     await page.type('#ecoGoodsBody tr input.eco-price', '99,5'); await page.keyboard.press('Tab');
     await new Promise(r => setTimeout(r, 300));
     assert.ok(calls.some(c => c.startsWith('PUT /api/economics/goods/7/price') && c.includes('"unitPrice":99.5')), 'ручная цена ушла числом');
@@ -163,6 +174,18 @@ async function main() {
     await page.$$eval('#ecoTechCards button', bs => bs.find(b => b.textContent === 'Найти в YClients').click());
     await new Promise(r => setTimeout(r, 300));
     assert.ok(calls.some(c => c.includes('/services/101/tech-card/lookup') && c.includes('"staffYcIds":[1,2]')), 'lookup по исполнителям услуги');
+    // плейсхолдер «— выбрать техкарту —» ничего не шлёт
+    const callsBefore = calls.length;
+    await page.select('#ecoTechCards tbody tr:first-child select', '');
+    await new Promise(r => setTimeout(r, 300));
+    assert.equal(calls.slice(callsBefore).filter(c => c.includes('/tech-card')).length, 0, 'плейсхолдер не отвязывает');
+    // явная отвязка ручной привязки — DELETE после confirm
+    page.once('dialog', d => d.accept());
+    await page.$$eval('#ecoTechCards button', bs => bs.find(b => b.textContent === 'Отвязать').click());
+    await new Promise(r => setTimeout(r, 300));
+    assert.ok(calls.some(c => c === 'DELETE /api/economics/services/101/tech-card'), 'отвязка — DELETE');
+    assert.match(await page.evaluate(() => window._notes.join('\n')), /Ручная привязка снята/);
+    await page.waitForSelector('#ecoTechCards table');
     await page.$$eval('#ecoTechCards button', bs => bs.find(b => b.textContent === '+ Завести норму').click());
     await page.waitForSelector('.eco-man-item');
     await page.$$eval('#ecoTechCards button', bs => bs.find(b => b.textContent === 'Сохранить').click()); // пустая форма — отказ на клиенте
@@ -181,6 +204,10 @@ async function main() {
     await page.evaluate(() => { document.documentElement.removeAttribute('data-theme'); window._notes.length = 0; });
     await page.click('#ecoTabBtn-pay');
     await page.waitForSelector('#ecoPay table tbody tr td:not(.empty)');
+    assert.match(await page.evaluate(() => window._notes.join('\n')), /Каталог услуг YClients не ответил/, 'degraded — предупреждение');
+    await page.click('#ecoTabBtn-pay');   // повторный заход: degraded не закэширован → новый запрос
+    await page.waitForSelector('#ecoPay table tbody tr td:not(.empty)');
+    assert.equal(dictCalls, 2, 'degraded-справочник не кэшируется, полный — кэшируется');
     assert.equal(await page.$$eval('#ecoPay tbody tr', e => e.length), 2);
     assert.equal(await page.$$eval('#ecoPay b, #ecoPay i', e => e.length), 0, 'теги в заметке/имени экранированы');
     assert.match(await page.$eval('#ecoPay tbody', e => e.textContent), /салон по умолчанию/);
@@ -192,6 +219,8 @@ async function main() {
     await page.$eval('#ecoRPct', e => { e.value = '150'; });
     await clickBtn('#ecoRuleForm button', 'Сохранить');
     assert.match(await page.evaluate(() => window._notes.join('\n')), /Процент/);
+    assert.match(await page.$eval('#ecoRStaff', e => e.textContent), /Уволенная \(не работает\)/);
+    assert.match(await page.$eval('#ecoRService', e => e.textContent), /Старая услуга \(нет в каталоге\)/);
     await page.select('#ecoRService', '103'); await page.select('#ecoRCat', '9');
     await page.$eval('#ecoRPct', e => { e.value = '20,5'; });
     await clickBtn('#ecoRuleForm button', 'Сохранить');

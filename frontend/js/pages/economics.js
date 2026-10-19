@@ -39,10 +39,18 @@ function ecoApplyRange() {
   _eco.from = f <= t ? f : t; _eco.to = f <= t ? t : f; _eco.report = null; ecoRenderPeriod(); ecoSwitchTab(_eco.tab);
 }
 function ecoQs() { return `from=${_eco.from}&to=${_eco.to}`; }
+// Свой справочник: услуги из management-каталога YClients (все 300+, а не 4
+// онлайн-записываемых), сотрудники салона, услуги из записей за 12 мес.
+// Неполный ответ (degraded/пусто — YClients не ответил) не кэшируется: следующий
+// заход на вкладку спросит снова, а не будет жить с пустыми списками до F5.
 async function ecoDicts() {
-  if (!_eco.dicts) _eco.dicts = await api('GET', '/api/notification-rules/dictionaries');
-  return _eco.dicts;
+  if (_eco.dicts) return _eco.dicts;
+  const d = await api('GET', '/api/economics/dictionaries');
+  if (ecoDictsCacheable(d)) _eco.dicts = d;
+  else if (d && d.degraded) notify('Каталог услуг YClients не ответил — список услуг неполный', 'err');
+  return d;
 }
+function ecoDictLabel(i) { return (i.name || i.title || String(i.id)) + (i.is_active === false ? ' (не работает)' : '') + (i.in_catalog === false ? ' (нет в каталоге)' : ''); }
 function ecoDictName(list, id) { const x = (list || []).find(i => String(i.id) === String(id)); return x ? x.name || x.title : String(id); }
 
 // Загрузчики вкладок — задачи 16–18, 20–21. Заглушки, чтобы каркас работал.
@@ -147,7 +155,7 @@ async function ecoLoadGoods() {
       return `<tr>
       <td>${esc(g.title)}<div class="eco-kpi-sub">${esc(g.category_title || '')}</div></td>
       <td>${esc(u.main)}${u.sub ? `<div class="eco-kpi-sub">${esc(u.sub)}</div>` : ''}</td>
-      <td class="num">${g.last_receipt_price != null ? ecoNum(g.last_receipt_price, 2) : '—'}${g.last_receipt_at ? `<div class="eco-kpi-sub">${esc(String(g.last_receipt_at).slice(0, 10))}</div>` : ''}</td>
+      <td class="num">${g.last_receipt_price != null ? ecoNum(g.last_receipt_price, 2) : '—'}${g.last_receipt_at ? `<div class="eco-kpi-sub">${esc(ecoMskDate(g.last_receipt_at))}</div>` : ''}</td>
       <td class="num">${g.unit_actual_cost != null ? ecoNum(g.unit_actual_cost, 2) : '—'}</td>
       <td class="num"><input type="text" inputmode="decimal" class="eco-price" value="${g.override_price != null ? escAttr(String(g.override_price)) : ''}" placeholder="—" onchange="ecoSavePrice(${Number(g.good_id)}, this)"></td>
       <td><button class="btn btn-sm" onclick="ecoShowReceipts(${Number(g.good_id)}, this)">История</button></td>
@@ -170,7 +178,7 @@ async function ecoShowReceipts(goodId, btn) {
   try {
     const r = await api('GET', `/api/economics/goods/${Number(goodId)}/receipts`);
     if (tr.nextElementSibling && tr.nextElementSibling.classList.contains('eco-receipts')) return; // двойной клик
-    const rows = (r.receipts || []).map(x => `<tr><td>${esc(String(x.create_date).slice(0, 10))}</td><td class="num">${ecoQty(x.amount)} ${esc(x.unit_title || '')}</td><td class="num">${ecoNum(x.cost_per_unit, 2)}</td><td class="num">${ecoNum(x.discount, 2)}%</td><td class="num">${ecoMoney(x.cost)}</td><td>${esc(x.supplier_title || '')}</td></tr>`).join('');
+    const rows = (r.receipts || []).map(x => `<tr><td>${esc(ecoMskDate(x.create_date))}</td><td class="num">${ecoQty(x.amount)} ${esc(x.unit_title || '')}</td><td class="num">${ecoNum(x.cost_per_unit, 2)}</td><td class="num">${ecoNum(x.discount, 2)}%</td><td class="num">${ecoMoney(x.cost)}</td><td>${esc(x.supplier_title || '')}</td></tr>`).join('');
     tr.insertAdjacentHTML('afterend', `<tr class="eco-receipts"><td colspan="6"><div class="tw"><table class="mtbl eco-tbl"><thead><tr><th>Дата</th><th class="num">Кол-во</th><th class="num">Цена за ед.</th><th class="num">Скидка</th><th class="num">Сумма</th><th>Поставщик</th></tr></thead><tbody>${rows || '<tr><td colspan="6" class="empty">Поступлений нет</td></tr>'}</tbody></table></div></td></tr>`);
   } catch (e) { notify('Ошибка: ' + e.message, 'err'); }
 }
@@ -193,9 +201,9 @@ async function ecoLoadTechCards() {
         <td>${esc(s.title)}<div class="eco-kpi-sub">${esc(ecoCoverageHint(s))}</div></td>
         <td>${tc ? `<b>${esc(tc.title)}</b> <span class="badge eco-badge-muted">${esc(tc.source)}${tc.staff_yc_id ? ' · сотрудник ' + esc(String(tc.staff_yc_id)) : ''}</span><div class="eco-kpi-sub">${esc(ecoCardItemsText(tc.items))}</div>` : `<span class="badge eco-badge-warn">нет техкарты</span> ${sugg}`}</td>
         <td><div class="eco-actions">
-          <select onchange="ecoLinkCard(${sid}, this.value)">${cardOpts(tc ? tc.id : null)}</select>
+          <select onchange="if (this.value) ecoLinkCard(${sid}, this.value)">${cardOpts(tc ? tc.id : null)}</select>
           <button class="btn btn-sm" data-staff="${escAttr((s.staff_yc_ids || []).join(','))}" onclick="ecoLookupCard(${sid}, this)" title="default_for_staff_and_service по каждому исполнителю (≤4 вызова)">Найти в YClients</button>
-          ${tc && tc.source === 'manual' ? `<button class="btn btn-sm" onclick="ecoLinkCard(${sid}, null)">Отвязать</button>` : ''}
+          ${tc && tc.source === 'manual' ? `<button class="btn btn-sm" onclick="ecoUnlinkCard(${sid}, ${tc.staff_yc_id != null ? Number(tc.staff_yc_id) : 'null'})">Отвязать</button>` : ''}
         </div></td></tr>`;
     }).join('');
     const manual = _eco.cards.filter(c => c.source === 'manual').map(c => `<tr><td>${esc(c.title)}</td><td class="eco-kpi-sub">${esc(ecoCardItemsText(c.items))}</td><td class="num">${ecoNum(c.links)}</td><td><button class="btn btn-sm" onclick="ecoDeleteManual(${Number(c.id)})">Удалить</button></td></tr>`).join('');
@@ -213,8 +221,19 @@ async function ecoLoadTechCards() {
   } catch (e) { if (seq === _ecoCardsSeq) el.innerHTML = `<div class="empty">Ошибка: ${esc(e.message)}</div>`; }
 }
 async function ecoLinkCard(serviceId, cardId) {
-  try { await api('PUT', `/api/economics/services/${Number(serviceId)}/tech-card`, { techCardId: cardId ? Number(cardId) : null }); _eco.report = null; notify('Привязка сохранена'); ecoLoadTechCards(); }
+  if (!cardId) return; // плейсхолдер «— выбрать техкарту —» ничего не делает; снять — кнопкой «Отвязать»
+  try { await api('PUT', `/api/economics/services/${Number(serviceId)}/tech-card`, { techCardId: Number(cardId) }); _eco.report = null; notify('Привязка сохранена'); ecoLoadTechCards(); }
   catch (e) { notify('Ошибка: ' + e.message, 'err'); ecoLoadTechCards(); }
+}
+// Снимает только РУЧНУЮ привязку (выученные из списаний/найденные в YClients вернул бы ночной проход).
+async function ecoUnlinkCard(serviceId, staffYcId) {
+  if (!confirm('Снять ручную привязку техкарты к услуге?')) return;
+  const qs = staffYcId ? `?staffYcId=${Number(staffYcId)}` : '';
+  try {
+    const r = await api('DELETE', `/api/economics/services/${Number(serviceId)}/tech-card${qs}`);
+    if (r && r.removed) { _eco.report = null; notify('Ручная привязка снята'); } else notify('Ручной привязки нет — снимать нечего', 'err');
+    ecoLoadTechCards();
+  } catch (e) { notify('Ошибка: ' + e.message, 'err'); }
 }
 async function ecoLookupCard(serviceId, btn) {
   const staffIds = String(btn.dataset.staff || '').split(',').filter(Boolean).map(Number);
@@ -294,7 +313,7 @@ async function ecoEditRule(id) {
   const opt = (list, sel, label) => {
     const items = list || [];
     const missing = sel && !items.some(i => String(i.id) === String(sel)) ? `<option value="${escAttr(String(sel))}" selected>id ${esc(String(sel))} (нет в справочнике)</option>` : '';
-    return `<option value="">${label}</option>` + missing + items.map(i => `<option value="${escAttr(String(i.id))}" ${String(sel) === String(i.id) ? 'selected' : ''}>${esc(i.name || i.title)}</option>`).join('');
+    return `<option value="">${label}</option>` + missing + items.map(i => `<option value="${escAttr(String(i.id))}" ${String(sel) === String(i.id) ? 'selected' : ''}>${esc(ecoDictLabel(i))}</option>`).join('');
   };
   document.getElementById('ecoRuleForm').innerHTML = `<div class="card eco-detail"><div class="eco-form">
     <div class="fg"><label class="fl">Сотрудник</label><select id="ecoRStaff">${opt(d.staff, x.staff_yc_id, '— все —')}</select></div>
@@ -454,7 +473,7 @@ async function ecoEditEq(id) {
   const sel = (x.service_ids || []).map(String);
   const known = new Set((d.services || []).map(s => String(s.id)));
   const missing = sel.filter(i => !known.has(i)).map(i => `<option value="${escAttr(i)}" selected>id ${esc(i)} (нет в справочнике)</option>`).join('');
-  const opts = missing + (d.services || []).map(s => `<option value="${escAttr(String(s.id))}" ${sel.includes(String(s.id)) ? 'selected' : ''}>${esc(s.title)}</option>`).join('');
+  const opts = missing + (d.services || []).map(s => `<option value="${escAttr(String(s.id))}" ${sel.includes(String(s.id)) ? 'selected' : ''}>${esc(ecoDictLabel(s))}</option>`).join('');
   const num = (v) => escAttr(v === '' || v === null || v === undefined ? '' : String(Number(v)));
   document.getElementById('ecoEqForm').innerHTML = `<div class="card eco-detail" style="margin-bottom:12px"><div class="eco-form">
     <div class="fg"><label class="fl">Название</label><input id="ecoEName" maxlength="255" value="${escAttr(x.name)}"></div>

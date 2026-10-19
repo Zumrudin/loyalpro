@@ -266,3 +266,18 @@ test('ecoParseEquipmentForm: тело как у parseEquipment', () => {
 test('ecoSeedBody: строка сида → тело POST', () => {
   assert.deepStrictEqual(plain(ctx.ecoSeedBody({ name: 'X', purchase_price: 0, useful_life_months: 36, note: 'n' })), { name: 'X', purchasePrice: 0, usefulLifeMonths: 36, note: 'n', serviceIds: [] });
 });
+
+test('второе ревью п.5: ecoMskDate — московская дата из TIMESTAMPTZ, ДД.ММ.ГГГГ', () => {
+  assert.strictEqual(ctx.ecoMskDate('2026-10-18T22:30:00.000Z'), '19.10.2026');
+  assert.strictEqual(ctx.ecoMskDate('2026-10-18T20:59:59Z'), '18.10.2026');
+  assert.strictEqual(ctx.ecoMskDate('2026-10-18'), '18.10.2026');   // голая дата — как есть, без сдвига
+  assert.strictEqual(ctx.ecoMskDate(null), '');
+  assert.strictEqual(ctx.ecoMskDate('мусор'), '');
+});
+
+test('второе ревью п.9: ecoDictsCacheable — пустой/degraded справочник не кэшируется', () => {
+  assert.strictEqual(ctx.ecoDictsCacheable({ services: [{ id: 1 }], staff: [], categories: [], degraded: false }), true);
+  assert.strictEqual(ctx.ecoDictsCacheable({ services: [{ id: 1 }], staff: [], categories: [], degraded: true }), false);
+  assert.strictEqual(ctx.ecoDictsCacheable({ services: [], staff: [], categories: [] }), false);
+  assert.strictEqual(ctx.ecoDictsCacheable(null), false);
+});

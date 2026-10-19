@@ -82,6 +82,28 @@ function ecoPeriodPreset(preset, today) {
 }
 
 function ecoTodayMsk() { return new Date().toLocaleDateString('sv-SE', { timeZone: 'Europe/Moscow' }); }
+/**
+ * Московская дата ДД.ММ.ГГГГ из TIMESTAMPTZ (сервер отдаёт UTC ISO): .slice(0,10)
+ * давал UTC-дату, и приход в 01:30 мск показывался вчерашним. Голая YYYY-MM-DD —
+ * как есть (это уже календарная дата). Мусор/пусто → ''.
+ */
+function ecoMskDate(v) {
+  if (v === null || v === undefined || v === '') return '';
+  const s = String(v);
+  let iso;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) iso = s;
+  else {
+    const d = new Date(s);
+    if (Number.isNaN(d.getTime())) return '';
+    iso = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Moscow' }).format(d);
+  }
+  const [y, m, dd] = iso.split('-');
+  return `${dd}.${m}.${y}`;
+}
+/** Справочник можно кэшировать, только если он полный: degraded (YClients не ответил) или пустой — нет. */
+function ecoDictsCacheable(d) {
+  return !!(d && !d.degraded && Array.isArray(d.services) && d.services.length > 0);
+}
 
 /** Следующее состояние сортировки по клику на заголовок. Новая колонка — desc (крупные сверху), «Услуга» — asc. */
 function ecoSortNext(state, key) {
