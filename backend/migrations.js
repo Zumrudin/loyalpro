@@ -2304,6 +2304,38 @@ async function runMigrations(client) {
     CREATE INDEX IF NOT EXISTS idx_staff_pay_rules_salon ON staff_pay_rules (salon_id)
   `).catch(() => {});
 
+  // Схемы оплаты труда (спека 2026-10-19-economics-pay-schemes-design.md): линии в JSONB
+  // [{percent, base, payroll_multiplier|null, fixed_per_visit, categories:[], services:[]}].
+  // staff_pay_rules остаётся (никогда деструктивно), кодом больше не читается.
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS pay_schemes (
+      id         SERIAL PRIMARY KEY,
+      salon_id   INT NOT NULL REFERENCES salons(id) ON DELETE CASCADE,
+      title      VARCHAR(120) NOT NULL,
+      note       VARCHAR(500),
+      lines      JSONB NOT NULL DEFAULT '[]',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `).catch(() => {});
+  await client.query(`CREATE INDEX IF NOT EXISTS idx_pay_schemes_salon ON pay_schemes (salon_id)`).catch(() => {});
+  // Назначение схемы специалисту на период; ON DELETE RESTRICT — удаление назначенной
+  // схемы роутер отвергает (409), а не обнуляет оплату врача молча.
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS pay_scheme_assignments (
+      id          SERIAL PRIMARY KEY,
+      salon_id    INT NOT NULL REFERENCES salons(id) ON DELETE CASCADE,
+      staff_yc_id BIGINT NOT NULL,
+      scheme_id   INT NOT NULL REFERENCES pay_schemes(id) ON DELETE RESTRICT,
+      valid_from  DATE,
+      valid_to    DATE,
+      note        VARCHAR(500),
+      created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `).catch(() => {});
+  await client.query(`CREATE INDEX IF NOT EXISTS idx_pay_scheme_assignments_staff ON pay_scheme_assignments (salon_id, staff_yc_id)`).catch(() => {});
+
   await client.query(`
     CREATE TABLE IF NOT EXISTS economics_settings (
       salon_id                  INT PRIMARY KEY REFERENCES salons(id) ON DELETE CASCADE,
