@@ -83,7 +83,7 @@ function ecoRenderSummary(s, el) {
 }
 
 const ECO_WARN_MAX = 30;
-const ECO_WARN_ICON = { no_consumables: '📦', overrun: '📈', no_price: '🏷️', price_jump: '💹' };
+const ECO_WARN_ICON = { sync_gap: '🕳️', no_consumables: '📦', overrun: '📈', no_price: '🏷️', price_jump: '💹' };
 function ecoRenderWarnings(list, el) {
   if (!el) return;
   const lines = ecoWarningLines(list);

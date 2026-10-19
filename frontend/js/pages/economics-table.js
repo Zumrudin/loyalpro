@@ -177,7 +177,11 @@ function ecoWarningLines(list) {
   const out = [];
   for (const x of Array.isArray(list) ? list : []) {
     let text = null;
-    if (x.type === 'no_consumables') {
+    if (x.type === 'sync_gap') {
+      const days = Array.isArray(x.days) ? x.days : [];
+      const span = days.length > 1 ? `${ecoMskDate(days[0])} – ${ecoMskDate(days[days.length - 1])}` : (days[0] ? ecoMskDate(days[0]) : '');
+      text = `Списания не загружены за ${ecoNum(days.length)} ${ecoPlural(days.length, 'день', 'дня', 'дней')} (${span}, ${ecoNum(x.visits)} ${ecoPlural(x.visits, 'визит', 'визита', 'визитов')}): ни у одной записи этих дней нет списаний YClients — материалы по ним показаны по норме; ночной проход дотянет данные сам, вручную — догон scripts/economics-backfill-goods.js`;
+    } else if (x.type === 'no_consumables') {
       text = `«${x.service_title}»: ${ecoNum(x.count)} ${ecoPlural(x.count, 'визит', 'визита', 'визитов')} без списаний, хотя у услуги есть техкарта${x.last_date ? ` (последний ${ecoMskDate(x.last_date)})` : ''}`;
     } else if (x.type === 'overrun') {
       text = `«${x.service_title}», визит ${ecoMskDate(x.visit_date)}${x.staff_name ? ` (${x.staff_name})` : ''}: материалы ${ecoMoney(x.fact)} при норме ${ecoMoney(x.norm)} — ×${ecoQty(x.ratio)}`;

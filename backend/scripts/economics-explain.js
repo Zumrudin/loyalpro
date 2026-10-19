@@ -36,6 +36,7 @@ async function explain(label, sql, params) {
   await explain('RECEIPTS_SQL', S.RECEIPTS_SQL, [salonId, goods, to]);
   await explain('CATALOG_SQL', S.CATALOG_SQL, [salonId, goods]);
   await explain('CAPACITY_SQL', S.CAPACITY_SQL, [salonId, from, to]);
+  await explain('GAP_DAYS_SQL', S.GAP_DAYS_SQL, [salonId, from, to]);
   for (const k of ['OVERRIDES_SQL', 'CARDS_SQL', 'LINKS_SQL', 'PAY_RULES_SQL', 'SETTINGS_SQL', 'FIXED_SQL', 'EQUIPMENT_SQL']) {
     await explain(k, S[k], [salonId]);
   }

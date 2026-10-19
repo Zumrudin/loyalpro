@@ -286,6 +286,7 @@ test('второе ревью п.9: ecoDictsCacheable — пустой/degraded 
 
 test('Task 22: ecoWarningLines — тексты предупреждений без HTML, даты по Москве, порядок как у сервера', () => {
   const lines = plain(ctx.ecoWarningLines([
+    { type: 'sync_gap', days: ['2026-10-01', '2026-10-08', '2026-10-16'], visits: 170 },
     { type: 'no_consumables', service_yc_id: 10, service_title: 'Ботокс <лоб>', count: 3, record_ids: [1, 2, 3], last_date: '2026-09-12' },
     { type: 'overrun', service_yc_id: 10, service_title: 'S', record_id: 7, visit_date: '2026-09-10', staff_name: 'Пери', fact: 1300, norm: 1000, ratio: 1.3 },
     { type: 'no_price', good_id: 7, good_title: 'Игла', visits: 10 },
@@ -293,6 +294,7 @@ test('Task 22: ecoWarningLines — тексты предупреждений б�
     { type: 'чужое' },
   ]));
   assert.deepStrictEqual(lines, [
+    { type: 'sync_gap', text: 'Списания не загружены за 3 дня (01.10.2026 – 16.10.2026, 170 визитов): ни у одной записи этих дней нет списаний YClients — материалы по ним показаны по норме; ночной проход дотянет данные сам, вручную — догон scripts/economics-backfill-goods.js' },
     { type: 'no_consumables', text: '«Ботокс <лоб>»: 3 визита без списаний, хотя у услуги есть техкарта (последний 12.09.2026)' },
     { type: 'overrun', text: '«S», визит 10.09.2026 (Пери): материалы 1 300 ₽ при норме 1 000 ₽ — ×1,3' },
     { type: 'no_price', text: 'Товар без цены: «Игла» — списан в 10 визитах, цены нет ни в приходах, ни вручную, ни в каталоге' },

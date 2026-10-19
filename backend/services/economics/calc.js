@@ -319,6 +319,9 @@ function receiptDayPrices(receipts, unitEquals) {
  *  - no_price: товар реально списан в периоде, а цены нет ни в приходах, ни вручную, ни в каталоге.
  *  - price_jump: последний день приходов в периоде против предыдущего дня приходов,
  *    оба в сопоставимых единицах (единица списания), рост ≥ 20 %.
+ *  - sync_gap: дни периода (до сегодня) с состоявшимися визитами, где НИ У ОДНОЙ записи нет
+ *    списаний — списания YClients за эти дни не загружены (ночной проход дотягивает их сам,
+ *    sync.healGoodsGaps); без этого дыра читалась как «оценка по норме» молча. Одна строка на период.
  * rows — строки buildRows; receiptsByGood — приходы до конца периода; today — 'YYYY-MM-DD' мск.
  */
 function warnings(rows, { receiptsByGood = new Map(), catalogByGood = new Map(), from, to, today } = {}) {
@@ -327,6 +330,15 @@ function warnings(rows, { receiptsByGood = new Map(), catalogByGood = new Map(),
   const noPrice = new Map();
   const title = (gid) => (catalogByGood.get(gid) || {}).title || `товар ${gid}`;
   const consDays = new Set((rows || []).filter(r => r.has_consumables).map(r => r.visit_date));
+  const gapDays = new Map();
+  for (const r of rows || []) {
+    if (!r.has_consumables && !consDays.has(r.visit_date) && !(today && r.visit_date >= today)) {
+      const g = gapDays.get(r.visit_date) || new Set();
+      g.add(r.record_id); gapDays.set(r.visit_date, g);
+    }
+  }
+  const syncGap = gapDays.size ? [{ type: 'sync_gap', days: [...gapDays.keys()].sort(),
+    visits: [...gapDays.values()].reduce((a, g) => a + g.size, 0) }] : [];
   for (const r of rows || []) {
     if (!r.has_consumables && r.has_tech_card && has(r.materials_norm) && consDays.has(r.visit_date)
       && !(today && r.visit_date >= today)) {
@@ -360,6 +372,7 @@ function warnings(rows, { receiptsByGood = new Map(), catalogByGood = new Map(),
     }
   }
   return [
+    ...syncGap,
     ...[...noCons.values()].sort((a, b) => b.count - a.count || a.service_yc_id - b.service_yc_id),
     ...overrun.sort((a, b) => b.ratio - a.ratio || a.record_id - b.record_id),
     ...[...noPrice.values()].map(({ _rec, ...g }) => ({ ...g, visits: _rec.size })).sort((a, b) => b.visits - a.visits || a.good_id - b.good_id),

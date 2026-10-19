@@ -446,6 +446,20 @@ describe('warnings (Task 22): только то, что доказуемо да�
     ];
     expect(run(rows).filter(w => w.type === 'no_consumables').map(w => w.record_ids)).toEqual([[2]]);
   });
+  test('sync_gap: дни без единого списания в салоне перечислены одной строкой — визиты по записям, сегодня не считается, первым в списке', () => {
+    const rows = [
+      { ...base, record_id: 1, has_consumables: false, visit_date: '2026-09-05' },
+      { ...base, record_id: 1, service_yc_id: 11, has_consumables: false, visit_date: '2026-09-05' }, // та же запись, вторая услуга
+      { ...base, record_id: 4, has_consumables: false, visit_date: '2026-09-03' },
+      { ...base, record_id: 2, has_consumables: false, visit_date: '2026-09-02' },
+      { ...base, record_id: 3, service_yc_id: 99, has_tech_card: false, materials_norm: null, visit_date: '2026-09-02' }, // списания в этот день есть
+      { ...base, record_id: 9, has_consumables: false, visit_date: '2026-10-19' },                                      // сегодня
+    ];
+    const w = run(rows, { from: '2026-09-01', to: '2026-10-31' });
+    expect(w[0]).toEqual({ type: 'sync_gap', days: ['2026-09-03', '2026-09-05'], visits: 2 });
+    expect(w.filter(x => x.type === 'sync_gap')).toHaveLength(1);
+    expect(run([{ ...base, record_id: 1 }]).filter(x => x.type === 'sync_gap')).toEqual([]);
+  });
   test('визит сегодня/в будущем без списаний — не предупреждение (списание ещё могут провести)', () => {
     const w = run([{ ...base, has_consumables: false, visit_date: '2026-10-19' }, { ...base, record_id: 2, visit_date: '2026-10-19', materials_norm: null, has_tech_card: false }], { from: '2026-10-01', to: '2026-10-31' });
     expect(w).toEqual([]);
