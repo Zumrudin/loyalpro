@@ -197,6 +197,17 @@ cron.schedule('35 4 * * *', async () => {
   } catch (e) { cronLogger.error(`reconcile cron: ${e.message}`); }
 }, { timezone: 'Europe/Moscow' });
 
+// Экономика процедур: ночной проход YClients (каталог, техкарты, транзакции,
+// привязки) — 5:05 мск, после сверки записей 4:35 и чистки 4:40; ≈33 запроса.
+if (config.ECONOMICS_SYNC) {
+  cron.schedule('5 5 * * *', async () => {
+    try { await require('./services/economics').runNightlyAll(); }
+    catch (e) { cronLogger.error(`economics nightly: ${e.message}`); }
+  }, { timezone: 'Europe/Moscow' });
+} else {
+  cronLogger.warn('ECONOMICS_SYNC=false — ночной синк экономики выключен');
+}
+
 // Вердикты ИИ по перепискам (services/dialog-verdicts, спека 2026-10-04): дважды
 // в день, ОБА раза вне окна Милы 22:00–09:30 — анализ делит с ней мост dev
 // (2 слота), и утренний прогон в 09:45 застаёт мост свободным. Окно отбора

@@ -202,6 +202,9 @@ module.exports = {
   // Вердикты ИИ по перепискам: DIALOG_VERDICTS=false гасит РОВНО плановые прогоны
   // (крон 09:45 и 21:30 мск), кнопка «Проанализировать» работает всегда.
   DIALOG_VERDICTS: process.env.DIALOG_VERDICTS !== 'false',
+  // Экономика процедур: ночной синк YClients (каталог, техкарты, сверка транзакций).
+  // 'false' гасит ТОЛЬКО крон; вебхуки и ручной POST /api/economics/sync работают.
+  ECONOMICS_SYNC: process.env.ECONOMICS_SYNC !== 'false',
   // Провайдер базы знаний: 'aitunnel' | 'gemini' (старый релей/прямой вызов, откат).
   KB_PROVIDER:          process.env.KB_PROVIDER          || 'aitunnel',
 
