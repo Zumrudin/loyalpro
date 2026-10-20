@@ -1247,6 +1247,16 @@ tr.eco-receipts>td{background:var(--bg)}
 .eco-tabs .tab{flex:0 0 auto;white-space:nowrap}
 [data-theme="dark"] .eco-tabs .tab.active{background:var(--bd);color:var(--t1)}
 @media(max-width:700px){.eco-summary{grid-template-columns:1fr 1fr}.eco-form{grid-template-columns:1fr}.eco-tabs{max-width:100%}}
+.eco-scheme{margin-bottom:10px}.eco-scheme-head{display:flex;justify-content:space-between;gap:10px;align-items:flex-start;flex-wrap:wrap}
+.eco-lines{margin:8px 0 0;padding-left:18px;font-size:13px;line-height:1.5}
+.eco-line{margin-top:10px}.eco-line-head{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:8px}
+.eco-picker{margin-top:10px}.eco-picker>input[type=text]{width:100%;margin:6px 0;box-sizing:border-box}
+.eco-chips{display:flex;flex-wrap:wrap;gap:6px;min-height:24px;align-items:center}
+.eco-chip{display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border-radius:12px;background:var(--bg);border:1px solid var(--bd);font-size:12.5px}
+.eco-chip button{border:0;background:none;cursor:pointer;color:var(--t3);font-size:14px;line-height:1;padding:0 0 0 2px}
+.eco-picker-list{max-height:180px;overflow:auto;border:1px solid var(--bd);border-radius:8px;padding:4px 8px}
+.eco-pick{display:flex;gap:6px;align-items:center;padding:3px 0;font-size:13px;cursor:pointer}
+.eco-pick input[type=checkbox]{width:auto;flex:0 0 auto;margin:0;padding:0}
 [data-theme="dark"] #page-economics input,[data-theme="dark"] #page-economics select{background:var(--card);color:var(--t1);color-scheme:dark}
 [data-theme="dark"] #page-economics .btn:not(.btn-pri){background:var(--bd);color:var(--t1)}
 #ecoPeriod .pb-btns{flex-wrap:wrap}
