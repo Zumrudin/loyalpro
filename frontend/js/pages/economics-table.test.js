@@ -180,28 +180,61 @@ test('ecoIsDate: только реальные YYYY-MM-DD', () => {
   assert.strictEqual(ctx.ecoIsDate(null), false);
 });
 
-const ruleForm = (o) => ({ staff: '', service: '', category: '', percent: '30', base: 'gross', fixed: '', from: '', to: '', note: '', ...o });
-test('ecoParseRuleForm: тело ровно как у parsePayRule бэкенда', () => {
-  assert.deepStrictEqual(plain(ctx.ecoParseRuleForm(ruleForm({ staff: '12', percent: '27,5', fixed: '500', from: '2026-01-01', to: '2026-12-31', note: ' x ' }))),
-    { value: { staffYcId: 12, serviceYcId: null, categoryYcId: null, percent: 27.5, base: 'gross', fixedPerVisit: 500, validFrom: '2026-01-01', validTo: '2026-12-31', note: 'x' } });
-  const def = plain(ctx.ecoParseRuleForm(ruleForm({ base: 'net_of_materials' })));
-  assert.strictEqual(def.value.fixedPerVisit, 0);
-  assert.strictEqual(def.value.staffYcId, null);
-  assert.strictEqual(def.value.base, 'net_of_materials');
+const schemeLine = (o) => ({ percent: '15', base: 'gross', mult: '', fixed: '', categories: [100], services: [], ...o });
+const schemeForm = (o) => ({ title: ' Инъекции ', note: '', lines: [schemeLine()], names: {}, ...o });
+test('ecoParseSchemeForm: тело ровно как у parsePayScheme бэкенда', () => {
+  const r = plain(ctx.ecoParseSchemeForm(schemeForm({ lines: [schemeLine({ percent: '27,5', mult: '1,494', fixed: '500' }), schemeLine({ categories: [], services: ['10', 10, 11], base: 'net_of_materials' })] })));
+  assert.deepStrictEqual(r, { value: { title: 'Инъекции', note: '', lines: [
+    { percent: 27.5, base: 'gross', payrollMultiplier: 1.494, fixedPerVisit: 500, categories: [100], services: [] },
+    { percent: 15, base: 'net_of_materials', payrollMultiplier: null, fixedPerVisit: 0, categories: [], services: [10, 11] },
+  ] } });
 });
-test('ecoParseRuleForm: ошибки', () => {
-  assert.match(ctx.ecoParseRuleForm(ruleForm({ service: '5', category: '6' })).error, /услуг.*категори/i);
-  assert.match(ctx.ecoParseRuleForm(ruleForm({ percent: '' })).error, /процент/i);
-  assert.match(ctx.ecoParseRuleForm(ruleForm({ percent: '101' })).error, /процент/i);
-  assert.match(ctx.ecoParseRuleForm(ruleForm({ percent: '-1' })).error, /процент/i);
-  assert.match(ctx.ecoParseRuleForm(ruleForm({ percent: 'abc' })).error, /процент/i);
-  assert.match(ctx.ecoParseRuleForm(ruleForm({ base: 'x' })).error, /баз/i);
-  assert.match(ctx.ecoParseRuleForm(ruleForm({ fixed: '-5' })).error, /фикс/i);
-  assert.match(ctx.ecoParseRuleForm(ruleForm({ from: '2026-13-01' })).error, /дат/i);
-  assert.match(ctx.ecoParseRuleForm(ruleForm({ from: '2026-05-02', to: '2026-05-01' })).error, /период/i);
-  assert.match(ctx.ecoParseRuleForm(ruleForm({ staff: '0' })).error, /сотрудник/i);
-  assert.ok(ctx.ecoParseRuleForm(ruleForm({ note: 'я'.repeat(501) })).error);
+test('ecoParseSchemeForm: ошибки', () => {
+  assert.match(ctx.ecoParseSchemeForm(schemeForm({ title: '' })).error, /назван/i);
+  assert.match(ctx.ecoParseSchemeForm(schemeForm({ lines: [] })).error, /лини/i);
+  assert.match(ctx.ecoParseSchemeForm(schemeForm({ lines: [schemeLine({ percent: '101' })] })).error, /Линия 1: процент/);
+  assert.match(ctx.ecoParseSchemeForm(schemeForm({ lines: [schemeLine({ percent: 'abc' })] })).error, /процент/);
+  assert.match(ctx.ecoParseSchemeForm(schemeForm({ lines: [schemeLine({ base: 'x' })] })).error, /баз/i);
+  assert.match(ctx.ecoParseSchemeForm(schemeForm({ lines: [schemeLine({ mult: '0,9' })] })).error, /ФОТ/);
+  assert.match(ctx.ecoParseSchemeForm(schemeForm({ lines: [schemeLine({ fixed: '-5' })] })).error, /фикс/i);
+  assert.match(ctx.ecoParseSchemeForm(schemeForm({ lines: [schemeLine(), schemeLine()] })).error, /#100 стоит в линиях 1 и 2/);
+  assert.match(ctx.ecoParseSchemeForm(schemeForm({ lines: [schemeLine({ categories: [] }), schemeLine({ categories: [] })] })).error, /остальные услуги/);
+  assert.ok(ctx.ecoParseSchemeForm(schemeForm({ note: 'я'.repeat(501) })).error);
 });
+test('ecoSchemeConflictText подставляет имена из справочника', () => {
+  const names = { services: new Map([['5', 'Revi Strong 2 ml']]), categories: new Map([['100', 'Инъекционная косметология']]) };
+  assert.strictEqual(ctx.ecoSchemeConflictText({ kind: 'service', id: 5, lines: [0, 2] }, names), 'Услуга «Revi Strong 2 ml» стоит в линиях 1 и 3 — оставьте её в одной');
+  assert.strictEqual(ctx.ecoSchemeConflictText({ kind: 'category', id: 100, lines: [0, 1] }, names), 'Категория «Инъекционная косметология» стоит в линиях 1 и 2 — оставьте её в одной');
+  assert.strictEqual(ctx.ecoSchemeConflictText({ kind: 'category', id: 7, lines: [0, 1] }, names), 'Категория #7 стоит в линиях 1 и 2 — оставьте её в одной');
+  assert.strictEqual(ctx.ecoSchemeConflictText({ kind: 'fallback', id: null, lines: [1, 3] }, names), 'Линия «остальные услуги» может быть только одна (линии 2 и 4)');
+});
+test('ecoLineText / ecoLineIsFallback / ecoPlural', () => {
+  assert.strictEqual(ctx.ecoLineText({ percent: 15, base: 'gross', payroll_multiplier: null, fixed_per_visit: 0, categories: [1, 2, 3], services: [7, 8] }), '15 % от выручки · 3 категории, 2 услуги');
+  assert.strictEqual(ctx.ecoLineText({ percent: 20, base: 'net_of_materials', payroll_multiplier: 1.494, fixed_per_visit: 500, categories: [], services: [7] }), '20 % от выручки − материалы · ФОТ ×1,494 · фикс 500 ₽ · 1 услуга');
+  assert.strictEqual(ctx.ecoLineText({ percent: 10, base: 'gross', categories: [], services: [] }), '10 % от выручки · остальные услуги');
+  assert.strictEqual(ctx.ecoLineIsFallback({ categories: [], services: [] }), true);
+  assert.strictEqual(ctx.ecoLineIsFallback({ categories: [1], services: [] }), false);
+  assert.strictEqual(ctx.ecoPlural(5, 'категория', 'категории', 'категорий'), 'категорий');
+  assert.strictEqual(ctx.ecoPlural(21, 'услуга', 'услуги', 'услуг'), 'услуга');
+  assert.strictEqual(ctx.ecoPlural(12, 'услуга', 'услуги', 'услуг'), 'услуг');
+});
+test('ecoParseAssignmentForm: тело как у parsePayAssignment; ошибки', () => {
+  assert.deepStrictEqual(plain(ctx.ecoParseAssignmentForm({ staff: '5', scheme: '3', from: '2026-02-01', to: '', note: ' n ' })), { value: { staffYcId: 5, schemeId: 3, validFrom: '2026-02-01', validTo: null, note: 'n' } });
+  assert.match(ctx.ecoParseAssignmentForm({ staff: '', scheme: '3', from: '', to: '', note: '' }).error, /сотрудник/i);
+  assert.match(ctx.ecoParseAssignmentForm({ staff: '5', scheme: '', from: '', to: '', note: '' }).error, /схем/i);
+  assert.match(ctx.ecoParseAssignmentForm({ staff: '5', scheme: '3', from: '2026-13-01', to: '', note: '' }).error, /дат/i);
+  assert.match(ctx.ecoParseAssignmentForm({ staff: '5', scheme: '3', from: '2026-05-02', to: '2026-05-01', note: '' }).error, /период/i);
+});
+test('ecoAssignmentsOverlap и ecoStaffWithoutScheme', () => {
+  const ex = [{ id: 1, staff_yc_id: 5, scheme_id: 1, valid_from: '2026-01-01', valid_to: '2026-06-30' }, { id: 2, staff_yc_id: 5, scheme_id: 2, valid_from: '2026-07-01', valid_to: null }];
+  assert.deepStrictEqual(plain(ctx.ecoAssignmentsOverlap(ex, { id: null, staff_yc_id: 5, valid_from: '2026-06-30', valid_to: null })).map(a => a.id), [1, 2]);
+  assert.deepStrictEqual(plain(ctx.ecoAssignmentsOverlap(ex, { id: 2, staff_yc_id: 5, valid_from: '2026-07-01', valid_to: null })), []);
+  assert.deepStrictEqual(plain(ctx.ecoAssignmentsOverlap(ex, { id: null, staff_yc_id: 6, valid_from: null, valid_to: null })), []);
+  const staff = [{ id: 5, name: 'Б', is_active: true }, { id: 6, name: 'В', is_active: true }, { id: 7, name: 'Г', is_active: false }];
+  assert.deepStrictEqual(plain(ctx.ecoStaffWithoutScheme(staff, ex, '2026-10-19')), [{ id: 6, name: 'В', is_active: true }]);
+  assert.deepStrictEqual(plain(ctx.ecoStaffWithoutScheme(staff, [], '2026-10-19')).map(s => s.id), [5, 6]);
+});
+
 
 const setForm = (o) => ({ mult: '1,3', base: '0', driver: 'minutes', usn: '15', acquiring: [], ...o });
 test('ecoParseSettingsForm: тело как у parseSettings', () => {
@@ -220,10 +253,6 @@ test('ecoParseSettingsForm: ошибки', () => {
   assert.match(ctx.ecoParseSettingsForm(setForm({ acquiring: [{ account: 'A', value: 'x' }] })).error, /«A»/);
   assert.ok(ctx.ecoParseSettingsForm(setForm({ acquiring: [{ account: '__proto__', value: '1' }] })).error);
   assert.ok(ctx.ecoParseSettingsForm(setForm({ acquiring: Array.from({ length: 51 }, (_, i) => ({ account: 'k' + i, value: '1' })) })).error);
-});
-test('ecoRuleScopeParts: область правила', () => {
-  assert.deepStrictEqual(plain(ctx.ecoRuleScopeParts({})), []);
-  assert.deepStrictEqual(plain(ctx.ecoRuleScopeParts({ staff_yc_id: 1, category_yc_id: 3 })), [['сотрудник', 1], ['категория', 3]]);
 });
 
 test('ECO_FIXED_CATS совпадает с FIXED_CATEGORIES бэкенда', () => {
