@@ -301,23 +301,32 @@ async function ecoDeleteManual(id) {
   if (!confirm('Удалить норму? Привязки к ней тоже удалятся.')) return;
   try { await api('DELETE', `/api/economics/tech-cards/${Number(id)}`); _eco.report = null; ecoLoadTechCards(); } catch (e) { notify('Ошибка: ' + e.message, 'err'); }
 }
-// ── Оплата труда ──
+// ── Оплата труда: схемы и назначения (спека 2026-10-19-economics-pay-schemes-design.md §5) ──
 let _ecoPaySeq = 0;
-function ecoScopeText(r, d) {
-  const lists = { 'сотрудник': d.staff, 'услуга': d.services, 'категория': d.categories };
-  return ecoRuleScopeParts(r).map(([kind, id]) => `${kind}: ${ecoDictName(lists[kind], id)}`).join(' · ') || 'салон по умолчанию';
+function ecoSchemeById(id) { return (_eco.schemes || []).find(s => Number(s.id) === Number(id)) || null; }
+function ecoPayNames(d) {
+  return { staff: new Map((d.staff || []).map(s => [String(s.id), s.name])), services: new Map((d.services || []).map(s => [String(s.id), s.title])), categories: new Map((d.categories || []).map(c => [String(c.id), c.title])) };
 }
 async function ecoLoadPay() {
   const el = document.getElementById('ecoPay'); const seq = ++_ecoPaySeq;
   try {
-    const [r, d] = await Promise.all([api('GET', '/api/economics/pay-rules'), ecoDicts()]);
+    const [r, d, st] = await Promise.all([api('GET', '/api/economics/pay-schemes'), ecoDicts(), api('GET', '/api/economics/settings')]);
     if (seq !== _ecoPaySeq) return;
     el.className = '';
-    _eco.rules = r.rules || [];
-    const rows = _eco.rules.map(x => `<tr><td>${esc(ecoScopeText(x, d))}${x.note ? `<div class="eco-kpi-sub">${esc(x.note)}</div>` : ''}</td><td class="num">${ecoNum(Number(x.percent), 2)}%</td><td>${x.base === 'net_of_materials' ? 'выручка − материалы' : 'выручка'}</td><td class="num">${ecoMoney(x.fixed_per_visit)}</td><td>${esc(x.valid_from || '…')} — ${esc(x.valid_to || '…')}</td><td><div class="eco-actions"><button class="btn btn-sm" onclick="ecoEditRule(${Number(x.id)})">Изменить</button><button class="btn btn-sm" onclick="ecoDeleteRule(${Number(x.id)})">Удалить</button></div></td></tr>`).join('');
-    el.innerHTML = `<div class="bc-head"><div><div class="bc-head-title">👩‍⚕️ Оплата труда</div><div class="bc-head-sub">Приоритет: услуга → категория → сотрудник → салон. Сотрудник без правила — оплата 0 и флаг в отчёте</div></div><button class="btn btn-sm btn-pri" onclick="ecoEditRule(null)">+ Правило</button></div>
-      <div id="ecoRuleForm"></div>
-      <div class="card eco-card-flush"><div class="tw"><table class="mtbl eco-tbl"><thead><tr><th>Область</th><th class="num">%</th><th>База</th><th class="num">Фикс/визит</th><th>Период</th><th></th></tr></thead><tbody>${rows || '<tr><td colspan="6" class="empty">Правил нет — оплата врача в отчёте равна 0</td></tr>'}</tbody></table></div></div>
+    _eco.schemes = r.schemes || []; _eco.assignments = r.assignments || []; _eco.payDicts = d; _eco.schemeDraft = null;
+    _eco.salonMult = Number(st.settings && st.settings.payroll_multiplier) || 1.3;
+    const nm = ecoPayNames(d);
+    const staffName = (id) => nm.staff.get(String(id)) || `id ${id}`;
+    const cards = _eco.schemes.map(s => `<div class="card eco-scheme"><div class="eco-scheme-head"><div><div class="eco-strong">${esc(s.title)}</div><div class="eco-kpi-sub">${s.assigned.length ? 'назначена: ' + esc(s.assigned.map(staffName).join(', ')) : 'никому не назначена'}${s.note ? ' · ' + esc(s.note) : ''}</div></div><div class="eco-actions"><button class="btn btn-sm" onclick="ecoEditScheme(${Number(s.id)})">Изменить</button><button class="btn btn-sm" onclick="ecoDeleteScheme(${Number(s.id)})">Удалить</button></div></div><ul class="eco-lines">${(s.lines || []).map(l => `<li>${esc(ecoLineText(l))}</li>`).join('')}</ul></div>`).join('');
+    const aRows = _eco.assignments.map(a => `<tr><td>${esc(staffName(a.staff_yc_id))}</td><td>${esc((ecoSchemeById(a.scheme_id) || {}).title || `схема #${a.scheme_id}`)}</td><td>${esc(a.valid_from || '…')} — ${esc(a.valid_to || '…')}</td><td>${esc(a.note || '')}</td><td><div class="eco-actions"><button class="btn btn-sm" onclick="ecoEditAssignment(${Number(a.id)})">Изменить</button><button class="btn btn-sm" onclick="ecoDeleteAssignment(${Number(a.id)})">Удалить</button></div></td></tr>`).join('');
+    const without = ecoStaffWithoutScheme(d.staff, _eco.assignments, ecoTodayMsk());
+    el.innerHTML = `<div class="bc-head"><div><div class="bc-head-title">👩‍⚕️ Схемы оплаты</div><div class="bc-head-sub">Схема — линии «категории/услуги → процент». Услуга, названная прямо, важнее категории; категория важнее линии «остальные услуги»</div></div><button class="btn btn-sm btn-pri" onclick="ecoEditScheme(null)">+ Схема</button></div>
+      <div id="ecoSchemeForm"></div>
+      ${cards || '<div class="card"><div class="empty">Схем нет — создайте схему и назначьте её специалистам, иначе оплата врача в отчёте равна 0</div></div>'}
+      <div class="bc-head" style="margin-top:18px"><div><div class="bc-head-title">Назначение специалистам</div><div class="bc-head-sub">Одна схема — любому числу специалистов; периоды одного специалиста не пересекаются</div></div><button class="btn btn-sm btn-pri" onclick="ecoEditAssignment(null)">+ Назначить</button></div>
+      <div id="ecoAssignForm"></div>
+      <div class="card eco-card-flush"><div class="tw"><table class="mtbl eco-tbl"><thead><tr><th>Сотрудник</th><th>Схема</th><th>Период</th><th>Заметка</th><th></th></tr></thead><tbody>${aRows || '<tr><td colspan="5" class="empty">Назначений нет</td></tr>'}</tbody></table></div></div>
+      ${without.length ? `<div class="eco-kpi-sub" style="margin-top:6px">Без схемы на сегодня: ${esc(without.map(s => s.name).join(', '))} — в отчёте у них «нет правила оплаты»</div>` : ''}
       <div class="card" style="margin-top:14px"><div class="bc-head"><div class="bc-head-title">Сверка с YClients</div><div><input type="month" id="ecoPcMonth" value="${escAttr(ecoTodayMsk().slice(0, 7))}"> <button class="btn btn-sm" onclick="ecoPayrollCheck()">Сверить</button></div></div><div id="ecoPcBody" class="eco-kpi-sub">Наш расчёт оплаты по процедурам против итога «Расчёт зарплат» YClients за месяц. Ничего не пересчитывает; по одному запросу в YClients на сотрудника.</div></div>`;
   } catch (e) { if (seq === _ecoPaySeq) el.innerHTML = `<div class="empty">Ошибка: ${esc(e.message)}</div>`; }
 }
@@ -335,42 +344,115 @@ async function ecoPayrollCheck() {
     el.innerHTML = `<div class="tw"><table class="mtbl eco-tbl"><thead><tr><th>Сотрудник</th><th class="num">Визитов</th><th class="num">Наш расчёт</th><th class="num">YClients</th><th class="num">Разница</th></tr></thead><tbody>${body || '<tr><td colspan="5" class="empty">За месяц нет визитов</td></tr>'}</tbody></table></div>${r.truncated ? '<div class="eco-kpi-sub">Показаны не все сотрудники (кап запросов)</div>' : ''}`;
   } catch (e) { if (seq === _ecoPcSeq) el.textContent = 'Ошибка: ' + e.message; }
 }
-async function ecoEditRule(id) {
-  let d;
-  try { d = await ecoDicts(); } catch (e) { return notify('Ошибка: ' + e.message, 'err'); }
-  const x = id ? (_eco.rules || []).find(r => Number(r.id) === Number(id)) : { percent: 30, base: 'gross', fixed_per_visit: 0 };
-  if (!x) return notify('Правило не найдено — обновите вкладку', 'err');
-  const opt = (list, sel, label) => {
-    const items = list || [];
-    const missing = sel && !items.some(i => String(i.id) === String(sel)) ? `<option value="${escAttr(String(sel))}" selected>id ${esc(String(sel))} (нет в справочнике)</option>` : '';
-    return `<option value="">${label}</option>` + missing + items.map(i => `<option value="${escAttr(String(i.id))}" ${String(sel) === String(i.id) ? 'selected' : ''}>${esc(ecoDictLabel(i))}</option>`).join('');
-  };
-  document.getElementById('ecoRuleForm').innerHTML = `<div class="card eco-detail"><div class="eco-form">
-    <div class="fg"><label class="fl">Сотрудник</label><select id="ecoRStaff">${opt(d.staff, x.staff_yc_id, '— все —')}</select></div>
-    <div class="fg"><label class="fl">Услуга</label><select id="ecoRService">${opt(d.services, x.service_yc_id, '— любая —')}</select></div>
-    <div class="fg"><label class="fl">Категория</label><select id="ecoRCat">${opt(d.categories, x.category_yc_id, '— любая —')}</select></div>
-    <div class="fg"><label class="fl">Процент</label><input id="ecoRPct" type="text" inputmode="decimal" value="${escAttr(String(Number(x.percent)))}"></div>
-    <div class="fg"><label class="fl">База</label><select id="ecoRBase"><option value="gross" ${x.base !== 'net_of_materials' ? 'selected' : ''}>от выручки</option><option value="net_of_materials" ${x.base === 'net_of_materials' ? 'selected' : ''}>выручка − материалы</option></select></div>
-    <div class="fg"><label class="fl">Фикс за визит, ₽</label><input id="ecoRFixed" type="text" inputmode="decimal" value="${escAttr(String(Number(x.fixed_per_visit) || 0))}"></div>
-    <div class="fg"><label class="fl">Действует с</label><input id="ecoRFrom" type="date" value="${escAttr(x.valid_from || '')}"></div>
-    <div class="fg"><label class="fl">по</label><input id="ecoRTo" type="date" value="${escAttr(x.valid_to || '')}"></div>
-    <div class="fg"><label class="fl">Заметка</label><input id="ecoRNote" maxlength="500" value="${escAttr(x.note || '')}"></div>
-    </div><div class="eco-kpi-sub" style="margin-top:6px">Правило — либо на услугу, либо на категорию. Период можно не заполнять.</div>
-    <div class="eco-actions" style="margin-top:10px"><button class="btn btn-sm btn-pri" id="ecoRSave" onclick="ecoSaveRule(${id ? Number(id) : 'null'})">Сохранить</button><button class="btn btn-sm" onclick="document.getElementById('ecoRuleForm').innerHTML=''">Отмена</button></div></div>`;
+// Редактор схемы — черновик в _eco.schemeDraft; поля пишут в него по oninput, перерисовка
+// целиком только на добавление/удаление линии (иначе теряется фокус), выбор целей
+// перерисовывает один пикер.
+function ecoNewLine() { return { percent: '30', base: 'gross', mult: '', fixed: '', categories: [], services: [] }; }
+function ecoLineFromApi(l) {
+  return { percent: String(Number(l.percent)), base: l.base, mult: l.payroll_multiplier === null || l.payroll_multiplier === undefined ? '' : String(Number(l.payroll_multiplier)),
+    fixed: Number(l.fixed_per_visit) ? String(Number(l.fixed_per_visit)) : '', categories: (l.categories || []).map(Number), services: (l.services || []).map(Number) };
 }
-async function ecoSaveRule(id) {
-  const v = (i) => document.getElementById(i).value;
-  const p = ecoParseRuleForm({ staff: v('ecoRStaff'), service: v('ecoRService'), category: v('ecoRCat'), percent: v('ecoRPct'), base: v('ecoRBase'), fixed: v('ecoRFixed'), from: v('ecoRFrom'), to: v('ecoRTo'), note: v('ecoRNote') });
+function ecoEditScheme(id) {
+  const s = id ? ecoSchemeById(id) : null;
+  if (id && !s) return notify('Схема не найдена — обновите вкладку', 'err');
+  _eco.schemeDraft = { id: id ? Number(id) : null, title: s ? s.title : '', note: s ? s.note || '' : '', lines: s ? (s.lines || []).map(ecoLineFromApi) : [ecoNewLine()] };
+  ecoRenderSchemeForm();
+  const t = document.getElementById('ecoSchTitle'); if (t) t.focus();
+}
+function ecoRenderSchemeForm() {
+  const dr = _eco.schemeDraft; const box = document.getElementById('ecoSchemeForm'); if (!dr || !box) return;
+  const lines = dr.lines.map((l, i) => `<div class="card eco-line"><div class="eco-line-head"><div class="eco-strong">Линия ${i + 1} <span class="eco-kpi-sub" id="ecoLineKind-${i}">${ecoLineIsFallback(l) ? '· остальные услуги' : ''}</span></div><button class="btn btn-sm" onclick="ecoRemoveLine(${i})">Убрать</button></div>
+    <div class="eco-form">
+      <div class="fg"><label class="fl">Процент</label><input type="text" inputmode="decimal" value="${escAttr(l.percent)}" oninput="ecoLineField(${i},'percent',this.value)"></div>
+      <div class="fg"><label class="fl">База</label><select onchange="ecoLineField(${i},'base',this.value)"><option value="gross" ${l.base !== 'net_of_materials' ? 'selected' : ''}>от выручки</option><option value="net_of_materials" ${l.base === 'net_of_materials' ? 'selected' : ''}>выручка − материалы</option></select></div>
+      <div class="fg"><label class="fl">Коэффициент ФОТ</label><input type="text" inputmode="decimal" placeholder="из настроек: ${escAttr(String(_eco.salonMult))}" value="${escAttr(l.mult)}" oninput="ecoLineField(${i},'mult',this.value)"></div>
+      <div class="fg"><label class="fl">Фикс за визит, ₽</label><input type="text" inputmode="decimal" value="${escAttr(l.fixed)}" oninput="ecoLineField(${i},'fixed',this.value)"></div>
+    </div>
+    ${ecoPickerHtml(i, 'categories', 'Категории')}${ecoPickerHtml(i, 'services', 'Услуги')}</div>`).join('');
+  box.innerHTML = `<div class="card eco-detail"><div class="eco-form">
+    <div class="fg"><label class="fl">Название схемы</label><input id="ecoSchTitle" maxlength="120" value="${escAttr(dr.title)}" oninput="_eco.schemeDraft.title=this.value"></div>
+    <div class="fg"><label class="fl">Заметка</label><input maxlength="500" value="${escAttr(dr.note)}" oninput="_eco.schemeDraft.note=this.value"></div></div>
+    ${lines}
+    <div class="eco-kpi-sub" style="margin-top:8px">Приоритет: услуга, названная в линии прямо, важнее категории; категория важнее линии «остальные услуги» (линия без выбранных категорий и услуг — не больше одной). Одна услуга или категория не может стоять в двух линиях. Пустой коэффициент ФОТ — множитель из настроек.</div>
+    <div class="eco-actions" style="margin-top:10px"><button class="btn btn-sm" onclick="ecoAddLine()">+ Линия</button><button class="btn btn-sm btn-pri" id="ecoSchSave" onclick="ecoSaveScheme()">Сохранить</button><button class="btn btn-sm" onclick="ecoCancelScheme()">Отмена</button></div></div>`;
+}
+function ecoCancelScheme() { _eco.schemeDraft = null; const b = document.getElementById('ecoSchemeForm'); if (b) b.innerHTML = ''; }
+function ecoLineField(i, key, value) { const l = _eco.schemeDraft && _eco.schemeDraft.lines[i]; if (l) l[key] = value; }
+function ecoAddLine() { if (!_eco.schemeDraft) return; _eco.schemeDraft.lines.push(ecoNewLine()); ecoRenderSchemeForm(); }
+function ecoRemoveLine(i) { if (!_eco.schemeDraft) return; _eco.schemeDraft.lines.splice(i, 1); ecoRenderSchemeForm(); }
+function ecoPickerList(kind) { const d = _eco.payDicts || {}; return (kind === 'services' ? d.services : d.categories) || []; }
+function ecoPickerCatTitle(kind, x) {
+  if (kind !== 'services' || x.category_id === null || x.category_id === undefined) return '';
+  const c = ((_eco.payDicts || {}).categories || []).find(y => Number(y.id) === Number(x.category_id));
+  return c ? ` <span class="eco-kpi-sub">(${esc(c.title)})</span>` : '';
+}
+function ecoChipsHtml(i, kind) {
+  const l = _eco.schemeDraft.lines[i]; const byId = new Map(ecoPickerList(kind).map(x => [Number(x.id), x]));
+  return l[kind].map(id => `<span class="eco-chip">${esc(byId.has(id) ? ecoDictLabel(byId.get(id)) : `id ${id}`)}<button type="button" title="Убрать" onclick="ecoPickerToggle(${i},'${kind}',${id})">×</button></span>`).join('') || '<span class="eco-kpi-sub">ничего не выбрано</span>';
+}
+function ecoPickerListHtml(i, kind, q) {
+  const l = _eco.schemeDraft.lines[i]; const chosen = new Set(l[kind].map(Number)); const needle = String(q || '').trim().toLowerCase();
+  const items = ecoPickerList(kind).filter(x => !needle || ecoDictLabel(x).toLowerCase().includes(needle));
+  if (!items.length) return '<div class="eco-kpi-sub" style="padding:6px">Ничего не найдено</div>';
+  return items.map(x => `<label class="eco-pick"><input type="checkbox" ${chosen.has(Number(x.id)) ? 'checked' : ''} onchange="ecoPickerToggle(${i},'${kind}',${Number(x.id)})"> ${esc(ecoDictLabel(x))}${ecoPickerCatTitle(kind, x)}</label>`).join('');
+}
+function ecoPickerHtml(i, kind, label) {
+  return `<div class="eco-picker"><label class="fl">${label}</label><div class="eco-chips" id="ecoChips-${i}-${kind}">${ecoChipsHtml(i, kind)}</div><input type="text" placeholder="Поиск…" id="ecoPkQ-${i}-${kind}" oninput="ecoPickerFilter(${i},'${kind}',this.value)"><div class="eco-picker-list" id="ecoPk-${i}-${kind}">${ecoPickerListHtml(i, kind, '')}</div></div>`;
+}
+function ecoPickerFilter(i, kind, q) { const el = document.getElementById(`ecoPk-${i}-${kind}`); if (el) el.innerHTML = ecoPickerListHtml(i, kind, q); }
+function ecoPickerToggle(i, kind, id) {
+  const l = _eco.schemeDraft && _eco.schemeDraft.lines[i]; if (!l) return;
+  const n = Number(id);
+  l[kind] = l[kind].includes(n) ? l[kind].filter(x => x !== n) : [...l[kind], n];
+  const q = document.getElementById(`ecoPkQ-${i}-${kind}`); ecoPickerFilter(i, kind, q ? q.value : '');
+  const chips = document.getElementById(`ecoChips-${i}-${kind}`); if (chips) chips.innerHTML = ecoChipsHtml(i, kind);
+  const kindEl = document.getElementById(`ecoLineKind-${i}`); if (kindEl) kindEl.textContent = ecoLineIsFallback(l) ? '· остальные услуги' : '';
+}
+async function ecoSaveScheme() {
+  const dr = _eco.schemeDraft; if (!dr) return;
+  const p = ecoParseSchemeForm({ title: dr.title, note: dr.note, lines: dr.lines, names: ecoPayNames(_eco.payDicts || {}) });
   if (p.error) return notify(p.error, 'err');
-  const btn = document.getElementById('ecoRSave'); if (btn) btn.disabled = true;
+  const btn = document.getElementById('ecoSchSave'); if (btn) btn.disabled = true;
   try {
-    await api(id ? 'PUT' : 'POST', id ? `/api/economics/pay-rules/${Number(id)}` : '/api/economics/pay-rules', p.value);
-    _eco.report = null; notify('Правило сохранено'); ecoLoadPay();
+    await api(dr.id ? 'PUT' : 'POST', dr.id ? `/api/economics/pay-schemes/${dr.id}` : '/api/economics/pay-schemes', p.value);
+    _eco.schemeDraft = null; _eco.report = null; notify('Схема сохранена'); ecoLoadPay();
   } catch (e) { if (btn) btn.disabled = false; notify('Ошибка: ' + e.message, 'err'); }
 }
-async function ecoDeleteRule(id) {
-  if (!confirm('Удалить правило?')) return;
-  try { await api('DELETE', `/api/economics/pay-rules/${Number(id)}`); _eco.report = null; ecoLoadPay(); } catch (e) { notify('Ошибка: ' + e.message, 'err'); }
+async function ecoDeleteScheme(id) {
+  const s = ecoSchemeById(id);
+  if (s && s.assigned && s.assigned.length) return notify('Схема назначена специалистам — сначала снимите назначения', 'err');
+  if (!confirm('Удалить схему?')) return;
+  try { await api('DELETE', `/api/economics/pay-schemes/${Number(id)}`); _eco.report = null; ecoLoadPay(); } catch (e) { notify('Ошибка: ' + e.message, 'err'); }
+}
+function ecoEditAssignment(id) {
+  const d = _eco.payDicts || {};
+  const a = id ? (_eco.assignments || []).find(x => Number(x.id) === Number(id)) : { staff_yc_id: '', scheme_id: '', valid_from: '', valid_to: '', note: '' };
+  if (!a) return notify('Назначение не найдено — обновите вкладку', 'err');
+  const opt = (list, sel, label, text) => `<option value="">${label}</option>` + (sel && !list.some(i => String(i.id) === String(sel)) ? `<option value="${escAttr(String(sel))}" selected>id ${esc(String(sel))} (нет в справочнике)</option>` : '') + list.map(i => `<option value="${escAttr(String(i.id))}" ${String(sel) === String(i.id) ? 'selected' : ''}>${esc(text(i))}</option>`).join('');
+  document.getElementById('ecoAssignForm').innerHTML = `<div class="card eco-detail"><div class="eco-form">
+    <div class="fg"><label class="fl">Сотрудник</label><select id="ecoAStaff">${opt(d.staff || [], a.staff_yc_id, '— выберите —', ecoDictLabel)}</select></div>
+    <div class="fg"><label class="fl">Схема</label><select id="ecoAScheme">${opt(_eco.schemes || [], a.scheme_id, '— выберите —', s => s.title)}</select></div>
+    <div class="fg"><label class="fl">Действует с</label><input id="ecoAFrom" type="date" value="${escAttr(a.valid_from || '')}"></div>
+    <div class="fg"><label class="fl">по</label><input id="ecoATo" type="date" value="${escAttr(a.valid_to || '')}"></div>
+    <div class="fg"><label class="fl">Заметка</label><input id="ecoANote" maxlength="500" value="${escAttr(a.note || '')}"></div></div>
+    <div class="eco-kpi-sub" style="margin-top:6px">Период можно не заполнять — схема действует бессрочно.</div>
+    <div class="eco-actions" style="margin-top:10px"><button class="btn btn-sm btn-pri" id="ecoASave" onclick="ecoSaveAssignment(${id ? Number(id) : 'null'})">Сохранить</button><button class="btn btn-sm" onclick="document.getElementById('ecoAssignForm').innerHTML=''">Отмена</button></div></div>`;
+}
+async function ecoSaveAssignment(id) {
+  const v = (i) => document.getElementById(i).value;
+  const p = ecoParseAssignmentForm({ staff: v('ecoAStaff'), scheme: v('ecoAScheme'), from: v('ecoAFrom'), to: v('ecoATo'), note: v('ecoANote') });
+  if (p.error) return notify(p.error, 'err');
+  const clash = ecoAssignmentsOverlap(_eco.assignments || [], { id, staff_yc_id: p.value.staffYcId, valid_from: p.value.validFrom, valid_to: p.value.validTo });
+  if (clash.length) return notify(`Период пересекается с назначением «${(ecoSchemeById(clash[0].scheme_id) || {}).title || '#' + clash[0].scheme_id}» (${clash[0].valid_from || '…'} — ${clash[0].valid_to || '…'})`, 'err');
+  const btn = document.getElementById('ecoASave'); if (btn) btn.disabled = true;
+  try {
+    await api(id ? 'PUT' : 'POST', id ? `/api/economics/pay-assignments/${Number(id)}` : '/api/economics/pay-assignments', p.value);
+    _eco.report = null; notify('Назначение сохранено'); ecoLoadPay();
+  } catch (e) { if (btn) btn.disabled = false; notify('Ошибка: ' + e.message, 'err'); }
+}
+async function ecoDeleteAssignment(id) {
+  if (!confirm('Снять назначение? Оплата врача за визиты этого периода в отчёте станет 0.')) return;
+  try { await api('DELETE', `/api/economics/pay-assignments/${Number(id)}`); _eco.report = null; ecoLoadPay(); } catch (e) { notify('Ошибка: ' + e.message, 'err'); }
 }
 
 // ── Настройки ──
