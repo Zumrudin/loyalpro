@@ -9,7 +9,8 @@ jest.mock('./middleware/auth', () => ({
   requireRole: (...roles) => (req, res, next) => (roles.includes(req.user && req.user.role) ? next() : res.status(403).json({ error: 'Нет доступа' })),
 }));
 jest.mock('./services/economics/store', () => ({
-  listPayRules: jest.fn(), insertPayRule: jest.fn(), updatePayRule: jest.fn(), deletePayRule: jest.fn(),
+  listPaySchemes: jest.fn(), listPayAssignments: jest.fn(), paySchemeExists: jest.fn(), insertPayScheme: jest.fn(), updatePayScheme: jest.fn(), deletePayScheme: jest.fn(),
+  insertPayAssignment: jest.fn(), updatePayAssignment: jest.fn(), deletePayAssignment: jest.fn(),
   getSettings: jest.fn(), saveSettings: jest.fn(), listAccounts: jest.fn(), setPriceOverride: jest.fn(),
   insertManualCard: jest.fn(), updateManualCard: jest.fn(), deleteManualCard: jest.fn(), techCardExists: jest.fn(),
   upsertServiceTechCard: jest.fn(), clearServiceTechCard: jest.fn(), listGoods: jest.fn(), listReceipts: jest.fn(), listTechCards: jest.fn(),
@@ -25,7 +26,7 @@ const store = require('./services/economics/store');
 const report = require('./services/economics/report');
 const sync = require('./services/economics/sync');
 const router = require('./routes/economics');
-const { parsePayRule, parseSettings, parsePriceBody, parseManualCard, parsePeriodDays, parseFixedCost, parseEquipment, parseMonth } = router;
+const { parsePayScheme, parsePayAssignment, parseSettings, parsePriceBody, parseManualCard, parsePeriodDays, parseFixedCost, parseEquipment, parseMonth } = router;
 
 // Прогон запроса через настоящий router без HTTP.
 function call(method, url, { user = { role: 'owner', salonId: 1, userId: 9 }, body, query } = {}) {
@@ -40,21 +41,52 @@ function call(method, url, { user = { role: 'owner', salonId: 1, userId: 9 }, bo
   });
 }
 
-describe('parsePayRule', () => {
-  const ok = { staffYcId: 5, serviceYcId: null, categoryYcId: null, percent: 30, base: 'gross', fixedPerVisit: 0, validFrom: '2026-01-01', validTo: null, note: '' };
-  test('валидное тело', () => {
-    expect(parsePayRule(ok).value).toEqual({ staff_yc_id: 5, service_yc_id: null, category_yc_id: null, percent: 30, base: 'gross', fixed_per_visit: 0, valid_from: '2026-01-01', valid_to: null, note: '' });
+describe('parsePayScheme', () => {
+  const line = { percent: 15, base: 'gross', payrollMultiplier: null, fixedPerVisit: 0, categories: [100, 101], services: [] };
+  const ok = { title: ' Инъекции ', note: 'n', lines: [line, { ...line, categories: [], services: [10, '11', 10], base: 'net_of_materials', payrollMultiplier: '1.494', fixedPerVisit: '' }] };
+  test('валидное тело: trim названия, дедуп id, числа из строк, пустой мульт → null', () => {
+    expect(parsePayScheme(ok).value).toEqual({ title: 'Инъекции', note: 'n', lines: [
+      { percent: 15, base: 'gross', payroll_multiplier: null, fixed_per_visit: 0, categories: [100, 101], services: [] },
+      { percent: 15, base: 'net_of_materials', payroll_multiplier: 1.494, fixed_per_visit: 0, categories: [], services: [10, 11] },
+    ] });
   });
-  test('процент 0–100, база из списка, фикс ≥ 0, даты календарные, from ≤ to', () => {
-    expect(parsePayRule({ ...ok, percent: 101 }).error).toMatch(/0–100/);
-    expect(parsePayRule({ ...ok, percent: 'abc' }).error).toMatch(/0–100/);
-    expect(parsePayRule({ ...ok, base: 'net' }).error).toMatch(/база/i);
-    expect(parsePayRule({ ...ok, fixedPerVisit: -1 }).error).toMatch(/фикс/i);
-    expect(parsePayRule({ ...ok, validFrom: '2026-02-30' }).error).toMatch(/дат/i);
-    expect(parsePayRule({ ...ok, validFrom: '2026-05-01', validTo: '2026-04-01' }).error).toMatch(/период/i);
-    expect(parsePayRule({ ...ok, serviceYcId: 10, categoryYcId: 100 }).error).toMatch(/услуг.*категори|категори.*услуг/i);
-    expect(parsePayRule({ ...ok, staffYcId: 'x' }).error).toMatch(/целы/i);
-    expect(parsePayRule({ ...ok, staffYcId: 1.5 }).error).toMatch(/целы/i);
+  test('ошибки', () => {
+    expect(parsePayScheme({ ...ok, title: '' }).error).toMatch(/назван/i);
+    expect(parsePayScheme({ ...ok, title: 'x'.repeat(121) }).error).toMatch(/назван/i);
+    expect(parsePayScheme({ ...ok, lines: [] }).error).toMatch(/лини/i);
+    expect(parsePayScheme({ ...ok, lines: 'x' }).error).toMatch(/лини/i);
+    expect(parsePayScheme({ ...ok, lines: Array.from({ length: 51 }, () => line) }).error).toMatch(/1–50/);
+    expect(parsePayScheme({ ...ok, lines: [{ ...line, percent: 101 }] }).error).toMatch(/Линия 1: процент/);
+    expect(parsePayScheme({ ...ok, lines: [{ ...line, percent: '' }] }).error).toMatch(/процент/);
+    expect(parsePayScheme({ ...ok, lines: [{ ...line, base: 'net' }] }).error).toMatch(/база/i);
+    expect(parsePayScheme({ ...ok, lines: [{ ...line, payrollMultiplier: 0.9 }] }).error).toMatch(/ФОТ/);
+    expect(parsePayScheme({ ...ok, lines: [{ ...line, payrollMultiplier: 'x' }] }).error).toMatch(/ФОТ/);
+    expect(parsePayScheme({ ...ok, lines: [{ ...line, fixedPerVisit: -1 }] }).error).toMatch(/фикс/i);
+    expect(parsePayScheme({ ...ok, lines: [{ ...line, categories: 'x' }] }).error).toMatch(/категории — список/i);
+    expect(parsePayScheme({ ...ok, lines: [{ ...line, services: [0] }] }).error).toMatch(/услуги/i);
+    expect(parsePayScheme({ ...ok, lines: [line, { ...line, categories: [101] }] }).error).toMatch(/Категория #101 стоит в линиях 1 и 2/);
+    expect(parsePayScheme({ ...ok, lines: [{ ...line, categories: [], services: [5] }, { ...line, categories: [], services: [5] }] }).error).toMatch(/Услуга #5/);
+    expect(parsePayScheme({ ...ok, lines: [{ ...line, categories: [] }, { ...line, categories: [] }] }).error).toMatch(/остальные услуги/);
+  });
+  test('услуга в одной линии и её категория в другой — законно; заметка режется до 500', () => {
+    const r = parsePayScheme({ title: 't', note: 'я'.repeat(600), lines: [{ ...line, categories: [100] }, { ...line, categories: [], services: [7] }] });
+    expect(r.error).toBeUndefined();
+    expect(r.value.note).toHaveLength(500);
+  });
+});
+
+describe('parsePayAssignment', () => {
+  const ok = { staffYcId: 5, schemeId: 3, validFrom: '2026-02-01', validTo: null, note: '' };
+  test('валидное тело', () => {
+    expect(parsePayAssignment(ok).value).toEqual({ staff_yc_id: 5, scheme_id: 3, valid_from: '2026-02-01', valid_to: null, note: '' });
+    expect(parsePayAssignment({ staffYcId: '5', schemeId: '3' }).value).toEqual({ staff_yc_id: 5, scheme_id: 3, valid_from: null, valid_to: null, note: '' });
+  });
+  test('ошибки', () => {
+    expect(parsePayAssignment({ ...ok, staffYcId: null }).error).toMatch(/сотрудник/i);
+    expect(parsePayAssignment({ ...ok, staffYcId: 'abc' }).error).toMatch(/сотрудник/i);
+    expect(parsePayAssignment({ ...ok, schemeId: 0 }).error).toMatch(/схем/i);
+    expect(parsePayAssignment({ ...ok, validFrom: '2026-02-30' }).error).toMatch(/дат/i);
+    expect(parsePayAssignment({ ...ok, validFrom: '2026-05-01', validTo: '2026-04-01' }).error).toMatch(/период/i);
   });
 });
 
@@ -94,16 +126,19 @@ describe('роутер без HTTP', () => {
   beforeEach(() => { jest.clearAllMocks(); sync.isRunning.mockReturnValue(false); });
 
   test('не-owner (admin) получает 403 на любой ручке, store не вызывается', async () => {
-    const r = await call('GET', '/pay-rules', { user: { role: 'admin', salonId: 1 } });
+    const r = await call('GET', '/pay-schemes', { user: { role: 'admin', salonId: 1 } });
     expect(r.status).toBe(403);
-    expect(store.listPayRules).not.toHaveBeenCalled();
+    expect(store.listPaySchemes).not.toHaveBeenCalled();
   });
 
-  test('owner: список правил идёт со salonId из токена', async () => {
-    store.listPayRules.mockResolvedValue([{ id: 1 }]);
-    const r = await call('GET', '/pay-rules');
+  test('GET /pay-schemes: схемы с assigned и назначения, всё по salonId из токена', async () => {
+    store.listPaySchemes.mockResolvedValue([{ id: 1, title: 'A', note: null, lines: [] }, { id: 2, title: 'B', note: null, lines: [] }]);
+    store.listPayAssignments.mockResolvedValue([{ id: 7, staff_yc_id: 5, scheme_id: 1 }, { id: 8, staff_yc_id: 6, scheme_id: 1 }, { id: 9, staff_yc_id: 5, scheme_id: 1 }]);
+    const r = await call('GET', '/pay-schemes');
     expect(r.status).toBe(200);
-    expect(store.listPayRules).toHaveBeenCalledWith(1);
+    expect(store.listPaySchemes).toHaveBeenCalledWith(1);
+    expect(r.body.schemes.map(s => s.assigned)).toEqual([[5, 6], []]);
+    expect(r.body.assignments).toHaveLength(3);
   });
 
   test('PUT /settings с мусором — 400, ничего не пишется и кэш не сбрасывается', async () => {
@@ -121,24 +156,65 @@ describe('роутер без HTTP', () => {
     expect(report.invalidate).toHaveBeenCalledWith(1);
   });
 
-  test('POST /pay-rules создаёт и сбрасывает кэш; удаление чужого id — 404 без сброса', async () => {
-    store.insertPayRule.mockResolvedValue(7);
-    const body = { staffYcId: 5, percent: 30, base: 'gross' };
-    const r = await call('POST', '/pay-rules', { body });
+  test('POST /pay-schemes создаёт и сбрасывает кэш; мусор — 400 без записи', async () => {
+    store.insertPayScheme.mockResolvedValue(7);
+    const body = { title: 'A', lines: [{ percent: 30, base: 'gross', categories: [1] }] };
+    const r = await call('POST', '/pay-schemes', { body });
     expect(r).toEqual({ status: 200, body: { id: 7 } });
+    expect(store.insertPayScheme).toHaveBeenCalledWith(1, expect.objectContaining({ title: 'A' }));
     expect(report.invalidate).toHaveBeenCalledWith(1);
     report.invalidate.mockClear();
-    store.deletePayRule.mockResolvedValue(false);
-    const d = await call('DELETE', '/pay-rules/99');
-    expect(d.status).toBe(404);
-    expect(store.deletePayRule).toHaveBeenCalledWith(1, 99);
+    expect((await call('POST', '/pay-schemes', { body: { title: 'A', lines: [] } })).status).toBe(400);
     expect(report.invalidate).not.toHaveBeenCalled();
   });
 
+  test('DELETE /pay-schemes: назначена → 409, нет → 404, удалена → 200 + сброс кэша', async () => {
+    store.deletePayScheme.mockResolvedValueOnce('assigned');
+    const a = await call('DELETE', '/pay-schemes/5');
+    expect(a.status).toBe(409); expect(a.body.error).toMatch(/назначен/i);
+    store.deletePayScheme.mockResolvedValueOnce('missing');
+    expect((await call('DELETE', '/pay-schemes/5')).status).toBe(404);
+    expect(report.invalidate).not.toHaveBeenCalled();
+    store.deletePayScheme.mockResolvedValueOnce('deleted');
+    expect((await call('DELETE', '/pay-schemes/5')).status).toBe(200);
+    expect(store.deletePayScheme).toHaveBeenCalledWith(1, 5);
+    expect(report.invalidate).toHaveBeenCalledWith(1);
+  });
+
+  test('POST /pay-assignments: чужая схема — 400; пересечение периода — 400 с номером; иначе insert', async () => {
+    const body = { staffYcId: 5, schemeId: 3, validFrom: '2026-06-01', validTo: null };
+    store.paySchemeExists.mockResolvedValue(false);
+    expect((await call('POST', '/pay-assignments', { body })).status).toBe(400);
+    expect(store.insertPayAssignment).not.toHaveBeenCalled();
+    store.paySchemeExists.mockResolvedValue(true);
+    store.listPayAssignments.mockResolvedValue([{ id: 11, staff_yc_id: 5, scheme_id: 2, valid_from: '2026-01-01', valid_to: '2026-06-30' }]);
+    const clash = await call('POST', '/pay-assignments', { body });
+    expect(clash.status).toBe(400); expect(clash.body.error).toMatch(/пересека/i);
+    expect(store.insertPayAssignment).not.toHaveBeenCalled();
+    store.listPayAssignments.mockResolvedValue([{ id: 11, staff_yc_id: 5, scheme_id: 2, valid_from: '2026-01-01', valid_to: '2026-05-31' }]);
+    store.insertPayAssignment.mockResolvedValue(12);
+    const ok = await call('POST', '/pay-assignments', { body });
+    expect(ok).toEqual({ status: 200, body: { id: 12 } });
+    expect(store.insertPayAssignment).toHaveBeenCalledWith(1, { staff_yc_id: 5, scheme_id: 3, valid_from: '2026-06-01', valid_to: null, note: '' });
+    expect(report.invalidate).toHaveBeenCalledWith(1);
+  });
+
+  test('PUT /pay-assignments/:id исключает саму строку из проверки пересечения; чужой id — 404', async () => {
+    store.paySchemeExists.mockResolvedValue(true);
+    store.listPayAssignments.mockResolvedValue([{ id: 11, staff_yc_id: 5, scheme_id: 2, valid_from: '2026-01-01', valid_to: null }]);
+    store.updatePayAssignment.mockResolvedValue(true);
+    const r = await call('PUT', '/pay-assignments/11', { body: { staffYcId: 5, schemeId: 2, validFrom: '2026-02-01' } });
+    expect(r.status).toBe(200);
+    expect(store.updatePayAssignment).toHaveBeenCalledWith(1, 11, expect.objectContaining({ valid_from: '2026-02-01' }));
+    store.updatePayAssignment.mockResolvedValue(false);
+    store.listPayAssignments.mockResolvedValue([]); // иначе бессрочный кандидат пересёкся бы со строкой 11 и дал 400 раньше 404
+    expect((await call('PUT', '/pay-assignments/99', { body: { staffYcId: 5, schemeId: 2 } })).status).toBe(404);
+  });
+
   test('нечисловой :id не попадает в обработчик (404)', async () => {
-    const r = await call('DELETE', '/pay-rules/abc');
+    const r = await call('DELETE', '/pay-schemes/abc');
     expect(r.status).toBe(404);
-    expect(store.deletePayRule).not.toHaveBeenCalled();
+    expect(store.deletePayScheme).not.toHaveBeenCalled();
   });
 
   test('/services: период больше 731 дня — 400, отчёт не строится', async () => {
@@ -315,8 +391,8 @@ describe('второе ревью', () => {
   });
 });
 
-test('второе ревью: невозможная дата в правиле оплаты — 400, а не RangeError', () => {
-  expect(parsePayRule({ staffYcId: 5, percent: 30, base: 'gross', validFrom: '9999-99-99' }).error).toMatch(/дат/i);
+test('второе ревью: невозможная дата в назначении схемы оплаты — 400, а не RangeError', () => {
+  expect(parsePayAssignment({ staffYcId: 5, schemeId: 3, validFrom: '9999-99-99' }).error).toMatch(/дат/i);
   expect(parseEquipment({ name: 'A', purchasePrice: 1, purchaseDate: '2026-13-45' }).error).toMatch(/дат/i);
 });
 

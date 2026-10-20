@@ -17,10 +17,12 @@ const { createLogger } = require('../logger');
 const { resolvePeriod: resolvePeriodShared, isCalendarDate } = require('../utils/period');
 const { ycGetServiceMeta, ycGetServiceCatalog } = require('../services/yclients');
 const { buildDictionaries } = require('../services/economics/dictionaries');
+const { schemeLineConflicts, conflictText, assignmentsOverlap } = require('../services/economics/pay-rules');
 const logger = createLogger('EconomicsAPI');
 
 const MAX_PERIOD_DAYS = 731;
 const PAY_BASES = ['gross', 'net_of_materials'];
+const MAX_SCHEME_LINES = 50;
 const DRIVERS = ['minutes', 'visits'];
 
 // Безопасная проверка (общая с utils/period): '9999-99-99' раньше давал Invalid Date →
@@ -40,20 +42,51 @@ function parsePeriodDays(from, to) { return Math.round((Date.parse(to) - Date.pa
 // period=today|day|week|month|quarter|N. Мусор бросает PeriodError → 400.
 function resolvePeriod(req) { return resolvePeriodShared((req && req.query) || {}); }
 
-function parsePayRule(b) {
+function parseIdList(v, label) {
+  if (v === undefined || v === null) return { value: [] };
+  if (!Array.isArray(v)) return { error: `${label} — список` };
+  const ids = v.map(optInt);
+  if (ids.some(x => !x)) return { error: `${label} — целые положительные id` };
+  return { value: [...new Set(ids)] };
+}
+// Схема оплаты (спека 2026-10-19-economics-pay-schemes-design.md §2): линии с процентом,
+// базой, коэффициентом ФОТ (null = из настроек салона), фиксом и целями.
+function parsePayScheme(b) {
   b = b || {};
-  const staff = optInt(b.staffYcId), service = optInt(b.serviceYcId), category = optInt(b.categoryYcId);
-  if ([staff, service, category].some(Number.isNaN)) return { error: 'Идентификаторы — целые положительные числа' };
-  if (service !== null && category !== null) return { error: 'Правило либо на услугу, либо на категорию' };
-  const percent = typeof b.percent === 'number' || typeof b.percent === 'string' ? Number(b.percent) : NaN;
-  if (b.percent === '' || !Number.isFinite(percent) || percent < 0 || percent > 100) return { error: 'Процент 0–100' };
-  if (!PAY_BASES.includes(b.base)) return { error: 'База: gross или net_of_materials' };
-  const fixed = b.fixedPerVisit === undefined || b.fixedPerVisit === null || b.fixedPerVisit === '' ? 0 : Number(b.fixedPerVisit);
-  if (!Number.isFinite(fixed) || fixed < 0 || fixed > 1e7) return { error: 'Фикс за визит ≥ 0' };
+  const title = String(b.title || '').trim();
+  if (!title || title.length > 120) return { error: 'Название схемы — 1–120 символов' };
+  if (!Array.isArray(b.lines) || !b.lines.length || b.lines.length > MAX_SCHEME_LINES) return { error: `Линии — список из 1–${MAX_SCHEME_LINES}` };
+  const lines = [];
+  for (const [i, l] of b.lines.entries()) {
+    const n = i + 1;
+    if (!l || typeof l !== 'object' || Array.isArray(l)) return { error: `Линия ${n}: объект` };
+    const percent = typeof l.percent === 'number' || typeof l.percent === 'string' ? Number(l.percent) : NaN;
+    if (l.percent === '' || !Number.isFinite(percent) || percent < 0 || percent > 100) return { error: `Линия ${n}: процент 0–100` };
+    if (!PAY_BASES.includes(l.base)) return { error: `Линия ${n}: база gross или net_of_materials` };
+    let mult = null;
+    if (!(l.payrollMultiplier === undefined || l.payrollMultiplier === null || l.payrollMultiplier === '')) {
+      mult = (typeof l.payrollMultiplier === 'number' || typeof l.payrollMultiplier === 'string') ? Number(l.payrollMultiplier) : NaN;
+      if (!Number.isFinite(mult) || mult < 1 || mult > 3) return { error: `Линия ${n}: коэффициент ФОТ 1–3 (пусто — из настроек)` };
+    }
+    const fixed = l.fixedPerVisit === undefined || l.fixedPerVisit === null || l.fixedPerVisit === '' ? 0 : Number(l.fixedPerVisit);
+    if (!Number.isFinite(fixed) || fixed < 0 || fixed > 1e7) return { error: `Линия ${n}: фикс за визит ≥ 0` };
+    const cats = parseIdList(l.categories, `Линия ${n}: категории`); if (cats.error) return cats;
+    const svcs = parseIdList(l.services, `Линия ${n}: услуги`); if (svcs.error) return svcs;
+    lines.push({ percent, base: l.base, payroll_multiplier: mult, fixed_per_visit: fixed, categories: cats.value, services: svcs.value });
+  }
+  const conflicts = schemeLineConflicts(lines);
+  if (conflicts.length) return { error: conflictText(conflicts[0]) };
+  return { value: { title, note: String(b.note || '').slice(0, 500), lines } };
+}
+function parsePayAssignment(b) {
+  b = b || {};
+  const staff = optInt(b.staffYcId), scheme = optInt(b.schemeId);
+  if (!staff) return { error: 'Сотрудник — обязательное поле' };
+  if (!scheme) return { error: 'Схема — обязательное поле' };
   const vf = b.validFrom || null, vt = b.validTo || null;
   if ((vf && !isDate(vf)) || (vt && !isDate(vt))) return { error: 'Дата в формате YYYY-MM-DD' };
   if (vf && vt && vf > vt) return { error: 'Период: начало позже конца' };
-  return { value: { staff_yc_id: staff, service_yc_id: service, category_yc_id: category, percent, base: b.base, fixed_per_visit: fixed, valid_from: vf, valid_to: vt, note: String(b.note || '').slice(0, 500) } };
+  return { value: { staff_yc_id: staff, scheme_id: scheme, valid_from: vf, valid_to: vt, note: String(b.note || '').slice(0, 500) } };
 }
 
 function parseSettings(b) {
@@ -257,26 +290,64 @@ router.get('/dictionaries', async (req, res) => {
   } catch (e) { fail(res, 'dictionaries')(e); }
 });
 
-// ── правила оплаты ──
-router.get('/pay-rules', async (req, res) => { try { res.json({ rules: await store.listPayRules(req.user.salonId) }); } catch (e) { fail(res, 'pay-rules')(e); } });
-router.post('/pay-rules', async (req, res) => {
-  const p = parsePayRule(req.body); if (p.error) return res.status(400).json({ error: p.error });
-  try { const id = await store.insertPayRule(req.user.salonId, p.value); report.invalidate(req.user.salonId); res.json({ id }); } catch (e) { fail(res, 'pay-rule create')(e); }
-});
-router.put('/pay-rules/:id(\\d+)', async (req, res) => {
-  const p = parsePayRule(req.body); if (p.error) return res.status(400).json({ error: p.error });
+// ── схемы оплаты и назначения ──
+router.get('/pay-schemes', async (req, res) => {
+  const sid = req.user.salonId;
   try {
-    const ok = await store.updatePayRule(req.user.salonId, idParam(req.params.id), p.value);
-    if (!ok) return res.status(404).json({ error: 'Правило не найдено' });
-    report.invalidate(req.user.salonId); res.json({ ok: true });
-  } catch (e) { fail(res, 'pay-rule update')(e); }
+    const [schemes, assignments] = await Promise.all([store.listPaySchemes(sid), store.listPayAssignments(sid)]);
+    res.json({ schemes: schemes.map(s => ({ ...s, assigned: [...new Set(assignments.filter(a => a.scheme_id === s.id).map(a => a.staff_yc_id))] })), assignments });
+  } catch (e) { fail(res, 'pay-schemes')(e); }
 });
-router.delete('/pay-rules/:id(\\d+)', async (req, res) => {
+router.post('/pay-schemes', async (req, res) => {
+  const p = parsePayScheme(req.body); if (p.error) return res.status(400).json({ error: p.error });
+  try { const id = await store.insertPayScheme(req.user.salonId, p.value); report.invalidate(req.user.salonId); res.json({ id }); } catch (e) { fail(res, 'pay-scheme create')(e); }
+});
+router.put('/pay-schemes/:id(\\d+)', async (req, res) => {
+  const p = parsePayScheme(req.body); if (p.error) return res.status(400).json({ error: p.error });
   try {
-    const ok = await store.deletePayRule(req.user.salonId, idParam(req.params.id));
-    if (!ok) return res.status(404).json({ error: 'Правило не найдено' });
+    const ok = await store.updatePayScheme(req.user.salonId, idParam(req.params.id), p.value);
+    if (!ok) return res.status(404).json({ error: 'Схема не найдена' });
     report.invalidate(req.user.salonId); res.json({ ok: true });
-  } catch (e) { fail(res, 'pay-rule delete')(e); }
+  } catch (e) { fail(res, 'pay-scheme update')(e); }
+});
+// Удаление назначенной схемы — 409, а не каскад: оплата — деньги, обнулять расчёт по врачу молча нельзя.
+router.delete('/pay-schemes/:id(\\d+)', async (req, res) => {
+  try {
+    const r = await store.deletePayScheme(req.user.salonId, idParam(req.params.id));
+    if (r === 'assigned') return res.status(409).json({ error: 'Схема назначена специалистам — сначала снимите назначения' });
+    if (r !== 'deleted') return res.status(404).json({ error: 'Схема не найдена' });
+    report.invalidate(req.user.salonId); res.json({ ok: true });
+  } catch (e) { fail(res, 'pay-scheme delete')(e); }
+});
+async function checkAssignment(sid, v, selfId) {
+  if (!(await store.paySchemeExists(sid, v.scheme_id))) return 'Схема не найдена';
+  const clash = assignmentsOverlap(await store.listPayAssignments(sid), { ...v, id: selfId });
+  if (clash.length) return `Период пересекается с назначением #${clash[0].id} (${clash[0].valid_from || '…'} — ${clash[0].valid_to || '…'})`;
+  return null;
+}
+router.post('/pay-assignments', async (req, res) => {
+  const p = parsePayAssignment(req.body); if (p.error) return res.status(400).json({ error: p.error });
+  try {
+    const err = await checkAssignment(req.user.salonId, p.value, null); if (err) return res.status(400).json({ error: err });
+    const id = await store.insertPayAssignment(req.user.salonId, p.value); report.invalidate(req.user.salonId); res.json({ id });
+  } catch (e) { fail(res, 'pay-assignment create')(e); }
+});
+router.put('/pay-assignments/:id(\\d+)', async (req, res) => {
+  const p = parsePayAssignment(req.body); if (p.error) return res.status(400).json({ error: p.error });
+  const id = idParam(req.params.id);
+  try {
+    const err = await checkAssignment(req.user.salonId, p.value, id); if (err) return res.status(400).json({ error: err });
+    const ok = await store.updatePayAssignment(req.user.salonId, id, p.value);
+    if (!ok) return res.status(404).json({ error: 'Назначение не найдено' });
+    report.invalidate(req.user.salonId); res.json({ ok: true });
+  } catch (e) { fail(res, 'pay-assignment update')(e); }
+});
+router.delete('/pay-assignments/:id(\\d+)', async (req, res) => {
+  try {
+    const ok = await store.deletePayAssignment(req.user.salonId, idParam(req.params.id));
+    if (!ok) return res.status(404).json({ error: 'Назначение не найдено' });
+    report.invalidate(req.user.salonId); res.json({ ok: true });
+  } catch (e) { fail(res, 'pay-assignment delete')(e); }
 });
 
 // ── настройки ──
@@ -369,7 +440,8 @@ crud('equipment', { list: (s) => store.listEquipment(s), parse: parseEquipment, 
   decorate: (e) => ({ ...e, monthly: equipmentMonthly(e) }) });
 
 module.exports = router;
-module.exports.parsePayRule = parsePayRule;
+module.exports.parsePayScheme = parsePayScheme;
+module.exports.parsePayAssignment = parsePayAssignment;
 module.exports.parseSettings = parseSettings;
 module.exports.parsePriceBody = parsePriceBody;
 module.exports.parseManualCard = parseManualCard;
