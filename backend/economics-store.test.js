@@ -110,7 +110,8 @@ describe('loadPeriod', () => {
       if (/type_id = 3/.test(sql)) { expect(new Set(params[1])).toEqual(new Set([7, 8])); return [{ good_id: '7', create_date: new Date('2026-09-01T10:00:00Z'), amount: '2', cost: '100', operation_unit_type: 1 }]; }
       if (/FROM yclients_goods_catalog/.test(sql)) return [{ good_id: '7', title: 'G', unit_equals: '1', unit_actual_cost: '45' }];
       if (/FROM goods_price_overrides/.test(sql)) return [{ good_id: '8', unit_price: '9' }];
-      if (/FROM staff_pay_rules/.test(sql)) return [{ id: 1, percent: '30', base: 'gross', fixed_per_visit: '0', valid_from: null, valid_to: null, staff_yc_id: null, service_yc_id: null, category_yc_id: null }];
+      if (/FROM pay_schemes/.test(sql)) return [{ id: 1, title: 'Базовая', note: null, lines: [{ percent: 30, base: 'gross', payroll_multiplier: null, fixed_per_visit: 0, categories: [], services: [] }] }];
+      if (/FROM pay_scheme_assignments/.test(sql)) return [{ id: 1, staff_yc_id: '5', scheme_id: 1, valid_from: null, valid_to: null, note: null }];
       if (/FROM fixed_costs/.test(sql)) return [{ id: 1, category: 'rent', amount_month: '1000', month_from: '2026-01-01', month_to: null }];
       if (/FROM equipment/.test(sql)) return [{ id: 1, name: 'L', purchase_price: '100', purchase_date: '2025-01-01', useful_life_months: 60, residual_pct: '0', maintenance_monthly: '0', service_ids: [10], is_active: true }];
       return [];
@@ -131,7 +132,8 @@ describe('loadPeriod', () => {
     expect(d.overridesByGood.get(8).unit_price).toBe(9);
     expect(d.cards.get(3).title).toBe('C');
     expect(d.links[0].service_yc_id).toBe(10);
-    expect(d.payRules[0].percent).toBe(30);
+    expect(d.pay.schemes[0].lines[0].percent).toBe(30);
+    expect(d.pay.assignments[0]).toEqual({ id: 1, staff_yc_id: 5, scheme_id: 1, valid_from: null, valid_to: null, note: null });
     expect(d.settings.payroll_multiplier).toBe(1.3);
     expect(d.settings.acquiring).toEqual({ 'Расчетный счет': 1.5 });
     expect(d.fixedCosts[0].amount_month).toBe(1000);
@@ -229,5 +231,40 @@ describe('второе ревью п.2: copyFixedCosts не дублирует �
     const sql = db.query.mock.calls[0][0].replace(/\s+/g, ' ');
     expect(sql).toMatch(/NOT \(\s*fc\.month_from <= \$3::date AND \(fc\.month_to IS NULL OR fc\.month_to >= \$3::date\)\s*\)/);
     expect(db.query.mock.calls[0][1]).toEqual([1, '2026-09-01', '2026-10-01']);
+  });
+});
+
+describe('схемы оплаты: CRUD', () => {
+  beforeEach(() => jest.clearAllMocks());
+  test('insertPaySchemes пишет lines как jsonb и возвращает id', async () => {
+    db.one.mockResolvedValue({ id: 12 });
+    const lines = [{ percent: 15, base: 'gross', payroll_multiplier: null, fixed_per_visit: 0, categories: [1], services: [] }];
+    const id = await store.insertPayScheme(1, { title: 'Инъекции', note: '', lines });
+    expect(id).toBe(12);
+    const [sql, params] = db.one.mock.calls[0];
+    expect(sql).toMatch(/INSERT INTO pay_schemes/); expect(sql).toMatch(/::jsonb/);
+    expect(params).toEqual([1, 'Инъекции', '', JSON.stringify(lines)]);
+  });
+  test('deletePayScheme: назначена → "assigned" без DELETE; нет строки → "missing"; удалена → "deleted"', async () => {
+    db.oneOrNone.mockResolvedValueOnce({ n: '2' });
+    expect(await store.deletePayScheme(1, 5)).toBe('assigned');
+    expect(db.query).not.toHaveBeenCalled();
+    db.oneOrNone.mockResolvedValueOnce({ n: '0' }); db.query.mockResolvedValueOnce({ rowCount: 0 });
+    expect(await store.deletePayScheme(1, 5)).toBe('missing');
+    db.oneOrNone.mockResolvedValueOnce({ n: '0' }); db.query.mockResolvedValueOnce({ rowCount: 1 });
+    expect(await store.deletePayScheme(1, 5)).toBe('deleted');
+    expect(db.query.mock.calls[1][1]).toEqual([1, 5]);
+  });
+  test('paySchemeExists и назначения ограничены salon_id', async () => {
+    db.oneOrNone.mockResolvedValue({ id: 3 });
+    expect(await store.paySchemeExists(1, 3)).toBe(true);
+    expect(db.oneOrNone.mock.calls[0][1]).toEqual([1, 3]);
+    db.one.mockResolvedValue({ id: 9 });
+    const id = await store.insertPayAssignment(1, { staff_yc_id: 5, scheme_id: 3, valid_from: '2026-02-01', valid_to: null, note: '' });
+    expect(id).toBe(9);
+    expect(db.one.mock.calls[0][1]).toEqual([1, 5, 3, '2026-02-01', null, '']);
+    db.query.mockResolvedValue({ rowCount: 1 });
+    expect(await store.deletePayAssignment(1, 9)).toBe(true);
+    expect(db.query.mock.calls[0][1]).toEqual([1, 9]);
   });
 });
