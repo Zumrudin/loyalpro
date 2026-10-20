@@ -37,7 +37,7 @@ async function explain(label, sql, params) {
   await explain('CATALOG_SQL', S.CATALOG_SQL, [salonId, goods]);
   await explain('CAPACITY_SQL', S.CAPACITY_SQL, [salonId, from, to]);
   await explain('GAP_DAYS_SQL', S.GAP_DAYS_SQL, [salonId, from, to]);
-  for (const k of ['OVERRIDES_SQL', 'CARDS_SQL', 'LINKS_SQL', 'PAY_RULES_SQL', 'SETTINGS_SQL', 'FIXED_SQL', 'EQUIPMENT_SQL']) {
+  for (const k of ['OVERRIDES_SQL', 'CARDS_SQL', 'LINKS_SQL', 'PAY_SCHEMES_SQL', 'PAY_ASSIGNMENTS_SQL', 'SETTINGS_SQL', 'FIXED_SQL', 'EQUIPMENT_SQL']) {
     await explain(k, S[k], [salonId]);
   }
   // Холодный прогон открывает новые соединения пула (параллельные запросы) — на
@@ -54,7 +54,7 @@ async function explain(label, sql, params) {
   const bonus = d.records.reduce((a, r) => a + r.bonus_redeemed, 0);
   console.log(`loadPeriod: ${d.records.length} записей (со списаниями ${recsWithCons}, с оплатами ${recsWithPay}, бонусами списано ${Math.round(bonus)} ₽), `
     + `${d.records.reduce((a, r) => a + r.consumables.length, 0)} списаний, ${d.receiptsByGood.size} товаров с приходами, `
-    + `${d.catalogByGood.size} в каталоге, ${d.cards.size} карт, ${d.links.length} привязок, ${d.payRules.length} правил, `
+    + `${d.catalogByGood.size} в каталоге, ${d.cards.size} карт, ${d.links.length} привязок, ${d.pay.schemes.length} схем, ${d.pay.assignments.length} назначений, `
     + `мощность ${d.capacityMinutes} мин — ${ms} мс`);
   if (ms > 1000) { console.error('ПРЕВЫШЕН порог 1 с'); process.exitCode = 1; }
   await pool.end();

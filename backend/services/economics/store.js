@@ -253,10 +253,12 @@ const CATALOG_SQL = `
 const OVERRIDES_SQL = `SELECT good_id, unit_price, note FROM goods_price_overrides WHERE salon_id = $1`;
 const CARDS_SQL = `SELECT id, yc_card_id, title, items, source, synced_at, updated_at FROM tech_cards WHERE salon_id = $1`;
 const LINKS_SQL = `SELECT service_yc_id, staff_yc_id, tech_card_id, source, updated_at FROM service_tech_cards WHERE salon_id = $1`;
-const PAY_RULES_SQL = `
-  SELECT id, staff_yc_id, service_yc_id, category_yc_id, percent, base, fixed_per_visit,
-         to_char(valid_from, 'YYYY-MM-DD') AS valid_from, to_char(valid_to, 'YYYY-MM-DD') AS valid_to, note
-  FROM staff_pay_rules WHERE salon_id = $1 ORDER BY id`;
+const PAY_SCHEMES_SQL = `SELECT id, title, note, lines FROM pay_schemes WHERE salon_id = $1 ORDER BY title, id`;
+const PAY_ASSIGNMENTS_SQL = `
+  SELECT id, staff_yc_id, scheme_id, to_char(valid_from, 'YYYY-MM-DD') AS valid_from, to_char(valid_to, 'YYYY-MM-DD') AS valid_to, note
+  FROM pay_scheme_assignments WHERE salon_id = $1 ORDER BY staff_yc_id, valid_from NULLS FIRST, id`;
+function normScheme(r) { return { id: Number(r.id), title: r.title || '', note: r.note, lines: Array.isArray(r.lines) ? r.lines : [] }; }
+function normAssignment(r) { return { id: Number(r.id), staff_yc_id: toInt(r.staff_yc_id), scheme_id: Number(r.scheme_id), valid_from: r.valid_from || null, valid_to: r.valid_to || null, note: r.note === undefined ? null : r.note }; }
 const SETTINGS_SQL = `SELECT payroll_multiplier, pay_base_includes_bonuses, allocation_driver, usn_rate, acquiring FROM economics_settings WHERE salon_id = $1`;
 const FIXED_SQL = `
   SELECT id, category, title, amount_month, to_char(month_from, 'YYYY-MM-DD') AS month_from, to_char(month_to, 'YYYY-MM-DD') AS month_to, note
@@ -303,8 +305,8 @@ async function loadPeriod(salonId, from, to) {
     };
   });
 
-  const [cardRows, linkRows, payRuleRows, settingsRow, fixedRows, eqRows, capRow, overrideRows] = await Promise.all([
-    db.any(CARDS_SQL, [salonId]), db.any(LINKS_SQL, [salonId]), db.any(PAY_RULES_SQL, [salonId]),
+  const [cardRows, linkRows, schemeRows, assignmentRows, settingsRow, fixedRows, eqRows, capRow, overrideRows] = await Promise.all([
+    db.any(CARDS_SQL, [salonId]), db.any(LINKS_SQL, [salonId]), db.any(PAY_SCHEMES_SQL, [salonId]), db.any(PAY_ASSIGNMENTS_SQL, [salonId]),
     db.oneOrNone(SETTINGS_SQL, [salonId]), db.any(FIXED_SQL, [salonId]), db.any(EQUIPMENT_SQL, [salonId]),
     db.oneOrNone(CAPACITY_SQL, [salonId, from, to]), db.any(OVERRIDES_SQL, [salonId]),
   ]);
@@ -331,7 +333,7 @@ async function loadPeriod(salonId, from, to) {
 
   return {
     from, to, records, cards, links, receiptsByGood, catalogByGood, overridesByGood,
-    payRules: payRuleRows.map(r => ({ ...r, staff_yc_id: toInt(r.staff_yc_id), service_yc_id: toInt(r.service_yc_id), category_yc_id: toInt(r.category_yc_id), percent: N(r.percent), fixed_per_visit: N(r.fixed_per_visit) })),
+    pay: { schemes: schemeRows.map(normScheme), assignments: assignmentRows.map(normAssignment) },
     settings: normSettings(settingsRow),
     fixedCosts: fixedRows.map(f => ({ ...f, amount_month: N(f.amount_month) })),
     equipment: eqRows.map(e => ({ ...e, purchase_price: N(e.purchase_price), residual_pct: N(e.residual_pct), maintenance_monthly: N(e.maintenance_monthly), service_ids: Array.isArray(e.service_ids) ? e.service_ids.map(Number) : [] })),
@@ -422,18 +424,35 @@ async function listRecentServices(salonId) {
   const rows = await db.any(RECENT_SERVICES_SQL, [salonId]);
   return rows.map(r => ({ id: Number(r.id), title: r.title || '', category_id: r.category_id != null ? Number(r.category_id) : null }));
 }
-async function listPayRules(salonId) { return db.any(PAY_RULES_SQL, [salonId]); }
-async function insertPayRule(salonId, v) {
-  const r = await db.one(`INSERT INTO staff_pay_rules (salon_id, staff_yc_id, service_yc_id, category_yc_id, percent, base, fixed_per_visit, valid_from, valid_to, note)
-    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id`, [salonId, v.staff_yc_id, v.service_yc_id, v.category_yc_id, v.percent, v.base, v.fixed_per_visit, v.valid_from, v.valid_to, v.note]);
-  return r ? r.id : null;
+async function listPaySchemes(salonId) { return (await db.any(PAY_SCHEMES_SQL, [salonId])).map(normScheme); }
+async function listPayAssignments(salonId) { return (await db.any(PAY_ASSIGNMENTS_SQL, [salonId])).map(normAssignment); }
+async function paySchemeExists(salonId, id) { return !!(await db.oneOrNone('SELECT id FROM pay_schemes WHERE salon_id=$1 AND id=$2', [salonId, id])); }
+async function insertPayScheme(salonId, v) {
+  const r = await db.one(`INSERT INTO pay_schemes (salon_id, title, note, lines) VALUES ($1,$2,$3,$4::jsonb) RETURNING id`, [salonId, v.title, v.note, JSON.stringify(v.lines)]);
+  return r ? Number(r.id) : null;
 }
-async function updatePayRule(salonId, id, v) {
-  const r = await db.query(`UPDATE staff_pay_rules SET staff_yc_id=$3, service_yc_id=$4, category_yc_id=$5, percent=$6, base=$7, fixed_per_visit=$8, valid_from=$9, valid_to=$10, note=$11, updated_at=NOW()
-    WHERE salon_id=$1 AND id=$2`, [salonId, id, v.staff_yc_id, v.service_yc_id, v.category_yc_id, v.percent, v.base, v.fixed_per_visit, v.valid_from, v.valid_to, v.note]);
+async function updatePayScheme(salonId, id, v) {
+  const r = await db.query(`UPDATE pay_schemes SET title=$3, note=$4, lines=$5::jsonb, updated_at=NOW() WHERE salon_id=$1 AND id=$2`, [salonId, id, v.title, v.note, JSON.stringify(v.lines)]);
   return r.rowCount > 0;
 }
-async function deletePayRule(salonId, id) { const r = await db.query('DELETE FROM staff_pay_rules WHERE salon_id=$1 AND id=$2', [salonId, id]); return r.rowCount > 0; }
+/** 'assigned' — есть назначения (не удаляем), 'missing' — нет такой схемы, 'deleted'. */
+async function deletePayScheme(salonId, id) {
+  const c = await db.oneOrNone('SELECT count(*)::int AS n FROM pay_scheme_assignments WHERE salon_id=$1 AND scheme_id=$2', [salonId, id]);
+  if (c && Number(c.n) > 0) return 'assigned';
+  const r = await db.query('DELETE FROM pay_schemes WHERE salon_id=$1 AND id=$2', [salonId, id]);
+  return r.rowCount > 0 ? 'deleted' : 'missing';
+}
+async function insertPayAssignment(salonId, v) {
+  const r = await db.one(`INSERT INTO pay_scheme_assignments (salon_id, staff_yc_id, scheme_id, valid_from, valid_to, note) VALUES ($1,$2,$3,$4,$5,$6) RETURNING id`,
+    [salonId, v.staff_yc_id, v.scheme_id, v.valid_from, v.valid_to, v.note]);
+  return r ? Number(r.id) : null;
+}
+async function updatePayAssignment(salonId, id, v) {
+  const r = await db.query(`UPDATE pay_scheme_assignments SET staff_yc_id=$3, scheme_id=$4, valid_from=$5, valid_to=$6, note=$7, updated_at=NOW() WHERE salon_id=$1 AND id=$2`,
+    [salonId, id, v.staff_yc_id, v.scheme_id, v.valid_from, v.valid_to, v.note]);
+  return r.rowCount > 0;
+}
+async function deletePayAssignment(salonId, id) { const r = await db.query('DELETE FROM pay_scheme_assignments WHERE salon_id=$1 AND id=$2', [salonId, id]); return r.rowCount > 0; }
 async function getSettings(salonId) { return normSettings(await db.oneOrNone(SETTINGS_SQL, [salonId])); }
 async function saveSettings(salonId, v) {
   await db.query(`INSERT INTO economics_settings (salon_id, payroll_multiplier, pay_base_includes_bonuses, allocation_driver, usn_rate, acquiring, updated_at)
@@ -501,6 +520,6 @@ module.exports = { listFixedCosts, insertFixedCost, updateFixedCost, deleteFixed
   upsertCatalogGood, upsertGoodsTransaction, refreshLastReceipt, refreshAllLastReceipts, TXN_COLS,
   upsertTechCard, upsertServiceTechCard, listTechCardIdsByYc, listRecordsToLearn, RECORDS_TO_LEARN_SQL, listWriteoffGapDays, GAP_DAYS_SQL,
   loadPeriod, normSettings, DEFAULT_SETTINGS, RECORDS_SQL, CONSUMABLES_SQL, PAYMENTS_SQL, RECEIPTS_SQL, CATALOG_SQL,
-  OVERRIDES_SQL, CARDS_SQL, LINKS_SQL, PAY_RULES_SQL, SETTINGS_SQL, FIXED_SQL, EQUIPMENT_SQL, CAPACITY_SQL,
+  OVERRIDES_SQL, CARDS_SQL, LINKS_SQL, PAY_SCHEMES_SQL, PAY_ASSIGNMENTS_SQL, SETTINGS_SQL, FIXED_SQL, EQUIPMENT_SQL, CAPACITY_SQL,
   listGoods, listReceipts, setPriceOverride, listTechCards, insertManualCard, updateManualCard, deleteManualCard, techCardExists,
-  clearServiceTechCard, listDictionaryStaff, listRecentServices, DICT_STAFF_SQL, RECENT_SERVICES_SQL, listPayRules, insertPayRule, updatePayRule, deletePayRule, getSettings, saveSettings, listAccounts };
+  clearServiceTechCard, listDictionaryStaff, listRecentServices, DICT_STAFF_SQL, RECENT_SERVICES_SQL, listPaySchemes, listPayAssignments, paySchemeExists, insertPayScheme, updatePayScheme, deletePayScheme, insertPayAssignment, updatePayAssignment, deletePayAssignment, getSettings, saveSettings, listAccounts };
