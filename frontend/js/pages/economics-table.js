@@ -272,32 +272,97 @@ function ecoOptId(v, label) {
   return { value: Number(s) };
 }
 
-/** Форма правила оплаты → тело POST/PUT /pay-rules (то, что принимает parsePayRule). f — строки из полей. */
-function ecoParseRuleForm(f) {
-  const staff = ecoOptId(f.staff, 'Сотрудник'), service = ecoOptId(f.service, 'Услуга'), cat = ecoOptId(f.category, 'Категория');
-  for (const x of [staff, service, cat]) if (x.error) return { error: x.error };
-  if (service.value !== null && cat.value !== null) return { error: 'Правило либо на услугу, либо на категорию — не на обе сразу' };
-  const percent = ecoStrictNumber(f.percent);
-  if (!(percent >= 0 && percent <= 100)) return { error: 'Процент — число от 0 до 100' };
-  if (f.base !== 'gross' && f.base !== 'net_of_materials') return { error: 'Выберите базу процента' };
-  const fixedRaw = String(f.fixed === null || f.fixed === undefined ? '' : f.fixed).trim();
-  const fixed = fixedRaw === '' ? 0 : ecoStrictNumber(fixedRaw);
-  if (!(fixed >= 0 && fixed <= 1e7)) return { error: 'Фикс за визит — число от 0' };
+// ── Схемы оплаты труда (зеркало parsePayScheme / pay-rules.js бэкенда) ──
+function ecoLineIsFallback(l) { return !((l && l.services) || []).length && !((l && l.categories) || []).length; }
+/** Конфликты линий: [{kind:'service'|'category'|'fallback', id, lines:[i,j]}] — та же логика, что schemeLineConflicts на бэкенде. */
+function ecoSchemeConflicts(lines) {
+  const out = []; const seen = { service: new Map(), category: new Map() }; const fallbacks = [];
+  (lines || []).forEach((l, i) => {
+    for (const [kind, key] of [['service', 'services'], ['category', 'categories']]) {
+      for (const id of (l[key] || [])) {
+        const k = String(id); const first = seen[kind].get(k);
+        if (first === undefined) seen[kind].set(k, i);
+        else if (first !== i && !out.some(c => c.kind === kind && String(c.id) === k)) out.push({ kind, id: Number(id), lines: [first, i] });
+      }
+    }
+    if (ecoLineIsFallback(l)) fallbacks.push(i);
+  });
+  if (fallbacks.length > 1) out.push({ kind: 'fallback', id: null, lines: fallbacks.slice(0, 2) });
+  return out;
+}
+/** names: {services: Map(id→title), categories: Map(id→title)} — имена вместо «#id», когда известны. */
+function ecoSchemeConflictText(c, names) {
+  const [a, b] = c.lines.map(i => i + 1);
+  if (c.kind === 'fallback') return `Линия «остальные услуги» может быть только одна (линии ${a} и ${b})`;
+  const map = (names || {})[c.kind === 'service' ? 'services' : 'categories'];
+  const nm = map && map.get ? map.get(String(c.id)) : null;
+  return `${c.kind === 'service' ? 'Услуга' : 'Категория'} ${nm ? `«${nm}»` : `#${c.id}`} стоит в линиях ${a} и ${b} — оставьте её в одной`;
+}
+/** Форма схемы → тело POST/PUT /pay-schemes. f: {title, note, lines:[{percent, base, mult, fixed, categories:[ids], services:[ids]}], names}. */
+function ecoParseSchemeForm(f) {
+  const title = String(f.title || '').trim();
+  if (!title) return { error: 'Укажите название схемы' };
+  if (title.length > 120) return { error: 'Название — не длиннее 120 символов' };
+  const src = f.lines || [];
+  if (!src.length) return { error: 'Добавьте хотя бы одну линию' };
+  if (src.length > 50) return { error: 'Не больше 50 линий' };
+  const ids = (arr) => [...new Set((arr || []).map(x => Number(x)).filter(x => Number.isInteger(x) && x > 0))];
+  const lines = [];
+  for (const [i, l] of src.entries()) {
+    const n = i + 1;
+    const percent = ecoStrictNumber(l.percent);
+    if (!(percent >= 0 && percent <= 100)) return { error: `Линия ${n}: процент — число от 0 до 100` };
+    if (l.base !== 'gross' && l.base !== 'net_of_materials') return { error: `Линия ${n}: выберите базу` };
+    const multRaw = String(l.mult === null || l.mult === undefined ? '' : l.mult).trim();
+    const mult = multRaw === '' ? null : ecoStrictNumber(multRaw);
+    if (mult !== null && !(mult >= 1 && mult <= 3)) return { error: `Линия ${n}: коэффициент ФОТ — от 1 до 3 (пусто — из настроек)` };
+    const fixedRaw = String(l.fixed === null || l.fixed === undefined ? '' : l.fixed).trim();
+    const fixed = fixedRaw === '' ? 0 : ecoStrictNumber(fixedRaw);
+    if (!(fixed >= 0 && fixed <= 1e7)) return { error: `Линия ${n}: фикс за визит — число от 0` };
+    lines.push({ percent, base: l.base, payrollMultiplier: mult, fixedPerVisit: fixed, categories: ids(l.categories), services: ids(l.services) });
+  }
+  const c = ecoSchemeConflicts(lines);
+  if (c.length) return { error: ecoSchemeConflictText(c[0], f.names) };
+  const note = String(f.note || '').trim();
+  if (note.length > 500) return { error: 'Заметка — не длиннее 500 символов' };
+  return { value: { title, note, lines } };
+}
+/** Подпись линии в карточке схемы (линия в форме API: payroll_multiplier, fixed_per_visit). */
+function ecoLineText(l) {
+  const parts = [`${ecoNum(Number(l.percent), Number.isInteger(Number(l.percent)) ? 0 : 2)} % ${l.base === 'net_of_materials' ? 'от выручки − материалы' : 'от выручки'}`];
+  const m = Number(l.payroll_multiplier); if (m > 0) parts.push(`ФОТ ×${ecoNum(m, 3).replace(/,?0+$/, '')}`);
+  const f = Number(l.fixed_per_visit); if (f > 0) parts.push(`фикс ${ecoMoney(f)}`);
+  const nc = (l.categories || []).length, ns = (l.services || []).length; const scope = [];
+  if (nc) scope.push(`${nc} ${ecoPlural(nc, 'категория', 'категории', 'категорий')}`);
+  if (ns) scope.push(`${ns} ${ecoPlural(ns, 'услуга', 'услуги', 'услуг')}`);
+  parts.push(scope.length ? scope.join(', ') : 'остальные услуги');
+  return parts.join(' · ');
+}
+/** Форма назначения → тело POST/PUT /pay-assignments. */
+function ecoParseAssignmentForm(f) {
+  const staff = ecoOptId(f.staff, 'Сотрудник'); if (staff.error) return staff;
+  if (staff.value === null) return { error: 'Выберите сотрудника' };
+  const scheme = ecoOptId(f.scheme, 'Схема'); if (scheme.error) return scheme;
+  if (scheme.value === null) return { error: 'Выберите схему' };
   const from = String(f.from || '').trim() || null, to = String(f.to || '').trim() || null;
   if ((from && !ecoIsDate(from)) || (to && !ecoIsDate(to))) return { error: 'Неверная дата' };
   if (from && to && from > to) return { error: 'Период: начало позже конца' };
   const note = String(f.note || '').trim();
   if (note.length > 500) return { error: 'Заметка — не длиннее 500 символов' };
-  return { value: { staffYcId: staff.value, serviceYcId: service.value, categoryYcId: cat.value, percent, base: f.base, fixedPerVisit: fixed, validFrom: from, validTo: to, note } };
+  return { value: { staffYcId: staff.value, schemeId: scheme.value, validFrom: from, validTo: to, note } };
 }
-
-/** Область правила как пары [тип, id] для подписи (имена подставляет страница). Пусто — «салон по умолчанию». */
-function ecoRuleScopeParts(r) {
-  const out = [];
-  if (r.staff_yc_id) out.push(['сотрудник', r.staff_yc_id]);
-  if (r.service_yc_id) out.push(['услуга', r.service_yc_id]);
-  if (r.category_yc_id) out.push(['категория', r.category_yc_id]);
-  return out;
+/** Назначения того же сотрудника с пересекающимся периодом (NULL — бесконечность); cand.id исключается. */
+function ecoAssignmentsOverlap(existing, cand) {
+  const d = (v) => (v ? String(v).slice(0, 10) : null);
+  const from = d(cand.valid_from) || '0000-00-00', to = d(cand.valid_to) || '9999-12-31';
+  return (existing || []).filter(a => String(a.staff_yc_id) === String(cand.staff_yc_id) && !(cand.id !== null && cand.id !== undefined && String(a.id) === String(cand.id)))
+    .filter(a => (d(a.valid_from) || '0000-00-00') <= to && (d(a.valid_to) || '9999-12-31') >= from);
+}
+/** Активные сотрудники справочника без назначения, действующего на дату today ('YYYY-MM-DD'). */
+function ecoStaffWithoutScheme(staff, assignments, today) {
+  const d = (v) => (v ? String(v).slice(0, 10) : null);
+  const active = (a) => (!d(a.valid_from) || d(a.valid_from) <= today) && (!d(a.valid_to) || d(a.valid_to) >= today);
+  return (staff || []).filter(s => s.is_active !== false && !(assignments || []).some(a => String(a.staff_yc_id) === String(s.id) && active(a)));
 }
 
 /** Форма настроек → тело PUT /settings. f: {mult, base:'0'|'1', driver, usn, acquiring:[{account, value}]}. */
