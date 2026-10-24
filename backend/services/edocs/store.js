@@ -32,6 +32,22 @@ async function saveSettings(salonId, patch) {
     [salonId, ...vals],
   );
 }
+// Поля подключения: смена любого из них PUT /settings считает поводом сбросить corp_id и проверить заново.
+const CONNECTION_COLS = ['base_url', 'api_key_enc', 'app_login', 'app_password_enc', 'app_code'];
+/**
+ * corp_id по итогам проверки ключа — только если подключение с момента чтения (`was` — строка edoc_settings,
+ * прочитанная ДО проверки) не менялось. Проверка идёт по сети, и пока она шла, PUT мог сохранить другой
+ * ключ/стенд и сбросить corp_id: безусловная запись сделала бы новый ключ «проверенным».
+ * true — записано; false — настройки изменились (corp_id не тронут).
+ */
+async function saveCorpIdIfUnchanged(salonId, corpId, was) {
+  const same = CONNECTION_COLS.map((c, i) => `${c} IS NOT DISTINCT FROM $${i + 3}`).join(' AND ');
+  const r = await db.oneOrNone(
+    `UPDATE edoc_settings SET corp_id=$2, updated_at=NOW() WHERE salon_id=$1 AND ${same} RETURNING salon_id`,
+    [salonId, corpId, ...CONNECTION_COLS.map((c) => (was && was[c] !== undefined ? was[c] : null))],
+  );
+  return !!r;
+}
 async function findSalonByWebhookSecret(secret) {
   const r = await db.oneOrNone('SELECT salon_id FROM edoc_settings WHERE webhook_secret=$1 AND enabled', [secret]);
   return r ? r.salon_id : null;
@@ -130,14 +146,17 @@ async function replaceTemplateFile(salonId, id, t) {
     return old.file_key;
   });
 }
+// Шаблон «занят», пока он есть в неотправленном/неподписанном комплекте: повтор отправки соберёт документ из
+// ТЕКУЩЕГО файла шаблона, и подмена файла, вида или включённости изменила бы то, что никто не проверял.
+const TEMPLATE_BUSY_SQL = `SELECT 1 FROM edoc_documents d JOIN edoc_packages p ON p.id=d.package_id
+  WHERE p.salon_id=$1 AND d.template_id=$2 AND p.status IN ('draft', 'sent', 'error') LIMIT 1`;
+async function isTemplateBusy(salonId, id) {
+  return !!(await db.oneOrNone(TEMPLATE_BUSY_SQL, [salonId, id]));
+}
 /** 'busy' — шаблон в неотправленном/неподписанном комплекте; 'missing'; иначе { fileKey }. */
 async function deleteTemplate(salonId, id) {
   return withTransaction(async (c) => {
-    const busy = (await c.query(
-      `SELECT 1 FROM edoc_documents d JOIN edoc_packages p ON p.id=d.package_id
-       WHERE p.salon_id=$1 AND d.template_id=$2 AND p.status IN ('draft', 'sent', 'error') LIMIT 1`,
-      [salonId, id],
-    )).rows[0];
+    const busy = (await c.query(TEMPLATE_BUSY_SQL, [salonId, id])).rows[0];
     if (busy) return 'busy';
     const r = (await c.query('DELETE FROM edoc_templates WHERE salon_id=$1 AND id=$2 RETURNING file_key', [salonId, id])).rows[0];
     return r ? { fileKey: r.file_key } : 'missing';
@@ -397,9 +416,9 @@ async function listEvents(salonId, packageId, limit = 30) {
 }
 
 module.exports = {
-  getSettings, saveSettings, findSalonByWebhookSecret, touchWebhook,
+  getSettings, saveSettings, saveCorpIdIfUnchanged, findSalonByWebhookSecret, touchWebhook,
   getCredentials, saveCredentials, deleteCredentials, markCredentialsOk, markCredentialsFail, pickCredentials, listUsersWithCredentials,
-  listTemplates, getTemplate, getTemplatesByIds, insertTemplate, updateTemplateMeta, replaceTemplateFile, deleteTemplate,
+  listTemplates, getTemplate, getTemplatesByIds, insertTemplate, updateTemplateMeta, replaceTemplateFile, isTemplateBusy, deleteTemplate,
   searchClients, getClient, getLatestCertRequest, getIdentityRow, upsertIdentity,
   getRecord, listClientVisits, actStatusesForRecords,
   insertPackage, markSent, markSendError, setEmployeeUrl, applyStatus, touchStatusCheck, getPackage, findPackageByAnyId,

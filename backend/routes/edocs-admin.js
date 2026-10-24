@@ -25,6 +25,9 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: doc
 const str = (v, max) => String(v === undefined || v === null ? '' : v).replace(CONTROL_RE, '').trim().slice(0, max);
 const idParam = (v) => (/^\d{1,9}$/.test(String(v)) ? Number(v) : null);
 const publicBase = (req) => `${req.protocol}://${req.get('host')}`;
+// Шаблон в неподписанном комплекте не удаляется, не заменяется, не выключается и не меняет вид: один ответ на всё.
+const templateBusy = (res) => res.status(409).json({ error: 'Шаблон в неподписанном комплекте — дождитесь подписи или аннулируйте комплект' });
+const subscribing = new Set();   // салоны, у которых подписка на вебхук F.Doc идёт прямо сейчас (память процесса)
 
 /**
  * Тело PUT /settings. Секреты: undefined/null — не менять, '' — очистить, строка — заменить.
@@ -129,9 +132,14 @@ router.put('/settings', async (req, res) => {
 router.post('/settings/verify', async (req, res) => {
   const sid = req.user.salonId;
   try {
-    const cfg = packages.fdocConfig(await store.getSettings(sid), { requireCorp: false, requireEnabled: false });
+    const row = await store.getSettings(sid);
+    const cfg = packages.fdocConfig(row, { requireCorp: false, requireEnabled: false });
     const corpId = await fdoc.verifyApiKey(cfg);
-    await store.saveSettings(sid, { corp_id: corpId });
+    // Проверка шла по сети: PUT /settings мог за это время сохранить другой ключ или стенд и сбросить corp_id.
+    // Пишем только если подключение осталось таким, каким читали до проверки, — иначе новый ключ стал бы «проверенным».
+    if (!(await store.saveCorpIdIfUnchanged(sid, corpId, row))) {
+      return res.status(409).json({ error: 'Настройки изменились во время проверки — проверьте ещё раз' });
+    }
     res.json({ corpId });
   } catch (e) { sendError(res, e, logger, 'edocs verify'); }
 });
@@ -146,6 +154,9 @@ router.get('/settings/tariff', async (req, res) => {
 // Подписка на вебхук SetStatus. Перед ней F.Doc должен зарегистрировать IP сервера.
 router.post('/settings/webhook', async (req, res) => {
   const sid = req.user.salonId;
+  // Два одновременных вызова создали бы по своему секрету: в БД остался бы один, а в F.Doc — другой.
+  if (subscribing.has(sid)) return res.status(409).json({ error: 'Подписка уже выполняется' });
+  subscribing.add(sid);
   try {
     const row = await store.getSettings(sid);
     const cfg = packages.fdocConfig(row, { requireEnabled: false });
@@ -154,7 +165,7 @@ router.post('/settings/webhook', async (req, res) => {
     const url = `${publicBase(req)}/fdoc/webhook/${secret}`;
     await fdoc.putWebhooks(cfg, url);
     res.json({ url });
-  } catch (e) { sendError(res, e, logger, 'edocs webhook subscribe'); }
+  } catch (e) { sendError(res, e, logger, 'edocs webhook subscribe'); } finally { subscribing.delete(sid); }
 });
 
 router.get('/users', async (req, res) => {
@@ -200,6 +211,10 @@ router.put('/templates/:id', async (req, res) => {
     if (!t) return res.status(404).json({ error: 'Шаблон не найден' });
     const v = validateTags(Object.fromEntries((t.placeholders || []).map((n) => [n, {}])), m.value.kind);
     if (!v.ok) return res.status(400).json({ error: 'Вид документа не подходит к тегам шаблона', details: v.errors });
+    // Смена вида и выключение — как удаление: пока шаблон в неподписанном комплекте, повтор отправки собрал бы
+    // документ уже по-новому. Название, порядок и включение можно всегда.
+    const risky = m.value.kind !== t.kind || (t.is_active && !m.value.is_active);
+    if (risky && await store.isTemplateBusy(sid, id)) return templateBusy(res);
     await store.updateTemplateMeta(sid, id, m.value);
     res.json({ ok: true });
   } catch (e) { sendError(res, e, logger, 'edocs template update'); }
@@ -212,6 +227,9 @@ router.post('/templates/:id/file', uploadDocx, async (req, res) => {
   try {
     const t = await store.getTemplate(sid, id);
     if (!t) return res.status(404).json({ error: 'Шаблон не найден' });
+    // Замена меняет текст, из которого повтор отправки соберёт документ комплекта, и удаляет прежний файл.
+    // Проверяем до разбора и загрузки: отказ не должен оставлять в S3 лишний файл.
+    if (await store.isTemplateBusy(sid, id)) return templateBusy(res);
     const v = validateTags(docx.inspect(req.file.buffer), t.kind);
     if (!v.ok) return res.status(400).json({ error: 'Шаблон не прошёл проверку', details: v.errors });
     const key = `edocs/${sid}/templates/${crypto.randomUUID()}.docx`;
@@ -236,7 +254,7 @@ router.delete('/templates/:id', async (req, res) => {
   if (!id) return res.status(404).json({ error: 'Шаблон не найден' });
   try {
     const r = await store.deleteTemplate(req.user.salonId, id);
-    if (r === 'busy') return res.status(409).json({ error: 'Шаблон в неподписанном комплекте — дождитесь подписи или аннулируйте комплект' });
+    if (r === 'busy') return templateBusy(res);
     if (r === 'missing') return res.status(404).json({ error: 'Шаблон не найден' });
     await s3.deleteObjects([r.fileKey]).catch((e) => logger.warn(`edocs template file ${r.fileKey}: ${e.message}`));
     res.json({ ok: true });

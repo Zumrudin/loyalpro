@@ -55,6 +55,21 @@ async function run(client, { salonId = 1 } = {}) {
   ok('findSalonByWebhookSecret', (await store.findSalonByWebhookSecret(secret)) === salonId);
   await store.touchWebhook(salonId);
 
+  // corp_id по итогам проверки ключа пишется условно: пока проверка шла по сети, PUT мог сменить подключение.
+  const was = await store.getSettings(salonId);
+  ok('saveCorpIdIfUnchanged: подключение не менялось (NULL = NULL тоже «то же») → записано',
+    (await store.saveCorpIdIfUnchanged(salonId, 'C2', was)) === true && (await store.getSettings(salonId)).corp_id === 'C2');
+  ok('saveCorpIdIfUnchanged: чужой салон → false', (await store.saveCorpIdIfUnchanged(-1, 'CX', was)) === false);
+  for (const [label, patch] of [['ключ API', { api_key_enc: 'v1:n:e:w' }], ['стенд', { base_url: 'https://other.fdoc.ru' }],
+    ['логин приложения', { app_login: 'other' }], ['пароль приложения', { app_password_enc: 'v1:p:p:p' }], ['код приложения', { app_code: 'other' }]]) {
+    await store.saveSettings(salonId, { ...patch, corp_id: null });   // «PUT во время проверки»: подключение сменилось, corp_id сброшен
+    ok(`saveCorpIdIfUnchanged: сменился ${label} → не записано, corp_id пуст`,
+      (await store.saveCorpIdIfUnchanged(salonId, 'C-OLD', was)) === false && (await store.getSettings(salonId)).corp_id === null);
+    await store.saveSettings(salonId, { ...Object.fromEntries(Object.keys(patch).map((k) => [k, was[k]])), corp_id: 'C1' });
+  }
+  await store.saveSettings(salonId, { unsign_days: 30, requisites: { city: 'Казань' } });   // правка, не касающаяся подключения
+  ok('saveCorpIdIfUnchanged: правка реквизитов и срока подписания проверку не ломает', (await store.saveCorpIdIfUnchanged(salonId, 'C1', was)) === true);
+
   // Чужой салон — несуществующий id: ни одна проверка ниже не вставляет строк с ним (только
   // UPDATE/SELECT и INSERT, упирающийся в конфликт), поэтому внешние ключи не мешают.
   const otherSalon = -1;
@@ -99,6 +114,9 @@ async function run(client, { salonId = 1 } = {}) {
   const pkgId = crypto.randomUUID(), d1 = crypto.randomUUID();
   await store.insertPackage({ id: pkgId, salon_id: salonId, client_id: rec.client_id, record_id: rec.id, kind: 'act', title: 'Smoke акт', payload: { templateIds: [aId] }, sent_by: u.id },
     [{ id: d1, template_id: aId, title: 'Smoke акт', file_name: 'Smoke.docx', sort_order: 0 }]);
+  ok('isTemplateBusy: шаблон в неподписанном комплекте', (await store.isTemplateBusy(salonId, aId)) === true);
+  ok('isTemplateBusy: шаблон вне комплектов', (await store.isTemplateBusy(salonId, tId)) === false);
+  ok('isTemplateBusy: чужой салон', (await store.isTemplateBusy(otherSalon, aId)) === false);
   ok('deleteTemplate занятого → busy', (await store.deleteTemplate(salonId, aId)) === 'busy');
   await store.markSendError(salonId, pkgId, 'smoke error');
   ok('markSent из черновика → true', (await store.markSent(salonId, pkgId, { employeeUrl: 'https://demo.fdoc.ru/x', userId: u.id })) === true);
@@ -122,6 +140,7 @@ async function run(client, { salonId = 1 } = {}) {
   ok('applyStatus sent → signed → true', (await store.applyStatus(salonId, pkgId, statusUpd('signed', 'SIGNED', signedIso))) === true);
   pk = await store.getPackage(salonId, pkgId);
   ok('applyStatus', pk.status === 'signed' && !!pk.signed_at && !!pk.last_status_check_at, pk);
+  ok('isTemplateBusy: комплект подписан — шаблон свободен', (await store.isTemplateBusy(salonId, aId)) === false);
   ok('markSent подписанного → false', (await store.markSent(salonId, pkgId, { userId: u.id })) === false);
   pk = await store.getPackage(salonId, pkgId);
   ok('markSent подписанного: статус не откатился, ссылка без нового значения не стёрта', pk.status === 'signed' && pk.employee_url === 'https://demo.fdoc.ru/again', { status: pk.status, employee_url: pk.employee_url });
