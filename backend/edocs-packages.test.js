@@ -175,6 +175,21 @@ describe('send', () => {
     await expect(pk.send({ salonId: 1, userId: 4, clientId: 52, templateIds: [11], recordId: 30252 })).rejects.toMatchObject({ status: 404 });
   });
 
+  test('акт без врача — 409 act_no_doctor, без даты визита — 409 act_no_date; должность врача не обязательна', async () => {
+    const act = { salonId: 1, userId: 4, clientId: 52, templateIds: [11], recordId: 30252 };
+    store.getRecord.mockResolvedValueOnce({ ...RECORD, staff: { name: '  ', position: { title: 'Врач-косметолог' } } });
+    await expect(pk.send(act)).rejects.toMatchObject({ code: 'act_no_doctor', status: 409, message: 'В визите не указан врач — укажите исполнителя в YClients и повторите' });
+    store.getRecord.mockResolvedValueOnce({ ...RECORD, staff: null });
+    await expect(pk.send(act)).rejects.toMatchObject({ code: 'act_no_doctor', status: 409 });
+    store.getRecord.mockResolvedValueOnce({ ...RECORD, visit_date: null });
+    await expect(pk.send(act)).rejects.toMatchObject({ code: 'act_no_date', status: 409, message: 'У визита нет даты' });
+    expect(store.insertPackage).not.toHaveBeenCalled();
+    expect(fdoc.sendPackage).not.toHaveBeenCalled();
+    store.getRecord.mockResolvedValueOnce({ ...RECORD, staff: { name: 'Гаджиева Пери' } });
+    await pk.send(act);
+    expect(store.insertPackage.mock.calls[0][0].payload.act).toMatchObject({ doctor_name: 'Гаджиева Пери', doctor_position: '' });
+  });
+
   test('демо-стенд: отправка только на тестовые номера; боевой стенд — без ограничения', async () => {
     store.getIdentityRow.mockResolvedValue({ ...IDENTITY, phone: '79001112233' });
     await expect(pk.send({ salonId: 1, userId: 4, clientId: 52, templateIds: [10] })).rejects.toMatchObject({ code: 'demo_phone_blocked', status: 409 });

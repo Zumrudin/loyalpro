@@ -90,10 +90,14 @@ async function prepare(input, { needFdoc = true, allowMissing = false } = {}) {
     record = await store.getRecord(salonId, input.recordId);
     if (!record || record.client_id !== client.id) throw new EdocsError('not_found', 'Визит не найден у этого пациента', 404);
     if (record.attendance !== '1' || record.deleted) throw new EdocsError('act_visit_not_done', 'Акт оформляется только по состоявшемуся визиту', 409);
+    // Врач и дата визита — обязательные реквизиты акта: без них пациент подписал бы акт с пропуском
+    // «________». Должность врача не обязательна.
+    const doctor = doctorOf(record.staff);
+    if (!doctor.name) throw new EdocsError('act_no_doctor', 'В визите не указан врач — укажите исполнителя в YClients и повторите', 409);
+    if (!record.visit_date) throw new EdocsError('act_no_date', 'У визита нет даты', 409);
     const lines = input.actLines ? normalizeLines(input.actLines) : { value: linesFromRecord(record.services) };
     if (lines.error) throw new EdocsError('bad_act_lines', lines.error, 400);
     if (!lines.value.length) throw new EdocsError('bad_act_lines', 'В акте нет ни одной строки', 400);
-    const doctor = doctorOf(record.staff);
     act = {
       act_no: String(record.yclients_record_id || record.id), visit_date: record.visit_date,
       doctor_name: doctor.name, doctor_position: doctor.position, lines: lines.value,
