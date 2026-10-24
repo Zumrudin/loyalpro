@@ -1,5 +1,5 @@
-// «📄 Документы»: чистые помощники edocs-helpers.js и паритет справочников с бэкендом.
-// (Задача 14 плана заменит файл итоговой версией с проверками страницы и разметки.)
+// «📄 Документы» (edocs-helpers.js + edocs.js): общая глобальная область, чистые помощники,
+// разметка ↔ скрипт, паритет справочников с бэкендом.
 // Запуск: node --test frontend/js/pages/edocs.test.js
 const { test } = require('node:test');
 const assert = require('node:assert');
@@ -19,11 +19,11 @@ function run(ctx, file, src) { vm.runInContext(src !== undefined ? src : fs.read
 const plain = (x) => JSON.parse(JSON.stringify(x));
 
 const ctx = browserContext();
-for (const f of ['js/core/utils.js', 'js/core/api.js', 'js/pages/edocs-helpers.js']) run(ctx, f, fs.readFileSync(path.join(FRONT, f), 'utf8'));
+for (const f of ['js/core/utils.js', 'js/core/api.js', 'js/pages/edocs-helpers.js', 'js/pages/edocs.js']) run(ctx, f, fs.readFileSync(path.join(FRONT, f), 'utf8'));
 const k = (name) => vm.runInContext(name, ctx);
 
-test('edocs-helpers.js грузится в одну область с core', () => {
-  for (const name of ['edParseTail', 'edActTotals', 'edCollectActLines', 'edIdentityBody', 'edMissingText', 'edStatusInfo']) {
+test('edocs-helpers.js и edocs.js грузятся в одну область с core', () => {
+  for (const name of ['loadEdocs', 'edocsOnHashArg', 'edGo', 'edStopPolling', 'edRenderClientBlock', 'edDecorateRecords', 'edParseTail', 'edActTotals', 'edOpenMe']) {
     assert.strictEqual(typeof ctx[name], 'function', `${name} не определена`);
   }
 });
@@ -82,6 +82,55 @@ test('форматы: дата, деньги, телефон', () => {
   assert.strictEqual(k('edStatusInfo')('signed').cls, 'bg');
   assert.strictEqual(k('edIsFinal')('annulled'), true);
   assert.strictEqual(k('edIsFinal')('sent'), false);
+});
+
+// ── все скрипты index.html одной областью ──
+function indexScripts() {
+  const html = fs.readFileSync(path.join(FRONT, 'index.html'), 'utf8');
+  const out = [];
+  const re = /<script\b([^>]*)>([\s\S]*?)<\/script>/g;
+  let m;
+  while ((m = re.exec(html))) {
+    const src = /\bsrc="([^"]+)"/.exec(m[1]);
+    if (src) {
+      if (/^https?:|^\/\//.test(src[1]) || src[1].startsWith('vendor/')) continue;
+      out.push({ name: src[1].replace(/\?.*$/, ''), code: fs.readFileSync(path.join(FRONT, src[1].replace(/\?.*$/, '')), 'utf8') });
+    } else if (m[2].trim()) out.push({ name: 'index.html (inline)', code: m[2] });
+  }
+  return out;
+}
+
+test('все скрипты index.html грузятся в одну область без SyntaxError; edocs подключён после помощников', () => {
+  const scripts = indexScripts();
+  const names = scripts.map((s) => s.name);
+  assert.ok(names.indexOf('js/pages/edocs-helpers.js') >= 0 && names.indexOf('js/pages/edocs.js') > names.indexOf('js/pages/edocs-helpers.js'));
+  const all = browserContext();
+  const bad = [];
+  for (const s of scripts) { try { run(all, s.name, s.code); } catch (e) { if (e && e.name === 'SyntaxError') bad.push(`${s.name}: ${e.message}`); } }
+  assert.deepStrictEqual(bad, []);
+});
+
+test('id разметки: каждый getElementById edocs.js есть в index.html или рисуется скриптом', () => {
+  const html = fs.readFileSync(path.join(FRONT, 'index.html'), 'utf8');
+  const src = fs.readFileSync(path.join(__dirname, 'edocs.js'), 'utf8');
+  const ids = new Set([...src.matchAll(/getElementById\('([A-Za-z0-9_-]+)'\)/g)].map((m) => m[1]));
+  // Есть в разметке index.html или написан литералом id="…" в самом скрипте (рисует скрипт).
+  const missing = [...ids].filter((id) => !html.includes(`id="${id}"`) && !src.includes(`id="${id}"`));
+  assert.ok(ids.size >= 15, `getElementById не нашлись (${ids.size}) — регулярка устарела`);
+  assert.deepStrictEqual(missing, []);
+});
+
+test('инлайн-обработчики edocs.js и разметки страницы ссылаются на существующие функции', () => {
+  const html = fs.readFileSync(path.join(FRONT, 'index.html'), 'utf8');
+  const from = html.indexOf('id="page-edocs"');
+  const region = html.slice(from, html.indexOf('id="page-economics"', from)) + html.slice(html.indexOf('id="edMeModal"'), html.indexOf('id="notif"'));
+  const script = fs.readFileSync(path.join(__dirname, 'edocs.js'), 'utf8');
+  const re = /on(?:click|change|input)=\\?"(?:if\(event\.target===this\))?(?:event\.preventDefault\(\);)?([A-Za-z_]+)\(/g;
+  const called = new Set([...region.matchAll(re), ...script.matchAll(re)].map((m) => m[1]));
+  assert.ok(called.size >= 25, `обработчики не нашлись (${called.size}) — регулярка устарела`);
+  const builtin = new Set(['closeModal', 'openModal']);
+  const missing = [...called].filter((n) => !builtin.has(n) && typeof ctx[n] !== 'function');
+  assert.deepStrictEqual(missing, []);
 });
 
 test('паритет справочников фронта с бэкендом', () => {

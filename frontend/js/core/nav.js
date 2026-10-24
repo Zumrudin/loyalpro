@@ -43,6 +43,8 @@ function navTo(p, opts) {
   // Живой опрос чата жив только на своей странице — гасим при любом переходе
   // (страница «Чат» перезапустит его через loadChat).
   if (typeof stopChatPolling === 'function') stopChatPolling();
+  // Опрос статусов «Документов» жив только на своей странице.
+  if (typeof edStopPolling === 'function') edStopPolling();
   document.querySelectorAll('.tn').forEach(n => n.classList.remove('active'));
   // Генератор справки — под-страница раздела «Справки»: держим его пункт активным.
   const highlight = (p === 'medical-cert') ? 'cert-requests' : p;
@@ -80,6 +82,7 @@ function navTo(p, opts) {
   if (p === 'knowledge-base') loadKnowledgeBase();
   if (p === 'agent-services') loadAgentServices();
   if (p === 'economics')      loadEconomics();
+  if (p === 'edocs')          loadEdocs();
 }
 
 // ── ROLE-BASED NAV ──
@@ -179,9 +182,10 @@ window.addEventListener('hashchange', () => {
   const arg = rest.length ? decodeURIComponent(rest.join('/')) : null;
   if (!page) return;
   if (page === _navPage) {
-    // Тот же раздел — сменился только хвост. Хвост есть у чата и у дашборда.
+    // Тот же раздел — сменился только хвост. Хвост есть у чата, дашборда и «Документов».
     if (page === 'dashboard' && typeof dashboardOnHashArg === 'function') dashboardOnHashArg(arg);
     if (page === 'chat' && typeof chatOnHashArg === 'function') chatOnHashArg(arg);
+    if (page === 'edocs' && typeof edocsOnHashArg === 'function') edocsOnHashArg(arg);
     return;
   }
   if (!document.getElementById('page-' + page) || !_navAllowed(page)) {
@@ -198,6 +202,7 @@ window.addEventListener('hashchange', () => {
 
 function showLogin() {
   if (typeof vdStop === 'function') vdStop();
+  if (typeof edStopPolling === 'function') edStopPolling();
   document.getElementById('agent-model-notice')?.remove();
   localStorage.removeItem('lp_tk');
   document.getElementById('loginScreen').style.display = 'flex';

@@ -21,9 +21,9 @@
 <script src="js/core/api.js"></script>
 <script src="js/core/theme.js"></script>
 <script src="js/core/auth.js?v=2026-06-02a"></script>
-<script src="js/core/nav.js?v=2026-10-19-eco"></script>
+<script src="js/core/nav.js?v=2026-10-24-edocs"></script>
 <link rel="stylesheet" href="css/base.css?v=2026-08-10-mobile">
-<link rel="stylesheet" href="css/features.css?v=2026-10-19-eco7-notify1">
+<link rel="stylesheet" href="css/features.css?v=2026-10-24-edocs">
 </head>
 <body>
 
@@ -108,6 +108,7 @@
       <div class="tn" data-p="care" data-roles="owner,admin" onclick="nav(this)">💚 Забота</div>
       <div class="tn" data-p="chat" data-roles="owner,admin,admin_cashier" onclick="nav(this)">💬 Чат</div>
       <div class="tn" data-p="cert-requests" data-roles="owner,admin,specialist,admin_cashier" onclick="nav(this)">Справки</div>
+      <div class="tn" data-p="edocs" data-roles="owner,admin,admin_cashier" onclick="nav(this)">📄 Документы</div>
       <div class="tn" data-p="home-care" data-roles="owner,admin,specialist,admin_cashier" onclick="nav(this)">Уход</div>
       <div class="tn" data-p="patient-portfolio" data-roles="owner,admin,specialist,admin_cashier" onclick="nav(this)">📷 Фото-кейсы</div>
       <div class="tn" data-p="settings" data-roles="owner,admin" onclick="nav(this)">Настройки</div>
@@ -153,6 +154,7 @@
       <div class="tn" data-p="care" data-roles="owner,admin" onclick="nav(this)">💚 Забота</div>
       <div class="tn" data-p="chat" data-roles="owner,admin,admin_cashier" onclick="nav(this)">💬 Чат</div>
       <div class="tn" data-p="cert-requests" data-roles="owner,admin,specialist,admin_cashier" onclick="nav(this)">Справки</div>
+      <div class="tn" data-p="edocs" data-roles="owner,admin,admin_cashier" onclick="nav(this)">📄 Документы</div>
       <div class="tn" data-p="home-care" data-roles="owner,admin,specialist,admin_cashier" onclick="nav(this)">Уход</div>
       <div class="tn" data-p="patient-portfolio" data-roles="owner,admin,specialist,admin_cashier" onclick="nav(this)">📷 Фото-кейсы</div>
       <div class="tn" data-p="settings" data-roles="owner,admin" onclick="nav(this)">Настройки</div>
@@ -1999,6 +2001,29 @@
       <div id="agent-services-root"></div>
     </div>
 
+    <div class="page" id="page-edocs">
+      <div class="bc-head">
+        <div>
+          <div class="bc-head-title">📄 Документы</div>
+          <div class="bc-head-sub">Электронное подписание с пациентами через F.Doc</div>
+        </div>
+        <div class="ed-head-actions">
+          <span id="edMeStatus" class="ed-me"></span>
+          <button class="btn btn-sec btn-sm" onclick="edOpenMe()">Мой F.Doc</button>
+        </div>
+      </div>
+      <div class="tabs ed-tabs">
+        <button class="tab active" id="edTabBtn-list" onclick="edGo('')">Комплекты</button>
+        <button class="tab" id="edTabBtn-new" onclick="edGo('new')">Оформить</button>
+        <button class="tab" id="edTabBtn-settings" onclick="edGo('settings')">Настройки</button>
+      </div>
+      <div id="edNotice"></div>
+      <div id="edView-list"></div>
+      <div id="edView-new" style="display:none"></div>
+      <div id="edView-package" style="display:none"></div>
+      <div id="edView-settings" style="display:none"></div>
+    </div>
+
     <div class="page" id="page-economics">
       <div class="bc-head">
         <div>
@@ -2259,6 +2284,20 @@
       <button class="btn btn-pri" onclick="submitBonus(1)">+ Начислить</button>
       <button class="btn btn-sec btn-dng" onclick="submitBonus(-1)">− Списать</button>
       <button class="btn btn-sec" onclick="closeModal('bonusModal')">Отмена</button>
+    </div>
+  </div>
+</div>
+
+<div class="ov" id="edMeModal" onclick="if(event.target===this)closeModal('edMeModal')">
+  <div class="modal">
+    <div class="mh"><div class="mt">Мой F.Doc</div><button class="mc" onclick="closeModal('edMeModal')">✕</button></div>
+    <div class="ed-sub" id="edMeInfo" style="margin-bottom:12px"></div>
+    <div class="fg"><label class="fl" for="edMeLogin">Логин F.Doc</label><input type="text" id="edMeLogin" autocomplete="username"></div>
+    <div class="fg"><label class="fl" for="edMePassword">Пароль F.Doc</label><input type="password" id="edMePassword" autocomplete="current-password"></div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      <button class="btn btn-pri" onclick="edSaveMe()">Проверить и сохранить</button>
+      <button class="btn btn-sec btn-dng" onclick="edDeleteMe()">Отключить</button>
+      <button class="btn btn-sec" onclick="closeModal('edMeModal')">Закрыть</button>
     </div>
   </div>
 </div>
@@ -2756,6 +2795,8 @@ function fireConfetti() {
 <script src="js/pages/economics.js?v=2026-10-19e"></script>
 <script src="js/pages/medical-cert.js?v=2026-06-19"></script>
 <script src="js/pages/cert-requests.js?v=2026-06-19b"></script>
+<script src="js/pages/edocs-helpers.js?v=2026-10-24a"></script>
+<script src="js/pages/edocs.js?v=2026-10-24a"></script>
 <script src="js/pages/medical-cert-coords-transform.js?v=2026-06-17b"></script>
 <script src="js/pages/medical-cert-coords-editor.js?v=2026-06-17b"></script>
 <script src="js/pages/kb-markdown.js?v=2026-07-17-kbimg2"></script>
