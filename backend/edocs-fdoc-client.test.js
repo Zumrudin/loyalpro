@@ -169,6 +169,19 @@ describe('forget', () => {
     gates[1].resolve(taggedResponse('NEW'));
     expect(await Promise.all([p2, p3])).toEqual([`Bearer ${accessOf('NEW')}`, `Bearer ${accessOf('NEW')}`]);
   });
+  test('во время checkCredentials: токен проверочного входа не кэшируется, следующий вызов входит заново', async () => {
+    const { c, gates, logins } = gated();
+    const check = c.checkCredentials(S, CRED);       // проверка пароля зависла на входе
+    await flush();
+    c.forget('C1', 7);
+    gates[0].resolve(taggedResponse('OLD'));         // проверка заканчивается уже после forget
+    expect(await check).toBe(true);                  // вызывающему результат возвращается как обычно
+    const next = c.employeeUrl(S, CRED_NEW, 'b');    // а токен проверки забыт: нужен новый вход
+    await flush();
+    expect(logins()).toHaveLength(2);
+    gates[1].resolve(taggedResponse('NEW'));
+    expect(await next).toBe(`Bearer ${accessOf('NEW')}`);
+  });
 });
 
 describe('повторы и ответы', () => {

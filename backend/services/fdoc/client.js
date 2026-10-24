@@ -163,10 +163,12 @@ function makeClient({ http = axios, now = () => Date.now(), sleep = (ms) => new 
       if (!data || !data.corpId) throw new FdocError('F.Doc: в ответе проверки ключа нет corpId', { code: 'fdoc_bad_response' });
       return String(data.corpId);
     },
-    /** Проверка логина и пароля сотрудника: вход паролем мимо кэша, токен кэшируется. */
+    /** Проверка логина и пароля сотрудника: вход паролем мимо кэша, токен кэшируется (если за это время не было forget). */
     async checkCredentials(s, cred) {
+      const k = key(s, cred);
+      const gen = gens.get(k) || 0;   // как в freshToken: forget во время проверки — токен не кэшируем, результат отдаём
       const t = await passwordLogin(s, cred);
-      tokens.set(key(s, cred), t);
+      if ((gens.get(k) || 0) === gen) tokens.set(k, t);
       return true;
     },
     /** POST document/withSigners — повтор вслепую НЕ делаем: комплект мог быть принят. */
