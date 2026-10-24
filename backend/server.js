@@ -327,6 +327,18 @@ cron.schedule('*/2 * * * *', async () => {
   } catch (e) { cronLogger.error(`delivery watchdog: ${e.message}`); }
 }, { timezone: 'Europe/Moscow' });
 
+// «Документы» (F.Doc): опрос статусов комплектов — страховка к вебхуку SetStatus и
+// докачка подписанных PDF в S3. EDOCS_POLL=false гасит только опрос (вебхук работает).
+// Подробности — services/edocs/packages.js (refreshDue).
+if (process.env.EDOCS_POLL !== 'false') {
+  cron.schedule('*/5 * * * *', async () => {
+    try {
+      const r = await require('./services/edocs/packages').refreshDue();
+      if (r && r.changed) cronLogger.info(`edocs: проверено комплектов=${r.checked}, изменился статус=${r.changed}`);
+    } catch (e) { cronLogger.error(`edocs poll: ${e.message}`); }
+  }, { timezone: 'Europe/Moscow' });
+}
+
 // ============================================================
 // START
 // ============================================================

@@ -218,7 +218,8 @@ module.exports = {
   API_PUBLIC: ['/api/auth/login', '/api/auth/register', '/api/app-settings', '/api/salon/logo', '/api/kb/relay', '/api/kb/relay/embed'],
   SPECIALIST_ALLOWED_PREFIXES,
   // Администратор-кассир: те же права, что у специалиста, плюс доступ к чату.
-  CASHIER_ALLOWED_PREFIXES: [...SPECIALIST_ALLOWED_PREFIXES, '/api/chat'],
+  // и к «Документам» (оформление на ресепшене; /api/edocs/admin закрыт ему самим роутером).
+  CASHIER_ALLOWED_PREFIXES: [...SPECIALIST_ALLOWED_PREFIXES, '/api/chat', '/api/edocs'],
 
   // S3 (patient photo cases — Yandex Object Storage / S3-compatible)
   S3_ENDPOINT: process.env.S3_ENDPOINT,
