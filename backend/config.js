@@ -3,7 +3,7 @@
 // ============================================================
 require('dotenv').config();
 
-// Route prefixes a `specialist` may reach. `admin_cashier` gets the same set + chat.
+// Route prefixes a `specialist` may reach. `admin_cashier` gets the same set + chat + «Документы» (/api/edocs).
 const SPECIALIST_ALLOWED_PREFIXES = ['/api/home-care', '/api/auth', '/api/template-settings', '/api/patient-portfolio', '/api/analytics/staff-dashboard', '/api/medical-cert', '/api/kb'];
 
 module.exports = {
@@ -217,8 +217,9 @@ module.exports = {
   // API Access Control
   API_PUBLIC: ['/api/auth/login', '/api/auth/register', '/api/app-settings', '/api/salon/logo', '/api/kb/relay', '/api/kb/relay/embed'],
   SPECIALIST_ALLOWED_PREFIXES,
-  // Администратор-кассир: те же права, что у специалиста, плюс доступ к чату.
-  CASHIER_ALLOWED_PREFIXES: [...SPECIALIST_ALLOWED_PREFIXES, '/api/chat'],
+  // Администратор-кассир: те же права, что у специалиста, плюс доступ к чату
+  // и к «Документам» (/api/edocs — оформление на ресепшене; /api/edocs/admin закрыт ему самим роутером).
+  CASHIER_ALLOWED_PREFIXES: [...SPECIALIST_ALLOWED_PREFIXES, '/api/chat', '/api/edocs'],
 
   // S3 (patient photo cases — Yandex Object Storage / S3-compatible)
   S3_ENDPOINT: process.env.S3_ENDPOINT,
@@ -228,6 +229,14 @@ module.exports = {
   S3_SECRET_KEY: process.env.S3_SECRET_KEY,
   S3_FORCE_PATH_STYLE: process.env.S3_FORCE_PATH_STYLE === 'true',
   S3_URL_TTL_SECONDS: parseInt(process.env.S3_URL_TTL_SECONDS, 10) || 900,
+
+  // «Документы» (F.Doc): ключ AES-256-GCM для паспортных данных и паролей F.Doc —
+  // 32 байта в base64 (`node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"`).
+  // Пусто — модуль не сохраняет ни паспорт, ни пароли (503). Потеря ключа = потеря данных.
+  EDOCS_ENC_KEY: process.env.EDOCS_ENC_KEY || '',
+  // На ДЕМО-стенде F.Doc (demo.*) отправка разрешена только на эти номера: в дев-БД живые
+  // пациенты, а демо-контур шлёт настоящие SMS. Через запятую, канон 7XXXXXXXXXX.
+  EDOCS_DEMO_PHONES: (process.env.EDOCS_DEMO_PHONES || '79200255591').split(',').map((s) => s.replace(/\D/g, '')).filter(Boolean),
 
   // Sync
   SYNC_DAYS: 365,

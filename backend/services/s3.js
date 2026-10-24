@@ -29,4 +29,9 @@ async function presignGet(key, ttlSeconds = cfg.S3_URL_TTL_SECONDS) {
   return getSignedUrl(client, new GetObjectCommand({ Bucket: cfg.S3_BUCKET, Key: key }), { expiresIn: ttlSeconds });
 }
 
-module.exports = { client, putObject, deleteObjects, presignGet };
+async function getObjectBuffer(key) {
+  const obj = await client.send(new GetObjectCommand({ Bucket: cfg.S3_BUCKET, Key: key }));
+  return Buffer.from(await obj.Body.transformToByteArray());
+}
+
+module.exports = { client, putObject, deleteObjects, presignGet, getObjectBuffer };

@@ -1260,3 +1260,62 @@ tr.eco-receipts>td{background:var(--bg)}
 [data-theme="dark"] #page-economics input,[data-theme="dark"] #page-economics select{background:var(--card);color:var(--t1);color-scheme:dark}
 [data-theme="dark"] #page-economics .btn:not(.btn-pri){background:var(--bd);color:var(--t1)}
 #ecoPeriod .pb-btns{flex-wrap:wrap}
+
+/* ─── «📄 Документы» (F.Doc) ─── */
+.ed-head-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.ed-tabs{max-width:520px}
+.ed-me{font-size:12px;color:var(--t3)}
+.ed-note{padding:10px 12px;border-radius:8px;background:var(--as);color:var(--t1);font-size:12.5px;margin-bottom:12px;line-height:1.45}
+.ed-note-bad{background:rgba(232,84,84,.1)}
+.ed-h{font-size:15px;font-weight:700;margin-bottom:10px}
+.ed-h2{font-size:13px;font-weight:700;margin:12px 0 8px}
+.ed-sub{font-size:12px;color:var(--t3)}
+.ed-err{font-size:12px;color:var(--danger);margin-top:4px}
+.ed-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:0 12px}
+#page-edocs input[type=checkbox],#edMeModal input[type=checkbox]{width:auto;margin:0;flex-shrink:0}
+.ed-actions{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:10px}
+.ed-file{position:relative;overflow:hidden;cursor:pointer}
+.ed-file input[type=file]{position:absolute;inset:0;opacity:0;cursor:pointer;width:100%}
+.ed-results{margin-top:10px;display:flex;flex-direction:column;gap:6px}
+.ed-result{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:8px 10px;border:1px solid var(--bd);border-radius:8px;cursor:pointer}
+.ed-result:hover,.ed-row:hover,.ed-crow:hover{background:var(--bg)}
+.ed-row,.ed-link{cursor:pointer}
+.ed-patient{display:flex;justify-content:space-between;align-items:center;gap:10px}
+.ed-tpls{display:flex;flex-direction:column;gap:6px;margin:10px 0}
+.ed-tpl{display:flex;flex-wrap:wrap;align-items:center;gap:8px;font-size:13px}
+.ed-tpl-name{flex:1 1 200px;min-width:0}
+.ed-date{max-width:220px}
+.ed-missing{font-size:12.5px;color:var(--warn);min-height:18px}
+.ed-act th:first-child,.ed-act td:first-child{width:36px}
+.ed-act th:nth-child(n+3),.ed-act td:nth-child(n+3){width:120px}
+.ed-act td:nth-child(n+3) input{text-align:right}
+.ed-total{font-weight:700;margin-left:auto}
+.ed-visits{margin:6px 0 10px;font-size:13px}
+.ed-visit{display:flex;flex-wrap:wrap;gap:8px;align-items:center;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--bd);font-size:12.5px}
+.ed-pkg-head{display:flex;justify-content:space-between;gap:12px;align-items:flex-start}
+.ed-badge-lg{font-size:12.5px;padding:4px 12px}
+.ed-event{font-size:12.5px;padding:4px 0;border-bottom:1px dashed var(--bd)}
+.ed-upload{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:8px}
+.ed-upload input,.ed-upload select{width:auto;flex:1 1 180px}
+.ed-inline{min-width:160px}
+.ed-row-actions{white-space:nowrap}
+.ed-row-actions .btn{margin:2px}
+.ed-dict{margin-top:12px;font-size:12.5px}
+.ed-dict code{font-size:12px}
+.ed-switch{display:flex;align-items:center;gap:8px;font-size:13px;margin:6px 0}
+.ed-cblock-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px}
+.ed-crow{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:6px 8px;border-radius:6px;cursor:pointer;font-size:12.5px}
+.ed-toolbar{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px}
+.ed-toolbar select,.ed-toolbar input[type=date]{width:auto}
+/* Тёмная тема: глобальный .tab.active белый (см. заметку у «Рассылок») — чиним свои вкладки. */
+[data-theme="dark"] .ed-tabs .tab.active{background:var(--bd);color:var(--t1)}
+/* «Записи» в карточном режиме: пустая ячейка «Акт» (модуль выключен, визит не состоялся) не нужна. */
+@media(max-width:700px){
+  #page-records tbody td.r-act:empty{display:none}
+  .ed-patient,.ed-pkg-head{flex-direction:column;align-items:stretch}
+  .ed-row-actions{white-space:normal}
+  #page-edocs .card{min-width:0}
+  .ed-tbl-card{padding:0;background:transparent;border:none;box-shadow:none}
+  .ed-act th:first-child,.ed-act td:first-child,.ed-act th:nth-child(n+3),.ed-act td:nth-child(n+3){width:auto}
+  .ed-act.mtbl tbody td input[type=text]{flex:1 1 150px;max-width:65%}
+}

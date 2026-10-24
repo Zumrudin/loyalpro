@@ -158,4 +158,6 @@ function resolveGivenName(source, opts = {}) {
   return fromString(source, dictionary);
 }
 
-module.exports = { resolveGivenName, splitFio, normalizeName };
+// Регэкспы отчества экспортируются для разбора ФИО в «Документах» (services/edocs/fio.js):
+// правило «что считать отчеством» одно на оба модуля.
+module.exports = { resolveGivenName, splitFio, normalizeName, PATRONYMIC_RE, TURKIC_PATRONYMIC_RE };
