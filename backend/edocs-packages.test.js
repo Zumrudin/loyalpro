@@ -1,0 +1,241 @@
+'use strict';
+jest.mock('./services/edocs/store', () => ({
+  getSettings: jest.fn(), getCredentials: jest.fn(), pickCredentials: jest.fn(), markCredentialsOk: jest.fn(), markCredentialsFail: jest.fn(),
+  getClient: jest.fn(), getTemplatesByIds: jest.fn(), getRecord: jest.fn(), getIdentityRow: jest.fn(),
+  insertPackage: jest.fn(), markSent: jest.fn(), markSendError: jest.fn(), logEvent: jest.fn(), getPackage: jest.fn(),
+  listDocuments: jest.fn(), applyStatus: jest.fn(), touchStatusCheck: jest.fn(), setDocumentPdf: jest.fn(), setEmployeeUrl: jest.fn(),
+  listDuePackages: jest.fn(),
+}));
+jest.mock('./services/s3', () => ({ getObjectBuffer: jest.fn(), putObject: jest.fn() }));
+jest.mock('./services/fdoc/client', () => ({
+  client: { sendPackage: jest.fn(), workflowStatuses: jest.fn(), downloadPdf: jest.fn(), employeeUrl: jest.fn(), sendPermalink: jest.fn(), declinePackage: jest.fn() },
+}));
+jest.mock('./utils/secret-box', () => ({
+  box: () => ({ decrypt: (x) => String(x).replace(/^enc:/, ''), decryptJson: (x) => JSON.parse(String(x).replace(/^enc:/, '')) }),
+}));
+jest.mock('./logger', () => ({ createLogger: () => ({ info: jest.fn(), warn: jest.fn(), error: jest.fn() }) }));
+jest.mock('./config', () => ({ EDOCS_DEMO_PHONES: ['79200255591'] }));
+
+const store = require('./services/edocs/store');
+const s3 = require('./services/s3');
+const { client: fdoc } = require('./services/fdoc/client');
+const pk = require('./services/edocs/packages');
+const { makeDocx, docText, p, table } = require('./services/edocs/__fixtures__/docx');
+
+const SETTINGS = { salon_id: 1, enabled: true, base_url: 'https://demo.fdoc.ru', api_key_enc: 'enc:KEY', app_login: 'app', app_password_enc: 'enc:APW', app_code: 'crm', corp_id: 'C1', qes_cert_alias: 'peri-qes', employee_position: 'Администратор', unsign_days: 7, requisites: { name: 'ООО «Пери Клиник»', inn: '9724060392', city: 'Москва' } };
+const CLIENT = { id: 52, name: 'Иванова Анна Сергеевна', phone: '+79200255591', yclients_data: {} };
+const IDENTITY = { client_id: 52, last_name: 'Иванова', first_name: 'Анна', middle_name: 'Сергеевна', birth_date: '1983-03-21', gender: 'F', phone: '79200255591', email: null, contract_no: '1739', contract_date: null,
+  secure_enc: 'enc:' + JSON.stringify({ passport_series: '4510', passport_number: '123456' }), secure_fields: ['passport_series', 'passport_number'] };
+const T_CONTRACT = { id: 10, kind: 'contract', title: 'Договор', is_active: true, file_key: 'k/contract.docx', placeholders: ['fio', 'passport', 'org_name'] };
+const T_ACT = { id: 11, kind: 'act', title: 'Акт', is_active: true, file_key: 'k/act.docx', placeholders: ['fio', 'services', 'total_sum'] };
+const RECORD = { id: 30252, client_id: 52, yclients_record_id: 2056697734, attendance: '1', deleted: false, visit_date: '2026-10-23',
+  staff: { name: 'Гаджиева Пери', position: { title: 'Врач-косметолог' } },
+  services: [{ id: 1, title: 'Чистка', amount: 1, discount: 0, first_cost: 3500, manual_cost: 3500, cost: 3500 }] };
+const FILES = {
+  'k/contract.docx': makeDocx({ body: p('Договор с {fio}, паспорт {passport}, исполнитель {org_name}') }),
+  'k/act.docx': makeDocx({ body: p('Акт: {fio}') + table([['{#services}{title}', '{sum}{/services}']]) + p('Итого {total_sum}') }),
+};
+
+beforeEach(() => {
+  jest.clearAllMocks();
+  store.getSettings.mockResolvedValue(SETTINGS);
+  store.getCredentials.mockResolvedValue({ user_id: 4, login: 'ivanova', password_enc: 'enc:pw', fail_count: 0 });
+  store.getClient.mockResolvedValue(CLIENT);
+  store.getIdentityRow.mockResolvedValue(IDENTITY);
+  store.getTemplatesByIds.mockImplementation(async (sid, ids) => [T_CONTRACT, T_ACT].filter((t) => ids.includes(t.id)));
+  store.getRecord.mockResolvedValue(RECORD);
+  store.getPackage.mockImplementation(async (sid, id) => ({ id, salon_id: 1, client_id: 52, status: 'sent', sent_by: 4, title: 'Документы', payload: {} }));
+  store.listDocuments.mockResolvedValue([]);
+  s3.getObjectBuffer.mockImplementation(async (key) => FILES[key]);
+  fdoc.sendPackage.mockResolvedValue({ url: 'https://demo.fdoc.ru/employee/xyz' });
+  fdoc.workflowStatuses.mockResolvedValue({ packages: [], failures: [] });
+});
+
+describe('send', () => {
+  test('собирает DOCX с данными, вставляет комплект, отправляет с маршрутом «клиника → пациент»', async () => {
+    const r = await pk.send({ salonId: 1, userId: 4, clientId: 52, templateIds: [10], docDate: '2026-10-24' });
+    expect(r.packageId).toMatch(/^[0-9a-f-]{36}$/);
+    const [pkg, docs] = store.insertPackage.mock.calls[0];
+    expect(pkg).toMatchObject({ id: r.packageId, salon_id: 1, client_id: 52, record_id: null, kind: 'onboarding', title: 'Документы от 24.10.2026', sent_by: 4 });
+    expect(pkg.payload).toEqual({ templateIds: [10], docDate: '2026-10-24', act: null, patient: { fio: 'Иванова Анна Сергеевна', phone: '79200255591' } });
+    expect(docs).toEqual([{ id: expect.any(String), template_id: 10, title: 'Договор', file_name: 'Договор.docx', sort_order: 0 }]);
+    const [cfg, cred, body] = fdoc.sendPackage.mock.calls[0];
+    expect(cfg).toEqual({ baseUrl: 'https://demo.fdoc.ru', apiKey: 'KEY', appLogin: 'app', appPassword: 'APW', appCode: 'crm', corpId: 'C1' });
+    expect(cred).toMatchObject({ userId: 4, login: 'ivanova', password: 'pw' });
+    expect(body.package).toEqual({ id: r.packageId, name: 'Документы от 24.10.2026', objectId: 'client:52', signers: [
+      { type: 'corp', priority: 1, operatorAutoSign: true, qesCertAlias: 'peri-qes', employeePosition: 'Администратор' },
+      { type: 'client', priority: 2, id: '52', name: 'Иванова Анна Сергеевна', phone: '+79200255591' },
+    ] });
+    expect(body.documents[0]).toMatchObject({ id: docs[0].id, name: 'Договор.docx', unsignExpiredDate: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/) });
+    expect(docText(Buffer.from(body.documents[0].file, 'base64'))).toBe('Договор с Иванова Анна Сергеевна, паспорт 4510 123456, исполнитель ООО «Пери Клиник»');
+    expect(store.markSent).toHaveBeenCalledWith(1, r.packageId, { employeeUrl: 'https://demo.fdoc.ru/employee/xyz', userId: 4 });
+    expect(fdoc.workflowStatuses).toHaveBeenCalledWith(expect.anything(), expect.anything(), [r.packageId]);
+  });
+
+  test('не хватает данных — 400 со списком, в F.Doc ничего не уходит', async () => {
+    store.getIdentityRow.mockResolvedValue({ ...IDENTITY, secure_enc: null, secure_fields: [] });
+    await expect(pk.send({ salonId: 1, userId: 4, clientId: 52, templateIds: [10] })).rejects.toMatchObject({
+      code: 'missing_fields', status: 400, missing: { identity: [{ key: 'passport_number', label: 'Номер паспорта' }, { key: 'passport_series', label: 'Серия паспорта' }], org: [] },
+    });
+    expect(store.insertPackage).not.toHaveBeenCalled();
+    expect(fdoc.sendPackage).not.toHaveBeenCalled();
+  });
+
+  test('модуль выключен, F.Doc не подключён, нет учётки сотрудника — 409', async () => {
+    store.getSettings.mockResolvedValueOnce({ ...SETTINGS, enabled: false });
+    await expect(pk.send({ salonId: 1, userId: 4, clientId: 52, templateIds: [10] })).rejects.toMatchObject({ code: 'not_enabled', status: 409 });
+    store.getSettings.mockResolvedValueOnce({ ...SETTINGS, corp_id: null });
+    await expect(pk.send({ salonId: 1, userId: 4, clientId: 52, templateIds: [10] })).rejects.toMatchObject({ code: 'not_configured' });
+    store.getCredentials.mockResolvedValueOnce(null);
+    await expect(pk.send({ salonId: 1, userId: 4, clientId: 52, templateIds: [10] })).rejects.toMatchObject({ code: 'fdoc_no_credentials', status: 409 });
+  });
+
+  test('F.Doc отверг комплект — черновик с ошибкой, 502 с id комплекта', async () => {
+    fdoc.sendPackage.mockRejectedValue(Object.assign(new Error('F.Doc POST /x 400: Файл повреждён'), { name: 'FdocError', code: 'fdoc_rejected', status: 400 }));
+    const e = await pk.send({ salonId: 1, userId: 4, clientId: 52, templateIds: [10] }).catch((x) => x);
+    expect(e).toMatchObject({ code: 'fdoc_send_failed', status: 502, packageId: expect.any(String) });
+    expect(store.markSendError).toHaveBeenCalledWith(1, e.packageId, 'F.Doc POST /x 400: Файл повреждён');
+    expect(store.markSent).not.toHaveBeenCalled();
+    expect(store.logEvent).toHaveBeenCalledWith(expect.objectContaining({ kind: 'send_error' }));
+  });
+
+  test('F.Doc не принял пароль сотрудника — счётчик отказов и 409', async () => {
+    fdoc.sendPackage.mockRejectedValue(Object.assign(new Error('bad'), { code: 'fdoc_credentials_invalid', status: 401 }));
+    await expect(pk.send({ salonId: 1, userId: 4, clientId: 52, templateIds: [10] })).rejects.toMatchObject({ code: 'fdoc_credentials_invalid', status: 409 });
+    expect(store.markCredentialsFail).toHaveBeenCalledWith(4, 'bad');
+  });
+
+  test('акт: строки из записи, привязка к визиту, номер акта — id записи YClients', async () => {
+    const r = await pk.send({ salonId: 1, userId: 4, clientId: 52, templateIds: [11], recordId: 30252, docDate: '2026-10-24' });
+    const [pkg] = store.insertPackage.mock.calls[0];
+    expect(pkg).toMatchObject({ kind: 'act', record_id: 30252, title: 'Акт от 24.10.2026' });
+    expect(pkg.payload.act).toEqual({ act_no: '2056697734', visit_date: '2026-10-23', doctor_name: 'Гаджиева Пери', doctor_position: 'Врач-косметолог',
+      lines: [{ service_id: 1, title: 'Чистка', qty: 1, price: 3500, sum: 3500 }] });
+    const body = fdoc.sendPackage.mock.calls[0][2];
+    expect(docText(Buffer.from(body.documents[0].file, 'base64'))).toBe('Акт: Иванова Анна СергеевнаЧистка3 500,00Итого 3 500,00');
+    expect(r.packageId).toBe(pkg.id);
+  });
+
+  test('акт по несостоявшемуся визиту — 409; без визита — 400; чужой визит — 404', async () => {
+    store.getRecord.mockResolvedValueOnce({ ...RECORD, attendance: '2' });
+    await expect(pk.send({ salonId: 1, userId: 4, clientId: 52, templateIds: [11], recordId: 30252 })).rejects.toMatchObject({ code: 'act_visit_not_done', status: 409 });
+    await expect(pk.send({ salonId: 1, userId: 4, clientId: 52, templateIds: [11] })).rejects.toMatchObject({ code: 'act_needs_record', status: 400 });
+    store.getRecord.mockResolvedValueOnce({ ...RECORD, client_id: 99 });
+    await expect(pk.send({ salonId: 1, userId: 4, clientId: 52, templateIds: [11], recordId: 30252 })).rejects.toMatchObject({ status: 404 });
+  });
+
+  test('демо-стенд: отправка только на тестовые номера; боевой стенд — без ограничения', async () => {
+    store.getIdentityRow.mockResolvedValue({ ...IDENTITY, phone: '79001112233' });
+    await expect(pk.send({ salonId: 1, userId: 4, clientId: 52, templateIds: [10] })).rejects.toMatchObject({ code: 'demo_phone_blocked', status: 409 });
+    expect(store.insertPackage).not.toHaveBeenCalled();
+    store.getSettings.mockResolvedValue({ ...SETTINGS, base_url: 'https://fdoc.ru' });
+    await expect(pk.send({ salonId: 1, userId: 4, clientId: 52, templateIds: [10] })).resolves.toMatchObject({ packageId: expect.any(String) });
+  });
+
+  test('правленые строки акта проверяются', async () => {
+    await expect(pk.send({ salonId: 1, userId: 4, clientId: 52, templateIds: [11], recordId: 30252, actLines: [{ title: '', qty: 1, price: 1, sum: 1 }] }))
+      .rejects.toMatchObject({ code: 'bad_act_lines', status: 400 });
+  });
+
+  test('выключенный или чужой шаблон, больше 10 документов', async () => {
+    store.getTemplatesByIds.mockResolvedValueOnce([{ ...T_CONTRACT, is_active: false }]);
+    await expect(pk.send({ salonId: 1, userId: 4, clientId: 52, templateIds: [10] })).rejects.toMatchObject({ code: 'bad_templates' });
+    await expect(pk.send({ salonId: 1, userId: 4, clientId: 52, templateIds: [10, 999] })).rejects.toMatchObject({ code: 'bad_templates' });
+    await expect(pk.send({ salonId: 1, userId: 4, clientId: 52, templateIds: Array.from({ length: 11 }, (_, i) => i + 1) })).rejects.toMatchObject({ code: 'bad_templates' });
+  });
+});
+
+describe('resend', () => {
+  const DRAFT = { id: '11111111-1111-4111-8111-111111111111', salon_id: 1, client_id: 52, status: 'draft', sent_by: 4, title: 'Документы от 24.10.2026', record_id: null, payload: { templateIds: [10], docDate: '2026-10-24' } };
+  test('F.Doc уже знает комплект — отмечаем отправленным без повторной отправки', async () => {
+    store.getPackage.mockResolvedValue(DRAFT);
+    fdoc.workflowStatuses.mockResolvedValue({ packages: [{ id: DRAFT.id, status: 'WAIT_SIGN', documents: [] }], failures: [] });
+    expect(await pk.resend({ salonId: 1, userId: 4, packageId: DRAFT.id })).toEqual({ packageId: DRAFT.id, recovered: true });
+    expect(fdoc.sendPackage).not.toHaveBeenCalled();
+    expect(store.markSent).toHaveBeenCalledWith(1, DRAFT.id, { userId: 4 });
+  });
+  test('F.Doc комплекта не знает — повторная отправка с теми же id', async () => {
+    store.getPackage.mockResolvedValue(DRAFT);
+    store.listDocuments.mockResolvedValue([{ id: 'd-1', template_id: 10, title: 'Договор', file_name: 'Договор.docx', sort_order: 0 }]);
+    fdoc.workflowStatuses.mockResolvedValue({ packages: [], failures: [{ id: DRAFT.id, code: 'NOT_FOUND' }] });
+    await pk.resend({ salonId: 1, userId: 4, packageId: DRAFT.id });
+    const body = fdoc.sendPackage.mock.calls[0][2];
+    expect(body.package.id).toBe(DRAFT.id);
+    expect(body.documents.map((d) => d.id)).toEqual(['d-1']);
+  });
+  test('уже отправленный — 409', async () => {
+    store.getPackage.mockResolvedValue({ ...DRAFT, status: 'sent' });
+    await expect(pk.resend({ salonId: 1, userId: 4, packageId: DRAFT.id })).rejects.toMatchObject({ code: 'already_sent', status: 409 });
+  });
+});
+
+describe('refreshRows и refreshDue', () => {
+  const ROW = { id: '22222222-2222-4222-8222-222222222222', salon_id: 1, client_id: 52, status: 'sent', sent_by: 4, fdoc_package_guid: null };
+  test('статус меняется — журнал; подписан — PDF в S3', async () => {
+    store.listDocuments.mockResolvedValue([{ id: 'd-1', file_name: 'Договор.docx', title: 'Договор', pdf_key: null }]);
+    fdoc.workflowStatuses.mockResolvedValue({ packages: [{ id: ROW.id, status: 'SIGNED', documents: [{ id: 'd-1', status: 'SIGNED', clientSigners: [{ isSigned: true, dateSignOrCancel: '2026-10-24T10:00:00+03:00' }] }] }] });
+    store.getPackage.mockResolvedValue({ ...ROW, status: 'signed' });
+    fdoc.downloadPdf.mockResolvedValue(Buffer.from('%PDF-1.7'));
+    expect(await pk.refreshRows(1, [ROW])).toEqual({ checked: 1, changed: 1 });
+    expect(store.applyStatus).toHaveBeenCalledWith(1, ROW.id, expect.objectContaining({ package: expect.objectContaining({ status: 'signed' }) }));
+    expect(store.logEvent).toHaveBeenCalledWith(expect.objectContaining({ kind: 'status', payload: { from: 'sent', to: 'signed', fdoc: 'SIGNED' } }));
+    expect(fdoc.downloadPdf).toHaveBeenCalledWith(expect.anything(), expect.anything(), ROW.id, 'd-1');
+    expect(s3.putObject).toHaveBeenCalledWith(`edocs/1/packages/${ROW.id}/d-1.pdf`, Buffer.from('%PDF-1.7'), 'application/pdf');
+    expect(store.setDocumentPdf).toHaveBeenCalledWith('d-1', `edocs/1/packages/${ROW.id}/d-1.pdf`);
+    expect(store.touchStatusCheck).toHaveBeenCalledWith([ROW.id]);
+  });
+  test('учётки отправителя нет — берётся любая рабочая в салоне', async () => {
+    store.getCredentials.mockResolvedValue(null);
+    store.pickCredentials.mockResolvedValue({ user_id: 9, login: 'admin2', password_enc: 'enc:pw2', fail_count: 0 });
+    await pk.refreshRows(1, [ROW]);
+    expect(fdoc.workflowStatuses.mock.calls[0][1]).toMatchObject({ userId: 9, login: 'admin2' });
+  });
+  test('ни одной рабочей учётки — опрос пропущен без исключения', async () => {
+    store.getCredentials.mockResolvedValue(null);
+    store.pickCredentials.mockResolvedValue(null);
+    expect(await pk.refreshRows(1, [ROW])).toEqual({ checked: 0, changed: 0 });
+    expect(fdoc.workflowStatuses).not.toHaveBeenCalled();
+  });
+  test('refreshDue раскладывает по салонам; сбой салона не останавливает остальные', async () => {
+    store.listDuePackages.mockResolvedValue([{ ...ROW, salon_id: 1 }, { ...ROW, id: '33333333-3333-4333-8333-333333333333', salon_id: 2 }]);
+    store.getSettings.mockImplementation(async (sid) => (sid === 2 ? null : SETTINGS));
+    const r = await pk.refreshDue();
+    expect(r).toEqual({ checked: 0, changed: 0 });
+    expect(store.touchStatusCheck).toHaveBeenCalledWith(['33333333-3333-4333-8333-333333333333']);
+  });
+});
+
+describe('действия', () => {
+  test('ссылка в окно сотрудника — под учёткой текущего пользователя', async () => {
+    fdoc.employeeUrl.mockResolvedValue('https://demo.fdoc.ru/w/1');
+    expect(await pk.employeeUrl({ salonId: 1, userId: 4, packageId: 'p' })).toEqual({ url: 'https://demo.fdoc.ru/w/1' });
+    expect(store.setEmployeeUrl).toHaveBeenCalledWith(1, 'p', 'https://demo.fdoc.ru/w/1');
+  });
+  test('аннулировать подписанный нельзя', async () => {
+    store.getPackage.mockResolvedValue({ id: 'p', status: 'signed', client_id: 52 });
+    await expect(pk.annul({ salonId: 1, userId: 4, packageId: 'p' })).rejects.toMatchObject({ code: 'bad_status', status: 409 });
+    expect(fdoc.declinePackage).not.toHaveBeenCalled();
+  });
+  test('ссылку повторно — только по ожидающему подписи', async () => {
+    await pk.permalink({ salonId: 1, userId: 4, packageId: 'p' });
+    expect(fdoc.sendPermalink).toHaveBeenCalledWith(expect.anything(), expect.anything(), 'p', ['52']);
+  });
+  test('preview: без F.Doc и с пропусками', async () => {
+    store.getSettings.mockResolvedValue(null);
+    store.getIdentityRow.mockResolvedValue(null);
+    const r = await pk.preview({ salonId: 1, userId: 4, clientId: 52, templateId: 10, docDate: '2026-10-24' });
+    expect(r.fileName).toBe('Договор.docx');
+    expect(docText(Buffer.from(r.base64, 'base64'))).toBe('Договор с ________, паспорт ________, исполнитель ________');
+  });
+  test('check: чего не хватает', async () => {
+    store.getIdentityRow.mockResolvedValue(null);
+    const r = await pk.check({ salonId: 1, clientId: 52, templateIds: [10] });
+    expect(r.missing.identity.map((x) => x.key)).toEqual(['first_name', 'last_name', 'passport_number', 'passport_series', 'phone']);
+  });
+  test('имена файлов: запрещённые символы и дубли', () => {
+    const { safeFileName, uniqueNames } = require('./services/edocs/send-body');
+    expect(safeFileName('Договор №1 / копия: "А"')).toBe('Договор №1 копия А.docx');
+    expect(safeFileName('')).toBe('Документ.docx');
+    expect(uniqueNames(['А.docx', 'а.docx', 'Б.docx'])).toEqual(['А.docx', 'а (2).docx', 'Б.docx']);
+  });
+});
