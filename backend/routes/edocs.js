@@ -16,7 +16,7 @@ const secretBox = require('../utils/secret-box');
 const { client: fdoc } = require('../services/fdoc/client');
 const { linesFromRecord, doctorOf, actTotals } = require('../services/edocs/act-lines');
 const { STATUSES } = require('../services/edocs/statuses');
-const { EdocsError, sendError } = require('../services/edocs/errors');
+const { EdocsError, shortError, sendError } = require('../services/edocs/errors');
 const { validateImageBuffer } = require('../utils/upload-validator');
 const { isCalendarDate, todayMsk } = require('../utils/period');
 const { createLogger } = require('../logger');
@@ -217,12 +217,18 @@ router.post('/clients/:id/identity/recognize', (req, res, next) => {
     if (!client) return res.status(404).json({ error: 'Пациент не найден' });
     const check = validateImageBuffer(req.file.buffer, req.file.originalname);
     if (!check.ok) return res.status(400).json({ error: check.error });
-    const jpeg = await sharp(req.file.buffer).rotate().resize({ width: 2400, height: 2400, fit: 'inside', withoutEnlargement: true }).jpeg({ quality: 85 }).toBuffer();
+    let jpeg;
+    try {
+      jpeg = await sharp(req.file.buffer).rotate().resize({ width: 2400, height: 2400, fit: 'inside', withoutEnlargement: true }).jpeg({ quality: 85 }).toBuffer();
+    } catch (e) {
+      // Сигнатура верная, а тело битое (обрезанный снимок, подделка): это ошибка фото, а не сервера — не 500.
+      logger.warn(`edocs recognize: фото не прочиталось: ${shortError(e)}`);
+      return res.status(400).json({ error: 'Не удалось прочитать фото — снимите ещё раз', code: 'bad_image' });
+    }
     const b64 = jpeg.toString('base64');
     if (b64.length > MAX_RECOGNIZE_B64) return res.status(400).json({ error: 'Фото слишком большое даже после сжатия' });
-    const cfg = packages.fdocConfig(await store.getSettings(sid));
-    const cred = await packages.credFor(sid, req.user.userId);
-    const result = await fdoc.recognize(cfg, cred, b64, 'jpg');
+    // Через packages: вход под учёткой пользователя с учётом отказов (fail_count), а не прямой вызов клиента F.Doc.
+    const result = await packages.recognize({ salonId: sid, userId: req.user.userId, imageBase64: b64 });
     await store.logEvent({ salonId: sid, clientId: id, kind: 'recognize', userId: req.user.userId, payload: { recognized: !!result } });
     if (!result) return res.status(422).json({ error: 'F.Doc не распознал документ на фото — сфотографируйте разворот целиком' });
     res.json(identity.fromRecognized(result));
@@ -282,8 +288,14 @@ router.post('/packages/preview', async (req, res) => {
   const p = parsePackageBody(req.body, { single: true });
   if (p.error) return res.status(400).json({ error: p.error });
   try {
-    res.json(await packages.preview({ salonId: req.user.salonId, userId: req.user.userId, clientId: p.value.clientId, templateId: p.value.templateIds[0],
-      recordId: p.value.recordId, actLines: p.value.actLines, docDate: p.value.docDate }));
+    const sid = req.user.salonId;
+    const r = await packages.preview({ salonId: sid, userId: req.user.userId, clientId: p.value.clientId, templateId: p.value.templateIds[0],
+      recordId: p.value.recordId, actLines: p.value.actLines, docDate: p.value.docDate });
+    // В заполненном документе паспорт и адрес пациента: как и каждый показ формы данных, предпросмотр — в журнал.
+    // В payload только идентификаторы шаблона и визита, без ПДн.
+    await store.logEvent({ salonId: sid, clientId: p.value.clientId, kind: 'preview', userId: req.user.userId,
+      payload: { templateId: p.value.templateIds[0], recordId: p.value.recordId } });
+    res.json(r);
   } catch (e) { sendError(res, e, logger, 'edocs preview'); }
 });
 

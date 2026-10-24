@@ -27,10 +27,12 @@ async function processWebhook(salonId, body) {
   await store.touchWebhook(salonId);
   const b = body && typeof body === 'object' ? body : {};
   const packageId = typeof b.packageId === 'string' ? b.packageId.slice(0, 100) : null;
-  await store.logEvent({ salonId, packageId, kind: 'webhook', payload: pick(b) });
-  if (!packageId) return;
+  if (!packageId) { logger.info(`fdoc webhook: в теле нет packageId (салон ${salonId})`); return; }
   const row = await store.findPackageByAnyId(salonId, packageId);
   if (!row) { logger.info(`fdoc webhook: комплект ${packageId} не наш (салон ${salonId})`); return; }
+  // Событие — под НАШИМ id: F.Doc может прислать свой GUID комплекта, и запись под ним не попала бы на карточку.
+  // Чужой комплект и тело без packageId в журнал не пишем — только в лог.
+  await store.logEvent({ salonId, packageId: row.id, kind: 'webhook', payload: pick(b) });
   await packages.refreshRows(salonId, [row]);
 }
 

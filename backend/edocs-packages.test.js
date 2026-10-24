@@ -8,7 +8,7 @@ jest.mock('./services/edocs/store', () => ({
 }));
 jest.mock('./services/s3', () => ({ getObjectBuffer: jest.fn(), putObject: jest.fn() }));
 jest.mock('./services/fdoc/client', () => ({
-  client: { sendPackage: jest.fn(), workflowStatuses: jest.fn(), downloadPdf: jest.fn(), employeeUrl: jest.fn(), sendPermalink: jest.fn(), declinePackage: jest.fn() },
+  client: { sendPackage: jest.fn(), workflowStatuses: jest.fn(), downloadPdf: jest.fn(), employeeUrl: jest.fn(), sendPermalink: jest.fn(), declinePackage: jest.fn(), recognize: jest.fn() },
 }));
 jest.mock('./utils/secret-box', () => ({
   box: () => ({ decrypt: (x) => String(x).replace(/^enc:/, ''), decryptJson: (x) => JSON.parse(String(x).replace(/^enc:/, '')) }),
@@ -614,5 +614,36 @@ describe('действия', () => {
     expect(safeFileName('Договор №1 / копия: "А"')).toBe('Договор №1 копия А.docx');
     expect(safeFileName('')).toBe('Документ.docx');
     expect(uniqueNames(['А.docx', 'а.docx', 'Б.docx'])).toEqual(['А.docx', 'а (2).docx', 'Б.docx']);
+  });
+});
+
+describe('recognize', () => {
+  test('под учёткой пользователя: расшифрованные настройки и пароль, фото уходит как есть', async () => {
+    fdoc.recognize.mockResolvedValue({ confidence: true });
+    expect(await pk.recognize({ salonId: 1, userId: 4, imageBase64: 'QUJD' })).toEqual({ confidence: true });
+    const [cfg, cred, b64, ext] = fdoc.recognize.mock.calls[0];
+    expect(cfg).toEqual({ baseUrl: 'https://demo.fdoc.ru', apiKey: 'KEY', appLogin: 'app', appPassword: 'APW', appCode: 'crm', corpId: 'C1' });
+    expect(cred).toMatchObject({ userId: 4, login: 'ivanova', password: 'pw' });
+    expect([b64, ext]).toEqual(['QUJD', 'jpg']);
+  });
+  test('F.Doc не принял пароль: это действие пользователя, а не фон — счётчик отказов растёт, ответ 409', async () => {
+    fdoc.recognize.mockRejectedValue(Object.assign(new Error('bad'), { name: 'FdocError', code: 'fdoc_credentials_invalid', status: 401 }));
+    await expect(pk.recognize({ salonId: 1, userId: 4, imageBase64: 'QUJD' })).rejects.toMatchObject({ name: 'EdocsError', code: 'fdoc_credentials_invalid', status: 409 });
+    expect(store.markCredentialsFail).toHaveBeenCalledWith(1, 4, 'bad');
+  });
+  test('удачное распознавание снимает прежние отказы учётки', async () => {
+    store.getCredentials.mockResolvedValue({ user_id: 4, login: 'ivanova', password_enc: 'enc:pw', fail_count: 2 });
+    fdoc.recognize.mockResolvedValue(null);
+    expect(await pk.recognize({ salonId: 1, userId: 4, imageBase64: 'QUJD' })).toBeNull();   // документ на фото не найден — не ошибка
+    expect(store.markCredentialsOk).toHaveBeenCalledWith(1, 4);
+  });
+  test('модуль выключен, нет учётки, учётка заперта после трёх отказов — 409, F.Doc не зовётся', async () => {
+    store.getSettings.mockResolvedValueOnce({ ...SETTINGS, enabled: false });
+    await expect(pk.recognize({ salonId: 1, userId: 4, imageBase64: 'QUJD' })).rejects.toMatchObject({ code: 'not_enabled', status: 409 });
+    store.getCredentials.mockResolvedValueOnce(null);
+    await expect(pk.recognize({ salonId: 1, userId: 4, imageBase64: 'QUJD' })).rejects.toMatchObject({ code: 'fdoc_no_credentials', status: 409 });
+    store.getCredentials.mockResolvedValueOnce({ user_id: 4, login: 'ivanova', password_enc: 'enc:pw', fail_count: 3 });
+    await expect(pk.recognize({ salonId: 1, userId: 4, imageBase64: 'QUJD' })).rejects.toMatchObject({ code: 'fdoc_credentials_invalid', status: 409 });
+    expect(fdoc.recognize).not.toHaveBeenCalled();
   });
 });

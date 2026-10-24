@@ -17,7 +17,7 @@ jest.mock('./services/edocs/store', () => ({
 }));
 jest.mock('./services/edocs/packages', () => ({
   MAX_DOCS: 10, send: jest.fn(), resend: jest.fn(), refreshRows: jest.fn(), employeeUrl: jest.fn(), permalink: jest.fn(), annul: jest.fn(),
-  preview: jest.fn(), check: jest.fn(), credFor: jest.fn(), clearCredentialPause: jest.fn(),
+  preview: jest.fn(), check: jest.fn(), credFor: jest.fn(), clearCredentialPause: jest.fn(), recognize: jest.fn(),
   fdocConfig: jest.fn(() => ({ baseUrl: 'https://demo.fdoc.ru', apiKey: 'K', appLogin: 'a', appPassword: 'p', appCode: 'c', corpId: 'C1' })),
 }));
 jest.mock('./services/fdoc/client', () => ({ client: { verifyApiKey: jest.fn(), checkCredentials: jest.fn(), forget: jest.fn(), tariffInfo: jest.fn(), putWebhooks: jest.fn(), recognize: jest.fn() } }));
@@ -27,6 +27,8 @@ jest.mock('./utils/secret-box', () => ({
   box: () => ({ encrypt: (x) => `enc:${x}`, decrypt: (x) => String(x).slice(4), encryptJson: (o) => `enc:${JSON.stringify(o)}`, decryptJson: (x) => JSON.parse(String(x).slice(4)) }),
 }));
 
+const { Readable } = require('stream');
+const sharp = require('sharp');
 const store = require('./services/edocs/store');
 const packages = require('./services/edocs/packages');
 const { client: fdoc } = require('./services/fdoc/client');
@@ -34,7 +36,7 @@ const { EdocsError } = require('./services/edocs/errors');
 const ops = require('./routes/edocs');
 const webhook = require('./routes/fdoc-webhook');
 
-function call(router, method, url, { user = { role: 'admin', salonId: 1, userId: 4 }, body, query } = {}) {
+function call(router, method, url, { user = { role: 'admin', salonId: 1, userId: 4 }, body, query, file } = {}) {
   return new Promise((resolve) => {
     const res = {
       statusCode: 200,
@@ -42,11 +44,27 @@ function call(router, method, url, { user = { role: 'admin', salonId: 1, userId:
       json(b) { resolve({ status: this.statusCode, body: b }); return this; },
       end() { resolve({ status: this.statusCode, body: null }); return this; },
     };
-    const req = { method, url, headers: { host: 'dev.zumrudin.ru' }, body, query: query || {}, __user: user, protocol: 'https', get: (h) => (h === 'host' ? 'dev.zumrudin.ru' : undefined) };
+    const common = { method, url, body, query: query || {}, __user: user, protocol: 'https', get: (h) => (h === 'host' ? 'dev.zumrudin.ru' : undefined) };
+    let req;
+    if (file) {
+      // Файл — настоящим multipart-потоком: multer разбирает его как боевой запрос (сокетов нет).
+      const boundary = '----edocs-test';
+      const payload = Buffer.concat([
+        Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="${file.field}"; filename="${file.name}"\r\nContent-Type: ${file.type}\r\n\r\n`),
+        file.buffer,
+        Buffer.from(`\r\n--${boundary}--\r\n`),
+      ]);
+      req = Object.assign(Readable.from([payload]), common, {
+        body: {}, headers: { host: 'dev.zumrudin.ru', 'content-type': `multipart/form-data; boundary=${boundary}`, 'content-length': String(payload.length) },
+      });
+    } else {
+      req = { ...common, headers: { host: 'dev.zumrudin.ru' } };
+    }
     router.handle(req, res, () => resolve({ status: 404, body: null }));
   });
 }
 const PKG_ID = '11111111-1111-4111-8111-111111111111';
+const FDOC_GUID = '22222222-2222-4222-8222-222222222222';   // GUID комплекта на стороне F.Doc — не наш id
 
 beforeEach(() => jest.clearAllMocks());
 
@@ -180,26 +198,99 @@ describe('/api/edocs', () => {
   });
 });
 
+describe('предпросмотр документа', () => {
+  test('показ ПДн пишется в журнал: вид preview, в payload только templateId и recordId', async () => {
+    packages.preview.mockResolvedValue({ fileName: 'Договор.docx', base64: 'UEsDBA==' });
+    const r = await call(ops, 'POST', '/packages/preview', { body: { clientId: 52, templateId: 10, recordId: 30252 } });
+    expect(r).toEqual({ status: 200, body: { fileName: 'Договор.docx', base64: 'UEsDBA==' } });
+    expect(store.logEvent).toHaveBeenCalledTimes(1);
+    expect(store.logEvent).toHaveBeenCalledWith({ salonId: 1, clientId: 52, kind: 'preview', userId: 4, payload: { templateId: 10, recordId: 30252 } });
+    await call(ops, 'POST', '/packages/preview', { body: { clientId: 52, templateId: 10 } });
+    expect(store.logEvent).toHaveBeenLastCalledWith({ salonId: 1, clientId: 52, kind: 'preview', userId: 4, payload: { templateId: 10, recordId: null } });
+  });
+  test('предпросмотр не удался — ПДн не показаны, в журнал ничего не пишется', async () => {
+    packages.preview.mockRejectedValueOnce(new EdocsError('not_found', 'Пациент не найден', 404));
+    expect((await call(ops, 'POST', '/packages/preview', { body: { clientId: 52, templateId: 10 } })).status).toBe(404);
+    expect(store.logEvent).not.toHaveBeenCalled();
+  });
+});
+
+describe('распознавание паспорта по фото', () => {
+  const URL = '/clients/52/identity/recognize';
+  const upload = (buffer, name = 'passport.jpg', type = 'image/jpeg') => ({ file: { field: 'photo', name, type, buffer } });
+  let jpeg;
+  beforeAll(async () => { jpeg = await sharp({ create: { width: 64, height: 48, channels: 3, background: '#ffffff' } }).jpeg().toBuffer(); });
+  beforeEach(() => store.getClient.mockResolvedValue({ id: 52 }));
+
+  test('верная сигнатура JPEG, но тело битое — 400 bad_image, а не 500; F.Doc не зовётся', async () => {
+    const garbage = Buffer.concat([Buffer.from([0xFF, 0xD8, 0xFF, 0xE0]), Buffer.from('не картинка'.repeat(30))]);
+    const r = await call(ops, 'POST', URL, upload(garbage));
+    expect(r).toEqual({ status: 400, body: { error: 'Не удалось прочитать фото — снимите ещё раз', code: 'bad_image' } });
+    expect(packages.recognize).not.toHaveBeenCalled();
+    expect(store.logEvent).not.toHaveBeenCalled();
+  });
+  test('распознавание идёт через packages.recognize (учёт отказов), а не прямым вызовом клиента F.Doc', async () => {
+    packages.recognize.mockResolvedValueOnce({ confidence: true, fields: { surname_nat: { value: 'ИВАНОВА' } } });
+    const r = await call(ops, 'POST', URL, upload(jpeg));
+    expect(r.body).toMatchObject({ plain: { last_name: 'Иванова' }, confidence: true });
+    expect(packages.recognize).toHaveBeenCalledWith({ salonId: 1, userId: 4, imageBase64: expect.any(String) });
+    const sent = Buffer.from(packages.recognize.mock.calls[0][0].imageBase64, 'base64');
+    expect(sent.slice(0, 3)).toEqual(Buffer.from([0xFF, 0xD8, 0xFF]));   // фото пересжато в JPEG
+    expect(fdoc.recognize).not.toHaveBeenCalled();
+    expect(store.logEvent).toHaveBeenCalledWith({ salonId: 1, clientId: 52, kind: 'recognize', userId: 4, payload: { recognized: true } });
+  });
+  test('F.Doc не принял пароль сотрудника — 409 fdoc_credentials_invalid, события recognize нет', async () => {
+    packages.recognize.mockRejectedValueOnce(new EdocsError('fdoc_credentials_invalid', 'F.Doc не принял логин или пароль — обновите их в «Мой F.Doc»', 409));
+    const r = await call(ops, 'POST', URL, upload(jpeg));
+    expect(r).toEqual({ status: 409, body: { error: 'F.Doc не принял логин или пароль — обновите их в «Мой F.Doc»', code: 'fdoc_credentials_invalid' } });
+    expect(store.logEvent).not.toHaveBeenCalled();
+  });
+  test('F.Doc не распознал документ — 422, событие с recognized:false', async () => {
+    packages.recognize.mockResolvedValueOnce(null);
+    const r = await call(ops, 'POST', URL, upload(jpeg));
+    expect(r.status).toBe(422);
+    expect(store.logEvent).toHaveBeenCalledWith({ salonId: 1, clientId: 52, kind: 'recognize', userId: 4, payload: { recognized: false } });
+  });
+});
+
 describe('вебхук F.Doc', () => {
   test('неизвестный или кривой секрет — 404 без тела', async () => {
     expect((await call(webhook, 'POST', '/webhook/short')).status).toBe(404);
     store.findSalonByWebhookSecret.mockResolvedValueOnce(null);
     expect((await call(webhook, 'POST', `/webhook/${'a'.repeat(48)}`)).status).toBe(404);
   });
-  test('известный секрет — 200 сразу, затем журнал и перечитывание статуса', async () => {
+  test('известный секрет — 200 сразу, затем журнал под НАШИМ id комплекта и перечитывание статуса', async () => {
     store.findSalonByWebhookSecret.mockResolvedValue(1);
-    store.findPackageByAnyId.mockResolvedValue({ id: PKG_ID, salon_id: 1 });
+    // F.Doc прислал свой GUID комплекта, а не наш id: событие должно лечь на нашу карточку.
+    store.findPackageByAnyId.mockResolvedValue({ id: PKG_ID, salon_id: 1, fdoc_package_guid: FDOC_GUID });
     packages.refreshRows.mockResolvedValue({ checked: 1, changed: 1 });
-    const r = await call(webhook, 'POST', `/webhook/${'a'.repeat(48)}`, { body: { packageId: PKG_ID, status: 'SIGNED', documentIds: [PKG_ID], evil: 'x'.repeat(10) } });
+    const r = await call(webhook, 'POST', `/webhook/${'a'.repeat(48)}`, { body: { packageId: FDOC_GUID, status: 'SIGNED', documentIds: [FDOC_GUID], evil: 'x'.repeat(10) } });
     expect(r).toEqual({ status: 200, body: { ok: true } });
     await new Promise((s) => setImmediate(s));
     await new Promise((s) => setImmediate(s));
-    expect(store.logEvent).toHaveBeenCalledWith({ salonId: 1, packageId: PKG_ID, kind: 'webhook', payload: { packageId: PKG_ID, status: 'SIGNED', documentIds: [PKG_ID] } });
-    expect(packages.refreshRows).toHaveBeenCalledWith(1, [{ id: PKG_ID, salon_id: 1 }]);
+    expect(store.findPackageByAnyId).toHaveBeenCalledWith(1, FDOC_GUID);
+    expect(store.logEvent).toHaveBeenCalledTimes(1);
+    expect(store.logEvent).toHaveBeenCalledWith({ salonId: 1, packageId: PKG_ID, kind: 'webhook', payload: { packageId: FDOC_GUID, status: 'SIGNED', documentIds: [FDOC_GUID] } });
+    expect(packages.refreshRows).toHaveBeenCalledWith(1, [{ id: PKG_ID, salon_id: 1, fdoc_package_guid: FDOC_GUID }]);
   });
-  test('processWebhook: чужой комплект — без перечитывания', async () => {
+  test('processWebhook: чужой комплект — без перечитывания и без события в журнале', async () => {
     store.findPackageByAnyId.mockResolvedValue(null);
-    await webhook.processWebhook(1, { packageId: 'foreign' });
+    await webhook.processWebhook(1, { packageId: 'foreign', status: 'SIGNED' });
+    expect(store.touchWebhook).toHaveBeenCalledWith(1);
     expect(packages.refreshRows).not.toHaveBeenCalled();
+    expect(store.logEvent).not.toHaveBeenCalled();
+  });
+  test('processWebhook: в теле нет packageId — искать нечего, события нет', async () => {
+    await webhook.processWebhook(1, { status: 'SIGNED' });
+    await webhook.processWebhook(1, null);
+    expect(store.findPackageByAnyId).not.toHaveBeenCalled();
+    expect(store.logEvent).not.toHaveBeenCalled();
+    expect(packages.refreshRows).not.toHaveBeenCalled();
+  });
+  test('processWebhook: сбой перечитывания не теряет событие (оно уже в журнале)', async () => {
+    store.findPackageByAnyId.mockResolvedValue({ id: PKG_ID, salon_id: 1 });
+    packages.refreshRows.mockRejectedValueOnce(new Error('F.Doc недоступен'));
+    await expect(webhook.processWebhook(1, { packageId: PKG_ID })).rejects.toThrow('F.Doc недоступен');
+    expect(store.logEvent).toHaveBeenCalledWith(expect.objectContaining({ packageId: PKG_ID, kind: 'webhook' }));
   });
 });

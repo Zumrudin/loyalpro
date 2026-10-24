@@ -525,6 +525,17 @@ async function preview(input) {
   return { fileName: safeFileName(t.title), base64: buf.toString('base64') };
 }
 
+/**
+ * Фото паспорта → распознанные поля (первый результат или null). Интерактивное действие
+ * пользователя, поэтому вход идёт через withCred БЕЗ background: неверный пароль F.Doc здесь
+ * считается в fail_count, как и в остальных действиях. Фото роутер уже сжал в JPEG; у нас оно не хранится.
+ */
+async function recognize({ salonId, userId, imageBase64, ext = 'jpg' }) {
+  const cfg = fdocConfig(await store.getSettings(salonId));
+  const cred = await credFor(salonId, userId);
+  return withCred(cred, () => fdoc.recognize(cfg, cred, imageBase64, ext));
+}
+
 /** Чего не хватает пациенту для набора шаблонов (без исключения — для формы). */
 async function check({ salonId, clientId, templateIds }) {
   const client = await store.getClient(salonId, clientId);
@@ -538,6 +549,6 @@ async function check({ salonId, clientId, templateIds }) {
 function _reset() { warnedAt.clear(); bgPause.clear(); }
 
 module.exports = {
-  send, resend, refreshRows, refreshDue, fetchPdfs, employeeUrl, permalink, annul, preview, check,
+  send, resend, refreshRows, refreshDue, fetchPdfs, employeeUrl, permalink, annul, preview, check, recognize,
   fdocConfig, credFor, clearCredentialPause, MAX_DOCS, _reset,
 };
