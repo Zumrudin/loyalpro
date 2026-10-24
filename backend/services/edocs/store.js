@@ -66,12 +66,16 @@ async function markCredentialsOk(salonId, userId) {
 async function markCredentialsFail(salonId, userId, error) {
   await db.query('UPDATE edoc_user_credentials SET fail_count=fail_count+1, last_error=$3, updated_at=NOW() WHERE user_id=$1 AND salon_id=$2', [userId, salonId, String(error || '').slice(0, 300)]);
 }
-/** Рабочие учётные данные салона: сначала preferUserId, иначе последние удачные. */
-async function pickCredentials(salonId, preferUserId) {
+/**
+ * Рабочие учётные данные салона: сначала preferUserId, иначе последние удачные.
+ * failBelow — отказов меньше этого (фон берёт только учётки без записанных отказов: 1);
+ * exclude — user_id, которые не брать (учётки на паузе фона).
+ */
+async function pickCredentials(salonId, preferUserId, { failBelow = 3, exclude = [] } = {}) {
   return db.oneOrNone(
-    `SELECT * FROM edoc_user_credentials WHERE salon_id=$1 AND fail_count < 3
+    `SELECT * FROM edoc_user_credentials WHERE salon_id=$1 AND fail_count < $3 AND NOT (user_id = ANY($4::int[]))
      ORDER BY (user_id = $2) DESC, last_ok_at DESC NULLS LAST LIMIT 1`,
-    [salonId, preferUserId || 0],
+    [salonId, preferUserId || 0, failBelow, exclude],
   );
 }
 async function listUsersWithCredentials(salonId) {

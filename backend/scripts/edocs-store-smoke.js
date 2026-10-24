@@ -67,10 +67,15 @@ async function run(client, { salonId = 1 } = {}) {
   cr = await store.getCredentials(salonId, u.id);
   ok('credentials + счётчик отказов (чужой салон не считается)', cr.fail_count === 1 && cr.last_error === 'bad', { fail_count: cr.fail_count, last_error: cr.last_error });
   ok('pickCredentials', (await store.pickCredentials(salonId, u.id)).user_id === u.id);
+  const bgPick = await store.pickCredentials(salonId, u.id, { failBelow: 1 });
+  ok('pickCredentials для фона: учётку с отказом не берёт', !bgPick || bgPick.user_id !== u.id, bgPick && bgPick.user_id);
   await store.markCredentialsOk(otherSalon, u.id);
   ok('markCredentialsOk чужого салона не сбрасывает счётчик', (await store.getCredentials(salonId, u.id)).fail_count === 1);
   await store.markCredentialsOk(salonId, u.id);
   ok('markCredentialsOk своего салона сбрасывает счётчик', (await store.getCredentials(salonId, u.id)).fail_count === 0);
+  ok('pickCredentials для фона: без отказов — берёт', (await store.pickCredentials(salonId, u.id, { failBelow: 1, exclude: [] })).user_id === u.id);
+  const exPick = await store.pickCredentials(salonId, u.id, { failBelow: 1, exclude: [u.id] });
+  ok('pickCredentials: учётка на паузе исключена', !exPick || exPick.user_id !== u.id, exPick && exPick.user_id);
   ok('listUsersWithCredentials', (await store.listUsersWithCredentials(salonId)).some((x) => x.login === 'smoke'));
 
   const tId = await store.insertTemplate(salonId, { kind: 'contract', title: 'Smoke договор', file_key: 'smoke/k1', file_size: 1, placeholders: ['fio'], created_by: u.id });

@@ -97,6 +97,7 @@ router.put('/me/credentials', async (req, res) => {
     }
     const saved = await store.saveCredentials(sid, req.user.userId, login, secretBox.box().encrypt(password));
     if (!saved) return res.status(409).json({ error: 'Учётная запись принадлежит другому салону' });
+    packages.clearCredentialPause(sid, req.user.userId);   // новый пароль проверен входом — фон снова берёт учётку
     await store.logEvent({ salonId: sid, kind: 'credentials', userId: req.user.userId, payload: { action: 'save', login } });
     res.json({ ok: true });
   } catch (e) { sendError(res, e, logger, 'edocs credentials save'); }

@@ -17,7 +17,7 @@ jest.mock('./services/edocs/store', () => ({
 }));
 jest.mock('./services/edocs/packages', () => ({
   MAX_DOCS: 10, send: jest.fn(), resend: jest.fn(), refreshRows: jest.fn(), employeeUrl: jest.fn(), permalink: jest.fn(), annul: jest.fn(),
-  preview: jest.fn(), check: jest.fn(), credFor: jest.fn(),
+  preview: jest.fn(), check: jest.fn(), credFor: jest.fn(), clearCredentialPause: jest.fn(),
   fdocConfig: jest.fn(() => ({ baseUrl: 'https://demo.fdoc.ru', apiKey: 'K', appLogin: 'a', appPassword: 'p', appCode: 'c', corpId: 'C1' })),
 }));
 jest.mock('./services/fdoc/client', () => ({ client: { verifyApiKey: jest.fn(), checkCredentials: jest.fn(), forget: jest.fn(), tariffInfo: jest.fn(), putWebhooks: jest.fn(), recognize: jest.fn() } }));
@@ -78,10 +78,12 @@ describe('/api/edocs', () => {
     fdoc.checkCredentials.mockRejectedValueOnce(Object.assign(new Error('x'), { code: 'fdoc_credentials_invalid' }));
     expect((await call(ops, 'PUT', '/me/credentials', { body: { login: 'ivanova', password: 'bad' } })).status).toBe(400);
     expect(store.saveCredentials).not.toHaveBeenCalled();
+    expect(packages.clearCredentialPause).not.toHaveBeenCalled();
     fdoc.checkCredentials.mockResolvedValueOnce(true);
     store.saveCredentials.mockResolvedValueOnce(true);
     expect((await call(ops, 'PUT', '/me/credentials', { body: { login: ' ivanova ', password: 'pw' } })).body).toEqual({ ok: true });
     expect(store.saveCredentials).toHaveBeenCalledWith(1, 4, 'ivanova', 'enc:pw');
+    expect(packages.clearCredentialPause).toHaveBeenCalledWith(1, 4);   // новый пароль проверен входом — фон снова берёт учётку
     expect((await call(ops, 'PUT', '/me/credentials', { body: { login: 'x' } })).status).toBe(400);
   });
   test('PUT /me/credentials: строка учётки в другом салоне — 409, журнал не пишется', async () => {
@@ -91,6 +93,7 @@ describe('/api/edocs', () => {
     expect(await call(ops, 'PUT', '/me/credentials', { body: { login: 'ivanova', password: 'pw' } }))
       .toEqual({ status: 409, body: { error: 'Учётная запись принадлежит другому салону' } });
     expect(store.logEvent).not.toHaveBeenCalled();
+    expect(packages.clearCredentialPause).not.toHaveBeenCalled();
   });
   test('GET identity расшифровывает и пишет просмотр в журнал', async () => {
     store.getClient.mockResolvedValue({ id: 52 });

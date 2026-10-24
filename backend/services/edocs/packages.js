@@ -27,6 +27,7 @@ const MAX_DOCS = 10;          // предел F.Doc: 10 файлов на ком
 const STATUS_CHUNK = 10;      // предел F.Doc: 10 комплектов в запросе статусов
 const WARN_EVERY_MS = 60 * 60 * 1000;   // WARN о проблеме опроса салона — раз в час на причину (спека §5.4)
 const SEND_STALE_MS = 5 * 60 * 1000;    // дольше любой отправки (вход 30 с + POST до 120 с)
+const BG_PAUSE_MS = 60 * 60 * 1000;     // пауза фона для учётки, которую F.Doc отверг
 
 /** Настройки салона → параметры клиента F.Doc (секреты расшифрованы). */
 function fdocConfig(row, { requireCorp = true, requireEnabled = true } = {}) {
@@ -42,10 +43,35 @@ function fdocConfig(row, { requireCorp = true, requireEnabled = true } = {}) {
   };
 }
 
-/** Учётные данные F.Doc пользователя; fallback — любые рабочие в салоне (фоновый опрос). */
+// Фон не долбит F.Doc неверным паролем: учётку, которую F.Doc отверг в фоне, фон не берёт час —
+// иначе крон входил бы ею каждые 5 минут, и F.Doc мог бы запереть её у себя за серию неудачных
+// входов. Память процесса; действия пользователя паузу не учитывают, удачный вход её снимает.
+const bgPause = new Map();   // `${salonId}:${userId}` → до какого времени (мс) фон учётку не берёт
+const pauseKey = (salonId, userId) => `${salonId}:${userId}`;
+/** user_id учёток салона на паузе фона (истёкшие паузы вычищаются). */
+function pausedUserIds(salonId) {
+  const now = Date.now();
+  const ids = [];
+  for (const [k, until] of bgPause) {
+    if (until <= now) { bgPause.delete(k); continue; }
+    const [s, u] = k.split(':');
+    if (s === String(salonId)) ids.push(Number(u));
+  }
+  return ids;
+}
+/** Учётку обновили и проверили входом («Мой F.Doc») — фон снова может её брать. */
+function clearCredentialPause(salonId, userId) { bgPause.delete(pauseKey(salonId, userId)); }
+
+/**
+ * Учётные данные F.Doc пользователя. fallback — для фона: учётку с записанным отказом (пусть человек
+ * сначала обновит пароль) и на паузе фон не берёт, вместо неё — любая другая рабочая в салоне.
+ */
 async function credFor(salonId, userId, { fallback = false } = {}) {
   let row = userId ? await store.getCredentials(salonId, userId) : null;
-  if (fallback && (!row || row.fail_count >= 3)) row = await store.pickCredentials(salonId, userId);
+  if (fallback) {
+    const paused = pausedUserIds(salonId);
+    if (!row || row.fail_count >= 1 || paused.includes(row.user_id)) row = await store.pickCredentials(salonId, userId, { failBelow: 1, exclude: paused });
+  }
   if (!row) throw new EdocsError('fdoc_no_credentials', 'Подключите свою учётную запись F.Doc: кнопка «Мой F.Doc»', 409);
   if (row.fail_count >= 3) throw new EdocsError('fdoc_credentials_invalid', 'F.Doc трижды не принял ваш пароль — обновите его в «Мой F.Doc»', 409);
   return { salonId, userId: row.user_id, login: row.login, password: secretBox.box().decrypt(row.password_enc), failCount: row.fail_count };
@@ -56,9 +82,15 @@ async function credFor(salonId, userId, { fallback = false } = {}) {
 // (ключ API, настройки приложения), за несколько тиков запер бы по очереди все учётки салона —
 // fallback берёт следующую. Счётчик ведут только действия пользователя.
 async function withCred(cred, fn, { background = false } = {}) {
-  if (background) return fn();
+  if (background) {
+    try { return await fn(); } catch (e) {
+      if (e && e.code === 'fdoc_credentials_invalid') bgPause.set(pauseKey(cred.salonId, cred.userId), Date.now() + BG_PAUSE_MS);
+      throw e;
+    }
+  }
   try {
     const r = await fn();
+    clearCredentialPause(cred.salonId, cred.userId);   // вход пользователя удался — пауза фона снята
     if (cred.failCount > 0) { await store.markCredentialsOk(cred.salonId, cred.userId); cred.failCount = 0; }
     return r;
   } catch (e) {
@@ -376,12 +408,16 @@ async function refreshLocked(salonId, ids) {
   } catch (e) { out.errors.push(e); return out; }
   const groups = new Map();
   for (const r of list) { const k = r.sent_by || 0; if (!groups.has(k)) groups.set(k, []); groups.get(k).push(r); }
-  for (const [userId, group] of groups) {
-    let cred = null;
-    try { cred = await credFor(salonId, userId, { fallback: true }); } catch (e) {
+  // Учётка группы; нет рабочей — группа пропускается (часовой WARN).
+  const groupCred = async (userId) => {
+    try { return await credFor(salonId, userId, { fallback: true }); } catch (e) {
       if (e && e.name === 'EdocsError') pollWarn(salonId, e.code, `edocs: в салоне ${salonId} нет рабочих учётных данных F.Doc — статусы не проверены`);
       else { out.errors.push(e); pollWarn(salonId, (e && e.code) || 'credentials', `edocs: учётные данные F.Doc салона ${salonId}: ${shortError(e)}`); }
+      return null;
     }
+  };
+  for (const [userId, group] of groups) {
+    let cred = await groupCred(userId);
     for (let i = 0; i < group.length; i += STATUS_CHUNK) {
       const chunk = group.slice(i, i + STATUS_CHUNK);
       if (cred) {
@@ -396,6 +432,8 @@ async function refreshLocked(salonId, ids) {
         } catch (e) {
           out.errors.push(e);
           pollWarn(salonId, (e && e.code) || 'error', `edocs: статусы комплектов салона ${salonId} не проверены: ${shortError(e)}`);
+          // Учётка ушла на паузу — остальные пачки группы не входят тем же паролем, а берут другую.
+          if (e && e.code === 'fdoc_credentials_invalid') cred = await groupCred(userId);
         }
       }
       // Отметка и после сбоя: сломанная пачка не должна опрашиваться каждый тик подряд.
@@ -496,7 +534,10 @@ async function check({ salonId, clientId, templateIds }) {
   return { missing: missingFor(await store.getIdentityRow(salonId, clientId), templates, (settingsRow && settingsRow.requisites) || {}) };
 }
 
+/** Только для тестов: сбросить память процесса (WARN раз в час, паузы учёток фона). */
+function _reset() { warnedAt.clear(); bgPause.clear(); }
+
 module.exports = {
   send, resend, refreshRows, refreshDue, fetchPdfs, employeeUrl, permalink, annul, preview, check,
-  fdocConfig, credFor, MAX_DOCS,
+  fdocConfig, credFor, clearCredentialPause, MAX_DOCS, _reset,
 };

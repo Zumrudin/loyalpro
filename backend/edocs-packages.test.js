@@ -48,6 +48,7 @@ const FILES = {
 
 beforeEach(() => {
   jest.clearAllMocks();
+  pk._reset();
   store.getSettings.mockResolvedValue(SETTINGS);
   store.getCredentials.mockResolvedValue({ user_id: 4, login: 'ivanova', password_enc: 'enc:pw', fail_count: 0 });
   store.getClient.mockResolvedValue(CLIENT);
@@ -324,6 +325,7 @@ describe('resend', () => {
 
 describe('refreshRows и refreshDue', () => {
   const ROW = { id: '22222222-2222-4222-8222-222222222222', salon_id: 1, client_id: 52, status: 'sent', sent_by: 4, fdoc_package_guid: null };
+  const BAD = Object.assign(new Error('F.Doc не принял логин или пароль сотрудника: x'), { name: 'FdocError', code: 'fdoc_credentials_invalid', status: 401 });
   test('статус меняется — журнал; подписан — PDF в S3', async () => {
     store.listDocuments.mockResolvedValue([{ id: 'd-1', file_name: 'Договор.docx', title: 'Договор', pdf_key: null }]);
     fdoc.workflowStatuses.mockResolvedValue({ packages: [{ id: ROW.id, status: 'SIGNED', documents: [{ id: 'd-1', status: 'SIGNED', clientSigners: [{ isSigned: true, dateSignOrCancel: '2026-10-24T10:00:00+03:00' }] }] }] });
@@ -346,21 +348,92 @@ describe('refreshRows и refreshDue', () => {
     expect(await pk.refreshRows(1, [{ ...ROW, status: 'signed' }])).toEqual({ checked: 1, changed: 0 });
     expect(store.logEvent).not.toHaveBeenCalledWith(expect.objectContaining({ kind: 'status' }));
   });
-  test('фоновое перечитывание не меняет счётчик отказов учётки: ни отказ, ни удача', async () => {
-    const bad = Object.assign(new Error('F.Doc не принял логин или пароль сотрудника: x'), { name: 'FdocError', code: 'fdoc_credentials_invalid', status: 401 });
-    fdoc.workflowStatuses.mockRejectedValueOnce(bad);
+  test('фоновое перечитывание не меняет счётчик отказов учётки', async () => {
+    fdoc.workflowStatuses.mockRejectedValueOnce(BAD);
     // Ни один комплект не проверен — ошибка уходит вызывающему как есть (без «Мой F.Doc»: учётка могла быть чужой).
-    await expect(pk.refreshRows(1, [ROW])).rejects.toBe(bad);
+    await expect(pk.refreshRows(1, [ROW])).rejects.toBe(BAD);
     expect(store.markCredentialsFail).not.toHaveBeenCalled();
-    store.getCredentials.mockResolvedValue({ user_id: 4, login: 'ivanova', password_enc: 'enc:pw', fail_count: 1 });
-    await pk.refreshRows(1, [ROW]);
     expect(store.markCredentialsOk).not.toHaveBeenCalled();
   });
-  test('докачка PDF — тоже фон: отказ входа не наращивает счётчик', async () => {
-    store.listDocuments.mockResolvedValue([{ id: 'd-1', pdf_key: null }]);
-    fdoc.downloadPdf.mockRejectedValue(Object.assign(new Error('bad'), { name: 'FdocError', code: 'fdoc_credentials_invalid', status: 401 }));
-    await expect(pk.fetchPdfs(1, { id: ROW.id, client_id: 52, sent_by: 4 }, {})).rejects.toMatchObject({ code: 'fdoc_credentials_invalid' });
+  test('два тика подряд с неверным паролем → один вход в F.Doc, а не два', async () => {
+    fdoc.workflowStatuses.mockRejectedValue(BAD);   // вход паролем внутри вызова отвергнут
+    store.pickCredentials.mockResolvedValue(null);  // другой рабочей учётки в салоне нет
+    store.listDuePackages.mockResolvedValue([ROW]);
+    await pk.refreshDue();
+    await pk.refreshDue();
+    expect(fdoc.workflowStatuses).toHaveBeenCalledTimes(1);
     expect(store.markCredentialsFail).not.toHaveBeenCalled();
+  });
+  test('пауза учётки в фоне — 60 минут, потом фон пробует её снова', async () => {
+    const now = jest.spyOn(Date, 'now');
+    try {
+      const t0 = Date.UTC(2026, 9, 24, 7, 0, 0);
+      now.mockReturnValue(t0);
+      fdoc.workflowStatuses.mockRejectedValue(BAD);
+      store.pickCredentials.mockResolvedValue(null);
+      await expect(pk.refreshRows(1, [ROW])).rejects.toBe(BAD);
+      now.mockReturnValue(t0 + 59 * 60 * 1000);
+      expect(await pk.refreshRows(1, [ROW])).toEqual({ checked: 0, changed: 0 });   // пропуск группы, без входа
+      expect(fdoc.workflowStatuses).toHaveBeenCalledTimes(1);
+      now.mockReturnValue(t0 + 61 * 60 * 1000);
+      await expect(pk.refreshRows(1, [ROW])).rejects.toBe(BAD);
+      expect(fdoc.workflowStatuses).toHaveBeenCalledTimes(2);
+    } finally { now.mockRestore(); }
+  });
+  test('учётка на паузе — фон берёт другую рабочую по прежнему порядку; остальные пачки группы — уже ею', async () => {
+    const id = (n) => `77777777-7777-4777-8777-${String(n).padStart(12, '0')}`;
+    const rows = Array.from({ length: 11 }, (_, i) => ({ ...ROW, id: id(i) }));   // две пачки одного отправителя
+    store.getPackage.mockImplementation(async (sid, pid) => rows.find((r) => r.id === pid) || null);
+    store.pickCredentials.mockResolvedValue({ user_id: 9, login: 'admin2', password_enc: 'enc:pw2', fail_count: 0 });
+    fdoc.workflowStatuses.mockImplementation(async (cfg, cred, ids) => {
+      if (cred.userId === 4) throw BAD;
+      return { packages: ids.map((x) => ({ id: x, status: 'WAIT_SIGN', documents: [] })), failures: [] };
+    });
+    expect(await pk.refreshRows(1, rows)).toEqual({ checked: 1, changed: 0 });
+    expect(fdoc.workflowStatuses.mock.calls.map((c) => c[1].userId)).toEqual([4, 9]);   // второй раз тем же паролем не входим
+    expect(store.pickCredentials).toHaveBeenCalledWith(1, 4, { failBelow: 1, exclude: [4] });
+    fdoc.workflowStatuses.mockClear();
+    await pk.refreshRows(1, rows.slice(0, 1));   // следующий тик: отправитель на паузе — сразу другая учётка
+    expect(fdoc.workflowStatuses.mock.calls.map((c) => c[1].userId)).toEqual([9]);
+  });
+  test('учётку с записанным отказом (fail_count ≥ 1) фон не берёт: пусть человек обновит пароль', async () => {
+    store.getCredentials.mockResolvedValue({ user_id: 4, login: 'ivanova', password_enc: 'enc:pw', fail_count: 1 });
+    store.pickCredentials.mockResolvedValue(null);
+    expect(await pk.refreshRows(1, [ROW])).toEqual({ checked: 0, changed: 0 });
+    expect(fdoc.workflowStatuses).not.toHaveBeenCalled();
+    expect(store.pickCredentials).toHaveBeenCalledWith(1, 4, { failBelow: 1, exclude: [] });
+    expect(store.markCredentialsOk).not.toHaveBeenCalled();
+  });
+  test('действия пользователя паузу не учитывают; удачный вход пользователя её снимает', async () => {
+    fdoc.workflowStatuses.mockRejectedValueOnce(BAD);
+    store.pickCredentials.mockResolvedValue(null);
+    await expect(pk.refreshRows(1, [ROW])).rejects.toBe(BAD);   // фон: учётка 4 на паузе
+    await pk.refreshRows(1, [ROW]);
+    expect(fdoc.workflowStatuses).toHaveBeenCalledTimes(1);
+    fdoc.employeeUrl.mockResolvedValue('https://demo.fdoc.ru/w/1');
+    await pk.employeeUrl({ salonId: 1, userId: 4, packageId: 'p' });   // пользователь входит той же учёткой
+    expect(fdoc.employeeUrl.mock.calls[0][1]).toMatchObject({ userId: 4 });
+    await pk.refreshRows(1, [ROW]);
+    expect(fdoc.workflowStatuses).toHaveBeenCalledTimes(2);
+    expect(fdoc.workflowStatuses.mock.calls[1][1]).toMatchObject({ userId: 4 });
+  });
+  test('новый пароль в «Мой F.Doc» снимает паузу (clearCredentialPause)', async () => {
+    fdoc.workflowStatuses.mockRejectedValueOnce(BAD);
+    store.pickCredentials.mockResolvedValue(null);
+    await expect(pk.refreshRows(1, [ROW])).rejects.toBe(BAD);
+    pk.clearCredentialPause(1, 4);
+    await pk.refreshRows(1, [ROW]);
+    expect(fdoc.workflowStatuses).toHaveBeenCalledTimes(2);
+  });
+  test('докачка PDF — тоже фон: отказ входа не наращивает счётчик и ставит учётку на паузу', async () => {
+    store.listDocuments.mockResolvedValue([{ id: 'd-1', pdf_key: null }]);
+    store.pickCredentials.mockResolvedValue(null);
+    fdoc.downloadPdf.mockRejectedValue(BAD);
+    const signed = { id: ROW.id, client_id: 52, sent_by: 4 };
+    await expect(pk.fetchPdfs(1, signed, {})).rejects.toBe(BAD);
+    expect(store.markCredentialsFail).not.toHaveBeenCalled();
+    await expect(pk.fetchPdfs(1, signed, {})).rejects.toMatchObject({ code: 'fdoc_no_credentials' });
+    expect(fdoc.downloadPdf).toHaveBeenCalledTimes(1);
   });
   test('действие пользователя ведёт счётчик: удача после отказов сбрасывает его в салоне учётки', async () => {
     store.getCredentials.mockResolvedValue({ user_id: 4, login: 'ivanova', password_enc: 'enc:pw', fail_count: 1 });
