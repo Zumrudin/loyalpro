@@ -2383,6 +2383,155 @@ async function runMigrations(client) {
       updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `).catch(() => {});
+
+  // ── «Документы»: электронное подписание с пациентами через F.Doc (спека
+  // docs/superpowers/specs/2026-10-24-fdoc-esign-design.md). Секреты (ключ API, пароли,
+  // паспорт) хранятся шифротекстом utils/secret-box (TEXT 'v1:…'), открытым — никогда.
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS edoc_settings (
+      salon_id          INTEGER PRIMARY KEY REFERENCES salons(id) ON DELETE CASCADE,
+      enabled           BOOLEAN NOT NULL DEFAULT FALSE,
+      base_url          VARCHAR(200) NOT NULL DEFAULT 'https://demo.fdoc.ru',
+      api_key_enc       TEXT,
+      app_login         VARCHAR(200),
+      app_password_enc  TEXT,
+      app_code          VARCHAR(100),
+      corp_id           VARCHAR(100),
+      qes_cert_alias    VARCHAR(200),
+      employee_position VARCHAR(200),
+      requisites        JSONB NOT NULL DEFAULT '{}'::jsonb,
+      unsign_days       INTEGER NOT NULL DEFAULT 14,
+      webhook_secret    VARCHAR(64),
+      last_webhook_at   TIMESTAMPTZ,
+      updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `).catch(() => {});
+  await client.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_edoc_settings_webhook ON edoc_settings (webhook_secret) WHERE webhook_secret IS NOT NULL`).catch(() => {});
+
+  // Учётная запись F.Doc у каждого пользователя своя (решение владельца 24.10.2026):
+  // в журнале F.Doc виден отправитель. Токены — только в памяти процесса.
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS edoc_user_credentials (
+      user_id       INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+      salon_id      INTEGER NOT NULL REFERENCES salons(id) ON DELETE CASCADE,
+      login         VARCHAR(200) NOT NULL,
+      password_enc  TEXT NOT NULL,
+      fail_count    INTEGER NOT NULL DEFAULT 0,
+      last_ok_at    TIMESTAMPTZ,
+      last_error    VARCHAR(300),
+      updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `).catch(() => {});
+
+  // Данные пациента для документов. Паспортная часть — одним шифротекстом secure_enc,
+  // secure_fields — какие поля в нём заполнены (проверка полноты без расшифровки).
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS client_identity (
+      client_id     INTEGER PRIMARY KEY REFERENCES clients(id) ON DELETE CASCADE,
+      salon_id      INTEGER NOT NULL REFERENCES salons(id) ON DELETE CASCADE,
+      last_name     VARCHAR(100),
+      first_name    VARCHAR(100),
+      middle_name   VARCHAR(100),
+      birth_date    DATE,
+      gender        VARCHAR(1),
+      phone         VARCHAR(20),
+      email         VARCHAR(200),
+      contract_no   VARCHAR(50),
+      contract_date DATE,
+      secure_enc    TEXT,
+      secure_fields JSONB NOT NULL DEFAULT '[]'::jsonb,
+      source        VARCHAR(20) NOT NULL DEFAULT 'manual',
+      updated_by    INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `).catch(() => {});
+  await client.query(`CREATE INDEX IF NOT EXISTS idx_client_identity_salon ON client_identity (salon_id)`).catch(() => {});
+
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS edoc_templates (
+      id           SERIAL PRIMARY KEY,
+      salon_id     INTEGER NOT NULL REFERENCES salons(id) ON DELETE CASCADE,
+      kind         VARCHAR(20) NOT NULL,
+      title        VARCHAR(200) NOT NULL,
+      file_key     VARCHAR(300) NOT NULL,
+      file_size    INTEGER NOT NULL DEFAULT 0,
+      placeholders JSONB NOT NULL DEFAULT '[]'::jsonb,
+      is_active    BOOLEAN NOT NULL DEFAULT TRUE,
+      sort_order   INTEGER NOT NULL DEFAULT 0,
+      created_by   INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `).catch(() => {});
+  await client.query(`CREATE INDEX IF NOT EXISTS idx_edoc_templates_salon ON edoc_templates (salon_id, is_active, sort_order)`).catch(() => {});
+
+  // Комплект: id — наш UUID, он же package.id в F.Doc. client_id — RESTRICT: строка
+  // комплекта — след юридически значимого документа, молча исчезать с клиентом не должна.
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS edoc_packages (
+      id                   UUID PRIMARY KEY,
+      salon_id             INTEGER NOT NULL REFERENCES salons(id) ON DELETE CASCADE,
+      client_id            INTEGER NOT NULL REFERENCES clients(id) ON DELETE RESTRICT,
+      record_id            INTEGER REFERENCES records(id) ON DELETE SET NULL,
+      kind                 VARCHAR(20) NOT NULL,
+      title                VARCHAR(200) NOT NULL,
+      status               VARCHAR(20) NOT NULL DEFAULT 'draft',
+      fdoc_status          VARCHAR(40),
+      fdoc_package_guid    VARCHAR(100),
+      payload              JSONB NOT NULL DEFAULT '{}'::jsonb,
+      employee_url         TEXT,
+      employee_url_at      TIMESTAMPTZ,
+      sent_by              INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      sent_at              TIMESTAMPTZ,
+      signed_at            TIMESTAMPTZ,
+      last_error           VARCHAR(500),
+      last_status_check_at TIMESTAMPTZ,
+      created_at           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at           TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `).catch(() => {});
+  await client.query(`CREATE INDEX IF NOT EXISTS idx_edoc_packages_salon_status ON edoc_packages (salon_id, status)`).catch(() => {});
+  await client.query(`CREATE INDEX IF NOT EXISTS idx_edoc_packages_salon_client ON edoc_packages (salon_id, client_id, created_at DESC)`).catch(() => {});
+  await client.query(`CREATE INDEX IF NOT EXISTS idx_edoc_packages_record ON edoc_packages (salon_id, record_id) WHERE record_id IS NOT NULL`).catch(() => {});
+
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS edoc_documents (
+      id                 UUID PRIMARY KEY,
+      package_id         UUID NOT NULL REFERENCES edoc_packages(id) ON DELETE CASCADE,
+      salon_id           INTEGER NOT NULL REFERENCES salons(id) ON DELETE CASCADE,
+      template_id        INTEGER REFERENCES edoc_templates(id) ON DELETE SET NULL,
+      title              VARCHAR(200) NOT NULL,
+      file_name          VARCHAR(250) NOT NULL,
+      sort_order         INTEGER NOT NULL DEFAULT 0,
+      fdoc_document_guid VARCHAR(100),
+      fdoc_status        VARCHAR(40),
+      client_signed_at   TIMESTAMPTZ,
+      corp_signed_at     TIMESTAMPTZ,
+      pdf_key            VARCHAR(300),
+      pdf_fetched_at     TIMESTAMPTZ,
+      created_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at         TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `).catch(() => {});
+  await client.query(`CREATE INDEX IF NOT EXISTS idx_edoc_documents_package ON edoc_documents (package_id)`).catch(() => {});
+
+  // Журнал: отправки, статусы, вебхуки (тело целиком, кроме секрета), просмотры и
+  // правки паспортных данных (кто и когда — без значений).
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS edoc_events (
+      id         BIGSERIAL PRIMARY KEY,
+      salon_id   INTEGER NOT NULL REFERENCES salons(id) ON DELETE CASCADE,
+      package_id UUID,
+      client_id  INTEGER,
+      kind       VARCHAR(30) NOT NULL,
+      user_id    INTEGER,
+      payload    JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `).catch(() => {});
+  await client.query(`CREATE INDEX IF NOT EXISTS idx_edoc_events_package ON edoc_events (salon_id, package_id, created_at DESC)`).catch(() => {});
+  await client.query(`CREATE INDEX IF NOT EXISTS idx_edoc_events_client ON edoc_events (salon_id, client_id, created_at DESC) WHERE client_id IS NOT NULL`).catch(() => {});
 }
 
 module.exports = { runMigrations };
