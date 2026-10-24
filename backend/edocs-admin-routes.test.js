@@ -67,7 +67,11 @@ async function until(cond) {
   for (let i = 0; i < 200 && !cond(); i++) await tick();
   if (!cond()) throw new Error('условие так и не наступило');
 }
-beforeEach(() => jest.clearAllMocks());
+beforeEach(() => {
+  jest.clearAllMocks();
+  // Реализации, заданные «навсегда» (mockResolvedValue) в одном тесте, не должны утекать в соседние.
+  for (const f of [store.isTemplateBusy, store.saveCorpIdIfUnchanged, store.replaceTemplateFile]) f.mockReset();
+});
 
 describe('parseSettings', () => {
   const { parseSettings } = admin;
@@ -229,6 +233,17 @@ describe('/api/edocs/admin', () => {
       expect(store.updateTemplateMeta).toHaveBeenCalledWith(1, 3, { title: 'Договор', kind: 'consent_pd', is_active: false, sort_order: 0 });
     });
   });
+  test('шаблон-«бомба» (в файле килобайты, после распаковки больше 25 МБ): 400 с понятным текстом, в S3 и БД ничего', async () => {
+    store.getTemplate.mockResolvedValue({ id: 3, kind: 'contract', is_active: true, placeholders: [] });
+    store.isTemplateBusy.mockResolvedValue(false);
+    const bomb = makeDocx({ body: p(' '.repeat(26 * 1024 * 1024)), compress: true });
+    expect(bomb.length).toBeLessThan(1024 * 1024);   // лимит загрузки (10 МБ по сжатому размеру) её пропускает
+    const r = await call(admin, 'POST', '/templates/3/file', { file: { field: 'file', name: 'bomb.docx', type: 'application/octet-stream', buffer: bomb } });
+    expect(r.status).toBe(400);
+    expect(r.body.error).toMatch(/слишком велик после распаковки/);
+    expect(s3.putObject).not.toHaveBeenCalled();
+    expect(store.replaceTemplateFile).not.toHaveBeenCalled();
+  }, 30000);
   test('словарь тегов — статический путь раньше :id', async () => {
     const r = await call(admin, 'GET', '/templates/dictionary');
     expect(r.body.fields.length).toBeGreaterThan(30);

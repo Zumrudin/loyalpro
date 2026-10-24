@@ -1,7 +1,8 @@
 'use strict';
 // Минимальные DOCX для тестов и живых скриптов — без бинарных фикстур в git.
-// makeDocx({ body, header }) собирает word/document.xml (и колонтитул) из XML-кусков;
-// p('текст') — абзац, table([['№','Услуга'], …]) — таблица по строкам.
+// makeDocx({ body, header, extra, compress }) собирает word/document.xml (и колонтитул) из XML-кусков;
+// extra — { 'путь/в/архиве': Buffer|string } — дополнительные записи; compress: true — DEFLATE (по умолчанию
+// записи не сжимаются: тесты читают байты как есть). p('текст') — абзац, table([['№','Услуга'], …]) — таблица по строкам.
 const PizZip = require('pizzip');
 
 const W = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main';
@@ -11,7 +12,7 @@ const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replac
 const p = (text) => `<w:p><w:r><w:t xml:space="preserve">${esc(text)}</w:t></w:r></w:p>`;
 const table = (rows) => `<w:tbl>${rows.map((cells) => `<w:tr>${cells.map((c) => `<w:tc>${p(c)}</w:tc>`).join('')}</w:tr>`).join('')}</w:tbl>`;
 
-function makeDocx({ body = '', header = null } = {}) {
+function makeDocx({ body = '', header = null, extra = {}, compress = false } = {}) {
   const zip = new PizZip();
   zip.file('[Content_Types].xml', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
     + '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
@@ -34,7 +35,8 @@ function makeDocx({ body = '', header = null } = {}) {
     sect = '<w:sectPr><w:headerReference w:type="default" r:id="rIdH1"/></w:sectPr>';
   }
   zip.file('word/document.xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="${W}" xmlns:r="${R}"><w:body>${body}${sect}</w:body></w:document>`);
-  return zip.generate({ type: 'nodebuffer' });
+  for (const [name, content] of Object.entries(extra)) zip.file(name, content);
+  return zip.generate({ type: 'nodebuffer', ...(compress ? { compression: 'DEFLATE' } : {}) });
 }
 
 /** Текст части документа без разметки (сущности XML раскрыты) — для проверок в тестах. */

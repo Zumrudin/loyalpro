@@ -1,6 +1,7 @@
 'use strict';
+const PizZip = require('pizzip');
 const { makeDocx, docText, p, table } = require('./services/edocs/__fixtures__/docx');
-const { inspect, render, TemplateError } = require('./services/edocs/docx');
+const { inspect, render, TemplateError, MAX_UNPACKED_BYTES } = require('./services/edocs/docx');
 const { validateTags, missingFor, dictionary } = require('./services/edocs/placeholders');
 
 const actTemplate = () => makeDocx({
@@ -53,6 +54,65 @@ describe('docx.render', () => {
   test('перенос строки в значении становится переносом в Word', () => {
     const out = render(makeDocx({ body: p('{address}') }), { address: 'г. Москва\nул. Ленина, 1' });
     expect(docText(out)).toBe('г. Москва\nул. Ленина, 1');
+  });
+});
+
+describe('лимит распаковки (zip-бомба)', () => {
+  const MB = 1024 * 1024;
+  const HEAVY = 30000;   // сборка архивов на десятки МБ в pizzip занимает секунды
+  /** Сумма заявленных в оглавлении несжатых размеров — то, что видит проверка. */
+  const unpacked = (buf) => Object.values(new PizZip(buf).files).reduce((n, f) => n + f._data.uncompressedSize, 0);
+  const small = (opts = {}) => makeDocx({ body: p('Договор с {fio}'), ...opts });
+  /** Подменяет в оглавлении ZIP заявленный несжатый размер записи — как делает автор «бомбы». */
+  function forgeSize(buf, name, size) {
+    const out = Buffer.from(buf);
+    for (let off = out.indexOf('PK\x01\x02', 0, 'latin1'); off !== -1; off = out.indexOf('PK\x01\x02', off + 4, 'latin1')) {
+      const len = out.readUInt16LE(off + 28);
+      if (out.toString('utf8', off + 46, off + 46 + len) === name) { out.writeUInt32LE(size, off + 24); return out; }
+    }
+    throw new Error(`в оглавлении нет записи ${name}`);
+  }
+  // ~30 МБ пробелов в одном абзаце: валидный XML, а в архиве с DEFLATE — несколько десятков КБ.
+  let bomb;
+  beforeAll(() => { bomb = makeDocx({ body: p(' '.repeat(30 * MB)), compress: true }); }, HEAVY);
+
+  test('несколько десятков КБ в файле, 30 МБ после распаковки: inspect и render отклоняют той же TemplateError, что и битый DOCX', () => {
+    expect(bomb.length).toBeLessThan(200 * 1024);   // это именно «бомба»: лимит загрузки по сжатому размеру её пропускает
+    expect(unpacked(bomb)).toBeGreaterThan(30 * MB);
+    for (const fn of [() => inspect(bomb), () => render(bomb, {})]) {
+      expect(fn).toThrow(TemplateError);
+      expect(fn).toThrow(/слишком велик после распаковки \(больше 25 МБ\)/);
+    }
+  });
+  test('считается сумма по всем записям архива, а не размер одной', () => {
+    // каждая запись по 9 МБ (меньше лимита), вместе 27 МБ
+    const buf = small({ compress: true, extra: { 'word/media/a.bin': Buffer.alloc(9 * MB), 'word/media/b.bin': Buffer.alloc(9 * MB), 'word/media/c.bin': Buffer.alloc(9 * MB) } });
+    expect(unpacked(buf)).toBeGreaterThan(MAX_UNPACKED_BYTES);
+    expect(() => inspect(buf)).toThrow(/слишком велик/);
+  }, HEAVY);
+  test('граница: ровно MAX_UNPACKED_BYTES проходит, на байт больше — нет', () => {
+    const base = unpacked(small({ extra: { 'word/media/pad.bin': Buffer.alloc(0) } }));   // размер без добавки (сжатие на сумму не влияет)
+    const exact = small({ compress: true, extra: { 'word/media/pad.bin': Buffer.alloc(MAX_UNPACKED_BYTES - base) } });
+    const over = small({ compress: true, extra: { 'word/media/pad.bin': Buffer.alloc(MAX_UNPACKED_BYTES - base + 1) } });
+    expect(unpacked(exact)).toBe(MAX_UNPACKED_BYTES);
+    expect(inspect(exact)).toEqual({ fio: {} });
+    expect(() => inspect(over)).toThrow(/слишком велик/);
+  }, HEAVY);
+  test('обычный DOCX проходит и без сжатия, и с DEFLATE; увесистый, но в пределах лимита — тоже', () => {
+    expect(inspect(small())).toEqual({ fio: {} });
+    expect(inspect(small({ compress: true }))).toEqual({ fio: {} });
+    expect(docText(render(small({ compress: true }), { fio: 'Иванова Анна' }))).toBe('Договор с Иванова Анна');
+    const heavy = makeDocx({ body: p('Акт {fio}') + p('x'.repeat(10 * MB)), compress: true });
+    expect(unpacked(heavy)).toBeGreaterThan(10 * MB);
+    expect(inspect(heavy)).toEqual({ fio: {} });
+  }, HEAVY);
+  test('оглавление архива занижает размер — отклоняется до полной распаковки, а не на «size mismatch» после неё', () => {
+    const forged = forgeSize(bomb, 'word/document.xml', 1000);
+    expect(unpacked(forged)).toBeLessThan(MB);   // заявленная сумма проверку проходит
+    for (const fn of [() => inspect(forged), () => render(forged, {})]) {
+      expect(fn).toThrow(TemplateError);
+      expect(fn).toThrow(/слишком велик после распаковки/);
+    }
   });
 });
 
