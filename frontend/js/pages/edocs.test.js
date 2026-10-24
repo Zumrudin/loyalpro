@@ -275,3 +275,15 @@ test('«Отправить ссылку ещё раз»: без подтверж
   assert.strictEqual(btn.disabled, false);
   assert.strictEqual(p.st.fetches.filter((u) => u.endsWith('/permalink')).length, 1);
 });
+test('встройки: карточка клиента и «Записи» зовут хуки «Документов», колонка «Акт» в таблице записей', () => {
+  const clients = fs.readFileSync(path.join(__dirname, 'clients.js'), 'utf8');
+  const records = fs.readFileSync(path.join(__dirname, 'records.js'), 'utf8');
+  const html = fs.readFileSync(path.join(FRONT, 'index.html'), 'utf8');
+  assert.match(clients, /<div id="edClientBlock_\$\{c\.id\}"><\/div>/);
+  assert.match(clients, /typeof edRenderClientBlock === 'function'\) edRenderClientBlock\(c\.id\)/);
+  assert.match(records, /class="r-act" data-rid="\$\{r\.id\}" data-cid="\$\{r\.client_id \|\| ''\}"/);
+  assert.match(records, /typeof edDecorateRecords === 'function'\) edDecorateRecords\(d\.records\)/);
+  assert.doesNotMatch(records, /colspan="9"/);
+  assert.match(html, /<th>Статус<\/th><th>Источник<\/th><th><\/th><\/tr><\/thead>/);
+  assert.match(html, /<td colspan="10" class="empty">Выберите период<\/td>/);
+});
