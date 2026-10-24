@@ -79,9 +79,18 @@ describe('/api/edocs', () => {
     expect((await call(ops, 'PUT', '/me/credentials', { body: { login: 'ivanova', password: 'bad' } })).status).toBe(400);
     expect(store.saveCredentials).not.toHaveBeenCalled();
     fdoc.checkCredentials.mockResolvedValueOnce(true);
+    store.saveCredentials.mockResolvedValueOnce(true);
     expect((await call(ops, 'PUT', '/me/credentials', { body: { login: ' ivanova ', password: 'pw' } })).body).toEqual({ ok: true });
     expect(store.saveCredentials).toHaveBeenCalledWith(1, 4, 'ivanova', 'enc:pw');
     expect((await call(ops, 'PUT', '/me/credentials', { body: { login: 'x' } })).status).toBe(400);
+  });
+  test('PUT /me/credentials: строка учётки в другом салоне — 409, журнал не пишется', async () => {
+    store.getSettings.mockResolvedValue({ corp_id: 'C1' });
+    fdoc.checkCredentials.mockResolvedValueOnce(true);
+    store.saveCredentials.mockResolvedValueOnce(false);
+    expect(await call(ops, 'PUT', '/me/credentials', { body: { login: 'ivanova', password: 'pw' } }))
+      .toEqual({ status: 409, body: { error: 'Учётная запись принадлежит другому салону' } });
+    expect(store.logEvent).not.toHaveBeenCalled();
   });
   test('GET identity расшифровывает и пишет просмотр в журнал', async () => {
     store.getClient.mockResolvedValue({ id: 52 });
@@ -129,6 +138,7 @@ describe('/api/edocs', () => {
     store.listEvents.mockResolvedValue([]);
     const r = await call(ops, 'GET', `/packages/${PKG_ID}`);
     expect(r.body).toMatchObject({ id: PKG_ID, status: 'signed', patient: { fio: 'Иванова Анна' }, documents: [{ id: 'd', title: 'Договор', fileName: 'Договор.docx', hasPdf: true }] });
+    expect(store.listDocuments).toHaveBeenCalledWith(1, PKG_ID);
   });
   test('действия по комплекту передают salonId/userId', async () => {
     packages.annul.mockResolvedValue({ ok: true });

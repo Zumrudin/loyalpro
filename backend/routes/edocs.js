@@ -95,7 +95,8 @@ router.put('/me/credentials', async (req, res) => {
       if (e && e.code === 'fdoc_credentials_invalid') return res.status(400).json({ error: 'F.Doc не принял логин или пароль', code: e.code });
       throw e;
     }
-    await store.saveCredentials(sid, req.user.userId, login, secretBox.box().encrypt(password));
+    const saved = await store.saveCredentials(sid, req.user.userId, login, secretBox.box().encrypt(password));
+    if (!saved) return res.status(409).json({ error: 'Учётная запись принадлежит другому салону' });
     await store.logEvent({ salonId: sid, kind: 'credentials', userId: req.user.userId, payload: { action: 'save', login } });
     res.json({ ok: true });
   } catch (e) { sendError(res, e, logger, 'edocs credentials save'); }
@@ -318,7 +319,7 @@ router.get('/packages/:id', async (req, res) => {
   try {
     const p = await store.getPackage(sid, req.params.id);
     if (!p) return res.status(404).json({ error: 'Комплект не найден' });
-    const [docs, events] = await Promise.all([store.listDocuments(p.id), store.listEvents(sid, p.id, 30)]);
+    const [docs, events] = await Promise.all([store.listDocuments(sid, p.id), store.listEvents(sid, p.id, 30)]);
     res.json({
       ...packageView(p),
       act: (p.payload && p.payload.act) || null,

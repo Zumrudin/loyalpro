@@ -5,8 +5,12 @@
 // по Москве, и toISOString() дал бы вчерашний день (готча из CLAUDE.md).
 const { db, withTransaction } = require('../../db');
 const { createLogger } = require('../../logger');
+const { STATUSES, isFinal } = require('./statuses');
 
 const logger = createLogger('EdocsStore');
+// Из этих статусов комплект не возвращается в draft/sent/error (applyStatus): финальные по
+// statuses.isFinal и 'signed' — он не финальный лишь потому, что ещё может стать «аннулирован».
+const NO_ROLLBACK = STATUSES.filter((s) => s === 'signed' || isFinal(s));
 
 // ── настройки салона ────────────────────────────────────────────────────────
 const SETTINGS_COLS = ['enabled', 'base_url', 'api_key_enc', 'app_login', 'app_password_enc', 'app_code', 'corp_id',
@@ -40,23 +44,27 @@ async function touchWebhook(salonId) {
 async function getCredentials(salonId, userId) {
   return db.oneOrNone('SELECT * FROM edoc_user_credentials WHERE user_id=$1 AND salon_id=$2', [userId, salonId]);
 }
+/** true — записано; false — строка этого user_id принадлежит другому салону (не тронута). */
 async function saveCredentials(salonId, userId, login, passwordEnc) {
-  await db.query(
+  const r = await db.oneOrNone(
     `INSERT INTO edoc_user_credentials (user_id, salon_id, login, password_enc, fail_count, last_ok_at)
      VALUES ($1, $2, $3, $4, 0, NOW())
-     ON CONFLICT (user_id) DO UPDATE SET salon_id=EXCLUDED.salon_id, login=EXCLUDED.login, password_enc=EXCLUDED.password_enc,
-       fail_count=0, last_ok_at=NOW(), last_error=NULL, updated_at=NOW()`,
+     ON CONFLICT (user_id) DO UPDATE SET login=EXCLUDED.login, password_enc=EXCLUDED.password_enc,
+       fail_count=0, last_ok_at=NOW(), last_error=NULL, updated_at=NOW()
+     WHERE edoc_user_credentials.salon_id = EXCLUDED.salon_id
+     RETURNING user_id`,
     [userId, salonId, login, passwordEnc],
   );
+  return !!r;
 }
 async function deleteCredentials(salonId, userId) {
   await db.query('DELETE FROM edoc_user_credentials WHERE user_id=$1 AND salon_id=$2', [userId, salonId]);
 }
-async function markCredentialsOk(userId) {
-  await db.query('UPDATE edoc_user_credentials SET fail_count=0, last_ok_at=NOW(), last_error=NULL, updated_at=NOW() WHERE user_id=$1', [userId]);
+async function markCredentialsOk(salonId, userId) {
+  await db.query('UPDATE edoc_user_credentials SET fail_count=0, last_ok_at=NOW(), last_error=NULL, updated_at=NOW() WHERE user_id=$1 AND salon_id=$2', [userId, salonId]);
 }
-async function markCredentialsFail(userId, error) {
-  await db.query('UPDATE edoc_user_credentials SET fail_count=fail_count+1, last_error=$2, updated_at=NOW() WHERE user_id=$1', [userId, String(error || '').slice(0, 300)]);
+async function markCredentialsFail(salonId, userId, error) {
+  await db.query('UPDATE edoc_user_credentials SET fail_count=fail_count+1, last_error=$3, updated_at=NOW() WHERE user_id=$1 AND salon_id=$2', [userId, salonId, String(error || '').slice(0, 300)]);
 }
 /** Рабочие учётные данные салона: сначала preferUserId, иначе последние удачные. */
 async function pickCredentials(salonId, preferUserId) {
@@ -240,14 +248,17 @@ async function insertPackage(pkg, docs) {
     }
   });
 }
+/** Только из 'draft': true — комплект переведён в 'sent', false — он уже не черновик (не тронут). */
 async function markSent(salonId, id, { employeeUrl = null, userId = null } = {}) {
-  await db.query(
+  const r = await db.oneOrNone(
     `UPDATE edoc_packages SET status='sent', sent_at=NOW(), sent_by=COALESCE($3, sent_by), last_error=NULL,
        employee_url=COALESCE($4, employee_url), employee_url_at=CASE WHEN $4::text IS NULL THEN employee_url_at ELSE NOW() END,
        updated_at=NOW()
-     WHERE salon_id=$1 AND id=$2`,
+     WHERE salon_id=$1 AND id=$2 AND status='draft'
+     RETURNING id`,
     [salonId, id, userId, employeeUrl],
   );
+  return !!r;
 }
 async function markSendError(salonId, id, error) {
   await db.query('UPDATE edoc_packages SET last_error=$3, updated_at=NOW() WHERE salon_id=$1 AND id=$2', [salonId, id, String(error || '').slice(0, 500)]);
@@ -255,30 +266,39 @@ async function markSendError(salonId, id, error) {
 async function setEmployeeUrl(salonId, id, url) {
   await db.query('UPDATE edoc_packages SET employee_url=$3, employee_url_at=NOW() WHERE salon_id=$1 AND id=$2', [salonId, id, url]);
 }
-/** Применить statuses.applyWorkflow(): комплект и его документы одной транзакцией. */
+/**
+ * Применить statuses.applyWorkflow(): комплект и его документы одной транзакцией.
+ * Статус только вперёд: из NO_ROLLBACK комплект переходит лишь в NO_ROLLBACK (signed → annulled
+ * законен). Условие — в WHERE, а не в JS: иначе устаревший ответ F.Doc, прочитанный параллельно,
+ * откатил бы статус. Документы — только если строка комплекта обновилась.
+ * true — применено; false — комплект не найден в салоне или переход назад отвергнут.
+ */
 async function applyStatus(salonId, id, upd) {
-  await withTransaction(async (c) => {
+  return withTransaction(async (c) => {
     const p = upd.package;
-    await c.query(
+    const hit = (await c.query(
       `UPDATE edoc_packages SET status=$3, fdoc_status=$4, fdoc_package_guid=COALESCE($5, fdoc_package_guid),
          signed_at=COALESCE(signed_at, $6::timestamptz), last_status_check_at=NOW(), updated_at=NOW()
-       WHERE salon_id=$1 AND id=$2`,
-      [salonId, id, p.status, p.fdoc_status, p.fdoc_package_guid, p.signed_at],
-    );
+       WHERE salon_id=$1 AND id=$2 AND (status <> ALL($7::text[]) OR $3::text = ANY($7::text[]))
+       RETURNING id`,
+      [salonId, id, p.status, p.fdoc_status, p.fdoc_package_guid, p.signed_at, NO_ROLLBACK],
+    )).rows[0];
+    if (!hit) return false;
     for (const d of upd.documents || []) {
       await c.query(
-        `UPDATE edoc_documents SET fdoc_document_guid=COALESCE($3, fdoc_document_guid), fdoc_status=$4,
-           client_signed_at=COALESCE($5::timestamptz, client_signed_at), corp_signed_at=COALESCE($6::timestamptz, corp_signed_at),
+        `UPDATE edoc_documents SET fdoc_document_guid=COALESCE($4, fdoc_document_guid), fdoc_status=$5,
+           client_signed_at=COALESCE($6::timestamptz, client_signed_at), corp_signed_at=COALESCE($7::timestamptz, corp_signed_at),
            updated_at=NOW()
-         WHERE package_id=$1 AND id=$2`,
-        [id, d.id, d.fdoc_document_guid, d.fdoc_status, d.client_signed_at, d.corp_signed_at],
+         WHERE salon_id=$1 AND package_id=$2 AND id=$3`,
+        [salonId, id, d.id, d.fdoc_document_guid, d.fdoc_status, d.client_signed_at, d.corp_signed_at],
       );
     }
+    return true;
   });
 }
-async function touchStatusCheck(ids) {
+async function touchStatusCheck(salonId, ids) {
   if (!ids.length) return;
-  await db.query('UPDATE edoc_packages SET last_status_check_at=NOW() WHERE id = ANY($1::uuid[])', [ids]);
+  await db.query('UPDATE edoc_packages SET last_status_check_at=NOW() WHERE salon_id=$1 AND id = ANY($2::uuid[])', [salonId, ids]);
 }
 const PACKAGE_SELECT = `SELECT p.*, c.name AS client_name, c.phone AS client_phone, u.name AS sent_by_name
   FROM edoc_packages p JOIN clients c ON c.id=p.client_id LEFT JOIN users u ON u.id=p.sent_by`;
@@ -288,8 +308,8 @@ async function getPackage(salonId, id) {
 async function findPackageByAnyId(salonId, anyId) {
   return db.oneOrNone('SELECT * FROM edoc_packages WHERE salon_id=$1 AND (id::text=$2 OR fdoc_package_guid=$2) LIMIT 1', [salonId, anyId]);
 }
-async function listDocuments(packageId) {
-  return db.any('SELECT * FROM edoc_documents WHERE package_id=$1 ORDER BY sort_order, created_at', [packageId]);
+async function listDocuments(salonId, packageId) {
+  return db.any('SELECT * FROM edoc_documents WHERE salon_id=$1 AND package_id=$2 ORDER BY sort_order, created_at', [salonId, packageId]);
 }
 async function getDocument(salonId, id) {
   return db.oneOrNone(
@@ -298,8 +318,8 @@ async function getDocument(salonId, id) {
     [salonId, id],
   );
 }
-async function setDocumentPdf(docId, key) {
-  await db.query('UPDATE edoc_documents SET pdf_key=$2, pdf_fetched_at=NOW(), updated_at=NOW() WHERE id=$1', [docId, key]);
+async function setDocumentPdf(salonId, docId, key) {
+  await db.query('UPDATE edoc_documents SET pdf_key=$3, pdf_fetched_at=NOW(), updated_at=NOW() WHERE salon_id=$1 AND id=$2', [salonId, docId, key]);
 }
 /** Список комплектов салона с фильтрами; from/to — даты создания по Москве. */
 async function listPackages(salonId, { status = null, clientId = null, from = null, to = null, limit = 50, offset = 0 } = {}) {
@@ -326,7 +346,8 @@ async function listClientPackages(salonId, clientId, limit = 20) {
 }
 // Кого опросить фоном: незавершённые — каждые 5 минут первые 60 дней, дальше раз в сутки;
 // подписанные — раз в сутки 30 дней (подписанный ещё может стать «аннулирован»);
-// подписанные без PDF — каждые 5 минут, пока PDF не скачаны.
+// подписанные без PDF — каждые 5 минут, пока PDF не скачаны, но тоже не дольше 30 дней
+// с подписи: PDF, который не скачивается, иначе опрашивался бы вечно.
 const DUE_SQL = `
   SELECT p.* FROM edoc_packages p JOIN edoc_settings s ON s.salon_id=p.salon_id AND s.enabled
   WHERE (p.status IN ('sent', 'error') AND p.created_at > NOW() - INTERVAL '60 days'
@@ -335,7 +356,8 @@ const DUE_SQL = `
           AND (p.last_status_check_at IS NULL OR p.last_status_check_at < NOW() - INTERVAL '1 day'))
      OR (p.status = 'signed' AND p.signed_at > NOW() - INTERVAL '30 days'
           AND (p.last_status_check_at IS NULL OR p.last_status_check_at < NOW() - INTERVAL '1 day'))
-     OR (p.status = 'signed' AND EXISTS (SELECT 1 FROM edoc_documents d WHERE d.package_id=p.id AND d.pdf_key IS NULL)
+     OR (p.status = 'signed' AND p.signed_at > NOW() - INTERVAL '30 days'
+          AND EXISTS (SELECT 1 FROM edoc_documents d WHERE d.package_id=p.id AND d.pdf_key IS NULL)
           AND (p.last_status_check_at IS NULL OR p.last_status_check_at < NOW() - INTERVAL '5 minutes'))
   ORDER BY p.last_status_check_at NULLS FIRST, p.created_at
   LIMIT $1`;

@@ -46,6 +46,7 @@ beforeEach(() => {
   store.getRecord.mockResolvedValue(RECORD);
   store.getPackage.mockImplementation(async (sid, id) => ({ id, salon_id: 1, client_id: 52, status: 'sent', sent_by: 4, title: 'Документы', payload: {} }));
   store.listDocuments.mockResolvedValue([]);
+  store.applyStatus.mockResolvedValue(true);
   s3.getObjectBuffer.mockImplementation(async (key) => FILES[key]);
   fdoc.sendPackage.mockResolvedValue({ url: 'https://demo.fdoc.ru/employee/xyz' });
   fdoc.workflowStatuses.mockResolvedValue({ packages: [], failures: [] });
@@ -102,7 +103,7 @@ describe('send', () => {
   test('F.Doc не принял пароль сотрудника — счётчик отказов и 409', async () => {
     fdoc.sendPackage.mockRejectedValue(Object.assign(new Error('bad'), { code: 'fdoc_credentials_invalid', status: 401 }));
     await expect(pk.send({ salonId: 1, userId: 4, clientId: 52, templateIds: [10] })).rejects.toMatchObject({ code: 'fdoc_credentials_invalid', status: 409 });
-    expect(store.markCredentialsFail).toHaveBeenCalledWith(4, 'bad');
+    expect(store.markCredentialsFail).toHaveBeenCalledWith(1, 4, 'bad');
   });
 
   test('акт: строки из записи, привязка к визиту, номер акта — id записи YClients', async () => {
@@ -177,12 +178,24 @@ describe('refreshRows и refreshDue', () => {
     store.getPackage.mockResolvedValue({ ...ROW, status: 'signed' });
     fdoc.downloadPdf.mockResolvedValue(Buffer.from('%PDF-1.7'));
     expect(await pk.refreshRows(1, [ROW])).toEqual({ checked: 1, changed: 1 });
+    expect(store.listDocuments).toHaveBeenCalledWith(1, ROW.id);
     expect(store.applyStatus).toHaveBeenCalledWith(1, ROW.id, expect.objectContaining({ package: expect.objectContaining({ status: 'signed' }) }));
     expect(store.logEvent).toHaveBeenCalledWith(expect.objectContaining({ kind: 'status', payload: { from: 'sent', to: 'signed', fdoc: 'SIGNED' } }));
     expect(fdoc.downloadPdf).toHaveBeenCalledWith(expect.anything(), expect.anything(), ROW.id, 'd-1');
     expect(s3.putObject).toHaveBeenCalledWith(`edocs/1/packages/${ROW.id}/d-1.pdf`, Buffer.from('%PDF-1.7'), 'application/pdf');
-    expect(store.setDocumentPdf).toHaveBeenCalledWith('d-1', `edocs/1/packages/${ROW.id}/d-1.pdf`);
-    expect(store.touchStatusCheck).toHaveBeenCalledWith([ROW.id]);
+    expect(store.setDocumentPdf).toHaveBeenCalledWith(1, 'd-1', `edocs/1/packages/${ROW.id}/d-1.pdf`);
+    expect(store.touchStatusCheck).toHaveBeenCalledWith(1, [ROW.id]);
+  });
+  test('откат статуса отвергнут (applyStatus → false) — без события и без «изменился»', async () => {
+    store.applyStatus.mockResolvedValue(false);
+    fdoc.workflowStatuses.mockResolvedValue({ packages: [{ id: ROW.id, status: 'WAIT_SIGN', documents: [] }] });
+    expect(await pk.refreshRows(1, [{ ...ROW, status: 'signed' }])).toEqual({ checked: 1, changed: 0 });
+    expect(store.logEvent).not.toHaveBeenCalledWith(expect.objectContaining({ kind: 'status' }));
+  });
+  test('удачный вызов после отказов сбрасывает счётчик учётки в её салоне', async () => {
+    store.getCredentials.mockResolvedValue({ user_id: 4, login: 'ivanova', password_enc: 'enc:pw', fail_count: 1 });
+    await pk.refreshRows(1, [ROW]);
+    expect(store.markCredentialsOk).toHaveBeenCalledWith(1, 4);
   });
   test('учётки отправителя нет — берётся любая рабочая в салоне', async () => {
     store.getCredentials.mockResolvedValue(null);
@@ -201,7 +214,7 @@ describe('refreshRows и refreshDue', () => {
     store.getSettings.mockImplementation(async (sid) => (sid === 2 ? null : SETTINGS));
     const r = await pk.refreshDue();
     expect(r).toEqual({ checked: 0, changed: 0 });
-    expect(store.touchStatusCheck).toHaveBeenCalledWith(['33333333-3333-4333-8333-333333333333']);
+    expect(store.touchStatusCheck).toHaveBeenCalledWith(2, ['33333333-3333-4333-8333-333333333333']);
   });
 });
 

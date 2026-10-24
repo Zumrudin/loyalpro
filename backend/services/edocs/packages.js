@@ -46,18 +46,18 @@ async function credFor(salonId, userId, { fallback = false } = {}) {
   if (fallback && (!row || row.fail_count >= 3)) row = await store.pickCredentials(salonId, userId);
   if (!row) throw new EdocsError('fdoc_no_credentials', 'Подключите свою учётную запись F.Doc: кнопка «Мой F.Doc»', 409);
   if (row.fail_count >= 3) throw new EdocsError('fdoc_credentials_invalid', 'F.Doc трижды не принял ваш пароль — обновите его в «Мой F.Doc»', 409);
-  return { userId: row.user_id, login: row.login, password: secretBox.box().decrypt(row.password_enc), failCount: row.fail_count };
+  return { salonId, userId: row.user_id, login: row.login, password: secretBox.box().decrypt(row.password_enc), failCount: row.fail_count };
 }
 
 // Неверный пароль — счётчик отказов (после трёх учётка не используется) и 409 для фронта.
 async function withCred(cred, fn) {
   try {
     const r = await fn();
-    if (cred.failCount > 0) { await store.markCredentialsOk(cred.userId); cred.failCount = 0; }
+    if (cred.failCount > 0) { await store.markCredentialsOk(cred.salonId, cred.userId); cred.failCount = 0; }
     return r;
   } catch (e) {
     if (e && e.code === 'fdoc_credentials_invalid') {
-      await store.markCredentialsFail(cred.userId, shortError(e));
+      await store.markCredentialsFail(cred.salonId, cred.userId, shortError(e));
       throw new EdocsError('fdoc_credentials_invalid', 'F.Doc не принял логин или пароль — обновите их в «Мой F.Doc»', 409);
     }
     throw e;
@@ -168,7 +168,7 @@ async function resend({ salonId, userId, packageId }) {
     await store.logEvent({ salonId, packageId: pkg.id, clientId: pkg.client_id, kind: 'send_recovered', userId, payload: { fdoc: wf.status || null } });
     return { packageId: pkg.id, recovered: true };
   }
-  const docs = await store.listDocuments(pkg.id);
+  const docs = await store.listDocuments(salonId, pkg.id);
   if (docs.some((d) => !d.template_id)) throw new EdocsError('template_gone', 'Шаблон документа удалён — оформите комплект заново', 409);
   const p = pkg.payload || {};
   const ctx = await prepare({ salonId, userId, clientId: pkg.client_id, templateIds: docs.map((d) => d.template_id), recordId: pkg.record_id, actLines: p.act ? p.act.lines : null, docDate: p.docDate });
@@ -180,18 +180,18 @@ async function resend({ salonId, userId, packageId }) {
 }
 
 async function applyOne(salonId, row, wf) {
-  const docs = await store.listDocuments(row.id);
+  const docs = await store.listDocuments(salonId, row.id);
   const upd = applyWorkflow(row, docs, wf);
-  await store.applyStatus(salonId, row.id, upd);
+  const applied = await store.applyStatus(salonId, row.id, upd);
   if (upd.package.unknownStatus) logger.warn(`edocs: незнакомый статус F.Doc «${wf.status}» у комплекта ${row.id}`);
-  if (upd.package.status === row.status) return false;
+  if (!applied || upd.package.status === row.status) return false;
   await store.logEvent({ salonId, packageId: row.id, clientId: row.client_id, kind: 'status', payload: { from: row.status, to: upd.package.status, fdoc: wf.status || null } });
   return true;
 }
 
 /** PDF подписанных документов → S3 (только те, что ещё не скачаны). */
 async function fetchPdfs(salonId, pkg, cfg) {
-  const docs = (await store.listDocuments(pkg.id)).filter((d) => !d.pdf_key);
+  const docs = (await store.listDocuments(salonId, pkg.id)).filter((d) => !d.pdf_key);
   if (!docs.length) return 0;
   const cred = await credFor(salonId, pkg.sent_by, { fallback: true });
   let n = 0;
@@ -199,7 +199,7 @@ async function fetchPdfs(salonId, pkg, cfg) {
     const buf = await withCred(cred, () => fdoc.downloadPdf(cfg, cred, pkg.fdoc_package_guid || pkg.id, d.fdoc_document_guid || d.id));
     const key = `edocs/${salonId}/packages/${pkg.id}/${d.id}.pdf`;
     await s3.putObject(key, buf, 'application/pdf');
-    await store.setDocumentPdf(d.id, key);
+    await store.setDocumentPdf(salonId, d.id, key);
     n++;
   }
   await store.logEvent({ salonId, packageId: pkg.id, clientId: pkg.client_id, kind: 'pdf', payload: { documents: n } });
@@ -229,7 +229,7 @@ async function refreshRows(salonId, rows) {
         checked++;
         if (await applyOne(salonId, row, wf)) changed++;
       }
-      await store.touchStatusCheck(chunk.map((r) => r.id));
+      await store.touchStatusCheck(salonId, chunk.map((r) => r.id));
     }
   }
   for (const r of list) {
@@ -256,7 +256,7 @@ async function refreshDue() {
       } catch (e) {
         logger.warn(`edocs poll salon ${salonId}: ${shortError(e)}`);
         // Сломанные настройки салона не должны опрашиваться каждый тик подряд.
-        try { await store.touchStatusCheck(list.map((x) => x.id)); } catch (_) { /* повторит следующий тик */ }
+        try { await store.touchStatusCheck(salonId, list.map((x) => x.id)); } catch (_) { /* повторит следующий тик */ }
       }
     }
     return { checked, changed };

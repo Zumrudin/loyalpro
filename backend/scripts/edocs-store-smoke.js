@@ -55,11 +55,22 @@ async function run(client, { salonId = 1 } = {}) {
   ok('findSalonByWebhookSecret', (await store.findSalonByWebhookSecret(secret)) === salonId);
   await store.touchWebhook(salonId);
 
-  await store.saveCredentials(salonId, u.id, 'smoke', 'v1:x:y:z');
-  await store.markCredentialsFail(u.id, 'bad');
-  ok('credentials + счётчик отказов', (await store.getCredentials(salonId, u.id)).fail_count === 1);
+  // Чужой салон — несуществующий id: ни одна проверка ниже не вставляет строк с ним (только
+  // UPDATE/SELECT и INSERT, упирающийся в конфликт), поэтому внешние ключи не мешают.
+  const otherSalon = -1;
+  ok('saveCredentials своего салона → true', (await store.saveCredentials(salonId, u.id, 'smoke', 'v1:x:y:z')) === true);
+  ok('saveCredentials из чужого салона → false', (await store.saveCredentials(otherSalon, u.id, 'intruder', 'v1:i:i:i')) === false);
+  let cr = await store.getCredentials(salonId, u.id);
+  ok('строка учётки чужим салоном не тронута', cr && cr.login === 'smoke' && cr.password_enc === 'v1:x:y:z' && cr.salon_id === salonId, cr && { login: cr.login, salon_id: cr.salon_id });
+  await store.markCredentialsFail(otherSalon, u.id, 'evil');
+  await store.markCredentialsFail(salonId, u.id, 'bad');
+  cr = await store.getCredentials(salonId, u.id);
+  ok('credentials + счётчик отказов (чужой салон не считается)', cr.fail_count === 1 && cr.last_error === 'bad', { fail_count: cr.fail_count, last_error: cr.last_error });
   ok('pickCredentials', (await store.pickCredentials(salonId, u.id)).user_id === u.id);
-  await store.markCredentialsOk(u.id);
+  await store.markCredentialsOk(otherSalon, u.id);
+  ok('markCredentialsOk чужого салона не сбрасывает счётчик', (await store.getCredentials(salonId, u.id)).fail_count === 1);
+  await store.markCredentialsOk(salonId, u.id);
+  ok('markCredentialsOk своего салона сбрасывает счётчик', (await store.getCredentials(salonId, u.id)).fail_count === 0);
   ok('listUsersWithCredentials', (await store.listUsersWithCredentials(salonId)).some((x) => x.login === 'smoke'));
 
   const tId = await store.insertTemplate(salonId, { kind: 'contract', title: 'Smoke договор', file_key: 'smoke/k1', file_size: 1, placeholders: ['fio'], created_by: u.id });
@@ -85,27 +96,59 @@ async function run(client, { salonId = 1 } = {}) {
     [{ id: d1, template_id: aId, title: 'Smoke акт', file_name: 'Smoke.docx', sort_order: 0 }]);
   ok('deleteTemplate занятого → busy', (await store.deleteTemplate(salonId, aId)) === 'busy');
   await store.markSendError(salonId, pkgId, 'smoke error');
-  await store.markSent(salonId, pkgId, { employeeUrl: 'https://demo.fdoc.ru/x', userId: u.id });
+  ok('markSent из черновика → true', (await store.markSent(salonId, pkgId, { employeeUrl: 'https://demo.fdoc.ru/x', userId: u.id })) === true);
   let pk = await store.getPackage(salonId, pkgId);
   ok('markSent', pk.status === 'sent' && pk.employee_url === 'https://demo.fdoc.ru/x' && pk.last_error === null, pk);
+  ok('markSent уже отправленного → false', (await store.markSent(salonId, pkgId, { employeeUrl: 'https://demo.fdoc.ru/again', userId: u.id })) === false);
+  ok('markSent повторный комплект не тронул', (await store.getPackage(salonId, pkgId)).employee_url === 'https://demo.fdoc.ru/x');
   ok('actStatusesForRecords', (await store.actStatusesForRecords(salonId, [rec.id])).some((x) => x.package_id === pkgId));
   ok('listClientVisits со статусом акта', (await store.listClientVisits(salonId, rec.client_id)).some((x) => x.act_package_id === pkgId));
-  await store.applyStatus(salonId, pkgId, { package: { status: 'signed', fdoc_status: 'SIGNED', fdoc_package_guid: null, signed_at: '2026-10-24T07:05:00.000Z' },
-    documents: [{ id: d1, fdoc_document_guid: null, fdoc_status: 'SIGNED', client_signed_at: '2026-10-24T07:05:00.000Z', corp_signed_at: null }] });
+
+  // Статус только вперёд. Время подписи — относительно «сейчас»: опрос без PDF ограничен 30 днями.
+  const signedIso = new Date(Date.now() - 3600 * 1000).toISOString();
+  const statusUpd = (status, fdocStatus, signedAt) => ({ package: { status, fdoc_status: fdocStatus, fdoc_package_guid: null, signed_at: signedAt },
+    documents: [{ id: d1, fdoc_document_guid: null, fdoc_status: fdocStatus, client_signed_at: signedAt, corp_signed_at: null }] });
+  ok('applyStatus sent → signed → true', (await store.applyStatus(salonId, pkgId, statusUpd('signed', 'SIGNED', signedIso))) === true);
   pk = await store.getPackage(salonId, pkgId);
   ok('applyStatus', pk.status === 'signed' && !!pk.signed_at && !!pk.last_status_check_at, pk);
+  ok('applyStatus signed → sent отвергнут (false)', (await store.applyStatus(salonId, pkgId, statusUpd('sent', 'WAIT_SIGN', null))) === false);
+  pk = await store.getPackage(salonId, pkgId);
+  let doc = await store.getDocument(salonId, d1);
+  ok('после отказа: комплект signed, документ не тронут', pk.status === 'signed' && pk.fdoc_status === 'SIGNED' && doc.fdoc_status === 'SIGNED', { pkg: pk.status, doc: doc.fdoc_status });
+  ok('applyStatus чужого салона → false', (await store.applyStatus(otherSalon, pkgId, statusUpd('annulled', 'ANNULED', null))) === false);
+  pk = await store.getPackage(salonId, pkgId);
+  doc = await store.getDocument(salonId, d1);
+  ok('applyStatus чужого салона: комплект и документ не тронуты', pk.status === 'signed' && doc.fdoc_status === 'SIGNED', { pkg: pk.status, doc: doc.fdoc_status });
+
+  ok('listDocuments своего салона', (await store.listDocuments(salonId, pkgId)).map((x) => x.id).join() === d1);
+  ok('listDocuments чужого салона пуст', (await store.listDocuments(otherSalon, pkgId)).length === 0);
+
   await client.query("UPDATE edoc_packages SET last_status_check_at = NOW() - INTERVAL '2 days' WHERE id=$1", [pkgId]);
   ok('listDuePackages видит подписанный без PDF', (await store.listDuePackages(500)).some((x) => x.id === pkgId));
-  await store.setDocumentPdf(d1, 'smoke/x.pdf');
+  await client.query("UPDATE edoc_packages SET signed_at = NOW() - INTERVAL '31 days' WHERE id=$1", [pkgId]);
+  ok('listDuePackages не видит подписанный 31 день назад без PDF', !(await store.listDuePackages(500)).some((x) => x.id === pkgId));
+  await client.query('UPDATE edoc_packages SET signed_at = $2::timestamptz WHERE id=$1', [pkgId, signedIso]);
+
+  const checkedOld = async () => (await client.query("SELECT last_status_check_at < NOW() - INTERVAL '1 day' AS old FROM edoc_packages WHERE id=$1", [pkgId])).rows[0].old;
+  await store.touchStatusCheck(otherSalon, [pkgId]);
+  ok('touchStatusCheck чужого салона не трогает', (await checkedOld()) === true);
+  await store.touchStatusCheck(salonId, [pkgId]);
+  ok('touchStatusCheck своего салона', (await checkedOld()) === false);
+
+  await store.setDocumentPdf(otherSalon, d1, 'evil/x.pdf');
+  ok('setDocumentPdf чужого салона не трогает', (await store.getDocument(salonId, d1)).pdf_key === null);
+  await store.setDocumentPdf(salonId, d1, 'smoke/x.pdf');
   ok('getDocument', (await store.getDocument(salonId, d1)).pdf_key === 'smoke/x.pdf');
   ok('findPackageByAnyId', !!(await store.findPackageByAnyId(salonId, pkgId)));
   ok('listPackages', (await store.listPackages(salonId, { status: 'signed', from: '2020-01-01', to: '2099-12-31' })).rows.some((x) => x.id === pkgId));
   ok('listClientPackages', (await store.listClientPackages(salonId, rec.client_id)).some((x) => x.id === pkgId));
-  await store.touchStatusCheck([pkgId]);
+  ok('applyStatus signed → annulled → true', (await store.applyStatus(salonId, pkgId, statusUpd('annulled', 'ANNULED', null))) === true);
+  pk = await store.getPackage(salonId, pkgId);
+  ok('signed → annulled применён, время подписи сохранено', pk.status === 'annulled' && !!pk.signed_at && (await store.getDocument(salonId, d1)).fdoc_status === 'ANNULED', { pkg: pk.status, signed_at: pk.signed_at });
   await store.setEmployeeUrl(salonId, pkgId, 'https://demo.fdoc.ru/y');
   await store.logEvent({ salonId, packageId: pkgId, clientId: rec.client_id, kind: 'send', userId: u.id, payload: { documents: 1 } });
   ok('listEvents', (await store.listEvents(salonId, pkgId)).length === 1);
-  ok('deleteTemplate после подписи → удалён', (await store.deleteTemplate(salonId, aId)).fileKey === 'smoke/k2');
+  ok('deleteTemplate завершённого комплекта → удалён', (await store.deleteTemplate(salonId, aId)).fileKey === 'smoke/k2');
   await store.deleteCredentials(salonId, u.id);
   ok('deleteCredentials', (await store.getCredentials(salonId, u.id)) === null);
 }
