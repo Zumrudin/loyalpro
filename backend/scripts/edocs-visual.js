@@ -79,12 +79,14 @@ async function main() {
     await p.goto(base + '#edocs', { waitUntil: 'networkidle0' });
     await p.waitForSelector('#edListBody .ed-row');
     assert.equal(await p.$$eval('#edListBody .ed-row', (els) => els.length), 2);
+    await new Promise((r) => setTimeout(r, 700)); // переходы CSS (до 0,25 с) — кадр не посреди смены темы
     await p.screenshot({ path: '/tmp/edocs-list.png', fullPage: true });
 
     await p.click('#edListBody .ed-row');
     await p.waitForSelector('#edView-package .ed-pkg-head');
     assert.match(await p.evaluate(() => location.hash), new RegExp(`#edocs/p/${PKG}`));
     assert.equal(await p.$$eval('#edView-package tbody tr', (els) => els.length), 2);
+    await new Promise((r) => setTimeout(r, 700)); // переходы CSS (до 0,25 с) — кадр не посреди смены темы
     await p.screenshot({ path: '/tmp/edocs-package.png', fullPage: true });
 
     await p.goto(base + `#edocs/p/${PKG2}`, { waitUntil: 'networkidle0' });
@@ -101,6 +103,7 @@ async function main() {
     await p.waitForFunction(() => !document.getElementById('edSendBtn').disabled === false || true);
     await p.click('.ed-tpl input[type=checkbox]');
     await p.waitForFunction(() => document.getElementById('edSendBtn') && !document.getElementById('edSendBtn').disabled);
+    await new Promise((r) => setTimeout(r, 700)); // переходы CSS (до 0,25 с) — кадр не посреди смены темы
     await p.screenshot({ path: '/tmp/edocs-wizard.png', fullPage: true });
     await p.reload({ waitUntil: 'networkidle0' });
     await p.waitForSelector('#edF-last_name');
@@ -110,23 +113,27 @@ async function main() {
     await p.waitForSelector('.ed-act tbody tr');
     assert.equal(await p.$$eval('.ed-act tbody tr', (els) => els.length), 2);
     assert.match(await p.$eval('#edActTotal', (el) => el.textContent), /19\s250,00 ₽/);
+    await new Promise((r) => setTimeout(r, 700)); // переходы CSS (до 0,25 с) — кадр не посреди смены темы
     await p.screenshot({ path: '/tmp/edocs-act.png', fullPage: true });
 
     await p.goto(base + '#edocs/settings', { waitUntil: 'networkidle0' });
     await p.waitForSelector('#edS-baseUrl');
     assert.equal(await p.$$eval('#edView-settings tbody tr', (els) => els.length) >= 3, true);
+    await new Promise((r) => setTimeout(r, 700)); // переходы CSS (до 0,25 с) — кадр не посреди смены темы
     await p.screenshot({ path: '/tmp/edocs-settings.png', fullPage: true });
 
     await p.evaluate(() => document.documentElement.setAttribute('data-theme', 'dark'));
     await p.goto(base + `#edocs/p/${PKG}`, { waitUntil: 'networkidle0' });
     await p.evaluate(() => document.documentElement.setAttribute('data-theme', 'dark'));
     await p.waitForSelector('#edView-package .ed-pkg-head');
+    await new Promise((r) => setTimeout(r, 700)); // переходы CSS (до 0,25 с) — кадр не посреди смены темы
     await p.screenshot({ path: '/tmp/edocs-package-dark.png', fullPage: true });
 
     await p.setViewport({ width: 390, height: 844, isMobile: true });
     await p.goto(base + '#edocs/new/52/30252', { waitUntil: 'networkidle0' });
     await p.waitForSelector('.ed-act tbody tr');
     const overflow = await p.evaluate(() => document.querySelector('main').scrollWidth - document.querySelector('main').clientWidth);
+    await new Promise((r) => setTimeout(r, 700)); // переходы CSS (до 0,25 с) — кадр не посреди смены темы
     await p.screenshot({ path: '/tmp/edocs-mobile.png', fullPage: true });
     assert.ok(overflow <= 1, `горизонтальная прокрутка страницы на 390px: ${overflow}px`);
 
