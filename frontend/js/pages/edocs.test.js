@@ -143,3 +143,135 @@ test('паритет справочников фронта с бэкендом',
   assert.deepStrictEqual(plain(k('ED_PLAIN_FIELDS')).map((f) => f[0]), id.PLAIN_KEYS);
   assert.deepStrictEqual(plain(k('ED_SECURE_FIELDS')).map((f) => f[0]).sort(), [...id.SECURE_KEYS].sort());
 });
+
+// ── поведение страницы: заглушка DOM, location.hash, fetch и таймеры ──
+// Элементы создаются по id при первом обращении; setInterval считается, а не запускается.
+function pageContext({ fetch, confirm = () => true, hash = '#edocs' } = {}) {
+  const els = new Map();
+  const el = (id) => {
+    if (!els.has(id)) {
+      const cls = new Set();
+      els.set(id, { id, style: {}, dataset: {}, value: '', textContent: '', innerHTML: '', disabled: false, checked: false, focus() {},
+        classList: { add: (c) => cls.add(c), remove: (c) => cls.delete(c), contains: (c) => cls.has(c),
+          toggle: (c, on) => ((on === undefined ? !cls.has(c) : on) ? cls.add(c) : cls.delete(c)) } });
+    }
+    return els.get(id);
+  };
+  const st = { hash, live: new Set(), timerSeq: 0, fetches: [], modals: [] };
+  const ctx = browserContext({
+    document: { getElementById: el, body: { dataset: {} }, querySelectorAll: () => [],
+      createElement: () => ({ set textContent(v) { this.t = String(v); }, get innerHTML() { return this.t; } }) },
+    location: { get hash() { return st.hash; }, set hash(v) { st.hash = String(v).startsWith('#') ? String(v) : '#' + v; } },
+    history: { replaceState: (_a, _b, u) => { st.hash = u; } },
+    setTimeout: (f, ms) => { const t = setTimeout(f, ms); if (t.unref) t.unref(); return t; }, clearTimeout,
+    setInterval: () => { st.live.add(++st.timerSeq); return st.timerSeq; },
+    clearInterval: (id) => { st.live.delete(id); },
+    fetch: (url, o) => { st.fetches.push(url); return fetch(url, o); },
+    confirm: () => confirm(),
+    openModal: (id) => st.modals.push(id), closeModal() {},
+  });
+  for (const f of ['js/core/utils.js', 'js/core/api.js', 'js/pages/edocs-helpers.js', 'js/pages/edocs.js']) run(ctx, f, fs.readFileSync(path.join(FRONT, f), 'utf8'));
+  return { st, el, run: (code) => vm.runInContext(code, ctx), k: (name) => vm.runInContext(name, ctx) };
+}
+const res = (status, body) => ({ ok: status >= 200 && status < 300, status, json: async () => body, text: async () => JSON.stringify(body) });
+const settle = () => new Promise((r) => setTimeout(r, 20));
+const PID = '22222222-2222-4222-8222-222222222222';
+const STATE = { enabled: true, encReady: true, me: { connected: true, broken: false, login: 'admin' } };
+const WIZARD = "_ed.w = { clientId: 52, recordId: null, selected: new Set([10]), docDate: '', act: null, form: {}, unsaved: false, notes: [] };"
+  + " _ed.route = { view: 'new', clientId: 52, recordId: null }; location.hash = '#edocs/new/52';";
+
+test('edFetch: сбой сети — status 0 и понятный текст, полоса загрузки снята', async () => {
+  const p = pageContext({ fetch: () => Promise.reject(new TypeError('Failed to fetch')) });
+  assert.deepStrictEqual(plain(await p.k('edFetch')('POST', '/api/edocs/packages', { json: {} })),
+    { ok: false, status: 0, body: { error: 'Нет связи с сервером' } });
+  assert.strictEqual(p.el('lbar').style.display, 'none');
+});
+
+test('отправка: packageId вместе с ошибкой учётки — карточка комплекта, «Мой F.Doc» поверх, кнопка не включается', async () => {
+  const p = pageContext({ fetch: async () => res(409, { error: 'F.Doc не принял логин или пароль — обновите их в «Мой F.Doc»', code: 'fdoc_credentials_invalid', packageId: PID }) });
+  p.run(WIZARD);
+  await p.k('edSend')();
+  assert.strictEqual(p.st.hash, '#edocs/p/' + PID);
+  assert.deepStrictEqual(p.st.modals, ['edMeModal']);
+  assert.strictEqual(p.el('edSendBtn').disabled, true);
+  assert.match(p.el('notif').textContent, /не принял логин или пароль/);
+  assert.deepStrictEqual(p.st.fetches, ['/api/edocs/packages']);   // ни проверки, ни второй отправки
+  assert.strictEqual(p.k('_ed').sending, false);
+});
+
+test('отправка: ответа нет (сеть, 502 прокси) — «комплект мог уйти», переход в список, кнопка не включается', async () => {
+  const proxy502 = async () => ({ ok: false, status: 502, json: async () => { throw new SyntaxError('Unexpected token <'); } });
+  for (const fetch of [() => Promise.reject(new TypeError('Failed to fetch')), proxy502]) {
+    const p = pageContext({ fetch });
+    p.run(WIZARD);
+    await p.k('edSend')();
+    assert.strictEqual(p.st.hash, '#edocs');
+    assert.match(p.el('notif').textContent, /комплект мог уйти/);
+    assert.strictEqual(p.el('edSendBtn').disabled, true);
+  }
+});
+
+test('пока идёт отправка, проверка и «+ Строка» кнопку не включают; отказ 4xx — кнопку пересчитывает проверка', async () => {
+  let release;
+  const p = pageContext({ fetch: (url) => (url === '/api/edocs/packages'
+    ? new Promise((r) => { release = () => r(res(400, { error: 'Шаблон не прошёл проверку' })); })
+    : Promise.resolve(res(200, { missing: { identity: [], org: [] } }))) });
+  p.run(WIZARD + ` _ed.state = ${JSON.stringify(STATE)}; Object.assign(_ed.w, { client: { name: 'Тестова', phone: '79001234567' },
+    templates: [{ id: 10, kind: 'act', title: 'Акт' }, { id: 11, kind: 'contract', title: 'Договор' }],
+    act: { visitDate: '2026-10-20', actNo: '1', doctor: { name: 'Врач' }, rows: [{ include: true, title: 'Чистка', qty: 1, price: 100, sum: 100 }] } });`);
+  const btn = p.el('edSendBtn');
+  const sending = p.k('edSend')();
+  await settle();
+  assert.strictEqual(p.k('_ed').sending, true);
+  p.k('edToggleTpl')(11, true);
+  p.k('edActAdd')();
+  await settle();
+  assert.strictEqual(btn.disabled, true, 'кнопка включилась во время отправки');
+  assert.match(p.el('edView-new').innerHTML, /id="edSendBtn" onclick="edSend\(\)" disabled>Отправляем…</);
+  release();
+  await sending;
+  await settle();
+  assert.strictEqual(p.k('_ed').sending, false);
+  assert.strictEqual(btn.disabled, false, 'после отказа 4xx кнопку включает проверка');
+  assert.strictEqual(btn.textContent, 'Отправить на подписание');
+  assert.strictEqual(p.st.fetches.filter((u) => u === '/api/edocs/packages').length, 1);
+});
+
+test('двойная загрузка: меню (loadEdocs + hashchange тем же хвостом) и «Назад» до конца загрузки — один опрос', async () => {
+  const fetch = async (url) => res(200, /state$/.test(url) ? STATE
+    : url.includes('/packages/') ? { id: PID, title: 'Документы', status: 'sent', documents: [], events: [] } : { rows: [] });
+  const p = pageContext({ fetch });
+  p.run('loadEdocs(); edocsOnHashArg(null)');
+  await settle();
+  assert.strictEqual(p.st.live.size, 1);
+  assert.deepStrictEqual(p.st.fetches, ['/api/edocs/state', '/api/edocs/packages']);
+  p.run(`edocsOnHashArg('p/${PID}'); edocsOnHashArg(null)`);   // карточка, и сразу «Назад» к списку
+  await settle();
+  assert.strictEqual(p.st.live.size, 1);
+  assert.strictEqual(p.k('_ed').route.view, 'list');
+  p.run("edRoute(''); edRoute('')");
+  await settle();
+  assert.strictEqual(p.st.live.size, 1);
+  p.run('edStopPolling()');   // уход со страницы, выход
+  assert.strictEqual(p.st.live.size, 0);
+});
+
+test('«Отправить ссылку ещё раз»: без подтверждения запроса нет; на время запроса кнопка заблокирована', async () => {
+  let answer = false;
+  let release;
+  const p = pageContext({ confirm: () => answer, fetch: (url) => (url.endsWith('/permalink')
+    ? new Promise((r) => { release = () => r(res(200, { ok: true })); })
+    : Promise.resolve(res(200, { id: PID, title: 'Документы', status: 'sent', documents: [], events: [] }))) });
+  const btn = { disabled: false };
+  await p.k('edPkgAction')(PID, 'permalink', btn);
+  assert.deepStrictEqual(p.st.fetches, []);
+  answer = true;
+  const first = p.k('edPkgAction')(PID, 'permalink', btn);
+  await settle();
+  assert.strictEqual(btn.disabled, true);
+  await p.k('edPkgAction')(PID, 'permalink', btn);   // повторный клик, пока идёт запрос
+  release();
+  await first;
+  assert.strictEqual(btn.disabled, false);
+  assert.strictEqual(p.st.fetches.filter((u) => u.endsWith('/permalink')).length, 1);
+});

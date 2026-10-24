@@ -4,23 +4,40 @@
 // Состояние — в hash: F5 и «Назад» возвращают туда же (хук edocsOnHashArg в nav.js).
 // Зависимости: api(), esc(), escAttr(), notify(), showLbar(), openModal()/closeModal(),
 // помощники edocs-helpers.js. Глобальные имена — с префиксом ed/ED_ (общая область скриптов).
-let _ed = { state: null, route: { view: 'list' }, timer: null, listStatus: '', listFrom: '', listTo: '', w: null, pkg: null };
+// loadSeq — номер загрузки: его увеличивают каждый маршрут, уход со страницы и выход; загрузка с
+// устаревшим номером не рисует и не заводит опрос (иначе второй setInterval затирал handle первого
+// и опрос жил до перезагрузки). sending — идёт отправка комплекта: кнопку «Отправить» до её итога
+// не включает никто, иначе второй клик создал бы второй комплект тому же пациенту.
+let _ed = { state: null, route: { view: 'list' }, timer: null, loadSeq: 0, sending: false, listStatus: '', listFrom: '', listTo: '', w: null, pkg: null };
 const ED_POLL_MS = 30000;
 let _edSearchTimer = null;
 let _edSearchSeq = 0;
 
 function edTail() { return (location.hash || '').slice(1).split('/').slice(1).map(decodeURIComponent).join('/'); }
 function loadEdocs() { edRoute(edTail()); }
-function edocsOnHashArg(arg) { edRoute(arg || ''); }
+// Клик по меню: navTo пишет hash и сам зовёт loadEdocs, следом hashchange приносит тот же хвост —
+// тот же маршрут второй раз не грузим (двойные запросы и второй опрос).
+function edocsOnHashArg(arg) {
+  const tail = arg || '';
+  if (edSameRoute(edParseTail(tail), _ed.route)) return;
+  edRoute(tail);
+}
+function edSameRoute(a, b) {
+  return !!a && !!b && a.view === b.view && (a.clientId || null) === (b.clientId || null)
+    && (a.recordId || null) === (b.recordId || null) && (a.packageId || null) === (b.packageId || null);
+}
 function edGo(tail) {
   const h = tail ? 'edocs/' + tail : 'edocs';
   if ((location.hash || '').slice(1) === h) edRoute(tail || ''); else location.hash = h;
 }
-function edStopPolling() { if (_ed.timer) { clearInterval(_ed.timer); _ed.timer = null; } }
+function edClearTimer() { if (_ed.timer) { clearInterval(_ed.timer); _ed.timer = null; } }
+// Уход со страницы и выход (nav.js), новый маршрут: опрос гаснет, идущие загрузки устаревают.
+function edStopPolling() { _ed.loadSeq++; edClearTimer(); }
 function edIsAdmin() { return typeof ME !== 'undefined' && !!ME && (ME.role === 'owner' || ME.role === 'admin'); }
 
 // fetch, который сохраняет всё тело ответа (api() оставляет только error): нужны
-// packageId, missing, details. Файлы — FormData, JSON — opts.json.
+// packageId, missing, details. Файлы — FormData, JSON — opts.json. Сбой сети — не исключение,
+// а status 0: вызывающий обязан показать ошибку (необработанный reject оставлял кнопки «в загрузке»).
 async function edFetch(method, path, opts) {
   opts = opts || {};
   const headers = { Authorization: 'Bearer ' + localStorage.getItem('lp_tk') };
@@ -29,7 +46,10 @@ async function edFetch(method, path, opts) {
   else if (opts.json !== undefined) { headers['Content-Type'] = 'application/json'; body = JSON.stringify(opts.json); }
   showLbar(true);
   try {
-    const r = await fetch(path, { method: method, headers: headers, body: body });
+    let r;
+    try { r = await fetch(path, { method: method, headers: headers, body: body }); } catch (e) {
+      return { ok: false, status: 0, body: { error: 'Нет связи с сервером' } };
+    }
     let j = {};
     try { j = (await r.json()) || {}; } catch (_) { /* пустое тело или HTML */ }
     return { ok: r.ok, status: r.status, body: j };
@@ -57,6 +77,7 @@ function edDownloadBase64(b64, name, mime) {
 
 async function edRoute(tail) {
   edStopPolling();
+  const seq = ++_ed.loadSeq;
   let route = edParseTail(tail);
   if (route.view === 'settings' && !edIsAdmin()) { history.replaceState(null, '', '#edocs'); route = { view: 'list' }; }
   _ed.route = route;
@@ -71,10 +92,11 @@ async function edRoute(tail) {
   const sb = document.getElementById('edTabBtn-settings');
   if (sb) sb.style.display = edIsAdmin() ? '' : 'none';
   await edLoadState();
-  if (route.view === 'new') return edRenderNew(route);
-  if (route.view === 'package') return edRenderPackage(route.packageId);
+  if (seq !== _ed.loadSeq) return;   // пока грузили, ушли: другой маршрут, другая страница, выход
+  if (route.view === 'new') return edRenderNew(route, seq);
+  if (route.view === 'package') return edRenderPackage(route.packageId, seq);
   if (route.view === 'settings') return edRenderSettings();
-  return edRenderList();
+  return edRenderList(seq);
 }
 
 async function edLoadState() {
@@ -92,7 +114,7 @@ async function edLoadState() {
 }
 
 // ── список комплектов ──
-async function edRenderList() {
+async function edRenderList(seq) {
   const box = document.getElementById('edView-list');
   if (!box) return;
   box.innerHTML = '<div class="ed-toolbar"><select id="edListStatus" onchange="edSetListStatus(this.value)"><option value="">Все статусы</option>'
@@ -101,6 +123,8 @@ async function edRenderList() {
     + '<input type="date" id="edListTo" value="' + escAttr(_ed.listTo) + '" onchange="edSetListPeriod()" title="Создан по"></div><div class="card ed-tbl-card"><div class="tw mtbl-wrap"><table class="mtbl"><thead><tr><th>Создан</th><th>Пациент</th><th>Комплект</th><th>Статус</th><th>Отправил</th></tr></thead>'
     + '<tbody id="edListBody"><tr><td colspan="5" class="empty">Загрузка…</td></tr></tbody></table></div></div>';
   await edLoadList();
+  if (seq !== _ed.loadSeq) return;   // ушли, пока грузили, — опрос не заводим
+  edClearTimer();
   _ed.timer = setInterval(edLoadList, ED_POLL_MS);
 }
 function edSetListStatus(v) { _ed.listStatus = v; edLoadList(); }
@@ -151,7 +175,7 @@ async function edDoSearch(q) {
   } catch (e) { box.innerHTML = '<div class="ed-err">' + esc(e.message) + '</div>'; }
 }
 
-async function edRenderNew(route) {
+async function edRenderNew(route, seq) {
   const box = document.getElementById('edView-new');
   if (!box) return;
   if (!route.clientId) {
@@ -191,8 +215,8 @@ async function edRenderNew(route) {
     } else {
       w.visits = (await api('GET', '/api/edocs/clients/' + w.clientId + '/records')).records;
     }
-  } catch (e) { box.innerHTML = '<div class="empty">' + esc(e.message) + '</div>'; return; }
-  if (_ed.w !== w) return;   // пока грузили, ушли в другой раздел
+  } catch (e) { if (_ed.w === w && seq === _ed.loadSeq) box.innerHTML = '<div class="empty">' + esc(e.message) + '</div>'; return; }
+  if (_ed.w !== w || seq !== _ed.loadSeq) return;   // пока грузили, ушли в другой раздел
   edRenderWizard();
 }
 
@@ -232,7 +256,7 @@ function edRenderWizard() {
       : '<div class="empty">Нет активных шаблонов — загрузите их во вкладке «Настройки»</div>') + '</div>'
     + '<div class="fg ed-date"><label class="fl" for="edDocDate">Дата документа (пусто — сегодня)</label><input type="date" id="edDocDate" value="' + escAttr(w.docDate) + '" onchange="edSetDocDate(this.value)"></div>'
     + '<div id="edMissing" class="ed-missing"></div>'
-    + '<div class="ed-actions"><button class="btn btn-pri" id="edSendBtn" onclick="edSend()" disabled>Отправить на подписание</button>'
+    + '<div class="ed-actions"><button class="btn btn-pri" id="edSendBtn" onclick="edSend()" disabled>' + (_ed.sending ? 'Отправляем…' : 'Отправить на подписание') + '</button>'
     + '<span class="ed-sub">Пациент получит SMS со ссылкой и подпишет документы кодом из SMS</span></div></div>';
   if (w.act) edActTotalRender();
   edCheckMissing();
@@ -327,6 +351,7 @@ async function edCheckMissing() {
   const btn = document.getElementById('edSendBtn');
   if (!w || !el || !btn) return;
   btn.disabled = true;
+  if (_ed.sending) return;   // идёт отправка: кнопку включит только её итог
   if (w.unsaved) { el.textContent = 'Сохраните данные пациента: документы заполняются из сохранённых данных'; return; }
   if (!w.selected.size) { el.textContent = 'Отметьте документы для подписания'; return; }
   try {
@@ -338,7 +363,7 @@ async function edCheckMissing() {
     el.textContent = text || (ready ? '' : st && !st.enabled
       ? 'Модуль выключен: документы можно проверить кнопкой «Проверить», отправка — после подключения F.Doc'
       : 'Подключите свою учётную запись F.Doc: кнопка «Мой F.Doc»');
-    btn.disabled = !!text || !ready;
+    btn.disabled = !!text || !ready || _ed.sending;   // отправка могла начаться, пока шла проверка
   } catch (e) { el.textContent = e.message; }
 }
 
@@ -364,33 +389,53 @@ async function edPreview(templateId) {
   } catch (e) { notify(e.message, 'err'); }
 }
 
+const ED_SEND_UNKNOWN = 'Ответ сервера не получен — комплект мог уйти. Проверьте список комплектов, прежде чем отправлять снова';
 async function edSend() {
   const w = _ed.w;
-  const btn = document.getElementById('edSendBtn');
+  if (!w || _ed.sending) return;
   const body = { clientId: w.clientId, templateIds: Array.from(w.selected), docDate: w.docDate || null };
   const err = edActBody(body);
   if (err) return notify(err, 'err');
   if (!confirm('Отправить документы пациенту на подписание? Он получит SMS со ссылкой.')) return;
-  btn.disabled = true;
-  btn.textContent = 'Отправляем…';
-  const r = await edFetch('POST', '/api/edocs/packages', { json: body });
-  btn.textContent = 'Отправить на подписание';
-  if (r.ok) { notify('Документы отправлены пациенту'); edGo('p/' + r.body.packageId); return; }
-  btn.disabled = false;
+  _ed.sending = true;
+  const sb = document.getElementById('edSendBtn');
+  if (sb) { sb.disabled = true; sb.textContent = 'Отправляем…'; }
+  let r;
+  try { r = await edFetch('POST', '/api/edocs/packages', { json: body }); } finally { _ed.sending = false; }
   const b = r.body || {};
-  if (b.code === 'missing_fields') { const el = document.getElementById('edMissing'); if (el) el.textContent = edMissingText(b.missing); }
+  const credentials = b.code === 'fdoc_no_credentials' || b.code === 'fdoc_credentials_invalid';
+  if (r.ok || b.packageId) {
+    // Комплект создан — успех или сбой уже после черновика. Дальше только его карточка: «Повторить»
+    // там сначала спросит F.Doc, а кнопка «Отправить» в мастере создала бы второй комплект.
+    notify(r.ok ? 'Документы отправлены пациенту' : (b.error || ('Ошибка ' + r.status)), r.ok ? 'ok' : 'err');
+    edGo(b.packageId ? 'p/' + b.packageId : '');
+    if (credentials) edOpenMe();   // поверх карточки: после смены пароля — «Повторить отправку»
+    return;
+  }
+  if (!r.status || r.status >= 500) {
+    // Ответа нет (сеть) или он не разобран (5xx прокси или сервера): комплект мог уйти.
+    notify(ED_SEND_UNKNOWN, 'err');
+    edGo('');
+    return;
+  }
+  // 4xx без комплекта — ничего не создано: исправить и отправить снова. Кнопку пересчитает проверка.
+  const btn = document.getElementById('edSendBtn');
+  if (btn) btn.textContent = 'Отправить на подписание';
+  if (_ed.w === w && b.code === 'missing_fields') { const el = document.getElementById('edMissing'); if (el) el.textContent = edMissingText(b.missing); }
   notify(b.error || ('Ошибка ' + r.status), 'err');
-  if (b.code === 'fdoc_no_credentials' || b.code === 'fdoc_credentials_invalid') edOpenMe();
-  else if (b.packageId) edGo('p/' + b.packageId);   // черновик создан — повтор из карточки
+  if (credentials) edOpenMe();
+  edCheckMissing();
 }
 
 // ── карточка комплекта ──
-async function edRenderPackage(id) {
+async function edRenderPackage(id, seq) {
   const box = document.getElementById('edView-package');
   if (!box) return;
   box.innerHTML = '<div class="empty">Загрузка…</div>';
   _ed.pkg = null;
   await edLoadPackage(id, false);
+  if (seq !== _ed.loadSeq) return;   // ушли, пока грузили, — опрос не заводим
+  edClearTimer();
   _ed.timer = setInterval(() => { if (_ed.pkg && !edIsFinal(_ed.pkg.status)) edLoadPackage(id, true); }, ED_POLL_MS);
 }
 
@@ -427,7 +472,7 @@ function edActSummaryHtml(act) {
 
 function edPackageActions(p) {
   const b = [];
-  const btn = (action, label, cls) => '<button class="btn ' + (cls || 'btn-sec') + ' btn-sm" onclick="edPkgAction(\'' + p.id + '\',\'' + action + '\')">' + label + '</button>';
+  const btn = (action, label, cls) => '<button class="btn ' + (cls || 'btn-sec') + ' btn-sm" onclick="edPkgAction(\'' + p.id + '\',\'' + action + '\',this)">' + label + '</button>';
   if (p.status === 'draft') b.push(btn('resend', 'Повторить отправку', 'btn-pri'));
   if (p.status !== 'draft') b.push('<button class="btn btn-sec btn-sm" onclick="edOpenInFdoc(\'' + p.id + '\')">Открыть в F.Doc</button>');
   if (p.status === 'sent') b.push(btn('permalink', 'Отправить ссылку ещё раз'));
@@ -440,14 +485,19 @@ function edPackageActions(p) {
   return b.join('');
 }
 
-async function edPkgAction(id, action) {
+// btn — нажатая кнопка: заблокирована до ответа (двойной клик «Отправить ссылку ещё раз» = два SMS пациенту).
+async function edPkgAction(id, action, btn) {
+  if (btn && btn.disabled) return;   // запрос по этой кнопке уже идёт
   if (action === 'annul' && !confirm('Аннулировать комплект? Пациент больше не сможет его подписать.')) return;
+  if (action === 'permalink' && !confirm('Отправить пациенту ссылку на подписание ещё раз? Он получит SMS.')) return;
+  if (btn) btn.disabled = true;
   try {
     const r = await api('POST', '/api/edocs/packages/' + id + '/' + action);
     const msg = { resend: r && r.recovered ? 'Комплект уже был в F.Doc — отмечен отправленным' : 'Комплект отправлен', permalink: 'Ссылка отправлена пациенту', refresh: 'Статус обновлён', annul: 'Комплект аннулирован' };
     notify(msg[action] || 'Готово');
-    edLoadPackage(id, true);
+    await edLoadPackage(id, true);   // карточка перерисуется с новыми кнопками
   } catch (e) { notify(e.message, 'err'); if (/Мой F\.Doc/.test(e.message)) edOpenMe(); }
+  finally { if (btn) btn.disabled = false; }
 }
 function edOpenInFdoc(id) { edOpenAsync(async () => (await api('POST', '/api/edocs/packages/' + id + '/employee-url')).url); }
 function edOpenPdf(docId) { edOpenAsync(async () => (await api('GET', '/api/edocs/documents/' + docId + '/pdf')).url); }
@@ -601,7 +651,13 @@ async function edUploadTemplate() {
 async function edSaveTemplate(id) {
   const body = { title: edVal('edTt-' + id), kind: edVal('edTk-' + id), isActive: document.getElementById('edTa-' + id).checked };
   const r = await edFetch('PUT', '/api/edocs/admin/templates/' + id, { json: body });
-  if (!r.ok) return notify((r.body.error || 'Ошибка') + ((r.body.details || []).length ? ': ' + r.body.details.join('; ') : ''), 'err');
+  if (!r.ok) {
+    notify((r.body.error || 'Ошибка') + ((r.body.details || []).length ? ': ' + r.body.details.join('; ') : ''), 'err');
+    // Отказ сервера (шаблон занят, вид не подходит): в строке не должно остаться несохранённого.
+    // Без связи (status 0) перечитать нечего — только текст ошибки, форма остаётся.
+    if (r.status) edRenderSettings();
+    return;
+  }
   notify('Шаблон сохранён');
 }
 function edTemplateFile(id) { edOpenAsync(async () => (await api('GET', '/api/edocs/admin/templates/' + id + '/file')).url); }

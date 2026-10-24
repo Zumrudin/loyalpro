@@ -180,7 +180,7 @@ async function transmit(ctx, packageId, body) {
     await store.logEvent({ salonId: ctx.salonId, packageId, clientId: ctx.client.id, kind: 'send', userId: ctx.userId, payload: { documents: body.documents.length } });
   } catch (e) {
     logger.error(`edocs: F.Doc принял комплект ${packageId} (салон ${ctx.salonId}), но отправка не сохранилась: ${(e && e.code) || ''} ${shortError(e)}`);
-    throw new EdocsError('saved_partially', 'F.Doc принял комплект, но статус не сохранился — обновите карточку комплекта', 500, { packageId });
+    throw new EdocsError('saved_partially', 'F.Doc принял комплект, но статус не сохранился — откройте комплект и нажмите «Повторить»: мы найдём его в F.Doc и отметим отправленным', 500, { packageId });
   }
   // Автоподпись клиники могла уже сдвинуть статус — перечитываем сразу. Замок комплекта уже наш
   // (через refreshRows перечитывание ждало бы само себя); сбой не страшен, догонит опрос.
@@ -228,7 +228,7 @@ async function resend({ salonId, userId, packageId }) {
   // Черновик без ошибки моложе 5 минут — отправка, скорее всего, ещё идёт (здесь или в другом
   // процессе), повтор дал бы второй POST. Старше — процесс упал посреди отправки.
   if (!pkg.last_error && !(Date.now() - new Date(pkg.created_at).getTime() > SEND_STALE_MS)) {
-    throw new EdocsError('send_in_progress', 'Комплект ещё отправляется — подождите минуту', 409);
+    throw new EdocsError('send_in_progress', 'Комплект ещё отправляется — повторить можно через 5 минут после начала отправки', 409);
   }
   return exclusive(salonId, pkg.id, () => resendLocked(salonId, userId, pkg.id));
 }

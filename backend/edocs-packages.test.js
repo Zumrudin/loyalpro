@@ -143,7 +143,7 @@ describe('send', () => {
     store.markSent.mockRejectedValueOnce(Object.assign(new Error('deadlock detected on relation edoc_packages'), { code: '40P01' }));
     const e = await pk.send({ salonId: 1, userId: 4, clientId: 52, templateIds: [10] }).catch((x) => x);
     expect(e).toMatchObject({ name: 'EdocsError', code: 'saved_partially', status: 500, packageId: expect.any(String),
-      message: 'F.Doc принял комплект, но статус не сохранился — обновите карточку комплекта' });
+      message: 'F.Doc принял комплект, но статус не сохранился — откройте комплект и нажмите «Повторить»: мы найдём его в F.Doc и отметим отправленным' });
     expect(e.message).not.toMatch(/deadlock|edoc_packages/);
     expect(mockLog.error).toHaveBeenCalledWith(expect.stringContaining('deadlock detected'));
     expect(mockLog.error).toHaveBeenCalledWith(expect.stringContaining(e.packageId));
@@ -221,7 +221,7 @@ describe('resend', () => {
 
   test('свежий черновик без ошибки — 409 send_in_progress, F.Doc не трогаем', async () => {
     store.getPackage.mockResolvedValue({ ...DRAFT, last_error: null, created_at: new Date(Date.now() - 60 * 1000) });
-    await expect(pk.resend({ salonId: 1, userId: 4, packageId: DRAFT.id })).rejects.toMatchObject({ code: 'send_in_progress', status: 409, message: 'Комплект ещё отправляется — подождите минуту' });
+    await expect(pk.resend({ salonId: 1, userId: 4, packageId: DRAFT.id })).rejects.toMatchObject({ code: 'send_in_progress', status: 409, message: 'Комплект ещё отправляется — повторить можно через 5 минут после начала отправки' });
     expect(fdoc.workflowStatuses).not.toHaveBeenCalled();
     expect(fdoc.sendPackage).not.toHaveBeenCalled();
   });
