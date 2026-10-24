@@ -13,7 +13,8 @@ jest.mock('./services/fdoc/client', () => ({
 jest.mock('./utils/secret-box', () => ({
   box: () => ({ decrypt: (x) => String(x).replace(/^enc:/, ''), decryptJson: (x) => JSON.parse(String(x).replace(/^enc:/, '')) }),
 }));
-jest.mock('./logger', () => ({ createLogger: () => ({ info: jest.fn(), warn: jest.fn(), error: jest.fn() }) }));
+const mockLog = { info: jest.fn(), warn: jest.fn(), error: jest.fn() };
+jest.mock('./logger', () => ({ createLogger: () => mockLog }));
 jest.mock('./config', () => ({ EDOCS_DEMO_PHONES: ['79200255591'] }));
 
 const store = require('./services/edocs/store');
@@ -21,6 +22,15 @@ const s3 = require('./services/s3');
 const { client: fdoc } = require('./services/fdoc/client');
 const pk = require('./services/edocs/packages');
 const { makeDocx, docText, p, table } = require('./services/edocs/__fixtures__/docx');
+
+const tick = () => new Promise((r) => setImmediate(r));
+/** Ждать, пока асинхронная цепочка дойдёт до нужного места (моки резолвятся микрозадачами). */
+async function until(cond) {
+  for (let i = 0; i < 200 && !cond(); i++) await tick();
+  if (!cond()) throw new Error('условие так и не наступило');
+}
+/** Промис, который открывается вручную: «медленный» ответ F.Doc. */
+function gate() { let open; const promise = new Promise((r) => { open = r; }); return { promise, open }; }
 
 const SETTINGS = { salon_id: 1, enabled: true, base_url: 'https://demo.fdoc.ru', api_key_enc: 'enc:KEY', app_login: 'app', app_password_enc: 'enc:APW', app_code: 'crm', corp_id: 'C1', qes_cert_alias: 'peri-qes', employee_position: 'Администратор', unsign_days: 7, requisites: { name: 'ООО «Пери Клиник»', inn: '9724060392', city: 'Москва' } };
 const CLIENT = { id: 52, name: 'Иванова Анна Сергеевна', phone: '+79200255591', yclients_data: {} };
@@ -175,7 +185,8 @@ describe('refreshRows и refreshDue', () => {
   test('статус меняется — журнал; подписан — PDF в S3', async () => {
     store.listDocuments.mockResolvedValue([{ id: 'd-1', file_name: 'Договор.docx', title: 'Договор', pdf_key: null }]);
     fdoc.workflowStatuses.mockResolvedValue({ packages: [{ id: ROW.id, status: 'SIGNED', documents: [{ id: 'd-1', status: 'SIGNED', clientSigners: [{ isSigned: true, dateSignOrCancel: '2026-10-24T10:00:00+03:00' }] }] }] });
-    store.getPackage.mockResolvedValue({ ...ROW, status: 'signed' });
+    // Под замком строка читается заново (ещё sent), после применения — уже signed (докачка PDF).
+    store.getPackage.mockResolvedValueOnce({ ...ROW }).mockResolvedValue({ ...ROW, status: 'signed' });
     fdoc.downloadPdf.mockResolvedValue(Buffer.from('%PDF-1.7'));
     expect(await pk.refreshRows(1, [ROW])).toEqual({ checked: 1, changed: 1 });
     expect(store.listDocuments).toHaveBeenCalledWith(1, ROW.id);
@@ -187,15 +198,67 @@ describe('refreshRows и refreshDue', () => {
     expect(store.touchStatusCheck).toHaveBeenCalledWith(1, [ROW.id]);
   });
   test('откат статуса отвергнут (applyStatus → false) — без события и без «изменился»', async () => {
+    store.getPackage.mockResolvedValue({ ...ROW, status: 'signed' });
     store.applyStatus.mockResolvedValue(false);
     fdoc.workflowStatuses.mockResolvedValue({ packages: [{ id: ROW.id, status: 'WAIT_SIGN', documents: [] }] });
     expect(await pk.refreshRows(1, [{ ...ROW, status: 'signed' }])).toEqual({ checked: 1, changed: 0 });
     expect(store.logEvent).not.toHaveBeenCalledWith(expect.objectContaining({ kind: 'status' }));
   });
-  test('удачный вызов после отказов сбрасывает счётчик учётки в её салоне', async () => {
+  test('фоновое перечитывание не меняет счётчик отказов учётки: ни отказ, ни удача', async () => {
+    const bad = Object.assign(new Error('F.Doc не принял логин или пароль сотрудника: x'), { name: 'FdocError', code: 'fdoc_credentials_invalid', status: 401 });
+    fdoc.workflowStatuses.mockRejectedValueOnce(bad);
+    // Ни один комплект не проверен — ошибка уходит вызывающему как есть (без «Мой F.Doc»: учётка могла быть чужой).
+    await expect(pk.refreshRows(1, [ROW])).rejects.toBe(bad);
+    expect(store.markCredentialsFail).not.toHaveBeenCalled();
     store.getCredentials.mockResolvedValue({ user_id: 4, login: 'ivanova', password_enc: 'enc:pw', fail_count: 1 });
     await pk.refreshRows(1, [ROW]);
+    expect(store.markCredentialsOk).not.toHaveBeenCalled();
+  });
+  test('докачка PDF — тоже фон: отказ входа не наращивает счётчик', async () => {
+    store.listDocuments.mockResolvedValue([{ id: 'd-1', pdf_key: null }]);
+    fdoc.downloadPdf.mockRejectedValue(Object.assign(new Error('bad'), { name: 'FdocError', code: 'fdoc_credentials_invalid', status: 401 }));
+    await expect(pk.fetchPdfs(1, { id: ROW.id, client_id: 52, sent_by: 4 }, {})).rejects.toMatchObject({ code: 'fdoc_credentials_invalid' });
+    expect(store.markCredentialsFail).not.toHaveBeenCalled();
+  });
+  test('действие пользователя ведёт счётчик: удача после отказов сбрасывает его в салоне учётки', async () => {
+    store.getCredentials.mockResolvedValue({ user_id: 4, login: 'ivanova', password_enc: 'enc:pw', fail_count: 1 });
+    fdoc.employeeUrl.mockResolvedValue('https://demo.fdoc.ru/w/1');
+    await pk.employeeUrl({ salonId: 1, userId: 4, packageId: 'p' });
     expect(store.markCredentialsOk).toHaveBeenCalledWith(1, 4);
+  });
+  test('сбой одной группы или пачки не обрывает остальные; после каждой пачки — отметка проверки', async () => {
+    const id = (n) => `66666666-6666-4666-8666-${String(n).padStart(12, '0')}`;
+    const rows = [...Array.from({ length: 11 }, (_, i) => ({ ...ROW, id: id(i), sent_by: 4 })), { ...ROW, id: id(70), sent_by: 7 }, { ...ROW, id: id(90), sent_by: 9 }];
+    store.getPackage.mockImplementation(async (sid, pid) => rows.find((r) => r.id === pid) || null);
+    store.getCredentials.mockImplementation(async (sid, uid) => {
+      if (uid === 7) throw new Error('connection terminated');   // группа 7: сбой БД при чтении учётки
+      return { user_id: uid, login: `u${uid}`, password_enc: 'enc:pw', fail_count: 0 };
+    });
+    let n = 0;
+    fdoc.workflowStatuses.mockImplementation(async (cfg, cred, ids) => {
+      n++;
+      if (n === 1) throw Object.assign(new Error('F.Doc POST /x 503: down'), { name: 'FdocError', code: 'fdoc_server', status: 503 });   // первая пачка группы 4
+      return { packages: ids.map((x) => ({ id: x, status: 'WAIT_SIGN', documents: [] })), failures: [] };
+    });
+    expect(await pk.refreshRows(1, rows)).toEqual({ checked: 2, changed: 0 });
+    expect(fdoc.workflowStatuses).toHaveBeenCalledTimes(3);
+    expect(store.touchStatusCheck.mock.calls.map((c) => c[1])).toEqual([rows.slice(0, 10).map((r) => r.id), [id(10)], [id(70)], [id(90)]]);
+  });
+  test('WARN об опросе салона — не чаще раза в час на пару салон+причина', async () => {
+    const now = jest.spyOn(Date, 'now');
+    try {
+      const t0 = Date.UTC(2026, 9, 24, 7, 0, 0);
+      now.mockReturnValue(t0);
+      store.getCredentials.mockResolvedValue(null);
+      store.pickCredentials.mockResolvedValue(null);
+      store.listDuePackages.mockResolvedValue([{ ...ROW, salon_id: 7 }]);
+      await pk.refreshDue();
+      await pk.refreshDue();
+      expect(mockLog.warn).toHaveBeenCalledTimes(1);
+      now.mockReturnValue(t0 + 61 * 60 * 1000);
+      await pk.refreshDue();
+      expect(mockLog.warn).toHaveBeenCalledTimes(2);
+    } finally { now.mockRestore(); }
   });
   test('учётки отправителя нет — берётся любая рабочая в салоне', async () => {
     store.getCredentials.mockResolvedValue(null);
@@ -215,6 +278,92 @@ describe('refreshRows и refreshDue', () => {
     const r = await pk.refreshDue();
     expect(r).toEqual({ checked: 0, changed: 0 });
     expect(store.touchStatusCheck).toHaveBeenCalledWith(2, ['33333333-3333-4333-8333-333333333333']);
+  });
+});
+
+describe('замок комплекта', () => {
+  const ROW = { id: '44444444-4444-4444-8444-444444444444', salon_id: 1, client_id: 52, status: 'sent', sent_by: 4, fdoc_package_guid: null };
+  const SIGNED = { id: ROW.id, status: 'SIGNED', documents: [{ id: 'd-1', status: 'SIGNED', clientSigners: [{ isSigned: true, dateSignOrCancel: '2026-10-24T10:00:00+03:00' }] }] };
+
+  test('одновременные перечитывания одного комплекта: без параллельных запросов статусов, PDF один раз, одно доп. перечитывание после «грязной» пометки', async () => {
+    let status = 'sent';
+    const docs = [{ id: 'd-1', file_name: 'Договор.docx', title: 'Договор', pdf_key: null }];
+    store.getPackage.mockImplementation(async () => ({ ...ROW, status }));
+    store.applyStatus.mockImplementation(async (sid, id, upd) => { status = upd.package.status; return true; });
+    store.listDocuments.mockImplementation(async () => docs.map((d) => ({ ...d })));
+    store.setDocumentPdf.mockImplementation(async (sid, id, key) => { docs.find((d) => d.id === id).pdf_key = key; });
+    fdoc.downloadPdf.mockResolvedValue(Buffer.from('%PDF-1.7'));
+    const slow = gate();
+    let inFlight = 0;
+    let maxInFlight = 0;
+    fdoc.workflowStatuses.mockImplementation(async () => {
+      inFlight++; maxInFlight = Math.max(maxInFlight, inFlight);
+      await slow.promise;
+      inFlight--;
+      return { packages: [SIGNED], failures: [] };
+    });
+    const first = pk.refreshRows(1, [ROW]);
+    await until(() => fdoc.workflowStatuses.mock.calls.length === 1);
+    const second = pk.refreshRows(1, [ROW]);   // вебхук SetStatus
+    const third = pk.refreshRows(1, [ROW]);    // ещё один — склеивается со вторым
+    await tick(); await tick();
+    expect(fdoc.workflowStatuses).toHaveBeenCalledTimes(1);
+    slow.open();
+    const res = await Promise.all([first, second, third]);
+    expect(maxInFlight).toBe(1);
+    expect(fdoc.workflowStatuses).toHaveBeenCalledTimes(2);   // одно перечитывание после «грязной» пометки
+    expect(fdoc.downloadPdf).toHaveBeenCalledTimes(1);
+    expect(store.logEvent.mock.calls.filter(([e]) => e.kind === 'status')).toHaveLength(1);
+    expect(store.logEvent.mock.calls.filter(([e]) => e.kind === 'pdf')).toHaveLength(1);
+    expect(res).toEqual([{ checked: 1, changed: 1 }, { checked: 1, changed: 0 }, { checked: 1, changed: 0 }]);
+  });
+
+  test('вебхук во время отправки ждёт её и перечитывает комплект после markSent', async () => {
+    const slow = gate();
+    const order = [];
+    fdoc.sendPackage.mockImplementation(async () => { await slow.promise; order.push('POST'); return { url: 'https://demo.fdoc.ru/employee/xyz' }; });
+    store.markSent.mockImplementation(async () => { order.push('markSent'); return true; });
+    fdoc.workflowStatuses.mockImplementation(async () => { order.push('status'); return { packages: [], failures: [] }; });
+    const sending = pk.send({ salonId: 1, userId: 4, clientId: 52, templateIds: [10] });
+    await until(() => fdoc.sendPackage.mock.calls.length === 1);
+    const id = store.insertPackage.mock.calls[0][0].id;
+    const hook = pk.refreshRows(1, [{ id, salon_id: 1, client_id: 52, status: 'draft', sent_by: 4 }]);
+    await tick(); await tick();
+    expect(fdoc.workflowStatuses).not.toHaveBeenCalled();
+    slow.open();
+    await Promise.all([sending, hook]);
+    expect(order).toEqual(['POST', 'markSent', 'status', 'status']);   // перечитывание после отправки + одно за вебхук
+  });
+
+  test('крон не ждёт занятый комплект: помечает «грязным» и идёт дальше', async () => {
+    const slow = gate();
+    fdoc.workflowStatuses.mockImplementationOnce(async () => { await slow.promise; return { packages: [], failures: [] }; });
+    const hook = pk.refreshRows(1, [ROW]);
+    await until(() => fdoc.workflowStatuses.mock.calls.length === 1);
+    store.listDuePackages.mockResolvedValue([ROW]);
+    expect(await pk.refreshDue()).toEqual({ checked: 0, changed: 0 });
+    expect(fdoc.workflowStatuses).toHaveBeenCalledTimes(1);
+    slow.open();
+    await hook;
+    await until(() => fdoc.workflowStatuses.mock.calls.length === 2);   // перечитывание за крон — после вебхука
+    await until(() => store.touchStatusCheck.mock.calls.length === 2);  // дождаться его конца: не просочиться в следующий тест
+    await tick(); await tick();
+  });
+
+  test('повтор отправки, пока по комплекту идёт отправка, — сразу 409 busy без запросов в F.Doc', async () => {
+    const DRAFT = { id: '55555555-5555-4555-8555-555555555555', salon_id: 1, client_id: 52, status: 'draft', sent_by: 4, title: 'Документы', record_id: null,
+      payload: { docDate: '2026-10-24' }, last_error: 'F.Doc POST /x network: ETIMEDOUT', created_at: new Date() };
+    store.getPackage.mockResolvedValue(DRAFT);
+    const slow = gate();
+    fdoc.workflowStatuses.mockImplementation(async () => { await slow.promise; return { packages: [{ id: DRAFT.id, status: 'WAIT_SIGN', documents: [] }], failures: [] }; });
+    const first = pk.resend({ salonId: 1, userId: 4, packageId: DRAFT.id });
+    await until(() => fdoc.workflowStatuses.mock.calls.length === 1);
+    // Второй повтор отказывает сразу, пока первый ещё ждёт F.Doc (иначе тест повис бы до таймаута).
+    const second = await pk.resend({ salonId: 1, userId: 4, packageId: DRAFT.id }).catch((e) => e);
+    expect(second).toMatchObject({ code: 'busy', status: 409, message: 'Комплект уже отправляется' });
+    expect(fdoc.workflowStatuses).toHaveBeenCalledTimes(1);
+    slow.open();
+    await expect(first).resolves.toEqual({ packageId: DRAFT.id, recovered: true });
   });
 });
 

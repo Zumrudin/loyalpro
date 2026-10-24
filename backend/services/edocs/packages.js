@@ -25,6 +25,7 @@ const config = require('../../config');
 const logger = createLogger('Edocs');
 const MAX_DOCS = 10;          // предел F.Doc: 10 файлов на комплект
 const STATUS_CHUNK = 10;      // предел F.Doc: 10 комплектов в запросе статусов
+const WARN_EVERY_MS = 60 * 60 * 1000;   // WARN о проблеме опроса салона — раз в час на причину (спека §5.4)
 
 /** Настройки салона → параметры клиента F.Doc (секреты расшифрованы). */
 function fdocConfig(row, { requireCorp = true, requireEnabled = true } = {}) {
@@ -50,7 +51,11 @@ async function credFor(salonId, userId, { fallback = false } = {}) {
 }
 
 // Неверный пароль — счётчик отказов (после трёх учётка не используется) и 409 для фронта.
-async function withCred(cred, fn) {
+// Фон (опрос, вебхук, докачка PDF) счётчик не меняет и не сбрасывает: сбой входа, общий для всех
+// (ключ API, настройки приложения), за несколько тиков запер бы по очереди все учётки салона —
+// fallback берёт следующую. Счётчик ведут только действия пользователя.
+async function withCred(cred, fn, { background = false } = {}) {
+  if (background) return fn();
   try {
     const r = await fn();
     if (cred.failCount > 0) { await store.markCredentialsOk(cred.salonId, cred.userId); cred.failCount = 0; }
@@ -108,6 +113,7 @@ async function renderTemplate(ctx, t) {
   return docx.render(buf, buildRenderData({ identity: ctx.identity, requisites: ctx.requisites, docDate: ctx.docDate, act: t.kind === 'act' ? ctx.act : null }));
 }
 
+/** Отправка в F.Doc. Вызывающий (send/resend) держит замок комплекта. */
 async function transmit(ctx, packageId, body) {
   try {
     const res = await withCred(ctx.cred, () => fdoc.sendPackage(ctx.cfg, ctx.cred, body));
@@ -120,8 +126,10 @@ async function transmit(ctx, packageId, body) {
     if (e.name === 'EdocsError') { e.packageId = packageId; throw e; }
     throw new EdocsError('fdoc_send_failed', `F.Doc не принял комплект: ${shortError(e)}`, 502, { packageId });
   }
-  // Автоподпись клиники могла уже сдвинуть статус — перечитываем сразу; сбой не страшен, догонит опрос.
-  try { await refreshRows(ctx.salonId, [await store.getPackage(ctx.salonId, packageId)]); } catch (e) { logger.warn(`edocs refresh after send ${packageId}: ${shortError(e)}`); }
+  // Автоподпись клиники могла уже сдвинуть статус — перечитываем сразу. Замок комплекта уже наш
+  // (через refreshRows перечитывание ждало бы само себя); сбой не страшен, догонит опрос.
+  const fresh = await refreshLocked(ctx.salonId, [packageId]);
+  if (fresh.errors.length) logger.warn(`edocs refresh after send ${packageId}: ${shortError(fresh.errors[0])}`);
   return { packageId };
 }
 
@@ -146,18 +154,25 @@ async function send(input) {
   const names = uniqueNames(ctx.templates.map((t) => safeFileName(t.title)));
   const docs = ctx.templates.map((t, i) => ({ id: crypto.randomUUID(), template_id: t.id, title: t.title, file_name: names[i], sort_order: i }));
   const title = `${ctx.isAct ? 'Акт' : 'Документы'} от ${fmtDate(ctx.docDate)}`;
-  await store.insertPackage({
-    id: packageId, salon_id: ctx.salonId, client_id: ctx.client.id, record_id: ctx.isAct ? ctx.record.id : null,
-    kind: ctx.isAct ? 'act' : 'onboarding', title, sent_by: ctx.userId,
-    payload: { templateIds: ctx.templates.map((t) => t.id), docDate: ctx.docDate, act: ctx.act, patient: { fio: fioOf(ctx.identity), phone: ctx.identity.plain.phone } },
-  }, docs);
-  return transmit(ctx, packageId, buildSendBody({ packageId, title, clientId: ctx.client.id, docs, files, identity: ctx.identity, settings: ctx.settingsRow }));
+  // Замок — уже на вставке: черновик сразу виден в списке, и «Повторить» не должно пойти параллельно.
+  return exclusive(ctx.salonId, packageId, async () => {
+    await store.insertPackage({
+      id: packageId, salon_id: ctx.salonId, client_id: ctx.client.id, record_id: ctx.isAct ? ctx.record.id : null,
+      kind: ctx.isAct ? 'act' : 'onboarding', title, sent_by: ctx.userId,
+      payload: { templateIds: ctx.templates.map((t) => t.id), docDate: ctx.docDate, act: ctx.act, patient: { fio: fioOf(ctx.identity), phone: ctx.identity.plain.phone } },
+    }, docs);
+    return transmit(ctx, packageId, buildSendBody({ packageId, title, clientId: ctx.client.id, docs, files, identity: ctx.identity, settings: ctx.settingsRow }));
+  });
 }
 
 /** Повтор отправки черновика: сначала спросить F.Doc — ответ мог потеряться, а комплект дойти. */
 async function resend({ salonId, userId, packageId }) {
   const pkg = await mustPackage(salonId, packageId);
   if (pkg.status !== 'draft') throw new EdocsError('already_sent', 'Комплект уже принят F.Doc', 409);
+  return exclusive(salonId, pkg.id, () => resendLocked(salonId, userId, pkg));
+}
+
+async function resendLocked(salonId, userId, pkg) {
   const cfg = fdocConfig(await store.getSettings(salonId));
   const cred = await credFor(salonId, userId);
   const known = await withCred(cred, () => fdoc.workflowStatuses(cfg, cred, [pkg.id]));
@@ -183,7 +198,7 @@ async function applyOne(salonId, row, wf) {
   const docs = await store.listDocuments(salonId, row.id);
   const upd = applyWorkflow(row, docs, wf);
   const applied = await store.applyStatus(salonId, row.id, upd);
-  if (upd.package.unknownStatus) logger.warn(`edocs: незнакомый статус F.Doc «${wf.status}» у комплекта ${row.id}`);
+  if (upd.package.unknownStatus) pollWarn(salonId, `status:${wf.status}`, `edocs: незнакомый статус F.Doc «${wf.status}» у комплекта ${row.id}`);
   if (!applied || upd.package.status === row.status) return false;
   await store.logEvent({ salonId, packageId: row.id, clientId: row.client_id, kind: 'status', payload: { from: row.status, to: upd.package.status, fdoc: wf.status || null } });
   return true;
@@ -196,7 +211,7 @@ async function fetchPdfs(salonId, pkg, cfg) {
   const cred = await credFor(salonId, pkg.sent_by, { fallback: true });
   let n = 0;
   for (const d of docs) {
-    const buf = await withCred(cred, () => fdoc.downloadPdf(cfg, cred, pkg.fdoc_package_guid || pkg.id, d.fdoc_document_guid || d.id));
+    const buf = await withCred(cred, () => fdoc.downloadPdf(cfg, cred, pkg.fdoc_package_guid || pkg.id, d.fdoc_document_guid || d.id), { background: true });
     const key = `edocs/${salonId}/packages/${pkg.id}/${d.id}.pdf`;
     await s3.putObject(key, buf, 'application/pdf');
     await store.setDocumentPdf(salonId, d.id, key);
@@ -206,37 +221,130 @@ async function fetchPdfs(salonId, pkg, cfg) {
   return n;
 }
 
-/** Перечитать статусы комплектов одного салона (под учёткой отправителя, иначе любой рабочей). */
-async function refreshRows(salonId, rows) {
-  const list = (rows || []).filter(Boolean);
-  if (!list.length) return { checked: 0, changed: 0 };
-  const cfg = fdocConfig(await store.getSettings(salonId));
-  let checked = 0, changed = 0;
+const warnedAt = new Map();   // `${salonId}:${причина}` → когда писали
+/** WARN о проблеме опроса салона — не чаще раза в час на пару салон+причина (иначе — каждый тик крона). */
+function pollWarn(salonId, reason, text) {
+  const k = `${salonId}:${reason}`;
+  const now = Date.now();
+  if (warnedAt.has(k) && now - warnedAt.get(k) < WARN_EVERY_MS) return;
+  warnedAt.set(k, now);
+  logger.warn(text);
+}
+
+// Замок комплекта внутри процесса: packageId → идущая операция { salonId, dirty, after }.
+// Под ним — отправка (send/resend) и перечитывание статуса: параллельные перечитывания одного
+// комплекта (вебхук на каждый SetStatus + крон) дважды качали PDF, дублировали события и
+// откатывали статус устаревшим ответом. Перечитывание, запрошенное во время операции, не идёт
+// параллельно: комплект помечается «грязным» и перечитывается ОДИН раз после неё — повторный
+// SetStatus мог принести более новый статус. Отправка не ждёт, а сразу отказывает (exclusive).
+const pkgOps = new Map();
+
+function tryLock(salonId, id) {
+  if (pkgOps.has(id)) return false;
+  pkgOps.set(id, { salonId, dirty: false, after: null });
+  return true;
+}
+
+/** Перечитать после текущей операции: один раз на все запросы, пришедшие за время операции. */
+function rereadAfter(id) {
+  const op = pkgOps.get(id);
+  op.dirty = true;
+  if (!op.after) {
+    let resolve;
+    op.after = { promise: new Promise((r) => { resolve = r; }), resolve };
+  }
+  return op.after.promise;
+}
+
+function unlock(id) {
+  const op = pkgOps.get(id);
+  if (!op || !op.dirty) { pkgOps.delete(id); return; }
+  // Замок не освобождаем: им сразу владеет перечитывание — иначе его перехватила бы новая операция.
+  pkgOps.set(id, { salonId: op.salonId, dirty: false, after: null });
+  const done = (r) => { unlock(id); op.after.resolve(r); };
+  refreshLocked(op.salonId, [id]).then(done, (e) => done({ checked: 0, changed: 0, errors: [e] }));
+}
+
+/** Операция отправки под замком комплекта: занят — сразу 409, не ждём. */
+async function exclusive(salonId, id, fn) {
+  if (!tryLock(salonId, id)) throw new EdocsError('busy', 'Комплект уже отправляется', 409);
+  try { return await fn(); } finally { unlock(id); }
+}
+
+/**
+ * Перечитать статусы комплектов одного салона (под учёткой отправителя, иначе любой рабочей).
+ * Комплект, по которому идёт другая операция, перечитывается один раз после неё; wait=false —
+ * не ждать этого (крон: зависшая чужая операция не должна стопорить опрос всех салонов).
+ * Сбой группы или пачки не обрывает остальные; исключение — только если не проверен ни один
+ * комплект, а ошибка была (кнопка «Обновить статус» её покажет, refreshDue — в WARN).
+ */
+async function refreshRows(salonId, rows, { wait = true } = {}) {
+  const mine = [];
+  const waits = [];
+  const seen = new Set();
+  for (const r of rows || []) {
+    if (!r || !r.id || seen.has(r.id)) continue;
+    seen.add(r.id);
+    if (tryLock(salonId, r.id)) mine.push(r.id); else waits.push(rereadAfter(r.id));
+  }
+  let res = { checked: 0, changed: 0, errors: [] };
+  try { if (mine.length) res = await refreshLocked(salonId, mine); } finally { for (const id of mine) unlock(id); }
+  if (wait) {
+    for (const w of await Promise.all(waits)) { res.checked += w.checked; res.changed += w.changed; res.errors.push(...w.errors); }
+  }
+  if (!res.checked && res.errors.length) throw res.errors[0];
+  return { checked: res.checked, changed: res.changed };
+}
+
+/** Перечитывание под замком: вызывающий держит замки всех ids. Не бросает — ошибки в errors. */
+async function refreshLocked(salonId, ids) {
+  const out = { checked: 0, changed: 0, errors: [] };
+  let cfg;
+  const list = [];
+  try {
+    cfg = fdocConfig(await store.getSettings(salonId));
+    // Строки — заново из БД: снимок вызывающего (вебхук, крон) мог устареть, пока шла прошлая
+    // операция, и applyOne записал бы по нему дубль события «sent → signed».
+    for (const id of ids) { const r = await store.getPackage(salonId, id); if (r) list.push(r); }
+  } catch (e) { out.errors.push(e); return out; }
   const groups = new Map();
   for (const r of list) { const k = r.sent_by || 0; if (!groups.has(k)) groups.set(k, []); groups.get(k).push(r); }
   for (const [userId, group] of groups) {
-    let cred;
+    let cred = null;
     try { cred = await credFor(salonId, userId, { fallback: true }); } catch (e) {
-      logger.warn(`edocs: в салоне ${salonId} нет рабочих учётных данных F.Doc — статусы не проверены`);
-      continue;
+      if (e && e.name === 'EdocsError') pollWarn(salonId, e.code, `edocs: в салоне ${salonId} нет рабочих учётных данных F.Doc — статусы не проверены`);
+      else { out.errors.push(e); pollWarn(salonId, (e && e.code) || 'credentials', `edocs: учётные данные F.Doc салона ${salonId}: ${shortError(e)}`); }
     }
     for (let i = 0; i < group.length; i += STATUS_CHUNK) {
       const chunk = group.slice(i, i + STATUS_CHUNK);
-      const res = await withCred(cred, () => fdoc.workflowStatuses(cfg, cred, chunk.map((r) => r.fdoc_package_guid || r.id)));
-      for (const wf of res.packages) {
-        const row = chunk.find((r) => wf && (r.id === wf.id || (r.fdoc_package_guid && r.fdoc_package_guid === wf.id))) || (chunk.length === 1 ? chunk[0] : null);
-        if (!row) { logger.warn(`edocs: F.Doc вернул комплект ${wf && wf.id}, которого нет в запросе`); continue; }
-        checked++;
-        if (await applyOne(salonId, row, wf)) changed++;
+      if (cred) {
+        try {
+          const res = await withCred(cred, () => fdoc.workflowStatuses(cfg, cred, chunk.map((r) => r.fdoc_package_guid || r.id)), { background: true });
+          for (const wf of res.packages) {
+            const row = chunk.find((r) => wf && (r.id === wf.id || (r.fdoc_package_guid && r.fdoc_package_guid === wf.id))) || (chunk.length === 1 ? chunk[0] : null);
+            if (!row) { pollWarn(salonId, 'foreign_package', `edocs: F.Doc вернул комплект ${wf && wf.id}, которого нет в запросе`); continue; }
+            out.checked++;
+            if (await applyOne(salonId, row, wf)) out.changed++;
+          }
+        } catch (e) {
+          out.errors.push(e);
+          pollWarn(salonId, (e && e.code) || 'error', `edocs: статусы комплектов салона ${salonId} не проверены: ${shortError(e)}`);
+        }
       }
-      await store.touchStatusCheck(salonId, chunk.map((r) => r.id));
+      // Отметка и после сбоя: сломанная пачка не должна опрашиваться каждый тик подряд.
+      try { await store.touchStatusCheck(salonId, chunk.map((r) => r.id)); } catch (e) {
+        out.errors.push(e);
+        pollWarn(salonId, 'touch', `edocs: отметка проверки статусов салона ${salonId}: ${shortError(e)}`);
+      }
     }
   }
   for (const r of list) {
-    const fresh = await store.getPackage(salonId, r.id);
-    if (fresh && fresh.status === 'signed') await fetchPdfs(salonId, fresh, cfg).catch((e) => logger.warn(`edocs PDF ${r.id}: ${shortError(e)}`));
+    try {
+      const fresh = await store.getPackage(salonId, r.id);
+      if (fresh && fresh.status === 'signed') await fetchPdfs(salonId, fresh, cfg);
+    } catch (e) { pollWarn(salonId, `pdf:${(e && e.code) || 'error'}`, `edocs PDF ${r.id}: ${shortError(e)}`); }
   }
-  return { checked, changed };
+  return out;
 }
 
 let pollRunning = false;
@@ -251,10 +359,10 @@ async function refreshDue() {
     let checked = 0, changed = 0;
     for (const [salonId, list] of bySalon) {
       try {
-        const r = await refreshRows(salonId, list);
+        const r = await refreshRows(salonId, list, { wait: false });
         checked += r.checked; changed += r.changed;
       } catch (e) {
-        logger.warn(`edocs poll salon ${salonId}: ${shortError(e)}`);
+        pollWarn(salonId, (e && e.code) || 'error', `edocs poll salon ${salonId}: ${shortError(e)}`);
         // Сломанные настройки салона не должны опрашиваться каждый тик подряд.
         try { await store.touchStatusCheck(salonId, list.map((x) => x.id)); } catch (_) { /* повторит следующий тик */ }
       }
