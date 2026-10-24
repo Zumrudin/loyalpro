@@ -229,6 +229,14 @@ module.exports = {
   S3_FORCE_PATH_STYLE: process.env.S3_FORCE_PATH_STYLE === 'true',
   S3_URL_TTL_SECONDS: parseInt(process.env.S3_URL_TTL_SECONDS, 10) || 900,
 
+  // «Документы» (F.Doc): ключ AES-256-GCM для паспортных данных и паролей F.Doc —
+  // 32 байта в base64 (`node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"`).
+  // Пусто — модуль не сохраняет ни паспорт, ни пароли (503). Потеря ключа = потеря данных.
+  EDOCS_ENC_KEY: process.env.EDOCS_ENC_KEY || '',
+  // На ДЕМО-стенде F.Doc (demo.*) отправка разрешена только на эти номера: в дев-БД живые
+  // пациенты, а демо-контур шлёт настоящие SMS. Через запятую, канон 7XXXXXXXXXX.
+  EDOCS_DEMO_PHONES: (process.env.EDOCS_DEMO_PHONES || '79200255591').split(',').map((s) => s.replace(/\D/g, '')).filter(Boolean),
+
   // Sync
   SYNC_DAYS: 365,
 
