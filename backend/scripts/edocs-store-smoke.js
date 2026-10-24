@@ -99,8 +99,14 @@ async function run(client, { salonId = 1 } = {}) {
   ok('markSent из черновика → true', (await store.markSent(salonId, pkgId, { employeeUrl: 'https://demo.fdoc.ru/x', userId: u.id })) === true);
   let pk = await store.getPackage(salonId, pkgId);
   ok('markSent', pk.status === 'sent' && pk.employee_url === 'https://demo.fdoc.ru/x' && pk.last_error === null, pk);
-  ok('markSent уже отправленного → false', (await store.markSent(salonId, pkgId, { employeeUrl: 'https://demo.fdoc.ru/again', userId: u.id })) === false);
-  ok('markSent повторный комплект не тронул', (await store.getPackage(salonId, pkgId)).employee_url === 'https://demo.fdoc.ru/x');
+  ok('markSent чужого салона → false', (await store.markSent(otherSalon, pkgId, { employeeUrl: 'https://evil.example/x', userId: u.id })) === false);
+  ok('markSent чужого салона комплект не тронул', (await store.getPackage(salonId, pkgId)).employee_url === 'https://demo.fdoc.ru/x');
+  await store.markSendError(salonId, pkgId, 'late error');
+  ok('markSent уже отправленного → false (статус не менялся)', (await store.markSent(salonId, pkgId, { employeeUrl: 'https://demo.fdoc.ru/again', userId: u.id })) === false);
+  pk = await store.getPackage(salonId, pkgId);
+  ok('markSent уже отправленного: статус прежний, поля отправки записаны, ошибка снята',
+    pk.status === 'sent' && pk.employee_url === 'https://demo.fdoc.ru/again' && pk.last_error === null && !!pk.sent_at && pk.sent_by === u.id,
+    { status: pk.status, employee_url: pk.employee_url, last_error: pk.last_error });
   ok('actStatusesForRecords', (await store.actStatusesForRecords(salonId, [rec.id])).some((x) => x.package_id === pkgId));
   ok('listClientVisits со статусом акта', (await store.listClientVisits(salonId, rec.client_id)).some((x) => x.act_package_id === pkgId));
 
@@ -111,6 +117,9 @@ async function run(client, { salonId = 1 } = {}) {
   ok('applyStatus sent → signed → true', (await store.applyStatus(salonId, pkgId, statusUpd('signed', 'SIGNED', signedIso))) === true);
   pk = await store.getPackage(salonId, pkgId);
   ok('applyStatus', pk.status === 'signed' && !!pk.signed_at && !!pk.last_status_check_at, pk);
+  ok('markSent подписанного → false', (await store.markSent(salonId, pkgId, { userId: u.id })) === false);
+  pk = await store.getPackage(salonId, pkgId);
+  ok('markSent подписанного: статус не откатился, ссылка без нового значения не стёрта', pk.status === 'signed' && pk.employee_url === 'https://demo.fdoc.ru/again', { status: pk.status, employee_url: pk.employee_url });
   ok('applyStatus signed → sent отвергнут (false)', (await store.applyStatus(salonId, pkgId, statusUpd('sent', 'WAIT_SIGN', null))) === false);
   pk = await store.getPackage(salonId, pkgId);
   let doc = await store.getDocument(salonId, d1);

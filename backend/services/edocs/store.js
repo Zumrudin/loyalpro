@@ -248,17 +248,25 @@ async function insertPackage(pkg, docs) {
     }
   });
 }
-/** Только из 'draft': true — комплект переведён в 'sent', false — он уже не черновик (не тронут). */
+/**
+ * F.Doc принял комплект: время, отправитель, ссылка в окно сотрудника и снятие ошибки пишутся всегда,
+ * а статус 'sent' — только из 'draft' (CASE в SET, не условие WHERE): перечитывание могло уже сдвинуть
+ * его дальше, назад не возвращаем. true — статус сменился, false — не черновик или комплекта нет в салоне.
+ * Прежний статус — из подзапроса FOR UPDATE: RETURNING видит только новую строку, а блокировка не даёт
+ * ему разойтись с той, что обновляется.
+ */
 async function markSent(salonId, id, { employeeUrl = null, userId = null } = {}) {
   const r = await db.oneOrNone(
-    `UPDATE edoc_packages SET status='sent', sent_at=NOW(), sent_by=COALESCE($3, sent_by), last_error=NULL,
-       employee_url=COALESCE($4, employee_url), employee_url_at=CASE WHEN $4::text IS NULL THEN employee_url_at ELSE NOW() END,
+    `UPDATE edoc_packages p SET status=CASE WHEN p.status='draft' THEN 'sent' ELSE p.status END,
+       sent_at=NOW(), sent_by=COALESCE($3, p.sent_by), last_error=NULL,
+       employee_url=COALESCE($4, p.employee_url), employee_url_at=CASE WHEN $4::text IS NULL THEN p.employee_url_at ELSE NOW() END,
        updated_at=NOW()
-     WHERE salon_id=$1 AND id=$2 AND status='draft'
-     RETURNING id`,
+     FROM (SELECT id, status FROM edoc_packages WHERE salon_id=$1 AND id=$2 FOR UPDATE) o
+     WHERE p.salon_id=$1 AND p.id=o.id
+     RETURNING (o.status='draft') AS changed`,
     [salonId, id, userId, employeeUrl],
   );
-  return !!r;
+  return !!(r && r.changed);
 }
 async function markSendError(salonId, id, error) {
   await db.query('UPDATE edoc_packages SET last_error=$3, updated_at=NOW() WHERE salon_id=$1 AND id=$2', [salonId, id, String(error || '').slice(0, 500)]);

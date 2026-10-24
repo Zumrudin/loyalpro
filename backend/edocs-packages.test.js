@@ -101,19 +101,59 @@ describe('send', () => {
     await expect(pk.send({ salonId: 1, userId: 4, clientId: 52, templateIds: [10] })).rejects.toMatchObject({ code: 'fdoc_no_credentials', status: 409 });
   });
 
-  test('F.Doc отверг комплект — черновик с ошибкой, 502 с id комплекта', async () => {
+  test('F.Doc отверг комплект (HTTP 4xx) — черновик с ошибкой, 502 fdoc_rejected с id комплекта', async () => {
     fdoc.sendPackage.mockRejectedValue(Object.assign(new Error('F.Doc POST /x 400: Файл повреждён'), { name: 'FdocError', code: 'fdoc_rejected', status: 400 }));
     const e = await pk.send({ salonId: 1, userId: 4, clientId: 52, templateIds: [10] }).catch((x) => x);
-    expect(e).toMatchObject({ code: 'fdoc_send_failed', status: 502, packageId: expect.any(String) });
+    expect(e).toMatchObject({ name: 'EdocsError', code: 'fdoc_rejected', status: 502, packageId: expect.any(String), message: 'F.Doc не принял комплект: F.Doc POST /x 400: Файл повреждён' });
     expect(store.markSendError).toHaveBeenCalledWith(1, e.packageId, 'F.Doc POST /x 400: Файл повреждён');
     expect(store.markSent).not.toHaveBeenCalled();
-    expect(store.logEvent).toHaveBeenCalledWith(expect.objectContaining({ kind: 'send_error' }));
+    expect(store.logEvent).toHaveBeenCalledWith(expect.objectContaining({ kind: 'send_error', packageId: e.packageId }));
   });
 
-  test('F.Doc не принял пароль сотрудника — счётчик отказов и 409', async () => {
+  test('неоднозначный сбой отправки (сеть, таймаут, 5xx) — 502 fdoc_send_unknown: сначала проверить, не дошёл ли', async () => {
+    const unknown = 'Не удалось подтвердить отправку в F.Doc — откройте комплект и нажмите «Повторить»: сначала проверим, не дошёл ли он';
+    for (const err of [
+      Object.assign(new Error('F.Doc POST /x network: ECONNABORTED'), { name: 'FdocError', code: 'fdoc_network', status: null }),
+      Object.assign(new Error('F.Doc POST /x 502: bad gateway'), { name: 'FdocError', code: 'fdoc_server', status: 502 }),
+      new Error('socket hang up'),
+    ]) {
+      store.markSendError.mockClear();
+      fdoc.sendPackage.mockRejectedValueOnce(err);
+      const e = await pk.send({ salonId: 1, userId: 4, clientId: 52, templateIds: [10] }).catch((x) => x);
+      expect(e).toMatchObject({ name: 'EdocsError', code: 'fdoc_send_unknown', status: 502, packageId: expect.any(String), message: unknown });
+      expect(store.markSendError).toHaveBeenCalledWith(1, e.packageId, err.message);
+    }
+    expect(store.markSent).not.toHaveBeenCalled();
+  });
+
+  test('F.Doc не принял пароль сотрудника — счётчик отказов и 409 с id комплекта', async () => {
     fdoc.sendPackage.mockRejectedValue(Object.assign(new Error('bad'), { code: 'fdoc_credentials_invalid', status: 401 }));
-    await expect(pk.send({ salonId: 1, userId: 4, clientId: 52, templateIds: [10] })).rejects.toMatchObject({ code: 'fdoc_credentials_invalid', status: 409 });
+    await expect(pk.send({ salonId: 1, userId: 4, clientId: 52, templateIds: [10] })).rejects.toMatchObject({ code: 'fdoc_credentials_invalid', status: 409, packageId: expect.any(String) });
     expect(store.markCredentialsFail).toHaveBeenCalledWith(1, 4, 'bad');
+  });
+
+  test('ошибка записи ошибки не теряет класс ответа: всё равно EdocsError с id комплекта', async () => {
+    fdoc.sendPackage.mockRejectedValue(Object.assign(new Error('F.Doc POST /x 400: x'), { name: 'FdocError', code: 'fdoc_rejected', status: 400 }));
+    store.markSendError.mockRejectedValueOnce(new Error('connection terminated'));
+    await expect(pk.send({ salonId: 1, userId: 4, clientId: 52, templateIds: [10] })).rejects.toMatchObject({ code: 'fdoc_rejected', packageId: expect.any(String) });
+  });
+
+  test('F.Doc принял, а сохранить не удалось — 500 saved_partially без текста БД; ошибки отправки нет', async () => {
+    store.markSent.mockRejectedValueOnce(Object.assign(new Error('deadlock detected on relation edoc_packages'), { code: '40P01' }));
+    const e = await pk.send({ salonId: 1, userId: 4, clientId: 52, templateIds: [10] }).catch((x) => x);
+    expect(e).toMatchObject({ name: 'EdocsError', code: 'saved_partially', status: 500, packageId: expect.any(String),
+      message: 'F.Doc принял комплект, но статус не сохранился — обновите карточку комплекта' });
+    expect(e.message).not.toMatch(/deadlock|edoc_packages/);
+    expect(mockLog.error).toHaveBeenCalledWith(expect.stringContaining('deadlock detected'));
+    expect(mockLog.error).toHaveBeenCalledWith(expect.stringContaining(e.packageId));
+    expect(store.markSendError).not.toHaveBeenCalled();
+    expect(store.logEvent).not.toHaveBeenCalledWith(expect.objectContaining({ kind: 'send_error' }));
+  });
+
+  test('markSent → false (статус уже сдвинут перечитыванием) — не ошибка', async () => {
+    store.markSent.mockResolvedValueOnce(false);
+    await expect(pk.send({ salonId: 1, userId: 4, clientId: 52, templateIds: [10] })).resolves.toMatchObject({ packageId: expect.any(String) });
+    expect(store.logEvent).toHaveBeenCalledWith(expect.objectContaining({ kind: 'send' }));
   });
 
   test('акт: строки из записи, привязка к визиту, номер акта — id записи YClients', async () => {
@@ -157,7 +197,94 @@ describe('send', () => {
 });
 
 describe('resend', () => {
-  const DRAFT = { id: '11111111-1111-4111-8111-111111111111', salon_id: 1, client_id: 52, status: 'draft', sent_by: 4, title: 'Документы от 24.10.2026', record_id: null, payload: { templateIds: [10], docDate: '2026-10-24' } };
+  const DRAFT = { id: '11111111-1111-4111-8111-111111111111', salon_id: 1, client_id: 52, status: 'draft', sent_by: 4, title: 'Документы от 24.10.2026', record_id: null,
+    payload: { templateIds: [10], docDate: '2026-10-24' }, last_error: 'F.Doc POST /x network: ETIMEDOUT', created_at: new Date() };
+  const DOCS = [{ id: 'd-1', template_id: 10, title: 'Договор', file_name: 'Договор.docx', sort_order: 0 }];
+  const credOf = (uid, failCount = 0) => ({ user_id: uid, login: `u${uid}`, password_enc: 'enc:pw', fail_count: failCount });
+  const CHECK_FAILED = { name: 'EdocsError', code: 'fdoc_check_failed', status: 502, message: 'Не удалось проверить комплект в F.Doc — повторите позже' };
+
+  test('свежий черновик без ошибки — 409 send_in_progress, F.Doc не трогаем', async () => {
+    store.getPackage.mockResolvedValue({ ...DRAFT, last_error: null, created_at: new Date(Date.now() - 60 * 1000) });
+    await expect(pk.resend({ salonId: 1, userId: 4, packageId: DRAFT.id })).rejects.toMatchObject({ code: 'send_in_progress', status: 409, message: 'Комплект ещё отправляется — подождите минуту' });
+    expect(fdoc.workflowStatuses).not.toHaveBeenCalled();
+    expect(fdoc.sendPackage).not.toHaveBeenCalled();
+  });
+  test('черновик без ошибки старше 5 минут (процесс упал посреди отправки) — повтор разрешён', async () => {
+    store.getPackage.mockResolvedValue({ ...DRAFT, last_error: null, created_at: new Date(Date.now() - 6 * 60 * 1000) });
+    store.listDocuments.mockResolvedValue(DOCS);
+    await pk.resend({ salonId: 1, userId: 4, packageId: DRAFT.id });
+    expect(fdoc.workflowStatuses).toHaveBeenCalledTimes(2);   // проверка + перечитывание после отправки
+    expect(fdoc.sendPackage).toHaveBeenCalledTimes(1);
+  });
+  test('пока ждали замок, комплект ушёл из черновиков — 409 already_sent без запросов в F.Doc', async () => {
+    store.getPackage.mockResolvedValueOnce(DRAFT).mockResolvedValue({ ...DRAFT, status: 'sent' });
+    await expect(pk.resend({ salonId: 1, userId: 4, packageId: DRAFT.id })).rejects.toMatchObject({ code: 'already_sent', status: 409 });
+    expect(fdoc.workflowStatuses).not.toHaveBeenCalled();
+  });
+  test('проверка — учёткой отправителя; найден — отправителем остаётся тот, кому F.Doc его показал', async () => {
+    store.getPackage.mockResolvedValue({ ...DRAFT, sent_by: 7 });
+    store.getCredentials.mockImplementation(async (sid, uid) => credOf(uid));
+    fdoc.workflowStatuses.mockResolvedValue({ packages: [{ id: DRAFT.id, status: 'WAIT_SIGN', documents: [] }], failures: [] });
+    expect(await pk.resend({ salonId: 1, userId: 4, packageId: DRAFT.id })).toEqual({ packageId: DRAFT.id, recovered: true });
+    expect(fdoc.workflowStatuses.mock.calls[0][1]).toMatchObject({ userId: 7, login: 'u7' });
+    expect(store.markSent).toHaveBeenCalledWith(1, DRAFT.id, { userId: 7 });
+  });
+  test('учётки отправителя нет или она заперта — проверка учёткой текущего пользователя', async () => {
+    store.getPackage.mockResolvedValue({ ...DRAFT, sent_by: 7 });
+    fdoc.workflowStatuses.mockResolvedValue({ packages: [{ id: DRAFT.id, status: 'WAIT_SIGN', documents: [] }], failures: [] });
+    store.getCredentials.mockImplementation(async (sid, uid) => (uid === 7 ? null : credOf(uid)));
+    await pk.resend({ salonId: 1, userId: 4, packageId: DRAFT.id });
+    expect(fdoc.workflowStatuses.mock.calls[0][1]).toMatchObject({ userId: 4 });
+    fdoc.workflowStatuses.mockClear();
+    store.getCredentials.mockImplementation(async (sid, uid) => credOf(uid, uid === 7 ? 3 : 0));
+    await pk.resend({ salonId: 1, userId: 4, packageId: DRAFT.id });
+    expect(fdoc.workflowStatuses.mock.calls[0][1]).toMatchObject({ userId: 4 });
+  });
+  test('пароль отправителя отвергнут при проверке — счётчик его учётки и 502 fdoc_check_failed без отправки', async () => {
+    store.getPackage.mockResolvedValue({ ...DRAFT, sent_by: 7 });
+    store.getCredentials.mockImplementation(async (sid, uid) => credOf(uid));
+    fdoc.workflowStatuses.mockRejectedValue(Object.assign(new Error('bad'), { name: 'FdocError', code: 'fdoc_credentials_invalid', status: 401 }));
+    await expect(pk.resend({ salonId: 1, userId: 4, packageId: DRAFT.id })).rejects.toMatchObject(CHECK_FAILED);
+    expect(store.markCredentialsFail).toHaveBeenCalledWith(1, 7, 'bad');
+    expect(fdoc.sendPackage).not.toHaveBeenCalled();
+  });
+  test('свой пароль отвергнут при проверке — 409 «Мой F.Doc»', async () => {
+    store.getPackage.mockResolvedValue(DRAFT);
+    fdoc.workflowStatuses.mockRejectedValue(Object.assign(new Error('bad'), { name: 'FdocError', code: 'fdoc_credentials_invalid', status: 401 }));
+    await expect(pk.resend({ salonId: 1, userId: 4, packageId: DRAFT.id })).rejects.toMatchObject({ code: 'fdoc_credentials_invalid', status: 409 });
+    expect(fdoc.sendPackage).not.toHaveBeenCalled();
+  });
+  test('повторный POST — только при однозначном «нет»; иначе 502 fdoc_check_failed без отправки', async () => {
+    store.getPackage.mockResolvedValue(DRAFT);
+    store.listDocuments.mockResolvedValue(DOCS);
+    for (const answer of [
+      { packages: [], failures: [{ id: DRAFT.id, code: 'ACCESS_DENIED', message: 'нет доступа' }] },   // другая ошибка по нашему id
+      { packages: [{ id: 'чужой-комплект', status: 'WAIT_SIGN' }], failures: [] },                     // единственный, но чужой
+      { packages: [], failures: [{ code: 'NOT_FOUND' }] },                                               // NOT_FOUND без id
+      { packages: [], failures: [{ id: 'другой-id', code: 'NOT_FOUND' }] },                              // NOT_FOUND не по нашему id
+      { packages: [null], failures: [] },                                                                // непонятный ответ
+    ]) {
+      fdoc.workflowStatuses.mockResolvedValueOnce(answer);
+      await expect(pk.resend({ salonId: 1, userId: 4, packageId: DRAFT.id })).rejects.toMatchObject(CHECK_FAILED);
+    }
+    fdoc.workflowStatuses.mockRejectedValueOnce(Object.assign(new Error('F.Doc POST /x network: ETIMEDOUT'), { name: 'FdocError', code: 'fdoc_network', status: null }));
+    await expect(pk.resend({ salonId: 1, userId: 4, packageId: DRAFT.id })).rejects.toMatchObject(CHECK_FAILED);
+    expect(fdoc.sendPackage).not.toHaveBeenCalled();
+    expect(store.markSent).not.toHaveBeenCalled();
+  });
+  test('однозначное «нет»: пустой ответ без failures — повторная отправка', async () => {
+    store.getPackage.mockResolvedValue(DRAFT);
+    store.listDocuments.mockResolvedValue(DOCS);
+    fdoc.workflowStatuses.mockResolvedValue({ packages: [], failures: [] });
+    await pk.resend({ salonId: 1, userId: 4, packageId: DRAFT.id });
+    expect(fdoc.sendPackage).toHaveBeenCalledTimes(1);
+  });
+  test('единственный комплект без id в ответе — считается нашим', async () => {
+    store.getPackage.mockResolvedValue(DRAFT);
+    fdoc.workflowStatuses.mockResolvedValue({ packages: [{ status: 'WAIT_SIGN', documents: [] }], failures: [] });
+    expect(await pk.resend({ salonId: 1, userId: 4, packageId: DRAFT.id })).toEqual({ packageId: DRAFT.id, recovered: true });
+    expect(fdoc.sendPackage).not.toHaveBeenCalled();
+  });
   test('F.Doc уже знает комплект — отмечаем отправленным без повторной отправки', async () => {
     store.getPackage.mockResolvedValue(DRAFT);
     fdoc.workflowStatuses.mockResolvedValue({ packages: [{ id: DRAFT.id, status: 'WAIT_SIGN', documents: [] }], failures: [] });

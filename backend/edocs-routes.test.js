@@ -123,9 +123,9 @@ describe('/api/edocs', () => {
     packages.send.mockRejectedValueOnce(new EdocsError('missing_fields', 'Не хватает данных', 400, { missing: { identity: [{ key: 'phone', label: 'Телефон' }], org: [] } }));
     let r = await call(ops, 'POST', '/packages', { body: { clientId: 52, templateIds: [10] } });
     expect(r).toEqual({ status: 400, body: { error: 'Не хватает данных', code: 'missing_fields', missing: { identity: [{ key: 'phone', label: 'Телефон' }], org: [] } } });
-    packages.send.mockRejectedValueOnce(new EdocsError('fdoc_send_failed', 'F.Doc не принял комплект: x', 502, { packageId: PKG_ID }));
+    packages.send.mockRejectedValueOnce(new EdocsError('fdoc_rejected', 'F.Doc не принял комплект: x', 502, { packageId: PKG_ID }));
     r = await call(ops, 'POST', '/packages', { body: { clientId: 52, templateIds: [10] } });
-    expect(r.body).toMatchObject({ code: 'fdoc_send_failed', packageId: PKG_ID });
+    expect(r.body).toMatchObject({ code: 'fdoc_rejected', packageId: PKG_ID });
     packages.send.mockResolvedValueOnce({ packageId: PKG_ID });
     r = await call(ops, 'POST', '/packages', { body: { clientId: 52, templateIds: [10] } });
     expect(packages.send).toHaveBeenLastCalledWith({ salonId: 1, userId: 4, clientId: 52, templateIds: [10], recordId: null, docDate: null, actLines: null });

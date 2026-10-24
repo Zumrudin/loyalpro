@@ -26,6 +26,7 @@ const logger = createLogger('Edocs');
 const MAX_DOCS = 10;          // предел F.Doc: 10 файлов на комплект
 const STATUS_CHUNK = 10;      // предел F.Doc: 10 комплектов в запросе статусов
 const WARN_EVERY_MS = 60 * 60 * 1000;   // WARN о проблеме опроса салона — раз в час на причину (спека §5.4)
+const SEND_STALE_MS = 5 * 60 * 1000;    // дольше любой отправки (вход 30 с + POST до 120 с)
 
 /** Настройки салона → параметры клиента F.Doc (секреты расшифрованы). */
 function fdocConfig(row, { requireCorp = true, requireEnabled = true } = {}) {
@@ -113,18 +114,37 @@ async function renderTemplate(ctx, t) {
   return docx.render(buf, buildRenderData({ identity: ctx.identity, requisites: ctx.requisites, docDate: ctx.docDate, act: t.kind === 'act' ? ctx.act : null }));
 }
 
+// Отправка не прошла. Однозначный отказ (HTTP 4xx) — комплекта в F.Doc нет. Без статуса (сеть,
+// таймаут) и 5xx — мог и дойти, поэтому «Повторить» начнёт с проверки (resend). Учётка — как есть.
+function sendFailure(e, packageId) {
+  if (e && e.name === 'EdocsError') { e.packageId = packageId; return e; }
+  const st = Number(e && e.status);
+  if (st >= 400 && st < 500) return new EdocsError('fdoc_rejected', `F.Doc не принял комплект: ${shortError(e)}`, 502, { packageId });
+  return new EdocsError('fdoc_send_unknown', 'Не удалось подтвердить отправку в F.Doc — откройте комплект и нажмите «Повторить»: сначала проверим, не дошёл ли он', 502, { packageId });
+}
+
 /** Отправка в F.Doc. Вызывающий (send/resend) держит замок комплекта. */
 async function transmit(ctx, packageId, body) {
+  let res;
   try {
-    const res = await withCred(ctx.cred, () => fdoc.sendPackage(ctx.cfg, ctx.cred, body));
+    res = await withCred(ctx.cred, () => fdoc.sendPackage(ctx.cfg, ctx.cred, body));
+  } catch (e) {
+    try { await store.markSendError(ctx.salonId, packageId, shortError(e)); } catch (dbErr) {
+      logger.error(`edocs: ошибка отправки комплекта ${packageId} не записана: ${shortError(dbErr)}`);
+    }
+    await store.logEvent({ salonId: ctx.salonId, packageId, clientId: ctx.client.id, kind: 'send_error', userId: ctx.userId,
+      payload: { code: e.code || null, status: e.status || null, message: shortError(e) } });
+    throw sendFailure(e, packageId);
+  }
+  // Комплект принят — дальше сбой только наш, отдельным try: иначе пользователь прочёл бы «F.Doc не
+  // принял», а markSendError пометил бы ошибкой уже принятый комплект.
+  try {
+    // false — статус уже сдвинут перечитыванием: не ошибка, поля отправки всё равно записаны.
     await store.markSent(ctx.salonId, packageId, { employeeUrl: (res && res.url) || null, userId: ctx.userId });
     await store.logEvent({ salonId: ctx.salonId, packageId, clientId: ctx.client.id, kind: 'send', userId: ctx.userId, payload: { documents: body.documents.length } });
   } catch (e) {
-    await store.markSendError(ctx.salonId, packageId, shortError(e));
-    await store.logEvent({ salonId: ctx.salonId, packageId, clientId: ctx.client.id, kind: 'send_error', userId: ctx.userId,
-      payload: { code: e.code || null, status: e.status || null, message: shortError(e) } });
-    if (e.name === 'EdocsError') { e.packageId = packageId; throw e; }
-    throw new EdocsError('fdoc_send_failed', `F.Doc не принял комплект: ${shortError(e)}`, 502, { packageId });
+    logger.error(`edocs: F.Doc принял комплект ${packageId} (салон ${ctx.salonId}), но отправка не сохранилась: ${(e && e.code) || ''} ${shortError(e)}`);
+    throw new EdocsError('saved_partially', 'F.Doc принял комплект, но статус не сохранился — обновите карточку комплекта', 500, { packageId });
   }
   // Автоподпись клиники могла уже сдвинуть статус — перечитываем сразу. Замок комплекта уже наш
   // (через refreshRows перечитывание ждало бы само себя); сбой не страшен, догонит опрос.
@@ -169,19 +189,62 @@ async function send(input) {
 async function resend({ salonId, userId, packageId }) {
   const pkg = await mustPackage(salonId, packageId);
   if (pkg.status !== 'draft') throw new EdocsError('already_sent', 'Комплект уже принят F.Doc', 409);
-  return exclusive(salonId, pkg.id, () => resendLocked(salonId, userId, pkg));
+  // Черновик без ошибки моложе 5 минут — отправка, скорее всего, ещё идёт (здесь или в другом
+  // процессе), повтор дал бы второй POST. Старше — процесс упал посреди отправки.
+  if (!pkg.last_error && !(Date.now() - new Date(pkg.created_at).getTime() > SEND_STALE_MS)) {
+    throw new EdocsError('send_in_progress', 'Комплект ещё отправляется — подождите минуту', 409);
+  }
+  return exclusive(salonId, pkg.id, () => resendLocked(salonId, userId, pkg.id));
 }
 
-async function resendLocked(salonId, userId, pkg) {
+const checkFailed = () => new EdocsError('fdoc_check_failed', 'Не удалось проверить комплект в F.Doc — повторите позже', 502);
+
+// Комплект в F.Doc может быть виден только отправителю — проверяем его учёткой; её нет или она
+// заперта — учёткой текущего пользователя.
+async function checkCredFor(salonId, pkg, userId) {
+  if (pkg.sent_by && pkg.sent_by !== userId) {
+    try { return await credFor(salonId, pkg.sent_by); } catch (e) {
+      if (!e || !['fdoc_no_credentials', 'fdoc_credentials_invalid'].includes(e.code)) throw e;
+    }
+  }
+  return credFor(salonId, userId);
+}
+
+async function resendLocked(salonId, userId, packageId) {
+  // Заново под замком: пока ждали, комплект могли отправить или перечитать.
+  const pkg = await mustPackage(salonId, packageId);
+  if (pkg.status !== 'draft') throw new EdocsError('already_sent', 'Комплект уже принят F.Doc', 409);
   const cfg = fdocConfig(await store.getSettings(salonId));
-  const cred = await credFor(salonId, userId);
-  const known = await withCred(cred, () => fdoc.workflowStatuses(cfg, cred, [pkg.id]));
-  const wf = known.packages.find((x) => x && x.id === pkg.id) || (known.packages.length === 1 ? known.packages[0] : null);
+  const cred = await checkCredFor(salonId, pkg, userId);
+  let known;
+  try {
+    known = await withCred(cred, () => fdoc.workflowStatuses(cfg, cred, [pkg.id]));
+  } catch (e) {
+    if (e && e.name === 'EdocsError' && cred.userId === userId) throw e;   // свой пароль — 409 и «Мой F.Doc»
+    logger.warn(`edocs resend ${pkg.id}: проверка в F.Doc не удалась: ${shortError(e)}`);
+    throw checkFailed();
+  }
+  const list = Array.isArray(known && known.packages) ? known.packages : null;
+  const fails = Array.isArray(known && known.failures) ? known.failures : null;
+  if (!list || !fails) throw checkFailed();
+  const ours = (x) => x && (x.id === pkg.id || (pkg.fdoc_package_guid && x.id === pkg.fdoc_package_guid));
+  // Единственный комплект без id — тоже наш (F.Doc мог id не вернуть); с чужим id — нет.
+  const only = list.length === 1 ? list[0] : null;
+  const wf = list.find(ours) || (only && !only.id ? only : null);
   if (wf) {
-    await store.markSent(salonId, pkg.id, { userId });
+    // Отправитель — тот, чьей учёткой комплект нашёлся: под ней его и опрашивать.
+    await store.markSent(salonId, pkg.id, { userId: cred.userId });
     await applyOne(salonId, { ...pkg, status: 'sent' }, wf);
     await store.logEvent({ salonId, packageId: pkg.id, clientId: pkg.client_id, kind: 'send_recovered', userId, payload: { fdoc: wf.status || null } });
     return { packageId: pkg.id, recovered: true };
+  }
+  // Повторный POST — только если F.Doc однозначно ответил «такого нет»: пустой ответ без failures или
+  // NOT_FOUND по нашему id. Иное (другой код, чужой комплект, failure без id) — вслепую задвоили бы
+  // комплект у пациента.
+  const absent = !list.length && fails.every((f) => f && f.id === pkg.id && String(f.code || '').toUpperCase() === 'NOT_FOUND');
+  if (!absent) {
+    logger.warn(`edocs resend ${pkg.id}: непонятный ответ F.Doc — packages ${JSON.stringify(list.map((x) => x && x.id))}, failures ${JSON.stringify(fails.map((f) => f && [f.id, f.code]))}`);
+    throw checkFailed();
   }
   const docs = await store.listDocuments(salonId, pkg.id);
   if (docs.some((d) => !d.template_id)) throw new EdocsError('template_gone', 'Шаблон документа удалён — оформите комплект заново', 409);
