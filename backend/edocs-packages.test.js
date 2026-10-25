@@ -15,9 +15,12 @@ jest.mock('./utils/secret-box', () => ({
 }));
 const mockLog = { info: jest.fn(), warn: jest.fn(), error: jest.fn() };
 jest.mock('./logger', () => ({ createLogger: () => mockLog }));
-jest.mock('./config', () => ({ EDOCS_DEMO_PHONES: ['79200255591'] }));
+jest.mock('./config', () => ({ EDOCS_DEMO_PHONES: ['79200255591'], EDOCS_TEST_PHONES: [] }));
+jest.mock('./services/edocs/counter', () => ({ ensureContractNo: jest.fn() }));
 
 const store = require('./services/edocs/store');
+const config = require('./config');
+const counter = require('./services/edocs/counter');
 const s3 = require('./services/s3');
 const { client: fdoc } = require('./services/fdoc/client');
 const pk = require('./services/edocs/packages');
@@ -49,6 +52,7 @@ const FILES = {
 beforeEach(() => {
   jest.clearAllMocks();
   pk._reset();
+  config.EDOCS_TEST_PHONES = [];
   store.getSettings.mockResolvedValue(SETTINGS);
   store.getCredentials.mockResolvedValue({ user_id: 4, login: 'ivanova', password_enc: 'enc:pw', fail_count: 0 });
   store.getClient.mockResolvedValue(CLIENT);
@@ -70,7 +74,8 @@ describe('send', () => {
     const [pkg, docs] = store.insertPackage.mock.calls[0];
     expect(pkg).toMatchObject({ id: r.packageId, salon_id: 1, client_id: 52, record_id: null, kind: 'onboarding', title: 'Документы от 24.10.2026', sent_by: 4 });
     expect(pkg.payload).toEqual({ templateIds: [10], docDate: '2026-10-24', act: null, patient: { fio: 'Иванова Анна Сергеевна', phone: '79200255591' } });
-    expect(docs).toEqual([{ id: expect.any(String), template_id: 10, title: 'Договор', file_name: 'Договор.docx', sort_order: 0 }]);
+    expect(docs).toEqual([{ id: expect.any(String), template_id: 10, kind: 'contract', title: 'Договор', file_name: 'Договор.docx', sort_order: 0 }]);
+    expect(pkg.source).toBe('manual');
     const [cfg, cred, body] = fdoc.sendPackage.mock.calls[0];
     expect(cfg).toEqual({ baseUrl: 'https://demo.fdoc.ru', apiKey: 'KEY', appLogin: 'app', appPassword: 'APW', appCode: 'crm', corpId: 'C1' });
     expect(cred).toMatchObject({ userId: 4, login: 'ivanova', password: 'pw' });
@@ -645,5 +650,58 @@ describe('recognize', () => {
     store.getCredentials.mockResolvedValueOnce({ user_id: 4, login: 'ivanova', password_enc: 'enc:pw', fail_count: 3 });
     await expect(pk.recognize({ salonId: 1, userId: 4, imageBase64: 'QUJD' })).rejects.toMatchObject({ code: 'fdoc_credentials_invalid', status: 409 });
     expect(fdoc.recognize).not.toHaveBeenCalled();
+  });
+});
+
+describe('автонумерация договора, источник комплекта, тестовые номера (спека 2026-10-25)', () => {
+  const T_NUMBERED = { ...T_CONTRACT, id: 12, placeholders: ['fio', 'passport', 'contract_no', 'contract_date'] };
+  beforeEach(() => {
+    store.getTemplatesByIds.mockImplementation(async (sid, ids) => [T_CONTRACT, T_ACT, T_NUMBERED].filter((t) => ids.includes(t.id)));
+    s3.getObjectBuffer.mockImplementation(async (key) => (key === 'k/numbered.docx' ? FILES.numbered : FILES[key]));
+    T_NUMBERED.file_key = 'k/numbered.docx';
+    FILES.numbered = makeDocx({ body: p('Договор № {contract_no} от {contract_date} с {fio}') });
+    counter.ensureContractNo.mockResolvedValue({ contractNo: '1999', source: 'counter', assigned: true });
+  });
+
+  test('нет номера, шаблон его печатает — номер присваивается ДО сборки и попадает в документ', async () => {
+    store.getIdentityRow.mockResolvedValue({ ...IDENTITY, contract_no: null });
+    const r = await pk.send({ salonId: 1, userId: 4, clientId: 52, templateIds: [12], docDate: '2026-10-25', source: 'auto' });
+    expect(counter.ensureContractNo).toHaveBeenCalledWith({ salonId: 1, clientId: 52, client: CLIENT, docDate: '2026-10-25' });
+    const body = fdoc.sendPackage.mock.calls[0][2];
+    expect(docText(Buffer.from(body.documents[0].file, 'base64'))).toBe('Договор № 1999 от 25.10.2026 с Иванова Анна Сергеевна');
+    expect(store.insertPackage.mock.calls[0][0].source).toBe('auto');
+    expect(store.logEvent).toHaveBeenCalledWith(expect.objectContaining({ kind: 'contract_no', clientId: 52, payload: { contractNo: '1999', source: 'counter' } }));
+    expect(r.packageId).toBeTruthy();
+  });
+
+  test('свой номер у пациента — счётчик не трогается; шаблон без номера — тоже', async () => {
+    await pk.send({ salonId: 1, userId: 4, clientId: 52, templateIds: [12] });
+    expect(counter.ensureContractNo).not.toHaveBeenCalled();
+    store.getIdentityRow.mockResolvedValue({ ...IDENTITY, contract_no: null });
+    await pk.send({ salonId: 1, userId: 4, clientId: 52, templateIds: [10] });
+    expect(counter.ensureContractNo).not.toHaveBeenCalled();
+  });
+
+  test('автонумерация выключена — номер договора снова обязателен', async () => {
+    store.getSettings.mockResolvedValue({ ...SETTINGS, contract_autonumber: false });
+    store.getIdentityRow.mockResolvedValue({ ...IDENTITY, contract_no: null });
+    await expect(pk.send({ salonId: 1, userId: 4, clientId: 52, templateIds: [12] })).rejects.toMatchObject({
+      code: 'missing_fields', missing: { identity: [{ key: 'contract_no', label: 'Номер договора' }], org: [] },
+    });
+    expect((await pk.check({ salonId: 1, clientId: 52, templateIds: [12] })).missing.identity.map((x) => x.key)).toEqual(['contract_no']);
+    store.getSettings.mockResolvedValue(SETTINGS);
+    expect((await pk.check({ salonId: 1, clientId: 52, templateIds: [12] })).missing.identity).toEqual([]);
+  });
+
+  test('EDOCS_TEST_PHONES: чужой номер — 409, в F.Doc ничего; свой — уходит; повтор ссылки — тоже под защитой', async () => {
+    config.EDOCS_TEST_PHONES = ['79000000000'];
+    await expect(pk.send({ salonId: 1, userId: 4, clientId: 52, templateIds: [10] })).rejects.toMatchObject({ code: 'test_phone_blocked', status: 409 });
+    expect(fdoc.sendPackage).not.toHaveBeenCalled();
+    store.getPackage.mockResolvedValue({ id: 'p', salon_id: 1, client_id: 52, status: 'sent', sent_by: 4, payload: { patient: { phone: '79200255591' } } });
+    await expect(pk.permalink({ salonId: 1, userId: 4, packageId: 'p' })).rejects.toMatchObject({ code: 'test_phone_blocked' });
+    expect(fdoc.sendPermalink).not.toHaveBeenCalled();
+    config.EDOCS_TEST_PHONES = ['79200255591'];
+    await pk.send({ salonId: 1, userId: 4, clientId: 52, templateIds: [10] });
+    expect(fdoc.sendPackage).toHaveBeenCalledTimes(1);
   });
 });

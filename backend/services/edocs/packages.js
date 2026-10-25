@@ -17,6 +17,8 @@ const { linesFromRecord, normalizeLines, doctorOf } = require('./act-lines');
 const { applyWorkflow } = require('./statuses');
 const { EdocsError, shortError } = require('./errors');
 const { buildSendBody, safeFileName, uniqueNames, fioOf } = require('./send-body');
+const counter = require('./counter');
+const testPhones = require('./test-phones');
 const { fmtDate } = require('./format');
 const { todayMsk } = require('../../utils/period');
 const { createLogger } = require('../../logger');
@@ -137,12 +139,36 @@ async function prepare(input, { needFdoc = true, allowMissing = false } = {}) {
   }
   const identityRow = await store.getIdentityRow(salonId, client.id);
   const requisites = (settingsRow && settingsRow.requisites) || {};
-  const missing = missingFor(identityRow, templates, requisites);
+  // Номер договора при включённой автонумерации присвоит send() (counter.ensureContractNo) —
+  // его отсутствие отправку не блокирует.
+  const autoContractNo = usesAutoContractNo(settingsRow, templates);
+  const missing = missingFor(identityRow, templates, requisites, { autoContractNo });
   if (!allowMissing && (missing.identity.length || missing.org.length)) {
     throw new EdocsError('missing_fields', 'Не хватает данных для выбранных документов', 400, { missing });
   }
   const identity = decodeRow(identityRow, secretBox.box()) || { plain: {}, secure: {}, secure_fields: [] };
-  return { salonId, userId, settingsRow: settingsRow || {}, cfg, cred, client, templates, isAct, act, record, identity, requisites, missing, docDate: input.docDate || todayMsk() };
+  return { salonId, userId, settingsRow: settingsRow || {}, cfg, cred, client, templates, isAct, act, record, identity, requisites, missing, autoContractNo, docDate: input.docDate || todayMsk() };
+}
+
+/** Автонумерация договоров включена (по умолчанию да; нет строки настроек — тоже да). */
+function autonumberOn(settingsRow) { return !settingsRow || settingsRow.contract_autonumber !== false; }
+/** Номер присвоит автонумерация: она включена, и номер печатает шаблон договора из набора. */
+function usesAutoContractNo(settingsRow, templates) {
+  return autonumberOn(settingsRow) && (templates || []).some((t) => t.kind === 'contract' && (t.placeholders || []).includes('contract_no'));
+}
+
+/**
+ * В комплекте договор, а номера у пациента нет — присвоить ДО сборки DOCX (counter.ensureContractNo
+ * сразу пишет его в данные пациента: повтор отправки возьмёт тот же номер, дыр в нумерации нет).
+ */
+async function assignContractNo(ctx) {
+  if (!ctx.autoContractNo || String(ctx.identity.plain.contract_no || '').trim()) return;
+  const r = await counter.ensureContractNo({ salonId: ctx.salonId, clientId: ctx.client.id, client: ctx.client, docDate: ctx.docDate });
+  ctx.identity.plain.contract_no = r.contractNo;
+  if (!ctx.identity.plain.contract_date) ctx.identity.plain.contract_date = ctx.docDate;
+  if (r.assigned) {
+    await store.logEvent({ salonId: ctx.salonId, clientId: ctx.client.id, kind: 'contract_no', userId: ctx.userId, payload: { contractNo: r.contractNo, source: r.source } });
+  }
 }
 
 async function renderTemplate(ctx, t) {
@@ -190,7 +216,9 @@ async function transmit(ctx, packageId, body) {
 }
 
 // Демо-стенд F.Doc шлёт настоящие SMS, а в дев-БД — живые пациенты: туда только тестовые номера.
+// Плюс общий тестовый режим модуля (EDOCS_TEST_PHONES) — на любом стенде.
 function assertDemoPhone(ctx) {
+  testPhones.assertAllowed(ctx.identity.plain.phone);
   let host = '';
   try { host = new URL(ctx.cfg.baseUrl).hostname; } catch (e) { host = ''; }
   if (!host.startsWith('demo.')) return;
@@ -204,17 +232,18 @@ function assertDemoPhone(ctx) {
 async function send(input) {
   const ctx = await prepare(input);
   assertDemoPhone(ctx);
+  await assignContractNo(ctx);
   const files = [];
   for (const t of ctx.templates) files.push(await renderTemplate(ctx, t));
   const packageId = crypto.randomUUID();
   const names = uniqueNames(ctx.templates.map((t) => safeFileName(t.title)));
-  const docs = ctx.templates.map((t, i) => ({ id: crypto.randomUUID(), template_id: t.id, title: t.title, file_name: names[i], sort_order: i }));
+  const docs = ctx.templates.map((t, i) => ({ id: crypto.randomUUID(), template_id: t.id, kind: t.kind, title: t.title, file_name: names[i], sort_order: i }));
   const title = `${ctx.isAct ? 'Акт' : 'Документы'} от ${fmtDate(ctx.docDate)}`;
   // Замок — уже на вставке: черновик сразу виден в списке, и «Повторить» не должно пойти параллельно.
   return exclusive(ctx.salonId, packageId, async () => {
     await store.insertPackage({
       id: packageId, salon_id: ctx.salonId, client_id: ctx.client.id, record_id: ctx.isAct ? ctx.record.id : null,
-      kind: ctx.isAct ? 'act' : 'onboarding', title, sent_by: ctx.userId,
+      kind: ctx.isAct ? 'act' : 'onboarding', title, sent_by: ctx.userId, source: input.source || 'manual',
       payload: { templateIds: ctx.templates.map((t) => t.id), docDate: ctx.docDate, act: ctx.act, patient: { fio: fioOf(ctx.identity), phone: ctx.identity.plain.phone } },
     }, docs);
     return transmit(ctx, packageId, buildSendBody({ packageId, title, clientId: ctx.client.id, docs, files, identity: ctx.identity, settings: ctx.settingsRow }));
@@ -497,6 +526,7 @@ async function employeeUrl({ salonId, userId, packageId }) {
 async function permalink({ salonId, userId, packageId }) {
   const pkg = await mustPackage(salonId, packageId);
   if (pkg.status !== 'sent') throw new EdocsError('bad_status', 'Ссылку можно отправить только по комплекту, который ждёт подписи', 409);
+  testPhones.assertAllowed((pkg.payload && pkg.payload.patient && pkg.payload.patient.phone) || pkg.client_phone);
   const cfg = fdocConfig(await store.getSettings(salonId));
   const cred = await credFor(salonId, userId);
   await withCred(cred, () => fdoc.sendPermalink(cfg, cred, pkg.fdoc_package_guid || pkg.id, [String(pkg.client_id)]));
@@ -542,7 +572,8 @@ async function check({ salonId, clientId, templateIds }) {
   if (!client) throw new EdocsError('not_found', 'Пациент не найден', 404);
   const templates = await store.getTemplatesByIds(salonId, [...new Set(templateIds || [])]);
   const settingsRow = await store.getSettings(salonId);
-  return { missing: missingFor(await store.getIdentityRow(salonId, clientId), templates, (settingsRow && settingsRow.requisites) || {}) };
+  return { missing: missingFor(await store.getIdentityRow(salonId, clientId), templates, (settingsRow && settingsRow.requisites) || {},
+    { autoContractNo: usesAutoContractNo(settingsRow, templates) }) };
 }
 
 /** Только для тестов: сбросить память процесса (WARN раз в час, паузы учёток фона). */
@@ -550,5 +581,5 @@ function _reset() { warnedAt.clear(); bgPause.clear(); }
 
 module.exports = {
   send, resend, refreshRows, refreshDue, fetchPdfs, employeeUrl, permalink, annul, preview, check, recognize,
-  fdocConfig, credFor, clearCredentialPause, MAX_DOCS, _reset,
+  fdocConfig, credFor, clearCredentialPause, autonumberOn, usesAutoContractNo, MAX_DOCS, _reset,
 };

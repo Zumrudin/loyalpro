@@ -329,9 +329,11 @@ cron.schedule('*/2 * * * *', async () => {
 
 // «Документы» (F.Doc): опрос статусов комплектов — страховка к вебхуку SetStatus и
 // докачка подписанных PDF в S3. EDOCS_POLL=false гасит только опрос (вебхук работает).
-// Подробности — services/edocs/packages.js (refreshDue).
+// Крон — каждую минуту, а КАК ЧАСТО опрашивать комплект, решает SQL (store.DUE_SQL): отправленные
+// за 2 часа — раз в минуту (пациент подписывает у стойки — карточка дашборда зеленеет за минуту),
+// прочие — раз в 5 минут и реже. Подробности — services/edocs/packages.js (refreshDue).
 if (process.env.EDOCS_POLL !== 'false') {
-  cron.schedule('*/5 * * * *', async () => {
+  cron.schedule('* * * * *', async () => {
     try {
       const r = await require('./services/edocs/packages').refreshDue();
       if (r && r.changed) cronLogger.info(`edocs: проверено комплектов=${r.checked}, изменился статус=${r.changed}`);
