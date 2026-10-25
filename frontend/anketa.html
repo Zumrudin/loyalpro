@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="robots" content="noindex,nofollow">
+<meta name="referrer" content="no-referrer">
+<title>Анкета пациента</title>
+<style>
+  /* Публичная анкета «Документов» (спека 2026-10-25 §6): страница пациента, цвета клиники. Скрипт —
+     /js/anketa.js (CSP: только свои скрипты). Ничего из уже известных данных пациента страница не показывает. */
+  :root{--bg:#F4EFE6;--card:#FFFCF8;--ink:#3f3832;--muted:#6C5F55;--line:#DED3C7;--accent:#806335;--accent-ink:#fff;--ok:#3F6B43;--bad:#A9442F;--bad-bg:#F7E4DD}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.5 -apple-system,'Segoe UI',system-ui,sans-serif;-webkit-text-size-adjust:100%}
+  main{max-width:560px;margin:0 auto;padding:22px 16px 40px}
+  .brand{display:flex;align-items:center;gap:10px;margin-bottom:18px;color:var(--accent);letter-spacing:3px;font:600 13px Georgia,serif;text-transform:uppercase}
+  .mono{width:34px;height:34px;border-radius:50%;border:1.5px solid var(--accent);display:grid;place-items:center;font:600 16px Georgia,serif;letter-spacing:0}
+  h1{font:600 28px/1.15 Georgia,'Times New Roman',serif;margin:0 0 8px}
+  .lead{color:var(--muted);margin:0 0 18px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:16px;margin-bottom:14px}
+  .photo{display:flex;flex-wrap:wrap;gap:12px;align-items:center}
+  .photo .t{flex:1 1 200px;font-size:14px;color:var(--muted)}
+  .photo .file{flex:1 1 auto}
+  .btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:48px;padding:0 18px;border-radius:12px;border:1px solid var(--accent);background:var(--accent);color:var(--accent-ink);font:600 16px inherit;cursor:pointer;width:100%}
+  .btn.sec{background:transparent;color:var(--accent)}
+  .btn[disabled]{opacity:.55;cursor:default}
+  .file{position:relative;overflow:hidden;width:auto;white-space:nowrap}
+  .file input{position:absolute;inset:0;opacity:0;cursor:pointer}
+  .sect{font-size:11px;letter-spacing:1.6px;text-transform:uppercase;color:var(--muted);margin:6px 0 10px}
+  .f{margin-bottom:14px}
+  .f label{display:block;font-size:13px;font-weight:600;margin-bottom:5px}
+  .f input,.f select{width:100%;min-height:48px;font:16px inherit;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:#fff;color:var(--ink)}
+  .f.err input,.f.err select{border-color:var(--bad);background:var(--bad-bg)}
+  .opt{color:var(--muted);font-weight:400}
+  .consent{display:flex;gap:10px;align-items:flex-start;font-size:14px;color:var(--muted);margin:6px 0 16px}
+  .consent input{width:22px;height:22px;flex:none;margin-top:1px}
+  .consent a{color:var(--accent)}
+  .msg{border-radius:12px;padding:12px 14px;font-size:14px;margin-bottom:14px}
+  .msg.bad{background:var(--bad-bg);color:var(--bad)}
+  .msg.info{background:#EFE6D8;color:var(--ink)}
+  .done{text-align:center;padding:40px 10px}
+  .done .ico{width:64px;height:64px;border-radius:50%;margin:0 auto 14px;display:grid;place-items:center;font-size:30px;background:#E3EEDF;color:var(--ok)}
+  .done h1{font-size:26px}
+  .small{font-size:12.5px;color:var(--muted);text-align:center;margin-top:18px}
+  [hidden]{display:none!important}
+</style>
+</head>
+<body>
+<main>
+  <div class="brand"><span class="mono" id="aMono">P</span><span id="aClinic">Клиника</span></div>
+  <div id="aLoading" class="lead">Загружаем анкету…</div>
+  <section id="aGone" hidden class="done"><div class="ico" id="aGoneIco">!</div><h1 id="aGoneTitle"></h1><p class="lead" id="aGoneText"></p></section>
+  <section id="aForm" hidden>
+    <h1 id="aHello">Здравствуйте!</h1>
+    <p class="lead" id="aLead">Заполните, пожалуйста, данные для договора — это займёт пару минут.</p>
+    <div class="card photo" id="aPhotoCard" hidden>
+      <div class="t">Сфотографируйте разворот паспорта с фотографией — поля заполнятся сами, останется проверить.</div>
+      <label class="btn sec file" id="aPhotoBtn">📷 Фото паспорта<input type="file" id="aPhoto" accept="image/*" capture="environment"></label>
+    </div>
+    <div id="aMsg"></div>
+    <form id="aFields" class="card" novalidate></form>
+    <label class="consent"><input type="checkbox" id="aConsent"><span>Даю согласие на обработку моих персональных данных для оформления договора и подтверждаю, что они верны. <a id="aPolicy" href="/privacy-policy.html" target="_blank" rel="noopener noreferrer">Политика обработки данных</a></span></label>
+    <button class="btn" id="aSubmit" type="button">Отправить</button>
+    <p class="small">Данные передаются по защищённому соединению и хранятся в зашифрованном виде.</p>
+  </section>
+  <section id="aDone" hidden class="done"><div class="ico">✓</div><h1>Спасибо!</h1><p class="lead" id="aDoneText"></p></section>
+</main>
+<script src="/js/anketa.js"></script>
+</body>
+</html>
