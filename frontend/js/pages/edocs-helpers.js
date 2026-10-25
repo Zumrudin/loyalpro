@@ -26,8 +26,22 @@ const ED_SECURE_FIELDS = [
 const ED_EVENT_LABELS = {
   send: 'Отправлен в F.Doc', send_error: 'F.Doc не принял комплект', send_recovered: 'Найден в F.Doc после сбоя связи',
   status: 'Статус изменился', webhook: 'Уведомление F.Doc', pdf: 'Подписанные PDF получены', permalink: 'Ссылка отправлена пациенту ещё раз',
-  annul: 'Аннулирован',
+  annul: 'Аннулирован', paper: 'Отмечено: подписано на бумаге', paper_revoke: 'Отметка «на бумаге» снята',
+  form_created: 'Создана анкета пациента', form_sent: 'Анкета отправлена пациенту', form_send_error: 'Анкета не доставлена',
+  form_opened: 'Пациент открыл анкету', form_photo: 'Пациент распознал паспорт по фото', form_submitted: 'Пациент заполнил анкету',
+  form_revoked: 'Анкета отозвана', form_expired: 'Срок анкеты истёк', form_docs_sent: 'Документы ушли после анкеты',
+  form_docs_error: 'Документы после анкеты не ушли', contract_no: 'Присвоен номер договора', identity_edit: 'Данные пациента изменены',
+  identity_view: 'Данные пациента просмотрены', identity_prefill: 'Данные подставлены из YClients', recognize: 'Паспорт распознан по фото',
+  preview: 'Документ скачан для проверки', credentials: 'Учётная запись F.Doc',
 };
+// Дашборд и страница пациента (спека 2026-10-25): подписи видов, периодов, фильтров, мессенджеров.
+const ED_KIND_SHORT = { contract: 'Договор', consent_pd: 'Согласие ПД', act: 'Акт' };
+const ED_RANGES = [['today', 'Сегодня'], ['tomorrow', 'Завтра'], ['week', 'Неделя'], ['open', 'Незакрытые'], ['all', 'Вся база']];
+const ED_CHIPS = [['', 'Все', 'all'], ['no_contract', 'Нет договора', 'no_contract'], ['no_consent', 'Нет согласия ПД', 'no_consent'],
+  ['act', 'Акт не подписан', 'act'], ['waiting', 'Ждём подпись', 'waiting'], ['ready', 'Готово', 'ready']];
+const ED_BASE_FILTERS = [['all', 'Все'], ['no_contract', 'Без договора'], ['no_consent', 'Без согласия'], ['open_acts', 'Незакрытые акты'], ['pending', 'Ждут подписи'], ['ready', 'Всё есть']];
+const ED_COLOR_TITLE = { red: 'Срочно', amber: 'До визита', blue: 'Ждём подпись', green: 'Готово' };
+const ED_VIA = { tdlib: 'Telegram', whatsapp: 'WhatsApp', max: 'MAX' };
 const ED_ORG_FIELDS = [
   ['name', 'Полное наименование'], ['inn', 'ИНН'], ['kpp', 'КПП'], ['ogrn', 'ОГРН'], ['address', 'Адрес'], ['license', 'Лицензия'],
   ['phone', 'Телефон'], ['bank', 'Банковские реквизиты'], ['signer_position', 'Должность подписанта'], ['signer_name', 'ФИО подписанта'], ['city', 'Город'],
@@ -36,20 +50,41 @@ const ED_ORG_FIELDS = [
 function edStatusInfo(status) { return ED_STATUS[status] || { label: status || '—', cls: 'bgr' }; }
 function edIsFinal(status) { return ED_FINAL.indexOf(status) >= 0; }
 
-/** Хвост адреса после «#edocs/» → что показать. */
+/**
+ * Хвост адреса после «#edocs/» → что показать:
+ *   '' — дашборд «Сегодня»; r/<tomorrow|week|open|all> — другой период; c/<пациент>[/<запись>] — страница
+ *   пациента; packages — все комплекты; p/<uuid> — комплект; settings — настройки. Старые адреса мастера
+ *   new/<пациент>[/<запись>] ведут на страницу пациента (legacy — переписать адрес), new — к поиску по базе.
+ */
 function edParseTail(tail) {
   const parts = String(tail || '').split('/').filter(Boolean);
-  if (!parts.length) return { view: 'list' };
+  const board = (range) => ({ view: 'board', range });
+  if (!parts.length) return board('today');
+  if (parts[0] === 'r') return board(['tomorrow', 'week', 'open', 'all'].indexOf(parts[1]) >= 0 ? parts[1] : 'today');
   if (parts[0] === 'settings') return { view: 'settings' };
+  if (parts[0] === 'packages') return { view: 'list' };
   if (parts[0] === 'p' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(parts[1] || '')) {
     return { view: 'package', packageId: parts[1].toLowerCase() };
   }
-  if (parts[0] === 'new') {
+  if (parts[0] === 'c' || parts[0] === 'new') {
     const clientId = /^\d{1,9}$/.test(parts[1] || '') ? Number(parts[1]) : null;
     const recordId = clientId && /^\d{1,9}$/.test(parts[2] || '') ? Number(parts[2]) : null;
-    return { view: 'new', clientId, recordId };
+    if (!clientId) return board(parts[0] === 'new' ? 'all' : 'today');
+    const r = { view: 'client', clientId, recordId };
+    if (parts[0] === 'new') r.legacy = true;
+    return r;
   }
-  return { view: 'list' };
+  return board('today');
+}
+/** Адрес (хвост) маршрута — обратная операция к edParseTail. */
+function edTailOf(route) {
+  if (!route) return '';
+  if (route.view === 'board') return route.range && route.range !== 'today' ? 'r/' + route.range : '';
+  if (route.view === 'client') return 'c/' + route.clientId + (route.recordId ? '/' + route.recordId : '');
+  if (route.view === 'package') return 'p/' + route.packageId;
+  if (route.view === 'list') return 'packages';
+  if (route.view === 'settings') return 'settings';
+  return '';
 }
 
 function edFmtDate(iso) {
@@ -123,4 +158,64 @@ function edIdentityBody(get, source) {
   for (const f of ED_SECURE_FIELDS) body.secure[f[0]] = String(get(f[0]) || '').trim();
   if (source) body.source = source;
   return body;
+}
+
+// ── дашборд и страница пациента ──
+/** Карточки по фильтру-чипу (теги считает сервер), цвету плитки сводки и поиску по имени/телефону. */
+function edFilterCards(cards, chip, color, search) {
+  const q = String(search || '').trim().toLowerCase();
+  const digits = q.replace(/\D/g, '');
+  return (cards || []).filter((c) => {
+    if (chip && (c.tags || []).indexOf(chip) < 0) return false;
+    if (color && c.color !== color) return false;
+    if (!q) return true;
+    if (digits.length >= 3 && String(c.phone || '').replace(/\D/g, '').indexOf(digits) >= 0) return true;
+    return String(c.name || '').toLowerCase().indexOf(q) >= 0;
+  });
+}
+/** Снимок для сравнения между опросами: ключ карточки → цвет и состояния документов. */
+function edBoardSnapshot(cards) {
+  const m = {};
+  for (const c of cards || []) m[c.key] = { color: c.color, contract: c.docs.contract.state, consent_pd: c.docs.consent_pd.state, act: c.docs.act.state, name: c.name };
+  return m;
+}
+/**
+ * Что изменилось с прошлого опроса — для всплывающего сообщения: подписанные документы и карточки,
+ * ставшие зелёными. Первый опрос (prev = null) ничего не сообщает. @returns [{ key, text }]
+ */
+function edBoardChanges(prev, cards) {
+  if (!prev) return [];
+  const out = [];
+  for (const c of cards || []) {
+    const was = prev[c.key];
+    if (!was) continue;
+    const signed = ['contract', 'consent_pd', 'act'].filter((k) => c.docs[k].state === 'signed' && was[k] !== 'signed');
+    if (signed.length) out.push({ key: c.key, text: c.name + ': подписан' + (signed.length > 1 ? 'ы ' : ' ') + signed.map((k) => ED_KIND_SHORT[k].toLowerCase()).join(', ') });
+    else if (c.color === 'green' && was.color !== 'green') out.push({ key: c.key, text: c.name + ': документы готовы' });
+  }
+  return out;
+}
+/** «Сегодня» / «Завтра» / «Вчера» / «пн, 27.10» по дате 'YYYY-MM-DD' относительно today. */
+function edDayLabel(day, today) {
+  const d = Date.parse(String(day) + 'T00:00:00Z'), t = Date.parse(String(today) + 'T00:00:00Z');
+  if (!isFinite(d) || !isFinite(t)) return '';
+  const diff = Math.round((d - t) / 86400000);
+  if (diff === 0) return 'Сегодня';
+  if (diff === 1) return 'Завтра';
+  if (diff === -1) return 'Вчера';
+  const wd = ['вс', 'пн', 'вт', 'ср', 'чт', 'пт', 'сб'][new Date(d).getUTCDay()];
+  return wd + ', ' + String(day).slice(8, 10) + '.' + String(day).slice(5, 7);
+}
+/** «Повторить ссылку» доступна (сервер прислал availableAt — не раньше 15 минут после отправки). */
+function edRemindReady(action, nowMs) {
+  if (!action || !action.availableAt) return true;
+  const t = Date.parse(action.availableAt);
+  return !isFinite(t) || (nowMs === undefined ? Date.now() : nowMs) >= t;
+}
+/** 1 поле / 2 поля / 5 полей. */
+function edPlural(n, one, few, many) {
+  const a = Math.abs(n) % 100, b = a % 10;
+  if (a > 10 && a < 20) return many;
+  if (b > 1 && b < 5) return few;
+  return b === 1 ? one : many;
 }
