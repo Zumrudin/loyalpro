@@ -97,9 +97,10 @@ function validateTags(tags, kind) {
  * Каких данных не хватает для набора шаблонов. Работает БЕЗ расшифровки паспорта:
  * заполненность секретных полей — по identity.secure_fields.
  * identity — строка client_identity (или null), templates — [{ placeholders }].
+ * opts.autoContractNo — номер договора присвоит автонумерация при отправке: его не требуем.
  * @returns {{ identity: Array<{key,label}>, org: Array<{key,label}> }}
  */
-function missingFor(identity, templates, requisites) {
+function missingFor(identity, templates, requisites, opts = {}) {
   const have = new Set();
   for (const [k, v] of Object.entries(identity || {})) {
     if (k !== 'secure_fields' && v !== null && v !== undefined && String(v).trim() !== '') have.add(k);
@@ -115,6 +116,7 @@ function missingFor(identity, templates, requisites) {
       if (f.org) needOrg.add(f.org);
     }
   }
+  if (opts && opts.autoContractNo) needIdentity.delete('contract_no');
   const req = requisites || {};
   return {
     identity: [...needIdentity].filter((k) => !have.has(k)).sort().map((key) => ({ key, label: IDENTITY_LABELS[key] || key })),
