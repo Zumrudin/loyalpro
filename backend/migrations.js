@@ -2532,6 +2532,96 @@ async function runMigrations(client) {
   `).catch(() => {});
   await client.query(`CREATE INDEX IF NOT EXISTS idx_edoc_events_package ON edoc_events (salon_id, package_id, created_at DESC)`).catch(() => {});
   await client.query(`CREATE INDEX IF NOT EXISTS idx_edoc_events_client ON edoc_events (salon_id, client_id, created_at DESC) WHERE client_id IS NOT NULL`).catch(() => {});
+
+  // ── «Документы»: дашборд, анкета пациента, автоматика — операторы в EDOCS_BOARD_DDL (ниже, вне функции:
+  // scripts/edocs-board-smoke.js гоняет их в откатываемой транзакции).
+  for (const sql of EDOCS_BOARD_DDL) await client.query(sql).catch(() => {});
 }
 
-module.exports = { runMigrations };
+// ── «Документы»: дашборд, анкета пациента, автоматика (спека
+// docs/superpowers/specs/2026-10-25-edocs-board-design.md §10). Только IF NOT EXISTS.
+//  • Вид документа хранится в самой строке: у шаблона, удалённого позже, вид не теряется, а состояние
+//    «договор подписан» считается по виду документа, а не комплекта (в одном комплекте бывают договор и акт).
+//  • Автоматика по умолчанию выключена (решение владельца 25.10.2026). acts_required_from — с какой даты
+//    визитам нужен акт: у существующей строки станет датой миграции, то есть датой выката, иначе каждый
+//    прошлый визит без акта стал бы красным.
+//  • edoc_counters: next_value — номер, который получит следующий договор.
+//  • edoc_auto_jobs: строка «застолбляет» действие ДО его выполнения (UNIQUE) — at-most-once, как в
+//    «Заботе» и уведомлениях: повтора не бывает, неудача остаётся с причиной.
+//  • edoc_patient_forms: анкета по публичной ссылке; в БД — sha256 токена (поиск) и его шифротекст
+//    (показать QR и переотправить ту же ссылку); сам токен в логи и журнал не пишется.
+const EDOCS_BOARD_DDL = [
+  'ALTER TABLE edoc_documents ADD COLUMN IF NOT EXISTS kind VARCHAR(20)',
+  'UPDATE edoc_documents d SET kind = t.kind FROM edoc_templates t WHERE d.template_id = t.id AND d.kind IS NULL',
+  "ALTER TABLE edoc_packages ADD COLUMN IF NOT EXISTS source VARCHAR(20) NOT NULL DEFAULT 'manual'",
+  ...[
+    'auto_sender_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL',
+    'auto_previsit BOOLEAN NOT NULL DEFAULT FALSE',
+    'auto_previsit_hours INTEGER NOT NULL DEFAULT 24',
+    "auto_previsit_scope VARCHAR(10) NOT NULL DEFAULT 'first'",
+    'auto_previsit_form BOOLEAN NOT NULL DEFAULT TRUE',
+    'auto_act BOOLEAN NOT NULL DEFAULT FALSE',
+    'auto_act_delay_min INTEGER NOT NULL DEFAULT 15',
+    'auto_remind BOOLEAN NOT NULL DEFAULT FALSE',
+    'auto_remind_hours INTEGER NOT NULL DEFAULT 2',
+    'form_message TEXT',
+    'form_ttl_days INTEGER NOT NULL DEFAULT 7',
+    'contract_autonumber BOOLEAN NOT NULL DEFAULT TRUE',
+    'acts_required_from DATE DEFAULT CURRENT_DATE',
+  ].map((col) => `ALTER TABLE edoc_settings ADD COLUMN IF NOT EXISTS ${col}`),
+  `CREATE TABLE IF NOT EXISTS edoc_counters (
+    salon_id   INTEGER NOT NULL REFERENCES salons(id) ON DELETE CASCADE,
+    kind       VARCHAR(20) NOT NULL,
+    next_value BIGINT NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (salon_id, kind)
+  )`,
+  `CREATE TABLE IF NOT EXISTS edoc_auto_jobs (
+    id         BIGSERIAL PRIMARY KEY,
+    salon_id   INTEGER NOT NULL REFERENCES salons(id) ON DELETE CASCADE,
+    kind       VARCHAR(20) NOT NULL,
+    ref        VARCHAR(64) NOT NULL,
+    client_id  INTEGER,
+    record_id  INTEGER,
+    package_id UUID,
+    form_id    UUID,
+    status     VARCHAR(20) NOT NULL DEFAULT 'claimed',
+    reason     VARCHAR(300),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (salon_id, kind, ref)
+  )`,
+  'CREATE INDEX IF NOT EXISTS idx_edoc_auto_jobs_client ON edoc_auto_jobs (salon_id, client_id, created_at DESC)',
+  `CREATE TABLE IF NOT EXISTS edoc_patient_forms (
+    id              UUID PRIMARY KEY,
+    salon_id        INTEGER NOT NULL REFERENCES salons(id) ON DELETE CASCADE,
+    client_id       INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+    record_id       INTEGER REFERENCES records(id) ON DELETE SET NULL,
+    token_hash      VARCHAR(64) NOT NULL,
+    token_enc       TEXT NOT NULL,
+    status          VARCHAR(20) NOT NULL DEFAULT 'active',
+    fields          JSONB NOT NULL DEFAULT '[]'::jsonb,
+    kinds           JSONB NOT NULL DEFAULT '[]'::jsonb,
+    send_docs       BOOLEAN NOT NULL DEFAULT FALSE,
+    sender_user_id  INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    source          VARCHAR(20) NOT NULL DEFAULT 'manual',
+    created_by      INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    expires_at      TIMESTAMPTZ NOT NULL,
+    delivered_via   VARCHAR(20),
+    delivered_at    TIMESTAMPTZ,
+    opened_at       TIMESTAMPTZ,
+    submitted_at    TIMESTAMPTZ,
+    submit_attempts INTEGER NOT NULL DEFAULT 0,
+    recognize_count INTEGER NOT NULL DEFAULT 0,
+    consent         JSONB,
+    package_id      UUID,
+    last_error      VARCHAR(500),
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`,
+  'CREATE UNIQUE INDEX IF NOT EXISTS idx_edoc_forms_token ON edoc_patient_forms (token_hash)',
+  'CREATE INDEX IF NOT EXISTS idx_edoc_forms_client ON edoc_patient_forms (salon_id, client_id, created_at DESC)',
+  "CREATE UNIQUE INDEX IF NOT EXISTS idx_edoc_forms_active ON edoc_patient_forms (client_id) WHERE status = 'active'",
+];
+
+module.exports = { runMigrations, EDOCS_BOARD_DDL };
