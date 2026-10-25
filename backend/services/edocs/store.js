@@ -333,6 +333,15 @@ async function applyStatus(salonId, id, upd) {
     return true;
   });
 }
+/** Снять отметку «Подписано на бумаге»: только бумажный комплект в статусе paper. true — снято. */
+async function revokePaperPackage(salonId, id) {
+  const r = await db.oneOrNone(
+    `UPDATE edoc_packages SET status='annulled', updated_at=NOW()
+     WHERE salon_id=$1 AND id=$2 AND status='paper' AND source='paper' RETURNING id`,
+    [salonId, id],
+  );
+  return !!r;
+}
 async function touchStatusCheck(salonId, ids) {
   if (!ids.length) return;
   await db.query('UPDATE edoc_packages SET last_status_check_at=NOW() WHERE salon_id=$1 AND id = ANY($2::uuid[])', [salonId, ids]);
@@ -431,7 +440,7 @@ module.exports = {
   listTemplates, getTemplate, getTemplatesByIds, insertTemplate, updateTemplateMeta, replaceTemplateFile, isTemplateBusy, deleteTemplate,
   searchClients, getClient, getLatestCertRequest, getIdentityRow, upsertIdentity,
   getRecord, listClientVisits, actStatusesForRecords,
-  insertPackage, markSent, markSendError, setEmployeeUrl, applyStatus, touchStatusCheck, getPackage, findPackageByAnyId,
+  insertPackage, markSent, markSendError, setEmployeeUrl, applyStatus, revokePaperPackage, touchStatusCheck, getPackage, findPackageByAnyId,
   listDocuments, getDocument, setDocumentPdf, listPackages, listClientPackages, listDuePackages, DUE_SQL,
   logEvent, listEvents, UUID_RE,
 };
