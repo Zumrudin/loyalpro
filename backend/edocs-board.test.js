@@ -61,6 +61,13 @@ describe('kindState', () => {
     expect(b.kindState([stale], 'contract', { nowMs: NOW })).toMatchObject({ state: 'problem', reason: 'not_sent' });
   });
 
+  test('снятая отметка «на бумаге» — ошибка администратора: как будто её не было, а не «аннулирован»', () => {
+    const revoked = doc('contract', 'annulled', { source: 'paper' });
+    expect(b.kindState([revoked], 'contract', { nowMs: NOW })).toEqual({ state: 'missing' });
+    const sent = doc('contract', 'sent', { created_at: at('2026-10-24T09:00:00+03:00') });
+    expect(b.kindState([sent, revoked], 'contract', { nowMs: NOW }).state).toBe('pending');
+  });
+
   test('акт считается только по своей записи', () => {
     const docs = [doc('act', 'signed', { record_id: 100 }), doc('act', 'sent', { record_id: 101 })];
     expect(b.kindState(docs, 'act', { recordId: 100, nowMs: NOW }).state).toBe('signed');
