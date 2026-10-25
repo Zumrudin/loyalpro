@@ -14,7 +14,11 @@ const NO_ROLLBACK = STATUSES.filter((s) => s === 'signed' || isFinal(s));
 
 // ── настройки салона ────────────────────────────────────────────────────────
 const SETTINGS_COLS = ['enabled', 'base_url', 'api_key_enc', 'app_login', 'app_password_enc', 'app_code', 'corp_id',
-  'qes_cert_alias', 'employee_position', 'requisites', 'unsign_days', 'webhook_secret'];
+  'qes_cert_alias', 'employee_position', 'requisites', 'unsign_days', 'webhook_secret',
+  // автоматика, анкета, нумерация (спека 2026-10-25 §7, §9)
+  'auto_sender_user_id', 'auto_previsit', 'auto_previsit_hours', 'auto_previsit_scope', 'auto_previsit_form',
+  'auto_act', 'auto_act_delay_min', 'auto_remind', 'auto_remind_hours', 'form_message', 'form_ttl_days',
+  'contract_autonumber', 'acts_required_from'];
 
 async function getSettings(salonId) {
   return db.oneOrNone('SELECT * FROM edoc_settings WHERE salon_id=$1', [salonId]);

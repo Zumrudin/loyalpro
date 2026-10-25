@@ -15,6 +15,11 @@ const secretBox = require('../utils/secret-box');
 const { client: fdoc } = require('../services/fdoc/client');
 const { KINDS, ORG_KEYS, validateTags, dictionary } = require('../services/edocs/placeholders');
 const { sendError } = require('../services/edocs/errors');
+const counter = require('../services/edocs/counter');
+const forms = require('../services/edocs/forms');
+const config = require('../config');
+const { db } = require('../db');
+const { isCalendarDate, todayMsk } = require('../utils/period');
 const { createLogger } = require('../logger');
 
 const logger = createLogger('EdocsAdminAPI');
@@ -178,6 +183,91 @@ router.get('/users', async (req, res) => {
   } catch (e) { sendError(res, e, logger, 'edocs users'); }
 });
 
+// ── автоматика, анкета, нумерация договоров (спека 2026-10-25 §7, §9) ──
+/**
+ * Тело PUT /automation. Флаги — строго boolean; числа — в своих границах; текст анкеты обязан
+ * содержать {ссылка} (без неё сообщение бесполезно), пустой — текст по умолчанию.
+ */
+function parseAutomation(b, { today = todayMsk() } = {}) {
+  b = b || {};
+  const int = (v, min, max, dflt, label) => {
+    if (v === undefined || v === null || v === '') return { v: dflt };
+    const n = typeof v === 'number' || typeof v === 'string' ? Number(v) : NaN;
+    return Number.isInteger(n) && n >= min && n <= max ? { v: n } : { error: `${label}: целое от ${min} до ${max}` };
+  };
+  const flag = (v, label) => (v === undefined || v === true || v === false ? { v: v === true } : { error: `${label}: да или нет` });
+  const pv = b.previsit || {}, act = b.act || {}, rm = b.remind || {};
+  const checks = {
+    auto_previsit: flag(pv.on, 'Перед визитом'), auto_previsit_hours: int(pv.hours, 2, 168, 24, 'Часов до визита'),
+    auto_previsit_form: flag(pv.form === undefined ? true : pv.form, 'Анкета, если данных не хватает'),
+    auto_act: flag(act.on, 'Акт после оплаты'), auto_act_delay_min: int(act.delayMin, 5, 240, 15, 'Минут после оплаты'),
+    auto_remind: flag(rm.on, 'Повтор'), auto_remind_hours: int(rm.hours, 1, 48, 2, 'Часов до повтора'),
+    form_ttl_days: int(b.formTtlDays, 1, 30, 7, 'Срок жизни анкеты'),
+    contract_autonumber: flag(b.contractAutonumber === undefined ? true : b.contractAutonumber, 'Автонумерация договоров'),
+  };
+  const out = {};
+  for (const [k, r] of Object.entries(checks)) { if (r.error) return { error: r.error }; out[k] = r.v; }
+  out.auto_previsit_scope = pv.scope === 'all' ? 'all' : 'first';
+  if (pv.scope !== undefined && !['all', 'first'].includes(pv.scope)) return { error: 'Кому: первичным или всем' };
+  const sender = b.senderUserId === undefined || b.senderUserId === null || b.senderUserId === '' ? null : idParam(b.senderUserId);
+  if (b.senderUserId && !sender) return { error: 'Неверный сотрудник' };
+  if ((out.auto_previsit || out.auto_act || out.auto_remind) && !sender) return { error: 'Выберите сотрудника, от имени которого автоматика отправляет документы' };
+  out.auto_sender_user_id = sender;
+  const msg = b.formMessage === undefined || b.formMessage === null ? '' : String(b.formMessage).replace(/\r/g, '').trim();
+  if (msg.length > 1000) return { error: 'Текст сообщения — до 1000 символов' };
+  if (msg && !msg.includes('{ссылка}')) return { error: 'В тексте сообщения нужен {ссылка} — туда подставится адрес анкеты' };
+  out.form_message = msg || null;
+  if (b.actsRequiredFrom !== undefined && b.actsRequiredFrom !== null && b.actsRequiredFrom !== '') {
+    const d = String(b.actsRequiredFrom);
+    if (!isCalendarDate(d) || d < '2020-01-01' || d > today) return { error: 'Акты требуются с даты — не позже сегодняшней' };
+    out.acts_required_from = d;
+  }
+  let nextNo;
+  if (b.contractNextNo !== undefined && b.contractNextNo !== null && b.contractNextNo !== '') {
+    const r = int(b.contractNextNo, 1, 999999999999, null, 'Следующий номер договора');
+    if (r.error) return { error: r.error };
+    nextNo = r.v;
+  }
+  return { value: out, nextNo };
+}
+
+router.get('/automation', async (req, res) => {
+  const sid = req.user.salonId;
+  try {
+    const s = (await store.getSettings(sid)) || {};
+    const [users, numbering, actsFrom] = await Promise.all([
+      store.listUsersWithCredentials(sid), counter.peek(sid),
+      db.oneOrNone(`SELECT to_char(acts_required_from, 'YYYY-MM-DD') AS d FROM edoc_settings WHERE salon_id=$1`, [sid]),
+    ]);
+    res.json({
+      senderUserId: s.auto_sender_user_id || null,
+      senders: users.filter((u) => u.is_active).map((u) => ({ id: u.id, name: u.name || u.email, role: u.role, connected: !!u.login, broken: (u.fail_count || 0) >= 3 })),
+      previsit: { on: !!s.auto_previsit, hours: s.auto_previsit_hours || 24, scope: s.auto_previsit_scope || 'first', form: s.auto_previsit_form !== false },
+      act: { on: !!s.auto_act, delayMin: s.auto_act_delay_min || 15 },
+      remind: { on: !!s.auto_remind, hours: s.auto_remind_hours || 2 },
+      formMessage: s.form_message || '', formMessageDefault: forms.DEFAULT_MESSAGE, formTtlDays: s.form_ttl_days || 7,
+      contractAutonumber: s.contract_autonumber !== false, contractNext: numbering,
+      actsRequiredFrom: (actsFrom && actsFrom.d) || null,
+      publicUrlConfigured: !!config.EDOCS_PUBLIC_URL, testPhones: config.EDOCS_TEST_PHONES || [],
+    });
+  } catch (e) { sendError(res, e, logger, 'edocs automation get'); }
+});
+
+router.put('/automation', async (req, res) => {
+  const p = parseAutomation(req.body);
+  if (p.error) return res.status(400).json({ error: p.error });
+  const sid = req.user.salonId;
+  try {
+    if (p.value.auto_sender_user_id) {
+      const users = await store.listUsersWithCredentials(sid);
+      if (!users.some((u) => u.id === p.value.auto_sender_user_id && u.is_active)) return res.status(400).json({ error: 'Сотрудник не найден' });
+    }
+    await store.saveSettings(sid, p.value);
+    if (p.nextNo) await counter.setNext(sid, p.nextNo);
+    res.json({ ok: true });
+  } catch (e) { sendError(res, e, logger, 'edocs automation save'); }
+});
+
 // ── шаблоны ── (статические пути — ДО /templates/:id)
 router.get('/templates/dictionary', (req, res) => res.json(dictionary()));
 
@@ -264,3 +354,4 @@ router.delete('/templates/:id', async (req, res) => {
 module.exports = router;
 module.exports.parseSettings = parseSettings;
 module.exports.parseTemplateMeta = parseTemplateMeta;
+module.exports.parseAutomation = parseAutomation;

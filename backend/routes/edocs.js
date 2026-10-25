@@ -61,7 +61,7 @@ function parsePackageBody(b, { single = false, today = todayMsk() } = {}) {
 function packageView(p) {
   return {
     id: p.id, kind: p.kind, title: p.title, status: p.status, fdocStatus: p.fdoc_status || null,
-    clientId: p.client_id, clientName: p.client_name || null, clientPhone: p.client_phone || null, recordId: p.record_id || null,
+    clientId: p.client_id, clientName: p.client_name || null, clientPhone: p.client_phone || null, recordId: p.record_id || null, source: p.source || 'manual',
     sentAt: p.sent_at || null, signedAt: p.signed_at || null, sentByName: p.sent_by_name || null, lastError: p.last_error || null,
     createdAt: p.created_at, lastStatusCheckAt: p.last_status_check_at || null,
   };
@@ -337,6 +337,9 @@ router.get('/packages/:id', async (req, res) => {
       ...packageView(p),
       act: (p.payload && p.payload.act) || null,
       patient: (p.payload && p.payload.patient) || null,
+      // «Подписано на бумаге»: дата, комментарий, есть ли скан (ключ S3 наружу не отдаётся).
+      paper: p.payload && p.payload.paper ? { signedDate: p.payload.paper.signedDate || null, note: p.payload.paper.note || '',
+        hasScan: !!(p.payload.paper.scan && p.payload.paper.scan.key) } : null,
       documents: docs.map((d) => ({ id: d.id, title: d.title, fileName: d.file_name, fdocStatus: d.fdoc_status || null,
         clientSignedAt: d.client_signed_at || null, corpSignedAt: d.corp_signed_at || null, hasPdf: !!d.pdf_key })),
       events: events.map((e) => ({ kind: e.kind, payload: e.payload, createdAt: e.created_at, userName: e.user_name || null })),
