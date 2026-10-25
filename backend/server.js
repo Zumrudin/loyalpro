@@ -343,9 +343,13 @@ if (process.env.EDOCS_POLL !== 'false') {
 
 // «Документы»: автоматика (перед визитом, акт после оплаты, повторы) и устаревание анкет —
 // services/edocs/automation.js. По умолчанию у салона выключена (настройки «Автоматизация»);
-// EDOCS_AUTOMATION=false гасит крон целиком.
+// EDOCS_AUTOMATION=false гасит крон целиком. Крон ставится при загрузке модуля, а миграции идут ниже,
+// при старте: первый тик после выката приходил раньше новых таблиц (дев 25.10.2026: «relation
+// "edoc_patient_forms" does not exist») — до конца миграций тики пропускаются.
+let edocsSchemaReady = false;
 if (process.env.EDOCS_AUTOMATION !== 'false') {
   cron.schedule('* * * * *', async () => {
+    if (!edocsSchemaReady) return;
     try {
       const r = await require('./services/edocs/automation').runOnce();
       if (r && (r.previsit || r.act || r.remind || r.errors)) {
@@ -362,6 +366,7 @@ const PORT = config.PORT;
 pool.connect()
   .then(async client => {
     await runMigrations(client);
+    edocsSchemaReady = true;
     client.release();
     // Прогон синка/сверки, оборванный рестартом, иначе висит running вечно
     // (27 таких строк на проде с марта 2026).
