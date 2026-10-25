@@ -72,7 +72,10 @@ const bySort = (a, b) => (Number(a.sort_order) || 0) - (Number(b.sort_order) || 
  * любой новый неудачный комплект; иначе решает последний по времени создания.
  */
 function kindState(docs, kind, { recordId = null, nowMs = Date.now() } = {}) {
-  const own = (docs || []).filter((d) => d && d.kind === kind && (kind !== ACT || Number(d.record_id) === Number(recordId)));
+  // Снятая отметка «на бумаге» — ошибка администратора: в состоянии её нет вовсе (документ снова «нет»,
+  // а не «аннулирован»); след остаётся в журнале и в списке комплектов.
+  const own = (docs || []).filter((d) => d && d.kind === kind && (kind !== ACT || Number(d.record_id) === Number(recordId))
+    && !(d.source === 'paper' && d.package_status === 'annulled'));
   const signed = own.filter((d) => d.package_status === 'signed' || d.package_status === 'paper')
     .sort((a, b) => (ms(b.signed_at) || ms(b.created_at) || 0) - (ms(a.signed_at) || ms(a.created_at) || 0))[0];
   if (signed) return { state: 'signed', at: iso(signed.signed_at || signed.created_at), paper: signed.package_status === 'paper', packageId: signed.package_id };
