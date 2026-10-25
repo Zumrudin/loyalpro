@@ -341,6 +341,20 @@ if (process.env.EDOCS_POLL !== 'false') {
   }, { timezone: 'Europe/Moscow' });
 }
 
+// «Документы»: автоматика (перед визитом, акт после оплаты, повторы) и устаревание анкет —
+// services/edocs/automation.js. По умолчанию у салона выключена (настройки «Автоматизация»);
+// EDOCS_AUTOMATION=false гасит крон целиком.
+if (process.env.EDOCS_AUTOMATION !== 'false') {
+  cron.schedule('* * * * *', async () => {
+    try {
+      const r = await require('./services/edocs/automation').runOnce();
+      if (r && (r.previsit || r.act || r.remind || r.errors)) {
+        cronLogger.info(`edocs auto: перед визитом=${r.previsit}, акты=${r.act}, повторы=${r.remind}, ошибки салонов=${r.errors}`);
+      }
+    } catch (e) { cronLogger.error(`edocs auto: ${e.message}`); }
+  }, { timezone: 'Europe/Moscow' });
+}
+
 // ============================================================
 // START
 // ============================================================
