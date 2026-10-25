@@ -203,6 +203,9 @@ async function main() {
       for (const sql of ddl) await client.query(sql);
       console.log(`таблицы созданы во временной транзакции: ${ddl.length} операторов`);
     }
+    // Колонки дашборда (вид документа, источник комплекта, настройки автоматики) — в той же транзакции:
+    // insertPackage их пишет, а миграция на этой БД могла ещё не пройти. IF NOT EXISTS — повтор безвреден.
+    for (const sql of require('../migrations').EDOCS_BOARD_DDL) await client.query(sql.replace(REF_RE, ''));
     await run(client);
     console.log('SQL «Документов» в порядке (транзакция откатывается)');
   } finally {

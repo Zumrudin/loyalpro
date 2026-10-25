@@ -23,7 +23,7 @@
 <script src="js/core/auth.js?v=2026-06-02a"></script>
 <script src="js/core/nav.js?v=2026-10-24-edocs"></script>
 <link rel="stylesheet" href="css/base.css?v=2026-08-10-mobile">
-<link rel="stylesheet" href="css/features.css?v=2026-10-24-edocs">
+<link rel="stylesheet" href="css/features.css?v=2026-10-25-board">
 </head>
 <body>
 
@@ -2005,7 +2005,7 @@
       <div class="bc-head">
         <div>
           <div class="bc-head-title">📄 Документы</div>
-          <div class="bc-head-sub">Электронное подписание с пациентами через F.Doc</div>
+          <div class="bc-head-sub">Договор и согласие — до визита, акт — сразу после оплаченного визита</div>
         </div>
         <div class="ed-head-actions">
           <span id="edMeStatus" class="ed-me"></span>
@@ -2013,13 +2013,14 @@
         </div>
       </div>
       <div class="tabs ed-tabs">
-        <button class="tab active" id="edTabBtn-list" onclick="edGo('')">Комплекты</button>
-        <button class="tab" id="edTabBtn-new" onclick="edGo('new')">Оформить</button>
+        <button class="tab active" id="edTabBtn-board" onclick="edGo('')">Дашборд</button>
+        <button class="tab" id="edTabBtn-list" onclick="edGo('packages')">Все комплекты</button>
         <button class="tab" id="edTabBtn-settings" onclick="edGo('settings')">Настройки</button>
       </div>
       <div id="edNotice"></div>
-      <div id="edView-list"></div>
-      <div id="edView-new" style="display:none"></div>
+      <div id="edView-board"></div>
+      <div id="edView-client" style="display:none"></div>
+      <div id="edView-list" style="display:none"></div>
       <div id="edView-package" style="display:none"></div>
       <div id="edView-settings" style="display:none"></div>
     </div>
@@ -2299,6 +2300,45 @@
       <button class="btn btn-sec btn-dng" onclick="edDeleteMe()">Отключить</button>
       <button class="btn btn-sec" onclick="closeModal('edMeModal')">Закрыть</button>
     </div>
+  </div>
+</div>
+
+<!-- «Документы»: окна дашборда и страницы пациента; содержимое рисует JS (edocs-board.js, edocs-client.js). -->
+<div class="ov" id="edConfirmModal" onclick="if(event.target===this)edConfirmDone(false)">
+  <div class="modal">
+    <div class="mh"><div class="mt" id="edConfirmTitle">Подтвердите</div><button class="mc" onclick="edConfirmDone(false)">✕</button></div>
+    <div id="edConfirmBody" style="font-size:13px;line-height:1.5"></div>
+    <div class="ed-actions"><button class="btn btn-pri" id="edConfirmOk" onclick="edConfirmDone(true)">Отправить</button><button class="btn btn-sec" onclick="edConfirmDone(false)">Отмена</button></div>
+  </div>
+</div>
+<div class="ov ed-wide" id="edActModal" onclick="if(event.target===this)closeModal('edActModal')">
+  <div class="modal">
+    <div class="mh"><div class="mt">Акт оказанных услуг</div><button class="mc" onclick="closeModal('edActModal')">✕</button></div>
+    <div id="edActBody"></div>
+  </div>
+</div>
+<div class="ov" id="edDocModal" onclick="if(event.target===this)closeModal('edDocModal')">
+  <div class="modal">
+    <div class="mh"><div class="mt" id="edDocTitle">Документ</div><button class="mc" onclick="closeModal('edDocModal')">✕</button></div>
+    <div id="edDocBody"></div>
+  </div>
+</div>
+<div class="ov" id="edPaperModal" onclick="if(event.target===this)closeModal('edPaperModal')">
+  <div class="modal">
+    <div class="mh"><div class="mt">Подписано на бумаге</div><button class="mc" onclick="closeModal('edPaperModal')">✕</button></div>
+    <div id="edPaperBody"></div>
+  </div>
+</div>
+<div class="ov" id="edFormModal" onclick="if(event.target===this)closeModal('edFormModal')">
+  <div class="modal">
+    <div class="mh"><div class="mt">Анкета пациента</div><button class="mc" onclick="closeModal('edFormModal')">✕</button></div>
+    <div id="edFormBody"></div>
+  </div>
+</div>
+<div class="ov ed-wide" id="edAutoModal" onclick="if(event.target===this)closeModal('edAutoModal')">
+  <div class="modal">
+    <div class="mh"><div class="mt">Автоматизация документов</div><button class="mc" onclick="closeModal('edAutoModal')">✕</button></div>
+    <div id="edAutoBody"></div>
   </div>
 </div>
 
@@ -2795,8 +2835,10 @@ function fireConfetti() {
 <script src="js/pages/economics.js?v=2026-10-19e"></script>
 <script src="js/pages/medical-cert.js?v=2026-06-19"></script>
 <script src="js/pages/cert-requests.js?v=2026-06-19b"></script>
-<script src="js/pages/edocs-helpers.js?v=2026-10-24a"></script>
-<script src="js/pages/edocs.js?v=2026-10-24a"></script>
+<script src="js/pages/edocs-helpers.js?v=2026-10-25-board"></script>
+<script src="js/pages/edocs.js?v=2026-10-25-board"></script>
+<script src="js/pages/edocs-board.js?v=2026-10-25-board"></script>
+<script src="js/pages/edocs-client.js?v=2026-10-25-board"></script>
 <script src="js/pages/medical-cert-coords-transform.js?v=2026-06-17b"></script>
 <script src="js/pages/medical-cert-coords-editor.js?v=2026-06-17b"></script>
 <script src="js/pages/kb-markdown.js?v=2026-07-17-kbimg2"></script>

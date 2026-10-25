@@ -14,7 +14,11 @@ const NO_ROLLBACK = STATUSES.filter((s) => s === 'signed' || isFinal(s));
 
 // ── настройки салона ────────────────────────────────────────────────────────
 const SETTINGS_COLS = ['enabled', 'base_url', 'api_key_enc', 'app_login', 'app_password_enc', 'app_code', 'corp_id',
-  'qes_cert_alias', 'employee_position', 'requisites', 'unsign_days', 'webhook_secret'];
+  'qes_cert_alias', 'employee_position', 'requisites', 'unsign_days', 'webhook_secret',
+  // автоматика, анкета, нумерация (спека 2026-10-25 §7, §9)
+  'auto_sender_user_id', 'auto_previsit', 'auto_previsit_hours', 'auto_previsit_scope', 'auto_previsit_form',
+  'auto_act', 'auto_act_delay_min', 'auto_remind', 'auto_remind_hours', 'form_message', 'form_ttl_days',
+  'contract_autonumber', 'acts_required_from'];
 
 async function getSettings(salonId) {
   return db.oneOrNone('SELECT * FROM edoc_settings WHERE salon_id=$1', [salonId]);
@@ -255,18 +259,24 @@ async function actStatusesForRecords(salonId, recordIds) {
 }
 
 // ── комплекты и документы ──────────────────────────────────────────────────
+/**
+ * Новый комплект с документами. status по умолчанию 'draft' (отправка в F.Doc впереди); бумажный
+ * комплект вставляется сразу 'paper' с signed_at. source — откуда: manual | auto | form | paper.
+ * Вид документа (kind) пишется в строку документа: состояние «договор подписан» считается по нему.
+ */
 async function insertPackage(pkg, docs) {
   await withTransaction(async (c) => {
     await c.query(
-      `INSERT INTO edoc_packages (id, salon_id, client_id, record_id, kind, title, payload, sent_by)
-       VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8)`,
-      [pkg.id, pkg.salon_id, pkg.client_id, pkg.record_id || null, pkg.kind, pkg.title, JSON.stringify(pkg.payload || {}), pkg.sent_by || null],
+      `INSERT INTO edoc_packages (id, salon_id, client_id, record_id, kind, title, payload, sent_by, status, source, signed_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $11::timestamptz)`,
+      [pkg.id, pkg.salon_id, pkg.client_id, pkg.record_id || null, pkg.kind, pkg.title, JSON.stringify(pkg.payload || {}), pkg.sent_by || null,
+        pkg.status || 'draft', pkg.source || 'manual', pkg.signed_at || null],
     );
     for (const d of docs) {
       await c.query(
-        `INSERT INTO edoc_documents (id, package_id, salon_id, template_id, title, file_name, sort_order)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-        [d.id, pkg.id, pkg.salon_id, d.template_id || null, d.title, d.file_name, d.sort_order || 0],
+        `INSERT INTO edoc_documents (id, package_id, salon_id, template_id, title, file_name, sort_order, kind)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+        [d.id, pkg.id, pkg.salon_id, d.template_id || null, d.title, d.file_name, d.sort_order || 0, d.kind || null],
       );
     }
   });
@@ -327,6 +337,15 @@ async function applyStatus(salonId, id, upd) {
     return true;
   });
 }
+/** Снять отметку «Подписано на бумаге»: только бумажный комплект в статусе paper. true — снято. */
+async function revokePaperPackage(salonId, id) {
+  const r = await db.oneOrNone(
+    `UPDATE edoc_packages SET status='annulled', updated_at=NOW()
+     WHERE salon_id=$1 AND id=$2 AND status='paper' AND source='paper' RETURNING id`,
+    [salonId, id],
+  );
+  return !!r;
+}
 async function touchStatusCheck(salonId, ids) {
   if (!ids.length) return;
   await db.query('UPDATE edoc_packages SET last_status_check_at=NOW() WHERE salon_id=$1 AND id = ANY($2::uuid[])', [salonId, ids]);
@@ -375,13 +394,17 @@ async function listClientPackages(salonId, clientId, limit = 20) {
     [salonId, clientId, limit],
   );
 }
-// Кого опросить фоном: незавершённые — каждые 5 минут первые 60 дней, дальше раз в сутки;
+// Кого опросить фоном: отправленные за последние 2 часа — раз в минуту («быстрая полоса»: пациент
+// подписывает у стойки, карточка дашборда должна позеленеть за минуту, а не за пять; крон — каждую
+// минуту); прочие незавершённые — каждые 5 минут первые 60 дней, дальше раз в сутки;
 // подписанные — раз в сутки 30 дней (подписанный ещё может стать «аннулирован»);
 // подписанные без PDF — каждые 5 минут, пока PDF не скачаны, но тоже не дольше 30 дней
 // с подписи: PDF, который не скачивается, иначе опрашивался бы вечно.
 const DUE_SQL = `
   SELECT p.* FROM edoc_packages p JOIN edoc_settings s ON s.salon_id=p.salon_id AND s.enabled
-  WHERE (p.status IN ('sent', 'error') AND p.created_at > NOW() - INTERVAL '60 days'
+  WHERE (p.status IN ('sent', 'error') AND p.sent_at > NOW() - INTERVAL '2 hours'
+          AND (p.last_status_check_at IS NULL OR p.last_status_check_at < NOW() - INTERVAL '1 minute'))
+     OR (p.status IN ('sent', 'error') AND p.created_at > NOW() - INTERVAL '60 days'
           AND (p.last_status_check_at IS NULL OR p.last_status_check_at < NOW() - INTERVAL '5 minutes'))
      OR (p.status IN ('sent', 'error') AND p.created_at <= NOW() - INTERVAL '60 days'
           AND (p.last_status_check_at IS NULL OR p.last_status_check_at < NOW() - INTERVAL '1 day'))
@@ -421,7 +444,7 @@ module.exports = {
   listTemplates, getTemplate, getTemplatesByIds, insertTemplate, updateTemplateMeta, replaceTemplateFile, isTemplateBusy, deleteTemplate,
   searchClients, getClient, getLatestCertRequest, getIdentityRow, upsertIdentity,
   getRecord, listClientVisits, actStatusesForRecords,
-  insertPackage, markSent, markSendError, setEmployeeUrl, applyStatus, touchStatusCheck, getPackage, findPackageByAnyId,
+  insertPackage, markSent, markSendError, setEmployeeUrl, applyStatus, revokePaperPackage, touchStatusCheck, getPackage, findPackageByAnyId,
   listDocuments, getDocument, setDocumentPdf, listPackages, listClientPackages, listDuePackages, DUE_SQL,
   logEvent, listEvents, UUID_RE,
 };

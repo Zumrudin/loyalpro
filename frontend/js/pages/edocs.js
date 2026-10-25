@@ -1,17 +1,17 @@
 // ── «📄 ДОКУМЕНТЫ»: электронное подписание с пациентами через F.Doc ─────────────
-// Адрес: #edocs — комплекты; #edocs/new[/<клиент>[/<запись>]] — оформление (с записью — акт);
-// #edocs/p/<комплект> — карточка; #edocs/settings — настройки (владелец, администратор).
-// Состояние — в hash: F5 и «Назад» возвращают туда же (хук edocsOnHashArg в nav.js).
-// Зависимости: api(), esc(), escAttr(), notify(), showLbar(), openModal()/closeModal(),
-// помощники edocs-helpers.js. Глобальные имена — с префиксом ed/ED_ (общая область скриптов).
+// Адрес (хвост #edocs/…): '' и r/<период> — дашборд подписей (edocs-board.js); c/<пациент>[/<запись>] —
+// страница пациента (edocs-client.js); packages — все комплекты; p/<комплект> — карточка; settings —
+// настройки. Старые адреса мастера new/<пациент>[/<запись>] переписываются на c/… (на них ссылались
+// карточка клиента, «Записи» и закладки). Состояние — в hash: F5 и «Назад» возвращают туда же (хук
+// edocsOnHashArg в nav.js). Зависимости: api(), esc(), escAttr(), notify(), showLbar(), openModal()/
+// closeModal(), помощники edocs-helpers.js. Глобальные имена — с префиксом ed/ED_ (общая область скриптов).
 // loadSeq — номер загрузки: его увеличивают каждый маршрут, уход со страницы и выход; загрузка с
-// устаревшим номером не рисует и не заводит опрос (иначе второй setInterval затирал handle первого
-// и опрос жил до перезагрузки). sending — идёт отправка комплекта: кнопку «Отправить» до её итога
-// не включает никто, иначе второй клик создал бы второй комплект тому же пациенту.
-let _ed = { state: null, route: { view: 'list' }, timer: null, loadSeq: 0, sending: false, listStatus: '', listFrom: '', listTo: '', w: null, pkg: null };
+// устаревшим номером не рисует и не заводит опрос (иначе второй setInterval затирал handle первого и опрос
+// жил до перезагрузки). Опрос у всех видов один — _ed.timer. sending — идёт отправка комплекта: кнопку
+// «Отправить» до её итога не включает никто, иначе второй клик создал бы второй комплект тому же пациенту.
+let _ed = { state: null, route: { view: 'board', range: 'today' }, timer: null, loadSeq: 0, sending: false, listStatus: '', listFrom: '', listTo: '', pkg: null };
 const ED_POLL_MS = 30000;
-let _edSearchTimer = null;
-let _edSearchSeq = 0;
+const ED_VIEWS = ['board', 'client', 'list', 'package', 'settings'];
 
 function edTail() { return (location.hash || '').slice(1).split('/').slice(1).map(decodeURIComponent).join('/'); }
 function loadEdocs() { edRoute(edTail()); }
@@ -23,7 +23,7 @@ function edocsOnHashArg(arg) {
   edRoute(tail);
 }
 function edSameRoute(a, b) {
-  return !!a && !!b && a.view === b.view && (a.clientId || null) === (b.clientId || null)
+  return !!a && !!b && !a.legacy && a.view === b.view && (a.range || null) === (b.range || null) && (a.clientId || null) === (b.clientId || null)
     && (a.recordId || null) === (b.recordId || null) && (a.packageId || null) === (b.packageId || null);
 }
 function edGo(tail) {
@@ -34,6 +34,17 @@ function edClearTimer() { if (_ed.timer) { clearInterval(_ed.timer); _ed.timer =
 // Уход со страницы и выход (nav.js), новый маршрут: опрос гаснет, идущие загрузки устаревают.
 function edStopPolling() { _ed.loadSeq++; edClearTimer(); }
 function edIsAdmin() { return typeof ME !== 'undefined' && !!ME && (ME.role === 'owner' || ME.role === 'admin'); }
+/** Отправлять в F.Doc сейчас можно: модуль включён и проверен, своя учётка подключена и не заперта. */
+function edCanSend() { const s = _ed.state; return !!(s && s.enabled && s.configured && s.me && s.me.connected && !s.me.broken); }
+/** Почему нельзя отправить (или ''). */
+function edSendBlockReason() {
+  const s = _ed.state;
+  if (!s) return 'Нет связи с сервером';
+  if (!s.enabled || !s.configured) return 'Модуль выключен: документы можно проверить, отправка — после подключения F.Doc';
+  if (!s.me || !s.me.connected) return 'Подключите свою учётную запись F.Doc: кнопка «Мой F.Doc»';
+  if (s.me.broken) return 'F.Doc не принимает ваш пароль — обновите его в «Мой F.Doc»';
+  return '';
+}
 
 // fetch, который сохраняет всё тело ответа (api() оставляет только error): нужны
 // packageId, missing, details. Файлы — FormData, JSON — opts.json. Сбой сети — не исключение,
@@ -79,24 +90,36 @@ async function edRoute(tail) {
   edStopPolling();
   const seq = ++_ed.loadSeq;
   let route = edParseTail(tail);
-  if (route.view === 'settings' && !edIsAdmin()) { history.replaceState(null, '', '#edocs'); route = { view: 'list' }; }
+  if (route.legacy) {
+    route = { view: 'client', clientId: route.clientId, recordId: route.recordId };
+    history.replaceState(null, '', '#edocs/' + edTailOf(route));
+  }
+  if (route.view === 'settings' && !edIsAdmin()) { history.replaceState(null, '', '#edocs'); route = { view: 'board', range: 'today' }; }
   _ed.route = route;
-  for (const v of ['list', 'new', 'package', 'settings']) {
+  for (const v of ED_VIEWS) {
     const el = document.getElementById('edView-' + v);
     if (el) el.style.display = v === route.view ? '' : 'none';
   }
-  for (const t of ['list', 'new', 'settings']) {
+  const tabOf = { board: 'board', client: 'board', list: 'list', package: 'list', settings: 'settings' };
+  for (const t of ['board', 'list', 'settings']) {
     const b = document.getElementById('edTabBtn-' + t);
-    if (b) b.classList.toggle('active', t === route.view || (t === 'list' && route.view === 'package'));
+    if (b) b.classList.toggle('active', tabOf[route.view] === t);
   }
   const sb = document.getElementById('edTabBtn-settings');
   if (sb) sb.style.display = edIsAdmin() ? '' : 'none';
   await edLoadState();
   if (seq !== _ed.loadSeq) return;   // пока грузили, ушли: другой маршрут, другая страница, выход
-  if (route.view === 'new') return edRenderNew(route, seq);
+  if (route.view === 'board') return edbRender(route, seq);
+  if (route.view === 'client') return edcRender(route, seq);
   if (route.view === 'package') return edRenderPackage(route.packageId, seq);
   if (route.view === 'settings') return edRenderSettings();
   return edRenderList(seq);
+}
+
+/** Перерисовать текущий вид после смены состояния (подключили F.Doc, сменили настройки). */
+function edRefreshView() {
+  if (_ed.route.view === 'board' && typeof edbRefresh === 'function') edbRefresh(true);
+  else if (_ed.route.view === 'client' && typeof edcRefresh === 'function') edcRefresh(true);
 }
 
 async function edLoadState() {
@@ -108,9 +131,49 @@ async function edLoadState() {
   if (!note) return;
   const msgs = [];
   if (s && !s.encReady) msgs.push('На сервере не задан ключ шифрования EDOCS_ENC_KEY — данные пациентов сохранять нельзя.');
-  if (s && !s.enabled) msgs.push(edIsAdmin() ? 'Модуль выключен. Подключите F.Doc во вкладке «Настройки».' : 'Модуль ещё не настроен — обратитесь к администратору.');
+  if (s && !s.enabled) msgs.push(edIsAdmin()
+    ? 'F.Doc не подключён: дашборд, данные пациентов, отметки «на бумаге» и анкеты работают, электронная отправка — после подключения (вкладка «Настройки»).'
+    : 'F.Doc ещё не подключён: отметки «на бумаге» и анкеты работают, электронная отправка — после подключения (обратитесь к администратору).');
   else if (s && !s.me.connected) msgs.push('Чтобы отправлять документы, подключите свою учётную запись F.Doc: кнопка «Мой F.Doc».');
   note.innerHTML = msgs.map((m) => '<div class="ed-note">' + esc(m) + '</div>').join('');
+}
+
+// ── общее окно подтверждения (дашборд и страница пациента) ──
+let _edConfirmResolve = null;
+/** Окно с HTML-содержимым и кнопкой ok; Promise<boolean>. html собирает вызывающий (через esc). */
+function edConfirm(opts) {
+  if (_edConfirmResolve) _edConfirmResolve(false);
+  document.getElementById('edConfirmTitle').textContent = opts.title || 'Подтвердите';
+  document.getElementById('edConfirmBody').innerHTML = opts.html || '';
+  document.getElementById('edConfirmOk').textContent = opts.ok || 'Отправить';
+  openModal('edConfirmModal');
+  return new Promise((resolve) => { _edConfirmResolve = resolve; });
+}
+function edConfirmDone(v) {
+  closeModal('edConfirmModal');
+  const r = _edConfirmResolve;
+  _edConfirmResolve = null;
+  if (r) r(!!v);
+}
+
+// Итог POST /packages (edFetch) — один на дашборд и страницу пациента. Комплект создан, но сбой уже после
+// черновика — его карточка: «Повторить» там сначала спросит F.Doc, а повторная отправка отсюда создала бы
+// второй комплект. Ответа нет (сеть, 5xx прокси) — комплект мог уйти. @returns 'sent'|'package'|'unknown'|'rejected'
+const ED_SEND_UNKNOWN = 'Ответ сервера не получен — комплект мог уйти. Проверьте документы пациента, прежде чем отправлять снова';
+function edSendOutcome(r) {
+  const b = r.body || {};
+  const credentials = b.code === 'fdoc_no_credentials' || b.code === 'fdoc_credentials_invalid';
+  if (r.ok) { notify('Документы отправлены пациенту — он получит SMS со ссылкой'); return 'sent'; }
+  if (b.packageId) {
+    notify(b.error || ('Ошибка ' + r.status), 'err');
+    edGo('p/' + b.packageId);
+    if (credentials) edOpenMe();   // поверх карточки: после смены пароля — «Повторить отправку»
+    return 'package';
+  }
+  if (!r.status || r.status >= 500) { notify(ED_SEND_UNKNOWN, 'err'); return 'unknown'; }
+  notify(b.error || ('Ошибка ' + r.status), 'err');
+  if (credentials) edOpenMe();
+  return 'rejected';
 }
 
 // ── список комплектов ──
@@ -155,278 +218,6 @@ async function edLoadList() {
   } catch (e) { tb.innerHTML = '<tr><td colspan="5" class="empty">' + esc(e.message) + '</td></tr>'; }
 }
 
-// ── оформление: пациент → данные → документы → отправка ──
-function edSearchClients(q) {
-  clearTimeout(_edSearchTimer);
-  _edSearchTimer = setTimeout(() => edDoSearch(q), 300);
-}
-async function edDoSearch(q) {
-  const box = document.getElementById('edClientResults');
-  if (!box) return;
-  const seq = ++_edSearchSeq;
-  const query = String(q || '').trim();
-  if (query.length < 2) { box.innerHTML = ''; return; }
-  try {
-    const d = await api('GET', '/api/edocs/clients?search=' + encodeURIComponent(query));
-    if (seq !== _edSearchSeq) return;   // запоздалый ответ на прежний ввод
-    box.innerHTML = d.clients.length ? d.clients.map((c) => '<div class="ed-result" onclick="edGo(\'new/' + c.id + '\')"><span><strong>' + esc(c.name)
-      + '</strong> <span class="ed-sub">' + esc(edPhone(c.phone)) + '</span></span>' + (c.hasIdentity ? '<span class="badge bg">данные есть</span>' : '') + '</div>').join('')
-      : '<div class="ed-sub">Никого не нашли</div>';
-  } catch (e) { box.innerHTML = '<div class="ed-err">' + esc(e.message) + '</div>'; }
-}
-
-async function edRenderNew(route, seq) {
-  const box = document.getElementById('edView-new');
-  if (!box) return;
-  if (!route.clientId) {
-    _ed.w = null;
-    box.innerHTML = '<div class="card"><div class="ed-h">Пациент</div><input type="text" id="edClientSearch" placeholder="Фамилия, имя или телефон" autocomplete="off" oninput="edSearchClients(this.value)">'
-      + '<div id="edClientResults" class="ed-results"></div></div>';
-    const inp = document.getElementById('edClientSearch');
-    if (inp) inp.focus();
-    return;
-  }
-  box.innerHTML = '<div class="empty">Загрузка…</div>';
-  const w = { clientId: route.clientId, recordId: route.recordId, selected: new Set(), source: 'manual', docDate: '', notes: [], unsaved: false, act: null, visits: [] };
-  _ed.w = w;
-  try {
-    const res = await Promise.all([
-      api('GET', '/api/edocs/clients/' + w.clientId + '/summary'),
-      api('GET', '/api/edocs/clients/' + w.clientId + '/identity'),
-      api('GET', '/api/edocs/templates'),
-    ]);
-    const summary = res[0], ident = res[1];
-    w.client = summary.client;
-    w.templates = res[2].templates;
-    if (ident.exists) {
-      w.form = Object.assign({}, ident.plain, ident.secure);
-    } else {
-      const pre = await api('GET', '/api/edocs/clients/' + w.clientId + '/identity/prefill');
-      w.form = Object.assign({}, pre.plain, pre.secure);
-      w.notes = (pre.notes || []).slice();
-      w.unsaved = true;
-    }
-    if (w.recordId) {
-      const d = await api('GET', '/api/edocs/records/' + w.recordId + '/act-draft');
-      if (d.record.clientId !== w.clientId) throw new Error('Визит не принадлежит этому пациенту');
-      w.act = { visitDate: d.record.visitDate, actNo: d.record.actNo, doctor: d.doctor, rows: d.lines.map((l) => Object.assign({ include: true }, l)) };
-      const actTpl = w.templates.find((t) => t.kind === 'act');
-      if (actTpl) w.selected.add(actTpl.id);
-    } else {
-      w.visits = (await api('GET', '/api/edocs/clients/' + w.clientId + '/records')).records;
-    }
-  } catch (e) { if (_ed.w === w && seq === _ed.loadSeq) box.innerHTML = '<div class="empty">' + esc(e.message) + '</div>'; return; }
-  if (_ed.w !== w || seq !== _ed.loadSeq) return;   // пока грузили, ушли в другой раздел
-  edRenderWizard();
-}
-
-function edField(key, label, type, extra) {
-  const w = _ed.w;
-  const val = w.form[key] === null || w.form[key] === undefined ? '' : String(w.form[key]);
-  return '<div class="fg ed-f-' + key + '"><label class="fl" for="edF-' + key + '">' + esc(label) + '</label><input type="' + (type || 'text') + '" id="edF-' + key
-    + '" value="' + escAttr(val) + '" ' + (extra || '') + ' oninput="edFormChanged()"></div>';
-}
-
-function edRenderWizard() {
-  const w = _ed.w;
-  const box = document.getElementById('edView-new');
-  if (!w || !box) return;
-  const tpls = w.templates.filter((t) => (w.act ? true : t.kind !== 'act'));
-  box.innerHTML = '<div class="card mb ed-patient"><div><div class="ed-h">' + esc(w.client.name) + '</div><div class="ed-sub">' + esc(edPhone(w.client.phone)) + '</div></div>'
-    + '<button class="btn btn-sec btn-sm" onclick="edGo(\'new\')">Другой пациент</button></div>'
-    + '<div class="card mb"><div class="ed-h">1. Данные пациента для документов</div>'
-    + (w.notes.length ? '<div class="ed-note">' + w.notes.map(esc).join('<br>') + '</div>' : '')
-    + '<div class="ed-grid">' + edField('last_name', 'Фамилия') + edField('first_name', 'Имя') + edField('middle_name', 'Отчество')
-    + edField('birth_date', 'Дата рождения', 'date')
-    + '<div class="fg"><label class="fl" for="edF-gender">Пол</label><select id="edF-gender" onchange="edFormChanged()"><option value=""></option>'
-    + '<option value="F"' + (w.form.gender === 'F' ? ' selected' : '') + '>женский</option><option value="M"' + (w.form.gender === 'M' ? ' selected' : '') + '>мужской</option></select></div>'
-    + edField('phone', 'Телефон', 'tel') + edField('email', 'E-mail', 'email') + edField('contract_no', 'Номер договора') + edField('contract_date', 'Дата договора', 'date') + '</div>'
-    + '<div class="ed-h2">Паспорт РФ</div><div class="ed-grid">'
-    + edField('passport_series', 'Серия', 'text', 'inputmode="numeric" maxlength="5"') + edField('passport_number', 'Номер', 'text', 'inputmode="numeric" maxlength="7"')
-    + edField('issue_date', 'Дата выдачи', 'date') + edField('authority_code', 'Код подразделения', 'text', 'maxlength="7"') + '</div>'
-    + edField('issued_by', 'Кем выдан') + edField('birth_place', 'Место рождения') + edField('address', 'Адрес регистрации')
-    + '<div class="ed-actions"><button class="btn btn-pri" id="edSaveIdentity" onclick="edSaveIdentity()">Сохранить данные</button>'
-    + '<label class="btn btn-sec ed-file">📷 Распознать по фото паспорта<input type="file" accept="image/*" onchange="edRecognize(this)"></label>'
-    + '<span id="edIdentityState" class="ed-sub">' + (w.unsaved ? 'Данные ещё не сохранены' : 'Сохранено') + '</span></div></div>'
-    + '<div class="card mb"><div class="ed-h">2. ' + (w.act ? 'Акт по визиту ' + esc(edFmtDate(w.act.visitDate)) : 'Документы') + '</div>'
-    + (w.act ? edActTableHtml() : edVisitsHtml())
-    + '<div class="ed-tpls">' + (tpls.length ? tpls.map((t) => '<label class="ed-tpl"><input type="checkbox"' + (w.selected.has(t.id) ? ' checked' : '')
-      + ' onchange="edToggleTpl(' + t.id + ',this.checked)"><span class="ed-tpl-name">' + esc(t.title) + ' <span class="ed-sub">' + esc(ED_KIND_LABELS[t.kind] || t.kind) + '</span></span>'
-      + '<button class="btn btn-sec btn-sm" onclick="event.preventDefault();edPreview(' + t.id + ')">Проверить</button></label>').join('')
-      : '<div class="empty">Нет активных шаблонов — загрузите их во вкладке «Настройки»</div>') + '</div>'
-    + '<div class="fg ed-date"><label class="fl" for="edDocDate">Дата документа (пусто — сегодня)</label><input type="date" id="edDocDate" value="' + escAttr(w.docDate) + '" onchange="edSetDocDate(this.value)"></div>'
-    + '<div id="edMissing" class="ed-missing"></div>'
-    + '<div class="ed-actions"><button class="btn btn-pri" id="edSendBtn" onclick="edSend()" disabled>' + (_ed.sending ? 'Отправляем…' : 'Отправить на подписание') + '</button>'
-    + '<span class="ed-sub">Пациент получит SMS со ссылкой и подпишет документы кодом из SMS</span></div></div>';
-  if (w.act) edActTotalRender();
-  edCheckMissing();
-}
-
-function edActTableHtml() {
-  const a = _ed.w.act;
-  const cell = (i, key, val, label, mode) => '<td data-label="' + label + '"><input type="text"' + (mode ? ' inputmode="decimal"' : '') + ' value="' + escAttr(String(val === null || val === undefined ? '' : val))
-    + '" oninput="edActEdit(' + i + ',\'' + key + '\',this.value)"></td>';
-  return '<div class="ed-sub">Врач: ' + esc(a.doctor.name || '—') + (a.doctor.position ? ', ' + esc(a.doctor.position) : '') + ' · номер акта ' + esc(a.actNo) + '</div>'
-    + '<div class="tw mtbl-wrap"><table class="ed-act mtbl"><thead><tr><th></th><th>Услуга</th><th>Кол-во</th><th>Цена</th><th>Сумма</th></tr></thead><tbody>'
-    + a.rows.map((r, i) => '<tr><td data-label="В акте"><input type="checkbox"' + (r.include ? ' checked' : '') + ' onchange="edActEdit(' + i + ',\'include\',this.checked)"></td>'
-      + cell(i, 'title', r.title, 'Услуга') + cell(i, 'qty', r.qty, 'Кол-во', true) + cell(i, 'price', r.price, 'Цена', true) + cell(i, 'sum', r.sum, 'Сумма', true) + '</tr>').join('')
-    + '</tbody></table></div><div class="ed-actions"><button class="btn btn-sec btn-sm" onclick="edActAdd()">+ Строка</button><span class="ed-total" id="edActTotal"></span></div>';
-}
-function edActEdit(i, key, val) { _ed.w.act.rows[i][key] = val; edActTotalRender(); }
-function edActAdd() { edCaptureForm(); _ed.w.act.rows.push({ include: true, title: '', qty: 1, price: 0, sum: 0, service_id: null }); edRenderWizard(); }
-function edActTotalRender() {
-  const el = document.getElementById('edActTotal');
-  if (el) el.textContent = 'Итого: ' + edMoney(edActTotals(_ed.w.act.rows.filter((r) => r.include)).total);
-}
-
-function edVisitsHtml() {
-  const v = _ed.w.visits || [];
-  if (!v.length) return '';
-  return '<details class="ed-visits"><summary>Оформить акт по визиту (' + v.length + ')</summary>' + v.map((r) => {
-    const act = r.act ? edStatusInfo(r.act.status) : null;
-    return '<div class="ed-visit"><span>' + esc(edFmtDate(r.visitDate)) + ' · ' + esc(r.services.join(', ') || '—') + (r.staffName ? ' · ' + esc(r.staffName) : '') + '</span>'
-      + (act ? '<span class="badge ' + act.cls + '">Акт: ' + esc(act.label) + '</span>' : '')
-      + '<button class="btn btn-sec btn-sm" onclick="edGo(\'new/' + _ed.w.clientId + '/' + r.id + '\')">Оформить акт</button></div>';
-  }).join('') + '</details>';
-}
-
-function edToggleTpl(id, on) { if (on) _ed.w.selected.add(id); else _ed.w.selected.delete(id); edCheckMissing(); }
-function edSetDocDate(v) { _ed.w.docDate = v; }
-
-function edCaptureForm() {
-  const w = _ed.w;
-  if (!w) return;
-  for (const f of ED_PLAIN_FIELDS.concat(ED_SECURE_FIELDS)) {
-    const el = document.getElementById('edF-' + f[0]);
-    if (el) w.form[f[0]] = el.value;
-  }
-}
-function edFormChanged() {
-  edCaptureForm();
-  _ed.w.unsaved = true;
-  const s = document.getElementById('edIdentityState');
-  if (s) s.textContent = 'Есть несохранённые изменения';
-  edCheckMissing();
-}
-
-async function edSaveIdentity() {
-  const w = _ed.w;
-  edCaptureForm();
-  const btn = document.getElementById('edSaveIdentity');
-  if (btn) btn.disabled = true;
-  try {
-    await api('PUT', '/api/edocs/clients/' + w.clientId + '/identity', edIdentityBody((k) => w.form[k], w.source));
-    w.unsaved = false;
-    w.source = 'manual';
-    const s = document.getElementById('edIdentityState');
-    if (s) s.textContent = 'Сохранено';
-    notify('Данные пациента сохранены');
-    edCheckMissing();
-  } catch (e) { notify(e.message, 'err'); } finally { if (btn) btn.disabled = false; }
-}
-
-async function edRecognize(input) {
-  const file = input.files && input.files[0];
-  input.value = '';
-  if (!file) return;
-  const w = _ed.w;
-  const fd = new FormData();
-  fd.append('photo', file);
-  notify('Распознаём паспорт…');
-  const r = await edFetch('POST', '/api/edocs/clients/' + w.clientId + '/identity/recognize', { form: fd });
-  if (!r.ok) { notify(r.body.error || 'Не удалось распознать', 'err'); if (r.body.code === 'fdoc_no_credentials' || r.body.code === 'fdoc_credentials_invalid') edOpenMe(); return; }
-  if (_ed.w !== w) return;
-  edCaptureForm();
-  Object.assign(w.form, r.body.plain || {}, r.body.secure || {});
-  w.source = 'recognize';
-  w.unsaved = true;
-  w.notes = [r.body.confidence ? 'Поля заполнены по фото — проверьте их и нажмите «Сохранить данные»' : 'Распознано неуверенно — внимательно проверьте каждое поле'];
-  if (r.body.spoofing && r.body.spoofing.length) w.notes.push('F.Doc сомневается в подлинности снимка (' + r.body.spoofing.join(', ') + ') — сверьте с оригиналом паспорта');
-  edRenderWizard();
-}
-
-async function edCheckMissing() {
-  const w = _ed.w;
-  const el = document.getElementById('edMissing');
-  const btn = document.getElementById('edSendBtn');
-  if (!w || !el || !btn) return;
-  btn.disabled = true;
-  if (_ed.sending) return;   // идёт отправка: кнопку включит только её итог
-  if (w.unsaved) { el.textContent = 'Сохраните данные пациента: документы заполняются из сохранённых данных'; return; }
-  if (!w.selected.size) { el.textContent = 'Отметьте документы для подписания'; return; }
-  try {
-    const r = await api('POST', '/api/edocs/packages/check', { clientId: w.clientId, templateIds: Array.from(w.selected) });
-    if (_ed.w !== w) return;
-    const text = edMissingText(r.missing);
-    const st = _ed.state;
-    const ready = st && st.enabled && st.me && st.me.connected && !st.me.broken;
-    el.textContent = text || (ready ? '' : st && !st.enabled
-      ? 'Модуль выключен: документы можно проверить кнопкой «Проверить», отправка — после подключения F.Doc'
-      : 'Подключите свою учётную запись F.Doc: кнопка «Мой F.Doc»');
-    btn.disabled = !!text || !ready || _ed.sending;   // отправка могла начаться, пока шла проверка
-  } catch (e) { el.textContent = e.message; }
-}
-
-function edActBody(body) {
-  const w = _ed.w;
-  if (!w.act) return null;
-  const lines = edCollectActLines(w.act.rows);
-  if (lines.error) return lines.error;
-  body.recordId = w.recordId;
-  body.actLines = lines.value;
-  return null;
-}
-
-async function edPreview(templateId) {
-  const w = _ed.w;
-  const body = { clientId: w.clientId, templateId: templateId, docDate: w.docDate || null };
-  const err = edActBody(body);
-  if (err) return notify(err, 'err');
-  try {
-    const r = await api('POST', '/api/edocs/packages/preview', body);
-    edDownloadBase64(r.base64, r.fileName, 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
-    if (w.unsaved) notify('Документ собран по СОХРАНЁННЫМ данным — сохраните изменения, чтобы они попали в документ');
-  } catch (e) { notify(e.message, 'err'); }
-}
-
-const ED_SEND_UNKNOWN = 'Ответ сервера не получен — комплект мог уйти. Проверьте список комплектов, прежде чем отправлять снова';
-async function edSend() {
-  const w = _ed.w;
-  if (!w || _ed.sending) return;
-  const body = { clientId: w.clientId, templateIds: Array.from(w.selected), docDate: w.docDate || null };
-  const err = edActBody(body);
-  if (err) return notify(err, 'err');
-  if (!confirm('Отправить документы пациенту на подписание? Он получит SMS со ссылкой.')) return;
-  _ed.sending = true;
-  const sb = document.getElementById('edSendBtn');
-  if (sb) { sb.disabled = true; sb.textContent = 'Отправляем…'; }
-  let r;
-  try { r = await edFetch('POST', '/api/edocs/packages', { json: body }); } finally { _ed.sending = false; }
-  const b = r.body || {};
-  const credentials = b.code === 'fdoc_no_credentials' || b.code === 'fdoc_credentials_invalid';
-  if (r.ok || b.packageId) {
-    // Комплект создан — успех или сбой уже после черновика. Дальше только его карточка: «Повторить»
-    // там сначала спросит F.Doc, а кнопка «Отправить» в мастере создала бы второй комплект.
-    notify(r.ok ? 'Документы отправлены пациенту' : (b.error || ('Ошибка ' + r.status)), r.ok ? 'ok' : 'err');
-    edGo(b.packageId ? 'p/' + b.packageId : '');
-    if (credentials) edOpenMe();   // поверх карточки: после смены пароля — «Повторить отправку»
-    return;
-  }
-  if (!r.status || r.status >= 500) {
-    // Ответа нет (сеть) или он не разобран (5xx прокси или сервера): комплект мог уйти.
-    notify(ED_SEND_UNKNOWN, 'err');
-    edGo('');
-    return;
-  }
-  // 4xx без комплекта — ничего не создано: исправить и отправить снова. Кнопку пересчитает проверка.
-  const btn = document.getElementById('edSendBtn');
-  if (btn) btn.textContent = 'Отправить на подписание';
-  if (_ed.w === w && b.code === 'missing_fields') { const el = document.getElementById('edMissing'); if (el) el.textContent = edMissingText(b.missing); }
-  notify(b.error || ('Ошибка ' + r.status), 'err');
-  if (credentials) edOpenMe();
-  edCheckMissing();
-}
-
 // ── карточка комплекта ──
 async function edRenderPackage(id, seq) {
   const box = document.getElementById('edView-package');
@@ -458,6 +249,8 @@ async function edLoadPackage(id, quiet) {
       + '<td data-label="Пациент">' + esc(edFmtDateTime(d.clientSignedAt)) + '</td><td>' + (d.hasPdf ? '<button class="btn btn-sec btn-sm" onclick="edOpenPdf(\'' + d.id + '\')">PDF</button>' : '') + '</td></tr>').join('')
     + '</tbody></table></div></div>'
     + (p.act ? edActSummaryHtml(p.act) : '')
+    + (p.paper ? '<div class="card mb"><div class="ed-h2">Подписано на бумаге</div><div class="ed-sub">Дата подписания: ' + esc(edFmtDate(p.paper.signedDate))
+      + (p.paper.note ? ' · ' + esc(p.paper.note) : '') + (p.paper.hasScan ? '' : ' · скан не приложен') + '</div></div>' : '')
     + '<div class="card"><div class="ed-h2">Журнал</div>' + ((p.events || []).map((e) => '<div class="ed-event"><span class="ed-sub">' + esc(edFmtDateTime(e.createdAt)) + '</span> '
       + esc(ED_EVENT_LABELS[e.kind] || e.kind) + (e.kind === 'status' && e.payload ? ': ' + esc(edStatusInfo(e.payload.to).label) : '')
       + (e.userName ? ' · ' + esc(e.userName) : '') + '</div>').join('') || '<div class="ed-sub">Пусто</div>') + '</div>';
@@ -473,14 +266,20 @@ function edActSummaryHtml(act) {
 function edPackageActions(p) {
   const b = [];
   const btn = (action, label, cls) => '<button class="btn ' + (cls || 'btn-sec') + ' btn-sm" onclick="edPkgAction(\'' + p.id + '\',\'' + action + '\',this)">' + label + '</button>';
+  b.push('<button class="btn btn-sec btn-sm" onclick="edGo(\'c/' + p.clientId + '\')">Пациент</button>');
+  if (p.source === 'paper') {
+    if (p.paper && p.paper.hasScan) b.push('<button class="btn btn-sec btn-sm" onclick="edOpenScan(\'' + p.id + '\')">Скан</button>');
+    if (p.status === 'paper' && edIsAdmin()) b.push('<button class="btn btn-sec btn-sm btn-dng" onclick="edRevokePaper(\'' + p.id + '\')">Снять отметку</button>');
+    return b.join('');
+  }
   if (p.status === 'draft') b.push(btn('resend', 'Повторить отправку', 'btn-pri'));
   if (p.status !== 'draft') b.push('<button class="btn btn-sec btn-sm" onclick="edOpenInFdoc(\'' + p.id + '\')">Открыть в F.Doc</button>');
   if (p.status === 'sent') b.push(btn('permalink', 'Отправить ссылку ещё раз'));
   if (p.status !== 'draft' && !edIsFinal(p.status)) b.push(btn('refresh', 'Обновить статус'));
   if (p.status === 'sent' || p.status === 'error') b.push(btn('annul', 'Аннулировать', 'btn-sec btn-dng'));
-  // Отказ, аннулирование, истёкший срок — новый комплект тому же пациенту (и по тому же визиту для акта).
+  // Отказ, аннулирование, истёкший срок — новый комплект на странице пациента (по тому же визиту для акта).
   if (['declined', 'annulled', 'expired'].indexOf(p.status) >= 0) {
-    b.push('<button class="btn btn-pri btn-sm" onclick="edGo(\'new/' + p.clientId + (p.recordId ? '/' + p.recordId : '') + '\')">Оформить заново</button>');
+    b.push('<button class="btn btn-pri btn-sm" onclick="edGo(\'c/' + p.clientId + (p.recordId ? '/' + p.recordId : '') + '\')">Оформить заново</button>');
   }
   return b.join('');
 }
@@ -502,6 +301,17 @@ async function edPkgAction(id, action, btn) {
 function edOpenInFdoc(id) { edOpenAsync(async () => (await api('POST', '/api/edocs/packages/' + id + '/employee-url')).url); }
 function edOpenPdf(docId) { edOpenAsync(async () => (await api('GET', '/api/edocs/documents/' + docId + '/pdf')).url); }
 
+function edOpenScan(id) { edOpenAsync(async () => (await api('GET', '/api/edocs/packages/' + id + '/scan')).url); }
+async function edRevokePaper(id) {
+  const reason = prompt('Почему снимаете отметку «Подписано на бумаге»? Причина попадёт в журнал.');
+  if (reason === null) return;
+  try {
+    await api('POST', '/api/edocs/packages/' + id + '/paper-revoke', { reason: reason });
+    notify('Отметка снята');
+    await edLoadPackage(id, true);
+  } catch (e) { notify(e.message, 'err'); }
+}
+
 // ── «Мой F.Doc»: учётная запись текущего пользователя ──
 function edOpenMe() {
   const me = _ed.state && _ed.state.me;
@@ -522,7 +332,7 @@ async function edSaveMe() {
     notify('Учётная запись F.Doc подключена');
     closeModal('edMeModal');
     await edLoadState();
-    edCheckMissing();
+    edRefreshView();
   } catch (e) { notify(e.message, 'err'); }
 }
 async function edDeleteMe() {
@@ -532,7 +342,7 @@ async function edDeleteMe() {
     notify('Учётная запись F.Doc отключена');
     closeModal('edMeModal');
     await edLoadState();
-    edCheckMissing();
+    edRefreshView();
   } catch (e) { notify(e.message, 'err'); }
 }
 
@@ -567,6 +377,9 @@ async function edRenderSettings() {
     + '<div class="ed-actions"><button class="btn btn-pri" onclick="edSaveSettings()">Сохранить настройки</button>'
     + '<button class="btn btn-sec" onclick="edVerify()">Проверить подключение</button><button class="btn btn-sec" onclick="edTariff()">Тариф</button>'
     + '<span id="edTariff" class="ed-sub"></span></div></div>'
+    + '<div class="card mb"><div class="ed-h">Автоматизация, анкета и номера договоров</div>'
+    + '<div class="ed-sub">Что отправлять без участия администратора, текст сообщения с анкетой, нумерация договоров, с какой даты нужны акты. По умолчанию автоматика выключена.</div>'
+    + '<div class="ed-actions"><button class="btn btn-pri" onclick="edOpenAutomation()">⚙ Настроить</button></div></div>'
     + '<div class="card mb"><div class="ed-h">Уведомления F.Doc о статусах</div><div class="ed-sub">'
     + (s.webhookUrl ? 'Адрес: ' + esc(s.webhookUrl) : 'Не подключены — статусы проверяются опросом раз в 5 минут')
     + (s.lastWebhookAt ? ' · последнее уведомление ' + esc(edFmtDateTime(s.lastWebhookAt)) : '') + '</div>'
@@ -678,6 +491,71 @@ async function edDeleteTemplate(id) {
   catch (e) { notify(e.message, 'err'); }
 }
 
+// ── автоматизация, анкета, номера договоров (окно — с дашборда и из настроек) ──
+let _edAuto = null;
+async function edOpenAutomation() {
+  const box = document.getElementById('edAutoBody');
+  box.innerHTML = '<div class="empty">Загрузка…</div>';
+  openModal('edAutoModal');
+  try { _edAuto = await api('GET', '/api/edocs/admin/automation'); } catch (e) { box.innerHTML = '<div class="empty">' + esc(e.message) + '</div>'; return; }
+  edAutoRender();
+}
+function edTgl(btn) { btn.classList.toggle('on'); }
+function edAutoRender() {
+  const d = _edAuto;
+  const box = document.getElementById('edAutoBody');
+  if (!d || !box) return;
+  const tgl = (id, on) => '<button type="button" class="ed-tgl' + (on ? ' on' : '') + '" id="' + id + '" onclick="edTgl(this)"></button>';
+  const num = (id, v, min, max) => '<input type="number" id="' + id + '" value="' + escAttr(String(v)) + '" min="' + min + '" max="' + max + '" style="width:80px">';
+  const opt = (v, label, cur) => '<option value="' + escAttr(String(v)) + '"' + (String(cur) === String(v) ? ' selected' : '') + '>' + esc(String(label)) + '</option>';
+  const senders = d.senders.filter((u) => u.connected && !u.broken);
+  box.innerHTML = (d.testPhones && d.testPhones.length ? '<div class="ed-note">Тестовый режим: пациентам уходят только отправки на ' + esc(d.testPhones.join(', ')) + ' (EDOCS_TEST_PHONES).</div>' : '')
+    + (d.publicUrlConfigured ? '' : '<div class="ed-note ed-note-bad">Не задан адрес для ссылок анкеты (EDOCS_PUBLIC_URL) — автоматика не сможет отправлять анкеты.</div>')
+    + '<div class="ed-sub" style="margin-bottom:6px">По умолчанию всё выключено. Ручная отправка со страницы пациента работает всегда. Ночью (тихие часы из настроек автоуведомлений) автоматика ждёт утра.</div>'
+    + '<div class="fg"><label class="fl" for="edAu-sender">Отправлять от имени</label><select id="edAu-sender"><option value="">— выберите сотрудника с подключённым F.Doc —</option>'
+    + senders.map((u) => opt(u.id, u.name, d.senderUserId)).join('') + '</select>'
+    + (d.senders.length > senders.length ? '<div class="ed-sub">В списке только сотрудники, подключившие свою учётную запись F.Doc.</div>' : '') + '</div>'
+    + '<div class="ed-au-row">' + tgl('edAu-previsit', d.previsit.on) + '<div class="grow"><h4>Договор и согласие перед визитом</h4>'
+    + '<p>Если документа нет, пациент получит его заранее и подпишет дома. Не хватает паспорта — уйдёт анкета, а документы — сразу после её заполнения.</p>'
+    + 'за ' + num('edAu-previsitHours', d.previsit.hours, 2, 168) + ' ч до визита · <select id="edAu-scope">' + opt('first', 'только первичным', d.previsit.scope) + opt('all', 'всем, у кого нет документов', d.previsit.scope) + '</select>'
+    + '<label class="ed-switch"><input type="checkbox" id="edAu-form"' + (d.previsit.form ? ' checked' : '') + '> Если данных не хватает — отправить анкету</label></div></div>'
+    + '<div class="ed-au-row">' + tgl('edAu-act', d.act.on) + '<div class="grow"><h4>Акт после оплаты визита</h4>'
+    + '<p>Когда в YClients визит отмечен «пришёл» и оплачен, акт собирается из услуг записи и уходит пациенту.</p>'
+    + 'через ' + num('edAu-actDelay', d.act.delayMin, 5, 240) + ' мин после оплаты</div></div>'
+    + '<div class="ed-au-row">' + tgl('edAu-remind', d.remind.on) + '<div class="grow"><h4>Повтор, если не подписано</h4>'
+    + '<p>Один раз: ссылка на подпись — SMS от F.Doc, анкета — повторно в мессенджер.</p>'
+    + 'через ' + num('edAu-remindHours', d.remind.hours, 1, 48) + ' ч</div></div>'
+    + '<div class="ed-au-row"><div class="grow"><h4>Сообщение с анкетой</h4><p>Подставляются {имя}, {клиника}, {дата}, {ссылка}. Пусто — текст по умолчанию.</p>'
+    + '<textarea id="edAu-msg" placeholder="' + escAttr(d.formMessageDefault) + '">' + esc(d.formMessage || '') + '</textarea>'
+    + 'Ссылка действует ' + num('edAu-ttl', d.formTtlDays, 1, 30) + ' дн.</div></div>'
+    + '<div class="ed-au-row">' + tgl('edAu-autonum', d.contractAutonumber) + '<div class="grow"><h4>Номера договоров автоматически</h4>'
+    + '<p>Свой номер пациента (в данных или в YClients) сохраняется; остальным — следующий по счёту. Уже выдан максимум: ' + esc(String(d.contractNext.maxUsed)) + '.</p>'
+    + 'Следующий номер: ' + num('edAu-next', d.contractNext.next, 1, 999999999999) + '</div></div>'
+    + '<div class="ed-au-row"><div class="grow"><h4>Акты нужны для визитов с</h4><p>Более ранние визиты дашборд не считает незакрытыми.</p>'
+    + '<input type="date" id="edAu-actsFrom" value="' + escAttr(d.actsRequiredFrom || '') + '" style="width:auto"></div></div>'
+    + '<div class="ed-actions"><button class="btn btn-pri" onclick="edSaveAutomation()">Сохранить</button><button class="btn btn-sec" onclick="closeModal(\'edAutoModal\')">Отмена</button></div>';
+}
+async function edSaveAutomation() {
+  const on = (id) => document.getElementById(id).classList.contains('on');
+  const d = _edAuto;
+  const next = edVal('edAu-next');
+  const body = {
+    senderUserId: edVal('edAu-sender') || null,
+    previsit: { on: on('edAu-previsit'), hours: edVal('edAu-previsitHours'), scope: edVal('edAu-scope'), form: document.getElementById('edAu-form').checked },
+    act: { on: on('edAu-act'), delayMin: edVal('edAu-actDelay') },
+    remind: { on: on('edAu-remind'), hours: edVal('edAu-remindHours') },
+    formMessage: edVal('edAu-msg'), formTtlDays: edVal('edAu-ttl'), contractAutonumber: on('edAu-autonum'),
+    actsRequiredFrom: edVal('edAu-actsFrom') || null,
+  };
+  if (d && String(next) !== String(d.contractNext.next)) body.contractNextNo = next;
+  try {
+    await api('PUT', '/api/edocs/admin/automation', body);
+    notify('Настройки автоматизации сохранены');
+    closeModal('edAutoModal');
+    edRefreshView();
+  } catch (e) { notify(e.message, 'err'); }
+}
+
 // ── встройки в другие страницы ──
 // Карточка клиента (clients.js → openCD): блок «Документы», если модуль включён.
 async function edRenderClientBlock(clientId) {
@@ -688,16 +566,16 @@ async function edRenderClientBlock(clientId) {
   if (!s || !s.enabled) { el.innerHTML = ''; return; }
   const id = s.identity;
   el.innerHTML = '<div class="div"></div><div class="ed-cblock-head"><div style="font-size:13px;font-weight:700">Документы</div>'
-    + '<button class="btn btn-pri btn-sm" onclick="edOpenWizard(' + clientId + ')">Оформить документы</button></div>'
+    + '<button class="btn btn-pri btn-sm" onclick="edOpenClient(' + clientId + ')">Документы пациента</button></div>'
     + '<div class="ed-sub">' + (id.exists ? 'Данные для документов: ' + esc(id.fio || '—') + (id.passportMask ? ' · паспорт ' + esc(id.passportMask) : ' · паспорт не заполнен') : 'Данные для документов не заполнены') + '</div>'
     + (s.packages || []).map((p) => {
       const st = edStatusInfo(p.status);
       return '<div class="ed-crow" onclick="edOpenPackage(\'' + p.id + '\')"><span>' + esc(p.title) + '</span><span class="badge ' + st.cls + '">' + esc(st.label) + '</span></div>';
     }).join('');
 }
-function edOpenWizard(clientId, recordId) {
+function edOpenClient(clientId, recordId) {
   if (typeof closeModal === 'function') closeModal('clientModal');
-  location.hash = 'edocs/new/' + clientId + (recordId ? '/' + recordId : '');
+  location.hash = 'edocs/c/' + clientId + (recordId ? '/' + recordId : '');
 }
 function edOpenPackage(id) {
   if (typeof closeModal === 'function') closeModal('clientModal');
@@ -716,6 +594,6 @@ async function edDecorateRecords(records) {
     const a = res.statuses[rid];
     td.innerHTML = a
       ? '<span class="badge ' + edStatusInfo(a.status).cls + ' ed-link" onclick="edOpenPackage(\'' + a.packageId + '\')">Акт: ' + esc(edStatusInfo(a.status).label) + '</span>'
-      : '<button class="btn btn-sec btn-sm" onclick="edOpenWizard(' + cid + ',' + rid + ')">📄 Акт</button>';
+      : '<button class="btn btn-sec btn-sm" onclick="edOpenClient(' + cid + ',' + rid + ')">📄 Акт</button>';
   });
 }
