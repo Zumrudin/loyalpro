@@ -36,10 +36,19 @@ describe('stripMarkdown', () => {
     expect(s.stripMarkdown('``15:30``')).toBe('15:30');
   });
   test('маркер внутри слова, адреса, ника — не разметка', () => {
-    expect(s.stripMarkdown('@_peri_ и site.ru/_promo_/ и file__name__v2')).toBe('@_peri_ и site.ru/_promo_/ и file__name__v2');
+    expect(s.stripMarkdown('@_peri_ и site.ru/_promo_/ и file__name__v2 и peri_clinic_promo')).toBe('@_peri_ и site.ru/_promo_/ и file__name__v2 и peri_clinic_promo');
   });
   test('выделение у скобок, кавычек и знаков препинания снимается', () => {
     expect(s.stripMarkdown('(**15:30**) или **17:00**, или «**18:00**».')).toBe('(15:30) или 17:00, или «18:00».');
+  });
+  test('эмодзи вплотную к маркеру не мешают снять выделение', () => {
+    expect(s.stripMarkdown('**Записала!**🤍 и 🌸**15:30**')).toBe('Записала!🤍 и 🌸15:30');
+  });
+  test('тире, слэш и «₽» снаружи маркера не мешают', () => {
+    expect(s.stripMarkdown('с **10:00**–**12:00** или **15:30**/**16:00**, **500**₽')).toBe('с 10:00–12:00 или 15:30/16:00, 500₽');
+  });
+  test('***жирный курсив*** и типографские кавычки', () => {
+    expect(s.stripMarkdown('***важно*** и „**точно**“')).toBe('важно и „точно“');
   });
 });
 
