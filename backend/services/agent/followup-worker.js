@@ -29,6 +29,7 @@ const history = require('./history');
 const pendingReplies = require('./pending-replies');
 const { needsPriceFollowupOffer, hasBookingInvitation, STEP_QUESTION } = require('./booking-interest');
 const replyGuard = require('./reply-guard');
+const replyStyle = require('./reply-style');
 const chatEvents = require('../chat-events');
 const authorship = require('../outgoing-authorship');
 const notifications = require('../notifications');
@@ -662,6 +663,10 @@ async function processOne(row, deps = defaultDeps) {
       d.log.info(`followup #${row.id}: бонусный довод — ${bonus.why}`);
       text = bonusLine ? `${built.text}\n\n${bonusLine.text}` : built.text;
     }
+
+    // Стилевой слой — тот же, что у реплик диспетчера (reply-style): в
+    // rendered_text и в отправку уходит один и тот же текст.
+    text = replyStyle.applyReplyStyle(text);
 
     // ── 8. Захват строки: последний гейт перед side-effect'ом ──
     // Строку могли погасить (клиент ответил, оператор взял диалог) уже после
