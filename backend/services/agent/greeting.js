@@ -124,7 +124,12 @@ function buildGreeting(opts = {}) {
   // приветствие — другим (в runDialog salonName не передаёт никто).
   const salon = resolveSalonName(opts.salonName);
   const heart = opts.empathetic ? '' : '🤍';
-  return `Здравствуйте${name ? `, ${name}` : ''}!${heart}\nЭто Мила, виртуальный администратор ${salon}.`;
+  const hello = `Здравствуйте${name ? `, ${name}` : ''}!${heart}`;
+  // withIntro:false — представление в серии уже есть (модель назвалась, но не
+  // поздоровалась): дописываем только приветственную строку, иначе «Это Мила…»
+  // прозвучало бы дважды.
+  if (opts.withIntro === false) return hello;
+  return `${hello}\nЭто Мила, виртуальный администратор ${salon}.`;
 }
 
 // Дописывает приветствие в НАЧАЛО первой реплики, если во всей серии его нет.
@@ -138,7 +143,8 @@ function ensureGreeting(replies, opts = {}) {
   if (list.some(hasGreeting)) return list;
   const out = list.slice();
   const empathetic = opts.empathetic != null ? !!opts.empathetic : EMPATHY_RE.test(list.join('\n'));
-  out[0] = `${buildGreeting({ ...opts, empathetic })}\n\n${out[0]}`;
+  const withIntro = !list.some(hasIntroduction);
+  out[0] = `${buildGreeting({ ...opts, empathetic, withIntro })}\n\n${out[0]}`;
   return out;
 }
 
