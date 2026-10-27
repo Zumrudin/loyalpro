@@ -120,6 +120,29 @@ async function reconcileGoodsTransactions(salon, opts = {}) {
   return { pages: r.pages, upserted: r.upserted, skipped: r.skipped, receipts: r.receipts };
 }
 
+/**
+ * Списания свежих дней (сегодня − RECONCILE_DAYS … сегодня, мск) по ДАТЕ СПИСАНИЯ
+ * (start_date/end_date). ЗАЧЕМ рядом со сверкой changed_after: списание по техкарте
+ * YClients создаёт ЗАРАНЕЕ, при оформлении записи, с датой визита — его last_change_date
+ * лежит на недели раньше визита (дев 21.10.2026: запись 1988994849 на 20.10, документ
+ * изменён 12.10). Потерянный тогда вебхук не ловили ни сверка (−2 дня по изменению),
+ * ни healGoodsGaps (только дни без единого списания у салона), и состоявшийся визит
+ * молча оставался «без списаний» с предупреждением no_consumables. 1–3 страницы за ночь.
+ */
+async function pullRecentWriteoffDays(salon, opts = {}) {
+  const sleep = opts.sleep || defaultSleep;
+  const now = opts.now || new Date();
+  const from = mskDate(now, -RECONCILE_DAYS);
+  const to = mskDate(now);
+  const r = await pullTransactions(salon, { start_date: from, end_date: to }, 'reconcile', sleep);
+  for (const goodId of r.receiptGoods) {
+    await Promise.resolve().then(() => store.refreshLastReceipt(salon.id, goodId))
+      .catch(e => logger.warn(`last receipt good=${goodId}: ${e.message}`));
+  }
+  logger.info(`salon=${salon.id}: списания по дате ${from}..${to}: ${r.upserted} строк, ${r.skipped} пропущено`);
+  return { from, to, pages: r.pages, upserted: r.upserted, skipped: r.skipped, receipts: r.receipts };
+}
+
 // ── Самолечение пробелов списаний ───────────────────────────────────────────
 const GAP_LOOKBACK_DAYS = 30;
 const MAX_GAP_RANGES = 3;           // диапазонов за ночь — квота общая с Милой
@@ -308,6 +331,7 @@ async function runNightly(salon, opts = {}) {
     await step('catalog', () => syncGoodsCatalog(salon, opts));
     await step('techCards', () => syncTechCards(salon, opts));
     await step('transactions', () => reconcileGoodsTransactions(salon, opts));
+    await step('recentDays', () => pullRecentWriteoffDays(salon, opts));
     await step('gaps', () => healGoodsGaps(salon, opts));
     await step('learn', () => learnTechCardLinks(salon, opts));
     await step('lastReceipts', () => store.refreshAllLastReceipts(salon.id));
@@ -326,6 +350,6 @@ async function fetchStaffSalary(salon, staffYcId, dateFrom, dateTo) {
 }
 
 module.exports = { fetchStaffSalary, syncGoodsCatalog, parseCatalogGood, MAX_GOODS_PAGES, PAGE, RETRY, PAGE_PAUSE_MS, defaultSleep, num,
-  reconcileGoodsTransactions, backfillGoodsTransactions, monthRanges, mskDate, RECONCILE_DAYS, MAX_TXN_PAGES,
+  reconcileGoodsTransactions, pullRecentWriteoffDays, backfillGoodsTransactions, monthRanges, mskDate, RECONCILE_DAYS, MAX_TXN_PAGES,
   healGoodsGaps, dayRanges, GAP_LOOKBACK_DAYS, MAX_GAP_RANGES,
   syncTechCards, learnTechCardLinks, lookupTechCardForService, MAX_CARD_PAGES, MAX_LEARN_CALLS, MAX_LOOKUP_STAFF, runNightly, isRunning, runExclusive };

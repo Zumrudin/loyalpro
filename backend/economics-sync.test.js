@@ -74,6 +74,31 @@ describe('reconcileGoodsTransactions', () => {
   });
 });
 
+describe('pullRecentWriteoffDays: списания свежих дней по дате списания (2026-10-21)', () => {
+  // Списание по техкарте YClients создаёт ЗАРАНЕЕ, при оформлении записи (дев: запись
+  // 1988994849 на 20.10, документ изменён 12.10). changed_after=−2 дня его не видит, а
+  // healGoodsGaps — только когда в день нет списаний ни у одной записи.
+  test('start_date = сегодня −2 дня, end_date = сегодня (мск), source=reconcile, приходы пересчитывают закупку', async () => {
+    const seen = [];
+    ycGet.mockImplementation(async (s, path, params) => {
+      expect(path).toBe('/storages/transactions/668791');
+      seen.push({ ...params });
+      return params.page === 1 ? [
+        { id: 1880671203, type_id: 2, amount: '-1', cost: '9000', good: { id: 5, title: 'РЕВИ СТРОНГ 2ml' }, record_id: 1988994849,
+          create_date: '2026-10-20T13:30:00+0400', last_change_date: '2026-10-12T12:52:14+04:00' },
+        { id: 7, type_id: 3, amount: '2', cost: '10', good: { id: 9, title: 'G' }, record_id: 0, create_date: '2026-10-20T10:00:00+0400' },
+      ] : [];
+    });
+    const r = await sync.pullRecentWriteoffDays(SALON, { now: new Date('2026-10-21T05:05:00+03:00'), sleep: noSleep });
+    expect(seen.map(p => [p.start_date, p.end_date, p.changed_after])).toEqual([
+      ['2026-10-19', '2026-10-21', undefined], ['2026-10-19', '2026-10-21', undefined],
+    ]);
+    expect(r).toEqual({ from: '2026-10-19', to: '2026-10-21', pages: 2, upserted: 2, skipped: 0, receipts: 1 });
+    expect(store.upsertGoodsTransaction).toHaveBeenCalledWith(1, expect.objectContaining({ yclients_txn_id: 1880671203, record_id: 1988994849 }), { status: 'update', source: 'reconcile' });
+    expect(store.refreshLastReceipt).toHaveBeenCalledWith(1, 9);
+  });
+});
+
 describe('healGoodsGaps: дни с визитами без единого списания дотягиваются start_date/end_date', () => {
   test('dayRanges: соседние дни склеиваются, свежие первыми', () => {
     expect(sync.dayRanges(['2026-10-02', '2026-10-16', '2026-10-14', '2026-10-15', '2026-10-08', '2026-10-08']))
@@ -114,7 +139,7 @@ describe('healGoodsGaps: дни с визитами без единого спи
     store.listRecordsToLearn.mockResolvedValue([]);
     store.listTechCardIdsByYc.mockResolvedValue(new Map());
     const r = await sync.runNightly(SALON, { sleep: noSleep });
-    expect(Object.keys(r.steps)).toEqual(['catalog', 'techCards', 'transactions', 'gaps', 'learn', 'lastReceipts']);
+    expect(Object.keys(r.steps)).toEqual(['catalog', 'techCards', 'transactions', 'recentDays', 'gaps', 'learn', 'lastReceipts']);
     expect(r.steps.gaps).toEqual({ gapDays: 0, ranges: 0, healed: 0, upserted: 0 });
   });
 });
