@@ -1,7 +1,11 @@
 'use strict';
 
 const { createHmac, timingSafeEqual } = require('node:crypto');
-const MODEL = 'gpt-6-sol';
+const MODEL = 'gpt-6-astra';
+// Модели, которые relay принимает в ответе моста для движка gpt: мост и прод
+// выкатываются по очереди, и жёсткое равенство одной константе в окне между
+// выкатами уводило бы Милу на «Пользу» (RELAY_RESPONSE → bridge_unavailable).
+const GPT_MODELS = Object.freeze(['gpt-6-astra', 'gpt-6-sol']);
 const CLAUDE_MODEL = 'claude-sonnet';
 const MAX_BYTES = 2 * 1024 * 1024;
 const ROUTE = '/api/mila-codex/v1/message';
@@ -33,4 +37,4 @@ function failure(code) {
   e.code = code;
   return e;
 }
-module.exports = { MODEL, CLAUDE_MODEL, MAX_BYTES, ROUTE, signature, authorized, validRequest, failure };
+module.exports = { MODEL, GPT_MODELS, CLAUDE_MODEL, MAX_BYTES, ROUTE, signature, authorized, validRequest, failure };

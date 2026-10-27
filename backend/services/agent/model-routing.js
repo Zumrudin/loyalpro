@@ -1,6 +1,9 @@
 'use strict';
 
+const { MODEL: GPT_MODEL, CLAUDE_MODEL } = require('./providers/codex-relay-protocol');
+
 const SELECTABLE = ['gpt', 'claude', 'polza'];
+const MODEL_TITLES = { 'gpt-6-astra': 'GPT-6 Astra', 'gpt-6-sol': 'GPT-6 Sol' };
 const REASONS = {
   model_failed: 'Модель на dev вернула ошибку или не ответила вовремя',
   bridge_unavailable: 'Мост на dev недоступен или отклонил запрос',
@@ -9,12 +12,12 @@ const REASONS = {
 function createStore({ db, config }) {
   const initial = config.AGENT_PROVIDER === 'codex-relay' ? 'gpt' : config.AGENT_PROVIDER;
   const choices = {
-    gpt: { title: 'GPT-6 Sol', model: 'gpt-6-sol', channel: 'Мост dev · подписка ChatGPT' },
-    claude: { title: 'Claude Sonnet', model: 'claude-sonnet', channel: 'Мост dev · подписка Claude Code' },
+    gpt: { title: MODEL_TITLES[GPT_MODEL] || GPT_MODEL, model: GPT_MODEL, channel: 'Мост dev · подписка ChatGPT' },
+    claude: { title: 'Claude Sonnet', model: CLAUDE_MODEL, channel: 'Мост dev · подписка Claude Code' },
     polza: { title: 'Польза', model: config.POLZA_CHAT_MODEL, channel: 'API polza.ai' },
     anthropic: { title: 'Anthropic', channel: 'API Anthropic' },
     aitunnel: { title: 'AI Tunnel', channel: 'API AI Tunnel' },
-    codex: { title: 'Codex (dev)', model: 'gpt-6-sol', channel: 'Локальная подписка ChatGPT' },
+    codex: { title: 'Codex (dev)', model: GPT_MODEL, channel: 'Локальная подписка ChatGPT' },
   };
   const defaults = () => ({ active: initial, revision: '0', model: null, health: 'unverified', last_auto: null });
   async function get(salonId) {

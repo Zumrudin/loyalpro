@@ -1,12 +1,13 @@
 'use strict';
 
 const { randomUUID } = require('node:crypto');
-const { MODEL, CLAUDE_MODEL, MAX_BYTES, signature, validRequest, failure, ROUTE } = require('./codex-relay-protocol');
+const { MODEL, GPT_MODELS, CLAUDE_MODEL, MAX_BYTES, signature, validRequest, failure, ROUTE } = require('./codex-relay-protocol');
 const codex = require('./codex');
 
 function createProvider({ env = process.env, fetchImpl = globalThis.fetch, allowLoopback = false, engine = 'gpt' } = {}) {
   if (!['gpt', 'claude'].includes(engine)) throw failure('RELAY_CONFIG');
   const model = engine === 'claude' ? CLAUDE_MODEL : MODEL;
+  const accepted = engine === 'claude' ? [CLAUDE_MODEL] : GPT_MODELS;
   return {
     MODEL: model,
     async createMessage({ system, messages, tools = [] }) {
@@ -55,7 +56,7 @@ function createProvider({ env = process.env, fetchImpl = globalThis.fetch, allow
           chunks.push(Buffer.from(chunk));
         }
         const result = JSON.parse(Buffer.concat(chunks).toString('utf8'));
-        if (result.model !== model || result.requestId !== id) throw failure('RELAY_RESPONSE');
+        if (!accepted.includes(result.model) || result.requestId !== id) throw failure('RELAY_RESPONSE');
         // Revalidate the tool names/arguments on the caller against its own schemas.
         // Fresh tool IDs are generated here and remain local to the caller's dialog.
         let parsed;
@@ -64,7 +65,7 @@ function createProvider({ env = process.env, fetchImpl = globalThis.fetch, allow
           { type: 'turn.completed' },
         ].map(e => JSON.stringify(e)).join('\n'), tools); }
         catch (_) { throw failure('RELAY_MODEL_FAILED'); }
-        return { ...parsed, model };
+        return { ...parsed, model: result.model };
       } catch (e) {
         if (/^RELAY_[A-Z_]+$/.test(e.code || '')) throw e;
         throw failure(controller.signal.aborted ? 'RELAY_TIMEOUT' : 'RELAY_FAILED');
