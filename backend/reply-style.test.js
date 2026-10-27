@@ -28,6 +28,19 @@ describe('stripMarkdown', () => {
     expect(s.stripMarkdown(null)).toBe('');
     expect(s.stripMarkdown(undefined)).toBe('');
   });
+  test('«+» в начале строки — не маркер списка', () => {
+    expect(s.stripMarkdown('+ 500 бонусов на карту')).toBe('+ 500 бонусов на карту');
+  });
+  test('вложенные маркеры снимаются за один вызов', () => {
+    expect(s.stripMarkdown('_*важно*_')).toBe('важно');
+    expect(s.stripMarkdown('``15:30``')).toBe('15:30');
+  });
+  test('маркер внутри слова, адреса, ника — не разметка', () => {
+    expect(s.stripMarkdown('@_peri_ и site.ru/_promo_/ и file__name__v2')).toBe('@_peri_ и site.ru/_promo_/ и file__name__v2');
+  });
+  test('выделение у скобок, кавычек и знаков препинания снимается', () => {
+    expect(s.stripMarkdown('(**15:30**) или **17:00**, или «**18:00**».')).toBe('(15:30) или 17:00, или «18:00».');
+  });
 });
 
 describe('capitalizeAddress', () => {
@@ -51,10 +64,23 @@ describe('applyReplyStyle', () => {
     const once = s.applyReplyStyle('*   пункт с **жирным** и вашим временем 14:00');
     expect(s.applyReplyStyle(once)).toBe(once);
     expect(once).toBe('• пункт с жирным и Вашим временем 14:00');
+    const nested = s.applyReplyStyle('_*важно*_ вас');
+    expect(nested).toBe('важно Вас');
+    expect(s.applyReplyStyle(nested)).toBe(nested);
   });
   test('рычаг AGENT_REPLY_STYLE=false выключает преобразования', () => {
     expect(s.applyReplyStyle('**x** вас', { env: { AGENT_REPLY_STYLE: 'false' } })).toBe('**x** вас');
     expect(s.isEnabled({ AGENT_REPLY_STYLE: 'false' })).toBe(false);
     expect(s.isEnabled({})).toBe(true);
+  });
+  test('opts = null и env = null не бросают: env берётся из process.env', () => {
+    expect(s.applyReplyStyle('**x** вас', null)).toBe('x Вас');
+    const saved = process.env.AGENT_REPLY_STYLE;
+    process.env.AGENT_REPLY_STYLE = 'false';
+    try {
+      expect(s.isEnabled(null)).toBe(false);
+    } finally {
+      if (saved === undefined) delete process.env.AGENT_REPLY_STYLE; else process.env.AGENT_REPLY_STYLE = saved;
+    }
   });
 });
