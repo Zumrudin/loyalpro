@@ -114,6 +114,15 @@ test('current GPT model is reported from the bridge response', async () => {
   await start();
   await expect(provider().createMessage(input)).resolves.toMatchObject({ text: 'Hello', model: 'gpt-6-astra' });
 });
+test.each([['gpt', 'claude-sonnet'], ['claude', 'gpt-6-astra'], ['claude', 'gpt-6-sol']])(
+  '%s engine rejects foreign model %s', async (engine, model) => {
+    await start(engine === 'claude' ? { generateClaude: async () => ({ text: 'Hello', toolCalls: [] }) } : {});
+    const fetchImpl = async (target, opts) => {
+      const real = await fetch(target, opts); const data = await real.json(); data.model = model;
+      return new Response(JSON.stringify(data), { status: 200 });
+    };
+    await expect(provider({ engine, fetchImpl }).createMessage(input)).rejects.toMatchObject({ code: 'RELAY_RESPONSE' });
+  });
 test('does not retry or expose private network errors', async () => {
   await start(); const fetchImpl = jest.fn(async () => { throw new Error('private-token'); });
   await expect(provider({ fetchImpl }).createMessage(input)).rejects.toThrow('RELAY_FAILED');
