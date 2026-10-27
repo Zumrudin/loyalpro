@@ -1216,7 +1216,17 @@ git log --oneline -1 origin/main
 
 Expected: `origin/main` = верхний коммит ветки.
 
-- [ ] **Step 5: Мост на деве**
+- [ ] **Step 5: Прод — ПЕРВЫМ (новый relay принимает и Sol, и Astra)**
+
+Порядок обязателен (находка ревью 27.10): старый relay на проде сверяет модель строгим равенством, и мост, перезапущенный на Astra раньше прода, уводил бы салон на «Пользу» липко. Делать днём (09:30–22:00): до моста доходят только номера белого списка.
+
+```bash
+ssh root@217.114.0.254 "cd /root/loyalpro_new && git pull origin main && pm2 restart loyalpro && sleep 3 && pm2 ls | grep loyalpro && git log --oneline -1"
+```
+
+Expected: `online`, верхний коммит = `origin/main`. Мост в этот момент ещё на Sol — relay его принимает.
+
+- [ ] **Step 6: Мост на деве — ВТОРЫМ**
 
 ```bash
 ts=$(date -u +%Y%m%dT%H%M%SZ); mkdir -p /root/mila-model-rollback-$ts && cp -a /opt/mila-codex-bridge /root/mila-model-rollback-$ts/bridge
@@ -1225,9 +1235,9 @@ cp /root/loyalpro/.worktrees/mila-human-tone/backend/services/agent/providers/co
 systemctl restart mila-codex-bridge && sleep 2 && systemctl is-active mila-codex-bridge && curl -s http://127.0.0.1:3012/health
 ```
 
-Expected: `active` и `{"ok":true,"model":"gpt-6-astra"}`.
+Expected: `active` и `{"ok":true,"model":"gpt-6-astra"}`. Откат — в обратном порядке: сначала мост из `/root/mila-model-rollback-$ts/bridge` + restart, потом прод.
 
-- [ ] **Step 6: Дев-бэкенд**
+- [ ] **Step 7: Дев-бэкенд**
 
 ```bash
 cd /root/loyalpro && git pull --ff-only origin main 2>/dev/null || echo "основное дерево на другой ветке — дев перезапускается на своём коде"
@@ -1235,14 +1245,6 @@ PORT=3001 pm2 restart loyalpro && sleep 3 && pm2 ls | grep loyalpro && tail -n 3
 ```
 
 Основное дерево `/root/loyalpro` стоит на `feat/notifications-own-module`; дев-процесс берёт код оттуда. Если ветку дева владелец не переключает, Astra на деве появится после слияния этой ветки в неё (`git merge main`), это отдельное решение — зафиксировать в отчёте.
-
-- [ ] **Step 7: Прод**
-
-```bash
-ssh root@217.114.0.254 "cd /root/loyalpro_new && git pull origin main && pm2 restart loyalpro && sleep 3 && pm2 ls | grep loyalpro && git log --oneline -1"
-```
-
-Expected: `online`, верхний коммит = `origin/main`.
 
 - [ ] **Step 8: Проверка на проде**
 
