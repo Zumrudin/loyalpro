@@ -458,7 +458,7 @@ describe('followup worker: напоминание (stage 0)', () => {
     });
     await worker.processOne(row(), d);
     expect(d.calls.sent).toHaveLength(1);
-    expect(d.calls.sent[0].text).toBe('Мария, добрый день! Записать вас?');
+    expect(d.calls.sent[0].text).toBe('Мария, добрый день! Записать Вас?');
   });
 
   test('строку перехватили между гейтами и захватом → не отправляем', async () => {
@@ -516,7 +516,7 @@ describe('followup worker: бонусный довод (stage 0)', () => {
     const d = deps({ loadTranscript: priceTranscript, readCardBalance: async () => ({ status: 'ok', balance: 3024, cardId: 1 }) });
     await worker.processOne(row(BONUS_ROW), d);
     expect(d.calls.sent).toHaveLength(1);
-    expect(d.calls.sent[0].text).toBe('Мария, подскажите, записать вас?\n\nНа карте 3 024 бонусов.');
+    expect(d.calls.sent[0].text).toBe('Мария, подскажите, записать Вас?\n\nНа карте 3 024 бонусов.');
     const mark = d.calls.marks.find((m) => /stage\s*=\s*1/.test(m.sql));
     expect(mark.sql).toMatch(/bonus_kind\s*=\s*\$4/);
     expect(mark.sql).toMatch(/bonus_balance\s*=\s*\$5/);
@@ -537,7 +537,7 @@ describe('followup worker: бонусный довод (stage 0)', () => {
     const d2 = deps({ loadTranscript: priceTranscript, readCardBalance: async () => { calls.push(1); return { status: 'ok', balance: 999 }; } });
     await worker.processOne(row(), d2); // в row() шаблонов нет
     expect(calls).toHaveLength(0);
-    expect(d2.calls.sent[0].text).toBe('Мария, подскажите, записать вас?');
+    expect(d2.calls.sent[0].text).toBe('Мария, подскажите, записать Вас?');
     const mark2 = d2.calls.marks.find((m) => /stage\s*=\s*1/.test(m.sql));
     expect(mark2.params[3]).toBe(null);
   });
@@ -551,7 +551,7 @@ describe('followup worker: бонусный довод (stage 0)', () => {
     });
     await worker.processOne(row(BONUS_ROW), d);
     expect(calls).toEqual(['turn-1']);
-    expect(d.calls.sent[0].text).toBe('Мария, подскажите, записать вас?');
+    expect(d.calls.sent[0].text).toBe('Мария, подскажите, записать Вас?');
   });
 
   test('бонусы уже звучали в переписке / недавно слали → без фразы', async () => {
@@ -586,7 +586,7 @@ describe('followup worker: бонусный довод (stage 0)', () => {
     const d2 = deps({ loadTranscript: priceTranscript, loadTurnEvents: async () => { throw new Error('boom'); } });
     await worker.processOne(row(BONUS_ROW), d2);
     expect(d2.calls.sent).toHaveLength(1);
-    expect(d2.calls.sent[0].text).toBe('Мария, подскажите, записать вас?');
+    expect(d2.calls.sent[0].text).toBe('Мария, подскажите, записать Вас?');
   });
 
   test('skip модели не стоит похода за картой; финал (stage 1) фразу не получает', async () => {
@@ -630,6 +630,12 @@ describe('followup worker: финал (stage 1)', () => {
     await worker.processOne(row({ stage: 1, followup_final_text: null }), d);
     expect(d.calls.sent).toHaveLength(1);
     expect(d.calls.sent[0].text).toBe(worker.DEFAULT_FINAL_TEXT);
+  });
+
+  test('текст напоминания проходит стилевой слой: markdown убран, «вы» с заглавной', async () => {
+    const d = deps();
+    await worker.processOne(row({ stage: 1, followup_final_text: 'Если **вопросы** — пишите, я с вами' }), d);
+    expect(d.calls.sent[0].text).toBe('Если вопросы — пишите, я с Вами');
   });
 
   test('{first_name} в шаблоне разворачивается в ЛИЧНОЕ имя, а не в ФИО', async () => {
@@ -906,7 +912,7 @@ describe('напоминание после цены без приглашени
     });
     await worker.processOne(row(), d);
     expect(system).toContain('предложи подобрать удобное время для записи');
-    expect(d.calls.sent[0].text).toBe('Подобрать Вам удобное время для записи?');
+    expect(d.calls.sent[0].text).toBe('Подобрать Вам удобное окошко?');
   });
   test('skip модели и проверка выдуманного времени сохраняются', async () => {
     for (const decision of [{ action: 'skip', reason: 'разговор завершён' },

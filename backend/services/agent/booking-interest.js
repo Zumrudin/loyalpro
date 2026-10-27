@@ -9,7 +9,7 @@ const { isPureClosing } = require('./closing');
 const { parseDayPart } = require('./patient-time');
 const { resolveDateInfo } = require('./offer-attribution');
 
-const STEP_QUESTION = 'Подобрать Вам удобное время для записи?';
+const STEP_QUESTION = 'Подобрать Вам удобное окошко?';
 const GAP_MS = DEFAULT_GAP_HOURS * 60 * 60 * 1000;
 const INVITATION_RE = /(?:подобрать|подберу|подбер[её]м|подобрала|посмотреть|посмотрим|предложить|предложу|выбрать|выберем)[^.!?\n]{0,65}(?:врем|день|дат|окош|запис|консультац)|(?:записать|запишу|запишем)(?![\p{L}])|(?:хотите|можем|можно|предлагаю|приглашаю)[^.!?\n]{0,55}(?:записаться|консультацию)|(?:какой|какая|когда|какое)[^.!?\n]{0,35}(?:день|дата|время|удобн)/iu;
 const INTEREST_RE = /что\s+(?:у\s+вас\s+)?(?:входит|включ)|(?:входит|включен|включ[её]н)|как\s+(?:она\s+|он\s+|это\s+)?проход|сколько[^?!\n]{0,40}(?:длится|длительность|занимает)|расскажите\s+(?:про|об?|подробнее)|чем[^?!\n]{0,35}отлич|какой[^?!\n]{0,30}(?:эффект|результат)|(?:делаете|проводите)\s+ли/iu;
@@ -99,7 +99,7 @@ function applyContextualOffer(replies, policy) {
 
 // Remove only a standalone, generic repeated CTA. Never cut a sentence with
 // service details, a verified time or an answer to the patient's question.
-const GENERIC_INVITATION_RE = /^(?:подобрать(?:\s+вам)?(?:\s+удобное)?\s+время(?:\s+для\s+записи)?|хотите\s+записаться|записать(?:\s+вас)?(?:\s+на\s+консультацию)?|какой\s+день\s+вам\s+удобен)\?$/iu;
+const GENERIC_INVITATION_RE = /^(?:подобрать(?:\s+вам)?(?:\s+удобное)?\s+(?:время|окошко)(?:\s+для\s+записи)?|хотите\s+записаться|записать(?:\s+вас)?(?:\s+на\s+консультацию)?|какой\s+день\s+вам\s+удобен)\?$/iu;
 function removeRepeatedOffer(replies, policy) {
   if (!['already_offered', 'declined'].includes(policy.reason)) return replies;
   const out = replies.map(text => {

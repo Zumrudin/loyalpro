@@ -32,7 +32,7 @@ describe('phone-request: детерминированный запрос ном�
   });
 
   test('«ваш» в тексте нет: на канале без номера тот же текст уходит и при записи гостя', () => {
-    expect(buildPhoneRequest({})).not.toMatch(/\bваш\b/i);
+    expect(buildPhoneRequest({})).not.toMatch(/(?<![\p{L}])ваш/iu);
   });
 
   test('isNeedsPhone — строго по флагу needs_phone:true', () => {

@@ -44,6 +44,16 @@ test('серия из двух сообщений в окне дебаунса �
   expect(d.send).toHaveBeenCalledWith(meta, 'Здравствуйте!');
 });
 
+// Стилевой слой (reply-style) стоит в обёртке send ПЕРВЫМ: журнал авторства
+// хэширует отправленный текст, и эхо мессенджера принесёт именно его.
+test('стилевой слой: markdown убран и «вы» с заглавной до отправки и журнала авторства', async () => {
+  const d = deps({ orchestrator: { runDialog: jest.fn(async () => ({ replies: ['Да, **15:30** свободно, записать вас?'], escalated: false })) } });
+  dispatcher.enqueue(1, 'k', meta, d);
+  await jest.advanceTimersByTimeAsync(1000);
+  expect(d.send).toHaveBeenCalledWith(meta, 'Да, 15:30 свободно, записать Вас?');
+  expect(d.authorship.remember).toHaveBeenCalledWith(1, 'k', 'Да, 15:30 свободно, записать Вас?', 'agent');
+});
+
 test('process кладёт salonId в meta — defaultSend шлёт по аккаунту ЭТОГО салона', async () => {
   const d = deps();
   const m = { phone: '79001112233', channel: 'whatsapp', messageId: 'm1' };
@@ -109,7 +119,7 @@ test('эскалация с текстом → объявление о пере�
   await jest.advanceTimersByTimeAsync(1000);
   expect(d.orchestrator.runDialog).toHaveBeenCalledTimes(1);
   expect(d.send).toHaveBeenCalledTimes(1);
-  expect(d.send).toHaveBeenCalledWith(meta, 'Передаю вас администратору 🤍');
+  expect(d.send).toHaveBeenCalledWith(meta, 'Передаю Вас администратору 🤍');
 });
 
 test('эскалация без текста → дефолтная фраза перевода (страховка от молчания)', async () => {
@@ -319,7 +329,7 @@ test('ход с side-effect (запись создана) НЕ выбрасыв�
   await jest.advanceTimersByTimeAsync(1000);
   // Подтверждение реальной записи обязано дойти, потом ответ на новое сообщение.
   expect(d.send).toHaveBeenCalledTimes(2);
-  expect(d.send).toHaveBeenNthCalledWith(1, meta, 'Записала вас на 20:00');
+  expect(d.send).toHaveBeenNthCalledWith(1, meta, 'Записала Вас на 20:00');
   expect(d.send).toHaveBeenNthCalledWith(2, meta, 'r2');
 });
 
@@ -1032,7 +1042,7 @@ describe('gate outside-schedule → перевод живого диалога',
     expect(d.orchestrator.runDialog).not.toHaveBeenCalled();
     expect(d.escalate).toHaveBeenCalledWith(1, 'k', 'window_closed');
     expect(d.send).toHaveBeenCalledTimes(1);
-    expect(d.send.mock.calls[0][1]).toMatch(/Передаю ваш диалог администратору/);
+    expect(d.send.mock.calls[0][1]).toMatch(/Передаю Ваш вопрос администратору/);
   });
 
   test('реплика Милы 5 часов назад → тишина, как раньше', async () => {
@@ -1084,6 +1094,20 @@ describe('additional proposal delivery', () => {
     dispatcher.enqueue(1, 'k', meta, d);
     await jest.advanceTimersByTimeAsync(1000);
     expect(proposals.offered(1, { ...ctx, previousAssistantText: p.text }).id).toBe(p.id);
+  });
+  // Стилевой слой (reply-style) применяется к списку ДО markSent: транскрипт
+  // хранит то, что реально ушло, и offered() сверяет с ним deliveredText.
+  test('реплика с markdown и «вы» вокруг предложения: markSent получает финальный стиль, предложение активно', async () => {
+    const { ctx, p, d } = setup();
+    d.orchestrator.runDialog = jest.fn(async () => ({
+      replies: [`Конечно, **вот** предложение. ${p.text} Если вы согласны — подтвердите.`],
+      additionalProposalId: p.id,
+    }));
+    dispatcher.enqueue(1, 'k', meta, d);
+    await jest.advanceTimersByTimeAsync(1000);
+    const sentText = d.send.mock.calls[0][1];
+    expect(sentText).toBe(`Конечно, вот предложение. ${p.text} Если Вы согласны — подтвердите.`);
+    expect(proposals.offered(1, { ...ctx, previousAssistantText: sentText }).id).toBe(p.id);
   });
   test('missing delivery receipt never activates the draft', async () => {
     const { ctx, p, d } = setup();

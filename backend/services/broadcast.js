@@ -21,13 +21,14 @@
 // failed и идём дальше.
 
 const axios = require('axios');
+const config = require('../config');
 const { db, botDb } = require('../db');
 const { createLogger } = require('../logger');
 
 const log = createLogger('Broadcast');
 
 const TOKEN = process.env.TELEGRAM_BOT_TOKEN;
-const API   = TOKEN ? `https://api.telegram.org/bot${TOKEN}` : null;
+const API   = TOKEN ? `${config.TELEGRAM_API_BASE}/bot${TOKEN}` : null;
 
 const SEND_INTERVAL_MS = 60;   // ~16 msg/sec — комфортно ниже лимита Telegram (30/sec)
 const WORKER_TICK_MS   = 2500; // как часто воркер опрашивает БД на новые задания
@@ -444,4 +445,5 @@ module.exports = {
   _resolveAudience: resolveAudience,
   _renderTemplate:  renderTemplate,
   _normPhone:       normPhone,
+  _sendOne:         sendOne,
 };

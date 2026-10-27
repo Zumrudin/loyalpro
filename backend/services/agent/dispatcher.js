@@ -19,6 +19,7 @@ const chatPersist = require('../chat-persist');
 const deliveryWatchdog = require('./delivery-watchdog');
 const priceListData = require('./price-list-data');
 const priceList = require('./price-list');
+const replyStyle = require('./reply-style');
 const followupQueueDefault = require('./followup-queue');
 const windowHandover = require('./window-handover');
 const historyDefault = require('./history');
@@ -109,7 +110,11 @@ async function process(salonId, dialogKey, meta, opts = {}) {
     try { await persistOwnFile(salonId, dialogKey, m, att, out); }
     catch (e) { logger.warn(`dialog ${dialogKey}: фото прайса не легло в «Чат» (${e.message})`); }
   };
-  const send = async (m, text) => {
+  const send = async (m, rawText) => {
+    // Стилевой слой (reply-style) — ПЕРВЫМ: журнал авторства, pending-replies,
+    // «Чат» и сторож доставки обязаны видеть ТОТ текст, что ушёл пациенту;
+    // эхо мессенджера принесёт именно его.
+    const text = replyStyle.applyReplyStyle(rawText);
     // Журнал авторства — ДО отправки: эхо шлюза может прийти раньше возврата
     // rawSend. Без await: доставка не ждёт служебной записи. remember не бросает.
     authorLog.remember(salonId, dialogKey, text, 'agent');
@@ -140,7 +145,11 @@ async function process(salonId, dialogKey, meta, opts = {}) {
   // Мила повторила бы пациенту уже сказанное (включая приветствие), то есть ровно
   // тот инцидент, ради которого журнал и заводится. Ни компилятор, ни тесты этого
   // не поймают, поэтому флаг выставляет сама естественная запись отправки.
-  const deliverReplies = async (list, attachments, priceListUrl) => {
+  const deliverReplies = async (rawList, attachments, priceListUrl) => {
+    // Слой применяется ДО цикла: в markSent обязан уйти тот же текст, что
+    // отправлен (offered() сверяет deliveredText с транскриптом). Внутри send
+    // слой повторится — он идемпотентен.
+    const list = (rawList || []).map(t => replyStyle.applyReplyStyle(t));
     let acceptedAll = true;
     for (const text of list) {
       const receipt = await send(meta, text);

@@ -38,6 +38,14 @@ test('prepare uses verified catalog and slots without writing CRM', async () => 
   expect(p.proposal_text).toContain('Все прежние записи сохраняем');
   expect(booking.createBookingRecord).not.toHaveBeenCalled();
 });
+// Стилевой слой (reply-style) применяется к реплике ДО отправки, а markSent
+// проверяет includes(p.text): текст предложения обязан храниться в той же форме.
+test('текст предложения хранится уже в финальном стиле — markSent сверяет его с отправленным', () => {
+  const ctx = context();
+  const p = proposals.prepare(1, ctx, input, 'Предлагаю **дополнительный визит**, вы согласны?');
+  expect(p.text).toBe('Предлагаю дополнительный визит, Вы согласны?');
+  expect(proposals.markSent(1, ctx.dialogKey, p.id, ['Конечно. Предлагаю дополнительный визит, Вы согласны?'], nowMs)).toBe(true);
+});
 test('delivered offer delegates consent despite negation of old transfer', async () => {
   const { ctx, args } = await delivered();
   expect((await create.run(1, args, ctx)).created).toBe(true);

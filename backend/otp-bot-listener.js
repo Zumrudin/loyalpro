@@ -11,7 +11,7 @@
 // codes directly into the chat without the user opening the bot again.
 // ============================================================
 
-require('./config'); // ensures dotenv is loaded
+const config = require('./config'); // ensures dotenv is loaded
 const axios = require('axios');
 const { db } = require('./db');
 const { createLogger } = require('./logger');
@@ -29,7 +29,7 @@ if (!TOKEN) {
   process.exit(1);
 }
 
-const API = `https://api.telegram.org/bot${TOKEN}`;
+const API = `${config.TELEGRAM_API_BASE}/bot${TOKEN}`;
 const POLL_TIMEOUT_S = 25;
 const ERROR_BACKOFF_MS = 5000;
 

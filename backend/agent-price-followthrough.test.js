@@ -190,7 +190,7 @@ describe('реальные чанки КБ → итоговая реплика',
     const fact = pickServiceFact(REAL.volnewmer, ask);
     const r = pf.applyPriceFollowthrough(['Volnewmer — от 81 000 ₽ за 400 линий.'], { patientLastText: ask, serviceFact: fact });
     expect(r.replies).toEqual(['Volnewmer — от 81 000 ₽ за 400 линий. '
-      + 'Подобрать Вам удобное время для записи?']);
+      + 'Подобрать Вам удобное окошко?']);
   });
 
   test('чистка лица: подходящий факт не приклеивается к ответу кодом', () => {
@@ -198,7 +198,7 @@ describe('реальные чанки КБ → итоговая реплика',
     const fact = pickServiceFact(REAL.cleaning, ask);
     const r = pf.applyPriceFollowthrough(['Комбинированная чистка лица стоит 6 500 ₽.'], { patientLastText: ask, serviceFact: fact });
     expect(r.replies).toEqual(['Комбинированная чистка лица стоит 6 500 ₽. '
-      + 'Подобрать Вам удобное время для записи?']);
+      + 'Подобрать Вам удобное окошко?']);
   });
 });
 

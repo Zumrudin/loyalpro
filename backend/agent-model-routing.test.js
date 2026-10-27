@@ -86,7 +86,8 @@ const config = { AGENT_PROVIDER: 'codex-relay', POLZA_CHAT_MODEL: 'test-polza' }
 test('new salon inherits configured provider without a DB write', async () => {
   const db = { oneOrNone: jest.fn(async () => null), query: jest.fn() };
   const status = await createStore({ db, config }).status(17, 4);
-  expect(status).toMatchObject({ active: 'gpt', model: 'gpt-6-sol', notice: null });
+  expect(status).toMatchObject({ active: 'gpt', model: 'gpt-6-astra', notice: null });
+  expect(status.choices.find(c => c.id === 'gpt')).toMatchObject({ title: 'GPT-6 Astra', model: 'gpt-6-astra' });
   expect(db.query).not.toHaveBeenCalled();
   expect(db.oneOrNone.mock.calls.map(c => c[1])).toEqual([[17], [17, 4]]);
 });

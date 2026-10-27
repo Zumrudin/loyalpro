@@ -588,8 +588,8 @@ const FABRICATION_TYPES = new Set([
   'false_unavailability', 'alien_time_attribution', 'fabricated_unavailability_reason',
   'unverified_offer_date',
 ]);
-const SAFE_FALLBACK_TEXT = 'Понимаю вас. Подскажите, пожалуйста, какой день и какая половина дня (утро, день или вечер) ' +
-  'вам удобнее — посмотрю свободное время и предложу варианты.';
+const SAFE_FALLBACK_TEXT = 'Понимаю Вас. Напишите, какой день и половина дня Вам удобнее, '
+  + 'и я посмотрю свободные окошки.';
 function fabricationViolations(violations) {
   return (violations || []).filter(v => FABRICATION_TYPES.has(v.type));
 }

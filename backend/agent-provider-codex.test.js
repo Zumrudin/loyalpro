@@ -62,7 +62,7 @@ test('isolates config, sends input through stdin, preserves provider contract', 
   expect(result).toMatchObject({ text: answer.text, toolCalls: [], stopReason: 'stop',
     assistantMsg: { role: 'assistant', content: answer.text } });
   const [, args, options] = run.mock.calls[1];
-  expect(args.slice(args.indexOf('--model'), args.indexOf('--model') + 2)).toEqual(['--model', 'gpt-6-sol']);
+  expect(args.slice(args.indexOf('--model'), args.indexOf('--model') + 2)).toEqual(['--model', 'gpt-6-astra']);
   expect(args).not.toContain('another-model');
   expect(args).toEqual(expect.arrayContaining(['--ignore-user-config', '--ephemeral', 'read-only', 'forced_login_method="chatgpt"']));
   expect(args.join(' ')).not.toContain('Synthetic prompt');

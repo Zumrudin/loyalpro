@@ -1,11 +1,12 @@
 const axios = require('axios');
+const config = require('../config');
 const { db } = require('../db');
 const { createLogger } = require('../logger');
 
 const log = createLogger('TelegramOtp');
 
 const TOKEN = process.env.TELEGRAM_BOT_TOKEN;
-const API = TOKEN ? `https://api.telegram.org/bot${TOKEN}` : null;
+const API = TOKEN ? `${config.TELEGRAM_API_BASE}/bot${TOKEN}` : null;
 
 async function sendMessage(chatId, text) {
   if (!API) throw new Error('TELEGRAM_BOT_TOKEN is not configured');

@@ -9,7 +9,7 @@ const os = require('node:os');
 const path = require('node:path');
 
 const MAX_BYTES = 2 * 1024 * 1024;
-const MODEL = 'gpt-6-sol';
+const MODEL = 'gpt-6-astra';
 const DISABLED_FEATURES = [
   'shell_tool', 'unified_exec', 'shell_snapshot', 'apps', 'plugins', 'remote_plugin',
   'browser_use', 'computer_use', 'image_generation', 'view_image', 'hooks',

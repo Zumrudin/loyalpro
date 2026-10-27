@@ -351,6 +351,8 @@ describe('buildSystemPrompt', () => {
   test('образец приветствия и запрет тавтологии', () => {
     const p = buildSystemPrompt({ salonName: 'PERI CLINIC' });
     expect(p).toContain('виртуальный администратор PERI CLINIC');
+    expect(p).toContain('Здравствуйте!🤍\nЭто Мила, виртуальный администратор PERI CLINIC.\n\nПодскажите, как могу к Вам обращаться');
+    expect(p).not.toContain('Я Мила, виртуальный администратор');
     expect(p).toMatch(/тавтолог/i);
   });
 
@@ -380,6 +382,25 @@ describe('buildSystemPrompt', () => {
     expect(p).toMatch(/Я нашла подходящие услуги/);
     expect(p).toMatch(/Для этого нам подойдут/);
     expect(p).toMatch(/НЕ вываливай нумерованным списком с жирными названиями/i);
+  });
+
+  // 27.10.2026: TDLib-шлюз и MAX показывают markdown буквально, а правило само
+  // велело «жирным выделяй время» — правка существующего правила, не новое.
+  test('тон: без markdown-разметки и с эмодзи администраторов', () => {
+    const p = buildSystemPrompt({ salonName: 'PERI CLINIC' });
+    expect(p).not.toMatch(/жирным выделяй/);
+    expect(p).toMatch(/без markdown-разметки/i);
+    expect(p).toContain('(🤍, ✨)');
+    expect(p).not.toContain('(🌸, 🤍, ✨, 🌿)');
+    expect(p).not.toContain('«Я Мила, виртуальный администратор»');
+    expect(p).not.toContain('обращаться? 🌸');
+    // Блок «НАЧАЛО НОВОЙ ПЕРЕПИСКИ»: обе ветки цитируют формулу представления.
+    const gap = buildSystemPrompt({ salonName: 'PERI CLINIC', session: { newSession: true, gapText: '2 дня' }, firstAgentReply: true });
+    expect(gap).toContain('«Это Мила, виртуальный администратор»');
+    expect(gap).not.toContain('«Я Мила, виртуальный администратор»');
+    const gapRepeat = buildSystemPrompt({ salonName: 'PERI CLINIC', session: { newSession: true, gapText: '2 дня' } });
+    expect(gapRepeat).toContain('Представляться второй раз («Это Мила, виртуальный администратор»)');
+    expect(gapRepeat).not.toContain('«Я Мила, виртуальный администратор»');
   });
 
   test('относительные даты: называть день недели и число, не «завтра»', () => {
@@ -489,17 +510,17 @@ describe('buildSystemPrompt', () => {
     test('известный пациент: образец с обращением по имени, БЕЗ вопроса об имени', () => {
       const p = buildSystemPrompt({ clientName: 'Анна' });
       expect(p).toContain('Здравствуйте, Анна!');
-      expect(p).not.toContain('как могу к вам обращаться');
+      expect(p).not.toMatch(/как могу к вам обращаться/i);
     });
     test('новый пациент с известным номером: образец объединяет имя и цель одним сообщением', () => {
       const p = buildSystemPrompt({ phoneKnown: true });
-      expect(p).toContain('ОДНИМ сообщением, больше вопросов не задавай');
-      expect(p).toContain('как могу к вам обращаться и на какую процедуру хотели бы записаться');
+      expect(p).toContain('одним сообщением, больше вопросов не задавай');
+      expect(p).toContain('как могу к Вам обращаться и на какую процедуру хотели бы записаться');
     });
     test('канал без номера: образец тоже спрашивает имя', () => {
       const p = buildSystemPrompt({});
-      expect(p).toContain('ОДНИМ сообщением, больше вопросов не задавай');
-      expect(p).toContain('как могу к вам обращаться и на какую процедуру хотели бы записаться');
+      expect(p).toContain('одним сообщением, больше вопросов не задавай');
+      expect(p).toContain('как могу к Вам обращаться и на какую процедуру хотели бы записаться');
     });
   });
 
@@ -908,7 +929,7 @@ describe('фраза эскалации по окну администратор
   test('adminOffHours → без обещания немедленного ответа', () => {
     const p = buildSystemPrompt({ adminOffHours: true });
     expect(p).not.toMatch(/с минуты на минуту/);
-    expect(p).toMatch(/в начале рабочего дня/);
+    expect(p).toMatch(/ответит Вам с утра/);
     expect(p).toMatch(/НЕ обещай, что администратор ответит немедленно/i);
   });
 });

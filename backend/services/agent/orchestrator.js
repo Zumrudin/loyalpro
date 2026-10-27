@@ -379,12 +379,12 @@ function summarizeToolInput(input) {
 // create_booking дата+время достаточны, для прочих write-инструментов — общее «Готово».
 function buildWriteConfirmation(lastWrite) {
   const input = (lastWrite && lastWrite.input) || {};
-  const who = String(input.client_name || '').trim() || 'вас';
+  const who = String(input.client_name || '').trim() || 'Вас';
   if (lastWrite && lastWrite.tool === 'create_booking' && input.datetime) {
     const slot = formatSlotMoscow(input.datetime);
-    if (slot) return `Готово! Записала ${who} на ${slot.date} в ${slot.time} ✅ Будем ждать 🤍`;
+    if (slot) return `Записала ${who} на ${slot.date} в ${slot.time}, будем ждать 🤍`;
   }
-  return 'Готово, всё оформила ✅';
+  return 'Готово, всё оформила 🤍';
 }
 
 // Прогнать один ход диалога. Возвращает { replies, escalated, sideEffect }.
@@ -1092,8 +1092,10 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
       .filter(m => m.role === 'user')
       .map(m => stripAllStamps(String(m.content || '')).trim());
     const bookingIntent = bookingWriteGuard.patientIntent(toolCtx.patientRecentTexts);
+    // Запасной признак — только сообщения ПАЦИЕНТА текущей переписки
+    // (инцидент 2026-10-27: старое автоуведомление «запись перенесена» в окне).
     toolCtx.rescheduleRequested = bookingIntent === 'reschedule' || (!bookingIntent
-      && messages.some(m => /перенес|перенести|перенос|перезапис/iu.test(String(m.content || ''))));
+      && bookingWriteGuard.rescheduleMentioned({ conversation, messages }));
     // Хвост диалога для контекстных проверок инструментов. Согласие на перенос
     // проверяется отдельно по previousAssistantText и patientLastText.
     toolCtx.recentDialogText = messages.slice(-3)

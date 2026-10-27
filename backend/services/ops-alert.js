@@ -26,7 +26,7 @@ function isPaymentError(err) {
 function telegramTransport({ token, chatId }) {
   if (!token || !chatId) return null;
   return async (text) => {
-    await axios.post(`https://api.telegram.org/bot${token}/sendMessage`,
+    await axios.post(`${config.TELEGRAM_API_BASE}/bot${token}/sendMessage`,
       { chat_id: chatId, text: text.slice(0, 3500), disable_web_page_preview: true },
       { timeout: 8000 });
   };

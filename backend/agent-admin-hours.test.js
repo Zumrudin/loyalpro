@@ -30,16 +30,24 @@ describe('admin-hours', () => {
   });
 
   describe('фразы эскалации', () => {
-    test('в рабочее время — прежние тексты («с минуты на минуту»)', () => {
+    test('в рабочее время — «с минуты на минуту»', () => {
       expect(ah.handoverText(false)).toBe(
-        'Передаю ваш диалог администратору клиники — он подключится с минуты на минуту 🤍');
+        'Передаю Ваш вопрос администратору, он подключится с минуты на минуту 🤍');
       expect(ah.silentFallbackText(false)).toMatch(/с минуты на минуту/);
     });
     test('вне рабочего времени — без обещания немедленного ответа', () => {
       expect(ah.handoverText(true)).not.toMatch(/с минуты на минуту/);
-      expect(ah.handoverText(true)).toMatch(/в начале рабочего дня/);
+      expect(ah.handoverText(true)).toMatch(/с утра/);
       expect(ah.silentFallbackText(true)).not.toMatch(/с минуты на минуту/);
-      expect(ah.silentFallbackText(true)).toMatch(/в начале рабочего дня/);
+      expect(ah.silentFallbackText(true)).toMatch(/с утра/);
+    });
+    // Стиль администраторов (27.10.2026): «Вы» с заглавной, перевод объявлен
+    // общим признаком — иначе диспетчер дошлёт вторую фразу.
+    test('все четыре фразы объявляют перевод и обращаются на «Вы» с заглавной', () => {
+      for (const t of [ah.handoverText(false), ah.handoverText(true), ah.silentFallbackText(false), ah.silentFallbackText(true)]) {
+        expect(t).toMatch(ah.HANDOVER_ANNOUNCED_RE);
+        expect(t).not.toMatch(/(?<![\p{L}])(вы|вас|вам|ваш)(?![\p{L}])/u);
+      }
     });
   });
 

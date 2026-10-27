@@ -4,6 +4,7 @@
 // new offer, never restores consent from model arguments or a slot lookup.
 const { randomUUID } = require('crypto');
 const { stripAllStamps } = require('./transcript-time');
+const { applyReplyStyle } = require('./reply-style');
 const TTL_MS = 30 * 60 * 1000;
 const MAX_DIALOGS = 500;
 const store = new Map();
@@ -26,7 +27,7 @@ function prepare(salon, ctx, input, text) {
     staff_yc_id: input.staff_yc_id, service_yc_id: input.service_yc_id,
     datetime: input.datetime, seance_length: input.seance_length,
     phone: phoneKey(ctx.clientPhone), existing: snapshot(ctx.liveBookings),
-    text, deliveredText: null, sentAt: null, expiresAt: (ctx.nowMs || Date.now()) + TTL_MS });
+    text: applyReplyStyle(text), deliveredText: null, sentAt: null, expiresAt: (ctx.nowMs || Date.now()) + TTL_MS });
   const k = key(salon, ctx.dialogKey);
   store.delete(k);
   store.set(k, p);
