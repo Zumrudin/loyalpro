@@ -50,6 +50,23 @@ describe('stripMarkdown', () => {
   test('***жирный курсив*** и типографские кавычки', () => {
     expect(s.stripMarkdown('***важно*** и „**точно**“')).toBe('важно и „точно“');
   });
+  test('одиночные маркеры не вплотную к тексту — не разметка', () => {
+    expect(s.stripMarkdown('2 * 3 * 4 и a _ b _ c')).toBe('2 * 3 * 4 и a _ b _ c');
+  });
+  test('буква снаружи одиночной звёздочки — не разметка', () => {
+    expect(s.stripMarkdown('a*b*c')).toBe('a*b*c');
+  });
+  test('вложение в три слоя снимается за один вызов', () => {
+    expect(s.stripMarkdown('**_*x*_**')).toBe('x');
+  });
+  test('уже стоящий «•» не трогаем', () => {
+    expect(s.stripMarkdown('• пункт\n•  второй')).toBe('• пункт\n•  второй');
+  });
+  test('проход повторяется, пока текст меняется (до 10 проходов)', () => {
+    expect(s.stripMarkdown('# # # # a')).toBe('a');
+    expect(s.stripMarkdown('````a````')).toBe('a');
+    expect(s.applyReplyStyle(s.applyReplyStyle('````a````'))).toBe(s.applyReplyStyle('````a````'));
+  });
 });
 
 describe('capitalizeAddress', () => {
@@ -62,6 +79,17 @@ describe('capitalizeAddress', () => {
   });
   test('уже заглавные не меняются', () => {
     expect(s.capitalizeAddress('Вы записаны, Ваш визит')).toBe('Вы записаны, Ваш визит');
+  });
+  test('каждая из 17 форм обращения отдельным словом — с заглавной', () => {
+    expect(s.ADDRESS_FORMS).toHaveLength(17);
+    expect(s.ADDRESS_FORMS).toEqual(expect.arrayContaining(
+      ['вы', 'ваше', 'ваши', 'вашу', 'вашей', 'вашего', 'вашему', 'ваших', 'вашими', 'вашею']));
+    for (const form of s.ADDRESS_FORMS) {
+      expect(s.capitalizeAddress('и ' + form + ' тоже')).toBe('и ' + form[0].toUpperCase() + form.slice(1) + ' тоже');
+    }
+  });
+  test('левая граница: форма в конце слова не трогается', () => {
+    expect(s.capitalizeAddress('готовы, правы, здоровы, навас')).toBe('готовы, правы, здоровы, навас');
   });
 });
 
@@ -91,5 +119,11 @@ describe('applyReplyStyle', () => {
     } finally {
       if (saved === undefined) delete process.env.AGENT_REPLY_STYLE; else process.env.AGENT_REPLY_STYLE = saved;
     }
+  });
+  test('не-строка → пустая строка во всех трёх функциях', () => {
+    expect(s.applyReplyStyle(42)).toBe('');
+    expect(s.applyReplyStyle({})).toBe('');
+    expect(s.stripMarkdown(['**a**'])).toBe('');
+    expect(s.capitalizeAddress(42)).toBe('');
   });
 });

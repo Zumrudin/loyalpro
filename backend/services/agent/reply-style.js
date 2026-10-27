@@ -1,9 +1,12 @@
 'use strict';
 
 // ── Стилевой слой исходящих реплик Милы ─────────────────────────────────────
-// Чистый модуль: ни БД, ни HTTP. Применяется в ОДНОЙ точке диспетчера (обёртка
-// send) и в воркере напоминаний о себе — спека
-// docs/superpowers/specs/2026-10-27-mila-human-tone-design.md, раздел 4.
+// Чистый модуль: ни БД, ни HTTP. Четыре точки применения (спека
+// docs/superpowers/specs/2026-10-27-mila-human-tone-design.md, раздел 4.2):
+// обёртка send диспетчера; предварительный проход по списку реплик в
+// deliverReplies — чтобы в markSent ушёл тот же текст, что и пациенту;
+// additional-proposals.prepare() — текст предложения доп. визита; воркер
+// напоминаний о себе.
 //
 // ЗАЧЕМ: замер прода 27.10.2026 — markdown в 28 % реплик (`**15:30**`,
 // `*   пункт`), а TDLib-шлюз шлёт formattedText с пустым entities и MAX —
@@ -43,12 +46,13 @@ const BOLD_UNDERSCORE_RE = new RegExp(String.raw`${UNDERSCORE_OPEN}__([^_\n][^_\
 const ITALIC_STAR_RE = new RegExp(String.raw`${STAR_OPEN}\*(?=\S)([^*\n]+?)(?<=\S)\*${STAR_CLOSE}`, 'gu');
 const ITALIC_UNDERSCORE_RE = new RegExp(String.raw`${UNDERSCORE_OPEN}_(?=\S)([^_\n]+?)(?<=\S)_${UNDERSCORE_CLOSE}`, 'gu');
 
-// Проход повторяется, пока текст меняется, но не больше трёх раз: вложенные
-// маркеры снимаются за ОДИН вызов («_*важно*_» → «*важно*» → «важно»,
-// «``15:30``» → «`15:30`» → «15:30»). Без этого повторный вызов снимал бы ещё
-// слой, а в диспетчере слой применяется дважды. Вложенность глубже трёх слоёв
-// дочистит следующий вызов.
-const MAX_PASSES = 3;
+// Проход повторяется, пока текст меняется, до 10 раз: вложенные маркеры
+// снимаются за ОДИН вызов («_*важно*_» → «*важно*» → «важно», «``15:30``» →
+// «`15:30`» → «15:30», «# # a» → «# a» → «a»). Без этого повторный вызов снимал
+// бы ещё слой, а в диспетчере слой применяется дважды. Цикл сходится: каждый
+// проход либо укорачивает текст, либо меняет маркер списка на «•», который
+// повторно не срабатывает; потолок — страховка.
+const MAX_PASSES = 10;
 
 function isEnabled(env) {
   // null/undefined → боевое окружение процесса.
@@ -77,8 +81,10 @@ function stripPass(t) {
   return t;
 }
 
+// Не-строка → '' во всех трёх функциях (контракт спеки): иначе объект ушёл бы
+// пациенту как «[object Object]», а число — цифрами вместо реплики.
 function stripMarkdown(input) {
-  let t = String(input == null ? '' : input);
+  let t = typeof input === 'string' ? input : '';
   for (let i = 0; i < MAX_PASSES; i++) {
     const next = stripPass(t);
     if (next === t) break;
@@ -88,16 +94,17 @@ function stripMarkdown(input) {
 }
 
 function capitalizeAddress(input) {
-  return String(input == null ? '' : input).replace(ADDRESS_RE, m => m[0].toUpperCase() + m.slice(1));
+  const t = typeof input === 'string' ? input : '';
+  return t.replace(ADDRESS_RE, m => m[0].toUpperCase() + m.slice(1));
 }
 
-// Идемпотентна: f(f(x)) === f(x), пока вложенность маркеров не глубже трёх
-// слоёв (MAX_PASSES) — внутри диспетчера слой применяется дважды (список
-// реплик и обёртка send), и это закреплено тестом.
+// Идемпотентна: f(f(x)) === f(x), пока тексту хватает MAX_PASSES проходов —
+// внутри диспетчера слой применяется дважды (список реплик и обёртка send), и
+// это закреплено тестом.
 function applyReplyStyle(text, opts) {
   // null от вызывающего не должен ронять отправку реплики.
   opts = opts || {};
-  const raw = String(text == null ? '' : text);
+  const raw = typeof text === 'string' ? text : '';
   if (!isEnabled(opts.env)) return raw;
   return capitalizeAddress(stripMarkdown(raw));
 }
