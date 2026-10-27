@@ -957,7 +957,7 @@ describe('runDialog', () => {
       deps, salonName: 'PERI CLINIC', ctx: { phone: '79165370505' },
     });
     expect(out.replies[0]).toBe(
-      'Здравствуйте, Юлия! Я Мила, виртуальный администратор PERI CLINIC.\n\n'
+      'Здравствуйте, Юлия!🤍\nЭто Мила, виртуальный администратор PERI CLINIC.\n\n'
       + 'К сожалению, 16:00 занято — есть 18:30.');
   });
 
@@ -2216,7 +2216,7 @@ describe('представление при первой реплике Милы
     deps.provider.createMessage.mockResolvedValueOnce(textResp('Здравствуйте, Марина! 👋\n\nСейчас проверю.'));
     const out = await orchestrator.runDialog(1, 'k', { deps, salonName: 'PERI CLINIC' });
     expect(out.replies).toEqual([
-      'Здравствуйте, Марина! 👋 Я Мила, виртуальный администратор PERI CLINIC.\n\nСейчас проверю.',
+      'Здравствуйте, Марина! 👋\nЭто Мила, виртуальный администратор PERI CLINIC.\n\nСейчас проверю.',
     ]);
   });
 
@@ -2256,7 +2256,7 @@ describe('представление при первой реплике Милы
     });
     deps.provider.createMessage.mockResolvedValueOnce(textResp('Конечно, на какую процедуру?'));
     const out = await orchestrator.runDialog(1, 'k', { deps, salonName: 'PERI CLINIC' });
-    expect(out.replies[0].match(/Я Мила/g)).toHaveLength(1);
+    expect(out.replies[0].match(/(?:Я|Это) Мила/g)).toHaveLength(1);
     expect(deps.history.hasAgentEverWritten).not.toHaveBeenCalled();
   });
 

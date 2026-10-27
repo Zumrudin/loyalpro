@@ -351,6 +351,8 @@ describe('buildSystemPrompt', () => {
   test('образец приветствия и запрет тавтологии', () => {
     const p = buildSystemPrompt({ salonName: 'PERI CLINIC' });
     expect(p).toContain('виртуальный администратор PERI CLINIC');
+    expect(p).toContain('Здравствуйте!🤍\nЭто Мила, виртуальный администратор PERI CLINIC.\n\nПодскажите, как могу к Вам обращаться');
+    expect(p).not.toContain('Я Мила, виртуальный администратор');
     expect(p).toMatch(/тавтолог/i);
   });
 
@@ -489,17 +491,17 @@ describe('buildSystemPrompt', () => {
     test('известный пациент: образец с обращением по имени, БЕЗ вопроса об имени', () => {
       const p = buildSystemPrompt({ clientName: 'Анна' });
       expect(p).toContain('Здравствуйте, Анна!');
-      expect(p).not.toContain('как могу к вам обращаться');
+      expect(p).not.toMatch(/как могу к вам обращаться/i);
     });
     test('новый пациент с известным номером: образец объединяет имя и цель одним сообщением', () => {
       const p = buildSystemPrompt({ phoneKnown: true });
-      expect(p).toContain('ОДНИМ сообщением, больше вопросов не задавай');
-      expect(p).toContain('как могу к вам обращаться и на какую процедуру хотели бы записаться');
+      expect(p).toContain('одним сообщением, больше вопросов не задавай');
+      expect(p).toContain('как могу к Вам обращаться и на какую процедуру хотели бы записаться');
     });
     test('канал без номера: образец тоже спрашивает имя', () => {
       const p = buildSystemPrompt({});
-      expect(p).toContain('ОДНИМ сообщением, больше вопросов не задавай');
-      expect(p).toContain('как могу к вам обращаться и на какую процедуру хотели бы записаться');
+      expect(p).toContain('одним сообщением, больше вопросов не задавай');
+      expect(p).toContain('как могу к Вам обращаться и на какую процедуру хотели бы записаться');
     });
   });
 
