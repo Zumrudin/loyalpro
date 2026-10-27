@@ -912,7 +912,7 @@ describe('напоминание после цены без приглашени
     });
     await worker.processOne(row(), d);
     expect(system).toContain('предложи подобрать удобное время для записи');
-    expect(d.calls.sent[0].text).toBe('Подобрать Вам удобное время для записи?');
+    expect(d.calls.sent[0].text).toBe('Подобрать Вам удобное окошко?');
   });
   test('skip модели и проверка выдуманного времени сохраняются', async () => {
     for (const decision of [{ action: 'skip', reason: 'разговор завершён' },

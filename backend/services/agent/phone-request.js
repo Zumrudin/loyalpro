@@ -60,7 +60,7 @@ function buildPhoneRequest({ datetime, allowedTimes } = {}) {
   const slot = datetime ? formatSlotMoscow(datetime) : null;
   const timeOk = slot && allowedTimes && typeof allowedTimes.has === 'function' && allowedTimes.has(slot.time);
   const what = timeOk ? `${slot.date} в ${slot.time}` : 'это время';
-  return `Чтобы закрепить за вами ${what}, подскажите, пожалуйста, контактный номер телефона 🤍`;
+  return `Чтобы закрепить ${what}, напишите, пожалуйста, номер телефона 🤍`;
 }
 
 module.exports = { NEEDS_PHONE_ERROR, PROMPT_RULE_MARKER, isNeedsPhone, buildPhoneRequest };

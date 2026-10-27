@@ -379,12 +379,12 @@ function summarizeToolInput(input) {
 // create_booking дата+время достаточны, для прочих write-инструментов — общее «Готово».
 function buildWriteConfirmation(lastWrite) {
   const input = (lastWrite && lastWrite.input) || {};
-  const who = String(input.client_name || '').trim() || 'вас';
+  const who = String(input.client_name || '').trim() || 'Вас';
   if (lastWrite && lastWrite.tool === 'create_booking' && input.datetime) {
     const slot = formatSlotMoscow(input.datetime);
-    if (slot) return `Готово! Записала ${who} на ${slot.date} в ${slot.time} ✅ Будем ждать 🤍`;
+    if (slot) return `Записала ${who} на ${slot.date} в ${slot.time}, будем ждать 🤍`;
   }
-  return 'Готово, всё оформила ✅';
+  return 'Готово, всё оформила 🤍';
 }
 
 // Прогнать один ход диалога. Возвращает { replies, escalated, sideEffect }.

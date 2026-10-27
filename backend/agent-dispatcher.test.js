@@ -1042,7 +1042,7 @@ describe('gate outside-schedule → перевод живого диалога',
     expect(d.orchestrator.runDialog).not.toHaveBeenCalled();
     expect(d.escalate).toHaveBeenCalledWith(1, 'k', 'window_closed');
     expect(d.send).toHaveBeenCalledTimes(1);
-    expect(d.send.mock.calls[0][1]).toMatch(/Передаю Ваш диалог администратору/);
+    expect(d.send.mock.calls[0][1]).toMatch(/Передаю Ваш вопрос администратору/);
   });
 
   test('реплика Милы 5 часов назад → тишина, как раньше', async () => {

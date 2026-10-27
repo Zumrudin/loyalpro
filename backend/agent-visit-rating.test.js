@@ -110,7 +110,7 @@ describe('тексты ответов', () => {
     expect(handoverText(true)).toMatch(HANDOVER_ANNOUNCED_RE);
   });
   test('ночью не обещаем скорый ответ — как handoverText в admin-hours', () => {
-    expect(buildApology({ adminOff: true })).toMatch(/рабочего дня/i);
-    expect(buildApology({ adminOff: false })).not.toMatch(/рабочего дня/i);
+    expect(buildApology({ adminOff: true })).toMatch(/с утра/);
+    expect(buildApology({ adminOff: false })).not.toMatch(/с утра/);
   });
 });

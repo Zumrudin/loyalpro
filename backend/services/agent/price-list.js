@@ -144,7 +144,7 @@ function renderPriceListBlock(index) {
 function photoFailureText(url) {
   const link = String(url || '').trim();
   const tail = link ? ` Полный прайс есть на сайте: ${link}.` : '';
-  return `Прошу прощения, фото прайса не отправилось.${tail} Напишите, пожалуйста, какая процедура вас интересует, — подскажу стоимость текстом.`;
+  return `Простите, фото прайса не отправилось.${tail} Напишите, какая процедура Вас интересует, и я подскажу стоимость.`;
 }
 
 module.exports = {
