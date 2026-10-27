@@ -384,6 +384,25 @@ describe('buildSystemPrompt', () => {
     expect(p).toMatch(/НЕ вываливай нумерованным списком с жирными названиями/i);
   });
 
+  // 27.10.2026: TDLib-шлюз и MAX показывают markdown буквально, а правило само
+  // велело «жирным выделяй время» — правка существующего правила, не новое.
+  test('тон: без markdown-разметки и с эмодзи администраторов', () => {
+    const p = buildSystemPrompt({ salonName: 'PERI CLINIC' });
+    expect(p).not.toMatch(/жирным выделяй/);
+    expect(p).toMatch(/без markdown-разметки/i);
+    expect(p).toContain('(🤍, ✨)');
+    expect(p).not.toContain('(🌸, 🤍, ✨, 🌿)');
+    expect(p).not.toContain('«Я Мила, виртуальный администратор»');
+    expect(p).not.toContain('обращаться? 🌸');
+    // Блок «НАЧАЛО НОВОЙ ПЕРЕПИСКИ»: обе ветки цитируют формулу представления.
+    const gap = buildSystemPrompt({ salonName: 'PERI CLINIC', session: { newSession: true, gapText: '2 дня' }, firstAgentReply: true });
+    expect(gap).toContain('«Это Мила, виртуальный администратор»');
+    expect(gap).not.toContain('«Я Мила, виртуальный администратор»');
+    const gapRepeat = buildSystemPrompt({ salonName: 'PERI CLINIC', session: { newSession: true, gapText: '2 дня' } });
+    expect(gapRepeat).toContain('Представляться второй раз («Это Мила, виртуальный администратор»)');
+    expect(gapRepeat).not.toContain('«Я Мила, виртуальный администратор»');
+  });
+
   test('относительные даты: называть день недели и число, не «завтра»', () => {
     const p = buildSystemPrompt({});
     expect(p).toMatch(/ОТНОСИТЕЛЬНЫЕ ДАТЫ — НЕ ОШИБАЙСЯ В ДНЯХ/i);
