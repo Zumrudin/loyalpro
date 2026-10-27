@@ -1,5 +1,8 @@
 'use strict';
 const fs = require('node:fs');
+// Запасной ответ reply-guard берём из модуля: его текст меняется (27.10.2026),
+// а копия строки здесь молча считала бы 0.
+const { SAFE_FALLBACK_TEXT } = require('../services/agent/reply-guard');
 
 function summarize(report) {
   const cases = report.cases || [];
@@ -19,7 +22,7 @@ function summarize(report) {
     internalInstructionReplies: cases.filter(c => /служебн.{0,30}инструк|системн.{0,30}промпт|внутренн.{0,30}инструк/i
       .test(c.answer || '')).map(c => c.id),
     genericFallbackReplies: cases.filter(c => (c.answer || '')
-      .startsWith('Понимаю вас. Подскажите, пожалуйста, какой день и какая половина дня')).map(c => c.id),
+      .startsWith(SAFE_FALLBACK_TEXT.slice(0, 40))).map(c => c.id),
     llmCalls: cases.reduce((sum, c) => sum + (c.llmCalls || 0), 0),
     medianSeconds: times.length ? times[Math.floor(times.length / 2)] / 1000 : null,
     maxSeconds: times.length ? times.at(-1) / 1000 : null,

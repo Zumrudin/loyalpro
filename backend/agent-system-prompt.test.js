@@ -929,7 +929,7 @@ describe('фраза эскалации по окну администратор
   test('adminOffHours → без обещания немедленного ответа', () => {
     const p = buildSystemPrompt({ adminOffHours: true });
     expect(p).not.toMatch(/с минуты на минуту/);
-    expect(p).toMatch(/в начале рабочего дня/);
+    expect(p).toMatch(/ответит Вам с утра/);
     expect(p).toMatch(/НЕ обещай, что администратор ответит немедленно/i);
   });
 });
