@@ -5,6 +5,7 @@ const { resolveDate } = require('./offer-attribution');
 const { stripAllStamps } = require('./transcript-time');
 const { moscowDateKey, moscowHHMM } = require('./slot-evidence');
 const { mentionsAdditionalVisit } = require('./additional-visit');
+const { DEFAULT_GAP_HOURS } = require('./session-gap');
 
 // Capabilities are server-only Symbols, bound to exact targets. Tool JSON cannot
 // opt out of consent or turn a rejected transfer into creation.
@@ -214,6 +215,37 @@ function patientIntent(texts, ctx = {}) {
   return null;
 }
 
+// Запасной признак к patientIntent: слово о переносе в СООБЩЕНИЯХ ПАЦИЕНТА
+// ТЕКУЩЕЙ переписки — patientIntent останавливается на первом вопросе/«нет»
+// и не видит «перенесите…», сказанное парой сообщений раньше «а в 15 есть?».
+// Только входящие и только после последнего разрыва ≥ 6 ч (граница session-gap):
+// инцидент 2026-10-27 (79299778510) — признак считался по ВСЕМУ окну LIMIT 20
+// и всем ролям, и автоуведомление YClients «Ваша запись … перенесена» от 31.08
+// заблокировало новую запись через book_chain как «перенос» → перевод на человека.
+// conversation — сырые строки loadTranscript (direction/text/msg_ts, хронология);
+// без них (подменённый history) — роль user из messages, без границы сессии.
+const MOVE_WORD_RE = /перенес|перенести|перенос|перезапис/iu;
+const SESSION_GAP_SEC = DEFAULT_GAP_HOURS * 3600;
+function currentConversation(rows) {
+  let start = 0;
+  let prev = null;
+  for (let i = 0; i < rows.length; i++) {
+    const ts = Number(rows[i] && rows[i].msg_ts);
+    if (!Number.isFinite(ts) || ts <= 0) continue;
+    if (prev !== null && ts - prev >= SESSION_GAP_SEC) start = i;
+    prev = ts;
+  }
+  return rows.slice(start);
+}
+function rescheduleMentioned({ conversation, messages } = {}) {
+  if (Array.isArray(conversation)) {
+    return currentConversation(conversation)
+      .some(r => r && r.direction === 'incoming' && MOVE_WORD_RE.test(String(r.text || '')));
+  }
+  return (Array.isArray(messages) ? messages : [])
+    .some(m => m && m.role === 'user' && MOVE_WORD_RE.test(stripAllStamps(String(m.content || ''))));
+}
+
 function withNewChainLink(ctx, input) { return { ...ctx, [CHAIN_CREATE]: input }; }
 
 function creationRejection(input, ctx) {
@@ -260,4 +292,4 @@ function creationRejection(input, ctx) {
   return null;
 }
 
-module.exports = { withAdditionalProposal, creationRejection, rescheduleRejection, strictMismatch, withChainTransfer, withNewChainLink, transferConfirmed, patientIntent };
+module.exports = { withAdditionalProposal, creationRejection, rescheduleRejection, strictMismatch, withChainTransfer, withNewChainLink, transferConfirmed, patientIntent, rescheduleMentioned };

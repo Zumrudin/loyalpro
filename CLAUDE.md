@@ -352,6 +352,15 @@ Always use the **MCP Playwright server** (`mcp__playwright__*`) for browser auto
 создания вместо переноса и привязку к исходным record_id не ослаблять.
 Подробности и регрессии: `docs/superpowers/specs/2026-10-02-agent-booking-consent-fix.md`.
 
+Признак «пациент просил перенос» (`toolCtx.rescheduleRequested`, по нему
+`book_chain`/`create_booking` отказывают в НОВОЙ записи) запасным путём
+считается ТОЛЬКО по входящим текущей переписки (`booking-write-guard.rescheduleMentioned`:
+после последнего разрыва ≥ 6 ч по сырому `conversation`). Инцидент 2026-10-27
+(79299778510): проверка шла по всему окну LIMIT 20 и всем ролям, и автоуведомление
+YClients «Ваша запись … перенесена» от 31.08 заблокировало запись на лазер
+(`reschedule_blocked`) → перевод на администратора. Тесты в
+`agent-booking-write-guards.test.js` и `agent-orchestrator.test.js`.
+
 
 ### Структурированное предложение дополнительного визита (05.10.2026)
 `prepare_additional_booking` → серверный текст → receipt отправки → новый ответ

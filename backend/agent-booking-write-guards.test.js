@@ -347,3 +347,77 @@ test.each([false, 'true'])('additional visit rejects invalid semantic consent %p
   expect(result.needs_confirmation).toBe(true);
   expect(booking.createBookingRecord).not.toHaveBeenCalled();
 });
+
+// Инцидент 2026-10-27 (79299778510): автоуведомление YClients «Ваша запись …
+// перенесена» от 31.08 лежало в окне транскрипта и взводило rescheduleRequested,
+// book_chain отказал новой записи как «переносу» → перевод на администратора.
+describe('rescheduleMentioned — только сообщения пациента текущей переписки', () => {
+  const ts = iso => Math.floor(Date.parse(iso) / 1000);
+  // Хронология реального диалога (тексты сокращены, ключевые слова дословно).
+  const incident = [
+    { direction: 'incoming', authored_by: null, msg_ts: ts('2026-08-31T13:04:00+03:00'), text: 'Здравствуйте, да буду! А подскажите пожалуйста на всякий случай , может быть есть время на попозже ?' },
+    { direction: 'outgoing', authored_by: 'operator', msg_ts: ts('2026-08-31T13:05:00+03:00'), text: 'Добрый день!🤍\nБудет окошко на 12:00, как вам?☺️' },
+    { direction: 'incoming', authored_by: null, msg_ts: ts('2026-08-31T13:05:10+03:00'), text: 'Давайте на 12' },
+    { direction: 'outgoing', authored_by: 'system', msg_ts: ts('2026-08-31T13:05:50+03:00'), text: 'Ваша запись в «PERI CLINIC» перенесена.\nНовое время записи 01.09.2026 в 12:00' },
+    { direction: 'incoming', authored_by: null, msg_ts: ts('2026-09-30T11:23:00+03:00'), text: 'Здравствуйте, да' },
+    { direction: 'incoming', authored_by: null, msg_ts: ts('2026-10-27T08:33:52+03:00'), text: 'Добрый день , можно записать на лазер ? 7 ноября' },
+    { direction: 'outgoing', authored_by: 'agent', msg_ts: ts('2026-10-27T08:34:14+03:00'), text: 'Здравствуйте, Елизавета! Я Мила…' },
+    { direction: 'incoming', authored_by: null, msg_ts: ts('2026-10-27T08:50:44+03:00'), text: 'Да' },
+    { direction: 'outgoing', authored_by: 'agent', msg_ts: ts('2026-10-27T08:51:04+03:00'), text: 'Есть время на **13:00** или **15:30** — какое Вам удобнее?' },
+    { direction: 'incoming', authored_by: null, msg_ts: ts('2026-10-27T08:51:13+03:00'), text: '13:00' },
+  ];
+
+  test('автоуведомление «запись перенесена» двухмесячной давности — не просьба о переносе', () => {
+    expect(guard.rescheduleMentioned({ conversation: incident })).toBe(false);
+  });
+
+  test('сообщение клиники о переносе В ТЕКУЩЕЙ переписке — тоже не просьба пациента', () => {
+    const rows = [
+      { direction: 'outgoing', authored_by: 'agent', msg_ts: 1000, text: 'Могу перенести вашу запись на пятницу?' },
+      { direction: 'incoming', msg_ts: 1060, text: 'А в 15 есть?' },
+    ];
+    expect(guard.rescheduleMentioned({ conversation: rows })).toBe(false);
+  });
+
+  test('«перенесите» пациента, за которым шёл вопрос, — признак есть (ради этого запасной путь)', () => {
+    const rows = [
+      { direction: 'incoming', msg_ts: 1000, text: 'Можно перенести мою запись на пятницу' },
+      { direction: 'outgoing', authored_by: 'agent', msg_ts: 1030, text: 'На пятницу есть 12:00 и 15:00' },
+      { direction: 'incoming', msg_ts: 1060, text: 'А в 16 есть?' },
+    ];
+    expect(guard.patientIntent(['Можно перенести мою запись на пятницу', 'А в 16 есть?'])).toBeNull();
+    expect(guard.rescheduleMentioned({ conversation: rows })).toBe(true);
+  });
+
+  test('«перенесите» пациента из ПРОШЛОЙ переписки (разрыв ≥ 6 ч) не считается', () => {
+    const rows = [
+      { direction: 'incoming', msg_ts: 1000, text: 'Перенесите, пожалуйста, на завтра' },
+      { direction: 'outgoing', msg_ts: 1100, text: 'Перенесла' },
+      { direction: 'incoming', msg_ts: 1100 + 6 * 3600, text: 'Можно записаться на лазер?' },
+    ];
+    expect(guard.rescheduleMentioned({ conversation: rows })).toBe(false);
+    // Разрыв короче границы — та же переписка.
+    rows[2].msg_ts = 1100 + 6 * 3600 - 1;
+    expect(guard.rescheduleMentioned({ conversation: rows })).toBe(true);
+  });
+
+  test('битый msg_ts не рвёт и не сдвигает границу', () => {
+    const rows = [
+      { direction: 'incoming', msg_ts: 1000, text: 'Перенесите на пятницу' },
+      { direction: 'incoming', msg_ts: null, text: 'вот' },
+      { direction: 'incoming', msg_ts: 1200, text: 'а в 15?' },
+    ];
+    expect(guard.rescheduleMentioned({ conversation: rows })).toBe(true);
+  });
+
+  test('без conversation — только роль user из messages, метки времени срезаны', () => {
+    const messages = [
+      { role: 'assistant', content: '[31.08 13:05] Ваша запись в «PERI CLINIC» перенесена.' },
+      { role: 'user', content: '[27.10 08:51] 13:00' },
+    ];
+    expect(guard.rescheduleMentioned({ messages })).toBe(false);
+    messages.push({ role: 'user', content: '[27.10 08:52] а перенести потом можно будет?' });
+    expect(guard.rescheduleMentioned({ messages })).toBe(true);
+    expect(guard.rescheduleMentioned()).toBe(false);
+  });
+});

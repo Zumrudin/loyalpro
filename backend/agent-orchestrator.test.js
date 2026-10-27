@@ -4038,3 +4038,50 @@ describe('медицинский вопрос — база знаний пред
     expect(mockLogger.warn.mock.calls.some(c => /medical_kb_unused/.test(c[0]))).toBe(true);
   });
 });
+
+// Инцидент 2026-10-27 (79299778510): старое автоуведомление «запись перенесена»
+// в окне транскрипта взводило rescheduleRequested → book_chain блокировал новую
+// запись как перенос.
+describe('rescheduleRequested — по сообщениям пациента текущей переписки', () => {
+  const ts = iso => Math.floor(Date.parse(iso) / 1000);
+  const run = async (messages, conversation) => {
+    const deps = makeDeps({ history: { loadTranscript: jest.fn(async () => ({ messages, watermark: 100, conversation })) } });
+    deps.provider.createMessage
+      .mockResolvedValueOnce({ text: '', toolCalls: [{ id: 't1', name: 'get_available_slots', input: { date: '2026-11-07', service_yc_id: 1 } }], assistantMsg: {} })
+      .mockResolvedValueOnce({ text: 'Готово', toolCalls: [], assistantMsg: {} });
+    await orchestrator.runDialog(1, 'k', { deps, ctx: { phone: '79299778510', channel: 'tdlib' } });
+    return deps.registry.handlers.get_available_slots.mock.calls[0][2];
+  };
+
+  test('автоуведомление «Ваша запись перенесена» от 31.08 флаг не взводит', async () => {
+    const messages = [
+      { role: 'user', content: '[31.08 13:05] Давайте на 12' },
+      { role: 'assistant', content: '[31.08 13:05] Ваша запись в «PERI CLINIC» перенесена.\nНовое время записи 01.09.2026 в 12:00' },
+      { role: 'user', content: '[27.10 08:33] Добрый день , можно записать на лазер ? 7 ноября' },
+      { role: 'assistant', content: '[27.10 08:51] Есть время на 13:00 или 15:30 — какое Вам удобнее?' },
+      { role: 'user', content: '[27.10 08:51] 13:00' },
+    ];
+    const conversation = [
+      { direction: 'incoming', msg_ts: ts('2026-08-31T13:05:10+03:00'), text: 'Давайте на 12' },
+      { direction: 'outgoing', authored_by: 'system', msg_ts: ts('2026-08-31T13:05:50+03:00'), text: 'Ваша запись в «PERI CLINIC» перенесена.\nНовое время записи 01.09.2026 в 12:00' },
+      { direction: 'incoming', msg_ts: ts('2026-10-27T08:33:52+03:00'), text: 'Добрый день , можно записать на лазер ? 7 ноября' },
+      { direction: 'outgoing', authored_by: 'agent', msg_ts: ts('2026-10-27T08:51:04+03:00'), text: 'Есть время на 13:00 или 15:30 — какое Вам удобнее?' },
+      { direction: 'incoming', msg_ts: ts('2026-10-27T08:51:13+03:00'), text: '13:00' },
+    ];
+    expect((await run(messages, conversation)).rescheduleRequested).toBe(false);
+  });
+
+  test('«перенесите» пациента в текущей переписке, а затем вопрос, — флаг взведён', async () => {
+    const messages = [
+      { role: 'user', content: '[27.10 08:33] Перенесите мою запись на пятницу' },
+      { role: 'assistant', content: '[27.10 08:34] На пятницу есть 12:00 и 15:00' },
+      { role: 'user', content: '[27.10 08:35] А в 16 есть?' },
+    ];
+    const conversation = [
+      { direction: 'incoming', msg_ts: ts('2026-10-27T08:33:00+03:00'), text: 'Перенесите мою запись на пятницу' },
+      { direction: 'outgoing', authored_by: 'agent', msg_ts: ts('2026-10-27T08:34:00+03:00'), text: 'На пятницу есть 12:00 и 15:00' },
+      { direction: 'incoming', msg_ts: ts('2026-10-27T08:35:00+03:00'), text: 'А в 16 есть?' },
+    ];
+    expect((await run(messages, conversation)).rescheduleRequested).toBe(true);
+  });
+});
