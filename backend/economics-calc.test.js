@@ -566,6 +566,25 @@ describe('количество услуги в записи (amount) — жив�
     const [est] = C.buildRows({ ...rec, consumables: [] }, c);
     expect(est.materials_used).toBe(5267 * 2);              // оценка по норме — тоже на 2 единицы
   });
+  // Две формы одной записи YClients (дев-БД, 28.10.2026): вебхук отдаёт first_cost ЗА ЕДИНИЦУ,
+  // REST /records (ночная сверка, синк) — уже ЗА ВСЕ единицы; cost_per_unit — за единицу в обеих
+  // (916 строк amount>1 — cost_per_unit × amount = first_cost, 34 — cost_per_unit = first_cost).
+  // Запись 2010661446 после ночной сверки: first_cost 48000 при amount 2 → прайс 48000, не 96000.
+  test('REST-форма: first_cost уже за все единицы, cost_per_unit за единицу → прайс cost_per_unit × amount', () => {
+    const [row] = C.buildRows({ ...rec, services: [{ id: 9536663, title: 'Revi strong 2 ml', amount: 2, first_cost: 48000, cost_per_unit: 24000, cost: 43200, cost_to_pay: 43200, discount: 0 }] }, ctx());
+    expect(row.first_cost).toBe(48000);
+    expect(row.discount).toBe(4800);
+  });
+  test('вебхук-форма с cost_per_unit: first_cost за единицу → тот же прайс', () => {
+    const [row] = C.buildRows({ ...rec, services: [{ id: 9536663, title: 'Revi strong 2 ml', amount: 2, first_cost: 24000, cost_per_unit: 24000, cost: 48000, cost_to_pay: 48000, discount: 0 }] }, ctx());
+    expect(row.first_cost).toBe(48000);
+    expect(row.discount).toBe(0);
+  });
+  test('без cost_per_unit: first_cost не меньше cost → это уже итог, на amount не умножается', () => {
+    const [row] = C.buildRows({ ...rec, services: [{ id: 9536663, title: 'Revi strong 2 ml', amount: 2, first_cost: 48000, cost: 48000, cost_to_pay: 48000 }] }, ctx());
+    expect(row.first_cost).toBe(48000);
+    expect(row.discount).toBe(0);
+  });
   test('нет amount / мусор → количество 1', () => {
     const c = ctx(); c.techCardFor = () => ({ items: [{ good_id: 1, amount: 1 }] });
     for (const amount of [undefined, null, 0, -1, 'x']) {
