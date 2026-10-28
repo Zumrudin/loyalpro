@@ -25,13 +25,24 @@ const has = (v) => v !== undefined && v !== null;
 function buildRows(record, ctx) {
   const services = (Array.isArray(record.services) ? record.services : [])
     .map(s => {
-      // Количество услуги в записи: first_cost YClients — цена ЕДИНИЦЫ, cost/cost_to_pay —
-      // уже за все единицы, техкарта — на одну («Revi strong 2 ml» × 2: два шприца).
+      // Количество услуги в записи: cost/cost_to_pay — уже за все единицы, техкарта — на одну
+      // («Revi strong 2 ml» × 2: два шприца). first_cost у YClients в ДВУХ формах: вебхук
+      // отдаёт его за единицу, REST /records (ночная сверка, синк) — уже за все единицы, а
+      // сверка перезаписывает запись каждую ночь. Умножение first_cost × amount на REST-форме
+      // удваивало прайс и показывало разницу «скидкой» (октябрь 2026, Revi strong: 192 000 ₽
+      // ложной скидки на 4 визитах × 2). cost_per_unit — за единицу в обеих формах.
       const qty = Number(s.amount) > 0 ? Number(s.amount) : 1;
-      // Прайс (first_cost × qty) и «к оплате деньгами» (cost_to_pay; нет — cost). Разрыв
-      // между ними объясняется бонусами и скидкой — делится ниже по записи.
+      // Прайс и «к оплате деньгами» (cost_to_pay; нет — cost). Разрыв между ними
+      // объясняется бонусами и скидкой — делится ниже по записи.
       const price = n(has(s.cost_to_pay) ? s.cost_to_pay : s.cost);
-      const first = has(s.first_cost) ? n(s.first_cost) * qty : n(has(s.cost) ? s.cost : price);
+      const cost = n(has(s.cost) ? s.cost : price);
+      const fc = has(s.first_cost) ? n(s.first_cost) : null;
+      let first;
+      if (n(s.cost_per_unit) > 0) first = n(s.cost_per_unit) * qty;
+      // Без cost_per_unit форма угадывается по cost: прайс за все единицы не меньше cost,
+      // first_cost за единицу при qty > 1 — меньше (кроме скидки ≥ 50 %, в данных не встречалось).
+      else if (fc !== null) first = qty > 1 && fc < cost ? fc * qty : fc;
+      else first = cost;
       return { id: Number(s.id), title: String(s.title || ''), qty, price, first_cost: first, gap: Math.max(0, first - price) };
     }).filter(s => s.id);
   if (!services.length) return [];
