@@ -6,6 +6,8 @@
 const STATUS = {
   ACCEPTED: [1, 'Принято'],                 // DEFAULT в схеме; частичный индекс pending — по status_id=1
   SENT:     [2, 'Отправлено'],
+  DELIVERED: [3, 'Доставлено'],             // WhatsApp: квитанция устройства получателя (DELIVERY_ACK)
+  READ:     [4, 'Прочитано'],               // WhatsApp: READ/PLAYED
   FAILED:   [5, 'Невозможно доставить'],    // ровно 5: его проверяет backend/routes/chat.js
 };
 
@@ -88,7 +90,25 @@ function makeDeliveries(db) {
     return r ? Number(r.id) : null;
   }
 
-  return { create, setStatus, setStatusIf, get, failStale, setTempId, findByTempId, setProviderMessageId, findByProviderMessageId };
+  // Квитанция доставки/прочтения может прийти через часы и после рестарта —
+  // ищем по id сообщения в любом статусе (в отличие от findByProviderMessageId).
+  async function findAnyByProviderMessageId(accountId, providerMessageId) {
+    const r = await db.oneOrNone(
+      `SELECT id FROM gateway_deliveries WHERE account_id=$1 AND provider_message_id=$2 ORDER BY id DESC LIMIT 1`,
+      [accountId, providerMessageId]);
+    return r ? Number(r.id) : null;
+  }
+
+  // Статус только растёт: «Отправлено» → «Доставлено» → «Прочитано»;
+  // «Невозможно доставить» (5) квитанцией не перекрывается.
+  async function raiseStatus(id, [statusId, description]) {
+    const r = await db.query(
+      `UPDATE gateway_deliveries SET status_id=$2, description=$3, updated_at=NOW() WHERE id=$1 AND status_id < $2`,
+      [id, statusId, description]);
+    return !!(r && r.rowCount);
+  }
+
+  return { create, setStatus, setStatusIf, get, failStale, setTempId, findByTempId, setProviderMessageId, findByProviderMessageId, findAnyByProviderMessageId, raiseStatus };
 }
 
 function parseId(s) {

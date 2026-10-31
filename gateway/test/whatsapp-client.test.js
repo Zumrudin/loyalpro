@@ -781,3 +781,72 @@ test('app-state: resyncAppState прошёл, но коллекция конта
   assert.equal(st.creds.accountSyncCounter, undefined);
   assert.equal(st.flushes, 1);
 });
+
+// ── Инцидент 31.10.2026: клиент с известным LID — отправка на <lid>@lid ──
+// Отправка на номер шифровалась отдельной сессией, которую телефон клиента
+// (переписка на LID) не мог расшифровать — «Ожидание сообщения».
+test('LID известен (gateway_contacts): sendMessage на <lid>@lid без onWhatsApp, эхо бэкенду под номером', async () => {
+  const { wa, sock, hooks } = setup({ deps: { repo: {
+    setAuth: async () => {}, phoneByLid: async () => null, rememberContact: async () => {}, rememberContacts: async () => {},
+    contactUserId: async (acc, p) => (p === '79608575301' ? 173976626180345 : null),
+  } } });
+  await open(wa, sock);
+  await wa.sendText({ text: 'Привет', phone: '79608575301' });
+  const sends = sock.calls.filter(c => c[0] === 'sendMessage');
+  assert.deepEqual(sends.at(-1), ['sendMessage', '173976626180345@lid', { text: 'Привет' }]);
+  assert.equal(sock.calls.filter(c => c[0] === 'onWhatsApp').length, 0);
+  await ticks(3);
+  assert.equal(hooks.length, 1);
+  assert.equal(hooks[0].payload.delivery_id, 'g12');
+  assert.equal(hooks[0].payload.new_message.recipient_phone_number, '79608575301');
+  assert.equal(hooks[0].payload.new_message.chat_id, '79608575301@c.us');
+  // Своё push с LID-адреса того же id — не эхо оператора.
+  sock.ev.emit('messages.upsert', { type: 'append', messages: [{ key: { remoteJid: '173976626180345@lid', fromMe: true, id: 'OUT1' }, messageTimestamp: 1_700_000_100, message: { conversation: 'Привет' } }] });
+  await ticks(3);
+  assert.equal(hooks.length, 1);
+});
+
+test('LID из памяти (входящее с senderPn) — следующая отправка на LID; номер без LID — как раньше на номер', async () => {
+  const { wa, sock } = setup();
+  await open(wa, sock);
+  wa.rememberLidLocal('111222333444555', '79001112233');
+  await wa.sendText({ text: 'a', phone: '79001112233' });
+  await wa.sendText({ text: 'b', phone: '79005550000' });
+  const sends = sock.calls.filter(c => c[0] === 'sendMessage').map(c => c[1]);
+  assert.deepEqual(sends.slice(-2), ['111222333444555@lid', '79005550000@s.whatsapp.net']);
+});
+
+test('LID с другим номером в памяти не берём; сбой БД — шлём на номер', async () => {
+  const { wa, sock } = setup({ deps: { repo: {
+    setAuth: async () => {}, phoneByLid: async () => null, rememberContact: async () => {}, rememberContacts: async () => {},
+    contactUserId: async (acc, p) => { if (p === '79007770000') throw new Error('db down'); return 999888777666555; },
+  } } });
+  await open(wa, sock);
+  wa.rememberLidLocal('999888777666555', '79001110000');           // LID уже числится за другим номером
+  await wa.sendText({ text: 'a', phone: '79002220000' });
+  await wa.sendText({ text: 'b', phone: '79007770000' });
+  const sends = sock.calls.filter(c => c[0] === 'sendMessage').map(c => c[1]);
+  assert.deepEqual(sends.slice(-2), ['79002220000@s.whatsapp.net', '79007770000@s.whatsapp.net']);
+});
+
+test('квитанции устройства: DELIVERY_ACK → «Доставлено», READ → «Прочитано» (raiseStatus), чужое сообщение — мимо', async () => {
+  const raised = [];
+  const { wa, sock } = setup({ deps: { deliveries: {
+    STATUS: { ACCEPTED: [1, 'Принято'], SENT: [2, 'Отправлено'], DELIVERED: [3, 'Доставлено'], READ: [4, 'Прочитано'], FAILED: [5, 'Невозможно доставить'] },
+    create: async () => 12, setStatus: async () => {}, setStatusIf: async () => true, setProviderMessageId: async () => {},
+    findByProviderMessageId: async () => null, failStale: async () => 0,
+    findAnyByProviderMessageId: async (acc, id) => (id === 'OLD7' ? 7 : null),
+    raiseStatus: async (id, st) => { raised.push([id, st[0]]); return true; },
+  } } });
+  await open(wa, sock);
+  await wa.sendText({ text: 'x', phone: '79001112233' });
+  sock.ev.emit('messages.update', [
+    { key: { remoteJid: '79001112233@s.whatsapp.net', fromMe: true, id: 'OUT1' }, update: { status: 3 } },
+    { key: { remoteJid: '79001112233@s.whatsapp.net', fromMe: true, id: 'OUT1' }, update: { status: 4 } },
+    { key: { remoteJid: '1@lid', fromMe: true, id: 'OLD7' }, update: { status: 5 } },     // после рестарта — из БД
+    { key: { remoteJid: '1@lid', fromMe: true, id: 'NOPE' }, update: { status: 3 } },     // не наша отправка
+    { key: { remoteJid: '1@lid', fromMe: false, id: 'IN1' }, update: { status: 4 } },
+  ]);
+  await ticks(4);
+  assert.deepEqual(raised, [[12, 3], [12, 4], [7, 4]]);
+});

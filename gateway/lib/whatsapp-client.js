@@ -48,6 +48,11 @@
 // ушло в сокет), messages.update ERROR → «Невозможно доставить», sendMessage
 // бросил → «Невозможно доставить». Иначе доставка висела бы в «Принято» и
 // failStale на следующем старте ложно закрыл бы её как недоставленную.
+// Квитанции устройства (DELIVERY_ACK/READ) поднимают статус до «Доставлено»/
+// «Прочитано» (raiseStatus, только вверх) — это единственный признак, что
+// сообщение РАСШИФРОВАНО у получателя. Клиенту с известным LID шлём на
+// <lid>@lid: отправка на номер шла отдельной Signal-сессией, и телефон,
+// ведущий переписку на LID, показывал «Ожидание сообщения» (31.10.2026).
 // Старше MAX_MESSAGE_AGE_S, статусы-истории, рассылки, каналы — не форвардим;
 // в группах медиа не качаем — как у Telegram.
 // Зависимости инжектятся (deps) — тесты без Baileys.
@@ -84,6 +89,8 @@ const INFLIGHT_WAIT_MS = 30 * 1000;
 const MEDIA_DOWNLOAD_DEADLINE_MS = 90 * 1000;
 const MEDIA_HTTP_TIMEOUT_MS = 30 * 1000;   // axios timeout: до заголовков ответа
 const STATUS_ERROR = 0;              // WAMessageStatus.ERROR
+const STATUS_DELIVERY_ACK = 3;       // WAMessageStatus.DELIVERY_ACK — квитанция устройства получателя
+const STATUS_READ = 4;               // WAMessageStatus.READ (5 — PLAYED, тоже «прочитано»)
 // Номер получателя в сыром пакете своего сообщения (другое устройство аккаунта).
 const RECIPIENT_PN_ATTRS = ['peer_recipient_pn', 'recipient_pn'];
 // Сколько раз написать в лог атрибуты пакета, где номера получателя НЕТ, — чтобы
@@ -197,6 +204,7 @@ class WhatsappClient {
     this.existsCache = new Map();    // phone → {jid, ts} (onWhatsApp подтвердил, jid канонический)
     this.chatQueues = new Map();
     this.lidPhones = new Map();      // lid → phone: синхронно, раньше записи в БД (пакет обгоняет INSERT)
+    this.phoneLids = new Map();      // phone → lid: обратный индекс для отправки на LID
     this.wsHandlers = [];            // [ws, event, fn] — сырые узлы протокола
     this.rawPnAttr = null;           // каким атрибутом пришёл номер получателя (для лога, один раз)
     this.rawDiagLeft = RAW_DIAG_MAX;
@@ -346,7 +354,12 @@ class WhatsappClient {
   rememberLidLocal(lid, phone) {
     if (this.lidPhones.has(lid)) this.lidPhones.delete(lid);        // свежие — в хвост (вытесняем самые старые)
     this.lidPhones.set(lid, phone);
-    if (this.lidPhones.size > LID_CACHE_MAX) this.lidPhones.delete(this.lidPhones.keys().next().value);
+    this.phoneLids.set(phone, lid);
+    if (this.lidPhones.size > LID_CACHE_MAX) {
+      const [oldLid, oldPhone] = this.lidPhones.entries().next().value;
+      this.lidPhones.delete(oldLid);
+      if (this.phoneLids.get(oldPhone) === oldLid) this.phoneLids.delete(oldPhone);
+    }
   }
 
   // Память обновляется СИНХРОННО (до первого await) — вызывающий из сырого
@@ -660,6 +673,10 @@ class WhatsappClient {
   async onUpdates(updates) {
     for (const u of updates || []) {
       const key = (u && u.key) || {}; const upd = (u && u.update) || {};
+      if (key.fromMe && typeof upd.status === 'number' && upd.status >= STATUS_DELIVERY_ACK) {
+        await this.onReceipt(key, upd.status);
+        continue;
+      }
       if (!key.fromMe || upd.status !== STATUS_ERROR) continue;
       let deliveryId = this.ownSends.has(key.id) ? this.ownSends.get(key.id).deliveryId : null;
       if (!deliveryId) {
@@ -671,6 +688,25 @@ class WhatsappClient {
       this.log.warn(`delivery g${deliveryId}: ${error}`);
       await this.d.deliveries.setStatus(deliveryId, this.d.deliveries.STATUS.FAILED, { error });
     }
+  }
+
+  // Квитанция устройства получателя: единственное доказательство, что сообщение
+  // РАСШИФРОВАНО у клиента («Отправлено» — лишь «ушло в сокет»; нерасшифрованное
+  // висит у получателя «Ожидание сообщения», инцидент 31.10.2026). Только лог и
+  // рост статуса — сбой БД доставку не трогает.
+  async onReceipt(key, status) {
+    if (!key.id) return;
+    let deliveryId = this.ownSends.has(key.id) ? this.ownSends.get(key.id).deliveryId : null;
+    if (!deliveryId && this.d.deliveries.findAnyByProviderMessageId) {
+      try { deliveryId = await this.d.deliveries.findAnyByProviderMessageId(this.id, key.id); }
+      catch (e) { this.log.warn(`findAnyByProviderMessageId: ${e.message}`); }
+    }
+    if (!deliveryId) return;   // не наша отправка (сообщение с телефона клиники)
+    const st = status >= STATUS_READ ? this.d.deliveries.STATUS.READ : this.d.deliveries.STATUS.DELIVERED;
+    if (!st || !this.d.deliveries.raiseStatus) return;
+    try {
+      if (await this.d.deliveries.raiseStatus(deliveryId, st)) this.log.info(`delivery g${deliveryId}: ${st[1].toLowerCase()}`);
+    } catch (e) { this.log.warn(`delivery g${deliveryId}: статус ${st[1]} не записан (${e.message})`); }
   }
 
   // ── Отправка ─────────────────────────────────────────────────
@@ -685,6 +721,14 @@ class WhatsappClient {
   async resolveJid(phone) {
     const p = normalizePhone(phone);
     if (!p) throw httpError('нет получателя: phone обязателен', 422);
+    // Клиент, чей LID известен, пишет нам с LID — и отвечать надо туда же.
+    // Отправка на номер шифруется ОТДЕЛЬНОЙ сессией (<номер>.<dev>), которую
+    // телефон клиента, ведущий переписку на LID, расшифровать не может:
+    // у получателя «Ожидание сообщения», дальше всё держится на retry
+    // (инцидент 31.10.2026, 79608575301). LID известен — значит, WhatsApp у
+    // клиента есть, onWhatsApp не нужен.
+    const lid = await this.lidOfPhone(p);
+    if (lid) return { jid: `${lid}@lid`, phone: p, pnJid: `${p}@s.whatsapp.net` };
     const hit = this.existsCache.get(p);
     if (hit && this.d.now() - hit.ts <= EXISTS_TTL_MS) return { jid: hit.jid, phone: p };
     let res;
@@ -701,11 +745,29 @@ class WhatsappClient {
     return { jid: `${p}@s.whatsapp.net`, phone: p };
   }
 
+  // Память → gateway_contacts. LID, за которым в памяти числится ДРУГОЙ номер,
+  // не берём (тот же принцип, что в learnPairs: чужой номер хуже отправки на
+  // номер). Сбой БД → null → прежний путь на номер.
+  async lidOfPhone(p) {
+    let lid = this.phoneLids.get(p) || null;
+    if (!lid && this.d.repo.contactUserId) {
+      try {
+        const uid = await this.d.repo.contactUserId(this.id, p);
+        if (uid) lid = String(uid);
+      } catch (e) { this.log.warn(`contactUserId ${p}: ${e.message} — шлём на номер`); return null; }
+    }
+    if (!lid || !/^\d{6,20}$/.test(lid) || lid === this.ownLid) return null;
+    const known = this.lidPhones.get(lid);
+    if (known && known !== p) return null;
+    if (!known) this.rememberLidLocal(lid, p);
+    return lid;
+  }
+
   async sendText({ text, phone }) {
     this.requireReady();
-    const { jid, phone: p } = await this.resolveJid(phone);
+    const { jid, phone: p, pnJid } = await this.resolveJid(phone);
     const deliveryId = await this.d.deliveries.create({ accountId: this.id, chatId: null, phone: p, kind: 'text', text });
-    await this.invokeSend(jid, { text }, deliveryId, p);
+    await this.invokeSend(jid, { text }, deliveryId, p, pnJid);
     return deliveryId;
   }
 
@@ -721,22 +783,27 @@ class WhatsappClient {
       try { fs.rmSync(filePath, { force: true }); } catch (_) { /* подберёт страховочный таймер server.js */ }
       fs.rmdir(path.dirname(filePath), () => {});   // каталог tmp/<hex>/ от multer; непустой — останется
     }
-    const { jid, phone: p } = await this.resolveJid(phone);
+    const { jid, phone: p, pnJid } = await this.resolveJid(phone);
     const mime = mimeType || mimeOfFile(fileName);
     const content = type === 'image'
       ? { image: buf, caption: caption || '', ...(mime && /^image\//.test(mime) ? { mimetype: mime } : {}) }
       : { document: buf, mimetype: mime || 'application/octet-stream', fileName: fileName || 'file', caption: caption || '' };
     const deliveryId = await this.d.deliveries.create({ accountId: this.id, chatId: null, phone: p, kind: 'file', text: caption || fileName });
-    await this.invokeSend(jid, content, deliveryId, p);
+    await this.invokeSend(jid, content, deliveryId, p, pnJid);
     return deliveryId;
   }
 
-  async invokeSend(jid, content, deliveryId, phone) {
+  // pnJid — номерной адрес, когда шлём на LID: эхо уходит бэкенду под ним (тот
+  // же chat_id «<номер>@c.us», что и раньше), а отправка в пути видна под обоими
+  // адресами — своё push может прийти и с LID, и с номера.
+  async invokeSend(jid, content, deliveryId, phone, pnJid = null) {
     let done;
     const settled = new Promise(r => { done = r; });
-    const key = normJid(jid);
-    if (!this.inflight.has(key)) this.inflight.set(key, new Set());
-    this.inflight.get(key).add(settled);
+    const keys = [...new Set([normJid(jid), ...(pnJid ? [normJid(pnJid)] : [])])];
+    for (const key of keys) {
+      if (!this.inflight.has(key)) this.inflight.set(key, new Set());
+      this.inflight.get(key).add(settled);
+    }
     try {
       let sent;
       try { sent = await this.sock.sendMessage(jid, content, { mediaUploadTimeoutMs: MEDIA_UPLOAD_TIMEOUT_MS }); }
@@ -762,15 +829,18 @@ class WhatsappClient {
       try { await this.d.deliveries.setStatusIf(deliveryId, this.d.deliveries.STATUS.ACCEPTED[0], this.d.deliveries.STATUS.SENT); }
       catch (e) { this.log.warn(`delivery g${deliveryId}: статус SENT не записан (${e.message})`); }
       // Эхо своей отправки — сами, не ждём append-апсерта библиотеки.
+      const echoJid = pnJid || jid;
       const echo = {
-        key: { remoteJid: jid, fromMe: true, id: msgId || `g${deliveryId}` },
+        key: { remoteJid: echoJid, fromMe: true, id: msgId || `g${deliveryId}` },
         message: sent && sent.message ? sent.message : (content.text !== undefined ? { conversation: content.text } : {}),
         messageTimestamp: mapper.tsOf(sent && sent.messageTimestamp) || Math.floor(this.d.now() / 1000),
       };
-      this.enqueueChat(jid, () => this.emitMessage(echo, `g${deliveryId}`, mapper.phoneOfJid(jid) || phone)).catch(e => this.log.warn(`эхо g${deliveryId}: ${e.message}`));
+      this.enqueueChat(jid, () => this.emitMessage(echo, `g${deliveryId}`, mapper.phoneOfJid(echoJid) || phone)).catch(e => this.log.warn(`эхо g${deliveryId}: ${e.message}`));
     } finally {
-      const set = this.inflight.get(key);
-      if (set) { set.delete(settled); if (!set.size) this.inflight.delete(key); }
+      for (const key of keys) {
+        const set = this.inflight.get(key);
+        if (set) { set.delete(settled); if (!set.size) this.inflight.delete(key); }
+      }
       done();
     }
   }
