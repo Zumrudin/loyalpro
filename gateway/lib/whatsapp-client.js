@@ -595,6 +595,7 @@ class WhatsappClient {
     if (this.undecrypted.size >= UNDECRYPTED_MAX) this.undecrypted.delete(this.undecrypted.keys().next().value);
     const err = Array.isArray(msg.messageStubParameters) ? String(msg.messageStubParameters[0] || '') : '';
     this.undecrypted.set(key.id, { key, ts: this.d.now(), err });
+    this.log.info(`сообщение ${key.remoteJid}:${key.id} не расшифровано (${key.fromMe ? 'своё' : 'входящее'}${err ? `, ${err.slice(0, 60)}` : ''}) — ждём повтора`);
     const t = setTimeout(() => {
       const hit = this.undecrypted.get(key.id);
       if (!hit || this.closed) return;
