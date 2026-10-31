@@ -13,6 +13,31 @@ describe('callAitunnel', () => {
     expect(calls[0].messages).toEqual([{ role: 'system', content: 'S' }, { role: 'user', content: 'U' }]);
     expect(calls[0].temperature).toBe(0.2);
   });
+
+  // Инцидент 2026-10-31: gemini-2.5-pro тратил весь max_tokens=800 на reasoning,
+  // finish_reason=length, и в UI доходил огрызок первой строки.
+  test('бюджет вывода с запасом на reasoning и низкое усилие размышлений', async () => {
+    const calls = [];
+    const fakeClient = { chat: { completions: { create: async (p) => {
+      calls.push(p);
+      return { choices: [{ message: { content: 'x' }, finish_reason: 'stop' }] };
+    } } } };
+    await kb.callAitunnel({ system: 'S', user: 'U' }, { client: fakeClient });
+    expect(calls[0].max_tokens).toBeGreaterThanOrEqual(4096);
+    expect(calls[0].reasoning_effort).toBe('low');
+  });
+
+  test('обрезанный ответ (finish_reason=length) пишется WARN, текст отдаётся', async () => {
+    const warns = [];
+    const logger = { warn: (m) => warns.push(m) };
+    const fakeClient = { chat: { completions: { create: async () => ({
+      choices: [{ message: { content: 'Огрызок' }, finish_reason: 'length' }],
+      usage: { completion_tokens: 4096, completion_tokens_details: { reasoning_tokens: 4000 } },
+    }) } } };
+    const out = await kb.callAitunnel({ system: 'S', user: 'U' }, { client: fakeClient, logger });
+    expect(out).toBe('Огрызок');
+    expect(warns).toEqual([expect.stringMatching(/обрезан.*reasoning=4000/)]);
+  });
 });
 
 describe('embedTextAitunnel', () => {
