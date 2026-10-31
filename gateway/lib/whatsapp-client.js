@@ -118,7 +118,33 @@ let baileysMod = null;
 // (require(esm)). Грузим лениво: тесты и Telegram-аккаунты без него.
 function baileys() { if (!baileysMod) baileysMod = require('@whiskeysockets/baileys'); return baileysMod; }
 
-async function defaultCreateSocket(authDir, { getMessage } = {}) {
+// Логи Baileys по умолчанию глушим целиком, кроме узкого набора про повтор
+// отправки и расшифровку (31.10.2026: у получателя «Ожидание сообщения», а мы
+// не видели ни запросов повтора, ни их судьбы). Фильтр стоит в hooks.logMethod
+// — отброшенная строка не сериализуется. WA_BAILEYS_DIAG=false гасит всё.
+const BAILEYS_DIAG_RE = /retry|decrypt|again|bad ack|no session|prekey|session not found|not available/i;
+function baileysLogger(pino, sink) {
+  if (process.env.WA_BAILEYS_DIAG === 'false' || !sink) return pino({ level: 'silent' });
+  return pino({
+    level: 'debug',
+    hooks: {
+      logMethod(args, method) {
+        const msg = typeof args[0] === 'string' ? args[0] : (typeof args[1] === 'string' ? args[1] : '');
+        if (!BAILEYS_DIAG_RE.test(msg)) return;
+        const obj = args[0] && typeof args[0] === 'object' ? args[0] : null;
+        let extra = '';
+        if (obj) {
+          try {
+            extra = ' ' + JSON.stringify(obj, (k, v) => (k === 'trace' && typeof v === 'string' ? v.split('\n').slice(0, 3).join(' | ') : (Buffer.isBuffer(v) || (v && v.type === 'Buffer') ? '<buf>' : v))).slice(0, 600);
+          } catch (_) { extra = ''; }
+        }
+        sink(`baileys: ${msg}${extra}`);
+      },
+    },
+  });
+}
+
+async function defaultCreateSocket(authDir, { getMessage, diagSink } = {}) {
   const b = baileys();
   const pino = require('pino');
   const { state, saveCreds } = await b.useMultiFileAuthState(authDir);
@@ -128,7 +154,7 @@ async function defaultCreateSocket(authDir, { getMessage } = {}) {
   const sock = b.makeWASocket({
     auth: state,
     ...(version ? { version } : {}),
-    logger: pino({ level: 'silent' }),
+    logger: baileysLogger(pino, diagSink),
     browser: b.Browsers.ubuntu('Chrome'),
     markOnlineOnConnect: false,
     syncFullHistory: false,
@@ -227,7 +253,8 @@ class WhatsappClient {
   async connect() {
     if (this.closed) return;
     const getMessage = async (key) => (key && this.sentCache.get(key.id)) || undefined;
-    const { sock, saveCreds } = await this.d.createSocket(this.dirs().wa, { getMessage });
+    const diagSink = (line) => this.log.info(line);
+    const { sock, saveCreds } = await this.d.createSocket(this.dirs().wa, { getMessage, diagSink });
     // close() мог случиться, пока сокет создавался (реконнект) — такой сокет
     // не оживляем, иначе его open записал бы 'ready' закрытому клиенту.
     if (this.closed) { try { sock.end(undefined); } catch (_) { /* уже закрыт */ } return; }
@@ -252,6 +279,9 @@ class WhatsappClient {
       const raw = (node) => { try { this.onRawMessage(node); } catch (e) { this.log.warn(`сырой пакет: ${e.message}`); } };
       sock.ws.on('CB:message', raw);
       this.wsHandlers.push([sock.ws, 'CB:message', raw]);
+      const rawReceipt = (node) => { try { this.onRawReceipt(node); } catch (e) { this.log.warn(`сырая квитанция: ${e.message}`); } };
+      sock.ws.on('CB:receipt', rawReceipt);
+      this.wsHandlers.push([sock.ws, 'CB:receipt', rawReceipt]);
     }
   }
 
@@ -673,6 +703,9 @@ class WhatsappClient {
   async onUpdates(updates) {
     for (const u of updates || []) {
       const key = (u && u.key) || {}; const upd = (u && u.update) || {};
+      if (typeof upd.status === 'number' && key.id && this.ownSends.has(key.id)) {
+        this.log.info(`messages.update g${this.ownSends.get(key.id).deliveryId}: status=${upd.status} fromMe=${!!key.fromMe} remote=${key.remoteJid || '-'}`);
+      }
       if (key.fromMe && typeof upd.status === 'number' && upd.status >= STATUS_DELIVERY_ACK) {
         await this.onReceipt(key, upd.status);
         continue;
@@ -688,6 +721,27 @@ class WhatsappClient {
       this.log.warn(`delivery g${deliveryId}: ${error}`);
       await this.d.deliveries.setStatus(deliveryId, this.d.deliveries.STATUS.FAILED, { error });
     }
+  }
+
+  // Диагностика (31.10.2026): квитанции на НАШИ отправки и любые запросы повтора
+  // — в лог как есть (атрибуты узла), до разбора Baileys. Нужно, чтобы понять,
+  // приходят ли квитанции вообще и в какой форме (from/recipient), и сколько раз
+  // и с какого адреса телефон получателя просит повтор.
+  onRawReceipt(node) {
+    const a = (node && node.attrs) || {};
+    const items = [];
+    for (const c of (Array.isArray(node && node.content) ? node.content : [])) {
+      if (c && c.tag === 'list' && Array.isArray(c.content)) for (const it of c.content) if (it && it.attrs && it.attrs.id) items.push(it.attrs.id);
+    }
+    const ids = [a.id, ...items].filter(Boolean);
+    const ours = ids.filter(id => this.ownSends.has(id));
+    const retry = a.type === 'retry';
+    if (!ours.length && !retry) return;
+    const label = (id) => (this.ownSends.has(id) ? `g${this.ownSends.get(id).deliveryId}` : id);
+    const rc = retry && Array.isArray(node.content) ? node.content.find(c => c && c.tag === 'retry') : null;
+    const keys = retry && Array.isArray(node.content) && node.content.some(c => c && c.tag === 'keys');
+    this.log.info(`квитанция ${a.type || 'delivery'}: from=${a.from || '-'} recipient=${a.recipient || '-'} participant=${a.participant || '-'}`
+      + ` ids=${ids.map(label).join(',')}${rc ? ` count=${(rc.attrs && rc.attrs.count) || '?'}` : ''}${retry ? ` keys=${keys ? 'yes' : 'no'}` : ''}${a.offline ? ' offline' : ''}`);
   }
 
   // Квитанция устройства получателя: единственное доказательство, что сообщение

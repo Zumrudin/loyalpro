@@ -850,3 +850,18 @@ test('квитанции устройства: DELIVERY_ACK → «Доставл
   await ticks(4);
   assert.deepEqual(raised, [[12, 3], [12, 4], [7, 4]]);
 });
+
+test('диагностика: сырая квитанция на свою отправку и запрос повтора пишутся в лог, чужие — нет', async () => {
+  const { wa, sock } = setup();
+  const lines = [];
+  wa.log = { info: (m) => lines.push(m), warn: (m) => lines.push(m), error: (m) => lines.push(m), debug: () => {} };
+  await open(wa, sock);
+  await wa.sendText({ text: 'x', phone: '79001112233' });
+  wa.onRawReceipt({ tag: 'receipt', attrs: { from: '111@lid', id: 'OUT1' } });
+  wa.onRawReceipt({ tag: 'receipt', attrs: { from: '111@lid', id: 'OTHER', type: 'read' } });
+  wa.onRawReceipt({ tag: 'receipt', attrs: { from: '111@lid', id: 'OUT1', type: 'retry' }, content: [{ tag: 'retry', attrs: { count: '2' } }, { tag: 'keys', attrs: {} }] });
+  const diag = lines.filter(l => l.startsWith('квитанция'));
+  assert.equal(diag.length, 2);
+  assert.match(diag[0], /^квитанция delivery: from=111@lid .* ids=g12$/);
+  assert.match(diag[1], /^квитанция retry: .* ids=g12 count=2 keys=yes$/);
+});
