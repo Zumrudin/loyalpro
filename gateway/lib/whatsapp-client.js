@@ -809,6 +809,22 @@ class WhatsappClient {
       // Канонический jid от WhatsApp (номер мог быть записан не так, как его знает WA).
       const jid = typeof r.jid === 'string' && r.jid.includes('@') ? normJid(r.jid) : `${p}@s.whatsapp.net`;
       this.existsCache.set(p, { jid, ts: this.d.now() });
+      // onWhatsApp Baileys 6.7.24 спрашивает usync и с протоколом LID: r.lid —
+      // сырой attrs.val узла <lid> («<цифры>@lid»; на всякий случай и голые цифры,
+      // и суффикс устройства). Контакт, чей LID нам ещё ни разу не приходил, иначе
+      // получал бы сообщение на номер — тот же недешифруемый случай, что выше.
+      // Выученный LID идёт через learnPairs (память + БД; чужой номер за LID не
+      // перезаписывает), а решает lidOfPhone — единственная точка проверок.
+      // Любой сбой — прежний путь на номер.
+      try {
+        const rawLid = r.lid == null ? '' : String(r.lid);
+        const newLid = rawLid.includes('@') ? mapper.lidOfJid(rawLid) : (/^\d{6,20}$/.test(rawLid) ? rawLid : null);
+        if (newLid) {
+          await this.learnPairs([{ phone: p, lid: newLid }], 'onWhatsApp');
+          const known = await this.lidOfPhone(p);
+          if (known) return { jid: `${known}@lid`, phone: p, pnJid: `${p}@s.whatsapp.net` };
+        }
+      } catch (e) { this.log.warn(`LID из onWhatsApp(${p}): ${e.message} — шлём на номер`); }
       return { jid, phone: p };
     }
     return { jid: `${p}@s.whatsapp.net`, phone: p };

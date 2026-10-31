@@ -829,6 +829,44 @@ test('LID с другим номером в памяти не берём; сбо
   assert.deepEqual(sends.slice(-2), ['79002220000@s.whatsapp.net', '79007770000@s.whatsapp.net']);
 });
 
+// ── LID из ответа onWhatsApp (Baileys 6.7.24 отдаёт { jid, exists, lid }) ──
+test('onWhatsApp вернул lid: отправка на <lid>@lid, пара сохранена, эхо под номером, второй раз без onWhatsApp', async () => {
+  const { wa, sock, repoCalls, hooks } = setup();
+  sock.onWhatsApp = async (p) => { sock.calls.push(['onWhatsApp', p]); return [{ jid: `${p}@s.whatsapp.net`, exists: true, lid: '555666777888999@lid' }]; };
+  await open(wa, sock);
+  await wa.sendText({ text: 'Привет', phone: '79001112233' });
+  assert.deepEqual(sock.calls.filter(c => c[0] === 'sendMessage').at(-1), ['sendMessage', '555666777888999@lid', { text: 'Привет' }]);
+  assert.deepEqual(repoCalls.filter(c => c[0] === 'rememberContacts'), [['rememberContacts', 42, [{ phone: '79001112233', userId: '555666777888999' }]]]);
+  await ticks(3);
+  assert.equal(hooks.length, 1);
+  assert.equal(hooks[0].payload.new_message.chat_id, '79001112233@c.us');
+  await wa.sendText({ text: 'Ещё', phone: '79001112233' });
+  assert.equal(sock.calls.filter(c => c[0] === 'onWhatsApp').length, 1);
+  assert.deepEqual(sock.calls.filter(c => c[0] === 'sendMessage').at(-1), ['sendMessage', '555666777888999@lid', { text: 'Ещё' }]);
+});
+
+test('onWhatsApp без lid (и с суффиксом устройства / голыми цифрами): без lid — на номер, остальное нормализуется', async () => {
+  const { wa, sock, repoCalls } = setup();
+  const lids = { '79001112233': undefined, '79001112244': '555666777888999:12@lid', '79001112255': '444333222111000' };
+  sock.onWhatsApp = async (p) => { sock.calls.push(['onWhatsApp', p]); return [{ jid: `${p}@s.whatsapp.net`, exists: true, lid: lids[p] }]; };
+  await open(wa, sock);
+  for (const phone of Object.keys(lids)) await wa.sendText({ text: 'x', phone });
+  const sends = sock.calls.filter(c => c[0] === 'sendMessage').map(c => c[1]);
+  assert.deepEqual(sends.slice(-3), ['79001112233@s.whatsapp.net', '555666777888999@lid', '444333222111000@lid']);
+  assert.equal(repoCalls.filter(c => c[0] === 'rememberContacts').length, 2);
+});
+
+test('onWhatsApp вернул lid, уже числящийся за другим номером — шлём на номер, чужую пару не трогаем', async () => {
+  const { wa, sock, repoCalls } = setup();
+  sock.onWhatsApp = async (p) => { sock.calls.push(['onWhatsApp', p]); return [{ jid: `${p}@s.whatsapp.net`, exists: true, lid: '555666777888999@lid' }]; };
+  await open(wa, sock);
+  wa.rememberLidLocal('555666777888999', '79009998877');
+  await wa.sendText({ text: 'x', phone: '79001112233' });
+  assert.deepEqual(sock.calls.filter(c => c[0] === 'sendMessage').at(-1), ['sendMessage', '79001112233@s.whatsapp.net', { text: 'x' }]);
+  assert.ok(!repoCalls.some(c => c[0] === 'rememberContacts'));
+  assert.equal(wa.lidPhones.get('555666777888999'), '79009998877');
+});
+
 test('квитанции устройства: DELIVERY_ACK → «Доставлено», READ → «Прочитано» (raiseStatus), чужое сообщение — мимо', async () => {
   const raised = [];
   const { wa, sock } = setup({ deps: { deliveries: {
