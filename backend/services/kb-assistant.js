@@ -4,11 +4,20 @@ const { db } = require('../db');
 const config = require('../config');
 const { buildPrefixTsQuery } = require('./knowledge-base');
 const aitunnel = require('./aitunnel');
+const { createLogger } = require('../logger');
+
+const log = createLogger('kb-assistant');
 
 // ── RAG-ассистент базы знаний ─────────────────────────────────
 // Спека: docs/superpowers/specs/2026-07-16-kb-ai-assistant-design.md
 
 const CONTEXT_CHAR_BUDGET = 12000;   // сколько символов статей максимум шлём модели
+// Бюджет вывода считается ВМЕСТЕ с reasoning-токенами. Инцидент 2026-10-31:
+// при 800 gemini-2.5-pro тратил на размышления все 767 токенов (finish=length),
+// и в UI доходил огрызок первой строки. 4096 + reasoning_effort 'low' — живой
+// замер: полный ответ ~700 символов, reasoning ~630 токенов, ~3 ₽ за вопрос
+// (без 'low' — 3 600 токенов размышлений и ~8 ₽).
+const MAX_OUTPUT_TOKENS = 4096;
 
 const SYSTEM_PROMPT =
   'Ты — ассистент базы знаний косметологической клиники PERI CLINIC ' +
@@ -69,7 +78,7 @@ async function callGeminiOnce(prompt, { key, model, fetchFn }) {
   const body = {
     system_instruction: { parts: [{ text: prompt.system }] },
     contents: [{ role: 'user', parts: [{ text: prompt.user }] }],
-    generationConfig: { temperature: 0.2, maxOutputTokens: 800 },
+    generationConfig: { temperature: 0.2, maxOutputTokens: MAX_OUTPUT_TOKENS },
   };
   // Таймаут через AbortController — иначе повисший запрос держит соединение
   // до OS-таймаута (минуты). На abort callGemini попробует следующий ключ.
@@ -153,14 +162,21 @@ async function callAitunnel(prompt, opts = {}) {
   const resp = await client.chat.completions.create({
     model: config.AITUNNEL_CHAT_MODEL,
     temperature: 0.2,
-    max_tokens: 800,
+    max_tokens: MAX_OUTPUT_TOKENS,
+    reasoning_effort: 'low',
     messages: [
       { role: 'system', content: prompt.system },
       { role: 'user', content: prompt.user },
     ],
   });
-  const content = resp && resp.choices && resp.choices[0] && resp.choices[0].message
-    && resp.choices[0].message.content;
+  const choice = resp && resp.choices && resp.choices[0];
+  const content = choice && choice.message && choice.message.content;
+  if (choice && choice.finish_reason === 'length') {
+    const u = (resp && resp.usage) || {};
+    const reasoning = (u.completion_tokens_details || {}).reasoning_tokens || 0;
+    (opts.logger || log).warn(`ответ обрезан лимитом max_tokens=${MAX_OUTPUT_TOKENS} ` +
+      `(out=${u.completion_tokens || 0} reasoning=${reasoning})`);
+  }
   return (content || '').trim();
 }
 
@@ -382,7 +398,7 @@ async function embedText(text, opts) {
 }
 
 module.exports = {
-  CONTEXT_CHAR_BUDGET, SYSTEM_PROMPT, REQUEST_TIMEOUT_MS,
+  CONTEXT_CHAR_BUDGET, MAX_OUTPUT_TOKENS, SYSTEM_PROMPT, REQUEST_TIMEOUT_MS,
   buildContext, buildPrompt, parseGeminiResponse,
   callGeminiOnce, callGemini, callGeminiDirect, callViaRelay, callAitunnel,
   retrieveArticles, logChat, ask,
