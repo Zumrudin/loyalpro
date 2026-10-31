@@ -134,4 +134,6 @@ module.exports = {
   findByTempId: (...a) => getDefault().findByTempId(...a),
   setProviderMessageId: (...a) => getDefault().setProviderMessageId(...a),
   findByProviderMessageId: (...a) => getDefault().findByProviderMessageId(...a),
+  findAnyByProviderMessageId: (...a) => getDefault().findAnyByProviderMessageId(...a),
+  raiseStatus: (...a) => getDefault().raiseStatus(...a),
 };
