@@ -742,6 +742,21 @@ class WhatsappClient {
     const keys = retry && Array.isArray(node.content) && node.content.some(c => c && c.tag === 'keys');
     this.log.info(`квитанция ${a.type || 'delivery'}: from=${a.from || '-'} recipient=${a.recipient || '-'} participant=${a.participant || '-'}`
       + ` ids=${ids.map(label).join(',')}${rc ? ` count=${(rc.attrs && rc.attrs.count) || '?'}` : ''}${retry ? ` keys=${keys ? 'yes' : 'no'}` : ''}${a.offline ? ' offline' : ''}`);
+    // Запрос повтора от ПОЛУЧАТЕЛЯ = сообщение до него дошло, но не расшифровалось:
+    // пишем причину в доставку. Свои же устройства (телефон клиники, другие
+    // привязанные) тоже просят повтор — это не получатель, их пропускаем.
+    if (retry && this.ownSends.has(a.id) && this.d.deliveries.markRetryRequested) {
+      const ownLid = this.ownLid ? String(this.ownLid) : null;
+      const ownPhone = this.ownPhone ? String(this.ownPhone) : null;
+      const fromLid = mapper.lidOfJid(a.from);
+      const fromPhone = mapper.phoneOfJid(a.from);
+      const fromSelf = (ownLid && fromLid === ownLid) || (ownPhone && fromPhone === ownPhone);
+      if (!fromSelf) {
+        const deliveryId = this.ownSends.get(a.id).deliveryId;
+        Promise.resolve(this.d.deliveries.markRetryRequested(deliveryId, rc && rc.attrs && rc.attrs.count))
+          .catch(e => this.log.warn(`delivery g${deliveryId}: запрос повтора не записан (${e.message})`));
+      }
+    }
   }
 
   // Квитанция устройства получателя: единственное доказательство, что сообщение

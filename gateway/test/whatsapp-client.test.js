@@ -865,3 +865,27 @@ test('диагностика: сырая квитанция на свою отп
   assert.match(diag[0], /^квитанция delivery: from=111@lid .* ids=g12$/);
   assert.match(diag[1], /^квитанция retry: .* ids=g12 count=2 keys=yes$/);
 });
+
+test('запрос повтора от получателя пишется в доставку; от своих устройств и по чужим id — нет', async () => {
+  const marked = [];
+  const { wa, sock } = setup({ deps: { deliveries: {
+    STATUS: { ACCEPTED: [1, 'Принято'], SENT: [2, 'Отправлено'], DELIVERED: [3, 'Доставлено'], READ: [4, 'Прочитано'], FAILED: [5, 'Невозможно доставить'] },
+    create: async () => 12, setStatus: async () => {}, setStatusIf: async () => true, setProviderMessageId: async () => {},
+    findByProviderMessageId: async () => null, failStale: async () => 0,
+    markRetryRequested: async (id, count) => { marked.push([id, count]); return true; },
+  } } });
+  wa.log = { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} };
+  await open(wa, sock);
+  await wa.sendText({ text: 'x', phone: '79001112233' });
+  wa.ownLid = '279666862632979'; wa.ownPhone = '79250177778';
+  const retry = (from, id) => wa.onRawReceipt({ tag: 'receipt', attrs: { from, id, type: 'retry' }, content: [{ tag: 'retry', attrs: { count: '1' } }] });
+  retry('111222333@lid', 'OUT1');
+  await ticks(2);
+  assert.deepEqual(marked, [[12, '1']]);
+  retry('279666862632979:85@lid', 'OUT1');             // другое устройство клиники
+  retry('279666862632979@lid', 'OUT1');                // основной телефон клиники
+  retry('79250177778:12@s.whatsapp.net', 'OUT1');      // свой номер с суффиксом устройства
+  retry('111222333@lid', 'NOT_OURS');                  // не наша отправка
+  await ticks(2);
+  assert.deepEqual(marked, [[12, '1']]);
+});

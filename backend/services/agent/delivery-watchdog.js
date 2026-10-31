@@ -22,6 +22,18 @@
 // вопрос дороже повтора. Но риск ограничен ровно одной попыткой: вторая строка
 // (`retry_of` заполнен) уже не переотправляется никогда, а уходит к человеку.
 //
+// WHATSAPP ЧЕРЕЗ СВОЙ ШЛЮЗ (delivery_id `g<n>`, с 01.11.2026). Эхо своей
+// отправки шлюз собирает САМ сразу после sendMessage, поэтому событие с
+// delivery_id в chatpush_events ничего не доказывает — сторож был слеп
+// (инцидент 31.10.2026, 79608575301: ответ висел у клиентки «Ожидание
+// сообщения», а строка закрылась confirmed за минуту). Для таких строк судим по
+// статусу доставки шлюза (`gatewayVerdict`): «Доставлено»/«Прочитано» — это
+// квитанция телефона получателя, то есть сообщение РАСШИФРОВАНО; запрос повтора
+// от получателя без квитанции — сбой расшифровки, ведём как недоставку (повтор,
+// потом человек). Голое «Отправлено» без квитанций — телефон клиента, скорее
+// всего, офлайн: повтор дал бы дубль, перевод — ложную тревогу, поэтому ждём до
+// MAX_RETRY_AGE_MIN и закрываем строку `sent` с WARN.
+//
 // ЧЕГО СТОРОЖ НЕ ДЕЛАЕТ. Он НЕ шлёт клиенту страховочную фразу «передаю
 // администратору»: сломана ровно отправка, и ещё одно сообщение в ту же дыру
 // ничего не даст. Перевод виден человеку в «Чате» (красный, вверху списка).
@@ -53,6 +65,31 @@ function decide(row, { confirmed, thresholdMin, nowMs, maxRetryAgeMin = MAX_RETR
   // NaN-возраст (битая дата) сюда не дойдёт: сравнение выше вернёт 'wait'.
   if (row.retry_of == null && ageMin <= maxRetryAgeMin) return 'retry';
   return 'escalate';
+}
+
+// Отправка ушла через наш шлюз: его id доставки — `g<n>`, у Chatpush — число.
+function isGatewayDelivery(row) {
+  return row.channel === 'whatsapp' && /^g\d+$/.test(String(row.delivery_id || ''));
+}
+
+// Маркер, который шлюз пишет в error доставки на запрос повтора от телефона
+// получателя (gateway/lib/deliveries.js RETRY_ERROR_PREFIX). Копия строки, а не
+// require: бэкенд и шлюз — разные процессы; связь закреплена тестом.
+const GATEWAY_RETRY_MARK = 'получатель не расшифровал';
+
+// Вердикт по статусу доставки шлюза (`GET /api/v1/delivery/:id` → delivery):
+//   confirmed   — квитанция «Доставлено»/«Прочитано» (status_id ≥ 3, кроме 5);
+//   undelivered — «Невозможно доставить», зависшее «Принято» или запрос повтора
+//                 от получателя без квитанции: сообщение до клиента не дошло;
+//   sent        — «Отправлено» без квитанций: ушло на сервер WhatsApp, телефон
+//                 клиента, вероятно, офлайн.
+function gatewayVerdict(delivery) {
+  const st = (delivery && delivery.status) || {};
+  const id = Number(st.status_id);
+  if (id === 5) return 'undelivered';
+  if (id >= 3) return 'confirmed';
+  if (id === 2) return String((delivery && delivery.error) || '').startsWith(GATEWAY_RETRY_MARK) ? 'undelivered' : 'sent';
+  return 'undelivered';
 }
 
 // ── Работа с БД ─────────────────────────────────────────────
@@ -155,12 +192,28 @@ async function sweep(deps = {}) {
   const escalate = deps.escalate || defaultEscalate;
   const nowMs = deps.nowMs || Date.now();
   const thresholdMin = Number(config.AGENT_DELIVERY_WATCHDOG_MIN) || 5;
+  const gatewayStatus = deps.gatewayStatus || defaultGatewayStatus;
 
   const rows = await st.listPending();
-  const out = { checked: rows.length, confirmed: 0, retried: 0, escalated: 0 };
+  const out = { checked: rows.length, confirmed: 0, retried: 0, escalated: 0, sent: 0 };
   for (const row of rows) {
     try {
-      const confirmed = await st.isConfirmed(row.delivery_id);
+      let confirmed;
+      if (isGatewayDelivery(row)) {
+        // Сбой запроса статуса бросает: строка останется pending до следующего тика.
+        const verdict = gatewayVerdict(await gatewayStatus(row));
+        if (verdict === 'sent') {
+          const ageMin = (nowMs - new Date(row.created_at).getTime()) / 60000;
+          if (!(ageMin > MAX_RETRY_AGE_MIN)) continue;
+          logger.warn(`реплика ушла на сервер WhatsApp, но квитанции телефона за ${MAX_RETRY_AGE_MIN} мин нет (dialog ${row.dialog_key}, delivery ${row.delivery_id}) — клиент офлайн? повтор не шлю`);
+          await st.setStatus(row.id, 'sent');
+          out.sent++;
+          continue;
+        }
+        confirmed = verdict === 'confirmed';
+      } else {
+        confirmed = await st.isConfirmed(row.delivery_id);
+      }
       const action = decide(row, { confirmed, thresholdMin, nowMs });
       if (action === 'wait') continue;
       if (action === 'confirm') { await st.setStatus(row.id, 'confirmed'); out.confirmed++; continue; }
@@ -207,6 +260,13 @@ async function sweep(deps = {}) {
   return out;
 }
 
+// Статус спрашиваем у текущего WhatsApp-аккаунта салона: accountId отправки в
+// журнале не хранится, а канал у салона один.
+async function defaultGatewayStatus(row) {
+  const transport = require('../messaging/transport');
+  return transport.getDeliveryStatus(row.salon_id, row.channel, row.delivery_id);
+}
+
 async function defaultResend(row) {
   const transport = require('../messaging/transport');
   return transport.sendMessage(row.salon_id, {
@@ -235,4 +295,4 @@ async function cleanup(days = 30) {
   }
 }
 
-module.exports = { _store: store, record, sweep, decide, cleanup, MAX_RETRY_AGE_MIN, BATCH };
+module.exports = { _store: store, record, sweep, decide, gatewayVerdict, isGatewayDelivery, cleanup, MAX_RETRY_AGE_MIN, BATCH, GATEWAY_RETRY_MARK };

@@ -12,6 +12,9 @@ const STATUS = {
 };
 
 const STALE_REASON = 'шлюз перезапущен, исход неизвестен';
+// Префикс error у доставки, на которую телефон получателя запросил повтор
+// (не смог расшифровать): по нему такие строки отличаются от прочих сбоев.
+const RETRY_ERROR_PREFIX = 'получатель не расшифровал';
 
 function makeDeliveries(db) {
   async function create({ accountId, chatId, phone, kind, text }) {
@@ -108,7 +111,17 @@ function makeDeliveries(db) {
     return !!(r && r.rowCount);
   }
 
-  return { create, setStatus, setStatusIf, get, failStale, setTempId, findByTempId, setProviderMessageId, findByProviderMessageId, findAnyByProviderMessageId, raiseStatus };
+  // Получатель прислал receipt type=retry: сообщение до него дошло, но не
+  // расшифровалось. Статус не меняем, только пишем причину; квитанция
+  // «Доставлено» (3) и выше означает, что расшифровали, — такую строку не трогаем.
+  async function markRetryRequested(id, count) {
+    const r = await db.query(
+      `UPDATE gateway_deliveries SET error=$2, updated_at=NOW() WHERE id=$1 AND status_id < 3`,
+      [id, `${RETRY_ERROR_PREFIX}: запрос повтора ${count || '?'}`]);
+    return !!(r && r.rowCount);
+  }
+
+  return { create, setStatus, setStatusIf, get, failStale, setTempId, findByTempId, setProviderMessageId, findByProviderMessageId, findAnyByProviderMessageId, raiseStatus, markRetryRequested };
 }
 
 function parseId(s) {
@@ -124,7 +137,7 @@ function getDefault() {
 }
 
 module.exports = {
-  makeDeliveries, parseId, STATUS, STALE_REASON,
+  makeDeliveries, parseId, STATUS, STALE_REASON, RETRY_ERROR_PREFIX,
   create: (...a) => getDefault().create(...a),
   setStatus: (...a) => getDefault().setStatus(...a),
   setStatusIf: (...a) => getDefault().setStatusIf(...a),
@@ -136,4 +149,5 @@ module.exports = {
   findByProviderMessageId: (...a) => getDefault().findByProviderMessageId(...a),
   findAnyByProviderMessageId: (...a) => getDefault().findAnyByProviderMessageId(...a),
   raiseStatus: (...a) => getDefault().raiseStatus(...a),
+  markRetryRequested: (...a) => getDefault().markRetryRequested(...a),
 };
