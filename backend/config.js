@@ -209,6 +209,10 @@ module.exports = {
   DIALOG_VERDICTS: process.env.DIALOG_VERDICTS !== 'false',
   // Провайдер базы знаний: 'aitunnel' | 'gemini' (старый релей/прямой вызов, откат).
   KB_PROVIDER:          process.env.KB_PROVIDER          || 'aitunnel',
+  // Кто отвечает в «Спросить ИИ» базы знаний: 'agent' — цепочка Милы (прод: GPT через
+  // мост → Claude через мост → Польза; дев: Codex → Польза), иначе прежний путь по
+  // KB_PROVIDER. Эмбеддинги поиска от этой настройки не зависят (KB_PROVIDER).
+  KB_CHAT_PROVIDER:     process.env.KB_CHAT_PROVIDER     || 'agent',
 
   // CORS — comma-separated list of allowed origins, e.g.:
   // ALLOWED_ORIGINS=http://89.22.233.73,http://89.22.233.73:8081

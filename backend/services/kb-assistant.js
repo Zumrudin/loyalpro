@@ -22,6 +22,8 @@ const MAX_OUTPUT_TOKENS = 4096;
 const SYSTEM_PROMPT =
   'Ты — ассистент базы знаний косметологической клиники PERI CLINIC ' +
   '(это косметологическая клиника, а НЕ салон красоты — так её и называй). ' +
+  'Ты НЕ Мила и не пишешь пациенту: ты отвечаешь сотруднику клиники на его вопрос ' +
+  'по базе знаний, ответ — обычный текст. ' +
   'Отвечай ТОЛЬКО по тексту статей ниже. Ничего не выдумывай и не добавляй от себя. ' +
   'Если ответа в тексте нет — честно ответь "В базе знаний нет ответа на этот вопрос". ' +
   'Отвечай по-русски, кратко, по делу и единообразно.\n' +
@@ -213,8 +215,35 @@ async function embedTextAitunnel(text, opts = {}) {
   throw lastErr;
 }
 
-// Диспетчер: если задан KB_GEMINI_RELAY_URL (прод) — идём через relay; иначе прямой вызов.
+// ── Цепочка Милы (KB_CHAT_PROVIDER='agent') ────────────────────
+// Те же звенья и тот же обход отказов, что у анализа переписок
+// (dialog-verdicts/provider.js): прод — GPT через мост → Claude через мост → Польза,
+// дев — Codex → Польза. Маршрутизация Милы (agent_model_routing) НЕ читается и НЕ
+// пишется — упавший вопрос сотрудника не переключит её на резерв (закреплено тестом).
+// Пауза на занятом мосте короче, чем у ночного анализа: вопрос ждёт человек.
+const KB_BUSY_WAIT_MS = 5000;
+let kbChainProvider = null;
+async function callAgentChain(prompt, opts = {}) {
+  let provider = opts.provider;
+  if (!provider) {
+    if (!kbChainProvider) {
+      const { createVerdictProvider } = require('./dialog-verdicts/provider');
+      kbChainProvider = createVerdictProvider({ busyWaitMs: KB_BUSY_WAIT_MS });
+    }
+    provider = kbChainProvider;
+  }
+  const res = await provider.createMessage({
+    system: prompt.system,
+    messages: [{ role: 'user', content: prompt.user }],
+    tools: [],
+  });
+  if (res && res.model) log.info(`ответ ассистента: ${res.model}`);
+  return String((res && res.text) || '').trim();
+}
+
+// Диспетчер: цепочка Милы; иначе KB_PROVIDER — aitunnel, relay (прод) или прямой Gemini.
 async function callGemini(prompt, opts) {
+  if (config.KB_CHAT_PROVIDER === 'agent') return callAgentChain(prompt, opts);
   if (config.KB_PROVIDER === 'aitunnel') return callAitunnel(prompt, opts);
   if (config.KB_GEMINI_RELAY_URL) {
     return callViaRelay(prompt, { fetchFn: (opts && opts.fetchFn) || fetch });
@@ -315,7 +344,9 @@ async function ask(salonId, userId, question) {
   const free  = config.KB_GEMINI_KEY_FREE;
   const paid  = config.KB_GEMINI_KEY_PAID;
   const model = config.KB_LLM_MODEL;
-  if (config.KB_PROVIDER === 'aitunnel') {
+  if (config.KB_CHAT_PROVIDER === 'agent') {
+    // ключи живут у звеньев цепочки; их отказ — обычная деградация с источниками
+  } else if (config.KB_PROVIDER === 'aitunnel') {
     if (!config.AITUNNEL_API_KEY) {
       const e = new Error('Ассистент не настроен'); e.code = 'NOT_CONFIGURED'; throw e;
     }
@@ -400,7 +431,7 @@ async function embedText(text, opts) {
 module.exports = {
   CONTEXT_CHAR_BUDGET, MAX_OUTPUT_TOKENS, SYSTEM_PROMPT, REQUEST_TIMEOUT_MS,
   buildContext, buildPrompt, parseGeminiResponse,
-  callGeminiOnce, callGemini, callGeminiDirect, callViaRelay, callAitunnel,
+  callGeminiOnce, callGemini, callGeminiDirect, callViaRelay, callAitunnel, callAgentChain,
   retrieveArticles, logChat, ask,
   embedContentOnce, embedTextDirect, embedTextViaRelay, embedText, embedTextAitunnel,
 };
