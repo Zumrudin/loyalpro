@@ -57,8 +57,8 @@ const kb = require('./kb-assistant');
 describe('callGemini (dual-key fallback)', () => {
   const config = require('../config');
   let _savedProvider;
-  beforeEach(() => { _savedProvider = config.KB_PROVIDER; config.KB_PROVIDER = 'gemini'; });
-  afterEach(() => { config.KB_PROVIDER = _savedProvider; });
+  beforeEach(() => { _savedProvider = config.KB_PROVIDER; config.KB_PROVIDER = 'gemini'; config.KB_CHAT_PROVIDER = 'legacy'; });
+  afterEach(() => { config.KB_PROVIDER = _savedProvider; config.KB_CHAT_PROVIDER = 'agent'; });
   const prompt = { system: 'S', user: 'U' };
   const okJson = { candidates: [{ content: { parts: [{ text: 'Ответ.' }] } }] };
 
@@ -126,10 +126,10 @@ describe('callGemini relay-режим (прод → dev)', () => {
   const okJson = { candidates: [{ content: { parts: [{ text: 'Ответ.' }] } }] };
 
   let _savedProvider;
-  beforeEach(() => { _savedProvider = config.KB_PROVIDER; config.KB_PROVIDER = 'gemini'; });
+  beforeEach(() => { _savedProvider = config.KB_PROVIDER; config.KB_PROVIDER = 'gemini'; config.KB_CHAT_PROVIDER = 'legacy'; });
   afterEach(() => {
     config.KB_GEMINI_RELAY_URL = ''; config.KB_GEMINI_RELAY_SECRET = '';
-    config.KB_PROVIDER = _savedProvider;
+    config.KB_PROVIDER = _savedProvider; config.KB_CHAT_PROVIDER = 'agent';
   });
 
   test('при заданном RELAY_URL промпт уходит на relay, а не в Google', async () => {
