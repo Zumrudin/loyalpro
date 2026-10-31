@@ -927,3 +927,38 @@ test('запрос повтора от получателя пишется в д
   await ticks(2);
   assert.deepEqual(marked, [[12, '1']]);
 });
+
+test('закрытие соединения: в лог идёт текст ошибки и узел stream:error (31.10.2026: обрывы ~раз в 50 мин с code=500)', async () => {
+  const { wa, sock } = setup();
+  const lines = [];
+  wa.log = { info: () => {}, warn: (m) => lines.push(m), error: (m) => lines.push(m), debug: () => {} };
+  await open(wa, sock);
+  sock.ev.emit('connection.update', { connection: 'close', lastDisconnect: { error: { message: 'Stream Errored (unknown)', data: { tag: 'stream:error', attrs: { code: '500' } }, output: { statusCode: 500 } } } });
+  await ticks(3);
+  const l = lines.find(x => x.startsWith('соединение закрыто'));
+  assert.match(l, /^соединение закрыто \(code=500\): Stream Errored \(unknown\) \{"tag":"stream:error","attrs":\{"code":"500"\}\}$/);
+});
+
+test('нерасшифрованное (CIPHERTEXT): не форвардится; повтор пришёл — INFO; не пришёл — WARN с тем, чьё оно', async () => {
+  const { wa, sock, hooks } = setup({ deps: { undecryptedWaitMs: 20 } });
+  const lines = [];
+  wa.log = { info: (m) => lines.push(['i', m]), warn: (m) => lines.push(['w', m]), error: (m) => lines.push(['e', m]), debug: () => {} };
+  await open(wa, sock);
+  const ts = 1_700_000_000;
+  sock.ev.emit('messages.upsert', { type: 'notify', messages: [
+    { key: { remoteJid: '111@lid', fromMe: false, id: 'A1' }, messageTimestamp: ts, messageStubType: 2, messageStubParameters: ['Bad MAC'] },
+    { key: { remoteJid: '111@lid', fromMe: true, id: 'B2' }, messageTimestamp: ts, messageStubType: 2 },
+    { key: { remoteJid: '111@lid', fromMe: true, id: 'd406937057THISISBOT' }, messageTimestamp: ts, messageStubType: 2 },
+  ] });
+  await ticks(3);
+  assert.equal(hooks.length, 0);
+  // A1 пришло повтором расшифрованным
+  sock.ev.emit('messages.upsert', { type: 'notify', messages: [{ key: { remoteJid: '111@lid', fromMe: false, id: 'A1' }, messageTimestamp: ts, message: { conversation: 'Привет' } }] });
+  await new Promise(r => setTimeout(r, 60));
+  assert.ok(lines.some(([l, m]) => l === 'i' && /111@lid:A1 расшифровано после повтора/.test(m)));
+  const warns = lines.filter(([l]) => l === 'w').map(([, m]) => m);
+  assert.equal(warns.length, 2);
+  assert.ok(warns.some(m => /\(своё с устройства клиники\): 111@lid:B2/.test(m)));
+  assert.ok(warns.some(m => /\(копия отправки Chatpush\): 111@lid:d406937057THISISBOT/.test(m)));
+  assert.equal(hooks.length, 1);
+});

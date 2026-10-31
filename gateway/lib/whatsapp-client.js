@@ -89,6 +89,9 @@ const INFLIGHT_WAIT_MS = 30 * 1000;
 const MEDIA_DOWNLOAD_DEADLINE_MS = 90 * 1000;
 const MEDIA_HTTP_TIMEOUT_MS = 30 * 1000;   // axios timeout: до заголовков ответа
 const STATUS_ERROR = 0;              // WAMessageStatus.ERROR
+const STUB_CIPHERTEXT = 2;           // WebMessageInfo.StubType.CIPHERTEXT — не расшифровалось
+const UNDECRYPTED_WAIT_MS = 3 * 60 * 1000;
+const UNDECRYPTED_MAX = 1000;
 const STATUS_DELIVERY_ACK = 3;       // WAMessageStatus.DELIVERY_ACK — квитанция устройства получателя
 const STATUS_READ = 4;               // WAMessageStatus.READ (5 — PLAYED, тоже «прочитано»)
 // Номер получателя в сыром пакете своего сообщения (другое устройство аккаунта).
@@ -142,6 +145,20 @@ function baileysLogger(pino, sink) {
       },
     },
   });
+}
+
+// Текст ошибки закрытия: днём соединение рвётся примерно раз в 50 минут с
+// code=500 (31.10.2026), а ровно в эти моменты идут сбои расшифровки — без
+// текста и узла stream:error причину не установить. Коротко, без буферов.
+function disconnectDetail(u) {
+  const err = u && u.lastDisconnect && u.lastDisconnect.error;
+  if (!err) return '';
+  let data = '';
+  try {
+    const d = err.data != null ? err.data : (err.output && err.output.payload);
+    if (d != null) data = JSON.stringify(d, (k, v) => (v && v.type === 'Buffer' ? '<buf>' : v)).slice(0, 300);
+  } catch (_) { data = ''; }
+  return `: ${String(err.message || err).slice(0, 200)}${data ? ` ${data}` : ''}`;
 }
 
 async function defaultCreateSocket(authDir, { getMessage, diagSink } = {}) {
@@ -227,6 +244,7 @@ class WhatsappClient {
     this.ownSends = new Map();       // key.id → {deliveryId, ts}
     this.inflight = new Map();       // jid → Set промисов отправок, ещё не зарегистрированных в ownSends
     this.sentCache = new Map();      // key.id → message (для getMessage при повторе)
+    this.undecrypted = new Map();    // key.id → {key, ts, err}: ждём повторную доставку
     this.existsCache = new Map();    // phone → {jid, ts} (onWhatsApp подтвердил, jid канонический)
     this.chatQueues = new Map();
     this.lidPhones = new Map();      // lid → phone: синхронно, раньше записи в БД (пакет обгоняет INSERT)
@@ -326,7 +344,7 @@ class WhatsappClient {
       if (this.closed) return;        // close()/logout() — сами разберутся с состоянием
       const code = disconnectCode(u);
       const DR = this.d.disconnectReason;
-      this.log.warn(`соединение закрыто (code=${code || '?'})`);
+      this.log.warn(`соединение закрыто (code=${code || '?'})${disconnectDetail(u)}`);
       if (code === DR.loggedOut) {
         this.closed = true;
         this.detach();
@@ -547,6 +565,11 @@ class WhatsappClient {
       if (this.isSelfChat(key.remoteJid)) continue;                 // «Избранное» — не переписка с клиентом
       const ts = mapper.tsOf(msg.messageTimestamp);
       if (ts && this.d.now() / 1000 - ts > MAX_MESSAGE_AGE_S) { this.log.warn(`пропущено ${key.remoteJid}:${key.id} старше ${MAX_MESSAGE_AGE_S / 3600} ч`); continue; }
+      if (msg.messageStubType === STUB_CIPHERTEXT) { this.noteUndecrypted(key, msg); continue; }
+      if (this.undecrypted.has(key.id)) {
+        this.undecrypted.delete(key.id);
+        this.log.info(`сообщение ${key.remoteJid}:${key.id} расшифровано после повтора`);
+      }
       if (!mapper.contentOf(msg.message)) continue;                 // служебное/заглушка
       this.enqueueChat(key.remoteJid, async () => {
         if (key.fromMe) {
@@ -557,6 +580,30 @@ class WhatsappClient {
         await this.emitMessage(msg, null);
       }).catch(e => this.log.error(`сообщение ${key.remoteJid}:${key.id}: ${e.message}`));
     }
+  }
+
+  // Нерасшифрованное сообщение Baileys отдаёт заглушкой CIPHERTEXT и просит
+  // отправителя прислать его заново; заглушку мы не форвардим (в «Чат» ничего
+  // не попадает). Если повтор не пришёл расшифрованным за UNDECRYPTED_WAIT_MS,
+  // сообщение потеряно молча — пишем WARN с тем, чьё оно: клиента, своё с
+  // телефона клиники или копия отправки Chatpush (id …THISISBOT). Учёт введён
+  // 01.11.2026: днём шлюз переподключается ~раз в 50 мин, и в эти моменты от
+  // устройств клиники десятки сбоев расшифровки — теряются ли при этом реплики
+  // администраторов, по логам было не понять.
+  noteUndecrypted(key, msg) {
+    if (!key.id || this.undecrypted.has(key.id)) return;
+    if (this.undecrypted.size >= UNDECRYPTED_MAX) this.undecrypted.delete(this.undecrypted.keys().next().value);
+    const err = Array.isArray(msg.messageStubParameters) ? String(msg.messageStubParameters[0] || '') : '';
+    this.undecrypted.set(key.id, { key, ts: this.d.now(), err });
+    const t = setTimeout(() => {
+      const hit = this.undecrypted.get(key.id);
+      if (!hit || this.closed) return;
+      this.undecrypted.delete(key.id);
+      const who = /THISISBOT$/.test(key.id) ? 'копия отправки Chatpush'
+        : key.fromMe ? 'своё с устройства клиники' : 'от клиента';
+      this.log.warn(`сообщение НЕ расшифровано и после повтора (${who}): ${key.remoteJid}:${key.id}${key.participant ? ` participant=${key.participant}` : ''}${hit.err ? ` (${hit.err.slice(0, 80)})` : ''}`);
+    }, this.d.undecryptedWaitMs != null ? this.d.undecryptedWaitMs : UNDECRYPTED_WAIT_MS);
+    if (t && typeof t.unref === 'function') t.unref();
   }
 
   // ── Своя личность (номер, LID, имя) ─────────────────────────────
@@ -946,6 +993,7 @@ class WhatsappClient {
     this.detach();
     this.ownSends.clear();
     this.sentCache.clear();
+    this.undecrypted.clear();
   }
 }
 
