@@ -1207,6 +1207,30 @@
         <div class="bc-modal-body">
 
           <div class="bc-section">
+            <div class="bc-section-title">Куда отправляем</div>
+            <div id="bcTransport" class="bc-chip-row">
+              <span class="bc-chip on" data-v="messengers" onclick="bcSetTransport('messengers')">💬 Мессенджеры клиники</span>
+              <span class="bc-chip" data-v="telegram_bot" onclick="bcSetTransport('telegram_bot')">🤖 Telegram-бот</span>
+            </div>
+            <div class="bc-msg-only" style="margin-top:10px">
+              <div class="bc-section-title" style="margin-bottom:6px">Кому</div>
+              <div id="bcSource" class="bc-chip-row">
+                <span class="bc-chip on" data-v="filters" onclick="bcSetSource('filters')">По фильтрам</span>
+                <span class="bc-chip" data-v="list" onclick="bcSetSource('list')">По списку</span>
+              </div>
+              <div id="bcListBlock" style="display:none;margin-top:10px">
+                <div class="bc-section-hint">Вставьте строки «Имя;телефон» (или только телефон) либо загрузите файл .csv / .xlsx (до 2 МБ).</div>
+                <textarea id="bcListText" class="bc-textarea" rows="5" placeholder="Анна;+7 920 000-00-00&#10;79201112233"></textarea>
+                <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:6px">
+                  <input type="file" id="bcListFile" accept=".csv,.xlsx">
+                  <button class="btn btn-sec btn-sm" id="bcListParseBtn" onclick="bcParseList()">Разобрать</button>
+                </div>
+                <div id="bcListReport" class="bc-preview" style="margin-top:8px;display:none"></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="bc-section" id="bcFiltersSection">
             <div class="bc-section-title">Фильтр получателей</div>
 
             <div class="fg" style="margin-bottom:10px">
@@ -1272,7 +1296,7 @@
 
           <div class="bc-section">
             <div class="bc-section-title">Текст сообщения</div>
-            <div class="bc-section-hint">
+            <div class="bc-section-hint bc-bot-only">
               HTML-разметка Telegram: &lt;b&gt;жирный&lt;/b&gt;, &lt;i&gt;курсив&lt;/i&gt;, &lt;a href="…"&gt;ссылка&lt;/a&gt;.<br>
               Подстановки:
               <code onclick="bcInsertVar('{name}')">{name}</code>
@@ -1282,6 +1306,51 @@
             </div>
             <textarea id="bcText" class="bc-textarea" rows="7" placeholder="Здравствуйте, {first_name}! У вас на счету {bonuses} бонусов…" maxlength="4000"></textarea>
             <div class="bc-char-count"><span id="bcCharCount">0</span> / 4000</div>
+          </div>
+
+          <div class="bc-section bc-msg-only" id="bcImageBlock">
+            <div class="bc-section-title">Картинка (необязательно)</div>
+            <div class="bc-section-hint">jpg / png / webp до 5 МБ. Уйдёт вместе с текстом подписью.</div>
+            <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+              <input type="file" id="bcImageFile" accept="image/jpeg,image/png,image/webp" onchange="bcPickImage()">
+              <button class="btn btn-sec btn-sm" id="bcImageClear" style="display:none" onclick="bcClearImage()">убрать</button>
+            </div>
+            <img id="bcImagePreview" alt="" style="display:none;max-width:180px;max-height:140px;margin-top:8px;border-radius:6px">
+          </div>
+
+          <div class="bc-section bc-msg-only" id="bcDelivery">
+            <div class="bc-section-title">Доставка</div>
+            <label style="display:flex;gap:8px;align-items:center;margin-bottom:8px">
+              <input type="checkbox" id="bcCascade" checked onchange="bcUpdateForecast()">
+              <span>Каскад: последняя переписка → порядок из настроек автоуведомлений</span>
+            </label>
+            <table class="bc-ch-table" style="width:100%;font-size:13px">
+              <thead><tr><th style="text-align:left">Мессенджер</th><th>Пауза, сек</th><th>Лимит</th></tr></thead>
+              <tbody>
+                <tr><td><label><input type="checkbox" id="bcCh-tdlib-on" checked onchange="bcUpdateForecast()"> Telegram</label></td>
+                    <td><input id="bcCh-tdlib-delay" type="number" min="0" max="3600" value="60" oninput="bcUpdateForecast()"></td>
+                    <td><input id="bcCh-tdlib-limit" type="number" min="1" max="10000" placeholder="без лимита" oninput="bcUpdateForecast()"></td></tr>
+                <tr><td><label><input type="checkbox" id="bcCh-whatsapp-on" checked onchange="bcUpdateForecast()"> WhatsApp</label></td>
+                    <td><input id="bcCh-whatsapp-delay" type="number" min="0" max="3600" value="180" oninput="bcUpdateForecast()"></td>
+                    <td><input id="bcCh-whatsapp-limit" type="number" min="1" max="10000" placeholder="без лимита" oninput="bcUpdateForecast()"></td></tr>
+                <tr><td><label><input type="checkbox" id="bcCh-max-on" checked onchange="bcUpdateForecast()"> MAX</label></td>
+                    <td><input id="bcCh-max-delay" type="number" min="0" max="3600" value="60" oninput="bcUpdateForecast()"></td>
+                    <td><input id="bcCh-max-limit" type="number" min="1" max="10000" placeholder="без лимита" oninput="bcUpdateForecast()"></td></tr>
+              </tbody>
+            </table>
+            <div class="fg" style="margin-top:8px">
+              <label class="fl">Когда лимит мессенджера исчерпан</label>
+              <select id="bcOnLimit" onchange="bcUpdateForecast()">
+                <option value="next_channel">в следующий мессенджер</option>
+                <option value="skip">не отправлять</option>
+              </select>
+            </div>
+            <div id="bcForecast" class="bc-preview" style="margin-top:8px">—</div>
+            <div id="bcBonusHint" class="bc-section-hint" style="display:none;margin-top:6px">В режиме списка у номеров не из базы {bonuses} = 0.</div>
+            <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:10px">
+              <input id="bcTestPhone" type="tel" inputmode="tel" placeholder="Мой номер для теста" oninput="bcSaveTestPhone()">
+              <button class="btn btn-sec btn-sm" id="bcTestBtn" onclick="bcSendTest()">🧪 Тест на мой номер</button>
+            </div>
           </div>
 
           <div class="bc-actions">
@@ -2825,7 +2894,8 @@ function fireConfetti() {
 <script src="js/pages/dashboard.js?v=2026-10-03-messengers"></script>
 <script src="js/pages/dashboard-messengers.js?v=2026-10-04-verdicts1"></script>
 <script src="js/pages/dashboard-verdicts.js?v=2026-10-04-verdicts1"></script>
-<script src="js/pages/broadcasts.js?v=2026-06-13c"></script>
+<script src="js/pages/broadcasts-form.js?v=2026-11-01a"></script>
+<script src="js/pages/broadcasts.js?v=2026-11-01a"></script>
 <script src="js/pages/conditions-editor.js?v=2026-08-07a"></script>
 <script src="js/pages/notifications.js?v=2026-10-16a"></script>
 <script src="js/pages/care.js?v=2026-08-07a"></script>
