@@ -456,16 +456,18 @@ function bcRenderHistoryItem(b) {
   if (filters.gender)     fParts.push(`пол: ${filters.gender === 'female' ? 'жен' : 'муж'}`);
   const fLine = fParts.length ? fParts.join(' · ') : 'без фильтров';
 
+  const isMsg = b.transport === 'messengers';
   const canCancel = b.status === 'pending' || b.status === 'in_progress';
   const errLine = (b.errorSamples && b.errorSamples.length)
     ? `<div class="bc-row-errors">Примеры ошибок: ${b.errorSamples.slice(0,3).map(e => esc(e.error || '').slice(0, 60)).join(' / ')}</div>`
     : '';
 
   return `
-    <div class="bc-row" data-id="${b.id}">
+    <div class="bc-row" data-id="${b.id}"${isMsg ? ' data-monitor="1" onclick="bcOpenMonitor(' + Number(b.id) + ')" title="Открыть монитор"' : ''}>
       <div class="bc-row-grid">
         <div class="bc-row-left">
           <div class="bc-row-meta">
+            <span class="bc-row-chan" title="${isMsg ? 'Мессенджеры клиники' : 'Telegram-бот'}">${isMsg ? '💬' : '🤖'}</span>
             <span class="bc-row-status" style="background:${s.color}22;color:${s.color}">${s.lbl}</span>
             ${esc(b.author_name || '—')} · ${esc(created)}
           </div>
@@ -479,7 +481,7 @@ function bcRenderHistoryItem(b) {
             ${b.failed > 0 ? `<span style="color:var(--danger);font-size:11px">· ${b.failed} ошибок</span>` : ''}
           </div>
           <div class="bc-progress-bar"><i style="width:${pct}%;background:${s.color}"></i></div>
-          ${canCancel ? `<button class="btn btn-sec btn-sm" style="margin-top:8px" onclick="bcCancel(${b.id})">Отменить</button>` : ''}
+          ${canCancel ? `<button class="btn btn-sec btn-sm" style="margin-top:8px" onclick="event.stopPropagation();bcCancel(${b.id})">Отменить</button>` : ''}
         </div>
       </div>
     </div>`;

@@ -21,9 +21,9 @@
 <script src="js/core/api.js"></script>
 <script src="js/core/theme.js"></script>
 <script src="js/core/auth.js?v=2026-06-02a"></script>
-<script src="js/core/nav.js?v=2026-10-24-edocs"></script>
+<script src="js/core/nav.js?v=2026-11-01-bcmon"></script>
 <link rel="stylesheet" href="css/base.css?v=2026-08-10-mobile">
-<link rel="stylesheet" href="css/features.css?v=2026-10-25-board">
+<link rel="stylesheet" href="css/features.css?v=2026-11-01-bcmon">
 </head>
 <body>
 
@@ -1193,6 +1193,49 @@
             </label>
           </div>
           <div id="ntParityBody"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══ BROADCAST MONITOR (мессенджеры) ═══ -->
+    <div id="bcMonitorOv" class="ov" onclick="if(event.target===this)bcCloseMonitor()">
+      <div class="modal bc-modal bc-mon">
+        <div class="mh">
+          <div class="mt">Рассылка</div>
+          <button class="mc" onclick="bcCloseMonitor()">✕</button>
+        </div>
+        <div class="bc-modal-body">
+          <div class="bc-mon-head">
+            <div id="bcMonStatus"></div>
+            <div class="bc-mon-btns">
+              <button id="bcMonPause" class="btn btn-sec btn-sm" onclick="bcMonAction('pause')">Пауза</button>
+              <button id="bcMonResume" class="btn btn-pri btn-sm" style="display:none" onclick="bcMonAction('resume')">Продолжить</button>
+              <button id="bcMonCancel" class="btn btn-sec btn-sm" onclick="bcMonAction('cancel')">Отменить остаток</button>
+            </div>
+          </div>
+          <div id="bcMonProgress"></div>
+          <div id="bcMonText" class="bc-mon-text"></div>
+          <div id="bcMonCards" class="bc-mon-cards"></div>
+          <div class="bc-section">
+            <div class="bc-section-title">Сейчас ждут</div>
+            <div id="bcMonWaiting"></div>
+          </div>
+          <div id="bcMonSummary"></div>
+          <div class="bc-section">
+            <div class="bc-section-title">Получатели</div>
+            <div class="bc-mon-filters">
+              <select id="bcMonStatusF" onchange="bcMonFilterChanged(0)">
+                <option value="">Все статусы</option><option value="pending">Ждут</option><option value="sent">Отправлено</option>
+                <option value="failed">Ошибка</option><option value="skipped">Пропущены</option><option value="cancelled">Отменены</option>
+              </select>
+              <select id="bcMonChannelF" onchange="bcMonFilterChanged(0)">
+                <option value="">Все мессенджеры</option><option value="tdlib">Telegram</option><option value="whatsapp">WhatsApp</option><option value="max">MAX</option>
+              </select>
+              <input id="bcMonQ" type="text" placeholder="Поиск по номеру" oninput="bcMonFilterChanged(400)">
+            </div>
+            <div class="bc-mon-tablewrap"><table class="bc-mon-table"><thead><tr><th>Имя</th><th>Номер</th><th>Мессенджер</th><th>Статус</th></tr></thead><tbody id="bcMonRows"></tbody></table></div>
+            <div id="bcMonPager" class="bc-mon-pager"></div>
+          </div>
         </div>
       </div>
     </div>
@@ -2895,7 +2938,8 @@ function fireConfetti() {
 <script src="js/pages/dashboard-messengers.js?v=2026-10-04-verdicts1"></script>
 <script src="js/pages/dashboard-verdicts.js?v=2026-10-04-verdicts1"></script>
 <script src="js/pages/broadcasts-form.js?v=2026-11-01a"></script>
-<script src="js/pages/broadcasts.js?v=2026-11-01a"></script>
+<script src="js/pages/broadcasts-monitor.js?v=2026-11-01b"></script>
+<script src="js/pages/broadcasts.js?v=2026-11-01b"></script>
 <script src="js/pages/conditions-editor.js?v=2026-08-07a"></script>
 <script src="js/pages/notifications.js?v=2026-10-16a"></script>
 <script src="js/pages/care.js?v=2026-08-07a"></script>

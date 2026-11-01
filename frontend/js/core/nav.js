@@ -39,6 +39,7 @@ function _navAllowed(p) {
 function navTo(p, opts) {
   opts = opts || {};
   if (typeof vdStop === 'function') vdStop();
+  if (typeof bcStopMonitor === 'function') bcStopMonitor();   // монитор рассылки живёт только на своей странице
   closeMenu();                         // закрыть drawer, если переход был из него
   // Живой опрос чата жив только на своей странице — гасим при любом переходе
   // (страница «Чат» перезапустит его через loadChat).
@@ -202,6 +203,7 @@ window.addEventListener('hashchange', () => {
 
 function showLogin() {
   if (typeof vdStop === 'function') vdStop();
+  if (typeof bcStopMonitor === 'function') bcStopMonitor();
   if (typeof edStopPolling === 'function') edStopPolling();
   document.getElementById('agent-model-notice')?.remove();
   localStorage.removeItem('lp_tk');
