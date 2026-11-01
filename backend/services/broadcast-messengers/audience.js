@@ -112,22 +112,52 @@ async function loadByList(salonId, list) {
   return { people, skipped };
 }
 
-async function resolveAudience(salonId, { source, filters, list, channelSettings, cascadeEnabled } = {}) {
+const EMPTY_CONV = Object.freeze({ lastChannel: null, chats: Object.freeze({}) });
+
+/** Каноны номеров, встречавшихся в переписке салона; сбой → null (зовём lastConversation всем, как раньше). */
+async function phonesWithConversation(salonId) {
+  try {
+    const rows = await db.any(
+      `SELECT DISTINCT phone FROM chatpush_messages WHERE salon_id = $1 AND COALESCE(phone,'') <> ''`, [salonId]);
+    const set = new Set();
+    for (const r of rows) { const k = canonPhone(r.phone); if (k) set.add(k); }
+    return set;
+  } catch (e) {
+    return null;
+  }
+}
+
+/**
+ * База аудитории — люди и их последняя переписка; от настроек мессенджеров рассылки НЕ зависит, поэтому
+ * прогноз формы кэширует её (service.js), а на правку пауз/лимитов/галочек пересчитывает только каскад.
+ */
+async function loadAudienceBase(salonId, { source, filters, list } = {}) {
   const { people, skipped } = source === 'list' ? await loadByList(salonId, list) : await loadByFilters(salonId, filters);
   const cfg = await notifSettings.getSettings(salonId);
-  const chans = channelSettings || {};
 
-  const convs = new Array(people.length);
-  for (let i = 0; i < people.length; i += CONV_BATCH) {
-    const slice = people.slice(i, i + CONV_BATCH);
-    const res = await Promise.all(slice.map(p => lastConversation(salonId, p.phone).catch(() => ({ lastChannel: null, chats: {} }))));
-    res.forEach((r, k) => { convs[i + k] = r || { lastChannel: null, chats: {} }; });
+  // lastConversation зовём только тем, у кого в переписке салона ВООБЩЕ есть этот номер: у остальных оба
+  // её запроса заведомо пусты. Префильтр — надмножество по канону (сырые формы номера в chatpush_messages
+  // разные), сам результат по-прежнему считает lastConversation — правило адресатов одно. ЗАЧЕМ: на
+  // 4 400 клиентах «по фильтрам» сборка шла 100 с (дев-БД через туннель), а прогноз формы зовёт её часто.
+  const known = await phonesWithConversation(salonId);
+  const convs = people.map(() => EMPTY_CONV);
+  const todo = people.map((p, idx) => idx).filter(idx => !known || known.has(people[idx].phone));
+  for (let i = 0; i < todo.length; i += CONV_BATCH) {
+    const slice = todo.slice(i, i + CONV_BATCH);
+    const res = await Promise.all(slice.map(idx => lastConversation(salonId, people[idx].phone).catch(() => EMPTY_CONV)));
+    res.forEach((r, k) => { convs[slice[k]] = r || EMPTY_CONV; });
   }
+  return { people, convs, cfg, skipped };
+}
 
+/** Каскад каждому из базы: выключенные в рассылке мессенджеры и мессенджеры без адресата выпадают. */
+function applyCascade(base, { channelSettings, cascadeEnabled } = {}) {
+  const chans = channelSettings || {};
+  const skipped = { ...base.skipped, no_recipient: base.skipped.no_recipient || 0 };
   const recipients = [];
-  people.forEach((p, idx) => {
-    const conv = convs[idx];
-    let cascade = buildCascade(cfg.default_channels, { preferLast: cfg.prefer_last_channel !== false, lastChannel: conv.lastChannel })
+  base.people.forEach((p, idx) => {
+    const conv = base.convs[idx];
+    let cascade = buildCascade(base.cfg.default_channels, { preferLast: base.cfg.prefer_last_channel !== false, lastChannel: conv.lastChannel })
       .filter(ch => chans[ch] && chans[ch].enabled && recipientFor(ch, p.phone, conv.chats) != null);
     if (cascadeEnabled === false) cascade = cascade.slice(0, 1);
     if (!cascade.length) { skipped.no_recipient++; return; }
@@ -136,4 +166,8 @@ async function resolveAudience(salonId, { source, filters, list, channelSettings
   return { recipients, skipped };
 }
 
-module.exports = { resolveAudience, matchesFilters, CONV_BATCH };
+async function resolveAudience(salonId, opts = {}) {
+  return applyCascade(await loadAudienceBase(salonId, opts), opts);
+}
+
+module.exports = { resolveAudience, loadAudienceBase, applyCascade, matchesFilters, CONV_BATCH };

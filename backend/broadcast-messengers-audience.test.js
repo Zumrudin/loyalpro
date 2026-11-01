@@ -75,4 +75,20 @@ describe('resolveAudience', () => {
     expect(r.recipients[0].cascade[0]).toBe('max');
     expect(r.recipients[1].cascade).toEqual(['tdlib', 'whatsapp', 'max']);
   });
+  test('номер без переписки в салоне — lastConversation не зовётся (префильтр)', async () => {
+    db.any
+      .mockResolvedValueOnce([client(), client({ client_id: 2, phone: '+79200000002' })]) // клиенты
+      .mockResolvedValueOnce([{ phone: '89200000002' }]); // номера из chatpush_messages
+    const r = await aud.resolveAudience(1, { source: 'filters', filters: {}, channelSettings: ALL });
+    expect(rules.lastConversation).toHaveBeenCalledTimes(1);
+    expect(rules.lastConversation).toHaveBeenCalledWith(1, '79200000002');
+    expect(r.recipients).toHaveLength(2);
+  });
+  test('сбой префильтра — lastConversation зовётся всем', async () => {
+    db.any
+      .mockResolvedValueOnce([client(), client({ client_id: 2, phone: '+79200000002' })])
+      .mockRejectedValueOnce(new Error('db down'));
+    await aud.resolveAudience(1, { source: 'filters', filters: {}, channelSettings: ALL });
+    expect(rules.lastConversation).toHaveBeenCalledTimes(2);
+  });
 });
