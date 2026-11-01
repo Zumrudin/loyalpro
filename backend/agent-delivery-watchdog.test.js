@@ -183,3 +183,84 @@ test('повтор уже ушёл прошлым тиком (пометка н�
   expect(st.setStatus).toHaveBeenCalledWith(1, 'retried');
   expect(r.retried).toBe(0);
 });
+
+// ── WhatsApp через свой шлюз (delivery_id g<n>, 01.11.2026) ─────────────
+// Эхо шлюз синтезирует сам сразу после sendMessage — chatpush_events для него
+// ничего не доказывает (31.10.2026: 79608575301, «Ожидание сообщения» у клиентки,
+// а строка закрылась confirmed). Судим по квитанциям телефона получателя.
+const gw = (statusId, error = null) => ({ id: 'g236', status: { status_id: statusId, description: '' }, error });
+
+test('gatewayVerdict: квитанция → confirmed; «Отправлено» → sent; запрос повтора/5/1 → undelivered', () => {
+  expect(watchdog.gatewayVerdict(gw(3))).toBe('confirmed');
+  expect(watchdog.gatewayVerdict(gw(4))).toBe('confirmed');
+  expect(watchdog.gatewayVerdict(gw(2))).toBe('sent');
+  expect(watchdog.gatewayVerdict(gw(2, `${watchdog.GATEWAY_RETRY_MARK}: запрос повтора 1`))).toBe('undelivered');
+  expect(watchdog.gatewayVerdict(gw(5, 'WhatsApp отклонил'))).toBe('undelivered');
+  expect(watchdog.gatewayVerdict(gw(1))).toBe('undelivered');
+  expect(watchdog.gatewayVerdict(null)).toBe('undelivered');
+});
+
+test('маркер повтора совпадает с тем, что пишет шлюз', () => {
+  const gwDeliveries = require('../gateway/lib/deliveries');
+  expect(gwDeliveries.RETRY_ERROR_PREFIX).toBe(watchdog.GATEWAY_RETRY_MARK);
+});
+
+test('isGatewayDelivery: только whatsapp с g<n>', () => {
+  expect(watchdog.isGatewayDelivery(row({ delivery_id: 'g236' }))).toBe(true);
+  expect(watchdog.isGatewayDelivery(row({ delivery_id: '376412700' }))).toBe(false);
+  expect(watchdog.isGatewayDelivery(row({ channel: 'tdlib', delivery_id: 'g235' }))).toBe(false);
+});
+
+test('шлюз: эхо в chatpush_events НЕ подтверждает, подтверждает квитанция', async () => {
+  const st = store({ listPending: jest.fn(async () => [row({ delivery_id: 'g236' })]), isConfirmed: jest.fn(async () => true) });
+  const send = jest.fn(async () => ({ id: 'g250' }));
+  const gatewayStatus = jest.fn(async () => gw(3));
+  const res = await watchdog.sweep({ config: cfg, store: st, send, gatewayStatus, nowMs: NOW });
+  expect(st.isConfirmed).not.toHaveBeenCalled();
+  expect(st.setStatus).toHaveBeenCalledWith(1, 'confirmed');
+  expect(send).not.toHaveBeenCalled();
+  expect(res.confirmed).toBe(1);
+});
+
+test('шлюз: получатель запросил повтор и квитанции нет → один повтор (как недоставка)', async () => {
+  const st = store({ listPending: jest.fn(async () => [row({ delivery_id: 'g236' })]) });
+  const send = jest.fn(async () => ({ id: 'g250' }));
+  const gatewayStatus = jest.fn(async () => gw(2, `${watchdog.GATEWAY_RETRY_MARK}: запрос повтора 2`));
+  const res = await watchdog.sweep({ config: cfg, store: st, send, gatewayStatus, nowMs: NOW });
+  expect(send).toHaveBeenCalledTimes(1);
+  expect(st.insert).toHaveBeenCalledWith(expect.objectContaining({ deliveryId: 'g250', retryOf: 1 }));
+  expect(res.retried).toBe(1);
+});
+
+test('шлюз: голое «Отправлено» — не повторяем и не зовём человека; через час закрываем sent', async () => {
+  const send = jest.fn(); const escalate = jest.fn();
+  const gatewayStatus = jest.fn(async () => gw(2));
+  const st1 = store({ listPending: jest.fn(async () => [row({ delivery_id: 'g236' })]) });   // 10 мин
+  await watchdog.sweep({ config: cfg, store: st1, send, escalate, gatewayStatus, nowMs: NOW });
+  expect(st1.setStatus).not.toHaveBeenCalled();
+  const old = row({ delivery_id: 'g236', created_at: new Date(NOW - (watchdog.MAX_RETRY_AGE_MIN + 1) * 60000).toISOString() });
+  const st2 = store({ listPending: jest.fn(async () => [old]) });
+  const res = await watchdog.sweep({ config: cfg, store: st2, send, escalate, gatewayStatus, nowMs: NOW });
+  expect(st2.setStatus).toHaveBeenCalledWith(1, 'sent');
+  expect(send).not.toHaveBeenCalled();
+  expect(escalate).not.toHaveBeenCalled();
+  expect(res.sent).toBe(1);
+  expect(mockLogger.warn).toHaveBeenCalled();
+});
+
+test('шлюз: статус не получен → строка остаётся pending, ничего не шлём', async () => {
+  const st = store({ listPending: jest.fn(async () => [row({ delivery_id: 'g236' })]) });
+  const send = jest.fn();
+  const gatewayStatus = jest.fn(async () => { throw new Error('ECONNREFUSED'); });
+  await watchdog.sweep({ config: cfg, store: st, send, gatewayStatus, nowMs: NOW });
+  expect(send).not.toHaveBeenCalled();
+  expect(st.setStatus).not.toHaveBeenCalled();
+});
+
+test('Chatpush-строки (числовой delivery_id) — по-прежнему по chatpush_events', async () => {
+  const st = store({ listPending: jest.fn(async () => [row()]), isConfirmed: jest.fn(async () => true) });
+  const gatewayStatus = jest.fn();
+  await watchdog.sweep({ config: cfg, store: st, gatewayStatus, nowMs: NOW });
+  expect(gatewayStatus).not.toHaveBeenCalled();
+  expect(st.setStatus).toHaveBeenCalledWith(1, 'confirmed');
+});

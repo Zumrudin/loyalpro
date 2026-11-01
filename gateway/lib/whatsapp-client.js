@@ -48,6 +48,11 @@
 // ушло в сокет), messages.update ERROR → «Невозможно доставить», sendMessage
 // бросил → «Невозможно доставить». Иначе доставка висела бы в «Принято» и
 // failStale на следующем старте ложно закрыл бы её как недоставленную.
+// Квитанции устройства (DELIVERY_ACK/READ) поднимают статус до «Доставлено»/
+// «Прочитано» (raiseStatus, только вверх) — это единственный признак, что
+// сообщение РАСШИФРОВАНО у получателя. Клиенту с известным LID шлём на
+// <lid>@lid: отправка на номер шла отдельной Signal-сессией, и телефон,
+// ведущий переписку на LID, показывал «Ожидание сообщения» (31.10.2026).
 // Старше MAX_MESSAGE_AGE_S, статусы-истории, рассылки, каналы — не форвардим;
 // в группах медиа не качаем — как у Telegram.
 // Зависимости инжектятся (deps) — тесты без Baileys.
@@ -84,6 +89,11 @@ const INFLIGHT_WAIT_MS = 30 * 1000;
 const MEDIA_DOWNLOAD_DEADLINE_MS = 90 * 1000;
 const MEDIA_HTTP_TIMEOUT_MS = 30 * 1000;   // axios timeout: до заголовков ответа
 const STATUS_ERROR = 0;              // WAMessageStatus.ERROR
+const STUB_CIPHERTEXT = 2;           // WebMessageInfo.StubType.CIPHERTEXT — не расшифровалось
+const UNDECRYPTED_WAIT_MS = 3 * 60 * 1000;
+const UNDECRYPTED_MAX = 1000;
+const STATUS_DELIVERY_ACK = 3;       // WAMessageStatus.DELIVERY_ACK — квитанция устройства получателя
+const STATUS_READ = 4;               // WAMessageStatus.READ (5 — PLAYED, тоже «прочитано»)
 // Номер получателя в сыром пакете своего сообщения (другое устройство аккаунта).
 const RECIPIENT_PN_ATTRS = ['peer_recipient_pn', 'recipient_pn'];
 // Сколько раз написать в лог атрибуты пакета, где номера получателя НЕТ, — чтобы
@@ -111,7 +121,47 @@ let baileysMod = null;
 // (require(esm)). Грузим лениво: тесты и Telegram-аккаунты без него.
 function baileys() { if (!baileysMod) baileysMod = require('@whiskeysockets/baileys'); return baileysMod; }
 
-async function defaultCreateSocket(authDir, { getMessage } = {}) {
+// Логи Baileys по умолчанию глушим целиком, кроме узкого набора про повтор
+// отправки и расшифровку (31.10.2026: у получателя «Ожидание сообщения», а мы
+// не видели ни запросов повтора, ни их судьбы). Фильтр стоит в hooks.logMethod
+// — отброшенная строка не сериализуется. WA_BAILEYS_DIAG=false гасит всё.
+const BAILEYS_DIAG_RE = /retry|decrypt|again|bad ack|no session|prekey|session not found|not available/i;
+function baileysLogger(pino, sink) {
+  if (process.env.WA_BAILEYS_DIAG === 'false' || !sink) return pino({ level: 'silent' });
+  return pino({
+    level: 'debug',
+    hooks: {
+      logMethod(args, method) {
+        const msg = typeof args[0] === 'string' ? args[0] : (typeof args[1] === 'string' ? args[1] : '');
+        if (!BAILEYS_DIAG_RE.test(msg)) return;
+        const obj = args[0] && typeof args[0] === 'object' ? args[0] : null;
+        let extra = '';
+        if (obj) {
+          try {
+            extra = ' ' + JSON.stringify(obj, (k, v) => (k === 'trace' && typeof v === 'string' ? v.split('\n').slice(0, 3).join(' | ') : (Buffer.isBuffer(v) || (v && v.type === 'Buffer') ? '<buf>' : v))).slice(0, 600);
+          } catch (_) { extra = ''; }
+        }
+        sink(`baileys: ${msg}${extra}`);
+      },
+    },
+  });
+}
+
+// Текст ошибки закрытия: днём соединение рвётся примерно раз в 50 минут с
+// code=500 (31.10.2026), а ровно в эти моменты идут сбои расшифровки — без
+// текста и узла stream:error причину не установить. Коротко, без буферов.
+function disconnectDetail(u) {
+  const err = u && u.lastDisconnect && u.lastDisconnect.error;
+  if (!err) return '';
+  let data = '';
+  try {
+    const d = err.data != null ? err.data : (err.output && err.output.payload);
+    if (d != null) data = JSON.stringify(d, (k, v) => (v && v.type === 'Buffer' ? '<buf>' : v)).slice(0, 300);
+  } catch (_) { data = ''; }
+  return `: ${String(err.message || err).slice(0, 200)}${data ? ` ${data}` : ''}`;
+}
+
+async function defaultCreateSocket(authDir, { getMessage, diagSink } = {}) {
   const b = baileys();
   const pino = require('pino');
   const { state, saveCreds } = await b.useMultiFileAuthState(authDir);
@@ -121,7 +171,7 @@ async function defaultCreateSocket(authDir, { getMessage } = {}) {
   const sock = b.makeWASocket({
     auth: state,
     ...(version ? { version } : {}),
-    logger: pino({ level: 'silent' }),
+    logger: baileysLogger(pino, diagSink),
     browser: b.Browsers.ubuntu('Chrome'),
     markOnlineOnConnect: false,
     syncFullHistory: false,
@@ -194,9 +244,11 @@ class WhatsappClient {
     this.ownSends = new Map();       // key.id → {deliveryId, ts}
     this.inflight = new Map();       // jid → Set промисов отправок, ещё не зарегистрированных в ownSends
     this.sentCache = new Map();      // key.id → message (для getMessage при повторе)
+    this.undecrypted = new Map();    // key.id → {key, ts, err}: ждём повторную доставку
     this.existsCache = new Map();    // phone → {jid, ts} (onWhatsApp подтвердил, jid канонический)
     this.chatQueues = new Map();
     this.lidPhones = new Map();      // lid → phone: синхронно, раньше записи в БД (пакет обгоняет INSERT)
+    this.phoneLids = new Map();      // phone → lid: обратный индекс для отправки на LID
     this.wsHandlers = [];            // [ws, event, fn] — сырые узлы протокола
     this.rawPnAttr = null;           // каким атрибутом пришёл номер получателя (для лога, один раз)
     this.rawDiagLeft = RAW_DIAG_MAX;
@@ -219,7 +271,8 @@ class WhatsappClient {
   async connect() {
     if (this.closed) return;
     const getMessage = async (key) => (key && this.sentCache.get(key.id)) || undefined;
-    const { sock, saveCreds } = await this.d.createSocket(this.dirs().wa, { getMessage });
+    const diagSink = (line) => this.log.info(line);
+    const { sock, saveCreds } = await this.d.createSocket(this.dirs().wa, { getMessage, diagSink });
     // close() мог случиться, пока сокет создавался (реконнект) — такой сокет
     // не оживляем, иначе его open записал бы 'ready' закрытому клиенту.
     if (this.closed) { try { sock.end(undefined); } catch (_) { /* уже закрыт */ } return; }
@@ -244,6 +297,9 @@ class WhatsappClient {
       const raw = (node) => { try { this.onRawMessage(node); } catch (e) { this.log.warn(`сырой пакет: ${e.message}`); } };
       sock.ws.on('CB:message', raw);
       this.wsHandlers.push([sock.ws, 'CB:message', raw]);
+      const rawReceipt = (node) => { try { this.onRawReceipt(node); } catch (e) { this.log.warn(`сырая квитанция: ${e.message}`); } };
+      sock.ws.on('CB:receipt', rawReceipt);
+      this.wsHandlers.push([sock.ws, 'CB:receipt', rawReceipt]);
     }
   }
 
@@ -288,7 +344,7 @@ class WhatsappClient {
       if (this.closed) return;        // close()/logout() — сами разберутся с состоянием
       const code = disconnectCode(u);
       const DR = this.d.disconnectReason;
-      this.log.warn(`соединение закрыто (code=${code || '?'})`);
+      this.log.warn(`соединение закрыто (code=${code || '?'})${disconnectDetail(u)}`);
       if (code === DR.loggedOut) {
         this.closed = true;
         this.detach();
@@ -346,7 +402,12 @@ class WhatsappClient {
   rememberLidLocal(lid, phone) {
     if (this.lidPhones.has(lid)) this.lidPhones.delete(lid);        // свежие — в хвост (вытесняем самые старые)
     this.lidPhones.set(lid, phone);
-    if (this.lidPhones.size > LID_CACHE_MAX) this.lidPhones.delete(this.lidPhones.keys().next().value);
+    this.phoneLids.set(phone, lid);
+    if (this.lidPhones.size > LID_CACHE_MAX) {
+      const [oldLid, oldPhone] = this.lidPhones.entries().next().value;
+      this.lidPhones.delete(oldLid);
+      if (this.phoneLids.get(oldPhone) === oldLid) this.phoneLids.delete(oldPhone);
+    }
   }
 
   // Память обновляется СИНХРОННО (до первого await) — вызывающий из сырого
@@ -504,6 +565,11 @@ class WhatsappClient {
       if (this.isSelfChat(key.remoteJid)) continue;                 // «Избранное» — не переписка с клиентом
       const ts = mapper.tsOf(msg.messageTimestamp);
       if (ts && this.d.now() / 1000 - ts > MAX_MESSAGE_AGE_S) { this.log.warn(`пропущено ${key.remoteJid}:${key.id} старше ${MAX_MESSAGE_AGE_S / 3600} ч`); continue; }
+      if (msg.messageStubType === STUB_CIPHERTEXT) { this.noteUndecrypted(key, msg); continue; }
+      if (this.undecrypted.has(key.id)) {
+        this.undecrypted.delete(key.id);
+        this.log.info(`сообщение ${key.remoteJid}:${key.id} расшифровано после повтора`);
+      }
       if (!mapper.contentOf(msg.message)) continue;                 // служебное/заглушка
       this.enqueueChat(key.remoteJid, async () => {
         if (key.fromMe) {
@@ -514,6 +580,31 @@ class WhatsappClient {
         await this.emitMessage(msg, null);
       }).catch(e => this.log.error(`сообщение ${key.remoteJid}:${key.id}: ${e.message}`));
     }
+  }
+
+  // Нерасшифрованное сообщение Baileys отдаёт заглушкой CIPHERTEXT и просит
+  // отправителя прислать его заново; заглушку мы не форвардим (в «Чат» ничего
+  // не попадает). Если повтор не пришёл расшифрованным за UNDECRYPTED_WAIT_MS,
+  // сообщение потеряно молча — пишем WARN с тем, чьё оно: клиента, своё с
+  // телефона клиники или копия отправки Chatpush (id …THISISBOT). Учёт введён
+  // 01.11.2026: днём шлюз переподключается ~раз в 50 мин, и в эти моменты от
+  // устройств клиники десятки сбоев расшифровки — теряются ли при этом реплики
+  // администраторов, по логам было не понять.
+  noteUndecrypted(key, msg) {
+    if (!key.id || this.undecrypted.has(key.id)) return;
+    if (this.undecrypted.size >= UNDECRYPTED_MAX) this.undecrypted.delete(this.undecrypted.keys().next().value);
+    const err = Array.isArray(msg.messageStubParameters) ? String(msg.messageStubParameters[0] || '') : '';
+    this.undecrypted.set(key.id, { key, ts: this.d.now(), err });
+    this.log.info(`сообщение ${key.remoteJid}:${key.id} не расшифровано (${key.fromMe ? 'своё' : 'входящее'}${err ? `, ${err.slice(0, 60)}` : ''}) — ждём повтора`);
+    const t = setTimeout(() => {
+      const hit = this.undecrypted.get(key.id);
+      if (!hit || this.closed) return;
+      this.undecrypted.delete(key.id);
+      const who = /THISISBOT$/.test(key.id) ? 'копия отправки Chatpush'
+        : key.fromMe ? 'своё с устройства клиники' : 'от клиента';
+      this.log.warn(`сообщение НЕ расшифровано и после повтора (${who}): ${key.remoteJid}:${key.id}${key.participant ? ` participant=${key.participant}` : ''}${hit.err ? ` (${hit.err.slice(0, 80)})` : ''}`);
+    }, this.d.undecryptedWaitMs != null ? this.d.undecryptedWaitMs : UNDECRYPTED_WAIT_MS);
+    if (t && typeof t.unref === 'function') t.unref();
   }
 
   // ── Своя личность (номер, LID, имя) ─────────────────────────────
@@ -660,6 +751,13 @@ class WhatsappClient {
   async onUpdates(updates) {
     for (const u of updates || []) {
       const key = (u && u.key) || {}; const upd = (u && u.update) || {};
+      if (typeof upd.status === 'number' && key.id && this.ownSends.has(key.id)) {
+        this.log.info(`messages.update g${this.ownSends.get(key.id).deliveryId}: status=${upd.status} fromMe=${!!key.fromMe} remote=${key.remoteJid || '-'}`);
+      }
+      if (key.fromMe && typeof upd.status === 'number' && upd.status >= STATUS_DELIVERY_ACK) {
+        await this.onReceipt(key, upd.status);
+        continue;
+      }
       if (!key.fromMe || upd.status !== STATUS_ERROR) continue;
       let deliveryId = this.ownSends.has(key.id) ? this.ownSends.get(key.id).deliveryId : null;
       if (!deliveryId) {
@@ -671,6 +769,61 @@ class WhatsappClient {
       this.log.warn(`delivery g${deliveryId}: ${error}`);
       await this.d.deliveries.setStatus(deliveryId, this.d.deliveries.STATUS.FAILED, { error });
     }
+  }
+
+  // Диагностика (31.10.2026): квитанции на НАШИ отправки и любые запросы повтора
+  // — в лог как есть (атрибуты узла), до разбора Baileys. Нужно, чтобы понять,
+  // приходят ли квитанции вообще и в какой форме (from/recipient), и сколько раз
+  // и с какого адреса телефон получателя просит повтор.
+  onRawReceipt(node) {
+    const a = (node && node.attrs) || {};
+    const items = [];
+    for (const c of (Array.isArray(node && node.content) ? node.content : [])) {
+      if (c && c.tag === 'list' && Array.isArray(c.content)) for (const it of c.content) if (it && it.attrs && it.attrs.id) items.push(it.attrs.id);
+    }
+    const ids = [a.id, ...items].filter(Boolean);
+    const ours = ids.filter(id => this.ownSends.has(id));
+    const retry = a.type === 'retry';
+    if (!ours.length && !retry) return;
+    const label = (id) => (this.ownSends.has(id) ? `g${this.ownSends.get(id).deliveryId}` : id);
+    const rc = retry && Array.isArray(node.content) ? node.content.find(c => c && c.tag === 'retry') : null;
+    const keys = retry && Array.isArray(node.content) && node.content.some(c => c && c.tag === 'keys');
+    this.log.info(`квитанция ${a.type || 'delivery'}: from=${a.from || '-'} recipient=${a.recipient || '-'} participant=${a.participant || '-'}`
+      + ` ids=${ids.map(label).join(',')}${rc ? ` count=${(rc.attrs && rc.attrs.count) || '?'}` : ''}${retry ? ` keys=${keys ? 'yes' : 'no'}` : ''}${a.offline ? ' offline' : ''}`);
+    // Запрос повтора от ПОЛУЧАТЕЛЯ = сообщение до него дошло, но не расшифровалось:
+    // пишем причину в доставку. Свои же устройства (телефон клиники, другие
+    // привязанные) тоже просят повтор — это не получатель, их пропускаем.
+    if (retry && this.ownSends.has(a.id) && this.d.deliveries.markRetryRequested) {
+      const ownLid = this.ownLid ? String(this.ownLid) : null;
+      const ownPhone = this.ownPhone ? String(this.ownPhone) : null;
+      const fromLid = mapper.lidOfJid(a.from);
+      const fromPhone = mapper.phoneOfJid(a.from);
+      const fromSelf = (ownLid && fromLid === ownLid) || (ownPhone && fromPhone === ownPhone);
+      if (!fromSelf) {
+        const deliveryId = this.ownSends.get(a.id).deliveryId;
+        Promise.resolve(this.d.deliveries.markRetryRequested(deliveryId, rc && rc.attrs && rc.attrs.count))
+          .catch(e => this.log.warn(`delivery g${deliveryId}: запрос повтора не записан (${e.message})`));
+      }
+    }
+  }
+
+  // Квитанция устройства получателя: единственное доказательство, что сообщение
+  // РАСШИФРОВАНО у клиента («Отправлено» — лишь «ушло в сокет»; нерасшифрованное
+  // висит у получателя «Ожидание сообщения», инцидент 31.10.2026). Только лог и
+  // рост статуса — сбой БД доставку не трогает.
+  async onReceipt(key, status) {
+    if (!key.id) return;
+    let deliveryId = this.ownSends.has(key.id) ? this.ownSends.get(key.id).deliveryId : null;
+    if (!deliveryId && this.d.deliveries.findAnyByProviderMessageId) {
+      try { deliveryId = await this.d.deliveries.findAnyByProviderMessageId(this.id, key.id); }
+      catch (e) { this.log.warn(`findAnyByProviderMessageId: ${e.message}`); }
+    }
+    if (!deliveryId) return;   // не наша отправка (сообщение с телефона клиники)
+    const st = status >= STATUS_READ ? this.d.deliveries.STATUS.READ : this.d.deliveries.STATUS.DELIVERED;
+    if (!st || !this.d.deliveries.raiseStatus) return;
+    try {
+      if (await this.d.deliveries.raiseStatus(deliveryId, st)) this.log.info(`delivery g${deliveryId}: ${st[1].toLowerCase()}`);
+    } catch (e) { this.log.warn(`delivery g${deliveryId}: статус ${st[1]} не записан (${e.message})`); }
   }
 
   // ── Отправка ─────────────────────────────────────────────────
@@ -685,6 +838,14 @@ class WhatsappClient {
   async resolveJid(phone) {
     const p = normalizePhone(phone);
     if (!p) throw httpError('нет получателя: phone обязателен', 422);
+    // Клиент, чей LID известен, пишет нам с LID — и отвечать надо туда же.
+    // Отправка на номер шифруется ОТДЕЛЬНОЙ сессией (<номер>.<dev>), которую
+    // телефон клиента, ведущий переписку на LID, расшифровать не может:
+    // у получателя «Ожидание сообщения», дальше всё держится на retry
+    // (инцидент 31.10.2026, 79608575301). LID известен — значит, WhatsApp у
+    // клиента есть, onWhatsApp не нужен.
+    const lid = await this.lidOfPhone(p);
+    if (lid) return { jid: `${lid}@lid`, phone: p, pnJid: `${p}@s.whatsapp.net` };
     const hit = this.existsCache.get(p);
     if (hit && this.d.now() - hit.ts <= EXISTS_TTL_MS) return { jid: hit.jid, phone: p };
     let res;
@@ -696,16 +857,50 @@ class WhatsappClient {
       // Канонический jid от WhatsApp (номер мог быть записан не так, как его знает WA).
       const jid = typeof r.jid === 'string' && r.jid.includes('@') ? normJid(r.jid) : `${p}@s.whatsapp.net`;
       this.existsCache.set(p, { jid, ts: this.d.now() });
+      // onWhatsApp Baileys 6.7.24 спрашивает usync и с протоколом LID: r.lid —
+      // сырой attrs.val узла <lid> («<цифры>@lid»; на всякий случай и голые цифры,
+      // и суффикс устройства). Контакт, чей LID нам ещё ни разу не приходил, иначе
+      // получал бы сообщение на номер — тот же недешифруемый случай, что выше.
+      // Выученный LID идёт через learnPairs (память + БД; чужой номер за LID не
+      // перезаписывает), а решает lidOfPhone — единственная точка проверок.
+      // Любой сбой — прежний путь на номер.
+      try {
+        const rawLid = r.lid == null ? '' : String(r.lid);
+        const newLid = rawLid.includes('@') ? mapper.lidOfJid(rawLid) : (/^\d{6,20}$/.test(rawLid) ? rawLid : null);
+        if (newLid) {
+          await this.learnPairs([{ phone: p, lid: newLid }], 'onWhatsApp');
+          const known = await this.lidOfPhone(p);
+          if (known) return { jid: `${known}@lid`, phone: p, pnJid: `${p}@s.whatsapp.net` };
+        }
+      } catch (e) { this.log.warn(`LID из onWhatsApp(${p}): ${e.message} — шлём на номер`); }
       return { jid, phone: p };
     }
     return { jid: `${p}@s.whatsapp.net`, phone: p };
   }
 
+  // Память → gateway_contacts. LID, за которым в памяти числится ДРУГОЙ номер,
+  // не берём (тот же принцип, что в learnPairs: чужой номер хуже отправки на
+  // номер). Сбой БД → null → прежний путь на номер.
+  async lidOfPhone(p) {
+    let lid = this.phoneLids.get(p) || null;
+    if (!lid && this.d.repo.contactUserId) {
+      try {
+        const uid = await this.d.repo.contactUserId(this.id, p);
+        if (uid) lid = String(uid);
+      } catch (e) { this.log.warn(`contactUserId ${p}: ${e.message} — шлём на номер`); return null; }
+    }
+    if (!lid || !/^\d{6,20}$/.test(lid) || lid === this.ownLid) return null;
+    const known = this.lidPhones.get(lid);
+    if (known && known !== p) return null;
+    if (!known) this.rememberLidLocal(lid, p);
+    return lid;
+  }
+
   async sendText({ text, phone }) {
     this.requireReady();
-    const { jid, phone: p } = await this.resolveJid(phone);
+    const { jid, phone: p, pnJid } = await this.resolveJid(phone);
     const deliveryId = await this.d.deliveries.create({ accountId: this.id, chatId: null, phone: p, kind: 'text', text });
-    await this.invokeSend(jid, { text }, deliveryId, p);
+    await this.invokeSend(jid, { text }, deliveryId, p, pnJid);
     return deliveryId;
   }
 
@@ -721,22 +916,27 @@ class WhatsappClient {
       try { fs.rmSync(filePath, { force: true }); } catch (_) { /* подберёт страховочный таймер server.js */ }
       fs.rmdir(path.dirname(filePath), () => {});   // каталог tmp/<hex>/ от multer; непустой — останется
     }
-    const { jid, phone: p } = await this.resolveJid(phone);
+    const { jid, phone: p, pnJid } = await this.resolveJid(phone);
     const mime = mimeType || mimeOfFile(fileName);
     const content = type === 'image'
       ? { image: buf, caption: caption || '', ...(mime && /^image\//.test(mime) ? { mimetype: mime } : {}) }
       : { document: buf, mimetype: mime || 'application/octet-stream', fileName: fileName || 'file', caption: caption || '' };
     const deliveryId = await this.d.deliveries.create({ accountId: this.id, chatId: null, phone: p, kind: 'file', text: caption || fileName });
-    await this.invokeSend(jid, content, deliveryId, p);
+    await this.invokeSend(jid, content, deliveryId, p, pnJid);
     return deliveryId;
   }
 
-  async invokeSend(jid, content, deliveryId, phone) {
+  // pnJid — номерной адрес, когда шлём на LID: эхо уходит бэкенду под ним (тот
+  // же chat_id «<номер>@c.us», что и раньше), а отправка в пути видна под обоими
+  // адресами — своё push может прийти и с LID, и с номера.
+  async invokeSend(jid, content, deliveryId, phone, pnJid = null) {
     let done;
     const settled = new Promise(r => { done = r; });
-    const key = normJid(jid);
-    if (!this.inflight.has(key)) this.inflight.set(key, new Set());
-    this.inflight.get(key).add(settled);
+    const keys = [...new Set([normJid(jid), ...(pnJid ? [normJid(pnJid)] : [])])];
+    for (const key of keys) {
+      if (!this.inflight.has(key)) this.inflight.set(key, new Set());
+      this.inflight.get(key).add(settled);
+    }
     try {
       let sent;
       try { sent = await this.sock.sendMessage(jid, content, { mediaUploadTimeoutMs: MEDIA_UPLOAD_TIMEOUT_MS }); }
@@ -762,15 +962,18 @@ class WhatsappClient {
       try { await this.d.deliveries.setStatusIf(deliveryId, this.d.deliveries.STATUS.ACCEPTED[0], this.d.deliveries.STATUS.SENT); }
       catch (e) { this.log.warn(`delivery g${deliveryId}: статус SENT не записан (${e.message})`); }
       // Эхо своей отправки — сами, не ждём append-апсерта библиотеки.
+      const echoJid = pnJid || jid;
       const echo = {
-        key: { remoteJid: jid, fromMe: true, id: msgId || `g${deliveryId}` },
+        key: { remoteJid: echoJid, fromMe: true, id: msgId || `g${deliveryId}` },
         message: sent && sent.message ? sent.message : (content.text !== undefined ? { conversation: content.text } : {}),
         messageTimestamp: mapper.tsOf(sent && sent.messageTimestamp) || Math.floor(this.d.now() / 1000),
       };
-      this.enqueueChat(jid, () => this.emitMessage(echo, `g${deliveryId}`, mapper.phoneOfJid(jid) || phone)).catch(e => this.log.warn(`эхо g${deliveryId}: ${e.message}`));
+      this.enqueueChat(jid, () => this.emitMessage(echo, `g${deliveryId}`, mapper.phoneOfJid(echoJid) || phone)).catch(e => this.log.warn(`эхо g${deliveryId}: ${e.message}`));
     } finally {
-      const set = this.inflight.get(key);
-      if (set) { set.delete(settled); if (!set.size) this.inflight.delete(key); }
+      for (const key of keys) {
+        const set = this.inflight.get(key);
+        if (set) { set.delete(settled); if (!set.size) this.inflight.delete(key); }
+      }
       done();
     }
   }
@@ -791,6 +994,7 @@ class WhatsappClient {
     this.detach();
     this.ownSends.clear();
     this.sentCache.clear();
+    this.undecrypted.clear();
   }
 }
 

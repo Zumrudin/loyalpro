@@ -6,10 +6,15 @@
 const STATUS = {
   ACCEPTED: [1, 'Принято'],                 // DEFAULT в схеме; частичный индекс pending — по status_id=1
   SENT:     [2, 'Отправлено'],
+  DELIVERED: [3, 'Доставлено'],             // WhatsApp: квитанция устройства получателя (DELIVERY_ACK)
+  READ:     [4, 'Прочитано'],               // WhatsApp: READ/PLAYED
   FAILED:   [5, 'Невозможно доставить'],    // ровно 5: его проверяет backend/routes/chat.js
 };
 
 const STALE_REASON = 'шлюз перезапущен, исход неизвестен';
+// Префикс error у доставки, на которую телефон получателя запросил повтор
+// (не смог расшифровать): по нему такие строки отличаются от прочих сбоев.
+const RETRY_ERROR_PREFIX = 'получатель не расшифровал';
 
 function makeDeliveries(db) {
   async function create({ accountId, chatId, phone, kind, text }) {
@@ -88,7 +93,35 @@ function makeDeliveries(db) {
     return r ? Number(r.id) : null;
   }
 
-  return { create, setStatus, setStatusIf, get, failStale, setTempId, findByTempId, setProviderMessageId, findByProviderMessageId };
+  // Квитанция доставки/прочтения может прийти через часы и после рестарта —
+  // ищем по id сообщения в любом статусе (в отличие от findByProviderMessageId).
+  async function findAnyByProviderMessageId(accountId, providerMessageId) {
+    const r = await db.oneOrNone(
+      `SELECT id FROM gateway_deliveries WHERE account_id=$1 AND provider_message_id=$2 ORDER BY id DESC LIMIT 1`,
+      [accountId, providerMessageId]);
+    return r ? Number(r.id) : null;
+  }
+
+  // Статус только растёт: «Отправлено» → «Доставлено» → «Прочитано»;
+  // «Невозможно доставить» (5) квитанцией не перекрывается.
+  async function raiseStatus(id, [statusId, description]) {
+    const r = await db.query(
+      `UPDATE gateway_deliveries SET status_id=$2, description=$3, updated_at=NOW() WHERE id=$1 AND status_id < $2`,
+      [id, statusId, description]);
+    return !!(r && r.rowCount);
+  }
+
+  // Получатель прислал receipt type=retry: сообщение до него дошло, но не
+  // расшифровалось. Статус не меняем, только пишем причину; квитанция
+  // «Доставлено» (3) и выше означает, что расшифровали, — такую строку не трогаем.
+  async function markRetryRequested(id, count) {
+    const r = await db.query(
+      `UPDATE gateway_deliveries SET error=$2, updated_at=NOW() WHERE id=$1 AND status_id < 3`,
+      [id, `${RETRY_ERROR_PREFIX}: запрос повтора ${count || '?'}`]);
+    return !!(r && r.rowCount);
+  }
+
+  return { create, setStatus, setStatusIf, get, failStale, setTempId, findByTempId, setProviderMessageId, findByProviderMessageId, findAnyByProviderMessageId, raiseStatus, markRetryRequested };
 }
 
 function parseId(s) {
@@ -104,7 +137,7 @@ function getDefault() {
 }
 
 module.exports = {
-  makeDeliveries, parseId, STATUS, STALE_REASON,
+  makeDeliveries, parseId, STATUS, STALE_REASON, RETRY_ERROR_PREFIX,
   create: (...a) => getDefault().create(...a),
   setStatus: (...a) => getDefault().setStatus(...a),
   setStatusIf: (...a) => getDefault().setStatusIf(...a),
@@ -114,4 +147,7 @@ module.exports = {
   findByTempId: (...a) => getDefault().findByTempId(...a),
   setProviderMessageId: (...a) => getDefault().setProviderMessageId(...a),
   findByProviderMessageId: (...a) => getDefault().findByProviderMessageId(...a),
+  findAnyByProviderMessageId: (...a) => getDefault().findAnyByProviderMessageId(...a),
+  raiseStatus: (...a) => getDefault().raiseStatus(...a),
+  markRetryRequested: (...a) => getDefault().markRetryRequested(...a),
 };

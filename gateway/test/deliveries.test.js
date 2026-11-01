@@ -90,3 +90,17 @@ test('setStatusIf: UPDATE только из ожидаемого статуса 
   db.query = async (sql, p) => { db.calls.push([sql, p]); return { rowCount: 0 }; };
   assert.equal(await d.setStatusIf(12, STATUS.ACCEPTED[0], STATUS.SENT), false);
 });
+
+test('markRetryRequested: пишет причину только пока статус < «Доставлено», возвращает признак обновления', async () => {
+  const calls = [];
+  let rowCount = 1;
+  const db = { oneOrNone: async () => null, query: async (sql, p) => { calls.push([sql, p]); return { rowCount }; } };
+  const d = makeDeliveries(db);
+  assert.equal(await d.markRetryRequested(12, '2'), true);
+  assert.match(calls[0][0], /SET error=\$2.*WHERE id=\$1 AND status_id < 3/);
+  assert.deepEqual(calls[0][1], [12, 'получатель не расшифровал: запрос повтора 2']);
+  await d.markRetryRequested(12, undefined);
+  assert.equal(calls[1][1][1], 'получатель не расшифровал: запрос повтора ?');
+  rowCount = 0;
+  assert.equal(await d.markRetryRequested(12, '1'), false);
+});

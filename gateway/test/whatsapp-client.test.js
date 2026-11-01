@@ -781,3 +781,184 @@ test('app-state: resyncAppState прошёл, но коллекция конта
   assert.equal(st.creds.accountSyncCounter, undefined);
   assert.equal(st.flushes, 1);
 });
+
+// ── Инцидент 31.10.2026: клиент с известным LID — отправка на <lid>@lid ──
+// Отправка на номер шифровалась отдельной сессией, которую телефон клиента
+// (переписка на LID) не мог расшифровать — «Ожидание сообщения».
+test('LID известен (gateway_contacts): sendMessage на <lid>@lid без onWhatsApp, эхо бэкенду под номером', async () => {
+  const { wa, sock, hooks } = setup({ deps: { repo: {
+    setAuth: async () => {}, phoneByLid: async () => null, rememberContact: async () => {}, rememberContacts: async () => {},
+    contactUserId: async (acc, p) => (p === '79608575301' ? 173976626180345 : null),
+  } } });
+  await open(wa, sock);
+  await wa.sendText({ text: 'Привет', phone: '79608575301' });
+  const sends = sock.calls.filter(c => c[0] === 'sendMessage');
+  assert.deepEqual(sends.at(-1), ['sendMessage', '173976626180345@lid', { text: 'Привет' }]);
+  assert.equal(sock.calls.filter(c => c[0] === 'onWhatsApp').length, 0);
+  await ticks(3);
+  assert.equal(hooks.length, 1);
+  assert.equal(hooks[0].payload.delivery_id, 'g12');
+  assert.equal(hooks[0].payload.new_message.recipient_phone_number, '79608575301');
+  assert.equal(hooks[0].payload.new_message.chat_id, '79608575301@c.us');
+  // Своё push с LID-адреса того же id — не эхо оператора.
+  sock.ev.emit('messages.upsert', { type: 'append', messages: [{ key: { remoteJid: '173976626180345@lid', fromMe: true, id: 'OUT1' }, messageTimestamp: 1_700_000_100, message: { conversation: 'Привет' } }] });
+  await ticks(3);
+  assert.equal(hooks.length, 1);
+});
+
+test('LID из памяти (входящее с senderPn) — следующая отправка на LID; номер без LID — как раньше на номер', async () => {
+  const { wa, sock } = setup();
+  await open(wa, sock);
+  wa.rememberLidLocal('111222333444555', '79001112233');
+  await wa.sendText({ text: 'a', phone: '79001112233' });
+  await wa.sendText({ text: 'b', phone: '79005550000' });
+  const sends = sock.calls.filter(c => c[0] === 'sendMessage').map(c => c[1]);
+  assert.deepEqual(sends.slice(-2), ['111222333444555@lid', '79005550000@s.whatsapp.net']);
+});
+
+test('LID с другим номером в памяти не берём; сбой БД — шлём на номер', async () => {
+  const { wa, sock } = setup({ deps: { repo: {
+    setAuth: async () => {}, phoneByLid: async () => null, rememberContact: async () => {}, rememberContacts: async () => {},
+    contactUserId: async (acc, p) => { if (p === '79007770000') throw new Error('db down'); return 999888777666555; },
+  } } });
+  await open(wa, sock);
+  wa.rememberLidLocal('999888777666555', '79001110000');           // LID уже числится за другим номером
+  await wa.sendText({ text: 'a', phone: '79002220000' });
+  await wa.sendText({ text: 'b', phone: '79007770000' });
+  const sends = sock.calls.filter(c => c[0] === 'sendMessage').map(c => c[1]);
+  assert.deepEqual(sends.slice(-2), ['79002220000@s.whatsapp.net', '79007770000@s.whatsapp.net']);
+});
+
+// ── LID из ответа onWhatsApp (Baileys 6.7.24 отдаёт { jid, exists, lid }) ──
+test('onWhatsApp вернул lid: отправка на <lid>@lid, пара сохранена, эхо под номером, второй раз без onWhatsApp', async () => {
+  const { wa, sock, repoCalls, hooks } = setup();
+  sock.onWhatsApp = async (p) => { sock.calls.push(['onWhatsApp', p]); return [{ jid: `${p}@s.whatsapp.net`, exists: true, lid: '555666777888999@lid' }]; };
+  await open(wa, sock);
+  await wa.sendText({ text: 'Привет', phone: '79001112233' });
+  assert.deepEqual(sock.calls.filter(c => c[0] === 'sendMessage').at(-1), ['sendMessage', '555666777888999@lid', { text: 'Привет' }]);
+  assert.deepEqual(repoCalls.filter(c => c[0] === 'rememberContacts'), [['rememberContacts', 42, [{ phone: '79001112233', userId: '555666777888999' }]]]);
+  await ticks(3);
+  assert.equal(hooks.length, 1);
+  assert.equal(hooks[0].payload.new_message.chat_id, '79001112233@c.us');
+  await wa.sendText({ text: 'Ещё', phone: '79001112233' });
+  assert.equal(sock.calls.filter(c => c[0] === 'onWhatsApp').length, 1);
+  assert.deepEqual(sock.calls.filter(c => c[0] === 'sendMessage').at(-1), ['sendMessage', '555666777888999@lid', { text: 'Ещё' }]);
+});
+
+test('onWhatsApp без lid (и с суффиксом устройства / голыми цифрами): без lid — на номер, остальное нормализуется', async () => {
+  const { wa, sock, repoCalls } = setup();
+  const lids = { '79001112233': undefined, '79001112244': '555666777888999:12@lid', '79001112255': '444333222111000' };
+  sock.onWhatsApp = async (p) => { sock.calls.push(['onWhatsApp', p]); return [{ jid: `${p}@s.whatsapp.net`, exists: true, lid: lids[p] }]; };
+  await open(wa, sock);
+  for (const phone of Object.keys(lids)) await wa.sendText({ text: 'x', phone });
+  const sends = sock.calls.filter(c => c[0] === 'sendMessage').map(c => c[1]);
+  assert.deepEqual(sends.slice(-3), ['79001112233@s.whatsapp.net', '555666777888999@lid', '444333222111000@lid']);
+  assert.equal(repoCalls.filter(c => c[0] === 'rememberContacts').length, 2);
+});
+
+test('onWhatsApp вернул lid, уже числящийся за другим номером — шлём на номер, чужую пару не трогаем', async () => {
+  const { wa, sock, repoCalls } = setup();
+  sock.onWhatsApp = async (p) => { sock.calls.push(['onWhatsApp', p]); return [{ jid: `${p}@s.whatsapp.net`, exists: true, lid: '555666777888999@lid' }]; };
+  await open(wa, sock);
+  wa.rememberLidLocal('555666777888999', '79009998877');
+  await wa.sendText({ text: 'x', phone: '79001112233' });
+  assert.deepEqual(sock.calls.filter(c => c[0] === 'sendMessage').at(-1), ['sendMessage', '79001112233@s.whatsapp.net', { text: 'x' }]);
+  assert.ok(!repoCalls.some(c => c[0] === 'rememberContacts'));
+  assert.equal(wa.lidPhones.get('555666777888999'), '79009998877');
+});
+
+test('квитанции устройства: DELIVERY_ACK → «Доставлено», READ → «Прочитано» (raiseStatus), чужое сообщение — мимо', async () => {
+  const raised = [];
+  const { wa, sock } = setup({ deps: { deliveries: {
+    STATUS: { ACCEPTED: [1, 'Принято'], SENT: [2, 'Отправлено'], DELIVERED: [3, 'Доставлено'], READ: [4, 'Прочитано'], FAILED: [5, 'Невозможно доставить'] },
+    create: async () => 12, setStatus: async () => {}, setStatusIf: async () => true, setProviderMessageId: async () => {},
+    findByProviderMessageId: async () => null, failStale: async () => 0,
+    findAnyByProviderMessageId: async (acc, id) => (id === 'OLD7' ? 7 : null),
+    raiseStatus: async (id, st) => { raised.push([id, st[0]]); return true; },
+  } } });
+  await open(wa, sock);
+  await wa.sendText({ text: 'x', phone: '79001112233' });
+  sock.ev.emit('messages.update', [
+    { key: { remoteJid: '79001112233@s.whatsapp.net', fromMe: true, id: 'OUT1' }, update: { status: 3 } },
+    { key: { remoteJid: '79001112233@s.whatsapp.net', fromMe: true, id: 'OUT1' }, update: { status: 4 } },
+    { key: { remoteJid: '1@lid', fromMe: true, id: 'OLD7' }, update: { status: 5 } },     // после рестарта — из БД
+    { key: { remoteJid: '1@lid', fromMe: true, id: 'NOPE' }, update: { status: 3 } },     // не наша отправка
+    { key: { remoteJid: '1@lid', fromMe: false, id: 'IN1' }, update: { status: 4 } },
+  ]);
+  await ticks(4);
+  assert.deepEqual(raised, [[12, 3], [12, 4], [7, 4]]);
+});
+
+test('диагностика: сырая квитанция на свою отправку и запрос повтора пишутся в лог, чужие — нет', async () => {
+  const { wa, sock } = setup();
+  const lines = [];
+  wa.log = { info: (m) => lines.push(m), warn: (m) => lines.push(m), error: (m) => lines.push(m), debug: () => {} };
+  await open(wa, sock);
+  await wa.sendText({ text: 'x', phone: '79001112233' });
+  wa.onRawReceipt({ tag: 'receipt', attrs: { from: '111@lid', id: 'OUT1' } });
+  wa.onRawReceipt({ tag: 'receipt', attrs: { from: '111@lid', id: 'OTHER', type: 'read' } });
+  wa.onRawReceipt({ tag: 'receipt', attrs: { from: '111@lid', id: 'OUT1', type: 'retry' }, content: [{ tag: 'retry', attrs: { count: '2' } }, { tag: 'keys', attrs: {} }] });
+  const diag = lines.filter(l => l.startsWith('квитанция'));
+  assert.equal(diag.length, 2);
+  assert.match(diag[0], /^квитанция delivery: from=111@lid .* ids=g12$/);
+  assert.match(diag[1], /^квитанция retry: .* ids=g12 count=2 keys=yes$/);
+});
+
+test('запрос повтора от получателя пишется в доставку; от своих устройств и по чужим id — нет', async () => {
+  const marked = [];
+  const { wa, sock } = setup({ deps: { deliveries: {
+    STATUS: { ACCEPTED: [1, 'Принято'], SENT: [2, 'Отправлено'], DELIVERED: [3, 'Доставлено'], READ: [4, 'Прочитано'], FAILED: [5, 'Невозможно доставить'] },
+    create: async () => 12, setStatus: async () => {}, setStatusIf: async () => true, setProviderMessageId: async () => {},
+    findByProviderMessageId: async () => null, failStale: async () => 0,
+    markRetryRequested: async (id, count) => { marked.push([id, count]); return true; },
+  } } });
+  wa.log = { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} };
+  await open(wa, sock);
+  await wa.sendText({ text: 'x', phone: '79001112233' });
+  wa.ownLid = '279666862632979'; wa.ownPhone = '79250177778';
+  const retry = (from, id) => wa.onRawReceipt({ tag: 'receipt', attrs: { from, id, type: 'retry' }, content: [{ tag: 'retry', attrs: { count: '1' } }] });
+  retry('111222333@lid', 'OUT1');
+  await ticks(2);
+  assert.deepEqual(marked, [[12, '1']]);
+  retry('279666862632979:85@lid', 'OUT1');             // другое устройство клиники
+  retry('279666862632979@lid', 'OUT1');                // основной телефон клиники
+  retry('79250177778:12@s.whatsapp.net', 'OUT1');      // свой номер с суффиксом устройства
+  retry('111222333@lid', 'NOT_OURS');                  // не наша отправка
+  await ticks(2);
+  assert.deepEqual(marked, [[12, '1']]);
+});
+
+test('закрытие соединения: в лог идёт текст ошибки и узел stream:error (31.10.2026: обрывы ~раз в 50 мин с code=500)', async () => {
+  const { wa, sock } = setup();
+  const lines = [];
+  wa.log = { info: () => {}, warn: (m) => lines.push(m), error: (m) => lines.push(m), debug: () => {} };
+  await open(wa, sock);
+  sock.ev.emit('connection.update', { connection: 'close', lastDisconnect: { error: { message: 'Stream Errored (unknown)', data: { tag: 'stream:error', attrs: { code: '500' } }, output: { statusCode: 500 } } } });
+  await ticks(3);
+  const l = lines.find(x => x.startsWith('соединение закрыто'));
+  assert.match(l, /^соединение закрыто \(code=500\): Stream Errored \(unknown\) \{"tag":"stream:error","attrs":\{"code":"500"\}\}$/);
+});
+
+test('нерасшифрованное (CIPHERTEXT): не форвардится; повтор пришёл — INFO; не пришёл — WARN с тем, чьё оно', async () => {
+  const { wa, sock, hooks } = setup({ deps: { undecryptedWaitMs: 20 } });
+  const lines = [];
+  wa.log = { info: (m) => lines.push(['i', m]), warn: (m) => lines.push(['w', m]), error: (m) => lines.push(['e', m]), debug: () => {} };
+  await open(wa, sock);
+  const ts = 1_700_000_000;
+  sock.ev.emit('messages.upsert', { type: 'notify', messages: [
+    { key: { remoteJid: '111@lid', fromMe: false, id: 'A1' }, messageTimestamp: ts, messageStubType: 2, messageStubParameters: ['Bad MAC'] },
+    { key: { remoteJid: '111@lid', fromMe: true, id: 'B2' }, messageTimestamp: ts, messageStubType: 2 },
+    { key: { remoteJid: '111@lid', fromMe: true, id: 'd406937057THISISBOT' }, messageTimestamp: ts, messageStubType: 2 },
+  ] });
+  await ticks(3);
+  assert.equal(hooks.length, 0);
+  // A1 пришло повтором расшифрованным
+  sock.ev.emit('messages.upsert', { type: 'notify', messages: [{ key: { remoteJid: '111@lid', fromMe: false, id: 'A1' }, messageTimestamp: ts, message: { conversation: 'Привет' } }] });
+  await new Promise(r => setTimeout(r, 60));
+  assert.ok(lines.some(([l, m]) => l === 'i' && /111@lid:A1 расшифровано после повтора/.test(m)));
+  const warns = lines.filter(([l]) => l === 'w').map(([, m]) => m);
+  assert.equal(warns.length, 2);
+  assert.ok(warns.some(m => /\(своё с устройства клиники\): 111@lid:B2/.test(m)));
+  assert.ok(warns.some(m => /\(копия отправки Chatpush\): 111@lid:d406937057THISISBOT/.test(m)));
+  assert.equal(hooks.length, 1);
+});
