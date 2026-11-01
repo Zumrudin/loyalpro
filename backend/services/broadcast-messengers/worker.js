@@ -340,5 +340,5 @@ function start() {
 
 module.exports = {
   start, tick, processBroadcast, closeStaleSending, checkDeliveries, deliveryVerdict, statsFromRows,
-  ACTIVE_SQL, STATS_SQL, HEADS_SQL, LIMIT_PENDING_SQL, CHECK_SQL, CLOSE_STALE_SQL,
+  ACTIVE_SQL, STATS_SQL, HEADS_SQL, LIMIT_PENDING_SQL, CHECK_SQL, CLOSE_STALE_SQL, parseSettings,
 };
