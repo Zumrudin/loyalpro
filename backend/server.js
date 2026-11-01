@@ -381,6 +381,7 @@ pool.connect()
       logger.info('Webhook: POST /yclients/webhook.v2/:companyId');
       logger.info('Register: POST /api/auth/register');
       startBroadcastWorker();
+      require('./services/broadcast-messengers/worker').start();
       startNotificationWorker();
       require('./services/care/worker').startCareWorker();
       require('./services/reminders/worker').startRemindersWorker();

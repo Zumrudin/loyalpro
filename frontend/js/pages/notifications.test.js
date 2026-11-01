@@ -28,7 +28,7 @@ const plain = (x) => JSON.parse(JSON.stringify(x));
 // Страница как в браузере: те же файлы в том же порядке в одном контексте.
 function loadPage(extra) {
   const c = browserContext(extra);
-  for (const f of ['core/utils.js', 'core/api.js', 'js/pages/conditions-editor.js', 'js/pages/broadcasts.js', 'js/pages/notifications.js']) {
+  for (const f of ['core/utils.js', 'core/api.js', 'js/pages/conditions-editor.js', 'js/pages/broadcasts.js', 'js/pages/broadcasts-monitor.js', 'js/pages/notifications.js']) {
     run(c, f, fs.readFileSync(path.join(FRONT, f.startsWith('core/') ? `js/${f}` : f), 'utf8'));
   }
   return c;
