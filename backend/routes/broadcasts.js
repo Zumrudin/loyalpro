@@ -206,28 +206,35 @@ router.post('/', guard, async (req, res) => {
   }
 });
 
+// id рассылки из пути: не целое положительное → 404 (иначе pg падает на 'NaN' и отвечает 500).
+function bcId(req) {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id <= 0) { const e = new Error('Рассылка не найдена'); e.status = 404; throw e; }
+  return id;
+}
+
 router.get('/:id/monitor', guard, async (req, res) => {
-  try { res.json(await msg.monitor(req.user.salonId, parseInt(req.params.id, 10))); }
+  try { res.json(await msg.monitor(req.user.salonId, bcId(req))); }
   catch (e) { fail(res, e, 'monitor'); }
 });
 
 router.get('/:id/recipients', guard, async (req, res) => {
-  try { res.json(await msg.recipients(req.user.salonId, parseInt(req.params.id, 10), req.query)); }
+  try { res.json(await msg.recipients(req.user.salonId, bcId(req), req.query)); }
   catch (e) { fail(res, e, 'recipients'); }
 });
 
 router.post('/:id/pause', guard, async (req, res) => {
-  try { res.json(await msg.pause(req.user.salonId, parseInt(req.params.id, 10))); }
+  try { res.json(await msg.pause(req.user.salonId, bcId(req))); }
   catch (e) { fail(res, e, 'pause'); }
 });
 
 router.post('/:id/resume', guard, async (req, res) => {
-  try { res.json(await msg.resume(req.user.salonId, parseInt(req.params.id, 10))); }
+  try { res.json(await msg.resume(req.user.salonId, bcId(req))); }
   catch (e) { fail(res, e, 'resume'); }
 });
 
 router.post('/:id/retry-draft', guard, async (req, res) => {
-  try { res.json({ list: await msg.retryDraft(req.user.salonId, parseInt(req.params.id, 10)) }); }
+  try { res.json({ list: await msg.retryDraft(req.user.salonId, bcId(req)) }); }
   catch (e) { fail(res, e, 'retry-draft'); }
 });
 

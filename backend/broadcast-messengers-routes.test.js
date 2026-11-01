@@ -85,6 +85,15 @@ describe('порядок маршрутов', () => {
       expect(paths).toContain(p);
     }
   });
+  test('нечисловой id в пути — 404, а не 500 от pg', async () => {
+    const router = require('./routes/broadcasts');
+    const layer = router.stack.find((l) => l.route && l.route.path === '/:id/monitor' && l.route.methods.get);
+    const handler = layer.route.stack[layer.route.stack.length - 1].handle;
+    const res = { code: null, body: null, status(c) { this.code = c; return this; }, json(b) { this.body = b; return this; } };
+    await handler({ params: { id: 'abc' }, user: { salonId: 1 }, query: {} }, res);
+    expect(res.code).toBe(404);
+    expect(res.body.error).toBe('Рассылка не найдена');
+  });
 });
 
 describe('кэш базы прогноза', () => {
