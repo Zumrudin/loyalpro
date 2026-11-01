@@ -844,6 +844,50 @@ async function runMigrations(client) {
       ON broadcast_recipients (broadcast_id, telegram_chat_id)
   `).catch(() => {});
 
+  // ── Рассылки через мессенджеры клиники (спека 2026-11-01) ──────
+  // transport: telegram_bot — прежний бот-путь (services/broadcast.js), messengers —
+  // services/broadcast-messengers/. Получатели мессенджеров адресуются телефоном,
+  // telegram_chat_id у них NULL (старый уникальный индекс NULL не сравнивает).
+  await client.query(`
+    ALTER TABLE broadcasts
+      ADD COLUMN IF NOT EXISTS transport        VARCHAR(20) NOT NULL DEFAULT 'telegram_bot',
+      ADD COLUMN IF NOT EXISTS audience_source  VARCHAR(10) NOT NULL DEFAULT 'filters',
+      ADD COLUMN IF NOT EXISTS image_url        TEXT,
+      ADD COLUMN IF NOT EXISTS cascade_enabled  BOOLEAN NOT NULL DEFAULT TRUE,
+      ADD COLUMN IF NOT EXISTS channel_settings JSONB NOT NULL DEFAULT '{}'::jsonb,
+      ADD COLUMN IF NOT EXISTS on_limit         VARCHAR(12) NOT NULL DEFAULT 'next_channel',
+      ADD COLUMN IF NOT EXISTS paused           BOOLEAN NOT NULL DEFAULT FALSE,
+      ADD COLUMN IF NOT EXISTS pause_reason     TEXT,
+      ADD COLUMN IF NOT EXISTS skipped          INTEGER NOT NULL DEFAULT 0
+  `).catch(() => {});
+
+  await client.query(`ALTER TABLE broadcast_recipients ALTER COLUMN telegram_chat_id DROP NOT NULL`).catch(() => {});
+
+  await client.query(`
+    ALTER TABLE broadcast_recipients
+      ADD COLUMN IF NOT EXISTS phone           VARCHAR(20),
+      ADD COLUMN IF NOT EXISTS cascade         TEXT[],
+      ADD COLUMN IF NOT EXISTS step            SMALLINT NOT NULL DEFAULT 0,
+      ADD COLUMN IF NOT EXISTS channel         VARCHAR(16),
+      ADD COLUMN IF NOT EXISTS reason          TEXT,
+      ADD COLUMN IF NOT EXISTS delivery_id     TEXT,
+      ADD COLUMN IF NOT EXISTS account_id      INTEGER,
+      ADD COLUMN IF NOT EXISTS delivery_status VARCHAR(20),
+      ADD COLUMN IF NOT EXISTS checked_at      TIMESTAMPTZ,
+      ADD COLUMN IF NOT EXISTS cascade_log     JSONB NOT NULL DEFAULT '[]'::jsonb,
+      ADD COLUMN IF NOT EXISTS sort_order      INTEGER NOT NULL DEFAULT 0
+  `).catch(() => {});
+
+  await client.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_broadcast_recipient_phone
+      ON broadcast_recipients (broadcast_id, phone) WHERE phone IS NOT NULL
+  `).catch(() => {});
+
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS idx_broadcast_recipients_queue
+      ON broadcast_recipients (broadcast_id, status, channel, sort_order)
+  `).catch(() => {});
+
   // ── Автоуведомления по событиям (v1: создание записи) ──────────
   // Правило: conditions = { logic:'and'|'or', items:[{type:'staff'|'category'|'service', ids:[…]}] },
   // channels = порядок каскада dispatch_routing Chatpush (['telegram','whatsapp',…]).
