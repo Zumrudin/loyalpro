@@ -11,6 +11,7 @@ const { getTreeCache, setTreeCache } = require('../services/yclients');
 const { syncGoodsCategories }        = require('../services/home-care');
 const { isBlacklisted }              = require('../services/yclients-goods-catalog');
 const { buildHomeCareHtml, BRAND_CONFIG } = require('../homecare-template');
+const { inlineFontCss } = require('../homecare-fonts');
 const config = require('../config');
 const { createLogger } = require('../logger');
 const logger = createLogger('HomeCare');
@@ -326,7 +327,7 @@ router.get('/:id/pdf', auth, async (req, res) => {
     const items = await db.any('SELECT * FROM home_care_items WHERE prescription_id=$1 ORDER BY time_of_day, sort_order', [req.params.id]);
     const prescription = { ...p, items };
     const tmpl = await loadTemplateConfig(req.user.salonId, prescription.salon_name);
-    const html = buildHomeCareHtml(prescription, tmpl);
+    const html = buildHomeCareHtml(prescription, { ...tmpl, fontCss: inlineFontCss() });
     browser = await puppeteer.launch({ args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-gpu'], headless: true });
     const pg = await browser.newPage();
     await pg.setContent(html, { waitUntil: 'load', timeout: 30000 });

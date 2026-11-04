@@ -160,6 +160,11 @@ Always use the **MCP PostgreSQL server** (`mcp__postgres__query`) for direct DB 
 ### Browser / UI testing
 Always use the **MCP Playwright server** (`mcp__playwright__*`) for browser automation and UI testing — do not spawn Playwright via bash scripts.
 
+### Лист «Домашнего ухода» (PDF)
+`GET /api/home-care/:id/pdf` (`routes/home-care.js`) рендерит `homecare-template.js` puppeteer'ом; оформление (логотип, водяной знак, цвета, контакты) — `salons.template_*`, пустые поля = дефолт `BRAND_CONFIG` (текстовый «PERI ✿ CLINIC», крем, золото, лотос) — так лист и выглядел на новом проде 04.11.2026, пока настройки не восстановили.
+- Шрифты PDF — ЛОКАЛЬНЫЕ (`homecare-fonts/`, Cormorant Garamond + Lora, OFL, встраиваются data: URI через `fontCss`): запрос CSS к fonts.googleapis.com с прода (Selectel, Москва) в ~13 % случаев не завершался, и `waitUntil:'load'` давал 30 с и «Navigation timeout». Экранный предпросмотр (`/:id/preview`) по-прежнему тянет Google — браузер при сбое просто покажет запасной шрифт. Тесты `homecare-fonts.test.js`.
+- Новый сервер: Chrome puppeteer требует системные библиотеки (Ubuntu 26.04: `libnspr4 libnss3 libatk1.0-0t64 libatk-bridge2.0-0t64 libcups2t64 libatspi2.0-0t64 libxcomposite1 libxdamage1 libxrandr2 libgbm1 libxkbcommon0 libasound2t64 libpango-1.0-0 libcairo2 fonts-liberation`), без них «Скачать PDF» падает у всех. Проверка после выката — `scripts/homecare-pdf-check.js --salon=1 (--id=N | --fixture=rx.json)` под пользователем приложения (боевой обработчик in-process, без JWT, ничего не пишет).
+
 ### Portfolio module (До/После)
 "Before/after" gallery for the mobile client app, managed by salon admins under Settings → Mobile App → Портфолио работ.
 

@@ -42,6 +42,10 @@ const BRAND_CONFIG = {
   contactPhone:  '',               // '+7 (925) 017-77-78'
   contactWeb:    '',               // 'www.peri-clinic.ru'
   contactSocial: '',               // '@peri_clinic'
+
+  // CSS @font-face со встроенными шрифтами (homecare-fonts). null = Google Fonts по сети.
+  // PDF обязан передавать встроенные: puppeteer ждёт 'load', а запрос к Google с прода иногда виснет.
+  fontCss:       null,
 };
 
 // ─── SVG-лотос (водяной знак) ──────────────────────────────────────────────
@@ -321,9 +325,9 @@ function buildHomeCareHtml(prescription, config = {}) {
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${escHtml(C.docTitle)} — ${clientName}</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
+${C.fontCss ? `<style>${C.fontCss}</style>` : `<link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,500;0,600;0,700;1,400;1,500&family=Lora:ital,wght@0,400;0,500;1,400&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,500;0,600;0,700;1,400;1,500&family=Lora:ital,wght@0,400;0,500;1,400&display=swap" rel="stylesheet">`}
 <style>
 /* ═══════════════════════════════════════════════════════
    BRAND TOKENS — меняйте только здесь для другой организации
