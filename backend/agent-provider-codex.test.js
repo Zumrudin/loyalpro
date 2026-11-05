@@ -126,17 +126,25 @@ test('rejects oversized input without starting CLI', async () => {
   expect(run).not.toHaveBeenCalled();
 });
 
-test('serializes calls; releases capacity after failures', async () => {
-  let release;
-  const run = jest.fn(() => new Promise(resolve => { release = resolve; }));
+test('supports concurrent isolated calls; bridge owns capacity limits', async () => {
+  const pending = [];
+  const run = jest.fn((_bin, args) => new Promise(resolve => pending.push({ args, resolve })));
   const p = createProvider({ env: dev, run });
   const first = p.createMessage(request);
-  await expect(p.createMessage(request)).rejects.toMatchObject({ code: 'CODEX_BUSY' });
-  while (!release) await new Promise(resolve => setImmediate(resolve));
-  release({ stdout: 'Not logged in', stderr: '' });
-  await expect(first).rejects.toMatchObject({ code: 'CODEX_CHATGPT_LOGIN_REQUIRED' });
-  run.mockImplementation(makeRun());
-  await expect(p.createMessage(request)).resolves.toMatchObject({ text: answer.text });
+  const second = p.createMessage(request);
+
+  while (pending.length < 2) await new Promise(resolve => setImmediate(resolve));
+  expect(pending.every(call => call.args[0] === 'login')).toBe(true);
+  pending.splice(0).forEach(call => call.resolve({ stdout: '', stderr: 'Logged in using ChatGPT' }));
+
+  while (pending.length < 2) await new Promise(resolve => setImmediate(resolve));
+  expect(pending.every(call => call.args[0] === 'exec')).toBe(true);
+  pending.splice(0).forEach(call => call.resolve({ stdout: output(answer), stderr: '' }));
+
+  await expect(Promise.all([first, second])).resolves.toEqual([
+    expect.objectContaining({ text: answer.text }),
+    expect.objectContaining({ text: answer.text }),
+  ]);
 });
 
 test('does not forward external authentication, backend secrets or process injection', () => {
