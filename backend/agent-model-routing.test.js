@@ -15,37 +15,78 @@ function setup(active = 'gpt') {
     }),
     outcome: jest.fn(async () => {}),
   };
-  const providers = Object.fromEntries(['gpt', 'claude', 'polza'].map(key => [key, {
+  const providers = Object.fromEntries(['gpt', 'sol', 'claude', 'polza'].map(key => [key, {
     createMessage: jest.fn(async () => ok), toolResultMessages: results => results,
   }]));
-  return { store, providers, change: next => { state = next; },
-    provider: createProvider({ salonId: 17, store, providers, legacy: providers.gpt }) };
+  const log = { info: jest.fn(), warn: jest.fn() };
+  return { store, providers, log, change: next => { state = next; },
+    provider: createProvider({ salonId: 17, store, providers, legacy: providers.gpt, log }) };
 }
-test('GPT model error falls back to Claude on the same request; sticks across requests', async () => {
+test('GPT model error falls back to Sol on the same request; sticks across requests', async () => {
   const s = setup(); s.providers.gpt.createMessage.mockRejectedValue(fail('RELAY_MODEL_FAILED'));
   expect(await s.provider.createMessage(input)).toBe(ok);
   await s.provider.createMessage(input);
   expect(s.providers.gpt.createMessage).toHaveBeenCalledTimes(1);
-  expect(s.providers.claude.createMessage).toHaveBeenCalledTimes(2);
-  expect(s.providers.claude.createMessage.mock.calls[0][0]).toBe(input);
+  expect(s.providers.sol.createMessage).toHaveBeenCalledTimes(2);
+  expect(s.providers.sol.createMessage.mock.calls[0][0]).toBe(input);
+  expect(s.providers.claude.createMessage).not.toHaveBeenCalled();
+  expect(s.providers.polza.createMessage).not.toHaveBeenCalled();
+  expect(s.store.transition).toHaveBeenCalledWith(17, expect.anything(), 'sol', 'model_failed');
+});
+test('Sol model error falls back to Claude', async () => {
+  const s = setup('sol'); s.providers.sol.createMessage.mockRejectedValue(fail('RELAY_MODEL_FAILED'));
+  await s.provider.createMessage(input);
+  expect(s.providers.claude.createMessage).toHaveBeenCalledTimes(1);
   expect(s.providers.polza.createMessage).not.toHaveBeenCalled();
   expect(s.store.transition).toHaveBeenCalledWith(17, expect.anything(), 'claude', 'model_failed');
 });
+test('Sol bridge failure skips Claude (same bridge) and goes to Polza', async () => {
+  const s = setup('sol'); s.providers.sol.createMessage.mockRejectedValue(fail('RELAY_TIMEOUT'));
+  await s.provider.createMessage(input);
+  expect(s.providers.claude.createMessage).not.toHaveBeenCalled();
+  expect(s.store.transition).toHaveBeenCalledWith(17, expect.anything(), 'polza', 'bridge_unavailable');
+});
+test('every failure and switch is journaled with its diagnostics, success after fallback too', async () => {
+  const s = setup();
+  s.providers.gpt.createMessage.mockRejectedValue(Object.assign(fail('RELAY_MODEL_FAILED'),
+    { bridgeCause: 'CODEX_PROCESS_FAILED', httpStatus: 502, requestId: 'req-1' }));
+  await s.provider.createMessage(input);
+  const warn = s.log.warn.mock.calls.map(c => c[0]).join('\n');
+  expect(warn).toMatch(/салон 17: gpt отказала: RELAY_MODEL_FAILED, мост: CODEX_PROCESS_FAILED, http 502, \d+ мс, req req-1 → переключаю на sol \(model_failed\)/);
+  expect(s.log.info.mock.calls[0][0]).toMatch(/ответила sol \(synthetic-model\) за \d+ мс после отказа gpt/);
+});
+test('a lost switch (manual change in between) is journaled, not silent', async () => {
+  const s = setup();
+  s.providers.gpt.createMessage.mockImplementation(async () => {
+    s.change({ active: 'polza', revision: '5' }); throw fail('RELAY_MODEL_FAILED');
+  });
+  await s.provider.createMessage(input);
+  expect(s.log.warn.mock.calls.map(c => c[0]).join('\n')).toMatch(/переключение на sol не записано — выбор уже polza \(rev 5\)/);
+});
+test('no content of the request reaches the journal', async () => {
+  const s = setup();
+  const secret = { ...input, system: 'PRIVATE-PROMPT', messages: [{ role: 'user', content: 'PRIVATE-PATIENT' }] };
+  for (const id of ['gpt', 'sol', 'claude', 'polza']) s.providers[id].createMessage.mockRejectedValue(fail('RELAY_MODEL_FAILED'));
+  await expect(s.provider.createMessage(secret)).rejects.toThrow();
+  const all = [...s.log.warn.mock.calls, ...s.log.info.mock.calls].map(c => c[0]).join('\n');
+  expect(all).not.toMatch(/PRIVATE/);
+});
 test.each(['RELAY_FAILED', 'RELAY_TIMEOUT', 'RELAY_BUSY', 'RELAY_UPSTREAM', 'RELAY_AUTH', 'RELAY_CONFIG'])(
-  '%s skips Claude and switches straight to Polza', async code => {
+  '%s skips Sol and Claude and switches straight to Polza', async code => {
     const s = setup(); s.providers.gpt.createMessage.mockRejectedValue(fail(code));
     await s.provider.createMessage(input);
+    expect(s.providers.sol.createMessage).not.toHaveBeenCalled();
     expect(s.providers.claude.createMessage).not.toHaveBeenCalled();
     expect(s.providers.polza.createMessage).toHaveBeenCalledTimes(1);
   });
-test('both bridge models fail → Polza, no rerun of previous tool steps', async () => {
+test('all bridge models fail → Polza, no rerun of previous tool steps', async () => {
   const s = setup();
-  for (const id of ['gpt', 'claude']) s.providers[id].createMessage.mockRejectedValue(fail('RELAY_MODEL_FAILED'));
+  for (const id of ['gpt', 'sol', 'claude']) s.providers[id].createMessage.mockRejectedValue(fail('RELAY_MODEL_FAILED'));
   await s.provider.createMessage(input);
-  expect(s.store.transition.mock.calls.map(c => c[2])).toEqual(['claude', 'polza']);
+  expect(s.store.transition.mock.calls.map(c => c[2])).toEqual(['sol', 'claude', 'polza']);
   expect(s.providers.polza.createMessage.mock.calls[0][0]).toBe(input);
 });
-test.each(['claude', 'polza'])('manual %s starts at selected provider', async active => {
+test.each(['sol', 'claude', 'polza'])('manual %s starts at selected provider', async active => {
   const s = setup(active); await s.provider.createMessage(input);
   expect(s.providers[active].createMessage).toHaveBeenCalledTimes(1);
   expect(s.providers.gpt.createMessage).not.toHaveBeenCalled();
@@ -65,7 +106,8 @@ test('bad input does not change selection or resend', async () => {
 test('empty generation triggers fallback', async () => {
   const s = setup(); s.providers.gpt.createMessage.mockResolvedValue({ text: '', toolCalls: [] });
   await s.provider.createMessage(input);
-  expect(s.providers.claude.createMessage).toHaveBeenCalledTimes(1);
+  expect(s.providers.sol.createMessage).toHaveBeenCalledTimes(1);
+  expect(s.providers.claude.createMessage).not.toHaveBeenCalled();
 });
 test('late failing request respects a concurrent manual switch', async () => {
   const s = setup();
@@ -88,6 +130,8 @@ test('new salon inherits configured provider without a DB write', async () => {
   const status = await createStore({ db, config }).status(17, 4);
   expect(status).toMatchObject({ active: 'gpt', model: 'gpt-6-astra', notice: null });
   expect(status.choices.find(c => c.id === 'gpt')).toMatchObject({ title: 'GPT-6 Astra', model: 'gpt-6-astra' });
+  expect(status.choices.map(c => c.id)).toEqual(['gpt', 'sol', 'claude', 'polza']);
+  expect(status.choices.find(c => c.id === 'sol')).toMatchObject({ title: 'GPT-5.6 Sol', model: 'gpt-5.6-sol' });
   expect(db.query).not.toHaveBeenCalled();
   expect(db.oneOrNone.mock.calls.map(c => c[1])).toEqual([[17], [17, 4]]);
 });

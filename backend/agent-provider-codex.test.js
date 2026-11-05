@@ -164,3 +164,41 @@ test('child failures never expose stderr', async () => {
     { cwd: '/tmp', env: childEnv(process.env), timeoutMs: 1000 }))
     .rejects.toThrow('Codex prototype: CODEX_PROCESS_FAILED');
 });
+
+// ── Sol и диагностика для журнала моста (05.11.2026) ──
+test('Sol engine runs the same isolated CLI with --model gpt-5.6-sol', async () => {
+  const run = makeRun();
+  await createProvider({ env: dev, run, model: 'gpt-5.6-sol' }).createMessage(request);
+  const args = run.mock.calls[1][1];
+  expect(args.slice(args.indexOf('--model'), args.indexOf('--model') + 2)).toEqual(['--model', 'gpt-5.6-sol']);
+  expect(args).toEqual(expect.arrayContaining(['--ignore-user-config', '--ephemeral', 'read-only']));
+});
+test('a model outside the fixed set is refused at construction', () => {
+  expect(() => createProvider({ env: dev, run: makeRun(), model: 'gpt-4o' })).toThrow('CODEX_CONFIG');
+});
+test.each([
+  ['{"type":"turn.failed","error":{"message":"You have hit your usage limit 79201234567"}}', /^turn_failed: You have hit your usage limit #$/],
+  ['{"type":"error","message":"stream disconnected; retrying 1/5"}', /^error_event: stream disconnected/],
+  ['{"type":"item.started","item":{"type":"command_execution"}}', /^item:command_execution$/],
+  [output({ text: 'x', toolCalls: [] }).split('\n')[0], /^not_completed$/],
+  [output({ text: '', toolCalls: [{ name: 'get_test_hours', arguments: '{"salon_id":1}' }] }), /^extra_arg:get_test_hours.salon_id$/],
+  [output({ text: '', toolCalls: [{ name: 'shell', arguments: '{}' }] }), /^unknown_tool:shell$/],
+  [output({ text: '', toolCalls: [] }), /^empty$/],
+])('rejection names its reason without output text: %#', (stdout, reason) => {
+  const e = (() => { try { parseResponse(stdout, [tool]); } catch (x) { return x; } })();
+  expect(e.message).toBe('Codex prototype: CODEX_INVALID_RESPONSE');
+  expect(e.detail.reason).toMatch(reason);
+});
+test('process failure detail has exit code, last API error and masked stderr tail; message stays clean', async () => {
+  const script = 'console.log(JSON.stringify({type:"turn.failed",error:{message:"model overloaded"}}));'
+    + 'console.error("call 79201234567 failed");process.exit(3)';
+  const e = await runProcess(process.execPath, ['-e', script], { cwd: '/tmp', env: childEnv(process.env), timeoutMs: 2000 }).catch(x => x);
+  expect(e.message).toBe('Codex prototype: CODEX_PROCESS_FAILED');
+  expect(e.detail).toMatchObject({ exit: 3, apiError: 'model overloaded', stderr: 'call # failed' });
+});
+test('stage and model are attached to exec and parse failures', async () => {
+  const run = jest.fn(async (_bin, args) => args[0] === 'login'
+    ? { stdout: '', stderr: 'Logged in using ChatGPT' } : { stdout: '{"type":"turn.failed"}', stderr: '' });
+  const e = await createProvider({ env: dev, run, model: 'gpt-5.6-sol' }).createMessage(request).catch(x => x);
+  expect(e.detail).toMatchObject({ stage: 'parse', model: 'gpt-5.6-sol', reason: 'turn_failed: -' });
+});

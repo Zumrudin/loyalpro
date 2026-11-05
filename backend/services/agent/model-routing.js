@@ -1,9 +1,9 @@
 'use strict';
 
-const { MODEL: GPT_MODEL, CLAUDE_MODEL } = require('./providers/codex-relay-protocol');
+const { MODEL: GPT_MODEL, SOL_MODEL, CLAUDE_MODEL } = require('./providers/codex-relay-protocol');
 
-const SELECTABLE = ['gpt', 'claude', 'polza'];
-const MODEL_TITLES = { 'gpt-6-astra': 'GPT-6 Astra', 'gpt-6-sol': 'GPT-6 Sol' };
+const SELECTABLE = ['gpt', 'sol', 'claude', 'polza'];
+const MODEL_TITLES = { 'gpt-6-astra': 'GPT-6 Astra', 'gpt-6-sol': 'GPT-6 Sol', 'gpt-5.6-sol': 'GPT-5.6 Sol' };
 const REASONS = {
   model_failed: 'Модель на dev вернула ошибку или не ответила вовремя',
   bridge_unavailable: 'Мост на dev недоступен или отклонил запрос',
@@ -13,6 +13,7 @@ function createStore({ db, config }) {
   const initial = config.AGENT_PROVIDER === 'codex-relay' ? 'gpt' : config.AGENT_PROVIDER;
   const choices = {
     gpt: { title: MODEL_TITLES[GPT_MODEL] || GPT_MODEL, model: GPT_MODEL, channel: 'Мост dev · подписка ChatGPT' },
+    sol: { title: MODEL_TITLES[SOL_MODEL] || SOL_MODEL, model: SOL_MODEL, channel: 'Мост dev · подписка ChatGPT' },
     claude: { title: 'Claude Sonnet', model: CLAUDE_MODEL, channel: 'Мост dev · подписка Claude Code' },
     polza: { title: 'Польза', model: config.POLZA_CHAT_MODEL, channel: 'API polza.ai' },
     anthropic: { title: 'Anthropic', channel: 'API Anthropic' },

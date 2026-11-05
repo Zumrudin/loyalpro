@@ -152,3 +152,76 @@ test('proxy 502 is a bridge failure; bounded GENERATION_FAILED is a model failur
   await expect(provider({ fetchImpl: async () => new Response('<html>Bad gateway</html>', { status: 502 }) })
     .createMessage(input)).rejects.toMatchObject({ code: 'RELAY_UPSTREAM' });
 });
+
+// ── Sol как резерв Astra на том же мосту + журнал причин (05.11.2026) ──
+test('signed Sol selector uses only Sol and reports gpt-5.6-sol', async () => {
+  const generateSol = jest.fn(async () => ({ text: 'Sol', toolCalls: [] }));
+  await start({ generateSol });
+  await expect(provider({ engine: 'sol' }).createMessage(input)).resolves.toMatchObject({ text: 'Sol', model: 'gpt-5.6-sol' });
+  expect(generateSol).toHaveBeenCalledWith(input);
+  expect(generate).not.toHaveBeenCalled();
+});
+test.each(['gpt-6-astra', 'gpt-6-sol', 'claude-sonnet'])('sol engine rejects foreign model %s', async model => {
+  await start({ generateSol: async () => ({ text: 'Sol', toolCalls: [] }) });
+  const fetchImpl = async (target, opts) => {
+    const real = await fetch(target, opts); const data = await real.json(); data.model = model;
+    return new Response(JSON.stringify(data), { status: 200 });
+  };
+  await expect(provider({ engine: 'sol', fetchImpl }).createMessage(input)).rejects.toMatchObject({ code: 'RELAY_RESPONSE' });
+});
+test('bridge without a Sol generator answers as a model failure (chain moves on)', async () => {
+  await start();
+  await expect(provider({ engine: 'sol' }).createMessage(input))
+    .rejects.toMatchObject({ code: 'RELAY_MODEL_FAILED', bridgeCause: 'ENGINE_UNAVAILABLE' });
+});
+test('model failure carries the bridge cause, status, request id and timing — not the private message', async () => {
+  const log = jest.fn();
+  await start({ log });
+  generate.mockRejectedValueOnce(Object.assign(new Error('private-token-and-prompt'),
+    { code: 'CODEX_PROCESS_FAILED', detail: { stage: 'exec', exit: 1, apiError: 'usage limit' } }));
+  const e = await provider().createMessage(input).catch(x => x);
+  expect(e).toMatchObject({ code: 'RELAY_MODEL_FAILED', bridgeCause: 'CODEX_PROCESS_FAILED', httpStatus: 502, engine: 'gpt' });
+  expect(e.requestId).toMatch(/^[a-f0-9-]{36}$/);
+  expect(typeof e.ms).toBe('number');
+  expect(JSON.stringify(e)).not.toMatch(/private/);
+  const entry = log.mock.calls.map(c => c[0]).find(x => x.status === 502);
+  expect(entry).toMatchObject({ event: 'request', id: e.requestId, engine: 'gpt', error: 'CODEX_PROCESS_FAILED',
+    detail: { stage: 'exec', exit: 1, apiError: 'usage limit' } });
+});
+test('a cause outside the fixed code form is reported as UNKNOWN', async () => {
+  await start();
+  generate.mockRejectedValueOnce(Object.assign(new Error('x'), { code: 'lower case <script>' }));
+  await expect(provider().createMessage(input)).rejects.toMatchObject({ bridgeCause: 'UNKNOWN' });
+});
+test('bridge journal: success, busy and auth failures are logged without prompts or output', async () => {
+  const log = jest.fn();
+  await start({ log, maxPerMinute: 1 });
+  await provider().createMessage({ ...input, system: 'PRIVATE-PROMPT' });
+  const busy = await provider().createMessage(input).catch(x => x);
+  expect(busy).toMatchObject({ code: 'RELAY_BUSY', httpStatus: 429, bridgeCause: 'RATE_LIMIT' });
+  const bad = await fetch(url, { ...signed(), headers: { ...signed().headers, 'x-mila-signature': '0'.repeat(64) } });
+  await bad.text();
+  const entries = log.mock.calls.map(c => c[0]);
+  expect(entries.find(x => x.status === 200)).toMatchObject({ engine: 'gpt', model: 'gpt-6-astra', toolCalls: 0 });
+  expect(entries.find(x => x.status === 429)).toMatchObject({ error: 'RATE_LIMIT' });
+  expect(entries.find(x => x.status === 401)).toMatchObject({ error: 'BAD_SIGNATURE' });
+  expect(JSON.stringify(entries)).not.toMatch(/PRIVATE|Hello/);
+});
+test('a throwing journal never breaks the reply', async () => {
+  await start({ log: () => { throw new Error('disk full'); } });
+  await expect(provider().createMessage(input)).resolves.toMatchObject({ text: 'Hello' });
+});
+test('network failure reports the network code', async () => {
+  await start();
+  const fetchImpl = async () => { throw Object.assign(new TypeError('fetch failed'), { cause: { code: 'ECONNRESET' } }); };
+  await expect(provider({ fetchImpl }).createMessage(input)).rejects.toMatchObject({ code: 'RELAY_FAILED', netCause: 'ECONNRESET' });
+});
+test('relay revalidation failure names the reason', async () => {
+  await start(); generate.mockResolvedValue({ text: '', toolCalls: [{ name: 'get_hours', input: { salon_id: 42 } }] });
+  await expect(provider().createMessage(input))
+    .rejects.toMatchObject({ code: 'RELAY_MODEL_FAILED', bridgeCause: 'RELAY_REVALIDATE', reason: 'extra_arg:get_hours.salon_id' });
+});
+test('protocol and Codex adapter agree on the Sol model', () => {
+  expect(require('./services/agent/providers/codex-relay-protocol').SOL_MODEL)
+    .toBe(require('./services/agent/providers/codex').SOL_MODEL);
+});

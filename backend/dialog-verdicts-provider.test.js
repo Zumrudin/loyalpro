@@ -12,9 +12,9 @@ const okRes = (model) => ({ text: '{"verdicts":[]}', toolCalls: [], model });
 const link = (name, impl) => ({ name, createMessage: jest.fn(impl) });
 
 describe('buildChain', () => {
-  const links = { gpt: 'G', claude: 'C', polza: 'P', codex: 'X' };
-  test('прод (codex-relay): gpt → claude → polza', () => {
-    expect(buildChain('codex-relay', links)).toEqual(['G', 'C', 'P']);
+  const links = { gpt: 'G', sol: 'S', claude: 'C', polza: 'P', codex: 'X' };
+  test('прод (codex-relay): gpt → sol → claude → polza', () => {
+    expect(buildChain('codex-relay', links)).toEqual(['G', 'S', 'C', 'P']);
   });
   test('дев (codex): codex → polza', () => {
     expect(buildChain('codex', links)).toEqual(['X', 'P']);
@@ -78,11 +78,20 @@ describe('createVerdictProvider', () => {
   });
 });
 
-test('transport failure skips Claude on the same bridge', async () => {
+test('transport failure skips Sol and Claude on the same bridge', async () => {
   const gpt = link('gpt', async () => { throw err('RELAY_UPSTREAM'); });
+  const sol = link('sol', async () => okRes('s'));
   const claude = link('claude', async () => okRes('c'));
   const polza = link('polza', async () => okRes('p'));
-  expect((await createVerdictProvider({ chain: [gpt, claude, polza] }).createMessage({})).model).toBe('p');
+  expect((await createVerdictProvider({ chain: [gpt, sol, claude, polza] }).createMessage({})).model).toBe('p');
+  expect(sol.createMessage).not.toHaveBeenCalled();
+  expect(claude.createMessage).not.toHaveBeenCalled();
+});
+test('Astra model failure is answered by Sol', async () => {
+  const gpt = link('gpt', async () => { throw err('RELAY_MODEL_FAILED'); });
+  const sol = link('sol', async () => okRes('gpt-5.6-sol'));
+  const claude = link('claude', async () => okRes('c'));
+  expect((await createVerdictProvider({ chain: [gpt, sol, claude] }).createMessage({})).model).toBe('gpt-5.6-sol');
   expect(claude.createMessage).not.toHaveBeenCalled();
 });
 test('local input errors are not replayed', async () => {

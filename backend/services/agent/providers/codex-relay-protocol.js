@@ -8,7 +8,12 @@ const MODEL = 'gpt-6-astra';
 // Список покрывает ТОЛЬКО «новый relay + старый мост», поэтому порядок выката —
 // прод первым, мост вторым (старый relay сверяет модель строго).
 const GPT_MODELS = Object.freeze([MODEL, 'gpt-6-sol']);
+// Резерв на том же мосту, когда отказала сама Astra: цепочка Милы gpt → sol →
+// claude → polza (providers/resilient.js). Совпадает с codex.SOL_MODEL (тест).
+const SOL_MODEL = 'gpt-5.6-sol';
 const CLAUDE_MODEL = 'claude-sonnet';
+// Движки моста; 'gpt' — движок по умолчанию (поле engine в запросе не передаётся).
+const ENGINES = Object.freeze(['gpt', 'sol', 'claude']);
 const MAX_BYTES = 2 * 1024 * 1024;
 const ROUTE = '/api/mila-codex/v1/message';
 
@@ -31,7 +36,7 @@ function validRequest(data) {
     && Array.isArray(data.tools) && data.tools.length <= 100
     && data.tools.every(t => t && typeof t.name === 'string' && /^[a-zA-Z0-9_-]{1,80}$/.test(t.name)
       && t.input_schema && typeof t.input_schema === 'object' && !Array.isArray(t.input_schema))
-    && (data.engine === undefined || ['gpt', 'claude'].includes(data.engine))
+    && (data.engine === undefined || ENGINES.includes(data.engine))
     && Object.keys(data).every(k => ['system', 'messages', 'tools', 'engine'].includes(k));
 }
 function failure(code) {
@@ -39,4 +44,4 @@ function failure(code) {
   e.code = code;
   return e;
 }
-module.exports = { MODEL, GPT_MODELS, CLAUDE_MODEL, MAX_BYTES, ROUTE, signature, authorized, validRequest, failure };
+module.exports = { MODEL, GPT_MODELS, SOL_MODEL, CLAUDE_MODEL, ENGINES, MAX_BYTES, ROUTE, signature, authorized, validRequest, failure };

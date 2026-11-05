@@ -10,6 +10,8 @@ const path = require('node:path');
 
 const MAX_BYTES = 2 * 1024 * 1024;
 const MODEL = 'gpt-6-astra';
+// Reserve engine of the bridge when Astra itself fails (prod chain gpt → sol).
+const SOL_MODEL = 'gpt-5.6-sol';
 const DISABLED_FEATURES = [
   'shell_tool', 'unified_exec', 'shell_snapshot', 'apps', 'plugins', 'remote_plugin',
   'browser_use', 'computer_use', 'image_generation', 'view_image', 'hooks',
@@ -17,11 +19,37 @@ const DISABLED_FEATURES = [
   'skill_search', 'skill_mcp_dependency_install', 'tool_suggest', 'sleep_tool',
 ];
 
-function failure(code) {
-  // Never expose CLI stderr, model output, prompts, tokens, or account identity.
+function failure(code, detail) {
+  // Never expose CLI stderr, model output, prompts, tokens, or account identity
+  // in the message: it may travel to the caller. `detail` is for the bridge's
+  // local journal only (why the run failed), already cut by diagText.
   const e = new Error(`Codex prototype: ${code}`);
   e.code = code;
+  if (detail) e.detail = detail;
   return e;
+}
+
+// Diagnostic text for the local journal: API/CLI error messages, never prompts.
+// Long digit runs (phones) are masked, whitespace collapsed, length capped.
+function diagText(value, max = 300) {
+  const text = String(value ?? '').replace(/\d{7,}/g, '#').replace(/\s+/g, ' ').trim();
+  return text.length > max ? text.slice(0, max) + '…' : text;
+}
+// Model-supplied identifiers in diagnostics (tool/argument names).
+const diagName = value => String(value ?? '').replace(/[^A-Za-z0-9_.-]/g, '').slice(0, 60) || '?';
+
+// Last API-level error the CLI reported in its JSON event stream.
+function lastApiError(stdout) {
+  let found = null;
+  for (const line of String(stdout || '').split('\n')) {
+    if (!line.includes('"error"') && !line.includes('turn.failed')) continue;
+    try {
+      const event = JSON.parse(line);
+      if (event.type === 'error') found = event.message;
+      else if (event.type === 'turn.failed') found = event.error?.message || 'turn.failed';
+    } catch (_) { /* not an event line */ }
+  }
+  return found === null ? null : diagText(found);
 }
 
 function childEnv(env) {
@@ -40,13 +68,13 @@ function runProcess(binary, args, { env, cwd, input = '', timeoutMs }) {
       stdio: ['pipe', 'pipe', 'pipe'] });
     let stdout = '', stderr = '', bytes = 0, error;
     const stop = (code) => {
-      if (!error) error = failure(code);
+      if (!error) error = failure(code, code === 'CODEX_TIMEOUT' ? { timeoutMs } : undefined);
       if (proc.pid) {
         try { process.kill(-proc.pid, 'SIGKILL'); } catch (_) { proc.kill('SIGKILL'); }
       }
     };
     const timer = setTimeout(() => stop('CODEX_TIMEOUT'), timeoutMs);
-    proc.on('error', () => { error = failure('CODEX_UNAVAILABLE'); });
+    proc.on('error', e => { error = failure('CODEX_UNAVAILABLE', { errno: diagName(e?.code) }); });
     proc.stdin.on('error', () => stop('CODEX_STDIN_FAILED'));
     for (const [stream, kind] of [[proc.stdout, 'out'], [proc.stderr, 'err']]) {
       stream.setEncoding('utf8');
@@ -57,10 +85,13 @@ function runProcess(binary, args, { env, cwd, input = '', timeoutMs }) {
         else stderr += chunk;
       });
     }
-    proc.on('close', code => {
+    proc.on('close', (code, signal) => {
       clearTimeout(timer);
       if (error) return reject(error);
-      if (code !== 0) return reject(failure('CODEX_PROCESS_FAILED'));
+      if (code !== 0) {
+        return reject(failure('CODEX_PROCESS_FAILED', { exit: code, signal: signal || null,
+          apiError: lastApiError(stdout), stderr: diagText(stderr.slice(-2000)) || null }));
+      }
       resolve({ stdout, stderr });
     });
     proc.stdin.end(input);
@@ -69,10 +100,15 @@ function runProcess(binary, args, { env, cwd, input = '', timeoutMs }) {
 
 function parseResponse(stdout, tools) {
   let last, completed = false, started = false;
+  // Each rejection names its reason for the bridge journal; the thrown error
+  // still carries only the code, and the reason holds no prompt or output text.
+  const reject = reason => { throw Object.assign(new Error('rejected'), { reason }); };
   try {
     for (const line of stdout.split('\n').filter(Boolean)) {
-      const event = JSON.parse(line);
-      if (event.type === 'turn.failed' || event.type === 'error') throw new Error();
+      let event;
+      try { event = JSON.parse(line); } catch (_) { reject('event_not_json'); }
+      if (event.type === 'turn.failed') reject('turn_failed: ' + diagText(event.error?.message || '-'));
+      if (event.type === 'error') reject('error_event: ' + diagText(event.message || '-'));
       if (event.type === 'turn.started') started = true;
       if (event.type === 'turn.completed') completed = true;
       if (event.type === 'item.completed' && event.item?.type === 'agent_message') {
@@ -84,38 +120,50 @@ function parseResponse(stdout, tools) {
         // error item. Accept only this known warning, never arbitrary errors.
         if (!started && event.type === 'item.completed' && event.item?.type === 'error'
             && event.item.message?.startsWith('Code Mode is unavailable because code-mode host is disabled.')) continue;
-        if (!['agent_message', 'reasoning'].includes(event.item?.type)) throw new Error();
+        if (!['agent_message', 'reasoning'].includes(event.item?.type)) {
+          reject('item:' + diagName(event.item?.type)
+            + (event.item?.type === 'error' ? ' ' + diagText(event.item.message, 200) : ''));
+        }
       }
     }
-    if (!completed || typeof last !== 'string') throw new Error();
-    const data = JSON.parse(last);
-    if (typeof data.text !== 'string' || !Array.isArray(data.toolCalls)
-        || data.toolCalls.length > 8) throw new Error();
+    if (!completed) reject('not_completed');
+    if (typeof last !== 'string') reject('no_agent_message');
+    let data;
+    try { data = JSON.parse(last); } catch (_) { reject('output_not_json'); }
+    if (typeof data?.text !== 'string' || !Array.isArray(data.toolCalls)) reject('output_shape');
+    if (data.toolCalls.length > 8) reject('too_many_tool_calls:' + data.toolCalls.length);
     const allowed = new Map(tools.map(t => [t.name, t.input_schema]));
     const toolCalls = data.toolCalls.map(tc => {
-      if (!allowed.has(tc.name) || typeof tc.arguments !== 'string') throw new Error();
-      const input = JSON.parse(tc.arguments);
-      if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error();
+      const name = diagName(tc?.name);
+      if (!allowed.has(tc?.name)) reject('unknown_tool:' + name);
+      if (typeof tc.arguments !== 'string') reject('args_not_string:' + name);
+      let input;
+      try { input = JSON.parse(tc.arguments); } catch (_) { reject('args_not_json:' + name); }
+      if (!input || typeof input !== 'object' || Array.isArray(input)) reject('args_not_object:' + name);
       const schema = allowed.get(tc.name) || {};
       // Match required fields and reject invented parameters (including tenant
       // selectors). Existing handlers retain domain validation and authorization.
-      if ((schema.required || []).some(k => !Object.hasOwn(input, k))) throw new Error();
-      if (Object.keys(input).some(k => !Object.hasOwn(schema.properties || {}, k))) throw new Error();
+      const missing = (schema.required || []).find(k => !Object.hasOwn(input, k));
+      if (missing !== undefined) reject(`missing_required:${name}.${diagName(missing)}`);
+      const extra = Object.keys(input).find(k => !Object.hasOwn(schema.properties || {}, k));
+      if (extra !== undefined) reject(`extra_arg:${name}.${diagName(extra)}`);
       return { id: `codex_${randomUUID()}`, name: tc.name, input };
     });
     const text = data.text.trim();
-    if (!text && !toolCalls.length) throw new Error();
+    if (!text && !toolCalls.length) reject('empty');
     const assistantMsg = { role: 'assistant', content: text || null };
     if (toolCalls.length) assistantMsg.tool_calls = toolCalls.map(tc => ({
       id: tc.id, type: 'function', function: { name: tc.name, arguments: JSON.stringify(tc.input) },
     }));
     return { text, toolCalls, stopReason: toolCalls.length ? 'tool_calls' : 'stop', assistantMsg };
-  } catch (_) {
-    throw failure('CODEX_INVALID_RESPONSE');
+  } catch (e) {
+    throw failure('CODEX_INVALID_RESPONSE', { reason: e.reason || 'unexpected' });
   }
 }
 
-function createProvider({ env = process.env, run = runProcess } = {}) {
+// `model` is fixed by the bridge code per engine, never taken from a request.
+function createProvider({ env = process.env, run = runProcess, model = MODEL } = {}) {
+  if (![MODEL, SOL_MODEL].includes(model)) throw failure('CODEX_CONFIG');
   return {
     async createMessage({ system, messages, tools = [] }) {
       // The deployed dev server keeps NODE_ENV=production for Express security
@@ -140,9 +188,12 @@ function createProvider({ env = process.env, run = runProcess } = {}) {
       const cwd = await fs.mkdtemp(path.join(os.tmpdir(), 'mila-codex-'));
       const binary = env.MILA_CODEX_BIN || 'codex';
       const options = { cwd, env: childEnv(env), timeoutMs: 10000 };
-      const auth = await run(binary, ['login', 'status'], options);
+      let auth;
+      try { auth = await run(binary, ['login', 'status'], options); }
+      catch (e) { e.detail = { stage: 'login', ...e.detail }; throw e; }
       if (!/Logged in using ChatGPT/.test(auth.stdout + auth.stderr)) {
-        throw failure('CODEX_CHATGPT_LOGIN_REQUIRED');
+        throw failure('CODEX_CHATGPT_LOGIN_REQUIRED', { stage: 'login',
+          output: diagText(auth.stdout + ' ' + auth.stderr, 200) });
       }
       const args = ['exec', '--ignore-user-config', '--ignore-rules',
         '--skip-git-repo-check', '--ephemeral', '--sandbox', 'read-only',
@@ -153,10 +204,13 @@ function createProvider({ env = process.env, run = runProcess } = {}) {
         '-c', 'model_instructions_file=' + JSON.stringify(path.join(__dirname, 'codex-instructions.md')),
       ];
       for (const feature of DISABLED_FEATURES) args.push('--disable', feature);
-      args.push('--model', MODEL);
+      args.push('--model', model);
       args.push('-');
-      const result = await run(binary, args, { ...options, input, timeoutMs });
-      return parseResponse(result.stdout, tools);
+      let result;
+      try { result = await run(binary, args, { ...options, input, timeoutMs }); }
+      catch (e) { e.detail = { stage: 'exec', model, ...e.detail }; throw e; }
+      try { return parseResponse(result.stdout, tools); }
+      catch (e) { e.detail = { stage: 'parse', model, ...e.detail }; throw e; }
     },
     toolResultMessages(results) {
       return results.map(r => ({ role: 'tool', tool_call_id: r.id, content: JSON.stringify(r.result) }));
@@ -164,4 +218,4 @@ function createProvider({ env = process.env, run = runProcess } = {}) {
   };
 }
 
-module.exports = { ...createProvider(), MODEL, createProvider, parseResponse, childEnv, runProcess };
+module.exports = { ...createProvider(), MODEL, SOL_MODEL, createProvider, parseResponse, childEnv, runProcess, diagText };

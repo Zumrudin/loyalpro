@@ -21,7 +21,8 @@ function getProviderForSalon(salonId) {
   const relay = require('./codex-relay');
   return require('./resilient').createProvider({ salonId,
     store: require('../model-routing').getStore(),
-    providers: { gpt: relay, claude: relay.createProvider({ engine: 'claude' }), polza },
+    providers: { gpt: relay, sol: relay.createProvider({ engine: 'sol' }),
+      claude: relay.createProvider({ engine: 'claude' }), polza },
     legacy: getProvider(),
   });
 }

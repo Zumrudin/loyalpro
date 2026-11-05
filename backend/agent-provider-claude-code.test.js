@@ -43,3 +43,25 @@ test('valid tool result reuses caller-side tool validation and IDs', async () =>
   const p = createProvider({ run: runner({ text: '', toolCalls: [{ name: 'get_hours', arguments: '{}' }] }) });
   expect(await p.createMessage(request)).toMatchObject({ toolCalls: [{ name: 'get_hours', input: {} }] });
 });
+
+// ── Диагностика для журнала моста (05.11.2026): одна общая ошибка наружу, детали — в detail ──
+test('CLI error result (limit) is kept in detail, not in the message', async () => {
+  const run = jest.fn(async (_, args) => args[0] === 'auth'
+    ? { stdout: JSON.stringify({ loggedIn: true, authMethod: 'claude.ai' }) }
+    : { stdout: JSON.stringify({ subtype: 'success', is_error: true, result: 'Claude AI usage limit reached|1794317211' }) });
+  const e = await createProvider({ run }).createMessage(request).catch(x => x);
+  expect(e.message).toMatch(/CLAUDE_GENERATION_FAILED/);
+  expect(e.message).not.toMatch(/limit/);
+  expect(e.detail).toMatchObject({ stage: 'exec', cause: 'CLAUDE_GENERATION_FAILED', error: 'Claude AI usage limit reached|#' });
+});
+test('wrong login method is named in detail', async () => {
+  const run = jest.fn(async () => ({ stdout: '{"loggedIn":false,"authMethod":"none"}' }));
+  const e = await createProvider({ run }).createMessage(request).catch(x => x);
+  expect(e.detail).toMatchObject({ stage: 'auth', cause: 'CLAUDE_SUBSCRIPTION_REQUIRED', auth: 'loggedIn=false method=none' });
+});
+test('successful model output never lands in detail on a parse failure', async () => {
+  const e = await createProvider({ run: runner({ text: 'PRIVATE-ANSWER', toolCalls: [{ name: 'nope', arguments: '{}' }] }) })
+    .createMessage(request).catch(x => x);
+  expect(e.detail).toMatchObject({ stage: 'parse', reason: 'unknown_tool:nope' });
+  expect(JSON.stringify(e.detail)).not.toMatch(/PRIVATE/);
+});
