@@ -31,6 +31,16 @@ let _bcPreviewTimer = null;
 let _bcPollTimer = null;
 let _bcSegmentsSel = new Set();
 
+// ── Состояние формы «мессенджеры» ─────────────────────────────────────────────────────
+let _bcTransport = 'messengers';   // 'messengers' | 'telegram_bot'
+let _bcSource = 'filters';         // 'filters' | 'list'
+let _bcList = null;                // rows последнего «Разобрать» (или заполненный извне список)
+let _bcImageUrl = null;            // /uploads/broadcast_… после загрузки
+let _bcImageBusy = false;
+let _bcForecastTimer = null;
+let _bcForecastGen = 0;            // поколение: запоздалый ответ прогноза не рисуем
+let _bcLastForecast = null;
+
 async function loadBroadcasts() {
   // Шапка с числом подписчиков и список истории.
   await bcRenderSegmentChips();
@@ -82,6 +92,7 @@ function bcCollectFilters() {
 }
 
 function bcUpdatePreview() {
+  if (_bcTransport === 'messengers') { bcUpdateForecast(); return; }
   // Debounce, чтобы при быстром наборе не молотить сервер
   if (_bcPreviewTimer) clearTimeout(_bcPreviewTimer);
   _bcPreviewTimer = setTimeout(async () => {
@@ -117,11 +128,232 @@ function bcOpenComposer() {
   document.getElementById('bcText').value = '';
   document.getElementById('bcCharCount').textContent = '0';
   document.getElementById('bcSendBtn').disabled = false;
+  bcResetMessengerForm();
   document.getElementById('bcComposerOv').classList.add('open');
-  bcUpdatePreview();
+  bcSetTransport('messengers');
   // counter
   const ta = document.getElementById('bcText');
-  ta.oninput = () => { document.getElementById('bcCharCount').textContent = String(ta.value.length); };
+  ta.oninput = () => { document.getElementById('bcCharCount').textContent = String(ta.value.length); bcUpdateBonusHint(); };
+  // Правка списка после «Разобрать» делает разобранное устаревшим — отправлять можно только разобранное.
+  const lt = document.getElementById('bcListText');
+  lt.oninput = bcInvalidateList;
+  document.getElementById('bcListFile').onchange = bcInvalidateList;
+  const tp = document.getElementById('bcTestPhone');
+  if (tp) tp.value = localStorage.getItem('bcTestPhone') || '';
+}
+
+// Открыть форму в режиме «По списку» с готовым списком [{name, phone}] (монитор: «Новая рассылка по пропущенным»).
+// Список считается уже разобранным: _bcList = list, сводка пишется в #bcListReport, прогноз запускается сразу.
+function bcOpenComposerWithList(list) {
+  bcOpenComposer();
+  bcSetSource('list');
+  _bcList = Array.isArray(list) ? list.map(r => ({ name: r.name || '', phone: r.phone })) : [];
+  const rep = document.getElementById('bcListReport');
+  rep.style.display = '';
+  rep.innerHTML = `Получателей в списке: <b>${_bcList.length}</b> (подготовлен из прошлой рассылки)`;
+  bcUpdateForecast();
+}
+
+function bcResetMessengerForm() {
+  _bcList = null; _bcImageUrl = null; _bcImageBusy = false; _bcLastForecast = null;
+  _bcForecastGen++;
+  if (_bcForecastTimer) { clearTimeout(_bcForecastTimer); _bcForecastTimer = null; }
+  document.getElementById('bcListText').value = '';
+  document.getElementById('bcListFile').value = '';
+  document.getElementById('bcListReport').style.display = 'none';
+  bcClearImage();
+  document.getElementById('bcCascade').checked = true;
+  for (const ch of BC_CHANNELS) {
+    document.getElementById(`bcCh-${ch.key}-on`).checked = true;
+    document.getElementById(`bcCh-${ch.key}-delay`).value = String(ch.delay);
+    document.getElementById(`bcCh-${ch.key}-limit`).value = '';
+  }
+  document.getElementById('bcOnLimit').value = 'next_channel';
+  document.getElementById('bcForecast').textContent = '—';
+  _bcSource = 'filters';
+  document.querySelectorAll('#bcSource .bc-chip').forEach(el => el.classList.toggle('on', el.dataset.v === 'filters'));
+  document.getElementById('bcListBlock').style.display = 'none';
+}
+
+function bcSetTransport(v) {
+  _bcTransport = v === 'telegram_bot' ? 'telegram_bot' : 'messengers';
+  document.querySelectorAll('#bcTransport .bc-chip').forEach(el => el.classList.toggle('on', el.dataset.v === _bcTransport));
+  const msg = _bcTransport === 'messengers';
+  document.querySelectorAll('#bcComposerOv .bc-msg-only').forEach(el => { el.style.display = msg ? '' : 'none'; });
+  document.querySelectorAll('#bcComposerOv .bc-bot-only').forEach(el => { el.style.display = msg ? 'none' : ''; });
+  // Блок списка внутри .bc-msg-only живёт по своему переключателю источника
+  if (msg) bcSetSource(_bcSource);
+  document.getElementById('bcPreview').style.display = msg ? 'none' : '';
+  document.getElementById('bcFiltersSection').style.display = (msg && _bcSource === 'list') ? 'none' : '';
+  bcUpdateBonusHint();
+  bcUpdatePreview();
+}
+
+function bcSetSource(v) {
+  _bcSource = v === 'list' ? 'list' : 'filters';
+  document.querySelectorAll('#bcSource .bc-chip').forEach(el => el.classList.toggle('on', el.dataset.v === _bcSource));
+  document.getElementById('bcListBlock').style.display = _bcSource === 'list' ? '' : 'none';
+  document.getElementById('bcFiltersSection').style.display = (_bcTransport === 'messengers' && _bcSource === 'list') ? 'none' : '';
+  bcUpdateBonusHint();
+  if (_bcTransport === 'messengers') bcUpdateForecast();
+}
+
+function bcUpdateBonusHint() {
+  const el = document.getElementById('bcBonusHint');
+  if (!el) return;
+  const t = (document.getElementById('bcText') || {}).value || '';
+  el.style.display = (_bcTransport === 'messengers' && _bcSource === 'list' && t.includes('{bonuses}')) ? '' : 'none';
+}
+
+function bcInvalidateList() {
+  _bcList = null;
+  document.getElementById('bcListReport').style.display = 'none';
+  bcUpdateForecast();
+}
+
+// multipart: api() умеет только JSON, поэтому свой fetch (как ntUploadAttachment). TOKEN — глобальный из core/api.js.
+async function bcUpload(path, file) {
+  const fd = new FormData();
+  fd.append('file', file);
+  const headers = {};
+  const tok = (typeof TOKEN !== 'undefined' && TOKEN) || localStorage.getItem('lp_tk');
+  if (tok) headers['Authorization'] = 'Bearer ' + tok;
+  const r = await fetch(path, { method: 'POST', headers, body: fd });
+  const text = await r.text();
+  let j = {};
+  try { j = text ? JSON.parse(text) : {}; } catch (e) { /* HTML вместо JSON (502/404) */ }
+  if (!r.ok) throw new Error(j.error || 'HTTP ' + r.status);
+  return j;
+}
+
+async function bcParseList() {
+  const btn = document.getElementById('bcListParseBtn');
+  const rep = document.getElementById('bcListReport');
+  const file = document.getElementById('bcListFile').files[0];
+  const text = document.getElementById('bcListText').value;
+  if (!file && !text.trim()) { notify('Вставьте список или выберите файл', 'err'); return; }
+  btn.disabled = true;
+  try {
+    const d = file ? await bcUpload('/api/broadcasts/list/parse', file)
+                   : await api('POST', '/api/broadcasts/list/parse', { text });
+    _bcList = d.rows || [];
+    const bad = d.invalid || [];
+    rep.style.display = '';
+    rep.innerHTML = `Распознано: <b>${_bcList.length}</b>` +
+      ` · дубликатов: ${d.duplicates || 0} · в базе клиентов: ${d.inBase || 0} · в чёрном списке: ${d.blacklisted || 0}` +
+      ` · битых строк: ${bad.length}` +
+      (bad.length ? `<details style="margin-top:6px"><summary>Показать битые строки</summary>${bad.slice(0, 200).map(b => `<div>строка ${esc(String(b.line))}: ${esc(String(b.raw))}</div>`).join('')}</details>` : '');
+    bcUpdateForecast();
+  } catch (e) {
+    _bcList = null;
+    rep.style.display = '';
+    rep.textContent = 'Ошибка: ' + e.message;
+  } finally { btn.disabled = false; }
+}
+
+async function bcPickImage() {
+  const inp = document.getElementById('bcImageFile');
+  const file = inp.files[0];
+  if (!file) return;
+  _bcImageBusy = true;
+  try {
+    const d = await bcUpload('/api/broadcasts/image', file);
+    _bcImageUrl = d.imageUrl;
+    const pv = document.getElementById('bcImagePreview');
+    pv.src = d.imageUrl; pv.style.display = '';
+    document.getElementById('bcImageClear').style.display = '';
+  } catch (e) {
+    _bcImageUrl = null;
+    inp.value = '';
+    notify('Картинка не загружена: ' + e.message, 'err');
+  } finally { _bcImageBusy = false; }
+}
+
+function bcClearImage() {
+  _bcImageUrl = null;
+  const inp = document.getElementById('bcImageFile'); if (inp) inp.value = '';
+  const pv = document.getElementById('bcImagePreview'); if (pv) { pv.style.display = 'none'; pv.removeAttribute('src'); }
+  const bt = document.getElementById('bcImageClear'); if (bt) bt.style.display = 'none';
+}
+
+function bcSaveTestPhone() {
+  localStorage.setItem('bcTestPhone', document.getElementById('bcTestPhone').value.trim());
+}
+
+function bcReadField(id) {
+  const el = document.getElementById(id);
+  if (!el) return '';
+  return el.type === 'checkbox' ? el.checked : el.value;
+}
+
+// Тело T для /forecast, /test и POST / (спека §6). textFallback — прогнозу текст не нужен, но сервер
+// валидирует тело целиком, поэтому подставляем заглушку.
+function bcBuildBody(textFallback) {
+  const text = document.getElementById('bcText').value.trim();
+  return {
+    transport: 'messengers',
+    audienceSource: _bcSource,
+    filters: _bcSource === 'filters' ? bcCollectFilters() : {},
+    list: _bcSource === 'list' ? (_bcList || []).map(r => ({ name: r.name || '', phone: r.phone })) : [],
+    messageTemplate: text || textFallback || '',
+    imageUrl: _bcImageUrl || null,
+    channelSettings: bcCollectChannelSettings(bcReadField),
+    onLimit: document.getElementById('bcOnLimit').value,
+    cascadeEnabled: document.getElementById('bcCascade').checked,
+  };
+}
+
+function bcUpdateForecast() {
+  if (_bcTransport !== 'messengers') return;
+  if (_bcForecastTimer) clearTimeout(_bcForecastTimer);
+  const gen = ++_bcForecastGen;
+  const el = document.getElementById('bcForecast');
+  if (!el) return;
+  _bcLastForecast = null;
+  if (_bcSource === 'list' && !(_bcList && _bcList.length)) { el.textContent = 'Разберите список — тогда появится прогноз'; return; }
+  const cs = bcCollectChannelSettings(bcReadField);
+  if (!BC_CHANNELS.some(ch => cs[ch.key].enabled)) { el.textContent = 'Включите хотя бы один мессенджер'; return; }
+  el.textContent = 'считаю…';
+  _bcForecastTimer = setTimeout(async () => {
+    try {
+      const r = await api('POST', '/api/broadcasts/forecast', bcBuildBody('.'));
+      if (gen !== _bcForecastGen) return;          // пришёл запоздавший ответ — форма уже изменилась
+      _bcLastForecast = r;
+      el.textContent = bcFormatForecast(r);
+    } catch (e) {
+      if (gen !== _bcForecastGen) return;
+      el.textContent = 'Прогноз недоступен: ' + e.message;
+    }
+  }, 500);
+}
+
+async function bcSendTest() {
+  const phone = document.getElementById('bcTestPhone').value.trim();
+  if (!phone) { notify('Укажите свой номер для теста', 'err'); return; }
+  const errs = bcValidateMessengerForm(bcFormState());
+  // Для теста список получателей не нужен
+  const rel = errs.filter(e => !e.startsWith('Загрузите список'));
+  if (rel.length) { notify(rel[0], 'err'); return; }
+  const btn = document.getElementById('bcTestBtn');
+  btn.disabled = true;
+  try {
+    const body = bcBuildBody();
+    if (_bcSource === 'list' && !body.list.length) body.list = [{ name: '', phone }];
+    const r = await api('POST', '/api/broadcasts/test', { ...body, testPhone: phone });
+    notify(r.ok ? `Тест отправлен (${r.channel})` : `Тест не ушёл: ${r.error || 'ошибка'}`, r.ok ? 'ok' : 'err');
+  } catch (e) {
+    notify('Ошибка теста: ' + e.message, 'err');
+  } finally { btn.disabled = false; }
+}
+
+function bcFormState() {
+  return {
+    audienceSource: _bcSource,
+    list: _bcList,
+    messageTemplate: document.getElementById('bcText').value,
+    channelSettings: bcCollectChannelSettings(bcReadField),
+    imageUploading: _bcImageBusy,
+  };
 }
 
 function bcCloseComposer() {
@@ -139,6 +371,7 @@ function bcInsertVar(token) {
 }
 
 async function bcSend() {
+  if (_bcTransport === 'messengers') return bcSendMessengers();
   const text = document.getElementById('bcText').value.trim();
   if (!text) { notify('Введите текст сообщения', 'err'); return; }
 
@@ -154,6 +387,28 @@ async function bcSend() {
   btn.disabled = true;
   try {
     await api('POST', '/api/broadcasts', { messageTemplate: text, filters });
+    notify('Рассылка поставлена в очередь', 'ok');
+    bcCloseComposer();
+    await bcLoadHistory();
+  } catch (e) {
+    notify('Ошибка: ' + e.message, 'err');
+    btn.disabled = false;
+  }
+}
+
+async function bcSendMessengers() {
+  const errs = bcValidateMessengerForm(bcFormState());
+  if (errs.length) { notify(errs[0], 'err'); return; }
+  const f = _bcLastForecast;
+  const n = f ? Math.max(0, (f.total || 0) - (f.skipped || 0)) : null;
+  const q = n != null
+    ? `Запустить рассылку? Получат сообщение примерно ${n} из ${f.total}.`
+    : 'Запустить рассылку? Прогноз ещё не посчитан.';
+  if (!confirm(q)) return;
+  const btn = document.getElementById('bcSendBtn');
+  btn.disabled = true;
+  try {
+    await api('POST', '/api/broadcasts', bcBuildBody());
     notify('Рассылка поставлена в очередь', 'ok');
     bcCloseComposer();
     await bcLoadHistory();
@@ -201,16 +456,18 @@ function bcRenderHistoryItem(b) {
   if (filters.gender)     fParts.push(`пол: ${filters.gender === 'female' ? 'жен' : 'муж'}`);
   const fLine = fParts.length ? fParts.join(' · ') : 'без фильтров';
 
+  const isMsg = b.transport === 'messengers';
   const canCancel = b.status === 'pending' || b.status === 'in_progress';
   const errLine = (b.errorSamples && b.errorSamples.length)
     ? `<div class="bc-row-errors">Примеры ошибок: ${b.errorSamples.slice(0,3).map(e => esc(e.error || '').slice(0, 60)).join(' / ')}</div>`
     : '';
 
   return `
-    <div class="bc-row" data-id="${b.id}">
+    <div class="bc-row" data-id="${b.id}"${isMsg ? ' data-monitor="1" onclick="bcOpenMonitor(' + Number(b.id) + ')" title="Открыть монитор"' : ''}>
       <div class="bc-row-grid">
         <div class="bc-row-left">
           <div class="bc-row-meta">
+            <span class="bc-row-chan" title="${isMsg ? 'Мессенджеры клиники' : 'Telegram-бот'}">${isMsg ? '💬' : '🤖'}</span>
             <span class="bc-row-status" style="background:${s.color}22;color:${s.color}">${s.lbl}</span>
             ${esc(b.author_name || '—')} · ${esc(created)}
           </div>
@@ -224,7 +481,7 @@ function bcRenderHistoryItem(b) {
             ${b.failed > 0 ? `<span style="color:var(--danger);font-size:11px">· ${b.failed} ошибок</span>` : ''}
           </div>
           <div class="bc-progress-bar"><i style="width:${pct}%;background:${s.color}"></i></div>
-          ${canCancel ? `<button class="btn btn-sec btn-sm" style="margin-top:8px" onclick="bcCancel(${b.id})">Отменить</button>` : ''}
+          ${canCancel ? `<button class="btn btn-sec btn-sm" style="margin-top:8px" onclick="event.stopPropagation();bcCancel(${b.id})">Отменить</button>` : ''}
         </div>
       </div>
     </div>`;

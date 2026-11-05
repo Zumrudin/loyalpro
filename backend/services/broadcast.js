@@ -348,6 +348,7 @@ async function processOneTick() {
        SELECT id FROM broadcasts
         WHERE status IN ('pending','in_progress')
           AND cancel_requested = FALSE
+          AND transport = 'telegram_bot'  -- рассылки через мессенджеры ведёт свой воркер
         ORDER BY status DESC, created_at ASC  -- in_progress сначала (продолжаем), потом pending
         LIMIT 1
         FOR UPDATE SKIP LOCKED
