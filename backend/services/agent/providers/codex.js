@@ -116,7 +116,6 @@ function parseResponse(stdout, tools) {
 }
 
 function createProvider({ env = process.env, run = runProcess } = {}) {
-  let busy = false;
   return {
     async createMessage({ system, messages, tools = [] }) {
       // The deployed dev server keeps NODE_ENV=production for Express security
@@ -129,41 +128,35 @@ function createProvider({ env = process.env, run = runProcess } = {}) {
       if ((env.NODE_ENV !== 'development' && !devStand) || env.MILA_CODEX_PROTOTYPE !== 'true') {
         throw failure('CODEX_DEV_ONLY');
       }
-      if (busy) throw failure('CODEX_BUSY');
       const timeoutMs = Number(env.MILA_CODEX_TIMEOUT_MS || 90000);
       if (!Number.isInteger(timeoutMs) || timeoutMs < 1000 || timeoutMs > 180000) {
         throw failure('CODEX_INVALID_TIMEOUT');
       }
       const input = JSON.stringify({ system, messages, tools });
       if (Buffer.byteLength(input) > MAX_BYTES) throw failure('CODEX_INPUT_TOO_LARGE');
-      busy = true;
-      try {
-        // Empty cwd outside the application tree: no project config/instructions.
-        // It contains no prompts, outputs, or credentials and is not shared by
-        // simultaneous sessions. No process-global chdir or environment changes.
-        const cwd = await fs.mkdtemp(path.join(os.tmpdir(), 'mila-codex-'));
-        const binary = env.MILA_CODEX_BIN || 'codex';
-        const options = { cwd, env: childEnv(env), timeoutMs: 10000 };
-        const auth = await run(binary, ['login', 'status'], options);
-        if (!/Logged in using ChatGPT/.test(auth.stdout + auth.stderr)) {
-          throw failure('CODEX_CHATGPT_LOGIN_REQUIRED');
-        }
-        const args = ['exec', '--ignore-user-config', '--ignore-rules',
-          '--skip-git-repo-check', '--ephemeral', '--sandbox', 'read-only',
-          '--json', '--color', 'never', '--output-schema',
-          path.join(__dirname, 'codex-response.schema.json'),
-          '-c', 'forced_login_method="chatgpt"', '-c', 'model_provider="openai"',
-          '-c', 'web_search="disabled"', '-c', 'project_doc_max_bytes=0',
-          '-c', 'model_instructions_file=' + JSON.stringify(path.join(__dirname, 'codex-instructions.md')),
-        ];
-        for (const feature of DISABLED_FEATURES) args.push('--disable', feature);
-        args.push('--model', MODEL);
-        args.push('-');
-        const result = await run(binary, args, { ...options, input, timeoutMs });
-        return parseResponse(result.stdout, tools);
-      } finally {
-        busy = false;
+      // Empty cwd outside the application tree: no project config/instructions.
+      // It contains no prompts, outputs, or credentials and is not shared by
+      // simultaneous sessions. The bridge owns concurrency and queue limits.
+      const cwd = await fs.mkdtemp(path.join(os.tmpdir(), 'mila-codex-'));
+      const binary = env.MILA_CODEX_BIN || 'codex';
+      const options = { cwd, env: childEnv(env), timeoutMs: 10000 };
+      const auth = await run(binary, ['login', 'status'], options);
+      if (!/Logged in using ChatGPT/.test(auth.stdout + auth.stderr)) {
+        throw failure('CODEX_CHATGPT_LOGIN_REQUIRED');
       }
+      const args = ['exec', '--ignore-user-config', '--ignore-rules',
+        '--skip-git-repo-check', '--ephemeral', '--sandbox', 'read-only',
+        '--json', '--color', 'never', '--output-schema',
+        path.join(__dirname, 'codex-response.schema.json'),
+        '-c', 'forced_login_method="chatgpt"', '-c', 'model_provider="openai"',
+        '-c', 'web_search="disabled"', '-c', 'project_doc_max_bytes=0',
+        '-c', 'model_instructions_file=' + JSON.stringify(path.join(__dirname, 'codex-instructions.md')),
+      ];
+      for (const feature of DISABLED_FEATURES) args.push('--disable', feature);
+      args.push('--model', MODEL);
+      args.push('-');
+      const result = await run(binary, args, { ...options, input, timeoutMs });
+      return parseResponse(result.stdout, tools);
     },
     toolResultMessages(results) {
       return results.map(r => ({ role: 'tool', tool_call_id: r.id, content: JSON.stringify(r.result) }));
