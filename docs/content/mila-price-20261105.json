@@ -1,0 +1,440 @@
+{
+  "salonId": 1,
+  "date": "2026-11-01",
+  "mapping": {
+    "c9536368": [
+      3
+    ],
+    "s5": [
+      4
+    ],
+    "s6": [
+      5
+    ],
+    "c18845024": [
+      6
+    ],
+    "c17941412": [
+      7
+    ],
+    "c9648698": [
+      7
+    ],
+    "c26099057": [
+      8
+    ],
+    "c9536369": [
+      9,
+      10,
+      11
+    ],
+    "c15394163": [
+      12
+    ],
+    "c15393811": [
+      13
+    ],
+    "s15": [
+      14
+    ],
+    "c28566429": [
+      14
+    ],
+    "s2": [
+      15,
+      16
+    ],
+    "s10": [
+      15,
+      16
+    ],
+    "s12": [
+      16
+    ],
+    "s7": [
+      17
+    ],
+    "s8": [
+      17
+    ],
+    "s9": [
+      18
+    ],
+    "c15394164": [
+      19
+    ],
+    "s14": [
+      19
+    ],
+    "c28053996": [
+      19
+    ],
+    "s11": [
+      20
+    ],
+    "c9536367": [
+      21
+    ],
+    "s18": [
+      22
+    ],
+    "s20": [
+      22
+    ],
+    "c25506840": [
+      22
+    ],
+    "s16": [
+      23
+    ],
+    "s17": [
+      23
+    ],
+    "s13": [
+      24
+    ]
+  },
+  "files": [
+    {
+      "page": 3,
+      "name": "page-03.jpg",
+      "size": 261178,
+      "sha256": "435a55b4d6aa831b49329d4c35308f60d70778febf7c7b89e0fcff078f83be40"
+    },
+    {
+      "page": 4,
+      "name": "page-04.jpg",
+      "size": 386988,
+      "sha256": "502cfbfc2adc38fad324171cd8fb5b003524ceea610f618d00441f650af4b78b"
+    },
+    {
+      "page": 5,
+      "name": "page-05.jpg",
+      "size": 403648,
+      "sha256": "055768f0258737be1ac8490ccef12aa4f767fed75351d275159241ee573b381f"
+    },
+    {
+      "page": 6,
+      "name": "page-06.jpg",
+      "size": 319907,
+      "sha256": "cd66e82162e5fd5e904df7644c00e75084ca6323529dcd929ea71c527ab2b29c"
+    },
+    {
+      "page": 7,
+      "name": "page-07.jpg",
+      "size": 402332,
+      "sha256": "55cdc18681168edc23190a33dd78071a174184779029ab04b240f02101cb98c5"
+    },
+    {
+      "page": 8,
+      "name": "page-08.jpg",
+      "size": 461716,
+      "sha256": "fb95d0a353ae7d45a75095eb34fd050bbc72519db045992fd4c66bf9f8a3fca9"
+    },
+    {
+      "page": 9,
+      "name": "page-09.jpg",
+      "size": 410871,
+      "sha256": "7e12e6995c250d8cc23064777b5659698cd4a6afdc5038dba7d9d59fbac13275"
+    },
+    {
+      "page": 10,
+      "name": "page-10.jpg",
+      "size": 367086,
+      "sha256": "9b37ee540da807719ac662325cab8295af3d03c01d7ae8ad2461f016858aedac"
+    },
+    {
+      "page": 11,
+      "name": "page-11.jpg",
+      "size": 345974,
+      "sha256": "8530d02b3bb5b80ef6c688b2a69da745d65accd8eab9abb6ad639bd679a3feb2"
+    },
+    {
+      "page": 12,
+      "name": "page-12.jpg",
+      "size": 357638,
+      "sha256": "e46a7821c5a6eadbec5aa2808c66d24f0eb15e6f930f2276f182395988862313"
+    },
+    {
+      "page": 13,
+      "name": "page-13.jpg",
+      "size": 282002,
+      "sha256": "5c9e124a8bb31c71d8128ad9ff4cc44ffb82a49bd8411ffe8b784304e5edfb8e"
+    },
+    {
+      "page": 14,
+      "name": "page-14.jpg",
+      "size": 288468,
+      "sha256": "d1a9602bc89e851aaefbd433e2c6e914235c3b4b84bfb824d4c7af0277814774"
+    },
+    {
+      "page": 15,
+      "name": "page-15.jpg",
+      "size": 459062,
+      "sha256": "f3654e05be1cde897bef724080359d545f9fa55b5eb8ffd0b28173e68e6fda98"
+    },
+    {
+      "page": 16,
+      "name": "page-16.jpg",
+      "size": 463331,
+      "sha256": "7d497135b19da37b203a960ddb86ee0c3b65664c27a3c0b6e2909fa7ef5e1fe2"
+    },
+    {
+      "page": 17,
+      "name": "page-17.jpg",
+      "size": 475317,
+      "sha256": "0ca1714e3de657fa645adcbf4b8e48803b040aaef98eb049b0e69a9b85b57765"
+    },
+    {
+      "page": 18,
+      "name": "page-18.jpg",
+      "size": 489391,
+      "sha256": "8ed7a8d4e903702588714c790eab70369052c9e82688f74c6d8e990de384d5e9"
+    },
+    {
+      "page": 19,
+      "name": "page-19.jpg",
+      "size": 411462,
+      "sha256": "4c3cc72a700b642caa4d1febeaf4e4e971e61368bfbad975fef3aa68e0a7f700"
+    },
+    {
+      "page": 20,
+      "name": "page-20.jpg",
+      "size": 429892,
+      "sha256": "28356346c7816d363b70a2f3be1e5ece698eb2c1f7dc51dcf4d812afd0d8e3a6"
+    },
+    {
+      "page": 21,
+      "name": "page-21.jpg",
+      "size": 282292,
+      "sha256": "9f9d79bd0a1b86db061d977bc6f0fb7440417e2378b60d4adbf6ab1c032c914b"
+    },
+    {
+      "page": 22,
+      "name": "page-22.jpg",
+      "size": 455348,
+      "sha256": "5401dc17df5ab35ddbff8615a4f6f226b07f7631eb9ab02fd1e19c12c2851360"
+    },
+    {
+      "page": 23,
+      "name": "page-23.jpg",
+      "size": 366437,
+      "sha256": "a0adec138fc43af174ae49e421dbc6543c754d436b0cc551d44ff51b4398c269"
+    },
+    {
+      "page": 24,
+      "name": "page-24.jpg",
+      "size": 163464,
+      "sha256": "10a6790e78063c7ffc112dec9da208b86df7231a983e813642c76f69edaaff46"
+    }
+  ],
+  "verifiedNodes": [
+    {
+      "node": "c9536368",
+      "title": "Консультации",
+      "pages": [
+        3
+      ]
+    },
+    {
+      "node": "s5",
+      "title": "Фотоомоложение LUMECCA",
+      "pages": [
+        4
+      ]
+    },
+    {
+      "node": "s6",
+      "title": "Morpheus 8",
+      "pages": [
+        5
+      ]
+    },
+    {
+      "node": "c18845024",
+      "title": "Volnewmer",
+      "pages": [
+        6
+      ]
+    },
+    {
+      "node": "c17941412",
+      "title": "Tesla Former",
+      "pages": [
+        7
+      ]
+    },
+    {
+      "node": "c9648698",
+      "title": "RSL-скульптурирование",
+      "pages": [
+        7
+      ]
+    },
+    {
+      "node": "c26099057",
+      "title": "Pladuo",
+      "pages": [
+        8
+      ]
+    },
+    {
+      "node": "c9536369",
+      "title": "Лазерная эпиляция",
+      "pages": [
+        9,
+        10,
+        11
+      ]
+    },
+    {
+      "node": "c15394163",
+      "title": "ProFacial",
+      "pages": [
+        12
+      ]
+    },
+    {
+      "node": "c15393811",
+      "title": "HELEO4",
+      "pages": [
+        13
+      ]
+    },
+    {
+      "node": "s15",
+      "title": "Микротоковая терапия",
+      "pages": [
+        14
+      ]
+    },
+    {
+      "node": "c28566429",
+      "title": "Микротоки",
+      "pages": [
+        14
+      ]
+    },
+    {
+      "node": "s2",
+      "title": "Биоревитализация",
+      "pages": [
+        15,
+        16
+      ]
+    },
+    {
+      "node": "s10",
+      "title": "Мезотерапия",
+      "pages": [
+        15,
+        16
+      ]
+    },
+    {
+      "node": "s12",
+      "title": "Липолитики",
+      "pages": [
+        16
+      ]
+    },
+    {
+      "node": "s7",
+      "title": "Увеличение губ",
+      "pages": [
+        17
+      ]
+    },
+    {
+      "node": "s8",
+      "title": "Контурная пластика",
+      "pages": [
+        17
+      ]
+    },
+    {
+      "node": "s9",
+      "title": "Ботулинотерапия",
+      "pages": [
+        18
+      ]
+    },
+    {
+      "node": "c15394164",
+      "title": "Коллагенотерапия",
+      "pages": [
+        19
+      ]
+    },
+    {
+      "node": "s14",
+      "title": "Полимолочная кислота",
+      "pages": [
+        19
+      ]
+    },
+    {
+      "node": "c28053996",
+      "title": "Полимолочная кислота",
+      "pages": [
+        19
+      ]
+    },
+    {
+      "node": "s11",
+      "title": "Плазмолифтинг / плазмотерапия",
+      "pages": [
+        20
+      ]
+    },
+    {
+      "node": "c9536367",
+      "title": "Капельницы",
+      "pages": [
+        21
+      ]
+    },
+    {
+      "node": "s18",
+      "title": "Чистки",
+      "pages": [
+        22
+      ]
+    },
+    {
+      "node": "s20",
+      "title": "Уходовые процедуры",
+      "pages": [
+        22
+      ]
+    },
+    {
+      "node": "c25506840",
+      "title": "Уходы от Forlle`d",
+      "pages": [
+        22
+      ]
+    },
+    {
+      "node": "s16",
+      "title": "Косметологические пилинги",
+      "pages": [
+        23
+      ]
+    },
+    {
+      "node": "s17",
+      "title": "МИЛАЙН",
+      "pages": [
+        23
+      ]
+    },
+    {
+      "node": "s13",
+      "title": "Дополнительно",
+      "pages": [
+        24
+      ]
+    }
+  ]
+}
