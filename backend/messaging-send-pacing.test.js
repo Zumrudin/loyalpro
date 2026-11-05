@@ -8,12 +8,14 @@ const {
 const NOW = Date.parse('2026-08-08T11:00:00+03:00');
 const ago = (min) => new Date(NOW - min * 60000);
 
-// SQL смотрит ВСЕ ТРИ плановые очереди — без этой проверки правку UNION
-// (например, потерю ветки notification_sends) можно молча проехать.
-test('SQL смотрит все три очереди', () => {
+// SQL смотрит ВСЕ ЧЕТЫРЕ плановые очереди — без этой проверки потерю любой
+// ветки (например, notification_sends или notification_jobs) можно молча
+// проехать: темп перестал бы видеть часть исходящих с номера.
+test('SQL смотрит все четыре очереди', () => {
   expect(LAST_SENT_SQL).toContain('care_touch_sends');
   expect(LAST_SENT_SQL).toContain('reminder_queue');
   expect(LAST_SENT_SQL).toContain('notification_sends');
+  expect(LAST_SENT_SQL).toContain('notification_jobs');
 });
 
 test('никогда не отправляли → ждать нечего', () => {
@@ -72,12 +74,12 @@ test('lastPlannedSendAt: max() на пустой выборке → null', async
 });
 
 // max() поверх UNION ALL PostgreSQL не сводит к «первая строка индекса» —
-// живой EXPLAIN давал скан ВСЕХ строк status='sent' каждой таблицы. Три
+// живой EXPLAIN давал скан ВСЕХ строк status='sent' каждой таблицы. Четыре
 // отдельных max() под greatest() дают InitPlan → Limit → Index Only Scan.
-test('SQL берёт три отдельных max() через greatest(), а не агрегат над UNION', () => {
+test('SQL берёт четыре отдельных max() через greatest(), а не агрегат над UNION', () => {
   expect(LAST_SENT_SQL).toMatch(/greatest\(/i);
   expect(LAST_SENT_SQL).not.toMatch(/UNION/i);
-  expect(LAST_SENT_SQL.match(/max\(/gi)).toHaveLength(3);
+  expect(LAST_SENT_SQL.match(/max\(/gi)).toHaveLength(4);
 });
 
 // ── потолок по времени суток ───────────────────────────────────────────────

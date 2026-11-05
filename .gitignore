@@ -34,6 +34,8 @@ frontend/uploads/portfolio_*
 frontend/uploads/kb_*
 frontend/uploads/salon_logo_*
 frontend/uploads/pricelist_*
+frontend/uploads/notify_seed/
+frontend/uploads/notify_*
 .superpowers/
 gateway/data/
 frontend/uploads/gateway/
