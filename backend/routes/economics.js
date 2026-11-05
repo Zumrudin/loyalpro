@@ -1,5 +1,5 @@
 'use strict';
-// /api/economics — экономика процедур. ТОЛЬКО владелец (зарплаты и закупки).
+// /api/economics — экономика процедур. Владелец и администраторы (зарплаты и закупки).
 // Валидация недоверчивая, как parseRuleBody в routes/reminders.js: тела вне
 // контракта — 400 с причиной. Парсеры вынесены наружу ради теста без HTTP.
 // ВНИМАНИЕ: поля JWT — req.user.salonId и req.user.userId (НЕ salon_id).
@@ -156,7 +156,7 @@ async function salonOr404(req, res) {
 const fail = (res, label) => (e) => { logger.warn(`${label}: ${e.message}`); res.status(500).json({ error: e.message }); };
 const idParam = (v) => Number(v);
 
-router.use(auth, requireRole('owner'));
+router.use(auth, requireRole('owner', 'admin'));
 
 // ── отчёт ──
 router.get('/services', async (req, res) => {

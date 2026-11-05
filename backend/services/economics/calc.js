@@ -113,12 +113,38 @@ function buildRows(record, ctx) {
   const recFact = splitByWeights(rec.fact, prices);
   const recYc = splitByWeights(rec.yc, prices);
 
-  // Эквайринг по кассам (§3.4): только когда оплаты привязаны к записи; касса без
-  // процента в настройках = 0 (это не оценка, оплаты известны).
+  // Эквайринг по кассам (§3.4): от фактических денежных оплат записи; касса без
+  // процента в настройках = 0 (это не оценка, оплаты известны). Оплата YClients несёт
+  // sold_item_id (service_id) — услугу, за которую платили: её эквайринг ложится на эту
+  // услугу (при повторе услуги в записи — между её строками по цене). Оплата без
+  // service_id или с услугой не из записи — общая, делится по цене, как раньше.
+  // Услуга с ценой, на которую не пришлось ни своей, ни общей оплаты (вебхук
+  // finances_operation потерян ), — оценка по средней
+  // доле: «оплаты не видно» значит «не знаем», а не «без эквайринга».
   const payments = Array.isArray(record.payments) ? record.payments : [];
   const pct = settings.acquiring || {};
-  const acqTotal = payments.reduce((a, p) => a + n(p.amount) * (n(pct[p.account_title]) / 100), 0);
-  const acqParts = splitByWeights(acqTotal, prices);
+  const fee = (p) => n(p.amount) * (n(pct[p.account_title]) / 100);
+  const ownPay = new Map();
+  let poolAcq = 0, poolPaid = 0;
+  for (const p of payments) {
+    const sid = Number(p.service_id);
+    if (sid && own.has(sid)) {
+      const b = ownPay.get(sid) || { acq: 0, paid: 0 };
+      b.acq += fee(p); b.paid += n(p.amount);
+      ownPay.set(sid, b);
+    } else { poolAcq += fee(p); poolPaid += n(p.amount); }
+  }
+  const poolAcqParts = splitByWeights(poolAcq, prices);
+  const poolPaidParts = splitByWeights(poolPaid, prices);
+  const acqParts = services.map(() => 0);
+  const paidParts = services.map(() => 0);
+  for (const [sid, b] of ownPay) {
+    const idx = own.get(sid).idx;
+    const ws = idx.map(i => prices[i]);
+    const a = splitByWeights(b.acq, ws), pd = splitByWeights(b.paid, ws);
+    idx.forEach((i, k) => { acqParts[i] = a[k]; paidParts[i] = pd[k]; });
+  }
+  const rowHasPay = services.map((s, i) => payments.length > 0 && (paidParts[i] + poolPaidParts[i] > 0 || prices[i] <= 0));
 
   // Линия схемы оплаты выбирается на каждую строку (спека 2026-10-19, §3); fixed_per_visit —
   // «за визит», поэтому у линии, под которую попало несколько строк ОДНОЙ записи, фикс
@@ -169,8 +195,8 @@ function buildRows(record, ctx) {
       // норма посчитана по всем своим товарам; факт строки включает долю общих списаний.
       no_price_consumed: noPriceConsumed, norm_complete: !!norm && norm.noPrice.length === 0, fact_shared: factShared,
       pay_scheme_id: hit ? hit.schemeId : null, pay_line_idx: hit ? hit.lineIdx : null, pay_base: dp.base, doctor_pay: dp.pay, doctor_cost: dp.cost, no_pay_rule: dp.noRule,
-      has_payments: payments.length > 0,
-      acquiring_cost: payments.length ? acqParts[i] : null, acquiring_estimated: payments.length === 0,
+      has_payments: rowHasPay[i],
+      acquiring_cost: rowHasPay[i] ? r2(acqParts[i] + poolAcqParts[i]) : null, acquiring_estimated: !rowHasPay[i],
       contribution: null, contribution_pct: null,
       overhead: 0, equipment_cost: 0, operating_profit: null, operating_pct: null, usn_estimate: 0, profit_per_hour: null,
     };

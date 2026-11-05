@@ -233,8 +233,11 @@ const CONSUMABLES_SQL = `
     AND t.record_id = ANY($2::bigint[])
   ORDER BY t.record_id, t.yclients_txn_id`;
 
+// service_id — услуга, за которую платили (sold_item_id YClients): у вебхука лежит в
+// raw_payload.data, у старой выгрузки из API (source='api_backfill') — на верхнем уровне.
 const PAYMENTS_SQL = `
-  SELECT yclients_record_id AS record_id, amount, account_title
+  SELECT yclients_record_id AS record_id, amount, account_title,
+    substring(COALESCE(raw_payload->'data'->>'sold_item_id', raw_payload->>'sold_item_id') FROM '^[0-9]{1,18}$')::bigint AS service_id
   FROM revenue_operations WHERE salon_id = $1 AND category = 'services' AND yclients_record_id = ANY($2::bigint[])`;
 
 // Приходы до конца дня $3 по Москве: create_date — timestamptz, граница считается
@@ -295,7 +298,7 @@ async function loadPeriod(salonId, from, to) {
     : [[], []];
   const consBy = new Map(); const paysBy = new Map();
   for (const c of cons) pushTo(consBy, toInt(c.record_id), { good_id: toInt(c.good_id), service_id: toInt(c.service_id), amount: N(c.amount), cost: N(c.cost), cost_per_unit: N(c.cost_per_unit) });
-  for (const p of pays) pushTo(paysBy, toInt(p.record_id), { amount: N(p.amount), account_title: p.account_title || '' });
+  for (const p of pays) pushTo(paysBy, toInt(p.record_id), { amount: N(p.amount), account_title: p.account_title || '', service_id: toInt(p.service_id) });
   const records = recs.map(r => {
     const id = toInt(r.record_id);
     return {

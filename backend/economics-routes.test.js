@@ -125,16 +125,16 @@ describe('parsePriceBody / parseManualCard / parsePeriodDays', () => {
 describe('роутер без HTTP', () => {
   beforeEach(() => { jest.clearAllMocks(); sync.isRunning.mockReturnValue(false); });
 
-  test('не-owner (admin) получает 403 на любой ручке, store не вызывается', async () => {
-    const r = await call('GET', '/pay-schemes', { user: { role: 'admin', salonId: 1 } });
+  test.each(['specialist', 'admin_cashier', 'unknown'])('%s получает 403, store не вызывается', async (role) => {
+    const r = await call('GET', '/pay-schemes', { user: { role, salonId: 1 } });
     expect(r.status).toBe(403);
     expect(store.listPaySchemes).not.toHaveBeenCalled();
   });
 
-  test('GET /pay-schemes: схемы с assigned и назначения, всё по salonId из токена', async () => {
+  test.each(['owner', 'admin'])('GET /pay-schemes: %s, схемы и назначения по salonId из токена', async (role) => {
     store.listPaySchemes.mockResolvedValue([{ id: 1, title: 'A', note: null, lines: [] }, { id: 2, title: 'B', note: null, lines: [] }]);
     store.listPayAssignments.mockResolvedValue([{ id: 7, staff_yc_id: 5, scheme_id: 1 }, { id: 8, staff_yc_id: 6, scheme_id: 1 }, { id: 9, staff_yc_id: 5, scheme_id: 1 }]);
-    const r = await call('GET', '/pay-schemes');
+    const r = await call('GET', '/pay-schemes', { user: { role, salonId: 1, userId: 9 }, query: { salonId: 999 } });
     expect(r.status).toBe(200);
     expect(store.listPaySchemes).toHaveBeenCalledWith(1);
     expect(r.body.schemes.map(s => s.assigned)).toEqual([[5, 6], []]);
@@ -274,9 +274,9 @@ test('parseMonth', () => { expect(parseMonth('2026-09')).toBe('2026-09-01'); exp
 describe('fixed-costs / equipment ручки', () => {
   beforeEach(() => jest.clearAllMocks());
   const fc = { category: 'rent', amountMonth: 100, monthFrom: '2026-01' };
-  test('не владелец — 403', async () => {
-    expect((await call('GET', '/fixed-costs', { user: { role: 'admin', salonId: 1 } })).status).toBe(403);
-    expect((await call('GET', '/equipment', { user: { role: 'admin', salonId: 1 } })).status).toBe(403);
+  test.each(['specialist', 'admin_cashier'])('%s — 403', async (role) => {
+    expect((await call('GET', '/fixed-costs', { user: { role, salonId: 1 } })).status).toBe(403);
+    expect((await call('GET', '/equipment', { user: { role, salonId: 1 } })).status).toBe(403);
   });
   test('POST fixed-costs: 400 на мусор, 200 + invalidate', async () => {
     expect((await call('POST', '/fixed-costs', { body: { category: 'zzz' } })).status).toBe(400);
