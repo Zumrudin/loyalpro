@@ -21,10 +21,10 @@
 <script src="js/core/api.js"></script>
 <script src="js/core/theme.js?v=2026-11-06g"></script>
 <script src="js/core/auth.js?v=2026-06-02a"></script>
-<script src="js/core/nav.js?v=2026-11-06b"></script>
+<script src="js/core/nav.js?v=2026-11-06h"></script>
 <link rel="stylesheet" href="css/base.css?v=2026-08-10-mobile">
 <link rel="stylesheet" href="css/features.css?v=2026-11-01-bcmon">
-<link rel="stylesheet" href="css/ivory-brass.css?v=2026-11-06g">
+<link rel="stylesheet" href="css/ivory-brass.css?v=2026-11-06h">
 </head>
 <body>
 
@@ -102,7 +102,9 @@
     <div class="tb-crumb" id="tbCrumb"></div>
     <nav class="tb-nav" id="mainNav" aria-label="Разделы">
       <div class="nav-sec-t">Рабочее пространство</div>
+      <div class="tn" data-p="workday" data-roles="admin" tabindex="0" role="link" onclick="nav(this)">Рабочий день</div>
       <div class="tn" data-p="dashboard" data-roles="owner,admin" tabindex="0" role="link" onclick="nav(this)">Обзор</div>
+      <div class="tn" data-p="workday" data-roles="owner" tabindex="0" role="link" onclick="nav(this)">Рабочий день</div>
       <div class="tn" data-p="staff-dashboard" data-roles="specialist" tabindex="0" role="link" onclick="nav(this)">Мои результаты</div>
       <div class="tn" data-p="records" data-roles="owner,admin" tabindex="0" role="link" onclick="nav(this)">Записи</div>
       <div class="tn" data-p="clients" data-roles="owner,admin" tabindex="0" role="link" onclick="nav(this)">Пациенты</div>
@@ -167,7 +169,9 @@
     </div>
     <nav class="mnav-list" id="mnavList" aria-label="Разделы">
       <div class="nav-sec-t">Рабочее пространство</div>
+      <div class="tn" data-p="workday" data-roles="admin" tabindex="0" role="link" onclick="nav(this)">Рабочий день</div>
       <div class="tn" data-p="dashboard" data-roles="owner,admin" tabindex="0" role="link" onclick="nav(this)">Обзор</div>
+      <div class="tn" data-p="workday" data-roles="owner" tabindex="0" role="link" onclick="nav(this)">Рабочий день</div>
       <div class="tn" data-p="staff-dashboard" data-roles="specialist" tabindex="0" role="link" onclick="nav(this)">Мои результаты</div>
       <div class="tn" data-p="records" data-roles="owner,admin" tabindex="0" role="link" onclick="nav(this)">Записи</div>
       <div class="tn" data-p="clients" data-roles="owner,admin" tabindex="0" role="link" onclick="nav(this)">Пациенты</div>
@@ -334,6 +338,29 @@
         <div class="card"><div class="ct">Последние начисления</div><div id="recentTx"><div class="empty">Нет данных</div></div></div>
         <div class="card"><div class="ct">Распределение по уровням</div><div style="height:200px"><canvas id="lvlChart"></canvas></div></div>
       </div>
+      </div>
+    </div>
+
+    <!-- ── РАБОЧИЙ ДЕНЬ (главная администратора; js/pages/workday.js) ── -->
+    <div class="page" id="page-workday">
+      <div class="wd-date" id="wdDate"></div>
+      <div class="sg mb wd-sum">
+        <div class="sc"><div class="sl">Записей сегодня</div><div class="sv" id="wdTotal">—</div><div class="sd">без удалённых</div></div>
+        <div class="sc"><div class="sl">Пришли</div><div class="sv" id="wdCame">—</div><div class="sd">визит идёт или оказан</div></div>
+        <div class="sc"><div class="sl">Ждём</div><div class="sv" id="wdExpected">—</div><div class="sd">подтверждены или в ожидании</div></div>
+        <div class="sc"><div class="sl">Отмены и неявки</div><div class="sv" id="wdLost">—</div><div class="sd">за сегодня</div></div>
+      </div>
+      <div class="g32 mb">
+        <div class="card"><div class="ct">Записи на сегодня <a href="#records" class="wd-link" onclick="navTo('records',{reset:true});return false">Все записи ›</a></div><div id="wdRecords"></div></div>
+        <div class="wd-col">
+          <div class="card mb"><div class="ct">Ждут ответа человека <span class="wd-count" id="wdEscN">—</span></div><div id="wdDialogs"></div>
+            <div class="wd-foot"><a href="#chat" class="wd-link" onclick="navTo('chat',{reset:true});return false">Все сообщения ›</a></div></div>
+          <div class="card mb"><div class="ct">Новые заявки на справки <span class="wd-count" id="wdCertN">—</span></div><div id="wdCerts"></div>
+            <div class="wd-foot"><a href="#cert-requests" class="wd-link" onclick="navTo('cert-requests',{reset:true});return false">Все заявки ›</a></div></div>
+          <div class="card"><div class="ct">Забота о пациентах</div>
+            <div class="wd-sub" style="margin-bottom:10px">Программы касаний после визита и напоминания о повторном визите.</div>
+            <a href="#care" class="btn btn-sec btn-sm" onclick="navTo('care',{reset:true});return false">Открыть «Заботу» ›</a></div>
+        </div>
       </div>
     </div>
 
@@ -2990,6 +3017,7 @@ function fireConfetti() {
 <script src="js/pages/staff-dashboard.js?v=2026-11-06g"></script>
 <script src="js/pages/users.js"></script>
 <script src="js/pages/clients.js?v=2026-10-24-edocs"></script>
+<script src="js/pages/workday.js?v=2026-11-06g"></script>
 <script src="js/pages/dashboard.js?v=2026-11-06f"></script>
 <script src="js/pages/dashboard-messengers.js?v=2026-10-04-verdicts1"></script>
 <script src="js/pages/dashboard-verdicts.js?v=2026-11-06c"></script>
