@@ -19,12 +19,12 @@
      падала у людей с «escJs is not defined». -->
 <script src="js/core/utils.js?v=2026-08-09a"></script>
 <script src="js/core/api.js"></script>
-<script src="js/core/theme.js?v=2026-11-06b"></script>
+<script src="js/core/theme.js?v=2026-11-06c"></script>
 <script src="js/core/auth.js?v=2026-06-02a"></script>
 <script src="js/core/nav.js?v=2026-11-06b"></script>
 <link rel="stylesheet" href="css/base.css?v=2026-08-10-mobile">
 <link rel="stylesheet" href="css/features.css?v=2026-11-05-economics">
-<link rel="stylesheet" href="css/ivory-brass.css?v=2026-11-06a">
+<link rel="stylesheet" href="css/ivory-brass.css?v=2026-11-06c">
 </head>
 <body>
 
@@ -242,6 +242,16 @@
           </div>
         </div>
       </div>
+      <!-- Вкладки дашборда владельца (Ivory & Brass, этап 3). Вкладка живёт в hash:
+           #dashboard — Клиника, #dashboard/msg[/…] — Мессенджеры (вместе с
+           детализацией вердиктов), #dashboard/loyalty — Лояльность. Данные
+           грузятся ОДНИМ заходом loadDashboard на все три вкладки. -->
+      <div class="tabs dash-tabs" role="tablist" aria-label="Разделы дашборда">
+        <button type="button" class="tab active" role="tab" data-dtab="clinic" aria-selected="true" onclick="dashTabClick('clinic')">Клиника</button>
+        <button type="button" class="tab" role="tab" data-dtab="msg" aria-selected="false" onclick="dashTabClick('msg')">Мессенджеры</button>
+        <button type="button" class="tab" role="tab" data-dtab="loyalty" aria-selected="false" onclick="dashTabClick('loyalty')">Лояльность</button>
+      </div>
+      <div class="dash-tab" data-dtab="clinic" role="tabpanel">
       <div class="sg-top mb">
         <div class="sc"><div class="sl">Выручка за период</div><div class="sv" id="ds3">—</div><div class="sd" id="ds3s"></div><div class="rev-breakdown" id="ds3b"><div class="rev-row" id="rev-row-services"><span class="rev-lbl">Услуги</span><span class="rev-val" id="rev-services">—</span></div><div class="rev-row" id="rev-row-goods"><span class="rev-lbl">Косметика и товары</span><span class="rev-val" id="rev-goods">—</span></div><div class="rev-row" id="rev-row-abonement"><span class="rev-lbl">Абонементы</span><span class="rev-val" id="rev-abonement">—</span></div><div class="rev-row" id="rev-row-certificate"><span class="rev-lbl">Сертификаты</span><span class="rev-val" id="rev-certificate">—</span></div><div class="rev-row" id="rev-row-deposit"><span class="rev-lbl">Пополнения счёта</span><span class="rev-val" id="rev-deposit">—</span></div></div></div>
         <div class="sg-top-col">
@@ -253,13 +263,31 @@
           <div class="sc"><div class="sl">Списано бонусов</div><div class="sv" id="an5" style="color:var(--danger)">—</div><div class="sd dn" id="an5s"></div></div>
         </div>
       </div>
-      <div class="sg mb" style="grid-template-columns:repeat(5,1fr)">
-        <div class="sc"><div class="sl">Клиентов в базе</div><div class="sv" id="ds1">—</div><div class="sd up" id="ds1s"></div></div>
-        <div class="sc"><div class="sl">Клиентов с картой лояльности</div><div class="sv" id="ds5">—</div><div class="sd" id="ds5s"></div></div>
-        <div class="sc"><div class="sl">Активных бонусов</div><div class="sv" id="ds2">—</div><div class="sd" id="ds2s"></div></div>
-        <div class="sc"><div class="sl">Подписаны в Telegram</div><div class="sv" id="ds6">—</div><div class="sd" id="ds6s"></div></div>
-        <div class="sc"><div class="sl">ROI программы</div><div class="sv" id="an3" style="color:var(--a)">—</div><div class="sd" id="an3s">выручка / начисления</div></div>
+        <div class="card mb"><div class="ct">Выручка по дням</div><div style="height:220px"><canvas id="revChart"></canvas></div></div>
+        <div class="card mb" style="padding:0">
+          <div class="ct" style="padding:18px 18px 0 18px">Топ услуг</div>
+          <div class="tw"><table>
+            <thead>
+              <tr>
+                <th class="th-sort asc" onclick="svcSort('service_name')" data-col="service_name">
+                  <span>Услуга</span><i class="sort-icon"></i>
+                </th>
+                <th class="th-sort" onclick="svcSort('cnt')" data-col="cnt">
+                  <span>Количество</span><i class="sort-icon"></i>
+                </th>
+                <th class="th-sort" onclick="svcSort('total_amount')" data-col="total_amount">
+                  <span>Сумма ₽</span><i class="sort-icon"></i>
+                </th>
+              </tr>
+            </thead>
+            <tbody id="svcBody"><tr><td colspan="3" class="empty">Нет данных</td></tr></tbody>
+          </table>
+          <div style="padding:12px 18px 18px 18px;text-align:center">
+            <button id="svcToggleBtn" onclick="toggleSvc()" style="background:none;border:1px solid var(--b3);padding:8px 16px;border-radius:4px;cursor:pointer;font-size:12px;color:var(--t2);display:none">Показать все ▼</button>
+          </div></div>
+        </div>
       </div>
+      <div class="dash-tab" data-dtab="msg" role="tabpanel" hidden>
       <!-- ── Переписки в мессенджерах (спеки 2026-10-03-dashboard-messenger-stats, 2026-10-04-dialog-verdicts) ── -->
       <div class="msg-head">
         <div class="ttl">Переписки в мессенджерах</div>
@@ -287,38 +315,23 @@
           <div class="vd-panel" id="vdPanel" style="display:none"></div>
         </div>
       </div>
+      </div>
+      <div class="dash-tab" data-dtab="loyalty" role="tabpanel" hidden>
+      <div class="sg mb" style="grid-template-columns:repeat(5,1fr)">
+        <div class="sc"><div class="sl">Клиентов в базе</div><div class="sv" id="ds1">—</div><div class="sd up" id="ds1s"></div></div>
+        <div class="sc"><div class="sl">Клиентов с картой лояльности</div><div class="sv" id="ds5">—</div><div class="sd" id="ds5s"></div></div>
+        <div class="sc"><div class="sl">Активных бонусов</div><div class="sv" id="ds2">—</div><div class="sd" id="ds2s"></div></div>
+        <div class="sc"><div class="sl">Подписаны в Telegram</div><div class="sv" id="ds6">—</div><div class="sd" id="ds6s"></div></div>
+        <div class="sc"><div class="sl">Выручка на 1 ₽ бонусов</div><div class="sv" id="an3" style="color:var(--a)">—</div><div class="sd" id="an3s">выручка ÷ начисления за период · не прибыль</div></div>
+      </div>
       <div class="g32 mb">
-        <div class="card"><div class="ct">Выручка по дням</div><div style="height:220px"><canvas id="revChart"></canvas></div></div>
+        <div class="card"><div class="ct">Бонусы: начислено vs потрачено</div><div style="height:200px"><canvas id="bfChart"></canvas></div></div>
         <div class="card"><div class="ct">Уровни клиентов</div><div id="lvlDash" style="display:flex;flex-direction:column;gap:10px;padding-top:4px"></div></div>
       </div>
       <div class="g2 mb">
         <div class="card"><div class="ct">Последние начисления</div><div id="recentTx"><div class="empty">Нет данных</div></div></div>
-        <div class="card" style="padding:0">
-          <div class="ct" style="padding:18px 18px 0 18px">Топ услуг</div>
-          <div class="tw"><table>
-            <thead>
-              <tr>
-                <th class="th-sort asc" onclick="svcSort('service_name')" data-col="service_name">
-                  <span>Услуга</span><i class="sort-icon"></i>
-                </th>
-                <th class="th-sort" onclick="svcSort('cnt')" data-col="cnt">
-                  <span>Количество</span><i class="sort-icon"></i>
-                </th>
-                <th class="th-sort" onclick="svcSort('total_amount')" data-col="total_amount">
-                  <span>Сумма ₽</span><i class="sort-icon"></i>
-                </th>
-              </tr>
-            </thead>
-            <tbody id="svcBody"><tr><td colspan="3" class="empty">Нет данных</td></tr></tbody>
-          </table>
-          <div style="padding:12px 18px 18px 18px;text-align:center">
-            <button id="svcToggleBtn" onclick="toggleSvc()" style="background:none;border:1px solid var(--b3);padding:8px 16px;border-radius:4px;cursor:pointer;font-size:12px;color:var(--t2);display:none">Показать все ▼</button>
-          </div></div>
-        </div>
-      </div>
-      <div class="g2">
-        <div class="card"><div class="ct">Бонусы: начислено vs потрачено</div><div style="height:200px"><canvas id="bfChart"></canvas></div></div>
         <div class="card"><div class="ct">Распределение по уровням</div><div style="height:200px"><canvas id="lvlChart"></canvas></div></div>
+      </div>
       </div>
     </div>
 
@@ -2898,9 +2911,9 @@ function fireConfetti() {
 <script src="js/pages/staff-dashboard.js?v=2026-11-06a"></script>
 <script src="js/pages/users.js"></script>
 <script src="js/pages/clients.js"></script>
-<script src="js/pages/dashboard.js?v=2026-11-06a"></script>
+<script src="js/pages/dashboard.js?v=2026-11-06c"></script>
 <script src="js/pages/dashboard-messengers.js?v=2026-10-04-verdicts1"></script>
-<script src="js/pages/dashboard-verdicts.js?v=2026-10-04-verdicts1"></script>
+<script src="js/pages/dashboard-verdicts.js?v=2026-11-06c"></script>
 <script src="js/pages/broadcasts-form.js?v=2026-11-01a"></script>
 <script src="js/pages/broadcasts-monitor.js?v=2026-11-01b"></script>
 <script src="js/pages/broadcasts.js?v=2026-11-01b"></script>
