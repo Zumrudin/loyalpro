@@ -276,3 +276,29 @@ html[data-skin="ivory"] .sd-seg{background:var(--card);border:1px solid var(--bd
 html[data-skin="ivory"] .sd-seg-pill{background:var(--as)!important;box-shadow:none!important}
 html[data-skin="ivory"] .sd-p:hover{transform:none;box-shadow:0 4px 18px rgba(74,66,60,.06)}
 html[data-skin="ivory"] .sd-p-ico{box-shadow:none;border:1px solid var(--bd2)}
+
+/* ═══════════════════ РАБОЧИЙ ДЕНЬ (этап 4, js/pages/workday.js) ═══════════════════
+   Структура общая для обоих видов, цвета — из токенов темы. */
+.wd-date{font-size:13px;color:var(--t2);margin:-6px 0 16px;text-transform:capitalize}
+.wd-sum{grid-template-columns:repeat(4,1fr)}
+.wd-col{display:flex;flex-direction:column;min-width:0}
+.wd-row{display:flex;align-items:center;gap:12px;padding:11px 0;border-bottom:1px solid var(--bd)}
+.wd-row:last-child{border-bottom:none}
+.wd-time{font-weight:700;font-variant-numeric:tabular-nums;min-width:46px}
+.wd-main{flex:1;min-width:0}
+.wd-name{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.wd-sub{font-size:12px;color:var(--t3);margin-top:2px}
+.wd-click{cursor:pointer;border-radius:8px;padding-left:6px;padding-right:6px;margin:0 -6px}
+.wd-click:hover,.wd-click:focus-visible{background:var(--bg);outline:none}
+.wd-go{font-size:12px;color:var(--a);white-space:nowrap}
+.wd-link{font-size:12px;font-weight:500;color:var(--a);text-decoration:none}
+.wd-foot{margin-top:10px}
+.wd-count{font-size:12px;font-weight:600;background:var(--as);color:var(--t1);border-radius:10px;padding:1px 9px}
+.wd-lost .wd-name,.wd-lost .wd-time{color:var(--t3);text-decoration:line-through}
+.wd-badge-came{background:rgba(0,200,150,.15);color:#007a5a}
+.wd-badge-expected{background:rgba(59,130,246,.12);color:#1d4ed8}
+.wd-badge-lost{background:rgba(232,84,84,.12);color:#c53030}
+html[data-skin="ivory"] .wd-badge-came{background:#E7ECDF;color:#4A5E34}
+html[data-skin="ivory"] .wd-badge-expected{background:#E4E8EC;color:#3F5568}
+html[data-skin="ivory"] .wd-badge-lost{background:#F3E1DA;color:#8E4232}
+@media(max-width:1100px){.wd-sum{grid-template-columns:repeat(2,1fr)}}

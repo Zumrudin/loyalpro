@@ -23,7 +23,7 @@ function nav(el) {
 // Крупный заголовок страницы (оформление Ivory & Brass). Где название пункта
 // меню слишком короткое для заголовка — своя формулировка, как в макетах.
 const NAV_PAGE_TITLES = {
-  dashboard: 'Обзор клиники', 'staff-dashboard': 'Мои результаты', clients: 'Пациенты клиники',
+  dashboard: 'Обзор клиники', workday: 'Рабочий день', 'staff-dashboard': 'Мои результаты', clients: 'Пациенты клиники',
   records: 'Записи', chat: 'Диалоги с пациентами', care: 'Продолжение заботы',
   economics: 'Экономика процедур', 'agent-services': 'Мила · услуги агента',
   'staff-analytics': 'Сотрудники', settings: 'Управление клиникой', edocs: 'Документы',
@@ -93,8 +93,10 @@ function _navSyncHash(p, opts) {
 // выглядит как сбой). Источник правды — уже отфильтрованное applyRoleNav меню.
 function _navAllowed(p) {
   const key = (p === 'medical-cert') ? 'cert-requests' : p;   // под-страница «Справок»
-  const item = document.querySelector('#mainNav .tn[data-p="' + key + '"]:not([data-stg])');
-  return !!item && item.style.display !== 'none';
+  // Пунктов одной страницы бывает несколько («Рабочий день» — у администратора
+  // первым, у владельца после «Обзора»): доступ есть, если виден ЛЮБОЙ из них.
+  return Array.from(document.querySelectorAll('#mainNav .tn[data-p="' + key + '"]:not([data-stg])'))
+    .some(item => item.style.display !== 'none');
 }
 
 // Переход на страницу по ключу (без привязки к пункту меню) — позволяет открывать
@@ -130,6 +132,7 @@ function navTo(p, opts) {
   _navSyncHash(p, opts);
   _navAfterHighlight();
   if (p === 'dashboard')       { loadDashboard(); loadLs(); }
+  if (p === 'workday')         loadWorkday();
   if (p === 'clients')         loadClients();
   if (p === 'records')         { setDefDates(); loadRecords(1); }
   if (p === 'staff-analytics') loadStaffAnalytics();
@@ -255,6 +258,7 @@ async function launchApp() {
   else if (startPage === 'staff-dashboard') { loadStaffDashboard(); }
   else if (startPage === 'home-care') { loadHomeCare(); }
   else if (startPage === 'chat') { loadChat(); }
+  else if (startPage === 'workday') { loadWorkday(); }
   else { loadDashboard(); loadLs(); }
 }
 
