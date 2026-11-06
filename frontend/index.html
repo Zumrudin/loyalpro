@@ -19,11 +19,12 @@
      падала у людей с «escJs is not defined». -->
 <script src="js/core/utils.js?v=2026-08-09a"></script>
 <script src="js/core/api.js"></script>
-<script src="js/core/theme.js"></script>
+<script src="js/core/theme.js?v=2026-11-06a"></script>
 <script src="js/core/auth.js?v=2026-06-02a"></script>
-<script src="js/core/nav.js?v=2026-11-05-economics"></script>
+<script src="js/core/nav.js?v=2026-11-06a"></script>
 <link rel="stylesheet" href="css/base.css?v=2026-08-10-mobile">
 <link rel="stylesheet" href="css/features.css?v=2026-11-05-economics">
+<link rel="stylesheet" href="css/ivory-brass.css?v=2026-11-06a">
 </head>
 <body>
 
@@ -97,31 +98,52 @@
       <div class="tb-li" id="tbBrandLogo"><svg viewBox="0 0 24 24"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg></div>
       <div class="tb-ln">LoyalPro</div>
     </div>
-    <nav class="tb-nav" id="mainNav">
-      <div class="tn active" data-p="dashboard" data-roles="owner,admin" onclick="nav(this)">Дашборд</div>
-      <div class="tn" data-p="staff-dashboard" data-roles="specialist" onclick="nav(this)">Дашборд</div>
-      <div class="tn" data-p="clients" data-roles="owner,admin" onclick="nav(this)">Клиенты</div>
-      <div class="tn" data-p="records" data-roles="owner,admin" onclick="nav(this)">Записи</div>
-      <div class="tn" data-p="staff-analytics" data-roles="owner,admin" onclick="nav(this)">Сотрудники</div>
-      <div class="tn" data-p="segments" data-roles="owner,admin" onclick="nav(this)">Сегменты</div>
-      <div class="tn" data-p="broadcasts" data-roles="owner,admin" onclick="nav(this)">📨 Рассылка</div>
-      <div class="tn" data-p="care" data-roles="owner,admin" onclick="nav(this)">💚 Забота</div>
-      <div class="tn" data-p="chat" data-roles="owner,admin,admin_cashier" onclick="nav(this)">💬 Чат</div>
-      <div class="tn" data-p="cert-requests" data-roles="owner,admin,specialist,admin_cashier" onclick="nav(this)">Справки</div>
-      <div class="tn" data-p="home-care" data-roles="owner,admin,specialist,admin_cashier" onclick="nav(this)">Уход</div>
-      <div class="tn" data-p="patient-portfolio" data-roles="owner,admin,specialist,admin_cashier" onclick="nav(this)">📷 Фото-кейсы</div>
-      <div class="tn" data-p="settings" data-roles="owner,admin" onclick="nav(this)">Настройки</div>
-      <div class="tn" data-p="knowledge-base" data-roles="owner,admin,specialist,admin_cashier" onclick="nav(this)">База знаний</div>
-      <div class="tn" data-p="users" data-roles="owner" onclick="nav(this)">Пользователи</div>
-      <div class="tn" data-p="economics" data-roles="owner,admin" onclick="nav(this)">💰 Экономика</div>
-      <div class="tn" data-p="agent-services" data-roles="owner,admin" onclick="nav(this)">Услуги агента</div>
+    <div class="tb-clinic" aria-hidden="true"><img src="img/peri-monogram.png" alt="" width="40" height="40"><span>PERI CLINIC</span></div>
+    <div class="tb-crumb" id="tbCrumb"></div>
+    <nav class="tb-nav" id="mainNav" aria-label="Разделы">
+      <div class="nav-sec-t">Рабочее пространство</div>
+      <div class="tn" data-p="dashboard" data-roles="owner,admin" tabindex="0" role="link" onclick="nav(this)">Обзор</div>
+      <div class="tn" data-p="staff-dashboard" data-roles="specialist" tabindex="0" role="link" onclick="nav(this)">Мои результаты</div>
+      <div class="tn" data-p="records" data-roles="owner,admin" tabindex="0" role="link" onclick="nav(this)">Записи</div>
+      <div class="tn" data-p="clients" data-roles="owner,admin" tabindex="0" role="link" onclick="nav(this)">Пациенты</div>
+      <div class="tn" data-p="chat" data-roles="owner,admin,admin_cashier" tabindex="0" role="link" onclick="nav(this)">Сообщения</div>
+      <div class="tn" data-p="care" data-roles="owner,admin" tabindex="0" role="link" onclick="nav(this)">Забота</div>
+      <div class="nav-sec-t">Клиника</div>
+      <div class="nav-grp" data-grp="growth">
+        <button type="button" class="nav-grp-t" aria-expanded="false" onclick="navGrpToggle(this)">Развитие</button>
+        <div class="nav-grp-b">
+          <div class="tn" data-p="segments" data-roles="owner,admin" tabindex="0" role="link" onclick="nav(this)">Сегменты</div>
+          <div class="tn" data-p="broadcasts" data-roles="owner,admin" tabindex="0" role="link" onclick="nav(this)">Рассылки</div>
+          <div class="tn" data-p="settings" data-roles="owner,admin" data-stg="loyalty-levels" tabindex="0" role="link" onclick="nav(this)">Лояльность</div>
+        </div>
+      </div>
+      <div class="nav-grp" data-grp="materials">
+        <button type="button" class="nav-grp-t" aria-expanded="false" onclick="navGrpToggle(this)">Материалы</button>
+        <div class="nav-grp-b">
+          <div class="tn" data-p="cert-requests" data-roles="owner,admin,specialist,admin_cashier" tabindex="0" role="link" onclick="nav(this)">Справки</div>
+          <div class="tn" data-p="home-care" data-roles="owner,admin,specialist,admin_cashier" tabindex="0" role="link" onclick="nav(this)">Домашний уход</div>
+          <div class="tn" data-p="patient-portfolio" data-roles="owner,admin,specialist,admin_cashier" tabindex="0" role="link" onclick="nav(this)">Фото-кейсы</div>
+          <div class="tn" data-p="knowledge-base" data-roles="owner,admin,specialist,admin_cashier" tabindex="0" role="link" onclick="nav(this)">База знаний</div>
+        </div>
+      </div>
+      <div class="nav-grp" data-grp="manage">
+        <button type="button" class="nav-grp-t" aria-expanded="false" onclick="navGrpToggle(this)">Управление</button>
+        <div class="nav-grp-b">
+          <div class="tn" data-p="staff-analytics" data-roles="owner,admin" tabindex="0" role="link" onclick="nav(this)">Сотрудники</div>
+          <div class="tn" data-p="economics" data-roles="owner,admin" tabindex="0" role="link" onclick="nav(this)">Экономика</div>
+          <div class="tn" data-p="agent-services" data-roles="owner,admin" tabindex="0" role="link" onclick="nav(this)">Мила</div>
+          <div class="tn" data-p="settings" data-roles="owner,admin" tabindex="0" role="link" onclick="nav(this)">Настройки</div>
+          <div class="tn" data-p="users" data-roles="owner" tabindex="0" role="link" onclick="nav(this)">Пользователи</div>
+        </div>
+      </div>
     </nav>
     <div class="tb-right">
       <div id="syncSt" style="font-size:11.5px;color:var(--t3)"></div>
       <button class="btn btn-sec btn-sm" id="syncBtn" onclick="triggerSync()">
         <svg viewBox="0 0 24 24"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>Синхронизировать
       </button>
-      <div style="display:flex;align-items:center;gap:5px">
+      <button type="button" class="btn btn-sec btn-sm skin-btn" id="skinToggle" onclick="toggleSkin()" hidden title="Переключить оформление (только дев)">Ivory</button>
+      <div class="dm-wrap" style="display:flex;align-items:center;gap:5px">
         <span class="dm-label" id="dmLabel">🌙</span>
         <button class="dm-btn" id="dmToggle" onclick="toggleDarkMode()" title="Тёмная тема"></button>
       </div>
@@ -142,24 +164,42 @@
       </div>
       <button class="mnav-close" onclick="closeMenu()" aria-label="Закрыть">✕</button>
     </div>
-    <nav class="mnav-list" id="mnavList">
-      <div class="tn" data-p="dashboard" data-roles="owner,admin" onclick="nav(this)">Дашборд</div>
-      <div class="tn" data-p="staff-dashboard" data-roles="specialist" onclick="nav(this)">Дашборд</div>
-      <div class="tn" data-p="clients" data-roles="owner,admin" onclick="nav(this)">Клиенты</div>
-      <div class="tn" data-p="records" data-roles="owner,admin" onclick="nav(this)">Записи</div>
-      <div class="tn" data-p="staff-analytics" data-roles="owner,admin" onclick="nav(this)">Сотрудники</div>
-      <div class="tn" data-p="segments" data-roles="owner,admin" onclick="nav(this)">Сегменты</div>
-      <div class="tn" data-p="broadcasts" data-roles="owner,admin" onclick="nav(this)">📨 Рассылка</div>
-      <div class="tn" data-p="care" data-roles="owner,admin" onclick="nav(this)">💚 Забота</div>
-      <div class="tn" data-p="chat" data-roles="owner,admin,admin_cashier" onclick="nav(this)">💬 Чат</div>
-      <div class="tn" data-p="cert-requests" data-roles="owner,admin,specialist,admin_cashier" onclick="nav(this)">Справки</div>
-      <div class="tn" data-p="home-care" data-roles="owner,admin,specialist,admin_cashier" onclick="nav(this)">Уход</div>
-      <div class="tn" data-p="patient-portfolio" data-roles="owner,admin,specialist,admin_cashier" onclick="nav(this)">📷 Фото-кейсы</div>
-      <div class="tn" data-p="settings" data-roles="owner,admin" onclick="nav(this)">Настройки</div>
-      <div class="tn" data-p="knowledge-base" data-roles="owner,admin,specialist,admin_cashier" onclick="nav(this)">База знаний</div>
-      <div class="tn" data-p="users" data-roles="owner" onclick="nav(this)">Пользователи</div>
-      <div class="tn" data-p="economics" data-roles="owner,admin" onclick="nav(this)">💰 Экономика</div>
-      <div class="tn" data-p="agent-services" data-roles="owner,admin" onclick="nav(this)">Услуги агента</div>
+    <nav class="mnav-list" id="mnavList" aria-label="Разделы">
+      <div class="nav-sec-t">Рабочее пространство</div>
+      <div class="tn" data-p="dashboard" data-roles="owner,admin" tabindex="0" role="link" onclick="nav(this)">Обзор</div>
+      <div class="tn" data-p="staff-dashboard" data-roles="specialist" tabindex="0" role="link" onclick="nav(this)">Мои результаты</div>
+      <div class="tn" data-p="records" data-roles="owner,admin" tabindex="0" role="link" onclick="nav(this)">Записи</div>
+      <div class="tn" data-p="clients" data-roles="owner,admin" tabindex="0" role="link" onclick="nav(this)">Пациенты</div>
+      <div class="tn" data-p="chat" data-roles="owner,admin,admin_cashier" tabindex="0" role="link" onclick="nav(this)">Сообщения</div>
+      <div class="tn" data-p="care" data-roles="owner,admin" tabindex="0" role="link" onclick="nav(this)">Забота</div>
+      <div class="nav-sec-t">Клиника</div>
+      <div class="nav-grp" data-grp="growth">
+        <button type="button" class="nav-grp-t" aria-expanded="false" onclick="navGrpToggle(this)">Развитие</button>
+        <div class="nav-grp-b">
+          <div class="tn" data-p="segments" data-roles="owner,admin" tabindex="0" role="link" onclick="nav(this)">Сегменты</div>
+          <div class="tn" data-p="broadcasts" data-roles="owner,admin" tabindex="0" role="link" onclick="nav(this)">Рассылки</div>
+          <div class="tn" data-p="settings" data-roles="owner,admin" data-stg="loyalty-levels" tabindex="0" role="link" onclick="nav(this)">Лояльность</div>
+        </div>
+      </div>
+      <div class="nav-grp" data-grp="materials">
+        <button type="button" class="nav-grp-t" aria-expanded="false" onclick="navGrpToggle(this)">Материалы</button>
+        <div class="nav-grp-b">
+          <div class="tn" data-p="cert-requests" data-roles="owner,admin,specialist,admin_cashier" tabindex="0" role="link" onclick="nav(this)">Справки</div>
+          <div class="tn" data-p="home-care" data-roles="owner,admin,specialist,admin_cashier" tabindex="0" role="link" onclick="nav(this)">Домашний уход</div>
+          <div class="tn" data-p="patient-portfolio" data-roles="owner,admin,specialist,admin_cashier" tabindex="0" role="link" onclick="nav(this)">Фото-кейсы</div>
+          <div class="tn" data-p="knowledge-base" data-roles="owner,admin,specialist,admin_cashier" tabindex="0" role="link" onclick="nav(this)">База знаний</div>
+        </div>
+      </div>
+      <div class="nav-grp" data-grp="manage">
+        <button type="button" class="nav-grp-t" aria-expanded="false" onclick="navGrpToggle(this)">Управление</button>
+        <div class="nav-grp-b">
+          <div class="tn" data-p="staff-analytics" data-roles="owner,admin" tabindex="0" role="link" onclick="nav(this)">Сотрудники</div>
+          <div class="tn" data-p="economics" data-roles="owner,admin" tabindex="0" role="link" onclick="nav(this)">Экономика</div>
+          <div class="tn" data-p="agent-services" data-roles="owner,admin" tabindex="0" role="link" onclick="nav(this)">Мила</div>
+          <div class="tn" data-p="settings" data-roles="owner,admin" tabindex="0" role="link" onclick="nav(this)">Настройки</div>
+          <div class="tn" data-p="users" data-roles="owner" tabindex="0" role="link" onclick="nav(this)">Пользователи</div>
+        </div>
+      </div>
     </nav>
     <div class="mnav-foot">
       <div id="mnavSyncSt" style="font-size:11.5px;color:var(--t3)"></div>
@@ -171,6 +211,9 @@
   </aside>
 
   <div class="content">
+    <!-- Заголовок страницы оформления Ivory & Brass (в прежнем виде скрыт).
+         Текст ставит nav.js (_navAfterHighlight) по активному пункту меню. -->
+    <div class="pg-hero" id="pgHero"><div class="pg-eyebrow" id="pgEyebrow"></div><h1 class="pg-title" id="pgTitle"></h1></div>
 
     <!-- ── PERSONAL STAFF DASHBOARD ── -->
     <section class="page" id="page-staff-dashboard" hidden>
@@ -2855,7 +2898,7 @@ function fireConfetti() {
 <script src="js/pages/staff-dashboard.js?v=2026-06-11d"></script>
 <script src="js/pages/users.js"></script>
 <script src="js/pages/clients.js"></script>
-<script src="js/pages/dashboard.js?v=2026-10-03-messengers"></script>
+<script src="js/pages/dashboard.js?v=2026-11-06a"></script>
 <script src="js/pages/dashboard-messengers.js?v=2026-10-04-verdicts1"></script>
 <script src="js/pages/dashboard-verdicts.js?v=2026-10-04-verdicts1"></script>
 <script src="js/pages/broadcasts-form.js?v=2026-11-01a"></script>
