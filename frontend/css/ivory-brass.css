@@ -248,3 +248,6 @@ html[data-skin="ivory"] .dash-tabs .tab{font-size:13.5px}
 html[data-skin="ivory"] .msg-head .ttl{font-family:var(--serif);font-size:24px;font-weight:600}
 html[data-skin="ivory"] .rev-breakdown{border-top-color:var(--bd2)}
 html[data-skin="ivory"] .rev-val{font-variant-numeric:tabular-nums}
+html[data-skin="ivory"] .vd-run .btn{background:var(--card);color:var(--t1);border:1px solid var(--bd)}
+html[data-skin="ivory"] .vd-run .btn:hover{background:var(--as)}
+html[data-skin="ivory"] .msg-tbl th{padding-left:10px;padding-right:10px}
