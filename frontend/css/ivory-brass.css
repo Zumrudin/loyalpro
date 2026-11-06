@@ -251,3 +251,28 @@ html[data-skin="ivory"] .rev-val{font-variant-numeric:tabular-nums}
 html[data-skin="ivory"] .vd-run .btn{background:var(--card);color:var(--t1);border:1px solid var(--bd)}
 html[data-skin="ivory"] .vd-run .btn:hover{background:var(--as)}
 html[data-skin="ivory"] .msg-tbl th{letter-spacing:.02em}
+
+/* ═══════════════════ ДАШБОРД СПЕЦИАЛИСТА (этап 4) ═══════════════════
+   Палитра карточек живёт в переменных --sdp-* (фон) / --sda-* (акцент,
+   features.css) — в Ivory их заменяет приглушённая гамма бренда. Акценты
+   подобраны с контрастом ≥4.5:1 к светлому фону карточки. */
+html[data-skin="ivory"] #page-staff-dashboard{
+  --sdp-rev:#F1EADD;  --sda-rev:#806335;
+  --sdp-vis:#E7EBEE;  --sda-vis:#4F6A82;
+  --sdp-nosh:#F5E7E0; --sda-nosh:#A6533F;
+  --sdp-avg:#EEE9F0;  --sda-avg:#6F5F7E;
+  --sdp-new:#F3E8E6;  --sda-new:#93555A;
+  --sdp-ret:#E5EDEB;  --sda-ret:#3F6E67;
+  --sdp-reap:#EAEFE3; --sda-reap:#5A7040;
+  --sdp-goods:#F4ECDC;--sda-goods:#7D5E16;
+  --sdp-util:#EDE8E2; --sda-util:#6C5F55;
+}
+html[data-skin="ivory"] .sd-hero{background:var(--card);border:1px solid var(--bd);border-radius:16px}
+html[data-skin="ivory"] .sd-hero-t h2{font-family:var(--serif);font-size:26px;font-weight:600;letter-spacing:0}
+html[data-skin="ivory"] .sd-hero-ava-fb{background:var(--as);color:var(--t1)}
+html[data-skin="ivory"] .sd-hello h2{font-family:var(--serif);font-size:32px;font-weight:600;letter-spacing:0}
+html[data-skin="ivory"] .sd-hello-fill{background:var(--a)}
+html[data-skin="ivory"] .sd-seg{background:var(--card);border:1px solid var(--bd)}
+html[data-skin="ivory"] .sd-seg-pill{background:var(--as)!important;box-shadow:none!important}
+html[data-skin="ivory"] .sd-p:hover{transform:none;box-shadow:0 4px 18px rgba(74,66,60,.06)}
+html[data-skin="ivory"] .sd-p-ico{box-shadow:none;border:1px solid var(--bd2)}
