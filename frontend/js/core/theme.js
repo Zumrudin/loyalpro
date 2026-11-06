@@ -84,3 +84,11 @@ function lpLevelColor(key, fallback) {
   if (!_skinIvory()) return fallback;
   return { platinum: '#6F6A80', gold: '#C9A96B', silver: '#B7A89B', bronze: '#8E6334' }[key] || fallback;
 }
+
+// Смысловые цвета (хорошо / на грани / плохо) для цифр, которые страницы
+// красят прямо в разметке. В Ivory — приглушённые олива / охра / терракота.
+function lpSemColor(kind) {
+  const ivory = _skinIvory();
+  const P = ivory ? { good: '#5A7040', warn: '#7D5E16', bad: '#A6533F' } : { good: '#13a05e', warn: '#e8a23d', bad: '#d23f3f' };
+  return P[kind] || P.good;
+}
