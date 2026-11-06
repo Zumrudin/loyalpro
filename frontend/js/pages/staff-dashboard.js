@@ -65,9 +65,11 @@ const _SD_MON_NOM = ['январь','февраль','март','апрель','
 
 // ── Экран приветствия при первом заходе ─────────────────────────
 // Имя берём из ME (users.name = «Фамилия Имя») — второе слово.
+// Личное имя считает бэкенд (utils/person-name.js): в карточках встречается и
+// «Имя Фамилия», и «Фамилия Имя», и угадывать по позиции слова нельзя
+// («Астемир Боташев» превращался в «Боташев»). Имени нет — приветствие без имени.
 function _sdFirstName() {
-  const parts = String((typeof ME !== 'undefined' && ME && ME.name) || '').trim().split(/\s+/);
-  return parts.length >= 2 ? parts[1] : (parts[0] || '');
+  return (typeof ME !== 'undefined' && ME && ME.given_name) || '';
 }
 // Приветствие по локальному времени устройства специалиста.
 function _sdGreeting() {
@@ -171,7 +173,7 @@ function _sdFillRings(root) {
 // Hero-блок. s — data.stats. Использует существующий _sdGreeting().
 function _sdHeroHtml(s) {
   const [greet, emoji] = _sdGreeting();
-  const name = String(s.staffName || '').trim().split(/\s+/).pop() || ''; // «Гатауллина Юлия» → «Юлия»
+  const name = s.staffGivenName || _sdFirstName();
   const ava = s.staffAvatar
     ? `<img class="sd-hero-ava" src="${_sdEsc(s.staffAvatar)}" alt="" data-fb="${_sdEsc(name.slice(0, 1) || '•')}">`
     : `<div class="sd-hero-ava-fb">${_sdEsc(name.slice(0, 1) || '•')}</div>`;
