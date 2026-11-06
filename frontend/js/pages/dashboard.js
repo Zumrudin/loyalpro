@@ -75,9 +75,9 @@ function buildRevChart(data) {
     data: {
       labels,
       datasets: [
-        { label: 'Выручка ₽', data: data.map(d => parseFloat(d.revenue || 0)), backgroundColor: 'rgba(0,200,150,0.75)', borderRadius: 3 },
-        { label: 'Начислено бонусов', data: data.map(d => parseFloat(d.bonuses_accrued || 0)), backgroundColor: 'rgba(59,130,246,0.65)', borderRadius: 3 },
-        { label: 'Списано бонусов', data: data.map(d => parseFloat(d.bonuses_redeemed || 0)), backgroundColor: 'rgba(232,84,84,0.55)', borderRadius: 3 },
+        { label: 'Выручка ₽', data: data.map(d => parseFloat(d.revenue || 0)), backgroundColor: lpChartColor('main', 0.75), borderRadius: 3 },
+        { label: 'Начислено бонусов', data: data.map(d => parseFloat(d.bonuses_accrued || 0)), backgroundColor: lpChartColor('second', 0.65), borderRadius: 3 },
+        { label: 'Списано бонусов', data: data.map(d => parseFloat(d.bonuses_redeemed || 0)), backgroundColor: lpChartColor('neg', 0.55), borderRadius: 3 },
       ]
     },
     options: {
@@ -187,8 +187,8 @@ function buildBfChart(data) {
     data: {
       labels: keys.map(d => { const dt = new Date(d); return dt.getDate() + '.' + (dt.getMonth() + 1); }),
       datasets: [
-        { label: 'Начислено', data: keys.map(k => days[k].a), backgroundColor: 'rgba(0,200,150,0.6)', borderRadius: 3 },
-        { label: 'Списано', data: keys.map(k => days[k].r), backgroundColor: 'rgba(232,84,84,0.5)', borderRadius: 3 }
+        { label: 'Начислено', data: keys.map(k => days[k].a), backgroundColor: lpChartColor('main', 0.6), borderRadius: 3 },
+        { label: 'Списано', data: keys.map(k => days[k].r), backgroundColor: lpChartColor('neg', 0.5), borderRadius: 3 }
       ]
     },
     options: {
