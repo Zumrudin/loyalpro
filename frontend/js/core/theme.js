@@ -28,16 +28,16 @@ initDarkMode();
 
 // ── ОФОРМЛЕНИЕ IVORY & BRASS (дев-приёмка) ─────────────────────
 // Новая айдентика PERI включается атрибутом <html data-skin="ivory"> и живёт
-// в css/ivory-brass.css. До приёмки — ТОЛЬКО на дев-стенде: на боевом домене
-// _skinAvailable() ложно, атрибут не ставится и кнопка скрыта — прод выглядит
-// по-старому даже после слияния ветки. Тёмная тема в Ivory не применяется,
-// но её выбор (lp_dark) не стирается: переключение назад вернёт как было.
+// в css/ivory-brass.css. С 06.11.2026 (решение владельца) — основной вид везде:
+// на боевом домене Ivory всегда, кнопки «Прежний вид» нет. Переключатель
+// остаётся ТОЛЬКО на дев-стенде (_skinAvailable) — сравнивать со старым видом.
+// Тёмная тема в Ivory не применяется, её выбор (lp_dark) не стирается.
 function _skinAvailable() {
   const h = location.hostname;
   return h.startsWith('dev.') || h === 'localhost' || h === '127.0.0.1' || h === '89.125.92.223';
 }
 function _skinIvory() {
-  return _skinAvailable() && localStorage.getItem('lp_skin') !== 'classic';
+  return !_skinAvailable() || localStorage.getItem('lp_skin') !== 'classic';
 }
 function applySkin() {
   const html = document.documentElement;
