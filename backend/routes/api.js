@@ -427,7 +427,7 @@ router.get('/analytics/staff-dashboard', auth, async (req, res) => {
     ]);
 
     res.json({
-      stats: { staffName: link.staff_name, staffAvatar: link.avatar_url || null, ...stats },
+      stats: { staffName: link.staff_name, staffGivenName: require('../utils/person-name').resolveGivenName(link.staff_name || '') || null, staffAvatar: link.avatar_url || null, ...stats },
       topServices: top,
       dailyRevenue: daily,
       period: { from, to },
@@ -514,6 +514,9 @@ router.get('/analytics/retention', auth, async (req, res) => {
 // параллельный прогон удвоил бы нагрузку на общую квоту — 409, пока идёт первый
 // (зависшие running закрывает closeStaleSyncRuns при старте процесса).
 router.post('/sync', auth, async (req, res) => {
+  // Полный прогон — решение владельца (06.11.2026): кнопка видна только ему,
+  // и сервер не даёт запустить его другим ролям в обход интерфейса.
+  if (req.user.role !== 'owner') return res.status(403).json({ error: 'Синхронизацию запускает только владелец' });
   try {
     const salon = await db.one('SELECT * FROM salons WHERE id=$1', [req.user.salonId]);
     if (!salon.yclients_company_id || !salon.yclients_user_token)

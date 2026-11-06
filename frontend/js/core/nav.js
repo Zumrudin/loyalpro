@@ -219,6 +219,12 @@ async function launchApp() {
   }
 
   document.getElementById('app').style.display = 'flex';
+  // Полная синхронизация с YClients — только владельцу (≈8 800 запросов в общую
+  // с продом квоту YClients; сервер тоже отвечает 403 остальным ролям).
+  ['syncBtn', 'syncSt', 'mnavSyncBtn', 'mnavSyncSt'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.style.display = ME.role === 'owner' ? '' : 'none';
+  });
   checkAgentModelNotice();
 
   const startPage = applyRoleNav(ME.role);
