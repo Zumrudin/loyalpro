@@ -250,4 +250,4 @@ html[data-skin="ivory"] .rev-breakdown{border-top-color:var(--bd2)}
 html[data-skin="ivory"] .rev-val{font-variant-numeric:tabular-nums}
 html[data-skin="ivory"] .vd-run .btn{background:var(--card);color:var(--t1);border:1px solid var(--bd)}
 html[data-skin="ivory"] .vd-run .btn:hover{background:var(--as)}
-html[data-skin="ivory"] .msg-tbl th:not(:first-child),html[data-skin="ivory"] .msg-tbl td:not(:first-child){padding-left:16px}
+html[data-skin="ivory"] .msg-tbl th{letter-spacing:.02em}

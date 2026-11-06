@@ -344,6 +344,9 @@ async function loadDashboard() {
     const roi = periodBonuses > 0 ? Math.round(revTotal / periodBonuses) : 0;
     if (roi > 0) animateCount(document.getElementById('an3'), roi, { suffix: 'x' });
     else document.getElementById('an3').textContent = '—';
+    // Подпись перезаписывается скелетоном при загрузке — возвращаем её явно.
+    document.getElementById('an3s').textContent = periodBonuses > 0
+      ? 'выручка ÷ начисления за период · не прибыль' : 'начислений за период не было';
 
     animateCount(document.getElementById('an4'), s.newClients);
     document.getElementById('an4s').textContent = periodSuffix;
