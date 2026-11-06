@@ -78,3 +78,9 @@ if (window.Chart && _skinIvory()) {
   Chart.defaults.color = '#6C5F55';
   Chart.defaults.borderColor = '#E7DDD1';
 }
+
+// Цвета уровней лояльности: в Ivory — приглушённая гамма бренда, иначе прежние.
+function lpLevelColor(key, fallback) {
+  if (!_skinIvory()) return fallback;
+  return { platinum: '#6F6A80', gold: '#C9A96B', silver: '#B7A89B', bronze: '#8E6334' }[key] || fallback;
+}

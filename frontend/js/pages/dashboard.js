@@ -9,6 +9,37 @@ let svcSortCol = 'cnt';
 let svcSortDir = 'desc';
 let svcExpanded = false;
 
+// ── Вкладки дашборда владельца: Клиника / Мессенджеры / Лояльность ──
+// Вкладка — часть hash (#dashboard, #dashboard/msg[/…], #dashboard/loyalty),
+// поэтому F5, «Назад» и старые ссылки на детализацию вердиктов
+// (#dashboard/msg/<канал>/<статус>) работают без отдельного состояния.
+// Данные всех трёх вкладок приходят ОДНИМ loadDashboard — переключение
+// вкладки ничего не запрашивает заново.
+const DASH_TABS = ['clinic', 'msg', 'loyalty'];
+function dashTabFromArg(arg) {
+  const head = String(arg || '').split('/')[0];
+  return head === 'msg' ? 'msg' : head === 'loyalty' ? 'loyalty' : 'clinic';
+}
+function dashSetTab(tab) {
+  if (!DASH_TABS.includes(tab)) tab = 'clinic';
+  document.querySelectorAll('#page-dashboard [data-dtab]').forEach(el => {
+    const on = el.dataset.dtab === tab;
+    if (el.classList.contains('dash-tab')) el.hidden = !on;
+    else { el.classList.toggle('active', on); el.setAttribute('aria-selected', on ? 'true' : 'false'); }
+  });
+  // Chart.js не знает размер canvas, пока вкладка скрыта: после показа — resize.
+  [typeof rCh !== 'undefined' ? rCh : null, typeof bfCh !== 'undefined' ? bfCh : null,
+   typeof lvlCh !== 'undefined' ? lvlCh : null].forEach(ch => { try { ch && ch.resize(); } catch (e) {} });
+}
+function dashTabClick(tab) {
+  const want = tab === 'clinic' ? 'dashboard' : 'dashboard/' + tab;
+  // Клик по уже открытой вкладке «Мессенджеры» не должен сбрасывать открытый
+  // список вердиктов (#dashboard/msg/…): hash меняем, только если вкладка другая.
+  const cur = (location.hash || '').slice(1);
+  if (dashTabFromArg(cur.split('/').slice(1).join('/')) === tab && cur.startsWith('dashboard')) return;
+  location.hash = want;
+}
+
 function moscowToday() {
   return new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Moscow' }).format(new Date());
 }
@@ -205,7 +236,7 @@ function buildBfChart(data) {
 function buildLvlChart(dist) {
   const ctx = document.getElementById('lvlChart').getContext('2d');
   if (lvlCh) lvlCh.destroy();
-  const K = ['platinum', 'gold', 'silver', 'bronze'], C = ['#00c896', '#f59e0b', '#9e9e9e', '#cd7f32'];
+  const K = ['platinum', 'gold', 'silver', 'bronze'], C = K.map(k => lpLevelColor(k, ['#00c896', '#f59e0b', '#9e9e9e', '#cd7f32'][K.indexOf(k)]));
   const map = {}; dist.forEach(d => map[d.loyalty_level] = parseInt(d.cnt) || 0);
   lvlCh = new Chart(ctx, {
     type: 'doughnut',
@@ -218,7 +249,7 @@ function buildLvlChart(dist) {
 }
 
 function buildLvlDash(dist, total) {
-  const LVL = [{ key: 'platinum', l: '💎 Платина', c: '#6366f1' }, { key: 'gold', l: '🥇 Золото', c: '#eab308' }, { key: 'silver', l: '🥈 Серебро', c: '#94a3b8' }, { key: 'bronze', l: '🥉 Бронза', c: '#c9a96e' }];
+  const LVL = [{ key: 'platinum', l: '💎 Платина', c: '#6366f1' }, { key: 'gold', l: '🥇 Золото', c: '#eab308' }, { key: 'silver', l: '🥈 Серебро', c: '#94a3b8' }, { key: 'bronze', l: '🥉 Бронза', c: '#c9a96e' }].map(x => ({ ...x, c: lpLevelColor(x.key, x.c) }));
   const map = {}; dist.forEach(d => map[d.loyalty_level] = parseInt(d.cnt) || 0);
   document.getElementById('lvlDash').innerHTML = LVL.map(l => {
     const pct = total ? Math.round((map[l.key] || 0) / total * 100) : 0;
@@ -252,6 +283,8 @@ function showDashSkeleton() {
 }
 
 async function loadDashboard() {
+  const _h = (location.hash || '').slice(1).split('/');
+  dashSetTab(_h[0] === 'dashboard' ? dashTabFromArg(_h.slice(1).join('/')) : 'clinic');
   showDashSkeleton();
   try {
     if (!dashRange.from || !dashRange.to) {
