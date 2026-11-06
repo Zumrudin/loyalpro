@@ -279,7 +279,8 @@ html[data-skin="ivory"] .sd-p-ico{box-shadow:none;border:1px solid var(--bd2)}
 
 /* ═══════════════════ РАБОЧИЙ ДЕНЬ (этап 4, js/pages/workday.js) ═══════════════════
    Структура общая для обоих видов, цвета — из токенов темы. */
-.wd-date{font-size:13px;color:var(--t2);margin:-6px 0 16px;text-transform:capitalize}
+.wd-date{font-size:13px;color:var(--t2);margin:-6px 0 16px}
+.wd-date::first-letter{text-transform:uppercase}
 .wd-sum{grid-template-columns:repeat(4,1fr)}
 .wd-col{display:flex;flex-direction:column;min-width:0}
 .wd-row{display:flex;align-items:center;gap:12px;padding:11px 0;border-bottom:1px solid var(--bd)}
