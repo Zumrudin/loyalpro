@@ -12,7 +12,8 @@ for (const role of ['owner', 'admin', 'specialist', 'admin_cashier', 'unknown'])
     assert.equal(items.filter(x => x.dataset.p === 'economics').length, 2);
     assert.equal(items.filter(x => x.dataset.p === 'broadcasts').length, 2);
     const ctx = vm.createContext({ window: { addEventListener() {} }, document: { addEventListener() {},
-      querySelectorAll: () => items,
+      // Группы и заголовки секций бокового меню (Ivory & Brass) заглушке не нужны.
+      querySelectorAll: s => (/nav-grp|nav-sec-t/.test(s) ? [] : items),
       querySelector: s => items.find(x => s.includes(`data-p="${x.dataset.p}"`)),
     } });
     vm.runInContext(nav, ctx);
