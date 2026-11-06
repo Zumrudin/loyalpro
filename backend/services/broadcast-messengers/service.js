@@ -199,9 +199,11 @@ async function monitor(salonId, id, nowMs = Date.now()) {
   const counts = await db.any(
     `SELECT channel, status, delivery_status, count(*)::int AS n FROM broadcast_recipients
       WHERE broadcast_id = $1 GROUP BY 1,2,3`, [b.id]);
+  // why: limit | rejected | not_registered — «перешли дальше по лимиту» и «адресата нет в мессенджере» — разное.
   const adv = await db.any(
-    `SELECT e->>'from' AS ch, count(*)::int AS n FROM broadcast_recipients r, jsonb_array_elements(r.cascade_log) e
-      WHERE r.broadcast_id = $1 AND e ? 'to' GROUP BY 1`, [b.id]);
+    `SELECT e->>'from' AS ch, COALESCE(e->>'why', '') AS why, count(*)::int AS n
+       FROM broadcast_recipients r, jsonb_array_elements(r.cascade_log) e
+      WHERE r.broadcast_id = $1 AND e ? 'to' GROUP BY 1, 2`, [b.id]);
   const waiting = await db.any(
     `SELECT id, client_name AS name, phone, channel FROM broadcast_recipients
       WHERE broadcast_id = $1 AND status = 'pending' ORDER BY sort_order, id LIMIT 20`, [b.id]);
@@ -215,31 +217,48 @@ async function monitor(salonId, id, nowMs = Date.now()) {
       byStatus[r.status] = (byStatus[r.status] || 0) + r.n;
       if (r.delivery_status) byDelivery[r.delivery_status] = (byDelivery[r.delivery_status] || 0) + r.n;
     }
-    const a = adv.find((x) => x.ch === ch);
+    let advancedFrom = 0;
+    const advancedBy = {};
+    for (const a of adv) {
+      if (a.ch !== ch) continue;
+      advancedFrom += a.n;
+      const why = a.why || 'other';
+      advancedBy[why] = (advancedBy[why] || 0) + a.n;
+    }
     const cfg = settings[ch] || {};
     channels[ch] = {
       enabled: !!cfg.enabled, delaySec: Number(cfg.delay_sec) || 0,
       state: states[ch].state, pausedUntil: states[ch].pausedUntil, sent: states[ch].sent, limit: states[ch].limit,
-      byStatus, byDelivery, advancedFrom: a ? a.n : 0,
+      byStatus, byDelivery, advancedFrom, advancedBy,
     };
   }
   const byStatus = {};
-  for (const r of counts) byStatus[r.status] = (byStatus[r.status] || 0) + r.n;
+  const byDelivery = {};
+  for (const r of counts) {
+    byStatus[r.status] = (byStatus[r.status] || 0) + r.n;
+    if (r.delivery_status) byDelivery[r.delivery_status] = (byDelivery[r.delivery_status] || 0) + r.n;
+  }
   return {
     id: b.id, status: b.status, paused: !!b.paused, pauseReason: b.pause_reason || null,
     cancelRequested: !!b.cancel_requested, inWindow: scheduler.inSendWindow(nowMs),
     total: b.total, sent: b.sent, failed: b.failed, skipped: b.skipped,
     onLimit: b.on_limit, cascadeEnabled: b.cascade_enabled, imageUrl: b.image_url, messageTemplate: b.message_template,
     createdAt: b.created_at, startedAt: b.started_at, finishedAt: b.finished_at,
-    byStatus, channels, waiting,
+    byStatus, byDelivery, channels, waiting,
   };
 }
+
+// Фильтр таблицы по исходу сверки: такие строки в status — 'sent', различает их delivery_status.
+const DELIVERY_FILTERS = new Set(['undeliverable', 'unknown']);
 
 async function recipients(salonId, id, { status, channel, q, offset, limit } = {}) {
   await loadOwn(salonId, id);
   const params = [id];
   const where = ['broadcast_id = $1'];
-  if (status) { params.push(String(status)); where.push(`status = $${params.length}`); }
+  if (status && DELIVERY_FILTERS.has(String(status))) {
+    params.push(String(status));
+    where.push(`status = 'sent'`, `delivery_status = $${params.length}`);
+  } else if (status) { params.push(String(status)); where.push(`status = $${params.length}`); }
   if (channel) { params.push(String(channel)); where.push(`channel = $${params.length}`); }
   const digits = String(q || '').replace(/\D+/g, '');
   if (digits) { params.push(`%${digits}%`); where.push(`phone LIKE $${params.length}`); }
@@ -265,12 +284,18 @@ async function resume(salonId, id) {
   return { ok: true };
 }
 
-/** «Новая рассылка по пропущенным»: имя+телефон тех, кому не ушло. */
+/**
+ * «Новая рассылка по пропущенным»: имя+телефон тех, кому не ушло, и тех, кому мессенджер отказал после
+ * приёма («не доставлено» — в т.ч. адресата нет в мессенджере, а каскаду идти было некуда).
+ * «Доставка неизвестна» сюда НЕ входит: сообщение могло дойти, повтор дал бы дубль.
+ */
 async function retryDraft(salonId, id) {
   await loadOwn(salonId, id);
   const rows = await db.any(
     `SELECT client_name AS name, phone FROM broadcast_recipients
-      WHERE broadcast_id = $1 AND status IN ('skipped','failed','cancelled') AND phone IS NOT NULL ORDER BY sort_order, id`, [id]);
+      WHERE broadcast_id = $1 AND phone IS NOT NULL
+        AND (status IN ('skipped','failed','cancelled') OR (status = 'sent' AND delivery_status = 'undeliverable'))
+      ORDER BY sort_order, id`, [id]);
   return rows.map((r) => ({ name: r.name || '', phone: r.phone }));
 }
 

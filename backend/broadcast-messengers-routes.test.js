@@ -147,6 +147,39 @@ describe('кэш базы прогноза', () => {
   });
 });
 
+describe('таблица получателей и «по пропущенным»', () => {
+  beforeEach(() => { db.oneOrNone.mockReset(); db.any.mockReset(); });
+
+  test('фильтр «не доставлено» — sent + delivery_status, а не status', async () => {
+    db.oneOrNone.mockResolvedValueOnce({ id: 5 }).mockResolvedValueOnce({ n: 0 });
+    db.any.mockResolvedValueOnce([]);
+    await svc.recipients(1, 5, { status: 'undeliverable' });
+    const [sql, params] = db.oneOrNone.mock.calls[1];
+    expect(sql).toMatch(/status = 'sent' AND delivery_status = \$2/);
+    expect(params).toEqual([5, 'undeliverable']);
+  });
+
+  test('обычный статус фильтруется по status как раньше', async () => {
+    db.oneOrNone.mockResolvedValueOnce({ id: 5 }).mockResolvedValueOnce({ n: 0 });
+    db.any.mockResolvedValueOnce([]);
+    await svc.recipients(1, 5, { status: 'skipped' });
+    const [sql, params] = db.oneOrNone.mock.calls[1];
+    expect(sql).toMatch(/AND status = \$2/);
+    expect(sql).not.toMatch(/delivery_status/);
+    expect(params).toEqual([5, 'skipped']);
+  });
+
+  test('«по пропущенным» берёт и не доставленных, но не «доставка неизвестна»', async () => {
+    db.oneOrNone.mockResolvedValueOnce({ id: 5 });
+    db.any.mockResolvedValueOnce([{ name: 'Волкова Дарья', phone: '79260643864' }, { name: null, phone: '79001542566' }]);
+    const list = await svc.retryDraft(1, 5);
+    expect(list).toEqual([{ name: 'Волкова Дарья', phone: '79260643864' }, { name: '', phone: '79001542566' }]);
+    const sql = db.any.mock.calls[0][0];
+    expect(sql).toMatch(/status IN \('skipped','failed','cancelled'\) OR \(status = 'sent' AND delivery_status = 'undeliverable'\)/);
+    expect(sql).not.toMatch(/'unknown'/);
+  });
+});
+
 describe('monitor и scope по салону', () => {
   test('чужая рассылка — 404', async () => {
     db.oneOrNone.mockResolvedValueOnce(null);
@@ -177,7 +210,34 @@ describe('monitor и scope по салону', () => {
     expect(m.channels.whatsapp.byStatus).toEqual({ pending: 4 });
     expect(m.channels.max.state).toBe('disabled');
     expect(m.byStatus).toEqual({ sent: 3, pending: 4 });
+    expect(m.byDelivery).toEqual({ delivered: 2, accepted: 1 });
     expect(m.waiting).toHaveLength(1);
+  });
+  test('«перешли дальше» разбиты по причинам; итоги доставки по рассылке', async () => {
+    const now = new Date(2026, 10, 2, 12, 0, 0).getTime();
+    db.any.mockClear(); // ниже смотрим calls[2] — история вызовов не должна зависеть от соседних тестов
+    db.oneOrNone.mockResolvedValueOnce({
+      id: 5, status: 'completed', total: 98, sent: 90, failed: 0, skipped: 8, on_limit: 'next_channel', cascade_enabled: true,
+      channel_settings: { tdlib: { enabled: true, delay_sec: 300, limit: 30 }, whatsapp: { enabled: true, delay_sec: 300, limit: 30 }, max: { enabled: true, delay_sec: 300, limit: 30 } },
+    });
+    db.any
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([
+        { channel: 'tdlib', status: 'sent', delivery_status: 'delivered', n: 28 },
+        { channel: 'max', status: 'sent', delivery_status: 'undeliverable', n: 9 },
+        { channel: 'max', status: 'sent', delivery_status: 'unknown', n: 1 },
+      ])
+      .mockResolvedValueOnce([
+        { ch: 'tdlib', why: 'limit', n: 49 }, { ch: 'tdlib', why: 'not_registered', n: 2 }, { ch: 'whatsapp', why: 'limit', n: 31 },
+      ])
+      .mockResolvedValueOnce([]);
+    const m = await svc.monitor(1, 5, now);
+    expect(m.channels.tdlib.advancedFrom).toBe(51);
+    expect(m.channels.tdlib.advancedBy).toEqual({ limit: 49, not_registered: 2 });
+    expect(m.channels.whatsapp.advancedBy).toEqual({ limit: 31 });
+    expect(m.channels.max.advancedBy).toEqual({});
+    expect(m.byDelivery).toEqual({ delivered: 28, undeliverable: 9, unknown: 1 });
+    expect(db.any.mock.calls[2][0]).toMatch(/GROUP BY 1, 2/);
   });
   test('resume снимает паузу и причину', async () => {
     db.oneOrNone.mockResolvedValueOnce({ id: 5 });

@@ -13,6 +13,11 @@ const BC_MON_REASONS = {
   blacklist: 'чёрный список',
 };
 
+// Почему получатель ушёл дальше по каскаду / почему шаг не удался. Порядок ключей — порядок в карточке.
+const BC_MON_WHY = {
+  limit: 'лимит', not_registered: 'нет в мессенджере', rejected: 'отказ', unreachable: 'шлюз недоступен', ambiguous: 'неизвестно',
+};
+
 function bcMonName(ch) { return BC_MON_NAMES[ch] || String(ch || ''); }
 
 // Время по Москве с секундами (окно рассылки и пауза считаются по Москве, браузер может быть в другом поясе).
@@ -61,7 +66,11 @@ function bcStatusText(r) {
     case 'cancelled': return 'отменено';
     case 'sent':
       if (x.delivery_status === 'delivered') return 'доставлено';
-      if (x.delivery_status === 'undeliverable') return 'не доставлено';
+      if (x.delivery_status === 'undeliverable') {
+        // error — текст отказа мессенджера («Клиент не зарегистрирован в MAX»), не внутренний код
+        const why = String(x.error || '').trim();
+        return why ? `не доставлено: ${why.charAt(0).toLowerCase()}${why.slice(1)}` : 'не доставлено';
+      }
       if (x.delivery_status === 'unknown') return 'отправлено, доставка неизвестна';
       return 'отправлено';
     case 'skipped': {
@@ -79,7 +88,7 @@ function bcStatusText(r) {
 // Путь по каскаду: «Telegram: отказ → WhatsApp». Успешные отправки (ok:true) в путь не входят.
 function bcCascadePath(log) {
   if (!Array.isArray(log)) return '';
-  const WHY = { rejected: 'отказ', unreachable: 'шлюз недоступен', ambiguous: 'неизвестно', limit: 'лимит' };
+  const WHY = BC_MON_WHY;
   const parts = [];
   for (const e of log) {
     if (!e || typeof e !== 'object') continue;
@@ -88,6 +97,35 @@ function bcCascadePath(log) {
     else if (e.ok === false) parts.push(`${bcMonName(e.channel)}: ${WHY[e.why] || 'ошибка'}`);
   }
   return parts.join(' · ');
+}
+
+// Строки карточки мессенджера. Числа сходятся: ушло = доставлено + не доставлено + проверяется +
+// доставка неизвестна + ушедшие дальше из-за «нет в мессенджере» (они — в строке «перешли дальше»).
+function bcChannelSummary(c) {
+  const x = c || {}, bs = x.byStatus || {}, bd = x.byDelivery || {};
+  const parts = [`ушло ${x.sent || 0}`, `доставлено ${bd.delivered || 0}`, `не доставлено ${bd.undeliverable || 0}`];
+  if (bd.accepted > 0) parts.push(`проверяется ${bd.accepted}`);
+  if (bd.unknown > 0) parts.push(`доставка неизвестна ${bd.unknown}`);
+  parts.push(`ждут ${(bs.pending || 0) + (bs.sending || 0)}`, `отказ ${bs.failed || 0}`);
+  let adv = '';
+  if (x.advancedFrom > 0) {
+    const by = x.advancedBy || {};
+    const known = Object.keys(BC_MON_WHY);
+    const reasons = Object.keys(by).filter((k) => by[k] > 0)
+      .sort((a, b) => (known.indexOf(a) + 1 || 99) - (known.indexOf(b) + 1 || 99));
+    const label = (k) => BC_MON_WHY[k] || 'другое';
+    let tail = '';
+    if (reasons.length === 1) tail = ` (${label(reasons[0])})`;
+    else if (reasons.length > 1) tail = ` (${reasons.map((k) => `${label(k)} ${by[k]}`).join(' · ')})`;
+    adv = `перешли дальше по каскаду: ${x.advancedFrom}${tail}`;
+  }
+  return { line: parts.join(' · '), adv };
+}
+
+// «Не получили сообщение»: пропущенные, ошибки, отменённые и не доставленные после приёма мессенджером.
+function bcMonLost(m) {
+  const bs = (m && m.byStatus) || {}, bd = (m && m.byDelivery) || {};
+  return (bs.skipped || 0) + (bs.failed || 0) + (bs.cancelled || 0) + (bd.undeliverable || 0);
 }
 
 // ── Панель ────────────────────────────────────────────────────────────────────────────────
@@ -173,15 +211,12 @@ function bcMonRender(m) {
   const chs = m.channels || {};
   const keys = Object.keys(BC_MON_NAMES).filter((k) => chs[k]);
   document.getElementById('bcMonCards').innerHTML = keys.map((k) => {
-    const c = chs[k], bs = c.byStatus || {}, bd = c.byDelivery || {};
-    const delivered = bd.delivered || 0;
-    const bad = bd.undeliverable || 0;
-    const waiting = (bs.pending || 0) + (bs.sending || 0);
-    const rejected = (bs.failed || 0);
+    const c = chs[k];
+    const sum = bcChannelSummary(c);
     return `<div class="bc-mon-card">
       <div class="bc-mon-card-h"><b>${esc(bcMonName(k))}</b><span id="bcMonSt-${k}">${esc(bcChannelLabel(c, Date.now()))}</span></div>
-      <div class="bc-mon-sub">ушло ${c.sent || 0} · доставлено ${delivered} · не доставлено ${bad} · ждут ${waiting} · отказ ${rejected}</div>
-      ${c.advancedFrom > 0 ? `<div class="bc-mon-sub">перешли дальше по каскаду: ${c.advancedFrom}</div>` : ''}
+      <div class="bc-mon-sub">${esc(sum.line)}</div>
+      ${sum.adv ? `<div class="bc-mon-sub">${esc(sum.adv)}</div>` : ''}
     </div>`;
   }).join('');
 
@@ -190,7 +225,7 @@ function bcMonRender(m) {
     ? w.map((r) => `<div class="bc-mon-wrow"><span>${esc(r.name || '—')}</span><span class="bc-mon-sub">${esc(r.phone || '')} · ${esc(bcMonName(r.channel))}</span></div>`).join('')
     : '<div class="bc-mon-sub">Очередь пуста</div>';
 
-  const lost = (m.byStatus && ((m.byStatus.skipped || 0) + (m.byStatus.failed || 0) + (m.byStatus.cancelled || 0))) || 0;
+  const lost = bcMonLost(m);
   const sum = document.getElementById('bcMonSummary');
   sum.innerHTML = (s.done && lost > 0)
     ? `<div class="bc-mon-sub" style="margin-bottom:6px">Не получили сообщение: ${lost}</div><button class="btn btn-pri btn-sm" onclick="bcMonRetryDraft()">Новая рассылка по пропущенным</button>`
