@@ -16,8 +16,18 @@
 // /root/loyalpro, где воркер бота без фильтра transport арендовал бы рассылку скрипта, а после выката нового
 // кода его воркер рассылок пошёл бы с НАСТОЯЩИМ sender. Обход — --allow-worker-running (осознанно).
 //
-// checkDeliveries не вызывается: delivery_id стаба фиктивный. В конце рассылка удаляется (каскадом уходят
+// Сверка доставки идёт настоящим worker.checkDeliveries после каждой итерации: рассылка с 06.11.2026 не
+// завершается, пока у получателя, которому каскадом ещё есть куда идти, нет вердикта. В режиме стаба
+// transport.getDeliveryStatus тоже подменён (ответ 16 «Прочитано»), а sent_at строк рассылки сдвигается на
+// 3 мин назад (CHECK_SQL ждёт 120 с по часам БД). С --send статусы настоящие, и после цикла скрипт ждёт
+// вердиктов в РЕАЛЬНОМ времени (до 6 мин). Перед каждой сверкой скрипт убеждается, что CHECK_SQL видит ТОЛЬКО
+// строки своей рассылки (сверка глобальная), иначе отказ. В конце рассылка удаляется (каскадом уходят
 // получатели), копия картинки тоже; --keep оставляет рассылку (для explain).
+//
+// --not-registered — сценарий «адресата нет в мессенджере» (Chatpush 55/58, рассылка №3 06.11.2026): стаб
+// отправки отвечает успехом, а стаб статуса на ПЕРВУЮ доставку — 58 «не найден в Telegram», на остальные —
+// 16 «Прочитано». Проверяется: получатель ушёл на следующий шаг каскада и доставлен, попытка осталась за
+// первым мессенджером (монитор), рассылка завершилась только после вердикта. С --send несовместим.
 
 // Планировщик считает окно 09–21 по локальным часам процесса; хост дева в UTC, боевой процесс — Europe/Moscow.
 process.env.TZ = 'Europe/Moscow';
@@ -27,6 +37,7 @@ const path = require('path');
 const { execFileSync } = require('child_process');
 const { db, pool } = require('../db');
 const sender = require('../services/broadcast-messengers/sender');
+const transport = require('../services/messaging/transport');
 const worker = require('../services/broadcast-messengers/worker');
 const service = require('../services/broadcast-messengers/service');
 const scheduler = require('../services/broadcast-messengers/scheduler');
@@ -38,7 +49,9 @@ const val = (n, def) => { const i = args.indexOf(n); return i >= 0 ? args[i + 1]
 const PHONES = val('--phones', '79200255591').split(',').map(s => s.trim()).filter(Boolean);
 const SALON_ID = Number(val('--salon', 1));
 const REAL_SEND = flag('--send');
+const NOT_REGISTERED = flag('--not-registered');
 const KEEP = flag('--keep');
+const NR_TEXT = 'Пользователь не найден в Telegram (e2e)';
 const MAX_ITER = 20;
 const E2E_DELAY_SEC = 5;
 
@@ -93,6 +106,7 @@ function startNowMs() {
 }
 
 (async () => {
+  if (NOT_REGISTERED && REAL_SEND) { console.error('--not-registered несовместим с --send'); process.exit(2); }
   guardAgainstLiveWorker();
   const t0 = Date.now();
   const ownerRow = await db.oneOrNone(`SELECT id FROM users WHERE salon_id = $1 AND role = 'owner' ORDER BY id LIMIT 1`, [SALON_ID]);
@@ -148,11 +162,30 @@ function startNowMs() {
       let calls = 0;
       sender.sendToRecipient = async ({ phone, channel }) => {
         calls++;
-        console.log(`  стаб #${calls}: ${phone} через ${channel}`);
-        if (calls === 1 && (cascadeLen.get(phone) || 0) > 1) return { ok: false, kind: 'rejected', error: 'e2e' };
-        return { ok: true, delivery_id: 'e2e', account_id: null };
+        // обычный сценарий: первый вызов — отказ при отправке (если каскаду есть куда идти); --not-registered — всё принято
+        if (!NOT_REGISTERED && calls === 1 && (cascadeLen.get(phone) || 0) > 1) {
+          console.log(`  стаб #${calls}: ${phone} через ${channel} → отказ`);
+          return { ok: false, kind: 'rejected', error: 'e2e' };
+        }
+        console.log(`  стаб #${calls}: ${phone} через ${channel} → принято, delivery e2e-${calls}`);
+        return { ok: true, delivery_id: `e2e-${calls}`, account_id: null };
+      };
+      transport.getDeliveryStatus = async (_salonId, channel, deliveryId) => {
+        if (!/^e2e-\d+$/.test(String(deliveryId))) throw new Error(`стаб сверки: чужая доставка ${deliveryId}`);
+        const st = NOT_REGISTERED && deliveryId === 'e2e-1'
+          ? { status: { status_id: 58, description: NR_TEXT } } : { status: { status_id: 16, description: 'Прочитано' } };
+        console.log(`  сверка ${deliveryId} (${channel}) → ${st.status.status_id} «${st.status.description}»`);
+        return st;
       };
     }
+
+    // CHECK_SQL глобальный (все мессенджерные рассылки) — сверку гоняем, только если он видит одни свои строки.
+    const runChecks = async (atMs) => {
+      const due = await db.any(worker.CHECK_SQL);
+      const alien = due.filter(r => r.broadcast_id !== b.id);
+      if (alien.length) throw new Error(`CHECK_SQL видит чужие строки (рассылки ${[...new Set(alien.map(r => r.broadcast_id))].join(',')}) — сверку не гоняю`);
+      await worker.checkDeliveries(atMs);
+    };
 
     // Ускоренное время: sent_at пишет БД (NOW()), поэтому фиктивное время обязано быть ≥ реального, иначе
     // пауза «не истекла». Шаг — самая длинная пауза + 1 с.
@@ -164,9 +197,29 @@ function startNowMs() {
       const cur = await db.oneOrNone('SELECT * FROM broadcasts WHERE id = $1', [b.id]);
       if (!cur || !['pending', 'in_progress'].includes(cur.status)) break;
       await worker.processBroadcast(cur, Math.max(nowMs, Date.now()));
-      const open = await db.any(`SELECT status, count(*)::int AS n FROM broadcast_recipients WHERE broadcast_id = $1 GROUP BY 1`, [b.id]);
-      console.log(`  итерация ${iter + 1}:`, open.map(r => `${r.status}=${r.n}`).join(' '));
+      if (!REAL_SEND) {
+        await db.query(`UPDATE broadcast_recipients SET sent_at = sent_at - interval '3 minutes'
+                         WHERE broadcast_id = $1 AND status = 'sent' AND delivery_status = 'accepted'`, [b.id]);
+      }
+      await runChecks(Math.max(nowMs, Date.now()));
+      const open = await db.any(`SELECT status, coalesce(delivery_status, '-') AS ds, count(*)::int AS n FROM broadcast_recipients WHERE broadcast_id = $1 GROUP BY 1, 2`, [b.id]);
+      console.log(`  итерация ${iter + 1}:`, open.map(r => `${r.status}/${r.ds}=${r.n}`).join(' '));
       nowMs += stepMs;
+    }
+    // --send: настоящие статусы приходят не раньше, чем через 120 с после отправки — ждём вердиктов вживую.
+    if (REAL_SEND) {
+      const deadline = Date.now() + 6 * 60 * 1000;
+      for (;;) {
+        const cur = await db.oneOrNone('SELECT * FROM broadcasts WHERE id = $1', [b.id]);
+        if (!cur || !['pending', 'in_progress'].includes(cur.status)) break;
+        if (Date.now() > deadline) { console.warn('⚠️  вердиктов сверки не дождались за 6 мин'); break; }
+        await new Promise(r => setTimeout(r, 15000));
+        await runChecks(Date.now());
+        const fresh = await db.oneOrNone('SELECT * FROM broadcasts WHERE id = $1', [b.id]);
+        if (fresh) await worker.processBroadcast(fresh, Date.now());
+        const st = await db.any(`SELECT status, coalesce(delivery_status, '-') AS ds, count(*)::int AS n FROM broadcast_recipients WHERE broadcast_id = $1 GROUP BY 1, 2`, [b.id]);
+        console.log('  ожидание сверки:', st.map(r => `${r.status}/${r.ds}=${r.n}`).join(' '));
+      }
     }
     const mon = await service.monitor(SALON_ID, b.id, Math.max(nowMs, Date.now()));
     console.log('\n=== МОНИТОР ===');
@@ -181,7 +234,21 @@ function startNowMs() {
     if (mon.status !== 'completed') throw new Error(`рассылка не завершилась за ${iter} итераций (status=${mon.status})`);
     const bad = list.items.filter(r => r.status !== 'sent');
     if (bad.length) throw new Error(`не все получатели sent: ${bad.map(r => `${r.phone}:${r.status}`).join(', ')}`);
-    if (!REAL_SEND && recs.some(r => r.cascade.length > 1)) {
+    if (NOT_REGISTERED) {
+      const r0 = recs[0];
+      const it = list.items.find(r => r.phone === r0.phone);
+      const first = r0.cascade[0];
+      if (r0.cascade.length > 1) {
+        const nr = (it.cascade_log || []).find(e => e.why === 'not_registered');
+        if (!nr || nr.from !== first || nr.to !== r0.cascade[1] || nr.error !== NR_TEXT) throw new Error(`нет перехода not_registered ${first}→${r0.cascade[1]} в cascade_log`);
+        if (it.channel !== r0.cascade[1] || it.delivery_status !== 'delivered') throw new Error(`ожидался ${r0.cascade[1]}/delivered, а ${it.channel}/${it.delivery_status}`);
+        if (mon.channels[first].sent !== 1) throw new Error(`попытка в ${first} не учтена в паузе/лимите: sent=${mon.channels[first].sent}`);
+        if (!mon.channels[first].advancedBy || mon.channels[first].advancedBy.not_registered !== 1) throw new Error('монитор: нет advancedBy.not_registered');
+        if (mon.sent !== 1) throw new Error(`«ушло» рассылки ${mon.sent}, ожидалось 1 (без двойного счёта)`);
+      } else if (it.delivery_status !== 'undeliverable' || it.error !== NR_TEXT) {
+        throw new Error(`каскад из одного шага: ожидалось undeliverable с причиной, а ${it.delivery_status}/${it.error}`);
+      }
+    } else if (!REAL_SEND && recs.some(r => r.cascade.length > 1)) {
       const hop = list.items.some(r => (r.cascade_log || []).some(e => e.to));
       if (!hop) throw new Error('переход по каскаду после rejected не зафиксирован в cascade_log');
     }

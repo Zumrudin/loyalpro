@@ -11,14 +11,22 @@
 // try/catch. Упал процесс между захватом и ответом → closeStaleSending закрывает такие строки как
 // `failed: ambiguous_failure`, не переотправляет (дубль хуже пропуска).
 //
-// Сверка доставки — ТОЛЬКО для монитора: каскад по «не доставлено» не продолжается (повтор в другой
+// Сверка доставки — для монитора: каскад по «не доставлено» не продолжается (повтор в другой
 // мессенджер через минуты в разовой рассылке выглядел бы спамом, а у шлюза статус 5 бывает и
-// «исход неизвестен» — трактовка та же, что у автоуведомлений).
+// «исход неизвестен» — трактовка та же, что у автоуведомлений). ИСКЛЮЧЕНИЕ — «адресата нет в
+// мессенджере» (Chatpush 55/58, решение владельца 06.11.2026): Chatpush принимает отправку и только
+// потом сообщает, что номера в Telegram/MAX нет, то есть сообщение не ушло НИКОМУ и дубля быть не
+// может — получатель возвращается в очередь на следующий шаг своего каскада. Его попытка остаётся
+// за прежним мессенджером (запись `why:'not_registered'` с `sent_at` в cascade_log): поиск номера —
+// тоже обращение к аккаунту, поэтому держит паузу и расходует лимит (STATS_SQL). Рассылка не
+// завершается, пока у получателя, которому ещё есть куда идти, нет вердикта (SQL.hasOpen).
+// Коды статусов у Chatpush и шлюза РАЗНЫЕ — трактовка в services/messaging/delivery-status.js.
 //
 // Каждый SQL помечен тегом /* bm:… */ — по нему тест маршрутизирует фейковую БД.
 // ============================================================
 const { db } = require('../../db');
 const transport = require('../messaging/transport');
+const { classifyDelivery } = require('../messaging/delivery-status');
 const sender = require('./sender');
 const scheduler = require('./scheduler');
 const { createLogger } = require('../../logger');
@@ -31,8 +39,6 @@ const CHECK_BATCH = 20;
 const CHECK_REPEAT_S = 30;        // «Принято» перечитываем не чаще раза в 30 с, а не каждый тик
 const ACCEPTED_MAX_AGE_MS = 10 * 60 * 1000; // дольше «Принято» — исход неизвестен (шлюз закрывает зависшие через 10 мин)
 const CHECK_MAX_AGE_MS = 8 * 60 * 1000;     // статус 5, увиденный позже, не доказан (как notifications/worker.js)
-const UNDELIVERABLE_STATUS_ID = 5;
-const DELIVERED_STATUS_IDS = new Set([2, 3, 4]);
 const UNKNOWN_OUTCOME_RE = /исход неизвестен/i;
 const STALE_CHECK_EVERY_MS = 60 * 1000;
 const ERR_MAX = 500;
@@ -43,10 +49,23 @@ const ACTIVE_SQL = `/* bm:active */
    WHERE transport = 'messengers' AND status IN ('pending','in_progress')
    ORDER BY salon_id, (status = 'in_progress') DESC, created_at ASC, id ASC`;
 
+// Вторая половина UNION — попытки, которые мессенджер отверг ПОСЛЕ приёма («нет в мессенджере»):
+// получатель уже ушёл дальше по каскаду, но пауза и лимит считаются по прежнему мессенджеру.
 const STATS_SQL = `/* bm:stats */
-  SELECT channel, extract(epoch FROM max(sent_at)) * 1000 AS last_ms, count(*)::int AS n
-    FROM broadcast_recipients
-   WHERE broadcast_id = $1 AND status IN ('sent','sending')
+  SELECT channel, extract(epoch FROM max(last_at)) * 1000 AS last_ms, sum(n)::int AS n
+    FROM (
+      SELECT channel, max(sent_at) AS last_at, count(*) AS n
+        FROM broadcast_recipients
+       WHERE broadcast_id = $1 AND status IN ('sent','sending')
+       GROUP BY channel
+      UNION ALL
+      SELECT e->>'from', max((e->>'sent_at')::timestamptz), count(*)
+        FROM broadcast_recipients r
+       CROSS JOIN LATERAL jsonb_array_elements(r.cascade_log) e
+       WHERE r.broadcast_id = $1 AND r.cascade_log @> '[{"why":"not_registered"}]'
+         AND e->>'why' = 'not_registered'
+       GROUP BY 1
+    ) x
    GROUP BY channel`;
 
 const HEADS_SQL = `/* bm:heads */
@@ -61,7 +80,8 @@ const LIMIT_PENDING_SQL = `/* bm:limit-pending */
    WHERE broadcast_id = $1 AND status = 'pending' AND channel = ANY($2::text[])`;
 
 const CHECK_SQL = `/* bm:deliveries */
-  SELECT r.id, r.channel, r.delivery_id, r.account_id, r.sent_at, b.salon_id
+  SELECT r.id, r.broadcast_id, r.channel, r.delivery_id, r.account_id, r.sent_at, r.cascade, r.step,
+         b.salon_id, b.status AS broadcast_status, b.cancel_requested, b.channel_settings
     FROM broadcast_recipients r
     JOIN broadcasts b ON b.id = r.broadcast_id
    WHERE b.transport = 'messengers'
@@ -113,11 +133,24 @@ const SQL = {
                       SET status='pending', sent_at=NULL, error=$2, cascade_log = cascade_log || $3::jsonb
                     WHERE id=$1 AND status='sending' RETURNING id`,
   pause: `/* bm:pause-broadcast */ UPDATE broadcasts SET paused=TRUE, pause_reason=$2 WHERE id=$1`,
-  hasOpen: `/* bm:has-open */ SELECT 1 AS one FROM broadcast_recipients WHERE broadcast_id=$1 AND status IN ('pending','sending') LIMIT 1`,
+  // Открыта и пока у получателя, которому каскадом ещё есть куда идти, нет вердикта сверки: иначе
+  // «нет в мессенджере» пришёл бы к уже завершённой рассылке и остался без продолжения.
+  hasOpen: `/* bm:has-open */ SELECT 1 AS one FROM broadcast_recipients
+             WHERE broadcast_id=$1
+               AND (status IN ('pending','sending')
+                    OR (status='sent' AND delivery_status='accepted' AND delivery_id IS NOT NULL
+                        AND step < COALESCE(array_length(cascade, 1), 0) - 1))
+             LIMIT 1`,
   complete: `/* bm:complete */ UPDATE broadcasts SET status='completed', finished_at=NOW() WHERE id=$1 AND status='in_progress'`,
   deliveryStatus: `/* bm:delivery-status */ UPDATE broadcast_recipients
-                     SET delivery_status = COALESCE($2, delivery_status), checked_at = NOW()
+                     SET delivery_status = COALESCE($2, delivery_status), error = COALESCE($3, error), checked_at = NOW()
                    WHERE id=$1 AND delivery_status='accepted'`,
+  // «Нет в мессенджере»: сообщение не ушло никому — обратно в очередь на следующий шаг каскада.
+  notRegisteredNext: `/* bm:not-registered-next */ UPDATE broadcast_recipients
+                        SET status='pending', step=$2, channel=$3, sent_at=NULL, delivery_id=NULL, account_id=NULL,
+                            delivery_status=NULL, checked_at=NULL, error=$4, cascade_log = cascade_log || $5::jsonb
+                      WHERE id=$1 AND status='sent' AND delivery_status='accepted' RETURNING id`,
+  decSent: `/* bm:dec-sent */ UPDATE broadcasts SET sent = GREATEST(sent - 1, 0) WHERE id=$1`,
 };
 
 const errText = (e) => String((e && e.message) || e || '').slice(0, ERR_MAX);
@@ -261,35 +294,63 @@ async function closeStaleSending() {
 }
 
 /**
- * Трактовка статуса доставки для монитора: 'delivered' | 'undeliverable' | 'unknown' | null (пока «Принято»).
+ * Трактовка статуса доставки: 'delivered' | 'undeliverable' | 'not_registered' | 'unknown' | null (ещё в пути).
+ * Таблица кодов — по провайдеру (deliveryId `g<n>` — шлюз, число — Chatpush; delivery-status.js).
  * Статус 5 — «не доставлено» только при доказанном исходе: без «исход неизвестен» и не позже CHECK_MAX_AGE_MS.
+ * 'not_registered' («нет в мессенджере») доказан сам по себе — срок к нему не применяется.
  */
-function deliveryVerdict(st, ageMs) {
-  if (!st || !st.status) return 'unknown';
-  const sid = Number(st.status.status_id);
-  if (sid === UNDELIVERABLE_STATUS_ID) {
-    if (UNKNOWN_OUTCOME_RE.test(`${st.error || ''} ${st.status.description || ''}`)) return 'unknown';
+function deliveryVerdict(st, ageMs, deliveryId) {
+  const c = classifyDelivery(st, { deliveryId });
+  if (c.kind === 'unknown') return 'unknown';
+  if (c.kind === 'delivered') return 'delivered';
+  if (c.kind === 'not_registered') return 'not_registered';
+  if (c.kind === 'undeliverable') {
+    if (UNKNOWN_OUTCOME_RE.test(`${st.error || ''} ${c.description}`)) return 'unknown';
     if (!(ageMs <= CHECK_MAX_AGE_MS)) return 'unknown';
     return 'undeliverable';
   }
-  if (DELIVERED_STATUS_IDS.has(sid)) return 'delivered';
   return ageMs > ACCEPTED_MAX_AGE_MS ? 'unknown' : null;
+}
+
+/** «Нет в мессенджере»: следующий шаг каскада, если рассылка жива и шаг есть, иначе «не доставлено» с причиной. */
+async function onNotRegistered(r, detail, nowMs) {
+  const settings = parseSettings(r.channel_settings);
+  const disabled = new Set(scheduler.CHANNELS.filter((ch) => !(settings[ch] && settings[ch].enabled)));
+  const alive = ['pending', 'in_progress'].includes(r.broadcast_status) && !r.cancel_requested;
+  const n = alive ? scheduler.nextStep(r.cascade, Number(r.step) || 0, disabled) : null;
+  if (!n) {
+    await db.query(SQL.deliveryStatus, [r.id, 'undeliverable', detail || null]);
+    return;
+  }
+  const entry = logEntry(nowMs, {
+    from: r.channel, to: n.channel, why: 'not_registered', error: detail,
+    sent_at: r.sent_at ? new Date(r.sent_at).toISOString() : null, delivery_id: r.delivery_id,
+  });
+  const moved = await db.any(SQL.notRegisteredNext, [r.id, n.step, n.channel, detail || null, entry]);
+  if (!moved.length) return;
+  await safe(`рассылка ${r.broadcast_id} sent-1`, () => db.query(SQL.decSent, [r.broadcast_id]));
+  log.info(`рассылка ${r.broadcast_id}: #${r.id} — ${detail || 'нет в мессенджере'} (${r.channel}) → дальше по каскаду: ${n.channel}`);
 }
 
 async function checkDeliveries(nowMs = Date.now()) {
   const rows = await db.any(CHECK_SQL);
   for (const r of rows) {
     try {
+      const ageMs = r.sent_at ? nowMs - new Date(r.sent_at).getTime() : NaN;
       let verdict;
+      let detail = '';
       try {
         const st = await transport.getDeliveryStatus(r.salon_id, r.channel, r.delivery_id, { accountId: r.account_id });
-        const ageMs = r.sent_at ? nowMs - new Date(r.sent_at).getTime() : NaN;
-        verdict = deliveryVerdict(st, ageMs);
+        verdict = deliveryVerdict(st, ageMs, r.delivery_id);
+        detail = (st && st.status && String(st.status.description || '')) || '';
       } catch (e) {
+        // Сбой ЧТЕНИЯ статуса — не исход доставки: перечитаем через CHECK_REPEAT_S и сдаёмся по тому же
+        // сроку, что и для «в пути» (рассылка №3: один таймаут Chatpush навсегда записал «неизвестно»).
         log.warn(`#${r.id} сверка доставки: ${e.message}`);
-        verdict = 'unknown';
+        verdict = ageMs > ACCEPTED_MAX_AGE_MS ? 'unknown' : null;
       }
-      await db.query(SQL.deliveryStatus, [r.id, verdict]);
+      if (verdict === 'not_registered') await onNotRegistered(r, detail, nowMs);
+      else await db.query(SQL.deliveryStatus, [r.id, verdict, null]);
     } catch (e) {
       log.error(`#${r.id} delivery status: ${e.message}`);
     }
@@ -340,5 +401,5 @@ function start() {
 
 module.exports = {
   start, tick, processBroadcast, closeStaleSending, checkDeliveries, deliveryVerdict, statsFromRows,
-  ACTIVE_SQL, STATS_SQL, HEADS_SQL, LIMIT_PENDING_SQL, CHECK_SQL, CLOSE_STALE_SQL, parseSettings,
+  ACTIVE_SQL, STATS_SQL, HEADS_SQL, LIMIT_PENDING_SQL, CHECK_SQL, CLOSE_STALE_SQL, SQL, parseSettings,
 };

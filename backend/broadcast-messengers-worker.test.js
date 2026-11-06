@@ -41,12 +41,16 @@ function run(sql, p = []) {
     case 'start-broadcast': { const b = bc(p[0]); if (b.status === 'pending') { b.status = 'in_progress'; b.started_at = b.started_at || nowDb; } return []; }
     case 'stats': {
       const by = {};
-      for (const r of S.recipients) {
-        if (r.broadcast_id !== p[0] || !['sent', 'sending'].includes(r.status)) continue;
-        const o = by[r.channel] || (by[r.channel] = { channel: r.channel, last_ms: null, n: 0 });
+      const bump = (ch, ms) => {
+        const o = by[ch] || (by[ch] = { channel: ch, last_ms: null, n: 0 });
         o.n++;
-        const ms = r.sent_at.getTime();
-        if (o.last_ms == null || ms > Number(o.last_ms)) o.last_ms = String(ms); // numeric приходит строкой
+        if (ms != null && (o.last_ms == null || ms > Number(o.last_ms))) o.last_ms = String(ms); // numeric приходит строкой
+      };
+      for (const r of S.recipients) {
+        if (r.broadcast_id !== p[0]) continue;
+        if (['sent', 'sending'].includes(r.status)) bump(r.channel, r.sent_at.getTime());
+        // попытка, отвергнутая «нет в мессенджере» после приёма, остаётся за мессенджером-отправителем
+        for (const e of r.cascade_log) if (e.why === 'not_registered') bump(e.from, e.sent_at ? Date.parse(e.sent_at) : null);
       }
       return Object.values(by);
     }
@@ -98,15 +102,25 @@ function run(sql, p = []) {
     }
     case 'pause-broadcast': { const b = bc(p[0]); b.paused = true; b.pause_reason = p[1]; return []; }
     case 'has-open':
-      return S.recipients.some((r) => r.broadcast_id === p[0] && ['pending', 'sending'].includes(r.status)) ? [{ one: 1 }] : [];
+      return S.recipients.some((r) => r.broadcast_id === p[0] && (['pending', 'sending'].includes(r.status)
+        || (r.status === 'sent' && r.delivery_status === 'accepted' && r.delivery_id != null && r.step < r.cascade.length - 1)))
+        ? [{ one: 1 }] : [];
     case 'complete': { const b = bc(p[0]); if (b.status === 'in_progress') { b.status = 'completed'; b.finished_at = nowDb; } return []; }
     case 'active': return [...S.broadcasts.values()].filter((b) => ['pending', 'in_progress'].includes(b.status));
     case 'deliveries': return S.deliveries || [];
     case 'delivery-status': {
       const r = rec(p[0]); if (!r || r.delivery_status !== 'accepted') return [];
       if (p[1] != null) r.delivery_status = p[1];
+      if (p[2] != null) r.error = p[2];
       r.checked_at = nowDb; return [];
     }
+    case 'not-registered-next': {
+      const r = rec(p[0]); if (!r || r.status !== 'sent' || r.delivery_status !== 'accepted') return [];
+      Object.assign(r, { status: 'pending', step: p[1], channel: p[2], sent_at: null, delivery_id: null, account_id: null,
+        delivery_status: null, checked_at: null, error: p[3] });
+      appendLog(r, p[4]); return [{ id: r.id }];
+    }
+    case 'dec-sent': { const b = bc(p[0]); b.sent = Math.max(b.sent - 1, 0); return []; }
     case 'close-stale': return S.closeStaleRows || [];
     default: throw new Error(`неизвестный тег ${tag}`);
   }
@@ -372,18 +386,28 @@ describe('processBroadcast — отмена и завершение', () => {
   });
 });
 
-describe('checkDeliveries', () => {
-  const row = (over = {}) => ({ id: 1, salon_id: 7, channel: 'tdlib', delivery_id: '555', account_id: 9, sent_at: new Date(NOW - 150 * 1000), ...over });
+// Строка CHECK_SQL: поля получателя + рассылки (каскад продолжается только у живой рассылки).
+function drow(r, over = {}) {
+  const b = bc(r.broadcast_id);
+  return {
+    id: r.id, broadcast_id: r.broadcast_id, channel: r.channel, delivery_id: r.delivery_id, account_id: r.account_id,
+    sent_at: r.sent_at, cascade: r.cascade, step: r.step, salon_id: b.salon_id, broadcast_status: b.status,
+    cancel_requested: b.cancel_requested, channel_settings: b.channel_settings, ...over,
+  };
+}
+
+describe('checkDeliveries — шлюз (id g<n>)', () => {
+  let r1;
   beforeEach(() => {
     addBroadcast();
-    addRec({ status: 'sent', sent_at: new Date(NOW - 150 * 1000), delivery_status: 'accepted', delivery_id: '555', account_id: 9, cascade: ['tdlib'] });
-    S.deliveries = [row()];
+    r1 = addRec({ status: 'sent', sent_at: new Date(NOW - 150 * 1000), delivery_status: 'accepted', delivery_id: 'g555', account_id: 9, cascade: ['tdlib'] });
+    S.deliveries = [drow(r1)];
   });
 
   test('status 5 с «исход неизвестен» → unknown, каскад не продолжается', async () => {
     transport.getDeliveryStatus.mockResolvedValue({ status: { status_id: 5, description: 'Невозможно доставить' }, error: 'шлюз перезапущен, исход неизвестен' });
     await w.checkDeliveries(NOW);
-    expect(transport.getDeliveryStatus).toHaveBeenCalledWith(7, 'tdlib', '555', { accountId: 9 });
+    expect(transport.getDeliveryStatus).toHaveBeenCalledWith(7, 'tdlib', 'g555', { accountId: 9 });
     expect(rec(1).delivery_status).toBe('unknown');
     expect(rec(1).status).toBe('sent');
     expect(sender.sendToRecipient).not.toHaveBeenCalled();
@@ -396,7 +420,7 @@ describe('checkDeliveries', () => {
   });
 
   test('status 5 позже 8 мин после отправки → unknown', async () => {
-    S.deliveries = [row({ sent_at: new Date(NOW - 9 * 60 * 1000) })];
+    S.deliveries = [drow(r1, { sent_at: new Date(NOW - 9 * 60 * 1000) })];
     transport.getDeliveryStatus.mockResolvedValue({ status: { status_id: 5 } });
     await w.checkDeliveries(NOW);
     expect(rec(1).delivery_status).toBe('unknown');
@@ -413,25 +437,178 @@ describe('checkDeliveries', () => {
     await w.checkDeliveries(NOW);
     expect(rec(1).delivery_status).toBe('accepted');
     expect(rec(1).checked_at).toBeTruthy();
-    S.deliveries = [row({ sent_at: new Date(NOW - 11 * 60 * 1000) })];
+    S.deliveries = [drow(r1, { sent_at: new Date(NOW - 11 * 60 * 1000) })];
     await w.checkDeliveries(NOW);
     expect(rec(1).delivery_status).toBe('unknown');
   });
 
-  test('ошибка чтения → unknown', async () => {
-    transport.getDeliveryStatus.mockRejectedValue(new Error('500'));
+  test('ошибка чтения статуса не финальна: до 10 мин — accepted (перечитаем), после — unknown', async () => {
+    // №65 рассылки 3: один таймаут Chatpush 15 с навсегда записал «доставка неизвестна».
+    transport.getDeliveryStatus.mockRejectedValue(new Error('timeout of 15000ms exceeded'));
+    await w.checkDeliveries(NOW);
+    expect(rec(1).delivery_status).toBe('accepted');
+    expect(rec(1).checked_at).toBeTruthy();
+    expect(mockLog.warn).toHaveBeenCalledWith(expect.stringContaining('timeout of 15000ms exceeded'));
+    S.deliveries = [drow(r1, { sent_at: new Date(NOW - 11 * 60 * 1000) })];
     await w.checkDeliveries(NOW);
     expect(rec(1).delivery_status).toBe('unknown');
   });
 });
 
+describe('checkDeliveries — коды Chatpush (рассылка №3, 06.11.2026)', () => {
+  const NF_TG = { status: { status_id: 58, description: 'Пользователь не найден в Telegram' } };
+  const NR_MAX = { status: { status_id: 55, description: 'Клиент не зарегистрирован в MAX' } };
+  const sentRec = (over = {}) => addRec({
+    status: 'sent', sent_at: new Date(NOW - 150 * 1000), delivery_status: 'accepted', delivery_id: '408628094', account_id: 8,
+    cascade: ['tdlib', 'whatsapp', 'max'], ...over,
+  });
+
+  test('16 «Прочитано» → delivered (раньше: «доставка неизвестна» через 10 мин)', async () => {
+    addBroadcast();
+    const r = sentRec();
+    S.deliveries = [drow(r)];
+    transport.getDeliveryStatus.mockResolvedValue({ status: { status_id: 16, description: 'Прочитано' } });
+    await w.checkDeliveries(NOW);
+    expect(r.delivery_status).toBe('delivered');
+  });
+
+  test('2 «Доставлено» → delivered; 6 «Принято» — ждём', async () => {
+    addBroadcast();
+    const a = sentRec();
+    const b = sentRec({ delivery_id: '408628095' });
+    S.deliveries = [drow(a), drow(b)];
+    transport.getDeliveryStatus.mockImplementation(async (_s, _c, id) => (id === '408628094'
+      ? { status: { status_id: 2, description: 'Доставлено' } } : { status: { status_id: 6, description: 'Принято' } }));
+    await w.checkDeliveries(NOW);
+    expect(a.delivery_status).toBe('delivered');
+    expect(b.delivery_status).toBe('accepted');
+  });
+
+  test('58 «не найден в Telegram» → получатель на следующий шаг каскада, «ушло» −1', async () => {
+    const b = addBroadcast({ sent: 5 });
+    const r = sentRec();
+    S.deliveries = [drow(r)];
+    transport.getDeliveryStatus.mockResolvedValue(NF_TG);
+    await w.checkDeliveries(NOW);
+    expect(r).toMatchObject({
+      status: 'pending', step: 1, channel: 'whatsapp', sent_at: null, delivery_id: null, account_id: null,
+      delivery_status: null, error: 'Пользователь не найден в Telegram',
+    });
+    expect(r.cascade_log[r.cascade_log.length - 1]).toEqual(expect.objectContaining({
+      from: 'tdlib', to: 'whatsapp', why: 'not_registered', error: 'Пользователь не найден в Telegram',
+      sent_at: new Date(NOW - 150 * 1000).toISOString(), delivery_id: '408628094',
+    }));
+    expect(b.sent).toBe(4);
+    expect(sender.sendToRecipient).not.toHaveBeenCalled(); // отправка — следующим тиком, по правилам паузы
+    // следующий тик: уходит в WhatsApp, «ушло» снова 5
+    await w.processBroadcast(b, NOW);
+    expect(sender.sendToRecipient).toHaveBeenCalledWith(expect.objectContaining({ phone: r.phone, channel: 'whatsapp' }));
+    expect(r.status).toBe('sent');
+    expect(b.sent).toBe(5);
+  });
+
+  test('следующий мессенджер выключен в рассылке — перескакиваем через него', async () => {
+    const b = addBroadcast();
+    b.channel_settings.whatsapp.enabled = false;
+    const r = sentRec();
+    S.deliveries = [drow(r)];
+    transport.getDeliveryStatus.mockResolvedValue(NF_TG);
+    await w.checkDeliveries(NOW);
+    expect(r).toMatchObject({ status: 'pending', step: 2, channel: 'max' });
+  });
+
+  test('55 на последнем шаге → undeliverable с причиной, «ушло» не меняется', async () => {
+    const b = addBroadcast({ sent: 5 });
+    const r = sentRec({ cascade: ['tdlib', 'whatsapp', 'max'], step: 2, channel: 'max', account_id: 10 });
+    S.deliveries = [drow(r)];
+    transport.getDeliveryStatus.mockResolvedValue(NR_MAX);
+    await w.checkDeliveries(NOW);
+    expect(r).toMatchObject({ status: 'sent', channel: 'max', delivery_status: 'undeliverable', error: 'Клиент не зарегистрирован в MAX' });
+    expect(b.sent).toBe(5);
+  });
+
+  test('рассылка отменена или завершена — каскад не продолжаем, только undeliverable', async () => {
+    addBroadcast({ status: 'cancelled', cancel_requested: true });
+    const r = sentRec();
+    S.deliveries = [drow(r)];
+    transport.getDeliveryStatus.mockResolvedValue(NF_TG);
+    await w.checkDeliveries(NOW);
+    expect(r).toMatchObject({ status: 'sent', delivery_status: 'undeliverable', error: 'Пользователь не найден в Telegram' });
+
+    bc(1).status = 'completed'; bc(1).cancel_requested = false;
+    const r2 = sentRec({ delivery_id: '408628096' });
+    S.deliveries = [drow(r2)];
+    await w.checkDeliveries(NOW);
+    expect(r2).toMatchObject({ status: 'sent', delivery_status: 'undeliverable' });
+  });
+
+  test('без каскада в рассылке (один мессенджер) — undeliverable', async () => {
+    addBroadcast();
+    const r = sentRec({ cascade: ['tdlib'] });
+    S.deliveries = [drow(r)];
+    transport.getDeliveryStatus.mockResolvedValue(NF_TG);
+    await w.checkDeliveries(NOW);
+    expect(r).toMatchObject({ status: 'sent', delivery_status: 'undeliverable' });
+  });
+
+  test('ушедшая дальше попытка расходует ЛИМИТ мессенджера-отправителя', async () => {
+    const b = addBroadcast();
+    b.channel_settings.tdlib.limit = 1;
+    const r = sentRec();
+    const r2 = addRec({ cascade: ['tdlib', 'whatsapp'], sort_order: 100 });
+    S.deliveries = [drow(r)];
+    transport.getDeliveryStatus.mockResolvedValue(NF_TG);
+    await w.checkDeliveries(NOW);
+    await w.processBroadcast(b, NOW);
+    // tdlib: 1 попытка из 1 → r2 уходит по лимиту в WhatsApp, а не в Telegram
+    expect(r2.cascade_log).toEqual([expect.objectContaining({ from: 'tdlib', to: 'whatsapp', why: 'limit' })]);
+    expect(sender.sendToRecipient).toHaveBeenCalledTimes(1);
+    expect(sender.sendToRecipient).toHaveBeenCalledWith(expect.objectContaining({ phone: r.phone, channel: 'whatsapp' }));
+  });
+
+  test('ушедшая дальше попытка держит ПАУЗУ мессенджера-отправителя', async () => {
+    const b = addBroadcast();
+    b.channel_settings.tdlib.delay_sec = 300; // отправлено 150 с назад → пауза ещё 150 с
+    const r = sentRec();
+    const r2 = addRec({ cascade: ['tdlib'], sort_order: 100 });
+    S.deliveries = [drow(r)];
+    transport.getDeliveryStatus.mockResolvedValue(NF_TG);
+    await w.checkDeliveries(NOW);
+    await w.processBroadcast(b, NOW);
+    expect(r2.status).toBe('pending');
+    expect(sender.sendToRecipient).toHaveBeenCalledTimes(1);
+    expect(sender.sendToRecipient).toHaveBeenCalledWith(expect.objectContaining({ phone: r.phone, channel: 'whatsapp' }));
+  });
+});
+
+describe('завершение рассылки ждёт сверку, если каскад ещё может продолжиться', () => {
+  test('отправлено, вердикта нет, следующий шаг есть — не завершаем', async () => {
+    const b = addBroadcast();
+    addRec({ status: 'sent', sent_at: new Date(NOW - 60 * 1000), delivery_status: 'accepted', delivery_id: '1', cascade: ['tdlib', 'max'] });
+    await w.processBroadcast(b, at(22, 0));
+    expect(bc(1).status).toBe('in_progress');
+  });
+  test('последний шаг каскада или без delivery_id — ждать нечего, завершаем', async () => {
+    const b = addBroadcast();
+    addRec({ status: 'sent', sent_at: new Date(NOW - 60 * 1000), delivery_status: 'accepted', delivery_id: '1', cascade: ['tdlib'] });
+    addRec({ status: 'sent', sent_at: new Date(NOW - 60 * 1000), delivery_status: 'accepted', delivery_id: null, cascade: ['tdlib', 'max'] });
+    await w.processBroadcast(b, at(22, 0));
+    expect(bc(1).status).toBe('completed');
+  });
+});
+
 describe('deliveryVerdict', () => {
-  test('чистая трактовка статусов', () => {
-    expect(w.deliveryVerdict(null, 0)).toBe('unknown');
-    expect(w.deliveryVerdict({ status: { status_id: 2 } }, 0)).toBe('delivered');
-    expect(w.deliveryVerdict({ status: { status_id: 4 } }, 0)).toBe('delivered');
-    expect(w.deliveryVerdict({ status: { status_id: 5, description: 'исход неизвестен' } }, 0)).toBe('unknown');
-    expect(w.deliveryVerdict({ status: { status_id: 1 } }, 60 * 1000)).toBeNull();
+  test('чистая трактовка статусов: таблица кодов — по провайдеру (id g<n> — шлюз, число — Chatpush)', () => {
+    expect(w.deliveryVerdict(null, 0, '1')).toBe('unknown');
+    expect(w.deliveryVerdict({ status: { status_id: 2 } }, 0, '1')).toBe('delivered');
+    expect(w.deliveryVerdict({ status: { status_id: 16 } }, 0, '1')).toBe('delivered');
+    expect(w.deliveryVerdict({ status: { status_id: 4 } }, 0, 'g1')).toBe('delivered');
+    expect(w.deliveryVerdict({ status: { status_id: 4 } }, 60 * 1000, '1')).toBeNull(); // у Chatpush 4 — не «Прочитано»
+    expect(w.deliveryVerdict({ status: { status_id: 58, description: 'Пользователь не найден в Telegram' } }, 0, '1')).toBe('not_registered');
+    expect(w.deliveryVerdict({ status: { status_id: 55 } }, 20 * 60 * 1000, '1')).toBe('not_registered'); // отказ доказан и поздно
+    expect(w.deliveryVerdict({ status: { status_id: 5, description: 'исход неизвестен' } }, 0, 'g1')).toBe('unknown');
+    expect(w.deliveryVerdict({ status: { status_id: 1 } }, 60 * 1000, 'g1')).toBeNull();
+    expect(w.deliveryVerdict({ status: { status_id: 6 } }, 11 * 60 * 1000, '1')).toBe('unknown');
   });
 });
 
@@ -483,6 +660,16 @@ describe('SQL-константы', () => {
     expect(w.ACTIVE_SQL).toMatch(/transport\s*=\s*'messengers'/);
     expect(w.ACTIVE_SQL).toMatch(/DISTINCT ON \(salon_id\)/);
     expect(w.STATS_SQL).toMatch(/status IN \('sent','sending'\)/);
+    expect(w.STATS_SQL).toMatch(/'not_registered'/); // ушедшие дальше попытки держат паузу и лимит
     expect(w.HEADS_SQL).toMatch(/channel = ANY\(\$2::text\[\]\)/);
+    for (const col of ['r.cascade', 'r.step', 'b.status AS broadcast_status', 'b.cancel_requested', 'b.channel_settings']) {
+      expect(w.CHECK_SQL).toContain(col);
+    }
+    // фейк БД выше повторяет эти условия — реальный SQL сверяется тут и живьём (broadcast-messengers-explain.js)
+    expect(w.SQL.hasOpen).toMatch(/delivery_status='accepted' AND delivery_id IS NOT NULL/);
+    expect(w.SQL.hasOpen).toMatch(/step < COALESCE\(array_length\(cascade, 1\), 0\) - 1/);
+    expect(w.SQL.notRegisteredNext).toMatch(/WHERE id=\$1 AND status='sent' AND delivery_status='accepted'/);
+    // у новой доставки — свежий цикл сверки (e2e 06.11: checked_at=NOW() откладывал сверку повторной отправки)
+    expect(w.SQL.notRegisteredNext).toMatch(/checked_at=NULL/);
   });
 });

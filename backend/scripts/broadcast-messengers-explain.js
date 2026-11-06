@@ -39,9 +39,32 @@ async function explain(client, label, sql, params) {
     await explain(client, 'HEADS', w.HEADS_SQL, [id, CHANNELS]);
     await explain(client, 'LIMIT_PENDING', w.LIMIT_PENDING_SQL, [id, CHANNELS]);
     await explain(client, 'CHECK', w.CHECK_SQL, []);
+    await explain(client, 'HAS_OPEN', w.SQL.hasOpen, [id]);
     // CLOSE_STALE — запись: в транзакции и откат.
     await client.query('BEGIN');
     try { await explain(client, 'CLOSE_STALE', w.CLOSE_STALE_SQL, []); } finally { await client.query('ROLLBACK'); }
+
+    // «Нет в мессенджере» (06.11.2026): STATS с записью not_registered в cascade_log (каст sent_at → timestamptz
+    // и UNION-типы проверяются только на реальной строке) и пишущие запросы сверки — в транзакции с откатом.
+    const row = await db.oneOrNone(
+      `SELECT id, channel FROM broadcast_recipients WHERE broadcast_id = $1 AND status = 'sent' ORDER BY id LIMIT 1`, [id]);
+    if (!row) {
+      console.warn('⚠️  в рассылке нет отправленных строк — проверка not_registered пропущена');
+    } else {
+      const entry = JSON.stringify([{ at: new Date().toISOString(), from: row.channel, to: 'whatsapp', why: 'not_registered',
+        error: 'Пользователь не найден в Telegram', sent_at: new Date(Date.now() - 60000).toISOString(), delivery_id: '1' }]);
+      await client.query('BEGIN');
+      try {
+        await client.query(`UPDATE broadcast_recipients SET cascade_log = cascade_log || $2::jsonb, delivery_status = 'accepted' WHERE id = $1`, [row.id, entry]);
+        const { rows: st } = await client.query(w.STATS_SQL, [id]);
+        console.log('STATS с not_registered:', st.map(r => `${r.channel}: n=${r.n} last=${r.last_ms ? new Date(Number(r.last_ms)).toISOString() : '-'}`).join('; '));
+        await explain(client, 'STATS+NR', w.STATS_SQL, [id]);
+        await explain(client, 'DELIV_STATUS', w.SQL.deliveryStatus, [row.id, 'undeliverable', 'Клиент не зарегистрирован в MAX']);
+        await client.query(`UPDATE broadcast_recipients SET delivery_status = 'accepted' WHERE id = $1`, [row.id]);
+        await explain(client, 'NR_NEXT', w.SQL.notRegisteredNext, [row.id, 1, 'whatsapp', 'Пользователь не найден в Telegram', entry]);
+        await explain(client, 'DEC_SENT', w.SQL.decSent, [id]);
+      } finally { await client.query('ROLLBACK'); }
+    }
   } finally {
     client.release();
   }
