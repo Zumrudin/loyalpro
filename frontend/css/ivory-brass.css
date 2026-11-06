@@ -239,3 +239,12 @@ html[data-skin="ivory"] .stg-hdr{font-family:var(--serif);font-size:26px;font-we
 /* Чат на десктопе: высота считалась от прежней шапки 52px и паддинга 22px. */
 @media (min-width:1024px){html[data-skin="ivory"] .chat-layout{height:calc(100vh - 72px - 30px - 36px - 50px)}}
 @media (min-width:701px) and (max-width:1023px){html[data-skin="ivory"] .chat-layout{height:calc(100vh - 60px - 48px - 50px)}}
+
+/* ═══════════════════ ДАШБОРД ВЛАДЕЛЬЦА: ВКЛАДКИ (этап 3) ═══════════════════ */
+.dash-tabs{margin:0 0 18px}
+.dash-tabs .tab{flex:0 1 auto;padding:7px 18px}
+html[data-skin="ivory"] .dash-tabs{margin:2px 0 22px}
+html[data-skin="ivory"] .dash-tabs .tab{font-size:13.5px}
+html[data-skin="ivory"] .msg-head .ttl{font-family:var(--serif);font-size:24px;font-weight:600}
+html[data-skin="ivory"] .rev-breakdown{border-top-color:var(--bd2)}
+html[data-skin="ivory"] .rev-val{font-variant-numeric:tabular-nums}
