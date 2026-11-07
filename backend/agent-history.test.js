@@ -663,20 +663,39 @@ describe('lastOutgoingAuthor', () => {
 });
 
 // window-handover (инцидент 2026-09-19): «бот только что вёл этот диалог» =
-// последняя реплика агента не старше N минут.
-describe('lastAgentReplyAt', () => {
+// последняя реплика агента не старше N минут. Текст реплики — чтобы отличить
+// «Ок» на её вопрос от «Ок» после прощания (инцидент 07.11.2026).
+describe('lastAgentReply', () => {
   test('нет реплик агента → null', async () => {
     db.oneOrNone.mockResolvedValue(null);
-    expect(await history.lastAgentReplyAt(1, 'k')).toBeNull();
+    expect(await history.lastAgentReply(1, 'k')).toBeNull();
     const [sql, params] = db.oneOrNone.mock.calls[0];
     expect(sql).toMatch(/authored_by\s*=\s*'agent'/);
     expect(sql).toMatch(/direction\s*=\s*'outgoing'/);
     expect(params).toEqual([1, 'k']);
   });
 
-  test('msg_ts (секунды) → миллисекунды', async () => {
-    db.oneOrNone.mockResolvedValue({ ts: '1789799342' });
-    expect(await history.lastAgentReplyAt(1, 'k')).toBe(1789799342000);
+  test('msg_ts (секунды) → миллисекунды, текст как есть', async () => {
+    db.oneOrNone.mockResolvedValue({ ts: '1789799342', text: 'Записала Вас. До встречи!' });
+    expect(await history.lastAgentReply(1, 'k')).toEqual({ at: 1789799342000, text: 'Записала Вас. До встречи!' });
+  });
+
+  test('текста нет (NULL) → text: null', async () => {
+    db.oneOrNone.mockResolvedValue({ ts: '1789799342', text: null });
+    expect(await history.lastAgentReply(1, 'k')).toEqual({ at: 1789799342000, text: null });
+  });
+});
+
+// Серия пациента после реплики Милы: дебаунс отдаёт диспетчеру только последнее
+// сообщение, а решению о переводе нужны все.
+describe('incomingTextsAfter', () => {
+  test('входящие строго после момента, по порядку; вложение → null', async () => {
+    db.any.mockResolvedValue([{ text: 'А на чистку можно?' }, { text: null }, { text: 'Ок' }]);
+    expect(await history.incomingTextsAfter(1, 'k', 1789799342000)).toEqual(['А на чистку можно?', null, 'Ок']);
+    const [sql, params] = db.any.mock.calls[0];
+    expect(sql).toMatch(/direction\s*=\s*'incoming'/);
+    expect(sql).toMatch(/file_url/);
+    expect(params).toEqual([1, 'k', 1789799342]);
   });
 });
 

@@ -216,6 +216,7 @@ async function process(salonId, dialogKey, meta, opts = {}) {
         await windowHandover.onOutsideSchedule(salonId, dialogKey, meta, {
           state: opts.dialogState || dialogStateDefault,
           history: opts.history || historyDefault,
+          pending: opts.pendingReplies || pendingReplies,
           escalate, send,
           handoverText: () => adminHours.handoverText(adminOffNow()),
           maxAgeMs: (opts.windowHandoverMin != null ? opts.windowHandoverMin : config.AGENT_WINDOW_HANDOVER_MIN) * 60 * 1000,

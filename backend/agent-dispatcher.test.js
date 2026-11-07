@@ -1024,11 +1024,15 @@ test('принудительный перевод после провала за
 // → gate skip (outside-schedule), ни эскалации, ни фразы, ни подсветки.
 describe('gate outside-schedule → перевод живого диалога', () => {
   const NOW = Date.now();
+  function history(at, text, incoming = []) {
+    return { lastAgentReply: jest.fn(async () => ({ at, text })), incomingTextsAfter: jest.fn(async () => incoming) };
+  }
   function wdeps(over = {}) {
     return deps({
       settings: { isAllowed: jest.fn(async () => ({ allow: false, reason: 'outside-schedule' })) },
       dialogState: { get: jest.fn(async () => ({ status: 'bot' })) },
-      history: { lastAgentReplyAt: jest.fn(async () => NOW - 3 * 60 * 1000) },
+      history: history(NOW - 3 * 60 * 1000, 'Подскажите, на какое время Вас записать?'),
+      pendingReplies: { peek: jest.fn(() => []) },
       windowHandoverMin: 60,
       ...over,
     });
@@ -1046,7 +1050,7 @@ describe('gate outside-schedule → перевод живого диалога',
   });
 
   test('реплика Милы 5 часов назад → тишина, как раньше', async () => {
-    const d = wdeps({ history: { lastAgentReplyAt: jest.fn(async () => NOW - 5 * 60 * 60 * 1000) } });
+    const d = wdeps({ history: history(NOW - 5 * 60 * 60 * 1000, 'Подскажите, на какое время Вас записать?') });
     dispatcher.enqueue(1, 'k', m, d);
     await jest.advanceTimersByTimeAsync(1000);
     expect(d.escalate).not.toHaveBeenCalled();
@@ -1074,6 +1078,38 @@ describe('gate outside-schedule → перевод живого диалога',
     await jest.advanceTimersByTimeAsync(1000);
     expect(d.dialogState.get).not.toHaveBeenCalled();
     expect(d.send).not.toHaveBeenCalled();
+  });
+
+  // Инцидент 07.11.2026 (79292633336): «Ок» в 09:37 на «записала Вас… До встречи!»
+  // из 09:09 уходил в «Передаю Ваш вопрос администратору».
+  const booked = 'Татьяна, записала Вас на фотоомоложение лица к Астемиру Алексеевичу в четверг, 12 ноября, в 10:30. До встречи!';
+
+  test('«Ок» после «записала… До встречи!» → тишина, без эскалации', async () => {
+    const d = wdeps({ history: history(NOW - 29 * 60 * 1000, booked, ['Ок']) });
+    dispatcher.enqueue(1, 'k', { ...meta, text: 'Ок' }, d);
+    await jest.advanceTimersByTimeAsync(1000);
+    expect(d.escalate).not.toHaveBeenCalled();
+    expect(d.send).not.toHaveBeenCalled();
+    expect(d.orchestrator.runDialog).not.toHaveBeenCalled();
+  });
+
+  test('«Ок» на вопрос Милы — согласие → перевод', async () => {
+    const d = wdeps({ history: history(NOW - 2 * 60 * 1000, 'В 10:30 свободно. Записать Вас?', ['Ок']) });
+    dispatcher.enqueue(1, 'k', { ...meta, text: 'Ок' }, d);
+    await jest.advanceTimersByTimeAsync(1000);
+    expect(d.escalate).toHaveBeenCalledWith(1, 'k', 'window_closed');
+    expect(d.send).toHaveBeenCalledTimes(1);
+  });
+
+  test('свежая реплика Милы ещё не в БД (эхо опаздывает) → берётся из pending-replies', async () => {
+    const d = wdeps({
+      history: history(NOW - 29 * 60 * 1000, booked, ['Ок']),
+      pendingReplies: { peek: jest.fn(() => [{ text: 'Могу добавить консультацию в 11:00.', ts: Math.floor(NOW / 1000) - 60 }]) },
+    });
+    dispatcher.enqueue(1, 'k', { ...meta, text: 'Ок' }, d);
+    await jest.advanceTimersByTimeAsync(1000);
+    expect(d.pendingReplies.peek).toHaveBeenCalledWith(1, 'k', expect.any(Number));
+    expect(d.escalate).toHaveBeenCalledWith(1, 'k', 'window_closed');
   });
 });
 
