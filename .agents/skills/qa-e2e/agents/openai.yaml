@@ -1,0 +1,4 @@
+interface:
+  display_name: "QA and E2E"
+  short_description: "Тесты API, регрессии и browser E2E"
+  default_prompt: "Use $qa-e2e to verify this change with focused automated tests."

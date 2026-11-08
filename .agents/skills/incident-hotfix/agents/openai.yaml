@@ -1,0 +1,4 @@
+interface:
+  display_name: "Incident Hotfix"
+  short_description: "Быстрый безопасный фикс с проверкой"
+  default_prompt: "Use $incident-hotfix to investigate and safely fix this production issue."

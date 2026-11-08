@@ -1,0 +1,4 @@
+interface:
+  display_name: "Feature Delivery"
+  short_description: "Поставка фичи от плана до проверок"
+  default_prompt: "Use $feature-delivery to implement this feature safely from specification through verification."

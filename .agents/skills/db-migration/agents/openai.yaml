@@ -1,0 +1,4 @@
+interface:
+  display_name: "Safe DB Migration"
+  short_description: "Безопасные миграции PostgreSQL для LoyalPro"
+  default_prompt: "Use $db-migration to design and implement this PostgreSQL schema change safely."

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Security and Privacy Review"
+  short_description: "Проверка доступа, PII и рисков клиники"
+  default_prompt: "Use $security-privacy-review to review this change for security and patient-data risks."
