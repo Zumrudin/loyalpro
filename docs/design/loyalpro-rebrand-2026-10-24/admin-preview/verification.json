@@ -1,0 +1,204 @@
+{
+  "browser": "Chromium 156.0.8078.4",
+  "screens": [
+    {
+      "screen": "owner",
+      "desktop": true,
+      "widths": [
+        1440,
+        768,
+        390,
+        360
+      ],
+      "states": [
+        "ready",
+        "loading",
+        "empty",
+        "error"
+      ],
+      "mobileMenu": true
+    },
+    {
+      "screen": "admin",
+      "desktop": true,
+      "widths": [
+        1440,
+        768,
+        390,
+        360
+      ],
+      "states": [
+        "ready",
+        "loading",
+        "empty",
+        "error"
+      ],
+      "mobileMenu": true
+    },
+    {
+      "screen": "specialist",
+      "desktop": true,
+      "widths": [
+        1440,
+        768,
+        390,
+        360
+      ],
+      "states": [
+        "ready",
+        "loading",
+        "empty",
+        "error"
+      ],
+      "mobileMenu": true
+    },
+    {
+      "screen": "messengers",
+      "desktop": true,
+      "widths": [
+        1440,
+        768,
+        390,
+        360
+      ],
+      "states": [
+        "ready",
+        "loading",
+        "empty",
+        "error"
+      ],
+      "mobileMenu": true
+    },
+    {
+      "screen": "loyalty",
+      "desktop": true,
+      "widths": [
+        1440,
+        768,
+        390,
+        360
+      ],
+      "states": [
+        "ready",
+        "loading",
+        "empty",
+        "error"
+      ],
+      "mobileMenu": true
+    },
+    {
+      "screen": "patients",
+      "desktop": true,
+      "widths": [
+        1440,
+        768,
+        390,
+        360
+      ],
+      "states": [
+        "ready",
+        "loading",
+        "empty",
+        "error"
+      ],
+      "mobileMenu": true
+    },
+    {
+      "screen": "records",
+      "desktop": true,
+      "widths": [
+        1440,
+        768,
+        390,
+        360
+      ],
+      "states": [
+        "ready",
+        "loading",
+        "empty",
+        "error"
+      ],
+      "mobileMenu": true
+    },
+    {
+      "screen": "chat",
+      "desktop": true,
+      "widths": [
+        1440,
+        768,
+        390,
+        360
+      ],
+      "states": [
+        "ready",
+        "loading",
+        "empty",
+        "error"
+      ],
+      "mobileMenu": true
+    },
+    {
+      "screen": "care",
+      "desktop": true,
+      "widths": [
+        1440,
+        768,
+        390,
+        360
+      ],
+      "states": [
+        "ready",
+        "loading",
+        "empty",
+        "error"
+      ],
+      "mobileMenu": true
+    },
+    {
+      "screen": "economics",
+      "desktop": true,
+      "widths": [
+        1440,
+        768,
+        390,
+        360
+      ],
+      "states": [
+        "ready",
+        "loading",
+        "empty",
+        "error"
+      ],
+      "mobileMenu": true
+    },
+    {
+      "screen": "settings",
+      "desktop": true,
+      "widths": [
+        1440,
+        768,
+        390,
+        360
+      ],
+      "states": [
+        "ready",
+        "loading",
+        "empty",
+        "error"
+      ],
+      "mobileMenu": true
+    }
+  ],
+  "gallery": true,
+  "patientSearch": true,
+  "patientDialog": true,
+  "consoleErrors": [],
+  "externalRequests": [],
+  "notRun": [
+    "Real API integration",
+    "Backend unit tests",
+    "WebKit/Safari",
+    "Deployment"
+  ],
+  "date": "2026-10-24"
+}
