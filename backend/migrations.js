@@ -844,6 +844,50 @@ async function runMigrations(client) {
       ON broadcast_recipients (broadcast_id, telegram_chat_id)
   `).catch(() => {});
 
+  // ── Рассылки через мессенджеры клиники (спека 2026-11-01) ──────
+  // transport: telegram_bot — прежний бот-путь (services/broadcast.js), messengers —
+  // services/broadcast-messengers/. Получатели мессенджеров адресуются телефоном,
+  // telegram_chat_id у них NULL (старый уникальный индекс NULL не сравнивает).
+  await client.query(`
+    ALTER TABLE broadcasts
+      ADD COLUMN IF NOT EXISTS transport        VARCHAR(20) NOT NULL DEFAULT 'telegram_bot',
+      ADD COLUMN IF NOT EXISTS audience_source  VARCHAR(10) NOT NULL DEFAULT 'filters',
+      ADD COLUMN IF NOT EXISTS image_url        TEXT,
+      ADD COLUMN IF NOT EXISTS cascade_enabled  BOOLEAN NOT NULL DEFAULT TRUE,
+      ADD COLUMN IF NOT EXISTS channel_settings JSONB NOT NULL DEFAULT '{}'::jsonb,
+      ADD COLUMN IF NOT EXISTS on_limit         VARCHAR(12) NOT NULL DEFAULT 'next_channel',
+      ADD COLUMN IF NOT EXISTS paused           BOOLEAN NOT NULL DEFAULT FALSE,
+      ADD COLUMN IF NOT EXISTS pause_reason     TEXT,
+      ADD COLUMN IF NOT EXISTS skipped          INTEGER NOT NULL DEFAULT 0
+  `).catch(() => {});
+
+  await client.query(`ALTER TABLE broadcast_recipients ALTER COLUMN telegram_chat_id DROP NOT NULL`).catch(() => {});
+
+  await client.query(`
+    ALTER TABLE broadcast_recipients
+      ADD COLUMN IF NOT EXISTS phone           VARCHAR(20),
+      ADD COLUMN IF NOT EXISTS cascade         TEXT[],
+      ADD COLUMN IF NOT EXISTS step            SMALLINT NOT NULL DEFAULT 0,
+      ADD COLUMN IF NOT EXISTS channel         VARCHAR(16),
+      ADD COLUMN IF NOT EXISTS reason          TEXT,
+      ADD COLUMN IF NOT EXISTS delivery_id     TEXT,
+      ADD COLUMN IF NOT EXISTS account_id      INTEGER,
+      ADD COLUMN IF NOT EXISTS delivery_status VARCHAR(20),
+      ADD COLUMN IF NOT EXISTS checked_at      TIMESTAMPTZ,
+      ADD COLUMN IF NOT EXISTS cascade_log     JSONB NOT NULL DEFAULT '[]'::jsonb,
+      ADD COLUMN IF NOT EXISTS sort_order      INTEGER NOT NULL DEFAULT 0
+  `).catch(() => {});
+
+  await client.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_broadcast_recipient_phone
+      ON broadcast_recipients (broadcast_id, phone) WHERE phone IS NOT NULL
+  `).catch(() => {});
+
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS idx_broadcast_recipients_queue
+      ON broadcast_recipients (broadcast_id, status, channel, sort_order)
+  `).catch(() => {});
+
   // ── Автоуведомления по событиям (v1: создание записи) ──────────
   // Правило: conditions = { logic:'and'|'or', items:[{type:'staff'|'category'|'service', ids:[…]}] },
   // channels = порядок каскада dispatch_routing Chatpush (['telegram','whatsapp',…]).
@@ -904,6 +948,142 @@ async function runMigrations(client) {
   await client.query(`
     CREATE INDEX IF NOT EXISTS idx_notification_sends_sent
       ON notification_sends (salon_id, sent_at DESC) WHERE status = 'sent'
+  `).catch(() => {});
+
+  // ── Уведомления YClients своими силами (замена Chatpush, 2026-10-13) ──
+  // Спека docs/superpowers/specs/2026-10-13-yclients-notifications-own-module-design.md.
+  // notification_rules получает новые trigger_type и поля; очередь — notification_jobs
+  // (notification_sends остаётся историей v1, воркер её больше не читает).
+  for (const col of [
+    'hours_before INTEGER',
+    'delay_minutes INTEGER',
+    'attachment_url TEXT',
+    'attachment_name VARCHAR(255)',
+    'on_no_show BOOLEAN NOT NULL DEFAULT TRUE',
+    'ask_confirmation BOOLEAN NOT NULL DEFAULT TRUE',
+  ]) {
+    await client.query(`ALTER TABLE notification_rules ADD COLUMN IF NOT EXISTS ${col}`).catch(() => {});
+  }
+
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS notification_settings (
+      salon_id             INTEGER PRIMARY KEY REFERENCES salons(id) ON DELETE CASCADE,
+      mode                 VARCHAR(10) NOT NULL DEFAULT 'off',
+      default_channels     JSONB NOT NULL DEFAULT '["tdlib","whatsapp","max"]'::jsonb,   -- порядок каскада
+      prefer_last_channel  BOOLEAN NOT NULL DEFAULT TRUE,   -- мессенджер последней переписки первым
+      quiet_from           VARCHAR(5) DEFAULT '21:00',
+      quiet_to             VARCHAR(5) DEFAULT '09:00',
+      confirm_reply_text   TEXT NOT NULL DEFAULT '✅ Ваша запись подтверждена.\nБудем ждать вас!',
+      rating_high_text     TEXT NOT NULL DEFAULT 'Спасибо за отличную оценку нашей работы! 🙏🏻',
+      rating_mid_text      TEXT NOT NULL DEFAULT 'Спасибо за оценку! Подскажите, пожалуйста, что нам стоит улучшить? Мы обязательно учтём.',
+      rating_low_text      TEXT NOT NULL DEFAULT 'Благодарим Вас за оценку.\nНе могли бы Вы рассказать, что именно Вас не устроило? Мы постараемся принять меры и, по возможности, исправить данную ситуацию.',
+      rating_escalate_low  BOOLEAN NOT NULL DEFAULT TRUE,
+      pilot_phones         JSONB NOT NULL DEFAULT '[]'::jsonb,   -- shadow: слать только этим номерам
+      updated_at           TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `).catch(() => {});
+  // Пилотные номера (16.10.2026): в shadow письма уходят ТОЛЬКО им, остальные — журнал тени.
+  await client.query(`ALTER TABLE notification_settings ADD COLUMN IF NOT EXISTS pilot_phones JSONB NOT NULL DEFAULT '[]'::jsonb`).catch(() => {});
+
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS notification_jobs (
+      id                  BIGSERIAL PRIMARY KEY,
+      salon_id            INTEGER NOT NULL REFERENCES salons(id) ON DELETE CASCADE,
+      rule_id             INTEGER REFERENCES notification_rules(id) ON DELETE SET NULL,
+      rule_title          VARCHAR(255),
+      trigger_type        VARCHAR(40) NOT NULL,
+      yclients_record_id  BIGINT NOT NULL DEFAULT 0,
+      visit_datetime      TIMESTAMPTZ,
+      client_id           INTEGER REFERENCES clients(id) ON DELETE SET NULL,
+      phone               VARCHAR(32),
+      scheduled_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      status              VARCHAR(20) NOT NULL DEFAULT 'pending',
+      attempts            INTEGER NOT NULL DEFAULT 0,
+      error               TEXT,
+      rendered_text       TEXT NOT NULL,
+      attachment_url      TEXT,
+      routing             JSONB,                     -- рассчитанный каскад этой отправки
+      cascade_pos         INTEGER NOT NULL DEFAULT 0,  -- с какого шага (продолжение после «Невозможно доставить»)
+      cascade_log         JSONB NOT NULL DEFAULT '[]'::jsonb,  -- шаги [{ch,res,err?,at}]
+      channel_used        VARCHAR(30),
+      delivery_id         VARCHAR(120),
+      account_id          VARCHAR(40),               -- аккаунт, которым ушло (для сверки доставки)
+      check_at            TIMESTAMPTZ,               -- когда сверить статус доставки
+      meta                JSONB NOT NULL DEFAULT '{}'::jsonb,
+      confirmed_at        TIMESTAMPTZ,
+      decision_reason     TEXT,
+      last_attempt_at     TIMESTAMPTZ,
+      created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      sent_at             TIMESTAMPTZ
+    )
+  `).catch(() => {});
+  // Один job на (правило, запись, момент визита): перенос даёт новый ключ,
+  // повтор вебхука — DO NOTHING. visit_datetime NULL у тестовых отправок —
+  // уникальность по NULL не работает, поэтому COALESCE на эпоху.
+  await client.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_notification_jobs_rule_record_visit
+      ON notification_jobs (rule_id, yclients_record_id, COALESCE(visit_datetime, 'epoch'::timestamptz))
+  `).catch(() => {});
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS idx_notification_jobs_due
+      ON notification_jobs (scheduled_at, id) WHERE status = 'pending'
+  `).catch(() => {});
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS idx_notification_jobs_check
+      ON notification_jobs (check_at) WHERE status = 'sent' AND check_at IS NOT NULL
+  `).catch(() => {});
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS idx_notification_jobs_record
+      ON notification_jobs (salon_id, yclients_record_id)
+  `).catch(() => {});
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS idx_notification_jobs_phone_sent
+      ON notification_jobs (salon_id, phone, sent_at DESC) WHERE status = 'sent'
+  `).catch(() => {});
+  // Под send-pacing.js: MAX(sent_at) по салону — как idx_notification_sends_sent выше.
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS idx_notification_jobs_sent
+      ON notification_jobs (salon_id, sent_at DESC) WHERE status = 'sent'
+  `).catch(() => {});
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS idx_notification_jobs_journal
+      ON notification_jobs (salon_id, created_at DESC)
+  `).catch(() => {});
+
+  // Последнее известное состояние записи — чтобы отличать перенос (datetime
+  // изменился) от прочих update: records к моменту хука уже перезаписан
+  // processRecordEvent, прежнего значения там нет.
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS notification_record_state (
+      salon_id            INTEGER NOT NULL REFERENCES salons(id) ON DELETE CASCADE,
+      yclients_record_id  BIGINT NOT NULL,
+      visit_datetime      TIMESTAMPTZ,
+      seance_length       INTEGER,
+      attendance          INTEGER NOT NULL DEFAULT 0,
+      deleted             BOOLEAN NOT NULL DEFAULT FALSE,
+      services            JSONB NOT NULL DEFAULT '[]'::jsonb,
+      staff_id            BIGINT,
+      client_yc_id        BIGINT,
+      phone               VARCHAR(32),
+      created_user_id     BIGINT,
+      updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      PRIMARY KEY (salon_id, yclients_record_id)
+    )
+  `).catch(() => {});
+
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS visit_ratings (
+      id                  BIGSERIAL PRIMARY KEY,
+      salon_id            INTEGER NOT NULL REFERENCES salons(id) ON DELETE CASCADE,
+      yclients_record_id  BIGINT NOT NULL,
+      client_id           INTEGER REFERENCES clients(id) ON DELETE SET NULL,
+      phone               VARCHAR(32),
+      rating              SMALLINT NOT NULL,
+      comment             TEXT,
+      source_job_id       BIGINT,
+      created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE (salon_id, yclients_record_id)
+    )
   `).catch(() => {});
 
   // ── Отдел заботы: программы касаний после состоявшегося визита ──
@@ -2035,6 +2215,457 @@ async function runMigrations(client) {
       if (!verdictMigrationError) throw unlockError;
     }
   }
+
+  // ── Экономика процедур (спека docs/superpowers/specs/2026-10-18-procedure-economics-design.md, §5) ──
+  // Товарные транзакции YClients: списания расходников (type_id 2), приходы (3),
+  // продажи, списания-потери. delete ставит deleted_at, строка остаётся (форензика).
+  // client.* из payload НЕ пишется (PII).
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS goods_transactions (
+      id                  BIGSERIAL PRIMARY KEY,
+      salon_id            INT NOT NULL REFERENCES salons(id) ON DELETE CASCADE,
+      yclients_txn_id     BIGINT NOT NULL,
+      document_id         BIGINT,
+      type_id             SMALLINT,
+      type_title          VARCHAR(100),
+      good_id             BIGINT,
+      good_title          VARCHAR(500),
+      storage_id          BIGINT,
+      unit_title          VARCHAR(50),
+      operation_unit_type SMALLINT,
+      amount              NUMERIC(14,4) NOT NULL DEFAULT 0,
+      cost_per_unit       NUMERIC(14,4),
+      cost                NUMERIC(14,2),
+      discount            NUMERIC(8,2),
+      record_id           BIGINT,
+      service_id          BIGINT,
+      service_title       VARCHAR(500),
+      master_id           BIGINT,
+      supplier_title      VARCHAR(255),
+      create_date         TIMESTAMPTZ,
+      last_change_date    TIMESTAMPTZ,
+      deleted_at          TIMESTAMPTZ,
+      source              VARCHAR(16) NOT NULL DEFAULT 'webhook',
+      raw                 JSONB,
+      created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE (salon_id, yclients_txn_id)
+    )
+  `).catch(() => {});
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS idx_goods_txn_record
+      ON goods_transactions (salon_id, record_id) WHERE deleted_at IS NULL AND record_id IS NOT NULL
+  `).catch(() => {});
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS idx_goods_txn_good_type_date
+      ON goods_transactions (salon_id, good_id, type_id, create_date DESC) WHERE deleted_at IS NULL
+  `).catch(() => {});
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS idx_goods_txn_salon_date
+      ON goods_transactions (salon_id, create_date) WHERE deleted_at IS NULL
+  `).catch(() => {});
+  // Списания бонусов по записи читаются отчётом по (salon_id, record_id).
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS idx_lct_salon_record
+      ON loyalty_card_transactions (salon_id, record_id) WHERE record_id IS NOT NULL
+  `).catch(() => {});
+
+  // Каталог товаров: единицы, себестоимость YClients, остатки, последняя закупка.
+  for (const col of [
+    'unit VARCHAR(50)', 'service_unit VARCHAR(50)', 'unit_equals NUMERIC(14,4)',
+    'actual_cost NUMERIC(14,4)', 'unit_actual_cost NUMERIC(14,4)', 'stock JSONB',
+    'last_receipt_price NUMERIC(14,4)', 'last_receipt_at TIMESTAMPTZ',
+  ]) {
+    await client.query(`ALTER TABLE yclients_goods_catalog ADD COLUMN IF NOT EXISTS ${col}`).catch(() => {});
+  }
+
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS goods_price_overrides (
+      salon_id   INT NOT NULL REFERENCES salons(id) ON DELETE CASCADE,
+      good_id    BIGINT NOT NULL,
+      unit_price NUMERIC(14,4) NOT NULL,
+      note       VARCHAR(500),
+      updated_by INT,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      PRIMARY KEY (salon_id, good_id)
+    )
+  `).catch(() => {});
+
+  // Техкарты: импорт YClients (yc_card_id) и нормы LoyalPro (source='manual', yc_card_id NULL).
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS tech_cards (
+      id         SERIAL PRIMARY KEY,
+      salon_id   INT NOT NULL REFERENCES salons(id) ON DELETE CASCADE,
+      yc_card_id BIGINT,
+      title      VARCHAR(500) NOT NULL DEFAULT '',
+      items      JSONB NOT NULL DEFAULT '[]',
+      source     VARCHAR(16) NOT NULL DEFAULT 'yclients',
+      synced_at  TIMESTAMPTZ,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `).catch(() => {});
+  await client.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_tech_cards_yc
+      ON tech_cards (salon_id, yc_card_id) WHERE yc_card_id IS NOT NULL
+  `).catch(() => {});
+
+  // Привязка техкарты к услуге (и, опционально, сотруднику). UNIQUE через COALESCE —
+  // NULL в staff_yc_id иначе не участвует в UNIQUE и дубли «для всех» проходили бы.
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS service_tech_cards (
+      id            SERIAL PRIMARY KEY,
+      salon_id      INT NOT NULL REFERENCES salons(id) ON DELETE CASCADE,
+      service_yc_id BIGINT NOT NULL,
+      staff_yc_id   BIGINT,
+      tech_card_id  INT NOT NULL REFERENCES tech_cards(id) ON DELETE CASCADE,
+      source        VARCHAR(16) NOT NULL DEFAULT 'learned',
+      updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `).catch(() => {});
+  await client.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_service_tech_cards
+      ON service_tech_cards (salon_id, service_yc_id, COALESCE(staff_yc_id, 0))
+  `).catch(() => {});
+
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS staff_pay_rules (
+      id              SERIAL PRIMARY KEY,
+      salon_id        INT NOT NULL REFERENCES salons(id) ON DELETE CASCADE,
+      staff_yc_id     BIGINT,
+      service_yc_id   BIGINT,
+      category_yc_id  BIGINT,
+      percent         NUMERIC(6,2) NOT NULL DEFAULT 0,
+      base            VARCHAR(20) NOT NULL DEFAULT 'gross',
+      fixed_per_visit NUMERIC(12,2) NOT NULL DEFAULT 0,
+      valid_from      DATE,
+      valid_to        DATE,
+      note            VARCHAR(500),
+      created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `).catch(() => {});
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS idx_staff_pay_rules_salon ON staff_pay_rules (salon_id)
+  `).catch(() => {});
+
+  // Схемы оплаты труда (спека 2026-10-19-economics-pay-schemes-design.md): линии в JSONB
+  // [{percent, base, payroll_multiplier|null, fixed_per_visit, categories:[], services:[]}].
+  // staff_pay_rules остаётся (никогда деструктивно), кодом больше не читается.
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS pay_schemes (
+      id         SERIAL PRIMARY KEY,
+      salon_id   INT NOT NULL REFERENCES salons(id) ON DELETE CASCADE,
+      title      VARCHAR(120) NOT NULL,
+      note       VARCHAR(500),
+      lines      JSONB NOT NULL DEFAULT '[]',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `).catch(() => {});
+  await client.query(`CREATE INDEX IF NOT EXISTS idx_pay_schemes_salon ON pay_schemes (salon_id)`).catch(() => {});
+  // Назначение схемы специалисту на период; ON DELETE RESTRICT — удаление назначенной
+  // схемы роутер отвергает (409), а не обнуляет оплату врача молча.
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS pay_scheme_assignments (
+      id          SERIAL PRIMARY KEY,
+      salon_id    INT NOT NULL REFERENCES salons(id) ON DELETE CASCADE,
+      staff_yc_id BIGINT NOT NULL,
+      scheme_id   INT NOT NULL REFERENCES pay_schemes(id) ON DELETE RESTRICT,
+      valid_from  DATE,
+      valid_to    DATE,
+      note        VARCHAR(500),
+      created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `).catch(() => {});
+  await client.query(`CREATE INDEX IF NOT EXISTS idx_pay_scheme_assignments_staff ON pay_scheme_assignments (salon_id, staff_yc_id)`).catch(() => {});
+
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS economics_settings (
+      salon_id                  INT PRIMARY KEY REFERENCES salons(id) ON DELETE CASCADE,
+      payroll_multiplier        NUMERIC(6,3) NOT NULL DEFAULT 1.30,
+      pay_base_includes_bonuses BOOLEAN NOT NULL DEFAULT FALSE,
+      allocation_driver         VARCHAR(16) NOT NULL DEFAULT 'minutes',
+      usn_rate                  NUMERIC(5,2) NOT NULL DEFAULT 15,
+      acquiring                 JSONB NOT NULL DEFAULT '{}',
+      updated_at                TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `).catch(() => {});
+
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS fixed_costs (
+      id           SERIAL PRIMARY KEY,
+      salon_id     INT NOT NULL REFERENCES salons(id) ON DELETE CASCADE,
+      category     VARCHAR(64) NOT NULL,
+      title        VARCHAR(255) NOT NULL DEFAULT '',
+      amount_month NUMERIC(14,2) NOT NULL DEFAULT 0,
+      month_from   DATE NOT NULL,
+      month_to     DATE,
+      note         VARCHAR(500),
+      created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `).catch(() => {});
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS idx_fixed_costs_salon_month ON fixed_costs (salon_id, month_from)
+  `).catch(() => {});
+
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS equipment (
+      id                  SERIAL PRIMARY KEY,
+      salon_id            INT NOT NULL REFERENCES salons(id) ON DELETE CASCADE,
+      name                VARCHAR(255) NOT NULL,
+      purchase_price      NUMERIC(14,2) NOT NULL DEFAULT 0,
+      purchase_date       DATE,
+      useful_life_months  INT NOT NULL DEFAULT 60,
+      residual_pct        NUMERIC(5,2) NOT NULL DEFAULT 0,
+      maintenance_monthly NUMERIC(12,2) NOT NULL DEFAULT 0,
+      service_ids         JSONB NOT NULL DEFAULT '[]',
+      is_active           BOOLEAN NOT NULL DEFAULT TRUE,
+      note                VARCHAR(500),
+      created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `).catch(() => {});
+
+  // ── «Документы»: электронное подписание с пациентами через F.Doc (спека
+  // docs/superpowers/specs/2026-10-24-fdoc-esign-design.md). Секреты (ключ API, пароли,
+  // паспорт) хранятся шифротекстом utils/secret-box (TEXT 'v1:…'), открытым — никогда.
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS edoc_settings (
+      salon_id          INTEGER PRIMARY KEY REFERENCES salons(id) ON DELETE CASCADE,
+      enabled           BOOLEAN NOT NULL DEFAULT FALSE,
+      base_url          VARCHAR(200) NOT NULL DEFAULT 'https://demo.fdoc.ru',
+      api_key_enc       TEXT,
+      app_login         VARCHAR(200),
+      app_password_enc  TEXT,
+      app_code          VARCHAR(100),
+      corp_id           VARCHAR(100),
+      qes_cert_alias    VARCHAR(200),
+      employee_position VARCHAR(200),
+      requisites        JSONB NOT NULL DEFAULT '{}'::jsonb,
+      unsign_days       INTEGER NOT NULL DEFAULT 14,
+      webhook_secret    VARCHAR(64),
+      last_webhook_at   TIMESTAMPTZ,
+      updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `).catch(() => {});
+  await client.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_edoc_settings_webhook ON edoc_settings (webhook_secret) WHERE webhook_secret IS NOT NULL`).catch(() => {});
+
+  // Учётная запись F.Doc у каждого пользователя своя (решение владельца 24.10.2026):
+  // в журнале F.Doc виден отправитель. Токены — только в памяти процесса.
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS edoc_user_credentials (
+      user_id       INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+      salon_id      INTEGER NOT NULL REFERENCES salons(id) ON DELETE CASCADE,
+      login         VARCHAR(200) NOT NULL,
+      password_enc  TEXT NOT NULL,
+      fail_count    INTEGER NOT NULL DEFAULT 0,
+      last_ok_at    TIMESTAMPTZ,
+      last_error    VARCHAR(300),
+      updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `).catch(() => {});
+
+  // Данные пациента для документов. Паспортная часть — одним шифротекстом secure_enc,
+  // secure_fields — какие поля в нём заполнены (проверка полноты без расшифровки).
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS client_identity (
+      client_id     INTEGER PRIMARY KEY REFERENCES clients(id) ON DELETE CASCADE,
+      salon_id      INTEGER NOT NULL REFERENCES salons(id) ON DELETE CASCADE,
+      last_name     VARCHAR(100),
+      first_name    VARCHAR(100),
+      middle_name   VARCHAR(100),
+      birth_date    DATE,
+      gender        VARCHAR(1),
+      phone         VARCHAR(20),
+      email         VARCHAR(200),
+      contract_no   VARCHAR(50),
+      contract_date DATE,
+      secure_enc    TEXT,
+      secure_fields JSONB NOT NULL DEFAULT '[]'::jsonb,
+      source        VARCHAR(20) NOT NULL DEFAULT 'manual',
+      updated_by    INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `).catch(() => {});
+  await client.query(`CREATE INDEX IF NOT EXISTS idx_client_identity_salon ON client_identity (salon_id)`).catch(() => {});
+
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS edoc_templates (
+      id           SERIAL PRIMARY KEY,
+      salon_id     INTEGER NOT NULL REFERENCES salons(id) ON DELETE CASCADE,
+      kind         VARCHAR(20) NOT NULL,
+      title        VARCHAR(200) NOT NULL,
+      file_key     VARCHAR(300) NOT NULL,
+      file_size    INTEGER NOT NULL DEFAULT 0,
+      placeholders JSONB NOT NULL DEFAULT '[]'::jsonb,
+      is_active    BOOLEAN NOT NULL DEFAULT TRUE,
+      sort_order   INTEGER NOT NULL DEFAULT 0,
+      created_by   INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `).catch(() => {});
+  await client.query(`CREATE INDEX IF NOT EXISTS idx_edoc_templates_salon ON edoc_templates (salon_id, is_active, sort_order)`).catch(() => {});
+
+  // Комплект: id — наш UUID, он же package.id в F.Doc. client_id — RESTRICT: строка
+  // комплекта — след юридически значимого документа, молча исчезать с клиентом не должна.
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS edoc_packages (
+      id                   UUID PRIMARY KEY,
+      salon_id             INTEGER NOT NULL REFERENCES salons(id) ON DELETE CASCADE,
+      client_id            INTEGER NOT NULL REFERENCES clients(id) ON DELETE RESTRICT,
+      record_id            INTEGER REFERENCES records(id) ON DELETE SET NULL,
+      kind                 VARCHAR(20) NOT NULL,
+      title                VARCHAR(200) NOT NULL,
+      status               VARCHAR(20) NOT NULL DEFAULT 'draft',
+      fdoc_status          VARCHAR(40),
+      fdoc_package_guid    VARCHAR(100),
+      payload              JSONB NOT NULL DEFAULT '{}'::jsonb,
+      employee_url         TEXT,
+      employee_url_at      TIMESTAMPTZ,
+      sent_by              INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      sent_at              TIMESTAMPTZ,
+      signed_at            TIMESTAMPTZ,
+      last_error           VARCHAR(500),
+      last_status_check_at TIMESTAMPTZ,
+      created_at           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at           TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `).catch(() => {});
+  await client.query(`CREATE INDEX IF NOT EXISTS idx_edoc_packages_salon_status ON edoc_packages (salon_id, status)`).catch(() => {});
+  await client.query(`CREATE INDEX IF NOT EXISTS idx_edoc_packages_salon_client ON edoc_packages (salon_id, client_id, created_at DESC)`).catch(() => {});
+  await client.query(`CREATE INDEX IF NOT EXISTS idx_edoc_packages_record ON edoc_packages (salon_id, record_id) WHERE record_id IS NOT NULL`).catch(() => {});
+
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS edoc_documents (
+      id                 UUID PRIMARY KEY,
+      package_id         UUID NOT NULL REFERENCES edoc_packages(id) ON DELETE CASCADE,
+      salon_id           INTEGER NOT NULL REFERENCES salons(id) ON DELETE CASCADE,
+      template_id        INTEGER REFERENCES edoc_templates(id) ON DELETE SET NULL,
+      title              VARCHAR(200) NOT NULL,
+      file_name          VARCHAR(250) NOT NULL,
+      sort_order         INTEGER NOT NULL DEFAULT 0,
+      fdoc_document_guid VARCHAR(100),
+      fdoc_status        VARCHAR(40),
+      client_signed_at   TIMESTAMPTZ,
+      corp_signed_at     TIMESTAMPTZ,
+      pdf_key            VARCHAR(300),
+      pdf_fetched_at     TIMESTAMPTZ,
+      created_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at         TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `).catch(() => {});
+  await client.query(`CREATE INDEX IF NOT EXISTS idx_edoc_documents_package ON edoc_documents (package_id)`).catch(() => {});
+
+  // Журнал: отправки, статусы, вебхуки (тело целиком, кроме секрета), просмотры и
+  // правки паспортных данных (кто и когда — без значений).
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS edoc_events (
+      id         BIGSERIAL PRIMARY KEY,
+      salon_id   INTEGER NOT NULL REFERENCES salons(id) ON DELETE CASCADE,
+      package_id UUID,
+      client_id  INTEGER,
+      kind       VARCHAR(30) NOT NULL,
+      user_id    INTEGER,
+      payload    JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `).catch(() => {});
+  await client.query(`CREATE INDEX IF NOT EXISTS idx_edoc_events_package ON edoc_events (salon_id, package_id, created_at DESC)`).catch(() => {});
+  await client.query(`CREATE INDEX IF NOT EXISTS idx_edoc_events_client ON edoc_events (salon_id, client_id, created_at DESC) WHERE client_id IS NOT NULL`).catch(() => {});
+
+  // ── «Документы»: дашборд, анкета пациента, автоматика — операторы в EDOCS_BOARD_DDL (ниже, вне функции:
+  // scripts/edocs-board-smoke.js гоняет их в откатываемой транзакции).
+  for (const sql of EDOCS_BOARD_DDL) await client.query(sql).catch(() => {});
 }
 
-module.exports = { runMigrations };
+// ── «Документы»: дашборд, анкета пациента, автоматика (спека
+// docs/superpowers/specs/2026-10-25-edocs-board-design.md §10). Только IF NOT EXISTS.
+//  • Вид документа хранится в самой строке: у шаблона, удалённого позже, вид не теряется, а состояние
+//    «договор подписан» считается по виду документа, а не комплекта (в одном комплекте бывают договор и акт).
+//  • Автоматика по умолчанию выключена (решение владельца 25.10.2026). acts_required_from — с какой даты
+//    визитам нужен акт: у существующей строки станет датой миграции, то есть датой выката, иначе каждый
+//    прошлый визит без акта стал бы красным.
+//  • edoc_counters: next_value — номер, который получит следующий договор.
+//  • edoc_auto_jobs: строка «застолбляет» действие ДО его выполнения (UNIQUE) — at-most-once, как в
+//    «Заботе» и уведомлениях: повтора не бывает, неудача остаётся с причиной.
+//  • edoc_patient_forms: анкета по публичной ссылке; в БД — sha256 токена (поиск) и его шифротекст
+//    (показать QR и переотправить ту же ссылку); сам токен в логи и журнал не пишется.
+const EDOCS_BOARD_DDL = [
+  'ALTER TABLE edoc_documents ADD COLUMN IF NOT EXISTS kind VARCHAR(20)',
+  'UPDATE edoc_documents d SET kind = t.kind FROM edoc_templates t WHERE d.template_id = t.id AND d.kind IS NULL',
+  "ALTER TABLE edoc_packages ADD COLUMN IF NOT EXISTS source VARCHAR(20) NOT NULL DEFAULT 'manual'",
+  ...[
+    'auto_sender_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL',
+    'auto_previsit BOOLEAN NOT NULL DEFAULT FALSE',
+    'auto_previsit_hours INTEGER NOT NULL DEFAULT 24',
+    "auto_previsit_scope VARCHAR(10) NOT NULL DEFAULT 'first'",
+    'auto_previsit_form BOOLEAN NOT NULL DEFAULT TRUE',
+    'auto_act BOOLEAN NOT NULL DEFAULT FALSE',
+    'auto_act_delay_min INTEGER NOT NULL DEFAULT 15',
+    'auto_remind BOOLEAN NOT NULL DEFAULT FALSE',
+    'auto_remind_hours INTEGER NOT NULL DEFAULT 2',
+    'form_message TEXT',
+    'form_ttl_days INTEGER NOT NULL DEFAULT 7',
+    'contract_autonumber BOOLEAN NOT NULL DEFAULT TRUE',
+    'acts_required_from DATE DEFAULT CURRENT_DATE',
+  ].map((col) => `ALTER TABLE edoc_settings ADD COLUMN IF NOT EXISTS ${col}`),
+  `CREATE TABLE IF NOT EXISTS edoc_counters (
+    salon_id   INTEGER NOT NULL REFERENCES salons(id) ON DELETE CASCADE,
+    kind       VARCHAR(20) NOT NULL,
+    next_value BIGINT NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (salon_id, kind)
+  )`,
+  `CREATE TABLE IF NOT EXISTS edoc_auto_jobs (
+    id         BIGSERIAL PRIMARY KEY,
+    salon_id   INTEGER NOT NULL REFERENCES salons(id) ON DELETE CASCADE,
+    kind       VARCHAR(20) NOT NULL,
+    ref        VARCHAR(64) NOT NULL,
+    client_id  INTEGER,
+    record_id  INTEGER,
+    package_id UUID,
+    form_id    UUID,
+    status     VARCHAR(20) NOT NULL DEFAULT 'claimed',
+    reason     VARCHAR(300),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (salon_id, kind, ref)
+  )`,
+  'CREATE INDEX IF NOT EXISTS idx_edoc_auto_jobs_client ON edoc_auto_jobs (salon_id, client_id, created_at DESC)',
+  `CREATE TABLE IF NOT EXISTS edoc_patient_forms (
+    id              UUID PRIMARY KEY,
+    salon_id        INTEGER NOT NULL REFERENCES salons(id) ON DELETE CASCADE,
+    client_id       INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+    record_id       INTEGER REFERENCES records(id) ON DELETE SET NULL,
+    token_hash      VARCHAR(64) NOT NULL,
+    token_enc       TEXT NOT NULL,
+    status          VARCHAR(20) NOT NULL DEFAULT 'active',
+    fields          JSONB NOT NULL DEFAULT '[]'::jsonb,
+    kinds           JSONB NOT NULL DEFAULT '[]'::jsonb,
+    send_docs       BOOLEAN NOT NULL DEFAULT FALSE,
+    sender_user_id  INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    source          VARCHAR(20) NOT NULL DEFAULT 'manual',
+    created_by      INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    expires_at      TIMESTAMPTZ NOT NULL,
+    delivered_via   VARCHAR(20),
+    delivered_at    TIMESTAMPTZ,
+    opened_at       TIMESTAMPTZ,
+    submitted_at    TIMESTAMPTZ,
+    submit_attempts INTEGER NOT NULL DEFAULT 0,
+    recognize_count INTEGER NOT NULL DEFAULT 0,
+    consent         JSONB,
+    package_id      UUID,
+    last_error      VARCHAR(500),
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`,
+  'CREATE UNIQUE INDEX IF NOT EXISTS idx_edoc_forms_token ON edoc_patient_forms (token_hash)',
+  'CREATE INDEX IF NOT EXISTS idx_edoc_forms_client ON edoc_patient_forms (salon_id, client_id, created_at DESC)',
+  "CREATE UNIQUE INDEX IF NOT EXISTS idx_edoc_forms_active ON edoc_patient_forms (client_id) WHERE status = 'active'",
+];
+
+module.exports = { runMigrations, EDOCS_BOARD_DDL };

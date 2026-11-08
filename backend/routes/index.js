@@ -15,8 +15,13 @@ module.exports = function mountRoutes(app) {
   // свой секрет (GATEWAY_WEBHOOK_SECRET), салон — по messenger_accounts.
   app.use('/gateway', require('./chatpush-webhook'));
 
+  // ── F.Doc — вебхук статусов «Документов» (no JWT, секрет салона в URL) ──
+  app.use('/fdoc', require('./fdoc-webhook'));
+
   // ── Публичная форма заявки на справку (БЕЗ JWT — монтируем до guard) ──
   app.use(require('./public-cert-request'));
+  // Анкета пациента «Документов» (/anketa/<токен>, /api/public/anketa/…) — без JWT, ДО проверки /api.
+  app.use(require('./public-anketa'));
 
   // ── Mobile App API (separate auth) ────────────────────────
   app.use('/api/mobile/auth', require('./mobile-auth'));
@@ -72,6 +77,12 @@ module.exports = function mountRoutes(app) {
   app.use('/api/care',              require('./care'));
   app.use('/api/reminders',         require('./reminders'));
   app.use('/api/medical-cert',      require('./medical-cert'));
+  app.use('/api/economics',         require('./economics'));
+  // «Документы»: admin-роутер ДО общего — иначе /api/edocs поймал бы и /api/edocs/admin/*.
+  app.use('/api/edocs/admin',       require('./edocs-admin'));
+  // Дашборд, страница пациента, бумага, анкеты — свой роутер, ДО общего (роли те же).
+  app.use('/api/edocs',             require('./edocs-board'));
+  app.use('/api/edocs',             require('./edocs'));
 
   app.use('/api/analytics/messengers/verdicts', require('./dialog-verdicts'));
 

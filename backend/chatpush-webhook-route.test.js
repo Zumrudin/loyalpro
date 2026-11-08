@@ -12,6 +12,9 @@ jest.mock('./services/outgoing-authorship', () => ({ classify: jest.fn().mockRes
 jest.mock('./services/chat-persist', () => ({ adoptPhoneForChat: jest.fn().mockResolvedValue(0) }));
 jest.mock('./services/agent/followup-queue', () => ({ close: jest.fn().mockResolvedValue(false) }));
 jest.mock('./services/agent/dialog-state', () => ({ pauseForOperator: jest.fn().mockResolvedValue() }));
+// Перехват ответов на уведомления клиники тянет YClients/транспорт/историю — в этом сьюте нужна только
+// проводка вебхука; сам модуль покрыт notifications-replies.test.js.
+jest.mock('./services/notifications/replies', () => ({ handleIncoming: jest.fn() }));
 jest.mock('./logger', () => {
   const log = { warn: jest.fn(), info: jest.fn(), error: jest.fn(), debug: jest.fn() };
   return { createLogger: () => log, __log: log };
@@ -20,6 +23,7 @@ jest.mock('./logger', () => {
 const { db } = require('./db');
 const accounts = require('./services/messaging/accounts');
 const dispatcher = require('./services/agent/dispatcher');
+const notifyReplies = require('./services/notifications/replies');
 const { __log: log } = require('./logger');
 const router = require('./routes/chatpush-webhook');
 const handle = router.stack.find(l => l.route && l.route.path === '/webhook').route.stack[0].handle;
@@ -38,6 +42,9 @@ const messageInserts = () => db.query.mock.calls.filter(c => /INSERT INTO chatpu
 
 beforeEach(() => {
   jest.clearAllMocks();
+  // mockReset: реализация из теста (handled:true / reject) не должна пережить его.
+  notifyReplies.handleIncoming.mockReset();
+  notifyReplies.handleIncoming.mockResolvedValue({ handled: false });
   accounts.credentialsFor.mockResolvedValue(null);
   db.one.mockResolvedValue({ id: 101 });
   db.oneOrNone.mockResolvedValue(null);
@@ -202,4 +209,109 @@ test('/gateway whatsapp: входящее и эхо без delivery_id сохр�
   accounts.credentialsFor.mockResolvedValue({ id: 9, provider: 'gateway' });
   await handle({ baseUrl: '/gateway', query: { key: 'gwsecret' }, body: waEcho(null, 'true_x_APP1') }, fakeRes());
   expect(messageInserts()[0][1][5]).toBe('true_x_APP1');
+});
+
+// ── Ответы на уведомления клиники («Подтверждаю» после напоминания, «5» после опроса) ──
+// handleIncoming стоит ПОСЛЕ сохранения входящего и ДО постановки Милы в очередь: иначе на одну
+// цифру ответили бы дважды — модуль и Мила. Сам модуль в режимах off/shadow возвращает
+// {handled:false} (notifications-replies.test.js), здесь проверяется только проводка.
+describe('перехват ответов на уведомления клиники', () => {
+  const outgoingBody = customerId => ({
+    type: 'tdlib_incoming_msg',
+    payload: {
+      customer_id: customerId, direction: 'outgoing', chat_id: '5', chat_type: 'person',
+      sender_phone_number: '79250177778', recipient_phone_number: '79001112233', delivery_id: 4,
+      message: { id: '5:2', type: 'formattedText', text: 'Напоминаем о записи', timestamp: 2 },
+    },
+  });
+  const viaGateway = (body = flatBody(9)) => handle({ baseUrl: '/gateway', query: { key: 'gwsecret' }, body }, fakeRes());
+  const insertOrder = () => db.query.mock.invocationCallOrder[db.query.mock.calls.findIndex(c => /INSERT INTO chatpush_messages/.test(c[0]))];
+
+  beforeEach(() => accounts.resolveSalon.mockResolvedValue(3));
+
+  test('перехвачено (handled:true) → Мила в очередь не ставится, сообщение при этом сохранено', async () => {
+    notifyReplies.handleIncoming.mockResolvedValue({ handled: true, kind: 'rating', rating: 5 });
+    await viaGateway();
+    expect(notifyReplies.handleIncoming).toHaveBeenCalledTimes(1);
+    expect(notifyReplies.handleIncoming).toHaveBeenCalledWith(3, expect.objectContaining({
+      direction: 'incoming', channel: 'tdlib', phone: '79001112233', chatId: '5', text: 'x' }));
+    expect(messageInserts()).toHaveLength(1);
+    expect(dispatcher.enqueue).not.toHaveBeenCalled();
+    expect(log.info).toHaveBeenCalledWith(expect.stringMatching(/notify reply: rating 5.*Мила не вызывается/));
+  });
+
+  test('повтор ответа (kind=duplicate) тоже не уходит Миле', async () => {
+    notifyReplies.handleIncoming.mockResolvedValue({ handled: true, kind: 'duplicate' });
+    await viaGateway();
+    expect(dispatcher.enqueue).not.toHaveBeenCalled();
+    expect(log.info).toHaveBeenCalledWith(expect.stringMatching(/notify reply: duplicate/));
+  });
+
+  test('не перехвачено (handled:false: режим off/shadow, не наш ответ) → Мила ставится как раньше', async () => {
+    await viaGateway();
+    expect(notifyReplies.handleIncoming).toHaveBeenCalledTimes(1);
+    expect(dispatcher.enqueue).toHaveBeenCalledWith(3, '79001112233', expect.objectContaining({ channel: 'tdlib', text: 'x' }));
+  });
+
+  test('порядок: сообщение сохранено → перехват → Мила', async () => {
+    await viaGateway();
+    const call = notifyReplies.handleIncoming.mock.invocationCallOrder[0];
+    expect(call).toBeGreaterThan(insertOrder());
+    expect(call).toBeLessThan(dispatcher.enqueue.mock.invocationCallOrder[0]);
+  });
+
+  test('сбой перехвата не мешает Миле и не помечает событие ошибкой', async () => {
+    notifyReplies.handleIncoming.mockRejectedValue(new Error('boom'));
+    await viaGateway();
+    expect(dispatcher.enqueue).toHaveBeenCalledWith(3, '79001112233', expect.any(Object));
+    expect(log.error).toHaveBeenCalledWith(expect.stringMatching(/notify reply.*boom/));
+    expect(db.query.mock.calls.some(c => /UPDATE chatpush_events SET error/.test(c[0]))).toBe(false);
+  });
+
+  test('повтор вебхука (сообщение уже сохранено) → перехват не вызывается, ответ не обработать дважды', async () => {
+    db.query.mockImplementation(async sql => (/INSERT INTO chatpush_messages/.test(sql)
+      ? { rowCount: 0, rows: [] } : { rowCount: 1, rows: [] }));
+    await viaGateway();
+    expect(notifyReplies.handleIncoming).not.toHaveBeenCalled();
+    expect(dispatcher.enqueue).not.toHaveBeenCalled();
+  });
+
+  test('исходящее эхо не перехватывается', async () => {
+    await viaGateway(outgoingBody(9));
+    expect(messageInserts()).toHaveLength(1);
+    expect(notifyReplies.handleIncoming).not.toHaveBeenCalled();
+  });
+
+  test('перехват не зависит от глобального флага агента: Мила выключена, а ответ на уведомление обработан', async () => {
+    const config = require('./config');
+    config.CHATPUSH.agentEnabled = false;
+    try {
+      notifyReplies.handleIncoming.mockResolvedValue({ handled: true, kind: 'confirmed' });
+      await viaGateway();
+      expect(notifyReplies.handleIncoming).toHaveBeenCalledTimes(1);
+      expect(dispatcher.enqueue).not.toHaveBeenCalled();
+    } finally { config.CHATPUSH.agentEnabled = true; }
+  });
+
+  test('/chatpush: тот же роутер — тот же перехват, салон из реестра', async () => {
+    accounts.resolveSalon.mockResolvedValue(1);
+    notifyReplies.handleIncoming.mockResolvedValue({ handled: true, kind: 'confirmed' });
+    await handle({ baseUrl: '/chatpush', query: { key: 'cpsecret' }, body: flatBody(46594) }, fakeRes());
+    expect(notifyReplies.handleIncoming).toHaveBeenCalledWith(1, expect.objectContaining({ phone: '79001112233' }));
+    expect(dispatcher.enqueue).not.toHaveBeenCalled();
+  });
+
+  test('неизвестный аккаунт (салона нет) → перехвата нет', async () => {
+    accounts.resolveSalon.mockResolvedValue(null);
+    await viaGateway();
+    expect(notifyReplies.handleIncoming).not.toHaveBeenCalled();
+  });
+
+  test('канал салона обслуживает другой провайдер (копия сообщения от прежнего) → перехвата нет, иначе ответили бы дважды', async () => {
+    accounts.resolveSalon.mockResolvedValue(1);
+    accounts.credentialsFor.mockResolvedValue({ id: 42, provider: 'gateway', channel: 'tdlib' });
+    await handle({ baseUrl: '/chatpush', query: { key: 'cpsecret' }, body: flatBody(46594) }, fakeRes());
+    expect(notifyReplies.handleIncoming).not.toHaveBeenCalled();
+    expect(dispatcher.enqueue).not.toHaveBeenCalled();
+  });
 });

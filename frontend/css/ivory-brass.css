@@ -1,0 +1,305 @@
+/* ════════════════════════════════════════════════════════════════
+   IVORY & BRASS — айдентика PERI для админки LoyalPro (дев-приёмка)
+   Макеты: docs/design/loyalpro-rebrand-2026-10-24/admin-preview/
+   План:   docs/superpowers/plans/2026-10-24-ivory-brass-dev-plan.md
+
+   Тема включается атрибутом <html data-skin="ivory"> (js/core/theme.js,
+   только на дев-домене). Всё оформление — под этим атрибутом; без него
+   действует прежний вид. Исключение — первый блок: разметка групп меню
+   (заголовки секций, сворачиваемые группы) общая для обоих видов.
+   Бизнес-логика страниц не меняется: только токены, шрифты и раскладка.
+   ════════════════════════════════════════════════════════════════ */
+
+@font-face{font-family:Manrope;src:url('../fonts/Manrope.woff2') format('woff2');font-weight:200 800;font-display:swap}
+@font-face{font-family:"Cormorant Garamond";src:url('../fonts/CormorantGaramond.woff2') format('woff2');font-weight:300 700;font-display:swap}
+@font-face{font-family:Cinzel;src:url('../fonts/Cinzel.woff2') format('woff2');font-weight:400 900;font-display:swap}
+
+/* ─── Группы меню: общая разметка для обоих видов ─── */
+.nav-grp-b{display:none}
+.nav-grp.open .nav-grp-b{display:block}
+.nav-sec-t{font-size:10px;font-weight:600;letter-spacing:.14em;text-transform:uppercase;color:var(--t3);padding:16px 14px 6px}
+.nav-grp-t{display:flex;align-items:center;width:100%;background:transparent;border:none;font:inherit;font-size:15px;color:var(--t2);text-align:left;padding:12px 14px;border-radius:8px;cursor:pointer}
+.nav-grp-t::after{content:'';margin-left:auto;width:6px;height:6px;border-right:1.5px solid currentColor;border-bottom:1.5px solid currentColor;transform:rotate(45deg) translateY(-2px);transition:transform .15s}
+.nav-grp.open>.nav-grp-t::after{transform:rotate(-135deg) translateY(-1px)}
+.nav-grp-t:hover{background:var(--bg)}
+.mnav-list .nav-grp-b .tn{padding-left:26px}
+.tb-clinic,.tb-crumb,.pg-hero{display:none}
+/* Прежний вид, десктопная полоса меню: группы «раскрыты» в строку, заголовков нет. */
+html:not([data-skin="ivory"]) #mainNav .nav-sec-t,
+html:not([data-skin="ivory"]) #mainNav .nav-grp-t{display:none}
+html:not([data-skin="ivory"]) #mainNav .nav-grp,
+html:not([data-skin="ivory"]) #mainNav .nav-grp-b{display:contents}
+/* Ярлык «Лояльность» в строке прежнего вида не нужен (там есть «Настройки»),
+   а строка из 19 пунктов вытесняла правую часть шапки за экран — пусть
+   меню прокручивается, а кнопки справа остаются на месте. */
+html:not([data-skin="ivory"]) #mainNav .tn[data-stg]{display:none!important}
+html:not([data-skin="ivory"]) .tb-nav{min-width:0;overflow-x:auto;scrollbar-width:none}
+html:not([data-skin="ivory"]) .tb-right{flex-shrink:0}
+.tn:focus-visible,.nav-grp-t:focus-visible{outline:2px solid var(--a);outline-offset:2px}
+
+/* ═══════════════════ ТОКЕНЫ ═══════════════════ */
+html[data-skin="ivory"]{
+  --a:#806335;--ad:#6B522B;--as:#E9DFD2;
+  --brass:#C9A96B;--taupe:#B7A89B;--side:#FBF8F3;
+  --bg:#F4EFE6;--card:#FFFCF8;--bg2:#FFFCF8;--bd:#DED3C7;--bd2:#E9E0D5;
+  --t1:#4A423C;--t2:#6C5F55;--t3:#7A6B5E;
+  --danger:#A6533F;--warn:#7D5E16;--info:#4F6A82;
+  --r:14px;--sh:0 1px 2px rgba(74,66,60,.04);
+  --grad-a:#806335;
+  --serif:"Cormorant Garamond",Georgia,serif;
+  color-scheme:light;
+}
+html[data-skin="ivory"] body{font-family:Manrope,-apple-system,'Segoe UI',system-ui,sans-serif;background:var(--bg);color:var(--t1);-webkit-font-smoothing:antialiased}
+html[data-skin="ivory"] ::selection{background:#E6D6B8}
+
+/* ═══════════════════ БАЗОВЫЕ КОМПОНЕНТЫ ═══════════════════ */
+html[data-skin="ivory"] input,
+html[data-skin="ivory"] select,
+html[data-skin="ivory"] textarea,
+html[data-skin="ivory"] .filter-row input,
+html[data-skin="ivory"] .filter-row select{background:var(--card);border-color:var(--bd);color:var(--t1);border-radius:10px}
+html[data-skin="ivory"] input:focus,
+html[data-skin="ivory"] select:focus,
+html[data-skin="ivory"] textarea:focus{border-color:var(--a);box-shadow:0 0 0 3px rgba(128,99,53,.14)}
+html[data-skin="ivory"] input[readonly]{background:var(--bg)}
+html[data-skin="ivory"] .filter-row th{background:var(--bg)}
+
+html[data-skin="ivory"] .btn{border-radius:10px;font-weight:600}
+html[data-skin="ivory"] .btn-pri{background:var(--a);color:#fff;box-shadow:none}
+html[data-skin="ivory"] .btn-pri:hover{background:var(--ad);opacity:1;box-shadow:none;transform:none}
+html[data-skin="ivory"] .btn-sec{background:var(--card);color:var(--t1);border-color:var(--bd)}
+html[data-skin="ivory"] .btn-sec:hover{background:var(--as)}
+html[data-skin="ivory"] .btn:focus-visible{outline:2px solid var(--a);outline-offset:2px}
+
+html[data-skin="ivory"] .card,
+html[data-skin="ivory"] .sc{background:var(--card);border-color:var(--bd);box-shadow:var(--sh);backdrop-filter:none;-webkit-backdrop-filter:none}
+html[data-skin="ivory"] .sc:hover{transform:none;box-shadow:0 4px 18px rgba(74,66,60,.06)}
+html[data-skin="ivory"] .card:hover{box-shadow:0 4px 18px rgba(74,66,60,.06)}
+html[data-skin="ivory"] .sc{padding:20px 22px}
+html[data-skin="ivory"] .sl{font-size:12px;color:var(--t2);font-weight:500}
+html[data-skin="ivory"] .sv{font-weight:500;letter-spacing:-.02em;font-size:28px;font-variant-numeric:tabular-nums}
+html[data-skin="ivory"] .sd.up{color:var(--a)}
+html[data-skin="ivory"] .ct{font-size:15px;font-weight:600}
+
+html[data-skin="ivory"] thead th{font-size:10.5px;letter-spacing:.08em;color:var(--t2);border-bottom-color:var(--bd)}
+html[data-skin="ivory"] tbody td{border-bottom-color:var(--bd2)}
+html[data-skin="ivory"] tbody tr:hover{background:#F8F3EB}
+
+html[data-skin="ivory"] .tabs{background:transparent;padding:0;gap:4px;border-bottom:1px solid var(--bd);border-radius:0;padding-bottom:10px}
+html[data-skin="ivory"] .tab{color:var(--t2);font-weight:500;border-radius:9px;padding:9px 16px;flex:0 1 auto}
+html[data-skin="ivory"] .tab:hover{color:var(--t1)}
+html[data-skin="ivory"] .tab.active{background:var(--as);color:var(--t1);box-shadow:none;font-weight:600}
+
+html[data-skin="ivory"] .badge{border-radius:6px;font-weight:600}
+html[data-skin="ivory"] .bg{background:#ECE3D2;color:#6B522B}
+html[data-skin="ivory"] .bb{background:#E4E8EC;color:#3F5568}
+html[data-skin="ivory"] .bo{background:#F1E6CC;color:#6E5212}
+html[data-skin="ivory"] .br{background:#F3E1DA;color:#8E4232}
+html[data-skin="ivory"] .bgr{background:var(--bg);color:var(--t2);border-color:var(--bd)}
+
+html[data-skin="ivory"] .pb{background:var(--bd2)}
+html[data-skin="ivory"] .pf{background:var(--a)}
+html[data-skin="ivory"] .tgl input:checked+.ts{background:var(--a)}
+html[data-skin="ivory"] .ts{background:#D5C9BC}
+html[data-skin="ivory"] .t-av{background:var(--as);color:var(--t1);font-weight:600}
+html[data-skin="ivory"] .modal{background:var(--card);border-radius:18px}
+html[data-skin="ivory"] .ov{background:rgba(74,66,60,.38)}
+html[data-skin="ivory"] .hc-picker-box{background:var(--card)}
+html[data-skin="ivory"] .sk{background:linear-gradient(90deg,var(--bd2) 25%,var(--bg) 50%,var(--bd2) 75%);background-size:200% 100%}
+
+/* Убираем декоративные эффекты прежнего вида: свечение, наклон карточек, градиентная линия. */
+html[data-skin="ivory"] .topbar::after{display:none}
+html[data-skin="ivory"] .sync-active::before{border-color:var(--brass)}
+html[data-skin="ivory"] .badge-gold-glow,
+html[data-skin="ivory"] .badge-plat-glow{animation:none}
+html[data-skin="ivory"] .page-enter{animation-duration:.18s}
+@media (prefers-reduced-motion:reduce){html[data-skin="ivory"] .page-enter,html[data-skin="ivory"] .sc-animate{animation:none}}
+
+/* Тёмная тема в Ivory не действует — переключатель прячем (выбор хранится). */
+html[data-skin="ivory"] .dm-wrap{display:none!important}
+
+/* Период дашборда */
+html[data-skin="ivory"] .pb-btns{background:var(--card);border:1px solid var(--bd);border-radius:10px}
+html[data-skin="ivory"] .pb-btn.active{background:var(--as);color:var(--t1)}
+
+/* ═══════════════════ ВХОД ═══════════════════ */
+html[data-skin="ivory"] .lw{background:var(--bg)}
+html[data-skin="ivory"] .lb{background:var(--card);border:1px solid var(--bd);box-shadow:0 20px 60px rgba(74,66,60,.10);border-radius:20px}
+html[data-skin="ivory"] .li{background:var(--a)}
+html[data-skin="ivory"] .lt{background:var(--bg)}
+html[data-skin="ivory"] .lt-t.active{background:var(--card)}
+
+/* ═══════════════════ ШАПКА И МЕНЮ ═══════════════════ */
+html[data-skin="ivory"] .topbar{background:var(--card);border-bottom-color:var(--bd);height:64px}
+html[data-skin="ivory"] .tb-li{display:none}
+html[data-skin="ivory"] .tb-ln{font-size:22px;font-weight:700;letter-spacing:-.04em;color:var(--t1)}
+html[data-skin="ivory"] .tb-ln::after{content:'pro.';font-family:var(--serif);font-style:italic;font-weight:500;letter-spacing:0;margin-left:1px}
+html[data-skin="ivory"] .tb-ln{font-size:0}
+html[data-skin="ivory"] .tb-ln::before{content:'loyal';font-size:22px}
+html[data-skin="ivory"] .tb-ln::after{font-size:22px}
+html[data-skin="ivory"] .tb-crumb{display:block;font-size:12.5px;color:var(--t2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+html[data-skin="ivory"] .tb-clinic{align-items:center;gap:8px}
+html[data-skin="ivory"] .tb-clinic img{width:40px;height:40px;object-fit:contain}
+html[data-skin="ivory"] .tb-clinic span{font:500 12px Cinzel,Georgia,serif;letter-spacing:.07em;background:linear-gradient(120deg,#C69A5E,#9A7240,#7A5630);-webkit-background-clip:text;background-clip:text;color:transparent}
+html[data-skin="ivory"] #topName{color:var(--t2)}
+html[data-skin="ivory"] .tb-logout{border-color:var(--bd)!important;color:var(--t2)!important;border-radius:10px}
+html[data-skin="ivory"] .skin-btn{font-size:11.5px}
+
+html[data-skin="ivory"] .tn{color:var(--t1);font-weight:500;border-radius:10px}
+html[data-skin="ivory"] .tn:hover{background:#F1EAE0;color:var(--t1)}
+html[data-skin="ivory"] .tn.active{background:var(--as);color:var(--t1);font-weight:700}
+html[data-skin="ivory"] .nav-grp-t{color:var(--t1)}
+html[data-skin="ivory"] .nav-grp-t:hover{background:#F1EAE0}
+
+/* Drawer (телефон и планшет) */
+html[data-skin="ivory"] .mnav-drawer{background:var(--side);border-right-color:var(--bd)}
+html[data-skin="ivory"] .mnav-ov{background:rgba(74,66,60,.38)}
+html[data-skin="ivory"] .mnav-list .tn{font-size:15px;min-height:44px;display:flex;align-items:center}
+html[data-skin="ivory"] .nav-grp-t{min-height:44px}
+
+/* Заголовок страницы: подпись роли + крупный антиквенный заголовок */
+html[data-skin="ivory"] .pg-hero{display:block;margin:2px 0 22px}
+html[data-skin="ivory"] .pg-eyebrow{font-size:10.5px;letter-spacing:.18em;text-transform:uppercase;color:var(--t2);margin-bottom:6px}
+html[data-skin="ivory"] .pg-title{font-family:var(--serif);font-weight:600;font-size:38px;line-height:1.12;letter-spacing:-.01em;color:var(--t1);margin:0}
+body[data-page="chat"] .pg-hero,
+body[data-page="medical-cert"] .pg-hero{display:none!important}
+/* Мелкие заголовки страниц, дословно повторяющие крупный, в Ivory не нужны. */
+html[data-skin="ivory"] #page-dashboard > div:nth-child(2) > div:first-child,
+html[data-skin="ivory"] #page-home-care > div:first-child > div:first-child,
+html[data-skin="ivory"] #page-users > div:first-child > div:first-child > div:first-child,
+html[data-skin="ivory"] #page-agent-services > div:first-child,
+html[data-skin="ivory"] #page-edocs .bc-head-title,
+html[data-skin="ivory"] #page-economics .bc-head-title{display:none}
+
+/* ── Десктоп ≥1024: левый сайдбар ──
+   DOM прежний (одна .topbar с логотипом, меню и правой частью), поэтому
+   раскладка делается гридом на #app, а .topbar становится display:contents.
+   #app получает inline display:flex после входа — привязываемся к нему,
+   чтобы на экране входа приложение не показалось. */
+@media (min-width:1024px){
+  html[data-skin="ivory"] #app[style*="flex"]{display:grid!important;grid-template-columns:240px minmax(0,1fr);grid-template-rows:72px auto minmax(0,1fr)}
+  html[data-skin="ivory"] #app::before{content:'';grid-column:1;grid-row:1/4;background:var(--side);border-right:1px solid var(--bd)}
+  html[data-skin="ivory"] #app::after{content:'';grid-column:2;grid-row:1;background:var(--card);border-bottom:1px solid var(--bd)}
+  html[data-skin="ivory"] .topbar{display:contents}
+  html[data-skin="ivory"] .tb-burger{display:none!important}
+  html[data-skin="ivory"] .tb-logo{grid-column:1;grid-row:1;align-self:end;padding:0 26px 4px;z-index:1}
+  html[data-skin="ivory"] .tb-clinic{display:flex;grid-column:1;grid-row:2;padding:10px 20px 6px;z-index:1}
+  html[data-skin="ivory"] .tb-crumb{grid-column:2;grid-row:1;align-self:center;padding:0 0 0 32px;z-index:1;max-width:45%}
+  html[data-skin="ivory"] .tb-right{grid-column:2;grid-row:1;align-self:center;justify-self:end;padding:0 32px 0 0;z-index:1;margin:0;gap:10px}
+  html[data-skin="ivory"] .tb-nav{grid-column:1;grid-row:3;display:flex;flex-direction:column;gap:2px;margin:0;padding:6px 16px 24px;overflow-y:auto;min-height:0;z-index:1}
+  html[data-skin="ivory"] .tb-nav .tn{padding:11px 14px;font-size:14px;white-space:normal}
+  html[data-skin="ivory"] .tb-nav .nav-grp-t{font-size:14px;padding:11px 14px}
+  html[data-skin="ivory"] .tb-nav .nav-grp-b .tn{padding-left:26px;font-size:13.5px}
+  html[data-skin="ivory"] .tb-nav .nav-sec-t{padding:20px 14px 8px}
+  html[data-skin="ivory"] .content{grid-column:2;grid-row:2/4;padding:30px 36px 36px;min-width:0}
+}
+/* ── Планшет 701–1023: шапка с кнопкой меню, разделы в drawer ── */
+@media (min-width:701px) and (max-width:1023px){
+  html[data-skin="ivory"] .tb-nav{display:none}
+  html[data-skin="ivory"] .tb-burger{display:flex;align-items:center;justify-content:center;background:transparent;border:none;color:var(--t1);cursor:pointer;padding:8px;border-radius:8px}
+  html[data-skin="ivory"] .tb-crumb{flex:1;margin-left:8px}
+  html[data-skin="ivory"] .content{padding:24px}
+}
+@media (max-width:1023px){
+  html[data-skin="ivory"] .topbar{height:60px}
+  html[data-skin="ivory"] .pg-title{font-size:32px}
+}
+@media (max-width:700px){
+  html[data-skin="ivory"] .tb-crumb{display:none}
+  html[data-skin="ivory"] .pg-title{font-size:28px}
+  html[data-skin="ivory"] .pg-hero{margin-bottom:16px}
+  html[data-skin="ivory"] .tb-ln::before,
+  html[data-skin="ivory"] .tb-ln::after{font-size:20px}
+  html[data-skin="ivory"] .sv{font-size:24px}
+}
+
+/* ═══════════════════ ПРАВКИ ПО ЖИВОМУ ПРОСМОТРУ ═══════════════════ */
+/* Уведомления: светлая плашка вместо чёрной. */
+html[data-skin="ivory"] .notif{background:var(--card);color:var(--t1);border:1px solid var(--bd);box-shadow:0 10px 30px rgba(74,66,60,.14);border-radius:12px}
+/* Ряд из пяти карточек дашборда задан inline repeat(5,1fr): у 1fr минимум —
+   ширина содержимого, и при сайдбаре на 1024–1200 ряд вылезал за край. */
+html[data-skin="ivory"] #page-dashboard .sg[style*="repeat(5"]{grid-template-columns:repeat(auto-fit,minmax(150px,1fr))!important}
+/* Настройки: прежде страница прилипала к краям отрицательным отступом под
+   паддинг .content; в Ivory — колонка разделов карточкой рядом с содержимым. */
+html[data-skin="ivory"] #page-settings{margin:0;gap:20px}
+html[data-skin="ivory"] #page-settings.active{min-height:0;align-items:flex-start}
+html[data-skin="ivory"] .stg-sidebar{border:1px solid var(--bd);border-radius:14px;padding:10px 0;max-height:calc(100vh - 120px)}
+html[data-skin="ivory"] .stg-content{padding:4px 0 0}
+html[data-skin="ivory"] .stg-item{color:var(--t1)}
+html[data-skin="ivory"] .stg-item.active{color:var(--t1);font-weight:700}
+html[data-skin="ivory"] .stg-hdr{font-family:var(--serif);font-size:26px;font-weight:600}
+@media (max-width:700px){
+  html[data-skin="ivory"] #page-settings{margin:0 -14px}
+  html[data-skin="ivory"] .stg-sidebar{border-radius:0;border-width:0 0 1px}
+}
+/* Шапка на средних ширинах: имя пользователя уступает место крошкам. */
+@media (max-width:1279px){html[data-skin="ivory"] #topName{display:none}}
+@media (max-width:1023px){html[data-skin="ivory"] #syncSt,html[data-skin="ivory"] .tb-crumb{display:none}}
+@media (max-width:480px){html[data-skin="ivory"] .tb-ln{display:block}}
+/* Чат на десктопе: высота считалась от прежней шапки 52px и паддинга 22px. */
+@media (min-width:1024px){html[data-skin="ivory"] .chat-layout{height:calc(100vh - 72px - 30px - 36px - 50px)}}
+@media (min-width:701px) and (max-width:1023px){html[data-skin="ivory"] .chat-layout{height:calc(100vh - 60px - 48px - 50px)}}
+
+/* ═══════════════════ ДАШБОРД ВЛАДЕЛЬЦА: ВКЛАДКИ (этап 3) ═══════════════════ */
+.dash-tabs{margin:0 0 18px}
+.dash-tabs .tab{flex:0 1 auto;padding:7px 18px}
+html[data-skin="ivory"] .dash-tabs{margin:2px 0 22px}
+html[data-skin="ivory"] .dash-tabs .tab{font-size:13.5px}
+html[data-skin="ivory"] .msg-head .ttl{font-family:var(--serif);font-size:24px;font-weight:600}
+html[data-skin="ivory"] .rev-breakdown{border-top-color:var(--bd2)}
+html[data-skin="ivory"] .rev-val{font-variant-numeric:tabular-nums}
+html[data-skin="ivory"] .vd-run .btn{background:var(--card);color:var(--t1);border:1px solid var(--bd)}
+html[data-skin="ivory"] .vd-run .btn:hover{background:var(--as)}
+html[data-skin="ivory"] .msg-tbl th{letter-spacing:.02em}
+
+/* ═══════════════════ ДАШБОРД СПЕЦИАЛИСТА (этап 4) ═══════════════════
+   Палитра карточек живёт в переменных --sdp-* (фон) / --sda-* (акцент,
+   features.css) — в Ivory их заменяет приглушённая гамма бренда. Акценты
+   подобраны с контрастом ≥4.5:1 к светлому фону карточки. */
+html[data-skin="ivory"] #page-staff-dashboard{
+  --sdp-rev:#F1EADD;  --sda-rev:#806335;
+  --sdp-vis:#E7EBEE;  --sda-vis:#4F6A82;
+  --sdp-nosh:#F5E7E0; --sda-nosh:#A6533F;
+  --sdp-avg:#EEE9F0;  --sda-avg:#6F5F7E;
+  --sdp-new:#F3E8E6;  --sda-new:#93555A;
+  --sdp-ret:#E5EDEB;  --sda-ret:#3F6E67;
+  --sdp-reap:#EAEFE3; --sda-reap:#5A7040;
+  --sdp-goods:#F4ECDC;--sda-goods:#7D5E16;
+  --sdp-util:#EDE8E2; --sda-util:#6C5F55;
+}
+html[data-skin="ivory"] .sd-hero{background:var(--card);border:1px solid var(--bd);border-radius:16px}
+html[data-skin="ivory"] .sd-hero-t h2{font-family:var(--serif);font-size:26px;font-weight:600;letter-spacing:0}
+html[data-skin="ivory"] .sd-hero-ava-fb{background:var(--as);color:var(--t1)}
+html[data-skin="ivory"] .sd-hello h2{font-family:var(--serif);font-size:32px;font-weight:600;letter-spacing:0}
+html[data-skin="ivory"] .sd-hello-fill{background:var(--a)}
+html[data-skin="ivory"] .sd-seg{background:var(--card);border:1px solid var(--bd)}
+html[data-skin="ivory"] .sd-seg-pill{background:var(--as)!important;box-shadow:none!important}
+html[data-skin="ivory"] .sd-p:hover{transform:none;box-shadow:0 4px 18px rgba(74,66,60,.06)}
+html[data-skin="ivory"] .sd-p-ico{box-shadow:none;border:1px solid var(--bd2)}
+
+/* ═══════════════════ РАБОЧИЙ ДЕНЬ (этап 4, js/pages/workday.js) ═══════════════════
+   Структура общая для обоих видов, цвета — из токенов темы. */
+.wd-date{font-size:13px;color:var(--t2);margin:-6px 0 16px}
+.wd-date::first-letter{text-transform:uppercase}
+.wd-sum{grid-template-columns:repeat(4,1fr)}
+.wd-col{display:flex;flex-direction:column;min-width:0}
+.wd-row{display:flex;align-items:center;gap:12px;padding:11px 0;border-bottom:1px solid var(--bd)}
+.wd-row:last-child{border-bottom:none}
+.wd-time{font-weight:700;font-variant-numeric:tabular-nums;min-width:46px}
+.wd-main{flex:1;min-width:0}
+.wd-name{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.wd-sub{font-size:12px;color:var(--t3);margin-top:2px}
+.wd-click{cursor:pointer;border-radius:8px;padding-left:6px;padding-right:6px;margin:0 -6px}
+.wd-click:hover,.wd-click:focus-visible{background:var(--bg);outline:none}
+.wd-go{font-size:12px;color:var(--a);white-space:nowrap}
+.wd-link{font-size:12px;font-weight:500;color:var(--a);text-decoration:none}
+.wd-foot{margin-top:10px}
+.wd-count{font-size:12px;font-weight:600;background:var(--as);color:var(--t1);border-radius:10px;padding:1px 9px}
+.wd-lost .wd-name,.wd-lost .wd-time{color:var(--t3);text-decoration:line-through}
+.wd-badge-came{background:rgba(0,200,150,.15);color:#007a5a}
+.wd-badge-expected{background:rgba(59,130,246,.12);color:#1d4ed8}
+.wd-badge-lost{background:rgba(232,84,84,.12);color:#c53030}
+html[data-skin="ivory"] .wd-badge-came{background:#E7ECDF;color:#4A5E34}
+html[data-skin="ivory"] .wd-badge-expected{background:#E4E8EC;color:#3F5568}
+html[data-skin="ivory"] .wd-badge-lost{background:#F3E1DA;color:#8E4232}
+@media(max-width:1100px){.wd-sum{grid-template-columns:repeat(2,1fr)}}

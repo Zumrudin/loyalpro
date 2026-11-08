@@ -1,3 +1,4 @@
+const { resolveGivenName } = require('../utils/person-name');
 const router    = require('express').Router();
 const bcrypt    = require('bcryptjs');
 const jwt       = require('jsonwebtoken');
@@ -125,6 +126,9 @@ router.get('/me', auth, async (req, res) => {
        FROM users u JOIN salons s ON s.id=u.salon_id WHERE u.id=$1`,
       [req.user.userId]
     );
+    // Личное имя для приветствия: в users.name бывает и «Имя Фамилия», и
+    // «Фамилия Имя» — разбор тот же, что у обращения Милы к пациентам.
+    if (user) user.given_name = resolveGivenName(user.name || '') || null;
     res.json(user);
   } catch (e) { console.error('[auth]', e.message); res.status(500).json({ error: 'Внутренняя ошибка сервера' }); }
 });

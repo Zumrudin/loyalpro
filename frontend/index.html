@@ -19,11 +19,12 @@
      падала у людей с «escJs is not defined». -->
 <script src="js/core/utils.js?v=2026-08-09a"></script>
 <script src="js/core/api.js"></script>
-<script src="js/core/theme.js"></script>
+<script src="js/core/theme.js?v=2026-11-06g"></script>
 <script src="js/core/auth.js?v=2026-06-02a"></script>
-<script src="js/core/nav.js?v=2026-10-09-msgacc"></script>
+<script src="js/core/nav.js?v=2026-11-06h"></script>
 <link rel="stylesheet" href="css/base.css?v=2026-08-10-mobile">
-<link rel="stylesheet" href="css/features.css?v=2026-10-04-verdicts1">
+<link rel="stylesheet" href="css/features.css?v=2026-11-01-bcmon">
+<link rel="stylesheet" href="css/ivory-brass.css?v=2026-11-06i">
 </head>
 <body>
 
@@ -97,30 +98,55 @@
       <div class="tb-li" id="tbBrandLogo"><svg viewBox="0 0 24 24"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg></div>
       <div class="tb-ln">LoyalPro</div>
     </div>
-    <nav class="tb-nav" id="mainNav">
-      <div class="tn active" data-p="dashboard" data-roles="owner,admin" onclick="nav(this)">Дашборд</div>
-      <div class="tn" data-p="staff-dashboard" data-roles="specialist" onclick="nav(this)">Дашборд</div>
-      <div class="tn" data-p="clients" data-roles="owner,admin" onclick="nav(this)">Клиенты</div>
-      <div class="tn" data-p="records" data-roles="owner,admin" onclick="nav(this)">Записи</div>
-      <div class="tn" data-p="staff-analytics" data-roles="owner,admin" onclick="nav(this)">Сотрудники</div>
-      <div class="tn" data-p="segments" data-roles="owner,admin" onclick="nav(this)">Сегменты</div>
-      <div class="tn" data-p="broadcasts" data-roles="owner,admin" onclick="nav(this)">📨 Рассылка</div>
-      <div class="tn" data-p="care" data-roles="owner,admin" onclick="nav(this)">💚 Забота</div>
-      <div class="tn" data-p="chat" data-roles="owner,admin,admin_cashier" onclick="nav(this)">💬 Чат</div>
-      <div class="tn" data-p="cert-requests" data-roles="owner,admin,specialist,admin_cashier" onclick="nav(this)">Справки</div>
-      <div class="tn" data-p="home-care" data-roles="owner,admin,specialist,admin_cashier" onclick="nav(this)">Уход</div>
-      <div class="tn" data-p="patient-portfolio" data-roles="owner,admin,specialist,admin_cashier" onclick="nav(this)">📷 Фото-кейсы</div>
-      <div class="tn" data-p="settings" data-roles="owner,admin" onclick="nav(this)">Настройки</div>
-      <div class="tn" data-p="knowledge-base" data-roles="owner,admin,specialist,admin_cashier" onclick="nav(this)">База знаний</div>
-      <div class="tn" data-p="users" data-roles="owner" onclick="nav(this)">Пользователи</div>
-      <div class="tn" data-p="agent-services" data-roles="owner,admin" onclick="nav(this)">Услуги агента</div>
+    <div class="tb-clinic" aria-hidden="true"><img src="img/peri-monogram.png" alt="" width="40" height="40"><span>PERI CLINIC</span></div>
+    <div class="tb-crumb" id="tbCrumb"></div>
+    <nav class="tb-nav" id="mainNav" aria-label="Разделы">
+      <div class="nav-sec-t">Рабочее пространство</div>
+      <div class="tn" data-p="workday" data-roles="admin" tabindex="0" role="link" onclick="nav(this)">Рабочий день</div>
+      <div class="tn" data-p="dashboard" data-roles="owner,admin" tabindex="0" role="link" onclick="nav(this)">Обзор</div>
+      <div class="tn" data-p="workday" data-roles="owner" tabindex="0" role="link" onclick="nav(this)">Рабочий день</div>
+      <div class="tn" data-p="staff-dashboard" data-roles="specialist" tabindex="0" role="link" onclick="nav(this)">Мои результаты</div>
+      <div class="tn" data-p="records" data-roles="owner,admin" tabindex="0" role="link" onclick="nav(this)">Записи</div>
+      <div class="tn" data-p="clients" data-roles="owner,admin" tabindex="0" role="link" onclick="nav(this)">Пациенты</div>
+      <div class="tn" data-p="chat" data-roles="owner,admin,admin_cashier" tabindex="0" role="link" onclick="nav(this)">Сообщения</div>
+      <div class="tn" data-p="care" data-roles="owner,admin" tabindex="0" role="link" onclick="nav(this)">Забота</div>
+      <div class="tn" data-p="home-care" data-roles="owner,admin,specialist,admin_cashier" tabindex="0" role="link" onclick="nav(this)">Домашний уход</div>
+      <div class="nav-sec-t">Клиника</div>
+      <div class="nav-grp" data-grp="growth">
+        <button type="button" class="nav-grp-t" aria-expanded="false" onclick="navGrpToggle(this)">Развитие</button>
+        <div class="nav-grp-b">
+          <div class="tn" data-p="segments" data-roles="owner,admin" tabindex="0" role="link" onclick="nav(this)">Сегменты</div>
+          <div class="tn" data-p="broadcasts" data-roles="owner,admin" tabindex="0" role="link" onclick="nav(this)">Рассылки</div>
+          <div class="tn" data-p="settings" data-roles="owner,admin" data-stg="loyalty-levels" tabindex="0" role="link" onclick="nav(this)">Лояльность</div>
+        </div>
+      </div>
+      <div class="nav-grp" data-grp="materials">
+        <button type="button" class="nav-grp-t" aria-expanded="false" onclick="navGrpToggle(this)">Материалы</button>
+        <div class="nav-grp-b">
+          <div class="tn" data-p="cert-requests" data-roles="owner,admin,specialist,admin_cashier" tabindex="0" role="link" onclick="nav(this)">Справки</div>
+          <div class="tn" data-p="edocs" data-roles="owner,admin,admin_cashier" tabindex="0" role="link" onclick="nav(this)">Документы</div>
+          <div class="tn" data-p="patient-portfolio" data-roles="owner,admin,specialist,admin_cashier" tabindex="0" role="link" onclick="nav(this)">Фото-кейсы</div>
+          <div class="tn" data-p="knowledge-base" data-roles="owner,admin,specialist,admin_cashier" tabindex="0" role="link" onclick="nav(this)">База знаний</div>
+        </div>
+      </div>
+      <div class="nav-grp" data-grp="manage">
+        <button type="button" class="nav-grp-t" aria-expanded="false" onclick="navGrpToggle(this)">Управление</button>
+        <div class="nav-grp-b">
+          <div class="tn" data-p="staff-analytics" data-roles="owner,admin" tabindex="0" role="link" onclick="nav(this)">Сотрудники</div>
+          <div class="tn" data-p="economics" data-roles="owner" tabindex="0" role="link" onclick="nav(this)">Экономика</div>
+          <div class="tn" data-p="agent-services" data-roles="owner,admin" tabindex="0" role="link" onclick="nav(this)">Мила</div>
+          <div class="tn" data-p="settings" data-roles="owner,admin" tabindex="0" role="link" onclick="nav(this)">Настройки</div>
+          <div class="tn" data-p="users" data-roles="owner" tabindex="0" role="link" onclick="nav(this)">Пользователи</div>
+        </div>
+      </div>
     </nav>
     <div class="tb-right">
       <div id="syncSt" style="font-size:11.5px;color:var(--t3)"></div>
       <button class="btn btn-sec btn-sm" id="syncBtn" onclick="triggerSync()">
         <svg viewBox="0 0 24 24"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>Синхронизировать
       </button>
-      <div style="display:flex;align-items:center;gap:5px">
+      <button type="button" class="btn btn-sec btn-sm skin-btn" id="skinToggle" onclick="toggleSkin()" hidden title="Переключить оформление (только дев)">Ivory</button>
+      <div class="dm-wrap" style="display:flex;align-items:center;gap:5px">
         <span class="dm-label" id="dmLabel">🌙</span>
         <button class="dm-btn" id="dmToggle" onclick="toggleDarkMode()" title="Тёмная тема"></button>
       </div>
@@ -141,27 +167,49 @@
       </div>
       <button class="mnav-close" onclick="closeMenu()" aria-label="Закрыть">✕</button>
     </div>
-    <nav class="mnav-list" id="mnavList">
-      <div class="tn" data-p="dashboard" data-roles="owner,admin" onclick="nav(this)">Дашборд</div>
-      <div class="tn" data-p="staff-dashboard" data-roles="specialist" onclick="nav(this)">Дашборд</div>
-      <div class="tn" data-p="clients" data-roles="owner,admin" onclick="nav(this)">Клиенты</div>
-      <div class="tn" data-p="records" data-roles="owner,admin" onclick="nav(this)">Записи</div>
-      <div class="tn" data-p="staff-analytics" data-roles="owner,admin" onclick="nav(this)">Сотрудники</div>
-      <div class="tn" data-p="segments" data-roles="owner,admin" onclick="nav(this)">Сегменты</div>
-      <div class="tn" data-p="broadcasts" data-roles="owner,admin" onclick="nav(this)">📨 Рассылка</div>
-      <div class="tn" data-p="care" data-roles="owner,admin" onclick="nav(this)">💚 Забота</div>
-      <div class="tn" data-p="chat" data-roles="owner,admin,admin_cashier" onclick="nav(this)">💬 Чат</div>
-      <div class="tn" data-p="cert-requests" data-roles="owner,admin,specialist,admin_cashier" onclick="nav(this)">Справки</div>
-      <div class="tn" data-p="home-care" data-roles="owner,admin,specialist,admin_cashier" onclick="nav(this)">Уход</div>
-      <div class="tn" data-p="patient-portfolio" data-roles="owner,admin,specialist,admin_cashier" onclick="nav(this)">📷 Фото-кейсы</div>
-      <div class="tn" data-p="settings" data-roles="owner,admin" onclick="nav(this)">Настройки</div>
-      <div class="tn" data-p="knowledge-base" data-roles="owner,admin,specialist,admin_cashier" onclick="nav(this)">База знаний</div>
-      <div class="tn" data-p="users" data-roles="owner" onclick="nav(this)">Пользователи</div>
-      <div class="tn" data-p="agent-services" data-roles="owner,admin" onclick="nav(this)">Услуги агента</div>
+    <nav class="mnav-list" id="mnavList" aria-label="Разделы">
+      <div class="nav-sec-t">Рабочее пространство</div>
+      <div class="tn" data-p="workday" data-roles="admin" tabindex="0" role="link" onclick="nav(this)">Рабочий день</div>
+      <div class="tn" data-p="dashboard" data-roles="owner,admin" tabindex="0" role="link" onclick="nav(this)">Обзор</div>
+      <div class="tn" data-p="workday" data-roles="owner" tabindex="0" role="link" onclick="nav(this)">Рабочий день</div>
+      <div class="tn" data-p="staff-dashboard" data-roles="specialist" tabindex="0" role="link" onclick="nav(this)">Мои результаты</div>
+      <div class="tn" data-p="records" data-roles="owner,admin" tabindex="0" role="link" onclick="nav(this)">Записи</div>
+      <div class="tn" data-p="clients" data-roles="owner,admin" tabindex="0" role="link" onclick="nav(this)">Пациенты</div>
+      <div class="tn" data-p="chat" data-roles="owner,admin,admin_cashier" tabindex="0" role="link" onclick="nav(this)">Сообщения</div>
+      <div class="tn" data-p="care" data-roles="owner,admin" tabindex="0" role="link" onclick="nav(this)">Забота</div>
+      <div class="tn" data-p="home-care" data-roles="owner,admin,specialist,admin_cashier" tabindex="0" role="link" onclick="nav(this)">Домашний уход</div>
+      <div class="nav-sec-t">Клиника</div>
+      <div class="nav-grp" data-grp="growth">
+        <button type="button" class="nav-grp-t" aria-expanded="false" onclick="navGrpToggle(this)">Развитие</button>
+        <div class="nav-grp-b">
+          <div class="tn" data-p="segments" data-roles="owner,admin" tabindex="0" role="link" onclick="nav(this)">Сегменты</div>
+          <div class="tn" data-p="broadcasts" data-roles="owner,admin" tabindex="0" role="link" onclick="nav(this)">Рассылки</div>
+          <div class="tn" data-p="settings" data-roles="owner,admin" data-stg="loyalty-levels" tabindex="0" role="link" onclick="nav(this)">Лояльность</div>
+        </div>
+      </div>
+      <div class="nav-grp" data-grp="materials">
+        <button type="button" class="nav-grp-t" aria-expanded="false" onclick="navGrpToggle(this)">Материалы</button>
+        <div class="nav-grp-b">
+          <div class="tn" data-p="cert-requests" data-roles="owner,admin,specialist,admin_cashier" tabindex="0" role="link" onclick="nav(this)">Справки</div>
+          <div class="tn" data-p="edocs" data-roles="owner,admin,admin_cashier" tabindex="0" role="link" onclick="nav(this)">Документы</div>
+          <div class="tn" data-p="patient-portfolio" data-roles="owner,admin,specialist,admin_cashier" tabindex="0" role="link" onclick="nav(this)">Фото-кейсы</div>
+          <div class="tn" data-p="knowledge-base" data-roles="owner,admin,specialist,admin_cashier" tabindex="0" role="link" onclick="nav(this)">База знаний</div>
+        </div>
+      </div>
+      <div class="nav-grp" data-grp="manage">
+        <button type="button" class="nav-grp-t" aria-expanded="false" onclick="navGrpToggle(this)">Управление</button>
+        <div class="nav-grp-b">
+          <div class="tn" data-p="staff-analytics" data-roles="owner,admin" tabindex="0" role="link" onclick="nav(this)">Сотрудники</div>
+          <div class="tn" data-p="economics" data-roles="owner" tabindex="0" role="link" onclick="nav(this)">Экономика</div>
+          <div class="tn" data-p="agent-services" data-roles="owner,admin" tabindex="0" role="link" onclick="nav(this)">Мила</div>
+          <div class="tn" data-p="settings" data-roles="owner,admin" tabindex="0" role="link" onclick="nav(this)">Настройки</div>
+          <div class="tn" data-p="users" data-roles="owner" tabindex="0" role="link" onclick="nav(this)">Пользователи</div>
+        </div>
+      </div>
     </nav>
     <div class="mnav-foot">
       <div id="mnavSyncSt" style="font-size:11.5px;color:var(--t3)"></div>
-      <button class="btn btn-sec btn-full" onclick="triggerSync()">
+      <button class="btn btn-sec btn-full" id="mnavSyncBtn" onclick="triggerSync()">
         <svg viewBox="0 0 24 24"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>Синхронизировать
       </button>
       <button class="btn btn-sec btn-full" onclick="doLogout()">Выйти</button>
@@ -169,6 +217,9 @@
   </aside>
 
   <div class="content">
+    <!-- Заголовок страницы оформления Ivory & Brass (в прежнем виде скрыт).
+         Текст ставит nav.js (_navAfterHighlight) по активному пункту меню. -->
+    <div class="pg-hero" id="pgHero"><div class="pg-eyebrow" id="pgEyebrow"></div><h1 class="pg-title" id="pgTitle"></h1></div>
 
     <!-- ── PERSONAL STAFF DASHBOARD ── -->
     <section class="page" id="page-staff-dashboard" hidden>
@@ -197,6 +248,16 @@
           </div>
         </div>
       </div>
+      <!-- Вкладки дашборда владельца (Ivory & Brass, этап 3). Вкладка живёт в hash:
+           #dashboard — Клиника, #dashboard/msg[/…] — Мессенджеры (вместе с
+           детализацией вердиктов), #dashboard/loyalty — Лояльность. Данные
+           грузятся ОДНИМ заходом loadDashboard на все три вкладки. -->
+      <div class="tabs dash-tabs" role="tablist" aria-label="Разделы дашборда">
+        <button type="button" class="tab active" role="tab" data-dtab="clinic" aria-selected="true" onclick="dashTabClick('clinic')">Клиника</button>
+        <button type="button" class="tab" role="tab" data-dtab="msg" aria-selected="false" onclick="dashTabClick('msg')">Мессенджеры</button>
+        <button type="button" class="tab" role="tab" data-dtab="loyalty" aria-selected="false" onclick="dashTabClick('loyalty')">Лояльность</button>
+      </div>
+      <div class="dash-tab" data-dtab="clinic" role="tabpanel">
       <div class="sg-top mb">
         <div class="sc"><div class="sl">Выручка за период</div><div class="sv" id="ds3">—</div><div class="sd" id="ds3s"></div><div class="rev-breakdown" id="ds3b"><div class="rev-row" id="rev-row-services"><span class="rev-lbl">Услуги</span><span class="rev-val" id="rev-services">—</span></div><div class="rev-row" id="rev-row-goods"><span class="rev-lbl">Косметика и товары</span><span class="rev-val" id="rev-goods">—</span></div><div class="rev-row" id="rev-row-abonement"><span class="rev-lbl">Абонементы</span><span class="rev-val" id="rev-abonement">—</span></div><div class="rev-row" id="rev-row-certificate"><span class="rev-lbl">Сертификаты</span><span class="rev-val" id="rev-certificate">—</span></div><div class="rev-row" id="rev-row-deposit"><span class="rev-lbl">Пополнения счёта</span><span class="rev-val" id="rev-deposit">—</span></div></div></div>
         <div class="sg-top-col">
@@ -208,13 +269,31 @@
           <div class="sc"><div class="sl">Списано бонусов</div><div class="sv" id="an5" style="color:var(--danger)">—</div><div class="sd dn" id="an5s"></div></div>
         </div>
       </div>
-      <div class="sg mb" style="grid-template-columns:repeat(5,1fr)">
-        <div class="sc"><div class="sl">Клиентов в базе</div><div class="sv" id="ds1">—</div><div class="sd up" id="ds1s"></div></div>
-        <div class="sc"><div class="sl">Клиентов с картой лояльности</div><div class="sv" id="ds5">—</div><div class="sd" id="ds5s"></div></div>
-        <div class="sc"><div class="sl">Активных бонусов</div><div class="sv" id="ds2">—</div><div class="sd" id="ds2s"></div></div>
-        <div class="sc"><div class="sl">Подписаны в Telegram</div><div class="sv" id="ds6">—</div><div class="sd" id="ds6s"></div></div>
-        <div class="sc"><div class="sl">ROI программы</div><div class="sv" id="an3" style="color:var(--a)">—</div><div class="sd" id="an3s">выручка / начисления</div></div>
+        <div class="card mb"><div class="ct">Выручка по дням</div><div style="height:220px"><canvas id="revChart"></canvas></div></div>
+        <div class="card mb" style="padding:0">
+          <div class="ct" style="padding:18px 18px 0 18px">Топ услуг</div>
+          <div class="tw"><table>
+            <thead>
+              <tr>
+                <th class="th-sort asc" onclick="svcSort('service_name')" data-col="service_name">
+                  <span>Услуга</span><i class="sort-icon"></i>
+                </th>
+                <th class="th-sort" onclick="svcSort('cnt')" data-col="cnt">
+                  <span>Количество</span><i class="sort-icon"></i>
+                </th>
+                <th class="th-sort" onclick="svcSort('total_amount')" data-col="total_amount">
+                  <span>Сумма ₽</span><i class="sort-icon"></i>
+                </th>
+              </tr>
+            </thead>
+            <tbody id="svcBody"><tr><td colspan="3" class="empty">Нет данных</td></tr></tbody>
+          </table>
+          <div style="padding:12px 18px 18px 18px;text-align:center">
+            <button id="svcToggleBtn" onclick="toggleSvc()" style="background:none;border:1px solid var(--b3);padding:8px 16px;border-radius:4px;cursor:pointer;font-size:12px;color:var(--t2);display:none">Показать все ▼</button>
+          </div></div>
+        </div>
       </div>
+      <div class="dash-tab" data-dtab="msg" role="tabpanel" hidden>
       <!-- ── Переписки в мессенджерах (спеки 2026-10-03-dashboard-messenger-stats, 2026-10-04-dialog-verdicts) ── -->
       <div class="msg-head">
         <div class="ttl">Переписки в мессенджерах</div>
@@ -242,38 +321,46 @@
           <div class="vd-panel" id="vdPanel" style="display:none"></div>
         </div>
       </div>
+      </div>
+      <div class="dash-tab" data-dtab="loyalty" role="tabpanel" hidden>
+      <div class="sg mb" style="grid-template-columns:repeat(5,1fr)">
+        <div class="sc"><div class="sl">Клиентов в базе</div><div class="sv" id="ds1">—</div><div class="sd up" id="ds1s"></div></div>
+        <div class="sc"><div class="sl">Клиентов с картой лояльности</div><div class="sv" id="ds5">—</div><div class="sd" id="ds5s"></div></div>
+        <div class="sc"><div class="sl">Активных бонусов</div><div class="sv" id="ds2">—</div><div class="sd" id="ds2s"></div></div>
+        <div class="sc"><div class="sl">Подписаны в Telegram</div><div class="sv" id="ds6">—</div><div class="sd" id="ds6s"></div></div>
+        <div class="sc"><div class="sl">Выручка на 1 ₽ бонусов</div><div class="sv" id="an3" style="color:var(--a)">—</div><div class="sd" id="an3s">выручка ÷ начисления за период · не прибыль</div></div>
+      </div>
       <div class="g32 mb">
-        <div class="card"><div class="ct">Выручка по дням</div><div style="height:220px"><canvas id="revChart"></canvas></div></div>
+        <div class="card"><div class="ct">Бонусы: начислено vs потрачено</div><div style="height:200px"><canvas id="bfChart"></canvas></div></div>
         <div class="card"><div class="ct">Уровни клиентов</div><div id="lvlDash" style="display:flex;flex-direction:column;gap:10px;padding-top:4px"></div></div>
       </div>
       <div class="g2 mb">
         <div class="card"><div class="ct">Последние начисления</div><div id="recentTx"><div class="empty">Нет данных</div></div></div>
-        <div class="card" style="padding:0">
-          <div class="ct" style="padding:18px 18px 0 18px">Топ услуг</div>
-          <div class="tw"><table>
-            <thead>
-              <tr>
-                <th class="th-sort asc" onclick="svcSort('service_name')" data-col="service_name">
-                  <span>Услуга</span><i class="sort-icon"></i>
-                </th>
-                <th class="th-sort" onclick="svcSort('cnt')" data-col="cnt">
-                  <span>Количество</span><i class="sort-icon"></i>
-                </th>
-                <th class="th-sort" onclick="svcSort('total_amount')" data-col="total_amount">
-                  <span>Сумма ₽</span><i class="sort-icon"></i>
-                </th>
-              </tr>
-            </thead>
-            <tbody id="svcBody"><tr><td colspan="3" class="empty">Нет данных</td></tr></tbody>
-          </table>
-          <div style="padding:12px 18px 18px 18px;text-align:center">
-            <button id="svcToggleBtn" onclick="toggleSvc()" style="background:none;border:1px solid var(--b3);padding:8px 16px;border-radius:4px;cursor:pointer;font-size:12px;color:var(--t2);display:none">Показать все ▼</button>
-          </div></div>
-        </div>
-      </div>
-      <div class="g2">
-        <div class="card"><div class="ct">Бонусы: начислено vs потрачено</div><div style="height:200px"><canvas id="bfChart"></canvas></div></div>
         <div class="card"><div class="ct">Распределение по уровням</div><div style="height:200px"><canvas id="lvlChart"></canvas></div></div>
+      </div>
+      </div>
+    </div>
+
+    <!-- ── РАБОЧИЙ ДЕНЬ (главная администратора; js/pages/workday.js) ── -->
+    <div class="page" id="page-workday">
+      <div class="wd-date" id="wdDate"></div>
+      <div class="sg mb wd-sum">
+        <div class="sc"><div class="sl">Записей сегодня</div><div class="sv" id="wdTotal">—</div><div class="sd">без удалённых</div></div>
+        <div class="sc"><div class="sl">Пришли</div><div class="sv" id="wdCame">—</div><div class="sd">визит идёт или оказан</div></div>
+        <div class="sc"><div class="sl">Ждём</div><div class="sv" id="wdExpected">—</div><div class="sd">подтверждены или в ожидании</div></div>
+        <div class="sc"><div class="sl">Отмены и неявки</div><div class="sv" id="wdLost">—</div><div class="sd">за сегодня</div></div>
+      </div>
+      <div class="g32 mb">
+        <div class="card"><div class="ct">Записи на сегодня <a href="#records" class="wd-link" onclick="navTo('records',{reset:true});return false">Все записи ›</a></div><div id="wdRecords"></div></div>
+        <div class="wd-col">
+          <div class="card mb"><div class="ct">Ждут ответа человека <span class="wd-count" id="wdEscN">—</span></div><div id="wdDialogs"></div>
+            <div class="wd-foot"><a href="#chat" class="wd-link" onclick="navTo('chat',{reset:true});return false">Все сообщения ›</a></div></div>
+          <div class="card mb"><div class="ct">Новые заявки на справки <span class="wd-count" id="wdCertN">—</span></div><div id="wdCerts"></div>
+            <div class="wd-foot"><a href="#cert-requests" class="wd-link" onclick="navTo('cert-requests',{reset:true});return false">Все заявки ›</a></div></div>
+          <div class="card"><div class="ct">Забота о пациентах</div>
+            <div class="wd-sub" style="margin-bottom:10px">Программы касаний после визита и напоминания о повторном визите.</div>
+            <a href="#care" class="btn btn-sec btn-sm" onclick="navTo('care',{reset:true});return false">Открыть «Заботу» ›</a></div>
+        </div>
       </div>
     </div>
 
@@ -352,8 +439,8 @@
         <button class="btn btn-sec" onclick="loadRecords(1)">Применить</button>
       </div>
       <div class="card" style="padding:0"><div class="tw"><table>
-        <thead><tr><th>Дата</th><th>Клиент</th><th>Услуги</th><th>Мастер</th><th style="text-align:right">Сумма</th><th style="text-align:right">Начислено</th><th style="text-align:right">Списано</th><th>Статус</th><th>Источник</th></tr></thead>
-        <tbody id="rBody"><tr><td colspan="9" class="empty">Выберите период</td></tr></tbody>
+        <thead><tr><th>Дата</th><th>Клиент</th><th>Услуги</th><th>Мастер</th><th style="text-align:right">Сумма</th><th style="text-align:right">Начислено</th><th style="text-align:right">Списано</th><th>Статус</th><th>Источник</th><th></th></tr></thead>
+        <tbody id="rBody"><tr><td colspan="10" class="empty">Выберите период</td></tr></tbody>
       </table></div></div>
       <div style="font-size:12px;color:var(--t3);padding:8px 2px" id="rPager"></div>
     </div>
@@ -1137,12 +1224,103 @@
       <div id="bcTab-rules" style="display:none">
         <div class="bc-head">
           <div>
-            <div class="bc-head-title">🔁 Автоуведомления</div>
-            <div class="bc-head-sub">Постоянные уведомления по событию «создание записи»</div>
+            <div class="bc-head-title">🔁 Уведомления клиентам по записям YClients</div>
+            <div class="bc-head-sub" id="ntModeLine">Режим: —</div>
           </div>
-          <button class="btn btn-pri" onclick="nrOpenEditor()">+ Новое правило</button>
+          <div class="care-acts">
+            <button class="btn btn-sec" id="ntSettingsBtn" onclick="ntOpenSettings()">⚙️ Настройки</button>
+            <button class="btn btn-pri" id="ntAddBtn" onclick="ntOpenEditor()">+ Правило</button>
+          </div>
         </div>
-        <div id="nrList" class="empty">Загрузка…</div>
+
+        <div class="tabs nt-subtabs" id="ntSubTabs">
+          <button class="tab active" id="ntSubBtn-rules" onclick="ntSub('rules')">Правила</button>
+          <button class="tab" id="ntSubBtn-jobs" onclick="ntSub('jobs')">Журнал</button>
+          <button class="tab" id="ntSubBtn-ratings" onclick="ntSub('ratings')">Оценки</button>
+          <button class="tab" id="ntSubBtn-parity" onclick="ntSub('parity')">Сверка с Chatpush</button>
+        </div>
+
+        <div id="ntSub-rules" class="empty">Загрузка…</div>
+
+        <div id="ntSub-jobs" style="display:none">
+          <div class="care-filters nt-filters">
+            <select id="ntJobType" onchange="ntJobsFilterChanged()"><option value="">Все типы</option></select>
+            <select id="ntJobStatus" onchange="ntJobsFilterChanged()">
+              <option value="">Все статусы</option>
+              <option value="pending">В очереди</option>
+              <option value="sent">Отправлено</option>
+              <option value="shadow">Тень</option>
+              <option value="skipped">Пропущено</option>
+              <option value="cancelled">Отменено</option>
+              <option value="failed">Ошибка</option>
+            </select>
+            <input type="date" id="ntJobDate" onchange="ntJobsFilterChanged()" title="День отправки (по плану)">
+            <button class="btn btn-sec btn-sm" onclick="ntJobsReset()">Сбросить</button>
+          </div>
+          <div id="ntJobsList"></div>
+          <div id="ntJobsPager"></div>
+        </div>
+
+        <div id="ntSub-ratings" style="display:none">
+          <div id="ntRatingsBody"></div>
+        </div>
+
+        <div id="ntSub-parity" style="display:none">
+          <div class="care-filters nt-filters">
+            <label class="care-touch-lbl">период
+              <select id="ntParityDays" onchange="ntLoadParity()" style="width:auto">
+                <option value="7" selected>7 дней</option>
+                <option value="14">14 дней</option>
+                <option value="30">30 дней</option>
+              </select>
+            </label>
+          </div>
+          <div id="ntParityBody"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══ BROADCAST MONITOR (мессенджеры) ═══ -->
+    <div id="bcMonitorOv" class="ov" onclick="if(event.target===this)bcCloseMonitor()">
+      <div class="modal bc-modal bc-mon">
+        <div class="mh">
+          <div class="mt">Рассылка</div>
+          <button class="mc" onclick="bcCloseMonitor()">✕</button>
+        </div>
+        <div class="bc-modal-body">
+          <div class="bc-mon-head">
+            <div id="bcMonStatus"></div>
+            <div class="bc-mon-btns">
+              <button id="bcMonPause" class="btn btn-sec btn-sm" onclick="bcMonAction('pause')">Пауза</button>
+              <button id="bcMonResume" class="btn btn-pri btn-sm" style="display:none" onclick="bcMonAction('resume')">Продолжить</button>
+              <button id="bcMonCancel" class="btn btn-sec btn-sm" onclick="bcMonAction('cancel')">Отменить остаток</button>
+            </div>
+          </div>
+          <div id="bcMonProgress"></div>
+          <div id="bcMonText" class="bc-mon-text"></div>
+          <div id="bcMonCards" class="bc-mon-cards"></div>
+          <div class="bc-section">
+            <div class="bc-section-title">Сейчас ждут</div>
+            <div id="bcMonWaiting"></div>
+          </div>
+          <div id="bcMonSummary"></div>
+          <div class="bc-section">
+            <div class="bc-section-title">Получатели</div>
+            <div class="bc-mon-filters">
+              <select id="bcMonStatusF" onchange="bcMonFilterChanged(0)">
+                <option value="">Все статусы</option><option value="pending">Ждут</option><option value="sent">Отправлено</option>
+                <option value="undeliverable">Не доставлено</option><option value="unknown">Доставка неизвестна</option>
+                <option value="failed">Ошибка</option><option value="skipped">Пропущены</option><option value="cancelled">Отменены</option>
+              </select>
+              <select id="bcMonChannelF" onchange="bcMonFilterChanged(0)">
+                <option value="">Все мессенджеры</option><option value="tdlib">Telegram</option><option value="whatsapp">WhatsApp</option><option value="max">MAX</option>
+              </select>
+              <input id="bcMonQ" type="text" placeholder="Поиск по номеру" oninput="bcMonFilterChanged(400)">
+            </div>
+            <div class="bc-mon-tablewrap"><table class="bc-mon-table"><thead><tr><th>Имя</th><th>Номер</th><th>Мессенджер</th><th>Статус</th></tr></thead><tbody id="bcMonRows"></tbody></table></div>
+            <div id="bcMonPager" class="bc-mon-pager"></div>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -1156,6 +1334,30 @@
         <div class="bc-modal-body">
 
           <div class="bc-section">
+            <div class="bc-section-title">Куда отправляем</div>
+            <div id="bcTransport" class="bc-chip-row">
+              <span class="bc-chip on" data-v="messengers" onclick="bcSetTransport('messengers')">💬 Мессенджеры клиники</span>
+              <span class="bc-chip" data-v="telegram_bot" onclick="bcSetTransport('telegram_bot')">🤖 Telegram-бот</span>
+            </div>
+            <div class="bc-msg-only" style="margin-top:10px">
+              <div class="bc-section-title" style="margin-bottom:6px">Кому</div>
+              <div id="bcSource" class="bc-chip-row">
+                <span class="bc-chip on" data-v="filters" onclick="bcSetSource('filters')">По фильтрам</span>
+                <span class="bc-chip" data-v="list" onclick="bcSetSource('list')">По списку</span>
+              </div>
+              <div id="bcListBlock" style="display:none;margin-top:10px">
+                <div class="bc-section-hint">Вставьте строки «Имя;телефон» (или только телефон) либо загрузите файл .csv / .xlsx (до 2 МБ).</div>
+                <textarea id="bcListText" class="bc-textarea" rows="5" placeholder="Анна;+7 920 000-00-00&#10;79201112233"></textarea>
+                <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:6px">
+                  <input type="file" id="bcListFile" accept=".csv,.xlsx">
+                  <button class="btn btn-sec btn-sm" id="bcListParseBtn" onclick="bcParseList()">Разобрать</button>
+                </div>
+                <div id="bcListReport" class="bc-preview" style="margin-top:8px;display:none"></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="bc-section" id="bcFiltersSection">
             <div class="bc-section-title">Фильтр получателей</div>
 
             <div class="fg" style="margin-bottom:10px">
@@ -1221,7 +1423,7 @@
 
           <div class="bc-section">
             <div class="bc-section-title">Текст сообщения</div>
-            <div class="bc-section-hint">
+            <div class="bc-section-hint bc-bot-only">
               HTML-разметка Telegram: &lt;b&gt;жирный&lt;/b&gt;, &lt;i&gt;курсив&lt;/i&gt;, &lt;a href="…"&gt;ссылка&lt;/a&gt;.<br>
               Подстановки:
               <code onclick="bcInsertVar('{name}')">{name}</code>
@@ -1233,6 +1435,51 @@
             <div class="bc-char-count"><span id="bcCharCount">0</span> / 4000</div>
           </div>
 
+          <div class="bc-section bc-msg-only" id="bcImageBlock">
+            <div class="bc-section-title">Картинка (необязательно)</div>
+            <div class="bc-section-hint">jpg / png / webp до 5 МБ. Уйдёт вместе с текстом подписью.</div>
+            <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+              <input type="file" id="bcImageFile" accept="image/jpeg,image/png,image/webp" onchange="bcPickImage()">
+              <button class="btn btn-sec btn-sm" id="bcImageClear" style="display:none" onclick="bcClearImage()">убрать</button>
+            </div>
+            <img id="bcImagePreview" alt="" style="display:none;max-width:180px;max-height:140px;margin-top:8px;border-radius:6px">
+          </div>
+
+          <div class="bc-section bc-msg-only" id="bcDelivery">
+            <div class="bc-section-title">Доставка</div>
+            <label style="display:flex;gap:8px;align-items:center;margin-bottom:8px">
+              <input type="checkbox" id="bcCascade" checked onchange="bcUpdateForecast()">
+              <span>Каскад: последняя переписка → порядок из настроек автоуведомлений</span>
+            </label>
+            <table class="bc-ch-table" style="width:100%;font-size:13px">
+              <thead><tr><th style="text-align:left">Мессенджер</th><th>Пауза, сек</th><th>Лимит</th></tr></thead>
+              <tbody>
+                <tr><td><label><input type="checkbox" id="bcCh-tdlib-on" checked onchange="bcUpdateForecast()"> Telegram</label></td>
+                    <td><input id="bcCh-tdlib-delay" type="number" min="0" max="3600" value="60" oninput="bcUpdateForecast()"></td>
+                    <td><input id="bcCh-tdlib-limit" type="number" min="1" max="10000" placeholder="без лимита" oninput="bcUpdateForecast()"></td></tr>
+                <tr><td><label><input type="checkbox" id="bcCh-whatsapp-on" checked onchange="bcUpdateForecast()"> WhatsApp</label></td>
+                    <td><input id="bcCh-whatsapp-delay" type="number" min="0" max="3600" value="180" oninput="bcUpdateForecast()"></td>
+                    <td><input id="bcCh-whatsapp-limit" type="number" min="1" max="10000" placeholder="без лимита" oninput="bcUpdateForecast()"></td></tr>
+                <tr><td><label><input type="checkbox" id="bcCh-max-on" checked onchange="bcUpdateForecast()"> MAX</label></td>
+                    <td><input id="bcCh-max-delay" type="number" min="0" max="3600" value="60" oninput="bcUpdateForecast()"></td>
+                    <td><input id="bcCh-max-limit" type="number" min="1" max="10000" placeholder="без лимита" oninput="bcUpdateForecast()"></td></tr>
+              </tbody>
+            </table>
+            <div class="fg" style="margin-top:8px">
+              <label class="fl">Когда лимит мессенджера исчерпан</label>
+              <select id="bcOnLimit" onchange="bcUpdateForecast()">
+                <option value="next_channel">в следующий мессенджер</option>
+                <option value="skip">не отправлять</option>
+              </select>
+            </div>
+            <div id="bcForecast" class="bc-preview" style="margin-top:8px">—</div>
+            <div id="bcBonusHint" class="bc-section-hint" style="display:none;margin-top:6px">В режиме списка у номеров не из базы {bonuses} = 0.</div>
+            <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:10px">
+              <input id="bcTestPhone" type="tel" inputmode="tel" placeholder="Мой номер для теста" oninput="bcSaveTestPhone()">
+              <button class="btn btn-sec btn-sm" id="bcTestBtn" onclick="bcSendTest()">🧪 Тест на мой номер</button>
+            </div>
+          </div>
+
           <div class="bc-actions">
             <button class="btn btn-sec" onclick="bcCloseComposer()">Отмена</button>
             <button id="bcSendBtn" class="btn btn-pri" onclick="bcSend()">Отправить</button>
@@ -1241,36 +1488,42 @@
       </div>
     </div>
 
-    <!-- ═══ NOTIFICATION RULE EDITOR MODAL ═══ -->
-    <div id="nrEditorOv" class="ov" onclick="if(event.target===this)nrCloseEditor()">
-      <div class="modal bc-modal">
+    <!-- ═══ NOTIFICATION RULE EDITOR MODAL (notifications.js) ═══ -->
+    <div id="ntEditorOv" class="ov" onclick="if(event.target===this)ntCloseEditor()">
+      <div class="modal bc-modal nt-modal">
         <div class="mh">
-          <div class="mt" id="nrEditorTitle">Новое правило</div>
-          <button class="mc" onclick="nrCloseEditor()">✕</button>
+          <div class="mt" id="ntEditorTitle">Новое правило</div>
+          <button class="mc" onclick="ntCloseEditor()">✕</button>
         </div>
         <div class="bc-modal-body">
 
           <div class="bc-section">
             <div class="fg">
               <label class="fl">Название правила</label>
-              <input id="nrTitle" type="text" maxlength="255" placeholder="напр. Запись на лазерную эпиляцию">
+              <input id="ntTitle" type="text" maxlength="255" placeholder="напр. Напоминание за сутки">
             </div>
+            <div class="fg" style="margin-bottom:0">
+              <label class="fl">Тип уведомления</label>
+              <select id="ntType" onchange="ntOnTypeChange()"></select>
+              <div class="bc-section-hint" id="ntTypeHint" style="margin:6px 0 0"></div>
+            </div>
+            <div id="ntTypeFields" style="margin-top:12px"></div>
           </div>
 
           <div class="bc-section">
-            <div class="bc-section-title">Условия (событие: создание записи)</div>
+            <div class="bc-section-title">Условия</div>
             <div class="bc-section-hint">
-              Без условий правило срабатывает на любую новую запись.
+              Без условий правило срабатывает на любую запись.
               Внутри одного условия значения объединяются через ИЛИ.
             </div>
-            <div id="nrConds"></div>
+            <div id="ntfConds"></div>
             <div style="display:flex;align-items:center;gap:14px;margin-top:8px;flex-wrap:wrap">
-              <button class="btn btn-sec btn-sm" onclick="nrAddCond()">+ Условие</button>
-              <div id="nrLogicWrap" style="display:none;align-items:center;gap:8px">
+              <button class="btn btn-sec btn-sm" onclick="condAdd('ntf')">+ Условие</button>
+              <div id="ntfLogicWrap" style="display:none;align-items:center;gap:8px">
                 <span style="font-size:12px;color:var(--t3)">Объединять условия:</span>
                 <div class="bc-chip-row">
-                  <span class="bc-chip on" id="nrLogic-and" onclick="nrSetLogic('and')">И</span>
-                  <span class="bc-chip" id="nrLogic-or" onclick="nrSetLogic('or')">ИЛИ</span>
+                  <span class="bc-chip on" id="ntfLogic-and" onclick="condSetLogic('ntf','and')">И</span>
+                  <span class="bc-chip" id="ntfLogic-or" onclick="condSetLogic('ntf','or')">ИЛИ</span>
                 </div>
               </div>
             </div>
@@ -1279,50 +1532,140 @@
           <div class="bc-section">
             <div class="bc-section-title">Текст сообщения</div>
             <div class="bc-section-hint">
-              Эмодзи поддерживаются. Разметка WhatsApp: *жирный*, _курсив_.<br>
-              Подстановки:
-              <code onclick="nrInsertVar('{first_name}')">{first_name}</code>
-              <code onclick="nrInsertVar('{name}')">{name}</code>
-              <code onclick="nrInsertVar('{date}')">{date}</code>
-              <code onclick="nrInsertVar('{time}')">{time}</code>
-              <code onclick="nrInsertVar('{services}')">{services}</code>
-              <code onclick="nrInsertVar('{staff}')">{staff}</code>
-              <code onclick="nrInsertVar('{salon}')">{salon}</code>
+              Эмодзи поддерживаются. Подстановки (клик — вставить в текст):
+              <span id="ntVars"></span>
             </div>
-            <textarea id="nrText" class="bc-textarea" rows="6" maxlength="4000"
-              placeholder="Здравствуйте, {first_name}! Вы записаны {date} в {time} на «{services}» к мастеру {staff} 💜"></textarea>
-            <div class="bc-char-count"><span id="nrCharCount">0</span> / 4000</div>
-          </div>
-
-          <div class="bc-section">
-            <div class="bc-section-title">Каналы отправки</div>
-            <div class="bc-section-hint">
-              Кликайте в нужном порядке — это порядок каскада: не доставили в первый, пробуем следующий.
+            <textarea id="ntText" class="bc-textarea" rows="6" maxlength="4000" oninput="ntTextChanged()"></textarea>
+            <div class="bc-char-count"><span id="ntCharCount">0</span> / 4000</div>
+            <div id="ntTextWarn"></div>
+            <div class="bc-section-hint" style="margin:6px 0 0">
+              Правка текста действует на новые события: уже запланированные отправки уйдут со старым текстом.
             </div>
-            <div id="nrChannels" class="bc-chip-row"></div>
-            <label style="display:flex;align-items:center;gap:8px;margin-top:10px;font-size:12.5px;cursor:pointer">
-              <input type="checkbox" id="nrPreferLast" checked>
-              Сначала — канал, из которого клиент писал в последний раз
-            </label>
           </div>
 
           <div class="bc-actions">
-            <button class="btn btn-sec" onclick="nrCloseEditor()">Отмена</button>
-            <button id="nrSaveBtn" class="btn btn-pri" onclick="nrSave()">Сохранить</button>
+            <button class="btn btn-sec btn-dng" id="ntDeleteBtn" onclick="ntDelete()" style="margin-right:auto">🗑 Удалить</button>
+            <button class="btn btn-sec" id="ntTestBtn" onclick="ntOpenTest()">🧪 Тест</button>
+            <button class="btn btn-sec" onclick="ntCloseEditor()">Отмена</button>
+            <button id="ntSaveBtn" class="btn btn-pri" onclick="ntSave()">Сохранить</button>
           </div>
         </div>
       </div>
     </div>
 
-    <!-- ═══ NOTIFICATION RULE LOG MODAL ═══ -->
-    <div id="nrLogOv" class="ov" onclick="if(event.target===this)nrCloseLog()">
-      <div class="modal bc-modal">
+    <!-- ═══ NOTIFICATION TEST SEND MODAL (поверх редактора: в DOM после него) ═══ -->
+    <div id="ntTestOv" class="ov" onclick="if(event.target===this)ntCloseTest()">
+      <div class="modal nt-modal">
         <div class="mh">
-          <div class="mt" id="nrLogTitle">Журнал отправок</div>
-          <button class="mc" onclick="nrCloseLog()">✕</button>
+          <div class="mt">Тестовая отправка</div>
+          <button class="mc" onclick="ntCloseTest()">✕</button>
         </div>
-        <div class="bc-modal-body" id="nrLogBody">
-          <div class="empty">Загрузка…</div>
+        <div class="bc-modal-body">
+          <div class="bc-section-hint" style="margin:0">
+            Правило уйдёт на указанный номер тем же воркером, что и в бою, с тестовыми данными
+            (имя «Тест Тестовна», дата 31.12.2026, время 12:00). Берётся СОХРАНЁННАЯ версия правила —
+            сначала сохраните правки. В режиме «тень» строка попадёт в журнал без отправки,
+            в «боевом» — реально уйдёт на номер, в выключенном тест не работает.
+          </div>
+          <div class="fg" style="max-width:240px;margin-bottom:0">
+            <label class="fl">Номер телефона</label>
+            <input id="ntTestPhone" type="tel" placeholder="79200255591">
+          </div>
+          <div id="ntTestResult" class="empty" style="padding:12px 0">Укажите номер и нажмите «Отправить тест»</div>
+          <div class="bc-actions">
+            <button class="btn btn-sec" onclick="ntCloseTest()">Закрыть</button>
+            <button class="btn btn-pri" id="ntTestSendBtn" onclick="ntRunTest()">Отправить тест</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══ NOTIFICATION SETTINGS MODAL (notifications.js) ═══ -->
+    <div id="ntSettingsOv" class="ov" onclick="if(event.target===this)ntCloseSettings()">
+      <div class="modal bc-modal nt-modal">
+        <div class="mh">
+          <div class="mt">⚙️ Настройки уведомлений</div>
+          <button class="mc" onclick="ntCloseSettings()">✕</button>
+        </div>
+        <div class="bc-modal-body">
+
+          <div class="bc-section">
+            <div class="bc-section-title">Режим</div>
+            <select id="ntsMode" onchange="ntRenderModeHint()">
+              <option value="off">⚪ Выключен</option>
+              <option value="shadow">🟡 Тень — пишем в журнал, клиентам не отправляем</option>
+              <option value="live">🟢 Боевой — уходит клиентам</option>
+            </select>
+            <div class="bc-section-hint" id="ntsModeHint" style="margin:8px 0 0"></div>
+          </div>
+
+          <div class="bc-section">
+            <div class="bc-section-title">Пилотные номера</div>
+            <div class="bc-section-hint">
+              Действует только в режиме «Тень»: этим номерам уведомления уходят по-настоящему и их ответы
+              («Подтверждаю», оценка) обрабатываем мы, остальные клиенты остаются в журнале тени.
+              По одному номеру в строке или через запятую. В «Боевом» уходит всем, в «Выключен» — никому.
+            </div>
+            <textarea id="ntsPilotPhones" class="bc-textarea nt-ta-sm" rows="2" placeholder="79200255591"></textarea>
+          </div>
+
+          <div class="bc-section">
+            <div class="bc-section-title">Каскад отправки</div>
+            <div class="bc-section-hint">
+              Включённые мессенджеры идут по порядку: не вышло в первый — пробуем следующий.
+              Стрелки меняют порядок, ✕ выключает, «+» включает.
+            </div>
+            <div id="ntsChannels" class="bc-chip-row"></div>
+            <label class="nt-check">
+              <input type="checkbox" id="ntsPreferLast">
+              <span>Сначала мессенджер, в котором клиент писал последним</span>
+            </label>
+          </div>
+
+          <div class="bc-section">
+            <div class="bc-section-title">Тихие часы</div>
+            <div class="bc-section-hint">
+              В это окно не уходят напоминание, опрос, рекомендации и приглашение в программу лояльности —
+              отправка сдвигается на конец окна. «Создана / перенесена / отменена» уходят сразу.
+              Оба поля пустые — тихих часов нет.
+            </div>
+            <div class="nt-row2">
+              <div class="fg" style="margin-bottom:0"><label class="fl">С</label><input type="time" id="ntsQuietFrom"></div>
+              <div class="fg" style="margin-bottom:0"><label class="fl">До</label><input type="time" id="ntsQuietTo"></div>
+            </div>
+          </div>
+
+          <div class="bc-section">
+            <div class="bc-section-title">Ответы пациентам</div>
+            <div class="bc-section-hint">
+              Отправляются автоматически в боевом режиме, когда пациент отвечает на напоминание или опрос.
+            </div>
+            <div class="fg">
+              <label class="fl">Ответ «Подтверждаю» (визит подтверждён)</label>
+              <textarea id="ntsConfirm" class="bc-textarea nt-ta-sm" rows="2" maxlength="2000"></textarea>
+            </div>
+            <div class="fg">
+              <label class="fl">Оценка 5 (сюда можно добавить ссылки на отзывы)</label>
+              <textarea id="ntsHigh" class="bc-textarea nt-ta-sm" rows="2" maxlength="2000"></textarea>
+            </div>
+            <div class="fg">
+              <label class="fl">Оценка 4 («что можно улучшить», без перевода на администратора)</label>
+              <textarea id="ntsMid" class="bc-textarea nt-ta-sm" rows="2" maxlength="2000"></textarea>
+            </div>
+            <div class="fg">
+              <label class="fl">Оценка 2–3 («что не устроило»)</label>
+              <textarea id="ntsLow" class="bc-textarea nt-ta-sm" rows="2" maxlength="2000"></textarea>
+            </div>
+            <label class="nt-check">
+              <input type="checkbox" id="ntsEscalate">
+              <span>При оценке 2–3 передавать диалог администратору (красная подсветка в «Чате»)</span>
+            </label>
+          </div>
+
+          <div class="bc-actions">
+            <button class="btn btn-sec" onclick="ntCloseSettings()">Отмена</button>
+            <button id="ntsSaveBtn" class="btn btn-pri" onclick="ntSaveSettings()">Сохранить</button>
+          </div>
         </div>
       </div>
     </div>
@@ -1854,6 +2197,68 @@
       <div id="agent-services-root"></div>
     </div>
 
+    <div class="page" id="page-edocs">
+      <div class="bc-head">
+        <div>
+          <div class="bc-head-title">📄 Документы</div>
+          <div class="bc-head-sub">Договор и согласие — до визита, акт — сразу после оплаченного визита</div>
+        </div>
+        <div class="ed-head-actions">
+          <span id="edMeStatus" class="ed-me"></span>
+          <button class="btn btn-sec btn-sm" onclick="edOpenMe()">Мой F.Doc</button>
+        </div>
+      </div>
+      <div class="tabs ed-tabs">
+        <button class="tab active" id="edTabBtn-board" onclick="edGo('')">Дашборд</button>
+        <button class="tab" id="edTabBtn-list" onclick="edGo('packages')">Все комплекты</button>
+        <button class="tab" id="edTabBtn-settings" onclick="edGo('settings')">Настройки</button>
+      </div>
+      <div id="edNotice"></div>
+      <div id="edView-board"></div>
+      <div id="edView-client" style="display:none"></div>
+      <div id="edView-list" style="display:none"></div>
+      <div id="edView-package" style="display:none"></div>
+      <div id="edView-settings" style="display:none"></div>
+    </div>
+
+    <div class="page" id="page-economics">
+      <div class="bc-head">
+        <div>
+          <div class="bc-head-title">💰 Экономика процедур</div>
+          <div class="bc-head-sub">Себестоимость и маржинальность по услугам · <span id="ecoPeriodLabel"></span></div>
+        </div>
+        <div class="pb-wrap" id="ecoPeriod">
+          <div class="pb-btns">
+            <button class="pb-btn active" data-preset="month" onclick="ecoSetPreset('month')">Месяц</button>
+            <button class="pb-btn" data-preset="prev-month" onclick="ecoSetPreset('prev-month')">Прошлый</button>
+            <button class="pb-btn" data-preset="quarter" onclick="ecoSetPreset('quarter')">Квартал</button>
+            <button class="pb-btn" data-preset="year" onclick="ecoSetPreset('year')">Год</button>
+            <button class="pb-btn" data-preset="custom" onclick="ecoSetPreset('custom')">Период</button>
+          </div>
+          <div class="pb-range" id="ecoRange" style="display:none">
+            <input type="date" id="ecoFrom" class="pb-date"><span class="pb-dash">—</span><input type="date" id="ecoTo" class="pb-date">
+            <button class="btn btn-sm btn-pri" onclick="ecoApplyRange()">OK</button>
+          </div>
+        </div>
+      </div>
+      <div class="tabs eco-tabs">
+        <button class="tab active" id="ecoTabBtn-services" onclick="ecoSwitchTab('services')">📊 Услуги</button>
+        <button class="tab" id="ecoTabBtn-goods" onclick="ecoSwitchTab('goods')">🧴 Материалы</button>
+        <button class="tab" id="ecoTabBtn-tech-cards" onclick="ecoSwitchTab('tech-cards')">📋 Техкарты</button>
+        <button class="tab" id="ecoTabBtn-pay" onclick="ecoSwitchTab('pay')">👩‍⚕️ Оплата труда</button>
+        <button class="tab" id="ecoTabBtn-fixed" onclick="ecoSwitchTab('fixed')">🏢 Постоянные</button>
+        <button class="tab" id="ecoTabBtn-equipment" onclick="ecoSwitchTab('equipment')">🔬 Аппараты</button>
+        <button class="tab" id="ecoTabBtn-settings" onclick="ecoSwitchTab('settings')">⚙️ Настройки</button>
+      </div>
+      <div id="ecoTab-services"><div id="ecoSummary" class="eco-summary"></div><div id="ecoWarnings"></div><div id="ecoServices" class="empty">Загрузка…</div><div id="ecoDetail"></div></div>
+      <div id="ecoTab-goods" style="display:none"><div id="ecoGoods" class="empty">Загрузка…</div></div>
+      <div id="ecoTab-tech-cards" style="display:none"><div id="ecoTechCards" class="empty">Загрузка…</div></div>
+      <div id="ecoTab-pay" style="display:none"><div id="ecoPay" class="empty">Загрузка…</div></div>
+      <div id="ecoTab-fixed" style="display:none"><div id="ecoFixed" class="empty">Загрузка…</div></div>
+      <div id="ecoTab-equipment" style="display:none"><div id="ecoEquipment" class="empty">Загрузка…</div></div>
+      <div id="ecoTab-settings" style="display:none"><div id="ecoSettings" class="empty">Загрузка…</div></div>
+    </div>
+
     <div class="page" id="page-knowledge-base">
       <div class="kb-wrap">
         <div class="kb-topbar">
@@ -2077,6 +2482,59 @@
       <button class="btn btn-sec btn-dng" onclick="submitBonus(-1)">− Списать</button>
       <button class="btn btn-sec" onclick="closeModal('bonusModal')">Отмена</button>
     </div>
+  </div>
+</div>
+
+<div class="ov" id="edMeModal" onclick="if(event.target===this)closeModal('edMeModal')">
+  <div class="modal">
+    <div class="mh"><div class="mt">Мой F.Doc</div><button class="mc" onclick="closeModal('edMeModal')">✕</button></div>
+    <div class="ed-sub" id="edMeInfo" style="margin-bottom:12px"></div>
+    <div class="fg"><label class="fl" for="edMeLogin">Логин F.Doc</label><input type="text" id="edMeLogin" autocomplete="username"></div>
+    <div class="fg"><label class="fl" for="edMePassword">Пароль F.Doc</label><input type="password" id="edMePassword" autocomplete="current-password"></div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      <button class="btn btn-pri" onclick="edSaveMe()">Проверить и сохранить</button>
+      <button class="btn btn-sec btn-dng" onclick="edDeleteMe()">Отключить</button>
+      <button class="btn btn-sec" onclick="closeModal('edMeModal')">Закрыть</button>
+    </div>
+  </div>
+</div>
+
+<!-- «Документы»: окна дашборда и страницы пациента; содержимое рисует JS (edocs-board.js, edocs-client.js). -->
+<div class="ov" id="edConfirmModal" onclick="if(event.target===this)edConfirmDone(false)">
+  <div class="modal">
+    <div class="mh"><div class="mt" id="edConfirmTitle">Подтвердите</div><button class="mc" onclick="edConfirmDone(false)">✕</button></div>
+    <div id="edConfirmBody" style="font-size:13px;line-height:1.5"></div>
+    <div class="ed-actions"><button class="btn btn-pri" id="edConfirmOk" onclick="edConfirmDone(true)">Отправить</button><button class="btn btn-sec" onclick="edConfirmDone(false)">Отмена</button></div>
+  </div>
+</div>
+<div class="ov ed-wide" id="edActModal" onclick="if(event.target===this)closeModal('edActModal')">
+  <div class="modal">
+    <div class="mh"><div class="mt">Акт оказанных услуг</div><button class="mc" onclick="closeModal('edActModal')">✕</button></div>
+    <div id="edActBody"></div>
+  </div>
+</div>
+<div class="ov" id="edDocModal" onclick="if(event.target===this)closeModal('edDocModal')">
+  <div class="modal">
+    <div class="mh"><div class="mt" id="edDocTitle">Документ</div><button class="mc" onclick="closeModal('edDocModal')">✕</button></div>
+    <div id="edDocBody"></div>
+  </div>
+</div>
+<div class="ov" id="edPaperModal" onclick="if(event.target===this)closeModal('edPaperModal')">
+  <div class="modal">
+    <div class="mh"><div class="mt">Подписано на бумаге</div><button class="mc" onclick="closeModal('edPaperModal')">✕</button></div>
+    <div id="edPaperBody"></div>
+  </div>
+</div>
+<div class="ov" id="edFormModal" onclick="if(event.target===this)closeModal('edFormModal')">
+  <div class="modal">
+    <div class="mh"><div class="mt">Анкета пациента</div><button class="mc" onclick="closeModal('edFormModal')">✕</button></div>
+    <div id="edFormBody"></div>
+  </div>
+</div>
+<div class="ov ed-wide" id="edAutoModal" onclick="if(event.target===this)closeModal('edAutoModal')">
+  <div class="modal">
+    <div class="mh"><div class="mt">Автоматизация документов</div><button class="mc" onclick="closeModal('edAutoModal')">✕</button></div>
+    <div id="edAutoBody"></div>
   </div>
 </div>
 
@@ -2546,7 +3004,7 @@ function fireConfetti() {
 <script src="js/pages/staff.js?v=2026-06-11a"></script>
 <script src="js/pages/home-care.js?v=2026-06-02c"></script>
 <script src="js/pages/segments.js"></script>
-<script src="js/pages/records.js"></script>
+<script src="js/pages/records.js?v=2026-10-24-edocs"></script>
 <script src="js/pages/settings.js"></script>
 <script src="js/pages/portfolio.js"></script>
 <script src="js/pages/chat-dialog-sort.js?v=2026-07-31a"></script>
@@ -2557,20 +3015,29 @@ function fireConfetti() {
 <script src="js/pages/agent-model.js?v=2026-09-27"></script>
 <script src="js/pages/messaging-accounts.js?v=2026-10-14"></script>
 <script src="js/pages/patient-portfolio.js?v=2026-06-01e"></script>
-<script src="js/pages/staff-dashboard.js?v=2026-06-11d"></script>
+<script src="js/pages/staff-dashboard.js?v=2026-11-06g"></script>
 <script src="js/pages/users.js"></script>
-<script src="js/pages/clients.js"></script>
-<script src="js/pages/dashboard.js?v=2026-10-03-messengers"></script>
+<script src="js/pages/clients.js?v=2026-10-24-edocs"></script>
+<script src="js/pages/workday.js?v=2026-11-06g"></script>
+<script src="js/pages/dashboard.js?v=2026-11-06f"></script>
 <script src="js/pages/dashboard-messengers.js?v=2026-10-04-verdicts1"></script>
-<script src="js/pages/dashboard-verdicts.js?v=2026-10-04-verdicts1"></script>
-<script src="js/pages/broadcasts.js?v=2026-06-13c"></script>
-<script src="js/pages/broadcast-rules.js?v=2026-08-02a"></script>
+<script src="js/pages/dashboard-verdicts.js?v=2026-11-06c"></script>
+<script src="js/pages/broadcasts-form.js?v=2026-11-01a"></script>
+<script src="js/pages/broadcasts-monitor.js?v=2026-11-06a"></script>
+<script src="js/pages/broadcasts.js?v=2026-11-01b"></script>
 <script src="js/pages/conditions-editor.js?v=2026-08-07a"></script>
+<script src="js/pages/notifications.js?v=2026-10-16a"></script>
 <script src="js/pages/care.js?v=2026-08-07a"></script>
 <script src="js/pages/reminders-plan.js?v=2026-08-09a"></script>
 <script src="js/pages/reminders.js?v=2026-08-19a"></script>
+<script src="js/pages/economics-table.js?v=2026-10-19e"></script>
+<script src="js/pages/economics.js?v=2026-10-19e"></script>
 <script src="js/pages/medical-cert.js?v=2026-06-19"></script>
 <script src="js/pages/cert-requests.js?v=2026-06-19b"></script>
+<script src="js/pages/edocs-helpers.js?v=2026-10-25-board"></script>
+<script src="js/pages/edocs.js?v=2026-10-25-board"></script>
+<script src="js/pages/edocs-board.js?v=2026-10-25-board"></script>
+<script src="js/pages/edocs-client.js?v=2026-10-25-board"></script>
 <script src="js/pages/medical-cert-coords-transform.js?v=2026-06-17b"></script>
 <script src="js/pages/medical-cert-coords-editor.js?v=2026-06-17b"></script>
 <script src="js/pages/kb-markdown.js?v=2026-07-17-kbimg2"></script>

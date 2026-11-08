@@ -57,7 +57,7 @@ function _sdDelta(cur, prev, opts = {}) {
   if (diff === 0)
     return `<span style="font-size:13px;font-weight:600;color:var(--t3);vertical-align:3px;white-space:nowrap">${opts.pp ? '0 п.п.' : '0%'}</span>`;
   const good = opts.inverse ? diff < 0 : diff > 0;
-  return `<span style="font-size:13px;font-weight:700;color:${good ? '#13a05e' : '#d23f3f'};vertical-align:3px;white-space:nowrap">${diff > 0 ? '▲' : '▼'} ${txt}</span>`;
+  return `<span style="font-size:13px;font-weight:700;color:${good ? lpSemColor('good') : lpSemColor('bad')};vertical-align:3px;white-space:nowrap">${diff > 0 ? '▲' : '▼'} ${txt}</span>`;
 }
 
 const _SD_MON_GEN = ['января','февраля','марта','апреля','мая','июня','июля','августа','сентября','октября','ноября','декабря'];
@@ -65,9 +65,11 @@ const _SD_MON_NOM = ['январь','февраль','март','апрель','
 
 // ── Экран приветствия при первом заходе ─────────────────────────
 // Имя берём из ME (users.name = «Фамилия Имя») — второе слово.
+// Личное имя считает бэкенд (utils/person-name.js): в карточках встречается и
+// «Имя Фамилия», и «Фамилия Имя», и угадывать по позиции слова нельзя
+// («Астемир Боташев» превращался в «Боташев»). Имени нет — приветствие без имени.
 function _sdFirstName() {
-  const parts = String((typeof ME !== 'undefined' && ME && ME.name) || '').trim().split(/\s+/);
-  return parts.length >= 2 ? parts[1] : (parts[0] || '');
+  return (typeof ME !== 'undefined' && ME && ME.given_name) || '';
 }
 // Приветствие по локальному времени устройства специалиста.
 function _sdGreeting() {
@@ -171,7 +173,7 @@ function _sdFillRings(root) {
 // Hero-блок. s — data.stats. Использует существующий _sdGreeting().
 function _sdHeroHtml(s) {
   const [greet, emoji] = _sdGreeting();
-  const name = String(s.staffName || '').trim().split(/\s+/).pop() || ''; // «Гатауллина Юлия» → «Юлия»
+  const name = s.staffGivenName || _sdFirstName();
   const ava = s.staffAvatar
     ? `<img class="sd-hero-ava" src="${_sdEsc(s.staffAvatar)}" alt="" data-fb="${_sdEsc(name.slice(0, 1) || '•')}">`
     : `<div class="sd-hero-ava-fb">${_sdEsc(name.slice(0, 1) || '•')}</div>`;
@@ -250,7 +252,7 @@ async function _sdRender() {
   } catch (e) {
     if (stepTimer) clearInterval(stepTimer);
     root.classList.remove('sd-stale');
-    root.innerHTML = `<div class="pp-hint" style="color:#c00;padding:24px">Ошибка: ${_sdEsc(e.message)}</div>`;
+    root.innerHTML = `<div class="pp-hint" style="color:var(--danger);padding:24px">Ошибка: ${_sdEsc(e.message)}</div>`;
     return;
   }
   if (firstLoad) {
@@ -342,7 +344,7 @@ async function _sdRender() {
     const g = data.goal;
     if (!g) return '';
     // Цвет и комментарий — из pace (бэкенд computePace, спека 2026-06-12).
-    const PACE_COLORS = { done: '#13a05e', ahead: '#13a05e', tight: '#e8a23d', behind: '#d23f3f' };
+    const PACE_COLORS = { done: lpSemColor('good'), ahead: lpSemColor('good'), tight: lpSemColor('warn'), behind: lpSemColor('bad') };
     const paceLine = (p) => {
       if (!p) return '';
       const shifts = (n) => `ещё ${n} ${_sdPlural(n, 'смена', 'смены', 'смен')}`;
@@ -372,7 +374,7 @@ async function _sdRender() {
       if (p && PACE_COLORS[p.status]) return PACE_COLORS[p.status];
       if (p && p.status === 'no_schedule')
         return p.ratio >= 1.05 ? PACE_COLORS.ahead : p.ratio >= 0.95 ? PACE_COLORS.tight : PACE_COLORS.behind;
-      return fcPct >= 100 ? '#13a05e' : fcPct >= 80 ? '#e8a23d' : '#d23f3f'; // фолбэк до деплоя бэка
+      return fcPct >= 100 ? lpSemColor('good') : fcPct >= 80 ? lpSemColor('warn') : lpSemColor('bad'); // фолбэк до деплоя бэка
     };
     const goalBar = (lbl, o) => {
       if (!(parseFloat(o.target) > 0)) return '';

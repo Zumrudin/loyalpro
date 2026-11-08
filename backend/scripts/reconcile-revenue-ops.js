@@ -3,14 +3,15 @@
 // Сверка revenue_operations с YClients: находит операции, которые в YClients
 // уже удалены (webhook delete не дошёл), и удаляет их у нас. Зависшие операции
 // завышают выручку на дашбордах (кейс: оплату переразбили на кассу+счёт,
-// старая операция удалена в YClients, но осталась в нашей БД).
+// старая операция удалена в YClients, но осталась в нашей БД). И наоборот —
+// операции, чей create-webhook не дошёл, добавляет (с 28.10.2026).
 //
 // Логика — в services/revenue-reconcile.js (её же использует ежедневный cron,
 // сверяющий последние 7 дней). Скрипт — для ручной сверки произвольного периода.
 //
 // Использование:
 //   node scripts/reconcile-revenue-ops.js --from 2026-05-01 --to 2026-06-12 [--apply] [--rate-ms 300]
-// Без --apply — только отчёт (dry-run).
+// Без --apply — только отчёт (dry-run): и зависшие, и потерянные.
 
 const { db, pool } = require('../db');
 const { reconcileSalon } = require('../services/revenue-reconcile');
@@ -38,18 +39,22 @@ async function main() {
   const salons = await db.any(
     `SELECT * FROM salons WHERE is_active=TRUE AND yclients_company_id IS NOT NULL`);
 
-  let staleTotal = 0, deletedTotal = 0;
+  let staleTotal = 0, deletedTotal = 0, missingTotal = 0, addedTotal = 0;
   for (const salon of salons) {
     console.log(`salon=${salon.id} (${salon.name}), период ${args.from}..${args.to}`);
     const r = await reconcileSalon(salon, args.from, args.to, {
       apply, rateMs,
       onStale: (o, day) =>
         console.log(`  ${day}: зависшая op_id=${o.yclients_operation_id} (${o.category}, ${o.amount} ₽)${apply ? ' — удаляю' : ''}`),
+      onMissing: (t, day, { moved } = {}) =>
+        console.log(`  ${day}: ${moved ? 'перенесённая (дата сменилась в YClients)' : 'потерянная'} op_id=${t.id} (${t.expense && t.expense.title}, ${t.amount} ₽, запись ${t.record_id || '—'})${apply ? ' — добавляю' : ''}`),
     });
     staleTotal += r.stale.length;
     deletedTotal += r.deleted;
+    missingTotal += r.missing.length;
+    addedTotal += r.added;
   }
-  console.log(`\nDone${apply ? '' : ' (dry-run)'}: зависших=${staleTotal}${apply ? `, удалено=${deletedTotal}` : ' (запустите с --apply для удаления)'}`);
+  console.log(`\nDone${apply ? '' : ' (dry-run)'}: зависших=${staleTotal}, потерянных=${missingTotal}${apply ? `, удалено=${deletedTotal}, добавлено=${addedTotal}` : ' (запустите с --apply, чтобы применить)'}`);
   await pool.end();
 }
 

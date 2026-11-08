@@ -15,7 +15,16 @@
 //   • последняя реплика Милы не старше AGENT_WINDOW_HANDOVER_MIN (дефолт 60;
 //     0 выключает) — старый диалог окном не «обрывался», обрывать нечего;
 //   • входящее — не чистая формула вежливости («Спасибо» после нашего ответа
-//     не повод красить диалог красным).
+//     не повод красить диалог красным);
+//   • входящее — не голое подтверждение («Ок», «Хорошо», «Понятно») после
+//     реплики, которой Мила сама закрыла разговор: без вопроса, с прощанием или
+//     отчётом «записала / перенесла / отменила». Инцидент 07.11.2026
+//     (79292633336): запись в 09:09, «…До встречи!», в 09:37 «Ок» — и пациентка
+//     получила «Передаю Ваш вопрос администратору», хотя вопроса не было. «Ок» на
+//     вопрос Милы («Записать Вас?») — согласие, тут перевод остаётся;
+//   • молчать по тексту можно, только если ВСЯ серия пациента после реплики Милы
+//     такая: дебаунс отдаёт диспетчеру лишь последнее сообщение, а «А на чистку
+//     можно?» + «Ок» — это вопрос. Вложение без текста — всегда повод для человека.
 // Действие: эскалация тем же escalate_to_operator (reason 'window_closed' —
 // подсветка, SSE, гашение напоминаний) + фраза перевода пациенту. Всё
 // best-effort: сбой любого шага — только в лог. На следующем открытии окна
@@ -27,53 +36,90 @@
 // продолжает — грейс-период столкнул бы Милу с администратором, вышедшим на
 // смену.
 
-const { isPureClosing } = require('./closing');
+const { isPureClosing, isAcknowledgment, isClosingReply } = require('./closing');
 
 const WINDOW_CLOSED_REASON = 'window_closed';
 
+// Всё, что пациент прислал после последней реплики Милы: серия из БД плюс
+// текущее сообщение. null — классифицировать нечего или нельзя (вложение без
+// текста, старый вебхук без текста): тогда решает только возраст реплики.
+function patientTexts(incomingText, incomingTexts) {
+  const fromDb = Array.isArray(incomingTexts) ? incomingTexts : [];
+  if (fromDb.some((t) => typeof t !== 'string' || !t.trim())) return null;
+  const all = [...fromDb, incomingText].filter((t) => typeof t === 'string' && t.trim());
+  return all.length ? all : null;
+}
+
 /**
  * @param {{dialogStatus: string|null, lastAgentReplyAgeMs: number|null,
- *          maxAgeMs: number, incomingText?: string}} p
+ *          maxAgeMs: number, incomingText?: string, incomingTexts?: Array<string|null>,
+ *          lastAgentReplyText?: string|null, newerOutgoingTexts?: string[]}} p
  * @returns {{action: 'handover'|'skip', why: string}}
  */
-function decideWindowHandover({ dialogStatus, lastAgentReplyAgeMs, maxAgeMs, incomingText } = {}) {
+function decideWindowHandover({ dialogStatus, lastAgentReplyAgeMs, maxAgeMs, incomingText,
+  incomingTexts, lastAgentReplyText, newerOutgoingTexts } = {}) {
   if (!(maxAgeMs > 0)) return { action: 'skip', why: 'disabled' };
   if (dialogStatus !== 'bot') return { action: 'skip', why: `status=${dialogStatus || 'none'}` };
   if (!Number.isFinite(lastAgentReplyAgeMs)) return { action: 'skip', why: 'no-agent-reply' };
   if (lastAgentReplyAgeMs > maxAgeMs) return { action: 'skip', why: 'agent-reply-too-old' };
-  if (typeof incomingText === 'string' && incomingText.trim() && isPureClosing(incomingText)) {
-    return { action: 'skip', why: 'pure-closing' };
+  const texts = patientTexts(incomingText, incomingTexts);
+  if (texts && texts.every((t) => isPureClosing(t))) return { action: 'skip', why: 'pure-closing' };
+  if (texts && texts.every((t) => isPureClosing(t) || isAcknowledgment(t))
+      && isClosingReply(lastAgentReplyText)
+      && (newerOutgoingTexts || []).every((t) => isClosingReply(t))) {
+    return { action: 'skip', why: 'ack-after-closing' };
   }
   return { action: 'handover', why: 'live-dialog' };
 }
 
 /**
  * Вход диспетчера на gate.reason === 'outside-schedule'.
- * deps: { state (dialog-state), history, escalate(salonId, dialogKey, reason),
- *         send(meta, text), handoverText(), maxAgeMs, nowMs, logger }.
+ * deps: { state (dialog-state), history, pending (pending-replies),
+ *         escalate(salonId, dialogKey, reason), send(meta, text), handoverText(),
+ *         maxAgeMs, nowMs, logger }.
  * @returns {Promise<boolean>} был ли перевод
  */
 async function onOutsideSchedule(salonId, dialogKey, meta, deps) {
   const log = deps.logger || { info() {}, warn() {} };
-  let dialogStatus = null;
-  let lastAgentReplyAgeMs = null;
+  const nowMs = deps.nowMs || Date.now();
+  const p = { dialogStatus: null, lastAgentReplyAgeMs: null, maxAgeMs: deps.maxAgeMs, incomingText: meta && meta.text };
+  let lastAt = null;
   try {
     const row = await deps.state.get(salonId, dialogKey);
-    dialogStatus = row ? row.status : null;
-    const at = await deps.history.lastAgentReplyAt(salonId, dialogKey);
-    lastAgentReplyAgeMs = Number.isFinite(at) ? (deps.nowMs || Date.now()) - at : null;
+    p.dialogStatus = row ? row.status : null;
+    const last = await deps.history.lastAgentReply(salonId, dialogKey);
+    if (last && Number.isFinite(last.at)) {
+      lastAt = last.at;
+      p.lastAgentReplyAgeMs = nowMs - last.at;
+      p.lastAgentReplyText = last.text;
+      // Эхо Telegram/MAX приходит с задержкой в минуты: реплика, ушедшая после
+      // последней из БД, пока лежит только в pending-replies (там и исходящие
+      // «Заботы»/напоминаний — для проверки «закрыт ли разговор» это безопасно).
+      const pending = deps.pending ? deps.pending.peek(salonId, dialogKey, nowMs) : [];
+      p.newerOutgoingTexts = pending.filter((x) => Number(x.ts) * 1000 >= last.at).map((x) => x.text);
+    }
   } catch (e) {
     log.warn(`dialog ${dialogKey}: окно закрыто, состояние диалога не прочитать (${e.message}) — без перевода`);
     return false;
   }
-  const d = decideWindowHandover({
-    dialogStatus, lastAgentReplyAgeMs, maxAgeMs: deps.maxAgeMs, incomingText: meta && meta.text,
-  });
+  let d = decideWindowHandover(p);
+  // Молчать по тексту можно, только если ВСЯ серия пациента после реплики Милы
+  // такая же. Серию читаем только здесь, перед молчанием, а не на каждом входящем
+  // вне окна (их на проде сотня с лишним в день).
+  if (d.action === 'skip' && (d.why === 'pure-closing' || d.why === 'ack-after-closing')) {
+    try {
+      p.incomingTexts = await deps.history.incomingTextsAfter(salonId, dialogKey, lastAt);
+    } catch (e) {
+      log.warn(`dialog ${dialogKey}: окно закрыто, серию сообщений не прочитать (${e.message}) — без перевода`);
+      return false;
+    }
+    d = decideWindowHandover(p);
+  }
   if (d.action !== 'handover') {
     log.info(`dialog ${dialogKey}: окно расписания закрыто, перевода нет (${d.why})`);
     return false;
   }
-  log.info(`dialog ${dialogKey}: окно расписания закрылось посреди живого диалога (реплика Милы ${Math.round(lastAgentReplyAgeMs / 60000)} мин назад) — перевод на администратора`);
+  log.info(`dialog ${dialogKey}: окно расписания закрылось посреди живого диалога (реплика Милы ${Math.round(p.lastAgentReplyAgeMs / 60000)} мин назад) — перевод на администратора`);
   try {
     await deps.escalate(salonId, dialogKey, WINDOW_CLOSED_REASON);
   } catch (e) {

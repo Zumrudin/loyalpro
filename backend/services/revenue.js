@@ -54,11 +54,13 @@ async function fetchSoldByStaffId(salon, soldItemId) {
   }
 }
 
+// Возвращает true, если строка ЛЕГЛА (ночная сверка считает по нему добавленные);
+// false — отсеяна (возврат, расход) или уже была (ON CONFLICT: вебхук успел раньше).
 async function recordRevenueOperation(payload, salon, source) {
   const data = payload.data || {};
 
   if (payload.status === 'delete') {
-    if (!data.id) return;
+    if (!data.id) return false;
     const result = await db.query(
       'DELETE FROM revenue_operations WHERE salon_id=$1 AND yclients_operation_id=$2',
       [salon.id, data.id]
@@ -66,15 +68,15 @@ async function recordRevenueOperation(payload, salon, source) {
     if (result.rowCount > 0) {
       logger.info(`Deleted revenue_operations op_id=${data.id} (status=delete)`);
     }
-    return;
+    return false;
   }
 
   const amount = parseFloat(data.amount || 0);
-  if (amount <= 0) return;
+  if (amount <= 0) return false;
 
   const expenseTitle = data.expense?.title || null;
   const category = classifyExpense(expenseTitle);
-  if (!category) return;
+  if (!category) return false;
 
   if (category === 'other') {
     logger.warn(`Unknown expense.title="${expenseTitle}" op_id=${data.id} — writing as 'other'`);
@@ -104,7 +106,7 @@ async function recordRevenueOperation(payload, salon, source) {
     soldByYcStaffId = await fetchSoldByStaffId(salon, goodsTransactionRef(data));
   }
 
-  await db.query(`
+  const result = await db.query(`
     INSERT INTO revenue_operations
       (salon_id, yclients_operation_id, category, amount, operation_date, operation_at,
        client_id, yclients_client_id, yclients_record_id,
@@ -131,6 +133,7 @@ async function recordRevenueOperation(payload, salon, source) {
     source,
     soldByYcStaffId,
   ]);
+  return (result && result.rowCount) > 0;
 }
 
 module.exports = { classifyExpense, recordRevenueOperation, goodsTransactionRef, fetchSoldByStaffId };

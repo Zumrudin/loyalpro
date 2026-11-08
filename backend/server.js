@@ -197,6 +197,17 @@ cron.schedule('35 4 * * *', async () => {
   } catch (e) { cronLogger.error(`reconcile cron: ${e.message}`); }
 }, { timezone: 'Europe/Moscow' });
 
+// Экономика процедур: ночной проход YClients (каталог, техкарты, транзакции,
+// привязки) — 5:05 мск, после сверки записей 4:35 и чистки 4:40; ≈33 запроса.
+if (config.ECONOMICS_SYNC) {
+  cron.schedule('5 5 * * *', async () => {
+    try { await require('./services/economics').runNightlyAll(); }
+    catch (e) { cronLogger.error(`economics nightly: ${e.message}`); }
+  }, { timezone: 'Europe/Moscow' });
+} else {
+  cronLogger.warn('ECONOMICS_SYNC=false — ночной синк экономики выключен');
+}
+
 // Вердикты ИИ по перепискам (services/dialog-verdicts, спека 2026-10-04): дважды
 // в день, ОБА раза вне окна Милы 22:00–09:30 — анализ делит с ней мост dev
 // (2 слота), и утренний прогон в 09:45 застаёт мост свободным. Окно отбора
@@ -282,12 +293,13 @@ cron.schedule('17 3 * * *', async () => {
 
 // Сверка revenue_operations с YClients за последние 7 дней: удаляем операции,
 // которые в YClients удалены (переразбивка оплаты), а delete-webhook не дошёл —
-// иначе они завышают выручку на дашбордах. Ночью, когда оплаты не проводятся.
+// иначе они завышают выручку на дашбордах; и добавляем те, чей create-webhook
+// потерялся (с 28.10.2026). Ночью, когда оплаты не проводятся.
 cron.schedule('40 4 * * *', async () => {
   try {
     const { reconcileRecentAllSalons } = require('./services/revenue-reconcile');
     const r = await reconcileRecentAllSalons(7);
-    if (r.stale > 0) cronLogger.info(`revenue reconcile ${r.from}..${r.to}: удалено зависших=${r.deleted}`);
+    if (r.stale > 0 || r.missing > 0) cronLogger.info(`revenue reconcile ${r.from}..${r.to}: удалено зависших=${r.deleted}, добавлено потерянных=${r.added} из ${r.missing}`);
   } catch (e) { cronLogger.error(`revenue reconcile cron: ${e.message}`); }
 }, { timezone: 'Europe/Moscow' });
 
@@ -316,6 +328,38 @@ cron.schedule('*/2 * * * *', async () => {
   } catch (e) { cronLogger.error(`delivery watchdog: ${e.message}`); }
 }, { timezone: 'Europe/Moscow' });
 
+// «Документы» (F.Doc): опрос статусов комплектов — страховка к вебхуку SetStatus и
+// докачка подписанных PDF в S3. EDOCS_POLL=false гасит только опрос (вебхук работает).
+// Крон — каждую минуту, а КАК ЧАСТО опрашивать комплект, решает SQL (store.DUE_SQL): отправленные
+// за 2 часа — раз в минуту (пациент подписывает у стойки — карточка дашборда зеленеет за минуту),
+// прочие — раз в 5 минут и реже. Подробности — services/edocs/packages.js (refreshDue).
+if (process.env.EDOCS_POLL !== 'false') {
+  cron.schedule('* * * * *', async () => {
+    try {
+      const r = await require('./services/edocs/packages').refreshDue();
+      if (r && r.changed) cronLogger.info(`edocs: проверено комплектов=${r.checked}, изменился статус=${r.changed}`);
+    } catch (e) { cronLogger.error(`edocs poll: ${e.message}`); }
+  }, { timezone: 'Europe/Moscow' });
+}
+
+// «Документы»: автоматика (перед визитом, акт после оплаты, повторы) и устаревание анкет —
+// services/edocs/automation.js. По умолчанию у салона выключена (настройки «Автоматизация»);
+// EDOCS_AUTOMATION=false гасит крон целиком. Крон ставится при загрузке модуля, а миграции идут ниже,
+// при старте: первый тик после выката приходил раньше новых таблиц (дев 25.10.2026: «relation
+// "edoc_patient_forms" does not exist») — до конца миграций тики пропускаются.
+let edocsSchemaReady = false;
+if (process.env.EDOCS_AUTOMATION !== 'false') {
+  cron.schedule('* * * * *', async () => {
+    if (!edocsSchemaReady) return;
+    try {
+      const r = await require('./services/edocs/automation').runOnce();
+      if (r && (r.previsit || r.act || r.remind || r.errors)) {
+        cronLogger.info(`edocs auto: перед визитом=${r.previsit}, акты=${r.act}, повторы=${r.remind}, ошибки салонов=${r.errors}`);
+      }
+    } catch (e) { cronLogger.error(`edocs auto: ${e.message}`); }
+  }, { timezone: 'Europe/Moscow' });
+}
+
 // ============================================================
 // START
 // ============================================================
@@ -323,6 +367,7 @@ const PORT = config.PORT;
 pool.connect()
   .then(async client => {
     await runMigrations(client);
+    edocsSchemaReady = true;
     client.release();
     // Прогон синка/сверки, оборванный рестартом, иначе висит running вечно
     // (27 таких строк на проде с марта 2026).
@@ -337,6 +382,7 @@ pool.connect()
       logger.info('Webhook: POST /yclients/webhook.v2/:companyId');
       logger.info('Register: POST /api/auth/register');
       startBroadcastWorker();
+      require('./services/broadcast-messengers/worker').start();
       startNotificationWorker();
       require('./services/care/worker').startCareWorker();
       require('./services/reminders/worker').startRemindersWorker();

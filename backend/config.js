@@ -3,7 +3,7 @@
 // ============================================================
 require('dotenv').config();
 
-// Route prefixes a `specialist` may reach. `admin_cashier` gets the same set + chat.
+// Route prefixes a `specialist` may reach. `admin_cashier` gets the same set + chat + «Документы» (/api/edocs).
 const SPECIALIST_ALLOWED_PREFIXES = ['/api/home-care', '/api/auth', '/api/template-settings', '/api/patient-portfolio', '/api/analytics/staff-dashboard', '/api/medical-cert', '/api/kb'];
 
 module.exports = {
@@ -207,6 +207,9 @@ module.exports = {
   // Вердикты ИИ по перепискам: DIALOG_VERDICTS=false гасит РОВНО плановые прогоны
   // (крон 09:45 и 21:30 мск), кнопка «Проанализировать» работает всегда.
   DIALOG_VERDICTS: process.env.DIALOG_VERDICTS !== 'false',
+  // Экономика процедур: ночной синк YClients (каталог, техкарты, сверка транзакций).
+  // 'false' гасит ТОЛЬКО крон; вебхуки и ручной POST /api/economics/sync работают.
+  ECONOMICS_SYNC: process.env.ECONOMICS_SYNC !== 'false',
   // Провайдер базы знаний: 'aitunnel' | 'gemini' (старый релей/прямой вызов, откат).
   KB_PROVIDER:          process.env.KB_PROVIDER          || 'aitunnel',
   // Кто отвечает в «Спросить ИИ» базы знаний: 'agent' — цепочка Милы (прод: GPT через
@@ -223,8 +226,9 @@ module.exports = {
   // API Access Control
   API_PUBLIC: ['/api/auth/login', '/api/auth/register', '/api/app-settings', '/api/salon/logo', '/api/kb/relay', '/api/kb/relay/embed'],
   SPECIALIST_ALLOWED_PREFIXES,
-  // Администратор-кассир: те же права, что у специалиста, плюс доступ к чату.
-  CASHIER_ALLOWED_PREFIXES: [...SPECIALIST_ALLOWED_PREFIXES, '/api/chat'],
+  // Администратор-кассир: те же права, что у специалиста, плюс доступ к чату
+  // и к «Документам» (/api/edocs — оформление на ресепшене; /api/edocs/admin закрыт ему самим роутером).
+  CASHIER_ALLOWED_PREFIXES: [...SPECIALIST_ALLOWED_PREFIXES, '/api/chat', '/api/edocs'],
 
   // S3 (patient photo cases — Yandex Object Storage / S3-compatible)
   S3_ENDPOINT: process.env.S3_ENDPOINT,
@@ -234,6 +238,21 @@ module.exports = {
   S3_SECRET_KEY: process.env.S3_SECRET_KEY,
   S3_FORCE_PATH_STYLE: process.env.S3_FORCE_PATH_STYLE === 'true',
   S3_URL_TTL_SECONDS: parseInt(process.env.S3_URL_TTL_SECONDS, 10) || 900,
+
+  // «Документы» (F.Doc): ключ AES-256-GCM для паспортных данных и паролей F.Doc —
+  // 32 байта в base64 (`node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"`).
+  // Пусто — модуль не сохраняет ни паспорт, ни пароли (503). Потеря ключа = потеря данных.
+  EDOCS_ENC_KEY: process.env.EDOCS_ENC_KEY || '',
+  // На ДЕМО-стенде F.Doc (demo.*) отправка разрешена только на эти номера: в дев-БД живые
+  // пациенты, а демо-контур шлёт настоящие SMS. Через запятую, канон 7XXXXXXXXXX.
+  EDOCS_DEMO_PHONES: (process.env.EDOCS_DEMO_PHONES || '79200255591').split(',').map((s) => s.replace(/\D/g, '')).filter(Boolean),
+  // Если задан — ЛЮБЫЕ отправки пациентам из «Документов» (комплекты F.Doc, повторы ссылок, анкеты в
+  // мессенджер, ручные и автоматические) уходят только на эти номера. Дев: получает реальные вебхуки
+  // клиники и держит боевые аккаунты мессенджеров. Прод: НЕ задавать. Через запятую, канон 7XXXXXXXXXX.
+  EDOCS_TEST_PHONES: (process.env.EDOCS_TEST_PHONES || '').split(',').map((s) => s.replace(/\D/g, '')).filter(Boolean),
+  // Адрес, по которому пациент открывает анкету (`<адрес>/anketa/<токен>`), без «/» в конце.
+  // Нужен автоматике: у крона нет запроса, из которого взять адрес.
+  EDOCS_PUBLIC_URL: (process.env.EDOCS_PUBLIC_URL || '').trim().replace(/\/+$/, ''),
 
   // Sync
   SYNC_DAYS: 365,

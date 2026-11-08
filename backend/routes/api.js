@@ -5,6 +5,7 @@ const { buildClientsQuery } = require('../clients-query');
 const { ycGet, ycGetClientCards, ycGetCardTransactions, ycWebSessions } = require('../services/yclients');
 const { getLoyaltySettings, getLevel, runSync, sleep } = require('../services/loyalty');
 const { computeStaffMetrics } = require('../services/staff');
+const { resolvePeriod: resolvePeriodShared } = require('../utils/period');
 const { loadMessengerStats, summarize: summarizeMessengerStats, periodDays, MAX_PERIOD_DAYS } = require('../services/messenger-stats');
 const { createLogger } = require('../logger');
 const logger = createLogger('API');
@@ -93,36 +94,10 @@ router.get('/records', auth, async (req, res) => {
 });
 
 // ── Analytics ────────────────────────────────────────────────
-// Resolve from/to inclusive Moscow-local dates (YYYY-MM-DD).
-// Accepts ?from=YYYY-MM-DD&to=YYYY-MM-DD, falls back to legacy ?period=N (N days back from Moscow today).
-function resolvePeriod(req) {
-  const todayMsk = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Moscow' }).format(new Date());
-  let { from, to } = req.query;
-  const isDate = s => typeof s === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(s);
-  if (isDate(from) && isDate(to)) {
-    if (from > to) [from, to] = [to, from];
-    return { from, to };
-  }
-  const addDays = (iso, n) => {
-    const d = new Date(iso + 'T00:00:00Z');
-    d.setUTCDate(d.getUTCDate() + n);
-    return d.toISOString().slice(0, 10);
-  };
-  const preset = String(req.query.period || '').toLowerCase();
-  if (preset === 'today' || preset === 'day') return { from: todayMsk, to: todayMsk };
-  if (preset === 'week') {
-    const d = new Date(todayMsk + 'T00:00:00Z');
-    const dow = d.getUTCDay();
-    const back = dow === 0 ? 6 : dow - 1;
-    return { from: addDays(todayMsk, -back), to: todayMsk };
-  }
-  if (preset === 'month') return { from: todayMsk.slice(0, 8) + '01', to: todayMsk };
-  const parsedDays = Number.parseInt(req.query.period || '30', 10);
-  const days = Number.isFinite(parsedDays) ? Math.max(1, parsedDays) : 30;
-  const back = new Date(todayMsk + 'T00:00:00Z');
-  back.setUTCDate(back.getUTCDate() - (days - 1));
-  return { from: back.toISOString().slice(0, 10), to: todayMsk };
-}
+// Resolve from/to inclusive Moscow-local dates (YYYY-MM-DD) — общий помощник с
+// «Экономикой» (utils/period.js). Мусорный ?period= (1e17) бросает PeriodError
+// внутри try обработчиков (500 с текстом, не падение процесса), как и раньше RangeError.
+function resolvePeriod(req) { return resolvePeriodShared(req.query || {}); }
 
 async function optionalAnalyticsQuery(label, fn, fallback) {
   try {
@@ -452,7 +427,7 @@ router.get('/analytics/staff-dashboard', auth, async (req, res) => {
     ]);
 
     res.json({
-      stats: { staffName: link.staff_name, staffAvatar: link.avatar_url || null, ...stats },
+      stats: { staffName: link.staff_name, staffGivenName: require('../utils/person-name').resolveGivenName(link.staff_name || '') || null, staffAvatar: link.avatar_url || null, ...stats },
       topServices: top,
       dailyRevenue: daily,
       period: { from, to },
@@ -539,6 +514,9 @@ router.get('/analytics/retention', auth, async (req, res) => {
 // параллельный прогон удвоил бы нагрузку на общую квоту — 409, пока идёт первый
 // (зависшие running закрывает closeStaleSyncRuns при старте процесса).
 router.post('/sync', auth, async (req, res) => {
+  // Полный прогон — решение владельца (06.11.2026): кнопка видна только ему,
+  // и сервер не даёт запустить его другим ролям в обход интерфейса.
+  if (req.user.role !== 'owner') return res.status(403).json({ error: 'Синхронизацию запускает только владелец' });
   try {
     const salon = await db.one('SELECT * FROM salons WHERE id=$1', [req.user.salonId]);
     if (!salon.yclients_company_id || !salon.yclients_user_token)

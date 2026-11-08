@@ -34,6 +34,15 @@ frontend/uploads/portfolio_*
 frontend/uploads/kb_*
 frontend/uploads/salon_logo_*
 frontend/uploads/pricelist_*
+frontend/uploads/notify_seed/
+frontend/uploads/notify_*
 .superpowers/
 gateway/data/
 frontend/uploads/gateway/
+
+# Выгрузки переписок с пациентами (ПДн) и артефакты разовых операций с данными прода — не код
+/exports/
+/artifacts/
+# Образцы шаблонов «Документов» (scripts/edocs-sample-templates.js) и временные проверки
+frontend/uploads/edocs-samples/
+backend/scripts/_tmp_*

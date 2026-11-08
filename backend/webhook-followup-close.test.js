@@ -7,7 +7,7 @@ jest.mock('./logger', () => ({ createLogger: () => ({ info: jest.fn(), warn: jes
 jest.mock('./services/loyalty', () => ({
   getLoyaltySettings: jest.fn(), processRecordEvent: jest.fn(), processFinancesOperation: jest.fn(),
 }));
-jest.mock('./services/notifications', () => ({ handleRecordCreated: jest.fn(async () => {}) }));
+jest.mock('./services/notifications', () => ({ handleRecordEvent: jest.fn(async () => {}) }));
 jest.mock('./services/care/enroll', () => ({ handleRecordEvent: jest.fn(async () => {}) }));
 jest.mock('./services/reminders/enroll', () => ({
   handleRecordEvent: jest.fn(async () => {}), handleAttribution: jest.fn(async () => {}),

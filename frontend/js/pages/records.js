@@ -49,7 +49,7 @@ async function loadRecords(page) {
       deleted:   'background:rgba(232,84,84,.12);color:#c53030',
     };
     const tb = document.getElementById('rBody');
-    if (!d.records?.length) { tb.innerHTML = '<tr><td colspan="9" class="empty">Записей нет</td></tr>'; renderRecordsPager(d); return; }
+    if (!d.records?.length) { tb.innerHTML = '<tr><td colspan="10" class="empty">Записей нет</td></tr>'; renderRecordsPager(d); return; }
     tb.innerHTML = d.records.map(r => {
       let services = r.services;
       if (typeof services === 'string') try { services = JSON.parse(services); } catch { services = []; }
@@ -89,9 +89,12 @@ async function loadRecords(page) {
         <td data-label="Списано" style="color:var(--danger);font-weight:600;text-align:right">${redeemed > 0 ? '-' + redeemed.toLocaleString('ru') : '—'}</td>
         <td data-label="Статус" style="white-space:nowrap"><span class="badge" style="${badgeStyle}">${esc(SL[displayStatus] || SL[status] || status)}</span>${paidMark}</td>
         <td data-label="Источник"><span class="badge bgr" style="font-size:10px">${esc({sync:'Синхр.',webhook:'Hook'}[r.source] || r.source || '—')}</span></td>
+        <td data-label="Акт" class="r-act" data-rid="${r.id}" data-cid="${r.client_id || ''}"></td>
       </tr>`;
     }).join('');
     renderRecordsPager(d);
+    // «Документы» (edocs.js): кнопка «Акт» у состоявшихся визитов, если модуль включён.
+    if (typeof edDecorateRecords === 'function') edDecorateRecords(d.records);
   } catch(e) { notify(e.message, 'err'); }
 }
 

@@ -185,9 +185,12 @@ async function openCD(id) {
         <span style="font-size:11px;color:var(--t3)">${allTxns.length} операций</span>
       </div>
       ${rows ? `<div style="max-height:280px;overflow-y:auto"><table><thead><tr><th>Дата</th><th>Сумма</th><th>Описание</th><th>Баланс</th></tr></thead><tbody>${rows}</tbody></table></div>` : '<div class="empty">Нет операций</div>'}
-      <div id="cardTxnsBlock_${c.id}"></div>`;
+      <div id="cardTxnsBlock_${c.id}"></div>
+      <div id="edClientBlock_${c.id}"></div>`;
 
     openModal('clientModal');
+    // «Документы» (edocs.js): блок рисуется, только если модуль включён в салоне.
+    if (typeof edRenderClientBlock === 'function') edRenderClientBlock(c.id);
   } catch(e) { notify(e.message, 'err'); }
 }
 

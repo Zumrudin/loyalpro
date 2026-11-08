@@ -2,10 +2,11 @@ const router = require('express').Router();
 const crypto = require('crypto');
 const { db } = require('../db');
 const { getLoyaltySettings, processRecordEvent, processFinancesOperation } = require('../services/loyalty');
-const { handleRecordCreated } = require('../services/notifications');
+const { handleRecordEvent } = require('../services/notifications');
 const care = require('../services/care/enroll');
 const reminders = require('../services/reminders/enroll');
 const { upsertClientFromYc } = require('../services/client-upsert');
+const economics = require('../services/economics');
 const followupQueue = require('../services/agent/followup-queue');
 const { normalizePhoneKey } = require('../services/agent-gate');
 const { createLogger } = require('../logger');
@@ -77,12 +78,11 @@ router.post('/webhook.v2/:companyId', async (req, res) => {
 
     if (resourceType === 'record') {
       await processRecordEvent(payload, salon, settings);
-      // Автоуведомления — только на первое создание записи; сбой не должен
-      // ломать начисления, поэтому свой catch.
-      if (payload.status === 'create') {
-        await handleRecordCreated(salon, payload).catch(e =>
-          logger.error(`notifications: ${e.message}`));
-      }
+      // Уведомления клиенту по ЛЮБОМУ событию записи (создание/перенос/отмена/
+      // пришёл → напоминание, опрос, рекомендации). Свой catch — сбой не должен
+      // ломать начисления.
+      await handleRecordEvent(salon, payload).catch(e =>
+        logger.error(`notifications: ${e.message}`));
       // «Отдел заботы»: визит состоялся → зачисление в программы.
       // Свой catch — сбой заботы не должен ломать начисления.
       await care.handleRecordEvent(salon, payload).catch(e =>
@@ -120,6 +120,14 @@ router.post('/webhook.v2/:companyId', async (req, res) => {
 
     if (resourceType === 'finances_operation') {
       await processFinancesOperation(payload, salon);
+    }
+
+    // Товарные операции (списания расходников, приходы, продажи, потери) →
+    // goods_transactions для экономики процедур. Свой catch: 200 уже отдан,
+    // потерянное добирает ночная сверка (services/economics/sync.js).
+    if (typeof resourceType === 'string' && resourceType.startsWith('goods_operations_')) {
+      await economics.handleGoodsEvent(salon, payload).catch(e =>
+        logger.error(`economics goods event: ${e.message}`));
     }
 
     if (wlog) {

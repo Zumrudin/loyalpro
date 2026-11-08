@@ -350,19 +350,38 @@ async function lastOutgoingAuthor(salonId, dialogKey) {
   return (row && row.author) || null;
 }
 
-// Момент ПОСЛЕДНЕЙ реплики Милы в диалоге (мс) или null. Нужен решению о
+// ПОСЛЕДНЯЯ реплика Милы в диалоге: { at (мс), text } или null. Нужна решению о
 // переводе при закрытии окна расписания (window-handover.js): «бот только что
-// вёл этот диалог» = реплика агента не старше N минут. Строго authored_by='agent'.
-async function lastAgentReplyAt(salonId, dialogKey) {
+// вёл этот диалог» = реплика агента не старше N минут, а по тексту видно, ждала
+// ли она ответа («Записать Вас?») или сама закрыла разговор («…До встречи!»).
+// Строго authored_by='agent'.
+async function lastAgentReply(salonId, dialogKey) {
   const row = await db.oneOrNone(
-    `SELECT ${MSG_TS_SQL} AS ts FROM chatpush_messages
+    `SELECT ${MSG_TS_SQL} AS ts, text FROM chatpush_messages
       WHERE salon_id = $1 AND ${DIALOG_KEY_SQL} = $2
         AND direction = 'outgoing' AND authored_by = 'agent'
       ORDER BY ${MSG_TS_SQL} DESC, id DESC
       LIMIT 1`,
     [salonId, dialogKey]);
   const ts = row ? Number(row.ts) : NaN;
-  return Number.isFinite(ts) && ts > 0 ? ts * 1000 : null;
+  if (!(Number.isFinite(ts) && ts > 0)) return null;
+  return { at: ts * 1000, text: typeof row.text === 'string' ? row.text : null };
+}
+
+// Тексты входящих ПОСЛЕ момента afterMs, по порядку. Дебаунс отдаёт диспетчеру
+// только последнее сообщение серии, а решению о переводе нужны все («А на чистку
+// можно?» + «Ок»). Вложение (фото, файл, голосовое) приходит как null: прочитать
+// его нельзя, и вызывающий обязан считать его содержательным.
+async function incomingTextsAfter(salonId, dialogKey, afterMs) {
+  const rows = await db.any(
+    `SELECT CASE WHEN COALESCE(file_url, '') <> '' THEN NULL ELSE text END AS text
+       FROM chatpush_messages
+      WHERE salon_id = $1 AND ${DIALOG_KEY_SQL} = $2
+        AND direction = 'incoming' AND ${MSG_TS_SQL} > $3
+      ORDER BY ${MSG_TS_SQL}, id
+      LIMIT 50`,
+    [salonId, dialogKey, Math.floor(afterMs / 1000)]);
+  return rows.map((r) => (typeof r.text === 'string' ? r.text : null));
 }
 
 // Пришло ли входящее новее watermark (во время прогона агента)?
@@ -382,6 +401,6 @@ module.exports = {
   conversationComplete: (salonId, dialogKey) => require('./visit-confirmation')
     .loadConversationComplete(db, salonId, dialogKey),
   loadTranscript, hasIncomingAfter, hasEverAnswered, hasAgentEverWritten,
-  lastOutgoing, lastOutgoingAuthor, lastAgentReplyAt,
+  lastOutgoing, lastOutgoingAuthor, lastAgentReply, incomingTextsAfter,
   OPERATOR_MARK, AUTHORSHIP_SINCE_TS, stripOperatorMark, markOperatorLines,
 };

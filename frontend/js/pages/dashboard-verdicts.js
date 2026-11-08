@@ -91,7 +91,10 @@ function vdCurrentArg() {
 }
 
 // nav.js → hashchange на той же странице (клик по цифре, «Назад», ручная правка адреса).
-function dashboardOnHashArg(arg) { vdSync(vdParseArg(arg)); }
+function dashboardOnHashArg(arg) {
+  if (typeof dashSetTab === 'function') dashSetTab(dashTabFromArg(arg));
+  vdSync(vdParseArg(arg));
+}
 
 // dashboard-messengers.js → после (пере)рисовки таблицы: F5, смена периода.
 function vdAfterRender() {
@@ -182,7 +185,7 @@ function vdMarkActive(key, day) {
     r.classList.toggle('active', r.dataset.key === key && r.dataset.day === day));
 }
 
-function vdCloseList() { location.hash = 'dashboard'; }
+function vdCloseList() { location.hash = 'dashboard/msg'; }   // остаёмся на вкладке «Мессенджеры»
 function vdCloseDialog() { if (_vdState) location.hash = vdBuildHash({ channel: _vdState.channel, status: _vdState.status }); }
 
 function vdCloseDialogPane() {

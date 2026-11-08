@@ -129,4 +129,7 @@ function configured() {
   return !!((config.CHATPUSH && config.CHATPUSH.instanceToken) || (config.MESSAGING_GATEWAY && config.MESSAGING_GATEWAY.url));
 }
 
-module.exports = { sendMessage, sendFile, getDeliveryStatus, configured };
+// isDefiniteRejection экспортируется для воркера уведомлений: каскад мессенджеров
+// (services/notifications/worker.js) переходит к следующему шагу по ТОМУ ЖЕ правилу,
+// что и фолбэк между аккаунтами выше, — копия правила разошлась бы с этим.
+module.exports = { sendMessage, sendFile, getDeliveryStatus, configured, isDefiniteRejection };
