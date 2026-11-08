@@ -499,3 +499,11 @@ test('needs_phone — единственный error-вызов, который 
   expect(joined).not.toMatch(/record_id/);
   expect(joined).not.toMatch(/Анна/);
 });
+
+// 08.11.2026: мужская цена лазерной эпиляции (стандартная +30 %) из get_service_masters
+// живёт в памяти рядом с обычной — иначе следующий ход назвал бы мужчине женскую.
+test('экстрактор цен: мужская цена price_display_men попадает в журнал', () => {
+  const rows = [ev({ tool: 'get_service_masters', result: { services: [{ title: 'Спина полностью',
+    staff: [{ name: 'Юлия', price_display: '3500 ₽', price_display_men: '4550 ₽' }] }] } })];
+  expect(renderMemory(rows, { nowMs: NOW }).lines[0]).toMatch(/Юлия 3500 ₽ \(мужчине 4550 ₽\)/);
+});
