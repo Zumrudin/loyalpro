@@ -2275,9 +2275,45 @@ async function runMigrations(client) {
     'unit VARCHAR(50)', 'service_unit VARCHAR(50)', 'unit_equals NUMERIC(14,4)',
     'actual_cost NUMERIC(14,4)', 'unit_actual_cost NUMERIC(14,4)', 'stock JSONB',
     'last_receipt_price NUMERIC(14,4)', 'last_receipt_at TIMESTAMPTZ',
+    // Публичная цена и видимость отделены от себестоимости: Мила не должна
+    // случайно назвать пациенту actual_cost/цену последнего поступления.
+    'retail_price NUMERIC(14,2)', 'agent_visible BOOLEAN NOT NULL DEFAULT FALSE',
+    'agent_low_stock_threshold NUMERIC(14,4) NOT NULL DEFAULT 1',
   ]) {
     await client.query(`ALTER TABLE yclients_goods_catalog ADD COLUMN IF NOT EXISTS ${col}`).catch(() => {});
   }
+
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS idx_ygc_agent_search
+      ON yclients_goods_catalog (salon_id, title)
+      WHERE agent_visible AND NOT is_archived
+  `).catch(() => {});
+
+  // Управляемый каталог абонементов для Милы. YClients /loyalty/abonements
+  // возвращает купленные пациентом экземпляры, а не витрину предложений.
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS agent_abonement_offers (
+      id                BIGSERIAL PRIMARY KEY,
+      salon_id          INTEGER NOT NULL REFERENCES salons(id) ON DELETE CASCADE,
+      title             VARCHAR(300) NOT NULL,
+      procedures_count  INTEGER CHECK (procedures_count IS NULL OR procedures_count > 0),
+      price             NUMERIC(14,2) NOT NULL CHECK (price >= 0),
+      terms             VARCHAR(1000),
+      promo_label       VARCHAR(300),
+      promo_percent     NUMERIC(5,2) CHECK (promo_percent IS NULL OR (promo_percent > 0 AND promo_percent <= 100)),
+      promo_starts_on   DATE,
+      promo_ends_on     DATE,
+      agent_visible     BOOLEAN NOT NULL DEFAULT FALSE,
+      is_active         BOOLEAN NOT NULL DEFAULT TRUE,
+      created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `).catch(() => {});
+  await client.query(`
+    CREATE INDEX IF NOT EXISTS idx_agent_abonement_offers_search
+      ON agent_abonement_offers (salon_id, title)
+      WHERE agent_visible AND is_active
+  `).catch(() => {});
 
   await client.query(`
     CREATE TABLE IF NOT EXISTS goods_price_overrides (

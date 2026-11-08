@@ -24,10 +24,12 @@ const bonusBal  = require('./get-bonus-balance');
 const abonement = require('./get-client-abonements');
 const svcMasters = require('./get-service-masters');
 const sendPrice = require('./send-price-list');
+const retailProducts = require('./search-retail-products');
+const abonementOffers = require('./search-abonement-offers');
 
 const tools = [searchKb, listSvc, listStaff, getSlots, getParSlot, getSeqSlot, getDates, getClient,
   createBk, prepareAdditional, bookChain, listBookings, visitHistory, cancelBk, reschedBk, modifySvc,
-  bonusBal, abonement, sendPrice, escalate];
+  bonusBal, abonement, retailProducts, abonementOffers, sendPrice, escalate];
 
 function build(list) {
   const schemas = list.map(t => t.schema);
