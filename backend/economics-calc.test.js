@@ -198,6 +198,52 @@ describe('норма и флаги покрытия', () => {
     expect(rows[0].acquiring_estimated).toBe(false);
     expect(rows[0].has_payments).toBe(true);
   });
+  // Оплата YClients несёт sold_item_id — услугу, за которую платили (дев-БД 28.10.2026:
+  // запись 2010661446, Revi 34 100 по счёту + 9 100 наличными). Эквайринг оплаты с
+  // service_id ложится на ЕЁ услугу, а не делится по цене между всеми услугами записи.
+  test('оплата с service_id: эквайринг на свою услугу (карта у Belotero, наличные у ботулинотерапии)', () => {
+    const rows = C.buildRows({ ...RECORD, payments: [
+      { amount: 22500, account_title: 'Расчетный счет', service_id: 9536380 },
+      { amount: 5000, account_title: 'Касса', service_id: 25013124 },
+    ] }, ctx());
+    expect(rows[0].acquiring_cost).toBeCloseTo(337.5, 2);
+    expect(rows[1].acquiring_cost).toBe(0);
+    expect(rows[1].acquiring_estimated).toBe(false);
+  });
+  test('оплата без service_id или с чужим service_id — общая, делится по цене (прежнее поведение)', () => {
+    const rows = C.buildRows({ ...RECORD, payments: [
+      { amount: 22500, account_title: 'Расчетный счет', service_id: 9536380 },
+      { amount: 5000, account_title: 'Расчетный счет', service_id: 999 },
+    ] }, ctx());
+    expect(rows[0].acquiring_cost).toBeCloseTo(337.5 + 75 * 22500 / 27500, 2);
+    expect(rows[1].acquiring_cost).toBeCloseTo(75 * 5000 / 27500, 2);
+  });
+  // Записи 2056697734 / 2018785335 (23.10): YClients показывает оплату Revi, а вебхук
+  // finances_operation не дошёл. Своих оплат у услуги нет, общих нет — оценка по
+  // средней доле, а не 0: «оплаты нет» здесь значит «не знаем», а не «без эквайринга».
+  test('у услуги с ценой нет ни своей, ни общей оплаты → оценка по средней доле; в среднюю не входит', () => {
+    const rows = C.buildRows({ ...RECORD, payments: [{ amount: 5000, account_title: 'Расчетный счет', service_id: 25013124 }] }, ctx());
+    expect(rows[0].acquiring_cost).toBeNull();
+    expect(rows[0].acquiring_estimated).toBe(true);
+    expect(rows[0].has_payments).toBe(false);
+    expect(rows[1].acquiring_cost).toBeCloseTo(75, 2);
+    expect(C.avgAcquiringRate(rows)).toBeCloseTo(75 / 5000, 6);
+    C.finalizeRows(rows, { avgAcquiringRate: 0.02 });
+    expect(rows[0].acquiring_cost).toBeCloseTo(22500 * 0.02, 2);
+  });
+  test('услуга дважды в записи: её оплата делится между её строками по цене', () => {
+    const rows = C.buildRows({ ...RECORD, services: [
+      { id: 9536380, title: 'A', cost_to_pay: 3000, first_cost: 3000 },
+      { id: 9536380, title: 'A', cost_to_pay: 1000, first_cost: 1000 },
+      { id: 25013124, title: 'B', cost_to_pay: 5000, first_cost: 5000 },
+    ], payments: [
+      { amount: 4000, account_title: 'Расчетный счет', service_id: 9536380 },
+      { amount: 5000, account_title: 'Касса', service_id: 25013124 },
+    ] }, ctx());
+    expect(rows[0].acquiring_cost).toBeCloseTo(45, 2);
+    expect(rows[1].acquiring_cost).toBeCloseTo(15, 2);
+    expect(rows[2].acquiring_cost).toBe(0);
+  });
   test('avgAcquiringRate: Σ эквайринг / Σ выручка по строкам с оплатами', () => {
     const rows = C.buildRows(RECORD, ctx());
     expect(C.avgAcquiringRate(rows)).toBeCloseTo(412.5 / 27500, 6);
