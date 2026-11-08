@@ -293,12 +293,13 @@ cron.schedule('17 3 * * *', async () => {
 
 // Сверка revenue_operations с YClients за последние 7 дней: удаляем операции,
 // которые в YClients удалены (переразбивка оплаты), а delete-webhook не дошёл —
-// иначе они завышают выручку на дашбордах. Ночью, когда оплаты не проводятся.
+// иначе они завышают выручку на дашбордах; и добавляем те, чей create-webhook
+// потерялся (с 28.10.2026). Ночью, когда оплаты не проводятся.
 cron.schedule('40 4 * * *', async () => {
   try {
     const { reconcileRecentAllSalons } = require('./services/revenue-reconcile');
     const r = await reconcileRecentAllSalons(7);
-    if (r.stale > 0) cronLogger.info(`revenue reconcile ${r.from}..${r.to}: удалено зависших=${r.deleted}`);
+    if (r.stale > 0 || r.missing > 0) cronLogger.info(`revenue reconcile ${r.from}..${r.to}: удалено зависших=${r.deleted}, добавлено потерянных=${r.added} из ${r.missing}`);
   } catch (e) { cronLogger.error(`revenue reconcile cron: ${e.message}`); }
 }, { timezone: 'Europe/Moscow' });
 
