@@ -39,3 +39,10 @@ frontend/uploads/notify_*
 .superpowers/
 gateway/data/
 frontend/uploads/gateway/
+
+# Выгрузки переписок с пациентами (ПДн) и артефакты разовых операций с данными прода — не код
+/exports/
+/artifacts/
+# Образцы шаблонов «Документов» (scripts/edocs-sample-templates.js) и временные проверки
+frontend/uploads/edocs-samples/
+backend/scripts/_tmp_*
