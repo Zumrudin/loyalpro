@@ -285,3 +285,104 @@ describe('get_service_masters: маскировка «Ботулакс 1 ед»'
     expect(out.services[0].staff[0]).toMatchObject({ price_min: 5000, price_display: '5000 ₽' });
   });
 });
+
+// ── Мужская цена лазерной эпиляции = стандартная +30 % (решение владельца 08.11.2026) ──
+// Дубли «Муж.» у эпиляции удалены в YClients; мужскую цену считает КОД и кладёт
+// готовой туда, откуда модель её берёт: строка каталога, диапазоны, get_service_masters.
+describe('мужская цена лазерной эпиляции в каталоге', () => {
+  const laser = (over = {}) => svc({
+    yc_id: 9536756, title: 'Спина полностью', duration_min: 20, price_min: 3500, price_max: 3500,
+    category_path: ['Лазерная эпиляция'],
+    staff: [{ yc_id: 1914276, name: 'Юлия', price_min: 3500, price_max: 3500 },
+      { yc_id: 3356928, name: 'Татьяна', price_min: 3500, price_max: 3500 }],
+    ...over,
+  });
+  const rowOf = (block, id) => block.split('\n').find(l => l.startsWith(`${id}|`));
+
+  test('строка лазерной эпиляции несёт готовую мужскую цену после стандартной', () => {
+    const block = renderCatalogBlock([laser()]);
+    expect(rowOf(block, 9536756)).toBe('9536756|Спина полностью|20|3500 (мужчине 4550)|Лазерная эпиляция|1914276,3356928');
+  });
+
+  test('интимная зона и комплекс с бикини — без мужской цены', () => {
+    const block = renderCatalogBlock([
+      laser({ yc_id: 9536759, title: 'Тотальное бикини' }),
+      laser({ yc_id: 32843169, title: '№7: все зоны на лице и теле', price_min: 19000, price_max: 19000 }),
+    ]);
+    expect(rowOf(block, 9536759)).toBe('9536759|Тотальное бикини|20|3500|Лазерная эпиляция|1914276,3356928');
+    expect(rowOf(block, 32843169)).not.toMatch(/мужчине/);
+  });
+
+  test('другие направления не трогаются', () => {
+    const block = renderCatalogBlock([svc()]);
+    expect(block).not.toMatch(/мужчине \d/);
+  });
+
+  test('разные цены мастеров: у каждого своя мужская цена', () => {
+    const block = renderCatalogBlock([laser({
+      price_min: 3000, price_max: 3500,
+      staff: [{ yc_id: 55, name: 'Юлия', price_min: 3000, price_max: 3000 },
+        { yc_id: 66, name: 'Татьяна', price_min: 3500, price_max: 3500 }],
+    })]);
+    expect(rowOf(block, 9536756)).toBe('9536756|Спина полностью|20|3000-3500 (мужчине 3900-4550)|Лазерная эпиляция|55=3000 (мужчине 3900),66=3500 (мужчине 4550)');
+  });
+
+  test('заголовок каталога объясняет «(мужчине N)»', () => {
+    expect(renderCatalogBlock([laser()])).toMatch(/«\(мужчине N\)»[^\n]*\+30/);
+  });
+
+  test('диапазон направления: мужская часть только по зонам, доступным мужчинам', () => {
+    const lines = renderPriceRanges([
+      laser({ yc_id: 1, title: 'Лицо полностью', price_min: 3000, price_max: 3000 }),
+      laser({ yc_id: 2, title: 'Спина полностью', price_min: 3500, price_max: 3500 }),
+      laser({ yc_id: 3, title: 'Тотальное бикини', price_min: 3500, price_max: 3500 }),
+      laser({ yc_id: 4, title: '№7: все зоны на лице и теле', price_min: 19000, price_max: 19000 }),
+    ]);
+    expect(lines).toEqual(['- «Лазерная эпиляция»: от 3000 до 19000 ₽ (мужчинам, стандартная цена +30%: от 3900 до 4550 ₽)']);
+  });
+
+  test('прежний формат мужского прайса «Муж.» не изменился', () => {
+    const lines = renderPriceRanges([
+      svc({ yc_id: 1, title: 'Ботулинотерапия Лоб', price_min: 10000, price_max: 10000, category_path: ['Инъекции'] }),
+      svc({ yc_id: 2, title: 'Муж. Лоб', price_min: 13000, price_max: 13000, category_path: ['Инъекции'] }),
+    ]);
+    expect(lines).toEqual(['- «Инъекции»: 10000 ₽ (мужской прайс «Муж.»: 13000 ₽)']);
+  });
+});
+
+describe('get_service_masters: мужская цена лазерной эпиляции', () => {
+  const svcMasters = require('./services/agent/tools/get-service-masters');
+  const laserSvc = (over = {}) => ({
+    yc_id: 9536756, title: 'Спина полностью', duration_min: 20, price_min: 3500, price_max: 3500,
+    category_path: ['Лазерная эпиляция'],
+    staff: [{ yc_id: 1914276, name: 'Юлия', price_min: 3500, price_max: 3500 }], ...over,
+  });
+
+  test('у мастера готовая мужская цена, у услуги male_markup и подсказка', async () => {
+    loadCatalogServices.mockResolvedValue([laserSvc()]);
+    const s = (await svcMasters.run(1, { service_yc_ids: [9536756] })).services[0];
+    expect(s.staff[0]).toMatchObject({ price_display: '3500 ₽', price_display_men: '4550 ₽' });
+    expect(s.male_markup).toBe(true);
+    expect(s.hint).toMatch(/\+30/);
+    expect(s.hint).toMatch(/price_display_men/);
+  });
+
+  test('интимная зона: men_not_available, мужской цены нет', async () => {
+    loadCatalogServices.mockResolvedValue([laserSvc({ yc_id: 9536759, title: 'Тотальное бикини' })]);
+    const s = (await svcMasters.run(1, { service_yc_ids: [9536759] })).services[0];
+    expect(s.men_not_available).toBe(true);
+    expect(s.male_markup).toBeUndefined();
+    expect(s.staff[0].price_display_men).toBeUndefined();
+    expect(s.hint).toMatch(/мужчинам/i);
+  });
+
+  test('другие направления: новых полей нет', async () => {
+    loadCatalogServices.mockResolvedValue([{ yc_id: 7, title: 'Чистка лица', duration_min: 60,
+      price_min: 5000, price_max: 5000, category_path: ['Уходы'],
+      staff: [{ yc_id: 5, name: 'Юлия', price_min: 5000, price_max: 5000 }] }]);
+    const s = (await svcMasters.run(1, { service_yc_ids: [7] })).services[0];
+    expect(s.male_markup).toBeUndefined();
+    expect(s.men_not_available).toBeUndefined();
+    expect(s.staff[0].price_display_men).toBeUndefined();
+  });
+});

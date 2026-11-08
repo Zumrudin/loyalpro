@@ -333,7 +333,9 @@ const EXTRACTORS = {
     if (!svcs.length) return null;
     const parts = svcs.slice(0, 3).map(s => {
       const st = (Array.isArray(s.staff) ? s.staff : []).slice(0, 5)
-        .map(m => `${m.name} ${m.price_display}`).join(', ');
+        // Мужская цена лазерной эпиляции (стандартная +30 %) — рядом с обычной:
+        // без неё следующий ход назвал бы мужчине женскую цену.
+        .map(m => `${m.name} ${m.price_display}${m.price_display_men ? ` (мужчине ${m.price_display_men})` : ''}`).join(', ');
       return `«${s.title}»: ${st || 'мастеров нет'}`;
     });
     return `называла цены — ${parts.join('; ')}`;
