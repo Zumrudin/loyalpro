@@ -5,7 +5,7 @@
 // id|название|мин|цена|направление>подкатегория|id мастеров.
 // ~16k символов против 77k у JSON list_services (замер 2026-07-27, salon 1).
 const { loadCatalogServices, matchesGenericTitle, UNIT_PRICE_SERVICE_TITLE } = require('./catalog-data');
-const { isMaleService } = require('./male-services');
+const { isMaleService, maleMarkupApplies, maleMarkupPrice } = require('./male-services');
 const { createLogger } = require('../../logger');
 const logger = createLogger('AgentCatalogBlock');
 
@@ -58,6 +58,23 @@ function fmtPrice(min, max) {
   return `${b.lo}-${b.hi}`;
 }
 
+// Мужская цена «стандартная +30 %» (лазерная эпиляция, решение владельца
+// 08.11.2026 — male-services) в том же формате, что fmtPrice: одно число или X-Y.
+// Нет цены или «инд.» — мужской цены тоже нет: пустая строка, число не выдумываем.
+function fmtMalePrice(min, max) {
+  const b = priceBounds(min, max);
+  if (!b || b.lo <= PLACEHOLDER_PRICE_MAX) return '';
+  const lo = maleMarkupPrice(b.lo);
+  const hi = maleMarkupPrice(b.hi);
+  return hi <= lo ? String(lo) : `${lo}-${hi}`;
+}
+
+// Стандартная цена + «(мужчине N)», когда у услуги есть мужская цена.
+function withMalePrice(text, min, max, applies) {
+  const male = applies ? fmtMalePrice(min, max) : '';
+  return male && /^\d/.test(text) ? `${text} (мужчине ${male})` : text;
+}
+
 // Колонка мастеров. Если цены мастеров различаются — цена КАЖДОГО стоит прямо
 // в строке («55=5000,66=8000»), иначе только id («55,66»). Инцидент 2026-08-01:
 // в строке был только агрегат «19000-23000», модель не пошла за точной суммой в
@@ -68,7 +85,9 @@ function fmtStaffCell(staff, opts = {}) {
   if (opts.hidePrices) return list.map(m => String(m.yc_id)).join(',');
   const prices = list.map(m => fmtPrice(m.price_min, m.price_max));
   const same = prices.every(p => p === prices[0]);
-  return list.map((m, i) => (same ? String(m.yc_id) : `${m.yc_id}=${prices[i]}`)).join(',');
+  return list.map((m, i) => (same
+    ? String(m.yc_id)
+    : `${m.yc_id}=${withMalePrice(prices[i], m.price_min, m.price_max, opts.maleMarkup)}`)).join(',');
 }
 
 // ── Предрассчитанные диапазоны цен по узлам category_path ────────────────────
@@ -97,11 +116,19 @@ function rangeBounds(service) {
 }
 
 function renderPriceRanges(services) {
-  const nodes = new Map();   // путь узла → { f:{lo,hi}|null, m:{lo,hi}|null }
+  // путь узла → { f, m, x }: f — стандартный прайс, m — услуги «Муж.»,
+  // x — мужская цена «стандартная +30 %» (лазерная эпиляция вне интимных зон).
+  const nodes = new Map();
+  const widen = (node, key, b) => {
+    const cur = node[key];
+    node[key] = cur ? { lo: Math.min(cur.lo, b.lo), hi: Math.max(cur.hi, b.hi) } : { lo: b.lo, hi: b.hi };
+  };
   for (const s of services || []) {
     const b = rangeBounds(s);
     if (!b) continue;
     const key = isMaleService(s.title) ? 'm' : 'f';
+    const xb = key === 'f' && maleMarkupApplies(s)
+      ? { lo: maleMarkupPrice(b.lo), hi: maleMarkupPrice(b.hi) } : null;
     // Ключ узла — ПОЛНЫЙ путь от корня, а не голое имя: одноимённые подкатегории
     // живут в разных ветках дерева (на salon 1 «Дополнительно» есть и в
     // инъекционной, и в аппаратной косметологии), и по имени их диапазоны
@@ -111,11 +138,9 @@ function renderPriceRanges(services) {
     const path = (s.category_path || []).map(c => cell(c, 60)).filter(Boolean);
     for (let i = 0; i < path.length; i++) {
       const nodeKey = path.slice(0, i + 1).join('>');
-      const node = nodes.get(nodeKey) || { f: null, m: null };
-      const cur = node[key];
-      node[key] = cur
-        ? { lo: Math.min(cur.lo, b.lo), hi: Math.max(cur.hi, b.hi) }
-        : { lo: b.lo, hi: b.hi };
+      const node = nodes.get(nodeKey) || { f: null, m: null, x: null };
+      widen(node, key, b);
+      if (xb) widen(node, 'x', xb);
       nodes.set(nodeKey, node);
     }
   }
@@ -123,10 +148,12 @@ function renderPriceRanges(services) {
   // детерминированным байт-в-байт (префикс-кэш), а localeCompare зависит от ICU.
   return [...nodes.entries()]
     .sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0))
-    .map(([name, { f, m }]) => {
-      if (f && m) return `- «${name}»: ${fmtRange(f)} (мужской прайс «Муж.»: ${fmtRange(m)})`;
-      if (f) return `- «${name}»: ${fmtRange(f)}`;
-      return `- «${name}»: только мужской прайс «Муж.» — ${fmtRange(m)}`;
+    .map(([name, { f, m, x }]) => {
+      if (!f) return `- «${name}»: только мужской прайс «Муж.» — ${fmtRange(m)}`;
+      const extra = [];
+      if (m) extra.push(`мужской прайс «Муж.»: ${fmtRange(m)}`);
+      if (x) extra.push(`мужчинам, стандартная цена +30%: ${fmtRange(x)}`);
+      return `- «${name}»: ${fmtRange(f)}${extra.length ? ` (${extra.join('; ')})` : ''}`;
     });
 }
 
@@ -148,18 +175,19 @@ function renderCatalogBlock(services) {
   const lines = sorted
     .map(s => {
       const unitPrice = isUnitPriceService(s.title);
+      const maleMarkup = !unitPrice && maleMarkupApplies(s);
       return [
         s.yc_id,
         cell(s.title, 120),
         s.duration_min || '',
-        unitPrice ? 'инд.' : fmtPrice(s.price_min, s.price_max),
+        unitPrice ? 'инд.' : withMalePrice(fmtPrice(s.price_min, s.price_max), s.price_min, s.price_max, maleMarkup),
         (s.category_path || []).map(c => cell(c, 60)).join('>'),
-        fmtStaffCell(s.staff, { hidePrices: unitPrice }),
+        fmtStaffCell(s.staff, { hidePrices: unitPrice, maleMarkup }),
       ].join('|');
     });
   const rangeLines = renderPriceRanges(sorted);
   const block = [
-    'КАТАЛОГ УСЛУГ КЛИНИКИ (полный актуальный список; формат строки: id услуги|название|длительность в минутах|цена ₽|направление>подкатегория|id мастеров через запятую). Цена: одно число — точная стоимость; X-Y — цены мастеров различаются, и тогда в колонке мастеров у каждого стоит его собственная цена (id=цена) — называй пациенту именно её, а не границу диапазона; «инд.» — стоимость определяет врач на консультации, цифру НЕ называй; пусто — цены нет, не выдумывай. Услуги с приставкой «Муж.» в начале названия — мужской прайс: мужчине называй цену и оформляй запись ТОЛЬКО по ним, женщине — только по строкам без приставки:',
+    'КАТАЛОГ УСЛУГ КЛИНИКИ (полный актуальный список; формат строки: id услуги|название|длительность в минутах|цена ₽|направление>подкатегория|id мастеров через запятую). Цена: одно число — точная стоимость; X-Y — цены мастеров различаются, и тогда в колонке мастеров у каждого стоит его собственная цена (id=цена) — называй пациенту именно её, а не границу диапазона; «инд.» — стоимость определяет врач на консультации, цифру НЕ называй; пусто — цены нет, не выдумывай. Услуги с приставкой «Муж.» в начале названия — мужской прайс: где они есть, мужчине называй цену и оформляй запись ТОЛЬКО по ним, женщине — только по строкам без приставки. «(мужчине N)» после цены — цена этой же услуги для мужчины (стандартная +30%, уже посчитана; так у лазерной эпиляции, где отдельных услуг «Муж.» нет): мужчине называй её, запись оформляй на эту же строку:',
     legend ? `Мастера: ${legend}` : null,
     ...lines,
     // Пустая строка-разделитель — это ведущий \n ВНУТРИ строки заголовка:
@@ -183,7 +211,7 @@ async function buildSafe(salonId) {
 }
 
 module.exports = {
-  renderCatalogBlock, buildSafe, fmtPrice, renderPriceRanges,
+  renderCatalogBlock, buildSafe, fmtPrice, fmtMalePrice, renderPriceRanges,
   // RANGES_HEADER экспортируется, чтобы тест промпта сверял ссылку правила
   // «Цена НАПРАВЛЕНИЯ» с РЕАЛЬНЫМ заголовком блока: иначе переименование
   // константы оставит промпт со ссылкой на несуществующий блок при зелёных тестах.
