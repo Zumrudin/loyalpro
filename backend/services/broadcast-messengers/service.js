@@ -123,7 +123,14 @@ async function forecastBroadcast(salonId, v) {
   return { ...f, total: recipients.length, skipped: sumSkipped(skipped), skippedBy: skipped };
 }
 
+function assertOwnImage(salonId, imageUrl) {
+  if (imageUrl && (!IMAGE_URL_RE.test(imageUrl) || !imageUrl.startsWith(`/uploads/broadcast_${salonId}_`))) {
+    throw httpError(400, 'Некорректный адрес картинки');
+  }
+}
+
 async function createBroadcast(salonId, userId, v) {
+  assertOwnImage(salonId, v.imageUrl);
   const { recipients, skipped } = await audience.resolveAudience(salonId, audOpts(v));
   if (!recipients.length) throw httpError(400, 'Нет получателей');
 
@@ -172,6 +179,7 @@ async function createBroadcast(salonId, userId, v) {
 
 /** Тест: первый мессенджер каскада тестового номера, без пауз и лимитов, рассылку не создаёт. */
 async function testSend(salonId, v, testPhone) {
+  assertOwnImage(salonId, v.imageUrl);
   const phone = canonPhone(testPhone);
   if (!phone) throw httpError(400, 'Укажите корректный номер для теста');
   const { recipients } = await audience.resolveAudience(salonId, {

@@ -246,3 +246,15 @@ describe('monitor и scope по салону', () => {
     expect(db.query.mock.calls[0][0]).toMatch(/paused = FALSE, pause_reason = NULL/);
   });
 });
+
+
+describe('изоляция картинки рассылки по салону', () => {
+  test('создание и тест отвергают картинку другого салона до побочных действий', async () => {
+    const value = svc.parseCreateBody({ ...valid(), imageUrl: '/uploads/broadcast_2_1730000000000.jpg' }).value;
+    audience.resolveAudience.mockClear();
+    await expect(svc.createBroadcast(1, 1, value)).rejects.toMatchObject({ status: 400 });
+    await expect(svc.testSend(1, value, '79000000000')).rejects.toMatchObject({ status: 400 });
+    expect(audience.resolveAudience).not.toHaveBeenCalled();
+    expect(require('./services/broadcast-messengers/sender').sendToRecipient).not.toHaveBeenCalled();
+  });
+});
