@@ -566,6 +566,10 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
     // Идентификация: знаем ли телефон (из канала) и имя (из карточки клиента).
     phoneKnown: !!ctx.phone,
     clientName: clientGivenName,
+    // Состоявшиеся визиты пациента (identity.resolveClient): факт «был ли уже в
+    // клинике». Инцидент 2026-11-09 (79082417232) — без него оговорка КБ «на
+    // первичный визит» модели не к чему применить.
+    clientVisits: client ? { count: client.visits, lastVisitAt: client.lastVisitAt } : null,
     catalogBlock,
     priceListBlock,
     activeOffers,
