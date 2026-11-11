@@ -27,6 +27,7 @@ const { extractTimes } = require('./reply-guard');
 
 const SLOT_EVIDENCE_TOOLS = new Set([
   'get_available_slots', 'get_sequential_slots', 'get_parallel_slots', 'create_booking',
+  'reschedule_booking',
 ]);
 
 function toMs(datetime) {
@@ -47,16 +48,21 @@ function idOrNull(v) {
 // available_slots ретрая имени не несут (null — «мастер неизвестен»).
 function extractPairs(tool, input, result) {
   const out = [];
-  if (!result || typeof result !== 'object' || result.error) return out;
-  const push = (datetime, staff, name, service) => {
+  if (!result || typeof result !== 'object') return out;
+  // Ошибочные результаты не считаются — КРОМЕ свежих стартов, которые write-
+  // инструмент сам перезапросил после отказа YClients по времени (они реальны).
+  if (result.error && !(result.slot_unavailable && (tool === 'create_booking' || tool === 'reschedule_booking'))) return out;
+  // len — seance_length слота в секундах (под какую длительность он посчитан);
+  // null, если выдача её не несёт (стыковка, гости, старые строки журнала).
+  const push = (datetime, staff, name, service, len) => {
     const ms = toMs(datetime);
     if (Number.isFinite(ms)) {
       out.push({ ms, staff: idOrNull(staff), name: (typeof name === 'string' && name.trim()) || null,
-        service: idOrNull(service) });
+        service: idOrNull(service), len: idOrNull(len) });
     }
   };
   const pushSlots = (list, staff, name, service) => {
-    for (const s of (Array.isArray(list) ? list : [])) if (s) push(s.datetime, staff, name, service);
+    for (const s of (Array.isArray(list) ? list : [])) if (s) push(s.datetime, staff, name, service, s.seance_length);
   };
   const inputStaff = input && input.staff_yc_id;
   const inputService = input && input.service_yc_id;
@@ -89,6 +95,12 @@ function extractPairs(tool, input, result) {
     // того же мастера (withFreshSlotsOnTimeFailure). Сам отвергнутый datetime
     // из input сюда НЕ попадает.
     pushSlots(result.available_slots, inputStaff, null, inputService);
+  } else if (tool === 'reschedule_booking') {
+    // Отказ YClients по времени при переносе кладёт свежие старты ПОД ЭТУ
+    // запись (её мастер, её услуга, её полная длительность) — инцидент
+    // 2026-11-11, см. tools/reschedule-booking.js. Сам отвергнутый datetime
+    // сюда не попадает: в available_slots его нет.
+    pushSlots(result.available_slots, result.staff_yc_id, null, result.service_yc_id);
   }
   return out;
 }
@@ -112,7 +124,7 @@ function createSlotEvidence() {
       for (const p of extractPairs(tool, input, result)) {
         if (!byMs.has(p.ms)) byMs.set(p.ms, new Set());
         byMs.get(p.ms).add(p.staff);
-        const k = `${p.ms}|${p.staff}|${p.name}|${p.service}`;
+        const k = `${p.ms}|${p.staff}|${p.name}|${p.service}|${p.len}`;
         if (!seen.has(k)) { seen.add(k); rows.push(p); }
       }
     },
@@ -133,6 +145,11 @@ function createSlotEvidence() {
     //   услугу, которую назвал пациент СВОИМИ словами, а не под ту, что
     //   реально стоит в переносимой записи — совпало по счастливой случайности
     //   (одинаковая длительность), а могло и не совпасть.
+    //   minLengthSec — полная длительность переносимой записи: подтверждающая
+    //   строка обязана быть посчитана под НЕ МЕНЬШУЮ длительность (или не знать
+    //   её — fail-open). Инцидент 2026-11-11 (79166123348): запись из трёх услуг
+    //   на 75 мин, слот найден под одну услугу (30 мин) — 12:00 «свободно», а
+    //   визит упирался в чужую запись в 13:00, YClients отказал после согласия.
     has(datetime, opts = {}) {
       const ms = toMs(datetime);
       if (!Number.isFinite(ms) || !byMs.has(ms)) return false;
@@ -142,11 +159,16 @@ function createSlotEvidence() {
       const wantServices = Array.isArray(opts.serviceYcIds)
         ? opts.serviceYcIds.map(idOrNull).filter(v => v !== null)
         : null;
-      if (!wantServices || !wantServices.length) return true;
+      const minLen = idOrNull(opts.minLengthSec);
+      if ((!wantServices || !wantServices.length) && minLen === null) return true;
       const matches = rows.filter(r => r.ms === ms && (want === null || r.staff === want || r.staff === null));
-      return matches.some(r => opts.requireExact
-        ? r.staff === want && wantServices.includes(r.service)
-        : r.service === null || wantServices.includes(r.service));
+      return matches.some(r => {
+        const serviceOk = (!wantServices || !wantServices.length) ? true
+          : (opts.requireExact
+            ? r.staff === want && wantServices.includes(r.service)
+            : r.service === null || wantServices.includes(r.service));
+        return serviceOk && (minLen === null || r.len === null || r.len >= minLen);
+      });
     },
     // Строки tool-events.loadRecent ({tool,input,result,is_error,age_ms}).
     // Выброшенный черновик (delivered=false) засевает: слот был реален в момент
@@ -212,13 +234,24 @@ function wrongServiceHint(datetime, recordServiceIds) {
     'повтори reschedule_booking с datetime ДОСЛОВНО из новой выдачи. Пациенту про эту проверку не пиши.';
 }
 
+// Гейт booking-modify.rescheduleBookingRecord: слот найден под ОДНУ услугу
+// (короче записи), а переносится вся запись (инцидент 2026-11-11).
+function shortSlotHint(datetime, recordId, recordLenSec) {
+  const min = Math.round(Number(recordLenSec) / 60);
+  return `Слот ${datetime} посчитан под одну услугу, а переносимая запись длится ${min} мин (все её услуги) — ` +
+    'в это окно она может не поместиться, перенос НЕ выполнен. Вызови get_available_slots на эту дату с ' +
+    `record_id=${recordId} (время посчитается под всю запись) и предложи пациенту время ТОЛЬКО из новой выдачи; ` +
+    'если названного ранее времени там нет — честно скажи, что вся запись в него не помещается, и предложи ' +
+    'ближайшее из выдачи. Пациенту про эту проверку не пиши.';
+}
+
 // Связь промпта с кодом (Сценарий 3, Шаг 5): правило обязано называть все три
 // hint-ответа по имени — иначе модель прочтёт их как провал и уйдёт в
 // «извинись и escalate». Проверяется в agent-system-prompt.test.js.
-const PROMPT_RULE_MARKERS = ['unverified_slot', 'needs_confirmation', 'wrong_service'];
+const PROMPT_RULE_MARKERS = ['unverified_slot', 'needs_confirmation', 'wrong_service', 'short_slot', 'staff_mismatch'];
 
 module.exports = {
   createSlotEvidence, SLOT_EVIDENCE_TOOLS, extractPairs,
   timeMentioned, moscowHHMM, moscowDateKey, unverifiedSlotHint, needsConfirmationHint, wrongServiceHint,
-  PROMPT_RULE_MARKERS,
+  shortSlotHint, PROMPT_RULE_MARKERS,
 };

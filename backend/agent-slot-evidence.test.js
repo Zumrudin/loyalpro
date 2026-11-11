@@ -179,7 +179,7 @@ describe('createSlotEvidence.add / has', () => {
 
   test('SLOT_EVIDENCE_TOOLS перечисляет ровно источники', () => {
     expect([...SLOT_EVIDENCE_TOOLS].sort()).toEqual(
-      ['create_booking', 'get_available_slots', 'get_parallel_slots', 'get_sequential_slots']);
+      ['create_booking', 'get_available_slots', 'get_parallel_slots', 'get_sequential_slots', 'reschedule_booking']);
   });
 });
 

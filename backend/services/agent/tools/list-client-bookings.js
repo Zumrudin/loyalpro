@@ -55,6 +55,9 @@ async function run(salonId, _input, ctx = {}) {
       service_yc_ids: (Array.isArray(r.services) ? r.services : []).map(s => Number(s.id)).filter(Boolean),
       staff_yc_id: r.staff_id || (r.staff && r.staff.id) || null,
       staff_name: (r.staff && r.staff.name) || null,
+      // Полная длительность визита (сек) — get_available_slots считает окна
+      // переноса под ВСЮ запись, а не под одну её услугу (инцидент 2026-11-11).
+      seance_length: Number(r.seance_length) || null,
     }));
   return { bookings };
 }

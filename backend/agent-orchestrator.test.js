@@ -710,6 +710,16 @@ describe('runDialog', () => {
       .toHaveBeenCalledWith(1, expect.anything(), expect.objectContaining({ clientName: 'Анна', clientPhone: '79001112233' }));
   });
 
+  test('визиты пациента из identity уходят в промпт (инцидент 2026-11-09, паспорт повторной клиентке)', async () => {
+    const deps = makeDeps({ identity: { resolveClient: jest.fn(async () => ({
+      id: 4180, name: 'Мазеина Анастасия Алексеевна', givenName: 'Анастасия', phone: '+79082417232',
+      visits: 2, lastVisitAt: new Date('2026-06-08T08:40:00Z') })) } });
+    deps.provider.createMessage.mockResolvedValueOnce(textResp('Перенесла на 13:00.'));
+    await orchestrator.runDialog(1, 'k', { deps, ctx: { phone: '79082417232' } });
+    const sentSystem = deps.provider.createMessage.mock.calls[0][0].system;
+    expect(sentSystem).toContain('состоявшихся визитов: 2, последний — 8 июня 2026 г.');
+  });
+
   test('в промпт уходит только ЛИЧНОЕ имя, в запись — ФИО целиком', async () => {
     // Инцидент 2026-08-04: пациентке «Вихарева Мария Андреевна» Мила написала
     // «Мария Андреевна, …» — в промпт уходило ФИО из карточки целиком.
