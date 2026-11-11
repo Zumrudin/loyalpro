@@ -87,6 +87,7 @@ async function run(salonId, input, ctx = {}) {
   if (!res.ok) {
     if (res.wrongService) return { invalid_args: true, wrong_service: true, error: res.error };
     if (res.shortSlot) return { invalid_args: true, short_slot: true, error: res.error };
+    if (res.staffMismatch) return { invalid_args: true, staff_mismatch: true, error: res.error };
     return withFreshSlotsOnTimeFailure(salonId, datetime, ctx, res);
   }
   return { rescheduled: true, record_id: res.record_id, datetime: res.datetime };

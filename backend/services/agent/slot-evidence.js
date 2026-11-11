@@ -248,7 +248,7 @@ function shortSlotHint(datetime, recordId, recordLenSec) {
 // Связь промпта с кодом (Сценарий 3, Шаг 5): правило обязано называть все три
 // hint-ответа по имени — иначе модель прочтёт их как провал и уйдёт в
 // «извинись и escalate». Проверяется в agent-system-prompt.test.js.
-const PROMPT_RULE_MARKERS = ['unverified_slot', 'needs_confirmation', 'wrong_service', 'short_slot'];
+const PROMPT_RULE_MARKERS = ['unverified_slot', 'needs_confirmation', 'wrong_service', 'short_slot', 'staff_mismatch'];
 
 module.exports = {
   createSlotEvidence, SLOT_EVIDENCE_TOOLS, extractPairs,

@@ -173,7 +173,8 @@ function resolveRecordContext(input, ctx, serviceId) {
   const ids = (list) => (Array.isArray(list) ? list : []).map(Number).filter(n => Number.isFinite(n) && n > 0);
   const ov = ctx && ctx.recordLengthOverride;
   if (ov && Number(ov.seance_length) > 0) {
-    return { recordId: ov.record_id, lenMin: Math.ceil(Number(ov.seance_length) / 60), serviceIds: ids(ov.service_yc_ids), auto: false };
+    return { recordId: ov.record_id, lenMin: Math.ceil(Number(ov.seance_length) / 60), serviceIds: ids(ov.service_yc_ids),
+      staffYcId: ov.staff_id || null, auto: false };
   }
   const rows = (Array.isArray(ctx && ctx.liveBookings) ? ctx.liveBookings : [])
     .filter(b => b && b.record_id && Number(b.seance_length) > 0);
@@ -186,7 +187,38 @@ function resolveRecordContext(input, ctx, serviceId) {
     if (m.length === 1) { b = m[0]; auto = true; }
   }
   if (!b) return null;
-  return { recordId: b.record_id, lenMin: Math.ceil(Number(b.seance_length) / 60), serviceIds: ids(b.service_yc_ids), auto };
+  return { recordId: b.record_id, lenMin: Math.ceil(Number(b.seance_length) / 60), serviceIds: ids(b.service_yc_ids),
+    staffYcId: b.staff_yc_id || null, auto };
+}
+
+// Кто выполняет ВСЕ услуги переносимой записи (пересечение исполнителей по
+// каталогу). Перенос сохраняет услуги, поэтому мастер, делающий лишь часть,
+// не годится: YClients запишет ему чужую процедуру или откажет уже после
+// согласия пациента. Каталог не ответил хоть по одной услуге → null
+// (fail-open: не фильтруем, решает гейт переноса в booking-modify).
+async function recordPerformers(salonId, rec) {
+  if (!rec || !rec.serviceIds.length) return null;
+  let common = null;
+  const names = new Map();
+  for (const sid of rec.serviceIds) {
+    const chk = await staffGuard.checkStaffPerformsService(salonId, sid, 0);
+    if (!chk || chk.unknown) return null;
+    const ids = new Set((chk.staffList || []).map((m) => {
+      names.set(String(m.yc_id), m.name);
+      return String(m.yc_id);
+    }));
+    common = common ? new Set([...common].filter(x => ids.has(x))) : ids;
+  }
+  return { ids: common, names: [...common].map(id => names.get(id)).filter(Boolean) };
+}
+
+function recordStaffMismatch(perf) {
+  const who = perf.names.length
+    ? `Все её услуги выполняют: ${perf.names.join(', ')} — предложи пациенту время у них (или у мастера самой записи).`
+    : 'Все её услуги не выполняет ни один другой специалист — переносить можно только к мастеру самой записи.';
+  return { slots: [], staff_mismatch: true, record_staff_mismatch: true,
+    error: 'Этот специалист выполняет НЕ ВСЕ услуги переносимой записи — перенести к нему запись целиком нельзя, ' +
+      `не предлагай его время для переноса. ${who}` };
 }
 
 function recordLengthNote(rec) {
@@ -258,18 +290,32 @@ function seancesToRanges(seances) {
 // Старт привязываем к ЧИСТОЙ сетке (кратной step от полуночи → :00/:30), а НЕ к
 // r.start. Иначе окно, начатое в 19:05 (хвост от предыдущей записи чужой длительности),
 // тянуло смещение через все старты: 19:05, 19:35, 20:05 — и прятало свободные 19:00/20:00.
-function rangesToSlots(ranges, date, step, durationMin) {
+// opts.edgeStep — «крайние» старты на мелкой сетке (15 мин): сразу после
+// окончания занятости и вплотную перед следующей, если их нет на основной сетке.
+// Инцидент 2026-11-11 (79166123348): у врача занято до 15:15 и с 17:00, запись
+// на 75 мин — сетка 30 мин давала только 15:30, а 15:15 и 15:45 (визит ровно
+// к краю чужой записи, без «мёртвого» времени) не предлагались вовсе. Внутренние
+// старты остаются на основной сетке — пациенту не сыплются «13:15, 13:45…».
+function rangesToSlots(ranges, date, step, durationMin, opts = {}) {
   const need = durationMin > 0 ? durationMin : step;
-  const slots = [];
+  const edge = Number(opts.edgeStep) > 0 ? Number(opts.edgeStep) : 0;
+  const starts = new Set();
   for (const r of ranges) {
     const first = Math.ceil(r.start / step) * step;   // ближайший чистый старт ≥ r.start
-    for (let t = first; t + need <= r.end; t += step) {
-      const hhmm = toHHMM(t);
-      slots.push({ time: hhmm, datetime: `${date}T${hhmm}:00+03:00` });
+    for (let t = first; t + need <= r.end; t += step) starts.add(t);
+    if (edge) {
+      const head = Math.ceil(r.start / edge) * edge;              // сразу после занятости
+      const tail = Math.floor((r.end - need) / edge) * edge;      // вплотную перед следующей
+      for (const t of [head, tail]) if (t >= r.start && t + need <= r.end) starts.add(t);
     }
   }
-  return slots;
+  return [...starts].sort((a, b) => a - b).map((t) => {
+    const hhmm = toHHMM(t);
+    return { time: hhmm, datetime: `${date}T${hhmm}:00+03:00` };
+  });
 }
+
+const EDGE_STEP_MIN = 15;
 
 // Слоты одного мастера под услугу на дату: сперва онлайн-запись (точные слоты),
 // иначе fallback из графика с вычетом занятого оборудования. Вынесено из run(),
@@ -341,7 +387,8 @@ async function computeStaffSlots(salon, staffId, serviceId, date, nowMs, dayPart
   // округляла их границы как время записи: инцидент 2026-07-28 — окно с 14:40
   // названо пациенту «14:00», create_booking упал «время недоступно» → ложная
   // эскалация. Единственный допустимый источник предлагаемого времени — slots.
-  let slots = rangesToSlots(ranges, date, DEFAULT_STEP_MIN, svcDurationMin);
+  let slots = rangesToSlots(ranges, date, DEFAULT_STEP_MIN, svcDurationMin,
+    { edgeStep: svcDurationMin ? EDGE_STEP_MIN : 0 });
   // seance_length — как у get_parallel_slots: create_booking без него ловил 422
   // на салонах с выключенной онлайн-записью.
   if (svcDurationMin) {
@@ -572,9 +619,18 @@ async function run(salonId, input, ctx = {}) {
       return { error: 'Не удалось получить список исполнителей услуги. Вызови get_available_slots ещё раз, ' +
         'указав конкретный staff_yc_id (id мастера — в колонке мастеров строки услуги в каталоге).' };
     }
+    let candidates = chk.staffList;
+    if (rec) {
+      const perf = await recordPerformers(salonId, rec);
+      if (perf) {
+        candidates = candidates.filter(m => perf.ids.has(String(m.yc_id))
+          || String(m.yc_id) === String(rec.staffYcId));
+        if (!candidates.length) return { ...recordStaffMismatch(perf), staff_options: [] };
+      }
+    }
     const salon = await loadSalon(salonId);
     if (!salon || !salon.yclients_company_id) return { error: 'YClients не подключён для салона.' };
-    const { options, reachable, checked, total } = await computeStaffOptions(salon, filter, chk.staffList, serviceId, date, nowMs, dayPart, rec);
+    const { options, reachable, checked, total } = await computeStaffOptions(salon, filter, candidates, serviceId, date, nowMs, dayPart, rec);
     if (options.length) {
       await attachPositions(salonId, options);
       // «Один специалист» законно ровно там же, где законно «ни у кого»: кап никого не
@@ -631,6 +687,16 @@ async function run(salonId, input, ctx = {}) {
       };
     }
     staffList = chk.staffList || [];
+    // Перенос записи к ДРУГОМУ мастеру: он обязан делать ВСЕ её услуги, а не
+    // только ту, по которой спрашивают окна. Альтернативы — тоже только такие.
+    if (rec) {
+      const perf = await recordPerformers(salonId, rec);
+      if (perf) {
+        const own = (id) => rec.staffYcId && String(id) === String(rec.staffYcId);
+        if (!own(staffId) && !perf.ids.has(String(staffId))) return recordStaffMismatch(perf);
+        staffList = staffList.filter(m => perf.ids.has(String(m.yc_id)) || own(m.yc_id));
+      }
+    }
   }
   const salon = await loadSalon(salonId);
   if (!salon || !salon.yclients_company_id) return { error: 'YClients не подключён для салона.' };

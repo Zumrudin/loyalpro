@@ -210,6 +210,24 @@ async function rescheduleBookingRecord(salonId, {
     }
   }
 
+  // Перенос к ДРУГОМУ мастеру сохраняет услуги записи, поэтому новый мастер
+  // обязан выполнять ВСЕ из них (инцидент 2026-11-11, разбор). Каталог не
+  // ответил → unknown → не блокируем (fail-open, как staff-service-guard везде).
+  const newStaff = staffYcId && String(staffYcId) !== String(rec.staff_id) ? staffYcId : null;
+  if (newStaff) {
+    const staffGuard = require('./staff-service-guard');
+    for (const s of serviceIds(rec)) {
+      let chk = null;
+      try { chk = await staffGuard.checkStaffPerformsService(salonId, s.id, newStaff); } catch (_) { chk = null; }
+      if (chk && !chk.unknown && !chk.ok) {
+        return { ok: false, staffMismatch: true,
+          error: 'Новый специалист выполняет НЕ ВСЕ услуги переносимой записи — перенос к нему не выполнен. ' +
+            'Предложи пациенту время у мастера самой записи или у того, кто делает все её услуги ' +
+            '(get_available_slots с record_id покажет только подходящих). Пациенту про эту проверку не пиши.' };
+      }
+    }
+  }
+
   // Перенос НЕ меняет длительность записи: seance_length слота посчитан под
   // одну услугу и короче визита из нескольких услуг — подставленный в PUT, он
   // молча обрезал бы запись (а с ней и время, отведённое врачу). Аргумент

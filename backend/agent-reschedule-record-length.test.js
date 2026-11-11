@@ -31,9 +31,18 @@ jest.mock('./services/agent/service-filter', () => ({
   isBookable: jest.fn(() => true),
   decideServiceVisible: jest.fn(() => true),
 }));
+// Каталог исполнителей: Profhilo делают Пери и Боташев, Lumecca и ИМП — только Пери.
+const PERFORMERS = {
+  9536495: [{ yc_id: 1910274, name: 'Гаджиева Пери' }, { yc_id: 5708379, name: 'Астемир Боташев' }],
+  15394152: [{ yc_id: 1910274, name: 'Гаджиева Пери' }],
+  26099275: [{ yc_id: 1910274, name: 'Гаджиева Пери' }],
+};
 jest.mock('./services/agent/staff-service-guard', () => ({
-  checkStaffPerformsService: jest.fn(async () => ({ ok: true, unknown: false, performers: [],
-    staffList: [{ yc_id: 1910274, name: 'Гаджиева Пери' }] })),
+  checkStaffPerformsService: jest.fn(async (_s, sid, staff) => {
+    const list = PERFORMERS[Number(sid)] || [];
+    return { ok: list.some(m => String(m.yc_id) === String(staff)), unknown: false,
+      performers: list.map(m => m.name), staffList: list };
+  }),
 }));
 jest.mock('./services/agent/equipment-context', () => ({
   loadEquipmentContext: jest.fn(async () => ({})),
@@ -92,7 +101,7 @@ describe('get_available_slots: окна под ВСЮ переносимую з�
     const times = res.slots.map(s => s.time);
     expect(times).not.toContain('12:00');
     expect(times).not.toContain('12:30');
-    expect(times).toEqual(['15:30']);            // 15:30 + 75 мин = 16:45 < 17:00 (сетка 30 мин)
+    expect(times).toEqual(['15:15', '15:30', '15:45']);   // 15:15 сразу после занятости, 15:45 + 75 = 17:00 вплотную
     expect(res.slots[0].seance_length).toBe(4500);
     expect(res.record_length_applied).toEqual({ record_id: 2085514739, minutes: 75 });
     expect(res.hint).toMatch(/new_visit:true/);
@@ -100,7 +109,7 @@ describe('get_available_slots: окна под ВСЮ переносимую з�
 
   test('явный record_id — то же, без оговорки про new_visit', async () => {
     const res = await slotsTool.run(1, { ...ARGS, record_id: 2085514739 }, CTX);
-    expect(res.slots.map(s => s.time)).toEqual(['15:30']);
+    expect(res.slots.map(s => s.time)).toEqual(['15:15', '15:30', '15:45']);
     expect(res.hint).not.toMatch(/new_visit/);
   });
 
@@ -108,7 +117,7 @@ describe('get_available_slots: окна под ВСЮ переносимую з�
     ycGetBookTimes.mockResolvedValue([{ time: '12:00', datetime: '2026-11-19T12:00:00+03:00', seance_length: 1800 }]);
     const res = await slotsTool.run(1, { ...ARGS, record_id: 2085514739 }, CTX);
     expect(ycGetBookTimes).not.toHaveBeenCalled();
-    expect(res.slots.map(s => s.time)).toEqual(['15:30']);
+    expect(res.slots.map(s => s.time)).toEqual(['15:15', '15:30', '15:45']);
   });
 
   test('односервисная запись автоматически НЕ применяется (повторная запись на ту же услугу обычна)', () => {
@@ -209,7 +218,7 @@ describe('reschedule_booking: инструмент', () => {
     const res = await reschedule.run(1, { record_id: YC_REC.id, datetime: '2026-11-19T12:00:00+03:00', patient_confirmed: true },
       consent);   // без slotEvidence — гейты fail-open, доходим до YClients
     expect(res.slot_unavailable).toBe(true);
-    expect(res.available_slots.map(s => s.time)).toEqual(['15:30']);
+    expect(res.available_slots.map(s => s.time)).toEqual(['15:15', '15:30', '15:45']);
     expect(res.available_slots[0].seance_length).toBe(4500);
     expect(res.staff_yc_id).toBe(PERI);
     expect(res.error).toMatch(/не повод передавать диалог администратору/);
@@ -224,5 +233,81 @@ describe('reschedule_booking: инструмент', () => {
     expect(res.error).toMatch(/500/);
     expect(res.slot_unavailable).toBeUndefined();
     expect(ycGetStaffSeances).not.toHaveBeenCalled();
+  });
+});
+
+describe('сетка 15 минут у краёв занятости', () => {
+  test('rangesToSlots: края окна на сетке 15 мин, середина — на сетке 30 мин', () => {
+    // окно 15:15–17:00, визит 75 мин: 15:15 (сразу после), 15:30 (сетка), 15:45 (вплотную к 17:00)
+    const r = slotsTool.rangesToSlots([{ start: 915, end: 1020 }], '2026-11-19', 30, 75, { edgeStep: 15 });
+    expect(r.map(x => x.time)).toEqual(['15:15', '15:30', '15:45']);
+    // без edgeStep — прежнее поведение
+    expect(slotsTool.rangesToSlots([{ start: 915, end: 1020 }], '2026-11-19', 30, 75).map(x => x.time)).toEqual(['15:30']);
+  });
+
+  test('длинное окно: внутренние старты не мельчат, добавляются только два края', () => {
+    // 12:15–15:00, услуга 30 мин
+    const r = slotsTool.rangesToSlots([{ start: 735, end: 900 }], '2026-11-19', 30, 30, { edgeStep: 15 });
+    expect(r.map(x => x.time)).toEqual(['12:15', '12:30', '13:00', '13:30', '14:00', '14:30']);
+  });
+
+  test('плотная запись предлагает время вплотную к занятости (15:15 или 15:45), а не 15:30', async () => {
+    const res = await slotsTool.run(1, { ...ARGS, record_id: 2085514739 }, CTX);
+    const offer = res.offer_slots.map(s => s.time);
+    expect(offer.length).toBeGreaterThan(0);
+    expect(offer).not.toContain('15:30');
+    expect(offer.every(t => t === '15:15' || t === '15:45')).toBe(true);
+  });
+});
+
+describe('перенос к другому мастеру: он обязан делать ВСЕ услуги записи', () => {
+  const BOTASHEV = 5708379;
+
+  test('get_available_slots: мастер делает только Profhilo → staff_mismatch, слоты не отдаются', async () => {
+    const res = await slotsTool.run(1, { ...ARGS, staff_yc_id: BOTASHEV, record_id: 2085514739 }, CTX);
+    expect(res.staff_mismatch).toBe(true);
+    expect(res.record_staff_mismatch).toBe(true);
+    expect(res.slots).toEqual([]);
+    expect(res.error).toMatch(/Гаджиева Пери/);
+    expect(ycGetStaffSeances).not.toHaveBeenCalled();
+  });
+
+  test('новый визит той же услуги к нему же (new_visit) — разрешён как раньше', async () => {
+    const res = await slotsTool.run(1, { ...ARGS, staff_yc_id: BOTASHEV, new_visit: true }, CTX);
+    expect(res.staff_mismatch).toBeUndefined();
+  });
+
+  test('без мастера: в выбор попадают только те, кто делает все услуги записи', async () => {
+    const res = await slotsTool.run(1, { service_yc_id: PROFHILO, date: '2026-11-19', record_id: 2085514739 }, CTX);
+    expect((res.staff_options || []).map(o => o.staff_yc_id)).toEqual([PERI]);
+  });
+
+  test('booking-modify: перенос к мастеру, делающему не все услуги → staffMismatch, PUT не идёт', async () => {
+    ycr.ycGetRecord.mockResolvedValue(YC_REC);
+    const res = await rescheduleBookingRecord(1, { recordId: YC_REC.id, expectedYcClientId: 777,
+      datetime: '2026-11-19T15:30:00+03:00', staffYcId: BOTASHEV });
+    expect(res.ok).toBe(false);
+    expect(res.staffMismatch).toBe(true);
+    expect(ycr.ycUpdateRecord).not.toHaveBeenCalled();
+  });
+
+  test('reschedule_booking: staff_mismatch — hint, не провал', async () => {
+    ycr.ycGetRecord.mockResolvedValue(YC_REC);
+    const res = await reschedule.run(1, { record_id: YC_REC.id, datetime: '2026-11-19T15:30:00+03:00',
+      staff_yc_id: BOTASHEV, patient_confirmed: true }, {
+      clientPhone: '79166123348', nowMs: NOW, liveBookings: [RECORD],
+      previousAssistantText: '19 ноября в 15:30 — переносим?', patientLastText: 'да',
+      recentDialogText: '19 ноября в 15:30 — переносим?\nда',
+    });
+    expect(res.staff_mismatch).toBe(true);
+    expect(reschedule.isHintResult(res)).toBe(true);
+  });
+
+  test('тот же мастер записи — проверки исполнителей нет, PUT идёт', async () => {
+    ycr.ycGetRecord.mockResolvedValue(YC_REC);
+    ycr.ycUpdateRecord.mockResolvedValue({ id: YC_REC.id });
+    const res = await rescheduleBookingRecord(1, { recordId: YC_REC.id, expectedYcClientId: 777,
+      datetime: '2026-11-19T15:30:00+03:00', staffYcId: PERI });
+    expect(res.ok).toBe(true);
   });
 });
