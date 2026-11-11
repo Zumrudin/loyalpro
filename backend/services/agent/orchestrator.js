@@ -227,7 +227,8 @@ function buildHardFixPrompt(hard) {
 // назван, невалидный id). Отказом YClients не является — для writeErrored.
 function isWriteHint(res) {
   return !!(res && (res.invalid_args || res.too_soon || res.needs_phone
-    || res.generic_service_hint || res.unverified_slot || res.needs_confirmation || res.wrong_service));
+    || res.generic_service_hint || res.unverified_slot || res.needs_confirmation || res.wrong_service
+    || res.short_slot));
 }
 
 // Реплика содержит конкретное время (HH:MM / HH.MM) — модель предлагает слот.

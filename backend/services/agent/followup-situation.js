@@ -29,7 +29,7 @@ const SLOT_TOOLS = new Set(['get_available_slots', 'get_available_dates', 'get_s
 const PRICE_TOOLS = new Set(['get_service_masters', 'send_price_list']);
 // Hint-ответы write-инструментов (см. isHintResult в tools/reschedule-booking.js
 // и ветки create-booking.js): YClients не звался, ход предрешён вопросом.
-const HINT_FLAGS = ['needs_phone', 'generic_service_hint', 'too_soon', 'unverified_slot', 'needs_confirmation', 'wrong_service'];
+const HINT_FLAGS = ['needs_phone', 'generic_service_hint', 'too_soon', 'unverified_slot', 'needs_confirmation', 'wrong_service', 'short_slot'];
 // Ключи непустой выдачи по всем четырём слот-инструментам: slots/offer_slots/
 // staff_options/alternative_staff (get_available_slots), variants (sequential),
 // starts (parallel), schedule (dates); free_day:true — тоже выбор (половина дня).

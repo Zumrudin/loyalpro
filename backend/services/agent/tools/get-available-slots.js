@@ -144,11 +144,68 @@ const schema = {
           'afternoon — после обеда (с 14:00), evening — вечером (с 17:00). Передавай, когда пациент ' +
           'сказал, в какую часть дня ему удобно (в том числе в ответ на твой вопрос при free_day). ' +
           'Полный slots от этого не сужается — сужается только подобранное offer_slots.' },
+      record_id:     { type: 'integer',
+        description: 'При ПЕРЕНОСЕ существующей записи — её record_id (из блока «АКТУАЛЬНЫЕ ЗАПИСИ ПАЦИЕНТА»). ' +
+          'Время посчитается под ВСЮ длительность записи со всеми её услугами, а не под одну услугу.' },
+      new_visit:     { type: 'boolean',
+        description: 'true — пациент записывается на НОВЫЙ отдельный визит этой услуги, а не переносит ' +
+          'существующую запись (снимает подсчёт под длительность его текущей записи).' },
     },
     required: ['service_yc_id', 'date'],
     additionalProperties: false,
   },
 };
+
+// Длительность ПЕРЕНОСИМОЙ записи (инцидент 2026-11-11, 79166123348): запись из
+// трёх услуг на 75 мин, а слоты искались под одну услугу (Profhilo, 30 мин) —
+// 12:00 «свободно», хотя в 13:00 у врача чужая запись, и YClients отказал в
+// переносе уже после «да» пациентки. Источник — ТОЛЬКО серверные данные:
+//   ctx.recordLengthOverride — сам reschedule_booking перезапрашивает слоты после
+//     отказа YClients (данные записи у него на руках);
+//   input.record_id — модель назвала запись; ищется в ctx.liveBookings (сверка с
+//     CRM этого хода, записи ТОЛЬКО этого пациента — чужой id ничего не даст);
+//   автоматически — услуга входит в ЕДИНСТВЕННУЮ будущую запись пациента из
+//     НЕСКОЛЬКИХ услуг: спросить окна под одну её услугу почти всегда значит
+//     переносить её (модель в инциденте record_id не передала бы — правило
+//     промпта тут не держится). Отключается new_visit:true; односервисные
+//     записи автоматом не трогаем — повторная запись на ту же услугу обычна.
+function resolveRecordContext(input, ctx, serviceId) {
+  const ids = (list) => (Array.isArray(list) ? list : []).map(Number).filter(n => Number.isFinite(n) && n > 0);
+  const ov = ctx && ctx.recordLengthOverride;
+  if (ov && Number(ov.seance_length) > 0) {
+    return { recordId: ov.record_id, lenMin: Math.ceil(Number(ov.seance_length) / 60), serviceIds: ids(ov.service_yc_ids), auto: false };
+  }
+  const rows = (Array.isArray(ctx && ctx.liveBookings) ? ctx.liveBookings : [])
+    .filter(b => b && b.record_id && Number(b.seance_length) > 0);
+  let b = null;
+  let auto = false;
+  if (input && input.record_id) {
+    b = rows.find(r => String(r.record_id) === String(input.record_id)) || null;
+  } else if (!(input && input.new_visit === true)) {
+    const m = rows.filter(r => ids(r.service_yc_ids).length > 1 && ids(r.service_yc_ids).includes(Number(serviceId)));
+    if (m.length === 1) { b = m[0]; auto = true; }
+  }
+  if (!b) return null;
+  return { recordId: b.record_id, lenMin: Math.ceil(Number(b.seance_length) / 60), serviceIds: ids(b.service_yc_ids), auto };
+}
+
+function recordLengthNote(rec) {
+  let note = `Время посчитано под ВСЮ запись record_id=${rec.recordId} (${rec.lenMin} мин, все её услуги) — ` +
+    'это нужно для переноса: в эти старты помещается весь визит.';
+  if (rec.auto) {
+    note += ' Если пациент НЕ переносит эту запись, а записывается на новый отдельный визит этой услуги — ' +
+      'повтори вызов с new_visit:true.';
+  }
+  return note;
+}
+
+function decorateRecord(out, rec) {
+  if (!rec || !out) return out;
+  out.record_length_applied = { record_id: rec.recordId, minutes: rec.lenMin };
+  const note = recordLengthNote(rec);
+  out.hint = out.hint ? `${note} ${out.hint}` : note;
+  return out;
+}
 
 const toMin = (t) => { const [h, m] = String(t).split(':').map(Number); return h * 60 + m; };
 const toHHMM = (min) => `${String(Math.floor(min / 60)).padStart(2, '0')}:${String(min % 60).padStart(2, '0')}`;
@@ -217,9 +274,11 @@ function rangesToSlots(ranges, date, step, durationMin) {
 // Слоты одного мастера под услугу на дату: сперва онлайн-запись (точные слоты),
 // иначе fallback из графика с вычетом занятого оборудования. Вынесено из run(),
 // чтобы тем же кодом считать альтернативных мастеров при пустой выдаче.
-async function computeStaffSlots(salon, staffId, serviceId, date, nowMs, dayPart) {
+async function computeStaffSlots(salon, staffId, serviceId, date, nowMs, dayPart, rec) {
   // 1) Онлайн-запись включена и известна услуга → точные слоты под услугу.
-  if (serviceId) {
+  // Под ПЕРЕНОС многоуслужной записи (rec) онлайн-запись не годится: она
+  // отдаёт старты под одну услугу — считаем по графику с длиной всей записи.
+  if (serviceId && !rec) {
     const times = await ycGetBookTimes(salon, staffId, date, [serviceId]);
     const slots = (Array.isArray(times) ? times : []).map(t => ({
       time: t.time, datetime: t.datetime, seance_length: t.seance_length,
@@ -265,7 +324,10 @@ async function computeStaffSlots(salon, staffId, serviceId, date, nowMs, dayPart
   if (serviceId) {
     const eqCtx = await eqContext.loadEquipmentContext(salon, date);
     svcDurationMin = eqContext.durationMin(eqCtx, serviceId) || DEFAULT_DURATION_MIN;
-    const busy = eqContext.busyForService(eqCtx, serviceId);
+    // Перенос записи: окно обязано вместить ВСЮ запись, и аппараты ВСЕХ её услуг.
+    if (rec && rec.lenMin > svcDurationMin) svcDurationMin = rec.lenMin;
+    const eqServices = rec ? [...new Set([Number(serviceId), ...rec.serviceIds])] : [serviceId];
+    const busy = eqServices.flatMap(id => eqContext.busyForService(eqCtx, id) || []);
     if (busy.length) {
       const trimmed = eq.subtractRanges(ranges, busy);
       equipmentBusy = trimmed.length !== ranges.length
@@ -329,7 +391,7 @@ function applyPatientTime(holder, patientText) {
 // сказала «окошек нет», хотя у Татьяны было 14:00; клиент сам вытащил альтернативу
 // вопросом «а почему к Тане не предлагаешь?». Задача — довести до записи: альтернативу
 // подсвечивает сам инструмент, а не память модели.
-async function findAlternativeStaff(salon, filter, staffList, staffId, serviceId, date, nowMs, dayPart) {
+async function findAlternativeStaff(salon, filter, staffList, staffId, serviceId, date, nowMs, dayPart, rec) {
   const eligible = (staffList || [])
     .filter(m => m && m.yc_id && String(m.yc_id) !== String(staffId))
     .filter(m => svcFilter.isBookable(filter, serviceId, m.yc_id))
@@ -347,7 +409,7 @@ async function findAlternativeStaff(salon, filter, staffList, staffId, serviceId
       // В booking-ветке computeStaffSlots делает ДОПОЛНИТЕЛЬНЫЙ запрос сетки на
       // КАЖДОГО мастера (до MAX_ALT_STAFF штук) — цена осознанная: offer_slots
       // нужен по каждому специалисту отдельно, плотность считается по ЕГО дню.
-      const r = await computeStaffSlots(salon, m.yc_id, serviceId, date, nowMs, dayPart);
+      const r = await computeStaffSlots(salon, m.yc_id, serviceId, date, nowMs, dayPart, rec);
       const item = { staff_yc_id: m.yc_id, name: m.name, slots: r.slots || [], offer_slots: r.offer_slots || [] };
       if (r.free_day) item.free_day = true;   // весь день свободен — времени по нему не называем
       return item;
@@ -398,7 +460,7 @@ async function loadSalon(salonId) {
 // Пациент мастера не называл → окна считаем у ВСЕХ исполнителей услуги, а выбор
 // отдаём пациенту. Раньше исполнителя выбирала сама модель (промпт это разрешал), и
 // пациент молча получал одного специалиста — при том что цена зависит от мастера.
-async function computeStaffOptions(salon, filter, staffList, serviceId, date, nowMs, dayPart) {
+async function computeStaffOptions(salon, filter, staffList, serviceId, date, nowMs, dayPart, rec) {
   const eligible = (staffList || [])
     .filter(m => m && m.yc_id)
     .filter(m => svcFilter.isBookable(filter, serviceId, m.yc_id))
@@ -417,7 +479,7 @@ async function computeStaffOptions(salon, filter, staffList, serviceId, date, no
       // В booking-ветке computeStaffSlots делает ДОПОЛНИТЕЛЬНЫЙ запрос сетки на
       // КАЖДОГО мастера (до MAX_STAFF_OPTIONS штук) — цена осознанная: offer_slots
       // нужен по каждому специалисту отдельно, плотность считается по ЕГО дню.
-      const r = await computeStaffSlots(salon, m.yc_id, serviceId, date, nowMs, dayPart);
+      const r = await computeStaffSlots(salon, m.yc_id, serviceId, date, nowMs, dayPart, rec);
       const item = {
         staff_yc_id: m.yc_id, name: m.name, position: null,
         slots: r.slots || [], offer_slots: r.offer_slots || [],
@@ -481,6 +543,7 @@ async function run(salonId, input, ctx = {}) {
     : patientTime.parseDayPartFromRecent(recentTexts);
   const dayPart = (input && input.day_part) || inferredDayPart || undefined;
   const nowMs = (ctx && ctx.nowMs) || Date.now();
+  const rec = resolveRecordContext(input, ctx, serviceId);
   if (!date) return { error: 'Нужна date (YYYY-MM-DD).' };
   // Услуга обязательна: без неё неизвестна длительность, и старты считались бы
   // «хотя бы на один шаг» — сеткой 30 мин. Инцидент 2026-07-31: так предложили
@@ -511,7 +574,7 @@ async function run(salonId, input, ctx = {}) {
     }
     const salon = await loadSalon(salonId);
     if (!salon || !salon.yclients_company_id) return { error: 'YClients не подключён для салона.' };
-    const { options, reachable, checked, total } = await computeStaffOptions(salon, filter, chk.staffList, serviceId, date, nowMs, dayPart);
+    const { options, reachable, checked, total } = await computeStaffOptions(salon, filter, chk.staffList, serviceId, date, nowMs, dayPart, rec);
     if (options.length) {
       await attachPositions(salonId, options);
       // «Один специалист» законно ровно там же, где законно «ни у кого»: кап никого не
@@ -524,9 +587,9 @@ async function run(salonId, input, ctx = {}) {
       // offer_slots») по нему невыполним: времени там нет. Оговорка дописывается,
       // а не заменяет хинт: в смешанном дне остальные мастера идут как обычно.
       if (options.some(o => o.free_day)) hint += HINT_FREE_DAY_OPTIONS;
-      return inferredDayPart
+      return decorateRecord(inferredDayPart
         ? { staff_options: options, hint, day_part_inferred: inferredDayPart }
-        : { staff_options: options, hint };
+        : { staff_options: options, hint }, rec);
     }
     // Пустой список окон САМ ПО СЕБЕ не означает «времени нет»: недостижимый мастер
     // (сбой YClients) выпадает из выдачи так же, как занятый. Утверждать «свободного
@@ -572,7 +635,7 @@ async function run(salonId, input, ctx = {}) {
   const salon = await loadSalon(salonId);
   if (!salon || !salon.yclients_company_id) return { error: 'YClients не подключён для салона.' };
   try {
-    const out = await computeStaffSlots(salon, staffId, serviceId, date, nowMs, dayPart);
+    const out = await computeStaffSlots(salon, staffId, serviceId, date, nowMs, dayPart, rec);
     if (inferredDayPart) out.day_part_inferred = inferredDayPart;
     // Имя запрошенного мастера едет рядом с его слотами — оно нужно reply-guard'у
     // (checkStaffAttribution): без него оркестратор знает, что выдача пуста, но не
@@ -591,14 +654,14 @@ async function run(salonId, input, ctx = {}) {
       if (named.length) out.hint = patientTime.hintPatientTimeFree(named);
       else if (out.free_day) out.hint = HINT_FREE_DAY;
       else if (out.day_part_empty) out.hint = HINT_DAY_PART_EMPTY;
-      return out;
+      return decorateRecord(out, rec);
     }
     // У запрошенного мастера на эту дату пусто → сразу подсвечиваем альтернативу:
     // те же слоты у других исполнителей услуги, чтобы клиент не ушёл без записи.
     // Параллельно выясняем ПРИЧИНУ пустоты: «день расписан» и «мастера нет в
     // графике» до 10.08.2026 выглядели снаружи одинаково (инцидент 79166524647).
     const [alt, sched] = await Promise.all([
-      findAlternativeStaff(salon, filter, staffList, staffId, serviceId, date, nowMs, dayPart),
+      findAlternativeStaff(salon, filter, staffList, staffId, serviceId, date, nowMs, dayPart, rec),
       describeStaffSchedule(salon, staffId, date),
     ]);
     if (alt && alt.alternative_staff) {
@@ -634,7 +697,7 @@ async function run(salonId, input, ctx = {}) {
       const notWorking = hintStaffNotWorking(staffName, sched.nextWorkingDate, sched.checkedUntil);
       out.hint = out.hint ? `${notWorking} ${out.hint}` : notWorking;
     }
-    return out;
+    return decorateRecord(out, rec);
   } catch (e) {
     return { error: `Не удалось получить слоты: ${e.message}` };
   }
@@ -642,4 +705,4 @@ async function run(salonId, input, ctx = {}) {
 
 // MAX_STAFF_OPTIONS экспортируется РАДИ ТЕСТОВ: фикстуры с зашитой «тройкой» мастеров
 // остались бы зелёными и после сдвига капа — ровно на этом инцидент 2026-08-06 и держался.
-module.exports = { schema, run, seancesToRanges, rangesToSlots, toMin, toHHMM, MAX_STAFF_OPTIONS };
+module.exports = { schema, run, seancesToRanges, rangesToSlots, toMin, toHHMM, MAX_STAFF_OPTIONS, resolveRecordContext };

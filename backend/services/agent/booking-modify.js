@@ -6,7 +6,7 @@ const { ycGetRecord, ycUpdateRecord } = require('../yclients-records');
 const { ycGetServiceMeta, ycGetServiceCatalog } = require('../yclients');
 const { ycGetDayRecords } = require('../yclients-booking');
 const { withRateLimitRetry } = require('../yclients-retry');
-const { wrongServiceHint } = require('./slot-evidence');
+const { wrongServiceHint, shortSlotHint } = require('./slot-evidence');
 const { isRecordAlive, isEmptyRecord } = require('./record-liveness');
 const { normalizePhoneKey } = require('../agent-gate');
 
@@ -198,11 +198,26 @@ async function rescheduleBookingRecord(salonId, {
         && !slotEvidence.has(datetime, { staffYcId: staffYcId || rec.staff_id, serviceYcIds: recordServiceIds })) {
       return { ok: false, wrongService: true, error: wrongServiceHint(datetime, recordServiceIds) };
     }
+    // Слот обязан быть посчитан под ВСЮ длительность записи, а не под одну её
+    // услугу (инцидент 2026-11-11, 79166123348: запись на 75 мин из трёх услуг,
+    // слот 12:00 найден под Profhilo на 30 мин, в 13:00 у мастера чужая запись —
+    // YClients отказал уже после «да» пациентки). Строки без длительности
+    // (стыковка, старый журнал) не мешают — fail-open, как и весь гейт.
+    const recLenSec = Number(rec.seance_length);
+    if (recordServiceIds.length && recLenSec > 0
+        && !slotEvidence.has(datetime, { staffYcId: staffYcId || rec.staff_id, serviceYcIds: recordServiceIds, minLengthSec: recLenSec })) {
+      return { ok: false, shortSlot: true, error: shortSlotHint(datetime, rec.id, recLenSec) };
+    }
   }
 
+  // Перенос НЕ меняет длительность записи: seance_length слота посчитан под
+  // одну услугу и короче визита из нескольких услуг — подставленный в PUT, он
+  // молча обрезал бы запись (а с ней и время, отведённое врачу). Аргумент
+  // модели берётся, только если у записи своей длительности нет.
+  const keepLength = Number(rec.seance_length) > 0 ? rec.seance_length : seanceLength;
+
   if (Date.parse(rec.datetime) === Date.parse(datetime)
-      && Number(rec.staff_id) === Number(staffYcId || rec.staff_id)
-      && Number(rec.seance_length) === Number(seanceLength || rec.seance_length)) {
+      && Number(rec.staff_id) === Number(staffYcId || rec.staff_id)) {
     return { ok: true, already: true, record_id: rec.id, datetime };
   }
 
@@ -214,10 +229,18 @@ async function rescheduleBookingRecord(salonId, {
       services: serviceIds(rec),
       client: clientOf(rec),
       datetime,
-      seance_length: seanceLength || rec.seance_length,
+      seance_length: keepLength,
       comment: rec.comment || '',
     }));
-  } catch (e) { return { ok: false, error: e.message }; }
+  } catch (e) {
+    // Данные записи нужны инструменту, чтобы на отказ «время недоступно»
+    // перезапросить свободное время ПОД ЭТУ запись (её мастер, услуги, длина).
+    return { ok: false, error: e.message, record: {
+      id: rec.id, staff_id: staffYcId || rec.staff_id,
+      service_ids: serviceIds(rec).map(x => Number(x.id)).filter(Boolean),
+      seance_length: Number(rec.seance_length) || null,
+    } };
+  }
 
   await logEvent(salonId, dialogKey, 'booking_rescheduled', 'reschedule_booking',
     { record_id: recordId, datetime });
