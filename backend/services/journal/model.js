@@ -70,8 +70,16 @@ function normColor(v) {
 function normalizeLabels(list) {
   return (Array.isArray(list) ? list : []).map(l => (l && typeof l === 'object')
     ? { id: Number(l.id), title: String(l.title || ''), color: normColor(l.color) || '' }
-    : { id: Number(l), title: '', color: '' })
+    : (typeof l === 'number' || (typeof l === 'string' && /^\d+$/.test(l.trim())))
+      ? { id: Number(l), title: '', color: '' } : null)
+    .filter(Boolean)
     .filter(l => Number.isSafeInteger(l.id) && l.id > 0);
+}
+// Seconds that must be a real non-negative number («Infinity» would make a
+// visit occupy the whole day and break the slot search).
+function nonNegSeconds(v) {
+  const n = Number(v);
+  return Number.isFinite(n) ? Math.max(0, n) : 0;
 }
 const countOf = v => (v === undefined || v === null || v === '' || !Number.isFinite(Number(v))) ? null : Number(v);
 const truthy = v => v === true || v === 1 || v === '1';
@@ -92,7 +100,7 @@ function normalizeRecord(r, opts = {}) {
     comment: String(r.comment || ''),
     customColor: normColor(r.custom_color), fontColor: normColor(r.custom_font_color),
     labels: normalizeLabels(r.record_labels),
-    technicalBreak: Math.max(0, Number(r.technical_break_duration) || 0),
+    technicalBreak: nonNegSeconds(r.technical_break_duration),
     visitCounts: { success: countOf(r.client?.success_visits_count), fail: countOf(r.client?.fail_visits_count) },
     // The phone is for the card only (owner/admin router); the day grid never carries it.
     ...(opts.withPhone ? { clientPhone: String(r.client?.phone || '') } : {}),
@@ -176,7 +184,9 @@ function workRanges(schedule, date) {
     return { start: mins(s.from), end: mins(s.to) };
   }));
 }
-function slotsFor({ date, staffId, duration, schedule, records, resourceIds, resources, excludeId, now = Date.now() }) {
+function slotsFor({ date, staffId, duration, breakMinutes = 0, schedule, records, resourceIds, resources, excludeId, now = Date.now() }) {
+  // The visit's own technical break (12.11.2026) is occupied time after it.
+  const span = duration + nonNegSeconds(breakMinutes);
   const relevant = records.filter(r => !r.deleted && Number(r.id) !== Number(excludeId));
   const windows = relevant.map(r => {
     const at = moscowParts(r.datetime || r.date);
@@ -185,7 +195,7 @@ function slotsFor({ date, staffId, duration, schedule, records, resourceIds, res
     if (!at || !(length > 0)) fail('Не удалось проверить длительность записей. Откройте YClients.', 502);
     const dayStart = Date.parse(date + 'T00:00:00+03:00');
     // A technical break after the visit is occupied time too (12.11.2026).
-    const pause = Math.max(0, Number(r.technical_break_duration) || 0) / 60;
+    const pause = nonNegSeconds(r.technical_break_duration) / 60;
     return { r, start: (at.ms - dayStart) / 60000, end: (at.ms - dayStart) / 60000 + length + pause };
   });
   const free = subtractRanges(workRanges(schedule, date), windows.filter(x => Number(x.r.staff_id || x.r.staff?.id) === staffId));
@@ -195,10 +205,10 @@ function slotsFor({ date, staffId, duration, schedule, records, resourceIds, res
     return r.instances.map(i => String(i.id));
   });
   const result = [];
-  for (const range of free) for (let t = Math.ceil(range.start / 5) * 5; t + duration <= range.end && t + duration <= 1440; t += 5) {
+  for (const range of free) for (let t = Math.ceil(range.start / 5) * 5; t + span <= range.end && t + span <= 1440; t += 5) {
     if (Date.parse(date + 'T00:00:00+03:00') + t * 60000 <= now) continue;
     const busy = new Set();
-    for (const w of windows) if (t < w.end && t + duration > w.start) {
+    for (const w of windows) if (t < w.end && t + span > w.start) {
       for (const id of (w.r.resource_instance_ids || [])) busy.add(String(id));
       // Older records may omit instance ids. Conservatively reserve every
       // instance of any required group shared by their service list.
@@ -212,4 +222,4 @@ function slotsFor({ date, staffId, duration, schedule, records, resourceIds, res
   }
   return result;
 }
-module.exports = { JournalError, fail, dateKey, positiveId, nonZeroId, fingerprint, revision, editRevision, servicesRevision, normalizeRecord, normColor, normalizeLabels, recordsForDay, parseDraft, moscowParts, slotsFor, isAdministrator, staffSchedule };
+module.exports = { JournalError, fail, nonNegSeconds, dateKey, positiveId, nonZeroId, fingerprint, revision, editRevision, servicesRevision, normalizeRecord, normColor, normalizeLabels, recordsForDay, parseDraft, moscowParts, slotsFor, isAdministrator, staffSchedule };

@@ -21,7 +21,7 @@ async function day(salonId, date, src) {
   if (!src) src = await sources.forSalon(salon);
   const [staffSource, local, records, labels] = await Promise.all([src.staff(), localCatalog.forJournal(salonId),
     src.records(shiftDate(date, -1), shiftDate(date, 1)),
-    typeof src.labels === 'function' ? src.labels().catch(() => []) : []]);
+    typeof src.labels === 'function' ? Promise.resolve().then(() => src.labels()).catch(() => []) : []]);
   const data = { staff: staffSource.filter(s => !s.fired && !m.isAdministrator(s)) };
   // Bounded concurrency avoids a burst against the shared YClients quota;
   // cached schedules are local reads (a cache miss is a single live call).
@@ -68,7 +68,7 @@ async function detail(salonId, id) {
     if (!r) m.fail('Запись не найдена.', 404);
     const queuedPay = [row, ...children].some(x => ['queued', 'running'].includes(x.status)
       && (x.steps || []).some(s => s.kind === 'pay' && s.state !== 'done'));
-    const out = { ...m.normalizeRecord(r, { withPhone: true }), comment: String(r.comment || '') };
+    const out = m.normalizeRecord(r, { withPhone: true });
     return { ...out, paid: out.paid || queuedPay, paymentSync: queuedPay && [row, ...children].some(x => x.released_at != null && (x.steps || []).some(s => s.kind === 'pay' && s.state !== 'done')) };
   }
   const salon = await salonFor(salonId);
@@ -90,13 +90,13 @@ async function detail(salonId, id) {
       && (x.steps || []).some(s => s.kind === 'pay' && s.state !== 'done'));
     const queuedPay = payRows.length > 0;
     const ledgerPaid = require('./record-edit').hasActivePayments(ledger || []);
-    const out = { ...m.normalizeRecord(r, { withPhone: true }), comment: String(r.comment || '') };
+    const out = m.normalizeRecord(r, { withPhone: true });
     // paymentSync = the payment is on its way (released); an unreleased one waits for dispatch.
     return { ...out, paid: out.paid || ledgerPaid || queuedPay, paymentSync: payRows.some(x => x.released_at != null) };
   } else {
     r = await yc.getRecord(salon, id);
   }
-  return { ...m.normalizeRecord(r, { withPhone: true }), comment: String(r.comment || '') };
+  return m.normalizeRecord(r, { withPhone: true });
 }
 // `src` defaults to live YClients: the write path (prepare) must verify against
 // the source of truth. Only slots() (a UI read) passes the local source.
@@ -114,12 +114,18 @@ async function availability(salon, draft, record, src = sources.live(salon)) {
   if (selected.some(s => !Array.isArray(s.staff) || !s.staff.some(x => Number(x.id || x) === draft.staffId))) {
     m.fail('Не подтверждена доступность услуг у сотрудника. Проверьте настройки YClients.', 409);
   }
-  const duration = record ? Number(record.seance_length) / 60 : local ? local.reduce((sum,s) => { const info=localCatalog.journalService(s);return sum+(info.staffDetails.find(x=>x.id===draft.staffId)?.duration || info.duration)*(draft.lines?.find(l=>l.serviceId===Number(s.id))?.quantity || draft.quantities?.[s.id] || 1); },0) : selected.reduce((total, s) => {
+  const computed = record ? Number(record.seance_length) / 60 : local ? local.reduce((sum,s) => { const info=localCatalog.journalService(s);return sum+(info.staffDetails.find(x=>x.id===draft.staffId)?.duration || info.duration)*(draft.lines?.find(l=>l.serviceId===Number(s.id))?.quantity || draft.quantities?.[s.id] || 1); },0) : selected.reduce((total, s) => {
     const specific = (s.staff || []).find(x => Number(x.id) === draft.staffId);
     const seconds = Number(specific?.seance_length || s.duration);
     if (!(seconds > 0)) m.fail('Для услуги не задана длительность.', 409);
     return total + seconds / 60;
   }, 0);
+  // An explicit length from the card / resize handle (12.11.2026) wins.
+  const override = Number(draft.durationOverride);
+  const duration = Number.isInteger(override) && override > 0 ? override : computed;
+  // Technical break: the edited value, else the record's own, else none.
+  const breakMinutes = m.nonNegSeconds(draft.technicalBreak !== undefined ? draft.technicalBreak
+    : record ? record.technical_break_duration : 0) / 60;
   if (!(duration > 0 && duration <= 1440)) m.fail('Некорректная длительность записи.', 409);
   const resourceIds = [...new Set(selected.flatMap(s => (s.resources || []).map(String)))];
   const [schedule, records, resources] = await Promise.all([
@@ -128,7 +134,7 @@ async function availability(salon, draft, record, src = sources.live(salon)) {
     resourceIds.length ? src.resources() : Promise.resolve([]),
   ]);
   for (const r of records) r._journalResourceIds = (r.services || []).flatMap(s => services.find(x => Number(x.id) === Number(s.id))?.resources || []);
-  return { duration, ...(local ? {servicePayload:local.map(s => {const info=localCatalog.journalService(s);const price=info.staffDetails.find(x=>x.id===draft.staffId)?.priceMin ?? info.priceMin;const line=draft.lines?.find(l=>l.serviceId===Number(s.id));return line?{id:Number(s.yclients_id),amount:line.quantity,cost_per_unit:line.unitPrice,first_cost:line.gross,discount:line.discount,cost:line.total}:{id:Number(s.yclients_id),...(price==null?{}:{cost:price})};})}:{}), slots: m.slotsFor({ ...draft, duration, schedule, records, resourceIds, resources, excludeId: record?.id }) };
+  return { duration, ...(local ? {servicePayload:local.map(s => {const info=localCatalog.journalService(s);const price=info.staffDetails.find(x=>x.id===draft.staffId)?.priceMin ?? info.priceMin;const line=draft.lines?.find(l=>l.serviceId===Number(s.id));return line?{id:Number(s.yclients_id),amount:line.quantity,cost_per_unit:line.unitPrice,first_cost:line.gross,discount:line.discount,cost:line.total}:{id:Number(s.yclients_id),...(price==null?{}:{cost:price})};})}:{}), slots: m.slotsFor({ ...draft, duration, breakMinutes, schedule, records, resourceIds, resources, excludeId: record?.id }) };
 }
 async function slots(salonId, draft) {
   const salon = await salonFor(salonId);

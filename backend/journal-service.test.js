@@ -265,6 +265,23 @@ describe('parity fields (12.11.2026)', () => {
     yc.list.mockImplementation(async (s, path) => { if (path === '/labels/30') throw new Error('boom'); return base(s, path); });
     expect((await service.day(3, '2030-04-01')).labels).toEqual([]);
   });
+  test('availability: explicit duration and the record technical break', async () => {
+    const salon = { id: 3, yclients_company_id: 30 };
+    const src = require('./services/journal/sources').live(salon);
+    const out = await service.availability(salon, { staffId: 1, date: '2030-04-01', time: '09:00', durationOverride: 90, technicalBreak: 1800 }, record, src);
+    expect(out.duration).toBe(90);
+    expect(out.slots).toContain('09:00');
+    expect(out.slots).toContain('10:00');     // 10:00 + 90 + 30 = 12:00
+    expect(out.slots).not.toContain('10:05');
+    const plain = await service.availability(salon, { staffId: 1, date: '2030-04-01', time: '09:00' }, { ...record, technical_break_duration: 600 }, src);
+    expect(plain.duration).toBe(60);
+    expect(plain.slots).toContain('10:50');   // 60 + 10
+    expect(plain.slots).not.toContain('10:55');
+  });
+  test('day survives a labels source that throws synchronously (review T2)', async () => {
+    const src = { kind: 'live', staff: async () => [], records: async () => [], schedule: async () => [], labels: () => { throw new Error('sync'); } };
+    expect((await service.day(3, '2030-04-01', src)).labels).toEqual([]);
+  });
   test('card (detail) carries the client phone', async () => {
     yc.getRecord.mockResolvedValue({ ...structuredClone(record), client: { id: 5, name: 'Тест', phone: '79200255591' } });
     expect((await service.detail(3, 8)).clientPhone).toBe('79200255591');

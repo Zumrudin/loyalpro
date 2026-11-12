@@ -110,3 +110,19 @@ test('technical break of an existing visit occupies the time after it', () => {
   expect(slots).not.toContain('11:00');
   expect(slots).toContain('11:30');
 });
+test('candidate technical break must fit the shift and must not overlap', () => {
+  const slots = m.slotsFor({ ...context, duration: 30, breakMinutes: 30, records: [] });
+  expect(slots).toContain('11:00');      // 11:00 + 30 + 30 = 12:00 — край смены
+  expect(slots).not.toContain('11:05');
+  const busy = m.slotsFor({ ...context, duration: 30, breakMinutes: 30, records: [{ ...record, datetime: '2030-04-01T10:00:00+03:00' }] });
+  expect(busy).not.toContain('09:05');   // 09:05 + 60 заходит на визит 10:00
+  expect(busy).toContain('09:00');
+});
+test('non-finite break values are zero (review T2)', () => {
+  expect(m.normalizeRecord({ ...record, technical_break_duration: 'Infinity' }).technicalBreak).toBe(0);
+  expect(m.slotsFor({ ...context, records: [{ ...record, technical_break_duration: 'Infinity' }] })).toContain('11:00');
+  expect(m.slotsFor({ ...context, duration: 30, breakMinutes: Infinity })).toContain('11:30');
+});
+test('normalizeLabels takes plain ids only as numbers or numeric strings (review T2)', () => {
+  expect(m.normalizeLabels([true, '5', 6, ' 7x', false])).toEqual([{ id: 5, title: '', color: '' }, { id: 6, title: '', color: '' }]);
+});

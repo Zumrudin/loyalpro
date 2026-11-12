@@ -170,3 +170,7 @@ test('route ids: negative accepted, zero and junk rejected', () => {
   expect(m.nonZeroId('8')).toBe(8);
   for (const v of ['0', 'nope', '1.5', '', '-']) expect(() => m.nonZeroId(v)).toThrow();
 });
+test('local labels with a cold cache are an empty list (review T2)', async () => {
+  reference.getReference.mockResolvedValue(null);
+  await expect(sources.local(salon).labels()).resolves.toEqual([]);
+});
