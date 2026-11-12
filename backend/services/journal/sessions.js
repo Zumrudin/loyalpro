@@ -73,7 +73,8 @@ function parseSession(body) {
     out.edit = require('./record-edit').parse(body.edit);
     // Status/services and time/staff of the same card go in ONE package
     // (move first, then edit). Payments and confirm/cancel stay separate.
-    if (present(body.status) || body.payments?.length || body.removePayments?.length) m.fail('Сохраните изменения записи отдельно от оплат.');
+    // Delete may carry the card's unsaved edit (e.g. «не уведомлять»); other statuses and payments go separately.
+    if ((present(body.status) && body.status !== 'delete') || body.payments?.length || body.removePayments?.length) m.fail('Сохраните изменения записи отдельно от оплат.');
   }
   if (present(body.move)) {
     if (!hasRecord) m.fail('Перенос доступен только для сохранённой записи.');
@@ -84,15 +85,17 @@ function parseSession(body) {
   }
   if (present(body.status)) {
     if (!hasRecord) m.fail('Статус меняется только у сохранённой записи.');
-    if (!['confirm', 'cancel'].includes(body.status)) m.fail('Неизвестный статус записи.');
+    if (!['confirm', 'cancel', 'delete'].includes(body.status)) m.fail('Неизвестный статус записи.');
     out.status = body.status;
   }
   if (out.move && out.status === 'cancel') m.fail('Нельзя одновременно перенести и отменить запись.');
+  if (out.move && out.status === 'delete') m.fail('Нельзя одновременно перенести и удалить запись.');
   out.payments = listOf(body.payments, MAX_PAYMENTS, parsePayment, 'оплаты');
   out.removePayments = listOf(body.removePayments, MAX_REMOVES, parseRemove, 'удаления оплат');
   const keys = out.removePayments.map(r => r.method + ':' + r.transactionId);
   if (new Set(keys).size !== keys.length) m.fail('Одна оплата указана к удалению дважды.');
   if (out.status === 'cancel' && (out.payments.length || out.removePayments.length)) m.fail('Отменённый визит нельзя оплатить.');
+  if (out.status === 'delete' && (out.payments.length || out.removePayments.length)) m.fail('Удалённую запись нельзя оплатить.');
   if (!out.edit && !out.create && !out.move && !out.status && !out.payments.length && !out.removePayments.length) m.fail('Нет изменений для сохранения.');
   return out;
 }
@@ -169,7 +172,8 @@ async function validate(salonId, session) {
   } else {
     ctx = await paymentsLocal.loadContext(salonId, session.recordId);
     const record = ctx.record;
-    if (record.deleted || (!session.edit && Number(record.attendance) === -1)) m.fail('Запись уже отменена или удалена.', 409);
+    // A cancelled visit (-1) can still be deleted; a deleted one cannot be changed at all.
+    if (record.deleted || (!session.edit && session.status !== 'delete' && Number(record.attendance) === -1)) m.fail('Запись уже отменена или удалена.', 409);
     const patch = {};
     if (session.move || session.status) {
       const paid = paymentsLocal.localOptions(ctx).paid.length > 0;
@@ -199,6 +203,7 @@ async function validate(salonId, session) {
     }
     if (session.status === 'confirm') patch.attendance = 2;
     if (session.status === 'cancel') patch.cancel = true;
+    if (session.status === 'delete') patch.deleted = true;
     overlay = { kind: 'patch', patch };
     attendance = patch.attendance ?? (session.status === 'confirm' ? 2 : Number(record.attendance) || 0);
   }

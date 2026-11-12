@@ -73,6 +73,8 @@ function applyOverlay(records, rows, now = Date.now()) {
       for (const f of ['datetime', 'staff_id', 'seance_length', 'attendance', 'services', 'comment', 'client',
         'custom_color', 'record_labels', 'technical_break_duration', 'notify_client']) if (p[f] !== undefined) next[f] = p[f];
       if (p.cancel === true) next.attendance = -1;
+      // Deleted locally: the day drops it (recordsForDay), the card shows «удалена (ждёт отправки)».
+      if (p.deleted === true) next.deleted = true;
       next._sync = sync;
       out[at] = next;
     }

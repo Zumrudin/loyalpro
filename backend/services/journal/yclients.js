@@ -81,4 +81,21 @@ async function markArrived(salon, record) {
     comment: record.comment || '', attendance: 1, save_if_busy: false, send_sms: false,
   });
 }
-module.exports = { list, records, getRecord, write, getSale, pay, removePayment, markArrived };
+// DELETE /record. «Already deleted» (404, or 409 for a record YClients
+// considers gone) is a success: a repeated package must not fail on it.
+async function remove(salon, id) {
+  const authSalon = config.YCLIENTS_INTEGRATION_USER_TOKEN
+    ? { ...salon, yclients_user_token: config.YCLIENTS_INTEGRATION_USER_TOKEN } : salon;
+  let response;
+  try {
+    response = await axios({ method: 'delete', url: `${config.YC}/record/${salon.yclients_company_id}/${id}`,
+      headers: ycHeaders(authSalon), timeout: 30000 });
+  } catch (e) {
+    const status = e?.response?.status;
+    if (status === 404 || status === 409) return { recordId: id, alreadyDeleted: true };
+    throw e;
+  }
+  if (response?.data && typeof response.data === 'object' && response.data.success === false) throw new Error('upstream_delete_failed');
+  return { recordId: id };
+}
+module.exports = { list, records, getRecord, write, remove, getSale, pay, removePayment, markArrived };

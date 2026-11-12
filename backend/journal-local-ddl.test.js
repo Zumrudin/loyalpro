@@ -17,3 +17,11 @@ test('flags default on and switch off only by the string false', () => {
   if (prev.a === undefined) delete process.env.JOURNAL_LOCAL_FIRST; else process.env.JOURNAL_LOCAL_FIRST = prev.a;
   if (prev.b === undefined) delete process.env.JOURNAL_OUTBOX; else process.env.JOURNAL_OUTBOX = prev.b;
 });
+
+test('journal_operations accepts the delete action (v3 constraint, v2 block guarded)', () => {
+  const src = require('fs').readFileSync(require('path').join(__dirname, 'migrations.js'), 'utf8');
+  expect(src).toContain("journal_operations_action_v3_check CHECK (action IN ('create','move','cancel','confirm','edit','delete'))");
+  // The v2 block must not run again after v3 dropped the v2 constraint
+  // (it would DROP a constraint that no longer exists and fail every start).
+  expect(src).toMatch(/conname='journal_operations_action_v2_check'\)\s*AND NOT EXISTS \(SELECT 1 FROM pg_constraint WHERE conrelid='journal_operations'::regclass AND conname='journal_operations_action_v3_check'\)/);
+});

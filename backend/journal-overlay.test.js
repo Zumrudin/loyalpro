@@ -94,3 +94,9 @@ test('colour stored as YClients sends it (no «#») is shown normalised', () => 
   const [out] = applyOverlay([rec], [row({ yclients_record_id: 8, overlay: { kind: 'patch', patch: { custom_color: 'f4a0a0' } } })], NOW);
   expect(m.normalizeRecord(out).customColor).toBe('#f4a0a0');
 });
+
+test('delete patch marks the record deleted: the day drops it, the card says so', () => {
+  const [out] = applyOverlay([rec], [row({ yclients_record_id: 8, overlay: { kind: 'patch', patch: { deleted: true } } })], NOW);
+  expect(out.deleted).toBe(true);
+  expect(m.recordsForDay([out], '2030-04-01')).toEqual([]);
+});

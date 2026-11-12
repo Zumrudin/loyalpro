@@ -147,7 +147,17 @@ function editable(r) {
   if (r.deleted || Number(r.attendance) === -1) m.fail('Запись уже отменена или удалена.', 409);
   if (Number(r.attendance) === 1 || r.paid_full || Number(r.paid_amount) > 0) m.fail('Пришедшие и оплаченные визиты изменяйте в YClients.', 409);
 }
-async function prepare(salon, draft) {
+async function prepare(salon, draft, opts = {}) {
+  if (draft.action === 'delete') {
+    let rec;
+    try { rec = await yc.getRecord(salon, draft.recordId); }
+    catch (e) { if (e instanceof m.JournalError && e.status === 404) return { alreadyDeleted: true }; throw e; }
+    if (rec.deleted) return { alreadyDeleted: true };
+    if (m.revision(rec) !== draft.version) m.fail('Запись изменилась. Откройте карточку заново.', 409, 'stale');
+    if (rec.paid_full || Number(rec.paid_amount) > 0) m.fail('Сначала удалите оплаты визита.', 409);
+    if (Number(rec.attendance) === 1) m.fail('Пришедший визит удаляйте в YClients.', 409);
+    return {};
+  }
   let record;
   if (draft.action !== 'create') {
     record = await yc.getRecord(salon, draft.recordId);
@@ -174,6 +184,9 @@ async function prepare(salon, draft) {
       }),
       staff_id: draft.staffId, datetime: `${draft.date}T${draft.time}:00+03:00`,
       seance_length: available.duration * 60, save_if_busy: false, send_sms: false,
+      // Our package id travels with the new record: the create webhook can
+      // arrive before we know the record id (notifications, task 5).
+      ...(!record && /^lp-outbox-\d{1,18}$/.test(String(opts.apiId || '')) ? { api_id: opts.apiId } : {}),
     };
   }
   const body = {
@@ -193,7 +206,7 @@ async function prepare(salon, draft) {
 // Session lock serializes this journal's writes across processes. The pending
 // marker is AUTOCOMMITTED before the external effect, surviving a process crash.
 // Other writers (Mila / YClients UI) are still arbitrated by save_if_busy=false.
-async function mutate(salonId, userId, draft) {
+async function mutate(salonId, userId, draft, opts = {}) {
   const conn = await pool.connect();
   let locked = false, broken = false;
   const requestHash = m.fingerprint(draft);
@@ -223,15 +236,17 @@ async function mutate(salonId, userId, draft) {
       const ledger = (await conn.query("SELECT action, method, external_ids, target_transaction_id FROM journal_financial_transactions WHERE salon_id=$1 AND yclients_record_id=$2 AND yclients_company_id=$3 AND state='confirmed'", [salonId,draft.recordId,salon.yclients_company_id])).rows;
       if (require('./record-edit').hasActivePayments(ledger)) m.fail('У визита есть проведённые оплаты. Измените его в YClients.',409);
     }
-    const body = await prepare(salon, draft);
-    if (draft.recordId && m.revision(await yc.getRecord(salon, draft.recordId)) !== draft.version) {
+    const body = await prepare(salon, draft, opts);
+    if (draft.recordId && !body?.alreadyDeleted && m.revision(await yc.getRecord(salon, draft.recordId)) !== draft.version) {
       m.fail('Запись изменилась. Откройте карточку заново.', 409, 'stale');
     }
     await conn.query(`INSERT INTO journal_operations (salon_id, operation_id, user_id, action, record_id, request_hash, state)
       VALUES ($1,$2,$3,$4,$5,$6,'pending')`, [salonId, draft.operationId, userId, draft.action, draft.recordId || null, requestHash]);
     let result;
     try {
-      result = await yc.write(salon, draft.recordId, body);
+      result = draft.action !== 'delete' ? await yc.write(salon, draft.recordId, body)
+        : body.alreadyDeleted ? { recordId: draft.recordId, alreadyDeleted: true }
+        : await yc.remove(salon, draft.recordId);
       await conn.query("UPDATE journal_operations SET state='done', result=$3, record_id=$4, updated_at=NOW() WHERE salon_id=$1 AND operation_id=$2",
         [salonId, draft.operationId, JSON.stringify(result), result.recordId]);
     } catch (error) {

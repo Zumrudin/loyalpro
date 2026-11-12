@@ -44,6 +44,23 @@ const lastWrite = re => [...writes].reverse().find(x => re.test(x.sql));
 const stepsOf = wr => JSON.parse(wr.args[1]);
 
 describe('processPackage', () => {
+  test('delete step goes through mutate with the live version (12.11.2026)', async () => {
+    const live = { id: 42, datetime: '2030-04-01T10:00:00+03:00', staff_id: 5, attendance: 0 };
+    yc.getRecord.mockResolvedValue(live);
+    expect(await w.processPackage(pkg([step('delete', 1)], { yclients_record_id: 42 }))).toBe('done');
+    expect(calls[0][2]).toEqual({ operationId: OP(1), action: 'delete', recordId: 42, version: m.revision(live) });
+  });
+  test('delete of a record YClients no longer has (404) is done without mutate', async () => {
+    yc.getRecord.mockRejectedValue(new m.JournalError(404, 'Запись не найдена.'));
+    expect(await w.processPackage(pkg([step('delete', 1)], { yclients_record_id: 42 }))).toBe('done');
+    expect(index.mutate).not.toHaveBeenCalled();
+    expect(stepsOf(lastWrite(/status='done'/))[0].result).toEqual({ recordId: 42, alreadyDeleted: true });
+  });
+  test('create passes api_id = lp-outbox-<package id> outside the draft', async () => {
+    await w.processPackage(pkg([step('create', 1, CREATE_PARAMS)]));
+    expect(index.mutate.mock.calls[0][3]).toEqual({ apiId: 'lp-outbox-11' });
+    expect(index.mutate.mock.calls[0][2]).not.toHaveProperty('apiId');
+  });
   test('create + bonus + cash: order, recordId flows, confirmArrival, done', async () => {
     const row = pkg([
       step('create', 1, CREATE_PARAMS),

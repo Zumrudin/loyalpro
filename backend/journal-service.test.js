@@ -2,7 +2,7 @@
 jest.mock('./config', () => ({ JWT_SECRET: 'synthetic-test-secret' }));
 jest.mock('./db', () => ({ db: { oneOrNone: jest.fn(), any: jest.fn() }, pool: { connect: jest.fn() } }));
 jest.mock('./services/service-catalog', () => ({forJournal:jest.fn(),resolve:jest.fn(),journalService:jest.requireActual('./services/service-catalog').journalService}));
-jest.mock('./services/journal/yclients', () => ({ list: jest.fn(), records: jest.fn(), getRecord: jest.fn(), write: jest.fn() }));
+jest.mock('./services/journal/yclients', () => ({ list: jest.fn(), records: jest.fn(), getRecord: jest.fn(), write: jest.fn(), remove: jest.fn() }));
 const { db, pool } = require('./db');
 const yc = require('./services/journal/yclients');
 const service = require('./services/journal');
@@ -254,6 +254,39 @@ test('removed cash and bonus receipts no longer block status edits', async () =>
 });
 
 describe('parity fields (12.11.2026)', () => {
+  test('delete calls DELETE once; an already deleted record is not called again', async () => {
+    yc.remove.mockResolvedValue({ recordId: 8 });
+    expect(await service.mutate(3, 4, { operationId, action: 'delete', recordId: 8, version: m.revision(record) })).toEqual({ recordId: 8 });
+    expect(yc.remove).toHaveBeenCalledWith(expect.objectContaining({ id: 3 }), 8);
+    expect(yc.write).not.toHaveBeenCalled();
+    const insert = conn.query.mock.calls.find(([sql]) => sql.includes('INSERT INTO journal_operations'));
+    expect(insert[1][3]).toBe('delete');
+    yc.remove.mockClear();
+    const gone = { ...record, deleted: true };
+    yc.getRecord.mockResolvedValue(structuredClone(gone));
+    expect(await service.mutate(3, 4, { operationId: '22345678-1234-4123-8123-123456789012', action: 'delete', recordId: 8, version: m.revision(gone) }))
+      .toEqual({ recordId: 8, alreadyDeleted: true });
+    expect(yc.remove).not.toHaveBeenCalled();
+  });
+  test('delete refuses an arrived or a paid visit and a stale version', async () => {
+    for (const rec of [{ ...record, attendance: 1 }, { ...record, paid_amount: 100 }]) {
+      yc.getRecord.mockResolvedValue(structuredClone(rec));
+      await expect(service.mutate(3, 4, { operationId, action: 'delete', recordId: 8, version: m.revision(rec) })).rejects.toMatchObject({ status: 409 });
+    }
+    yc.getRecord.mockResolvedValue(structuredClone(record));
+    await expect(service.mutate(3, 4, { operationId, action: 'delete', recordId: 8, version: '0'.repeat(64) })).rejects.toMatchObject({ code: 'stale' });
+    expect(yc.remove).not.toHaveBeenCalled();
+  });
+  test('create sends api_id from opts; the request hash does not depend on it', async () => {
+    const d = { operationId, action: 'create', date: '2030-04-01', time: '09:00', staffId: 1, serviceIds: [7], clientName: 'Тест', clientPhone: '70000000000', comment: '' };
+    await service.mutate(3, 4, d, { apiId: 'lp-outbox-15' });
+    expect(yc.write.mock.calls[0][2].api_id).toBe('lp-outbox-15');
+    const hashWith = conn.query.mock.calls.find(([sql]) => sql.includes('INSERT INTO journal_operations'))[1][5];
+    expect(hashWith).toBe(m.fingerprint(d));
+    yc.write.mockClear();
+    await service.mutate(3, 4, { ...d, operationId: '32345678-1234-4123-8123-123456789012' }, { apiId: 'evil; DROP' });
+    expect(yc.write.mock.calls[0][2]).not.toHaveProperty('api_id');
+  });
   test('day carries the salon label list, normalised', async () => {
     const base = yc.list.getMockImplementation();
     yc.list.mockImplementation(async (s, path) => path === '/labels/30' ? [{ id: 3, title: 'VIP', color: 'FF0000' }] : base(s, path));

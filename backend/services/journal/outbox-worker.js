@@ -138,7 +138,9 @@ async function runStep(ctx, step) {
   const p = step.params || {};
   if (step.kind === 'create') {
     const { operationId: _o, action: _a, ...params } = p;
-    const r = await index.mutate(salonId, userId, { ...params, operationId: step.opId, action: 'create' });
+    // api_id rides OUTSIDE the draft: the draft's fingerprint must stay the same
+    // for packages started before this field existed.
+    const r = await index.mutate(salonId, userId, { ...params, operationId: step.opId, action: 'create' }, { apiId: `lp-outbox-${ctx.outboxId}` });
     const recordId = Number(r?.recordId);
     if (!Number.isSafeInteger(recordId) || recordId < 1) m.fail('Не удалось подтвердить результат. Проверьте запись в YClients.', 409, 'uncertain');
     ctx.recordId = recordId;
@@ -146,10 +148,16 @@ async function runStep(ctx, step) {
   }
   if (!ctx.recordId) m.fail('Запись ещё не создана в YClients.', 409);
   const recordId = ctx.recordId;
-  if (['move', 'confirm', 'cancel', 'edit'].includes(step.kind)) {
+  if (['move', 'confirm', 'cancel', 'edit', 'delete'].includes(step.kind)) {
     let draft = storedDraft(step);
     if (!draft) {
-      const live = await yc.getRecord(ctx.salon, recordId);
+      let live;
+      try { live = await yc.getRecord(ctx.salon, recordId); }
+      catch (e) {
+        // Deleting a record YClients no longer has is done (spec §6).
+        if (step.kind === 'delete' && e instanceof m.JournalError && e.status === 404) return { recordId, alreadyDeleted: true };
+        throw e;
+      }
       // The services version was checked locally when the change was saved
       // (against the journal's state incl. earlier unsent changes). Sent later
       // it would compare a local draft with YClients and refuse every change
@@ -163,6 +171,7 @@ async function runStep(ctx, step) {
       await storeDraft(ctx, step, draft);
     }
     const r = await index.mutate(salonId, userId, draft);
+    if (r?.alreadyDeleted) return { recordId, alreadyDeleted: true };
     return { recordId: Number(r?.recordId) || recordId };
   }
   if (step.kind === 'pay' || step.kind === 'remove_payment') {
@@ -192,6 +201,7 @@ async function processPackage(row) {
     userId: row.user_id ?? null,
     recordId: row.yclients_record_id != null ? Number(row.yclients_record_id) : null,
     salon: null,
+    outboxId: Number(row.id),
     steps,
   };
   const json = () => JSON.stringify(steps);

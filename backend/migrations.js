@@ -7,9 +7,19 @@ async function runMigrations(client) {
   await client.query(JOURNAL_DDL);
   // Expand only once; no data rewrite, existing actions remain valid.
   await client.query(`DO $$ BEGIN
-    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='journal_operations'::regclass AND conname='journal_operations_action_v2_check') THEN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='journal_operations'::regclass AND conname='journal_operations_action_v2_check')
+      AND NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='journal_operations'::regclass AND conname='journal_operations_action_v3_check') THEN
       ALTER TABLE journal_operations DROP CONSTRAINT journal_operations_action_check,
         ADD CONSTRAINT journal_operations_action_v2_check CHECK (action IN ('create','move','cancel','confirm','edit'));
+    END IF;
+  END $$`);
+  // Journal record deletion (12.11.2026): the outbox «delete» step goes through
+  // mutate(), which audits it in journal_operations. Expand only once.
+  await client.query(`DO $$ BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='journal_operations'::regclass AND conname='journal_operations_action_v3_check') THEN
+      ALTER TABLE journal_operations DROP CONSTRAINT IF EXISTS journal_operations_action_v2_check,
+        DROP CONSTRAINT IF EXISTS journal_operations_action_check,
+        ADD CONSTRAINT journal_operations_action_v3_check CHECK (action IN ('create','move','cancel','confirm','edit','delete'));
     END IF;
   END $$`);
   await client.query(SERVICE_CATALOG_DDL);

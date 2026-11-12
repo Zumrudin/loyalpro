@@ -79,7 +79,7 @@ describe('parseSession', () => {
     expect(() => parse({ create: CREATE, status: 'confirm' })).toThrow('сохранённой');
     expect(() => parse({ create: CREATE, move: { date: '2030-04-01', time: '11:00', staffId: 5 } })).toThrow('сохранённой');
     expect(() => parse({ recordId: 1, move: { date: '2030-04-01', time: '11:00', staffId: 5 }, status: 'cancel' })).toThrow('одновременно');
-    expect(() => parse({ recordId: 1, status: 'delete' })).toThrow('статус');
+    expect(() => parse({ recordId: 1, status: 'arrive' })).toThrow('статус');
     const ok = parse({ recordId: 1, move: { date: '2030-04-01', time: '11:00', staffId: 5, version: 'x' }, status: 'confirm' });
     expect(ok.move).toEqual({ date: '2030-04-01', time: '11:00', staffId: 5 });
   });
@@ -433,5 +433,29 @@ describe('edit: parity fields (12.11.2026)', () => {
   test('client change of an arrived visit is refused locally', async () => {
     setup({ record: { ...RECORD, attendance: 1 } });
     await expect(s.validate(3, parse({ recordId: 42, edit: { client: { name: 'Анна', phone: '79200255591' } } }))).rejects.toMatchObject({ status: 409 });
+  });
+});
+
+describe('delete (12.11.2026)', () => {
+  test('parse: delete alone or with edit; not with payments, move or create', () => {
+    expect(parse({ recordId: 42, status: 'delete' })).toMatchObject({ status: 'delete' });
+    expect(parse({ recordId: 42, status: 'delete', edit: { notifyClient: false } })).toMatchObject({ status: 'delete', edit: { notifyClient: false } });
+    expect(() => parse({ recordId: 42, status: 'delete', payments: [pay('account', 10, 100)] })).toThrow('Удалённую запись нельзя оплатить');
+    expect(() => parse({ recordId: 42, status: 'delete', move: { date: '2030-04-01', time: '11:00', staffId: 5 } })).toThrow('Нельзя одновременно перенести и удалить');
+    expect(() => parse({ recordId: 42, status: 'confirm', edit: { comment: 'x' } })).toThrow('отдельно');
+    expect(() => parse({ create: CREATE, status: 'delete' })).toThrow('сохранённой');
+  });
+  test('validate: delete is the last step and hides the record in the overlay', async () => {
+    const out = await s.validate(3, parse({ recordId: 42, status: 'delete', edit: { notifyClient: false } }));
+    expect(out.steps.map(x => x.kind)).toEqual(['edit', 'delete']);
+    expect(out.overlay.patch).toEqual({ notify_client: false, deleted: true });
+  });
+  test('validate: arrived or paid visit cannot be deleted; a cancelled one can', async () => {
+    setup({ record: { ...RECORD, attendance: 1 } });
+    await expect(s.validate(3, parse({ recordId: 42, status: 'delete' }))).rejects.toMatchObject({ status: 409 });
+    setup({ record: { ...RECORD, attendance: -1 } });
+    await expect(s.validate(3, parse({ recordId: 42, status: 'delete' }))).resolves.toMatchObject({ overlay: { patch: { deleted: true } } });
+    setup({ record: { ...RECORD, deleted: true } });
+    await expect(s.validate(3, parse({ recordId: 42, status: 'delete' }))).rejects.toMatchObject({ status: 409 });
   });
 });
