@@ -1,0 +1,15 @@
+'use strict';
+const router=require('express').Router();
+const {auth,requireRole}=require('../middleware/auth');
+const service=require('../services/service-catalog');
+const {JournalError,positiveId}=require('../services/journal/model');
+router.use(auth,requireRole('owner','admin'));
+router.use((req,res,next)=>{res.set('Cache-Control','no-store');next();});
+const handle=fn=>async(req,res)=>{try{res.json(await fn(req));}catch(e){res.status(e instanceof JournalError?e.status:502).json({error:e instanceof JournalError?e.message:'Не удалось выполнить операцию с каталогом. Попробуйте ещё раз.'});}};
+router.get('/',handle(req=>service.list(req.user.salonId)));
+router.post('/import',handle(req=>service.importYclients(req.user.salonId)));
+router.post('/categories',handle(req=>service.saveCategory(req.user.salonId,null,req.body)));
+router.put('/categories/:id',handle(req=>service.saveCategory(req.user.salonId,positiveId(req.params.id),req.body)));
+router.post('/services',handle(req=>service.saveService(req.user.salonId,null,req.body)));
+router.put('/services/:id',handle(req=>service.saveService(req.user.salonId,positiveId(req.params.id),req.body)));
+module.exports=router;

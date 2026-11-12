@@ -87,7 +87,8 @@ test('записи за окно → upsertRecordFromYc с source=reconcile, к�
   expect(loyalty.linkClientCard.mock.calls[0][1]).toMatchObject({ yclients_client_id: 501 });
   expect(ycGetClientCards).toHaveBeenCalledTimes(1);
   // numeric и integer одним параметром → обязателен явный ::numeric (живой прогон 25.09)
-  const bal = db.query.mock.calls.find(c => /yclients_card_balance=\$1::numeric, bonus_balance=\$1::numeric/.test(c[0]));
+  // пишет bonusLedger.setCardReading (без BONUS_LEDGER_PRIMARY — обе колонки = карта)
+  const bal = db.query.mock.calls.find(c => /bonus_balance=\$1::numeric, yclients_card_balance=\$1::numeric/.test(c[0]));
   expect(bal).toBeTruthy();
   expect(bal[1]).toEqual([450, 3502]);
   // хвост

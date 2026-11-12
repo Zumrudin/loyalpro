@@ -1,0 +1,47 @@
+/* Страница «Финансы» (js/pages/finance.js). Цвета — через переменные темы (светлая/тёмная). */
+#page-finance .fin-filters{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px}
+#page-finance .fin-filters select{width:auto;min-width:130px;max-width:230px;padding:5px 10px;font-size:12.5px}
+#page-finance .fin-filters input[type=text]{width:210px;padding:5px 10px;font-size:12.5px}
+#page-finance .fin-range{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+#page-finance .fin-chip-row:empty{display:none}
+#page-finance .fin-chip-row{margin-bottom:10px}
+#page-finance .fin-chip{display:inline-flex;align-items:center;gap:6px;padding:3px 6px 3px 10px;border-radius:14px;border:1px solid var(--bd);background:var(--card);font-size:12px;color:var(--t1)}
+#page-finance .fin-chip button{border:none;background:transparent;color:var(--t2);font-size:15px;line-height:1;cursor:pointer;padding:0 4px}
+#page-finance .fin-tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:14px}
+#page-finance .fin-tile .sv{font-size:20px}
+#page-finance .fin-unit{font-size:12px;font-weight:600;color:var(--t3)}
+#page-finance .fin-pos{color:var(--a)}
+#page-finance .fin-neg{color:var(--danger)}
+#page-finance .fin-warn{color:var(--warn)}
+#page-finance .fin-dim{opacity:.55;text-decoration:line-through}
+#page-finance .fin-sub{font-size:11px;color:var(--t3)}
+#page-finance .fin-amt{text-align:right;font-weight:700;white-space:nowrap}
+#page-finance .fin-visit,#page-finance .fin-client{color:inherit;text-decoration:none}
+#page-finance .fin-visit{color:var(--info);white-space:nowrap}
+#page-finance .fin-visit:hover,#page-finance .fin-client:hover strong{text-decoration:underline}
+#page-finance .fin-badge{display:inline-block;padding:2px 9px;border-radius:12px;font-size:11px;font-weight:600;line-height:1.35;max-width:170px}
+#page-finance .fin-st-confirmed{background:rgba(0,200,150,.15);color:var(--a)}
+#page-finance .fin-st-queued{background:rgba(245,158,11,.16);color:var(--warn)}
+#page-finance .fin-st-sending{background:rgba(59,130,246,.16);color:var(--info)}
+#page-finance .fin-st-cancelled{background:rgba(139,148,158,.18);color:var(--t2)}
+#page-finance .fin-st-failed{background:rgba(232,84,84,.16);color:var(--danger)}
+#page-finance .fin-pager{display:flex;flex-wrap:wrap;align-items:center;gap:8px;font-size:12px;color:var(--t3);padding:10px 2px}
+#page-finance .fin-pager .btn{padding:3px 12px;font-size:12px}
+#page-finance .fin-disc{margin-bottom:14px}
+#page-finance .fin-disc-btn{margin-bottom:8px}
+#page-finance .fin-disc-has{border-color:var(--warn);color:var(--warn)}
+@media(max-width:700px){
+  #page-finance .fin-filters select,#page-finance .fin-filters input[type=text]{flex:1 1 140px;max-width:none;font-size:16px}
+  #page-finance .fin-tiles{grid-template-columns:repeat(2,1fr);gap:8px}
+  #page-finance .tw{overflow:visible}
+  #page-finance table,#page-finance thead,#page-finance tbody,#page-finance tbody tr,#page-finance tbody td{display:block;width:auto}
+  #page-finance thead{display:none}
+  #page-finance tbody tr{border:1px solid var(--bd);border-radius:var(--r);box-shadow:var(--sh);background:var(--card);padding:12px 14px;margin-bottom:10px}
+  #page-finance tbody td{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:5px 0;border:none;text-align:right;min-width:0}
+  #page-finance tbody td::before{content:attr(data-label);color:var(--t3);font-size:12px;font-weight:600;text-align:left;flex-shrink:0}
+  #page-finance tbody td.fin-card-title{justify-content:flex-start;padding-bottom:10px;margin-bottom:6px;border-bottom:1px solid var(--bd);font-weight:700}
+  #page-finance tbody td.fin-card-title::before{content:none}
+  #page-finance tbody td.empty{display:block;text-align:center}
+  #page-finance tbody td.empty::before{content:none}
+  #page-finance .fin-badge{max-width:none}
+}

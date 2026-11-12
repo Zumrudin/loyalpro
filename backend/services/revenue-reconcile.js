@@ -13,6 +13,7 @@
 const { db } = require('../db');
 const { ycGet } = require('./yclients');
 const { classifyExpense, recordRevenueOperation } = require('./revenue');
+const finOps = require('./finance-ops');
 const { createLogger } = require('../logger');
 
 const logger = createLogger('RevenueReconcile');
@@ -108,6 +109,7 @@ async function reconcileSalon(salon, fromDay, toDay, { apply = false, rateMs = 3
       if (onStale) onStale(o, day);
       if (apply) {
         await db.query(`DELETE FROM revenue_operations WHERE id=$1`, [o.id]);
+        await finOps.safely('revenue-reconcile-delete', () => finOps.cancelRevenueOp(salon.id, o.yclients_operation_id));
         deleted++;
         logger.info(`salon=${salon.id} ${day}: удалена зависшая op_id=${o.yclients_operation_id} (${o.category}, ${o.amount} ₽)`);
       }

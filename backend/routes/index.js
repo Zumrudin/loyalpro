@@ -77,7 +77,10 @@ module.exports = function mountRoutes(app) {
   app.use('/api/care',              require('./care'));
   app.use('/api/reminders',         require('./reminders'));
   app.use('/api/medical-cert',      require('./medical-cert'));
+  app.use('/api/service-catalog',   require('./service-catalog'));
+  app.use('/api/journal',           require('./journal'));
   app.use('/api/economics',         require('./economics'));
+  app.use('/api/finance',           require('./finance'));
   // «Документы»: admin-роутер ДО общего — иначе /api/edocs поймал бы и /api/edocs/admin/*.
   app.use('/api/edocs/admin',       require('./edocs-admin'));
   // Дашборд, страница пациента, бумага, анкеты — свой роутер, ДО общего (роли те же).

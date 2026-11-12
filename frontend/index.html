@@ -21,10 +21,13 @@
 <script src="js/core/api.js"></script>
 <script src="js/core/theme.js?v=2026-11-08p"></script>
 <script src="js/core/auth.js?v=2026-06-02a"></script>
-<script src="js/core/nav.js?v=2026-11-08p"></script>
+<script src="js/core/nav.js?v=2026-11-08catalog-2026-11-08journal"></script>
+<link rel="stylesheet" href="css/journal.css?v=2026-11-12bill">
 <link rel="stylesheet" href="css/base.css?v=2026-08-10-mobile">
 <link rel="stylesheet" href="css/features.css?v=2026-11-08p">
 <link rel="stylesheet" href="css/ivory-brass.css?v=2026-11-08p">
+<link rel="stylesheet" href="css/service-catalog.css?v=2026-11-08catalog">
+<link rel="stylesheet" href="css/finance.css?v=2026-11-12fin2">
 </head>
 <body>
 
@@ -106,6 +109,7 @@
       <div class="tn" data-p="dashboard" data-roles="owner,admin" tabindex="0" role="link" onclick="nav(this)">Обзор</div>
       <div class="tn" data-p="workday" data-roles="owner" tabindex="0" role="link" onclick="nav(this)">Рабочий день</div>
       <div class="tn" data-p="staff-dashboard" data-roles="specialist" tabindex="0" role="link" onclick="nav(this)">Мои результаты</div>
+      <div class="tn" data-p="journal" data-roles="owner,admin" tabindex="0" role="link" onclick="nav(this)">Журнал записи</div>
       <div class="tn" data-p="records" data-roles="owner,admin" tabindex="0" role="link" onclick="nav(this)">Записи</div>
       <div class="tn" data-p="clients" data-roles="owner,admin" tabindex="0" role="link" onclick="nav(this)">Пациенты</div>
       <div class="tn" data-p="chat" data-roles="owner,admin,admin_cashier" tabindex="0" role="link" onclick="nav(this)">Сообщения</div>
@@ -133,7 +137,9 @@
         <button type="button" class="nav-grp-t" aria-expanded="false" onclick="navGrpToggle(this)">Управление</button>
         <div class="nav-grp-b">
           <div class="tn" data-p="staff-analytics" data-roles="owner,admin" tabindex="0" role="link" onclick="nav(this)">Сотрудники</div>
+          <div class="tn" data-p="service-catalog" data-roles="owner,admin" tabindex="0" role="link" onclick="nav(this)">Услуги</div>
           <div class="tn" data-p="economics" data-roles="owner,admin" tabindex="0" role="link" onclick="nav(this)">Экономика</div>
+          <div class="tn" data-p="finance" data-roles="owner,admin" tabindex="0" role="link" onclick="nav(this)">Финансы</div>
           <div class="tn" data-p="agent-services" data-roles="owner,admin" tabindex="0" role="link" onclick="nav(this)">Мила</div>
           <div class="tn" data-p="settings" data-roles="owner,admin" tabindex="0" role="link" onclick="nav(this)">Настройки</div>
           <div class="tn" data-p="users" data-roles="owner" tabindex="0" role="link" onclick="nav(this)">Пользователи</div>
@@ -173,6 +179,7 @@
       <div class="tn" data-p="dashboard" data-roles="owner,admin" tabindex="0" role="link" onclick="nav(this)">Обзор</div>
       <div class="tn" data-p="workday" data-roles="owner" tabindex="0" role="link" onclick="nav(this)">Рабочий день</div>
       <div class="tn" data-p="staff-dashboard" data-roles="specialist" tabindex="0" role="link" onclick="nav(this)">Мои результаты</div>
+      <div class="tn" data-p="journal" data-roles="owner,admin" tabindex="0" role="link" onclick="nav(this)">Журнал записи</div>
       <div class="tn" data-p="records" data-roles="owner,admin" tabindex="0" role="link" onclick="nav(this)">Записи</div>
       <div class="tn" data-p="clients" data-roles="owner,admin" tabindex="0" role="link" onclick="nav(this)">Пациенты</div>
       <div class="tn" data-p="chat" data-roles="owner,admin,admin_cashier" tabindex="0" role="link" onclick="nav(this)">Сообщения</div>
@@ -200,7 +207,9 @@
         <button type="button" class="nav-grp-t" aria-expanded="false" onclick="navGrpToggle(this)">Управление</button>
         <div class="nav-grp-b">
           <div class="tn" data-p="staff-analytics" data-roles="owner,admin" tabindex="0" role="link" onclick="nav(this)">Сотрудники</div>
+          <div class="tn" data-p="service-catalog" data-roles="owner,admin" tabindex="0" role="link" onclick="nav(this)">Услуги</div>
           <div class="tn" data-p="economics" data-roles="owner,admin" tabindex="0" role="link" onclick="nav(this)">Экономика</div>
+          <div class="tn" data-p="finance" data-roles="owner,admin" tabindex="0" role="link" onclick="nav(this)">Финансы</div>
           <div class="tn" data-p="agent-services" data-roles="owner,admin" tabindex="0" role="link" onclick="nav(this)">Мила</div>
           <div class="tn" data-p="settings" data-roles="owner,admin" tabindex="0" role="link" onclick="nav(this)">Настройки</div>
           <div class="tn" data-p="users" data-roles="owner" tabindex="0" role="link" onclick="nav(this)">Пользователи</div>
@@ -417,6 +426,34 @@
         </div>
       </div>
     </div>
+
+    <div class="page" id="page-service-catalog">
+      <div class="svc-toolbar"><input type="search" placeholder="Найти услугу" aria-label="Поиск услуг" oninput="svcState.query=this.value;svcRender()"><button class="btn btn-sec" onclick="svcEditCategory()">+ Категория</button><button class="btn btn-pri" onclick="svcEditService()">+ Услуга</button><button class="btn btn-sec" id="svcImport" onclick="svcImport()">Импорт из YClients</button></div>
+      <p class="svc-note">Собственный каталог LoyalPro. Повторный импорт добавляет новые позиции и сохраняет ваши изменения.</p><p id="svcStatus" class="svc-note" role="status"></p>
+      <div class="svc-layout"><aside id="svcTree" class="svc-tree" aria-label="Категории услуг"></aside><section id="svcList"></section></div>
+      <dialog id="svcModal" class="svc-modal"><h2 id="svcModalTitle"></h2><form id="svcForm"><div id="svcModalBody" class="svc-form"></div><p id="svcError" class="svc-error" role="alert"></p><div class="svc-toolbar"><button type="button" class="btn btn-sec" onclick="svcClose()">Закрыть</button><button type="submit" id="svcSave" class="btn btn-pri">Сохранить</button></div></form></dialog>
+    </div>
+    <div class="page" id="page-journal">
+      <div class="jr-toolbar">
+        <button class="btn btn-sec" onclick="jrShift(-1)" aria-label="Предыдущий день">←</button>
+        <input id="jrDate" type="date" aria-label="Дата журнала" onchange="loadJournal()">
+        <button class="btn btn-sec" onclick="jrShift(1)" aria-label="Следующий день">→</button>
+        <button class="btn btn-sec" onclick="jrEl('jrDate').value=jrToday();loadJournal()">Сегодня</button>
+        <label class="jr-working-filter"><input id="jrWorkingOnly" type="checkbox" checked onchange="jrUpdateStaffFilter();jrRender()"> Только работающие</label>
+        <select id="jrStaffFilter" aria-label="Сотрудник" onchange="jrRender()"><option value="">Все сотрудники</option></select>
+        <input id="jrSearch" type="search" placeholder="Клиент или услуга" aria-label="Поиск в журнале" oninput="jrRender()">
+        <button class="btn btn-sec" onclick="loadJournal()">Обновить</button>
+        <button class="btn btn-pri" id="jrNew" disabled onclick="jrForm()">+ Новая запись</button>
+        <button class="btn btn-sec" id="jrDispatch" onclick="jrDispatchOpen()">Отправить в YClients</button>
+      </div>
+      <button class="btn btn-sec" id="jrReview" hidden onclick="jrReviewPending()">Сверить незавершённые операции</button>
+      <p id="jrState" class="jr-state" role="status" aria-live="polite"></p>
+      <div id="jrGrid" class="jr-scroll" aria-label="Расписание сотрудников"></div>
+    </div>
+    <dialog id="jrModal" class="jr-dialog" aria-labelledby="jrModalTitle">
+      <div class="jr-dialog-head"><h2 id="jrModalTitle">Запись</h2><button class="btn btn-sec" aria-label="Закрыть карточку" onclick="jrClose()">✕</button></div>
+      <div id="jrModalBody"></div><div id="jrModalError" class="jr-error" role="alert"></div><div id="jrCloseAsk" class="jr-close-ask" role="alertdialog" aria-live="assertive" hidden></div>
+    </dialog>
 
     <!-- ── RECORDS ── -->
     <div class="page" id="page-records">
@@ -2221,6 +2258,8 @@
       <div id="edView-settings" style="display:none"></div>
     </div>
 
+    <div class="page" id="page-finance"></div>
+
     <div class="page" id="page-economics">
       <div class="bc-head">
         <div>
@@ -3004,6 +3043,8 @@ function fireConfetti() {
 <script src="js/pages/staff.js?v=2026-06-11a"></script>
 <script src="js/pages/home-care.js?v=2026-06-02c"></script>
 <script src="js/pages/segments.js"></script>
+<script src="js/pages/service-catalog.js?v=2026-11-08catalog"></script>
+<script src="js/pages/journal.js?v=bill2-2026-11-12"></script>
 <script src="js/pages/records.js?v=2026-11-08p"></script>
 <script src="js/pages/settings.js"></script>
 <script src="js/pages/portfolio.js"></script>
@@ -3032,6 +3073,7 @@ function fireConfetti() {
 <script src="js/pages/reminders.js?v=2026-08-19a"></script>
 <script src="js/pages/economics-table.js?v=2026-10-19e"></script>
 <script src="js/pages/economics.js?v=2026-10-19e"></script>
+<script src="js/pages/finance.js?v=2026-11-12fin3"></script>
 <script src="js/pages/medical-cert.js?v=2026-06-19"></script>
 <script src="js/pages/cert-requests.js?v=2026-06-19b"></script>
 <script src="js/pages/edocs-helpers.js?v=2026-11-08p"></script>

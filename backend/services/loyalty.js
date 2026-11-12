@@ -7,6 +7,15 @@ const { buildClientFio } = require('../utils/client-name');
 const { createLogger } = require('../logger');
 const logger = createLogger('Sync');
 const { recordRevenueOperation } = require('./revenue');
+const finOps = require('./finance-ops');
+const bonusLedger = require('./bonus-ledger');
+
+// Журнал финансовых операций (finance_operations): после вставки проводки в
+// loyalty_card_transactions. Сбой не ломает денежный путь — safely() логирует, ночная сверка добирает.
+const trackLct = (res, hints) => {
+  const row = res && res.rows && res.rows[0];
+  return row ? finOps.safely('loyalty-txn', () => finOps.recordLoyaltyTxn(row, hints)) : null;
+};
 const { isRateLimitError } = require('./yclients-retry');
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -127,14 +136,15 @@ async function processCompletedRecord(recordId, clientId, ycRec, salonId, settin
       [accrual, cost, level.key, ycRec.date || new Date(), clientId]
     );
 
+    let accrualTxn = null;
     if (accrual > 0) {
-      await pg.query(
+      accrualTxn = await pg.query(
         `INSERT INTO loyalty_card_transactions
            (salon_id,client_id,yclients_card_id,type,amount,
             balance_after,title,record_id,txn_date,created_at)
          VALUES ($1,$2,
            (SELECT yclients_card_id FROM clients WHERE id=$3),
-           'accrual',$4,$5,$6,$7,NOW(),NOW())`,
+           'accrual',$4,$5,$6,$7,NOW(),NOW()) RETURNING *`,
         [salonId, clientId, clientId, accrual,
          client.bonus_balance + accrual,
          `Кэшбэк ${pct}% за визит #${ycRec.id}`,
@@ -148,6 +158,7 @@ async function processCompletedRecord(recordId, clientId, ycRec, salonId, settin
     );
 
     await pg.query('COMMIT');
+    await trackLct(accrualTxn, { origin: 'loyalpro' });
     return accrual;
   } catch (e) {
     await pg.query('ROLLBACK');
@@ -165,17 +176,17 @@ async function cancelRecordBonuses(recordId, clientId, salonId) {
   if (!client) return;
   const deduct = Math.min(record.bonus_accrued, client.bonus_balance);
   await db.query('UPDATE clients SET bonus_balance=bonus_balance-$1,updated_at=NOW() WHERE id=$2', [deduct, clientId]);
-  await db.query(
+  await trackLct(await db.query(
     `INSERT INTO loyalty_card_transactions
        (salon_id,client_id,yclients_card_id,type,amount,
         balance_after,title,record_id,txn_date,created_at)
      VALUES ($1,$2,
        (SELECT yclients_card_id FROM clients WHERE id=$3),
-       'redemption',$4,$5,$6,$7,NOW(),NOW())`,
+       'redemption',$4,$5,$6,$7,NOW(),NOW()) RETURNING *`,
     [salonId, clientId, clientId, -deduct,
      client.bonus_balance - deduct,
      'Отмена начисления', recordId]
-  );
+  ), { origin: 'loyalpro' });
   await db.query(
     'UPDATE records SET bonus_processed=FALSE,bonus_accrued=0,status=$1 WHERE id=$2',
     ['cancelled', recordId]
@@ -415,13 +426,11 @@ async function runSync(salon, syncType, userId) {
               const cardBalance = parseFloat(card.balance || 0);
               const paidAmount  = parseFloat(card.paid_amount || card.sold_amount || totalSpent || 0);
               await db.query(
-                `UPDATE clients SET
-                   yclients_card_id=$1, yclients_card_number=$2, yclients_card_balance=$3,
-                   bonus_balance=$4::numeric, updated_at=NOW()
-                 WHERE id=$5`,
-                [card.id, card.number || card.loyalty_card_number || null,
-                 cardBalance, cardBalance, dbClientId]
+                `UPDATE clients SET yclients_card_id=$1, yclients_card_number=$2, updated_at=NOW() WHERE id=$3`,
+                [card.id, card.number || card.loyalty_card_number || null, dbClientId]
               );
+              // Без BONUS_LEDGER_PRIMARY — обе колонки = карта (как было); с ним — только показание.
+              await bonusLedger.setCardReading(dbClientId, cardBalance);
               if (settings?.levels && paidAmount > 0) {
                 const lvl = getLevel(paidAmount, settings.levels);
                 await db.query('UPDATE clients SET loyalty_level=$1 WHERE id=$2', [lvl.key, dbClientId]);
@@ -544,6 +553,7 @@ async function revertCashback(ycRecordId, salon, clientYcId) {
     try {
       await ycAccrueCard(salon, client.yclients_card_id, -deduct,
         `Отмена кэшбэка по записи #${ycRecordId}`);
+      await bonusLedger.bumpCardReading(client.id, -deduct).catch(e => logger.warn(`card reading bump: ${e.message}`));
     } catch (e) { logger.error(`Revert card deduct error: ${e.message}`); }
   }
 
@@ -553,15 +563,15 @@ async function revertCashback(ycRecordId, salon, clientYcId) {
   );
 
   const dbRecord = await db.oneOrNone('SELECT id FROM records WHERE salon_id=$1 AND yclients_record_id=$2', [salon.id, ycRecordId]);
-  await db.query(
+  await trackLct(await db.query(
     `INSERT INTO loyalty_card_transactions
        (salon_id,client_id,yclients_card_id,type,amount,balance_after,title,record_id,txn_date,created_at)
-     VALUES ($1,$2,(SELECT yclients_card_id FROM clients WHERE id=$3),'redemption',$4,$5,$6,$7,NOW(),NOW())`,
+     VALUES ($1,$2,(SELECT yclients_card_id FROM clients WHERE id=$3),'redemption',$4,$5,$6,$7,NOW(),NOW()) RETURNING *`,
     [salon.id, client.id, client.id, -deduct,
      Math.max(0, client.bonus_balance - deduct),
      `Отмена кэшбэка за визит #${ycRecordId}`,
      dbRecord?.id || ycRecordId]
-  );
+  ), { origin: 'loyalpro' });
   logger.info(`reverted ${deduct} for client ${client.name}, record #${ycRecordId}`);
 }
 
@@ -592,13 +602,15 @@ async function linkClientCard(salon, client, settings) {
   // for type integer» — карта не привязывается НИКОГДА, а в начислении это
   // «сбой YClients → повтор на следующем событии» по кругу (поймано живым
   // прогоном ночной сверки 25.09; numeric→integer при присваивании округляется).
-  return db.one(
-    `UPDATE clients SET yclients_card_id=$1,yclients_card_number=$2,yclients_card_balance=$3,
-     bonus_balance=$4::numeric,total_spent=$5,visits_count=$6,loyalty_level=$7,updated_at=NOW()
-     WHERE id=$8 RETURNING *`,
-    [card.id, cardNumber, cardBalance, cardBalance, paidAmount, visitsCount,
-     level?.key || client.loyalty_level, client.id]
+  await db.query(
+    `UPDATE clients SET yclients_card_id=$1,yclients_card_number=$2,
+     total_spent=$3,visits_count=$4,loyalty_level=$5,updated_at=NOW()
+     WHERE id=$6`,
+    [card.id, cardNumber, paidAmount, visitsCount, level?.key || client.loyalty_level, client.id]
   );
+  // Без BONUS_LEDGER_PRIMARY: bonus_balance = yclients_card_balance = карта (прежнее правило,
+  // ::numeric внутри). С флагом — только показание, баланс из журнала (входящий остаток при первом чтении).
+  return bonusLedger.setCardReading(client.id, cardBalance);
 }
 
 // Оплачен ли визит бонусами — по YClients, а не по нашей loyalty_card_transactions.
@@ -794,6 +806,7 @@ async function processRecordEvent(payload, salon, settings) {
     if (client.yclients_card_id && salon.yclients_card_type_id) {
       try {
         await ycAccrueCard(salon, client.yclients_card_id, cashback, `Кэшбэк ${pct}% за визит #${ycRecordId}`);
+        await bonusLedger.bumpCardReading(client.id, cashback).catch(e2 => logger.warn(`card reading bump: ${e2.message}`));
       } catch(e) {
         // The real YClients write failed — do NOT fall through to crediting bonus_balance
         // locally, or our DB permanently diverges from the client's actual card (incident
@@ -822,14 +835,14 @@ async function processRecordEvent(payload, salon, settings) {
       [cashback, spentDelta, level.key, data.date || new Date(), client.id, visitsDelta]
     );
 
-    await db.query(
+    await trackLct(await db.query(
       `INSERT INTO loyalty_card_transactions
          (salon_id,client_id,yclients_card_id,type,amount,balance_after,title,record_id,txn_date,created_at)
-       VALUES ($1,$2,(SELECT yclients_card_id FROM clients WHERE id=$3),'accrual',$4,$5,$6,$7,NOW(),NOW())`,
+       VALUES ($1,$2,(SELECT yclients_card_id FROM clients WHERE id=$3),'accrual',$4,$5,$6,$7,NOW(),NOW()) RETURNING *`,
       [salon.id, client.id, client.id, cashback,
        client.bonus_balance + cashback,
        `Кэшбэк ${pct}% за визит #${ycRecordId}`, record.id]
-    );
+    ), { origin: 'loyalpro' });
 
     await db.query(
       'UPDATE finances_log SET cashback_amount=$1, cashback_pct=$2, paid_amount=$3, processed=TRUE WHERE yclients_record_id=$4',
@@ -911,7 +924,8 @@ async function _processFinancesOperationLocked(payload, salon) {
       const card = cards.find(c => String(c.id) === String(client.yclients_card_id));
       if (!card) return;
       const newBalance = parseFloat(card.balance || 0);
-      const oldBalance = parseFloat(client.bonus_balance || 0);
+      // BONUS_LEDGER_PRIMARY: база — показание карты (bonus_balance включает очередь журнала).
+      const oldBalance = bonusLedger.cardBase(client);
       const delta = newBalance - oldBalance;
       logger.info(`FinOp delete: card balance old=${oldBalance} new=${newBalance} delta=${delta}`);
       if (Math.abs(delta) < 1) return;
@@ -921,20 +935,17 @@ async function _processFinancesOperationLocked(payload, salon) {
         [client.id, salon.id, ycRecordId, delta]
       );
       if (existingTxn) { logger.info(`FinOp delete: duplicate sync skipped`); return; }
-      await db.query(
-        'UPDATE clients SET bonus_balance=$1::numeric, yclients_card_balance=$1::numeric, updated_at=NOW() WHERE id=$2',
-        [newBalance, client.id]
-      );
+      await bonusLedger.setCardReading(client.id, newBalance, { openingFirst: true });
       const dbRecord = await db.oneOrNone('SELECT id FROM records WHERE salon_id=$1 AND yclients_record_id=$2', [salon.id, ycRecordId]);
       const txnType = delta >= 0 ? 'accrual' : 'redemption';
-      await db.query(
+      await trackLct(await db.query(
         `INSERT INTO loyalty_card_transactions
            (salon_id,client_id,yclients_card_id,type,amount,balance_after,title,record_id,txn_date,created_at)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,NOW(),NOW())`,
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,NOW(),NOW()) RETURNING *`,
         [salon.id, client.id, client.yclients_card_id, txnType, delta, newBalance,
          delta > 0 ? `Возврат бонусов при отмене оплаты визита #${ycRecordId}` : `Списание бонусов при отмене визита #${ycRecordId}`,
          dbRecord?.id || null]
-      );
+      ), { origin: 'yclients' });
       logger.info(`FinOp delete: synced balance ${oldBalance} → ${newBalance} for client ${client.name}`);
     } catch(e) { logger.error(`FinOp delete: card sync error: ${e.message}`); }
     return;
@@ -951,7 +962,8 @@ async function _processFinancesOperationLocked(payload, salon) {
       const card = cards.find(c => String(c.id) === String(client.yclients_card_id));
       if (!card) { logger.info(`FinOp create: card not found`); return; }
       const newBalance = parseFloat(card.balance || 0);
-      const oldBalance = parseFloat(client.bonus_balance || 0);
+      // BONUS_LEDGER_PRIMARY: база — показание карты (bonus_balance включает очередь журнала).
+      const oldBalance = bonusLedger.cardBase(client);
       const delta = newBalance - oldBalance;
       logger.info(`FinOp create: card balance old=${oldBalance} new=${newBalance} delta=${delta}`);
       if (Math.abs(delta) < 1) { logger.info(`FinOp create: balance unchanged, skip`); return; }
@@ -978,10 +990,7 @@ async function _processFinancesOperationLocked(payload, salon) {
         );
         if (alreadyProcessed) {
           logger.info(`FinOp create: record=${ycRecordId} already processed by record webhook — syncing balance only`);
-          await db.query(
-            'UPDATE clients SET bonus_balance=$1::numeric, yclients_card_balance=$1::numeric, updated_at=NOW() WHERE id=$2',
-            [newBalance, client.id]
-          );
+          await bonusLedger.setCardReading(client.id, newBalance, { openingFirst: true });
           return;
         }
 
@@ -1005,27 +1014,21 @@ async function _processFinancesOperationLocked(payload, salon) {
         );
         if (existingRedemption) {
           logger.info(`FinOp create: redemption for record=${ycRecordId} already processed — syncing balance only`);
-          await db.query(
-            'UPDATE clients SET bonus_balance=$1::numeric, yclients_card_balance=$1::numeric, updated_at=NOW() WHERE id=$2',
-            [newBalance, client.id]
-          );
+          await bonusLedger.setCardReading(client.id, newBalance, { openingFirst: true });
           return;
         }
       }
 
-      await db.query(
-        'UPDATE clients SET bonus_balance=$1::numeric, yclients_card_balance=$1::numeric, updated_at=NOW() WHERE id=$2',
-        [newBalance, client.id]
-      );
+      await bonusLedger.setCardReading(client.id, newBalance, { openingFirst: true });
       const txnType = delta >= 0 ? 'accrual' : 'redemption';
-      await db.query(
+      await trackLct(await db.query(
         `INSERT INTO loyalty_card_transactions
            (salon_id,client_id,yclients_card_id,type,amount,balance_after,title,record_id,txn_date,created_at)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,NOW(),NOW())`,
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,NOW(),NOW()) RETURNING *`,
         [salon.id, client.id, client.yclients_card_id, txnType, delta, newBalance,
          delta < 0 ? `Списание бонусов при оплате визита #${ycRecordId}` : `Начисление бонусов (YClients) #${ycRecordId}`,
          dbRecord?.id || null]
-      );
+      ), { origin: 'yclients' });
       if (delta < 0) {
         // This redemption row is about to feed hasRedemptionTx and can deny this SAME
         // record's own cashback (incident 2026-09-16: a stale local balance — caused by

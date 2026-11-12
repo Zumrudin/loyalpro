@@ -29,6 +29,7 @@
 // Лимит YClients: страница /records повторяется через 60 с (лимит минутный,
 // сообщение «через 0 секунд» врёт — 47 падений runSync подряд это доказали).
 const { db } = require('../db');
+const bonusLedger = require('./bonus-ledger');
 const { ycGet, ycGetClientCards } = require('./yclients');
 const loyalty = require('./loyalty');
 const { upsertClientFromYc } = require('./client-upsert');
@@ -115,10 +116,8 @@ async function reconcileClient(salon, ycClientId, settings) {
         // один параметр на две колонки разных типов даёт «inconsistent types
         // deduced for parameter $1» (поймано живым прогоном 25.09, те же грабли,
         // что п. 8 в docs/2026-09-25-cashback-accrual-bugs.md).
-        await db.query(
-          'UPDATE clients SET yclients_card_balance=$1::numeric, bonus_balance=$1::numeric, updated_at=NOW() WHERE id=$2',
-          [parseFloat(card.balance || 0), row.id]
-        );
+        // Без BONUS_LEDGER_PRIMARY — обе колонки = карта; с ним — только показание карты.
+        await bonusLedger.setCardReading(row.id, parseFloat(card.balance || 0));
       }
     }
   }

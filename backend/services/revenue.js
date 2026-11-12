@@ -2,6 +2,7 @@
 
 const { db } = require('../db');
 const { createLogger } = require('../logger');
+const finOps = require('./finance-ops');
 
 const logger = createLogger('Revenue');
 
@@ -68,6 +69,7 @@ async function recordRevenueOperation(payload, salon, source) {
     if (result.rowCount > 0) {
       logger.info(`Deleted revenue_operations op_id=${data.id} (status=delete)`);
     }
+    await finOps.safely('revenue-delete', () => finOps.cancelRevenueOp(salon.id, data.id));
     return false;
   }
 
@@ -114,6 +116,7 @@ async function recordRevenueOperation(payload, salon, source) {
        sold_by_yc_staff_id)
     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
     ON CONFLICT (salon_id, yclients_operation_id) DO NOTHING
+    RETURNING *
   `, [
     salon.id,
     data.id,
@@ -133,7 +136,11 @@ async function recordRevenueOperation(payload, salon, source) {
     source,
     soldByYcStaffId,
   ]);
-  return (result && result.rowCount) > 0;
+  const inserted = (result && result.rowCount) > 0;
+  if (inserted && result.rows && result.rows[0]) {
+    await finOps.safely('revenue-op', () => finOps.recordRevenueOp(result.rows[0]));
+  }
+  return inserted;
 }
 
 module.exports = { classifyExpense, recordRevenueOperation, goodsTransactionRef, fetchSoldByStaffId };

@@ -66,6 +66,8 @@ function wireDb() {
   });
   db.query.mockImplementation((sql) => {
     if (sql.includes('INSERT INTO finances_log')) return Promise.resolve({ rowCount: 1 });
+    // bonusLedger.setCardReading без BONUS_LEDGER_PRIMARY: обе колонки = карта, RETURNING *
+    if (sql.includes('UPDATE clients SET bonus_balance=$1::numeric')) return Promise.resolve({ rowCount: 1, rows: [CLIENT_LINKED] });
     return Promise.resolve({ rowCount: 1, rows: [] });
   });
 }
@@ -85,10 +87,12 @@ test('привязка пишет bonus_balance с явным ::numeric (дро�
   ycGetClientCardsStrict.mockResolvedValue([{ ...YC_CARD, balance: 784.89 }]);
   ycGet.mockResolvedValue({ loyalty_transactions: [] });
   await processRecordEvent(makePayload(), SALON, SETTINGS);
-  const link = db.one.mock.calls.find(c => c[0].includes('yclients_card_id=$1'));
+  const link = db.query.mock.calls.find(c => c[0].includes('yclients_card_id=$1'));
   expect(link).toBeTruthy();
-  expect(link[0]).toMatch(/bonus_balance=\$4::numeric/);
-  expect(link[1][3]).toBe(784.89);
+  // баланс пишет bonusLedger.setCardReading: один параметр на integer и numeric — только с ::numeric
+  const bal = db.query.mock.calls.find(c => /bonus_balance=\$1::numeric, yclients_card_balance=\$1::numeric/.test(c[0]));
+  expect(bal).toBeTruthy();
+  expect(bal[1][0]).toBe(784.89);
 });
 
 test('карта есть в YClients, но не в нашей БД → привязывается и кэшбэк начисляется на неё', async () => {
@@ -97,7 +101,7 @@ test('карта есть в YClients, но не в нашей БД → прив
 
   await processRecordEvent(makePayload(), SALON, SETTINGS);
 
-  const link = db.one.mock.calls.find(c => c[0].includes('yclients_card_id='));
+  const link = db.query.mock.calls.find(c => c[0].includes('yclients_card_id='));
   expect(link).toBeTruthy();
   expect(link[1]).toEqual(expect.arrayContaining([152063337, '00012', 3777]));
 
@@ -122,7 +126,7 @@ test('свежепривязанная карта: визит оплачен б�
   expect(denial()).toBeTruthy();
   expect(denial()[0]).toMatch(/processed=TRUE/);
   // Связка при этом остаётся: следующий визит пойдёт по обычному пути.
-  expect(db.one.mock.calls.some(c => c[0].includes('yclients_card_id='))).toBe(true);
+  expect(db.query.mock.calls.some(c => c[0].includes('yclients_card_id='))).toBe(true);
 });
 
 test('карты типа салона в YClients нет → терминальный отказ как раньше', async () => {
