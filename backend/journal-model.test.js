@@ -126,3 +126,13 @@ test('non-finite break values are zero (review T2)', () => {
 test('normalizeLabels takes plain ids only as numbers or numeric strings (review T2)', () => {
   expect(m.normalizeLabels([true, '5', 6, ' 7x', false])).toEqual([{ id: 5, title: '', color: '' }, { id: 6, title: '', color: '' }]);
 });
+test('create accepts notifyClient boolean only', () => {
+  expect(m.parseDraft({ ...base, notifyClient: false }, 'create').notifyClient).toBe(false);
+  expect(m.parseDraft(base, 'create')).not.toHaveProperty('notifyClient');
+  expect(() => m.parseDraft({ ...base, notifyClient: 'no' }, 'create')).toThrow();
+});
+test('recordExtras carries colour, label ids and break back into a full PUT', () => {
+  expect(m.recordExtras({ custom_color: 'f4a0a0', record_labels: [{ id: 3, title: 'VIP' }, 4], technical_break_duration: 600 }))
+    .toEqual({ custom_color: 'f4a0a0', record_labels: [3, 4], technical_break_duration: 600 });
+  expect(m.recordExtras({})).toEqual({});
+});

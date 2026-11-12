@@ -282,6 +282,20 @@ describe('parity fields (12.11.2026)', () => {
     const src = { kind: 'live', staff: async () => [], records: async () => [], schedule: async () => [], labels: () => { throw new Error('sync'); } };
     expect((await service.day(3, '2030-04-01', src)).labels).toEqual([]);
   });
+  test('edit sends the new comment and keeps colour, labels and break of the record', async () => {
+    const rec = { ...record, custom_color: '#f4a0a0', record_labels: [{ id: 3, title: 'VIP' }], technical_break_duration: 600 };
+    yc.getRecord.mockResolvedValue(structuredClone(rec));
+    await service.mutate(3, 4, { operationId, action: 'edit', recordId: 8, version: m.revision(rec), edit: { comment: 'Новый' } });
+    expect(yc.write.mock.calls[0][2]).toMatchObject({ comment: 'Новый', custom_color: '#f4a0a0', record_labels: [3], technical_break_duration: 600 });
+  });
+  test('move and confirm keep colour and labels', async () => {
+    const rec = { ...record, custom_color: '#f4a0a0', record_labels: [{ id: 3 }] };
+    yc.getRecord.mockResolvedValue(structuredClone(rec));
+    await service.mutate(3, 4, { operationId, action: 'move', recordId: 8, version: m.revision(rec), date: '2030-04-01', time: '11:00', staffId: 1 });
+    await service.mutate(3, 4, { operationId: '22345678-1234-4123-8123-123456789012', action: 'confirm', recordId: 8, version: m.revision(rec) });
+    expect(yc.write.mock.calls[0][2]).toMatchObject({ custom_color: '#f4a0a0', record_labels: [3] });
+    expect(yc.write.mock.calls[1][2]).toMatchObject({ custom_color: '#f4a0a0', record_labels: [3], attendance: 2 });
+  });
   test('card (detail) carries the client phone', async () => {
     yc.getRecord.mockResolvedValue({ ...structuredClone(record), client: { id: 5, name: 'Тест', phone: '79200255591' } });
     expect((await service.detail(3, 8)).clientPhone).toBe('79200255591');

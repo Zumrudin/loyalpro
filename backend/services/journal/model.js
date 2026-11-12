@@ -160,8 +160,21 @@ function parseDraft(body, action) {
       if (out.clientPhone.length === 11 && out.clientPhone[0] === '8') out.clientPhone = '7' + out.clientPhone.slice(1);
       out.comment = typeof body.comment === 'string' ? body.comment.trim() : '';
       if (out.comment.length > 1000) fail('Комментарий слишком длинный.');
+      if (body.notifyClient !== undefined) {
+        if (typeof body.notifyClient !== 'boolean') fail('Некорректный флаг уведомления.');
+        out.notifyClient = body.notifyClient;
+      }
     }
   }
+  return out;
+}
+// What a full PUT /record must carry back so that a move or a status change
+// does not wipe colour, labels and the technical break set in YClients.
+function recordExtras(r) {
+  const out = {};
+  if (typeof r.custom_color === 'string' && r.custom_color) out.custom_color = r.custom_color;
+  if (Array.isArray(r.record_labels)) out.record_labels = normalizeLabels(r.record_labels).map(l => l.id);
+  if (nonNegSeconds(r.technical_break_duration) > 0) out.technical_break_duration = nonNegSeconds(r.technical_break_duration);
   return out;
 }
 const mins = t => Number(t.slice(0, 2)) * 60 + Number(t.slice(3, 5));
@@ -222,4 +235,4 @@ function slotsFor({ date, staffId, duration, breakMinutes = 0, schedule, records
   }
   return result;
 }
-module.exports = { JournalError, fail, nonNegSeconds, dateKey, positiveId, nonZeroId, fingerprint, revision, editRevision, servicesRevision, normalizeRecord, normColor, normalizeLabels, recordsForDay, parseDraft, moscowParts, slotsFor, isAdministrator, staffSchedule };
+module.exports = { JournalError, fail, nonNegSeconds, dateKey, positiveId, nonZeroId, fingerprint, revision, editRevision, servicesRevision, normalizeRecord, normColor, normalizeLabels, recordsForDay, parseDraft, moscowParts, slotsFor, recordExtras, isAdministrator, staffSchedule };

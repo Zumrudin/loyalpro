@@ -83,3 +83,49 @@ describe('conflict check only on the services the user edited (10.11.2026)', () 
     expect(ok.services[0]).toMatchObject({ id: 7, amount: 2 });
   });
 });
+
+describe('parity fields (12.11.2026)', () => {
+  const labelsSrc = { ...src, labels: async () => [{ id: 3, title: 'VIP' }, { id: 4, title: 'Важно' }] };
+  test('parse validates every new field', () => {
+    expect(parse({ comment: '  Позвонить  ', seanceLength: 75, client: { name: ' Анна ', phone: '8 (920) 025-55-91' }, customColor: '#F4A0A0',
+      labelIds: [3, '4', 3], technicalBreak: 600, notifyClient: false })).toEqual({ comment: 'Позвонить', seanceLength: 75,
+      client: { name: 'Анна', phone: '79200255591' }, customColor: '#f4a0a0', labelIds: [3, 4], technicalBreak: 600, notifyClient: false });
+    expect(parse({ customColor: null })).toEqual({ customColor: null });
+    for (const bad of [{ seanceLength: 7 }, { seanceLength: 0 }, { seanceLength: 725 }, { technicalBreak: 100 }, { technicalBreak: 3900 },
+      { customColor: 'red' }, { client: { name: 'A', phone: '123' } }, { client: { name: '', phone: '79200255591' } },
+      { comment: 'x'.repeat(1001) }, { labelIds: [0] }, { notifyClient: 'no' }, { servicesVersion: 'a'.repeat(64) }]) {
+      expect(() => parse(bad)).toThrow();
+    }
+  });
+  test('patch builds the YClients fields; notifyClient never reaches YClients', async () => {
+    const out = await patch({ id: 3 }, { ...record, datetime: '2020-01-01T10:00:00+03:00' }, { comment: 'Позвонить', customColor: null, labelIds: [4], technicalBreak: 0,
+      client: { name: 'Анна', phone: '79200255591' }, notifyClient: false }, labelsSrc, jest.fn());
+    expect(out).toEqual({ comment: 'Позвонить', custom_color: '', record_labels: [4], technical_break_duration: 0, client: { phone: '79200255591', name: 'Анна' } });
+  });
+  test('comment, colour and labels are allowed for an arrived visit; duration and client are not', async () => {
+    const arrived = { ...record, attendance: 1 };
+    await expect(patch({}, arrived, { comment: 'ok' }, src, jest.fn())).resolves.toEqual({ comment: 'ok' });
+    await expect(patch({}, arrived, { seanceLength: 90 }, src, jest.fn())).rejects.toMatchObject({ status: 409 });
+    await expect(patch({}, record, { client: { name: 'A', phone: '79200255591' }, attendance: 1 }, src, jest.fn())).rejects.toMatchObject({ status: 409 });
+  });
+  test('unknown label or cold label cache is refused', async () => {
+    await expect(patch({}, record, { labelIds: [9] }, labelsSrc, jest.fn())).rejects.toThrow('Метка не найдена');
+    await expect(patch({}, record, { labelIds: [3] }, src, jest.fn())).rejects.toMatchObject({ status: 503 });
+    await expect(patch({}, record, { labelIds: [] }, src, jest.fn())).resolves.toEqual({ record_labels: [] });
+  });
+  test('a longer visit or a break re-checks the window with the explicit length; a started visit does not', async () => {
+    const availability = jest.fn(async () => ({ slots: ['10:00'] }));
+    const out = await patch({ id: 3 }, record, { seanceLength: 90, technicalBreak: 300 }, src, availability);
+    expect(out).toEqual({ seance_length: 5400, technical_break_duration: 300 });
+    expect(availability.mock.calls[0][1]).toEqual({ staffId: 5, date: '2030-04-01', time: '10:00', durationOverride: 90, technicalBreak: 300 });
+    expect(availability.mock.calls[0][2]).toMatchObject({ id: 1 });
+    await expect(patch({}, record, { seanceLength: 90 }, src, async () => ({ slots: [] }))).rejects.toMatchObject({ code: 'slot_taken' });
+    const started = { ...record, datetime: '2020-01-01T10:00:00+03:00' };
+    const none = jest.fn();
+    await patch({}, started, { seanceLength: 90 }, src, none);
+    expect(none).not.toHaveBeenCalled();
+  });
+  test('a deleted record refuses even a comment', async () => {
+    await expect(patch({}, { ...record, deleted: true }, { comment: 'ok' }, src, jest.fn())).rejects.toMatchObject({ status: 409 });
+  });
+});

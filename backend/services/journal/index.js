@@ -158,7 +158,7 @@ async function prepare(salon, draft) {
     const patch = await require('./record-edit').patch(salon, record, draft.edit, sources.live(salon), availability);
     return { staff_id: record.staff_id, services: record.services, client: record.client,
       datetime: record.datetime, seance_length: record.seance_length, comment: record.comment || '',
-      attendance: record.attendance, ...patch, save_if_busy: false, send_sms: false };
+      attendance: record.attendance, ...m.recordExtras(record), ...patch, save_if_busy: false, send_sms: false };
   }
   if (draft.action === 'create' || draft.action === 'move') {
     const available = await availability(salon, draft, record, sources.live(salon));
@@ -166,6 +166,7 @@ async function prepare(salon, draft) {
     return {
       ...(record ? {
         client: record.client, services: record.services, comment: record.comment || '', attendance: record.attendance,
+        ...m.recordExtras(record),
       } : {
         client: { name: draft.clientName, phone: draft.clientPhone },
         services: available.servicePayload || draft.serviceIds.map(id => ({ id })), comment: draft.comment,
@@ -177,7 +178,7 @@ async function prepare(salon, draft) {
   const body = {
     staff_id: record.staff_id, services: record.services, client: record.client,
     datetime: record.datetime, seance_length: record.seance_length,
-    comment: record.comment || '', attendance: draft.action === 'confirm' ? 2 : -1,
+    comment: record.comment || '', attendance: draft.action === 'confirm' ? 2 : -1, ...m.recordExtras(record),
     save_if_busy: false, send_sms: false,
   };
   if (draft.action === 'cancel') {
