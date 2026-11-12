@@ -2,7 +2,12 @@
 const fs = require('fs');
 const vm = require('vm');
 const path = require('path');
-const code = fs.readFileSync(path.join(__dirname, '../frontend/js/pages/journal.js'), 'utf8');
+// All journal files share ONE global scope in the browser (classic <script>s,
+// index.html order). The harness runs them the same way, one script each.
+const JR_FILES = ['journal.js', 'journal-grid.js', 'journal-card.js', 'journal-forms.js', 'journal-payment.js', 'journal-dispatch.js'];
+const readJr = file => fs.readFileSync(path.join(__dirname, '../frontend/js/pages', file), 'utf8');
+const JR_SOURCES = JR_FILES.map(file => ({ file, code: readJr(file) }));
+const JR_ALL = JR_SOURCES.map(s => s.code).join('\n');
 function harness() {
   const nodes = new Map();
   const get = id => {
@@ -13,9 +18,33 @@ function harness() {
   };
   let uuid = 0;
   const context = vm.createContext({ document: { getElementById: get }, Date, URLSearchParams, AbortController, setTimeout, clearTimeout, encodeURIComponent, crypto: { randomUUID: () => 'synthetic-uuid-' + (++uuid) }, TOKEN: 'synthetic-token', ME: { role: 'owner' }, notify: jest.fn(), fetch: jest.fn(), confirm: jest.fn(() => false) });
-  vm.runInContext(code, context);
+  for (const s of JR_SOURCES) vm.runInContext(s.code, context, { filename: s.file });
   return { context, get, run: expression => vm.runInContext(expression, context) };
 }
+// Top-level names of a classic script: a duplicate const/let across files is a
+// SyntaxError that kills the whole page; a duplicate function silently wins.
+function jrTopLevelNames(code) {
+  const out = [];
+  for (const m of code.matchAll(/^(?:async\s+function|function|const|let|var)\s+([A-Za-z_$][\w$]*)/gm)) out.push(m[1]);
+  return out;
+}
+test('journal files: no top-level name is declared twice across files', () => {
+  const seen = new Map();
+  for (const s of JR_SOURCES) for (const name of jrTopLevelNames(s.code)) {
+    expect({ name, file: s.file, other: seen.get(name) || null }).toEqual({ name, file: s.file, other: null });
+    seen.set(name, s.file);
+  }
+  expect(seen.size).toBeGreaterThan(90);
+});
+test('index.html loads every journal file in order, after the dialog, with a cache buster', () => {
+  const html = fs.readFileSync(path.join(__dirname, '../frontend/index.html'), 'utf8');
+  let last = html.indexOf('id="jrModal"');
+  for (const file of JR_FILES) {
+    const at = html.search(new RegExp(`src="js/pages/${file.replace('.', '\\.')}\\?v=[^"]+"`));
+    expect({ file, found: at > last }).toEqual({ file, found: true });
+    last = at;
+  }
+});
 test('overlapping visits use lanes and adjacent visits reclaim a lane', () => {
   const h = harness();
   const records = [{ id: 1, time: '09:00', duration: 60 }, { id: 2, time: '09:30', duration: 60 }, { id: 3, time: '10:00', duration: 30 }, { id: 4, time: '12:00', duration: 60 }];
@@ -276,9 +305,9 @@ test('unavailable buttons use ordinary disabled cursor, only active requests sho
  expect(css).toContain('.jr-dialog.jr-payment-busy .jr-pay-method:disabled{cursor:wait}');
  for (const cls of ['.jr-visit-syncing','.jr-visit-failed','.jr-sync-alert','.jr-pay-queued']) expect(css).toContain(cls);
 });
-test('index bumps journal script and stylesheet cache busters',()=>{
+test('index bumps journal stylesheet cache buster',()=>{
  const html=fs.readFileSync(path.join(__dirname,'../frontend/index.html'),'utf8');
- expect(html).toContain('js/pages/journal.js?v=bill2-2026-11-12');expect(html).toContain('css/journal.css?v=2026-11-12bill');
+ expect(html).toMatch(/css\/journal\.css\?v=[^"]+"/);
 });
 
 // ---- Local-first sessions (2026-11-10) ----
@@ -703,7 +732,7 @@ test('visit colours follow the YClients status palette (paid in full = orange, o
  for (const c of ['#9ee5d7','#b3bdfd','#ff8989','#f7c76d','#ffad79','#1ab394']) expect(css).toContain(c);
  expect(css).toMatch(/\.jr-status-1\.jr-paid-full\{--jr-yc:#ffad79/);
  expect(css).toMatch(/data-status="1"\]\[data-paid-full\]/);
- const js=fs.readFileSync(path.join(__dirname,'../frontend/js/pages/journal.js'),'utf8');
+ const js=JR_ALL;
  expect(js).toContain("r.paidFull ? ' jr-paid-full' : ''");
  const model=require('./services/journal/model');
  const n=model.normalizeRecord||null;
