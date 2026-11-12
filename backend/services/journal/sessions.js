@@ -173,7 +173,10 @@ async function validate(salonId, session) {
       }
     }
     if (session.move) {
-      const draft = { action: 'move', recordId: session.recordId, ...session.move };
+      // A move saved together with a new length/break is checked with them.
+      const draft = { action: 'move', recordId: session.recordId, ...session.move,
+        ...(session.edit?.seanceLength !== undefined ? { durationOverride: session.edit.seanceLength } : {}),
+        ...(session.edit?.technicalBreak !== undefined ? { technicalBreak: session.edit.technicalBreak } : {}) };
       const available = await index.availability(salon, draft, record, src);
       if (!available.slots.includes(session.move.time)) busy();
       patch.datetime = `${session.move.date}T${session.move.time}:00+03:00`;
@@ -185,6 +188,9 @@ async function validate(salonId, session) {
       // new services must fit the new time and belong to the new staff.
       const moved = session.move ? { ...record, datetime: patch.datetime, staff_id: patch.staff_id } : record;
       Object.assign(patch, await require('./record-edit').patch(salon, moved, session.edit, src, index.availability, paymentsLocal.localOptions(ctx).paid.length > 0));
+      // Display only: the worker builds the YClients body itself; the flag goes
+      // to journal_record_prefs (task 5), never into PUT /record.
+      if (session.edit.notifyClient !== undefined) patch.notify_client = session.edit.notifyClient;
     }
     if (session.status === 'confirm') patch.attendance = 2;
     if (session.status === 'cancel') patch.cancel = true;

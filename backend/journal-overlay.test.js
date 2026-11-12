@@ -82,3 +82,11 @@ test('change of an unsent new record lands on its synthetic record (manual dispa
   expect(out[0]).toMatchObject({ id: -5, attendance: 1 });
   expect(out[0]._sync).toMatchObject({ outboxId: 9, released: false });
 });
+test('patch carries parity fields (12.11.2026)', () => {
+  const p = { comment: 'Позвонить', client: { name: 'Новый', phone: '79200255591' }, custom_color: '#f4a0a0', record_labels: [3],
+    technical_break_duration: 600, notify_client: false, seance_length: 4500 };
+  const [out] = applyOverlay([rec], [row({ yclients_record_id: 8, overlay: { kind: 'patch', patch: p } })], NOW);
+  expect(out).toMatchObject(p);
+  expect(m.normalizeRecord(out)).toMatchObject({ comment: 'Позвонить', clientName: 'Новый', customColor: '#f4a0a0',
+    labels: [{ id: 3, title: '', color: '' }], technicalBreak: 600, duration: 75 });
+});

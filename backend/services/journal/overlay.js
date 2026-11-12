@@ -70,7 +70,8 @@ function applyOverlay(records, rows, now = Date.now()) {
     } else if (o.kind === 'patch') {
       if (at === undefined) continue;
       const p = o.patch || {}, next = { ...out[at] };
-      for (const f of ['datetime', 'staff_id', 'seance_length', 'attendance', 'services']) if (p[f] !== undefined) next[f] = p[f];
+      for (const f of ['datetime', 'staff_id', 'seance_length', 'attendance', 'services', 'comment', 'client',
+        'custom_color', 'record_labels', 'technical_break_duration', 'notify_client']) if (p[f] !== undefined) next[f] = p[f];
       if (p.cancel === true) next.attendance = -1;
       next._sync = sync;
       out[at] = next;

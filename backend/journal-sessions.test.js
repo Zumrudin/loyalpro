@@ -397,3 +397,32 @@ describe('one card = one package: status, services, time, staff (10.11.2026)', (
     expect(() => parse({ recordId: 42, edit: { attendance: 1 }, move: { date: '2030-04-01', time: '11:00', staffId: 5 }, payments: [pay('account', 10, 1)] })).toThrow();
   });
 });
+
+describe('edit: parity fields (12.11.2026)', () => {
+  test('all new fields go into the edit step; the overlay shows them before sending', async () => {
+    sources.forSalon.mockResolvedValueOnce({ kind: 'local', services: jest.fn(async () => []), labels: jest.fn(async () => [{ id: 3, title: 'VIP' }]) });
+    const edit = { comment: 'Позвонить', customColor: '#F4A0A0', labelIds: [3], technicalBreak: 600, notifyClient: false, seanceLength: 75 };
+    const out = await s.validate(3, parse({ recordId: 42, edit }));
+    expect(out.steps).toEqual([expect.objectContaining({ kind: 'edit',
+      params: { comment: 'Позвонить', customColor: '#f4a0a0', labelIds: [3], technicalBreak: 600, notifyClient: false, seanceLength: 75 } })]);
+    expect(out.overlay.patch).toEqual({ comment: 'Позвонить', custom_color: '#f4a0a0', record_labels: [3], technical_break_duration: 600,
+      seance_length: 4500, notify_client: false });
+    expect(index.availability).toHaveBeenCalledWith(expect.anything(),
+      expect.objectContaining({ durationOverride: 75, technicalBreak: 600, time: '10:00', staffId: 5 }), expect.anything(), expect.anything());
+  });
+  test('move together with a longer duration checks the new place with the new length', async () => {
+    const out = await s.validate(3, parse({ recordId: 42, move: { date: '2030-04-01', time: '11:00', staffId: 5 }, edit: { seanceLength: 90 } }));
+    expect(out.steps.map(x => x.kind)).toEqual(['move', 'edit']);
+    expect(index.availability.mock.calls[0][1]).toMatchObject({ action: 'move', time: '11:00', durationOverride: 90 });
+    expect(out.overlay.patch).toMatchObject({ datetime: '2030-04-01T11:00:00+03:00', seance_length: 5400 });
+  });
+  test('notifyClient alone is a valid edit and does not touch the visit', async () => {
+    const out = await s.validate(3, parse({ recordId: 42, edit: { notifyClient: false } }));
+    expect(out.overlay.patch).toEqual({ notify_client: false });
+    expect(index.availability).not.toHaveBeenCalled();
+  });
+  test('client change of an arrived visit is refused locally', async () => {
+    setup({ record: { ...RECORD, attendance: 1 } });
+    await expect(s.validate(3, parse({ recordId: 42, edit: { client: { name: 'Анна', phone: '79200255591' } } }))).rejects.toMatchObject({ status: 409 });
+  });
+});
