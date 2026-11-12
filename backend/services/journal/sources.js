@@ -46,6 +46,8 @@ function local(salon) {
     staff: ref('staff'), services: ref('services'), resources: ref('resources'), accounts: ref('accounts'),
     // Labels are decoration: a cold cache is an empty list, not an error.
     labels: async () => (await reference.getReference(salon.id, 'labels')) || [],
+    // Cache only (a miss is null, never a YClients call): for scans over many masters/days.
+    cachedSchedule: (staffId, date) => reference.getSchedule(salon.id, staffId, date),
     async schedule(staffId, date) {
       const cached = await reference.getSchedule(salon.id, staffId, date);
       return cached || fallback.schedule(staffId, date);

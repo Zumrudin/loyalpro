@@ -272,6 +272,17 @@ describe('parity fields (12.11.2026)', () => {
     expect(yc.records).toHaveBeenCalledWith(expect.anything(), '2030-03-31', '2030-04-08');
     expect(JSON.stringify(out)).not.toMatch(/clientPhone/);
   });
+  test('week default master is chosen from the schedule cache only, no YClients call', async () => {
+    yc.list.mockClear();
+    const cachedSchedule = jest.fn(async (id) => (id === 2 ? [{ date: '2030-04-02', is_working: 1, slots: [{ from: '09:00', to: '12:00' }] }] : null));
+    const src = { kind: 'local', staff: async () => [{ id: 1, name: 'A' }, { id: 2, name: 'B' }], records: async () => [],
+      schedule: async () => [], cachedSchedule, labels: async () => [] };
+    const out = await service.week(3, '2030-04-03', null, src);
+    expect(out.staff.id).toBe(2);
+    const cold = { ...src, cachedSchedule: async () => null };
+    expect((await service.week(3, '2030-04-03', null, cold)).staff.id).toBe(1);
+    expect(yc.list).not.toHaveBeenCalled();
+  });
   test('week with an unknown staffId is 404', async () => {
     await expect(service.week(3, '2030-04-03', 99)).rejects.toMatchObject({ status: 404 });
   });

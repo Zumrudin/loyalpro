@@ -14,16 +14,24 @@ test('density: 0 without records, by share of workingStaff × 8, 3 when nobody w
   expect(month.density(5, 4)).toBe(1);
   expect(month.density(12, 4)).toBe(2);
   expect(month.density(25, 4)).toBe(3);
-  expect(month.density(2, 0)).toBe(3);
+  expect(month.density(2, 0)).toBe(1);
+  expect(month.density(5, 0)).toBe(2);
 });
 test('monthDays fills every day of the month', () => {
-  const days = month.monthDays('2026-11', [{ date: '2026-11-02', n: 12 }], [{ date: '2026-11-02', n: 4 }, { date: '2026-11-03', n: 2 }]);
+  const days = month.monthDays('2026-11', [{ date: '2026-11-02', n: 12 }], [{ date: '2026-11-02', n: 4, total: 5 }, { date: '2026-11-03', n: 2, total: 2 }]);
   expect(days).toHaveLength(30);
   expect(days[1]).toEqual({ date: '2026-11-02', records: 12, workingStaff: 4, density: 2 });
   expect(days[2]).toEqual({ date: '2026-11-03', records: 0, workingStaff: 2, density: 0 });
 });
+test('no schedule rows → density null; rows but nobody working → ordinary formula', () => {
+  const days = month.monthDays('2026-11', [{ date: '2026-11-01', n: 9 }, { date: '2026-11-02', n: 9 }],
+    [{ date: '2026-11-02', n: 0, total: 3 }]);
+  expect(days[0]).toEqual({ date: '2026-11-01', records: 9, workingStaff: 0, density: null });
+  expect(days[1]).toEqual({ date: '2026-11-02', records: 9, workingStaff: 0, density: 3 });
+  expect(days[2]).toEqual({ date: '2026-11-03', records: 0, workingStaff: 0, density: null });
+});
 test('month reads the mirror and schedules of THIS salon only, without deleted records', async () => {
-  db.any.mockResolvedValueOnce([{ date: '2026-11-02', n: 3 }]).mockResolvedValueOnce([{ date: '2026-11-02', n: 1 }]);
+  db.any.mockResolvedValueOnce([{ date: '2026-11-02', n: 3 }]).mockResolvedValueOnce([{ date: '2026-11-02', n: 1, total: 1 }]);
   const out = await month.month(7, '2026-11');
   expect(out.month).toBe('2026-11');
   expect(out.days[1]).toMatchObject({ records: 3, workingStaff: 1, density: 2 });
@@ -31,6 +39,6 @@ test('month reads the mirror and schedules of THIS salon only, without deleted r
   expect(recSql).toMatch(/FROM records/); expect(recSql).toMatch(/salon_id=\$1/); expect(recSql).toMatch(/'deleted'/);
   expect(recArgs).toEqual([7, '2026-11-01', '2026-11-30']);
   const [staffSql, staffArgs] = db.any.mock.calls[1];
-  expect(staffSql).toMatch(/FROM journal_staff_schedule/); expect(staffSql).toMatch(/is_working/);
+  expect(staffSql).toMatch(/FROM journal_staff_schedule/); expect(staffSql).toMatch(/FILTER \(WHERE is_working\)/); expect(staffSql).toMatch(/count\(\*\)::int AS total/);
   expect(staffArgs).toEqual([7, '2026-11-01', '2026-11-30']);
 });

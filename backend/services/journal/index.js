@@ -75,8 +75,12 @@ async function week(salonId, date, staffId, src) {
     return schedules.get(key);
   };
   // Live source = YClients calls: no 7xN scan for "the first working master".
-  if (!chosen && src.kind === 'local') {
-    outer: for (const s of list) for (const d of dates) if (m.staffSchedule(await scheduleOf(s, d), d).working) { chosen = s; break outer; }
+  if (!chosen && src.kind === 'local' && typeof src.cachedSchedule === 'function') {
+    // Cache only: a miss counts as "not working" (no live fallback for 7xN reads).
+    outer: for (const s of list) for (const d of dates) {
+      const cached = await src.cachedSchedule(s.id, d);
+      if (cached && m.staffSchedule(cached, d).working) { chosen = s; break outer; }
+    }
   }
   chosen = chosen || list[0] || null;
   const base = { from, to: dates[6], allStaff, labels: m.normalizeLabels(labels), fetchedAt: new Date().toISOString(),
