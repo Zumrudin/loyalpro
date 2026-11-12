@@ -56,6 +56,11 @@ describe('processPackage', () => {
     expect(index.mutate).not.toHaveBeenCalled();
     expect(stepsOf(lastWrite(/status='done'/))[0].result).toEqual({ recordId: 42, alreadyDeleted: true });
   });
+  test('delete: plain HTTP 404 (ycGet Error.status) on the live read is done too', async () => {
+    yc.getRecord.mockRejectedValue(Object.assign(new Error('Not found'), { status: 404 }));
+    expect(await w.processPackage(pkg([step('delete', 1)], { yclients_record_id: 42 }))).toBe('done');
+    expect(index.mutate).not.toHaveBeenCalled();
+  });
   test('create passes api_id = lp-outbox-<package id> outside the draft', async () => {
     await w.processPackage(pkg([step('create', 1, CREATE_PARAMS)]));
     expect(index.mutate.mock.calls[0][3]).toEqual({ apiId: 'lp-outbox-11' });

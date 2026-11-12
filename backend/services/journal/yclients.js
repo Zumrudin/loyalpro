@@ -81,8 +81,9 @@ async function markArrived(salon, record) {
     comment: record.comment || '', attendance: 1, save_if_busy: false, send_sms: false,
   });
 }
-// DELETE /record. «Already deleted» (404, or 409 for a record YClients
-// considers gone) is a success: a repeated package must not fail on it.
+// DELETE /record. A 404/409 answer is «already deleted» (a repeated package
+// must not fail on it) ONLY if a re-read confirms it: deleted:true or a real
+// 404. A 409 for a live record (e.g. locked) is a refusal, never a false done.
 async function remove(salon, id) {
   const authSalon = config.YCLIENTS_INTEGRATION_USER_TOKEN
     ? { ...salon, yclients_user_token: config.YCLIENTS_INTEGRATION_USER_TOKEN } : salon;
@@ -92,8 +93,12 @@ async function remove(salon, id) {
       headers: ycHeaders(authSalon), timeout: 30000 });
   } catch (e) {
     const status = e?.response?.status;
-    if (status === 404 || status === 409) return { recordId: id, alreadyDeleted: true };
-    throw e;
+    if (status !== 404 && status !== 409) throw e;
+    let rec;
+    try { rec = await getRecord(salon, id); }
+    catch (re) { if (Number(re?.status) === 404) return { recordId: id, alreadyDeleted: true }; throw re; }
+    if (rec?.deleted) return { recordId: id, alreadyDeleted: true };
+    fail('YClients не удалил запись. Проверьте её в YClients.', 409, 'delete_refused');
   }
   if (response?.data && typeof response.data === 'object' && response.data.success === false) throw new Error('upstream_delete_failed');
   return { recordId: id };

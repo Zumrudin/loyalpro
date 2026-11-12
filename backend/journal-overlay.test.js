@@ -100,3 +100,10 @@ test('delete patch marks the record deleted: the day drops it, the card says so'
   expect(out.deleted).toBe(true);
   expect(m.recordsForDay([out], '2030-04-01')).toEqual([]);
 });
+
+test('a FAILED delete package keeps the record visible with the failed sync', () => {
+  const [out] = applyOverlay([rec], [row({ status: 'failed', error_text: 'x', yclients_record_id: 8, overlay: { kind: 'patch', patch: { deleted: true } } })], NOW);
+  expect(out.deleted).toBeFalsy();
+  expect(out._sync.status).toBe('failed');
+  expect(m.recordsForDay([out], '2030-04-01')).toHaveLength(1);
+});

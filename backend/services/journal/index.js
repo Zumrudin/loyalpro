@@ -151,7 +151,7 @@ async function prepare(salon, draft, opts = {}) {
   if (draft.action === 'delete') {
     let rec;
     try { rec = await yc.getRecord(salon, draft.recordId); }
-    catch (e) { if (e instanceof m.JournalError && e.status === 404) return { alreadyDeleted: true }; throw e; }
+    catch (e) { if (m.isNotFound(e)) return { alreadyDeleted: true }; throw e; }
     if (rec.deleted) return { alreadyDeleted: true };
     if (m.revision(rec) !== draft.version) m.fail('Запись изменилась. Откройте карточку заново.', 409, 'stale');
     if (rec.paid_full || Number(rec.paid_amount) > 0) m.fail('Сначала удалите оплаты визита.', 409);
@@ -234,7 +234,7 @@ async function mutate(salonId, userId, draft, opts = {}) {
     }
     if (draft.recordId) {
       const ledger = (await conn.query("SELECT action, method, external_ids, target_transaction_id FROM journal_financial_transactions WHERE salon_id=$1 AND yclients_record_id=$2 AND yclients_company_id=$3 AND state='confirmed'", [salonId,draft.recordId,salon.yclients_company_id])).rows;
-      if (require('./record-edit').hasActivePayments(ledger)) m.fail('У визита есть проведённые оплаты. Измените его в YClients.',409);
+      if (require('./record-edit').hasActivePayments(ledger)) m.fail(draft.action === 'delete' ? 'Сначала удалите оплаты визита.' : 'У визита есть проведённые оплаты. Измените его в YClients.',409);
     }
     const body = await prepare(salon, draft, opts);
     if (draft.recordId && !body?.alreadyDeleted && m.revision(await yc.getRecord(salon, draft.recordId)) !== draft.version) {
@@ -250,6 +250,11 @@ async function mutate(salonId, userId, draft, opts = {}) {
       await conn.query("UPDATE journal_operations SET state='done', result=$3, record_id=$4, updated_at=NOW() WHERE salon_id=$1 AND operation_id=$2",
         [salonId, draft.operationId, JSON.stringify(result), result.recordId]);
     } catch (error) {
+      // YClients re-read the record after a 404/409 DELETE and it is alive: nothing was deleted.
+      if (error instanceof m.JournalError && error.code === 'delete_refused') {
+        await conn.query("UPDATE journal_operations SET state='rejected', updated_at=NOW() WHERE salon_id=$1 AND operation_id=$2", [salonId, draft.operationId]);
+        throw error;
+      }
       // A definite HTTP validation/auth/rate rejection has no ambiguous write.
       if ([400, 401, 403, 404, 422, 429].includes(error.response?.status)) {
         await conn.query("UPDATE journal_operations SET state='rejected', updated_at=NOW() WHERE salon_id=$1 AND operation_id=$2", [salonId, draft.operationId]);

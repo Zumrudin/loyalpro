@@ -74,7 +74,8 @@ function applyOverlay(records, rows, now = Date.now()) {
         'custom_color', 'record_labels', 'technical_break_duration', 'notify_client']) if (p[f] !== undefined) next[f] = p[f];
       if (p.cancel === true) next.attendance = -1;
       // Deleted locally: the day drops it (recordsForDay), the card shows «удалена (ждёт отправки)».
-      if (p.deleted === true) next.deleted = true;
+      // A FAILED delete keeps the record (it is alive in YClients) with its red failed card.
+      if (p.deleted === true && row.status !== 'failed') next.deleted = true;
       next._sync = sync;
       out[at] = next;
     }

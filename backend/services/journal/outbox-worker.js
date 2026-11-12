@@ -155,7 +155,7 @@ async function runStep(ctx, step) {
       try { live = await yc.getRecord(ctx.salon, recordId); }
       catch (e) {
         // Deleting a record YClients no longer has is done (spec §6).
-        if (step.kind === 'delete' && e instanceof m.JournalError && e.status === 404) return { recordId, alreadyDeleted: true };
+        if (step.kind === 'delete' && m.isNotFound(e)) return { recordId, alreadyDeleted: true };
         throw e;
       }
       // The services version was checked locally when the change was saved

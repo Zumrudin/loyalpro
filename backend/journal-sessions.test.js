@@ -31,6 +31,7 @@ let state;
 function setup(over = {}) {
   state = { salon: { id: 3, yclients_company_id: 77 }, record: RECORD, ledger: [], open: [], card: { yclients_card_id: 88, yclients_card_balance: 5000 }, outbox: null, inserted: [], ...over };
   db.oneOrNone.mockImplementation(async (sql, args) => {
+    if (/WITH parent AS \(UPDATE journal_outbox/.test(sql)) { state.localCalls = [...(state.localCalls || []), { sql, args }]; return state.localCancel ?? null; }
     if (/FROM salons/.test(sql)) return state.salon;
     if (/FROM records/.test(sql)) return state.record ? { raw_payload: state.record } : null;
     if (/FROM clients/.test(sql)) return state.card;
@@ -457,5 +458,63 @@ describe('delete (12.11.2026)', () => {
     await expect(s.validate(3, parse({ recordId: 42, status: 'delete' }))).resolves.toMatchObject({ overlay: { patch: { deleted: true } } });
     setup({ record: { ...RECORD, deleted: true } });
     await expect(s.validate(3, parse({ recordId: 42, status: 'delete' }))).rejects.toMatchObject({ status: 409 });
+  });
+});
+
+describe('delete review fixes (12.11.2026)', () => {
+  const queuedPay = { id: 6, status: 'queued', yclients_record_id: 42, overlay: { kind: 'patch', patch: {} },
+    steps: [{ kind: 'pay', state: 'pending', params: { method: 'loyalty_card', methodId: 88, amount: 100 } }] };
+  test('a QUEUED payment blocks delete/confirm/move like a confirmed one', async () => {
+    state.open = [queuedPay];
+    await expect(s.validate(3, parse({ recordId: 42, status: 'delete' }))).rejects.toMatchObject({ status: 409, message: 'Сначала удалите оплаты визита.' });
+    await expect(s.validate(3, parse({ recordId: 42, status: 'confirm' }))).rejects.toMatchObject({ status: 409 });
+    await expect(s.validate(3, parse({ recordId: 42, move: { date: '2030-04-01', time: '11:00', staffId: 5 } }))).rejects.toMatchObject({ status: 409 });
+  });
+  test('delete texts: paid → «Сначала удалите оплаты визита», arrived → «удаляйте в YClients»', async () => {
+    setup({ record: { ...RECORD, paid_amount: 100 } });
+    await expect(s.validate(3, parse({ recordId: 42, status: 'delete' }))).rejects.toMatchObject({ message: 'Сначала удалите оплаты визита.' });
+    setup({ record: { ...RECORD, attendance: 1 } });
+    await expect(s.validate(3, parse({ recordId: 42, status: 'delete' }))).rejects.toMatchObject({ message: 'Пришедший визит удаляйте в YClients.' });
+  });
+  const createRow = (over = {}) => ({ id: 5, status: 'queued', released_at: null, yclients_record_id: null,
+    overlay: { kind: 'create', date: '2030-04-01', time: '10:00', staffId: 5, duration: 60, services: [{ id: 900, title: 'Чистка', amount: 1, cost: 3000 }], client: { name: 'Анна', phone: '79200001122' }, attendance: 0 },
+    steps: [{ kind: 'create', state: 'pending' }], ...over });
+  test('unsent new record: delete cancels its create and children locally, no YClients step', async () => {
+    state.row = createRow();
+    state.localCancel = { id: 9, status: 'cancelled' };
+    const r = await s.enqueue(3, 4, parse({ recordId: -5, status: 'delete' }));
+    expect(r).toEqual({ outboxId: 9, recordId: -5, status: 'cancelled' });
+    expect(state.inserted).toHaveLength(0);
+    const { sql, args } = state.localCalls[0];
+    expect(sql).toMatch(/status='queued' AND released_at IS NULL AND yclients_record_id IS NULL/);
+    expect(sql).toMatch(/create_outbox_id/);
+    expect(args.slice(0, 3)).toEqual([3, 5, SID]);
+    expect(JSON.parse(args[5])).toEqual([]);
+    expect(index.availability).not.toHaveBeenCalled();
+    expect(db.query.mock.calls.some(([q]) => /UPDATE finance_operations/.test(q))).toBe(true);
+  });
+  test('unsent new record with a queued payment is still cancelled locally (nothing reached YClients)', async () => {
+    state.row = createRow({ steps: [{ kind: 'create', state: 'pending' }, { kind: 'pay', state: 'pending', params: { method: 'loyalty_card', methodId: 88, amount: 100 } }] });
+    state.localCancel = { id: 9, status: 'cancelled' };
+    expect(await s.enqueue(3, 4, parse({ recordId: -5, status: 'delete' }))).toMatchObject({ status: 'cancelled' });
+  });
+  test('released or running create → regular delete package (the create may reach YClients)', async () => {
+    state.row = createRow({ released_at: new Date().toISOString() });
+    const r = await s.enqueue(3, 4, parse({ recordId: -5, status: 'delete' }));
+    expect(r).toEqual({ outboxId: 7, recordId: -5, status: 'queued' });
+    expect(state.localCalls).toBeUndefined();
+    expect(JSON.parse(state.inserted[0][6]).map(x => x.kind)).toEqual(['delete']);
+  });
+  test('local cancel lost the race (dispatch released it) → regular delete package', async () => {
+    state.row = createRow();
+    state.localCancel = null;
+    const r = await s.enqueue(3, 4, parse({ recordId: -5, status: 'delete' }));
+    expect(state.localCalls).toHaveLength(1);
+    expect(r.status).toBe('queued');
+    expect(JSON.parse(state.inserted[0][6]).map(x => x.kind)).toEqual(['delete']);
+  });
+  test('replay of a local cancel answers the same', async () => {
+    state.outbox = { id: 9, request_hash: require('./services/journal/model').fingerprint(parse({ recordId: -5, status: 'delete' })), status: 'cancelled' };
+    expect(await s.enqueue(3, 4, parse({ recordId: -5, status: 'delete' }))).toEqual({ outboxId: 9, recordId: -5, status: 'cancelled', duplicate: true });
   });
 });

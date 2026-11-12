@@ -268,6 +268,22 @@ describe('parity fields (12.11.2026)', () => {
       .toEqual({ recordId: 8, alreadyDeleted: true });
     expect(yc.remove).not.toHaveBeenCalled();
   });
+  test('delete: a plain HTTP 404 from the read (ycGet Error.status) = already deleted', async () => {
+    yc.getRecord.mockRejectedValue(Object.assign(new Error('Not found'), { status: 404 }));
+    expect(await service.mutate(3, 4, { operationId, action: 'delete', recordId: 8, version: m.revision(record) })).toEqual({ recordId: 8, alreadyDeleted: true });
+    expect(yc.remove).not.toHaveBeenCalled();
+  });
+  test('delete refused by YClients (record still alive) → rejected, not uncertain', async () => {
+    yc.remove.mockRejectedValue(new m.JournalError(409, 'YClients не удалил запись.', 'delete_refused'));
+    await expect(service.mutate(3, 4, { operationId, action: 'delete', recordId: 8, version: m.revision(record) })).rejects.toMatchObject({ status: 409, code: 'delete_refused' });
+    expect(conn.query.mock.calls.some(([sql]) => /state='rejected'/.test(sql))).toBe(true);
+  });
+  test('delete of a visit with confirmed payments: «Сначала удалите оплаты визита»', async () => {
+    conn.query.mockImplementation(async sql => /journal_financial_transactions/.test(sql) && /confirmed/.test(sql)
+      ? { rows: [{ action: 'payment', method: 'account', external_ids: [1], target_transaction_id: null }] }
+      : /pg_try_advisory_lock/.test(sql) ? { rows: [{ locked: true }] } : { rows: [] });
+    await expect(service.mutate(3, 4, { operationId, action: 'delete', recordId: 8, version: m.revision(record) })).rejects.toMatchObject({ status: 409, message: 'Сначала удалите оплаты визита.' });
+  });
   test('delete refuses an arrived or a paid visit and a stale version', async () => {
     for (const rec of [{ ...record, attendance: 1 }, { ...record, paid_amount: 100 }]) {
       yc.getRecord.mockResolvedValue(structuredClone(rec));

@@ -176,10 +176,13 @@ async function validate(salonId, session) {
     if (record.deleted || (!session.edit && session.status !== 'delete' && Number(record.attendance) === -1)) m.fail('Запись уже отменена или удалена.', 409);
     const patch = {};
     if (session.move || session.status) {
-      const paid = paymentsLocal.localOptions(ctx).paid.length > 0;
-      if (Number(record.attendance) === 1 || record.paid_full || Number(record.paid_amount) > 0 || paid) {
-        m.fail('Пришедшие и оплаченные визиты изменяйте в YClients.', 409);
-      }
+      // A payment still in the queue blocks exactly like a confirmed one
+      // (as queuedPay in index.detail): the worker would refuse later anyway.
+      const paid = record.paid_full || Number(record.paid_amount) > 0
+        || paymentsLocal.localOptions(ctx).paid.length > 0 || (ctx.queued || []).some(q => q.kind === 'pay');
+      if (session.status === 'delete' && paid) m.fail('Сначала удалите оплаты визита.', 409);
+      if (session.status === 'delete' && Number(record.attendance) === 1) m.fail('Пришедший визит удаляйте в YClients.', 409);
+      if (Number(record.attendance) === 1 || paid) m.fail('Пришедшие и оплаченные визиты изменяйте в YClients.', 409);
     }
     if (session.move) {
       // A move saved together with a new length/break is checked with them.
@@ -256,10 +259,32 @@ function replay(row, session, hash) {
 // create reached YClients the change goes to the real record instead.
 async function parentOf(salonId, session) {
   if (!present(session.recordId) || Number(session.recordId) > 0) return null;
-  const row = await db.oneOrNone("SELECT id, status, yclients_record_id, overlay FROM journal_outbox WHERE salon_id=$1 AND id=$2", [salonId, -Number(session.recordId)]);
+  const row = await db.oneOrNone("SELECT id, status, released_at, yclients_record_id, overlay FROM journal_outbox WHERE salon_id=$1 AND id=$2", [salonId, -Number(session.recordId)]);
   if (!row || row.overlay?.kind !== 'create' || row.status === 'cancelled') m.fail('Запись не найдена.', 404);
   if (row.status === 'failed' && row.yclients_record_id == null) m.fail('Запись не создана в YClients. Повторите отправку или уберите её из журнала.', 409);
   return row;
+}
+// Delete of a new record that was never sent (its create is queued and not
+// released): cancel the create and its child packages here, with no YClients
+// call — otherwise YClients would get create + DELETE and the patient a
+// «Вы записаны» for a record that no longer exists. One statement: the create
+// is cancelled only while still unreleased (dispatch races lose cleanly), and
+// this session gets a cancelled row so a replay answers the same.
+const LOCAL_DELETE_SQL = `WITH parent AS (UPDATE journal_outbox SET status='cancelled', updated_at=NOW()
+    WHERE salon_id=$1 AND id=$2 AND status='queued' AND released_at IS NULL AND yclients_record_id IS NULL RETURNING id),
+  children AS (UPDATE journal_outbox SET status='cancelled', updated_at=NOW()
+    WHERE salon_id=$1 AND create_outbox_id IN (SELECT id FROM parent) AND yclients_record_id IS NULL AND status IN ('queued','failed') RETURNING id)
+  INSERT INTO journal_outbox(salon_id,session_id,user_id,request_hash,yclients_record_id,create_outbox_id,status,steps,overlay)
+  SELECT $1,$3,$4,$5,NULL,id,'cancelled',$6,$7 FROM parent
+  ON CONFLICT (salon_id,session_id) DO NOTHING RETURNING id, status`;
+async function deleteUnsent(salonId, uid, session, hash, parent) {
+  if (session.status !== 'delete' || !parent || parent.status !== 'queued' || parent.released_at != null || parent.yclients_record_id != null) return null;
+  const row = await db.oneOrNone(LOCAL_DELETE_SQL, [salonId, Number(parent.id), session.sessionId, uid,
+    hash, JSON.stringify([]), JSON.stringify({ kind: 'patch', patch: { deleted: true } })]);
+  if (!row) return null;
+  // Queued bonus/cash operations of the cancelled packages leave the ledger.
+  await finOps.safely('journal-delete-unsent', () => finOps.syncCancelledOutbox(salonId));
+  return { outboxId: Number(row.id), recordId: session.recordId, status: row.status };
 }
 async function enqueue(salonId, userId, session) {
   const hash = m.fingerprint(session);
@@ -268,9 +293,18 @@ async function enqueue(salonId, userId, session) {
     // even though its own overlay now occupies the slot.
     const prior = await db.oneOrNone(OUTBOX_BY_SESSION, [salonId, session.sessionId]);
     if (prior) return replay(prior, session, hash);
-    const parent = await parentOf(salonId, session);
-    const { steps, overlay } = await validate(salonId, session);
+    let parent = await parentOf(salonId, session);
     const uid = Number(userId);
+    const owner = Number.isSafeInteger(uid) && uid > 0 ? uid : null;
+    const local = await deleteUnsent(salonId, owner, session, hash, parent);
+    if (local) return local;
+    // Lost the race to «Отправить» (or same session concurrently): regular path.
+    if (session.status === 'delete' && parent) {
+      const again = await db.oneOrNone(OUTBOX_BY_SESSION, [salonId, session.sessionId]);
+      if (again) return replay(again, session, hash);
+      parent = await parentOf(salonId, session);
+    }
+    const { steps, overlay } = await validate(salonId, session);
     const recordId = parent ? (parent.yclients_record_id != null ? Number(parent.yclients_record_id) : null) : (session.recordId ?? null);
     const row = await db.oneOrNone(`INSERT INTO journal_outbox(salon_id,session_id,user_id,request_hash,yclients_record_id,create_outbox_id,status,steps,overlay)
       VALUES($1,$2,$3,$4,$5,$6,'queued',$7,$8) ON CONFLICT (salon_id,session_id) DO NOTHING RETURNING id, status`,

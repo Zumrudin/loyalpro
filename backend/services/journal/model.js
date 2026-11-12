@@ -8,6 +8,9 @@ class JournalError extends Error {
   constructor(status, message, code = 'invalid') { super(message); this.status = status; this.code = code; }
 }
 const fail = (message, status = 400, code) => { throw new JournalError(status, message, code); };
+// «Not found» from our boundary (JournalError 404) or a raw HTTP 404 from ycGet
+// (a plain Error carrying .status) — both mean YClients has no such record.
+const isNotFound = e => Number(e?.status ?? e?.response?.status) === 404;
 function dateKey(value) {
   if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) fail('Укажите дату.');
   const d = new Date(value + 'T12:00:00Z');
@@ -236,4 +239,4 @@ function slotsFor({ date, staffId, duration, breakMinutes = 0, schedule, records
   }
   return result;
 }
-module.exports = { JournalError, fail, nonNegSeconds, dateKey, positiveId, nonZeroId, fingerprint, revision, editRevision, servicesRevision, normalizeRecord, normColor, normalizeLabels, recordsForDay, parseDraft, moscowParts, slotsFor, recordExtras, isAdministrator, staffSchedule };
+module.exports = { JournalError, fail, isNotFound, nonNegSeconds, dateKey, positiveId, nonZeroId, fingerprint, revision, editRevision, servicesRevision, normalizeRecord, normColor, normalizeLabels, recordsForDay, parseDraft, moscowParts, slotsFor, recordExtras, isAdministrator, staffSchedule };
