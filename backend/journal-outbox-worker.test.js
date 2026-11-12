@@ -9,6 +9,7 @@ jest.mock('./services/journal/index', () => ({ mutate: jest.fn() }));
 jest.mock('./services/journal/payments', () => ({ context: jest.fn(), parse: jest.fn(b => ({ ...b })), pay: jest.fn() }));
 jest.mock('./services/journal/yclients', () => ({ getRecord: jest.fn() }));
 jest.mock('./services/journal/reference-cache', () => ({ learnBonusPercent: jest.fn(async () => {}) }));
+jest.mock('./services/notifications/enroll', () => ({ cancelPending: jest.fn(async () => 1) }));
 
 const { db } = require('./db');
 const { __log: log } = require('./logger');
@@ -18,6 +19,7 @@ const yc = require('./services/journal/yclients');
 const reference = require('./services/journal/reference-cache');
 const m = require('./services/journal/model');
 const w = require('./services/journal/outbox-worker');
+const notifyEnroll = require('./services/notifications/enroll');
 
 const OP = n => `00000000-0000-4000-8000-00000000000${n}`;
 const SALON = { id: 3, yclients_company_id: 77 };
@@ -56,7 +58,7 @@ describe('processPackage', () => {
     expect(prefsBeforePut).toBe(true);
     expect(writes.find(x => /INSERT INTO journal_record_prefs/.test(x.sql)).args).toEqual([3, 42, false, 11]);
     // the PUT's webhook cancels queued notifications itself
-    expect(writes.some(x => /UPDATE notification_jobs/.test(x.sql))).toBe(false);
+    expect(notifyEnroll.cancelPending).not.toHaveBeenCalled();
     calls = []; writes.length = 0;
     expect(await w.processPackage(pkg([step('edit', 2, { notifyClient: true })], { yclients_record_id: 42 }))).toBe('done');
     expect(calls).toEqual([]);
@@ -67,8 +69,33 @@ describe('processPackage', () => {
   test('a flag-only «не уведомлять» cancels queued notifications (no PUT = no webhook)', async () => {
     expect(await w.processPackage(pkg([step('edit', 1, { notifyClient: false, servicesVersion: 'x' })], { yclients_record_id: 42 }))).toBe('done');
     expect(index.mutate).not.toHaveBeenCalled();
-    const cancel = writes.find(x => /UPDATE notification_jobs SET status='cancelled'/.test(x.sql));
-    expect(cancel.args).toEqual([3, 42, 'journal_opt_out']);
+    expect(notifyEnroll.cancelPending).toHaveBeenCalledWith(3, 42, 'journal_opt_out');
+    expect(writes.some(x => /notification_jobs/.test(x.sql))).toBe(false);
+  });
+  test('a failed cancelPending does not fail the flag-only step', async () => {
+    notifyEnroll.cancelPending.mockRejectedValueOnce(new Error('boom'));
+    expect(await w.processPackage(pkg([step('edit', 1, { notifyClient: false })], { yclients_record_id: 42 }))).toBe('done');
+    expect(log.warn).toHaveBeenCalled();
+  });
+  test('[move, edit{notifyClient:false}]: prefs written BEFORE the move PUT (12.11.2026 review)', async () => {
+    yc.getRecord.mockResolvedValue({ id: 42, datetime: '2030-04-01T10:00:00+03:00', staff_id: 5, attendance: 0 });
+    const seen = [];
+    index.mutate.mockImplementation(async (s, u, d) => {
+      seen.push([d.action, writes.filter(x => /INSERT INTO journal_record_prefs/.test(x.sql)).map(x => x.args)]);
+      return { recordId: d.recordId };
+    });
+    expect(await w.processPackage(pkg([step('move', 1, { date: '2030-04-02', time: '11:00', staffId: 5 }), step('edit', 2, { notifyClient: false })], { yclients_record_id: 42 }))).toBe('done');
+    expect(seen[0]).toEqual(['move', [[3, 42, false, 11]]]);
+    expect(writes.filter(x => /INSERT INTO journal_record_prefs/.test(x.sql))).toHaveLength(1);
+  });
+  test('create: a failed prefs write does not fail the step — the record exists in YClients', async () => {
+    db.query.mockImplementation(async (sql, args) => {
+      if (/journal_record_prefs/.test(sql)) throw new Error('db down');
+      writes.push({ sql, args }); return { rowCount: 0 };
+    });
+    expect(await w.processPackage(pkg([step('create', 1, { ...CREATE_PARAMS, notifyClient: false })]))).toBe('done');
+    expect(stepsOf(lastWrite(/status='done'/))[0]).toMatchObject({ state: 'done', result: { recordId: 500 } });
+    expect(log.warn).toHaveBeenCalled();
   });
   test('create with notifyClient:false records the flag for the new id', async () => {
     await w.processPackage(pkg([step('create', 1, { ...CREATE_PARAMS, notifyClient: false })]));

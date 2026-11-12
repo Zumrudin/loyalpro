@@ -13,21 +13,6 @@ test('write upserts the flag with the package id, scoped by salon', async () => 
   expect(args).toEqual([3, 500, false, 11]);
 });
 test('apiIdFor builds lp-outbox-<id>', () => expect(prefs.apiIdFor(15)).toBe('lp-outbox-15'));
-describe('cancelPendingNotifications', () => {
-  test('cancels only pending jobs of this record in this salon, reason journal_opt_out', async () => {
-    db.query.mockResolvedValueOnce({ rowCount: 2 });
-    expect(await prefs.cancelPendingNotifications(3, 500)).toBe(2);
-    const [sql, args] = db.query.mock.calls[0];
-    expect(sql).toMatch(/UPDATE notification_jobs SET status='cancelled'/);
-    expect(sql).toMatch(/status='pending'/);
-    expect(args).toEqual([3, 500, 'journal_opt_out']);
-  });
-  test('a DB failure is swallowed (best effort) with a WARN', async () => {
-    db.query.mockRejectedValueOnce(new Error('boom'));
-    expect(await prefs.cancelPendingNotifications(3, 500)).toBe(0);
-    expect(log.warn).toHaveBeenCalled();
-  });
-});
 describe('optOutForEvent', () => {
   test('row wins', async () => {
     db.oneOrNone.mockResolvedValueOnce({ notify_client: false });

@@ -147,19 +147,33 @@ async function runStep(ctx, step) {
     ctx.recordId = recordId;
     // «Не уведомлять» for the new record; the create webhook may come first —
     // notifications/enroll.js then finds the flag through api_id (lp-outbox-<id>).
-    if (typeof p.notifyClient === 'boolean') await prefs.write(salonId, recordId, p.notifyClient, ctx.outboxId);
+    // The record already exists in YClients: a failed write must not fail the step.
+    if (typeof p.notifyClient === 'boolean') {
+      try { await prefs.write(salonId, recordId, p.notifyClient, ctx.outboxId); }
+      catch (e) { logger.warn(`outbox ${ctx.outboxId} salon ${salonId} record ${recordId}: notify flag not saved ${describe(e)}`); }
+    }
     return { recordId };
   }
   if (!ctx.recordId) m.fail('Запись ещё не создана в YClients.', 409);
   const recordId = ctx.recordId;
   if (['move', 'confirm', 'cancel', 'edit', 'delete'].includes(step.kind)) {
+    // «Не уведомлять» is saved BEFORE the package's FIRST external step: in
+    // [move, edit{notifyClient}] the move's webhook would otherwise queue
+    // «запись перенесена» before the flag exists. Idempotent on retry.
+    if (!ctx.prefsWritten) {
+      const flagged = ctx.steps.find(s => s && s.kind === 'edit' && typeof s.params?.notifyClient === 'boolean');
+      if (flagged) await prefs.write(salonId, recordId, flagged.params.notifyClient, ctx.outboxId);
+      ctx.prefsWritten = true;
+    }
     if (step.kind === 'edit' && typeof p.notifyClient === 'boolean') {
-      // BEFORE the PUT: its webhook must already see the flag. Idempotent on retry.
-      await prefs.write(salonId, recordId, p.notifyClient, ctx.outboxId);
       const rest = Object.keys(p).filter(k => !['notifyClient', 'servicesVersion', 'version'].includes(k));
       if (!rest.length) {
-        // No PUT → no webhook: queued notifications of the record are cancelled here.
-        if (p.notifyClient === false) await prefs.cancelPendingNotifications(salonId, recordId);
+        // No PUT → no webhook: queued notifications of the record are cancelled
+        // by the notifications module's own rule. Best effort.
+        if (p.notifyClient === false) {
+          try { await require('../notifications/enroll').cancelPending(salonId, recordId, prefs.OPT_OUT_REASON); }
+          catch (e) { logger.warn(`outbox ${ctx.outboxId} salon ${salonId} record ${recordId}: pending notifications not cancelled ${describe(e)}`); }
+        }
         return { recordId, prefsOnly: true };
       }
     }

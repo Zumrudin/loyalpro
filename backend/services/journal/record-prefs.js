@@ -16,25 +16,12 @@ const UPSERT_SQL = `INSERT INTO journal_record_prefs(salon_id,yclients_record_id
   ON CONFLICT (salon_id,yclients_record_id) DO UPDATE SET notify_client=EXCLUDED.notify_client, outbox_id=EXCLUDED.outbox_id, updated_at=NOW()`;
 const GET_SQL = 'SELECT notify_client FROM journal_record_prefs WHERE salon_id=$1 AND yclients_record_id=$2';
 const PACKAGE_SQL = 'SELECT steps FROM journal_outbox WHERE salon_id=$1 AND id=$2';
-const CANCEL_SQL = `UPDATE notification_jobs SET status='cancelled', decision_reason=$3
-  WHERE salon_id=$1 AND yclients_record_id=$2 AND status='pending'`;
 
 async function write(salonId, recordId, notifyClient, outboxId = null) {
   await db.query(UPSERT_SQL, [Number(salonId), Number(recordId), notifyClient !== false, outboxId == null ? null : Number(outboxId)]);
 }
 async function get(salonId, recordId) {
   return db.oneOrNone(GET_SQL, [Number(salonId), Number(recordId)]);
-}
-// A flag-only change makes no PUT, so no webhook will reach notifications/enroll.js:
-// already queued notifications of the record are cancelled here. Best effort.
-async function cancelPendingNotifications(salonId, recordId) {
-  try {
-    const r = await db.query(CANCEL_SQL, [Number(salonId), Number(recordId), OPT_OUT_REASON]);
-    return r?.rowCount || 0;
-  } catch (e) {
-    logger.warn(`salon ${salonId} record ${recordId}: cancelling pending notifications failed (${e?.code || 'error'})`);
-    return 0;
-  }
 }
 async function optOutForEvent(salonId, recordId, apiId) {
   try {
@@ -50,4 +37,4 @@ async function optOutForEvent(salonId, recordId, apiId) {
     return false;
   }
 }
-module.exports = { write, get, optOutForEvent, cancelPendingNotifications, apiIdFor, API_ID, OPT_OUT_REASON };
+module.exports = { write, get, optOutForEvent, apiIdFor, API_ID, OPT_OUT_REASON };
