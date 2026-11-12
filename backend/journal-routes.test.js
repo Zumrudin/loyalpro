@@ -4,6 +4,7 @@ jest.mock('./services/journal/payments', () => ({options:jest.fn(),pay:jest.fn()
 jest.mock('./services/journal/payments-local', () => ({localPaymentOptions:jest.fn()}));
 jest.mock('./services/journal', () => ({ day: jest.fn(), week: jest.fn(), detail: jest.fn(), slots: jest.fn(), mutate: jest.fn(), pending: jest.fn(), review: jest.fn() }));
 jest.mock('./services/journal/month', () => ({ month: jest.fn() }));
+jest.mock('./services/journal/history', () => ({ load: jest.fn() }));
 jest.mock('./middleware/auth', () => ({
   auth: (req, res, next) => req.__user ? (req.user = req.__user, next()) : res.status(401).json({}),
   requireRole: (...roles) => (req, res, next) => roles.includes(req.user.role) ? next() : res.status(403).json({}),
@@ -87,4 +88,14 @@ test('week and month: validated input, tenant from JWT', async () => {
   expect((await call('GET', '/month', { query: { month: '2030-04' } })).status).toBe(200);
   expect(month.month).toHaveBeenCalledWith(3, '2030-04');
   expect((await call('GET', '/week', { user: { role: 'specialist' }, query: { date: '2030-04-01' } })).status).toBe(403);
+});
+
+test('record history: id validated, tenant from JWT', async () => {
+  const history = require('./services/journal/history');
+  history.load.mockResolvedValue({ recordId: 8, events: [] });
+  expect((await call('GET', '/records/8/history')).status).toBe(200);
+  expect(history.load).toHaveBeenCalledWith(3, 8);
+  expect((await call('GET', '/records/-4/history')).status).toBe(200);
+  expect(history.load).toHaveBeenLastCalledWith(3, -4);
+  expect((await call('GET', '/records/abc/history')).status).toBe(400);
 });
