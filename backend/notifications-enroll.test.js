@@ -1601,3 +1601,51 @@ describe('backfillReminders', () => {
     expect(r).toMatchObject({ scanned: 3, eligible: 1, queued: 1 });
   });
 });
+
+describe('журнал: «не уведомлять клиента» (12.11.2026)', () => {
+  const withJournal = (fn) => {
+    const base = db.oneOrNone.getMockImplementation();
+    db.oneOrNone.mockImplementation(async (sql, p) => {
+      const hit = await fn(sql, p);
+      return hit === undefined ? base(sql, p) : hit;
+    });
+  };
+  test('строка journal_record_prefs с notify_client=false → job skipped journal_opt_out, pending записи гасятся', async () => {
+    setup({ rules: [rule()] });
+    withJournal(async (sql) => (/journal_record_prefs/.test(sql) ? { notify_client: false } : undefined));
+    await enroll.handleRecordEvent(salon, payload(), NOW);
+    expect(inserts()).toHaveLength(1);
+    expect(inserts()[0][9]).toBe('skipped');
+    expect(inserts()[0][13]).toBe('journal_opt_out');
+    expect(cancels().some((p) => p[2] === 'journal_opt_out')).toBe(true);
+  });
+  test('строки нет, api_id ведёт на пакет журнала с notifyClient:false → skipped', async () => {
+    setup({ rules: [rule()] });
+    withJournal(async (sql, p) => {
+      if (/journal_record_prefs/.test(sql)) return null;
+      if (/FROM journal_outbox/.test(sql)) { expect(p).toEqual([1, 77]); return { steps: [{ kind: 'create', params: { notifyClient: false } }] }; }
+      return undefined;
+    });
+    await enroll.handleRecordEvent(salon, payload({ api_id: 'lp-outbox-77' }), NOW);
+    expect(inserts()[0][9]).toBe('skipped');
+    expect(inserts()[0][13]).toBe('journal_opt_out');
+  });
+  test('сбой проверки флага → уведомление ставится как раньше', async () => {
+    setup({ rules: [rule()] });
+    withJournal(async (sql) => { if (/journal_record_prefs/.test(sql)) throw new Error('boom'); return undefined; });
+    await enroll.handleRecordEvent(salon, payload(), NOW);
+    expect(inserts()[0][9]).toBe('pending');
+    expect(cancels()).toHaveLength(0);
+  });
+  test('чужой api_id не заглядывает в журнал', async () => {
+    setup({ rules: [rule()] });
+    await enroll.handleRecordEvent(salon, payload({ api_id: 'site-77' }), NOW);
+    expect(db.oneOrNone.mock.calls.some(([sql]) => /FROM journal_outbox/.test(sql))).toBe(false);
+    expect(inserts()[0][9]).toBe('pending');
+  });
+  test('в режиме off флаг не читается', async () => {
+    setup({ rules: [rule()], mode: 'off' });
+    await enroll.handleRecordEvent(salon, payload({ api_id: 'lp-outbox-77' }), NOW);
+    expect(db.oneOrNone.mock.calls.some(([sql]) => /journal_record_prefs|journal_outbox/.test(sql))).toBe(false);
+  });
+});

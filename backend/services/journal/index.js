@@ -6,6 +6,7 @@ const localCatalog = require('../service-catalog');
 const sources = require('./sources');
 const overlay = require('./overlay');
 const mirror = require('./mirror');
+const prefs = require('./record-prefs');
 async function salonFor(salonId) {
   const salon = await db.oneOrNone('SELECT * FROM salons WHERE id=$1', [salonId]);
   if (!salon?.yclients_company_id) m.fail('YClients не подключён для салона.', 409);
@@ -68,7 +69,9 @@ async function detail(salonId, id) {
     if (!r) m.fail('Запись не найдена.', 404);
     const queuedPay = [row, ...children].some(x => ['queued', 'running'].includes(x.status)
       && (x.steps || []).some(s => s.kind === 'pay' && s.state !== 'done'));
-    const out = m.normalizeRecord(r, { withPhone: true });
+    const createStep = (row.steps || []).find(s => s && s.kind === 'create');
+    const notify = r.notify_client ?? createStep?.params?.notifyClient ?? true;
+    const out = { ...m.normalizeRecord(r, { withPhone: true }), notifyClient: notify !== false };
     return { ...out, paid: out.paid || queuedPay, paymentSync: queuedPay && [row, ...children].some(x => x.released_at != null && (x.steps || []).some(s => s.kind === 'pay' && s.state !== 'done')) };
   }
   const salon = await salonFor(salonId);
@@ -90,13 +93,18 @@ async function detail(salonId, id) {
       && (x.steps || []).some(s => s.kind === 'pay' && s.state !== 'done'));
     const queuedPay = payRows.length > 0;
     const ledgerPaid = require('./record-edit').hasActivePayments(ledger || []);
-    const out = m.normalizeRecord(r, { withPhone: true });
+    const pref = r.notify_client ?? (await notifyPref(salonId, id));
+    const out = { ...m.normalizeRecord(r, { withPhone: true }), notifyClient: pref !== false };
     // paymentSync = the payment is on its way (released); an unreleased one waits for dispatch.
     return { ...out, paid: out.paid || ledgerPaid || queuedPay, paymentSync: payRows.some(x => x.released_at != null) };
   } else {
     r = await yc.getRecord(salon, id);
   }
-  return m.normalizeRecord(r, { withPhone: true });
+  return { ...m.normalizeRecord(r, { withPhone: true }), notifyClient: (await notifyPref(salonId, id)) !== false };
+}
+// «Не уведомлять клиента» (journal_record_prefs); no row or a failed read = notify.
+async function notifyPref(salonId, id) {
+  return (await prefs.get(salonId, id).catch(() => null))?.notify_client ?? true;
 }
 // `src` defaults to live YClients: the write path (prepare) must verify against
 // the source of truth. Only slots() (a UI read) passes the local source.

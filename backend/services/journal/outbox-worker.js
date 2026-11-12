@@ -15,6 +15,7 @@ const payments = require('./payments');
 const yc = require('./yclients');
 const reference = require('./reference-cache');
 const finOps = require('../finance-ops');
+const prefs = require('./record-prefs');
 const logger = require('../../logger').createLogger('JournalOutbox');
 
 const TICK_MS = 2000;
@@ -144,11 +145,24 @@ async function runStep(ctx, step) {
     const recordId = Number(r?.recordId);
     if (!Number.isSafeInteger(recordId) || recordId < 1) m.fail('Не удалось подтвердить результат. Проверьте запись в YClients.', 409, 'uncertain');
     ctx.recordId = recordId;
+    // «Не уведомлять» for the new record; the create webhook may come first —
+    // notifications/enroll.js then finds the flag through api_id (lp-outbox-<id>).
+    if (typeof p.notifyClient === 'boolean') await prefs.write(salonId, recordId, p.notifyClient, ctx.outboxId);
     return { recordId };
   }
   if (!ctx.recordId) m.fail('Запись ещё не создана в YClients.', 409);
   const recordId = ctx.recordId;
   if (['move', 'confirm', 'cancel', 'edit', 'delete'].includes(step.kind)) {
+    if (step.kind === 'edit' && typeof p.notifyClient === 'boolean') {
+      // BEFORE the PUT: its webhook must already see the flag. Idempotent on retry.
+      await prefs.write(salonId, recordId, p.notifyClient, ctx.outboxId);
+      const rest = Object.keys(p).filter(k => !['notifyClient', 'servicesVersion', 'version'].includes(k));
+      if (!rest.length) {
+        // No PUT → no webhook: queued notifications of the record are cancelled here.
+        if (p.notifyClient === false) await prefs.cancelPendingNotifications(salonId, recordId);
+        return { recordId, prefsOnly: true };
+      }
+    }
     let draft = storedDraft(step);
     if (!draft) {
       let live;

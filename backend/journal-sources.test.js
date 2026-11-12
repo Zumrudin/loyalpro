@@ -174,3 +174,16 @@ test('local labels with a cold cache are an empty list (review T2)', async () =>
   reference.getReference.mockResolvedValue(null);
   await expect(sources.local(salon).labels()).resolves.toEqual([]);
 });
+test('detail: «не уведомлять» — from the create step of a queued record, from prefs of a mirrored one (12.11.2026)', async () => {
+  outbox = [{ id: 41, status: 'queued', yclients_record_id: null, updated_at: new Date().toISOString(),
+    steps: [{ kind: 'create', params: { notifyClient: false } }],
+    overlay: { kind: 'create', date: DATE, time: '11:00', duration: 30, staffId: 2, services: [], client: { name: 'Новый' } } }];
+  expect((await service.detail(3, -41)).notifyClient).toBe(false);
+  outbox = [{ ...outbox[0], steps: [{ kind: 'create', params: {} }] }];
+  expect((await service.detail(3, -41)).notifyClient).toBe(true);
+  outbox = [];
+  expect((await service.detail(3, 8)).notifyClient).toBe(true);
+  const base = db.oneOrNone.getMockImplementation();
+  db.oneOrNone.mockImplementation(async (sql, p) => /journal_record_prefs/.test(sql) ? { notify_client: false } : base(sql, p));
+  expect((await service.detail(3, 8)).notifyClient).toBe(false);
+});

@@ -25,6 +25,7 @@ async function runMigrations(client) {
   await client.query(SERVICE_CATALOG_DDL);
   await client.query(JOURNAL_FINANCE_DDL);
   await client.query(JOURNAL_LOCAL_DDL);
+  await client.query(JOURNAL_PREFS_DDL);
   // Unified money/bonus ledger (12.11.2026): additive, written only by services/finance-ops.js.
   await client.query(FINANCE_OPS_DDL);
 
@@ -2794,6 +2795,18 @@ CREATE INDEX IF NOT EXISTS journal_outbox_child ON journal_outbox(create_outbox_
 -- Packages already started or finished before manual dispatch keep going.
 UPDATE journal_outbox SET released_at=updated_at WHERE released_at IS NULL AND (status<>'queued' OR attempts>0);
 `;
+// «Не уведомлять клиента» for journal records (12.11.2026). Read by
+// notifications/enroll.js; written by the journal outbox worker.
+const JOURNAL_PREFS_DDL = `
+CREATE TABLE IF NOT EXISTS journal_record_prefs (
+ salon_id INTEGER NOT NULL REFERENCES salons(id) ON DELETE CASCADE,
+ yclients_record_id BIGINT NOT NULL,
+ notify_client BOOLEAN NOT NULL DEFAULT TRUE,
+ outbox_id BIGINT,
+ updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+ PRIMARY KEY (salon_id, yclients_record_id)
+);
+`;
 const FINANCE_OPS_DDL = `
 CREATE TABLE IF NOT EXISTS finance_operations (
  id BIGSERIAL PRIMARY KEY,
@@ -2826,4 +2839,4 @@ CREATE INDEX IF NOT EXISTS finance_ops_yc_op ON finance_operations(salon_id,ycli
 CREATE UNIQUE INDEX IF NOT EXISTS finance_ops_opening_uq ON finance_operations(salon_id,client_id) WHERE kind='bonus_opening';
 CREATE INDEX IF NOT EXISTS finance_ops_bonus_client ON finance_operations(client_id,status) WHERE method='bonus';
 `;
-module.exports = { runMigrations, FINANCE_OPS_DDL, EDOCS_BOARD_DDL, JOURNAL_DDL, SERVICE_CATALOG_DDL, JOURNAL_FINANCE_DDL, JOURNAL_LOCAL_DDL };
+module.exports = { runMigrations, FINANCE_OPS_DDL, EDOCS_BOARD_DDL, JOURNAL_DDL, SERVICE_CATALOG_DDL, JOURNAL_FINANCE_DDL, JOURNAL_LOCAL_DDL, JOURNAL_PREFS_DDL };

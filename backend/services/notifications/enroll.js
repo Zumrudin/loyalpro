@@ -94,6 +94,7 @@ const ev = require('./events');
 const { evaluateRule, getServiceCategoryMap } = require('./rules');
 const { renderTemplate, buildRenderCtx } = require('./render');
 const salonNames = require('../../utils/salon-names');
+const journalPrefs = require('../journal/record-prefs');
 
 const log = createLogger('NotifyEnroll');
 
@@ -116,6 +117,8 @@ const STALE_VISIT_REASON = 'визит завершился более 12 ч н�
 const REVIEW_REPEAT_REASON = 'опрос уже был за 30 дней';
 const INVITE_REPEAT_REASON = 'приглашение уже отправлялось';
 const CATALOG_REASON = 'каталог услуг YClients недоступен';
+// Журнал записи: администратор снял «уведомлять клиента» (journal_record_prefs / api_id пакета).
+const JOURNAL_OPT_OUT_REASON = journalPrefs.OPT_OUT_REASON;
 
 async function loadState(salonId, recordId) {
   const row = await db.oneOrNone(
@@ -375,6 +378,11 @@ async function enrollEvent(salon, snap, now, { cfg, rules, catalog }) {
 
   if (!isActiveMode(cfg)) return;
 
+  // Журнал: «не уведомлять клиента» действует на все типы правил по этой записи; флаг могли поставить
+  // уже после того, как напоминание встало в очередь — гасим и его. Проверка best-effort (сбой → уведомляем).
+  const journalOptOut = await journalPrefs.optOutForEvent(salonId, snap.recordId, snap.apiId);
+  if (journalOptOut) await cancelPending(salonId, snap.recordId, JOURNAL_OPT_OUT_REASON);
+
   // Отмена/перенос гасят запланированное ВСЕГДА, даже без правил на эти события и даже когда
   // письма об отмене не будет (удаление записи). При переносе гасится только напоминание: приглашение
   // новому клиенту привязано к созданию записи, а не ко времени визита.
@@ -406,7 +414,7 @@ async function enrollEvent(salon, snap, now, { cfg, rules, catalog }) {
   // ставим как раньше.
   const visitEnd = snap.visitAt != null ? snap.visitAt + snap.seanceLength * 1000 : null;
   const visitStale = visitEnd != null && now - visitEnd > AFTER_VISIT_MAX_AGE_MS;
-  const baseSkipReason = !snap.phone ? 'нет телефона клиента'
+  const baseSkipReason = journalOptOut ? JOURNAL_OPT_OUT_REASON : !snap.phone ? 'нет телефона клиента'
     : (client && client.is_blacklisted ? 'клиент в чёрном списке' : null);
 
   /**

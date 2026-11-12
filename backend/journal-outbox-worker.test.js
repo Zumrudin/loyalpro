@@ -44,6 +44,40 @@ const lastWrite = re => [...writes].reverse().find(x => re.test(x.sql));
 const stepsOf = wr => JSON.parse(wr.args[1]);
 
 describe('processPackage', () => {
+  test('edit with notifyClient writes journal_record_prefs BEFORE the PUT; a flag-only edit makes no PUT', async () => {
+    yc.getRecord.mockResolvedValue({ id: 42, datetime: '2030-04-01T10:00:00+03:00', staff_id: 5, attendance: 0 });
+    let prefsBeforePut = null;
+    index.mutate.mockImplementation(async (s, u, d) => {
+      calls.push(['mutate', d.action, d]);
+      prefsBeforePut = writes.some(x => /INSERT INTO journal_record_prefs/.test(x.sql));
+      return { recordId: d.recordId };
+    });
+    await w.processPackage(pkg([step('edit', 1, { comment: 'x', notifyClient: false })], { yclients_record_id: 42 }));
+    expect(prefsBeforePut).toBe(true);
+    expect(writes.find(x => /INSERT INTO journal_record_prefs/.test(x.sql)).args).toEqual([3, 42, false, 11]);
+    // the PUT's webhook cancels queued notifications itself
+    expect(writes.some(x => /UPDATE notification_jobs/.test(x.sql))).toBe(false);
+    calls = []; writes.length = 0;
+    expect(await w.processPackage(pkg([step('edit', 2, { notifyClient: true })], { yclients_record_id: 42 }))).toBe('done');
+    expect(calls).toEqual([]);
+    expect(yc.getRecord).toHaveBeenCalledTimes(1);
+    expect(writes.find(x => /INSERT INTO journal_record_prefs/.test(x.sql)).args).toEqual([3, 42, true, 11]);
+    expect(stepsOf(lastWrite(/status='done'/))[0].result).toEqual({ recordId: 42, prefsOnly: true });
+  });
+  test('a flag-only «не уведомлять» cancels queued notifications (no PUT = no webhook)', async () => {
+    expect(await w.processPackage(pkg([step('edit', 1, { notifyClient: false, servicesVersion: 'x' })], { yclients_record_id: 42 }))).toBe('done');
+    expect(index.mutate).not.toHaveBeenCalled();
+    const cancel = writes.find(x => /UPDATE notification_jobs SET status='cancelled'/.test(x.sql));
+    expect(cancel.args).toEqual([3, 42, 'journal_opt_out']);
+  });
+  test('create with notifyClient:false records the flag for the new id', async () => {
+    await w.processPackage(pkg([step('create', 1, { ...CREATE_PARAMS, notifyClient: false })]));
+    expect(writes.find(x => /INSERT INTO journal_record_prefs/.test(x.sql)).args).toEqual([3, 500, false, 11]);
+  });
+  test('create without the flag writes no prefs row', async () => {
+    await w.processPackage(pkg([step('create', 1, CREATE_PARAMS)]));
+    expect(writes.some(x => /journal_record_prefs/.test(x.sql))).toBe(false);
+  });
   test('delete step goes through mutate with the live version (12.11.2026)', async () => {
     const live = { id: 42, datetime: '2030-04-01T10:00:00+03:00', staff_id: 5, attendance: 0 };
     yc.getRecord.mockResolvedValue(live);

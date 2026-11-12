@@ -360,4 +360,9 @@ describe('parity fields (12.11.2026)', () => {
     yc.getRecord.mockResolvedValue({ ...structuredClone(record), client: { id: 5, name: 'Тест', phone: '79200255591' } });
     expect((await service.detail(3, 8)).clientPhone).toBe('79200255591');
   });
+  test('card shows «не уведомлять» from journal_record_prefs (default: notify)', async () => {
+    expect((await service.detail(3, 8)).notifyClient).toBe(true);
+    db.oneOrNone.mockImplementation(async sql => /journal_record_prefs/.test(sql) ? { notify_client: false } : { id: 3, yclients_company_id: 30 });
+    expect((await service.detail(3, 8)).notifyClient).toBe(false);
+  });
 });

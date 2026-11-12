@@ -25,3 +25,11 @@ test('journal_operations accepts the delete action (v3 constraint, v2 block guar
   // (it would DROP a constraint that no longer exists and fail every start).
   expect(src).toMatch(/conname='journal_operations_action_v2_check'\)\s*AND NOT EXISTS \(SELECT 1 FROM pg_constraint WHERE conrelid='journal_operations'::regclass AND conname='journal_operations_action_v3_check'\)/);
 });
+
+test('journal_record_prefs DDL is additive and tenant-scoped', () => {
+  const { JOURNAL_PREFS_DDL } = require('./migrations');
+  expect(JOURNAL_PREFS_DDL).toContain('CREATE TABLE IF NOT EXISTS journal_record_prefs');
+  expect(JOURNAL_PREFS_DDL).toContain('PRIMARY KEY (salon_id, yclients_record_id)');
+  expect(JOURNAL_PREFS_DDL).toContain('notify_client BOOLEAN NOT NULL DEFAULT TRUE');
+  expect(JOURNAL_PREFS_DDL).not.toMatch(/DROP|TRUNCATE|DELETE FROM|CREATE INDEX/);
+});
