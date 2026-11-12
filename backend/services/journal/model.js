@@ -58,7 +58,24 @@ function moscowParts(value) {
   const local = new Date(ms + 3 * 3600000).toISOString();
   return { date: local.slice(0, 10), time: local.slice(11, 16), ms };
 }
-function normalizeRecord(r) {
+// YClients colour: «F4A0A0» or «#f4a0a0» — the format of custom_color in
+// upstream answers is not confirmed on dev data, both are accepted.
+function normColor(v) {
+  const m = /^#?([0-9a-f]{6})$/i.exec(String(v ?? '').trim());
+  return m ? '#' + m[1].toLowerCase() : null;
+}
+// record_labels arrive as objects in GET /record, as plain ids in our own
+// overlay (we send ids in PUT). A plain id has no title: the UI resolves it
+// from the salon's label list (GET /day → labels).
+function normalizeLabels(list) {
+  return (Array.isArray(list) ? list : []).map(l => (l && typeof l === 'object')
+    ? { id: Number(l.id), title: String(l.title || ''), color: normColor(l.color) || '' }
+    : { id: Number(l), title: '', color: '' })
+    .filter(l => Number.isSafeInteger(l.id) && l.id > 0);
+}
+const countOf = v => (v === undefined || v === null || v === '' || !Number.isFinite(Number(v))) ? null : Number(v);
+const truthy = v => v === true || v === 1 || v === '1';
+function normalizeRecord(r, opts = {}) {
   const at = moscowParts(r.datetime || r.date);
   return {
     id: Number(r.id), staffId: Number(r.staff_id || r.staff?.id),
@@ -70,6 +87,15 @@ function normalizeRecord(r) {
     paid: !!r.paid_full || Number(r.paid_amount) > 0,
     // YClients colours a came visit orange only when it is paid in full (paid_full=1), yellow otherwise.
     paidFull: Number(r.paid_full) === 1,
+    // Parity fields (12.11.2026).
+    online: truthy(r.online), isNew: truthy(r.client?.is_new),
+    comment: String(r.comment || ''),
+    customColor: normColor(r.custom_color), fontColor: normColor(r.custom_font_color),
+    labels: normalizeLabels(r.record_labels),
+    technicalBreak: Math.max(0, Number(r.technical_break_duration) || 0),
+    visitCounts: { success: countOf(r.client?.success_visits_count), fail: countOf(r.client?.fail_visits_count) },
+    // The phone is for the card only (owner/admin router); the day grid never carries it.
+    ...(opts.withPhone ? { clientPhone: String(r.client?.phone || '') } : {}),
     version: revision(r), editVersion: editRevision(r), servicesVersion: servicesRevision(r),
     sync: r._sync || null,
   };
@@ -158,7 +184,9 @@ function slotsFor({ date, staffId, duration, schedule, records, resourceIds, res
     // Unknown intervals cannot be treated as free time.
     if (!at || !(length > 0)) fail('Не удалось проверить длительность записей. Откройте YClients.', 502);
     const dayStart = Date.parse(date + 'T00:00:00+03:00');
-    return { r, start: (at.ms - dayStart) / 60000, end: (at.ms - dayStart) / 60000 + length };
+    // A technical break after the visit is occupied time too (12.11.2026).
+    const pause = Math.max(0, Number(r.technical_break_duration) || 0) / 60;
+    return { r, start: (at.ms - dayStart) / 60000, end: (at.ms - dayStart) / 60000 + length + pause };
   });
   const free = subtractRanges(workRanges(schedule, date), windows.filter(x => Number(x.r.staff_id || x.r.staff?.id) === staffId));
   const groups = resourceIds.map(id => {
@@ -184,4 +212,4 @@ function slotsFor({ date, staffId, duration, schedule, records, resourceIds, res
   }
   return result;
 }
-module.exports = { JournalError, fail, dateKey, positiveId, nonZeroId, fingerprint, revision, editRevision, servicesRevision, normalizeRecord, recordsForDay, parseDraft, moscowParts, slotsFor, isAdministrator, staffSchedule };
+module.exports = { JournalError, fail, dateKey, positiveId, nonZeroId, fingerprint, revision, editRevision, servicesRevision, normalizeRecord, normColor, normalizeLabels, recordsForDay, parseDraft, moscowParts, slotsFor, isAdministrator, staffSchedule };

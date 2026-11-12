@@ -5,12 +5,14 @@ const yc = require('./yclients');
 const { isAdministrator } = require('./model');
 const logger = require('../../logger').createLogger('JournalReference');
 
-const KINDS = ['staff', 'services', 'resources', 'accounts'];
+const KINDS = ['staff', 'services', 'resources', 'accounts', 'labels'];
 const PATHS = {
   staff: cid => `/staff/${cid}`,
   services: cid => `/company/${cid}/services/`,
   resources: cid => `/resources/${cid}`,
   accounts: cid => `/accounts/${cid}`,
+  // Record labels (colour + title) of the salon; refreshed with the rest every 30 min.
+  labels: cid => `/labels/${cid}`,
 };
 const UPSERT_REF = `INSERT INTO journal_reference_cache(salon_id,kind,payload,fetched_at) VALUES($1,$2,$3,NOW())
   ON CONFLICT (salon_id,kind) DO UPDATE SET payload=EXCLUDED.payload, fetched_at=NOW()`;

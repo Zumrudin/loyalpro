@@ -24,6 +24,7 @@ function live(salon) {
     services: () => yc.list(salon, `/company/${cid}/services/`),
     resources: () => yc.list(salon, `/resources/${cid}`),
     accounts: () => yc.list(salon, `/accounts/${cid}`),
+    labels: () => yc.list(salon, `/labels/${cid}`),
     schedule: (staffId, date) => yc.list(salon, `/schedule/${cid}/${staffId}/${date}/${date}`),
     records: (from, to) => yc.records(salon, from, to),
   };
@@ -43,6 +44,8 @@ function local(salon) {
   return {
     kind: 'local',
     staff: ref('staff'), services: ref('services'), resources: ref('resources'), accounts: ref('accounts'),
+    // Labels are decoration: a cold cache is an empty list, not an error.
+    labels: async () => (await reference.getReference(salon.id, 'labels')) || [],
     async schedule(staffId, date) {
       const cached = await reference.getSchedule(salon.id, staffId, date);
       return cached || fallback.schedule(staffId, date);

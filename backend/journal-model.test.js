@@ -79,3 +79,34 @@ test('creation recalculates editable quote and rejects mismatched totals/service
  expect(m.parseDraft(body,'create').lines[0]).toMatchObject({total:180,gross:200});
  expect(()=>m.parseDraft({...body,lines:[{...body.lines[0],serviceId:71}]},'create')).toThrow();
 });
+
+describe('normalizeRecord: parity fields (12.11.2026)', () => {
+  const full = { ...record, online: true, comment: 'Позвонить', custom_color: 'F4A0A0', custom_font_color: '#FFFFFF',
+    record_labels: [{ id: 3, title: 'VIP', color: '#FF0000', entity: 1 }, 4], technical_break_duration: 900,
+    client: { name: 'Тест', phone: '+79200255591', is_new: 1, success_visits_count: 5, fail_visits_count: 1 } };
+  test('maps online, new client, comment, colours, labels, break and visit counts', () => {
+    expect(m.normalizeRecord(full)).toMatchObject({
+      online: true, isNew: true, comment: 'Позвонить', customColor: '#f4a0a0', fontColor: '#ffffff',
+      labels: [{ id: 3, title: 'VIP', color: '#ff0000' }, { id: 4, title: '', color: '' }],
+      technicalBreak: 900, visitCounts: { success: 5, fail: 1 },
+    });
+  });
+  test('phone only on explicit request (card), never in the day grid', () => {
+    expect(m.normalizeRecord(full)).not.toHaveProperty('clientPhone');
+    expect(m.normalizeRecord(full, { withPhone: true }).clientPhone).toBe('+79200255591');
+  });
+  test('garbage values are neutralised', () => {
+    const out = m.normalizeRecord({ ...record, online: 0, custom_color: 'red', technical_break_duration: -5, record_labels: [{ id: 'x' }, 0, null] });
+    expect(out).toMatchObject({ online: false, isNew: false, customColor: null, fontColor: null, technicalBreak: 0, labels: [], visitCounts: { success: null, fail: null } });
+  });
+  test('normColor and normalizeLabels are exported', () => {
+    expect(m.normColor(' #ABCDEF ')).toBe('#abcdef');
+    expect(m.normColor('#abc')).toBe(null);
+    expect(m.normalizeLabels([{ id: 2, title: 'Новый', color: '00ff00' }])).toEqual([{ id: 2, title: 'Новый', color: '#00ff00' }]);
+  });
+});
+test('technical break of an existing visit occupies the time after it', () => {
+  const slots = m.slotsFor({ ...context, duration: 30, records: [{ ...record, technical_break_duration: 1800 }] });
+  expect(slots).not.toContain('11:00');
+  expect(slots).toContain('11:30');
+});

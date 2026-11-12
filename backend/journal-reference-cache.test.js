@@ -12,16 +12,16 @@ const salon = { id: 1, yclients_company_id: 77 };
 beforeEach(() => { jest.resetAllMocks(); db.query.mockResolvedValue({ rows: [] }); });
 
 describe('refreshReference', () => {
-  test('writes 4 kinds; failure of one does not stop others', async () => {
+  test('writes 5 kinds; failure of one does not stop others', async () => {
     yc.list.mockImplementation(async (s, path) => {
       if (path === '/resources/77') throw new Error('boom');
       return [{ id: 1 }];
     });
     const r = await rc.refreshReference(salon);
-    expect(yc.list.mock.calls.map(c => c[1])).toEqual(['/staff/77', '/company/77/services/', '/resources/77', '/accounts/77']);
-    expect(r).toEqual({ ok: ['staff', 'services', 'accounts'], failed: ['resources'] });
+    expect(yc.list.mock.calls.map(c => c[1])).toEqual(['/staff/77', '/company/77/services/', '/resources/77', '/accounts/77', '/labels/77']);
+    expect(r).toEqual({ ok: ['staff', 'services', 'accounts', 'labels'], failed: ['resources'] });
     const kinds = db.query.mock.calls.map(c => c[1][1]);
-    expect(kinds).toEqual(['staff', 'services', 'accounts']);
+    expect(kinds).toEqual(['staff', 'services', 'accounts', 'labels']);
     expect(db.query.mock.calls[0][1][2]).toBe(JSON.stringify([{ id: 1 }]));
   });
 });

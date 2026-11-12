@@ -19,7 +19,9 @@ async function catalog(salon, src = sources.live(salon)) {
 async function day(salonId, date, src) {
   const salon = await salonFor(salonId);
   if (!src) src = await sources.forSalon(salon);
-  const [staffSource, local, records] = await Promise.all([src.staff(), localCatalog.forJournal(salonId), src.records(shiftDate(date, -1), shiftDate(date, 1))]);
+  const [staffSource, local, records, labels] = await Promise.all([src.staff(), localCatalog.forJournal(salonId),
+    src.records(shiftDate(date, -1), shiftDate(date, 1)),
+    typeof src.labels === 'function' ? src.labels().catch(() => []) : []]);
   const data = { staff: staffSource.filter(s => !s.fired && !m.isAdministrator(s)) };
   // Bounded concurrency avoids a burst against the shared YClients quota;
   // cached schedules are local reads (a cache miss is a single live call).
@@ -37,6 +39,7 @@ async function day(salonId, date, src) {
     date, fetchedAt: new Date().toISOString(),
     staff,
     services: local.services, categories: local.categories, serviceSource: 'internal',
+    labels: m.normalizeLabels(labels),
     records: m.recordsForDay(records, date),
     freshness: await mirror.freshness(salonId),
     unsent: await require('./dispatch').summary(salonId).catch(() => null),
@@ -65,7 +68,7 @@ async function detail(salonId, id) {
     if (!r) m.fail('Запись не найдена.', 404);
     const queuedPay = [row, ...children].some(x => ['queued', 'running'].includes(x.status)
       && (x.steps || []).some(s => s.kind === 'pay' && s.state !== 'done'));
-    const out = { ...m.normalizeRecord(r), comment: String(r.comment || '') };
+    const out = { ...m.normalizeRecord(r, { withPhone: true }), comment: String(r.comment || '') };
     return { ...out, paid: out.paid || queuedPay, paymentSync: queuedPay && [row, ...children].some(x => x.released_at != null && (x.steps || []).some(s => s.kind === 'pay' && s.state !== 'done')) };
   }
   const salon = await salonFor(salonId);
@@ -87,13 +90,13 @@ async function detail(salonId, id) {
       && (x.steps || []).some(s => s.kind === 'pay' && s.state !== 'done'));
     const queuedPay = payRows.length > 0;
     const ledgerPaid = require('./record-edit').hasActivePayments(ledger || []);
-    const out = { ...m.normalizeRecord(r), comment: String(r.comment || '') };
+    const out = { ...m.normalizeRecord(r, { withPhone: true }), comment: String(r.comment || '') };
     // paymentSync = the payment is on its way (released); an unreleased one waits for dispatch.
     return { ...out, paid: out.paid || ledgerPaid || queuedPay, paymentSync: payRows.some(x => x.released_at != null) };
   } else {
     r = await yc.getRecord(salon, id);
   }
-  return { ...m.normalizeRecord(r), comment: String(r.comment || '') };
+  return { ...m.normalizeRecord(r, { withPhone: true }), comment: String(r.comment || '') };
 }
 // `src` defaults to live YClients: the write path (prepare) must verify against
 // the source of truth. Only slots() (a UI read) passes the local source.

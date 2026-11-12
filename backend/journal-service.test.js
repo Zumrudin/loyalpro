@@ -252,3 +252,21 @@ test('removed cash and bonus receipts no longer block status edits', async () =>
  const query=conn.query.mock.calls.find(([sql])=>sql.includes('SELECT action, method'));
  expect(query[1]).toEqual([3,8,30]);
 });
+
+describe('parity fields (12.11.2026)', () => {
+  test('day carries the salon label list, normalised', async () => {
+    const base = yc.list.getMockImplementation();
+    yc.list.mockImplementation(async (s, path) => path === '/labels/30' ? [{ id: 3, title: 'VIP', color: 'FF0000' }] : base(s, path));
+    const out = await service.day(3, '2030-04-01');
+    expect(out.labels).toEqual([{ id: 3, title: 'VIP', color: '#ff0000' }]);
+  });
+  test('day survives a labels failure with an empty list', async () => {
+    const base = yc.list.getMockImplementation();
+    yc.list.mockImplementation(async (s, path) => { if (path === '/labels/30') throw new Error('boom'); return base(s, path); });
+    expect((await service.day(3, '2030-04-01')).labels).toEqual([]);
+  });
+  test('card (detail) carries the client phone', async () => {
+    yc.getRecord.mockResolvedValue({ ...structuredClone(record), client: { id: 5, name: 'Тест', phone: '79200255591' } });
+    expect((await service.detail(3, 8)).clientPhone).toBe('79200255591');
+  });
+});
