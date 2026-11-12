@@ -2,7 +2,8 @@
 jest.mock('./config', () => ({ JWT_SECRET: 'synthetic-test-secret' }));
 jest.mock('./services/journal/payments', () => ({options:jest.fn(),pay:jest.fn(),review:jest.fn(),parse:jest.fn(v=>v)}));
 jest.mock('./services/journal/payments-local', () => ({localPaymentOptions:jest.fn()}));
-jest.mock('./services/journal', () => ({ day: jest.fn(), detail: jest.fn(), slots: jest.fn(), mutate: jest.fn(), pending: jest.fn(), review: jest.fn() }));
+jest.mock('./services/journal', () => ({ day: jest.fn(), week: jest.fn(), detail: jest.fn(), slots: jest.fn(), mutate: jest.fn(), pending: jest.fn(), review: jest.fn() }));
+jest.mock('./services/journal/month', () => ({ month: jest.fn() }));
 jest.mock('./middleware/auth', () => ({
   auth: (req, res, next) => req.__user ? (req.user = req.__user, next()) : res.status(401).json({}),
   requireRole: (...roles) => (req, res, next) => roles.includes(req.user.role) ? next() : res.status(403).json({}),
@@ -73,4 +74,17 @@ test('payment form ?local=1 reads the local loader, accepts queued negative ids'
  expect(payments.options).not.toHaveBeenCalled();
  expect((await call('GET','/payments/-7')).status).toBe(400);
  expect((await call('GET','/payments/0',{query:{local:'1'}})).status).toBe(400);
+});
+
+test('week and month: validated input, tenant from JWT', async () => {
+  const month = require('./services/journal/month');
+  service.week.mockResolvedValue({ days: [] }); month.month.mockResolvedValue({ days: [] });
+  expect((await call('GET', '/week', { query: { date: '2030-04-01', staffId: '5', salonId: 99 } })).status).toBe(200);
+  expect(service.week).toHaveBeenCalledWith(3, '2030-04-01', 5);
+  expect((await call('GET', '/week', { query: { date: '2030-04-01' } })).status).toBe(200);
+  expect(service.week).toHaveBeenLastCalledWith(3, '2030-04-01', null);
+  expect((await call('GET', '/week', { query: { date: 'x' } })).status).toBe(400);
+  expect((await call('GET', '/month', { query: { month: '2030-04' } })).status).toBe(200);
+  expect(month.month).toHaveBeenCalledWith(3, '2030-04');
+  expect((await call('GET', '/week', { user: { role: 'specialist' }, query: { date: '2030-04-01' } })).status).toBe(403);
 });

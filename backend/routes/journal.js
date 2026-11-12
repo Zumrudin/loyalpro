@@ -7,6 +7,7 @@ const payments = require('../services/journal/payments');
 const paymentsLocal = require('../services/journal/payments-local');
 const sessions = require('../services/journal/sessions');
 const dispatch = require('../services/journal/dispatch');
+const month = require('../services/journal/month');
 router.use(auth, requireRole('owner', 'admin'));
 router.use((req, res, next) => { res.set('Cache-Control', 'no-store'); next(); });
 const handle = fn => async (req, res) => {
@@ -45,6 +46,8 @@ router.get('/dispatch/:id', handle(req => dispatch.progress(req.user.salonId, re
 router.post('/sessions/:id/retry', handle(req => sessions.retry(req.user.salonId, m.positiveId(req.params.id))));
 router.post('/sessions/:id/dismiss', handle(req => sessions.dismiss(req.user.salonId, m.positiveId(req.params.id))));
 router.get('/day', handle(req => service.day(req.user.salonId, m.dateKey(req.query.date))));
+router.get('/week', handle(req => service.week(req.user.salonId, m.dateKey(req.query.date), req.query.staffId ? m.positiveId(req.query.staffId) : null)));
+router.get('/month', handle(req => month.month(req.user.salonId, req.query.month)));
 router.get('/records/:id', handle(req => service.detail(req.user.salonId, m.nonZeroId(req.params.id))));
 router.get('/slots', handle(req => {
   const draft = { date: m.dateKey(req.query.date), staffId: m.positiveId(req.query.staffId) };

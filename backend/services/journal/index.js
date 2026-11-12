@@ -17,6 +17,25 @@ async function catalog(salon, src = sources.live(salon)) {
   const [staff, services] = await Promise.all([src.staff(), src.services()]);
   return { staff: staff.filter(s => !s.fired && !m.isAdministrator(s)), services };
 }
+// Schedules of a staff list for one date with bounded concurrency (a burst
+// against the shared YClients quota is avoided; cached schedules are local).
+async function staffForDate(src, list, date) {
+  const staff = new Array(list.length);
+  const width = src.kind === 'local' ? list.length : 3;
+  let next = 0;
+  await Promise.all(Array.from({ length: Math.min(width, list.length) }, async () => {
+    while (next < list.length) {
+      const index = next++, s = list[index];
+      const schedule = await src.schedule(s.id, date);
+      staff[index] = { id: Number(s.id), name: String(s.name || 'Сотрудник'), ...m.staffSchedule(schedule, date) };
+    }
+  }));
+  return staff;
+}
+const weekStart = date => {
+  const dow = new Date(date + 'T12:00:00Z').getUTCDay();
+  return shiftDate(date, -((dow + 6) % 7));
+};
 async function day(salonId, date, src) {
   const salon = await salonFor(salonId);
   if (!src) src = await sources.forSalon(salon);
@@ -24,18 +43,7 @@ async function day(salonId, date, src) {
     src.records(shiftDate(date, -1), shiftDate(date, 1)),
     typeof src.labels === 'function' ? Promise.resolve().then(() => src.labels()).catch(() => []) : []]);
   const data = { staff: staffSource.filter(s => !s.fired && !m.isAdministrator(s)) };
-  // Bounded concurrency avoids a burst against the shared YClients quota;
-  // cached schedules are local reads (a cache miss is a single live call).
-  const staff = new Array(data.staff.length);
-  const width = src.kind === 'local' ? data.staff.length : 3;
-  let next = 0;
-  await Promise.all(Array.from({ length: Math.min(width, data.staff.length) }, async () => {
-    while (next < data.staff.length) {
-      const index = next++, s = data.staff[index];
-      const schedule = await src.schedule(s.id, date);
-      staff[index] = { id: Number(s.id), name: String(s.name || 'Сотрудник'), ...m.staffSchedule(schedule, date) };
-    }
-  }));
+  const staff = await staffForDate(src, data.staff, date);
   return {
     date, fetchedAt: new Date().toISOString(),
     staff,
@@ -46,6 +54,42 @@ async function day(salonId, date, src) {
     unsent: await require('./dispatch').summary(salonId).catch(() => null),
     source: src.kind,
   };
+}
+// Week view (spec 2026-11-12 §3.1): one master x 7 days from Monday, built
+// with the same pieces as the day (staffSchedule + recordsForDay).
+async function week(salonId, date, staffId, src) {
+  const salon = await salonFor(salonId);
+  if (!src) src = await sources.forSalon(salon);
+  const from = weekStart(date);
+  const dates = Array.from({ length: 7 }, (_, i) => shiftDate(from, i));
+  const [staffSource, records, labels] = await Promise.all([src.staff(), src.records(shiftDate(from, -1), shiftDate(from, 7)),
+    typeof src.labels === 'function' ? Promise.resolve().then(() => src.labels()).catch(() => []) : []]);
+  const list = staffSource.filter(s => !s.fired && !m.isAdministrator(s));
+  const allStaff = list.map(s => ({ id: Number(s.id), name: String(s.name || 'Сотрудник') }));
+  let chosen = staffId ? list.find(s => Number(s.id) === Number(staffId)) : null;
+  if (staffId && !chosen) m.fail('Сотрудник недоступен.', 404);
+  const schedules = new Map();
+  const scheduleOf = async (s, d) => {
+    const key = s.id + ':' + d;
+    if (!schedules.has(key)) schedules.set(key, await src.schedule(s.id, d));
+    return schedules.get(key);
+  };
+  // Live source = YClients calls: no 7xN scan for "the first working master".
+  if (!chosen && src.kind === 'local') {
+    outer: for (const s of list) for (const d of dates) if (m.staffSchedule(await scheduleOf(s, d), d).working) { chosen = s; break outer; }
+  }
+  chosen = chosen || list[0] || null;
+  const base = { from, to: dates[6], allStaff, labels: m.normalizeLabels(labels), fetchedAt: new Date().toISOString(),
+    freshness: await mirror.freshness(salonId), source: src.kind };
+  if (!chosen) return { ...base, staff: null, days: dates.map(d => ({ date: d, working: false, workRanges: [], records: [] })) };
+  const id = Number(chosen.id);
+  const days = [];
+  for (const d of dates) {
+    const sched = m.staffSchedule(await scheduleOf(chosen, d), d);
+    days.push({ date: d, working: sched.working, workRanges: sched.workRanges,
+      records: m.recordsForDay(records, d).filter(r => r.staffId === id) });
+  }
+  return { ...base, staff: { id, name: String(chosen.name || 'Сотрудник') }, days };
 }
 async function mirroredRecord(salon, id) {
   const row = await db.oneOrNone('SELECT raw_payload FROM records WHERE salon_id=$1 AND yclients_record_id=$2', [salon.id, id]);
@@ -301,4 +345,4 @@ async function review(salonId, userId, operationId) {
     conn.release(broken);
   }
 }
-module.exports = { day, detail, slots, mutate, prepare, availability, pending, review };
+module.exports = { day, week, weekStart, detail, slots, mutate, prepare, availability, pending, review };

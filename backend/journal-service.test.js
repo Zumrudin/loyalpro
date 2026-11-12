@@ -254,6 +254,27 @@ test('removed cash and bonus receipts no longer block status edits', async () =>
 });
 
 describe('parity fields (12.11.2026)', () => {
+  test('weekStart is the Moscow Monday', () => {
+    expect(service.weekStart('2030-04-03')).toBe('2030-04-01');
+    expect(service.weekStart('2030-04-07')).toBe('2030-04-01');
+    expect(service.weekStart('2030-04-01')).toBe('2030-04-01');
+  });
+  test('week: 7 days of one master built like the day', async () => {
+    yc.records.mockResolvedValue([record]);
+    const out = await service.week(3, '2030-04-03', null);
+    expect(out.from).toBe('2030-04-01'); expect(out.to).toBe('2030-04-07');
+    expect(out.staff).toEqual({ id: 1, name: 'Сотрудник' });
+    expect(out.allStaff).toEqual([{ id: 1, name: 'Сотрудник' }]);
+    expect(out.days.map(d => d.date)).toEqual(['2030-04-01', '2030-04-02', '2030-04-03', '2030-04-04', '2030-04-05', '2030-04-06', '2030-04-07']);
+    expect(out.days[0]).toMatchObject({ working: true, workRanges: [{ start: 540, end: 720 }] });
+    expect(out.days[0].records.map(r => r.id)).toEqual([8]);
+    expect(out.days[1]).toMatchObject({ working: false, records: [] });
+    expect(yc.records).toHaveBeenCalledWith(expect.anything(), '2030-03-31', '2030-04-08');
+    expect(JSON.stringify(out)).not.toMatch(/clientPhone/);
+  });
+  test('week with an unknown staffId is 404', async () => {
+    await expect(service.week(3, '2030-04-03', 99)).rejects.toMatchObject({ status: 404 });
+  });
   test('delete calls DELETE once; an already deleted record is not called again', async () => {
     yc.remove.mockResolvedValue({ recordId: 8 });
     expect(await service.mutate(3, 4, { operationId, action: 'delete', recordId: 8, version: m.revision(record) })).toEqual({ recordId: 8 });
