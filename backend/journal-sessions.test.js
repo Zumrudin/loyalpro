@@ -405,7 +405,7 @@ describe('edit: parity fields (12.11.2026)', () => {
     const out = await s.validate(3, parse({ recordId: 42, edit }));
     expect(out.steps).toEqual([expect.objectContaining({ kind: 'edit',
       params: { comment: 'Позвонить', customColor: '#f4a0a0', labelIds: [3], technicalBreak: 600, notifyClient: false, seanceLength: 75 } })]);
-    expect(out.overlay.patch).toEqual({ comment: 'Позвонить', custom_color: '#f4a0a0', record_labels: [3], technical_break_duration: 600,
+    expect(out.overlay.patch).toEqual({ comment: 'Позвонить', custom_color: 'f4a0a0', record_labels: [3], technical_break_duration: 600,
       seance_length: 4500, notify_client: false });
     expect(index.availability).toHaveBeenCalledWith(expect.anything(),
       expect.objectContaining({ durationOverride: 75, technicalBreak: 600, time: '10:00', staffId: 5 }), expect.anything(), expect.anything());
@@ -413,8 +413,17 @@ describe('edit: parity fields (12.11.2026)', () => {
   test('move together with a longer duration checks the new place with the new length', async () => {
     const out = await s.validate(3, parse({ recordId: 42, move: { date: '2030-04-01', time: '11:00', staffId: 5 }, edit: { seanceLength: 90 } }));
     expect(out.steps.map(x => x.kind)).toEqual(['move', 'edit']);
+    expect(out.steps[0].params).toEqual({ date: '2030-04-01', time: '11:00', staffId: 5, seanceLength: 90 });
     expect(index.availability.mock.calls[0][1]).toMatchObject({ action: 'move', time: '11:00', durationOverride: 90 });
     expect(out.overlay.patch).toMatchObject({ datetime: '2030-04-01T11:00:00+03:00', seance_length: 5400 });
+  });
+  test('a move without a new length keeps the old move params', async () => {
+    const out = await s.validate(3, parse({ recordId: 42, move: { date: '2030-04-01', time: '11:00', staffId: 5 }, edit: { comment: 'x' } }));
+    expect(out.steps[0].params).toEqual({ date: '2030-04-01', time: '11:00', staffId: 5 });
+  });
+  test('a move with a new break carries it in the move step', async () => {
+    const out = await s.validate(3, parse({ recordId: 42, move: { date: '2030-04-01', time: '11:00', staffId: 5 }, edit: { technicalBreak: 600 } }));
+    expect(out.steps[0].params).toEqual({ date: '2030-04-01', time: '11:00', staffId: 5, technicalBreak: 600 });
   });
   test('notifyClient alone is a valid edit and does not touch the visit', async () => {
     const out = await s.validate(3, parse({ recordId: 42, edit: { notifyClient: false } }));

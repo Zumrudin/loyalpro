@@ -52,7 +52,11 @@ function parse(input) {
   }
   if (input.labelIds !== undefined) {
     if (!Array.isArray(input.labelIds) || input.labelIds.length > MAX_LABELS) m.fail('Некорректный список меток.');
-    out.labelIds = [...new Set(input.labelIds.map(m.positiveId))];
+    // Numbers or digit strings only (positiveId would take `true` as 1).
+    out.labelIds = [...new Set(input.labelIds.map(v => {
+      if (typeof v !== 'number' && !(typeof v === 'string' && /^\d+$/.test(v))) m.fail('Некорректная метка.');
+      return m.positiveId(v);
+    }))];
   }
   if (input.technicalBreak !== undefined) {
     const n = input.technicalBreak;
@@ -80,7 +84,8 @@ async function patch(salon, record, input, src, availability, paid = false) {
   if (edit.comment !== undefined) out.comment = edit.comment;
   // YClients re-links the visit to the card found by this phone.
   if (edit.client) out.client = { phone: edit.client.phone, name: edit.client.name };
-  if (edit.customColor !== undefined) out.custom_color = edit.customColor || '';
+  // YClients stores the colour without «#» (ffeb3b); inside LoyalPro it is #rrggbb.
+  if (edit.customColor !== undefined) out.custom_color = edit.customColor ? edit.customColor.slice(1) : '';
   if (edit.labelIds !== undefined) {
     if (edit.labelIds.length) {
       const known = typeof src.labels === 'function' ? await src.labels() : null;

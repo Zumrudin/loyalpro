@@ -90,3 +90,7 @@ test('patch carries parity fields (12.11.2026)', () => {
   expect(m.normalizeRecord(out)).toMatchObject({ comment: 'Позвонить', clientName: 'Новый', customColor: '#f4a0a0',
     labels: [{ id: 3, title: '', color: '' }], technicalBreak: 600, duration: 75 });
 });
+test('colour stored as YClients sends it (no «#») is shown normalised', () => {
+  const [out] = applyOverlay([rec], [row({ yclients_record_id: 8, overlay: { kind: 'patch', patch: { custom_color: 'f4a0a0' } } })], NOW);
+  expect(m.normalizeRecord(out).customColor).toBe('#f4a0a0');
+});

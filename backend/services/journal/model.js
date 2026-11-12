@@ -172,7 +172,8 @@ function parseDraft(body, action) {
 // does not wipe colour, labels and the technical break set in YClients.
 function recordExtras(r) {
   const out = {};
-  if (typeof r.custom_color === 'string' && r.custom_color) out.custom_color = r.custom_color;
+  // YClients keeps the colour without «#»; guard against a mirrored «#rrggbb».
+  if (typeof r.custom_color === 'string' && r.custom_color) out.custom_color = r.custom_color.replace(/^#/, '');
   if (Array.isArray(r.record_labels)) out.record_labels = normalizeLabels(r.record_labels).map(l => l.id);
   if (nonNegSeconds(r.technical_break_duration) > 0) out.technical_break_duration = nonNegSeconds(r.technical_break_duration);
   return out;

@@ -107,7 +107,12 @@ function buildSteps(session) {
   const steps = [];
   if (session.create) steps.push(step('create', { ...session.create }));
   // Move before edit: a status «arrived» set first would make the move refuse.
-  if (session.move) steps.push(step('move', { date: session.move.date, time: session.move.time, staffId: session.move.staffId }));
+  // A new length/break saved with the move is applied by the move itself, so
+  // the worker never moves with the old length first (time could be taken in
+  // between). Absent fields keep the old params byte-for-byte.
+  if (session.move) steps.push(step('move', { date: session.move.date, time: session.move.time, staffId: session.move.staffId,
+    ...(session.edit?.seanceLength !== undefined ? { seanceLength: session.edit.seanceLength } : {}),
+    ...(session.edit?.technicalBreak !== undefined ? { technicalBreak: session.edit.technicalBreak } : {}) }));
   if (session.edit) steps.push(step('edit', session.edit));
   if (session.status) steps.push(step(session.status, {}));
   for (const p of orderedPayments(session)) {

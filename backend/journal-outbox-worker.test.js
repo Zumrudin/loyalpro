@@ -215,6 +215,22 @@ describe('review fixes', () => {
     expect(payments.context).toHaveBeenCalledTimes(2);
   });
 
+  test('move step with a new length/break: the draft carries durationOverride and technicalBreak', async () => {
+    const live = { id: 42, datetime: '2030-04-01T10:00:00+03:00', staff_id: 5, attendance: 0 };
+    yc.getRecord.mockResolvedValue(live);
+    await w.processPackage(pkg([step('move', 1, { date: '2030-04-02', time: '11:00', staffId: 6, seanceLength: 90, technicalBreak: 600 })], { yclients_record_id: 42 }));
+    expect(calls[0][2]).toEqual({ operationId: OP(1), action: 'move', recordId: 42, version: m.revision(live), date: '2030-04-02', time: '11:00', staffId: 6,
+      durationOverride: 90, technicalBreak: 600 });
+  });
+  test('old move package without the new fields stores the same draftJson byte-for-byte', async () => {
+    const live = { id: 42, datetime: '2030-04-01T10:00:00+03:00', staff_id: 5, attendance: 0 };
+    yc.getRecord.mockResolvedValue(live);
+    const st = step('move', 1, { date: '2030-04-02', time: '11:00', staffId: 6 });
+    await w.processPackage(pkg([st], { yclients_record_id: 42 }));
+    const expected = JSON.stringify({ operationId: OP(1), action: 'move', recordId: 42, version: m.revision(live), date: '2030-04-02', time: '11:00', staffId: 6 });
+    expect(JSON.stringify(calls[0][2])).toBe(expected);
+    expect(m.fingerprint(calls[0][2])).toBe(m.fingerprint(JSON.parse(expected)));
+  });
   test('C1: move draft replay after a JSONB round-trip keeps the fingerprint', async () => {
     index.mutate.mockImplementationOnce(async () => { throw Object.assign(new Error('crash'), { code: 'ECONNRESET' }); });
     await w.processPackage(pkg([step('move', 1, { date: '2030-04-02', time: '11:00', staffId: 6 })], { yclients_record_id: 42 }));

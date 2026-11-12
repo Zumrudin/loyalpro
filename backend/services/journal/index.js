@@ -167,6 +167,7 @@ async function prepare(salon, draft) {
       ...(record ? {
         client: record.client, services: record.services, comment: record.comment || '', attendance: record.attendance,
         ...m.recordExtras(record),
+        ...(draft.technicalBreak !== undefined ? { technical_break_duration: draft.technicalBreak } : {}),
       } : {
         client: { name: draft.clientName, phone: draft.clientPhone },
         services: available.servicePayload || draft.serviceIds.map(id => ({ id })), comment: draft.comment,

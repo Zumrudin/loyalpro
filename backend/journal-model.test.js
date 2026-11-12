@@ -136,3 +136,13 @@ test('recordExtras carries colour, label ids and break back into a full PUT', ()
     .toEqual({ custom_color: 'f4a0a0', record_labels: [3, 4], technical_break_duration: 600 });
   expect(m.recordExtras({})).toEqual({});
 });
+test('recordExtras strips a mirrored «#» from the colour (YClients keeps ffeb3b)', () => {
+  expect(m.recordExtras({ custom_color: '#ffeb3b' })).toEqual({ custom_color: 'ffeb3b' });
+});
+test('public move/create drafts never take durationOverride or technicalBreak from outside', () => {
+  const out = m.parseDraft({ operationId, recordId: 8, version: 'a'.repeat(64), date: '2030-04-01', time: '10:00', staffId: 1,
+    durationOverride: 600, technicalBreak: 3600, breakMinutes: 60 }, 'move');
+  expect(out).not.toHaveProperty('durationOverride');
+  expect(out).not.toHaveProperty('technicalBreak');
+  expect(out).not.toHaveProperty('breakMinutes');
+});

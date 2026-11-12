@@ -157,7 +157,9 @@ async function runStep(ctx, step) {
       const { servicesVersion: _sv, version: _v, ...edit } = p;
       draft = { operationId: step.opId, action: step.kind, recordId, version: m.revision(live),
         ...(step.kind === 'edit' ? { edit } : {}),
-        ...(step.kind === 'move' ? { date: p.date, time: p.time, staffId: p.staffId } : {}) };
+        ...(step.kind === 'move' ? { date: p.date, time: p.time, staffId: p.staffId,
+          ...(p.seanceLength !== undefined ? { durationOverride: p.seanceLength } : {}),
+          ...(p.technicalBreak !== undefined ? { technicalBreak: p.technicalBreak } : {}) } : {}) };
       await storeDraft(ctx, step, draft);
     }
     const r = await index.mutate(salonId, userId, draft);

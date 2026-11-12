@@ -283,18 +283,29 @@ describe('parity fields (12.11.2026)', () => {
     expect((await service.day(3, '2030-04-01', src)).labels).toEqual([]);
   });
   test('edit sends the new comment and keeps colour, labels and break of the record', async () => {
-    const rec = { ...record, custom_color: '#f4a0a0', record_labels: [{ id: 3, title: 'VIP' }], technical_break_duration: 600 };
+    const rec = { ...record, custom_color: 'f4a0a0', record_labels: [{ id: 3, title: 'VIP' }], technical_break_duration: 600 };
     yc.getRecord.mockResolvedValue(structuredClone(rec));
     await service.mutate(3, 4, { operationId, action: 'edit', recordId: 8, version: m.revision(rec), edit: { comment: 'Новый' } });
-    expect(yc.write.mock.calls[0][2]).toMatchObject({ comment: 'Новый', custom_color: '#f4a0a0', record_labels: [3], technical_break_duration: 600 });
+    expect(yc.write.mock.calls[0][2]).toMatchObject({ comment: 'Новый', custom_color: 'f4a0a0', record_labels: [3], technical_break_duration: 600 });
   });
   test('move and confirm keep colour and labels', async () => {
-    const rec = { ...record, custom_color: '#f4a0a0', record_labels: [{ id: 3 }] };
+    const rec = { ...record, custom_color: '#F4A0A0', record_labels: [{ id: 3 }] };
     yc.getRecord.mockResolvedValue(structuredClone(rec));
     await service.mutate(3, 4, { operationId, action: 'move', recordId: 8, version: m.revision(rec), date: '2030-04-01', time: '11:00', staffId: 1 });
     await service.mutate(3, 4, { operationId: '22345678-1234-4123-8123-123456789012', action: 'confirm', recordId: 8, version: m.revision(rec) });
-    expect(yc.write.mock.calls[0][2]).toMatchObject({ custom_color: '#f4a0a0', record_labels: [3] });
-    expect(yc.write.mock.calls[1][2]).toMatchObject({ custom_color: '#f4a0a0', record_labels: [3], attendance: 2 });
+    // A mirrored «#» is stripped on the way to YClients.
+    expect(yc.write.mock.calls[0][2]).toMatchObject({ custom_color: 'F4A0A0', record_labels: [3] });
+    expect(yc.write.mock.calls[1][2]).toMatchObject({ custom_color: 'F4A0A0', record_labels: [3], attendance: 2 });
+  });
+  test('move with a new length and break: the move body carries them', async () => {
+    yc.getRecord.mockResolvedValue(structuredClone(record));
+    await service.mutate(3, 4, { operationId, action: 'move', recordId: 8, version: m.revision(record), date: '2030-04-01', time: '10:00', staffId: 1,
+      durationOverride: 90, technicalBreak: 1800 });
+    expect(yc.write.mock.calls[0][2]).toMatchObject({ datetime: '2030-04-01T10:00:00+03:00', seance_length: 5400, technical_break_duration: 1800 });
+    yc.write.mockClear();
+    await expect(service.mutate(3, 4, { operationId: '32345678-1234-4123-8123-123456789012', action: 'move', recordId: 8, version: m.revision(record),
+      date: '2030-04-01', time: '10:35', staffId: 1, durationOverride: 90 })).rejects.toMatchObject({ code: 'slot_taken' });
+    expect(yc.write).not.toHaveBeenCalled();
   });
   test('card (detail) carries the client phone', async () => {
     yc.getRecord.mockResolvedValue({ ...structuredClone(record), client: { id: 5, name: 'Тест', phone: '79200255591' } });

@@ -108,6 +108,13 @@ describe('parity fields (12.11.2026)', () => {
     await expect(patch({}, arrived, { seanceLength: 90 }, src, jest.fn())).rejects.toMatchObject({ status: 409 });
     await expect(patch({}, record, { client: { name: 'A', phone: '79200255591' }, attendance: 1 }, src, jest.fn())).rejects.toMatchObject({ status: 409 });
   });
+  test('colour goes to YClients without «#»', async () => {
+    await expect(patch({}, record, { customColor: '#F4A0A0' }, src, jest.fn())).resolves.toEqual({ custom_color: 'f4a0a0' });
+  });
+  test('label ids only as numbers or digit strings', () => {
+    for (const bad of [[true], [' 3'], ['3x'], [null], [{ id: 3 }]]) expect(() => parse({ labelIds: bad })).toThrow();
+    expect(parse({ labelIds: ['3', 4] })).toEqual({ labelIds: [3, 4] });
+  });
   test('unknown label or cold label cache is refused', async () => {
     await expect(patch({}, record, { labelIds: [9] }, labelsSrc, jest.fn())).rejects.toThrow('Метка не найдена');
     await expect(patch({}, record, { labelIds: [3] }, src, jest.fn())).rejects.toMatchObject({ status: 503 });
