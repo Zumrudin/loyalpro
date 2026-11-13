@@ -209,3 +209,21 @@ describe('processRecordEvent: technical_break_duration не затирается
     expect(JSON.parse(upd[1][1]).technical_break_duration).toBe(600);
   });
 });
+
+describe('processRecordEvent: связь записи с клиентом при UPDATE (ревью 13.11.2026)', () => {
+  test('UPDATE пишет yclients_client_id из payload и client_id найденного клиента', async () => {
+    wireDb();
+    db.oneOrNone.mockImplementation((sql) => {
+      if (sql.includes('FROM clients')) return Promise.resolve(CLIENT_LINKED);
+      if (sql.includes('FROM records WHERE')) return Promise.resolve({ id: 55, client_id: null, raw_payload: {} });
+      return Promise.resolve(null);
+    });
+    const p = makePayload(); p.data.paid_full = 0;
+    await processRecordEvent(p, SALON, SETTINGS);
+    const [sql, params] = db.query.mock.calls.find(c => /UPDATE records SET status/.test(c[0]));
+    expect(sql).toMatch(/client_id=COALESCE\(\$\d+, client_id\)/);
+    expect(sql).toMatch(/yclients_client_id=\$\d+/);
+    expect(params).toContain(3777);
+    expect(params).toContain(352092609);
+  });
+});

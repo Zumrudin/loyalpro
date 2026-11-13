@@ -214,6 +214,25 @@ function keepTechnicalBreak(incoming, storedBreak) {
   return { ...incoming, technical_break_duration: kept };
 }
 
+// Our client for a YClients record when the caller did not resolve one: by
+// yclients_client_id, then by phone (last 10 digits, exactly one match). null
+// = unknown — the UPDATE then keeps the stored client_id (review 13.11.2026:
+// the journal worker may store a record before its client exists; a client
+// changed in the journal must move the link to the new client).
+async function resolveRecordClientId(salonId, ycClient) {
+  if (!ycClient) return null;
+  if (ycClient.id != null) {
+    const c = await db.oneOrNone('SELECT id FROM clients WHERE salon_id=$1 AND yclients_client_id=$2', [salonId, ycClient.id]);
+    if (c && c.id) return c.id;
+  }
+  const digits = String(ycClient.phone || '').replace(/\D/g, '');
+  if (digits.length < 10) return null;
+  const rows = await db.any(
+    "SELECT id FROM clients WHERE salon_id=$1 AND right(regexp_replace(COALESCE(phone,''),'\\D','','g'),10)=$2 LIMIT 2",
+    [salonId, digits.slice(-10)]);
+  return Array.isArray(rows) && rows.length === 1 ? rows[0].id : null;
+}
+
 async function upsertRecordFromYc(salonId, ycr, dbClientId, source) {
   if (!ycr || ycr.id == null) return null;
   const status  = getRecordStatus(ycr);
@@ -230,13 +249,15 @@ async function upsertRecordFromYc(salonId, ycr, dbClientId, source) {
     ycr = keepTechnicalBreak(ycr, prevBreak);
   }
   if (prev) {
+    const clientId = dbClientId || await resolveRecordClientId(salonId, ycr.client);
     await db.query(
       `UPDATE records SET status=$1, raw_payload=$2, amount=$3,
        visit_datetime=$4, visit_date=$5,
-       services=$6, staff=$7, client_id=COALESCE($8, client_id), updated_at=NOW() WHERE id=$9`,
+       services=$6, staff=$7, client_id=COALESCE($8, client_id),
+       yclients_client_id=COALESCE($10, yclients_client_id), updated_at=NOW() WHERE id=$9`,
       [status, JSON.stringify(ycr), recCost, ycr.date || null, visitDate,
        JSON.stringify(ycr.services || []), JSON.stringify(ycr.staff || []),
-       dbClientId || null, prev.id]
+       clientId || null, prev.id, ycr.client?.id ?? null]
     );
     return { id: prev.id, status, inserted: false, prev };
   }
@@ -685,11 +706,12 @@ async function processRecordEvent(payload, salon, settings) {
     await db.query(
       `UPDATE records SET status=$1, raw_payload=$2, amount=$3,
        visit_date=$4, visit_datetime=$5,
-       services=$6, staff=$7, updated_at=NOW() WHERE id=$8`,
+       services=$6, staff=$7, client_id=COALESCE($9, client_id),
+       yclients_client_id=$10, updated_at=NOW() WHERE id=$8`,
       [recStatus, JSON.stringify(keepTechnicalBreak(data, record.raw_payload?.technical_break_duration)), getRecordCost(data),
        String(data.date || '').split(' ')[0] || null, data.date || null,
        JSON.stringify(data.services || []), JSON.stringify(data.staff || []),
-       record.id]
+       record.id, client?.id || null, clientYcId]
     );
   }
 
