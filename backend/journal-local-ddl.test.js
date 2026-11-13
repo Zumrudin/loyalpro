@@ -33,3 +33,10 @@ test('journal_record_prefs DDL is additive and tenant-scoped', () => {
   expect(JOURNAL_PREFS_DDL).toContain('notify_client BOOLEAN NOT NULL DEFAULT TRUE');
   expect(JOURNAL_PREFS_DDL).not.toMatch(/DROP|TRUNCATE|DELETE FROM|CREATE INDEX/);
 });
+
+test('webhook_logs history index is additive (IF NOT EXISTS) and partial on record events', () => {
+  const { JOURNAL_HISTORY_INDEX_DDL } = require('./migrations');
+  expect(JOURNAL_HISTORY_INDEX_DDL).toContain('CREATE INDEX IF NOT EXISTS idx_webhook_logs_record ON webhook_logs (salon_id, resource_id, created_at)');
+  expect(JOURNAL_HISTORY_INDEX_DDL).toContain("WHERE event_type='record'");
+  expect(JOURNAL_HISTORY_INDEX_DDL).not.toMatch(/DROP|TRUNCATE|DELETE FROM|ALTER/);
+});

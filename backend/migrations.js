@@ -26,6 +26,7 @@ async function runMigrations(client) {
   await client.query(JOURNAL_FINANCE_DDL);
   await client.query(JOURNAL_LOCAL_DDL);
   await client.query(JOURNAL_PREFS_DDL);
+  await client.query(JOURNAL_HISTORY_INDEX_DDL);
   // Unified money/bonus ledger (12.11.2026): additive, written only by services/finance-ops.js.
   await client.query(FINANCE_OPS_DDL);
 
@@ -2807,6 +2808,11 @@ CREATE TABLE IF NOT EXISTS journal_record_prefs (
  PRIMARY KEY (salon_id, yclients_record_id)
 );
 `;
+// Journal record history (12.11.2026) reads record webhooks by salon+record;
+// without this index it scanned every webhook of the salon (review 13.11.2026).
+const JOURNAL_HISTORY_INDEX_DDL = `
+CREATE INDEX IF NOT EXISTS idx_webhook_logs_record ON webhook_logs (salon_id, resource_id, created_at) WHERE event_type='record';
+`;
 const FINANCE_OPS_DDL = `
 CREATE TABLE IF NOT EXISTS finance_operations (
  id BIGSERIAL PRIMARY KEY,
@@ -2839,4 +2845,4 @@ CREATE INDEX IF NOT EXISTS finance_ops_yc_op ON finance_operations(salon_id,ycli
 CREATE UNIQUE INDEX IF NOT EXISTS finance_ops_opening_uq ON finance_operations(salon_id,client_id) WHERE kind='bonus_opening';
 CREATE INDEX IF NOT EXISTS finance_ops_bonus_client ON finance_operations(client_id,status) WHERE method='bonus';
 `;
-module.exports = { runMigrations, FINANCE_OPS_DDL, EDOCS_BOARD_DDL, JOURNAL_DDL, SERVICE_CATALOG_DDL, JOURNAL_FINANCE_DDL, JOURNAL_LOCAL_DDL, JOURNAL_PREFS_DDL };
+module.exports = { runMigrations, FINANCE_OPS_DDL, EDOCS_BOARD_DDL, JOURNAL_DDL, SERVICE_CATALOG_DDL, JOURNAL_FINANCE_DDL, JOURNAL_LOCAL_DDL, JOURNAL_PREFS_DDL, JOURNAL_HISTORY_INDEX_DDL };
