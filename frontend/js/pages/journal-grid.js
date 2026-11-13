@@ -14,9 +14,12 @@ function jrCellState(staff, minute, date, records, now = Date.now()) {
   return 'free';
 }
 function jrGridCreate(staffId, time, date) {
-  const staff = jrStaffList().find(s => s.id === staffId);
-  if (!staff || !journal.data || jrCellState(staff, jrMinutes(time), journal.data.date, journal.data.records) !== 'free') return;
-  jrForm(null, { staffId, time, date: journal.data.date });
+  if (!journal.data) return;
+  const day = journal.view === 'week' && journal.week ? journal.week.days.find(d => d.date === date) : null;
+  const staff = day ? { id: journal.week.staff.id, workRanges: day.workRanges || [] } : jrStaffList().find(s => s.id === staffId);
+  const when = day ? day.date : journal.data.date;
+  if (!staff || jrCellState(staff, jrMinutes(time), when, day ? day.records : journal.data.records) !== 'free') return;
+  jrForm(null, { staffId, time, date: when });
 }
 function jrLayout(records) {
   // Overlaps occupy separate lanes; neither appointment covers the other.
@@ -107,8 +110,13 @@ function jrBindGrid(grid) {
 }
 function jrRender() {
   if (!journal.data) return;
+  if (journal.view === 'week' && journal.week) return jrRenderWeek();
   const filter = jrEl('jrStaffFilter').value;
-  const staff = jrStaffList().filter(s => !filter || String(s.id) === filter);
+  let staff = jrStaffList().filter(s => !filter || String(s.id) === filter);
+  // Phone: one master at a time, switched by chips (spec 3.1).
+  const mobile = jrIsMobile();
+  if (mobile && staff.length > 1) staff = staff.slice(0, 1);
+  jrRenderChips(mobile, staff[0]?.id);
   const query = jrEl('jrSearch').value.trim().toLowerCase();
   const allRecords = journal.data.records;
   const records = allRecords.filter(r => staff.some(s => s.id === r.staffId) && (!query || [r.clientName, ...r.services.map(s => s.title)].join(' ').toLowerCase().includes(query)));
@@ -120,4 +128,64 @@ function jrRender() {
   grid.innerHTML = `<div class="jr-calendar" data-start="${start}" style="--jr-columns:${staff.length};--jr-height:${height}px"><div class="jr-corner">Время</div>${staff.map(s => `<div class="jr-heading">${jrEscape(s.name)}<small>${s.working ? (s.workRanges || []).map(r => jrTimeLabel(r.start) + '–' + jrTimeLabel(r.end)).join(', ') || 'Рабочий день' : 'Выходной'} · ${records.filter(r => r.staffId === s.id).length} записей</small></div>`).join('')}<div class="jr-hours">${jrHourLabels(start, end)}</div>${staff.map(s => jrColumnHtml(s, journal.data.date, records.filter(r => r.staffId === s.id), allRecords, start, end, now)).join('')}</div>`;
   jrBindGrid(grid);
   if (!records.length && query) grid.insertAdjacentHTML('afterbegin', '<p class="jr-empty">Записей по запросу не найдено. Занятые интервалы остаются недоступны.</p>');
+}
+const JR_WEEKDAYS = ['пн', 'вт', 'ср', 'чт', 'пт', 'сб', 'вс'];
+function jrRenderWeek() {
+  const w = journal.week, grid = jrEl('jrGrid');
+  jrRenderChips(false);
+  if (!w?.staff) { grid.innerHTML = '<p class="jr-empty">Специалистов пока нет.</p>'; return; }
+  const query = jrEl('jrSearch').value.trim().toLowerCase();
+  const match = r => !query || [r.clientName, ...(r.services || []).map(s => s.title)].join(' ').toLowerCase().includes(query);
+  const { start, end } = jrBounds(w.days.flatMap(d => d.records), w.days.flatMap(d => d.workRanges || []));
+  const now = Date.now();
+  const column = d => ({ id: w.staff.id, name: w.staff.name, workRanges: d.workRanges || [] });
+  grid.innerHTML = `<div class="jr-calendar jr-week" data-start="${start}" style="--jr-columns:7;--jr-height:${(end - start) * JR_PX_PER_MIN}px"><div class="jr-corner">${jrEscape(w.staff.name)}</div>${w.days.map((d, i) => `<div class="jr-heading${d.date === journal.data?.date ? ' is-selected' : ''}">${JR_WEEKDAYS[i]} ${d.date.slice(8, 10)}.${d.date.slice(5, 7)}<small>${d.working ? (d.workRanges || []).map(r => jrTimeLabel(r.start) + '–' + jrTimeLabel(r.end)).join(', ') || 'Рабочий день' : 'Выходной'} · ${d.records.length} записей</small></div>`).join('')}<div class="jr-hours">${jrHourLabels(start, end)}</div>${w.days.map(d => jrColumnHtml(column(d), d.date, d.records.filter(match), d.records, start, end, now)).join('')}</div>`;
+  jrBindGrid(grid);
+}
+function jrRenderChips(mobile, currentId) {
+  const box = jrEl('jrStaffChips');
+  if (!box) return;
+  box.hidden = !mobile;
+  if (!mobile) { box.innerHTML = ''; return; }
+  box.innerHTML = jrStaffList().map(s => `<button type="button" class="jr-chip${s.id === currentId ? ' is-active' : ''}" data-chip="${s.id}" aria-pressed="${s.id === currentId}">${jrEscape(s.name)}</button>`).join('');
+  box.querySelectorAll('[data-chip]').forEach(b => { b.onclick = () => { jrEl('jrStaffFilter').value = b.dataset.chip; jrRender(); }; });
+}
+// Month calendar with day load (spec 3.1): Monday first, density 0-3 from the server (null = no schedule data).
+function jrMonthCells(month, days) {
+  const first = new Date(month + '-01T12:00:00Z');
+  const lead = (first.getUTCDay() + 6) % 7;
+  const count = new Date(Date.UTC(first.getUTCFullYear(), first.getUTCMonth() + 1, 0)).getUTCDate();
+  const byDate = new Map((days || []).map(d => [d.date, d]));
+  const cells = Array.from({ length: lead }, () => null);
+  for (let i = 1; i <= count; i++) {
+    const date = `${month}-${String(i).padStart(2, '0')}`, d = byDate.get(date);
+    cells.push({ date, day: i, records: Number(d?.records) || 0, density: d?.density == null ? null : Number(d.density) || 0 });
+  }
+  return cells;
+}
+function jrMonthAdd(month, n) { const d = new Date(month + '-01T12:00:00Z'); d.setUTCMonth(d.getUTCMonth() + n); return d.toISOString().slice(0, 7); }
+async function jrMonthPicker(month) {
+  const box = jrEl('jrMonth');
+  month = month || (jrEl('jrDate').value || jrToday()).slice(0, 7);
+  const request = journal.monthRequest = (journal.monthRequest || 0) + 1;
+  box.hidden = false;
+  box.innerHTML = '<p class="jr-hint">Загрузка…</p>';
+  let data;
+  try { data = await jrApi('month?' + new URLSearchParams({ month })); }
+  catch (e) { if (request === journal.monthRequest) box.innerHTML = `<p class="jr-hint">${jrEscape(e.message)}</p><button type="button" class="btn btn-sec" data-month-close>Закрыть</button>`; return; }
+  if (request !== journal.monthRequest) return;
+  const title = new Date(month + '-01T12:00:00Z').toLocaleDateString('ru', { month: 'long', year: 'numeric', timeZone: 'UTC' });
+  const selected = jrEl('jrDate').value;
+  box.innerHTML = `<div class="jr-month-head"><button type="button" class="btn btn-sec" data-month-shift="-1" aria-label="Предыдущий месяц">←</button><strong>${jrEscape(title)}</strong><button type="button" class="btn btn-sec" data-month-shift="1" aria-label="Следующий месяц">→</button><button type="button" class="btn btn-sec" data-month-close aria-label="Закрыть календарь">✕</button></div><div class="jr-month-grid">${JR_WEEKDAYS.map(d => `<span class="jr-month-wd">${d}</span>`).join('')}${jrMonthCells(month, data.days).map(c => c ? `<button type="button" class="jr-month-day${c.date === selected ? ' is-current' : ''}" data-month-date="${c.date}" title="Записей: ${c.records}"><span>${c.day}</span>${c.density == null ? '<i class="jr-density jr-density-none" aria-hidden="true"></i>' : `<i class="jr-density jr-density-${c.density}" aria-hidden="true">${'•'.repeat(c.density)}</i>`}</button>` : '<span></span>').join('')}</div>`;
+  box.querySelectorAll('[data-month-date]').forEach(b => { b.onclick = () => { jrEl('jrDate').value = b.dataset.monthDate; box.hidden = true; loadJournal(); }; });
+  box.querySelectorAll('[data-month-shift]').forEach(b => { b.onclick = () => jrMonthPicker(jrMonthAdd(month, Number(b.dataset.monthShift))); });
+  box.querySelectorAll('[data-month-close]').forEach(b => { b.onclick = () => { box.hidden = true; }; });
+}
+// Crossing the 700px threshold re-lays the grid (one master <-> all masters).
+if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+  let jrResizeTimer = null;
+  window.addEventListener('resize', () => {
+    clearTimeout(jrResizeTimer);
+    jrResizeTimer = setTimeout(() => { if (document.body?.dataset?.page === 'journal') { if (jrIsMobile()) journal.view = 'day'; jrRender(); } }, 200);
+  });
 }

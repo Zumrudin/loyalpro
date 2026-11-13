@@ -222,13 +222,40 @@ button.jr-service-line:hover,button.jr-service-line:focus-visible{border-color:v
 .jr-label-dot{display:inline-block;width:8px;height:8px;border-radius:50%;border:1px solid rgba(0,0,0,.25);flex:0 0 8px}
 .jr-break-band{position:absolute;z-index:1;border:1px dashed var(--t3);border-radius:4px;background:repeating-linear-gradient(135deg,var(--bg) 0,var(--bg) 4px,var(--card) 4px,var(--card) 8px);font-size:10px;line-height:1;color:var(--t2);text-align:center;overflow:hidden;pointer-events:none}
 @media print{
-  .topbar,.mnav-drawer,.jr-toolbar,#jrReview,#jrState,#jrStaffChips,#jrMonth{display:none!important}
+  body[data-page="journal"] .topbar,body[data-page="journal"] .mnav-drawer,.jr-toolbar,#jrReview,#jrState,#jrStaffChips,#jrMonth{display:none!important}
   .jr-scroll{max-height:none;overflow:visible;border:0}
   .jr-calendar{min-width:0;grid-template-columns:44px repeat(var(--jr-columns),minmax(0,1fr))}
   .jr-heading,.jr-corner{position:static}
   .jr-hours{position:relative}
-  #app{display:block!important;height:auto!important;overflow:visible!important}
-  #app::before,#app::after{display:none}
-  .content{overflow:visible;padding:0}
+  body[data-page="journal"] #app{display:block!important;height:auto!important;overflow:visible!important}
+  body[data-page="journal"] #app::before,body[data-page="journal"] #app::after{display:none}
+  body[data-page="journal"] .content{overflow:visible;padding:0}
   .jr-visit,.jr-break-band,.jr-cell-break,.jr-label-dot{print-color-adjust:exact;-webkit-print-color-adjust:exact}
+}
+
+/* Week view, month calendar, phone day (13.11.2026). 700px = JR_MOBILE_MAX in journal.js. */
+.jr-view-switch{display:inline-flex}
+.jr-view-switch .btn{border-radius:0}
+.jr-view-switch .btn:first-child{border-radius:8px 0 0 8px}
+.jr-view-switch .btn:last-child{border-radius:0 8px 8px 0}
+.jr-view-switch .btn.is-active{background:var(--as);color:var(--a);border-color:var(--a)}
+.jr-week .jr-heading.is-selected{color:var(--a)}
+.jr-month{position:relative;z-index:6;max-width:340px;margin:0 0 12px;padding:12px;border:1px solid var(--bd);border-radius:12px;background:var(--card);box-shadow:0 8px 24px rgba(0,0,0,.12)}
+.jr-month[hidden]{display:none}
+.jr-month-head{display:flex;align-items:center;gap:6px;margin-bottom:8px}
+.jr-month-head strong{flex:1;text-align:center;text-transform:capitalize}
+.jr-month-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:4px}
+.jr-month-wd{font-size:11px;color:var(--t3);text-align:center}
+.jr-month-day{display:flex;flex-direction:column;align-items:center;gap:2px;padding:6px 0;border:1px solid var(--bd);border-radius:8px;background:var(--card);color:inherit;font:inherit;font-size:13px;cursor:pointer}
+.jr-month-day.is-current{border-color:var(--a);color:var(--a);font-weight:600}
+.jr-density{font-style:normal;font-size:10px;line-height:1;min-height:10px;color:var(--a)}
+.jr-density-3{color:var(--danger,#a64635)}
+.jr-staff-chips[hidden]{display:none}
+@media (max-width:700px){
+  #jrViewWeek{display:none}
+  .jr-staff-chips{display:flex;gap:6px;overflow-x:auto;padding:0 0 10px}
+  .jr-chip{flex:0 0 auto;padding:6px 12px;border:1px solid var(--bd);border-radius:16px;background:var(--card);color:inherit;font:inherit;font-size:13px}
+  .jr-chip.is-active{border-color:var(--a);background:var(--as);color:var(--a)}
+  .jr-calendar{grid-template-columns:46px minmax(0,1fr);min-width:0}
+  .jr-toolbar input,.jr-toolbar select{max-width:none}
 }

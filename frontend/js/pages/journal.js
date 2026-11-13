@@ -1,5 +1,8 @@
 // Staff journal. Upstream data is escaped; no patient data is stored in browser storage.
-const journal = { data: null, request: 0, modalRequest: 0, slotRequest: 0, busy: false, draft: null, slots: [], preferredTime: null };
+const journal = { data: null, week: null, view: 'day', request: 0, modalRequest: 0, slotRequest: 0, busy: false, draft: null, slots: [], preferredTime: null };
+// Phone layout threshold: the same number is in journal.css (@media (max-width:700px)) — change both together.
+const JR_MOBILE_MAX = 700;
+const jrIsMobile = () => typeof window !== 'undefined' && typeof window.matchMedia === 'function' && window.matchMedia(`(max-width: ${JR_MOBILE_MAX}px)`).matches;
 const jrEl = id => document.getElementById(id);
 const jrEscape = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const jrToday = () => new Date(Date.now() + 3 * 3600000).toISOString().slice(0, 10);
@@ -37,8 +40,15 @@ async function loadJournal(opts = {}) {
     journal.data = null;
   }
   try {
-    const data = await jrApi('day?' + new URLSearchParams({ date }));
+    // Week = one master x 7 days; the day is still loaded: forms need its services/staff.
+    if (jrIsMobile()) journal.view = 'day';
+    const staffId = jrEl('jrStaffFilter').value;
+    const [data, week] = await Promise.all([
+      jrApi('day?' + new URLSearchParams({ date })),
+      journal.view === 'week' ? jrApi('week?' + new URLSearchParams({ date, ...(staffId ? { staffId } : {}) })) : Promise.resolve(null),
+    ]);
     if (request !== journal.request) return;
+    journal.week = week;
     const grid = jrEl('jrGrid'), scroll = [grid.scrollTop, grid.scrollLeft];
     journal.data = data;
     jrUpdateStaffFilter();
@@ -82,8 +92,23 @@ function jrUpdateStaffFilter() {
   select.value = staff.some(s => String(s.id) === prev) ? prev : '';
 }
 function jrShift(days) {
+  if (journal.view === 'week') days *= 7;
   const d = new Date((jrEl('jrDate').value || jrToday()) + 'T12:00:00Z');
   d.setUTCDate(d.getUTCDate() + days); jrEl('jrDate').value = d.toISOString().slice(0, 10); loadJournal();
+}
+function jrSetView(view) {
+  journal.view = view === 'week' && !jrIsMobile() ? 'week' : 'day';
+  for (const [id, v] of [['jrViewDay', 'day'], ['jrViewWeek', 'week']]) {
+    const b = jrEl(id);
+    b.classList?.toggle('is-active', journal.view === v);
+    b.setAttribute?.('aria-pressed', String(journal.view === v));
+  }
+  loadJournal();
+}
+// In the week the master is part of the request; in the day the filter is local.
+function jrStaffChanged() {
+  if (journal.view === 'week') loadJournal({ silent: true });
+  else jrRender();
 }
 // Shared appointment-window components. Placeholder controls never issue API calls.
 function jrIcon(name) {

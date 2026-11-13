@@ -22,7 +22,7 @@
 <script src="js/core/theme.js?v=2026-11-08p"></script>
 <script src="js/core/auth.js?v=2026-06-02a"></script>
 <script src="js/core/nav.js?v=2026-11-08catalog-2026-11-08journal"></script>
-<link rel="stylesheet" href="css/journal.css?v=2026-11-13print">
+<link rel="stylesheet" href="css/journal.css?v=t10-2026-11-13">
 <link rel="stylesheet" href="css/base.css?v=2026-08-10-mobile">
 <link rel="stylesheet" href="css/features.css?v=2026-11-08p">
 <link rel="stylesheet" href="css/ivory-brass.css?v=2026-11-08p">
@@ -437,10 +437,12 @@
       <div class="jr-toolbar">
         <button class="btn btn-sec" onclick="jrShift(-1)" aria-label="Предыдущий день">←</button>
         <input id="jrDate" type="date" aria-label="Дата журнала" onchange="loadJournal()">
+        <button class="btn btn-sec" id="jrMonthBtn" onclick="jrMonthPicker()" aria-label="Календарь месяца" title="Календарь месяца">📅</button>
         <button class="btn btn-sec" onclick="jrShift(1)" aria-label="Следующий день">→</button>
         <button class="btn btn-sec" onclick="jrEl('jrDate').value=jrToday();loadJournal()">Сегодня</button>
+        <span class="jr-view-switch" role="group" aria-label="Вид журнала"><button class="btn btn-sec is-active" id="jrViewDay" aria-pressed="true" onclick="jrSetView('day')">День</button><button class="btn btn-sec" id="jrViewWeek" aria-pressed="false" onclick="jrSetView('week')">Неделя</button></span>
         <label class="jr-working-filter"><input id="jrWorkingOnly" type="checkbox" checked onchange="jrUpdateStaffFilter();jrRender()"> Только работающие</label>
-        <select id="jrStaffFilter" aria-label="Сотрудник" onchange="jrRender()"><option value="">Все сотрудники</option></select>
+        <select id="jrStaffFilter" aria-label="Сотрудник" onchange="jrStaffChanged()"><option value="">Все сотрудники</option></select>
         <input id="jrSearch" type="search" placeholder="Клиент или услуга" aria-label="Поиск в журнале" oninput="jrRender()">
         <button class="btn btn-sec" onclick="loadJournal()">Обновить</button>
         <button class="btn btn-sec" id="jrPrint" onclick="window.print()" title="Печать журнала дня">Печать</button>
@@ -448,7 +450,9 @@
         <button class="btn btn-sec" id="jrDispatch" onclick="jrDispatchOpen()">Отправить в YClients</button>
       </div>
       <button class="btn btn-sec" id="jrReview" hidden onclick="jrReviewPending()">Сверить незавершённые операции</button>
+      <div id="jrMonth" class="jr-month" hidden></div>
       <p id="jrState" class="jr-state" role="status" aria-live="polite"></p>
+      <div id="jrStaffChips" class="jr-staff-chips" hidden role="group" aria-label="Специалист"></div>
       <div id="jrGrid" class="jr-scroll" aria-label="Расписание сотрудников"></div>
     </div>
     <dialog id="jrModal" class="jr-dialog" aria-labelledby="jrModalTitle">
@@ -3045,8 +3049,8 @@ function fireConfetti() {
 <script src="js/pages/home-care.js?v=2026-06-02c"></script>
 <script src="js/pages/segments.js"></script>
 <script src="js/pages/service-catalog.js?v=2026-11-08catalog"></script>
-<script src="js/pages/journal.js?v=split-2026-11-12"></script>
-<script src="js/pages/journal-grid.js?v=t9-2026-11-12"></script>
+<script src="js/pages/journal.js?v=t10-2026-11-13"></script>
+<script src="js/pages/journal-grid.js?v=t10-2026-11-13"></script>
 <script src="js/pages/journal-card.js?v=split-2026-11-12"></script>
 <script src="js/pages/journal-forms.js?v=split-2026-11-12"></script>
 <script src="js/pages/journal-payment.js?v=split-2026-11-12"></script>

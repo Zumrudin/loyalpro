@@ -874,3 +874,98 @@ test('technical break occupies the lane; paid mark appears with paidFull', () =>
   const css = fs.readFileSync(path.join(__dirname, '../frontend/css/journal.css'), 'utf8');
   expect(css).not.toContain('[style*=');
 });
+
+const WEEK = { from: '2030-04-01', to: '2030-04-07', staff: { id: 1, name: 'Юлия' }, allStaff: [{ id: 1, name: 'Юлия' }], labels: [],
+  days: ['01', '02', '03', '04', '05', '06', '07'].map((d, i) => ({ date: `2030-04-${d}`, working: i === 0, workRanges: i === 0 ? [{ start: 540, end: 720 }] : [],
+    records: i === 0 ? [{ id: 8, staffId: 1, date: '2030-04-01', time: '10:00', duration: 60, clientName: 'Анна', attendance: 0, services: [] }] : [] })) };
+const DAY = { date: '2030-04-03', fetchedAt: '2030-04-03T06:00:00Z', staff: [{ id: 1, name: 'Юлия', working: true, workRanges: [] }], records: [], services: [], categories: [], labels: [] };
+test('week view loads day and week together and renders 7 date columns of one master', async () => {
+  const h = harness(); h.get('jrDate').value = '2030-04-03';
+  h.context.jrApi = jest.fn(async p => (p.startsWith('week') ? WEEK : DAY));
+  h.context.jrUpdateDispatchButton = jest.fn();   // harness nodes have no classList
+  h.run(`journal.view = 'week'`);
+  await h.context.loadJournal();
+  expect(h.context.jrApi.mock.calls.map(c => c[0])).toEqual(['day?date=2030-04-03', 'week?date=2030-04-03']);
+  const html = h.get('jrGrid').innerHTML;
+  expect((html.match(/<div class="jr-column"/g) || []).length).toBe(7);
+  expect(html).toContain('пн 01.04');
+  expect(html).toContain('data-date="2030-04-07"');
+  expect(html).toContain('data-record="8"');
+  expect(h.run('journal.data.date')).toBe('2030-04-03');
+});
+test('week: staff filter is sent; arrows move by 7 days', async () => {
+  const h = harness(); h.get('jrDate').value = '2030-04-03'; h.get('jrStaffFilter').value = '1';
+  h.context.jrApi = jest.fn(async p => (p.startsWith('week') ? WEEK : DAY));
+  h.context.jrUpdateDispatchButton = jest.fn();   // harness nodes have no classList
+  h.run(`journal.view = 'week'`);
+  await h.context.loadJournal();
+  expect(h.context.jrApi.mock.calls[1][0]).toBe('week?date=2030-04-03&staffId=1');
+  h.context.loadJournal = jest.fn();
+  h.context.jrShift(1);
+  expect(h.get('jrDate').value).toBe('2030-04-10');
+});
+test('week: a free cell of another day opens the form on that day', () => {
+  const h = harness();
+  h.run(`journal.view='week'; journal.data = ${JSON.stringify(DAY)}; journal.week = ${JSON.stringify(WEEK)};`);
+  h.context.jrForm = jest.fn();
+  h.context.jrGridCreate(1, '09:00', '2030-04-01');
+  expect(h.context.jrForm).toHaveBeenCalledWith(null, { staffId: 1, time: '09:00', date: '2030-04-01' });
+  h.context.jrGridCreate(1, '09:00', '2030-04-02');   // day off
+  expect(h.context.jrForm).toHaveBeenCalledTimes(1);
+});
+test('month cells start on Monday and carry density', () => {
+  const h = harness();
+  const cells = h.context.jrMonthCells('2026-11', [{ date: '2026-11-02', records: 12, workingStaff: 4, density: 2 }]);
+  expect(cells).toHaveLength(36);                    // 1 Nov 2026 is a Sunday: 6 blanks
+  expect(cells.slice(0, 6)).toEqual([null, null, null, null, null, null]);
+  expect(cells[7]).toEqual({ date: '2026-11-02', day: 2, records: 12, density: 2 });
+  expect(h.context.jrMonthAdd('2026-12', 1)).toBe('2027-01');
+});
+test('month picker renders days with dots and survives an API error', async () => {
+  const h = harness(); h.get('jrDate').value = '2026-11-12';
+  h.context.jrApi = jest.fn().mockResolvedValue({ month: '2026-11', days: [{ date: '2026-11-02', records: 12, workingStaff: 4, density: 2 }] });
+  await h.context.jrMonthPicker();
+  expect(h.context.jrApi).toHaveBeenCalledWith('month?month=2026-11');
+  const html = h.get('jrMonth').innerHTML;
+  expect(html).toContain('data-month-date="2026-11-02"');
+  expect(html).toContain('jr-density-2');
+  expect(html).toContain('data-month-date="2026-11-12" title="Записей: 0"');
+  expect(h.get('jrMonth').hidden).toBe(false);
+  h.context.jrApi = jest.fn().mockRejectedValue(new Error('<b>нет связи</b>'));
+  await h.context.jrMonthPicker('2026-12');
+  expect(h.get('jrMonth').innerHTML).toContain('&lt;b&gt;нет связи');
+});
+test('phone (≤700px): one master and chips; week is not offered', async () => {
+  const h = harness(); h.context.window = { matchMedia: q => ({ matches: q === '(max-width: 700px)' }) };
+  h.get('jrWorkingOnly').checked = false;
+  h.run(`journal.data = {date:'2030-04-01',labels:[],staff:[{id:1,name:'Юлия',working:true,workRanges:[]},{id:2,name:'Пери',working:true,workRanges:[]}],records:[]}; jrRender()`);
+  expect((h.get('jrGrid').innerHTML.match(/<div class="jr-column"/g) || []).length).toBe(1);
+  expect(h.get('jrStaffChips').hidden).toBe(false);
+  expect(h.get('jrStaffChips').innerHTML).toContain('data-chip="2"');
+  h.context.loadJournal = jest.fn();
+  h.context.jrSetView('week');
+  expect(h.run('journal.view')).toBe('day');
+});
+test('the 700px threshold is the same in JS and CSS', () => {
+  const h = harness();
+  expect(h.run('JR_MOBILE_MAX')).toBe(700);
+  const css = fs.readFileSync(path.join(__dirname, '../frontend/css/journal.css'), 'utf8');
+  expect(css).toMatch(/@media \(max-width:700px\)\{\s*#jrViewWeek\{display:none\}/);
+});
+
+test('month: days without schedule data (density null) render neutral, no dots', async () => {
+  const h = harness(); h.get('jrDate').value = '2026-11-12';
+  h.context.jrApi = jest.fn().mockResolvedValue({ days: [{ date: '2026-11-02', records: 1, workingStaff: 0, density: null }] });
+  expect(h.context.jrMonthCells('2026-11', [{ date: '2026-11-02', records: 1, density: null }])[7].density).toBeNull();
+  await h.context.jrMonthPicker();
+  expect(h.get('jrMonth').innerHTML).toContain('jr-density-none');
+});
+test('print rules are scoped to the journal page (no bare .topbar / #app)', () => {
+  const css = fs.readFileSync(path.join(__dirname, '../frontend/css/journal.css'), 'utf8');
+  const print = css.slice(css.indexOf('@media print{'));
+  const block = print.slice(0, print.indexOf('\n}\n') + 3);
+  for (const sel of ['.topbar', '.mnav-drawer', '#app', '#app::before', '.content']) {
+    const bare = new RegExp('(^|[,\\s{])' + sel.replace(/[.#:]/g, '\\$&') + '(?=[,{\\s])', 'gm');
+    for (const mm of block.matchAll(bare)) expect(block.slice(Math.max(0, mm.index - 25), mm.index + 1)).toContain('body[data-page="journal"]');
+  }
+});
