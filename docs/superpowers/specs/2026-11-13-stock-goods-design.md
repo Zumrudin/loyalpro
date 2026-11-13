@@ -6,7 +6,7 @@
 
 **Уточнение владельца 13.11.2026: отправлять данные по складу обратно в YClients НЕ требуется.** Модуль — ЛОКАЛЬНЫЙ учёт: YClients остаётся только ИСТОЧНИКОМ (каталог товаров, склады, техкарты, операции, которые клиника всё ещё проводит там), ни один документ склада из LoyalPro в YClients не уходит. Это снимает очередь отправки, маркеры, сверку эха и зависимость от прав интеграционного пользователя на запись. Первая редакция спеки (с отправкой) заменена целиком.
 
-Спека написана в автономном режиме; спорные решения собраны в §11 и помечены «подтвердить». План — `docs/superpowers/plans/2026-11-13-stock-goods.md`.
+**Решения владельца 13.11.2026 (вторая итерация):** (1) бонусы списываются ТОЛЬКО на услуги — товары за бонусы не продаются, модуль не пишет в YClients ничего, включая карту лояльности; (2) локальные товары разрешены, экономика процедур продолжает читать `goods_transactions`. Остальные решения §11 приняты автономно и помечены «подтвердить». План — `docs/superpowers/plans/2026-11-13-stock-goods.md`.
 
 ---
 
@@ -44,7 +44,7 @@
 Вебхуки (на дев приходят реальные): `goods_operations_sale|receipt|consumable|stolen|move` (`status` create/update/delete; `data` — транзакция с вложенными `good, unit, storage, client, master, service, supplier`), `good`. Удаление приходит ТОЛЬКО вебхуком — API `/storages/transactions` удалённые не отдаёт. Доставка at-least-once, порядок не гарантирован (защита по `last_change_date` уже есть в `economics/store.upsertGoodsTransaction`).
 
 ### 1.3 Права интеграционного пользователя (живой `GET /user/permissions`, 13.11.2026)
-Чтение склада полное: `storages_access`, `storages_transactions_access`, `storages_last_days_count=-1`. Запись (перемещения, инвентаризация, создание/правка товаров, отчёты, поставщики) — `false`; после уточнения владельца это не имеет значения — модуль в YClients не пишет. Единственная запись в YClients, которая остаётся рядом с модулем, — списание бонусов с карты клиента при продаже (§6.4, это API лояльности, не склада; `ycAccrueCard` с отрицательной суммой уже используется в `loyalty.js:594`).
+Чтение склада полное: `storages_access`, `storages_transactions_access`, `storages_last_days_count=-1`. Запись (перемещения, инвентаризация, создание/правка товаров, отчёты, поставщики) — `false`; после уточнения владельца это не имеет значения — модуль в YClients не пишет ничего.
 
 **Вывод:** важно, что YClients продолжит САМ создавать списания расходников (type 2) по своим техкартам при каждой записи — записи клиники по-прежнему живут в YClients (журнал local-first шлёт их туда). Поэтому зеркало операций YClients остаётся обязательным входом леджера: иначе у нас не было бы фактических расходников визитов.
 
@@ -58,7 +58,7 @@
 | Каталог товаров `yclients_goods_catalog` (+ `unit, service_unit, unit_equals, actual_cost, unit_actual_cost, stock, last_receipt_*`), синк `syncGoodsCatalog` (экономика, весь каталог) и синк «Домашнего ухода» (`services/yclients-goods-catalog.js`, по известным категориям, soft-delete по `last_seen_at`) | `migrations.js` ~402, 2306; `economics/sync.js`; `yclients-goods-catalog.js` | Таблица товаров — ОДНА, эта; расширяем колонками и разрешаем ЛОКАЛЬНЫЕ товары (§5.2). ГОТЧИ: `is_archived` занят «Уходами» (экономика вставляет расходники с `is_archived=TRUE`) — активность для склада своя (`stock_active`); Step C синка «Уходов» архивирует товары с `last_seen_at` старше 24 ч внутри перечисленных категорий — локальный товар он бы заархивировал, поэтому в его `UPDATE` добавляется `AND yclients_good_id IS NOT NULL` |
 | Цена единицы материала на дату (`price.unitPriceAsOf`: последний приход → ручная → себестоимость каталога), пересчёт количества списания `writeoffQty` | `economics/price.js` | леджер хранит количество в базовых единицах через ТУ ЖЕ `writeoffQty`; цена единицы — через `unitPriceAsOf`, которому приходы теперь отдаёт леджер (наши и зеркальные) |
 | Техкарты: зеркало `tech_cards` + ручные, привязки `service_tech_cards` (manual > lookup > learned), UI «Техкарты» в «Экономике» | `economics/tech-cards.js`, `store.js`, `routes/economics.js`, `frontend/js/pages/economics.js` | Вкладка «Техкарты» в «Товарах» рендерит ТОТ ЖЕ код; нормы техкарт — «ожидаемые расходники» в карточке записи |
-| Кассовые операции `revenue_operations`, `finance_operations` (единый писатель `services/finance-ops.js`, kind `goods_sale`), баланс бонусов `bonus-ledger.js` | `services/revenue.js`, `services/finance-ops.js`, `services/bonus-ledger.js` | оплата продажи пишется через `finance-ops` новым входом; бонусы — той же проводкой, что в журнале |
+| Кассовые операции `revenue_operations`, `finance_operations` (единый писатель `services/finance-ops.js`, kind `goods_sale`) | `services/revenue.js`, `services/finance-ops.js` | оплата продажи пишется через `finance-ops` новым входом (`cash`/`card`) |
 | Журнал local-first: карточка записи с заглушками вкладок «Товары» и «Списание расходников» (`journal-card.js:165`), панель клиента, `visit-history.js` (покупки из `finance_operations`, расходники из `goods_transactions` type 2) | `services/journal/*`, `frontend/js/pages/journal-card.js` | вкладки оживают; «История посещений» берёт покупки и расходники из леджера |
 | Карта API YClients, пагинация `/goods`, слепота синка «Уходов» к новым категориям | `docs/2026-11-12-yclients-api-capability-map.md`, памяти | категории склада берём деревом `/goods_categories/{cid}/{parent}` рекурсивно — это закрывает и слепоту к новым брендам |
 
@@ -71,7 +71,7 @@
 2. **Леджер склада в LoyalPro — единственный источник остатка**: входящий остаток (снимок YClients на момент включения) + все движения: наши документы и зеркало операций, которые клиника всё ещё проводит в YClients (прежде всего авто-списания расходников по записям).
 3. **Ничего не пишем в YClients**: документы живут только у нас. Показание `actual_amounts` YClients показывается как справочная цифра на момент включения; после него YClients и LoyalPro расходятся по построению, и это не ошибка.
 4. **Записи ↔ списания ↔ техкарты**: в карточке записи журнала — фактические списания расходников (зеркало type 2 + наши локальные правки), норма по техкарте, расхождение; расходники записи корректируются локальным документом.
-5. **Клиенты ↔ продажи и списания**: продажа товара — клиенту, с оплатой (касса/карта/бонусы) в `finance_operations`; из карточки записи и со страницы; в карточке пациента и «Истории посещений» — покупки и расходники визитов.
+5. **Клиенты ↔ продажи и списания**: продажа товара — клиенту, с оплатой наличными/картой в `finance_operations` (бонусами товары не оплачиваются — решение владельца 13.11); из карточки записи и со страницы; в карточке пациента и «Истории посещений» — покупки и расходники визитов.
 
 ### Не делаем в v1 (§12)
 Любая запись в YClients по складу; создание техкарт в YClients (ручные нормы — у нас, как сейчас); сертификаты и абонементы как товары (подпроект 4; их продажи видны как зеркало); ККМ/чеки; Мила (ветка `feat/mila-commerce-catalog`); переключение экономики процедур на леджер (экономика продолжает читать `goods_transactions`; переключение отдельным решением); локальные товары в ручных техкартах (items техкарт адресуют `good_id` YClients — расширение на `good_row_id` после v1); мобильное приложение; роли `specialist`/`admin_cashier`.
@@ -85,7 +85,7 @@
 3. **Одна единица хранения количества** — базовая единица списания (`qty_base`), исходное количество и тип единицы рядом; пересчёт через `unit_equals` и общий `price.writeoffQty`.
 4. **Историю не переписываем**: удаление — `deleted_at`; правка проведённого документа — отмена и новый (как YClients); аддитивные миграции `IF NOT EXISTS`.
 5. **Всё по `salon_id`**; PII (имя/телефон) в леджер не пишем — ссылки `clients.id`/`yclients_client_id`.
-6. **Деньги — через `finance-ops`**, бонусы — тем же путём, что оплата визита (`bonus-ledger`), списание с карты YClients — существующим `ycAccrueCard`.
+6. **Деньги — через `finance-ops`**; бонусы в продаже товаров не участвуют (только услуги — решение владельца), поэтому карта лояльности YClients модулем не трогается.
 7. **Вторых копий правил нет**: `writeoffQty`, `unitPriceAsOf`, `pickTechCard`, `isVisitCompleted`, парсер транзакции — импортируются.
 8. **Квота YClients минутная и общая**: все чтения — внутри существующего ночного прохода экономики (`5 5 * * *`) и существующих вебхуков; новый обход категорий — не чаще раза в 30 мин и только по кнопке/ночью.
 
@@ -162,7 +162,6 @@ stock_settings (
   salon_id INT PRIMARY KEY REFERENCES salons(id) ON DELETE CASCADE,
   enabled BOOLEAN NOT NULL DEFAULT FALSE,                 -- леджер включён (снимок сделан)
   default_sale_storage_id BIGINT, default_service_storage_id BIGINT,
-  sale_bonus_to_card BOOLEAN NOT NULL DEFAULT TRUE,       -- списывать бонусы продажи с карты YClients (ycAccrueCard −сумма)
   categories_synced_at TIMESTAMPTZ, updated_at TIMESTAMPTZ
 )
 ```
@@ -173,7 +172,7 @@ stock_settings (
 **`yclients_good_id` становится NULLABLE** (`ALTER TABLE … ALTER COLUMN yclients_good_id DROP NOT NULL` — ослабление, не разрушение; существующий `UNIQUE (salon_id, yclients_good_id)` допускает несколько NULL). Локальный товар: `yclients_good_id IS NULL`, `source='loyalpro'`, `category_id NULL`, `local_category`, единицы — из `stock_units`, `unit_equals` обязателен (≥ 1). Страж: `services/yclients-goods-catalog.js` Step C получает `AND yclients_good_id IS NOT NULL`; экономика (`syncGoodsCatalog`, `listGoods`, `tech-cards`) по локальным товарам ничего не делает — они адресуются только по `id` (`good_row_id`).
 
 ### 5.3 Связи
-- `finance_operations`: колонка `stock_document_id BIGINT`; идемпотентность — `step_op_id` (uuid оплаты), origin `loyalpro`, kind `goods_sale` / `bonus_redemption`.
+- `finance_operations`: колонка `stock_document_id BIGINT`; идемпотентность — `step_op_id` (uuid оплаты), origin `loyalpro`, kind `goods_sale`, method `cash|card`.
 - `goods_transactions` не меняется — сырое зеркало экономики; леджер читает его через хук апсерта.
 
 ---
@@ -197,9 +196,8 @@ stock_settings (
 - Отрицательный остаток разрешён и подсвечен; критический (`critical_amount`) — подсветка и счётчик в шапке. Показание YClients на момент снимка хранится и показывается в карточке товара как справка; текущих сверок с YClients нет (по построению расходятся).
 
 ### 6.4 Продажа клиенту
-- Форма (страница и карточка записи): клиент (поиск по `clients`; номер вне базы → `ycSearchClientIdByPhone` + минимальная строка клиента, как делает журнал), мастер, склад (`for_sale` по умолчанию), строки `{товар, кол-во в ед. продажи, цена = local_sale_price ?? sale_price, скидка %}`, итог, оплаты `[{method: cash|card|bonus, amount}]` (сумма оплат = итогу или «подарок»/«в долг» явно).
-- Сохранение — одна транзакция БД: документ `sale` `posted`, движения, по каждой оплате — `finance-ops.recordStockSalePayment({salonId, stockDocumentId, opId, method, amount, clientId, ycClientId, occurredAt})` → `finance_operations` `kind='goods_sale'` (`cash`/`card`) или `kind='bonus_redemption', method='bonus', amount<0` — статус `confirmed` сразу (денег в YClients нет, подтверждать нечего).
-- Бонусы: сумма ≤ баланса (`clients.bonus_balance`; при `BONUS_LEDGER_PRIMARY` — из журнала). При `sale_bonus_to_card=TRUE` после фиксации в БД зовётся `ycAccrueCard(salon, card, −amount, 'Оплата товаров бонусами, продажа #<id>')` — та же функция, что списание в `loyalty.js:594`; сбой карты → строка `finance_operations` остаётся `confirmed`, документу ставится `card_sync_error`, в карточке документа видно «бонусы не списаны с карты YClients» и кнопка «Повторить списание» (owner). Это единственная запись в YClients рядом с модулем (лояльность, не склад) — решение §11.
+- Форма (страница и карточка записи): клиент (поиск по `clients`; номер вне базы → `ycSearchClientIdByPhone` + минимальная строка клиента, как делает журнал), мастер, склад (`for_sale` по умолчанию), строки `{товар, кол-во в ед. продажи, цена = local_sale_price ?? sale_price, скидка %}`, итог, оплаты `[{method: cash|card, amount}]` (сумма оплат = итогу или «подарок» явно). Бонусов среди способов НЕТ: решение владельца 13.11 — бонусы только на услуги.
+- Сохранение — одна транзакция БД: документ `sale` `posted`, движения, по каждой оплате — `finance-ops.recordStockSalePayment({salonId, stockDocumentId, opId, method, amount, clientId, ycClientId, occurredAt})` → `finance_operations` `kind='goods_sale'`, `method cash|card`, статус `confirmed` сразу (денег в YClients нет, подтверждать нечего). Отмена продажи гасит эти строки (`cancelled`).
 - Карточка пациента (`clients.js`, `openCD`) — блок «Покупки»; «История посещений» журнала берёт покупки из леджера (документы `sale` обоих источников) и `finance_operations`.
 
 ### 6.5 Записи ↔ списания ↔ техкарты (журнал)
@@ -221,7 +219,7 @@ stock_settings (
 
 | Метод | Назначение |
 |---|---|
-| `GET /settings`, `PUT /settings` | склады по умолчанию, `sale_bonus_to_card` (owner) |
+| `GET /settings`, `PUT /settings` | склады по умолчанию |
 | `GET /dictionaries` | склады, единицы, поставщики, мастера (из `journal_reference_cache`), категории (пути) — одним запросом для форм |
 | `GET /storages`, `POST /storages` (локальный склад), `PUT /storages/:id`, `POST /storages/sync` | склады |
 | `GET /units`, `POST /units`, `PUT /units/:id` | единицы |
@@ -235,8 +233,7 @@ stock_settings (
 | `GET /documents?kind&status&origin&from&to&storage&client&record&page` | журнал операций; `GET /documents/:id` |
 | `POST /documents` `{kind: receipt|writeoff|move, storageId, toStorageId?, supplierId?, docDate, comment, lines:[{goodRowId, qty, unitType, costPerUnit, discount, comment}]}` | проведение (§8 валидация) |
 | `POST /documents/:id/cancel` `{reason}` | отмена; у `origin='yclients'` — 409 |
-| `POST /sales` `{clientId|phone, storageId, masterStaffYcId, recordId?, lines, payments:[{method, amount}], gift?}` | продажа с оплатой (§6.4); `GET /sales/payment-options?clientId=` — баланс бонусов и доступные способы |
-| `POST /sales/:id/retry-card` | повтор списания бонусов с карты (owner) |
+| `POST /sales` `{clientId|phone, storageId, masterStaffYcId, recordId?, lines, payments:[{method: cash|card, amount}], gift?}` | продажа с оплатой (§6.4) |
 | `GET /records/:recordId/consumables`, `PUT /records/:recordId/consumables/:serviceId` `{lines:[{goodRowId, qtyBase}]}` | расходники записи (§6.5) |
 | `GET /clients/:clientId/purchases` | покупки клиента |
 | `POST /inventories`, `GET /inventories/:id`, `PUT /inventories/:id/lines`, `POST /inventories/:id/post` | инвентаризация (§6.6) |
@@ -250,7 +247,7 @@ stock_settings (
 - `KINDS`, `ORIGINS`, `YC_TYPE_BY_KIND = {sale:1, consumable:2, receipt:3, writeoff:4, move:5}`, `kindByYcType`, `signFor(kind)` (приход/opening +, остальное −; `move` — пара строк; `consumable`/`inventory` — знак по дельте).
 - `toBaseInfo({kind, qty, unitType, unitEquals, costPerUnit, cost})` → `{qtyBase, unitUnknown}` (тип 2 — через `price.writeoffQty`), `toBase`, `fromBase(qtyBase, unitEquals)` → `{saleUnits, remainderBase}`.
 - `validateDocument(body, ctx)` → `{ok, errors[], warnings[], normalized}`: вид, склад(ы), дата, строки (`qty > 0`, товар активен, `unitType ∈ {1,2}`, цена ≥ 0, скидка 0–100), `move` — разные склады, `sale` — клиент/телефон и итог > 0 либо `gift`.
-- `validateSalePayments(payments, total, bonusBalance)` → ошибки «сумма оплат ≠ итогу», «бонусов больше баланса», `cash|card|bonus`.
+- `validateSalePayments(payments, total, {gift})` → ошибки «сумма оплат ≠ итогу», метод только `cash|card`.
 - `consumableDelta(targetLines, actualLines)` → строки-дельты `{goodRowId, qtyBase}` без нулей.
 - `inventoryDiff(expectedBase, counted, countedUnitType, unitEquals)` → `{countedBase, diffBase}`.
 - `balanceCountsRow(row, opening)` — правило §6.3 функцией (тест фиксирует словами).
@@ -274,25 +271,25 @@ stock_settings (
 
 ## 10. Ошибки, лимиты, безопасность
 - Чтения YClients — только существующими путями (вебхуки, ночной проход экономики, кнопка синка категорий с троттлингом 30 мин); `withRateLimitRetry` на 429.
-- Единственная запись в YClients — `ycAccrueCard` при продаже за бонусы (`sale_bonus_to_card`), best-effort после фиксации в БД, с видимым статусом и ручным повтором (owner). Она идемпотентна только по нашей стороне (у `manual_transaction` ключа нет — та же оговорка, что у кэшбэка): повтор — только руками, после проверки карты.
-- Роли `owner`/`admin`; owner-only: «Пересчитать от показания», настройки, повтор списания с карты, отмена чужих документов старше суток.
+- Записей в YClients нет вовсе.
+- Роли `owner`/`admin`; owner-only: «Пересчитать от показания», настройки, отмена чужих документов старше суток.
 - PII в леджере нет; тексты ошибок YClients не показываются.
 - Все даты — Москва (`TZ=Europe/Moscow`), `doc_date` — timestamptz, день для отчётов — `AT TIME ZONE 'Europe/Moscow'`.
 
 ---
 
 ## 11. Решения, принятые без владельца (ПОДТВЕРДИТЬ)
-1. **Списание бонусов при продаже пишется в карту YClients** (`sale_bonus_to_card=TRUE` по умолчанию) — иначе баланс карты, который пациент видит в боте и который копирует `clients.bonus_balance`, не уменьшится. Альтернатива: только локальный учёт при `BONUS_LEDGER_PRIMARY`.
+1. ~~Бонусы при продаже~~ — РЕШЕНО владельцем 13.11: бонусы только на услуги, товары за бонусы не продаются.
 2. **Касса и карта при продаже — локальная запись в `finance_operations`**, без кассы YClients и чека ККМ (чек — вне рамок).
 3. **Правка расходников записи — локальной дельтой**, авто-списания YClients не трогаются.
-4. **Локальные товары разрешены** (`yclients_good_id` nullable); они не попадают в «Уходы», техкарты и экономику процедур в v1.
+4. **Локальные товары разрешены** (`yclients_good_id` nullable) — ПОДТВЕРЖДЕНО владельцем 13.11; они не попадают в «Уходы», техкарты и экономику процедур в v1.
 5. **Правило счёта остатка** (§6.3): задним числом через вебхук считается, догон/сверка старых строк — нет.
 6. **Входящий остаток — из `actual_amounts` YClients на момент включения**; дальше YClients и LoyalPro расходятся намеренно, сверок нет.
-7. **Экономика процедур продолжает читать `goods_transactions`** (наши документы в её расчётах не участвуют до отдельного решения; это значит, что наши приходы не влияют на «цену последнего прихода» экономики).
+7. **Экономика процедур продолжает читать `goods_transactions`** — ПОДТВЕРЖДЕНО владельцем 13.11 (наши приходы не влияют на «цену последнего прихода» экономики).
 8. **Роли** owner/admin; кассиру продажа не открыта.
 9. **Пороги**: `over` расходников — факт > норма × 1.2 (как `overrun` экономики).
 
-Открытые вопросы владельцу: п. 1 и 7; нужна ли печать чека; продавать ли сертификаты/абонементы с этой страницы (подпроект 4).
+Открытые вопросы владельцу: нужна ли печать чека; продавать ли сертификаты/абонементы с этой страницы (подпроект 4).
 
 ---
 
@@ -303,5 +300,5 @@ stock_settings (
 - `npx jest backend/stock` (путь с префиксом обязателен), `backend/stock-ui.test.js` — `vm`-харнесс всех `<script>` `index.html`.
 - `scripts/stock-explain.js` — EXPLAIN (ANALYZE) остатков, оборотки, журнала с реальными bound-параметрами + сверка JS-правила §6.3 с SQL на 200 случайных строках.
 - `scripts/stock-opening.js --salon=1 [--write]` — входящий остаток; `scripts/stock-backfill-mirror.js --salon=1 [--write]` — переливка `goods_transactions` в леджер (остатки до/после одинаковы — проверка правила §6.3).
-- `scripts/stock-e2e.js` — на дев-БД: приход → списание → перемещение → продажа тестовому клиенту 79200255591 с оплатой картой (локально; бонусы — с `--bonus`, списание с карты 1 бонуса и возврат `ycAccrueCard(+1)`) → инвентаризация → отмена; инварианты остатков и `finance_operations`; в YClients ничего, кроме `--bonus`, не пишет.
+- `scripts/stock-e2e.js` — на дев-БД: приход → списание → перемещение → продажа тестовому клиенту 79200255591 с оплатой картой → инвентаризация → отмена; инварианты остатков и `finance_operations`; в YClients не пишет ничего.
 - `scripts/stock-ui-e2e.js` — puppeteer: страница, вкладки, формы без сохранения, две темы, 390px.

@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Страница «Управление → Товары» с остатками, каталогом, журналом операций (приход/списание/перемещение/продажа/инвентаризация), поставщиками, техкартами и обороткой; остаток считает LoyalPro из единого леджера; в карточке записи журнала видны и корректируются списания расходников и продажи клиенту визита; в карточке пациента — покупки. **В YClients модуль ничего не пишет** (уточнение владельца 13.11.2026); YClients — только источник (каталог, склады, техкарты, зеркало операций).
+**Goal:** Страница «Управление → Товары» с остатками, каталогом, журналом операций (приход/списание/перемещение/продажа/инвентаризация), поставщиками, техкартами и обороткой; остаток считает LoyalPro из единого леджера; в карточке записи журнала видны и корректируются списания расходников и продажи клиенту визита; в карточке пациента — покупки. **В YClients модуль ничего не пишет** (решения владельца 13.11.2026: склад не отправлять; бонусы только на услуги, поэтому и карта лояльности не трогается); YClients — только источник (каталог, склады, техкарты, зеркало операций).
 
-**Architecture:** Леджер `stock_documents`/`stock_movements` питается двумя входами — зеркалом YClients (хук в `economics/store.upsertGoodsTransaction`) и нашими документами; остаток = входящий остаток (снимок `actual_amounts` при включении) + движения по правилу §6.3 спеки. Деньги продажи — через `finance-ops`; единственная запись в YClients рядом с модулем — списание бонусов с карты существующим `ycAccrueCard`. Фронт — шесть файлов `frontend/js/pages/stock*.js` одной глобальной области с префиксом `stock`.
+**Architecture:** Леджер `stock_documents`/`stock_movements` питается двумя входами — зеркалом YClients (хук в `economics/store.upsertGoodsTransaction`) и нашими документами; остаток = входящий остаток (снимок `actual_amounts` при включении) + движения по правилу §6.3 спеки. Деньги продажи (наличные/карта) — через `finance-ops`. Фронт — шесть файлов `frontend/js/pages/stock*.js` одной глобальной области с префиксом `stock`.
 
 **Tech Stack:** Node.js/Express, pg без ORM, vanilla JS SPA, Jest (`TZ=Europe/Moscow`), `vm`-тесты фронта, puppeteer. Спека — `docs/superpowers/specs/2026-11-13-stock-goods-design.md` (вторая редакция; разделы — обязательства, ссылки §… — на неё).
 
@@ -48,7 +48,7 @@ npx jest backend/stock-ui --silent
 
 - БД дева — `loyalpro_test` (`DATABASE_URL` в `backend/.env`, PG15 локально `:5432`; MCP postgres смотрит на мёртвый `:5433` — ручные запросы `psql "$DATABASE_URL"`).
 - Дев-сервер: `cd /root/loyalpro/backend && PORT=3001 pm2 restart loyalpro` (НЕ `--update-env`).
-- В YClients живьём пишется ТОЛЬКО списание 1 бонуса с карты клиента 79200255591 в `stock-e2e.js --bonus` с немедленным возвратом (`ycAccrueCard(+1)`). Всё остальное — наша БД.
+- В YClients живьём НИЧЕГО не пишется; все прогоны — на нашей БД (`loyalpro_test`).
 - Миграции — только в `backend/migrations.js`, блок `// ── STOCK` после блока журнала, `IF NOT EXISTS`/`DO NOTHING`; единственное изменение существующей колонки — `ALTER TABLE yclients_goods_catalog ALTER COLUMN yclients_good_id DROP NOT NULL` (ослабление).
 - Правка JS/CSS фронта — с бампом `?v=` в `frontend/index.html`.
 
@@ -61,12 +61,12 @@ npx jest backend/stock-ui --silent
 5. **`yclients_good_id` теперь NULLABLE**: код, джойнящий каталог по `yclients_good_id`, обязан переживать `NULL` (экономика джойнит `goods_transactions.good_id = yclients_good_id` — NULL не совпадает, это ок). В леджере товар адресуется только `good_row_id` (= `yclients_goods_catalog.id`).
 6. **`changed_after` YClients только с временем**; числа строками; `/goods` — `count=100` до пустой страницы.
 7. **Количества**: `operation_unit_type` 1 — ед. продажи, 2 — ед. списания; у части списаний `amount` в ед. продажи при типе 2 — пересчёт ТОЛЬКО через `economics/price.writeoffQty`. `actual_amounts` — в ед. продажи, бывают отрицательные.
-8. **Ничего не пишем в YClients** — ни одного `POST/PUT/DELETE` к `/storage_operations`, `/goods`, `/technological_cards`. Исключение — `ycAccrueCard` (лояльность) при продаже за бонусы, best-effort после фиксации в БД.
+8. **Ничего не пишем в YClients** — ни одного `POST/PUT/DELETE` ни к складу, ни к карте лояльности (бонусы на товары не тратятся — решение владельца).
 9. **Тексты YClients наружу не отдавать**; **PII** в леджер не писать.
 10. **Москва**: `TZ=Europe/Moscow` у jest и pm2; дни отчётов — `AT TIME ZONE 'Europe/Moscow'`.
 11. **Экономика не ломается**: хук леджера через `safely()`, `goods_transactions` и `npx jest economics` зелёные; `recorded_at` при апсерте не трогать.
 12. **Живой EXPLAIN** с реальными bound-параметрами для SQL остатков/оборотки/журнала (`scripts/stock-explain.js`).
-13. **Деньги**: `finance-ops` — единственный писатель `finance_operations`; суммы — в копейках; `ycAccrueCard` без ключа идемпотентности — автоповтора нет.
+13. **Деньги**: `finance-ops` — единственный писатель `finance_operations`; суммы — в копейках; способы продажи — только `cash|card`.
 
 ## Карта файлов
 
@@ -77,7 +77,7 @@ npx jest backend/stock-ui --silent
 | `backend/services/stock/store.js` | весь SQL склада: справочники, документы, движения, остатки (CTE экспортируется), инвентаризация, покупки клиента, оборотка |
 | `backend/services/stock/ledger.js` | `ingestMirrored`, `postDocument` (документ → движения), `openingFromCatalog`, `drainIngestPending` |
 | `backend/services/stock/documents.js` | create/cancel для receipt/writeoff/move; инвентаризация; `openingReset` |
-| `backend/services/stock/sales.js` | продажа: документ + оплаты в `finance-ops` + бонусы (`bonus-ledger`, `ycAccrueCard`) |
+| `backend/services/stock/sales.js` | продажа: документ + оплаты (`cash|card`) в `finance-ops` |
 | `backend/services/stock/consumables.js` | расходники записи: норма/факт/расхождение, корректировка дельтой |
 | `backend/services/stock/catalog-sync.js` | склады, единицы, дерево категорий, расширенные поля товара, вебхук `good`, локальные товары |
 | `backend/services/stock/index.js` | фасад для `routes/webhook.js`, `economics/sync.runNightly` |
@@ -204,13 +204,13 @@ describe('validateDocument', () => {
 });
 
 describe('validateSalePayments', () => {
-  test('сумма оплат = итогу, бонусы ≤ баланса', () => {
-    expect(m.validateSalePayments([{ method: 'card', amount: 700 }, { method: 'bonus', amount: 300 }], 1000, 500)).toEqual({ ok: true, errors: [] });
-    expect(m.validateSalePayments([{ method: 'card', amount: 700 }], 1000, 500).errors[0]).toMatch(/не совпадает/);
-    expect(m.validateSalePayments([{ method: 'bonus', amount: 600 }], 600, 500).errors[0]).toMatch(/бонус/i);
-    expect(m.validateSalePayments([{ method: 'crypto', amount: 10 }], 10, 0).ok).toBe(false);
+  test('сумма оплат = итогу, только cash|card', () => {
+    expect(m.validateSalePayments([{ method: 'card', amount: 700 }, { method: 'cash', amount: 300 }], 1000)).toEqual({ ok: true, errors: [] });
+    expect(m.validateSalePayments([{ method: 'card', amount: 700 }], 1000).errors[0]).toMatch(/не совпадает/);
+    expect(m.validateSalePayments([{ method: 'bonus', amount: 600 }], 600).ok).toBe(false); // бонусы только на услуги (решение владельца 13.11)
+    expect(m.validateSalePayments([{ method: 'crypto', amount: 10 }], 10).ok).toBe(false);
   });
-  test('подарок — оплат нет', () => expect(m.validateSalePayments([], 0, 0, { gift: true }).ok).toBe(true));
+  test('подарок — оплат нет', () => expect(m.validateSalePayments([], 0, { gift: true }).ok).toBe(true));
 });
 
 describe('дельта расходников и инвентаризация', () => {
@@ -247,7 +247,7 @@ const ORIGINS = ['loyalpro', 'yclients'];
 const YC_TYPE_BY_KIND = { sale: 1, consumable: 2, receipt: 3, writeoff: 4, move: 5 };
 const KIND_BY_YC_TYPE = Object.fromEntries(Object.entries(YC_TYPE_BY_KIND).map(([k, v]) => [v, k]));
 const INFLOW_KINDS = new Set(['receipt', 'opening']);
-const PAY_METHODS = ['cash', 'card', 'bonus'];
+const PAY_METHODS = ['cash', 'card']; // бонусы — только на услуги (решение владельца 13.11.2026)
 
 class StockError extends Error { constructor(message, status = 400, code = 'bad_request', extra = {}) { super(message); this.status = status; this.code = code; Object.assign(this, extra); } }
 const fail = (message, status, code, extra) => { throw new StockError(message, status, code, extra); };
@@ -313,18 +313,17 @@ function validateDocument(body, ctx) {
   return { ok: !errors.length, errors, warnings, normalized: { kind: b.kind, storageId: storage ? Number(storage.id) : null, toStorageId: b.kind === 'move' ? Number(b.toStorageId) : null, docDate, comment: typeof b.comment === 'string' ? b.comment.slice(0, 1000) : '', lines: normLines, totalCost } };
 }
 
-/** Оплаты продажи: методы, сумма = итогу (в копейках), бонусы ≤ баланса. */
-function validateSalePayments(payments, total, bonusBalance, opts = {}) {
+/** Оплаты продажи: методы cash|card, сумма = итогу (в копейках). */
+function validateSalePayments(payments, total, opts = {}) {
   const errors = []; const list = Array.isArray(payments) ? payments : [];
   if (opts.gift === true) { if (list.length) errors.push('У подарка не бывает оплат.'); return { ok: !errors.length, errors }; }
-  let sum = 0, bonus = 0;
+  let sum = 0;
   for (const p of list) {
-    if (!PAY_METHODS.includes(p && p.method)) { errors.push('Способ оплаты: cash, card или bonus.'); continue; }
+    if (!PAY_METHODS.includes(p && p.method)) { errors.push('Способ оплаты: наличные или карта (бонусы — только на услуги).'); continue; }
     const a = num(p.amount); if (!(a > 0)) { errors.push('Сумма оплаты должна быть больше нуля.'); continue; }
-    sum += kop(a); if (p.method === 'bonus') bonus += kop(a);
+    sum += kop(a);
   }
   if (!errors.length && sum !== kop(total)) errors.push(`Сумма оплат не совпадает с итогом (${(sum / 100).toFixed(2)} ≠ ${Number(total).toFixed(2)}).`);
-  if (bonus > kop(bonusBalance || 0)) errors.push('Бонусов больше, чем на балансе клиента.');
   return { ok: !errors.length, errors };
 }
 
@@ -355,7 +354,7 @@ module.exports = { KINDS, ORIGINS, YC_TYPE_BY_KIND, PAY_METHODS, StockError, fai
 
 - [ ] **Step 4:** `npx jest backend/stock-model --silent` → PASS.
 
-- [ ] **Step 5: Миграции** — блок `// ── STOCK (склад, 2026-11-13) ──` после `journal_record_prefs`: DDL §5.1 спеки (`stock_storages, stock_units, stock_suppliers, stock_documents, stock_movements, stock_openings, stock_inventory_lines, stock_ingest_pending, stock_settings`), каждый `CREATE TABLE IF NOT EXISTS … .catch(() => {})`, индексы и частичные UNIQUE — `CREATE [UNIQUE] INDEX IF NOT EXISTS`; колонки каталога §5.2 — циклом `ALTER TABLE yclients_goods_catalog ADD COLUMN IF NOT EXISTS …`; `ALTER TABLE yclients_goods_catalog ALTER COLUMN yclients_good_id DROP NOT NULL`; `ALTER TABLE finance_operations ADD COLUMN IF NOT EXISTS stock_document_id BIGINT`; `ALTER TABLE stock_documents ADD COLUMN IF NOT EXISTS card_sync_error TEXT`.
+- [ ] **Step 5: Миграции** — блок `// ── STOCK (склад, 2026-11-13) ──` после `journal_record_prefs`: DDL §5.1 спеки (`stock_storages, stock_units, stock_suppliers, stock_documents, stock_movements, stock_openings, stock_inventory_lines, stock_ingest_pending, stock_settings`), каждый `CREATE TABLE IF NOT EXISTS … .catch(() => {})`, индексы и частичные UNIQUE — `CREATE [UNIQUE] INDEX IF NOT EXISTS`; колонки каталога §5.2 — циклом `ALTER TABLE yclients_goods_catalog ADD COLUMN IF NOT EXISTS …`; `ALTER TABLE yclients_goods_catalog ALTER COLUMN yclients_good_id DROP NOT NULL`; `ALTER TABLE finance_operations ADD COLUMN IF NOT EXISTS stock_document_id BIGINT`.
 
 - [ ] **Step 6: Страж «Уходов»** — `services/yclients-goods-catalog.js` Step C: в `UPDATE … SET is_archived = TRUE` добавить `AND yclients_good_id IS NOT NULL`; экспортировать текст запроса константой `ARCHIVE_SQL` и добавить тест в `backend/yclients-goods-catalog-archive.test.js`: `expect(ARCHIVE_SQL).toMatch(/yclients_good_id IS NOT NULL/)`.
 
@@ -495,23 +494,23 @@ WHERE g.salon_id = $1 AND s.salon_id = $1 AND s.is_active AND (op.good_row_id IS
 
 ---
 
-### Task 6: Продажа клиенту с оплатой, бонусы, финансы
+### Task 6: Продажа клиенту с оплатой, финансы
 
 **Модель:** Codex GPT Astra.
 
 **Files:** Create `backend/services/stock/sales.js`, `backend/stock-sales.test.js`; Modify `backend/services/finance-ops.js` (`recordStockSalePayment`, `cancelByStockDocument`), `backend/routes/stock.js` (`/sales*`, `/clients/:id/purchases`), `backend/services/journal/visit-history.js`
 
-- [ ] **Step 1: Тесты (красные)** `stock-sales.test.js`: `create(salonId, userId, body)`: клиент по `clientId` или `phone` (суффиксный поиск по 10 цифрам в `clients`, как `resolveTestClient` напоминаний; нет → `ycSearchClientIdByPhone` + `INSERT clients` минимальный, как журнал); `validateDocument` + `validateSalePayments(payments, totalCost, bonusBalance)`; одна транзакция: документ `sale` `posted` + движения + по каждой оплате `finOps.recordStockSalePayment(q, {...})` (`cash`/`card` → `kind 'goods_sale'`, `amount > 0`; `bonus` → `kind 'bonus_redemption', method 'bonus', amount < 0`), `step_op_id` = новый uuid на оплату, `status 'confirmed'`, `origin 'loyalpro'`, `stock_document_id`; после коммита при `settings.sale_bonus_to_card` и бонусах > 0 → `ycAccrueCard(salon, client.yclients_card_id, -bonus, 'Оплата товаров бонусами, продажа #<id>')` в `try/catch` → сбой → `store.setCardSyncError(docId, text)` + WARN, результат `{cardSynced:false}`; нет карты → `cardSynced:null` и предупреждение; `retryCard(docId)` (owner) повторяет только при `card_sync_error` и сбрасывает его при успехе. `recordStockSalePayment`: идемпотентность по `step_op_id`, `touchBonus` для бонусных строк, `method` `cash|card|bonus`. `cancelByStockDocument(q, salonId, docId)` → строки `cancelled`.
+- [ ] **Step 1: Тесты (красные)** `stock-sales.test.js`: `create(salonId, userId, body)`: клиент по `clientId` или `phone` (суффиксный поиск по 10 цифрам в `clients`, как `resolveTestClient` напоминаний; нет → `ycSearchClientIdByPhone` + `INSERT clients` минимальный, как журнал); `validateDocument` + `validateSalePayments(payments, totalCost, {gift})`; одна транзакция: документ `sale` `posted` + движения + по каждой оплате `finOps.recordStockSalePayment(q, {...})` (`kind 'goods_sale'`, `method cash|card`, `amount > 0`), `step_op_id` = новый uuid на оплату, `status 'confirmed'`, `origin 'loyalpro'`, `stock_document_id`. Способ `bonus` отвергается на уровне модели (решение владельца: бонусы только на услуги). `recordStockSalePayment`: идемпотентность по `step_op_id`. `cancelByStockDocument(q, salonId, docId)` → строки `cancelled`.
 
-- [ ] **Step 2: Реализация** по тестам. `GET /sales/payment-options?clientId=` → `{bonusBalance, hasCard, methods:['cash','card','bonus']}` (баланс — `clients.bonus_balance`; при `BONUS_LEDGER_PRIMARY` он уже из журнала). `documents.cancel` у продажи зовёт `cancelByStockDocument`; бонусы на карту автоматически НЕ возвращаются — в ответе и карточке документа подсказка «верните бонусы на карту вручную: N».
+- [ ] **Step 2: Реализация** по тестам. `documents.cancel` у продажи зовёт `cancelByStockDocument`.
 
 - [ ] **Step 3: `visit-history.js`**: покупки — `UNION` строк `finance_operations` (как сейчас) и документов `stock_documents kind='sale' origin='loyalpro'` без оплат (подарки), дедуп по `stock_document_id`; расходники под услугой — из `stock_movements kind consumable` (зеркало + наши корректировки, строка «корректировка LoyalPro» отдельно). Тесты `journal-visit-history.test.js` правятся на новые SQL.
 
-- [ ] **Step 4: Живо** (`stock-e2e.js`, `--sale`): продажа 1 шт локального тестового товара клиенту 79200255591 за 1 ₽ картой → документ `posted`, `finance_operations` одна строка `goods_sale confirmed`; `--bonus`: та же продажа за 1 бонус → строка `bonus_redemption −1`, `ycAccrueCard(−1)` прошёл, затем возврат `ycAccrueCard(+1)` и отмена документа (строка `finance_operations` → `cancelled`).
+- [ ] **Step 4: Живо** (`stock-e2e.js`, `--sale`): продажа 1 шт локального тестового товара клиенту 79200255591 за 1 ₽ картой → документ `posted`, `finance_operations` одна строка `goods_sale confirmed`; отмена документа → строка `cancelled`.
 
 - [ ] **Step 5:** `npx jest backend/stock finance backend/journal-visit-history --silent` → PASS; коммит `feat(stock): продажа клиенту, оплата, бонусы, покупки в истории посещений`.
 
-**Чек-лист Opus:** `finance-ops` — единственный писатель; `ycAccrueCard` — после коммита, best-effort, без автоповтора; отмена продажи гасит `finance_operations`; PII нет.
+**Чек-лист Opus:** `finance-ops` — единственный писатель; способ `bonus` невозможен ни на фронте, ни на бэке; отмена продажи гасит `finance_operations`; PII нет.
 
 ---
 
@@ -552,8 +551,8 @@ WHERE g.salon_id = $1 AND s.salon_id = $1 AND s.is_active AND (op.good_row_id IS
 
 **Files:** Modify `frontend/js/pages/stock-docs.js`, `stock-sale.js`, `stock.css`, `index.html` (`<dialog id="stockDocModal">`, `<dialog id="stockSaleModal">`), `backend/stock-ui.test.js`
 
-- [ ] **Step 1: Тесты (красные)**: `stockDocBadge(doc)` → текст/класс по `origin` и `status` («LoyalPro» / «YClients», «Отменён»); `stockLinesTotal(lines)` в копейках; `stockDocFormDraft()` → тело `POST /documents`; `stockSaleDraft()` → `payments[]`, клиентская проверка при сумме ≠ итогу и бонусах > баланса (повтор логики `validateSalePayments` для мгновенной подсказки; сервер — источник правды); рендер экранирует комментарии.
-- [ ] **Step 2: Реализация.** `stock-docs.js`: `stockLoadDocs()` с фильтрами (вид, источник, статус, период, склад, клиент), таблица, карточка документа (строки с `stockFmtQty`, итог, источник, «Отменить» с причиной — только у `origin='loyalpro'`, «Открыть запись» при `record_id`, у продажи — оплаты и статус «бонусы с карты: списаны / ошибка (повторить — owner)»); формы «Приход»/«Списание»/«Перемещение» в одном `<dialog>`: склад(ы), поставщик (приход), дата, строки `[поиск товара (datalist по `GET /goods?search=`), кол-во, единица (шт|мл по товару), цена, скидка, итог]`, «+ строка», `warnings[]` жёлтым, `errors[]` списком. `stock-sale.js`: `stockSaleOpen({clientId, recordId, staffYcId})` — клиент (поиск `/api/clients?q=` как журнал, либо телефон), мастер, склад `for_sale`, строки с ценой `local_sale_price ?? sale_price`, оплаты (наличные/карта/бонусы с балансом из `payment-options`), «Подарок», «Продать» → `POST /sales` → итог плашкой, предупреждение при `cardSynced:false|null`.
+- [ ] **Step 1: Тесты (красные)**: `stockDocBadge(doc)` → текст/класс по `origin` и `status` («LoyalPro» / «YClients», «Отменён»); `stockLinesTotal(lines)` в копейках; `stockDocFormDraft()` → тело `POST /documents`; `stockSaleDraft()` → `payments[]` (`cash|card`), клиентская проверка при сумме ≠ итогу (повтор логики `validateSalePayments`; сервер — источник правды); рендер экранирует комментарии.
+- [ ] **Step 2: Реализация.** `stock-docs.js`: `stockLoadDocs()` с фильтрами (вид, источник, статус, период, склад, клиент), таблица, карточка документа (строки с `stockFmtQty`, итог, источник, «Отменить» с причиной — только у `origin='loyalpro'`, «Открыть запись» при `record_id`, у продажи — оплаты); формы «Приход»/«Списание»/«Перемещение» в одном `<dialog>`: склад(ы), поставщик (приход), дата, строки `[поиск товара (datalist по `GET /goods?search=`), кол-во, единица (шт|мл по товару), цена, скидка, итог]`, «+ строка», `warnings[]` жёлтым, `errors[]` списком. `stock-sale.js`: `stockSaleOpen({clientId, recordId, staffYcId})` — клиент (поиск `/api/clients?q=` как журнал, либо телефон), мастер, склад `for_sale`, строки с ценой `local_sale_price ?? sale_price`, оплаты (наличные/карта), «Подарок», «Продать» → `POST /sales` → итог плашкой.
 - [ ] **Step 3:** тесты, визуальная проверка на деве (продажа — только локального тестового товара на 79200255591, «наличные» 1 ₽, затем отмена из карточки документа). Коммит `feat(stock): журнал операций, формы документов, продажа`.
 
 **Чек-лист Opus:** суммы в копейках; отмена — с причиной; экранирование; форма продажи работает и из карточки записи.
@@ -567,7 +566,7 @@ WHERE g.salon_id = $1 AND s.salon_id = $1 AND s.is_active AND (op.good_row_id IS
 **Files:** Modify `frontend/js/pages/stock-inventory.js`, `stock-refs.js`, `frontend/js/pages/economics.js` (`ecoLoadTechCards(containerId)`), `backend/stock-ui.test.js`
 
 - [ ] **Step 1: Тесты (красные)**: `stockInvRows(lines)` — разница с подсветкой, итого недостач/излишков; `stockTurnoverRows(rows, {search})`; `ecoLoadTechCards()` без аргумента пишет в `ecoTechCards`.
-- [ ] **Step 2: Реализация.** `stock-inventory.js`: список инвентаризаций, «Новая» (склад, категория), экран подсчёта с автосохранением (`PUT /inventories/:id/lines`, дебаунс 800 мс), «Провести» (`confirm`), пометка «черновик старше 7 дней». Оборотка: период (`pb-wrap` как в экономике), склад, категория, таблица начало/приход/расход/конец, CSV-выгрузка на фронте. `stock-refs.js`: поставщики (таблица + форма), единицы, склады (локальный склад — форма; YClients-склады — только назначение по умолчанию), настройки (`default_*_storage_id`, `sale_bonus_to_card` — owner). Вкладка «Техкарты»: `ecoLoadTechCards('stockTechCards')`; выделить `ecoEnsurePeriod()` (текущий месяц, если `_eco.from` пуст).
+- [ ] **Step 2: Реализация.** `stock-inventory.js`: список инвентаризаций, «Новая» (склад, категория), экран подсчёта с автосохранением (`PUT /inventories/:id/lines`, дебаунс 800 мс), «Провести» (`confirm`), пометка «черновик старше 7 дней». Оборотка: период (`pb-wrap` как в экономике), склад, категория, таблица начало/приход/расход/конец, CSV-выгрузка на фронте. `stock-refs.js`: поставщики (таблица + форма), единицы, склады (локальный склад — форма; YClients-склады — только назначение по умолчанию), настройки (`default_*_storage_id` — owner). Вкладка «Техкарты»: `ecoLoadTechCards('stockTechCards')`; выделить `ecoEnsurePeriod()` (текущий месяц, если `_eco.from` пуст).
 - [ ] **Step 3:** `npx jest backend/stock backend/stock-ui economics --silent`; коммит `feat(stock): инвентаризация, оборотка, справочники, настройки, техкарты`.
 
 **Чек-лист Opus:** проведение не создаёт движений при `diff=0`; `ecoLoadTechCards()` без аргумента не изменил «Экономику»; owner-only настройки скрыты у admin.
@@ -636,17 +635,17 @@ WHERE g.salon_id = $1 AND s.salon_id = $1 AND s.is_active AND (op.good_row_id IS
 
 **Модель:** Sonnet (скрипты, доки) → **Opus** (финальное ревью ветки с записью находок в `docs/2026-11-13-stock-review.md` ПО ХОДУ; один проход, без фоновых агентов).
 
-**Files:** Create `backend/scripts/stock-ui-e2e.js` (puppeteer: страница, вкладки, формы без сохранения, карточка товара, карточка записи с вкладками, две темы, 390px; скриншоты `/tmp/stock-*.png`), финальная `backend/scripts/stock-e2e.js` (`--sale --bonus --cleanup`), `docs/2026-11-13-stock-acceptance.md`, `docs/2026-11-13-stock-review.md`; Modify `CLAUDE.md` (раздел «### Склад и товары («Управление → Товары», с 13.11.2026, дев)» ≤ 40 строк: таблицы, правило счёта, «в YClients не пишем, кроме бонусов карты», готча nullable `yclients_good_id` и страж «Уходов», рычаг `STOCK_LEDGER`, команды), память проекта (`stock_goods_plan_2026_11_13.md` обновить; строка `MEMORY.md` ≤ 200 символов).
+**Files:** Create `backend/scripts/stock-ui-e2e.js` (puppeteer: страница, вкладки, формы без сохранения, карточка товара, карточка записи с вкладками, две темы, 390px; скриншоты `/tmp/stock-*.png`), финальная `backend/scripts/stock-e2e.js` (`--sale --cleanup`), `docs/2026-11-13-stock-acceptance.md`, `docs/2026-11-13-stock-review.md`; Modify `CLAUDE.md` (раздел «### Склад и товары («Управление → Товары», с 13.11.2026, дев)» ≤ 40 строк: таблицы, правило счёта, «в YClients не пишем ничего», готча nullable `yclients_good_id` и страж «Уходов», рычаг `STOCK_LEDGER`, команды), память проекта (`stock_goods_plan_2026_11_13.md` обновить; строка `MEMORY.md` ≤ 200 символов).
 
 - [ ] **Step 1:** `npx jest backend/stock economics backend/journal finance yclients-goods-catalog --silent` — зелёные (флейк `primary-clients` не относится).
-- [ ] **Step 2:** `stock-e2e.js` на деве → `stock-acceptance.md` (остатки до/после одинаковы, `finance_operations` чист, карта 79200255591 вернулась к исходному балансу).
+- [ ] **Step 2:** `stock-e2e.js` на деве → `stock-acceptance.md` (остатки до/после одинаковы, `finance_operations` чист).
 - [ ] **Step 3:** `stock-ui-e2e.js` → скриншоты.
-- [ ] **Step 4: Opus — финальное ревью**: чек-листы задач + инварианты: (1) ни одного `POST/PUT/DELETE` к YClients, кроме `ycAccrueCard`; (2) `recorded_at` неизменяем; (3) `safely` вокруг хука; (4) `salon_id` во всех SQL; (5) нет копий `writeoffQty`/`unitPriceAsOf`/`pickTechCard`/`parseCatalogGood`; (6) PII; (7) `?v=`; (8) миграции аддитивны, единственный `ALTER COLUMN` — `DROP NOT NULL`; (9) Step C «Уходов» защищён. Находки — в файл по ходу; критичные чинятся отдельными коммитами.
+- [ ] **Step 4: Opus — финальное ревью**: чек-листы задач + инварианты: (1) ни одного `POST/PUT/DELETE` к YClients; (2) `recorded_at` неизменяем; (3) `safely` вокруг хука; (4) `salon_id` во всех SQL; (5) нет копий `writeoffQty`/`unitPriceAsOf`/`pickTechCard`/`parseCatalogGood`; (6) PII; (7) `?v=`; (8) миграции аддитивны, единственный `ALTER COLUMN` — `DROP NOT NULL`; (9) Step C «Уходов» защищён. Находки — в файл по ходу; критичные чинятся отдельными коммитами.
 - [ ] **Step 5:** CLAUDE.md и память; коммит `docs(stock): раздел CLAUDE.md, приёмка, ревью`. Владельцу — список решений §11 на подтверждение.
 
 ---
 
 ## Самопроверка плана
 - **Покрытие спеки:** §5 → 2; §6.1/6.3 → 4, 13; §6.2 → 5; §6.4 → 6, 9, 12; §6.5 → 11, 14; §6.6 → 5, 10; §6.7 → 3, 8; §7 → 3, 5, 6, 7, 11; §9.1 → 8–10; §9.2 → 11; §9.3 → 12; §13 → 4, 15.
-- **Имена, общие между задачами:** `model.toBaseInfo/toBase/fromBase/validateDocument/validateSalePayments/consumableDelta/inventoryDiff/balanceCountsRow/kop/StockError/fail`; `store.BALANCES_SQL/TURNOVER_SQL/DOCS_LIST_SQL/upsertMovement/insertMovement/upsertMirrorDocument/listReceipts/balances/goodByYcId/ensureStorage/clientIdByYc/addIngestPending/markMovementDeleted/setCardSyncError/getSettings/saveSettings/listGoods`; `ledger.ingestMirrored/postDocument/openingFromCatalog/drainIngestPending`; `documents.create/cancel/inventoryCreate/inventorySetLines/inventoryPost/openingReset`; `sales.create/retryCard`; `consumables.forRecord/update`; `catalog-sync.syncStorages/syncCategories/collectUnits/handleGoodEvent/createLocalGood/updateGood`; `finance-ops.recordStockSalePayment/cancelByStockDocument`; фронт `stockApi/stockSwitchTab/stockFmtQty/stockBalanceRows/stockDocBadge/stockSaleOpen/stockLoadDocs`; `ecoLoadTechCards(containerId)`.
-- **Отличие от первой редакции:** убраны воркер отправки, `draft_json`, маркеры `[LP#id]`, сверка эха, права на запись, `sync_status`, живые пробы записи; добавлены локальные товары (nullable `yclients_good_id` + страж «Уходов»), корректировка расходников дельтой, оплата продажи без YClients, цена по приходам леджера.
+- **Имена, общие между задачами:** `model.toBaseInfo/toBase/fromBase/validateDocument/validateSalePayments/consumableDelta/inventoryDiff/balanceCountsRow/kop/StockError/fail`; `store.BALANCES_SQL/TURNOVER_SQL/DOCS_LIST_SQL/upsertMovement/insertMovement/upsertMirrorDocument/listReceipts/balances/goodByYcId/ensureStorage/clientIdByYc/addIngestPending/markMovementDeleted/getSettings/saveSettings/listGoods`; `ledger.ingestMirrored/postDocument/openingFromCatalog/drainIngestPending`; `documents.create/cancel/inventoryCreate/inventorySetLines/inventoryPost/openingReset`; `sales.create`; `consumables.forRecord/update`; `catalog-sync.syncStorages/syncCategories/collectUnits/handleGoodEvent/createLocalGood/updateGood`; `finance-ops.recordStockSalePayment/cancelByStockDocument`; фронт `stockApi/stockSwitchTab/stockFmtQty/stockBalanceRows/stockDocBadge/stockSaleOpen/stockLoadDocs`; `ecoLoadTechCards(containerId)`.
+- **Отличие от первой редакции:** убраны воркер отправки, `draft_json`, маркеры `[LP#id]`, сверка эха, права на запись, `sync_status`, живые пробы записи; добавлены локальные товары (nullable `yclients_good_id` + страж «Уходов»), корректировка расходников дельтой, оплата продажи без YClients (только наличные/карта — бонусы только на услуги), цена по приходам леджера.
