@@ -1,12 +1,62 @@
 // Журнал записи: карточка записи. Общая глобальная область с journal.js (префикс jr).
-function jrTools() {
+// Card parity with YClients (12.11.2026). Colour palette: one constant.
+const JR_COLORS = ['#f4a0a0', '#ffad79', '#f7c76d', '#c5e384', '#9ee5d7', '#a8d8f0', '#b3bdfd', '#d7a6e8'];
+function jrPhoneHtml(r) {
+  const digits = String(r?.clientPhone || '').replace(/\D/g, '');
+  if (!digits) return '<p class="jr-hint">Телефон не указан</p>';
+  const tel = '+' + digits;
+  return `<p class="jr-client-phone"><a href="tel:${jrEscape(tel)}">${jrEscape(tel)}</a><button type="button" class="btn btn-sec" id="jrCopyPhone" data-phone="${jrEscape(tel)}">Копировать</button></p>`;
+}
+function jrExtraFields(r) {
+  const can = jrCanChange(r), reshape = jrCanReshape(r);
+  const off = flag => (flag ? '' : ' disabled');
+  const labels = journal.data?.labels || [];
+  const chosen = new Set((r.labels || []).map(l => Number(l.id)));
+  const pause = Math.round((Number(r.technicalBreak) || 0) / 60);
+  return `<section class="jr-extra">
+    <label class="jr-side-label">Длительность, мин<input id="jrDurationEdit" type="number" min="5" max="720" step="5" value="${jrEscape(r.duration)}"${off(reshape)}></label>
+    <label class="jr-side-label">Технический перерыв<select id="jrBreakEdit"${off(can)}>${Array.from({ length: 13 }, (_, i) => i * 5).map(v => `<option value="${v}"${v === pause ? ' selected' : ''}>${v ? v + ' мин' : 'Нет'}</option>`).join('')}</select></label>
+    <div class="jr-side-label">Цвет записи<div class="jr-colors" role="group" aria-label="Цвет записи"><button type="button" class="jr-color jr-color-none${r.customColor ? '' : ' is-current'}" data-color="" title="Без цвета"${off(can)}>∅</button>${JR_COLORS.map(c => `<button type="button" class="jr-color${r.customColor === c ? ' is-current' : ''}" data-color="${c}" style="background:${c}" title="${c}"${off(can)}></button>`).join('')}</div></div>
+    <div class="jr-side-label">Метки${labels.length ? `<div class="jr-labels">${labels.map(l => `<label class="jr-label-choice"><input type="checkbox" data-label="${Number(l.id)}"${chosen.has(Number(l.id)) ? ' checked' : ''}${off(can)}><i class="jr-label-dot" style="background:${JR_HEX.test(l.color || '') ? l.color : '#999999'}"></i>${jrEscape(l.title)}</label>`).join('')}</div>` : '<p class="jr-hint">Меток в салоне нет.</p>'}</div>
+    <label class="jr-notify"><input type="checkbox" id="jrNoNotify"${r.notifyClient === false ? ' checked' : ''}${off(can)}> Не уведомлять клиента</label>
+  </section>`;
+}
+// One field of the card's session edit; enables «Сохранить изменения».
+function jrCardEdit(key, value) {
+  if (!journal.session) return;
+  journal.session.edit ||= {};
+  journal.session.edit[key] = value;
+  jrEl('jrSaveChanges').disabled = false;
+  // Cancel would contradict the draft (as for status/services edits).
+  if (jrEl('jrCancel')) jrEl('jrCancel').disabled = true;
+}
+function jrDeleteRecord(r) {
+  const carry = journal.session?.edit ? { ...journal.session.edit } : null;
+  jrShowModal('Удалить запись');
+  journal.draft = { action: 'delete', recordId: r.id };
+  journal.session = jrNewSession({ recordId: r.id });
+  journal.payment = null;
+  jrEl('jrModalBody').innerHTML = `<p>${jrEscape(r.clientName)} · ${jrEscape(r.date)} ${jrEscape(r.time)}</p><p>Удалить запись насовсем? В отличие от отмены (статус «Не пришёл»), удалённая запись исчезнет из журнала, а после «Отправить в YClients» — и из YClients. Вернуть её будет нельзя.</p><div class="jr-actions"><button type="button" class="btn btn-pri jr-danger" id="jrApply">Да, удалить запись</button><button type="button" class="btn btn-sec" id="jrBack">Назад</button></div>`;
+  jrEl('jrApply').onclick = () => jrSave({ sessionId: journal.session.sessionId, recordId: r.id, status: 'delete', ...(carry ? { edit: carry } : {}) });
+  jrEl('jrBack').onclick = () => jrOpen(r.id);
+}
+// «Записать повторно»: the same client and services, the date is chosen anew.
+function jrRebook(r) {
+  const ids = new Set((r.services || []).map(s => Number(s.id)));
+  const serviceIds = (journal.data?.services || []).filter(s => ids.has(Number(s.yclientsId)) && (s.staffIds || []).includes(r.staffId)).map(s => s.id);
+  jrForm(null, { staffId: r.staffId, date: '', serviceIds, client: { name: r.clientName, phone: r.clientPhone || '' } });
+}
+
+function jrTools(record) {
   return `<div class="jr-tools">${[['ЕГИСЗ','plus'],['Текущий приём','file'],['Расширенные поля','list'],['Повторение записи','repeat'],['Уведомления о визите','bell'],['Списание расходников','box'],['История изменений','clock'],['Лист назначения','file']].map(([title,icon]) => jrStub(title,icon)).join('')}</div>`;
 }
-function jrClientPanel(record, creating = false) {
+function jrClientPanel(record, creating = false, editable = false) {
   return `<aside class="jr-booking-client jr-booking-panel"><div class="jr-client-tabs"><span class="is-active">${jrIcon('user')} Клиент</span>${jrStub('Чат','chat','jr-tab-stub')}</div>${creating
     ? '<div class="jr-fields"><label>Имя клиента<input id="jrName" required maxlength="120" autocomplete="off" placeholder="Имя и фамилия"></label><label>Телефон с кодом страны<input id="jrPhone" required type="tel" maxlength="24" autocomplete="off" placeholder="Введите номер телефона"></label></div>'
-    : `<div class="jr-client-identity">${jrIcon('user')}<h3>${jrEscape(record?.clientName || 'Клиент')}</h3></div>`}
-    ${jrStub('Сменить клиента','user','jr-stub-inline')}
+    : `<div class="jr-client-identity">${jrIcon('user')}<h3 id="jrClientName">${jrEscape(record?.clientName || 'Клиент')}</h3></div>${editable ? jrPhoneHtml(record) : ''}`}
+    ${!creating && editable && record && jrCanReshape(record)
+      ? `<button type="button" class="btn btn-sec" id="jrChangeClient">${jrIcon('user')} Сменить клиента</button><div id="jrChangeClientBox" class="jr-fields" hidden><label>Найти клиента<input id="jrClientSearch" type="search" placeholder="Имя или телефон" autocomplete="off"></label><h4 id="jrClientsTitle">Последние клиенты</h4><div id="jrClientResults" aria-live="polite"></div></div>`
+      : jrStub('Сменить клиента','user','jr-stub-inline')}
     <div class="jr-client-tools">${[['Планы лечения','file'],['Медкарта','plus'],['История посещений','clock'],['Лояльность','wallet'],['Счета клиента','wallet']].map(([title,icon]) => jrStub(title,icon)).join('')}</div>
     <label class="jr-other-visitor"><input type="checkbox" disabled> Записывает другого посетителя <small>Скоро</small></label>
     <section class="jr-client-info"><h4>Дополнительно</h4><p>Примечание о клиенте<span>—</span></p><p>Дата рождения<span>—</span></p><p>Номер договора<span>—</span></p></section>
@@ -18,7 +68,7 @@ function jrPaymentPanel(record) {
   return `<section class="jr-payment-panel"><div class="jr-payment-icon">${jrIcon('wallet')}</div><h3>${state}</h3><p>Актуальная сумма, доступные способы и история — в форме оплаты.</p>${record && !record.deleted && record.attendance !== -1 ? '<button type="button" class="btn btn-sec" id="jrPaymentOpen">Оплата визита</button>' : jrStub('Детали оплаты','wallet','jr-stub-inline')}</section>`;
 }
 function jrStatusBar(record, canEdit = false) {
-  if (record?.deleted) return '<div class="jr-status-bar"><span class="jr-state-pill is-current">Запись удалена</span></div>';
+  if (record?.deleted) return `<div class="jr-status-bar"><span class="jr-state-pill is-current">${['queued', 'running'].includes(record.sync?.status) ? 'Удалена (ждёт отправки)' : 'Запись удалена'}</span></div>`;
   const current = record ? record.attendance : 0;
   const states = [[0,'Ожидание','clock'],[1,'Пришёл','plus'],[-1,'Не пришёл','list'],[2,'Подтвердил','check']];
   return `<div class="jr-status-bar" aria-label="Статус визита">${states.map(([value,label,icon]) => {
@@ -49,6 +99,8 @@ function jrSyncAlert(record) {
 // record not yet in YClients); a package on its way or failed locks it.
 const jrLocked = record => jrSyncing(record) || record.sync?.status === 'failed';
 const jrCanChange = record => !record.deleted && !record.paid && !jrLocked(record);
+// Duration, client and deletion additionally exclude an arrived visit (spec §4.1).
+const jrCanReshape = record => jrCanChange(record) && record.attendance !== 1;
 const jrCanEdit = record => !record.deleted && record.attendance !== -1 && record.attendance !== 1 && !record.paid && !jrLocked(record);
 function jrAppointmentCard(record) {
   const canEdit = jrCanEdit(record);
@@ -60,9 +112,9 @@ function jrAppointmentCard(record) {
   const initials = staffName.split(/\s+/).slice(0,2).map(s => s[0] || '').join('');
   const day = record.date ? new Date(record.date + 'T12:00:00+03:00').toLocaleDateString('ru', { day:'numeric',month:'long',timeZone:'Europe/Moscow' }) : 'Дата не указана';
   return `${jrSyncAlert(record)}<div class="jr-booking-layout"><aside class="jr-booking-side"><div class="jr-visit-summary"><div class="jr-staff-identity"><span class="jr-staff-avatar">${jrEscape(initials)}</span><div><strong>${jrEscape(staffName)}</strong><small>Специалист</small></div></div><div class="jr-visit-date">${jrIcon('calendar')}<div><strong>${jrEscape(day)}</strong><small>${jrEscape(record.time)} · ${jrEscape(record.duration)} мин.</small></div></div>${canEdit ? `<button type="button" class="btn btn-sec jr-move-btn" id="jrMove">${jrIcon('move')}Перенести запись</button>` : `<button type="button" class="btn btn-sec jr-move-btn" disabled title="${jrEscape(editNote)}">Перенести запись</button>`}</div>
-    <label class="jr-side-label">Комментарий к записи<textarea rows="4" readonly placeholder="Комментарий не указан">${jrEscape(record.comment || '')}</textarea><small>Редактирование — скоро</small></label>${record ? jrTools() : '<div class="jr-tools">' + [['Расширенные поля','list'],['Повторение записи','repeat'],['Уведомления о визите','bell']].map(([label,icon]) => jrStub(label,icon)).join('') + '</div>'}</aside>
-    <section class="jr-booking-main jr-booking-panel">${jrStatusBar(record,jrCanChange(record))}${jrSyncing(record) ? '<p class="jr-hint" role="status">Передаём изменения в YClients… Карточка обновится автоматически.</p>' : jrUnsent(record) ? `<p class="jr-hint jr-unsent-hint" role="status">${local ? 'Новая запись сохранена в журнале' : 'Изменения сохранены в журнале'} и ещё не отправлены в YClients — кнопка «Отправить в YClients» над журналом.</p>` : ''}${jrServicesPanel(record, jrCanChange(record))}${jrCanChange(record) ? '<button type="button" class="btn btn-sec" id="jrEditServices">Изменить услуги, количество и стоимость</button>' : record.paid && !record.deleted ? '<p class="jr-hint">Визит оплачен: чтобы изменить статус, услуги или стоимость, сначала удалите оплаты в «Оплата визита».</p>' : ''}${jrPaymentPanel(record)}${!canEdit ? `<p class="jr-hint">${jrEscape(editNote)}</p>` : ''}</section>${jrClientPanel(record)}</div>
-    <footer class="jr-booking-footer"><span class="jr-hint">Изменения сохраняются в журнале кнопкой «Сохранить изменения» (при закрытии карточки спросим); в YClients они уходят по кнопке «Отправить в YClients».</span><div>${canEdit ? '<button type="button" class="btn btn-sec" id="jrCancel">Отменить запись</button>' : ''}${jrStub('Удалить запись','file','jr-stub-inline')}${jrCanChange(record) ? '<button type="button" class="btn btn-pri" id="jrSaveChanges" disabled>Сохранить изменения</button>' : jrStub('Сохранить изменения','check','jr-stub-inline')}</div></footer>`;
+    <label class="jr-side-label">Комментарий к записи<textarea id="jrCommentEdit" rows="4" maxlength="1000" placeholder="Комментарий не указан"${jrCanChange(record) ? '' : ' readonly'}>${jrEscape(record.comment || '')}</textarea></label>${jrExtraFields(record)}${record ? jrTools(record) : '<div class="jr-tools">' + [['Расширенные поля','list'],['Повторение записи','repeat'],['Уведомления о визите','bell']].map(([label,icon]) => jrStub(label,icon)).join('') + '</div>'}</aside>
+    <section class="jr-booking-main jr-booking-panel">${jrStatusBar(record,jrCanChange(record))}${jrSyncing(record) ? '<p class="jr-hint" role="status">Передаём изменения в YClients… Карточка обновится автоматически.</p>' : jrUnsent(record) ? `<p class="jr-hint jr-unsent-hint" role="status">${local ? 'Новая запись сохранена в журнале' : 'Изменения сохранены в журнале'} и ещё не отправлены в YClients — кнопка «Отправить в YClients» над журналом.</p>` : ''}${jrServicesPanel(record, jrCanChange(record))}${jrCanChange(record) ? '<button type="button" class="btn btn-sec" id="jrEditServices">Изменить услуги, количество и стоимость</button>' : record.paid && !record.deleted ? '<p class="jr-hint">Визит оплачен: чтобы изменить статус, услуги или стоимость, сначала удалите оплаты в «Оплата визита».</p>' : ''}${jrPaymentPanel(record)}${!canEdit ? `<p class="jr-hint">${jrEscape(editNote)}</p>` : ''}</section>${jrClientPanel(record, false, true)}</div>
+    <footer class="jr-booking-footer"><span class="jr-hint">Изменения сохраняются в журнале кнопкой «Сохранить изменения» (при закрытии карточки спросим); в YClients они уходят по кнопке «Отправить в YClients».</span><div>${canEdit ? '<button type="button" class="btn btn-sec" id="jrCancel">Отменить запись</button>' : ''}${jrCanReshape(record) ? '<button type="button" class="btn btn-sec jr-danger" id="jrDelete">Удалить запись</button>' : ''}${record.deleted ? '' : '<button type="button" class="btn btn-sec" id="jrRebook">Записать повторно</button>'}${jrCanChange(record) ? '<button type="button" class="btn btn-pri" id="jrSaveChanges" disabled>Сохранить изменения</button>' : jrStub('Сохранить изменения','check','jr-stub-inline')}</div></footer>`;
 }
 
 async function jrOpen(id) {
@@ -93,6 +145,15 @@ function jrRenderRecord(r) {
 
       jrEl('jrCancel').onclick = () => jrConfirmAction(r, 'cancel');
     }
+    const copy = jrEl('jrCopyPhone');
+    if (copy) copy.onclick = () => {
+      const clip = typeof navigator !== 'undefined' && navigator.clipboard;
+      (clip ? clip.writeText(copy.dataset?.phone || '') : Promise.reject(new Error('no clipboard')))
+        .then(() => notify('Телефон скопирован.'))
+        .catch(() => notify('Не удалось скопировать — выделите номер вручную.', 'err'));
+    };
+    if (jrCanReshape(r) && jrEl('jrDelete')) jrEl('jrDelete').onclick = () => jrDeleteRecord(r);
+    if (!r.deleted && jrEl('jrRebook')) jrEl('jrRebook').onclick = () => jrRebook(r);
 }
 // The card is tinted by the visit status (like the block in the grid) and
 // follows a status click at once, before saving.
@@ -183,6 +244,41 @@ function jrBindRecordEdit(record) {
     };
   });
   jrEl('jrSaveChanges').onclick = () => jrSave(jrSessionBody());
+  // Parity fields (12.11.2026): each goes into the same session edit.
+  const comment = jrEl('jrCommentEdit');
+  if (comment) comment.oninput = () => jrCardEdit('comment', comment.value);
+  const duration = jrEl('jrDurationEdit');
+  if (duration && !duration.disabled) duration.onchange = () => {
+    const n = Number(duration.value);
+    if (!Number.isInteger(n) || n < 5 || n > 720 || n % 5 !== 0) { jrMessage('Длительность — от 5 до 720 минут, кратно 5.'); return; }
+    jrMessage('');
+    jrCardEdit('seanceLength', n);
+  };
+  const pause = jrEl('jrBreakEdit');
+  if (pause) pause.onchange = () => jrCardEdit('technicalBreak', Number(pause.value) * 60);
+  const noNotify = jrEl('jrNoNotify');
+  if (noNotify) noNotify.onchange = () => jrCardEdit('notifyClient', !noNotify.checked);
+  const body = jrEl('jrModalBody');
+  body.querySelectorAll('[data-color]').forEach(b => { b.onclick = () => {
+    jrCardEdit('customColor', b.dataset.color || null);
+    body.querySelectorAll('[data-color]').forEach(x => x.classList?.toggle('is-current', x === b));
+  }; });
+  body.querySelectorAll('[data-label]').forEach(box => { box.onchange = () => {
+    jrCardEdit('labelIds', Array.from(body.querySelectorAll('[data-label]')).filter(x => x.checked).map(x => Number(x.dataset.label)));
+  }; });
+  const pickClient = client => {
+    if (!client?.phone) { jrMessage('У клиента нет телефона — выберите другого.'); return; }
+    jrMessage('');
+    jrCardEdit('client', { name: String(client.name || '').trim() || 'Без имени', phone: String(client.phone) });
+    jrEl('jrChangeClientBox').hidden = true;
+    jrEl('jrClientName').textContent = `${client.name || 'Без имени'} — заменит клиента после сохранения`;
+  };
+  const changeClient = jrEl('jrChangeClient');
+  if (changeClient) changeClient.onclick = () => {
+    jrEl('jrChangeClientBox').hidden = false;
+    jrEl('jrClientSearch').oninput = () => jrLoadClients(jrEl('jrClientSearch').value.trim(), pickClient);
+    jrLoadClients('', pickClient);
+  };
   jrEl('jrEditServices').onclick = () => {
     const panel = jrEl('jrModalBody').querySelector('.jr-service-panel');
     let lines = record.services.map(s => ({ serviceId: s.id, title: s.title, quantity: s.quantity || 1,

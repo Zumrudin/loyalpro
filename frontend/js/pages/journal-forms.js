@@ -53,9 +53,10 @@ function jrCreateClientPanel() {
     <label>Телефон<input id="jrPhone" required type="tel" maxlength="24" autocomplete="off" placeholder="+7 …"></label>
     <label>Email<input id="jrEmail" type="email" readonly placeholder="Из карточки выбранного клиента"><small>Редактирование — в разделе «Клиенты»</small></label>
     </div><label class="jr-other-visitor"><input type="checkbox" disabled> Записывает другого посетителя <small>Скоро</small></label>
+    <label class="jr-notify"><input type="checkbox" id="jrCreateNoNotify"> Не уведомлять клиента</label>
     <div id="jrClientSummary" class="jr-hint"></div><h4 id="jrClientsTitle">Последние клиенты</h4><div id="jrClientResults" aria-live="polite"></div></aside>`;
 }
-async function jrLoadClients(query = '') {
+async function jrLoadClients(query = '', onPick = jrSelectClient) {
   const modal = journal.modalRequest;
   const request = journal.clientRequest = (journal.clientRequest || 0) + 1;
   jrEl('jrClientResults').textContent = 'Загрузка…';
@@ -67,7 +68,7 @@ async function jrLoadClients(query = '') {
     journal.clientResults = result.clients || [];
     jrEl('jrClientsTitle').textContent = query ? 'Найденные клиенты' : 'Последние клиенты';
     jrEl('jrClientResults').innerHTML = journal.clientResults.length ? journal.clientResults.map((c,i) => `<button type="button" class="jr-client-result" data-client-index="${i}"><span>${jrEscape(c.name || 'Без имени')}</span><small>${jrEscape(c.phone || 'Нет телефона')}</small></button>`).join('') : '<p class="jr-hint">Клиенты не найдены. Заполните данные нового клиента.</p>';
-    jrEl('jrClientResults').querySelectorAll('[data-client-index]').forEach(button => { button.onclick = () => jrSelectClient(journal.clientResults[Number(button.dataset.clientIndex)]); });
+    jrEl('jrClientResults').querySelectorAll('[data-client-index]').forEach(button => { button.onclick = () => onPick(journal.clientResults[Number(button.dataset.clientIndex)]); });
   } catch (_) {
     if (modal === journal.modalRequest && request === journal.clientRequest) jrEl('jrClientResults').textContent = 'Не удалось загрузить клиентов. Повторите поиск.';
   }
@@ -218,7 +219,8 @@ function jrForm(record, preset = {}) {
     journal.payAfterCreate=button.dataset.payNext;
     jrEl('jrForm').requestSubmit();
   };});
-  jrEl('jrFormDate').value = record?.date || preset.date || jrEl('jrDate').value;
+  // «Записать повторно» passes date:'' — the date is chosen anew.
+  jrEl('jrFormDate').value = record?.date || (preset.date !== undefined ? preset.date : jrEl('jrDate').value);
   jrEl('jrStaff').value = String(record?.staffId || preset.staffId || jrEl('jrStaffFilter').value || '');
   const invalidate = () => { journal.slotRequest++; journal.slots = []; jrEl('jrTime').innerHTML = '<option value="">Проверьте свободное время</option>'; jrEl('jrTime').disabled = true; jrEl('jrApply').disabled = true; jrEl('jrSlotInfo').textContent = ''; journal.duration = null; jrUpdateEndTime(); };
   const services = () => {
@@ -232,6 +234,10 @@ function jrForm(record, preset = {}) {
     if (!jrEl('jrServices').options.length) jrEl('jrSlotInfo').textContent = 'У сотрудника нет доступных услуг. Проверьте раздел «Услуги» и импорт каталога.';
   };
   services();
+  if (!record && Array.isArray(preset.serviceIds) && preset.serviceIds.length) {
+    for (const o of Array.from(jrEl('jrServices').options)) if (o) o.selected = preset.serviceIds.includes(Number(o.value));
+    jrRenderServiceChoices();
+  }
   if (journal.preferredTime) {
     jrEl('jrTime').innerHTML = `<option value="">${jrEscape(journal.preferredTime)} — проверим после выбора услуг</option>`;
     jrEl('jrSlotInfo').textContent = 'Выберите услуги: проверим выбранное время и длительность визита.';
@@ -248,6 +254,7 @@ function jrForm(record, preset = {}) {
     jrEl('jrClientSearch').oninput = () => jrLoadClients(jrEl('jrClientSearch').value.trim());
     jrEl('jrClearClient').onclick = () => jrSelectClient(null);
     jrLoadClients();
+    if (preset.client?.phone) jrSelectClient(preset.client);
   }
   jrEl('jrTime').onchange = () => { jrEl('jrApply').disabled = !journal.slots.includes(jrEl('jrTime').value); jrUpdateEndTime(); };
   jrEl('jrFindSlots').onclick = jrFindSlots;
@@ -262,7 +269,7 @@ function jrForm(record, preset = {}) {
 }
 function jrFormDraft(record) {
   const draft = { date: jrEl('jrFormDate').value, time: jrEl('jrTime').value, staffId: Number(jrEl('jrStaff').value) };
-  if (!record) Object.assign(draft, { serviceSource: journal.data.serviceSource, ...(journal.data.serviceSource === 'internal' ? {lines:jrSelectedLines()} : {}), serviceIds: Array.from(jrEl('jrServices').selectedOptions).map(o => Number(o.value)), clientName: journal.selectedClient?.name || [jrEl('jrSurname').value,jrEl('jrName').value,jrEl('jrPatronymic').value].map(s => s.trim()).filter(Boolean).join(' '), clientPhone: journal.selectedClient?.phone || jrEl('jrPhone').value, comment: jrEl('jrComment').value });
+  if (!record) Object.assign(draft, { serviceSource: journal.data.serviceSource, ...(journal.data.serviceSource === 'internal' ? {lines:jrSelectedLines()} : {}), serviceIds: Array.from(jrEl('jrServices').selectedOptions).map(o => Number(o.value)), clientName: journal.selectedClient?.name || [jrEl('jrSurname').value,jrEl('jrName').value,jrEl('jrPatronymic').value].map(s => s.trim()).filter(Boolean).join(' '), clientPhone: journal.selectedClient?.phone || jrEl('jrPhone').value, comment: jrEl('jrComment').value, ...(jrEl('jrCreateNoNotify')?.checked ? { notifyClient: false } : {}) });
   return draft;
 }
 async function jrFindSlots() {
