@@ -864,3 +864,13 @@ test('print: toolbar button and print stylesheet keep colours', () => {
   expect(css).toMatch(/@media print\{[^]*print-color-adjust:exact/);
   expect(css).toContain('.jr-cell-break');
 });
+
+test('technical break occupies the lane; paid mark appears with paidFull', () => {
+  const h = harness();
+  const l = h.context.jrLayout([{ id: 1, time: '10:00', duration: 30, technicalBreak: 1800 }, { id: 2, time: '10:45', duration: 30 }]);
+  expect(l[0].lane).not.toBe(l[1].lane);
+  expect(h.context.jrVisitMarks({ paidFull: true })).toContain('title="Оплачено"');
+  expect(h.context.jrVisitMarks({})).toBe('');
+  const css = fs.readFileSync(path.join(__dirname, '../frontend/css/journal.css'), 'utf8');
+  expect(css).not.toContain('[style*=');
+});

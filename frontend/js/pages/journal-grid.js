@@ -29,13 +29,13 @@ function jrLayout(records) {
     for (const r of group) {
       let lane = lanes.findIndex(t => t <= r.start);
       if (lane < 0) lane = lanes.length;
-      r.lane = lane; lanes[lane] = r.start + Math.max(r.duration || 15, 5);
+      r.lane = lane; lanes[lane] = r.start + Math.max(jrOccupied(r), 5);
     }
     group.forEach(r => { r.lanes = lanes.length; });
   };
   for (const r of sorted) {
     if (r.start >= end) { finish(); group = []; end = -1; }
-    group.push(r); end = Math.max(end, r.start + Math.max(r.duration || 15, 5));
+    group.push(r); end = Math.max(end, r.start + Math.max(jrOccupied(r), 5));
   }
   finish(); return sorted;
 }

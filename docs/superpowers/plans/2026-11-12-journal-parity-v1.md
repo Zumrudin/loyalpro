@@ -2774,7 +2774,11 @@ function jrGridCreate(staffId, time, date) {
   .topbar,.mnav-drawer,.jr-toolbar,#jrReview,#jrState,#jrStaffChips,#jrMonth{display:none!important}
   .jr-scroll{max-height:none;overflow:visible;border:0}
   .jr-calendar{min-width:0;grid-template-columns:44px repeat(var(--jr-columns),minmax(0,1fr))}
-  .jr-heading,.jr-corner,.jr-hours{position:static}
+  .jr-heading,.jr-corner{position:static}
+  .jr-hours{position:relative}
+  #app{display:block!important;height:auto!important;overflow:visible!important}
+  #app::before,#app::after{display:none}
+  .content{overflow:visible;padding:0}
   .jr-visit,.jr-break-band,.jr-cell-break,.jr-label-dot{print-color-adjust:exact;-webkit-print-color-adjust:exact}
 }
 ```
