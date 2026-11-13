@@ -281,3 +281,14 @@ button.jr-service-line:hover,button.jr-service-line:focus-visible{border-color:v
 .jr-client-phone a{font-weight:600;color:var(--a)}
 .btn.jr-danger{color:var(--danger,#a64635);border-color:var(--danger,#a64635)}
 [data-theme="dark"] .jr-color{box-shadow:inset 0 0 0 1px rgba(255,255,255,.25)}
+
+/* History and client panel (13.11.2026). */
+.jr-placeholder.jr-tool-live{cursor:pointer}
+.jr-history-box{margin:0 0 16px;max-height:320px;overflow:auto;font-size:12px}
+.jr-history-box[hidden]{display:none}
+.jr-history{list-style:none;margin:0;padding:0;display:grid;gap:8px}
+.jr-history>li{padding:8px;border:1px solid var(--bd);border-radius:8px}
+.jr-history-head{display:flex;flex-wrap:wrap;gap:6px;align-items:baseline}
+.jr-history-head time{color:var(--t3)}
+.jr-history ul,.jr-last-visits,.jr-abonements{margin:4px 0 0;padding-left:16px;font-size:12px}
+[data-theme="dark"] .jr-history>li{border-color:var(--bd)}

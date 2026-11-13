@@ -57,7 +57,10 @@ function jrRebook(r) {
 }
 
 function jrTools(record) {
-  return `<div class="jr-tools">${[['ЕГИСЗ','plus'],['Текущий приём','file'],['Расширенные поля','list'],['Повторение записи','repeat'],['Уведомления о визите','bell'],['Списание расходников','box'],['История изменений','clock'],['Лист назначения','file']].map(([title,icon]) => jrStub(title,icon)).join('')}</div>`;
+  const live = !!record && Number(record.id) > 0;
+  return `<div class="jr-tools">${[['ЕГИСЗ','plus'],['Текущий приём','file'],['Расширенные поля','list'],['Повторение записи','repeat'],['Уведомления о визите','bell'],['Списание расходников','box'],['История изменений','clock'],['Лист назначения','file']].map(([title,icon]) => live && title === 'История изменений'
+    ? `<button type="button" class="jr-tool-live jr-placeholder" id="jrHistoryOpen">${jrIcon(icon)}<span>${title}</span></button>`
+    : jrStub(title,icon)).join('')}</div>${live ? '<div id="jrHistory" class="jr-history-box" hidden></div>' : ''}`;
 }
 function jrClientPanel(record, creating = false, editable = false) {
   return `<aside class="jr-booking-client jr-booking-panel"><div class="jr-client-tabs"><span class="is-active">${jrIcon('user')} Клиент</span>${jrStub('Чат','chat','jr-tab-stub')}</div>${creating
@@ -69,7 +72,8 @@ function jrClientPanel(record, creating = false, editable = false) {
     <div class="jr-client-tools">${[['Планы лечения','file'],['Медкарта','plus'],['История посещений','clock'],['Лояльность','wallet'],['Счета клиента','wallet']].map(([title,icon]) => jrStub(title,icon)).join('')}</div>
     <label class="jr-other-visitor"><input type="checkbox" disabled> Записывает другого посетителя <small>Скоро</small></label>
     <section class="jr-client-info"><h4>Дополнительно</h4><p>Примечание о клиенте<span>—</span></p><p>Дата рождения<span>—</span></p><p>Номер договора<span>—</span></p></section>
-    <section class="jr-client-info"><h4>Статистика</h4><div class="jr-client-stats"><p>Последний визит<span>—</span></p><p>Всего визитов<span>—</span></p></div><small>Данные карточки клиента пока не подключены к журналу.</small></section>
+    ${editable ? '<section class="jr-client-info"><h4>Клиент</h4><div id="jrClientSummaryBox"><p class="jr-hint">Загрузка данных клиента…</p></div></section>'
+      : '<section class="jr-client-info"><h4>Статистика</h4><div class="jr-client-stats"><p>Последний визит<span>—</span></p><p>Всего визитов<span>—</span></p></div><small>Данные карточки клиента пока не подключены к журналу.</small></section>'}
   </aside>`;
 }
 function jrPaymentPanel(record) {
@@ -163,6 +167,15 @@ function jrRenderRecord(r) {
     };
     if (jrCanReshape(r) && jrEl('jrDelete')) jrEl('jrDelete').onclick = () => jrDeleteRecord(r);
     if (!r.deleted && jrEl('jrRebook')) jrEl('jrRebook').onclick = () => jrRebook(r);
+    const historyBtn = jrEl('jrHistoryOpen');
+    if (historyBtn) {
+      historyBtn.onclick = () => jrLoadHistory(r.id);
+      // A re-render (polling while sending) keeps an already loaded history.
+      const kept = journal.history;
+      if (kept && kept.request === journal.modalRequest && kept.id === r.id) { jrEl('jrHistory').hidden = false; jrEl('jrHistory').innerHTML = kept.html; }
+    }
+    // Lazy, once per opened card; errors stay inside the panel.
+    jrLoadClientSummary(r);
 }
 // The card is tinted by the visit status (like the block in the grid) and
 // follows a status click at once, before saving.
@@ -282,7 +295,7 @@ function jrBindRecordEdit(record) {
     if (digits.length < 11 || digits.length > 15) { notify('У клиента нет корректного телефона (11–15 цифр) — выберите другого.', 'err'); return; }
     if (!name || name.length > 120) { notify('У клиента нет имени или оно длиннее 120 символов — выберите другого.', 'err'); return; }
     jrMessage('');
-    jrCardEdit('client', { name, phone: String(client.phone) });
+    jrCardEdit('client', { name, phone: digits });
     jrEl('jrChangeClientBox').hidden = true;
     jrEl('jrClientName').textContent = `${name} — заменит клиента после сохранения`;
   };
@@ -327,4 +340,65 @@ function jrBindRecordEdit(record) {
     render(); jrEl('jrEditServices').disabled = true;
   };
   jrEl('jrModalBody').querySelectorAll('[data-service-line]').forEach(line => { line.onclick = () => jrEl('jrEditServices').onclick(); });
+}
+
+// ---- History of changes (spec 4.2) and client panel (4.4) ----
+const jrMskStamp = iso => new Date(iso).toLocaleString('ru', { timeZone: 'Europe/Moscow', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+function jrHistoryHtml(events) {
+  if (!events?.length) return '<p class="jr-hint">Изменений не зафиксировано. Журнал вебхуков YClients ведётся с 04.11.2026.</p>';
+  return `<ol class="jr-history">${events.map(e => `<li><div class="jr-history-head"><time>${jrEscape(jrMskStamp(e.at))}</time><strong>${jrEscape(e.author)}</strong><span>${jrEscape(e.title)}</span></div>${(e.changes || []).length ? `<ul>${e.changes.map(c => `<li>${jrEscape(c.label || c.field)}: ${jrEscape(c.from ?? '—')} → ${jrEscape(c.to ?? '—')}</li>`).join('')}</ul>` : ''}${e.error ? `<p class="jr-sync-failed-note">${jrEscape(e.error)}${e.errorCode ? ' (' + jrEscape(e.errorCode) + ')' : ''}</p>` : ''}</li>`).join('')}</ol>`;
+}
+async function jrLoadHistory(id) {
+  const box = jrEl('jrHistory'), request = journal.modalRequest;
+  if (!box) return;
+  box.hidden = false;
+  box.innerHTML = '<p class="jr-hint">Загрузка истории…</p>';
+  try {
+    const data = await jrApi(`records/${encodeURIComponent(id)}/history`);
+    if (request !== journal.modalRequest) return;
+    const html = jrHistoryHtml(data.events);
+    journal.history = { request, id, html };
+    const now = jrEl('jrHistory');
+    if (now) { now.hidden = false; now.innerHTML = html; }
+  } catch (e) {
+    const now = jrEl('jrHistory');
+    if (request === journal.modalRequest && now) now.innerHTML = `<p class="jr-hint">${jrEscape(e.message)}</p>`;
+  }
+}
+function jrClientSummaryHtml(s) {
+  if (!s) return '<p class="jr-hint">Нет данных клиента.</p>';
+  const v = value => jrEscape(value ?? '—');
+  const abonements = s.abonements === null || s.abonements === undefined ? '<p class="jr-hint">Абонементы: не удалось прочитать.</p>'
+    : s.abonements.length ? `<ul class="jr-abonements">${s.abonements.map(a => `<li>${jrEscape(a.title)}${a.balance != null ? ' · осталось ' + jrEscape(a.balance) : ''}${a.expires ? ' · до ' + jrEscape(String(a.expires).slice(0, 10)) : ''}${a.frozen ? ' · заморожен' : ''}</li>`).join('')}</ul>`
+    : '<p class="jr-hint">Абонементов нет.</p>';
+  const last = (s.lastVisits || []).length ? `<h4>Последние визиты</h4><ul class="jr-last-visits">${s.lastVisits.map(x => `<li>${jrEscape(x.date)} · ${jrEscape(x.staffName)} · ${jrEscape((x.services || []).join(', '))} · ${jrEscape(jrStatus({ attendance: x.attendance }))}</li>`).join('')}</ul>` : '';
+  const source = s.bonusesSource === 'ledger' ? 'по журналу LoyalPro' : s.bonusesSource === 'card' ? 'по карте YClients' : '';
+  return `<div class="jr-client-stats"><p>Визитов<span>${v(s.visits?.success)}</span></p><p>Неявок<span>${v(s.visits?.fail)}</span></p><p>Бонусы<span>${v(s.bonusBalance)}</span></p><p>Уровень<span>${v(s.loyaltyLevel)}</span></p><p>Потрачено<span>${s.totalSpent == null ? '—' : jrEscape(Number(s.totalSpent).toLocaleString('ru-RU') + ' ₽')}</span></p></div>${source ? `<small class="jr-hint">Бонусы ${source}</small>` : ''}<h4>Абонементы</h4>${abonements}${last}`;
+}
+async function jrLoadClientSummary(r) {
+  const box = jrEl('jrClientSummaryBox');
+  if (!box) return;
+  const phone = String(r?.clientPhone || '').replace(/\D/g, '');
+  if (!phone) { box.innerHTML = '<p class="jr-hint">Телефон клиента неизвестен — данных нет.</p>'; return; }
+  const request = journal.modalRequest;
+  const cached = journal.clientSummary;
+  if (cached && cached.phone === phone && cached.request === request) {
+    if (cached.html) box.innerHTML = cached.html;
+    return; // loaded already, or the request is in flight and will fill the current box
+  }
+  journal.clientSummary = { phone, request, html: null };
+  box.innerHTML = '<p class="jr-hint">Загрузка данных клиента…</p>';
+  try {
+    const s = await jrApi('clients/summary?' + new URLSearchParams({ phone }));
+    if (request !== journal.modalRequest) return;
+    const html = jrClientSummaryHtml(s);
+    journal.clientSummary = { phone, request, html };
+    const now = jrEl('jrClientSummaryBox');
+    if (now) now.innerHTML = html;
+  } catch (e) {
+    if (request !== journal.modalRequest) return;
+    journal.clientSummary = null; // let the next render retry
+    const now = jrEl('jrClientSummaryBox');
+    if (now) now.innerHTML = `<p class="jr-hint">Не удалось загрузить данные клиента: ${jrEscape(e.message)}</p>`;
+  }
 }

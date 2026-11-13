@@ -1293,7 +1293,7 @@ test('change client: the card search picks a client into edit.client', () => {
   expect(h.get('jrChangeClientBox').hidden).toBe(false);
   const pick = h.context.jrLoadClients.mock.calls[0][1];
   pick({ name: '<b>Борис</b>', phone: '+79000000001' });
-  expect(h.run('journal.session.edit.client')).toEqual({ name: '<b>Борис</b>', phone: '+79000000001' });
+  expect(h.run('journal.session.edit.client')).toEqual({ name: '<b>Борис</b>', phone: '79000000001' });
   expect(h.get('jrClientName').textContent).toContain('Борис');
   pick({ name: 'Без телефона', phone: '' });
   expect(h.context.notify).toHaveBeenCalledWith(expect.stringContaining('телефона'), 'err');
@@ -1395,4 +1395,74 @@ test('unsaved card edit with new fields: kind is edit and closing asks', () => {
   h.context.jrClose();
   expect(h.get('jrCloseAsk').hidden).toBe(false);
   expect(h.get('jrCloseAsk').innerHTML).toContain('Есть несохранённые изменения');
+});
+
+// ---- History and client panel (12.11.2026) ----
+const SUMMARY = { name: 'Анна', phone: '79200255591', visits: { success: 7, fail: 2 }, bonusBalance: 650, loyaltyLevel: 'Золото', totalSpent: 42000,
+  lastVisits: [{ date: '2026-11-01', staffName: '<b>Юлия</b>', services: ['Чистка'], attendance: 1 }], abonements: null, bonusesSource: 'card' };
+test('card has a live history button and the client panel box', () => {
+  const h = cardHarness();
+  const html = h.context.jrAppointmentCard(CARD);
+  expect(html).toContain('class="jr-tool-live jr-placeholder" id="jrHistoryOpen"');
+  expect(html).toContain('<div id="jrHistory" class="jr-history-box" hidden></div>');
+  expect(html).toContain('<div id="jrClientSummaryBox">');
+  expect(h.context.jrClientPanel(CARD)).not.toContain('jrClientSummaryBox');
+});
+test('history: lazy load, escaped changes, package errors, empty state', async () => {
+  const h = cardHarness();
+  h.context.jrApi = jest.fn().mockResolvedValue({ recordId: 8, events: [
+    { at: '2026-11-12T07:10:00Z', source: 'yclients', author: 'YClients', title: 'Изменена в YClients', changes: [{ field: 'comment', label: 'Комментарий', from: null, to: '<script>x</script>' }] },
+    { at: '2026-11-12T07:07:00Z', source: 'journal', author: 'LoyalPro: Мария', title: 'перенос — ошибка', changes: [], error: 'Время занято', errorCode: 'slot_taken' },
+  ] });
+  await h.context.jrLoadHistory(8);
+  expect(h.context.jrApi).toHaveBeenCalledWith('records/8/history');
+  const html = h.get('jrHistory').innerHTML;
+  expect(h.get('jrHistory').hidden).toBe(false);
+  expect(html).toContain('Комментарий: — → &lt;script&gt;x&lt;/script&gt;');
+  expect(html).toContain('LoyalPro: Мария');
+  expect(html).toContain('Время занято (slot_taken)');
+  expect(html).toContain('12.11, 10:10');
+  expect(h.context.jrHistoryHtml([])).toContain('Изменений не зафиксировано');
+  h.context.jrApi = jest.fn().mockRejectedValue(new Error('Нет связи'));
+  await h.context.jrLoadHistory(8);
+  expect(h.get('jrHistory').innerHTML).toContain('Нет связи');
+});
+test('client panel: visits, no-shows, bonuses, abonements, last visits escaped', () => {
+  const h = harness();
+  const html = h.context.jrClientSummaryHtml(SUMMARY);
+  for (const s of ['Визитов<span>7</span>', 'Неявок<span>2</span>', 'Бонусы<span>650</span>', 'Уровень<span>Золото</span>', 'не удалось прочитать', 'по карте YClients']) expect(html).toContain(s);
+  expect(html).toContain('&lt;b&gt;Юлия&lt;/b&gt;');
+  expect(h.context.jrClientSummaryHtml({ ...SUMMARY, abonements: [] })).toContain('Абонементов нет');
+  const ab = h.context.jrClientSummaryHtml({ ...SUMMARY, abonements: [{ title: 'Чистка <x>', balance: 3, expires: '2027-01-01T00:00:00', frozen: true }] });
+  expect(ab).toContain('Чистка &lt;x&gt; · осталось 3 · до 2027-01-01 · заморожен');
+});
+test('client panel loads once per opened card; failure stays inside the panel', async () => {
+  const h = cardHarness();
+  h.context.jrApi = jest.fn().mockResolvedValue(SUMMARY);
+  await h.context.jrLoadClientSummary(CARD);
+  await h.context.jrLoadClientSummary(CARD);
+  expect(h.context.jrApi).toHaveBeenCalledTimes(1);
+  expect(h.context.jrApi).toHaveBeenCalledWith('clients/summary?phone=79200255591');
+  expect(h.get('jrClientSummaryBox').innerHTML).toContain('Визитов<span>7</span>');
+  h.run('journal.modalRequest++');
+  h.context.jrApi = jest.fn().mockRejectedValue(new Error('YClients недоступен'));
+  await h.context.jrLoadClientSummary(CARD);
+  expect(h.get('jrClientSummaryBox').innerHTML).toContain('Не удалось загрузить данные клиента: YClients недоступен');
+});
+test('client panel: stale answer after the card changed is not drawn', async () => {
+  const h = cardHarness();
+  let resolve;
+  h.context.jrApi = jest.fn(() => new Promise(r => { resolve = r; }));
+  const p = h.context.jrLoadClientSummary(CARD);
+  h.run('journal.modalRequest++');
+  resolve(SUMMARY);
+  await p;
+  expect(h.get('jrClientSummaryBox').innerHTML).not.toContain('Визитов');
+});
+test('no phone: the panel says so and does not call the server', async () => {
+  const h = cardHarness();
+  h.context.jrApi = jest.fn();
+  await h.context.jrLoadClientSummary({ ...CARD, clientPhone: '' });
+  expect(h.context.jrApi).not.toHaveBeenCalled();
+  expect(h.get('jrClientSummaryBox').innerHTML).toContain('Телефон клиента неизвестен');
 });
