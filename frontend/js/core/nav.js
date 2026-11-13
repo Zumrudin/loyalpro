@@ -24,8 +24,8 @@ function nav(el) {
 // меню слишком короткое для заголовка — своя формулировка, как в макетах.
 const NAV_PAGE_TITLES = {
   dashboard: 'Обзор клиники', workday: 'Рабочий день', 'staff-dashboard': 'Мои результаты', clients: 'Пациенты клиники',
-  records: 'Записи', chat: 'Диалоги с пациентами', care: 'Продолжение заботы',
-  economics: 'Экономика процедур', 'agent-services': 'Мила · услуги агента',
+  journal: 'Журнал записи', records: 'Записи', chat: 'Диалоги с пациентами', care: 'Продолжение заботы',
+  'service-catalog': 'Услуги', economics: 'Экономика процедур', finance: 'Финансовые операции', 'agent-services': 'Мила · услуги агента',
   'staff-analytics': 'Сотрудники', settings: 'Управление клиникой', edocs: 'Документы',
 };
 const NAV_ROLE_LBL = { owner: 'Владелец', admin: 'Администратор', specialist: 'Специалист', admin_cashier: 'Администратор-кассир' };
@@ -134,6 +134,8 @@ function navTo(p, opts) {
   if (p === 'dashboard')       { loadDashboard(); loadLs(); }
   if (p === 'workday')         loadWorkday();
   if (p === 'clients')         loadClients();
+  if (p === 'service-catalog') loadServiceCatalog();
+  if (p === 'journal') loadJournal();
   if (p === 'records')         { setDefDates(); loadRecords(1); }
   if (p === 'staff-analytics') loadStaffAnalytics();
   if (p === 'segments')        loadSegments();
@@ -150,6 +152,7 @@ function navTo(p, opts) {
   if (p === 'knowledge-base') loadKnowledgeBase();
   if (p === 'agent-services') loadAgentServices();
   if (p === 'economics')      loadEconomics();
+  if (p === 'finance')        loadFinance();
   if (p === 'edocs')          loadEdocs();
 }
 

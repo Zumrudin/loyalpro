@@ -63,6 +63,8 @@ function recordSnapshot(payload) {
     clientName: (d.client && d.client.name) || '',
     createdUserId: d.created_user_id != null ? Number(d.created_user_id) : null,
     shortLink: d.short_link || '',
+    // Journal packages send api_id = numeric package id (journal «не уведомлять»; YClients keeps only a number).
+    apiId: typeof d.api_id === 'string' || typeof d.api_id === 'number' ? String(d.api_id) : '',
   };
 }
 

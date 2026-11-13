@@ -5,6 +5,7 @@ const config  = require('./config');
 const { pool, db } = require('./db');
 const { runMigrations } = require('./migrations');
 const { reconcileDaily, closeStaleSyncRuns } = require('./services/yclients-reconcile');
+const finOps = require('./services/finance-ops');
 const { syncGoodsCategories } = require('./services/home-care');
 const { syncGoodsCatalog }    = require('./services/yclients-goods-catalog');
 const { syncStaffData, syncGoodsSales } = require('./services/staff');
@@ -149,12 +150,13 @@ cron.schedule('0 10 * * *', async () => {
         if (already) continue;
         const bonus = salon.birthday_bonus || 500;
         await db.query('UPDATE clients SET bonus_balance=bonus_balance+$1 WHERE id=$2', [bonus, c.id]);
-        await db.query(
+        const lctRes = await db.query(
           `INSERT INTO loyalty_card_transactions
              (salon_id,client_id,yclients_card_id,type,amount,balance_after,title,txn_date,created_at)
-           VALUES ($1,$2,(SELECT yclients_card_id FROM clients WHERE id=$3),'accrual',$4,$5,'🎂 Подарок на день рождения',NOW(),NOW())`,
+           VALUES ($1,$2,(SELECT yclients_card_id FROM clients WHERE id=$3),'accrual',$4,$5,'🎂 Подарок на день рождения',NOW(),NOW()) RETURNING *`,
           [salon.id, c.id, c.id, bonus, c.bonus_balance + bonus]
         );
+        if (lctRes && lctRes.rows && lctRes.rows[0]) await finOps.safely('bonus-birthday', () => finOps.recordLoyaltyTxn(lctRes.rows[0], { origin: 'loyalpro', kind: 'bonus_accrual' }));
         cronLogger.info(`Birthday: ${c.name} +${bonus}`);
       }
     }
@@ -303,6 +305,17 @@ cron.schedule('40 4 * * *', async () => {
   } catch (e) { cronLogger.error(`revenue reconcile cron: ${e.message}`); }
 }, { timezone: 'Europe/Moscow' });
 
+// Журнал финансовых операций (finance_operations): ночной догон за 7 дней — пакеты журнала,
+// кассовые операции YClients и бонусные проводки. После сверки revenue_operations (04:40),
+// чтобы удалённые там операции уже не попали в журнал. Те же upsert, что и в хуках; повторный
+// проход ничего не дублирует.
+cron.schedule('50 4 * * *', async () => {
+  try {
+    const r = await finOps.reconcile({ days: 7 });
+    cronLogger.info(`finance ops reconcile: journal=${r.journal} revenue=${r.revenue} loyalty=${r.loyalty} cancelled=${r.cancelled} errors=${r.errors}`);
+  } catch (e) { cronLogger.error(`finance ops reconcile cron: ${e.message}`); }
+}, { timezone: 'Europe/Moscow' });
+
 // Вечерний автосброс пауз «отвечал администратор»: на открытии окна расписания
 // диалоги, поставленные на паузу ДО окна, возвращаются Миле. Тик, а не разовый
 // крон на время старта окна: schedule_start у каждого салона свой и меняется из
@@ -360,6 +373,42 @@ if (process.env.EDOCS_AUTOMATION !== 'false') {
   }, { timezone: 'Europe/Moscow' });
 }
 
+// Журнал записи (local-first, спека 2026-11-10): зеркало записей и кэш
+// справочников/графиков освежаются кроном, чтобы журнал читал локальные данные.
+// Прогоны одного крона не наслаиваются (процессный guard). В лог — только id
+// салона и код ошибки: тексты исключений YClients могут нести данные пациентов.
+let journalSchemaReady = false;
+let journalWarmUp = null;
+if (config.JOURNAL_LOCAL_FIRST) {
+  const jMirror = require('./services/journal/mirror');
+  const jReference = require('./services/journal/reference-cache');
+  const journalSalons = () => db.any('SELECT * FROM salons WHERE yclients_company_id IS NOT NULL AND is_active=TRUE');
+  const journalRefresh = async salon => {
+    const today = jMirror.todayMsk();
+    await jReference.refreshReference(salon);
+    await jReference.refreshSchedules(salon, today, jMirror.shiftDate(today, 60));
+  };
+  const journalSync = kind => salon => { const w = jMirror.windowFor(kind); return jMirror.syncWindow(salon, w.from, w.to); };
+  const journalRunning = new Set();
+  const journalJob = (name, fn, log) => async () => {
+    if (!journalSchemaReady || journalRunning.has(name)) return;
+    journalRunning.add(name);
+    try {
+      for (const salon of await journalSalons()) {
+        try { await fn(salon); } catch (e) { log(`journal ${name} salon=${salon.id}: ${e?.code || 'error'} status=${e?.response?.status || e?.status || '-'} ${String(e?.message || '').slice(0, 160)}`); }
+      }
+    } catch (e) { log(`journal ${name}: ${e?.code || 'error'}`); }
+    finally { journalRunning.delete(name); }
+  };
+  const cronErr = msg => cronLogger.error(msg);
+  cron.schedule('*/10 * * * *', journalJob('mirror-near', journalSync('near'), cronErr), { timezone: 'Europe/Moscow' });
+  cron.schedule('20 3 * * *', journalJob('mirror-far', journalSync('far'), cronErr), { timezone: 'Europe/Moscow' });
+  const refreshJob = journalJob('reference', journalRefresh, cronErr);
+  cron.schedule('*/30 * * * *', refreshJob, { timezone: 'Europe/Moscow' });
+  // Разовый прогрев при старте — тот же guard, что у крона справочников.
+  journalWarmUp = journalJob('reference', journalRefresh, msg => logger.warn(msg));
+}
+
 // ============================================================
 // START
 // ============================================================
@@ -368,6 +417,7 @@ pool.connect()
   .then(async client => {
     await runMigrations(client);
     edocsSchemaReady = true;
+    journalSchemaReady = true;
     client.release();
     // Прогон синка/сверки, оборванный рестартом, иначе висит running вечно
     // (27 таких строк на проде с марта 2026).
@@ -387,6 +437,8 @@ pool.connect()
       require('./services/care/worker').startCareWorker();
       require('./services/reminders/worker').startRemindersWorker();
       require('./services/agent/followup-worker').startFollowupWorker();
+      if (config.JOURNAL_OUTBOX) require('./services/journal/outbox-worker').start();
+      if (journalWarmUp) journalWarmUp().catch(() => logger.warn('journal warm-up failed'));
     });
   })
   .catch(e => {

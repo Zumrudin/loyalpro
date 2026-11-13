@@ -1,6 +1,7 @@
 const router = require('express').Router();
 const { pool, db } = require('../db');
 const { auth } = require('../middleware/auth');
+const finOps = require('../services/finance-ops');
 const { buildClientsQuery } = require('../clients-query');
 const { ycGet, ycGetCardTransactions, ycWebSessions } = require('../services/yclients');
 const { getLoyaltySettings, runSync, sleep, linkClientCard } = require('../services/loyalty');
@@ -65,15 +66,19 @@ router.post('/:id/bonus', auth, async (req, res) => {
     if (!client) { await pg.query('ROLLBACK'); return res.status(404).json({ error: 'Клиент не найден' }); }
     const newBal = Math.max(0, client.bonus_balance + amount);
     await pg.query('UPDATE clients SET bonus_balance=$1,updated_at=NOW() WHERE id=$2', [newBal, client.id]);
-    await pg.query(
+    const lctRes = await pg.query(
       `INSERT INTO loyalty_card_transactions
          (salon_id,client_id,yclients_card_id,type,amount,balance_after,title,txn_date,created_at)
-       VALUES ($1,$2,(SELECT yclients_card_id FROM clients WHERE id=$3),$4,$5,$6,$7,NOW(),NOW())`,
+       VALUES ($1,$2,(SELECT yclients_card_id FROM clients WHERE id=$3),$4,$5,$6,$7,NOW(),NOW()) RETURNING *`,
       [req.user.salonId, client.id, client.id,
        amount > 0 ? 'accrual' : 'redemption', amount, newBal,
        description || 'Ручная корректировка']
     );
     await pg.query('COMMIT');
+    if (lctRes && lctRes.rows && lctRes.rows[0]) {
+      await finOps.safely('bonus-manual', () => finOps.recordLoyaltyTxn(lctRes.rows[0],
+        { origin: 'staff', kind: 'bonus_adjustment', userId: req.user.userId || req.user.id || null }));
+    }
     res.json({ ok: true, newBalance: newBal });
   } catch (e) {
     await pg.query('ROLLBACK');

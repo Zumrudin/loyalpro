@@ -70,6 +70,80 @@ describe('upsertRecordFromYc', () => {
   });
 });
 
+describe('technical_break_duration: вебхуки YClients его не несут (13.11.2026)', () => {
+  const stored = (v) => db.oneOrNone.mockResolvedValue({ id: 55, status: 'confirmed', bonus_processed: false, prev_break: v });
+  const savedPayload = () => JSON.parse(db.query.mock.calls.find(c => /UPDATE records SET status/.test(c[0]))[1][1]);
+  test('payload без поля поверх строки с 600 → в БД остаётся 600', async () => {
+    stored(600);
+    const r = await upsertRecordFromYc(1, YCR, null, 'webhook');
+    expect(savedPayload().technical_break_duration).toBe(600);
+    expect(r.prev).toEqual({ id: 55, status: 'confirmed', bonus_processed: false });
+  });
+  test('payload с null поверх 600 → 600', async () => {
+    stored(600);
+    await upsertRecordFromYc(1, { ...YCR, technical_break_duration: null }, null, 'webhook');
+    expect(savedPayload().technical_break_duration).toBe(600);
+  });
+  test('явное значение побеждает: 0 поверх 600 → 0', async () => {
+    stored(600);
+    await upsertRecordFromYc(1, { ...YCR, technical_break_duration: 0 }, null, 'journal');
+    expect(savedPayload().technical_break_duration).toBe(0);
+  });
+  test('у сохранённой строки поля нет → payload как есть, без ключа', async () => {
+    stored(null);
+    await upsertRecordFromYc(1, YCR, null, 'webhook');
+    expect(savedPayload()).not.toHaveProperty('technical_break_duration');
+  });
+  test('новая строка без поля → INSERT без перерыва (null)', async () => {
+    db.oneOrNone.mockResolvedValue(null);
+    db.one.mockResolvedValue({ id: 56 });
+    await upsertRecordFromYc(1, YCR, null, 'webhook');
+    const payload = JSON.parse(db.one.mock.calls[0][1][11]);
+    expect(payload.technical_break_duration ?? null).toBeNull();
+  });
+  test('keepTechnicalBreak — чистая функция, входной объект не мутирует', () => {
+    const inc = { id: 1 };
+    expect(loyalty.keepTechnicalBreak(inc, 600)).toEqual({ id: 1, technical_break_duration: 600 });
+    expect(inc).toEqual({ id: 1 });
+    expect(loyalty.keepTechnicalBreak({ id: 1, technical_break_duration: 300 }, 600).technical_break_duration).toBe(300);
+    expect(loyalty.keepTechnicalBreak({ id: 1 }, null)).toEqual({ id: 1 });
+    expect(loyalty.keepTechnicalBreak({ id: 1 }, '600').technical_break_duration).toBe(600);
+  });
+});
+
+describe('связь записи с клиентом при UPDATE (ревью 13.11.2026)', () => {
+  const upd = () => db.query.mock.calls.find(c => /UPDATE records SET status/.test(c[0]));
+  const stored = { id: 55, status: 'confirmed', bonus_processed: false, client_id: 10, prev_break: null };
+  test('смена клиента: yclients_client_id из payload, client_id — переданный вызывающим', async () => {
+    db.oneOrNone.mockResolvedValueOnce(stored);
+    await upsertRecordFromYc(1, YCR, 3777, 'journal');
+    const [sql, params] = upd();
+    expect(sql).toMatch(/yclients_client_id=COALESCE\(\$\d+, yclients_client_id\)/);
+    expect(params).toContain(352092609);
+    expect(params).toContain(3777);
+  });
+  test('вызывающий клиента не знает → резолв по yclients_client_id', async () => {
+    db.oneOrNone.mockImplementation(async (sql) => /FROM records/.test(sql) ? stored
+      : /yclients_client_id=\$2/.test(sql) ? { id: 4242 } : null);
+    await upsertRecordFromYc(1, YCR, null, 'webhook');
+    expect(upd()[1]).toContain(4242);
+  });
+  test('по yclients_client_id не нашли → по телефону (ровно один клиент)', async () => {
+    db.oneOrNone.mockImplementation(async (sql) => /FROM records/.test(sql) ? stored : null);
+    db.any.mockImplementation(async (sql, p) => /FROM clients/.test(sql) && p[1] === '9200255591' ? [{ id: 777 }] : []);
+    await upsertRecordFromYc(1, { ...YCR, client: { id: 352092609, phone: '+7 (920) 025-55-91' } }, null, 'webhook');
+    expect(upd()[1]).toContain(777);
+  });
+  test('по телефону двое или никого → client_id не затирается (NULL в COALESCE)', async () => {
+    db.oneOrNone.mockImplementation(async (sql) => /FROM records/.test(sql) ? stored : null);
+    db.any.mockResolvedValue([{ id: 1 }, { id: 2 }]);
+    await upsertRecordFromYc(1, { ...YCR, client: { id: 352092609, phone: '79200255591' } }, null, 'webhook');
+    const [sql, params] = upd();
+    expect(sql).toMatch(/client_id=COALESCE\(\$8, client_id\)/);
+    expect(params[7]).toBeNull();
+  });
+});
+
 describe('хвостовые SQL', () => {
   test('refreshLastVisitAt — один UPDATE clients … FROM records по salon_id', async () => {
     await refreshLastVisitAt(1);

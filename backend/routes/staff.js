@@ -5,6 +5,7 @@ const fs      = require('fs');
 const multer  = require('multer');
 const { db }  = require('../db');
 const { auth } = require('../middleware/auth');
+const finOps = require('../services/finance-ops');
 const { getStaffList, computeStaffMetrics, computeStaffSparklines, syncStaffData, syncGoodsSales } = require('../services/staff');
 const { imageFileFilter, validateImageBuffer, getExt } = require('../utils/upload-validator');
 const { createLogger } = require('../logger');
@@ -346,7 +347,8 @@ router.post('/import/csv-transactions', auth, express.raw({ type: '*/*', limit: 
           const dup = await db.oneOrNone(`SELECT id FROM loyalty_card_transactions WHERE client_id=$1 AND amount=$2 AND balance_after=$3 AND txn_date IS NULL LIMIT 1`, [client.id, amount, balance]);
           if (dup) { skipped++; continue; }
         }
-        await db.query(`INSERT INTO loyalty_card_transactions (salon_id,client_id,yclients_card_id,type,amount,balance_after,title,txn_date,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,NOW())`, [salonId, client.id, client.yclients_card_id, amount >= 0 ? 'accrual' : 'redemption', amount, balance, comment || txnType || (amount >= 0 ? 'Начисление' : 'Списание'), txnDate]);
+        const lctRes = await db.query(`INSERT INTO loyalty_card_transactions (salon_id,client_id,yclients_card_id,type,amount,balance_after,title,txn_date,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,NOW()) RETURNING *`, [salonId, client.id, client.yclients_card_id, amount >= 0 ? 'accrual' : 'redemption', amount, balance, comment || txnType || (amount >= 0 ? 'Начисление' : 'Списание'), txnDate]);
+        if (lctRes && lctRes.rows && lctRes.rows[0]) await finOps.safely('bonus-csv-import', () => finOps.recordLoyaltyTxn(lctRes.rows[0], { origin: 'staff' }));
         imported++;
       } catch(e) { errors++; }
     }

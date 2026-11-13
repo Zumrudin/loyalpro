@@ -26,6 +26,13 @@ module.exports = {
 
   // YClients API
   YC: 'https://api.yclients.com/api/v1',
+  // Explicit per-environment opt-in; disabled unless configured.
+  JOURNAL_ACCOUNT_PAYMENTS_ENABLED: process.env.JOURNAL_ACCOUNT_PAYMENTS_ENABLED === 'true',
+  JOURNAL_LOCAL_FIRST: process.env.JOURNAL_LOCAL_FIRST !== 'false',
+  JOURNAL_OUTBOX: process.env.JOURNAL_OUTBOX !== 'false',
+  // Этап 3 спеки 2026-11-12-finance-operations: баланс бонусов = сумма бонусных строк finance_operations
+  // (только у клиентов с входящим остатком). По умолчанию выключено.
+  BONUS_LEDGER_PRIMARY: process.env.BONUS_LEDGER_PRIMARY === 'true',
   FRONTEND_URL: process.env.FRONTEND_URL || '*',
 
   // Knowledge-base AI assistant (Gemini). Dual-key: free первым, paid по fallback на 429.

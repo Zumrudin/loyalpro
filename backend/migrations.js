@@ -3,6 +3,33 @@
 // ============================================================
 
 async function runMigrations(client) {
+  // Journal writes fail closed until this additive table is available.
+  await client.query(JOURNAL_DDL);
+  // Expand only once; no data rewrite, existing actions remain valid.
+  await client.query(`DO $$ BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='journal_operations'::regclass AND conname='journal_operations_action_v2_check')
+      AND NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='journal_operations'::regclass AND conname='journal_operations_action_v3_check') THEN
+      ALTER TABLE journal_operations DROP CONSTRAINT journal_operations_action_check,
+        ADD CONSTRAINT journal_operations_action_v2_check CHECK (action IN ('create','move','cancel','confirm','edit'));
+    END IF;
+  END $$`);
+  // Journal record deletion (12.11.2026): the outbox «delete» step goes through
+  // mutate(), which audits it in journal_operations. Expand only once.
+  await client.query(`DO $$ BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='journal_operations'::regclass AND conname='journal_operations_action_v3_check') THEN
+      ALTER TABLE journal_operations DROP CONSTRAINT IF EXISTS journal_operations_action_v2_check,
+        DROP CONSTRAINT IF EXISTS journal_operations_action_check,
+        ADD CONSTRAINT journal_operations_action_v3_check CHECK (action IN ('create','move','cancel','confirm','edit','delete'));
+    END IF;
+  END $$`);
+  await client.query(SERVICE_CATALOG_DDL);
+  await client.query(JOURNAL_FINANCE_DDL);
+  await client.query(JOURNAL_LOCAL_DDL);
+  await client.query(JOURNAL_PREFS_DDL);
+  await client.query(JOURNAL_HISTORY_INDEX_DDL);
+  // Unified money/bonus ledger (12.11.2026): additive, written only by services/finance-ops.js.
+  await client.query(FINANCE_OPS_DDL);
+
   // Additive, no backfill: selection starts from AGENT_PROVIDER until first use.
   await client.query(`
     CREATE TABLE IF NOT EXISTS agent_model_routing (
@@ -2668,4 +2695,154 @@ const EDOCS_BOARD_DDL = [
   "CREATE UNIQUE INDEX IF NOT EXISTS idx_edoc_forms_active ON edoc_patient_forms (client_id) WHERE status = 'active'",
 ];
 
-module.exports = { runMigrations, EDOCS_BOARD_DDL };
+const JOURNAL_DDL = `CREATE TABLE IF NOT EXISTS journal_operations (
+  salon_id INTEGER NOT NULL REFERENCES salons(id) ON DELETE CASCADE,
+  operation_id UUID NOT NULL,
+  user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  reviewed_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  action TEXT NOT NULL CHECK (action IN ('create','move','cancel','confirm')),
+  record_id BIGINT,
+  request_hash VARCHAR(64) NOT NULL,
+  state TEXT NOT NULL CHECK (state IN ('pending','done','rejected','reviewed')),
+  result JSONB,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (salon_id, operation_id)
+)`;
+const SERVICE_CATALOG_DDL = `
+CREATE TABLE IF NOT EXISTS service_categories (
+ id SERIAL PRIMARY KEY, salon_id INTEGER NOT NULL REFERENCES salons(id),
+ parent_id INTEGER, title VARCHAR(200) NOT NULL,
+ yclients_id BIGINT, yclients_company_id BIGINT,
+ UNIQUE(salon_id,id), UNIQUE(salon_id,yclients_company_id,yclients_id),
+ FOREIGN KEY(salon_id,parent_id) REFERENCES service_categories(salon_id,id)
+);
+CREATE INDEX IF NOT EXISTS service_categories_parent ON service_categories(salon_id,parent_id);
+CREATE TABLE IF NOT EXISTS service_catalog (
+ id SERIAL PRIMARY KEY, salon_id INTEGER NOT NULL REFERENCES salons(id),
+ category_id INTEGER, title VARCHAR(200) NOT NULL,
+ duration INTEGER NOT NULL DEFAULT 0 CHECK(duration BETWEEN 0 AND 1440),
+ price_min NUMERIC(12,2), price_max NUMERIC(12,2),
+ active BOOLEAN NOT NULL DEFAULT TRUE,
+ yclients_id BIGINT, yclients_company_id BIGINT, economics_yc_id BIGINT,
+ staff JSONB NOT NULL DEFAULT '[]',
+ created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+ UNIQUE(salon_id,id), UNIQUE(salon_id,yclients_company_id,yclients_id),
+ FOREIGN KEY(salon_id,category_id) REFERENCES service_categories(salon_id,id),
+ CHECK(price_min IS NULL OR price_min >= 0),
+ CHECK(price_max IS NULL OR (price_min IS NOT NULL AND price_max >= price_min))
+);
+CREATE INDEX IF NOT EXISTS service_catalog_category ON service_catalog(salon_id,category_id);
+`;
+const JOURNAL_FINANCE_DDL = `
+CREATE TABLE IF NOT EXISTS journal_financial_transactions (
+ salon_id INTEGER NOT NULL REFERENCES salons(id), operation_id UUID NOT NULL,
+ user_id INTEGER REFERENCES users(id), reviewed_by INTEGER REFERENCES users(id),
+ yclients_company_id BIGINT NOT NULL, yclients_record_id BIGINT NOT NULL,
+ document_id BIGINT NOT NULL, record_id INTEGER REFERENCES records(id),
+ client_id INTEGER REFERENCES clients(id), bonus_transaction_id INTEGER REFERENCES loyalty_card_transactions(id),
+ method TEXT NOT NULL CHECK(method IN ('account','loyalty_card')),
+ method_id BIGINT NOT NULL, amount NUMERIC(12,2) NOT NULL CHECK(amount>0),
+ state TEXT NOT NULL CHECK(state IN ('pending','confirmed','rejected','reviewed')),
+ request_hash VARCHAR(64) NOT NULL, before_ids JSONB NOT NULL DEFAULT '[]',
+ external_ids JSONB NOT NULL DEFAULT '[]', quote JSONB,
+ created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+ PRIMARY KEY(salon_id,operation_id)
+);
+ALTER TABLE journal_financial_transactions ADD COLUMN IF NOT EXISTS action TEXT NOT NULL DEFAULT 'payment' CHECK(action IN ('payment','remove'));
+ALTER TABLE journal_financial_transactions ADD COLUMN IF NOT EXISTS target_transaction_id BIGINT;
+CREATE INDEX IF NOT EXISTS journal_finance_record ON journal_financial_transactions(salon_id,yclients_record_id);
+CREATE INDEX IF NOT EXISTS journal_finance_pending ON journal_financial_transactions(salon_id,state);
+`;
+const JOURNAL_LOCAL_DDL = `
+CREATE TABLE IF NOT EXISTS journal_staff_schedule (
+ salon_id INTEGER NOT NULL REFERENCES salons(id) ON DELETE CASCADE,
+ staff_id BIGINT NOT NULL, date DATE NOT NULL, is_working BOOLEAN NOT NULL,
+ slots JSONB NOT NULL DEFAULT '[]', fetched_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+ PRIMARY KEY(salon_id,staff_id,date)
+);
+CREATE TABLE IF NOT EXISTS journal_reference_cache (
+ salon_id INTEGER NOT NULL REFERENCES salons(id) ON DELETE CASCADE,
+ kind TEXT NOT NULL, payload JSONB NOT NULL, fetched_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+ PRIMARY KEY(salon_id,kind)
+);
+CREATE TABLE IF NOT EXISTS journal_mirror_state (
+ salon_id INTEGER PRIMARY KEY REFERENCES salons(id) ON DELETE CASCADE,
+ last_ok_at TIMESTAMPTZ, last_error TEXT, updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE TABLE IF NOT EXISTS journal_outbox (
+ id BIGSERIAL PRIMARY KEY,
+ salon_id INTEGER NOT NULL REFERENCES salons(id) ON DELETE CASCADE,
+ session_id UUID NOT NULL, user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+ request_hash VARCHAR(64) NOT NULL, yclients_record_id BIGINT,
+ status TEXT NOT NULL CHECK(status IN ('queued','running','done','failed','cancelled')),
+ steps JSONB NOT NULL, overlay JSONB NOT NULL,
+ failed_step INTEGER, error_code TEXT, error_text TEXT,
+ attempts INTEGER NOT NULL DEFAULT 0, next_attempt_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+ created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+ UNIQUE(salon_id,session_id)
+);
+CREATE INDEX IF NOT EXISTS journal_outbox_due ON journal_outbox(next_attempt_at,id) WHERE status='queued';
+CREATE INDEX IF NOT EXISTS journal_outbox_record ON journal_outbox(salon_id,yclients_record_id);
+CREATE INDEX IF NOT EXISTS journal_outbox_open ON journal_outbox(salon_id,status) WHERE status IN ('queued','running','failed');
+-- Manual dispatch (10.11.2026): a package goes to YClients only after the
+-- journal's «Отправить в YClients» released it (released_at/release_id).
+-- create_outbox_id ties changes of a not-yet-sent new record to its create.
+ALTER TABLE journal_outbox ADD COLUMN IF NOT EXISTS released_at TIMESTAMPTZ;
+ALTER TABLE journal_outbox ADD COLUMN IF NOT EXISTS release_id UUID;
+ALTER TABLE journal_outbox ADD COLUMN IF NOT EXISTS create_outbox_id BIGINT;
+CREATE INDEX IF NOT EXISTS journal_outbox_release ON journal_outbox(salon_id,release_id) WHERE release_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS journal_outbox_child ON journal_outbox(create_outbox_id) WHERE create_outbox_id IS NOT NULL;
+-- Packages already started or finished before manual dispatch keep going.
+UPDATE journal_outbox SET released_at=updated_at WHERE released_at IS NULL AND (status<>'queued' OR attempts>0);
+`;
+// «Не уведомлять клиента» for journal records (12.11.2026). Read by
+// notifications/enroll.js; written by the journal outbox worker.
+const JOURNAL_PREFS_DDL = `
+CREATE TABLE IF NOT EXISTS journal_record_prefs (
+ salon_id INTEGER NOT NULL REFERENCES salons(id) ON DELETE CASCADE,
+ yclients_record_id BIGINT NOT NULL,
+ notify_client BOOLEAN NOT NULL DEFAULT TRUE,
+ outbox_id BIGINT,
+ updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+ PRIMARY KEY (salon_id, yclients_record_id)
+);
+`;
+// Journal record history (12.11.2026) reads record webhooks by salon+record;
+// without this index it scanned every webhook of the salon (review 13.11.2026).
+const JOURNAL_HISTORY_INDEX_DDL = `
+CREATE INDEX IF NOT EXISTS idx_webhook_logs_record ON webhook_logs (salon_id, resource_id, created_at) WHERE event_type='record';
+`;
+const FINANCE_OPS_DDL = `
+CREATE TABLE IF NOT EXISTS finance_operations (
+ id BIGSERIAL PRIMARY KEY,
+ salon_id INTEGER NOT NULL REFERENCES salons(id) ON DELETE CASCADE,
+ occurred_at TIMESTAMPTZ NOT NULL,
+ op_date DATE NOT NULL,
+ kind TEXT NOT NULL CHECK(kind IN ('visit_payment','payment_reversal','bonus_redemption','bonus_accrual','bonus_adjustment','bonus_opening','goods_sale','certificate_sale','abonement_sale','deposit','other_income')),
+ method TEXT CHECK(method IS NULL OR method IN ('cash','card','bonus','other')),
+ amount NUMERIC(12,2) NOT NULL,
+ status TEXT NOT NULL CHECK(status IN ('queued','sending','confirmed','cancelled','failed')),
+ origin TEXT NOT NULL CHECK(origin IN ('journal','yclients','loyalpro','staff','backfill','opening')),
+ account_id BIGINT, account_title TEXT,
+ client_id INTEGER REFERENCES clients(id) ON DELETE SET NULL,
+ yclients_client_id BIGINT, yclients_record_id BIGINT,
+ outbox_id BIGINT, step_op_id UUID, journal_operation_id UUID,
+ revenue_operation_id INTEGER, loyalty_txn_id INTEGER, yclients_operation_id BIGINT,
+ user_id INTEGER, title TEXT, comment TEXT,
+ created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS finance_ops_step_uq ON finance_operations(salon_id,step_op_id) WHERE step_op_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS finance_ops_revenue_uq ON finance_operations(salon_id,revenue_operation_id) WHERE revenue_operation_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS finance_ops_loyalty_uq ON finance_operations(salon_id,loyalty_txn_id) WHERE loyalty_txn_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS finance_ops_journal_uq ON finance_operations(salon_id,journal_operation_id) WHERE journal_operation_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS finance_ops_date ON finance_operations(salon_id,op_date);
+CREATE INDEX IF NOT EXISTS finance_ops_client ON finance_operations(salon_id,client_id);
+CREATE INDEX IF NOT EXISTS finance_ops_record ON finance_operations(salon_id,yclients_record_id);
+CREATE INDEX IF NOT EXISTS finance_ops_outbox ON finance_operations(salon_id,outbox_id) WHERE outbox_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS finance_ops_yc_op ON finance_operations(salon_id,yclients_operation_id) WHERE yclients_operation_id IS NOT NULL;
+-- этап 3: входящий остаток бонусов — ровно одна строка на клиента
+CREATE UNIQUE INDEX IF NOT EXISTS finance_ops_opening_uq ON finance_operations(salon_id,client_id) WHERE kind='bonus_opening';
+CREATE INDEX IF NOT EXISTS finance_ops_bonus_client ON finance_operations(client_id,status) WHERE method='bonus';
+`;
+module.exports = { runMigrations, FINANCE_OPS_DDL, EDOCS_BOARD_DDL, JOURNAL_DDL, SERVICE_CATALOG_DDL, JOURNAL_FINANCE_DDL, JOURNAL_LOCAL_DDL, JOURNAL_PREFS_DDL, JOURNAL_HISTORY_INDEX_DDL };

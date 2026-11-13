@@ -1,6 +1,8 @@
 const router = require('express').Router();
 const { pool, db, botDb } = require('../db');
 const { auth } = require('../middleware/auth');
+const finOps = require('../services/finance-ops');
+const bonusLedger = require('../services/bonus-ledger');
 const { buildClientsQuery } = require('../clients-query');
 const { ycGet, ycGetClientCards, ycGetCardTransactions, ycWebSessions } = require('../services/yclients');
 const { getLoyaltySettings, getLevel, runSync, sleep } = require('../services/loyalty');
@@ -632,10 +634,11 @@ router.post('/bulk-import-card-history', auth, async (req, res) => {
                 isDup = !!dup;
               }
               if (!isDup) {
-                await db.query(
-                  `INSERT INTO loyalty_card_transactions (salon_id,client_id,yclients_card_id,type,amount,title,txn_date,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,NOW())`,
+                const lctRes = await db.query(
+                  `INSERT INTO loyalty_card_transactions (salon_id,client_id,yclients_card_id,type,amount,title,txn_date,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,NOW()) RETURNING *`,
                   [salonId, c.id, c.yclients_card_id, txnAmt >= 0 ? 'accrual' : 'redemption', txnAmt, t.title || (txnAmt >= 0 ? 'Начисление' : 'Списание'), txnDate]
                 );
+                if (lctRes && lctRes.rows && lctRes.rows[0]) await finOps.safely('bonus-bulk-import', () => finOps.recordLoyaltyTxn(lctRes.rows[0], { origin: 'yclients' }));
                 bulkImportStatus[salonId].imported++;
               }
             } catch {}
@@ -647,9 +650,10 @@ router.post('/bulk-import-card-history', auth, async (req, res) => {
             const lsData = await getLoyaltySettings(salonId);
             const level = lsData?.levels ? getLevel(paidAmount, lsData.levels) : null;
             await db.query(
-              `UPDATE clients SET yclients_card_balance=$1,bonus_balance=$2::numeric,total_spent=GREATEST(total_spent,$3),visits_count=GREATEST(visits_count,$4),loyalty_level=COALESCE($5,loyalty_level),updated_at=NOW() WHERE id=$6`,
-              [parseFloat(card.balance||0), parseFloat(card.balance||0), paidAmount, parseInt(card.visits_count||0), level?.key||null, c.id]
+              `UPDATE clients SET total_spent=GREATEST(total_spent,$1),visits_count=GREATEST(visits_count,$2),loyalty_level=COALESCE($3,loyalty_level),updated_at=NOW() WHERE id=$4`,
+              [paidAmount, parseInt(card.visits_count||0), level?.key||null, c.id]
             );
+            await bonusLedger.setCardReading(c.id, parseFloat(card.balance||0));
           }
         } catch (e) {
           bulkImportStatus[salonId].errors++;
