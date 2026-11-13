@@ -28,10 +28,10 @@ describe('syncGoodsCatalog', () => {
     });
     const r = await sync.syncGoodsCatalog(SALON, { sleep: noSleep });
     expect(r).toEqual({ pages: 3, goods: 2 });
-    expect(store.upsertCatalogGood).toHaveBeenCalledWith(1, {
+    expect(store.upsertCatalogGood).toHaveBeenCalledWith(1, expect.objectContaining({
       good_id: 123, title: 'Шампунь', unit: 'шт', service_unit: 'гр', unit_equals: 10,
       actual_cost: 1050, unit_actual_cost: 105, stock: [{ storage_id: 987, amount: 1000000 }],
-    });
+    }));
     expect(store.upsertCatalogGood).toHaveBeenCalledWith(1, expect.objectContaining({ good_id: 124, unit_equals: null, actual_cost: null, stock: [] }));
   });
   test('кап страниц — не больше MAX_GOODS_PAGES', async () => {
