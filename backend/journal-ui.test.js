@@ -1211,3 +1211,19 @@ test('drag review: click suppression is armed after the confirmation, not before
   expect(armedAtConfirm).toBe(0);
   expect(h.run('journal.suppressClickUntil')).toBeGreaterThanOrEqual(before + 400);
 });
+test('drag review: a plain click and a cancelled resize keep the rendered block height', async () => {
+  const h = dragHarness(); const { on, fire } = dragDom(h);
+  const el = dragEl(8, '2030-04-01'); el.style.height = '94px';
+  h.context.jrDragBegin(el, { button: 0, clientX: 100, clientY: 100, target: {} });
+  fire(on.doc, 'pointerup', { clientX: 100, clientY: 101 });
+  await Promise.resolve();
+  expect(el.style.height).toBe('94px');
+  h.context.confirm = jest.fn(() => false);
+  h.context.jrDragBegin(el, { button: 0, clientX: 100, clientY: 100, target: { dataset: { resize: '1' } } });
+  fire(on.doc, 'pointermove', { clientX: 100, clientY: 124, buttons: 1 });
+  expect(el.style.height).not.toBe('94px');
+  fire(on.doc, 'pointerup', { clientX: 100, clientY: 124 });
+  await Promise.resolve();
+  expect(h.context.confirm).toHaveBeenCalledWith('Длительность 60 → 75 мин?');
+  expect(el.style.height).toBe('94px');
+});

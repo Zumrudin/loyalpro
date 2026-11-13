@@ -275,15 +275,17 @@ function jrDragMove(ev) {
   }
   return target;
 }
-function jrDragRestore(el) {
+// Back to the rendered look; the height is the inline one from the render.
+function jrDragRestore(d) {
+  const el = d?.el;
   if (!el?.style) return;
-  el.style.pointerEvents = ''; el.style.transform = ''; el.style.height = '';
+  el.style.pointerEvents = ''; el.style.transform = ''; el.style.height = d.height0 ?? '';
   el.classList?.remove('jr-visit-dragging');
 }
 function jrDragCancel() {
   const d = journal.drag;
   journal.drag = null;
-  jrDragRestore(d?.el);
+  jrDragRestore(d);
   jrRender();
 }
 async function jrDragEnd(ev) {
@@ -292,7 +294,7 @@ async function jrDragEnd(ev) {
   const moved = d.moved || Math.abs(ev.clientX - d.x) + Math.abs(ev.clientY - d.y) >= JR_DRAG_THRESHOLD;
   const target = moved ? jrDragTarget(ev) : null;
   journal.drag = null;
-  jrDragRestore(d.el);
+  jrDragRestore(d);
   if (!moved) return false;                       // a plain click: the click handler opens the card
   // The click that ends a drag must not open the card. Re-armed after the
   // confirmation too: thinking over the question takes longer than 400 ms.
@@ -346,6 +348,7 @@ function jrDragBegin(el, ev) {
   const date = typeof el.closest === 'function' ? el.closest('.jr-column')?.dataset?.date : undefined;
   if (!jrDragStart(ev, Number(el.dataset.record), mode, date)) return;
   journal.drag.el = el;
+  journal.drag.height0 = el.style?.height ?? '';
   ev.preventDefault?.();
   const win = typeof window !== 'undefined' && typeof window.addEventListener === 'function' ? window : null;
   const move = e => {
