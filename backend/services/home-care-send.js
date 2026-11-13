@@ -59,4 +59,39 @@ function channelOptions(phone, lastIncoming) {
   return { dialogKey: hasPhone ? key : null, channels, defaultChannel: def };
 }
 
-module.exports = { channelOptions, phoneVariants, FILE_NAME, CAPTION, CHANNEL_LABELS };
+// ── Стоимость услуги в «Листе назначения» ─────────────────────
+// Цена хранится только у строк услуг (time_of_day sheet_*), у косметики и
+// витаминов — всегда null. Пусто/мусор/отрицательное → null.
+function itemPrice(it) {
+  if (!it || !String(it.time_of_day || '').startsWith('sheet_')) return null;
+  const raw = it.price;
+  if (raw === null || raw === undefined || String(raw).trim() === '') return null;
+  const n = Number(String(raw).replace(/\s/g, '').replace(',', '.'));
+  if (!Number.isFinite(n) || n < 0 || n > 1e9) return null;
+  return Math.round(n * 100) / 100;
+}
+
+const titleKey = (t) => String(t || '').trim().replace(/\s+/g, ' ').toLowerCase();
+
+// Цена услуги YClients: price_min, а если он пуст/0 — price_max (у «от X»
+// YClients кладёт X в price_min при price_max=0, иногда наоборот).
+function servicePrice(s) {
+  const min = Number(s && s.price_min) || 0;
+  const max = Number(s && s.price_max) || 0;
+  const v = min > 0 ? min : max;
+  return v > 0 ? v : null;
+}
+
+// Название (нормализованное) → цена. Первым идёт management-каталог.
+function priceIndex(...lists) {
+  const m = new Map();
+  for (const list of lists) for (const s of list || []) {
+    const k = titleKey(s && s.title);
+    const p = servicePrice(s);
+    if (k && p != null && !m.has(k)) m.set(k, p);
+  }
+  return m;
+}
+
+module.exports = { channelOptions, phoneVariants, FILE_NAME, CAPTION, CHANNEL_LABELS,
+  itemPrice, titleKey, servicePrice, priceIndex };

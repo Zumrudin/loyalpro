@@ -138,7 +138,7 @@ async function hcOpenEdit(id) {
     document.getElementById('hcClientId').value     = d.client_id   || '';
     (d.items || []).forEach(it => {
       const isService = it.time_of_day.startsWith('sheet_');
-      hcAddItem(it.time_of_day, it.category, it.product_name, it.instructions, isService, it.days_of_week || null);
+      hcAddItem(it.time_of_day, it.category, it.product_name, it.instructions, isService, it.days_of_week || null, isService ? it.price : null);
     });
     document.getElementById('hcNotes').value = d.notes || '';
     // Populate course period fields
@@ -203,7 +203,7 @@ function hcResetForm() {
   if (errEl)   { errEl.style.display = 'none'; errEl.textContent = ''; }
 }
 
-function hcAddItem(timeOfDay, category, product = '', instructions = '', isService = false, daysOfWeek = null) {
+function hcAddItem(timeOfDay, category, product = '', instructions = '', isService = false, daysOfWeek = null, price = null) {
   const catId = `hcCat-${timeOfDay}-${category}`;
   const catEl = document.getElementById(catId);
   if (!catEl) return;
@@ -219,6 +219,10 @@ function hcAddItem(timeOfDay, category, product = '', instructions = '', isServi
                oninput="hcAcSearch(this)" onfocus="hcAcSearch(this)" style="flex:1">
         <button type="button" class="hc-pick-btn" onclick="hcOpenPicker('${uid}',${isService})" title="Выбрать из каталога">☰</button>
       </div>
+      ${isService ? `<label class="hc-price-row">Стоимость
+        <input type="text" inputmode="decimal" class="hc-price-inp" data-field="price" data-price-uid="${uid}"
+               value="${price === null || price === undefined || price === '' ? '' : esc(String(Number(price)))}" placeholder="—">
+        <span class="hc-price-rub">₽</span></label>` : ''}
       <div class="hc-ac-drop" id="drop_${uid}"></div>
     </div>
     <input type="text" placeholder="Как применять, частота..." value="${esc(instructions)}" data-field="instructions">
@@ -287,6 +291,34 @@ function hcAcSelect(e, uid, title) {
   if (inp) inp.value = title;
   const drop = document.getElementById('drop_' + uid);
   if (drop) drop.style.display = 'none';
+  if (inp && inp.dataset.service === '1') hcFillServicePrice(uid, title);
+}
+
+// ── Стоимость услуги в «Листе назначения» ─────────────────────
+// Цены — из того же дерева услуг, что и каталог (/service-tree отдаёт
+// prices по группам). Выбор услуги подставляет её цену; поле правится руками.
+let hcServicePriceMap = null;
+function hcIndexServicePrices(groups) {
+  const m = new Map();
+  (groups || []).forEach(g => Object.entries(g.prices || {}).forEach(([t, p]) => {
+    const k = String(t).trim().replace(/\s+/g, ' ').toLowerCase();
+    if (!m.has(k)) m.set(k, p);
+  }));
+  return m;
+}
+async function hcServicePrice(title) {
+  if (!hcServicePriceMap) {
+    try { hcServicePriceMap = hcIndexServicePrices(await api('GET', '/api/home-care/service-tree')); }
+    catch (_) { return null; }
+  }
+  const p = hcServicePriceMap.get(String(title || '').trim().replace(/\s+/g, ' ').toLowerCase());
+  return p === undefined ? null : p;
+}
+async function hcFillServicePrice(uid, title) {
+  const priceInp = document.querySelector(`[data-price-uid="${uid}"]`);
+  if (!priceInp) return;
+  const p = await hcServicePrice(title);
+  priceInp.value = p === null ? '' : String(p);
 }
 
 // ── Catalog Picker ─────────────────────────────────────────────
@@ -304,6 +336,7 @@ async function hcOpenPicker(uid, isService) {
   try {
     const ep  = isService ? '/api/home-care/service-tree' : '/api/home-care/product-tree';
     hcPickerData = await api('GET', ep);
+    if (isService) hcServicePriceMap = hcIndexServicePrices(hcPickerData);
     hcPickerRender(hcPickerData);
   } catch(e) {
     body.innerHTML = `<div style="padding:20px;color:var(--danger)">Ошибка: ${esc(e.message)}</div>`;
@@ -384,6 +417,7 @@ function hcPickerSelect(title) {
     const inp = document.querySelector(`[data-uid="${hcPickerUid}"]`);
     if (inp) {
       inp.value = title;
+      if (hcPickerIsService) hcFillServicePrice(hcPickerUid, title);
       // Триггерим input-event на случай если на input навешены слушатели,
       // которые ждут любого изменения (autocomplete, dirty-tracking).
       inp.dispatchEvent(new Event('input', { bubbles: true }));
@@ -468,12 +502,14 @@ function hcCollectItems() {
     catEl.querySelectorAll('.hc-item').forEach(row => {
       const product = row.querySelector('[data-field="product"]').value.trim();
       if (!product) return;
+      const priceEl = row.querySelector('[data-field="price"]');
       items.push({
         time_of_day: timeOfDay,
         category,
         product_name: product,
         instructions: row.querySelector('[data-field="instructions"]').value.trim(),
         days_of_week: collectDays(row),
+        price: priceEl ? priceEl.value.trim().replace(/\s/g, '').replace(',', '.') || null : null,
       });
     });
   });
@@ -614,7 +650,7 @@ function hcOpenPrintWindow(d) {
           const items = Object.values(grouped[a.key]).flat();
           return `<div class="sheet-col">
             <div class="sheet-col-title">${esc(a.label)}</div>
-            ${items.map(it => `<div class="item-row"><div class="item-name">${esc(it.product_name)}</div>${it.instructions ? `<div class="item-instr">${esc(it.instructions)}</div>` : ''}</div>`).join('')}
+            ${items.map(it => `<div class="item-row"><div class="item-name">${esc(it.product_name)}</div>${hcFmtRub(it.price) ? `<div class="item-price" style="color:#b8943e;font-weight:600">${esc(hcFmtRub(it.price))}</div>` : ''}${it.instructions ? `<div class="item-instr">${esc(it.instructions)}</div>` : ''}</div>`).join('')}
           </div>`;
         }).join('')}
       </div>
@@ -974,4 +1010,12 @@ async function hcOpenSendModal(id) {
   }));
 
   document.body.appendChild(modal);
+}
+
+// 4500 → «4 500 ₽» (то же правило, что formatRub в homecare-template.js).
+function hcFmtRub(v) {
+  if (v === null || v === undefined || String(v).trim() === '') return '';
+  const n = Number(v);
+  if (!Number.isFinite(n)) return '';
+  return n.toLocaleString('ru-RU', { maximumFractionDigits: 2 }).replace(/\s/g, '\u00a0') + '\u00a0₽';
 }

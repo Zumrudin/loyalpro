@@ -78,6 +78,15 @@ function escHtml(s) {
 
 const DAY_LABELS = ['Пн','Вт','Ср','Чт','Пт','Сб','Вс'];
 
+// Стоимость услуги в «Листе назначения»: 4500 → «4 500 ₽» (неразрывные
+// пробелы — цифры и знак рубля не разрываются переносом). Пусто → ''.
+function formatRub(v) {
+  if (v === null || v === undefined || String(v).trim() === '') return '';
+  const n = Number(v);
+  if (!Number.isFinite(n)) return '';
+  return n.toLocaleString('ru-RU', { maximumFractionDigits: 2 }).replace(/\s/g, '\u00a0') + '\u00a0₽';
+}
+
 // 'YYYY-MM-DD' / Date → 'DD.MM.YYYY'
 function formatDateRu(d) {
   if (!d) return '';
@@ -288,6 +297,7 @@ function buildHomeCareHtml(prescription, config = {}) {
             <div class="sheet-col-title">${escHtml(area.label)}</div>
             ${items.map(it => `
               <div class="item-name">${escHtml(it.product_name)}</div>
+              ${formatRub(it.price) ? `<div class="item-price">${escHtml(formatRub(it.price))}</div>` : ''}
               ${it.instructions ? `<div class="item-instr">${escHtml(it.instructions)}</div>` : ''}`
             ).join('')}
           </div>`;
@@ -502,6 +512,13 @@ img.watermark { width:616px; height:616px; object-fit:contain; opacity:0.5; }
   vertical-align: middle;
   white-space: nowrap;
 }
+.item-price {
+  font-size: 10.6pt;
+  color: var(--accent);
+  font-weight: 600;
+  line-height: 1.4;
+  white-space: nowrap;
+}
 .item-instr {
   font-size: 11.4pt;
   color: var(--text2);
@@ -665,4 +682,4 @@ ${wmHtml}
 </html>`;
 }
 
-module.exports = { buildHomeCareHtml, BRAND_CONFIG };
+module.exports = { buildHomeCareHtml, BRAND_CONFIG, formatRub };

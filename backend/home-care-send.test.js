@@ -38,3 +38,34 @@ describe('home-care-send.channelOptions', () => {
     expect(CAPTION).toBe('Лист назначения');
   });
 });
+
+describe('home-care-send: стоимость услуги', () => {
+  const { itemPrice, priceIndex, titleKey } = require('./services/home-care-send');
+  const { formatRub } = require('./homecare-template');
+
+  test('цена сохраняется только у услуг листа назначения', () => {
+    expect(itemPrice({ time_of_day: 'sheet_face', price: '4 500' })).toBe(4500);
+    expect(itemPrice({ time_of_day: 'sheet_hair', price: '1500,50' })).toBe(1500.5);
+    expect(itemPrice({ time_of_day: 'morning', price: 900 })).toBeNull();
+    expect(itemPrice({ time_of_day: 'vitamins', price: 900 })).toBeNull();
+    expect(itemPrice({ time_of_day: 'sheet_body', price: '' })).toBeNull();
+    expect(itemPrice({ time_of_day: 'sheet_body', price: 'abc' })).toBeNull();
+    expect(itemPrice({ time_of_day: 'sheet_body', price: -5 })).toBeNull();
+  });
+
+  test('цена YClients: price_min, при пустом — price_max; management первым', () => {
+    const m = priceIndex(
+      [{ title: 'Чистка  лица', price_min: 0, price_max: 5000 }, { title: 'Пилинг', price_min: 0, price_max: 0 }],
+      [{ title: 'чистка лица', price_min: 100, price_max: 100 }, { title: 'Пилинг', price_min: 3000, price_max: 3500 }],
+    );
+    expect(m.get(titleKey('Чистка лица'))).toBe(5000);
+    expect(m.get(titleKey('Пилинг'))).toBe(3000);
+  });
+
+  test('формат в листе: цифры и знак рубля, без разрыва', () => {
+    expect(formatRub(4500)).toBe('4 500 ₽');
+    expect(formatRub('12500.50')).toBe('12 500,5 ₽');
+    expect(formatRub(null)).toBe('');
+    expect(formatRub('')).toBe('');
+  });
+});

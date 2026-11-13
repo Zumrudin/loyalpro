@@ -170,17 +170,24 @@ router.get('/service-tree', auth, async (req, res) => {
     }
     const salon = await db.one('SELECT * FROM salons WHERE id=$1', [salonId]);
     let grouped = {};
+    const prices = {};
     if (salon.yclients_company_id && salon.yclients_user_token) {
       const cats = await ycGet(salon, `/service_categories/${salon.yclients_company_id}`);
       const catMap = {};
       for (const c of (cats || [])) catMap[c.id] = c.title;
       const services = await ycGet(salon, `/services/${salon.yclients_company_id}`);
+      // Цены — из management-каталога (там ВСЕ услуги, booking-каталог отдаёт
+      // только онлайн-записываемые); не ответил — берём цены booking-каталога.
+      const mgmt = await ycGet(salon, `/company/${salon.yclients_company_id}/services/`, {}).catch(() => null);
+      const priceByTitle = hcSend.priceIndex(Array.isArray(mgmt) ? mgmt : [], services || []);
       for (const s of (services || [])) {
         if (!s.title) continue;
         if (search && !s.title.toLowerCase().includes(search.toLowerCase())) continue;
         const cat = catMap[s.category_id] || 'Без категории';
         if (!grouped[cat]) grouped[cat] = [];
         grouped[cat].push(s.title);
+        const pr = priceByTitle.get(hcSend.titleKey(s.title));
+        if (pr != null) { if (!prices[cat]) prices[cat] = {}; prices[cat][s.title] = pr; }
       }
     } else {
       const { rows } = await db.query(
@@ -193,7 +200,7 @@ router.get('/service-tree', auth, async (req, res) => {
       );
       grouped['Услуги'] = rows.map(r => r.title);
     }
-    const result = Object.entries(grouped).sort(([a],[b])=>a.localeCompare(b,'ru')).map(([cat,items])=>({cat,items}));
+    const result = Object.entries(grouped).sort(([a],[b])=>a.localeCompare(b,'ru')).map(([cat,items])=>({cat,items,prices:prices[cat]||{}}));
     if (!search) setTreeCache(salonId, 'services', result);
     res.json(result);
   } catch (e) { res.status(500).json({ error: e.message }); }
@@ -482,9 +489,9 @@ router.post('/', auth, async (req, res) => {
       const it = items[i];
       await db.query(
         `INSERT INTO home_care_items
-           (prescription_id, time_of_day, category, product_name, instructions, sort_order, days_of_week)
-         VALUES ($1,$2,$3,$4,$5,$6,$7)`,
-        [p.id, it.time_of_day, it.category, it.product_name, it.instructions || null, i, normalizeDays(it.days_of_week)]
+           (prescription_id, time_of_day, category, product_name, instructions, sort_order, days_of_week, price)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+        [p.id, it.time_of_day, it.category, it.product_name, it.instructions || null, i, normalizeDays(it.days_of_week), hcSend.itemPrice(it)]
       );
     }
     if (client_id) sendPrescriptionPush(client_id, p.id);
@@ -526,9 +533,9 @@ router.put('/:id', auth, async (req, res) => {
       const it = items[i];
       await db.query(
         `INSERT INTO home_care_items
-           (prescription_id, time_of_day, category, product_name, instructions, sort_order, days_of_week)
-         VALUES ($1,$2,$3,$4,$5,$6,$7)`,
-        [req.params.id, it.time_of_day, it.category, it.product_name, it.instructions || null, i, normalizeDays(it.days_of_week)]
+           (prescription_id, time_of_day, category, product_name, instructions, sort_order, days_of_week, price)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+        [req.params.id, it.time_of_day, it.category, it.product_name, it.instructions || null, i, normalizeDays(it.days_of_week), hcSend.itemPrice(it)]
       );
     }
     res.json({ ok: true });

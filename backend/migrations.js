@@ -257,6 +257,13 @@ async function runMigrations(client) {
       ADD COLUMN IF NOT EXISTS days_of_week SMALLINT[]
   `).catch(() => {});
 
+  // Стоимость услуги в «Листе назначения» (только строки sheet_*): печатается
+  // под услугой в листе. Снимок на момент назначения, правится руками.
+  await client.query(`
+    ALTER TABLE home_care_items
+      ADD COLUMN IF NOT EXISTS price NUMERIC(12,2)
+  `).catch(() => {});
+
   // ── Daily Care Checklist: completions log ──────────────────
   await client.query(`
     CREATE TABLE IF NOT EXISTS home_care_completions (
