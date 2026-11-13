@@ -166,7 +166,7 @@ function build({ records, ops, consumables, stockPurchases = [], outboxOf = new 
   }
   for (const p of standalone) {
     entries.push({ kind: 'purchase', recordId: p.recordId, date: p.at?.date || null, time: p.at?.time || null, sortAt: p.at?.ms ?? 0,
-      staffId: p.staffId, staffName: null, purchases: [{ type: p.type, title: p.title, quantity: p.quantity, amount: p.amount, status: p.status }] });
+      staffId: p.staffId, staffName: null, purchases: [{ type: p.type, title: p.title, quantity: p.quantity, amount: p.amount, status: p.status, ...(p.gift !== undefined ? { gift: p.gift } : {}) }] });
   }
   entries.sort((a, b) => b.sortAt - a.sortAt || (b.recordId || 0) - (a.recordId || 0));
   return { salonName, entries: entries.map(({ sortAt, ...e }) => e) };
