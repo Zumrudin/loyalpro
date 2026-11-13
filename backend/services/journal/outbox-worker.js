@@ -16,6 +16,7 @@ const yc = require('./yclients');
 const reference = require('./reference-cache');
 const finOps = require('../finance-ops');
 const prefs = require('./record-prefs');
+const mirror = require('./mirror');
 const logger = require('../../logger').createLogger('JournalOutbox');
 
 const TICK_MS = 2000;
@@ -222,6 +223,21 @@ async function runStep(ctx, step) {
   m.fail('Неизвестный шаг пакета.', 400, 'unknown_step');
 }
 
+// After our own successful write the LIVE record goes into the mirror the way
+// a webhook would: YClients record webhooks lack technical_break_duration
+// (13.11.2026), and a break-less mirror let local checks accept a move into an
+// occupied window. Best effort — never changes the step's outcome.
+const MIRRORED_KINDS = new Set(['create', 'move', 'edit', 'confirm', 'cancel', 'delete']);
+async function refreshMirror(ctx, step) {
+  if (!MIRRORED_KINDS.has(step.kind) || step.result?.prefsOnly || !ctx.recordId) return;
+  try {
+    if (step.kind === 'delete') await mirror.markDeleted(ctx.salon, ctx.recordId);
+    else await mirror.storeLive(ctx.salon, await yc.getRecord(ctx.salon, ctx.recordId));
+  } catch (e) {
+    logger.warn(`outbox ${ctx.outboxId} salon ${ctx.salonId} step ${step.kind}: mirror not refreshed ${describe(e)}`);
+  }
+}
+
 async function processPackage(row) {
   const steps = (Array.isArray(row.steps) ? row.steps : []).map(s => ({ ...s }));
   const ctx = {
@@ -252,6 +268,7 @@ async function processPackage(row) {
       step.state = 'done';
       clearDraft(step);
       await ctx.persist();
+      await refreshMirror(ctx, step);
       // Payment step reached YClients and was confirmed locally (opId = journal_financial_transactions.operation_id).
       if (step.kind === 'pay' || step.kind === 'remove_payment') {
         await finOps.safely('journal-step-done', () => finOps.markStep(ctx.salonId, step.opId, 'confirmed', { journalOperationId: step.opId, yclientsRecordId: ctx.recordId }));

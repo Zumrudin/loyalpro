@@ -96,3 +96,32 @@ test('a stored version as new or newer than the page is never overwritten', asyn
   expect(loyalty.upsertRecordFromYc.mock.calls.map(c => c[1].id)).toEqual([6, 8]);
   expect(r).toMatchObject({ upserted: 2, unchanged: 1 });
 });
+
+describe('storeLive / markDeleted — worker puts the live record after its own step (13.11.2026)', () => {
+  const live = { id: 8, client: { id: 9 }, technical_break_duration: 600, last_change_date: '2026-11-13T10:00:05+0300' };
+  test('upserts the live record (webhooks lack technical_break_duration) with source journal', async () => {
+    db.oneOrNone.mockImplementation(async sql => /FROM clients/.test(sql) ? { id: 42 } : { changed: '2026-11-13T10:00:05+0300' });
+    expect(await mirror.storeLive(salon, live)).toBe(true);
+    expect(loyalty.upsertRecordFromYc).toHaveBeenCalledWith(1, live, 42, 'journal');
+  });
+  test('never overwrites a strictly newer stored version', async () => {
+    db.oneOrNone.mockImplementation(async sql => /FROM clients/.test(sql) ? { id: 42 } : { changed: '2026-11-13T10:00:06+0300' });
+    expect(await mirror.storeLive(salon, live)).toBe(false);
+    expect(loyalty.upsertRecordFromYc).not.toHaveBeenCalled();
+  });
+  test('no id → nothing', async () => {
+    expect(await mirror.storeLive(salon, null)).toBe(false);
+    expect(loyalty.upsertRecordFromYc).not.toHaveBeenCalled();
+  });
+  test('markDeleted marks the stored row deleted like the window sync does', async () => {
+    db.oneOrNone.mockResolvedValue({ raw_payload: { id: 8, comment: 'x' } });
+    expect(await mirror.markDeleted(salon, 8)).toBe(true);
+    expect(loyalty.upsertRecordFromYc).toHaveBeenCalledWith(1, { id: 8, comment: 'x', deleted: true }, null, 'journal');
+    loyalty.upsertRecordFromYc.mockClear();
+    db.oneOrNone.mockResolvedValue({ raw_payload: { id: 8, deleted: true } });
+    expect(await mirror.markDeleted(salon, 8)).toBe(false);
+    db.oneOrNone.mockResolvedValue(null);
+    expect(await mirror.markDeleted(salon, 8)).toBe(false);
+    expect(loyalty.upsertRecordFromYc).not.toHaveBeenCalled();
+  });
+});

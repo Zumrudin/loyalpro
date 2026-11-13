@@ -80,4 +80,32 @@ async function freshness(salonId) {
   return { mirrorOkAt: row && row.last_ok_at ? new Date(row.last_ok_at).toISOString() : null };
 }
 
-module.exports = { NEAR_DAYS, FAR_DAYS, todayMsk, windowFor, syncWindow, freshness, shiftDate };
+// The outbox worker stores the LIVE record after its own step: YClients
+// record webhooks lack technical_break_duration (live run 13.11.2026, record
+// 2142899150), so a mirror fed only by them showed no break and local slot
+// checks let through a move into an occupied window. A strictly newer stored
+// version is never overwritten; an equal one is (the webhook of this very
+// change carries the same last_change_date without the break).
+const JOURNAL_SRC = 'journal';
+async function storeLive(salon, rec) {
+  if (!rec || rec.id == null) return false;
+  const row = await db.oneOrNone(
+    `SELECT raw_payload->>'last_change_date' AS changed FROM records WHERE salon_id=$1 AND yclients_record_id=$2`, [salon.id, Number(rec.id)]);
+  const known = changedAt(row?.changed), incoming = changedAt(rec.last_change_date);
+  if (known != null && incoming != null && known > incoming) return false;
+  let dbClientId = null;
+  if (rec.client && rec.client.id) {
+    const c = await db.oneOrNone('SELECT id FROM clients WHERE salon_id=$1 AND yclients_client_id=$2', [salon.id, rec.client.id]);
+    dbClientId = (c && c.id) || null;
+  }
+  await loyalty.upsertRecordFromYc(salon.id, rec, dbClientId, JOURNAL_SRC);
+  return true;
+}
+// Deleted by our own step: marked the same way syncWindow marks a vanished record.
+async function markDeleted(salon, id) {
+  const row = await db.oneOrNone('SELECT raw_payload FROM records WHERE salon_id=$1 AND yclients_record_id=$2', [salon.id, Number(id)]);
+  if (!row || !row.raw_payload || row.raw_payload.deleted === true) return false;
+  await loyalty.upsertRecordFromYc(salon.id, { ...row.raw_payload, deleted: true }, null, JOURNAL_SRC);
+  return true;
+}
+module.exports = { NEAR_DAYS, FAR_DAYS, todayMsk, windowFor, syncWindow, freshness, shiftDate, storeLive, markDeleted };

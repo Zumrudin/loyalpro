@@ -10,6 +10,7 @@ jest.mock('./services/journal/payments', () => ({ context: jest.fn(), parse: jes
 jest.mock('./services/journal/yclients', () => ({ getRecord: jest.fn() }));
 jest.mock('./services/journal/reference-cache', () => ({ learnBonusPercent: jest.fn(async () => {}) }));
 jest.mock('./services/notifications/enroll', () => ({ cancelPending: jest.fn(async () => 1) }));
+jest.mock('./services/journal/mirror', () => ({ storeLive: jest.fn(async () => true), markDeleted: jest.fn(async () => true) }));
 
 const { db } = require('./db');
 const { __log: log } = require('./logger');
@@ -20,6 +21,7 @@ const reference = require('./services/journal/reference-cache');
 const m = require('./services/journal/model');
 const w = require('./services/journal/outbox-worker');
 const notifyEnroll = require('./services/notifications/enroll');
+const mirror = require('./services/journal/mirror');
 
 const OP = n => `00000000-0000-4000-8000-00000000000${n}`;
 const SALON = { id: 3, yclients_company_id: 77 };
@@ -42,10 +44,49 @@ beforeEach(() => {
   payments.pay.mockImplementation(async (s, u, d) => { calls.push(['pay', d.method, d]); if (d.method === 'loyalty_card') attendance = attendance; return { confirmed: true }; });
   yc.getRecord.mockImplementation(async () => ({ id: 500, datetime: 'x', attendance: 0 }));
 });
+const readsBeforePut = () => yc.getRecord.mock.invocationCallOrder.filter(n => n < (index.mutate.mock.invocationCallOrder[0] ?? Infinity)).length;
 const lastWrite = re => [...writes].reverse().find(x => re.test(x.sql));
 const stepsOf = wr => JSON.parse(wr.args[1]);
 
 describe('processPackage', () => {
+  describe('live record into the mirror after a step (13.11.2026: webhooks lack technical_break_duration)', () => {
+    const LIVE = { id: 42, datetime: '2030-04-01T10:00:00+03:00', staff_id: 5, attendance: 0, technical_break_duration: 600 };
+    test('edit: one GET after the PUT, the live record goes to storeLive', async () => {
+      yc.getRecord.mockResolvedValue(LIVE);
+      expect(await w.processPackage(pkg([step('edit', 1, { comment: 'x' })], { yclients_record_id: 42 }))).toBe('done');
+      expect(mirror.storeLive).toHaveBeenCalledWith(SALON, LIVE);
+      const putAt = index.mutate.mock.invocationCallOrder[0];
+      expect(yc.getRecord.mock.invocationCallOrder.some(n => n > putAt)).toBe(true);
+    });
+    test('create and move store the record too; flag-only edit does not', async () => {
+      yc.getRecord.mockResolvedValue({ ...LIVE, id: 500 });
+      await w.processPackage(pkg([step('create', 1, CREATE_PARAMS)]));
+      expect(yc.getRecord).toHaveBeenLastCalledWith(SALON, 500);
+      expect(mirror.storeLive).toHaveBeenCalledTimes(1);
+      mirror.storeLive.mockClear(); yc.getRecord.mockResolvedValue(LIVE);
+      await w.processPackage(pkg([step('move', 1, { date: '2030-04-02', time: '11:00', staffId: 5 })], { yclients_record_id: 42 }));
+      expect(mirror.storeLive).toHaveBeenCalledTimes(1);
+      mirror.storeLive.mockClear();
+      await w.processPackage(pkg([step('edit', 1, { notifyClient: true })], { yclients_record_id: 42 }));
+      expect(mirror.storeLive).not.toHaveBeenCalled();
+    });
+    test('a failed mirror write or re-read does not change the step outcome', async () => {
+      yc.getRecord.mockResolvedValue(LIVE);
+      mirror.storeLive.mockRejectedValueOnce(new Error('db down'));
+      expect(await w.processPackage(pkg([step('edit', 1, { comment: 'x' })], { yclients_record_id: 42 }))).toBe('done');
+      expect(log.warn).toHaveBeenCalled();
+      yc.getRecord.mockReset();
+      yc.getRecord.mockResolvedValueOnce(LIVE).mockRejectedValueOnce(new Error('ECONNRESET'));
+      expect(await w.processPackage(pkg([step('confirm', 2)], { yclients_record_id: 42 }))).toBe('done');
+    });
+    test('delete marks the mirrored row deleted, no re-read', async () => {
+      yc.getRecord.mockResolvedValue(LIVE);
+      expect(await w.processPackage(pkg([step('delete', 1)], { yclients_record_id: 42 }))).toBe('done');
+      expect(mirror.markDeleted).toHaveBeenCalledWith(SALON, 42);
+      expect(mirror.storeLive).not.toHaveBeenCalled();
+      expect(yc.getRecord).toHaveBeenCalledTimes(1);
+    });
+  });
   test('edit with notifyClient writes journal_record_prefs BEFORE the PUT; a flag-only edit makes no PUT', async () => {
     yc.getRecord.mockResolvedValue({ id: 42, datetime: '2030-04-01T10:00:00+03:00', staff_id: 5, attendance: 0 });
     let prefsBeforePut = null;
@@ -62,7 +103,8 @@ describe('processPackage', () => {
     calls = []; writes.length = 0;
     expect(await w.processPackage(pkg([step('edit', 2, { notifyClient: true })], { yclients_record_id: 42 }))).toBe('done');
     expect(calls).toEqual([]);
-    expect(yc.getRecord).toHaveBeenCalledTimes(1);
+    // first package: draft read + live re-read for the mirror; the flag-only one reads nothing
+    expect(yc.getRecord).toHaveBeenCalledTimes(2);
     expect(writes.find(x => /INSERT INTO journal_record_prefs/.test(x.sql)).args).toEqual([3, 42, true, 11]);
     expect(stepsOf(lastWrite(/status='done'/))[0].result).toEqual({ recordId: 42, prefsOnly: true });
   });
@@ -186,7 +228,7 @@ describe('processPackage', () => {
   test('stored draft (same opId) is replayed byte-identical; re-keyed step rebuilds it', async () => {
     const stored = { operationId: OP(1), action: 'confirm', recordId: 42, version: 'a'.repeat(64) };
     await w.processPackage(pkg([step('confirm', 1, {}, { draft: stored })], { yclients_record_id: 42 }));
-    expect(yc.getRecord).not.toHaveBeenCalled();
+    expect(readsBeforePut()).toBe(0); // the draft is not rebuilt (the later read is the mirror refresh)
     expect(calls[0][2]).toEqual(stored);
     calls = [];
     await w.processPackage(pkg([step('confirm', 2, {}, { draft: stored })], { yclients_record_id: 42 }));
@@ -321,13 +363,15 @@ describe('review fixes', () => {
     const stored = jsonbRoundTrip(JSON.parse(writes.find(x => /^UPDATE journal_outbox SET steps=/.test(x.sql)).args[1]));
     await w.processPackage(pkg(stored, { yclients_record_id: 42 }));
     expect(m.fingerprint(index.mutate.mock.calls[1][2])).toBe(m.fingerprint(first));
-    expect(yc.getRecord).toHaveBeenCalledTimes(1);
+    // one draft read in the first (failed) run; the replay rebuilds nothing — the only later read is the mirror refresh
+    expect(yc.getRecord.mock.invocationCallOrder.filter(n => n < index.mutate.mock.invocationCallOrder[1] && n > index.mutate.mock.invocationCallOrder[0])).toHaveLength(0);
+    expect(yc.getRecord.mock.invocationCallOrder.filter(n => n < index.mutate.mock.invocationCallOrder[0])).toHaveLength(1);
   });
 
   test('C1: an old object draft is still accepted', async () => {
     const stored = { operationId: OP(1), action: 'confirm', recordId: 42, version: 'a'.repeat(64) };
     await w.processPackage(pkg([step('confirm', 1, {}, { draft: stored })], { yclients_record_id: 42 }));
-    expect(yc.getRecord).not.toHaveBeenCalled();
+    expect(readsBeforePut()).toBe(0); // the draft is not rebuilt (the later read is the mirror refresh)
     expect(calls[0][2]).toEqual(stored);
   });
 
