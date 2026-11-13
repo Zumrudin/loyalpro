@@ -7,7 +7,7 @@ const { db } = require('./db');
 const sources = require('./services/journal/sources');
 const vh = require('./services/journal/visit-history');
 
-const rec = (id, dt, services, over = {}) => ({ id, datetime: dt, staff_id: 5, staff: { name: 'Юлия' }, attendance: 1, services, client: { phone: '+79200255591' }, ...over });
+const rec = (id, dt, services, over = {}) => ({ id, datetime: dt, staff_id: 5, staff: { name: 'Юлия' }, attendance: 1, services, client: { phone: '+79990000001' }, ...over });
 const svc = (id, title, cost, amount = 1) => ({ id, title, cost, amount });
 const op = over => ({ kind: 'visit_payment', method: 'card', amount: '0', status: 'confirmed', origin: 'yclients', yclients_record_id: null, outbox_id: null, occurred_at: new Date('2026-11-10T09:00:00Z'), ...over });
 
@@ -68,20 +68,50 @@ describe('load', () => {
   test('by phone: salon-scoped records, unsent new record of the same phone joins, foreign one does not', async () => {
     db.oneOrNone.mockImplementation(async sql => /FROM salons/.test(sql) ? { id: 3, name: 'PERI' } : null);
     db.any.mockImplementation(async (sql, args) => {
-      if (/FROM records/.test(sql)) { expect(args).toEqual([3, '79200255591']); return [{ raw_payload: rec(8, '2026-11-01T10:00:00+03:00', [svc(1, 'A', 100)]) }]; }
+      if (/FROM records/.test(sql)) { expect(args).toEqual([3, '79990000001']); return [{ raw_payload: rec(8, '2026-11-01T10:00:00+03:00', [svc(1, 'A', 100)]) }]; }
       if (/FROM finance_operations/.test(sql)) { expect(args[0]).toBe(3); expect(args[2]).toEqual([8]); expect(args[3]).toEqual([40]); return []; }
-      if (/FROM goods_transactions/.test(sql)) return [];
+      if (/FROM stock_movements/.test(sql)) return [];
       return [];
     });
     const create = (id, phone) => ({ id, status: 'queued', released_at: null, yclients_record_id: null, overlay: { kind: 'create', date: '2026-11-20', time: '12:00', staffId: 5, duration: 60, services: [svc(1, 'A', 100)], client: { name: 'X', phone } }, steps: [] });
-    sources.openOutbox.mockResolvedValue([create(40, '79200255591'), create(41, '79001112233')]);
-    const out = await vh.load(3, { phone: '8 920 025-55-91' });
+    sources.openOutbox.mockResolvedValue([create(40, '79990000001'), create(41, '79001112233')]);
+    const out = await vh.load(3, { phone: '8 999 000-00-01' });
     expect(out.entries.map(e => e.recordId)).toEqual([-40, 8]);
   });
   test('SQL: records not deleted, ops only queued/sending/confirmed, consumables are write-offs', () => {
     expect(vh.RECORDS_BY_ID_SQL).toMatch(/salon_id=\$1 AND yclients_client_id=\$2/);
     expect(vh.RECORDS_BY_ID_SQL).toMatch(/<>'deleted'/);
     expect(vh.OPS_SQL).toMatch(/f\.salon_id=\$1 AND f\.status = ANY\(\$2::text\[\]\)/);
-    expect(vh.CONSUMABLES_SQL).toMatch(/type_id=2 AND deleted_at IS NULL/);
+    expect(vh.CONSUMABLES_SQL).toMatch(/d.kind='consumable'/);
+    expect(vh.CONSUMABLES_SQL).toMatch(/m.deleted_at IS NULL/);
+    expect(vh.CONSUMABLES_SQL).toMatch(/m.salon_id=\$1/);
+    expect(vh.CONSUMABLES_SQL).toMatch(/m.qty_base AS amount/);
   });
+});
+
+test('stock purchases include gifts, keep cancelled status and deduplicate split financial payments', () => {
+  const documents = [
+    { id: 10, doc_date: '2026-11-13T10:00:00Z', status: 'cancelled', total_cost: 1, lines: [{ title: 'Cream', qty: 1, unit: 'шт', cost: 1 }] },
+    { id: 11, doc_date: '2026-11-13T11:00:00Z', status: 'posted', total_cost: 0, lines: [{ title: 'Gift', qty: 1, unit: 'шт', cost: 0 }] },
+  ];
+  const out = vh.build({ records: [], stockPurchases: documents, consumables: [], ops: [
+    op({ kind: 'goods_sale', stock_document_id: 10, amount: .3 }),
+    op({ kind: 'goods_sale', stock_document_id: 10, amount: .7 }),
+    op({ kind: 'certificate_sale', amount: 20 }),
+  ] });
+  expect(out.entries).toHaveLength(3);
+  expect(out.entries.flatMap(x => x.purchases)).toEqual(expect.arrayContaining([
+    expect.objectContaining({ title: 'Gift', amount: 0, status: 'posted' }),
+    expect.objectContaining({ title: 'Cream', amount: 1, status: 'cancelled' }),
+    expect.objectContaining({ type: 'certificate', amount: 20 }),
+  ]));
+});
+test('local consumable adjustment remains separate from mirrored usage', () => {
+  const out = vh.build({ records: [rec(5, '2026-11-01T10:00:00+03:00', [svc(77, 'A', 10)])], ops: [],
+    consumables: [{ record_id: 5, service_id: 77, good_title: 'Material', amount: -2, unit_title: 'мл', cost: 3 },
+      { record_id: 5, service_id: 77, good_title: 'Material', amount: 1, unit_title: 'мл', cost: 1.5, adjustment: true }] });
+  expect(out.entries[0].services[0].consumables).toEqual([
+    { title: 'Material', quantity: '2 мл', cost: 3 },
+    { title: 'Material', quantity: '1 мл', cost: 1.5, adjustment: true },
+  ]);
 });

@@ -7,6 +7,7 @@ const { db } = require('../db');
 const store = require('../services/stock/store');
 const catalog = require('../services/stock/catalog-sync');
 const documents = require('../services/stock/documents');
+const sales = require('../services/stock/sales');
 const { StockError } = require('../services/stock/model');
 const { getReference } = require('../services/journal/reference-cache');
 const { createLogger } = require('../logger');
@@ -204,6 +205,15 @@ router.post('/openings/reset', requireRole('owner'), wrap('opening-reset', async
   const salon = await db.oneOrNone('SELECT * FROM salons WHERE id = $1', [req.user.salonId]);
   if (!salon) return res.status(404).json({ error: 'Салон не найден.' });
   res.json(await documents.openingReset(salon, req.user.userId, bodyOf(req)));
+}));
+
+router.post('/sales', wrap('sale-create', async (req, res) => {
+  res.status(201).json({ document: await sales.create(req.user.salonId, req.user.userId, bodyOf(req)) });
+}));
+router.get('/clients/:clientId/purchases', wrap('client-purchases', async (req, res) => {
+  const clientId = Number(req.params.clientId);
+  if (!Number.isSafeInteger(clientId) || clientId <= 0) return bad(res, ['Некорректный id клиента.']);
+  res.json(await store.listPurchasesByClient(req.user.salonId, clientId));
 }));
 
 module.exports = router;

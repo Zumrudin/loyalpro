@@ -1,5 +1,6 @@
 'use strict';
 jest.mock('./services/stock/store');
+jest.mock('./services/finance-ops', () => ({ cancelByStockDocument: jest.fn() }));
 jest.mock('./services/stock/ledger', () => ({ postDocument: jest.fn() }));
 jest.mock('./services/yclients', () => ({ ycGet: jest.fn() }));
 jest.mock('./db', () => ({ pool: { connect: jest.fn() }, db: {} }));
@@ -188,9 +189,21 @@ describe('HTTP routes', () => {
   });
 });
 
-test.each(['opening', 'sale'])('generic cancellation cannot partially undo %s', async kind => {
+test.each(['opening'])('generic cancellation cannot partially undo %s', async kind => {
   store.documentById.mockResolvedValue({ id: 30, kind, origin: 'loyalpro', status: 'posted' });
   await expect(docs.cancel(1, 9, 30, 'test')).rejects.toMatchObject({ status: 409, code: 'kind' });
   expect(store.cancelDocument).not.toHaveBeenCalled();
   expect(store.softDeleteDocumentMovements).not.toHaveBeenCalled();
+});
+
+test('sale cancellation cancels finance operations in the movement transaction', async () => {
+  const fin = require('./services/finance-ops');
+  store.documentById.mockResolvedValue({ id: 30, kind: 'sale', origin: 'loyalpro', status: 'posted' });
+  await docs.cancel(1, 9, 30, 'test');
+  const tx = store.cancelDocument.mock.calls[0][0];
+  expect(store.softDeleteDocumentMovements).toHaveBeenCalledWith(tx, 1, 30);
+  expect(fin.cancelByStockDocument).toHaveBeenCalledTimes(1);
+  expect(fin.cancelByStockDocument).toHaveBeenCalledWith(tx, 1, 30);
+  expect(fin.cancelByStockDocument.mock.invocationCallOrder[0]).toBeGreaterThan(store.softDeleteDocumentMovements.mock.invocationCallOrder[0]);
+  expect(query.mock.calls.at(-1)[0]).toBe('COMMIT');
 });

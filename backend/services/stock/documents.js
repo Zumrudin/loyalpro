@@ -2,6 +2,7 @@
 const { pool } = require('../../db');
 const store = require('./store');
 const ledger = require('./ledger');
+const finOps = require('../finance-ops');
 const m = require('./model');
 const { ycGet } = require('../yclients');
 const { parseCatalogGood } = require('../economics/sync');
@@ -66,10 +67,11 @@ async function cancel(salonId, userId, id, reason) {
     const d = await document(salonId, id, q);
     if (d.origin === 'yclients') m.fail('Зеркальный документ нельзя отменить.', 409, 'mirror');
     if (d.status === 'cancelled') m.fail('Документ уже отменён.', 409, 'already_cancelled');
-    // Opening меняет снимок, sale — деньги: обычная отмена движений для них недостаточна.
-    if (!['receipt', 'writeoff', 'move', 'inventory'].includes(d.kind)) m.fail('Для этого вида нужна отдельная отмена.', 409, 'kind');
+    // Opening меняет снимок: обычной отмены движений недостаточно.
+    if (!['receipt', 'writeoff', 'move', 'inventory', 'sale'].includes(d.kind)) m.fail('Для этого вида нужна отдельная отмена.', 409, 'kind');
     await store.cancelDocument(q, salonId, Number(id), reason.trim());
     await store.softDeleteDocumentMovements(q, salonId, Number(id));
+    if (d.kind === 'sale') await finOps.cancelByStockDocument(q, salonId, Number(id));
   });
   return detail(salonId, id);
 }
@@ -156,4 +158,4 @@ async function openingReset(salon, userId, body) {
     return { ...d, lines: [line] };
   });
 }
-module.exports = { create, cancel, inventoryCreate, inventorySetLines, inventoryPost, openingReset, detail, categoryMatches };
+module.exports = { transaction, create, cancel, inventoryCreate, inventorySetLines, inventoryPost, openingReset, detail, categoryMatches };

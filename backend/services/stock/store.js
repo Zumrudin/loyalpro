@@ -278,3 +278,18 @@ const currentOpening = (salonId, goodRowId, storageId) => db.oneOrNone(`SELECT *
   WHERE salon_id = $1 AND good_row_id = $2 AND storage_id = $3`, [salonId, goodRowId, storageId]);
 Object.assign(module.exports, { documentById, listMovementsByDocument, cancelDocument, softDeleteDocumentMovements,
   insertInventoryLines, listInventoryLines, updateInventoryLine, postInventory, setDocumentStatus, currentOpening });
+
+// Покупки обоих источников, включая отменённые документы и подарки без оплат.
+const PURCHASES_SQL = `SELECT d.id, d.doc_date, d.origin, d.status, d.total_cost,
+  COALESCE((SELECT jsonb_agg(jsonb_build_object('title', g.title, 'qty', m.qty,
+    'unit', CASE WHEN m.unit_type=1 THEN g.unit ELSE g.service_unit END, 'cost', m.cost) ORDER BY m.id)
+    FROM stock_movements m JOIN yclients_goods_catalog g ON g.id=m.good_row_id AND g.salon_id=m.salon_id
+    WHERE m.salon_id=d.salon_id AND m.document_id=d.id), '[]'::jsonb) AS lines,
+  COALESCE((SELECT jsonb_agg(jsonb_build_object('method', f.method, 'amount', f.amount, 'status', f.status) ORDER BY f.id)
+    FROM finance_operations f WHERE f.salon_id=d.salon_id AND f.stock_document_id=d.id), '[]'::jsonb) AS payments
+  FROM stock_documents d WHERE d.salon_id=$1 AND d.kind='sale'
+    AND (d.client_id=$2 OR (d.client_id IS NULL AND d.yclients_client_id IN
+      (SELECT yclients_client_id FROM clients WHERE salon_id=$1 AND id=$2)))
+  ORDER BY d.doc_date DESC, d.id DESC LIMIT 200`;
+const listPurchasesByClient = (salonId, clientId) => db.any(PURCHASES_SQL, [salonId, clientId]);
+Object.assign(module.exports, { PURCHASES_SQL, listPurchasesByClient });
