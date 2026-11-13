@@ -126,9 +126,9 @@ WHERE g.salon_id = $1 AND s.salon_id = $1 AND s.is_active AND (op.good_row_id IS
 
 const balanceCache = new Map();
 const invalidateBalances = salonId => balanceCache.delete(String(salonId));
-async function balances(salonId, { goodRowIds, storageId } = {}) {
+async function balances(salonId, { goodRowIds, storageId } = {}, q) {
   const key = String(salonId);
-  let cached = balanceCache.get(key);
+  let cached = q ? { rows: (await q(BALANCES_SQL, [salonId])).rows, expires: Infinity } : balanceCache.get(key);
   if (!cached || cached.expires <= Date.now()) {
     cached = { rows: await db.any(BALANCES_SQL, [salonId]), expires: Date.now() + 30000 };
     balanceCache.set(key, cached);
@@ -206,11 +206,11 @@ async function insertDocument(q, salonId, d) {
   const result = await q(`INSERT INTO stock_documents
     (salon_id, kind, origin, status, storage_id, to_storage_id, supplier_id, client_id, yclients_client_id,
      record_id, master_staff_yc_id, doc_date, comment, total_cost, created_by, posted_at)
-    VALUES ($1, $2, 'loyalpro', $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15) RETURNING id`,
+    VALUES ($1, $2, 'loyalpro', $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, COALESCE($15::timestamptz, CASE WHEN $3 = 'posted' THEN NOW() END)) RETURNING *`,
   [salonId, d.kind, d.status, d.storageId ?? null, d.toStorageId ?? null, d.supplierId ?? null,
     d.clientId ?? null, d.ycClientId ?? null, d.recordId ?? null, d.masterStaffYcId ?? null,
     d.docDate, d.comment ?? null, d.totalCost ?? null, d.createdBy ?? null,
-    d.postedAt ?? (d.status === 'posted' ? new Date() : null)]);
+    d.postedAt ?? null]);
   return result.rows[0];
 }
 const listOpenings = salonId => db.any('SELECT * FROM stock_openings WHERE salon_id = $1 ORDER BY good_row_id, storage_id', [salonId]);
@@ -233,3 +233,45 @@ async function setEnabled(q, salonId, enabled) {
 Object.assign(module.exports, { BALANCES_SQL, balances, invalidateBalances, goodByYcId, ensureStorage,
   clientIdByYc, addIngestPending, markMovementDeleted, upsertMirrorDocument, upsertMovement,
   insertMovement, insertDocument, listOpenings, insertOpening, setEnabled });
+
+// ── Документы и инвентаризации; q позволяет читать под блокировкой в транзакции ──
+async function documentById(salonId, id, q) {
+  const sql = 'SELECT * FROM stock_documents WHERE salon_id = $1 AND id = $2';
+  return q ? (await q(`${sql} FOR UPDATE`, [salonId, id])).rows[0] || null : db.oneOrNone(sql, [salonId, id]);
+}
+const listMovementsByDocument = (salonId, docId) => db.any(`
+  SELECT m.*, g.title, g.unit, g.service_unit, g.unit_equals, s.title AS storage_title
+  FROM stock_movements m
+  JOIN yclients_goods_catalog g ON g.id = m.good_row_id AND g.salon_id = m.salon_id
+  JOIN stock_storages s ON s.id = m.storage_id AND s.salon_id = m.salon_id
+  WHERE m.salon_id = $1 AND m.document_id = $2 ORDER BY m.id`, [salonId, docId]);
+const cancelDocument = (q, salonId, id, reason) => q(`
+  UPDATE stock_documents SET status = 'cancelled', cancelled_at = NOW(), cancel_reason = $3, updated_at = NOW()
+  WHERE salon_id = $1 AND id = $2`, [salonId, id, reason]);
+const softDeleteDocumentMovements = (q, salonId, id) => q(`
+  UPDATE stock_movements SET deleted_at = NOW() WHERE salon_id = $1 AND document_id = $2 AND deleted_at IS NULL`, [salonId, id]);
+async function insertInventoryLines(q, salonId, docId, lines) {
+  for (const l of lines) await q(`INSERT INTO stock_inventory_lines
+    (salon_id, document_id, good_row_id, storage_id, expected_base) VALUES ($1, $2, $3, $4, $5)`,
+  [salonId, docId, l.goodRowId, l.storageId, l.expectedBase]);
+}
+async function listInventoryLines(salonId, docId, q) {
+  const sql = `SELECT l.*, g.title, g.unit, g.service_unit, g.unit_equals, s.title AS storage_title
+    FROM stock_inventory_lines l
+    JOIN yclients_goods_catalog g ON g.id = l.good_row_id AND g.salon_id = l.salon_id
+    JOIN stock_storages s ON s.id = l.storage_id AND s.salon_id = l.salon_id
+    WHERE l.salon_id = $1 AND l.document_id = $2 ORDER BY l.id`;
+  return q ? (await q(sql, [salonId, docId])).rows : db.any(sql, [salonId, docId]);
+}
+const updateInventoryLine = (q, salonId, docId, l) => q(`UPDATE stock_inventory_lines
+  SET expected_base = $4, counted = $5, counted_unit_type = $6, counted_base = $7, diff_base = $8
+  WHERE salon_id = $1 AND document_id = $2 AND good_row_id = $3`,
+[salonId, docId, l.goodRowId, l.expectedBase, l.counted, l.countedUnitType, l.countedBase, l.diffBase]);
+const setDocumentStatus = (q, salonId, id, status) => q(`UPDATE stock_documents
+  SET status = $3, posted_at = CASE WHEN $3 = 'posted' THEN NOW() ELSE posted_at END, updated_at = NOW()
+  WHERE salon_id = $1 AND id = $2`, [salonId, id, status]);
+const postInventory = (q, salonId, id) => setDocumentStatus(q, salonId, id, 'posted');
+const currentOpening = (salonId, goodRowId, storageId) => db.oneOrNone(`SELECT * FROM stock_openings
+  WHERE salon_id = $1 AND good_row_id = $2 AND storage_id = $3`, [salonId, goodRowId, storageId]);
+Object.assign(module.exports, { documentById, listMovementsByDocument, cancelDocument, softDeleteDocumentMovements,
+  insertInventoryLines, listInventoryLines, updateInventoryLine, postInventory, setDocumentStatus, currentOpening });

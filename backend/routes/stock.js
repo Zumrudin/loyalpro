@@ -6,6 +6,7 @@ const { auth, requireRole } = require('../middleware/auth');
 const { db } = require('../db');
 const store = require('../services/stock/store');
 const catalog = require('../services/stock/catalog-sync');
+const documents = require('../services/stock/documents');
 const { StockError } = require('../services/stock/model');
 const { getReference } = require('../services/journal/reference-cache');
 const { createLogger } = require('../logger');
@@ -156,6 +157,53 @@ router.post('/goods', wrap('good-create', async (req, res) => {
 router.put('/goods/:id', wrap('good-update', async (req, res) => {
   const gid = id(req); if (!gid) return res.status(400).json({ error: 'Некорректный id.' });
   res.json(await catalog.updateGood(req.user.salonId, gid, bodyOf(req)));
+}));
+
+// ── Остатки и документы ──
+router.get('/balances', wrap('balances', async (req, res) => {
+  const q = req.query || {}; const storageId = optId(q.storage);
+  if (Number.isNaN(storageId)) return bad(res, ['Некорректный id склада.']);
+  const [rows, goods] = await Promise.all([store.balances(req.user.salonId, { storageId }), store.listGoods(req.user.salonId)]);
+  const byId = new Map(goods.map(g => [String(g.id), g]));
+  const result = rows.map(r => {
+    const g = byId.get(String(r.good_row_id)) || {};
+    return { ...r, title: g.title, unit: g.unit, service_unit: g.service_unit, unit_equals: g.unit_equals,
+      critical_amount: g.critical_amount, category_path: g.category_path, local_category: g.local_category };
+  }).filter(r => (!q.category || documents.categoryMatches(r, q.category)) &&
+    (q.only_negative !== '1' || Number(r.qty_base) < 0) &&
+    (q.only_critical !== '1' || (r.critical_amount != null && Number(r.qty_base) <= Number(r.critical_amount) * (Number(r.unit_equals) || 1))));
+  res.json(result);
+}));
+router.post('/documents', wrap('document-create', async (req, res) => {
+  res.status(201).json(await documents.create(req.user.salonId, req.user.userId, bodyOf(req)));
+}));
+router.get('/documents/:id', wrap('document', async (req, res) => {
+  const did = id(req); if (!did) return bad(res, ['Некорректный id.']);
+  res.json(await documents.detail(req.user.salonId, did));
+}));
+router.post('/documents/:id/cancel', wrap('document-cancel', async (req, res) => {
+  const did = id(req); if (!did) return bad(res, ['Некорректный id.']);
+  res.json(await documents.cancel(req.user.salonId, req.user.userId, did, bodyOf(req).reason));
+}));
+router.post('/inventories', wrap('inventory-create', async (req, res) => {
+  res.status(201).json(await documents.inventoryCreate(req.user.salonId, req.user.userId, bodyOf(req)));
+}));
+router.get('/inventories/:id', wrap('inventory', async (req, res) => {
+  const did = id(req); if (!did) return bad(res, ['Некорректный id.']);
+  res.json(await documents.detail(req.user.salonId, did, true));
+}));
+router.put('/inventories/:id/lines', wrap('inventory-lines', async (req, res) => {
+  const did = id(req); if (!did) return bad(res, ['Некорректный id.']);
+  res.json(await documents.inventorySetLines(req.user.salonId, did, bodyOf(req).lines));
+}));
+router.post('/inventories/:id/post', wrap('inventory-post', async (req, res) => {
+  const did = id(req); if (!did) return bad(res, ['Некорректный id.']);
+  res.json(await documents.inventoryPost(req.user.salonId, req.user.userId, did));
+}));
+router.post('/openings/reset', requireRole('owner'), wrap('opening-reset', async (req, res) => {
+  const salon = await db.oneOrNone('SELECT * FROM salons WHERE id = $1', [req.user.salonId]);
+  if (!salon) return res.status(404).json({ error: 'Салон не найден.' });
+  res.json(await documents.openingReset(salon, req.user.userId, bodyOf(req)));
 }));
 
 module.exports = router;
