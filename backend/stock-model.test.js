@@ -70,8 +70,17 @@ describe('дельта расходников и инвентаризация', 
 
 describe('правило счёта остатка (§6.3)', () => {
   const opening = { takenAt: new Date('2026-11-14T00:00:00Z') };
-  test('после снимка по дате операции — считается', () => expect(m.balanceCountsRow({ occurredAt: '2026-11-15T00:00:00Z', recordedAt: '2026-11-15T00:00:00Z', source: 'reconcile' }, opening)).toBe(true));
-  test('задним числом через вебхук/наш документ — считается', () => expect(m.balanceCountsRow({ occurredAt: '2026-11-01T00:00:00Z', recordedAt: '2026-11-15T00:00:00Z', source: 'webhook' }, opening)).toBe(true));
-  test('старая строка сверкой/догоном — нет', () => expect(m.balanceCountsRow({ occurredAt: '2026-11-01T00:00:00Z', recordedAt: '2026-11-15T00:00:00Z', source: 'backfill' }, opening)).toBe(false));
+  test('зеркальная строка, впервые увиденная после снимка (вебхук/сверка) — считается', () => {
+    expect(m.balanceCountsRow({ occurredAt: '2026-11-15T00:00:00Z', recordedAt: '2026-11-15T00:00:00Z', source: 'reconcile' }, opening)).toBe(true);
+    expect(m.balanceCountsRow({ occurredAt: '2026-11-01T00:00:00Z', recordedAt: '2026-11-15T00:00:00Z', source: 'webhook' }, opening)).toBe(true);
+  });
+  test('зеркальная строка, лежавшая у нас до снимка (в т.ч. с будущей датой визита) — нет: она уже в показании YClients', () =>
+    expect(m.balanceCountsRow({ occurredAt: '2026-12-01T00:00:00Z', recordedAt: '2026-11-10T00:00:00Z', source: 'backfill' }, opening)).toBe(false));
+  test('догон старых строк после снимка — нет', () => expect(m.balanceCountsRow({ occurredAt: '2026-11-01T00:00:00Z', recordedAt: '2026-11-15T00:00:00Z', source: 'backfill' }, opening)).toBe(false));
+  test('локальные движения считаются всегда, даже если старше снимка (их нет в YClients)', () => {
+    expect(m.balanceCountsRow({ occurredAt: '2026-11-01T00:00:00Z', recordedAt: '2026-11-01T00:00:00Z', source: 'loyalpro' }, opening)).toBe(true);
+    expect(m.balanceCountsRow({ occurredAt: '2026-11-01T00:00:00Z', recordedAt: '2026-11-01T00:00:00Z', source: 'inventory' }, opening)).toBe(true);
+  });
+  test('строка opening при снимке не считается', () => expect(m.balanceCountsRow({ occurredAt: '2026-11-14T00:00:00Z', recordedAt: '2026-11-14T00:00:00Z', source: 'opening' }, opening)).toBe(false));
   test('без входящего остатка — всё считается', () => expect(m.balanceCountsRow({ occurredAt: '2026-11-01T00:00:00Z', recordedAt: '2026-11-01T00:00:00Z', source: 'backfill' }, null)).toBe(true));
 });

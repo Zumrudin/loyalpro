@@ -25,6 +25,7 @@ beforeEach(() => {
   store.listMovementsByDocument.mockResolvedValue([]);
   store.listInventoryLines.mockResolvedValue([{ good_row_id: 10, expected_base: 1, counted: 3, counted_unit_type: 1, counted_base: 15, unit_equals: 5 }]);
   store.balances.mockResolvedValue([{ good_row_id: 10, storage_id: 1, qty_base: '2' }]);
+  store.getSettings.mockResolvedValue({ enabled: true });
 });
 test('create validates context, posts normalized lines and commits once', async () => {
   const result = await docs.create(1, 9, body());
@@ -102,7 +103,7 @@ test('opening does one GET; informational movement cannot double count snapshot'
   expect(opening).toMatchObject({ qtyBase: 15, ycQtyBase: 15, note: 'test', createdBy: 9 });
   expect(movement).toMatchObject({ source: 'opening', qtyBase: 15, occurredAt: opening.takenAt });
   expect(model.balanceCountsRow({ ...movement, recordedAt: new Date(now.getTime() + 1000) }, { takenAt: opening.takenAt })).toBe(false);
-  expect(jest.requireActual('./services/stock/store').BALANCES_SQL).toContain("mv.source IN ('webhook','loyalpro','inventory')");
+  expect(jest.requireActual('./services/stock/store').BALANCES_SQL).toContain("mv.source IN ('webhook','reconcile')"); // opening не в списке источников — не считается
 });
 
 test('missing document is 404 (db.one may return null)', async () => {

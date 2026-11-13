@@ -17,12 +17,14 @@ async function transaction(salonId, fn) {
     await client.query('BEGIN');
     const result = await fn(client.query.bind(client));
     await client.query('COMMIT');
+    client.release();
     store.invalidateBalances(salonId);
     return result;
   } catch (e) {
-    await client.query('ROLLBACK');
+    try { await client.query('ROLLBACK'); } catch (rollbackErr) { client.release(rollbackErr); throw e; }
+    client.release();
     throw e;
-  } finally { client.release(); }
+  }
 }
 async function document(salonId, id, q, inventory = false) {
   const d = await store.documentById(salonId, checkId(id), q);
@@ -137,6 +139,8 @@ async function openingReset(salon, userId, body) {
   if (good.yclients_good_id == null) m.fail('У локального товара нет показания YClients.', 409, 'local_good');
   const storage = await activeStorage(salon.id, storageId);
   if (storage.yclients_storage_id == null) m.fail('У склада нет показания YClients.', 409, 'local_storage');
+  const settings = await store.getSettings(salon.id);
+  if (!settings || !settings.enabled) m.fail('Входящий остаток ещё не снят (scripts/stock-opening.js).', 409, 'not_enabled');
   let parsed;
   try { parsed = parseCatalogGood(await ycGet(salon, `/goods/${salon.yclients_company_id}/${good.yclients_good_id}`)); }
   catch (_) { m.fail('unavailable', 502, 'unavailable'); }

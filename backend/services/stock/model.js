@@ -104,9 +104,9 @@ function inventoryDiff({ expectedBase, counted, countedUnitType, unitEquals }) {
 /** §6.3: считается ли строка в остаток при данном входящем остатке. */
 function balanceCountsRow(row, opening) {
   if (!opening || !opening.takenAt) return true;
+  if (['loyalpro', 'inventory'].includes(row.source)) return true;            // локальное — YClients его не видел
   const t = new Date(opening.takenAt).getTime();
-  if (new Date(row.occurredAt).getTime() > t) return true;
-  return new Date(row.recordedAt).getTime() > t && ['webhook', 'loyalpro', 'inventory'].includes(row.source);
+  return new Date(row.recordedAt).getTime() > t && ['webhook', 'reconcile'].includes(row.source);
 }
 
 module.exports = { KINDS, ORIGINS, YC_TYPE_BY_KIND, PAY_METHODS, StockError, fail, signFor, kindByYcType, toBase, toBaseInfo, fromBase, validateDocument, validateSalePayments, consumableDelta, inventoryDiff, balanceCountsRow, kop };

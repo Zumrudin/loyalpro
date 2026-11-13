@@ -56,7 +56,13 @@ async function upsertGoodsTransaction(salonId, row, opts) {
       deleted_at = ${delSet}
   `;
   await db.query(sql, params);
-  if (config.STOCK_LEDGER !== 'false') await safely('stock ingest', () => require('../stock/ledger').ingestMirrored(salonId, row, { status, source, deletedAt: status === 'delete' ? (opts.deletedAt || new Date()) : null }), 'движение склада не записано');
+  // Леджер склада получает ИТОГОВУЮ строку после апсерта: защита от порядка (last_change_date) и
+  // удалений живёт здесь, и зеркало склада обязано ей следовать, а не входящему событию (ревью задачи 4).
+  if (config.STOCK_LEDGER !== 'false') await safely('stock ingest', async () => {
+    const stored = await db.oneOrNone(`SELECT yclients_txn_id, ${TXN_COLS.join(', ')}, deleted_at FROM goods_transactions WHERE salon_id=$1 AND yclients_txn_id=$2`, [salonId, row.yclients_txn_id]);
+    if (!stored) return null;
+    return require('../stock/ledger').ingestMirrored(salonId, stored, { status: stored.deleted_at ? 'delete' : 'update', source, deletedAt: stored.deleted_at });
+  }, 'движение склада не записано');
   return { deleted: status === 'delete' };
 }
 

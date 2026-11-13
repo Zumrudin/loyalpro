@@ -107,6 +107,9 @@ module.exports = { listStorages, storageById, upsertStorage, deactivateMissingSt
   listGoods, goodById, setGoodActiveByYcId, updateCatalogPaths, goodUnitsRows, txnUnitRows, distinctCategoryPaths };
 
 // ── Остатки: одно правило для загрузчика и живого EXPLAIN ──
+// Правило счёта (§6.3 спеки, уточнено ревью задачи 4): локальные движения (loyalpro, inventory) считаются ВСЕГДА —
+// их нет в показании YClients по построению; зеркальные (webhook, reconcile) — только впервые увиденные ПОСЛЕ снимка
+// (recorded_at > taken_at); backfill и opening при наличии снимка не считаются. Та же логика — model.balanceCountsRow.
 const BALANCES_SQL = `WITH op AS (SELECT good_row_id, storage_id, qty_base, taken_at FROM stock_openings WHERE salon_id = $1),
 mv AS (
   SELECT mv.good_row_id, mv.storage_id, SUM(mv.qty_base) AS moved
@@ -114,8 +117,8 @@ mv AS (
   JOIN stock_documents d ON d.id = mv.document_id AND d.salon_id = mv.salon_id AND d.status = 'posted'
   LEFT JOIN op ON op.good_row_id = mv.good_row_id AND op.storage_id = mv.storage_id
   WHERE mv.salon_id = $1 AND mv.deleted_at IS NULL
-    AND (op.taken_at IS NULL OR mv.occurred_at > op.taken_at
-         OR (mv.recorded_at > op.taken_at AND mv.source IN ('webhook','loyalpro','inventory')))
+    AND (op.taken_at IS NULL OR mv.source IN ('loyalpro','inventory')
+         OR (mv.recorded_at > op.taken_at AND mv.source IN ('webhook','reconcile')))
   GROUP BY mv.good_row_id, mv.storage_id)
 SELECT g.id AS good_row_id, s.id AS storage_id, COALESCE(op.qty_base,0) + COALESCE(mv.moved,0) AS qty_base, op.taken_at
 FROM yclients_goods_catalog g

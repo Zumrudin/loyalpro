@@ -54,7 +54,7 @@ test('перемещение: две строки на каждую позици
   expect(store.insertMovement.mock.calls.map(c => [c[2].storageId, c[2].qtyBase])).toEqual([[2, -10], [3, 10], [2, -20], [3, 20]]);
 });
 test('SQL остатков экспортирован и содержит правило снимка и статус документа', () => {
-  for (const text of ['stock_openings', 'recorded_at', 'occurred_at', "('webhook','loyalpro','inventory')", "d.status = 'posted'"]) expect(actualStore.BALANCES_SQL).toContain(text);
+  for (const text of ['stock_openings', 'recorded_at', "('loyalpro','inventory')", "('webhook','reconcile')", "d.status = 'posted'"]) expect(actualStore.BALANCES_SQL).toContain(text);
 });
 test('снимок: единицы продажи, отрицательные остатки, неизвестный коэффициент', () => {
   expect(ledger.openingFromCatalog({ unit_equals: 500, stock: [{ storage_id: 12, amount: -8.118 }] })).toEqual([{ storageYcId: 12, qtyBase: -4059, ycQtyBase: -4059, unitUnknown: false }]);
@@ -106,8 +106,15 @@ test('хук экономики: флаг выключения и сбой не 
     await expect(economics.upsertGoodsTransaction(7, row, { status: 'update', source: 'webhook' })).resolves.toEqual({ deleted: false });
     expect(spy).not.toHaveBeenCalled();
     config.STOCK_LEDGER = undefined;
+    // Леджер получает ИТОГОВУЮ строку goods_transactions (после правил свежести/удаления), а не входящее событие.
+    const stored = { ...row, deleted_at: at };
+    db.oneOrNone.mockResolvedValueOnce(stored);
     await expect(economics.upsertGoodsTransaction(7, row, { status: 'delete', source: 'webhook', deletedAt: at })).resolves.toEqual({ deleted: true });
-    expect(spy).toHaveBeenCalledWith(7, row, { status: 'delete', source: 'webhook', deletedAt: at });
+    expect(spy).toHaveBeenCalledWith(7, stored, { status: 'delete', source: 'webhook', deletedAt: at });
+    // Событие update, но в БД строка уже удалена позже → леджер видит delete (защита от порядка).
+    db.oneOrNone.mockResolvedValueOnce({ ...row, deleted_at: at });
+    await economics.upsertGoodsTransaction(7, row, { status: 'update', source: 'reconcile' });
+    expect(spy).toHaveBeenLastCalledWith(7, expect.objectContaining({ deleted_at: at }), { status: 'delete', source: 'reconcile', deletedAt: at });
   } finally { config.STOCK_LEDGER = old; spy.mockRestore(); }
 });
 
