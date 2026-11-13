@@ -10,6 +10,7 @@ const dispatch = require('../services/journal/dispatch');
 const month = require('../services/journal/month');
 const history = require('../services/journal/history');
 const clientSummary = require('../services/journal/client-summary');
+const visitHistory = require('../services/journal/visit-history');
 router.use(auth, requireRole('owner', 'admin'));
 router.use((req, res, next) => { res.set('Cache-Control', 'no-store'); next(); });
 const handle = fn => async (req, res) => {
@@ -17,7 +18,7 @@ const handle = fn => async (req, res) => {
   catch (e) {
     // Never return upstream messages (they can contain client data / credentials).
     if (e instanceof m.JournalError) return res.status(e.status).json({ error: e.message, code: e.code });
-    res.status(502).json({ error: 'Не удалось связаться с YClients или базой. Обновите журнал.', code: 'unavailable' });
+    res.status(502).json({ error: 'Не удалось загрузить данные. Обновите журнал.', code: 'unavailable' });
   }
 };
 router.get('/operations/pending', requireRole('owner'), handle(req => service.pending(req.user.salonId)));
@@ -53,6 +54,7 @@ router.get('/month', handle(req => month.month(req.user.salonId, req.query.month
 router.get('/records/:id', handle(req => service.detail(req.user.salonId, m.nonZeroId(req.params.id))));
 router.get('/records/:id/history', handle(req => history.load(req.user.salonId, m.nonZeroId(req.params.id))));
 router.get('/clients/summary', handle(req => clientSummary.summary(req.user.salonId, req.query)));
+router.get('/clients/visits', handle(req => visitHistory.load(req.user.salonId, req.query)));
 router.get('/slots', handle(req => {
   const draft = { date: m.dateKey(req.query.date), staffId: m.positiveId(req.query.staffId) };
   if (req.query.recordId) draft.recordId = m.positiveId(req.query.recordId);

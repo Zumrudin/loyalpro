@@ -4,7 +4,7 @@ const vm = require('vm');
 const path = require('path');
 // All journal files share ONE global scope in the browser (classic <script>s,
 // index.html order). The harness runs them the same way, one script each.
-const JR_FILES = ['journal.js', 'journal-grid.js', 'journal-card.js', 'journal-forms.js', 'journal-payment.js', 'journal-dispatch.js'];
+const JR_FILES = ['journal.js', 'journal-grid.js', 'journal-card.js', 'journal-forms.js', 'journal-payment.js', 'journal-dispatch.js', 'journal-visits.js'];
 const readJr = file => fs.readFileSync(path.join(__dirname, '../frontend/js/pages', file), 'utf8');
 const JR_SOURCES = JR_FILES.map(file => ({ file, code: readJr(file) }));
 const JR_ALL = JR_SOURCES.map(s => s.code).join('\n');
@@ -338,7 +338,7 @@ test('create without payment sends exactly one session and closes the form at on
  expect(body).not.toHaveProperty('payments');expect(body).not.toHaveProperty('recordId');
  expect(h.get('jrModal').open).toBe(false);
  expect(h.context.loadJournal).toHaveBeenCalledWith({silent:true});
- expect(h.context.notify).toHaveBeenCalledWith('Сохранено в журнале. В YClients — кнопкой «Отправить в YClients».');
+ expect(h.context.notify).toHaveBeenCalledWith('Сохранено в журнале.');
 });
 test('create form no longer promises a synchronous YClients check',()=>{
  const h=harness();createForm(h);
@@ -464,31 +464,16 @@ test('choosing bonuses clears outstanding arrival approval and never consents to
  const confirm=h.get('jrPayArrivalConfirm').onclick;h.context.jrPayMethod(2);confirm();
  expect(h.run('JSON.stringify(journal.session.payments)')).toBe(JSON.stringify([{method:'loyalty_card',methodId:10,amount:30}]));
 });
-test('existing record payment form renders from ?local=1 first, then silently takes live data while untouched',async()=>{
- const h=harness();let resolveLive;
+test('payment form is built from LoyalPro data only: one ?local=1 request, no live YClients request (13.11.2026)',async()=>{
+ const h=harness();
  const local={...createOptions(),items:[{title:'LOCAL',quantity:1,total:100}]};
- const live={...createOptions(),items:[{title:'LIVE',quantity:1,total:100}]};
- h.context.jrApi=jest.fn(path=>path.endsWith('?local=1')?Promise.resolve(local):new Promise(r=>{resolveLive=r}));
- const opening=h.context.jrOpenPayment(8);
- expect(h.context.jrApi.mock.calls.map(c=>c[0])).toEqual(['payments/8?local=1','payments/8']);
- await new Promise(r=>setImmediate(r));
+ h.context.jrApi=jest.fn(path=>path.endsWith('?local=1')?Promise.resolve(local):Promise.reject(new Error('live must not be called')));
+ expect(await h.context.jrOpenPayment(8)).toBe(true);
+ expect(h.context.jrApi.mock.calls.map(c=>c[0])).toEqual(['payments/8?local=1']);
  expect(h.get('jrModalBody').innerHTML).toContain('LOCAL');
- resolveLive(live);await opening;
- expect(h.get('jrModalBody').innerHTML).toContain('LIVE');
- expect(h.get('jrModalBody').innerHTML).not.toContain('Повторное проведение заблокировано');
- expect(h.get('jrModalBody').innerHTML).not.toContain('ожидает сверки');
-});
-test('live data does not replace a form with chosen actions; live failure keeps local silently',async()=>{
- const h=harness();let resolveLive;
- const local={...createOptions(),items:[{title:'LOCAL',quantity:1,total:100}]};
- h.context.jrApi=jest.fn(path=>path.endsWith('?local=1')?Promise.resolve(local):new Promise(r=>{resolveLive=r}));
- const opening=h.context.jrOpenPayment(8);await new Promise(r=>setImmediate(r));
- h.context.jrPayMethod(0);
- resolveLive({...createOptions(),items:[{title:'LIVE',quantity:1,total:100}]});await opening;
- expect(h.get('jrModalBody').innerHTML).toContain('LOCAL');expect(h.run('journal.session.payments.length')).toBe(1);
- const h2=harness();h2.context.jrApi=paymentApi(local,new Error('YClients down'));
- await h2.context.jrOpenPayment(8);
- expect(h2.get('jrModalBody').innerHTML).toContain('LOCAL');expect(h2.get('jrModalError').textContent).toBe('');
+ const h2=harness();h2.context.jrApi=jest.fn(()=>Promise.reject(new Error('Нет связи')));
+ expect(await h2.context.jrOpenPayment(8)).toBe(false);
+ expect(h2.get('jrModalError').textContent).toBe('Нет связи');expect(h2.get('jrModalBody').innerHTML).toContain('jrPayReload');
 });
 test('negative (not yet sent) record is paid like any record: methods shown, payment queued for -id (11.11.2026)',async()=>{
  const h=harness();h.context.jrApi=paymentApi(createOptions(),null);h.context.loadJournal=jest.fn();
@@ -547,17 +532,17 @@ test('grid marks syncing and failed visits; negative ids stay clickable',()=>{
  expect(h.get('jrGrid').innerHTML).toContain('data-record="-3"');
  h.run(syncDay({outboxId:1,status:'failed',errorText:'<Нет связи>',errorCode:'network'}));
  const html=h.get('jrGrid').innerHTML;
- expect(html).toContain('jr-visit-failed');expect(html).toContain('Не передано в YClients');
+ expect(html).toContain('jr-visit-failed');expect(html).toContain('Ошибка отправки');expect(html).not.toContain('YClients');
  expect(html).toContain('&lt;Нет связи&gt;');expect(html).not.toContain('<Нет связи>');
 });
 test('failed card shows reason and retry; uncertain hides retry and dismiss; dismiss for any other failed package',async()=>{
  const h=harness();
  const base={id:8,staffId:1,staffName:'Test',date:'2030-04-01',time:'09:15',duration:60,clientName:'Test',attendance:0,paid:false,services:[]};
  let html=h.context.jrAppointmentCard({...base,sync:{outboxId:4,status:'failed',errorText:'<Сбой>',errorCode:'network'}});
- expect(html).toContain('Не передано в YClients: &lt;Сбой&gt;');expect(html).toContain('id="jrSyncRetry"');
+ expect(html).toContain('Ошибка отправки: &lt;Сбой&gt;');expect(html).toContain('id="jrSyncRetry"');
  expect(html).toContain('id="jrSyncDismiss"');expect(html).toContain('Отменить неотправленные изменения');expect(html).not.toContain('Убрать из журнала');
  html=h.context.jrAppointmentCard({...base,sync:{outboxId:4,status:'failed',errorText:'Ответ потерян',errorCode:'uncertain'}});
- expect(html).not.toContain('id="jrSyncRetry"');expect(html).toContain('Нужна сверка в YClients');expect(html).not.toContain('id="jrSyncDismiss"');
+ expect(html).not.toContain('id="jrSyncRetry"');expect(html).toContain('Нужна сверка');expect(html).not.toContain('id="jrSyncDismiss"');
  html=h.context.jrAppointmentCard({...base,id:-3,sync:{outboxId:4,status:'failed',errorText:'x',errorCode:'uncertain'}});
  expect(html).not.toContain('id="jrSyncDismiss"');
  html=h.context.jrAppointmentCard({...base,id:-3,sync:{outboxId:4,status:'failed',errorText:'x',errorCode:'busy'}});
@@ -586,16 +571,16 @@ test('session key already used (lost response, then edited form): key kept, form
 test('negative record still being sent has no move/confirm/cancel and says so',()=>{
  const h=harness();
  const html=h.context.jrAppointmentCard({id:-3,staffName:'Test',date:'2030-04-01',time:'09:15',duration:60,clientName:'Test',attendance:0,paid:false,services:[],sync:{outboxId:4,status:'running'}});
- expect(html).toContain('Изменения передаются в YClients');
+ expect(html).toContain('Идёт отправка изменений');
  for(const id of ['jrMove','jrConfirm','jrCancel'])expect(html).not.toContain(`id="${id}"`);
  expect(html).toContain('id="jrPaymentOpen"');
 });
-test('unsent new record (manual dispatch) stays editable and says it waits for «Отправить в YClients»',()=>{
+test('unsent new record (manual dispatch) stays editable and does not talk about YClients',()=>{
  const h=harness();
  const r={id:-3,staffName:'Test',date:'2030-04-01',time:'09:15',duration:60,clientName:'Test',attendance:0,paid:false,services:[],sync:{outboxId:4,status:'queued',released:false}};
  const html=h.context.jrAppointmentCard(r);
  for(const id of ['jrMove','jrCancel','jrEditServices','jrSaveChanges'])expect(html).toContain(`id="${id}"`);
- expect(html).toContain('ещё не отправлены в YClients');
+ expect(html).not.toContain('YClients');expect(html).toContain('id="jrDelete"');
  expect(html).toContain('data-attendance="1"');
 });
 test('arrived unsent record: service lines open the editor, note does not say «edit in YClients»',()=>{
@@ -650,13 +635,13 @@ test('polling is scheduled only while a package is queued or running, on the jou
  h.context.jrApi.mockResolvedValue(day('running'));h.context.document.body.dataset.page='clients';
  await h.context.loadJournal({silent:true});expect(h.run('journal.pollTimer')).toBe(null);
 });
-test('silent reload keeps the grid and shows stale mirror freshness',async()=>{
+test('silent reload keeps the grid; freshness does not mention YClients',async()=>{
  const h=harness();h.get('jrDate').value='2030-04-01';h.get('jrGrid').innerHTML='OLD GRID';h.get('jrState').textContent='Обновлено 09:00';
  let resolve;h.context.jrApi=jest.fn(()=>new Promise(r=>resolve=r));
  const load=h.context.loadJournal({silent:true});
  expect(h.get('jrGrid').innerHTML).toBe('OLD GRID');expect(h.get('jrState').textContent).toBe('Обновлено 09:00');
  resolve({date:'2030-04-01',fetchedAt:new Date().toISOString(),staff:[],records:[],freshness:{mirrorOkAt:new Date(Date.now()-3600000).toISOString()}});await load;
- expect(h.get('jrState').textContent).toContain('Данные YClients обновлены');
+ expect(h.get('jrState').textContent).toContain('Обновлено');expect(h.get('jrState').textContent).not.toContain('YClients');
 });
 
 test('open syncing card enables editing automatically when its package completes', async () => {
@@ -666,7 +651,7 @@ test('open syncing card enables editing automatically when its package completes
  h.context.jrApi=jest.fn().mockResolvedValueOnce(r).mockResolvedValueOnce({...r,sync:null});
  await h.context.jrOpen(8);
  expect(h.get('jrModalBody').innerHTML).not.toContain('data-attendance=');
- expect(h.get('jrModalBody').innerHTML).toContain('Карточка обновится автоматически');
+ expect(h.get('jrModalBody').innerHTML).toContain('карточка обновится автоматически');
  expect(timers.at(-1).ms).toBe(2000);
  await timers.at(-1).fn();
  expect(h.get('jrModalBody').innerHTML).toContain('data-attendance="0"');
@@ -785,7 +770,7 @@ test('payment form shows line breakdown, totals, queued payments with badges and
  const html=h.get('jrModalBody').innerHTML;
  expect(html).toContain('&lt;b&gt;Маска&lt;/b&gt;');expect(html).not.toContain('<b>Маска');expect(html).not.toContain('<i>Касса');
  expect(html).toContain('× 3');expect(html).toContain('скидка −');expect(html).toContain('(10 %)');
- for(const t of ['Без скидки','Скидка','Итого к оплате за визит','Бонусов списано','Остаток к оплате','Баланс бонусов после оплаты','Проведено в YClients','Ждёт отправки в YClients','Передаётся в YClients','Ошибка отправки','Отмена оплаты'])expect(html).toContain(t);
+ for(const t of ['Без скидки','Скидка','Итого к оплате за визит','Бонусов списано','Остаток к оплате','Баланс бонусов после оплаты','Проведено','Ошибка отправки','Отмена оплаты'])expect(html).toContain(t);
  expect(html).toContain('data-remove-payment="0"');
 });
 test('payment form falls back to the plain bill for responses without breakdown fields',()=>{
@@ -796,28 +781,6 @@ test('payment form falls back to the plain bill for responses without breakdown 
  expect(html).toContain('data-remove-payment="0"');
 });
 
-describe('jrMergeLivePayment',()=>{
- const item={title:'Маска',quantity:3,unitPrice:333.33,gross:999.99,discountPercent:10,discount:100,total:899.99};
- const local=(payments,items=[item])=>({items,payments,paid:[],due:500});
- const live=(over={})=>({items:[{title:'Маска',quantity:3,total:899.99}],paid:[{id:1,method:'loyalty_card',methodId:10,title:'Бонусы',amount:65},{id:2,method:'account',methodId:9,title:'Касса',amount:100}],due:734.99,methods:[],...over});
- test('queued payments keep the local form',()=>{
-  const h=harness();const l=local([{status:'queued',kind:'payment',amount:10}]);
-  expect(h.context.jrMergeLivePayment(l,live())).toBe(l);
-  expect(h.context.jrMergeLivePayment(local([{status:'failed',kind:'remove_payment',amount:1}]),live()).due).toBe(500);
- });
- test('confirmed-only local: live enriched with discount breakdown and mapped paid',()=>{
-  const h=harness();const l=local([]);const lv=live();
-  const r=h.context.jrMergeLivePayment(l,lv);
-  expect(r.items[0].discount).toBe(100);expect(r.paid).toBe(lv.paid);
-  expect(JSON.parse(JSON.stringify(r.payments[0]))).toEqual({method:'loyalty_card',methodId:10,title:'Бонусы',amount:65,status:'confirmed',kind:'payment',outboxId:null});
-  expect(JSON.parse(JSON.stringify(r.summary))).toEqual({gross:999.99,discount:100,total:899.99,paidConfirmed:165,paidQueued:0,bonusSpent:65,due:734.99});
- });
- test('mismatched items fall back to live items',()=>{
-  const h=harness();const r=h.context.jrMergeLivePayment(local([]),live({items:[{title:'Другое',quantity:1,total:50}]}));
-  expect(r.items[0].title).toBe('Другое');expect(r.summary.gross).toBe(50);expect(r.summary.discount).toBe(0);
- });
- test('no local: live as is',()=>{const h=harness();const lv=live();expect(h.context.jrMergeLivePayment(null,lv)).toBe(lv);});
-});
 
 // ---- Parity grid (12.11.2026) ----
 const PARITY_DAY = `journal.data = {date:'2030-04-01',labels:[{id:3,title:'<b>VIP</b>',color:'#ff0000'}],
@@ -1338,7 +1301,7 @@ test('jrSave: a local cancel (status cancelled) says the record was removed from
   h.context.loadJournal = jest.fn(); h.context.notify.mockClear();
   h.context.jrApi = jest.fn().mockResolvedValue({ outboxId: 0, recordId: -3, status: 'cancelled' });
   expect(await h.context.jrSave({ sessionId: 's', recordId: -3, status: 'delete' })).toBe(true);
-  expect(h.context.notify).toHaveBeenCalledWith(expect.stringContaining('в YClients она ещё не уходила'));
+  expect(h.context.notify).toHaveBeenCalledWith('Запись удалена из журнала.');
   expect(h.context.loadJournal).toHaveBeenCalled();
   h.context.notify.mockClear();
   h.context.jrApi = jest.fn().mockResolvedValue({ status: 'queued' });
@@ -1418,7 +1381,7 @@ test('card has a live history button and the client panel box', () => {
 test('history: lazy load, escaped changes, package errors, empty state', async () => {
   const h = cardHarness();
   h.context.jrApi = jest.fn().mockResolvedValue({ recordId: 8, events: [
-    { at: '2026-11-12T07:10:00Z', source: 'yclients', author: 'YClients', title: 'Изменена в YClients', changes: [{ field: 'comment', label: 'Комментарий', from: null, to: '<script>x</script>' }] },
+    { at: '2026-11-12T07:10:00Z', source: 'yclients', author: 'Синхронизация', title: 'Запись изменена', changes: [{ field: 'comment', label: 'Комментарий', from: null, to: '<script>x</script>' }] },
     { at: '2026-11-12T07:07:00Z', source: 'journal', author: 'LoyalPro: Мария', title: 'перенос — ошибка', changes: [], error: 'Время занято', errorCode: 'slot_taken' },
   ] });
   await h.context.jrLoadHistory(8);
@@ -1437,7 +1400,7 @@ test('history: lazy load, escaped changes, package errors, empty state', async (
 test('client panel: visits, no-shows, bonuses, abonements, last visits escaped', () => {
   const h = harness();
   const html = h.context.jrClientSummaryHtml(SUMMARY);
-  for (const s of ['Визитов<span>7</span>', 'Неявок<span>2</span>', 'Бонусы<span>650</span>', 'Уровень<span>Золото</span>', 'не удалось прочитать', 'по карте YClients']) expect(html).toContain(s);
+  for (const s of ['Визитов<span>7</span>', 'Неявок<span>2</span>', 'Бонусы<span>650</span>', 'Уровень<span>Золото</span>', 'не удалось прочитать', 'по карте лояльности']) expect(html).toContain(s);
   expect(html).toContain('&lt;b&gt;Юлия&lt;/b&gt;');
   expect(h.context.jrClientSummaryHtml({ ...SUMMARY, abonements: [] })).toContain('Абонементов нет');
   const ab = h.context.jrClientSummaryHtml({ ...SUMMARY, abonements: [{ title: 'Чистка <x>', balance: 3, expires: '2027-01-01T00:00:00', frozen: true }] });
@@ -1482,14 +1445,14 @@ test('queued record (id<0) has no history button or box', () => {
 });
 test('history survives a re-render of the same card', async () => {
   const h = cardHarness();
-  h.context.jrApi = jest.fn().mockResolvedValue({ events: [{ at: '2026-11-12T07:10:00Z', source: 'yclients', author: 'YClients', title: 'Изменена в YClients', changes: [] }] });
+  h.context.jrApi = jest.fn().mockResolvedValue({ events: [{ at: '2026-11-12T07:10:00Z', source: 'yclients', author: 'Синхронизация', title: 'Запись изменена', changes: [] }] });
   h.context.jrRenderRecord(CARD);
   await h.context.jrLoadHistory(8);
   h.get('jrHistory').innerHTML = '';
   h.get('jrHistory').hidden = true;
   h.context.jrRenderRecord(CARD);
   expect(h.get('jrHistory').hidden).toBe(false);
-  expect(h.get('jrHistory').innerHTML).toContain('Изменена в YClients');
+  expect(h.get('jrHistory').innerHTML).toContain('Запись изменена');
 });
 test('history error is visible even if the box was hidden by a re-render', async () => {
   const h = cardHarness();
@@ -1507,4 +1470,105 @@ test('change client: 8XXXXXXXXXX is normalized to 7XXXXXXXXXX in the session', (
   h.get('jrChangeClient').onclick();
   h.context.jrLoadClients.mock.calls[0][1]({ name: 'Борис', phone: '89000000001' });
   expect(h.run('journal.session.edit.client')).toEqual({ name: 'Борис', phone: '79000000001' });
+});
+
+describe('unsent payment and unsent new record can be deleted locally (13.11.2026)',()=>{
+ const OP='aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
+ test('saved, not sent payment has a delete button; dropping it reopens the due and goes into the session body',async()=>{
+  const h=harness();
+  const base=createOptions({due:0,payments:[
+   {method:'account',methodId:5,title:'Наличные · Касса',amount:100,status:'queued',kind:'payment',outboxId:6,opId:OP,cancellable:true},
+   {method:'account',methodId:5,title:'Наличные · Касса',amount:20,status:'sending',kind:'payment',outboxId:7,opId:'x',cancellable:false}]});
+  h.context.jrApi=paymentApi(base,null);
+  await h.context.jrOpenPayment(42);
+  let html=h.get('jrModalBody').innerHTML;
+  expect(html).toContain('data-unqueue-payment="0"');expect(html).not.toContain('data-unqueue-payment="1"');expect(html).not.toContain('YClients');
+  h.context.jrUnqueuePayment(0,true);
+  html=h.get('jrModalBody').innerHTML;
+  expect(html).toContain('будет удалено');expect(html).toContain('data-undrop-payment="0"');
+  expect(h.run('jrPaymentView(journal.payment.base, journal.session).due')).toBe(100);
+  expect(h.run('jrSessionPending()')).toBe(true);
+  expect(h.run('JSON.stringify(jrSessionBody().dropPayments)')).toBe(JSON.stringify([{outboxId:6,opId:OP}]));
+  h.context.jrUnqueuePayment(0,false);
+  expect(h.run('journal.session.dropPayments.length')).toBe(0);
+ });
+ test('new record saved only in the journal: «Удалить запись» even when paid and arrived; a sent paid record has none',()=>{
+  const h=harness();
+  const r={id:-3,staffName:'Test',date:'2030-04-01',time:'09:15',duration:60,clientName:'Test',attendance:1,paid:true,services:[],sync:{outboxId:4,status:'queued',released:false}};
+  expect(h.context.jrAppointmentCard(r)).toContain('id="jrDelete"');
+  expect(h.context.jrAppointmentCard({...r,id:42,sync:null})).not.toContain('id="jrDelete"');
+  expect(h.context.jrAppointmentCard({...r,sync:{outboxId:4,status:'queued',released:true}})).not.toContain('id="jrDelete"');
+ });
+});
+
+describe('«История посещений» (13.11.2026)', () => {
+ const DATA = { salonName: 'PERI CLINIC', entries: [
+  { kind: 'visit', recordId: 2, date: '2026-11-20', time: '14:45', staffId: 5, staffName: 'Гаджиева Пери', attendance: 0, total: 21370, paid: 0,
+    services: [{ id: 21, title: 'Биоревитализация', quantity: 1, cost: 21000, paid: 0, consumables: [] }, { id: 22, title: '<b>Миотокс</b>', quantity: 2, cost: 370, paid: 0, consumables: [] }], purchases: [] },
+  { kind: 'visit', recordId: 1, date: '2026-11-13', time: '14:30', staffId: 6, staffName: null, attendance: 1, total: 6500, paid: 6500,
+    services: [{ id: 11, title: 'Чистка', quantity: 1, cost: 6500, paid: 6500, consumables: [{ title: 'Салфетки', quantity: '2 шт.', cost: 7.5 }, { title: 'Ватные диски', quantity: '20 шт.', cost: 10.6 }, { title: 'Перчатки', quantity: '1 пар.', cost: 3 }] }],
+    purchases: [{ type: 'goods', title: 'Сыворотка', quantity: '1 шт.', amount: 7490, status: 'confirmed' }] },
+  { kind: 'purchase', recordId: null, date: '2026-11-11', time: '14:51', staffId: null, staffName: null, purchases: [{ type: 'certificate', title: 'Сертификат 20000', quantity: '1 шт.', amount: 20000 }] },
+ ] };
+ test('card: «История посещений» is a live button, not a stub', () => {
+  const h = harness();
+  const html = h.context.jrAppointmentCard({ id: 42, staffName: 'T', date: '2030-04-01', time: '09:15', duration: 60, clientName: 'Анна', clientPhone: '79200255591', attendance: 0, paid: false, services: [] });
+  expect(html).toContain('id="jrVisitsOpen"');
+  expect(html).not.toContain('title="История посещений — скоро');
+ });
+ test('table: days with salon, staff, status, lines with cost/paid, consumables folded, purchases, escaped, no YClients', () => {
+  const h = harness();
+  h.run('journal.data = { staff: [{ id: 6, name: "Богатырева Татьяна" }] }; journal.visits = { fromId: 42, expanded: new Set() }');
+  const html = h.context.jrVhHtml(DATA, 'all').replace(/[\u00a0\u202f]/g, ' ');
+  for (const t of ['20 Ноября 2026', '13 Ноября 2026', 'PERI CLINIC', 'Гаджиева Пери', 'Богатырева Татьяна', 'Подробнее ›', 'Биоревитализация', '21 000 ₽',
+   'Салфетки, 2 шт., 7,5 ₽', 'Показать полностью', 'Сыворотка', 'Косметика', 'Сертификат 20000', 'Продажа вне визита', 'id="jrVhBack"', 'Повторить услуги'])
+   expect(html).toContain(t);
+  expect(html).not.toContain('Перчатки'); // third consumable folded
+  expect(html).toContain('&lt;b&gt;Миотокс&lt;/b&gt;'); expect(html).not.toContain('<b>Миотокс');
+  expect(html).toContain('data-vh-open="2"'); expect(html).toContain('data-vh-pay="1"');
+  expect(html).not.toContain('data-vh-pay="null"');
+  expect(html).not.toContain('YClients');
+ });
+ test('filter: visits only / purchases only', () => {
+  const h = harness();
+  h.run('journal.visits = { expanded: new Set() }');
+  const visits = h.context.jrVhHtml(DATA, 'visits');
+  expect(visits).toContain('Биоревитализация'); expect(visits).not.toContain('Сыворотка'); expect(visits).not.toContain('Сертификат 20000');
+  const buys = h.context.jrVhHtml(DATA, 'purchases');
+  expect(buys).toContain('Сыворотка'); expect(buys).toContain('Сертификат 20000'); expect(buys).not.toContain('Биоревитализация');
+  expect(h.context.jrVhHtml({ entries: [] }, 'purchases')).toContain('Покупок нет.');
+ });
+ test('loads by phone; clicks open the visit, the payment, repeat and back', async () => {
+  const h = harness();
+  h.context.jrApi = jest.fn().mockResolvedValue(DATA);
+  h.context.jrOpen = jest.fn(); h.context.jrOpenPayment = jest.fn(); h.context.jrRebook = jest.fn();
+  const buttons = {};
+  h.get('jrModalBody').querySelectorAll = sel => {
+   const attr = { '[data-vh-open]': ['vhOpen', ['2']], '[data-vh-pay]': ['vhPay', ['1']], '[data-vh-repeat]': ['vhRepeat', ['0']], '[data-vh-more]': ['vhMore', ['1']] }[sel];
+   if (!attr) return [];
+   return (buttons[sel] = attr[1].map(v => ({ dataset: { [attr[0]]: v } })));
+  };
+  expect(await h.context.jrOpenVisits({ id: 42, clientName: 'Анна', clientPhone: '+7 920 025-55-91' })).toBe(true);
+  expect(h.context.jrApi).toHaveBeenCalledWith('clients/visits?phone=79200255591');
+  expect(h.get('jrModalTitle').textContent).toBe('История посещений');
+  buttons['[data-vh-open]'][0].onclick(); expect(h.context.jrOpen).toHaveBeenCalledWith(2);
+  buttons['[data-vh-pay]'][0].onclick(); expect(h.context.jrOpenPayment).toHaveBeenCalledWith(1);
+  buttons['[data-vh-repeat]'][0].onclick();
+  expect(h.context.jrRebook).toHaveBeenCalledWith(expect.objectContaining({ staffId: 5, clientName: 'Анна', clientPhone: '79200255591' }));
+  buttons['[data-vh-more]'][0].onclick(); expect(h.get('jrModalBody').innerHTML).toContain('Перчатки');
+  h.get('jrVhBack').onclick(); expect(h.context.jrOpen).toHaveBeenLastCalledWith(42);
+ });
+ test('unsaved card edits ask before leaving; unknown phone and load error are shown', async () => {
+  const h = harness();
+  h.context.jrApi = jest.fn().mockRejectedValue(new Error('Нет связи'));
+  h.context.jrAskClose = jest.fn(); h.context.jrUnsavedKind = () => 'record';
+  h.run('journal.session = { edit: { comment: "x" } }');
+  await h.context.jrOpenVisits({ id: 42, clientPhone: '79200255591' });
+  expect(h.context.jrAskClose).toHaveBeenCalledWith('record'); expect(h.context.jrApi).not.toHaveBeenCalled();
+  h.run('journal.session = null');
+  expect(await h.context.jrOpenVisits({ id: 42, clientPhone: '' })).toBe(false);
+  expect(h.get('jrModalBody').innerHTML).toContain('Телефон клиента неизвестен');
+  expect(await h.context.jrOpenVisits({ id: 42, clientPhone: '79200255591' })).toBe(false);
+  expect(h.get('jrModalError').textContent).toBe('Нет связи'); expect(h.get('jrModalBody').innerHTML).toContain('jrVhReload');
+ });
 });

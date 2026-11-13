@@ -21,7 +21,7 @@ function jrExtraFields(r) {
   return `<section class="jr-extra">
     <label class="jr-side-label">Длительность, мин<input id="jrDurationEdit" type="number" min="5" max="720" step="5" value="${jrEscape(r.duration)}"${off(reshape)}></label>
     <label class="jr-side-label">Технический перерыв<select id="jrBreakEdit"${off(can)}>${Array.from({ length: 13 }, (_, i) => i * 5).map(v => `<option value="${v}"${!offGrid && v === pause ? ' selected' : ''}>${v ? v + ' мин' : 'Нет'}</option>`).join('')}${offGrid ? `<option value="${pauseSec / 60}" selected>${jrEscape(Math.round(pauseSec / 6) / 10)} мин</option>` : ''}</select></label>
-    <div class="jr-side-label">Цвет записи<div class="jr-colors" role="group" aria-label="Цвет записи"><button type="button" class="jr-color jr-color-none${r.customColor ? '' : ' is-current'}" data-color="" title="Без цвета"${off(can)}>∅</button>${customOut ? `<button type="button" class="jr-color is-current" data-color="${r.customColor}" style="background:${r.customColor}" title="${r.customColor} (цвет из YClients)"${off(can)}></button>` : ''}${JR_COLORS.map(c => `<button type="button" class="jr-color${r.customColor === c ? ' is-current' : ''}" data-color="${c}" style="background:${c}" title="${c}"${off(can)}></button>`).join('')}</div></div>
+    <div class="jr-side-label">Цвет записи<div class="jr-colors" role="group" aria-label="Цвет записи"><button type="button" class="jr-color jr-color-none${r.customColor ? '' : ' is-current'}" data-color="" title="Без цвета"${off(can)}>∅</button>${customOut ? `<button type="button" class="jr-color is-current" data-color="${r.customColor}" style="background:${r.customColor}" title="${r.customColor} (свой цвет)"${off(can)}></button>` : ''}${JR_COLORS.map(c => `<button type="button" class="jr-color${r.customColor === c ? ' is-current' : ''}" data-color="${c}" style="background:${c}" title="${c}"${off(can)}></button>`).join('')}</div></div>
     <div class="jr-side-label">Метки${labels.length || orphans.length ? `<div class="jr-labels">${labels.map(l => `<label class="jr-label-choice"><input type="checkbox" data-label="${Number(l.id)}"${chosen.has(Number(l.id)) ? ' checked' : ''}${off(can)}><i class="jr-label-dot" style="background:${JR_HEX.test(l.color || '') ? l.color : '#999999'}"></i>${jrEscape(l.title)}</label>`).join('')}${orphans.map(id => `<label class="jr-label-choice"><input type="checkbox" data-label="${id}" checked disabled>№${id} (нет в справочнике)</label>`).join('')}</div>` : '<p class="jr-hint">Меток в салоне нет.</p>'}</div>
     <label class="jr-notify"><input type="checkbox" id="jrNoNotify"${r.notifyClient === false ? ' checked' : ''}${off(can)}> Не уведомлять клиента</label>
   </section>`;
@@ -44,7 +44,7 @@ function jrDeleteRecord(r) {
   journal.draft = { action: 'delete', recordId: r.id };
   journal.session = jrNewSession({ recordId: r.id });
   journal.payment = null;
-  jrEl('jrModalBody').innerHTML = `<p>${jrEscape(r.clientName)} · ${jrEscape(r.date)} ${jrEscape(r.time)}</p><p>Удалить запись насовсем? В отличие от отмены (статус «Не пришёл»), удалённая запись исчезнет из журнала, а после «Отправить в YClients» — и из YClients. Вернуть её будет нельзя.</p><div class="jr-actions"><button type="button" class="btn btn-pri jr-danger" id="jrApply">Да, удалить запись</button><button type="button" class="btn btn-sec" id="jrBack">Назад</button></div>`;
+  jrEl('jrModalBody').innerHTML = `<p>${jrEscape(r.clientName)} · ${jrEscape(r.date)} ${jrEscape(r.time)}</p><p>Удалить запись насовсем? В отличие от отмены (статус «Не пришёл»), удалённая запись исчезнет из журнала. Вернуть её будет нельзя.</p>${r.paid ? '<p>Оплаты этой записи тоже будут удалены.</p>' : ''}<div class="jr-actions"><button type="button" class="btn btn-pri jr-danger" id="jrApply">Да, удалить запись</button><button type="button" class="btn btn-sec" id="jrBack">Назад</button></div>`;
   jrEl('jrApply').onclick = () => jrSave({ sessionId: journal.session.sessionId, recordId: r.id, status: 'delete' });
   jrEl('jrBack').onclick = () => jrOpen(r.id);
 }
@@ -72,7 +72,9 @@ function jrClientPanel(record, creating = false, editable = false) {
     ${!creating && editable && record && jrCanReshape(record)
       ? `<button type="button" class="btn btn-sec" id="jrChangeClient">${jrIcon('user')} Сменить клиента</button><div id="jrChangeClientBox" class="jr-fields" hidden><label>Найти клиента<input id="jrClientSearch" type="search" placeholder="Имя или телефон" autocomplete="off"></label><h4 id="jrClientsTitle">Последние клиенты</h4><div id="jrClientResults" aria-live="polite"></div></div>`
       : jrStub('Сменить клиента','user','jr-stub-inline')}
-    <div class="jr-client-tools">${[['Планы лечения','file'],['Медкарта','plus'],['История посещений','clock'],['Лояльность','wallet'],['Счета клиента','wallet']].map(([title,icon]) => jrStub(title,icon)).join('')}</div>
+    <div class="jr-client-tools">${[['Планы лечения','file'],['Медкарта','plus'],['История посещений','clock'],['Лояльность','wallet'],['Счета клиента','wallet']].map(([title,icon]) => !creating && editable && record && title === 'История посещений'
+      ? `<button type="button" class="jr-tool-live jr-placeholder" id="jrVisitsOpen">${jrIcon(icon)}<span>${title}</span></button>`
+      : jrStub(title,icon)).join('')}</div>
     <label class="jr-other-visitor"><input type="checkbox" disabled> Записывает другого посетителя <small>Скоро</small></label>
     <section class="jr-client-info"><h4>Дополнительно</h4><p>Примечание о клиенте<span>—</span></p><p>Дата рождения<span>—</span></p><p>Номер договора<span>—</span></p></section>
     ${editable ? '<section class="jr-client-info"><h4>Клиент</h4><div id="jrClientSummaryBox"><p class="jr-hint">Загрузка данных клиента…</p></div></section>'
@@ -80,7 +82,7 @@ function jrClientPanel(record, creating = false, editable = false) {
   </aside>`;
 }
 function jrPaymentPanel(record) {
-  const state = !record ? 'Оплата после создания записи' : record.paymentSync ? 'Оплата передаётся в YClients…' : record.paid ? 'Есть отметка об оплате' : 'Оплата не отмечена';
+  const state = !record ? 'Оплата после создания записи' : record.paid ? 'Есть отметка об оплате' : 'Оплата не отмечена';
   return `<section class="jr-payment-panel"><div class="jr-payment-icon">${jrIcon('wallet')}</div><h3>${state}</h3><p>Актуальная сумма, доступные способы и история — в форме оплаты.</p>${record && !record.deleted && record.attendance !== -1 ? '<button type="button" class="btn btn-sec" id="jrPaymentOpen">Оплата визита</button>' : jrStub('Детали оплаты','wallet','jr-stub-inline')}</section>`;
 }
 function jrStatusBar(record, canEdit = false) {
@@ -90,7 +92,7 @@ function jrStatusBar(record, canEdit = false) {
   return `<div class="jr-status-bar" aria-label="Статус визита">${states.map(([value,label,icon]) => {
     if (value === current && !canEdit) return `<span class="jr-state-pill is-current" aria-current="true">${jrIcon(icon)}${label}</span>`;
     if (canEdit) return `<button type="button" data-attendance="${value}" class="jr-state-pill${value === current ? ' is-current' : ''}">${jrIcon(icon)}${label}</button>`;
-    if (jrSyncing(record)) return `<button type="button" class="jr-state-pill" disabled title="Изменения передаются в YClients">${jrIcon(icon)}${label}</button>`;
+    if (jrSyncing(record)) return `<button type="button" class="jr-state-pill" disabled title="Идёт отправка изменений">${jrIcon(icon)}${label}</button>`;
     if (record?.paid) return `<button type="button" class="jr-state-pill" disabled title="Сначала удалите оплаты визита">${jrIcon(icon)}${label}</button>`;
     return jrStub(label,icon,'jr-state-pill');
   }).join('')}</div>`;
@@ -109,7 +111,7 @@ function jrSyncAlert(record) {
   const sync = record?.sync;
   if (sync?.status !== 'failed') return '';
   const uncertain = sync.errorCode === 'uncertain';
-  return `<div class="jr-sync-alert" role="alert"><strong>Не передано в YClients: ${jrEscape(sync.errorText || 'причина неизвестна')}</strong>${uncertain ? '<p>Нужна сверка в YClients — владелец: кнопка «Сверка операций».</p>' : ''}<div class="jr-actions">${uncertain ? '' : '<button type="button" class="btn btn-sec" id="jrSyncRetry">Повторить отправку</button>'}${uncertain ? '' : `<button type="button" class="btn btn-sec" id="jrSyncDismiss">${Number(record.id) < 0 ? 'Убрать из журнала' : 'Отменить неотправленные изменения'}</button>`}</div></div>`;
+  return `<div class="jr-sync-alert" role="alert"><strong>Ошибка отправки: ${jrEscape(sync.errorText || 'причина неизвестна')}</strong>${uncertain ? '<p>Нужна сверка — владелец: кнопка «Сверка операций».</p>' : ''}<div class="jr-actions">${uncertain ? '' : '<button type="button" class="btn btn-sec" id="jrSyncRetry">Повторить отправку</button>'}${uncertain ? '' : `<button type="button" class="btn btn-sec" id="jrSyncDismiss">${Number(record.id) < 0 ? 'Убрать из журнала' : 'Отменить неотправленные изменения'}</button>`}</div></div>`;
 }
 // A record whose changes are only saved locally stays editable (also a new
 // record not yet in YClients); a package on its way or failed locks it.
@@ -117,20 +119,22 @@ const jrLocked = record => jrSyncing(record) || record.sync?.status === 'failed'
 const jrCanChange = record => !record.deleted && !record.paid && !jrLocked(record);
 // Duration, client and deletion additionally exclude an arrived visit (spec §4.1).
 const jrCanReshape = record => jrCanChange(record) && record.attendance !== 1;
+// A new record saved only in the journal is deleted locally whatever its status
+// and payments: nothing about it has left LoyalPro (sessions.deleteUnsent).
+const jrCanDeleteUnsent = record => !record.deleted && Number(record.id) < 0 && jrUnsent(record);
 const jrCanEdit = record => !record.deleted && record.attendance !== -1 && record.attendance !== 1 && !record.paid && !jrLocked(record);
 function jrAppointmentCard(record) {
   const canEdit = jrCanEdit(record);
-  const local = Number(record.id) < 0;
-  const editNote = jrSyncing(record) ? 'Изменения передаются в YClients' : record.sync?.status === 'failed' ? 'Сначала повторите или отмените неотправленные изменения.'
+  const editNote = jrSyncing(record) ? 'Идёт отправка изменений — карточка обновится автоматически.' : record.sync?.status === 'failed' ? 'Сначала повторите или отмените неотправленные изменения.'
     : jrCanChange(record) ? `Перенос и отмена недоступны для визита со статусом «${record.attendance === 1 ? 'Пришёл' : 'Не пришёл'}». Статус, услуги и стоимость можно менять.`
-    : 'Изменения этого визита выполняются в YClients.';
+    : record.paid ? 'Сначала удалите оплаты визита в «Оплата визита».' : 'Этот визит сейчас изменить нельзя.';
   const staffName = journal.data?.staff?.find(s => s.id === record.staffId)?.name || record.staffName || 'Сотрудник';
   const initials = staffName.split(/\s+/).slice(0,2).map(s => s[0] || '').join('');
   const day = record.date ? new Date(record.date + 'T12:00:00+03:00').toLocaleDateString('ru', { day:'numeric',month:'long',timeZone:'Europe/Moscow' }) : 'Дата не указана';
   return `${jrSyncAlert(record)}<div class="jr-booking-layout"><aside class="jr-booking-side"><div class="jr-visit-summary"><div class="jr-staff-identity"><span class="jr-staff-avatar">${jrEscape(initials)}</span><div><strong>${jrEscape(staffName)}</strong><small>Специалист</small></div></div><div class="jr-visit-date">${jrIcon('calendar')}<div><strong>${jrEscape(day)}</strong><small>${jrEscape(record.time)} · ${jrEscape(record.duration)} мин.</small></div></div>${canEdit ? `<button type="button" class="btn btn-sec jr-move-btn" id="jrMove">${jrIcon('move')}Перенести запись</button>` : `<button type="button" class="btn btn-sec jr-move-btn" disabled title="${jrEscape(editNote)}">Перенести запись</button>`}</div>
     <label class="jr-side-label">Комментарий к записи<textarea id="jrCommentEdit" rows="4" maxlength="1000" placeholder="Комментарий не указан"${jrCanChange(record) ? '' : ' readonly'}>${jrEscape(record.comment || '')}</textarea></label>${jrExtraFields(record)}${record ? jrTools(record) : '<div class="jr-tools">' + [['Расширенные поля','list'],['Повторение записи','repeat'],['Уведомления о визите','bell']].map(([label,icon]) => jrStub(label,icon)).join('') + '</div>'}</aside>
-    <section class="jr-booking-main jr-booking-panel">${jrStatusBar(record,jrCanChange(record))}${jrSyncing(record) ? '<p class="jr-hint" role="status">Передаём изменения в YClients… Карточка обновится автоматически.</p>' : jrUnsent(record) ? `<p class="jr-hint jr-unsent-hint" role="status">${local ? 'Новая запись сохранена в журнале' : 'Изменения сохранены в журнале'} и ещё не отправлены в YClients — кнопка «Отправить в YClients» над журналом.</p>` : ''}${jrServicesPanel(record, jrCanChange(record))}${jrCanChange(record) ? '<button type="button" class="btn btn-sec" id="jrEditServices">Изменить услуги, количество и стоимость</button>' : record.paid && !record.deleted ? '<p class="jr-hint">Визит оплачен: чтобы изменить статус, услуги или стоимость, сначала удалите оплаты в «Оплата визита».</p>' : ''}${jrPaymentPanel(record)}${!canEdit ? `<p class="jr-hint">${jrEscape(editNote)}</p>` : ''}</section>${jrClientPanel(record, false, true)}</div>
-    <footer class="jr-booking-footer"><span class="jr-hint">Изменения сохраняются в журнале кнопкой «Сохранить изменения» (при закрытии карточки спросим); в YClients они уходят по кнопке «Отправить в YClients».</span><div>${canEdit ? '<button type="button" class="btn btn-sec" id="jrCancel">Отменить запись</button>' : ''}${jrCanReshape(record) ? '<button type="button" class="btn btn-sec jr-danger" id="jrDelete">Удалить запись</button>' : ''}${record.deleted ? '' : '<button type="button" class="btn btn-sec" id="jrRebook">Записать повторно</button>'}${jrCanChange(record) ? '<button type="button" class="btn btn-pri" id="jrSaveChanges" disabled>Сохранить изменения</button>' : jrStub('Сохранить изменения','check','jr-stub-inline')}</div></footer>`;
+    <section class="jr-booking-main jr-booking-panel">${jrStatusBar(record,jrCanChange(record))}${jrServicesPanel(record, jrCanChange(record))}${jrCanChange(record) ? '<button type="button" class="btn btn-sec" id="jrEditServices">Изменить услуги, количество и стоимость</button>' : record.paid && !record.deleted ? '<p class="jr-hint">Визит оплачен: чтобы изменить статус, услуги или стоимость, сначала удалите оплаты в «Оплата визита».</p>' : ''}${jrPaymentPanel(record)}${!canEdit ? `<p class="jr-hint">${jrEscape(editNote)}</p>` : ''}</section>${jrClientPanel(record, false, true)}</div>
+    <footer class="jr-booking-footer"><span class="jr-hint">Изменения сохраняются кнопкой «Сохранить изменения» (при закрытии карточки спросим).</span><div>${canEdit ? '<button type="button" class="btn btn-sec" id="jrCancel">Отменить запись</button>' : ''}${jrCanReshape(record) || jrCanDeleteUnsent(record) ? '<button type="button" class="btn btn-sec jr-danger" id="jrDelete">Удалить запись</button>' : ''}${record.deleted ? '' : '<button type="button" class="btn btn-sec" id="jrRebook">Записать повторно</button>'}${jrCanChange(record) ? '<button type="button" class="btn btn-pri" id="jrSaveChanges" disabled>Сохранить изменения</button>' : jrStub('Сохранить изменения','check','jr-stub-inline')}</div></footer>`;
 }
 
 async function jrOpen(id) {
@@ -168,8 +172,9 @@ function jrRenderRecord(r) {
         .then(() => notify('Телефон скопирован.'))
         .catch(() => notify('Не удалось скопировать — выделите номер вручную.', 'err'));
     };
-    if (jrCanReshape(r) && jrEl('jrDelete')) jrEl('jrDelete').onclick = () => jrDeleteRecord(r);
+    if ((jrCanReshape(r) || jrCanDeleteUnsent(r)) && jrEl('jrDelete')) jrEl('jrDelete').onclick = () => jrDeleteRecord(r);
     if (!r.deleted && jrEl('jrRebook')) jrEl('jrRebook').onclick = () => jrRebook(r);
+    if (jrEl('jrVisitsOpen')) jrEl('jrVisitsOpen').onclick = () => jrOpenVisits(r);
     const historyBtn = jrEl('jrHistoryOpen');
     if (historyBtn) {
       historyBtn.onclick = () => jrLoadHistory(r.id);
@@ -231,7 +236,7 @@ function jrConfirmAction(r, action) {
   journal.draft = { action, recordId: r.id };
   journal.session = jrNewSession({ recordId: r.id });
   journal.payment = null;
-  jrEl('jrModalBody').innerHTML = `<p>${jrEscape(r.clientName)} · ${jrEscape(r.date)} ${jrEscape(r.time)}</p><p>${action === 'cancel' ? 'Отменить визит? В YClients будет установлен статус «Не пришёл», длительность сократится до 5 минут. Это текущий способ отмены в LoyalPro.' : 'Подтвердить запись?'}</p><div class="jr-actions"><button class="btn btn-pri" id="jrApply">${action === 'cancel' ? 'Да, отменить запись' : 'Подтвердить запись'}</button><button class="btn btn-sec" id="jrBack">Назад</button></div>`;
+  jrEl('jrModalBody').innerHTML = `<p>${jrEscape(r.clientName)} · ${jrEscape(r.date)} ${jrEscape(r.time)}</p><p>${action === 'cancel' ? 'Отменить визит? Будет установлен статус «Не пришёл», длительность сократится до 5 минут.' : 'Подтвердить запись?'}</p><div class="jr-actions"><button class="btn btn-pri" id="jrApply">${action === 'cancel' ? 'Да, отменить запись' : 'Подтвердить запись'}</button><button class="btn btn-sec" id="jrBack">Назад</button></div>`;
   jrEl('jrApply').onclick = () => jrSave({ sessionId: journal.session.sessionId, recordId: r.id, status: action });
   jrEl('jrBack').onclick = () => jrOpen(r.id);
 }
@@ -348,7 +353,7 @@ function jrBindRecordEdit(record) {
 // ---- History of changes (spec 4.2) and client panel (4.4) ----
 const jrMskStamp = iso => new Date(iso).toLocaleString('ru', { timeZone: 'Europe/Moscow', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
 function jrHistoryHtml(events) {
-  if (!events?.length) return '<p class="jr-hint">Изменений не зафиксировано. Журнал вебхуков YClients ведётся с 04.11.2026.</p>';
+  if (!events?.length) return '<p class="jr-hint">Изменений не зафиксировано. История изменений ведётся с 04.11.2026.</p>';
   return `<ol class="jr-history">${events.map(e => `<li><div class="jr-history-head"><time>${jrEscape(jrMskStamp(e.at))}</time><strong>${jrEscape(e.author)}</strong><span>${jrEscape(e.title)}</span></div>${(e.changes || []).length ? `<ul>${e.changes.map(c => `<li>${jrEscape(c.label || c.field)}: ${jrEscape(c.from ?? '—')} → ${jrEscape(c.to ?? '—')}</li>`).join('')}</ul>` : ''}${e.error ? `<p class="jr-sync-failed-note">${jrEscape(e.error)}${e.errorCode ? ' (' + jrEscape(e.errorCode) + ')' : ''}</p>` : ''}</li>`).join('')}</ol>`;
 }
 async function jrLoadHistory(id) {
@@ -375,7 +380,7 @@ function jrClientSummaryHtml(s) {
     : s.abonements.length ? `<ul class="jr-abonements">${s.abonements.map(a => `<li>${jrEscape(a.title)}${a.balance != null ? ' · осталось ' + jrEscape(a.balance) : ''}${a.expires ? ' · до ' + jrEscape(String(a.expires).slice(0, 10)) : ''}${a.frozen ? ' · заморожен' : ''}</li>`).join('')}</ul>`
     : '<p class="jr-hint">Абонементов нет.</p>';
   const last = (s.lastVisits || []).length ? `<h4>Последние визиты</h4><ul class="jr-last-visits">${s.lastVisits.map(x => `<li>${jrEscape(x.date)} · ${jrEscape(x.staffName)} · ${jrEscape((x.services || []).join(', '))} · ${jrEscape(jrStatus({ attendance: x.attendance }))}</li>`).join('')}</ul>` : '';
-  const source = s.bonusesSource === 'ledger' ? 'по журналу LoyalPro' : s.bonusesSource === 'card' ? 'по карте YClients' : '';
+  const source = s.bonusesSource === 'ledger' ? 'по журналу LoyalPro' : s.bonusesSource === 'card' ? 'по карте лояльности' : '';
   return `<div class="jr-client-stats"><p>Визитов<span>${v(s.visits?.success)}</span></p><p>Неявок<span>${v(s.visits?.fail)}</span></p><p>Бонусы<span>${v(s.bonusBalance)}</span></p><p>Уровень<span>${v(s.loyaltyLevel)}</span></p><p>Потрачено<span>${s.totalSpent == null ? '—' : jrEscape(Number(s.totalSpent).toLocaleString('ru-RU') + ' ₽')}</span></p></div>${source ? `<small class="jr-hint">Бонусы ${source}</small>` : ''}<h4>Абонементы</h4>${abonements}${last}`;
 }
 async function jrLoadClientSummary(r) {

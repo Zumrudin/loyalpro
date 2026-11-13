@@ -69,7 +69,8 @@ const COUNTS_COLS = `count(*) FILTER (WHERE raw_payload->>'attendance'='1')::int
 const COUNTS_BY_ID_SQL = `SELECT ${COUNTS_COLS} FROM records WHERE salon_id=$1 AND yclients_client_id=$2 AND COALESCE(status,'')<>'deleted'`;
 const COUNTS_BY_PHONE_SQL = `SELECT ${COUNTS_COLS} FROM records WHERE salon_id=$1 AND ${PHONE_WHO} AND COALESCE(status,'')<>'deleted'`;
 
-async function summary(salonId, query = {}) {
+// The client of a journal card by phone and/or YClients id (shared with the visit history).
+async function resolveClient(salonId, query = {}) {
   const phone = query.phone != null && query.phone !== '' ? canonPhone(query.phone) : null;
   if (query.phone != null && query.phone !== '' && !phone) m.fail('Некорректный телефон.');
   const ycClientId = query.ycClientId != null && query.ycClientId !== '' ? m.positiveId(query.ycClientId) : null;
@@ -81,6 +82,10 @@ async function summary(salonId, query = {}) {
   if (!client && phone) client = await db.oneOrNone(CLIENT_SUFFIX_SQL, [salonId, ycClientId, phone]);
   const yc = ycClientId || (client?.yclients_client_id != null ? Number(client.yclients_client_id) : null);
   const ph = phone || canonPhone(client?.phone);
+  return { salon, client, yc, ph };
+}
+async function summary(salonId, query = {}) {
+  const { salon, client, yc, ph } = await resolveClient(salonId, query);
   const rows = yc ? await db.any(VISITS_BY_ID_SQL, [salonId, yc])
     : ph ? await db.any(VISITS_BY_PHONE_SQL, [salonId, ph]) : [];
   const fresh = yc ? (await db.oneOrNone(FRESH_CLIENT_SQL, [salonId, yc]))?.client : rows[0]?.raw_payload?.client;
@@ -109,4 +114,4 @@ async function summary(salonId, query = {}) {
     bonusesSource: ledger ? 'ledger' : 'card',
   };
 }
-module.exports = { summary, canonPhone, abonementsView, _cache: cache, CLIENT_SQL, CLIENT_SUFFIX_SQL, VISITS_BY_ID_SQL, VISITS_BY_PHONE_SQL, FRESH_CLIENT_SQL, COUNTS_BY_ID_SQL, COUNTS_BY_PHONE_SQL };
+module.exports = { summary, resolveClient, canonPhone, abonementsView, _cache: cache, CLIENT_SQL, CLIENT_SUFFIX_SQL, VISITS_BY_ID_SQL, VISITS_BY_PHONE_SQL, FRESH_CLIENT_SQL, COUNTS_BY_ID_SQL, COUNTS_BY_PHONE_SQL };
