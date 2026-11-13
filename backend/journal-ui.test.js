@@ -1298,15 +1298,22 @@ test('change client: the card search picks a client into edit.client', () => {
   pick({ name: 'Без телефона', phone: '' });
   expect(h.context.notify).toHaveBeenCalledWith(expect.stringContaining('телефона'), 'err');
 });
-test('delete: own confirmation explains the difference from cancel; unsaved edits travel with it', async () => {
+test('delete: own confirmation explains the difference from cancel; the package carries no edit', async () => {
   const h = cardHarness();
   h.context.jrRenderRecord(CARD);
-  h.context.jrCardEdit('notifyClient', true);
   h.context.jrDeleteRecord(CARD);
   expect(h.get('jrModalBody').innerHTML).toContain('отличие от отмены');
   h.context.jrApi = jest.fn().mockResolvedValue({ outboxId: 2, recordId: 8, status: 'queued' }); h.context.loadJournal = jest.fn();
   await h.get('jrApply').onclick();
-  expect(h.context.jrApi).toHaveBeenCalledWith('sessions', { sessionId: 'synthetic-uuid-2', recordId: 8, status: 'delete', edit: { notifyClient: true } });
+  expect(h.context.jrApi).toHaveBeenCalledWith('sessions', { sessionId: 'synthetic-uuid-2', recordId: 8, status: 'delete' });
+});
+test('delete with unsaved card edits asks first (like rebook) instead of carrying them (review 13.11.2026)', () => {
+  const h = cardHarness();
+  h.context.jrRenderRecord(CARD);
+  h.context.jrCardEdit('notifyClient', true);
+  h.context.jrDeleteRecord(CARD);
+  expect(h.get('jrModalBody').innerHTML).not.toContain('отличие от отмены');
+  expect(h.get('jrCloseAsk').innerHTML).toContain('Есть несохранённые изменения');
 });
 test('rebook opens the create form with the same client and services and no date', () => {
   const h = cardHarness();

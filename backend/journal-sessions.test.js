@@ -438,18 +438,22 @@ describe('edit: parity fields (12.11.2026)', () => {
 });
 
 describe('delete (12.11.2026)', () => {
-  test('parse: delete alone or with edit; not with payments, move or create', () => {
+  test('parse: delete alone; not with an edit, payments, move or create', () => {
     expect(parse({ recordId: 42, status: 'delete' })).toMatchObject({ status: 'delete' });
-    expect(parse({ recordId: 42, status: 'delete', edit: { notifyClient: false } })).toMatchObject({ status: 'delete', edit: { notifyClient: false } });
+    // [edit, delete] would PUT the unsaved card edit and then fail on delete (review 13.11.2026)
+    for (const edit of [{ notifyClient: false }, { comment: 'x' }]) {
+      let err; try { parse({ recordId: 42, status: 'delete', edit }); } catch (e) { err = e; }
+      expect(err).toMatchObject({ status: 409, message: expect.stringContaining('Сначала сохраните или отмените изменения карточки') });
+    }
     expect(() => parse({ recordId: 42, status: 'delete', payments: [pay('account', 10, 100)] })).toThrow('Удалённую запись нельзя оплатить');
     expect(() => parse({ recordId: 42, status: 'delete', move: { date: '2030-04-01', time: '11:00', staffId: 5 } })).toThrow('Нельзя одновременно перенести и удалить');
     expect(() => parse({ recordId: 42, status: 'confirm', edit: { comment: 'x' } })).toThrow('отдельно');
     expect(() => parse({ create: CREATE, status: 'delete' })).toThrow('сохранённой');
   });
   test('validate: delete is the last step and hides the record in the overlay', async () => {
-    const out = await s.validate(3, parse({ recordId: 42, status: 'delete', edit: { notifyClient: false } }));
-    expect(out.steps.map(x => x.kind)).toEqual(['edit', 'delete']);
-    expect(out.overlay.patch).toEqual({ notify_client: false, deleted: true });
+    const out = await s.validate(3, parse({ recordId: 42, status: 'delete' }));
+    expect(out.steps.map(x => x.kind)).toEqual(['delete']);
+    expect(out.overlay.patch).toEqual({ deleted: true });
   });
   test('validate: arrived or paid visit cannot be deleted; a cancelled one can', async () => {
     setup({ record: { ...RECORD, attendance: 1 } });

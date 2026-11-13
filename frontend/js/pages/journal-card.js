@@ -36,13 +36,16 @@ function jrCardEdit(key, value) {
   if (jrEl('jrCancel')) jrEl('jrCancel').disabled = true;
 }
 function jrDeleteRecord(r) {
-  const carry = journal.session?.edit ? { ...journal.session.edit } : null;
+  // Unsaved card edits are not sent with a deletion (the server refuses
+  // [edit, delete]): ask first, as «Записать повторно» and closing do.
+  const kind = journal.session?.edit ? jrUnsavedKind() : null;
+  if (kind) return jrAskClose(kind);
   jrShowModal('Удалить запись');
   journal.draft = { action: 'delete', recordId: r.id };
   journal.session = jrNewSession({ recordId: r.id });
   journal.payment = null;
   jrEl('jrModalBody').innerHTML = `<p>${jrEscape(r.clientName)} · ${jrEscape(r.date)} ${jrEscape(r.time)}</p><p>Удалить запись насовсем? В отличие от отмены (статус «Не пришёл»), удалённая запись исчезнет из журнала, а после «Отправить в YClients» — и из YClients. Вернуть её будет нельзя.</p><div class="jr-actions"><button type="button" class="btn btn-pri jr-danger" id="jrApply">Да, удалить запись</button><button type="button" class="btn btn-sec" id="jrBack">Назад</button></div>`;
-  jrEl('jrApply').onclick = () => jrSave({ sessionId: journal.session.sessionId, recordId: r.id, status: 'delete', ...(carry ? { edit: carry } : {}) });
+  jrEl('jrApply').onclick = () => jrSave({ sessionId: journal.session.sessionId, recordId: r.id, status: 'delete' });
   jrEl('jrBack').onclick = () => jrOpen(r.id);
 }
 // «Записать повторно»: the same client and services, the date is chosen anew.

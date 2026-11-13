@@ -18,7 +18,9 @@ const UPSERT_SQL = `INSERT INTO journal_record_prefs(salon_id,yclients_record_id
   VALUES($1,$2,$3,$4,NOW())
   ON CONFLICT (salon_id,yclients_record_id) DO UPDATE SET notify_client=EXCLUDED.notify_client, outbox_id=EXCLUDED.outbox_id, updated_at=NOW()`;
 const GET_SQL = 'SELECT notify_client FROM journal_record_prefs WHERE salon_id=$1 AND yclients_record_id=$2';
-const PACKAGE_SQL = 'SELECT steps, yclients_record_id FROM journal_outbox WHERE salon_id=$1 AND id=$2';
+// A cancelled package (incl. a locally cancelled unsent create) never claims a
+// record: without yclients_record_id it would match any record sent with its number.
+const PACKAGE_SQL = "SELECT steps, yclients_record_id FROM journal_outbox WHERE salon_id=$1 AND id=$2 AND status NOT IN ('cancelled')";
 
 async function write(salonId, recordId, notifyClient, outboxId = null) {
   await db.query(UPSERT_SQL, [Number(salonId), Number(recordId), notifyClient !== false, outboxId == null ? null : Number(outboxId)]);

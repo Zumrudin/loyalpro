@@ -73,8 +73,11 @@ function parseSession(body) {
     out.edit = require('./record-edit').parse(body.edit);
     // Status/services and time/staff of the same card go in ONE package
     // (move first, then edit). Payments and confirm/cancel stay separate.
-    // Delete may carry the card's unsaved edit (e.g. «не уведомлять»); other statuses and payments go separately.
-    if ((present(body.status) && body.status !== 'delete') || body.payments?.length || body.removePayments?.length) m.fail('Сохраните изменения записи отдельно от оплат.');
+    // Delete takes no edit: [edit, delete] PUT the unsaved card change and then
+    // failed on delete, leaving the record changed (review 13.11.2026). A
+    // deletion notifies nobody, so «не уведомлять» is not needed with it either.
+    if (body.status === 'delete') m.fail('Сначала сохраните или отмените изменения карточки.', 409);
+    if (present(body.status) || body.payments?.length || body.removePayments?.length) m.fail('Сохраните изменения записи отдельно от оплат.');
   }
   if (present(body.move)) {
     if (!hasRecord) m.fail('Перенос доступен только для сохранённой записи.');

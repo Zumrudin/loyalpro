@@ -29,6 +29,8 @@ describe('optOutForEvent', () => {
     db.oneOrNone.mockResolvedValueOnce(null).mockResolvedValueOnce({ yclients_record_id: null, steps: [{ kind: 'create', params: { notifyClient: false } }] });
     expect(await prefs.optOutForEvent(3, 500, '15')).toBe(true);
     expect(db.oneOrNone.mock.calls[1][1]).toEqual([3, 15]);
+    // a cancelled (incl. locally cancelled) package never claims a record by its number
+    expect(db.oneOrNone.mock.calls[1][0]).toMatch(/status NOT IN \('cancelled'\)/);
     db.oneOrNone.mockResolvedValueOnce(null).mockResolvedValueOnce({ yclients_record_id: '500', steps: [{ kind: 'create', params: { notifyClient: false } }] });
     expect(await prefs.optOutForEvent(3, 500, '15')).toBe(true);
     db.oneOrNone.mockResolvedValueOnce(null).mockResolvedValueOnce({ yclients_record_id: null, steps: [{ kind: 'create', params: {} }] });
