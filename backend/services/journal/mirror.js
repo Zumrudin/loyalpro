@@ -34,14 +34,20 @@ async function syncWindow(salon, from, to) {
   const ids = new Set();
   // A webhook may already have stored a newer version: never overwrite it with
   // an older (or the same) page snapshot — and skip the write when unchanged.
+  // An EQUAL version is still rewritten when the break differs: webhooks never
+  // carry technical_break_duration, and a break set or removed in YClients
+  // would otherwise never reach the mirror (review 13.11.2026). null = 0.
   const stored = new Map((await db.any(
-    `SELECT yclients_record_id::text AS id, raw_payload->>'last_change_date' AS changed FROM records
+    `SELECT yclients_record_id::text AS id, raw_payload->>'last_change_date' AS changed,
+            raw_payload->>'technical_break_duration' AS brk FROM records
       WHERE salon_id=$1 AND yclients_record_id = ANY($2::bigint[])`, [salon.id, list.map(r => Number(r.id))]))
-    .map(x => [x.id, changedAt(x.changed)]));
+    .map(x => [x.id, { changed: changedAt(x.changed), brk: Number(x.brk || 0) }]));
   for (const r of list) {
     ids.add(String(r.id));
     const known = stored.get(String(r.id)), incoming = changedAt(r.last_change_date);
-    if (known != null && incoming != null && known >= incoming) { unchanged++; continue; }
+    const breakDiffers = known != null && r.technical_break_duration != null && Number(r.technical_break_duration || 0) !== known.brk;
+    if (known?.changed != null && incoming != null
+      && (known.changed > incoming || (known.changed === incoming && !breakDiffers))) { unchanged++; continue; }
     let dbClientId = null;
     if (r.client && r.client.id) {
       const c = await db.oneOrNone('SELECT id FROM clients WHERE salon_id=$1 AND yclients_client_id=$2', [salon.id, r.client.id]);

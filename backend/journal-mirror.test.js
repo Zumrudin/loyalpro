@@ -125,3 +125,31 @@ describe('storeLive / markDeleted — worker puts the live record after its own 
     expect(loyalty.upsertRecordFromYc).not.toHaveBeenCalled();
   });
 });
+
+describe('syncWindow: равный last_change_date, но другой перерыв (ревью 13.11.2026)', () => {
+  const LCD = '2026-11-13T10:00:05+0300';
+  test('перерыв в REST отличается от сохранённого → строка перезаписывается', async () => {
+    yc.records.mockResolvedValue([{ id: 5, last_change_date: LCD, technical_break_duration: 600 }]);
+    db.any.mockImplementation(async sql => /AS changed/.test(sql) ? [{ id: '5', changed: LCD, brk: null }] : []);
+    const r = await mirror.syncWindow(salon, 'a', 'b');
+    expect(loyalty.upsertRecordFromYc).toHaveBeenCalledTimes(1);
+    expect(r).toMatchObject({ upserted: 1, unchanged: 0 });
+  });
+  test('перерыв убран в YClients (0 при сохранённых 600) → перезапись', async () => {
+    yc.records.mockResolvedValue([{ id: 5, last_change_date: LCD, technical_break_duration: 0 }]);
+    db.any.mockImplementation(async sql => /AS changed/.test(sql) ? [{ id: '5', changed: LCD, brk: '600' }] : []);
+    expect((await mirror.syncWindow(salon, 'a', 'b')).upserted).toBe(1);
+  });
+  test('перерыв тот же → unchanged, как раньше', async () => {
+    yc.records.mockResolvedValue([{ id: 5, last_change_date: LCD, technical_break_duration: 600 }]);
+    db.any.mockImplementation(async sql => /AS changed/.test(sql) ? [{ id: '5', changed: LCD, brk: '600' }] : []);
+    const r = await mirror.syncWindow(salon, 'a', 'b');
+    expect(loyalty.upsertRecordFromYc).not.toHaveBeenCalled();
+    expect(r.unchanged).toBe(1);
+  });
+  test('сохранённая версия новее → не трогаем, даже если перерыв другой', async () => {
+    yc.records.mockResolvedValue([{ id: 5, last_change_date: LCD, technical_break_duration: 600 }]);
+    db.any.mockImplementation(async sql => /AS changed/.test(sql) ? [{ id: '5', changed: '2026-11-13T10:00:06+0300', brk: null }] : []);
+    expect((await mirror.syncWindow(salon, 'a', 'b')).unchanged).toBe(1);
+  });
+});
