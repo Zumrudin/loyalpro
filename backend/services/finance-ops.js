@@ -18,6 +18,7 @@
 const { db } = require('../db');
 const { createLogger } = require('../logger');
 const logger = createLogger('FinanceOps');
+const { safely } = require('../utils/safely');
 const bonusLedger = require('./bonus-ledger');
 
 // Этап 3: после любого изменения бонусной строки — пересчёт баланса клиента из журнала
@@ -457,20 +458,6 @@ async function recordLoyaltyTxn(lct, hints = {}, opts = {}) {
 }
 
 // ── хуки: сбой журнала операций не должен ронять денежный путь ───────────────
-
-const _warned = new Map();
-async function safely(label, fn) {
-  try { return await fn(); } catch (e) {
-    try {
-      const now = Date.now();
-      if (!_warned.has(label) || now - _warned.get(label) > 60000) {
-        _warned.set(label, now);
-        logger.warn(`${label}: не записано в finance_operations (${e && (e.code || e.name) || 'error'}: ${String(e && e.message || e).slice(0, 160)})`);
-      }
-    } catch (_) { /* логирование не должно менять путь денег */ }
-    return null;
-  }
-}
 
 // ── источники + ночная сверка ───────────────────────────────────────────
 

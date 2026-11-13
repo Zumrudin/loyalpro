@@ -2314,6 +2314,15 @@ async function runMigrations(client) {
     await client.query(`ALTER TABLE yclients_goods_catalog ADD COLUMN IF NOT EXISTS ${col}`).catch(() => {});
   }
 
+  // ── STOCK (склад, 2026-11-13) ──
+  for (const col of STOCK_CATALOG_COLUMNS) {
+    await client.query(`ALTER TABLE yclients_goods_catalog ADD COLUMN IF NOT EXISTS ${col}`).catch(() => {});
+  }
+  // Локальные товары не имеют id YClients: ослабление ограничения, не разрушение.
+  await client.query(`ALTER TABLE yclients_goods_catalog ALTER COLUMN yclients_good_id DROP NOT NULL`).catch(() => {});
+  for (const ddl of STOCK_DDL) await client.query(ddl).catch(() => {});
+  await client.query(`ALTER TABLE finance_operations ADD COLUMN IF NOT EXISTS stock_document_id BIGINT`).catch(() => {});
+
   await client.query(`
     CREATE TABLE IF NOT EXISTS goods_price_overrides (
       salon_id   INT NOT NULL REFERENCES salons(id) ON DELETE CASCADE,
@@ -2821,6 +2830,92 @@ CREATE TABLE IF NOT EXISTS journal_record_prefs (
 const JOURNAL_HISTORY_INDEX_DDL = `
 CREATE INDEX IF NOT EXISTS idx_webhook_logs_record ON webhook_logs (salon_id, resource_id, created_at) WHERE event_type='record';
 `;
+// ── STOCK (склад, 2026-11-13): только аддитивно; выполняется в runMigrations после колонок каталога ──
+const STOCK_DDL = [
+  `CREATE TABLE IF NOT EXISTS stock_storages (
+    id BIGSERIAL PRIMARY KEY, salon_id INT NOT NULL REFERENCES salons(id) ON DELETE CASCADE,
+    yclients_storage_id BIGINT,
+    title VARCHAR(200) NOT NULL, for_service BOOLEAN NOT NULL DEFAULT FALSE, for_sale BOOLEAN NOT NULL DEFAULT FALSE,
+    comment TEXT, weight INT, is_active BOOLEAN NOT NULL DEFAULT TRUE, synced_at TIMESTAMPTZ
+  )`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS stock_storages_yc_uq ON stock_storages (salon_id, yclients_storage_id) WHERE yclients_storage_id IS NOT NULL`,
+  `CREATE TABLE IF NOT EXISTS stock_units (
+    id BIGSERIAL PRIMARY KEY, salon_id INT NOT NULL REFERENCES salons(id) ON DELETE CASCADE,
+    yclients_unit_id BIGINT, title VARCHAR(100) NOT NULL, short_title VARCHAR(50) NOT NULL
+  )`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS stock_units_yc_uq ON stock_units (salon_id, yclients_unit_id) WHERE yclients_unit_id IS NOT NULL`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS stock_units_short_uq ON stock_units (salon_id, lower(short_title))`,
+  `CREATE TABLE IF NOT EXISTS stock_suppliers (
+    id BIGSERIAL PRIMARY KEY, salon_id INT NOT NULL REFERENCES salons(id) ON DELETE CASCADE,
+    title VARCHAR(255) NOT NULL, inn VARCHAR(20), phone VARCHAR(32), email VARCHAR(120), contact VARCHAR(255), comment TEXT,
+    is_active BOOLEAN NOT NULL DEFAULT TRUE, created_at TIMESTAMPTZ DEFAULT NOW(), updated_at TIMESTAMPTZ DEFAULT NOW()
+  )`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS stock_suppliers_title_uq ON stock_suppliers (salon_id, lower(title))`,
+  `CREATE TABLE IF NOT EXISTS stock_documents (
+    id BIGSERIAL PRIMARY KEY, salon_id INT NOT NULL REFERENCES salons(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL CHECK (kind IN ('receipt','writeoff','sale','move','inventory','consumable','opening')),
+    origin TEXT NOT NULL CHECK (origin IN ('loyalpro','yclients')),
+    status TEXT NOT NULL CHECK (status IN ('draft','posted','cancelled')),
+    storage_id BIGINT REFERENCES stock_storages(id), to_storage_id BIGINT REFERENCES stock_storages(id),
+    supplier_id BIGINT REFERENCES stock_suppliers(id) ON DELETE SET NULL,
+    client_id INT REFERENCES clients(id) ON DELETE SET NULL, yclients_client_id BIGINT,
+    record_id BIGINT,
+    master_staff_yc_id BIGINT, doc_date TIMESTAMPTZ NOT NULL, comment TEXT,
+    total_cost NUMERIC(14,2), yclients_document_id BIGINT,
+    created_by INT, created_at TIMESTAMPTZ DEFAULT NOW(), updated_at TIMESTAMPTZ DEFAULT NOW(),
+    posted_at TIMESTAMPTZ, cancelled_at TIMESTAMPTZ, cancel_reason TEXT
+  )`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS stock_documents_yc_uq ON stock_documents (salon_id, yclients_document_id) WHERE yclients_document_id IS NOT NULL`,
+  `CREATE INDEX IF NOT EXISTS stock_documents_date ON stock_documents (salon_id, doc_date DESC)`,
+  `CREATE INDEX IF NOT EXISTS stock_documents_record ON stock_documents (salon_id, record_id) WHERE record_id IS NOT NULL`,
+  `CREATE INDEX IF NOT EXISTS stock_documents_client ON stock_documents (salon_id, client_id) WHERE client_id IS NOT NULL`,
+  `CREATE TABLE IF NOT EXISTS stock_movements (
+    id BIGSERIAL PRIMARY KEY, salon_id INT NOT NULL REFERENCES salons(id) ON DELETE CASCADE,
+    document_id BIGINT NOT NULL REFERENCES stock_documents(id) ON DELETE CASCADE,
+    good_row_id BIGINT NOT NULL REFERENCES yclients_goods_catalog(id),
+    storage_id BIGINT NOT NULL REFERENCES stock_storages(id),
+    qty NUMERIC(14,4) NOT NULL, unit_type SMALLINT NOT NULL,
+    qty_base NUMERIC(16,4) NOT NULL,
+    cost_per_unit NUMERIC(14,4), discount NUMERIC(8,2), cost NUMERIC(14,2),
+    record_id BIGINT, service_yc_id BIGINT, master_staff_yc_id BIGINT,
+    yclients_txn_id BIGINT,
+    source TEXT NOT NULL CHECK (source IN ('webhook','reconcile','backfill','loyalpro','opening','inventory')),
+    occurred_at TIMESTAMPTZ NOT NULL, recorded_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    deleted_at TIMESTAMPTZ, comment TEXT
+  )`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS stock_movements_txn_uq ON stock_movements (salon_id, yclients_txn_id) WHERE yclients_txn_id IS NOT NULL`,
+  `CREATE INDEX IF NOT EXISTS stock_movements_good ON stock_movements (salon_id, good_row_id, storage_id) WHERE deleted_at IS NULL`,
+  `CREATE INDEX IF NOT EXISTS stock_movements_record ON stock_movements (salon_id, record_id) WHERE record_id IS NOT NULL`,
+  `CREATE INDEX IF NOT EXISTS stock_movements_occurred ON stock_movements (salon_id, occurred_at)`,
+  `CREATE TABLE IF NOT EXISTS stock_openings (
+    id BIGSERIAL PRIMARY KEY, salon_id INT NOT NULL, good_row_id BIGINT NOT NULL, storage_id BIGINT NOT NULL,
+    qty_base NUMERIC(16,4) NOT NULL, taken_at TIMESTAMPTZ NOT NULL, source TEXT NOT NULL DEFAULT 'yclients_actual_amounts',
+    yc_qty_base NUMERIC(16,4),
+    note TEXT, created_by INT, UNIQUE (salon_id, good_row_id, storage_id)
+  )`,
+  `CREATE TABLE IF NOT EXISTS stock_inventory_lines (
+    id BIGSERIAL PRIMARY KEY, salon_id INT NOT NULL, document_id BIGINT REFERENCES stock_documents(id) ON DELETE CASCADE,
+    good_row_id BIGINT NOT NULL, storage_id BIGINT NOT NULL, expected_base NUMERIC(16,4), counted NUMERIC(14,4), counted_unit_type SMALLINT,
+    counted_base NUMERIC(16,4), diff_base NUMERIC(16,4), UNIQUE (document_id, good_row_id)
+  )`,
+  `CREATE TABLE IF NOT EXISTS stock_ingest_pending (
+    salon_id INT NOT NULL, yclients_txn_id BIGINT NOT NULL, good_id BIGINT, raw JSONB, created_at TIMESTAMPTZ DEFAULT NOW(),
+    PRIMARY KEY (salon_id, yclients_txn_id)
+  )`,
+  `CREATE TABLE IF NOT EXISTS stock_settings (
+    salon_id INT PRIMARY KEY REFERENCES salons(id) ON DELETE CASCADE,
+    enabled BOOLEAN NOT NULL DEFAULT FALSE,
+    default_sale_storage_id BIGINT, default_service_storage_id BIGINT,
+    categories_synced_at TIMESTAMPTZ, updated_at TIMESTAMPTZ
+  )`,
+];
+const STOCK_CATALOG_COLUMNS = [
+  `source VARCHAR(16) NOT NULL DEFAULT 'yclients'`, 'category_path JSONB', 'parent_category_id BIGINT',
+  'local_category VARCHAR(200)', 'sale_price NUMERIC(14,2)', 'local_sale_price NUMERIC(14,2)', 'barcode VARCHAR(64)',
+  'unit_id BIGINT', 'service_unit_id BIGINT', 'critical_amount NUMERIC(14,4)', 'desired_amount NUMERIC(14,4)',
+  'comment TEXT', 'local_note TEXT', 'loyalty_abonement_type_id BIGINT', 'loyalty_certificate_type_id BIGINT',
+  'yc_last_change_date TIMESTAMPTZ', 'stock_active BOOLEAN NOT NULL DEFAULT TRUE',
+];
 const FINANCE_OPS_DDL = `
 CREATE TABLE IF NOT EXISTS finance_operations (
  id BIGSERIAL PRIMARY KEY,

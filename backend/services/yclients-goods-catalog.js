@@ -90,6 +90,18 @@ function extractCategoryTitle(g, catMap) {
  *   goodsSeen?: number, categoriesSeen?: number, errors?: number, durationMs?: number
  * }>}
  */
+// Страж: локальные товары склада (yclients_good_id IS NULL) синк YClients не архивирует.
+const ARCHIVE_SQL = `
+      UPDATE yclients_goods_catalog
+         SET is_archived = TRUE, updated_at = NOW()
+       WHERE salon_id = $1
+         AND yclients_good_id IS NOT NULL
+         AND category_id = ANY($2::int[])
+         AND last_seen_at < NOW() - INTERVAL '24 hours'
+         AND NOT is_archived
+      RETURNING id
+    `;
+
 async function syncGoodsCatalog(salon) {
   // Self-guard (D-context Pitfall 5, matches services/home-care.js:9 pattern)
   if (!salon || !salon.yclients_company_id || !salon.yclients_user_token) {
@@ -261,15 +273,7 @@ async function syncGoodsCatalog(salon) {
   // Forlled, GIGI, Phyto-C, HELEO4, HELIOCARE, Luscious Lips.
   let archived = { rowCount: 0 };
   if (okCatIds.length) {
-    archived = await db.query(`
-      UPDATE yclients_goods_catalog
-         SET is_archived = TRUE, updated_at = NOW()
-       WHERE salon_id = $1
-         AND category_id = ANY($2::int[])
-         AND last_seen_at < NOW() - INTERVAL '24 hours'
-         AND NOT is_archived
-      RETURNING id
-    `, [salonId, okCatIds]);
+    archived = await db.query(ARCHIVE_SQL, [salonId, okCatIds]);
   }
   if (okCatIds.length < catIdList.length) {
     logger.warn(
@@ -304,6 +308,7 @@ async function syncGoodsCatalog(salon) {
 
 module.exports = {
   syncGoodsCatalog,
+  ARCHIVE_SQL,
   HOME_CARE_CATEGORY_BLACKLIST,
   isBlacklisted,
   extractCategoryTitle,
