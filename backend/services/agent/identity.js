@@ -18,9 +18,23 @@ async function resolveClient(salonId, rawPhone) {
   // Короткий ключ в суффиксном LIKE совпал бы с хвостом чужого номера —
   // идентифицируем только по полному номеру (10+ цифр).
   if (!salonId || !phone || phone.length < 10) return null;
+  // Число состоявшихся визитов — для факта «пациент уже бывал в клинике» в промпте
+  // (инцидент 2026-11-09, 79082417232: FAQ КБ «паспорт нужен на первичный визит»,
+  // а Мила не знала, что визит не первый, и велела взять паспорт клиентке с двумя
+  // визитами). Источников два, берём больший: visits_count из карточки YClients
+  // (client-вебхук) знает всю историю, records — только синхронизированные 730 дней,
+  // зато не зависят от того, дошёл ли client-вебхук.
   const row = await db.oneOrNone(
-    `SELECT id, name, phone, yclients_data FROM clients
-      WHERE salon_id = $1 AND phone LIKE '%' || $2
+    `SELECT c.id, c.name, c.phone, c.yclients_data, c.visits_count, c.last_visit_at,
+            v.cnt AS rec_visits, v.last_at AS rec_last_at
+       FROM clients c
+       LEFT JOIN LATERAL (
+         SELECT count(*)::int AS cnt, max(r.visit_datetime) AS last_at
+           FROM records r
+          WHERE r.client_id = c.id AND r.status IN ('arrived', 'completed')
+            AND r.visit_datetime <= now()
+       ) v ON true
+      WHERE c.salon_id = $1 AND c.phone LIKE '%' || $2
       LIMIT 1`,
     [salonId, phone]);
   if (!row) return null;
@@ -32,7 +46,21 @@ async function resolveClient(salonId, rawPhone) {
   try {
     givenName = resolveGivenName(nameSource(row), { dictionary: await salonNames.load(salonId) });
   } catch (e) { givenName = null; }
-  return { id: row.id, name: row.name, givenName, phone: row.phone };
+  return { id: row.id, name: row.name, givenName, phone: row.phone, ...visitStats(row) };
+}
+
+// { visits, lastVisitAt }: visits — null, если ни один источник ничего не знает
+// (тогда промпт молчит о визитах, а не утверждает «визитов нет»).
+function visitStats(row) {
+  const num = (x) => (x === null || x === undefined || x === '' || !Number.isFinite(Number(x)) ? null : Number(x));
+  const a = num(row.visits_count);
+  const b = num(row.rec_visits);
+  const visits = a === null && b === null ? null : Math.max(a || 0, b || 0);
+  const dates = [row.last_visit_at, row.rec_last_at]
+    .map(d => (d ? new Date(d) : null))
+    .filter(d => d && Number.isFinite(d.getTime()));
+  const lastVisitAt = dates.length ? new Date(Math.max(...dates.map(d => d.getTime()))) : null;
+  return { visits, lastVisitAt };
 }
 
 // Раздельные поля YClients точнее склеенного ФИО (в них видно, где имя, а где
@@ -76,4 +104,4 @@ async function resolveYclientsClientId(salonId, rawPhone) {
   return row && row.yc_client_id ? Number(row.yc_client_id) : null;
 }
 
-module.exports = { resolveClient, resolveYclientsClientId };
+module.exports = { resolveClient, resolveYclientsClientId, visitStats };

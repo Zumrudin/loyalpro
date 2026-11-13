@@ -2068,3 +2068,45 @@ describe('мужская цена лазерной эпиляции: станд�
     expect(catalog).toMatch(/men_not_available:true/);
   });
 });
+
+// Инцидент 2026-11-09 (79082417232): FAQ КБ «паспорт нужен на первичный визит»
+// модель применила к пациентке с двумя визитами — промпт не знал о визитах.
+describe('факт о визитах пациента в блоке ИДЕНТИФИКАЦИЯ', () => {
+  const { renderVisitsLine, FACTUAL_SECTION_MARKER } = require('./services/agent/system-prompt');
+  const lastVisitAt = new Date('2026-06-08T08:40:00Z');
+
+  test('повторный пациент: число визитов, дата словом, первичное к нему не относится', () => {
+    const p = buildSystemPrompt({ clientName: 'Анастасия', phoneKnown: true, clientVisits: { count: 2, lastVisitAt } });
+    expect(p).toContain('состоявшихся визитов: 2, последний — 8 июня 2026 г.');
+    expect(p).toMatch(/ПОВТОРНЫЙ пациент/);
+    expect(p).toMatch(/первичный визит.*НЕ относится/);
+  });
+
+  test('строка стоит в фактической части (после маркера), внутри блока идентификации', () => {
+    const p = buildSystemPrompt({ clientName: 'Анастасия', phoneKnown: true, clientVisits: { count: 2, lastVisitAt } });
+    const marker = p.indexOf(FACTUAL_SECTION_MARKER);
+    const idx = p.indexOf('ПОВТОРНЫЙ пациент');
+    expect(marker).toBeGreaterThan(-1);
+    expect(idx).toBeGreaterThan(marker);
+    expect(idx).toBeGreaterThan(p.lastIndexOf('ИДЕНТИФИКАЦИЯ ПАЦИЕНТА:'));
+  });
+
+  test('дата не в форме ДД.ММ — иначе reply-guard прочёл бы её как время', () => {
+    const line = renderVisitsLine({ count: 2, lastVisitAt });
+    expect(line).not.toMatch(/\d{1,2}[.:]\d{2}/);
+  });
+
+  test('визитов 0 → первый визит', () => {
+    expect(renderVisitsLine({ count: 0 })).toMatch(/ПЕРВЫЙ визит/);
+  });
+
+  test('визиты неизвестны → строки нет; без карточки строки нет', () => {
+    expect(renderVisitsLine({ count: null })).toBeNull();
+    expect(renderVisitsLine(null)).toBeNull();
+    expect(renderVisitsLine({ count: -1 })).toBeNull();
+    const base = buildSystemPrompt({ clientName: 'Анастасия', phoneKnown: true });
+    expect(buildSystemPrompt({ clientName: 'Анастасия', phoneKnown: true, clientVisits: { count: null } })).toBe(base);
+    const anon = buildSystemPrompt({ phoneKnown: true, clientVisits: { count: 3, lastVisitAt } });
+    expect(anon).not.toMatch(/ПОВТОРНЫЙ пациент/);
+  });
+});

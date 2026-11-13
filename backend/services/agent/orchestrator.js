@@ -227,7 +227,8 @@ function buildHardFixPrompt(hard) {
 // назван, невалидный id). Отказом YClients не является — для writeErrored.
 function isWriteHint(res) {
   return !!(res && (res.invalid_args || res.too_soon || res.needs_phone
-    || res.generic_service_hint || res.unverified_slot || res.needs_confirmation || res.wrong_service));
+    || res.generic_service_hint || res.unverified_slot || res.needs_confirmation || res.wrong_service
+    || res.short_slot));
 }
 
 // Реплика содержит конкретное время (HH:MM / HH.MM) — модель предлагает слот.
@@ -566,6 +567,10 @@ async function runDialogInner(salonId, dialogKey, opts = {}, bag = {}) {
     // Идентификация: знаем ли телефон (из канала) и имя (из карточки клиента).
     phoneKnown: !!ctx.phone,
     clientName: clientGivenName,
+    // Состоявшиеся визиты пациента (identity.resolveClient): факт «был ли уже в
+    // клинике». Инцидент 2026-11-09 (79082417232) — без него оговорка КБ «на
+    // первичный визит» модели не к чему применить.
+    clientVisits: client ? { count: client.visits, lastVisitAt: client.lastVisitAt } : null,
     catalogBlock,
     priceListBlock,
     activeOffers,

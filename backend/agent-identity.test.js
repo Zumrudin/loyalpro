@@ -12,7 +12,7 @@ describe('identity.resolveClient', () => {
   test('находит карточку по полному нормализованному номеру', async () => {
     db.oneOrNone.mockResolvedValue({ id: 7, name: 'Анна', phone: '79001234567' });
     const out = await identity.resolveClient(1, '8 (900) 123-45-67');
-    expect(out).toEqual({ id: 7, name: 'Анна', givenName: 'Анна', phone: '79001234567' });
+    expect(out).toEqual({ id: 7, name: 'Анна', givenName: 'Анна', phone: '79001234567', visits: null, lastVisitAt: null });
     expect(db.oneOrNone.mock.calls[0][1]).toEqual([1, '79001234567']);
   });
 
@@ -63,5 +63,36 @@ describe('identity.resolveClient — имя для обращения', () => {
     db.oneOrNone.mockResolvedValue({ id: 4, name: 'Вихарева Мария Андреевна', phone: '79133850883' });
     const out = await identity.resolveClient(1, '79133850883');
     expect(out.givenName).toBe('Мария');   // базовый словарь и позиция по отчеству работают
+  });
+});
+
+// Инцидент 2026-11-09 (79082417232): Мила велела взять паспорт клиентке с двумя
+// визитами — признака «повторный пациент» в промпте не было.
+describe('identity.visitStats — число визитов для промпта', () => {
+  test('берётся больший из карточки YClients и records', () => {
+    const v = identity.visitStats({ visits_count: 2, rec_visits: 1,
+      last_visit_at: '2026-06-08T08:40:00Z', rec_last_at: '2026-06-08T08:40:00Z' });
+    expect(v.visits).toBe(2);
+    expect(v.lastVisitAt.toISOString()).toBe('2026-06-08T08:40:00.000Z');
+  });
+  test('client-вебхук не дошёл (visits_count NULL) → считаем по records', () => {
+    const v = identity.visitStats({ visits_count: null, rec_visits: 3, last_visit_at: null, rec_last_at: '2026-10-01T10:00:00Z' });
+    expect(v.visits).toBe(3);
+    expect(v.lastVisitAt.toISOString()).toBe('2026-10-01T10:00:00.000Z');
+  });
+  test('ни один источник ничего не знает → visits null (а не «0 визитов»)', () => {
+    expect(identity.visitStats({})).toEqual({ visits: null, lastVisitAt: null });
+  });
+  test('пустая история → 0', () => {
+    expect(identity.visitStats({ visits_count: 0, rec_visits: 0 }).visits).toBe(0);
+  });
+  test('resolveClient отдаёт визиты, SQL считает только состоявшиеся прошедшие записи', async () => {
+    db.oneOrNone.mockResolvedValue({ id: 4180, name: 'Мазеина Анастасия Алексеевна', phone: '+79082417232',
+      visits_count: 2, rec_visits: 1, last_visit_at: '2026-06-08T08:40:00Z', rec_last_at: null });
+    const out = await identity.resolveClient(1, '79082417232');
+    expect(out.visits).toBe(2);
+    const sql = db.oneOrNone.mock.calls[0][0];
+    expect(sql).toMatch(/status IN \('arrived', 'completed'\)/);
+    expect(sql).toMatch(/visit_datetime <= now\(\)/);
   });
 });
