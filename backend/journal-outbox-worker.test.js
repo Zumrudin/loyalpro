@@ -122,9 +122,9 @@ describe('processPackage', () => {
     expect(await w.processPackage(pkg([step('delete', 1)], { yclients_record_id: 42 }))).toBe('done');
     expect(index.mutate).not.toHaveBeenCalled();
   });
-  test('create passes api_id = lp-outbox-<package id> outside the draft', async () => {
+  test('create passes api_id = numeric package id outside the draft', async () => {
     await w.processPackage(pkg([step('create', 1, CREATE_PARAMS)]));
-    expect(index.mutate.mock.calls[0][3]).toEqual({ apiId: 'lp-outbox-11' });
+    expect(index.mutate.mock.calls[0][3]).toEqual({ apiId: '11' });
     expect(index.mutate.mock.calls[0][2]).not.toHaveProperty('apiId');
   });
   test('create + bonus + cash: order, recordId flows, confirmArrival, done', async () => {

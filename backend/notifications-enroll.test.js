@@ -1623,10 +1623,10 @@ describe('журнал: «не уведомлять клиента» (12.11.2026
     setup({ rules: [rule()] });
     withJournal(async (sql, p) => {
       if (/journal_record_prefs/.test(sql)) return null;
-      if (/FROM journal_outbox/.test(sql)) { expect(p).toEqual([1, 77]); return { steps: [{ kind: 'create', params: { notifyClient: false } }] }; }
+      if (/FROM journal_outbox/.test(sql)) { expect(p).toEqual([1, 77]); return { yclients_record_id: null, steps: [{ kind: 'create', params: { notifyClient: false } }] }; }
       return undefined;
     });
-    await enroll.handleRecordEvent(salon, payload({ api_id: 'lp-outbox-77' }), NOW);
+    await enroll.handleRecordEvent(salon, payload({ api_id: '77' }), NOW);
     expect(inserts()[0][9]).toBe('skipped');
     expect(inserts()[0][13]).toBe('journal_opt_out');
   });
@@ -1645,7 +1645,7 @@ describe('журнал: «не уведомлять клиента» (12.11.2026
   });
   test('в режиме off флаг не читается', async () => {
     setup({ rules: [rule()], mode: 'off' });
-    await enroll.handleRecordEvent(salon, payload({ api_id: 'lp-outbox-77' }), NOW);
+    await enroll.handleRecordEvent(salon, payload({ api_id: '77' }), NOW);
     expect(db.oneOrNone.mock.calls.some(([sql]) => /journal_record_prefs|journal_outbox/.test(sql))).toBe(false);
   });
 });

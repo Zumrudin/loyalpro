@@ -327,8 +327,8 @@ describe('parity fields (12.11.2026)', () => {
   });
   test('create sends api_id from opts; the request hash does not depend on it', async () => {
     const d = { operationId, action: 'create', date: '2030-04-01', time: '09:00', staffId: 1, serviceIds: [7], clientName: 'Тест', clientPhone: '70000000000', comment: '' };
-    await service.mutate(3, 4, d, { apiId: 'lp-outbox-15' });
-    expect(yc.write.mock.calls[0][2].api_id).toBe('lp-outbox-15');
+    await service.mutate(3, 4, d, { apiId: '15' });
+    expect(yc.write.mock.calls[0][2].api_id).toBe('15');
     const hashWith = conn.query.mock.calls.find(([sql]) => sql.includes('INSERT INTO journal_operations'))[1][5];
     expect(hashWith).toBe(m.fingerprint(d));
     yc.write.mockClear();

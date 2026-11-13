@@ -12,24 +12,36 @@ test('write upserts the flag with the package id, scoped by salon', async () => 
   expect(sql).toMatch(/ON CONFLICT \(salon_id,yclients_record_id\) DO UPDATE/);
   expect(args).toEqual([3, 500, false, 11]);
 });
-test('apiIdFor builds lp-outbox-<id>', () => expect(prefs.apiIdFor(15)).toBe('lp-outbox-15'));
+test('apiIdFor is the bare package id: YClients keeps only a number (live run 13.11.2026)', () => {
+  expect(prefs.apiIdFor(15)).toBe('15');
+  expect(prefs.API_ID.test('15')).toBe(true);
+  expect(prefs.API_ID.test('lp-outbox-15')).toBe(false);
+});
 describe('optOutForEvent', () => {
   test('row wins', async () => {
     db.oneOrNone.mockResolvedValueOnce({ notify_client: false });
-    expect(await prefs.optOutForEvent(3, 500, 'lp-outbox-15')).toBe(true);
+    expect(await prefs.optOutForEvent(3, 500, '15')).toBe(true);
     expect(db.oneOrNone).toHaveBeenCalledTimes(1);
     db.oneOrNone.mockResolvedValueOnce({ notify_client: true });
-    expect(await prefs.optOutForEvent(3, 500, 'lp-outbox-15')).toBe(false);
+    expect(await prefs.optOutForEvent(3, 500, '15')).toBe(false);
   });
-  test('no row: api_id → package of THIS salon → create step flag', async () => {
-    db.oneOrNone.mockResolvedValueOnce(null).mockResolvedValueOnce({ steps: [{ kind: 'create', params: { notifyClient: false } }] });
-    expect(await prefs.optOutForEvent(3, 500, 'lp-outbox-15')).toBe(true);
+  test('no row: numeric api_id → package of THIS salon with a create step → its flag', async () => {
+    db.oneOrNone.mockResolvedValueOnce(null).mockResolvedValueOnce({ yclients_record_id: null, steps: [{ kind: 'create', params: { notifyClient: false } }] });
+    expect(await prefs.optOutForEvent(3, 500, '15')).toBe(true);
     expect(db.oneOrNone.mock.calls[1][1]).toEqual([3, 15]);
-    db.oneOrNone.mockResolvedValueOnce(null).mockResolvedValueOnce({ steps: [{ kind: 'create', params: {} }] });
-    expect(await prefs.optOutForEvent(3, 500, 'lp-outbox-15')).toBe(false);
+    db.oneOrNone.mockResolvedValueOnce(null).mockResolvedValueOnce({ yclients_record_id: '500', steps: [{ kind: 'create', params: { notifyClient: false } }] });
+    expect(await prefs.optOutForEvent(3, 500, '15')).toBe(true);
+    db.oneOrNone.mockResolvedValueOnce(null).mockResolvedValueOnce({ yclients_record_id: null, steps: [{ kind: 'create', params: {} }] });
+    expect(await prefs.optOutForEvent(3, 500, '15')).toBe(false);
   });
-  test('foreign or missing api_id never reads the outbox', async () => {
-    for (const apiId of ['', null, 'site-15', 'lp-outbox-', 'lp-outbox-1;DROP']) {
+  test('a foreign numeric api_id (package created another record / has no create) → false', async () => {
+    db.oneOrNone.mockResolvedValueOnce(null).mockResolvedValueOnce({ yclients_record_id: '777', steps: [{ kind: 'create', params: { notifyClient: false } }] });
+    expect(await prefs.optOutForEvent(3, 500, '15')).toBe(false);
+    db.oneOrNone.mockResolvedValueOnce(null).mockResolvedValueOnce({ yclients_record_id: null, steps: [{ kind: 'edit', params: { notifyClient: false } }] });
+    expect(await prefs.optOutForEvent(3, 500, '15')).toBe(false);
+  });
+  test('missing, zero or non-numeric api_id never reads the outbox', async () => {
+    for (const apiId of ['', null, '0', '000', 'site-15', 'lp-outbox-15', '1;DROP', '1234567890123456']) {
       db.oneOrNone.mockReset(); db.oneOrNone.mockResolvedValueOnce(null);
       expect(await prefs.optOutForEvent(3, 500, apiId)).toBe(false);
       expect(db.oneOrNone).toHaveBeenCalledTimes(1);

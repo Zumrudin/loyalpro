@@ -141,12 +141,12 @@ async function runStep(ctx, step) {
     const { operationId: _o, action: _a, ...params } = p;
     // api_id rides OUTSIDE the draft: the draft's fingerprint must stay the same
     // for packages started before this field existed.
-    const r = await index.mutate(salonId, userId, { ...params, operationId: step.opId, action: 'create' }, { apiId: `lp-outbox-${ctx.outboxId}` });
+    const r = await index.mutate(salonId, userId, { ...params, operationId: step.opId, action: 'create' }, { apiId: prefs.apiIdFor(ctx.outboxId) });
     const recordId = Number(r?.recordId);
     if (!Number.isSafeInteger(recordId) || recordId < 1) m.fail('Не удалось подтвердить результат. Проверьте запись в YClients.', 409, 'uncertain');
     ctx.recordId = recordId;
     // «Не уведомлять» for the new record; the create webhook may come first —
-    // notifications/enroll.js then finds the flag through api_id (lp-outbox-<id>).
+    // notifications/enroll.js then finds the flag through api_id (the numeric package id).
     // The record already exists in YClients: a failed write must not fail the step.
     if (typeof p.notifyClient === 'boolean') {
       try { await prefs.write(salonId, recordId, p.notifyClient, ctx.outboxId); }

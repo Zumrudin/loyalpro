@@ -25,6 +25,12 @@ describe('recordSnapshot', () => {
     expect(s.services).toEqual([{ id: 1, title: 'Пилинг' }]);
     expect(s.createdUserId).toBe(13287477);
   });
+  test('api_id журнала: строка или число YClients → строка, нет → пусто (13.11.2026)', () => {
+    expect(ev.recordSnapshot({ ...base, data: { ...base.data, api_id: '43' } }).apiId).toBe('43');
+    expect(ev.recordSnapshot({ ...base, data: { ...base.data, api_id: 43 } }).apiId).toBe('43');
+    expect(ev.recordSnapshot(base).apiId).toBe('');
+    expect(ev.recordSnapshot({ ...base, data: { ...base.data, api_id: { x: 1 } } }).apiId).toBe('');
+  });
   test('status=delete → deleted', () => {
     expect(ev.recordSnapshot({ ...base, status: 'delete' }).deleted).toBe(true);
   });

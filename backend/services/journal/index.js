@@ -242,7 +242,7 @@ async function prepare(salon, draft, opts = {}) {
       seance_length: available.duration * 60, save_if_busy: false, send_sms: false,
       // Our package id travels with the new record: the create webhook can
       // arrive before we know the record id (notifications, task 5).
-      ...(!record && /^lp-outbox-\d{1,18}$/.test(String(opts.apiId || '')) ? { api_id: opts.apiId } : {}),
+      ...(!record && prefs.API_ID.test(String(opts.apiId || '')) ? { api_id: opts.apiId } : {}),
     };
   }
   const body = {

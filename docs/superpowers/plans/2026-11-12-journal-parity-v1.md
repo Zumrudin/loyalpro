@@ -1082,6 +1082,8 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 ---
 ### Task 4: Сервер — удаление записи (`status:'delete'` → шаг `delete`) и `api_id` у создания
 
+> **Поправка 13.11.2026 (живой прогон):** YClients хранит `api_id` только числом — `lp-outbox-43` сохранился как `"0"`. Фактический формат — числовой id пакета (`'43'`, `prefs.apiIdFor`, `prefs.API_ID = /^\d{1,15}$/`); `enroll.js` считает пакет своим, только если у него есть шаг `create` и `yclients_record_id` пуст или равен id записи. Код ниже — исходный вариант плана с `<числовой id пакета>`, актуальный — в коде.
+
 **Исполнитель:** Opus. **Зависимости:** T3.
 
 **Files:**
@@ -1167,8 +1169,8 @@ jest.mock('./services/journal/yclients', () => ({ list: jest.fn(), records: jest
   });
   test('create sends api_id from opts; the request hash does not depend on it', async () => {
     const d = { operationId, action: 'create', date: '2030-04-01', time: '09:00', staffId: 1, serviceIds: [7], clientName: 'Тест', clientPhone: '70000000000', comment: '' };
-    await service.mutate(3, 4, d, { apiId: 'lp-outbox-15' });
-    expect(yc.write.mock.calls[0][2].api_id).toBe('lp-outbox-15');
+    await service.mutate(3, 4, d, { apiId: '15' });
+    expect(yc.write.mock.calls[0][2].api_id).toBe('15');
     const hashWith = conn.query.mock.calls.find(([sql]) => sql.includes('INSERT INTO journal_operations'))[1][5];
     expect(hashWith).toBe(m.fingerprint(d));
     yc.write.mockClear();
@@ -1230,9 +1232,9 @@ test('delete patch marks the record deleted: the day drops it, the card says so'
     expect(index.mutate).not.toHaveBeenCalled();
     expect(stepsOf(lastWrite(/status='done'/))[0].result).toEqual({ recordId: 42, alreadyDeleted: true });
   });
-  test('create passes api_id = lp-outbox-<package id> outside the draft', async () => {
+  test('create passes api_id = numeric package id outside the draft', async () => {
     await w.processPackage(pkg([step('create', 1, CREATE_PARAMS)]));
-    expect(index.mutate.mock.calls[0][3]).toEqual({ apiId: 'lp-outbox-11' });
+    expect(index.mutate.mock.calls[0][3]).toEqual({ apiId: '11' });
     expect(index.mutate.mock.calls[0][2]).not.toHaveProperty('apiId');
   });
 ```
@@ -1301,7 +1303,7 @@ async function remove(salon, id) {
 ```js
       // Our package id travels with the new record: the create webhook can
       // arrive before we know the record id (notifications, task 5).
-      ...(!record && /^lp-outbox-\d{1,18}$/.test(String(opts.apiId || '')) ? { api_id: opts.apiId } : {}),
+      ...(!record && prefs.API_ID.test(String(opts.apiId || '')) ? { api_id: opts.apiId } : {}),
 ```
 
 Функция `mutate`: заголовок `async function mutate(salonId, userId, draft) {` → `async function mutate(salonId, userId, draft, opts = {}) {`. Строку `const requestHash = m.fingerprint(draft);` НЕ трогать (хэш — только от черновика). Заменить
@@ -1375,7 +1377,7 @@ async function remove(salon, id) {
 ```js
     // api_id rides OUTSIDE the draft: the draft's fingerprint must stay the same
     // for packages started before this field existed.
-    const r = await index.mutate(salonId, userId, { ...params, operationId: step.opId, action: 'create' }, { apiId: `lp-outbox-${ctx.outboxId}` });
+    const r = await index.mutate(salonId, userId, { ...params, operationId: step.opId, action: 'create' }, { apiId: prefs.apiIdFor(ctx.outboxId) });
 ```
 - строку `if (['move', 'confirm', 'cancel', 'edit'].includes(step.kind)) {` заменить на `if (['move', 'confirm', 'cancel', 'edit', 'delete'].includes(step.kind)) {`
 - внутри этой ветки строку
@@ -1441,7 +1443,7 @@ cd /root/loyalpro && git add backend/services/journal/yclients.js backend/servic
 
 status:'delete' — последний шаг, несовместим с оплатами и переносом;
 пришедший/оплаченный визит не удаляется. Уже удалённая запись (deleted,
-404, 409) — шаг done. create уходит с api_id=lp-outbox-<id> вне
+404, 409) — шаг done. create уходит с api_id=<числовой id пакета> вне
 черновика (хэш операции не меняется). journal_operations: ограничение v3.
 
 Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
@@ -1449,6 +1451,8 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 
 ---
 ### Task 5: «Не уведомлять клиента» — `journal_record_prefs`, воркер, `notifications/enroll.js`
+
+> **Поправка 13.11.2026 (живой прогон):** YClients хранит `api_id` только числом — `lp-outbox-43` сохранился как `"0"`. Фактический формат — числовой id пакета (`'43'`, `prefs.apiIdFor`, `prefs.API_ID = /^\d{1,15}$/`); `enroll.js` считает пакет своим, только если у него есть шаг `create` и `yclients_record_id` пуст или равен id записи. Код ниже — исходный вариант плана с `<числовой id пакета>`, актуальный — в коде.
 
 **Исполнитель:** Opus. **Зависимости:** T4 (`api_id`, `ctx.outboxId`).
 
@@ -1462,7 +1466,7 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 - Modify: `backend/services/notifications/enroll.js` (`enrollEvent`)
 - Test: `backend/journal-outbox-worker.test.js`, `backend/journal-service.test.js`, `backend/journal-local-ddl.test.js`, `backend/notifications-enroll.test.js`
 
-Как это работает (спека §4.3): в YClients всегда `send_sms:false`; клиенту пишет наш модуль уведомлений по вебхукам. Флаг «не уведомлять» = строка `journal_record_prefs(notify_client=false)`. Для существующей записи воркер пишет строку ДО `PUT` (вебхук приходит после). Для новой записи id неизвестен до ответа `POST /records`, а вебхук `create` может опередить нашу запись строки — поэтому `enroll.js` при отсутствии строки смотрит `data.api_id` формата `lp-outbox-<id>` → `journal_outbox.steps[create].params.notifyClient`. `false` → новые job'ы ложатся `skipped` с причиной `journal_opt_out`, а уже стоящие `pending` этой записи гасятся (флаг мог быть поставлен после того, как напоминание встало в очередь). Проверка best-effort: любой сбой → `false` (уведомление идёт как раньше) + WARN в лог. Догон `backfillReminders` флаг НЕ проверяет (вне рамок v1: он обрабатывает записи, созданные до включения модуля).
+Как это работает (спека §4.3): в YClients всегда `send_sms:false`; клиенту пишет наш модуль уведомлений по вебхукам. Флаг «не уведомлять» = строка `journal_record_prefs(notify_client=false)`. Для существующей записи воркер пишет строку ДО `PUT` (вебхук приходит после). Для новой записи id неизвестен до ответа `POST /records`, а вебхук `create` может опередить нашу запись строки — поэтому `enroll.js` при отсутствии строки смотрит `data.api_id` = числовой id пакета (защита от чужого api_id — по `yclients_record_id` пакета) → `journal_outbox.steps[create].params.notifyClient`. `false` → новые job'ы ложатся `skipped` с причиной `journal_opt_out`, а уже стоящие `pending` этой записи гасятся (флаг мог быть поставлен после того, как напоминание встало в очередь). Проверка best-effort: любой сбой → `false` (уведомление идёт как раньше) + WARN в лог. Догон `backfillReminders` флаг НЕ проверяет (вне рамок v1: он обрабатывает записи, созданные до включения модуля).
 
 - [ ] **Step 1: Падающие тесты модуля и миграции**
 
@@ -1483,21 +1487,21 @@ test('write upserts the flag with the package id, scoped by salon', async () => 
   expect(sql).toMatch(/ON CONFLICT \(salon_id,yclients_record_id\) DO UPDATE/);
   expect(args).toEqual([3, 500, false, 11]);
 });
-test('apiIdFor builds lp-outbox-<id>', () => expect(prefs.apiIdFor(15)).toBe('lp-outbox-15'));
+test('apiIdFor builds <числовой id пакета>', () => expect(prefs.apiIdFor(15)).toBe('15'));
 describe('optOutForEvent', () => {
   test('row wins', async () => {
     db.oneOrNone.mockResolvedValueOnce({ notify_client: false });
-    expect(await prefs.optOutForEvent(3, 500, 'lp-outbox-15')).toBe(true);
+    expect(await prefs.optOutForEvent(3, 500, '15')).toBe(true);
     expect(db.oneOrNone).toHaveBeenCalledTimes(1);
     db.oneOrNone.mockResolvedValueOnce({ notify_client: true });
-    expect(await prefs.optOutForEvent(3, 500, 'lp-outbox-15')).toBe(false);
+    expect(await prefs.optOutForEvent(3, 500, '15')).toBe(false);
   });
   test('no row: api_id → package of THIS salon → create step flag', async () => {
     db.oneOrNone.mockResolvedValueOnce(null).mockResolvedValueOnce({ steps: [{ kind: 'create', params: { notifyClient: false } }] });
-    expect(await prefs.optOutForEvent(3, 500, 'lp-outbox-15')).toBe(true);
+    expect(await prefs.optOutForEvent(3, 500, '15')).toBe(true);
     expect(db.oneOrNone.mock.calls[1][1]).toEqual([3, 15]);
     db.oneOrNone.mockResolvedValueOnce(null).mockResolvedValueOnce({ steps: [{ kind: 'create', params: {} }] });
-    expect(await prefs.optOutForEvent(3, 500, 'lp-outbox-15')).toBe(false);
+    expect(await prefs.optOutForEvent(3, 500, '15')).toBe(false);
   });
   test('foreign or missing api_id never reads the outbox', async () => {
     for (const apiId of ['', null, 'site-15', 'lp-outbox-', 'lp-outbox-1;DROP']) {
@@ -1540,13 +1544,13 @@ Expected: FAIL — `Cannot find module './services/journal/record-prefs'`, `JOUR
 // «Не уведомлять клиента» for a journal record (spec 2026-11-12 §4.3).
 // The worker writes the flag BEFORE PUT /record (the webhook comes after).
 // A new record has no id until POST /records answers and its create webhook
-// may come first: it carries api_id = lp-outbox-<package id>, and the flag is
+// may come first: it carries api_id = numeric package id, and the flag is
 // read from that package's create step. Best effort: a failure = notify.
 const { db } = require('../../db');
 const logger = require('../../logger').createLogger('JournalPrefs');
 
-const API_ID = /^lp-outbox-(\d{1,18})$/;
-const apiIdFor = outboxId => `lp-outbox-${Number(outboxId)}`;
+const API_ID = /^\d{1,15}$/;
+const apiIdFor = outboxId => String(Number(outboxId));
 
 const UPSERT_SQL = `INSERT INTO journal_record_prefs(salon_id,yclients_record_id,notify_client,outbox_id,updated_at)
   VALUES($1,$2,$3,$4,NOW())
@@ -1667,7 +1671,7 @@ describe('журнал: «не уведомлять клиента» (12.11.2026
       if (/FROM journal_outbox/.test(sql)) { expect(p).toEqual([1, 77]); return { steps: [{ kind: 'create', params: { notifyClient: false } }] }; }
       return undefined;
     });
-    await enroll.handleRecordEvent(salon, payload({ api_id: 'lp-outbox-77' }), NOW);
+    await enroll.handleRecordEvent(salon, payload({ api_id: '77' }), NOW);
     expect(inserts()[0][9]).toBe('skipped');
     expect(inserts()[0][13]).toBe('journal_opt_out');
   });
@@ -1701,7 +1705,7 @@ Expected: FAIL — нет записи `journal_record_prefs`, `notifyClient` un
 В `runStep`, ветка `create`: после строки `ctx.recordId = recordId;` вставить:
 ```js
     // «Не уведомлять» for the new record; the create webhook may come first —
-    // enroll.js then finds the flag through api_id (lp-outbox-<id>).
+    // enroll.js then finds the flag through api_id (<числовой id пакета>).
     if (typeof p.notifyClient === 'boolean') await prefs.write(salonId, recordId, p.notifyClient, ctx.outboxId);
 ```
 
@@ -1737,7 +1741,7 @@ Expected: FAIL — нет записи `journal_record_prefs`, `notifyClient` un
 
 `backend/services/notifications/events.js`, в `recordSnapshot` после строки `shortLink: d.short_link || '',` добавить:
 ```js
-    // Journal packages send api_id = lp-outbox-<id> (journal «не уведомлять», 12.11.2026).
+    // Journal packages send api_id = <числовой id пакета> (journal «не уведомлять», 12.11.2026).
     apiId: typeof d.api_id === 'string' ? d.api_id : '',
 ```
 
@@ -4229,7 +4233,7 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
    - `SELECT status, steps FROM journal_outbox WHERE salon_id=1 ORDER BY id DESC LIMIT 1` — `done`, шаг `create` с `params.notifyClient=false`;
    - `SELECT * FROM journal_record_prefs WHERE salon_id=1 ORDER BY updated_at DESC LIMIT 1` — `notify_client=false`;
    - `SELECT status, decision_reason, trigger_type FROM notification_jobs WHERE yclients_record_id=<id> ORDER BY id` — все `skipped`, `journal_opt_out`;
-   - в `webhook_logs` вебхук `create` этой записи несёт `data.api_id = 'lp-outbox-<id пакета>'`.
+   - в `webhook_logs` вебхук `create` этой записи несёт `data.api_id = '<id пакета>'` (числом).
 3. Открыть карточку: телефон, «Копировать». Изменить комментарий, цвет (любой из палитры), поставить метку, длительность +15 мин, технический перерыв 10 мин; «Сохранить изменения» → «Отправить в YClients». Сверить запись в YClients `GET /record/{cid}/{id}` (через `node -e` с `services/journal/yclients.getRecord`): `comment`, `custom_color` (записать, в каком виде вернулся: с `#` или без), `record_labels`, `seance_length`, `technical_break_duration`.
 4. Перенести эту же запись перетаскиванием на +1 час (подтвердить) → отправить → снова `GET /record`: цвет, метки и перерыв СОХРАНИЛИСЬ (проверка `recordExtras`, задача 3b). Если YClients их стёр или вернул 4xx на `record_labels` из чисел — записать это как дефект, формат правит задача 3b.
 5. Снять «Не уведомлять» → сохранить → отправить: строка `journal_record_prefs.notify_client=true`; следующий вебхук этой записи ставит job'ы как обычно.
@@ -4253,4 +4257,4 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
    - §7 проверка — jest во всех задачах, `journal-ui` на всех файлах (T1), `scripts/journal-ui-e2e.js` (T14), живой прогон — раздел выше. ✔
    - Не покрыто: `backfillReminders` флаг «не уведомлять» не смотрит (обоснование в T5); `client.is_new` и `success_visits_count` в данных дева не проверены живьём — если YClients их не присылает, значок ✦ просто не появится, а панель клиента посчитает визиты по `records`.
 2. **Скан заглушек.** Просмотрены все шаги: в каждом шаге с кодом — сам код; «TBD», «аналогично», «добавить обработку ошибок» не используются; команды запуска и ожидаемый результат указаны в каждом шаге «Запустить». ✔
-3. **Согласованность имён.** Сервер: `edit.{comment, seanceLength, client, customColor, labelIds, technicalBreak, notifyClient}` (T3b) = тела сессий фронта (T11 `edit.seanceLength`, T12 `jrCardEdit` ключи) = параметры шага в воркере (T5 `p.notifyClient`). Наложение `patch.{comment, client, custom_color, record_labels, technical_break_duration, notify_client, deleted}` (T3c, T4) = поля, читаемые `normalizeRecord` (T2) и `detail` (`r.notify_client`, T5). `index.availability` draft `durationOverride`/`technicalBreak` (T3a) = вызовы в `record-edit.patch` (T3b) и `sessions.validate` (T3c). `mutate(salonId, userId, draft, opts)` / `prepare(salon, draft, opts)` с `opts.apiId` (T4) = вызов воркера `{ apiId: 'lp-outbox-<id>' }` (T4) = `record-prefs.API_ID` (T5). Фронт: `jrColumnHtml`, `jrBounds`, `jrHourLabels`, `jrBindGrid`, `jrOccupied`, `JR_HEX` (T9) используются в T10, T11, T12; `JR_MOBILE_MAX`, `jrIsMobile`, `journal.week`, `journal.view` (T10) — в T11; `jrClientPanel(record, creating, editable)`, `jrTools(record)`, `#jrClientName` (T12) — в T13. Ответы `GET /week` (`staff`, `days[].records/workRanges`), `GET /month` (`days[].density`), `/records/:id/history` (`events[].author/title/changes/error`), `/clients/summary` (`visits`, `bonusBalance`, `abonements`, `lastVisits`) совпадают в серверных задачах и фронтовых тестах. ✔
+3. **Согласованность имён.** Сервер: `edit.{comment, seanceLength, client, customColor, labelIds, technicalBreak, notifyClient}` (T3b) = тела сессий фронта (T11 `edit.seanceLength`, T12 `jrCardEdit` ключи) = параметры шага в воркере (T5 `p.notifyClient`). Наложение `patch.{comment, client, custom_color, record_labels, technical_break_duration, notify_client, deleted}` (T3c, T4) = поля, читаемые `normalizeRecord` (T2) и `detail` (`r.notify_client`, T5). `index.availability` draft `durationOverride`/`technicalBreak` (T3a) = вызовы в `record-edit.patch` (T3b) и `sessions.validate` (T3c). `mutate(salonId, userId, draft, opts)` / `prepare(salon, draft, opts)` с `opts.apiId` (T4) = вызов воркера `{ apiId: prefs.apiIdFor(<id>) } (числовой id пакета, поправка 13.11.2026)` (T4) = `record-prefs.API_ID` (T5). Фронт: `jrColumnHtml`, `jrBounds`, `jrHourLabels`, `jrBindGrid`, `jrOccupied`, `JR_HEX` (T9) используются в T10, T11, T12; `JR_MOBILE_MAX`, `jrIsMobile`, `journal.week`, `journal.view` (T10) — в T11; `jrClientPanel(record, creating, editable)`, `jrTools(record)`, `#jrClientName` (T12) — в T13. Ответы `GET /week` (`staff`, `days[].records/workRanges`), `GET /month` (`days[].density`), `/records/:id/history` (`events[].author/title/changes/error`), `/clients/summary` (`visits`, `bonusBalance`, `abonements`, `lastVisits`) совпадают в серверных задачах и фронтовых тестах. ✔
