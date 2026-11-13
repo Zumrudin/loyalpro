@@ -1138,3 +1138,76 @@ test('phone: no drag handle and no drag start; a background render waits for the
   d.context.jrRender();
   expect(d.get('jrGrid').innerHTML).toBe('kept');
 });
+// ---- Drag review fixes (13.11.2026) ----
+function dragDom(h) {
+  const on = { doc: {}, win: {} };
+  const add = box => jest.fn((type, fn) => { (box[type] = box[type] || []).push(fn); });
+  const remove = box => jest.fn((type, fn) => { box[type] = (box[type] || []).filter(x => x !== fn); });
+  Object.assign(h.context.document, { addEventListener: add(on.doc), removeEventListener: remove(on.doc) });
+  h.context.window = { addEventListener: add(on.win), removeEventListener: remove(on.win) };
+  const fire = (box, type, ev) => (box[type] || []).slice().forEach(fn => fn(ev));
+  return { on, fire };
+}
+const dragEl = (record, date, draggable = true) => ({ dataset: { record: String(record) }, style: {},
+  classList: { contains: c => draggable && c === 'jr-draggable', add: jest.fn(), remove: jest.fn() },
+  closest: () => ({ dataset: { date } }) });
+test('drag review: week «continuation» with the same id never starts a drag; non-draggable blocks are ignored', () => {
+  const h = dragHarness(); dragDom(h);
+  h.run(`journal.view='week'; journal.week = {staff:{id:1,name:'Юлия'},days:[
+    {date:'2030-04-01',workRanges:[{start:540,end:1440}],records:[{id:8,staffId:1,date:'2030-04-01',time:'22:00',duration:240,clientName:'Анна',attendance:0,services:[]}]},
+    {date:'2030-04-02',workRanges:[{start:0,end:1080}],records:[{id:8,staffId:1,date:'2030-04-02',time:'00:00',duration:120,continued:true,clientName:'Анна',attendance:0,services:[]}]}]}`);
+  expect(h.context.jrDragStart({ button: 0, clientX: 0, clientY: 0 }, 8, 'move', '2030-04-02')).toBe(false);
+  expect(h.context.jrDragStart({ button: 0, clientX: 0, clientY: 0 }, 8, 'move', '2030-04-01')).toBe(true);
+  h.run('journal.drag = null');
+  h.context.jrDragBegin(dragEl(8, '2030-04-02', false), { button: 0, clientX: 0, clientY: 0, target: {} });
+  expect(h.run('journal.drag')).toBeFalsy();
+  h.context.jrDragBegin(dragEl(8, '2030-04-02', true), { button: 0, clientX: 0, clientY: 0, target: {} });
+  expect(h.run('journal.drag')).toBeFalsy();
+  h.context.jrDragBegin(dragEl(8, '2030-04-01', true), { button: 0, clientX: 0, clientY: 0, target: {} });
+  expect(h.run('journal.drag.record.continued')).toBeFalsy();
+});
+test('drag review: lost pointerup — blur, Escape or a move without buttons cancels and restores the block', () => {
+  for (const lose of ['blur', 'escape', 'buttons']) {
+    const h = dragHarness(); const { on, fire } = dragDom(h);
+    h.context.document.elementFromPoint = columnAt(1, '2030-04-01');
+    const el = dragEl(8, '2030-04-01');
+    h.context.jrDragBegin(el, { button: 0, clientX: 100, clientY: 100, target: {} });
+    fire(on.doc, 'pointermove', { clientX: 100, clientY: 160, buttons: 1 });
+    expect(el.style.pointerEvents).toBe('none');
+    if (lose === 'blur') fire(on.win, 'blur', {});
+    else if (lose === 'escape') fire(on.doc, 'keydown', { key: 'Escape' });
+    else fire(on.doc, 'pointermove', { clientX: 100, clientY: 170, buttons: 0 });
+    expect({ lose, drag: h.run('journal.drag'), pe: el.style.pointerEvents, tr: el.style.transform }).toEqual({ lose, drag: null, pe: '', tr: '' });
+    expect(h.context.jrRender).toHaveBeenCalled();
+    expect([...Object.values(on.doc), ...Object.values(on.win)].every(list => list.length === 0)).toBe(true);
+    fire(on.doc, 'pointerup', { clientX: 100, clientY: 200 });
+    expect(h.context.confirm).not.toHaveBeenCalled();
+  }
+});
+test('drag review: a new drag removes the listeners of an unfinished one', () => {
+  const h = dragHarness(); const { on } = dragDom(h);
+  h.context.jrDragBegin(dragEl(8, '2030-04-01'), { button: 0, clientX: 0, clientY: 0, target: {} });
+  h.context.jrDragBegin(dragEl(8, '2030-04-01'), { button: 0, clientX: 0, clientY: 0, target: {} });
+  expect(on.doc.pointerup.length).toBe(1);
+  expect(on.win.blur.length).toBe(1);
+});
+test('drag review: jrDragAllowed follows the card rule; resize of a visit without length starts from 15', async () => {
+  const h = dragHarness();
+  const base = { id: 1, time: '10:00', attendance: 0 };
+  expect(h.context.jrDragAllowed({ ...base, attendance: 2 })).toBe(true);
+  expect(h.context.jrDragAllowed({ ...base, time: '' })).toBe(false);
+  h.run(`journal.data.records[0].duration = 0`);
+  h.context.jrDragStart({ button: 0, clientX: 100, clientY: 100 }, 8, 'resize');
+  expect(await h.context.jrDragEnd({ clientX: 100, clientY: 100 + 15 * 1.6 })).toBe(true);
+  expect(h.context.confirm).toHaveBeenCalledWith('Длительность 15 → 30 мин?');
+});
+test('drag review: click suppression is armed after the confirmation, not before it', async () => {
+  const h = dragHarness(); h.context.document.elementFromPoint = columnAt(1, '2030-04-01');
+  let armedAtConfirm = null;
+  h.context.confirm = jest.fn(() => { armedAtConfirm = h.run('journal.suppressClickUntil || 0'); return false; });
+  h.context.jrDragStart({ button: 0, clientX: 100, clientY: 100 }, 8, 'move');
+  const before = Date.now();
+  await h.context.jrDragEnd({ clientX: 100, clientY: 100 + 60 * 1.6 });
+  expect(armedAtConfirm).toBe(0);
+  expect(h.run('journal.suppressClickUntil')).toBeGreaterThanOrEqual(before + 400);
+});

@@ -209,13 +209,20 @@ if (typeof document !== 'undefined' && typeof document.addEventListener === 'fun
 // ---- Drag-and-drop: move and resize (spec 2026-11-12 §3.3) ----
 const JR_DRAG_STEP = 5, JR_DRAG_THRESHOLD = 4;
 const jrSnap = minute => Math.round(minute / JR_DRAG_STEP) * JR_DRAG_STEP;
-// Same locks as the card: no continuation, paid, arrived/no-show, package on its way or failed.
+// The card's rule (jrCanEdit, journal-card.js — loaded before any render), plus:
+// a «continuation» block is only a picture of the visit, never dragged itself.
 function jrDragAllowed(r) {
-  return !!r && !r.continued && !r.deleted && !r.paid && !jrSyncing(r) && r.sync?.status !== 'failed'
-    && r.attendance !== 1 && r.attendance !== -1 && /^\d\d:\d\d$/.test(r.time || '');
+  return !!r && !r.continued && jrCanEdit(r) && /^\d\d:\d\d$/.test(r.time || '');
 }
-function jrDragRecords() {
-  return journal.view === 'week' && journal.week ? journal.week.days.flatMap(d => d.records) : (journal.data?.records || []);
+// Visits of one column's date: in the week a continuation on the next day has
+// the SAME id as the original, so the id alone picks the wrong block.
+function jrDragRecords(date) {
+  if (journal.view === 'week' && journal.week) {
+    const days = date ? journal.week.days.filter(d => d.date === date) : journal.week.days;
+    return days.flatMap(d => d.records);
+  }
+  const records = journal.data?.records || [];
+  return date ? records.filter(r => !r.date || r.date === date) : records;
 }
 // Staff (with shift) and the visits of the column the block is dropped on.
 function jrColumnContext(staffId, date) {
@@ -236,17 +243,19 @@ function jrDropCheck({ record, staff, date, minute, duration, records, now = Dat
     && minute < jrMinutes(r.time) + jrOccupied(r) && minute + occupied > jrMinutes(r.time));
   return clash ? { ok: false, reason: 'Время занято другой записью.' } : { ok: true };
 }
-function jrDragStart(ev, recordId, mode) {
+function jrDragStart(ev, recordId, mode, date) {
   if (ev.button !== undefined && ev.button !== 0) return false;
-  const record = jrDragRecords().find(r => r.id === recordId);
+  const record = jrDragRecords(date).find(r => r.id === recordId);
   if (!jrDragAllowed(record)) return false;
   journal.drag = { record, mode, x: ev.clientX, y: ev.clientY, moved: false, el: null };
   return true;
 }
+// A visit without a stored length is drawn as 15 minutes (jrOccupied).
+const jrDragLength = r => (r.duration > 0 ? r.duration : 15);
 function jrDragTarget(ev) {
   const d = journal.drag, r = d.record;
   const delta = (ev.clientY - d.y) / JR_PX_PER_MIN;
-  if (d.mode === 'resize') return { kind: 'resize', duration: Math.min(720, Math.max(5, jrSnap(r.duration + delta))) };
+  if (d.mode === 'resize') return { kind: 'resize', duration: Math.min(720, Math.max(5, jrSnap(jrDragLength(r) + delta))) };
   const el = typeof document.elementFromPoint === 'function' ? document.elementFromPoint(ev.clientX, ev.clientY) : null;
   const col = el && typeof el.closest === 'function' ? el.closest('.jr-column') : null;
   if (!col?.dataset?.date) return null;
@@ -266,27 +275,40 @@ function jrDragMove(ev) {
   }
   return target;
 }
-function jrDragCancel() { journal.drag = null; jrRender(); }
+function jrDragRestore(el) {
+  if (!el?.style) return;
+  el.style.pointerEvents = ''; el.style.transform = ''; el.style.height = '';
+  el.classList?.remove('jr-visit-dragging');
+}
+function jrDragCancel() {
+  const d = journal.drag;
+  journal.drag = null;
+  jrDragRestore(d?.el);
+  jrRender();
+}
 async function jrDragEnd(ev) {
   const d = journal.drag;
   if (!d) return false;
   const moved = d.moved || Math.abs(ev.clientX - d.x) + Math.abs(ev.clientY - d.y) >= JR_DRAG_THRESHOLD;
   const target = moved ? jrDragTarget(ev) : null;
   journal.drag = null;
-  if (d.el?.style) { d.el.style.pointerEvents = ''; d.el.style.transform = ''; d.el.classList?.remove('jr-visit-dragging'); }
+  jrDragRestore(d.el);
   if (!moved) return false;                       // a plain click: the click handler opens the card
-  journal.suppressClickUntil = Date.now() + 400;
-  const r = d.record;
-  const back = () => { jrRender(); return false; };  // the block returns to its place
+  // The click that ends a drag must not open the card. Re-armed after the
+  // confirmation too: thinking over the question takes longer than 400 ms.
+  const suppress = () => { journal.suppressClickUntil = Date.now() + 400; };
+  const r = d.record, length = jrDragLength(r);
+  const back = () => { suppress(); jrRender(); return false; };  // the block returns to its place
   if (!target) return back();
   if (target.kind === 'resize') {
-    if (target.duration === r.duration) return back();
+    if (target.duration === length) return back();
     const ctx = jrColumnContext(r.staffId, r.date);
     // A visit already under way may be extended: no «past» check for resize.
     const check = ctx ? jrDropCheck({ record: r, staff: ctx.staff, date: r.date, minute: jrMinutes(r.time), duration: target.duration, records: ctx.records, now: 0 })
       : { ok: false, reason: 'Специалист не найден в сетке.' };
     if (!check.ok) { notify(check.reason, 'err'); return back(); }
-    if (!confirm(`Длительность ${r.duration} → ${target.duration} мин?`)) return back();
+    if (!confirm(`Длительность ${length} → ${target.duration} мин?`)) return back();
+    suppress();
     return jrDragSave({ sessionId: crypto.randomUUID(), recordId: r.id, edit: { seanceLength: target.duration } });
   }
   const ctx = jrColumnContext(target.staffId, target.date);
@@ -296,6 +318,7 @@ async function jrDragEnd(ev) {
   if (!check.ok) { notify(check.reason, 'err'); return back(); }
   const day = target.date === r.date ? '' : ` ${target.date.slice(8, 10)}.${target.date.slice(5, 7)}`;
   if (!confirm(`Перенести запись ${r.clientName} на${day} ${time} к специалисту ${ctx.staff.name || ''}?`)) return back();
+  suppress();
   return jrDragSave({ sessionId: crypto.randomUUID(), recordId: r.id, move: { date: target.date, time, staffId: target.staffId } });
 }
 // Same session endpoint as the forms; saved locally, sent by «Отправить в YClients».
@@ -309,23 +332,42 @@ async function jrDragSave(body) {
     notify(e.message, 'err');
     jrRender();
     return false;
+  } finally {
+    journal.suppressClickUntil = Date.now() + 400;
   }
 }
 function jrDragBegin(el, ev) {
   if (jrIsMobile()) return;      // phone: the finger scrolls; moving goes through the card
+  // Only blocks the grid marked as draggable (not a continuation, not locked).
+  if (!el?.classList?.contains?.('jr-draggable')) return;
+  // A drag whose pointerup was lost (Alt-Tab, system dialog) is closed first.
+  if (typeof journal.dragOff === 'function') { journal.dragOff(); if (journal.drag) jrDragCancel(); }
   const mode = ev.target?.dataset?.resize ? 'resize' : 'move';
-  if (!jrDragStart(ev, Number(el.dataset.record), mode)) return;
+  const date = typeof el.closest === 'function' ? el.closest('.jr-column')?.dataset?.date : undefined;
+  if (!jrDragStart(ev, Number(el.dataset.record), mode, date)) return;
   journal.drag.el = el;
   ev.preventDefault?.();
-  const move = e => jrDragMove(e);
+  const win = typeof window !== 'undefined' && typeof window.addEventListener === 'function' ? window : null;
+  const move = e => {
+    // Buttons released outside the page: pointerup never came.
+    if (journal.drag?.moved && e.buttons === 0) return cancel();
+    jrDragMove(e);
+  };
   const up = e => { off(); jrDragEnd(e); };
   const cancel = () => { off(); jrDragCancel(); };
+  const key = e => { if (e.key === 'Escape') cancel(); };
   const off = () => {
     document.removeEventListener('pointermove', move);
     document.removeEventListener('pointerup', up);
     document.removeEventListener('pointercancel', cancel);
+    document.removeEventListener('keydown', key);
+    win?.removeEventListener('blur', cancel);
+    if (journal.dragOff === off) journal.dragOff = null;
   };
+  journal.dragOff = off;
   document.addEventListener('pointermove', move);
   document.addEventListener('pointerup', up);
   document.addEventListener('pointercancel', cancel);
+  document.addEventListener('keydown', key);
+  win?.addEventListener('blur', cancel);
 }
