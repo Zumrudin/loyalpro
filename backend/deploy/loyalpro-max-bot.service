@@ -1,0 +1,27 @@
+[Unit]
+Description=LoyalPro official MAX loyalty bot
+After=network-online.target loyalpro-selectel-tunnel.service
+Wants=network-online.target loyalpro-selectel-tunnel.service
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=loyalpro
+Group=loyalpro
+WorkingDirectory=/srv/loyalpro-max-bot/app
+EnvironmentFile=/srv/loyalpro-max-bot/bot.env
+Environment=NODE_ENV=production
+Environment=TZ=Europe/Moscow
+Environment=NODE_EXTRA_CA_CERTS=/srv/loyalpro-max-bot/russian-root-ca.pem
+ExecStart=/srv/loyalpro-max-bot/node /srv/loyalpro-max-bot/app/max-loyalty-server.js
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/srv/loyalpro-max-bot/app/logs
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

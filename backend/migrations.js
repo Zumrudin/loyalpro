@@ -3,6 +3,7 @@
 // ============================================================
 
 async function runMigrations(client) {
+  await client.query(MAX_LOYALTY_DDL);
   // Journal writes fail closed until this additive table is available.
   await client.query(JOURNAL_DDL);
   // Expand only once; no data rewrite, existing actions remain valid.
@@ -2845,4 +2846,40 @@ CREATE INDEX IF NOT EXISTS finance_ops_yc_op ON finance_operations(salon_id,ycli
 CREATE UNIQUE INDEX IF NOT EXISTS finance_ops_opening_uq ON finance_operations(salon_id,client_id) WHERE kind='bonus_opening';
 CREATE INDEX IF NOT EXISTS finance_ops_bonus_client ON finance_operations(client_id,status) WHERE method='bonus';
 `;
-module.exports = { runMigrations, FINANCE_OPS_DDL, EDOCS_BOARD_DDL, JOURNAL_DDL, SERVICE_CATALOG_DDL, JOURNAL_FINANCE_DDL, JOURNAL_LOCAL_DDL, JOURNAL_PREFS_DDL, JOURNAL_HISTORY_INDEX_DDL };
+// Additive only. Disabled bot never reads these tables. Rollback: disable the
+// bot, retain the effect journal (dropping it could permit duplicate bonuses).
+const MAX_LOYALTY_DDL = `
+CREATE TABLE IF NOT EXISTS max_loyalty_sessions (
+ salon_id INTEGER NOT NULL REFERENCES salons(id) ON DELETE CASCADE,
+ user_id BIGINT NOT NULL,
+ state JSONB NOT NULL DEFAULT '{}',
+ updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+ PRIMARY KEY(salon_id,user_id)
+);
+CREATE TABLE IF NOT EXISTS max_loyalty_events (
+ id BIGSERIAL PRIMARY KEY,
+ salon_id INTEGER NOT NULL REFERENCES salons(id) ON DELETE CASCADE,
+ event_key VARCHAR(64) NOT NULL,
+ user_id BIGINT NOT NULL,
+ payload JSONB,
+ reply JSONB,
+ status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','reply','done','failed')),
+ attempts INTEGER NOT NULL DEFAULT 0,
+ next_attempt_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+ created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+ updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+ UNIQUE(salon_id,event_key)
+);
+CREATE INDEX IF NOT EXISTS max_loyalty_events_pending ON max_loyalty_events(salon_id,id)
+ WHERE status IN ('pending','reply');
+CREATE INDEX IF NOT EXISTS max_loyalty_events_user ON max_loyalty_events(salon_id,user_id,id);
+CREATE TABLE IF NOT EXISTS max_loyalty_registrations (
+ salon_id INTEGER NOT NULL REFERENCES salons(id) ON DELETE CASCADE,
+ phone VARCHAR(16) NOT NULL,
+ state JSONB NOT NULL DEFAULT '{}',
+ synced BOOLEAN NOT NULL DEFAULT FALSE,
+ updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+ PRIMARY KEY(salon_id,phone)
+);
+`;
+module.exports = { runMigrations, MAX_LOYALTY_DDL, FINANCE_OPS_DDL, EDOCS_BOARD_DDL, JOURNAL_DDL, SERVICE_CATALOG_DDL, JOURNAL_FINANCE_DDL, JOURNAL_LOCAL_DDL, JOURNAL_PREFS_DDL, JOURNAL_HISTORY_INDEX_DDL };

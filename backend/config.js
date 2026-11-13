@@ -10,6 +10,15 @@ module.exports = {
   // Server
   PORT: process.env.PORT || 3001,
 
+  // Official MAX loyalty bot. Separate from the clinic's MAX user-account gateway.
+  // One server-configured bot/salon per process; no tenant ids accepted from updates.
+  MAX_LOYALTY_BOT: {
+    enabled: process.env.MAX_LOYALTY_BOT_ENABLED === 'true',
+    salonId: Number(process.env.MAX_LOYALTY_BOT_SALON_ID || 0),
+    token: process.env.MAX_LOYALTY_BOT_TOKEN || '',
+    webhookSecret: process.env.MAX_LOYALTY_BOT_WEBHOOK_SECRET || '',
+  },
+
   // Database
   DATABASE_URL: process.env.DATABASE_URL,
   DB_SSL: process.env.DB_SSL === 'true' ? { rejectUnauthorized: false } : false,

@@ -69,6 +69,15 @@ Mobile clients use a separate auth path: `routes/mobile-auth.js` + `routes/mobil
 ### CORS
 Managed in `server.js`. The whitelist is set via `ALLOWED_ORIGINS` env var (comma-separated) or falls back to hardcoded defaults. To add an origin, set `ALLOWED_ORIGINS` in the environment — do not edit the hardcoded list unless adding a permanent default.
 
+### MAX-бот лояльности — только с дев-стенда (с 13.11.2026)
+`loyalpro-max-bot` и `loyalpro-max-webhook-tunnel` — enabled systemd на деве,
+Restart=always. Код `/srv/loyalpro-max-bot/app`; отдельная точка запуска
+`backend/max-loyalty-server.js`, в основном backend worker не запускается.
+База Selectel через туннель 5441; production nginx принимает прежний webhook
+и передаёт его через обратный SSH-туннель 3104 на дев. На production сервис
+отключён и защищён маркером `MOVED_TO_DEV`. Не переносить ботов на production.
+Подробности: `docs/2026-11-13-max-loyalty-bot.md`.
+
 ### Telegram-боты — только с дев-стенда (с 18.10.2026)
 Канал прод (РФ) → `api.telegram.org` теряет пакеты (ping 10 %, до 37 % TCP-соединений ждут повтора SYN; до YClients и Google — 0): ответ бота лояльности клиенту пропал на `ConnectTimeout`. Решение владельца — всё, что ходит в Bot API, выходит в интернет с дева (89.125.92.223, Финляндия).
 - Python-боты (отдельный репо `Zumrudin/loyalty-telegram-bot`): `@PERICLINIC_bot` (`mybot`) и поздравления с ДР (`birthday_bot`) — systemd на ДЕВЕ, `/root/bot_project`, логи `journalctl -u mybot|birthday_bot`. В юнитах `TZ=Europe/Moscow` обязателен: хост в UTC, а APScheduler (08:50) и «у кого ДР сегодня» считаются по локальной зоне. База бота `n8n_db` (пользователь `n8n_user`) с 04.11.2026 — отдельная БД в Postgres на Selectel рядом с `loyalpro`, с дева через `loyalpro-selectel-tunnel` (`127.0.0.1:5441`), бэкенд на Selectel ходит на `127.0.0.1:5432`; дампится тем же `loyalpro-backup` (`n8n_db.dump`). Прежняя база на Beget потеряна вместе с регистрациями (`clients_peri`): старые клиенты регистрируются в боте заново, и приветственные 500 бонусов начисляются ТОЛЬКО на карту, созданную в этот момент (`bot.py`, ветка `already_had_card`) — иначе каждая повторная регистрация дарила бы ещё 500. На проде юниты отключены и заперты drop-in'ом `ConditionPathExists=!/root/bot_project/MOVED_TO_DEV`: второй поллер того же токена = 409, второй `birthday_bot` = двойное начисление бонусов. Админка бота `peri_admin` осталась на проде.

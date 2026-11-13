@@ -1,0 +1,18 @@
+[Unit]
+Description=MAX webhook relay from production ingress to dev bot
+After=network-online.target loyalpro-max-bot.service
+Wants=network-online.target loyalpro-max-bot.service
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=root
+Environment=AUTOSSH_GATETIME=0
+ExecStart=/usr/bin/autossh -M 0 -N -i /root/.ssh/selectel-16ca3b4284a3 -o StrictHostKeyChecking=yes -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=3 -R 127.0.0.1:3104:127.0.0.1:3104 root@176.53.249.141
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
