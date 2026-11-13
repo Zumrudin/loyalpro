@@ -9,6 +9,7 @@ const catalog = require('../services/stock/catalog-sync');
 const documents = require('../services/stock/documents');
 const sales = require('../services/stock/sales');
 const { StockError } = require('../services/stock/model');
+const { parseGoodsQuery, parseDocsQuery, parseTurnoverQuery } = require('../services/stock/query');
 const { getReference } = require('../services/journal/reference-cache');
 const { createLogger } = require('../logger');
 const logger = createLogger('StockAPI');
@@ -141,11 +142,19 @@ router.post('/categories/sync', requireRole('owner'), wrap('categories-sync', as
   res.json(await catalog.syncCategories(salon, { force: bodyOf(req).force === true }));
 }));
 router.get('/goods', wrap('goods', async (req, res) => {
-  const q = req.query || {};
-  res.json(await store.listGoods(req.user.salonId, {
-    search: typeof q.search === 'string' ? q.search.slice(0, 100) : '',
-    source: typeof q.source === 'string' ? q.source : null,
-    active: q.active === 'true' ? true : q.active === 'false' ? false : null }));
+  res.json({ goods: await store.listGoodsWithBalances(req.user.salonId, parseGoodsQuery(req.query)) });
+}));
+router.get('/goods/:id', wrap('good-card', async (req, res) => {
+  const gid = id(req); if (!gid) return bad(res, ['Некорректный id.']);
+  const card = await store.goodCard(req.user.salonId, gid);
+  if (!card) return res.status(404).json({ error: 'Товар не найден.' });
+  res.json(card);
+}));
+router.get('/goods/:id/movements', wrap('good-movements', async (req, res) => {
+  const gid = id(req); if (!gid) return bad(res, ['Некорректный id.']);
+  if (!(await store.goodById(req.user.salonId, gid))) return res.status(404).json({ error: 'Товар не найден.' });
+  const { page, limit } = parseDocsQuery({ page: req.query && req.query.page, limit: req.query && req.query.limit });
+  res.json(await store.listMovementsByGood(req.user.salonId, gid, { page, limit }));
 }));
 router.post('/goods', wrap('good-create', async (req, res) => {
   const b = bodyOf(req);
@@ -174,6 +183,13 @@ router.get('/balances', wrap('balances', async (req, res) => {
     (q.only_negative !== '1' || Number(r.qty_base) < 0) &&
     (q.only_critical !== '1' || (r.critical_amount != null && Number(r.qty_base) <= Number(r.critical_amount) * (Number(r.unit_equals) || 1))));
   res.json(result);
+}));
+router.get('/documents', wrap('documents', async (req, res) => {
+  res.json(await store.listDocuments(req.user.salonId, parseDocsQuery(req.query)));
+}));
+router.get('/reports/turnover', wrap('turnover', async (req, res) => {
+  const rows = await store.turnover(req.user.salonId, parseTurnoverQuery(req.query));
+  res.json({ rows });
 }));
 router.post('/documents', wrap('document-create', async (req, res) => {
   res.status(201).json(await documents.create(req.user.salonId, req.user.userId, bodyOf(req)));

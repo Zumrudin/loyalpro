@@ -1,7 +1,7 @@
 'use strict';
 require('dotenv').config();
 const { db, pool } = require('../db');
-const { BALANCES_SQL } = require('../services/stock/store');
+const { BALANCES_SQL, DOCS_LIST_SQL, TURNOVER_SQL } = require('../services/stock/store');
 const { balanceCountsRow } = require('../services/stock/model');
 
 // Отдельная проверка предиката той же строки по id, без округления дат JS.
@@ -23,6 +23,18 @@ async function main() {
     await client.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY');
     const plan = await client.query(`EXPLAIN (ANALYZE, BUFFERS) ${BALANCES_SQL}`, [salonId]);
     console.log(plan.rows.map(r => r['QUERY PLAN']).join('\n'));
+    const today = new Date().toISOString().slice(0, 10);
+    const from30 = new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10);
+    const timed = async (label, sql, params) => {
+      const p = await client.query(`EXPLAIN (ANALYZE, BUFFERS) ${sql}`, params);
+      const lines = p.rows.map(r => r['QUERY PLAN']);
+      console.log(`\n── ${label} ──\n${lines.join('\n')}`);
+      console.log(`>>> ${label}: ${lines.find(l => /Execution Time/.test(l))}`);
+    };
+    await timed('BALANCES_SQL', BALANCES_SQL, [salonId]);
+    await timed('DOCS_LIST_SQL (30 дней, без фильтров)', DOCS_LIST_SQL, [salonId, null, null, null, from30, today, null, null, null, 50, 0]);
+    await timed('DOCS_LIST_SQL (все время, стр. 1)', DOCS_LIST_SQL, [salonId, null, null, null, null, null, null, null, null, 50, 0]);
+    await timed('TURNOVER_SQL (30 дней)', TURNOVER_SQL, [salonId, from30, today, null]);
     const { rows } = await client.query(`SELECT mv.id, mv.occurred_at, mv.recorded_at, mv.source, mv.deleted_at, d.status, op.taken_at
       FROM stock_movements mv JOIN stock_documents d ON d.id = mv.document_id AND d.salon_id = mv.salon_id
       LEFT JOIN stock_openings op ON op.salon_id = mv.salon_id AND op.good_row_id = mv.good_row_id AND op.storage_id = mv.storage_id

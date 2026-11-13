@@ -110,6 +110,9 @@ module.exports = { listStorages, storageById, upsertStorage, deactivateMissingSt
 // Правило счёта (§6.3 спеки, уточнено ревью задачи 4): локальные движения (loyalpro, inventory) считаются ВСЕГДА —
 // их нет в показании YClients по построению; зеркальные (webhook, reconcile) — только впервые увиденные ПОСЛЕ снимка
 // (recorded_at > taken_at); backfill и opening при наличии снимка не считаются. Та же логика — model.balanceCountsRow.
+// Предикат «движение входит в остаток» — ОДНО на остатки и оборотку (алиасы: mv — движение, op — снимок пары).
+const COUNTED_SQL = `(op.taken_at IS NULL OR mv.source IN ('loyalpro','inventory')
+         OR (mv.recorded_at > op.taken_at AND mv.source IN ('webhook','reconcile')))`;
 const BALANCES_SQL = `WITH op AS (SELECT good_row_id, storage_id, qty_base, taken_at FROM stock_openings WHERE salon_id = $1),
 mv AS (
   SELECT mv.good_row_id, mv.storage_id, SUM(mv.qty_base) AS moved
@@ -117,8 +120,7 @@ mv AS (
   JOIN stock_documents d ON d.id = mv.document_id AND d.salon_id = mv.salon_id AND d.status = 'posted'
   LEFT JOIN op ON op.good_row_id = mv.good_row_id AND op.storage_id = mv.storage_id
   WHERE mv.salon_id = $1 AND mv.deleted_at IS NULL
-    AND (op.taken_at IS NULL OR mv.source IN ('loyalpro','inventory')
-         OR (mv.recorded_at > op.taken_at AND mv.source IN ('webhook','reconcile')))
+    AND ${COUNTED_SQL}
   GROUP BY mv.good_row_id, mv.storage_id)
 SELECT g.id AS good_row_id, s.id AS storage_id, COALESCE(op.qty_base,0) + COALESCE(mv.moved,0) AS qty_base, op.taken_at
 FROM yclients_goods_catalog g
@@ -293,3 +295,147 @@ const PURCHASES_SQL = `SELECT d.id, d.doc_date, d.origin, d.status, d.total_cost
   ORDER BY d.doc_date DESC, d.id DESC LIMIT 200`;
 const listPurchasesByClient = (salonId, clientId) => db.any(PURCHASES_SQL, [salonId, clientId]);
 Object.assign(module.exports, { PURCHASES_SQL, listPurchasesByClient });
+
+// ═══ Задача 7: чтение — каталог с остатками, карточка товара, журнал документов, оборотка ═══
+const { fromBase } = require('./model');
+Object.assign(module.exports, { COUNTED_SQL });
+
+const goodInCategory = (g, category) => category == null || g.local_category === String(category) ||
+  (Array.isArray(g.category_path) && g.category_path.some(n => n && String(n.id) === String(category)));
+const qtyView = (qtyBase, unitEquals) => {
+  const f = fromBase(qtyBase, unitEquals);
+  return { sale_units: f.saleUnits, remainder_base: f.remainderBase };
+};
+const isCritical = (g, qtyBase) => Number(g.critical_amount) > 0 && Number(qtyBase) < Number(g.critical_amount) * (Number(g.unit_equals) || 1);
+
+async function listGoodsWithBalances(salonId, f = {}) {
+  const [goods, bal, storages] = await Promise.all([
+    listGoods(salonId, { search: f.search || '', source: f.source || null, active: f.active ?? null }),
+    balances(salonId, { storageId: f.storage ?? null }), listStorages(salonId)]);
+  const sTitle = new Map(storages.map(s => [String(s.id), s.title]));
+  const byGood = new Map();
+  for (const r of bal) {
+    const k = String(r.good_row_id);
+    if (!byGood.has(k)) byGood.set(k, []);
+    byGood.get(k).push(r);
+  }
+  const out = [];
+  for (const g of goods) {
+    if (!goodInCategory(g, f.category)) continue;
+    const rows = byGood.get(String(g.id)) || [];
+    if (f.storage != null && !rows.length) continue;
+    const balancesView = rows.map(r => ({ storage_id: r.storage_id, storage_title: sTitle.get(String(r.storage_id)) || null,
+      qty_base: r.qty_base, taken_at: r.taken_at, ...qtyView(r.qty_base, g.unit_equals), critical: isCritical(g, r.qty_base), negative: Number(r.qty_base) < 0 }));
+    if (f.onlyCritical && !balancesView.some(b => b.critical)) continue;
+    if (f.onlyNegative && !balancesView.some(b => b.negative)) continue;
+    out.push({ ...g, balances: balancesView });
+  }
+  return out;
+}
+
+const MOVEMENTS_BY_GOOD_SQL = `SELECT m.id, m.document_id, m.storage_id, s.title AS storage_title, m.qty, m.unit_type, m.qty_base,
+    m.cost_per_unit, m.discount, m.cost, m.record_id, m.source, m.occurred_at, m.deleted_at, m.comment,
+    d.kind, d.origin, d.status, d.doc_date, d.comment AS document_comment, count(*) OVER() AS total
+  FROM stock_movements m
+  JOIN stock_documents d ON d.id = m.document_id AND d.salon_id = m.salon_id
+  JOIN stock_storages s ON s.id = m.storage_id AND s.salon_id = m.salon_id
+  WHERE m.salon_id = $1 AND m.good_row_id = $2
+  ORDER BY m.occurred_at DESC, m.id DESC LIMIT $3 OFFSET $4`;
+async function listMovementsByGood(salonId, goodRowId, { page = 1, limit = 50 } = {}) {
+  const lim = Math.min(Math.max(Number(limit) || 50, 1), 200); const pg = Math.max(Number(page) || 1, 1);
+  const rows = await db.any(MOVEMENTS_BY_GOOD_SQL, [salonId, goodRowId, lim, (pg - 1) * lim]);
+  return { movements: rows.map(({ total, ...r }) => r), total: rows.length ? Number(rows[0].total) : 0, page: pg, limit: lim };
+}
+
+const RECEIPTS_BY_GOOD_SQL = `SELECT m.id, m.document_id, m.storage_id, s.title AS storage_title, m.qty, m.unit_type, m.qty_base,
+    m.cost_per_unit, m.cost, m.occurred_at, d.origin, d.status, d.supplier_id
+  FROM stock_movements m
+  JOIN stock_documents d ON d.id = m.document_id AND d.salon_id = m.salon_id
+  JOIN stock_storages s ON s.id = m.storage_id AND s.salon_id = m.salon_id
+  WHERE m.salon_id = $1 AND m.good_row_id = $2 AND d.kind = 'receipt' AND m.deleted_at IS NULL AND d.status = 'posted'
+  ORDER BY m.occurred_at DESC, m.id DESC LIMIT 100`;
+const listReceiptsByGood = (salonId, goodRowId) => db.any(RECEIPTS_BY_GOOD_SQL, [salonId, goodRowId]);
+
+const techCardsUsingGood = (salonId, ycGoodId) => ycGoodId == null ? [] : db.any(
+  `SELECT id, title FROM tech_cards WHERE salon_id = $1 AND items @> jsonb_build_array(jsonb_build_object('good_id', $2::bigint)) ORDER BY title LIMIT 100`,
+  [salonId, ycGoodId]);
+
+async function goodCard(salonId, id) {
+  const good = await goodById(salonId, id);
+  if (!good) return null;
+  const [bal, storages, openings, mv, receipts, techCards] = await Promise.all([
+    balances(salonId, { goodRowIds: [id] }), listStorages(salonId),
+    db.any('SELECT storage_id, qty_base, yc_qty_base, taken_at, source FROM stock_openings WHERE salon_id = $1 AND good_row_id = $2', [salonId, id]),
+    listMovementsByGood(salonId, id, { page: 1, limit: 50 }), listReceiptsByGood(salonId, id), techCardsUsingGood(salonId, good.yclients_good_id)]);
+  const sTitle = new Map(storages.map(s => [String(s.id), s.title]));
+  const view = r => ({ storage_id: r.storage_id, storage_title: sTitle.get(String(r.storage_id)) || null });
+  return {
+    good,
+    balances: bal.map(r => ({ ...view(r), qty_base: r.qty_base, taken_at: r.taken_at, ...qtyView(r.qty_base, good.unit_equals), critical: isCritical(good, r.qty_base), negative: Number(r.qty_base) < 0 })),
+    openings: openings.map(o => ({ ...view(o), qty_base: o.qty_base, yc_qty_base: o.yc_qty_base, taken_at: o.taken_at, source: o.source })),
+    movements: mv, receipts, techCards };
+}
+
+// Журнал документов обоих источников; total — window count до LIMIT. Количество строк — по движениям (у инвентаризации они появляются при проведении).
+// $1 салон, $2 вид, $3 статус, $4 источник, $5 с (дата), $6 по (дата), $7 клиент, $8 запись, $9 склад, $10 limit, $11 offset
+const DOCS_LIST_SQL = `WITH page AS (
+  SELECT d.id, d.kind, d.origin, d.status, d.doc_date, d.storage_id, d.to_storage_id, d.supplier_id, d.client_id, d.record_id,
+    d.total_cost, d.comment, d.cancel_reason, count(*) OVER() AS total
+  FROM stock_documents d
+  WHERE d.salon_id = $1
+    AND ($2::text IS NULL OR d.kind = $2) AND ($3::text IS NULL OR d.status = $3) AND ($4::text IS NULL OR d.origin = $4)
+    AND ($5::date IS NULL OR d.doc_date >= ($5::date)::timestamp AT TIME ZONE 'Europe/Moscow')
+    AND ($6::date IS NULL OR d.doc_date < (($6::date) + 1)::timestamp AT TIME ZONE 'Europe/Moscow')
+    AND ($7::int IS NULL OR d.client_id = $7) AND ($8::bigint IS NULL OR d.record_id = $8)
+    AND ($9::bigint IS NULL OR d.storage_id = $9 OR d.to_storage_id = $9)
+  ORDER BY d.doc_date DESC, d.id DESC LIMIT $10 OFFSET $11),
+lc AS (SELECT document_id, count(*) AS lines FROM stock_movements
+  WHERE salon_id = $1 AND deleted_at IS NULL AND document_id IN (SELECT id FROM page) GROUP BY document_id)
+SELECT page.*, COALESCE(lc.lines, 0)::int AS lines_count, s1.title AS storage_title, s2.title AS to_storage_title
+FROM page LEFT JOIN lc ON lc.document_id = page.id
+LEFT JOIN stock_storages s1 ON s1.id = page.storage_id AND s1.salon_id = $1
+LEFT JOIN stock_storages s2 ON s2.id = page.to_storage_id AND s2.salon_id = $1
+ORDER BY page.doc_date DESC, page.id DESC`;
+async function listDocuments(salonId, f = {}) {
+  const limit = f.limit || 50; const page = f.page || 1;
+  const rows = await db.any(DOCS_LIST_SQL, [salonId, f.kind ?? null, f.status ?? null, f.origin ?? null, f.from ?? null, f.to ?? null,
+    f.client ?? null, f.record ?? null, f.storage ?? null, limit, (page - 1) * limit]);
+  return { documents: rows.map(({ total, ...r }) => r), total: rows.length ? Number(rows[0].total) : 0, page, limit };
+}
+
+// Оборотка по товару × складу. $1 салон, $2 с, $3 по (даты, включительно, Москва), $4 склад|null.
+// начало = снимок + Σ засчитанных движений до $2 (правило COUNTED_SQL), приход/расход — по знаку за период, конец = начало + приход + расход.
+const TURNOVER_SQL = `WITH bounds AS (
+  SELECT ($2::date)::timestamp AT TIME ZONE 'Europe/Moscow' AS t_from, (($3::date) + 1)::timestamp AT TIME ZONE 'Europe/Moscow' AS t_to),
+op AS (SELECT good_row_id, storage_id, qty_base, taken_at FROM stock_openings WHERE salon_id = $1 AND ($4::bigint IS NULL OR storage_id = $4)),
+mv AS (
+  SELECT mv.good_row_id, mv.storage_id,
+    COALESCE(SUM(mv.qty_base) FILTER (WHERE mv.occurred_at < b.t_from), 0) AS before_qty,
+    COALESCE(SUM(mv.qty_base) FILTER (WHERE mv.occurred_at >= b.t_from AND mv.occurred_at < b.t_to AND mv.qty_base > 0), 0) AS inflow,
+    COALESCE(SUM(mv.qty_base) FILTER (WHERE mv.occurred_at >= b.t_from AND mv.occurred_at < b.t_to AND mv.qty_base < 0), 0) AS outflow
+  FROM stock_movements mv
+  CROSS JOIN bounds b
+  JOIN stock_documents d ON d.id = mv.document_id AND d.salon_id = mv.salon_id AND d.status = 'posted'
+  LEFT JOIN op ON op.good_row_id = mv.good_row_id AND op.storage_id = mv.storage_id
+  WHERE mv.salon_id = $1 AND mv.deleted_at IS NULL AND mv.occurred_at < b.t_to AND ($4::bigint IS NULL OR mv.storage_id = $4)
+    AND ${COUNTED_SQL}
+  GROUP BY mv.good_row_id, mv.storage_id),
+rows AS (
+  SELECT COALESCE(op.good_row_id, mv.good_row_id) AS good_row_id, COALESCE(op.storage_id, mv.storage_id) AS storage_id,
+    COALESCE(op.qty_base, 0) + COALESCE(mv.before_qty, 0) AS start_qty, COALESCE(mv.inflow, 0) AS inflow, COALESCE(mv.outflow, 0) AS outflow
+  FROM op FULL JOIN mv ON mv.good_row_id = op.good_row_id AND mv.storage_id = op.storage_id)
+SELECT r.good_row_id, g.yclients_good_id, g.title, g.unit, g.service_unit, g.unit_equals, g.category_path, g.local_category,
+  r.storage_id, s.title AS storage_title, r.start_qty, r.inflow, r.outflow, r.start_qty + r.inflow + r.outflow AS end_qty
+FROM rows r
+JOIN yclients_goods_catalog g ON g.id = r.good_row_id AND g.salon_id = $1
+JOIN stock_storages s ON s.id = r.storage_id AND s.salon_id = $1
+WHERE r.start_qty <> 0 OR r.inflow <> 0 OR r.outflow <> 0
+ORDER BY g.title, s.title`;
+async function turnover(salonId, { from, to, storage = null, category = null }) {
+  const rows = await db.any(TURNOVER_SQL, [salonId, from, to, storage]);
+  return rows.filter(r => goodInCategory(r, category)).map(r => ({ ...r,
+    start: qtyView(r.start_qty, r.unit_equals), inflow_view: qtyView(r.inflow, r.unit_equals),
+    outflow_view: qtyView(r.outflow, r.unit_equals), end: qtyView(r.end_qty, r.unit_equals) }));
+}
+Object.assign(module.exports, { listGoodsWithBalances, goodCard, listMovementsByGood, listReceiptsByGood, techCardsUsingGood,
+  MOVEMENTS_BY_GOOD_SQL, RECEIPTS_BY_GOOD_SQL, DOCS_LIST_SQL, listDocuments, TURNOVER_SQL, turnover });
