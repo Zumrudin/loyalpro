@@ -94,9 +94,14 @@ describe('handleGoodEvent', () => {
     expect(store.setGoodActiveByYcId).toHaveBeenCalledWith(1, 77, false);
     expect(econStore.upsertCatalogGood).not.toHaveBeenCalled();
   });
-  it('update → апсерт каталога', async () => {
-    await cs.handleGoodEvent({ id: 1 }, { resource: 'good', status: 'update', data: { id: 77, title: 'X', cost: '10' } });
+  it('update с полной карточкой → апсерт каталога', async () => {
+    await cs.handleGoodEvent({ id: 1 }, { resource: 'good', status: 'update', data: { id: 77, title: 'X', cost: '10', unit_id: 216760 } });
     expect(econStore.upsertCatalogGood).toHaveBeenCalledWith(1, expect.objectContaining({ good_id: 77, sale_price: 10 }));
+  });
+  it('update с частичным payload (без title/unit_id) пропускается — иначе UPSERT обнулил бы поля', async () => {
+    const r = await cs.handleGoodEvent({ id: 1 }, { resource: 'good', status: 'update', data: { id: 77, cost: '10' } });
+    expect(r).toEqual({ handled: false, partial: true });
+    expect(econStore.upsertCatalogGood).not.toHaveBeenCalled();
   });
   it('чужой ресурс игнорируется', async () => {
     const r = await cs.handleGoodEvent({ id: 1 }, { resource: 'record', data: { id: 1 } });
