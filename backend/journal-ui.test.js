@@ -1022,3 +1022,119 @@ test('phone with no staff keeps the chips strip hidden', () => {
   h.run(`journal.data = {date:'2030-04-01',labels:[],staff:[],records:[]}; jrRender()`);
   expect(h.get('jrStaffChips').hidden).toBe(true);
 });
+// ---- Drag-and-drop (12.11.2026): synthetic pointer events ----
+const DRAG_DAY = `journal.view='day'; journal.data = {date:'2030-04-01',labels:[],
+  staff:[{id:1,name:'Юлия',working:true,workRanges:[{start:540,end:1080}]},{id:2,name:'Пери',working:true,workRanges:[{start:540,end:1080}]}],
+  records:[{id:8,staffId:1,date:'2030-04-01',time:'10:00',duration:60,clientName:'Анна',attendance:0,services:[]},
+           {id:9,staffId:2,date:'2030-04-01',time:'12:00',duration:60,clientName:'Борис',attendance:0,services:[]}]}`;
+const columnAt = (staff, date) => () => ({ closest: () => ({ dataset: { staff: String(staff), date } }) });
+function dragHarness() {
+  const h = harness(); h.run(DRAG_DAY);
+  h.context.confirm = jest.fn(() => true);
+  h.context.jrApi = jest.fn().mockResolvedValue({ outboxId: 3, recordId: 8, status: 'queued' });
+  h.context.loadJournal = jest.fn(); h.context.jrRender = jest.fn();
+  return h;
+}
+test('drag: move to another master, confirmed, sends one move session', async () => {
+  const h = dragHarness(); h.context.document.elementFromPoint = columnAt(2, '2030-04-01');
+  expect(h.context.jrDragStart({ button: 0, clientX: 100, clientY: 100 }, 8, 'move')).toBe(true);
+  h.context.jrDragMove({ clientX: 300, clientY: 100 + 240 * 1.6 });
+  expect(await h.context.jrDragEnd({ clientX: 300, clientY: 100 + 240 * 1.6 })).toBe(true);
+  expect(h.context.confirm).toHaveBeenCalledWith('Перенести запись Анна на 14:00 к специалисту Пери?');
+  expect(h.context.jrApi).toHaveBeenCalledWith('sessions', { sessionId: 'synthetic-uuid-1', recordId: 8, move: { date: '2030-04-01', time: '14:00', staffId: 2 } });
+  expect(h.context.loadJournal).toHaveBeenCalledWith({ silent: true });
+  expect(h.run('journal.drag')).toBe(null);
+});
+test('drag: 5-minute grid; cancelling the confirmation changes nothing', async () => {
+  const h = dragHarness(); h.context.document.elementFromPoint = columnAt(1, '2030-04-01');
+  h.context.confirm = jest.fn(() => false);
+  h.context.jrDragStart({ button: 0, clientX: 100, clientY: 100 }, 8, 'move');
+  expect(await h.context.jrDragEnd({ clientX: 100, clientY: 100 + 37 * 1.6 })).toBe(false);
+  expect(h.context.confirm).toHaveBeenCalledWith('Перенести запись Анна на 10:35 к специалисту Юлия?');
+  expect(h.context.jrApi).not.toHaveBeenCalled();
+  expect(h.context.jrRender).toHaveBeenCalled();
+});
+test('drag: over another visit of that master is refused before asking', async () => {
+  const h = dragHarness(); h.context.document.elementFromPoint = columnAt(2, '2030-04-01');
+  h.context.jrDragStart({ button: 0, clientX: 100, clientY: 100 }, 8, 'move');
+  expect(await h.context.jrDragEnd({ clientX: 300, clientY: 100 + 120 * 1.6 })).toBe(false);   // 12:00 at Пери = Борис
+  expect(h.context.notify).toHaveBeenCalledWith('Время занято другой записью.', 'err');
+  expect(h.context.confirm).not.toHaveBeenCalled();
+  expect(h.context.jrApi).not.toHaveBeenCalled();
+});
+test('drag: outside the shift is refused', async () => {
+  const h = dragHarness(); h.context.document.elementFromPoint = columnAt(1, '2030-04-01');
+  h.context.jrDragStart({ button: 0, clientX: 100, clientY: 100 }, 8, 'move');
+  expect(await h.context.jrDragEnd({ clientX: 100, clientY: 100 + 450 * 1.6 })).toBe(false);   // 17:30 + 60 > 18:00
+  expect(h.context.notify).toHaveBeenCalledWith('Это время вне рабочего графика специалиста.', 'err');
+});
+test('resize: confirmed new length goes as edit.seanceLength', async () => {
+  const h = dragHarness();
+  h.context.jrDragStart({ button: 0, clientX: 100, clientY: 100 }, 8, 'resize');
+  h.context.jrDragMove({ clientX: 100, clientY: 100 + 15 * 1.6 });
+  expect(await h.context.jrDragEnd({ clientX: 100, clientY: 100 + 15 * 1.6 })).toBe(true);
+  expect(h.context.confirm).toHaveBeenCalledWith('Длительность 60 → 75 мин?');
+  expect(h.context.jrApi).toHaveBeenCalledWith('sessions', { sessionId: 'synthetic-uuid-1', recordId: 8, edit: { seanceLength: 75 } });
+});
+test('server refusal: message shown, block returns', async () => {
+  const h = dragHarness(); h.context.document.elementFromPoint = columnAt(1, '2030-04-01');
+  h.context.jrApi = jest.fn().mockRejectedValue(Object.assign(new Error('Время уже занято. Выберите другое.'), { status: 409, code: 'slot_taken' }));
+  h.context.jrDragStart({ button: 0, clientX: 100, clientY: 100 }, 8, 'move');
+  expect(await h.context.jrDragEnd({ clientX: 100, clientY: 100 + 60 * 1.6 })).toBe(false);
+  expect(h.context.notify).toHaveBeenCalledWith('Время уже занято. Выберите другое.', 'err');
+  expect(h.context.jrRender).toHaveBeenCalled();
+  expect(h.context.loadJournal).not.toHaveBeenCalled();
+});
+test('a tiny movement is a click; locked records do not start a drag', async () => {
+  const h = dragHarness();
+  h.context.jrDragStart({ button: 0, clientX: 100, clientY: 100 }, 8, 'move');
+  expect(await h.context.jrDragEnd({ clientX: 101, clientY: 102 })).toBe(false);
+  expect(h.context.confirm).not.toHaveBeenCalled();
+  const base = { id: 1, time: '10:00', attendance: 0 };
+  expect(h.context.jrDragAllowed(base)).toBe(true);
+  for (const r of [{ ...base, continued: true }, { ...base, paid: true }, { ...base, deleted: true }, { ...base, attendance: 1 }, { ...base, attendance: -1 },
+    { ...base, sync: { status: 'running', released: true } }, { ...base, sync: { status: 'failed' } }]) expect(h.context.jrDragAllowed(r)).toBe(false);
+  expect(h.context.jrDragAllowed({ ...base, sync: { status: 'queued', released: false } })).toBe(true);
+  expect(h.context.jrDragStart({ button: 2, clientX: 0, clientY: 0 }, 8, 'move')).toBe(false);
+});
+test('week: dropping on another day of the same master', async () => {
+  const h = dragHarness();
+  h.run(`journal.view='week'; journal.week = {staff:{id:1,name:'Юлия'},days:[
+    {date:'2030-04-01',workRanges:[{start:540,end:1080}],records:[{id:8,staffId:1,date:'2030-04-01',time:'10:00',duration:60,clientName:'Анна',attendance:0,services:[]}]},
+    {date:'2030-04-02',workRanges:[{start:540,end:1080}],records:[]}]}`);
+  h.context.document.elementFromPoint = columnAt(1, '2030-04-02');
+  h.context.jrDragStart({ button: 0, clientX: 100, clientY: 100 }, 8, 'move');
+  expect(await h.context.jrDragEnd({ clientX: 300, clientY: 100 })).toBe(true);
+  expect(h.context.confirm).toHaveBeenCalledWith('Перенести запись Анна на 02.04 10:00 к специалисту Юлия?');
+  expect(h.context.jrApi.mock.calls[0][1].move).toEqual({ date: '2030-04-02', time: '10:00', staffId: 1 });
+});
+test('draggable blocks get the resize handle', () => {
+  const h = harness(); h.run(DRAG_DAY + ';jrRender()');
+  const html = h.get('jrGrid').innerHTML;
+  expect(html).toContain('jr-draggable" data-record="8"');
+  expect(html).toContain('<i class="jr-resize" data-resize="1" aria-hidden="true"></i>');
+});
+test('jrDropCheck: past time refused; the technical break of a neighbour counts as busy', () => {
+  const h = harness();
+  const staff = { id: 1, workRanges: [{ start: 540, end: 1080 }] };
+  const record = { id: 8, staffId: 1, time: '10:00', duration: 60 };
+  const now = Date.parse('2030-04-01T12:00:00+03:00');
+  expect(h.context.jrDropCheck({ record, staff, date: '2030-04-01', minute: 660, duration: 60, records: [], now }).reason).toBe('Это время уже прошло.');
+  const neighbour = { id: 9, staffId: 1, date: '2030-04-01', time: '13:00', duration: 60, technicalBreak: 900 };   // busy till 14:15
+  expect(h.context.jrDropCheck({ record, staff, date: '2030-04-01', minute: 840, duration: 60, records: [neighbour], now: 0 }).ok).toBe(false);
+  expect(h.context.jrDropCheck({ record, staff, date: '2030-04-01', minute: 855, duration: 60, records: [neighbour], now: 0 }).ok).toBe(true);
+  // Another master's visit at the same time does not block.
+  expect(h.context.jrDropCheck({ record, staff, date: '2030-04-01', minute: 780, duration: 60, records: [{ ...neighbour, staffId: 2 }], now: 0 }).ok).toBe(true);
+});
+test('phone: no drag handle and no drag start; a background render waits for the drop', () => {
+  const h = harness(); h.context.window = { matchMedia: () => ({ matches: true }) };
+  h.run(DRAG_DAY + ';jrRender()');
+  expect(h.get('jrGrid').innerHTML).not.toContain('jr-resize');
+  const el = { dataset: { record: '8' } };
+  h.context.jrDragBegin(el, { button: 0, clientX: 0, clientY: 0, target: {} });
+  expect(h.run('journal.drag')).toBeFalsy();
+  const d = harness(); d.run(DRAG_DAY + ';jrRender()');
+  d.run(`journal.drag = {moved:true}`); d.get('jrGrid').innerHTML = 'kept';
+  d.context.jrRender();
+  expect(d.get('jrGrid').innerHTML).toBe('kept');
+});

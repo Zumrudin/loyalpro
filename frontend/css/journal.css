@@ -259,3 +259,9 @@ button.jr-service-line:hover,button.jr-service-line:focus-visible{border-color:v
   .jr-calendar{grid-template-columns:46px minmax(0,1fr);min-width:0}
   .jr-toolbar input,.jr-toolbar select{max-width:none}
 }
+/* Drag-and-drop (12.11.2026). The handle is an <i>: .jr-visit-short>span is hidden. */
+.jr-resize{position:absolute;left:0;right:0;bottom:0;height:7px;cursor:ns-resize}
+.jr-visit.jr-draggable{user-select:none;-webkit-user-select:none}
+@media (pointer:fine){.jr-visit.jr-draggable{touch-action:none;cursor:grab}}
+.jr-visit.jr-visit-dragging{opacity:.75;z-index:5;box-shadow:0 6px 18px rgba(0,0,0,.2);cursor:grabbing}
+[data-theme="dark"] .jr-visit.jr-visit-dragging{box-shadow:0 6px 18px rgba(0,0,0,.55)}

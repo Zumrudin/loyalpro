@@ -79,6 +79,7 @@ function jrBounds(records, ranges) {
 // One column (a master in the day view, a date in the week view).
 function jrColumnHtml(s, date, records, allRecords, start, end, now) {
   let cells = '', prev = null;
+  const mobile = jrIsMobile();
   for (let t = start; t < end; t += 15) {
     const state = jrCellState(s, t, date, allRecords, now), time = jrTimeLabel(t);
     const position = `top:${(t - start) * JR_PX_PER_MIN}px;height:${15 * JR_PX_PER_MIN}px`;
@@ -91,11 +92,13 @@ function jrColumnHtml(s, date, records, allRecords, start, end, now) {
   const visits = jrLayout(records).map(r => {
     const length = Math.min(Math.max(r.duration || 15, 5), end - r.start);
     const syncing = jrSyncing(r), failed = r.sync?.status === 'failed', unsent = jrUnsent(r);
+    // Phone: no drag (a finger on a block scrolls the grid); move via the card.
+    const drag = !mobile && jrDragAllowed(r);
     const title = r.time + ' · ' + r.clientName + ' · ' + r.services.map(x => x.title).join(', ') + (failed ? ' · Не передано в YClients: ' + (r.sync.errorText || 'причина неизвестна') : syncing ? ' · передаётся в YClients' : unsent ? ' · не отправлено в YClients' : '');
     const pos = `left:calc(${r.lane * 100 / r.lanes}% + 3px);width:calc(${100 / r.lanes}% - 6px)`;
     const pause = Number(r.technicalBreak) > 0 && !r.continued ? Math.min(Number(r.technicalBreak) / 60, end - r.start - length) : 0;
     const band = pause > 0 ? `<div class="jr-break-band" style="top:${(r.start + length - start) * JR_PX_PER_MIN}px;height:${Math.max(4, pause * JR_PX_PER_MIN - 2)}px;${pos}" title="Технический перерыв ${Math.round(pause)} мин" aria-hidden="true">⏸</div>` : '';
-    return `<button type="button" class="jr-visit jr-status-${r.attendance}${r.paidFull ? ' jr-paid-full' : ''}${length < 30 ? ' jr-visit-short' : ''}${syncing ? ' jr-visit-syncing' : ''}${unsent ? ' jr-visit-unsent' : ''}${failed ? ' jr-visit-failed' : ''}" data-record="${r.id}" style="${jrVisitStyle(r)}top:${(r.start - start) * JR_PX_PER_MIN}px;height:${Math.max(6, length * JR_PX_PER_MIN - 2)}px;${pos}" title="${jrEscape(title)}" aria-label="${jrEscape(r.time + ' ' + r.clientName + ', ' + jrStatus(r) + (failed ? ', не передано в YClients' : syncing ? ', передаётся в YClients' : unsent ? ', не отправлено в YClients' : ''))}"><b>${syncing ? '⏳ ' : ''}${jrEscape(r.time)} · ${jrEscape(r.clientName)}${jrVisitMarks(r)}</b><span>${jrEscape(r.services.map(x => x.title).join(', ') || 'Без услуг')}</span><small>${r.continued ? 'Продолжение · ' : ''}${jrEscape(jrStatus(r))}${r.paid ? ' · оплачено' : ''}</small>${failed ? '<small class="jr-sync-failed-note">Не передано в YClients</small>' : unsent ? '<small class="jr-sync-unsent-note">Не отправлено в YClients</small>' : ''}</button>${band}`;
+    return `<button type="button" class="jr-visit jr-status-${r.attendance}${r.paidFull ? ' jr-paid-full' : ''}${length < 30 ? ' jr-visit-short' : ''}${syncing ? ' jr-visit-syncing' : ''}${unsent ? ' jr-visit-unsent' : ''}${failed ? ' jr-visit-failed' : ''}${drag ? ' jr-draggable' : ''}" data-record="${r.id}" style="${jrVisitStyle(r)}top:${(r.start - start) * JR_PX_PER_MIN}px;height:${Math.max(6, length * JR_PX_PER_MIN - 2)}px;${pos}" title="${jrEscape(title)}" aria-label="${jrEscape(r.time + ' ' + r.clientName + ', ' + jrStatus(r) + (failed ? ', не передано в YClients' : syncing ? ', передаётся в YClients' : unsent ? ', не отправлено в YClients' : ''))}"><b>${syncing ? '⏳ ' : ''}${jrEscape(r.time)} · ${jrEscape(r.clientName)}${jrVisitMarks(r)}</b><span>${jrEscape(r.services.map(x => x.title).join(', ') || 'Без услуг')}</span><small>${r.continued ? 'Продолжение · ' : ''}${jrEscape(jrStatus(r))}${r.paid ? ' · оплачено' : ''}</small>${failed ? '<small class="jr-sync-failed-note">Не передано в YClients</small>' : unsent ? '<small class="jr-sync-unsent-note">Не отправлено в YClients</small>' : ''}${drag ? '<i class="jr-resize" data-resize="1" aria-hidden="true"></i>' : ''}</button>${band}`;
   }).join('');
   return `<div class="jr-column" data-staff="${s.id}" data-date="${date}">${cells}${visits}</div>`;
 }
@@ -105,11 +108,18 @@ function jrHourLabels(start, end) {
   return labels;
 }
 function jrBindGrid(grid) {
-  grid.querySelectorAll('[data-record]').forEach(el => el.addEventListener('click', () => jrOpen(Number(el.dataset.record))));
+  grid.querySelectorAll('[data-record]').forEach(el => {
+    // A click right after a drag is the end of that drag, not «open the card».
+    el.addEventListener('click', () => { if (Date.now() < (journal.suppressClickUntil || 0)) return; jrOpen(Number(el.dataset.record)); });
+    el.addEventListener('pointerdown', ev => jrDragBegin(el, ev));
+  });
   grid.querySelectorAll('[data-time]').forEach(el => el.addEventListener('click', () => jrGridCreate(Number(el.dataset.staff), el.dataset.time, el.dataset.date)));
 }
 function jrRender() {
   if (!journal.data) return;
+  // A background refresh must not tear the block out from under the pointer;
+  // the drag always ends with a render (or a reload).
+  if (journal.drag?.moved) return;
   if (journal.view === 'week' && journal.week) return jrRenderWeek();
   const filter = jrEl('jrStaffFilter').value;
   let staff = jrStaffList().filter(s => !filter || String(s.id) === filter);
@@ -195,4 +205,127 @@ if (typeof document !== 'undefined' && typeof document.addEventListener === 'fun
     const box = document.getElementById('jrMonth');
     if (e.key === 'Escape' && box && journal.monthOpen) { journal.monthOpen = false; box.hidden = true; }
   });
+}
+// ---- Drag-and-drop: move and resize (spec 2026-11-12 §3.3) ----
+const JR_DRAG_STEP = 5, JR_DRAG_THRESHOLD = 4;
+const jrSnap = minute => Math.round(minute / JR_DRAG_STEP) * JR_DRAG_STEP;
+// Same locks as the card: no continuation, paid, arrived/no-show, package on its way or failed.
+function jrDragAllowed(r) {
+  return !!r && !r.continued && !r.deleted && !r.paid && !jrSyncing(r) && r.sync?.status !== 'failed'
+    && r.attendance !== 1 && r.attendance !== -1 && /^\d\d:\d\d$/.test(r.time || '');
+}
+function jrDragRecords() {
+  return journal.view === 'week' && journal.week ? journal.week.days.flatMap(d => d.records) : (journal.data?.records || []);
+}
+// Staff (with shift) and the visits of the column the block is dropped on.
+function jrColumnContext(staffId, date) {
+  if (journal.view === 'week' && journal.week) {
+    const d = journal.week.days.find(x => x.date === date);
+    if (!d || Number(staffId) !== journal.week.staff.id) return null;
+    return { staff: { id: journal.week.staff.id, name: journal.week.staff.name, workRanges: d.workRanges || [] }, records: d.records };
+  }
+  const s = (journal.data?.staff || []).find(x => x.id === Number(staffId));
+  return s ? { staff: s, records: journal.data.records } : null;
+}
+// Grid-side check; the server re-checks (busy/slot_taken).
+function jrDropCheck({ record, staff, date, minute, duration, records, now = Date.now() }) {
+  const occupied = (duration > 0 ? duration : 15) + (Number(record.technicalBreak) > 0 ? Number(record.technicalBreak) / 60 : 0);
+  if (!(staff.workRanges || []).some(r => minute >= r.start && minute + occupied <= r.end)) return { ok: false, reason: 'Это время вне рабочего графика специалиста.' };
+  if (Date.parse(date + 'T00:00:00+03:00') + minute * 60000 <= now) return { ok: false, reason: 'Это время уже прошло.' };
+  const clash = (records || []).some(r => r.id !== record.id && r.staffId === staff.id && !r.deleted && r.time && (!r.date || r.date === date)
+    && minute < jrMinutes(r.time) + jrOccupied(r) && minute + occupied > jrMinutes(r.time));
+  return clash ? { ok: false, reason: 'Время занято другой записью.' } : { ok: true };
+}
+function jrDragStart(ev, recordId, mode) {
+  if (ev.button !== undefined && ev.button !== 0) return false;
+  const record = jrDragRecords().find(r => r.id === recordId);
+  if (!jrDragAllowed(record)) return false;
+  journal.drag = { record, mode, x: ev.clientX, y: ev.clientY, moved: false, el: null };
+  return true;
+}
+function jrDragTarget(ev) {
+  const d = journal.drag, r = d.record;
+  const delta = (ev.clientY - d.y) / JR_PX_PER_MIN;
+  if (d.mode === 'resize') return { kind: 'resize', duration: Math.min(720, Math.max(5, jrSnap(r.duration + delta))) };
+  const el = typeof document.elementFromPoint === 'function' ? document.elementFromPoint(ev.clientX, ev.clientY) : null;
+  const col = el && typeof el.closest === 'function' ? el.closest('.jr-column') : null;
+  if (!col?.dataset?.date) return null;
+  return { kind: 'move', staffId: Number(col.dataset.staff), date: col.dataset.date, minute: Math.min(1435, Math.max(0, jrSnap(jrMinutes(r.time) + delta))) };
+}
+function jrDragMove(ev) {
+  const d = journal.drag;
+  if (!d) return null;
+  if (!d.moved && Math.abs(ev.clientX - d.x) + Math.abs(ev.clientY - d.y) < JR_DRAG_THRESHOLD) return null;
+  // The moving block must not be «the element under the pointer».
+  if (!d.moved && d.el?.style) { d.el.style.pointerEvents = 'none'; d.el.classList?.add('jr-visit-dragging'); }
+  d.moved = true;
+  const target = jrDragTarget(ev);
+  if (d.el?.style) {
+    if (d.mode === 'resize' && target) d.el.style.height = Math.max(6, target.duration * JR_PX_PER_MIN - 2) + 'px';
+    else if (d.mode === 'move') d.el.style.transform = `translate(${ev.clientX - d.x}px, ${ev.clientY - d.y}px)`;
+  }
+  return target;
+}
+function jrDragCancel() { journal.drag = null; jrRender(); }
+async function jrDragEnd(ev) {
+  const d = journal.drag;
+  if (!d) return false;
+  const moved = d.moved || Math.abs(ev.clientX - d.x) + Math.abs(ev.clientY - d.y) >= JR_DRAG_THRESHOLD;
+  const target = moved ? jrDragTarget(ev) : null;
+  journal.drag = null;
+  if (d.el?.style) { d.el.style.pointerEvents = ''; d.el.style.transform = ''; d.el.classList?.remove('jr-visit-dragging'); }
+  if (!moved) return false;                       // a plain click: the click handler opens the card
+  journal.suppressClickUntil = Date.now() + 400;
+  const r = d.record;
+  const back = () => { jrRender(); return false; };  // the block returns to its place
+  if (!target) return back();
+  if (target.kind === 'resize') {
+    if (target.duration === r.duration) return back();
+    const ctx = jrColumnContext(r.staffId, r.date);
+    // A visit already under way may be extended: no «past» check for resize.
+    const check = ctx ? jrDropCheck({ record: r, staff: ctx.staff, date: r.date, minute: jrMinutes(r.time), duration: target.duration, records: ctx.records, now: 0 })
+      : { ok: false, reason: 'Специалист не найден в сетке.' };
+    if (!check.ok) { notify(check.reason, 'err'); return back(); }
+    if (!confirm(`Длительность ${r.duration} → ${target.duration} мин?`)) return back();
+    return jrDragSave({ sessionId: crypto.randomUUID(), recordId: r.id, edit: { seanceLength: target.duration } });
+  }
+  const ctx = jrColumnContext(target.staffId, target.date);
+  const time = jrTimeLabel(target.minute);
+  if (!ctx || (target.staffId === r.staffId && target.date === r.date && time === r.time)) return back();
+  const check = jrDropCheck({ record: r, staff: ctx.staff, date: target.date, minute: target.minute, duration: r.duration, records: ctx.records });
+  if (!check.ok) { notify(check.reason, 'err'); return back(); }
+  const day = target.date === r.date ? '' : ` ${target.date.slice(8, 10)}.${target.date.slice(5, 7)}`;
+  if (!confirm(`Перенести запись ${r.clientName} на${day} ${time} к специалисту ${ctx.staff.name || ''}?`)) return back();
+  return jrDragSave({ sessionId: crypto.randomUUID(), recordId: r.id, move: { date: target.date, time, staffId: target.staffId } });
+}
+// Same session endpoint as the forms; saved locally, sent by «Отправить в YClients».
+async function jrDragSave(body) {
+  try {
+    await jrApi('sessions', body);
+    notify('Сохранено в журнале. В YClients — кнопкой «Отправить в YClients».');
+    loadJournal({ silent: true });
+    return true;
+  } catch (e) {
+    notify(e.message, 'err');
+    jrRender();
+    return false;
+  }
+}
+function jrDragBegin(el, ev) {
+  if (jrIsMobile()) return;      // phone: the finger scrolls; moving goes through the card
+  const mode = ev.target?.dataset?.resize ? 'resize' : 'move';
+  if (!jrDragStart(ev, Number(el.dataset.record), mode)) return;
+  journal.drag.el = el;
+  ev.preventDefault?.();
+  const move = e => jrDragMove(e);
+  const up = e => { off(); jrDragEnd(e); };
+  const cancel = () => { off(); jrDragCancel(); };
+  const off = () => {
+    document.removeEventListener('pointermove', move);
+    document.removeEventListener('pointerup', up);
+    document.removeEventListener('pointercancel', cancel);
+  };
+  document.addEventListener('pointermove', move);
+  document.addEventListener('pointerup', up);
+  document.addEventListener('pointercancel', cancel);
 }
