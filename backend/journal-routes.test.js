@@ -5,6 +5,7 @@ jest.mock('./services/journal/payments-local', () => ({localPaymentOptions:jest.
 jest.mock('./services/journal', () => ({ day: jest.fn(), week: jest.fn(), detail: jest.fn(), slots: jest.fn(), mutate: jest.fn(), pending: jest.fn(), review: jest.fn() }));
 jest.mock('./services/journal/month', () => ({ month: jest.fn() }));
 jest.mock('./services/journal/history', () => ({ load: jest.fn() }));
+jest.mock('./services/journal/client-summary', () => ({ summary: jest.fn() }));
 jest.mock('./middleware/auth', () => ({
   auth: (req, res, next) => req.__user ? (req.user = req.__user, next()) : res.status(401).json({}),
   requireRole: (...roles) => (req, res, next) => roles.includes(req.user.role) ? next() : res.status(403).json({}),
@@ -98,4 +99,13 @@ test('record history: id validated, tenant from JWT', async () => {
   expect((await call('GET', '/records/-4/history')).status).toBe(200);
   expect(history.load).toHaveBeenLastCalledWith(3, -4);
   expect((await call('GET', '/records/abc/history')).status).toBe(400);
+});
+
+test('client summary: tenant from JWT, query passed as is (validated in the module)', async () => {
+  const cs = require('./services/journal/client-summary');
+  cs.summary.mockResolvedValue({ name: 'A' });
+  const res = await call('GET', '/clients/summary', { query: { phone: '79200255591', salonId: 99 } });
+  expect(res.status).toBe(200); expect(res.headers['Cache-Control']).toBe('no-store');
+  expect(cs.summary).toHaveBeenCalledWith(3, expect.objectContaining({ phone: '79200255591' }));
+  expect((await call('GET', '/clients/summary', { user: { role: 'admin_cashier' }, query: { phone: '79200255591' } })).status).toBe(403);
 });
