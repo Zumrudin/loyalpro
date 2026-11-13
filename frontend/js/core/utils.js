@@ -98,8 +98,8 @@ function applyFavicon(url) {
     link.href = url;
     localStorage.setItem('lp_favicon', url);
   } else {
-    link.type = 'image/svg+xml';
-    link.href = 'favicon.svg';
+    link.type = 'image/png';
+    link.href = 'favicon-32.png?v=2026-11-13';
     localStorage.removeItem('lp_favicon');
   }
 }
