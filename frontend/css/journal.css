@@ -291,4 +291,4 @@ button.jr-service-line:hover,button.jr-service-line:focus-visible{border-color:v
 .jr-history-head{display:flex;flex-wrap:wrap;gap:6px;align-items:baseline}
 .jr-history-head time{color:var(--t3)}
 .jr-history ul,.jr-last-visits,.jr-abonements{margin:4px 0 0;padding-left:16px;font-size:12px}
-[data-theme="dark"] .jr-history>li{border-color:var(--bd)}
+.jr-history .jr-sync-failed-note{color:var(--danger,#a64635)}

@@ -1466,3 +1466,38 @@ test('no phone: the panel says so and does not call the server', async () => {
   expect(h.context.jrApi).not.toHaveBeenCalled();
   expect(h.get('jrClientSummaryBox').innerHTML).toContain('Телефон клиента неизвестен');
 });
+
+test('queued record (id<0) has no history button or box', () => {
+  const h = cardHarness();
+  const html = h.context.jrAppointmentCard({ ...CARD, id: -3 });
+  expect(html).not.toContain('jrHistoryOpen');
+  expect(html).not.toContain('id="jrHistory"');
+});
+test('history survives a re-render of the same card', async () => {
+  const h = cardHarness();
+  h.context.jrApi = jest.fn().mockResolvedValue({ events: [{ at: '2026-11-12T07:10:00Z', source: 'yclients', author: 'YClients', title: 'Изменена в YClients', changes: [] }] });
+  h.context.jrRenderRecord(CARD);
+  await h.context.jrLoadHistory(8);
+  h.get('jrHistory').innerHTML = '';
+  h.get('jrHistory').hidden = true;
+  h.context.jrRenderRecord(CARD);
+  expect(h.get('jrHistory').hidden).toBe(false);
+  expect(h.get('jrHistory').innerHTML).toContain('Изменена в YClients');
+});
+test('history error is visible even if the box was hidden by a re-render', async () => {
+  const h = cardHarness();
+  h.context.jrApi = jest.fn().mockRejectedValue(new Error('Нет связи'));
+  h.get('jrHistory').hidden = true;
+  const p = h.context.jrLoadHistory(8);
+  h.get('jrHistory').hidden = true;
+  await p;
+  expect(h.get('jrHistory').hidden).toBe(false);
+});
+test('change client: 8XXXXXXXXXX is normalized to 7XXXXXXXXXX in the session', () => {
+  const h = cardHarness();
+  h.context.jrRenderRecord(CARD);
+  h.context.jrLoadClients = jest.fn();
+  h.get('jrChangeClient').onclick();
+  h.context.jrLoadClients.mock.calls[0][1]({ name: 'Борис', phone: '89000000001' });
+  expect(h.run('journal.session.edit.client')).toEqual({ name: 'Борис', phone: '79000000001' });
+});

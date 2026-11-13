@@ -362,7 +362,7 @@ async function jrLoadHistory(id) {
     if (now) { now.hidden = false; now.innerHTML = html; }
   } catch (e) {
     const now = jrEl('jrHistory');
-    if (request === journal.modalRequest && now) now.innerHTML = `<p class="jr-hint">${jrEscape(e.message)}</p>`;
+    if (request === journal.modalRequest && now) { now.hidden = false; now.innerHTML = `<p class="jr-hint">${jrEscape(e.message)}</p>`; }
   }
 }
 function jrClientSummaryHtml(s) {
