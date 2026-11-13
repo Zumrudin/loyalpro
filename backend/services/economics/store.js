@@ -3,6 +3,8 @@
 // (scripts/economics-explain.js) — ГОТЧА проекта: EXPLAIN с литералами не
 // ловит вывод типов параметров. Загрузчики отчёта — ниже (задача 11).
 const { db } = require('../../db');
+const config = require('../../config');
+const { safely } = require('../../utils/safely');
 const { receiptUnitPrice } = require('./price');
 const { createLogger } = require('../../logger');
 const logger = createLogger('EconomicsStore');
@@ -54,6 +56,7 @@ async function upsertGoodsTransaction(salonId, row, opts) {
       deleted_at = ${delSet}
   `;
   await db.query(sql, params);
+  if (config.STOCK_LEDGER !== 'false') await safely('stock ingest', () => require('../stock/ledger').ingestMirrored(salonId, row, { status, source, deletedAt: status === 'delete' ? (opts.deletedAt || new Date()) : null }), 'движение склада не записано');
   return { deleted: status === 'delete' };
 }
 

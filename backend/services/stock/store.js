@@ -105,3 +105,131 @@ module.exports = { listStorages, storageById, upsertStorage, deactivateMissingSt
   listSuppliers, insertSupplier, updateSupplier, softDeleteSupplier,
   getSettings, saveSettings, touchCategoriesSynced,
   listGoods, goodById, setGoodActiveByYcId, updateCatalogPaths, goodUnitsRows, txnUnitRows, distinctCategoryPaths };
+
+// ── Остатки: одно правило для загрузчика и живого EXPLAIN ──
+const BALANCES_SQL = `WITH op AS (SELECT good_row_id, storage_id, qty_base, taken_at FROM stock_openings WHERE salon_id = $1),
+mv AS (
+  SELECT mv.good_row_id, mv.storage_id, SUM(mv.qty_base) AS moved
+  FROM stock_movements mv
+  JOIN stock_documents d ON d.id = mv.document_id AND d.salon_id = mv.salon_id AND d.status = 'posted'
+  LEFT JOIN op ON op.good_row_id = mv.good_row_id AND op.storage_id = mv.storage_id
+  WHERE mv.salon_id = $1 AND mv.deleted_at IS NULL
+    AND (op.taken_at IS NULL OR mv.occurred_at > op.taken_at
+         OR (mv.recorded_at > op.taken_at AND mv.source IN ('webhook','loyalpro','inventory')))
+  GROUP BY mv.good_row_id, mv.storage_id)
+SELECT g.id AS good_row_id, s.id AS storage_id, COALESCE(op.qty_base,0) + COALESCE(mv.moved,0) AS qty_base, op.taken_at
+FROM yclients_goods_catalog g
+CROSS JOIN stock_storages s
+LEFT JOIN op ON op.good_row_id = g.id AND op.storage_id = s.id
+LEFT JOIN mv ON mv.good_row_id = g.id AND mv.storage_id = s.id
+WHERE g.salon_id = $1 AND s.salon_id = $1 AND s.is_active AND (op.good_row_id IS NOT NULL OR mv.good_row_id IS NOT NULL)`;
+
+const balanceCache = new Map();
+const invalidateBalances = salonId => balanceCache.delete(String(salonId));
+async function balances(salonId, { goodRowIds, storageId } = {}) {
+  const key = String(salonId);
+  let cached = balanceCache.get(key);
+  if (!cached || cached.expires <= Date.now()) {
+    cached = { rows: await db.any(BALANCES_SQL, [salonId]), expires: Date.now() + 30000 };
+    balanceCache.set(key, cached);
+  }
+  const ids = goodRowIds ? new Set(goodRowIds.map(String)) : null;
+  return cached.rows.filter(r => (!ids || ids.has(String(r.good_row_id))) && (storageId == null || String(r.storage_id) === String(storageId)));
+}
+const goodByYcId = (salonId, ycGoodId) => db.oneOrNone(
+  'SELECT id, unit_equals FROM yclients_goods_catalog WHERE salon_id = $1 AND yclients_good_id = $2', [salonId, ycGoodId]);
+const ensureStorage = (salonId, ycStorageId, title) => db.oneOrNone(`
+  INSERT INTO stock_storages (salon_id, yclients_storage_id, title)
+  VALUES ($1, $2, COALESCE($3, $4))
+  ON CONFLICT (salon_id, yclients_storage_id) WHERE yclients_storage_id IS NOT NULL
+  DO UPDATE SET title = COALESCE($3, stock_storages.title)
+  RETURNING id`, [salonId, ycStorageId, title || null, `Склад ${ycStorageId}`]);
+const clientIdByYc = async (salonId, ycClientId) => {
+  const row = await db.oneOrNone('SELECT id FROM clients WHERE salon_id = $1 AND yclients_client_id = $2', [salonId, ycClientId]);
+  return row ? row.id : null;
+};
+async function addIngestPending(salonId, row) {
+  const { client, ...raw } = row.raw || {}; // client.* никогда не сохраняем
+  await db.query(`INSERT INTO stock_ingest_pending (salon_id, yclients_txn_id, good_id, raw)
+    VALUES ($1, $2, $3, $4::jsonb) ON CONFLICT DO NOTHING`,
+  [salonId, row.yclients_txn_id, row.good_id, JSON.stringify(raw)]);
+}
+async function markMovementDeleted(salonId, ycTxnId, at) {
+  await db.query('UPDATE stock_movements SET deleted_at = $3 WHERE salon_id = $1 AND yclients_txn_id = $2', [salonId, ycTxnId, at]);
+  invalidateBalances(salonId);
+}
+async function upsertMirrorDocument(salonId, d) {
+  return db.oneOrNone(`INSERT INTO stock_documents
+    (salon_id, kind, origin, status, yclients_document_id, storage_id, doc_date, record_id, master_staff_yc_id, client_id, yclients_client_id, comment, posted_at)
+    VALUES ($1, $2, 'yclients', 'posted', $3, $4,
+      COALESCE($5::timestamptz, (SELECT doc_date FROM stock_documents WHERE salon_id = $1 AND yclients_document_id = $3)),
+      $6, $7, $8, $9, $10, NOW())
+    ON CONFLICT (salon_id, yclients_document_id) WHERE yclients_document_id IS NOT NULL DO UPDATE SET
+      kind = EXCLUDED.kind, storage_id = EXCLUDED.storage_id,
+      doc_date = COALESCE(EXCLUDED.doc_date, stock_documents.doc_date),
+      record_id = COALESCE(EXCLUDED.record_id, stock_documents.record_id),
+      master_staff_yc_id = COALESCE(EXCLUDED.master_staff_yc_id, stock_documents.master_staff_yc_id),
+      client_id = COALESCE(EXCLUDED.client_id, stock_documents.client_id),
+      yclients_client_id = COALESCE(EXCLUDED.yclients_client_id, stock_documents.yclients_client_id),
+      comment = COALESCE(EXCLUDED.comment, stock_documents.comment), updated_at = NOW()
+    RETURNING id`, [salonId, d.kind, d.ycDocumentId ?? null, d.storageId, d.docDate, d.recordId ?? null,
+    d.masterStaffYcId ?? null, d.clientId ?? null, d.ycClientId ?? null, d.comment ?? null]);
+}
+
+const MOVEMENT_COLS = ['document_id', 'good_row_id', 'storage_id', 'qty', 'unit_type', 'qty_base',
+  'cost_per_unit', 'discount', 'cost', 'record_id', 'service_yc_id', 'master_staff_yc_id',
+  'yclients_txn_id', 'source', 'occurred_at', 'comment'];
+const movementValues = r => [r.documentId, r.goodRowId, r.storageId, r.qty, r.unitType, r.qtyBase,
+  r.costPerUnit ?? null, r.discount ?? null, r.cost ?? null, r.recordId ?? null,
+  r.serviceYcId ?? null, r.masterStaffYcId ?? null, r.ycTxnId ?? null, r.source, r.occurredAt, r.comment ?? null];
+const MOVEMENT_INSERT = `INSERT INTO stock_movements (salon_id, ${MOVEMENT_COLS.join(', ')})
+  VALUES ($1, ${MOVEMENT_COLS.map((_, i) => `$${i + 2}`).join(', ')})`;
+async function upsertMovement(salonId, row) {
+  const result = await db.oneOrNone(`${MOVEMENT_INSERT}
+    ON CONFLICT (salon_id, yclients_txn_id) WHERE yclients_txn_id IS NOT NULL DO UPDATE SET
+      qty = EXCLUDED.qty, unit_type = EXCLUDED.unit_type, qty_base = EXCLUDED.qty_base,
+      cost_per_unit = EXCLUDED.cost_per_unit, discount = EXCLUDED.discount, cost = EXCLUDED.cost,
+      occurred_at = EXCLUDED.occurred_at, document_id = EXCLUDED.document_id,
+      good_row_id = EXCLUDED.good_row_id, storage_id = EXCLUDED.storage_id, record_id = EXCLUDED.record_id,
+      service_yc_id = EXCLUDED.service_yc_id, master_staff_yc_id = EXCLUDED.master_staff_yc_id,
+      deleted_at = NULL
+    RETURNING id`, [salonId, ...movementValues(row)]);
+  invalidateBalances(salonId);
+  return result;
+}
+async function insertMovement(q, salonId, row) {
+  const result = await q(`${MOVEMENT_INSERT} RETURNING id`, [salonId, ...movementValues(row)]);
+  invalidateBalances(salonId);
+  return result.rows[0];
+}
+async function insertDocument(q, salonId, d) {
+  const result = await q(`INSERT INTO stock_documents
+    (salon_id, kind, origin, status, storage_id, to_storage_id, supplier_id, client_id, yclients_client_id,
+     record_id, master_staff_yc_id, doc_date, comment, total_cost, created_by, posted_at)
+    VALUES ($1, $2, 'loyalpro', $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15) RETURNING id`,
+  [salonId, d.kind, d.status, d.storageId ?? null, d.toStorageId ?? null, d.supplierId ?? null,
+    d.clientId ?? null, d.ycClientId ?? null, d.recordId ?? null, d.masterStaffYcId ?? null,
+    d.docDate, d.comment ?? null, d.totalCost ?? null, d.createdBy ?? null,
+    d.postedAt ?? (d.status === 'posted' ? new Date() : null)]);
+  return result.rows[0];
+}
+const listOpenings = salonId => db.any('SELECT * FROM stock_openings WHERE salon_id = $1 ORDER BY good_row_id, storage_id', [salonId]);
+async function insertOpening(q, salonId, r) {
+  const result = await q(`INSERT INTO stock_openings
+    (salon_id, good_row_id, storage_id, qty_base, yc_qty_base, taken_at, note, created_by)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+    ON CONFLICT (salon_id, good_row_id, storage_id) DO UPDATE SET
+      qty_base = EXCLUDED.qty_base, yc_qty_base = EXCLUDED.yc_qty_base, taken_at = EXCLUDED.taken_at,
+      note = EXCLUDED.note, created_by = EXCLUDED.created_by RETURNING id`,
+  [salonId, r.goodRowId, r.storageId, r.qtyBase, r.ycQtyBase ?? null, r.takenAt, r.note ?? null, r.createdBy ?? null]);
+  invalidateBalances(salonId);
+  return result.rows[0];
+}
+async function setEnabled(q, salonId, enabled) {
+  await q(`INSERT INTO stock_settings (salon_id, enabled, updated_at) VALUES ($1, $2, NOW())
+    ON CONFLICT (salon_id) DO UPDATE SET enabled = EXCLUDED.enabled, updated_at = NOW()`, [salonId, enabled]);
+  invalidateBalances(salonId);
+}
+Object.assign(module.exports, { BALANCES_SQL, balances, invalidateBalances, goodByYcId, ensureStorage,
+  clientIdByYc, addIngestPending, markMovementDeleted, upsertMirrorDocument, upsertMovement,
+  insertMovement, insertDocument, listOpenings, insertOpening, setEnabled });
