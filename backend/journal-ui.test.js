@@ -1296,7 +1296,7 @@ test('change client: the card search picks a client into edit.client', () => {
   expect(h.run('journal.session.edit.client')).toEqual({ name: '<b>Борис</b>', phone: '+79000000001' });
   expect(h.get('jrClientName').textContent).toContain('Борис');
   pick({ name: 'Без телефона', phone: '' });
-  expect(h.get('jrModalError').textContent).toContain('нет телефона');
+  expect(h.context.notify).toHaveBeenCalledWith(expect.stringContaining('телефона'), 'err');
 });
 test('delete: own confirmation explains the difference from cancel; unsaved edits travel with it', async () => {
   const h = cardHarness();
@@ -1324,4 +1324,75 @@ test('a record deleted locally says it waits for sending', () => {
   const h = harness();
   expect(h.context.jrStatusBar({ deleted: true, sync: { status: 'queued', released: false } })).toContain('Удалена (ждёт отправки)');
   expect(h.context.jrStatusBar({ deleted: true })).toContain('Запись удалена');
+});
+// ---- Task 12 review fixes ----
+test('jrSave: a local cancel (status cancelled) says the record was removed from the journal', async () => {
+  const h = cardHarness(); h.context.jrRenderRecord(CARD);
+  h.context.loadJournal = jest.fn(); h.context.notify.mockClear();
+  h.context.jrApi = jest.fn().mockResolvedValue({ outboxId: 0, recordId: -3, status: 'cancelled' });
+  expect(await h.context.jrSave({ sessionId: 's', recordId: -3, status: 'delete' })).toBe(true);
+  expect(h.context.notify).toHaveBeenCalledWith(expect.stringContaining('в YClients она ещё не уходила'));
+  expect(h.context.loadJournal).toHaveBeenCalled();
+  h.context.notify.mockClear();
+  h.context.jrApi = jest.fn().mockResolvedValue({ status: 'queued' });
+  await h.context.jrSave({ sessionId: 's2', recordId: 8, edit: {} });
+  expect(h.context.notify).toHaveBeenCalledWith(expect.stringContaining('Сохранено в журнале'));
+});
+test('rebook: unsaved edits ask first; a preset form counts as touched; no stats line for a preset client', () => {
+  const h = cardHarness(); h.context.jrRenderRecord(CARD);
+  h.context.jrForm = jest.fn();
+  h.context.jrCardEdit('comment', 'x');
+  h.context.jrRebook(CARD);
+  expect(h.context.jrForm).not.toHaveBeenCalled();
+  expect(h.get('jrCloseAsk').innerHTML).toContain('Есть несохранённые изменения');
+  const h2 = cardHarness(); h2.context.jrRenderRecord(CARD); h2.context.jrForm = jest.fn();
+  h2.context.jrRebook(CARD);
+  expect(h2.context.jrForm).toHaveBeenCalled();
+  expect(h2.run('journal.formTouched')).toBe(true);
+  const h3 = harness(); createForm(h3);
+  h3.context.jrSelectClient({ name: 'Анна', phone: '79200255591' });
+  expect(h3.get('jrClientSummary').textContent).toBe('');
+  h3.context.jrSelectClient({ name: 'Анна', phone: '79200255591', visits_count: 2, bonus_balance: 5 });
+  expect(h3.get('jrClientSummary').textContent).toContain('Визитов: 2');
+});
+test('change client: invalid phone or name is rejected before the session', () => {
+  const h = cardHarness(); h.context.jrRenderRecord(CARD); h.context.jrLoadClients = jest.fn();
+  h.get('jrChangeClient').onclick();
+  const pick = h.context.jrLoadClients.mock.calls[0][1];
+  h.context.notify.mockClear();
+  pick({ name: 'Борис', phone: '12345' });
+  pick({ name: '  ', phone: '79000000001' });
+  pick({ name: 'x'.repeat(121), phone: '79000000001' });
+  expect(h.context.notify).toHaveBeenCalledTimes(3);
+  expect(h.run('journal.session.edit')).toBeFalsy();
+  pick({ name: 'Борис', phone: '89000000001' });
+  expect(h.run('journal.session.edit.client.name')).toBe('Борис');
+});
+test('colour outside the palette, off-grid break and unknown labels are kept visible', () => {
+  const h = cardHarness();
+  const html = h.context.jrAppointmentCard({ ...CARD, customColor: '#123456', technicalBreak: 420, labels: [{ id: 99, title: '', color: '' }] });
+  expect(html).toContain('class="jr-color is-current" data-color="#123456"');
+  expect(html).toContain('<option value="7" selected>7 мин</option>');
+  expect(html).not.toContain('<option value="0" selected>');
+  expect(html).toContain('data-label="99" checked disabled');
+  expect(html).toContain('нет в справочнике');
+  h.context.jrRenderRecord({ ...CARD, labels: [{ id: 99, title: '', color: '' }] });
+  h.context.jrCardEdit('labelIds', [99]);
+  expect(h.run('journal.session.edit.labelIds')).toEqual([99]);
+});
+test('deleting status text and cancelled (-1) record fields', () => {
+  const h = cardHarness();
+  expect(h.context.jrStatusBar({ deleted: true, sync: { status: 'running' } })).toContain('Удаляется…');
+  const html = h.context.jrAppointmentCard({ ...CARD, attendance: -1 });
+  expect(html).not.toMatch(/id="jrCommentEdit"[^>]* readonly>/);
+  expect(html).toMatch(/id="jrDurationEdit"[^>]*value="60">/);
+  expect(html).toContain('id="jrDelete"');
+});
+test('unsaved card edit with new fields: kind is edit and closing asks', () => {
+  const h = cardHarness(); h.context.jrRenderRecord(CARD);
+  h.context.jrCardEdit('customColor', '#f4a0a0');
+  expect(h.context.jrUnsavedKind()).toBe('edit');
+  h.context.jrClose();
+  expect(h.get('jrCloseAsk').hidden).toBe(false);
+  expect(h.get('jrCloseAsk').innerHTML).toContain('Есть несохранённые изменения');
 });

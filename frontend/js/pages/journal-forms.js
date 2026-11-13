@@ -87,7 +87,8 @@ function jrSelectClient(client) {
   ['jrSurname','jrName','jrPatronymic','jrPhone'].forEach(id => { jrEl(id).readOnly = !!client; });
   jrEl('jrPhone').readOnly = !!client?.phone;
   jrEl('jrClearClient').hidden = !client;
-  jrEl('jrClientSummary').textContent = client ? `Визитов: ${Number(client.visits_count) || 0} · Бонусы: ${Number(client.bonus_balance) || 0}. Данные из карточки LoyalPro.` : '';
+  const hasStats = client && (client.visits_count !== undefined || client.bonus_balance !== undefined);
+  jrEl('jrClientSummary').textContent = hasStats ? `Визитов: ${Number(client.visits_count) || 0} · Бонусы: ${Number(client.bonus_balance) || 0}. Данные из карточки LoyalPro.` : '';
 }
 function jrServiceMeta(service) {
   const specific = service.staffDetails?.find(s => s.id === Number(jrEl('jrStaff').value));

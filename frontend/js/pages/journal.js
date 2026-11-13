@@ -188,9 +188,9 @@ function jrSessionBody() {
 // The server only stores the session (fractions of a second); YClients is
 // updated in the background, so the form closes as soon as it answers.
 async function jrSave(body) {
-  let ok = false, used = false;
+  let ok = false, used = false, res = null;
   await jrWithBusy('Сохраняем…', async () => {
-    try { await jrApi('sessions', body); ok = true; }
+    try { res = await jrApi('sessions', body); ok = true; }
     catch (e) {
       // The key was stored earlier (a lost response) with other contents: the
       // earlier package is in the journal; a new key would make a second one.
@@ -210,7 +210,9 @@ async function jrSave(body) {
   if (!ok) return false;
   jrMessage(''); jrClose(true);
   loadJournal({ silent: true });
-  notify('Сохранено в журнале. В YClients — кнопкой «Отправить в YClients».');
+  // A local cancel of a not-yet-sent record: nothing goes to YClients.
+  if (res?.status === 'cancelled') notify('Запись удалена из журнала (в YClients она ещё не уходила).');
+  else notify('Сохранено в журнале. В YClients — кнопкой «Отправить в YClients».');
   return true;
 }
 jrEl('jrModal').addEventListener('cancel', event => { event.preventDefault(); jrClose(); });

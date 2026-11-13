@@ -12,12 +12,17 @@ function jrExtraFields(r) {
   const off = flag => (flag ? '' : ' disabled');
   const labels = journal.data?.labels || [];
   const chosen = new Set((r.labels || []).map(l => Number(l.id)));
-  const pause = Math.round((Number(r.technicalBreak) || 0) / 60);
+  const pauseSec = Number(r.technicalBreak) || 0;
+  const pause = Math.round(pauseSec / 60);
+  const offGrid = pauseSec > 0 && !(pauseSec % 300 === 0 && pauseSec <= 3600);
+  const known = new Set(labels.map(l => Number(l.id)));
+  const orphans = (r.labels || []).map(l => Number(l.id)).filter(id => !known.has(id));
+  const customOut = JR_HEX.test(r.customColor || '') && !JR_COLORS.includes(r.customColor);
   return `<section class="jr-extra">
     <label class="jr-side-label">Длительность, мин<input id="jrDurationEdit" type="number" min="5" max="720" step="5" value="${jrEscape(r.duration)}"${off(reshape)}></label>
-    <label class="jr-side-label">Технический перерыв<select id="jrBreakEdit"${off(can)}>${Array.from({ length: 13 }, (_, i) => i * 5).map(v => `<option value="${v}"${v === pause ? ' selected' : ''}>${v ? v + ' мин' : 'Нет'}</option>`).join('')}</select></label>
-    <div class="jr-side-label">Цвет записи<div class="jr-colors" role="group" aria-label="Цвет записи"><button type="button" class="jr-color jr-color-none${r.customColor ? '' : ' is-current'}" data-color="" title="Без цвета"${off(can)}>∅</button>${JR_COLORS.map(c => `<button type="button" class="jr-color${r.customColor === c ? ' is-current' : ''}" data-color="${c}" style="background:${c}" title="${c}"${off(can)}></button>`).join('')}</div></div>
-    <div class="jr-side-label">Метки${labels.length ? `<div class="jr-labels">${labels.map(l => `<label class="jr-label-choice"><input type="checkbox" data-label="${Number(l.id)}"${chosen.has(Number(l.id)) ? ' checked' : ''}${off(can)}><i class="jr-label-dot" style="background:${JR_HEX.test(l.color || '') ? l.color : '#999999'}"></i>${jrEscape(l.title)}</label>`).join('')}</div>` : '<p class="jr-hint">Меток в салоне нет.</p>'}</div>
+    <label class="jr-side-label">Технический перерыв<select id="jrBreakEdit"${off(can)}>${Array.from({ length: 13 }, (_, i) => i * 5).map(v => `<option value="${v}"${!offGrid && v === pause ? ' selected' : ''}>${v ? v + ' мин' : 'Нет'}</option>`).join('')}${offGrid ? `<option value="${pauseSec / 60}" selected>${jrEscape(Math.round(pauseSec / 6) / 10)} мин</option>` : ''}</select></label>
+    <div class="jr-side-label">Цвет записи<div class="jr-colors" role="group" aria-label="Цвет записи"><button type="button" class="jr-color jr-color-none${r.customColor ? '' : ' is-current'}" data-color="" title="Без цвета"${off(can)}>∅</button>${customOut ? `<button type="button" class="jr-color is-current" data-color="${r.customColor}" style="background:${r.customColor}" title="${r.customColor} (цвет из YClients)"${off(can)}></button>` : ''}${JR_COLORS.map(c => `<button type="button" class="jr-color${r.customColor === c ? ' is-current' : ''}" data-color="${c}" style="background:${c}" title="${c}"${off(can)}></button>`).join('')}</div></div>
+    <div class="jr-side-label">Метки${labels.length || orphans.length ? `<div class="jr-labels">${labels.map(l => `<label class="jr-label-choice"><input type="checkbox" data-label="${Number(l.id)}"${chosen.has(Number(l.id)) ? ' checked' : ''}${off(can)}><i class="jr-label-dot" style="background:${JR_HEX.test(l.color || '') ? l.color : '#999999'}"></i>${jrEscape(l.title)}</label>`).join('')}${orphans.map(id => `<label class="jr-label-choice"><input type="checkbox" data-label="${id}" checked disabled>№${id} (нет в справочнике)</label>`).join('')}</div>` : '<p class="jr-hint">Меток в салоне нет.</p>'}</div>
     <label class="jr-notify"><input type="checkbox" id="jrNoNotify"${r.notifyClient === false ? ' checked' : ''}${off(can)}> Не уведомлять клиента</label>
   </section>`;
 }
@@ -42,9 +47,13 @@ function jrDeleteRecord(r) {
 }
 // «Записать повторно»: the same client and services, the date is chosen anew.
 function jrRebook(r) {
+  // Unsaved card edits are not dropped silently: ask first, as on close.
+  const kind = journal.session?.edit ? jrUnsavedKind() : null;
+  if (kind) return jrAskClose(kind);
   const ids = new Set((r.services || []).map(s => Number(s.id)));
   const serviceIds = (journal.data?.services || []).filter(s => ids.has(Number(s.yclientsId)) && (s.staffIds || []).includes(r.staffId)).map(s => s.id);
   jrForm(null, { staffId: r.staffId, date: '', serviceIds, client: { name: r.clientName, phone: r.clientPhone || '' } });
+  journal.formTouched = true; // a preset form counts as changed: closing asks
 }
 
 function jrTools(record) {
@@ -68,7 +77,7 @@ function jrPaymentPanel(record) {
   return `<section class="jr-payment-panel"><div class="jr-payment-icon">${jrIcon('wallet')}</div><h3>${state}</h3><p>Актуальная сумма, доступные способы и история — в форме оплаты.</p>${record && !record.deleted && record.attendance !== -1 ? '<button type="button" class="btn btn-sec" id="jrPaymentOpen">Оплата визита</button>' : jrStub('Детали оплаты','wallet','jr-stub-inline')}</section>`;
 }
 function jrStatusBar(record, canEdit = false) {
-  if (record?.deleted) return `<div class="jr-status-bar"><span class="jr-state-pill is-current">${['queued', 'running'].includes(record.sync?.status) ? 'Удалена (ждёт отправки)' : 'Запись удалена'}</span></div>`;
+  if (record?.deleted) return `<div class="jr-status-bar"><span class="jr-state-pill is-current">${['queued', 'running'].includes(record.sync?.status) ? record.sync?.status === 'running' ? 'Удаляется…' : 'Удалена (ждёт отправки)' : 'Запись удалена'}</span></div>`;
   const current = record ? record.attendance : 0;
   const states = [[0,'Ожидание','clock'],[1,'Пришёл','plus'],[-1,'Не пришёл','list'],[2,'Подтвердил','check']];
   return `<div class="jr-status-bar" aria-label="Статус визита">${states.map(([value,label,icon]) => {
@@ -267,11 +276,15 @@ function jrBindRecordEdit(record) {
     jrCardEdit('labelIds', Array.from(body.querySelectorAll('[data-label]')).filter(x => x.checked).map(x => Number(x.dataset.label)));
   }; });
   const pickClient = client => {
-    if (!client?.phone) { jrMessage('У клиента нет телефона — выберите другого.'); return; }
+    const name = String(client?.name || '').trim();
+    let digits = String(client?.phone || '').replace(/\D/g, '');
+    if (digits.length === 11 && digits[0] === '8') digits = '7' + digits.slice(1);
+    if (digits.length < 11 || digits.length > 15) { notify('У клиента нет корректного телефона (11–15 цифр) — выберите другого.', 'err'); return; }
+    if (!name || name.length > 120) { notify('У клиента нет имени или оно длиннее 120 символов — выберите другого.', 'err'); return; }
     jrMessage('');
-    jrCardEdit('client', { name: String(client.name || '').trim() || 'Без имени', phone: String(client.phone) });
+    jrCardEdit('client', { name, phone: String(client.phone) });
     jrEl('jrChangeClientBox').hidden = true;
-    jrEl('jrClientName').textContent = `${client.name || 'Без имени'} — заменит клиента после сохранения`;
+    jrEl('jrClientName').textContent = `${name} — заменит клиента после сохранения`;
   };
   const changeClient = jrEl('jrChangeClient');
   if (changeClient) changeClient.onclick = () => {
