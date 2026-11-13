@@ -31,7 +31,7 @@ const optStr = (v, max) => (v === undefined || v === null || v === '' ? null : (
 router.get('/settings', wrap('settings', async (req, res) => res.json(await store.getSettings(req.user.salonId))));
 router.put('/settings', wrap('settings-save', async (req, res) => {
   const b = bodyOf(req); const p = {}; const errors = [];
-  if ('enabled' in b) { if (typeof b.enabled !== 'boolean') errors.push('enabled: true или false.'); else p.enabled = b.enabled; }
+  // enabled ставит только scripts/stock-opening.js (снимок остатков) — через API не меняется.
   for (const k of ['defaultSaleStorageId', 'defaultServiceStorageId']) {
     if (!(k in b)) continue;
     const n = optId(b[k]);

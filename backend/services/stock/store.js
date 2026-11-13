@@ -93,7 +93,8 @@ const updateCatalogPaths = (salonId, categoryId, path, parentId) => db.query(
   'UPDATE yclients_goods_catalog SET category_path = $3::jsonb, parent_category_id = $4 WHERE salon_id = $1 AND category_id = $2',
   [salonId, categoryId, JSON.stringify(path), parentId ?? null]);
 const goodUnitsRows = (salonId) => db.any(
-  `SELECT DISTINCT unit_id, unit, service_unit_id, service_unit FROM yclients_goods_catalog WHERE salon_id = $1 AND (unit_id IS NOT NULL OR service_unit_id IS NOT NULL)`, [salonId]);
+  `SELECT DISTINCT unit_id, unit, service_unit_id, service_unit FROM yclients_goods_catalog
+   WHERE salon_id = $1 AND yclients_good_id IS NOT NULL AND (unit_id IS NOT NULL OR service_unit_id IS NOT NULL)`, [salonId]);
 const txnUnitRows = (salonId) => db.any(
   `SELECT DISTINCT raw->'unit' AS unit FROM goods_transactions WHERE salon_id = $1 AND jsonb_typeof(raw->'unit') = 'object'`, [salonId]);
 const distinctCategoryPaths = (salonId) => db.any(

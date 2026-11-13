@@ -1,6 +1,7 @@
 'use strict';
 // Каталог склада: склады YClients, единицы, дерево категорий, вебхук `good`, локальные товары.
 // В YClients только читаем (GET). Локальные товары — строки каталога с yclients_good_id NULL, source 'loyalpro'.
+// ГОТЧА: у локального товара unit_id/service_unit_id — id из stock_units, у товара YClients — id единицы YClients; различать по source.
 const { ycGet } = require('../yclients');
 const { withRateLimitRetry } = require('../yclients-retry');
 const { parseCatalogGood, num } = require('../economics/sync');
@@ -116,6 +117,8 @@ async function handleGoodEvent(salon, payload) {
     await store.setGoodActiveByYcId(salon.id, id, false);
     return { handled: true, status };
   }
+  // Частичный payload (без title/unit_id) обнулил бы поля каталога через UPSERT — такой пропускаем, полную карточку принесёт ночной syncGoodsCatalog.
+  if (data.title === undefined || data.unit_id === undefined) { logger.warn(`salon=${salon.id}: вебхук good ${data.good_id ?? data.id} без полной карточки — пропущен`); return { handled: false, partial: true }; }
   const row = parseCatalogGood(data);
   if (!row) return { handled: false };
   await econStore.upsertCatalogGood(salon.id, row);
@@ -190,10 +193,10 @@ async function updateGood(salonId, id, body) {
   const sets = []; const params = [salonId, id];
   const put = (col, val) => { params.push(val); sets.push(`${col} = $${params.length}`); };
   if (good.source === 'yclients') {
+    // critical_amount у товара YClients перезаписывает ночной syncGoodsCatalog — править его здесь бессмысленно (ведётся в YClients).
     if ('salePrice' in v) put('local_sale_price', v.salePrice);
     if ('note' in v) put('local_note', v.note);
     if ('stockActive' in v) put('stock_active', v.stockActive);
-    if ('criticalAmount' in v) put('critical_amount', v.criticalAmount);
   } else {
     if ('title' in v) put('title', v.title);
     if ('localCategory' in v) put('local_category', v.localCategory);
