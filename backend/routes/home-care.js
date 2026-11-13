@@ -14,6 +14,10 @@ const { buildHomeCareHtml, BRAND_CONFIG } = require('../homecare-template');
 const config = require('../config');
 const { createLogger } = require('../logger');
 const logger = createLogger('HomeCare');
+const transport = require('../services/messaging/transport');
+const authorship = require('../services/outgoing-authorship');
+const { persistWhatsappOutgoing } = require('../services/chat-persist');
+const hcSend = require('../services/home-care-send');
 
 async function sendPrescriptionPush(clientId, prescriptionId) {
   try {
@@ -313,35 +317,123 @@ router.get('/:id/preview', auth, async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-router.get('/:id/pdf', auth, async (req, res) => {
+// Собирает PDF назначения салона. null — назначения нет (или чужой салон).
+// title — заголовок документа (вкладка браузера / свойства PDF).
+async function renderPrescriptionPdf(salonId, id, { title } = {}) {
+  const p = await db.oneOrNone(
+    `SELECT p.*, c.name as client_name, c.phone as client_phone, u.name as specialist_name, u.position as specialist_position, s.name as salon_name
+     FROM home_care_prescriptions p LEFT JOIN clients c ON c.id=p.client_id
+     LEFT JOIN users u ON u.id=p.specialist_id LEFT JOIN salons s ON s.id=p.salon_id
+     WHERE p.id=$1 AND p.salon_id=$2`, [id, salonId]
+  );
+  if (!p) return null;
+  const items = await db.any('SELECT * FROM home_care_items WHERE prescription_id=$1 ORDER BY time_of_day, sort_order', [id]);
+  const prescription = { ...p, items };
+  const tmpl = await loadTemplateConfig(salonId, prescription.salon_name);
+  const html = buildHomeCareHtml(prescription, tmpl);
   let browser;
   try {
-    const p = await db.oneOrNone(
-      `SELECT p.*, c.name as client_name, c.phone as client_phone, u.name as specialist_name, u.position as specialist_position, s.name as salon_name
-       FROM home_care_prescriptions p LEFT JOIN clients c ON c.id=p.client_id
-       LEFT JOIN users u ON u.id=p.specialist_id LEFT JOIN salons s ON s.id=p.salon_id
-       WHERE p.id=$1 AND p.salon_id=$2`, [req.params.id, req.user.salonId]
-    );
-    if (!p) return res.status(404).json({ error: 'Not found' });
-    const items = await db.any('SELECT * FROM home_care_items WHERE prescription_id=$1 ORDER BY time_of_day, sort_order', [req.params.id]);
-    const prescription = { ...p, items };
-    const tmpl = await loadTemplateConfig(req.user.salonId, prescription.salon_name);
-    const html = buildHomeCareHtml(prescription, tmpl);
     browser = await puppeteer.launch({ args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-gpu'], headless: true });
     const pg = await browser.newPage();
     await pg.setContent(html, { waitUntil: 'load', timeout: 30000 });
+    if (title) await pg.evaluate((t) => { document.title = t; }, title);
     await pg.evaluate(() => new Promise(r => setTimeout(r, 1200)));
     const pdfData = await pg.pdf({ format: 'A4', printBackground: true, margin: { top:'10mm', bottom:'12mm', left:'13mm', right:'13mm' } });
-    await browser.close();
-    const pdf = Buffer.isBuffer(pdfData) ? pdfData : Buffer.from(pdfData);
-    const clientName = (prescription.client_name || 'назначение').replace(/[^а-яёa-z0-9_\- ]/gi,'').slice(0,30);
+    return { prescription, pdf: Buffer.isBuffer(pdfData) ? pdfData : Buffer.from(pdfData) };
+  } finally {
+    if (browser) await browser.close().catch(() => {});
+  }
+}
+
+router.get('/:id/pdf', auth, async (req, res) => {
+  try {
+    const r = await renderPrescriptionPdf(req.user.salonId, req.params.id);
+    if (!r) return res.status(404).json({ error: 'Not found' });
+    const clientName = (r.prescription.client_name || 'назначение').replace(/[^а-яёa-z0-9_\- ]/gi,'').slice(0,30);
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent('Домашний уход — ' + clientName)}.pdf`);
-    res.send(pdf);
+    res.send(r.pdf);
   } catch (e) {
-    if (browser) await browser.close().catch(()=>{});
     logger.error('PDF generation failed:', e.message);
     res.status(500).json({ error: e.message });
+  }
+});
+
+// ── «Лист назначения» в мессенджер клиента ────────────────────
+// Последнее личное входящее клиента по каждому каналу (группы отсечены).
+async function loadLastIncoming(salonId, phone) {
+  const variants = hcSend.phoneVariants(phone);
+  if (!variants.length) return [];
+  return db.any(
+    `SELECT DISTINCT ON (channel) channel, phone, chat_id, msg_ts
+       FROM chatpush_messages
+      WHERE salon_id = $1 AND direction = 'incoming' AND phone = ANY($2)
+        AND channel IN ('whatsapp','tdlib','max')
+        AND COALESCE(chat_id,'') NOT LIKE '-%'
+      ORDER BY channel, msg_ts DESC NULLS LAST, id DESC`, [salonId, variants]);
+}
+
+async function loadSendOptions(salonId, id) {
+  const p = await db.oneOrNone(
+    `SELECT p.id, c.name AS client_name, c.phone AS client_phone
+       FROM home_care_prescriptions p LEFT JOIN clients c ON c.id = p.client_id
+      WHERE p.id = $1 AND p.salon_id = $2`, [id, salonId]);
+  if (!p) return null;
+  const opts = hcSend.channelOptions(p.client_phone, await loadLastIncoming(salonId, p.client_phone));
+  return { ...opts, clientName: p.client_name || null, phone: p.client_phone || null };
+}
+
+// GET /:id/send-options — какие мессенджеры доступны для клиента назначения.
+router.get('/:id/send-options', auth, async (req, res) => {
+  try {
+    const o = await loadSendOptions(req.user.salonId, req.params.id);
+    if (!o) return res.status(404).json({ error: 'Назначение не найдено' });
+    res.json({
+      clientName: o.clientName, phone: o.phone, defaultChannel: o.defaultChannel,
+      configured: transport.configured(),
+      channels: o.channels.map(c => ({ channel: c.channel, label: c.label, available: c.available, reason: c.reason })),
+    });
+  } catch (e) {
+    logger.error(`send-options failed: ${e.message}`);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// POST /:id/send {channel} — PDF назначения файлом «Лист назначения».
+// Авторство 'system' ДО отправки: эхо подписи иначе читалось бы ответом
+// администратора и ставило Милу на паузу (как у автоуведомлений).
+router.post('/:id/send', auth, async (req, res) => {
+  try {
+    const salonId = req.user.salonId;
+    const channel = String((req.body && req.body.channel) || '').trim();
+    const o = await loadSendOptions(salonId, req.params.id);
+    if (!o) return res.status(404).json({ error: 'Назначение не найдено' });
+    const opt = o.channels.find(c => c.channel === channel);
+    if (!opt) return res.status(400).json({ error: 'Выберите мессенджер' });
+    if (!opt.available) return res.status(422).json({ error: opt.reason || 'Мессенджер недоступен' });
+    if (!transport.configured()) return res.status(503).json({ error: 'Мессенджеры клиники не подключены' });
+
+    const r = await renderPrescriptionPdf(salonId, req.params.id, { title: hcSend.CAPTION });
+    if (!r) return res.status(404).json({ error: 'Назначение не найдено' });
+
+    const key = opt.params.phone || opt.params.tdlib_user_id || o.dialogKey;
+    await authorship.remember(salonId, key, hcSend.CAPTION, 'system');
+    const delivery = await transport.sendFile(salonId, {
+      fileName: hcSend.FILE_NAME, caption: hcSend.CAPTION, type: 'document', ...opt.params,
+    }, r.pdf, 'application/pdf');
+    logger.info(`prescription ${req.params.id} sent ${channel} to ${key}: delivery=${delivery && delivery.id} (${r.pdf.length} b) by user ${req.user.userId || req.user.id || '?'}`);
+    if (channel === 'whatsapp') {
+      try {
+        await persistWhatsappOutgoing(salonId, {
+          delivery, phone: opt.params.phone, chatId: null, text: hcSend.CAPTION,
+          msgType: 'document', fileUrl: null, mimeType: 'application/pdf', authoredBy: 'system',
+        });
+      } catch (e) { logger.error(`persist whatsapp outgoing failed: ${e.message}`); }
+    }
+    res.json({ ok: true, channel, label: opt.label, deliveryId: delivery && delivery.id, status: delivery && delivery.status_description });
+  } catch (e) {
+    logger.error(`prescription send failed: ${e.message}`);
+    res.status(502).json({ error: 'Не удалось отправить: ' + e.message });
   }
 });
 

@@ -52,6 +52,7 @@ async function hcFetch() {
             <button class="btn btn-sec btn-sm" onclick="openAdherenceModal(${r.id})" title="Heatmap выполнения" ${adhDisabled}>Подробно</button>
             <button class="btn btn-sec btn-sm" style="margin-left:4px" onclick="hcPrintById(${r.id})" title="Открыть превью">👁</button>
             <button class="btn btn-sec btn-sm" style="margin-left:4px" onclick="hcDownloadPdf(${r.id})" title="Скачать PDF">PDF</button>
+            <button class="btn btn-sec btn-sm hc-send-btn" style="margin-left:4px" onclick="hcOpenSendModal(${r.id})" title="Отправить клиенту в мессенджер" aria-label="Отправить клиенту в мессенджер">✈</button>
             <button class="btn btn-sec btn-sm" style="margin-left:4px" onclick="hcOpenEdit(${r.id})">Изм.</button>
             <button class="btn btn-sec btn-sm btn-dng" style="margin-left:4px" onclick="hcDelete(${r.id})">Удалить</button>
           </td>
@@ -908,6 +909,69 @@ function renderAdherenceModal(data, prescriptionId) {
       }
     });
   });
+
+  document.body.appendChild(modal);
+}
+
+// ── «Лист назначения» в мессенджер клиента ────────────────────
+// Кнопка ✈ в строке списка → выбор мессенджера → бэкенд собирает PDF
+// по шаблону и отправляет его файлом с подписью «Лист назначения».
+// Какие мессенджеры доступны, решает сервер (GET /:id/send-options).
+const HC_SEND_ICONS = { whatsapp: '🟢', tdlib: '✈️', max: '🔷' };
+
+async function hcOpenSendModal(id) {
+  document.getElementById('hcSendModal')?.remove();
+  let o;
+  try { o = await api('GET', `/api/home-care/${id}/send-options`); }
+  catch (e) { notify('Не удалось загрузить мессенджеры: ' + e.message, 'err'); return; }
+
+  const modal = document.createElement('div');
+  modal.id = 'hcSendModal';
+  modal.className = 'hc-modal-overlay';
+  const btns = (o.channels || []).map(c => `
+    <button type="button" class="hc-send-ch${c.channel === o.defaultChannel ? ' hc-send-ch-def' : ''}"
+            data-channel="${escAttr(c.channel)}" ${c.available ? '' : 'disabled'}
+            title="${escAttr(c.available ? 'Отправить в ' + c.label : (c.reason || 'Недоступно'))}">
+      <span class="hc-send-ic">${HC_SEND_ICONS[c.channel] || '💬'}</span>
+      <span class="hc-send-lbl">${esc(c.label)}</span>
+      ${c.available ? (c.channel === o.defaultChannel ? '<span class="hc-send-note">писал(а) последним</span>' : '')
+                    : `<span class="hc-send-note">${esc(c.reason || 'недоступно')}</span>`}
+    </button>`).join('');
+  const anyAvail = (o.channels || []).some(c => c.available);
+  modal.innerHTML = `
+    <div class="hc-modal hc-send-modal">
+      <button class="hc-modal-close" type="button" aria-label="Закрыть">×</button>
+      <div class="hc-modal-header">
+        <div>Отправить «Лист назначения»</div>
+        <div class="hc-modal-sub">${esc(o.clientName || 'Клиент')}${o.phone ? ' · ' + esc(o.phone) : ''}</div>
+      </div>
+      ${o.configured === false ? '<div class="hc-send-warn">Мессенджеры клиники не подключены — отправка недоступна.</div>' : ''}
+      ${anyAvail ? '' : '<div class="hc-send-warn">Нет доступного мессенджера: у клиента нет номера и переписки.</div>'}
+      <div class="hc-send-list">${btns}</div>
+      <div class="hc-send-status" id="hcSendStatus"></div>
+    </div>`;
+
+  function onEsc(ev) { if (ev.key === 'Escape') close(); }
+  function close() { modal.remove(); document.removeEventListener('keydown', onEsc); }
+  modal.addEventListener('click', (e) => { if (e.target === modal) close(); });
+  modal.querySelector('.hc-modal-close').addEventListener('click', close);
+  document.addEventListener('keydown', onEsc);
+
+  modal.querySelectorAll('.hc-send-ch').forEach(b => b.addEventListener('click', async () => {
+    if (b.disabled || o.configured === false) return;
+    const all = modal.querySelectorAll('.hc-send-ch');
+    all.forEach(x => { x.disabled = true; });
+    const st = document.getElementById('hcSendStatus');
+    st.textContent = 'Формируем лист назначения и отправляем…';
+    try {
+      const r = await api('POST', `/api/home-care/${id}/send`, { channel: b.dataset.channel });
+      notify(`Лист назначения отправлен в ${r.label || b.dataset.channel}`, 'ok');
+      close();
+    } catch (e) {
+      st.textContent = 'Ошибка: ' + e.message;
+      all.forEach(x => { x.disabled = !(o.channels.find(c => c.channel === x.dataset.channel) || {}).available; });
+    }
+  }));
 
   document.body.appendChild(modal);
 }
