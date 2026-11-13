@@ -969,3 +969,56 @@ test('print rules are scoped to the journal page (no bare .topbar / #app)', () =
     for (const mm of block.matchAll(bare)) expect(block.slice(Math.max(0, mm.index - 25), mm.index + 1)).toContain('body[data-page="journal"]');
   }
 });
+
+test('week: staff filter is built from week.allStaff and keeps the master across an off-day week', async () => {
+  const h = harness(); h.get('jrDate').value = '2030-04-03'; h.get('jrStaffFilter').value = '2';
+  const w = { ...WEEK, staff: { id: 2, name: 'Пери' }, allStaff: [{ id: 1, name: 'Юлия' }, { id: 2, name: 'Пери' }] };
+  h.context.jrApi = jest.fn(async p => (p.startsWith('week') ? w : { ...DAY, staff: [{ id: 1, name: 'Юлия', working: true, workRanges: [] }] }));
+  h.context.jrUpdateDispatchButton = jest.fn();
+  h.run(`journal.view = 'week'`);
+  await h.context.loadJournal();
+  expect(h.get('jrStaffFilter').innerHTML).toContain('value="2"');
+  expect(h.get('jrStaffFilter').innerHTML).not.toContain('Все сотрудники');
+  expect(h.get('jrStaffFilter').value).toBe('2');
+  h.context.jrShift(1);
+  await new Promise(r => setTimeout(r, 0));
+  expect(h.get('jrStaffFilter').value).toBe('2');
+  expect(h.context.jrApi.mock.calls.at(-1)[0]).toBe('week?date=2030-04-10&staffId=2');
+});
+test('forced day on phone syncs the view buttons', async () => {
+  const h = harness(); h.context.window = { matchMedia: () => ({ matches: true }) };
+  const week = h.get('jrViewWeek'); week.classList = { toggle: jest.fn() }; week.setAttribute = jest.fn();
+  h.context.jrApi = jest.fn(async () => DAY); h.context.jrUpdateDispatchButton = jest.fn();
+  h.run(`journal.view = 'week'`);
+  await h.context.loadJournal();
+  expect(h.run('journal.view')).toBe('day');
+  expect(week.classList.toggle).toHaveBeenCalledWith('is-active', false);
+  expect(week.setAttribute).toHaveBeenCalledWith('aria-pressed', 'false');
+});
+test('day view makes exactly one request (no week)', async () => {
+  const h = harness(); h.get('jrDate').value = '2030-04-03';
+  h.context.jrApi = jest.fn(async () => DAY); h.context.jrUpdateDispatchButton = jest.fn();
+  await h.context.loadJournal();
+  expect(h.context.jrApi.mock.calls.map(c => c[0])).toEqual(['day?date=2030-04-03']);
+});
+test('month button toggles: second press closes without a request', async () => {
+  const h = harness(); h.get('jrDate').value = '2026-11-12';
+  h.context.jrApi = jest.fn().mockResolvedValue({ days: [] });
+  await h.context.jrMonthPicker();
+  await h.context.jrMonthPicker();
+  expect(h.context.jrApi).toHaveBeenCalledTimes(1);
+  expect(h.get('jrMonth').hidden).toBe(true);
+});
+test('week: queue polling looks at records of every day of the week', () => {
+  const h = harness();
+  h.context.document.body = { dataset: { page: 'journal' } };
+  h.run(`journal.view='week'; journal.data={records:[]}; journal.week={days:[{records:[]},{records:[{id:1,sync:{status:'queued',released:true}}]}]}; jrSchedulePoll()`);
+  expect(h.run('journal.pollTimer')).toBeTruthy();
+  h.run('clearTimeout(journal.pollTimer)');
+});
+test('phone with no staff keeps the chips strip hidden', () => {
+  const h = harness(); h.context.window = { matchMedia: () => ({ matches: true }) };
+  h.get('jrWorkingOnly').checked = true;
+  h.run(`journal.data = {date:'2030-04-01',labels:[],staff:[],records:[]}; jrRender()`);
+  expect(h.get('jrStaffChips').hidden).toBe(true);
+});

@@ -41,7 +41,7 @@ async function loadJournal(opts = {}) {
   }
   try {
     // Week = one master x 7 days; the day is still loaded: forms need its services/staff.
-    if (jrIsMobile()) journal.view = 'day';
+    if (jrIsMobile() && journal.view !== 'day') { journal.view = 'day'; jrSyncViewButtons(); }
     const staffId = jrEl('jrStaffFilter').value;
     const [data, week] = await Promise.all([
       jrApi('day?' + new URLSearchParams({ date })),
@@ -76,7 +76,7 @@ const jrUnsent = r => r?.sync?.status === 'queued' && r.sync.released === false;
 function jrSchedulePoll() {
   clearTimeout(journal.pollTimer); journal.pollTimer = null;
   const onPage = () => document.body?.dataset?.page === 'journal';
-  if (!onPage() || !(journal.data?.records || []).some(jrSyncing)) return;
+  if (!onPage() || !(journal.view === 'week' && journal.week ? journal.week.days.flatMap(d => d.records || []) : (journal.data?.records || [])).some(jrSyncing)) return;
   journal.pollTimer = setTimeout(() => {
     journal.pollTimer = null;
     if (onPage() && !document.hidden) loadJournal({ silent: true });
@@ -87,6 +87,14 @@ function jrStaffList() {
   return (journal.data?.staff || []).filter(s => !jrEl('jrWorkingOnly').checked || s.working === true);
 }
 function jrUpdateStaffFilter() {
+  const week = journal.view === 'week' ? journal.week : null;
+  if (week?.staff) {
+    // Week = one master: the list is the whole roster (an off-day master stays selectable), no «all».
+    const sel = jrEl('jrStaffFilter');
+    sel.innerHTML = (week.allStaff || [week.staff]).map(s => `<option value="${s.id}">${jrEscape(s.name)}</option>`).join('');
+    sel.value = String(week.staff.id);
+    return;
+  }
   const select = jrEl('jrStaffFilter'), prev = select.value, staff = jrStaffList();
   select.innerHTML = '<option value="">Все сотрудники</option>' + staff.map(s => `<option value="${s.id}">${jrEscape(s.name)}</option>`).join('');
   select.value = staff.some(s => String(s.id) === prev) ? prev : '';
@@ -98,12 +106,15 @@ function jrShift(days) {
 }
 function jrSetView(view) {
   journal.view = view === 'week' && !jrIsMobile() ? 'week' : 'day';
+  jrSyncViewButtons();
+  loadJournal();
+}
+function jrSyncViewButtons() {
   for (const [id, v] of [['jrViewDay', 'day'], ['jrViewWeek', 'week']]) {
     const b = jrEl(id);
     b.classList?.toggle('is-active', journal.view === v);
     b.setAttribute?.('aria-pressed', String(journal.view === v));
   }
-  loadJournal();
 }
 // In the week the master is part of the request; in the day the filter is local.
 function jrStaffChanged() {

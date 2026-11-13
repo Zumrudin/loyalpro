@@ -116,7 +116,7 @@ function jrRender() {
   // Phone: one master at a time, switched by chips (spec 3.1).
   const mobile = jrIsMobile();
   if (mobile && staff.length > 1) staff = staff.slice(0, 1);
-  jrRenderChips(mobile, staff[0]?.id);
+  jrRenderChips(mobile && staff.length > 0, staff[0]?.id);
   const query = jrEl('jrSearch').value.trim().toLowerCase();
   const allRecords = journal.data.records;
   const records = allRecords.filter(r => staff.some(s => s.id === r.staffId) && (!query || [r.clientName, ...r.services.map(s => s.title)].join(' ').toLowerCase().includes(query)));
@@ -166,9 +166,10 @@ function jrMonthCells(month, days) {
 function jrMonthAdd(month, n) { const d = new Date(month + '-01T12:00:00Z'); d.setUTCMonth(d.getUTCMonth() + n); return d.toISOString().slice(0, 7); }
 async function jrMonthPicker(month) {
   const box = jrEl('jrMonth');
+  if (month === undefined && journal.monthOpen) { journal.monthOpen = false; box.hidden = true; return; }   // the 📅 button toggles
   month = month || (jrEl('jrDate').value || jrToday()).slice(0, 7);
   const request = journal.monthRequest = (journal.monthRequest || 0) + 1;
-  box.hidden = false;
+  box.hidden = false; journal.monthOpen = true;
   box.innerHTML = '<p class="jr-hint">Загрузка…</p>';
   let data;
   try { data = await jrApi('month?' + new URLSearchParams({ month })); }
@@ -177,15 +178,21 @@ async function jrMonthPicker(month) {
   const title = new Date(month + '-01T12:00:00Z').toLocaleDateString('ru', { month: 'long', year: 'numeric', timeZone: 'UTC' });
   const selected = jrEl('jrDate').value;
   box.innerHTML = `<div class="jr-month-head"><button type="button" class="btn btn-sec" data-month-shift="-1" aria-label="Предыдущий месяц">←</button><strong>${jrEscape(title)}</strong><button type="button" class="btn btn-sec" data-month-shift="1" aria-label="Следующий месяц">→</button><button type="button" class="btn btn-sec" data-month-close aria-label="Закрыть календарь">✕</button></div><div class="jr-month-grid">${JR_WEEKDAYS.map(d => `<span class="jr-month-wd">${d}</span>`).join('')}${jrMonthCells(month, data.days).map(c => c ? `<button type="button" class="jr-month-day${c.date === selected ? ' is-current' : ''}" data-month-date="${c.date}" title="Записей: ${c.records}"><span>${c.day}</span>${c.density == null ? '<i class="jr-density jr-density-none" aria-hidden="true"></i>' : `<i class="jr-density jr-density-${c.density}" aria-hidden="true">${'•'.repeat(c.density)}</i>`}</button>` : '<span></span>').join('')}</div>`;
-  box.querySelectorAll('[data-month-date]').forEach(b => { b.onclick = () => { jrEl('jrDate').value = b.dataset.monthDate; box.hidden = true; loadJournal(); }; });
+  box.querySelectorAll('[data-month-date]').forEach(b => { b.onclick = () => { jrEl('jrDate').value = b.dataset.monthDate; box.hidden = true; journal.monthOpen = false; loadJournal(); }; });
   box.querySelectorAll('[data-month-shift]').forEach(b => { b.onclick = () => jrMonthPicker(jrMonthAdd(month, Number(b.dataset.monthShift))); });
-  box.querySelectorAll('[data-month-close]').forEach(b => { b.onclick = () => { box.hidden = true; }; });
+  box.querySelectorAll('[data-month-close]').forEach(b => { b.onclick = () => { box.hidden = true; journal.monthOpen = false; }; });
 }
 // Crossing the 700px threshold re-lays the grid (one master <-> all masters).
 if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
   let jrResizeTimer = null;
   window.addEventListener('resize', () => {
     clearTimeout(jrResizeTimer);
-    jrResizeTimer = setTimeout(() => { if (document.body?.dataset?.page === 'journal') { if (jrIsMobile()) journal.view = 'day'; jrRender(); } }, 200);
+    jrResizeTimer = setTimeout(() => { if (document.body?.dataset?.page === 'journal') { if (jrIsMobile() && journal.view !== 'day') { journal.view = 'day'; jrSyncViewButtons(); } jrRender(); } }, 200);
+  });
+}
+if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
+  document.addEventListener('keydown', e => {
+    const box = document.getElementById('jrMonth');
+    if (e.key === 'Escape' && box && journal.monthOpen) { journal.monthOpen = false; box.hidden = true; }
   });
 }
