@@ -1,6 +1,7 @@
 'use strict';
 jest.mock('./config', () => ({ JWT_SECRET: 'synthetic-test-secret', JOURNAL_ACCOUNT_PAYMENTS_ENABLED: true }));
-jest.mock('./db', () => ({ db: { oneOrNone: jest.fn(), any: jest.fn(), query: jest.fn() }, pool: { connect: jest.fn(() => { throw new Error('no pool in sessions'); }) } }));
+jest.mock('./db', () => ({ db: { oneOrNone: jest.fn(), any: jest.fn(), query: jest.fn() }, pool: { connect: jest.fn(() => { throw new Error('no pool in sessions'); }) },
+  withTransaction: jest.fn() }));
 // Any YClients traffic from the sessions path is a defect.
 jest.mock('./services/journal/yclients', () => {
   const calls = [];
@@ -11,7 +12,7 @@ jest.mock('./services/journal/index', () => ({ availability: jest.fn() }));
 jest.mock('./services/journal/sources', () => ({ local: jest.fn(() => ({ kind: 'local', services: jest.fn(async () => []) })), forSalon: jest.fn(async () => ({ kind: 'local', services: jest.fn(async () => []) })), live: jest.fn(() => { throw new Error('live source'); }) }));
 jest.mock('./services/service-catalog', () => ({ resolve: jest.fn() }));
 jest.mock('./services/journal/reference-cache', () => ({ getReference: jest.fn(), getBonusPercent: jest.fn() }));
-const { db, pool } = require('./db');
+const { db, pool, withTransaction } = require('./db');
 const yc = require('./services/journal/yclients');
 const index = require('./services/journal/index');
 const catalog = require('./services/service-catalog');
@@ -238,7 +239,7 @@ describe('validate', () => {
     state.record = { ...RECORD, attendance: -1 };
     await expect(s.validate(3, parse({ recordId: 42, status: 'confirm' }))).rejects.toMatchObject({ status: 409 });
     state.record = { ...RECORD, attendance: 1 };
-    await expect(s.validate(3, parse({ recordId: 42, status: 'cancel' }))).rejects.toMatchObject({ status: 409, message: 'Пришедшие и оплаченные визиты изменяйте в YClients.' });
+    await expect(s.validate(3, parse({ recordId: 42, status: 'cancel' }))).rejects.toMatchObject({ status: 409, message: 'Пришедший визит нельзя перенести, отменить или подтвердить.' });
     state.record = { ...RECORD, paid_amount: 10 };
     await expect(s.validate(3, parse({ recordId: 42, status: 'confirm' }))).rejects.toMatchObject({ status: 409 });
     state.record = null;
@@ -474,11 +475,11 @@ describe('delete review fixes (12.11.2026)', () => {
     await expect(s.validate(3, parse({ recordId: 42, status: 'confirm' }))).rejects.toMatchObject({ status: 409 });
     await expect(s.validate(3, parse({ recordId: 42, move: { date: '2030-04-01', time: '11:00', staffId: 5 } }))).rejects.toMatchObject({ status: 409 });
   });
-  test('delete texts: paid → «Сначала удалите оплаты визита», arrived → «удаляйте в YClients»', async () => {
+  test('delete texts: paid → «Сначала удалите оплаты визита», arrived → «сначала смените статус»', async () => {
     setup({ record: { ...RECORD, paid_amount: 100 } });
     await expect(s.validate(3, parse({ recordId: 42, status: 'delete' }))).rejects.toMatchObject({ message: 'Сначала удалите оплаты визита.' });
     setup({ record: { ...RECORD, attendance: 1 } });
-    await expect(s.validate(3, parse({ recordId: 42, status: 'delete' }))).rejects.toMatchObject({ message: 'Пришедший визит удаляйте в YClients.' });
+    await expect(s.validate(3, parse({ recordId: 42, status: 'delete' }))).rejects.toMatchObject({ message: 'Пришедший визит нельзя удалить: сначала смените статус визита.' });
   });
   const createRow = (over = {}) => ({ id: 5, status: 'queued', released_at: null, yclients_record_id: null,
     overlay: { kind: 'create', date: '2030-04-01', time: '10:00', staffId: 5, duration: 60, services: [{ id: 900, title: 'Чистка', amount: 1, cost: 3000 }], client: { name: 'Анна', phone: '79200001122' }, attendance: 0 },
@@ -520,5 +521,79 @@ describe('delete review fixes (12.11.2026)', () => {
   test('replay of a local cancel answers the same', async () => {
     state.outbox = { id: 9, request_hash: require('./services/journal/model').fingerprint(parse({ recordId: -5, status: 'delete' })), status: 'cancelled' };
     expect(await s.enqueue(3, 4, parse({ recordId: -5, status: 'delete' }))).toEqual({ outboxId: 9, recordId: -5, status: 'cancelled', duplicate: true });
+  });
+});
+
+describe('unsent payment deleted in the journal (dropPayments, 13.11.2026)', () => {
+  const OP = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee', OP2 = 'aaaaaaaa-bbbb-4ccc-8ddd-ffffffffffff';
+  const payStep = (opId, params) => ({ kind: 'pay', opId, state: 'pending', params });
+  const pkg = (over = {}) => ({ id: 6, status: 'queued', released_at: null, yclients_record_id: 42, overlay: { kind: 'patch', patch: {} },
+    steps: [payStep(OP, { method: 'loyalty_card', methodId: 88, amount: 100 })], ...over });
+  let tx;
+  beforeEach(() => {
+    tx = { calls: [], row: pkg() };
+    withTransaction.mockImplementation(async fn => fn({ query: async (sql, args) => {
+      tx.calls.push({ sql, args });
+      if (/FOR UPDATE/.test(sql)) return { rows: tx.row ? [tx.row] : [] };
+      if (/INSERT INTO journal_outbox/.test(sql)) return { rows: [{ id: 11, status: args[8] }] };
+      return { rows: [] };
+    } }));
+  });
+  test('parse: uuid opId, record only, not with a card edit, no duplicates', () => {
+    expect(parse({ recordId: 42, dropPayments: [{ outboxId: 6, opId: OP }] }).dropPayments).toEqual([{ outboxId: 6, opId: OP }]);
+    expect(() => parse({ recordId: 42, dropPayments: [{ outboxId: 6, opId: 'x' }] })).toThrow('удаление оплаты');
+    expect(() => parse({ recordId: 42, dropPayments: [{ outboxId: 6, opId: OP }, { outboxId: 6, opId: OP }] })).toThrow('дважды');
+    expect(() => parse({ recordId: 42, edit: { comment: 'a' }, dropPayments: [{ outboxId: 6, opId: OP }] })).toThrow('отдельно от оплат');
+  });
+  test('validate: a dropped queued payment no longer blocks deleting the record', async () => {
+    state.open = [pkg()];
+    await expect(s.validate(3, parse({ recordId: 42, status: 'delete' }))).rejects.toMatchObject({ message: 'Сначала удалите оплаты визита.' });
+    const r = await s.validate(3, parse({ recordId: 42, status: 'delete', dropPayments: [{ outboxId: 6, opId: OP }] }));
+    expect(r.steps.map(x => x.kind)).toEqual(['delete']);
+    expect(r.drops).toEqual([{ outboxId: 6, opId: OP }]);
+  });
+  test('validate: a released (being sent) or foreign payment cannot be dropped', async () => {
+    state.open = [pkg({ released_at: new Date().toISOString() })];
+    await expect(s.validate(3, parse({ recordId: 42, dropPayments: [{ outboxId: 6, opId: OP }] }))).rejects.toMatchObject({ status: 409, code: 'drop_conflict' });
+    state.open = [pkg()];
+    await expect(s.validate(3, parse({ recordId: 42, dropPayments: [{ outboxId: 6, opId: OP2 }] }))).rejects.toMatchObject({ code: 'drop_conflict' });
+  });
+  test('enqueue drop-only: package loses the step (cancelled when empty), closed marker row, finance row cancelled', async () => {
+    state.open = [pkg()];
+    const r = await s.enqueue(3, 4, parse({ recordId: 42, dropPayments: [{ outboxId: 6, opId: OP }] }));
+    expect(r).toEqual({ outboxId: 11, recordId: 42, status: 'saved' });
+    const upd = tx.calls.find(c => /UPDATE journal_outbox SET steps/.test(c.sql));
+    expect(upd.args.slice(0, 2)).toEqual([3, 6]);
+    expect(JSON.parse(upd.args[2])).toEqual([]);
+    expect(upd.args[3]).toBe(true);
+    const ins = tx.calls.find(c => /INSERT INTO journal_outbox/.test(c.sql));
+    expect(ins.args[8]).toBe('cancelled');
+    expect(JSON.parse(ins.args[6])).toEqual([{ kind: 'drop_payment', state: 'done' }]);
+    expect(db.query.mock.calls.some(([q, a]) => /UPDATE finance_operations/.test(q) && a?.[1] === OP)).toBe(true);
+    expect(state.inserted).toHaveLength(0);
+  });
+  test('enqueue: package released between validate and save → 409, nothing written', async () => {
+    state.open = [pkg()];
+    tx.row = pkg({ released_at: new Date().toISOString() });
+    await expect(s.enqueue(3, 4, parse({ recordId: 42, dropPayments: [{ outboxId: 6, opId: OP }] }))).rejects.toMatchObject({ code: 'drop_conflict' });
+    expect(tx.calls.some(c => /^\s*(UPDATE|INSERT)/.test(c.sql))).toBe(false);
+  });
+  test('drop + new payment in one form: due reopened by the dropped amount, one queued package', async () => {
+    state.open = [pkg({ steps: [payStep(OP, { method: 'account', methodId: 10, amount: 3000 })] })];
+    state.record = { ...RECORD, attendance: 1 };
+    const r = await s.enqueue(3, 4, parse({ recordId: 42, dropPayments: [{ outboxId: 6, opId: OP }], payments: [pay('account', 10, 3000)] }));
+    expect(r.status).toBe('queued');
+    const ins = tx.calls.find(c => /INSERT INTO journal_outbox/.test(c.sql));
+    expect(ins.args[8]).toBe('queued');
+    expect(JSON.parse(ins.args[6]).map(x => x.kind)).toEqual(['pay']);
+  });
+  test('withoutDrops: a dropped arrival payment keeps the arrival as an edit step before the payments', () => {
+    const steps = [{ kind: 'create', opId: 'c', state: 'pending' }, payStep(OP2, { method: 'loyalty_card', methodId: 88, amount: 50 }),
+      payStep(OP, { method: 'account', methodId: 10, amount: 100, confirmArrival: true })];
+    const { next, dropped } = s.withoutDrops(steps, new Set([OP]));
+    expect(dropped).toBe(1);
+    expect(next.map(x => x.kind)).toEqual(['create', 'edit', 'pay']);
+    expect(next[1]).toMatchObject({ params: { attendance: 1 }, state: 'pending' });
+    expect(s.withoutDrops(steps, new Set([OP2])).next.map(x => x.kind)).toEqual(['create', 'pay']);
   });
 });

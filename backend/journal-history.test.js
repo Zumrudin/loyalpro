@@ -38,7 +38,7 @@ describe('mergeHistory', () => {
         steps: [{ kind: 'move', state: 'failed', draftJson: '{"client":{"phone":"79200255591"}}', params: { clientPhone: '79200255591' } }] },
     ], new Map([[4, 'Мария']]));
     expect(events.map(e => [e.source, e.title])).toEqual([
-      ['yclients', 'Изменена в YClients'], ['journal', 'перенос — ошибка'], ['yclients', 'Создана в YClients'],
+      ['yclients', 'Запись изменена'], ['journal', 'перенос — ошибка'], ['yclients', 'Запись создана'],
     ]);
     expect(events[0].changes).toEqual([{ field: 'comment', label: 'Комментарий', from: null, to: 'Позвонить' }]);
     expect(events[1]).toMatchObject({ author: 'LoyalPro: Мария', status: 'failed', steps: [{ kind: 'move', state: 'failed' }], error: 'Время занято' });
@@ -46,8 +46,12 @@ describe('mergeHistory', () => {
   });
   test('cancelled package with empty steps does not crash', () => {
     const ev = h.mergeHistory([], [{ id: 1, user_id: 4, status: 'cancelled', steps: [], created_at: new Date('2026-11-12T07:00:00Z') }], new Map());
-    expect(ev[0]).toMatchObject({ title: 'Удалена до отправки в YClients', steps: [], error: null, author: 'LoyalPro' });
+    expect(ev[0]).toMatchObject({ title: 'Удалена до отправки', steps: [], error: null, author: 'LoyalPro' });
     expect(() => h.mergeHistory([], [{ id: 2, status: 'failed', steps: null, created_at: new Date() }], new Map())).not.toThrow();
+  });
+  test('drop-only marker package reads as a deleted unsent payment', () => {
+    const [e] = h.mergeHistory([], [{ id: 3, status: 'cancelled', steps: [{ kind: 'drop_payment', state: 'done' }], created_at: new Date() }], new Map());
+    expect(e.title).toBe('Неотправленная оплата удалена');
   });
   test('partial payment is paid_full=2; date is the fallback for datetime', () => {
     const d = h.diffRecords({ ...base, paid_full: 0 }, { ...base, paid_full: 2 });
@@ -80,7 +84,7 @@ describe('load', () => {
     });
     const out = await h.load(3, 8);
     expect(out.recordId).toBe(8);
-    expect(out.events.map(e => e.author)).toEqual(['YClients', 'LoyalPro: Мария']);
+    expect(out.events.map(e => e.author)).toEqual(['Синхронизация', 'LoyalPro: Мария']);
     const hooks = db.any.mock.calls.find(([sql]) => /FROM webhook_logs/.test(sql));
     expect(hooks[0]).toMatch(/event_type='record'/); expect(hooks[1]).toEqual([3, '8', null]);
     const outbox = db.any.mock.calls.find(([sql]) => /FROM journal_outbox/.test(sql));

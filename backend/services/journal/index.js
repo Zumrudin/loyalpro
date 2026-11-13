@@ -9,7 +9,7 @@ const mirror = require('./mirror');
 const prefs = require('./record-prefs');
 async function salonFor(salonId) {
   const salon = await db.oneOrNone('SELECT * FROM salons WHERE id=$1', [salonId]);
-  if (!salon?.yclients_company_id) m.fail('YClients не подключён для салона.', 409);
+  if (!salon?.yclients_company_id) m.fail('Журнал записи не подключён для салона.', 409);
   return salon;
 }
 const shiftDate = (date, days) => new Date(Date.parse(date + 'T12:00:00Z') + days * 86400000).toISOString().slice(0, 10);
@@ -201,7 +201,7 @@ async function slots(salonId, draft) {
 }
 function editable(r) {
   if (r.deleted || Number(r.attendance) === -1) m.fail('Запись уже отменена или удалена.', 409);
-  if (Number(r.attendance) === 1 || r.paid_full || Number(r.paid_amount) > 0) m.fail('Пришедшие и оплаченные визиты изменяйте в YClients.', 409);
+  if (Number(r.attendance) === 1 || r.paid_full || Number(r.paid_amount) > 0) m.fail('Сначала удалите оплаты визита; пришедший визит не переносится и не отменяется.', 409);
 }
 async function prepare(salon, draft, opts = {}) {
   if (draft.action === 'delete') {
@@ -211,7 +211,7 @@ async function prepare(salon, draft, opts = {}) {
     if (rec.deleted) return { alreadyDeleted: true };
     if (m.revision(rec) !== draft.version) m.fail('Запись изменилась. Откройте карточку заново.', 409, 'stale');
     if (rec.paid_full || Number(rec.paid_amount) > 0) m.fail('Сначала удалите оплаты визита.', 409);
-    if (Number(rec.attendance) === 1) m.fail('Пришедший визит удаляйте в YClients.', 409);
+    if (Number(rec.attendance) === 1) m.fail('Пришедший визит нельзя удалить: сначала смените статус визита.', 409);
     return {};
   }
   let record;
@@ -290,7 +290,7 @@ async function mutate(salonId, userId, draft, opts = {}) {
     }
     if (draft.recordId) {
       const ledger = (await conn.query("SELECT action, method, external_ids, target_transaction_id FROM journal_financial_transactions WHERE salon_id=$1 AND yclients_record_id=$2 AND yclients_company_id=$3 AND state='confirmed'", [salonId,draft.recordId,salon.yclients_company_id])).rows;
-      if (require('./record-edit').hasActivePayments(ledger)) m.fail(draft.action === 'delete' ? 'Сначала удалите оплаты визита.' : 'У визита есть проведённые оплаты. Измените его в YClients.',409);
+      if (require('./record-edit').hasActivePayments(ledger)) m.fail(draft.action === 'delete' ? 'Сначала удалите оплаты визита.' : 'У визита есть оплаты. Сначала удалите оплаты визита.',409);
     }
     const body = await prepare(salon, draft, opts);
     if (draft.recordId && !body?.alreadyDeleted && m.revision(await yc.getRecord(salon, draft.recordId)) !== draft.version) {

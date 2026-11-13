@@ -10,9 +10,9 @@ const m = require('./model');
 const CAP = 200;
 const STATUS = { '-1': 'Не пришёл', 0: 'Ожидание', 1: 'Пришёл', 2: 'Подтвердил' };
 const STEP = { create: 'создание', move: 'перенос', edit: 'изменение', confirm: 'подтверждение', cancel: 'отмена',
-  delete: 'удаление', pay: 'оплата', remove_payment: 'удаление оплаты' };
+  delete: 'удаление', pay: 'оплата', remove_payment: 'удаление оплаты', drop_payment: 'удаление неотправленной оплаты' };
 const PACKAGE = { queued: 'ждёт отправки', running: 'передаётся', done: 'отправлено', failed: 'ошибка', cancelled: 'отменено' };
-const TITLE = { create: 'Создана в YClients', update: 'Изменена в YClients', delete: 'Удалена в YClients' };
+const TITLE = { create: 'Запись создана', update: 'Запись изменена', delete: 'Запись удалена' };
 
 const when = v => { const p = m.moscowParts(v); return p ? `${p.date.slice(8, 10)}.${p.date.slice(5, 7)} ${p.time}` : null; };
 const servicesText = list => (Array.isArray(list) ? list : [])
@@ -51,7 +51,7 @@ function mergeHistory(webhookRows, outboxRows, users = new Map()) {
     const changes = diffRecords(prev, data);
     if (data) {
       // A repeated/irrelevant update (nothing we show changed) is noise.
-      if (!(status === 'update' && prev && !changes.length)) events.push({ at: iso(w.created_at), source: 'yclients', author: 'YClients', title: TITLE[status], changes });
+      if (!(status === 'update' && prev && !changes.length)) events.push({ at: iso(w.created_at), source: 'yclients', author: 'Синхронизация', title: TITLE[status], changes });
       prev = data;
     }
   }
@@ -60,7 +60,8 @@ function mergeHistory(webhookRows, outboxRows, users = new Map()) {
     const steps = (Array.isArray(o.steps) ? o.steps : []).map(s => ({ kind: String(s?.kind || ''), state: String(s?.state || '') }));
     const name = users.get(Number(o.user_id));
     events.push({ at: iso(o.created_at), source: 'journal', author: 'LoyalPro' + (name ? ': ' + name : ''),
-      title: o.status === 'cancelled' && !steps.length ? 'Удалена до отправки в YClients'
+      title: o.status === 'cancelled' && !steps.length ? 'Удалена до отправки'
+        : steps.length && steps.every(s => s.kind === 'drop_payment') ? 'Неотправленная оплата удалена'
         : `${steps.map(s => STEP[s.kind] || s.kind).join(', ') || 'изменения'} — ${PACKAGE[o.status] || String(o.status)}`,
       changes: [], status: String(o.status), steps,
       error: o.status === 'failed' ? String(o.error_text || 'причина неизвестна') : null,

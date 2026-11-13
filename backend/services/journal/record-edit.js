@@ -74,10 +74,10 @@ async function patch(salon, record, input, src, availability, paid = false) {
   const edit = parse(input);
   if (edit.lines && edit.servicesVersion && edit.servicesVersion !== m.servicesRevision(record)) m.fail('Услуги визита изменились. Откройте карточку заново.', 409, 'edit_conflict');
   if (record.deleted) m.fail('Запись удалена.', 409);
-  if (paid || record.paid_full || Number(record.paid_amount) > 0) m.fail('У визита есть проведённые оплаты. Измените его в YClients.', 409);
+  if (paid || record.paid_full || Number(record.paid_amount) > 0) m.fail('У визита есть оплаты. Сначала удалите оплаты визита.', 409);
   // Spec §4.1: duration and client of a visit that came stay as they are.
   if ((edit.seanceLength !== undefined || edit.client) && (Number(record.attendance) === 1 || edit.attendance === 1)) {
-    m.fail('Длительность и клиента пришедшего визита меняйте в YClients.', 409);
+    m.fail('Длительность и клиента пришедшего визита изменить нельзя.', 409);
   }
   const out = {};
   if (edit.attendance !== undefined) out.attendance = edit.attendance;

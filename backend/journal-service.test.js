@@ -201,7 +201,7 @@ test('quantity extends verified booking duration and quoted prices cross integra
 });
 test('confirmed journal payment blocks changing its visit even before paid flag sync',async()=>{
  const original=conn.query.getMockImplementation();conn.query.mockImplementation((sql,args)=>sql.includes("state='confirmed'")&&sql.includes('journal_financial_transactions')?Promise.resolve({rows:[{operation_id:operationId}]}):original(sql,args));
- await expect(service.mutate(3,4,draft())).rejects.toThrow('проведённые оплаты');expect(yc.write).not.toHaveBeenCalled();
+ await expect(service.mutate(3,4,draft())).rejects.toThrow('Сначала удалите оплаты визита');expect(yc.write).not.toHaveBeenCalled();
 });
 
 test('pending payment on another visit does not block creation or touch financial history',async()=>{

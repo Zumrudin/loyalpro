@@ -64,8 +64,6 @@ async function loadJournal(opts = {}) {
 }
 const jrClock = value => new Date(value).toLocaleTimeString('ru', { timeZone: 'Europe/Moscow', hour: '2-digit', minute: '2-digit' });
 function jrFreshnessText(data) {
-  const mirror = data?.freshness?.mirrorOkAt ? Date.parse(data.freshness.mirrorOkAt) : NaN;
-  if (Number.isFinite(mirror) && Date.now() - mirror > 30 * 60000) return `Данные YClients обновлены ${jrClock(mirror)} · московское время`;
   return `Обновлено ${jrClock(data?.fetchedAt ? data.fetchedAt : Date.now())} · московское время`;
 }
 // Manual dispatch (10.11.2026): changes wait in the journal until «Отправить
@@ -160,7 +158,7 @@ function jrShowModal(title, wide = false) {
 const jrNewSession = extra => ({ sessionId: crypto.randomUUID(), ...extra });
 function jrSessionPending() {
   const s = journal.session;
-  return !!(s?.edit || (journal.payment && s && (s.create || s.payments?.length || s.removePayments?.length)));
+  return !!(s?.edit || (journal.payment && s && (s.create || s.payments?.length || s.removePayments?.length || s.dropPayments?.length)));
 }
 function jrMessage(message) { jrEl('jrModalError').textContent = message; }
 async function jrWithBusy(message, fn) {
@@ -183,10 +181,11 @@ function jrSessionBody() {
   if (s.edit) body.edit = { ...s.edit, ...(s.servicesVersion ? { servicesVersion: s.servicesVersion } : {}) };
   if (s.payments?.length) body.payments = s.payments.map(p => ({ ...p }));
   if (s.removePayments?.length) body.removePayments = s.removePayments.map(p => ({ ...p }));
+  if (s.dropPayments?.length) body.dropPayments = s.dropPayments.map(p => ({ outboxId: p.outboxId, opId: p.opId }));
   return body;
 }
-// The server only stores the session (fractions of a second); YClients is
-// updated in the background, so the form closes as soon as it answers.
+// The server only stores the session (fractions of a second), so the form
+// closes as soon as it answers.
 async function jrSave(body) {
   let ok = false, used = false, res = null;
   await jrWithBusy('Сохраняем…', async () => {
@@ -210,9 +209,8 @@ async function jrSave(body) {
   if (!ok) return false;
   jrMessage(''); jrClose(true);
   loadJournal({ silent: true });
-  // A local cancel of a not-yet-sent record: nothing goes to YClients.
-  if (res?.status === 'cancelled') notify('Запись удалена из журнала (в YClients она ещё не уходила).');
-  else notify('Сохранено в журнале. В YClients — кнопкой «Отправить в YClients».');
+  if (res?.status === 'cancelled') notify('Запись удалена из журнала.');
+  else notify('Сохранено в журнале.');
   return true;
 }
 jrEl('jrModal').addEventListener('cancel', event => { event.preventDefault(); jrClose(); });

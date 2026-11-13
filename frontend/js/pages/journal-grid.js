@@ -91,14 +91,14 @@ function jrColumnHtml(s, date, records, allRecords, start, end, now) {
   }
   const visits = jrLayout(records).map(r => {
     const length = Math.min(Math.max(r.duration || 15, 5), end - r.start);
-    const syncing = jrSyncing(r), failed = r.sync?.status === 'failed', unsent = jrUnsent(r);
+    const syncing = jrSyncing(r), failed = r.sync?.status === 'failed';
     // Phone: no drag (a finger on a block scrolls the grid); move via the card.
     const drag = !mobile && jrDragAllowed(r);
-    const title = r.time + ' · ' + r.clientName + ' · ' + r.services.map(x => x.title).join(', ') + (failed ? ' · Не передано в YClients: ' + (r.sync.errorText || 'причина неизвестна') : syncing ? ' · передаётся в YClients' : unsent ? ' · не отправлено в YClients' : '');
+    const title = r.time + ' · ' + r.clientName + ' · ' + r.services.map(x => x.title).join(', ') + (failed ? ' · Ошибка отправки: ' + (r.sync.errorText || 'причина неизвестна') : syncing ? ' · идёт отправка' : '');
     const pos = `left:calc(${r.lane * 100 / r.lanes}% + 3px);width:calc(${100 / r.lanes}% - 6px)`;
     const pause = Number(r.technicalBreak) > 0 && !r.continued ? Math.min(Number(r.technicalBreak) / 60, end - r.start - length) : 0;
     const band = pause > 0 ? `<div class="jr-break-band" style="top:${(r.start + length - start) * JR_PX_PER_MIN}px;height:${Math.max(4, pause * JR_PX_PER_MIN - 2)}px;${pos}" title="Технический перерыв ${Math.round(pause)} мин" aria-hidden="true">⏸</div>` : '';
-    return `<button type="button" class="jr-visit jr-status-${r.attendance}${r.paidFull ? ' jr-paid-full' : ''}${length < 30 ? ' jr-visit-short' : ''}${syncing ? ' jr-visit-syncing' : ''}${unsent ? ' jr-visit-unsent' : ''}${failed ? ' jr-visit-failed' : ''}${drag ? ' jr-draggable' : ''}" data-record="${r.id}" style="${jrVisitStyle(r)}top:${(r.start - start) * JR_PX_PER_MIN}px;height:${Math.max(6, length * JR_PX_PER_MIN - 2)}px;${pos}" title="${jrEscape(title)}" aria-label="${jrEscape(r.time + ' ' + r.clientName + ', ' + jrStatus(r) + (failed ? ', не передано в YClients' : syncing ? ', передаётся в YClients' : unsent ? ', не отправлено в YClients' : ''))}"><b>${syncing ? '⏳ ' : ''}${jrEscape(r.time)} · ${jrEscape(r.clientName)}${jrVisitMarks(r)}</b><span>${jrEscape(r.services.map(x => x.title).join(', ') || 'Без услуг')}</span><small>${r.continued ? 'Продолжение · ' : ''}${jrEscape(jrStatus(r))}${r.paid ? ' · оплачено' : ''}</small>${failed ? '<small class="jr-sync-failed-note">Не передано в YClients</small>' : unsent ? '<small class="jr-sync-unsent-note">Не отправлено в YClients</small>' : ''}${drag ? '<i class="jr-resize" data-resize="1" aria-hidden="true"></i>' : ''}</button>${band}`;
+    return `<button type="button" class="jr-visit jr-status-${r.attendance}${r.paidFull ? ' jr-paid-full' : ''}${length < 30 ? ' jr-visit-short' : ''}${syncing ? ' jr-visit-syncing' : ''}${failed ? ' jr-visit-failed' : ''}${drag ? ' jr-draggable' : ''}" data-record="${r.id}" style="${jrVisitStyle(r)}top:${(r.start - start) * JR_PX_PER_MIN}px;height:${Math.max(6, length * JR_PX_PER_MIN - 2)}px;${pos}" title="${jrEscape(title)}" aria-label="${jrEscape(r.time + ' ' + r.clientName + ', ' + jrStatus(r) + (failed ? ', ошибка отправки' : syncing ? ', идёт отправка' : ''))}"><b>${syncing ? '⏳ ' : ''}${jrEscape(r.time)} · ${jrEscape(r.clientName)}${jrVisitMarks(r)}</b><span>${jrEscape(r.services.map(x => x.title).join(', ') || 'Без услуг')}</span><small>${r.continued ? 'Продолжение · ' : ''}${jrEscape(jrStatus(r))}${r.paid ? ' · оплачено' : ''}</small>${failed ? '<small class="jr-sync-failed-note">Ошибка отправки</small>' : ''}${drag ? '<i class="jr-resize" data-resize="1" aria-hidden="true"></i>' : ''}</button>${band}`;
   }).join('');
   return `<div class="jr-column" data-staff="${s.id}" data-date="${date}">${cells}${visits}</div>`;
 }
@@ -327,7 +327,7 @@ async function jrDragEnd(ev) {
 async function jrDragSave(body) {
   try {
     await jrApi('sessions', body);
-    notify('Сохранено в журнале. В YClients — кнопкой «Отправить в YClients».');
+    notify('Сохранено в журнале.');
     loadJournal({ silent: true });
     return true;
   } catch (e) {

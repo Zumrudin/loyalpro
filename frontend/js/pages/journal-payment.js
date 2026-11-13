@@ -4,7 +4,8 @@
 const jrKop = value => Math.round((Number(value) || 0) * 100);
 const jrRub = value => Number(value).toLocaleString('ru-RU') + ' ₽';
 function jrPaymentView(base, session) {
-  const pays = session?.payments || [], removes = session?.removePayments || [];
+  // Unsent payments the user deletes (dropPayments) return their amount like removes.
+  const pays = session?.payments || [], removes = [...(session?.removePayments || []), ...(session?.dropPayments || [])];
   const sum = (list, filter = () => true) => list.filter(filter).reduce((n, p) => n + jrKop(p.amount), 0);
   const baseDue = jrKop(base.due);
   const due = Math.max(0, baseDue - sum(pays) + sum(removes));
@@ -28,7 +29,7 @@ function jrPayTitle(t) {
   const m = (journal.payment?.base?.methods || []).find(v => v.method === t.method && Number(v.id) === Number(t.methodId));
   return m ? (m.cash ? 'Наличные' : 'Банковская карта') + ' · ' + m.title : 'Касса';
 }
-const JR_PAY_STATUS = { confirmed: 'Проведено в YClients', queued: 'Ждёт отправки в YClients', sending: 'Передаётся в YClients', failed: 'Ошибка отправки' };
+const JR_PAY_STATUS = { confirmed: 'Проведено', queued: 'Проведено', sending: 'Проведено', failed: 'Ошибка отправки' };
 const jrPayBadge = status => JR_PAY_STATUS[status] ? `<em class="jr-pay-badge jr-pay-badge-${jrEscape(status)}">${jrEscape(JR_PAY_STATUS[status])}</em>` : '';
 // Bill lines: «цена × кол-во, скидка −N ₽ (P %)». Old/live responses carry only `total`.
 function jrBillItem(i) {
@@ -41,7 +42,7 @@ function jrBillSummary(data, session) {
   if (!sm) return '';
   const sum = (list, filter) => (list || []).filter(filter).reduce((n, x) => n + jrKop(x.amount), 0);
   const isBonus = x => x.method === 'loyalty_card';
-  const bonusDelta = sum(session?.payments, isBonus) - sum(session?.removePayments, isBonus);
+  const bonusDelta = sum(session?.payments, isBonus) - sum(session?.removePayments, isBonus) - sum(session?.dropPayments, isBonus);
   const bonus = (data.methods || []).find(v => v.method === 'loyalty_card');
   const row = (label, value, cls = '') => `<div class="jr-bill-sum${cls}"><span>${label}</span><strong>${value}</strong></div>`;
   return `<div class="jr-bill-summary">${row('Без скидки', jrRub(sm.gross))}${Number(sm.discount) > 0 ? row('Скидка', '−' + jrRub(sm.discount)) : ''}${row('Итого к оплате за визит', jrRub(sm.total), ' jr-bill-sum-total')}`
@@ -56,10 +57,16 @@ function jrPaymentBreakdown(data, session, readOnly = false) {
       ? `<button type="button" data-restore-payment="${i}" title="Не удалять" aria-label="Не удалять транзакцию ${jrEscape(t.title)}">↺</button>`
       : `<button type="button" data-remove-payment="${i}" title="Удалить транзакцию" aria-label="Удалить транзакцию ${jrEscape(t.title)}">${jrIcon('trash')}</button>`}</div>`;
   });
-  // Server-side queue (not yet confirmed in YClients): payments and cancellations.
-  const server = (Array.isArray(data.payments) ? data.payments : []).filter(t => t.status !== 'confirmed').map(t => {
+  // Saved in the journal, not confirmed yet: payments and cancellations. A saved
+  // payment that has not been sent can be deleted here (dropPayments).
+  const dropped = new Set((session?.dropPayments || []).map(d => d.outboxId + ':' + d.opId));
+  const server = (Array.isArray(data.payments) ? data.payments : []).filter(t => t.status !== 'confirmed').map((t, i) => {
     const cancel = t.kind === 'remove_payment';
-    return `<div class="jr-paid-row jr-pay-queued jr-pay-server${cancel ? ' jr-pay-cancel' : ''}"><span>${cancel ? 'Отмена оплаты · ' : ''}${jrEscape(t.title)}${jrPayBadge(t.status)}</span><strong>${cancel ? '−' : ''}${jrRub(t.amount)}</strong></div>`;
+    const gone = dropped.has(t.outboxId + ':' + t.opId);
+    const button = readOnly || !t.cancellable ? '' : gone
+      ? `<button type="button" data-undrop-payment="${i}" title="Не удалять" aria-label="Не удалять оплату ${jrEscape(t.title)}">↺</button>`
+      : `<button type="button" data-unqueue-payment="${i}" title="Удалить оплату" aria-label="Удалить оплату ${jrEscape(t.title)}">${jrIcon('trash')}</button>`;
+    return `<div class="jr-paid-row jr-pay-queued jr-pay-server${cancel ? ' jr-pay-cancel' : ''}${gone ? ' jr-pay-removed' : ''}"><span>${cancel ? 'Отмена оплаты · ' : ''}${jrEscape(t.title)}${gone ? '<small>будет удалено</small>' : jrPayBadge(t.status)}</span><strong>${cancel ? '−' : ''}${jrRub(t.amount)}</strong>${button}</div>`;
   });
   const queued = (session?.payments || []).map((t, i) => `<div class="jr-paid-row jr-pay-queued"><span>${jrEscape(jrPayTitle(t))}<small>будет передано${t.confirmArrival ? ' · с отметкой прихода' : ''}</small></span><strong>${jrRub(t.amount)}</strong><button type="button" data-drop-payment="${i}" title="Убрать оплату" aria-label="Убрать оплату ${jrEscape(jrPayTitle(t))}">×</button></div>`);
   return `<h4>Оплаты визита</h4>${[...real, ...server, ...queued].join('') || '<p class="jr-hint">Оплат пока нет</p>'}`;
@@ -86,7 +93,7 @@ function jrRenderPayment(keepScroll = true) {
   const preferredIndex = data.methods.findIndex(v => v.available && v.limit && jrPreferredMethod(v, p.preferred));
   const bill = `<aside class="jr-payment-bill"><h3>Общий счёт</h3>${(data.items || []).map(jrBillItem).join('')}${jrBillSummary(data, session)}<div class="jr-bill-total">${data.summary ? 'Остаток к оплате' : 'К оплате'} <strong>${jrRub(data.due)}</strong></div>${jrPaymentBreakdown(data, session, p.readOnly)}`;
   if (p.readOnly) {
-    jrEl('jrModalBody').innerHTML = `<div class="jr-payment-layout">${bill}${data.due === 0 ? '<div class="jr-payment-success" role="status">✓ Будет оплачено полностью</div>' : ''}</aside><section class="jr-payment-content"><h3>Оплата визита</h3><p class="jr-hint">Оплата станет доступна после передачи записи в YClients</p><div class="jr-actions"><button type="button" class="btn btn-pri" id="jrPayDone">Готово</button><button type="button" class="btn btn-sec" id="jrPayBack">К записи</button><button type="button" class="btn btn-sec" id="jrPayClose">Закрыть</button></div></section></div>`;
+    jrEl('jrModalBody').innerHTML = `<div class="jr-payment-layout">${bill}${data.due === 0 ? '<div class="jr-payment-success" role="status">✓ Будет оплачено полностью</div>' : ''}</aside><section class="jr-payment-content"><h3>Оплата визита</h3><p class="jr-hint">Оплата сейчас недоступна.</p><div class="jr-actions"><button type="button" class="btn btn-pri" id="jrPayDone">Готово</button><button type="button" class="btn btn-sec" id="jrPayBack">К записи</button><button type="button" class="btn btn-sec" id="jrPayClose">Закрыть</button></div></section></div>`;
     jrEl('jrModal').scrollTop = keepScroll ? scroll : 0;
     jrEl('jrPayDone').onclick = jrPayDone;
     jrEl('jrPayClose').onclick = () => jrClose();
@@ -104,6 +111,8 @@ function jrRenderPayment(keepScroll = true) {
   body.querySelectorAll('[data-remove-payment]').forEach(b => b.onclick = () => jrRemovePayment(Number(b.dataset.removePayment)));
   body.querySelectorAll('[data-restore-payment]').forEach(b => b.onclick = () => jrRestorePayment(Number(b.dataset.restorePayment)));
   body.querySelectorAll('[data-drop-payment]').forEach(b => b.onclick = () => jrDropPayment(Number(b.dataset.dropPayment)));
+  body.querySelectorAll('[data-unqueue-payment]').forEach(b => b.onclick = () => jrUnqueuePayment(Number(b.dataset.unqueuePayment), true));
+  body.querySelectorAll('[data-undrop-payment]').forEach(b => b.onclick = () => jrUnqueuePayment(Number(b.dataset.undropPayment), false));
 }
 function jrClearArrivalConfirmation() {
   if (journal.payment) delete journal.payment.arrival;
@@ -168,6 +177,17 @@ function jrDropPayment(index) {
   journal.session.payments.splice(index, 1);
   jrRenderPayment();
 }
+// Delete (on) / keep (off) a payment saved in the journal and not sent yet.
+function jrUnqueuePayment(index, on) {
+  if (journal.busy || !journal.session || journal.payment?.readOnly) return;
+  const t = (journal.payment?.base?.payments || []).filter(x => x.status !== 'confirmed')[index];
+  if (!t?.cancellable) return;
+  const same = d => d.outboxId === t.outboxId && d.opId === t.opId;
+  const list = (journal.session.dropPayments || []).filter(d => !same(d));
+  if (on) list.push({ outboxId: t.outboxId, opId: t.opId, method: t.method, amount: t.amount });
+  journal.session.dropPayments = list;
+  jrRenderPayment();
+}
 function jrPayDone() {
   if (journal.busy) return;
   if (jrSessionPending()) return jrSave(jrSessionBody());
@@ -180,64 +200,24 @@ function jrPayBack(recordId) {
   }
   return jrOpen(recordId);
 }
-// Local data renders at once; live YClients data replaces it silently while
-// nothing has been chosen yet. A live failure keeps the local form.
-// What to show once the live sale arrives. Live knows only the YClients sale, not
-// our outbox queue: with queued/sending/failed payments the local form stays.
-function jrMergeLivePayment(local, live) {
-  if (!live) return local || null;
-  if (!local) return live;
-  if ((Array.isArray(local.payments) ? local.payments : []).some(p => p && p.status !== 'confirmed')) return local;
-  const paid = Array.isArray(live.paid) ? live.paid : [];
-  const liveItems = Array.isArray(live.items) ? live.items : [];
-  const localItems = Array.isArray(local.items) ? local.items : [];
-  const same = localItems.length === liveItems.length && localItems.every((i, n) => i.title === liveItems[n].title);
-  const items = same ? localItems : liveItems;
-  const sum = (list, f = () => true) => list.filter(f).reduce((n, x) => n + jrKop(x.amount), 0);
-  const money = k => k / 100;
-  const detailed = items.length > 0 && items.every(i => i.gross !== undefined && i.gross !== null);
-  const total = items.reduce((n, i) => n + jrKop(i.total), 0);
-  const gross = detailed ? items.reduce((n, i) => n + jrKop(i.gross), 0) : total;
-  const summary = { gross: money(Math.max(gross, total)), discount: money(detailed ? items.reduce((n, i) => n + jrKop(i.discount), 0) : 0), total: money(total),
-    paidConfirmed: money(sum(paid)), paidQueued: 0, bonusSpent: money(sum(paid, t => t.method === 'loyalty_card')), due: live.due };
-  const payments = paid.map(t => ({ method: t.method, methodId: t.methodId, title: t.title, amount: t.amount, status: 'confirmed', kind: 'payment', outboxId: null }));
-  return { ...live, items, payments, summary };
-}
+// The payment form is built from LoyalPro data only (13.11.2026): no live request.
 async function jrOpenPayment(recordId, preferred = 'all') {
   const request = ++journal.modalRequest;
   journal.slotRequest++; journal.draft = null; journal.payment = null;
-  const session = journal.session = jrNewSession({ recordId, payments: [], removePayments: [] });
+  const session = journal.session = jrNewSession({ recordId, payments: [], removePayments: [], dropPayments: [] });
   jrShowModal('Оплата визита', true);
   jrEl('jrModal').className = 'jr-dialog jr-dialog-wide jr-dialog-payment';
   const current = () => request === journal.modalRequest && journal.session === session;
-  const localP = jrApi(`payments/${recordId}?local=1`);
-  const liveP = Number(recordId) > 0 ? jrApi('payments/' + recordId).catch(() => null) : null;
-  let shown = false, local = null;
   try {
-    const data = await localP;
+    const data = await jrApi(`payments/${recordId}?local=1`);
     if (!current()) return false;
-    local = data;
-    jrPaymentShow(data, { preferred, keepScroll: false }); shown = true;
+    jrPaymentShow(data, { preferred, keepScroll: false });
+    return true;
   } catch (e) {
-    if (current() && !liveP) {
-      jrMessage(e.message);
-      jrEl('jrModalBody').innerHTML = '<button type="button" class="btn btn-sec" id="jrPayReload">Повторить загрузку оплаты</button>';
-      jrEl('jrPayReload').onclick = () => jrOpenPayment(recordId, preferred);
-      return false;
-    }
+    if (!current()) return false;
+    jrMessage(e.message);
+    jrEl('jrModalBody').innerHTML = '<button type="button" class="btn btn-sec" id="jrPayReload">Повторить загрузку оплаты</button>';
+    jrEl('jrPayReload').onclick = () => jrOpenPayment(recordId, preferred);
+    return false;
   }
-  if (liveP) {
-    const live = await liveP;
-    if (!current()) return shown;
-    const untouched = !session.payments.length && !session.removePayments.length && !journal.payment?.arrival;
-    const view = jrMergeLivePayment(local, live);
-    if (live && view === local && shown) { /* queue is only known locally: keep the local form */ }
-    else if (live && (untouched || !shown)) { jrPaymentShow(view, { preferred, live: true }); jrMessage(''); shown = true; }
-    else if (!shown) {
-      jrMessage('Не удалось загрузить оплату визита.');
-      jrEl('jrModalBody').innerHTML = '<button type="button" class="btn btn-sec" id="jrPayReload">Повторить загрузку оплаты</button>';
-      jrEl('jrPayReload').onclick = () => jrOpenPayment(recordId, preferred);
-    }
-  }
-  return shown;
 }

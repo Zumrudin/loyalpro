@@ -86,7 +86,9 @@ function localOptions({ recordId, record, ledger, queued, accounts, card, bonusP
   const payments = [
     ...paid.map(p => ({ method: p.method, methodId: p.methodId, title: p.title, amount: p.amount, status: 'confirmed', outboxId: null, kind: 'payment' })),
     ...q.map(x => ({ method: x.method, methodId: Number(x.methodId), title: methodTitle(x, accounts), amount: Number(x.amount),
-      status: queuedStatus(x), outboxId: x.outboxId ?? null, kind: x.kind === 'pay' ? 'payment' : 'remove_payment' })),
+      status: queuedStatus(x), outboxId: x.outboxId ?? null, kind: x.kind === 'pay' ? 'payment' : 'remove_payment',
+      // A payment saved in the journal and not yet sent can be deleted locally.
+      opId: x.opId ?? null, cancellable: x.kind === 'pay' && queuedStatus(x) === 'queued' && !!x.opId && x.outboxId != null })),
   ];
   const bonusOf = list => list.filter(x => x.method === 'loyalty_card').reduce((n, x) => n + kop(x.amount), 0);
   const bonusQueued = bonusOf(qPays) - bonusOf(qRemoves);
@@ -122,7 +124,7 @@ function localOptions({ recordId, record, ledger, queued, accounts, card, bonusP
 function queuedOf(rows) {
   return (rows || []).flatMap(r => (Array.isArray(r.steps) ? r.steps : [])
     .filter(s => s && ['pay', 'remove_payment'].includes(s.kind) && s.state !== 'done')
-    .map(s => ({ kind: s.kind, ...(s.params || {}), outboxId: r.id ?? null, pkgStatus: r.status, releasedAt: r.released_at || null })));
+    .map(s => ({ kind: s.kind, ...(s.params || {}), opId: s.opId || null, outboxId: r.id ?? null, pkgStatus: r.status, releasedAt: r.released_at || null })));
 }
 
 // Overlay `lines` (quantity, unitPrice, gross, discount %, total) priced onto services.

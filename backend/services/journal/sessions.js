@@ -5,7 +5,7 @@
 // never YClients — and stored in `journal_outbox`; the outbox worker executes
 // the steps later through the existing mutate()/payments.pay() cores.
 const crypto = require('crypto');
-const { db } = require('../../db');
+const { db, withTransaction } = require('../../db');
 const config = require('../../config');
 const m = require('./model');
 const pricing = require('./pricing');
@@ -16,7 +16,7 @@ const paymentsLocal = require('./payments-local');
 const finOps = require('../finance-ops');
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-const MAX_PAYMENTS = 10, MAX_REMOVES = 10;
+const MAX_PAYMENTS = 10, MAX_REMOVES = 10, MAX_DROPS = 10;
 const DUMMY_VERSION = '0'.repeat(64);
 const kop = v => Math.round((Number(v) || 0) * 100);
 const isObject = v => !!v && typeof v === 'object' && !Array.isArray(v);
@@ -45,6 +45,12 @@ function parsePayment(p) {
 function parseRemove(p) {
   if (!isObject(p)) m.fail('Некорректное удаление оплаты.');
   return { transactionId: m.positiveId(p.transactionId), ...methodOf(p) };
+}
+// A payment saved in the journal but not yet sent: dropped from its package locally.
+function parseDrop(p) {
+  if (!isObject(p)) m.fail('Некорректное удаление оплаты.');
+  if (!UUID.test(p.opId || '')) m.fail('Некорректное удаление оплаты.');
+  return { outboxId: m.positiveId(p.outboxId), opId: String(p.opId).toLowerCase() };
 }
 function listOf(value, max, parse, label) {
   if (!present(value)) return [];
@@ -77,7 +83,7 @@ function parseSession(body) {
     // failed on delete, leaving the record changed (review 13.11.2026). A
     // deletion notifies nobody, so «не уведомлять» is not needed with it either.
     if (body.status === 'delete') m.fail('Сначала сохраните или отмените изменения карточки.', 409);
-    if (present(body.status) || body.payments?.length || body.removePayments?.length) m.fail('Сохраните изменения записи отдельно от оплат.');
+    if (present(body.status) || body.payments?.length || body.removePayments?.length || body.dropPayments?.length) m.fail('Сохраните изменения записи отдельно от оплат.');
   }
   if (present(body.move)) {
     if (!hasRecord) m.fail('Перенос доступен только для сохранённой записи.');
@@ -95,11 +101,14 @@ function parseSession(body) {
   if (out.move && out.status === 'delete') m.fail('Нельзя одновременно перенести и удалить запись.');
   out.payments = listOf(body.payments, MAX_PAYMENTS, parsePayment, 'оплаты');
   out.removePayments = listOf(body.removePayments, MAX_REMOVES, parseRemove, 'удаления оплат');
+  out.dropPayments = listOf(body.dropPayments, MAX_DROPS, parseDrop, 'удаления оплат');
+  if (out.dropPayments.length && !hasRecord) m.fail('Некорректное удаление оплаты.');
+  if (new Set(out.dropPayments.map(d => d.opId)).size !== out.dropPayments.length) m.fail('Одна оплата указана к удалению дважды.');
   const keys = out.removePayments.map(r => r.method + ':' + r.transactionId);
   if (new Set(keys).size !== keys.length) m.fail('Одна оплата указана к удалению дважды.');
   if (out.status === 'cancel' && (out.payments.length || out.removePayments.length)) m.fail('Отменённый визит нельзя оплатить.');
   if (out.status === 'delete' && (out.payments.length || out.removePayments.length)) m.fail('Удалённую запись нельзя оплатить.');
-  if (!out.edit && !out.create && !out.move && !out.status && !out.payments.length && !out.removePayments.length) m.fail('Нет изменений для сохранения.');
+  if (!out.edit && !out.create && !out.move && !out.status && !out.payments.length && !out.removePayments.length && !out.dropPayments.length) m.fail('Нет изменений для сохранения.');
   return out;
 }
 
@@ -132,7 +141,7 @@ function buildSteps(session) {
 
 async function salonFor(salonId) {
   const salon = await db.oneOrNone('SELECT * FROM salons WHERE id=$1', [salonId]);
-  if (!salon?.yclients_company_id) m.fail('YClients не подключён для салона.', 409);
+  if (!salon?.yclients_company_id) m.fail('Журнал записи не подключён для салона.', 409);
   return salon;
 }
 async function createServices(salon, draft, available, src) {
@@ -174,6 +183,14 @@ async function validate(salonId, session) {
     attendance = 0;
   } else {
     ctx = await paymentsLocal.loadContext(salonId, session.recordId);
+    if ((session.dropPayments || []).length) {
+      // Only an unsent payment of THIS record can be dropped; the rest of the
+      // checks see the visit as it will be without it.
+      const drops = new Set(session.dropPayments.map(d => d.outboxId + ':' + d.opId));
+      const open = (ctx.queued || []).filter(q => q.kind === 'pay' && drops.has(q.outboxId + ':' + q.opId));
+      if (open.length !== drops.size || open.some(q => q.pkgStatus !== 'queued' || q.releasedAt)) m.fail('Оплата уже отправляется или изменена. Обновите форму.', 409, 'drop_conflict');
+      ctx = { ...ctx, queued: ctx.queued.filter(q => !drops.has(q.outboxId + ':' + q.opId)) };
+    }
     const record = ctx.record;
     // A cancelled visit (-1) can still be deleted; a deleted one cannot be changed at all.
     if (record.deleted || (!session.edit && session.status !== 'delete' && Number(record.attendance) === -1)) m.fail('Запись уже отменена или удалена.', 409);
@@ -184,8 +201,9 @@ async function validate(salonId, session) {
       const paid = record.paid_full || Number(record.paid_amount) > 0
         || paymentsLocal.localOptions(ctx).paid.length > 0 || (ctx.queued || []).some(q => q.kind === 'pay');
       if (session.status === 'delete' && paid) m.fail('Сначала удалите оплаты визита.', 409);
-      if (session.status === 'delete' && Number(record.attendance) === 1) m.fail('Пришедший визит удаляйте в YClients.', 409);
-      if (Number(record.attendance) === 1 || paid) m.fail('Пришедшие и оплаченные визиты изменяйте в YClients.', 409);
+      if (session.status === 'delete' && Number(record.attendance) === 1) m.fail('Пришедший визит нельзя удалить: сначала смените статус визита.', 409);
+      if (paid) m.fail('Сначала удалите оплаты визита.', 409);
+      if (Number(record.attendance) === 1) m.fail('Пришедший визит нельзя перенести, отменить или подтвердить.', 409);
     }
     if (session.move) {
       // A move saved together with a new length/break is checked with them.
@@ -222,7 +240,7 @@ async function validate(salonId, session) {
     const method = options.methods.find(v => v.method === p.method && v.id === p.methodId);
     if (!method) m.fail('Способ оплаты недоступен для этого визита.', 409);
     if (p.method === 'account' && config.JOURNAL_ACCOUNT_PAYMENTS_ENABLED !== true) {
-      m.fail('Оплата в кассу временно отключена. Проведите её в YClients.', 409, 'payment_disabled');
+      m.fail('Оплата в кассу временно отключена.', 409, 'payment_disabled');
     }
     if (kop(p.amount) > kop(method.limit)) m.fail(`Сумма больше доступной: ${method.title}`, 409);
     if (p.method === 'account' && attendance === 0) {
@@ -250,7 +268,7 @@ async function validate(salonId, session) {
     if (overlay.kind === 'create') overlay.attendance = 1;
     else overlay.patch.attendance = 1;
   }
-  return { steps: buildSteps(session), overlay, options: paymentsLocal.localOptions(state()) };
+  return { steps: buildSteps(session), overlay, options: paymentsLocal.localOptions(state()), drops: session.dropPayments || [] };
 }
 
 const OUTBOX_BY_SESSION = 'SELECT id, request_hash, status FROM journal_outbox WHERE salon_id=$1 AND session_id=$2';
@@ -264,7 +282,7 @@ async function parentOf(salonId, session) {
   if (!present(session.recordId) || Number(session.recordId) > 0) return null;
   const row = await db.oneOrNone("SELECT id, status, released_at, yclients_record_id, overlay FROM journal_outbox WHERE salon_id=$1 AND id=$2", [salonId, -Number(session.recordId)]);
   if (!row || row.overlay?.kind !== 'create' || row.status === 'cancelled') m.fail('Запись не найдена.', 404);
-  if (row.status === 'failed' && row.yclients_record_id == null) m.fail('Запись не создана в YClients. Повторите отправку или уберите её из журнала.', 409);
+  if (row.status === 'failed' && row.yclients_record_id == null) m.fail('Запись не отправлена. Повторите отправку или уберите её из журнала.', 409);
   return row;
 }
 // Delete of a new record that was never sent (its create is queued and not
@@ -289,6 +307,36 @@ async function deleteUnsent(salonId, uid, session, hash, parent) {
   await finOps.safely('journal-delete-unsent', () => finOps.syncCancelledOutbox(salonId));
   return { outboxId: Number(row.id), recordId: session.recordId, status: row.status };
 }
+// Drops unsent payments from their packages (inside the caller's transaction).
+// Only a package still waiting for «send» is touched; a dropped payment that
+// marked the arrival keeps the arrival as an `edit` step before the payments
+// (the remaining cash payment would otherwise need the arrival itself).
+// A package left without steps is cancelled.
+const PAYMENT_KINDS = new Set(['pay', 'remove_payment']);
+function withoutDrops(steps, opIds) {
+  const list = Array.isArray(steps) ? steps : [];
+  const dropped = list.filter(s => s && s.kind === 'pay' && s.state === 'pending' && opIds.has(String(s.opId).toLowerCase()));
+  let next = list.filter(s => !dropped.includes(s));
+  if (dropped.some(s => s.params?.confirmArrival === true)) {
+    const at = next.findIndex(s => s && PAYMENT_KINDS.has(s.kind));
+    const arrival = step('edit', { attendance: 1 });
+    next = at < 0 ? [...next, arrival] : [...next.slice(0, at), arrival, ...next.slice(at)];
+    // Nothing else left in the package: an arrival alone is still a change to send.
+  }
+  return { next, dropped: dropped.length };
+}
+async function applyDrops(client, salonId, drops) {
+  const byPackage = new Map();
+  for (const d of drops) byPackage.set(d.outboxId, [...(byPackage.get(d.outboxId) || []), d.opId]);
+  for (const [outboxId, ids] of byPackage) {
+    const row = (await client.query('SELECT id, status, released_at, steps FROM journal_outbox WHERE salon_id=$1 AND id=$2 FOR UPDATE', [salonId, outboxId])).rows[0];
+    if (!row || row.status !== 'queued' || row.released_at != null) m.fail('Оплата уже отправляется или изменена. Обновите форму.', 409, 'drop_conflict');
+    const { next, dropped } = withoutDrops(row.steps, new Set(ids));
+    if (dropped !== ids.length) m.fail('Оплата уже отправляется или изменена. Обновите форму.', 409, 'drop_conflict');
+    await client.query(`UPDATE journal_outbox SET steps=$3, status=CASE WHEN $4 THEN 'cancelled' ELSE status END, updated_at=NOW()
+      WHERE salon_id=$1 AND id=$2`, [salonId, outboxId, JSON.stringify(next), next.length === 0]);
+  }
+}
 async function enqueue(salonId, userId, session) {
   const hash = m.fingerprint(session);
   try {
@@ -307,19 +355,37 @@ async function enqueue(salonId, userId, session) {
       if (again) return replay(again, session, hash);
       parent = await parentOf(salonId, session);
     }
-    const { steps, overlay } = await validate(salonId, session);
+    const { steps, overlay, drops } = await validate(salonId, session);
     const recordId = parent ? (parent.yclients_record_id != null ? Number(parent.yclients_record_id) : null) : (session.recordId ?? null);
-    const row = await db.oneOrNone(`INSERT INTO journal_outbox(salon_id,session_id,user_id,request_hash,yclients_record_id,create_outbox_id,status,steps,overlay)
-      VALUES($1,$2,$3,$4,$5,$6,'queued',$7,$8) ON CONFLICT (salon_id,session_id) DO NOTHING RETURNING id, status`,
-    [salonId, session.sessionId, Number.isSafeInteger(uid) && uid > 0 ? uid : null, hash, recordId, parent ? Number(parent.id) : null, JSON.stringify(steps), JSON.stringify(overlay)]);
+    const onlyDrops = drops.length > 0 && !steps.length;
+    const insert = q => q(`INSERT INTO journal_outbox(salon_id,session_id,user_id,request_hash,yclients_record_id,create_outbox_id,status,steps,overlay)
+      VALUES($1,$2,$3,$4,$5,$6,$9,$7,$8) ON CONFLICT (salon_id,session_id) DO NOTHING RETURNING id, status`,
+    [salonId, session.sessionId, owner, hash, recordId, parent ? Number(parent.id) : null,
+      // A drop-only session leaves a closed marker row: replay answers the same, history shows it.
+      JSON.stringify(onlyDrops ? drops.map(() => ({ kind: 'drop_payment', state: 'done' })) : steps), JSON.stringify(overlay), onlyDrops ? 'cancelled' : 'queued']);
+    let row;
+    if (drops.length) {
+      row = await withTransaction(async client => {
+        const q = (sql, args) => client.query(sql, args).then(r => r.rows[0] || null);
+        await applyDrops(client, salonId, drops);
+        return insert(q);
+      });
+      await finOps.safely('journal-drop-payment', async () => {
+        for (const d of drops) await finOps.markStep(salonId, d.opId, 'cancelled');
+        await finOps.syncCancelledOutbox(salonId);
+      });
+    } else {
+      row = await insert((sql, args) => db.oneOrNone(sql, args));
+    }
     if (!row) {
       const raced = await db.oneOrNone(OUTBOX_BY_SESSION, [salonId, session.sessionId]);
       if (!raced) m.fail('Не удалось сохранить изменения. Повторите.', 409);
       return replay(raced, session, hash);
     }
+    if (onlyDrops) return { outboxId: Number(row.id), recordId: session.recordId, status: 'saved' };
     // Ledger of finance operations (never breaks the save: failures are logged, reconcile catches up).
     await finOps.safely('journal-package', () => finOps.recordJournalPackage({ id: row.id, salon_id: salonId,
-      user_id: Number.isSafeInteger(uid) && uid > 0 ? uid : null, yclients_record_id: recordId,
+      user_id: owner, yclients_record_id: recordId,
       create_outbox_id: parent ? Number(parent.id) : null, overlay, created_at: new Date(), status: 'queued' }, steps));
     return { outboxId: Number(row.id), recordId: session.recordId ?? -Number(row.id), status: row.status };
   } catch (e) {
@@ -371,4 +437,4 @@ async function dismiss(salonId, outboxId) {
   return { outboxId: Number(updated.id), status: updated.status };
 }
 
-module.exports = { parseSession, buildSteps, validate, enqueue, retry, dismiss, MAX_PAYMENTS, MAX_REMOVES };
+module.exports = { parseSession, buildSteps, validate, enqueue, retry, dismiss, withoutDrops, MAX_PAYMENTS, MAX_REMOVES, MAX_DROPS };
