@@ -194,3 +194,18 @@ test('карта была привязана заранее → total_spent ув
   const accrualUpdate = db.query.mock.calls.find(c => c[0].includes('bonus_balance=bonus_balance+'));
   expect(accrualUpdate[1][1]).toBe(65500);
 });
+
+describe('processRecordEvent: technical_break_duration не затирается вебхуком (13.11.2026)', () => {
+  test('вебхук без поля поверх строки с перерывом 600 → в raw_payload остаётся 600', async () => {
+    wireDb();
+    db.oneOrNone.mockImplementation((sql) => {
+      if (sql.includes('FROM clients')) return Promise.resolve(CLIENT_LINKED);
+      if (sql.includes('FROM records WHERE')) return Promise.resolve({ id: 55, raw_payload: { technical_break_duration: 600 } });
+      return Promise.resolve(null);
+    });
+    const p = makePayload(); p.data.paid_full = 0;
+    await processRecordEvent(p, SALON, SETTINGS);
+    const upd = db.query.mock.calls.find(c => /UPDATE records SET status/.test(c[0]));
+    expect(JSON.parse(upd[1][1]).technical_break_duration).toBe(600);
+  });
+});

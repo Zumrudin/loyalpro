@@ -70,6 +70,47 @@ describe('upsertRecordFromYc', () => {
   });
 });
 
+describe('technical_break_duration: вебхуки YClients его не несут (13.11.2026)', () => {
+  const stored = (v) => db.oneOrNone.mockResolvedValue({ id: 55, status: 'confirmed', bonus_processed: false, prev_break: v });
+  const savedPayload = () => JSON.parse(db.query.mock.calls.find(c => /UPDATE records SET status/.test(c[0]))[1][1]);
+  test('payload без поля поверх строки с 600 → в БД остаётся 600', async () => {
+    stored(600);
+    const r = await upsertRecordFromYc(1, YCR, null, 'webhook');
+    expect(savedPayload().technical_break_duration).toBe(600);
+    expect(r.prev).toEqual({ id: 55, status: 'confirmed', bonus_processed: false });
+  });
+  test('payload с null поверх 600 → 600', async () => {
+    stored(600);
+    await upsertRecordFromYc(1, { ...YCR, technical_break_duration: null }, null, 'webhook');
+    expect(savedPayload().technical_break_duration).toBe(600);
+  });
+  test('явное значение побеждает: 0 поверх 600 → 0', async () => {
+    stored(600);
+    await upsertRecordFromYc(1, { ...YCR, technical_break_duration: 0 }, null, 'journal');
+    expect(savedPayload().technical_break_duration).toBe(0);
+  });
+  test('у сохранённой строки поля нет → payload как есть, без ключа', async () => {
+    stored(null);
+    await upsertRecordFromYc(1, YCR, null, 'webhook');
+    expect(savedPayload()).not.toHaveProperty('technical_break_duration');
+  });
+  test('новая строка без поля → INSERT без перерыва (null)', async () => {
+    db.oneOrNone.mockResolvedValue(null);
+    db.one.mockResolvedValue({ id: 56 });
+    await upsertRecordFromYc(1, YCR, null, 'webhook');
+    const payload = JSON.parse(db.one.mock.calls[0][1][11]);
+    expect(payload.technical_break_duration ?? null).toBeNull();
+  });
+  test('keepTechnicalBreak — чистая функция, входной объект не мутирует', () => {
+    const inc = { id: 1 };
+    expect(loyalty.keepTechnicalBreak(inc, 600)).toEqual({ id: 1, technical_break_duration: 600 });
+    expect(inc).toEqual({ id: 1 });
+    expect(loyalty.keepTechnicalBreak({ id: 1, technical_break_duration: 300 }, 600).technical_break_duration).toBe(300);
+    expect(loyalty.keepTechnicalBreak({ id: 1 }, null)).toEqual({ id: 1 });
+    expect(loyalty.keepTechnicalBreak({ id: 1 }, '600').technical_break_duration).toBe(600);
+  });
+});
+
 describe('хвостовые SQL', () => {
   test('refreshLastVisitAt — один UPDATE clients … FROM records по salon_id', async () => {
     await refreshLastVisitAt(1);

@@ -201,15 +201,34 @@ async function cancelRecordBonuses(recordId, clientId, salonId) {
 // Upsert записи YClients в `records` (без начисления — деньги решает вызывающий).
 // Возвращает { id, status, inserted, prev } (prev — прежняя строка при UPDATE)
 // либо null, если у объекта нет id.
+// YClients record webhooks never carry technical_break_duration (null or no
+// key), while GET /record and REST /records do (live run 13.11.2026). A webhook
+// arriving seconds after the journal worker stored the live record would wipe
+// the break, and the window sync would not repair it (same last_change_date).
+// So a missing/null incoming value keeps the stored one; an explicit value
+// (including 0) wins. Shared by every writer of records.raw_payload.
+function keepTechnicalBreak(incoming, storedBreak) {
+  if (incoming == null || incoming.technical_break_duration != null) return incoming;
+  const kept = storedBreak == null || storedBreak === '' ? null : Number(storedBreak);
+  if (kept == null || !Number.isFinite(kept)) return incoming;
+  return { ...incoming, technical_break_duration: kept };
+}
+
 async function upsertRecordFromYc(salonId, ycr, dbClientId, source) {
   if (!ycr || ycr.id == null) return null;
   const status  = getRecordStatus(ycr);
   const recCost = getRecordCost(ycr);
   const visitDate = String(ycr.date || '').split(' ')[0] || null;
-  const prev = await db.oneOrNone(
-    'SELECT id,status,bonus_processed,client_id FROM records WHERE salon_id=$1 AND yclients_record_id=$2',
+  const row = await db.oneOrNone(
+    "SELECT id,status,bonus_processed,client_id,raw_payload->'technical_break_duration' AS prev_break FROM records WHERE salon_id=$1 AND yclients_record_id=$2",
     [salonId, ycr.id]
   );
+  let prev = null;
+  if (row) {
+    const { prev_break: prevBreak, ...rest } = row;
+    prev = rest;
+    ycr = keepTechnicalBreak(ycr, prevBreak);
+  }
   if (prev) {
     await db.query(
       `UPDATE records SET status=$1, raw_payload=$2, amount=$3,
@@ -667,7 +686,7 @@ async function processRecordEvent(payload, salon, settings) {
       `UPDATE records SET status=$1, raw_payload=$2, amount=$3,
        visit_date=$4, visit_datetime=$5,
        services=$6, staff=$7, updated_at=NOW() WHERE id=$8`,
-      [recStatus, JSON.stringify(data), getRecordCost(data),
+      [recStatus, JSON.stringify(keepTechnicalBreak(data, record.raw_payload?.technical_break_duration)), getRecordCost(data),
        String(data.date || '').split(' ')[0] || null, data.date || null,
        JSON.stringify(data.services || []), JSON.stringify(data.staff || []),
        record.id]
@@ -1064,7 +1083,7 @@ module.exports = {
   getLoyaltySettings, getLevel, calcBonus, getRecordCost, getRecordStatus,
   processCompletedRecord, cancelRecordBonuses,
   runSync, RECORDS_LIMIT_WAIT_MS,
-  upsertRecordFromYc, refreshLastVisitAt, linkCardTransactionsToRecords,
+  upsertRecordFromYc, keepTechnicalBreak, refreshLastVisitAt, linkCardTransactionsToRecords,
   claimRecordProcessing, popCashbackAmount, getCashbackByRecord, revertCashback,
   linkClientCard, visitPaidWithBonuses,
   processRecordEvent, processFinancesOperation,
