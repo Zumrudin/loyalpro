@@ -344,9 +344,9 @@ function inventoryDiff({ expectedBase, counted, countedUnitType, unitEquals }) {
 /** §6.3: считается ли строка в остаток при данном входящем остатке. */
 function balanceCountsRow(row, opening) {
   if (!opening || !opening.takenAt) return true;
+  if (['loyalpro', 'inventory'].includes(row.source)) return true;            // локальное — YClients его не видел
   const t = new Date(opening.takenAt).getTime();
-  if (new Date(row.occurredAt).getTime() > t) return true;
-  return new Date(row.recordedAt).getTime() > t && ['webhook', 'loyalpro', 'inventory'].includes(row.source);
+  return new Date(row.recordedAt).getTime() > t && ['webhook', 'reconcile'].includes(row.source);
 }
 
 module.exports = { KINDS, ORIGINS, YC_TYPE_BY_KIND, PAY_METHODS, StockError, fail, signFor, kindByYcType, toBase, toBaseInfo, fromBase, validateDocument, validateSalePayments, consumableDelta, inventoryDiff, balanceCountsRow, kop };
@@ -454,8 +454,8 @@ mv AS (
   JOIN stock_documents d ON d.id = mv.document_id AND d.status = 'posted'
   LEFT JOIN op ON op.good_row_id = mv.good_row_id AND op.storage_id = mv.storage_id
   WHERE mv.salon_id = $1 AND mv.deleted_at IS NULL
-    AND (op.taken_at IS NULL OR mv.occurred_at > op.taken_at
-         OR (mv.recorded_at > op.taken_at AND mv.source IN ('webhook','loyalpro','inventory')))
+    AND (op.taken_at IS NULL OR mv.source IN ('loyalpro','inventory')
+         OR (mv.recorded_at > op.taken_at AND mv.source IN ('webhook','reconcile')))
   GROUP BY mv.good_row_id, mv.storage_id)
 SELECT g.id AS good_row_id, s.id AS storage_id, COALESCE(op.qty_base,0) + COALESCE(mv.moved,0) AS qty_base, op.taken_at
 FROM yclients_goods_catalog g
