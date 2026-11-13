@@ -49,6 +49,21 @@ describe('mergeHistory', () => {
     expect(ev[0]).toMatchObject({ title: 'Удалена до отправки в YClients', steps: [], error: null, author: 'LoyalPro' });
     expect(() => h.mergeHistory([], [{ id: 2, status: 'failed', steps: null, created_at: new Date() }], new Map())).not.toThrow();
   });
+  test('partial payment is paid_full=2; date is the fallback for datetime', () => {
+    const d = h.diffRecords({ ...base, paid_full: 0 }, { ...base, paid_full: 2 });
+    expect(d).toEqual([{ field: 'paid_full', label: 'Оплата', from: 'не оплачено', to: 'частично' }]);
+    const noDt = { ...base, datetime: undefined, date: '2026-11-12 15:00:00' };
+    expect(h.diffRecords(base, noDt).map(c => [c.label, c.to])).toEqual([['Время', '12.11 15:00']]);
+  });
+  test('package event carries errorCode', () => {
+    const [e] = h.mergeHistory([], [{ id: 1, status: 'failed', error_code: 'slot_taken', error_text: 'Занято', steps: [], created_at: new Date() }], new Map());
+    expect(e).toMatchObject({ error: 'Занято', errorCode: 'slot_taken' });
+  });
+  test('equal time: newer on top', () => {
+    const t = '2026-11-12T07:00:00Z';
+    const ev = h.mergeHistory([{ created_at: new Date(t), status: 'update', data: base }, { created_at: new Date(t), status: 'update', data: { ...base, comment: 'a' } }, { created_at: new Date(t), status: 'update', data: { ...base, comment: 'b' } }], [], new Map());
+    expect(ev.map(e => e.changes[0]?.to)).toEqual(['b', 'a', undefined]);
+  });
   test('cap 200', () => {
     const many = Array.from({ length: 250 }, (_, i) => hook(new Date(Date.UTC(2026, 10, 12, 0, i)).toISOString(), 'update', { ...base, comment: 'c' + i }));
     expect(h.mergeHistory(many, [], new Map())).toHaveLength(200);
@@ -67,10 +82,28 @@ describe('load', () => {
     expect(out.recordId).toBe(8);
     expect(out.events.map(e => e.author)).toEqual(['YClients', 'LoyalPro: Мария']);
     const hooks = db.any.mock.calls.find(([sql]) => /FROM webhook_logs/.test(sql));
-    expect(hooks[0]).toMatch(/event_type='record'/); expect(hooks[1]).toEqual([3, '8']);
+    expect(hooks[0]).toMatch(/event_type='record'/); expect(hooks[1]).toEqual([3, '8', null]);
     const outbox = db.any.mock.calls.find(([sql]) => /FROM journal_outbox/.test(sql));
     expect(outbox[1]).toEqual([3, 8, null]);
     expect(db.any.mock.calls.find(([sql]) => /FROM users/.test(sql))[1]).toEqual([3, [4]]);
+  });
+  test('lower bound = record create_date minus one day (Moscow); absent date → no bound', async () => {
+    db.any.mockResolvedValue([]);
+    db.oneOrNone.mockResolvedValue({ create_date: '2026-11-10 12:00:00' });
+    await h.load(3, 8);
+    expect(db.oneOrNone.mock.calls[0][0]).toMatch(/FROM records/); expect(db.oneOrNone.mock.calls[0][1]).toEqual([3, 8]);
+    const p = db.any.mock.calls.find(([sql]) => /FROM webhook_logs/.test(sql))[1];
+    expect(p[2].toISOString()).toBe('2026-11-09T09:00:00.000Z');
+    db.any.mockClear(); db.oneOrNone.mockResolvedValue({ create_date: '2026-11-10T19:04:08+0300' });
+    await h.load(3, 8);
+    expect(db.any.mock.calls.find(([sql]) => /FROM webhook_logs/.test(sql))[1][2].toISOString()).toBe('2026-11-09T16:04:08.000Z');
+    db.any.mockClear(); db.oneOrNone.mockResolvedValue({ create_date: '' });
+    await h.load(3, 8);
+    expect(db.any.mock.calls.find(([sql]) => /FROM webhook_logs/.test(sql))[1][2]).toBeNull();
+    db.any.mockClear(); db.oneOrNone.mockRejectedValue(new Error('x'));
+    await h.load(3, 8);
+    expect(db.any.mock.calls.find(([sql]) => /FROM webhook_logs/.test(sql))[1][2]).toBeNull();
+    db.oneOrNone.mockReset();
   });
   test('negative id = unsent new record: its packages; webhooks of the created record once known', async () => {
     db.oneOrNone.mockResolvedValue({ yclients_record_id: '900' });
@@ -78,7 +111,7 @@ describe('load', () => {
     await h.load(3, -5);
     expect(db.oneOrNone.mock.calls[0][1]).toEqual([3, 5]);
     expect(db.any.mock.calls.find(([sql]) => /FROM journal_outbox/.test(sql))[1]).toEqual([3, 900, 5]);
-    expect(db.any.mock.calls.find(([sql]) => /FROM webhook_logs/.test(sql))[1]).toEqual([3, '900']);
+    expect(db.any.mock.calls.find(([sql]) => /FROM webhook_logs/.test(sql))[1]).toEqual([3, '900', null]);
     db.oneOrNone.mockResolvedValue(null);
     await expect(h.load(3, -6)).rejects.toMatchObject({ status: 404 });
   });

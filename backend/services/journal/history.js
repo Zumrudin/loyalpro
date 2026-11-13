@@ -20,7 +20,7 @@ const servicesText = list => (Array.isArray(list) ? list : [])
   .sort().join('; ') || null;
 const labelsText = list => m.normalizeLabels(list).map(l => l.title || '#' + l.id).sort().join(', ') || null;
 const FIELDS = [
-  ['datetime', 'Время', d => when(d.datetime)],
+  ['datetime', 'Время', d => when(d.datetime || d.date)],
   ['staff', 'Специалист', d => d.staff?.name ? String(d.staff.name) : (d.staff_id != null ? '#' + Number(d.staff_id) : null)],
   ['services', 'Услуги', d => servicesText(d.services)],
   ['seance_length', 'Длительность', d => Number(d.seance_length) > 0 ? Math.round(Number(d.seance_length) / 60) + ' мин' : null],
@@ -28,7 +28,7 @@ const FIELDS = [
   ['comment', 'Комментарий', d => String(d.comment || '').trim() || null],
   ['custom_color', 'Цвет', d => m.normColor(d.custom_color)],
   ['record_labels', 'Метки', d => labelsText(d.record_labels)],
-  ['paid_full', 'Оплата', d => Number(d.paid_full) === 1 ? 'оплачено' : Number(d.paid_amount) > 0 ? 'частично' : 'не оплачено'],
+  ['paid_full', 'Оплата', d => Number(d.paid_full) === 1 ? 'оплачено' : Number(d.paid_full) === 2 ? 'частично' : 'не оплачено'],
   ['deleted', 'Удалена', d => d.deleted ? 'да' : 'нет'],
 ];
 function diffRecords(prev, next) {
@@ -55,24 +55,31 @@ function mergeHistory(webhookRows, outboxRows, users = new Map()) {
       prev = data;
     }
   }
-  for (const o of outboxRows || []) {
+  // Outbox rows arrive newest-first from SQL: walk them oldest-first so the tie-break above holds.
+  for (const o of [...(outboxRows || [])].reverse()) {
     const steps = (Array.isArray(o.steps) ? o.steps : []).map(s => ({ kind: String(s?.kind || ''), state: String(s?.state || '') }));
     const name = users.get(Number(o.user_id));
     events.push({ at: iso(o.created_at), source: 'journal', author: 'LoyalPro' + (name ? ': ' + name : ''),
       title: o.status === 'cancelled' && !steps.length ? 'Удалена до отправки в YClients'
         : `${steps.map(s => STEP[s.kind] || s.kind).join(', ') || 'изменения'} — ${PACKAGE[o.status] || String(o.status)}`,
       changes: [], status: String(o.status), steps,
-      error: o.status === 'failed' ? String(o.error_text || 'причина неизвестна') : null });
+      error: o.status === 'failed' ? String(o.error_text || 'причина неизвестна') : null,
+      errorCode: o.error_code || null });
   }
-  return events.sort((a, b) => Date.parse(b.at) - Date.parse(a.at)).slice(0, CAP);
+  // Equal time: newer on top. Events are pushed oldest → newest (webhooks), so the later index wins.
+  return events.map((e, i) => ({ e, i }))
+    .sort((a, b) => (Date.parse(b.e.at) - Date.parse(a.e.at)) || (b.i - a.i)).map(x => x.e).slice(0, CAP);
 }
 const WEBHOOK_SQL = `SELECT created_at, payload->>'status' AS status, payload->'data' AS data FROM webhook_logs
   WHERE salon_id=$1 AND event_type='record' AND resource_id=$2
+    AND ($3::timestamptz IS NULL OR created_at >= $3::timestamptz)
   ORDER BY created_at DESC, id DESC LIMIT ${CAP}`;
-const OUTBOX_SQL = `SELECT id, user_id, status, steps, error_text, created_at FROM journal_outbox
+const OUTBOX_SQL = `SELECT id, user_id, status, steps, error_code, error_text, created_at FROM journal_outbox
   WHERE salon_id=$1 AND (yclients_record_id=$2 OR id=$3 OR create_outbox_id=$3)
   ORDER BY id DESC LIMIT ${CAP}`;
 const USERS_SQL = 'SELECT id, name FROM users WHERE salon_id=$1 AND id = ANY($2::int[])';
+// Record creation date from the mirror: no webhook exists before it, so it bounds the (salon_id, created_at) index range.
+const CREATED_SQL = "SELECT raw_payload->>'create_date' AS create_date FROM records WHERE salon_id=$1 AND yclients_record_id=$2";
 const CREATE_SQL = 'SELECT yclients_record_id FROM journal_outbox WHERE salon_id=$1 AND id=$2';
 async function load(salonId, recordId) {
   let ycId = recordId > 0 ? Number(recordId) : null;
@@ -82,12 +89,20 @@ async function load(salonId, recordId) {
     if (!row) m.fail('Запись не найдена.', 404);
     if (row.yclients_record_id != null) ycId = Number(row.yclients_record_id);
   }
+  let since = null;
+  if (ycId) {
+    try {
+      const rec = await db.oneOrNone(CREATED_SQL, [salonId, ycId]);
+      const p = rec?.create_date ? m.moscowParts(String(rec.create_date).replace(/([+-]\d\d)(\d\d)$/, '$1:$2')) : null;
+      if (p) since = new Date(p.ms - 86400000);
+    } catch (_) { /* no bound: slower, still correct */ }
+  }
   const [hooks, outbox] = await Promise.all([
-    ycId ? db.any(WEBHOOK_SQL, [salonId, String(ycId)]) : Promise.resolve([]),
+    ycId ? db.any(WEBHOOK_SQL, [salonId, String(ycId), since]) : Promise.resolve([]),
     db.any(OUTBOX_SQL, [salonId, ycId, createId]),
   ]);
   const ids = [...new Set((outbox || []).map(o => Number(o.user_id)).filter(n => Number.isSafeInteger(n) && n > 0))];
   const users = new Map((ids.length ? await db.any(USERS_SQL, [salonId, ids]) : []).map(u => [Number(u.id), String(u.name || '')]));
   return { recordId, events: mergeHistory([...(hooks || [])].reverse(), outbox, users) };
 }
-module.exports = { diffRecords, mergeHistory, load, WEBHOOK_SQL, OUTBOX_SQL, CAP };
+module.exports = { diffRecords, mergeHistory, load, WEBHOOK_SQL, OUTBOX_SQL, CREATED_SQL, CAP };
