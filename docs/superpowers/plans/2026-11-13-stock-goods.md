@@ -400,7 +400,7 @@ module.exports = { KINDS, SYNC_STATUSES, YC_TYPE_BY_KIND, SENDABLE_KINDS, signFo
 
 - [ ] **Step 5: Миграции** — в `backend/migrations.js` после блока `journal_record_prefs` добавить блок `// ── STOCK (склад, 2026-11-13) ──` с DDL §5.1–5.3 спеки. Каждый `CREATE TABLE IF NOT EXISTS … .catch(() => {})`, индексы `CREATE INDEX IF NOT EXISTS`, частичные UNIQUE — `CREATE UNIQUE INDEX IF NOT EXISTS … WHERE …`. Колонки каталога — циклом `ALTER TABLE yclients_goods_catalog ADD COLUMN IF NOT EXISTS …` как в экономике (строка ~2306). `finance_operations`: `ALTER TABLE finance_operations ADD COLUMN IF NOT EXISTS stock_document_id BIGINT`. Полный список таблиц: `stock_storages, stock_units, stock_suppliers, stock_documents, stock_movements, stock_openings, stock_readings, stock_inventory_lines, stock_settings, stock_ingest_pending(salon_id, yclients_txn_id BIGINT, good_id BIGINT, raw JSONB, created_at, PRIMARY KEY(salon_id, yclients_txn_id))`. Индексы — из §5.1.
 
-- [ ] **Step 6: Применить на деве и проверить** — `node -e "require('dotenv').config(); require('./migrations').runMigrations().then(()=>process.exit(0))"` (имя функции — как её зовёт `server.js`), затем `psql "$DATABASE_URL" -c "\d stock_movements"` — все колонки и индексы на месте. Приложить вывод к отчёту.
+- [ ] **Step 6: Применить на деве и проверить** — `node -e "require('dotenv').config(); require('./migrations').runMigrations().then(()=>process.exit(0))"` (`runMigrations` — тот же экспорт, что зовёт `server.js`), затем `psql "$DATABASE_URL" -c "\d stock_movements"` — все колонки и индексы на месте. Приложить вывод к отчёту.
 
 - [ ] **Step 7: Коммит** `feat(stock): миграции склада и чистая модель`.
 
