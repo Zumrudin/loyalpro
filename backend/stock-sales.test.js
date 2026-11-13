@@ -19,6 +19,8 @@ beforeEach(() => {
   jest.resetAllMocks();
   q = jest.fn(async () => ({ rows: [client] })); release = jest.fn();
   pool.connect.mockResolvedValue({ query: q, release });
+  // Клиент резолвится ДО транзакции через db.query (поиск в YClients не должен держать соединение пула).
+  db.query.mockImplementation(async () => ({ rows: [client] }));
   store.listStorages.mockResolvedValue([{ id: 2, is_active: true, for_sale: true }]);
   store.listGoods.mockResolvedValue([{ id: 3, stock_active: true, unit_equals: 1 }]);
   store.insertDocument.mockImplementation(async (_, sid, d) => ({ id: 10, salon_id: sid, kind: d.kind, status: d.status, origin: 'loyalpro' }));
@@ -52,10 +54,20 @@ test('payment failure rolls document and movements back', async () => {
   await expect(sales.create(1, 4, body())).rejects.toThrow('test failure');
   expect(q.mock.calls.at(-1)[0]).toBe('ROLLBACK'); expect(release).toHaveBeenCalledTimes(1);
 });
-test('phone uses tenant-scoped last ten digits and returns existing client', async () => {
-  await expect(sales.resolveClient(1, { phone: '8 (999) 000-00-01' }, q)).resolves.toEqual(client);
-  expect(q).toHaveBeenCalledWith(expect.stringMatching(/RIGHT\(regexp_replace/), [1, '9990000001']);
+test('phone: exact forms by index first, tenant-scoped last ten digits as fallback', async () => {
+  const exactMiss = jest.fn(async (sql) => ({ rows: /phone = ANY/.test(sql) ? [] : [client] }));
+  await expect(sales.resolveClient(1, { phone: '8 (999) 000-00-01' }, exactMiss)).resolves.toEqual(client);
+  expect(exactMiss.mock.calls[0]).toEqual([expect.stringMatching(/phone = ANY\(\$2::text\[\]\)/), [1, ['+79990000001', '79990000001', '89990000001', '9990000001']]]);
+  expect(exactMiss).toHaveBeenCalledWith(expect.stringMatching(/RIGHT\(regexp_replace/), [1, '9990000001']);
+  await expect(sales.resolveClient(1, { phone: '79990000001' }, q)).resolves.toEqual(client);
+  expect(q).toHaveBeenCalledTimes(1); // точная форма нашлась — суффиксный запрос не нужен
   expect(yc.ycSearchClientIdByPhone).not.toHaveBeenCalled();
+});
+test('client lookup happens before the transaction (no pool connection held during YClients search)', async () => {
+  await sales.create(1, 4, body());
+  expect(db.query).toHaveBeenCalledWith(expect.stringMatching(/salon_id=\$1 AND id=\$2/), [1, 7]);
+  expect(q.mock.calls[0][0]).toBe('BEGIN');
+  expect(q.mock.calls.some(([sql]) => /FROM clients/.test(String(sql)))).toBe(false);
 });
 test('missing id never searches another salon or YClients', async () => {
   q.mockResolvedValue({ rows: [] });
@@ -83,7 +95,7 @@ test('finance writer persists stock link and Moscow day, conflict never overwrit
   expect(db.query).not.toHaveBeenCalled();
 });
 test('ambiguous phone and invalid inputs do not create documents', async () => {
-  q.mockResolvedValue({ rows: [client, { id: 8 }] });
+  db.query.mockResolvedValue({ rows: [client, { id: 8 }] });
   await expect(sales.create(1, 4, body({ clientId: undefined, phone: '79990000001' }))).rejects.toMatchObject({ status: 409, code: 'ambiguous_client' });
   expect(store.insertDocument).not.toHaveBeenCalled();
   await expect(sales.create(1, 4, body({ payments: [{ method: 'cash', amount: .99 }] }))).rejects.toMatchObject({ status: 400 });

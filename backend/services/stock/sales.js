@@ -19,8 +19,12 @@ async function resolveClient(salonId, body, q = (sql, args) => db.query(sql, arg
   } else {
     const phone = normalizePhoneKey(body.phone);
     if (!/^7\d{10}$/.test(phone)) validation(['Некорректный телефон.']);
-    rows = (await q(`SELECT id, yclients_client_id FROM clients WHERE salon_id=$1
-      AND RIGHT(regexp_replace(COALESCE(phone,''),'\\D','','g'),10)=$2 LIMIT 2`, [salonId, phone.slice(-10)])).rows;
+    // Сначала точные формы номера (индекс idx_clients_salon_phone), суффикс — только запасной путь (как client-summary.js).
+    const p10 = phone.slice(-10);
+    rows = (await q('SELECT id, yclients_client_id FROM clients WHERE salon_id=$1 AND phone = ANY($2::text[]) LIMIT 2',
+      [salonId, [`+7${p10}`, `7${p10}`, `8${p10}`, p10]])).rows;
+    if (!rows.length) rows = (await q(`SELECT id, yclients_client_id FROM clients WHERE salon_id=$1
+      AND RIGHT(regexp_replace(COALESCE(phone,''),'\\D','','g'),10)=$2 LIMIT 2`, [salonId, p10])).rows;
     if (rows.length > 1) m.fail('Найдено несколько клиентов. Выберите клиента.', 409, 'ambiguous_client');
     if (!rows.length) {
       const salon = (await q('SELECT * FROM salons WHERE id=$1', [salonId])).rows[0];
@@ -59,8 +63,9 @@ async function create(salonId, userId, body) {
   result.errors.push(...m.validateSalePayments(b.payments, result.normalized.totalCost, { gift: b.gift }).errors);
   if (result.errors.length) validation(result.errors);
   const { lines, ...normalized } = result.normalized;
+  // Клиент резолвится ДО транзакции: поиск в YClients (до 30 с) не должен держать соединение пула открытым.
+  const client = await resolveClient(salonId, b);
   return transaction(salonId, async q => {
-    const client = await resolveClient(salonId, b, q);
     if (b.recordId != null) {
       const r = (await q('SELECT id FROM records WHERE salon_id=$1 AND yclients_record_id=$2', [salonId, Number(b.recordId)])).rows[0];
       if (!r) validation(['Запись не найдена.']);

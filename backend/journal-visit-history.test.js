@@ -69,6 +69,7 @@ describe('load', () => {
     db.oneOrNone.mockImplementation(async sql => /FROM salons/.test(sql) ? { id: 3, name: 'PERI' } : null);
     db.any.mockImplementation(async (sql, args) => {
       if (/FROM records/.test(sql)) { expect(args).toEqual([3, '79990000001']); return [{ raw_payload: rec(8, '2026-11-01T10:00:00+03:00', [svc(1, 'A', 100)]) }]; }
+      if (/FROM stock_documents d/.test(sql)) return [];  // покупки склада (внутри — подзапрос к finance_operations), проверять раньше
       if (/FROM finance_operations/.test(sql)) { expect(args[0]).toBe(3); expect(args[2]).toEqual([8]); expect(args[3]).toEqual([40]); return []; }
       if (/FROM stock_movements/.test(sql)) return [];
       return [];
@@ -89,10 +90,10 @@ describe('load', () => {
   });
 });
 
-test('stock purchases include gifts, keep cancelled status and deduplicate split financial payments', () => {
+test('stock purchases include gifts, drop cancelled sales and deduplicate split financial payments', () => {
   const documents = [
-    { id: 10, doc_date: '2026-11-13T10:00:00Z', status: 'cancelled', total_cost: 1, lines: [{ title: 'Cream', qty: 1, unit: 'шт', cost: 1 }] },
-    { id: 11, doc_date: '2026-11-13T11:00:00Z', status: 'posted', total_cost: 0, lines: [{ title: 'Gift', qty: 1, unit: 'шт', cost: 0 }] },
+    { id: 10, doc_date: '2026-11-13T10:00:00Z', status: 'posted', total_cost: 1, paid: 1, lines: [{ title: 'Cream', qty: 1, unit: 'шт', cost: 1 }] },
+    { id: 11, doc_date: '2026-11-13T11:00:00Z', status: 'posted', total_cost: 500, paid: 0, lines: [{ title: 'Gift', qty: 1, unit: 'шт', cost: 500 }] },
   ];
   const out = vh.build({ records: [], stockPurchases: documents, consumables: [], ops: [
     op({ kind: 'goods_sale', stock_document_id: 10, amount: .3 }),
@@ -101,8 +102,8 @@ test('stock purchases include gifts, keep cancelled status and deduplicate split
   ] });
   expect(out.entries).toHaveLength(3);
   expect(out.entries.flatMap(x => x.purchases)).toEqual(expect.arrayContaining([
-    expect.objectContaining({ title: 'Gift', amount: 0, status: 'posted' }),
-    expect.objectContaining({ title: 'Cream', amount: 1, status: 'cancelled' }),
+    expect.objectContaining({ title: 'Gift', amount: 0, gift: true }),
+    expect.objectContaining({ title: 'Cream', amount: 1, gift: false }),
     expect.objectContaining({ type: 'certificate', amount: 20 }),
   ]));
 });

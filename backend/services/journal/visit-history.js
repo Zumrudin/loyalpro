@@ -37,7 +37,7 @@ const OPS_SQL = `SELECT f.id, f.occurred_at, f.kind, f.method, f.amount, f.statu
   LEFT JOIN goods_transactions g ON g.salon_id = f.salon_id
     AND g.yclients_txn_id = CASE WHEN r.raw_payload->'data'->>'sold_item_id' ~ '^[0-9]{1,18}$'
       THEN (r.raw_payload->'data'->>'sold_item_id')::bigint END AND g.deleted_at IS NULL
-  WHERE f.salon_id=$1 AND f.status = ANY($2::text[])
+  WHERE f.salon_id=$1 AND f.status = ANY($2::text[]) AND f.stock_document_id IS NULL
     AND (f.yclients_record_id = ANY($3::bigint[]) OR f.outbox_id = ANY($4::bigint[])
       OR (f.kind = ANY($5::text[]) AND (($6::int IS NOT NULL AND f.client_id=$6) OR ($7::bigint IS NOT NULL AND f.yclients_client_id=$7))))
   ORDER BY f.occurred_at DESC, f.id DESC LIMIT 1000`;
@@ -48,13 +48,17 @@ const CONSUMABLES_SQL = `SELECT d.record_id, m.service_yc_id AS service_id, g.ti
   JOIN yclients_goods_catalog g ON g.id=m.good_row_id AND g.salon_id=m.salon_id
   WHERE m.salon_id=$1 AND d.kind='consumable' AND d.status='posted'
     AND m.deleted_at IS NULL AND d.record_id = ANY($2::bigint[]) ORDER BY m.id`;
+// Отменённые продажи в историю не попадают (как и отменённые строки finance_operations). Оплачено — сумма живых оплат
+// документа; подарок = оплат нет (amount 0, gift true).
 const STOCK_PURCHASES_SQL = `SELECT d.id, d.doc_date, d.status, d.total_cost, d.record_id, d.master_staff_yc_id,
+    COALESCE((SELECT SUM(f.amount) FROM finance_operations f WHERE f.salon_id=d.salon_id AND f.stock_document_id=d.id
+      AND f.status IN ('queued','sending','confirmed')), 0) AS paid,
     COALESCE((SELECT jsonb_agg(jsonb_build_object('title', g.title, 'qty', m.qty,
       'unit', CASE WHEN m.unit_type=1 THEN g.unit ELSE g.service_unit END, 'cost', m.cost) ORDER BY m.id)
       FROM stock_movements m JOIN yclients_goods_catalog g ON g.id=m.good_row_id AND g.salon_id=m.salon_id
       WHERE m.salon_id=d.salon_id AND m.document_id=d.id), '[]'::jsonb) AS lines
   FROM stock_documents d WHERE d.salon_id=$1 AND d.kind='sale' AND d.origin='loyalpro'
-    AND d.status IN ('posted','cancelled')
+    AND d.status = 'posted'
     AND (($2::int IS NOT NULL AND d.client_id=$2) OR ($3::bigint IS NOT NULL AND d.yclients_client_id=$3))
   ORDER BY d.doc_date DESC, d.id DESC LIMIT 200`;
 
@@ -80,6 +84,7 @@ function purchaseOf(op) {
     type, title: String(op.good_title || op.title || PURCHASE_TITLE[type]),
     quantity: qtyText(op.qty, op.unit_title) || null,
     amount: rub(Math.abs(kop(op.amount))), status: op.status,
+    ...(op.gift !== undefined ? { gift: op.gift === true } : {}),
   };
 }
 
@@ -106,7 +111,7 @@ function build({ records, ops, consumables, stockPurchases = [], outboxOf = new 
   ops = dropUnlinkedTwins(ops || []).filter(op => !stockIds.has(String(op.stock_document_id)));
   // One purchase per document even with several payment methods; gifts have no finance row.
   ops = ops.concat(stockPurchases.map(d => ({ kind: 'goods_sale', stock_document_id: d.id,
-    occurred_at: d.doc_date, status: d.status, amount: d.total_cost,
+    occurred_at: d.doc_date, status: d.status, amount: d.paid != null ? Number(d.paid) : d.total_cost, gift: kop(d.paid != null ? d.paid : d.total_cost) === 0,
     yclients_record_id: d.record_id, staff_yc_id: d.master_staff_yc_id,
     good_title: d.lines.map(l => l.title).join(', ') || 'Косметика',
     qty: d.lines.length === 1 ? d.lines[0].qty : null,
