@@ -213,3 +213,20 @@ button.jr-service-line:hover,button.jr-service-line:focus-visible{border-color:v
 .jr-close-ask .jr-actions{margin-top:0}
 .jr-bill-summary{display:grid;gap:6px;padding:12px 0;border-bottom:1px solid var(--bd);font-size:13px}.jr-bill-sum{display:flex;justify-content:space-between;gap:10px;color:var(--t2)}.jr-bill-sum-total{color:inherit;font-weight:600}
 .jr-pay-badge{display:inline-block;margin-top:4px;padding:2px 8px;border-radius:999px;font-style:normal;font-size:11px;line-height:1.5;background:var(--as);color:var(--t2)}.jr-pay-badge-confirmed{color:#1b7f3b}.jr-pay-badge-queued{color:#9a6a00}.jr-pay-badge-sending{color:#1f5fbf}.jr-pay-badge-failed{color:#b3261e}.jr-paid-row.jr-pay-server span{display:grid}
+
+/* Parity with YClients (12.11.2026): breaks, colour, labels, marks, technical break, print. */
+.jr-cell-break{background:repeating-linear-gradient(45deg,var(--bg) 0,var(--bg) 3px,transparent 3px,transparent 9px);color:var(--t3)}
+.jr-cell-break span{display:block;font-size:10px;padding:2px 0 0 4px;white-space:nowrap}
+.jr-marks{display:inline-flex;gap:3px;align-items:center;margin-left:5px;vertical-align:middle}
+.jr-mark{font-size:11px;line-height:1;font-weight:400}
+.jr-label-dot{display:inline-block;width:8px;height:8px;border-radius:50%;border:1px solid rgba(0,0,0,.25);flex:0 0 8px}
+.jr-break-band{position:absolute;z-index:1;border:1px dashed var(--t3);border-radius:4px;background:repeating-linear-gradient(135deg,var(--bg) 0,var(--bg) 4px,var(--card) 4px,var(--card) 8px);font-size:10px;line-height:1;color:var(--t2);text-align:center;overflow:hidden;pointer-events:none}
+@media print{
+  .topbar,.mnav-drawer,.jr-toolbar,#jrReview,#jrState,#jrStaffChips,#jrMonth{display:none!important}
+  .jr-scroll{max-height:none;overflow:visible;border:0}
+  .jr-calendar{min-width:0;grid-template-columns:44px repeat(var(--jr-columns),minmax(0,1fr))}
+  .jr-heading,.jr-corner,.jr-hours{position:static}
+  .jr-visit,.jr-break-band,.jr-cell-break,.jr-label-dot{print-color-adjust:exact;-webkit-print-color-adjust:exact}
+}
+/* customColor wins over the status colour */
+.jr-visit[style*="--jr-yc"]{background:var(--jr-yc);border-color:var(--jr-yc-bd)}

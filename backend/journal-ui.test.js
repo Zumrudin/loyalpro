@@ -110,7 +110,9 @@ test('quarter cells respect breaks, past time and appointments hidden by search'
   const record = {staffId:1,time:'09:30',duration:30};
   expect(h.context.jrCellState(staff,540,'2030-04-01',[record],0)).toBe('free');
   expect(h.context.jrCellState(staff,570,'2030-04-01',[record],0)).toBe('busy');
-  expect(h.context.jrCellState(staff,600,'2030-04-01',[],0)).toBe('off');
+  expect(h.context.jrCellState(staff,600,'2030-04-01',[],0)).toBe('break');
+  expect(h.context.jrCellState(staff,720,'2030-04-01',[],0)).toBe('off');
+  expect(h.context.jrCellState(staff,525,'2030-04-01',[],0)).toBe('off');
   expect(h.context.jrCellState(staff,540,'2030-04-01',[],Date.parse('2030-04-01T10:00:00+03:00'))).toBe('past');
 });
 test('grid click passes exact staff, date and quarter-hour into creation form', () => {
@@ -815,4 +817,50 @@ describe('jrMergeLivePayment',()=>{
   expect(r.items[0].title).toBe('Другое');expect(r.summary.gross).toBe(50);expect(r.summary.discount).toBe(0);
  });
  test('no local: live as is',()=>{const h=harness();const lv=live();expect(h.context.jrMergeLivePayment(null,lv)).toBe(lv);});
+});
+
+// ---- Parity grid (12.11.2026) ----
+const PARITY_DAY = `journal.data = {date:'2030-04-01',labels:[{id:3,title:'<b>VIP</b>',color:'#ff0000'}],
+  staff:[{id:1,name:'Test',working:true,workRanges:[{start:540,end:660},{start:720,end:840}]}],
+  records:[{id:8,staffId:1,date:'2030-04-01',time:'09:30',duration:60,clientName:'Анна',attendance:0,services:[{title:'Чистка'}],
+    customColor:'#f4a0a0',fontColor:null,labels:[{id:3,title:'',color:''}],online:true,isNew:true,paidFull:false,comment:'Позвонить',technicalBreak:900}]}`;
+test('visit block: custom colour wins, contrast text, label dots resolved from the salon list and escaped', () => {
+  const h = harness(); h.run(PARITY_DAY + ';jrRender()');
+  const html = h.get('jrGrid').innerHTML;
+  expect(html).toContain('--jr-yc:#f4a0a0;--jr-yc-bd:#f4a0a0;color:#333');
+  expect(html).toContain('class="jr-label-dot" style="background:#ff0000" title="&lt;b&gt;VIP&lt;/b&gt;"');
+  expect(html).not.toContain('<b>VIP</b>');
+  for (const t of ['Онлайн-запись', 'Новый клиент', 'Есть комментарий']) expect(html).toContain(`title="${t}"`);
+  expect(html).not.toContain('title="Оплачено"');
+});
+test('technical break band under the visit; the break time is busy', () => {
+  const h = harness(); h.run(PARITY_DAY + ';jrRender()');
+  const html = h.get('jrGrid').innerHTML;
+  expect(html).toMatch(/class="jr-break-band"[^>]*title="Технический перерыв 15 мин"/);
+  expect(html).not.toContain('data-time="10:30"');   // 09:30 + 60 + 15 → 10:45
+  expect(html).toContain('data-time="10:45"');
+});
+test('break between two shift intervals is its own cell with a label once', () => {
+  const h = harness(); h.run(PARITY_DAY + ';jrRender()');
+  const html = h.get('jrGrid').innerHTML;
+  expect((html.match(/jr-cell-break/g) || []).length).toBe(4);   // 11:00–12:00 = 4 quarters
+  expect((html.match(/>Перерыв</g) || []).length).toBe(1);
+});
+test('custom colours only as #rrggbb; an injected colour is ignored', () => {
+  const h = harness();
+  expect(h.context.jrVisitStyle({ customColor: 'red;background:url(x)' })).toBe('');
+  expect(h.context.jrVisitStyle({ customColor: '#000000' })).toBe('--jr-yc:#000000;--jr-yc-bd:#000000;color:#fff;');
+  expect(h.context.jrVisitStyle({ customColor: '#ffffff', fontColor: '#123456' })).toBe('--jr-yc:#ffffff;--jr-yc-bd:#ffffff;color:#123456;');
+  expect(h.context.jrContrastColor('#f7c76d')).toBe('#333');
+});
+test('columns carry staff and date for drag-and-drop', () => {
+  const h = harness(); h.run(PARITY_DAY + ';jrRender()');
+  expect(h.get('jrGrid').innerHTML).toContain('<div class="jr-column" data-staff="1" data-date="2030-04-01">');
+});
+test('print: toolbar button and print stylesheet keep colours', () => {
+  const html = fs.readFileSync(path.join(__dirname, '../frontend/index.html'), 'utf8');
+  expect(html).toContain('id="jrPrint"');
+  const css = fs.readFileSync(path.join(__dirname, '../frontend/css/journal.css'), 'utf8');
+  expect(css).toMatch(/@media print\{[^]*print-color-adjust:exact/);
+  expect(css).toContain('.jr-cell-break');
 });

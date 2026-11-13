@@ -22,7 +22,7 @@
 <script src="js/core/theme.js?v=2026-11-08p"></script>
 <script src="js/core/auth.js?v=2026-06-02a"></script>
 <script src="js/core/nav.js?v=2026-11-08catalog-2026-11-08journal"></script>
-<link rel="stylesheet" href="css/journal.css?v=2026-11-12bill">
+<link rel="stylesheet" href="css/journal.css?v=t9-2026-11-12">
 <link rel="stylesheet" href="css/base.css?v=2026-08-10-mobile">
 <link rel="stylesheet" href="css/features.css?v=2026-11-08p">
 <link rel="stylesheet" href="css/ivory-brass.css?v=2026-11-08p">
@@ -443,6 +443,7 @@
         <select id="jrStaffFilter" aria-label="Сотрудник" onchange="jrRender()"><option value="">Все сотрудники</option></select>
         <input id="jrSearch" type="search" placeholder="Клиент или услуга" aria-label="Поиск в журнале" oninput="jrRender()">
         <button class="btn btn-sec" onclick="loadJournal()">Обновить</button>
+        <button class="btn btn-sec" id="jrPrint" onclick="window.print()" title="Печать журнала дня">Печать</button>
         <button class="btn btn-pri" id="jrNew" disabled onclick="jrForm()">+ Новая запись</button>
         <button class="btn btn-sec" id="jrDispatch" onclick="jrDispatchOpen()">Отправить в YClients</button>
       </div>
@@ -3045,7 +3046,7 @@ function fireConfetti() {
 <script src="js/pages/segments.js"></script>
 <script src="js/pages/service-catalog.js?v=2026-11-08catalog"></script>
 <script src="js/pages/journal.js?v=split-2026-11-12"></script>
-<script src="js/pages/journal-grid.js?v=split-2026-11-12"></script>
+<script src="js/pages/journal-grid.js?v=t9-2026-11-12"></script>
 <script src="js/pages/journal-card.js?v=split-2026-11-12"></script>
 <script src="js/pages/journal-forms.js?v=split-2026-11-12"></script>
 <script src="js/pages/journal-payment.js?v=split-2026-11-12"></script>
