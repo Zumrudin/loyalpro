@@ -2,79 +2,201 @@
 const fs = require('fs');
 const vm = require('vm');
 const path = require('path');
-const files = ['stock.js', 'stock-balances.js', 'stock-docs.js', 'stock-sale.js', 'stock-inventory.js', 'stock-refs.js'];
+const files = [
+  'stock.js',
+  'stock-balances.js',
+  'stock-docs.js',
+  'stock-sale.js',
+  'stock-inventory.js',
+  'stock-refs.js',
+];
 function harness() {
   const nodes = new Map();
-  const get = id => {
-    if (!nodes.has(id)) nodes.set(id, {value:'', checked:false, innerHTML:'', textContent:'', hidden:false, disabled:false, open:false,
-      classList:{toggle:jest.fn()}, addEventListener:jest.fn(), querySelectorAll:()=>[], showModal(){this.open=true;}, close(){this.open=false;}});
+  const get = (id) => {
+    if (!nodes.has(id))
+      nodes.set(id, {
+        value: '',
+        checked: false,
+        innerHTML: '',
+        textContent: '',
+        hidden: false,
+        disabled: false,
+        open: false,
+        classList: { toggle: jest.fn() },
+        addEventListener: jest.fn(),
+        querySelectorAll: () => [],
+        showModal() {
+          this.open = true;
+        },
+        close() {
+          this.open = false;
+        },
+      });
     return nodes.get(id);
   };
-  const ctx = vm.createContext({document:{getElementById:get}, api:jest.fn(), ME:{role:'owner'}, location:{hash:'#stock'}, URLSearchParams, Date, setTimeout, clearTimeout});
-  for (const file of files) vm.runInContext(fs.readFileSync(path.join(__dirname,'../frontend/js/pages',file),'utf8'),ctx,{filename:file});
-  return {ctx,get,run:s=>vm.runInContext(s,ctx)};
+  const ctx = vm.createContext({
+    document: { getElementById: get },
+    api: jest.fn(),
+    fetch: jest.fn(),
+    TOKEN: 'synthetic-token',
+    ME: { role: 'owner' },
+    location: { hash: '#stock' },
+    URLSearchParams,
+    Date,
+    setTimeout,
+    clearTimeout,
+  });
+  for (const file of files)
+    vm.runInContext(fs.readFileSync(path.join(__dirname, '../frontend/js/pages', file), 'utf8'), ctx, {
+      filename: file,
+    });
+  return { ctx, get, run: (s) => vm.runInContext(s, ctx) };
 }
-test('quantities preserve fractional base units and negative signs',()=>{
- const {ctx}=harness();
- expect(ctx.stockFmtQty(941,500,'шт','мл')).toBe('1 шт + 441 мл');
- expect(ctx.stockFmtQty(-4059,500,'шт','мл')).toBe('−9 шт + 441 мл');
- expect(ctx.stockFmtQty(7,1,'шт','шт')).toBe('7 шт');
- expect(ctx.stockFmtQty(-941,500,'шт','мл')).toBe('−2 шт + 59 мл');
- expect(ctx.stockFmtQty(0.25,1,'мл','мл')).toBe('0,25 мл');
+test('quantities preserve fractional base units and negative signs', () => {
+  const { ctx } = harness();
+  expect(ctx.stockFmtQty(941, 500, 'шт', 'мл')).toBe('1 шт + 441 мл');
+  expect(ctx.stockFmtQty(-4059, 500, 'шт', 'мл')).toBe('−9 шт + 441 мл');
+  expect(ctx.stockFmtQty(7, 1, 'шт', 'шт')).toBe('7 шт');
+  expect(ctx.stockFmtQty(-941, 500, 'шт', 'мл')).toBe('−2 шт + 59 мл');
+  expect(ctx.stockFmtQty(0.25, 1, 'мл', 'мл')).toBe('0,25 мл');
 });
-test('balance filters and rendering escape catalog and storage titles',()=>{
- const {ctx}=harness();
- const goods=[{id:1,title:'<script>x</script>',unit_equals:1,unit:'шт',balances:[{storage_id:3,qty_base:-2,negative:true,critical:true}]},{id:2,title:'Normal',balances:[]}];
- expect(ctx.stockBalanceRows(goods,[],{onlyNegative:true})).toHaveLength(1);
- const html=ctx.stockBalancesHtml(goods,[{id:3,title:'<img>'}],{});
- expect(html).toContain('&lt;script&gt;');expect(html).not.toContain('<script>');expect(html).toContain('&lt;img&gt;');
- expect(html).toContain('stock-neg');
+test('balance filters and rendering escape catalog and storage titles', () => {
+  const { ctx } = harness();
+  const goods = [
+    {
+      id: 1,
+      title: '<script>x</script>',
+      unit_equals: 1,
+      unit: 'шт',
+      balances: [{ storage_id: 3, qty_base: -2, negative: true, critical: true }],
+    },
+    { id: 2, title: 'Normal', balances: [] },
+  ];
+  expect(ctx.stockBalanceRows(goods, [], { onlyNegative: true })).toHaveLength(1);
+  const html = ctx.stockBalancesHtml(goods, [{ id: 3, title: '<img>' }], {});
+  expect(html).toContain('&lt;script&gt;');
+  expect(html).not.toContain('<script>');
+  expect(html).toContain('&lt;img&gt;');
+  expect(html).toContain('stock-neg');
 });
-test('stale catalog response cannot overwrite the newest filters',async()=>{
- const h=harness(); let resolve;
- h.ctx.stockApi=jest.fn().mockImplementationOnce(()=>new Promise(r=>resolve=r)).mockResolvedValueOnce({goods:[{id:2,title:'new',balances:[]}]});
- const first=h.ctx.stockLoadGoods(); await h.ctx.stockLoadGoods(); resolve({goods:[{id:1,title:'old',balances:[]}]});await first;
- expect(h.run('_stock.goods[0].title')).toBe('new');
+test('stale catalog response cannot overwrite the newest filters', async () => {
+  const h = harness();
+  let resolve;
+  h.ctx.stockApi = jest
+    .fn()
+    .mockImplementationOnce(() => new Promise((r) => (resolve = r)))
+    .mockResolvedValueOnce({ goods: [{ id: 2, title: 'new', balances: [] }] });
+  const first = h.ctx.stockLoadGoods();
+  await h.ctx.stockLoadGoods();
+  resolve({ goods: [{ id: 1, title: 'old', balances: [] }] });
+  await first;
+  expect(h.run('_stock.goods[0].title')).toBe('new');
 });
-test('good draft maps empty optional values to null and preserves zero prices',()=>{
- const h=harness(); h.get('stockGoodTitle').value='Local';h.get('stockGoodUnit').value='1';h.get('stockGoodRatio').value='1';h.get('stockGoodPrice').value='0';h.get('stockGoodActive').checked=true;
- expect(h.ctx.stockGoodFormDraft()).toMatchObject({title:'Local',unitId:1,unitEquals:1,salePrice:0,actualCost:null,stockActive:true});
+test('good draft maps empty optional values to null and preserves zero prices', () => {
+  const h = harness();
+  h.get('stockGoodTitle').value = 'Local';
+  h.get('stockGoodUnit').value = '1';
+  h.get('stockGoodRatio').value = '1';
+  h.get('stockGoodPrice').value = '0';
+  h.get('stockGoodActive').checked = true;
+  expect(h.ctx.stockGoodFormDraft()).toMatchObject({
+    title: 'Local',
+    unitId: 1,
+    unitEquals: 1,
+    salePrice: 0,
+    actualCost: null,
+    stockActive: true,
+  });
 });
-test('closed good card cannot be reopened by a late response',async()=>{
- const h=harness();let resolve;h.ctx.stockApi=()=>new Promise(r=>resolve=r);
- const pending=h.ctx.stockOpenGood(3);h.ctx.stockCloseGood();resolve({good:{id:3,title:'late'},balances:[],openings:[],receipts:[],techCards:[],movements:{movements:[],total:0}});await pending;
- expect(h.get('stockGoodModal').open).toBe(false);
+test('closed good card cannot be reopened by a late response', async () => {
+  const h = harness();
+  let resolve;
+  h.ctx.stockApi = () => new Promise((r) => (resolve = r));
+  const pending = h.ctx.stockOpenGood(3);
+  h.ctx.stockCloseGood();
+  resolve({
+    good: { id: 3, title: 'late' },
+    balances: [],
+    openings: [],
+    receipts: [],
+    techCards: [],
+    movements: { movements: [], total: 0 },
+  });
+  await pending;
+  expect(h.get('stockGoodModal').open).toBe(false);
 });
-test('stock scripts share global scope with all application scripts and are versioned',()=>{
- const html=fs.readFileSync(path.join(__dirname,'../frontend/index.html'),'utf8');
- for(const file of files) expect(html).toMatch(new RegExp('pages/'+file.replace('.','\\.')+'\\?v='));
- const all=[...html.matchAll(/<script src="(js\/[^"?]+)\?[^\"]*"/g)].map(m=>m[1]);
- const names=new Map();
- for(const file of all) {
-  const code=fs.readFileSync(path.join(__dirname,'../frontend',file),'utf8');
-  for(const m of code.matchAll(/^(?:async\s+function|function|const|let|var)\s+((?:stock|STOCK_|_stock)[\w$]*)/gm)){
-   expect({name:m[1],previous:names.get(m[1])}).toEqual({name:m[1],previous:undefined});names.set(m[1],file);
+test('stock scripts share global scope with all application scripts and are versioned', () => {
+  const html = fs.readFileSync(path.join(__dirname, '../frontend/index.html'), 'utf8');
+  for (const file of files) expect(html).toMatch(new RegExp('pages/' + file.replace('.', '\\.') + '\\?v='));
+  const all = [...html.matchAll(/<script src="(js\/[^"?]+)\?[^\"]*"/g)].map((m) => m[1]);
+  const names = new Map();
+  for (const file of all) {
+    const code = fs.readFileSync(path.join(__dirname, '../frontend', file), 'utf8');
+    for (const m of code.matchAll(/^(?:async\s+function|function|const|let|var)\s+((?:stock|STOCK_|_stock)[\w$]*)/gm)) {
+      expect({ name: m[1], previous: names.get(m[1]) }).toEqual({ name: m[1], previous: undefined });
+      names.set(m[1], file);
+    }
   }
- }
- expect((html.match(/data-p="stock"/g)||[])).toHaveLength(2);
+  expect(html.match(/data-p="stock"/g) || []).toHaveLength(2);
 });
-test('document totals round each line to kopeks and badges escape nothing untrusted',()=>{
- const {ctx}=harness();
- expect(ctx.stockLinesTotal([{qty:3,costPerUnit:0.1,discount:0},{qty:1,costPerUnit:1,discount:10}])).toBe(120);
- expect(ctx.stockDocBadge({origin:'yclients',status:'cancelled'})).toContain('Отменён');
- expect(ctx.stockDocumentHtml({id:1,kind:'receipt',origin:'loyalpro',status:'posted',comment:'<script>x</script>',lines:[]})).not.toContain('<script>');
+test('document totals round each line to kopeks and badges escape nothing untrusted', () => {
+  const { ctx } = harness();
+  expect(
+    ctx.stockLinesTotal([
+      { qty: 3, costPerUnit: 0.1, discount: 0 },
+      { qty: 1, costPerUnit: 1, discount: 10 },
+    ]),
+  ).toBe(120);
+  expect(ctx.stockDocBadge({ origin: 'yclients', status: 'cancelled' })).toContain('Отменён');
+  expect(
+    ctx.stockDocumentHtml({
+      id: 1,
+      kind: 'receipt',
+      origin: 'loyalpro',
+      status: 'posted',
+      comment: '<script>x</script>',
+      lines: [],
+    }),
+  ).not.toContain('<script>');
 });
-test('sale rejects mismatch and bonus payments, gift has no payments',()=>{
- const {ctx}=harness();
- expect(()=>ctx.stockCheckPayments([{method:'cash',amount:9}],1000,false)).toThrow();
- expect(()=>ctx.stockCheckPayments([{method:'bonus',amount:10}],1000,false)).toThrow();
- expect(()=>ctx.stockCheckPayments([],0,true)).not.toThrow();
- expect(()=>ctx.stockCheckPayments([{method:'cash',amount:1}],0,true)).toThrow();
+test('sale rejects mismatch and bonus payments, gift has no payments', () => {
+  const { ctx } = harness();
+  expect(() => ctx.stockCheckPayments([{ method: 'cash', amount: 9 }], 1000, false)).toThrow();
+  expect(() => ctx.stockCheckPayments([{ method: 'bonus', amount: 10 }], 1000, false)).toThrow();
+  expect(() => ctx.stockCheckPayments([], 0, true)).not.toThrow();
+  expect(() => ctx.stockCheckPayments([{ method: 'cash', amount: 1 }], 0, true)).toThrow();
 });
-test('inventory difference is signed and turnover CSV neutralizes formulas',()=>{
- const {ctx}=harness();
- expect(ctx.stockInvRows([{good_row_id:1,expected_base:5,counted_base:3}])[0].diff).toBe(-2);
- expect(ctx.stockInvRows([{good_row_id:1,expected_base:5,counted_base:null}])[0].diff).toBeNull();
- expect(ctx.stockCsvCell('=HYPERLINK("evil")')).toContain("'=HYPERLINK");
- expect(ctx.stockTurnoverRows([{title:'Cream'},{title:'Soap'}],{search:'soap'})).toHaveLength(1);
+test('inventory difference is signed and turnover CSV neutralizes formulas', () => {
+  const { ctx } = harness();
+  expect(ctx.stockInvRows([{ good_row_id: 1, expected_base: 5, counted_base: 3 }])[0].diff).toBe(-2);
+  expect(ctx.stockInvRows([{ good_row_id: 1, expected_base: 5, counted_base: null }])[0].diff).toBeNull();
+  expect(ctx.stockCsvCell('=HYPERLINK("evil")')).toContain("'=HYPERLINK");
+  expect(ctx.stockTurnoverRows([{ title: 'Cream' }, { title: 'Soap' }], { search: 'soap' })).toHaveLength(1);
+});
+
+test('stock API keeps validation lists and flags uncertain write outcomes', async () => {
+  const h = harness();
+  h.ctx.fetch.mockResolvedValue({ ok: false, status: 400, json: async () => ({ errors: ['first', 'second'] }) });
+  await expect(h.ctx.stockApi('/sales', {})).rejects.toMatchObject({
+    status: 400,
+    message: 'first\nsecond',
+    uncertain: false,
+  });
+  h.ctx.fetch.mockRejectedValue(new Error('synthetic timeout'));
+  await expect(h.ctx.stockApi('/sales', {})).rejects.toMatchObject({ uncertain: true });
+});
+test('uncertain sale locks resubmit until operator reviews operations', async () => {
+  const h = harness();
+  h.ctx.stockSaleDraft = () => ({ lines: [] });
+  h.ctx.stockApi = jest.fn().mockRejectedValue(Object.assign(new Error('unknown result'), { uncertain: true }));
+  await h.ctx.stockSaveSale({ preventDefault() {} });
+  await h.ctx.stockSaveSale({ preventDefault() {} });
+  expect(h.ctx.stockApi).toHaveBeenCalledTimes(1);
+  expect(h.get('stockSaleSave').disabled).toBe(true);
+});
+test('invalid inventory count blocks posting rather than using the previous persisted value', async () => {
+  const h = harness();
+  h.run('_stockInv.doc={id:1,lines:[]};');
+  h.ctx.stockInventoryChanged(1, '');
+  await expect(h.ctx.stockFlushInventory()).rejects.toThrow('факт');
 });

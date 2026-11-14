@@ -61,14 +61,20 @@ async function create(salonId, userId, body) {
   if (b.gift != null && typeof b.gift !== 'boolean') result.errors.push('gift: true или false.');
   if (b.payments != null && !Array.isArray(b.payments)) result.errors.push('Ожидается список оплат.');
   result.errors.push(...m.validateSalePayments(b.payments, result.normalized.totalCost, { gift: b.gift }).errors);
+  if (b.gift === true && m.kop(result.normalized.totalCost) !== 0) result.errors.push('Итог подарка должен быть нулевым.');
+  if (b.masterStaffYcId != null) {
+    const staff=await require('../journal/reference-cache').getReference(salonId,'staff');
+    if (!Array.isArray(staff) || !staff.some(s=>Number(s.id)===Number(b.masterStaffYcId)&&!s.fired)) result.errors.push('Специалист не найден в салоне.');
+  }
   if (result.errors.length) validation(result.errors);
   const { lines, ...normalized } = result.normalized;
   // Клиент резолвится ДО транзакции: поиск в YClients (до 30 с) не должен держать соединение пула открытым.
   const client = await resolveClient(salonId, b);
   return transaction(salonId, async q => {
     if (b.recordId != null) {
-      const r = (await q('SELECT id FROM records WHERE salon_id=$1 AND yclients_record_id=$2', [salonId, Number(b.recordId)])).rows[0];
+      const r = (await q('SELECT id, client_id, yclients_client_id FROM records WHERE salon_id=$1 AND yclients_record_id=$2', [salonId, Number(b.recordId)])).rows[0];
       if (!r) validation(['Запись не найдена.']);
+      if ((r.client_id != null && Number(r.client_id)!==Number(client.id)) || (r.yclients_client_id != null && Number(r.yclients_client_id)!==Number(client.yclients_client_id))) validation(['Пациент не совпадает с записью.']);
     }
     const input = { ...normalized, origin: 'loyalpro', status: 'posted', createdBy: userId,
       clientId: client.id, ycClientId: client.yclients_client_id ?? null,

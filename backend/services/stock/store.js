@@ -446,16 +446,16 @@ module.exports.listDocumentPayments = listDocumentPayments;
 async function consumablesContext(salonId, recordId) {
   let services, staffId, date;
   if (recordId < 0) {
-    const r = await require('../journal').detail(salonId, recordId);
+    let r;try { r = await require('../journal').detail(salonId, recordId); } catch(e) { if(e.status===404)return null;throw e; }
     services = r.services; staffId = r.staffId; date = r.date;
     if (r.id < 0) {
       const local = await db.any('SELECT id, economics_yc_id, yclients_id FROM service_catalog WHERE salon_id=$1 AND id=ANY($2::int[])', [salonId, services.map(s=>s.id)]);
       services = services.map(s=>({...s, yclients_id: local.find(l=>Number(l.id)===Number(s.id))?.economics_yc_id || local.find(l=>Number(l.id)===Number(s.id))?.yclients_id || 0}));
     }
   } else {
-    const r = await db.oneOrNone('SELECT raw_payload, staff_id, visit_date FROM records WHERE salon_id=$1 AND yclients_record_id=$2', [salonId, recordId]);
+    const r = await db.oneOrNone('SELECT raw_payload, services, staff, visit_date FROM records WHERE salon_id=$1 AND yclients_record_id=$2', [salonId, recordId]);
     if (!r) return null;
-    services = r.raw_payload?.services || []; staffId = r.staff_id; date = r.visit_date;
+    services = r.raw_payload?.services || r.services || []; staffId = r.raw_payload?.staff_id ?? r.raw_payload?.staff?.id ?? r.staff?.id; date = r.visit_date;
   }
   const [goods, links, cards, overrides] = await Promise.all([listGoods(salonId),
     db.any('SELECT * FROM service_tech_cards WHERE salon_id=$1', [salonId]),
