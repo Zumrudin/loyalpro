@@ -71,3 +71,10 @@ test('sale rejects mismatch and bonus payments, gift has no payments',()=>{
  expect(()=>ctx.stockCheckPayments([],0,true)).not.toThrow();
  expect(()=>ctx.stockCheckPayments([{method:'cash',amount:1}],0,true)).toThrow();
 });
+test('inventory difference is signed and turnover CSV neutralizes formulas',()=>{
+ const {ctx}=harness();
+ expect(ctx.stockInvRows([{good_row_id:1,expected_base:5,counted_base:3}])[0].diff).toBe(-2);
+ expect(ctx.stockInvRows([{good_row_id:1,expected_base:5,counted_base:null}])[0].diff).toBeNull();
+ expect(ctx.stockCsvCell('=HYPERLINK("evil")')).toContain("'=HYPERLINK");
+ expect(ctx.stockTurnoverRows([{title:'Cream'},{title:'Soap'}],{search:'soap'})).toHaveLength(1);
+});

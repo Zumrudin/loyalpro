@@ -1,6 +1,6 @@
 // Товары и склад. Все обращения используют общий авторизованный API.
 const _stock = {tab:'balances', goods:[], dictionaries:{storages:[],units:[],suppliers:[],staff:[],categories:[]}, goodsRequest:0, cardRequest:0, categories:new Map(), busy:false, good:null};
-const STOCK_TABS = {balances:'Остатки',goods:'Товары',docs:'Операции'};
+const STOCK_TABS = {balances:'Остатки',goods:'Товары',docs:'Операции',suppliers:'Справочники','tech-cards':'Техкарты',inventory:'Инвентаризация',turnover:'Оборотка',settings:'Настройки'};
 function stockEl(id) { return document.getElementById(id); }
 function stockEsc(value) { return String(value ?? '').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 function stockApi(path, body, method) { return api(method || (body ? 'POST':'GET'), '/api/stock'+path, body); }
@@ -11,6 +11,7 @@ async function loadStock() {
   stockEl('stockStatus').textContent='Загрузка…';
   try {
     _stock.dictionaries=await stockApi('/dictionaries');
+    stockEl('stockTabBtn-settings').hidden=ME?.role!=='owner';
     stockRenderFilters();
     await stockOnHashArg((location.hash || '').replace(/^#stock\/?/,''));
     await stockLoadCounters();
@@ -32,7 +33,9 @@ async function stockSwitchTab(tab, updateHash=true) {
     stockEl('stockTabBtn-'+key).classList.toggle('active',key===tab);
   }
   if(updateHash && location.hash!=='#stock/'+tab) {location.hash='stock/'+tab;return;}
-  if(tab==='docs')await stockLoadDocs();else await stockLoadGoods();
+  stockEl('stockFilters').hidden=!['goods','balances'].includes(tab);
+  const loaders={docs:stockLoadDocs,suppliers:stockLoadRefs,inventory:stockLoadInventory,turnover:stockLoadTurnover,settings:stockLoadSettings,'tech-cards':()=>ecoLoadTechCards('stockTechCards')};
+  if(loaders[tab])await loaders[tab]();else await stockLoadGoods();
 }
 async function stockLoadCounters() {
   try {

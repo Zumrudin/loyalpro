@@ -2272,8 +2272,8 @@
 
     <div class="page" id="page-stock">
       <div class="bc-head"><h2>Товары и склад</h2><p id="stockCounters" aria-live="polite"></p></div>
-      <div class="stock-toolbar"><button class="tab active" id="stockTabBtn-balances" onclick="stockSwitchTab('balances')">Остатки</button><button class="tab" id="stockTabBtn-goods" onclick="stockSwitchTab('goods')">Товары</button><button type="button" class="tab" id="stockTabBtn-docs" onclick="stockSwitchTab('docs')">Операции</button><button type="button" class="tab" id="stockTabBtn-suppliers" hidden disabled>Поставщики</button><button type="button" class="tab" id="stockTabBtn-tech-cards" hidden disabled>Техкарты</button><button type="button" class="tab" id="stockTabBtn-inventory" hidden disabled>Инвентаризация</button><button type="button" class="tab" id="stockTabBtn-turnover" hidden disabled>Оборотка</button><button type="button" class="tab" id="stockTabBtn-settings" hidden disabled>Настройки</button><button class="btn" onclick="stockNewGood()">+ Товар</button></div>
-      <form class="stock-toolbar" onsubmit="event.preventDefault();stockLoadGoods()">
+      <div class="stock-toolbar"><button class="tab active" id="stockTabBtn-balances" onclick="stockSwitchTab('balances')">Остатки</button><button class="tab" id="stockTabBtn-goods" onclick="stockSwitchTab('goods')">Товары</button><button type="button" class="tab" id="stockTabBtn-docs" onclick="stockSwitchTab('docs')">Операции</button><button type="button" class="tab" id="stockTabBtn-suppliers" onclick="stockSwitchTab('suppliers')">Поставщики</button><button type="button" class="tab" id="stockTabBtn-tech-cards" onclick="stockSwitchTab('tech-cards')">Техкарты</button><button type="button" class="tab" id="stockTabBtn-inventory" onclick="stockSwitchTab('inventory')">Инвентаризация</button><button type="button" class="tab" id="stockTabBtn-turnover" onclick="stockSwitchTab('turnover')">Оборотка</button><button type="button" class="tab" id="stockTabBtn-settings" onclick="stockSwitchTab('settings')">Настройки</button><button class="btn" onclick="stockNewGood()">+ Товар</button></div>
+      <form id="stockFilters" class="stock-toolbar" onsubmit="event.preventDefault();stockLoadGoods()">
         <label>Поиск<input id="stockSearch" type="search" maxlength="100" placeholder="Название товара"></label>
         <label>Склад<select id="stockStorage" onchange="stockLoadGoods()"><option value="">Все склады</option></select></label>
         <label>Категория<select id="stockCategory" onchange="stockLoadGoods()"><option value="">Все категории</option></select></label>
@@ -2281,7 +2281,7 @@
         <label class="stock-check"><input id="stockCritical" type="checkbox" onchange="stockLoadGoods()">Критические</label>
         <label class="stock-check"><input id="stockNegative" type="checkbox" onchange="stockLoadGoods()">Отрицательные</label><button type="submit">Найти</button>
       </form>
-      <p id="stockStatus" role="status"></p><div id="stockTab-balances"></div><div id="stockTab-goods" hidden></div><div id="stockTab-docs" hidden></div><div id="stockTab-suppliers" hidden></div><div id="stockTab-tech-cards" hidden></div><div id="stockTab-inventory" hidden></div><div id="stockTab-turnover" hidden></div><div id="stockTab-settings" hidden></div>
+      <p id="stockStatus" role="status"></p><div id="stockTab-balances"></div><div id="stockTab-goods" hidden></div><div id="stockTab-docs" hidden></div><div id="stockTab-suppliers" hidden></div><div id="stockTab-tech-cards" hidden><div id="stockTechCards"></div></div><div id="stockTab-inventory" hidden></div><div id="stockTab-turnover" hidden></div><div id="stockTab-settings" hidden></div>
     </div>
     <div class="page" id="page-economics">
       <div class="bc-head">
@@ -3106,6 +3106,7 @@ function fireConfetti() {
 </dialog>
 <dialog id="stockDocModal" class="stock-modal" aria-label="Операция склада"><form onsubmit="stockSaveDocument(event)"><button type="button" onclick="stockDocumentClose()">Закрыть</button><div id="stockDocBody"></div><p id="stockDocError" role="alert"></p><button id="stockDocSave" type="submit">Сохранить</button></form></dialog>
 <dialog id="stockSaleModal" class="stock-modal" aria-label="Операция склада"><form onsubmit="stockSaveSale(event)"><button type="button" onclick="stockSaleClose()">Закрыть</button><div id="stockSaleBody"></div><p id="stockSaleError" role="alert"></p><button id="stockSaleSave" type="submit">Сохранить</button></form></dialog>
+<dialog id="stockRefModal" class="stock-modal" aria-label="Справочник"><form onsubmit="stockSaveRef(event)"><button type="button" onclick="stockCloseRef()">Закрыть</button><div id="stockRefBody"></div><p id="stockRefError" role="alert"></p><button type="submit" id="stockRefSave">Сохранить</button></form></dialog>
 <script src="js/pages/stock.js?v=2026-11-14a"></script>
 <script src="js/pages/stock-balances.js?v=2026-11-14a"></script>
 <script src="js/pages/stock-docs.js?v=2026-11-14a"></script>
