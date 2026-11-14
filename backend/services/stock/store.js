@@ -471,3 +471,13 @@ async function recordConsumableMovements(salonId, recordId, q) {
 }
 const stockPriceReceipts = (salonId, good) => good.yclients_good_id == null ? [] : require('../economics/store').listReceipts(salonId, good.yclients_good_id);
 Object.assign(module.exports, { consumablesContext, recordConsumableMovements, stockPriceReceipts });
+
+// Replay the current mirror, never a stale queued payload. Deleted rows must also drain.
+const pendingMirrorRows = salonId => db.any(`SELECT g.* FROM stock_ingest_pending p
+  JOIN goods_transactions g ON g.salon_id=p.salon_id AND g.yclients_txn_id=p.yclients_txn_id
+  WHERE p.salon_id=$1 AND (g.deleted_at IS NOT NULL OR EXISTS
+    (SELECT 1 FROM yclients_goods_catalog c WHERE c.salon_id=p.salon_id AND c.yclients_good_id=g.good_id))
+  ORDER BY p.created_at, p.yclients_txn_id LIMIT 1000`, [salonId]);
+const removeIngestPending = (salonId,id) => db.query('DELETE FROM stock_ingest_pending WHERE salon_id=$1 AND yclients_txn_id=$2',[salonId,id]);
+const pendingCount = async salonId => Number((await db.oneOrNone('SELECT count(*) AS n FROM stock_ingest_pending WHERE salon_id=$1',[salonId]))?.n || 0);
+Object.assign(module.exports,{pendingMirrorRows,removeIngestPending,pendingCount});

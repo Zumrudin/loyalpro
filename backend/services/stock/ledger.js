@@ -40,3 +40,15 @@ function openingFromCatalog(goodRow) {
   });
 }
 module.exports = { ingestMirrored, postDocument, openingFromCatalog };
+
+async function drainIngestPending(salonId) {
+  const rows = await store.pendingMirrorRows(salonId); let drained=0, failed=0;
+  for (const row of rows) {
+    try {
+      const result=await ingestMirrored(salonId,row,{status:row.deleted_at?'delete':'update',source:row.source||'backfill',deletedAt:row.deleted_at});
+      if (!result.pending) { await store.removeIngestPending(salonId,row.yclients_txn_id);drained++; }
+    } catch (_) { failed++; }
+  }
+  return {drained,failed,pending:await store.pendingCount(salonId)};
+}
+module.exports.drainIngestPending=drainIngestPending;

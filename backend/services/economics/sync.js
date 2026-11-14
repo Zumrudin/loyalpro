@@ -339,6 +339,7 @@ async function runNightly(salon, opts = {}) {
   const out = { steps: {}, errors: {} };
   const step = async (name, fn) => { try { out.steps[name] = await fn(); } catch (e) { out.errors[name] = e.message; logger.warn(`salon=${salon.id} ${name}: ${e.message}`); } };
     await step('catalog', () => syncGoodsCatalog(salon, opts));
+    await step('stock', async () => { const r=await require('../stock').nightly(salon); if(Object.keys(r.errors||{}).length)out.errors.stock='stock_steps_failed'; return r; });
     await step('techCards', () => syncTechCards(salon, opts));
     await step('transactions', () => reconcileGoodsTransactions(salon, opts));
     await step('recentDays', () => pullRecentWriteoffDays(salon, opts));

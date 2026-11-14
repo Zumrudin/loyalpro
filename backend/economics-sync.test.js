@@ -1,5 +1,6 @@
 'use strict';
 jest.mock('./db', () => ({ db: { one: jest.fn(), oneOrNone: jest.fn(), query: jest.fn(), any: jest.fn() }, pool: {} }));
+jest.mock('./services/stock',()=>({nightly:jest.fn().mockResolvedValue({steps:{},errors:{}})}));
 jest.mock('./services/yclients', () => ({ ycGet: jest.fn() }));
 jest.mock('./services/economics/store', () => ({
   upsertGoodsTransaction: jest.fn(), refreshLastReceipt: jest.fn(), refreshAllLastReceipts: jest.fn(),
@@ -139,7 +140,7 @@ describe('healGoodsGaps: дни с визитами без единого спи
     store.listRecordsToLearn.mockResolvedValue([]);
     store.listTechCardIdsByYc.mockResolvedValue(new Map());
     const r = await sync.runNightly(SALON, { sleep: noSleep });
-    expect(Object.keys(r.steps)).toEqual(['catalog', 'techCards', 'transactions', 'recentDays', 'gaps', 'learn', 'lastReceipts']);
+    expect(Object.keys(r.steps)).toEqual(['catalog', 'stock', 'techCards', 'transactions', 'recentDays', 'gaps', 'learn', 'lastReceipts']);
     expect(r.steps.gaps).toEqual({ gapDays: 0, ranges: 0, healed: 0, upserted: 0 });
   });
 });
