@@ -63,7 +63,7 @@ function jrTools(record) {
   const live = !!record && Number(record.id) > 0;
   return `<div class="jr-tools">${[['ЕГИСЗ','plus'],['Текущий приём','file'],['Расширенные поля','list'],['Повторение записи','repeat'],['Уведомления о визите','bell'],['Списание расходников','box'],['История изменений','clock'],['Лист назначения','file']].map(([title,icon]) => live && title === 'История изменений'
     ? `<button type="button" class="jr-tool-live jr-placeholder" id="jrHistoryOpen">${jrIcon(icon)}<span>${title}</span></button>`
-    : jrStub(title,icon)).join('')}</div>${live ? '<div id="jrHistory" class="jr-history-box" hidden></div>' : ''}`;
+    : record && title === 'Списание расходников' ? `<button type="button" class="jr-tool-live jr-placeholder" id="jrConsumablesOpen">${jrIcon(icon)}<span>${title}</span></button>` : jrStub(title,icon)).join('')}</div>${live ? '<div id="jrHistory" class="jr-history-box" hidden></div>' : ''}`;
 }
 function jrClientPanel(record, creating = false, editable = false) {
   return `<aside class="jr-booking-client jr-booking-panel"><div class="jr-client-tabs"><span class="is-active">${jrIcon('user')} Клиент</span>${jrStub('Чат','chat','jr-tab-stub')}</div>${creating
@@ -102,9 +102,9 @@ function jrStatusBar(record, canEdit = false) {
 function jrServicesPanel(record, editable = false) {
   const tag = editable ? 'button type="button" data-service-line' : 'div';
   const end = editable ? 'button' : 'div';
-  return `<section class="jr-service-panel"><div class="jr-service-tabs"><span class="is-active">${jrIcon('list')} Услуги</span>${jrStub('Товары','box','jr-tab-stub')}</div>
-    <div class="jr-service-lines">${(record.services || []).map(s => `<${tag} class="jr-service-line"${editable ? ' title="Изменить количество и стоимость"' : ''}><span>${jrEscape(s.title || 'Услуга')}${Number(s.quantity) > 1 ? ` <small>× ${jrEscape(s.quantity)} по ${jrEscape(Number(s.unitPrice || 0).toLocaleString('ru'))} ₽</small>` : ''}</span><strong>${jrEscape(Number(s.cost || 0).toLocaleString('ru'))} ₽</strong></${end}>`).join('') || '<p>Услуги не указаны</p>'}</div>
-    <p class="jr-hint">Длительность визита при изменении услуг сохраняется.</p></section>`;
+  return `<section class="jr-service-panel"><div class="jr-service-tabs"><button type="button" id="jrTabServices" class="is-active" onclick="jrStockTab('services')">${jrIcon('list')} Услуги</button>${record.id ? `<button type="button" id="jrTabGoods" onclick="jrStockTab('goods')">${jrIcon('box')} Товары</button>` : ''}</div>
+    <div id="jrServicesPane"><div class="jr-service-lines">${(record.services || []).map(s => `<${tag} class="jr-service-line"${editable ? ' title="Изменить количество и стоимость"' : ''}><span>${jrEscape(s.title || 'Услуга')}${Number(s.quantity) > 1 ? ` <small>× ${jrEscape(s.quantity)} по ${jrEscape(Number(s.unitPrice || 0).toLocaleString('ru'))} ₽</small>` : ''}</span><strong>${jrEscape(Number(s.cost || 0).toLocaleString('ru'))} ₽</strong></${end}>`).join('') || '<p>Услуги не указаны</p>'}</div>
+    <p class="jr-hint">Длительность визита при изменении услуг сохраняется.</p></div><div id="jrGoodsPane" hidden></div><div id="jrConsumablesPane" hidden></div></section>`;
 }
 // Outbox package that could not be delivered to YClients: reason + safe next steps.
 function jrSyncAlert(record) {
@@ -183,6 +183,7 @@ function jrRenderRecord(r) {
       if (kept && kept.request === journal.modalRequest && kept.id === r.id) { jrEl('jrHistory').hidden = false; jrEl('jrHistory').innerHTML = kept.html; }
     }
     // Lazy, once per opened card; errors stay inside the panel.
+    if (typeof jrStockBind === 'function') jrStockBind(r);
     jrLoadClientSummary(r);
 }
 // The card is tinted by the visit status (like the block in the grid) and
@@ -400,7 +401,7 @@ async function jrLoadClientSummary(r) {
     const s = await jrApi('clients/summary?' + new URLSearchParams({ phone }));
     if (request !== journal.modalRequest) return;
     const html = jrClientSummaryHtml(s);
-    journal.clientSummary = { phone, request, html };
+    journal.clientSummary = { phone, request, html, clientId: s.clientId };
     const now = jrEl('jrClientSummaryBox');
     if (now) now.innerHTML = html;
   } catch (e) {

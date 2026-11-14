@@ -10,7 +10,7 @@
 //  - purchases: finance_operations goods_sale / certificate_sale /
 //    abonement_sale; the item title via revenue_operations.sold_item_id →
 //    goods_transactions. A purchase made in a visit is shown inside it.
-//  - consumables under a service: goods_transactions write-offs (type 2).
+//  - local sales include gifts; consumables come from the stock ledger.
 const { db } = require('../../db');
 const m = require('./model');
 const overlay = require('./overlay');
@@ -31,18 +31,36 @@ const RECORDS_BY_PHONE_SQL = `SELECT raw_payload FROM records WHERE salon_id=$1
   AND visit_date >= CURRENT_DATE - 730 AND ${ALIVE} ORDER BY visit_datetime DESC NULLS LAST LIMIT ${CAP}`;
 // Money and purchases: by record, by journal package (records not sent yet) and by client.
 const OPS_SQL = `SELECT f.id, f.occurred_at, f.kind, f.method, f.amount, f.status, f.origin, f.yclients_record_id, f.outbox_id,
-    f.title, r.sold_by_yc_staff_id AS staff_yc_id, g.good_title, g.amount AS qty, g.unit_title
+    f.title, f.stock_document_id, r.sold_by_yc_staff_id AS staff_yc_id, g.good_title, g.amount AS qty, g.unit_title
   FROM finance_operations f
-  LEFT JOIN revenue_operations r ON r.id = f.revenue_operation_id
+  LEFT JOIN revenue_operations r ON r.id = f.revenue_operation_id AND r.salon_id = f.salon_id
   LEFT JOIN goods_transactions g ON g.salon_id = f.salon_id
     AND g.yclients_txn_id = CASE WHEN r.raw_payload->'data'->>'sold_item_id' ~ '^[0-9]{1,18}$'
       THEN (r.raw_payload->'data'->>'sold_item_id')::bigint END AND g.deleted_at IS NULL
-  WHERE f.salon_id=$1 AND f.status = ANY($2::text[])
+  WHERE f.salon_id=$1 AND f.status = ANY($2::text[]) AND f.stock_document_id IS NULL
     AND (f.yclients_record_id = ANY($3::bigint[]) OR f.outbox_id = ANY($4::bigint[])
       OR (f.kind = ANY($5::text[]) AND (($6::int IS NOT NULL AND f.client_id=$6) OR ($7::bigint IS NOT NULL AND f.yclients_client_id=$7))))
   ORDER BY f.occurred_at DESC, f.id DESC LIMIT 1000`;
-const CONSUMABLES_SQL = `SELECT record_id, service_id, good_title, amount, unit_title, cost FROM goods_transactions
-  WHERE salon_id=$1 AND type_id=2 AND deleted_at IS NULL AND record_id = ANY($2::bigint[]) ORDER BY id`;
+const CONSUMABLES_SQL = `SELECT d.record_id, m.service_yc_id AS service_id, g.title AS good_title,
+    m.qty_base AS amount, g.service_unit AS unit_title, m.cost, (d.origin='loyalpro') AS adjustment
+  FROM stock_movements m
+  JOIN stock_documents d ON d.id=m.document_id AND d.salon_id=m.salon_id
+  JOIN yclients_goods_catalog g ON g.id=m.good_row_id AND g.salon_id=m.salon_id
+  WHERE m.salon_id=$1 AND d.kind='consumable' AND d.status='posted'
+    AND m.deleted_at IS NULL AND d.record_id = ANY($2::bigint[]) ORDER BY m.id`;
+// Отменённые продажи в историю не попадают (как и отменённые строки finance_operations). Оплачено — сумма живых оплат
+// документа; подарок = оплат нет (amount 0, gift true).
+const STOCK_PURCHASES_SQL = `SELECT d.id, d.doc_date, d.status, d.total_cost, d.record_id, d.master_staff_yc_id,
+    COALESCE((SELECT SUM(f.amount) FROM finance_operations f WHERE f.salon_id=d.salon_id AND f.stock_document_id=d.id
+      AND f.status IN ('queued','sending','confirmed')), 0) AS paid,
+    COALESCE((SELECT jsonb_agg(jsonb_build_object('title', g.title, 'qty', m.qty,
+      'unit', CASE WHEN m.unit_type=1 THEN g.unit ELSE g.service_unit END, 'cost', m.cost) ORDER BY m.id)
+      FROM stock_movements m JOIN yclients_goods_catalog g ON g.id=m.good_row_id AND g.salon_id=m.salon_id
+      WHERE m.salon_id=d.salon_id AND m.document_id=d.id), '[]'::jsonb) AS lines
+  FROM stock_documents d WHERE d.salon_id=$1 AND d.kind='sale' AND d.origin='loyalpro'
+    AND d.status = 'posted'
+    AND (($2::int IS NOT NULL AND d.client_id=$2) OR ($3::bigint IS NOT NULL AND d.yclients_client_id=$3))
+  ORDER BY d.doc_date DESC, d.id DESC LIMIT 200`;
 
 const kop = v => Math.round((Number(v) || 0) * 100);
 const rub = k => k / 100;
@@ -66,6 +84,7 @@ function purchaseOf(op) {
     type, title: String(op.good_title || op.title || PURCHASE_TITLE[type]),
     quantity: qtyText(op.qty, op.unit_title) || null,
     amount: rub(Math.abs(kop(op.amount))), status: op.status,
+    ...(op.gift !== undefined ? { gift: op.gift === true } : {}),
   };
 }
 
@@ -87,8 +106,16 @@ function dropUnlinkedTwins(ops) {
   });
 }
 // Pure assembly of the history (tested without the DB).
-function build({ records, ops, consumables, outboxOf = new Map(), salonName = '' }) {
-  ops = dropUnlinkedTwins(ops || []);
+function build({ records, ops, consumables, stockPurchases = [], outboxOf = new Map(), salonName = '' }) {
+  const stockIds = new Set(stockPurchases.map(d => String(d.id)));
+  ops = dropUnlinkedTwins(ops || []).filter(op => !stockIds.has(String(op.stock_document_id)));
+  // One purchase per document even with several payment methods; gifts have no finance row.
+  ops = ops.concat(stockPurchases.map(d => ({ kind: 'goods_sale', stock_document_id: d.id,
+    occurred_at: d.doc_date, status: d.status, amount: d.paid != null ? Number(d.paid) : d.total_cost, gift: kop(d.paid != null ? d.paid : d.total_cost) === 0,
+    yclients_record_id: d.record_id, staff_yc_id: d.master_staff_yc_id,
+    good_title: d.lines.map(l => l.title).join(', ') || 'Косметика',
+    qty: d.lines.length === 1 ? d.lines[0].qty : null,
+    unit_title: d.lines.length === 1 ? d.lines[0].unit : null })));
   const visits = new Map();
   for (const r of records) {
     const at = m.moscowParts(r.datetime || r.date);
@@ -114,7 +141,7 @@ function build({ records, ops, consumables, outboxOf = new Map(), salonName = ''
   for (const c of consumables || []) {
     const k = String(c.record_id) + ':' + String(c.service_id ?? '');
     if (!cons.has(k)) cons.set(k, []);
-    cons.get(k).push({ title: String(c.good_title || 'Расходник'), quantity: qtyText(c.amount, c.unit_title), cost: rub(kop(c.cost)) });
+    cons.get(k).push({ title: String(c.good_title || 'Расходник'), quantity: qtyText(c.amount, c.unit_title), cost: rub(kop(c.cost)), ...(c.adjustment ? { adjustment: true } : {}) });
   }
   const entries = [];
   for (const [key, v] of visits) {
@@ -139,7 +166,7 @@ function build({ records, ops, consumables, outboxOf = new Map(), salonName = ''
   }
   for (const p of standalone) {
     entries.push({ kind: 'purchase', recordId: p.recordId, date: p.at?.date || null, time: p.at?.time || null, sortAt: p.at?.ms ?? 0,
-      staffId: p.staffId, staffName: null, purchases: [{ type: p.type, title: p.title, quantity: p.quantity, amount: p.amount, status: p.status }] });
+      staffId: p.staffId, staffName: null, purchases: [{ type: p.type, title: p.title, quantity: p.quantity, amount: p.amount, status: p.status, ...(p.gift !== undefined ? { gift: p.gift } : {}) }] });
   }
   entries.sort((a, b) => b.sortAt - a.sortAt || (b.recordId || 0) - (a.recordId || 0));
   return { salonName, entries: entries.map(({ sortAt, ...e }) => e) };
@@ -168,12 +195,13 @@ async function load(salonId, query = {}) {
     if (key != null && shown.has(String(key))) outboxOf.set(String(o.id), String(key));
   }
   const realIds = laid.map(r => Number(r.id)).filter(n => n > 0);
-  const [ops, consumables] = await Promise.all([
+  const [ops, consumables, stockPurchases] = await Promise.all([
     db.any(OPS_SQL, [salonId, PAID_STATUSES, realIds, [...outboxOf.keys()].map(Number), Object.keys(PURCHASE_KINDS),
       client?.id != null ? Number(client.id) : null, yc]),
     realIds.length ? db.any(CONSUMABLES_SQL, [salonId, realIds]) : Promise.resolve([]),
+    db.any(STOCK_PURCHASES_SQL, [salonId, client?.id != null ? Number(client.id) : null, yc]),
   ]);
-  return build({ records: laid, ops, consumables, outboxOf, salonName: String(salon?.name || '') });
+  return build({ records: laid, ops, consumables, stockPurchases, outboxOf, salonName: String(salon?.name || '') });
 }
 
-module.exports = { load, build, paidDelta, dropUnlinkedTwins, RECORDS_BY_ID_SQL, RECORDS_BY_PHONE_SQL, OPS_SQL, CONSUMABLES_SQL, CAP };
+module.exports = { load, build, paidDelta, dropUnlinkedTwins, RECORDS_BY_ID_SQL, RECORDS_BY_PHONE_SQL, OPS_SQL, CONSUMABLES_SQL, STOCK_PURCHASES_SQL, CAP };

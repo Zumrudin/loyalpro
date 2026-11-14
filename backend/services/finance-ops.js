@@ -18,6 +18,7 @@
 const { db } = require('../db');
 const { createLogger } = require('../logger');
 const logger = createLogger('FinanceOps');
+const { safely } = require('../utils/safely');
 const bonusLedger = require('./bonus-ledger');
 
 // Этап 3: после любого изменения бонусной строки — пересчёт баланса клиента из журнала
@@ -189,11 +190,13 @@ const STATUS_MERGE = `CASE WHEN finance_operations.status='confirmed' THEN 'conf
 
 const keyOf = op => KEY_ORDER.find(k => op[k] != null) || null;
 
-function upsertSql(key) {
-  return `INSERT INTO finance_operations(${COLS.join(',')})
-VALUES(${COLS.map((_, i) => '$' + (i + 1)).join(',')})
+function upsertSql(key, stock = false) {
+  const cols = stock ? [...COLS, 'stock_document_id'] : COLS;
+  const status = stock ? `CASE WHEN finance_operations.status='cancelled' THEN 'cancelled' ELSE ${STATUS_MERGE} END` : STATUS_MERGE;
+  return `INSERT INTO finance_operations(${cols.join(',')})
+VALUES(${cols.map((_, i) => '$' + (i + 1)).join(',')})
 ON CONFLICT (salon_id,${key}) WHERE ${key} IS NOT NULL DO UPDATE SET
- status=${STATUS_MERGE},
+ status=${status},
  ${LINK_COLS.map(c => `${c}=COALESCE(finance_operations.${c},EXCLUDED.${c})`).join(',\n ')},
  updated_at=NOW()
 RETURNING *, (xmax=0) AS inserted`;
@@ -209,7 +212,9 @@ async function upsertOp(op, opts) {
     throw new Error(`finance_operations: недопустимые значения kind=${op.kind} status=${op.status} origin=${op.origin} method=${op.method}`);
   }
   const q = qOf(opts);
-  const r = await q(upsertSql(key), COLS.map(c => op[c] ?? null));
+  const stock = op.stock_document_id != null;
+  const cols = stock ? [...COLS, 'stock_document_id'] : COLS;
+  const r = await q(upsertSql(key, stock), cols.map(c => op[c] ?? null));
   const row = r.rows[0];
   await touchBonus(q, row);
   return { action: row?.inserted ? 'inserted' : 'updated', row };
@@ -458,20 +463,6 @@ async function recordLoyaltyTxn(lct, hints = {}, opts = {}) {
 
 // ── хуки: сбой журнала операций не должен ронять денежный путь ───────────────
 
-const _warned = new Map();
-async function safely(label, fn) {
-  try { return await fn(); } catch (e) {
-    try {
-      const now = Date.now();
-      if (!_warned.has(label) || now - _warned.get(label) > 60000) {
-        _warned.set(label, now);
-        logger.warn(`${label}: не записано в finance_operations (${e && (e.code || e.name) || 'error'}: ${String(e && e.message || e).slice(0, 160)})`);
-      }
-    } catch (_) { /* логирование не должно менять путь денег */ }
-    return null;
-  }
-}
-
 // ── источники + ночная сверка ───────────────────────────────────────────
 
 const OUTBOX_PAY_STEPS = `EXISTS (SELECT 1 FROM jsonb_array_elements(o.steps) s WHERE s->>'kind' IN ('pay','remove_payment'))`;
@@ -563,3 +554,22 @@ module.exports = {
   // обвязка
   safely, syncSources, reconcile, upsertSql, absorbStandalone,
 };
+
+// Продажа склада: ошибка оплаты должна откатить документ и движения вместе с ней.
+async function recordStockSalePayment(q, p) {
+  const { kop, fail } = require('./stock/model');
+  const amount = kop(p.amount) / 100;
+  if (!['cash', 'card'].includes(p.method) || !Number.isFinite(amount) || amount <= 0)
+    fail('Оплата товара: положительная сумма наличными или картой.', 400, 'validation');
+  const result = await upsertOp({ salon_id: p.salonId, stock_document_id: p.stockDocumentId,
+    step_op_id: p.opId, kind: 'goods_sale', method: p.method, amount,
+    status: 'confirmed', origin: 'loyalpro', client_id: p.clientId, yclients_client_id: p.ycClientId,
+    occurred_at: p.occurredAt, op_date: mskDate(p.occurredAt), user_id: p.userId,
+    title: `Продажа товаров #${p.stockDocumentId}` }, { q });
+  return result.row;
+}
+async function cancelByStockDocument(q, salonId, docId) {
+  return q(`UPDATE finance_operations SET status='cancelled', updated_at=NOW()
+    WHERE salon_id=$1 AND stock_document_id=$2`, [salonId, docId]);
+}
+Object.assign(module.exports, { recordStockSalePayment, cancelByStockDocument });

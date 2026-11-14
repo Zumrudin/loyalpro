@@ -270,6 +270,9 @@ module.exports = {
   // Нужен автоматике: у крона нет запроса, из которого взять адрес.
   EDOCS_PUBLIC_URL: (process.env.EDOCS_PUBLIC_URL || '').trim().replace(/\/+$/, ''),
 
+  // Леджер склада: 'false' отключает входящий хук.
+  STOCK_LEDGER: process.env.STOCK_LEDGER,
+
   // Sync
   SYNC_DAYS: 365,
 

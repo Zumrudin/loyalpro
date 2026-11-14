@@ -5,8 +5,9 @@
 const ECO_TABS = ['services', 'goods', 'tech-cards', 'pay', 'fixed', 'equipment', 'settings'];
 let _eco = { tab: 'services', from: null, to: null, preset: 'month', report: null, sortKey: 'revenue', sortDir: 'desc', dicts: null, goods: null, cards: null };
 
+function ecoEnsurePeriod() { if (!_eco.from) { const p = ecoPeriodPreset('month', ecoTodayMsk()); _eco.from = p.from; _eco.to = p.to; } }
 function loadEconomics() {
-  if (!_eco.from) { const p = ecoPeriodPreset('month', ecoTodayMsk()); _eco.from = p.from; _eco.to = p.to; }
+  ecoEnsurePeriod();
   ecoRenderPeriod();
   ecoSwitchTab(_eco.tab || 'services');
 }
@@ -200,8 +201,12 @@ async function ecoShowReceipts(goodId, btn) {
 
 // ── Техкарты и покрытие ──
 let _ecoCardsSeq = 0;
-async function ecoLoadTechCards() {
-  const el = document.getElementById('ecoTechCards');
+let _ecoCardsContainer = 'ecoTechCards';
+async function ecoLoadTechCards(containerId = 'ecoTechCards') {
+  ecoEnsurePeriod();
+  if (_ecoCardsContainer !== containerId) { const old = document.getElementById(_ecoCardsContainer); if(old) old.innerHTML = ''; }
+  _ecoCardsContainer = containerId;
+  const el = document.getElementById(containerId);
   const qs = ecoQs(); const seq = ++_ecoCardsSeq;
   try {
     const [cov, cards] = await Promise.all([api('GET', `/api/economics/coverage?${qs}`), api('GET', '/api/economics/tech-cards')]);
@@ -237,8 +242,8 @@ async function ecoLoadTechCards() {
 }
 async function ecoLinkCard(serviceId, cardId) {
   if (!cardId) return; // плейсхолдер «— выбрать техкарту —» ничего не делает; снять — кнопкой «Отвязать»
-  try { await api('PUT', `/api/economics/services/${Number(serviceId)}/tech-card`, { techCardId: Number(cardId) }); _eco.report = null; notify('Привязка сохранена'); ecoLoadTechCards(); }
-  catch (e) { notify('Ошибка: ' + e.message, 'err'); ecoLoadTechCards(); }
+  try { await api('PUT', `/api/economics/services/${Number(serviceId)}/tech-card`, { techCardId: Number(cardId) }); _eco.report = null; notify('Привязка сохранена'); ecoLoadTechCards(_ecoCardsContainer); }
+  catch (e) { notify('Ошибка: ' + e.message, 'err'); ecoLoadTechCards(_ecoCardsContainer); }
 }
 // Снимает только РУЧНУЮ привязку (выученные из списаний/найденные в YClients вернул бы ночной проход).
 async function ecoUnlinkCard(serviceId, staffYcId) {
@@ -247,7 +252,7 @@ async function ecoUnlinkCard(serviceId, staffYcId) {
   try {
     const r = await api('DELETE', `/api/economics/services/${Number(serviceId)}/tech-card${qs}`);
     if (r && r.removed) { _eco.report = null; notify('Ручная привязка снята'); } else notify('Ручной привязки нет — снимать нечего', 'err');
-    ecoLoadTechCards();
+    ecoLoadTechCards(_ecoCardsContainer);
   } catch (e) { notify('Ошибка: ' + e.message, 'err'); }
 }
 async function ecoLookupCard(serviceId, btn) {
@@ -259,11 +264,11 @@ async function ecoLookupCard(serviceId, btn) {
     _eco.report = null;
     const found = r.found || [];
     notify(found.length ? `Найдено: ${found.map(f => f.title).join(', ')}` : `Проверено исполнителей: ${r.checked}, техкарты в YClients нет`, found.length ? undefined : 'err');
-    ecoLoadTechCards();
+    ecoLoadTechCards(_ecoCardsContainer);
   } catch (e) { btn.disabled = false; notify('Ошибка: ' + e.message, 'err'); }
 }
 async function ecoSyncCards() {
-  try { const r = await api('POST', '/api/economics/tech-cards/sync'); _eco.report = null; notify(`Импортировано техкарт: ${ecoNum(r.cards)}`); ecoLoadTechCards(); }
+  try { const r = await api('POST', '/api/economics/tech-cards/sync'); _eco.report = null; notify(`Импортировано техкарт: ${ecoNum(r.cards)}`); ecoLoadTechCards(_ecoCardsContainer); }
   catch (e) { notify('Ошибка: ' + e.message, 'err'); }
 }
 async function ecoNewManual() {
@@ -294,12 +299,12 @@ async function ecoSaveManual() {
   const rows = [...document.querySelectorAll('.eco-man-item')].map(d => ({ goodId: d.querySelector('.eco-man-good').value, amount: d.querySelector('.eco-man-amount').value, unit: d.querySelector('.eco-man-unit').value }));
   const p = ecoParseManualItems(document.getElementById('ecoManTitle').value, rows);
   if (p.error) return notify(p.error, 'err');
-  try { await api('POST', '/api/economics/tech-cards', p.value); _eco.report = null; notify('Норма сохранена'); document.getElementById('ecoManualForm').innerHTML = ''; ecoLoadTechCards(); }
+  try { await api('POST', '/api/economics/tech-cards', p.value); _eco.report = null; notify('Норма сохранена'); document.getElementById('ecoManualForm').innerHTML = ''; ecoLoadTechCards(_ecoCardsContainer); }
   catch (e) { notify('Ошибка: ' + e.message, 'err'); }
 }
 async function ecoDeleteManual(id) {
   if (!confirm('Удалить норму? Привязки к ней тоже удалятся.')) return;
-  try { await api('DELETE', `/api/economics/tech-cards/${Number(id)}`); _eco.report = null; ecoLoadTechCards(); } catch (e) { notify('Ошибка: ' + e.message, 'err'); }
+  try { await api('DELETE', `/api/economics/tech-cards/${Number(id)}`); _eco.report = null; ecoLoadTechCards(_ecoCardsContainer); } catch (e) { notify('Ошибка: ' + e.message, 'err'); }
 }
 // ── Оплата труда: схемы и назначения (спека 2026-10-19-economics-pay-schemes-design.md §5) ──
 let _ecoPaySeq = 0;

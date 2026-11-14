@@ -25,7 +25,7 @@ function nav(el) {
 const NAV_PAGE_TITLES = {
   dashboard: 'Обзор клиники', workday: 'Рабочий день', 'staff-dashboard': 'Мои результаты', clients: 'Пациенты клиники',
   journal: 'Журнал записи', records: 'Записи', chat: 'Диалоги с пациентами', care: 'Продолжение заботы',
-  'service-catalog': 'Услуги', economics: 'Экономика процедур', finance: 'Финансовые операции', 'agent-services': 'Мила · услуги агента',
+  'service-catalog': 'Услуги', stock: 'Товары и склад', economics: 'Экономика процедур', finance: 'Финансовые операции', 'agent-services': 'Мила · услуги агента',
   'staff-analytics': 'Сотрудники', settings: 'Управление клиникой', edocs: 'Документы',
 };
 const NAV_ROLE_LBL = { owner: 'Владелец', admin: 'Администратор', specialist: 'Специалист', admin_cashier: 'Администратор-кассир' };
@@ -151,6 +151,7 @@ function navTo(p, opts) {
   if (p === 'cert-requests')  loadCertRequests();
   if (p === 'knowledge-base') loadKnowledgeBase();
   if (p === 'agent-services') loadAgentServices();
+  if (p === 'stock')          loadStock();
   if (p === 'economics')      loadEconomics();
   if (p === 'finance')        loadFinance();
   if (p === 'edocs')          loadEdocs();
@@ -278,6 +279,7 @@ window.addEventListener('hashchange', () => {
     // Тот же раздел — сменился только хвост. Хвост есть у чата, дашборда и «Документов».
     if (page === 'dashboard' && typeof dashboardOnHashArg === 'function') dashboardOnHashArg(arg);
     if (page === 'chat' && typeof chatOnHashArg === 'function') chatOnHashArg(arg);
+    if (page === 'stock' && typeof stockOnHashArg === 'function') stockOnHashArg(arg);
     if (page === 'edocs' && typeof edocsOnHashArg === 'function') edocsOnHashArg(arg);
     return;
   }

@@ -81,6 +81,7 @@ module.exports = function mountRoutes(app) {
   app.use('/api/journal',           require('./journal'));
   app.use('/api/economics',         require('./economics'));
   app.use('/api/finance',           require('./finance'));
+  app.use('/api/stock',             require('./stock'));
   // «Документы»: admin-роутер ДО общего — иначе /api/edocs поймал бы и /api/edocs/admin/*.
   app.use('/api/edocs/admin',       require('./edocs-admin'));
   // Дашборд, страница пациента, бумага, анкеты — свой роутер, ДО общего (роли те же).

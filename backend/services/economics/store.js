@@ -3,6 +3,8 @@
 // (scripts/economics-explain.js) — ГОТЧА проекта: EXPLAIN с литералами не
 // ловит вывод типов параметров. Загрузчики отчёта — ниже (задача 11).
 const { db } = require('../../db');
+const config = require('../../config');
+const { safely } = require('../../utils/safely');
 const { receiptUnitPrice } = require('./price');
 const { createLogger } = require('../../logger');
 const logger = createLogger('EconomicsStore');
@@ -54,6 +56,13 @@ async function upsertGoodsTransaction(salonId, row, opts) {
       deleted_at = ${delSet}
   `;
   await db.query(sql, params);
+  // Леджер склада получает ИТОГОВУЮ строку после апсерта: защита от порядка (last_change_date) и
+  // удалений живёт здесь, и зеркало склада обязано ей следовать, а не входящему событию (ревью задачи 4).
+  if (config.STOCK_LEDGER !== 'false') await safely('stock ingest', async () => {
+    const stored = await db.oneOrNone(`SELECT yclients_txn_id, ${TXN_COLS.join(', ')}, deleted_at FROM goods_transactions WHERE salon_id=$1 AND yclients_txn_id=$2`, [salonId, row.yclients_txn_id]);
+    if (!stored) return null;
+    return require('../stock/ledger').ingestMirrored(salonId, stored, { status: stored.deleted_at ? 'delete' : 'update', source, deletedAt: stored.deleted_at });
+  }, 'движение склада не записано');
   return { deleted: status === 'delete' };
 }
 
@@ -99,14 +108,23 @@ async function refreshAllLastReceipts(salonId) {
 async function upsertCatalogGood(salonId, g) {
   await db.query(`
     INSERT INTO yclients_goods_catalog (salon_id, yclients_good_id, title, unit, service_unit, unit_equals,
-      actual_cost, unit_actual_cost, stock, is_archived, last_seen_at, updated_at)
-    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, TRUE, NOW(), NOW())
+      actual_cost, unit_actual_cost, stock, sale_price, barcode, unit_id, service_unit_id, critical_amount, desired_amount,
+      comment, loyalty_abonement_type_id, loyalty_certificate_type_id, yc_last_change_date, is_archived, last_seen_at, updated_at)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, TRUE, NOW(), NOW())
     ON CONFLICT (salon_id, yclients_good_id) DO UPDATE SET
       title = CASE WHEN yclients_goods_catalog.category_id IS NULL AND EXCLUDED.title <> '' THEN EXCLUDED.title ELSE yclients_goods_catalog.title END,
       unit = EXCLUDED.unit, service_unit = EXCLUDED.service_unit, unit_equals = EXCLUDED.unit_equals,
       actual_cost = EXCLUDED.actual_cost, unit_actual_cost = EXCLUDED.unit_actual_cost, stock = EXCLUDED.stock,
+      sale_price = EXCLUDED.sale_price, barcode = EXCLUDED.barcode, unit_id = EXCLUDED.unit_id,
+      service_unit_id = EXCLUDED.service_unit_id, critical_amount = EXCLUDED.critical_amount,
+      desired_amount = EXCLUDED.desired_amount, comment = EXCLUDED.comment,
+      loyalty_abonement_type_id = EXCLUDED.loyalty_abonement_type_id,
+      loyalty_certificate_type_id = EXCLUDED.loyalty_certificate_type_id,
+      yc_last_change_date = EXCLUDED.yc_last_change_date,
       updated_at = NOW()
-  `, [salonId, g.good_id, g.title || '', g.unit, g.service_unit, g.unit_equals, g.actual_cost, g.unit_actual_cost, JSON.stringify(g.stock || [])]);
+  `, [salonId, g.good_id, g.title || '', g.unit, g.service_unit, g.unit_equals, g.actual_cost, g.unit_actual_cost, JSON.stringify(g.stock || []),
+    g.sale_price ?? null, g.barcode ?? null, g.unit_id ?? null, g.service_unit_id ?? null, g.critical_amount ?? null, g.desired_amount ?? null,
+    g.comment ?? null, g.loyalty_abonement_type_id ?? null, g.loyalty_certificate_type_id ?? null, g.yc_last_change_date ?? null]);
 }
 
 // ── Техкарты и привязки ─────────────────────────────────────────────────────

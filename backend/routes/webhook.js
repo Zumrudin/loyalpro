@@ -130,6 +130,12 @@ router.post('/webhook.v2/:companyId', async (req, res) => {
         logger.error(`economics goods event: ${e.message}`));
     }
 
+    // Карточка товара YClients (resource=good): расширенные поля каталога, delete → stock_active=false.
+    if (resourceType === 'good') {
+      await require('../services/stock').handleGoodEvent(salon, payload).catch(e =>
+        logger.error(`stock good event: ${e.message}`));
+    }
+
     if (wlog) {
       await db.query('UPDATE webhook_logs SET processed=TRUE,processing_ms=$1 WHERE id=$2', [Date.now() - t0, wlog.id]);
     }

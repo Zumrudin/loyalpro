@@ -539,3 +539,26 @@ agent-orchestrator, agent-followup-worker. Read-only проверка реаль
 - `finance_operations` — единая таблица движений денег и бонусов (сумма со знаком; `kind`/`method`/`status`/`origin`). ЕДИНСТВЕННЫЙ писатель — `services/finance-ops.js`; хуки во всех вставках `loyalty_card_transactions`, `revenue_operations`, в сессиях/выпуске/воркере журнала, всегда через `safely()` (сбой не ломает денежный путь). Идемпотентность — частичные UNIQUE по `step_op_id`/`revenue_operation_id`/`loyalty_txn_id`/`journal_operation_id`; `confirmed` назад не откатывается. Внешняя строка, совпавшая с оплатой журнала (визит+сумма+способ), не вставляется, а связывается. Ночная сверка `50 4 * * *` (7 дней). Перенос истории — `scripts/finance-ops-backfill.js --salon=1 [--write]` (дев: 355 строк, 12.11). Страница «Финансы» (`frontend/js/pages/finance.js`, `/api/finance/operations`, CSV, `/bonus-discrepancies`), owner/admin.
 - YClients шлёт для оплат через API `date=1970-01-01` — такие кассовые операции датируются временем получения. На оплаты журнала деньгами вебхук `finances_operation` обычно не приходит вовсе, на бонусные — приходит.
 - Этап 3, флаг `BONUS_LEDGER_PRIMARY` (по умолчанию false), `services/bonus-ledger.js`: `bonus_balance` = сумма бонусных строк `queued|sending|confirmed` — ТОЛЬКО у клиентов с входящим остатком (`kind='bonus_opening'`, одна строка на клиента, `scripts/bonus-ledger-opening.js --salon=1 [--write]`; `--write` только при флаге). Пересчёт (`recompute`) — после каждого бонусного изменения в finance-ops. `yclients_card_balance` при флаге — ПОКАЗАНИЕ карты: его задаёт только чтение карты (`setCardReading` — вместо всех прежних «bonus_balance = карта» в loyalty/linkClientCard/runSync/сверке/импорте) и сдвигают только наши УСПЕШНЫЕ записи в карту (`bumpCardReading`: кэшбэк, отмена кэшбэка, подтверждённая бонусная оплата журнала без уже связанной проводки). Дельта `finances_operation` в loyalty.js считается от показания (`cardBase`), а не от `bonus_balance` (тот включает очередь и локальные начисления). ГОТЧА порядка: в пути `finances_operation` входящий остаток заводится по ПРЕЖНЕМУ показанию (`openingFirst`), иначе дельта вошла бы и в остаток, и в проводку. Локальные начисления без записи в карту (ручная правка, ДР-крон, `runSync`) у нас учитываются, в карте — нет: это и есть расхождение (подтверждённое ≠ карта), WARN ночной сверки + список на странице; автоматически ничего не правится. Форма оплаты при флаге берёт лимит от нашего баланса (в нём уже вся очередь). Откат: флаг false + рестарт.
+
+
+### Склад и товары («Управление → Товары», ветка feat/stock-goods, 14.11.2026)
+- Реализация и приёмка: `docs/superpowers/plans/2026-11-13-stock-goods.md`,
+  `docs/2026-11-13-stock-acceptance.md`, `docs/2026-11-13-stock-review.md`. Ветка ещё не развёрнута.
+- API `/api/stock`, роли owner/admin; изменение настроек складов — только owner.
+- `stock_documents`, `stock_movements`, `stock_openings`, `stock_inventory_lines`,
+  `stock_ingest_pending`, `stock_settings`; справочники `stock_storages/units/suppliers`.
+- Остаток = снимок + учитываемые движения; локальные движения учитываются всегда,
+  зеркало — по `recorded_at` и источнику. `recorded_at` неизменяем при апсерте.
+- В YClients склад ничего не записывает, бонусы в продаже товаров не участвуют.
+  Поиск отсутствующего клиента может использовать read-only POST `/clients/search`.
+- Продажи наличными/картой и finance_operations атомарны; отмена мягкая. После
+  неопределённого результата POST оператор проверяет журнал перед повтором.
+- Расходники записи корректируются дельтами; advisory lock по салону+записи,
+  повтор целевого состава — no-op. Нормы через общие техкарты и unitPriceAsOf.
+- Цена склада берётся по приходам обоих источников в леджере; экономика процедур
+  продолжает читать goods_transactions. Очередь склада обрабатывается внутри economics.runNightly.
+- `STOCK_LEDGER=false` отключает хук зеркала и ночной проход склада; локальный API не отключает.
+- `yclients_good_id` допускает NULL для локальных товаров; Step C «Уходов» фильтрует IS NOT NULL.
+- Проверки: `npx jest backend/stock economics backend/journal finance yclients-goods-catalog --runInBand --silent`.
+- `scripts/stock-e2e.js --sale --cleanup` и `scripts/stock-ui-e2e.js`: только loyalpro_test,
+  TEMP-таблицы/последовательности, откат всех данных; без реальных пациентов и внешних эффектов.

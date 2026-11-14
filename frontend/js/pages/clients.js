@@ -186,9 +186,10 @@ async function openCD(id) {
       </div>
       ${rows ? `<div style="max-height:280px;overflow-y:auto"><table><thead><tr><th>Дата</th><th>Сумма</th><th>Описание</th><th>Баланс</th></tr></thead><tbody>${rows}</tbody></table></div>` : '<div class="empty">Нет операций</div>'}
       <div id="cardTxnsBlock_${c.id}"></div>
-      <div id="edClientBlock_${c.id}"></div>`;
+      <div id="cdPurchases_${c.id}"></div><div id="edClientBlock_${c.id}"></div>`;
 
     openModal('clientModal');
+    cdLoadPurchases(c.id);
     // «Документы» (edocs.js): блок рисуется, только если модуль включён в салоне.
     if (typeof edRenderClientBlock === 'function') edRenderClientBlock(c.id);
   } catch(e) { notify(e.message, 'err'); }
@@ -308,3 +309,15 @@ async function submitBonus(sign) {
     loadClients();
   } catch(e) { notify(e.message, 'err'); }
 }
+
+function cdPurchasesHtml(rows) {
+  if (!rows.length) return '<h3>Покупки</h3><p>Покупок нет</p>';
+  return '<h3>Покупки</h3>'+rows.map(r=>`<article class="card"><button class="stock-link" onclick="cdOpenPurchase(${Number(r.id)})">${stockDate(r.doc_date)} · ${stockMoney(r.total_cost)}</button>${stockDocBadge(r)}<p>${(r.lines||[]).map(l=>stockEsc(l.title)).join(', ')}</p><p>${(r.payments||[]).map(p=>`${p.method==='cash'?'Наличные':'Карта'}: ${stockMoney(p.amount)}`).join(' · ')||'Без локальной оплаты'}</p></article>`).join('');
+}
+async function cdLoadPurchases(id) {
+  const el=document.getElementById('cdPurchases_'+id);if(!el)return;
+  el.textContent='Покупки: загрузка…';
+  try { const rows=await api('GET','/api/stock/clients/'+Number(id)+'/purchases');if(document.getElementById('cdPurchases_'+id)===el)el.innerHTML=cdPurchasesHtml(rows); }
+  catch (_) { if(document.getElementById('cdPurchases_'+id)===el)el.textContent='Покупки: —'; }
+}
+function cdOpenPurchase(id) { closeModal('clientModal');location.hash='stock/doc/'+Number(id);navTo('stock',{keepHash:true}); }

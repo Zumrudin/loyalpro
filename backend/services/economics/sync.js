@@ -31,6 +31,16 @@ function parseCatalogGood(g) {
     unit_equals: num(g.unit_equals),
     actual_cost: num(g.actual_cost),
     unit_actual_cost: num(g.unit_actual_cost),
+    sale_price: num(g.cost),
+    barcode: typeof g.barcode === 'string' && g.barcode.trim() ? g.barcode.trim().slice(0, 64) : null,
+    unit_id: num(g.unit_id) || null,
+    service_unit_id: num(g.service_unit_id) || null,
+    critical_amount: num(g.critical_amount),
+    desired_amount: num(g.desired_amount),
+    comment: typeof g.comment === 'string' && g.comment ? g.comment.slice(0, 2000) : null,
+    loyalty_abonement_type_id: num(g.loyalty_abonement_type_id) || null,
+    loyalty_certificate_type_id: num(g.loyalty_certificate_type_id) || null,
+    yc_last_change_date: typeof g.last_change_date === 'string' && g.last_change_date ? g.last_change_date : null,
     stock: (Array.isArray(g.actual_amounts) ? g.actual_amounts : [])
       .map(a => ({ storage_id: num(a.storage_id), amount: num(a.amount) })).filter(a => a.storage_id),
   };
@@ -329,6 +339,7 @@ async function runNightly(salon, opts = {}) {
   const out = { steps: {}, errors: {} };
   const step = async (name, fn) => { try { out.steps[name] = await fn(); } catch (e) { out.errors[name] = e.message; logger.warn(`salon=${salon.id} ${name}: ${e.message}`); } };
     await step('catalog', () => syncGoodsCatalog(salon, opts));
+    await step('stock', async () => { const r=await require('../stock').nightly(salon); if(Object.keys(r.errors||{}).length)out.errors.stock='stock_steps_failed'; return r; });
     await step('techCards', () => syncTechCards(salon, opts));
     await step('transactions', () => reconcileGoodsTransactions(salon, opts));
     await step('recentDays', () => pullRecentWriteoffDays(salon, opts));
