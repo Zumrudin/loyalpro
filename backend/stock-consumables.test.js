@@ -6,7 +6,7 @@ const c=require('./services/stock/consumables');
 const store=require('./services/stock/store');
 const {transaction}=require('./services/stock/documents');
 const goods=[{id:1,yclients_good_id:10,title:'Synthetic',unit_equals:10,unit_actual_cost:2}];
-beforeEach(()=>{jest.clearAllMocks();store.consumablesContext.mockResolvedValue({services:[{id:20,amount:2}],staffId:30,date:'2026-11-14',goods,links:[],cards:[],overrides:[]});store.recordConsumableMovements.mockResolvedValue([{good_row_id:1,service_yc_id:20,qty_base:-4},{good_row_id:1,service_yc_id:20,qty_base:1}]);store.getSettings.mockResolvedValue({default_service_storage_id:2});store.storageById.mockResolvedValue({id:2,is_active:true});store.insertDocument.mockResolvedValue({id:9});store.stockPriceReceipts.mockResolvedValue([]);});
+beforeEach(()=>{jest.clearAllMocks();store.consumablesContext.mockResolvedValue({services:[{id:20,amount:2}],staffId:30,date:'2026-11-14',goods,links:[],cards:[],overrides:[]});store.recordConsumableMovements.mockResolvedValue([{good_row_id:1,service_yc_id:20,qty_base:-4},{good_row_id:1,service_yc_id:20,qty_base:1}]);store.getSettings.mockResolvedValue({default_service_storage_id:2});store.storageById.mockResolvedValue({id:2,is_active:true});store.insertDocument.mockResolvedValue({id:9});store.listReceipts.mockResolvedValue([]);});
 test('norm multiplies service quantity, uses selected staff card and shared price',()=>{
  const rows=c.expectedFor({id:20,amount:2},30,[{service_yc_id:20,staff_yc_id:30,source:'manual',tech_card_id:3}],[{id:3,items:[{good_id:10,amount:4}]}],()=>({price:2}),goods);
  expect(rows).toEqual([expect.objectContaining({goodRowId:1,qtyBase:8,unitPrice:2,cost:16})]);
@@ -28,4 +28,9 @@ test.each([[],[{goodRowId:99,qtyBase:1}],[{goodRowId:1,qtyBase:-1}],[{goodRowId:
 test('unknown service and local-only record cannot be changed',async()=>{
  await expect(c.update(1,7,80,99,{lines:[]})).rejects.toMatchObject({status:404});
  await expect(c.update(1,7,-80,20,{lines:[]})).rejects.toMatchObject({status:409});
+});
+test('norm uses a newer local receipt through the shared pricing rule',async()=>{
+ store.consumablesContext.mockResolvedValue({services:[{id:20,amount:1}],staffId:30,date:'2026-11-14',goods,links:[{service_yc_id:20,staff_yc_id:null,tech_card_id:3}],cards:[{id:3,items:[{good_id:10,amount:2}]}],overrides:[]});
+ store.listReceipts.mockResolvedValue([{create_date:'2026-11-12',amount:10,cost:30,operation_unit_type:2},{create_date:'2026-11-13',amount:10,cost:50,operation_unit_type:2}]);
+ const data=await c.forRecord(1,80);expect(data.services[0].rows[0].unitPrice).toBe(5);expect(data.summary.expected).toBe(10);
 });

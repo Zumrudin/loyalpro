@@ -370,7 +370,7 @@ async function goodCard(salonId, id) {
   const sTitle = new Map(storages.map(s => [String(s.id), s.title]));
   const view = r => ({ storage_id: r.storage_id, storage_title: sTitle.get(String(r.storage_id)) || null });
   return {
-    good,
+    good, unitPrice: await goodUnitPrice(salonId,good),
     balances: bal.map(r => ({ ...view(r), qty_base: r.qty_base, taken_at: r.taken_at, ...qtyView(r.qty_base, good.unit_equals), critical: isCritical(good, r.qty_base), negative: Number(r.qty_base) < 0 })),
     openings: openings.map(o => ({ ...view(o), qty_base: o.qty_base, yc_qty_base: o.yc_qty_base, taken_at: o.taken_at, source: o.source })),
     movements: mv, receipts, techCards };
@@ -469,7 +469,7 @@ async function recordConsumableMovements(salonId, recordId, q) {
     WHERE m.salon_id=$1 AND m.record_id=$2 AND d.kind='consumable' AND d.status='posted' AND m.deleted_at IS NULL`;
   return q ? (await q(sql,[salonId,recordId])).rows : db.any(sql,[salonId,recordId]);
 }
-const stockPriceReceipts = (salonId, good) => good.yclients_good_id == null ? [] : require('../economics/store').listReceipts(salonId, good.yclients_good_id);
+const stockPriceReceipts = (salonId, good) => listReceipts(salonId, good.id);
 Object.assign(module.exports, { consumablesContext, recordConsumableMovements, stockPriceReceipts });
 
 // Replay the current mirror, never a stale queued payload. Deleted rows must also drain.
@@ -481,3 +481,14 @@ const pendingMirrorRows = salonId => db.any(`SELECT g.* FROM stock_ingest_pendin
 const removeIngestPending = (salonId,id) => db.query('DELETE FROM stock_ingest_pending WHERE salon_id=$1 AND yclients_txn_id=$2',[salonId,id]);
 const pendingCount = async salonId => Number((await db.oneOrNone('SELECT count(*) AS n FROM stock_ingest_pending WHERE salon_id=$1',[salonId]))?.n || 0);
 Object.assign(module.exports,{pendingMirrorRows,removeIngestPending,pendingCount});
+
+const STOCK_RECEIPTS_SQL = `SELECT m.occurred_at AS create_date, ABS(m.qty_base) AS amount, m.cost, 2 AS operation_unit_type
+  FROM stock_movements m JOIN stock_documents d ON d.id=m.document_id AND d.salon_id=m.salon_id
+  WHERE m.salon_id=$1 AND m.good_row_id=$2 AND d.kind='receipt' AND d.status='posted' AND m.deleted_at IS NULL AND m.qty_base>0
+  ORDER BY m.occurred_at DESC, m.id DESC`;
+const listReceipts = (salonId, goodRowId) => db.any(STOCK_RECEIPTS_SQL,[salonId,goodRowId]);
+async function goodUnitPrice(salonId, good, date=new Date()) {
+  const override=good.yclients_good_id == null ? null : await db.oneOrNone('SELECT unit_price FROM goods_price_overrides WHERE salon_id=$1 AND good_id=$2',[salonId,good.yclients_good_id]);
+  return require('../economics/price').unitPriceAsOf({receipts:await listReceipts(salonId,good.id),override,catalogRow:good,date});
+}
+Object.assign(module.exports,{listReceipts,STOCK_RECEIPTS_SQL,goodUnitPrice});

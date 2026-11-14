@@ -44,7 +44,7 @@ async function prices(salonId, ctx, movements) {
   }
   for (const g of ctx.goods) {
     if (!needed.has(Number(g.id))) continue;
-    out.set(Number(g.id),unitPriceAsOf({receipts:await store.stockPriceReceipts(salonId,g),override:ctx.overrides.find(o=>Number(o.good_id)===Number(g.yclients_good_id)),catalogRow:g,date:ctx.date}));
+    out.set(Number(g.id),unitPriceAsOf({receipts:await store.listReceipts(salonId,g.id),override:ctx.overrides.find(o=>Number(o.good_id)===Number(g.yclients_good_id)),catalogRow:g,date:ctx.date}));
   }
   return out;
 }

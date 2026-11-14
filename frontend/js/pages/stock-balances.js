@@ -59,7 +59,7 @@ async function stockOpenGood(id) {
 }
 function stockGoodDetailsHtml(card) {
   const g=card.good, qty=n=>stockEsc(stockFmtQty(n,g.unit_equals,g.unit,g.service_unit));
-  return '<h3>Остатки</h3>'+card.balances.map(b=>`<p>${stockEsc(b.storage_title)}: ${qty(b.qty_base)}</p>`).join('')+
+  return (card.unitPrice?'<p>Себестоимость единицы списания: '+stockMoney(card.unitPrice.price)+'</p>':'')+'<h3>Остатки</h3>'+card.balances.map(b=>`<p>${stockEsc(b.storage_title)}: ${qty(b.qty_base)}</p>`).join('')+
     '<h3>YClients на снимке</h3>'+card.openings.map(b=>`<p>${stockEsc(b.storage_title)}: ${qty(b.yc_qty_base)} · ${stockDate(b.taken_at)}</p>`).join('')+
     '<h3>Приходы</h3>'+card.receipts.map(r=>`<p>${stockDate(r.occurred_at)} · ${stockEsc(r.storage_title)} · ${qty(r.qty_base)} · ${stockMoney(r.cost)} · ${stockEsc(r.origin)}</p>`).join('')+
     '<h3>Техкарты</h3><p>'+card.techCards.map(c=>stockEsc(c.title)).join(', ')+'</p><h3>Движения</h3><div id="stockGoodMovements">'+stockMovementsHtml(card.movements,g)+'</div>';
