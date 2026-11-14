@@ -10,6 +10,28 @@
 
 ---
 
+## Продолжение 14.11.2026
+
+Сессия `3febfa5f-785a-48ab-a311-188e59ad51bf` восстановлена в рабочей копии
+`/root/loyalpro-stock`, ветка `feat/stock-goods`. Фактический последний коммит
+предыдущей работы — `baaccca`: задача 7 уже реализована, несмотря на статус
+`in_progress` в старом списке задач. Базовая проверка склада: 6 наборов / 120 тестов.
+
+Задача 8: реализованы навигация в обоих меню, остатки, каталог с фильтром по
+иерархическим путям категорий, карточка товара, локальные формы и история движений.
+Панели следующих этапов смонтированы, их кнопки скрыты до реализации.
+Проверки: 47 наборов / 1144 теста (склад и смежные модули); после уточнения
+форматирования отрицательных остатков — повторный проход 6 UI-тестов.
+`backend/scripts/stock-ui-e2e.js` проверяет настоящий браузер с синтетическим API:
+две темы, 1280/390 px, отсутствие горизонтального переполнения, экранирование,
+открытие/закрытие карточки и отправку формы локального товара.
+Скриншоты: `/tmp/stock-{light,dark}-{1280,390}.png`.
+
+Живая проверка на дев-сервере и финальный прогон задачи 15 пока не выполнены.
+Сервисы не перезапускались, БД и YClients не изменялись. Следующий этап кода —
+задача 9 (операции, документы и продажа), затем 10–15. Опus/Sonnet-ревью не
+выполнялось: эти модели в текущем окружении недоступны; проверка проведена Codex.
+
 ## 0. Кто что делает (распределение по моделям — требование владельца)
 
 | Роль | Модель | Что | Как вызывать |
@@ -535,10 +557,10 @@ WHERE g.salon_id = $1 AND s.salon_id = $1 AND s.is_active AND (op.good_row_id IS
 
 **Files:** Create `frontend/js/pages/stock.js`, `stock-balances.js`, пустые `stock-docs.js`, `stock-sale.js`, `stock-inventory.js`, `stock-refs.js` (заголовок-комментарий), `frontend/css/stock.css`, `backend/stock-ui.test.js`; Modify `frontend/index.html`, `frontend/js/core/nav.js`
 
-- [ ] **Step 1: Харнесс и тесты (красные)** `backend/stock-ui.test.js` — копия подхода `journal-ui.test.js` с `STOCK_FILES`; тесты: нет дублей верхнеуровневых имён; `index.html` грузит все файлы после `#page-stock` с `?v=`; пункт `data-p="stock"` в ОБОИХ меню с `data-roles="owner,admin"`; `stockFmtQty(1150, 500, 'шт', 'мл')` → `'2 шт + 150 мл'`, `stockFmtQty(-4059, 500, 'шт', 'мл')` → `'−9 шт + 441 мл'`, `stockFmtQty(7, 1, 'шт', 'шт')` → `'7 шт'`; `stockBalanceRows(goods, storages, {onlyCritical, onlyNegative, search})` — фильтры, сортировка по названию, классы `crit`/`neg`; `stockGoodFormDraft()` собирает тело `POST /goods`; рендер экранирует (`<script>` → `&lt;script&gt;`).
-- [ ] **Step 2: Разметка и навигация.** `index.html`: пункт «Товары» в группе «Управление» после «Услуги» в обоих меню; `<div class="page" id="page-stock">` с `bc-head` («📦 Товары и склад», счётчики: критических, отрицательных, документов за сегодня) и вкладками `stockTabBtn-<tab>` для `balances|goods|docs|suppliers|tech-cards|inventory|turnover|settings`, контейнеры `#stockTab-<tab>`; `<link rel="stylesheet" href="css/stock.css?v=…">`. `nav.js`: `stock: 'Товары и склад'`, `if (p === 'stock') loadStock();`, deep-links.
-- [ ] **Step 3: `stock.js`**: `_stock` (вкладка, фильтры, справочники), `stockApi`, `loadStock()` (`GET /dictionaries` + вкладка + `_deepLinkArg`), `stockSwitchTab`, `stockLoadCounters`. `stock-balances.js`: «Остатки» (товар × склады, фильтры, подсветки, клик → карточка товара), «Товары» (поиск, дерево категорий из `category_path`/`local_category`, бейдж «LoyalPro» у локальных, «+ Товар» → форма в `<dialog id="stockGoodModal">`), карточка товара (поля, остатки, движения постранично, приходы, техкарты, «YClients на снимке», локальные поля, `PUT /goods/:id`).
-- [ ] **Step 4: CSS** `stock.css`: таблицы, бейджи источника, подсветки, диалоги; ≤ 700px таблицы → карточки (`data-label`).
+- [x] **Step 1: Харнесс и тесты (красные)** `backend/stock-ui.test.js` — копия подхода `journal-ui.test.js` с `STOCK_FILES`; тесты: нет дублей верхнеуровневых имён; `index.html` грузит все файлы после `#page-stock` с `?v=`; пункт `data-p="stock"` в ОБОИХ меню с `data-roles="owner,admin"`; `stockFmtQty(1150, 500, 'шт', 'мл')` → `'2 шт + 150 мл'`, `stockFmtQty(-4059, 500, 'шт', 'мл')` → `'−9 шт + 441 мл'`, `stockFmtQty(7, 1, 'шт', 'шт')` → `'7 шт'`; `stockBalanceRows(goods, storages, {onlyCritical, onlyNegative, search})` — фильтры, сортировка по названию, классы `crit`/`neg`; `stockGoodFormDraft()` собирает тело `POST /goods`; рендер экранирует (`<script>` → `&lt;script&gt;`).
+- [x] **Step 2: Разметка и навигация.** `index.html`: пункт «Товары» в группе «Управление» после «Услуги» в обоих меню; `<div class="page" id="page-stock">` с `bc-head` («📦 Товары и склад», счётчики: критических, отрицательных, документов за сегодня) и вкладками `stockTabBtn-<tab>` для `balances|goods|docs|suppliers|tech-cards|inventory|turnover|settings`, контейнеры `#stockTab-<tab>`; `<link rel="stylesheet" href="css/stock.css?v=…">`. `nav.js`: `stock: 'Товары и склад'`, `if (p === 'stock') loadStock();`, deep-links.
+- [x] **Step 3: `stock.js`**: `_stock` (вкладка, фильтры, справочники), `stockApi`, `loadStock()` (`GET /dictionaries` + вкладка + `_deepLinkArg`), `stockSwitchTab`, `stockLoadCounters`. `stock-balances.js`: «Остатки» (товар × склады, фильтры, подсветки, клик → карточка товара), «Товары» (поиск, дерево категорий из `category_path`/`local_category`, бейдж «LoyalPro» у локальных, «+ Товар» → форма в `<dialog id="stockGoodModal">`), карточка товара (поля, остатки, движения постранично, приходы, техкарты, «YClients на снимке», локальные поля, `PUT /goods/:id`).
+- [x] **Step 4: CSS** `stock.css`: таблицы, бейджи источника, подсветки, диалоги; ≤ 700px таблицы → карточки (`data-label`).
 - [ ] **Step 5:** `npx jest backend/stock-ui --silent` → PASS; визуально на деве `#stock` в обеих темах и 390px (скриншоты в отчёт). Коммит `feat(stock): страница «Товары» — каркас, остатки, каталог`.
 
 **Чек-лист Opus:** префиксы; `esc` везде; `?v=`; меню в обоих местах; роли = API.
