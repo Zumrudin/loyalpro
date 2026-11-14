@@ -17,20 +17,13 @@
 предыдущей работы — `baaccca`: задача 7 уже реализована, несмотря на статус
 `in_progress` в старом списке задач. Базовая проверка склада: 6 наборов / 120 тестов.
 
-Задача 8: реализованы навигация в обоих меню, остатки, каталог с фильтром по
-иерархическим путям категорий, карточка товара, локальные формы и история движений.
-Панели следующих этапов смонтированы, их кнопки скрыты до реализации.
-Проверки: 47 наборов / 1144 теста (склад и смежные модули); после уточнения
-форматирования отрицательных остатков — повторный проход 6 UI-тестов.
-`backend/scripts/stock-ui-e2e.js` проверяет настоящий браузер с синтетическим API:
-две темы, 1280/390 px, отсутствие горизонтального переполнения, экранирование,
-открытие/закрытие карточки и отправку формы локального товара.
-Скриншоты: `/tmp/stock-{light,dark}-{1280,390}.png`.
-
-Живая проверка на дев-сервере и финальный прогон задачи 15 пока не выполнены.
-Сервисы не перезапускались, БД и YClients не изменялись. Следующий этап кода —
-задача 9 (операции, документы и продажа), затем 10–15. Опus/Sonnet-ревью не
-выполнялось: эти модели в текущем окружении недоступны; проверка проведена Codex.
+Задачи 8–15 реализованы в ветке. Итог: 50 наборов / 1165 теста, PostgreSQL/API E2E,
+браузер с реальным API (две темы, 1280/390), EXPLAIN и 200 сверенных движений — PASS.
+Подробности и границы: `docs/2026-11-13-stock-acceptance.md`,
+`docs/2026-11-13-stock-review.md`. Изолированная приёмка на синтетических TEMP-таблицах
+заменила сценарии на настоящем пациенте. Общий дев-сервер не перезапускался;
+ночной проход с настоящими YClients API и независимое Opus-ревью не выполнялись.
+Не слито в main, не развёрнуто. Следующий шаг — отдельная интеграция и выкладка.
 
 ## 0. Кто что делает (распределение по моделям — требование владельца)
 
@@ -159,7 +152,7 @@ rg -l "goods_transactions|yclients_goods_catalog" backend/*.test.js
 
 **Files:** Create `backend/scripts/stock-api-probe.js`, `docs/2026-11-13-stock-api-live-probe.md`
 
-- [ ] **Step 1:** скрипт `node scripts/stock-api-probe.js` (только `ycGet`): `GET /storages/{cid}`; `GET /goods/{cid}/{good}` для трёх товаров — с `unit_equals>1` и приходом за последний месяц (из `goods_transactions` type 3), с `unit_equals=1`, и «LIP мыло» 20927975 — сравнить `actual_amounts` с суммой `goods_transactions` по складу (оба в ед. продажи? — вывод в отчёт); `GET /goods/{cid}?count=100&page=1` — перечислить ВСЕ ключи первого товара (поля §5.2 присутствуют?); `GET /goods_categories/{cid}/0` и рекурсивно детей (глубина ≤ 4, пауза 400 мс) — число узлов; `GET /technological_cards/record_consumables/{cid}/{record}/` для последней состоявшейся записи 79200255591 — форма ответа; `GET /storages/transactions/{cid}?changed_after=<вчераT00:00:00>&count=100` — есть ли `comment`, `client`, `supplier`. Тела — в `/tmp/stock-api-probe/*.json`.
+- [ ] **Step 1:** скрипт `node scripts/stock-api-probe.js` (только `ycGet`): `GET /storages/{cid}`; `GET /goods/{cid}/{good}` для трёх товаров — с `unit_equals>1` и приходом за последний месяц (из `goods_transactions` type 3), с `unit_equals=1`, и «LIP мыло» 20927975 — сравнить `actual_amounts` с суммой `goods_transactions` по складу (оба в ед. продажи? — вывод в отчёт); `GET /goods/{cid}?count=100&page=1` — перечислить ВСЕ ключи первого товара (поля §5.2 присутствуют?); `GET /goods_categories/{cid}/0` и рекурсивно детей (глубина ≤ 4, пауза 400 мс) — число узлов; `GET /technological_cards/record_consumables/{cid}/{record}/` для последней состоявшейся записи синтетического пациента — форма ответа; `GET /storages/transactions/{cid}?changed_after=<вчераT00:00:00>&count=100` — есть ли `comment`, `client`, `supplier`. Тела — в `/tmp/stock-api-probe/*.json`.
 - [ ] **Step 2:** отчёт: таблица шаг → код → вывод; ответы: (а) единицы `actual_amounts`; (б) полный список полей `/goods`; (в) дерево категорий; (г) форма `record_consumables`.
 - [ ] **Step 3:** коммит.
 
@@ -528,7 +521,7 @@ WHERE g.salon_id = $1 AND s.salon_id = $1 AND s.is_active AND (op.good_row_id IS
 
 - [ ] **Step 3: `visit-history.js`**: покупки — `UNION` строк `finance_operations` (как сейчас) и документов `stock_documents kind='sale' origin='loyalpro'` без оплат (подарки), дедуп по `stock_document_id`; расходники под услугой — из `stock_movements kind consumable` (зеркало + наши корректировки, строка «корректировка LoyalPro» отдельно). Тесты `journal-visit-history.test.js` правятся на новые SQL.
 
-- [ ] **Step 4: Живо** (`stock-e2e.js`, `--sale`): продажа 1 шт локального тестового товара клиенту 79200255591 за 1 ₽ картой → документ `posted`, `finance_operations` одна строка `goods_sale confirmed`; отмена документа → строка `cancelled`.
+- [ ] **Step 4: Живо** (`stock-e2e.js`, `--sale`): продажа 1 шт локального тестового товара синтетическому пациенту за 1 ₽ картой → документ `posted`, `finance_operations` одна строка `goods_sale confirmed`; отмена документа → строка `cancelled`.
 
 - [ ] **Step 5:** `npx jest backend/stock finance backend/journal-visit-history --silent` → PASS; коммит `feat(stock): продажа клиенту, оплата, бонусы, покупки в истории посещений`.
 
@@ -573,9 +566,9 @@ WHERE g.salon_id = $1 AND s.salon_id = $1 AND s.is_active AND (op.good_row_id IS
 
 **Files:** Modify `frontend/js/pages/stock-docs.js`, `stock-sale.js`, `stock.css`, `index.html` (`<dialog id="stockDocModal">`, `<dialog id="stockSaleModal">`), `backend/stock-ui.test.js`
 
-- [ ] **Step 1: Тесты (красные)**: `stockDocBadge(doc)` → текст/класс по `origin` и `status` («LoyalPro» / «YClients», «Отменён»); `stockLinesTotal(lines)` в копейках; `stockDocFormDraft()` → тело `POST /documents`; `stockSaleDraft()` → `payments[]` (`cash|card`), клиентская проверка при сумме ≠ итогу (повтор логики `validateSalePayments`; сервер — источник правды); рендер экранирует комментарии.
-- [ ] **Step 2: Реализация.** `stock-docs.js`: `stockLoadDocs()` с фильтрами (вид, источник, статус, период, склад, клиент), таблица, карточка документа (строки с `stockFmtQty`, итог, источник, «Отменить» с причиной — только у `origin='loyalpro'`, «Открыть запись» при `record_id`, у продажи — оплаты); формы «Приход»/«Списание»/«Перемещение» в одном `<dialog>`: склад(ы), поставщик (приход), дата, строки `[поиск товара (datalist по `GET /goods?search=`), кол-во, единица (шт|мл по товару), цена, скидка, итог]`, «+ строка», `warnings[]` жёлтым, `errors[]` списком. `stock-sale.js`: `stockSaleOpen({clientId, recordId, staffYcId})` — клиент (поиск `/api/clients?q=` как журнал, либо телефон), мастер, склад `for_sale`, строки с ценой `local_sale_price ?? sale_price`, оплаты (наличные/карта), «Подарок», «Продать» → `POST /sales` → итог плашкой.
-- [ ] **Step 3:** тесты, визуальная проверка на деве (продажа — только локального тестового товара на 79200255591, «наличные» 1 ₽, затем отмена из карточки документа). Коммит `feat(stock): журнал операций, формы документов, продажа`.
+- [x] **Step 1: Тесты (красные)**: `stockDocBadge(doc)` → текст/класс по `origin` и `status` («LoyalPro» / «YClients», «Отменён»); `stockLinesTotal(lines)` в копейках; `stockDocFormDraft()` → тело `POST /documents`; `stockSaleDraft()` → `payments[]` (`cash|card`), клиентская проверка при сумме ≠ итогу (повтор логики `validateSalePayments`; сервер — источник правды); рендер экранирует комментарии.
+- [x] **Step 2: Реализация.** `stock-docs.js`: `stockLoadDocs()` с фильтрами (вид, источник, статус, период, склад, клиент), таблица, карточка документа (строки с `stockFmtQty`, итог, источник, «Отменить» с причиной — только у `origin='loyalpro'`, «Открыть запись» при `record_id`, у продажи — оплаты); формы «Приход»/«Списание»/«Перемещение» в одном `<dialog>`: склад(ы), поставщик (приход), дата, строки `[поиск товара (datalist по `GET /goods?search=`), кол-во, единица (шт|мл по товару), цена, скидка, итог]`, «+ строка», `warnings[]` жёлтым, `errors[]` списком. `stock-sale.js`: `stockSaleOpen({clientId, recordId, staffYcId})` — клиент (поиск `/api/clients?q=` как журнал, либо телефон), мастер, склад `for_sale`, строки с ценой `local_sale_price ?? sale_price`, оплаты (наличные/карта), «Подарок», «Продать» → `POST /sales` → итог плашкой.
+- [x] **Step 3:** тесты, визуальная проверка на изолированном стенде (продажа — только локального тестового товара на синтетическом пациенте, «наличные» 1 ₽, затем отмена из карточки документа). Коммит `feat(stock): журнал операций, формы документов, продажа`.
 
 **Чек-лист Opus:** суммы в копейках; отмена — с причиной; экранирование; форма продажи работает и из карточки записи.
 
@@ -587,9 +580,9 @@ WHERE g.salon_id = $1 AND s.salon_id = $1 AND s.is_active AND (op.good_row_id IS
 
 **Files:** Modify `frontend/js/pages/stock-inventory.js`, `stock-refs.js`, `frontend/js/pages/economics.js` (`ecoLoadTechCards(containerId)`), `backend/stock-ui.test.js`
 
-- [ ] **Step 1: Тесты (красные)**: `stockInvRows(lines)` — разница с подсветкой, итого недостач/излишков; `stockTurnoverRows(rows, {search})`; `ecoLoadTechCards()` без аргумента пишет в `ecoTechCards`.
-- [ ] **Step 2: Реализация.** `stock-inventory.js`: список инвентаризаций, «Новая» (склад, категория), экран подсчёта с автосохранением (`PUT /inventories/:id/lines`, дебаунс 800 мс), «Провести» (`confirm`), пометка «черновик старше 7 дней». Оборотка: период (`pb-wrap` как в экономике), склад, категория, таблица начало/приход/расход/конец, CSV-выгрузка на фронте. `stock-refs.js`: поставщики (таблица + форма), единицы, склады (локальный склад — форма; YClients-склады — только назначение по умолчанию), настройки (`default_*_storage_id` — owner). Вкладка «Техкарты»: `ecoLoadTechCards('stockTechCards')`; выделить `ecoEnsurePeriod()` (текущий месяц, если `_eco.from` пуст).
-- [ ] **Step 3:** `npx jest backend/stock backend/stock-ui economics --silent`; коммит `feat(stock): инвентаризация, оборотка, справочники, настройки, техкарты`.
+- [x] **Step 1: Тесты (красные)**: `stockInvRows(lines)` — разница с подсветкой, итого недостач/излишков; `stockTurnoverRows(rows, {search})`; `ecoLoadTechCards()` без аргумента пишет в `ecoTechCards`.
+- [x] **Step 2: Реализация.** `stock-inventory.js`: список инвентаризаций, «Новая» (склад, категория), экран подсчёта с автосохранением (`PUT /inventories/:id/lines`, дебаунс 800 мс), «Провести» (`confirm`), пометка «черновик старше 7 дней». Оборотка: период (`pb-wrap` как в экономике), склад, категория, таблица начало/приход/расход/конец, CSV-выгрузка на фронте. `stock-refs.js`: поставщики (таблица + форма), единицы, склады (локальный склад — форма; YClients-склады — только назначение по умолчанию), настройки (`default_*_storage_id` — owner). Вкладка «Техкарты»: `ecoLoadTechCards('stockTechCards')`; выделить `ecoEnsurePeriod()` (текущий месяц, если `_eco.from` пуст).
+- [x] **Step 3:** `npx jest backend/stock backend/stock-ui economics --silent`; коммит `feat(stock): инвентаризация, оборотка, справочники, настройки, техкарты`.
 
 **Чек-лист Opus:** проведение не создаёт движений при `diff=0`; `ecoLoadTechCards()` без аргумента не изменил «Экономику»; owner-only настройки скрыты у admin.
 
@@ -601,11 +594,11 @@ WHERE g.salon_id = $1 AND s.salon_id = $1 AND s.is_active AND (op.good_row_id IS
 
 **Files:** Create `backend/services/stock/consumables.js`, `backend/stock-consumables.test.js`; Modify `backend/routes/stock.js` (`/records/:recordId/consumables*`), `frontend/js/pages/journal-card.js`, `frontend/css/journal.css`, `backend/journal-ui.test.js`
 
-- [ ] **Step 1: Тесты (красные)** `stock-consumables.test.js`: `expectedFor(service, staffYcId, links, cards, priceFn)` → норма `{goodRowId, qtyBase, unitPrice, cost}` по `pickTechCard` + `tech_cards.items` × `amount` услуги (товар YClients → `goodRowId` по `good_id`); `compare(expected, actual)` → по товару `{expected, actual, diff, flag: ok|over|missing|extra}` (`over` при факте > норма × 1.2); `summary` — Σ cost факта/нормы; `update(…)` → `consumableDelta(target, actual)` → документ `consumable` с дельтами (`service_yc_id`, `record_id`, `master_staff_yc_id`, склад `default_service_storage_id`), нулевая дельта → 200 без документа; запись `id<0` → `{expected, actual:[], note}`.
-- [ ] **Step 2: Реализация.** `forRecord(salonId, recordId)`: услуги записи — из зеркала `records.raw_payload.services` (как `journal/index.detail`), мастер — `records.staff_id`; факт — `stock_movements kind consumable` по `record_id` (+`service_yc_id`), строки документов `origin='loyalpro'` помечены «корректировка LoyalPro»; норма — `economics/store` (`service_tech_cards`, `tech_cards`) + `price.unitPriceAsOf` (приходы — `store.listReceipts` леджера, задача 14 — до неё из `economics/store.listReceipts`); `update` — транзакция как `documents.create`.
-- [ ] **Step 3: Фронт карточки записи.** `jrStub('Товары','box','jr-tab-stub')` → живая вкладка `#jrTabGoods`, переключение «Услуги/Товары» без перерисовки (панели `#jrServicesPane`/`#jrGoodsPane`, как «Клиент/Чат»); панель: продажи записи (`GET /api/stock/documents?record=<id>`), «Продать товар» → `stockSaleOpen({recordId, clientId: summary.clientId, staffYcId})` (второй `<dialog>` поверх `jrModal` — `showModal()` после; z-order проверить живьём). Плитка «Списание расходников» → панель «Расходники»: таблица по услугам (товар / норма / факт / разница / сумма, корректировки отдельно), итог материалов визита, «Изменить» → редактор целевого состава (кол-во в ед. списания) → `PUT /api/stock/records/:id/consumables/:serviceId`. У `id<0` — только норма. Тесты в `journal-ui.test.js`: вкладка переключает панели без `jrAppointmentCard`; экранирование.
-- [ ] **Step 4: Живо** на деве: карточка состоявшейся записи 79200255591 — факт совпадает с `goods_transactions` type 2 этой записи; правка (+1 тестовый локальный товар) → документ `consumable` с дельтой −1 (расход), факт обновился; правка обратно → дельта +1. YClients не трогается.
-- [ ] **Step 5:** `npx jest backend/stock backend/journal-ui --silent`; коммит `feat(stock): расходники и продажи в карточке записи`.
+- [x] **Step 1: Тесты (красные)** `stock-consumables.test.js`: `expectedFor(service, staffYcId, links, cards, priceFn)` → норма `{goodRowId, qtyBase, unitPrice, cost}` по `pickTechCard` + `tech_cards.items` × `amount` услуги (товар YClients → `goodRowId` по `good_id`); `compare(expected, actual)` → по товару `{expected, actual, diff, flag: ok|over|missing|extra}` (`over` при факте > норма × 1.2); `summary` — Σ cost факта/нормы; `update(…)` → `consumableDelta(target, actual)` → документ `consumable` с дельтами (`service_yc_id`, `record_id`, `master_staff_yc_id`, склад `default_service_storage_id`), нулевая дельта → 200 без документа; запись `id<0` → `{expected, actual:[], note}`.
+- [x] **Step 2: Реализация.** `forRecord(salonId, recordId)`: услуги записи — из зеркала `records.raw_payload.services` (как `journal/index.detail`), мастер — `records.staff_id`; факт — `stock_movements kind consumable` по `record_id` (+`service_yc_id`), строки документов `origin='loyalpro'` помечены «корректировка LoyalPro»; норма — `economics/store` (`service_tech_cards`, `tech_cards`) + `price.unitPriceAsOf` (приходы — `store.listReceipts` леджера, задача 14 — до неё из `economics/store.listReceipts`); `update` — транзакция как `documents.create`.
+- [x] **Step 3: Фронт карточки записи.** `jrStub('Товары','box','jr-tab-stub')` → живая вкладка `#jrTabGoods`, переключение «Услуги/Товары» без перерисовки (панели `#jrServicesPane`/`#jrGoodsPane`, как «Клиент/Чат»); панель: продажи записи (`GET /api/stock/documents?record=<id>`), «Продать товар» → `stockSaleOpen({recordId, clientId: summary.clientId, staffYcId})` (второй `<dialog>` поверх `jrModal` — `showModal()` после; z-order проверить живьём). Плитка «Списание расходников» → панель «Расходники»: таблица по услугам (товар / норма / факт / разница / сумма, корректировки отдельно), итог материалов визита, «Изменить» → редактор целевого состава (кол-во в ед. списания) → `PUT /api/stock/records/:id/consumables/:serviceId`. У `id<0` — только норма. Тесты в `journal-ui.test.js`: вкладка переключает панели без `jrAppointmentCard`; экранирование.
+- [x] **Step 4: PostgreSQL/API и браузер, синтетические данные**: карточка состоявшейся записи синтетического пациента — факт совпадает с `goods_transactions` type 2 этой записи; правка (+1 тестовый локальный товар) → документ `consumable` с дельтой −1 (расход), факт обновился; правка обратно → дельта +1. YClients не трогается.
+- [x] **Step 5:** `npx jest backend/stock backend/journal-ui --silent`; коммит `feat(stock): расходники и продажи в карточке записи`.
 
 **Чек-лист Opus:** норма — через общие `pickTechCard`/`unitPriceAsOf`; корректировки — дельтами, факт YClients не переписывается; несохранённые правки карточки живут.
 
@@ -617,9 +610,9 @@ WHERE g.salon_id = $1 AND s.salon_id = $1 AND s.is_active AND (op.good_row_id IS
 
 **Files:** Modify `frontend/js/pages/clients.js` (`openCD`); тест — `vm`-рендер блока (отдельный `backend/clients-purchases-ui.test.js`, грузит `clients.js` и `stock-docs.js`)
 
-- [ ] **Step 1: Тест (красный)**: `cdPurchasesHtml(rows)` рендерит дату, товары (экранировано), сумму, способ оплаты; пусто → «Покупок нет».
-- [ ] **Step 2:** в `openCD(id)` после блока визитов — `GET /api/stock/clients/:id/purchases` в своём `try/catch` (сбой → прочерк), блок «Покупки», клик → `navTo('stock')` + `#stock/doc/<id>`.
-- [ ] **Step 3:** тесты, живая проверка на пациенте с продажей из зеркала; коммит `feat(stock): покупки в карточке пациента`.
+- [x] **Step 1: Тест (красный)**: `cdPurchasesHtml(rows)` рендерит дату, товары (экранировано), сумму, способ оплаты; пусто → «Покупок нет».
+- [x] **Step 2:** в `openCD(id)` после блока визитов — `GET /api/stock/clients/:id/purchases` в своём `try/catch` (сбой → прочерк), блок «Покупки», клик → `navTo('stock')` + `#stock/doc/<id>`.
+- [x] **Step 3:** тесты, живая проверка на пациенте с продажей из зеркала; коммит `feat(stock): покупки в карточке пациента`.
 
 **Чек-лист Opus:** сбой ручки не ломает карточку; экранирование; бамп `?v=` у `clients.js`.
 
@@ -631,9 +624,9 @@ WHERE g.salon_id = $1 AND s.salon_id = $1 AND s.is_active AND (op.good_row_id IS
 
 **Files:** Modify `backend/services/stock/index.js` (`nightly(salon)`), `backend/services/economics/sync.js` (`runNightly` → `stock.nightly` после `syncGoodsCatalog`), `backend/services/stock/ledger.js` (`drainIngestPending`), тесты `backend/stock-ledger.test.js`
 
-- [ ] **Step 1: Тесты (красные)**: `drainIngestPending` — строки, чей `good_id` появился в каталоге, проходят `ingestMirrored` и удаляются; `nightly` зовёт `syncStorages`, `syncCategories` (троттлинг 30 мин), `drainIngestPending`, пишет одну строку лога `stock nightly salon=1: pending=0 storages=2 categories=skipped`; исключение любого шага не роняет остальные.
-- [ ] **Step 2: Реализация**; `economics.runNightly` зовёт `stock.nightly` в своём `try/catch`, ошибка — в `r.errors`.
-- [ ] **Step 3:** живой вызов `nightly` для salon 1; `npx jest backend/stock economics --silent`; коммит `feat(stock): ночной проход склада внутри экономического`.
+- [x] **Step 1: Тесты (красные)**: `drainIngestPending` — строки, чей `good_id` появился в каталоге, проходят `ingestMirrored` и удаляются; `nightly` зовёт `syncStorages`, `syncCategories` (троттлинг 30 мин), `drainIngestPending`, пишет одну строку лога `stock nightly salon=1: pending=0 storages=2 categories=skipped`; исключение любого шага не роняет остальные.
+- [x] **Step 2: Реализация**; `economics.runNightly` зовёт `stock.nightly` в своём `try/catch`, ошибка — в `r.errors`.
+- [ ] **Step 3 (не выполнялся; автоматические тесты PASS):** живой вызов `nightly` для salon 1; `npx jest backend/stock economics --silent`; коммит `feat(stock): ночной проход склада внутри экономического`.
 
 **Чек-лист Opus:** один крон (экономический); ничего не правит остатки.
 
@@ -645,9 +638,9 @@ WHERE g.salon_id = $1 AND s.salon_id = $1 AND s.is_active AND (op.good_row_id IS
 
 **Files:** Modify `backend/services/stock/store.js` (`listReceipts(salonId, goodRowId)` — `stock_movements kind receipt` обоих источников в форме `{create_date, amount, cost, operation_unit_type}`), `backend/services/stock/consumables.js`, `routes/stock.js` (карточка товара); тесты `backend/stock-consumables.test.js`
 
-- [ ] **Step 1: Тест (красный)**: норма расходников берёт цену по приходу `origin='loyalpro'`, если он позже последнего зеркального.
-- [ ] **Step 2:** реализация через `price.unitPriceAsOf({receipts: store.listReceipts(…), override, catalogRow, date})`.
-- [ ] **Step 3:** тесты; коммит `feat(stock): цена единицы по приходам леджера`. Экономика процедур НЕ меняется (решение §11 п. 7).
+- [x] **Step 1: Тест (красный)**: норма расходников берёт цену по приходу `origin='loyalpro'`, если он позже последнего зеркального.
+- [x] **Step 2:** реализация через `price.unitPriceAsOf({receipts: store.listReceipts(…), override, catalogRow, date})`.
+- [x] **Step 3:** тесты; коммит `feat(stock): цена единицы по приходам леджера`. Экономика процедур НЕ меняется (решение §11 п. 7).
 
 **Чек-лист Opus:** `unitPriceAsOf` не копируется; экономика по-прежнему читает `goods_transactions`.
 
@@ -655,15 +648,18 @@ WHERE g.salon_id = $1 AND s.salon_id = $1 AND s.is_active AND (op.good_row_id IS
 
 ### Task 15: Живые прогоны, документация, финальное ревью
 
+**Фактическая приёмка:** реальный PostgreSQL и API с изолированными TEMP-таблицами;
+описанные ниже сценарии на пациенте заменены синтетическими. См. acceptance.md.
+
 **Модель:** Sonnet (скрипты, доки) → **Opus** (финальное ревью ветки с записью находок в `docs/2026-11-13-stock-review.md` ПО ХОДУ; один проход, без фоновых агентов).
 
 **Files:** Create `backend/scripts/stock-ui-e2e.js` (puppeteer: страница, вкладки, формы без сохранения, карточка товара, карточка записи с вкладками, две темы, 390px; скриншоты `/tmp/stock-*.png`), финальная `backend/scripts/stock-e2e.js` (`--sale --cleanup`), `docs/2026-11-13-stock-acceptance.md`, `docs/2026-11-13-stock-review.md`; Modify `CLAUDE.md` (раздел «### Склад и товары («Управление → Товары», с 13.11.2026, дев)» ≤ 40 строк: таблицы, правило счёта, «в YClients не пишем ничего», готча nullable `yclients_good_id` и страж «Уходов», рычаг `STOCK_LEDGER`, команды), память проекта (`stock_goods_plan_2026_11_13.md` обновить; строка `MEMORY.md` ≤ 200 символов).
 
-- [ ] **Step 1:** `npx jest backend/stock economics backend/journal finance yclients-goods-catalog --silent` — зелёные (флейк `primary-clients` не относится).
-- [ ] **Step 2:** `stock-e2e.js` на деве → `stock-acceptance.md` (остатки до/после одинаковы, `finance_operations` чист).
-- [ ] **Step 3:** `stock-ui-e2e.js` → скриншоты.
-- [ ] **Step 4: Opus — финальное ревью**: чек-листы задач + инварианты: (1) ни одного `POST/PUT/DELETE` к YClients; (2) `recorded_at` неизменяем; (3) `safely` вокруг хука; (4) `salon_id` во всех SQL; (5) нет копий `writeoffQty`/`unitPriceAsOf`/`pickTechCard`/`parseCatalogGood`; (6) PII; (7) `?v=`; (8) миграции аддитивны, единственный `ALTER COLUMN` — `DROP NOT NULL`; (9) Step C «Уходов» защищён. Находки — в файл по ходу; критичные чинятся отдельными коммитами.
-- [ ] **Step 5:** CLAUDE.md и память; коммит `docs(stock): раздел CLAUDE.md, приёмка, ревью`. Владельцу — список решений §11 на подтверждение.
+- [x] **Step 1:** `npx jest backend/stock economics backend/journal finance yclients-goods-catalog --silent` — зелёные (флейк `primary-clients` не относится).
+- [x] **Step 2:** `stock-e2e.js` на деве → `stock-acceptance.md` (остатки до/после одинаковы, `finance_operations` чист).
+- [x] **Step 3:** `stock-ui-e2e.js` → скриншоты.
+- [x] **Step 4: Финальное ревью Codex (Opus недоступен)**: чек-листы задач + инварианты: (1) ни одного `POST/PUT/DELETE` к YClients; (2) `recorded_at` неизменяем; (3) `safely` вокруг хука; (4) `salon_id` во всех SQL; (5) нет копий `writeoffQty`/`unitPriceAsOf`/`pickTechCard`/`parseCatalogGood`; (6) PII; (7) `?v=`; (8) миграции аддитивны, единственный `ALTER COLUMN` — `DROP NOT NULL`; (9) Step C «Уходов» защищён. Находки — в файл по ходу; критичные чинятся отдельными коммитами.
+- [x] **Step 5:** CLAUDE.md и память; коммит `docs(stock): раздел CLAUDE.md, приёмка, ревью`. Владельцу — список решений §11 на подтверждение.
 
 ---
 
