@@ -334,3 +334,4 @@ button.jr-service-line:hover,button.jr-service-line:focus-visible{border-color:v
   .jr-vh-line{grid-template-columns:minmax(0,1fr) 72px 72px}
   .jr-vh-toolbar select{min-width:0;flex:1}
 }
+.jr-stock-editor{max-height:300px;overflow:auto;display:grid;gap:8px}.jr-stock-editor label{display:flex;gap:10px;align-items:center;justify-content:space-between}.jr-stock-editor input{width:100px}.jr-service-tabs button{background:none;border:0;color:inherit;font:inherit;cursor:pointer;padding:6px}.jr-service-tabs button.is-active{border-bottom:2px solid var(--a)}

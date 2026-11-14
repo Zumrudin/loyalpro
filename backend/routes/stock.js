@@ -232,4 +232,11 @@ router.get('/clients/:clientId/purchases', wrap('client-purchases', async (req, 
   res.json(await store.listPurchasesByClient(req.user.salonId, clientId));
 }));
 
+const consumables = require('../services/stock/consumables');
+const recordIdOf = req => { const n=Number(req.params.recordId); if(!Number.isSafeInteger(n)||n===0) throw new StockError('Некорректный id записи.',400); return n; };
+router.get('/records/:recordId/consumables', wrap('record-consumables', async(req,res)=>res.json(await consumables.forRecord(req.user.salonId,recordIdOf(req)))));
+router.put('/records/:recordId/consumables/:serviceId', wrap('record-consumables-update', async(req,res)=>{
+  const serviceId=Number(req.params.serviceId); if(!Number.isSafeInteger(serviceId)||serviceId<=0) return bad(res,['Некорректный id услуги.']);
+  res.json(await consumables.update(req.user.salonId,req.user.userId,recordIdOf(req),serviceId,bodyOf(req)));
+}));
 module.exports = router;

@@ -442,3 +442,32 @@ Object.assign(module.exports, { listGoodsWithBalances, goodCard, listMovementsBy
 
 const listDocumentPayments = (salonId, docId) => db.any(`SELECT method, amount, status FROM finance_operations WHERE salon_id=$1 AND stock_document_id=$2 ORDER BY id`, [salonId, docId]);
 module.exports.listDocumentPayments = listDocumentPayments;
+
+async function consumablesContext(salonId, recordId) {
+  let services, staffId, date;
+  if (recordId < 0) {
+    const r = await require('../journal').detail(salonId, recordId);
+    services = r.services; staffId = r.staffId; date = r.date;
+    if (r.id < 0) {
+      const local = await db.any('SELECT id, economics_yc_id, yclients_id FROM service_catalog WHERE salon_id=$1 AND id=ANY($2::int[])', [salonId, services.map(s=>s.id)]);
+      services = services.map(s=>({...s, yclients_id: local.find(l=>Number(l.id)===Number(s.id))?.economics_yc_id || local.find(l=>Number(l.id)===Number(s.id))?.yclients_id || 0}));
+    }
+  } else {
+    const r = await db.oneOrNone('SELECT raw_payload, staff_id, visit_date FROM records WHERE salon_id=$1 AND yclients_record_id=$2', [salonId, recordId]);
+    if (!r) return null;
+    services = r.raw_payload?.services || []; staffId = r.staff_id; date = r.visit_date;
+  }
+  const [goods, links, cards, overrides] = await Promise.all([listGoods(salonId),
+    db.any('SELECT * FROM service_tech_cards WHERE salon_id=$1', [salonId]),
+    db.any('SELECT id, items FROM tech_cards WHERE salon_id=$1', [salonId]),
+    db.any('SELECT good_id, unit_price FROM goods_price_overrides WHERE salon_id=$1', [salonId])]);
+  return { services, staffId, date, goods, links, cards, overrides };
+}
+async function recordConsumableMovements(salonId, recordId, q) {
+  const sql = `SELECT m.good_row_id, m.service_yc_id, m.storage_id, m.qty_base, m.cost, d.origin
+    FROM stock_movements m JOIN stock_documents d ON d.id=m.document_id AND d.salon_id=m.salon_id
+    WHERE m.salon_id=$1 AND m.record_id=$2 AND d.kind='consumable' AND d.status='posted' AND m.deleted_at IS NULL`;
+  return q ? (await q(sql,[salonId,recordId])).rows : db.any(sql,[salonId,recordId]);
+}
+const stockPriceReceipts = (salonId, good) => good.yclients_good_id == null ? [] : require('../economics/store').listReceipts(salonId, good.yclients_good_id);
+Object.assign(module.exports, { consumablesContext, recordConsumableMovements, stockPriceReceipts });

@@ -4,7 +4,7 @@ const vm = require('vm');
 const path = require('path');
 // All journal files share ONE global scope in the browser (classic <script>s,
 // index.html order). The harness runs them the same way, one script each.
-const JR_FILES = ['journal.js', 'journal-grid.js', 'journal-card.js', 'journal-forms.js', 'journal-payment.js', 'journal-dispatch.js', 'journal-visits.js'];
+const JR_FILES = ['journal.js', 'journal-grid.js', 'journal-card.js', 'journal-forms.js', 'journal-payment.js', 'journal-dispatch.js', 'journal-stock.js', 'journal-visits.js'];
 const readJr = file => fs.readFileSync(path.join(__dirname, '../frontend/js/pages', file), 'utf8');
 const JR_SOURCES = JR_FILES.map(file => ({ file, code: readJr(file) }));
 const JR_ALL = JR_SOURCES.map(s => s.code).join('\n');
@@ -1572,3 +1572,5 @@ describe('«История посещений» (13.11.2026)', () => {
   expect(h.get('jrModalError').textContent).toBe('Нет связи'); expect(h.get('jrModalBody').innerHTML).toContain('jrVhReload');
  });
 });
+
+test('stock tabs preserve unsaved appointment DOM',async()=>{const h=harness();h.context.stockApi=jest.fn().mockResolvedValue({documents:[]});h.context.stockDocsTable=()=>'';h.run("journal.modalRequest=1; jrStockBind({id:10});");h.get('jrServicesPane').innerHTML='unsaved';await h.context.jrStockTab('goods');expect(h.get('jrServicesPane').innerHTML).toBe('unsaved');expect(h.get('jrServicesPane').hidden).toBe(true);await h.context.jrStockTab('services');expect(h.get('jrServicesPane').hidden).toBe(false);});
