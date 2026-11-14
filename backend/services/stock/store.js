@@ -439,3 +439,6 @@ async function turnover(salonId, { from, to, storage = null, category = null }) 
 }
 Object.assign(module.exports, { listGoodsWithBalances, goodCard, listMovementsByGood, listReceiptsByGood, techCardsUsingGood,
   MOVEMENTS_BY_GOOD_SQL, RECEIPTS_BY_GOOD_SQL, DOCS_LIST_SQL, listDocuments, TURNOVER_SQL, turnover });
+
+const listDocumentPayments = (salonId, docId) => db.any(`SELECT method, amount, status FROM finance_operations WHERE salon_id=$1 AND stock_document_id=$2 ORDER BY id`, [salonId, docId]);
+module.exports.listDocumentPayments = listDocumentPayments;

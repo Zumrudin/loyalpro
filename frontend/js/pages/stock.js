@@ -1,6 +1,6 @@
 // Товары и склад. Все обращения используют общий авторизованный API.
 const _stock = {tab:'balances', goods:[], dictionaries:{storages:[],units:[],suppliers:[],staff:[],categories:[]}, goodsRequest:0, cardRequest:0, categories:new Map(), busy:false, good:null};
-const STOCK_TABS = {balances:'Остатки',goods:'Товары'};
+const STOCK_TABS = {balances:'Остатки',goods:'Товары',docs:'Операции'};
 function stockEl(id) { return document.getElementById(id); }
 function stockEsc(value) { return String(value ?? '').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 function stockApi(path, body, method) { return api(method || (body ? 'POST':'GET'), '/api/stock'+path, body); }
@@ -20,6 +20,7 @@ async function loadStock() {
 async function stockOnHashArg(arg) {
   const [tab,id]=String(arg||'').split('/');
   if(tab==='good' && /^\d+$/.test(id||'')) { await stockSwitchTab('goods',false);await stockOpenGood(Number(id));return; }
+  if(tab==='doc' && /^\d+$/.test(id||'')){await stockSwitchTab('docs',false);await stockOpenDocument(Number(id));return;}
   stockCloseGood();
   await stockSwitchTab(STOCK_TABS[tab]?tab:'balances',false);
 }
@@ -31,7 +32,7 @@ async function stockSwitchTab(tab, updateHash=true) {
     stockEl('stockTabBtn-'+key).classList.toggle('active',key===tab);
   }
   if(updateHash && location.hash!=='#stock/'+tab) {location.hash='stock/'+tab;return;}
-  await stockLoadGoods();
+  if(tab==='docs')await stockLoadDocs();else await stockLoadGoods();
 }
 async function stockLoadCounters() {
   try {

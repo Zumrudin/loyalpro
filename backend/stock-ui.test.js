@@ -58,3 +58,16 @@ test('stock scripts share global scope with all application scripts and are vers
  }
  expect((html.match(/data-p="stock"/g)||[])).toHaveLength(2);
 });
+test('document totals round each line to kopeks and badges escape nothing untrusted',()=>{
+ const {ctx}=harness();
+ expect(ctx.stockLinesTotal([{qty:3,costPerUnit:0.1,discount:0},{qty:1,costPerUnit:1,discount:10}])).toBe(120);
+ expect(ctx.stockDocBadge({origin:'yclients',status:'cancelled'})).toContain('Отменён');
+ expect(ctx.stockDocumentHtml({id:1,kind:'receipt',origin:'loyalpro',status:'posted',comment:'<script>x</script>',lines:[]})).not.toContain('<script>');
+});
+test('sale rejects mismatch and bonus payments, gift has no payments',()=>{
+ const {ctx}=harness();
+ expect(()=>ctx.stockCheckPayments([{method:'cash',amount:9}],1000,false)).toThrow();
+ expect(()=>ctx.stockCheckPayments([{method:'bonus',amount:10}],1000,false)).toThrow();
+ expect(()=>ctx.stockCheckPayments([],0,true)).not.toThrow();
+ expect(()=>ctx.stockCheckPayments([{method:'cash',amount:1}],0,true)).toThrow();
+});

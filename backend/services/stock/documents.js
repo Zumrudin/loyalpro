@@ -34,7 +34,7 @@ async function document(salonId, id, q, inventory = false) {
 }
 async function detail(salonId, id, inventory = false) {
   const d = await document(salonId, id, undefined, inventory);
-  return { ...d, lines: await (inventory ? store.listInventoryLines(salonId, id) : store.listMovementsByDocument(salonId, id)) };
+  return { ...d, ...(d.kind === 'sale' ? { payments: await store.listDocumentPayments(salonId, id) } : {}), lines: await (inventory ? store.listInventoryLines(salonId, id) : store.listMovementsByDocument(salonId, id)) };
 }
 async function activeStorage(salonId, id) {
   const s = await store.storageById(salonId, checkId(id));

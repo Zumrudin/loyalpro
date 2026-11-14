@@ -30,3 +30,7 @@
 #page-stock button:not(.stock-link),.stock-modal button { border:1px solid var(--bd); border-radius:8px; padding:8px 12px; background:var(--card); color:var(--t1); font:inherit; cursor:pointer; }
 #page-stock .tab.active { border-color:var(--a); background:var(--as); color:var(--t1); }
 #page-stock button:disabled,.stock-modal button:disabled { opacity:.5; cursor:default; }
+.stock-line { display:grid; grid-template-columns:2fr repeat(4,1fr) auto; gap:8px; align-items:end; border-bottom:1px solid var(--bd); padding:10px 0; }
+.stock-modal p[role="alert"] { color:var(--danger); white-space:pre-line; }
+.stock-modal textarea { width:100%; min-height:65px; }
+@media(max-width:700px){.stock-line{grid-template-columns:1fr 1fr}.stock-line>label:first-child{grid-column:1/-1}}
