@@ -45,6 +45,8 @@ async function abonements(salon, phone, now = Date.now()) {
   return value;
 }
 const CLIENT_COLS = `id, name, phone, yclients_client_id, bonus_balance, yclients_card_balance, loyalty_level, total_spent,
+  to_char(birthday, 'YYYY-MM-DD') AS birthday, NULLIF(btrim(yclients_data->>'comment'), '') AS note,
+  NULLIF(btrim(yclients_data->'custom_fields'->>'nomer-dogovra'), '') AS contract_no,
   EXISTS (SELECT 1 FROM finance_operations o WHERE o.salon_id=clients.salon_id AND o.client_id=clients.id AND o.kind='bonus_opening') AS ledger_open`;
 const CLIENT_ORDER = `ORDER BY ($2::bigint IS NOT NULL AND yclients_client_id=$2) DESC, (yclients_card_balance IS NOT NULL) DESC,
   (yclients_client_id IS NOT NULL) DESC, id LIMIT 1`;
@@ -84,6 +86,13 @@ async function resolveClient(salonId, query = {}) {
   const ph = phone || canonPhone(client?.phone);
   return { salon, client, yc, ph };
 }
+// Date of the last visit the client actually came to (rows are newest first).
+function lastArrivedDate(rows) {
+  const v = rows.find(x => Number(x.raw_payload?.attendance) === 1);
+  if (!v) return null;
+  const at = v.raw_payload.datetime || (v.visit_datetime instanceof Date ? v.visit_datetime.toISOString() : v.visit_datetime);
+  return m.moscowParts(at)?.date || null;
+}
 async function summary(salonId, query = {}) {
   const { salon, client, yc, ph } = await resolveClient(salonId, query);
   const rows = yc ? await db.any(VISITS_BY_ID_SQL, [salonId, yc])
@@ -98,11 +107,16 @@ async function summary(salonId, query = {}) {
   const bonusBalance = !client ? null : ledger ? Number(client.bonus_balance) || 0
     : client.yclients_card_balance != null ? Number(client.yclients_card_balance) : Number(client.bonus_balance) || 0;
   return {
+    clientId: client?.id ?? null,
     name: client?.name || rows[0]?.raw_payload?.client?.name || null,
     phone: ph,
     visits, bonusBalance,
     loyaltyLevel: client?.loyalty_level || null,
     totalSpent: client ? Number(client.total_spent) || 0 : null,
+    birthday: client?.birthday || null,
+    note: client?.note ? String(client.note).slice(0, 1000) : null,
+    contractNo: client?.contract_no ? String(client.contract_no).slice(0, 60) : null,
+    lastVisitDate: lastArrivedDate(rows),
     lastVisits: rows.map(v => {
       const p = v.raw_payload || {};
       const at = m.moscowParts(p.datetime || (v.visit_datetime instanceof Date ? v.visit_datetime.toISOString() : v.visit_datetime));

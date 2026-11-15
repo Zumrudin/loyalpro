@@ -5,6 +5,8 @@
 // density null: the frontend draws it neutrally instead of «full».
 const { db } = require('../../db');
 const m = require('./model');
+const sources = require('./sources');
+const scheduleOverlay = require('./schedule-overlay');
 
 const MONTH = /^\d{4}-(0[1-9]|1[0-2])$/;
 // A day is «full» at 8 visits per working master (owner's rule of thumb).
@@ -41,12 +43,27 @@ const RECORDS_SQL = `SELECT to_char(visit_date,'YYYY-MM-DD') AS date, count(*)::
 const STAFF_SQL = `SELECT to_char(date,'YYYY-MM-DD') AS date, count(*) FILTER (WHERE is_working)::int AS n, count(*)::int AS total FROM journal_staff_schedule
   WHERE salon_id=$1 AND date BETWEEN $2::date AND $3::date
   GROUP BY 1`;
+const STAFF_ROWS_SQL = `SELECT staff_id,to_char(date,'YYYY-MM-DD') AS date,is_working,slots FROM journal_staff_schedule
+  WHERE salon_id=$1 AND date BETWEEN $2::date AND $3::date`;
+function staffTotals(days) {
+  const byDate = new Map();
+  for (const day of days || []) {
+    const row = byDate.get(day.date) || { date: day.date, n: 0, total: 0 };
+    row.total++; if (day.is_working) row.n++;
+    byDate.set(day.date, row);
+  }
+  return [...byDate.values()];
+}
 async function month(salonId, monthKey) {
   const r = monthRange(monthKey);
-  const [records, staff] = await Promise.all([
+  const [records, staff, pending, staffRows] = await Promise.all([
     db.any(RECORDS_SQL, [salonId, r.from, r.to]),
     db.any(STAFF_SQL, [salonId, r.from, r.to]),
+    sources.openOutbox(salonId),
+    db.any(STAFF_ROWS_SQL, [salonId, r.from, r.to]),
   ]);
-  return { month: monthKey, days: monthDays(monthKey, records, staff) };
+  const hasScheduleChanges = (pending || []).some(row => row.overlay?.kind === 'schedule');
+  const effectiveStaff = hasScheduleChanges ? staffTotals(scheduleOverlay.applyMany(staffRows, pending)) : staff;
+  return { month: monthKey, days: monthDays(monthKey, records, effectiveStaff) };
 }
-module.exports = { monthRange, density, monthDays, month, RECORDS_SQL, STAFF_SQL, VISITS_PER_MASTER };
+module.exports = { monthRange, density, monthDays, month, staffTotals, RECORDS_SQL, STAFF_SQL, STAFF_ROWS_SQL, VISITS_PER_MASTER };

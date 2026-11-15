@@ -40,3 +40,12 @@ test('webhook_logs history index is additive (IF NOT EXISTS) and partial on reco
   expect(JOURNAL_HISTORY_INDEX_DDL).toContain("WHERE event_type='record'");
   expect(JOURNAL_HISTORY_INDEX_DDL).not.toMatch(/DROP|TRUNCATE|DELETE FROM|ALTER/);
 });
+
+test('schedule DDL is additive and both historical action guards skip v4', () => {
+  const src = require('fs').readFileSync(require('path').join(__dirname, 'migrations.js'), 'utf8');
+  const { JOURNAL_LOCAL_DDL } = require('./migrations');
+  expect(JOURNAL_LOCAL_DDL).toContain('ADD COLUMN IF NOT EXISTS schedule_key TEXT');
+  expect(JOURNAL_LOCAL_DDL).toContain('ON journal_outbox(salon_id,schedule_key)');
+  expect(src).toContain("CHECK (action IN ('create','move','cancel','confirm','edit','delete','schedule'))");
+  expect((src.match(/conname='journal_operations_action_v4_check'/g) || []).length).toBe(3);
+});

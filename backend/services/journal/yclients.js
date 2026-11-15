@@ -71,6 +71,30 @@ async function removePayment(salon,documentId,method,transactionId) {
  if(!response.data?.success||!Array.isArray(response.data.data?.state?.payment_transactions)||!Array.isArray(response.data.data?.state?.loyalty_transactions))throw new Error('payment_removal_unconfirmed');
  return response.data.data;
 }
+// Current staff-schedule contract (official OpenAPI, operation
+// api.location.staff.schedule.read/set). The array query keys are explicit:
+// ycGet uses URLSearchParams, not axios's array serializer.
+async function getStaffSchedule(salon, staffId, date) {
+  const value = await ycGet(salon, `/company/${salon.yclients_company_id}/staff/schedule`, {
+    start_date: date, end_date: date, 'staff_ids[]': staffId, 'include[]': 'busy_intervals',
+  });
+  if (!Array.isArray(value)) fail('YClients вернул неполные данные графика.', 502);
+  return value.filter(d => Number(d.staff_id) === Number(staffId) && String(d.date).slice(0, 10) === date);
+}
+async function setStaffSchedule(salon, schedule) {
+  const authSalon = config.YCLIENTS_INTEGRATION_USER_TOKEN
+    ? { ...salon, yclients_user_token: config.YCLIENTS_INTEGRATION_USER_TOKEN } : salon;
+  const item = { staff_id: schedule.staffId, dates: [schedule.date] };
+  const body = schedule.slots.length
+    ? { schedules_to_set: [{ ...item, slots: schedule.slots }] }
+    : { schedules_to_delete: [item] };
+  const response = await axios({ method: 'put',
+    url: `${config.YC}/company/${salon.yclients_company_id}/staff/schedule`,
+    headers: ycHeaders(authSalon), timeout: 30000, data: body,
+  });
+  if (!response.data?.success || !Array.isArray(response.data.data)) throw new Error('schedule_write_unconfirmed');
+  return response.data.data;
+}
 async function markArrived(salon, record) {
   // Short PUT {attendance} is rejected by YClients (422: staff_id, services,
   // client required). The full record is sent back exactly as read, like the
@@ -103,4 +127,4 @@ async function remove(salon, id) {
   if (response?.data && typeof response.data === 'object' && response.data.success === false) throw new Error('upstream_delete_failed');
   return { recordId: id };
 }
-module.exports = { list, records, getRecord, write, remove, getSale, pay, removePayment, markArrived };
+module.exports = { list, records, getRecord, write, remove, getSale, pay, removePayment, markArrived, getStaffSchedule, setStaffSchedule };

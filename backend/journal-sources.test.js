@@ -187,3 +187,11 @@ test('detail: «не уведомлять» — from the create step of a queued
   db.oneOrNone.mockImplementation(async (sql, p) => /journal_record_prefs/.test(sql) ? { notify_client: false } : base(sql, p));
   expect((await service.detail(3, 8)).notifyClient).toBe(false);
 });
+
+test('failed schedule removal survives cache refresh and reaches day/week with status', async () => {
+  outbox = [{ id: 41, status: 'failed', schedule_key: '1:2030-04-01', error_text: 'Conflict', overlay: { kind: 'schedule', staffId: 1, date: DATE, slots: [] } }];
+  const d = await service.day(3, DATE);
+  expect(d.staff.find(s => s.id === 1)).toMatchObject({ working: false, scheduleSync: { status: 'failed', outboxId: 41 } });
+  const w = await service.week(3, DATE, 1);
+  expect(w.days.find(d => d.date === DATE)).toMatchObject({ working: false, scheduleSync: { status: 'failed' } });
+});

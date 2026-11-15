@@ -17,6 +17,15 @@ async function catalog(salon, src = sources.live(salon)) {
   const [staff, services] = await Promise.all([src.staff(), src.services()]);
   return { staff: staff.filter(s => !s.fired && !m.isAdministrator(s)), services };
 }
+// Position and photo for the record card header (only when YClients has them).
+function staffProfile(s) {
+  const out = {};
+  const position = String((typeof s.position === 'object' ? s.position?.title : s.position) || s.specialization || '').trim();
+  if (position) out.specialization = position.slice(0, 120);
+  const avatar = String(s.avatar_big || s.avatar || '');
+  if (/^https:\/\//.test(avatar) && !/no-master/.test(avatar)) out.avatar = avatar;
+  return out;
+}
 // Schedules of a staff list for one date with bounded concurrency (a burst
 // against the shared YClients quota is avoided; cached schedules are local).
 async function staffForDate(src, list, date) {
@@ -27,7 +36,7 @@ async function staffForDate(src, list, date) {
     while (next < list.length) {
       const index = next++, s = list[index];
       const schedule = await src.schedule(s.id, date);
-      staff[index] = { id: Number(s.id), name: String(s.name || 'Сотрудник'), ...m.staffSchedule(schedule, date) };
+      staff[index] = { id: Number(s.id), name: String(s.name || 'Сотрудник'), ...staffProfile(s), ...m.staffSchedule(schedule, date) };
     }
   }));
   return staff;
@@ -90,7 +99,7 @@ async function week(salonId, date, staffId, src) {
   const days = [];
   for (const d of dates) {
     const sched = m.staffSchedule(await scheduleOf(chosen, d), d);
-    days.push({ date: d, working: sched.working, workRanges: sched.workRanges,
+    days.push({ date: d, ...sched,
       records: m.recordsForDay(records, d).filter(r => r.staffId === id) });
   }
   return { ...base, staff: { id, name: String(chosen.name || 'Сотрудник') }, days };

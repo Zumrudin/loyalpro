@@ -52,3 +52,10 @@ describe('progress', () => {
     await expect(d.progress(3, 'x')).rejects.toMatchObject({ status: 400 });
   });
 });
+
+test('schedule-only release counts employee days and groups by tenant schedule key', async () => {
+  db.any.mockResolvedValueOnce([{ id:31,grp:'s5:2030-04-01',schedule_key:'5:2030-04-01' },{ id:32,grp:'s5:2030-04-01',schedule_key:'5:2030-04-01' }]);
+  const result = await require('./services/journal/dispatch').preview(3,{from:'2030-04-01',to:'2030-04-01'});
+  expect(result).toMatchObject({records:0,schedules:1,packages:2});
+  expect(db.any.mock.calls[0][1]).toEqual([3,'2030-04-01','2030-04-01']);
+});

@@ -18,10 +18,12 @@ const MAX_DAYS = 366;
 // a create's date, a move's new date, the mirrored visit date, the create
 // date of the new record a change belongs to.
 const WAITING_CTE = `WITH pkg AS (
-  SELECT o.id,
-    COALESCE('r' || o.yclients_record_id::text, 'c' || COALESCE(o.create_outbox_id, o.id)::text) AS grp,
+  SELECT o.id, o.schedule_key,
+    CASE WHEN o.schedule_key IS NOT NULL THEN 's' || o.schedule_key
+      ELSE COALESCE('r' || o.yclients_record_id::text, 'c' || COALESCE(o.create_outbox_id, o.id)::text) END AS grp,
     ARRAY_REMOVE(ARRAY[
-      CASE WHEN o.overlay->>'date' ~ '^\\d{4}-\\d{2}-\\d{2}$' THEN (o.overlay->>'date')::date END,
+      CASE WHEN o.schedule_key IS NOT NULL AND o.overlay->>'date' ~ '^\\d{4}-\\d{2}-\\d{2}$' THEN (o.overlay->>'date')::date END,
+      CASE WHEN o.schedule_key IS NULL AND o.overlay->>'date' ~ '^\\d{4}-\\d{2}-\\d{2}$' THEN (o.overlay->>'date')::date END,
       CASE WHEN o.overlay->'patch'->>'datetime' ~ '^\\d{4}-\\d{2}-\\d{2}' THEN left(o.overlay->'patch'->>'datetime', 10)::date END,
       r.visit_date,
       CASE WHEN c.overlay->>'date' ~ '^\\d{4}-\\d{2}-\\d{2}$' THEN (c.overlay->>'date')::date END
@@ -33,9 +35,11 @@ const WAITING_CTE = `WITH pkg AS (
 )`;
 const PERIOD_SQL = `${WAITING_CTE},
 hit AS (SELECT DISTINCT grp FROM pkg WHERE EXISTS (SELECT 1 FROM unnest(dates) d WHERE d BETWEEN $2::date AND $3::date))
-SELECT p.id, p.grp FROM pkg p JOIN hit USING (grp) ORDER BY p.id`;
+SELECT p.id, p.grp, p.schedule_key FROM pkg p JOIN hit USING (grp) ORDER BY p.id`;
 const SUMMARY_SQL = `${WAITING_CTE}
-SELECT count(*)::int AS packages, count(DISTINCT grp)::int AS records,
+SELECT count(*)::int AS packages,
+  (count(DISTINCT grp) FILTER (WHERE schedule_key IS NULL))::int AS records,
+  count(DISTINCT schedule_key)::int AS schedules,
   to_char(min(d), 'YYYY-MM-DD') AS "from", to_char(max(d), 'YYYY-MM-DD') AS "to"
 FROM pkg LEFT JOIN LATERAL unnest(pkg.dates) d ON TRUE`;
 const RELEASE_SQL = `UPDATE journal_outbox SET released_at=NOW(), release_id=$2, next_attempt_at=NOW(), updated_at=NOW()
@@ -54,28 +58,32 @@ function period(input) {
 
 async function waiting(salonId, p) {
   const rows = await db.any(PERIOD_SQL, [salonId, p.from, p.to]);
-  return { ids: rows.map(r => Number(r.id)), records: new Set(rows.map(r => r.grp)).size };
+  return {
+    ids: rows.map(r => Number(r.id)),
+    records: new Set(rows.filter(r => r.schedule_key == null).map(r => r.grp)).size,
+    schedules: new Set(rows.filter(r => r.schedule_key != null).map(r => r.schedule_key)).size,
+  };
 }
 
 async function summary(salonId) {
   const row = await db.oneOrNone(SUMMARY_SQL, [salonId]);
-  return { packages: row?.packages || 0, records: row?.records || 0, from: row?.from || null, to: row?.to || null };
+  return { packages: row?.packages || 0, records: row?.records || 0, schedules: row?.schedules || 0, from: row?.from || null, to: row?.to || null };
 }
 
 async function preview(salonId, input) {
   const p = period(input);
-  const { ids, records } = await waiting(salonId, p);
-  return { ...p, packages: ids.length, records };
+  const { ids, records, schedules } = await waiting(salonId, p);
+  return { ...p, packages: ids.length, records, schedules };
 }
 
 async function release(salonId, input) {
   const p = period(input);
-  const { ids, records } = await waiting(salonId, p);
-  if (!ids.length) return { ...p, releaseId: null, packages: 0, records: 0 };
+  const { ids, records, schedules } = await waiting(salonId, p);
+  if (!ids.length) return { ...p, releaseId: null, packages: 0, records: 0, schedules: 0 };
   const releaseId = crypto.randomUUID();
   const done = await db.any(RELEASE_SQL, [salonId, releaseId, ids]);
   await finOps.safely('journal-release', () => finOps.markOutbox(salonId, done.map(r => r.id), 'sending'));
-  return { ...p, releaseId, packages: done.length, records };
+  return { ...p, releaseId, packages: done.length, records, schedules };
 }
 
 async function progress(salonId, releaseId) {
@@ -86,7 +94,8 @@ async function progress(salonId, releaseId) {
   out.finished = out.queued === 0 && out.running === 0;
   out.failures = out.failed ? (await db.any(FAILED_SQL, [salonId, releaseId])).map(r => ({
     outboxId: Number(r.id),
-    recordId: r.yclients_record_id != null ? Number(r.yclients_record_id) : -Number(r.create_outbox_id || r.id),
+    recordId: r.overlay?.kind === 'schedule' ? null : (r.yclients_record_id != null ? Number(r.yclients_record_id) : -Number(r.create_outbox_id || r.id)),
+    ...(r.overlay?.kind === 'schedule' ? { kind: 'schedule', staffId: Number(r.overlay.staffId) } : {}),
     date: r.overlay?.date || String(r.overlay?.patch?.datetime || '').slice(0, 10) || null,
     clientName: String(r.overlay?.client?.name || ''),
     errorText: r.error_text || null,

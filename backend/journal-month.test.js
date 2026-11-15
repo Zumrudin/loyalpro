@@ -42,3 +42,19 @@ test('month reads the mirror and schedules of THIS salon only, without deleted r
   expect(staffSql).toMatch(/FROM journal_staff_schedule/); expect(staffSql).toMatch(/FILTER \(WHERE is_working\)/); expect(staffSql).toMatch(/count\(\*\)::int AS total/);
   expect(staffArgs).toEqual([7, '2026-11-01', '2026-11-30']);
 });
+
+test('month reflects locally removed and newly added working days', async () => {
+  const date='2030-04-01';
+  db.any.mockImplementation(async sql => {
+    if(sql.includes('FROM records')) return [];
+    if(sql.includes('FROM journal_outbox')) return [
+      {id:1,status:'queued',schedule_key:`5:${date}`,overlay:{kind:'schedule',staffId:5,date,slots:[]}},
+      {id:2,status:'queued',schedule_key:'6:2030-04-02',overlay:{kind:'schedule',staffId:6,date:'2030-04-02',slots:[{from:'09:00',to:'18:00'}]}}
+    ];
+    if(sql.includes('FILTER')) return [{date,n:1,total:1}];
+    return [{staff_id:5,date,is_working:true,slots:[{from:'09:00',to:'18:00'}]}];
+  });
+  const result=await month.month(3,'2030-04');
+  expect(result.days[0].workingStaff).toBe(0); expect(result.days[1].workingStaff).toBe(1);
+  expect(db.any.mock.calls.every(c=>c[1][0]===3)).toBe(true);
+});

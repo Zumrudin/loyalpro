@@ -1,6 +1,7 @@
 // Журнал записи: формы создания/переноса, поиск клиента, вопрос при закрытии. Общая глобальная область с journal.js.
 // What would be lost by closing now; null = nothing unsaved.
 function jrUnsavedKind() {
+  if (journal.scheduleForm) return 'schedule';
   if (journal.payment) return jrSessionPending() ? 'payment' : null;
   const apply = jrEl('jrApply'), applyReady = !!(jrEl('jrForm') && apply && !apply.disabled);
   if (journal.draft?.action === 'move') return applyReady || journal.session?.edit ? 'move' : null;
@@ -24,6 +25,7 @@ function jrAskClose(kind) {
   box.innerHTML = `<p><strong>${kind === 'create' || kind === 'create-incomplete' ? 'Запись ещё не создана.' : 'Есть несохранённые изменения.'}</strong> ${canSave ? 'Сохранить их перед закрытием?' : 'Заполнены не все поля — закрыть без сохранения?'}</p><div class="jr-actions">${canSave ? `<button type="button" class="btn btn-pri" id="jrCloseSave">${kind === 'create' ? 'Создать запись' : 'Сохранить'}</button>` : ''}<button type="button" class="btn btn-sec" id="jrCloseDiscard">Закрыть без сохранения</button><button type="button" class="btn btn-sec" id="jrCloseStay">Продолжить редактирование</button></div>`;
   if (canSave) jrEl('jrCloseSave').onclick = () => {
     jrHideCloseAsk();
+    if (kind === 'schedule') return jrEl('jrScheduleForm').requestSubmit();
     const form = jrEl('jrForm'), apply = jrEl('jrApply');
     if ((kind === 'move' || kind === 'create') && form && apply && !apply.disabled) { journal.payAfterCreate = null; return form.requestSubmit(); }
     return jrSave(jrSessionBody());
@@ -41,6 +43,7 @@ function jrClose(force) {
   jrHideCloseAsk();
   jrStopRecordWatch();
   journal.modalRequest++; journal.slotRequest++; journal.draft = null; journal.session = null; journal.payment = null; journal.formTouched = false;
+  journal.scheduleForm = null;
   jrEl('jrModal').close();
 }
 function jrCreateClientPanel() {

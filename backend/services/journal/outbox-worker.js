@@ -17,6 +17,7 @@ const reference = require('./reference-cache');
 const finOps = require('../finance-ops');
 const prefs = require('./record-prefs');
 const mirror = require('./mirror');
+const staffSchedule = require('./staff-schedule');
 const logger = require('../../logger').createLogger('JournalOutbox');
 
 const TICK_MS = 2000;
@@ -39,6 +40,9 @@ WHERE id = (
     AND NOT EXISTS (SELECT 1 FROM journal_outbox e WHERE e.salon_id=o.salon_id AND e.id<o.id
                     AND e.status IN ('queued','running') AND e.yclients_record_id IS NOT NULL
                     AND e.yclients_record_id=o.yclients_record_id)
+    AND NOT EXISTS (SELECT 1 FROM journal_outbox e WHERE e.salon_id=o.salon_id AND e.id<o.id
+                    AND e.status IN ('queued','running') AND e.schedule_key IS NOT NULL
+                    AND e.schedule_key=o.schedule_key)
   ORDER BY o.next_attempt_at, o.id LIMIT 1 FOR UPDATE SKIP LOCKED)
 RETURNING *`;
 const RECOVER_SQL = `UPDATE journal_outbox SET status='queued', updated_at=NOW() WHERE status='running'`;
@@ -138,6 +142,15 @@ async function resolveBonusRemoval(ctx, step, sale, transactionId) {
 async function runStep(ctx, step) {
   const { salonId, userId } = ctx;
   const p = step.params || {};
+  if (step.kind === 'schedule') {
+    let draft = storedDraft(step);
+    if (!draft) {
+      draft = { operationId: step.opId, staffId: p.staffId, date: p.date, slots: p.slots, baseVersion: p.baseVersion };
+      await storeDraft(ctx, step, draft);
+    }
+    const result = await staffSchedule.mutate(salonId, userId, draft);
+    return { schedule: result.schedule, ...(result.duplicate ? { duplicate: true } : {}) };
+  }
   if (step.kind === 'create') {
     const { operationId: _o, action: _a, ...params } = p;
     // api_id rides OUTSIDE the draft: the draft's fingerprint must stay the same
@@ -229,6 +242,11 @@ async function runStep(ctx, step) {
 // occupied window. Best effort — never changes the step's outcome.
 const MIRRORED_KINDS = new Set(['create', 'move', 'edit', 'confirm', 'cancel', 'delete']);
 async function refreshMirror(ctx, step) {
+  if (step.kind === 'schedule') {
+    try { await reference.storeSchedule(ctx.salonId, step.result.schedule); }
+    catch (e) { logger.warn(`outbox ${ctx.outboxId} salon ${ctx.salonId} step schedule: cache not refreshed ${describe(e)}`); }
+    return;
+  }
   if (!MIRRORED_KINDS.has(step.kind) || step.result?.prefsOnly || !ctx.recordId) return;
   try {
     if (step.kind === 'delete') await mirror.markDeleted(ctx.salon, ctx.recordId);
@@ -253,6 +271,7 @@ async function processPackage(row) {
   for (let i = 0; i < steps.length; i++) {
     const step = steps[i];
     if (step.state === 'done') {
+      if (step.kind === 'schedule') await refreshMirror(ctx, step);
       if (step.kind === 'create' && Number(step.result?.recordId) > 0) {
         ctx.recordId = Number(step.result.recordId);
         await db.query(ADOPT_SQL, [row.id, ctx.recordId]);

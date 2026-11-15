@@ -11,6 +11,9 @@ const month = require('../services/journal/month');
 const history = require('../services/journal/history');
 const clientSummary = require('../services/journal/client-summary');
 const visitHistory = require('../services/journal/visit-history');
+const clientLoyalty = require('../services/journal/client-loyalty');
+const staffSchedule = require('../services/journal/staff-schedule');
+const daySummary = require('../services/journal/day-summary');
 router.use(auth, requireRole('owner', 'admin'));
 router.use((req, res, next) => { res.set('Cache-Control', 'no-store'); next(); });
 const handle = fn => async (req, res) => {
@@ -38,6 +41,12 @@ router.post('/sessions/validate', handle(async req => {
 }));
 // Saved locally only: YClients is updated by «Отправить в YClients» (dispatch).
 router.post('/sessions', handle(req => sessions.enqueue(req.user.salonId, req.user.userId || req.user.id, sessions.parseSession(req.body))));
+// Saved locally only; explicit dispatch executes the stored full-day snapshot.
+router.get('/staff-schedule/changes', handle(req => staffSchedule.changes(req.user.salonId)));
+for (const action of ['retry', 'dismiss']) router.post('/staff-schedule/:id/' + action, handle(req =>
+  staffSchedule.recover(req.user.salonId, m.positiveId(req.params.id), action)));
+router.post('/staff-schedule', requireRole('owner', 'admin'), handle(req => staffSchedule.enqueue(
+  req.user.salonId, req.user.userId || req.user.id, staffSchedule.parse(req.body))));
 router.get('/dispatch/summary', handle(req => dispatch.summary(req.user.salonId)));
 router.get('/dispatch/preview', handle(req => dispatch.preview(req.user.salonId, req.query)));
 router.post('/dispatch', handle(async req => {
@@ -49,12 +58,14 @@ router.get('/dispatch/:id', handle(req => dispatch.progress(req.user.salonId, re
 router.post('/sessions/:id/retry', handle(req => sessions.retry(req.user.salonId, m.positiveId(req.params.id))));
 router.post('/sessions/:id/dismiss', handle(req => sessions.dismiss(req.user.salonId, m.positiveId(req.params.id))));
 router.get('/day', handle(req => service.day(req.user.salonId, m.dateKey(req.query.date))));
+router.get('/day-summary', handle(req => daySummary.load(req.user.salonId, m.dateKey(req.query.date))));
 router.get('/week', handle(req => service.week(req.user.salonId, m.dateKey(req.query.date), req.query.staffId ? m.positiveId(req.query.staffId) : null)));
 router.get('/month', handle(req => month.month(req.user.salonId, req.query.month)));
 router.get('/records/:id', handle(req => service.detail(req.user.salonId, m.nonZeroId(req.params.id))));
 router.get('/records/:id/history', handle(req => history.load(req.user.salonId, m.nonZeroId(req.params.id))));
 router.get('/clients/summary', handle(req => clientSummary.summary(req.user.salonId, req.query)));
 router.get('/clients/visits', handle(req => visitHistory.load(req.user.salonId, req.query)));
+router.get('/clients/loyalty', handle(req => clientLoyalty.load(req.user.salonId, req.query)));
 router.get('/slots', handle(req => {
   const draft = { date: m.dateKey(req.query.date), staffId: m.positiveId(req.query.staffId) };
   if (req.query.recordId) draft.recordId = m.positiveId(req.query.recordId);

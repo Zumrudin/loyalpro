@@ -1,16 +1,16 @@
 // Журнал записи: сетка дня и недели. Общая глобальная область с journal.js (префикс jr).
 // Minutes a visit occupies on the grid: its length plus the technical break.
 const jrOccupied = r => (r.duration > 0 ? r.duration : 15) + (Number(r.technicalBreak) > 0 ? Number(r.technicalBreak) / 60 : 0);
-function jrCellState(staff, minute, date, records, now = Date.now()) {
+function jrCellState(staff, minute, date, records, now = Date.now(), cellMinutes = jrGridStep()) {
   const ranges = staff.workRanges || [];
-  if (!ranges.some(r => minute >= r.start && minute + 15 <= r.end)) {
+  if (!ranges.some(r => minute >= r.start && minute + cellMinutes <= r.end)) {
     // Between two intervals of one shift = the master's break, not «off» (spec §3.2).
-    return ranges.some(r => r.end <= minute) && ranges.some(r => r.start >= minute + 15) ? 'break' : 'off';
+    return ranges.some(r => r.end <= minute) && ranges.some(r => r.start >= minute + cellMinutes) ? 'break' : 'off';
   }
   if (Date.parse(date + 'T00:00:00+03:00') + minute * 60000 <= now) return 'past';
   // Use ALL appointments, including those hidden by a search filter.
   if (records.some(r => r.staffId === staff.id && !r.deleted && r.time &&
-    minute < jrMinutes(r.time) + jrOccupied(r) && minute + 15 > jrMinutes(r.time))) return 'busy';
+    minute < jrMinutes(r.time) + jrOccupied(r) && minute + cellMinutes > jrMinutes(r.time))) return 'busy';
   return 'free';
 }
 function jrGridCreate(staffId, time, date) {
@@ -80,9 +80,10 @@ function jrBounds(records, ranges) {
 function jrColumnHtml(s, date, records, allRecords, start, end, now) {
   let cells = '', prev = null;
   const mobile = jrIsMobile();
-  for (let t = start; t < end; t += 15) {
-    const state = jrCellState(s, t, date, allRecords, now), time = jrTimeLabel(t);
-    const position = `top:${(t - start) * JR_PX_PER_MIN}px;height:${15 * JR_PX_PER_MIN}px`;
+  const step = jrGridStep(), pxPerMin = jrPxPerMin();
+  for (let t = start; t < end; t += step) {
+    const state = jrCellState(s, t, date, allRecords, now, step), time = jrTimeLabel(t);
+    const position = `top:${(t - start) * pxPerMin}px;height:${step * pxPerMin}px`;
     const classes = `jr-cell jr-cell-${state}${t % 60 === 0 ? ' jr-cell-hour' : ''}`;
     cells += state === 'free'
       ? `<button type="button" class="${classes}" data-staff="${s.id}" data-date="${date}" data-time="${time}" style="${position}" aria-label="${jrEscape(time + ' — новая запись, ' + (s.name || ''))}"><span>${time} Новый сеанс</span></button>`
@@ -97,14 +98,15 @@ function jrColumnHtml(s, date, records, allRecords, start, end, now) {
     const title = r.time + ' · ' + r.clientName + ' · ' + r.services.map(x => x.title).join(', ') + (failed ? ' · Ошибка отправки: ' + (r.sync.errorText || 'причина неизвестна') : syncing ? ' · идёт отправка' : '');
     const pos = `left:calc(${r.lane * 100 / r.lanes}% + 3px);width:calc(${100 / r.lanes}% - 6px)`;
     const pause = Number(r.technicalBreak) > 0 && !r.continued ? Math.min(Number(r.technicalBreak) / 60, end - r.start - length) : 0;
-    const band = pause > 0 ? `<div class="jr-break-band" style="top:${(r.start + length - start) * JR_PX_PER_MIN}px;height:${Math.max(4, pause * JR_PX_PER_MIN - 2)}px;${pos}" title="Технический перерыв ${Math.round(pause)} мин" aria-hidden="true">⏸</div>` : '';
-    return `<button type="button" class="jr-visit jr-status-${r.attendance}${r.paidFull ? ' jr-paid-full' : ''}${length < 30 ? ' jr-visit-short' : ''}${syncing ? ' jr-visit-syncing' : ''}${failed ? ' jr-visit-failed' : ''}${drag ? ' jr-draggable' : ''}" data-record="${r.id}" style="${jrVisitStyle(r)}top:${(r.start - start) * JR_PX_PER_MIN}px;height:${Math.max(6, length * JR_PX_PER_MIN - 2)}px;${pos}" title="${jrEscape(title)}" aria-label="${jrEscape(r.time + ' ' + r.clientName + ', ' + jrStatus(r) + (failed ? ', ошибка отправки' : syncing ? ', идёт отправка' : ''))}"><b>${syncing ? '⏳ ' : ''}${jrEscape(r.time)} · ${jrEscape(r.clientName)}${jrVisitMarks(r)}</b><span>${jrEscape(r.services.map(x => x.title).join(', ') || 'Без услуг')}</span><small>${r.continued ? 'Продолжение · ' : ''}${jrEscape(jrStatus(r))}${r.paid ? ' · оплачено' : ''}</small>${failed ? '<small class="jr-sync-failed-note">Ошибка отправки</small>' : ''}${drag ? '<i class="jr-resize" data-resize="1" aria-hidden="true"></i>' : ''}</button>${band}`;
+    const band = pause > 0 ? `<div class="jr-break-band" style="top:${(r.start + length - start) * pxPerMin}px;height:${Math.max(4, pause * pxPerMin - 2)}px;${pos}" title="Технический перерыв ${Math.round(pause)} мин" aria-hidden="true">⏸</div>` : '';
+    return `<button type="button" class="jr-visit jr-status-${r.attendance}${r.paidFull ? ' jr-paid-full' : ''}${length < 30 ? ' jr-visit-short' : ''}${syncing ? ' jr-visit-syncing' : ''}${failed ? ' jr-visit-failed' : ''}${drag ? ' jr-draggable' : ''}" data-record="${r.id}" style="${jrVisitStyle(r)}top:${(r.start - start) * pxPerMin}px;height:${Math.max(6, length * pxPerMin - 2)}px;${pos}" title="${jrEscape(title)}" aria-label="${jrEscape(r.time + ' ' + r.clientName + ', ' + jrStatus(r) + (failed ? ', ошибка отправки' : syncing ? ', идёт отправка' : ''))}"><b>${syncing ? '⏳ ' : ''}${jrEscape(r.time)} · ${jrEscape(r.clientName)}${jrVisitMarks(r)}</b><span>${jrEscape(r.services.map(x => x.title).join(', ') || 'Без услуг')}</span><small>${r.continued ? 'Продолжение · ' : ''}${jrEscape(jrStatus(r))}${r.paid ? ' · оплачено' : ''}</small>${failed ? '<small class="jr-sync-failed-note">Ошибка отправки</small>' : ''}${drag ? '<i class="jr-resize" data-resize="1" aria-hidden="true"></i>' : ''}</button>${band}`;
   }).join('');
   return `<div class="jr-column" data-staff="${s.id}" data-date="${date}">${cells}${visits}</div>`;
 }
 function jrHourLabels(start, end) {
   let labels = '';
-  for (let t = start; t < end; t += 15) labels += `<span class="${t % 60 ? 'jr-quarter' : 'jr-hour'}" style="top:${(t - start) * JR_PX_PER_MIN}px">${t % 60 ? String(t % 60).padStart(2, '0') : jrTimeLabel(t)}</span>`;
+  const step = jrGridStep(), pxPerMin = jrPxPerMin();
+  for (let t = start; t < end; t += step) labels += `<span class="${t % 60 ? 'jr-quarter' : 'jr-hour'}" style="top:${(t - start) * pxPerMin}px">${t % 60 ? String(t % 60).padStart(2, '0') : jrTimeLabel(t)}</span>`;
   return labels;
 }
 function jrBindGrid(grid) {
@@ -114,6 +116,7 @@ function jrBindGrid(grid) {
     el.addEventListener('pointerdown', ev => jrDragBegin(el, ev));
   });
   grid.querySelectorAll('[data-time]').forEach(el => el.addEventListener('click', () => jrGridCreate(Number(el.dataset.staff), el.dataset.time, el.dataset.date)));
+  jrBindStaffMenus(grid);
 }
 function jrRender() {
   if (!journal.data) return;
@@ -129,13 +132,14 @@ function jrRender() {
   jrRenderChips(mobile && staff.length > 0, staff[0]?.id);
   const query = jrEl('jrSearch').value.trim().toLowerCase();
   const allRecords = journal.data.records;
-  const records = allRecords.filter(r => staff.some(s => s.id === r.staffId) && (!query || [r.clientName, ...r.services.map(s => s.title)].join(' ').toLowerCase().includes(query)));
+  const selectedRecords = allRecords.filter(r => staff.some(s => s.id === r.staffId));
+  const records = selectedRecords.filter(r => (typeof jrRecordVisible !== 'function' || jrRecordVisible(r)) && (!query || [r.clientName, ...r.services.map(s => s.title)].join(' ').toLowerCase().includes(query)));
   const grid = jrEl('jrGrid');
   if (!staff.length) { grid.innerHTML = `<p class="jr-empty">${jrEl('jrWorkingOnly').checked ? 'На выбранную дату нет работающих специалистов. Снимите фильтр «Только работающие», чтобы увидеть остальных.' : 'Специалистов пока нет.'}</p>`; return; }
-  const { start, end } = jrBounds(records, staff.flatMap(s => s.workRanges || []));
-  const height = (end - start) * JR_PX_PER_MIN;
+  const { start, end } = jrBounds(selectedRecords, staff.flatMap(s => s.workRanges || []));
+  const height = (end - start) * jrPxPerMin();
   const now = Date.now();
-  grid.innerHTML = `<div class="jr-calendar" data-start="${start}" style="--jr-columns:${staff.length};--jr-height:${height}px"><div class="jr-corner">Время</div>${staff.map(s => `<div class="jr-heading">${jrEscape(s.name)}<small>${s.working ? (s.workRanges || []).map(r => jrTimeLabel(r.start) + '–' + jrTimeLabel(r.end)).join(', ') || 'Рабочий день' : 'Выходной'} · ${records.filter(r => r.staffId === s.id).length} записей</small></div>`).join('')}<div class="jr-hours">${jrHourLabels(start, end)}</div>${staff.map(s => jrColumnHtml(s, journal.data.date, records.filter(r => r.staffId === s.id), allRecords, start, end, now)).join('')}</div>`;
+  grid.innerHTML = `<div class="jr-calendar" data-start="${start}" style="--jr-columns:${staff.length};--jr-height:${height}px"><div class="jr-corner">Время</div>${staff.map(s => `<div class="jr-heading jr-staff-heading">${jrStaffMenuButton(s, journal.data.date, s.name)}<small>${s.working ? (s.workRanges || []).map(r => jrTimeLabel(r.start) + '–' + jrTimeLabel(r.end)).join(', ') || 'Рабочий день' : 'Выходной'} · ${records.filter(r => r.staffId === s.id).length} записей</small></div>`).join('')}<div class="jr-hours">${jrHourLabels(start, end)}</div>${staff.map(s => jrColumnHtml(s, journal.data.date, records.filter(r => r.staffId === s.id), allRecords, start, end, now)).join('')}</div>`;
   jrBindGrid(grid);
   if (!records.length && query) grid.insertAdjacentHTML('afterbegin', '<p class="jr-empty">Записей по запросу не найдено. Занятые интервалы остаются недоступны.</p>');
 }
@@ -145,11 +149,11 @@ function jrRenderWeek() {
   jrRenderChips(false);
   if (!w?.staff) { grid.innerHTML = '<p class="jr-empty">Специалистов пока нет.</p>'; return; }
   const query = jrEl('jrSearch').value.trim().toLowerCase();
-  const match = r => !query || [r.clientName, ...(r.services || []).map(s => s.title)].join(' ').toLowerCase().includes(query);
+  const match = r => (typeof jrRecordVisible !== 'function' || jrRecordVisible(r)) && (!query || [r.clientName, ...(r.services || []).map(s => s.title)].join(' ').toLowerCase().includes(query));
   const { start, end } = jrBounds(w.days.flatMap(d => d.records), w.days.flatMap(d => d.workRanges || []));
   const now = Date.now();
   const column = d => ({ id: w.staff.id, name: w.staff.name, workRanges: d.workRanges || [] });
-  grid.innerHTML = `<div class="jr-calendar jr-week" data-start="${start}" style="--jr-columns:7;--jr-height:${(end - start) * JR_PX_PER_MIN}px"><div class="jr-corner">${jrEscape(w.staff.name)}</div>${w.days.map((d, i) => `<div class="jr-heading${d.date === journal.data?.date ? ' is-selected' : ''}">${JR_WEEKDAYS[i]} ${d.date.slice(8, 10)}.${d.date.slice(5, 7)}<small>${d.working ? (d.workRanges || []).map(r => jrTimeLabel(r.start) + '–' + jrTimeLabel(r.end)).join(', ') || 'Рабочий день' : 'Выходной'} · ${d.records.length} записей</small></div>`).join('')}<div class="jr-hours">${jrHourLabels(start, end)}</div>${w.days.map(d => jrColumnHtml(column(d), d.date, d.records.filter(match), d.records, start, end, now)).join('')}</div>`;
+  grid.innerHTML = `<div class="jr-calendar jr-week" data-start="${start}" style="--jr-columns:7;--jr-height:${(end - start) * jrPxPerMin()}px"><div class="jr-corner">${jrEscape(w.staff.name)}</div>${w.days.map((d, i) => `<div class="jr-heading jr-staff-heading${d.date === journal.data?.date ? ' is-selected' : ''}">${jrStaffMenuButton({ ...w.staff, working: d.working, scheduleSync: d.scheduleSync }, d.date, `${JR_WEEKDAYS[i]} ${d.date.slice(8, 10)}.${d.date.slice(5, 7)}`)}<small>${d.working ? (d.workRanges || []).map(r => jrTimeLabel(r.start) + '–' + jrTimeLabel(r.end)).join(', ') || 'Рабочий день' : 'Выходной'} · ${d.records.filter(match).length} записей</small></div>`).join('')}<div class="jr-hours">${jrHourLabels(start, end)}</div>${w.days.map(d => jrColumnHtml(column(d), d.date, d.records.filter(match), d.records, start, end, now)).join('')}</div>`;
   jrBindGrid(grid);
 }
 function jrRenderChips(mobile, currentId) {
@@ -254,7 +258,7 @@ function jrDragStart(ev, recordId, mode, date) {
 const jrDragLength = r => (r.duration > 0 ? r.duration : 15);
 function jrDragTarget(ev) {
   const d = journal.drag, r = d.record;
-  const delta = (ev.clientY - d.y) / JR_PX_PER_MIN;
+  const delta = (ev.clientY - d.y) / jrPxPerMin();
   if (d.mode === 'resize') return { kind: 'resize', duration: Math.min(720, Math.max(5, jrSnap(jrDragLength(r) + delta))) };
   const el = typeof document.elementFromPoint === 'function' ? document.elementFromPoint(ev.clientX, ev.clientY) : null;
   const col = el && typeof el.closest === 'function' ? el.closest('.jr-column') : null;
@@ -270,7 +274,7 @@ function jrDragMove(ev) {
   d.moved = true;
   const target = jrDragTarget(ev);
   if (d.el?.style) {
-    if (d.mode === 'resize' && target) d.el.style.height = Math.max(6, target.duration * JR_PX_PER_MIN - 2) + 'px';
+    if (d.mode === 'resize' && target) d.el.style.height = Math.max(6, target.duration * jrPxPerMin() - 2) + 'px';
     else if (d.mode === 'move') d.el.style.transform = `translate(${ev.clientX - d.x}px, ${ev.clientY - d.y}px)`;
   }
   return target;
@@ -287,6 +291,29 @@ function jrDragCancel() {
   journal.drag = null;
   jrDragRestore(d);
   jrRender();
+}
+// Change only visual density. Booking duration and drag snapping stay in real minutes.
+function jrSetGridStep(value) {
+  const step = Number(value);
+  if (!JR_GRID_STEPS.includes(step) || step === jrGridStep()) return false;
+  const grid = jrEl('jrGrid'), oldPxPerMin = jrPxPerMin();
+  const oldStart = Number(grid?.querySelector?.('.jr-calendar')?.dataset?.start);
+  const anchorMinute = Number.isFinite(oldStart) ? oldStart + (Number(grid.scrollTop) || 0) / oldPxPerMin : null;
+  if (journal.drag) {
+    if (typeof journal.dragOff === 'function') journal.dragOff();
+    const drag = journal.drag;
+    journal.drag = null;
+    jrDragRestore(drag);
+  }
+  journal.gridStep = step;
+  try { if (typeof localStorage !== 'undefined') localStorage.setItem(JR_GRID_STEP_KEY, String(step)); } catch (_) {}
+  jrRender();
+  if (anchorMinute != null) {
+    const newStart = Number(grid?.querySelector?.('.jr-calendar')?.dataset?.start);
+    if (Number.isFinite(newStart)) grid.scrollTop = Math.max(0, (anchorMinute - newStart) * jrPxPerMin());
+  }
+  if (typeof jrToolbarSync === 'function') jrToolbarSync();
+  return true;
 }
 async function jrDragEnd(ev) {
   const d = journal.drag;

@@ -1,12 +1,20 @@
 // Staff journal. Upstream data is escaped; no patient data is stored in browser storage.
-const journal = { data: null, week: null, view: 'day', request: 0, modalRequest: 0, slotRequest: 0, busy: false, draft: null, slots: [], preferredTime: null };
+const JR_GRID_CELL_PX = 24, JR_GRID_STEPS = [5, 10, 15], JR_GRID_STEP_KEY = 'loyalpro.journal.gridStep';
+function jrStoredGridStep() {
+  try {
+    const value = typeof localStorage !== 'undefined' ? Number(localStorage.getItem(JR_GRID_STEP_KEY)) : NaN;
+    return JR_GRID_STEPS.includes(value) ? value : 15;
+  } catch (_) { return 15; }
+}
+const journal = { data: null, week: null, view: 'day', request: 0, modalRequest: 0, slotRequest: 0, busy: false, draft: null, slots: [], preferredTime: null, gridStep: jrStoredGridStep() };
 // Phone layout threshold: the same number is in journal.css (@media (max-width:700px)) — change both together.
 const JR_MOBILE_MAX = 700;
 const jrIsMobile = () => typeof window !== 'undefined' && typeof window.matchMedia === 'function' && window.matchMedia(`(max-width: ${JR_MOBILE_MAX}px)`).matches;
 const jrEl = id => document.getElementById(id);
 const jrEscape = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const jrToday = () => new Date(Date.now() + 3 * 3600000).toISOString().slice(0, 10);
-const JR_PX_PER_MIN = 1.6;
+const jrGridStep = () => JR_GRID_STEPS.includes(Number(journal.gridStep)) ? Number(journal.gridStep) : 15;
+const jrPxPerMin = () => JR_GRID_CELL_PX / jrGridStep();
 const jrMinutes = time => Number(time.slice(0, 2)) * 60 + Number(time.slice(3, 5));
 const jrTimeLabel = minute => `${String(Math.floor(minute / 60)).padStart(2, '0')}:${String(minute % 60).padStart(2, '0')}`;
 const jrStatus = r => r.deleted ? 'Удалена' : ({ '-1': 'Не пришёл / отменена', 0: 'Ожидание', 1: 'Пришёл', 2: 'Подтверждена' }[r.attendance] || 'Ожидание');
@@ -29,9 +37,12 @@ async function jrApi(path, body) {
 async function loadJournal(opts = {}) {
   const silent = !!opts?.silent;
   if (!jrEl('jrDate').value) jrEl('jrDate').value = jrToday();
+  if (typeof jrToolbarSync === 'function') jrToolbarSync();
   jrEl('jrReview').hidden = typeof ME === 'undefined' || ME?.role !== 'owner';
   const date = jrEl('jrDate').value;
   const request = ++journal.request;
+  // Summary has its own stale-response guard and must not delay the grid.
+  if (typeof jrSummaryLoad === 'function') void jrSummaryLoad(date);
   clearTimeout(journal.pollTimer); journal.pollTimer = null;
   if (!silent) {
     jrEl('jrState').textContent = 'Загружаем расписание…';
@@ -39,6 +50,7 @@ async function loadJournal(opts = {}) {
     jrEl('jrNew').disabled = true;
     journal.data = null;
   }
+  if (typeof jrToolbarSummarySync === 'function') jrToolbarSummarySync();
   try {
     // Week = one master x 7 days; the day is still loaded: forms need its services/staff.
     if (jrIsMobile() && journal.view !== 'day') { journal.view = 'day'; jrSyncViewButtons(); }
@@ -51,7 +63,9 @@ async function loadJournal(opts = {}) {
     journal.week = week;
     const grid = jrEl('jrGrid'), scroll = [grid.scrollTop, grid.scrollLeft];
     journal.data = data;
+    if (typeof jrToolbarSummarySync === 'function') jrToolbarSummarySync();
     jrUpdateStaffFilter();
+    if (typeof jrToolbarSync === 'function') jrToolbarSync();
     jrEl('jrState').textContent = jrFreshnessText(data);
     jrEl('jrNew').disabled = !data.staff.length;
     jrUpdateDispatchButton(data.unsent);
@@ -74,7 +88,8 @@ const jrUnsent = r => r?.sync?.status === 'queued' && r.sync.released === false;
 function jrSchedulePoll() {
   clearTimeout(journal.pollTimer); journal.pollTimer = null;
   const onPage = () => document.body?.dataset?.page === 'journal';
-  if (!onPage() || !(journal.view === 'week' && journal.week ? journal.week.days.flatMap(d => d.records || []) : (journal.data?.records || [])).some(jrSyncing)) return;
+  const scheduleSending = (journal.data?.staff || []).some(s => jrSyncing({ sync: s.scheduleSync })) || (journal.week?.days || []).some(d => jrSyncing({ sync: d.scheduleSync }));
+  if (!onPage() || (!scheduleSending && !(journal.view === 'week' && journal.week ? journal.week.days.flatMap(d => d.records || []) : (journal.data?.records || [])).some(jrSyncing))) return;
   journal.pollTimer = setTimeout(() => {
     journal.pollTimer = null;
     if (onPage() && !document.hidden) loadJournal({ silent: true });
@@ -82,7 +97,7 @@ function jrSchedulePoll() {
 }
 function jrStaffList() {
   // Do not resurrect administrators/off-day staff from existing appointments.
-  return (journal.data?.staff || []).filter(s => !jrEl('jrWorkingOnly').checked || s.working === true);
+  return (journal.data?.staff || []).filter(s => !jrEl('jrWorkingOnly').checked || s.working === true || !!s.scheduleSync);
 }
 function jrUpdateStaffFilter() {
   const week = journal.view === 'week' ? journal.week : null;
@@ -136,6 +151,22 @@ function jrIcon(name) {
     wallet: '<rect x="3" y="5" width="18" height="15" rx="2"/><path d="M3 8V4a1 1 0 011-1h14M16 11h5v5h-5z"/>',
     chat: '<path d="M21 11a9 9 0 01-9 9H4l-3 3V11a10 10 0 0120 0zM6 9h10M6 13h7"/>',
     move: '<path d="M12 2v20M2 12h20M8 6l4-4 4 4M8 18l4 4 4-4M6 8l-4 4 4 4M18 8l4 4-4 4"/>',
+    pin: '<path d="M15 3l6 6-3 1-4 4 1 5-2 2-4-4-5 5M9 10l5 5M14 4l6 6"/>',
+    minus: '<path d="M5 12h14"/>',
+    pencil: '<path d="M16 3l5 5L8 21H3v-5zM13 6l5 5"/>',
+    search: '<circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/>',
+    card: '<rect x="3" y="6" width="18" height="13" rx="2"/><path d="M3 10h18M7 15h4"/>',
+    cash: '<rect x="3" y="6" width="18" height="12" rx="2"/><circle cx="12" cy="12" r="2.5"/><path d="M6 9v.01M18 15v.01"/>',
+    chevron: '<path d="M6 9l6 6 6-6"/>',
+    back: '<path d="M15 6l-6 6 6 6"/>',
+    dots: '<path d="M5 12h.01M12 12h.01M19 12h.01" stroke-width="3"/>',
+    copy: '<rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V5a1 1 0 00-1-1H5a1 1 0 00-1 1v10a1 1 0 001 1h3"/>',
+    sliders: '<path d="M4 7h10M18 7h2M4 17h4M12 17h8M14 4v6M8 14v6"/>',
+    folder: '<path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z"/>',
+    medcard: '<rect x="5" y="4" width="14" height="17" rx="2"/><path d="M9 4V3h6v1M12 9v6M9 12h6"/>',
+    receipt: '<path d="M5 3h14v18l-3-2-2 2-2-2-2 2-2-2-3 2zM9 8h6M9 12h6"/>',
+    loyalty: '<rect x="4" y="5" width="16" height="14" rx="2"/><path d="M9 10l1.5 1.5L15 8M8 16h8"/>',
+    egisz: '<path d="M12 4v16M4 12h16M8 4h8v4M8 20h8v-4"/>',
   };
   return `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths[name] || paths.file}</svg>`;
 }

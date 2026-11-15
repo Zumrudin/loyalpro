@@ -9,7 +9,8 @@ async function runMigrations(client) {
   // Expand only once; no data rewrite, existing actions remain valid.
   await client.query(`DO $$ BEGIN
     IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='journal_operations'::regclass AND conname='journal_operations_action_v2_check')
-      AND NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='journal_operations'::regclass AND conname='journal_operations_action_v3_check') THEN
+      AND NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='journal_operations'::regclass AND conname='journal_operations_action_v3_check')
+      AND NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='journal_operations'::regclass AND conname='journal_operations_action_v4_check') THEN
       ALTER TABLE journal_operations DROP CONSTRAINT journal_operations_action_check,
         ADD CONSTRAINT journal_operations_action_v2_check CHECK (action IN ('create','move','cancel','confirm','edit'));
     END IF;
@@ -17,10 +18,20 @@ async function runMigrations(client) {
   // Journal record deletion (12.11.2026): the outbox «delete» step goes through
   // mutate(), which audits it in journal_operations. Expand only once.
   await client.query(`DO $$ BEGIN
-    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='journal_operations'::regclass AND conname='journal_operations_action_v3_check') THEN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='journal_operations'::regclass AND conname='journal_operations_action_v3_check')
+      AND NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='journal_operations'::regclass AND conname='journal_operations_action_v4_check') THEN
       ALTER TABLE journal_operations DROP CONSTRAINT IF EXISTS journal_operations_action_v2_check,
         DROP CONSTRAINT IF EXISTS journal_operations_action_check,
         ADD CONSTRAINT journal_operations_action_v3_check CHECK (action IN ('create','move','cancel','confirm','edit','delete'));
+    END IF;
+  END $$`);
+  // Employee schedule changes (14.11.2026): additive action, no data rewrite.
+  await client.query(`DO $$ BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='journal_operations'::regclass AND conname='journal_operations_action_v4_check') THEN
+      ALTER TABLE journal_operations DROP CONSTRAINT IF EXISTS journal_operations_action_v3_check,
+        DROP CONSTRAINT IF EXISTS journal_operations_action_v2_check,
+        DROP CONSTRAINT IF EXISTS journal_operations_action_check,
+        ADD CONSTRAINT journal_operations_action_v4_check CHECK (action IN ('create','move','cancel','confirm','edit','delete','schedule'));
     END IF;
   END $$`);
   await client.query(SERVICE_CATALOG_DDL);
@@ -2812,6 +2823,8 @@ CREATE INDEX IF NOT EXISTS journal_outbox_open ON journal_outbox(salon_id,status
 ALTER TABLE journal_outbox ADD COLUMN IF NOT EXISTS released_at TIMESTAMPTZ;
 ALTER TABLE journal_outbox ADD COLUMN IF NOT EXISTS release_id UUID;
 ALTER TABLE journal_outbox ADD COLUMN IF NOT EXISTS create_outbox_id BIGINT;
+ALTER TABLE journal_outbox ADD COLUMN IF NOT EXISTS schedule_key TEXT;
+CREATE INDEX IF NOT EXISTS journal_outbox_schedule ON journal_outbox(salon_id,schedule_key) WHERE schedule_key IS NOT NULL;
 CREATE INDEX IF NOT EXISTS journal_outbox_release ON journal_outbox(salon_id,release_id) WHERE release_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS journal_outbox_child ON journal_outbox(create_outbox_id) WHERE create_outbox_id IS NOT NULL;
 -- Packages already started or finished before manual dispatch keep going.

@@ -190,7 +190,7 @@ function isAdministrator(staff) {
 }
 function staffSchedule(schedule, date) {
   const day = schedule.find(d => String(d.date).slice(0, 10) === date);
-  return { working: !!day && [true, 1, '1'].includes(day.is_working), workRanges: workRanges(schedule, date) };
+  return { working: !!day && [true, 1, '1'].includes(day.is_working), workRanges: workRanges(schedule, date), ...(day?._sync ? { scheduleSync: day._sync } : {}) };
 }
 function workRanges(schedule, date) {
   const day = schedule.find(d => String(d.date).slice(0, 10) === date);

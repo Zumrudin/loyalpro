@@ -5,10 +5,11 @@ jest.mock('./logger', () => {
   const log = { info: jest.fn(), warn: jest.fn(), error: jest.fn() };
   return { createLogger: () => log, __log: log };
 });
+jest.mock('./services/journal/staff-schedule', () => ({ mutate: jest.fn() }));
 jest.mock('./services/journal/index', () => ({ mutate: jest.fn() }));
 jest.mock('./services/journal/payments', () => ({ context: jest.fn(), parse: jest.fn(b => ({ ...b })), pay: jest.fn() }));
 jest.mock('./services/journal/yclients', () => ({ getRecord: jest.fn() }));
-jest.mock('./services/journal/reference-cache', () => ({ learnBonusPercent: jest.fn(async () => {}) }));
+jest.mock('./services/journal/reference-cache', () => ({ learnBonusPercent: jest.fn(async () => {}), storeSchedule: jest.fn(async () => {}) }));
 jest.mock('./services/notifications/enroll', () => ({ cancelPending: jest.fn(async () => 1) }));
 jest.mock('./services/journal/mirror', () => ({ storeLive: jest.fn(async () => true), markDeleted: jest.fn(async () => true) }));
 
@@ -545,4 +546,31 @@ describe('manual dispatch (10.11.2026)', () => {
     expect(writes.find(x => x.sql === w.ADOPT_SQL).args).toEqual([11, 500]);
     expect(index.mutate).not.toHaveBeenCalled();
   });
+});
+
+describe('staff schedule worker', () => {
+  const schedule = require('./services/journal/staff-schedule');
+  const params = { staffId:5,date:'2030-04-01',slots:[{from:'09:00',to:'18:00'}],baseVersion:'v' };
+  test('schedule step stores draft before mutation and updates cache without record writes', async () => {
+    schedule.mutate.mockResolvedValue({schedule:params});
+    expect(await w.processPackage(pkg([step('schedule',1,params)],{schedule_key:'5:2030-04-01'}))).toBe('done');
+    expect(schedule.mutate).toHaveBeenCalledWith(3,9,expect.objectContaining({...params,operationId:OP(1)}));
+    expect(reference.storeSchedule).toHaveBeenCalledWith(3,params);
+    expect(index.mutate).not.toHaveBeenCalled(); expect(payments.pay).not.toHaveBeenCalled();
+    expect(w.LEASE_SQL).toContain('e.schedule_key=o.schedule_key');
+  });
+  test('uncertain schedule is failed and never retried automatically', async () => {
+    schedule.mutate.mockRejectedValue(new m.JournalError(409,'Check result','uncertain'));
+    expect(await w.processPackage(pkg([step('schedule',1,params)]))).toBe('failed');
+    expect(reference.storeSchedule).not.toHaveBeenCalled();
+    expect(stepsOf(lastWrite(/status='failed'/))[0].state).toBe('uncertain');
+  });
+});
+
+test('resuming a completed schedule step repairs cache without repeating PUT', async () => {
+  const schedule = require('./services/journal/staff-schedule');
+  const target = { staffId:5, date:'2030-04-01', slots:[] };
+  expect(await w.processPackage(pkg([step('schedule',1,{}, {state:'done',result:{schedule:target}})]))).toBe('done');
+  expect(reference.storeSchedule).toHaveBeenCalledWith(3,target);
+  expect(schedule.mutate).not.toHaveBeenCalled();
 });

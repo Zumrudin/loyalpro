@@ -26,7 +26,8 @@ beforeEach(() => { jest.clearAllMocks(); cs._cache.clear(); config.BONUS_LEDGER_
 
 test('summary by phone: card, counts from the mirror, last visits, abonements', async () => {
   const out = await cs.summary(3, { phone: '8 920 025-55-91' });
-  expect(out).toEqual({ name: 'Анна', phone: '79200255591', visits: { success: 7, fail: 2 }, bonusBalance: 650.5, loyaltyLevel: 'Золото', totalSpent: 42000,
+  expect(out).toEqual({ clientId: 10, name: 'Анна', phone: '79200255591', visits: { success: 7, fail: 2 }, bonusBalance: 650.5, loyaltyLevel: 'Золото', totalSpent: 42000,
+    birthday: null, note: null, contractNo: null, lastVisitDate: '2026-11-01',
     lastVisits: [{ date: '2026-11-01', staffName: 'Юлия', services: ['Чистка'], attendance: 1 }],
     abonements: [{ title: 'Чистка ×5', balance: 3, expires: '2027-01-01', status: null, frozen: false }], bonusesSource: 'card' });
   expect(ycGetClientAbonements).toHaveBeenCalledWith(SALON, '79200255591');
@@ -50,7 +51,7 @@ test('abonements: cached 60 s, failure → null and not cached', async () => {
 });
 test('unknown client still answers; bad input is 400', async () => {
   setup({ client: null, visits: [] });
-  expect(await cs.summary(3, { phone: '79200255591' })).toMatchObject({ name: null, bonusBalance: null, totalSpent: null, lastVisits: [] });
+  expect(await cs.summary(3, { phone: '79200255591' })).toMatchObject({ clientId: null, name: null, bonusBalance: null, totalSpent: null, lastVisits: [] });
   await expect(cs.summary(3, {})).rejects.toMatchObject({ status: 400 });
   await expect(cs.summary(3, { phone: '123' })).rejects.toMatchObject({ status: 400 });
   await expect(cs.summary(3, { ycClientId: 'x' })).rejects.toMatchObject({ status: 400 });

@@ -73,6 +73,10 @@ async function getSchedule(salonId, staffId, date) {
   return [{ date: row.date, is_working: row.is_working ? 1 : 0, slots: row.slots }];
 }
 
+async function storeSchedule(salonId, schedule) {
+  await db.query(UPSERT_DAY, [salonId, schedule.staffId, schedule.date, schedule.slots.length > 0, JSON.stringify(schedule.slots)]);
+}
+
 async function getBonusPercent(salonId) {
   return (await getReference(salonId, 'bonus_rule'))?.percent ?? null;
 }
@@ -92,4 +96,4 @@ async function learnBonusPercent(salonId, sale) {
   }
 }
 
-module.exports = { KINDS, refreshReference, refreshSchedules, getReference, getSchedule, getBonusPercent, learnBonusPercent };
+module.exports = { KINDS, refreshReference, refreshSchedules, getReference, getSchedule, storeSchedule, getBonusPercent, learnBonusPercent };

@@ -8,6 +8,7 @@ const yc = require('./yclients');
 const m = require('./model');
 const reference = require('./reference-cache');
 const overlay = require('./overlay');
+const scheduleOverlay = require('./schedule-overlay');
 const logger = require('../../logger').createLogger('JournalSources');
 
 const OPEN_OUTBOX_SQL = `SELECT * FROM journal_outbox WHERE salon_id=$1
@@ -36,6 +37,8 @@ async function openOutbox(salonId) {
 
 function local(salon) {
   const fallback = live(salon);
+  let pending = null;
+  const outbox = () => pending || (pending = openOutbox(salon.id));
   const ref = kind => async () => {
     const value = await reference.getReference(salon.id, kind);
     if (value == null) throw new m.JournalError(503, 'Справочники журнала ещё не загружены.', 'cache_cold');
@@ -46,16 +49,21 @@ function local(salon) {
     staff: ref('staff'), services: ref('services'), resources: ref('resources'), accounts: ref('accounts'),
     // Labels are decoration: a cold cache is an empty list, not an error.
     labels: async () => (await reference.getReference(salon.id, 'labels')) || [],
-    // Cache only (a miss is null, never a YClients call): for scans over many masters/days.
-    cachedSchedule: (staffId, date) => reference.getSchedule(salon.id, staffId, date),
+    // Cache plus local full-day overlays (a miss without an overlay is null,
+    // never a YClients call): for scans over many masters/days.
+    async cachedSchedule(staffId, date) {
+      const [cached, rows] = await Promise.all([reference.getSchedule(salon.id, staffId, date), outbox()]);
+      return scheduleOverlay.applyOne(cached, rows, staffId, date);
+    },
     async schedule(staffId, date) {
-      const cached = await reference.getSchedule(salon.id, staffId, date);
-      return cached || fallback.schedule(staffId, date);
+      const [cached, rows] = await Promise.all([reference.getSchedule(salon.id, staffId, date), outbox()]);
+      const overlaid = scheduleOverlay.applyOne(cached, rows, staffId, date);
+      return overlaid || fallback.schedule(staffId, date);
     },
     async records(from, to) {
-      const [rows, outbox] = await Promise.all([db.any(RECORDS_SQL, [salon.id, from, to]), openOutbox(salon.id)]);
+      const [rows, pendingRows] = await Promise.all([db.any(RECORDS_SQL, [salon.id, from, to]), outbox()]);
       const list = rows.map(r => r.raw_payload).filter(r => r && !r.deleted);
-      return overlay.applyOverlay(list, outbox);
+      return overlay.applyOverlay(list, pendingRows);
     },
   };
 }

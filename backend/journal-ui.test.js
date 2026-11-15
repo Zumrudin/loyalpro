@@ -4,7 +4,7 @@ const vm = require('vm');
 const path = require('path');
 // All journal files share ONE global scope in the browser (classic <script>s,
 // index.html order). The harness runs them the same way, one script each.
-const JR_FILES = ['journal.js', 'journal-grid.js', 'journal-card.js', 'journal-forms.js', 'journal-payment.js', 'journal-dispatch.js', 'journal-stock.js', 'journal-visits.js'];
+const JR_FILES = ['journal.js', 'journal-toolbar.js', 'journal-grid.js', 'journal-staff-menu.js', 'journal-card.js', 'journal-forms.js', 'journal-payment.js', 'journal-dispatch.js', 'journal-stock.js', 'journal-visits.js', 'journal-loyalty.js', 'journal-chat.js'];
 const readJr = file => fs.readFileSync(path.join(__dirname, '../frontend/js/pages', file), 'utf8');
 const JR_SOURCES = JR_FILES.map(file => ({ file, code: readJr(file) }));
 const JR_ALL = JR_SOURCES.map(s => s.code).join('\n');
@@ -19,6 +19,8 @@ function harness() {
   let uuid = 0;
   const context = vm.createContext({ document: { getElementById: get }, Date, URLSearchParams, AbortController, setTimeout, clearTimeout, encodeURIComponent, crypto: { randomUUID: () => 'synthetic-uuid-' + (++uuid) }, TOKEN: 'synthetic-token', ME: { role: 'owner' }, notify: jest.fn(), fetch: jest.fn(), confirm: jest.fn(() => false) });
   for (const s of JR_SOURCES) vm.runInContext(s.code, context, { filename: s.file });
+  // Financial request races are covered separately; these tests isolate grid/card APIs.
+  context.jrSummaryLoad = jest.fn();
   return { context, get, run: expression => vm.runInContext(expression, context) };
 }
 // Top-level names of a classic script: a duplicate const/let across files is a
@@ -50,6 +52,21 @@ test('overlapping visits use lanes and adjacent visits reclaim a lane', () => {
   const records = [{ id: 1, time: '09:00', duration: 60 }, { id: 2, time: '09:30', duration: 60 }, { id: 3, time: '10:00', duration: 30 }, { id: 4, time: '12:00', duration: 60 }];
   const out = h.context.jrLayout(records);
   expect(out.map(r => [r.lane, r.lanes])).toEqual([[0,2],[1,2],[0,2],[0,1]]);
+});
+test('toolbar: clearing every status hides every appointment without freeing its time', () => {
+  const h = harness();
+  h.run(`journal.statusFilter = new Set(); journal.data = {
+    date:'2030-04-02', staff:[{id:1,name:'Synthetic',working:true,workRanges:[{start:600,end:720}]}],
+    records:[{id:8,staffId:1,date:'2030-04-02',clientName:'Synthetic',time:'10:00',duration:60,attendance:0,services:[]}]
+  }; jrRender();`);
+  expect(h.get('jrGrid').innerHTML).not.toContain('data-record="8"');
+  expect(h.context.jrCellState({id:1,workRanges:[{start:600,end:720}]},600,'2030-04-02',h.run('journal.data.records'),0)).toBe('busy');
+});
+test('toolbar: visible date uses day/month followed by weekday', () => {
+  const h = harness();
+  h.get('jrDate').value = '2026-11-15';
+  h.context.jrToolbarSync();
+  expect(h.get('jrDateLabel').textContent).toBe('15 ноября, воскресенье');
 });
 test('rendering escapes all patient and catalog text', () => {
   const h = harness();
@@ -154,7 +171,9 @@ test('appointment card preserves real actions and exposes unavailable features a
   expect(html).toContain('data-attendance="2"');
   expect(html).toContain('id="jrCancel"');
   const placeholders = html.match(/<button[^>]*class="jr-placeholder[^>]*>/g);
-  expect(placeholders.length).toBeGreaterThan(10);
+  expect(placeholders.length).toBeGreaterThan(0);
+  expect(html).toContain('id="jrConsumablesOpen"');
+  expect(html).toContain('id="jrTabGoods"');
   expect(placeholders.every(button => button.includes(' disabled') && button.includes('type="button"'))).toBe(true);
   expect(html).not.toContain('Оплачено 0');
 });
@@ -1202,7 +1221,7 @@ const cardHarness = () => {
 test('card shows phone, editable comment, duration, break, palette, labels and the notify flag', () => {
   const h = cardHarness();
   const html = h.context.jrAppointmentCard(CARD);
-  expect(html).toContain('<a href="tel:+79200255591">+79200255591</a>');
+  expect(html).toContain('<a href="tel:+79200255591">+7 920 025-55-91</a>');
   expect(html).toContain('id="jrCopyPhone"');
   expect(html).toMatch(/<textarea id="jrCommentEdit" rows="4" maxlength="1000" placeholder="Комментарий не указан">/);
   expect(html).toMatch(/id="jrDurationEdit" type="number" min="5" max="720" step="5" value="60">/);
@@ -1400,7 +1419,7 @@ test('history: lazy load, escaped changes, package errors, empty state', async (
 test('client panel: visits, no-shows, bonuses, abonements, last visits escaped', () => {
   const h = harness();
   const html = h.context.jrClientSummaryHtml(SUMMARY);
-  for (const s of ['Визитов<span>7</span>', 'Неявок<span>2</span>', 'Бонусы<span>650</span>', 'Уровень<span>Золото</span>', 'не удалось прочитать', 'по карте лояльности']) expect(html).toContain(s);
+  for (const s of ['Всего визитов<span>7</span>', 'Неявок<span>2</span>', 'Бонусы<span>650</span>', 'Уровень<span>Золото</span>', 'не удалось прочитать', 'по карте лояльности']) expect(html).toContain(s);
   expect(html).toContain('&lt;b&gt;Юлия&lt;/b&gt;');
   expect(h.context.jrClientSummaryHtml({ ...SUMMARY, abonements: [] })).toContain('Абонементов нет');
   const ab = h.context.jrClientSummaryHtml({ ...SUMMARY, abonements: [{ title: 'Чистка <x>', balance: 3, expires: '2027-01-01T00:00:00', frozen: true }] });
@@ -1413,7 +1432,7 @@ test('client panel loads once per opened card; failure stays inside the panel', 
   await h.context.jrLoadClientSummary(CARD);
   expect(h.context.jrApi).toHaveBeenCalledTimes(1);
   expect(h.context.jrApi).toHaveBeenCalledWith('clients/summary?phone=79200255591');
-  expect(h.get('jrClientSummaryBox').innerHTML).toContain('Визитов<span>7</span>');
+  expect(h.get('jrClientSummaryBox').innerHTML).toContain('Всего визитов<span>7</span>');
   h.run('journal.modalRequest++');
   h.context.jrApi = jest.fn().mockRejectedValue(new Error('YClients недоступен'));
   await h.context.jrLoadClientSummary(CARD);
@@ -1573,4 +1592,225 @@ describe('«История посещений» (13.11.2026)', () => {
  });
 });
 
+describe('client link and «Лояльность» (13.11.2026)', () => {
+ const LOY = {
+  clientId: 50, name: 'Анна', phone: '79200255591', errors: {},
+  cards: [{ kind: 'card', id: 1, number: '0065', title: 'samosale', network: 'Сеть <b>Peri</b>', balance: 8592, points: 0, maxDiscountPercent: 0, maxDiscountAmount: 0,
+   soldAmount: 737946, paidAmount: 737946, visits: 27, programs: [], linked: true, active: true,
+   history: [{ date: '2026-11-13', title: 'Списание с карты лояльности', amount: -650 }, { date: '2026-09-03', title: 'Ручное пополнение', amount: 1500 }] }],
+  abonements: [
+   { kind: 'abonement', id: 2, number: '804644', title: 'RSL 6', status: 'Активирован', created: '2026-09-26', activated: '2026-09-26', expires: '2027-09-25', balance: 2, united: true, frozen: false,
+    services: [{ category: '', service: 'BEAUTYLISER RSL', count: 0 }, { category: 'RSL-скульптурирование', service: 'Все услуги', count: 0 }], active: true },
+   { kind: 'abonement', id: 3, number: '1', title: 'Старый абонемент', status: 'Истёк', balance: 0, united: true, services: [], active: false }],
+  certificates: [{ kind: 'certificate', id: 4, number: '508763', title: 'Сертификат 20000', status: 'Активирован', created: '2026-11-11', expires: null, balance: 20000, nominal: 20000, appliesTo: 'Любые товары и услуги', active: true }],
+ };
+ test('card: client name is a link, «Лояльность» is a live button', () => {
+  const h = cardHarness();
+  const html = h.context.jrAppointmentCard(CARD);
+  expect(html).toContain('id="jrClientLink"'); expect(html).toContain('<span id="jrClientName">Анна</span>');
+  expect(html).toContain('id="jrLoyaltyOpen"'); expect(html).toContain('id="jrVisitsOpen"');
+  expect(h.context.jrClientPanel(CARD)).not.toContain('jrClientLink');
+ });
+ test('client link opens the LoyalPro client card by id from the summary', async () => {
+  const h = cardHarness();
+  h.context.openCD = jest.fn(); h.get('jrModal').open = true;
+  h.context.jrApi = jest.fn().mockResolvedValue({ ...SUMMARY, clientId: 50 });
+  await h.context.jrOpenClientCard(CARD);
+  expect(h.context.jrApi).toHaveBeenCalledWith('clients/summary?phone=79200255591');
+  expect(h.context.openCD).toHaveBeenCalledWith(50); expect(h.get('jrModal').open).toBe(false);
+  // already loaded summary: no second request
+  h.context.jrApi = jest.fn(); h.get('jrModal').open = true; h.context.openCD = jest.fn();
+  h.run('journal.clientSummary = { phone: "79200255591", request: journal.modalRequest, html: "x", clientId: 51 }');
+  await h.context.jrOpenClientCard(CARD);
+  expect(h.context.jrApi).not.toHaveBeenCalled(); expect(h.context.openCD).toHaveBeenCalledWith(51);
+ });
+ test('client link: unknown client and unsaved edits keep the card open', async () => {
+  const h = cardHarness();
+  h.context.openCD = jest.fn(); h.get('jrModal').open = true;
+  h.context.jrApi = jest.fn().mockResolvedValue({ ...SUMMARY, clientId: null });
+  await h.context.jrOpenClientCard(CARD);
+  expect(h.context.openCD).not.toHaveBeenCalled(); expect(h.get('jrModal').open).toBe(true);
+  expect(h.get('jrModalError').textContent).toBe('Клиента нет в базе LoyalPro.');
+  h.context.jrAskClose = jest.fn(); h.context.jrUnsavedKind = () => 'edit';
+  await h.context.jrOpenClientCard(CARD);
+  expect(h.context.jrAskClose).toHaveBeenCalledWith('edit');
+ });
+ test('loyalty: active by default, all on demand, escaped, sections and tiles', async () => {
+  const h = harness();
+  h.context.jrApi = jest.fn().mockResolvedValue(LOY);
+  expect(await h.context.jrOpenLoyalty({ id: 42, clientPhone: '+7 920 025-55-91' })).toBe(true);
+  expect(h.context.jrApi).toHaveBeenCalledWith('clients/loyalty?phone=79200255591');
+  expect(h.get('jrModalTitle').textContent).toBe('Лояльность');
+  let html = h.get('jrModalBody').innerHTML;
+  for (const s of ['Карты лояльности', 'Абонементы', 'Сертификаты', 'samosale', '№ 0065', 'Сеть &lt;b&gt;Peri&lt;/b&gt;', 'RSL 6', 'Сертификат 20000', 'Скрыто неактивных: 1', '<option value="active" selected>Активные</option>', '25.09.2027'])
+   expect(html).toContain(s);
+  expect(html).not.toContain('Старый абонемент'); expect(html).not.toContain('Списание с карты лояльности');
+  h.run('journal.loyalty.filter = "all"; journal.loyalty.open.add("card:1"); journal.loyalty.open.add("abonement:2")'); h.context.jrLyRender();
+  html = h.get('jrModalBody').innerHTML;
+  expect(html).toContain('Старый абонемент'); expect(html).toContain('Списание с карты лояльности');
+  expect(html).toContain('jr-ly-minus">− 650'); expect(html).toContain('jr-ly-plus">+ 1');
+  expect(html).toContain('RSL-скульптурирование'); expect(html).toContain('Все услуги');
+  h.run('journal.loyalty.tabs["abonement:2"] = "term"'); h.context.jrLyRender();
+  expect(h.get('jrModalBody').innerHTML).toContain('Действует до');
+ });
+ test('loyalty: section errors, empty lists, unknown phone, load error', async () => {
+  const h = harness();
+  h.run('journal.loyalty = { filter: "active", open: new Set(), tabs: {} }');
+  const html = h.context.jrLyHtml({ cards: null, abonements: [], certificates: [], errors: { cards: 'Не удалось получить карты лояльности.' } }, h.run('journal.loyalty'));
+  expect(html).toContain('Не удалось получить карты лояльности.'); expect(html).toContain('Активных абонементов нет.'); expect(html).toContain('Активных сертификатов нет.');
+  expect(await h.context.jrOpenLoyalty({ id: 42, clientPhone: '' })).toBe(false);
+  expect(h.get('jrModalBody').innerHTML).toContain('Телефон клиента неизвестен');
+  h.context.jrApi = jest.fn().mockRejectedValue(new Error('Нет связи'));
+  expect(await h.context.jrOpenLoyalty({ id: 42, clientPhone: '79200255591' })).toBe(false);
+  expect(h.get('jrModalError').textContent).toBe('Нет связи'); expect(h.get('jrModalBody').innerHTML).toContain('jrLyReload');
+ });
+});
+
+describe('record card: «Чат» tab (13.11.2026)', () => {
+ test('card has live «Клиент / Чат» tabs and a hidden chat pane; the move form keeps the stub', () => {
+  const h = cardHarness();
+  const html = h.context.jrAppointmentCard(CARD);
+  expect(html).toContain('id="jrTabChat"'); expect(html).toContain('<div id="jrChatPane" class="jr-chat-pane" hidden></div>');
+  expect(html).toContain('<div id="jrClientPane">');
+  expect(h.context.jrClientPanel(CARD)).not.toContain('jrTabChat');
+ });
+ test('dialog key and channels: phone canon, Telegram only after an incoming, reply where the client wrote', () => {
+  const h = harness();
+  expect(h.context.jrChatKey({ clientPhone: '8 (920) 025-55-91' })).toBe('79200255591');
+  expect(h.context.jrChatKey({ clientPhone: '' })).toBe(null);
+  const msgs = [{ direction: 'incoming', channel: 'tdlib', msg_ts: 1 }, { direction: 'outgoing', channel: 'whatsapp', msg_ts: 2 }];
+  const ch = h.context.jrChatChannels(msgs);
+  expect([...ch]).toEqual(['whatsapp', 'max', 'tdlib']);
+  expect([...h.context.jrChatChannels([])]).toEqual(['whatsapp', 'max']);
+  expect(h.context.jrChatDefaultChannel(msgs, ch)).toBe('tdlib');
+ });
+ test('messages are escaped, attachment urls filtered', () => {
+  const h = harness();
+  const html = h.context.jrChatMsgHtml({ direction: 'incoming', channel: 'max', text: '<script>x</script>', msg_ts: 1763020800 });
+  expect(html).toContain('&lt;script&gt;'); expect(html).not.toContain('<script>');
+  expect(h.context.jrChatMsgHtml({ direction: 'incoming', msg_type: 'image', file_url: 'javascript:alert(1)' })).not.toContain('javascript:');
+ });
+ test('opening loads the dialog by phone; send posts text+channel, optimistic bubble is replaced by the echo', async () => {
+  const h = cardHarness();
+  h.get('jrModal').open = true;
+  const calls = [];
+  h.context.fetch = jest.fn(async (url, opts) => {
+   calls.push([url, opts?.method, opts?.body]);
+   const body = /\/messages/.test(url) ? { messages: [{ id: 1, direction: 'incoming', channel: 'tdlib', text: 'Здравствуйте', msg_ts: 100 }] }
+    : /\/agent$/.test(url) ? { status: 'bot' } : { ok: true };
+   return { ok: true, json: async () => body };
+  });
+  expect(await h.context.jrChatOpen(CARD)).toBe(true);
+  expect(calls[0][0]).toBe('/api/chat/dialogs/79200255591/messages');
+  expect(h.get('jrChatMessages').innerHTML).toContain('Здравствуйте');
+  h.get('jrChatChannel').value = 'tdlib'; h.get('jrChatInput').value = '  Ждём Вас  ';
+  expect(await h.context.jrChatSend()).toBe(true);
+  const sent = calls.find(c => /\/send$/.test(c[0]));
+  expect(JSON.parse(sent[2])).toEqual({ text: 'Ждём Вас', channel: 'tdlib' });
+  expect(h.get('jrChatInput').value).toBe('');
+  expect(h.run('journal.chat.agent')).toBe('escalated');
+  h.context.jrChatMerge({ id: 2, direction: 'outgoing', channel: 'tdlib', text: 'Ждём Вас', msg_ts: 101 });
+  expect(h.run('journal.chat.messages.length')).toBe(2);
+  expect(h.run('journal.chat.messages.some(m => m._local)')).toBe(false);
+  h.run('journal.modalRequest++'); // closing the card stops polling by itself
+  h.context.jrChatStop();
+ });
+ test('failed send keeps the text visible with the error; unknown phone says so', async () => {
+  const h = cardHarness();
+  h.context.fetch = jest.fn(async (url) => /\/send$/.test(url)
+   ? { ok: false, json: async () => ({ error: 'Не найден получатель' }) }
+   : { ok: true, json: async () => (/\/messages/.test(url) ? { messages: [] } : { status: 'bot' }) });
+  await h.context.jrChatOpen(CARD);
+  h.get('jrChatChannel').value = 'whatsapp'; h.get('jrChatInput').value = 'Привет';
+  expect(await h.context.jrChatSend()).toBe(false);
+  expect(h.get('jrChatMessages').innerHTML).toContain('Не найден получатель');
+  h.run('journal.modalRequest++'); h.context.jrChatStop();
+  expect(await h.context.jrChatOpen({ ...CARD, clientPhone: '' })).toBe(false);
+  expect(h.get('jrChatPane').innerHTML).toContain('Телефон клиента неизвестен');
+ });
+});
 test('stock tabs preserve unsaved appointment DOM',async()=>{const h=harness();h.context.stockApi=jest.fn().mockResolvedValue({documents:[]});h.context.stockDocsTable=()=>'';h.run("journal.modalRequest=1; jrStockBind({id:10});");h.get('jrServicesPane').innerHTML='unsaved';await h.context.jrStockTab('goods');expect(h.get('jrServicesPane').innerHTML).toBe('unsaved');expect(h.get('jrServicesPane').hidden).toBe(true);await h.context.jrStockTab('services');expect(h.get('jrServicesPane').hidden).toBe(false);});
+
+describe('employee schedule menu', () => {
+  test('working day offers break/removal, off day offers add; labels are escaped', () => {
+    const h = harness();
+    const on = h.context.jrStaffMenuButton({ id: 5, name: '<img>', working: true }, '2030-04-01', '<img>');
+    expect(on).toContain('Добавить перерыв'); expect(on).toContain('Убрать рабочий день');
+    expect(on).not.toContain('data-staff-action="add"'); expect(on).not.toContain('<img>');
+    expect(h.context.jrStaffMenuButton({ id: 5, working: false }, '2030-04-01', 'A')).toContain('Добавить рабочий день');
+  });
+  test('failed off-day stays accessible with working-only filter and error badge', () => {
+    const h = harness(); h.get('jrWorkingOnly').checked = true;
+    h.run(`journal.data = {date:'2030-04-01',staff:[{id:5,name:'A',working:false,scheduleSync:{status:'failed',outboxId:21}}],records:[]}; jrRender()`);
+    expect(h.context.jrStaffList().map(s => s.id)).toEqual([5]);
+    expect(h.get('jrGrid').innerHTML).toContain('График не отправлен: ошибка');
+    const html = fs.readFileSync(path.join(__dirname, '../frontend/index.html'), 'utf8');
+    expect(html).toContain('id="jrScheduleChanges"');
+  });
+  test('form submits captured employee/date even after journal navigation', async () => {
+    const h = harness();
+    h.context.jrApi = jest.fn().mockResolvedValue({}); h.context.loadJournal = jest.fn();
+    h.context.jrStaffMenuForm({ staffId: 5, date: '2030-04-01', name: 'A' }, 'break');
+    h.get('jrScheduleStart').value = '12:00'; h.get('jrScheduleEnd').value = '13:00';
+    h.get('jrDate').value = '2030-04-02';
+    await h.context.jrStaffScheduleSave();
+    expect(h.context.jrApi).toHaveBeenCalledWith('staff-schedule', expect.objectContaining({ staffId: 5, date: '2030-04-01', start: '12:00', end: '13:00' }));
+    expect(h.get('jrModal').open).toBe(false);
+  });
+  test('double submit only writes once; timeout preserves key; key conflict keeps form open', async () => {
+    const h = harness(); let reject;
+    h.context.jrStaffMenuForm({ staffId: 5, date: '2030-04-01', name: 'A' }, 'break');
+    h.get('jrScheduleStart').value = '12:00'; h.get('jrScheduleEnd').value = '13:00';
+    const key = h.run('journal.scheduleForm.sessionId');
+    h.context.jrApi = jest.fn(() => new Promise((_, r) => { reject = r; }));
+    const pending = h.context.jrStaffScheduleSave(); await h.context.jrStaffScheduleSave();
+    expect(h.context.jrApi).toHaveBeenCalledTimes(1);
+    reject(new Error('synthetic timeout')); await pending;
+    expect(h.run('journal.scheduleForm.sessionId')).toBe(key);
+    h.context.jrApi.mockRejectedValueOnce(Object.assign(new Error('used'), { code: 'session_used', status: 409 }));
+    await h.context.jrStaffScheduleSave();
+    expect(h.get('jrModal').open).toBe(true);
+    expect(h.context.notify).not.toHaveBeenCalled();
+    expect(h.get('jrModalError').textContent).toContain('Новое время не сохранено');
+  });
+  test('removing a day requires confirmation; closing clears schedule state', async () => {
+    const h = harness(); h.context.jrApi = jest.fn();
+    h.context.jrStaffMenuForm({ staffId: 5, date: '2030-04-01', name: 'A' }, 'remove');
+    await h.context.jrStaffScheduleSave();
+    expect(h.context.confirm).toHaveBeenCalled(); expect(h.context.jrApi).not.toHaveBeenCalled();
+    h.context.jrClose(); expect(h.run('journal.closeAsk')).toBe(true);
+    h.context.jrClose(true); expect(h.run('journal.scheduleForm')).toBeNull();
+  });
+  test('failed changes remain reachable after reopening; stale list response is ignored', async () => {
+    const h = harness(); let resolve;
+    h.context.jrApi = jest.fn().mockResolvedValue([{ outboxId:21, staffId:5, date:'2030-04-01', status:'failed', errorText:'Conflict' }]);
+    await h.context.jrScheduleChangesOpen();
+    expect(h.get('jrModalBody').innerHTML).toContain('data-schedule-dismiss="21"');
+    expect(h.get('jrModalBody').innerHTML).toContain('Conflict');
+    h.context.jrApi.mockImplementationOnce(() => new Promise(r => { resolve = r; }));
+    const pending = h.context.jrScheduleChangesOpen(); h.context.jrClose(true);
+    h.get('jrModalBody').innerHTML = 'another screen'; resolve([]); await pending;
+    expect(h.get('jrModalBody').innerHTML).toBe('another screen');
+  });
+  test('menu opens, focuses its first item and closes with focus restored', () => {
+    const h = harness(), toggle = { setAttribute: jest.fn(), focus: jest.fn() }, menu = { hidden: true }, item = { focus: jest.fn() };
+    const root = { querySelector: q => q === '[role="menu"]' ? menu : q === '[data-staff-action]' ? item : toggle };
+    h.context.jrStaffMenuToggle(root); expect(menu.hidden).toBe(false); expect(item.focus).toHaveBeenCalled();
+    h.context.jrStaffMenuClose(true); expect(menu.hidden).toBe(true); expect(toggle.focus).toHaveBeenCalled();
+  });
+});
+
+test('schedule menu keyboard navigation, Escape and outside click', () => {
+  const handlers = {}, toggle = { setAttribute: jest.fn(), focus: jest.fn() }, menu = { hidden: false };
+  const items = [{focus:jest.fn()},{focus:jest.fn()}];
+  const root = { querySelector:q => q === '[role="menu"]' ? menu : toggle, querySelectorAll:()=>items, contains:target=>target===items[0] };
+  const doc = { addEventListener:(name, fn)=>{handlers[name]=fn;}, activeElement:items[0] };
+  const state = {staffMenu:root};
+  const ctx = vm.createContext({document:doc,journal:state});
+  vm.runInContext(readJr('journal-staff-menu.js'),ctx);
+  handlers.keydown({key:'ArrowDown',preventDefault:jest.fn()}); expect(items[1].focus).toHaveBeenCalled();
+  handlers.click({target:items[0]}); expect(menu.hidden).toBe(false);
+  handlers.keydown({key:'Escape',preventDefault:jest.fn(),stopPropagation:jest.fn()});
+  expect(menu.hidden).toBe(true); expect(toggle.focus).toHaveBeenCalled();
+  state.staffMenu=root; menu.hidden=false; handlers.click({target:{}}); expect(menu.hidden).toBe(true);
+});

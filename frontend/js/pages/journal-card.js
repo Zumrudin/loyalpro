@@ -1,12 +1,6 @@
 // Журнал записи: карточка записи. Общая глобальная область с journal.js (префикс jr).
 // Card parity with YClients (12.11.2026). Colour palette: one constant.
 const JR_COLORS = ['#f4a0a0', '#ffad79', '#f7c76d', '#c5e384', '#9ee5d7', '#a8d8f0', '#b3bdfd', '#d7a6e8'];
-function jrPhoneHtml(r) {
-  const digits = String(r?.clientPhone || '').replace(/\D/g, '');
-  if (!digits) return '<p class="jr-hint">Телефон не указан</p>';
-  const tel = '+' + digits;
-  return `<p class="jr-client-phone"><a href="tel:${jrEscape(tel)}">${jrEscape(tel)}</a><button type="button" class="btn btn-sec" id="jrCopyPhone" data-phone="${jrEscape(tel)}">Копировать</button></p>`;
-}
 function jrExtraFields(r) {
   const can = jrCanChange(r), reshape = jrCanReshape(r);
   const off = flag => (flag ? '' : ' disabled');
@@ -59,36 +53,84 @@ function jrRebook(r) {
   journal.formTouched = true; // a preset form counts as changed: closing asks
 }
 
-function jrTools(record) {
+// ---- Record window, laid out like the YClients record window (13.11.2026) ----
+// Colours stay LoyalPro's; the structure follows YClients: master/date card,
+// pinned comment and tool tiles on the left; status, services, service picker
+// and quick payment in the middle; client panel on the right.
+function jrDurationText(min) {
+  const n = Math.round(Number(min) || 0);
+  if (!n) return '';
+  const h = Math.floor(n / 60), m = n % 60;
+  const hours = h === 1 ? '1 час' : h >= 2 && h <= 4 ? h + ' часа' : h + ' часов';
+  return h && m ? `${h} ч ${m} мин` : h ? hours : m + ' мин';
+}
+function jrTimeRange(record) {
+  const start = String(record?.time || '');
+  if (!/^\d\d:\d\d$/.test(start)) return start;
+  const end = Number(record.duration) > 0 ? ' — ' + jrTimeLabel(jrMinutes(start) + Number(record.duration)) : '';
+  const length = jrDurationText(record.duration);
+  return start + end + (length ? ' · ' + length : '');
+}
+function jrPhonePretty(digits) {
+  return /^7\d{10}$/.test(digits) ? `+7 ${digits.slice(1, 4)} ${digits.slice(4, 7)}-${digits.slice(7, 9)}-${digits.slice(9)}` : '+' + digits;
+}
+// A tile of the left/right grids: live (own id) or a disabled placeholder.
+function jrTile(title, icon, id = null, extra = '') {
+  return id ? `<button type="button" class="jr-tool-live jr-placeholder${extra}" id="${id}">${jrIcon(icon)}<span>${title}</span></button>` : jrStub(title, icon);
+}
+function jrTools(record, card = false) {
   const live = !!record && Number(record.id) > 0;
-  return `<div class="jr-tools">${[['ЕГИСЗ','plus'],['Текущий приём','file'],['Расширенные поля','list'],['Повторение записи','repeat'],['Уведомления о визите','bell'],['Списание расходников','box'],['История изменений','clock'],['Лист назначения','file']].map(([title,icon]) => live && title === 'История изменений'
-    ? `<button type="button" class="jr-tool-live jr-placeholder" id="jrHistoryOpen">${jrIcon(icon)}<span>${title}</span></button>`
-    : record && title === 'Списание расходников' ? `<button type="button" class="jr-tool-live jr-placeholder" id="jrConsumablesOpen">${jrIcon(icon)}<span>${title}</span></button>` : jrStub(title,icon)).join('')}</div>${live ? '<div id="jrHistory" class="jr-history-box" hidden></div>' : ''}`;
+  const ids = { 'Списание расходников': card && record ? 'jrConsumablesOpen' : null, 'История изменений': live ? 'jrHistoryOpen' : null,
+    'Расширенные поля': card ? 'jrExtraOpen' : null,
+    'Повторение записи': card && record && !record.deleted ? 'jrRebook' : null };
+  return `<div class="jr-tools">${[['ЕГИСЗ','egisz'],['Текущий прием','plus'],['Расширенные поля','list'],['Повторение записи','repeat'],['Уведомления о визите','bell'],['Списание расходников','box'],['История изменений','receipt'],['Лист назначения','receipt']]
+    .map(([title, icon]) => jrTile(title, icon, ids[title])).join('')}</div>${live ? '<div id="jrHistory" class="jr-history-box" hidden></div>' : ''}`;
+}
+function jrPhoneHtml(r) {
+  const digits = String(r?.clientPhone || '').replace(/\D/g, '');
+  if (!digits) return '<p class="jr-hint">Телефон не указан</p>';
+  const tel = '+' + digits;
+  return `<p class="jr-client-phone"><a href="tel:${jrEscape(tel)}">${jrEscape(jrPhonePretty(digits))}</a><button type="button" class="jr-icon-btn" id="jrCopyPhone" data-phone="${jrEscape(tel)}" title="Копировать телефон" aria-label="Копировать телефон">${jrIcon('copy')}</button></p>`;
 }
 function jrClientPanel(record, creating = false, editable = false) {
-  return `<aside class="jr-booking-client jr-booking-panel"><div class="jr-client-tabs"><span class="is-active">${jrIcon('user')} Клиент</span>${jrStub('Чат','chat','jr-tab-stub')}</div>${creating
+  const canSwap = !creating && editable && record && jrCanReshape(record);
+  const name = jrEscape(record?.clientName || 'Клиент');
+  return `<aside class="jr-booking-client jr-booking-panel">${canSwap
+      ? `<button type="button" class="jr-back-link" id="jrChangeClient">${jrIcon('back')}Сменить клиента</button><div id="jrChangeClientBox" class="jr-fields jr-change-client" hidden><label>Найти клиента<input id="jrClientSearch" type="search" placeholder="Имя или телефон" autocomplete="off"></label><h4 id="jrClientsTitle">Последние клиенты</h4><div id="jrClientResults" aria-live="polite"></div></div>`
+      : `<button type="button" class="jr-back-link jr-placeholder" disabled title="Сменить клиента — недоступно для этой записи">${jrIcon('back')}<span>Сменить клиента</span></button>`}
+    ${!creating && editable && record
+      ? '<div class="jr-client-tabs" role="tablist"><button type="button" role="tab" class="jr-tab is-active" id="jrTabClient" aria-selected="true">Клиент</button><button type="button" role="tab" class="jr-tab" id="jrTabChat" aria-selected="false">Чат</button></div><div id="jrChatPane" class="jr-chat-pane" hidden></div><div id="jrClientPane">'
+      : `<div class="jr-client-tabs"><span class="is-active">Клиент</span>${jrStub('Чат','chat','jr-tab-stub')}</div><div>`}${creating
     ? '<div class="jr-fields"><label>Имя клиента<input id="jrName" required maxlength="120" autocomplete="off" placeholder="Имя и фамилия"></label><label>Телефон с кодом страны<input id="jrPhone" required type="tel" maxlength="24" autocomplete="off" placeholder="Введите номер телефона"></label></div>'
-    : `<div class="jr-client-identity">${jrIcon('user')}<h3 id="jrClientName">${jrEscape(record?.clientName || 'Клиент')}</h3></div>${editable ? jrPhoneHtml(record) : ''}`}
-    ${!creating && editable && record && jrCanReshape(record)
-      ? `<button type="button" class="btn btn-sec" id="jrChangeClient">${jrIcon('user')} Сменить клиента</button><div id="jrChangeClientBox" class="jr-fields" hidden><label>Найти клиента<input id="jrClientSearch" type="search" placeholder="Имя или телефон" autocomplete="off"></label><h4 id="jrClientsTitle">Последние клиенты</h4><div id="jrClientResults" aria-live="polite"></div></div>`
-      : jrStub('Сменить клиента','user','jr-stub-inline')}
-    <div class="jr-client-tools">${[['Планы лечения','file'],['Медкарта','plus'],['История посещений','clock'],['Лояльность','wallet'],['Счета клиента','wallet']].map(([title,icon]) => !creating && editable && record && title === 'История посещений'
-      ? `<button type="button" class="jr-tool-live jr-placeholder" id="jrVisitsOpen">${jrIcon(icon)}<span>${title}</span></button>`
-      : jrStub(title,icon)).join('')}</div>
-    <label class="jr-other-visitor"><input type="checkbox" disabled> Записывает другого посетителя <small>Скоро</small></label>
-    <section class="jr-client-info"><h4>Дополнительно</h4><p>Примечание о клиенте<span>—</span></p><p>Дата рождения<span>—</span></p><p>Номер договора<span>—</span></p></section>
-    ${editable ? '<section class="jr-client-info"><h4>Клиент</h4><div id="jrClientSummaryBox"><p class="jr-hint">Загрузка данных клиента…</p></div></section>'
-      : '<section class="jr-client-info"><h4>Статистика</h4><div class="jr-client-stats"><p>Последний визит<span>—</span></p><p>Всего визитов<span>—</span></p></div><small>Данные карточки клиента пока не подключены к журналу.</small></section>'}
-  </aside>`;
+    : `<div class="jr-client-head"><div class="jr-client-identity">${editable && record
+      ? `<button type="button" class="jr-client-link" id="jrClientLink" title="Открыть карточку клиента"><span id="jrClientName">${name}</span></button>`
+      : `<h3 id="jrClientName">${name}</h3>`}</div><div class="jr-client-acts">${editable && record ? `<button type="button" class="jr-icon-btn" id="jrClientIcon" title="Карточка клиента" aria-label="Карточка клиента">${jrIcon('user')}</button>` : ''}<button type="button" class="jr-icon-btn jr-placeholder" disabled title="Другие действия — скоро появятся в журнале" aria-label="Другие действия">${jrIcon('dots')}</button></div></div>${editable ? jrPhoneHtml(record) : ''}`}
+    <div class="jr-client-tools">${[['Планы лечения','folder'],['Медкарта','medcard'],['История посещений','clock'],['Лояльность','loyalty'],['Счета клиента','wallet']].map(([title, icon]) => {
+      const live = !creating && editable && record && { 'История посещений': 'jrVisitsOpen', 'Лояльность': 'jrLoyaltyOpen' }[title];
+      return jrTile(title, icon, live || null);
+    }).join('')}</div>
+    <label class="jr-other-visitor"><input type="checkbox" disabled> Записывает другого посетителя</label>
+    ${editable ? '<div id="jrClientSummaryBox"><p class="jr-hint">Загрузка данных клиента…</p></div>'
+      : '<section class="jr-client-info"><h4>Дополнительно</h4><div class="jr-info-row"><small>Примечание о клиенте</small><span>—</span></div><div class="jr-info-row"><small>Дата рождения</small><span>—</span></div></section><section class="jr-client-info"><h4>Статистика</h4><div class="jr-client-stats"><p>Последний визит<span>—</span></p><p>Всего визитов<span>—</span></p></div></section>'}
+  </div></aside>`;
 }
-function jrPaymentPanel(record) {
-  const state = !record ? 'Оплата после создания записи' : record.paid ? 'Есть отметка об оплате' : 'Оплата не отмечена';
-  return `<section class="jr-payment-panel"><div class="jr-payment-icon">${jrIcon('wallet')}</div><h3>${state}</h3><p>Актуальная сумма, доступные способы и история — в форме оплаты.</p>${record && !record.deleted && record.attendance !== -1 ? '<button type="button" class="btn btn-sec" id="jrPaymentOpen">Оплата визита</button>' : jrStub('Детали оплаты','wallet','jr-stub-inline')}</section>`;
+const jrRecordTotal = record => (record?.services || []).reduce((sum, s) => sum + Math.round(Number(s.cost || 0) * 100), 0) / 100;
+// live: the record card (quick buttons work); otherwise a read-only copy (move form).
+function jrPaymentPanel(record, live = false) {
+  const payable = live && record && !record.deleted && record.attendance !== -1;
+  const due = record ? jrRecordTotal(record) : 0;
+  const head = record?.paidFull ? '<span>Оплачено</span><strong>полностью</strong>' : `<span>К оплате</span><strong id="jrPayDue">${jrEscape(due.toLocaleString('ru-RU'))} ₽</strong>`;
+  const tile = (key, icon, title, sub, id = '') => payable
+    ? `<button type="button" class="jr-quick-pay${key === 'all' ? '' : ' is-quick'}"${id ? ` id="${id}"` : ''} data-quick-pay="${key}">${jrIcon(icon)}<strong>${title}</strong><small>${sub}</small></button>`
+    : `<button type="button" class="jr-quick-pay jr-placeholder" disabled title="${record ? 'Оплата этой записи недоступна' : 'Оплата после создания записи'}">${jrIcon(icon)}<span>${title}</span><small>${sub}</small></button>`;
+  return `<section class="jr-payment-panel"><div class="jr-pay-due">${head}</div>${record?.paid && !record.paidFull ? '<p class="jr-hint">Есть оплаты — подробности в «Все способы».</p>' : ''}
+    <div class="jr-pay-quick-head"><span>Быстрая оплата</span><button type="button" class="jr-link-btn jr-placeholder" disabled title="Настройка быстрой оплаты — скоро появится в журнале">${jrIcon('sliders')}<span>Настроить</span></button></div>
+    <div class="jr-pay-quick">${tile('card', 'card', 'Карта', 'Расчётный счёт')}${tile('cash', 'cash', 'Наличные', 'Основная касса')}${tile('all', 'wallet', 'Все способы', 'Бонусы, частичная оплата', 'jrPaymentOpen')}</div></section>`;
 }
 function jrStatusBar(record, canEdit = false) {
   if (record?.deleted) return `<div class="jr-status-bar"><span class="jr-state-pill is-current">${['queued', 'running'].includes(record.sync?.status) ? record.sync?.status === 'running' ? 'Удаляется…' : 'Удалена (ждёт отправки)' : 'Запись удалена'}</span></div>`;
   const current = record ? record.attendance : 0;
-  const states = [[0,'Ожидание','clock'],[1,'Пришёл','plus'],[-1,'Не пришёл','list'],[2,'Подтвердил','check']];
+  const states = [[0,'Ожидание','clock'],[1,'Пришёл','plus'],[-1,'Не пришёл','minus'],[2,'Подтвердил','check']];
   return `<div class="jr-status-bar" aria-label="Статус визита">${states.map(([value,label,icon]) => {
     if (value === current && !canEdit) return `<span class="jr-state-pill is-current" aria-current="true">${jrIcon(icon)}${label}</span>`;
     if (canEdit) return `<button type="button" data-attendance="${value}" class="jr-state-pill${value === current ? ' is-current' : ''}">${jrIcon(icon)}${label}</button>`;
@@ -97,14 +139,40 @@ function jrStatusBar(record, canEdit = false) {
     return jrStub(label,icon,'jr-state-pill');
   }).join('')}</div>`;
 }
-// editable: the lines themselves open the editor (a separate button alone
-// looked like a read-only list — 10.11.2026).
-function jrServicesPanel(record, editable = false) {
+function jrServiceDuration(record, s) {
+  const c = (journal.data?.services || []).find(x => Number(x.yclientsId) === Number(s.id));
+  const d = c?.staffDetails?.find(x => x.id === record.staffId)?.duration || c?.duration;
+  return d || ((record.services || []).length === 1 ? record.duration : null);
+}
+// Service lines as cards «master · duration / title / price». editable: a card
+// opens the editor of quantity and cost (10.11.2026).
+function jrServiceCards(record, editable = false) {
+  const staffName = jrEscape(journal.data?.staff?.find(s => s.id === record.staffId)?.name || record.staffName || 'Сотрудник');
   const tag = editable ? 'button type="button" data-service-line' : 'div';
   const end = editable ? 'button' : 'div';
-  return `<section class="jr-service-panel"><div class="jr-service-tabs"><button type="button" id="jrTabServices" class="is-active" onclick="jrStockTab('services')">${jrIcon('list')} Услуги</button>${record.id ? `<button type="button" id="jrTabGoods" onclick="jrStockTab('goods')">${jrIcon('box')} Товары</button>` : ''}</div>
-    <div id="jrServicesPane"><div class="jr-service-lines">${(record.services || []).map(s => `<${tag} class="jr-service-line"${editable ? ' title="Изменить количество и стоимость"' : ''}><span>${jrEscape(s.title || 'Услуга')}${Number(s.quantity) > 1 ? ` <small>× ${jrEscape(s.quantity)} по ${jrEscape(Number(s.unitPrice || 0).toLocaleString('ru'))} ₽</small>` : ''}</span><strong>${jrEscape(Number(s.cost || 0).toLocaleString('ru'))} ₽</strong></${end}>`).join('') || '<p>Услуги не указаны</p>'}</div>
-    <p class="jr-hint">Длительность визита при изменении услуг сохраняется.</p></div><div id="jrGoodsPane" hidden></div><div id="jrConsumablesPane" hidden></div></section>`;
+  return (record.services || []).map(s => {
+    const length = jrDurationText(jrServiceDuration(record, s));
+    return `<${tag} class="jr-service-line"${editable ? ' title="Изменить количество и стоимость"' : ''}><small>${staffName}${length ? ' · ' + jrEscape(length) : ''}</small><span>${jrEscape(s.title || 'Услуга')}${Number(s.quantity) > 1 ? ` <small>× ${jrEscape(s.quantity)} по ${jrEscape(Number(s.unitPrice || 0).toLocaleString('ru'))} ₽</small>` : ''}</span><strong>${jrEscape(Number(s.cost || 0).toLocaleString('ru'))} ₽</strong>${editable ? jrIcon('chevron') : ''}</${end}>`;
+  }).join('') || '<p class="jr-hint">Услуги не указаны</p>';
+}
+function jrServicesPanel(record, editable = false) {
+  return `<div class="jr-service-lines" id="jrLinesBox">${jrServiceCards(record, editable)}</div>`;
+}
+// The «Услуги / Товары» block with search, popular services of the master and
+// the full catalog tree; a tile adds the service to the visit (card editor).
+function jrServicePicker(record) {
+  const staffName = journal.data?.staff?.find(s => s.id === record.staffId)?.name || record.staffName || '';
+  return `<section class="jr-service-panel">
+    <label class="jr-search">${jrIcon('search')}<input id="jrCardServiceSearch" type="search" placeholder="Поиск по услугам" autocomplete="off" aria-label="Поиск по услугам"></label>
+    <h5 class="jr-popular-title" id="jrCardQuickTitle">Популярные услуги${staffName ? ': ' + jrEscape(staffName) : ''}</h5>
+    <div id="jrCardQuick" class="jr-service-choices"></div>
+    <details class="jr-all-services" id="jrCardAllBox"><summary>Все услуги${jrIcon('chevron')}</summary><div id="jrCardAll" class="jr-service-tree"></div></details></section>`;
+}
+function jrCardServiceMeta(service, staffId) {
+  const specific = service.staffDetails?.find(s => s.id === staffId);
+  const duration = jrDurationText(specific?.duration || service.duration);
+  const price = specific?.priceMin ?? service.priceMin, max = specific?.priceMax ?? service.priceMax;
+  return [duration, price != null ? (max > price ? 'от ' : '') + Number(price).toLocaleString('ru-RU') + ' ₽' : ''].filter(Boolean).join(' · ');
 }
 // Outbox package that could not be delivered to YClients: reason + safe next steps.
 function jrSyncAlert(record) {
@@ -124,17 +192,22 @@ const jrCanReshape = record => jrCanChange(record) && record.attendance !== 1;
 const jrCanDeleteUnsent = record => !record.deleted && Number(record.id) < 0 && jrUnsent(record);
 const jrCanEdit = record => !record.deleted && record.attendance !== -1 && record.attendance !== 1 && !record.paid && !jrLocked(record);
 function jrAppointmentCard(record) {
-  const canEdit = jrCanEdit(record);
+  const canEdit = jrCanEdit(record), canChange = jrCanChange(record);
   const editNote = jrSyncing(record) ? 'Идёт отправка изменений — карточка обновится автоматически.' : record.sync?.status === 'failed' ? 'Сначала повторите или отмените неотправленные изменения.'
-    : jrCanChange(record) ? `Перенос и отмена недоступны для визита со статусом «${record.attendance === 1 ? 'Пришёл' : 'Не пришёл'}». Статус, услуги и стоимость можно менять.`
-    : record.paid ? 'Сначала удалите оплаты визита в «Оплата визита».' : 'Этот визит сейчас изменить нельзя.';
-  const staffName = journal.data?.staff?.find(s => s.id === record.staffId)?.name || record.staffName || 'Сотрудник';
+    : canChange ? `Перенос и отмена недоступны для визита со статусом «${record.attendance === 1 ? 'Пришёл' : 'Не пришёл'}». Статус, услуги и стоимость можно менять.`
+    : record.paid ? 'Визит оплачен: чтобы изменить статус, услуги или стоимость, сначала удалите оплаты («Все способы»).' : 'Этот визит сейчас изменить нельзя.';
+  const staff = journal.data?.staff?.find(s => s.id === record.staffId);
+  const staffName = staff?.name || record.staffName || 'Сотрудник';
   const initials = staffName.split(/\s+/).slice(0,2).map(s => s[0] || '').join('');
+  const avatar = staff?.avatar && /^https:\/\//.test(staff.avatar) ? `<img class="jr-staff-avatar" src="${jrEscape(staff.avatar)}" alt="" loading="lazy">` : `<span class="jr-staff-avatar">${jrEscape(initials)}</span>`;
   const day = record.date ? new Date(record.date + 'T12:00:00+03:00').toLocaleDateString('ru', { day:'numeric',month:'long',timeZone:'Europe/Moscow' }) : 'Дата не указана';
-  return `${jrSyncAlert(record)}<div class="jr-booking-layout"><aside class="jr-booking-side"><div class="jr-visit-summary"><div class="jr-staff-identity"><span class="jr-staff-avatar">${jrEscape(initials)}</span><div><strong>${jrEscape(staffName)}</strong><small>Специалист</small></div></div><div class="jr-visit-date">${jrIcon('calendar')}<div><strong>${jrEscape(day)}</strong><small>${jrEscape(record.time)} · ${jrEscape(record.duration)} мин.</small></div></div>${canEdit ? `<button type="button" class="btn btn-sec jr-move-btn" id="jrMove">${jrIcon('move')}Перенести запись</button>` : `<button type="button" class="btn btn-sec jr-move-btn" disabled title="${jrEscape(editNote)}">Перенести запись</button>`}</div>
-    <label class="jr-side-label">Комментарий к записи<textarea id="jrCommentEdit" rows="4" maxlength="1000" placeholder="Комментарий не указан"${jrCanChange(record) ? '' : ' readonly'}>${jrEscape(record.comment || '')}</textarea></label>${jrExtraFields(record)}${record ? jrTools(record) : '<div class="jr-tools">' + [['Расширенные поля','list'],['Повторение записи','repeat'],['Уведомления о визите','bell']].map(([label,icon]) => jrStub(label,icon)).join('') + '</div>'}</aside>
-    <section class="jr-booking-main jr-booking-panel">${jrStatusBar(record,jrCanChange(record))}${jrServicesPanel(record, jrCanChange(record))}${jrCanChange(record) ? '<button type="button" class="btn btn-sec" id="jrEditServices">Изменить услуги, количество и стоимость</button>' : record.paid && !record.deleted ? '<p class="jr-hint">Визит оплачен: чтобы изменить статус, услуги или стоимость, сначала удалите оплаты в «Оплата визита».</p>' : ''}${jrPaymentPanel(record)}${!canEdit ? `<p class="jr-hint">${jrEscape(editNote)}</p>` : ''}</section>${jrClientPanel(record, false, true)}</div>
-    <footer class="jr-booking-footer"><span class="jr-hint">Изменения сохраняются кнопкой «Сохранить изменения» (при закрытии карточки спросим).</span><div>${canEdit ? '<button type="button" class="btn btn-sec" id="jrCancel">Отменить запись</button>' : ''}${jrCanReshape(record) || jrCanDeleteUnsent(record) ? '<button type="button" class="btn btn-sec jr-danger" id="jrDelete">Удалить запись</button>' : ''}${record.deleted ? '' : '<button type="button" class="btn btn-sec" id="jrRebook">Записать повторно</button>'}${jrCanChange(record) ? '<button type="button" class="btn btn-pri" id="jrSaveChanges" disabled>Сохранить изменения</button>' : jrStub('Сохранить изменения','check','jr-stub-inline')}</div></footer>`;
+  return `${jrSyncAlert(record)}<div class="jr-booking-layout"><aside class="jr-booking-side"><div class="jr-visit-summary"><div class="jr-staff-identity">${avatar}<div><strong>${jrEscape(staffName)}</strong><small>${jrEscape(staff?.specialization || 'Специалист')}</small></div></div><div class="jr-visit-date"><span class="jr-date-icon">${jrIcon('calendar')}</span><div><strong>${jrEscape(day)}</strong><small>${jrEscape(jrTimeRange(record))}</small></div></div>
+      <div class="jr-move-row">${canEdit ? `<button type="button" class="btn btn-sec jr-move-btn" id="jrMove">${jrIcon('move')}Перенести запись</button>` : `<button type="button" class="btn btn-sec jr-move-btn" disabled title="${jrEscape(editNote)}">${jrIcon('move')}Перенести запись</button>`}<button type="button" class="btn btn-sec jr-pencil" id="jrExtraToggle" title="Длительность, перерыв, цвет, метки" aria-label="Длительность, перерыв, цвет, метки" aria-expanded="false" aria-controls="jrExtraBox">${jrIcon('pencil')}</button></div></div>
+    <div id="jrExtraBox" class="jr-extra-box" hidden>${jrExtraFields(record)}</div>
+    <h4 class="jr-pinned">${jrIcon('pin')}Закрепленные поля</h4>
+    <label class="jr-side-label">Комментарий к записи<textarea id="jrCommentEdit" rows="4" maxlength="1000" placeholder="Комментарий не указан"${canChange ? '' : ' readonly'}>${jrEscape(record.comment || '')}</textarea></label>${jrTools(record, true)}</aside>
+    <section class="jr-booking-main jr-booking-panel">${jrStatusBar(record, canChange)}${!canEdit ? `<p class="jr-hint">${jrEscape(editNote)}</p>` : ''}<div class="jr-service-tabs"><button type="button" id="jrTabServices" class="is-active" onclick="jrStockTab('services')">${jrIcon('list')} Услуги</button><button type="button" id="jrTabGoods" onclick="jrStockTab('goods')">${jrIcon('box')} Товары</button></div><div id="jrServicesPane">${jrServicesPanel(record, canChange)}${canChange ? '<button type="button" id="jrEditServices" hidden>Изменить услуги, количество и стоимость</button>' + jrServicePicker(record) : ''}</div><div id="jrGoodsPane" hidden></div><div id="jrConsumablesPane" hidden></div>${jrPaymentPanel(record, true)}</section>${jrClientPanel(record, false, true)}</div>
+    <footer class="jr-booking-footer">${canEdit ? '<button type="button" class="btn btn-sec" id="jrCancel">Отменить запись</button>' : ''}${jrCanReshape(record) || jrCanDeleteUnsent(record) ? '<button type="button" class="btn btn-sec" id="jrDelete">Удалить запись</button>' : ''}${canChange ? '<button type="button" class="btn btn-pri" id="jrSaveChanges" disabled>Сохранить запись</button>' : jrStub('Сохранить запись','check','jr-stub-inline')}</footer>`;
 }
 
 async function jrOpen(id) {
@@ -152,9 +225,22 @@ async function jrOpen(id) {
 function jrRenderRecord(r) {
     const canEdit = jrCanEdit(r);
     jrEl('jrModalBody').innerHTML = jrAppointmentCard(r);
+    jrEl('jrModal').classList?.add('jr-dialog-card');
     jrSetCardStatus(r.deleted ? null : r.attendance);
     if (jrEl('jrModal')?.dataset) { if (r.paidFull) jrEl('jrModal').dataset.paidFull = '1'; else delete jrEl('jrModal').dataset.paidFull; }
-    if (!r.deleted && r.attendance !== -1) jrEl('jrPaymentOpen').onclick = () => jrPayFromCard(r.id);
+    if (!r.deleted && r.attendance !== -1) {
+      jrEl('jrPaymentOpen').onclick = () => jrPayFromCard(r.id);
+      // Quick payment preselects the method in the payment form.
+      jrEl('jrModalBody').querySelectorAll('.jr-quick-pay.is-quick').forEach(b => { b.onclick = () => jrPayFromCard(r.id, b.dataset.quickPay); });
+    }
+    const extraBox = jrEl('jrExtraBox'), extraToggle = jrEl('jrExtraToggle');
+    const toggleExtra = () => {
+      extraBox.hidden = !extraBox.hidden;
+      extraToggle.setAttribute?.('aria-expanded', String(!extraBox.hidden));
+      extraToggle.classList?.toggle('is-current', !extraBox.hidden);
+    };
+    if (extraBox && extraToggle) extraToggle.onclick = toggleExtra;
+    if (extraBox && jrEl('jrExtraOpen')) jrEl('jrExtraOpen').onclick = toggleExtra;
     if (r.sync?.status === 'failed') {
       if (r.sync.errorCode !== 'uncertain') jrEl('jrSyncRetry').onclick = () => jrSyncAction(r.sync.outboxId, 'retry');
       if (r.sync.errorCode !== 'uncertain') jrEl('jrSyncDismiss').onclick = () => jrSyncAction(r.sync.outboxId, 'dismiss');
@@ -175,6 +261,14 @@ function jrRenderRecord(r) {
     if ((jrCanReshape(r) || jrCanDeleteUnsent(r)) && jrEl('jrDelete')) jrEl('jrDelete').onclick = () => jrDeleteRecord(r);
     if (!r.deleted && jrEl('jrRebook')) jrEl('jrRebook').onclick = () => jrRebook(r);
     if (jrEl('jrVisitsOpen')) jrEl('jrVisitsOpen').onclick = () => jrOpenVisits(r);
+    if (jrEl('jrLoyaltyOpen')) jrEl('jrLoyaltyOpen').onclick = () => jrOpenLoyalty(r);
+    if (jrEl('jrClientLink')) jrEl('jrClientLink').onclick = () => jrOpenClientCard(r);
+    if (jrEl('jrClientIcon')) jrEl('jrClientIcon').onclick = () => jrOpenClientCard(r);
+    // «Клиент / Чат»: the chat pane loads our conversation with this client.
+    if (jrEl('jrTabChat')) {
+      jrEl('jrTabChat').onclick = () => jrChatShowTab(r, 'chat');
+      jrEl('jrTabClient').onclick = () => jrChatShowTab(r, 'client');
+    }
     const historyBtn = jrEl('jrHistoryOpen');
     if (historyBtn) {
       historyBtn.onclick = () => jrLoadHistory(r.id);
@@ -245,13 +339,13 @@ function jrConfirmAction(r, action) {
 // (typically «Пришёл») is saved as its own package first, then the payment form
 // opens. Before, the button was disabled after any change and the cashier had
 // to save, reopen the card and only then pay.
-async function jrPayFromCard(recordId) {
+async function jrPayFromCard(recordId, preferred = 'all') {
   if (journal.busy) return;
   if (journal.session?.edit && !journal.payment) {
     const saved = await jrSave(jrSessionBody());
     if (!saved) return false;
   }
-  return jrOpenPayment(recordId);
+  return preferred === 'all' ? jrOpenPayment(recordId) : jrOpenPayment(recordId, preferred);
 }
 function jrBindRecordEdit(record) {
   journal.session = jrNewSession({ recordId: record.id, servicesVersion: record.servicesVersion });
@@ -314,41 +408,75 @@ function jrBindRecordEdit(record) {
     jrEl('jrClientSearch').oninput = () => jrLoadClients(jrEl('jrClientSearch').value.trim(), pickClient);
     jrLoadClients('', pickClient);
   };
-  jrEl('jrEditServices').onclick = () => {
-    const panel = jrEl('jrModalBody').querySelector('.jr-service-panel');
-    let lines = record.services.map(s => ({ serviceId: s.id, title: s.title, quantity: s.quantity || 1,
-      unitPrice: s.unitPrice ?? s.cost, total: s.cost, mode: 'total', discount: 0 }));
-    const choices = (journal.data?.services || []).filter(s => s.yclientsId > 0 && s.staffIds.includes(record.staffId));
-    const mark = () => {
-      journal.session.edit ||= {};
-      journal.session.edit.lines = lines.map(({ title, ...line }) => line);
-      changed();
-    };
-    const render = () => {
-      panel.innerHTML = `<h3>Услуги и стоимость</h3>${lines.map((l, i) => {
-        const calc = jrLineCalculation(l);
-        return `<section class="jr-line-editor"><div class="jr-line-heading"><strong>${jrEscape(l.title)}</strong><button type="button" data-remove="${i}" aria-label="Удалить услугу">×</button></div><div class="jr-line-fields">${[['quantity','Кол-во'],['unitPrice','Цена, ₽'],['discount','Скидка, %'],['total','Итого, ₽']].map(([key,label]) => `<label>${label}<input type="number" min="${key === 'quantity' ? 1 : 0}" step="${key === 'quantity' ? 1 : '0.01'}" data-edit-line="${i}" data-field="${key}" value="${jrEscape(key === 'total' ? calc?.total ?? l.total : key === 'discount' && l.mode === 'total' ? calc?.discount ?? 0 : l[key])}"></label>`).join('')}</div></section>`;
-      }).join('')}<label>Добавить услугу<select id="jrAddService"><option value="">Выберите услугу</option>${choices.filter(s => !lines.some(l => l.serviceId === s.yclientsId)).map(s => `<option value="${s.yclientsId}">${jrEscape(s.title)}</option>`).join('')}</select></label><p class="jr-hint">Длительность визита сохраняется. Изменения отправятся по кнопке «Сохранить изменения».</p>`;
-      panel.querySelectorAll('[data-edit-line]').forEach(input => { input.onchange = () => {
-        const l = lines[Number(input.dataset.editLine)], key = input.dataset.field;
-        const discount = jrLineCalculation(l)?.discount ?? 0;
-        l[key] = input.value;
-        l.mode = key === 'total' ? 'total' : 'discount';
-        if (key !== 'discount') l.discount = discount;
-        mark(); render();
-      }; });
-      panel.querySelectorAll('[data-remove]').forEach(b => { b.onclick = () => { lines.splice(Number(b.dataset.remove), 1); mark(); render(); }; });
-      jrEl('jrAddService').onchange = e => {
-        const s = choices.find(s => s.yclientsId === Number(e.target.value));
-        if (!s) return;
-        const price = s.staffDetails?.find(x => x.id === record.staffId)?.priceMin ?? s.priceMin ?? 0;
-        lines.push({serviceId:s.yclientsId,title:s.title,quantity:1,unitPrice:price,total:price,discount:0,mode:'discount'});
-        mark(); render();
-      };
-    };
-    render(); jrEl('jrEditServices').disabled = true;
+  // Services editor: the lines box turns into editors of quantity and cost;
+  // the picker below adds services (an existing one gets +1 to its quantity).
+  const choices = (journal.data?.services || []).filter(s => s.yclientsId > 0 && (s.staffIds || []).includes(record.staffId));
+  let lines = null;
+  const mark = () => {
+    journal.session.edit ||= {};
+    journal.session.edit.lines = lines.map(({ title, ...line }) => line);
+    changed();
   };
-  jrEl('jrModalBody').querySelectorAll('[data-service-line]').forEach(line => { line.onclick = () => jrEl('jrEditServices').onclick(); });
+  const renderLines = () => {
+    const box = jrEl('jrLinesBox');
+    box.innerHTML = lines.map((l, i) => {
+      const calc = jrLineCalculation(l);
+      return `<section class="jr-line-editor"><div class="jr-line-heading"><strong>${jrEscape(l.title)}</strong><button type="button" data-remove="${i}" aria-label="Удалить услугу">×</button></div><div class="jr-line-fields">${[['quantity','Кол-во'],['unitPrice','Цена, ₽'],['discount','Скидка, %'],['total','Итого, ₽']].map(([key,label]) => `<label>${label}<input type="number" min="${key === 'quantity' ? 1 : 0}" step="${key === 'quantity' ? 1 : '0.01'}" data-edit-line="${i}" data-field="${key}" value="${jrEscape(key === 'total' ? calc?.total ?? l.total : key === 'discount' && l.mode === 'total' ? calc?.discount ?? 0 : l[key])}"></label>`).join('')}</div></section>`;
+    }).join('') + '<p class="jr-hint">Длительность визита сохраняется. Добавить услугу — в блоке «Услуги» ниже.</p>';
+    // «К оплате» follows the draft (until saved it is the draft total).
+    const totals = lines.map(jrLineCalculation), due = jrEl('jrPayDue');
+    if (due) due.textContent = totals.every(Boolean) ? (totals.reduce((sum, t) => sum + Math.round(t.total * 100), 0) / 100).toLocaleString('ru-RU') + ' ₽' : 'Проверьте стоимость';
+    box.querySelectorAll('[data-edit-line]').forEach(input => { input.onchange = () => {
+      const l = lines[Number(input.dataset.editLine)], key = input.dataset.field;
+      const discount = jrLineCalculation(l)?.discount ?? 0;
+      l[key] = input.value;
+      l.mode = key === 'total' ? 'total' : 'discount';
+      if (key !== 'discount') l.discount = discount;
+      mark(); renderLines();
+    }; });
+    box.querySelectorAll('[data-remove]').forEach(b => { b.onclick = () => { lines.splice(Number(b.dataset.remove), 1); mark(); renderLines(); }; });
+  };
+  const startEdit = () => {
+    if (!lines) lines = record.services.map(s => ({ serviceId: s.id, title: s.title, quantity: s.quantity || 1,
+      unitPrice: s.unitPrice ?? s.cost, total: s.cost, mode: 'total', discount: 0 }));
+    renderLines();
+  };
+  const addService = id => {
+    const s = choices.find(x => x.yclientsId === Number(id));
+    if (!s) return;
+    if (!lines) startEdit();
+    const same = lines.find(l => l.serviceId === s.yclientsId);
+    if (same) {
+      const discount = jrLineCalculation(same)?.discount ?? 0;
+      same.quantity = Number(same.quantity) + 1; same.mode = 'discount'; same.discount = discount;
+    } else {
+      const price = s.staffDetails?.find(x => x.id === record.staffId)?.priceMin ?? s.priceMin ?? 0;
+      lines.push({ serviceId: s.yclientsId, title: s.title, quantity: 1, unitPrice: price, total: price, discount: 0, mode: 'discount' });
+    }
+    mark(); renderLines();
+    notify(`Добавлено: ${s.title}. Сохраните запись.`);
+  };
+  jrEl('jrEditServices').onclick = startEdit;
+  jrEl('jrModalBody').querySelectorAll('[data-service-line]').forEach(line => { line.onclick = startEdit; });
+  const renderPicker = () => {
+    const quick = jrEl('jrCardQuick'), all = jrEl('jrCardAll');
+    if (!quick || !all) return;
+    const query = String(jrEl('jrCardServiceSearch')?.value || '').trim().toLowerCase();
+    const last = new Set();
+    const summary = journal.clientSummary?.request === journal.modalRequest ? journal.clientSummary : null;
+    for (const v of summary?.lastVisits || []) for (const t of v.services || []) last.add(String(t).toLowerCase());
+    const tile = s => `<button type="button" class="jr-service-choice" data-add-service="${s.yclientsId}"><span>${jrEscape(s.title)}</span><small>${jrEscape(jrCardServiceMeta(s, record.staffId))}</small>${last.has(String(s.title).toLowerCase()) ? '<em class="jr-last-tag">Последний визит</em>' : ''}</button>`;
+    const popular = query ? choices.filter(s => s.title.toLowerCase().includes(query))
+      : [...choices.filter(s => last.has(String(s.title).toLowerCase())), ...choices.filter(s => !last.has(String(s.title).toLowerCase()))].slice(0, 3);
+    if (jrEl('jrCardQuickTitle')) jrEl('jrCardQuickTitle').hidden = !!query;
+    quick.innerHTML = popular.slice(0, query ? 12 : 3).map(tile).join('') || '<p class="jr-hint">Услуги не найдены</p>';
+    const expanded = new Set(Array.from(all.querySelectorAll('details[open]')).map(node => node.dataset.categoryId));
+    all.innerHTML = journal.data ? jrServiceCategoryTree(choices, tile, query, expanded) : '';
+    jrEl('jrModalBody').querySelectorAll('[data-add-service]').forEach(b => { b.onclick = () => addService(b.dataset.addService); });
+  };
+  if (jrEl('jrCardServiceSearch')) jrEl('jrCardServiceSearch').oninput = renderPicker;
+  journal.cardPicker = { request: journal.modalRequest, render: renderPicker };
+  renderPicker();
 }
 
 // ---- History of changes (spec 4.2) and client panel (4.4) ----
@@ -374,15 +502,36 @@ async function jrLoadHistory(id) {
     if (request === journal.modalRequest && now) { now.hidden = false; now.innerHTML = `<p class="jr-hint">${jrEscape(e.message)}</p>`; }
   }
 }
+const jrLongDate = iso => /^\d{4}-\d{2}-\d{2}/.test(String(iso || '')) ? new Date(String(iso).slice(0, 10) + 'T12:00:00+03:00').toLocaleDateString('ru', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'Europe/Moscow' }).replace(/\s*г\.$/, '') : null;
+function jrAge(iso, now = new Date()) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(iso || ''));
+  if (!m) return null;
+  const today = new Date(now.getTime() + 3 * 3600e3).toISOString().slice(0, 10);
+  let age = Number(today.slice(0, 4)) - Number(m[1]);
+  if (today.slice(5) < `${m[2]}-${m[3]}`) age--;
+  if (age < 0 || age > 130) return null;
+  const tail = age % 10, teen = age % 100 >= 11 && age % 100 <= 14;
+  return `${age} ${teen ? 'лет' : tail === 1 ? 'год' : tail >= 2 && tail <= 4 ? 'года' : 'лет'}`;
+}
+// «Дополнительно» and «Статистика» of the client panel (local data, abonements live).
 function jrClientSummaryHtml(s) {
   if (!s) return '<p class="jr-hint">Нет данных клиента.</p>';
   const v = value => jrEscape(value ?? '—');
+  const add = label => `<button type="button" class="jr-add-stub jr-placeholder" disabled title="${jrEscape(label)} — скоро появится в журнале">${jrIcon('plus')}<span>${jrEscape(label)}</span></button>`;
+  const birth = jrLongDate(s.birthday);
+  const age = birth ? jrAge(s.birthday) : null;
+  const extra = `<section class="jr-client-info"><h4>Дополнительно</h4>
+    <div class="jr-info-row"><small>Примечание о клиенте</small>${s.note ? `<span class="jr-note">${jrEscape(s.note)}</span>` : add('Добавить примечание')}</div>
+    <div class="jr-info-row"><small>Дата рождения</small><span>${birth ? jrEscape(birth + (age ? ', ' + age : '')) : '-'}</span></div>
+    <div class="jr-info-row"><small>Дополнительный телефон</small><span>-</span></div>
+    <div class="jr-info-row"><small>Номер договора</small>${s.contractNo ? `<span>${jrEscape(s.contractNo)}</span>` : add('Добавить «Номер договора»')}</div></section>`;
   const abonements = s.abonements === null || s.abonements === undefined ? '<p class="jr-hint">Абонементы: не удалось прочитать.</p>'
     : s.abonements.length ? `<ul class="jr-abonements">${s.abonements.map(a => `<li>${jrEscape(a.title)}${a.balance != null ? ' · осталось ' + jrEscape(a.balance) : ''}${a.expires ? ' · до ' + jrEscape(String(a.expires).slice(0, 10)) : ''}${a.frozen ? ' · заморожен' : ''}</li>`).join('')}</ul>`
     : '<p class="jr-hint">Абонементов нет.</p>';
-  const last = (s.lastVisits || []).length ? `<h4>Последние визиты</h4><ul class="jr-last-visits">${s.lastVisits.map(x => `<li>${jrEscape(x.date)} · ${jrEscape(x.staffName)} · ${jrEscape((x.services || []).join(', '))} · ${jrEscape(jrStatus({ attendance: x.attendance }))}</li>`).join('')}</ul>` : '';
+  const last = (s.lastVisits || []).length ? `<h5>Последние визиты</h5><ul class="jr-last-visits">${s.lastVisits.map(x => `<li>${jrEscape(x.date)} · ${jrEscape(x.staffName)} · ${jrEscape((x.services || []).join(', '))} · ${jrEscape(jrStatus({ attendance: x.attendance }))}</li>`).join('')}</ul>` : '';
   const source = s.bonusesSource === 'ledger' ? 'по журналу LoyalPro' : s.bonusesSource === 'card' ? 'по карте лояльности' : '';
-  return `<div class="jr-client-stats"><p>Визитов<span>${v(s.visits?.success)}</span></p><p>Неявок<span>${v(s.visits?.fail)}</span></p><p>Бонусы<span>${v(s.bonusBalance)}</span></p><p>Уровень<span>${v(s.loyaltyLevel)}</span></p><p>Потрачено<span>${s.totalSpent == null ? '—' : jrEscape(Number(s.totalSpent).toLocaleString('ru-RU') + ' ₽')}</span></p></div>${source ? `<small class="jr-hint">Бонусы ${source}</small>` : ''}<h4>Абонементы</h4>${abonements}${last}`;
+  const lastVisit = jrLongDate(s.lastVisitDate);
+  return `${extra}<section class="jr-client-info"><h4>Статистика</h4><div class="jr-client-stats"><p>Последний визит<span>${lastVisit ? jrEscape(lastVisit) : '—'}</span></p><p>Всего визитов<span>${v(s.visits?.success)}</span></p><p>Неявок<span>${v(s.visits?.fail)}</span></p><p>Бонусы<span>${v(s.bonusBalance)}</span></p><p>Уровень<span>${v(s.loyaltyLevel)}</span></p><p>Потрачено<span>${s.totalSpent == null ? '—' : jrEscape(Number(s.totalSpent).toLocaleString('ru-RU') + ' ₽')}</span></p></div>${source ? `<small class="jr-hint">Бонусы ${source}</small>` : ''}<h5>Абонементы</h5>${abonements}${last}</section>`;
 }
 async function jrLoadClientSummary(r) {
   const box = jrEl('jrClientSummaryBox');
@@ -401,13 +550,33 @@ async function jrLoadClientSummary(r) {
     const s = await jrApi('clients/summary?' + new URLSearchParams({ phone }));
     if (request !== journal.modalRequest) return;
     const html = jrClientSummaryHtml(s);
-    journal.clientSummary = { phone, request, html, clientId: s.clientId };
+    journal.clientSummary = { phone, request, html, clientId: s?.clientId ?? null, lastVisits: s?.lastVisits || [] };
     const now = jrEl('jrClientSummaryBox');
     if (now) now.innerHTML = html;
+    if (journal.cardPicker?.request === request) journal.cardPicker.render();
   } catch (e) {
     if (request !== journal.modalRequest) return;
     journal.clientSummary = null; // let the next render retry
     const now = jrEl('jrClientSummaryBox');
     if (now) now.innerHTML = `<p class="jr-hint">Не удалось загрузить данные клиента: ${jrEscape(e.message)}</p>`;
   }
+}
+// The client name opens the LoyalPro client card (clients.js openCD). The journal
+// dialog is modal (top layer), so it is closed first; unsaved edits ask as on ✕.
+async function jrOpenClientCard(r) {
+  const kind = jrUnsavedKind();
+  if (kind) return jrAskClose(kind);
+  const phone = String(r?.clientPhone || '').replace(/\D/g, '');
+  if (!phone) return jrMessage('Телефон клиента неизвестен — карточку клиента найти нельзя.');
+  const request = journal.modalRequest;
+  let id = journal.clientSummary?.phone === phone ? journal.clientSummary.clientId : undefined;
+  if (id === undefined) {
+    try { id = (await jrApi('clients/summary?' + new URLSearchParams({ phone })))?.clientId ?? null; }
+    catch (e) { if (request === journal.modalRequest) jrMessage(e.message); return; }
+    if (request !== journal.modalRequest) return;
+  }
+  if (!id) return jrMessage('Клиента нет в базе LoyalPro.');
+  if (typeof openCD !== 'function') return jrMessage('Карточка клиента недоступна.');
+  jrClose(true);
+  openCD(id);
 }
