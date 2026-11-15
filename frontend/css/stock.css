@@ -465,3 +465,466 @@
     padding-right: 16px;
   }
 }
+
+/* Operations journal.  The operation-specific wrapper keeps this dense layout
+   isolated from the catalog, balances and document forms above. */
+#page-stock .stock-operations {
+  min-width: 0;
+  color: var(--t1);
+}
+#page-stock.stock-operations-active > .stock-page-head,
+#page-stock.stock-operations-active .stock-page-head.stock-common-head {
+  display: none;
+}
+#page-stock .stock-operations-head,
+#page-stock .stock-operations-header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 20px;
+  margin: 0 0 18px;
+}
+#page-stock .stock-operations-caption,
+#page-stock .stock-operations .stock-breadcrumb {
+  margin: 0 0 12px;
+  color: var(--t2);
+  font-size: 13px;
+}
+#page-stock .stock-operations h1,
+#page-stock .stock-operations-title {
+  margin: 0;
+  color: var(--t1);
+  font-size: 30px;
+  line-height: 1.12;
+}
+#page-stock .stock-operations-actions,
+#page-stock .stock-operations-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  flex-wrap: wrap;
+}
+#page-stock .stock-operations-actions > button,
+#page-stock .stock-operations-head-actions > button {
+  min-height: 36px;
+  padding: 8px 14px;
+  border: 1px solid var(--bd);
+  border-radius: 7px;
+  background: var(--card);
+  color: var(--t1);
+  font: inherit;
+  cursor: pointer;
+}
+#page-stock .stock-operations-actions .stock-operations-export,
+#page-stock .stock-operations-head-actions .stock-operations-export {
+  background: var(--card);
+}
+#page-stock .stock-operations-actions .stock-operations-menu,
+#page-stock .stock-operations-head-actions .stock-operations-menu,
+#page-stock .stock-operations-actions [data-stock-operation-menu],
+#page-stock .stock-operations-head-actions [data-stock-operation-menu] {
+  border-color: #eab308;
+  background: #facc15;
+  color: #241a00;
+}
+#page-stock .stock-operations-actions .stock-operations-menu > summary,
+#page-stock .stock-operations-head-actions .stock-operations-menu > summary {
+  min-height: 36px;
+  padding: 8px 14px;
+  border: 1px solid #eab308;
+  border-radius: 7px;
+  background: #facc15;
+  color: #241a00;
+  font: inherit;
+  cursor: pointer;
+}
+#page-stock .stock-operations-menu-wrap {
+  position: relative;
+}
+#page-stock .stock-operations-dropdown {
+  position: relative;
+}
+#page-stock .stock-operations-filter-extra {
+  grid-column: 1 / -1;
+  padding-top: 10px;
+  border-top: 1px solid var(--bd);
+}
+#page-stock .stock-operations-extra {
+  grid-column: 1 / -1;
+  border-top: 1px solid var(--bd);
+  padding-top: 10px;
+}
+#page-stock .stock-operations-extra summary {
+  width: fit-content;
+  color: var(--t2);
+  font-size: 13px;
+  cursor: pointer;
+}
+#page-stock .stock-operations-extra-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px 30px;
+  margin-top: 10px;
+}
+#page-stock .stock-operations-filter-footer {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding-top: 4px;
+}
+#page-stock .stock-operations-filter-footer label {
+  flex: 0 1 auto;
+  width: auto;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+#page-stock .stock-operations-filter-footer > button {
+  flex: 0 0 24%;
+  min-width: 180px;
+  justify-content: center;
+  background: #fbad55;
+  color: #241a00;
+  border: 0;
+  border-radius: 4px;
+  box-shadow: none;
+}
+#page-stock #stockOperationsError {
+  margin: 12px 0;
+  color: var(--danger, #b63e36);
+  white-space: pre-line;
+}
+#page-stock .stock-operations-menu-list {
+  position: absolute;
+  z-index: 5;
+  top: calc(100% + 3px);
+  right: 0;
+  min-width: 190px;
+  padding: 6px 0;
+  border: 1px solid var(--bd);
+  border-radius: 10px;
+  background: var(--card);
+  box-shadow: 0 8px 20px rgba(0, 0, 0, .14);
+}
+#page-stock .stock-operations-menu-list button,
+#page-stock .stock-operations-menu-list a {
+  display: block;
+  width: 100%;
+  padding: 10px 13px;
+  border: 0;
+  background: transparent;
+  color: var(--t1);
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
+}
+#page-stock .stock-operations-menu-list button:hover,
+#page-stock .stock-operations-menu-list a:hover {
+  background: var(--bg);
+}
+#page-stock .stock-operations-filters,
+#page-stock .stock-operation-filters,
+#page-stock .stock-operations-filter-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 14px 30px;
+  margin: 0 0 15px;
+  padding: 18px 0 14px;
+  border-top: 1px solid var(--bd);
+  border-bottom: 1px solid var(--bd);
+}
+#page-stock .stock-operations-filters,
+#page-stock .stock-operation-filters {
+  display: block;
+  border-top: 1px solid var(--bd);
+  border-bottom: 1px solid var(--bd);
+}
+#page-stock .stock-operations-filters > .stock-operations-filter-grid,
+#page-stock .stock-operation-filters > .stock-operations-filter-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 14px 30px;
+  padding: 18px 0 14px;
+}
+#page-stock .stock-operations-filters label,
+#page-stock .stock-operation-filters label,
+#page-stock .stock-operations-filter-grid label {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  color: var(--t2);
+  font-size: 13px;
+  font-weight: 400;
+}
+#page-stock .stock-operations-filters input,
+#page-stock .stock-operations-filters select,
+#page-stock .stock-operation-filters input,
+#page-stock .stock-operation-filters select,
+#page-stock .stock-operations-filter-grid input,
+#page-stock .stock-operations-filter-grid select {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  min-height: 35px;
+  padding: 7px 10px;
+  border: 1px solid var(--bd);
+  border-radius: 0;
+  background: var(--card);
+  color: var(--t1);
+  font: inherit;
+}
+#page-stock .stock-operations-filters .stock-search,
+#page-stock .stock-operation-filters .stock-search,
+#page-stock .stock-operations-filters .stock-filter-wide,
+#page-stock .stock-operation-filters .stock-filter-wide,
+#page-stock .stock-operations-filter-grid .stock-search,
+#page-stock .stock-operations-filter-grid .stock-filter-wide {
+  grid-column: span 2;
+}
+#page-stock .stock-operations-filter-actions,
+#page-stock .stock-operation-filter-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  margin: 0 0 20px;
+}
+#page-stock .stock-operations-filter-actions button,
+#page-stock .stock-operation-filter-actions button,
+#page-stock .stock-operations-show {
+  min-height: 31px;
+  min-width: 180px;
+  padding: 6px 18px;
+  border: 0;
+  border-radius: 4px;
+  background: #f6ad55;
+  color: #fff;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+#page-stock .stock-operations-filter-actions button:hover,
+#page-stock .stock-operation-filter-actions button:hover,
+#page-stock .stock-operations-show:hover {
+  background: #ed9835;
+}
+#page-stock .stock-operations-page-size {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--t2);
+  font-size: 13px;
+}
+#page-stock .stock-operations-page-size select {
+  min-height: 31px;
+  padding: 4px 6px;
+  border: 1px solid var(--bd);
+  background: var(--card);
+  color: var(--t1);
+}
+#page-stock .stock-operations-count,
+#page-stock .stock-operation-count,
+#page-stock #stockOperationsCount,
+#page-stock .stock-operations-meta {
+  margin: 0 auto 9px;
+  color: var(--t2);
+  text-align: center;
+  font-size: 13px;
+}
+#page-stock .stock-operations-count strong,
+#page-stock .stock-operation-count strong {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 7px 10px;
+  border: 1px solid var(--bd);
+  background: var(--card);
+  color: #f27f32;
+}
+#page-stock .stock-operations-table-wrap,
+#page-stock .stock-operation-table-wrap,
+#page-stock #stockOperationsList {
+  min-width: 0;
+  overflow-x: auto;
+  border: 1px solid var(--bd);
+  background: var(--card);
+}
+#page-stock .stock-operations-table,
+#page-stock .stock-operation-table,
+#page-stock #stockOperationsList > table {
+  width: 100%;
+  min-width: 1450px;
+  margin: 0;
+  border-collapse: collapse;
+  table-layout: fixed;
+  font-size: 13px;
+}
+#page-stock .stock-operations-table th,
+#page-stock .stock-operations-table td,
+#page-stock .stock-operation-table th,
+#page-stock .stock-operation-table td,
+#page-stock #stockOperationsList > table th,
+#page-stock #stockOperationsList > table td {
+  padding: 10px 8px;
+  border: 1px solid var(--bd);
+  vertical-align: top;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+#page-stock .stock-operations-table th,
+#page-stock .stock-operation-table th,
+#page-stock #stockOperationsList > table th {
+  background: var(--card);
+  color: var(--t2);
+  font-weight: 700;
+  text-align: left;
+  word-break: normal;
+  overflow-wrap: normal;
+  text-transform: none;
+  letter-spacing: normal;
+  font-size: 12px;
+}
+#page-stock .stock-operations-table th:nth-child(1), #page-stock .stock-operations-table td:nth-child(1), #page-stock .stock-operation-table th:nth-child(1), #page-stock .stock-operation-table td:nth-child(1) { width: 2%; }
+#page-stock .stock-operations-table th:nth-child(2), #page-stock .stock-operations-table td:nth-child(2), #page-stock .stock-operation-table th:nth-child(2), #page-stock .stock-operation-table td:nth-child(2) { width: 8%; }
+#page-stock .stock-operations-table th:nth-child(3), #page-stock .stock-operations-table td:nth-child(3), #page-stock .stock-operation-table th:nth-child(3), #page-stock .stock-operation-table td:nth-child(3) { width: 6%; }
+#page-stock .stock-operations-table th:nth-child(4), #page-stock .stock-operations-table td:nth-child(4), #page-stock .stock-operation-table th:nth-child(4), #page-stock .stock-operation-table td:nth-child(4) { width: 10%; }
+#page-stock .stock-operations-table th:nth-child(5), #page-stock .stock-operations-table td:nth-child(5), #page-stock .stock-operation-table th:nth-child(5), #page-stock .stock-operation-table td:nth-child(5) { width: 8%; }
+#page-stock .stock-operations-table th:nth-child(6), #page-stock .stock-operations-table td:nth-child(6), #page-stock .stock-operation-table th:nth-child(6), #page-stock .stock-operation-table td:nth-child(6) { width: 7%; }
+#page-stock .stock-operations-table th:nth-child(7), #page-stock .stock-operations-table td:nth-child(7), #page-stock .stock-operation-table th:nth-child(7), #page-stock .stock-operation-table td:nth-child(7) { width: 7%; }
+#page-stock .stock-operations-table th:nth-child(8), #page-stock .stock-operations-table td:nth-child(8), #page-stock .stock-operation-table th:nth-child(8), #page-stock .stock-operation-table td:nth-child(8) { width: 14%; }
+#page-stock .stock-operations-table th:nth-child(9), #page-stock .stock-operations-table td:nth-child(9), #page-stock .stock-operation-table th:nth-child(9), #page-stock .stock-operation-table td:nth-child(9) { width: 8%; }
+#page-stock .stock-operations-table th:nth-child(10), #page-stock .stock-operations-table td:nth-child(10), #page-stock .stock-operation-table th:nth-child(10), #page-stock .stock-operation-table td:nth-child(10) { width: 7%; }
+#page-stock .stock-operations-table th:nth-child(11), #page-stock .stock-operations-table td:nth-child(11), #page-stock .stock-operation-table th:nth-child(11), #page-stock .stock-operation-table td:nth-child(11) { width: 6%; }
+#page-stock .stock-operations-table th:nth-child(12), #page-stock .stock-operations-table td:nth-child(12), #page-stock .stock-operation-table th:nth-child(12), #page-stock .stock-operation-table td:nth-child(12) { width: 8%; }
+#page-stock .stock-operations-table th:nth-child(13), #page-stock .stock-operations-table td:nth-child(13), #page-stock .stock-operation-table th:nth-child(13), #page-stock .stock-operation-table td:nth-child(13) { width: 9%; }
+#page-stock .stock-operations-table tbody tr:hover,
+#page-stock .stock-operation-table tbody tr:hover,
+#page-stock #stockOperationsList > table tbody tr:hover {
+  background: color-mix(in srgb, var(--a) 5%, var(--card));
+}
+#page-stock .stock-operations-table a,
+#page-stock .stock-operation-table a,
+#page-stock #stockOperationsList > table a {
+  color: var(--a);
+}
+#page-stock .stock-operations-table .stock-link,
+#page-stock .stock-operation-table .stock-link {
+  color: #1769aa;
+  text-decoration: none;
+}
+#page-stock .stock-operations-table th,
+#page-stock .stock-operation-table th,
+#page-stock .stock-operations-table td,
+#page-stock .stock-operation-table td {
+  border-right: 0;
+  border-left: 0;
+}
+#page-stock .stock-operations-pagination,
+#page-stock .stock-operation-pagination,
+#page-stock #stockOperationsList .stock-operations-pagination {
+  display: flex;
+  justify-content: center;
+  gap: 7px;
+  margin: 14px 0;
+}
+
+@media (max-width: 980px) {
+  #page-stock .stock-operations-filters,
+  #page-stock .stock-operation-filters,
+  #page-stock .stock-operations-filter-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  #page-stock .stock-operations-filters > .stock-operations-filter-grid,
+  #page-stock .stock-operation-filters > .stock-operations-filter-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@media (max-width: 700px) {
+  #page-stock .stock-operations-head,
+  #page-stock .stock-operations-header {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 12px;
+  }
+  #page-stock .stock-operations-title,
+  #page-stock .stock-operations h1 {
+    font-size: 25px;
+  }
+  #page-stock .stock-operations-filters,
+  #page-stock .stock-operation-filters,
+  #page-stock .stock-operations-filter-grid {
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
+  #page-stock .stock-operations-filters > .stock-operations-filter-grid,
+  #page-stock .stock-operation-filters > .stock-operations-filter-grid {
+    grid-template-columns: 1fr;
+  }
+  #page-stock .stock-operations-filters .stock-search,
+  #page-stock .stock-operation-filters .stock-search,
+  #page-stock .stock-operations-filters .stock-filter-wide,
+  #page-stock .stock-operation-filters .stock-filter-wide,
+  #page-stock .stock-operations-filter-grid .stock-search,
+  #page-stock .stock-operations-filter-grid .stock-filter-wide {
+    grid-column: auto;
+  }
+  #page-stock .stock-operations-extra-grid {
+    grid-template-columns: 1fr;
+  }
+  #page-stock .stock-operations-filter-actions,
+  #page-stock .stock-operation-filter-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  #page-stock .stock-operations-show,
+  #page-stock .stock-operations-filter-actions button,
+  #page-stock .stock-operation-filter-actions button {
+    width: 100%;
+  }
+  #page-stock .stock-operations-filter-footer { flex-wrap: wrap; }
+  #page-stock .stock-operations-filter-footer > button {
+    flex-basis: 100%;
+    width: 100%;
+  }
+  /* Keep the journal as a real wide table: only its wrapper scrolls on phones. */
+  #page-stock .stock-operations-table thead,
+  #page-stock .stock-operation-table thead,
+  #page-stock #stockOperationsList > .stock-operations-table-wrap table thead {
+    display: table-header-group;
+  }
+  #page-stock .stock-operations-table tr,
+  #page-stock .stock-operation-table tr,
+  #page-stock #stockOperationsList > .stock-operations-table-wrap table tr {
+    display: table-row;
+    border: 0;
+    margin: 0;
+    padding: 0;
+  }
+  #page-stock .stock-operations-table td,
+  #page-stock .stock-operation-table td,
+  #page-stock #stockOperationsList > .stock-operations-table-wrap table td {
+    display: table-cell;
+    padding: 10px 8px;
+    border: 1px solid var(--bd);
+  }
+  #page-stock .stock-operations-table td::before,
+  #page-stock .stock-operation-table td::before,
+  #page-stock #stockOperationsList > .stock-operations-table-wrap table td::before {
+    content: none;
+  }
+}
+[data-theme='dark'] #page-stock .stock-operations-actions .stock-operations-menu,
+[data-theme='dark'] #page-stock .stock-operations-head-actions .stock-operations-menu,
+[data-theme='dark'] #page-stock .stock-operations-actions [data-stock-operation-menu],
+[data-theme='dark'] #page-stock .stock-operations-head-actions [data-stock-operation-menu] {
+  background: #facc15;
+  color: #211a00;
+}
+
+/* Maintain contrast in both application themes. */
+[data-theme='dark'] #page-stock .stock-operations-table .stock-link { color: #77b8ee; }
+#page-stock .stock-operations-head,
+#page-stock .stock-operations-filters { background: var(--card); }

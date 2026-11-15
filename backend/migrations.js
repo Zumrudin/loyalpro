@@ -2321,6 +2321,10 @@ async function runMigrations(client) {
   // Локальные товары не имеют id YClients: ослабление ограничения, не разрушение.
   await client.query(`ALTER TABLE yclients_goods_catalog ALTER COLUMN yclients_good_id DROP NOT NULL`).catch(() => {});
   for (const ddl of STOCK_DDL) await client.query(ddl).catch(() => {});
+  // Один simple-query PostgreSQL выполняет весь блок в общей неявной
+  // транзакции: таблица, функции и оба триггера появляются вместе. Ошибки не
+  // скрываем, иначе UI показывал бы неполную историю как достоверную.
+  await client.query(STOCK_HISTORY_DDL.join(';\n'));
   await client.query(`ALTER TABLE finance_operations ADD COLUMN IF NOT EXISTS stock_document_id BIGINT`).catch(() => {});
 
   await client.query(`
@@ -2909,6 +2913,177 @@ const STOCK_DDL = [
     categories_synced_at TIMESTAMPTZ, updated_at TIMESTAMPTZ
   )`,
 ];
+// Технический аудит склада: без комментариев, телефонов и иных PII. Триггеры
+// выполняются в транзакции исходной записи, поэтому rollback не оставляет
+// ложного события. document_id намеренно не FK: удаление салона/документа не
+// должно заставлять триггер писать событие в уже удаляемого родителя.
+const STOCK_HISTORY_DDL = [
+  `CREATE TABLE IF NOT EXISTS stock_document_events (
+    id BIGSERIAL PRIMARY KEY,
+    salon_id INT NOT NULL,
+    document_id BIGINT NOT NULL,
+    movement_id BIGINT,
+    occurred_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    action TEXT NOT NULL CHECK (action IN (
+      'document_created','document_changed','document_posted','document_cancelled',
+      'movement_created','movement_changed','movement_deleted','movement_restored'
+    )),
+    actor_user_id INT,
+    source TEXT NOT NULL,
+    changes JSONB NOT NULL DEFAULT '{}'::jsonb
+  )`,
+  `CREATE INDEX IF NOT EXISTS stock_document_events_document
+    ON stock_document_events (salon_id, document_id, occurred_at DESC, id DESC)`,
+  `CREATE OR REPLACE FUNCTION stock_audit_document_event() RETURNS trigger
+  LANGUAGE plpgsql AS $$
+  DECLARE changes JSONB := '{}'::jsonb; action_name TEXT;
+  BEGIN
+    IF TG_OP = 'INSERT' THEN
+      changes := jsonb_build_object(
+        'kind', jsonb_build_object('from', NULL, 'to', NEW.kind),
+        'origin', jsonb_build_object('from', NULL, 'to', NEW.origin),
+        'status', jsonb_build_object('from', NULL, 'to', NEW.status),
+        'storage_id', jsonb_build_object('from', NULL, 'to', NEW.storage_id),
+        'to_storage_id', jsonb_build_object('from', NULL, 'to', NEW.to_storage_id),
+        'doc_date', jsonb_build_object('from', NULL, 'to', NEW.doc_date)
+      );
+      INSERT INTO stock_document_events
+        (salon_id, document_id, occurred_at, action, actor_user_id, source, changes)
+      VALUES (NEW.salon_id, NEW.id, NOW(),
+        'document_created', NEW.created_by, NEW.origin, changes);
+      RETURN NEW;
+    END IF;
+    IF OLD.status IS DISTINCT FROM NEW.status THEN
+      changes := changes || jsonb_build_object('status', jsonb_build_object('from', OLD.status, 'to', NEW.status));
+    END IF;
+    IF OLD.kind IS DISTINCT FROM NEW.kind THEN
+      changes := changes || jsonb_build_object('kind', jsonb_build_object('from', OLD.kind, 'to', NEW.kind));
+    END IF;
+    IF OLD.origin IS DISTINCT FROM NEW.origin THEN
+      changes := changes || jsonb_build_object('origin', jsonb_build_object('from', OLD.origin, 'to', NEW.origin));
+    END IF;
+    IF OLD.storage_id IS DISTINCT FROM NEW.storage_id THEN
+      changes := changes || jsonb_build_object('storage_id', jsonb_build_object('from', OLD.storage_id, 'to', NEW.storage_id));
+    END IF;
+    IF OLD.to_storage_id IS DISTINCT FROM NEW.to_storage_id THEN
+      changes := changes || jsonb_build_object('to_storage_id', jsonb_build_object('from', OLD.to_storage_id, 'to', NEW.to_storage_id));
+    END IF;
+    IF OLD.supplier_id IS DISTINCT FROM NEW.supplier_id THEN
+      changes := changes || jsonb_build_object('supplier_id', jsonb_build_object('from', OLD.supplier_id, 'to', NEW.supplier_id));
+    END IF;
+    IF OLD.client_id IS DISTINCT FROM NEW.client_id THEN
+      changes := changes || jsonb_build_object('client_id', jsonb_build_object('from', OLD.client_id, 'to', NEW.client_id));
+    END IF;
+    IF OLD.yclients_client_id IS DISTINCT FROM NEW.yclients_client_id THEN
+      changes := changes || jsonb_build_object('yclients_client_link_changed', TRUE);
+    END IF;
+    IF OLD.record_id IS DISTINCT FROM NEW.record_id THEN
+      changes := changes || jsonb_build_object('record_id', jsonb_build_object('from', OLD.record_id, 'to', NEW.record_id));
+    END IF;
+    IF OLD.doc_date IS DISTINCT FROM NEW.doc_date THEN
+      changes := changes || jsonb_build_object('doc_date', jsonb_build_object('from', OLD.doc_date, 'to', NEW.doc_date));
+    END IF;
+    IF OLD.total_cost IS DISTINCT FROM NEW.total_cost THEN
+      changes := changes || jsonb_build_object('total_cost', jsonb_build_object('from', OLD.total_cost, 'to', NEW.total_cost));
+    END IF;
+    IF OLD.comment IS DISTINCT FROM NEW.comment THEN
+      changes := changes || jsonb_build_object('comment_changed', TRUE);
+    END IF;
+    IF changes = '{}'::jsonb THEN RETURN NEW; END IF;
+    action_name := CASE WHEN OLD.status IS DISTINCT FROM NEW.status AND NEW.status = 'cancelled' THEN 'document_cancelled'
+      WHEN OLD.status IS DISTINCT FROM NEW.status AND NEW.status = 'posted' THEN 'document_posted'
+      ELSE 'document_changed' END;
+    INSERT INTO stock_document_events
+      (salon_id, document_id, action, actor_user_id, source, changes)
+    VALUES (NEW.salon_id, NEW.id, action_name, NULL, NEW.origin, changes);
+    RETURN NEW;
+  END $$`,
+  `CREATE OR REPLACE FUNCTION stock_audit_movement_event() RETURNS trigger
+  LANGUAGE plpgsql AS $$
+  DECLARE changes JSONB := '{}'::jsonb; action_name TEXT;
+  BEGIN
+    IF TG_OP = 'INSERT' THEN
+      changes := jsonb_build_object(
+        'good_row_id', jsonb_build_object('from', NULL, 'to', NEW.good_row_id),
+        'storage_id', jsonb_build_object('from', NULL, 'to', NEW.storage_id),
+        'qty_base', jsonb_build_object('from', NULL, 'to', NEW.qty_base),
+        'cost', jsonb_build_object('from', NULL, 'to', NEW.cost),
+        'record_id', jsonb_build_object('from', NULL, 'to', NEW.record_id),
+        'service_yc_id', jsonb_build_object('from', NULL, 'to', NEW.service_yc_id),
+        'occurred_at', jsonb_build_object('from', NULL, 'to', NEW.occurred_at)
+      );
+      INSERT INTO stock_document_events
+        (salon_id, document_id, movement_id, occurred_at, action, source, changes)
+      VALUES (NEW.salon_id, NEW.document_id, NEW.id, NOW(),
+        'movement_created', NEW.source, changes);
+      RETURN NEW;
+    END IF;
+    IF OLD.good_row_id IS DISTINCT FROM NEW.good_row_id THEN
+      changes := changes || jsonb_build_object('good_row_id', jsonb_build_object('from', OLD.good_row_id, 'to', NEW.good_row_id));
+    END IF;
+    IF OLD.storage_id IS DISTINCT FROM NEW.storage_id THEN
+      changes := changes || jsonb_build_object('storage_id', jsonb_build_object('from', OLD.storage_id, 'to', NEW.storage_id));
+    END IF;
+    IF OLD.qty_base IS DISTINCT FROM NEW.qty_base THEN
+      changes := changes || jsonb_build_object('qty_base', jsonb_build_object('from', OLD.qty_base, 'to', NEW.qty_base));
+    END IF;
+    IF OLD.qty IS DISTINCT FROM NEW.qty THEN
+      changes := changes || jsonb_build_object('qty', jsonb_build_object('from', OLD.qty, 'to', NEW.qty));
+    END IF;
+    IF OLD.unit_type IS DISTINCT FROM NEW.unit_type THEN
+      changes := changes || jsonb_build_object('unit_type', jsonb_build_object('from', OLD.unit_type, 'to', NEW.unit_type));
+    END IF;
+    IF OLD.cost_per_unit IS DISTINCT FROM NEW.cost_per_unit THEN
+      changes := changes || jsonb_build_object('cost_per_unit', jsonb_build_object('from', OLD.cost_per_unit, 'to', NEW.cost_per_unit));
+    END IF;
+    IF OLD.discount IS DISTINCT FROM NEW.discount THEN
+      changes := changes || jsonb_build_object('discount', jsonb_build_object('from', OLD.discount, 'to', NEW.discount));
+    END IF;
+    IF OLD.cost IS DISTINCT FROM NEW.cost THEN
+      changes := changes || jsonb_build_object('cost', jsonb_build_object('from', OLD.cost, 'to', NEW.cost));
+    END IF;
+    IF OLD.record_id IS DISTINCT FROM NEW.record_id THEN
+      changes := changes || jsonb_build_object('record_id', jsonb_build_object('from', OLD.record_id, 'to', NEW.record_id));
+    END IF;
+    IF OLD.service_yc_id IS DISTINCT FROM NEW.service_yc_id THEN
+      changes := changes || jsonb_build_object('service_yc_id', jsonb_build_object('from', OLD.service_yc_id, 'to', NEW.service_yc_id));
+    END IF;
+    IF OLD.occurred_at IS DISTINCT FROM NEW.occurred_at THEN
+      changes := changes || jsonb_build_object('occurred_at', jsonb_build_object('from', OLD.occurred_at, 'to', NEW.occurred_at));
+    END IF;
+    IF OLD.deleted_at IS DISTINCT FROM NEW.deleted_at THEN
+      changes := changes || jsonb_build_object('deleted_at', jsonb_build_object('from', OLD.deleted_at, 'to', NEW.deleted_at));
+    END IF;
+    IF OLD.source IS DISTINCT FROM NEW.source THEN
+      changes := changes || jsonb_build_object('source', jsonb_build_object('from', OLD.source, 'to', NEW.source));
+    END IF;
+    IF OLD.comment IS DISTINCT FROM NEW.comment THEN
+      changes := changes || jsonb_build_object('comment_changed', TRUE);
+    END IF;
+    IF changes = '{}'::jsonb THEN RETURN NEW; END IF;
+    action_name := CASE WHEN OLD.deleted_at IS NULL AND NEW.deleted_at IS NOT NULL THEN 'movement_deleted'
+      WHEN OLD.deleted_at IS NOT NULL AND NEW.deleted_at IS NULL THEN 'movement_restored'
+      ELSE 'movement_changed' END;
+    INSERT INTO stock_document_events
+      (salon_id, document_id, movement_id, action, source, changes)
+    VALUES (NEW.salon_id, NEW.document_id, NEW.id, action_name, NEW.source, changes);
+    RETURN NEW;
+  END $$`,
+  `DO $$ BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'stock_documents_audit_trg'
+      AND tgrelid = 'stock_documents'::regclass) THEN
+      CREATE TRIGGER stock_documents_audit_trg AFTER INSERT OR UPDATE ON stock_documents
+        FOR EACH ROW EXECUTE FUNCTION stock_audit_document_event();
+    END IF;
+  END $$`,
+  `DO $$ BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'stock_movements_audit_trg'
+      AND tgrelid = 'stock_movements'::regclass) THEN
+      CREATE TRIGGER stock_movements_audit_trg AFTER INSERT OR UPDATE ON stock_movements
+        FOR EACH ROW EXECUTE FUNCTION stock_audit_movement_event();
+    END IF;
+  END $$`,
+];
 const STOCK_CATALOG_COLUMNS = [
   `source VARCHAR(16) NOT NULL DEFAULT 'yclients'`, 'category_path JSONB', 'parent_category_id BIGINT',
   'local_category VARCHAR(200)', 'sale_price NUMERIC(14,2)', 'local_sale_price NUMERIC(14,2)', 'barcode VARCHAR(64)',
@@ -2984,4 +3159,4 @@ CREATE TABLE IF NOT EXISTS max_loyalty_registrations (
  PRIMARY KEY(salon_id,phone)
 );
 `;
-module.exports = { runMigrations, MAX_LOYALTY_DDL, FINANCE_OPS_DDL, EDOCS_BOARD_DDL, JOURNAL_DDL, SERVICE_CATALOG_DDL, JOURNAL_FINANCE_DDL, JOURNAL_LOCAL_DDL, JOURNAL_PREFS_DDL, JOURNAL_HISTORY_INDEX_DDL };
+module.exports = { runMigrations, MAX_LOYALTY_DDL, FINANCE_OPS_DDL, EDOCS_BOARD_DDL, JOURNAL_DDL, SERVICE_CATALOG_DDL, JOURNAL_FINANCE_DDL, JOURNAL_LOCAL_DDL, JOURNAL_PREFS_DDL, JOURNAL_HISTORY_INDEX_DDL, STOCK_HISTORY_DDL };

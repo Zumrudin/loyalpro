@@ -5,8 +5,10 @@ const { isCalendarDate } = require('../../utils/period');
 
 const MAX_PERIOD_DAYS = 731;
 const STATUSES = ['draft', 'posted', 'cancelled'];
+const PAYMENT_STATUSES = ['paid', 'partial', 'unpaid', 'pending', 'failed', 'cancelled', 'not_applicable', 'unknown'];
 const posInt = v => { if (typeof v !== 'string' || !/^\d{1,12}$/.test(v)) return null; const n = Number(v); return n > 0 ? n : null; };
 const flag = v => v === '1';
+const shortText = (v, max) => typeof v === 'string' ? v.trim().slice(0, max) : '';
 
 function parseGoodsQuery(q = {}) {
   q = q || {};
@@ -55,4 +57,28 @@ function parseTurnoverQuery(q = {}) {
   return { from, to, storage: posInt(q.storage), category: g.category };
 }
 
-module.exports = { parseGoodsQuery, parseDocsQuery, parseTurnoverQuery, MAX_PERIOD_DAYS };
+// Построчный журнал движений. В отличие от документов, одна строка здесь —
+// один stock_movement, поэтому размер страницы по умолчанию совпадает с UI.
+function parseOperationsQuery(q = {}) {
+  q = q || {};
+  const { from, to } = parsePeriod(q.from, q.to, false);
+  const limit = posInt(q.limit);
+  return {
+    from, to,
+    kind: KINDS.includes(q.kind) ? q.kind : null,
+    origin: ORIGINS.includes(q.origin) ? q.origin : null,
+    status: STATUSES.includes(q.status) ? q.status : null,
+    storage: posInt(q.storage),
+    search: shortText(q.search, 200),
+    counterparty: shortText(q.counterparty, 200),
+    clientSearch: shortText(q.client_search, 200),
+    documentNumber: shortText(q.document_number, 100),
+    service: posInt(q.service),
+    paymentStatus: PAYMENT_STATUSES.includes(q.payment_status) ? q.payment_status : null,
+    page: posInt(q.page) || 1,
+    limit: limit ? Math.min(limit, 100) : 25,
+  };
+}
+
+module.exports = { parseGoodsQuery, parseDocsQuery, parseTurnoverQuery, parseOperationsQuery,
+  MAX_PERIOD_DAYS, PAYMENT_STATUSES };

@@ -8,8 +8,11 @@ const store = require('../services/stock/store');
 const catalog = require('../services/stock/catalog-sync');
 const documents = require('../services/stock/documents');
 const sales = require('../services/stock/sales');
+const operations = require('../services/stock/operations');
+const operationsExport = require('../services/stock/operations-export');
+const stockHistory = require('../services/stock/history');
 const { StockError } = require('../services/stock/model');
-const { parseGoodsQuery, parseDocsQuery, parseTurnoverQuery } = require('../services/stock/query');
+const { parseGoodsQuery, parseDocsQuery, parseTurnoverQuery, parseOperationsQuery } = require('../services/stock/query');
 const { getReference } = require('../services/journal/reference-cache');
 const { createLogger } = require('../logger');
 const logger = createLogger('StockAPI');
@@ -187,12 +190,25 @@ router.get('/balances', wrap('balances', async (req, res) => {
 router.get('/documents', wrap('documents', async (req, res) => {
   res.json(await store.listDocuments(req.user.salonId, parseDocsQuery(req.query)));
 }));
+router.get('/operations/services', wrap('operation-services', async (req, res) => {
+  res.json({ services: await operations.listOperationServices(req.user.salonId) });
+}));
+router.get('/operations/export', wrap('operations-export', async (req, res) => {
+  await operationsExport.exportOperations(req.user.salonId, parseOperationsQuery(req.query), res);
+}));
+router.get('/operations', wrap('operations', async (req, res) => {
+  res.json(await operations.listOperations(req.user.salonId, parseOperationsQuery(req.query)));
+}));
 router.get('/reports/turnover', wrap('turnover', async (req, res) => {
   const rows = await store.turnover(req.user.salonId, parseTurnoverQuery(req.query));
   res.json({ rows });
 }));
 router.post('/documents', wrap('document-create', async (req, res) => {
   res.status(201).json(await documents.create(req.user.salonId, req.user.userId, bodyOf(req)));
+}));
+router.get('/documents/:id/history', wrap('document-history', async (req, res) => {
+  const did = id(req); if (!did) return bad(res, ['Некорректный id.']);
+  res.json(await stockHistory.load(req.user.salonId, did));
 }));
 router.get('/documents/:id', wrap('document', async (req, res) => {
   const did = id(req); if (!did) return bad(res, ['Некорректный id.']);

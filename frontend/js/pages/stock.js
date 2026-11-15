@@ -75,6 +75,7 @@ function stockToday() {
   return new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/Moscow' }).format(new Date());
 }
 async function loadStock() {
+  if (typeof stockResetOperations === 'function') stockResetOperations();
   stockEl('stockStatus').textContent = 'Загрузка…';
   try {
     // Категории относятся к салону: не переносим их при смене контекста.
@@ -111,6 +112,7 @@ async function stockOnHashArg(arg) {
 async function stockSwitchTab(tab, updateHash = true) {
   if (!STOCK_TABS[tab]) return;
   _stock.tab = tab;
+  stockEl('page-stock').classList.toggle('stock-operations-active', tab === 'docs');
   if (tab !== 'goods') stockUnmountCatalogTools();
   for (const key of Object.keys(STOCK_TABS)) {
     stockEl('stockTab-' + key).hidden = key !== tab;
