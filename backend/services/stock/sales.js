@@ -6,6 +6,7 @@ const ledger = require('./ledger');
 const m = require('./model');
 const { transaction } = require('./documents');
 const finOps = require('../finance-ops');
+const appointmentGoods = require('./appointment-goods');
 const { ycSearchClientIdByPhone } = require('../yclients');
 const { normalizePhoneKey } = require('../agent-gate');
 const validId = v => ['number', 'string'].includes(typeof v) && Number.isSafeInteger(Number(v)) && Number(v) > 0;
@@ -157,11 +158,14 @@ async function addPayment(salonId, userId, documentId, body) {
     const before = await store.salePaymentSummary(q, salonId, doc.id, doc.total_cost, doc.status);
     if (amountKop > m.kop(before.outstandingAmount)) m.fail('Сумма оплаты превышает долг.', 409, 'overpayment');
     const now = (await q('SELECT NOW() AS now')).rows[0]?.now;
+    const financeKind = await appointmentGoods.saleKindForDocument(q, salonId, doc.id);
     const payment = await finOps.recordStockSalePayment(q, {
       salonId, stockDocumentId: doc.id, opId: paymentId, method: b.method, amount: amountKop / 100,
-      clientId: doc.client_id ?? null, ycClientId: doc.yclients_client_id ?? null, occurredAt: now, userId,
+      clientId: doc.client_id ?? null, ycClientId: doc.yclients_client_id ?? null, occurredAt: now, userId, kind: financeKind,
     });
-    return { payment, ...(await store.salePaymentSummary(q, salonId, doc.id, doc.total_cost, doc.status)) };
+    const summary = await store.salePaymentSummary(q, salonId, doc.id, doc.total_cost, doc.status);
+    if (m.kop(summary.outstandingAmount) === 0) await appointmentGoods.syncCodesForDocument(q, salonId, doc.id, 'active');
+    return { payment, ...summary };
   });
 }
 

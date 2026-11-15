@@ -568,6 +568,97 @@ body[data-page="journal"] .jr-scroll{max-height:calc(100vh - 150px);max-height:c
 .jr-schedule-status { display:block; border:0; background:transparent; color:var(--gold,#9b762e); font:inherit; font-size:11px; cursor:pointer; padding:2px 0; }
 .jr-schedule-status.is-error { color:var(--danger,#b42318); }
 
+/* Inline goods, certificates and memberships in the appointment card.
+   The block is scoped to the record dialog so catalogue styles cannot leak
+   into the journal grid or the standalone stock screens. */
+.jr-dialog-card .jr-goods-panel,
+.jr-dialog-card .jr-products-panel{display:grid;gap:10px}
+.jr-dialog-card .jr-goods-lines,
+.jr-dialog-card .jr-product-lines{display:grid;gap:8px;margin:0 0 4px}
+.jr-dialog-card .jr-goods-line,
+.jr-dialog-card .jr-product-line{display:grid;gap:10px;padding:12px 14px;border:1px solid var(--bd);border-radius:10px;background:var(--card);min-width:0}
+.jr-dialog-card .jr-goods-line-head,
+.jr-dialog-card .jr-product-line-head{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;min-width:0;font-size:13px;line-height:1.4}
+.jr-dialog-card .jr-goods-line-head>span:first-child,
+.jr-dialog-card .jr-product-line-head>span:first-child{min-width:0;overflow-wrap:anywhere}
+.jr-dialog-card .jr-goods-line-head strong,
+.jr-dialog-card .jr-product-line-head strong{white-space:normal;overflow-wrap:anywhere;font-size:14px;font-weight:500}
+.jr-dialog-card .jr-goods-line-head small,
+.jr-dialog-card .jr-product-line-head small{display:block;margin-top:3px;color:var(--t3);font-size:11px}
+.jr-dialog-card .jr-goods-line-remove,
+.jr-dialog-card .jr-product-line-remove{flex:0 0 auto;width:28px;height:28px;padding:0;border:0;border-radius:7px;background:transparent;color:var(--t2);font:inherit;font-size:19px;line-height:1;cursor:pointer}
+.jr-dialog-card .jr-goods-line-remove:hover,
+.jr-dialog-card .jr-goods-line-remove:focus-visible,
+.jr-dialog-card .jr-product-line-remove:hover,
+.jr-dialog-card .jr-product-line-remove:focus-visible{background:var(--bg);color:var(--danger,#a64635);outline:none}
+.jr-dialog-card .jr-goods-line-fields,
+.jr-dialog-card .jr-product-line-fields{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:8px;min-width:0}
+.jr-dialog-card .jr-goods-line-fields label,
+.jr-dialog-card .jr-product-line-fields label{display:grid;gap:5px;min-width:0;color:var(--t3);font-size:10px;line-height:1.2}
+.jr-dialog-card .jr-goods-line-fields input,
+.jr-dialog-card .jr-goods-line-fields select,
+.jr-dialog-card .jr-product-line-fields input,
+.jr-dialog-card .jr-product-line-fields select{width:100%;min-width:0;box-sizing:border-box;min-height:32px;padding:6px 8px;font-size:12px}
+.jr-dialog-card .jr-goods-line-meta,
+.jr-dialog-card .jr-product-line-meta{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:8px}
+.jr-dialog-card .jr-goods-line-code,
+.jr-dialog-card .jr-product-line-code{display:flex;align-items:end;gap:8px;min-width:0;padding-top:2px}
+.jr-dialog-card .jr-goods-line-code label,
+.jr-dialog-card .jr-product-line-code label{display:grid;gap:5px;min-width:0;flex:1;color:var(--t3);font-size:10px}
+.jr-dialog-card .jr-goods-line-code input,
+.jr-dialog-card .jr-product-line-code input{width:100%;min-width:0;box-sizing:border-box;min-height:32px;padding:6px 8px;font-size:12px}
+.jr-dialog-card .jr-goods-generate-code,
+.jr-dialog-card .jr-product-generate-code{flex:0 0 auto;min-height:32px;padding:6px 9px;white-space:nowrap;font-size:11px}
+.jr-dialog-card .jr-goods-catalog,
+.jr-dialog-card .jr-product-catalog{display:grid;gap:10px;padding:12px;border-radius:12px;background:var(--bg)}
+.jr-dialog-card .jr-goods-catalog-toolbar,
+.jr-dialog-card .jr-product-catalog-toolbar{display:grid;grid-template-columns:minmax(0,1fr) minmax(140px,.75fr);gap:8px;align-items:center}
+.jr-dialog-card .jr-goods-catalog-toolbar input,
+.jr-dialog-card .jr-goods-catalog-toolbar select,
+.jr-dialog-card .jr-product-catalog-toolbar input,
+.jr-dialog-card .jr-product-catalog-toolbar select{width:100%;min-width:0;box-sizing:border-box;min-height:34px;font-size:12px}
+.jr-dialog-card .jr-goods-search,
+.jr-dialog-card .jr-product-search{position:relative;display:block;min-width:0}
+.jr-dialog-card .jr-goods-search input,
+.jr-dialog-card .jr-product-search input{padding-left:30px}
+.jr-dialog-card .jr-goods-tree,
+.jr-dialog-card .jr-product-tree{display:grid;gap:5px;max-height:260px;overflow:auto;overscroll-behavior:contain}
+.jr-dialog-card .jr-goods-category,
+.jr-dialog-card .jr-product-category{border-top:1px solid var(--bd);padding-top:5px}
+.jr-dialog-card .jr-goods-category>summary,
+.jr-dialog-card .jr-product-category>summary{padding:7px 4px;color:var(--t1);font-size:12px;font-weight:500;cursor:pointer;overflow-wrap:anywhere}
+.jr-dialog-card .jr-goods-category>summary:focus-visible,
+.jr-dialog-card .jr-product-category>summary:focus-visible{outline:2px solid var(--a);outline-offset:1px;border-radius:4px}
+.jr-dialog-card .jr-goods-category-content,
+.jr-dialog-card .jr-product-category-content{display:grid;gap:5px;padding:2px 0 7px 10px;border-left:2px solid var(--bd);margin-left:4px}
+.jr-dialog-card .jr-goods-choice,
+.jr-dialog-card .jr-product-choice{display:flex;align-items:center;justify-content:space-between;gap:8px;width:100%;min-width:0;padding:8px 9px;border:1px solid var(--bd);border-radius:8px;background:var(--card);color:var(--t1);font:inherit;font-size:12px;text-align:left;cursor:pointer}
+.jr-dialog-card .jr-goods-choice:hover,
+.jr-dialog-card .jr-goods-choice:focus-visible,
+.jr-dialog-card .jr-product-choice:hover,
+.jr-dialog-card .jr-product-choice:focus-visible{border-color:var(--a);background:var(--as);outline:none}
+.jr-dialog-card .jr-goods-choice>span:first-child,
+.jr-dialog-card .jr-product-choice>span:first-child{min-width:0;overflow-wrap:anywhere}
+.jr-dialog-card .jr-goods-choice small,
+.jr-dialog-card .jr-product-choice small{flex:0 0 auto;color:var(--t3);font-size:11px;white-space:nowrap}
+.jr-dialog-card .jr-goods-empty,
+.jr-dialog-card .jr-product-empty{padding:10px 4px;color:var(--t3);font-size:12px}
+.jr-dialog-card .jr-goods-summary,
+.jr-dialog-card .jr-product-summary{display:flex;flex-wrap:wrap;align-items:end;justify-content:space-between;gap:10px;padding:5px 2px;color:var(--t2);font-size:12px}
+.jr-dialog-card .jr-goods-summary strong,
+.jr-dialog-card .jr-product-summary strong{color:var(--t1);font-weight:600;white-space:nowrap}
+@media(max-width:1050px){
+  .jr-dialog-card .jr-goods-line-fields,.jr-dialog-card .jr-product-line-fields{grid-template-columns:repeat(3,minmax(0,1fr))}
+  .jr-dialog-card .jr-goods-catalog-toolbar,.jr-dialog-card .jr-product-catalog-toolbar{grid-template-columns:1fr}
+}
+@media(max-width:600px){
+  .jr-dialog-card .jr-goods-line,.jr-dialog-card .jr-product-line{padding:10px}
+  .jr-dialog-card .jr-goods-line-fields,.jr-dialog-card .jr-product-line-fields{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .jr-dialog-card .jr-goods-line-meta,.jr-dialog-card .jr-product-line-meta{grid-template-columns:1fr}
+  .jr-dialog-card .jr-goods-line-code,.jr-dialog-card .jr-product-line-code{align-items:stretch;flex-direction:column}
+  .jr-dialog-card .jr-goods-generate-code,.jr-dialog-card .jr-product-generate-code{width:100%}
+}
+
 /* Journal toolbar parity with the schedule header. */
 body[data-page="journal"] .jr-toolbar{position:relative;display:flex;align-items:center;gap:6px;flex-wrap:nowrap;min-height:42px;margin-bottom:4px}
 body[data-page="journal"] .jr-toolbar .btn,body[data-page="journal"] .jr-toolbar select{min-height:34px;height:34px}
@@ -674,3 +765,10 @@ body[data-page="journal"] .jr-toolbar-secondary .btn{height:auto;min-height:28px
   .jr-dialog-section .jr-section-content-body{overflow-x:auto}
 }
 @media(prefers-reduced-motion:reduce){.jr-section-track{transition:none}}
+
+/* Inline appointment goods controls share the journal visual language. */
+.jr-dialog-card .jr-goods-generate-code,.jr-dialog-card [data-jr-good-pay]{border:1px solid var(--bd);border-radius:8px;background:var(--card);color:var(--t1);padding:8px 10px;font:inherit;font-size:12px;cursor:pointer}
+.jr-dialog-card .jr-goods-summary label{display:grid;gap:4px;flex:1 1 110px;min-width:0}
+.jr-dialog-card .jr-goods-summary input,.jr-dialog-card .jr-goods-summary select{width:100%;min-width:0}
+.jr-dialog-card .jr-goods-line input,.jr-dialog-card .jr-goods-line select,.jr-dialog-card .jr-goods-catalog input,.jr-dialog-card .jr-goods-catalog select,.jr-dialog-card .jr-goods-summary input,.jr-dialog-card .jr-goods-summary select{background:var(--card);color:var(--t1);border:1px solid var(--bd)}
+[data-theme="dark"] .jr-dialog-card .jr-goods-line label,[data-theme="dark"] .jr-dialog-card .jr-goods-line small{color:var(--t2)}

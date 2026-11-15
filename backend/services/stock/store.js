@@ -78,7 +78,8 @@ const touchCategoriesSynced = (salonId) => db.query(`
 
 // ── Товары ──
 const GOOD_COLS = `id, yclients_good_id, title, unit, service_unit, unit_equals, stock_active, source, local_sale_price, sale_price,
-  category_path, local_category, category_title, unit_id, service_unit_id, critical_amount, barcode, article, comment, local_note, actual_cost, unit_actual_cost`;
+  category_path, local_category, category_title, unit_id, service_unit_id, critical_amount, barcode, article, comment, local_note,
+  actual_cost, unit_actual_cost, loyalty_abonement_type_id, loyalty_certificate_type_id`;
 async function listGoods(salonId, { search = '', source = null, active = null } = {}) {
   const params = [salonId]; let where = 'salon_id = $1';
   if (search) { params.push(`%${String(search).replace(/[\\%_]/g, '\\$&')}%`); where += ` AND (title ILIKE $${params.length} OR article ILIKE $${params.length} OR barcode ILIKE $${params.length})`; }

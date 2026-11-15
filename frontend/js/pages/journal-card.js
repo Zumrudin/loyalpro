@@ -200,22 +200,42 @@ const jrCanReshape = record => jrCanChange(record) && record.attendance !== 1;
 const jrCanDeleteUnsent = record => !record.deleted && Number(record.id) < 0 && jrUnsent(record);
 const jrCanEdit = record => !record.deleted && record.attendance !== -1 && record.attendance !== 1 && !record.paid && !jrLocked(record);
 function jrAppointmentCard(record) {
-  const canEdit = jrCanEdit(record), canChange = jrCanChange(record);
-  const editNote = jrSyncing(record) ? 'Идёт отправка изменений — карточка обновится автоматически.' : record.sync?.status === 'failed' ? 'Сначала повторите или отмените неотправленные изменения.'
-    : canChange ? `Перенос и отмена недоступны для визита со статусом «${record.attendance === 1 ? 'Пришёл' : 'Не пришёл'}». Статус, услуги и стоимость можно менять.`
-    : record.paid ? 'Визит оплачен: чтобы изменить статус, услуги или стоимость, сначала удалите оплаты («Все способы»).' : 'Этот визит сейчас изменить нельзя.';
-  const staff = journal.data?.staff?.find(s => s.id === record.staffId);
-  const staffName = staff?.name || record.staffName || 'Сотрудник';
-  const initials = staffName.split(/\s+/).slice(0,2).map(s => s[0] || '').join('');
-  const avatar = staff?.avatar && /^https:\/\//.test(staff.avatar) ? `<img class="jr-staff-avatar" src="${jrEscape(staff.avatar)}" alt="" loading="lazy">` : `<span class="jr-staff-avatar">${jrEscape(initials)}</span>`;
-  const day = record.date ? new Date(record.date + 'T12:00:00+03:00').toLocaleDateString('ru', { day:'numeric',month:'long',timeZone:'Europe/Moscow' }) : 'Дата не указана';
-  return `${jrSyncAlert(record)}<div class="jr-booking-layout"><aside class="jr-booking-side"><div class="jr-visit-summary"><div class="jr-staff-identity">${avatar}<div><strong>${jrEscape(staffName)}</strong><small>${jrEscape(staff?.specialization || 'Специалист')}</small></div></div><div class="jr-visit-date"><span class="jr-date-icon">${jrIcon('calendar')}</span><div><strong>${jrEscape(day)}</strong><small>${jrEscape(jrTimeRange(record))}</small></div></div>
-      <div class="jr-move-row">${canEdit ? `<button type="button" class="btn btn-sec jr-move-btn" id="jrMove">${jrIcon('move')}Перенести запись</button>` : `<button type="button" class="btn btn-sec jr-move-btn" disabled title="${jrEscape(editNote)}">${jrIcon('move')}Перенести запись</button>`}<button type="button" class="btn btn-sec jr-pencil" id="jrExtraToggle" title="Длительность, перерыв, цвет, метки" aria-label="Длительность, перерыв, цвет, метки" aria-expanded="false" aria-controls="jrExtraBox">${jrIcon('pencil')}</button></div></div>
+  const canEdit = jrCanEdit(record),
+    canChange = jrCanChange(record);
+  const editNote = jrSyncing(record)
+    ? "Идёт отправка изменений — карточка обновится автоматически."
+    : record.sync?.status === "failed"
+      ? "Сначала повторите или отмените неотправленные изменения."
+      : canChange
+        ? `Перенос и отмена недоступны для визита со статусом «${record.attendance === 1 ? "Пришёл" : "Не пришёл"}». Статус, услуги и стоимость можно менять.`
+        : record.paid
+          ? "Визит оплачен: чтобы изменить статус, услуги или стоимость, сначала удалите оплаты («Все способы»)."
+          : "Этот визит сейчас изменить нельзя.";
+  const staff = journal.data?.staff?.find((s) => s.id === record.staffId);
+  const staffName = staff?.name || record.staffName || "Сотрудник";
+  const initials = staffName
+    .split(/\s+/)
+    .slice(0, 2)
+    .map((s) => s[0] || "")
+    .join("");
+  const avatar =
+    staff?.avatar && /^https:\/\//.test(staff.avatar)
+      ? `<img class="jr-staff-avatar" src="${jrEscape(staff.avatar)}" alt="" loading="lazy">`
+      : `<span class="jr-staff-avatar">${jrEscape(initials)}</span>`;
+  const day = record.date
+    ? new Date(record.date + "T12:00:00+03:00").toLocaleDateString("ru", {
+        day: "numeric",
+        month: "long",
+        timeZone: "Europe/Moscow",
+      })
+    : "Дата не указана";
+  return `${jrSyncAlert(record)}<div class="jr-booking-layout"><aside class="jr-booking-side"><div class="jr-visit-summary"><div class="jr-staff-identity">${avatar}<div><strong>${jrEscape(staffName)}</strong><small>${jrEscape(staff?.specialization || "Специалист")}</small></div></div><div class="jr-visit-date"><span class="jr-date-icon">${jrIcon("calendar")}</span><div><strong>${jrEscape(day)}</strong><small>${jrEscape(jrTimeRange(record))}</small></div></div>
+      <div class="jr-move-row">${canEdit ? `<button type="button" class="btn btn-sec jr-move-btn" id="jrMove">${jrIcon("move")}Перенести запись</button>` : `<button type="button" class="btn btn-sec jr-move-btn" disabled title="${jrEscape(editNote)}">${jrIcon("move")}Перенести запись</button>`}<button type="button" class="btn btn-sec jr-pencil" id="jrExtraToggle" title="Длительность, перерыв, цвет, метки" aria-label="Длительность, перерыв, цвет, метки" aria-expanded="false" aria-controls="jrExtraBox">${jrIcon("pencil")}</button></div></div>
     <div id="jrExtraBox" class="jr-extra-box" hidden>${jrExtraFields(record)}</div>
-    <h4 class="jr-pinned">${jrIcon('pin')}Закрепленные поля</h4>
-    <label class="jr-side-label">Комментарий к записи<textarea id="jrCommentEdit" rows="4" maxlength="1000" placeholder="Комментарий не указан"${canChange ? '' : ' readonly'}>${jrEscape(record.comment || '')}</textarea></label>${jrTools(record, true)}</aside>
-    <section class="jr-booking-main jr-booking-panel">${jrStatusBar(record, canChange)}${!canEdit ? `<p class="jr-hint">${jrEscape(editNote)}</p>` : ''}<div class="jr-service-tabs"><button type="button" id="jrTabServices" class="is-active" onclick="jrStockTab('services')">${jrIcon('list')} Услуги</button><button type="button" id="jrTabGoods" onclick="jrStockTab('goods')">${jrIcon('box')} Товары</button></div><div id="jrServicesPane">${jrServicesPanel(record, canChange)}${canChange ? '<button type="button" id="jrEditServices" hidden>Изменить услуги, количество и стоимость</button>' + jrServicePicker(record) : ''}</div><div id="jrGoodsPane" hidden></div><div id="jrConsumablesPane" hidden></div>${jrPaymentPanel(record, true)}</section>${jrClientPanel(record, false, true)}</div>
-    <footer class="jr-booking-footer">${canEdit ? '<button type="button" class="btn btn-sec" id="jrCancel">Отменить запись</button>' : ''}${jrCanReshape(record) || jrCanDeleteUnsent(record) ? '<button type="button" class="btn btn-sec" id="jrDelete">Удалить запись</button>' : ''}${canChange ? '<button type="button" class="btn btn-pri" id="jrSaveChanges" disabled>Сохранить запись</button>' : jrStub('Сохранить запись','check','jr-stub-inline')}</footer>`;
+    <h4 class="jr-pinned">${jrIcon("pin")}Закрепленные поля</h4>
+    <label class="jr-side-label">Комментарий к записи<textarea id="jrCommentEdit" rows="4" maxlength="1000" placeholder="Комментарий не указан"${canChange ? "" : " readonly"}>${jrEscape(record.comment || "")}</textarea></label>${jrTools(record, true)}</aside>
+    <section class="jr-booking-main jr-booking-panel">${jrStatusBar(record, canChange)}${!canEdit ? `<p class="jr-hint">${jrEscape(editNote)}</p>` : ""}${jrServicesPanel(record, canChange)}<div id="jrGoodsLines" class="jr-goods-lines" aria-live="polite"></div><p id="jrGoodsSummary" class="jr-goods-summary"></p><div id="jrGoodsPayment"></div><p id="jrGoodsError" role="alert"></p><div class="jr-service-tabs"><button type="button" id="jrTabServices" class="is-active" onclick="jrStockTab('services')">${jrIcon("list")} Услуги</button><button type="button" id="jrTabGoods" onclick="jrStockTab('goods')">${jrIcon("box")} Товары</button></div><div id="jrServicesPane">${canChange ? '<button type="button" id="jrEditServices" hidden>Изменить услуги, количество и стоимость</button>' + jrServicePicker(record) : ""}</div><div id="jrGoodsPane" hidden></div><div id="jrConsumablesPane" hidden></div>${jrPaymentPanel(record, true)}</section>${jrClientPanel(record, false, true)}</div>
+    <footer class="jr-booking-footer">${canEdit ? '<button type="button" class="btn btn-sec" id="jrCancel">Отменить запись</button>' : ""}${jrCanReshape(record) || jrCanDeleteUnsent(record) ? '<button type="button" class="btn btn-sec" id="jrDelete">Удалить запись</button>' : ""}${canChange ? '<button type="button" class="btn btn-pri" id="jrSaveChanges" disabled>Сохранить запись</button>' : jrStub("Сохранить запись", "check", "jr-stub-inline")}</footer>`;
 }
 
 // These client modules are not available in the journal yet. They still use

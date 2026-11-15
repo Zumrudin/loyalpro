@@ -315,20 +315,53 @@ function jrSessionBody() {
   if (s.dropPayments?.length) body.dropPayments = s.dropPayments.map(p => ({ outboxId: p.outboxId, opId: p.opId }));
   return body;
 }
-// The server only stores the session (fractions of a second), so the form
-// closes as soon as it answers.
+// Journal and local stock are separate transactions. Remember an acknowledged
+// journal package while stock is retried; never submit that mutation twice.
 async function jrSave(body) {
   let ok = false, used = false, res = null;
   await jrWithBusy('Сохраняем…', async () => {
-    try { res = await jrApi('sessions', body); ok = true; }
-    catch (e) {
-      // The key was stored earlier (a lost response) with other contents: the
-      // earlier package is in the journal; a new key would make a second one.
-      if (e.code === 'session_used') { used = true; return; }
-      jrMessage(e.message);
-      // A definite rejection was not stored: the corrected attempt is a new session.
-      // A lost response keeps the key, so a repeat cannot duplicate the session.
-      if (e.status >= 400 && e.status < 500 && journal.session?.sessionId === body.sessionId) journal.session.sessionId = crypto.randomUUID();
+    let stage = 'journal';
+    const session = journal.session;
+    const hasGoods = () => typeof jrStockHasDirtyGoods === 'function' && jrStockHasDirtyGoods();
+    try {
+      const needsJournal = !!(body.create || body.edit || body.status || body.move || body.payments?.length || body.removePayments?.length || body.dropPayments?.length);
+      const signature = JSON.stringify({ ...body, sessionId: undefined });
+      if (needsJournal) {
+        if (session?.acceptedJournal?.signature === signature) {
+          res = session.acceptedJournal.result;
+        } else {
+          // Further edits after a confirmed package use a new key. Unknown
+          // outcomes keep the old key, including when the response was lost.
+          if (session?.acceptedJournal) {
+            body = { ...body, sessionId: crypto.randomUUID() };
+            session.sessionId = body.sessionId;
+            session.acceptedJournal = null;
+          }
+          res = await jrApi('sessions', body);
+          if (session) session.acceptedJournal = { signature, result: res };
+        }
+      }
+      stage = 'goods';
+      if (hasGoods()) {
+        const recordId = Number(res?.recordId || body.recordId || session?.recordId);
+        if (!Number.isSafeInteger(recordId) || recordId === 0)
+          throw new Error('Не удалось определить запись для товаров. Повторите сохранение.');
+        await jrStockSaveGoods(recordId);
+      }
+      ok = true;
+    } catch (e) {
+      if (e.code === 'session_used') {
+        if (hasGoods()) {
+          jrMessage('Предыдущие изменения записи уже сохранены с другим составом. Товары остались в черновике; проверьте запись перед повтором.');
+        } else used = true;
+        return;
+      }
+      const prefix = stage === 'goods' && session?.acceptedJournal
+        ? 'Изменения записи сохранены, товары пока не сохранены. ' : '';
+      jrMessage(prefix + e.message);
+      // A stock rejection must not rotate the acknowledged journal key.
+      if (stage === 'journal' && e.status >= 400 && e.status < 500 && session?.sessionId === body.sessionId)
+        session.sessionId = crypto.randomUUID();
     }
   });
   if (used) {

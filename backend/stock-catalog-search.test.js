@@ -24,6 +24,8 @@ test('catalog search stays tenant-scoped and matches title, article, or barcode 
   expect(sql).toContain('stock_active = $4');
   expect(sql).toMatch(/\barticle\b/);
   expect(sql).toMatch(/\bcomment\b/);
+  expect(sql).toMatch(/\bloyalty_abonement_type_id\b/);
+  expect(sql).toMatch(/\bloyalty_certificate_type_id\b/);
 });
 
 test('catalog search escapes SQL wildcard characters without interpolating user input', async () => {

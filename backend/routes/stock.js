@@ -8,6 +8,7 @@ const store = require('../services/stock/store');
 const catalog = require('../services/stock/catalog-sync');
 const documents = require('../services/stock/documents');
 const sales = require('../services/stock/sales');
+const appointmentGoods = require('../services/stock/appointment-goods');
 const operations = require('../services/stock/operations');
 const operationsExport = require('../services/stock/operations-export');
 const stockHistory = require('../services/stock/history');
@@ -246,6 +247,11 @@ router.post('/sales/:id/payments', wrap('sale-payment', async (req, res) => {
   const saleId = id(req); if (!saleId) return bad(res, ['Некорректный id продажи.']);
   res.status(201).json(await sales.addPayment(req.user.salonId, req.user.userId, saleId, bodyOf(req)));
 }));
+router.post('/goods/:id/code-reservations', wrap('goods-code-reservation', async (req, res) => {
+  const goodId = id(req); if (!goodId) return bad(res, ['Некорректный id товара.']);
+  const b = bodyOf(req);
+  res.status(201).json(await appointmentGoods.reserveCode(req.user.salonId, req.user.userId, goodId, b.requestId));
+}));
 router.get('/clients/:clientId', wrap('sale-client', async (req, res) => {
   res.json(await sales.clientDetail(req.user.salonId, req.params.clientId));
 }));
@@ -257,6 +263,13 @@ router.get('/clients/:clientId/purchases', wrap('client-purchases', async (req, 
 
 const consumables = require('../services/stock/consumables');
 const recordIdOf = req => { const n=Number(req.params.recordId); if(!Number.isSafeInteger(n)||n===0) throw new StockError('Некорректный id записи.',400); return n; };
+router.get('/records/:recordId/goods', wrap('record-goods', async(req,res) => {
+  const clientId = req.query && req.query.clientId != null ? Number(req.query.clientId) : null;
+  res.json(await appointmentGoods.get(req.user.salonId, recordIdOf(req), clientId));
+}));
+router.put('/records/:recordId/goods', wrap('record-goods-save', async(req,res) => {
+  res.json(await appointmentGoods.save(req.user.salonId, req.user.userId, recordIdOf(req), bodyOf(req)));
+}));
 router.get('/records/:recordId/consumables', wrap('record-consumables', async(req,res)=>res.json(await consumables.forRecord(req.user.salonId,recordIdOf(req)))));
 router.put('/records/:recordId/consumables/:serviceId', wrap('record-consumables-update', async(req,res)=>{
   const serviceId=Number(req.params.serviceId); if(!Number.isSafeInteger(serviceId)||serviceId<=0) return bad(res,['Некорректный id услуги.']);

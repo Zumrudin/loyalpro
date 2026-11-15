@@ -27,7 +27,7 @@ async function postDocument(q, salonId, doc, lines) {
       ? [{ storageId: doc.storageId, qtyBase: -Math.abs(l.qtyBase) }, { storageId: doc.toStorageId, qtyBase: Math.abs(l.qtyBase) }]
       : [{ storageId: doc.storageId, qtyBase: l.qtyBase }];
     for (const r of rows) {
-      await store.insertMovement(q, salonId, { documentId: doc.id, goodRowId: l.goodRowId, storageId: r.storageId, qty: l.qty, unitType: l.unitType, qtyBase: r.qtyBase, costPerUnit: l.costPerUnit, discount: l.discount, cost: l.cost, recordId: doc.recordId || null, serviceYcId: l.serviceYcId || null, masterStaffYcId: doc.masterStaffYcId || null, source: doc.source || 'loyalpro', occurredAt: doc.docDate, comment: l.comment || null });
+      await store.insertMovement(q, salonId, { documentId: doc.id, goodRowId: l.goodRowId, storageId: r.storageId, qty: l.qty, unitType: l.unitType, qtyBase: r.qtyBase, costPerUnit: l.costPerUnit, discount: l.discount, cost: l.cost, recordId: doc.recordId || null, serviceYcId: l.serviceYcId || null, masterStaffYcId: l.masterStaffYcId ?? doc.masterStaffYcId ?? null, source: doc.source || 'loyalpro', occurredAt: doc.docDate, comment: l.comment || null });
     }
   }
 }

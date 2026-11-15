@@ -6,7 +6,7 @@ function jrUnsavedKind() {
   const apply = jrEl('jrApply'), applyReady = !!(jrEl('jrForm') && apply && !apply.disabled);
   if (journal.draft?.action === 'move') return applyReady || journal.session?.edit ? 'move' : null;
   if (journal.draft?.action === 'create') return journal.formTouched ? (applyReady ? 'create' : 'create-incomplete') : null;
-  if (journal.session?.edit) return 'edit';
+  if (journal.session?.edit || journal.goodsDirty) return 'edit';
   return null;
 }
 function jrHideCloseAsk() {
@@ -49,7 +49,7 @@ function jrClose(force) {
   }
   jrHideCloseAsk();
   jrStopRecordWatch();
-  journal.modalRequest++; journal.slotRequest++; journal.draft = null; journal.session = null; journal.payment = null; journal.formTouched = false;
+  journal.modalRequest++; journal.slotRequest++; journal.draft = null; journal.session = null; journal.payment = null; journal.goodsDirty = false; journal.formTouched = false;
   journal.scheduleForm = null;
   jrEl('jrModal').close();
 }

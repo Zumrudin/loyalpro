@@ -49,6 +49,12 @@ test.each([['receipt', 10], ['writeoff', -10], ['sale', -10]])('%s: нормал
   await ledger.postDocument(q, 7, { id: 4, kind, storageId: 2, docDate: at }, [{ goodRowId: 1, qty: 10, unitType: 2, qtyBase }]);
   expect(store.insertMovement).toHaveBeenCalledWith(q, 7, expect.objectContaining({ qtyBase, source: 'loyalpro', occurredAt: at }));
 });
+test('специалист строки сохраняется в движении и имеет приоритет над специалистом документа', async () => {
+  const q = jest.fn();
+  await ledger.postDocument(q, 7, { id: 4, kind: 'sale', storageId: 2, docDate: at, masterStaffYcId: 100 },
+    [{ goodRowId: 1, qty: 1, unitType: 1, qtyBase: -1, masterStaffYcId: 200 }]);
+  expect(store.insertMovement).toHaveBeenCalledWith(q, 7, expect.objectContaining({ masterStaffYcId: 200 }));
+});
 test('перемещение: две строки на каждую позицию', async () => {
   await ledger.postDocument(jest.fn(), 7, { id: 4, kind: 'move', storageId: 2, toStorageId: 3, docDate: at }, [{ goodRowId: 1, qtyBase: -10 }, { goodRowId: 5, qtyBase: -20 }]);
   expect(store.insertMovement.mock.calls.map(c => [c[2].storageId, c[2].qtyBase])).toEqual([[2, -10], [3, 10], [2, -20], [3, 20]]);

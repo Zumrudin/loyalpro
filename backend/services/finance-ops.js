@@ -561,11 +561,16 @@ async function recordStockSalePayment(q, p) {
   const amount = kop(p.amount) / 100;
   if (!['cash', 'card'].includes(p.method) || !Number.isFinite(amount) || amount <= 0)
     fail('Оплата товара: положительная сумма наличными или картой.', 400, 'validation');
+  // Internal callers derive this from the persisted sale, never from payment input.
+  const kind = p.kind ?? 'goods_sale';
+  if (!['goods_sale', 'certificate_sale', 'abonement_sale'].includes(kind))
+    fail('Некорректный вид продажи.', 400, 'validation');
+  const label = { goods_sale: 'Продажа товаров', certificate_sale: 'Продажа сертификата', abonement_sale: 'Продажа абонемента' }[kind];
   const result = await upsertOp({ salon_id: p.salonId, stock_document_id: p.stockDocumentId,
-    step_op_id: p.opId, kind: 'goods_sale', method: p.method, amount,
+    step_op_id: p.opId, kind, method: p.method, amount,
     status: 'confirmed', origin: 'loyalpro', client_id: p.clientId, yclients_client_id: p.ycClientId,
     occurred_at: p.occurredAt, op_date: mskDate(p.occurredAt), user_id: p.userId,
-    title: `Продажа товаров #${p.stockDocumentId}` }, { q });
+    title: `${label} #${p.stockDocumentId}` }, { q });
   return result.row;
 }
 async function cancelByStockDocument(q, salonId, docId) {

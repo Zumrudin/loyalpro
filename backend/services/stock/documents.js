@@ -3,6 +3,7 @@ const { pool } = require('../../db');
 const store = require('./store');
 const ledger = require('./ledger');
 const finOps = require('../finance-ops');
+const appointmentGoods = require('./appointment-goods');
 const m = require('./model');
 const { ycGet } = require('../yclients');
 const { parseCatalogGood } = require('../economics/sync');
@@ -74,7 +75,10 @@ async function cancel(salonId, userId, id, reason) {
     if (!['receipt', 'writeoff', 'move', 'inventory', 'sale'].includes(d.kind)) m.fail('Для этого вида нужна отдельная отмена.', 409, 'kind');
     await store.cancelDocument(q, salonId, Number(id), reason.trim());
     await store.softDeleteDocumentMovements(q, salonId, Number(id));
-    if (d.kind === 'sale') await finOps.cancelByStockDocument(q, salonId, Number(id));
+    if (d.kind === 'sale') {
+      await finOps.cancelByStockDocument(q, salonId, Number(id));
+      await appointmentGoods.syncCodesForDocument(q, salonId, Number(id), 'cancelled');
+    }
   });
   return detail(salonId, id);
 }

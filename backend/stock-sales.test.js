@@ -11,6 +11,7 @@ const fin = require('./services/finance-ops');
 const yc = require('./services/yclients');
 const sales = require('./services/stock/sales');
 const documents = require('./services/stock/documents');
+const appointmentGoods = require('./services/stock/appointment-goods');
 const client = { id: 7, yclients_client_id: 70 };
 const REQUEST_ID = '10000000-0000-4000-8000-000000000001';
 const PAYMENT_ID = '20000000-0000-4000-8000-000000000002';
@@ -256,10 +257,11 @@ describe('sale API', () => {
     base = `http://127.0.0.1:${server.address().port}/api/stock`;
   });
   afterAll(() => new Promise(resolve => server.close(resolve)));
-  async function request(path, role, payload) {
+  async function request(path, role, payload, method) {
     const headers = { 'Content-Type': 'application/json' };
     if (role) headers.Authorization = 'Bearer ' + require('jsonwebtoken').sign({ salonId: 1, userId: 4, role }, require('./config').JWT_SECRET);
-    const r = await fetch(base + path, { headers, method: payload ? 'POST' : 'GET', ...(payload ? { body: JSON.stringify(payload) } : {}) });
+    const verb = method || (payload ? 'POST' : 'GET');
+    const r = await fetch(base + path, { headers, method: verb, ...(payload ? { body: JSON.stringify(payload) } : {}) });
     return { status: r.status, data: await r.json() };
   }
   test('auth, roles, envelope and server-side tenant scope', async () => {
@@ -298,6 +300,20 @@ describe('sale API', () => {
     expect(store.listPurchasesByClient).toHaveBeenCalledWith(1, 7);
     expect((await request('/clients/0/purchases', 'admin')).status).toBe(400);
     expect((await request('/clients/7/purchases', 'specialist')).status).toBe(403);
+  });
+  test('inline appointment goods routes enforce roles and server tenant claims', async () => {
+    const view = { recordId: 90, version: 0, documents: [], lines: [], total: 0, paid: 0, outstanding: 0 };
+    const getSpy = jest.spyOn(appointmentGoods, 'get').mockResolvedValue(view);
+    const saveSpy = jest.spyOn(appointmentGoods, 'save').mockResolvedValue({ ...view, version: 1 });
+    const reserveSpy = jest.spyOn(appointmentGoods, 'reserveCode').mockResolvedValue({ id: REQUEST_ID, value: 'ABCD', kind: 'certificate', goodRowId: 3, status: 'reserved' });
+    expect((await request('/records/90/goods?clientId=7', 'specialist')).status).toBe(403);
+    expect((await request('/records/90/goods?clientId=7', 'admin')).status).toBe(200);
+    expect(getSpy).toHaveBeenCalledWith(1, 90, 7);
+    expect((await request('/records/90/goods', 'owner', { version: 0, clientId: 7, requestId: REQUEST_ID, lines: [], salonId: 99 }, 'PUT')).status).toBe(200);
+    expect(saveSpy).toHaveBeenCalledWith(1, 4, 90, expect.objectContaining({ salonId: 99 }));
+    expect((await request('/goods/3/code-reservations', 'admin', { requestId: REQUEST_ID, salonId: 99 })).status).toBe(201);
+    expect(reserveSpy).toHaveBeenCalledWith(1, 4, 3, REQUEST_ID);
+    getSpy.mockRestore(); saveSpy.mockRestore(); reserveSpy.mockRestore();
   });
 });
 describe('missing local client fallback', () => {

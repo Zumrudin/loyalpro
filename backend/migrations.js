@@ -2332,6 +2332,8 @@ async function runMigrations(client) {
   // Локальные товары не имеют id YClients: ослабление ограничения, не разрушение.
   await client.query(`ALTER TABLE yclients_goods_catalog ALTER COLUMN yclients_good_id DROP NOT NULL`).catch(() => {});
   for (const ddl of STOCK_DDL) await client.query(ddl).catch(() => {});
+  // Inline goods codes are globally unique; reads and writes remain tenant scoped.
+  for (const ddl of APPOINTMENT_GOODS_DDL) await client.query(ddl);
   // Один simple-query PostgreSQL выполняет весь блок в общей неявной
   // транзакции: таблица, функции и оба триггера появляются вместе. Ошибки не
   // скрываем, иначе UI показывал бы неполную историю как достоверную.
@@ -2929,6 +2931,80 @@ const STOCK_DDL = [
     categories_synced_at TIMESTAMPTZ, updated_at TIMESTAMPTZ
   )`,
 ];
+const APPOINTMENT_GOODS_DDL = [
+  `CREATE TABLE IF NOT EXISTS appointment_goods_sets (
+    id BIGSERIAL PRIMARY KEY,
+    salon_id INT NOT NULL REFERENCES salons(id) ON DELETE CASCADE,
+    local_outbox_id BIGINT,
+    yclients_record_id BIGINT,
+    client_id INT NOT NULL REFERENCES clients(id),
+    version INT NOT NULL DEFAULT 0,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CHECK (local_outbox_id IS NOT NULL OR yclients_record_id IS NOT NULL)
+  )`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS appointment_goods_sets_local_uq
+    ON appointment_goods_sets(salon_id, local_outbox_id) WHERE local_outbox_id IS NOT NULL`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS appointment_goods_sets_yc_uq
+    ON appointment_goods_sets(salon_id, yclients_record_id) WHERE yclients_record_id IS NOT NULL`,
+  `CREATE TABLE IF NOT EXISTS appointment_goods_codes (
+    id UUID PRIMARY KEY,
+    request_id UUID NOT NULL,
+    salon_id INT NOT NULL REFERENCES salons(id) ON DELETE CASCADE,
+    reserved_by INT REFERENCES users(id) ON DELETE SET NULL,
+    good_row_id BIGINT NOT NULL REFERENCES yclients_goods_catalog(id),
+    kind TEXT NOT NULL CHECK(kind IN ('certificate','abonement')),
+    code TEXT NOT NULL,
+    normalized_code TEXT NOT NULL,
+    status TEXT NOT NULL CHECK(status IN ('reserved','issued','active','cancelled')),
+    reserved_until TIMESTAMPTZ NOT NULL,
+    document_id BIGINT REFERENCES stock_documents(id),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT appointment_goods_codes_normalized_check
+      CHECK(normalized_code = upper(regexp_replace(code,'[^0-9A-Za-z]','','g'))),
+    UNIQUE(normalized_code),
+    UNIQUE(salon_id, request_id)
+  )`,
+  `DO $$ BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='appointment_goods_codes_normalized_check') THEN
+      ALTER TABLE appointment_goods_codes ADD CONSTRAINT appointment_goods_codes_normalized_check
+        CHECK(normalized_code = upper(regexp_replace(code,'[^0-9A-Za-z]','','g')));
+    END IF;
+  END $$`,
+  `CREATE INDEX IF NOT EXISTS appointment_goods_codes_owner
+    ON appointment_goods_codes(salon_id, reserved_by, good_row_id, status)`,
+  `CREATE TABLE IF NOT EXISTS appointment_goods_lines (
+    id BIGSERIAL PRIMARY KEY,
+    set_id BIGINT NOT NULL REFERENCES appointment_goods_sets(id) ON DELETE CASCADE,
+    salon_id INT NOT NULL REFERENCES salons(id) ON DELETE CASCADE,
+    line_id UUID NOT NULL,
+    document_id BIGINT NOT NULL REFERENCES stock_documents(id),
+    good_row_id BIGINT NOT NULL REFERENCES yclients_goods_catalog(id),
+    storage_id BIGINT NOT NULL REFERENCES stock_storages(id),
+    qty NUMERIC(14,4) NOT NULL,
+    unit_type SMALLINT NOT NULL CHECK(unit_type IN (1,2)),
+    price NUMERIC(14,4) NOT NULL,
+    discount NUMERIC(8,2) NOT NULL DEFAULT 0,
+    total NUMERIC(14,2) NOT NULL,
+    master_staff_yc_id BIGINT,
+    code_id UUID REFERENCES appointment_goods_codes(id),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(set_id,line_id),
+    UNIQUE(code_id)
+  )`,
+  `CREATE INDEX IF NOT EXISTS appointment_goods_lines_tenant_set
+    ON appointment_goods_lines(salon_id,set_id)`,
+  `CREATE TABLE IF NOT EXISTS appointment_goods_requests (
+    salon_id INT NOT NULL REFERENCES salons(id) ON DELETE CASCADE,
+    request_id UUID NOT NULL,
+    request_hash TEXT NOT NULL,
+    set_id BIGINT NOT NULL REFERENCES appointment_goods_sets(id) ON DELETE CASCADE,
+    version INT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY(salon_id,request_id)
+  )`,
+];
 // Технический аудит склада: без комментариев, телефонов и иных PII. Триггеры
 // выполняются в транзакции исходной записи, поэтому rollback не оставляет
 // ложного события. document_id намеренно не FK: удаление салона/документа не
@@ -3175,4 +3251,4 @@ CREATE TABLE IF NOT EXISTS max_loyalty_registrations (
  PRIMARY KEY(salon_id,phone)
 );
 `;
-module.exports = { runMigrations, MAX_LOYALTY_DDL, FINANCE_OPS_DDL, EDOCS_BOARD_DDL, JOURNAL_DDL, SERVICE_CATALOG_DDL, JOURNAL_FINANCE_DDL, JOURNAL_LOCAL_DDL, JOURNAL_PREFS_DDL, JOURNAL_HISTORY_INDEX_DDL, STOCK_HISTORY_DDL };
+module.exports = { runMigrations, MAX_LOYALTY_DDL, FINANCE_OPS_DDL, EDOCS_BOARD_DDL, JOURNAL_DDL, SERVICE_CATALOG_DDL, JOURNAL_FINANCE_DDL, JOURNAL_LOCAL_DDL, JOURNAL_PREFS_DDL, JOURNAL_HISTORY_INDEX_DDL, STOCK_HISTORY_DDL, APPOINTMENT_GOODS_DDL };

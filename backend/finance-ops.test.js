@@ -27,6 +27,25 @@ const upsertAnswer = inserted => ({ rows: [{ id: 1, inserted }], rowCount: 1 });
 
 beforeEach(() => jest.clearAllMocks());
 
+test.each([['goods_sale', 'Продажа товаров'], ['certificate_sale', 'Продажа сертификата'], ['abonement_sale', 'Продажа абонемента']])(
+  'stock payment preserves persisted sale classification: %s', async (kind, title) => {
+    const q = fakeQ([[/INSERT INTO finance_operations/, upsertAnswer(true)]]);
+    await fo.recordStockSalePayment(q, { salonId: 2, stockDocumentId: 19,
+      opId: '10000000-0000-4000-8000-000000000001', kind, method: 'card', amount: 120.50,
+      clientId: 7, occurredAt: '2030-04-02T21:30:00Z', userId: 4 });
+    const { sql, params } = q.calls[0];
+    const cols = sql.match(/INSERT INTO finance_operations\(([^)]+)\)/)[1].split(',');
+    const saved = Object.fromEntries(cols.map((c, i) => [c, params[i]]));
+    expect(saved).toMatchObject({ salon_id: 2, stock_document_id: 19, kind, amount: 120.50,
+      title: `${title} #19`, op_date: '2030-04-03', status: 'confirmed' });
+  });
+test('stock payment rejects unrelated finance kind before writing', async () => {
+  const q = fakeQ();
+  await expect(fo.recordStockSalePayment(q, { amount: 10, method: 'cash', kind: 'bonus_accrual' }))
+    .rejects.toMatchObject({ status: 400 });
+  expect(q).not.toHaveBeenCalled();
+});
+
 describe('classifiers', () => {
   test('revenue category -> kind', () => {
     expect(fo.revenueKind('services')).toBe('visit_payment');
