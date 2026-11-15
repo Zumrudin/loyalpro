@@ -42,13 +42,18 @@ test('pending commit precedes external effect; tenant/user scoped audit; unlock'
   expect(await service.mutate(3, 4, draft())).toEqual({ recordId: 8 });
   const insert = conn.query.mock.calls.find(([sql]) => sql.includes('INSERT INTO'));
   expect(insert[1].slice(0, 5)).toEqual([3, operationId, 4, 'confirm', 8]);
+  expect(JSON.parse(insert[1][6])._localAudit).toMatchObject({ version: 1, actor: { userId: 4 }, events: [{ action: 'confirm' }] });
   expect(db.oneOrNone).toHaveBeenCalledWith('SELECT * FROM salons WHERE id=$1', [3]);
   expect(yc.write.mock.calls[0][2]).toMatchObject({ services: record.services, client: record.client, attendance: 2, save_if_busy: false });
+  const done = conn.query.mock.calls.find(([sql]) => sql.includes("state='done'"));
+  const stored = JSON.parse(done[1][2]);
+  expect(stored._localAudit).toMatchObject({ version: 1, actor: { userId: 4 },
+    events: [{ action: 'confirm', changes: [expect.objectContaining({ field: 'attendance', from: 'Ожидание', to: 'Подтвердил' })] }] });
   expect(conn.query.mock.calls.at(-1)[0]).toContain('pg_advisory_unlock');
   expect(conn.release).toHaveBeenCalledWith(false);
 });
 test('replay returns stored success without calling YClients', async () => {
-  prior = { state: 'done', request_hash: m.fingerprint(draft()), result: { recordId: 8 } };
+  prior = { state: 'done', request_hash: m.fingerprint(draft()), result: { recordId: 8, _localAudit: { version: 1, events: [] } } };
   expect(await service.mutate(3, 4, draft())).toEqual({ recordId: 8, duplicate: true });
   expect(yc.write).not.toHaveBeenCalled(); expect(yc.getRecord).not.toHaveBeenCalled();
 });

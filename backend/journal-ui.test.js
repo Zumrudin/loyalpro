@@ -1447,7 +1447,7 @@ test('history: lazy load, escaped changes, package errors, empty state', async (
   expect(html).toContain('Комментарий: — → &lt;script&gt;x&lt;/script&gt;');
   expect(html).toContain('LoyalPro: Мария');
   expect(html).toContain('Время занято (slot_taken)');
-  expect(html).toContain('12.11, 10:10');
+  expect(html).toContain('12.11, 10:10:00');
   expect(h.context.jrHistoryHtml([])).toContain('Изменений не зафиксировано');
   h.context.jrApi = jest.fn().mockRejectedValue(new Error('Нет связи'));
   await h.context.jrLoadHistory(8);
@@ -1493,22 +1493,24 @@ test('no phone: the panel says so and does not call the server', async () => {
   expect(h.get('jrClientSummaryBox').innerHTML).toContain('Телефон клиента неизвестен');
 });
 
-test('queued record (id<0) has no history button or box', () => {
+test('queued record (id<0) has a history button and box', () => {
   const h = cardHarness();
   const html = h.context.jrAppointmentCard({ ...CARD, id: -3 });
-  expect(html).not.toContain('jrHistoryOpen');
-  expect(html).not.toContain('id="jrHistory"');
+  expect(html).toContain('jrHistoryOpen');
+  expect(html).toContain('id="jrHistory"');
 });
 test('history survives a re-render of the same card', async () => {
   const h = cardHarness();
-  h.context.jrApi = jest.fn().mockResolvedValue({ events: [{ at: '2026-11-12T07:10:00Z', source: 'yclients', author: 'Синхронизация', title: 'Запись изменена', changes: [] }] });
+  h.context.jrApi = jest.fn().mockResolvedValue({ events: [{ at: '2026-11-12T07:10:37Z', source: 'yclients', author: 'Синхронизация', title: 'Запись изменена', changes: [] }] });
   h.context.jrRenderRecord(CARD);
   await h.context.jrLoadHistory(8);
   h.get('jrHistory').innerHTML = '';
   h.get('jrHistory').hidden = true;
   h.context.jrRenderRecord(CARD);
+  await new Promise(resolve => setTimeout(resolve, 0));
   expect(h.get('jrHistory').hidden).toBe(false);
   expect(h.get('jrHistory').innerHTML).toContain('Запись изменена');
+  expect(h.get('jrHistory').innerHTML).toContain('10:10:37');
 });
 test('history error is visible even if the box was hidden by a re-render', async () => {
   const h = cardHarness();
@@ -1518,6 +1520,75 @@ test('history error is visible even if the box was hidden by a re-render', async
   h.get('jrHistory').hidden = true;
   await p;
   expect(h.get('jrHistory').hidden).toBe(false);
+});
+test('history button toggles closed and a late response cannot reopen it', async () => {
+  const h = cardHarness(); let resolve;
+  h.context.jrRenderRecord(CARD);
+  h.context.jrApi = jest.fn(() => new Promise(r => { resolve = r; }));
+  const button = h.get('jrHistoryOpen');
+  const pending = button.onclick();
+  expect(h.get('jrHistory').hidden).toBe(false);
+  button.onclick();
+  expect(h.get('jrHistory').hidden).toBe(true);
+  resolve({ events: [{ at: '2026-11-12T07:10:00Z', author: 'Мария', title: 'Изменено', changes: [] }] });
+  await pending;
+  expect(h.get('jrHistory').hidden).toBe(true);
+  expect(h.get('jrHistory').innerHTML).toContain('Изменено');
+});
+test('history response from a previous card is ignored after opening another card', async () => {
+  const h = cardHarness(); let resolve;
+  h.context.jrRenderRecord(CARD);
+  h.context.jrApi = jest.fn()
+    .mockImplementationOnce(() => new Promise(r => { resolve = r; }))
+    .mockResolvedValue(SUMMARY);
+  const pending = h.get('jrHistoryOpen').onclick();
+  h.context.jrClose(true);
+  h.context.jrRenderRecord({ ...CARD, id: 9, clientName: 'Другая запись' });
+  resolve({ events: [{ at: '2026-11-12T07:10:00Z', author: 'Мария', title: 'Старая запись', changes: [] }] });
+  await pending;
+  expect(h.get('jrHistory').innerHTML).not.toContain('Старая запись');
+  expect(h.run('jrHistoryState(9)')).toBeNull();
+});
+test('history re-render preserves an intentionally closed panel', async () => {
+  const h = cardHarness();
+  h.context.jrRenderRecord(CARD);
+  h.context.jrApi = jest.fn().mockResolvedValue({ events: [{ at: '2026-11-12T07:10:00Z', author: 'Мария', title: 'Изменено', changes: [] }] });
+  await h.get('jrHistoryOpen').onclick();
+  h.get('jrHistoryOpen').onclick();
+  expect(h.get('jrHistory').hidden).toBe(true);
+  h.context.jrRenderRecord(CARD);
+  expect(h.get('jrHistory').hidden).toBe(true);
+});
+test('open history refreshes when a queued local package becomes done', async () => {
+  const h = cardHarness();
+  h.context.jrRenderRecord({ ...CARD, sync: { status: 'queued' } });
+  let historyCalls = 0;
+  h.context.jrApi = jest.fn(path => {
+    if (!String(path).endsWith('/history')) return Promise.resolve(SUMMARY);
+    const sent = historyCalls++ > 0;
+    return Promise.resolve({ events: [{ at: '2026-11-12T07:10:37Z', author: 'LoyalPro: Мария', title: sent ? 'Изменение — отправлено' : 'Изменение — ждёт отправки', status: sent ? 'done' : 'queued', changes: [] }] });
+  });
+  const button = h.get('jrHistoryOpen');
+  await button.onclick();
+  expect(h.get('jrHistory').innerHTML).toContain('10:10:37');
+  h.context.jrRenderRecord({ ...CARD, sync: { status: 'done' } });
+  await new Promise(resolve => setTimeout(resolve, 0));
+  expect(h.context.jrApi.mock.calls.filter(([path]) => String(path).endsWith('/history'))).toHaveLength(2);
+  expect(h.get('jrHistory').innerHTML).toContain('Изменение — отправлено');
+});
+test('reopening history refreshes local events after a save or payment', async () => {
+  const h = cardHarness();
+  h.context.jrRenderRecord(CARD);
+  h.context.jrApi = jest.fn()
+    .mockResolvedValueOnce({ events: [{ at: '2026-11-12T07:10:00Z', author: 'Мария', title: 'Запись изменена', changes: [] }] })
+    .mockResolvedValueOnce({ events: [{ at: '2026-11-12T07:11:00Z', author: 'Мария', title: 'Оплата проведена', changes: [{ label: 'Сумма', from: '0 ₽', to: '3000 ₽' }] }] });
+  const button = h.get('jrHistoryOpen');
+  await button.onclick();
+  button.onclick();
+  await button.onclick();
+  expect(h.context.jrApi).toHaveBeenCalledTimes(2);
+  expect(h.get('jrHistory').innerHTML).toContain('Оплата проведена');
+  expect(h.get('jrHistory').innerHTML).toContain('0 ₽ → 3000 ₽');
 });
 test('change client: 8XXXXXXXXXX is normalized to 7XXXXXXXXXX in the session', () => {
   const h = cardHarness();

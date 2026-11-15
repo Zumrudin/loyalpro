@@ -15,14 +15,15 @@ describe('diffRecords', () => {
       services: [{ id: 7, title: 'Чистка', amount: 2, cost: 6000 }], comment: 'Позвонить', custom_color: 'F4A0A0',
       record_labels: [{ id: 3, title: 'VIP' }], paid_full: 1, deleted: true };
     expect(h.diffRecords(base, next).map(c => [c.label, c.from, c.to])).toEqual([
-      ['Время', '12.11 10:00', '12.11 12:30'], ['Специалист', 'Юлия', 'Пери'], ['Услуги', 'Чистка — 3000 ₽', 'Чистка ×2 — 6000 ₽'],
+      ['Время', '12.11 10:00', '12.11 12:30'], ['Специалист', 'Юлия', 'Пери'], ['Услуги, количество, цена и скидка', 'Чистка — 3000 ₽', 'Чистка ×2 — 6000 ₽'],
       ['Длительность', '60 мин', '75 мин'], ['Статус', 'Ожидание', 'Подтвердил'], ['Комментарий', null, 'Позвонить'],
       ['Цвет', null, '#f4a0a0'], ['Метки', null, 'VIP'], ['Оплата', 'не оплачено', 'оплачено'], ['Удалена', 'нет', 'да'],
     ]);
   });
   test('client phone and email never appear', () => {
     const out = h.diffRecords(base, { ...base, client: { name: 'Другая', phone: '79000000000', email: 'x@y.z' } });
-    expect(out).toEqual([]);
+    expect(out).toEqual([{ field: 'client', label: 'Клиент', from: 'Анна', to: 'Другая' }]);
+    expect(JSON.stringify(out)).not.toMatch(/79000000000|x@y\.z|79200255591|a@b\.c/);
   });
 });
 
@@ -38,7 +39,7 @@ describe('mergeHistory', () => {
         steps: [{ kind: 'move', state: 'failed', draftJson: '{"client":{"phone":"79200255591"}}', params: { clientPhone: '79200255591' } }] },
     ], new Map([[4, 'Мария']]));
     expect(events.map(e => [e.source, e.title])).toEqual([
-      ['yclients', 'Запись изменена'], ['journal', 'перенос — ошибка'], ['yclients', 'Запись создана'],
+      ['yclients', 'Запись изменена'], ['journal', 'перенос — ошибка передачи'], ['yclients', 'Запись создана'],
     ]);
     expect(events[0].changes).toEqual([{ field: 'comment', label: 'Комментарий', from: null, to: 'Позвонить' }]);
     expect(events[1]).toMatchObject({ author: 'LoyalPro: Мария', status: 'failed', steps: [{ kind: 'move', state: 'failed' }], error: 'Время занято' });
@@ -46,12 +47,37 @@ describe('mergeHistory', () => {
   });
   test('cancelled package with empty steps does not crash', () => {
     const ev = h.mergeHistory([], [{ id: 1, user_id: 4, status: 'cancelled', steps: [], created_at: new Date('2026-11-12T07:00:00Z') }], new Map());
-    expect(ev[0]).toMatchObject({ title: 'Удалена до отправки', steps: [], error: null, author: 'LoyalPro' });
+    expect(ev[0]).toMatchObject({ title: 'Удалена до отправки', steps: [], error: null, author: 'LoyalPro: автор не указан' });
     expect(() => h.mergeHistory([], [{ id: 2, status: 'failed', steps: null, created_at: new Date() }], new Map())).not.toThrow();
   });
   test('drop-only marker package reads as a deleted unsent payment', () => {
     const [e] = h.mergeHistory([], [{ id: 3, status: 'cancelled', steps: [{ kind: 'drop_payment', state: 'done' }], created_at: new Date() }], new Map());
     expect(e.title).toBe('Неотправленная оплата удалена');
+  });
+  test('legacy package exposes its payment amount before its finance mirror arrives', () => {
+    const op = '00000000-0000-4000-8000-000000000101';
+    const events = h.mergeHistory([], [{ id: 9, user_id: 4, status: 'queued', created_at: new Date('2026-11-12T07:00:00Z'),
+      steps: [{ kind: 'pay', opId: op, state: 'pending', params: { method: 'account', methodId: 6, amount: 1250 } }] }], new Map([[4, 'Мария']]), [],
+    [{ operation_id: op, action: 'payment', method: 'account', amount: 1250, state: 'confirmed', created_at: new Date() }]);
+    const payment = events.find(e => e.changes.some(c => c.field === 'payment'));
+    expect(payment).toMatchObject({ author: 'LoyalPro: Мария', title: 'Оплата сохранена — сохранено' });
+    expect(payment.changes).toEqual([{ field: 'payment', label: 'Оплата', from: null, to: '1 250 ₽ · касса #6' }]);
+  });
+  test('finance status and method are explicit for pending cash and rejected bonus operations', () => {
+    const events = h.mergeHistory([], [], new Map(), [], [], [
+      { journal_operation_id: 'cash-op', kind: 'visit_payment', method: 'cash', amount: 700, status: 'pending', occurred_at: '2026-11-12T07:00:00Z' },
+      { journal_operation_id: 'bonus-op', kind: 'bonus_redemption', method: 'bonus', amount: -200, status: 'rejected', occurred_at: '2026-11-12T07:01:00Z' },
+    ]);
+    expect(events.map(e => e.title)).toEqual(['Бонусы — не списаны', 'Оплата — ожидает подтверждения']);
+    expect(events[0].changes).toEqual([{ field: 'bonus_redemption', label: 'Бонусы', from: null, to: '200 бонусов' }]);
+    expect(events[1].changes).toEqual([{ field: 'visit_payment', label: 'Оплата', from: null, to: '700 ₽ · наличные' }]);
+  });
+  test('local drop and unsent delete are applied locally, not described as sent or cancelled', () => {
+    const at = new Date('2026-11-12T07:00:00Z');
+    const dropped = { id: 10, status: 'cancelled', steps: [], created_at: at, overlay: { audit: { version: 1, actor: { userId: 4, name: 'Мария' }, events: [{ action: 'drop_payment', changes: [], details: { method: 'account', amount: 50 } }] } } };
+    const deleted = { id: 11, status: 'cancelled', create_outbox_id: 7, steps: [], created_at: at, overlay: { kind: 'patch', patch: { deleted: true }, audit: { version: 1, actor: { userId: 4, name: 'Мария' }, events: [{ action: 'delete', changes: [{ field: 'deleted', label: 'Удалена', from: 'нет', to: 'да' }] }] } } };
+    const events = h.mergeHistory([], [dropped, deleted]);
+    expect(events.map(e => [e.title, e.status])).toEqual([['Неотправленная оплата удалена в LoyalPro', 'local'], ['Несохранённая запись удалена в LoyalPro', 'local']]);
   });
   test('partial payment is paid_full=2; date is the fallback for datetime', () => {
     const d = h.diffRecords({ ...base, paid_full: 0 }, { ...base, paid_full: 2 });
@@ -84,7 +110,7 @@ describe('load', () => {
     });
     const out = await h.load(3, 8);
     expect(out.recordId).toBe(8);
-    expect(out.events.map(e => e.author)).toEqual(['Синхронизация', 'LoyalPro: Мария']);
+    expect(out.events.map(e => e.author)).toEqual(['Неизвестно (YClients)', 'LoyalPro: Мария']);
     const hooks = db.any.mock.calls.find(([sql]) => /FROM webhook_logs/.test(sql));
     expect(hooks[0]).toMatch(/event_type='record'/); expect(hooks[1]).toEqual([3, '8', null]);
     const outbox = db.any.mock.calls.find(([sql]) => /FROM journal_outbox/.test(sql));

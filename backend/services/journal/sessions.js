@@ -14,6 +14,7 @@ const index = require('./index');
 const localCatalog = require('../service-catalog');
 const paymentsLocal = require('./payments-local');
 const finOps = require('../finance-ops');
+const audit = require('./audit');
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const MAX_PAYMENTS = 10, MAX_REMOVES = 10, MAX_DROPS = 10;
@@ -153,7 +154,8 @@ async function createServices(salon, draft, available, src) {
       const line = draft.lines?.find(l => l.serviceId === Number(s.id));
       const p = available.servicePayload?.[i] || {};
       const cost = line ? line.total : Number(p.cost) || 0;
-      return { ...p, id: Number(s.yclients_id) || Number(s.id), title: String(s.title || ''), amount: line ? line.quantity : Number(p.amount) || 1, cost };
+      return { ...p, id: Number(s.yclients_id) || Number(s.id), title: String(s.title || ''), amount: line ? line.quantity : Number(p.amount) || 1,
+        ...(line ? { cost_per_unit: line.unitPrice, first_cost: line.gross, discount: line.discount } : {}), cost };
     });
   }
   const all = await src.services();
@@ -168,7 +170,7 @@ async function validate(salonId, session) {
   const salon = await salonFor(salonId);
   // Local when local-first is on and the cache is warm, else live (rollback).
   const src = await sources.forSalon(salon);
-  let overlay, ctx, attendance;
+  let overlay, ctx, attendance, droppedPayments = [];
   if (session.create) {
     const d = session.create;
     const available = await index.availability(salon, d, null, src);
@@ -183,12 +185,27 @@ async function validate(salonId, session) {
     attendance = 0;
   } else {
     ctx = await paymentsLocal.loadContext(salonId, session.recordId);
+    if (session.edit?.notifyClient !== undefined && ctx.record.notify_client === undefined) {
+      // The mirror does not carry this local preference. A queued overlay,
+      // when present, is already authoritative and must not be replaced.
+      let notify = true;
+      if (session.recordId > 0) {
+        const pref = await require('./record-prefs').get(salonId, session.recordId);
+        notify = pref?.notify_client !== false;
+      } else {
+        const parent = await db.oneOrNone('SELECT steps FROM journal_outbox WHERE salon_id=$1 AND id=$2', [salonId, -session.recordId]);
+        const create = (Array.isArray(parent?.steps) ? parent.steps : []).find(s => s?.kind === 'create');
+        notify = create?.params?.notifyClient !== false;
+      }
+      ctx = { ...ctx, record: { ...ctx.record, notify_client: notify } };
+    }
     if ((session.dropPayments || []).length) {
       // Only an unsent payment of THIS record can be dropped; the rest of the
       // checks see the visit as it will be without it.
       const drops = new Set(session.dropPayments.map(d => d.outboxId + ':' + d.opId));
       const open = (ctx.queued || []).filter(q => q.kind === 'pay' && drops.has(q.outboxId + ':' + q.opId));
       if (open.length !== drops.size || open.some(q => q.pkgStatus !== 'queued' || q.releasedAt)) m.fail('Оплата уже отправляется или изменена. Обновите форму.', 409, 'drop_conflict');
+      droppedPayments = open.map(q => ({ ...q }));
       ctx = { ...ctx, queued: ctx.queued.filter(q => !drops.has(q.outboxId + ':' + q.opId)) };
     }
     const record = ctx.record;
@@ -270,7 +287,9 @@ async function validate(salonId, session) {
     if (overlay.kind === 'create') overlay.attendance = 1;
     else overlay.patch.attendance = 1;
   }
-  return { steps: buildSteps(session), overlay, options: paymentsLocal.localOptions(state()), drops: session.dropPayments || [] };
+  const steps = buildSteps(session);
+  return { steps, overlay, options: paymentsLocal.localOptions(state()), drops: session.dropPayments || [],
+    audit: audit.build({ session, overlay, beforeRecord: session.create ? null : ctx.record, droppedPayments, accounts: ctx.accounts, steps }) };
 }
 
 const OUTBOX_BY_SESSION = 'SELECT id, request_hash, status FROM journal_outbox WHERE salon_id=$1 AND session_id=$2';
@@ -300,14 +319,23 @@ const LOCAL_DELETE_SQL = `WITH parent AS (UPDATE journal_outbox SET status='canc
   INSERT INTO journal_outbox(salon_id,session_id,user_id,request_hash,yclients_record_id,create_outbox_id,status,steps,overlay)
   SELECT $1,$3,$4,$5,NULL,id,'cancelled',$6,$7 FROM parent
   ON CONFLICT (salon_id,session_id) DO NOTHING RETURNING id, status`;
-async function deleteUnsent(salonId, uid, session, hash, parent) {
+async function deleteUnsent(salonId, uid, session, hash, parent, actor) {
   if (session.status !== 'delete' || !parent || parent.status !== 'queued' || parent.released_at != null || parent.yclients_record_id != null) return null;
+  const overlay = { kind: 'patch', patch: { deleted: true } };
+  const beforeRecord = audit.recordAfter(null, parent.overlay, { create: {} });
+  const stored = audit.attach(overlay, audit.build({ session, overlay, beforeRecord }), actor);
   const row = await db.oneOrNone(LOCAL_DELETE_SQL, [salonId, Number(parent.id), session.sessionId, uid,
-    hash, JSON.stringify([]), JSON.stringify({ kind: 'patch', patch: { deleted: true } })]);
+    hash, JSON.stringify([]), JSON.stringify(stored)]);
   if (!row) return null;
   // Queued bonus/cash operations of the cancelled packages leave the ledger.
   await finOps.safely('journal-delete-unsent', () => finOps.syncCancelledOutbox(salonId));
   return { outboxId: Number(row.id), recordId: session.recordId, status: row.status };
+}
+
+async function actorFor(salonId, userId) {
+  if (!Number.isSafeInteger(userId) || userId < 1) return { userId: null, name: 'Неизвестный сотрудник' };
+  const row = await db.oneOrNone('SELECT name FROM users WHERE salon_id=$1 AND id=$2', [salonId, userId]);
+  return { userId, name: String(row?.name || 'Неизвестный сотрудник') };
 }
 // Drops unsent payments from their packages (inside the caller's transaction).
 // Only a package still waiting for «send» is touched; a dropped payment that
@@ -349,7 +377,8 @@ async function enqueue(salonId, userId, session) {
     let parent = await parentOf(salonId, session);
     const uid = Number(userId);
     const owner = Number.isSafeInteger(uid) && uid > 0 ? uid : null;
-    const local = await deleteUnsent(salonId, owner, session, hash, parent);
+    const actor = await actorFor(salonId, owner);
+    const local = await deleteUnsent(salonId, owner, session, hash, parent, actor);
     if (local) return local;
     // Lost the race to «Отправить» (or same session concurrently): regular path.
     if (session.status === 'delete' && parent) {
@@ -357,14 +386,15 @@ async function enqueue(salonId, userId, session) {
       if (again) return replay(again, session, hash);
       parent = await parentOf(salonId, session);
     }
-    const { steps, overlay, drops } = await validate(salonId, session);
+    const { steps, overlay, drops, audit: auditDraft } = await validate(salonId, session);
+    const storedOverlay = audit.attach(overlay, auditDraft, actor);
     const recordId = parent ? (parent.yclients_record_id != null ? Number(parent.yclients_record_id) : null) : (session.recordId ?? null);
     const onlyDrops = drops.length > 0 && !steps.length;
     const insert = q => q(`INSERT INTO journal_outbox(salon_id,session_id,user_id,request_hash,yclients_record_id,create_outbox_id,status,steps,overlay)
       VALUES($1,$2,$3,$4,$5,$6,$9,$7,$8) ON CONFLICT (salon_id,session_id) DO NOTHING RETURNING id, status`,
     [salonId, session.sessionId, owner, hash, recordId, parent ? Number(parent.id) : null,
       // A drop-only session leaves a closed marker row: replay answers the same, history shows it.
-      JSON.stringify(onlyDrops ? drops.map(() => ({ kind: 'drop_payment', state: 'done' })) : steps), JSON.stringify(overlay), onlyDrops ? 'cancelled' : 'queued']);
+      JSON.stringify(onlyDrops ? drops.map(() => ({ kind: 'drop_payment', state: 'done' })) : steps), JSON.stringify(storedOverlay), onlyDrops ? 'cancelled' : 'queued']);
     let row;
     if (drops.length) {
       row = await withTransaction(async client => {
@@ -388,7 +418,7 @@ async function enqueue(salonId, userId, session) {
     // Ledger of finance operations (never breaks the save: failures are logged, reconcile catches up).
     await finOps.safely('journal-package', () => finOps.recordJournalPackage({ id: row.id, salon_id: salonId,
       user_id: owner, yclients_record_id: recordId,
-      create_outbox_id: parent ? Number(parent.id) : null, overlay, created_at: new Date(), status: 'queued' }, steps));
+      create_outbox_id: parent ? Number(parent.id) : null, overlay: storedOverlay, created_at: new Date(), status: 'queued' }, steps));
     return { outboxId: Number(row.id), recordId: session.recordId ?? -Number(row.id), status: row.status };
   } catch (e) {
     if (e.code === '42P01') m.fail('Журнал ещё не подготовлен: требуется миграция базы.', 503);
@@ -439,4 +469,4 @@ async function dismiss(salonId, outboxId) {
   return { outboxId: Number(updated.id), status: updated.status };
 }
 
-module.exports = { parseSession, buildSteps, validate, enqueue, retry, dismiss, withoutDrops, MAX_PAYMENTS, MAX_REMOVES, MAX_DROPS };
+module.exports = { parseSession, buildSteps, validate, enqueue, retry, dismiss, withoutDrops, actorFor, MAX_PAYMENTS, MAX_REMOVES, MAX_DROPS };

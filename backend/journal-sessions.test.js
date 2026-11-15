@@ -30,12 +30,14 @@ const RECORD = { id: 42, datetime: '2030-04-01T10:00:00+03:00', staff_id: 5, sea
 
 let state;
 function setup(over = {}) {
-  state = { salon: { id: 3, yclients_company_id: 77 }, record: RECORD, ledger: [], open: [], card: { yclients_card_id: 88, yclients_card_balance: 5000 }, outbox: null, inserted: [], ...over };
+  state = { salon: { id: 3, yclients_company_id: 77 }, user: null, record: RECORD, ledger: [], open: [], card: { yclients_card_id: 88, yclients_card_balance: 5000 }, outbox: null, inserted: [], ...over };
   db.oneOrNone.mockImplementation(async (sql, args) => {
     if (/WITH parent AS \(UPDATE journal_outbox/.test(sql)) { state.localCalls = [...(state.localCalls || []), { sql, args }]; return state.localCancel ?? null; }
     if (/FROM salons/.test(sql)) return state.salon;
     if (/FROM records/.test(sql)) return state.record ? { raw_payload: state.record } : null;
     if (/FROM clients/.test(sql)) return state.card;
+    if (/FROM users/.test(sql)) return state.user;
+    if (/FROM journal_record_prefs/.test(sql)) return state.prefs || null;
     if (/INSERT INTO journal_outbox/.test(sql)) {
       if (state.outbox) return null;
       state.outbox = { id: 7, request_hash: args[3], status: 'queued' };
@@ -136,6 +138,12 @@ describe('buildSteps', () => {
 });
 
 describe('validate', () => {
+  test('notification audit reads the persisted preference missing from the record mirror', async () => {
+    state.prefs = { notify_client: false };
+    const result = await s.validate(3, parse({ recordId: 42, edit: { notifyClient: true } }));
+    expect(result.audit.events[0].changes).toContainEqual({ field: 'notify', label: 'Уведомления клиенту', from: 'выключены', to: 'включены' });
+    expect(db.oneOrNone).toHaveBeenCalledWith(expect.stringContaining('FROM journal_record_prefs WHERE salon_id=$1'), [3, 42]);
+  });
   test('create: local slot taken → 409 busy, no insert', async () => {
     index.availability.mockResolvedValue({ duration: 60, slots: ['11:00'] });
     await expect(s.enqueue(3, 4, parse({ create: CREATE }))).rejects.toMatchObject({ status: 409, code: 'slot_taken' });
@@ -145,7 +153,7 @@ describe('validate', () => {
   test('create overlay: lines, services from the internal catalog', async () => {
     const r = await s.validate(3, parse({ create: CREATE }));
     expect(r.overlay).toEqual({ kind: 'create', date: '2030-04-01', time: '10:00', staffId: 5, duration: 60,
-      services: [{ id: 900, title: 'Чистка', amount: 2, cost: 3000 }], lines: [{ serviceId: 1, quantity: 2, total: 3000 }],
+      services: [{ id: 900, title: 'Чистка', amount: 2, cost_per_unit: 1500, first_cost: 3000, discount: 0, cost: 3000 }], lines: [{ serviceId: 1, quantity: 2, total: 3000 }],
       client: { name: 'Анна', phone: '79200001122' }, comment: '', attendance: 0 });
     expect(r.options.due).toBe(3000);
     expect(r.options.items).toEqual([expect.objectContaining({ title: 'Чистка', quantity: 2, total: 3000 })]);
@@ -276,6 +284,16 @@ describe('enqueue', () => {
   test('existing record keeps its id', async () => {
     expect(await s.enqueue(3, 4, parse({ recordId: 42, status: 'confirm' }))).toEqual({ outboxId: 7, recordId: 42, status: 'queued' });
     expect(state.inserted[0][4]).toBe(42);
+  });
+  test('persists immutable actor and detailed changes in overlay.audit at acceptance', async () => {
+    state.user = { name: 'Владелец' };
+    await s.enqueue(3, 4, parse({ recordId: 42, payments: [pay('loyalty_card', 88, 500)] }));
+    const stored = JSON.parse(state.inserted[0][7]);
+    expect(stored.audit).toMatchObject({ version: 1, actor: { userId: 4, name: 'Владелец' } });
+    expect(stored.audit.events).toEqual([expect.objectContaining({ action: 'payment',
+      changes: [expect.objectContaining({ field: 'bonus_payment', to: '500 ₽' })],
+      details: expect.objectContaining({ method: 'loyalty_card', methodId: 88, amount: 500, stepOpId: expect.stringMatching(/^[a-f0-9-]{36}$/) }) })]);
+    expect(stored.audit.events[0].details.stepOpId).toBe(JSON.parse(state.inserted[0][6])[0].opId);
   });
   test('same session twice → same answer, one insert, replay skips validation', async () => {
     const first = await s.enqueue(3, 4, parse({ create: CREATE }));

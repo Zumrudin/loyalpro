@@ -79,7 +79,9 @@ function jrTile(title, icon, id = null, extra = '') {
   return id ? `<button type="button" class="jr-tool-live jr-placeholder${extra}" id="${id}">${jrIcon(icon)}<span>${title}</span></button>` : jrStub(title, icon);
 }
 function jrTools(record, card = false) {
-  const live = !!record && Number(record.id) > 0;
+  // Negative IDs are locally queued records.  They already have a LoyalPro
+  // history, even though YClients has not assigned an ID yet.
+  const live = !!record && Number.isFinite(Number(record.id)) && Number(record.id) !== 0;
   const ids = { 'Списание расходников': card && record ? 'jrConsumablesOpen' : null, 'История изменений': live ? 'jrHistoryOpen' : null,
     'Расширенные поля': card ? 'jrExtraOpen' : null,
     'Повторение записи': card && record && !record.deleted ? 'jrRebook' : null };
@@ -271,10 +273,22 @@ function jrRenderRecord(r) {
     }
     const historyBtn = jrEl('jrHistoryOpen');
     if (historyBtn) {
-      historyBtn.onclick = () => jrLoadHistory(r.id);
-      // A re-render (polling while sending) keeps an already loaded history.
-      const kept = journal.history;
-      if (kept && kept.request === journal.modalRequest && kept.id === r.id) { jrEl('jrHistory').hidden = false; jrEl('jrHistory').innerHTML = kept.html; }
+      historyBtn.setAttribute?.('aria-controls', 'jrHistory');
+      historyBtn.setAttribute?.('aria-expanded', String(!!jrHistoryState(r.id)?.open));
+      historyBtn.onclick = () => jrToggleHistory(r.id);
+      // Polling while a package is being sent re-renders the card. Preserve
+      // both states: an intentionally closed panel must stay closed, and a
+      // loaded/open panel must retain its contents.
+      const kept = jrHistoryState(r.id), history = jrEl('jrHistory');
+      if (kept && history) {
+        history.hidden = !kept.open;
+        history.innerHTML = kept.html || (kept.loading ? '<p class="jr-hint">Загрузка истории…</p>' : '');
+        historyBtn.setAttribute?.('aria-expanded', String(kept.open));
+        // The card may be re-rendered by the local outbox poll. Refresh an
+        // open audit trail at once; jrLoadHistory's loading flag prevents a
+        // second request while the previous refresh is still in flight.
+        if (kept.open && !kept.loading) void jrLoadHistory(r.id);
+      }
     }
     // Lazy, once per opened card; errors stay inside the panel.
     if (typeof jrStockBind === 'function') jrStockBind(r);
@@ -480,26 +494,75 @@ function jrBindRecordEdit(record) {
 }
 
 // ---- History of changes (spec 4.2) and client panel (4.4) ----
-const jrMskStamp = iso => new Date(iso).toLocaleString('ru', { timeZone: 'Europe/Moscow', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+const jrMskStamp = iso => {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return '—';
+  return date.toLocaleString('ru', { timeZone: 'Europe/Moscow', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' });
+};
+const jrHistoryValue = value => {
+  if (value === null || value === undefined || value === '') return '—';
+  return String(value);
+};
+const jrHistoryAuthor = event => event?.author || 'Автор не указан';
 function jrHistoryHtml(events) {
   if (!events?.length) return '<p class="jr-hint">Изменений не зафиксировано. История изменений ведётся с 04.11.2026.</p>';
-  return `<ol class="jr-history">${events.map(e => `<li><div class="jr-history-head"><time>${jrEscape(jrMskStamp(e.at))}</time><strong>${jrEscape(e.author)}</strong><span>${jrEscape(e.title)}</span></div>${(e.changes || []).length ? `<ul>${e.changes.map(c => `<li>${jrEscape(c.label || c.field)}: ${jrEscape(c.from ?? '—')} → ${jrEscape(c.to ?? '—')}</li>`).join('')}</ul>` : ''}${e.error ? `<p class="jr-sync-failed-note">${jrEscape(e.error)}${e.errorCode ? ' (' + jrEscape(e.errorCode) + ')' : ''}</p>` : ''}</li>`).join('')}</ol>`;
+  return `<ol class="jr-history">${events.map(e => `<li><div class="jr-history-head"><time>${jrEscape(jrMskStamp(e.at))}</time><strong>${jrEscape(jrHistoryAuthor(e))}</strong><span>${jrEscape(e.title || 'Изменение')}</span></div>${(e.changes || []).length ? `<ul>${e.changes.map(c => `<li>${jrEscape(c.label || c.field || 'Поле')}: ${jrEscape(jrHistoryValue(c.from))} → ${jrEscape(jrHistoryValue(c.to))}</li>`).join('')}</ul>` : ''}${e.error ? `<p class="jr-sync-failed-note">${jrEscape(e.error)}${e.errorCode ? ' (' + jrEscape(e.errorCode) + ')' : ''}</p>` : ''}</li>`).join('')}</ol>`;
+}
+function jrHistoryState(id) {
+  const state = journal.history;
+  return state && state.request === journal.modalRequest && String(state.id) === String(id) ? state : null;
+}
+function jrToggleHistory(id) {
+  const box = jrEl('jrHistory');
+  if (!box) return;
+  const current = jrHistoryState(id);
+  if (current?.open) {
+    current.open = false;
+    box.hidden = true;
+    jrEl('jrHistoryOpen')?.setAttribute?.('aria-expanded', 'false');
+    return;
+  }
+  if (current) {
+    current.open = true;
+    box.hidden = false;
+    jrEl('jrHistoryOpen')?.setAttribute?.('aria-expanded', 'true');
+    if (current.loading) {
+      box.innerHTML = current.html || '<p class="jr-hint">Загрузка истории…</p>';
+      return;
+    }
+    // The panel is a live audit trail. Reopening it refreshes local events
+    // immediately, including payments and queued edits.
+    return jrLoadHistory(id);
+  }
+  jrEl('jrHistoryOpen')?.setAttribute?.('aria-expanded', 'true');
+  return jrLoadHistory(id);
 }
 async function jrLoadHistory(id) {
   const box = jrEl('jrHistory'), request = journal.modalRequest;
   if (!box) return;
+  let state = jrHistoryState(id);
+  if (state?.loading) {
+    box.hidden = !state.open;
+    return;
+  }
+  state = { request, id, open: true, loading: true, html: state?.html || null };
+  journal.history = state;
   box.hidden = false;
   box.innerHTML = '<p class="jr-hint">Загрузка истории…</p>';
   try {
     const data = await jrApi(`records/${encodeURIComponent(id)}/history`);
-    if (request !== journal.modalRequest) return;
+    if (request !== journal.modalRequest || journal.history !== state) return;
     const html = jrHistoryHtml(data.events);
-    journal.history = { request, id, html };
+    state.loading = false;
+    state.html = html;
     const now = jrEl('jrHistory');
-    if (now) { now.hidden = false; now.innerHTML = html; }
+    if (now) { now.hidden = !state.open; now.innerHTML = html; }
   } catch (e) {
+    if (request !== journal.modalRequest || journal.history !== state) return;
+    state.loading = false;
+    state.html = `<p class="jr-hint">${jrEscape(e.message)}</p>`;
     const now = jrEl('jrHistory');
-    if (request === journal.modalRequest && now) { now.hidden = false; now.innerHTML = `<p class="jr-hint">${jrEscape(e.message)}</p>`; }
+    if (now) { now.hidden = !state.open; now.innerHTML = state.html; }
   }
 }
 const jrLongDate = iso => /^\d{4}-\d{2}-\d{2}/.test(String(iso || '')) ? new Date(String(iso).slice(0, 10) + 'T12:00:00+03:00').toLocaleDateString('ru', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'Europe/Moscow' }).replace(/\s*г\.$/, '') : null;

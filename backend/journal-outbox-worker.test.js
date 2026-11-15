@@ -167,7 +167,7 @@ describe('processPackage', () => {
   });
   test('create passes api_id = numeric package id outside the draft', async () => {
     await w.processPackage(pkg([step('create', 1, CREATE_PARAMS)]));
-    expect(index.mutate.mock.calls[0][3]).toEqual({ apiId: '11' });
+    expect(index.mutate.mock.calls[0][3]).toEqual({ apiId: '11', outboxId: 11 });
     expect(index.mutate.mock.calls[0][2]).not.toHaveProperty('apiId');
   });
   test('create + bonus + cash: order, recordId flows, confirmArrival, done', async () => {

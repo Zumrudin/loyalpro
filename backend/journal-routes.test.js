@@ -121,6 +121,16 @@ test('record history: id validated, tenant from JWT', async () => {
   expect((await call('GET', '/records/abc/history')).status).toBe(400);
 });
 
+test('record history denies anonymous and specialist access and ignores a requested tenant', async () => {
+  const history = require('./services/journal/history');
+  history.load.mockResolvedValue({ recordId: 8, events: [] });
+  expect((await call('GET', '/records/8/history', { user: null })).status).toBe(401);
+  expect((await call('GET', '/records/8/history', { user: { role: 'specialist', salonId: 3 } })).status).toBe(403);
+  expect(history.load).not.toHaveBeenCalled();
+  expect((await call('GET', '/records/8/history', { query: { salonId: 999 } })).status).toBe(200);
+  expect(history.load).toHaveBeenCalledWith(3, 8);
+});
+
 test('client summary: tenant from JWT, query passed as is (validated in the module)', async () => {
   const cs = require('./services/journal/client-summary');
   cs.summary.mockResolvedValue({ name: 'A' });

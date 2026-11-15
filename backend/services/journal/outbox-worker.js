@@ -155,7 +155,7 @@ async function runStep(ctx, step) {
     const { operationId: _o, action: _a, ...params } = p;
     // api_id rides OUTSIDE the draft: the draft's fingerprint must stay the same
     // for packages started before this field existed.
-    const r = await index.mutate(salonId, userId, { ...params, operationId: step.opId, action: 'create' }, { apiId: prefs.apiIdFor(ctx.outboxId) });
+    const r = await index.mutate(salonId, userId, { ...params, operationId: step.opId, action: 'create' }, { apiId: prefs.apiIdFor(ctx.outboxId), outboxId: ctx.outboxId });
     const recordId = Number(r?.recordId);
     if (!Number.isSafeInteger(recordId) || recordId < 1) m.fail('Не удалось подтвердить результат. Проверьте запись в YClients.', 409, 'uncertain');
     ctx.recordId = recordId;
@@ -212,7 +212,7 @@ async function runStep(ctx, step) {
           ...(p.technicalBreak !== undefined ? { technicalBreak: p.technicalBreak } : {}) } : {}) };
       await storeDraft(ctx, step, draft);
     }
-    const r = await index.mutate(salonId, userId, draft);
+    const r = await index.mutate(salonId, userId, draft, { outboxId: ctx.outboxId });
     if (r?.alreadyDeleted) return { recordId, alreadyDeleted: true };
     return { recordId: Number(r?.recordId) || recordId };
   }

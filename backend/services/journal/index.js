@@ -5,6 +5,7 @@ const m = require('./model');
 const localCatalog = require('../service-catalog');
 const sources = require('./sources');
 const overlay = require('./overlay');
+const audit = require('./audit');
 const mirror = require('./mirror');
 const prefs = require('./record-prefs');
 async function salonFor(salonId) {
@@ -283,7 +284,10 @@ async function mutate(salonId, userId, draft, opts = {}) {
       if (prior.request_hash !== requestHash) m.fail('Ключ операции уже использован для других данных.', 409);
       if (prior.state === 'reviewed') m.fail('Операция сверена вручную. Для нового действия откройте новую форму.', 409, 'reviewed');
       if (prior.state === 'rejected') m.fail('YClients отклонил операцию. Обновите данные и повторите.', 409, 'rejected');
-      if (prior.state === 'done') return { ...prior.result, duplicate: true };
+      if (prior.state === 'done') {
+        const { _localAudit: _audit, ...publicResult } = prior.result || {};
+        return { ...publicResult, duplicate: true };
+      }
       m.fail('Результат операции ещё не подтверждён. Проверьте запись в YClients перед новой попыткой.', 409, 'uncertain');
     }
     // Block a different key while an uncertain operation is unresolved. This
@@ -308,18 +312,35 @@ async function mutate(salonId, userId, draft, opts = {}) {
       }
     }
     const body = await prepare(salon, draft, { ...opts, paid: ledgerPaid });
-    if (draft.recordId && !body?.alreadyDeleted && m.revision(await yc.getRecord(salon, draft.recordId)) !== draft.version) {
+    let beforeRecord = null;
+    if (draft.recordId && !body?.alreadyDeleted) beforeRecord = await yc.getRecord(salon, draft.recordId);
+    if (beforeRecord && m.revision(beforeRecord) !== draft.version) {
       m.fail('Запись изменилась. Откройте карточку заново.', 409, 'stale');
     }
-    await conn.query(`INSERT INTO journal_operations (salon_id, operation_id, user_id, action, record_id, request_hash, state)
-      VALUES ($1,$2,$3,$4,$5,$6,'pending')`, [salonId, draft.operationId, userId, draft.action, draft.recordId || null, requestHash]);
+    let directAudit = null;
+    if (!opts.outboxId) {
+      // Resolve the actor before the pending marker and before the external
+      // effect: a local read failure must never turn a successful YClients
+      // write into an artificial uncertain outcome.
+      const actorRow = (await conn.query('SELECT name FROM users WHERE salon_id=$1 AND id=$2', [salonId, userId])).rows[0];
+      directAudit = { ...audit.direct(draft, body, beforeRecord), actor: {
+        userId: Number(userId) || null, name: String(actorRow?.name || 'Неизвестный сотрудник') } };
+    }
+    await conn.query(`INSERT INTO journal_operations (salon_id, operation_id, user_id, action, record_id, request_hash, state, result)
+      VALUES ($1,$2,$3,$4,$5,$6,'pending',$7)`, [salonId, draft.operationId, userId, draft.action, draft.recordId || null,
+      requestHash, directAudit ? JSON.stringify({ _localAudit: directAudit }) : null]);
     let result;
     try {
       result = draft.action !== 'delete' ? await yc.write(salon, draft.recordId, body)
         : body.alreadyDeleted ? { recordId: draft.recordId, alreadyDeleted: true }
         : await yc.remove(salon, draft.recordId);
+      let storedResult = result;
+      // Outbox packages already carry overlay.audit captured before any YClients
+      // request. Compatibility routes have no outbox, so retain their audit in
+      // the existing operation result without changing the API response.
+      if (directAudit) storedResult = { ...result, _localAudit: directAudit };
       await conn.query("UPDATE journal_operations SET state='done', result=$3, record_id=$4, updated_at=NOW() WHERE salon_id=$1 AND operation_id=$2",
-        [salonId, draft.operationId, JSON.stringify(result), result.recordId]);
+        [salonId, draft.operationId, JSON.stringify(storedResult), result.recordId]);
     } catch (error) {
       // YClients re-read the record after a 404/409 DELETE and it is alive: nothing was deleted.
       if (error instanceof m.JournalError && error.code === 'delete_refused') {
