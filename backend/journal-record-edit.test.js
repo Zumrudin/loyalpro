@@ -136,3 +136,35 @@ describe('parity fields (12.11.2026)', () => {
     await expect(patch({}, { ...record, deleted: true }, { comment: 'ok' }, src, jest.fn())).rejects.toMatchObject({ status: 409 });
   });
 });
+
+describe('duration-only shortening through the lower edge (15.11.2026)', () => {
+  test.each([-1, 0, 1, 2])('status %s and payment do not block a strict shortening', async attendance => {
+    const availability = jest.fn(async () => ({ slots: [] }));
+    const out = await patch({}, { ...record, attendance, paid_full: true, paid_amount: 100 },
+      { seanceLength: 30 }, src, availability, true);
+    expect(out).toEqual({ seance_length: 1800 });
+    expect(availability).not.toHaveBeenCalled();
+  });
+  test('servicesVersion metadata does not turn a duration-only edit into another change', async () => {
+    await expect(patch({}, { ...record, attendance: 1, paid_full: true },
+      { seanceLength: 30, servicesVersion: m.servicesRevision(record) }, src, jest.fn(), true))
+      .resolves.toEqual({ seance_length: 1800 });
+  });
+  test.each([
+    [{ seanceLength: 60 }, 'equal duration'],
+    [{ seanceLength: 90 }, 'extension'],
+    [{ seanceLength: 30, comment: 'bundled' }, 'another field'],
+    [{ seanceLength: 30, attendance: 0 }, 'status change'],
+  ])('paid/arrived visit still refuses %s (%s)', async (edit) => {
+    await expect(patch({}, { ...record, attendance: 1, paid_amount: 100 }, edit, src, jest.fn(), true))
+      .rejects.toMatchObject({ status: 409 });
+  });
+  test('missing stored duration never grants the exception from a UI fallback', async () => {
+    await expect(patch({}, { ...record, seance_length: null, attendance: 1, paid_full: true },
+      { seanceLength: 5 }, src, jest.fn(), true)).rejects.toMatchObject({ status: 409 });
+  });
+  test('deleted record remains immutable', async () => {
+    await expect(patch({}, { ...record, deleted: true, paid_full: true }, { seanceLength: 30 }, src, jest.fn(), true))
+      .rejects.toThrow('Запись удалена');
+  });
+});

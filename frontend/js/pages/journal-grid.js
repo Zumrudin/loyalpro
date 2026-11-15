@@ -95,11 +95,12 @@ function jrColumnHtml(s, date, records, allRecords, start, end, now) {
     const syncing = jrSyncing(r), failed = r.sync?.status === 'failed';
     // Phone: no drag (a finger on a block scrolls the grid); move via the card.
     const drag = !mobile && jrDragAllowed(r);
+    const resize = !mobile && jrResizeAllowed(r);
     const title = r.time + ' · ' + r.clientName + ' · ' + r.services.map(x => x.title).join(', ') + (failed ? ' · Ошибка отправки: ' + (r.sync.errorText || 'причина неизвестна') : syncing ? ' · идёт отправка' : '');
     const pos = `left:calc(${r.lane * 100 / r.lanes}% + 3px);width:calc(${100 / r.lanes}% - 6px)`;
     const pause = Number(r.technicalBreak) > 0 && !r.continued ? Math.min(Number(r.technicalBreak) / 60, end - r.start - length) : 0;
     const band = pause > 0 ? `<div class="jr-break-band" style="top:${(r.start + length - start) * pxPerMin}px;height:${Math.max(4, pause * pxPerMin - 2)}px;${pos}" title="Технический перерыв ${Math.round(pause)} мин" aria-hidden="true">⏸</div>` : '';
-    return `<button type="button" class="jr-visit jr-status-${r.attendance}${r.paidFull ? ' jr-paid-full' : ''}${length < 30 ? ' jr-visit-short' : ''}${syncing ? ' jr-visit-syncing' : ''}${failed ? ' jr-visit-failed' : ''}${drag ? ' jr-draggable' : ''}" data-record="${r.id}" style="${jrVisitStyle(r)}top:${(r.start - start) * pxPerMin}px;height:${Math.max(6, length * pxPerMin - 2)}px;${pos}" title="${jrEscape(title)}" aria-label="${jrEscape(r.time + ' ' + r.clientName + ', ' + jrStatus(r) + (failed ? ', ошибка отправки' : syncing ? ', идёт отправка' : ''))}"><b>${syncing ? '⏳ ' : ''}${jrEscape(r.time)} · ${jrEscape(r.clientName)}${jrVisitMarks(r)}</b><span>${jrEscape(r.services.map(x => x.title).join(', ') || 'Без услуг')}</span><small>${r.continued ? 'Продолжение · ' : ''}${jrEscape(jrStatus(r))}${r.paid ? ' · оплачено' : ''}</small>${failed ? '<small class="jr-sync-failed-note">Ошибка отправки</small>' : ''}${drag ? '<i class="jr-resize" data-resize="1" aria-hidden="true"></i>' : ''}</button>${band}`;
+    return `<button type="button" class="jr-visit jr-status-${r.attendance}${r.paidFull ? ' jr-paid-full' : ''}${length < 30 ? ' jr-visit-short' : ''}${syncing ? ' jr-visit-syncing' : ''}${failed ? ' jr-visit-failed' : ''}${drag ? ' jr-draggable' : ''}${resize ? ' jr-resizable' : ''}" data-record="${r.id}" style="${jrVisitStyle(r)}top:${(r.start - start) * pxPerMin}px;height:${Math.max(6, length * pxPerMin - 2)}px;${pos}" title="${jrEscape(title)}" aria-label="${jrEscape(r.time + ' ' + r.clientName + ', ' + jrStatus(r) + (failed ? ', ошибка отправки' : syncing ? ', идёт отправка' : ''))}"><b>${syncing ? '⏳ ' : ''}${jrEscape(r.time)} · ${jrEscape(r.clientName)}${jrVisitMarks(r)}</b><span>${jrEscape(r.services.map(x => x.title).join(', ') || 'Без услуг')}</span><small>${r.continued ? 'Продолжение · ' : ''}${jrEscape(jrStatus(r))}${r.paid ? ' · оплачено' : ''}</small>${failed ? '<small class="jr-sync-failed-note">Ошибка отправки</small>' : ''}${resize ? '<i class="jr-resize" data-resize="1" aria-hidden="true"></i>' : ''}</button>${band}`;
   }).join('');
   return `<div class="jr-column" data-staff="${s.id}" data-date="${date}">${cells}${visits}</div>`;
 }
@@ -218,6 +219,13 @@ const jrSnap = minute => Math.round(minute / JR_DRAG_STEP) * JR_DRAG_STEP;
 function jrDragAllowed(r) {
   return !!r && !r.continued && jrCanEdit(r) && /^\d\d:\d\d$/.test(r.time || '');
 }
+// Resizing is a narrower operation than moving: records that are paid, arrived,
+// or marked no-show may only be shortened.  The server still re-checks the
+// session, while the grid keeps deleted, continued, locked, and malformed cards
+// inert.
+function jrResizeAllowed(r) {
+  return !!r && !r.continued && !r.deleted && !jrLocked(r) && /^\d\d:\d\d$/.test(r.time || '');
+}
 // Visits of one column's date: in the week a continuation on the next day has
 // the SAME id as the original, so the id alone picks the wrong block.
 function jrDragRecords(date) {
@@ -250,7 +258,7 @@ function jrDropCheck({ record, staff, date, minute, duration, records, now = Dat
 function jrDragStart(ev, recordId, mode, date) {
   if (ev.button !== undefined && ev.button !== 0) return false;
   const record = jrDragRecords(date).find(r => r.id === recordId);
-  if (!jrDragAllowed(record)) return false;
+  if (mode === 'resize' ? !jrResizeAllowed(record) : !jrDragAllowed(record)) return false;
   journal.drag = { record, mode, x: ev.clientX, y: ev.clientY, moved: false, el: null };
   return true;
 }
@@ -259,7 +267,10 @@ const jrDragLength = r => (r.duration > 0 ? r.duration : 15);
 function jrDragTarget(ev) {
   const d = journal.drag, r = d.record;
   const delta = (ev.clientY - d.y) / jrPxPerMin();
-  if (d.mode === 'resize') return { kind: 'resize', duration: Math.min(720, Math.max(5, jrSnap(jrDragLength(r) + delta))) };
+  if (d.mode === 'resize') {
+    const length = jrDragLength(r), max = jrDragAllowed(r) ? 720 : length;
+    return { kind: 'resize', duration: Math.min(max, Math.max(5, jrSnap(length + delta))) };
+  }
   const el = typeof document.elementFromPoint === 'function' ? document.elementFromPoint(ev.clientX, ev.clientY) : null;
   const col = el && typeof el.closest === 'function' ? el.closest('.jr-column') : null;
   if (!col?.dataset?.date) return null;
@@ -331,11 +342,16 @@ async function jrDragEnd(ev) {
   if (!target) return back();
   if (target.kind === 'resize') {
     if (target.duration === length) return back();
-    const ctx = jrColumnContext(r.staffId, r.date);
-    // A visit already under way may be extended: no «past» check for resize.
-    const check = ctx ? jrDropCheck({ record: r, staff: ctx.staff, date: r.date, minute: jrMinutes(r.time), duration: target.duration, records: ctx.records, now: 0 })
-      : { ok: false, reason: 'Специалист не найден в сетке.' };
-    if (!check.ok) { notify(check.reason, 'err'); return back(); }
+    // Shortening stays inside the existing interval, so it cannot leave the
+    // shift or collide with a neighbour.  Keep the old grid checks for an
+    // extension of an otherwise movable record.
+    if (target.duration > length) {
+      const ctx = jrColumnContext(r.staffId, r.date);
+      // A visit already under way may be extended: no «past» check for resize.
+      const check = ctx ? jrDropCheck({ record: r, staff: ctx.staff, date: r.date, minute: jrMinutes(r.time), duration: target.duration, records: ctx.records, now: 0 })
+        : { ok: false, reason: 'Специалист не найден в сетке.' };
+      if (!check.ok) { notify(check.reason, 'err'); return back(); }
+    }
     if (!confirm(`Длительность ${length} → ${target.duration} мин?`)) return back();
     suppress();
     return jrDragSave({ sessionId: crypto.randomUUID(), recordId: r.id, edit: { seanceLength: target.duration } });
@@ -367,11 +383,12 @@ async function jrDragSave(body) {
 }
 function jrDragBegin(el, ev) {
   if (jrIsMobile()) return;      // phone: the finger scrolls; moving goes through the card
-  // Only blocks the grid marked as draggable (not a continuation, not locked).
-  if (!el?.classList?.contains?.('jr-draggable')) return;
+  const mode = ev.target?.dataset?.resize ? 'resize' : 'move';
+  // Move and resize have separate permissions: a paid/arrived/no-show card can
+  // expose only the lower-edge handle, while its body remains a plain click.
+  if (mode === 'resize' ? !el?.classList?.contains?.('jr-resizable') : !el?.classList?.contains?.('jr-draggable')) return;
   // A drag whose pointerup was lost (Alt-Tab, system dialog) is closed first.
   if (typeof journal.dragOff === 'function') { journal.dragOff(); if (journal.drag) jrDragCancel(); }
-  const mode = ev.target?.dataset?.resize ? 'resize' : 'move';
   const date = typeof el.closest === 'function' ? el.closest('.jr-column')?.dataset?.date : undefined;
   if (!jrDragStart(ev, Number(el.dataset.record), mode, date)) return;
   journal.drag.el = el;

@@ -1058,6 +1058,43 @@ test('resize: confirmed new length goes as edit.seanceLength', async () => {
   expect(h.context.confirm).toHaveBeenCalledWith('Длительность 60 → 75 мин?');
   expect(h.context.jrApi).toHaveBeenCalledWith('sessions', { sessionId: 'synthetic-uuid-1', recordId: 8, edit: { seanceLength: 75 } });
 });
+test('resize-only permission covers paid, arrived and no-show records but never move', () => {
+  const h = dragHarness();
+  for (const change of [{ paid: true }, { attendance: 1 }, { attendance: -1 }]) {
+    const record = { id: 8, time: '10:00', ...change };
+    expect(h.context.jrResizeAllowed(record)).toBe(true);
+    expect(h.context.jrDragAllowed(record)).toBe(false);
+  }
+  for (const change of [{ deleted: true }, { continued: true }, { sync: { status: 'running', released: true } }, { sync: { status: 'failed' } }, { time: '' }]) {
+    expect(h.context.jrResizeAllowed({ id: 8, time: '10:00', ...change })).toBe(false);
+  }
+});
+test('resize-only records shorten in place without grid checks or move fields', async () => {
+  const h = dragHarness();
+  h.run(`journal.data.records[0].paid = true; journal.data.staff[0].workRanges = []`);
+  h.context.jrDragStart({ button: 0, clientX: 100, clientY: 100 }, 8, 'resize');
+  h.context.jrDragMove({ clientX: 100, clientY: 100 - 12 * 1.6 });
+  expect(await h.context.jrDragEnd({ clientX: 100, clientY: 100 - 12 * 1.6 })).toBe(true);
+  expect(h.context.confirm).toHaveBeenCalledWith('Длительность 60 → 50 мин?');
+  expect(h.context.jrApi).toHaveBeenCalledWith('sessions', { sessionId: 'synthetic-uuid-1', recordId: 8, edit: { seanceLength: 50 } });
+  expect(h.context.jrApi.mock.calls[0][1]).not.toHaveProperty('move');
+});
+test('resize-only cancellation and save error restore the block', async () => {
+  const h = dragHarness();
+  h.run('journal.data.records[0].paid = true');
+  h.context.confirm = jest.fn(() => false);
+  h.context.jrDragStart({ button: 0, clientX: 100, clientY: 100 }, 8, 'resize');
+  expect(await h.context.jrDragEnd({ clientX: 100, clientY: 100 - 12 * 1.6 })).toBe(false);
+  expect(h.context.jrApi).not.toHaveBeenCalled();
+  expect(h.context.jrRender).toHaveBeenCalled();
+
+  h.context.confirm = jest.fn(() => true);
+  h.context.jrApi = jest.fn().mockRejectedValue(new Error('Не удалось сохранить'));
+  h.context.jrDragStart({ button: 0, clientX: 100, clientY: 100 }, 8, 'resize');
+  expect(await h.context.jrDragEnd({ clientX: 100, clientY: 100 - 12 * 1.6 })).toBe(false);
+  expect(h.context.notify).toHaveBeenCalledWith('Не удалось сохранить', 'err');
+  expect(h.context.jrRender).toHaveBeenCalled();
+});
 test('server refusal: message shown, block returns', async () => {
   const h = dragHarness(); h.context.document.elementFromPoint = columnAt(1, '2030-04-01');
   h.context.jrApi = jest.fn().mockRejectedValue(Object.assign(new Error('Время уже занято. Выберите другое.'), { status: 409, code: 'slot_taken' }));
@@ -1093,7 +1130,7 @@ test('week: dropping on another day of the same master', async () => {
 test('draggable blocks get the resize handle', () => {
   const h = harness(); h.run(DRAG_DAY + ';jrRender()');
   const html = h.get('jrGrid').innerHTML;
-  expect(html).toContain('jr-draggable" data-record="8"');
+  expect(html).toMatch(/class="[^"]*jr-draggable[^\"]*jr-resizable[^\"]*" data-record="8"/);
   expect(html).toContain('<i class="jr-resize" data-resize="1" aria-hidden="true"></i>');
 });
 test('jrDropCheck: past time refused; the technical break of a neighbour counts as busy', () => {
@@ -1131,7 +1168,7 @@ function dragDom(h) {
   return { on, fire };
 }
 const dragEl = (record, date, draggable = true) => ({ dataset: { record: String(record) }, style: {},
-  classList: { contains: c => draggable && c === 'jr-draggable', add: jest.fn(), remove: jest.fn() },
+  classList: { contains: c => draggable && (c === 'jr-draggable' || c === 'jr-resizable'), add: jest.fn(), remove: jest.fn() },
   closest: () => ({ dataset: { date } }) });
 test('drag review: week «continuation» with the same id never starts a drag; non-draggable blocks are ignored', () => {
   const h = dragHarness(); dragDom(h);

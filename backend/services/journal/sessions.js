@@ -220,7 +220,9 @@ async function validate(salonId, session) {
       // The edit is checked against the visit as it will be AFTER the move:
       // new services must fit the new time and belong to the new staff.
       const moved = session.move ? { ...record, datetime: patch.datetime, staff_id: patch.staff_id } : record;
-      Object.assign(patch, await require('./record-edit').patch(salon, moved, session.edit, src, index.availability, paymentsLocal.localOptions(ctx).paid.length > 0));
+      const localPayment = paymentsLocal.localOptions(ctx);
+      const paid = localPayment.paid.length > 0 || (ctx.queued || []).some(q => q.kind === 'pay');
+      Object.assign(patch, await require('./record-edit').patch(salon, moved, session.edit, src, index.availability, paid));
       // Display only: the worker builds the YClients body itself; the flag goes
       // to journal_record_prefs (task 5), never into PUT /record.
       if (session.edit.notifyClient !== undefined) patch.notify_client = session.edit.notifyClient;

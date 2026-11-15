@@ -29,6 +29,7 @@ function harness({ storedStep = null, visible = r => r.attendance !== -1 } = {})
     fetch: jest.fn(), notify: jest.fn(), confirm: jest.fn(), jrRecordVisible: visible,
     jrToolbarSync: jest.fn(), jrBindStaffMenus: jest.fn(), jrStaffMenuButton: (_s, _d, label) => String(label || ''),
     jrCanEdit: () => false, jrOpen: jest.fn(), jrForm: jest.fn(), jrUpdateDispatchButton: jest.fn(),
+    jrLocked: record => ['queued', 'running'].includes(record?.sync?.status) && record.sync.released !== false || record?.sync?.status === 'failed',
   });
   for (const source of SOURCES) vm.runInContext(source.code, context, { filename: source.file });
   return { context, get, storage, run: expression => vm.runInContext(expression, context) };

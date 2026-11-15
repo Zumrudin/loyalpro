@@ -230,7 +230,7 @@ async function prepare(salon, draft, opts = {}) {
     if (draft.action !== 'edit') editable(record);
   }
   if (draft.action === 'edit') {
-    const patch = await require('./record-edit').patch(salon, record, draft.edit, sources.live(salon), availability);
+    const patch = await require('./record-edit').patch(salon, record, draft.edit, sources.live(salon), availability, opts.paid === true);
     return { staff_id: record.staff_id, services: record.services, client: record.client,
       datetime: record.datetime, seance_length: record.seance_length, comment: record.comment || '',
       attendance: record.attendance, ...m.recordExtras(record), ...patch, save_if_busy: false, send_sms: false };
@@ -297,11 +297,17 @@ async function mutate(salonId, userId, draft, opts = {}) {
       const paymentPending = (await conn.query("SELECT operation_id FROM journal_financial_transactions WHERE salon_id=$1 AND yclients_record_id=$2 AND yclients_company_id=$3 AND state='pending' LIMIT 1", [salonId,draft.recordId,salon.yclients_company_id])).rows[0];
       if (paymentPending) m.fail('У этого визита есть неподтверждённая оплата. Сначала выполните сверку.',409,'payment_pending');
     }
+    let ledgerPaid = false;
     if (draft.recordId) {
       const ledger = (await conn.query("SELECT action, method, external_ids, target_transaction_id FROM journal_financial_transactions WHERE salon_id=$1 AND yclients_record_id=$2 AND yclients_company_id=$3 AND state='confirmed'", [salonId,draft.recordId,salon.yclients_company_id])).rows;
-      if (require('./record-edit').hasActivePayments(ledger)) m.fail(draft.action === 'delete' ? 'Сначала удалите оплаты визита.' : 'У визита есть оплаты. Сначала удалите оплаты визита.',409);
+      ledgerPaid = require('./record-edit').hasActivePayments(ledger);
+      // `patch` must compare the requested duration with the live record before
+      // granting the paid-visit exception. Every other action still stops here.
+      if (ledgerPaid && !(draft.action === 'edit' && require('./record-edit').isDurationOnlyEdit(draft.edit))) {
+        m.fail(draft.action === 'delete' ? 'Сначала удалите оплаты визита.' : 'У визита есть оплаты. Сначала удалите оплаты визита.',409);
+      }
     }
-    const body = await prepare(salon, draft, opts);
+    const body = await prepare(salon, draft, { ...opts, paid: ledgerPaid });
     if (draft.recordId && !body?.alreadyDeleted && m.revision(await yc.getRecord(salon, draft.recordId)) !== draft.version) {
       m.fail('Запись изменилась. Откройте карточку заново.', 409, 'stale');
     }

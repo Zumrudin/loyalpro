@@ -239,6 +239,47 @@ test('edit paid visit remains blocked', async () => {
   expect(yc.write).not.toHaveBeenCalled();
 });
 
+describe('duration-only shortening after payment (15.11.2026)', () => {
+  const activeLedger = [{ action: 'payment', method: 'account', external_ids: [51], target_transaction_id: null }];
+  const edit = (rec, body, id = operationId) => ({ operationId: id, action: 'edit', recordId: 8, version: m.revision(rec), edit: body });
+
+  test.each([-1, 0, 1, 2])('paid visit with status %s keeps its start and shortens without availability', async attendance => {
+    const rec = { ...record, attendance, paid_full: true, paid_amount: 500 };
+    yc.getRecord.mockResolvedValue(structuredClone(rec));
+    yc.records.mockClear(); yc.list.mockClear();
+    await service.mutate(3, 4, edit(rec, { seanceLength: 30 }));
+    expect(yc.write.mock.calls[0][2]).toMatchObject({ datetime: rec.datetime, seance_length: 1800,
+      attendance, services: rec.services, client: rec.client });
+    expect(yc.records).not.toHaveBeenCalled();
+    expect(yc.list).not.toHaveBeenCalled();
+  });
+  test('confirmed local payment ledger permits a strict shortening before paid flags sync', async () => {
+    const original = conn.query.getMockImplementation();
+    conn.query.mockImplementation((sql, args) => sql.includes("state='confirmed'") && sql.includes('journal_financial_transactions')
+      ? Promise.resolve({ rows: activeLedger }) : original(sql, args));
+    await service.mutate(3, 4, edit(record, { seanceLength: 30 }));
+    expect(yc.write.mock.calls[0][2]).toMatchObject({ datetime: record.datetime, seance_length: 1800 });
+  });
+  test.each([
+    [{ seanceLength: 60 }, 'equal'],
+    [{ seanceLength: 90 }, 'extension'],
+    [{ seanceLength: 30, comment: 'bundled' }, 'bundled edit'],
+  ])('confirmed local payment still blocks %s (%s)', async (body) => {
+    const original = conn.query.getMockImplementation();
+    conn.query.mockImplementation((sql, args) => sql.includes("state='confirmed'") && sql.includes('journal_financial_transactions')
+      ? Promise.resolve({ rows: activeLedger }) : original(sql, args));
+    await expect(service.mutate(3, 4, edit(record, body))).rejects.toThrow('оплаты');
+    expect(yc.write).not.toHaveBeenCalled();
+  });
+  test('an uncertain pending payment remains blocking for a shortening', async () => {
+    const original = conn.query.getMockImplementation();
+    conn.query.mockImplementation((sql, args) => sql.includes('journal_financial_transactions') && sql.includes("state='pending'")
+      ? Promise.resolve({ rows: [{ operation_id: 'pending' }] }) : original(sql, args));
+    await expect(service.mutate(3, 4, edit(record, { seanceLength: 30 }))).rejects.toMatchObject({ code: 'payment_pending' });
+    expect(yc.write).not.toHaveBeenCalled();
+  });
+});
+
 test('removed cash and bonus receipts no longer block status edits', async () => {
  const original=conn.query.getMockImplementation();
  const ledger=['account','loyalty_card'].flatMap(method=>[

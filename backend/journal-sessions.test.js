@@ -438,6 +438,42 @@ describe('edit: parity fields (12.11.2026)', () => {
   });
 });
 
+describe('duration-only shortening (15.11.2026)', () => {
+  const ledgerPayment = { state: 'confirmed', action: 'payment', method: 'account', method_id: 10, amount: '3000', external_ids: [501] };
+  const queuedPayment = { id: 6, status: 'queued', released_at: null, yclients_record_id: 42, overlay: { kind: 'patch', patch: {} },
+    steps: [{ kind: 'pay', state: 'pending', opId: '00000000-0000-4000-8000-000000000006', params: { method: 'account', methodId: 10, amount: 3000 } }] };
+
+  test.each([-1, 0, 1, 2])('status %s permits shrinking without an availability lookup', async attendance => {
+    setup({ record: { ...RECORD, attendance, paid_full: true, paid_amount: 3000 } });
+    const out = await s.validate(3, parse({ recordId: 42, edit: { seanceLength: 30 } }));
+    expect(out.overlay.patch).toEqual({ seance_length: 1800 });
+    expect(out.steps).toEqual([expect.objectContaining({ kind: 'edit', params: { seanceLength: 30 } })]);
+    expect(index.availability).not.toHaveBeenCalled();
+  });
+  test('confirmed local ledger and a queued payment both permit only the shortening', async () => {
+    setup({ ledger: [ledgerPayment] });
+    await expect(s.validate(3, parse({ recordId: 42, edit: { seanceLength: 30 } })))
+      .resolves.toMatchObject({ overlay: { patch: { seance_length: 1800 } } });
+    await expect(s.validate(3, parse({ recordId: 42, edit: { seanceLength: 30, comment: 'x' } })))
+      .rejects.toMatchObject({ status: 409 });
+
+    setup({ open: [queuedPayment] });
+    await expect(s.validate(3, parse({ recordId: 42, edit: { seanceLength: 30 } })))
+      .resolves.toMatchObject({ overlay: { patch: { seance_length: 1800 } } });
+    await expect(s.validate(3, parse({ recordId: 42, edit: { seanceLength: 90 } })))
+      .rejects.toMatchObject({ status: 409 });
+  });
+  test('queued payment on an unsent negative-id record uses its stored create duration', async () => {
+    const overlay = { kind: 'create', date: '2030-04-01', time: '10:00', staffId: 5, duration: 60,
+      services: [{ id: 900, title: 'Чистка', amount: 1, cost: 3000 }], client: { name: 'Анна', phone: '79200001122' }, attendance: 1 };
+    setup({ row: { id: 5, status: 'queued', released_at: null, yclients_record_id: null, overlay,
+      steps: [{ kind: 'create', state: 'pending' }, queuedPayment.steps[0]] } });
+    const out = await s.validate(3, parse({ recordId: -5, edit: { seanceLength: 30 } }));
+    expect(out.overlay.patch).toEqual({ seance_length: 1800 });
+    expect(index.availability).not.toHaveBeenCalled();
+  });
+});
+
 describe('delete (12.11.2026)', () => {
   test('parse: delete alone; not with an edit, payments, move or create', () => {
     expect(parse({ recordId: 42, status: 'delete' })).toMatchObject({ status: 'delete' });

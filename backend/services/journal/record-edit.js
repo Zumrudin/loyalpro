@@ -3,6 +3,21 @@ const m = require('./model');
 const pricing = require('./pricing');
 const HEX = /^#[0-9a-f]{6}$/i;
 const MAX_LABELS = 20;
+const EDIT_META = new Set(['version', 'servicesVersion']);
+
+// The lower-edge resize exception is deliberately narrow: metadata may ride
+// with the form, but duration must be its only behavioural change. Whether it
+// is actually shorter is checked against the record currently being edited.
+function isDurationOnlyEdit(edit) {
+  if (!edit || typeof edit !== 'object' || Array.isArray(edit) || edit.seanceLength === undefined) return false;
+  const fields = Object.keys(edit).filter(k => !EDIT_META.has(k));
+  return fields.length === 1 && fields[0] === 'seanceLength';
+}
+function isDurationOnlyShortening(record, edit) {
+  const oldSeconds = Number(record?.seance_length);
+  return isDurationOnlyEdit(edit) && Number.isInteger(edit.seanceLength)
+    && oldSeconds > 0 && edit.seanceLength * 60 < oldSeconds;
+}
 // One card edit (12.11.2026: comment, duration, client, colour, labels,
 // technical break and «не уведомлять» next to status and services).
 function parse(input) {
@@ -72,11 +87,14 @@ function parse(input) {
 }
 async function patch(salon, record, input, src, availability, paid = false) {
   const edit = parse(input);
+  const shortening = isDurationOnlyShortening(record, edit);
   if (edit.lines && edit.servicesVersion && edit.servicesVersion !== m.servicesRevision(record)) m.fail('Услуги визита изменились. Откройте карточку заново.', 409, 'edit_conflict');
   if (record.deleted) m.fail('Запись удалена.', 409);
-  if (paid || record.paid_full || Number(record.paid_amount) > 0) m.fail('У визита есть оплаты. Сначала удалите оплаты визита.', 409);
-  // Spec §4.1: duration and client of a visit that came stay as they are.
-  if ((edit.seanceLength !== undefined || edit.client) && (Number(record.attendance) === 1 || edit.attendance === 1)) {
+  // A strictly shorter duration-only edit is safe after payment: it cannot
+  // move the start, change the bill or recreate payment data in YClients.
+  if ((paid || record.paid_full || Number(record.paid_amount) > 0) && !shortening) m.fail('У визита есть оплаты. Сначала удалите оплаты визита.', 409);
+  // Other duration/client changes of an arrived visit stay blocked.
+  if ((edit.seanceLength !== undefined || edit.client) && (Number(record.attendance) === 1 || edit.attendance === 1) && !shortening) {
     m.fail('Длительность и клиента пришедшего визита изменить нельзя.', 409);
   }
   const out = {};
@@ -121,7 +139,9 @@ async function patch(salon, record, input, src, availability, paid = false) {
   // A visit that has already started occupies its time regardless — free-time
   // search excludes the past and would refuse every after-visit correction.
   const at = m.moscowParts(record.datetime);
-  if ((compositionChanged || lengthChanged) && !(at && at.ms <= Date.now())) {
+  // Shrinking the existing interval cannot collide with another visit and must
+  // remain possible after the old shift/date has fallen out of the cache.
+  if ((compositionChanged || lengthChanged) && !shortening && !(at && at.ms <= Date.now())) {
     if (!at) m.fail('Некорректное время записи.', 409);
     const draft = { staffId: Number(record.staff_id), date: at.date, time: at.time,
       ...(edit.seanceLength !== undefined ? { durationOverride: edit.seanceLength } : {}),
@@ -143,4 +163,4 @@ function hasActivePayments(rows) {
     (!Array.isArray(r.external_ids) || !r.external_ids.length ||
       r.external_ids.some(id => !removed.has(r.method + ':' + String(id)))));
 }
-module.exports = { parse, patch, hasActivePayments };
+module.exports = { parse, patch, hasActivePayments, isDurationOnlyEdit, isDurationOnlyShortening };
