@@ -30,7 +30,7 @@
 <link rel="stylesheet" href="css/ivory-brass.css?v=2026-11-08p">
 <link rel="stylesheet" href="css/service-catalog.css?v=2026-11-08catalog">
 <link rel="stylesheet" href="css/finance.css?v=2026-11-12fin2">
-<link rel="stylesheet" href="css/stock.css?v=2026-11-14-stock-final">
+<link rel="stylesheet" href="css/stock.css?v=2026-11-15-catalog">
 </head>
 <body>
 
@@ -2271,15 +2271,43 @@
     <div class="page" id="page-finance"></div>
 
     <div class="page" id="page-stock">
-      <div class="bc-head"><h2>Товары и склад</h2><p id="stockCounters" aria-live="polite"></p></div>
-      <div class="stock-toolbar"><button class="tab active" id="stockTabBtn-balances" onclick="stockSwitchTab('balances')">Остатки</button><button class="tab" id="stockTabBtn-goods" onclick="stockSwitchTab('goods')">Товары</button><button type="button" class="tab" id="stockTabBtn-docs" onclick="stockSwitchTab('docs')">Операции</button><button type="button" class="tab" id="stockTabBtn-suppliers" onclick="stockSwitchTab('suppliers')">Поставщики</button><button type="button" class="tab" id="stockTabBtn-tech-cards" onclick="stockSwitchTab('tech-cards')">Техкарты</button><button type="button" class="tab" id="stockTabBtn-inventory" onclick="stockSwitchTab('inventory')">Инвентаризация</button><button type="button" class="tab" id="stockTabBtn-turnover" onclick="stockSwitchTab('turnover')">Оборотка</button><button type="button" class="tab" id="stockTabBtn-settings" onclick="stockSwitchTab('settings')">Настройки</button><button class="btn" onclick="stockNewGood()">+ Товар</button></div>
-      <form id="stockFilters" class="stock-toolbar" onsubmit="event.preventDefault();stockLoadGoods()">
-        <label>Поиск<input id="stockSearch" type="search" maxlength="100" placeholder="Название товара"></label>
-        <label>Склад<select id="stockStorage" onchange="stockLoadGoods()"><option value="">Все склады</option></select></label>
-        <label>Категория<select id="stockCategory" onchange="stockLoadGoods()"><option value="">Все категории</option></select></label>
-        <label>Статус<select id="stockActive" onchange="stockLoadGoods()"><option value="1">Активные</option><option value="0">Архив</option><option value="">Все</option></select></label>
-        <label class="stock-check"><input id="stockCritical" type="checkbox" onchange="stockLoadGoods()">Критические</label>
-        <label class="stock-check"><input id="stockNegative" type="checkbox" onchange="stockLoadGoods()">Отрицательные</label><button type="submit">Найти</button>
+      <header class="stock-page-head">
+        <div>
+          <div class="stock-breadcrumb">Склад</div>
+          <h1>Товары</h1>
+          <p id="stockCounters" aria-live="polite"></p>
+        </div>
+        <div class="stock-page-actions" id="stockCatalogTools">
+          <button type="button" class="btn btn-sec" onclick="stockExportGoods()">Экспорт CSV для Excel</button>
+          <button type="button" class="btn btn-pri" onclick="stockNewGood()">+ Добавить товар</button>
+        </div>
+      </header>
+      <nav class="stock-tabs" aria-label="Разделы склада">
+        <button class="tab active" id="stockTabBtn-balances" onclick="stockSwitchTab('balances')">Остатки</button>
+        <button class="tab" id="stockTabBtn-goods" onclick="stockSwitchTab('goods')">Товары</button>
+        <button type="button" class="tab" id="stockTabBtn-docs" onclick="stockSwitchTab('docs')">Операции</button>
+        <button type="button" class="tab" id="stockTabBtn-suppliers" onclick="stockSwitchTab('suppliers')">Поставщики</button>
+        <button type="button" class="tab" id="stockTabBtn-tech-cards" onclick="stockSwitchTab('tech-cards')">Техкарты</button>
+        <button type="button" class="tab" id="stockTabBtn-inventory" onclick="stockSwitchTab('inventory')">Инвентаризация</button>
+        <button type="button" class="tab" id="stockTabBtn-turnover" onclick="stockSwitchTab('turnover')">Оборотка</button>
+        <button type="button" class="tab" id="stockTabBtn-settings" onclick="stockSwitchTab('settings')">Настройки</button>
+      </nav>
+      <form id="stockFilters" class="stock-filters" onsubmit="event.preventDefault();stockLoadGoods()">
+        <label class="stock-search-field"><span>Поиск</span><input id="stockSearch" type="search" maxlength="100" placeholder="Поиск по названию товара, штрихкоду или артикулу"></label>
+        <div class="stock-filter-actions">
+          <label><span>Показывать</span><select id="stockPageSize"><option value="25" selected>25</option><option value="50">50</option><option value="100">100</option></select></label>
+          <button type="submit" class="btn btn-pri">Показать</button>
+        </div>
+        <details class="stock-extra-filters">
+          <summary>Дополнительные фильтры</summary>
+          <div class="stock-extra-grid">
+            <label><span>Склад</span><select id="stockStorage" onchange="stockLoadGoods()"><option value="">Все склады</option></select></label>
+            <label><span>Категория</span><select id="stockCategory" onchange="stockLoadGoods()"><option value="">Все категории</option></select></label>
+            <label><span>Статус</span><select id="stockActive" onchange="stockLoadGoods()"><option value="1">Активные</option><option value="0">Архив</option><option value="">Все</option></select></label>
+            <label class="stock-check"><input id="stockCritical" type="checkbox" onchange="stockLoadGoods()">Критические</label>
+            <label class="stock-check"><input id="stockNegative" type="checkbox" onchange="stockLoadGoods()">Отрицательные</label>
+          </div>
+        </details>
       </form>
       <p id="stockStatus" role="status"></p><div id="stockTab-balances"></div><div id="stockTab-goods" hidden></div><div id="stockTab-docs" hidden></div><div id="stockTab-suppliers" hidden></div><div id="stockTab-tech-cards" hidden><div id="stockTechCards"></div></div><div id="stockTab-inventory" hidden></div><div id="stockTab-turnover" hidden></div><div id="stockTab-settings" hidden></div>
     </div>
@@ -3108,8 +3136,8 @@ function fireConfetti() {
 <dialog id="stockDocModal" class="stock-modal" aria-label="Операция склада"><form onsubmit="stockSaveDocument(event)"><button type="button" onclick="stockDocumentClose()">Закрыть</button><div id="stockDocBody"></div><p id="stockDocError" role="alert"></p><button id="stockDocSave" type="submit">Сохранить</button></form></dialog>
 <dialog id="stockSaleModal" class="stock-modal" aria-label="Операция склада"><form onsubmit="stockSaveSale(event)"><button type="button" onclick="stockSaleClose()">Закрыть</button><div id="stockSaleBody"></div><p id="stockSaleError" role="alert"></p><button id="stockSaleSave" type="submit">Продать</button></form></dialog>
 <dialog id="stockRefModal" class="stock-modal" aria-label="Справочник"><form onsubmit="stockSaveRef(event)"><button type="button" onclick="stockCloseRef()">Закрыть</button><div id="stockRefBody"></div><p id="stockRefError" role="alert"></p><button type="submit" id="stockRefSave">Сохранить</button></form></dialog>
-<script src="js/pages/stock.js?v=2026-11-14-stock-final"></script>
-<script src="js/pages/stock-balances.js?v=2026-11-14-stock-final"></script>
+<script src="js/pages/stock.js?v=2026-11-15-catalog"></script>
+<script src="js/pages/stock-balances.js?v=2026-11-15-catalog"></script>
 <script src="js/pages/stock-docs.js?v=2026-11-14-stock-final"></script>
 <script src="js/pages/stock-sale.js?v=2026-11-14-stock-final"></script>
 <script src="js/pages/stock-inventory.js?v=2026-11-14-stock-final"></script>

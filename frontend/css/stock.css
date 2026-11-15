@@ -193,3 +193,275 @@
 .stock-check input[type='checkbox'] {
   width: auto;
 }
+
+/* Catalog layout. These classes are shared with stockGoodsHtml(). */
+#page-stock [hidden] {
+  display: none !important;
+}
+#page-stock .stock-page-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 20px;
+  margin-bottom: 20px;
+}
+#page-stock .stock-breadcrumb {
+  margin-bottom: 5px;
+  color: var(--t3);
+  font-size: 12px;
+}
+#page-stock .stock-page-head h1 {
+  margin: 0;
+  font-size: 26px;
+  line-height: 1.15;
+}
+#page-stock #stockCounters {
+  margin-top: 6px;
+  color: var(--t3);
+  font-size: 12px;
+}
+#page-stock .stock-page-actions,
+#page-stock .stock-filter-actions {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+#page-stock .stock-tabs {
+  display: flex;
+  gap: 2px;
+  overflow-x: auto;
+  margin: 0 -2px 18px;
+  padding: 0 2px;
+  border-bottom: 1px solid var(--bd);
+}
+#page-stock .stock-tabs .tab {
+  flex: 0 0 auto;
+  padding: 10px 13px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  background: transparent;
+  color: var(--t2);
+  font: inherit;
+  cursor: pointer;
+  white-space: nowrap;
+}
+#page-stock .stock-tabs .tab.active {
+  border-bottom-color: #d99b00;
+  background: transparent;
+  color: var(--t1);
+  font-weight: 700;
+}
+#page-stock .stock-filters {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 12px;
+  margin: 0 0 18px;
+  padding: 16px;
+  border: 1px solid var(--bd);
+  border-radius: 10px;
+  background: var(--card);
+}
+#page-stock .stock-filters label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  color: var(--t2);
+  font-size: 12px;
+  font-weight: 600;
+}
+#page-stock .stock-filters input,
+#page-stock .stock-filters select {
+  box-sizing: border-box;
+  min-width: 0;
+  max-width: 100%;
+  padding: 9px 10px;
+  color: var(--t1);
+  background: var(--card);
+  border: 1px solid var(--bd);
+  border-radius: 7px;
+  font: inherit;
+  font-weight: 400;
+}
+#page-stock .stock-search-field input {
+  width: 100%;
+}
+#page-stock .stock-filter-actions {
+  justify-content: space-between;
+  align-items: flex-end;
+}
+#page-stock .stock-filter-actions label {
+  width: 112px;
+}
+#page-stock .stock-extra-filters {
+  border-top: 1px solid var(--bd);
+  padding-top: 12px;
+}
+#page-stock .stock-extra-filters summary {
+  width: fit-content;
+  color: var(--t2);
+  font-size: 12px;
+  cursor: pointer;
+  user-select: none;
+}
+#page-stock .stock-extra-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(130px, 1fr));
+  gap: 12px;
+  margin-top: 12px;
+}
+#page-stock .stock-catalog-layout {
+  display: grid;
+  grid-template-columns: minmax(240px, 280px) minmax(0, 1fr);
+  align-items: start;
+  gap: 16px;
+}
+#page-stock .stock-catalog-sidebar,
+#page-stock .stock-catalog-results {
+  min-width: 0;
+  padding: 16px;
+  border: 1px solid var(--bd);
+  border-radius: 10px;
+  background: var(--card);
+}
+#page-stock .stock-catalog-sidebar {
+  position: sticky;
+  top: 12px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+#page-stock .stock-catalog-sidebar section {
+  padding: 16px;
+  border: 1px solid var(--bd);
+  border-radius: 10px;
+  background: var(--card);
+}
+#page-stock .stock-catalog-sidebar section + section {
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px solid var(--bd);
+}
+#page-stock .stock-catalog-sidebar h3 {
+  margin: 0 0 12px;
+  font-size: 15px;
+}
+#page-stock .stock-catalog-sidebar section:first-child button {
+  display: block;
+  width: 100%;
+  margin-top: 8px;
+}
+#page-stock .stock-catalog-sidebar section:first-child button[data-stock-quick-manage] {
+  border-color: #d99b00;
+  background: #eab308;
+  color: #241a00;
+  font-weight: 700;
+}
+#page-stock .stock-category-tree,
+#page-stock .stock-category-tree ul {
+  margin: 0;
+  padding-left: 0;
+  list-style: none;
+}
+#page-stock .stock-category-tree ul {
+  padding-left: 16px;
+}
+#page-stock .stock-category-tree li {
+  position: relative;
+  padding: 3px 0 3px 16px;
+}
+#page-stock .stock-category-tree li::before {
+  content: '›';
+  position: absolute;
+  left: 2px;
+  color: var(--t3);
+}
+#page-stock .stock-category-tree .stock-link {
+  width: 100%;
+  padding: 3px 5px;
+  border-radius: 5px;
+  text-decoration: none;
+}
+#page-stock .stock-category-tree .stock-link:hover,
+#page-stock .stock-category-tree .stock-link[aria-current='true'] {
+  background: var(--bg);
+  color: var(--t1);
+  font-weight: 600;
+}
+#page-stock .stock-catalog-results {
+  overflow: hidden;
+}
+#page-stock .stock-catalog-table {
+  margin-top: 0;
+}
+#page-stock .stock-catalog-count {
+  margin-bottom: 12px;
+  color: var(--t3);
+  text-align: center;
+}
+#page-stock .stock-catalog-table small {
+  display: block;
+  margin-top: 3px;
+  color: var(--t3);
+  font-size: 11px;
+}
+#page-stock .stock-catalog-table td:first-child,
+#page-stock .stock-catalog-table th:first-child {
+  width: 38px;
+}
+#page-stock button.btn-pri {
+  border-color: #d99b00;
+  background: #eab308;
+  color: #241a00;
+  font-weight: 700;
+}
+#page-stock button.btn-pri:hover {
+  background: #d99b00;
+}
+[data-theme='dark'] #page-stock button.btn-pri,
+[data-theme='dark'] #page-stock .stock-catalog-sidebar section:first-child button[data-stock-quick-manage] {
+  background: #facc15;
+  color: #211a00;
+}
+
+@media (max-width: 760px) {
+  #page-stock .stock-page-head {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 12px;
+  }
+  #page-stock .stock-page-actions {
+    align-items: stretch;
+  }
+  #page-stock .stock-page-actions button {
+    flex: 1;
+  }
+  #page-stock .stock-catalog-layout {
+    grid-template-columns: 1fr;
+  }
+  #page-stock .stock-catalog-sidebar {
+    position: static;
+  }
+  #page-stock .stock-extra-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@media (max-width: 390px) {
+  #page-stock .stock-page-actions,
+  #page-stock .stock-filter-actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  #page-stock .stock-page-actions button {
+    width: 100%;
+  }
+  #page-stock .stock-extra-grid {
+    grid-template-columns: 1fr;
+  }
+  #page-stock .stock-tabs {
+    margin-right: -16px;
+    padding-right: 16px;
+  }
+}

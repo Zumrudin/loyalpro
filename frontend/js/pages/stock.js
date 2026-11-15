@@ -1,13 +1,19 @@
 // Товары и склад. Все обращения используют общий авторизованный API.
 const _stock = {
-  tab: 'balances',
+  tab: 'goods',
   goods: [],
   dictionaries: { storages: [], units: [], suppliers: [], staff: [], categories: [] },
   goodsRequest: 0,
   cardRequest: 0,
   categories: new Map(),
+  localCategories: new Map(),
   busy: false,
+  goodsLoading: false,
   good: null,
+  catalogPage: 1,
+  catalogPageSize: 25,
+  selectedGoods: new Set(),
+  bulkBusy: false,
 };
 const STOCK_TABS = {
   balances: 'Остатки',
@@ -71,6 +77,12 @@ function stockToday() {
 async function loadStock() {
   stockEl('stockStatus').textContent = 'Загрузка…';
   try {
+    // Категории относятся к салону: не переносим их при смене контекста.
+    _stock.categories.clear();
+    _stock.localCategories.clear();
+    _stock.goods = [];
+    _stock.selectedGoods.clear();
+    _stock.catalogPage = 1;
     _stock.dictionaries = await stockApi('/dictionaries');
     stockEl('stockTabBtn-settings').hidden = ME?.role !== 'owner';
     stockRenderFilters();
@@ -94,11 +106,12 @@ async function stockOnHashArg(arg) {
     return;
   }
   stockCloseGood();
-  await stockSwitchTab(STOCK_TABS[tab] ? tab : 'balances', false);
+  await stockSwitchTab(STOCK_TABS[tab] ? tab : 'goods', false);
 }
 async function stockSwitchTab(tab, updateHash = true) {
   if (!STOCK_TABS[tab]) return;
   _stock.tab = tab;
+  if (tab !== 'goods') stockUnmountCatalogTools();
   for (const key of Object.keys(STOCK_TABS)) {
     stockEl('stockTab-' + key).hidden = key !== tab;
     stockEl('stockTabBtn-' + key).classList.toggle('active', key === tab);
@@ -160,7 +173,11 @@ function stockRenderFilters() {
           .map((c) => c.title)
           .join(' › '),
       );
-  for (const g of _stock.goods) if (g.local_category) cats.set(g.local_category, g.local_category);
+  for (const g of _stock.goods)
+    if (g.local_category) {
+      _stock.localCategories.set(String(g.local_category), String(g.local_category));
+      cats.set(g.local_category, g.local_category);
+    }
   stockEl('stockCategory').innerHTML =
     '<option value="">Все категории</option>' +
     [...cats]
@@ -172,6 +189,10 @@ function stockRenderFilters() {
 async function stockLoadGoods() {
   const request = ++_stock.goodsRequest,
     f = stockFilters();
+  _stock.goodsLoading = true;
+  _stock.selectedGoods.clear();
+  stockRefreshSelectionControls();
+  stockSetGoodsExportDisabled(true);
   const params = new URLSearchParams({
     search: f.search,
     storage: f.storage,
@@ -184,11 +205,28 @@ async function stockLoadGoods() {
     const data = await stockApi('/goods?' + params);
     if (request !== _stock.goodsRequest) return;
     _stock.goods = data.goods || [];
+    _stock.catalogPage = 1;
+    _stock.selectedGoods.clear();
+    _stock.goodsLoading = false;
+    stockSetGoodsExportDisabled(false);
     stockRenderFilters();
     stockEl('stockTab-balances').innerHTML = stockBalancesHtml(_stock.goods, _stock.dictionaries.storages, f);
-    stockEl('stockTab-goods').innerHTML = stockGoodsHtml(_stock.goods);
+    stockRenderGoodsCatalog();
     stockEl('stockStatus').textContent = '';
   } catch (e) {
-    if (request === _stock.goodsRequest) stockEl('stockStatus').textContent = e.message;
+    if (request === _stock.goodsRequest) {
+      _stock.goods = [];
+      _stock.selectedGoods.clear();
+      _stock.goodsLoading = false;
+      stockSetGoodsExportDisabled(false);
+      stockEl('stockTab-balances').innerHTML = '';
+      stockRenderGoodsCatalog();
+      stockEl('stockStatus').textContent = e.message;
+    }
   }
+}
+function stockSetGoodsExportDisabled(disabled) {
+  const tools = stockEl('stockCatalogTools');
+  const button = tools && typeof tools.querySelector === 'function' ? tools.querySelector('[onclick="stockExportGoods()"]') : null;
+  if (button) button.disabled = !!disabled;
 }

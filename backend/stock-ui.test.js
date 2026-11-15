@@ -22,8 +22,10 @@ function harness() {
         hidden: false,
         disabled: false,
         open: false,
+        dataset: {},
         classList: { toggle: jest.fn() },
         addEventListener: jest.fn(),
+        querySelector: () => null,
         querySelectorAll: () => [],
         showModal() {
           this.open = true;
@@ -41,6 +43,7 @@ function harness() {
     TOKEN: 'synthetic-token',
     ME: { role: 'owner' },
     location: { hash: '#stock' },
+    window: { confirm: jest.fn(() => true) },
     URLSearchParams,
     Date,
     setTimeout,
@@ -86,11 +89,60 @@ test('stale catalog response cannot overwrite the newest filters', async () => {
     .fn()
     .mockImplementationOnce(() => new Promise((r) => (resolve = r)))
     .mockResolvedValueOnce({ goods: [{ id: 2, title: 'new', balances: [] }] });
+  h.ctx.stockRenderGoodsCatalog = jest.fn();
   const first = h.ctx.stockLoadGoods();
   await h.ctx.stockLoadGoods();
   resolve({ goods: [{ id: 1, title: 'old', balances: [] }] });
   await first;
   expect(h.run('_stock.goods[0].title')).toBe('new');
+});
+test('catalog page slices rows and moving pages clears selection without changing the active filters', () => {
+  const h = harness();
+  h.run(`
+    _stock.goods = Array.from({ length: 27 }, (_, i) => ({ id: i + 1, title: 'Товар ' + (i + 1) }));
+    _stock.catalogPageSize = 25;
+    _stock.catalogPage = 99;
+    _stock.selectedGoods = new Set([1, 2]);
+  `);
+  expect(h.ctx.stockCatalogPageRows()).toMatchObject({ totalPages: 2, from: 25 });
+  expect(h.ctx.stockCatalogPageRows().rows.map((g) => g.id)).toEqual([26, 27]);
+  h.ctx.stockRenderGoodsCatalog = jest.fn();
+  h.ctx.stockCatalogSetPage(1);
+  expect(h.run('_stock.catalogPage')).toBe(1);
+  expect(h.run('_stock.selectedGoods.size')).toBe(0);
+  expect(h.ctx.stockRenderGoodsCatalog).toHaveBeenCalledTimes(1);
+});
+test('catalog escapes category, title, article and comment in its tree and rows', () => {
+  const h = harness();
+  h.run(`
+    _stock.dictionaries.categories = [[{ id: 9, title: '<img src=x onerror=1>' }]];
+    _stock.goods = [{ id: 1, title: '<script>title</script>', article: '<b>SKU</b>', comment: '<svg>', unit: 'шт', service_unit: 'мл', unit_equals: 10 }];
+  `);
+  const html = h.ctx.stockGoodsHtml(h.run('_stock.goods'));
+  expect(html).toContain('&lt;script&gt;title&lt;/script&gt;');
+  expect(html).toContain('&lt;b&gt;SKU&lt;/b&gt;');
+  expect(html).toContain('&lt;svg&gt;');
+  expect(html).toContain('&lt;img src=x onerror=1&gt;');
+  expect(html).not.toContain('<script>');
+  expect(html).not.toContain('<svg>');
+});
+test('bulk archive stops after a partial or uncertain outcome and reports completed rows', async () => {
+  const h = harness();
+  h.run(`
+    _stock.goods = [11, 12, 13].map((id) => ({ id, title: 'Товар ' + id }));
+    _stock.selectedGoods = new Set([11, 12, 13]);
+  `);
+  h.ctx.stockLoadGoods = jest.fn().mockResolvedValue();
+  h.ctx.stockLoadCounters = jest.fn().mockResolvedValue();
+  const uncertain = Object.assign(new Error('Результат операции неизвестен.'), { uncertain: true });
+  h.ctx.stockApi = jest.fn().mockResolvedValueOnce({}).mockRejectedValueOnce(uncertain);
+  await h.ctx.stockArchiveSelectedGoods();
+  expect(h.ctx.stockApi).toHaveBeenCalledTimes(2);
+  expect(h.ctx.stockApi).toHaveBeenNthCalledWith(1, '/goods/11', { stockActive: false }, 'PUT');
+  expect(h.get('stockStatus').textContent).toContain('Архивировано: 1 из 3');
+  expect(h.get('stockStatus').textContent).toContain('неизвестен');
+  expect(h.run('_stock.selectedGoods.size')).toBe(0);
+  expect(h.ctx.stockLoadGoods).toHaveBeenCalledTimes(1);
 });
 test('good draft maps empty optional values to null and preserves zero prices', () => {
   const h = harness();
