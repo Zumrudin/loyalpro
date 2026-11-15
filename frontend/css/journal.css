@@ -643,3 +643,34 @@ body[data-page="journal"] .jr-toolbar-secondary .btn{height:auto;min-height:28px
 .jr-payment-complete-layout .jr-paid-row>span{min-width:0;overflow-wrap:anywhere}
 .jr-payment-complete-layout .jr-paid-row>strong{white-space:nowrap}
 @media(max-width:650px){.jr-payment-complete-layout{min-height:0}.jr-payment-complete-message{min-height:200px}.jr-payment-complete-content>header{align-items:flex-start}.jr-payment-panel.jr-payment-complete-card{min-height:170px}}
+
+/* Client sections share a sliding track and retain the original form controls. */
+.jr-dialog.jr-dialog-section{height:min(824px,94dvh);max-height:94dvh;overflow:hidden;background:var(--bg);padding:12px}
+.jr-dialog.jr-dialog-section>.jr-dialog-head{display:none}
+.jr-dialog-section #jrModalBody{height:100%;min-height:0;display:flex;flex-direction:column;overflow:hidden}
+.jr-section-shell{flex:1;min-height:0;overflow:hidden;overscroll-behavior:contain}
+.jr-section-track{display:grid;grid-template-columns:50% 50%;width:200%;height:100%;min-height:0;transform:translateX(0);transition:transform .32s cubic-bezier(.22,.61,.36,1)}
+.jr-section-shell.is-section-open .jr-section-track{transform:translateX(-50%)}
+.jr-section-record,.jr-section-split{grid-row:1;min-width:0;min-height:0}
+.jr-section-record{grid-column:1;overflow:auto}
+.jr-section-split{grid-column:2;display:grid;grid-template-columns:324px minmax(0,1fr);gap:10px;overflow:hidden}
+.jr-section-client,.jr-section-content{min-width:0;min-height:0;overflow:auto;overscroll-behavior:contain;background:var(--card);border:1px solid var(--bd);border-radius:14px;padding:16px}
+.jr-dialog-section .jr-section-client>.jr-booking-client{border:0;padding:0;border-radius:0;min-height:0}
+.jr-section-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:0 0 22px}
+.jr-section-head h2{margin:0;font-size:20px;font-weight:600}
+.jr-section-close{flex-shrink:0}
+.jr-dialog-section #jrModalBody>.jr-booking-footer{flex:0 0 auto;margin:0;padding:12px 0 0;position:static;background:transparent}
+.jr-section-content-body{min-width:0}
+.jr-section-content .jr-vh-table{overflow-x:auto}
+.jr-dialog-section>.jr-error:not(:empty),.jr-dialog-section>.jr-close-ask:not([hidden]){position:absolute;bottom:62px;left:16px;right:16px;z-index:10;background:var(--card);padding:14px;border:1px solid var(--bd);border-radius:10px}
+@media(max-width:1050px){.jr-section-split{grid-template-columns:270px minmax(0,1fr)}}
+@media(max-width:700px){
+  .jr-dialog.jr-dialog-section{padding:8px;height:94dvh}
+  .jr-section-split{display:flex;flex-direction:column;overflow:auto;gap:8px}
+  .jr-section-client,.jr-section-content{flex:none;padding:12px;overflow:visible}
+  .jr-section-content{order:-1;min-height:260px}
+  .jr-section-head{margin-bottom:16px}
+  .jr-section-head h2{font-size:18px}
+  .jr-dialog-section .jr-section-content-body{overflow-x:auto}
+}
+@media(prefers-reduced-motion:reduce){.jr-section-track{transition:none}}

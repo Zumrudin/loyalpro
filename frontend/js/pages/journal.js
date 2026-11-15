@@ -6,7 +6,7 @@ function jrStoredGridStep() {
     return JR_GRID_STEPS.includes(value) ? value : 15;
   } catch (_) { return 15; }
 }
-const journal = { data: null, week: null, view: 'day', request: 0, modalRequest: 0, slotRequest: 0, busy: false, draft: null, slots: [], preferredTime: null, gridStep: jrStoredGridStep() };
+const journal = { data: null, week: null, view: 'day', request: 0, modalRequest: 0, slotRequest: 0, sectionRequest: 0, busy: false, draft: null, slots: [], preferredTime: null, gridStep: jrStoredGridStep() };
 // Phone layout threshold: the same number is in journal.css (@media (max-width:700px)) — change both together.
 const JR_MOBILE_MAX = 700;
 const jrIsMobile = () => typeof window !== 'undefined' && typeof window.matchMedia === 'function' && window.matchMedia(`(max-width: ${JR_MOBILE_MAX}px)`).matches;
@@ -173,7 +173,107 @@ function jrIcon(name) {
 function jrStub(label, icon = 'file', extra = '') {
   return `<button type="button" class="jr-placeholder ${extra}" disabled title="${jrEscape(label)} — скоро появится в журнале">${jrIcon(icon)}<span>${jrEscape(label)}</span><small>Скоро</small></button>`;
 }
+// Keep the actual form and client controls alive while a client section is open.
+function jrSectionBody() {
+  return journal.section?.page || jrEl('jrModalBody');
+}
+function jrSectionActive() {
+  return !!(journal.section && !journal.section.closing && journal.section.page?.isConnected);
+}
+function jrSectionOpen(title, className = '') {
+  const body = jrEl('jrModalBody'), modal = jrEl('jrModal');
+  if (!body?.querySelector?.('.jr-booking-layout') || journal.busy) return null;
+  if (journal.section?.closing) journal.section.finish();
+  const previous = journal.section;
+  if (previous) {
+    // Switching tiles keeps the already-open layout, including sidebar scroll.
+    previous.title = title;
+    previous.request = journal.sectionRequest = (journal.sectionRequest || 0) + 1;
+    previous.content.className = 'jr-section-content ' + className;
+    previous.content.setAttribute('aria-label', title);
+    previous.content.querySelector('h2').textContent = title;
+    previous.page.innerHTML = '<p class="jr-hint">Загрузка…</p>';
+    jrEl('jrModalTitle').textContent = title;
+    jrMessage('');
+    return previous;
+  }
+  const watchId = journal.cardWatch?.id;
+  jrStopRecordWatch();
+  const focus = document.activeElement, scroll = modal.scrollTop, error = jrEl('jrModalError').textContent;
+  const viewport = document.createElement('div'); viewport.className = 'jr-section-shell';
+  const track = document.createElement('div'); track.className = 'jr-section-track';
+  const card = document.createElement('section'); card.className = 'jr-section-record';
+  while (body.firstChild) card.appendChild(body.firstChild);
+  const split = document.createElement('section'); split.className = 'jr-section-split';
+  const client = document.createElement('aside'); client.className = 'jr-section-client';
+  const content = document.createElement('section'); content.className = 'jr-section-content ' + className;
+  content.setAttribute('aria-label', title);
+  content.innerHTML = `<header class="jr-section-head"><h2>${jrEscape(title)}</h2><button type="button" class="btn btn-sec jr-section-close">Закрыть</button></header>`;
+  const page = document.createElement('div'); page.className = 'jr-section-content-body';
+  page.innerHTML = '<p class="jr-hint">Загрузка…</p>'; content.appendChild(page);
+  const clientNode = card.querySelector('.jr-booking-client');
+  // A noninteractive snapshot fills the outgoing card during the transition.
+  const placeholder = clientNode.cloneNode(true);
+  placeholder.removeAttribute('id');
+  placeholder.querySelectorAll('[id]').forEach(node => node.removeAttribute('id'));
+  placeholder.inert = true; placeholder.setAttribute('aria-hidden', 'true');
+  clientNode.replaceWith(placeholder); client.appendChild(clientNode);
+  const footer = card.querySelector('.jr-booking-footer');
+  const footerAnchor = document.createComment('footer');
+  if (footer) footer.replaceWith(footerAnchor);
+  split.append(client, content); track.append(card, split); viewport.appendChild(track);
+  body.appendChild(viewport); if (footer) body.appendChild(footer);
+  const state = journal.section = { title, viewport, track, card, split, client, content, page, clientNode, placeholder, footer, footerAnchor, body, focus, scroll, error, watchId,
+    request: journal.sectionRequest = (journal.sectionRequest || 0) + 1 };
+  modal.classList.add('jr-dialog-section'); modal.scrollTop = 0;
+  jrEl('jrModalTitle').textContent = title; jrMessage('');
+  const close = content.querySelector('.jr-section-close'); close.onclick = () => jrSectionClose();
+  card.inert = true;
+  // Force the initial position to be laid out before starting the transition.
+  void track.offsetWidth;
+  viewport.classList.add('is-section-open');
+  close.focus({ preventScroll: true });
+  return state;
+}
+function jrSectionClose(force = false) {
+  const state = journal.section;
+  if (!state) return false;
+  if (state.closing) { if (force) state.finish(); return true; }
+  state.closing = true;
+  journal.sectionRequest = (journal.sectionRequest || 0) + 1;
+  state.split.inert = true;
+  state.viewport.classList.remove('is-section-open');
+  const finish = state.finish = () => {
+    if (state.finished) return;
+    state.finished = true; clearTimeout(state.timer);
+    state.track.removeEventListener('transitionend', onEnd);
+    state.placeholder.replaceWith(state.clientNode);
+    if (state.footer) state.footerAnchor.replaceWith(state.footer);
+    // Only restore into the same live shell; never overwrite a new modal.
+    if (state.viewport.parentNode === state.body) {
+      while (state.card.firstChild) state.body.insertBefore(state.card.firstChild, state.viewport);
+      state.viewport.remove();
+    }
+    if (journal.section === state) journal.section = null;
+    const modal = jrEl('jrModal'); modal.classList.remove('jr-dialog-section');
+    jrEl('jrModalTitle').textContent = 'Карточка записи';
+    jrMessage(state.error);
+    modal.scrollTop = state.scroll;
+    if (!force) {
+      state.focus?.isConnected && state.focus.focus({ preventScroll: true });
+      if (state.watchId && !journal.session?.edit) jrWatchRecord(state.watchId);
+    }
+  };
+  const onEnd = event => { if (event.target === state.track && event.propertyName === 'transform') finish(); };
+  const reduced = typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
+  if (force || reduced) finish();
+  else { state.track.addEventListener('transitionend', onEnd); state.timer = setTimeout(finish, 380); }
+  return true;
+}
 function jrShowModal(title, wide = false) {
+  // Opening a different modal (payment, move form, another record) leaves the
+  // embedded detail page first so it cannot retain stale nodes or responses.
+  jrSectionClose(true);
   jrStopRecordWatch();
   jrEl('jrModal').querySelectorAll('button').forEach(el=>el.disabled=false);
   jrEl('jrModalTitle').textContent = title;

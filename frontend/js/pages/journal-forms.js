@@ -35,6 +35,13 @@ function jrAskClose(kind) {
 }
 function jrClose(force) {
   if (journal.busy) return;
+  // The header close button on an embedded detail page is the page's back
+  // action. It must leave the record DOM and its draft/session untouched.
+  if (journal.section && force !== true) {
+    jrSectionClose();
+    return;
+  }
+  if (journal.section) jrSectionClose(true);
   if (force !== true) {
     if (journal.closeAsk) { jrHideCloseAsk(); return; }
     const kind = jrUnsavedKind();

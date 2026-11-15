@@ -80,10 +80,10 @@ function jrLyHtml(data, v) {
 function jrLyRender() {
   const v = journal.loyalty;
   if (!v?.data) return;
-  const body = jrEl('jrModalBody');
+  const body = jrSectionBody();
   body.innerHTML = jrLyHtml(v.data, v);
   jrEl('jrLyFilter').onchange = e => { v.filter = e.target.value; jrLyRender(); };
-  if (jrEl('jrLyBack')) jrEl('jrLyBack').onclick = () => jrOpen(v.fromId);
+  if (jrEl('jrLyBack')) jrEl('jrLyBack').onclick = () => jrSectionActive() ? jrSectionClose() : jrOpen(v.fromId);
   body.querySelectorAll('[data-ly-toggle]').forEach(b => b.onclick = () => {
     const key = b.dataset.lyToggle;
     if (v.open.has(key)) v.open.delete(key); else v.open.add(key);
@@ -91,27 +91,44 @@ function jrLyRender() {
   });
   body.querySelectorAll('[data-ly-tab]').forEach(b => b.onclick = () => { v.tabs[b.dataset.lyTab] = b.dataset.lyTabId; jrLyRender(); });
 }
-// From the card: unsaved card edits are not dropped silently (as «История посещений»).
+// Embedded navigation retains the form session; standalone navigation keeps its guard.
 async function jrOpenLoyalty(r) {
-  const kind = journal.session?.edit ? jrUnsavedKind() : null;
-  if (kind) return jrAskClose(kind);
   const phone = String(r?.clientPhone || '').replace(/\D/g, '');
-  const request = ++journal.modalRequest;
-  journal.slotRequest++; journal.draft = null; journal.session = null; journal.payment = null;
-  journal.loyalty = { fromId: r?.id ?? null, phone, filter: 'active', open: new Set(), tabs: {}, data: null };
-  jrShowModal('Лояльность', true);
-  jrEl('jrModal').className = 'jr-dialog jr-dialog-wide jr-dialog-loyalty';
-  if (!phone) { jrEl('jrModalBody').innerHTML = '<p class="jr-hint">Телефон клиента неизвестен — данные лояльности показать нельзя.</p>'; return false; }
+  const embedded = !!jrEl('jrModalBody')?.querySelector?.('.jr-booking-layout') && typeof document?.createElement === 'function';
+  if (!embedded) {
+    const kind = journal.session?.edit ? jrUnsavedKind() : null;
+    if (kind) return jrAskClose(kind);
+    const request = ++journal.modalRequest;
+    journal.slotRequest++; journal.draft = null; journal.session = null; journal.payment = null;
+    journal.loyalty = { fromId: r?.id ?? null, phone, filter: 'active', open: new Set(), tabs: {}, data: null };
+    jrShowModal('Лояльность', true);
+    jrEl('jrModal').className = 'jr-dialog jr-dialog-wide jr-dialog-loyalty';
+    if (!phone) { jrEl('jrModalBody').innerHTML = '<p class="jr-hint">Телефон клиента неизвестен — данные лояльности показать нельзя.</p>'; return false; }
+    try {
+      const data = await jrApi('clients/loyalty?' + new URLSearchParams({ phone }));
+      if (request !== journal.modalRequest) return false;
+      journal.loyalty.data = data; jrLyRender(); return true;
+    } catch (e) {
+      if (request !== journal.modalRequest) return false;
+      jrMessage(e.message); jrEl('jrModalBody').innerHTML = '<button type="button" class="btn btn-sec" id="jrLyReload">Повторить загрузку</button>';
+      jrEl('jrLyReload').onclick = () => jrOpenLoyalty(r); return false;
+    }
+  }
+  const section = jrSectionOpen('Лояльность', 'jr-dialog-loyalty');
+  if (!section) return false;
+  const request = section.request;
+  journal.loyalty = { fromId: r?.id ?? null, phone, filter: 'active', open: new Set(), tabs: {}, data: null, section };
+  if (!phone) { section.page.innerHTML = '<p class="jr-hint">Телефон клиента неизвестен — данные лояльности показать нельзя.</p>'; return false; }
   try {
     const data = await jrApi('clients/loyalty?' + new URLSearchParams({ phone }));
-    if (request !== journal.modalRequest) return false;
+    if (request !== journal.sectionRequest || journal.section !== section) return false;
     journal.loyalty.data = data;
     jrLyRender();
     return true;
   } catch (e) {
-    if (request !== journal.modalRequest) return false;
+    if (request !== journal.sectionRequest || journal.section !== section) return false;
     jrMessage(e.message);
-    jrEl('jrModalBody').innerHTML = '<button type="button" class="btn btn-sec" id="jrLyReload">Повторить загрузку</button>';
+    section.page.innerHTML = '<button type="button" class="btn btn-sec" id="jrLyReload">Повторить загрузку</button>';
     jrEl('jrLyReload').onclick = () => jrOpenLoyalty(r);
     return false;
   }

@@ -70,12 +70,17 @@ function jrVhHtml(data, filter) {
 function jrVhRender() {
   const v = journal.visits;
   if (!v?.data) return;
-  jrEl('jrModalBody').innerHTML = jrVhHtml(v.data, v.filter);
-  const body = jrEl('jrModalBody');
+  const body = jrSectionBody();
+  body.innerHTML = jrVhHtml(v.data, v.filter);
   jrEl('jrVhFilter').onchange = e => { v.filter = e.target.value; jrVhRender(); };
-  if (jrEl('jrVhBack')) jrEl('jrVhBack').onclick = () => jrOpen(v.fromId);
-  body.querySelectorAll('[data-vh-open]').forEach(b => b.onclick = () => jrOpen(Number(b.dataset.vhOpen)));
-  body.querySelectorAll('[data-vh-pay]').forEach(b => b.onclick = () => jrOpenPayment(Number(b.dataset.vhPay)));
+  if (jrEl('jrVhBack')) jrEl('jrVhBack').onclick = () => jrSectionActive() ? jrSectionClose() : jrOpen(v.fromId);
+  const guarded = fn => () => {
+    const kind = journal.session?.edit ? jrUnsavedKind() : null;
+    if (kind) return jrAskClose(kind);
+    return fn();
+  };
+  body.querySelectorAll('[data-vh-open]').forEach(b => b.onclick = guarded(() => jrOpen(Number(b.dataset.vhOpen))));
+  body.querySelectorAll('[data-vh-pay]').forEach(b => b.onclick = guarded(() => jrOpenPayment(Number(b.dataset.vhPay))));
   body.querySelectorAll('[data-vh-more]').forEach(b => b.onclick = () => {
     const i = Number(b.dataset.vhMore);
     if (v.expanded.has(i)) v.expanded.delete(i); else v.expanded.add(i);
@@ -83,30 +88,47 @@ function jrVhRender() {
   });
   body.querySelectorAll('[data-vh-repeat]').forEach(b => b.onclick = () => {
     const e = v.data.entries[Number(b.dataset.vhRepeat)];
-    if (e) jrRebook({ staffId: e.staffId, services: e.services, clientName: v.clientName, clientPhone: v.phone });
+    if (e) guarded(() => jrRebook({ staffId: e.staffId, services: e.services, clientName: v.clientName, clientPhone: v.phone }))();
   });
 }
-// From the card: unsaved card edits are not dropped silently (as «Записать повторно»).
+// Embedded navigation retains the form session; standalone navigation keeps its guard.
 async function jrOpenVisits(r) {
-  const kind = journal.session?.edit ? jrUnsavedKind() : null;
-  if (kind) return jrAskClose(kind);
   const phone = String(r?.clientPhone || '').replace(/\D/g, '');
-  const request = ++journal.modalRequest;
-  journal.slotRequest++; journal.draft = null; journal.session = null; journal.payment = null;
-  journal.visits = { fromId: r?.id ?? null, phone, clientName: r?.clientName || '', filter: 'all', expanded: new Set(), data: null };
-  jrShowModal('История посещений', true);
-  jrEl('jrModal').className = 'jr-dialog jr-dialog-wide jr-dialog-visits';
-  if (!phone) { jrEl('jrModalBody').innerHTML = '<p class="jr-hint">Телефон клиента неизвестен — историю показать нельзя.</p>'; return false; }
+  const embedded = !!jrEl('jrModalBody')?.querySelector?.('.jr-booking-layout') && typeof document?.createElement === 'function';
+  if (!embedded) {
+    const kind = journal.session?.edit ? jrUnsavedKind() : null;
+    if (kind) return jrAskClose(kind);
+    const request = ++journal.modalRequest;
+    journal.slotRequest++; journal.draft = null; journal.session = null; journal.payment = null;
+    journal.visits = { fromId: r?.id ?? null, phone, clientName: r?.clientName || '', filter: 'all', expanded: new Set(), data: null };
+    jrShowModal('История посещений', true);
+    jrEl('jrModal').className = 'jr-dialog jr-dialog-wide jr-dialog-visits';
+    if (!phone) { jrEl('jrModalBody').innerHTML = '<p class="jr-hint">Телефон клиента неизвестен — историю показать нельзя.</p>'; return false; }
+    try {
+      const data = await jrApi('clients/visits?' + new URLSearchParams({ phone }));
+      if (request !== journal.modalRequest) return false;
+      journal.visits.data = data; jrVhRender(); return true;
+    } catch (e) {
+      if (request !== journal.modalRequest) return false;
+      jrMessage(e.message); jrEl('jrModalBody').innerHTML = '<button type="button" class="btn btn-sec" id="jrVhReload">Повторить загрузку</button>';
+      jrEl('jrVhReload').onclick = () => jrOpenVisits(r); return false;
+    }
+  }
+  const section = jrSectionOpen('История посещений', 'jr-dialog-visits');
+  if (!section) return false;
+  const request = section.request;
+  journal.visits = { fromId: r?.id ?? null, phone, clientName: r?.clientName || '', filter: 'all', expanded: new Set(), data: null, section };
+  if (!phone) { section.page.innerHTML = '<p class="jr-hint">Телефон клиента неизвестен — историю показать нельзя.</p>'; return false; }
   try {
     const data = await jrApi('clients/visits?' + new URLSearchParams({ phone }));
-    if (request !== journal.modalRequest) return false;
+    if (request !== journal.sectionRequest || journal.section !== section) return false;
     journal.visits.data = data;
     jrVhRender();
     return true;
   } catch (e) {
-    if (request !== journal.modalRequest) return false;
+    if (request !== journal.sectionRequest || journal.section !== section) return false;
     jrMessage(e.message);
-    jrEl('jrModalBody').innerHTML = '<button type="button" class="btn btn-sec" id="jrVhReload">Повторить загрузку</button>';
+    section.page.innerHTML = '<button type="button" class="btn btn-sec" id="jrVhReload">Повторить загрузку</button>';
     jrEl('jrVhReload').onclick = () => jrOpenVisits(r);
     return false;
   }

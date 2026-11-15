@@ -108,7 +108,7 @@ function jrClientPanel(record, creating = false, editable = false) {
       ? `<button type="button" class="jr-client-link" id="jrClientLink" title="Открыть карточку клиента"><span id="jrClientName">${name}</span></button>`
       : `<h3 id="jrClientName">${name}</h3>`}</div><div class="jr-client-acts">${editable && record ? `<button type="button" class="jr-icon-btn" id="jrClientIcon" title="Карточка клиента" aria-label="Карточка клиента">${jrIcon('user')}</button>` : ''}<button type="button" class="jr-icon-btn jr-placeholder" disabled title="Другие действия — скоро появятся в журнале" aria-label="Другие действия">${jrIcon('dots')}</button></div></div>${editable ? jrPhoneHtml(record) : ''}`}
     <div class="jr-client-tools">${[['Планы лечения','folder'],['Медкарта','medcard'],['История посещений','clock'],['Лояльность','loyalty'],['Счета клиента','wallet']].map(([title, icon]) => {
-      const live = !creating && editable && record && { 'История посещений': 'jrVisitsOpen', 'Лояльность': 'jrLoyaltyOpen' }[title];
+      const live = !creating && editable && record && { 'Планы лечения': 'jrTreatmentPlansOpen', 'Медкарта': 'jrMedicalCardOpen', 'История посещений': 'jrVisitsOpen', 'Лояльность': 'jrLoyaltyOpen', 'Счета клиента': 'jrClientAccountsOpen' }[title];
       return jrTile(title, icon, live || null);
     }).join('')}</div>
     <label class="jr-other-visitor"><input type="checkbox" disabled> Записывает другого посетителя</label>
@@ -218,6 +218,16 @@ function jrAppointmentCard(record) {
     <footer class="jr-booking-footer">${canEdit ? '<button type="button" class="btn btn-sec" id="jrCancel">Отменить запись</button>' : ''}${jrCanReshape(record) || jrCanDeleteUnsent(record) ? '<button type="button" class="btn btn-sec" id="jrDelete">Удалить запись</button>' : ''}${canChange ? '<button type="button" class="btn btn-pri" id="jrSaveChanges" disabled>Сохранить запись</button>' : jrStub('Сохранить запись','check','jr-stub-inline')}</footer>`;
 }
 
+// These client modules are not available in the journal yet. They still use
+// the same page transition so every tile has predictable navigation and makes
+// the limitation explicit instead of looking broken or silently doing nothing.
+function jrOpenUnavailable(title) {
+  const state = jrSectionOpen(title, 'jr-dialog-unavailable');
+  if (!state) return;
+  state.page.innerHTML = `<div class="jr-section-empty"><p class="jr-hint">Раздел «${jrEscape(title)}» пока недоступен в журнале записи.</p><button type="button" class="btn btn-sec" data-jr-section-back>К записи</button></div>`;
+  state.page.querySelector('[data-jr-section-back]')?.addEventListener('click', () => jrSectionClose());
+}
+
 async function jrOpen(id) {
   const request = ++journal.modalRequest;
   journal.slotRequest++; journal.draft = null; journal.session = null; journal.payment = null;
@@ -270,6 +280,9 @@ function jrRenderRecord(r) {
     if (!r.deleted && jrEl('jrRebook')) jrEl('jrRebook').onclick = () => jrRebook(r);
     if (jrEl('jrVisitsOpen')) jrEl('jrVisitsOpen').onclick = () => jrOpenVisits(r);
     if (jrEl('jrLoyaltyOpen')) jrEl('jrLoyaltyOpen').onclick = () => jrOpenLoyalty(r);
+    for (const [id, title] of [['jrTreatmentPlansOpen', 'Планы лечения'], ['jrMedicalCardOpen', 'Медкарта'], ['jrClientAccountsOpen', 'Счета клиента']]) {
+      if (jrEl(id)) jrEl(id).onclick = () => jrOpenUnavailable(title);
+    }
     if (jrEl('jrClientLink')) jrEl('jrClientLink').onclick = () => jrOpenClientCard(r);
     if (jrEl('jrClientIcon')) jrEl('jrClientIcon').onclick = () => jrOpenClientCard(r);
     // «Клиент / Чат»: the chat pane loads our conversation with this client.
