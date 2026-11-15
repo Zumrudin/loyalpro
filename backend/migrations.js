@@ -2882,6 +2882,9 @@ const STOCK_DDL = [
     created_by INT, created_at TIMESTAMPTZ DEFAULT NOW(), updated_at TIMESTAMPTZ DEFAULT NOW(),
     posted_at TIMESTAMPTZ, cancelled_at TIMESTAMPTZ, cancel_reason TEXT
   )`,
+  `ALTER TABLE stock_documents ADD COLUMN IF NOT EXISTS request_id UUID`,
+  `ALTER TABLE stock_documents ADD COLUMN IF NOT EXISTS request_hash TEXT`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS stock_documents_request_uq ON stock_documents (salon_id, request_id) WHERE request_id IS NOT NULL`,
   `CREATE UNIQUE INDEX IF NOT EXISTS stock_documents_yc_uq ON stock_documents (salon_id, yclients_document_id) WHERE yclients_document_id IS NOT NULL`,
   `CREATE INDEX IF NOT EXISTS stock_documents_date ON stock_documents (salon_id, doc_date DESC)`,
   `CREATE INDEX IF NOT EXISTS stock_documents_record ON stock_documents (salon_id, record_id) WHERE record_id IS NOT NULL`,

@@ -242,6 +242,13 @@ router.post('/openings/reset', requireRole('owner'), wrap('opening-reset', async
 router.post('/sales', wrap('sale-create', async (req, res) => {
   res.status(201).json({ document: await sales.create(req.user.salonId, req.user.userId, bodyOf(req)) });
 }));
+router.post('/sales/:id/payments', wrap('sale-payment', async (req, res) => {
+  const saleId = id(req); if (!saleId) return bad(res, ['Некорректный id продажи.']);
+  res.status(201).json(await sales.addPayment(req.user.salonId, req.user.userId, saleId, bodyOf(req)));
+}));
+router.get('/clients/:clientId', wrap('sale-client', async (req, res) => {
+  res.json(await sales.clientDetail(req.user.salonId, req.params.clientId));
+}));
 router.get('/clients/:clientId/purchases', wrap('client-purchases', async (req, res) => {
   const clientId = Number(req.params.clientId);
   if (!Number.isSafeInteger(clientId) || clientId <= 0) return bad(res, ['Некорректный id клиента.']);

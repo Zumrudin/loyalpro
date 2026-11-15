@@ -12,6 +12,8 @@ const yc = require('./services/yclients');
 const sales = require('./services/stock/sales');
 const documents = require('./services/stock/documents');
 const client = { id: 7, yclients_client_id: 70 };
+const REQUEST_ID = '10000000-0000-4000-8000-000000000001';
+const PAYMENT_ID = '20000000-0000-4000-8000-000000000002';
 const body = (extra = {}) => ({ clientId: 7, storageId: 2, docDate: '2026-11-13T22:00:00Z',
   lines: [{ goodRowId: 3, qty: 1, unitType: 1, costPerUnit: 1 }], payments: [{ method: 'card', amount: 1 }], ...extra });
 let q, release;
@@ -21,11 +23,29 @@ beforeEach(() => {
   pool.connect.mockResolvedValue({ query: q, release });
   // Клиент резолвится ДО транзакции через db.query (поиск в YClients не должен держать соединение пула).
   db.query.mockImplementation(async () => ({ rows: [client] }));
+  db.oneOrNone.mockImplementation(async (sql, args) => {
+    if (/FROM sessions/.test(String(sql))) {
+      const claims = require('jsonwebtoken').verify(args[0], require('./config').JWT_SECRET);
+      return { userId: claims.userId, salonId: claims.salonId, role: claims.role };
+    }
+    return null;
+  });
   store.listStorages.mockResolvedValue([{ id: 2, is_active: true, for_sale: true }]);
   store.listGoods.mockResolvedValue([{ id: 3, stock_active: true, unit_equals: 1 }]);
-  store.insertDocument.mockImplementation(async (_, sid, d) => ({ id: 10, salon_id: sid, kind: d.kind, status: d.status, origin: 'loyalpro' }));
+  store.insertDocument.mockImplementation(async (_, sid, d) => ({ id: 10, salon_id: sid, kind: d.kind, status: d.status,
+    origin: 'loyalpro', total_cost: d.totalCost, request_id: d.requestId, request_hash: d.requestHash }));
   fin.recordStockSalePayment.mockImplementation(async (_, p) => ({ method: p.method, amount: p.amount, status: 'confirmed' }));
-  store.documentById.mockResolvedValue({ id: 10, kind: 'sale', origin: 'loyalpro', status: 'posted' });
+  store.documentById.mockResolvedValue({ id: 10, kind: 'sale', origin: 'loyalpro', status: 'posted', total_cost: 1, client_id: 7, yclients_client_id: 70 });
+  store.documentByRequestId.mockResolvedValue(null);
+  store.paymentByStepId.mockResolvedValue(null);
+  store.listDocumentPayments.mockResolvedValue([]);
+  store.salePaymentSummary.mockImplementation(async (_q, _sid, _did, total, status) => {
+    if (status === 'cancelled') return { paymentStatus: 'cancelled', paidAmount: 0, outstandingAmount: 0 };
+    const paid = fin.recordStockSalePayment.mock.calls.reduce((sum, call) => sum + Number(call[1].amount || 0), 0);
+    const outstanding = Math.max(0, Math.round((Number(total || 0) - paid) * 100) / 100);
+    return { paymentStatus: Number(total) === 0 ? 'not_applicable' : paid >= Number(total) ? 'paid' : paid > 0 ? 'partial' : 'unpaid', paidAmount: paid, outstandingAmount: outstanding };
+  });
+  store.saleClientById.mockResolvedValue({ id: 7, display_name: 'Test Client', first_name: 'Test', last_name: 'Client', patronymic: '', phone: '', email: '' });
   store.listMovementsByDocument.mockResolvedValue([]);
 });
 test('sale: document, ledger and split payments share transaction, no YClients', async () => {
@@ -48,6 +68,39 @@ test.each(['bonus', 'other'])('rejects %s before transaction', async method => {
 test('gift with zero total has no payments', async () => {
   const d = await sales.create(1, 4, body({ gift: true, payments: [], lines: [{ goodRowId: 3, qty: 1, unitType: 1, costPerUnit: 0 }] }));
   expect(d.payments).toEqual([]); expect(fin.recordStockSalePayment).not.toHaveBeenCalled();
+});
+test('unpaid sale is posted once, reduces stock and creates no finance row', async () => {
+  const d = await sales.create(1, 4, body({ unpaid: true, payments: [], requestId: REQUEST_ID }));
+  expect(d).toMatchObject({ id: 10, status: 'posted', paymentStatus: 'unpaid', paidAmount: 0, outstandingAmount: 1 });
+  expect(store.insertDocument).toHaveBeenCalledWith(expect.any(Function), 1, expect.objectContaining({
+    requestId: REQUEST_ID, requestHash: expect.stringMatching(/^[a-f0-9]{64}$/), status: 'posted', totalCost: 1,
+  }));
+  expect(ledger.postDocument).toHaveBeenCalledTimes(1);
+  expect(fin.recordStockSalePayment).not.toHaveBeenCalled();
+});
+test('create requestId replay returns the same document without another movement', async () => {
+  const payload = body({ unpaid: true, payments: [], requestId: REQUEST_ID });
+  const first = await sales.create(1, 4, payload);
+  store.documentByRequestId.mockResolvedValue({ ...first, total_cost: 1, request_hash: store.insertDocument.mock.calls[0][2].requestHash });
+  const replay = await sales.create(1, 4, payload);
+  expect(replay.id).toBe(first.id);
+  expect(store.insertDocument).toHaveBeenCalledTimes(1);
+  expect(ledger.postDocument).toHaveBeenCalledTimes(1);
+  expect(q.mock.calls.filter(([sql]) => /pg_advisory_xact_lock/.test(sql))).toHaveLength(2);
+});
+test('requestId with changed normalized sale is a conflict', async () => {
+  const payload = body({ unpaid: true, payments: [], requestId: REQUEST_ID });
+  await sales.create(1, 4, payload);
+  store.documentByRequestId.mockResolvedValue({ id: 10, request_hash: store.insertDocument.mock.calls[0][2].requestHash });
+  await expect(sales.create(1, 4, { ...payload, comment: 'changed' })).rejects.toMatchObject({ status: 409, code: 'idempotency_conflict' });
+  expect(store.insertDocument).toHaveBeenCalledTimes(1);
+});
+test('request hash retains fractional unit price and normalized total', () => {
+  const base = { userId: 4, body: { docDate: null, payments: [] }, client,
+    normalized: { storageId: 2, docDate: new Date(0), comment: '', totalCost: 10 },
+    lines: [{ goodRowId: 3, qty: 10000, unitType: 1, costPerUnit: .001, discount: 0, cost: 10, qtyBase: -10000, unitUnknown: false, comment: null }] };
+  expect(sales.createRequestHash(base)).not.toBe(sales.createRequestHash({ ...base,
+    lines: [{ ...base.lines[0], costPerUnit: .002, cost: 20 }], normalized: { ...base.normalized, totalCost: 20 } }));
 });
 test('payment failure rolls document and movements back', async () => {
   fin.recordStockSalePayment.mockRejectedValue(new Error('test failure'));
@@ -106,6 +159,75 @@ test('cancellation finance failure rolls back', async () => {
   await expect(documents.cancel(1, 4, 10, 'test')).rejects.toThrow('test cancel failure');
   expect(q.mock.calls.at(-1)[0]).toBe('ROLLBACK');
 });
+test('late partial payment uses DB now, never posts stock again, and is atomic', async () => {
+  store.salePaymentSummary
+    .mockResolvedValueOnce({ paymentStatus: 'unpaid', paidAmount: 0, outstandingAmount: 1 })
+    .mockResolvedValueOnce({ paymentStatus: 'partial', paidAmount: .4, outstandingAmount: .6 });
+  q.mockImplementation(async sql => ({ rows: /SELECT NOW/.test(sql) ? [{ now: new Date('2026-11-15T12:00:00Z') }] : [client] }));
+  const out = await sales.addPayment(1, 4, 10, { paymentId: PAYMENT_ID.toUpperCase(), method: 'cash', amount: .4 });
+  expect(out).toMatchObject({ paymentStatus: 'partial', paidAmount: .4, outstandingAmount: .6 });
+  expect(fin.recordStockSalePayment).toHaveBeenCalledWith(expect.any(Function), expect.objectContaining({
+    salonId: 1, stockDocumentId: 10, opId: PAYMENT_ID, method: 'cash', amount: .4,
+    occurredAt: new Date('2026-11-15T12:00:00Z'), userId: 4,
+  }));
+  expect(ledger.postDocument).not.toHaveBeenCalled();
+  expect(q.mock.calls[0][0]).toBe('BEGIN');
+  expect(q.mock.calls.at(-1)[0]).toBe('COMMIT');
+});
+test('late payment replay is idempotent; changed key use and overpayment fail', async () => {
+  store.paymentByStepId.mockResolvedValue({ stock_document_id: 10, step_op_id: PAYMENT_ID, method: 'card', amount: .4, status: 'confirmed' });
+  store.salePaymentSummary.mockResolvedValue({ paymentStatus: 'partial', paidAmount: .4, outstandingAmount: .6 });
+  await expect(sales.addPayment(1, 4, 10, { paymentId: PAYMENT_ID, method: 'card', amount: .4 }))
+    .resolves.toMatchObject({ paymentStatus: 'partial' });
+  expect(fin.recordStockSalePayment).not.toHaveBeenCalled();
+  await expect(sales.addPayment(1, 4, 10, { paymentId: PAYMENT_ID, method: 'cash', amount: .4 }))
+    .rejects.toMatchObject({ status: 409, code: 'idempotency_conflict' });
+  store.paymentByStepId.mockResolvedValue(null);
+  await expect(sales.addPayment(1, 4, 10, { paymentId: PAYMENT_ID, method: 'card', amount: .61 }))
+    .rejects.toMatchObject({ status: 409, code: 'overpayment' });
+  expect(fin.recordStockSalePayment).not.toHaveBeenCalled();
+});
+test('payment lock precedes document lock and duplicate lookup; invalid scalar inputs never start transaction', async () => {
+  store.salePaymentSummary.mockResolvedValue({ paymentStatus: 'unpaid', paidAmount: 0, outstandingAmount: 1 });
+  await sales.addPayment(1, 4, 10, { paymentId: PAYMENT_ID, method: 'cash', amount: 1 });
+  const advisoryOrder = q.mock.invocationCallOrder.find((_, i) => /pg_advisory_xact_lock/.test(q.mock.calls[i][0]));
+  expect(advisoryOrder).toBeLessThan(store.documentById.mock.invocationCallOrder[0]);
+  expect(store.documentById.mock.invocationCallOrder[0]).toBeLessThan(store.paymentByStepId.mock.invocationCallOrder[0]);
+  for (const amount of [true, [], {}, .001]) {
+    jest.clearAllMocks();
+    await expect(sales.addPayment(1, 4, 10, { paymentId: PAYMENT_ID, method: 'cash', amount })).rejects.toMatchObject({ status: 400 });
+    expect(pool.connect).not.toHaveBeenCalled();
+  }
+});
+test('payment cannot cross tenant or race a cancelled/non-sale document', async () => {
+  store.documentById.mockResolvedValueOnce(null).mockResolvedValueOnce({ id: 10, kind: 'sale', origin: 'loyalpro', status: 'cancelled' });
+  await expect(sales.addPayment(2, 4, 10, { paymentId: PAYMENT_ID, method: 'cash', amount: 1 })).rejects.toMatchObject({ status: 404 });
+  await expect(sales.addPayment(1, 4, 10, { paymentId: PAYMENT_ID, method: 'cash', amount: 1 })).rejects.toMatchObject({ status: 409, code: 'not_payable' });
+  expect(fin.recordStockSalePayment).not.toHaveBeenCalled();
+});
+test('late payment writer failure rolls back without a stock movement', async () => {
+  store.salePaymentSummary.mockResolvedValue({ paymentStatus: 'unpaid', paidAmount: 0, outstandingAmount: 1 });
+  fin.recordStockSalePayment.mockRejectedValue(new Error('payment write failed'));
+  await expect(sales.addPayment(1, 4, 10, { paymentId: PAYMENT_ID, method: 'cash', amount: 1 })).rejects.toThrow('payment write failed');
+  expect(q.mock.calls.at(-1)[0]).toBe('ROLLBACK');
+  expect(ledger.postDocument).not.toHaveBeenCalled();
+});
+test('payment summary clears debt for cancelled document and client detail is tenant scoped', async () => {
+  const realStore = jest.requireActual('./services/stock/store');
+  const sqlQ = jest.fn(async () => ({ rows: [{ paid_amount: 0, pending_count: 0, failed_count: 0, cancelled_count: 1 }] }));
+  await expect(realStore.salePaymentSummary(sqlQ, 1, 10, 100, 'cancelled')).resolves.toEqual({
+    paymentStatus: 'cancelled', paidAmount: 0, outstandingAmount: 0,
+  });
+  db.oneOrNone.mockResolvedValue({ id: 7, display_name: 'Name', first_name: 'First', last_name: '', patronymic: '', phone: '', email: '' });
+  await realStore.saleClientById(2, 7);
+  expect(db.oneOrNone).toHaveBeenCalledWith(expect.stringMatching(/FROM clients WHERE salon_id=\$1 AND id=\$2/), [2, 7]);
+});
+test('stock migration adds tenant-scoped create idempotency columns and index', () => {
+  const ddl = require('fs').readFileSync(require('path').join(__dirname, 'migrations.js'), 'utf8');
+  expect(ddl).toContain('ALTER TABLE stock_documents ADD COLUMN IF NOT EXISTS request_id UUID');
+  expect(ddl).toContain('ALTER TABLE stock_documents ADD COLUMN IF NOT EXISTS request_hash TEXT');
+  expect(ddl).toMatch(/UNIQUE INDEX IF NOT EXISTS stock_documents_request_uq ON stock_documents \(salon_id, request_id\).*request_id IS NOT NULL/);
+});
 test('purchases query scopes joins and includes cancelled lines, both origins, limit 200', async () => {
   const real = jest.requireActual('./services/stock/store');
   db.any.mockResolvedValue([]);
@@ -146,6 +268,29 @@ describe('sale API', () => {
     expect((await request('/sales', 'admin', body({ salonId: 99 }))).data).toMatchObject({ document: { id: 10, salon_id: 1, status: 'posted' } });
     expect((await request('/sales', 'owner', body())).status).toBe(201);
     expect((await request('/sales', 'admin', body({ payments: [{ method: 'bonus', amount: 1 }] }))).status).toBe(400);
+  });
+  test('unpaid create, late payment and client detail use authenticated salon and roles', async () => {
+    expect((await request('/sales', 'admin', body({ unpaid: true, payments: [], requestId: REQUEST_ID, salonId: 99 }))).data.document)
+      .toMatchObject({ salon_id: 1, status: 'posted', paymentStatus: 'unpaid', outstandingAmount: 1 });
+    store.salePaymentSummary
+      .mockResolvedValueOnce({ paymentStatus: 'unpaid', paidAmount: 0, outstandingAmount: 1 })
+      .mockResolvedValueOnce({ paymentStatus: 'partial', paidAmount: .4, outstandingAmount: .6 });
+    const paid = await request('/sales/10/payments', 'admin', { paymentId: PAYMENT_ID, method: 'card', amount: .4, salonId: 99 });
+    expect(paid.status).toBe(201);
+    expect(paid.data).toMatchObject({ paymentStatus: 'partial', outstandingAmount: .6 });
+    expect(fin.recordStockSalePayment).toHaveBeenCalledWith(expect.any(Function), expect.objectContaining({ salonId: 1, stockDocumentId: 10 }));
+    expect((await request('/sales/10/payments', 'specialist', { paymentId: PAYMENT_ID, method: 'card', amount: .4 })).status).toBe(403);
+
+    const detail = await request('/clients/7', 'owner');
+    expect(detail.data).toEqual({ id: 7, displayName: 'Test Client', firstName: 'Test', lastName: 'Client', patronymic: '', phone: '', email: '' });
+    expect(store.saleClientById).toHaveBeenCalledWith(1, 7);
+    expect((await request('/clients/7', 'specialist')).status).toBe(403);
+  });
+  test('new sale endpoints expose stable validation errors', async () => {
+    expect((await request('/sales/0/payments', 'admin', { paymentId: PAYMENT_ID, method: 'cash', amount: 1 })).status).toBe(400);
+    expect((await request('/sales/10/payments', 'admin', { paymentId: 'bad', method: 'cash', amount: 1 })).data).toMatchObject({ code: 'validation' });
+    store.saleClientById.mockResolvedValue(null);
+    expect((await request('/clients/999', 'admin')).data).toMatchObject({ code: 'client_not_found' });
   });
   test('purchase list validates id and uses authenticated salon', async () => {
     store.listPurchasesByClient.mockResolvedValue([{ id: 10 }]);

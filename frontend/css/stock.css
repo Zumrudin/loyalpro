@@ -928,3 +928,117 @@
 [data-theme='dark'] #page-stock .stock-operations-table .stock-link { color: #77b8ee; }
 #page-stock .stock-operations-head,
 #page-stock .stock-operations-filters { background: var(--card); }
+
+/* Sale-only layout: shared warehouse forms keep their existing rules. */
+#stockSaleModal {
+  --sale-border: #d9dee8;
+  --sale-muted: #7e8492;
+  box-sizing: border-box;
+  width: min(928px, calc(100vw - 12px));
+  max-width: none;
+  max-height: calc(100dvh - 16px);
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid var(--sale-border);
+  border-radius: 14px;
+  background: var(--card, #fff);
+  color: var(--t1);
+}
+#stockSaleModal::backdrop { background: #1a22304d; }
+#stockSaleModal .stock-sale-form {
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100dvh - 18px);
+  margin: 0;
+}
+#stockSaleModal .stock-sale-close {
+  position: absolute; top: 16px; right: 16px; z-index: 2;
+  width: 28px; height: 28px; padding: 0; border: 0;
+  background: transparent; color: var(--sale-muted); font-size: 26px; line-height: 1;
+}
+#stockSaleModal #stockSaleBody { min-height: 0; overflow: auto; padding: 20px 20px 8px; }
+#stockSaleModal .stock-sale-head h3 { margin: 0 38px 22px 0; font-size: 20px; font-weight: 500; }
+#stockSaleModal label { display: flex; flex-direction: column; gap: 5px; min-width: 0; margin: 0 0 20px; color: var(--sale-muted); font-size: 12px; }
+#stockSaleModal input, #stockSaleModal select, #stockSaleModal textarea {
+  box-sizing: border-box; width: 100%; min-width: 0; min-height: 32px;
+  padding: 6px 9px; border: 1px solid var(--sale-border); border-radius: 8px;
+  background: var(--card, #fff); color: var(--t1); font: inherit; font-size: 14px;
+}
+#stockSaleModal input::placeholder { color: #9da5b4; }
+#stockSaleModal input[readonly] { color: var(--t2); background: var(--card, #fff); }
+#stockSaleModal :is(input,select,textarea):focus { outline: 2px solid #8ca8d8; outline-offset: 1px; }
+#stockSaleModal button:focus-visible, #stockSaleModal summary:focus-visible { outline: 2px solid #8ca8d8; outline-offset: 2px; }
+#stockSaleModal .stock-sale-grid { display: grid; grid-template-columns: 144px 48px 48px; gap: 12px; margin-bottom: 4px; }
+#stockSaleModal .stock-sale-grid label { margin-bottom: 16px; }
+#stockSaleModal .stock-sale-grid input[type='number'] { appearance: textfield; -moz-appearance: textfield; text-align: center; }
+#stockSaleModal .stock-sale-grid input::-webkit-inner-spin-button, #stockSaleModal .stock-sale-grid input::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+#stockSaleModal .stock-sale-client-grid { display: grid; grid-template-columns: repeat(6, minmax(0,1fr)); gap: 0 16px; }
+#stockSaleModal .stock-sale-client-grid > label:first-of-type,
+#stockSaleModal .stock-sale-client-results { grid-column: 1 / -1; }
+#stockSaleModal .stock-sale-client-results:empty { display: none; }
+#stockSaleModal .stock-sale-client-results { margin-bottom: 12px; }
+#stockSaleModal .stock-sale-client-results button { display: flex; justify-content: space-between; gap: 12px; width: 100%; padding: 8px; text-align: left; background: var(--card); color: var(--t1); border: 1px solid var(--sale-border); }
+#stockSaleModal .stock-sale-client-grid > label:nth-of-type(2),
+#stockSaleModal .stock-sale-client-grid > label:nth-of-type(3),
+#stockSaleModal .stock-sale-client-grid > label:nth-of-type(4) { grid-column: span 2; }
+#stockSaleModal .stock-sale-client-grid > label:nth-of-type(5),
+#stockSaleModal .stock-sale-client-grid > label:nth-of-type(6) { grid-column: span 3; }
+#stockSaleModal .stock-sale-meta, #stockSaleModal .stock-form-row { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 16px; }
+#stockSaleModal .stock-sale-line, #stockSaleModal .stock-sale-line-head {
+  display: grid; grid-template-columns: 22px minmax(160px,1.8fr) repeat(4,minmax(70px,1fr)) 22px;
+  align-items: start; gap: 12px;
+}
+#stockSaleModal .stock-sale-line-head { margin: 6px 0 16px; color: var(--t1); font-size: 13px; }
+#stockSaleModal .stock-sale-line { margin-bottom: 10px; }
+#stockSaleModal .stock-sale-line label { margin: 0; }
+#stockSaleModal .stock-sale-line > span { padding-top: 8px; font-size: 13px; }
+#stockSaleModal .stock-sale-line [data-stock-line-total] { min-height: 32px; padding: 7px; border: 1px solid var(--sale-border); border-radius: 8px; background: var(--bg); white-space: nowrap; }
+#stockSaleModal .stock-sale-line select { min-height: 22px; padding: 2px 5px; font-size: 11px; }
+#stockSaleModal .stock-sale-line > button { width: 22px; height: 32px; padding: 0; border: 0; color: var(--sale-muted); background: transparent; font-size: 0; }
+#stockSaleModal .stock-sale-line > button::before { content: '×'; font-size: 22px; }
+#stockSaleModal .stock-sale-add { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
+#stockSaleModal .stock-sale-add button { padding: 0; border: 0; background: transparent; color: var(--sale-muted); font: inherit; font-size: 13px; }
+#stockSaleModal #stockSaleTotal { margin: 0 0 18px; text-align: right; font-size: 14px; }
+#stockSaleModal :is(.stock-sale-payment,.stock-sale-comment) { margin: 10px 0; color: var(--sale-muted); font-size: 13px; }
+#stockSaleModal summary { cursor: pointer; }
+#stockSaleModal details[open] summary { margin-bottom: 10px; }
+#stockSaleModal .stock-check { flex-direction: row; align-items: center; gap: 7px; }
+#stockSaleModal .stock-check input { width: auto; min-height: auto; }
+#stockSaleModal #stockSaleError { flex: 0 0 auto; margin: 0; padding: 0 20px 10px; color: var(--danger,#b63e36); white-space: pre-line; font-size: 13px; }
+#stockSaleModal #stockSaleError:empty { display: none; }
+#stockSaleModal .stock-sale-actions { flex: 0 0 auto; display: flex; justify-content: flex-end; gap: 8px; padding: 12px 20px 16px; }
+#stockSaleModal .stock-sale-actions button { min-height: 32px; padding: 7px 10px; border: 1px solid var(--sale-border); border-radius: 8px; background: var(--card); color: var(--t1); font: inherit; font-size: 13px; }
+#stockSaleModal #stockSaleSave { background: #ffcf00; border-color: #ffcf00; color: #282100; }
+#stockSaleModal button:disabled { opacity: .5; cursor: default; }
+#stockSaleModal [hidden] { display: none !important; }
+@media (max-width: 700px) {
+  #stockSaleModal #stockSaleBody { padding: 18px 14px 8px; }
+  #stockSaleModal .stock-sale-client-grid { grid-template-columns: repeat(2,minmax(0,1fr)); gap: 0 10px; }
+  #stockSaleModal .stock-sale-client-grid > label:nth-of-type(n) { grid-column: span 1; }
+  #stockSaleModal .stock-sale-client-grid > label:first-of-type { grid-column: 1 / -1; }
+  #stockSaleModal .stock-sale-meta { gap: 10px; }
+  #stockSaleModal .stock-sale-line-head { display: none; }
+  #stockSaleModal .stock-sale-line { grid-template-columns: repeat(3,minmax(0,1fr)); gap: 10px; padding: 12px 0; border-top: 1px solid var(--sale-border); }
+  #stockSaleModal .stock-sale-line > span:first-child { display: none; }
+  #stockSaleModal .stock-sale-line > label:first-of-type { grid-column: 1 / -1; }
+  #stockSaleModal .stock-sale-line > label:nth-of-type(2)::before { content: 'Цена, ₽'; }
+  #stockSaleModal .stock-sale-line > label:nth-of-type(3)::before { content: 'Количество'; }
+  #stockSaleModal .stock-sale-line > label:nth-of-type(4)::before { content: 'Скидка, %'; }
+  #stockSaleModal .stock-sale-line [data-stock-line-total] { grid-column: span 2; }
+  #stockSaleModal .stock-sale-line > button { justify-self: end; }
+  #stockSaleModal .stock-sale-actions { padding: 10px 14px 14px; flex-wrap: wrap; }
+  #stockSaleModal .stock-sale-actions button { flex: 1 1 145px; }
+}
+[data-theme='dark'] #stockSaleModal { --sale-border: #424957; --sale-muted: #a3adbe; color-scheme: dark; }
+
+#stockSaleModal .stock-sale-head { display: flex; align-items: baseline; gap: 16px; }
+#stockSaleModal #stockSaleChangeClient { padding: 0; margin-right: 32px; border: 0; background: transparent; color: var(--sale-muted); font: inherit; font-size: 12px; }
+#stockSaleModal #stockSaleGoodsPicker:not([open]) { display: none; }
+#stockSaleModal #stockSaleGoodsPicker { padding: 12px; margin: 8px 0; border: 1px solid var(--sale-border); border-radius: 8px; }
+#stockSaleModal #stockSaleGoodsList { max-height: 180px; overflow: auto; }
+#stockSaleModal #stockSaleGoodsList button { display: block; width: 100%; padding: 8px; text-align: left; border: 0; background: var(--card); color: var(--t1); }
+#stockSaleModal #stockSaleGoodsList button:hover { background: var(--bg); }
+
+#stockSaleModal .stock-sale-grid label { font-size: 0; gap: 0; }
+#stockSaleModal .stock-sale-add { align-items: center; }
+#stockSaleModal .stock-sale-add #stockSaleTotal { margin: 0 0 0 auto; }

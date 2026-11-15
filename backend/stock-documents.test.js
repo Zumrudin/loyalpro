@@ -3,7 +3,7 @@ jest.mock('./services/stock/store');
 jest.mock('./services/finance-ops', () => ({ cancelByStockDocument: jest.fn() }));
 jest.mock('./services/stock/ledger', () => ({ postDocument: jest.fn() }));
 jest.mock('./services/yclients', () => ({ ycGet: jest.fn() }));
-jest.mock('./db', () => ({ pool: { connect: jest.fn() }, db: {} }));
+jest.mock('./db', () => ({ pool: { connect: jest.fn() }, db: { oneOrNone: jest.fn() } }));
 const store = require('./services/stock/store');
 const ledger = require('./services/stock/ledger');
 const { pool } = require('./db');
@@ -161,7 +161,12 @@ describe('HTTP routes', () => {
   afterAll(() => new Promise(resolve => server.close(resolve)));
   const request = async (path, role = 'admin', method = 'GET', body) => {
     const headers = { 'Content-Type': 'application/json' };
-    if (role) headers.Authorization = `Bearer ${jwt.sign({ salonId: 1, userId: 9, role }, require('./config').JWT_SECRET)}`;
+    if (role) {
+      const token = jwt.sign({ salonId: 1, userId: 9, role }, require('./config').JWT_SECRET);
+      headers.Authorization = `Bearer ${token}`;
+      require('./db').db.oneOrNone.mockImplementation(async (sql, args) =>
+        sql.includes('FROM sessions') && args[0] === token ? { userId: 9, salonId: 1, role } : null);
+    }
     const r = await fetch(base + path, { method, headers, ...(body ? { body: JSON.stringify(body) } : {}) });
     return { status: r.status, body: await r.json() };
   };

@@ -306,7 +306,45 @@ function stockDocsTable(rows) {
     : '<p class="empty">Операций нет</p>';
 }
 function stockDocumentHtml(d) {
-  return `<h3>${STOCK_KINDS[d.kind] || 'Документ'} №${Number(d.id)}</h3>${stockDocBadge(d)}<p>${stockDate(d.doc_date)} · ${stockMoney(d.total_cost)}</p><p>${stockEsc(d.comment)}</p><p>${stockEsc(d.cancel_reason)}</p><table class="stock-table"><thead><tr><th>Товар</th><th>Количество</th><th>Сумма</th></tr></thead><tbody>${(d.lines || []).map((l) => `<tr><td data-label="Товар">${stockEsc(l.title || l.good_title || 'Товар №' + l.good_row_id)}</td><td data-label="Количество">${stockEsc(stockFmtQty(l.qty_base, l.unit_equals, l.unit, l.service_unit))}</td><td data-label="Сумма">${stockMoney(l.cost)}</td></tr>`).join('')}</tbody></table><p>${(d.payments || []).map((p) => `${p.method === 'cash' ? 'Наличные' : 'Карта'}: ${stockMoney(p.amount)}`).join(' · ')}</p>${d.record_id ? `<button type="button" onclick="stockDocumentClose();navTo('journal');jrOpen(${Number(d.record_id)})">Открыть запись</button>` : ''}${d.origin === 'loyalpro' && d.status === 'posted' && ['receipt', 'writeoff', 'move', 'sale', 'inventory'].includes(d.kind) ? `<label>Причина отмены<textarea id="stockCancelReason" maxlength="500"></textarea></label><button type="button" onclick="stockCancelDocument(${Number(d.id)})">Отменить документ</button>` : ''}`;
+  return `<h3>${STOCK_KINDS[d.kind] || 'Документ'} №${Number(d.id)}</h3>${stockDocBadge(d)}<p>${stockDate(d.doc_date)} · ${stockMoney(d.total_cost)}</p><p>${stockEsc(d.comment)}</p><p>${stockEsc(d.cancel_reason)}</p><table class="stock-table"><thead><tr><th>Товар</th><th>Количество</th><th>Сумма</th></tr></thead><tbody>${(d.lines || []).map((l) => `<tr><td data-label="Товар">${stockEsc(l.title || l.good_title || 'Товар №' + l.good_row_id)}</td><td data-label="Количество">${stockEsc(stockFmtQty(l.qty_base, l.unit_equals, l.unit, l.service_unit))}</td><td data-label="Сумма">${stockMoney(l.cost)}</td></tr>`).join('')}</tbody></table><p>${(d.payments || []).map((p) => `${p.method === 'cash' ? 'Наличные' : 'Карта'}: ${stockMoney(p.amount)}`).join(' · ')}</p>${stockSaleLatePaymentHtml(d)}${d.record_id ? `<button type="button" onclick="stockDocumentClose();navTo('journal');jrOpen(${Number(d.record_id)})">Открыть запись</button>` : ''}${d.origin === 'loyalpro' && d.status === 'posted' && ['receipt', 'writeoff', 'move', 'sale', 'inventory'].includes(d.kind) ? `<label>Причина отмены<textarea id="stockCancelReason" maxlength="500"></textarea></label><button type="button" onclick="stockCancelDocument(${Number(d.id)})">Отменить документ</button>` : ''}`;
+}
+function stockSaleLatePaymentHtml(d) {
+  if (d.kind !== 'sale' || d.origin !== 'loyalpro' || d.status !== 'posted' || !(Number(d.outstandingAmount) > 0)) return '';
+  return `<section class="stock-sale-late-payment"><p>Долг: ${stockMoney(d.outstandingAmount)}</p><label>Способ оплаты<select id="stockSalePaymentMethod"><option value="cash">Наличные</option><option value="card">Карта</option></select></label><label>Сумма, ₽<input id="stockSalePaymentAmount" type="number" min="0.01" max="${Number(d.outstandingAmount)}" step="0.01" value="${Number(d.outstandingAmount)}"></label><button type="button" onclick="stockPaySale(${Number(d.id)})">Принять оплату</button></section>`;
+}
+function stockPaymentUuid() {
+  return typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+    ? crypto.randomUUID()
+    : 'xxxxxxxx-xxxx-4000-8000-xxxxxxxxxxxx'.replace(/x/g, () => Math.floor(Math.random() * 16).toString(16));
+}
+async function stockPaySale(documentId) {
+  if (_stockDoc.busy) return;
+  const prior = _stockDoc.salePayment;
+  const amount = prior?.documentId === Number(documentId) ? prior.amount : Number(stockEl('stockSalePaymentAmount').value);
+  if (!(amount > 0)) { stockEl('stockDocError').textContent = 'Укажите сумму оплаты.'; return; }
+  _stockDoc.salePayment = prior?.documentId === Number(documentId)
+    ? prior
+    : { documentId: Number(documentId), paymentId: stockPaymentUuid(), method: stockEl('stockSalePaymentMethod').value, amount };
+  const payment = _stockDoc.salePayment;
+  _stockDoc.busy = true;
+  let paymentAccepted = false;
+  for (const id of ['stockSalePaymentMethod', 'stockSalePaymentAmount']) if (stockEl(id)) stockEl(id).disabled = true;
+  try {
+    await stockApi('/sales/' + Number(documentId) + '/payments', { paymentId: payment.paymentId, method: payment.method, amount: payment.amount });
+    paymentAccepted = true;
+    const d = await stockApi('/documents/' + Number(documentId));
+    stockEl('stockDocBody').innerHTML = stockDocumentHtml(d);
+    stockEl('stockDocError').textContent = '';
+    await stockRefreshAfterWrite();
+    if (typeof jrStockRefresh === 'function') await jrStockRefresh();
+    _stockDoc.salePayment = null;
+  } catch (e) {
+    if (!paymentAccepted && !e.uncertain) _stockDoc.salePayment = null;
+    stockEl('stockDocError').textContent = e.message;
+  } finally {
+    _stockDoc.busy = false;
+    for (const id of ['stockSalePaymentMethod', 'stockSalePaymentAmount']) if (stockEl(id)) stockEl(id).disabled = false;
+  }
 }
 function stockDocumentClose() {
   if (!_stockDoc.busy) {
@@ -321,6 +359,7 @@ async function stockOpenDocument(id) {
     const d = await stockApi('/documents/' + Number(id));
     if (req !== _stockDoc.request) return;
     stockEl('stockDocBody').innerHTML = stockDocumentHtml(d);
+    _stockDoc.salePayment = null;
     stockEl('stockDocError').textContent = '';
     stockEl('stockDocSave').hidden = true;
     stockEl('stockDocModal').showModal();
@@ -353,6 +392,15 @@ async function stockRefreshAfterWrite() {
   await stockLoadCounters();
 }
 function stockLinesHtml(prefix, lines, goods) {
+  if (prefix === 'stockSale')
+    return (
+      `<datalist id="${prefix}Goods">${goods.map((g) => `<option value="${Number(g.id)} — ${stockEsc(g.title)}"></option>`).join('')}</datalist>` +
+      `<div class="stock-sale-line-head"><span>№</span><span>Товар</span><span>Цена, ₽</span><span>Количество</span><span>Скидка, %</span><span>Сумма, ₽</span><span></span></div>${lines.map((l, i) => {
+        const g = goods.find((g) => Number(g.id) === Number(l.goodRowId));
+        const amount = Math.round(Number(l.qty || 0) * Number(l.costPerUnit || 0) * (1 - Number(l.discount || 0) / 100) * 100) / 100;
+        return `<div class="stock-sale-line" data-stock-line="${i}"><span>${i + 1}</span><label><input data-field="good" aria-label="Товар" list="${prefix}Goods" value="${g ? Number(g.id) + ' — ' + stockEsc(g.title) : ''}" required placeholder="Название или артикул" oninput="stockSearchGoods('${prefix}',this.value)" onchange="stockLineGood('${prefix}',${i},this.value)"><select data-field="unitType" aria-label="Единица"><option value="1" ${l.unitType === 1 ? 'selected' : ''}>${stockEsc(g?.unit || 'Продажи')}</option><option value="2" ${l.unitType === 2 ? 'selected' : ''}>${stockEsc(g?.service_unit || 'Списания')}</option></select></label><label><input data-field="costPerUnit" aria-label="Цена, ₽" type="number" min="0" step="0.01" value="${Number(l.costPerUnit) || 0}" required></label><label><input data-field="qty" aria-label="Количество" type="number" min="0.0001" step="any" required value="${Number(l.qty) || 1}"></label><label><input data-field="discount" aria-label="Скидка, %" type="number" min="0" max="100" step="any" value="${Number(l.discount) || 0}"></label><span data-stock-line-total>${stockMoney(amount)}</span><button type="button" aria-label="Удалить товар" onclick="stockRemoveLine('${prefix}',${i})">Удалить</button></div>`;
+      }).join('')}`
+    );
   return (
     `<datalist id="${prefix}Goods">${goods.map((g) => `<option value="${Number(g.id)} — ${stockEsc(g.title)}"></option>`).join('')}</datalist>` +
     lines
@@ -384,6 +432,13 @@ function stockRenderLines(prefix) {
   stockUpdateTotal(prefix);
 }
 function stockUpdateTotal(prefix) {
+  if (prefix === 'stockSale') {
+    for (const row of stockEl(prefix + 'Lines').querySelectorAll('[data-stock-line]')) {
+      const v = (k) => Number(row.querySelector('[data-field="' + k + '"]').value);
+      const cell = row.querySelector('[data-stock-line-total]');
+      if (cell) cell.textContent = stockMoney(Math.round(v('qty') * v('costPerUnit') * (1 - v('discount') / 100) * 100) / 100);
+    }
+  }
   const el = stockEl(prefix + 'Total');
   if (el) el.textContent = 'Итого: ' + stockMoney(stockLinesTotal(stockReadLines(prefix)) / 100);
 }

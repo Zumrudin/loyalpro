@@ -210,12 +210,13 @@ async function insertMovement(q, salonId, row) {
 async function insertDocument(q, salonId, d) {
   const result = await q(`INSERT INTO stock_documents
     (salon_id, kind, origin, status, storage_id, to_storage_id, supplier_id, client_id, yclients_client_id,
-     record_id, master_staff_yc_id, doc_date, comment, total_cost, created_by, posted_at)
-    VALUES ($1, $2, 'loyalpro', $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, COALESCE($15::timestamptz, CASE WHEN $3 = 'posted' THEN NOW() END)) RETURNING *`,
+     record_id, master_staff_yc_id, doc_date, comment, total_cost, created_by, posted_at, request_id, request_hash)
+    VALUES ($1, $2, 'loyalpro', $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14,
+      COALESCE($15::timestamptz, CASE WHEN $3 = 'posted' THEN NOW() END), $16::uuid, $17) RETURNING *`,
   [salonId, d.kind, d.status, d.storageId ?? null, d.toStorageId ?? null, d.supplierId ?? null,
     d.clientId ?? null, d.ycClientId ?? null, d.recordId ?? null, d.masterStaffYcId ?? null,
     d.docDate, d.comment ?? null, d.totalCost ?? null, d.createdBy ?? null,
-    d.postedAt ?? null]);
+    d.postedAt ?? null, d.requestId ?? null, d.requestHash ?? null]);
   return result.rows[0];
 }
 const listOpenings = salonId => db.any('SELECT * FROM stock_openings WHERE salon_id = $1 ORDER BY good_row_id, storage_id', [salonId]);
@@ -243,6 +244,10 @@ Object.assign(module.exports, { BALANCES_SQL, balances, invalidateBalances, good
 async function documentById(salonId, id, q) {
   const sql = 'SELECT * FROM stock_documents WHERE salon_id = $1 AND id = $2';
   return q ? (await q(`${sql} FOR UPDATE`, [salonId, id])).rows[0] || null : db.oneOrNone(sql, [salonId, id]);
+}
+async function documentByRequestId(salonId, requestId, q) {
+  const sql = 'SELECT * FROM stock_documents WHERE salon_id = $1 AND request_id = $2';
+  return q ? (await q(`${sql} FOR UPDATE`, [salonId, requestId])).rows[0] || null : db.oneOrNone(sql, [salonId, requestId]);
 }
 const listMovementsByDocument = (salonId, docId) => db.any(`
   SELECT m.*, g.title, g.unit, g.service_unit, g.unit_equals, s.title AS storage_title
@@ -278,7 +283,7 @@ const setDocumentStatus = (q, salonId, id, status) => q(`UPDATE stock_documents
 const postInventory = (q, salonId, id) => setDocumentStatus(q, salonId, id, 'posted');
 const currentOpening = (salonId, goodRowId, storageId) => db.oneOrNone(`SELECT * FROM stock_openings
   WHERE salon_id = $1 AND good_row_id = $2 AND storage_id = $3`, [salonId, goodRowId, storageId]);
-Object.assign(module.exports, { documentById, listMovementsByDocument, cancelDocument, softDeleteDocumentMovements,
+Object.assign(module.exports, { documentById, documentByRequestId, listMovementsByDocument, cancelDocument, softDeleteDocumentMovements,
   insertInventoryLines, listInventoryLines, updateInventoryLine, postInventory, setDocumentStatus, currentOpening });
 
 // Покупки обоих источников, включая отменённые документы и подарки без оплат.
@@ -440,8 +445,45 @@ async function turnover(salonId, { from, to, storage = null, category = null }) 
 Object.assign(module.exports, { listGoodsWithBalances, goodCard, listMovementsByGood, listReceiptsByGood, techCardsUsingGood,
   MOVEMENTS_BY_GOOD_SQL, RECEIPTS_BY_GOOD_SQL, DOCS_LIST_SQL, listDocuments, TURNOVER_SQL, turnover });
 
-const listDocumentPayments = (salonId, docId) => db.any(`SELECT method, amount, status FROM finance_operations WHERE salon_id=$1 AND stock_document_id=$2 ORDER BY id`, [salonId, docId]);
-module.exports.listDocumentPayments = listDocumentPayments;
+const listDocumentPayments = async (salonId, docId, q) => {
+  const sql = `SELECT id, step_op_id, method, amount, status, occurred_at
+    FROM finance_operations WHERE salon_id=$1 AND stock_document_id=$2 ORDER BY id`;
+  return q ? (await q(sql, [salonId, docId])).rows : db.any(sql, [salonId, docId]);
+};
+const paymentByStepId = async (q, salonId, stepOpId) => (await q(`SELECT id, stock_document_id, step_op_id,
+  method, amount, status, occurred_at FROM finance_operations WHERE salon_id=$1 AND step_op_id=$2 FOR UPDATE`,
+[salonId, stepOpId])).rows[0] || null;
+async function salePaymentSummary(q, salonId, docId, totalCost, documentStatus = 'posted') {
+  const query = q || ((sql, args) => db.query(sql, args));
+  const { rows: [r = {}] } = await query(`SELECT
+    COALESCE(SUM(amount) FILTER (WHERE status='confirmed'),0) AS paid_amount,
+    COUNT(*) FILTER (WHERE status IN ('queued','sending')) AS pending_count,
+    COUNT(*) FILTER (WHERE status='failed') AS failed_count,
+    COUNT(*) FILTER (WHERE status='cancelled') AS cancelled_count
+    FROM finance_operations WHERE salon_id=$1 AND stock_document_id=$2`, [salonId, docId]);
+  const totalKop = Math.max(0, Math.round(Number(totalCost || 0) * 100));
+  const paidKop = Math.max(0, Math.round(Number(r.paid_amount || 0) * 100));
+  let paymentStatus = 'unpaid';
+  if (documentStatus === 'cancelled') paymentStatus = 'cancelled';
+  else if (totalKop === 0) paymentStatus = 'not_applicable';
+  else if (paidKop >= totalKop) paymentStatus = 'paid';
+  else if (paidKop > 0) paymentStatus = 'partial';
+  else if (Number(r.pending_count) > 0) paymentStatus = 'pending';
+  else if (Number(r.failed_count) > 0) paymentStatus = 'failed';
+  else if (Number(r.cancelled_count) > 0) paymentStatus = 'cancelled';
+  return { paymentStatus, paidAmount: paidKop / 100,
+    outstandingAmount: documentStatus === 'cancelled' ? 0 : Math.max(0, totalKop - paidKop) / 100 };
+}
+const saleClientById = (salonId, clientId) => db.oneOrNone(`SELECT id,
+  COALESCE(name,'') AS display_name,
+  COALESCE(NULLIF(btrim(yclients_data->>'name'),''),
+    CASE WHEN COALESCE(NULLIF(btrim(yclients_data->>'surname'),''), NULLIF(btrim(yclients_data->>'patronymic'),'')) IS NULL
+      THEN COALESCE(name,'') ELSE '' END) AS first_name,
+  COALESCE(NULLIF(btrim(yclients_data->>'surname'),''),'') AS last_name,
+  COALESCE(NULLIF(btrim(yclients_data->>'patronymic'),''),'') AS patronymic,
+  COALESCE(phone,'') AS phone, COALESCE(email,'') AS email
+  FROM clients WHERE salon_id=$1 AND id=$2`, [salonId, clientId]);
+Object.assign(module.exports, { listDocumentPayments, paymentByStepId, salePaymentSummary, saleClientById });
 
 async function consumablesContext(salonId, recordId) {
   let services, staffId, date;

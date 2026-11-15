@@ -7,6 +7,9 @@ const assert = require('assert/strict'),
 const { pool } = require('../db'),
   config = require('../config');
 const TABLES = [
+  'salons',
+  'users',
+  'sessions',
   'clients',
   'records',
   'yclients_goods_catalog',
@@ -58,6 +61,20 @@ async function withEnvironment(fn) {
       }
     }
     await q('SET LOCAL search_path TO pg_temp');
+    // New sale fields are exercised only in isolated TEMP tables, never public schema.
+    await q('ALTER TABLE pg_temp.stock_documents ADD COLUMN IF NOT EXISTS request_id UUID');
+    await q('ALTER TABLE pg_temp.stock_documents ADD COLUMN IF NOT EXISTS request_hash TEXT');
+    await q('CREATE UNIQUE INDEX IF NOT EXISTS e2e_stock_sale_request ON pg_temp.stock_documents(salon_id, request_id) WHERE request_id IS NOT NULL');
+    await q("INSERT INTO salons(id,name) VALUES(1,'Synthetic salon'),(2,'Synthetic other salon')");
+    const tokens = new Map();
+    for (const salonId of [1, 2]) for (const [index, role] of ['owner', 'admin', 'specialist'].entries()) {
+      const userId = salonId * 10 + index;
+      await q("INSERT INTO users(id,salon_id,email,password_hash,name,role) VALUES($1,$2,$3,'unused','Synthetic staff',$4)",
+        [userId, salonId, `stock-e2e-${userId}@example.invalid`, role]);
+      const value = jwt.sign({userId, salonId, role}, config.JWT_SECRET, {expiresIn:'10m'});
+      await q("INSERT INTO sessions(user_id,token,expires_at) VALUES($1,$2,NOW()+INTERVAL '10 minutes')", [userId,value]);
+      tokens.set(`${salonId}:${role}`, value);
+    }
     pool.query = (...args) => q(...args);
     pool.connect = async () => ({
       query: (sql, params) =>
@@ -113,7 +130,7 @@ async function withEnvironment(fn) {
     });
     const base = 'http://127.0.0.1:' + server.address().port;
     const token = (role = 'owner', salonId = 1) =>
-      jwt.sign({ userId: 1, salonId, role }, config.JWT_SECRET, { expiresIn: '10m' });
+      tokens.get(`${salonId}:${role}`);
     const request = async (method, path, body, { role = 'owner', salonId = 1, status = 200, noAuth = false } = {}) => {
       const r = await fetch(base + '/api/stock' + path, {
         method,
@@ -205,6 +222,38 @@ async function acceptance({ request, q }) {
   assert.equal((await request('GET', '/clients/1/purchases')).length, 1);
   await request('POST', '/documents/' + sale.id + '/cancel', { reason: 'Synthetic cleanup' });
   assert.equal((await q("SELECT count(*) AS n FROM finance_operations WHERE status<>'cancelled'")).rows[0].n, '0');
+  // Unpaid sale is posted once; subsequent payments never move stock again.
+  const { randomUUID } = require('crypto');
+  const unpaidBody = { storageId: 1, clientId: 1, unpaid: true, payments: [],
+    requestId: randomUUID(), docDate: '2026-11-15T00:05:00+03:00', comment: 'Synthetic unpaid sale',
+    lines: [{ ...line, qty: 1, costPerUnit: 10 }] };
+  const unpaidSale = (await post('/sales', unpaidBody)).document;
+  assert.equal(unpaidSale.status, 'posted');
+  assert.equal(unpaidSale.outstandingAmount, 10);
+  assert.equal((await request('GET', '/balances'))[0].qty_base * 1, 9);
+  assert.equal((await post('/sales', unpaidBody)).document.id, unpaidSale.id);
+  await post('/sales', { ...unpaidBody, comment: 'Changed payload' }, { status: 409 });
+  assert.equal((await q('SELECT count(*) AS n FROM finance_operations WHERE stock_document_id=$1', [unpaidSale.id])).rows[0].n, '0');
+  const payPath = '/sales/' + unpaidSale.id + '/payments';
+  const payment = { paymentId: randomUUID(), method: 'cash', amount: 4 };
+  const partial = await request('POST', payPath, payment, { status: 201 });
+  assert.equal(partial.outstandingAmount, 6);
+  assert.equal((await request('POST', payPath, payment, { status: 201 })).outstandingAmount, 6);
+  await request('POST', payPath, { ...payment, amount: 5 }, { status: 409 });
+  await request('POST', payPath, { ...payment, paymentId: randomUUID(), amount: 7 }, { status: 409 });
+  await request('POST', payPath, { ...payment, paymentId: randomUUID() }, { salonId: 2, status: 404 });
+  await request('POST', payPath, payment, { role: 'specialist', status: 403 });
+  const paid = await request('POST', payPath, { paymentId: randomUUID(), method: 'card', amount: 6 }, { status: 201 });
+  assert.equal(paid.outstandingAmount, 0);
+  assert.equal((await q('SELECT count(*) AS n FROM stock_movements WHERE document_id=$1', [unpaidSale.id])).rows[0].n, '1');
+  assert.equal((await request('GET', '/balances'))[0].qty_base * 1, 9);
+  await request('GET', '/clients/1', undefined, { salonId: 2, status: 404 });
+  const identity = await request('GET', '/clients/1');
+  assert.equal(identity.displayName, 'Synthetic client');
+  assert.equal('yclients_data' in identity, false);
+  await request('POST', '/documents/' + unpaidSale.id + '/cancel', { reason: 'Synthetic cleanup' });
+  await request('POST', payPath, { paymentId: randomUUID(), method: 'cash', amount: 1 }, { status: 409 });
+  assert.equal((await request('GET', '/balances'))[0].qty_base * 1, 10);
   const move = await post('/documents', { ...doc, kind: 'move', toStorageId: 2, lines: [{ ...line, qty: 3 }] });
   assert.equal(
     (await request('GET', '/balances')).reduce((sum, r) => sum + Number(r.qty_base), 0),
@@ -235,7 +284,7 @@ async function acceptance({ request, q }) {
     0,
   );
   console.log(
-    'PASS PostgreSQL/API: tenant/role checks, receipt, mixed-payment sale/cancel, transfer, inventory zero delta, consumable corrections/no-op, receipt prices, turnover; rollback cleanup.',
+    'PASS PostgreSQL/API: tenant/role checks, receipt, mixed-payment sale/cancel, unpaid sale/create replay/partial payment/replay/debt settlement/cancel, transfer, inventory zero delta, consumable corrections/no-op, receipt prices, turnover; rollback cleanup.',
   );
 }
 if (require.main === module)

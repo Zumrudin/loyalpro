@@ -76,6 +76,11 @@ function validateDocument(body, ctx) {
 /** Оплаты продажи: методы cash|card, сумма = итогу (в копейках). */
 function validateSalePayments(payments, total, opts = {}) {
   const errors = []; const list = Array.isArray(payments) ? payments : [];
+  if (opts.unpaid === true) {
+    if (opts.gift === true) errors.push('Подарок нельзя сохранить как неоплаченный.');
+    if (list.length) errors.push('У неоплаченной продажи не бывает оплат при создании.');
+    return { ok: !errors.length, errors };
+  }
   if (opts.gift === true) { if (list.length) errors.push('У подарка не бывает оплат.'); return { ok: !errors.length, errors }; }
   let sum = 0;
   for (const p of list) {

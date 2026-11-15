@@ -22,6 +22,13 @@ async function browserCheck({ app, base, token, request, q }) {
       'economics',
       'journal',
       'journal-card',
+      'journal-grid',
+      'journal-forms',
+      'journal-payment',
+      'journal-dispatch',
+      'journal-visits',
+      'journal-loyalty',
+      'journal-chat',
       'journal-stock',
       'stock',
       'stock-balances',
@@ -40,6 +47,13 @@ async function browserCheck({ app, base, token, request, q }) {
       ),
   );
   // Economics rendering is already separately tested; only its read-only API data is stubbed here.
+  // The sale dialog searches clients through the staff API. Keep this fixture
+  // read-only and synthetic instead of mounting the production clients router.
+  app.get('/api/clients', (req, res) => {
+    const q = String(req.query.search || '').toLowerCase();
+    const clients = [{ id: 1, name: 'Synthetic Client', phone: '+79990000001', email: 'synthetic@example.test' }];
+    res.json({ clients: clients.filter((c) => !q || c.name.toLowerCase().includes(q) || c.phone.includes(q)), total: 1, page: 1 });
+  });
   app.get('/api/economics/coverage', (_, res) => res.json({ services: [], summary: {} }));
   app.get('/api/economics/tech-cards', async (_, res) =>
     res.json({ cards: await require('../services/economics/store').listTechCards(1) }),
@@ -111,6 +125,51 @@ async function browserCheck({ app, base, token, request, q }) {
     await page.type('#stockCancelReason', 'Synthetic cleanup');
     await page.evaluate((id) => stockCancelDocument(id), purchases[0].id);
     console.log('browser cancel passed');
+    await page.evaluate(() => stockDocumentClose());
+    await page.setViewport({ width: 928, height: 677 });
+    await page.evaluate(() => { document.documentElement.dataset.theme = 'light'; document.documentElement.dataset.skin = ''; });
+    await page.evaluate(() => stockSaleOpen());
+    await page.type('#stockSaleClientSearch', 'Synthetic');
+    await page.waitForSelector('[data-stock-sale-client="0"]');
+    await page.click('[data-stock-sale-client="0"]');
+    await page.waitForFunction(() => document.getElementById('stockSaleName').value === 'Synthetic client');
+    assert.equal(await page.$eval('#stockSaleEmail', el => el.readOnly), true);
+    assert.equal(await page.$eval('#stockSaleClientSearchLabel', el => el.hidden), true);
+    await page.evaluate(() => stockSaleShowGoods());
+    await page.click('[data-stock-sale-good="1"]');
+    await page.$eval('#stockSaleLines [data-field="qty"]', el => { el.value = '2'; el.dispatchEvent(new Event('input', { bubbles: true })); });
+    await page.$eval('#stockSaleLines [data-field="discount"]', el => { el.value = '10'; el.dispatchEvent(new Event('input', { bubbles: true })); });
+    assert.match(await page.$eval('#stockSaleTotal', el => el.textContent), /18,00/);
+    for (const width of [928, 390]) for (const theme of ['light', 'dark']) {
+      await page.setViewport({ width, height: width === 928 ? 677 : 844 });
+      await page.evaluate(t => { document.documentElement.dataset.theme = t; }, theme);
+      assert.equal(await page.$eval('#stockSaleBody', el => el.scrollWidth <= el.clientWidth + 1), true, 'sale body horizontal overflow');
+      assert.equal(await page.$eval('#stockSaleLines [data-field="discount"]', el => getComputedStyle(el).display !== 'none'), true);
+      await page.screenshot({ path: `/tmp/stock-sale-${theme}-${width}.png`, fullPage: true });
+    }
+    await page.click('#stockSaleSaveUnpaid');
+    await page.waitForFunction(() => !document.getElementById('stockSaleModal').open);
+    const debtSale = (await request('GET', '/clients/1/purchases')).find(d => d.status === 'posted');
+    assert.ok(debtSale);
+    assert.equal((await request('GET', '/documents/' + debtSale.id)).outstandingAmount, 18);
+    assert.equal((await request('GET', '/documents/' + debtSale.id)).payments.length, 0);
+    await page.evaluate(id => stockOpenDocument(id), debtSale.id);
+    await page.$eval('#stockSalePaymentAmount', el => { el.value = '4'; });
+    await page.evaluate(id => stockPaySale(id), debtSale.id);
+    assert.equal((await request('GET', '/documents/' + debtSale.id)).outstandingAmount, 14);
+    await page.select('#stockSalePaymentMethod', 'card');
+    await page.evaluate(id => stockPaySale(id), debtSale.id);
+    const settled = await request('GET', '/documents/' + debtSale.id);
+    assert.equal(settled.outstandingAmount, 0);
+    assert.equal(settled.payments.length, 2);
+    assert.equal(settled.lines.length, 1);
+    assert.equal(Number((await request('GET', '/balances'))[0].qty_base), 8);
+    await page.type('#stockCancelReason', 'Synthetic debt cleanup');
+    await page.evaluate(id => stockCancelDocument(id), debtSale.id);
+    await page.evaluate(() => stockDocumentClose());
+    assert.equal(Number((await request('GET', '/balances'))[0].qty_base), 10);
+    console.log('browser client selection, readonly identity, goods picker, unpaid sale, partial/full debt payment and cancellation passed');
+
     for (const tab of ['docs', 'suppliers', 'settings', 'turnover', 'inventory', 'tech-cards']) {
       await page.evaluate((t) => stockSwitchTab(t, false), tab);
       assert.equal(await page.$eval('#stockTab-' + tab, (el) => el.hidden), false);
@@ -128,7 +187,7 @@ async function browserCheck({ app, base, token, request, q }) {
       journal.clientSummary = { clientId: 1 };
       const r = { id: 90, staffId: 30, services: [{ id: 20, title: 'Synthetic service', cost: 20 }] };
       document.getElementById('jrModalBody').innerHTML =
-        jrServicesPanel(r) + '<textarea id="syntheticUnsaved">keep me</textarea>';
+        jrAppointmentCard(r) + '<textarea id="syntheticUnsaved">keep me</textarea>';
       jrStockBind(r);
       document.getElementById('jrModal').showModal();
     });

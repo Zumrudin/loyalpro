@@ -55,6 +55,11 @@ describe('validateSalePayments', () => {
     expect(m.validateSalePayments([{ method: 'crypto', amount: 10 }], 10).ok).toBe(false);
   });
   test('подарок — оплат нет', () => expect(m.validateSalePayments([], 0, { gift: true }).ok).toBe(true));
+  test('неоплаченная продажа не создаёт оплат и несовместима с подарком', () => {
+    expect(m.validateSalePayments([], 1000, { unpaid: true })).toEqual({ ok: true, errors: [] });
+    expect(m.validateSalePayments([{ method: 'cash', amount: 1000 }], 1000, { unpaid: true }).ok).toBe(false);
+    expect(m.validateSalePayments([], 0, { unpaid: true, gift: true }).ok).toBe(false);
+  });
 });
 
 describe('дельта расходников и инвентаризация', () => {
