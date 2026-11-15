@@ -628,3 +628,18 @@ body[data-page="journal"] .jr-toolbar-secondary .btn{height:auto;min-height:28px
 @media(max-width:900px){body[data-page="journal"] .jr-toolbar{flex-wrap:wrap}.jr-summary-wrap{margin-left:0}.jr-toolbar-secondary{justify-content:flex-start;overflow:auto}.jr-date-label{min-width:150px}}
 @media(max-width:390px){body[data-page="journal"] .jr-toolbar{gap:4px}.jr-date-label{min-width:0;font-size:13px}.jr-today{padding-left:7px!important;padding-right:7px!important}.jr-icon-btn{width:32px}.jr-more-btn{font-size:12px;padding-left:7px!important;padding-right:7px!important}.jr-summary-trigger{max-width:115px;overflow:hidden}.jr-summary-popup{right:0;min-width:min(315px,calc(100vw - 24px))}.jr-toolbar-secondary{flex-wrap:wrap;overflow:visible}.jr-toolbar-secondary .btn{flex:1 1 auto}}
 @media print{.jr-toolbar-secondary{display:none!important}.jr-toolbar-popup{display:none!important}}
+
+/* Confirmed payment: compact receipt card and a dedicated success screen. */
+.jr-payment-panel.jr-payment-complete-card{display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;gap:16px;min-height:186px;padding:28px 20px}
+.jr-payment-check{display:flex;align-items:center;justify-content:center;width:48px;height:48px;flex-shrink:0;border-radius:50%;background:#ddf5df;color:#18a846}
+.jr-payment-check svg{width:24px;height:24px}
+.jr-payment-complete-card h3,.jr-payment-complete-message h3{margin:0;font-size:18px;font-weight:600;color:var(--t1)}
+.jr-payment-complete-layout .jr-payment-content{display:flex;flex-direction:column;min-width:0}
+.jr-payment-complete-content>header{display:flex;align-items:center;justify-content:space-between;gap:16px}
+.jr-payment-complete-content>header h3{margin:0}
+.jr-payment-complete-message{flex:1;min-height:340px;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;gap:20px;padding:24px 12px}
+.jr-payment-complete-layout .jr-payment-bill>h4{margin:28px 0 12px;font-size:15px;font-weight:600}
+.jr-payment-complete-layout .jr-paid-row{align-items:center}
+.jr-payment-complete-layout .jr-paid-row>span{min-width:0;overflow-wrap:anywhere}
+.jr-payment-complete-layout .jr-paid-row>strong{white-space:nowrap}
+@media(max-width:650px){.jr-payment-complete-layout{min-height:0}.jr-payment-complete-message{min-height:200px}.jr-payment-complete-content>header{align-items:flex-start}.jr-payment-panel.jr-payment-complete-card{min-height:170px}}

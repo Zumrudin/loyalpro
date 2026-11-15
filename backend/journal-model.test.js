@@ -146,3 +146,9 @@ test('public move/create drafts never take durationOverride or technicalBreak fr
   expect(out).not.toHaveProperty('technicalBreak');
   expect(out).not.toHaveProperty('breakMinutes');
 });
+
+test('string zero paid_full is not a payment', () => {
+  const { normalizeRecord } = require('./services/journal/model');
+  expect(normalizeRecord({ paid_full: '0', paid_amount: 0 }).paid).toBe(false);
+  expect(normalizeRecord({ paid_full: '1', paid_amount: 0 }).paidFull).toBe(true);
+});

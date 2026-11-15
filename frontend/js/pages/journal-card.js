@@ -120,12 +120,18 @@ const jrRecordTotal = record => (record?.services || []).reduce((sum, s) => sum 
 // live: the record card (quick buttons work); otherwise a read-only copy (move form).
 function jrPaymentPanel(record, live = false) {
   const payable = live && record && !record.deleted && record.attendance !== -1;
-  const due = record ? jrRecordTotal(record) : 0;
+  const due = record?.paymentSummary?.due ?? (record ? jrRecordTotal(record) : 0);
+  if (record?.paidFull && !record.paymentSync) {
+    const amount = record.paymentSummary?.paidConfirmed ?? jrRecordTotal(record);
+    return `<section class="jr-payment-panel jr-payment-complete-card"><div class="jr-payment-check" aria-hidden="true">${jrIcon('check')}</div><h3 role="status">Оплачено ${jrRub(amount)}</h3><button type="button" class="btn btn-sec" id="jrPaymentOpen" ${payable ? '' : 'disabled'}>Детали оплаты</button></section>`;
+  }
   const head = record?.paidFull ? '<span>Оплачено</span><strong>полностью</strong>' : `<span>К оплате</span><strong id="jrPayDue">${jrEscape(due.toLocaleString('ru-RU'))} ₽</strong>`;
   const tile = (key, icon, title, sub, id = '') => payable
     ? `<button type="button" class="jr-quick-pay${key === 'all' ? '' : ' is-quick'}"${id ? ` id="${id}"` : ''} data-quick-pay="${key}">${jrIcon(icon)}<strong>${title}</strong><small>${sub}</small></button>`
     : `<button type="button" class="jr-quick-pay jr-placeholder" disabled title="${record ? 'Оплата этой записи недоступна' : 'Оплата после создания записи'}">${jrIcon(icon)}<span>${title}</span><small>${sub}</small></button>`;
   return `<section class="jr-payment-panel"><div class="jr-pay-due">${head}</div>${record?.paid && !record.paidFull ? '<p class="jr-hint">Есть оплаты — подробности в «Все способы».</p>' : ''}
+    ${(record?.paymentDetails || []).map(p => `<div class="jr-paid-row"><span>${jrEscape(p.title)}</span><strong>${jrRub(p.amount)}</strong></div>`).join('')}
+    ${record?.paymentSummary?.breakdownIncomplete ? '<p class="jr-hint">Оплата учтена. Детализация из YClients получена не полностью.</p>' : ''}
     <div class="jr-pay-quick-head"><span>Быстрая оплата</span><button type="button" class="jr-link-btn jr-placeholder" disabled title="Настройка быстрой оплаты — скоро появится в журнале">${jrIcon('sliders')}<span>Настроить</span></button></div>
     <div class="jr-pay-quick">${tile('card', 'card', 'Карта', 'Расчётный счёт')}${tile('cash', 'cash', 'Наличные', 'Основная касса')}${tile('all', 'wallet', 'Все способы', 'Бонусы, частичная оплата', 'jrPaymentOpen')}</div></section>`;
 }

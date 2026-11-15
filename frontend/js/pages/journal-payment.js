@@ -49,11 +49,11 @@ function jrBillSummary(data, session) {
     + `${Number(sm.bonusSpent) > 0 || bonusDelta > 0 ? row('Бонусов списано', jrRub((jrKop(sm.bonusSpent) + bonusDelta) / 100)) : ''}`
     + `${bonus && bonus.balanceAfter !== undefined && bonus.balanceAfter !== null ? row('Баланс бонусов после оплаты', jrRub(Math.max(0, jrKop(bonus.balanceAfter) - bonusDelta) / 100)) : ''}</div>`;
 }
-function jrPaymentBreakdown(data, session, readOnly = false) {
+function jrPaymentBreakdown(data, session, readOnly = false, heading = 'Оплаты визита') {
   const removed = new Set((session?.removePayments || []).map(t => t.method + ':' + t.transactionId));
   const real = (data.paid || []).map((t, i) => {
     const gone = removed.has(t.method + ':' + t.id);
-    return `<div class="jr-paid-row${gone ? ' jr-pay-queued jr-pay-removed' : ''}"><span>${jrEscape(t.title)}${gone ? '<small>будет удалено</small>' : Array.isArray(data.payments) ? jrPayBadge('confirmed') : ''}</span><strong>${jrRub(t.amount)}</strong>${readOnly ? '' : gone
+    return `<div class="jr-paid-row${gone ? ' jr-pay-queued jr-pay-removed' : ''}"><span>${jrEscape(t.title)}${gone ? '<small>будет удалено</small>' : Array.isArray(data.payments) ? jrPayBadge('confirmed') : ''}</span><strong>${jrRub(t.amount)}</strong>${readOnly || t.removable === false ? '' : gone
       ? `<button type="button" data-restore-payment="${i}" title="Не удалять" aria-label="Не удалять транзакцию ${jrEscape(t.title)}">↺</button>`
       : `<button type="button" data-remove-payment="${i}" title="Удалить транзакцию" aria-label="Удалить транзакцию ${jrEscape(t.title)}">${jrIcon('trash')}</button>`}</div>`;
   });
@@ -69,7 +69,7 @@ function jrPaymentBreakdown(data, session, readOnly = false) {
     return `<div class="jr-paid-row jr-pay-queued jr-pay-server${cancel ? ' jr-pay-cancel' : ''}${gone ? ' jr-pay-removed' : ''}"><span>${cancel ? 'Отмена оплаты · ' : ''}${jrEscape(t.title)}${gone ? '<small>будет удалено</small>' : jrPayBadge(t.status)}</span><strong>${cancel ? '−' : ''}${jrRub(t.amount)}</strong>${button}</div>`;
   });
   const queued = (session?.payments || []).map((t, i) => `<div class="jr-paid-row jr-pay-queued"><span>${jrEscape(jrPayTitle(t))}<small>будет передано${t.confirmArrival ? ' · с отметкой прихода' : ''}</small></span><strong>${jrRub(t.amount)}</strong><button type="button" data-drop-payment="${i}" title="Убрать оплату" aria-label="Убрать оплату ${jrEscape(jrPayTitle(t))}">×</button></div>`);
-  return `<h4>Оплаты визита</h4>${[...real, ...server, ...queued].join('') || '<p class="jr-hint">Оплат пока нет</p>'}`;
+  return `<h4>${jrEscape(heading)}</h4>${[...real, ...server, ...queued].join('') || '<p class="jr-hint">Оплат пока нет</p>'}`;
 }
 function jrPaymentShow(base, opts = {}) {
   const prev = journal.payment;
@@ -91,7 +91,19 @@ function jrRenderPayment(keepScroll = true) {
   const scroll = jrEl('jrModal').scrollTop;
   const dirty = jrSessionPending();
   const preferredIndex = data.methods.findIndex(v => v.available && v.limit && jrPreferredMethod(v, p.preferred));
-  const bill = `<aside class="jr-payment-bill"><h3>Общий счёт</h3>${(data.items || []).map(jrBillItem).join('')}${jrBillSummary(data, session)}<div class="jr-bill-total">${data.summary ? 'Остаток к оплате' : 'К оплате'} <strong>${jrRub(data.due)}</strong></div>${jrPaymentBreakdown(data, session, p.readOnly)}`;
+  const bill = `<aside class="jr-payment-bill"><h3>Общий счёт</h3>${(data.items || []).map(jrBillItem).join('')}${jrBillSummary(data, session)}<div class="jr-bill-total">${data.summary ? 'Остаток к оплате' : 'К оплате'} <strong>${jrRub(data.due)}</strong></div>${jrPaymentBreakdown(data, session, p.readOnly)}${data.summary?.breakdownIncomplete ? '<p class="jr-hint">Оплата учтена. Детализация из YClients получена не полностью.</p>' : ''}`;
+  const fullyPaid = data.due === 0 && !dirty && !p.readOnly
+    && (Number(data.summary?.paidConfirmed) > 0 || (data.paid || []).some(t => Number(t.amount) > 0))
+    && !(data.pending || []).length && !(data.payments || []).some(t => t.status !== 'confirmed')
+    && !Number(data.summary?.paidQueued);
+  if (fullyPaid) {
+    jrEl('jrModalBody').innerHTML = `<div class="jr-payment-layout jr-payment-complete-layout"><aside class="jr-payment-bill"><h3>Общий счёт</h3>${(data.items || []).map(jrBillItem).join('')}${jrBillSummary(data, session)}${jrPaymentBreakdown(data, session, false, 'Оплачено')}${data.summary?.breakdownIncomplete ? '<p class="jr-hint">Детализация из YClients получена не полностью.</p>' : ''}</aside><section class="jr-payment-content jr-payment-complete-content"><header><h3>Оплата визита</h3><button type="button" class="btn btn-sec" id="jrPayClose">Закрыть</button></header><div class="jr-payment-complete-message" role="status"><div class="jr-payment-check" aria-hidden="true">${jrIcon('check')}</div><h3>Оплачено полностью</h3></div>${p.recordId != null ? '<div class="jr-actions"><button type="button" class="btn btn-sec" id="jrPayBack">К записи</button></div>' : ''}</section></div>`;
+    jrEl('jrModal').scrollTop = keepScroll ? scroll : 0;
+    jrEl('jrPayClose').onclick = () => jrClose();
+    if (p.recordId != null) jrEl('jrPayBack').onclick = () => jrPayBack(p.recordId);
+    jrBindPaymentRows();
+    return;
+  }
   if (p.readOnly) {
     jrEl('jrModalBody').innerHTML = `<div class="jr-payment-layout">${bill}${data.due === 0 ? '<div class="jr-payment-success" role="status">✓ Будет оплачено полностью</div>' : ''}</aside><section class="jr-payment-content"><h3>Оплата визита</h3><p class="jr-hint">Оплата сейчас недоступна.</p><div class="jr-actions"><button type="button" class="btn btn-pri" id="jrPayDone">Готово</button><button type="button" class="btn btn-sec" id="jrPayBack">К записи</button><button type="button" class="btn btn-sec" id="jrPayClose">Закрыть</button></div></section></div>`;
     jrEl('jrModal').scrollTop = keepScroll ? scroll : 0;
@@ -106,6 +118,9 @@ function jrRenderPayment(keepScroll = true) {
   jrEl('jrPayClose').onclick = () => jrClose();
   if (p.recordId != null) jrEl('jrPayBack').onclick = () => jrPayBack(p.recordId);
   jrEl('jrPayPartial').oninput = () => { const selected = journal.payment?.arrival; jrClearArrivalConfirmation(); if (selected) jrMessage('Сумма изменилась. Выберите способ оплаты заново.'); };
+  jrBindPaymentRows();
+}
+function jrBindPaymentRows() {
   const body = jrEl('jrModalBody');
   body.querySelectorAll('[data-method-index]').forEach(b => b.onclick = () => jrPayMethod(Number(b.dataset.methodIndex)));
   body.querySelectorAll('[data-remove-payment]').forEach(b => b.onclick = () => jrRemovePayment(Number(b.dataset.removePayment)));
@@ -160,7 +175,7 @@ function jrPayMethod(index) {
 function jrRemovePayment(index) {
   if (journal.busy || !journal.session || journal.payment?.readOnly) return;
   const t = journal.payment?.base?.paid?.[index];
-  if (!t) return;
+  if (!t || t.removable === false) return;
   const list = (journal.session.removePayments ||= []);
   if (!list.some(x => x.method === t.method && x.transactionId === t.id)) list.push({ transactionId: t.id, method: t.method, methodId: t.methodId, amount: t.amount });
   jrRenderPayment();

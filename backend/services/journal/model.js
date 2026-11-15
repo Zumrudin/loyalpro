@@ -95,7 +95,7 @@ function normalizeRecord(r, opts = {}) {
     clientName: String(r.client?.name || 'Без имени'),
     services: (Array.isArray(r.services) ? r.services : []).map(s => ({ id: Number(s.id), title: String(s.title || ''), cost: Number(s.cost) || 0, quantity: Number(s.amount) || 1, unitPrice: Number(s.cost_per_unit ?? (Number(s.first_cost ?? s.cost) / (Number(s.amount) || 1))) || 0 })),
     attendance: Number(r.attendance) || 0, deleted: !!r.deleted,
-    paid: !!r.paid_full || Number(r.paid_amount) > 0,
+    paid: Number(r.paid_full) === 1 || Number(r.paid_amount) > 0,
     // YClients colours a came visit orange only when it is paid in full (paid_full=1), yellow otherwise.
     paidFull: Number(r.paid_full) === 1,
     // Parity fields (12.11.2026).

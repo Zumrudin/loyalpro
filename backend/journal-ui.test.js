@@ -534,10 +534,10 @@ test('payment opening escapes names',async()=>{
  await h.context.jrOpenPayment(8);
  expect(h.get('jrModalBody').innerHTML).toContain('&lt;script&gt;');expect(h.get('jrModalBody').innerHTML).not.toContain('<script>');
 });
-test('fully paid notice is green sidebar status and includes actual bank transaction',async()=>{
+test('fully paid notice is in the success panel and includes actual bank transaction',async()=>{
  const h=harness();h.context.jrApi=paymentApi({items:[],methods:[],due:0,pending:[],history:[],paid:[{id:90,method:'account',methodId:9,title:'Банковская карта · Расчетный счет',amount:70},{id:91,method:'loyalty_card',methodId:10,title:'Бонусы',amount:30}]},null);
  await h.context.jrOpenPayment(8);const html=h.get('jrModalBody').innerHTML;
- expect(html).toContain('class="jr-payment-success" role="status"');expect(html.indexOf('Оплачено полностью')).toBeLessThan(html.indexOf('</aside>'));
+ expect(html).toContain('class="jr-payment-complete-message" role="status"');expect(html.indexOf('Оплачено полностью')).toBeGreaterThan(html.indexOf('</aside>'));
  expect(html).toContain('Банковская карта · Расчетный счет');
 });
 
@@ -1921,4 +1921,56 @@ test('schedule menu keyboard navigation, Escape and outside click', () => {
   handlers.keydown({key:'Escape',preventDefault:jest.fn(),stopPropagation:jest.fn()});
   expect(menu.hidden).toBe(true); expect(toggle.focus).toHaveBeenCalled();
   state.staffMenu=root; menu.hidden=false; handlers.click({target:{}}); expect(menu.hidden).toBe(true);
+});
+
+test('paid record card shows a receipt entry, partial card shows remaining amount', () => {
+  const h = harness();
+  const html = h.context.jrPaymentPanel({ id: 8, attendance: 1, paid: true, paidFull: true,
+    services: [{ cost: 30000 }], paymentSummary: { due: 0 }, paymentDetails: [
+      { title: 'Банковская карта · <Терминал>', amount: 27000 }, { title: 'Бонусы', amount: 3000 },
+    ] }, true);
+  expect(html).toContain('Оплачено');
+  expect(html).toContain('Детали оплаты');
+  expect(html).not.toContain('Быстрая оплата');
+  expect(html).not.toContain('is-quick');
+  const partial = h.context.jrPaymentPanel({ services: [{ cost: 30000 }], paymentSummary: { due: 2000 } });
+  expect(partial).toContain('2');
+  expect(partial).not.toContain('30');
+});
+test('external finance entries are display-only without a verified sale transaction id', () => {
+  const h = harness();
+  const html = h.context.jrPaymentBreakdown({ paid: [{ id: null, method: 'account', title: 'Карта', amount: 100, removable: false }], payments: [] }, {});
+  expect(html).toContain('100');
+  expect(html).not.toContain('data-remove-payment');
+});
+
+test('confirmed full payment renders a receipt and centered success instead of payment controls', () => {
+ const h = harness();
+ h.run(`journal.session = jrNewSession({recordId:8}); journal.payment = {recordId:8,base:{due:0,items:[{title:'<Service>',quantity:1,total:36000}],summary:{gross:36000,total:36000,paidConfirmed:36000,paidQueued:0,bonusSpent:3600},paid:[{title:'<Card>',amount:32400,removable:false},{title:'Бонусы',amount:3600,removable:false}],payments:[{status:'confirmed'}],methods:[]}}; jrRenderPayment();`);
+ const html = h.get('jrModalBody').innerHTML;
+ expect(html).toContain('jr-payment-complete-layout');
+ expect(html).toContain('Оплачено полностью');
+ expect(html).toContain('&lt;Card&gt;');
+ expect(html).toContain('&lt;Service&gt;');
+ expect(html).toContain('Бонусы');
+ expect(html).not.toContain('jrPayPartial');
+ expect(html).not.toContain('data-method-index');
+ expect(html).not.toContain('data-remove-payment');
+ expect(typeof h.get('jrPayClose').onclick).toBe('function');
+ expect(typeof h.get('jrPayBack').onclick).toBe('function');
+});
+test.each(['queued','sending','failed'])('zero due with %s payment keeps the payment workflow', status => {
+ const h = harness();
+ h.run(`journal.session = jrNewSession({recordId:8}); journal.payment = {recordId:8,base:{due:0,summary:{paidConfirmed:100,paidQueued:100},paid:[{title:'Карта',amount:100}],payments:[{status:'${status}',amount:100,title:'Карта'}],methods:[]}}; jrRenderPayment();`);
+ expect(h.get('jrModalBody').innerHTML).not.toContain('jr-payment-complete-layout');
+ expect(h.get('jrModalBody').innerHTML).toContain('jrPayPartial');
+});
+test('removing a confirmed payment reopens payment controls without making a request', () => {
+ const h = harness();
+ h.context.jrApi = jest.fn();
+ h.run(`journal.session = jrNewSession({recordId:8}); journal.payment = {recordId:8,base:{due:0,summary:{paidConfirmed:100},paid:[{id:1,method:'account',methodId:2,title:'Карта',amount:100}],payments:[{status:'confirmed'}],methods:[{method:'account',id:2,limit:0}]}}; jrRenderPayment(); jrRemovePayment(0);`);
+ expect(h.get('jrModalBody').innerHTML).not.toContain('jr-payment-complete-layout');
+ expect(h.get('jrModalBody').innerHTML).toContain('jrPayPartial');
+ expect(h.run('journal.payment.data.due')).toBe(100);
+ expect(h.context.jrApi).not.toHaveBeenCalled();
 });

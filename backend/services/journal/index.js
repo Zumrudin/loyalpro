@@ -137,9 +137,10 @@ async function detail(salonId, id) {
   let r;
   if (src.kind === 'local') {
     const base = await mirroredRecord(salon, id);
-    const [open, ledger] = await Promise.all([
+    const [open, ledger, external] = await Promise.all([
       sources.openOutbox(salonId),
-      db.any("SELECT action, method, external_ids, target_transaction_id FROM journal_financial_transactions WHERE salon_id=$1 AND yclients_record_id=$2 AND state IN ('confirmed','pending')", [salonId, id]),
+      db.any("SELECT * FROM journal_financial_transactions WHERE salon_id=$1 AND yclients_record_id=$2 AND state IN ('confirmed','pending')", [salonId, id]),
+      require('./payments-local').externalPayments(salonId, id),
     ]);
     const rows = open.filter(x => x.yclients_record_id != null && Number(x.yclients_record_id) === Number(id));
     r = overlay.applyOverlay([base], rows)[0];
@@ -154,7 +155,11 @@ async function detail(salonId, id) {
     const pref = r.notify_client ?? (await notifyPref(salonId, id));
     const out = { ...m.normalizeRecord(r, { withPhone: true }), notifyClient: pref !== false };
     // paymentSync = the payment is on its way (released); an unreleased one waits for dispatch.
-    return { ...out, paid: out.paid || ledgerPaid || queuedPay, paymentSync: payRows.some(x => x.released_at != null) };
+    const payment = require('./payments-local').localOptions({ recordId: id, record: r, ledger, external });
+    return { ...out, paid: out.paid || ledgerPaid || queuedPay || payment.summary.paidConfirmed > 0,
+      paidFull: out.paidFull || (payment.summary.paidConfirmed > 0 && payment.due === 0),
+      paymentSummary: payment.summary, paymentDetails: payment.paid,
+      paymentSync: payRows.some(x => x.released_at != null) };
   } else {
     r = await yc.getRecord(salon, id);
   }

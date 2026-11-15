@@ -444,3 +444,22 @@ describe('parity fields (12.11.2026)', () => {
     expect((await service.detail(3, 8)).notifyClient).toBe(false);
   });
 });
+
+test('local detail includes confirmed external payment breakdown and full status', async () => {
+  const sources = require('./services/journal/sources');
+  const source = jest.spyOn(sources, 'forSalon').mockResolvedValue({ kind: 'local' });
+  const open = jest.spyOn(sources, 'openOutbox').mockResolvedValue([]);
+  db.oneOrNone.mockImplementation(async sql => sql.includes('FROM salons')
+    ? { id: 3, yclients_company_id: 30 } : sql.includes('FROM records') ? { raw_payload: record } : null);
+  db.any.mockImplementation(async sql => sql.includes('FROM finance_operations') ? [
+    { id: 91, status: 'confirmed', kind: 'visit_payment', method: 'card', amount: 450 },
+    { id: 92, status: 'confirmed', kind: 'bonus_redemption', method: 'bonus', amount: -50 },
+  ] : []);
+  try {
+    const r = await service.detail(3, 8);
+    expect(r).toMatchObject({ paid: true, paidFull: true, paymentSummary: { due: 0, bonusSpent: 50 } });
+    expect(r.paymentDetails.map(p => p.title)).toEqual(['Банковская карта', 'Бонусы']);
+    expect(yc.write).not.toHaveBeenCalled();
+    expect(yc.getRecord).not.toHaveBeenCalled();
+  } finally { source.mockRestore(); open.mockRestore(); }
+});

@@ -41,6 +41,27 @@ function paidRows(ledger, accounts) {
   return out;
 }
 
+// External rows have no verified sale transaction/account pair: display only.
+async function externalPayments(salonId, recordId) {
+  return db.any(`SELECT * FROM finance_operations WHERE salon_id=$1 AND yclients_record_id=$2
+    AND status='confirmed' AND kind IN ('visit_payment','bonus_redemption','payment_reversal')
+    ORDER BY occurred_at,id`, [salonId, recordId]);
+}
+function externalPaidRows(external, ledger) {
+  const operations = new Set((ledger || []).map(r => r.operation_id).filter(Boolean));
+  const cashIds = new Set((ledger || []).filter(r => r.method === 'account')
+    .flatMap(r => r.external_ids || []).map(String));
+  return (external || []).filter(r => r.status === 'confirmed'
+    && ['visit_payment', 'bonus_redemption', 'payment_reversal'].includes(r.kind)
+    && !operations.has(r.journal_operation_id) && !operations.has(r.step_op_id)
+    && !(r.yclients_operation_id != null && cashIds.has(String(r.yclients_operation_id)) && r.method !== 'bonus'))
+    .map(r => ({ id: null, method: r.method === 'bonus' ? 'loyalty_card' : 'account',
+      methodId: null, amount: rub(r.method === 'bonus' ? -kop(r.amount) : kop(r.amount)), removable: false,
+      title: r.method === 'bonus' ? 'Бонусы' : (r.method === 'cash' ? 'Наличные' : r.method === 'card' ? 'Банковская карта' : 'Другой способ')
+        + (r.account_title ? ' · ' + String(r.account_title) : ''),
+    }));
+}
+
 // One service line in kopecks. YClients: cost_per_unit, amount, first_cost
 // (before discount), discount (percent), cost (final).
 function lineOf(s) {
@@ -68,7 +89,7 @@ function queuedStatus(x) {
   return 'queued';
 }
 
-function localOptions({ recordId, record, ledger, queued, accounts, card, bonusPercent }) {
+function localOptions({ recordId, record, ledger, queued, accounts, card, bonusPercent, external }) {
   const rec = record || {};
   const lines = (Array.isArray(rec.services) ? rec.services : []).map(lineOf);
   const items = lines.map(l => ({
@@ -77,10 +98,14 @@ function localOptions({ recordId, record, ledger, queued, accounts, card, bonusP
   }));
   const total = lines.reduce((n, l) => n + l.total, 0);
   const grossSum = lines.reduce((n, l) => n + l.gross, 0);
-  const paid = paidRows(ledger, accounts);
+  const paid = [...paidRows(ledger, accounts), ...externalPaidRows(external, ledger)];
   const q = Array.isArray(queued) ? queued : [];
   const qPays = q.filter(x => x.kind === 'pay'), qRemoves = q.filter(x => x.kind === 'remove_payment');
-  const paidSum = paid.reduce((n, p) => n + kop(p.amount), 0);
+  const detailedSum = paid.reduce((n, p) => n + kop(p.amount), 0);
+  // A confirmed removal may precede the record webhook; do not resurrect it.
+  const hasRemoval = (ledger || []).some(r => r.state === 'confirmed' && r.action === 'remove');
+  const mirrorPaid = hasRemoval ? 0 : Number(rec.paid_full) === 1 ? total : kop(rec.paid_amount);
+  const paidSum = Math.max(0, detailedSum, mirrorPaid);
   const qNet = qPays.reduce((n, x) => n + kop(x.amount), 0) - qRemoves.reduce((n, x) => n + kop(x.amount), 0);
   const due = Math.max(0, total - paidSum - qPays.reduce((n, x) => n + kop(x.amount), 0) + qRemoves.reduce((n, x) => n + kop(x.amount), 0));
   const payments = [
@@ -94,7 +119,7 @@ function localOptions({ recordId, record, ledger, queued, accounts, card, bonusP
   const bonusQueued = bonusOf(qPays) - bonusOf(qRemoves);
   const summary = {
     gross: rub(Math.max(grossSum, total)), discount: rub(lines.reduce((n, l) => n + l.discount, 0)), total: rub(total),
-    paidConfirmed: rub(paidSum), paidQueued: rub(qNet), bonusSpent: rub(bonusOf(paid) + bonusQueued), due: rub(due),
+    breakdownIncomplete: paidSum > detailedSum, paidConfirmed: rub(paidSum), paidQueued: rub(qNet), bonusSpent: rub(bonusOf(paid) + bonusQueued), due: rub(due),
   };
   const waiting = Number(rec.attendance) === 0;
   const methods = (Array.isArray(accounts) ? accounts : []).filter(a => a && !a.is_acquiring).map(a => ({
@@ -170,7 +195,7 @@ async function references(salonId) {
 
 // Inputs of localOptions for an existing (positive) or queued (negative) record.
 async function loadContext(salonId, recordId) {
-  let record, ledger = [], queued, card = null;
+  let record, ledger = [], queued, card = null, external = [];
   if (recordId < 0) {
     const row = await db.oneOrNone('SELECT * FROM journal_outbox WHERE salon_id=$1 AND id=$2', [salonId, -recordId]);
     if (!row || row.overlay?.kind !== 'create' || row.status === 'cancelled') m.fail('Запись не найдена.', 404);
@@ -186,20 +211,21 @@ async function loadContext(salonId, recordId) {
   } else {
     const row = await db.oneOrNone('SELECT raw_payload FROM records WHERE salon_id=$1 AND yclients_record_id=$2', [salonId, recordId]);
     if (!row?.raw_payload) m.fail('Запись не найдена.', 404);
-    const [l, open] = await Promise.all([
+    const [l, open, ext] = await Promise.all([
       db.any('SELECT * FROM journal_financial_transactions WHERE salon_id=$1 AND yclients_record_id=$2', [salonId, recordId]),
       db.any('SELECT * FROM journal_outbox WHERE salon_id=$1 AND yclients_record_id=$2 AND status = ANY($3) ORDER BY id', [salonId, recordId, OPEN]),
+      externalPayments(salonId, recordId),
     ]);
     // Queued/running/failed packages of this record are laid over the mirror:
     // a queued confirm, arrival, move or cancel is already the visit's state.
     record = overlay.applyOverlay([{ ...row.raw_payload, id: row.raw_payload.id ?? recordId }], open)[0];
-    ledger = l; queued = queuedOf(open);
+    ledger = l; external = ext; queued = queuedOf(open);
     const clientId = Number(record.client?.id);
     if (clientId > 0) {
       card = await cardBy(`SELECT ${CARD_COLS} FROM clients WHERE salon_id=$1 AND yclients_client_id=$2 LIMIT 1`, [salonId, clientId]);
     }
   }
-  return { recordId, record, ledger, queued, card, ...(await references(salonId)) };
+  return { recordId, record, ledger, queued, card, external, ...(await references(salonId)) };
 }
 
 // Inputs of localOptions for a create overlay that is not stored yet.
@@ -213,4 +239,4 @@ async function localPaymentOptions(salonId, recordId) {
   return localOptions(await loadContext(salonId, recordId));
 }
 
-module.exports = { localOptions, localPaymentOptions, loadContext, createContext, synthesize, OPEN };
+module.exports = { localOptions, localPaymentOptions, loadContext, createContext, synthesize, externalPayments, OPEN };

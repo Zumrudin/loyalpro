@@ -232,3 +232,66 @@ describe('localOptions: our bonus ledger balance (stage 3)', () => {
     expect(a).toMatchObject({ balance: 5000, balanceAfter: 4000 });
   });
 });
+
+describe('YClients payments in the local form', () => {
+  const external = [
+    { id: 91, status: 'confirmed', kind: 'visit_payment', method: 'card', amount: 27000, account_title: 'Терминал' },
+    { id: 92, status: 'confirmed', kind: 'bonus_redemption', method: 'bonus', amount: -3000 },
+  ];
+  test('external mixed payment closes the bill and shows bonuses', () => {
+    const r = localOptions(base({ external }));
+    expect(r.summary).toMatchObject({ paidConfirmed: 30000, bonusSpent: 3000, due: 0 });
+    expect(r.paid.map(p => p.title)).toEqual(['Банковская карта · Терминал', 'Бонусы']);
+    expect(r.paid.every(p => p.removable === false)).toBe(true);
+  });
+  test('linked journal payment is not counted twice', () => {
+    const ledger = [{ operation_id: 'op', state: 'confirmed', action: 'payment', method: 'account', method_id: 11, amount: 27000, external_ids: [101] }];
+    const r = localOptions(base({ ledger, external: [{ ...external[0], journal_operation_id: 'op' }, external[1]] }));
+    expect(r.summary.paidConfirmed).toBe(30000);
+  });
+  test('cashback, goods and unconfirmed operations are excluded', () => {
+    const r = localOptions(base({ external: [
+      { ...external[0], status: 'sending' }, { ...external[0], kind: 'goods_sale' },
+      { ...external[1], kind: 'bonus_cashback', amount: 500 },
+    ] }));
+    expect(r.summary.paidConfirmed).toBe(0);
+  });
+  test('known paid status prevents asking for payment when details are missing', () => {
+    const r = localOptions(base({ record: rec({ paid_full: 1 }), external: [external[1]] }));
+    expect(r.due).toBe(0);
+    expect(r.summary).toMatchObject({ paidConfirmed: 30000, bonusSpent: 3000, breakdownIncomplete: true });
+  });
+  test('partial amount is a lower bound, not added to detailed payments', () => {
+    const r = localOptions(base({ record: rec({ paid_amount: 28000 }), external: [external[0]] }));
+    expect(r.due).toBe(2000);
+    expect(r.summary.paidConfirmed).toBe(28000);
+  });
+});
+
+test('external payment query is scoped by salon and record and does not write', async () => {
+  jest.resetAllMocks();
+  reference.getReference.mockResolvedValue(ACCOUNTS);
+  db.oneOrNone.mockResolvedValue({ raw_payload: rec() });
+  db.any.mockImplementation(async sql => /FROM finance_operations/.test(sql)
+    ? [{ id: 91, status: 'confirmed', kind: 'visit_payment', method: 'cash', amount: 30000 }] : []);
+  const result = await localPaymentOptions(3, 5);
+  expect(result.due).toBe(0);
+  const call = db.any.mock.calls.find(([sql]) => /FROM finance_operations/.test(sql));
+  expect(call[0]).toContain('salon_id=$1 AND yclients_record_id=$2');
+  expect(call[1]).toEqual([3, 5]);
+  expect(db.query).not.toHaveBeenCalled();
+});
+test('external bonus reversal reduces the amount spent', () => {
+  const r = localOptions(base({ external: [
+    { status: 'confirmed', kind: 'bonus_redemption', method: 'bonus', amount: -3000 },
+    { status: 'confirmed', kind: 'payment_reversal', method: 'bonus', amount: 1000 },
+  ] }));
+  expect(r.summary).toMatchObject({ paidConfirmed: 2000, bonusSpent: 2000, due: 28000 });
+});
+test('confirmed removal is not resurrected by a delayed paid record snapshot', () => {
+  const r = localOptions(base({ record: rec({ paid_full: 1 }), ledger: [
+    { state: 'confirmed', action: 'payment', method: 'account', amount: 30000, external_ids: [1] },
+    { state: 'confirmed', action: 'remove', method: 'account', amount: 30000, external_ids: [1] },
+  ] }));
+  expect(r.due).toBe(30000);
+});
