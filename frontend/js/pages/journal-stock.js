@@ -10,6 +10,7 @@ const jrStockState = {
   catalog: [],
   catalogRequest: 0,
   searchTimer: null,
+  search: "",
   category: "",
   storageId: "",
   dirty: false,
@@ -40,6 +41,7 @@ function jrStockBind(record) {
     tab: "services",
     consumables: null,
     catalog: [],
+    search: "",
     category: "",
     storageId: "",
     dirty: false,
@@ -96,7 +98,8 @@ async function jrStockLoadGoods(opts = {}) {
     const storage = (dictionary.storages || []).find(
       (s) => s.is_active !== false && s.for_sale !== false,
     );
-    jrStockState.storageId = String(storage?.id || "");
+    if (!(dictionary.storages || []).some(s => String(s.id) === jrStockState.storageId))
+      jrStockState.storageId = String(storage?.id || "");
     jrStockRenderLines();
     if (jrStockState.tab === "goods") await jrStockCatalogLoad();
   } catch (e) {
@@ -316,11 +319,9 @@ function jrStockCatalogHtml() {
       Array.isArray,
     ),
     unique = new Map(
-      paths
-        .filter((p) => p.length)
-        .map((p) => [String(p[p.length - 1].id), p[p.length - 1]]),
+      paths.flatMap(p => p.map((c, i) => [String(c.id), { ...c, title: p.slice(0, i + 1).map(n => n.title).join(" › ") }])),
     );
-  return `<div class="jr-goods-catalog"><div class="jr-goods-catalog-toolbar"><label>Склад<select id="jrGoodsStorage" ${jrStockCanEdit() ? "" : "disabled"}>${jrStockStorageOptions(jrStockState.storageId)}</select></label><label>Категория<select id="jrGoodsCategory" ${jrStockCanEdit() ? "" : "disabled"}><option value="">Все категории</option>${[...unique.values()].map((c) => `<option value="${Number(c.id)}"${String(c.id) === String(jrStockState.category) ? " selected" : ""}>${jrEscape(c.title)}</option>`).join("")}</select></label><label class="jr-goods-search">Поиск<input id="jrGoodsSearch" type="search" placeholder="Название, артикул или штрихкод" ${jrStockCanEdit() ? "" : "disabled"}></label></div><div id="jrGoodsCatalog" class="jr-goods-tree" aria-live="polite">Загрузка…</div></div>`;
+  return `<div class="jr-goods-catalog"><div class="jr-goods-catalog-toolbar"><label>Склад<select id="jrGoodsStorage" ${jrStockCanEdit() ? "" : "disabled"}>${jrStockStorageOptions(jrStockState.storageId)}</select></label><label>Категория<select id="jrGoodsCategory" ${jrStockCanEdit() ? "" : "disabled"}><option value="">Все категории</option>${[...unique.values()].map((c) => `<option value="${Number(c.id)}"${String(c.id) === String(jrStockState.category) ? " selected" : ""}>${jrEscape(c.title)}</option>`).join("")}</select></label><label class="jr-goods-search">Поиск<input id="jrGoodsSearch" type="search" value="${jrEscape(jrStockState.search)}" placeholder="Название, артикул или штрихкод" ${jrStockCanEdit() ? "" : "disabled"}></label></div><div id="jrGoodsCatalog" class="jr-goods-tree" aria-live="polite">Загрузка…</div></div>`;
 }
 async function jrStockCatalogLoad() {
   if (jrStockState.tab !== "goods") return;
@@ -337,16 +338,22 @@ async function jrStockCatalogLoad() {
   if (!storage || !category || !search) return;
   storage.onchange = (e) => {
     jrStockState.storageId = e.target.value;
-    jrStockCatalogRequest();
+    clearTimeout(jrStockState.searchTimer);
+    void jrStockFetchCatalog();
   };
   category.onchange = (e) => {
     jrStockState.category = e.target.value;
+    clearTimeout(jrStockState.searchTimer);
+    void jrStockFetchCatalog();
+  };
+  search.oninput = () => {
+    jrStockState.search = search.value;
     jrStockCatalogRequest();
   };
-  search.oninput = jrStockCatalogRequest;
   await jrStockFetchCatalog();
 }
 function jrStockCatalogRequest() {
+  jrStockState.catalogRequest++; // Invalidate earlier results before the debounce fires.
   clearTimeout(jrStockState.searchTimer);
   jrStockState.searchTimer = setTimeout(() => void jrStockFetchCatalog(), 180);
 }
@@ -359,7 +366,7 @@ async function jrStockFetchCatalog() {
   const q = new URLSearchParams({ active: "1" });
   if (jrStockState.storageId) q.set("storage", jrStockState.storageId);
   if (jrStockState.category) q.set("category", jrStockState.category);
-  const search = jrEl("jrGoodsSearch")?.value?.trim();
+  const search = jrStockState.search.trim();
   if (search) q.set("search", search);
   try {
     const data = await stockApi("/goods?" + q);
@@ -383,7 +390,7 @@ async function jrStockFetchCatalog() {
       ? [...groups.entries()]
           .map(
             ([title, goods]) =>
-              `<details class="jr-goods-category" open><summary>${jrEscape(title)}</summary><div class="jr-goods-category-content">${goods.map((g) => `<button type="button" class="jr-goods-choice" data-jr-catalog-good="${Number(g.id)}" ${jrStockCanEdit() ? "" : "disabled"}><span>${jrEscape(g.title)}${g.article ? ` · ${jrEscape(g.article)}` : ""}</span><small>${stockMoney(g.local_sale_price ?? g.sale_price)}</small></button>`).join("")}</div></details>`,
+              `<details class="jr-goods-category"${search ? " open" : ""}><summary>${jrEscape(title)}</summary><div class="jr-goods-category-content">${goods.map((g) => `<button type="button" class="jr-goods-choice" data-jr-catalog-good="${Number(g.id)}" ${jrStockCanEdit() ? "" : "disabled"}><span>${jrEscape(g.title)}${g.article ? ` · ${jrEscape(g.article)}` : ""}</span><small>${stockMoney(g.local_sale_price ?? g.sale_price)}</small></button>`).join("")}</div></details>`,
           )
           .join("")
       : '<p class="jr-goods-empty">Товары не найдены.</p>';

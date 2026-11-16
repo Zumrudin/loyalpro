@@ -772,3 +772,8 @@ body[data-page="journal"] .jr-toolbar-secondary .btn{height:auto;min-height:28px
 .jr-dialog-card .jr-goods-summary input,.jr-dialog-card .jr-goods-summary select{width:100%;min-width:0}
 .jr-dialog-card .jr-goods-line input,.jr-dialog-card .jr-goods-line select,.jr-dialog-card .jr-goods-catalog input,.jr-dialog-card .jr-goods-catalog select,.jr-dialog-card .jr-goods-summary input,.jr-dialog-card .jr-goods-summary select{background:var(--card);color:var(--t1);border:1px solid var(--bd)}
 [data-theme="dark"] .jr-dialog-card .jr-goods-line label,[data-theme="dark"] .jr-dialog-card .jr-goods-line small{color:var(--t2)}
+
+/* Empty goods placeholders must not create flex gaps below the services. */
+.jr-dialog-card #jrGoodsLines:empty,.jr-dialog-card #jrGoodsSummary:empty,.jr-dialog-card #jrGoodsPayment:empty,.jr-dialog-card #jrGoodsError:empty{display:none}
+.jr-dialog-card .jr-booking-main{gap:12px}
+.jr-dialog-card .jr-service-tabs{margin-bottom:0}

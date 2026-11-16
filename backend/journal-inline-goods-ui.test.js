@@ -150,3 +150,22 @@ test("typing a decimal line value preserves the focused DOM until change", () =>
   h.context.jrStockChangeLine({ type: "change", target });
   expect(h.context.render).toHaveBeenCalledTimes(1);
 });
+
+test('refresh keeps the chosen warehouse instead of restoring the first one', async () => {
+  const h = harness(); h.setState();
+  vm.runInContext(`jrStockState.storageId = '22'; jrStockRenderLines = () => {};`, h.context);
+  h.context.stockApi = jest.fn(async url => url === '/dictionaries'
+    ? { storages: [{ id: 21 }, { id: 22 }] }
+    : { lines: [], documents: [] });
+  await h.context.jrStockLoadGoods();
+  expect(vm.runInContext('jrStockState.storageId', h.context)).toBe('22');
+});
+
+test('category selector includes parents as well as subcategories', () => {
+  const h = harness(); h.setState();
+  vm.runInContext(`jrStockState.dictionary = { categories: [[{id:10,title:'Cosmetics'}, {id:11,title:'Brand'}]] };`, h.context);
+  const html = h.context.jrStockCatalogHtml();
+  expect(html).toContain('value="10"');
+  expect(html).toContain('value="11"');
+  expect(html).toContain('Cosmetics › Brand');
+});

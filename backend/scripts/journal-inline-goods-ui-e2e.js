@@ -42,6 +42,7 @@ const uuid = n => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 async function waitFor(page, selector) { await page.waitForSelector(selector, { timeout: 3000 }); }
 async function selectCatalog(page, id) {
   await page.waitForFunction(expected => [...document.querySelectorAll('[data-jr-catalog-good]')].some(b => Number(b.dataset.jrCatalogGood) === expected), { timeout: 3000 }, id);
+  await page.$eval(`[data-jr-catalog-good="${id}"]`, el => { el.closest("details").open = true; });
   await page.click(`[data-jr-catalog-good="${id}"]`);
 }
 async function expectNoOverflow(page, label) {
@@ -89,7 +90,7 @@ async function main() {
           const wantedCategory = query.get('category'); const search = (query.get('search') || '').toLowerCase();
           return { goods: catalog.filter(g => {
             const categoryMatches = !wantedCategory || (wantedCategory === '10' ? Number(g.id) === 101 : [102, 103].includes(Number(g.id)));
-            return categoryMatches && (!search || [g.title, g.article].join(' ').toLowerCase().includes(search));
+            return (query.get('storage') !== '21' || Number(g.id) === 101) && categoryMatches && (!search || [g.title, g.article].join(' ').toLowerCase().includes(search));
           }) };
         }
         if (/^\/goods\/\d+\/code-reservations$/.test(key)) {
@@ -123,11 +124,24 @@ async function main() {
 
     await page.click('#jrTabGoods');
     await waitFor(page, '#jrGoodsCatalog');
-    await page.select('#jrGoodsStorage', '22');
+    await page.waitForFunction(() => document.querySelectorAll('#jrGoodsCatalog details').length > 0);
+    assert.equal(await page.$$eval('#jrGoodsCatalog details[open]', els => els.length), 0, 'categories start collapsed');
+    const gap = await page.evaluate(() => {
+      const tabs = document.querySelector('.jr-service-tabs');
+      let previous = tabs.previousElementSibling;
+      while (previous && getComputedStyle(previous).display === 'none') previous = previous.previousElementSibling;
+      return tabs.getBoundingClientRect().top - previous.getBoundingClientRect().bottom;
+    });
+    assert(gap <= 16, `empty goods sections create a ${gap}px gap`);
+    await page.screenshot({ path: '/tmp/journal-goods-collapsed.png' });
+    assert.equal(await page.$$eval('[data-jr-catalog-good]', els => els.length), 1, 'first warehouse has only its goods');
+    await page.focus('#jrGoodsStorage');
+    await page.keyboard.press('ArrowDown');
+    await page.keyboard.press('Enter');
     await page.waitForFunction(() => window.__goodsCalls.some(c => /storage=22/.test(c.url)), { timeout: 2000 });
-    await sleep(60);
+    await page.waitForFunction(() => document.querySelectorAll('[data-jr-catalog-good]').length === 3);
     await page.select('#jrGoodsCategory', '10');
-    await page.evaluate(() => { jrStockState.category = document.getElementById('jrGoodsCategory').value; return jrStockFetchCatalog(); });
+    await sleep(300);
     assert(await page.evaluate(() => window.__goodsCalls.some(c => /category=10/.test(c.url))), 'category filter did not request category=10');
     await sleep(300);
     const categoryState = await page.evaluate(() => ({ count: document.querySelectorAll('[data-jr-catalog-good]').length, text: document.getElementById('jrGoodsCatalog')?.textContent, catalog: jrStockState.catalog }));
@@ -136,10 +150,15 @@ async function main() {
     await page.$eval('#jrGoodsSearch', el => { el.value = 'cos'; el.dispatchEvent(new Event('input', { bubbles: true })); });
     await sleep(240);
     await page.waitForFunction(() => window.__goodsCalls.some(c => /search=cos/.test(c.url)), { timeout: 2000 });
+    await page.click('#jrTabServices');
+    await page.click('#jrTabGoods');
+    assert.equal(await page.$eval('#jrGoodsStorage', el => el.value), '22');
+    assert.equal(await page.$eval('#jrGoodsCategory', el => el.value), '10');
+    assert.equal(await page.$eval('#jrGoodsSearch', el => el.value), 'cos');
     await selectCatalog(page, 101);
 
     await page.select('#jrGoodsCategory', '20');
-    await page.evaluate(() => { jrStockState.category = document.getElementById('jrGoodsCategory').value; return jrStockFetchCatalog(); });
+    await sleep(300);
     assert(await page.evaluate(() => window.__goodsCalls.some(c => /category=20/.test(c.url))), 'category filter did not request category=20');
     await page.$eval('#jrGoodsSearch', el => { el.value = ''; el.dispatchEvent(new Event('input', { bubbles: true })); });
     await sleep(240);
