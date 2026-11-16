@@ -4,6 +4,7 @@ const aitunnel = require('../../aitunnel');
 const config = require('../../../config');
 const { createLogger } = require('../../../logger');
 const logger = createLogger('AgentAitunnel');
+const { isLimitError } = require('../../resource-limits');
 
 // ── aitunnel-адаптер: Gemini 3.1 Flash Lite через OpenAI-совместимый API. ──
 
@@ -45,6 +46,7 @@ async function createWithRetry(client, params, o = {}) {
     try {
       return await client.chat.completions.create(params);
     } catch (e) {
+      if (isLimitError(e)) throw e;
       lastErr = e;
       if (attempt === maxRetries || !isTransient(e)) throw e;
       await sleep(baseMs * (attempt + 1));
@@ -80,6 +82,7 @@ async function createMessage({ system, messages, tools }, opts = {}) {
     resp = await createWithRetry(client, params,
       { maxRetries: opts.maxRetries, retryBaseMs: opts.retryBaseMs });
   } catch (e) {
+    if (isLimitError(e)) throw e;
     const fallbackModel = opts.fallbackModel !== undefined
       ? opts.fallbackModel : config.AITUNNEL_FALLBACK_MODEL;
     if (!isTransient(e) || !fallbackModel || fallbackModel === primaryModel) throw e;

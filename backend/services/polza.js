@@ -8,17 +8,18 @@ const config = require('../config');
 // оплата картой РФ, модели Anthropic/Google по id вида `anthropic/...`.
 // Таймаут обязателен: дефолт SDK — 600 с, и залипший запрос превращается
 // в немой диалог на десятки минут (клиент не получает вообще ничего).
-// 60 с × 2 ретрая — потолок ожидания ответа агента.
+// Each request disables SDK retries in paid-client-budget; explicit adapter
+// retries reserve quota separately. This SDK default is never used for create.
 const REQUEST_TIMEOUT_MS = 60_000;
 const MAX_RETRIES = 2;
 
 function makeClient(apiKey) {
-  return new OpenAI({
+  return require('./paid-client-budget')(new OpenAI({
     apiKey: apiKey || config.POLZA_API_KEY || 'missing',
     baseURL: config.POLZA_BASE,
     timeout: REQUEST_TIMEOUT_MS,
     maxRetries: MAX_RETRIES,
-  });
+  }));
 }
 
 module.exports = { makeClient };

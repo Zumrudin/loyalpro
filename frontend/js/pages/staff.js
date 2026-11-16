@@ -318,24 +318,24 @@ function sgRender(rows) {
       <tbody>
         ${rows.map(r => `
           <tr style="border-bottom:1px solid var(--bg)">
-            <td style="padding:8px 6px"><b>${esc(r.name || 'Без имени')}</b>
-              ${r.specialization ? `<div style="font-size:11px;color:var(--t3)">${esc(r.specialization)}</div>` : ''}
-              ${r.planned_days > 0 ? `<div style="font-size:11px;color:var(--t3)">${r.worked_days} из ${r.planned_days} раб. дн.</div>` : ''}
+            <td style="padding:8px 6px"><b>${esc(r.name||'Без имени')}</b>
+              ${r.specialization?`<div style="font-size:11px;color:var(--t3)">${esc(r.specialization)}</div>`:''}
+              ${r.planned_days>0?`<div style="font-size:11px;color:var(--t3)">${r.worked_days} из ${r.planned_days} раб. дн.</div>`:''}
             </td>
             <td style="padding:8px 6px;text-align:right">
               <input id="sg-sv-${r.staff_member_id}" type="number" min="0" step="1000"
-                value="${r.has_goal ? r.services_target : ''}" placeholder="—"
+                value="${r.has_goal?r.services_target:''}" placeholder="—"
                 class="sa-inp" style="width:110px;text-align:right">
             </td>
-            <td style="padding:8px 6px">${sgProgress(r.services_fact, r.services_target, r.services_forecast)}</td>
+            <td style="padding:8px 6px">${sgProgress(r.services_fact,r.services_target,r.services_forecast)}</td>
             <td style="padding:8px 6px;text-align:right">
               <input id="sg-gv-${r.staff_member_id}" type="number" min="0" step="1000"
-                value="${r.has_goal ? r.goods_target : ''}" placeholder="—"
+                value="${r.has_goal?r.goods_target:''}" placeholder="—"
                 class="sa-inp" style="width:110px;text-align:right">
             </td>
-            <td style="padding:8px 6px">${sgProgress(r.goods_fact, r.goods_target, r.goods_forecast)}</td>
+            <td style="padding:8px 6px">${sgProgress(r.goods_fact,r.goods_target,r.goods_forecast)}</td>
             <td style="padding:8px 6px;text-align:right">
-              <button class="btn btn-pri btn-sm" onclick="sgSave(${r.staff_member_id}, this)">Сохранить</button>
+              <button class="btn btn-pri btn-sm" ${UIEvents.attrs("click","staff-1",[UIEvents.value(r.staff_member_id)])}>Сохранить</button>
             </td>
           </tr>`).join('')}
       </tbody>

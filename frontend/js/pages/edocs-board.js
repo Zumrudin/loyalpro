@@ -60,8 +60,7 @@ function edbHeadRender() {
   const sub = _edb.range === 'open'
     ? 'Прошлые визиты, где не хватает акта или договора'
     : 'Все обязательные документы подписаны у ' + s.green + ' из ' + s.total + ' ' + edPlural(s.total, 'пациента', 'пациентов', 'пациентов');
-  const tile = (color, note) => '<button class="edb-tile ed-c-' + color + (_edb.color === color ? ' on' : '') + '" onclick="edbSetColor(\'' + color + '\')">'
-    + '<span class="edb-k">' + esc(ED_COLOR_TITLE[color]) + '</span><b>' + s[color] + '</b><small>' + esc(note) + '</small></button>';
+  const tile = (color, note) => `<button class="edb-tile ed-c-${color}${_edb.color===color?' on':''}" ${UIEvents.attrs("click","edocs-board-1",[String(color)])}><span class="edb-k">${esc(ED_COLOR_TITLE[color])}</span><b>${s[color]}</b><small>${esc(note)}</small></button>`;
   el.innerHTML = '<div class="edb-sum"><div class="edb-tile edb-ready"><div class="edb-ring" style="--p:' + pct + '"><span>' + s.green + '/' + s.total + '</span></div>'
     + '<div><h3>' + esc(titles[_edb.range] || '') + '</h3><small>' + esc(sub) + '</small></div></div>'
     + tile('red', 'визит скоро или акт после оплаты') + tile('amber', 'успеть до визита') + tile('blue', 'ссылка или анкета у пациента') + tile('green', 'всё подписано') + '</div>';
@@ -73,11 +72,7 @@ function edbBarRender(full) {
   if (!el) return;
   const counts = (_edb.data && _edb.data.rangeCounts) || {};
   if (full || !edbEl('edbSeg-today')) {
-    el.innerHTML = '<div class="edb-bar"><div class="edb-seg">' + ED_RANGES.map((r) => '<button id="edbSeg-' + r[0] + '" class="' + (r[0] === _edb.range ? 'on' : '') + '" onclick="edbSetRange(\'' + r[0] + '\')">'
-      + esc(r[1]) + '<i>' + (counts[r[0]] !== undefined ? counts[r[0]] : '') + '</i></button>').join('') + '</div>'
-      + '<input type="search" class="edb-search" id="edbSearch" placeholder="' + (_edb.range === 'all' ? 'Поиск по всей базе: имя или телефон' : 'Поиск по имени или телефону') + '" value="'
-      + escAttr(_edb.range === 'all' ? _edb.base.search : _edb.search) + '" oninput="edbSearch(this.value)">'
-      + (edIsAdmin() ? '<button class="btn btn-sec btn-sm" onclick="edOpenAutomation()">⚙ Автоматизация</button>' : '') + '</div>';
+    el.innerHTML = `<div class="edb-bar"><div class="edb-seg">${ED_RANGES.map(r=>`<button id="edbSeg-${r[0]}" class="${r[0]===_edb.range?'on':''}" ${UIEvents.attrs("click","edocs-board-3",[String(r[0])])}>${esc(r[1])}<i>${counts[r[0]]!==undefined?counts[r[0]]:''}</i></button>`).join('')}</div><input type="search" class="edb-search" id="edbSearch" placeholder="${_edb.range==='all'?'Поиск по всей базе: имя или телефон':'Поиск по имени или телефону'}" value="${escAttr(_edb.range==='all'?_edb.base.search:_edb.search)}" ${UIEvents.attrs("input","edocs-board-2",[])}>${edIsAdmin()?`<button class="btn btn-sec btn-sm" ${UIEvents.attrs("click","edocs-board-4",[])}>⚙ Автоматизация</button>`:''}</div>`;
     return;
   }
   for (const r of ED_RANGES) {
@@ -91,8 +86,7 @@ function edbChipsRender() {
   const el = edbEl('edbChips');
   if (!el || !d) return;
   const dot = { no_contract: 'red', no_consent: 'red', act: 'red', waiting: 'blue', ready: 'green' };
-  el.innerHTML = ED_CHIPS.map((c) => '<button class="edb-chip' + (_edb.chip === c[0] && !_edb.color ? ' on' : '') + '" onclick="edbSetChip(\'' + c[0] + '\')">'
-    + (dot[c[0]] ? '<span class="edb-dot ed-c-' + dot[c[0]] + '" style="background:var(--c)"></span>' : '') + esc(c[1]) + ' <i>' + (d.chips[c[2]] || 0) + '</i></button>').join('');
+  el.innerHTML = ED_CHIPS.map((c) => `<button class="edb-chip${_edb.chip===c[0]&&!_edb.color?' on':''}" ${UIEvents.attrs("click","edocs-board-5",[String(c[0])])}>${dot[c[0]]?'<span class="edb-dot ed-c-'+dot[c[0]]+'" style="background:var(--c)"></span>':''}${esc(c[1])} <i>${d.chips[c[2]]||0}</i></button>`).join('');
 }
 
 function edbAutoRender() {
@@ -107,14 +101,14 @@ function edbAutoRender() {
   ];
   if ((a.previsit.on || a.act.on || a.remind.on) && a.senderName) parts.push('от имени: ' + a.senderName);
   el.innerHTML = '<div class="edb-auto">🤖 <span><b>Автоматизация:</b> ' + esc(parts.join(' · ')) + '</span>'
-    + (edIsAdmin() ? '<button class="btn btn-sec btn-sm" onclick="edOpenAutomation()">Настроить</button>' : '') + '</div>';
+    + (edIsAdmin() ? `<button class="btn btn-sec btn-sm" ${UIEvents.attrs("click","edocs-board-6",[])}>Настроить</button>` : '') + '</div>';
 }
 
 function edbWarnsRender() {
   const d = _edb.data;
   const el = edbEl('edbWarns');
   if (!el || !d) return;
-  const link = edIsAdmin() ? ' <button class="btn btn-sec btn-sm" onclick="edGo(\'settings\')">Настройки</button>' : '';
+  const link = edIsAdmin() ? ` <button class="btn btn-sec btn-sm" ${UIEvents.attrs("click","edocs-board-7",[])}>Настройки</button>` : '';
   el.innerHTML = (d.warnings || []).map((w) => {
     if (w.code === 'no_template') return '<div class="ed-note">Не загружен шаблон «' + esc(ED_KIND_LABELS[w.kind] || w.kind) + '» — карточки этот документ не проверяют.' + link + '</div>';
     if (w.code === 'org_missing') return '<div class="ed-note ed-note-bad">Не заполнены реквизиты клиники: ' + esc(w.fields.join(', ')) + ' — документы с ними не отправить.' + link + '</div>';
@@ -156,11 +150,7 @@ function edbCardHtml(c, flash, multiDay) {
     + (c.visits.length > 1 ? ' · ' + c.visits.length + ' ' + edPlural(c.visits.length, 'визит', 'визита', 'визитов') : '');
   const warns = c.warnings.map((w) => '<div class="edb-warn' + (c.color === 'red' && /^⏱/.test(w) ? ' hot' : '') + '">' + esc(w) + '</div>').join('');
   const rid = c.action && c.action.recordId ? c.action.recordId : 0;
-  return '<article class="edb-card ed-c-' + c.color + (flash ? ' flash' : '') + '" onclick="edbOpen(' + c.clientId + ',' + rid + ')">'
-    + '<div class="edb-ch"><div class="edb-av">' + esc(c.initials) + '</div><div class="edb-who"><span class="edb-st">' + esc(c.label) + '</span>'
-    + '<div class="edb-nm">' + esc(c.name) + '</div><div class="edb-vs">' + esc(visit) + '</div></div></div>'
-    + '<div class="edb-docs">' + tiles + '</div>' + warns
-    + '<div class="edb-cf"><span>' + esc(c.hint || '') + '</span>' + edbActionHtml(c) + '</div></article>';
+  return `<article class="edb-card ed-c-${c.color}${flash?' flash':''}" ${UIEvents.attrs("click","edocs-board-8",[UIEvents.value(c.clientId),UIEvents.value(rid)])}><div class="edb-ch"><div class="edb-av">${esc(c.initials)}</div><div class="edb-who"><span class="edb-st">${esc(c.label)}</span><div class="edb-nm">${esc(c.name)}</div><div class="edb-vs">${esc(visit)}</div></div></div><div class="edb-docs">${tiles}</div>${warns}<div class="edb-cf"><span>${esc(c.hint||'')}</span>${edbActionHtml(c)}</div></article>`;
 }
 
 function edbActionHtml(c) {
@@ -169,15 +159,13 @@ function edbActionHtml(c) {
   const k = escAttr(c.key);
   if (_edb.busy.has(c.key)) return '<button class="btn btn-pri btn-sm" disabled>Отправляем…</button>';
   if (a.type === 'fill') {
-    return '<button class="edb-mini" title="Пациент заполнит данные сам по ссылке" onclick="event.stopPropagation();edbForm(\'' + k + '\')">✉ Анкета</button>'
-      + '<button class="btn btn-pri btn-sm" onclick="event.stopPropagation();edbAct(\'' + k + '\')">' + esc(a.label) + '</button>';
+    return `<button class="edb-mini" title="Пациент заполнит данные сам по ссылке" ${UIEvents.attrs("click","edocs-board-9",[String(k)])}>✉ Анкета</button><button class="btn btn-pri btn-sm" ${UIEvents.attrs("click","edocs-board-10",[String(k)])}>${esc(a.label)}</button>`;
   }
   if ((a.type === 'send' || a.type === 'remind') && !edCanSend()) {
-    return '<button class="btn btn-sec btn-sm" title="' + escAttr(edSendBlockReason()) + '" onclick="event.stopPropagation();edbOpen(' + c.clientId + ',0)">Открыть</button>';
+    return `<button class="btn btn-sec btn-sm" title="${escAttr(edSendBlockReason())}" ${UIEvents.attrs("click","edocs-board-11",[UIEvents.value(c.clientId)])}>Открыть</button>`;
   }
   const wait = a.type === 'remind' && !edRemindReady(a);
-  return '<button class="btn btn-pri btn-sm' + (a.ghost ? ' edb-ghost' : '') + '"' + (wait ? ' disabled title="Повторить можно через 15 минут после отправки"' : '')
-    + ' onclick="event.stopPropagation();edbAct(\'' + k + '\')">' + esc(a.label) + '</button>';
+  return `<button class="btn btn-pri btn-sm${a.ghost?' edb-ghost':''}"${wait?' disabled title="Повторить можно через 15 минут после отправки"':''} ${UIEvents.attrs("click","edocs-board-12",[String(k)])}>${esc(a.label)}</button>`;
 }
 
 function edbCard(key) { return (_edb.data && _edb.data.cards.find((c) => c.key === key)) || null; }
@@ -270,7 +258,7 @@ function edbRenderBase(seq) {
 }
 function edbBaseFiltersRender() {
   const el = edbEl('edbBaseFilters');
-  if (el) el.innerHTML = ED_BASE_FILTERS.map((f) => '<button class="edb-chip' + (_edb.base.filter === f[0] ? ' on' : '') + '" onclick="edbBaseFilter(\'' + f[0] + '\')">' + esc(f[1]) + '</button>').join('');
+  if (el) el.innerHTML = ED_BASE_FILTERS.map((f) => `<button class="edb-chip${_edb.base.filter===f[0]?' on':''}" ${UIEvents.attrs("click","edocs-board-13",[String(f[0])])}>${esc(f[1])}</button>`).join('');
 }
 function edbBaseFilter(f) { _edb.base.filter = f; _edb.base.page = 1; edbBaseFiltersRender(); edbBaseLoad(_ed.loadSeq); }
 function edbBasePage(n) { _edb.base.page = Math.max(1, n); edbBaseLoad(_ed.loadSeq); }
@@ -285,12 +273,7 @@ async function edbBaseLoad(seq) {
   const yes = (v) => (v ? '<span class="edb-yes">✓ есть</span>' : '<span class="edb-no">нет</span>');
   const pages = Math.max(1, Math.ceil(d.total / 50));
   el.innerHTML = '<div class="edb-base-row edb-base-head"><span>Пациент</span><span>Договор</span><span>Согласие ПД</span><span class="edb-col-hide">Незакрытые акты</span><span class="edb-col-hide">Последний визит</span></div>'
-    + (d.rows.length ? d.rows.map((r) => '<div class="edb-base-row" onclick="edbOpen(' + r.id + ',0)"><span><b>' + esc(r.name || '—') + '</b><br><span class="ed-sub">' + esc(edPhone(r.phone)) + '</span></span>'
-      + '<span>' + yes(r.contract) + '</span><span>' + yes(r.consent) + (r.pending ? ' <span class="badge bb">ждёт</span>' : '') + '</span>'
-      + '<span class="edb-col-hide">' + (r.openActs ? '<span class="edb-no">' + r.openActs + '</span>' : '—') + '</span>'
-      + '<span class="edb-col-hide">' + esc(r.lastVisitAt ? edFmtDate(String(r.lastVisitAt).slice(0, 10)) : '—') + '</span></div>').join('')
+    + (d.rows.length ? d.rows.map((r) => `<div class="edb-base-row" ${UIEvents.attrs("click","edocs-board-14",[UIEvents.value(r.id)])}><span><b>${esc(r.name||'—')}</b><br><span class="ed-sub">${esc(edPhone(r.phone))}</span></span><span>${yes(r.contract)}</span><span>${yes(r.consent)}${r.pending?' <span class="badge bb">ждёт</span>':''}</span><span class="edb-col-hide">${r.openActs?'<span class="edb-no">'+r.openActs+'</span>':'—'}</span><span class="edb-col-hide">${esc(r.lastVisitAt?edFmtDate(String(r.lastVisitAt).slice(0,10)):'—')}</span></div>`).join('')
       : '<div class="empty">Никого не нашли</div>')
-    + '<div class="edb-pager" style="padding:8px 12px">Всего: ' + d.total + (pages > 1 ? ' · стр. ' + d.page + ' из ' + pages
-      + ' <button class="btn btn-sec btn-sm" onclick="edbBasePage(' + (d.page - 1) + ')"' + (d.page <= 1 ? ' disabled' : '') + '>‹</button>'
-      + '<button class="btn btn-sec btn-sm" onclick="edbBasePage(' + (d.page + 1) + ')"' + (d.page >= pages ? ' disabled' : '') + '>›</button>' : '') + '</div>';
+    + '<div class="edb-pager" style="padding:8px 12px">Всего: ' + d.total + (pages > 1 ? ` · стр. ${d.page} из ${pages} <button class="btn btn-sec btn-sm" ${UIEvents.attrs("click","edocs-board-15",[UIEvents.value(d.page-1)])}${d.page<=1?' disabled':''}>‹</button><button class="btn btn-sec btn-sm" ${UIEvents.attrs("click","edocs-board-16",[UIEvents.value(d.page+1)])}${d.page>=pages?' disabled':''}>›</button>` : '') + '</div>';
 }

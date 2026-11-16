@@ -442,7 +442,7 @@ async function ntLoad() {
     if (seq !== _ntLoadSeq) return;
     _ntLoaded = false;       // следующее открытие вкладки попробует снова
     box.className = 'empty';
-    box.innerHTML = `<span style="color:var(--danger)">Ошибка: ${esc(e.message)}</span> <button class="btn btn-sec btn-sm" onclick="ntLoad()">Повторить</button>`;
+    box.innerHTML = `<span style="color:var(--danger)">Ошибка: ${esc(e.message)}</span> <button class="btn btn-sec btn-sm" ${UIEvents.attrs("click","notifications-1",[])}>Повторить</button>`;
   }
 }
 
@@ -478,7 +478,7 @@ function ntRenderRules() {
 
 function ntTypeCard(t, rules) {
   const meta = NT_TYPES[t];
-  const add = meta ? `<button class="btn btn-sec btn-sm" onclick="ntOpenEditor(null,'${ntJsArg(t)}')">+ Правило</button>` : '';
+  const add = meta ? `<button class="btn btn-sec btn-sm" ${UIEvents.attrs("click","notifications-2",[String(t)])}>+ Правило</button>` : '';
   return `<div class="bc-row nt-type" data-type="${ntAttr(t)}">
     <div class="nt-type-head">
       <div><b>${esc(ntTypeLabel(t))}</b><div class="care-meta" style="margin-top:2px">${esc(meta ? meta.hint : 'Неизвестный тип')}</div></div>
@@ -496,14 +496,14 @@ function ntRuleRow(r) {
     .filter(([k]) => Number(r[k]) > 0)
     .map(([k, ico, tip]) => `<span class="care-stat" title="${ntAttr(tip)}">${ico} <b>${Number(r[k])}</b></span>`).join('');
   return `<div class="nt-rule" data-id="${id}">
-    <label class="tgl" title="${on ? 'Выключить правило' : 'Включить правило'}"><input type="checkbox" ${on ? 'checked' : ''}
-      onchange="ntToggle(${id})"><span class="ts"></span></label>
-    <div class="nt-rule-main" onclick="ntOpenEditor(${id})" title="Открыть правило">
-      <div class="care-card-title"><b>${esc(r.title)}</b>${r.attachment_url ? '<span title="К сообщению приложена картинка">📎</span>' : ''}${on ? '' : '<span class="care-badge care-st-stopped">выключено</span>'}</div>
-      <div class="care-meta">${esc(ntRuleSummary(r, _ntDicts))}</div>
+    <label class="tgl" title="${on?'Выключить правило':'Включить правило'}"><input type="checkbox" ${on?'checked':''}
+      ${UIEvents.attrs("change","notifications-3",[UIEvents.value(id)])}><span class="ts"></span></label>
+    <div class="nt-rule-main" ${UIEvents.attrs("click","notifications-4",[UIEvents.value(id)])} title="Открыть правило">
+      <div class="care-card-title"><b>${esc(r.title)}</b>${r.attachment_url?'<span title="К сообщению приложена картинка">📎</span>':''}${on?'':'<span class="care-badge care-st-stopped">выключено</span>'}</div>
+      <div class="care-meta">${esc(ntRuleSummary(r,_ntDicts))}</div>
     </div>
-    <div class="care-stats nt-stats">${counts || '<span class="care-meta">отправок не было</span>'}</div>
-    <button class="btn btn-sec btn-sm" onclick="ntOpenEditor(${id})">✏️ Изменить</button>
+    <div class="care-stats nt-stats">${counts||'<span class="care-meta">отправок не было</span>'}</div>
+    <button class="btn btn-sec btn-sm" ${UIEvents.attrs("click","notifications-5",[UIEvents.value(id)])}>✏️ Изменить</button>
   </div>`;
 }
 
@@ -541,7 +541,7 @@ async function ntOpenEditor(id, type) {
   sel.title = rule ? 'Тип нельзя изменить после создания — создайте новое правило' : '';
   document.getElementById('ntEditorTitle').textContent = rule ? 'Правило: ' + rule.title : 'Новое правило';
   document.getElementById('ntVars').innerHTML = NT_VARS
-    .map(([tok, tip]) => `<code onclick="ntInsertVar('${ntJsArg(tok)}')" title="${ntAttr(tip)}">${esc(tok)}</code>`).join(' ');
+    .map(([tok, tip]) => `<code ${UIEvents.attrs("click","notifications-6",[String(tok)])} title="${ntAttr(tip)}">${esc(tok)}</code>`).join(' ');
   document.getElementById('ntTitle').value = r.title || '';
   document.getElementById('ntText').value = r.message_template || '';
   ntRenderTypeFields(r);
@@ -599,7 +599,7 @@ function ntRenderTypeFields(r) {
   if (t === 'visit_reminder') {
     html += `<div class="fg"><label class="fl">За сколько часов до визита</label>
         <input type="number" id="ntHours" min="1" max="72" step="1" value="${esc(String(ntHoursOr24(r.hours_before)))}"></div>
-      <label class="nt-check"><input type="checkbox" id="ntAsk" ${r.ask_confirmation !== false ? 'checked' : ''} onchange="ntTextChanged()">
+      <label class="nt-check"><input type="checkbox" id="ntAsk" ${r.ask_confirmation!==false?'checked':''} ${UIEvents.attrs("change","notifications-7",[])}>
         <span>Просить подтверждение: ответ «Подтверждаю» или «+» ставит статус «Подтвердил» в YClients</span></label>`;
   }
   if (t === 'visit_review' || t === 'visit_after') {
@@ -609,11 +609,11 @@ function ntRenderTypeFields(r) {
   if (t === 'visit_after') {
     const has = !!r.attachment_url;
     html += `<div class="fg"><label class="fl">Картинка к сообщению (JPEG, PNG или WEBP, до 5 МБ)</label>
-      ${has ? `<div class="nt-att">${ntUploadHref(r.attachment_url) ? `<img src="${ntAttr(r.attachment_url)}" alt="Картинка правила">` : ''}
-          <div><div class="care-meta" style="margin:0 0 6px">${esc(r.attachment_name || 'файл')}</div>
-          <button class="btn btn-sec btn-sm" type="button" onclick="ntDeleteAttachment()">Убрать картинку</button></div></div>` : ''}
-      <input type="file" id="ntFile" accept="image/jpeg,image/png,image/webp" onchange="ntOnFile(this)">
-      <div class="bc-section-hint" style="margin:4px 0 0">${has ? 'Выбранный файл заменит текущую картинку при сохранении. ' : ''}Картинка уходит вместе с текстом (текст — подписью); без картинки отправится только текст.</div></div>`;
+      ${has?`<div class="nt-att">${ntUploadHref(r.attachment_url)?`<img src="${ntAttr(r.attachment_url)}" alt="Картинка правила">`:''}
+          <div><div class="care-meta" style="margin:0 0 6px">${esc(r.attachment_name||'файл')}</div>
+          <button class="btn btn-sec btn-sm" type="button" ${UIEvents.attrs("click","notifications-9",[])}>Убрать картинку</button></div></div>`:''}
+      <input type="file" id="ntFile" accept="image/jpeg,image/png,image/webp" ${UIEvents.attrs("change","notifications-8",[])}>
+      <div class="bc-section-hint" style="margin:4px 0 0">${has?'Выбранный файл заменит текущую картинку при сохранении. ':''}Картинка уходит вместе с текстом (текст — подписью); без картинки отправится только текст.</div></div>`;
   }
   if (t === 'record_cancelled') {
     html += `<label class="nt-check"><input type="checkbox" id="ntNoShow" ${r.on_no_show !== false ? 'checked' : ''}>
@@ -805,11 +805,11 @@ function ntRenderModeHint() {
 function ntRenderCascade() {
   const on = _ntCascade, off = Object.keys(NT_CH).filter((c) => !on.includes(c));
   document.getElementById('ntsChannels').innerHTML =
-    on.map((c, i) => `<span class="bc-chip on nt-ch" data-ch="${ntAttr(c)}">${i + 1}. ${esc(NT_CH[c] || c)}
-      <button type="button" class="nt-ch-btn" title="Раньше" onclick="ntMoveCh(${i},-1)" ${i === 0 ? 'disabled' : ''}>↑</button>
-      <button type="button" class="nt-ch-btn" title="Позже" onclick="ntMoveCh(${i},1)" ${i === on.length - 1 ? 'disabled' : ''}>↓</button>
-      <button type="button" class="nt-ch-btn" title="Выключить" onclick="ntToggleCh('${ntJsArg(c)}')">✕</button></span>`).join('')
-    + off.map((c) => `<span class="bc-chip nt-ch-off" data-ch="${ntAttr(c)}" onclick="ntToggleCh('${ntJsArg(c)}')">+ ${esc(NT_CH[c])}</span>`).join('');
+    on.map((c, i) => `<span class="bc-chip on nt-ch" data-ch="${ntAttr(c)}">${i+1}. ${esc(NT_CH[c]||c)}
+      <button type="button" class="nt-ch-btn" title="Раньше" ${UIEvents.attrs("click","notifications-10",[UIEvents.value(i)])} ${i===0?'disabled':''}>↑</button>
+      <button type="button" class="nt-ch-btn" title="Позже" ${UIEvents.attrs("click","notifications-11",[UIEvents.value(i)])} ${i===on.length-1?'disabled':''}>↓</button>
+      <button type="button" class="nt-ch-btn" title="Выключить" ${UIEvents.attrs("click","notifications-12",[String(c)])}>✕</button></span>`).join('')
+    + off.map((c) => `<span class="bc-chip nt-ch-off" data-ch="${ntAttr(c)}" ${UIEvents.attrs("click","notifications-13",[String(c)])}>+ ${esc(NT_CH[c])}</span>`).join('');
 }
 
 function ntToggleCh(c) {
@@ -891,9 +891,9 @@ async function ntLoadJobs() {
       <tbody>${items.length ? items.map(ntJobRow).join('') : '<tr><td colspan="6" class="empty">Записей нет</td></tr>'}</tbody></table></div></div>`;
     // Размер страницы — LIMIT 100 у GET /jobs: меньше сотни строк значит последняя страница.
     pager.innerHTML = (_ntJobsPage > 0 || items.length >= NT_JOBS_PAGE) ? `<div class="nt-pager">
-      <button class="btn btn-sec btn-sm" onclick="ntJobsPage(-1)" ${_ntJobsPage > 0 ? '' : 'disabled'}>← Назад</button>
-      <span>Страница ${_ntJobsPage + 1}</span>
-      <button class="btn btn-sec btn-sm" onclick="ntJobsPage(1)" ${items.length >= NT_JOBS_PAGE ? '' : 'disabled'}>Дальше →</button></div>` : '';
+      <button class="btn btn-sec btn-sm" ${UIEvents.attrs("click","notifications-14",[])} ${_ntJobsPage>0?'':'disabled'}>← Назад</button>
+      <span>Страница ${_ntJobsPage+1}</span>
+      <button class="btn btn-sec btn-sm" ${UIEvents.attrs("click","notifications-15",[])} ${items.length>=NT_JOBS_PAGE?'':'disabled'}>Дальше →</button></div>` : '';
   } catch (e) {
     if (seq !== _ntJobsSeq) return;
     list.innerHTML = `<div class="empty" style="color:var(--danger)">Ошибка: ${esc(e.message)}</div>`;
@@ -922,7 +922,7 @@ function ntJobRow(j) {
     <td data-label="Статус"><span class="care-badge" style="background:${st.color}22;color:${st.color}">${esc(st.lbl)}</span>${j.channel_used ? ` · ${esc(NT_CH[j.channel_used] || j.channel_used)}` : ''}
       ${path}${reply}${reason ? `<div class="nt-path">${esc(reason)}</div>` : ''}</td>
     <td class="mtbl-full mtbl-hide-empty nt-text" data-label="Текст" title="${ntAttr(text)}">${text ? esc(text.slice(0, 220)) + (text.length > 220 ? '…' : '') + att : ''}</td>
-    <td class="mtbl-act mtbl-hide-empty">${j.status === 'pending' ? `<button class="btn btn-sec btn-sm" onclick="ntCancelJob(${Number(j.id)})">Отменить</button>` : ''}</td>
+    <td class="mtbl-act mtbl-hide-empty">${j.status === 'pending' ? `<button class="btn btn-sec btn-sm" ${UIEvents.attrs("click","notifications-16",[UIEvents.value(Number(j.id))])}>Отменить</button>` : ''}</td>
   </tr>`;
 }
 

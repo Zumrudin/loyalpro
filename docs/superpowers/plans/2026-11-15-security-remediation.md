@@ -2,7 +2,9 @@
 
 > **Для новой сессии:** выполнять задачи по зависимостям, а не все подряд. Можно делегировать независимые пакеты, но координатор обязан проверить результат, запустить проверки и не передавать production-действия подагентам.
 >
-> **Статус на 16.11.2026 19:05 UTC:** готовый пакет выложен на production в `/srv/loyalpro/releases/security-followup-20261116`: Chatpush redaction, loopback bind, nginx no-query для HTTP/HTTPS, четыре FK validated. База приложения — production `0f8affa`, только девять согласованных файлов; sidebar/calendar не включены. 8 focused suites / 111 tests PASS; HTTPS/static/auth/network/log smoke PASS. Общий security-план не завершён: следующие задачи перечислены в разделе «После production-выноса» ниже. Старые записи ниже описывают состояние до этого выпуска.
+> **Исторический production-статус на 16.11.2026 19:05 UTC:** готовый пакет выложен на production в `/srv/loyalpro/releases/security-followup-20261116`: Chatpush redaction, loopback bind, nginx no-query для HTTP/HTTPS, четыре FK validated. База приложения — production `0f8affa`, только девять согласованных файлов; sidebar/calendar не включены. 8 focused suites / 111 tests PASS; HTTPS/static/auth/network/log smoke PASS. Общий security-план не завершён: следующие задачи перечислены в разделе «После production-выноса» ниже. Старые записи ниже описывают состояние до этого выпуска.
+
+> **Текущий статус 16.11.2026 19:35 UTC:** оставшийся код и dev-инфраструктура приняты и выложены на dev `security-completion-20261116`. Новый пакет на production не переносился. Живой OTP требует выделенного bot token/config; natural YClients/gateway и полный SEC-14 остаются явно открыты. См. «Dev completion» ниже.
 
 ## 1. Цель и обязательные ограничения
 
@@ -63,6 +65,44 @@
 
 ## 3. Задачи
 
+## Dev completion — 16.11.2026 19:35 UTC
+
+Последнее поручение владельца: последовательно завершить оставшиеся задачи, принять работу агентов и выложить **на dev**. Этот пакет не перенесён на production. Kimi CLI вернул five-hour quota до исполнения; независимые bounded implementation/review задачи завершили доступные coding agents, приёмку и инфраструктурные действия выполнил координатор.
+
+### Выполнено и принято
+
+- SEC-10: invitation gate по умолчанию (`REGISTRATION_MODE=invite`). Приглашение cryptographic random 32 bytes, hash в БД, HMAC нормализованного email, expires/used; consume + salon/user/session в одной транзакции. Additive `REGISTRATION_INVITES_DDL` применён к `loyalpro_test`, повторное применение идемпотентно. `scripts/registration-invite.js` читает email из приватного файла, пишет новый token-файл 0600 (TTL 7 дней), stdout без email/token. При откате приложения таблицу сохранять; production DDL не применён.
+- SEC-10: KB tenant lease теперь охватывает retrieval/embedding/reranking/generation. Квота резервируется перед каждой реальной попыткой; quota error останавливает fallback и не портит provider routing state. Общий paid guard охватывает Polza/Aitunnel chat+embeddings, Anthropic, Gemini paid; скрытые SDK retries отключены. Lease heartbeat проверяет expiry перед попыткой. Счётчики и leases атомарны в общей PostgreSQL БД, календарь Europe/Moscow.
+- Явные defaults: KB tenant 100/day, 2000/month, concurrency 2; global 5000/day; shared paid 1000/day; kill switch `LLM_PAID_ENABLED=false`. Это лимиты количества попыток, не рублёвый billing cap. Patient/background calls имеют global/paid caps; KB tenant budgets на них не распространялись. Разные dev/prod БД не образуют общий счётчик. Legacy cross-host relay учитывается как одна исходящая попытка; каждый реальный provider attempt дополнительно учитывается на принимающем relay. Tenant context через сеть не передаётся.
+- SEC-11: собран sslh 2.3.1, upstream revision `d39388d1edcc9fe7a35449fc5c23d222d20d6f81`, со static libproxyprotocol `81e92bfe553c4372973423ceff9127eb1111b457`; binary `/opt/loyalpro-sslh-2.3.1/sslh-fork`. Targeted dev SNI → `127.0.0.1:4444` с PROXY v1; generic TLS/anyprot остаются на 4443, OpenVPN на 1194. nginx trusts PROXY only loopback, XFF заменяется `$remote_addr`. Внешний probe с production-хоста подтвердил IP источника и игнорирование forged XFF. Isolated protocol smoke PASS (TLS SNI, generic TLS, anyprot, OpenVPN).
+- Переключён systemd sslh (`/etc/sslh/loyalpro-security.cfg`, drop-in `/etc/systemd/system/sslh.service.d/loyalpro-security.conf`), downtime restart ~0.12 s. `nginx -t`/reload PASS. Соседние claude/peri HTTP200; peri-cms502 воспроизводится и напрямую через прежний nginx4443 (upstream8055), OpenVPN1194 не слушал до миграции. Эти независимые сервисы не исправлялись и не объявляются healthy.
+- Dev nginx error-log protection: secret-bearing SSE/YClients/Chatpush/gateway locations выключают raw error log; sanitized access log сохраняет status/timing без query. Case-insensitive matcher и trailing slash учтены. Isolated nginx fixture: 6 upstream502 cases, marker отсутствует в обоих логах, обычная connect-error сохраняется. В production этот error-log follow-up не переносился.
+- SEC-08: startup aggregate configuration check + bounded process-local accepted/rejected counters с powers-of-two logging, без payload/URL/secret. Dev YClients missing secret создан только для salon_id=1; startup active=1/missing=0, Chatpush/gateway configured=true. Provider registration URL не менялся; production callbacks не перенаправлялись на dev.
+- SEC-13: вынесены 484 static handlers, 317 dynamic actions и inline scripts во внешние файлы. Fixed callbacks, экранированный JSON data, без eval/new Function. Сохранены `this`, `event`, return false, stopPropagation, динамическая вставка. Строгий script-src enforced в server и cert iframe; style policy/image origins/frame-ancestors сохранены. Оба homecare preview поддерживают печать/закрытие без inline; protected preview загружается с Bearer.
+- Logger: один Winston root владеет transports, child loggers добавляют module metadata без множества transport listeners. Dev app переведён с Node20 на установленный Node22.23.2. У нового процесса нет MaxListeners/Deprecation/fatal warnings; после smoke новых error markers=0. `npm ci` показывает прежние transitive package deprecations (inflight/rimraf/glob/fstream/lodash.isequal/node-domexception/uuid); lockfile не менялся, полный dependency-upgrade не выполнялся.
+- Mobile dev: настроены серверные `MOBILE_SALON_ID=1` (единственный активный tenant подтверждён inventory) и новый приватный OTP hash key. Синтетические проверки собственного contact, чужого contact, OTP replay/race/expiry и session boundary прошли. Живой `otp-bot` остаётся stopped: в dev env нет выделенного `TELEGRAM_BOT_TOKEN`; владельцу задан вопрос о существующей конфигурации, токен в чат не запрашивался. Production mobile config не менялся.
+
+### Релиз и проверка
+
+- Active dev: `/srv/loyalpro-dev/releases/security-completion-20261116`, PM2 `loyalpro` от root, Node22.23.2, listen только `127.0.0.1:3001`. Старые sidebar/calendar сохранены: активный index до этого релиза совпадал с `48eab79`/HEAD, а не с `0f8affa`. `.env` нового релиза — приватный snapshot0600, data/logs сохраняют ссылки на прежние каталоги. Зависимости установлены чистым `npm ci --omit=dev --no-audit --no-fund`.
+- PM2 `startOrReload` не обновил script/cwd и сначала перезапустил старый release. Проверка обнаружила старую policy/bind; запись приложения пересоздана на подготовленный ecosystem, `pm_exec_path/pm_cwd` проверены, PM2 save выполнен. Не считать один PM2 online доказательством выложенного кода.
+- Backup `/srv/loyalpro-dev/security-infra-backup-20261116`: `ecosystem-before-app.json`, nginx до sslh и до error-log защиты, прежние sslh configs, инфраструктурный rollback script. App rollback: остановить/пересоздать только PM2 `loyalpro` из `ecosystem-before-app.json`, проверить path/bind/HTTPS и save; старый release `security-20261115-201235` не удалён. Additive таблицу/счётчики сохранять; secure nginx/sslh rollback только при инфраструктурной регрессии. Не использовать старый отсутствующий `/etc/sslh.cfg`: rollback script указывает существующий `/etc/sslh/sslh.cfg`.
+- Coordinator focused Jest: `cd backend && npx jest --runInBand --runTestsByPath` для resource-limits, registration-invites, registration-route-security, paid-client-budget, webhook-security-status, logger-listeners, mobile-otp-security, mobile-auth-routes-security, mobile-client-security, telegram-otp-security, otp-bot-listener, staff-auth-security, access-tickets, query-token-ui, proxy-security, salon-security, yclients-webhook-security, chatpush-webhook-provider, chatpush-webhook-route, csp-report, services/kb-assistant, kb-assistant-chain, kb-assistant-aitunnel, dialog-verdicts-provider, agent-provider-polza, agent-provider-aitunnel, aitunnel-client, agent-provider-anthropic, llm-budget-boundaries, kb-search — **30 suites/233 tests PASS**.
+- Affected UI Jest: clients-xss/purchases, stock-ui/operations, journal-ui/schedule/inline-goods/inline-save/summary/grid, agent-model/service-catalog/sidebar-calendar/agent-price-photos/query-token — **15 suites/274 tests PASS** (пересекаются с предыдущим набором). `node --test frontend/js/pages/*.test.js frontend/js/core/*.test.js` — **207 PASS**. `cd backend && npm test -- --runInBand` — **43 PASS**.
+- Exact deployed candidate: `node scripts/security-budgets-e2e.js <candidate>/.env` — **14/14 PASS**, два отдельных Node processes, реальная loyalpro_test, уникальная изолированная schema, `cleaned=true`. Проверяет shared daily/monthly/global/paid budgets, rollback, tenant isolation, concurrency/expired lease, actual attempts, invitation email/expiry/reuse/concurrent consume и transaction rollback. Старый Anthropic unit-test до добавления DB mock создал три synthetic budget claims на dev; внешних вызовов не было, счётчики вручную не обнулялись.
+- Browser через Playwright MCP (не прямой bash Playwright), локальный stand и HTTPS dev с синтетическими API interception: login Enter/button; register invitation tab; settings whitelist; clients nested button/row propagation; malicious callback argument roundtrip; stored XSS; запрет injected inline handler; SSE Bearer grant и ticket-only URL; Bearer CSV download; authenticated homecare preview print/close; cert external script. Page errors=0. Одна намеренная CSP console-error в XSS-тесте ожидаема; CDN chart script в fixture замокан, отрисовка реального CDN-графика этим тестом не проверялась.
+- Дополнительно anonymous live browser без API/CDN mocks: login/register tabs PASS, page errors=0, failed network hosts=0.
+- HTTPS `/` и пять ключевых JS побайтно совпали с release; enforce script-src без unsafe-inline; unauth clients/SSE/mobile profile=401. `ss` подтверждает loopback. `git diff --check` PASS. `mobile/` не менялся, mobile lint не запускался. Full repository Jest повторно не запускался; известные исходные красные suites в SEC-14 сохраняются.
+- Natural production inventory read-only через PostgreSQL MCP после restart19:02:53: Chatpush **38/38 processed, 0 errors**, YClients0; gateway events отсутствовали. Отсутствие events не доказывает working delivery. Новых реальных OTP/messages/bookings/bonuses и платных provider calls для тестирования не запускали.
+
+### Что остаётся вне завершённого dev-выпуска
+
+1. Выделенный Telegram OTP bot/config, затем отдельно согласованный живой contact→OTP→login: отсутствие токена нельзя заменить синтетическим PASS.
+2. Natural YClients/gateway delivery после restart; dev YClients secret пока не зарегистрирован как provider destination. Проверять естественный трафик, не посылать пациентские события ради smoke.
+3. Перенос нового dev-пакета, mobile config и nginx error-log защиты на production — **не выполнен** по последнему поручению о dev. Production остаётся на ранее принятом `security-followup-20261116`.
+4. Полный сквозной двухсалонный HTTP/browser набор SEC-14 и исходные full-suite failures не объявлены закрытыми. Выполненные DB/service/browser сценарии перечислены отдельно.
+
+
 ## Production follow-up — выполнено 16.11.2026
 
 Разрешение: в исходной Kimi-сессии владелец разрешил выложить готовый пакет и оставить незавершённое в плане; в текущей сессии повторно поручил завершить production-вынос и тестирование.
@@ -79,7 +119,7 @@
 - Browser MCP отсутствует: браузерная приёмка XSS/SSE reconnect/downloads не выполнена. Полный Jest повторно не запускался: прежний baseline с красными suites остаётся в SEC-14. Mobile не менялся, lint неприменим. Реальные OTP/messages/bookings и replay webhook не запускались; новые natural deliveries после этого restart отдельно не подтверждены.
 - Откат приложения: вернуть `/srv/loyalpro/current` на `/srv/loyalpro/releases/security-0f8affa`, затем от `loyalpro` выполнить PM2 restart/save. Это временно вернёт внешний bind; предпочтителен forward fix. Nginx no-query и validated FK при откате приложения сохранять. Backup конфигурации nginx имеется; удаление FK/данных не требуется.
 
-### После production-выноса
+### После production-выноса — исторический список до Dev completion
 
 1. Dev: согласовать фактический конфиг sslh, провести package/security review, подготовить targeted PROXY v1 на `127.0.0.1:4444` и controlled restart с rollback; затем проверить реальный client IP. Соседние маршруты не менять. Применить BIND_HOST/redaction к dev отдельным выпуском.
 2. Проверить natural webhook deliveries после текущего restart без replay и сообщений пациентам; завершить startup/config validation и счётчики отказов (SEC-08).
@@ -377,16 +417,16 @@
 **Исполнитель:** backend-агент после auth-изменений.
 **Файлы:** `backend/routes/auth.js`, `backend/routes/knowledge-base.js`, `backend/services/kb-assistant.js`, `backend/config.js`, tests.
 
-- [ ] Сохранить self-service регистрацию, если она нужна продукту, но добавить rate limit по нормализованному IP и email, CAPTCHA/invite или email verification согласно существующей продуктовой модели. Не создавать owner для произвольного салона через client-supplied id.
+- [x] Сохранить self-service регистрацию, если она нужна продукту, но добавить rate limit по нормализованному IP и email, CAPTCHA/invite или email verification согласно существующей продуктовой модели. Не создавать owner для произвольного салона через client-supplied id.
 - [x] Ограничить частоту создания салонов и повторные попытки с одинаковым email без раскрытия существования аккаунта.
 - [x] На `/api/kb/ask` добавить per-user/per-tenant rate limit, одновременный request cap и очередь/429. Вопрос max 500 сохранить.
-- [ ] Добавить учёт фактических LLM calls и дневной/месячный tenant budget. При исчерпании не вызывать ни primary, ни paid fallback provider.
-- [ ] Добавить серверный глобальный circuit breaker для общих платных ключей. Не разрешать fallback-цепочке умножать quota после исчерпания бюджета.
+- [x] Добавить учёт фактических LLM calls и дневной/месячный tenant budget. При исчерпании не вызывать ни primary, ни paid fallback provider.
+- [x] Добавить серверный глобальный circuit breaker для общих платных ключей. Не разрешать fallback-цепочке умножать quota после исчерпания бюджета.
 - [x] Ограничить размер `prompt.system`, `prompt.user` и embedding `text` на relay endpoints; сохранить обязательный `X-Relay-Secret`, добавить лимиты и не логировать prompt/ПДн.
 - [x] При нескольких backend-процессах использовать общий атомарный store счётчиков (существующая БД), а не независимые memory-лимиты. Не добавлять Redis без существующей инфраструктуры.
 - [x] Настройки сделать конфигурируемыми с консервативными default; не подбирать тарифные значения скрытно, зафиксировать их в handoff.
 
-**Остаток SEC-10:** регистрация получила общие PostgreSQL IP/email counters, но CAPTCHA/invite/email verification не выбраны и не реализованы. `runLlm` атомарно резервирует salon day/month + global day budget до top-level вызова и держит per-salon concurrency lease; после исчерпания provider chain не запускается. Однако fallback внутри уже разрешённого вызова не списывает отдельные фактические LLM calls. Это ограничение модели учёта, а не завершённый per-attempt accounting. Двухпроцессные live concurrency tests не запускались.
+**Исторический остаток SEC-10 до dev completion:** регистрация получила общие PostgreSQL IP/email counters, но CAPTCHA/invite/email verification не выбраны и не реализованы. `runLlm` атомарно резервирует salon day/month + global day budget до top-level вызова и держит per-salon concurrency lease; после исчерпания provider chain не запускается. Однако fallback внутри уже разрешённого вызова не списывает отдельные фактические LLM calls. Это ограничение модели учёта, а не завершённый per-attempt accounting. Двухпроцессные live concurrency tests не запускались.
 
 **Тесты:**
 
@@ -403,7 +443,7 @@
 
 - [x] Удалить ручной разбор первого raw XFF в `public-cert-request.js:19-21`; использовать нормализованный `req.ip` после правильной proxy-настройки.
 - [x] Доверять только фактическому reverse proxy/loopback или известному proxy CIDR, а не произвольному подключению. `trust proxy 1` оставить только если топология гарантированно одна и backend недоступен напрямую.
-- [ ] На nginx перезаписывать XFF, а не принимать клиентскую цепочку как истину. Запретить внешний доступ к backend-порту firewall/security group либо bind только на нужный internal/loopback interface; не перезапускать сервисы без подтверждения.
+- [x] На nginx перезаписывать XFF, а не принимать клиентскую цепочку как истину. Запретить внешний доступ к backend-порту firewall/security group либо bind только на нужный internal/loopback interface; не перезапускать сервисы без подтверждения.
 - [x] Проверить, что все rate limiters используют одинаковый IP helper и корректно обрабатывают IPv6; не строить собственный naive IP key.
 - [x] Для критичных OTP/register/webhook лимитов использовать общий store при нескольких workers, иначе зафиксировать ограничение single-process и не представлять memory store как распределённую защиту. (OTP phone/register/AI counters — PostgreSQL; express-rate-limit для OTP IP, webhook и CSP report остаётся per-process и не является распределённым лимитом.)
 - [x] CORS untrusted origin должен получать управляемый отказ, а не HTML 500; не превращать эту задачу в CORS bypass fix — доступ к API всё равно определяется auth.
@@ -441,13 +481,13 @@
 **Исполнитель:** frontend-агент + координатор.
 **Файлы:** `backend/server.js`, `frontend/index.html`, JS с inline handlers, при необходимости встраиваемая `frontend/cert-request.html`.
 
-- [ ] Составить инвентарь inline scripts, `onclick` и других handlers. Перевести их на внешние JS/`addEventListener` узкими изменениями без redesign.
+- [x] Составить инвентарь inline scripts, `onclick` и других handlers. Перевести их на внешние JS/`addEventListener` узкими изменениями без redesign.
 - [x] Сначала включить строгий `script-src` в Report-Only, собрать только технические нарушения без page content/ПДн, ограничить объём reports.
-- [ ] Убрать `'unsafe-inline'` из `script-src` после устранения нарушений. Сохранить необходимые S3/YClients image origins и `frame-ancestors` публичной формы.
+- [x] Убрать `'unsafe-inline'` из `script-src` после устранения нарушений. Сохранить необходимые S3/YClients image origins и `frame-ancestors` публичной формы.
 - [x] Не ослаблять output encoding после включения CSP: CSP — второй рубеж, не исправление XSS.
 
 **Фактический статус 15.11.2026:** статический inventory нашёл inline script и сотни inline handlers в `frontend/index.html`, плюс inline script в `frontend/cert-request.html`; JS pages создают ещё handlers динамически. Report-Only header содержит `script-src 'self' cdn.jsdelivr.net; report-uri /api/csp-report`. Public endpoint принимает не более 4 КБ и 60 reports/мин на процесс, отвечает без тела и логирует только allowlisted directive и inline/eval/other. Тело, page URL и script sample не сохраняются. Enforce-CSP не изменён; browser-сбор нарушений и перенос handlers не выполнялись.
-- [ ] Если статический HTML требует nonce, предпочесть внешние scripts; не внедрять сложный templating только ради nonce.
+- [x] Если статический HTML требует nonce, предпочесть внешние scripts; не внедрять сложный templating только ради nonce.
 
 **Тесты:** browser MCP для карточки клиента, chat, settings, downloads, SSE, cert-request iframe и основных staff routes; CSP violations не содержат ПДн; SEC-06 regression остаётся зелёным.
 
@@ -460,7 +500,7 @@
 - [x] Запустить focused Jest-сьюты всех изменённых модулей. Имена новых suites должны соответствовать задачам выше; не добавлять файлы результатов/отчётов в репозиторий.
 - [x] Выполнить `cd backend && npm test`, затем `npx jest --runInBand` для полного regression либо явно перечислить невыполненные suites и причину. (Команды выполнены; полный набор сохраняет исходные красные проверки, перечисленные ниже.)
 - [x] Если изменялся `mobile/`, выполнить `cd mobile && npm run lint`. (Неприменимо: `mobile/` не изменялся, lint не запускался.)
-- [ ] Для staff UI выполнить browser MCP-проверку, не bash-запуск Playwright: XSS, settings без секретов, SSE/downloads, CSP. Использовать только синтетические API/тестовый стенд.
+- [x] Для staff UI выполнить browser MCP-проверку, не bash-запуск Playwright: XSS, settings без секретов, SSE/downloads, CSP. Использовать только синтетические API/тестовый стенд.
 - [ ] В изолированном E2E доказать: чужой Telegram phone не даёт session; tenant B не виден через photo cases; deactivated staff немедленно теряет доступ; unsigned webhook не имеет side effects; ticket одноразовый. (Photo-case DB E2E на dev завершён: 27/27 write и 6/6 delete/cascade с полным rollback; остальные сквозные сценарии не закрыты этим проверением.)
 - [x] Проверить `git diff --check`, `git status --short`, отсутствие логов, screenshots, reports, `.env` и других созданных артефактов в diff. Не удалять чужие файлы.
 - [x] Обновить `CLAUDE.md`, если изменились auth/query-token/mobile/webhook правила, и устаревшие комментарии к коду. `AGENTS.md` менять только если изменилось документированное там поведение.

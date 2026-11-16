@@ -32,7 +32,7 @@ function harness() {
   get('jrDate').value = '2030-04-01';
   const journal = { data: null, busy: false, modalRequest: 0, slotRequest: 0 };
   let uuid = 0;
-  const context = vm.createContext({
+  const context = vm.createContext({ UIEvents: require('../frontend/js/core/ui-events.js'),
     journal, crypto: { randomUUID: () => `session-${++uuid}` },
     document: { addEventListener: jest.fn(), activeElement: null },
     jrEl: get,

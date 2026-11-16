@@ -1,5 +1,6 @@
 // backend/dialog-verdicts-provider.test.js
 'use strict';
+jest.mock('./services/resource-limits', () => ({ attempt: jest.fn(async () => {}), isLimitError: e => ['BUDGET_EXHAUSTED','PAID_DISABLED'].includes(e?.code), runLlm: (_s,_u,fn) => fn() }));
 // Цепочка провайдеров анализа: те же звенья, что у Милы (resilient.js), но БЕЗ
 // чтения и записи agent_model_routing — падение ночного анализа не должно
 // переключать Милу на резервную модель.

@@ -6,7 +6,7 @@ async function stockLoadRefs() {
     el.innerHTML = ['suppliers', 'units', 'storages']
       .map(
         (key, i) =>
-          `<h3>${['Поставщики', 'Единицы', 'Склады'][i]}</h3><button onclick="stockEditRef('${key}')">Добавить</button><table class="stock-table"><tbody>${_stock.dictionaries[key].map((r) => `<tr><td>${stockEsc(r.title)} ${r.yclients_storage_id || r.yclients_unit_id ? ' · YClients' : ''}</td><td>${(key === 'storages' && r.yclients_storage_id) || (key === 'units' && r.yclients_unit_id) ? '' : `<button onclick="stockEditRef('${key}',${Number(r.id)})">Изменить</button>`}${key === 'suppliers' ? `<button onclick="stockDeleteSupplier(${Number(r.id)})">Архивировать</button>` : ''}</td></tr>`).join('')}</tbody></table>`,
+          `<h3>${['Поставщики','Единицы','Склады'][i]}</h3><button ${UIEvents.attrs("click","stock-refs-1",[String(key)])}>Добавить</button><table class="stock-table"><tbody>${_stock.dictionaries[key].map(r=>`<tr><td>${stockEsc(r.title)} ${r.yclients_storage_id||r.yclients_unit_id?' · YClients':''}</td><td>${key==='storages'&&r.yclients_storage_id||key==='units'&&r.yclients_unit_id?'':`<button ${UIEvents.attrs("click","stock-refs-2",[String(key),UIEvents.value(Number(r.id))])}>Изменить</button>`}${key==='suppliers'?`<button ${UIEvents.attrs("click","stock-refs-3",[UIEvents.value(Number(r.id))])}>Архивировать</button>`:''}</td></tr>`).join('')}</tbody></table>`,
       )
       .join('');
   } catch (e) {
@@ -74,7 +74,7 @@ async function stockLoadSettings() {
   }
   try {
     const s = await stockApi('/settings');
-    el.innerHTML = `<form onsubmit="stockSaveSettings(event)">${stockSelect('stockSettingSale', 'Склад продаж', _stock.dictionaries.storages, s.default_sale_storage_id)}${stockSelect('stockSettingService', 'Склад расходников', _stock.dictionaries.storages, s.default_service_storage_id)}<button id="stockSettingsSave">Сохранить</button><p id="stockSettingsStatus"></p></form>`;
+    el.innerHTML = `<form ${UIEvents.attrs("submit","stock-refs-4",[])}>${stockSelect('stockSettingSale','Склад продаж',_stock.dictionaries.storages,s.default_sale_storage_id)}${stockSelect('stockSettingService','Склад расходников',_stock.dictionaries.storages,s.default_service_storage_id)}<button id="stockSettingsSave">Сохранить</button><p id="stockSettingsStatus"></p></form>`;
   } catch (e) {
     el.textContent = e.message;
   }

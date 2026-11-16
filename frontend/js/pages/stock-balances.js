@@ -35,14 +35,7 @@ function stockBalancesHtml(goods, storages, filters = {}) {
     rows
       .map(
         (g) =>
-          `<tr><td data-label="Товар"><button class="stock-link" onclick="stockOpenGood(${Number(g.id)})">${stockEsc(g.title)}</button>${g.source === 'loyalpro' ? '<span class="stock-badge">LoyalPro</span>' : ''}</td>` +
-          columns
-            .map((s) => {
-              const b = (g.balances || []).find((b) => String(b.storage_id) === String(s.id));
-              return `<td data-label="${stockEsc(s.title)}" class="${b?.negative ? 'stock-neg' : b?.critical ? 'stock-crit' : ''}">${b ? stockEsc(stockFmtQty(b.qty_base, g.unit_equals, g.unit, g.service_unit)) : '—'}</td>`;
-            })
-            .join('') +
-          '</tr>',
+          `<tr><td data-label="Товар"><button class="stock-link" ${UIEvents.attrs("click","stock-balances-1",[UIEvents.value(Number(g.id))])}>${stockEsc(g.title)}</button>${g.source==='loyalpro'?'<span class="stock-badge">LoyalPro</span>':''}</td>${columns.map(s=>{const b=(g.balances||[]).find(b=>String(b.storage_id)===String(s.id));return`<td data-label="${stockEsc(s.title)}" class="${b?.negative?'stock-neg':b?.critical?'stock-crit':''}">${b?stockEsc(stockFmtQty(b.qty_base,g.unit_equals,g.unit,g.service_unit)):'—'}</td>`;}).join('')}</tr>`,
       )
       .join('') +
     '</tbody></table>'
@@ -379,14 +372,7 @@ function stockMovementsHtml(data, g) {
   const page = Number(data.page) || 1,
     limit = Number(data.limit) || 50;
   return (
-    '<table class="stock-table"><thead><tr><th>Дата</th><th>Операция</th><th>Количество</th><th>Сумма</th></tr></thead><tbody>' +
-    data.movements
-      .map(
-        (m) =>
-          `<tr><td data-label="Дата">${stockDate(m.occurred_at)}</td><td data-label="Операция">${stockEsc(m.kind)} · ${stockEsc(m.origin)}${m.deleted_at ? ' · Отменено' : ''}</td><td data-label="Количество">${stockEsc(stockFmtQty(m.qty_base, g.unit_equals, g.unit, g.service_unit))}</td><td data-label="Сумма">${stockMoney(m.cost)}</td></tr>`,
-      )
-      .join('') +
-    `</tbody></table><div class="stock-toolbar"><button type="button" ${page <= 1 ? 'disabled' : ''} onclick="stockGoodMovements(${page - 1})">Назад</button><span>Страница ${page}</span><button type="button" ${page * limit >= data.total ? 'disabled' : ''} onclick="stockGoodMovements(${page + 1})">Далее</button></div>`
+    `<table class="stock-table"><thead><tr><th>Дата</th><th>Операция</th><th>Количество</th><th>Сумма</th></tr></thead><tbody>${data.movements.map(m=>`<tr><td data-label="Дата">${stockDate(m.occurred_at)}</td><td data-label="Операция">${stockEsc(m.kind)} · ${stockEsc(m.origin)}${m.deleted_at?' · Отменено':''}</td><td data-label="Количество">${stockEsc(stockFmtQty(m.qty_base,g.unit_equals,g.unit,g.service_unit))}</td><td data-label="Сумма">${stockMoney(m.cost)}</td></tr>`).join('')}</tbody></table><div class="stock-toolbar"><button type="button" ${page<=1?'disabled':''} ${UIEvents.attrs("click","stock-balances-2",[UIEvents.value(page-1)])}>Назад</button><span>Страница ${page}</span><button type="button" ${page*limit>=data.total?'disabled':''} ${UIEvents.attrs("click","stock-balances-3",[UIEvents.value(page+1)])}>Далее</button></div>`
   );
 }
 async function stockGoodMovements(page) {

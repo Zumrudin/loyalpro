@@ -228,7 +228,7 @@ function bcMonRender(m) {
   const lost = bcMonLost(m);
   const sum = document.getElementById('bcMonSummary');
   sum.innerHTML = (s.done && lost > 0)
-    ? `<div class="bc-mon-sub" style="margin-bottom:6px">Не получили сообщение: ${lost}</div><button class="btn btn-pri btn-sm" onclick="bcMonRetryDraft()">Новая рассылка по пропущенным</button>`
+    ? `<div class="bc-mon-sub" style="margin-bottom:6px">Не получили сообщение: ${lost}</div><button class="btn btn-pri btn-sm" ${UIEvents.attrs("click","broadcasts-monitor-1",[])}>Новая рассылка по пропущенным</button>`
     : '';
 }
 
@@ -263,9 +263,7 @@ async function bcMonLoadRecipients(gen) {
     : '<tr><td colspan="4" class="bc-mon-sub">Никого нет</td></tr>';
   const total = d.total || 0, from = total ? _bcMonOffset + 1 : 0, to = Math.min(total, _bcMonOffset + BC_MON_PAGE);
   document.getElementById('bcMonPager').innerHTML =
-    `<button class="btn btn-sec btn-sm" ${_bcMonOffset <= 0 ? 'disabled' : ''} onclick="bcMonPage(-1)">←</button>` +
-    `<span class="bc-mon-sub"> ${from}–${to} из ${total} </span>` +
-    `<button class="btn btn-sec btn-sm" ${to >= total ? 'disabled' : ''} onclick="bcMonPage(1)">→</button>`;
+    `<button class="btn btn-sec btn-sm" ${_bcMonOffset<=0?'disabled':''} ${UIEvents.attrs("click","broadcasts-monitor-2",[])}>←</button><span class="bc-mon-sub"> ${from}–${to} из ${total} </span><button class="btn btn-sec btn-sm" ${to>=total?'disabled':''} ${UIEvents.attrs("click","broadcasts-monitor-3",[])}>→</button>`;
 }
 
 function bcMonPage(dir) {

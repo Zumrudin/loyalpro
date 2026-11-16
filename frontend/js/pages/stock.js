@@ -229,6 +229,6 @@ async function stockLoadGoods() {
 }
 function stockSetGoodsExportDisabled(disabled) {
   const tools = stockEl('stockCatalogTools');
-  const button = tools && typeof tools.querySelector === 'function' ? tools.querySelector('[onclick="stockExportGoods()"]') : null;
+  const button = tools && typeof tools.querySelector === 'function' ? tools.querySelector('[data-static-onclick="s274"]') : null;
   if (button) button.disabled = !!disabled;
 }

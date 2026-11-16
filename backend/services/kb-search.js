@@ -2,6 +2,7 @@
 
 // Staff KB retrieval. Patient-facing agent-rag keeps its own audience filters.
 const { db } = require('../db');
+const resourceLimits = require('./resource-limits');
 const { buildPrefixTsQuery } = require('./knowledge-base');
 const { cosineSim, vectorNorm, reciprocalRankFusion } = require('./agent-rag');
 
@@ -72,7 +73,10 @@ async function searchArticles(salonId, question, limit = 8) {
         }
       }
       semantic = [...scores].sort((a, b) => b[1] - a[1]).slice(0, 24).map(([id]) => id);
-    } catch (_) { /* Provider failure: lexical results remain usable. */ }
+    } catch (error) {
+      if (resourceLimits.isLimitError(error)) throw error;
+      // Provider failure: lexical results remain usable.
+    }
   }
   const ids = reciprocalRankFusion([lexical.map(a => a.id), semantic]).slice(0, 24);
   if (!ids.length) return [];
@@ -107,7 +111,8 @@ async function rerank(question, candidates, fragments, limit) {
       throw new Error('Invalid source selection');
     }
     return [...new Set(parsed.ids)].slice(0, limit).map(id => candidates.find(a => a.id === id));
-  } catch (_) {
+  } catch (error) {
+    if (resourceLimits.isLimitError(error)) throw error;
     // Do not turn a transient ranking-provider failure into a failed staff question.
     return candidates.slice(0, limit);
   }

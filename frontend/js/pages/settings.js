@@ -78,8 +78,8 @@ async function loadBdList() {
     el.innerHTML = ups.map(c => `
       <div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--bd)">
         <div class="av" style="background:${avc(c.name)};color:#fff;font-size:10px">${avi(c.name)}</div>
-        <div style="flex:1"><div style="font-weight:600;font-size:13px">${esc(c.name)}</div><div style="font-size:11px;color:var(--t3)">${esc(c.phone || '—')}</div></div>
-        <button class="btn btn-pri btn-sm" onclick="sendBdB(${c.id})">🎁 Начислить</button>
+        <div style="flex:1"><div style="font-weight:600;font-size:13px">${esc(c.name)}</div><div style="font-size:11px;color:var(--t3)">${esc(c.phone||'—')}</div></div>
+        <button class="btn btn-pri btn-sm" ${UIEvents.attrs("click","settings-1",[UIEvents.value(c.id)])}>🎁 Начислить</button>
       </div>`).join('');
   } catch(e) { el.innerHTML = `<div class="empty" style="color:var(--danger)">${esc(e.message)}</div>`; }
 }
@@ -351,8 +351,8 @@ function renderStaffProfiles() {
   const fired  = _staffProfiles.filter(s => !s.is_active);
 
   const toggleBtn = fired.length > 0 || _staffShowFired
-    ? `<button class="btn btn-sec" style="font-size:12px;margin-bottom:14px" onclick="loadStaffProfiles(${_staffShowFired ? 'false' : 'true'})">
-        ${_staffShowFired ? 'Скрыть уволенных' : `Показать уволенных (${fired.length})`}
+    ? `<button class="btn btn-sec" style="font-size:12px;margin-bottom:14px" ${UIEvents.attrs("click","settings-2",[UIEvents.value(_staffShowFired?false:true)])}>
+        ${_staffShowFired?'Скрыть уволенных':`Показать уволенных (${fired.length})`}
        </button>`
     : '';
 
@@ -380,13 +380,13 @@ function staffProfileCard(s) {
   const firedBadge = !s.is_active ? `<div style="font-size:10px;color:#ef4444;margin-bottom:4px">Уволен</div>` : '';
   const appBadge = s.is_active && !s.show_in_app ? `<div style="font-size:10px;color:#f59e0b">Скрыт в приложении</div>` : '';
   return `
-    <div draggable="true" data-staff-id="${s.id}" style="border:1px solid ${s.is_active ? '#e5e7eb' : '#fecaca'};border-radius:12px;padding:16px;text-align:center;background:${s.is_active ? '#fff' : '#fff5f5'};cursor:pointer;transition:box-shadow .15s,opacity .15s;position:relative" onclick="openStaffModal(${s.id})" onmouseover="this.style.boxShadow='0 4px 16px rgba(0,0,0,.10)'" onmouseout="this.style.boxShadow=''">
+    <div draggable="true" data-staff-id="${s.id}" style="border:1px solid ${s.is_active?'#e5e7eb':'#fecaca'};border-radius:12px;padding:16px;text-align:center;background:${s.is_active?'#fff':'#fff5f5'};cursor:pointer;transition:box-shadow .15s,opacity .15s;position:relative" ${UIEvents.attrs("click","settings-3",[UIEvents.value(s.id)])} ${UIEvents.attrs("mouseover","settings-4",[])} ${UIEvents.attrs("mouseout","settings-5",[])}>
       <div style="position:absolute;top:8px;left:8px;cursor:grab;color:#d1d5db;font-size:14px;line-height:1;user-select:none" title="Перетащите для изменения порядка">⠿</div>
       <div style="display:flex;justify-content:center;margin-bottom:10px">${photoHtml}</div>
-      <div style="font-weight:600;font-size:13px;margin-bottom:3px">${esc(s.name || '—')}</div>
-      <div style="font-size:11px;color:#9ca3af;margin-bottom:6px">${esc(s.specialization || '')}</div>
+      <div style="font-weight:600;font-size:13px;margin-bottom:3px">${esc(s.name||'—')}</div>
+      <div style="font-size:11px;color:#9ca3af;margin-bottom:6px">${esc(s.specialization||'')}</div>
       ${firedBadge}
-      <div style="font-size:11px;color:${hasBio ? '#10b981' : '#d1d5db'}">${hasBio ? '✓ Биография заполнена' : 'Биография не заполнена'}</div>
+      <div style="font-size:11px;color:${hasBio?'#10b981':'#d1d5db'}">${hasBio?'✓ Биография заполнена':'Биография не заполнена'}</div>
       ${appBadge}
     </div>`;
 }

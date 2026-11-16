@@ -67,20 +67,20 @@ function usersShowModal(u, isNew) {
   const isOwner = ME.role === 'owner';
   const title = isNew ? 'Новый пользователь' : 'Редактировать пользователя';
   const html = `
-    <div class="seg-drawer-ov open" id="usersMod" onclick="if(event.target===this)usersCloseModal()">
+    <div class="seg-drawer-ov open" id="usersMod" ${UIEvents.attrs("click","users-1",[])}>
       <div class="seg-drawer" style="width:420px;padding:24px">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px">
           <b style="font-size:15px">${title}</b>
-          <button class="btn btn-sec btn-sm" onclick="usersCloseModal()">✕</button>
+          <button class="btn btn-sec btn-sm" ${UIEvents.attrs("click","users-2",[])}>✕</button>
         </div>
         <div class="err" id="usersModErr"></div>
         <div class="fg"><label class="fl">Имя</label><input type="text" id="umName" value="${esc(u.name)}" placeholder="Иван Иванов"></div>
-        <div class="fg"><label class="fl">Email</label><input type="email" id="umEmail" value="${esc(u.email)}" placeholder="user@salon.ru" ${isNew ? '' : 'disabled'}></div>
+        <div class="fg"><label class="fl">Email</label><input type="email" id="umEmail" value="${esc(u.email)}" placeholder="user@salon.ru" ${isNew?'':'disabled'}></div>
         <div class="fg"><label class="fl">Должность <span class="fh">необязательно</span></label><input type="text" id="umPosition" value="${esc(u.position||'')}" placeholder="Косметолог, Трихолог…"></div>
         <div class="fg">
           <label class="fl">Роль</label>
-          <select id="umRole" ${!isOwner ? 'disabled' : ''}>
-            ${isOwner ? '<option value="admin">Администратор</option>' : ''}
+          <select id="umRole" ${!isOwner?'disabled':''}>
+            ${isOwner?'<option value="admin">Администратор</option>':''}
             <option value="specialist">Специалист</option>
             <option value="admin_cashier">Администратор-кассир</option>
           </select>
@@ -93,16 +93,16 @@ function usersShowModal(u, isNew) {
           <div class="fh" id="umStaffHint" style="margin-top:4px"></div>
         </div>
         <div class="fg">
-          <label class="fl">${isNew ? 'Временный пароль' : 'Новый пароль'} <span class="fh">${isNew ? 'обязательно' : 'оставьте пустым чтобы не менять'}</span></label>
+          <label class="fl">${isNew?'Временный пароль':'Новый пароль'} <span class="fh">${isNew?'обязательно':'оставьте пустым чтобы не менять'}</span></label>
           <input type="password" id="umPw" placeholder="••••••••">
         </div>
-        ${!isNew ? `<div class="fg" style="display:flex;align-items:center;gap:10px">
-          <input type="checkbox" id="umActive" ${u.is_active ? 'checked' : ''} style="width:16px;height:16px">
+        ${!isNew?`<div class="fg" style="display:flex;align-items:center;gap:10px">
+          <input type="checkbox" id="umActive" ${u.is_active?'checked':''} style="width:16px;height:16px">
           <label for="umActive" class="fl" style="margin:0;cursor:pointer">Пользователь активен</label>
-        </div>` : ''}
+        </div>`:''}
         <div style="display:flex;gap:8px;margin-top:20px">
-          <button class="btn btn-pri" style="flex:1" onclick="usersSave(${u.id || 'null'},${isNew})">${isNew ? 'Создать' : 'Сохранить'}</button>
-          <button class="btn btn-sec" onclick="usersCloseModal()">Отмена</button>
+          <button class="btn btn-pri" style="flex:1" ${UIEvents.attrs("click","users-3",[UIEvents.value(u.id||null),UIEvents.value(isNew)])}>${isNew?'Создать':'Сохранить'}</button>
+          <button class="btn btn-sec" ${UIEvents.attrs("click","users-4",[])}>Отмена</button>
         </div>
       </div>
     </div>

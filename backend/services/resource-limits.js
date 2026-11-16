@@ -2,6 +2,8 @@
 const crypto = require('crypto');
 const config = require('../config');
 const { db, withTransaction } = require('../db');
+const { AsyncLocalStorage } = require('async_hooks');
+const usageContext = new AsyncLocalStorage();
 
 class LimitError extends Error {
   constructor(code, message) {
@@ -23,6 +25,7 @@ function settings() {
     salonDailyCalls: c.salonDailyCalls || 100,
     salonMonthlyCalls: c.salonMonthlyCalls || 2000,
     globalDailyCalls: c.globalDailyCalls || 5000,
+    paidDailyCalls: c.paidDailyCalls || 1000,
   };
 }
 
@@ -73,17 +76,38 @@ async function incrementCall(conn, salonId, period, startExpression, limit) {
   if (!result.rows[0]) throw new LimitError('BUDGET_EXHAUSTED', 'Лимит запросов ИИ исчерпан.');
 }
 
-async function claimUsage(salonId) {
+async function claimUsage(salonId, { paid = false, leaseId } = {}) {
   const limits = settings();
+  const day = "(NOW() AT TIME ZONE 'Europe/Moscow')::date";
   await withTransaction(async conn => {
-    await incrementCall(conn, 0, 'global_day', 'CURRENT_DATE', limits.globalDailyCalls);
-    await incrementCall(conn, salonId, 'day', 'CURRENT_DATE', limits.salonDailyCalls);
-    await incrementCall(conn, salonId, 'month', "date_trunc('month',CURRENT_DATE)::date", limits.salonMonthlyCalls);
+    if (leaseId) {
+      const lease = await conn.query(`UPDATE llm_concurrency_leases SET expires_at=NOW()+INTERVAL '5 minutes'
+        WHERE id=$1 AND salon_id=$2 AND expires_at>NOW() RETURNING id`, [leaseId, salonId]);
+      if (!lease.rows.length) throw new LimitError('CONCURRENCY', 'Срок запроса истёк. Повторите запрос.');
+    }
+    await incrementCall(conn, 0, 'global_day', day, limits.globalDailyCalls);
+    if (paid) await incrementCall(conn, 0, 'paid_day', day, limits.paidDailyCalls);
+    await incrementCall(conn, salonId, 'day', day, limits.salonDailyCalls);
+    await incrementCall(conn, salonId, 'month', `date_trunc('month',${day})::date`, limits.salonMonthlyCalls);
   });
 }
 
-async function claimGlobal() {
-  await incrementCall(db, 0, 'global_day', 'CURRENT_DATE', settings().globalDailyCalls);
+async function claimGlobal({ paid = false } = {}) {
+  await withTransaction(async conn => {
+    const day = "(NOW() AT TIME ZONE 'Europe/Moscow')::date";
+    await incrementCall(conn, 0, 'global_day', day, settings().globalDailyCalls);
+    if (paid) await incrementCall(conn, 0, 'paid_day', day, settings().paidDailyCalls);
+  });
+}
+
+function isLimitError(e) {
+  return ['BUDGET_EXHAUSTED', 'PAID_DISABLED', 'CONCURRENCY'].includes(e?.code);
+}
+
+async function attempt({ paid = false } = {}) {
+  if (paid && config.LLM_PAID_ENABLED === false) throw new LimitError('PAID_DISABLED', 'Платные запросы ИИ временно отключены.');
+  const context = usageContext.getStore();
+  return context ? claimUsage(context.salonId, { paid, leaseId: context.leaseId }) : claimGlobal({ paid });
 }
 
 async function acquire(salonId, userId) {
@@ -110,11 +134,10 @@ async function acquire(salonId, userId) {
 async function runLlm(salonId, userId, fn) {
   const leaseId = await acquire(salonId, userId);
   try {
-    await claimUsage(salonId);
-    return await fn();
+    return await usageContext.run({ salonId, leaseId }, fn);
   } finally {
     await db.query('DELETE FROM llm_concurrency_leases WHERE id=$1 AND salon_id=$2', [leaseId, salonId]).catch(() => {});
   }
 }
 
-module.exports = { LimitError, keyHash, consumeRate, register, askRate, claimUsage, claimGlobal, acquire, runLlm };
+module.exports = { LimitError, keyHash, consumeRate, register, askRate, claimUsage, claimGlobal, acquire, runLlm, attempt, isLimitError };

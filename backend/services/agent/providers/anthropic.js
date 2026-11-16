@@ -2,10 +2,11 @@
 
 const Anthropic = require('@anthropic-ai/sdk');
 const config = require('../../../config');
+const resourceLimits = require('../../resource-limits');
 
 // ── Anthropic-адаптер (Claude tool-calling). Откат: AGENT_PROVIDER=anthropic. ──
 function makeClient(apiKey) {
-  return new Anthropic({ apiKey: apiKey || config.ANTHROPIC_API_KEY });
+  return new Anthropic({ apiKey: apiKey || config.ANTHROPIC_API_KEY, maxRetries: 0 });
 }
 
 // Вызов Claude + нормализация ответа в провайдер-агностичный вид.
@@ -22,7 +23,8 @@ async function createMessage({ system, messages, tools }, opts = {}) {
   };
   // Пустой список — добивочный вызов оркестратора «ответь прозой без инструментов».
   if (tools && tools.length) params.tools = tools;
-  const msg = await client.messages.create(params);
+  await resourceLimits.attempt({ paid: true });
+  const msg = await client.messages.create(params, { maxRetries: 0 });
   const blocks = (msg && msg.content) || [];
   const text = blocks.filter(b => b.type === 'text').map(b => b.text).join('\n').trim();
   const toolCalls = blocks

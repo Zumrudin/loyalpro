@@ -545,6 +545,7 @@ async function runMigrations(client) {
   await client.query(MOBILE_AUTH_DDL);
   await client.query(API_ACCESS_TICKETS_DDL);
   await client.query(RESOURCE_LIMITS_DDL);
+  await client.query(REGISTRATION_INVITES_DDL);
 
   // ── Patient Photo Cases (внутренний клинический модуль) ─────────
   // Спека:  docs/superpowers/specs/2026-05-30-patient-photo-cases-design.md
@@ -3262,6 +3263,18 @@ CREATE TABLE IF NOT EXISTS llm_concurrency_leases (
 CREATE INDEX IF NOT EXISTS idx_llm_leases_salon_expiry ON llm_concurrency_leases(salon_id,expires_at);
 `;
 
+// Platform-owned pre-tenant invitations: no salon exists until registration.
+// Consumption and salon creation share a transaction; only hashes are stored.
+const REGISTRATION_INVITES_DDL = `
+CREATE TABLE IF NOT EXISTS registration_invites (
+ token_hash CHAR(64) PRIMARY KEY,
+ email_hash CHAR(64) NOT NULL,
+ expires_at TIMESTAMPTZ NOT NULL,
+ used_at TIMESTAMPTZ,
+ created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+`;
+
 // Additive mobile-auth schema. No historical link/OTP is backfilled or trusted.
 // Deploy with the legacy OTP listener/login stopped; rollback keeps this schema
 // and disables mobile login rather than restoring plaintext OTP or phone deep-links.
@@ -3396,4 +3409,4 @@ CREATE TRIGGER case_comment_tenant_check
   FOR EACH ROW EXECUTE FUNCTION validate_case_comment_tenant();
 `;
 
-module.exports = { runMigrations, MOBILE_AUTH_DDL, API_ACCESS_TICKETS_DDL, RESOURCE_LIMITS_DDL, CASE_TENANT_INTEGRITY_DDL, MAX_LOYALTY_DDL, FINANCE_OPS_DDL, EDOCS_BOARD_DDL, JOURNAL_DDL, SERVICE_CATALOG_DDL, JOURNAL_FINANCE_DDL, JOURNAL_LOCAL_DDL, JOURNAL_PREFS_DDL, JOURNAL_HISTORY_INDEX_DDL, STOCK_HISTORY_DDL, APPOINTMENT_GOODS_DDL };
+module.exports = { REGISTRATION_INVITES_DDL, runMigrations, MOBILE_AUTH_DDL, API_ACCESS_TICKETS_DDL, RESOURCE_LIMITS_DDL, CASE_TENANT_INTEGRITY_DDL, MAX_LOYALTY_DDL, FINANCE_OPS_DDL, EDOCS_BOARD_DDL, JOURNAL_DDL, SERVICE_CATALOG_DDL, JOURNAL_FINANCE_DDL, JOURNAL_LOCAL_DDL, JOURNAL_PREFS_DDL, JOURNAL_HISTORY_INDEX_DDL, STOCK_HISTORY_DDL, APPOINTMENT_GOODS_DDL };

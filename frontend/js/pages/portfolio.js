@@ -42,11 +42,11 @@ function portfolioCatTile(c) {
     : `<div style="width:100%;aspect-ratio:1;background:#f3f4f6;border-radius:10px;display:flex;align-items:center;justify-content:center;color:#d1d5db;font-size:32px">🖼️</div>`;
   const hiddenBadge = !c.isPublished ? '<div style="font-size:10px;color:#f59e0b;margin-top:4px">Скрыто</div>' : '';
   return `
-    <div draggable="true" data-portfolio-cat-id="${c.id}" style="border:1px solid #e5e7eb;border-radius:12px;padding:12px;cursor:pointer;transition:box-shadow .15s,opacity .15s;position:relative;background:#fff" onclick="openPortfolioCategory(${c.id})" onmouseover="this.style.boxShadow='0 4px 16px rgba(0,0,0,.10)'" onmouseout="this.style.boxShadow=''">
+    <div draggable="true" data-portfolio-cat-id="${c.id}" style="border:1px solid #e5e7eb;border-radius:12px;padding:12px;cursor:pointer;transition:box-shadow .15s,opacity .15s;position:relative;background:#fff" ${UIEvents.attrs("click","portfolio-1",[UIEvents.value(c.id)])} ${UIEvents.attrs("mouseover","portfolio-2",[])} ${UIEvents.attrs("mouseout","portfolio-3",[])}>
       <div style="position:absolute;top:8px;left:8px;cursor:grab;color:#d1d5db;font-size:14px;line-height:1;user-select:none">⠿</div>
       ${cover}
-      <div style="font-weight:600;font-size:13px;margin-top:8px">${_esc(c.title || '—')}</div>
-      <div style="font-size:11px;color:#9ca3af">${c.itemsCount || 0} работ</div>
+      <div style="font-weight:600;font-size:13px;margin-top:8px">${_esc(c.title||'—')}</div>
+      <div style="font-size:11px;color:#9ca3af">${c.itemsCount||0} работ</div>
       ${hiddenBadge}
     </div>`;
 }
@@ -215,7 +215,7 @@ function portfolioItemTile(it) {
   const staffBadge = it.staffName ? `<div style="font-size:11px;color:#6b7280;margin-top:2px">👤 ${_esc(it.staffName)}</div>` : '';
   const beforeBadge = it.photoBeforeUrl ? '<span style="display:inline-block;padding:2px 6px;background:#eef2ff;color:#4f46e5;border-radius:4px;font-size:10px;margin-left:4px">До+После</span>' : '';
   return `
-    <div draggable="true" data-portfolio-item-id="${it.id}" style="border:1px solid #e5e7eb;border-radius:12px;padding:10px;cursor:pointer;transition:box-shadow .15s,opacity .15s;position:relative;background:#fff" onclick="openPortfolioItemEdit(${it.id})" onmouseover="this.style.boxShadow='0 4px 16px rgba(0,0,0,.10)'" onmouseout="this.style.boxShadow=''">
+    <div draggable="true" data-portfolio-item-id="${it.id}" style="border:1px solid #e5e7eb;border-radius:12px;padding:10px;cursor:pointer;transition:box-shadow .15s,opacity .15s;position:relative;background:#fff" ${UIEvents.attrs("click","portfolio-4",[UIEvents.value(it.id)])} ${UIEvents.attrs("mouseover","portfolio-5",[])} ${UIEvents.attrs("mouseout","portfolio-6",[])}>
       <div style="position:absolute;top:6px;left:6px;cursor:grab;color:#d1d5db;font-size:14px;user-select:none">⠿</div>
       ${cover}
       <div style="font-weight:600;font-size:13px;margin-top:8px">${_esc(it.title)}${beforeBadge}</div>

@@ -17,7 +17,7 @@ function harness() {
     return nodes.get(id);
   };
   let uuid = 0;
-  const context = vm.createContext({ document: { getElementById: get }, Date, URLSearchParams, AbortController, setTimeout, clearTimeout, encodeURIComponent, crypto: { randomUUID: () => 'synthetic-uuid-' + (++uuid) }, TOKEN: 'synthetic-token', ME: { role: 'owner' }, notify: jest.fn(), fetch: jest.fn(), confirm: jest.fn(() => false) });
+  const context = vm.createContext({ UIEvents: require('../frontend/js/core/ui-events.js'), document: { getElementById: get }, Date, URLSearchParams, AbortController, setTimeout, clearTimeout, encodeURIComponent, crypto: { randomUUID: () => 'synthetic-uuid-' + (++uuid) }, TOKEN: 'synthetic-token', ME: { role: 'owner' }, notify: jest.fn(), fetch: jest.fn(), confirm: jest.fn(() => false) });
   for (const s of JR_SOURCES) vm.runInContext(s.code, context, { filename: s.file });
   // Financial request races are covered separately; these tests isolate grid/card APIs.
   context.jrSummaryLoad = jest.fn();
@@ -1914,7 +1914,7 @@ test('schedule menu keyboard navigation, Escape and outside click', () => {
   const root = { querySelector:q => q === '[role="menu"]' ? menu : toggle, querySelectorAll:()=>items, contains:target=>target===items[0] };
   const doc = { addEventListener:(name, fn)=>{handlers[name]=fn;}, activeElement:items[0] };
   const state = {staffMenu:root};
-  const ctx = vm.createContext({document:doc,journal:state});
+  const ctx = vm.createContext({ UIEvents: require('../frontend/js/core/ui-events.js'),document:doc,journal:state});
   vm.runInContext(readJr('journal-staff-menu.js'),ctx);
   handlers.keydown({key:'ArrowDown',preventDefault:jest.fn()}); expect(items[1].focus).toHaveBeenCalled();
   handlers.click({target:items[0]}); expect(menu.hidden).toBe(false);

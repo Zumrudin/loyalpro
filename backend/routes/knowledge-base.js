@@ -285,7 +285,6 @@ router.post('/relay', relayRate, async (req, res) => {
     return res.status(400).json({ error: 'bad prompt' });
   }
   try {
-    await resourceLimits.claimGlobal();
     // callGeminiDirect минует relay-ветку → без риска рекурсии, даже если URL задан.
     const answer = await kbAssistant.callGeminiDirect(prompt, {
       free:  config.KB_GEMINI_KEY_FREE,
@@ -307,7 +306,6 @@ router.post('/relay/embed', relayRate, async (req, res) => {
     return res.status(400).json({ error: 'bad text' });
   }
   try {
-    await resourceLimits.claimGlobal();
     const embedding = await kbAssistant.embedTextDirect(text, {
       free:  config.KB_GEMINI_KEY_FREE,
       paid:  config.KB_GEMINI_KEY_PAID,

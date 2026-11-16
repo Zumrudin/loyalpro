@@ -34,14 +34,15 @@ async function doRegister() {
   const city      = document.getElementById('rCity').value.trim();
   const email     = document.getElementById('rEmail').value.trim();
   const password  = document.getElementById('rPass').value;
+  const invitation = document.getElementById('rInvitation').value.trim();
   const errEl = document.getElementById('regErr');
   const btn = document.getElementById('regBtn');
   errEl.style.display = 'none';
   if (!salonName || !email || !password) { errEl.textContent = 'Заполните все обязательные поля'; errEl.style.display = 'block'; return; }
-  if (password.length < 6) { errEl.textContent = 'Пароль минимум 6 символов'; errEl.style.display = 'block'; return; }
+  if (password.length < 8) { errEl.textContent = 'Пароль минимум 8 символов'; errEl.style.display = 'block'; return; }
   btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>';
   try {
-    const d = await api('POST', '/api/auth/register', { salonName, city, email, password });
+    const d = await api('POST', '/api/auth/register', { salonName, city, email, password, invitation });
     TOKEN = d.token; ME = d.user;
     localStorage.setItem('lp_tk', TOKEN);
     launchApp();

@@ -1,4 +1,5 @@
 'use strict';
+const { isLimitError } = require('../../resource-limits');
 
 // Retry only the LLM step. Tool execution and delivery stay in the orchestrator.
 function createProvider({ salonId, store, providers, legacy }) {
@@ -17,6 +18,7 @@ function createProvider({ salonId, store, providers, legacy }) {
             ? { ...options, maxRetries: 0, sdkMaxRetries: 0, fallbackTimeoutMs: 20000 } : options);
           if (!result || (!result.text?.trim() && !result.toolCalls?.length)) throw new Error('EMPTY_MODEL_RESPONSE');
         } catch (e) {
+          if (isLimitError(e)) throw e;
           if (!['gpt', 'claude'].includes(state.active)) {
             await store.outcome(salonId, state, 'error');
             throw e;

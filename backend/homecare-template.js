@@ -675,9 +675,10 @@ ${pagesHtml}
 ${wmHtml}
 
 <div class="no-print">
-  <button class="btn-print-go" onclick="window.print()">🖨 Печать / PDF</button>
-  <button class="btn-close"    onclick="window.close()">Закрыть</button>
+  <button class="btn-print-go" id="hcPrintPreview">🖨 Печать / PDF</button>
+  <button class="btn-close" id="hcClosePreview">Закрыть</button>
 </div>
+<script src="/js/homecare-print.js"></script>
 </body>
 </html>`;
 }

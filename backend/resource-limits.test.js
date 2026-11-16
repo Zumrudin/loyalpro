@@ -52,10 +52,11 @@ test('budget exhaustion prevents the provider call and releases the lease', asyn
   mockTxQuery.mockImplementation(async sql => {
     if (sql.includes('COUNT(*)')) return { rows: [{ count: 0 }] };
     if (sql.includes('INSERT INTO llm_usage_counters')) return { rows: [] };
+    if (sql.includes('UPDATE llm_concurrency_leases')) return { rows: [{ id: 'synthetic' }] };
     return { rows: [] };
   });
   const provider = jest.fn();
-  await expect(limits.runLlm(11, 5, provider)).rejects.toMatchObject({ status: 429, code: 'BUDGET_EXHAUSTED' });
+  await expect(limits.runLlm(11, 5, async () => { await limits.attempt(); return provider(); })).rejects.toMatchObject({ status: 429, code: 'BUDGET_EXHAUSTED' });
   expect(provider).not.toHaveBeenCalled();
   expect(mockQuery).toHaveBeenCalledWith(
     'DELETE FROM llm_concurrency_leases WHERE id=$1 AND salon_id=$2', [expect.any(String), 11]);
@@ -73,8 +74,25 @@ test('concurrency cap is serialized per tenant across processes', async () => {
 
 test('a successful call always releases its lease', async () => {
   const provider = jest.fn(async () => 'synthetic-answer');
-  await expect(limits.runLlm(11, 5, provider)).resolves.toBe('synthetic-answer');
+  await expect(limits.runLlm(11, 5, async () => { await limits.attempt(); return provider(); })).resolves.toBe('synthetic-answer');
   expect(provider).toHaveBeenCalledTimes(1);
   expect(mockQuery).toHaveBeenCalledWith(
     'DELETE FROM llm_concurrency_leases WHERE id=$1 AND salon_id=$2', [expect.any(String), 11]);
+});
+
+test('parallel salon contexts account every attempt without leaking tenant context', async () => {
+  await Promise.all([11, 22].map(salon => limits.runLlm(salon, 5, async () => {
+    await limits.attempt({ paid: true });
+    await limits.attempt();
+  })));
+  const calls=mockTxQuery.mock.calls.filter(([sql])=>sql.includes('INSERT INTO llm_usage_counters'));
+  expect(calls.filter(([,p])=>p[0]===11)).toHaveLength(4);
+  expect(calls.filter(([,p])=>p[0]===22)).toHaveLength(4);
+  expect(calls.filter(([,p])=>p[1]==='paid_day')).toHaveLength(2);
+});
+
+test('paid kill switch fails before quota storage or network', async () => {
+  const config=require('./config');config.LLM_PAID_ENABLED=false;
+  await expect(limits.attempt({paid:true})).rejects.toMatchObject({code:'PAID_DISABLED',status:429});
+  expect(mockTxQuery).not.toHaveBeenCalled();delete config.LLM_PAID_ENABLED;
 });

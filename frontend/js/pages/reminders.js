@@ -62,20 +62,20 @@ function remRenderRules() {
       <div class="bc-row-grid">
         <div class="bc-row-left">
           <div class="care-card-title">
-            <label class="tgl" title="${on ? 'Выключить правило' : 'Включить правило'}"><input type="checkbox" ${on ? 'checked' : ''}
-              onchange="remToggleRule(${r.id})"><span class="ts"></span></label>
+            <label class="tgl" title="${on?'Выключить правило':'Включить правило'}"><input type="checkbox" ${on?'checked':''}
+              ${UIEvents.attrs("change","reminders-1",[UIEvents.value(r.id)])}><span class="ts"></span></label>
             <b>${esc(r.title)}</b>
-            ${on ? '' : '<span class="care-badge care-st-stopped">выключено</span>'}
+            ${on?'':'<span class="care-badge care-st-stopped">выключено</span>'}
           </div>
           <div class="care-meta">
             Через ${r.delayDays} дн. в ${esc(r.sendTime)} ·
-            ${r.textMode === 'free' ? '✍️ Мила пишет сама' : '📋 готовый текст'} ·
-            ${r.bonusEnabled ? `🎁 бонусы: ${(r.bonusTiers || []).length} ступ.` : 'без бонусов'}
+            ${r.textMode==='free'?'✍️ Мила пишет сама':'📋 готовый текст'} ·
+            ${r.bonusEnabled?`🎁 бонусы: ${(r.bonusTiers||[]).length} ступ.`:'без бонусов'}
           </div>
           <div class="care-stats">
             <span class="care-stat on" title="Ждут отправки"><b>${r.queuedCount}</b> в очереди</span>
             <span class="care-stat" title="Всего отправлено напоминаний"><b>${r.sentCount}</b> отправлено</span>
-            <span class="care-stat" title="Записались после напоминания${conv === null ? '' : ` — ${conv}% от отправленных`}"><b>${r.convertedCount}</b> записались${conv === null ? '' : ` · ${conv}%`}</span>
+            <span class="care-stat" title="Записались после напоминания${conv===null?'':` — ${conv}% от отправленных`}"><b>${r.convertedCount}</b> записались${conv===null?'':` · ${conv}%`}</span>
             <span class="care-stat" title="Плановая сумма записей, созданных после напоминания"><b>${remRub(r.conversionAmountTotal)}</b> перезапись</span>
             <span class="care-stat" title="Дошли до визита"><b>${r.visitedCount}</b> дошли</span>
             <span class="care-stat" title="Фактическая выручка по визитам, до которых дошли после напоминания"><b>${remRub(r.visitRevenueTotal)}</b> выручка</span>
@@ -84,10 +84,10 @@ function remRenderRules() {
         </div>
         <div class="bc-row-right">
           <div class="care-acts">
-            <button class="btn btn-sec btn-sm" onclick="remOpenTest(${r.id})" title="Отправить это правило на свой номер">🧪 Тест</button>
-            <button class="btn btn-sec btn-sm" onclick="remOpenBackfill(${r.id})" title="Кому ушло бы, если бы правило работало последние N дней">👁 Догон</button>
-            <button class="btn btn-sec btn-sm" onclick="remOpenRuleModal(${r.id})">✏️ Изменить</button>
-            <button class="btn btn-sec btn-sm care-act-icon" onclick="remDeleteRule(${r.id})" title="Удалить правило">🗑</button>
+            <button class="btn btn-sec btn-sm" ${UIEvents.attrs("click","reminders-2",[UIEvents.value(r.id)])} title="Отправить это правило на свой номер">🧪 Тест</button>
+            <button class="btn btn-sec btn-sm" ${UIEvents.attrs("click","reminders-3",[UIEvents.value(r.id)])} title="Кому ушло бы, если бы правило работало последние N дней">👁 Догон</button>
+            <button class="btn btn-sec btn-sm" ${UIEvents.attrs("click","reminders-4",[UIEvents.value(r.id)])}>✏️ Изменить</button>
+            <button class="btn btn-sec btn-sm care-act-icon" ${UIEvents.attrs("click","reminders-5",[UIEvents.value(r.id)])} title="Удалить правило">🗑</button>
           </div>
         </div>
       </div>
@@ -173,25 +173,25 @@ function remRenderTiers() {
   wrap.innerHTML = (_remTiers.map((t, i) => `
     <div class="nr-cond rem-tier" style="margin-bottom:8px">
       <div class="rem-tier-head">
-        <span class="care-touch-num">${i + 1}</span>
-        <span class="rem-tier-lbl">Ступень ${i + 1}</span>
-        <button class="mc" onclick="remRemoveTier(${i})" title="Убрать ступень">✕</button>
+        <span class="care-touch-num">${i+1}</span>
+        <span class="rem-tier-lbl">Ступень ${i+1}</span>
+        <button class="mc" ${UIEvents.attrs("click","reminders-6",[UIEvents.value(i)])} title="Убрать ступень">✕</button>
       </div>
       <div class="rem-tier-fields">
         <label class="care-touch-lbl">баланс меньше
-          <input type="number" min="0" style="width:110px" value="${t.upTo === null ? '' : t.upTo}"
-                 placeholder="без предела" oninput="remTierField(${i},'upTo',this.value)"></label>
-        <select style="width:auto" onchange="remTierField(${i},'action',this.value)">
-          <option value="accrue"  ${t.action === 'accrue'  ? 'selected' : ''}>начислить бонусы</option>
-          <option value="mention" ${t.action === 'mention' ? 'selected' : ''}>только упомянуть баланс</option>
-          <option value="none"    ${t.action === 'none'    ? 'selected' : ''}>без бонусов</option>
+          <input type="number" min="0" style="width:110px" value="${t.upTo===null?'':t.upTo}"
+                 placeholder="без предела" ${UIEvents.attrs("input","reminders-7",[UIEvents.value(i)])}></label>
+        <select style="width:auto" ${UIEvents.attrs("change","reminders-8",[UIEvents.value(i)])}>
+          <option value="accrue"  ${t.action==='accrue'?'selected':''}>начислить бонусы</option>
+          <option value="mention" ${t.action==='mention'?'selected':''}>только упомянуть баланс</option>
+          <option value="none"    ${t.action==='none'?'selected':''}>без бонусов</option>
         </select>
-        ${t.action === 'accrue' ? `<label class="care-touch-lbl">сколько
+        ${t.action==='accrue'?`<label class="care-touch-lbl">сколько
           <input type="number" min="1" style="width:100px" value="${t.amount}"
-                 placeholder="бонусов" oninput="remTierField(${i},'amount',this.value)"></label>` : ''}
+                 placeholder="бонусов" ${UIEvents.attrs("input","reminders-10",[UIEvents.value(i)])}></label>`:''}
       </div>
       <textarea rows="2" placeholder="Текст для этой ступени (пусто — возьмётся основной текст правила)"
-                oninput="remTierField(${i},'text',this.value)">${esc(t.text || '')}</textarea>
+                ${UIEvents.attrs("input","reminders-9",[UIEvents.value(i)])}>${esc(t.text||'')}</textarea>
     </div>`).join('') || '<div class="empty" style="padding:10px 0">Ступеней нет — добавьте хотя бы одну</div>') + hint;
 }
 
@@ -613,9 +613,9 @@ function remRenderPlan(d, ruleId) {
       day.backfillCount ? `из догона: ${day.backfillCount}` : '',
       'клик — показать этот день в таблице',
     ].filter(Boolean).join(' · ');
-    return `<span class="bc-chip${on ? ' on' : ''}" title="${escAttr(tip)}"
-        onclick="remPickPlanDay('${escJs(day.date)}')">${esc(remPlanDayLabel(day.date))}
-        <b style="margin-left:4px">${day.count}</b>${fin && fin.overflow ? ' ⚠️' : ''}</span>`;
+    return `<span class="bc-chip${on?' on':''}" title="${escAttr(tip)}"
+        ${UIEvents.attrs("click","reminders-11",[String(day.date)])}>${esc(remPlanDayLabel(day.date))}
+        <b style="margin-left:4px">${day.count}</b>${fin&&fin.overflow?' ⚠️':''}</span>`;
   }).join('');
   const first = days[0];
   const firstFin = remPlanDayFinish(first.firstTime, first.count, interval);
@@ -631,7 +631,7 @@ function remRenderPlan(d, ruleId) {
     <div class="bc-chip-row">${chips}</div>
     ${_remHistDate ? `<div style="margin-top:8px;font-size:12.5px;color:var(--t3)">
         Таблица показывает только ${esc(remPlanDayLabel(_remHistDate))}.
-        <a href="#" onclick="event.preventDefault();remPickPlanDay(null)">показать все</a></div>` : ''}
+        <a href="#" ${UIEvents.attrs("click","reminders-12",[])}>показать все</a></div>` : ''}
     <div style="margin-top:6px;font-size:11.5px;color:var(--t3)">
       Время приблизительное: воркер держит паузу между сообщениями и не шлёт позже 21:00.</div>
   </div>`;
@@ -684,10 +684,10 @@ function remRenderHistory(rows) {
       <td data-label="Дошёл">${r.visitedAt ? '✅ ' + remFmt(r.visitedAt) : '—'}</td>
       <td data-label="Выручка" style="font-weight:600;text-align:right">${r.visitedAt ? remRub(r.visitRevenue) : '—'}</td>
       <td class="mtbl-act mtbl-hide-empty">${r.status === 'scheduled'
-             ? `<button class="btn btn-sec btn-sm" onclick="remCancelQueued(${r.id})">Отменить отправку</button>`
-             : (r.ruleId ? `<button class="btn btn-sec btn-sm" onclick="remToggleMute(${r.ruleId}, '${escJs(r.phone)}', ${!r.muted})"
-                  title="${r.muted ? 'Разрешить напоминания этому клиенту по этому правилу' : 'Больше не напоминать этому клиенту по этому правилу'}">
-                  ${r.muted ? '🔔 Разрешить снова' : '🔕 Запретить'}</button>` : '')}</td>
+             ? `<button class="btn btn-sec btn-sm" ${UIEvents.attrs("click","reminders-13",[UIEvents.value(r.id)])}>Отменить отправку</button>`
+             : (r.ruleId ? `<button class="btn btn-sec btn-sm" ${UIEvents.attrs("click","reminders-14",[UIEvents.value(r.ruleId),String(r.phone),UIEvents.value(!r.muted)])}
+                  title="${r.muted?'Разрешить напоминания этому клиенту по этому правилу':'Больше не напоминать этому клиенту по этому правилу'}">
+                  ${r.muted?'🔔 Разрешить снова':'🔕 Запретить'}</button>` : '')}</td>
     </tr>`;
   }).join('');
 }

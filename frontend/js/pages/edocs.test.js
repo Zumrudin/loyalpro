@@ -11,7 +11,7 @@ const FRONT = path.join(__dirname, '..', '..');
 const BACK = path.join(__dirname, '..', '..', '..', 'backend');
 
 function browserContext(extra = {}) {
-  const ctx = vm.createContext({ console, URLSearchParams, localStorage: { getItem: () => null, setItem() {}, removeItem() {} }, ...extra });
+  const ctx = vm.createContext({ console, URLSearchParams, UIEvents: require('../core/ui-events.js'), localStorage: { getItem: () => null, setItem() {}, removeItem() {} }, ...extra });
   ctx.window = ctx;
   return ctx;
 }
@@ -157,17 +157,16 @@ test('id разметки: каждый getElementById страницы есть
   assert.deepStrictEqual(missing, []);
 });
 
-test('инлайн-обработчики edocs.js и разметки страницы ссылаются на существующие функции', () => {
-  const html = fs.readFileSync(path.join(FRONT, 'index.html'), 'utf8');
-  const from = html.indexOf('id="page-edocs"');
-  const region = html.slice(from, html.indexOf('id="page-economics"', from)) + html.slice(html.indexOf('id="edMeModal"'), html.indexOf('id="notif"'));
-  const script = ED_PAGE_SRC;
-  const re = /on(?:click|change|input|toggle)=\\?"(?:if\(event\.target===this\))?(?:event\.(?:preventDefault|stopPropagation)\(\);)?([A-Za-z_]+)\(/g;
-  const called = new Set([...region.matchAll(re), ...script.matchAll(re)].map((m) => m[1]));
-  assert.ok(called.size >= 25, `обработчики не нашлись (${called.size}) — регулярка устарела`);
-  const builtin = new Set(['closeModal', 'openModal']);
-  const missing = [...called].filter((n) => !builtin.has(n) && typeof ctx[n] !== 'function');
-  assert.deepStrictEqual(missing, []);
+test('CSP-обработчики ссылаются на существующие функции страницы', () => {
+  const dynamic = fs.readFileSync(path.join(FRONT, 'js/core/dynamic-events.js'), 'utf8');
+  const statics = fs.readFileSync(path.join(FRONT, 'js/core/static-events.js'), 'utf8');
+  const called = new Set([...(dynamic + statics).matchAll(/\b(ed[A-Za-z_]*)\(/g)].map(m => m[1]));
+  assert.ok(called.size >= 25, 'реестр обработчиков страницы не найден');
+  for (const name of called) assert.strictEqual(typeof ctx[name], 'function', name + ' не определена');
+  const pageSources = ED_PAGE_SRC;
+  const refs = [...pageSources.matchAll(/UIEvents\.attrs\(['"]\w+['"],\s*['"]([^'"]+)['"]/g)];
+  assert.ok(refs.length >= 25, 'CSP-ссылки не найдены');
+  for (const [, id] of refs) assert.ok(dynamic.includes('"' + id + '": function'), id + ' отсутствует в реестре');
 });
 
 test('паритет справочников фронта с бэкендом', () => {
@@ -270,7 +269,7 @@ test('страница пациента: пока идёт отправка, в�
   assert.strictEqual(p.k('_ed').sending, true);
   p.k('edcToggle')(11);
   await settle();
-  assert.match(p.el('edcSend').innerHTML, /id="edcSendBtn" onclick="edcSend\(\)" disabled>Отправляем…</);
+  assert.match(p.el('edcSend').innerHTML, /id="edcSendBtn" data-ui-click="edocs-client-21" data-ui-click-args="\[\]" disabled>Отправляем…</);
   await p.k('edcSend')();   // второй клик во время отправки
   release();
   await sending;
@@ -290,7 +289,7 @@ test('страница пациента: тело отправки — выбр�
   assert.match(p.el('notif').textContent, /отправлены пациенту/);
   p.run("_edc.missingSel = { identity: [{ key: 'passport_number', label: 'Номер паспорта' }], org: [] }; _edc.selected = new Set([10]); edcSendRender();");
   assert.match(p.el('edcSend').innerHTML, /Не хватает данных пациента: Номер паспорта/);
-  assert.match(p.el('edcSend').innerHTML, /id="edcSendBtn" onclick="edcSend\(\)" disabled>/);
+  assert.match(p.el('edcSend').innerHTML, /id="edcSendBtn" data-ui-click="edocs-client-21" data-ui-click-args="\[\]" disabled>/);
 });
 
 test('старый адрес мастера #edocs/new/52/30252 переписывается на страницу пациента', async () => {
@@ -330,7 +329,7 @@ test('дашборд: карточки по группам, цвет, плитк
   assert.match(html, /Требуют действия · 1[\s\S]*Готово · 1/);
   assert.match(html, /class="edb-card ed-c-red"/);
   assert.match(html, /<div class="edb-doc no"><b>Договор<\/b>нет<\/div>/);
-  assert.match(html, /edbAct\('52:2026-10-25'\)">Отправить договор</);
+  assert.match(html, /data-ui-click="edocs-board-12" data-ui-click-args="\[&quot;52:2026-10-25&quot;\]">Отправить договор</);
   assert.match(p.el('edbWarns').innerHTML, /Не загружен шаблон «Акт оказанных услуг»/);
   assert.match(p.el('edbHead').innerHTML, /<span>1\/2<\/span>/);
   p.run("_ed.state = Object.assign({}, _ed.state, { me: { connected: false } }); edbCardsRender([])");
@@ -403,7 +402,7 @@ test('встройки: карточка клиента и «Записи» зо
   const clients = fs.readFileSync(path.join(__dirname, 'clients.js'), 'utf8');
   const records = fs.readFileSync(path.join(__dirname, 'records.js'), 'utf8');
   const html = fs.readFileSync(path.join(FRONT, 'index.html'), 'utf8');
-  assert.match(clients, /<div id="edClientBlock_\$\{c\.id\}"><\/div>/);
+  assert.match(clients, /<div id="edClientBlock_\$\{cId\(c\.id\)\}"><\/div>/);
   assert.match(clients, /typeof edRenderClientBlock === 'function'\) edRenderClientBlock\(c\.id\)/);
   assert.match(records, /class="r-act" data-rid="\$\{r\.id\}" data-cid="\$\{r\.client_id \|\| ''\}"/);
   assert.match(records, /typeof edDecorateRecords === 'function'\) edDecorateRecords\(d\.records\)/);

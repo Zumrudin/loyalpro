@@ -48,7 +48,7 @@ router.get('/cert-request/:slug', async (req, res) => {
     res.setHeader('Cross-Origin-Opener-Policy', 'unsafe-none');
     const ancestors = ["'self'", ...cfg.CERT_REQUEST_FRAME_ANCESTORS].join(' ');
     res.setHeader('Content-Security-Policy',
-      `default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; ` +
+      `default-src 'self'; script-src 'self'; object-src 'none'; base-uri 'self'; style-src 'self' 'unsafe-inline'; ` +
       `img-src 'self' data:; connect-src 'self'; font-src 'self' data:; frame-ancestors ${ancestors}`);
     res.setHeader('Cache-Control', 'no-store');
     res.sendFile(path.join(__dirname, '../../frontend/cert-request.html'));

@@ -43,12 +43,16 @@ const AGENT_TEXT_TYPES = new Set(['text', 'formattedText']);
 const { createLogger } = require('../logger');
 const logger = createLogger('ChatpushWebhook');
 const { safeErrorCode } = require('../utils/safe-error');
+const securityStatus = require('../services/webhook-security-status');
 const rateLimitConfig = config.WEBHOOK_RATE_LIMIT || {};
 const limiterOptions = {
   windowMs: rateLimitConfig.windowMs || 60_000,
   standardHeaders: true,
   legacyHeaders: false,
-  handler: (req, res) => res.status(429).json({ error: 'too many requests' }),
+  handler: (req, res) => {
+    securityStatus.record(providerOf(req), 'rate_limited');
+    return res.status(429).json({ error: 'too many requests' });
+  },
 };
 const webhookIpLimiter = rateLimit({ ...limiterOptions, limit: rateLimitConfig.ipLimit || 240 });
 const webhookAccountLimiter = rateLimit({
@@ -125,11 +129,13 @@ router.post('/webhook', async (req, res) => {
 
   const sig = verifySecret(req);
   if (!sig.ok) {
-    logger.warn(`webhook key check failed (${providerOf(req)}): ${sig.reason}`);
+    securityStatus.record(providerOf(req), sig.status === 503 ? 'not_configured'
+      : sig.reason === 'missing key' ? 'missing_key' : 'invalid_key');
     return res.status(sig.status || 401).json({ error: sig.status === 503 ? 'webhook not configured' : 'invalid key' });
   }
 
   const provider = providerOf(req);
+  securityStatus.record(provider, 'accepted');
   const body = req.body || {};
   const msg = chatpush.parseMessageEvent(body);          // сообщение (in/out) или null
   // Плоская форма (tdlib, наш шлюз — в т.ч. НЕ-сообщения: статусы) кладёт

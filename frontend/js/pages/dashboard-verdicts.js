@@ -153,11 +153,11 @@ async function vdLoadList(s) {
     if (req !== _vdListReq) return;
     const rows = (data.rows || []).map(vdRowView);
     list.innerHTML = `
-      <div class="vd-list-head"><span>${esc(col ? col.short : s.status)} · ${esc(chanName)} · ${rows.length}${data.truncated ? '+' : ''}</span>
-        <button type="button" class="vd-close" title="Закрыть список" onclick="vdCloseList()">✕</button></div>
-      <div class="vd-list-sub">${esc(col ? col.title : '')}. Клик по строке открывает переписку за этот день.</div>
-      ${rows.length ? rows.map(vdRowHtml).join('') : '<div class="vd-more">Пусто за выбранный период</div>'}
-      ${data.truncated ? '<div class="vd-more">Показаны первые ' + rows.length + ' — сузьте период</div>' : ''}`;
+      <div class="vd-list-head"><span>${esc(col?col.short:s.status)} · ${esc(chanName)} · ${rows.length}${data.truncated?'+':''}</span>
+        <button type="button" class="vd-close" title="Закрыть список" ${UIEvents.attrs("click","dashboard-verdicts-1",[])}>✕</button></div>
+      <div class="vd-list-sub">${esc(col?col.title:'')}. Клик по строке открывает переписку за этот день.</div>
+      ${rows.length?rows.map(vdRowHtml).join(''):'<div class="vd-more">Пусто за выбранный период</div>'}
+      ${data.truncated?'<div class="vd-more">Показаны первые '+rows.length+' — сузьте период</div>':''}`;
     if (_vdState && _vdState.key) vdMarkActive(_vdState.key, _vdState.day);
   } catch (e) {
     if (req !== _vdListReq) return;
@@ -168,10 +168,10 @@ async function vdLoadList(s) {
 function vdRowHtml(v) {
   const b = (typeof msgBadge === 'function') ? msgBadge(v.channel) : { short: '?', cls: 'ch-all' };
   return `
-    <div class="vd-row" data-key="${esc(v.key)}" data-day="${esc(v.dayIso)}" onclick="vdOpenRow(this)">
+    <div class="vd-row" data-key="${esc(v.key)}" data-day="${esc(v.dayIso)}" ${UIEvents.attrs("click","dashboard-verdicts-2",[])}>
       <span class="ch ${esc(b.cls)}"><i>${esc(b.short)}</i></span>
-      <div><div class="vd-name">${esc(v.title)}</div><div class="vd-note">${esc(v.statusLabel)}${v.note ? ' — ' + esc(v.note) : ''}</div></div>
-      <div class="vd-badges"><span class="vd-day">${esc(v.day)}</span>${v.badges.map(x => `<span class="vd-b${x.on ? ' on' : ''}">${esc(x.text)}</span>`).join('')}</div>
+      <div><div class="vd-name">${esc(v.title)}</div><div class="vd-note">${esc(v.statusLabel)}${v.note?' — '+esc(v.note):''}</div></div>
+      <div class="vd-badges"><span class="vd-day">${esc(v.day)}</span>${v.badges.map(x=>`<span class="vd-b${x.on?' on':''}">${esc(x.text)}</span>`).join('')}</div>
     </div>`;
 }
 
@@ -228,16 +228,15 @@ async function vdLoadDialog(s) {
     panel.innerHTML = `
       <div class="vd-panel-head">
         <div><div class="vd-ttl">${esc(title)} · ${esc(vdFmtDay(s.day))}</div><div class="vd-st">${esc(sub)}</div></div>
-        <button type="button" class="vd-close" title="Закрыть переписку" onclick="vdCloseDialog()">✕</button>
+        <button type="button" class="vd-close" title="Закрыть переписку" ${UIEvents.attrs("click","dashboard-verdicts-3",[])}>✕</button>
       </div>
-      <div class="vd-msgs" id="vdMsgs">${html || '<div class="vd-more">Сообщений нет</div>'}</div>
+      <div class="vd-msgs" id="vdMsgs">${html||'<div class="vd-more">Сообщений нет</div>'}</div>
       <div class="vd-panel-foot"><a href="#chat/${encodeURIComponent(s.key)}">Открыть в Чате →</a></div>`;
     const box = document.getElementById('vdMsgs');
     if (box) box.scrollTop = box.scrollHeight;
   } catch (e) {
     if (req !== _vdDialogReq) return;
-    panel.innerHTML = '<div class="vd-panel-head"><div class="vd-ttl">Переписка</div><button type="button" class="vd-close" onclick="vdCloseDialog()">✕</button></div>'
-      + '<div class="vd-more">Не удалось загрузить: ' + esc(e && e.message) + '</div>';
+    panel.innerHTML = `<div class="vd-panel-head"><div class="vd-ttl">Переписка</div><button type="button" class="vd-close" ${UIEvents.attrs("click","dashboard-verdicts-4",[])}>✕</button></div><div class="vd-more">Не удалось загрузить: ${esc(e&&e.message)}</div>`;
   }
 }
 

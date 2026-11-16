@@ -214,7 +214,7 @@ function finRenderRows(rows) {
       ? `<a href="#journal" class="fin-visit" data-rec="${finEsc(r.yclientsRecordId)}" title="Открыть визит в журнале">#${finEsc(r.yclientsRecordId)}</a>`
       : (r.outboxId ? `<a href="#journal" class="fin-visit" data-rec="${finEsc(-r.outboxId)}" title="Новая запись в очереди журнала">очередь №${finEsc(r.outboxId)}</a>` : '—');
     const client = r.clientId
-      ? `<a href="javascript:void(0)" class="fin-client" data-cid="${finEsc(r.clientId)}" data-cname="${finEsc(r.clientName || '')}"><strong>${finEsc(r.clientName || 'Без имени')}</strong></a><br><span class="fin-sub">${finEsc(r.clientPhone || '')}</span>`
+      ? `<a href="#clients" class="fin-client" data-cid="${finEsc(r.clientId)}" data-cname="${finEsc(r.clientName || '')}"><strong>${finEsc(r.clientName || 'Без имени')}</strong></a><br><span class="fin-sub">${finEsc(r.clientPhone || '')}</span>`
       : '<span class="fin-sub">—</span>';
     const note = r.title ? `<br><span class="fin-sub">${finEsc(r.title)}</span>` : '';
     return `<tr class="fin-row fin-s-${finEsc(r.status)}">
@@ -250,7 +250,7 @@ function finBodyClick(e) {
   const v = e.target.closest('.fin-visit');
   if (v) { e.preventDefault(); finOpenVisit(Number(v.dataset.rec)); return; }
   const c = e.target.closest('.fin-client');
-  if (c) { finState.clientId = c.dataset.cid; finState.clientName = c.dataset.cname || ''; finState.offset = 0; finFetch(); }
+  if (c) { e.preventDefault(); finState.clientId = c.dataset.cid; finState.clientName = c.dataset.cname || ''; finState.offset = 0; finFetch(); }
 }
 // Журнал сам не читает хвост адреса, поэтому открываем раздел, а карточку визита — его же функцией jrOpen,
 // когда журнал загрузился. Нет jrOpen — остаёмся в разделе «Журнал записи».

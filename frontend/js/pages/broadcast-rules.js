@@ -94,21 +94,21 @@ function nrRenderList() {
         <div class="bc-row-grid">
           <div class="bc-row-left">
             <div class="bc-row-meta" style="display:flex;align-items:center;gap:10px">
-              <label class="tgl"><input type="checkbox" ${r.is_enabled ? 'checked' : ''}
-                onchange="nrToggle(${r.id})"><span class="ts"></span></label>
+              <label class="tgl"><input type="checkbox" ${r.is_enabled?'checked':''}
+                ${UIEvents.attrs("change","broadcast-rules-1",[UIEvents.value(r.id)])}><span class="ts"></span></label>
               <b style="font-size:13.5px;color:var(--t1)">${esc(r.title)}</b>
             </div>
             <div class="bc-row-filters" style="margin-top:6px">${esc(nrCondSummary(r.conditions))}</div>
-            <div class="bc-row-filters">Каналы: ${esc(channels)}${r.prefer_last_channel ? ' · сначала последний канал клиента' : ''}</div>
-            <div class="bc-row-preview">${esc((r.message_template || '').slice(0, 140))}${(r.message_template || '').length > 140 ? '…' : ''}</div>
+            <div class="bc-row-filters">Каналы: ${esc(channels)}${r.prefer_last_channel?' · сначала последний канал клиента':''}</div>
+            <div class="bc-row-preview">${esc((r.message_template||'').slice(0,140))}${(r.message_template||'').length>140?'…':''}</div>
           </div>
           <div class="bc-row-right">
             <div class="bc-progress-lbl">Отправки</div>
-            <div class="bc-progress-val">${stats.length ? stats.join(' · ') : '—'}</div>
+            <div class="bc-progress-val">${stats.length?stats.join(' · '):'—'}</div>
             <div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap;justify-content:flex-end">
-              <button class="btn btn-sec btn-sm" onclick="nrShowLog(${r.id})">Журнал</button>
-              <button class="btn btn-sec btn-sm" onclick="nrOpenEditor(${r.id})">Изменить</button>
-              <button class="btn btn-sec btn-sm" onclick="nrDelete(${r.id})">🗑</button>
+              <button class="btn btn-sec btn-sm" ${UIEvents.attrs("click","broadcast-rules-2",[UIEvents.value(r.id)])}>Журнал</button>
+              <button class="btn btn-sec btn-sm" ${UIEvents.attrs("click","broadcast-rules-3",[UIEvents.value(r.id)])}>Изменить</button>
+              <button class="btn btn-sec btn-sm" ${UIEvents.attrs("click","broadcast-rules-4",[UIEvents.value(r.id)])}>🗑</button>
             </div>
           </div>
         </div>
@@ -238,15 +238,14 @@ function nrRenderConds() {
   wrap.innerHTML = _nrConds.map((c, i) => `
     <div class="nr-cond">
       <div class="nr-cond-head">
-        <select onchange="nrCondType(${i}, this.value)">
-          ${Object.entries(NR_COND_LABELS).map(([k, v]) =>
-            `<option value="${k}" ${c.type === k ? 'selected' : ''}>${v}</option>`).join('')}
+        <select ${UIEvents.attrs("change","broadcast-rules-5",[UIEvents.value(i)])}>
+          ${Object.entries(NR_COND_LABELS).map(([k,v])=>`<option value="${k}" ${c.type===k?'selected':''}>${v}</option>`).join('')}
         </select>
         <span class="nr-cond-count" id="nrCondCount-${i}">выбрано: ${c.ids.size}</span>
-        <button class="mc" onclick="nrRemoveCond(${i})" title="Убрать условие">✕</button>
+        <button class="mc" ${UIEvents.attrs("click","broadcast-rules-6",[UIEvents.value(i)])} title="Убрать условие">✕</button>
       </div>
       <input type="search" autocomplete="off" placeholder="🔎 Поиск…" value="${esc(c.filter)}"
-             oninput="nrCondFilter(${i}, this.value)">
+             ${UIEvents.attrs("input","broadcast-rules-7",[UIEvents.value(i)])}>
       <div class="nr-cond-list" id="nrCondList-${i}"></div>
     </div>`).join('');
   document.getElementById('nrLogicWrap').style.display = _nrConds.length > 1 ? 'flex' : 'none';
@@ -266,8 +265,8 @@ function nrRenderCondList(i) {
   opts = opts.slice(0, 150);
   box.innerHTML = opts.map(o => `
     <label class="nr-cond-opt">
-      <input type="checkbox" ${c.ids.has(String(o.id)) ? 'checked' : ''}
-             onchange="nrCondToggleId(${i}, '${o.id}', this.checked)">
+      <input type="checkbox" ${c.ids.has(String(o.id))?'checked':''}
+             ${UIEvents.attrs("change","broadcast-rules-8",[UIEvents.value(i),String(o.id)])}>
       <span>${esc(o.label)}</span>
     </label>`).join('') || '<div class="empty" style="padding:12px 0">Ничего не найдено</div>';
   if (total > 150) {
@@ -282,8 +281,8 @@ function nrRenderChannels() {
   const all = (_nrDicts && _nrDicts.channels) || Object.keys(NR_CH_LABELS);
   wrap.innerHTML = all.map(ch => {
     const pos = _nrChannels.indexOf(ch);
-    return `<span class="bc-chip ${pos >= 0 ? 'on' : ''}" onclick="nrToggleChannel('${ch}')">
-      ${pos >= 0 ? (pos + 1) + ' · ' : ''}${esc(NR_CH_LABELS[ch] || ch)}</span>`;
+    return `<span class="bc-chip ${pos>=0?'on':''}" ${UIEvents.attrs("click","broadcast-rules-9",[String(ch)])}>
+      ${pos>=0?pos+1+' · ':''}${esc(NR_CH_LABELS[ch]||ch)}</span>`;
   }).join('');
 }
 

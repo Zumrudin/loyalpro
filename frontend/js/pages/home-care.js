@@ -40,21 +40,21 @@ async function hcFetch() {
           : '—';
         const adhDisabled = (adh === null || adh === undefined) ? 'disabled' : '';
         return `
-        <tr onclick="hcOpenEdit(${r.id})">
+        <tr ${UIEvents.attrs("click","home-care-1",[UIEvents.value(r.id)])}>
           <td>${new Date(r.created_at).toLocaleDateString('ru')}</td>
-          <td><b>${esc(r.client_name || '—')}</b></td>
-          <td style="color:var(--t3)">${esc(r.client_phone || '—')}</td>
-          <td style="color:var(--t2)">${esc(r.specialist_name || '—')}${r.specialist_position ? `<br><span style="font-size:11px;color:var(--t3)">${esc(r.specialist_position)}</span>` : ''}</td>
+          <td><b>${esc(r.client_name||'—')}</b></td>
+          <td style="color:var(--t3)">${esc(r.client_phone||'—')}</td>
+          <td style="color:var(--t2)">${esc(r.specialist_name||'—')}${r.specialist_position?`<br><span style="font-size:11px;color:var(--t3)">${esc(r.specialist_position)}</span>`:''}</td>
           <td style="color:var(--t3);font-size:12px;white-space:nowrap">${esc(periodText)}</td>
-          <td style="color:var(--t3);max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(r.notes || '')}</td>
+          <td style="color:var(--t3);max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(r.notes||'')}</td>
           <td style="color:${adhColor};font-weight:600;text-align:right;white-space:nowrap">${adhText}</td>
-          <td onclick="event.stopPropagation()" style="text-align:right;white-space:nowrap">
-            <button class="btn btn-sec btn-sm" onclick="openAdherenceModal(${r.id})" title="Heatmap выполнения" ${adhDisabled}>Подробно</button>
-            <button class="btn btn-sec btn-sm" style="margin-left:4px" onclick="hcPrintById(${r.id})" title="Открыть превью">👁</button>
-            <button class="btn btn-sec btn-sm" style="margin-left:4px" onclick="hcDownloadPdf(${r.id})" title="Скачать PDF">PDF</button>
-            <button class="btn btn-sec btn-sm hc-send-btn" style="margin-left:4px" onclick="hcOpenSendModal(${r.id})" title="Отправить клиенту в мессенджер" aria-label="Отправить клиенту в мессенджер">✈</button>
-            <button class="btn btn-sec btn-sm" style="margin-left:4px" onclick="hcOpenEdit(${r.id})">Изм.</button>
-            <button class="btn btn-sec btn-sm btn-dng" style="margin-left:4px" onclick="hcDelete(${r.id})">Удалить</button>
+          <td ${UIEvents.attrs("click","home-care-2",[])} style="text-align:right;white-space:nowrap">
+            <button class="btn btn-sec btn-sm" ${UIEvents.attrs("click","home-care-3",[UIEvents.value(r.id)])} title="Heatmap выполнения" ${adhDisabled}>Подробно</button>
+            <button class="btn btn-sec btn-sm" style="margin-left:4px" ${UIEvents.attrs("click","home-care-4",[UIEvents.value(r.id)])} title="Открыть превью">👁</button>
+            <button class="btn btn-sec btn-sm" style="margin-left:4px" ${UIEvents.attrs("click","home-care-5",[UIEvents.value(r.id)])} title="Скачать PDF">PDF</button>
+            <button class="btn btn-sec btn-sm hc-send-btn" style="margin-left:4px" ${UIEvents.attrs("click","home-care-6",[UIEvents.value(r.id)])} title="Отправить клиенту в мессенджер" aria-label="Отправить клиенту в мессенджер">✈</button>
+            <button class="btn btn-sec btn-sm" style="margin-left:4px" ${UIEvents.attrs("click","home-care-7",[UIEvents.value(r.id)])}>Изм.</button>
+            <button class="btn btn-sec btn-sm btn-dng" style="margin-left:4px" ${UIEvents.attrs("click","home-care-8",[UIEvents.value(r.id)])}>Удалить</button>
           </td>
         </tr>`;
       }).join('');
@@ -63,8 +63,8 @@ async function hcFetch() {
     const pages = Math.ceil(d.total / 20);
     pager.innerHTML = pages > 1
       ? `<span>Страница ${hcPage} из ${pages}</span>
-         <button class="btn btn-sec btn-sm" ${hcPage <= 1 ? 'disabled' : ''} onclick="hcPage--;hcFetch()">←</button>
-         <button class="btn btn-sec btn-sm" ${hcPage >= pages ? 'disabled' : ''} onclick="hcPage++;hcFetch()">→</button>
+         <button class="btn btn-sec btn-sm" ${hcPage<=1?'disabled':''} ${UIEvents.attrs("click","home-care-9",[])}>←</button>
+         <button class="btn btn-sec btn-sm" ${hcPage>=pages?'disabled':''} ${UIEvents.attrs("click","home-care-10",[])}>→</button>
          <span style="margin-left:auto">Всего: ${d.total}</span>`
       : `<span style="margin-left:auto">Всего: ${d.total}</span>`;
   } catch(e) { notify('Ошибка: ' + e.message, 'err'); }
@@ -214,19 +214,19 @@ function hcAddItem(timeOfDay, category, product = '', instructions = '', isServi
   row.innerHTML = `
     <div class="hc-ac-wrap">
       <div style="display:flex;gap:4px">
-        <input type="text" class="hc-ac-inp" placeholder="${isService ? 'Услуга / процедура...' : 'Название продукта...'}" value="${esc(product)}"
-               autocomplete="off" data-field="product" data-uid="${uid}" data-service="${isService ? '1' : '0'}"
-               oninput="hcAcSearch(this)" onfocus="hcAcSearch(this)" style="flex:1">
-        <button type="button" class="hc-pick-btn" onclick="hcOpenPicker('${uid}',${isService})" title="Выбрать из каталога">☰</button>
+        <input type="text" class="hc-ac-inp" placeholder="${isService?'Услуга / процедура...':'Название продукта...'}" value="${esc(product)}"
+               autocomplete="off" data-field="product" data-uid="${uid}" data-service="${isService?'1':'0'}"
+               ${UIEvents.attrs("input","home-care-11",[])} ${UIEvents.attrs("focus","home-care-12",[])} style="flex:1">
+        <button type="button" class="hc-pick-btn" ${UIEvents.attrs("click","home-care-13",[String(uid),UIEvents.value(isService)])} title="Выбрать из каталога">☰</button>
       </div>
-      ${isService ? `<label class="hc-price-row">Стоимость
+      ${isService?`<label class="hc-price-row">Стоимость
         <input type="text" inputmode="decimal" class="hc-price-inp" data-field="price" data-price-uid="${uid}"
-               value="${price === null || price === undefined || price === '' ? '' : esc(String(Number(price)))}" placeholder="—">
-        <span class="hc-price-rub">₽</span></label>` : ''}
+               value="${price===null||price===undefined||price===''?'':esc(String(Number(price)))}" placeholder="—">
+        <span class="hc-price-rub">₽</span></label>`:''}
       <div class="hc-ac-drop" id="drop_${uid}"></div>
     </div>
     <input type="text" placeholder="Как применять, частота..." value="${esc(instructions)}" data-field="instructions">
-    <button class="hc-item-del" onclick="this.closest('.hc-item').remove()" title="Удалить">✕</button>`;
+    <button class="hc-item-del" ${UIEvents.attrs("click","home-care-14",[])} title="Удалить">✕</button>`;
   container.appendChild(row);
 
   const isHomecare = ['morning', 'evening', 'additional'].includes(timeOfDay);
@@ -279,7 +279,7 @@ async function hcAcSearch(inp) {
     drop.style.left  = rect.left + 'px';
     drop.style.width = rect.width + 'px';
     drop.innerHTML   = rows.map(r =>
-      `<div class="hc-ac-opt" onmousedown="hcAcSelect(event,'${uid}','${escAttr(r.title)}')">${esc(r.title)}</div>`
+      `<div class="hc-ac-opt" ${UIEvents.attrs("mousedown","home-care-15",[String(uid),String(r.title)])}>${esc(r.title)}</div>`
     ).join('');
     drop.style.display = 'block';
   } catch { drop.style.display = 'none'; }
@@ -382,12 +382,12 @@ function hcPickerRender(groups) {
   }
   body.innerHTML = groups.map((g, gi) => `
     <div>
-      <div class="hc-picker-cat-hdr" onclick="hcPickerToggle(${gi})">
+      <div class="hc-picker-cat-hdr" ${UIEvents.attrs("click","home-care-16",[UIEvents.value(gi)])}>
         <span style="font-size:12px;font-weight:700;color:var(--t2);letter-spacing:.4px">${esc(g.cat)}</span>
-        <span id="hcPickChev-${gi}" style="font-size:11px;color:var(--t3)">${g.open === true ? '▼' : '▶'}</span>
+        <span id="hcPickChev-${gi}" style="font-size:11px;color:var(--t3)">${g.open===true?'▼':'▶'}</span>
       </div>
-      <div id="hcPickGrp-${gi}" style="display:${g.open === true ? '' : 'none'}">
-        ${g.items.map(t => `<div class="hc-picker-item" data-hc-pick-title="${esc(t)}">${esc(t)}</div>`).join('')}
+      <div id="hcPickGrp-${gi}" style="display:${g.open===true?'':'none'}">
+        ${g.items.map(t=>`<div class="hc-picker-item" data-hc-pick-title="${esc(t)}">${esc(t)}</div>`).join('')}
       </div>
     </div>`).join('');
   // Delegation: read title from textContent (safe) instead of interpolating
@@ -569,21 +569,20 @@ async function hcPrint() {
 }
 
 async function hcPrintById(id) {
-  const w = window.open(`/api/home-care/${id}/preview`, '_blank');
-  if (!w) {
-    try {
-      const resp = await fetch(`/api/home-care/${id}/preview`, {headers: {'Authorization': 'Bearer ' + TOKEN}});
-      const html = await resp.text();
-      window.open(URL.createObjectURL(new Blob([html], {type: 'text/html'})), '_blank');
-    } catch(e) { notify('Ошибка превью: ' + e.message, 'err'); }
-    return;
-  }
-  w.close();
+  // Reserve the popup during the user gesture; fetch protected HTML with Bearer.
+  const preview = window.open('', '_blank');
+  if (!preview) { notify('Разрешите всплывающие окна в браузере', 'err'); return; }
   try {
     const resp = await fetch(`/api/home-care/${id}/preview`, {headers: {'Authorization': 'Bearer ' + TOKEN}});
+    if (!resp.ok) throw new Error('Не удалось загрузить превью');
     const html = await resp.text();
-    window.open(URL.createObjectURL(new Blob([html], {type: 'text/html; charset=utf-8'})), '_blank');
-  } catch(e) { notify('Ошибка превью: ' + e.message, 'err'); }
+    // The direct preview has its own external binder. Here the opener binds the
+    // popup explicitly, so neither a blob base URL nor an inline script is used.
+    preview.document.write(html.replace('<script src="/js/homecare-print.js"></script>', ''));
+    preview.document.close();
+    preview.document.getElementById('hcPrintPreview')?.addEventListener('click', () => preview.print());
+    preview.document.getElementById('hcClosePreview')?.addEventListener('click', () => preview.close());
+  } catch(e) { preview.close(); notify('Ошибка превью: ' + e.message, 'err'); }
 }
 
 async function hcDownloadPdf(id) {
@@ -754,23 +753,23 @@ body{font-family:'Lora',Georgia,serif;background:#faf4ec;color:#2c2416;font-size
   <div class="content">
     <div class="header">
       <div class="logo-row">
-        <span class="logo-word">${salonName.includes(' ') ? salonName.split(' ')[0] : salonName}</span>
+        <span class="logo-word">${salonName.includes(' ')?salonName.split(' ')[0]:salonName}</span>
         <span class="logo-leaf">✿</span>
-        <span class="logo-word">${salonName.includes(' ') ? salonName.split(' ').slice(1).join(' ') : 'CLINIC'}</span>
+        <span class="logo-word">${salonName.includes(' ')?salonName.split(' ').slice(1).join(' '):'CLINIC'}</span>
       </div>
       <div class="clinic-sub">Клиника Эстетической медицины</div>
       <div class="doc-title">Домашний уход</div>
       <div class="gold-bar"></div>
       <div class="client-line">Имя: <b>${clientName}</b></div>
     </div>
-    ${(hasMorning || hasEvening) ? `<div class="two-col">
-      <div><div class="col-title">Утро</div>${colSection('morning', morningCats)}</div>
-      <div><div class="col-title">Вечер</div>${colSection('evening', eveningCats)}</div>
-    </div>` : ''}
+    ${hasMorning||hasEvening?`<div class="two-col">
+      <div><div class="col-title">Утро</div>${colSection('morning',morningCats)}</div>
+      <div><div class="col-title">Вечер</div>${colSection('evening',eveningCats)}</div>
+    </div>`:''}
     ${addBlock()}
     ${sheetBlock()}
     ${vitBlock()}
-    ${d.notes ? `<div class="notes-block">${esc(d.notes)}</div>` : ''}
+    ${d.notes?`<div class="notes-block">${esc(d.notes)}</div>`:''}
     <div class="footer">
       <div>${salonName}</div>
       <div class="footer-sign">Подпись специалиста:<span class="footer-sign-line"></span></div>
@@ -778,13 +777,18 @@ body{font-family:'Lora',Georgia,serif;background:#faf4ec;color:#2c2416;font-size
   </div>
 </div>
 <div class="no-print">
-  <button onclick="window.print()" style="background:#c9a96e;color:#fff;border:none;padding:10px 22px;border-radius:8px;font-size:13px;cursor:pointer;font-weight:600;font-family:Georgia,serif">Печать / PDF</button>
-  <button onclick="window.close()" style="background:#f5ece0;color:#5a4a32;border:1px solid #e8dcc8;padding:10px 16px;border-radius:8px;font-size:13px;cursor:pointer">Закрыть</button>
+  <button id="hcPrintPreview" style="background:#c9a96e;color:#fff;border:none;padding:10px 22px;border-radius:8px;font-size:13px;cursor:pointer;font-weight:600;font-family:Georgia,serif">Печать / PDF</button>
+  <button id="hcClosePreview" style="background:#f5ece0;color:#5a4a32;border:1px solid #e8dcc8;padding:10px 16px;border-radius:8px;font-size:13px;cursor:pointer">Закрыть</button>
 </div>
 </body></html>`;
 
   const w = window.open('', '_blank', 'width=900,height=750');
-  if (w) { w.document.write(html); w.document.close(); }
+  if (w) {
+    w.document.write(html);
+    w.document.close();
+    w.document.getElementById('hcPrintPreview').addEventListener('click', () => w.print());
+    w.document.getElementById('hcClosePreview').addEventListener('click', () => w.close());
+  }
   else notify('Разрешите всплывающие окна в браузере', 'err');
 }
 

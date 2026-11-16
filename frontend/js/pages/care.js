@@ -118,23 +118,23 @@ function careRenderPrograms() {
         <div class="bc-row-grid">
           <div class="bc-row-left">
             <div class="care-card-title">
-              <label class="tgl" title="${on ? 'Выключить программу' : 'Включить программу'}"><input type="checkbox" ${on ? 'checked' : ''}
-                onchange="careToggleProgram(${p.id})"><span class="ts"></span></label>
+              <label class="tgl" title="${on?'Выключить программу':'Включить программу'}"><input type="checkbox" ${on?'checked':''}
+                ${UIEvents.attrs("change","care-1",[UIEvents.value(p.id)])}><span class="ts"></span></label>
               <b>${esc(p.title)}</b>
-              ${on ? '' : '<span class="care-badge care-st-stopped">выключена</span>'}
+              ${on?'':'<span class="care-badge care-st-stopped">выключена</span>'}
             </div>
             <div class="bc-row-filters" style="margin-top:6px">${esc(careCondSummary(p.conditions))}</div>
-            <div class="care-tbadge-row">${touches || '<span style="font-size:11.5px;color:var(--t3)">нет касаний</span>'}</div>
+            <div class="care-tbadge-row">${touches||'<span style="font-size:11.5px;color:var(--t3)">нет касаний</span>'}</div>
             <div class="care-stats">
-              <span class="care-stat on" title="Клиентов сейчас проходят цепочку"><b>${+p.active_count || 0}</b> в работе</span>
-              <span class="care-stat" title="Всего отправлено касаний"><b>${+p.sent_count || 0}</b> отправлено</span>
+              <span class="care-stat on" title="Клиентов сейчас проходят цепочку"><b>${+p.active_count||0}</b> в работе</span>
+              <span class="care-stat" title="Всего отправлено касаний"><b>${+p.sent_count||0}</b> отправлено</span>
             </div>
           </div>
           <div class="bc-row-right">
             <div class="care-acts">
-              <button class="btn btn-sec btn-sm" onclick="careOpenPreview(${p.id})" title="Кто попал бы в программу за последние N дней">👁 Выборка</button>
-              <button class="btn btn-sec btn-sm" onclick="careOpenProgramModal(${p.id})">✏️ Изменить</button>
-              <button class="btn btn-sec btn-sm care-act-icon" onclick="careDeleteProgram(${p.id})" title="Удалить программу">🗑</button>
+              <button class="btn btn-sec btn-sm" ${UIEvents.attrs("click","care-2",[UIEvents.value(p.id)])} title="Кто попал бы в программу за последние N дней">👁 Выборка</button>
+              <button class="btn btn-sec btn-sm" ${UIEvents.attrs("click","care-3",[UIEvents.value(p.id)])}>✏️ Изменить</button>
+              <button class="btn btn-sec btn-sm care-act-icon" ${UIEvents.attrs("click","care-4",[UIEvents.value(p.id)])} title="Удалить программу">🗑</button>
             </div>
           </div>
         </div>
@@ -256,35 +256,31 @@ function careRenderTouches() {
     return `
     <div class="care-touch">
       <div class="care-touch-head">
-        <span class="care-touch-num">${i + 1}</span>
+        <span class="care-touch-num">${i+1}</span>
         <input type="text" class="care-touch-title" maxlength="255" placeholder="Название (напр. Контроль Т+1)"
-               value="${escAttr(esc(t.title))}" oninput="careTouchField(${i}, 'title', this.value)">
+               value="${escAttr(esc(t.title))}" ${UIEvents.attrs("input","care-5",[UIEvents.value(i)])}>
         <label class="care-touch-lbl">через
           <input type="number" min="0" max="730" inputmode="numeric" value="${esc(String(t.delayDays))}"
-                 oninput="careTouchField(${i}, 'delayDays', this.value)" style="width:64px"> дн.</label>
+                 ${UIEvents.attrs("input","care-6",[UIEvents.value(i)])} style="width:64px"> дн.</label>
         <label class="care-touch-lbl">в
           <input type="time" value="${esc(t.sendTime)}"
-                 oninput="careTouchField(${i}, 'sendTime', this.value)"></label>
+                 ${UIEvents.attrs("input","care-7",[UIEvents.value(i)])}></label>
         <span class="care-touch-btns">
-          <button class="mc" onclick="careMoveTouch(${i}, -1)" title="Выше" ${i === 0 ? 'disabled' : ''}>↑</button>
-          <button class="mc" onclick="careMoveTouch(${i}, 1)" title="Ниже" ${i === _careTouches.length - 1 ? 'disabled' : ''}>↓</button>
-          <button class="mc" onclick="careRemoveTouch(${i})" title="Удалить касание">✕</button>
+          <button class="mc" ${UIEvents.attrs("click","care-8",[UIEvents.value(i)])} title="Выше" ${i===0?'disabled':''}>↑</button>
+          <button class="mc" ${UIEvents.attrs("click","care-9",[UIEvents.value(i)])} title="Ниже" ${i===_careTouches.length-1?'disabled':''}>↓</button>
+          <button class="mc" ${UIEvents.attrs("click","care-10",[UIEvents.value(i)])} title="Удалить касание">✕</button>
         </span>
       </div>
       <div class="care-touch-mode">
         <div class="bc-chip-row">
-          <span class="bc-chip ${strict ? '' : 'on'}" onclick="careTouchMode(${i}, 'free')">✍️ Мила пишет сама</span>
-          <span class="bc-chip ${strict ? 'on' : ''}" onclick="careTouchMode(${i}, 'strict')">📋 Готовый текст</span>
+          <span class="bc-chip ${strict?'':'on'}" ${UIEvents.attrs("click","care-11",[UIEvents.value(i)])}>✍️ Мила пишет сама</span>
+          <span class="bc-chip ${strict?'on':''}" ${UIEvents.attrs("click","care-12",[UIEvents.value(i)])}>📋 Готовый текст</span>
         </div>
-        <span class="care-touch-modehint">${strict
-          ? 'Уйдёт дословно, имя вместо [Имя] подставит система; Мила решает только, уместно ли касание сейчас.'
-          : 'Мила напишет текст сама по смыслу заготовки.'}</span>
+        <span class="care-touch-modehint">${strict?'Уйдёт дословно, имя вместо [Имя] подставит система; Мила решает только, уместно ли касание сейчас.':'Мила напишет текст сама по смыслу заготовки.'}</span>
       </div>
       <textarea class="bc-textarea" rows="3" maxlength="2000"
-        placeholder="${strict
-          ? 'Готовый текст сообщения — уйдёт пациенту как написано…'
-          : 'Заготовка для Милы: что узнать/предложить в этом касании…'}"
-        oninput="careTouchField(${i}, 'intentText', this.value)">${esc(t.intentText)}</textarea>
+        placeholder="${strict?'Готовый текст сообщения — уйдёт пациенту как написано…':'Заготовка для Милы: что узнать/предложить в этом касании…'}"
+        ${UIEvents.attrs("input","care-13",[UIEvents.value(i)])}>${esc(t.intentText)}</textarea>
     </div>`;
   }).join('');
 }
@@ -497,20 +493,20 @@ function careRenderEnrollments() {
       `<div style="font-size:11.5px;color:var(--t3)">${esc(e.phone || '')}</div>`;
     const visit = `${careFmtDt(e.visit_at)}${services ? `<div style="font-size:11.5px;color:var(--t3)">${esc(services)}</div>` : ''}`;
     return `
-      <tr class="care-enr-row ${open ? 'open' : ''}" onclick="careToggleEnr(${e.id})"
-          title="${open ? 'Свернуть журнал касаний' : 'Показать журнал касаний'}">
+      <tr class="care-enr-row ${open?'open':''}" ${UIEvents.attrs("click","care-14",[UIEvents.value(e.id)])}
+          title="${open?'Свернуть журнал касаний':'Показать журнал касаний'}">
         <td class="mtbl-title">${client}</td>
-        <td data-label="Программа">${esc(e.program_title || '')}</td>
+        <td data-label="Программа">${esc(e.program_title||'')}</td>
         <td data-label="Визит">${visit}</td>
-        <td data-label="Врач">${esc(e.staff_name || '—')}</td>
-        <td data-label="Статус">${careEnrBadge(e.status)}${e.status_reason ? `<div style="font-size:11px;color:var(--t3);margin-top:2px">${esc(e.status_reason)}</div>` : ''}</td>
+        <td data-label="Врач">${esc(e.staff_name||'—')}</td>
+        <td data-label="Статус">${careEnrBadge(e.status)}${e.status_reason?`<div style="font-size:11px;color:var(--t3);margin-top:2px">${esc(e.status_reason)}</div>`:''}</td>
         <td data-label="След. касание">${careFmtDt(e.next_touch_at)}</td>
         <td data-label="Последняя отправка">${careFmtDt(e.last_sent_at)}</td>
       </tr>
-      ${_careEnrOpenId === e.id ? `
+      ${_careEnrOpenId===e.id?`
       <tr class="care-enr-detail"><td colspan="7">
         <div id="careEnrDetail-${e.id}"><div class="empty" style="padding:14px 0">Загрузка журнала…</div></div>
-      </td></tr>` : ''}`;
+      </td></tr>`:''}`;
   }).join('');
 }
 
@@ -544,8 +540,8 @@ async function careToggleEnr(id) {
     const canStop = ['active', 'escalated'].includes(e.status);
     box.innerHTML = `
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px">
-        ${canStop ? `<button class="btn btn-sec btn-sm" onclick="event.stopPropagation();careStopEnr(${id})">⏹ Остановить</button>` : ''}
-        ${e.phone ? `<button class="btn btn-sec btn-sm" onclick="event.stopPropagation();careOpenChat('${escJs(e.phone)}')">💬 Открыть чат</button>` : ''}
+        ${canStop ? `<button class="btn btn-sec btn-sm" ${UIEvents.attrs("click","care-15",[UIEvents.value(id)])}>⏹ Остановить</button>` : ''}
+        ${e.phone ? `<button class="btn btn-sec btn-sm" ${UIEvents.attrs("click","care-16",[String(e.phone)])}>💬 Открыть чат</button>` : ''}
       </div>
       ${rows}`;
   } catch (err) {

@@ -7,6 +7,7 @@ const { pool, db, withTransaction } = require('../db');
 const { auth } = require('../middleware/auth');
 const config  = require('../config');
 const resourceLimits = require('../services/resource-limits');
+const registrationInvites = require('../services/registration-invites');
 const JWT_SECRET = config.JWT_SECRET;
 
 const loginLimiter = rateLimit({
@@ -28,7 +29,7 @@ async function registerLimiter(req, res, next) {
 }
 
 router.post('/register', registerLimiter, async (req, res) => {
-  const pg = await pool.connect();
+  let pg;
   try {
     const { salonName, city, email, password } = req.body || {};
     if (typeof salonName !== 'string' || typeof email !== 'string' || typeof password !== 'string'
@@ -40,7 +41,9 @@ router.post('/register', registerLimiter, async (req, res) => {
         || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))
       return res.status(400).json({ error: 'Проверьте поля регистрации' });
 
+    pg = await pool.connect();
     await pg.query('BEGIN');
+    await registrationInvites.consume(pg, req.body.invitation, email);
     const salon = (await pg.query(
       'INSERT INTO salons (name,city) VALUES ($1,$2) RETURNING id',
       [salonName.trim(), city || null]
@@ -52,25 +55,25 @@ router.post('/register', registerLimiter, async (req, res) => {
        VALUES ($1,$2,$3,$4,'owner') RETURNING id,name,email,role`,
       [salon.id, email.toLowerCase().trim(), hash, salonName]
     )).rows[0];
-    await pg.query('COMMIT');
-
     const token = jwt.sign(
       { userId: user.id, salonId: salon.id, role: 'owner' },
       JWT_SECRET, { expiresIn: '7d' }
     );
-    await db.query(
+    await pg.query(
       `INSERT INTO sessions (user_id,token,ip,user_agent,expires_at)
        VALUES ($1,$2,$3,$4,NOW()+INTERVAL '7 days')`,
       [user.id, token, req.ip, req.headers['user-agent'] || '']
     );
+    await pg.query('COMMIT');
     res.json({ token, user: { ...user, salonName } });
   } catch (e) {
-    await pg.query('ROLLBACK');
+    if (pg) await pg.query('ROLLBACK');
+    if (e.status === 403) return res.status(403).json({ error: 'Приглашение недействительно или истекло.' });
     if (e.code === '23505')
       return res.status(409).json({ error: 'Не удалось завершить регистрацию' });
     console.error('[auth/register] failed');
     res.status(500).json({ error: 'Внутренняя ошибка сервера' });
-  } finally { pg.release(); }
+  } finally { if (pg) pg.release(); }
 });
 
 router.post('/login', loginLimiter, async (req, res) => {

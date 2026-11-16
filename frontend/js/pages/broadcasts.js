@@ -53,7 +53,7 @@ async function bcRenderSegmentChips() {
   const wrap = document.getElementById('bcSegments');
   if (!wrap) return;
   wrap.innerHTML = BC_SEGMENTS.map(s => `
-    <span class="bc-chip" data-key="${s.key}" onclick="bcToggleSeg('${s.key}', this)">
+    <span class="bc-chip" data-key="${s.key}" ${UIEvents.attrs("click","broadcasts-1",[String(s.key)])}>
       ${esc(s.label)}
     </span>`).join('');
 }
@@ -463,7 +463,7 @@ function bcRenderHistoryItem(b) {
     : '';
 
   return `
-    <div class="bc-row" data-id="${b.id}"${isMsg ? ' data-monitor="1" onclick="bcOpenMonitor(' + Number(b.id) + ')" title="Открыть монитор"' : ''}>
+    <div class="bc-row" data-id="${b.id}"${isMsg ? ` data-monitor="1" ${UIEvents.attrs("click","broadcasts-2",[UIEvents.value(Number(b.id))])} title="Открыть монитор"` : ''}>
       <div class="bc-row-grid">
         <div class="bc-row-left">
           <div class="bc-row-meta">
@@ -481,7 +481,7 @@ function bcRenderHistoryItem(b) {
             ${b.failed > 0 ? `<span style="color:var(--danger);font-size:11px">· ${b.failed} ошибок</span>` : ''}
           </div>
           <div class="bc-progress-bar"><i style="width:${pct}%;background:${s.color}"></i></div>
-          ${canCancel ? `<button class="btn btn-sec btn-sm" style="margin-top:8px" onclick="event.stopPropagation();bcCancel(${b.id})">Отменить</button>` : ''}
+          ${canCancel ? `<button class="btn btn-sec btn-sm" style="margin-top:8px" ${UIEvents.attrs("click","broadcasts-3",[UIEvents.value(b.id)])}>Отменить</button>` : ''}
         </div>
       </div>
     </div>`;

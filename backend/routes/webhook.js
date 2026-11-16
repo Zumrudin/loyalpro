@@ -14,6 +14,7 @@ const { normalizePhoneKey } = require('../services/agent-gate');
 const { createLogger } = require('../logger');
 const logger = createLogger('Webhook');
 const { safeErrorCode } = require('../utils/safe-error');
+const securityStatus = require('../services/webhook-security-status');
 
 /**
  * Authenticate a webhook delivery by a shared secret carried in the URL.
@@ -48,7 +49,10 @@ const limiterOptions = {
   windowMs: rateLimitConfig.windowMs || 60_000,
   standardHeaders: true,
   legacyHeaders: false,
-  handler: (req, res) => res.status(429).json({ error: 'too many requests' }),
+  handler: (req, res) => {
+    securityStatus.record('yclients', 'rate_limited');
+    return res.status(429).json({ error: 'too many requests' });
+  },
 };
 const webhookIpLimiter = rateLimit({ ...limiterOptions, limit: rateLimitConfig.ipLimit || 240 });
 const webhookCompanyLimiter = rateLimit({
@@ -56,7 +60,6 @@ const webhookCompanyLimiter = rateLimit({
   limit: rateLimitConfig.accountLimit || 120,
   keyGenerator: req => `company:${req.params.companyId}`,
 });
-const authFailures = { not_configured: 0, missing_key: 0, invalid_key: 0 };
 
 router.use('/webhook.v2/:companyId', webhookIpLimiter, webhookCompanyLimiter);
 
@@ -75,13 +78,13 @@ router.post('/webhook.v2/:companyId', async (req, res) => {
 
     const sig = verifyWebhookSecret(req, salon.yclients_webhook_secret);
     if (!sig.ok) {
-      authFailures[sig.reason] += 1;
-      logger.warn(`webhook authentication rejected salon=${salon.id} reason=${sig.reason} total=${authFailures[sig.reason]}`);
+      securityStatus.record('yclients', sig.reason);
       return res.status(sig.status).json({ error: sig.status === 503 ? 'webhook not configured' : 'invalid key' });
     }
 
     // ACK immediately AFTER auth check — YClients retries on timeout, but we
     // don't want spoofed payloads to get 200 OK.
+    securityStatus.record('yclients', 'accepted');
     res.json({ ok: true });
 
     const payload = req.body;

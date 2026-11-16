@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="ru">
 <head>
+<script src="js/core/static-events.js?v=2026-11-16-csp"></script>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <link rel="icon" type="image/png" sizes="32x32" href="favicon-32.png?v=2026-11-13">
@@ -19,6 +20,8 @@
      новый URL. 07.08 в utils.js появился escJs(), версия осталась июньской, и
      страница «История напоминаний» (её reminders.js приехал по свежему ?v=)
      падала у людей с «escJs is not defined». -->
+<script src="js/core/ui-events.js"></script>
+<script src="js/core/dynamic-events.js"></script>
 <script src="js/core/utils.js?v=2026-11-13fav"></script>
 <script src="js/core/api.js"></script>
 <script src="js/core/theme.js?v=2026-11-08p"></script>
@@ -47,16 +50,16 @@
     </div>
 
     <div class="lt">
-      <button class="lt-t active" id="tabLoginBtn" onclick="switchAuthTab('login')">Войти</button>
-      <button class="lt-t" id="tabRegBtn" onclick="switchAuthTab('register')">Регистрация</button>
+      <button class="lt-t active" id="tabLoginBtn" data-static-onclick="s1">Войти</button>
+      <button class="lt-t" id="tabRegBtn" data-static-onclick="s2">Регистрация</button>
     </div>
 
     <!-- LOGIN -->
     <div id="formLogin">
       <div class="err" id="loginErr"></div>
       <div class="fg"><label class="fl">Email</label><input type="email" id="lEmail" placeholder="admin@salon.ru" autocomplete="email"></div>
-      <div class="fg"><label class="fl">Пароль</label><input type="password" id="lPass" placeholder="••••••••" onkeydown="if(event.key==='Enter')doLogin()"></div>
-      <button class="btn btn-pri btn-full" id="loginBtn" onclick="doLogin()">Войти в личный кабинет</button>
+      <div class="fg"><label class="fl">Пароль</label><input type="password" id="lPass" placeholder="••••••••" data-static-onkeydown="s3"></div>
+      <button class="btn btn-pri btn-full" id="loginBtn" data-static-onclick="s4">Войти в личный кабинет</button>
     </div>
 
     <!-- REGISTER -->
@@ -65,8 +68,9 @@
       <div class="fg"><label class="fl">Название салона</label><input type="text" id="rSalon" placeholder="Салон Аура"></div>
       <div class="fg"><label class="fl">Город</label><input type="text" id="rCity" placeholder="Москва"></div>
       <div class="fg"><label class="fl">Email администратора</label><input type="email" id="rEmail" placeholder="admin@salon.ru"></div>
-      <div class="fg"><label class="fl">Пароль <span class="fh">минимум 6 символов</span></label><input type="password" id="rPass" placeholder="••••••••" onkeydown="if(event.key==='Enter')doRegister()"></div>
-      <button class="btn btn-pri btn-full" id="regBtn" onclick="doRegister()">Создать аккаунт</button>
+      <div class="fg"><label class="fl">Пароль <span class="fh">минимум 8 символов</span></label><input type="password" id="rPass" placeholder="••••••••" data-static-onkeydown="s5"></div>
+      <div class="fg"><label class="fl">Код приглашения</label><input type="password" id="rInvitation" autocomplete="off" placeholder="Из приглашения администратора"></div>
+      <button class="btn btn-pri btn-full" id="regBtn" data-static-onclick="s6">Создать аккаунт</button>
     </div>
   </div>
 </div>
@@ -92,16 +96,16 @@
     </div>
     <div class="fg">
       <label class="fl">Повторите пароль</label>
-      <input type="password" id="cpNew2" placeholder="••••••••" onkeydown="if(event.key==='Enter')doChangePw()">
+      <input type="password" id="cpNew2" placeholder="••••••••" data-static-onkeydown="s7">
     </div>
-    <button class="btn btn-pri btn-full" id="cpBtn" onclick="doChangePw()">Сохранить пароль и войти</button>
+    <button class="btn btn-pri btn-full" id="cpBtn" data-static-onclick="s8">Сохранить пароль и войти</button>
   </div>
 </div>
 
 <!-- ═══════════════ APP ═══════════════ -->
 <div id="app">
   <div class="topbar">
-    <button class="tb-burger" id="tbBurger" onclick="openMenu()" aria-label="Меню">
+    <button class="tb-burger" id="tbBurger" data-static-onclick="s9" aria-label="Меню">
       <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
     </button>
     <div class="tb-logo">
@@ -112,66 +116,66 @@
     <div class="tb-crumb" id="tbCrumb"></div>
     <nav class="tb-nav" id="mainNav" aria-label="Разделы">
       <div class="nav-sec-t">Рабочее пространство</div>
-      <div class="tn" data-p="workday" data-roles="admin" tabindex="0" role="link" onclick="nav(this)">Рабочий день</div>
-      <div class="tn" data-p="dashboard" data-roles="owner,admin" tabindex="0" role="link" onclick="nav(this)">Обзор</div>
-      <div class="tn" data-p="workday" data-roles="owner" tabindex="0" role="link" onclick="nav(this)">Рабочий день</div>
-      <div class="tn" data-p="staff-dashboard" data-roles="specialist" tabindex="0" role="link" onclick="nav(this)">Мои результаты</div>
-      <div class="tn" data-p="journal" data-roles="owner,admin" tabindex="0" role="link" onclick="nav(this)">Журнал записи</div>
-      <div class="tn" data-p="records" data-roles="owner,admin" tabindex="0" role="link" onclick="nav(this)">Записи</div>
-      <div class="tn" data-p="clients" data-roles="owner,admin" tabindex="0" role="link" onclick="nav(this)">Пациенты</div>
-      <div class="tn" data-p="chat" data-roles="owner,admin,admin_cashier" tabindex="0" role="link" onclick="nav(this)">Сообщения</div>
-      <div class="tn" data-p="care" data-roles="owner,admin" tabindex="0" role="link" onclick="nav(this)">Забота</div>
-      <div class="tn" data-p="home-care" data-roles="owner,admin,specialist,admin_cashier" tabindex="0" role="link" onclick="nav(this)">Домашний уход</div>
+      <div class="tn" data-p="workday" data-roles="admin" tabindex="0" role="link" data-static-onclick="s10">Рабочий день</div>
+      <div class="tn" data-p="dashboard" data-roles="owner,admin" tabindex="0" role="link" data-static-onclick="s10">Обзор</div>
+      <div class="tn" data-p="workday" data-roles="owner" tabindex="0" role="link" data-static-onclick="s10">Рабочий день</div>
+      <div class="tn" data-p="staff-dashboard" data-roles="specialist" tabindex="0" role="link" data-static-onclick="s10">Мои результаты</div>
+      <div class="tn" data-p="journal" data-roles="owner,admin" tabindex="0" role="link" data-static-onclick="s10">Журнал записи</div>
+      <div class="tn" data-p="records" data-roles="owner,admin" tabindex="0" role="link" data-static-onclick="s10">Записи</div>
+      <div class="tn" data-p="clients" data-roles="owner,admin" tabindex="0" role="link" data-static-onclick="s10">Пациенты</div>
+      <div class="tn" data-p="chat" data-roles="owner,admin,admin_cashier" tabindex="0" role="link" data-static-onclick="s10">Сообщения</div>
+      <div class="tn" data-p="care" data-roles="owner,admin" tabindex="0" role="link" data-static-onclick="s10">Забота</div>
+      <div class="tn" data-p="home-care" data-roles="owner,admin,specialist,admin_cashier" tabindex="0" role="link" data-static-onclick="s10">Домашний уход</div>
       <div class="nav-sec-t">Клиника</div>
       <div class="nav-grp" data-grp="growth">
-        <button type="button" class="nav-grp-t" aria-expanded="false" onclick="navGrpToggle(this)">Развитие</button>
+        <button type="button" class="nav-grp-t" aria-expanded="false" data-static-onclick="s11">Развитие</button>
         <div class="nav-grp-b">
-          <div class="tn" data-p="segments" data-roles="owner,admin" tabindex="0" role="link" onclick="nav(this)">Сегменты</div>
-          <div class="tn" data-p="broadcasts" data-roles="owner,admin" tabindex="0" role="link" onclick="nav(this)">Рассылки</div>
-          <div class="tn" data-p="settings" data-roles="owner,admin" data-stg="loyalty-levels" tabindex="0" role="link" onclick="nav(this)">Лояльность</div>
+          <div class="tn" data-p="segments" data-roles="owner,admin" tabindex="0" role="link" data-static-onclick="s10">Сегменты</div>
+          <div class="tn" data-p="broadcasts" data-roles="owner,admin" tabindex="0" role="link" data-static-onclick="s10">Рассылки</div>
+          <div class="tn" data-p="settings" data-roles="owner,admin" data-stg="loyalty-levels" tabindex="0" role="link" data-static-onclick="s10">Лояльность</div>
         </div>
       </div>
       <div class="nav-grp" data-grp="materials">
-        <button type="button" class="nav-grp-t" aria-expanded="false" onclick="navGrpToggle(this)">Материалы</button>
+        <button type="button" class="nav-grp-t" aria-expanded="false" data-static-onclick="s11">Материалы</button>
         <div class="nav-grp-b">
-          <div class="tn" data-p="cert-requests" data-roles="owner,admin,specialist,admin_cashier" tabindex="0" role="link" onclick="nav(this)">Справки</div>
-          <div class="tn" data-p="edocs" data-roles="owner,admin,admin_cashier" tabindex="0" role="link" onclick="nav(this)">Документы</div>
-          <div class="tn" data-p="patient-portfolio" data-roles="owner,admin,specialist,admin_cashier" tabindex="0" role="link" onclick="nav(this)">Фото-кейсы</div>
-          <div class="tn" data-p="knowledge-base" data-roles="owner,admin,specialist,admin_cashier" tabindex="0" role="link" onclick="nav(this)">База знаний</div>
+          <div class="tn" data-p="cert-requests" data-roles="owner,admin,specialist,admin_cashier" tabindex="0" role="link" data-static-onclick="s10">Справки</div>
+          <div class="tn" data-p="edocs" data-roles="owner,admin,admin_cashier" tabindex="0" role="link" data-static-onclick="s10">Документы</div>
+          <div class="tn" data-p="patient-portfolio" data-roles="owner,admin,specialist,admin_cashier" tabindex="0" role="link" data-static-onclick="s10">Фото-кейсы</div>
+          <div class="tn" data-p="knowledge-base" data-roles="owner,admin,specialist,admin_cashier" tabindex="0" role="link" data-static-onclick="s10">База знаний</div>
         </div>
       </div>
       <div class="nav-grp" data-grp="manage">
-        <button type="button" class="nav-grp-t" aria-expanded="false" onclick="navGrpToggle(this)">Управление</button>
+        <button type="button" class="nav-grp-t" aria-expanded="false" data-static-onclick="s11">Управление</button>
         <div class="nav-grp-b">
-          <div class="tn" data-p="staff-analytics" data-roles="owner,admin" tabindex="0" role="link" onclick="nav(this)">Сотрудники</div>
-          <div class="tn" data-p="service-catalog" data-roles="owner,admin" tabindex="0" role="link" onclick="nav(this)">Услуги</div>
-          <div class="tn" data-p="stock" data-roles="owner,admin" tabindex="0" role="link" onclick="nav(this)">Товары</div>
-          <div class="tn" data-p="economics" data-roles="owner,admin" tabindex="0" role="link" onclick="nav(this)">Экономика</div>
-          <div class="tn" data-p="finance" data-roles="owner,admin" tabindex="0" role="link" onclick="nav(this)">Финансы</div>
-          <div class="tn" data-p="agent-services" data-roles="owner,admin" tabindex="0" role="link" onclick="nav(this)">Мила</div>
-          <div class="tn" data-p="settings" data-roles="owner,admin" tabindex="0" role="link" onclick="nav(this)">Настройки</div>
-          <div class="tn" data-p="users" data-roles="owner" tabindex="0" role="link" onclick="nav(this)">Пользователи</div>
+          <div class="tn" data-p="staff-analytics" data-roles="owner,admin" tabindex="0" role="link" data-static-onclick="s10">Сотрудники</div>
+          <div class="tn" data-p="service-catalog" data-roles="owner,admin" tabindex="0" role="link" data-static-onclick="s10">Услуги</div>
+          <div class="tn" data-p="stock" data-roles="owner,admin" tabindex="0" role="link" data-static-onclick="s10">Товары</div>
+          <div class="tn" data-p="economics" data-roles="owner,admin" tabindex="0" role="link" data-static-onclick="s10">Экономика</div>
+          <div class="tn" data-p="finance" data-roles="owner,admin" tabindex="0" role="link" data-static-onclick="s10">Финансы</div>
+          <div class="tn" data-p="agent-services" data-roles="owner,admin" tabindex="0" role="link" data-static-onclick="s10">Мила</div>
+          <div class="tn" data-p="settings" data-roles="owner,admin" tabindex="0" role="link" data-static-onclick="s10">Настройки</div>
+          <div class="tn" data-p="users" data-roles="owner" tabindex="0" role="link" data-static-onclick="s10">Пользователи</div>
         </div>
       </div>
     </nav>
     <div class="tb-right">
       <div id="syncSt" style="font-size:11.5px;color:var(--t3)"></div>
-      <button class="btn btn-sec btn-sm" id="syncBtn" onclick="triggerSync()">
+      <button class="btn btn-sec btn-sm" id="syncBtn" data-static-onclick="s12">
         <svg viewBox="0 0 24 24"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>Синхронизировать
       </button>
-      <button type="button" class="btn btn-sec btn-sm skin-btn" id="skinToggle" onclick="toggleSkin()" hidden title="Переключить оформление (только дев)">Ivory</button>
+      <button type="button" class="btn btn-sec btn-sm skin-btn" id="skinToggle" data-static-onclick="s13" hidden title="Переключить оформление (только дев)">Ivory</button>
       <div class="dm-wrap" style="display:flex;align-items:center;gap:5px">
         <span class="dm-label" id="dmLabel">🌙</span>
-        <button class="dm-btn" id="dmToggle" onclick="toggleDarkMode()" title="Тёмная тема"></button>
+        <button class="dm-btn" id="dmToggle" data-static-onclick="s14" title="Тёмная тема"></button>
       </div>
       <div class="t-av" id="topAv">?</div>
       <span id="topName" style="font-size:12.5px;font-weight:600;color:var(--t2)"></span>
-      <button class="btn btn-sm tb-logout" style="color:var(--t3);border:1px solid var(--bd)" onclick="doLogout()">Выйти</button>
+      <button class="btn btn-sm tb-logout" style="color:var(--t3);border:1px solid var(--bd)" data-static-onclick="s15">Выйти</button>
     </div>
   </div>
 
   <!-- ═══ MOBILE DRAWER ═══ -->
-  <div class="mnav-ov" id="mnavOv" onclick="if(event.target===this)closeMenu()"></div>
+  <div class="mnav-ov" id="mnavOv" data-static-onclick="s16"></div>
   <aside class="mnav-drawer" id="mnavDrawer">
     <div class="mnav-hdr">
       <div class="t-av" id="mnavAv">?</div>
@@ -179,58 +183,58 @@
         <div class="mnav-name" id="mnavName"></div>
         <div class="mnav-role" id="mnavRole"></div>
       </div>
-      <button class="mnav-close" onclick="closeMenu()" aria-label="Закрыть">✕</button>
+      <button class="mnav-close" data-static-onclick="s17" aria-label="Закрыть">✕</button>
     </div>
     <nav class="mnav-list" id="mnavList" aria-label="Разделы">
       <div class="nav-sec-t">Рабочее пространство</div>
-      <div class="tn" data-p="workday" data-roles="admin" tabindex="0" role="link" onclick="nav(this)">Рабочий день</div>
-      <div class="tn" data-p="dashboard" data-roles="owner,admin" tabindex="0" role="link" onclick="nav(this)">Обзор</div>
-      <div class="tn" data-p="workday" data-roles="owner" tabindex="0" role="link" onclick="nav(this)">Рабочий день</div>
-      <div class="tn" data-p="staff-dashboard" data-roles="specialist" tabindex="0" role="link" onclick="nav(this)">Мои результаты</div>
-      <div class="tn" data-p="journal" data-roles="owner,admin" tabindex="0" role="link" onclick="nav(this)">Журнал записи</div>
-      <div class="tn" data-p="records" data-roles="owner,admin" tabindex="0" role="link" onclick="nav(this)">Записи</div>
-      <div class="tn" data-p="clients" data-roles="owner,admin" tabindex="0" role="link" onclick="nav(this)">Пациенты</div>
-      <div class="tn" data-p="chat" data-roles="owner,admin,admin_cashier" tabindex="0" role="link" onclick="nav(this)">Сообщения</div>
-      <div class="tn" data-p="care" data-roles="owner,admin" tabindex="0" role="link" onclick="nav(this)">Забота</div>
-      <div class="tn" data-p="home-care" data-roles="owner,admin,specialist,admin_cashier" tabindex="0" role="link" onclick="nav(this)">Домашний уход</div>
+      <div class="tn" data-p="workday" data-roles="admin" tabindex="0" role="link" data-static-onclick="s10">Рабочий день</div>
+      <div class="tn" data-p="dashboard" data-roles="owner,admin" tabindex="0" role="link" data-static-onclick="s10">Обзор</div>
+      <div class="tn" data-p="workday" data-roles="owner" tabindex="0" role="link" data-static-onclick="s10">Рабочий день</div>
+      <div class="tn" data-p="staff-dashboard" data-roles="specialist" tabindex="0" role="link" data-static-onclick="s10">Мои результаты</div>
+      <div class="tn" data-p="journal" data-roles="owner,admin" tabindex="0" role="link" data-static-onclick="s10">Журнал записи</div>
+      <div class="tn" data-p="records" data-roles="owner,admin" tabindex="0" role="link" data-static-onclick="s10">Записи</div>
+      <div class="tn" data-p="clients" data-roles="owner,admin" tabindex="0" role="link" data-static-onclick="s10">Пациенты</div>
+      <div class="tn" data-p="chat" data-roles="owner,admin,admin_cashier" tabindex="0" role="link" data-static-onclick="s10">Сообщения</div>
+      <div class="tn" data-p="care" data-roles="owner,admin" tabindex="0" role="link" data-static-onclick="s10">Забота</div>
+      <div class="tn" data-p="home-care" data-roles="owner,admin,specialist,admin_cashier" tabindex="0" role="link" data-static-onclick="s10">Домашний уход</div>
       <div class="nav-sec-t">Клиника</div>
       <div class="nav-grp" data-grp="growth">
-        <button type="button" class="nav-grp-t" aria-expanded="false" onclick="navGrpToggle(this)">Развитие</button>
+        <button type="button" class="nav-grp-t" aria-expanded="false" data-static-onclick="s11">Развитие</button>
         <div class="nav-grp-b">
-          <div class="tn" data-p="segments" data-roles="owner,admin" tabindex="0" role="link" onclick="nav(this)">Сегменты</div>
-          <div class="tn" data-p="broadcasts" data-roles="owner,admin" tabindex="0" role="link" onclick="nav(this)">Рассылки</div>
-          <div class="tn" data-p="settings" data-roles="owner,admin" data-stg="loyalty-levels" tabindex="0" role="link" onclick="nav(this)">Лояльность</div>
+          <div class="tn" data-p="segments" data-roles="owner,admin" tabindex="0" role="link" data-static-onclick="s10">Сегменты</div>
+          <div class="tn" data-p="broadcasts" data-roles="owner,admin" tabindex="0" role="link" data-static-onclick="s10">Рассылки</div>
+          <div class="tn" data-p="settings" data-roles="owner,admin" data-stg="loyalty-levels" tabindex="0" role="link" data-static-onclick="s10">Лояльность</div>
         </div>
       </div>
       <div class="nav-grp" data-grp="materials">
-        <button type="button" class="nav-grp-t" aria-expanded="false" onclick="navGrpToggle(this)">Материалы</button>
+        <button type="button" class="nav-grp-t" aria-expanded="false" data-static-onclick="s11">Материалы</button>
         <div class="nav-grp-b">
-          <div class="tn" data-p="cert-requests" data-roles="owner,admin,specialist,admin_cashier" tabindex="0" role="link" onclick="nav(this)">Справки</div>
-          <div class="tn" data-p="edocs" data-roles="owner,admin,admin_cashier" tabindex="0" role="link" onclick="nav(this)">Документы</div>
-          <div class="tn" data-p="patient-portfolio" data-roles="owner,admin,specialist,admin_cashier" tabindex="0" role="link" onclick="nav(this)">Фото-кейсы</div>
-          <div class="tn" data-p="knowledge-base" data-roles="owner,admin,specialist,admin_cashier" tabindex="0" role="link" onclick="nav(this)">База знаний</div>
+          <div class="tn" data-p="cert-requests" data-roles="owner,admin,specialist,admin_cashier" tabindex="0" role="link" data-static-onclick="s10">Справки</div>
+          <div class="tn" data-p="edocs" data-roles="owner,admin,admin_cashier" tabindex="0" role="link" data-static-onclick="s10">Документы</div>
+          <div class="tn" data-p="patient-portfolio" data-roles="owner,admin,specialist,admin_cashier" tabindex="0" role="link" data-static-onclick="s10">Фото-кейсы</div>
+          <div class="tn" data-p="knowledge-base" data-roles="owner,admin,specialist,admin_cashier" tabindex="0" role="link" data-static-onclick="s10">База знаний</div>
         </div>
       </div>
       <div class="nav-grp" data-grp="manage">
-        <button type="button" class="nav-grp-t" aria-expanded="false" onclick="navGrpToggle(this)">Управление</button>
+        <button type="button" class="nav-grp-t" aria-expanded="false" data-static-onclick="s11">Управление</button>
         <div class="nav-grp-b">
-          <div class="tn" data-p="staff-analytics" data-roles="owner,admin" tabindex="0" role="link" onclick="nav(this)">Сотрудники</div>
-          <div class="tn" data-p="service-catalog" data-roles="owner,admin" tabindex="0" role="link" onclick="nav(this)">Услуги</div>
-          <div class="tn" data-p="stock" data-roles="owner,admin" tabindex="0" role="link" onclick="nav(this)">Товары</div>
-          <div class="tn" data-p="economics" data-roles="owner,admin" tabindex="0" role="link" onclick="nav(this)">Экономика</div>
-          <div class="tn" data-p="finance" data-roles="owner,admin" tabindex="0" role="link" onclick="nav(this)">Финансы</div>
-          <div class="tn" data-p="agent-services" data-roles="owner,admin" tabindex="0" role="link" onclick="nav(this)">Мила</div>
-          <div class="tn" data-p="settings" data-roles="owner,admin" tabindex="0" role="link" onclick="nav(this)">Настройки</div>
-          <div class="tn" data-p="users" data-roles="owner" tabindex="0" role="link" onclick="nav(this)">Пользователи</div>
+          <div class="tn" data-p="staff-analytics" data-roles="owner,admin" tabindex="0" role="link" data-static-onclick="s10">Сотрудники</div>
+          <div class="tn" data-p="service-catalog" data-roles="owner,admin" tabindex="0" role="link" data-static-onclick="s10">Услуги</div>
+          <div class="tn" data-p="stock" data-roles="owner,admin" tabindex="0" role="link" data-static-onclick="s10">Товары</div>
+          <div class="tn" data-p="economics" data-roles="owner,admin" tabindex="0" role="link" data-static-onclick="s10">Экономика</div>
+          <div class="tn" data-p="finance" data-roles="owner,admin" tabindex="0" role="link" data-static-onclick="s10">Финансы</div>
+          <div class="tn" data-p="agent-services" data-roles="owner,admin" tabindex="0" role="link" data-static-onclick="s10">Мила</div>
+          <div class="tn" data-p="settings" data-roles="owner,admin" tabindex="0" role="link" data-static-onclick="s10">Настройки</div>
+          <div class="tn" data-p="users" data-roles="owner" tabindex="0" role="link" data-static-onclick="s10">Пользователи</div>
         </div>
       </div>
     </nav>
     <div class="mnav-foot">
       <div id="mnavSyncSt" style="font-size:11.5px;color:var(--t3)"></div>
-      <button class="btn btn-sec btn-full" id="mnavSyncBtn" onclick="triggerSync()">
+      <button class="btn btn-sec btn-full" id="mnavSyncBtn" data-static-onclick="s12">
         <svg viewBox="0 0 24 24"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>Синхронизировать
       </button>
-      <button class="btn btn-sec btn-full" onclick="doLogout()">Выйти</button>
+      <button class="btn btn-sec btn-full" data-static-onclick="s15">Выйти</button>
     </div>
   </aside>
 
@@ -253,16 +257,16 @@
         <div style="font-size:16px;font-weight:700">Обзор</div>
         <div class="pb-wrap">
           <div class="pb-btns">
-            <button class="pb-btn" data-preset="today" onclick="setPreset('today')">Сегодня</button>
-            <button class="pb-btn active" data-preset="week" onclick="setPreset('week')">Неделя</button>
-            <button class="pb-btn" data-preset="month" onclick="setPreset('month')">Месяц</button>
-            <button class="pb-btn" data-preset="custom" onclick="togglePbRange()" id="pbRangeBtn">Период</button>
+            <button class="pb-btn" data-preset="today" data-static-onclick="s18">Сегодня</button>
+            <button class="pb-btn active" data-preset="week" data-static-onclick="s19">Неделя</button>
+            <button class="pb-btn" data-preset="month" data-static-onclick="s20">Месяц</button>
+            <button class="pb-btn" data-preset="custom" data-static-onclick="s21" id="pbRangeBtn">Период</button>
           </div>
           <div class="pb-range" id="pbRange" style="display:none">
             <input type="date" id="pbFrom" class="pb-date">
             <span class="pb-dash">—</span>
             <input type="date" id="pbTo" class="pb-date">
-            <button class="btn btn-sm btn-pri" onclick="applyPbRange()">OK</button>
+            <button class="btn btn-sm btn-pri" data-static-onclick="s22">OK</button>
           </div>
         </div>
       </div>
@@ -271,9 +275,9 @@
            детализацией вердиктов), #dashboard/loyalty — Лояльность. Данные
            грузятся ОДНИМ заходом loadDashboard на все три вкладки. -->
       <div class="tabs dash-tabs" role="tablist" aria-label="Разделы дашборда">
-        <button type="button" class="tab active" role="tab" data-dtab="clinic" aria-selected="true" onclick="dashTabClick('clinic')">Клиника</button>
-        <button type="button" class="tab" role="tab" data-dtab="msg" aria-selected="false" onclick="dashTabClick('msg')">Мессенджеры</button>
-        <button type="button" class="tab" role="tab" data-dtab="loyalty" aria-selected="false" onclick="dashTabClick('loyalty')">Лояльность</button>
+        <button type="button" class="tab active" role="tab" data-dtab="clinic" aria-selected="true" data-static-onclick="s23">Клиника</button>
+        <button type="button" class="tab" role="tab" data-dtab="msg" aria-selected="false" data-static-onclick="s24">Мессенджеры</button>
+        <button type="button" class="tab" role="tab" data-dtab="loyalty" aria-selected="false" data-static-onclick="s25">Лояльность</button>
       </div>
       <div class="dash-tab" data-dtab="clinic" role="tabpanel">
       <div class="sg-top mb">
@@ -293,13 +297,13 @@
           <div class="tw"><table>
             <thead>
               <tr>
-                <th class="th-sort asc" onclick="svcSort('service_name')" data-col="service_name">
+                <th class="th-sort asc" data-static-onclick="s26" data-col="service_name">
                   <span>Услуга</span><i class="sort-icon"></i>
                 </th>
-                <th class="th-sort" onclick="svcSort('cnt')" data-col="cnt">
+                <th class="th-sort" data-static-onclick="s27" data-col="cnt">
                   <span>Количество</span><i class="sort-icon"></i>
                 </th>
-                <th class="th-sort" onclick="svcSort('total_amount')" data-col="total_amount">
+                <th class="th-sort" data-static-onclick="s28" data-col="total_amount">
                   <span>Сумма ₽</span><i class="sort-icon"></i>
                 </th>
               </tr>
@@ -307,7 +311,7 @@
             <tbody id="svcBody"><tr><td colspan="3" class="empty">Нет данных</td></tr></tbody>
           </table>
           <div style="padding:12px 18px 18px 18px;text-align:center">
-            <button id="svcToggleBtn" onclick="toggleSvc()" style="background:none;border:1px solid var(--b3);padding:8px 16px;border-radius:4px;cursor:pointer;font-size:12px;color:var(--t2);display:none">Показать все ▼</button>
+            <button id="svcToggleBtn" data-static-onclick="s29" style="background:none;border:1px solid var(--b3);padding:8px 16px;border-radius:4px;cursor:pointer;font-size:12px;color:var(--t2);display:none">Показать все ▼</button>
           </div></div>
         </div>
       </div>
@@ -318,7 +322,7 @@
         <div class="vd-run">
           <span id="vdRunSt" class="vd-run-st"></span>
           <label class="vd-run-opt"><input type="checkbox" id="vdRecompute"> пересчитать разобранные</label>
-          <button type="button" class="btn" id="vdRunBtn" onclick="vdRunClick()">Проанализировать</button>
+          <button type="button" class="btn" id="vdRunBtn" data-static-onclick="s30">Проанализировать</button>
         </div>
         <div class="sub" id="msgPeriodSub"></div>
       </div>
@@ -369,15 +373,15 @@
         <div class="sc"><div class="sl">Отмены и неявки</div><div class="sv" id="wdLost">—</div><div class="sd">за сегодня</div></div>
       </div>
       <div class="g32 mb">
-        <div class="card"><div class="ct">Записи на сегодня <a href="#records" class="wd-link" onclick="navTo('records',{reset:true});return false">Все записи ›</a></div><div id="wdRecords"></div></div>
+        <div class="card"><div class="ct">Записи на сегодня <a href="#records" class="wd-link" data-static-onclick="s31">Все записи ›</a></div><div id="wdRecords"></div></div>
         <div class="wd-col">
           <div class="card mb"><div class="ct">Ждут ответа человека <span class="wd-count" id="wdEscN">—</span></div><div id="wdDialogs"></div>
-            <div class="wd-foot"><a href="#chat" class="wd-link" onclick="navTo('chat',{reset:true});return false">Все сообщения ›</a></div></div>
+            <div class="wd-foot"><a href="#chat" class="wd-link" data-static-onclick="s32">Все сообщения ›</a></div></div>
           <div class="card mb"><div class="ct">Новые заявки на справки <span class="wd-count" id="wdCertN">—</span></div><div id="wdCerts"></div>
-            <div class="wd-foot"><a href="#cert-requests" class="wd-link" onclick="navTo('cert-requests',{reset:true});return false">Все заявки ›</a></div></div>
+            <div class="wd-foot"><a href="#cert-requests" class="wd-link" data-static-onclick="s33">Все заявки ›</a></div></div>
           <div class="card"><div class="ct">Забота о пациентах</div>
             <div class="wd-sub" style="margin-bottom:10px">Программы касаний после визита и напоминания о повторном визите.</div>
-            <a href="#care" class="btn btn-sec btn-sm" onclick="navTo('care',{reset:true});return false">Открыть «Заботу» ›</a></div>
+            <a href="#care" class="btn btn-sec btn-sm" data-static-onclick="s34">Открыть «Заботу» ›</a></div>
         </div>
       </div>
     </div>
@@ -385,32 +389,32 @@
     <!-- ── CLIENTS ── -->
     <div class="page" id="page-clients">
       <div style="display:flex;gap:10px;margin-bottom:14px;flex-wrap:wrap;align-items:center">
-        <select style="width:160px" id="cstat" onchange="cFilter()">
+        <select style="width:160px" id="cstat" data-static-onchange="s35">
           <option value="">Все статусы</option>
           <option value="sleeping">😴 Спящие (60+ дней)</option>
           <option value="risk">⚠️ В зоне риска</option>
           <option value="new">🆕 Новые</option>
         </select>
-        <button class="btn btn-sec btn-sm" onclick="cResetFilters()" title="Сбросить все фильтры">✕ Сбросить</button>
-        <button class="btn btn-pri" onclick="openModal('bonusModal')" style="margin-left:auto">+ Начислить / Списать</button>
+        <button class="btn btn-sec btn-sm" data-static-onclick="s36" title="Сбросить все фильтры">✕ Сбросить</button>
+        <button class="btn btn-pri" data-static-onclick="s37" style="margin-left:auto">+ Начислить / Списать</button>
       </div>
       <div class="card" style="padding:0"><div class="tw"><table>
         <thead>
           <tr>
-            <th class="th-sort" onclick="cSort('name')" data-col="name"><span>Клиент</span><i class="sort-icon"></i></th>
-            <th class="th-sort" onclick="cSort('phone')" data-col="phone"><span>Телефон</span><i class="sort-icon"></i></th>
-            <th class="th-sort" onclick="cSort('loyalty_level')" data-col="loyalty_level"><span>Уровень</span><i class="sort-icon"></i></th>
-            <th class="th-sort" onclick="cSort('bonus_balance')" data-col="bonus_balance"><span>Бонусы</span><i class="sort-icon"></i></th>
-            <th class="th-sort" onclick="cSort('total_spent')" data-col="total_spent"><span>Потрачено</span><i class="sort-icon"></i></th>
-            <th class="th-sort" onclick="cSort('visits_count')" data-col="visits_count"><span>Визитов</span><i class="sort-icon"></i></th>
-            <th class="th-sort" onclick="cSort('last_visit_at')" data-col="last_visit_at"><span>Последний визит</span><i class="sort-icon"></i></th>
+            <th class="th-sort" data-static-onclick="s38" data-col="name"><span>Клиент</span><i class="sort-icon"></i></th>
+            <th class="th-sort" data-static-onclick="s39" data-col="phone"><span>Телефон</span><i class="sort-icon"></i></th>
+            <th class="th-sort" data-static-onclick="s40" data-col="loyalty_level"><span>Уровень</span><i class="sort-icon"></i></th>
+            <th class="th-sort" data-static-onclick="s41" data-col="bonus_balance"><span>Бонусы</span><i class="sort-icon"></i></th>
+            <th class="th-sort" data-static-onclick="s42" data-col="total_spent"><span>Потрачено</span><i class="sort-icon"></i></th>
+            <th class="th-sort" data-static-onclick="s43" data-col="visits_count"><span>Визитов</span><i class="sort-icon"></i></th>
+            <th class="th-sort" data-static-onclick="s44" data-col="last_visit_at"><span>Последний визит</span><i class="sort-icon"></i></th>
             <th></th>
           </tr>
           <tr class="filter-row">
-            <th><input type="text" id="cf-name" placeholder="Имя..." oninput="dbc(cFilter,400)()"></th>
-            <th><input type="text" id="cf-phone" placeholder="Телефон..." oninput="dbc(cFilter,400)()"></th>
+            <th><input type="text" id="cf-name" placeholder="Имя..." data-static-oninput="s45"></th>
+            <th><input type="text" id="cf-phone" placeholder="Телефон..." data-static-oninput="s45"></th>
             <th>
-              <select id="cf-level" onchange="cFilter()">
+              <select id="cf-level" data-static-onchange="s35">
                 <option value="">Все</option>
                 <option value="bronze">🥉 Бронза</option>
                 <option value="silver">🥈 Серебро</option>
@@ -418,10 +422,10 @@
                 <option value="platinum">💎 Платина</option>
               </select>
             </th>
-            <th><div class="cf-range"><input type="number" id="cf-bonus-min" placeholder="от" oninput="dbc(cFilter,400)()"><input type="number" id="cf-bonus-max" placeholder="до" oninput="dbc(cFilter,400)()"></div></th>
-            <th><div class="cf-range"><input type="number" id="cf-spent-min" placeholder="от" oninput="dbc(cFilter,400)()"><input type="number" id="cf-spent-max" placeholder="до" oninput="dbc(cFilter,400)()"></div></th>
-            <th><div class="cf-range"><input type="number" id="cf-visits-min" placeholder="от" oninput="dbc(cFilter,400)()"><input type="number" id="cf-visits-max" placeholder="до" oninput="dbc(cFilter,400)()"></div></th>
-            <th><div class="cf-range"><input type="date" id="cf-visit-from" oninput="cFilter()" onchange="cFilter()"><input type="date" id="cf-visit-to" oninput="cFilter()" onchange="cFilter()"></div></th>
+            <th><div class="cf-range"><input type="number" id="cf-bonus-min" placeholder="от" data-static-oninput="s45"><input type="number" id="cf-bonus-max" placeholder="до" data-static-oninput="s45"></div></th>
+            <th><div class="cf-range"><input type="number" id="cf-spent-min" placeholder="от" data-static-oninput="s45"><input type="number" id="cf-spent-max" placeholder="до" data-static-oninput="s45"></div></th>
+            <th><div class="cf-range"><input type="number" id="cf-visits-min" placeholder="от" data-static-oninput="s45"><input type="number" id="cf-visits-max" placeholder="до" data-static-oninput="s45"></div></th>
+            <th><div class="cf-range"><input type="date" id="cf-visit-from" data-static-oninput="s35" data-static-onchange="s35"><input type="date" id="cf-visit-to" data-static-oninput="s35" data-static-onchange="s35"></div></th>
             <th></th>
           </tr>
         </thead>
@@ -430,52 +434,52 @@
       <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 2px">
         <div style="font-size:12px;color:var(--t3)" id="cPager"></div>
         <div style="display:flex;gap:6px">
-          <button class="btn btn-sec btn-sm" onclick="cPage(-1)">← Назад</button>
-          <button class="btn btn-sec btn-sm" onclick="cPage(1)">Далее →</button>
+          <button class="btn btn-sec btn-sm" data-static-onclick="s46">← Назад</button>
+          <button class="btn btn-sec btn-sm" data-static-onclick="s47">Далее →</button>
         </div>
       </div>
     </div>
 
     <div class="page" id="page-service-catalog">
-      <div class="svc-toolbar"><input type="search" placeholder="Найти услугу" aria-label="Поиск услуг" oninput="svcState.query=this.value;svcRender()"><button class="btn btn-sec" onclick="svcEditCategory()">+ Категория</button><button class="btn btn-pri" onclick="svcEditService()">+ Услуга</button><button class="btn btn-sec" id="svcImport" onclick="svcImport()">Импорт из YClients</button></div>
+      <div class="svc-toolbar"><input type="search" placeholder="Найти услугу" aria-label="Поиск услуг" data-static-oninput="s48"><button class="btn btn-sec" data-static-onclick="s49">+ Категория</button><button class="btn btn-pri" data-static-onclick="s50">+ Услуга</button><button class="btn btn-sec" id="svcImport" data-static-onclick="s51">Импорт из YClients</button></div>
       <p class="svc-note">Собственный каталог LoyalPro. Повторный импорт добавляет новые позиции и сохраняет ваши изменения.</p><p id="svcStatus" class="svc-note" role="status"></p>
       <div class="svc-layout"><aside id="svcTree" class="svc-tree" aria-label="Категории услуг"></aside><section id="svcList"></section></div>
-      <dialog id="svcModal" class="svc-modal"><h2 id="svcModalTitle"></h2><form id="svcForm"><div id="svcModalBody" class="svc-form"></div><p id="svcError" class="svc-error" role="alert"></p><div class="svc-toolbar"><button type="button" class="btn btn-sec" onclick="svcClose()">Закрыть</button><button type="submit" id="svcSave" class="btn btn-pri">Сохранить</button></div></form></dialog>
+      <dialog id="svcModal" class="svc-modal"><h2 id="svcModalTitle"></h2><form id="svcForm"><div id="svcModalBody" class="svc-form"></div><p id="svcError" class="svc-error" role="alert"></p><div class="svc-toolbar"><button type="button" class="btn btn-sec" data-static-onclick="s52">Закрыть</button><button type="submit" id="svcSave" class="btn btn-pri">Сохранить</button></div></form></dialog>
     </div>
     <div class="page" id="page-journal">
       <div class="jr-toolbar">
-        <button class="btn btn-sec jr-today" onclick="jrEl('jrDate').value=jrToday();jrToolbarSync();loadJournal()">Сегодня</button>
+        <button class="btn btn-sec jr-today" data-static-onclick="s53">Сегодня</button>
         <span class="jr-date-nav" role="group" aria-label="Навигация по датам">
-          <button class="btn btn-sec" onclick="jrShift(-1)" aria-label="Предыдущий день">‹</button>
-          <button class="btn btn-sec" onclick="jrShift(1)" aria-label="Следующий день">›</button>
-          <button class="jr-date-label" id="jrMonthBtn" type="button" onclick="jrMonthPicker()" aria-label="Выбрать дату"><span id="jrDateLabel"></span><svg aria-hidden="true" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M16 3v4M8 3v4M3 11h18"/></svg></button>
+          <button class="btn btn-sec" data-static-onclick="s54" aria-label="Предыдущий день">‹</button>
+          <button class="btn btn-sec" data-static-onclick="s55" aria-label="Следующий день">›</button>
+          <button class="jr-date-label" id="jrMonthBtn" type="button" data-static-onclick="s56" aria-label="Выбрать дату"><span id="jrDateLabel"></span><svg aria-hidden="true" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M16 3v4M8 3v4M3 11h18"/></svg></button>
         </span>
-        <input id="jrDate" type="date" aria-label="Дата журнала" onchange="jrToolbarSync();loadJournal()" tabindex="-1">
-        <select id="jrStaffFilter" aria-label="Сотрудник" onchange="jrStaffChanged()"><option value="">Все сотрудники</option></select>
-        <button class="btn btn-sec jr-icon-btn" type="button" id="jrScaleBtn" aria-label="Масштаб" aria-controls="jrScalePopup" aria-expanded="false" onclick="jrToolbarPopupToggle('scale', this)"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M9.5 3.5 11 2h2l1.5 1.5 2.1-.2 1.1 1.8 2 .8v2.1l1.3 1.7-1.3 1.7v2.1l-2 .8-1.1 1.8-2.1-.2L13 19h-2l-1.5-1.5-2.1.2-1.1-1.8-2-.8v-2.1L3 11.3l1.3-1.7V7.5l2-.8 1.1-1.8 2.1.2Z"/><circle cx="12" cy="10.5" r="3"/></svg></button>
-        <button class="btn btn-sec jr-icon-btn" type="button" id="jrStatusBtn" aria-label="Статусы" aria-controls="jrStatusPopup" aria-expanded="false" onclick="jrToolbarPopupToggle('status', this)"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16M9 4v4M15 10v4M11 16v4"/></svg></button>
-        <button class="btn btn-sec jr-icon-btn" type="button" id="jrScheduleAdd" aria-label="Добавить сотрудника" title="Добавить сотрудника" onclick="typeof jrScheduleAddOpen==='function'&&jrScheduleAddOpen()"><svg aria-hidden="true" viewBox="0 0 24 24"><circle cx="9" cy="8" r="4"/><path d="M3 21v-2a6 6 0 0 1 12 0M19 8v8M15 12h8"/></svg></button>
-        <button class="btn btn-sec jr-more-btn" type="button" id="jrMoreBtn" aria-controls="jrMorePopup" aria-expanded="false" onclick="jrToolbarPopupToggle('more', this)">Ещё <svg aria-hidden="true" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg></button>
+        <input id="jrDate" type="date" aria-label="Дата журнала" data-static-onchange="s57" tabindex="-1">
+        <select id="jrStaffFilter" aria-label="Сотрудник" data-static-onchange="s58"><option value="">Все сотрудники</option></select>
+        <button class="btn btn-sec jr-icon-btn" type="button" id="jrScaleBtn" aria-label="Масштаб" aria-controls="jrScalePopup" aria-expanded="false" data-static-onclick="s59"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M9.5 3.5 11 2h2l1.5 1.5 2.1-.2 1.1 1.8 2 .8v2.1l1.3 1.7-1.3 1.7v2.1l-2 .8-1.1 1.8-2.1-.2L13 19h-2l-1.5-1.5-2.1.2-1.1-1.8-2-.8v-2.1L3 11.3l1.3-1.7V7.5l2-.8 1.1-1.8 2.1.2Z"/><circle cx="12" cy="10.5" r="3"/></svg></button>
+        <button class="btn btn-sec jr-icon-btn" type="button" id="jrStatusBtn" aria-label="Статусы" aria-controls="jrStatusPopup" aria-expanded="false" data-static-onclick="s60"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16M9 4v4M15 10v4M11 16v4"/></svg></button>
+        <button class="btn btn-sec jr-icon-btn" type="button" id="jrScheduleAdd" aria-label="Добавить сотрудника" title="Добавить сотрудника" data-static-onclick="s61"><svg aria-hidden="true" viewBox="0 0 24 24"><circle cx="9" cy="8" r="4"/><path d="M3 21v-2a6 6 0 0 1 12 0M19 8v8M15 12h8"/></svg></button>
+        <button class="btn btn-sec jr-more-btn" type="button" id="jrMoreBtn" aria-controls="jrMorePopup" aria-expanded="false" data-static-onclick="s62">Ещё <svg aria-hidden="true" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg></button>
         <div class="jr-toolbar-popup" id="jrScalePopup" hidden role="group" aria-label="Масштаб"></div>
         <div class="jr-toolbar-popup" id="jrStatusPopup" hidden role="group" aria-label="Статусы"></div>
         <div class="jr-toolbar-popup jr-more-popup" id="jrMorePopup" hidden role="group" aria-label="Дополнительные действия">
-          <label class="jr-working-filter"><input id="jrWorkingOnly" type="checkbox" checked onchange="jrUpdateStaffFilter();jrRender()"> Только работающие</label>
-          <span class="jr-more-search"><input id="jrSearch" type="search" placeholder="Клиент или услуга" aria-label="Поиск в журнале" oninput="jrRender()"></span>
-          <span class="jr-view-switch" role="group" aria-label="Вид журнала"><button class="btn btn-sec is-active" id="jrViewDay" aria-pressed="true" onclick="jrSetView('day')">День</button><button class="btn btn-sec" id="jrViewWeek" aria-pressed="false" onclick="jrSetView('week')">Неделя</button></span>
-          <button class="btn btn-sec" onclick="loadJournal()">Обновить</button>
-          <button class="btn btn-sec" id="jrPrint" onclick="window.print()" title="Печать журнала дня">Печать</button>
-          <button class="btn btn-pri" id="jrNew" disabled onclick="jrForm()">+ Новая запись</button>
+          <label class="jr-working-filter"><input id="jrWorkingOnly" type="checkbox" checked data-static-onchange="s63"> Только работающие</label>
+          <span class="jr-more-search"><input id="jrSearch" type="search" placeholder="Клиент или услуга" aria-label="Поиск в журнале" data-static-oninput="s64"></span>
+          <span class="jr-view-switch" role="group" aria-label="Вид журнала"><button class="btn btn-sec is-active" id="jrViewDay" aria-pressed="true" data-static-onclick="s65">День</button><button class="btn btn-sec" id="jrViewWeek" aria-pressed="false" data-static-onclick="s66">Неделя</button></span>
+          <button class="btn btn-sec" data-static-onclick="s67">Обновить</button>
+          <button class="btn btn-sec" id="jrPrint" data-static-onclick="s68" title="Печать журнала дня">Печать</button>
+          <button class="btn btn-pri" id="jrNew" disabled data-static-onclick="s69">+ Новая запись</button>
         </div>
-        <div class="jr-summary-wrap"><button class="btn btn-sec jr-summary-plus" id="jrSummaryPlus" type="button" disabled title="Новая запись" aria-label="Новая запись" onclick="jrForm()">+</button><button class="btn btn-sec jr-summary-trigger" id="jrSummaryBtn" type="button" aria-controls="jrSummaryPopup" aria-expanded="false" onclick="jrToolbarPopupToggle('summary', this)"><span id="jrSummaryTotal">—</span> ₽ <svg aria-hidden="true" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg></button><div class="jr-toolbar-popup jr-summary-popup" id="jrSummaryPopup" hidden role="status" aria-label="Сводка за день"></div></div>
+        <div class="jr-summary-wrap"><button class="btn btn-sec jr-summary-plus" id="jrSummaryPlus" type="button" disabled title="Новая запись" aria-label="Новая запись" data-static-onclick="s69">+</button><button class="btn btn-sec jr-summary-trigger" id="jrSummaryBtn" type="button" aria-controls="jrSummaryPopup" aria-expanded="false" data-static-onclick="s70"><span id="jrSummaryTotal">—</span> ₽ <svg aria-hidden="true" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg></button><div class="jr-toolbar-popup jr-summary-popup" id="jrSummaryPopup" hidden role="status" aria-label="Сводка за день"></div></div>
         <div id="jrMonth" class="jr-month" hidden></div>
       </div>
-      <div class="jr-toolbar-secondary"><button class="btn btn-sec" id="jrScheduleChanges" onclick="jrScheduleChangesOpen()">Изменения графика</button><button class="btn btn-sec" id="jrDispatch" onclick="jrDispatchOpen()">Отправить в YClients</button><button class="btn btn-sec" id="jrReview" hidden onclick="jrReviewPending()">Сверить незавершённые операции</button></div>
+      <div class="jr-toolbar-secondary"><button class="btn btn-sec" id="jrScheduleChanges" data-static-onclick="s71">Изменения графика</button><button class="btn btn-sec" id="jrDispatch" data-static-onclick="s72">Отправить в YClients</button><button class="btn btn-sec" id="jrReview" hidden data-static-onclick="s73">Сверить незавершённые операции</button></div>
       <p id="jrState" class="jr-state" role="status" aria-live="polite"></p>
       <div id="jrStaffChips" class="jr-staff-chips" hidden role="group" aria-label="Специалист"></div>
       <div id="jrGrid" class="jr-scroll" aria-label="Расписание сотрудников"></div>
     </div>
     <dialog id="jrModal" class="jr-dialog" aria-labelledby="jrModalTitle">
-      <div class="jr-dialog-head"><h2 id="jrModalTitle">Запись</h2><button class="btn btn-sec" aria-label="Закрыть карточку" onclick="jrClose()">✕</button></div>
+      <div class="jr-dialog-head"><h2 id="jrModalTitle">Запись</h2><button class="btn btn-sec" aria-label="Закрыть карточку" data-static-onclick="s74">✕</button></div>
       <div id="jrModalBody"></div><div id="jrModalError" class="jr-error" role="alert"></div><div id="jrCloseAsk" class="jr-close-ask" role="alertdialog" aria-live="assertive" hidden></div>
     </dialog>
 
@@ -485,7 +489,7 @@
         <input type="date" id="rFrom" style="width:148px">
         <span style="color:var(--t3)">—</span>
         <input type="date" id="rTo" style="width:148px">
-        <select style="width:145px" id="rStat" onchange="loadRecords(1)">
+        <select style="width:145px" id="rStat" data-static-onchange="s75">
           <option value="">Все статусы</option>
           <option value="completed">Оказана</option>
           <option value="arrived">Пришёл</option>
@@ -495,9 +499,9 @@
           <option value="cancelled">Отменена</option>
           <option value="deleted">Удалена</option>
         </select>
-        <input type="text" id="rPhone" placeholder="Телефон" style="width:140px" onkeydown="if(event.key==='Enter')loadRecords(1)">
-        <input type="text" id="rClient" placeholder="ФИО клиента" style="width:160px" onkeydown="if(event.key==='Enter')loadRecords(1)">
-        <button class="btn btn-sec" onclick="loadRecords(1)">Применить</button>
+        <input type="text" id="rPhone" placeholder="Телефон" style="width:140px" data-static-onkeydown="s76">
+        <input type="text" id="rClient" placeholder="ФИО клиента" style="width:160px" data-static-onkeydown="s76">
+        <button class="btn btn-sec" data-static-onclick="s75">Применить</button>
       </div>
       <div class="card" style="padding:0"><div class="tw"><table>
         <thead><tr><th>Дата</th><th>Клиент</th><th>Услуги</th><th>Мастер</th><th style="text-align:right">Сумма</th><th style="text-align:right">Начислено</th><th style="text-align:right">Списано</th><th>Статус</th><th>Источник</th><th></th></tr></thead>
@@ -512,7 +516,7 @@
         <div style="font-size:16px;font-weight:700">Аналитика сотрудника</div>
         <div class="sa-filters">
           <select id="sa-staff" class="sa-sel"><option value="">— Сотрудник —</option></select>
-          <select id="sa-period" class="sa-sel" onchange="saOnPeriodChange()">
+          <select id="sa-period" class="sa-sel" data-static-onchange="s77">
             <option value="month">Этот месяц</option>
             <option value="quarter">Этот квартал</option>
             <option value="custom">Произвольный</option>
@@ -522,11 +526,11 @@
             <span style="line-height:32px;color:var(--t3)">—</span>
             <input type="date" id="sa-to" class="sa-inp">
           </div>
-          <button class="btn btn-pri btn-sm" onclick="buildStaffDashboard()">Сформировать</button>
-          <button class="btn btn-sec btn-sm" id="sa-pdf-btn" onclick="saExportPDF()">
+          <button class="btn btn-pri btn-sm" data-static-onclick="s78">Сформировать</button>
+          <button class="btn btn-sec btn-sm" id="sa-pdf-btn" data-static-onclick="s79">
             <svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>PDF
           </button>
-          <button class="btn btn-sec btn-sm" id="sa-sync-btn" onclick="saSyncStaff()">
+          <button class="btn btn-sec btn-sm" id="sa-sync-btn" data-static-onclick="s80">
             <svg viewBox="0 0 24 24"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>Синхр.
           </button>
         </div>
@@ -537,9 +541,9 @@
         <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px">
           <div class="ct">🎯 Планы на месяц</div>
           <div style="display:flex;align-items:center;gap:8px">
-            <button class="btn btn-sec btn-sm" onclick="sgChangeMonth(-1)">◀</button>
+            <button class="btn btn-sec btn-sm" data-static-onclick="s81">◀</button>
             <b id="sg-month-label" style="min-width:130px;text-align:center"></b>
-            <button class="btn btn-sec btn-sm" onclick="sgChangeMonth(1)">▶</button>
+            <button class="btn btn-sec btn-sm" data-static-onclick="s82">▶</button>
           </div>
         </div>
         <div style="font-size:12px;color:var(--t3);margin:6px 0 12px">
@@ -634,48 +638,48 @@
       <div class="stg-sidebar">
         <div class="stg-group">
           <div class="stg-group-lbl">🏆 Лояльность</div>
-          <div class="stg-item active" data-sec="loyalty-levels" onclick="navStg('loyalty-levels',this)"><span class="stg-ic">⭐</span>Уровни и кэшбэк</div>
-          <div class="stg-item" data-sec="loyalty-services" onclick="navStg('loyalty-services',this)"><span class="stg-ic">✂️</span>По услугам</div>
-          <div class="stg-item" data-sec="loyalty-birthday" onclick="navStg('loyalty-birthday',this)"><span class="stg-ic">🎂</span>День рождения</div>
-          <div class="stg-item" data-sec="loyalty-referral" onclick="navStg('loyalty-referral',this)"><span class="stg-ic">🤝</span>Реферальная</div>
+          <div class="stg-item active" data-sec="loyalty-levels" data-static-onclick="s83"><span class="stg-ic">⭐</span>Уровни и кэшбэк</div>
+          <div class="stg-item" data-sec="loyalty-services" data-static-onclick="s84"><span class="stg-ic">✂️</span>По услугам</div>
+          <div class="stg-item" data-sec="loyalty-birthday" data-static-onclick="s85"><span class="stg-ic">🎂</span>День рождения</div>
+          <div class="stg-item" data-sec="loyalty-referral" data-static-onclick="s86"><span class="stg-ic">🤝</span>Реферальная</div>
         </div>
         <div class="stg-sep"></div>
         <div class="stg-group">
           <div class="stg-group-lbl">🏠 Салон</div>
-          <div class="stg-item" data-sec="salon" onclick="navStg('salon',this)"><span class="stg-ic">⚙️</span>Основные настройки</div>
+          <div class="stg-item" data-sec="salon" data-static-onclick="s87"><span class="stg-ic">⚙️</span>Основные настройки</div>
         </div>
         <div class="stg-sep"></div>
         <div class="stg-group">
           <div class="stg-group-lbl">🔗 Интеграция</div>
-          <div class="stg-item" data-sec="agent-model" onclick="navStg('agent-model',this)"><span class="stg-ic">🤖</span>Модель Милы</div>
-          <div class="stg-item" data-sec="messengers" onclick="navStg('messengers',this)"><span class="stg-ic">💬</span>Мессенджеры</div>
-          <div class="stg-item" data-sec="yclients" onclick="navStg('yclients',this)"><span class="stg-ic">🔌</span>Подключение YClients</div>
-          <div class="stg-item" data-sec="loyalty-card" onclick="navStg('loyalty-card',this)"><span class="stg-ic">💳</span>Карта лояльности</div>
-          <div class="stg-item" data-sec="webhook" onclick="navStg('webhook',this)"><span class="stg-ic">🔔</span>Webhook URL</div>
-          <div class="stg-item" data-sec="cookies" onclick="navStg('cookies',this)"><span class="stg-ic">🍪</span>Куки браузера</div>
+          <div class="stg-item" data-sec="agent-model" data-static-onclick="s88"><span class="stg-ic">🤖</span>Модель Милы</div>
+          <div class="stg-item" data-sec="messengers" data-static-onclick="s89"><span class="stg-ic">💬</span>Мессенджеры</div>
+          <div class="stg-item" data-sec="yclients" data-static-onclick="s90"><span class="stg-ic">🔌</span>Подключение YClients</div>
+          <div class="stg-item" data-sec="loyalty-card" data-static-onclick="s91"><span class="stg-ic">💳</span>Карта лояльности</div>
+          <div class="stg-item" data-sec="webhook" data-static-onclick="s92"><span class="stg-ic">🔔</span>Webhook URL</div>
+          <div class="stg-item" data-sec="cookies" data-static-onclick="s93"><span class="stg-ic">🍪</span>Куки браузера</div>
         </div>
         <div class="stg-sep"></div>
         <div class="stg-group">
           <div class="stg-group-lbl">📊 Импорт данных</div>
-          <div class="stg-item" data-sec="import-csv" onclick="navStg('import-csv',this)"><span class="stg-ic">📋</span>CSV транзакций</div>
-          <div class="stg-item" data-sec="import-bulk" onclick="navStg('import-bulk',this)"><span class="stg-ic">📥</span>История карт</div>
-          <div class="stg-item" data-sec="sync-logs" onclick="navStg('sync-logs',this)"><span class="stg-ic">📜</span>Логи синхронизации</div>
+          <div class="stg-item" data-sec="import-csv" data-static-onclick="s94"><span class="stg-ic">📋</span>CSV транзакций</div>
+          <div class="stg-item" data-sec="import-bulk" data-static-onclick="s95"><span class="stg-ic">📥</span>История карт</div>
+          <div class="stg-item" data-sec="sync-logs" data-static-onclick="s96"><span class="stg-ic">📜</span>Логи синхронизации</div>
         </div>
         <div class="stg-sep"></div>
         <div class="stg-group">
           <div class="stg-group-lbl">📄 Документы</div>
-          <div class="stg-item" data-sec="template" onclick="navStg('template',this)"><span class="stg-ic">🎨</span>Шаблон «Домашний уход»</div>
+          <div class="stg-item" data-sec="template" data-static-onclick="s97"><span class="stg-ic">🎨</span>Шаблон «Домашний уход»</div>
         </div>
         <div class="stg-sep"></div>
         <div class="stg-group">
           <div class="stg-group-lbl">👥 Сотрудники</div>
-          <div class="stg-item" data-sec="staff-profiles" onclick="navStg('staff-profiles',this)"><span class="stg-ic">👤</span>Карточки сотрудников</div>
+          <div class="stg-item" data-sec="staff-profiles" data-static-onclick="s98"><span class="stg-ic">👤</span>Карточки сотрудников</div>
         </div>
         <div class="stg-sep"></div>
         <div class="stg-group">
           <div class="stg-group-lbl">📱 Мобильное приложение</div>
-          <div class="stg-item" data-sec="app-settings" onclick="navStg('app-settings',this)"><span class="stg-ic">⚙️</span>Настройки приложения</div>
-          <div class="stg-item" data-sec="portfolio" onclick="navStg('portfolio',this)"><span class="stg-ic">🖼️</span>Портфолио работ</div>
+          <div class="stg-item" data-sec="app-settings" data-static-onclick="s99"><span class="stg-ic">⚙️</span>Настройки приложения</div>
+          <div class="stg-item" data-sec="portfolio" data-static-onclick="s100"><span class="stg-ic">🖼️</span>Портфолио работ</div>
         </div>
       </div>
 
@@ -688,8 +692,8 @@
           <select id="agent-model-select" style="width:100%;max-width:560px"></select>
           <p>При ошибке GPT Мила переходит на Claude Sonnet. Если мост недоступен или обе модели не отвечают — на «Пользу». Выбранный резерв сохраняется; вернуть GPT можно вручную.</p>
           <p>Ручной выбор действует со следующего запроса. Защита от сбоев остаётся включённой.</p>
-          <button class="btn btn-pri" id="agent-model-save" onclick="saveAgentModel()" disabled>Применить</button>
-          <button class="btn btn-sec" onclick="loadAgentModel()">Обновить</button>
+          <button class="btn btn-pri" id="agent-model-save" data-static-onclick="s101" disabled>Применить</button>
+          <button class="btn btn-sec" data-static-onclick="s102">Обновить</button>
         </div>
 
         <div class="stg-section" id="stg-messengers">
@@ -697,25 +701,25 @@
           <p>Через какие аккаунты салон получает и отправляет сообщения. Telegram, WhatsApp и MAX можно подключить напрямую (свой шлюз), остальные каналы пока идут через Chatpush.</p>
           <div id="msg-acc-list">Загрузка…</div>
           <p id="msg-acc-gw-note" style="opacity:.7"></p>
-          <button class="btn btn-pri" id="msg-acc-connect-tg" onclick="msgAccConnectTelegram()">Подключить Telegram напрямую</button>
-          <button class="btn btn-pri" id="msg-acc-connect-wa" onclick="msgAccConnectWhatsapp()">Подключить WhatsApp напрямую</button>
-          <button class="btn btn-pri" id="msg-acc-connect-max" onclick="msgAccConnectMax()">Подключить MAX напрямую</button>
+          <button class="btn btn-pri" id="msg-acc-connect-tg" data-static-onclick="s103">Подключить Telegram напрямую</button>
+          <button class="btn btn-pri" id="msg-acc-connect-wa" data-static-onclick="s104">Подключить WhatsApp напрямую</button>
+          <button class="btn btn-pri" id="msg-acc-connect-max" data-static-onclick="s105">Подключить MAX напрямую</button>
           <div id="msg-acc-wizard" style="display:none;margin-top:12px">
             <div data-step="wait">Запускаем сессию…</div>
             <div data-step="phone">
               <label class="fl" for="msg-acc-phone">Номер телефона аккаунта Telegram клиники</label>
               <input id="msg-acc-phone" autocomplete="tel" placeholder="+7 900 000-00-00" style="max-width:280px">
-              <button class="btn btn-pri" onclick="msgAccSendStep('phone')">Отправить код</button>
+              <button class="btn btn-pri" data-static-onclick="s106">Отправить код</button>
             </div>
             <div data-step="code">
               <label class="fl" for="msg-acc-code">Код подтверждения (придёт в приложение на телефоне или SMS)</label>
               <input id="msg-acc-code" autocomplete="one-time-code" inputmode="numeric" style="max-width:160px">
-              <button class="btn btn-pri" onclick="msgAccSendStep('code')">Подтвердить</button>
+              <button class="btn btn-pri" data-static-onclick="s107">Подтвердить</button>
             </div>
             <div data-step="password">
               <label class="fl" for="msg-acc-password">Пароль двухэтапной проверки</label>
               <input id="msg-acc-password" autocomplete="new-password" type="password" style="max-width:280px">
-              <button class="btn btn-pri" onclick="msgAccSendStep('password')">Войти</button>
+              <button class="btn btn-pri" data-static-onclick="s108">Войти</button>
             </div>
             <div data-step="qr">
               <p id="msg-acc-qr-hint">Откройте приложение на телефоне клиники и отсканируйте QR:</p>
@@ -724,17 +728,17 @@
               <div id="msg-acc-qr-wa-only">
                 <p style="opacity:.8;margin-top:10px">Нет возможности сканировать? Введите номер WhatsApp клиники — получите код, его вводят на телефоне в «Привязка по номеру телефона».</p>
                 <input id="msg-acc-wa-phone" autocomplete="tel" placeholder="+7 900 000-00-00" style="max-width:280px">
-                <button class="btn btn-sec" onclick="msgAccSendStep('wa-phone')">Получить код привязки</button>
+                <button class="btn btn-sec" data-static-onclick="s109">Получить код привязки</button>
                 <p id="msg-acc-pairing-code" style="font-size:18px;font-weight:600;letter-spacing:2px"></p>
               </div>
               <div id="msg-acc-qr-max-only" style="display:none">
                 <p style="opacity:.8;margin-top:10px">Если QR недоступен: введите номер MAX клиники — придёт SMS с кодом, затем при необходимости пароль. (Вход по номеру в MAX живьём не проверялся — предпочтителен QR.)</p>
                 <input id="msg-acc-max-phone" autocomplete="tel" placeholder="+7 900 000-00-00" style="max-width:280px">
-                <button class="btn btn-sec" onclick="msgAccSendStep('max-phone')">Отправить код из SMS</button>
+                <button class="btn btn-sec" data-static-onclick="s110">Отправить код из SMS</button>
               </div>
             </div>
             <p id="msg-acc-error" style="color:#c33"></p>
-            <button class="btn btn-sec" id="msg-acc-restart" style="display:none" onclick="msgAccRestart()">Запустить заново</button>
+            <button class="btn btn-sec" id="msg-acc-restart" style="display:none" data-static-onclick="s111">Запустить заново</button>
           </div>
         </div>
 
@@ -746,15 +750,15 @@
             <div style="font-size:13px;font-weight:600;color:#92400e">Начисление бонусов отключено — вебхуки принимаются, транзакции логируются, но бонусы не начисляются</div>
           </div>
           <div class="g2">
-            <div class="card"><div class="ct">Уровни лояльности <button class="btn btn-pri btn-sm" onclick="saveLs()">Сохранить</button></div><div id="lvlEditor"></div></div>
+            <div class="card"><div class="ct">Уровни лояльности <button class="btn btn-pri btn-sm" data-static-onclick="s112">Сохранить</button></div><div id="lvlEditor"></div></div>
             <div class="card">
               <div class="ct">Правила начисления</div>
-              <div class="srow"><div><div class="srow-l" style="font-weight:600">🔴 Начисление бонусов</div><div class="srow-h">Глобальное включение / отключение</div></div><label class="tgl"><input type="checkbox" id="ls-bonuses-on" checked onchange="updateBonusBanner()"><span class="ts"></span></label></div>
+              <div class="srow"><div><div class="srow-l" style="font-weight:600">🔴 Начисление бонусов</div><div class="srow-h">Глобальное включение / отключение</div></div><label class="tgl"><input type="checkbox" id="ls-bonuses-on" checked data-static-onchange="s113"><span class="ts"></span></label></div>
               <div class="div" style="margin:10px 0"></div>
               <div class="srow"><div><div class="srow-l">Срок действия бонусов (дней)</div><div class="srow-h">0 = бессрочно</div></div><input type="number" id="ls-exp" value="0" style="width:80px"></div>
               <div class="div"></div>
               <div style="font-size:12.5px;color:var(--t2);line-height:1.7;margin-top:10px">При оплате визита — webhook от YClients → начисление бонусов. При отмене — автоматическое аннулирование.</div>
-              <div style="margin-top:14px"><button class="btn btn-pri" onclick="saveLs()">Сохранить правила</button></div>
+              <div style="margin-top:14px"><button class="btn btn-pri" data-static-onclick="s112">Сохранить правила</button></div>
             </div>
           </div>
         </div>
@@ -763,7 +767,7 @@
         <div class="stg-section" id="stg-loyalty-services">
           <div class="stg-hdr"><span>✂️</span>Кэшбэк по услугам</div>
           <div class="card">
-            <div class="ct">Индивидуальный кэшбэк <button class="btn btn-pri btn-sm" onclick="saveLs()">Сохранить</button></div>
+            <div class="ct">Индивидуальный кэшбэк <button class="btn btn-pri btn-sm" data-static-onclick="s112">Сохранить</button></div>
             <div style="font-size:12.5px;color:var(--t2);margin-bottom:12px">Переопределяет базовый кэшбэк уровня для конкретных услуг. Оставьте поле пустым чтобы использовать базовый процент.</div>
             <div id="svcCb"><div class="empty"><span class="spinner"></span> Загрузка из YClients...</div></div>
           </div>
@@ -778,7 +782,7 @@
               <div class="srow"><div><div class="srow-l">Включить программу</div><div class="srow-h">Автоматически начислять бонусы именинникам</div></div><label class="tgl"><input type="checkbox" id="ls-bd-on" checked><span class="ts"></span></label></div>
               <div class="fg" style="margin-top:14px"><label class="fl">Бонусов в подарок</label><input type="number" id="ls-bd-bonus" value="500"></div>
               <div class="fg"><label class="fl">За сколько дней до дня рождения</label><input type="number" id="ls-bd-days" value="3"></div>
-              <button class="btn btn-pri" onclick="saveLs()">Сохранить</button>
+              <button class="btn btn-pri" data-static-onclick="s112">Сохранить</button>
             </div>
             <div class="card">
               <div class="ct">Именинники (ближайшие 7 дней)</div>
@@ -796,7 +800,7 @@
               <div class="srow"><div><div class="srow-l">Программа активна</div><div class="srow-h">Клиенты могут приглашать друзей</div></div><label class="tgl"><input type="checkbox" id="ls-ref-on" checked><span class="ts"></span></label></div>
               <div class="fg" style="margin-top:14px"><label class="fl">Бонус пригласившему</label><input type="number" id="ls-ref-s" value="200"></div>
               <div class="fg"><label class="fl">Бонус приглашённому</label><input type="number" id="ls-ref-r" value="150"></div>
-              <button class="btn btn-pri" onclick="saveLs()">Сохранить</button>
+              <button class="btn btn-pri" data-static-onclick="s112">Сохранить</button>
             </div>
             <div class="sc" style="height:fit-content"><div class="sl">Реферальных регистраций</div><div class="sv">—</div><div class="sd">за всё время</div></div>
           </div>
@@ -817,7 +821,7 @@
                 <option value="Asia/Vladivostok">UTC+10 Владивосток</option>
               </select>
             </div>
-            <button class="btn btn-pri" onclick="saveSalon()">Сохранить</button>
+            <button class="btn btn-pri" data-static-onclick="s114">Сохранить</button>
           </div>
           <div class="card" style="max-width:480px;margin-top:16px">
             <div class="ct">Логотип филиала</div>
@@ -830,9 +834,9 @@
             <div style="display:flex;gap:8px;align-items:center">
               <label class="btn btn-pri" style="cursor:pointer;margin:0">
                 Загрузить логотип
-                <input type="file" accept="image/png,image/jpeg,image/gif,image/webp" style="display:none" onchange="uploadSalonLogo(this)">
+                <input type="file" accept="image/png,image/jpeg,image/gif,image/webp" style="display:none" data-static-onchange="s115">
               </label>
-              <button class="btn btn-sec" id="salonLogoDeleteBtn" style="display:none" onclick="deleteSalonLogo()">Удалить</button>
+              <button class="btn btn-sec" id="salonLogoDeleteBtn" style="display:none" data-static-onclick="s116">Удалить</button>
               <span id="salonLogoStatus" style="font-size:12px"></span>
             </div>
           </div>
@@ -848,8 +852,8 @@
             <div class="fg"><label class="fl">Пароль YClients</label><input type="password" id="st-pass"></div>
             <div class="fg"><label class="fl">Chain ID <span class="fh">salon_group_id из карты лояльности</span></label><input type="text" id="st-chain-id" placeholder="652414"></div>
             <div style="display:flex;gap:8px">
-              <button class="btn btn-pri" onclick="connectYC()">Подключить YClients</button>
-              <button class="btn btn-sec" onclick="saveSalon()">Сохранить</button>
+              <button class="btn btn-pri" data-static-onclick="s117">Подключить YClients</button>
+              <button class="btn btn-sec" data-static-onclick="s114">Сохранить</button>
             </div>
             <div id="ycSt" style="margin-top:10px;font-size:12px"></div>
           </div>
@@ -865,14 +869,14 @@
             </div>
             <div class="fg">
               <label class="fl">Тип карты лояльности</label>
-              <select id="st-card-type" onchange="onCardTypeChange(this)">
+              <select id="st-card-type" data-static-onchange="s118">
                 <option value="">— Не выбрана (сначала загрузите типы) —</option>
               </select>
             </div>
             <div id="cardTypeInfo" style="font-size:12px;color:var(--t3);margin-bottom:10px;display:none"></div>
             <div style="display:flex;gap:8px">
-              <button class="btn btn-pri" onclick="saveSalon()">Сохранить выбор</button>
-              <button class="btn btn-sec" onclick="loadCardTypes()">Загрузить типы карт</button>
+              <button class="btn btn-pri" data-static-onclick="s114">Сохранить выбор</button>
+              <button class="btn btn-sec" data-static-onclick="s119">Загрузить типы карт</button>
             </div>
           </div>
         </div>
@@ -887,7 +891,7 @@
             </div>
             <div style="display:flex;gap:6px">
               <input type="text" id="whUrl" readonly>
-              <button class="btn btn-sec" onclick="copyWh()">Копировать</button>
+              <button class="btn btn-sec" data-static-onclick="s120">Копировать</button>
             </div>
           </div>
         </div>
@@ -905,7 +909,7 @@
               <textarea id="st-web-cookie" rows="4" placeholder="XSRF-TOKEN=...; laravel_session=...; remember_web_...=..." style="resize:vertical;font-size:11px;font-family:monospace"></textarea>
             </div>
             <div style="display:flex;gap:8px;align-items:center">
-              <button class="btn btn-pri" onclick="saveWebCookie()">Сохранить куки</button>
+              <button class="btn btn-pri" data-static-onclick="s121">Сохранить куки</button>
               <span style="font-size:11.5px;color:var(--t3)">Куки действуют ~30 дней</span>
             </div>
             <div id="cookieSt" style="margin-top:8px;font-size:12px"></div>
@@ -927,7 +931,7 @@
             </div>
             <div id="xlsImportResult" style="display:none;margin:10px 0;font-size:13px;padding:10px 12px;border-radius:8px"></div>
             <div style="display:flex;gap:8px;align-items:center">
-              <button class="btn btn-pri" id="xlsImportBtn" onclick="startXlsImport()">📊 Импортировать CSV</button>
+              <button class="btn btn-pri" id="xlsImportBtn" data-static-onclick="s122">📊 Импортировать CSV</button>
               <span id="xlsImportProgress" style="font-size:12px;color:var(--t3)"></span>
             </div>
           </div>
@@ -957,7 +961,7 @@
             </div>
             <div id="bulkImportResult" style="display:none;margin-bottom:12px;font-size:13px;padding:10px 12px;border-radius:8px"></div>
             <div style="display:flex;align-items:center;gap:10px">
-              <button class="btn btn-pri" id="bulkImportBtn" onclick="startBulkImport()">📥 Запустить импорт истории</button>
+              <button class="btn btn-pri" id="bulkImportBtn" data-static-onclick="s123">📥 Запустить импорт истории</button>
               <span style="font-size:11px;color:var(--t3)">Займёт несколько минут</span>
             </div>
           </div>
@@ -967,7 +971,7 @@
         <div class="stg-section" id="stg-sync-logs">
           <div class="stg-hdr"><span>📜</span>Логи синхронизации</div>
           <div class="card">
-            <div class="ct">История синхронизаций <button class="btn btn-sec btn-sm" onclick="loadSyncLogs()">Обновить</button></div>
+            <div class="ct">История синхронизаций <button class="btn btn-sec btn-sm" data-static-onclick="s124">Обновить</button></div>
             <div id="syncLogs"><div class="empty">Загрузка...</div></div>
           </div>
         </div>
@@ -984,7 +988,7 @@
               <div id="appLogoPreview" style="width:100%;height:80px;border:1px dashed var(--bd);border-radius:8px;display:flex;align-items:center;justify-content:center;margin-bottom:8px;overflow:hidden;background:var(--bg)">
                 <span style="font-size:12px;color:var(--t3)">Нет изображения</span>
               </div>
-              <label class="btn btn-sec" style="cursor:pointer;display:inline-block;font-size:12px">Загрузить логотип<input type="file" accept="image/*" style="display:none" onchange="uploadAppLogo(this)"></label>
+              <label class="btn btn-sec" style="cursor:pointer;display:inline-block;font-size:12px">Загрузить логотип<input type="file" accept="image/*" style="display:none" data-static-onchange="s125"></label>
             </div>
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px">
               <div class="fg" style="margin:0;grid-column:1/-1"><label class="fl" style="font-size:11.5px">Название клиники</label><input type="text" id="app-clinic-name" placeholder="Aura Aesthetics"></div>
@@ -997,7 +1001,7 @@
               <div class="fg" style="margin:0;grid-column:1/-1"><label class="fl" style="font-size:11.5px">Email</label><input type="text" id="app-email" placeholder="info@clinic.ru"></div>
             </div>
             <div style="display:flex;gap:8px;align-items:center">
-              <button class="btn btn-pri" onclick="saveAppSettings()">Сохранить</button>
+              <button class="btn btn-pri" data-static-onclick="s126">Сохранить</button>
               <div id="appStgStatus" style="font-size:12px"></div>
             </div>
           </div>
@@ -1016,14 +1020,14 @@
                 <div id="tmplLogoPreview" style="width:100%;height:80px;border:1px dashed var(--bd);border-radius:8px;display:flex;align-items:center;justify-content:center;margin-bottom:8px;overflow:hidden;background:var(--bg)">
                   <span style="font-size:12px;color:var(--t3)">Нет изображения</span>
                 </div>
-                <label class="btn btn-sec" style="cursor:pointer;display:block;text-align:center;font-size:12px">Загрузить логотип<input type="file" accept="image/*" style="display:none" onchange="uploadTemplateImage('logo', this)"></label>
+                <label class="btn btn-sec" style="cursor:pointer;display:block;text-align:center;font-size:12px">Загрузить логотип<input type="file" accept="image/*" style="display:none" data-static-onchange="s127"></label>
               </div>
               <div>
                 <div style="font-size:12px;font-weight:600;color:var(--t2);margin-bottom:8px">Фоновый рисунок</div>
                 <div id="tmplWmPreview" style="width:100%;height:80px;border:1px dashed var(--bd);border-radius:8px;display:flex;align-items:center;justify-content:center;margin-bottom:8px;overflow:hidden;background:var(--bg)">
                   <span style="font-size:12px;color:var(--t3)">Нет изображения</span>
                 </div>
-                <label class="btn btn-sec" style="cursor:pointer;display:block;text-align:center;font-size:12px">Загрузить фон<input type="file" accept="image/*" style="display:none" onchange="uploadTemplateImage('wm', this)"></label>
+                <label class="btn btn-sec" style="cursor:pointer;display:block;text-align:center;font-size:12px">Загрузить фон<input type="file" accept="image/*" style="display:none" data-static-onchange="s128"></label>
               </div>
             </div>
             <div style="display:grid;grid-template-columns:1fr 1fr 2fr;gap:10px;margin-bottom:12px">
@@ -1032,9 +1036,9 @@
               <div class="fg" style="margin:0"><label class="fl" style="font-size:11.5px">Подзаголовок</label><input type="text" id="tmpl-subtitle" placeholder="МЕДИЦИНСКИЙ КОСМЕТОЛОГИЧЕСКИЙ ЦЕНТР"></div>
             </div>
             <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:12px">
-              <div class="fg" style="margin:0"><label class="fl" style="font-size:11.5px">Акцентный цвет</label><div style="display:flex;gap:6px;align-items:center"><input type="color" id="tmpl-accent" value="#b8943e" style="width:38px;height:32px;padding:2px;border-radius:4px;border:1px solid var(--bd);cursor:pointer"><input type="text" id="tmpl-accent-txt" placeholder="#b8943e" style="flex:1;font-size:12px" oninput="syncColor('accent')"></div></div>
-              <div class="fg" style="margin:0"><label class="fl" style="font-size:11.5px">Цвет фона</label><div style="display:flex;gap:6px;align-items:center"><input type="color" id="tmpl-bg" value="#faf0e6" style="width:38px;height:32px;padding:2px;border-radius:4px;border:1px solid var(--bd);cursor:pointer"><input type="text" id="tmpl-bg-txt" placeholder="#faf0e6" style="flex:1;font-size:12px" oninput="syncColor('bg')"></div></div>
-              <div class="fg" style="margin:0"><label class="fl" style="font-size:11.5px">Цвет текста</label><div style="display:flex;gap:6px;align-items:center"><input type="color" id="tmpl-text" value="#2c2020" style="width:38px;height:32px;padding:2px;border-radius:4px;border:1px solid var(--bd);cursor:pointer"><input type="text" id="tmpl-text-txt" placeholder="#2c2020" style="flex:1;font-size:12px" oninput="syncColor('text')"></div></div>
+              <div class="fg" style="margin:0"><label class="fl" style="font-size:11.5px">Акцентный цвет</label><div style="display:flex;gap:6px;align-items:center"><input type="color" id="tmpl-accent" value="#b8943e" style="width:38px;height:32px;padding:2px;border-radius:4px;border:1px solid var(--bd);cursor:pointer"><input type="text" id="tmpl-accent-txt" placeholder="#b8943e" style="flex:1;font-size:12px" data-static-oninput="s129"></div></div>
+              <div class="fg" style="margin:0"><label class="fl" style="font-size:11.5px">Цвет фона</label><div style="display:flex;gap:6px;align-items:center"><input type="color" id="tmpl-bg" value="#faf0e6" style="width:38px;height:32px;padding:2px;border-radius:4px;border:1px solid var(--bd);cursor:pointer"><input type="text" id="tmpl-bg-txt" placeholder="#faf0e6" style="flex:1;font-size:12px" data-static-oninput="s130"></div></div>
+              <div class="fg" style="margin:0"><label class="fl" style="font-size:11.5px">Цвет текста</label><div style="display:flex;gap:6px;align-items:center"><input type="color" id="tmpl-text" value="#2c2020" style="width:38px;height:32px;padding:2px;border-radius:4px;border:1px solid var(--bd);cursor:pointer"><input type="text" id="tmpl-text-txt" placeholder="#2c2020" style="flex:1;font-size:12px" data-static-oninput="s131"></div></div>
             </div>
             <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:16px">
               <div class="fg" style="margin:0"><label class="fl" style="font-size:11.5px">Телефон</label><input type="text" id="tmpl-phone" placeholder="+7 (999) 000-00-00"></div>
@@ -1042,8 +1046,8 @@
               <div class="fg" style="margin:0"><label class="fl" style="font-size:11.5px">Соцсети</label><input type="text" id="tmpl-social" placeholder="@clinic"></div>
             </div>
             <div style="display:flex;gap:8px">
-              <button class="btn btn-pri" onclick="saveTemplateSettings()">Сохранить настройки</button>
-              <button class="btn btn-sec" onclick="previewTemplateSettings()">Предпросмотр</button>
+              <button class="btn btn-pri" data-static-onclick="s132">Сохранить настройки</button>
+              <button class="btn btn-sec" data-static-onclick="s133">Предпросмотр</button>
             </div>
             <div id="tmplSaveStatus" style="margin-top:8px;font-size:12px"></div>
           </div>
@@ -1065,13 +1069,13 @@
 
               <div style="display:flex;gap:16px;align-items:flex-start;margin-bottom:20px">
                 <div style="flex-shrink:0;text-align:center">
-                  <div id="staff-modal-photo-wrap" style="width:108px;height:144px;border-radius:12px;overflow:hidden;background:#f3f4f6;margin-bottom:8px;border:2px solid #e5e7eb;cursor:pointer;position:relative" onclick="document.getElementById('staff-photo-input').click()">
+                  <div id="staff-modal-photo-wrap" style="width:108px;height:144px;border-radius:12px;overflow:hidden;background:#f3f4f6;margin-bottom:8px;border:2px solid #e5e7eb;cursor:pointer;position:relative" data-static-onclick="s134">
                     <img id="staff-modal-photo" src="" alt="" style="width:100%;height:100%;object-fit:cover;display:none">
                     <div id="staff-modal-photo-placeholder" style="width:100%;height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;font-size:32px;color:#d1d5db">👤<span style="font-size:10px;color:#9ca3af">Фото</span></div>
                     <div style="position:absolute;inset:0;background:rgba(0,0,0,.35);border-radius:12px;opacity:0;transition:.2s;display:flex;align-items:center;justify-content:center;font-size:22px;color:#fff" class="staff-photo-overlay">📷</div>
                   </div>
-                  <input type="file" id="staff-photo-input" accept="image/jpeg,image/png,image/webp" style="display:none" onchange="staffPhotoSelected(this)">
-                  <button class="btn btn-sec" style="font-size:11px;padding:4px 10px" onclick="document.getElementById('staff-photo-input').click()">Изменить фото</button>
+                  <input type="file" id="staff-photo-input" accept="image/jpeg,image/png,image/webp" style="display:none" data-static-onchange="s135">
+                  <button class="btn btn-sec" style="font-size:11px;padding:4px 10px" data-static-onclick="s134">Изменить фото</button>
                   <div style="font-size:10px;color:#9ca3af;margin-top:4px;line-height:1.4">JPG, PNG, WebP<br>до 5 МБ</div>
                   <div id="staff-photo-status" style="font-size:11px;color:#9ca3af;margin-top:2px"></div>
                 </div>
@@ -1088,15 +1092,15 @@
               </div>
 
               <div style="display:flex;gap:8px;justify-content:flex-end">
-                <button class="btn btn-sec" onclick="closeStaffModal()">Отмена</button>
-                <button class="btn btn-pri" onclick="saveStaffProfile()">Сохранить</button>
+                <button class="btn btn-sec" data-static-onclick="s136">Отмена</button>
+                <button class="btn btn-pri" data-static-onclick="s137">Сохранить</button>
               </div>
             </div>
           </div>
         </div>
 
         <div class="stg-section" id="stg-portfolio">
-          <div class="stg-h">Портфолио работ <button class="btn btn-pri" style="float:right;font-size:13px" onclick="openPortfolioCategoryCreate()">+ Новая категория</button></div>
+          <div class="stg-h">Портфолио работ <button class="btn btn-pri" style="float:right;font-size:13px" data-static-onclick="s138">+ Новая категория</button></div>
           <div class="stg-sub" style="margin-bottom:16px">Категории и фото работ «до/после» для мобильного приложения. Изменения видны клиентам сразу после публикации категории.</div>
 
           <div id="portfolio-loading" style="color:#9ca3af;font-size:13px">Загрузка...</div>
@@ -1109,12 +1113,12 @@
           <!-- Level 2: items inside a category -->
           <div id="portfolio-items-view" style="display:none">
             <div style="display:flex;align-items:center;gap:12px;margin-bottom:14px">
-              <button class="btn btn-sec" style="font-size:13px" onclick="loadPortfolioCategories()">← Все категории</button>
+              <button class="btn btn-sec" style="font-size:13px" data-static-onclick="s139">← Все категории</button>
               <div style="font-weight:600" id="portfolio-cat-title">—</div>
               <div style="margin-left:auto;display:flex;gap:8px">
-                <button class="btn btn-sec" style="font-size:13px" onclick="openPortfolioCategoryEdit()">Редактировать</button>
-                <button class="btn" style="font-size:13px;color:#ef4444" onclick="deletePortfolioCategoryConfirm()">Удалить категорию</button>
-                <button class="btn btn-pri" style="font-size:13px" onclick="openPortfolioItemCreate()">+ Добавить работу</button>
+                <button class="btn btn-sec" style="font-size:13px" data-static-onclick="s140">Редактировать</button>
+                <button class="btn" style="font-size:13px;color:#ef4444" data-static-onclick="s141">Удалить категорию</button>
+                <button class="btn btn-pri" style="font-size:13px" data-static-onclick="s142">+ Добавить работу</button>
               </div>
             </div>
             <div id="portfolio-items-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:14px"></div>
@@ -1139,8 +1143,8 @@
     </div>
     <div id="portfolio-cat-status" style="font-size:13px;margin-bottom:8px;min-height:18px"></div>
     <div style="display:flex;gap:8px;justify-content:flex-end">
-      <button class="btn btn-sec" onclick="closePortfolioCategoryModal()">Отмена</button>
-      <button class="btn btn-pri" onclick="savePortfolioCategory()">Сохранить</button>
+      <button class="btn btn-sec" data-static-onclick="s143">Отмена</button>
+      <button class="btn btn-pri" data-static-onclick="s144">Сохранить</button>
     </div>
   </div>
 </div>
@@ -1162,15 +1166,15 @@
         <label class="fl">Фото "До"</label>
         <div id="portfolio-item-before-preview" style="width:100%;aspect-ratio:1;border-radius:10px;border:2px solid #e5e7eb;background:#f3f4f6;background-size:cover;background-position:center"></div>
         <input type="file" id="portfolio-item-before-input" accept="image/*" style="margin-top:6px">
-        <button class="btn btn-sec" id="portfolio-item-before-clear" style="font-size:12px;margin-top:4px;display:none" onclick="clearPortfolioItemBefore()">Удалить «до»</button>
+        <button class="btn btn-sec" id="portfolio-item-before-clear" style="font-size:12px;margin-top:4px;display:none" data-static-onclick="s145">Удалить «до»</button>
       </div>
     </div>
     <div id="portfolio-item-status" style="font-size:13px;margin-bottom:8px;min-height:18px"></div>
     <div style="display:flex;gap:8px;justify-content:space-between">
-      <button class="btn" id="portfolio-item-delete-btn" style="color:#ef4444;display:none" onclick="deletePortfolioItemConfirm()">Удалить</button>
+      <button class="btn" id="portfolio-item-delete-btn" style="color:#ef4444;display:none" data-static-onclick="s146">Удалить</button>
       <div style="display:flex;gap:8px;margin-left:auto">
-        <button class="btn btn-sec" onclick="closePortfolioItemModal()">Отмена</button>
-        <button class="btn btn-pri" onclick="savePortfolioItem()">Сохранить</button>
+        <button class="btn btn-sec" data-static-onclick="s147">Отмена</button>
+        <button class="btn btn-pri" data-static-onclick="s148">Сохранить</button>
       </div>
     </div>
   </div>
@@ -1184,7 +1188,7 @@
           <div class="seg-meta" id="segMeta"></div>
         </div>
         <div style="display:flex;gap:8px;align-items:center">
-          <button class="btn btn-sec btn-sm" onclick="refreshSegments()">↻ Обновить</button>
+          <button class="btn btn-sec btn-sm" data-static-onclick="s149">↻ Обновить</button>
         </div>
       </div>
 
@@ -1213,17 +1217,17 @@
     </div>
 
     <!-- Segment clients drawer -->
-    <div class="seg-drawer-ov" id="segDrawerOv" onclick="if(event.target===this)segDrawerClose()">
+    <div class="seg-drawer-ov" id="segDrawerOv" data-static-onclick="s150">
       <div class="seg-drawer">
         <div class="seg-drawer-hdr">
           <span id="segDrawerEmoji" style="font-size:20px;flex-shrink:0"></span>
           <div class="seg-drawer-title" id="segDrawerTitle"></div>
-          <button class="btn btn-sec btn-sm" onclick="segExport()" title="Выгрузить в Excel">↓ CSV</button>
-          <button onclick="segDrawerClose()" style="background:none;border:none;font-size:18px;cursor:pointer;color:var(--t2);padding:2px 4px;line-height:1;flex-shrink:0">✕</button>
+          <button class="btn btn-sec btn-sm" data-static-onclick="s151" title="Выгрузить в Excel">↓ CSV</button>
+          <button data-static-onclick="s152" style="background:none;border:none;font-size:18px;cursor:pointer;color:var(--t2);padding:2px 4px;line-height:1;flex-shrink:0">✕</button>
         </div>
         <div class="seg-drawer-body">
           <div style="margin-bottom:12px">
-            <input type="text" class="finp" placeholder="Поиск по имени или телефону..." oninput="segDrawerSearch(this.value)"
+            <input type="text" class="finp" placeholder="Поиск по имени или телефону..." data-static-oninput="s153"
               style="width:100%;box-sizing:border-box" id="segDrawerSearchInp">
           </div>
           <div id="segDrawerList"></div>
@@ -1236,13 +1240,13 @@
     <div class="page" id="page-home-care">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:18px;flex-wrap:wrap;gap:10px">
         <div style="font-size:16px;font-weight:700">Домашний уход</div>
-        <button class="btn btn-pri" onclick="hcOpenNew()">
+        <button class="btn btn-pri" data-static-onclick="s154">
           <svg viewBox="0 0 24 24"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
           Новое назначение
         </button>
       </div>
       <div class="card mb" style="padding:12px 16px">
-        <input id="hcSearch" type="text" placeholder="Поиск по клиенту или телефону..." style="max-width:320px" oninput="hcSearchDebounce()">
+        <input id="hcSearch" type="text" placeholder="Поиск по клиенту или телефону..." style="max-width:320px" data-static-oninput="s155">
       </div>
       <div class="card" style="padding:0">
         <div class="tw">
@@ -1265,8 +1269,8 @@
     <!-- ═══ TELEGRAM BROADCASTS PAGE ═══ -->
     <div class="page" id="page-broadcasts">
       <div class="tabs" style="max-width:440px">
-        <button class="tab active" id="bcTabBtn-once" onclick="bcSwitchTab('once')">📨 Разовые рассылки</button>
-        <button class="tab" id="bcTabBtn-rules" onclick="bcSwitchTab('rules')">🔁 Автоуведомления</button>
+        <button class="tab active" id="bcTabBtn-once" data-static-onclick="s156">📨 Разовые рассылки</button>
+        <button class="tab" id="bcTabBtn-rules" data-static-onclick="s157">🔁 Автоуведомления</button>
       </div>
 
       <div id="bcTab-once">
@@ -1275,7 +1279,7 @@
             <div class="bc-head-title">📨 Рассылка в Telegram</div>
             <div id="bcMeta" class="bc-head-sub">Подписчиков бота: —</div>
           </div>
-          <button class="btn btn-pri" onclick="bcOpenComposer()">+ Новая рассылка</button>
+          <button class="btn btn-pri" data-static-onclick="s158">+ Новая рассылка</button>
         </div>
 
         <!-- История рассылок -->
@@ -1289,24 +1293,24 @@
             <div class="bc-head-sub" id="ntModeLine">Режим: —</div>
           </div>
           <div class="care-acts">
-            <button class="btn btn-sec" id="ntSettingsBtn" onclick="ntOpenSettings()">⚙️ Настройки</button>
-            <button class="btn btn-pri" id="ntAddBtn" onclick="ntOpenEditor()">+ Правило</button>
+            <button class="btn btn-sec" id="ntSettingsBtn" data-static-onclick="s159">⚙️ Настройки</button>
+            <button class="btn btn-pri" id="ntAddBtn" data-static-onclick="s160">+ Правило</button>
           </div>
         </div>
 
         <div class="tabs nt-subtabs" id="ntSubTabs">
-          <button class="tab active" id="ntSubBtn-rules" onclick="ntSub('rules')">Правила</button>
-          <button class="tab" id="ntSubBtn-jobs" onclick="ntSub('jobs')">Журнал</button>
-          <button class="tab" id="ntSubBtn-ratings" onclick="ntSub('ratings')">Оценки</button>
-          <button class="tab" id="ntSubBtn-parity" onclick="ntSub('parity')">Сверка с Chatpush</button>
+          <button class="tab active" id="ntSubBtn-rules" data-static-onclick="s161">Правила</button>
+          <button class="tab" id="ntSubBtn-jobs" data-static-onclick="s162">Журнал</button>
+          <button class="tab" id="ntSubBtn-ratings" data-static-onclick="s163">Оценки</button>
+          <button class="tab" id="ntSubBtn-parity" data-static-onclick="s164">Сверка с Chatpush</button>
         </div>
 
         <div id="ntSub-rules" class="empty">Загрузка…</div>
 
         <div id="ntSub-jobs" style="display:none">
           <div class="care-filters nt-filters">
-            <select id="ntJobType" onchange="ntJobsFilterChanged()"><option value="">Все типы</option></select>
-            <select id="ntJobStatus" onchange="ntJobsFilterChanged()">
+            <select id="ntJobType" data-static-onchange="s165"><option value="">Все типы</option></select>
+            <select id="ntJobStatus" data-static-onchange="s165">
               <option value="">Все статусы</option>
               <option value="pending">В очереди</option>
               <option value="sent">Отправлено</option>
@@ -1315,8 +1319,8 @@
               <option value="cancelled">Отменено</option>
               <option value="failed">Ошибка</option>
             </select>
-            <input type="date" id="ntJobDate" onchange="ntJobsFilterChanged()" title="День отправки (по плану)">
-            <button class="btn btn-sec btn-sm" onclick="ntJobsReset()">Сбросить</button>
+            <input type="date" id="ntJobDate" data-static-onchange="s165" title="День отправки (по плану)">
+            <button class="btn btn-sec btn-sm" data-static-onclick="s166">Сбросить</button>
           </div>
           <div id="ntJobsList"></div>
           <div id="ntJobsPager"></div>
@@ -1329,7 +1333,7 @@
         <div id="ntSub-parity" style="display:none">
           <div class="care-filters nt-filters">
             <label class="care-touch-lbl">период
-              <select id="ntParityDays" onchange="ntLoadParity()" style="width:auto">
+              <select id="ntParityDays" data-static-onchange="s167" style="width:auto">
                 <option value="7" selected>7 дней</option>
                 <option value="14">14 дней</option>
                 <option value="30">30 дней</option>
@@ -1342,19 +1346,19 @@
     </div>
 
     <!-- ═══ BROADCAST MONITOR (мессенджеры) ═══ -->
-    <div id="bcMonitorOv" class="ov" onclick="if(event.target===this)bcCloseMonitor()">
+    <div id="bcMonitorOv" class="ov" data-static-onclick="s168">
       <div class="modal bc-modal bc-mon">
         <div class="mh">
           <div class="mt">Рассылка</div>
-          <button class="mc" onclick="bcCloseMonitor()">✕</button>
+          <button class="mc" data-static-onclick="s169">✕</button>
         </div>
         <div class="bc-modal-body">
           <div class="bc-mon-head">
             <div id="bcMonStatus"></div>
             <div class="bc-mon-btns">
-              <button id="bcMonPause" class="btn btn-sec btn-sm" onclick="bcMonAction('pause')">Пауза</button>
-              <button id="bcMonResume" class="btn btn-pri btn-sm" style="display:none" onclick="bcMonAction('resume')">Продолжить</button>
-              <button id="bcMonCancel" class="btn btn-sec btn-sm" onclick="bcMonAction('cancel')">Отменить остаток</button>
+              <button id="bcMonPause" class="btn btn-sec btn-sm" data-static-onclick="s170">Пауза</button>
+              <button id="bcMonResume" class="btn btn-pri btn-sm" style="display:none" data-static-onclick="s171">Продолжить</button>
+              <button id="bcMonCancel" class="btn btn-sec btn-sm" data-static-onclick="s172">Отменить остаток</button>
             </div>
           </div>
           <div id="bcMonProgress"></div>
@@ -1368,15 +1372,15 @@
           <div class="bc-section">
             <div class="bc-section-title">Получатели</div>
             <div class="bc-mon-filters">
-              <select id="bcMonStatusF" onchange="bcMonFilterChanged(0)">
+              <select id="bcMonStatusF" data-static-onchange="s173">
                 <option value="">Все статусы</option><option value="pending">Ждут</option><option value="sent">Отправлено</option>
                 <option value="undeliverable">Не доставлено</option><option value="unknown">Доставка неизвестна</option>
                 <option value="failed">Ошибка</option><option value="skipped">Пропущены</option><option value="cancelled">Отменены</option>
               </select>
-              <select id="bcMonChannelF" onchange="bcMonFilterChanged(0)">
+              <select id="bcMonChannelF" data-static-onchange="s173">
                 <option value="">Все мессенджеры</option><option value="tdlib">Telegram</option><option value="whatsapp">WhatsApp</option><option value="max">MAX</option>
               </select>
-              <input id="bcMonQ" type="text" placeholder="Поиск по номеру" oninput="bcMonFilterChanged(400)">
+              <input id="bcMonQ" type="text" placeholder="Поиск по номеру" data-static-oninput="s174">
             </div>
             <div class="bc-mon-tablewrap"><table class="bc-mon-table"><thead><tr><th>Имя</th><th>Номер</th><th>Мессенджер</th><th>Статус</th></tr></thead><tbody id="bcMonRows"></tbody></table></div>
             <div id="bcMonPager" class="bc-mon-pager"></div>
@@ -1386,32 +1390,32 @@
     </div>
 
     <!-- ═══ BROADCAST COMPOSER MODAL ═══ -->
-    <div id="bcComposerOv" class="ov" onclick="if(event.target===this)bcCloseComposer()">
+    <div id="bcComposerOv" class="ov" data-static-onclick="s175">
       <div class="modal bc-modal">
         <div class="mh">
           <div class="mt">Новая рассылка</div>
-          <button class="mc" onclick="bcCloseComposer()">✕</button>
+          <button class="mc" data-static-onclick="s176">✕</button>
         </div>
         <div class="bc-modal-body">
 
           <div class="bc-section">
             <div class="bc-section-title">Куда отправляем</div>
             <div id="bcTransport" class="bc-chip-row">
-              <span class="bc-chip on" data-v="messengers" onclick="bcSetTransport('messengers')">💬 Мессенджеры клиники</span>
-              <span class="bc-chip" data-v="telegram_bot" onclick="bcSetTransport('telegram_bot')">🤖 Telegram-бот</span>
+              <span class="bc-chip on" data-v="messengers" data-static-onclick="s177">💬 Мессенджеры клиники</span>
+              <span class="bc-chip" data-v="telegram_bot" data-static-onclick="s178">🤖 Telegram-бот</span>
             </div>
             <div class="bc-msg-only" style="margin-top:10px">
               <div class="bc-section-title" style="margin-bottom:6px">Кому</div>
               <div id="bcSource" class="bc-chip-row">
-                <span class="bc-chip on" data-v="filters" onclick="bcSetSource('filters')">По фильтрам</span>
-                <span class="bc-chip" data-v="list" onclick="bcSetSource('list')">По списку</span>
+                <span class="bc-chip on" data-v="filters" data-static-onclick="s179">По фильтрам</span>
+                <span class="bc-chip" data-v="list" data-static-onclick="s180">По списку</span>
               </div>
               <div id="bcListBlock" style="display:none;margin-top:10px">
                 <div class="bc-section-hint">Вставьте строки «Имя;телефон» (или только телефон) либо загрузите файл .csv / .xlsx (до 2 МБ).</div>
                 <textarea id="bcListText" class="bc-textarea" rows="5" placeholder="Анна;+7 920 000-00-00&#10;79201112233"></textarea>
                 <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:6px">
                   <input type="file" id="bcListFile" accept=".csv,.xlsx">
-                  <button class="btn btn-sec btn-sm" id="bcListParseBtn" onclick="bcParseList()">Разобрать</button>
+                  <button class="btn btn-sec btn-sm" id="bcListParseBtn" data-static-onclick="s181">Разобрать</button>
                 </div>
                 <div id="bcListReport" class="bc-preview" style="margin-top:8px;display:none"></div>
               </div>
@@ -1425,7 +1429,7 @@
               <label class="fl">Поиск по телефону (частичное совпадение)</label>
               <input id="bcPhone" type="tel" inputmode="tel" autocomplete="off"
                      placeholder="напр. 905 или +7 905 597"
-                     oninput="bcUpdatePreview()">
+                     data-static-oninput="s182">
             </div>
 
             <div class="fg" style="margin-bottom:10px">
@@ -1436,26 +1440,26 @@
             <div class="bc-filter-row">
               <div class="fg">
                 <label class="fl">Бонусов ≥</label>
-                <input id="bcBonusMin" type="number" inputmode="numeric" min="0" placeholder="—" oninput="bcUpdatePreview()">
+                <input id="bcBonusMin" type="number" inputmode="numeric" min="0" placeholder="—" data-static-oninput="s182">
               </div>
               <div class="fg">
                 <label class="fl">Бонусов ≤</label>
-                <input id="bcBonusMax" type="number" inputmode="numeric" min="0" placeholder="—" oninput="bcUpdatePreview()">
+                <input id="bcBonusMax" type="number" inputmode="numeric" min="0" placeholder="—" data-static-oninput="s182">
               </div>
               <div class="fg">
                 <label class="fl">Не был дней ≥</label>
-                <input id="bcDaysGte" type="number" inputmode="numeric" min="0" placeholder="—" oninput="bcUpdatePreview()">
+                <input id="bcDaysGte" type="number" inputmode="numeric" min="0" placeholder="—" data-static-oninput="s182">
               </div>
               <div class="fg">
                 <label class="fl">Не был дней ≤</label>
-                <input id="bcDaysLte" type="number" inputmode="numeric" min="0" placeholder="—" oninput="bcUpdatePreview()">
+                <input id="bcDaysLte" type="number" inputmode="numeric" min="0" placeholder="—" data-static-oninput="s182">
               </div>
             </div>
 
             <div class="bc-filter-row bc-filter-row-2" style="margin-top:6px">
               <div class="fg">
                 <label class="fl">Месяц ДР</label>
-                <select id="bcBirthMonth" onchange="bcUpdatePreview()">
+                <select id="bcBirthMonth" data-static-onchange="s182">
                   <option value="">— любой —</option>
                   <option value="1">Январь</option><option value="2">Февраль</option>
                   <option value="3">Март</option><option value="4">Апрель</option>
@@ -1467,7 +1471,7 @@
               </div>
               <div class="fg">
                 <label class="fl">Пол</label>
-                <select id="bcGender" onchange="bcUpdatePreview()">
+                <select id="bcGender" data-static-onchange="s182">
                   <option value="">— любой —</option>
                   <option value="female">Женский</option>
                   <option value="male">Мужской</option>
@@ -1487,10 +1491,10 @@
             <div class="bc-section-hint bc-bot-only">
               HTML-разметка Telegram: &lt;b&gt;жирный&lt;/b&gt;, &lt;i&gt;курсив&lt;/i&gt;, &lt;a href="…"&gt;ссылка&lt;/a&gt;.<br>
               Подстановки:
-              <code onclick="bcInsertVar('{name}')">{name}</code>
-              <code onclick="bcInsertVar('{first_name}')">{first_name}</code>
-              <code onclick="bcInsertVar('{bonuses}')">{bonuses}</code>
-              <code onclick="bcInsertVar('{salon}')">{salon}</code>
+              <code data-static-onclick="s183">{name}</code>
+              <code data-static-onclick="s184">{first_name}</code>
+              <code data-static-onclick="s185">{bonuses}</code>
+              <code data-static-onclick="s186">{salon}</code>
             </div>
             <textarea id="bcText" class="bc-textarea" rows="7" placeholder="Здравствуйте, {first_name}! У вас на счету {bonuses} бонусов…" maxlength="4000"></textarea>
             <div class="bc-char-count"><span id="bcCharCount">0</span> / 4000</div>
@@ -1500,8 +1504,8 @@
             <div class="bc-section-title">Картинка (необязательно)</div>
             <div class="bc-section-hint">jpg / png / webp до 5 МБ. Уйдёт вместе с текстом подписью.</div>
             <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
-              <input type="file" id="bcImageFile" accept="image/jpeg,image/png,image/webp" onchange="bcPickImage()">
-              <button class="btn btn-sec btn-sm" id="bcImageClear" style="display:none" onclick="bcClearImage()">убрать</button>
+              <input type="file" id="bcImageFile" accept="image/jpeg,image/png,image/webp" data-static-onchange="s187">
+              <button class="btn btn-sec btn-sm" id="bcImageClear" style="display:none" data-static-onclick="s188">убрать</button>
             </div>
             <img id="bcImagePreview" alt="" style="display:none;max-width:180px;max-height:140px;margin-top:8px;border-radius:6px">
           </div>
@@ -1509,26 +1513,26 @@
           <div class="bc-section bc-msg-only" id="bcDelivery">
             <div class="bc-section-title">Доставка</div>
             <label style="display:flex;gap:8px;align-items:center;margin-bottom:8px">
-              <input type="checkbox" id="bcCascade" checked onchange="bcUpdateForecast()">
+              <input type="checkbox" id="bcCascade" checked data-static-onchange="s189">
               <span>Каскад: последняя переписка → порядок из настроек автоуведомлений</span>
             </label>
             <table class="bc-ch-table" style="width:100%;font-size:13px">
               <thead><tr><th style="text-align:left">Мессенджер</th><th>Пауза, сек</th><th>Лимит</th></tr></thead>
               <tbody>
-                <tr><td><label><input type="checkbox" id="bcCh-tdlib-on" checked onchange="bcUpdateForecast()"> Telegram</label></td>
-                    <td><input id="bcCh-tdlib-delay" type="number" min="0" max="3600" value="60" oninput="bcUpdateForecast()"></td>
-                    <td><input id="bcCh-tdlib-limit" type="number" min="1" max="10000" placeholder="без лимита" oninput="bcUpdateForecast()"></td></tr>
-                <tr><td><label><input type="checkbox" id="bcCh-whatsapp-on" checked onchange="bcUpdateForecast()"> WhatsApp</label></td>
-                    <td><input id="bcCh-whatsapp-delay" type="number" min="0" max="3600" value="180" oninput="bcUpdateForecast()"></td>
-                    <td><input id="bcCh-whatsapp-limit" type="number" min="1" max="10000" placeholder="без лимита" oninput="bcUpdateForecast()"></td></tr>
-                <tr><td><label><input type="checkbox" id="bcCh-max-on" checked onchange="bcUpdateForecast()"> MAX</label></td>
-                    <td><input id="bcCh-max-delay" type="number" min="0" max="3600" value="60" oninput="bcUpdateForecast()"></td>
-                    <td><input id="bcCh-max-limit" type="number" min="1" max="10000" placeholder="без лимита" oninput="bcUpdateForecast()"></td></tr>
+                <tr><td><label><input type="checkbox" id="bcCh-tdlib-on" checked data-static-onchange="s189"> Telegram</label></td>
+                    <td><input id="bcCh-tdlib-delay" type="number" min="0" max="3600" value="60" data-static-oninput="s189"></td>
+                    <td><input id="bcCh-tdlib-limit" type="number" min="1" max="10000" placeholder="без лимита" data-static-oninput="s189"></td></tr>
+                <tr><td><label><input type="checkbox" id="bcCh-whatsapp-on" checked data-static-onchange="s189"> WhatsApp</label></td>
+                    <td><input id="bcCh-whatsapp-delay" type="number" min="0" max="3600" value="180" data-static-oninput="s189"></td>
+                    <td><input id="bcCh-whatsapp-limit" type="number" min="1" max="10000" placeholder="без лимита" data-static-oninput="s189"></td></tr>
+                <tr><td><label><input type="checkbox" id="bcCh-max-on" checked data-static-onchange="s189"> MAX</label></td>
+                    <td><input id="bcCh-max-delay" type="number" min="0" max="3600" value="60" data-static-oninput="s189"></td>
+                    <td><input id="bcCh-max-limit" type="number" min="1" max="10000" placeholder="без лимита" data-static-oninput="s189"></td></tr>
               </tbody>
             </table>
             <div class="fg" style="margin-top:8px">
               <label class="fl">Когда лимит мессенджера исчерпан</label>
-              <select id="bcOnLimit" onchange="bcUpdateForecast()">
+              <select id="bcOnLimit" data-static-onchange="s189">
                 <option value="next_channel">в следующий мессенджер</option>
                 <option value="skip">не отправлять</option>
               </select>
@@ -1536,25 +1540,25 @@
             <div id="bcForecast" class="bc-preview" style="margin-top:8px">—</div>
             <div id="bcBonusHint" class="bc-section-hint" style="display:none;margin-top:6px">В режиме списка у номеров не из базы {bonuses} = 0.</div>
             <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:10px">
-              <input id="bcTestPhone" type="tel" inputmode="tel" placeholder="Мой номер для теста" oninput="bcSaveTestPhone()">
-              <button class="btn btn-sec btn-sm" id="bcTestBtn" onclick="bcSendTest()">🧪 Тест на мой номер</button>
+              <input id="bcTestPhone" type="tel" inputmode="tel" placeholder="Мой номер для теста" data-static-oninput="s190">
+              <button class="btn btn-sec btn-sm" id="bcTestBtn" data-static-onclick="s191">🧪 Тест на мой номер</button>
             </div>
           </div>
 
           <div class="bc-actions">
-            <button class="btn btn-sec" onclick="bcCloseComposer()">Отмена</button>
-            <button id="bcSendBtn" class="btn btn-pri" onclick="bcSend()">Отправить</button>
+            <button class="btn btn-sec" data-static-onclick="s176">Отмена</button>
+            <button id="bcSendBtn" class="btn btn-pri" data-static-onclick="s192">Отправить</button>
           </div>
         </div>
       </div>
     </div>
 
     <!-- ═══ NOTIFICATION RULE EDITOR MODAL (notifications.js) ═══ -->
-    <div id="ntEditorOv" class="ov" onclick="if(event.target===this)ntCloseEditor()">
+    <div id="ntEditorOv" class="ov" data-static-onclick="s193">
       <div class="modal bc-modal nt-modal">
         <div class="mh">
           <div class="mt" id="ntEditorTitle">Новое правило</div>
-          <button class="mc" onclick="ntCloseEditor()">✕</button>
+          <button class="mc" data-static-onclick="s194">✕</button>
         </div>
         <div class="bc-modal-body">
 
@@ -1565,7 +1569,7 @@
             </div>
             <div class="fg" style="margin-bottom:0">
               <label class="fl">Тип уведомления</label>
-              <select id="ntType" onchange="ntOnTypeChange()"></select>
+              <select id="ntType" data-static-onchange="s195"></select>
               <div class="bc-section-hint" id="ntTypeHint" style="margin:6px 0 0"></div>
             </div>
             <div id="ntTypeFields" style="margin-top:12px"></div>
@@ -1579,12 +1583,12 @@
             </div>
             <div id="ntfConds"></div>
             <div style="display:flex;align-items:center;gap:14px;margin-top:8px;flex-wrap:wrap">
-              <button class="btn btn-sec btn-sm" onclick="condAdd('ntf')">+ Условие</button>
+              <button class="btn btn-sec btn-sm" data-static-onclick="s196">+ Условие</button>
               <div id="ntfLogicWrap" style="display:none;align-items:center;gap:8px">
                 <span style="font-size:12px;color:var(--t3)">Объединять условия:</span>
                 <div class="bc-chip-row">
-                  <span class="bc-chip on" id="ntfLogic-and" onclick="condSetLogic('ntf','and')">И</span>
-                  <span class="bc-chip" id="ntfLogic-or" onclick="condSetLogic('ntf','or')">ИЛИ</span>
+                  <span class="bc-chip on" id="ntfLogic-and" data-static-onclick="s197">И</span>
+                  <span class="bc-chip" id="ntfLogic-or" data-static-onclick="s198">ИЛИ</span>
                 </div>
               </div>
             </div>
@@ -1596,7 +1600,7 @@
               Эмодзи поддерживаются. Подстановки (клик — вставить в текст):
               <span id="ntVars"></span>
             </div>
-            <textarea id="ntText" class="bc-textarea" rows="6" maxlength="4000" oninput="ntTextChanged()"></textarea>
+            <textarea id="ntText" class="bc-textarea" rows="6" maxlength="4000" data-static-oninput="s199"></textarea>
             <div class="bc-char-count"><span id="ntCharCount">0</span> / 4000</div>
             <div id="ntTextWarn"></div>
             <div class="bc-section-hint" style="margin:6px 0 0">
@@ -1605,21 +1609,21 @@
           </div>
 
           <div class="bc-actions">
-            <button class="btn btn-sec btn-dng" id="ntDeleteBtn" onclick="ntDelete()" style="margin-right:auto">🗑 Удалить</button>
-            <button class="btn btn-sec" id="ntTestBtn" onclick="ntOpenTest()">🧪 Тест</button>
-            <button class="btn btn-sec" onclick="ntCloseEditor()">Отмена</button>
-            <button id="ntSaveBtn" class="btn btn-pri" onclick="ntSave()">Сохранить</button>
+            <button class="btn btn-sec btn-dng" id="ntDeleteBtn" data-static-onclick="s200" style="margin-right:auto">🗑 Удалить</button>
+            <button class="btn btn-sec" id="ntTestBtn" data-static-onclick="s201">🧪 Тест</button>
+            <button class="btn btn-sec" data-static-onclick="s194">Отмена</button>
+            <button id="ntSaveBtn" class="btn btn-pri" data-static-onclick="s202">Сохранить</button>
           </div>
         </div>
       </div>
     </div>
 
     <!-- ═══ NOTIFICATION TEST SEND MODAL (поверх редактора: в DOM после него) ═══ -->
-    <div id="ntTestOv" class="ov" onclick="if(event.target===this)ntCloseTest()">
+    <div id="ntTestOv" class="ov" data-static-onclick="s203">
       <div class="modal nt-modal">
         <div class="mh">
           <div class="mt">Тестовая отправка</div>
-          <button class="mc" onclick="ntCloseTest()">✕</button>
+          <button class="mc" data-static-onclick="s204">✕</button>
         </div>
         <div class="bc-modal-body">
           <div class="bc-section-hint" style="margin:0">
@@ -1634,25 +1638,25 @@
           </div>
           <div id="ntTestResult" class="empty" style="padding:12px 0">Укажите номер и нажмите «Отправить тест»</div>
           <div class="bc-actions">
-            <button class="btn btn-sec" onclick="ntCloseTest()">Закрыть</button>
-            <button class="btn btn-pri" id="ntTestSendBtn" onclick="ntRunTest()">Отправить тест</button>
+            <button class="btn btn-sec" data-static-onclick="s204">Закрыть</button>
+            <button class="btn btn-pri" id="ntTestSendBtn" data-static-onclick="s205">Отправить тест</button>
           </div>
         </div>
       </div>
     </div>
 
     <!-- ═══ NOTIFICATION SETTINGS MODAL (notifications.js) ═══ -->
-    <div id="ntSettingsOv" class="ov" onclick="if(event.target===this)ntCloseSettings()">
+    <div id="ntSettingsOv" class="ov" data-static-onclick="s206">
       <div class="modal bc-modal nt-modal">
         <div class="mh">
           <div class="mt">⚙️ Настройки уведомлений</div>
-          <button class="mc" onclick="ntCloseSettings()">✕</button>
+          <button class="mc" data-static-onclick="s207">✕</button>
         </div>
         <div class="bc-modal-body">
 
           <div class="bc-section">
             <div class="bc-section-title">Режим</div>
-            <select id="ntsMode" onchange="ntRenderModeHint()">
+            <select id="ntsMode" data-static-onchange="s208">
               <option value="off">⚪ Выключен</option>
               <option value="shadow">🟡 Тень — пишем в журнал, клиентам не отправляем</option>
               <option value="live">🟢 Боевой — уходит клиентам</option>
@@ -1724,8 +1728,8 @@
           </div>
 
           <div class="bc-actions">
-            <button class="btn btn-sec" onclick="ntCloseSettings()">Отмена</button>
-            <button id="ntsSaveBtn" class="btn btn-pri" onclick="ntSaveSettings()">Сохранить</button>
+            <button class="btn btn-sec" data-static-onclick="s207">Отмена</button>
+            <button id="ntsSaveBtn" class="btn btn-pri" data-static-onclick="s209">Сохранить</button>
           </div>
         </div>
       </div>
@@ -1734,10 +1738,10 @@
     <!-- ═══ CARE PAGE («Забота»: программы касаний + дашборд) ═══ -->
     <div class="page" id="page-care">
       <div class="tabs" style="max-width:860px">
-        <button class="tab active" id="careTabBtn-programs" onclick="careSwitchTab('programs')">💚 Программы</button>
-        <button class="tab" id="careTabBtn-clients" onclick="careSwitchTab('clients')">👥 Клиенты</button>
-        <button class="tab" id="careTabBtn-reminders" onclick="careSwitchTab('reminders')">🔁 Напоминания</button>
-        <button class="tab" id="careTabBtn-reminders-history" onclick="careSwitchTab('reminders-history')">🧾 История</button>
+        <button class="tab active" id="careTabBtn-programs" data-static-onclick="s210">💚 Программы</button>
+        <button class="tab" id="careTabBtn-clients" data-static-onclick="s211">👥 Клиенты</button>
+        <button class="tab" id="careTabBtn-reminders" data-static-onclick="s212">🔁 Напоминания</button>
+        <button class="tab" id="careTabBtn-reminders-history" data-static-onclick="s213">🧾 История</button>
       </div>
 
       <div id="careTab-programs">
@@ -1746,7 +1750,7 @@
             <div class="bc-head-title">💚 Программы заботы</div>
             <div class="bc-head-sub">Цепочки касаний после состоявшегося визита</div>
           </div>
-          <button class="btn btn-pri" onclick="careOpenProgramModal()">+ Новая программа</button>
+          <button class="btn btn-pri" data-static-onclick="s214">+ Новая программа</button>
         </div>
         <div id="carePrograms" class="empty">Загрузка…</div>
       </div>
@@ -1757,7 +1761,7 @@
             <div class="bc-head-title">👥 Клиенты в программах</div>
             <div class="bc-head-sub">Прохождения: кто на каком касании, журнал отправок</div>
           </div>
-          <select id="careEnrStatus" class="care-filter-sel" onchange="careLoadEnrollments()" style="width:auto;min-width:170px;flex-shrink:0">
+          <select id="careEnrStatus" class="care-filter-sel" data-static-onchange="s215" style="width:auto;min-width:170px;flex-shrink:0">
             <option value="">Все статусы</option>
             <option value="active">Активно</option>
             <option value="completed">Завершено</option>
@@ -1784,7 +1788,7 @@
             <div class="bc-head-title">🔁 Напоминания о повторном визите</div>
             <div class="bc-head-sub">Через N дней после визита, если клиент не записался на аналогичную услугу</div>
           </div>
-          <button class="btn btn-pri" onclick="remOpenRuleModal()">+ Новое правило</button>
+          <button class="btn btn-pri" data-static-onclick="s216">+ Новое правило</button>
         </div>
         <div id="remRules" class="empty">Загрузка…</div>
       </div>
@@ -1796,8 +1800,8 @@
             <div class="bc-head-sub">Кому и по какому правилу ушло, бонусы, записался ли в итоге</div>
           </div>
           <div class="care-filters">
-            <select id="remHistRule" onchange="remHistFilterChanged()"></select>
-            <select id="remHistStatus" onchange="remHistFilterChanged()">
+            <select id="remHistRule" data-static-onchange="s217"></select>
+            <select id="remHistStatus" data-static-onchange="s217">
               <option value="">Все статусы</option>
               <option value="scheduled">Запланировано</option>
               <option value="sent">Отправлено</option>
@@ -1805,7 +1809,7 @@
               <option value="cancelled">Отменено</option>
               <option value="failed">Ошибка</option>
             </select>
-            <select id="remHistConv" onchange="remHistFilterChanged()">
+            <select id="remHistConv" data-static-onchange="s217">
               <option value="">Конверсия: любая</option>
               <option value="1">Записался</option>
               <option value="0">Не записался</option>
@@ -1829,11 +1833,11 @@
     </div>
 
     <!-- ═══ CARE PROGRAM EDITOR MODAL ═══ -->
-    <div id="careEditorOv" class="ov" onclick="if(event.target===this)careCloseEditor()">
+    <div id="careEditorOv" class="ov" data-static-onclick="s218">
       <div class="modal bc-modal">
         <div class="mh">
           <div class="mt" id="careEditorTitle">Новая программа</div>
-          <button class="mc" onclick="careCloseEditor()">✕</button>
+          <button class="mc" data-static-onclick="s219">✕</button>
         </div>
         <div class="bc-modal-body">
 
@@ -1852,12 +1856,12 @@
             </div>
             <div id="careConds"></div>
             <div style="display:flex;align-items:center;gap:14px;margin-top:8px;flex-wrap:wrap">
-              <button class="btn btn-sec btn-sm" onclick="careAddCond()">+ Условие</button>
+              <button class="btn btn-sec btn-sm" data-static-onclick="s220">+ Условие</button>
               <div id="careLogicWrap" style="display:none;align-items:center;gap:8px">
                 <span style="font-size:12px;color:var(--t3)">Объединять условия:</span>
                 <div class="bc-chip-row">
-                  <span class="bc-chip on" id="careLogic-and" onclick="careSetLogic('and')">И</span>
-                  <span class="bc-chip" id="careLogic-or" onclick="careSetLogic('or')">ИЛИ</span>
+                  <span class="bc-chip on" id="careLogic-and" data-static-onclick="s221">И</span>
+                  <span class="bc-chip" id="careLogic-or" data-static-onclick="s222">ИЛИ</span>
                 </div>
               </div>
             </div>
@@ -1871,24 +1875,24 @@
               дословно, но по-прежнему решает, уместно ли касание вообще.
             </div>
             <div id="careTouches"></div>
-            <button class="btn btn-sec btn-sm" style="margin-top:8px" onclick="careAddTouch()">+ Касание</button>
+            <button class="btn btn-sec btn-sm" style="margin-top:8px" data-static-onclick="s223">+ Касание</button>
           </div>
 
           <div class="bc-actions">
-            <button class="btn btn-sec" style="margin-right:auto" onclick="careOpenPreview()">👁 Проверить выборку</button>
-            <button class="btn btn-sec" onclick="careCloseEditor()">Отмена</button>
-            <button id="careSaveBtn" class="btn btn-pri" onclick="careSaveProgram()">Сохранить</button>
+            <button class="btn btn-sec" style="margin-right:auto" data-static-onclick="s224">👁 Проверить выборку</button>
+            <button class="btn btn-sec" data-static-onclick="s219">Отмена</button>
+            <button id="careSaveBtn" class="btn btn-pri" data-static-onclick="s225">Сохранить</button>
           </div>
         </div>
       </div>
     </div>
 
     <!-- ═══ CARE PREVIEW MODAL (сухой прогон условий по прошлым визитам) ═══ -->
-    <div id="carePreviewOv" class="ov" onclick="if(event.target===this)careClosePreview()">
+    <div id="carePreviewOv" class="ov" data-static-onclick="s226">
       <div class="modal bc-modal">
         <div class="mh">
           <div class="mt" id="carePreviewTitle">Проверка выборки</div>
-          <button class="mc" onclick="careClosePreview()">✕</button>
+          <button class="mc" data-static-onclick="s227">✕</button>
         </div>
         <div class="bc-modal-body">
           <div class="bc-section-hint" style="margin-bottom:10px">
@@ -1897,13 +1901,13 @@
           </div>
           <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:12px">
             <label class="care-touch-lbl">период
-              <select id="carePreviewDays" onchange="careRunPreview()" style="width:auto">
+              <select id="carePreviewDays" data-static-onchange="s228" style="width:auto">
                 <option value="7">7 дней</option>
                 <option value="30" selected>30 дней</option>
                 <option value="90">90 дней</option>
               </select>
             </label>
-            <button class="btn btn-sec btn-sm" onclick="careRunPreview()">↻ Пересчитать</button>
+            <button class="btn btn-sec btn-sm" data-static-onclick="s228">↻ Пересчитать</button>
           </div>
           <div id="carePreviewBody" class="empty">Загрузка…</div>
         </div>
@@ -1911,11 +1915,11 @@
     </div>
 
     <!-- ═══ REMINDER RULE EDITOR MODAL ═══ -->
-    <div id="remRuleOv" class="ov" onclick="if(event.target===this)remCloseRuleModal()">
+    <div id="remRuleOv" class="ov" data-static-onclick="s229">
       <div class="modal bc-modal">
         <div class="mh">
           <div class="mt" id="remRuleTitle">Новое правило</div>
-          <button class="mc" onclick="remCloseRuleModal()">✕</button>
+          <button class="mc" data-static-onclick="s230">✕</button>
         </div>
         <div class="bc-modal-body">
           <div class="bc-section">
@@ -1931,12 +1935,12 @@
             </div>
             <div id="remConds"></div>
             <div style="display:flex;align-items:center;gap:14px;margin-top:8px;flex-wrap:wrap">
-              <button class="btn btn-sec btn-sm" onclick="condAdd('rem')">+ Условие</button>
+              <button class="btn btn-sec btn-sm" data-static-onclick="s231">+ Условие</button>
               <div id="remLogicWrap" style="display:none;align-items:center;gap:8px">
                 <span style="font-size:12px;color:var(--t3)">Объединять условия:</span>
                 <div class="bc-chip-row">
-                  <span class="bc-chip on" id="remLogic-and" onclick="condSetLogic('rem','and')">И</span>
-                  <span class="bc-chip" id="remLogic-or" onclick="condSetLogic('rem','or')">ИЛИ</span>
+                  <span class="bc-chip on" id="remLogic-and" data-static-onclick="s232">И</span>
+                  <span class="bc-chip" id="remLogic-or" data-static-onclick="s233">ИЛИ</span>
                 </div>
               </div>
             </div>
@@ -1954,8 +1958,8 @@
           <div class="bc-section">
             <div class="bc-section-title">Текст</div>
             <div class="bc-chip-row" style="margin-bottom:8px">
-              <span class="bc-chip on" id="remMode-strict" onclick="remSetMode('strict')">📋 Готовый текст</span>
-              <span class="bc-chip" id="remMode-free" onclick="remSetMode('free')">✍️ Мила пишет сама</span>
+              <span class="bc-chip on" id="remMode-strict" data-static-onclick="s234">📋 Готовый текст</span>
+              <span class="bc-chip" id="remMode-free" data-static-onclick="s235">✍️ Мила пишет сама</span>
             </div>
             <textarea id="remText" rows="3" maxlength="2000"
               placeholder="{first_name}, прошло {дней} дн. с процедуры «{услуга}» — самое время повторить!"></textarea>
@@ -1969,11 +1973,11 @@
               <!-- width:16px обязателен: глобальное правило base.css input{width:100%}
                    растягивает чекбокс на всю строку, галка уезжает в центр, а подпись
                    вправо (тот же приём, что у staff-modal-show-in-app). -->
-              <input type="checkbox" id="remBonusEnabled" onchange="remRenderTiers()"
+              <input type="checkbox" id="remBonusEnabled" data-static-onchange="s236"
                      style="width:16px;height:16px;flex:none;cursor:pointer"> Начислять и упоминать бонусы
             </label>
             <div id="remTiers"></div>
-            <button class="btn btn-sec btn-sm" id="remAddTierBtn" onclick="remAddTier()">+ Ступень</button>
+            <button class="btn btn-sec btn-sm" id="remAddTierBtn" data-static-onclick="s237">+ Ступень</button>
           </div>
 
           <div style="display:flex;gap:12px;flex-wrap:wrap">
@@ -1995,42 +1999,42 @@
           </div>
 
           <div class="bc-actions">
-            <button class="btn btn-sec" onclick="remCloseRuleModal()">Отмена</button>
-            <button class="btn btn-pri" id="remSaveBtn" onclick="remSaveRule()">Сохранить</button>
+            <button class="btn btn-sec" data-static-onclick="s230">Отмена</button>
+            <button class="btn btn-pri" id="remSaveBtn" data-static-onclick="s238">Сохранить</button>
           </div>
         </div>
       </div>
     </div>
 
     <!-- ═══ REMINDER BACKFILL MODAL ═══ -->
-    <div id="remBackfillOv" class="ov" onclick="if(event.target===this)remCloseBackfill()">
+    <div id="remBackfillOv" class="ov" data-static-onclick="s239">
       <div class="modal bc-modal">
         <div class="mh">
           <div class="mt">Догон по базе</div>
-          <button class="mc" onclick="remCloseBackfill()">✕</button>
+          <button class="mc" data-static-onclick="s240">✕</button>
         </div>
         <div class="bc-modal-body">
           <div style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap">
             <div class="fg" style="flex:0 0 160px"><label class="fl">За последние (дней)</label>
-              <input id="remBfDays" type="number" min="1" max="730" value="30" oninput="remBfDaysChanged()"></div>
-            <button class="btn btn-sec btn-sm" onclick="remRunBackfillPreview()">👁 Показать выборку</button>
+              <input id="remBfDays" type="number" min="1" max="730" value="30" data-static-oninput="s241"></div>
+            <button class="btn btn-sec btn-sm" data-static-onclick="s242">👁 Показать выборку</button>
           </div>
           <div style="font-size:12px;color:var(--t3);margin:6px 0 0">До 730 дней (2 года). Год и больше считается до минуты — выборка тянется из YClients.</div>
           <div id="remBfResult" class="empty">Задайте период и нажмите «Показать выборку»</div>
           <div class="bc-actions">
-            <button class="btn btn-sec" onclick="remCloseBackfill()">Отмена</button>
-            <button class="btn btn-pri" id="remBfRunBtn" onclick="remRunBackfill()" disabled>Поставить в очередь</button>
+            <button class="btn btn-sec" data-static-onclick="s240">Отмена</button>
+            <button class="btn btn-pri" id="remBfRunBtn" data-static-onclick="s243" disabled>Поставить в очередь</button>
           </div>
         </div>
       </div>
     </div>
 
     <!-- ═══ REMINDER TEST SEND MODAL ═══ -->
-    <div id="remTestOv" class="ov" onclick="if(event.target===this)remCloseTest()">
+    <div id="remTestOv" class="ov" data-static-onclick="s244">
       <div class="modal bc-modal">
         <div class="mh">
           <div class="mt">Тестовая отправка</div>
-          <button class="mc" onclick="remCloseTest()">✕</button>
+          <button class="mc" data-static-onclick="s245">✕</button>
         </div>
         <div class="bc-modal-body">
           <div style="font-size:12px;color:var(--t3);margin-bottom:10px">
@@ -2050,8 +2054,8 @@
           </label>
           <div id="remTestResult" class="empty">Укажите номер и нажмите «Отправить тест»</div>
           <div class="bc-actions">
-            <button class="btn btn-sec" onclick="remCloseTest()">Закрыть</button>
-            <button class="btn btn-pri" id="remTestRunBtn" onclick="remRunTest()">Отправить тест</button>
+            <button class="btn btn-sec" data-static-onclick="s245">Закрыть</button>
+            <button class="btn btn-pri" id="remTestRunBtn" data-static-onclick="s246">Отправить тест</button>
           </div>
         </div>
       </div>
@@ -2066,17 +2070,17 @@
         <div class="chat-page-title">💬 Чат</div>
         <div style="display:flex;gap:8px;align-items:center">
           <div class="chat-fs-ctl" title="Размер шрифта переписки">
-            <button class="btn btn-sec chat-fs-btn" onclick="chatFontStep(-1)" aria-label="Меньше шрифт">A−</button>
-            <button class="btn btn-sec chat-fs-btn" onclick="chatFontStep(1)" aria-label="Больше шрифт">A+</button>
+            <button class="btn btn-sec chat-fs-btn" data-static-onclick="s247" aria-label="Меньше шрифт">A−</button>
+            <button class="btn btn-sec chat-fs-btn" data-static-onclick="s248" aria-label="Больше шрифт">A+</button>
           </div>
-          <button class="btn btn-sec" id="chat-agent-settings-btn" onclick="openAgentSettings()">⚙️ Агент</button>
-          <button class="btn btn-sec" onclick="loadChat()">↻ Обновить</button>
+          <button class="btn btn-sec" id="chat-agent-settings-btn" data-static-onclick="s249">⚙️ Агент</button>
+          <button class="btn btn-sec" data-static-onclick="s250">↻ Обновить</button>
         </div>
       </div>
       <div class="chat-layout">
         <div class="chat-sidebar">
           <input class="chat-search" id="chat-search" type="search" autocomplete="off"
-                 placeholder="🔎 Поиск по имени или номеру" oninput="onChatSearch(this.value)">
+                 placeholder="🔎 Поиск по имени или номеру" data-static-oninput="s251">
           <!-- Фильтр по статусу ожидания ответа клиента (chat-wait-status.js).
                Счётчики считаются по всем загруженным диалогам, не по отфильтрованным. -->
           <div class="chat-wait-filters" id="chat-wait-filters"></div>
@@ -2087,7 +2091,7 @@
         <div class="chat-main">
           <!-- Возврат к списку диалогов. Видна только на телефоне (features.css):
                там на экране одна панель, и другого выхода из переписки нет. -->
-          <button class="chat-back" type="button" onclick="chatCloseDialog()">‹ К списку чатов</button>
+          <button class="chat-back" type="button" data-static-onclick="s252">‹ К списку чатов</button>
           <div class="chat-header" id="chat-header"></div>
           <div class="chat-messages" id="chat-messages">
             <div class="empty">Выберите диалог</div>
@@ -2108,11 +2112,11 @@
           </div>
         </div>
       </div>
-      <div class="ov" id="agent-settings-modal" onclick="if(event.target===this)closeAgentSettings()">
+      <div class="ov" id="agent-settings-modal" data-static-onclick="s253">
         <div class="modal">
           <div class="mh">
             <div class="mt">Настройки ИИ-агента</div>
-            <button class="mc" onclick="closeAgentSettings()">✕</button>
+            <button class="mc" data-static-onclick="s254">✕</button>
           </div>
           <div class="stg-section active">
             <label class="fl"><input type="checkbox" id="agent-enabled"> Агент включён</label>
@@ -2123,7 +2127,7 @@
             <label class="fl"><input type="radio" name="agent-mode" value="whitelist"> Только указанным номерам</label>
           </div>
           <div class="stg-section active">
-            <label class="fl"><input type="checkbox" id="agent-schedule-enabled" onchange="agentToggleSchedule()"> Работать по расписанию</label>
+            <label class="fl"><input type="checkbox" id="agent-schedule-enabled" data-static-onchange="s255"> Работать по расписанию</label>
             <div id="agent-schedule-fields" style="display:flex;gap:8px;align-items:center;margin-top:6px">
               <span>с</span><input type="time" id="agent-schedule-start" style="width:120px">
               <span>до</span><input type="time" id="agent-schedule-end" style="width:120px">
@@ -2172,7 +2176,7 @@
             <div id="agent-allow-list"></div>
             <div style="display:flex;gap:6px;margin-top:6px">
               <input id="agent-allow-input" style="flex:1" placeholder="Напр. 89200255591">
-              <button class="btn btn-pri" onclick="addAgentNumber('allow')">Добавить</button>
+              <button class="btn btn-pri" data-static-onclick="s256">Добавить</button>
             </div>
           </div>
           <div class="stg-section active">
@@ -2180,43 +2184,43 @@
             <div id="agent-block-list"></div>
             <div style="display:flex;gap:6px;margin-top:6px">
               <input id="agent-block-input" style="flex:1" placeholder="Напр. 79991112233">
-              <button class="btn btn-pri" onclick="addAgentNumber('block')">Добавить</button>
+              <button class="btn btn-pri" data-static-onclick="s257">Добавить</button>
             </div>
           </div>
           <div class="stg-section active" style="text-align:right">
-            <button class="btn btn-pri" onclick="saveAgentSettings()">Сохранить</button>
+            <button class="btn btn-pri" data-static-onclick="s258">Сохранить</button>
           </div>
         </div>
       </div>
     </div>
     <div class="page" id="page-cert-requests"></div>
     <div class="page" id="page-medical-cert">
-  <div style="margin-bottom:12px"><a href="#" onclick="navTo('cert-requests');return false" style="color:var(--t3);text-decoration:none;font-size:14px">← К справкам</a></div>
+  <div style="margin-bottom:12px"><a href="#" data-static-onclick="s259" style="color:var(--t3);text-decoration:none;font-size:14px">← К справкам</a></div>
   <div class="card" style="padding:16px;margin-bottom:16px">
     <h2 style="margin-bottom:12px">Справка об оплате мед. услуг (КНД 1151156)</h2>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
       <div class="fg"><label class="fl">Клиент (поиск)</label>
-        <input id="mc-client-search" placeholder="Имя или телефон" oninput="mcSearchClients()">
+        <input id="mc-client-search" placeholder="Имя или телефон" data-static-oninput="s260">
         <div id="mc-client-results" style="font-size:12px"></div>
         <input type="hidden" id="mc-client-id">
       </div>
       <div class="fg"><label class="fl">Отчётный год</label>
         <input type="number" id="mc-year" value="2025"></div>
     </div>
-    <button class="btn" onclick="mcLoadDefaults()">Подтянуть данные</button>
+    <button class="btn" data-static-onclick="s261">Подтянуть данные</button>
 
     <hr style="margin:16px 0">
     <div id="mc-form" style="display:grid;grid-template-columns:1fr 1fr;gap:10px"></div>
-    <div style="margin-top:16px"><button class="btn btn-primary" onclick="mcGenerate()">Сформировать PDF</button></div>
+    <div style="margin-top:16px"><button class="btn btn-primary" data-static-onclick="s262">Сформировать PDF</button></div>
   </div>
 
   <div class="card" style="padding:16px">
     <h3 style="margin-bottom:8px">Шаблон бланка</h3>
     <div id="mc-template-meta" style="font-size:13px;margin-bottom:8px"></div>
     <input type="file" id="mc-template-file" accept="application/pdf">
-    <button class="btn" onclick="mcUploadTemplate()">Загрузить новый бланк</button>
-    <button class="btn btn-primary" onclick="mcOpenVisualEditor()">Редактор координат (визуальный)</button>
-    <button class="btn" onclick="mcOpenCoordsEditor()">Редактор JSON</button>
+    <button class="btn" data-static-onclick="s263">Загрузить новый бланк</button>
+    <button class="btn btn-primary" data-static-onclick="s264">Редактор координат (визуальный)</button>
+    <button class="btn" data-static-onclick="s265">Редактор JSON</button>
     <div id="mc-coords-editor" style="margin-top:12px"></div>
   </div>
 </div>
@@ -2225,9 +2229,9 @@
   <div class="mc-ve-shell">
     <div class="mc-ve-head">
       <strong>Редактор координат</strong>
-      <button class="btn" onclick="mcToggleGrid()">Сетка</button>
-      <button class="btn btn-primary" onclick="mcSaveVisualCoords()" style="margin-left:auto">Сохранить</button>
-      <button class="btn" onclick="mcCloseVisualEditor()">Отмена</button>
+      <button class="btn" data-static-onclick="s266">Сетка</button>
+      <button class="btn btn-primary" data-static-onclick="s267" style="margin-left:auto">Сохранить</button>
+      <button class="btn" data-static-onclick="s268">Отмена</button>
     </div>
     <div class="mc-ve-body">
       <div id="mc-ve-pages"></div>
@@ -2243,7 +2247,7 @@
           <div style="font-size:16px;font-weight:700">Пользователи</div>
           <div id="usersQuota" style="font-size:12.5px;color:var(--t3);margin-top:2px"></div>
         </div>
-        <button class="btn btn-pri" onclick="usersOpenCreate()">+ Добавить пользователя</button>
+        <button class="btn btn-pri" data-static-onclick="s269">+ Добавить пользователя</button>
       </div>
       <div class="card" style="padding:0;overflow:hidden">
         <table class="tbl" id="usersTbl">
@@ -2266,13 +2270,13 @@
         </div>
         <div class="ed-head-actions">
           <span id="edMeStatus" class="ed-me"></span>
-          <button class="btn btn-sec btn-sm" onclick="edOpenMe()">Мой F.Doc</button>
+          <button class="btn btn-sec btn-sm" data-static-onclick="s270">Мой F.Doc</button>
         </div>
       </div>
       <div class="tabs ed-tabs">
-        <button class="tab active" id="edTabBtn-board" onclick="edGo('')">Дашборд</button>
-        <button class="tab" id="edTabBtn-list" onclick="edGo('packages')">Все комплекты</button>
-        <button class="tab" id="edTabBtn-settings" onclick="edGo('settings')">Настройки</button>
+        <button class="tab active" id="edTabBtn-board" data-static-onclick="s271">Дашборд</button>
+        <button class="tab" id="edTabBtn-list" data-static-onclick="s272">Все комплекты</button>
+        <button class="tab" id="edTabBtn-settings" data-static-onclick="s273">Настройки</button>
       </div>
       <div id="edNotice"></div>
       <div id="edView-board"></div>
@@ -2292,21 +2296,21 @@
           <p id="stockCounters" aria-live="polite"></p>
         </div>
         <div class="stock-page-actions" id="stockCatalogTools">
-          <button type="button" class="btn btn-sec" onclick="stockExportGoods()">Экспорт CSV для Excel</button>
-          <button type="button" class="btn btn-pri" onclick="stockNewGood()">+ Добавить товар</button>
+          <button type="button" class="btn btn-sec" data-static-onclick="s274">Экспорт CSV для Excel</button>
+          <button type="button" class="btn btn-pri" data-static-onclick="s275">+ Добавить товар</button>
         </div>
       </header>
       <nav class="stock-tabs" aria-label="Разделы склада">
-        <button class="tab active" id="stockTabBtn-balances" onclick="stockSwitchTab('balances')">Остатки</button>
-        <button class="tab" id="stockTabBtn-goods" onclick="stockSwitchTab('goods')">Товары</button>
-        <button type="button" class="tab" id="stockTabBtn-docs" onclick="stockSwitchTab('docs')">Операции</button>
-        <button type="button" class="tab" id="stockTabBtn-suppliers" onclick="stockSwitchTab('suppliers')">Поставщики</button>
-        <button type="button" class="tab" id="stockTabBtn-tech-cards" onclick="stockSwitchTab('tech-cards')">Техкарты</button>
-        <button type="button" class="tab" id="stockTabBtn-inventory" onclick="stockSwitchTab('inventory')">Инвентаризация</button>
-        <button type="button" class="tab" id="stockTabBtn-turnover" onclick="stockSwitchTab('turnover')">Оборотка</button>
-        <button type="button" class="tab" id="stockTabBtn-settings" onclick="stockSwitchTab('settings')">Настройки</button>
+        <button class="tab active" id="stockTabBtn-balances" data-static-onclick="s276">Остатки</button>
+        <button class="tab" id="stockTabBtn-goods" data-static-onclick="s277">Товары</button>
+        <button type="button" class="tab" id="stockTabBtn-docs" data-static-onclick="s278">Операции</button>
+        <button type="button" class="tab" id="stockTabBtn-suppliers" data-static-onclick="s279">Поставщики</button>
+        <button type="button" class="tab" id="stockTabBtn-tech-cards" data-static-onclick="s280">Техкарты</button>
+        <button type="button" class="tab" id="stockTabBtn-inventory" data-static-onclick="s281">Инвентаризация</button>
+        <button type="button" class="tab" id="stockTabBtn-turnover" data-static-onclick="s282">Оборотка</button>
+        <button type="button" class="tab" id="stockTabBtn-settings" data-static-onclick="s283">Настройки</button>
       </nav>
-      <form id="stockFilters" class="stock-filters" onsubmit="event.preventDefault();stockLoadGoods()">
+      <form id="stockFilters" class="stock-filters" data-static-onsubmit="s284">
         <label class="stock-search-field"><span>Поиск</span><input id="stockSearch" type="search" maxlength="100" placeholder="Поиск по названию товара, штрихкоду или артикулу"></label>
         <div class="stock-filter-actions">
           <label><span>Показывать</span><select id="stockPageSize"><option value="25" selected>25</option><option value="50">50</option><option value="100">100</option></select></label>
@@ -2315,11 +2319,11 @@
         <details class="stock-extra-filters">
           <summary>Дополнительные фильтры</summary>
           <div class="stock-extra-grid">
-            <label><span>Склад</span><select id="stockStorage" onchange="stockLoadGoods()"><option value="">Все склады</option></select></label>
-            <label><span>Категория</span><select id="stockCategory" onchange="stockLoadGoods()"><option value="">Все категории</option></select></label>
-            <label><span>Статус</span><select id="stockActive" onchange="stockLoadGoods()"><option value="1">Активные</option><option value="0">Архив</option><option value="">Все</option></select></label>
-            <label class="stock-check"><input id="stockCritical" type="checkbox" onchange="stockLoadGoods()">Критические</label>
-            <label class="stock-check"><input id="stockNegative" type="checkbox" onchange="stockLoadGoods()">Отрицательные</label>
+            <label><span>Склад</span><select id="stockStorage" data-static-onchange="s285"><option value="">Все склады</option></select></label>
+            <label><span>Категория</span><select id="stockCategory" data-static-onchange="s285"><option value="">Все категории</option></select></label>
+            <label><span>Статус</span><select id="stockActive" data-static-onchange="s285"><option value="1">Активные</option><option value="0">Архив</option><option value="">Все</option></select></label>
+            <label class="stock-check"><input id="stockCritical" type="checkbox" data-static-onchange="s285">Критические</label>
+            <label class="stock-check"><input id="stockNegative" type="checkbox" data-static-onchange="s285">Отрицательные</label>
           </div>
         </details>
       </form>
@@ -2333,26 +2337,26 @@
         </div>
         <div class="pb-wrap" id="ecoPeriod">
           <div class="pb-btns">
-            <button class="pb-btn active" data-preset="month" onclick="ecoSetPreset('month')">Месяц</button>
-            <button class="pb-btn" data-preset="prev-month" onclick="ecoSetPreset('prev-month')">Прошлый</button>
-            <button class="pb-btn" data-preset="quarter" onclick="ecoSetPreset('quarter')">Квартал</button>
-            <button class="pb-btn" data-preset="year" onclick="ecoSetPreset('year')">Год</button>
-            <button class="pb-btn" data-preset="custom" onclick="ecoSetPreset('custom')">Период</button>
+            <button class="pb-btn active" data-preset="month" data-static-onclick="s286">Месяц</button>
+            <button class="pb-btn" data-preset="prev-month" data-static-onclick="s287">Прошлый</button>
+            <button class="pb-btn" data-preset="quarter" data-static-onclick="s288">Квартал</button>
+            <button class="pb-btn" data-preset="year" data-static-onclick="s289">Год</button>
+            <button class="pb-btn" data-preset="custom" data-static-onclick="s290">Период</button>
           </div>
           <div class="pb-range" id="ecoRange" style="display:none">
             <input type="date" id="ecoFrom" class="pb-date"><span class="pb-dash">—</span><input type="date" id="ecoTo" class="pb-date">
-            <button class="btn btn-sm btn-pri" onclick="ecoApplyRange()">OK</button>
+            <button class="btn btn-sm btn-pri" data-static-onclick="s291">OK</button>
           </div>
         </div>
       </div>
       <div class="tabs eco-tabs">
-        <button class="tab active" id="ecoTabBtn-services" onclick="ecoSwitchTab('services')">📊 Услуги</button>
-        <button class="tab" id="ecoTabBtn-goods" onclick="ecoSwitchTab('goods')">🧴 Материалы</button>
-        <button class="tab" id="ecoTabBtn-tech-cards" onclick="ecoSwitchTab('tech-cards')">📋 Техкарты</button>
-        <button class="tab" id="ecoTabBtn-pay" onclick="ecoSwitchTab('pay')">👩‍⚕️ Оплата труда</button>
-        <button class="tab" id="ecoTabBtn-fixed" onclick="ecoSwitchTab('fixed')">🏢 Постоянные</button>
-        <button class="tab" id="ecoTabBtn-equipment" onclick="ecoSwitchTab('equipment')">🔬 Аппараты</button>
-        <button class="tab" id="ecoTabBtn-settings" onclick="ecoSwitchTab('settings')">⚙️ Настройки</button>
+        <button class="tab active" id="ecoTabBtn-services" data-static-onclick="s292">📊 Услуги</button>
+        <button class="tab" id="ecoTabBtn-goods" data-static-onclick="s293">🧴 Материалы</button>
+        <button class="tab" id="ecoTabBtn-tech-cards" data-static-onclick="s294">📋 Техкарты</button>
+        <button class="tab" id="ecoTabBtn-pay" data-static-onclick="s295">👩‍⚕️ Оплата труда</button>
+        <button class="tab" id="ecoTabBtn-fixed" data-static-onclick="s296">🏢 Постоянные</button>
+        <button class="tab" id="ecoTabBtn-equipment" data-static-onclick="s297">🔬 Аппараты</button>
+        <button class="tab" id="ecoTabBtn-settings" data-static-onclick="s298">⚙️ Настройки</button>
       </div>
       <div id="ecoTab-services"><div id="ecoSummary" class="eco-summary"></div><div id="ecoWarnings"></div><div id="ecoServices" class="empty">Загрузка…</div><div id="ecoDetail"></div></div>
       <div id="ecoTab-goods" style="display:none"><div id="ecoGoods" class="empty">Загрузка…</div></div>
@@ -2396,7 +2400,7 @@
 </div><!-- /app -->
 
 <!-- HOME CARE FORM OVERLAY -->
-<div class="hc-form-ov" id="hcFormOv" onclick="if(event.target===this)hcCloseForm()">
+<div class="hc-form-ov" id="hcFormOv" data-static-onclick="s299">
   <div class="hc-form-box" id="hcFormBox">
     <!-- Шапка в стиле документа -->
     <div class="hc-form-header" id="hcFormHeader">
@@ -2410,14 +2414,14 @@
       <div class="hc-form-title-row" id="hcFormTitle">Домашний уход</div>
       <div class="hc-form-divider" id="hcFormDivider"></div>
     </div>
-    <button class="mc" onclick="hcCloseForm()" style="position:absolute;top:16px;right:16px">✕</button>
+    <button class="mc" data-static-onclick="s300" style="position:absolute;top:16px;right:16px">✕</button>
 
     <!-- Client selector -->
     <div class="hc-client-input-wrap">
       <label class="fl" style="font-family:inherit;margin-bottom:6px;display:block">Клиент</label>
       <div class="hc-client-wrap">
         <input type="text" id="hcClientSearch" placeholder="Имя или телефон..." autocomplete="off"
-               oninput="hcSearchClient(this.value)" onfocus="hcSearchClient(this.value)"
+               data-static-oninput="s301" data-static-onfocus="s301"
                style="border-color:#e8dcc8;background:#fdfaf5">
         <div id="hcClientDrop" class="hc-client-drop" style="display:none"></div>
       </div>
@@ -2444,52 +2448,52 @@
 
     <!-- 3 TABS -->
     <div class="hc-tabs">
-      <button class="hc-tab active" onclick="hcSwitchTab('care',this)">🌿 Домашний уход</button>
-      <button class="hc-tab" onclick="hcSwitchTab('sheet',this)">📋 Лист назначения</button>
-      <button class="hc-tab" onclick="hcSwitchTab('vitamins',this)">💊 Витамины</button>
+      <button class="hc-tab active" data-static-onclick="s302">🌿 Домашний уход</button>
+      <button class="hc-tab" data-static-onclick="s303">📋 Лист назначения</button>
+      <button class="hc-tab" data-static-onclick="s304">💊 Витамины</button>
     </div>
 
     <!-- TAB: ДОМАШНИЙ УХОД -->
     <div class="hc-tab-panel active" id="hcPanel-care">
       <!-- УТРО -->
       <div class="hc-section">
-        <div class="hc-section-hd" onclick="hcToggleSection(this)">
+        <div class="hc-section-hd" data-static-onclick="s305">
           <div class="hc-section-title">🌅 Утро</div>
           <svg viewBox="0 0 24 24" style="width:14px;height:14px;stroke:var(--t3);fill:none;stroke-width:2.5;transition:.2s" class="hc-chevron"><polyline points="6 9 12 15 18 9"/></svg>
         </div>
         <div class="hc-section-body" id="hcSec-morning">
-          <div id="hcCat-morning-Очищение" class="hc-cat"><div class="hc-cat-label"><span>Очищение</span><button class="hc-add-btn" onclick="hcAddItem('morning','Очищение')">+ добавить</button></div><div class="hc-items"></div></div>
-          <div id="hcCat-morning-Демакияж" class="hc-cat"><div class="hc-cat-label"><span>Демакияж</span><button class="hc-add-btn" onclick="hcAddItem('morning','Демакияж')">+ добавить</button></div><div class="hc-items"></div></div>
-          <div id="hcCat-morning-Тонизация" class="hc-cat"><div class="hc-cat-label"><span>Тонизация</span><button class="hc-add-btn" onclick="hcAddItem('morning','Тонизация')">+ добавить</button></div><div class="hc-items"></div></div>
-          <div id="hcCat-morning-Сыворотка" class="hc-cat"><div class="hc-cat-label"><span>Сыворотка</span><button class="hc-add-btn" onclick="hcAddItem('morning','Сыворотка')">+ добавить</button></div><div class="hc-items"></div></div>
-          <div id="hcCat-morning-Крем для лица" class="hc-cat"><div class="hc-cat-label"><span>Крем для лица</span><button class="hc-add-btn" onclick="hcAddItem('morning','Крем для лица')">+ добавить</button></div><div class="hc-items"></div></div>
-          <div id="hcCat-morning-Крем для век" class="hc-cat"><div class="hc-cat-label"><span>Крем для век</span><button class="hc-add-btn" onclick="hcAddItem('morning','Крем для век')">+ добавить</button></div><div class="hc-items"></div></div>
-          <div id="hcCat-morning-SPF" class="hc-cat"><div class="hc-cat-label"><span>SPF (защита от солнца)</span><button class="hc-add-btn" onclick="hcAddItem('morning','SPF')">+ добавить</button></div><div class="hc-items"></div></div>
+          <div id="hcCat-morning-Очищение" class="hc-cat"><div class="hc-cat-label"><span>Очищение</span><button class="hc-add-btn" data-static-onclick="s306">+ добавить</button></div><div class="hc-items"></div></div>
+          <div id="hcCat-morning-Демакияж" class="hc-cat"><div class="hc-cat-label"><span>Демакияж</span><button class="hc-add-btn" data-static-onclick="s307">+ добавить</button></div><div class="hc-items"></div></div>
+          <div id="hcCat-morning-Тонизация" class="hc-cat"><div class="hc-cat-label"><span>Тонизация</span><button class="hc-add-btn" data-static-onclick="s308">+ добавить</button></div><div class="hc-items"></div></div>
+          <div id="hcCat-morning-Сыворотка" class="hc-cat"><div class="hc-cat-label"><span>Сыворотка</span><button class="hc-add-btn" data-static-onclick="s309">+ добавить</button></div><div class="hc-items"></div></div>
+          <div id="hcCat-morning-Крем для лица" class="hc-cat"><div class="hc-cat-label"><span>Крем для лица</span><button class="hc-add-btn" data-static-onclick="s310">+ добавить</button></div><div class="hc-items"></div></div>
+          <div id="hcCat-morning-Крем для век" class="hc-cat"><div class="hc-cat-label"><span>Крем для век</span><button class="hc-add-btn" data-static-onclick="s311">+ добавить</button></div><div class="hc-items"></div></div>
+          <div id="hcCat-morning-SPF" class="hc-cat"><div class="hc-cat-label"><span>SPF (защита от солнца)</span><button class="hc-add-btn" data-static-onclick="s312">+ добавить</button></div><div class="hc-items"></div></div>
         </div>
       </div>
       <!-- ВЕЧЕР -->
       <div class="hc-section">
-        <div class="hc-section-hd" onclick="hcToggleSection(this)">
+        <div class="hc-section-hd" data-static-onclick="s305">
           <div class="hc-section-title">🌙 Вечер</div>
           <svg viewBox="0 0 24 24" style="width:14px;height:14px;stroke:var(--t3);fill:none;stroke-width:2.5;transition:.2s" class="hc-chevron"><polyline points="6 9 12 15 18 9"/></svg>
         </div>
         <div class="hc-section-body" id="hcSec-evening">
-          <div id="hcCat-evening-Очищение" class="hc-cat"><div class="hc-cat-label"><span>Очищение</span><button class="hc-add-btn" onclick="hcAddItem('evening','Очищение')">+ добавить</button></div><div class="hc-items"></div></div>
-          <div id="hcCat-evening-Тонизация" class="hc-cat"><div class="hc-cat-label"><span>Тонизация</span><button class="hc-add-btn" onclick="hcAddItem('evening','Тонизация')">+ добавить</button></div><div class="hc-items"></div></div>
-          <div id="hcCat-evening-Сыворотка" class="hc-cat"><div class="hc-cat-label"><span>Сыворотка</span><button class="hc-add-btn" onclick="hcAddItem('evening','Сыворотка')">+ добавить</button></div><div class="hc-items"></div></div>
-          <div id="hcCat-evening-Крем для лица" class="hc-cat"><div class="hc-cat-label"><span>Крем для лица</span><button class="hc-add-btn" onclick="hcAddItem('evening','Крем для лица')">+ добавить</button></div><div class="hc-items"></div></div>
-          <div id="hcCat-evening-Крем для век" class="hc-cat"><div class="hc-cat-label"><span>Крем для век</span><button class="hc-add-btn" onclick="hcAddItem('evening','Крем для век')">+ добавить</button></div><div class="hc-items"></div></div>
+          <div id="hcCat-evening-Очищение" class="hc-cat"><div class="hc-cat-label"><span>Очищение</span><button class="hc-add-btn" data-static-onclick="s313">+ добавить</button></div><div class="hc-items"></div></div>
+          <div id="hcCat-evening-Тонизация" class="hc-cat"><div class="hc-cat-label"><span>Тонизация</span><button class="hc-add-btn" data-static-onclick="s314">+ добавить</button></div><div class="hc-items"></div></div>
+          <div id="hcCat-evening-Сыворотка" class="hc-cat"><div class="hc-cat-label"><span>Сыворотка</span><button class="hc-add-btn" data-static-onclick="s315">+ добавить</button></div><div class="hc-items"></div></div>
+          <div id="hcCat-evening-Крем для лица" class="hc-cat"><div class="hc-cat-label"><span>Крем для лица</span><button class="hc-add-btn" data-static-onclick="s316">+ добавить</button></div><div class="hc-items"></div></div>
+          <div id="hcCat-evening-Крем для век" class="hc-cat"><div class="hc-cat-label"><span>Крем для век</span><button class="hc-add-btn" data-static-onclick="s317">+ добавить</button></div><div class="hc-items"></div></div>
         </div>
       </div>
       <!-- ДОП. УХОД -->
       <div class="hc-section">
-        <div class="hc-section-hd" onclick="hcToggleSection(this)">
+        <div class="hc-section-hd" data-static-onclick="s305">
           <div class="hc-section-title">✨ Дополнительный уход</div>
           <svg viewBox="0 0 24 24" style="width:14px;height:14px;stroke:var(--t3);fill:none;stroke-width:2.5;transition:.2s" class="hc-chevron"><polyline points="6 9 12 15 18 9"/></svg>
         </div>
         <div class="hc-section-body" id="hcSec-additional">
-          <div id="hcCat-additional-Маски" class="hc-cat"><div class="hc-cat-label"><span>Маски</span><button class="hc-add-btn" onclick="hcAddItem('additional','Маски')">+ добавить</button></div><div class="hc-items"></div></div>
-          <div id="hcCat-additional-Пилинги" class="hc-cat"><div class="hc-cat-label"><span>Пилинги</span><button class="hc-add-btn" onclick="hcAddItem('additional','Пилинги')">+ добавить</button></div><div class="hc-items"></div></div>
+          <div id="hcCat-additional-Маски" class="hc-cat"><div class="hc-cat-label"><span>Маски</span><button class="hc-add-btn" data-static-onclick="s318">+ добавить</button></div><div class="hc-items"></div></div>
+          <div id="hcCat-additional-Пилинги" class="hc-cat"><div class="hc-cat-label"><span>Пилинги</span><button class="hc-add-btn" data-static-onclick="s319">+ добавить</button></div><div class="hc-items"></div></div>
         </div>
       </div>
     </div>
@@ -2497,30 +2501,30 @@
     <!-- TAB: ЛИСТ НАЗНАЧЕНИЯ -->
     <div class="hc-tab-panel" id="hcPanel-sheet">
       <div class="hc-section">
-        <div class="hc-section-hd" onclick="hcToggleSection(this)">
+        <div class="hc-section-hd" data-static-onclick="s305">
           <div class="hc-section-title">👤 Лицо</div>
           <svg viewBox="0 0 24 24" style="width:14px;height:14px;stroke:var(--t3);fill:none;stroke-width:2.5;transition:.2s" class="hc-chevron"><polyline points="6 9 12 15 18 9"/></svg>
         </div>
         <div class="hc-section-body">
-          <div id="hcCat-sheet_face-Процедуры" class="hc-cat"><div class="hc-cat-label"><span>Процедуры</span><button class="hc-add-btn" onclick="hcAddItem('sheet_face','Процедуры','','',true)">+ добавить</button></div><div class="hc-items"></div></div>
+          <div id="hcCat-sheet_face-Процедуры" class="hc-cat"><div class="hc-cat-label"><span>Процедуры</span><button class="hc-add-btn" data-static-onclick="s320">+ добавить</button></div><div class="hc-items"></div></div>
         </div>
       </div>
       <div class="hc-section">
-        <div class="hc-section-hd" onclick="hcToggleSection(this)">
+        <div class="hc-section-hd" data-static-onclick="s305">
           <div class="hc-section-title">💪 Тело</div>
           <svg viewBox="0 0 24 24" style="width:14px;height:14px;stroke:var(--t3);fill:none;stroke-width:2.5;transition:.2s" class="hc-chevron"><polyline points="6 9 12 15 18 9"/></svg>
         </div>
         <div class="hc-section-body">
-          <div id="hcCat-sheet_body-Процедуры" class="hc-cat"><div class="hc-cat-label"><span>Процедуры</span><button class="hc-add-btn" onclick="hcAddItem('sheet_body','Процедуры','','',true)">+ добавить</button></div><div class="hc-items"></div></div>
+          <div id="hcCat-sheet_body-Процедуры" class="hc-cat"><div class="hc-cat-label"><span>Процедуры</span><button class="hc-add-btn" data-static-onclick="s321">+ добавить</button></div><div class="hc-items"></div></div>
         </div>
       </div>
       <div class="hc-section">
-        <div class="hc-section-hd" onclick="hcToggleSection(this)">
+        <div class="hc-section-hd" data-static-onclick="s305">
           <div class="hc-section-title">💇 Волосы</div>
           <svg viewBox="0 0 24 24" style="width:14px;height:14px;stroke:var(--t3);fill:none;stroke-width:2.5;transition:.2s" class="hc-chevron"><polyline points="6 9 12 15 18 9"/></svg>
         </div>
         <div class="hc-section-body">
-          <div id="hcCat-sheet_hair-Процедуры" class="hc-cat"><div class="hc-cat-label"><span>Процедуры</span><button class="hc-add-btn" onclick="hcAddItem('sheet_hair','Процедуры','','',true)">+ добавить</button></div><div class="hc-items"></div></div>
+          <div id="hcCat-sheet_hair-Процедуры" class="hc-cat"><div class="hc-cat-label"><span>Процедуры</span><button class="hc-add-btn" data-static-onclick="s322">+ добавить</button></div><div class="hc-items"></div></div>
         </div>
       </div>
       <div class="fg" style="margin-top:4px"><label class="fl">Дополнительные заметки</label><textarea id="hcNotes" rows="2" placeholder="Общие рекомендации..."></textarea></div>
@@ -2529,37 +2533,37 @@
     <!-- TAB: ВИТАМИНЫ -->
     <div class="hc-tab-panel" id="hcPanel-vitamins">
       <div class="hc-section">
-        <div class="hc-section-hd" onclick="hcToggleSection(this)">
+        <div class="hc-section-hd" data-static-onclick="s305">
           <div class="hc-section-title">💊 Витамины и добавки</div>
           <svg viewBox="0 0 24 24" style="width:14px;height:14px;stroke:var(--t3);fill:none;stroke-width:2.5;transition:.2s" class="hc-chevron"><polyline points="6 9 12 15 18 9"/></svg>
         </div>
         <div class="hc-section-body">
-          <div id="hcCat-vitamins-Препарат" class="hc-cat"><div class="hc-cat-label"><span>Препараты</span><button class="hc-add-btn" onclick="hcAddItem('vitamins','Препарат')">+ добавить</button></div><div class="hc-items"></div></div>
+          <div id="hcCat-vitamins-Препарат" class="hc-cat"><div class="hc-cat-label"><span>Препараты</span><button class="hc-add-btn" data-static-onclick="s323">+ добавить</button></div><div class="hc-items"></div></div>
         </div>
       </div>
     </div>
 
     <div class="hc-save-row">
-      <button class="hc-btn-save" onclick="hcSave()">Сохранить</button>
-      <button class="hc-btn-print" onclick="hcPrint()">
+      <button class="hc-btn-save" data-static-onclick="s324">Сохранить</button>
+      <button class="hc-btn-print" data-static-onclick="s325">
         <svg viewBox="0 0 24 24" style="width:13px;height:13px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>
         Печать / PDF
       </button>
-      <button class="hc-btn-cancel" onclick="hcCloseForm()">Отмена</button>
+      <button class="hc-btn-cancel" data-static-onclick="s300">Отмена</button>
     </div>
   </div>
 </div>
 
 <!-- CATALOG PICKER -->
-<div class="hc-picker-ov" id="hcPickerOv" onclick="if(event.target===this)hcPickerClose()">
+<div class="hc-picker-ov" id="hcPickerOv" data-static-onclick="s326">
   <div class="hc-picker-box">
     <div class="hc-picker-hdr">
       <div id="hcPickerTitle" style="font-weight:700;font-size:14px;flex:1">Выберите</div>
-      <button id="hcPickerSyncBtn" onclick="hcSyncGoodsCategories()" title="Синхронизировать категории из YClients" style="background:none;border:1px solid var(--hc-border);border-radius:6px;font-size:12px;cursor:pointer;color:var(--hc-brown2);padding:2px 8px;margin-right:6px;display:none">↻ Категории</button>
-      <button onclick="hcPickerClose()" style="background:none;border:none;font-size:18px;cursor:pointer;color:var(--t2);line-height:1">✕</button>
+      <button id="hcPickerSyncBtn" data-static-onclick="s327" title="Синхронизировать категории из YClients" style="background:none;border:1px solid var(--hc-border);border-radius:6px;font-size:12px;cursor:pointer;color:var(--hc-brown2);padding:2px 8px;margin-right:6px;display:none">↻ Категории</button>
+      <button data-static-onclick="s328" style="background:none;border:none;font-size:18px;cursor:pointer;color:var(--t2);line-height:1">✕</button>
     </div>
     <div style="padding:10px 18px;border-bottom:1px solid var(--bd)">
-      <input id="hcPickerSearch" type="text" placeholder="Поиск..." oninput="hcPickerSearchFn(this.value)" style="width:100%">
+      <input id="hcPickerSearch" type="text" placeholder="Поиск..." data-static-oninput="s329" style="width:100%">
     </div>
     <div class="hc-picker-body" id="hcPickerBody">
       <div style="padding:20px;text-align:center;color:var(--t3)">Загрузка...</div>
@@ -2568,76 +2572,76 @@
 </div>
 
 <!-- MODALS -->
-<div class="ov" id="clientModal" onclick="if(event.target===this)closeModal('clientModal')">
+<div class="ov" id="clientModal" data-static-onclick="s330">
   <div class="modal">
-    <div class="mh"><div class="mt" id="cmTitle">Клиент</div><button class="mc" onclick="closeModal('clientModal')">✕</button></div>
+    <div class="mh"><div class="mt" id="cmTitle">Клиент</div><button class="mc" data-static-onclick="s331">✕</button></div>
     <div id="cmBody"></div>
   </div>
 </div>
-<div class="ov" id="bonusModal" onclick="if(event.target===this)closeModal('bonusModal')">
+<div class="ov" id="bonusModal" data-static-onclick="s332">
   <div class="modal">
-    <div class="mh"><div class="mt">Начислить / Списать бонусы</div><button class="mc" onclick="closeModal('bonusModal')">✕</button></div>
-    <div class="fg"><label class="fl">Клиент (имя или телефон)</label><input type="text" id="bms" oninput="searchBonusC(this.value)" placeholder="Начните вводить..."></div>
+    <div class="mh"><div class="mt">Начислить / Списать бонусы</div><button class="mc" data-static-onclick="s333">✕</button></div>
+    <div class="fg"><label class="fl">Клиент (имя или телефон)</label><input type="text" id="bms" data-static-oninput="s334" placeholder="Начните вводить..."></div>
     <div id="bmr" style="margin-bottom:12px"></div>
     <div class="fg"><label class="fl">Количество бонусов</label><input type="number" id="bma" placeholder="500" min="1"></div>
     <div class="fg"><label class="fl">Комментарий</label><input type="text" id="bmc" value="Ручная корректировка"></div>
     <div style="display:flex;gap:8px">
-      <button class="btn btn-pri" onclick="submitBonus(1)">+ Начислить</button>
-      <button class="btn btn-sec btn-dng" onclick="submitBonus(-1)">− Списать</button>
-      <button class="btn btn-sec" onclick="closeModal('bonusModal')">Отмена</button>
+      <button class="btn btn-pri" data-static-onclick="s335">+ Начислить</button>
+      <button class="btn btn-sec btn-dng" data-static-onclick="s336">− Списать</button>
+      <button class="btn btn-sec" data-static-onclick="s333">Отмена</button>
     </div>
   </div>
 </div>
 
-<div class="ov" id="edMeModal" onclick="if(event.target===this)closeModal('edMeModal')">
+<div class="ov" id="edMeModal" data-static-onclick="s337">
   <div class="modal">
-    <div class="mh"><div class="mt">Мой F.Doc</div><button class="mc" onclick="closeModal('edMeModal')">✕</button></div>
+    <div class="mh"><div class="mt">Мой F.Doc</div><button class="mc" data-static-onclick="s338">✕</button></div>
     <div class="ed-sub" id="edMeInfo" style="margin-bottom:12px"></div>
     <div class="fg"><label class="fl" for="edMeLogin">Логин F.Doc</label><input type="text" id="edMeLogin" autocomplete="username"></div>
     <div class="fg"><label class="fl" for="edMePassword">Пароль F.Doc</label><input type="password" id="edMePassword" autocomplete="current-password"></div>
     <div style="display:flex;gap:8px;flex-wrap:wrap">
-      <button class="btn btn-pri" onclick="edSaveMe()">Проверить и сохранить</button>
-      <button class="btn btn-sec btn-dng" onclick="edDeleteMe()">Отключить</button>
-      <button class="btn btn-sec" onclick="closeModal('edMeModal')">Закрыть</button>
+      <button class="btn btn-pri" data-static-onclick="s339">Проверить и сохранить</button>
+      <button class="btn btn-sec btn-dng" data-static-onclick="s340">Отключить</button>
+      <button class="btn btn-sec" data-static-onclick="s338">Закрыть</button>
     </div>
   </div>
 </div>
 
 <!-- «Документы»: окна дашборда и страницы пациента; содержимое рисует JS (edocs-board.js, edocs-client.js). -->
-<div class="ov" id="edConfirmModal" onclick="if(event.target===this)edConfirmDone(false)">
+<div class="ov" id="edConfirmModal" data-static-onclick="s341">
   <div class="modal">
-    <div class="mh"><div class="mt" id="edConfirmTitle">Подтвердите</div><button class="mc" onclick="edConfirmDone(false)">✕</button></div>
+    <div class="mh"><div class="mt" id="edConfirmTitle">Подтвердите</div><button class="mc" data-static-onclick="s342">✕</button></div>
     <div id="edConfirmBody" style="font-size:13px;line-height:1.5"></div>
-    <div class="ed-actions"><button class="btn btn-pri" id="edConfirmOk" onclick="edConfirmDone(true)">Отправить</button><button class="btn btn-sec" onclick="edConfirmDone(false)">Отмена</button></div>
+    <div class="ed-actions"><button class="btn btn-pri" id="edConfirmOk" data-static-onclick="s343">Отправить</button><button class="btn btn-sec" data-static-onclick="s342">Отмена</button></div>
   </div>
 </div>
-<div class="ov ed-wide" id="edActModal" onclick="if(event.target===this)closeModal('edActModal')">
+<div class="ov ed-wide" id="edActModal" data-static-onclick="s344">
   <div class="modal">
-    <div class="mh"><div class="mt">Акт оказанных услуг</div><button class="mc" onclick="closeModal('edActModal')">✕</button></div>
+    <div class="mh"><div class="mt">Акт оказанных услуг</div><button class="mc" data-static-onclick="s345">✕</button></div>
     <div id="edActBody"></div>
   </div>
 </div>
-<div class="ov" id="edDocModal" onclick="if(event.target===this)closeModal('edDocModal')">
+<div class="ov" id="edDocModal" data-static-onclick="s346">
   <div class="modal">
-    <div class="mh"><div class="mt" id="edDocTitle">Документ</div><button class="mc" onclick="closeModal('edDocModal')">✕</button></div>
+    <div class="mh"><div class="mt" id="edDocTitle">Документ</div><button class="mc" data-static-onclick="s347">✕</button></div>
     <div id="edDocBody"></div>
   </div>
 </div>
-<div class="ov" id="edPaperModal" onclick="if(event.target===this)closeModal('edPaperModal')">
+<div class="ov" id="edPaperModal" data-static-onclick="s348">
   <div class="modal">
-    <div class="mh"><div class="mt">Подписано на бумаге</div><button class="mc" onclick="closeModal('edPaperModal')">✕</button></div>
+    <div class="mh"><div class="mt">Подписано на бумаге</div><button class="mc" data-static-onclick="s349">✕</button></div>
     <div id="edPaperBody"></div>
   </div>
 </div>
-<div class="ov" id="edFormModal" onclick="if(event.target===this)closeModal('edFormModal')">
+<div class="ov" id="edFormModal" data-static-onclick="s350">
   <div class="modal">
-    <div class="mh"><div class="mt">Анкета пациента</div><button class="mc" onclick="closeModal('edFormModal')">✕</button></div>
+    <div class="mh"><div class="mt">Анкета пациента</div><button class="mc" data-static-onclick="s351">✕</button></div>
     <div id="edFormBody"></div>
   </div>
 </div>
-<div class="ov ed-wide" id="edAutoModal" onclick="if(event.target===this)closeModal('edAutoModal')">
+<div class="ov ed-wide" id="edAutoModal" data-static-onclick="s352">
   <div class="modal">
-    <div class="mh"><div class="mt">Автоматизация документов</div><button class="mc" onclick="closeModal('edAutoModal')">✕</button></div>
+    <div class="mh"><div class="mt">Автоматизация документов</div><button class="mc" data-static-onclick="s353">✕</button></div>
     <div id="edAutoBody"></div>
   </div>
 </div>
@@ -2645,462 +2649,7 @@
 <div class="notif" id="notif"></div>
 <div id="lbar" class="lbar"></div>
 
-<script>
-// ── PAGE-LEVEL STATE (остаётся в index.html) ──
-// dashRange, rCh, bfCh, lvlCh → js/pages/dashboard.js
-// cPage_, cSortCol, cSortDir, bonusTarget → js/pages/clients.js
-let lsData = {}, ycSvcs = [];
-const LVL_L = {bronze:'🥉 Бронза',silver:'🥈 Серебро',gold:'🥇 Золото',platinum:'💎 Платина'};
-const LVL_B = {bronze:'bgr',silver:'bb',gold:'bo',platinum:'bg'};
-
-async function loadCardTypes() {
-  const sel = document.getElementById('st-card-type');
-  if (!sel) return;
-  sel.innerHTML = '<option value="">Загрузка...</option>';
-  try {
-    const types = await api('GET', '/api/yclients/card-types');
-    if (!types?.length) {
-      sel.innerHTML = '<option value="">Типы карт не найдены</option>';
-      return;
-    }
-    sel.innerHTML = '<option value="">— Выберите карту —</option>';
-    types.forEach(t => {
-      const opt = document.createElement('option');
-      opt.value = t.id;
-      opt.textContent = `${t.title} (ID: ${t.id})`;
-      sel.appendChild(opt);
-    });
-    notify(`Загружено ${types.length} типов карт`, 'ok');
-  } catch(e) { notify('Ошибка загрузки карт: '+e.message, 'err'); }
-}
-
-function onCardTypeChange(sel) {
-  const info = document.getElementById('cardTypeInfo');
-  if (!info) return;
-  if (sel.value) {
-    const name = sel.options[sel.selectedIndex]?.textContent || '';
-    info.style.display = 'block';
-    info.textContent = `Выбрана: ${name}. Нажмите «Сохранить».`;
-    info.style.color = 'var(--a)';
-  } else {
-    info.style.display = 'none';
-  }
-}
-
-// syncClientCard → js/pages/clients.js
-
-// ── BULK IMPORT ──────────────────────────────────────────────
-let bulkPollInterval = null;
-
-async function startBulkImport() {
-  const btn = document.getElementById('bulkImportBtn');
-  const statusEl = document.getElementById('bulkImportStatus');
-  const resultEl = document.getElementById('bulkImportResult');
-
-  // Сброс UI
-  resultEl.style.display = 'none';
-  statusEl.style.display = 'block';
-  btn.disabled = true;
-  btn.innerHTML = '<span class="spinner"></span> Импорт идёт...';
-  document.getElementById('bulkSpinner').style.display = 'inline-block';
-  document.getElementById('bulkStatusText').textContent = 'Запуск...';
-
-  try {
-    await api('POST', '/api/bulk-import-card-history');
-    notify('Импорт запущен! Прогресс отображается ниже.', 'ok');
-    // Начать polling статуса каждые 2 сек
-    bulkPollInterval = setInterval(pollBulkStatus, 2000);
-    pollBulkStatus();
-  } catch(e) {
-    btn.disabled = false;
-    btn.innerHTML = '📥 Запустить импорт истории';
-    statusEl.style.display = 'none';
-    notify('Ошибка: ' + e.message, 'err');
-  }
-}
-
-async function pollBulkStatus() {
-  try {
-    const s = await api('GET', '/api/bulk-import-card-history/status');
-    const statusEl  = document.getElementById('bulkImportStatus');
-    const resultEl  = document.getElementById('bulkImportResult');
-    const btn       = document.getElementById('bulkImportBtn');
-
-    if (s.notStarted) return;
-
-    // Обновить прогресс
-    document.getElementById('bulkDone').textContent     = s.done || 0;
-    document.getElementById('bulkTotal').textContent    = s.total || 0;
-    document.getElementById('bulkImported').textContent = s.imported || 0;
-    document.getElementById('bulkErrors').textContent   = s.errors || 0;
-    document.getElementById('bulkCurrent').textContent  = s.currentClient || '—';
-
-    const pct = s.total > 0 ? Math.round((s.done / s.total) * 100) : 0;
-    document.getElementById('bulkProgress').style.width = pct + '%';
-    document.getElementById('bulkStatusText').textContent =
-      s.running ? `Обрабатывается ${s.done} из ${s.total} клиентов...` : 'Завершено!';
-
-    if (!s.running) {
-      clearInterval(bulkPollInterval);
-      bulkPollInterval = null;
-
-      // Скрыть спиннер
-      document.getElementById('bulkSpinner').style.display = 'none';
-      btn.disabled = false;
-      btn.innerHTML = '✅ Импорт завершён (повторить)';
-
-      // Показать итог
-      resultEl.style.display = 'block';
-      if (s.error) {
-        resultEl.style.background = '#fef2f2';
-        resultEl.style.color = 'var(--danger)';
-        resultEl.innerHTML = `❌ Ошибка: ${s.error}`;
-      } else {
-        resultEl.style.background = '#f0fdf4';
-        resultEl.style.color = '#166534';
-        resultEl.innerHTML = `
-          ✅ <strong>Импорт завершён!</strong><br>
-          Клиентов обработано: <strong>${s.done}</strong> · 
-          Транзакций загружено: <strong>${s.imported}</strong> · 
-          Ошибок: <strong>${s.errors}</strong>
-        `;
-      }
-      notify(`Импорт завершён! Загружено ${s.imported} транзакций`, 'ok');
-    }
-  } catch(e) {
-    console.error('Poll error:', e.message);
-  }
-}
-
-async function saveWebCookie() {
-  const val = document.getElementById('st-web-cookie')?.value?.trim();
-  const el  = document.getElementById('cookieSt');
-  if (!val) { el.innerHTML='<span style="color:var(--danger)">Вставьте куки</span>'; return; }
-  el.innerHTML = '<span class="spinner"></span> Сохранение...';
-  try {
-    await api('PUT', '/api/salon', {
-      name:                document.getElementById('st-name')?.value,
-      city:                document.getElementById('st-city')?.value,
-      timezone:            document.getElementById('st-tz')?.value,
-      yclients_company_id: document.getElementById('st-yid')?.value,
-      yclients_web_cookie: val,
-    });
-    el.innerHTML = '<span style="color:var(--a)">✓ Куки сохранены! Теперь запустите импорт истории.</span>';
-    notify('Куки YClients сохранены!', 'ok');
-  } catch(e) {
-    el.innerHTML = `<span style="color:var(--danger)">Ошибка: ${e.message}</span>`;
-  }
-}
-
-async function startXlsImport() {
-  const fileInput = document.getElementById('xlsFile');
-  const btn       = document.getElementById('xlsImportBtn');
-  const progress  = document.getElementById('xlsImportProgress');
-  const result    = document.getElementById('xlsImportResult');
-
-  if (!fileInput.files.length) { notify('Выберите XLS файл', 'err'); return; }
-
-  const file = fileInput.files[0];
-  btn.disabled = true;
-  btn.innerHTML = '<span class="spinner"></span> Обработка...';
-  progress.textContent = `Загружаем ${file.name}...`;
-  result.style.display = 'none';
-
-  try {
-    // Читаем файл как бинарные данные и отправляем напрямую
-    const arrayBuffer = await file.arrayBuffer();
-
-    const resp = await fetch('/api/import/csv-transactions', {
-      method: 'POST',
-      headers: {
-        'Authorization': 'Bearer ' + localStorage.getItem('lp_tk'),
-        'Content-Type': 'application/octet-stream',
-        'X-Filename': encodeURIComponent(file.name),
-      },
-      body: arrayBuffer,
-    });
-    const data = await resp.json();
-
-    if (data.ok) {
-      result.style.display = 'block';
-      result.style.background = '#f0fdf4';
-      result.style.color = '#166534';
-      result.innerHTML = `
-        ✅ <strong>Файл импортирован!</strong><br>
-        Строк в файле: <strong>${data.totalRows}</strong> · 
-        Загружено: <strong>${data.imported}</strong> · 
-        Пропущено (дубли/не найден клиент): <strong>${data.skipped}</strong> · 
-        Ошибок: <strong>${data.errors}</strong>
-      `;
-      notify(`Импортировано ${data.imported} транзакций из ${file.name}`, 'ok');
-      fileInput.value = '';
-    } else {
-      throw new Error(data.error || 'Ошибка импорта');
-    }
-  } catch(e) {
-    result.style.display = 'block';
-    result.style.background = '#fef2f2';
-    result.style.color = 'var(--danger)';
-    result.innerHTML = `❌ Ошибка: ${e.message}`;
-    notify('Ошибка импорта: ' + e.message, 'err');
-  } finally {
-    btn.disabled = false;
-    btn.innerHTML = '📊 Импортировать CSV';
-    progress.textContent = '';
-  }
-}
-
-// doLogout, launchApp, showLogin, navStg → js/core/nav.js + js/core/auth.js
-
-// setPeriod, buildRevChart, buildRecentTx, buildTopSvc → js/pages/dashboard.js
-
-// cPage…quickB, openCD, doSyncCard, loadCardTxns → js/pages/clients.js
-
-// loadSegments…segExport → js/pages/segments.js
-// loadRecords, renderRecordsPager, setDefDates, formatVisitDate → js/pages/records.js
-// loadLs…previewTemplateSettings → js/pages/settings.js
-
-// ── SETTINGS ──
-async function loadSettings() {
-  try {
-    const salon=await api('GET','/api/salon');
-    const s=(id,v)=>{const e=document.getElementById(id);if(e)e.value=v||'';};
-    s('st-name',salon.name); s('st-city',salon.city); s('st-yid',salon.yclients_company_id);
-    s('st-pt','');
-    const tz=document.getElementById('st-tz'); if(tz)tz.value=salon.timezone||'Europe/Moscow';
-    const wh=`${window.location.origin}/api/webhook/yclients/${salon.yclients_company_id||'YOUR_ID'}`;
-    const we=document.getElementById('whUrl'); if(we)we.value=wh;
-    // Показать сохранённую карту лояльности
-    if (salon.yclients_card_type_id) {
-      const sel = document.getElementById('st-card-type');
-      if (sel) {
-        const exists = Array.from(sel.options).some(o=>String(o.value)===String(salon.yclients_card_type_id));
-        if (!exists) {
-          const opt=document.createElement('option');
-          opt.value=salon.yclients_card_type_id;
-          opt.textContent=salon.yclients_card_type_name||`Карта ID ${salon.yclients_card_type_id}`;
-          opt.selected=true;
-          sel.appendChild(opt);
-        } else { sel.value=String(salon.yclients_card_type_id); }
-        const info=document.getElementById('cardTypeInfo');
-        if(info){info.style.display='block';info.style.color='var(--a)';
-          info.textContent=`✓ Активна: ${salon.yclients_card_type_name||salon.yclients_card_type_id}`;}
-      }
-    }
-    const ci = document.getElementById('st-chain-id');
-    if (ci) ci.value = salon.yclients_chain_id || '';
-    renderSalonLogo(salon.logo_url);
-    // Показать статус куки
-    const cookieSt = document.getElementById('cookieSt');
-    if (cookieSt && salon.yclients_web_session_configured) {
-      cookieSt.textContent = '✓ Куки сохранены';
-    }
-    loadLs();
-    loadSyncLogs();
-    loadTemplateSettings();
-  } catch(e){notify(e.message,'err');}
-}
-async function saveSalon() {
-  try {
-    const sel = document.getElementById('st-card-type');
-    const selOpt = sel?.options[sel.selectedIndex];
-    await api('PUT','/api/salon',{
-      name:                 document.getElementById('st-name')?.value,
-      city:                 document.getElementById('st-city')?.value,
-      timezone:             document.getElementById('st-tz')?.value,
-      yclients_company_id:  document.getElementById('st-yid')?.value,
-      yclients_card_type_id:   sel?.value ? parseInt(sel.value) : null,
-      yclients_card_type_name: selOpt?.value ? (selOpt.textContent || null) : null,
-    });
-    notify('Сохранено!','ok');
-  } catch(e){notify(e.message,'err');}
-}
-async function connectYC() {
-  const el=document.getElementById('ycSt');
-
-  // Валидация полей
-  const pt = document.getElementById('st-pt')?.value?.trim();
-  const login = document.getElementById('st-login')?.value?.trim();
-  const pass = document.getElementById('st-pass')?.value?.trim();
-  const yid = document.getElementById('st-yid')?.value?.trim();
-
-  if (!pt || !login || !pass || !yid) {
-    el.innerHTML='<span style="color:var(--danger)">❌ Заполните все поля: ID компании, Partner Token, Email, Пароль</span>';
-    return;
-  }
-
-  el.innerHTML='<span class="spinner"></span> Подключение к YClients (может занять до 10 сек)...';
-  try {
-    console.log('📡 Отправка данных на сервер...');
-    const res = await api('POST','/api/salon/yclients-auth',{
-      partnerToken: pt,
-      login: login,
-      password: pass,
-      yclients_company_id: yid,
-      chainId: document.getElementById('st-chain-id')?.value || null,
-    });
-
-    el.innerHTML=`
-      <div style="background:#ecfdf5;border:1px solid #86efac;border-radius:6px;padding:12px;color:#15803d">
-        <div style="font-weight:600;margin-bottom:6px">✅ YClients успешно подключен!</div>
-        <div style="font-size:12px;line-height:1.5">
-          • Partner Token: сохранён<br>
-          • User Token: получен и сохранён<br>
-          • Теперь вы можете запустить синхронизацию
-        </div>
-      </div>
-    `;
-    notify('YClients подключён!','ok');
-
-    // Автоматически загрузить типы карт
-    setTimeout(() => { loadCardTypes(); }, 500);
-  } catch(e){
-    let errorMsg = e.message;
-    let helpText = '';
-
-    // Подробная справка для разных ошибок
-    if (errorMsg.includes('Неверный логин или пароль')) {
-      helpText = '<br><strong>Совет:</strong> Проверьте email и пароль вашего профиля YClients';
-    } else if (errorMsg.includes('401') || errorMsg.includes('Unauthorized')) {
-      helpText = '<br><strong>Совет:</strong> Partner Token неверный или истёк. Обновите его в YClients → Настройки → API';
-    } else if (errorMsg.includes('404')) {
-      helpText = '<br><strong>Совет:</strong> ID компании неверный. Проверьте в URL: yclients.com/cabinet/**ID**/...';
-    } else if (errorMsg.includes('timeout') || errorMsg.includes('ETIMEDOUT')) {
-      helpText = '<br><strong>Совет:</strong> Сервер YClients не отвечает. Попробуйте ещё раз через минуту.';
-    }
-
-    el.innerHTML=`
-      <div style="background:#fef2f2;border:1px solid #fca5a5;border-radius:6px;padding:12px;color:#991b1b">
-        <div style="font-weight:600;margin-bottom:6px">❌ Ошибка подключения</div>
-        <div style="font-size:12px;line-height:1.5;margin-bottom:8px">
-          ${esc(errorMsg)}${helpText}
-        </div>
-        <div style="font-size:11px;color:#7f1d1d;margin-top:8px">
-          Если проблема не решена, используйте скрипт восстановления (см. RECOVERY_GUIDE.md)
-        </div>
-      </div>
-    `;
-  }
-}
-function copyWh() { const v=document.getElementById('whUrl')?.value; navigator.clipboard.writeText(v).then(()=>notify('Скопировано!','ok')); }
-async function loadSyncLogs() {
-  try {
-    const logs=await api('GET','/api/sync/logs');
-    const el=document.getElementById('syncLogs'); if(!el)return;
-    if(!logs?.length){el.innerHTML='<div class="empty">Нет логов</div>';return;}
-    const si={success:'✅',error:'❌',running:'⏳'};
-    el.innerHTML=`<table><thead><tr><th>Тип</th><th>Статус</th><th>Клиентов</th><th>Записей</th><th>Бонусов</th><th>Время</th></tr></thead><tbody>
-      ${logs.map(l=>`<tr><td>${l.sync_type}</td><td>${si[l.status]||'?'} ${l.status}</td><td>${l.clients_synced||0}</td><td>${l.records_synced||0}</td><td style="color:var(--a)">${l.bonuses_accrued||0}</td><td style="color:var(--t3);font-size:12px">${new Date(l.started_at).toLocaleString('ru')}</td></tr>`).join('')}
-    </tbody></table>`;
-  } catch{}
-}
-
-// ── SYNC ──
-async function triggerSync() {
-  const banner=document.getElementById('syncBanner');
-  if(banner){banner.style.display='flex';document.getElementById('syncBannerText').textContent='Синхронизация запущена...';}
-  try {
-    await api('POST','/api/sync');
-    notify('Синхронизация запущена! Данные обновятся через несколько минут.','ok');
-    setTimeout(()=>{loadDashboard();if(banner)banner.style.display='none';},6000);
-  } catch(e){notify(e.message,'err');if(banner)banner.style.display='none';}
-}
-
-// searchBonusC, selBC → js/pages/clients.js
-
-// ── UTILS ──
-function openModal(id){document.getElementById(id).classList.add('open');}
-function closeModal(id){document.getElementById(id).classList.remove('open');}
-// notify, showLbar → js/core/utils.js
-function avc(n=''){const c=['#3b82f6','#8b5cf6','#ec4899','#f59e0b','#10b981','#06b6d4','#ef4444','#84cc16'];return c[(n||'').charCodeAt(0)%c.length];}
-function avi(n='?'){return(n||'?').split(' ').slice(0,2).map(w=>w[0]||'').join('').toUpperCase();}
-function timeSince(d){const s=Math.floor((Date.now()-new Date(d))/1000);if(s<60)return s+'с';if(s<3600)return Math.floor(s/60)+'м';if(s<86400)return Math.floor(s/3600)+'ч';return Math.floor(s/86400)+'д';}
-const _dbc={};
-function dbc(fn,ms){return function(...a){clearTimeout(_dbc[fn]);_dbc[fn]=setTimeout(()=>fn(...a),ms);};}
-
-// loadStaffAnalytics…saExportPDF → js/pages/staff.js
-
-// loadHomeCare…hcOpenPrintWindow → js/pages/home-care.js
-
-// loadUsers, renderUsers, usersShowModal, etc. → js/pages/users.js
-
-// ══════════════════════════════════════════════════════════════
-// ── VISUAL ENHANCEMENTS ──────────────────────────────────────
-// ══════════════════════════════════════════════════════════════
-
-// initDarkMode, toggleDarkMode, updateDmLabel → js/core/theme.js
-// animateCount, cascadeCards → js/core/utils.js
-
-// buildLvlDash, showDashSkeleton → js/pages/dashboard.js
-
-// nav → js/core/nav.js
-
-// ── Confetti ──────────────────────────────────────────────────
-function fireConfetti() {
-  if (typeof confetti !== 'function') return;
-  confetti({
-    particleCount: 90,
-    spread: 75,
-    origin: { y: 0.55 },
-    colors: ['#00c896','#0080ff','#f59e0b','#ec4899','#8b5cf6'],
-    startVelocity: 30,
-    gravity: 0.9,
-    ticks: 200,
-    scalar: 0.9,
-  });
-}
-
-// ── 3D Hover on stat cards ────────────────────────────────────
-(function setup3DHover(){
-  let currentCard = null;
-
-  function attachTilt(card) {
-    if (card._tiltBound) return;
-    card._tiltBound = true;
-
-    card.addEventListener('mousemove', function(e) {
-      const r = card.getBoundingClientRect();
-      const x = ((e.clientX - r.left) / r.width  - 0.5) * 14;
-      const y = ((e.clientY - r.top)  / r.height - 0.5) * 14;
-      card.style.transition = 'transform .08s ease, box-shadow .15s';
-      card.style.transform = `perspective(600px) rotateY(${x}deg) rotateX(${-y}deg) translateY(-4px) scale(1.02)`;
-      card.style.boxShadow = '0 12px 32px rgba(0,0,0,.14)';
-    });
-
-    card.addEventListener('mouseleave', function() {
-      card.style.transition = 'transform .35s cubic-bezier(.22,.68,0,1.2), box-shadow .25s';
-      card.style.transform = '';
-      card.style.boxShadow = '';
-    });
-  }
-
-  // Attach to all current .sc cards and observe new ones
-  function attachAll() {
-    document.querySelectorAll('.sc').forEach(attachTilt);
-  }
-
-  attachAll();
-
-  // Re-attach when dashboard re-renders cards
-  const obs = new MutationObserver(attachAll);
-  obs.observe(document.body, { childList: true, subtree: true });
-})();
-
-// ── Sync button pulse ─────────────────────────────────────────
-// Patching showLbar via original reference at init time
-(function patchShowLbar(){
-  const orig = showLbar;
-  window.showLbar = function(on){
-    document.getElementById('lbar').style.display = on ? 'block' : 'none';
-    const btn = document.getElementById('syncBtn');
-    if (btn) btn.classList.toggle('sync-active', !!on);
-  };
-})();
-
-// loadDashboard → js/pages/dashboard.js
-
-// submitBonus → js/pages/clients.js
-</script>
+<script src="js/core/index-inline.js?v=2026-11-16-csp"></script>
 <script src="js/pages/staff.js?v=2026-06-11a"></script>
 <script src="js/pages/home-care.js?v=2026-11-13p"></script>
 <script src="js/pages/segments.js"></script>
@@ -3144,12 +2693,12 @@ function fireConfetti() {
 <script src="js/pages/reminders-plan.js?v=2026-08-09a"></script>
 <script src="js/pages/reminders.js?v=2026-08-19a"></script>
 <dialog id="stockGoodModal" class="stock-modal" aria-labelledby="stockGoodTitleText">
-<form onsubmit="stockSaveGood(event)"><div class="stock-toolbar"><h2 id="stockGoodTitleText">Товар</h2><button type="button" onclick="stockCloseGood()" aria-label="Закрыть">×</button></div>
+<form data-static-onsubmit="s354"><div class="stock-toolbar"><h2 id="stockGoodTitleText">Товар</h2><button type="button" data-static-onclick="s355" aria-label="Закрыть">×</button></div>
 <div id="stockGoodFields"></div><p id="stockGoodError" role="alert"></p><button type="submit" id="stockGoodSave" class="btn">Сохранить</button><div id="stockGoodDetails"></div></form>
 </dialog>
-<dialog id="stockDocModal" class="stock-modal" aria-label="Операция склада"><form onsubmit="stockSaveDocument(event)"><button type="button" onclick="stockDocumentClose()">Закрыть</button><div id="stockDocBody"></div><p id="stockDocError" role="alert"></p><button id="stockDocSave" type="submit">Сохранить</button></form></dialog>
-<dialog id="stockSaleModal" class="stock-modal stock-sale-modal" aria-label="Продажа товара"><form class="stock-sale-form" onsubmit="stockSaveSale(event)"><button class="stock-sale-close" type="button" onclick="stockSaleClose()" aria-label="Закрыть">×</button><div id="stockSaleBody"></div><p id="stockSaleError" role="alert"></p><div id="stockSaleActions" class="stock-sale-actions"><button id="stockSaleSaveUnpaid" type="submit" data-sale-mode="unpaid">Сохранить без оплаты</button><button id="stockSaleSave" type="submit" data-sale-mode="paid">Сохранить и оплатить</button></div></form></dialog>
-<dialog id="stockRefModal" class="stock-modal" aria-label="Справочник"><form onsubmit="stockSaveRef(event)"><button type="button" onclick="stockCloseRef()">Закрыть</button><div id="stockRefBody"></div><p id="stockRefError" role="alert"></p><button type="submit" id="stockRefSave">Сохранить</button></form></dialog>
+<dialog id="stockDocModal" class="stock-modal" aria-label="Операция склада"><form data-static-onsubmit="s356"><button type="button" data-static-onclick="s357">Закрыть</button><div id="stockDocBody"></div><p id="stockDocError" role="alert"></p><button id="stockDocSave" type="submit">Сохранить</button></form></dialog>
+<dialog id="stockSaleModal" class="stock-modal stock-sale-modal" aria-label="Продажа товара"><form class="stock-sale-form" data-static-onsubmit="s358"><button class="stock-sale-close" type="button" data-static-onclick="s359" aria-label="Закрыть">×</button><div id="stockSaleBody"></div><p id="stockSaleError" role="alert"></p><div id="stockSaleActions" class="stock-sale-actions"><button id="stockSaleSaveUnpaid" type="submit" data-sale-mode="unpaid">Сохранить без оплаты</button><button id="stockSaleSave" type="submit" data-sale-mode="paid">Сохранить и оплатить</button></div></form></dialog>
+<dialog id="stockRefModal" class="stock-modal" aria-label="Справочник"><form data-static-onsubmit="s360"><button type="button" data-static-onclick="s361">Закрыть</button><div id="stockRefBody"></div><p id="stockRefError" role="alert"></p><button type="submit" id="stockRefSave">Сохранить</button></form></dialog>
 <script src="js/pages/stock.js?v=2026-11-15-operations"></script>
 <script src="js/pages/stock-balances.js?v=2026-11-15-catalog"></script>
 <script src="js/pages/stock-docs.js?v=2026-11-15-sale-form"></script>

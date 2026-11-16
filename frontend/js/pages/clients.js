@@ -87,15 +87,15 @@ async function loadClients() {
     const tb = document.getElementById('cBody');
     if (!d.clients?.length) { tb.innerHTML = '<tr><td colspan="8" class="empty">Клиенты не найдены</td></tr>'; return; }
     tb.innerHTML = d.clients.map(c => `
-      <tr onclick="openCD(${cId(c.id)})">
+      <tr ${UIEvents.attrs("click","clients-1",[UIEvents.value(cId(c.id))])}>
         <td class="c-card-title"><div style="display:flex;align-items:center;gap:9px"><div class="av" style="background:${avc(c.name)};color:#fff;font-size:10px">${esc(avi(c.name))}</div><div style="font-weight:600">${esc(c.name)}</div></div></td>
-        <td data-label="Телефон" style="color:var(--t2)">${esc(c.phone || '—')}</td>
-        <td data-label="Уровень"><span class="badge ${LVL_B[c.loyalty_level] || 'bgr'}">${LVL_L[c.loyalty_level] || '—'}</span></td>
-        <td data-label="Бонусы" style="font-weight:700;color:var(--a)">${Number(c.bonus_balance || 0).toLocaleString('ru')}</td>
-        <td data-label="Потрачено">${parseFloat(c.total_spent || 0).toLocaleString('ru')} ₽</td>
-        <td data-label="Визитов">${Number(c.visits_count) || 0}</td>
-        <td data-label="Последний визит" style="color:var(--t3)">${c.last_visit_at ? new Date(c.last_visit_at).toLocaleDateString('ru', {day:'numeric',month:'short',year:'numeric'}) : '—'}</td>
-        <td class="c-card-arrow"><button class="btn btn-sec btn-sm" onclick="event.stopPropagation();openCD(${cId(c.id)})">→</button></td>
+        <td data-label="Телефон" style="color:var(--t2)">${esc(c.phone||'—')}</td>
+        <td data-label="Уровень"><span class="badge ${LVL_B[c.loyalty_level]||'bgr'}">${LVL_L[c.loyalty_level]||'—'}</span></td>
+        <td data-label="Бонусы" style="font-weight:700;color:var(--a)">${Number(c.bonus_balance||0).toLocaleString('ru')}</td>
+        <td data-label="Потрачено">${parseFloat(c.total_spent||0).toLocaleString('ru')} ₽</td>
+        <td data-label="Визитов">${Number(c.visits_count)||0}</td>
+        <td data-label="Последний визит" style="color:var(--t3)">${c.last_visit_at?new Date(c.last_visit_at).toLocaleDateString('ru',{day:'numeric',month:'short',year:'numeric'}):'—'}</td>
+        <td class="c-card-arrow"><button class="btn btn-sec btn-sm" ${UIEvents.attrs("click","clients-2",[UIEvents.value(cId(c.id))])}>→</button></td>
       </tr>`).join('');
     const shown = Math.min(cPage_ * 50, d.total);
     const from  = d.total === 0 ? 0 : (cPage_ - 1) * 50 + 1;
@@ -149,15 +149,15 @@ async function openCD(id) {
       ? `<div style="display:flex;align-items:center;justify-content:space-between;padding:10px 12px;background:var(--as);border-radius:8px;margin-bottom:14px">
            <div>
              <div style="font-size:12px;color:var(--t3)">Карта YClients</div>
-             <div style="font-size:13px;font-weight:600">№${esc(String(c.yclients_card_number || c.yclients_card_id))} · Баланс: <span style="color:var(--a)">${parseFloat(c.yclients_card_balance || 0).toLocaleString('ru')} бонусов</span></div>
+             <div style="font-size:13px;font-weight:600">№${esc(String(c.yclients_card_number||c.yclients_card_id))} · Баланс: <span style="color:var(--a)">${parseFloat(c.yclients_card_balance||0).toLocaleString('ru')} бонусов</span></div>
            </div>
-           <button class="btn btn-sec btn-sm" id="syncCardBtn_${cId(c.id)}" onclick="doSyncCard(${cId(c.id)})">
+           <button class="btn btn-sec btn-sm" id="syncCardBtn_${cId(c.id)}" ${UIEvents.attrs("click","clients-3",[UIEvents.value(cId(c.id))])}>
              🔄 Синхронизировать карту
            </button>
          </div>`
       : `<div style="padding:10px 12px;background:var(--bg);border-radius:8px;margin-bottom:14px;font-size:12.5px;color:var(--t3)">
            Карта лояльности YClients не привязана.
-           <button class="btn btn-sec btn-sm" style="margin-left:8px" onclick="doSyncCard(${cId(c.id)})">Найти и привязать</button>
+           <button class="btn btn-sec btn-sm" style="margin-left:8px" ${UIEvents.attrs("click","clients-4",[UIEvents.value(cId(c.id))])}>Найти и привязать</button>
          </div>`;
 
     document.getElementById('cmBody').innerHTML = `
@@ -165,14 +165,14 @@ async function openCD(id) {
         <div class="av" style="width:48px;height:48px;font-size:15px;background:${avc(c.name)};color:#fff">${esc(avi(c.name))}</div>
         <div>
           <div style="font-size:17px;font-weight:700">${esc(c.name)}</div>
-          <div style="color:var(--t2);font-size:13px">${esc(c.phone || '—')}${c.email ? ' · ' + esc(c.email) : ''}</div>
+          <div style="color:var(--t2);font-size:13px">${esc(c.phone||'—')}${c.email?' · '+esc(c.email):''}</div>
         </div>
-        <span class="badge ${LVL_B[c.loyalty_level] || 'bgr'}" style="margin-left:auto">${LVL_L[c.loyalty_level] || '—'}</span>
+        <span class="badge ${LVL_B[c.loyalty_level]||'bgr'}" style="margin-left:auto">${LVL_L[c.loyalty_level]||'—'}</span>
       </div>
       <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:14px">
-        <div class="sc"><div class="sl">Бонусы (наша БД)</div><div class="sv" style="font-size:20px;color:var(--a)">${Number(c.bonus_balance || 0).toLocaleString('ru')}</div></div>
-        <div class="sc"><div class="sl">Потрачено</div><div class="sv" style="font-size:20px">${parseFloat(c.total_spent || 0).toLocaleString('ru')} ₽</div></div>
-        <div class="sc"><div class="sl">Визитов</div><div class="sv" style="font-size:20px">${Number(c.visits_count) || 0}</div></div>
+        <div class="sc"><div class="sl">Бонусы (наша БД)</div><div class="sv" style="font-size:20px;color:var(--a)">${Number(c.bonus_balance||0).toLocaleString('ru')}</div></div>
+        <div class="sc"><div class="sl">Потрачено</div><div class="sv" style="font-size:20px">${parseFloat(c.total_spent||0).toLocaleString('ru')} ₽</div></div>
+        <div class="sc"><div class="sl">Визитов</div><div class="sv" style="font-size:20px">${Number(c.visits_count)||0}</div></div>
       </div>
       ${cardBlock}
       <div class="div"></div>
@@ -180,8 +180,8 @@ async function openCD(id) {
         <div style="display:flex;gap:7px">
           <input type="number" id="qAmt" placeholder="Бонусы" style="flex:1">
           <input type="text" id="qCmt" placeholder="Причина" style="flex:1">
-          <button class="btn btn-pri btn-sm" onclick="quickB(${cId(c.id)},1)">+ Начислить</button>
-          <button class="btn btn-sec btn-sm btn-dng" onclick="quickB(${cId(c.id)},-1)">− Списать</button>
+          <button class="btn btn-pri btn-sm" ${UIEvents.attrs("click","clients-5",[UIEvents.value(cId(c.id))])}>+ Начислить</button>
+          <button class="btn btn-sec btn-sm btn-dng" ${UIEvents.attrs("click","clients-6",[UIEvents.value(cId(c.id))])}>− Списать</button>
         </div>
       </div>
       <div class="div"></div>
@@ -189,7 +189,7 @@ async function openCD(id) {
         <div style="font-size:13px;font-weight:700">История операций</div>
         <span style="font-size:11px;color:var(--t3)">${allTxns.length} операций</span>
       </div>
-      ${rows ? `<div style="max-height:280px;overflow-y:auto"><table><thead><tr><th>Дата</th><th>Сумма</th><th>Описание</th><th>Баланс</th></tr></thead><tbody>${rows}</tbody></table></div>` : '<div class="empty">Нет операций</div>'}
+      ${rows?`<div style="max-height:280px;overflow-y:auto"><table><thead><tr><th>Дата</th><th>Сумма</th><th>Описание</th><th>Баланс</th></tr></thead><tbody>${rows}</tbody></table></div>`:'<div class="empty">Нет операций</div>'}
       <div id="cardTxnsBlock_${cId(c.id)}"></div>
       <div id="cdPurchases_${cId(c.id)}"></div><div id="edClientBlock_${cId(c.id)}"></div>`;
 
@@ -317,7 +317,7 @@ async function submitBonus(sign) {
 
 function cdPurchasesHtml(rows) {
   if (!rows.length) return '<h3>Покупки</h3><p>Покупок нет</p>';
-  return '<h3>Покупки</h3>'+rows.map(r=>`<article class="card"><button class="stock-link" onclick="cdOpenPurchase(${Number(r.id)})">${stockDate(r.doc_date)} · ${stockMoney(r.total_cost)}</button>${stockDocBadge(r)}<p>${(r.lines||[]).map(l=>stockEsc(l.title)).join(', ')}</p><p>${(r.payments||[]).map(p=>`${p.method==='cash'?'Наличные':'Карта'}: ${stockMoney(p.amount)}`).join(' · ')||'Без локальной оплаты'}</p></article>`).join('');
+  return '<h3>Покупки</h3>'+rows.map(r=>`<article class="card"><button class="stock-link" ${UIEvents.attrs("click","clients-7",[UIEvents.value(Number(r.id))])}>${stockDate(r.doc_date)} · ${stockMoney(r.total_cost)}</button>${stockDocBadge(r)}<p>${(r.lines||[]).map(l=>stockEsc(l.title)).join(', ')}</p><p>${(r.payments||[]).map(p=>`${p.method==='cash'?'Наличные':'Карта'}: ${stockMoney(p.amount)}`).join(' · ')||'Без локальной оплаты'}</p></article>`).join('');
 }
 async function cdLoadPurchases(id) {
   const el=document.getElementById('cdPurchases_'+id);if(!el)return;

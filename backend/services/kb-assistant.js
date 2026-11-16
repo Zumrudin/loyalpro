@@ -84,7 +84,8 @@ const GEMINI_BASE = 'https://generativelanguage.googleapis.com/v1beta/models';
 const REQUEST_TIMEOUT_MS = 20000;
 
 // Один вызов generateContent конкретным ключом. Бросает {status} на не-2xx.
-async function callGeminiOnce(prompt, { key, model, fetchFn }) {
+async function callGeminiOnce(prompt, { key, model, fetchFn, paid = false }) {
+  await resourceLimits.attempt({ paid });
   const url = `${GEMINI_BASE}/${model}:generateContent?key=${key}`;
   const body = {
     system_instruction: { parts: [{ text: prompt.system }] },
@@ -125,8 +126,9 @@ async function callGeminiDirect(prompt, opts) {
   let lastErr;
   for (const key of keys) {
     try {
-      return await callGeminiOnce(prompt, { key, model, fetchFn });
+      return await callGeminiOnce(prompt, { key, model, fetchFn, paid: key === paid });
     } catch (e) {
+      if (resourceLimits.isLimitError(e)) throw e;
       lastErr = e;
       // На 429 (лимит) пробуем следующий ключ; на прочих ошибках — тоже пробуем,
       // но если ключей больше нет — пробросим ошибку ниже.
@@ -141,6 +143,7 @@ async function callGeminiDirect(prompt, opts) {
 // проксирует промпт на dev-сервер (в поддерживаемом регионе), где ключ и вызов.
 // Тело: { prompt:{system,user} }; ответ: { answer }. Защита — общий секрет в заголовке.
 async function callViaRelay(prompt, { fetchFn }) {
+  await resourceLimits.attempt();
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
   let res;
@@ -215,6 +218,7 @@ async function embedTextAitunnel(text, opts = {}) {
       if (Array.isArray(emb)) return emb;
       lastErr = new Error('aitunnel embed: пустой ответ');
     } catch (e) {
+      if (resourceLimits.isLimitError(e)) throw e;
       lastErr = e;
     }
     if (attempt < attempts) {
@@ -262,7 +266,8 @@ async function callGemini(prompt, opts) {
 
 // ── Эмбеддинги (RAG) ───────────────────────────────────────────
 // Один вызов embedContent конкретным ключом. Возвращает массив чисел. Бросает {status}.
-async function embedContentOnce(text, { key, model, fetchFn }) {
+async function embedContentOnce(text, { key, model, fetchFn, paid = false }) {
+  await resourceLimits.attempt({ paid });
   const url = `${GEMINI_BASE}/${model}:embedContent?key=${key}`;
   const body = { model: `models/${model}`, content: { parts: [{ text }] } };
   const controller = new AbortController();
@@ -298,8 +303,8 @@ async function embedTextDirect(text, opts) {
   let lastErr;
   for (const key of keys) {
     try {
-      return await embedContentOnce(text, { key, model, fetchFn });
-    } catch (e) { lastErr = e; continue; }
+      return await embedContentOnce(text, { key, model, fetchFn, paid: key === paid });
+    } catch (e) { if (resourceLimits.isLimitError(e)) throw e; lastErr = e; continue; }
   }
   throw lastErr || new Error('Gemini embed: все ключи недоступны');
 }
@@ -322,6 +327,10 @@ async function logChat(salonId, userId, question, answer, sourceIds) {
 // Оркестратор: retrieve → guard → prompt → LLM → log → { answer, sources }.
 // Бросает ошибку с .code для дифференциации на уровне роута.
 async function ask(salonId, userId, question) {
+  return resourceLimits.runLlm(salonId, userId, () => askWithinBudget(salonId, userId, question));
+}
+
+async function askWithinBudget(salonId, userId, question) {
   const free  = config.KB_GEMINI_KEY_FREE;
   const paid  = config.KB_GEMINI_KEY_PAID;
   const model = config.KB_LLM_MODEL;
@@ -353,7 +362,7 @@ async function ask(salonId, userId, question) {
 
   let answer;
   try {
-    answer = await resourceLimits.runLlm(salonId, userId, () => callGemini(prompt, { free, paid, model }));
+    answer = await callGemini(prompt, { free, paid, model });
   } catch (e) {
     if (e.status === 429) throw e;
     // LLM недоступен/лимит → деградация: отдаём источники, помечаем degraded.
@@ -370,6 +379,7 @@ async function ask(salonId, userId, question) {
 // Relay-режим для эмбеддингов: прод шлёт текст на dev, тот эмбеддит своим ключом.
 // Тело: { text }; ответ: { embedding: number[] }.
 async function embedTextViaRelay(text, { url, secret, fetchFn }) {
+  await resourceLimits.attempt();
   const fn = fetchFn || fetch;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);

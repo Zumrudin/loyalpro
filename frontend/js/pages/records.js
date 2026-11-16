@@ -107,15 +107,15 @@ function renderRecordsPager(d) {
   let html = `<span>Записей: ${total}</span>`;
   if (totalPages > 1) {
     html += ` &nbsp;|&nbsp; Стр. ${curPage} из ${totalPages} &nbsp;`;
-    html += `<button class="btn btn-sec" style="padding:2px 10px;font-size:12px;margin:0 3px" ${curPage <= 1 ? 'disabled' : ''} onclick="loadRecords(${curPage - 1})">←</button>`;
+    html += `<button class="btn btn-sec" style="padding:2px 10px;font-size:12px;margin:0 3px" ${curPage<=1?'disabled':''} ${UIEvents.attrs("click","records-1",[UIEvents.value(curPage-1)])}>←</button>`;
     let start = Math.max(1, curPage - 3);
     let end   = Math.min(totalPages, start + 6);
     start = Math.max(1, end - 6);
     for (let p = start; p <= end; p++) {
       if (p === curPage) html += `<button class="btn" style="padding:2px 10px;font-size:12px;margin:0 2px">${p}</button>`;
-      else html += `<button class="btn btn-sec" style="padding:2px 10px;font-size:12px;margin:0 2px" onclick="loadRecords(${p})">${p}</button>`;
+      else html += `<button class="btn btn-sec" style="padding:2px 10px;font-size:12px;margin:0 2px" ${UIEvents.attrs("click","records-2",[UIEvents.value(p)])}>${p}</button>`;
     }
-    html += `<button class="btn btn-sec" style="padding:2px 10px;font-size:12px;margin:0 3px" ${curPage >= totalPages ? 'disabled' : ''} onclick="loadRecords(${curPage + 1})">→</button>`;
+    html += `<button class="btn btn-sec" style="padding:2px 10px;font-size:12px;margin:0 3px" ${curPage>=totalPages?'disabled':''} ${UIEvents.attrs("click","records-3",[UIEvents.value(curPage+1)])}>→</button>`;
   }
   el.innerHTML = html;
 }

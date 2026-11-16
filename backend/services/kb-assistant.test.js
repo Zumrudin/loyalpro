@@ -1,4 +1,5 @@
 'use strict';
+jest.mock('../services/resource-limits', () => ({ attempt: jest.fn(async () => {}), isLimitError: e => ['BUDGET_EXHAUSTED','PAID_DISABLED'].includes(e?.code), runLlm: (_s,_u,fn) => fn() }));
 
 const {
   buildContext, buildPrompt, parseGeminiResponse,

@@ -11,6 +11,7 @@
 // звене (мост держит 2 слота, Мила могла занять оба), потом дальше.
 // ============================================================
 const config = require('../../config');
+const resourceLimits = require('../resource-limits');
 const { safeError } = require('./errors');
 
 const BUSY_CODES = ['CODEX_BUSY', 'RELAY_BUSY'];
@@ -46,10 +47,13 @@ function createVerdictProvider({ chain, sleep = defaultSleep, busyWaitMs = BUSY_
         if (skipClaude && l.name === 'claude') continue;
         for (let attempt = 0; attempt < 2; attempt++) {
           try {
+            // Paid adapters account at the SDK boundary, including retries.
+            if (!l.isPolza) await resourceLimits.attempt();
             const res = await l.createMessage(request, l.isPolza ? POLZA_OPTS : undefined);
             if (!res || !String(res.text || '').trim()) throw Object.assign(new Error('EMPTY_MODEL_RESPONSE'), { code: 'EMPTY_MODEL_RESPONSE' });
             return { text: res.text, model: res.model || l.name };
           } catch (e) {
+            if (resourceLimits.isLimitError(e)) throw e;
             last = e;
             if (['RELAY_INPUT', 'RELAY_INPUT_TOO_LARGE'].includes(e.code)) throw e;
             if (attempt === 0 && BUSY_CODES.includes(e.code)) { await sleep(busyWaitMs); continue; }

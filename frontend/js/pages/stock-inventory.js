@@ -25,18 +25,14 @@ function stockCsvCell(value) {
 }
 async function stockLoadInventory() {
   const el = stockEl('stockTab-inventory');
-  el.innerHTML = `<div class="stock-toolbar">${stockSelect(
-    'stockInvStorage',
-    'Склад',
-    _stock.dictionaries.storages.filter((s) => s.is_active !== false),
-  )}${stockInput('stockInvCategory', 'Категория (ID или локальное название)', '', 'text')}<button onclick="stockNewInventory()">Новая инвентаризация</button></div><div id="stockInvList"></div><div id="stockInvBody"></div><p id="stockInvStatus" role="status"></p>`;
+  el.innerHTML = `<div class="stock-toolbar">${stockSelect('stockInvStorage','Склад',_stock.dictionaries.storages.filter(s=>s.is_active!==false))}${stockInput('stockInvCategory','Категория (ID или локальное название)','','text')}<button ${UIEvents.attrs("click","stock-inventory-1",[])}>Новая инвентаризация</button></div><div id="stockInvList"></div><div id="stockInvBody"></div><p id="stockInvStatus" role="status"></p>`;
   try {
     const data = await stockApi('/documents?kind=inventory&limit=200');
     stockEl('stockInvList').innerHTML =
       data.documents
         .map(
           (d) =>
-            `<p><button onclick="stockOpenInventory(${Number(d.id)})">№${Number(d.id)} · ${stockDate(d.doc_date)}</button> ${stockDocBadge(d)}${d.status === 'draft' && Date.now() - new Date(d.doc_date) > 7 * 86400000 ? ' · Черновик старше 7 дней' : ''}</p>`,
+            `<p><button ${UIEvents.attrs("click","stock-inventory-2",[UIEvents.value(Number(d.id))])}>№${Number(d.id)} · ${stockDate(d.doc_date)}</button> ${stockDocBadge(d)}${d.status==='draft'&&Date.now()-new Date(d.doc_date)>7*86400000?' · Черновик старше 7 дней':''}</p>`,
         )
         .join('') || 'Инвентаризаций нет';
     if (_stockInv.doc) stockRenderInventory();
@@ -82,7 +78,7 @@ function stockRenderInventory() {
   const d = _stockInv.doc,
     rows = stockInvRows(d.lines);
   stockEl('stockInvBody').innerHTML =
-    `<h3>Инвентаризация №${Number(d.id)}</h3><p>Недостач: ${rows.filter((l) => l.diff < 0).length} · Излишков: ${rows.filter((l) => l.diff > 0).length}</p><table class="stock-table"><thead><tr><th>Товар</th><th>Ожидается</th><th>Факт, ед. списания</th><th>Разница</th></tr></thead><tbody>${rows.map((l) => `<tr><td data-label="Товар">${stockEsc(l.title)}</td><td data-label="Ожидается">${Number(l.expected_base)}</td><td data-label="Факт"><input aria-label="${stockEsc(l.title)}" type="number" min="0" step="any" value="${l.counted_base == null ? '' : Number(l.counted_base)}" ${d.status !== 'draft' ? 'disabled' : ''} oninput="stockInventoryChanged(${Number(l.good_row_id)},this.value)"> ${stockEsc(l.service_unit)}</td><td data-label="Разница" id="stockInvDiff-${Number(l.good_row_id)}">${l.diff ?? '—'}</td></tr>`).join('')}</tbody></table>${d.status === 'draft' ? '<button id="stockInvPost" onclick="stockPostInventory()">Провести</button>' : ''}`;
+    `<h3>Инвентаризация №${Number(d.id)}</h3><p>Недостач: ${rows.filter((l) => l.diff < 0).length} · Излишков: ${rows.filter((l) => l.diff > 0).length}</p><table class="stock-table"><thead><tr><th>Товар</th><th>Ожидается</th><th>Факт, ед. списания</th><th>Разница</th></tr></thead><tbody>${rows.map((l) => `<tr><td data-label="Товар">${stockEsc(l.title)}</td><td data-label="Ожидается">${Number(l.expected_base)}</td><td data-label="Факт"><input aria-label="${stockEsc(l.title)}" type="number" min="0" step="any" value="${l.counted_base==null?'':Number(l.counted_base)}" ${d.status!=='draft'?'disabled':''} ${UIEvents.attrs("input","stock-inventory-3",[UIEvents.value(Number(l.good_row_id))])}> ${stockEsc(l.service_unit)}</td><td data-label="Разница" id="stockInvDiff-${Number(l.good_row_id)}">${l.diff??'—'}</td></tr>`).join('')}</tbody></table>${d.status === 'draft' ? `<button id="stockInvPost" ${UIEvents.attrs("click","stock-inventory-4",[])}>Провести</button>` : ''}`;
 }
 function stockInventoryChanged(id, value) {
   if (_stockInv.posting) return;
@@ -155,7 +151,7 @@ async function stockPostInventory() {
 async function stockLoadTurnover() {
   const el = stockEl('stockTab-turnover');
   if (!stockEl('stockTurnoverRows'))
-    el.innerHTML = `<form class="stock-toolbar pb-wrap" onsubmit="event.preventDefault();stockLoadTurnover()">${stockInput('stockTurnoverFrom', 'С', stockToday().slice(0, 8) + '01', 'date', 'required')}${stockInput('stockTurnoverTo', 'По', stockToday(), 'date', 'required')}${stockSelect('stockTurnoverStorage', 'Склад', _stock.dictionaries.storages)}${stockInput('stockTurnoverCategory', 'Категория (ID или название)', '', 'text')}<button>Показать</button><button type="button" onclick="stockExportTurnover()">CSV</button></form><div id="stockTurnoverRows"></div>`;
+    el.innerHTML = `<form class="stock-toolbar pb-wrap" ${UIEvents.attrs("submit","stock-inventory-5",[])}>${stockInput('stockTurnoverFrom','С',stockToday().slice(0,8)+'01','date','required')}${stockInput('stockTurnoverTo','По',stockToday(),'date','required')}${stockSelect('stockTurnoverStorage','Склад',_stock.dictionaries.storages)}${stockInput('stockTurnoverCategory','Категория (ID или название)','','text')}<button>Показать</button><button type="button" ${UIEvents.attrs("click","stock-inventory-6",[])}>CSV</button></form><div id="stockTurnoverRows"></div>`;
   try {
     const q = new URLSearchParams({
       from: stockEl('stockTurnoverFrom').value,

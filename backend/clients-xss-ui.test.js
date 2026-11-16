@@ -25,7 +25,7 @@ function createContext(api) {
       };
     },
   };
-  const context = vm.createContext({
+  const context = vm.createContext({ UIEvents: require('../frontend/js/core/ui-events.js'),
     document,
     api,
     notify: jest.fn(),

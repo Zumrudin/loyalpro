@@ -74,22 +74,22 @@ function renderSegments(d) {
       const empty = s.client_count === 0;
       const hint = SEG_HINTS[s.key] || '';
       html += `
-        <div class="seg-card ${empty ? 'seg-empty-card' : ''}"
-             style="--seg-color:${s.color};border-color:${empty ? 'var(--bd)' : s.color + '44'}"
-             onclick="${empty ? '' : `segOpenDrawer('${s.key}')`}">
+        <div class="seg-card ${empty?'seg-empty-card':''}"
+             style="--seg-color:${s.color};border-color:${empty?'var(--bd)':s.color+'44'}"
+             ${UIEvents.attrs("click","segments-1",[UIEvents.value(empty),String(s.key)])}>
           <div class="seg-card-bar" style="background:${s.color}"></div>
-          ${hint ? `<div class="seg-tooltip">${esc(hint)}</div>` : ''}
+          ${hint?`<div class="seg-tooltip">${esc(hint)}</div>`:''}
           <div class="seg-card-top">
             <span class="seg-card-emoji">${s.emoji}</span>
-            ${s.client_count > 0 ? `<span class="seg-card-pct">${s.pct}%</span>` : ''}
+            ${s.client_count>0?`<span class="seg-card-pct">${s.pct}%</span>`:''}
           </div>
           <div class="seg-card-label">${esc(s.label)}</div>
           <div class="seg-card-count">${s.client_count.toLocaleString('ru')}</div>
-          ${s.client_count > 0 ? `
+          ${s.client_count>0?`
           <div class="seg-card-stats">
-            ${s.avg_check > 0 ? `<div class="seg-card-stat">Ср. чек <b>${s.avg_check.toLocaleString('ru')} ₽</b></div>` : ''}
-            ${s.avg_visits > 0 ? `<div class="seg-card-stat">Визитов <b>${s.avg_visits}</b></div>` : ''}
-          </div>` : '<div style="font-size:11px;color:var(--t3)">нет клиентов</div>'}
+            ${s.avg_check>0?`<div class="seg-card-stat">Ср. чек <b>${s.avg_check.toLocaleString('ru')} ₽</b></div>`:''}
+            ${s.avg_visits>0?`<div class="seg-card-stat">Визитов <b>${s.avg_visits}</b></div>`:''}
+          </div>`:'<div style="font-size:11px;color:var(--t3)">нет клиентов</div>'}
         </div>`;
     }
     html += '</div>';
@@ -155,7 +155,7 @@ async function loadSegDrawer() {
             <div class="seg-client-spent">${Math.round(parseFloat(c.total_spent || 0)).toLocaleString('ru')} ₽</div>
             <div class="seg-client-visits">${c.visits_count} визит.</div>
             ${ycUrl ? `<a href="${ycUrl}" target="_blank" rel="noopener"
-              onclick="event.stopPropagation()"
+              ${UIEvents.attrs("click","segments-2",[])}
               style="font-size:10px;color:var(--a);text-decoration:none;white-space:nowrap" title="Открыть в YClients">↗ YClients</a>` : ''}
           </div>
         </div>`;
@@ -166,8 +166,8 @@ async function loadSegDrawer() {
     if (pages > 1) {
       pg.innerHTML = `
         <span style="font-size:12px;color:var(--t3)">${d.page} / ${pages} стр. · ${total} клиентов</span><br>
-        ${d.page > 1 ? `<button class="btn btn-sec btn-sm" style="margin:4px" onclick="segDrawerGo(${d.page - 1})">← Назад</button>` : ''}
-        ${d.page < pages ? `<button class="btn btn-sec btn-sm" style="margin:4px" onclick="segDrawerGo(${d.page + 1})">Вперёд →</button>` : ''}`;
+        ${d.page > 1 ? `<button class="btn btn-sec btn-sm" style="margin:4px" ${UIEvents.attrs("click","segments-3",[UIEvents.value(d.page-1)])}>← Назад</button>` : ''}
+        ${d.page < pages ? `<button class="btn btn-sec btn-sm" style="margin:4px" ${UIEvents.attrs("click","segments-4",[UIEvents.value(d.page+1)])}>Вперёд →</button>` : ''}`;
     } else {
       pg.innerHTML = `<span style="font-size:12px;color:var(--t3)">${total} клиентов</span>`;
     }

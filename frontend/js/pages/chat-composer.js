@@ -114,8 +114,8 @@ function _cmpPickFile(file) {
   if (!CMP_FILE_CHANNELS.has(_cmpChannel())) { alert('Файлы можно отправить только в WhatsApp, Telegram или MAX'); return; }
   _cmpFile = file;
   const p = document.getElementById('chat-attach-preview');
-  p.innerHTML = `📎 ${_chatEsc(file.name)} <span style="color:var(--t3)">(${(file.size / 1024 / 1024).toFixed(1)} МБ)</span>
-    <button class="chat-tool-btn" style="font-size:14px" type="button" onclick="_cmpClearFile()">✕</button>`;
+  p.innerHTML = `📎 ${_chatEsc(file.name)} <span style="color:var(--t3)">(${(file.size/1024/1024).toFixed(1)} МБ)</span>
+    <button class="chat-tool-btn" style="font-size:14px" type="button" ${UIEvents.attrs("click","chat-composer-1",[])}>✕</button>`;
   p.style.display = 'flex';
 }
 

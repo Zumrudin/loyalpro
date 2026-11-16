@@ -92,13 +92,7 @@ function edcPaint(first) {
   const box = edcEl('edView-client');
   if (!box) return;
   if (first || !edcEl('edcHead')) {
-    box.innerHTML = '<button class="edc-back" onclick="edcBack()">← Документы</button><div id="edcHead"></div>'
-      + '<details id="edcData" class="edc-data" ontoggle="edcDataToggle(this)"><summary id="edcDataSum"></summary><div class="edc-body" id="edcDataBody"></div></details>'
-      + '<div class="edc-docs-head"><div><div class="ed-sub">Комплект на подпись</div><div class="ed-h" style="margin:0">Документы</div></div>'
-      + '<span class="ed-sub">Нажмите на карточку, чтобы добавить документ в отправку</span></div>'
-      + '<div id="edcDocs" class="edc-docs"></div><div id="edcSend" class="edc-send"></div>'
-      + '<div class="edc-two"><div class="card"><div class="ed-h2" style="margin-top:0">Визиты и акты</div><ul class="edc-tl" id="edcVisits"></ul></div>'
-      + '<div class="card"><div class="ed-h2" style="margin-top:0">История</div><ul class="edc-tl" id="edcHistory"></ul></div></div>';
+    box.innerHTML = `<button class="edc-back" ${UIEvents.attrs("click","edocs-client-1",[])}>← Документы</button><div id="edcHead"></div><details id="edcData" class="edc-data" ${UIEvents.attrs("toggle","edocs-client-2",[])}><summary id="edcDataSum"></summary><div class="edc-body" id="edcDataBody"></div></details><div class="edc-docs-head"><div><div class="ed-sub">Комплект на подпись</div><div class="ed-h" style="margin:0">Документы</div></div><span class="ed-sub">Нажмите на карточку, чтобы добавить документ в отправку</span></div><div id="edcDocs" class="edc-docs"></div><div id="edcSend" class="edc-send"></div><div class="edc-two"><div class="card"><div class="ed-h2" style="margin-top:0">Визиты и акты</div><ul class="edc-tl" id="edcVisits"></ul></div><div class="card"><div class="ed-h2" style="margin-top:0">История</div><ul class="edc-tl" id="edcHistory"></ul></div></div>`;
   }
   edcHeadRender();
   edcDataSumRender();
@@ -180,11 +174,10 @@ function edcFieldHtml(f) {
   const lbl = '<label class="fl" for="edcF-' + key + '">' + esc(label) + (required ? ' · обязательно' : '') + '</label>';
   let input;
   if (type === 'gender') {
-    input = '<select id="edcF-gender" onchange="edcFormChanged()"><option value=""></option><option value="F"' + (val === 'F' ? ' selected' : '') + '>женский</option>'
-      + '<option value="M"' + (val === 'M' ? ' selected' : '') + '>мужской</option></select>';
+    input = `<select id="edcF-gender" ${UIEvents.attrs("change","edocs-client-3",[])}><option value=""></option><option value="F"${val==='F'?' selected':''}>женский</option><option value="M"${val==='M'?' selected':''}>мужской</option></select>`;
   } else {
     const t = type === 'date' ? 'date' : type === 'tel' ? 'tel' : type === 'email' ? 'email' : 'text';
-    input = '<input type="' + t + '" id="edcF-' + key + '" value="' + escAttr(val) + '"' + (type === 'digits' ? ' inputmode="numeric"' : '') + ' oninput="edcFormChanged()">';
+    input = `<input type="${t}" id="edcF-${key}" value="${escAttr(val)}"${type==='digits'?' inputmode="numeric"':''} ${UIEvents.attrs("input","edocs-client-4",[])}>`;
   }
   let hint = '';
   if (key === 'contract_no') {
@@ -204,13 +197,7 @@ function edcDataBodyRender() {
     if (f[3]) fields += '<div class="edc-sect">' + esc(f[3]) + '</div>';
     fields += edcFieldHtml(f);
   }
-  body.innerHTML = '<div class="edc-tools"><label class="btn btn-sec btn-sm ed-file">📷 Распознать паспорт по фото<input type="file" accept="image/*" onchange="edcRecognize(this)"></label>'
-    + '<button class="btn btn-sec btn-sm" onclick="edcPrefill()">↻ Подставить из YClients</button>'
-    + '<button class="btn btn-sec btn-sm" onclick="edFormOpen(' + id + ')">✉ Анкета пациенту</button></div>'
-    + (_edc.notes.length ? '<div class="ed-note">' + _edc.notes.map(esc).join('<br>') + '</div>' : '')
-    + '<div class="edc-fields">' + fields + '</div>'
-    + '<div class="ed-actions"><button class="btn btn-pri" id="edcSaveBtn" onclick="edcSaveIdentity()">Сохранить данные</button>'
-    + '<span class="ed-sub" id="edcIdentityState">' + (_edc.unsaved ? 'Данные ещё не сохранены' : 'Сохранено') + '</span></div>';
+  body.innerHTML = `<div class="edc-tools"><label class="btn btn-sec btn-sm ed-file">📷 Распознать паспорт по фото<input type="file" accept="image/*" ${UIEvents.attrs("change","edocs-client-5",[])}></label><button class="btn btn-sec btn-sm" ${UIEvents.attrs("click","edocs-client-6",[])}>↻ Подставить из YClients</button><button class="btn btn-sec btn-sm" ${UIEvents.attrs("click","edocs-client-7",[UIEvents.value(id)])}>✉ Анкета пациенту</button></div>${_edc.notes.length?'<div class="ed-note">'+_edc.notes.map(esc).join('<br>')+'</div>':''}<div class="edc-fields">${fields}</div><div class="ed-actions"><button class="btn btn-pri" id="edcSaveBtn" ${UIEvents.attrs("click","edocs-client-8",[])}>Сохранить данные</button><span class="ed-sub" id="edcIdentityState">${_edc.unsaved?'Данные ещё не сохранены':'Сохранено'}</span></div>`;
   edcMarkMissing();
 }
 
@@ -304,22 +291,19 @@ function edcDocCard(kind, tpl, st, visit) {
   const title = kind === 'act' && visit ? tpl.title + ' · визит ' + edFmtDate(visit.day) : tpl.title;
   const neuter = kind === 'consent_pd';
   let cls = 'ed-c-' + edcTone(st), sub = '', status = '', acts = '', badge = '', selectable = false;
-  const icons = (withEdit) => '<button class="edc-ib" title="Посмотреть документ (DOCX)" onclick="event.stopPropagation();edcPreview(' + tpl.id + ')">👁</button>'
-    + (withEdit ? '<button class="edc-ib" title="Ручная правка" onclick="event.stopPropagation();edcEdit(\'' + kind + '\',' + tpl.id + ')">✎</button>' : '')
-    + '<button class="edc-ib" title="Подписано на бумаге" onclick="event.stopPropagation();edcPaperOpen(' + tpl.id + ')">📎</button>';
+  const icons = (withEdit) => `<button class="edc-ib" title="Посмотреть документ (DOCX)" ${UIEvents.attrs("click","edocs-client-9",[UIEvents.value(tpl.id)])}>👁</button>${withEdit?`<button class="edc-ib" title="Ручная правка" ${UIEvents.attrs("click","edocs-client-11",[String(kind),UIEvents.value(tpl.id)])}>✎</button>`:''}<button class="edc-ib" title="Подписано на бумаге" ${UIEvents.attrs("click","edocs-client-10",[UIEvents.value(tpl.id)])}>📎</button>`;
   if (st.state === 'signed') {
     cls += ' done';
     badge = neuter ? 'Подписано' : 'Подписан';
     sub = badge + ' ' + edFmtDateTime(st.at).slice(0, 10) + (st.paper ? ' на бумаге' : ' по SMS');
     status = '✓ ' + badge;
-    acts = st.packageId ? '<button class="edc-ib" title="Комплект" onclick="event.stopPropagation();edGo(\'p/' + st.packageId + '\')">📂</button>' : '';
+    acts = st.packageId ? `<button class="edc-ib" title="Комплект" ${UIEvents.attrs("click","edocs-client-12",[String(st.packageId)])}>📂</button>` : '';
   } else if (st.state === 'pending') {
     cls += ' done';
     badge = 'Ждём подпись';
     sub = 'Отправлен ' + edFmtDateTime(st.at) + ' — пациент подписывает по SMS-ссылке';
     status = '● Ждём подпись';
-    acts = '<button class="edc-ib" title="Отправить ссылку ещё раз" onclick="event.stopPropagation();edcRemind(\'' + st.packageId + '\')">↻</button>'
-      + '<button class="edc-ib" title="Комплект" onclick="event.stopPropagation();edGo(\'p/' + st.packageId + '\')">📂</button>';
+    acts = `<button class="edc-ib" title="Отправить ссылку ещё раз" ${UIEvents.attrs("click","edocs-client-13",[String(st.packageId)])}>↻</button><button class="edc-ib" title="Комплект" ${UIEvents.attrs("click","edocs-client-14",[String(st.packageId)])}>📂</button>`;
   } else if (EDC_BAD.indexOf(st.state) >= 0) {
     selectable = true;
     sub = kind === 'act' ? (st.state === 'missing' ? 'Визит оплачен в YClients — нужен акт' : '')
@@ -342,7 +326,7 @@ function edcDocCard(kind, tpl, st, visit) {
     sub = 'Нет шаблона';
   }
   if (selectable && sel) cls += ' sel';
-  return '<article class="edc-doc ' + cls + '"' + (selectable ? ' onclick="edcToggle(' + tpl.id + ')"' : '') + '>'
+  return '<article class="edc-doc ' + cls + '"' + (selectable ? ` ${UIEvents.attrs("click","edocs-client-15",[UIEvents.value(tpl.id)])}` : '') + '>'
     + (selectable ? '<span class="edc-chk">' + (sel ? '✓' : '') + '</span>' : (badge ? '<span class="edc-badge">' + esc(badge) + '</span>' : ''))
     + '<div class="edc-sheet">' + icon + '</div><h3>' + esc(title) + '</h3><div class="edc-dsub">' + esc(sub) + '</div>'
     + '<div class="edc-dst">' + esc(status) + '<span class="edc-dact">' + acts + '</span></div></article>';
@@ -363,10 +347,7 @@ function edcDocsRender() {
   }
   for (const t of p.templates.filter((x) => x.kind === 'other')) {
     const sel = _edc.selected.has(t.id);
-    cards.push('<article class="edc-doc ed-c-grey' + (sel ? ' sel' : '') + '" onclick="edcToggle(' + t.id + ')"><span class="edc-chk">' + (sel ? '✓' : '') + '</span>'
-      + '<div class="edc-sheet">📄</div><h3>' + esc(t.title) + '</h3><div class="edc-dsub">Дополнительный документ — по необходимости</div>'
-      + '<div class="edc-dst">○ По необходимости<span class="edc-dact"><button class="edc-ib" title="Посмотреть документ (DOCX)" onclick="event.stopPropagation();edcPreview(' + t.id + ')">👁</button>'
-      + '<button class="edc-ib" title="Подписано на бумаге" onclick="event.stopPropagation();edcPaperOpen(' + t.id + ')">📎</button></span></div></article>');
+    cards.push(`<article class="edc-doc ed-c-grey${sel?' sel':''}" ${UIEvents.attrs("click","edocs-client-16",[UIEvents.value(t.id)])}><span class="edc-chk">${sel?'✓':''}</span><div class="edc-sheet">📄</div><h3>${esc(t.title)}</h3><div class="edc-dsub">Дополнительный документ — по необходимости</div><div class="edc-dst">○ По необходимости<span class="edc-dact"><button class="edc-ib" title="Посмотреть документ (DOCX)" ${UIEvents.attrs("click","edocs-client-17",[UIEvents.value(t.id)])}>👁</button><button class="edc-ib" title="Подписано на бумаге" ${UIEvents.attrs("click","edocs-client-18",[UIEvents.value(t.id)])}>📎</button></span></div></article>`);
   }
   el.innerHTML = cards.join('');
 }
@@ -410,11 +391,7 @@ function edcSendRender() {
   const sel = edcSelectedTemplates();
   const reason = edcBlockReason();
   const phone = _edc.page.client.phone ? edPhone(_edc.page.client.phone) : 'номер не указан';
-  el.innerHTML = '<div class="grow">' + esc(sel.length ? 'Выбрано: ' + sel.map((t) => t.title).join(', ') : 'Ничего не выбрано')
-    + '<small>' + esc(reason || ('SMS-ссылка F.Doc на ' + phone + ' · пациент подпишет кодом из SMS')) + '</small></div>'
-    + '<button class="btn btn-sec btn-sm" onclick="edcPaperOpen()">Подписано на бумаге</button>'
-    + '<button class="btn btn-sec btn-sm" onclick="edcPreviewSelected()">Предпросмотр</button>'
-    + '<button class="btn btn-pri" id="edcSendBtn" onclick="edcSend()"' + (reason || _ed.sending ? ' disabled' : '') + '>' + (_ed.sending ? 'Отправляем…' : 'Отправить на подпись →') + '</button>';
+  el.innerHTML = `<div class="grow">${esc(sel.length?'Выбрано: '+sel.map(t=>t.title).join(', '):'Ничего не выбрано')}<small>${esc(reason||'SMS-ссылка F.Doc на '+phone+' · пациент подпишет кодом из SMS')}</small></div><button class="btn btn-sec btn-sm" ${UIEvents.attrs("click","edocs-client-19",[])}>Подписано на бумаге</button><button class="btn btn-sec btn-sm" ${UIEvents.attrs("click","edocs-client-20",[])}>Предпросмотр</button><button class="btn btn-pri" id="edcSendBtn" ${UIEvents.attrs("click","edocs-client-21",[])}${reason||_ed.sending?' disabled':''}>${_ed.sending?'Отправляем…':'Отправить на подпись →'}</button>`;
 }
 
 /** Тело запроса к /packages и /packages/preview: визит и правленые строки, если в наборе акт. */
@@ -495,17 +472,8 @@ function edcActEdit() {
   const box = edcEl('edActBody');
   if (!box) return;
   if (!a || a.error) { notify((a && a.error) || 'Выберите визит для акта', 'err'); return; }
-  const cell = (i, key, val, mode) => '<td><input type="text"' + (mode ? ' inputmode="decimal"' : '') + ' value="' + escAttr(String(val === null || val === undefined ? '' : val))
-    + '" oninput="edcActCell(' + i + ',\'' + key + '\',this.value)"></td>';
-  box.innerHTML = '<div class="ed-sub">Врач: ' + esc(a.doctor.name || '—') + (a.doctor.position ? ', ' + esc(a.doctor.position) : '') + ' · визит ' + esc(edFmtDate(a.visitDate))
-    + ' · номер акта ' + esc(a.actNo) + '. Правка действует только для этого акта.</div>'
-    + '<div class="tw mtbl-wrap"><table class="ed-act-edit mtbl"><thead><tr><th></th><th>Услуга</th><th>Кол-во</th><th>Цена</th><th>Сумма</th></tr></thead><tbody>'
-    + a.rows.map((r, i) => '<tr class="' + (r.include ? '' : 'off') + '"><td><input type="checkbox"' + (r.include ? ' checked' : '') + ' onchange="edcActCell(' + i + ',\'include\',this.checked)"></td>'
-      + cell(i, 'title', r.title) + cell(i, 'qty', r.qty, true) + cell(i, 'price', r.price, true) + cell(i, 'sum', r.sum, true) + '</tr>').join('')
-    + '</tbody></table></div><div class="ed-actions"><button class="btn btn-sec btn-sm" onclick="edcActAdd()">＋ Строка</button>'
-    + '<button class="btn btn-sec btn-sm" onclick="edcActReset()">↺ Как в YClients</button><span class="ed-total" id="edcActTotal"></span></div>'
-    + '<div id="edcActDiff"></div><div class="ed-actions"><button class="btn btn-pri" onclick="edcActSave()">Сохранить</button>'
-    + '<button class="btn btn-sec" onclick="edcPreviewAct()">Предпросмотр</button></div>';
+  const cell = (i, key, val, mode) => `<td><input type="text"${mode?' inputmode="decimal"':''} value="${escAttr(String(val===null||val===undefined?'':val))}" ${UIEvents.attrs("input","edocs-client-22",[UIEvents.value(i),String(key)])}></td>`;
+  box.innerHTML = `<div class="ed-sub">Врач: ${esc(a.doctor.name||'—')}${a.doctor.position?', '+esc(a.doctor.position):''} · визит ${esc(edFmtDate(a.visitDate))} · номер акта ${esc(a.actNo)}. Правка действует только для этого акта.</div><div class="tw mtbl-wrap"><table class="ed-act-edit mtbl"><thead><tr><th></th><th>Услуга</th><th>Кол-во</th><th>Цена</th><th>Сумма</th></tr></thead><tbody>${a.rows.map((r,i)=>`<tr class="${r.include?'':'off'}"><td><input type="checkbox"${r.include?' checked':''} ${UIEvents.attrs("change","edocs-client-27",[UIEvents.value(i)])}></td>${cell(i,'title',r.title)}${cell(i,'qty',r.qty,true)}${cell(i,'price',r.price,true)}${cell(i,'sum',r.sum,true)}</tr>`).join('')}</tbody></table></div><div class="ed-actions"><button class="btn btn-sec btn-sm" ${UIEvents.attrs("click","edocs-client-23",[])}>＋ Строка</button><button class="btn btn-sec btn-sm" ${UIEvents.attrs("click","edocs-client-24",[])}>↺ Как в YClients</button><span class="ed-total" id="edcActTotal"></span></div><div id="edcActDiff"></div><div class="ed-actions"><button class="btn btn-pri" ${UIEvents.attrs("click","edocs-client-25",[])}>Сохранить</button><button class="btn btn-sec" ${UIEvents.attrs("click","edocs-client-26",[])}>Предпросмотр</button></div>`;
   openModal('edActModal');
   edcActTotal();
 }
@@ -552,9 +520,7 @@ async function edcDocEdit(kind, templateId) {
     html += '<div class="fg"><label class="fl" for="edcE-no">Номер договора</label><input id="edcE-no" value="' + escAttr(_edc.form.contract_no || '') + '" placeholder="' + escAttr(ph) + '"></div>'
       + '<div class="fg"><label class="fl" for="edcE-date">Дата договора</label><input type="date" id="edcE-date" value="' + escAttr(_edc.form.contract_date || '') + '"></div>';
   }
-  html += '<div class="fg"><label class="fl" for="edcE-doc">Дата документа (пусто — сегодня)</label><input type="date" id="edcE-doc" value="' + escAttr(_edc.docDate) + '"></div>'
-    + '<div class="ed-actions"><button class="btn btn-pri" onclick="edcDocSave(\'' + kind + '\',' + templateId + ')">Сохранить</button>'
-    + '<button class="btn btn-sec" onclick="edcDocSave(\'' + kind + '\',' + templateId + ',true)">Предпросмотр</button></div>';
+  html += `<div class="fg"><label class="fl" for="edcE-doc">Дата документа (пусто — сегодня)</label><input type="date" id="edcE-doc" value="${escAttr(_edc.docDate)}"></div><div class="ed-actions"><button class="btn btn-pri" ${UIEvents.attrs("click","edocs-client-28",[String(kind),UIEvents.value(templateId)])}>Сохранить</button><button class="btn btn-sec" ${UIEvents.attrs("click","edocs-client-29",[String(kind),UIEvents.value(templateId)])}>Предпросмотр</button></div>`;
   box.innerHTML = html;
   openModal('edDocModal');
 }
@@ -589,12 +555,7 @@ function edcPaperOpen(templateId) {
   for (const k of ['contract', 'consent_pd']) if (p.kinds[k]) opts.push({ t: p.kinds[k], label: p.kinds[k].title });
   if (p.kinds.act && focus && focus.arrived) opts.push({ t: p.kinds.act, label: p.kinds.act.title + ' · визит ' + edFmtDate(focus.day) });
   for (const t of p.templates.filter((x) => x.kind === 'other')) opts.push({ t, label: t.title });
-  box.innerHTML = '<div class="ed-sub" style="margin-bottom:8px">Документ будет считаться подписанным. Приложите фото или скан — он сохранится у пациента.</div>'
-    + opts.map((o) => '<label class="ed-switch"><input type="checkbox" class="edcP-t" value="' + o.t.id + '"' + (pre.has(o.t.id) ? ' checked' : '') + '> ' + esc(o.label) + '</label>').join('')
-    + '<div class="fg" style="margin-top:10px"><label class="fl" for="edcP-date">Дата подписания</label><input type="date" id="edcP-date" value="' + escAttr(p.today) + '"></div>'
-    + '<div class="fg"><label class="fl" for="edcP-note">Комментарий</label><input id="edcP-note" placeholder="необязательно"></div>'
-    + '<div class="fg"><label class="fl" for="edcP-file">Скан или фото (JPG, PNG, WEBP, PDF до 10 МБ)</label><input type="file" id="edcP-file" accept="image/jpeg,image/png,image/webp,application/pdf"></div>'
-    + '<div class="ed-actions"><button class="btn btn-pri" id="edcP-btn" onclick="edcPaperSave()">Отметить подписанным</button><button class="btn btn-sec" onclick="closeModal(\'edPaperModal\')">Отмена</button></div>';
+  box.innerHTML = `<div class="ed-sub" style="margin-bottom:8px">Документ будет считаться подписанным. Приложите фото или скан — он сохранится у пациента.</div>${opts.map(o=>'<label class="ed-switch"><input type="checkbox" class="edcP-t" value="'+o.t.id+'"'+(pre.has(o.t.id)?' checked':'')+'> '+esc(o.label)+'</label>').join('')}<div class="fg" style="margin-top:10px"><label class="fl" for="edcP-date">Дата подписания</label><input type="date" id="edcP-date" value="${escAttr(p.today)}"></div><div class="fg"><label class="fl" for="edcP-note">Комментарий</label><input id="edcP-note" placeholder="необязательно"></div><div class="fg"><label class="fl" for="edcP-file">Скан или фото (JPG, PNG, WEBP, PDF до 10 МБ)</label><input type="file" id="edcP-file" accept="image/jpeg,image/png,image/webp,application/pdf"></div><div class="ed-actions"><button class="btn btn-pri" id="edcP-btn" ${UIEvents.attrs("click","edocs-client-30",[])}>Отметить подписанным</button><button class="btn btn-sec" ${UIEvents.attrs("click","edocs-client-31",[])}>Отмена</button></div>`;
   openModal('edPaperModal');
 }
 async function edcPaperSave() {
@@ -627,9 +588,7 @@ function edcVisitsRender() {
   if (!el) return;
   if (!p.visits.length) { el.innerHTML = '<li class="ed-sub">Визитов за последние 90 дней и ближайший месяц нет</li>'; return; }
   const dot = { ok: 'green', wait: 'blue', no: 'red', soon: 'amber', na: 'grey' };
-  el.innerHTML = p.visits.map((v) => '<li class="click' + (v.recordId === p.focusRecordId ? ' focus' : '') + '" onclick="edcSetFocus(' + v.recordId + ')">'
-    + '<span class="edc-tdot ed-c-' + (dot[v.tile.tone] || 'grey') + '" style="background:var(--c)"></span><time>' + esc(edFmtDate(v.day).slice(0, 5) + (v.time ? ' · ' + v.time : '')) + '</time>'
-    + '<span class="grow">' + esc(v.services.join(', ') || '—') + (v.staffName ? ' · ' + esc(v.staffName) : '') + ' — акт: ' + esc(v.tile.text) + '</span></li>').join('');
+  el.innerHTML = p.visits.map((v) => `<li class="click${v.recordId===p.focusRecordId?' focus':''}" ${UIEvents.attrs("click","edocs-client-32",[UIEvents.value(v.recordId)])}><span class="edc-tdot ed-c-${dot[v.tile.tone]||'grey'}" style="background:var(--c)"></span><time>${esc(edFmtDate(v.day).slice(0,5)+(v.time?' · '+v.time:''))}</time><span class="grow">${esc(v.services.join(', ')||'—')}${v.staffName?' · '+esc(v.staffName):''} — акт: ${esc(v.tile.text)}</span></li>`).join('');
 }
 async function edcSetFocus(recordId) {
   if (!_edc.page || recordId === _edc.page.focusRecordId) return;
@@ -649,7 +608,7 @@ function edcHistoryRender() {
   if (!el) return;
   if (!p.events.length) { el.innerHTML = '<li class="ed-sub">Событий пока нет</li>'; return; }
   const color = (k) => (/error|revoke|expired/.test(k) ? 'red' : /sent|send|permalink|form_created|form_opened/.test(k) ? 'blue' : /paper|submitted|pdf|docs_sent/.test(k) ? 'green' : 'grey');
-  el.innerHTML = p.events.map((e) => '<li' + (e.packageId ? ' class="click" onclick="edGo(\'p/' + e.packageId + '\')"' : '') + '>'
+  el.innerHTML = p.events.map((e) => '<li' + (e.packageId ? ` class="click" ${UIEvents.attrs("click","edocs-client-33",[String(e.packageId)])}` : '') + '>'
     + '<span class="edc-tdot ed-c-' + color(e.kind) + '" style="background:var(--c)"></span><time>' + esc(edFmtDateTime(e.createdAt)) + '</time><span class="grow">'
     + esc(ED_EVENT_LABELS[e.kind] || e.kind) + (e.kind === 'status' && e.payload && e.payload.to ? ': ' + esc(edStatusInfo(e.payload.to).label) : '')
     + (e.kind === 'contract_no' && e.payload && e.payload.contractNo ? ' № ' + esc(e.payload.contractNo) : '')
@@ -679,13 +638,7 @@ function edFormRender(note) {
   const f = _edForm;
   const box = edcEl('edFormBody');
   if (!box || !f) return;
-  box.innerHTML = '<div class="ed-qr"><img src="' + escAttr(f.qr) + '" alt="QR-код анкеты"><div class="grow"><div style="font-size:13px;line-height:1.5">'
-    + 'Пациент сканирует код своим телефоном и сам вносит паспорт — вводить ничего не нужно.' + (edCanSend() ? ' Сразу после заполнения документы уйдут на подпись.' : '')
-    + '</div><div class="ed-urlbox">' + esc(f.url) + '</div><div class="ed-sub">Ссылка действует до ' + esc(edFmtDateTime(f.expiresAt)) + '</div></div></div>'
-    + (note ? '<div class="ed-note" style="margin-top:10px">' + esc(note) + '</div>' : '')
-    + '<div class="ed-actions"><button class="btn btn-pri" id="edFormSendBtn" onclick="edFormSend()">✉ Отправить в мессенджер</button>'
-    + '<button class="btn btn-sec" onclick="edFormCopy()">Скопировать ссылку</button><button class="btn btn-sec btn-dng" onclick="edFormRevoke()">Отозвать</button>'
-    + '<button class="btn btn-sec" onclick="closeModal(\'edFormModal\')">Готово</button></div>';
+  box.innerHTML = `<div class="ed-qr"><img src="${escAttr(f.qr)}" alt="QR-код анкеты"><div class="grow"><div style="font-size:13px;line-height:1.5">Пациент сканирует код своим телефоном и сам вносит паспорт — вводить ничего не нужно.${edCanSend()?' Сразу после заполнения документы уйдут на подпись.':''}</div><div class="ed-urlbox">${esc(f.url)}</div><div class="ed-sub">Ссылка действует до ${esc(edFmtDateTime(f.expiresAt))}</div></div></div>${note?'<div class="ed-note" style="margin-top:10px">'+esc(note)+'</div>':''}<div class="ed-actions"><button class="btn btn-pri" id="edFormSendBtn" ${UIEvents.attrs("click","edocs-client-34",[])}>✉ Отправить в мессенджер</button><button class="btn btn-sec" ${UIEvents.attrs("click","edocs-client-35",[])}>Скопировать ссылку</button><button class="btn btn-sec btn-dng" ${UIEvents.attrs("click","edocs-client-36",[])}>Отозвать</button><button class="btn btn-sec" ${UIEvents.attrs("click","edocs-client-37",[])}>Готово</button></div>`;
 }
 async function edFormSend() {
   const f = _edForm;

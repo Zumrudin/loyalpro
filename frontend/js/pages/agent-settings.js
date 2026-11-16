@@ -73,8 +73,8 @@ function _renderAgentList(type) {
   if (!rows.length) { el.innerHTML = '<div class="empty">Пусто</div>'; return; }
   el.innerHTML = rows.map(r => `
     <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:4px 0">
-      <span>${_agEsc(r.phone)}${r.note ? ` — ${_agEsc(r.note)}` : ''}</span>
-      <button class="btn btn-sec" onclick="removeAgentNumber(${r.id})">✕</button>
+      <span>${_agEsc(r.phone)}${r.note?` — ${_agEsc(r.note)}`:''}</span>
+      <button class="btn btn-sec" ${UIEvents.attrs("click","agent-settings-1",[UIEvents.value(r.id)])}>✕</button>
     </div>`).join('');
 }
 

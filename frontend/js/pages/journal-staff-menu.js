@@ -7,7 +7,7 @@ function jrStaffMenuButton(staff, date, label) {
     ? '<button type="button" role="menuitem" data-staff-action="break">Добавить перерыв</button><button type="button" role="menuitem" data-staff-action="remove">Убрать рабочий день</button>'
     : '<button type="button" role="menuitem" data-staff-action="add">Добавить рабочий день</button>';
   const sync = staff.scheduleSync;
-  const status = sync ? `<button type="button" class="jr-schedule-status${sync.status === 'failed' ? ' is-error' : ''}" onclick="jrScheduleChangesOpen()">${sync.status === 'failed' ? 'График не отправлен: ошибка' : sync.status === 'done' ? 'График отправлен' : sync.released ? 'График отправляется…' : 'График ждёт отправки'}</button>` : '';
+  const status = sync ? `<button type="button" class="jr-schedule-status${sync.status==='failed'?' is-error':''}" ${UIEvents.attrs("click","journal-staff-menu-1",[])}>${sync.status==='failed'?'График не отправлен: ошибка':sync.status==='done'?'График отправлен':sync.released?'График отправляется…':'График ждёт отправки'}</button>` : '';
   return `${status}<div class="jr-staff-menu" data-staff-menu><button type="button" class="jr-staff-menu-toggle" data-staff-menu-toggle data-staff="${id}" data-date="${jrEscape(date)}" data-name="${jrEscape(staff.name || '')}" data-working="${working ? 1 : 0}" aria-haspopup="menu" aria-expanded="false" aria-controls="${jrEscape(menuId)}" aria-label="${jrEscape(`График: ${staff.name || ''}, ${date}`)}"><span>${jrEscape(label)}</span><span aria-hidden="true">▾</span></button><div class="jr-staff-menu-list" id="${jrEscape(menuId)}" role="menu" hidden>${actions}</div></div>`;
 }
 function jrStaffMenuClose(focus = false) {
@@ -116,13 +116,13 @@ function jrScheduleOpenForm(context, action, options = {}) {
     : `<label>Сотрудник<input id="jrScheduleStaff" value="${jrEscape(context.name)}" readonly></label>`;
   const times = action === 'remove' ? '' : action === 'add' ? jrScheduleAddFields()
     : '<div class="jr-schedule-times"><label>Начало<input type="time" id="jrScheduleStart" required step="300"></label><label>Окончание<input type="time" id="jrScheduleEnd" required step="300"></label></div>';
-  jrEl('jrModalBody').innerHTML = `<form id="jrScheduleForm" class="jr-schedule-form${action === 'add' ? ' jr-schedule-add-form' : ''}">
+  jrEl('jrModalBody').innerHTML = `<form id="jrScheduleForm" class="jr-schedule-form${action==='add'?' jr-schedule-add-form':''}">
     <p class="jr-hint">Изменение сохранится только в журнале. В YClients оно уйдёт через «Отправить в YClients».</p>
     ${staffField}
     <label>Дата<input type="date" id="jrScheduleDate" value="${jrEscape(context.date)}" readonly></label>
     ${times}
-    ${action === 'remove' ? '<p class="jr-schedule-warning">Рабочие интервалы на весь день будут убраны. Записи не отменяются; при пересечении изменение будет отклонено.</p>' : ''}
-    <div class="jr-actions"><button type="button" class="btn btn-sec" onclick="jrClose(true)">Отмена</button><button type="submit" class="btn btn-pri" id="jrScheduleSave">${action === 'remove' ? 'Убрать день' : action === 'add' ? 'Добавить' : 'Сохранить в журнале'}</button></div>
+    ${action==='remove'?'<p class="jr-schedule-warning">Рабочие интервалы на весь день будут убраны. Записи не отменяются; при пересечении изменение будет отклонено.</p>':''}
+    <div class="jr-actions"><button type="button" class="btn btn-sec" ${UIEvents.attrs("click","journal-staff-menu-2",[])}>Отмена</button><button type="submit" class="btn btn-pri" id="jrScheduleSave">${action==='remove'?'Убрать день':action==='add'?'Добавить':'Сохранить в журнале'}</button></div>
   </form>`;
   jrEl('jrScheduleForm').onsubmit = event => { event.preventDefault(); jrStaffScheduleSave(); };
   if (action === 'add') jrScheduleBindAddControls();

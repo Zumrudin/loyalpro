@@ -10,6 +10,8 @@ module.exports = {
   // Server
   PORT: process.env.PORT || 3001,
   BIND_HOST: process.env.BIND_HOST || '127.0.0.1',
+  REGISTRATION_MODE: process.env.REGISTRATION_MODE || 'invite',
+  LLM_PAID_ENABLED: process.env.LLM_PAID_ENABLED !== 'false',
 
   // Official MAX loyalty bot. Separate from the clinic's MAX user-account gateway.
   // One server-configured bot/salon per process; no tenant ids accepted from updates.
@@ -72,6 +74,7 @@ module.exports = {
     salonDailyCalls: Number(process.env.KB_SALON_DAILY_CALLS || 100),
     salonMonthlyCalls: Number(process.env.KB_SALON_MONTHLY_CALLS || 2000),
     globalDailyCalls: Number(process.env.KB_GLOBAL_DAILY_CALLS || 5000),
+    paidDailyCalls: Number(process.env.LLM_PAID_DAILY_CALLS || 1000),
   },
 
   WEBHOOK_RATE_LIMIT: {

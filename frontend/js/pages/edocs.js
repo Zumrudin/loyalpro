@@ -180,11 +180,7 @@ function edSendOutcome(r) {
 async function edRenderList(seq) {
   const box = document.getElementById('edView-list');
   if (!box) return;
-  box.innerHTML = '<div class="ed-toolbar"><select id="edListStatus" onchange="edSetListStatus(this.value)"><option value="">Все статусы</option>'
-    + Object.keys(ED_STATUS).map((k) => '<option value="' + k + '"' + (_ed.listStatus === k ? ' selected' : '') + '>' + esc(ED_STATUS[k].label) + '</option>').join('')
-    + '</select><input type="date" id="edListFrom" value="' + escAttr(_ed.listFrom) + '" onchange="edSetListPeriod()" title="Создан с">'
-    + '<input type="date" id="edListTo" value="' + escAttr(_ed.listTo) + '" onchange="edSetListPeriod()" title="Создан по"></div><div class="card ed-tbl-card"><div class="tw mtbl-wrap"><table class="mtbl"><thead><tr><th>Создан</th><th>Пациент</th><th>Комплект</th><th>Статус</th><th>Отправил</th></tr></thead>'
-    + '<tbody id="edListBody"><tr><td colspan="5" class="empty">Загрузка…</td></tr></tbody></table></div></div>';
+  box.innerHTML = `<div class="ed-toolbar"><select id="edListStatus" ${UIEvents.attrs("change","edocs-1",[])}><option value="">Все статусы</option>${Object.keys(ED_STATUS).map(k=>'<option value="'+k+'"'+(_ed.listStatus===k?' selected':'')+'>'+esc(ED_STATUS[k].label)+'</option>').join('')}</select><input type="date" id="edListFrom" value="${escAttr(_ed.listFrom)}" ${UIEvents.attrs("change","edocs-2",[])} title="Создан с"><input type="date" id="edListTo" value="${escAttr(_ed.listTo)}" ${UIEvents.attrs("change","edocs-3",[])} title="Создан по"></div><div class="card ed-tbl-card"><div class="tw mtbl-wrap"><table class="mtbl"><thead><tr><th>Создан</th><th>Пациент</th><th>Комплект</th><th>Статус</th><th>Отправил</th></tr></thead><tbody id="edListBody"><tr><td colspan="5" class="empty">Загрузка…</td></tr></tbody></table></div></div>`;
   await edLoadList();
   if (seq !== _ed.loadSeq) return;   // ушли, пока грузили, — опрос не заводим
   edClearTimer();
@@ -207,13 +203,7 @@ async function edLoadList() {
     if (!d.rows.length) { tb.innerHTML = '<tr><td colspan="5" class="empty">Комплектов пока нет</td></tr>'; return; }
     tb.innerHTML = d.rows.map((p) => {
       const st = edStatusInfo(p.status);
-      return '<tr class="ed-row" onclick="edGo(\'p/' + p.id + '\')">'
-        + '<td data-label="Создан">' + esc(edFmtDateTime(p.createdAt)) + '</td>'
-        + '<td class="mtbl-title"><strong>' + esc(p.clientName || '—') + '</strong> <span class="ed-sub">' + esc(edPhone(p.clientPhone)) + '</span></td>'
-        + '<td data-label="Комплект">' + esc(p.title) + '</td>'
-        + '<td data-label="Статус"><span class="badge ' + st.cls + '">' + esc(st.label) + '</span>'
-        + (p.lastError && p.status === 'draft' ? '<div class="ed-err">' + esc(p.lastError) + '</div>' : '') + '</td>'
-        + '<td data-label="Отправил">' + esc(p.sentByName || '—') + '</td></tr>';
+      return `<tr class="ed-row" ${UIEvents.attrs("click","edocs-4",[String(p.id)])}><td data-label="Создан">${esc(edFmtDateTime(p.createdAt))}</td><td class="mtbl-title"><strong>${esc(p.clientName||'—')}</strong> <span class="ed-sub">${esc(edPhone(p.clientPhone))}</span></td><td data-label="Комплект">${esc(p.title)}</td><td data-label="Статус"><span class="badge ${st.cls}">${esc(st.label)}</span>${p.lastError&&p.status==='draft'?'<div class="ed-err">'+esc(p.lastError)+'</div>':''}</td><td data-label="Отправил">${esc(p.sentByName||'—')}</td></tr>`;
     }).join('');
   } catch (e) { tb.innerHTML = '<tr><td colspan="5" class="empty">' + esc(e.message) + '</td></tr>'; }
 }
@@ -246,7 +236,7 @@ async function edLoadPackage(id, quiet) {
     + '<div class="ed-actions">' + edPackageActions(p) + '</div></div>'
     + '<div class="card mb"><div class="ed-h2">Документы</div><div class="tw mtbl-wrap"><table class="mtbl"><thead><tr><th>Документ</th><th>Подпись клиники</th><th>Подпись пациента</th><th></th></tr></thead><tbody>'
     + p.documents.map((d) => '<tr><td class="mtbl-title">' + esc(d.title) + '</td><td data-label="Клиника">' + esc(edFmtDateTime(d.corpSignedAt)) + '</td>'
-      + '<td data-label="Пациент">' + esc(edFmtDateTime(d.clientSignedAt)) + '</td><td>' + (d.hasPdf ? '<button class="btn btn-sec btn-sm" onclick="edOpenPdf(\'' + d.id + '\')">PDF</button>' : '') + '</td></tr>').join('')
+      + '<td data-label="Пациент">' + esc(edFmtDateTime(d.clientSignedAt)) + '</td><td>' + (d.hasPdf ? `<button class="btn btn-sec btn-sm" ${UIEvents.attrs("click","edocs-5",[String(d.id)])}>PDF</button>` : '') + '</td></tr>').join('')
     + '</tbody></table></div></div>'
     + (p.act ? edActSummaryHtml(p.act) : '')
     + (p.paper ? '<div class="card mb"><div class="ed-h2">Подписано на бумаге</div><div class="ed-sub">Дата подписания: ' + esc(edFmtDate(p.paper.signedDate))
@@ -265,21 +255,21 @@ function edActSummaryHtml(act) {
 
 function edPackageActions(p) {
   const b = [];
-  const btn = (action, label, cls) => '<button class="btn ' + (cls || 'btn-sec') + ' btn-sm" onclick="edPkgAction(\'' + p.id + '\',\'' + action + '\',this)">' + label + '</button>';
-  b.push('<button class="btn btn-sec btn-sm" onclick="edGo(\'c/' + p.clientId + '\')">Пациент</button>');
+  const btn = (action, label, cls) => `<button class="btn ${cls||'btn-sec'} btn-sm" ${UIEvents.attrs("click","edocs-6",[String(p.id),String(action)])}>${label}</button>`;
+  b.push(`<button class="btn btn-sec btn-sm" ${UIEvents.attrs("click","edocs-7",[String(p.clientId)])}>Пациент</button>`);
   if (p.source === 'paper') {
-    if (p.paper && p.paper.hasScan) b.push('<button class="btn btn-sec btn-sm" onclick="edOpenScan(\'' + p.id + '\')">Скан</button>');
-    if (p.status === 'paper' && edIsAdmin()) b.push('<button class="btn btn-sec btn-sm btn-dng" onclick="edRevokePaper(\'' + p.id + '\')">Снять отметку</button>');
+    if (p.paper && p.paper.hasScan) b.push(`<button class="btn btn-sec btn-sm" ${UIEvents.attrs("click","edocs-8",[String(p.id)])}>Скан</button>`);
+    if (p.status === 'paper' && edIsAdmin()) b.push(`<button class="btn btn-sec btn-sm btn-dng" ${UIEvents.attrs("click","edocs-9",[String(p.id)])}>Снять отметку</button>`);
     return b.join('');
   }
   if (p.status === 'draft') b.push(btn('resend', 'Повторить отправку', 'btn-pri'));
-  if (p.status !== 'draft') b.push('<button class="btn btn-sec btn-sm" onclick="edOpenInFdoc(\'' + p.id + '\')">Открыть в F.Doc</button>');
+  if (p.status !== 'draft') b.push(`<button class="btn btn-sec btn-sm" ${UIEvents.attrs("click","edocs-10",[String(p.id)])}>Открыть в F.Doc</button>`);
   if (p.status === 'sent') b.push(btn('permalink', 'Отправить ссылку ещё раз'));
   if (p.status !== 'draft' && !edIsFinal(p.status)) b.push(btn('refresh', 'Обновить статус'));
   if (p.status === 'sent' || p.status === 'error') b.push(btn('annul', 'Аннулировать', 'btn-sec btn-dng'));
   // Отказ, аннулирование, истёкший срок — новый комплект на странице пациента (по тому же визиту для акта).
   if (['declined', 'annulled', 'expired'].indexOf(p.status) >= 0) {
-    b.push('<button class="btn btn-pri btn-sm" onclick="edGo(\'c/' + p.clientId + (p.recordId ? '/' + p.recordId : '') + '\')">Оформить заново</button>');
+    b.push(`<button class="btn btn-pri btn-sm" ${UIEvents.attrs("click","edocs-11",[String(p.clientId),String(p.recordId?'/'+p.recordId:'')])}>Оформить заново</button>`);
   }
   return b.join('');
 }
@@ -360,56 +350,11 @@ async function edRenderSettings() {
   } catch (e) { box.innerHTML = '<div class="empty">' + esc(e.message) + '</div>'; return; }
   const v = (x) => escAttr(x === null || x === undefined ? '' : String(x));
   const f = (id, label, val, extra) => '<div class="fg"><label class="fl" for="' + id + '">' + esc(label) + '</label><input id="' + id + '" value="' + v(val) + '" ' + (extra || '') + '></div>';
-  box.innerHTML = (s.encReady ? '' : '<div class="ed-note ed-note-bad">На сервере не задан ключ шифрования EDOCS_ENC_KEY: модуль не сможет сохранять пароли и паспортные данные.</div>')
-    + '<div class="card mb"><div class="ed-h">Подключение к F.Doc</div><div class="ed-grid">'
-    + f('edS-baseUrl', 'Адрес стенда', s.baseUrl, 'placeholder="https://demo.fdoc.ru"')
-    + f('edS-apiKey', 'Ключ API организации', '', 'type="password" autocomplete="new-password" placeholder="' + (s.hasApiKey ? 'сохранён — введите, чтобы заменить' : '') + '"')
-    + f('edS-appLogin', 'Логин приложения', s.appLogin)
-    + f('edS-appPassword', 'Пароль приложения', '', 'type="password" autocomplete="new-password" placeholder="' + (s.hasAppPassword ? 'сохранён — введите, чтобы заменить' : '') + '"')
-    + f('edS-appCode', 'Код приложения (app)', s.appCode)
-    + f('edS-qesCertAlias', 'Алиас сертификата КЭП клиники', s.qesCertAlias, 'placeholder="пусто — штамп сотрудника"')
-    + f('edS-employeePosition', 'Должность подписанта от клиники', s.employeePosition)
-    + f('edS-unsignDays', 'Срок подписания, дней', s.unsignDays, 'type="number" min="1" max="90"')
-    + '</div><label class="ed-switch"><input type="checkbox" id="edS-enabled"' + (s.enabled ? ' checked' : '') + '> Модуль включён</label>'
-    + '<div class="ed-sub">Организация в F.Doc: ' + (s.corpId ? esc(s.corpId) : 'подключение не проверено') + '</div></div>'
-    + '<div class="card mb"><div class="ed-h">Реквизиты клиники для документов</div><div class="ed-grid">'
-    + ED_ORG_FIELDS.map((x) => f('edR-' + x[0], x[1], (s.requisites || {})[x[0]])).join('') + '</div>'
-    + '<div class="ed-actions"><button class="btn btn-pri" onclick="edSaveSettings()">Сохранить настройки</button>'
-    + '<button class="btn btn-sec" onclick="edVerify()">Проверить подключение</button><button class="btn btn-sec" onclick="edTariff()">Тариф</button>'
-    + '<span id="edTariff" class="ed-sub"></span></div></div>'
-    + '<div class="card mb"><div class="ed-h">Автоматизация, анкета и номера договоров</div>'
-    + '<div class="ed-sub">Что отправлять без участия администратора, текст сообщения с анкетой, нумерация договоров, с какой даты нужны акты. По умолчанию автоматика выключена.</div>'
-    + '<div class="ed-actions"><button class="btn btn-pri" onclick="edOpenAutomation()">⚙ Настроить</button></div></div>'
-    + '<div class="card mb"><div class="ed-h">Уведомления F.Doc о статусах</div><div class="ed-sub">'
-    + (s.webhookUrl ? 'Адрес: ' + esc(s.webhookUrl) : 'Не подключены — статусы проверяются опросом раз в 5 минут')
-    + (s.lastWebhookAt ? ' · последнее уведомление ' + esc(edFmtDateTime(s.lastWebhookAt)) : '') + '</div>'
-    + '<div class="ed-sub">Перед подпиской передайте менеджеру F.Doc IP-адрес сервера.</div>'
-    + '<div class="ed-actions"><button class="btn btn-sec" onclick="edSubscribe()">' + (s.webhookUrl ? 'Подписаться заново' : 'Подписаться') + '</button></div></div>'
-    + '<div class="card mb"><div class="ed-h">Шаблоны документов</div><div class="ed-upload">'
-    + '<input id="edT-title" placeholder="Название документа"><select id="edT-kind">' + dict.kinds.map((k) => '<option value="' + k.kind + '">' + esc(k.label) + '</option>').join('') + '</select>'
-    + '<input type="file" id="edT-file" accept=".docx"><button class="btn btn-pri btn-sm" onclick="edUploadTemplate()">Загрузить</button></div>'
-    + '<div id="edTplErrors" class="ed-err"></div>'
-    + '<div class="tw mtbl-wrap"><table class="mtbl"><thead><tr><th>Документ</th><th>Вид</th><th>Теги</th><th>Активен</th><th></th></tr></thead><tbody>'
-    + (t.templates.length ? t.templates.map(edTemplateRow).join('') : '<tr><td colspan="5" class="empty">Шаблонов пока нет</td></tr>') + '</tbody></table></div>'
-    + '<details class="ed-dict"><summary>Какие теги можно использовать в шаблоне</summary>'
-    + '<div class="ed-sub">Тег пишется прямо в тексте Word в фигурных скобках: {fio}. Строки акта — внутри одной строки таблицы: {#services}{n} … {title} … {sum}{/services}.</div>'
-    + '<table><tbody>' + dict.fields.map((x) => '<tr><td><code>{' + esc(x.loop ? '#' + x.tag : x.tag) + '}</code></td><td>' + esc(x.label) + (x.actOnly ? ' <span class="badge bgr">акт</span>' : '') + '</td></tr>').join('')
-    + dict.serviceFields.map((x) => '<tr><td><code>{' + esc(x.tag) + '}</code></td><td>' + esc(x.label) + ' <span class="badge bgr">строка акта</span></td></tr>').join('')
-    + '</tbody></table></details></div>'
-    + '<div class="card"><div class="ed-h">Сотрудники и F.Doc</div><div class="tw mtbl-wrap"><table class="mtbl"><thead><tr><th>Сотрудник</th><th>Роль</th><th>Учётная запись F.Doc</th></tr></thead><tbody>'
-    + u.users.map((x) => '<tr><td class="mtbl-title">' + esc(x.name || x.email) + '</td><td data-label="Роль">' + esc(x.role) + '</td><td data-label="F.Doc">' + (x.connected ? (x.broken ? '⚠ ' : '✓ ') + esc(x.login) : '<span class="ed-sub">не подключена</span>') + '</td></tr>').join('')
-    + '</tbody></table></div></div>';
+  box.innerHTML = `${s.encReady?'':'<div class="ed-note ed-note-bad">На сервере не задан ключ шифрования EDOCS_ENC_KEY: модуль не сможет сохранять пароли и паспортные данные.</div>'}<div class="card mb"><div class="ed-h">Подключение к F.Doc</div><div class="ed-grid">${f('edS-baseUrl','Адрес стенда',s.baseUrl,'placeholder="https://demo.fdoc.ru"')}${f('edS-apiKey','Ключ API организации','','type="password" autocomplete="new-password" placeholder="'+(s.hasApiKey?'сохранён — введите, чтобы заменить':'')+'"')}${f('edS-appLogin','Логин приложения',s.appLogin)}${f('edS-appPassword','Пароль приложения','','type="password" autocomplete="new-password" placeholder="'+(s.hasAppPassword?'сохранён — введите, чтобы заменить':'')+'"')}${f('edS-appCode','Код приложения (app)',s.appCode)}${f('edS-qesCertAlias','Алиас сертификата КЭП клиники',s.qesCertAlias,'placeholder="пусто — штамп сотрудника"')}${f('edS-employeePosition','Должность подписанта от клиники',s.employeePosition)}${f('edS-unsignDays','Срок подписания, дней',s.unsignDays,'type="number" min="1" max="90"')}</div><label class="ed-switch"><input type="checkbox" id="edS-enabled"${s.enabled?' checked':''}> Модуль включён</label><div class="ed-sub">Организация в F.Doc: ${s.corpId?esc(s.corpId):'подключение не проверено'}</div></div><div class="card mb"><div class="ed-h">Реквизиты клиники для документов</div><div class="ed-grid">${ED_ORG_FIELDS.map(x=>f('edR-'+x[0],x[1],(s.requisites||{})[x[0]])).join('')}</div><div class="ed-actions"><button class="btn btn-pri" ${UIEvents.attrs("click","edocs-12",[])}>Сохранить настройки</button><button class="btn btn-sec" ${UIEvents.attrs("click","edocs-13",[])}>Проверить подключение</button><button class="btn btn-sec" ${UIEvents.attrs("click","edocs-14",[])}>Тариф</button><span id="edTariff" class="ed-sub"></span></div></div><div class="card mb"><div class="ed-h">Автоматизация, анкета и номера договоров</div><div class="ed-sub">Что отправлять без участия администратора, текст сообщения с анкетой, нумерация договоров, с какой даты нужны акты. По умолчанию автоматика выключена.</div><div class="ed-actions"><button class="btn btn-pri" ${UIEvents.attrs("click","edocs-15",[])}>⚙ Настроить</button></div></div><div class="card mb"><div class="ed-h">Уведомления F.Doc о статусах</div><div class="ed-sub">${s.webhookUrl?'Адрес: '+esc(s.webhookUrl):'Не подключены — статусы проверяются опросом раз в 5 минут'}${s.lastWebhookAt?' · последнее уведомление '+esc(edFmtDateTime(s.lastWebhookAt)):''}</div><div class="ed-sub">Перед подпиской передайте менеджеру F.Doc IP-адрес сервера.</div><div class="ed-actions"><button class="btn btn-sec" ${UIEvents.attrs("click","edocs-16",[])}>${s.webhookUrl?'Подписаться заново':'Подписаться'}</button></div></div><div class="card mb"><div class="ed-h">Шаблоны документов</div><div class="ed-upload"><input id="edT-title" placeholder="Название документа"><select id="edT-kind">${dict.kinds.map(k=>'<option value="'+k.kind+'">'+esc(k.label)+'</option>').join('')}</select><input type="file" id="edT-file" accept=".docx"><button class="btn btn-pri btn-sm" ${UIEvents.attrs("click","edocs-17",[])}>Загрузить</button></div><div id="edTplErrors" class="ed-err"></div><div class="tw mtbl-wrap"><table class="mtbl"><thead><tr><th>Документ</th><th>Вид</th><th>Теги</th><th>Активен</th><th></th></tr></thead><tbody>${t.templates.length?t.templates.map(edTemplateRow).join(''):'<tr><td colspan="5" class="empty">Шаблонов пока нет</td></tr>'}</tbody></table></div><details class="ed-dict"><summary>Какие теги можно использовать в шаблоне</summary><div class="ed-sub">Тег пишется прямо в тексте Word в фигурных скобках: {fio}. Строки акта — внутри одной строки таблицы: {#services}{n} … {title} … {sum}{/services}.</div><table><tbody>${dict.fields.map(x=>'<tr><td><code>{'+esc(x.loop?'#'+x.tag:x.tag)+'}</code></td><td>'+esc(x.label)+(x.actOnly?' <span class="badge bgr">акт</span>':'')+'</td></tr>').join('')}${dict.serviceFields.map(x=>'<tr><td><code>{'+esc(x.tag)+'}</code></td><td>'+esc(x.label)+' <span class="badge bgr">строка акта</span></td></tr>').join('')}</tbody></table></details></div><div class="card"><div class="ed-h">Сотрудники и F.Doc</div><div class="tw mtbl-wrap"><table class="mtbl"><thead><tr><th>Сотрудник</th><th>Роль</th><th>Учётная запись F.Doc</th></tr></thead><tbody>${u.users.map(x=>'<tr><td class="mtbl-title">'+esc(x.name||x.email)+'</td><td data-label="Роль">'+esc(x.role)+'</td><td data-label="F.Doc">'+(x.connected?(x.broken?'⚠ ':'✓ ')+esc(x.login):'<span class="ed-sub">не подключена</span>')+'</td></tr>').join('')}</tbody></table></div></div>`;
 }
 
 function edTemplateRow(x) {
-  return '<tr><td data-label="Документ"><input class="ed-inline" id="edTt-' + x.id + '" value="' + escAttr(x.title) + '"></td>'
-    + '<td data-label="Вид"><select id="edTk-' + x.id + '">' + Object.keys(ED_KIND_LABELS).map((k) => '<option value="' + k + '"' + (x.kind === k ? ' selected' : '') + '>' + esc(ED_KIND_LABELS[k]) + '</option>').join('') + '</select></td>'
-    + '<td data-label="Теги" class="ed-sub">' + esc((x.placeholders || []).join(', ') || '—') + '</td>'
-    + '<td data-label="Активен"><input type="checkbox" id="edTa-' + x.id + '"' + (x.is_active ? ' checked' : '') + '></td>'
-    + '<td class="ed-row-actions"><button class="btn btn-sec btn-sm" onclick="edSaveTemplate(' + x.id + ')">Сохранить</button>'
-    + '<button class="btn btn-sec btn-sm" onclick="edTemplateFile(' + x.id + ')">Скачать</button>'
-    + '<label class="btn btn-sec btn-sm ed-file">Заменить файл<input type="file" accept=".docx" onchange="edReplaceTemplate(' + x.id + ',this)"></label>'
-    + '<button class="btn btn-sec btn-sm btn-dng" onclick="edDeleteTemplate(' + x.id + ')">Удалить</button></td></tr>';
+  return `<tr><td data-label="Документ"><input class="ed-inline" id="edTt-${x.id}" value="${escAttr(x.title)}"></td><td data-label="Вид"><select id="edTk-${x.id}">${Object.keys(ED_KIND_LABELS).map(k=>'<option value="'+k+'"'+(x.kind===k?' selected':'')+'>'+esc(ED_KIND_LABELS[k])+'</option>').join('')}</select></td><td data-label="Теги" class="ed-sub">${esc((x.placeholders||[]).join(', ')||'—')}</td><td data-label="Активен"><input type="checkbox" id="edTa-${x.id}"${x.is_active?' checked':''}></td><td class="ed-row-actions"><button class="btn btn-sec btn-sm" ${UIEvents.attrs("click","edocs-18",[UIEvents.value(x.id)])}>Сохранить</button><button class="btn btn-sec btn-sm" ${UIEvents.attrs("click","edocs-19",[UIEvents.value(x.id)])}>Скачать</button><label class="btn btn-sec btn-sm ed-file">Заменить файл<input type="file" accept=".docx" ${UIEvents.attrs("change","edocs-20",[UIEvents.value(x.id)])}></label><button class="btn btn-sec btn-sm btn-dng" ${UIEvents.attrs("click","edocs-21",[UIEvents.value(x.id)])}>Удалить</button></td></tr>`;
 }
 
 function edVal(id) { const el = document.getElementById(id); return el ? el.value : ''; }
@@ -505,35 +450,11 @@ function edAutoRender() {
   const d = _edAuto;
   const box = document.getElementById('edAutoBody');
   if (!d || !box) return;
-  const tgl = (id, on) => '<button type="button" class="ed-tgl' + (on ? ' on' : '') + '" id="' + id + '" onclick="edTgl(this)"></button>';
+  const tgl = (id, on) => `<button type="button" class="ed-tgl${on?' on':''}" id="${id}" ${UIEvents.attrs("click","edocs-22",[])}></button>`;
   const num = (id, v, min, max) => '<input type="number" id="' + id + '" value="' + escAttr(String(v)) + '" min="' + min + '" max="' + max + '" style="width:80px">';
   const opt = (v, label, cur) => '<option value="' + escAttr(String(v)) + '"' + (String(cur) === String(v) ? ' selected' : '') + '>' + esc(String(label)) + '</option>';
   const senders = d.senders.filter((u) => u.connected && !u.broken);
-  box.innerHTML = (d.testPhones && d.testPhones.length ? '<div class="ed-note">Тестовый режим: пациентам уходят только отправки на ' + esc(d.testPhones.join(', ')) + ' (EDOCS_TEST_PHONES).</div>' : '')
-    + (d.publicUrlConfigured ? '' : '<div class="ed-note ed-note-bad">Не задан адрес для ссылок анкеты (EDOCS_PUBLIC_URL) — автоматика не сможет отправлять анкеты.</div>')
-    + '<div class="ed-sub" style="margin-bottom:6px">По умолчанию всё выключено. Ручная отправка со страницы пациента работает всегда. Ночью (тихие часы из настроек автоуведомлений) автоматика ждёт утра.</div>'
-    + '<div class="fg"><label class="fl" for="edAu-sender">Отправлять от имени</label><select id="edAu-sender"><option value="">— выберите сотрудника с подключённым F.Doc —</option>'
-    + senders.map((u) => opt(u.id, u.name, d.senderUserId)).join('') + '</select>'
-    + (d.senders.length > senders.length ? '<div class="ed-sub">В списке только сотрудники, подключившие свою учётную запись F.Doc.</div>' : '') + '</div>'
-    + '<div class="ed-au-row">' + tgl('edAu-previsit', d.previsit.on) + '<div class="grow"><h4>Договор и согласие перед визитом</h4>'
-    + '<p>Если документа нет, пациент получит его заранее и подпишет дома. Не хватает паспорта — уйдёт анкета, а документы — сразу после её заполнения.</p>'
-    + 'за ' + num('edAu-previsitHours', d.previsit.hours, 2, 168) + ' ч до визита · <select id="edAu-scope">' + opt('first', 'только первичным', d.previsit.scope) + opt('all', 'всем, у кого нет документов', d.previsit.scope) + '</select>'
-    + '<label class="ed-switch"><input type="checkbox" id="edAu-form"' + (d.previsit.form ? ' checked' : '') + '> Если данных не хватает — отправить анкету</label></div></div>'
-    + '<div class="ed-au-row">' + tgl('edAu-act', d.act.on) + '<div class="grow"><h4>Акт после оплаты визита</h4>'
-    + '<p>Когда в YClients визит отмечен «пришёл» и оплачен, акт собирается из услуг записи и уходит пациенту.</p>'
-    + 'через ' + num('edAu-actDelay', d.act.delayMin, 5, 240) + ' мин после оплаты</div></div>'
-    + '<div class="ed-au-row">' + tgl('edAu-remind', d.remind.on) + '<div class="grow"><h4>Повтор, если не подписано</h4>'
-    + '<p>Один раз: ссылка на подпись — SMS от F.Doc, анкета — повторно в мессенджер.</p>'
-    + 'через ' + num('edAu-remindHours', d.remind.hours, 1, 48) + ' ч</div></div>'
-    + '<div class="ed-au-row"><div class="grow"><h4>Сообщение с анкетой</h4><p>Подставляются {имя}, {клиника}, {дата}, {ссылка}. Пусто — текст по умолчанию.</p>'
-    + '<textarea id="edAu-msg" placeholder="' + escAttr(d.formMessageDefault) + '">' + esc(d.formMessage || '') + '</textarea>'
-    + 'Ссылка действует ' + num('edAu-ttl', d.formTtlDays, 1, 30) + ' дн.</div></div>'
-    + '<div class="ed-au-row">' + tgl('edAu-autonum', d.contractAutonumber) + '<div class="grow"><h4>Номера договоров автоматически</h4>'
-    + '<p>Свой номер пациента (в данных или в YClients) сохраняется; остальным — следующий по счёту. Уже выдан максимум: ' + esc(String(d.contractNext.maxUsed)) + '.</p>'
-    + 'Следующий номер: ' + num('edAu-next', d.contractNext.next, 1, 999999999999) + '</div></div>'
-    + '<div class="ed-au-row"><div class="grow"><h4>Акты нужны для визитов с</h4><p>Более ранние визиты дашборд не считает незакрытыми.</p>'
-    + '<input type="date" id="edAu-actsFrom" value="' + escAttr(d.actsRequiredFrom || '') + '" style="width:auto"></div></div>'
-    + '<div class="ed-actions"><button class="btn btn-pri" onclick="edSaveAutomation()">Сохранить</button><button class="btn btn-sec" onclick="closeModal(\'edAutoModal\')">Отмена</button></div>';
+  box.innerHTML = `${(d.testPhones&&d.testPhones.length?'<div class="ed-note">Тестовый режим: пациентам уходят только отправки на '+esc(d.testPhones.join(', '))+' (EDOCS_TEST_PHONES).</div>':'')+(d.publicUrlConfigured?'':'<div class="ed-note ed-note-bad">Не задан адрес для ссылок анкеты (EDOCS_PUBLIC_URL) — автоматика не сможет отправлять анкеты.</div>')}<div class="ed-sub" style="margin-bottom:6px">По умолчанию всё выключено. Ручная отправка со страницы пациента работает всегда. Ночью (тихие часы из настроек автоуведомлений) автоматика ждёт утра.</div><div class="fg"><label class="fl" for="edAu-sender">Отправлять от имени</label><select id="edAu-sender"><option value="">— выберите сотрудника с подключённым F.Doc —</option>${senders.map(u=>opt(u.id,u.name,d.senderUserId)).join('')}</select>${d.senders.length>senders.length?'<div class="ed-sub">В списке только сотрудники, подключившие свою учётную запись F.Doc.</div>':''}</div><div class="ed-au-row">${tgl('edAu-previsit',d.previsit.on)}<div class="grow"><h4>Договор и согласие перед визитом</h4><p>Если документа нет, пациент получит его заранее и подпишет дома. Не хватает паспорта — уйдёт анкета, а документы — сразу после её заполнения.</p>за ${num('edAu-previsitHours',d.previsit.hours,2,168)} ч до визита · <select id="edAu-scope">${opt('first','только первичным',d.previsit.scope)}${opt('all','всем, у кого нет документов',d.previsit.scope)}</select><label class="ed-switch"><input type="checkbox" id="edAu-form"${d.previsit.form?' checked':''}> Если данных не хватает — отправить анкету</label></div></div><div class="ed-au-row">${tgl('edAu-act',d.act.on)}<div class="grow"><h4>Акт после оплаты визита</h4><p>Когда в YClients визит отмечен «пришёл» и оплачен, акт собирается из услуг записи и уходит пациенту.</p>через ${num('edAu-actDelay',d.act.delayMin,5,240)} мин после оплаты</div></div><div class="ed-au-row">${tgl('edAu-remind',d.remind.on)}<div class="grow"><h4>Повтор, если не подписано</h4><p>Один раз: ссылка на подпись — SMS от F.Doc, анкета — повторно в мессенджер.</p>через ${num('edAu-remindHours',d.remind.hours,1,48)} ч</div></div><div class="ed-au-row"><div class="grow"><h4>Сообщение с анкетой</h4><p>Подставляются {имя}, {клиника}, {дата}, {ссылка}. Пусто — текст по умолчанию.</p><textarea id="edAu-msg" placeholder="${escAttr(d.formMessageDefault)}">${esc(d.formMessage||'')}</textarea>Ссылка действует ${num('edAu-ttl',d.formTtlDays,1,30)} дн.</div></div><div class="ed-au-row">${tgl('edAu-autonum',d.contractAutonumber)}<div class="grow"><h4>Номера договоров автоматически</h4><p>Свой номер пациента (в данных или в YClients) сохраняется; остальным — следующий по счёту. Уже выдан максимум: ${esc(String(d.contractNext.maxUsed))}.</p>Следующий номер: ${num('edAu-next',d.contractNext.next,1,999999999999)}</div></div><div class="ed-au-row"><div class="grow"><h4>Акты нужны для визитов с</h4><p>Более ранние визиты дашборд не считает незакрытыми.</p><input type="date" id="edAu-actsFrom" value="${escAttr(d.actsRequiredFrom||'')}" style="width:auto"></div></div><div class="ed-actions"><button class="btn btn-pri" ${UIEvents.attrs("click","edocs-23",[])}>Сохранить</button><button class="btn btn-sec" ${UIEvents.attrs("click","edocs-24",[])}>Отмена</button></div>`;
 }
 async function edSaveAutomation() {
   const on = (id) => document.getElementById(id).classList.contains('on');
@@ -565,13 +486,7 @@ async function edRenderClientBlock(clientId) {
   try { s = await api('GET', '/api/edocs/clients/' + clientId + '/summary'); } catch (e) { el.innerHTML = ''; return; }
   if (!s || !s.enabled) { el.innerHTML = ''; return; }
   const id = s.identity;
-  el.innerHTML = '<div class="div"></div><div class="ed-cblock-head"><div style="font-size:13px;font-weight:700">Документы</div>'
-    + '<button class="btn btn-pri btn-sm" onclick="edOpenClient(' + clientId + ')">Документы пациента</button></div>'
-    + '<div class="ed-sub">' + (id.exists ? 'Данные для документов: ' + esc(id.fio || '—') + (id.passportMask ? ' · паспорт ' + esc(id.passportMask) : ' · паспорт не заполнен') : 'Данные для документов не заполнены') + '</div>'
-    + (s.packages || []).map((p) => {
-      const st = edStatusInfo(p.status);
-      return '<div class="ed-crow" onclick="edOpenPackage(\'' + p.id + '\')"><span>' + esc(p.title) + '</span><span class="badge ' + st.cls + '">' + esc(st.label) + '</span></div>';
-    }).join('');
+  el.innerHTML = `<div class="div"></div><div class="ed-cblock-head"><div style="font-size:13px;font-weight:700">Документы</div><button class="btn btn-pri btn-sm" ${UIEvents.attrs("click","edocs-25",[UIEvents.value(clientId)])}>Документы пациента</button></div><div class="ed-sub">${id.exists?'Данные для документов: '+esc(id.fio||'—')+(id.passportMask?' · паспорт '+esc(id.passportMask):' · паспорт не заполнен'):'Данные для документов не заполнены'}</div>${(s.packages||[]).map(p=>{const st=edStatusInfo(p.status);return`<div class="ed-crow" ${UIEvents.attrs("click","edocs-26",[String(p.id)])}><span>${esc(p.title)}</span><span class="badge ${st.cls}">${esc(st.label)}</span></div>`;}).join('')}`;
 }
 function edOpenClient(clientId, recordId) {
   if (typeof closeModal === 'function') closeModal('clientModal');
@@ -593,7 +508,7 @@ async function edDecorateRecords(records) {
     if (ids.indexOf(rid) < 0 || !cid) return;
     const a = res.statuses[rid];
     td.innerHTML = a
-      ? '<span class="badge ' + edStatusInfo(a.status).cls + ' ed-link" onclick="edOpenPackage(\'' + a.packageId + '\')">Акт: ' + esc(edStatusInfo(a.status).label) + '</span>'
-      : '<button class="btn btn-sec btn-sm" onclick="edOpenClient(' + cid + ',' + rid + ')">📄 Акт</button>';
+      ? `<span class="badge ${edStatusInfo(a.status).cls} ed-link" ${UIEvents.attrs("click","edocs-27",[String(a.packageId)])}>Акт: ${esc(edStatusInfo(a.status).label)}</span>`
+      : `<button class="btn btn-sec btn-sm" ${UIEvents.attrs("click","edocs-28",[UIEvents.value(cid),UIEvents.value(rid)])}>📄 Акт</button>`;
   });
 }

@@ -107,15 +107,14 @@ function condRender(ns) {
   wrap.innerHTML = st.conds.map((c, i) => `
     <div class="nr-cond">
       <div class="nr-cond-head">
-        <select onchange="condType('${ns}', ${i}, this.value)">
-          ${Object.entries(COND_LABELS).map(([k, v]) =>
-            `<option value="${k}" ${c.type === k ? 'selected' : ''}>${v}</option>`).join('')}
+        <select ${UIEvents.attrs("change","conditions-editor-1",[String(ns),UIEvents.value(i)])}>
+          ${Object.entries(COND_LABELS).map(([k,v])=>`<option value="${k}" ${c.type===k?'selected':''}>${v}</option>`).join('')}
         </select>
         <span class="nr-cond-count" id="${ns}CondCount-${i}">выбрано: ${c.ids.size}</span>
-        <button class="mc" onclick="condRemove('${ns}', ${i})" title="Убрать условие">✕</button>
+        <button class="mc" ${UIEvents.attrs("click","conditions-editor-2",[String(ns),UIEvents.value(i)])} title="Убрать условие">✕</button>
       </div>
       <input type="search" autocomplete="off" placeholder="🔎 Поиск…" value="${escAttr(esc(c.filter))}"
-             oninput="condFilter('${ns}', ${i}, this.value)">
+             ${UIEvents.attrs("input","conditions-editor-3",[String(ns),UIEvents.value(i)])}>
       <div class="nr-cond-list" id="${ns}CondList-${i}"></div>
     </div>`).join('');
   const lw = document.getElementById(`${ns}LogicWrap`);
@@ -137,8 +136,8 @@ function condRenderList(ns, i) {
   opts = opts.slice(0, 150);
   box.innerHTML = opts.map(o => `
     <label class="nr-cond-opt">
-      <input type="checkbox" ${c.ids.has(String(o.id)) ? 'checked' : ''}
-             onchange="condToggleId('${ns}', ${i}, '${o.id}', this.checked)">
+      <input type="checkbox" ${c.ids.has(String(o.id))?'checked':''}
+             ${UIEvents.attrs("change","conditions-editor-4",[String(ns),UIEvents.value(i),String(o.id)])}>
       <span>${esc(o.label)}</span>
     </label>`).join('') || '<div class="empty" style="padding:12px 0">Ничего не найдено</div>';
   if (total > 150) {

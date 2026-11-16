@@ -44,7 +44,7 @@ function loadMedicalCert() {
   const form = document.getElementById('mc-form');
   let html = MC_FIELDS.map(([k, l]) => mcInput(k, l)).join('');
   html += `<div class="fg" style="grid-column:1/3"><label class="fl">
-    <input type="checkbox" id="mc-f-payer_is_patient" checked onchange="mcTogglePatient()"> Налогоплательщик и пациент — одно лицо</label></div>`;
+    <input type="checkbox" id="mc-f-payer_is_patient" checked ${UIEvents.attrs("change","medical-cert-1",[])}> Налогоплательщик и пациент — одно лицо</label></div>`;
   html += `<div id="mc-patient-block" style="display:none;grid-column:1/3">
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">` +
     MC_PATIENT_FIELDS.map(([k, l]) => mcInput(k, l)).join('') + `</div></div>`;
@@ -77,7 +77,7 @@ function mcSearchClients() {
       const rows = await api('GET', '/api/clients?search=' + encodeURIComponent(q) + '&limit=8');
       const list = Array.isArray(rows) ? rows : (rows.items || rows.clients || []);
       document.getElementById('mc-client-results').innerHTML = list.map(c =>
-        `<div style="cursor:pointer;padding:4px" data-id="${escAttr(String(c.id))}" data-name="${escAttr(c.name || '')}" onclick="mcPickClient(this)">${esc(c.name || '')} ${esc(c.phone || '')}</div>`).join('');
+        `<div style="cursor:pointer;padding:4px" data-id="${escAttr(String(c.id))}" data-name="${escAttr(c.name||'')}" ${UIEvents.attrs("click","medical-cert-2",[])}>${esc(c.name||'')} ${esc(c.phone||'')}</div>`).join('');
     } catch {}
   }, 300);
 }
@@ -163,8 +163,8 @@ async function mcUploadTemplate() {
 async function mcOpenCoordsEditor() {
   const coords = await api('GET', '/api/medical-cert/template/coords');
   document.getElementById('mc-coords-editor').innerHTML =
-    `<textarea id="mc-coords-json" rows="14" style="width:100%;font-family:monospace;font-size:12px">${JSON.stringify(coords, null, 2)}</textarea>
-     <button class="btn" onclick="mcSaveCoords()">Сохранить координаты</button>`;
+    `<textarea id="mc-coords-json" rows="14" style="width:100%;font-family:monospace;font-size:12px">${JSON.stringify(coords,null,2)}</textarea>
+     <button class="btn" ${UIEvents.attrs("click","medical-cert-3",[])}>Сохранить координаты</button>`;
 }
 
 async function mcSaveCoords() {

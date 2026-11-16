@@ -4,6 +4,7 @@ const polza = require('../../polza');
 const config = require('../../../config');
 const { createLogger } = require('../../../logger');
 const logger = createLogger('AgentPolza');
+const { isLimitError } = require('../../resource-limits');
 
 // ── polza.ai-адаптер: Claude через OpenAI-совместимый API (наценка ~6%). ──
 // Структурно копия providers/aitunnel.js (решение из плана миграции 2026-07-25):
@@ -45,6 +46,7 @@ async function createWithRetry(client, params, o = {}) {
       return o.sdkMaxRetries === undefined ? await client.chat.completions.create(params)
         : await client.chat.completions.create(params, { maxRetries: o.sdkMaxRetries });
     } catch (e) {
+      if (isLimitError(e)) throw e;
       lastErr = e;
       if (attempt === maxRetries || !isTransient(e)) throw e;
       await sleep(baseMs * (attempt + 1));
@@ -94,6 +96,7 @@ async function createMessage({ system, messages, tools }, opts = {}) {
     resp = await createWithRetry(client, params,
       { maxRetries: opts.maxRetries, retryBaseMs: opts.retryBaseMs, sdkMaxRetries: opts.sdkMaxRetries });
   } catch (e) {
+    if (isLimitError(e)) throw e;
     const fallbackModel = opts.fallbackModel !== undefined
       ? opts.fallbackModel : config.POLZA_FALLBACK_MODEL;
     if (!isTransient(e) || !fallbackModel || fallbackModel === primaryModel) throw e;

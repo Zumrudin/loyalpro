@@ -189,7 +189,7 @@ function mcRenderPanel() {
   for (const k of MC_PANEL_FIELDS) {
     const val = f[k] == null ? '' : f[k];
     html += `<div class="fg" style="margin-bottom:6px"><label class="fl">${k}</label>
-      <input id="mc-ve-in-${k}" value="${esc(String(val))}" oninput="mcPanelEdit('${k}')"></div>`;
+      <input id="mc-ve-in-${k}" value="${esc(String(val))}" ${UIEvents.attrs("input","medical-cert-coords-editor-1",[String(k)])}></div>`;
   }
   panel.innerHTML = html;
 }

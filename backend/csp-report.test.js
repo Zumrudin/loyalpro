@@ -49,12 +49,14 @@ test('malformed and oversized reports are rejected without logging their content
   expect(mockLogger.info).not.toHaveBeenCalled();
 });
 
-test('strict script policy is report-only; existing cert iframe enforcement stays separate', () => {
+test('strict script policy is enforced and reported; cert iframe policy stays separate', () => {
   const source = fs.readFileSync(`${__dirname}/server.js`, 'utf8');
+  expect(source).toContain("scriptSrc: [\"'self'\", \"cdn.jsdelivr.net\"]");
   expect(source).toContain("res.setHeader('Content-Security-Policy-Report-Only', REPORT_ONLY_CSP)");
   expect(router.REPORT_ONLY_CSP).toBe("script-src 'self' cdn.jsdelivr.net; report-uri /api/csp-report");
   expect(router.REPORT_ONLY_CSP).not.toContain('unsafe-inline');
   const cert = fs.readFileSync(`${__dirname}/routes/public-cert-request.js`, 'utf8');
   expect(cert).toContain("res.setHeader('Content-Security-Policy'");
   expect(cert).toContain('frame-ancestors ${ancestors}');
+  expect(cert).not.toContain("script-src 'self' 'unsafe-inline'");
 });

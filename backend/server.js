@@ -55,7 +55,9 @@ app.use(helmet({
     useDefaults: false,
     directives: {
       defaultSrc: ["'self'"],
-      scriptSrc: ["'self'", "'unsafe-inline'", "cdn.jsdelivr.net"],
+      scriptSrc: ["'self'", "cdn.jsdelivr.net"],
+      objectSrc: ["'none'"],
+      baseUri: ["'self'"],
       styleSrc:  ["'self'", "'unsafe-inline'"],
       imgSrc,
       connectSrc: ["'self'"],
@@ -433,6 +435,8 @@ pool.connect()
     edocsSchemaReady = true;
     journalSchemaReady = true;
     client.release();
+    await require('./services/webhook-security-status').validateStartup(db, config)
+      .catch(() => logger.warn('Webhook configuration inventory unavailable; authentication remains fail-closed'));
     // Прогон синка/сверки, оборванный рестартом, иначе висит running вечно
     // (27 таких строк на проде с марта 2026).
     for (const salon of await db.any('SELECT id FROM salons')) {

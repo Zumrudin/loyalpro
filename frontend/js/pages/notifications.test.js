@@ -12,7 +12,7 @@ const BACK = path.join(__dirname, '..', '..', '..', 'backend');
 // Контекст как у браузера: window — это сам глобальный объект; localStorage нужен api.js на верхнем уровне.
 function browserContext(extra = {}) {
   const ctx = vm.createContext({
-    console, URLSearchParams,                  // браузерные глобали, которыми пользуются помощники
+    console, URLSearchParams, UIEvents: require('../core/ui-events.js'),                  // браузерные глобали, которыми пользуются помощники
     localStorage: { getItem: () => null, setItem() {}, removeItem() {} },
     ...extra,
   });
@@ -110,15 +110,16 @@ test('id разметки: каждый getElementById скрипта и каж�
   assert.deepStrictEqual(missing, []);
 });
 
-test('инлайн-обработчики (в разметке и в строках скрипта) ссылаются на существующие функции', () => {
-  const html = fs.readFileSync(path.join(FRONT, 'index.html'), 'utf8');
-  const from = html.indexOf('id="bcTab-rules"');
-  const region = html.slice(from, html.indexOf('CARE PAGE («Забота»', from));   // вкладка + три модалки (HOME CARE PAGE выше — не тот маркер)
-  const script = fs.readFileSync(path.join(__dirname, 'notifications.js'), 'utf8');
-  const re = /on(?:click|change|input)="(?:if\(event\.target===this\))?([A-Za-z_]+)\(/g;
-  const called = new Set([...region.matchAll(re), ...script.matchAll(re)].map((m) => m[1]));
-  assert.ok(called.size >= 20, 'обработчики не нашлись — регулярка устарела');
-  for (const fn of called) assert.strictEqual(typeof ctx[fn], 'function', `в разметке вызывается ${fn}(), а функции нет`);
+test('CSP-обработчики ссылаются на существующие функции страницы', () => {
+  const dynamic = fs.readFileSync(path.join(FRONT, 'js/core/dynamic-events.js'), 'utf8');
+  const statics = fs.readFileSync(path.join(FRONT, 'js/core/static-events.js'), 'utf8');
+  const called = new Set([...(dynamic + statics).matchAll(/\b(nt[A-Za-z_]*)\(/g)].map(m => m[1]));
+  assert.ok(called.size >= 20, 'реестр обработчиков страницы не найден');
+  for (const name of called) assert.strictEqual(typeof ctx[name], 'function', name + ' не определена');
+  const pageSources = fs.readFileSync(path.join(__dirname, 'notifications.js'), 'utf8');
+  const refs = [...pageSources.matchAll(/UIEvents\.attrs\(['"]\w+['"],\s*['"]([^'"]+)['"]/g)];
+  assert.ok(refs.length >= 16, 'CSP-ссылки не найдены');
+  for (const [, id] of refs) assert.ok(dynamic.includes('"' + id + '": function'), id + ' отсутствует в реестре');
 });
 
 // ── паритет с бэкендом ────────────────────────────────────────────────────────────────────────
@@ -564,7 +565,7 @@ function tokens(html) {
 
 const TAGS_OK = new Set(['a', 'b', 'button', 'code', 'div', 'img', 'input', 'label', 'span', 'td', 'tr']);
 const ATTRS_OK = new Set(['alt', 'accept', 'checked', 'class', 'data-ch', 'data-id', 'data-label', 'data-status', 'data-type', 'disabled',
-  'href', 'id', 'max', 'min', 'onchange', 'onclick', 'rel', 'src', 'step', 'style', 'target', 'title', 'type', 'value']);
+  'href', 'id', 'max', 'min', 'data-ui-click', 'data-ui-click-args', 'data-ui-change', 'data-ui-change-args', 'rel', 'src', 'step', 'style', 'target', 'title', 'type', 'value']);
 
 /** Разметка не содержит ничего, кроме своих тегов и атрибутов: ни вставленного тега, ни нового атрибута (onerror=…). */
 function assertStructure(html, what) {
@@ -580,7 +581,7 @@ function assertStructure(html, what) {
 
 /** Исполняет каждый on*-обработчик (после раскодирования сущностей) в песочнице: вызов своей функции записывается,
  *  всё постороннее (canary/alert или ReferenceError на чужом имени) — провал. */
-function runHandlers(html) {
+function runLegacyHandlers(html) {
   const calls = [];
   let stray = 0;
   for (const t of tokens(html)) {
@@ -596,11 +597,41 @@ function runHandlers(html) {
   return { calls, stray };
 }
 
-test('ntJsArg / ntAttr: враждебные значения не выходят ни из атрибута, ни из JS-литерала', () => {
+// Dispatch only fixed external callbacks through the actual CSP runtime.
+function runHandlers(html) {
+  const calls = [];
+  let stray = 0;
+  const registry = fs.readFileSync(path.join(FRONT, 'js/core/dynamic-events.js'), 'utf8');
+  const sandbox = { canary() { stray++; }, alert() { stray++; } };
+  for (const [, name] of registry.matchAll(/\b(nt[A-Za-z_]*)\(/g)) {
+    sandbox[name] = (...args) => calls.push({ fn: name, args });
+  }
+  const context = vm.createContext(sandbox);
+  run(context, 'ui-events.js', fs.readFileSync(path.join(FRONT, 'js/core/ui-events.js'), 'utf8'));
+  run(context, 'dynamic-events.js', registry);
+  run(context, 'fixture', "UIEvents.register({'xss-fixture': function(event,args) { fixture(args[0]); }});");
+  context.fixture = value => calls.push({ fn: 'f', args: [value] });
+  const runtime = vm.runInContext('UIEvents', context);
+  for (const token of tokens(html)) {
+    const attrs = Object.fromEntries(Object.entries(token.attrs).map(([name, value]) => [name, decodeAttr(value)]));
+    const callbacks = {};
+    const element = { value: '', checked: false, hasAttribute: name => Object.hasOwn(attrs, name),
+      getAttribute: name => attrs[name], addEventListener: (type, callback) => { callbacks[type] = callback; } };
+    for (const name of Object.keys(attrs)) if (/^on/i.test(name)) stray++;
+    runtime.bind(element);
+    for (const callback of Object.values(callbacks)) {
+      try { callback.call(element, { target: element, preventDefault() {}, stopPropagation() {} }); }
+      catch (_) { stray++; }
+    }
+  }
+  return { calls, stray };
+}
+
+test('UIEvents / ntAttr: враждебные значения остаются данными фиксированного обработчика', () => {
   const page = domPage();
-  const ntAttr = vm.runInContext('ntAttr', page), ntJsArg = vm.runInContext('ntJsArg', page);   // const верхнего уровня — не свойство контекста
+  const ntAttr = vm.runInContext('ntAttr', page);   // const верхнего уровня — не свойство контекста
   for (const s of HOSTILE) {
-    const html = `<a title="${ntAttr(s)}" onclick="f('${ntJsArg(s)}')">x</a>`;
+    const html = `<a title="${ntAttr(s)}" ${page.UIEvents.attrs("click", "xss-fixture", [s])}>x</a>`;
     const [a] = assertStructure(html, JSON.stringify(s)).filter((t) => t.tag === 'a');
     assert.strictEqual(decodeAttr(a.attrs.title), s, 'значение атрибута искажено');
     const { calls, stray } = runHandlers(html);
@@ -613,7 +644,7 @@ test('прежний ntJsArg (escAttr(escJs(s))) на «&#39;);…» испол�
   const page = domPage();
   const old = (s) => page.escAttr(page.escJs(s));
   const html = `<a onclick="f('${old(HOSTILE[0])}')">x</a>`;
-  assert.ok(runHandlers(html).stray > 0, 'уязвимость не воспроизвелась: тест не отличает безопасный ntJsArg от небезопасного');
+  assert.ok(runLegacyHandlers(html).stray > 0, 'уязвимость не воспроизвелась: тест не отличает безопасный ntJsArg от небезопасного');
 });
 
 test('ntUploadHref: только наш каталог загрузок', () => {
@@ -654,7 +685,7 @@ test('ntTypeCard: неизвестный тип из БД — без кнопк�
   const page = domPage();
   const html = page.ntTypeCard('<img src=x onerror=canary()>', [{ id: 1, title: 'T', trigger_type: 'x', is_enabled: true, conditions: null }]);
   assertStructure(html, 'ntTypeCard');
-  assert.ok(!/ntOpenEditor\(null/.test(html), 'у неизвестного типа не должно быть «+ Правило»');
+  assert.ok(!tokens(html).some(token => token.attrs['data-ui-click'] === 'notifications-2'), 'у неизвестного типа не должно быть «+ Правило»');
   assert.strictEqual(runHandlers(html).stray, 0);
 });
 

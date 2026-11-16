@@ -36,7 +36,7 @@ function harness() {
       });
     return nodes.get(id);
   };
-  const ctx = vm.createContext({
+  const ctx = vm.createContext({ UIEvents: require('../frontend/js/core/ui-events.js'),
     document: { getElementById: get },
     api: jest.fn(),
     fetch: jest.fn(),
@@ -276,7 +276,25 @@ test('sale UI renders a calculated row amount and read-only client fields', () =
 });
 test('late payment form is available only for a local posted sale with debt', () => {
   const { ctx } = harness();
-  expect(ctx.stockSaleLatePaymentHtml({ id: 4, kind: 'sale', origin: 'loyalpro', status: 'posted', outstandingAmount: 5 })).toContain('stockPaySale(4)');
+  const html = ctx.stockSaleLatePaymentHtml({ id: 4, kind: 'sale', origin: 'loyalpro', status: 'posted', outstandingAmount: 5 });
+  expect(html).not.toMatch(/\sonclick=/);
+  const binding = html.match(/data-ui-click="([^"]+)" data-ui-click-args="([^"]+)"/);
+  expect(binding).not.toBeNull();
+  expect(JSON.parse(binding[2])).toEqual([4]);
+  const dispatch = vm.createContext({ stockPaySale: jest.fn() });
+  for (const file of ['ui-events.js', 'dynamic-events.js']) {
+    vm.runInContext(fs.readFileSync(path.join(__dirname, '../frontend/js/core', file), 'utf8'), dispatch);
+  }
+  const attrs = { 'data-ui-click': binding[1], 'data-ui-click-args': binding[2] };
+  let click;
+  const button = {
+    hasAttribute: name => Object.hasOwn(attrs, name),
+    getAttribute: name => attrs[name],
+    addEventListener: (type, callback) => { if (type === 'click') click = callback; },
+  };
+  vm.runInContext('UIEvents', dispatch).bind(button);
+  click.call(button, {});
+  expect(dispatch.stockPaySale).toHaveBeenCalledWith(4);
   expect(ctx.stockSaleLatePaymentHtml({ id: 4, kind: 'sale', origin: 'yclients', status: 'posted', outstandingAmount: 5 })).toBe('');
 });
 test('late payment retries with the same payment id and snapshot after a refresh failure', async () => {

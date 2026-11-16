@@ -1,4 +1,5 @@
 'use strict';
+jest.mock('./services/resource-limits', () => ({ attempt: jest.fn(async () => {}), isLimitError: e => ['BUDGET_EXHAUSTED','PAID_DISABLED'].includes(e?.code), runLlm: (_s,_u,fn) => fn() }));
 // Ассистент базы знаний идёт по той же цепочке, что Мила (мост GPT → Claude → Польза
 // на проде, Codex → Польза на деве), но НЕ трогает маршрутизацию Милы:
 // упавший вопрос сотрудника не должен переключать её на резерв.

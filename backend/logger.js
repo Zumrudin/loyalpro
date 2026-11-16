@@ -38,12 +38,15 @@ const sharedTransports = [
   new winston.transports.DailyRotateFile(fileTransportOptions('error-%DATE%.log', 'error')),
 ];
 
+// One pipeline owns the transports. Child loggers attach metadata without
+// piping every module to the same transports and multiplying event listeners.
+const rootLogger = winston.createLogger({
+  level: process.env.LOG_LEVEL || 'info',
+  transports: sharedTransports,
+});
+
 function createLogger(module) {
-  return winston.createLogger({
-    level: process.env.LOG_LEVEL || 'info',
-    defaultMeta: { module },
-    transports: sharedTransports,
-  });
+  return rootLogger.child({ module });
 }
 
 module.exports = { createLogger };

@@ -45,10 +45,10 @@ async function jrDispatchOpen() {
   const from = summary?.from || jrEl('jrDate').value || today, to = summary?.to || from;
   jrEl('jrModalBody').innerHTML = `<form id="jrDispatchForm" class="jr-dispatch-form">
     <p>Изменения журнала сохраняются только у нас. Выберите период: в YClients уйдут все неотправленные изменения записей и графиков сотрудников этих дней.</p>
-    <p class="jr-hint">${summary?.records || summary?.schedules ? `Всего не отправлено: ${jrDispatchCountText(summary)}${summary.from ? `, даты с ${jrEscape(summary.from)} по ${jrEscape(summary.to)}` : ''}.` : 'Неотправленных изменений нет.'}</p>
+    <p class="jr-hint">${summary?.records||summary?.schedules?`Всего не отправлено: ${jrDispatchCountText(summary)}${summary.from?`, даты с ${jrEscape(summary.from)} по ${jrEscape(summary.to)}`:''}.`:'Неотправленных изменений нет.'}</p>
     <div class="jr-dispatch-period"><label>С<input type="date" id="jrDispatchFrom" required value="${jrEscape(from)}"></label><label>По<input type="date" id="jrDispatchTo" required value="${jrEscape(to)}"></label></div>
     <p id="jrDispatchPreview" class="jr-dispatch-preview" role="status" aria-live="polite"></p>
-    <div class="jr-actions"><button type="submit" class="btn btn-pri" id="jrDispatchGo" disabled>Отправить</button><button type="button" class="btn btn-sec" onclick="jrClose(true)">Отмена</button></div>
+    <div class="jr-actions"><button type="submit" class="btn btn-pri" id="jrDispatchGo" disabled>Отправить</button><button type="button" class="btn btn-sec" ${UIEvents.attrs("click","journal-dispatch-1",[])}>Отмена</button></div>
   </form>`;
   let previewRequest = 0;
   const preview = async () => {
@@ -83,11 +83,11 @@ function jrDispatchProgress(started, request) {
   const render = p => {
     const done = p.done + p.cancelled, left = p.queued + p.running;
     body.innerHTML = `<div class="jr-dispatch-progress" role="status" aria-live="polite">
-      <p><strong>${p.finished ? (p.failed ? 'Отправка завершена с ошибками' : 'Отправлено в YClients') : 'Отправляем в YClients…'}</strong></p>
-      <p>${jrDispatchCountText(started)} · изменений: ${p.total}. Готово: ${done}${left ? ` · в очереди: ${left}` : ''}${p.failed ? ` · ошибок: ${p.failed}` : ''}.</p>
-      ${p.finished ? '' : '<p class="jr-hint">Окно можно закрыть: отправка продолжится. Записи журнала обновятся сами.</p>'}
-      ${p.failures?.length ? `<ul class="jr-dispatch-failures">${p.failures.map(f => `<li>${f.kind === 'schedule' ? `<span>График · ${jrEscape(f.date || '')}</span> <button type="button" class="btn btn-sec" data-schedule-retry="${jrEscape(f.outboxId)}">Повторить</button> <button type="button" class="btn btn-sec" data-schedule-dismiss="${jrEscape(f.outboxId)}">Убрать локальное изменение</button>` : `<button type="button" class="btn btn-sec" data-open="${jrEscape(f.recordId)}">${jrEscape([f.date, f.clientName].filter(Boolean).join(' · ') || 'Запись')}</button>`} ${jrEscape(f.errorText || 'причина неизвестна')}</li>`).join('')}</ul><p class="jr-hint">Повтор доступен только после определённой ошибки. Неподтверждённый результат сначала сверьте в YClients.</p>` : ''}
-      <div class="jr-actions"><button type="button" class="btn btn-sec" onclick="jrClose(true)">Закрыть</button></div></div>`;
+      <p><strong>${p.finished?p.failed?'Отправка завершена с ошибками':'Отправлено в YClients':'Отправляем в YClients…'}</strong></p>
+      <p>${jrDispatchCountText(started)} · изменений: ${p.total}. Готово: ${done}${left?` · в очереди: ${left}`:''}${p.failed?` · ошибок: ${p.failed}`:''}.</p>
+      ${p.finished?'':'<p class="jr-hint">Окно можно закрыть: отправка продолжится. Записи журнала обновятся сами.</p>'}
+      ${p.failures?.length?`<ul class="jr-dispatch-failures">${p.failures.map(f=>`<li>${f.kind==='schedule'?`<span>График · ${jrEscape(f.date||'')}</span> <button type="button" class="btn btn-sec" data-schedule-retry="${jrEscape(f.outboxId)}">Повторить</button> <button type="button" class="btn btn-sec" data-schedule-dismiss="${jrEscape(f.outboxId)}">Убрать локальное изменение</button>`:`<button type="button" class="btn btn-sec" data-open="${jrEscape(f.recordId)}">${jrEscape([f.date,f.clientName].filter(Boolean).join(' · ')||'Запись')}</button>`} ${jrEscape(f.errorText||'причина неизвестна')}</li>`).join('')}</ul><p class="jr-hint">Повтор доступен только после определённой ошибки. Неподтверждённый результат сначала сверьте в YClients.</p>`:''}
+      <div class="jr-actions"><button type="button" class="btn btn-sec" ${UIEvents.attrs("click","journal-dispatch-2",[])}>Закрыть</button></div></div>`;
     body.querySelectorAll('[data-open]').forEach(el => { el.onclick = () => jrOpen(Number(el.dataset.open)); });
     for (const action of ['retry', 'dismiss']) body.querySelectorAll(`[data-schedule-${action}]`).forEach(el => { el.onclick = async () => {
       if (action === 'dismiss' && !confirm('Убрать это неотправленное изменение графика из журнала?')) return;

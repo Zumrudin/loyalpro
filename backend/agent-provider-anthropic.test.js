@@ -1,4 +1,5 @@
 'use strict';
+jest.mock('./services/resource-limits', () => ({ attempt: jest.fn(async () => {}) }));
 const anthropic = require('./services/agent/providers/anthropic');
 
 describe('anthropic.createMessage (нормализация)', () => {

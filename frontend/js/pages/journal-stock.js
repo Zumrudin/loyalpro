@@ -508,7 +508,7 @@ function jrStockConsumablesHtml(d) {
     d.services
       .map(
         (s) =>
-          `<h4>${stockEsc(s.title)}</h4><table class="stock-table"><thead><tr><th>Товар</th><th>Норма</th><th>Факт</th><th>Разница</th><th>Сумма</th></tr></thead><tbody>${s.rows.map((r) => `<tr><td data-label="Товар">${stockEsc(r.title)}${r.adjustments ? " · корректировка LoyalPro" : ""}</td><td data-label="Норма">${r.expected} ${stockEsc(r.unit)}</td><td data-label="Факт">${r.actual}</td><td data-label="Разница" class="${r.flag === "over" ? "stock-neg" : ""}">${r.diff}</td><td data-label="Сумма">${stockMoney(r.cost)}</td></tr>`).join("")}</tbody></table>${d.recordId > 0 ? `<button type="button" onclick="jrStockEdit(${Number(s.id)})">Изменить состав</button><div id="jrStockEdit-${Number(s.id)}"></div>` : ""}`,
+          `<h4>${stockEsc(s.title)}</h4><table class="stock-table"><thead><tr><th>Товар</th><th>Норма</th><th>Факт</th><th>Разница</th><th>Сумма</th></tr></thead><tbody>${s.rows.map((r) => `<tr><td data-label="Товар">${stockEsc(r.title)}${r.adjustments ? " · корректировка LoyalPro" : ""}</td><td data-label="Норма">${r.expected} ${stockEsc(r.unit)}</td><td data-label="Факт">${r.actual}</td><td data-label="Разница" class="${r.flag === "over" ? "stock-neg" : ""}">${r.diff}</td><td data-label="Сумма">${stockMoney(r.cost)}</td></tr>`).join("")}</tbody></table>${d.recordId > 0 ? `<button type="button" ${UIEvents.attrs("click","journal-stock-1",[UIEvents.value(Number(s.id))])}>Изменить состав</button><div id="jrStockEdit-${Number(s.id)}"></div>` : ""}`,
       )
       .join("") +
     (d.unassigned?.length
@@ -528,15 +528,7 @@ function jrStockEdit(id) {
     s = d.services.find((s) => s.id === id),
     actual = new Map(s.rows.map((r) => [r.goodRowId, r.actual]));
   jrEl("jrStockEdit-" + id).innerHTML =
-    `<p>Укажите полный целевой состав в единицах списания. Ноль убирает товар.</p><div class="jr-stock-editor">${d.goods
-      .filter((g) => g.stock_active !== false || actual.has(Number(g.id)))
-      .map(
-        (g) =>
-          `<label>${stockEsc(g.title)} (${stockEsc(g.service_unit)})<input type="number" min="0" step="any" data-stock-good="${Number(g.id)}" value="${actual.get(Number(g.id)) || 0}"></label>`,
-      )
-      .join(
-        "",
-      )}</div><button type="button" onclick="jrStockSave(${id})">Сохранить расходники</button><p role="alert" id="jrStockError-${id}"></p>`;
+    `<p>Укажите полный целевой состав в единицах списания. Ноль убирает товар.</p><div class="jr-stock-editor">${d.goods.filter(g=>g.stock_active!==false||actual.has(Number(g.id))).map(g=>`<label>${stockEsc(g.title)} (${stockEsc(g.service_unit)})<input type="number" min="0" step="any" data-stock-good="${Number(g.id)}" value="${actual.get(Number(g.id))||0}"></label>`).join("")}</div><button type="button" ${UIEvents.attrs("click","journal-stock-2",[UIEvents.value(id)])}>Сохранить расходники</button><p role="alert" id="jrStockError-${id}"></p>`;
 }
 async function jrStockSave(serviceId) {
   if (jrStockState.busy) return;

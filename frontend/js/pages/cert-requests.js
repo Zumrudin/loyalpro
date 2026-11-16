@@ -8,7 +8,7 @@ async function loadCertRequests() {
   host.innerHTML = `
     <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px">
       <h2 style="margin:0">Справки</h2>
-      <button class="btn-pri" onclick="crNewCert()">+ Создать новую справку</button>
+      <button class="btn-pri" ${UIEvents.attrs("click","cert-requests-1",[])}>+ Создать новую справку</button>
     </div>
     <div id="cr-list">Загрузка…</div>`;
   try {
@@ -38,12 +38,12 @@ function crRow(r) {
   const matched = r.matched_client_id ? '✅' : '—';
   return `<tr style="border-top:1px solid #eee;font-size:14px">
     <td>${date}</td><td>${esc(String(r.report_year))}</td><td>${payer}</td><td>${patient}</td>
-    <td>${matched}${r.computed_amount != null ? ' · ' + esc(Number(r.computed_amount).toLocaleString('ru-RU')) + ' ₽' : ''}</td>
-    <td>${esc(CR_STATUS_LABEL[r.status] || r.status)}</td>
+    <td>${matched}${r.computed_amount!=null?' · '+esc(Number(r.computed_amount).toLocaleString('ru-RU'))+' ₽':''}</td>
+    <td>${esc(CR_STATUS_LABEL[r.status]||r.status)}</td>
     <td>
-      <button class="btn-pri" onclick="crOpenInGenerator(${r.id})">Создать справку</button>
-      ${r.status !== 'done' ? `<button onclick="crSetStatus(${r.id},'done')">Готово</button>` : ''}
-      ${r.status !== 'rejected' ? `<button onclick="crSetStatus(${r.id},'rejected')">Отклонить</button>` : ''}
+      <button class="btn-pri" ${UIEvents.attrs("click","cert-requests-2",[UIEvents.value(r.id)])}>Создать справку</button>
+      ${r.status!=='done'?`<button ${UIEvents.attrs("click","cert-requests-3",[UIEvents.value(r.id)])}>Готово</button>`:''}
+      ${r.status!=='rejected'?`<button ${UIEvents.attrs("click","cert-requests-4",[UIEvents.value(r.id)])}>Отклонить</button>`:''}
     </td>
   </tr>`;
 }

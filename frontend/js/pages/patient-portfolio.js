@@ -235,29 +235,28 @@ async function _ppRenderPatient() {
   const pphone = (cases[0] && cases[0].client_phone) || '';
   _ppRoot().innerHTML = `
     <div class="pp-toolbar">
-      <button class="btn-back" onclick="_ppBack(1)">‹ К поиску</button>
-      <button class="btn btn-pri" onclick="_ppNewVisit()">+ Новый альбом</button>
+      <button class="btn-back" ${UIEvents.attrs("click","patient-portfolio-1",[])}>‹ К поиску</button>
+      <button class="btn btn-pri" ${UIEvents.attrs("click","patient-portfolio-2",[])}>+ Новый альбом</button>
     </div>
     <div class="pp-patient-head">
       <div class="pp-avatar">${_ppEsc(_ppInitials(pname))}</div>
       <div class="pp-patient-id">
         <div class="pp-patient-name">${_ppEsc(pname)}</div>
-        <div class="pp-patient-sub">${_ppEsc(pphone)}${cases.length ? ' · ' + cases.length + ' альбом(ов)' : ''}</div>
+        <div class="pp-patient-sub">${_ppEsc(pphone)}${cases.length?' · '+cases.length+' альбом(ов)':''}</div>
       </div>
     </div>
     <div class="pp-courses-row">
-      ${courses.map(c => `<span class="pp-chip pp-chip-course" data-id="${c.id}">${_ppEsc(c.title)} · ${c.visits.length}</span>`).join('')}
-      <span class="pp-chip pp-chip-add" onclick="_ppNewCourse()">+ Курс</span>
+      ${courses.map(c=>`<span class="pp-chip pp-chip-course" data-id="${c.id}">${_ppEsc(c.title)} · ${c.visits.length}</span>`).join('')}
+      <span class="pp-chip pp-chip-add" ${UIEvents.attrs("click","patient-portfolio-3",[])}>+ Курс</span>
     </div>
     <div class="pp-timeline">
-      ${cases.length === 0 ? '<div class="pp-empty">Альбомов пока нет — нажмите «+ Новый альбом»</div>' :
-        cases.map(v => `
+      ${cases.length===0?'<div class="pp-empty">Альбомов пока нет — нажмите «+ Новый альбом»</div>':cases.map(v=>`
           <div class="case-card pp-row" data-visit-id="${v.id}">
-            ${v.preview_url ? `<img class="pp-row-img" src="${_ppEsc(v.preview_url)}" loading="lazy" decoding="async" alt="">` : '<div class="pp-row-noimg">нет фото</div>'}
+            ${v.preview_url?`<img class="pp-row-img" src="${_ppEsc(v.preview_url)}" loading="lazy" decoding="async" alt="">`:'<div class="pp-row-noimg">нет фото</div>'}
             <div class="pp-row-body">
               <div class="cc-name">${_ppEsc(_ppFmtDate(v.visit_date))}</div>
-              <div class="cc-meta">${_ppEsc(v.specialist_name || '—')} • ${v.photos_count} фото • ${v.comments_count} комм.</div>
-              ${v.course_title ? `<div class="cc-course">↳ ${_ppEsc(v.course_title)}</div>` : ''}
+              <div class="cc-meta">${_ppEsc(v.specialist_name||'—')} • ${v.photos_count} фото • ${v.comments_count} комм.</div>
+              ${v.course_title?`<div class="cc-course">↳ ${_ppEsc(v.course_title)}</div>`:''}
             </div>
           </div>
         `).join('')}
@@ -387,7 +386,7 @@ async function _ppRenderAlbum() {
 
   _ppRoot().innerHTML = `
     <div class="pp-toolbar">
-      <button class="btn-back" onclick="_ppBack(2)">‹ Пациент</button>
+      <button class="btn-back" ${UIEvents.attrs("click","patient-portfolio-4",[])}>‹ Пациент</button>
       <div class="pp-album-meta">Альбом · ${_ppEsc(_ppFmtDate(v.visit_date))}</div>
       <div class="pp-menu">
         <button class="pp-menu-btn" type="button" aria-label="Меню альбома">⋯</button>
@@ -402,16 +401,15 @@ async function _ppRenderAlbum() {
     ${stageBlock('after')}
     <section class="pp-notes">
       <h3>Заметки</h3>
-      <textarea class="pp-notes-ta" placeholder="Клинические заметки по альбому">${_ppEsc(v.notes || '')}</textarea>
+      <textarea class="pp-notes-ta" placeholder="Клинические заметки по альбому">${_ppEsc(v.notes||'')}</textarea>
       <div class="pp-notes-hint">Сохраняется при потере фокуса</div>
     </section>
     <section class="pp-comments">
       <h3>Комментарии</h3>
       <div class="pp-comments-list">
-        ${v.comments.length === 0 ? '<div class="pp-stage-empty">Комментариев пока нет</div>' :
-          v.comments.map(c => `
+        ${v.comments.length===0?'<div class="pp-stage-empty">Комментариев пока нет</div>':v.comments.map(c=>`
             <div class="pp-comment">
-              <div class="pp-c-head">${_ppEsc(c.author_name || '—')} • ${new Date(c.created_at).toLocaleString('ru')}</div>
+              <div class="pp-c-head">${_ppEsc(c.author_name||'—')} • ${new Date(c.created_at).toLocaleString('ru')}</div>
               <div class="pp-c-text">${_ppEsc(c.text)}</div>
             </div>`).join('')}
       </div>
