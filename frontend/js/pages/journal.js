@@ -37,6 +37,7 @@ async function jrApi(path, body) {
 async function loadJournal(opts = {}) {
   const silent = !!opts?.silent;
   if (!jrEl('jrDate').value) jrEl('jrDate').value = jrToday();
+  if (typeof sideCalendarSync === 'function') sideCalendarSync(!silent);
   if (typeof jrToolbarSync === 'function') jrToolbarSync();
   jrEl('jrReview').hidden = typeof ME === 'undefined' || ME?.role !== 'owner';
   const date = jrEl('jrDate').value;

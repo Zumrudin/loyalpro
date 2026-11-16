@@ -1,0 +1,33 @@
+/* Desktop-only collapsed Ivory sidebar. Loaded after ivory-brass.css. */
+.sidebar-toggle,.sidebar-icon,.sidebar-brand-mark{display:none}
+@media (min-width:1024px){
+  html[data-skin="ivory"] #app[style*="flex"]{grid-template-columns:280px minmax(0,1fr)}
+  html[data-skin="ivory"] #app.sidebar-collapsed{grid-template-columns:64px minmax(0,1fr)}
+  html[data-skin="ivory"] #app.sidebar-collapsed .sidebar-brand-mark{display:block;width:28px;height:28px;object-fit:contain}
+  html[data-skin="ivory"] #app.sidebar-collapsed .tb-logo{padding:6px 10px;justify-content:center;flex-direction:column;gap:2px;align-self:center}
+  html[data-skin="ivory"] #app.sidebar-collapsed .tb-ln,
+  html[data-skin="ivory"] #app.sidebar-collapsed .tb-clinic,
+  html[data-skin="ivory"] #app.sidebar-collapsed .tb-nav .sidebar-label,
+  html[data-skin="ivory"] #app.sidebar-collapsed .tb-nav .nav-sec-t{display:none}
+  html[data-skin="ivory"] .sidebar-toggle{margin-left:auto;display:inline-flex;align-items:center;justify-content:center;width:30px;height:30px;padding:0;border:0;border-radius:8px;background:transparent;color:var(--t2);cursor:pointer;transform:rotate(180deg)}
+  html[data-skin="ivory"] .sidebar-toggle:hover{background:var(--as);color:var(--t1)}
+  html[data-skin="ivory"] .sidebar-toggle:focus-visible{outline:2px solid var(--a);outline-offset:2px}
+  html[data-skin="ivory"] .sidebar-toggle svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+  html[data-skin="ivory"] #app.sidebar-collapsed .sidebar-toggle{margin:0;transform:none}
+  html[data-skin="ivory"] .tb-nav .sidebar-icon{display:block;width:19px;height:19px;flex:0 0 19px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+  html[data-skin="ivory"] .tb-nav .tn{display:flex;align-items:center;gap:10px}
+  html[data-skin="ivory"] .tb-nav .nav-grp-t{gap:10px}
+  html[data-skin="ivory"] #app.sidebar-collapsed .tb-nav{padding-left:8px;padding-right:8px;overflow-y:auto;overflow-x:hidden}
+  html[data-skin="ivory"] #app.sidebar-collapsed .tb-nav .tn,
+  html[data-skin="ivory"] #app.sidebar-collapsed .tb-nav .nav-grp-t{width:48px;min-height:44px;padding:10px;justify-content:center;position:relative}
+  html[data-skin="ivory"] #app.sidebar-collapsed .tb-nav .nav-grp-t::after{display:none}
+  html[data-skin="ivory"] #app.sidebar-collapsed .tb-nav .sidebar-icon{width:20px;height:20px;flex-basis:20px}
+  html[data-skin="ivory"] #app.sidebar-collapsed .tb-nav .nav-grp-b{display:none}
+  html[data-skin="ivory"] #app.sidebar-collapsed .tb-nav .nav-grp.rail-open>.nav-grp-b{display:flex;position:fixed;z-index:120;flex-direction:column;gap:2px;min-width:196px;max-width:260px;max-height:calc(100vh - 16px);overflow:auto;padding:8px;background:var(--card);border:1px solid var(--bd);border-radius:12px;box-shadow:0 10px 28px rgba(74,66,60,.16)}
+  html[data-skin="ivory"] #app.sidebar-collapsed .tb-nav .nav-grp.rail-open .nav-grp-b .tn{width:auto;justify-content:flex-start;padding:10px 12px;font-size:13px;white-space:normal}
+  html[data-skin="ivory"] #app.sidebar-collapsed .tb-nav .nav-grp.rail-open .nav-grp-b .sidebar-label{display:inline}
+  html[data-skin="ivory"] #app.sidebar-collapsed .tb-nav .nav-grp.rail-open .nav-grp-b .sidebar-icon{margin-right:10px}
+}
+@media (max-width:1023px){
+  .sidebar-toggle{display:none!important}
+}

@@ -235,6 +235,8 @@ async function launchApp() {
   checkAgentModelNotice();
 
   const startPage = applyRoleNav(ME.role);
+  if (typeof sidebarInit === 'function') sidebarInit();
+  if (typeof sideCalendarInit === 'function') sideCalendarInit();
 
   // Deep-link: /#chat, /#clients, /#chat/<ключ-диалога> и т.п. — открыть
   // страницу из hash, если она существует в DOM (доступность по роли уже
