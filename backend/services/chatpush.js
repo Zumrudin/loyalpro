@@ -211,6 +211,19 @@ async function deleteWebhook(id, token) {
   return data.meta;
 }
 
+function webhookSummary(webhook) {
+  if (!webhook || typeof webhook !== 'object') return null;
+  const rawId = webhook.id;
+  const id = (typeof rawId === 'number' || (typeof rawId === 'string' && /^\d+$/.test(rawId)))
+    ? Number(rawId) : null;
+  return {
+    id: Number.isSafeInteger(id) ? id : null,
+    types: Array.isArray(webhook.types)
+      ? webhook.types.filter(type => typeof type === 'string' && /^[a-z0-9_]{1,64}$/.test(type)).slice(0, 50)
+      : [],
+  };
+}
+
 // ── Проверка своего аккаунта (Bearer token инстанса) ───────────────
 
 /**
@@ -404,6 +417,7 @@ module.exports = {
   getWebhook,
   updateWebhook,
   deleteWebhook,
+  webhookSummary,
   getAccount,
   getInstanceByCustomerId,
   parseIncomingMessage,

@@ -9,6 +9,7 @@ const SPECIALIST_ALLOWED_PREFIXES = ['/api/home-care', '/api/auth', '/api/templa
 module.exports = {
   // Server
   PORT: process.env.PORT || 3001,
+  BIND_HOST: process.env.BIND_HOST || '127.0.0.1',
 
   // Official MAX loyalty bot. Separate from the clinic's MAX user-account gateway.
   // One server-configured bot/salon per process; no tenant ids accepted from updates.

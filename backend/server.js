@@ -441,7 +441,7 @@ pool.connect()
     }
     await closeStaleSyncRuns().then(n => { if (n) logger.warn(`sync_logs: закрыто зависших running=${n}`); })
       .catch(e => logger.warn(`sync_logs: не удалось закрыть зависшие running: ${safeErrorCode(e)}`));
-    app.listen(PORT, () => {
+    app.listen(PORT, config.BIND_HOST, () => {
       logger.info(`Server running on port ${PORT}`);
       logger.info('Webhook: POST /yclients/webhook.v2/:companyId');
       logger.info('Register: POST /api/auth/register');
@@ -457,5 +457,5 @@ pool.connect()
   })
   .catch(e => {
     logger.error(`PostgreSQL error: ${safeErrorCode(e)}`);
-    app.listen(PORT, () => logger.warn(`Server started WITHOUT DB on port ${PORT}`));
+    app.listen(PORT, config.BIND_HOST, () => logger.warn(`Server started WITHOUT DB on port ${PORT}`));
   });

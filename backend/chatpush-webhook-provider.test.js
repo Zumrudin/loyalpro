@@ -40,3 +40,28 @@ test('у Chatpush пустой секрет → 503, legacy-приёма нет'
     expect(verifySecret(req('/chatpush', 'anything'))).toEqual({ ok: false, status: 503, reason: 'chatpush secret not configured' });
   } finally { config.CHATPUSH.webhookSecret = prev; }
 });
+
+test('webhookSummary исключает URL и остальной provider payload', () => {
+  const marker = 'synthetic-webhook-secret';
+  const summary = require('./services/chatpush').webhookSummary({
+    id: 57,
+    url: `https://example.invalid/chatpush/webhook?key=${marker}`,
+    types: ['tdlib_incoming_msg', `https://example.invalid/?key=${marker}`],
+    secret: marker,
+    meta: { response: marker },
+  });
+  expect(summary).toEqual({ id: 57, types: ['tdlib_incoming_msg'] });
+  expect(JSON.stringify(summary)).not.toContain(marker);
+});
+
+test('registration CLI использует sanitized summary и safeErrorCode вместо raw response', () => {
+  const source = require('fs').readFileSync(`${__dirname}/chatpush-register-webhook.js`, 'utf8');
+  expect(source).toContain('all.map(chatpush.webhookSummary)');
+  expect(source).toContain('JSON.stringify(chatpush.webhookSummary(wh)');
+  expect(source).toContain('safeErrorCode(e)');
+  expect(source).not.toContain('JSON.stringify(all,');
+  expect(source).not.toContain('JSON.stringify(wh,');
+  expect(source).not.toContain('JSON.stringify(meta)');
+  expect(source).not.toContain('e.response?.data');
+  expect(source).not.toContain("console.log('Регистрирую webhook →', URL)");
+});

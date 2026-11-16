@@ -14,6 +14,7 @@
 require('dotenv').config();
 const config = require('./config');
 const chatpush = require('./services/chatpush');
+const { safeErrorCode } = require('./utils/safe-error');
 
 const BASE = process.env.CHATPUSH_WEBHOOK_BASE || 'https://dev.zumrudin.ru';
 const URL = `${BASE}/chatpush/webhook?key=${config.CHATPUSH.webhookSecret}`;
@@ -40,26 +41,25 @@ function fail(msg) { console.error('❌ ' + msg); process.exit(1); }
   try {
     if (arg === '--list') {
       const all = await chatpush.listWebhooks();
-      console.log('Текущие webhooks:\n' + JSON.stringify(all, null, 2));
+      console.log('Текущие webhooks:\n' + JSON.stringify(all.map(chatpush.webhookSummary), null, 2));
       return;
     }
     if (arg.startsWith('--delete=')) {
       const id = arg.split('=')[1];
-      const meta = await chatpush.deleteWebhook(id);
-      console.log(`Удалён webhook ${id}:`, JSON.stringify(meta));
+      await chatpush.deleteWebhook(id);
+      console.log('Webhook удалён');
       return;
     }
 
     if (!config.CHATPUSH.webhookSecret) fail('CHATPUSH_WEBHOOK_SECRET не задан в .env');
-    console.log('Регистрирую webhook →', URL);
+    console.log('Регистрирую webhook');
     console.log('События:', EVENTS.join(', '));
     const wh = await chatpush.createWebhook(URL, EVENTS);
-    console.log('\n✅ Создан webhook:\n' + JSON.stringify(wh, null, 2));
+    console.log('\n✅ Создан webhook:\n' + JSON.stringify(chatpush.webhookSummary(wh), null, 2));
 
     const all = await chatpush.listWebhooks();
-    console.log('\nВсе webhooks сейчас:\n' + JSON.stringify(all, null, 2));
+    console.log('\nВсе webhooks сейчас:\n' + JSON.stringify(all.map(chatpush.webhookSummary), null, 2));
   } catch (e) {
-    const body = e.response?.data ? JSON.stringify(e.response.data) : e.message;
-    fail('Ошибка запроса к Chatpush: ' + body);
+    fail('Ошибка запроса к Chatpush: ' + safeErrorCode(e));
   }
 })();

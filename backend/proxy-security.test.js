@@ -45,3 +45,11 @@ test('public certificate limits use req.ip and CORS denial is a managed JSON err
   expect(serverSource).toContain("err?.code === 'CORS_FORBIDDEN'");
   expect(serverSource).toContain("res.status(403).json({ error: 'Origin not allowed' })");
 });
+
+test('backend binds loopback by default with an explicit env override', () => {
+  const configSource = fs.readFileSync(`${__dirname}/config.js`, 'utf8');
+  expect(configSource).toContain("BIND_HOST: process.env.BIND_HOST || '127.0.0.1'");
+  const serverSource = fs.readFileSync(`${__dirname}/server.js`, 'utf8');
+  expect(serverSource.match(/app\.listen\(PORT, config\.BIND_HOST,/g)).toHaveLength(2);
+  expect(serverSource).not.toMatch(/app\.listen\(PORT,\s*(?:\(\)|function)/);
+});

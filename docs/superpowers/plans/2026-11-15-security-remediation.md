@@ -2,9 +2,7 @@
 
 > **Для новой сессии:** выполнять задачи по зависимостям, а не все подряд. Можно делегировать независимые пакеты, но координатор обязан проверить результат, запустить проверки и не передавать production-действия подагентам.
 >
-> **Статус:** выполняется; кодовые hotfix SEC-01…SEC-04, SEC-06…SEC-09, SEC-11/12 и основная часть SEC-10 реализованы с mocked/focused тестами и установлены на dev. SEC-05 additive DDL применён в `loyalpro_test` после чистого агрегатного аудита; FK остаются `NOT VALID`, production-схема не менялась. SEC-13 переведён в Report-Only, но inline scripts/handlers ещё не перенесены и enforce-CSP не ужесточён. Активный dev release: `/srv/loyalpro-dev/releases/security-20261115-201235`; откат приложения — `inline-goods-20261115-1852` с сохранением additive DDL. Production-операции, browser MCP и живые внешние вызовы не выполнялись.
->
-> **Исходный аудит:** статический анализ кода и безопасные HTTP GET-проверки без реальной эксплуатации, OTP, webhook, регистрации, сообщений или изменения production-данных.
+> **Статус на 16.11.2026 19:05 UTC:** готовый пакет выложен на production в `/srv/loyalpro/releases/security-followup-20261116`: Chatpush redaction, loopback bind, nginx no-query для HTTP/HTTPS, четыре FK validated. База приложения — production `0f8affa`, только девять согласованных файлов; sidebar/calendar не включены. 8 focused suites / 111 tests PASS; HTTPS/static/auth/network/log smoke PASS. Общий security-план не завершён: следующие задачи перечислены в разделе «После production-выноса» ниже. Старые записи ниже описывают состояние до этого выпуска.
 
 ## 1. Цель и обязательные ограничения
 
@@ -64,6 +62,30 @@
 - Координатор не объявляет задачу выполненной, если её тесты не запускались или остались красными.
 
 ## 3. Задачи
+
+## Production follow-up — выполнено 16.11.2026
+
+Разрешение: в исходной Kimi-сессии владелец разрешил выложить готовый пакет и оставить незавершённое в плане; в текущей сессии повторно поручил завершить production-вынос и тестирование.
+
+- Причина остановки Kimi: PM2 проверялся от root; фактический supervisor принадлежит пользователю `loyalpro`, `PM2_HOME=/srv/loyalpro/.pm2`. Использовать `runuser -u loyalpro -- pm2 …`. Процесс не нужно создавать заново.
+- Release `/srv/loyalpro/releases/security-followup-20261116`, `/srv/loyalpro/current` переключён в 19:02:53 UTC. `pm2 restart loyalpro` и `pm2 save` выполнены от `loyalpro`; процесс online, cwd подтверждён. Node фактически v22.22.1.
+- Состав относительно `security-0f8affa`: `.env.example`, `config.js`, `server.js`, `services/chatpush.js`, `chatpush-register-webhook.js`, три focused test-файла и `scripts/case-tenant-integrity-e2e.js`. Все остальные backend/frontend-файлы побайтно совпали с предыдущим release. Зависимости установлены отдельным `npm ci --omit=dev --no-audit --no-fund`; `.env`, data, logs и uploads сохраняют прежние ссылки.
+- Backup `/srv/loyalpro-backups/pre-security-followup-20261116`: custom-format `loyalpro.dump` (13 858 628 bytes), `pg_restore --list` успешен; restore не запускался. Там же старые nginx/ecosystem/PM2 dump, deployment.json и verification.json. Секреты и содержимое данных не выводились.
+- Nginx `/etc/nginx/sites-available/loyalpro.conf`: формат `loyalpro_noquery` пишет `$request_method $uri $server_protocol`, без args, Referer и User-Agent; применён к HTTP и HTTPS. `nginx -t`, reload и active PASS. XFF остаётся `$remote_addr`.
+- Production FK: `node scripts/case-tenant-integrity-e2e.js --audit`, затем `--validate-constraints --confirm-database=loyalpro`, затем повторный `--audit`. Все семь counts до/после = 0; четыре FK validated за 5/3/2/3 мс. Отдельные транзакции, lock/statement timeout 5/30 s. Backfill/drop и изменение строк пациентов не выполнялись.
+- Exact candidate: после чистого `npm ci` и синтетического JWT_SECRET команда `npx --no-install jest --runInBand case-tenant-integrity chatpush-webhook-provider chatpush-webhook-route access-tickets proxy-security query-token-ui yclients-webhook-security clients-api --silent`: **8 suites, 111/111 PASS**. Первые попытки выявили отсутствие зависимостей, затем тестового JWT_SECRET; production credentials для тестов не использовались.
+- Внешние проверки: HTTPS `/` и два JS = 200 и byte match; auth/me, salon с query token и SSE с невалидным ticket = 401; HTTP = 301. `ss` подтверждает только `127.0.0.1:3001`, внешний TCP-connect недоступен. CSP Report-Only присутствует.
+- После reload старый nginx worker дописал прежний SSE-запрос при restart backend; в error log один `upstream prematurely closed` в 19:02:53. Это не скрыто из результата: после переключения отдельное окно проверки HTTP/HTTPS — query string и synthetic marker отсутствуют, новых error markers = 0. Исторические логи не удалялись. Startup `MaxListenersExceededWarning` и DEP0040 существовали до выпуска; приложение остаётся online.
+- Browser MCP отсутствует: браузерная приёмка XSS/SSE reconnect/downloads не выполнена. Полный Jest повторно не запускался: прежний baseline с красными suites остаётся в SEC-14. Mobile не менялся, lint неприменим. Реальные OTP/messages/bookings и replay webhook не запускались; новые natural deliveries после этого restart отдельно не подтверждены.
+- Откат приложения: вернуть `/srv/loyalpro/current` на `/srv/loyalpro/releases/security-0f8affa`, затем от `loyalpro` выполнить PM2 restart/save. Это временно вернёт внешний bind; предпочтителен forward fix. Nginx no-query и validated FK при откате приложения сохранять. Backup конфигурации nginx имеется; удаление FK/данных не требуется.
+
+### После production-выноса
+
+1. Dev: согласовать фактический конфиг sslh, провести package/security review, подготовить targeted PROXY v1 на `127.0.0.1:4444` и controlled restart с rollback; затем проверить реальный client IP. Соседние маршруты не менять. Применить BIND_HOST/redaction к dev отдельным выпуском.
+2. Проверить natural webhook deliveries после текущего restart без replay и сообщений пациентам; завершить startup/config validation и счётчики отказов (SEC-08).
+3. Проверить error logs отдельно: nginx error log может содержать исходный URI при upstream-ошибках; no-query access format не редактирует error log. Подготовить политику для secret-bearing routes, доступ к legacy logs и ротацию по отдельному access review.
+4. Выполнить browser MCP-приёмку на синтетическом стенде; продолжить SEC-10/13 (per-attempt LLM limits, защита регистрации, CSP без inline) и настройку mobile login по согласованному серверному tenant context.
+5. Разобрать прежние logger listener/deprecation warnings отдельным изменением; не маскировать их увеличением лимита без причины.
 
 ## SEC-00 — Baseline и безопасный стенд
 
@@ -219,11 +241,11 @@
 - [x] Добавить составные ограничения/триггеры для photos/comments, не меняя существующий lifecycle S3 и не удаляя объекты.
 - [x] Для старых данных рассмотреть `NOT VALID` + отдельную `VALIDATE CONSTRAINT`: новые записи должны проверяться сразу, старые ошибки не должны быть скрыты. Не объявлять constraint валидным, пока агрегатный аудит не чист.
 - [x] Не проглатывать ошибки security-миграции через `.catch(() => {})`: процесс должен явно сообщить, что защита не установлена. Проверить совместимость с текущим запуском миграций и не блокировать весь сервис без согласованного runbook.
-- [x] Задокументировать точные locks, ожидаемую длительность, порядок deploy, verification queries и recovery. Production-запуск — отдельное подтверждение. (На dev: `lock_timeout=5s`, `statement_timeout=30s`; MOBILE_AUTH/API_ACCESS_TICKETS/RESOURCE_LIMITS/CASE_TENANT_INTEGRITY — 1/19/19/20 мс. Production-длительность не измерена.)
+- [x] Задокументировать точные locks, ожидаемую длительность, порядок deploy, verification queries и recovery. Production-запуск — отдельное подтверждение. (Dev startup DDL: `lock_timeout=5s`, `statement_timeout=30s`, MOBILE_AUTH/API_ACCESS_TICKETS/RESOURCE_LIMITS/CASE_TENANT_INTEGRITY — 1/19/19/20 мс; dev VALIDATE четырёх FK — 6/3/8/2 мс. Production VALIDATE не выполнялся.)
 
-**Migration runbook (применён на dev `loyalpro_test`; production DDL не запускался):**
+**Migration runbook (dev `loyalpro_test`: DDL и VALIDATE выполнены; production VALIDATE не выполнялся и не разрешён):**
 
-1. До deploy на тестовой копии получить версию PostgreSQL, список одноимённых indexes/constraints и размеры `clients`, `case_courses`, `case_visits`, `case_photos`, `case_comments`. Текущий DDL создаёт `uq_clients_salon_id_id` и `uq_case_visits_salon_id_id` обычным `CREATE UNIQUE INDEX`: чтение продолжается, запись блокируется на время построения. На небольших dev-таблицах четыре security DDL-блока заняли 1/19/19/20 мс с `lock_timeout=5s`; production-длительность и locks не измерены. На больших таблицах сначала отдельно создать эти же индексы `CONCURRENTLY`, вне startup-миграции и её транзакции.
+1. До deploy на тестовой копии получить версию PostgreSQL, список одноимённых indexes/constraints и размеры `clients`, `case_courses`, `case_visits`, `case_photos`, `case_comments`. Текущий DDL создаёт `uq_clients_salon_id_id` и `uq_case_visits_salon_id_id` обычным `CREATE UNIQUE INDEX`: чтение продолжается, запись блокируется на время построения. На небольших dev-таблицах четыре security DDL-блока заняли 1/19/19/20 мс с `lock_timeout=5s`; длительность и locks для production VALIDATE не измерены. На больших таблицах сначала отдельно создать эти же индексы `CONCURRENTLY`, вне startup-миграции и её транзакции.
 2. Добавление каждого FK `NOT VALID` кратковременно требует `ShareRowExclusive` на связанных таблицах; новые/изменённые строки проверяются сразу, старые массово не сканируются этим шагом. `DROP/CREATE` только новых named triggers требует краткого `AccessExclusive`. Ошибка `CASE_TENANT_INTEGRITY_DDL` не глотается: текущий startup catch пишет ошибку и поднимает сервер без рабочей БД, поэтому выкат без staging и maintenance/recovery plan запрещён.
 3. Выполнить агрегатный аудит (выводятся только counts):
    ```sql
@@ -236,8 +258,9 @@
      (SELECT count(*) FROM case_photos p LEFT JOIN case_visits v ON v.id=p.case_visit_id AND v.salon_id=p.salon_id WHERE v.id IS NULL) AS bad_photo_visit,
      (SELECT count(*) FROM case_comments cm LEFT JOIN case_visits v ON v.id=cm.case_visit_id AND v.salon_id=cm.salon_id WHERE v.id IS NULL) AS bad_comment_visit;
    ```
-4. На staging с синтетическими салонами A/B проверить INSERT и UPDATE всех связей, повторный `runMigrations`, удаление client/course/record/specialist и сохранение `salon_id` при `SET NULL`. Проверить cascade photos/comments и отсутствие S3 side effects. На dev выполнены read-only inventory/audit и транзакционное применение DDL; повторный `runMigrations` прошёл при запуске PM2. Синтетические INSERT/UPDATE/delete/cascade сценарии A/B не выполнялись.
-5. Только если все counts равны нулю и locks измерены, отдельно согласовать `ALTER TABLE … VALIDATE CONSTRAINT fk_case_courses_salon_client`, затем аналогично остальные три FK. `VALIDATE CONSTRAINT` сканирует legacy-строки и использует `ShareUpdateExclusive`, не смешивать с backfill. При ненулевых counts оставить `NOT VALID`, не переносить записи автоматически.
+   Фактически 16.11: dev до/после E2E и после VALIDATE — все семь counts = 0; production read-only audit — тоже все семь = 0.
+4. На staging с синтетическими салонами A/B проверить INSERT и UPDATE всех связей, повторный `runMigrations`, удаление client/course/record/specialist и сохранение `salon_id` при `SET NULL`. Проверить cascade photos/comments и отсутствие S3 side effects. Повторный `runMigrations` ранее прошёл при запуске PM2. Dev harness `backend/scripts/case-tenant-integrity-e2e.js --e2e` фактически прошёл 27/27 write и 6/6 delete/cascade: `rolledBack=true`, `residueCount=0`, все семь aggregate audits = 0; внешние S3/API вызовы не выполнялись.
+5. Только если все counts равны нулю и locks измерены, отдельно согласовать `ALTER TABLE … VALIDATE CONSTRAINT fk_case_courses_salon_client`, затем аналогично остальные три FK. `VALIDATE CONSTRAINT` сканирует legacy-строки и использует `ShareUpdateExclusive`, не смешивать с backfill. Dev VALIDATE выполнен последовательно с timeouts 5/30 s: все четыре FK `convalidated=true`, durations 6/3/8/2 ms, повторный аудит = 0. Production четыре FK остаются `convalidated=false`; production VALIDATE не выполнялся, отдельное разрешение не подтверждено. При ненулевых counts оставить `NOT VALID`, не переносить записи автоматически.
 6. Recovery: остановить новый rollout до применения DDL либо оставить additive constraints и кодовые SEC-04 guards. Не удалять constraints/triggers и не менять старые single-column `ON DELETE SET NULL` FK без отдельного согласования. Откат к небезопасному API недопустим.
 
 **Тесты:**
@@ -302,12 +325,12 @@
 
 Исходные места: `routes/webhook.js:28-66`, `routes/chatpush-webhook.js:60-80`.
 
-- [ ] Получить только булеву инвентаризацию: для каких активных салонов секрет настроен/не настроен. Не выводить значения и не использовать production payload.
-- [ ] До включения enforcement настроить секрет и URL у провайдера для каждого активного салона через согласованную операцию. Не делать это автоматическим deploy-шагом.
+- [x] Получить только булеву инвентаризацию: для каких активных салонов секрет настроен/не настроен. Не выводить значения и не использовать production payload. (Один активный YClients-салон; Chatpush/gateway secrets присутствуют.)
+- [x] До включения enforcement настроить секрет и URL у провайдера для каждого активного салона через согласованную операцию. Не делать это автоматическим deploy-шагом. (Provider URL подтверждён пользователем.)
 - [x] Изменить код: отсутствующий секрет — ошибка конфигурации 503/401, отсутствующий/неверный key — 401; никакого `legacy ok` для YClients/Chatpush. Gateway сохраняет fail-closed.
 - [x] Никакие DB writes, AI, уведомления, финансовые и booking-обработчики не вызываются до успешной проверки секрета. Немедленный ACK сохранить только после auth.
 - [x] Добавить rate limit по нормализованному IP + salon/company, не допуская обхода через spoofed company/IP.
-- [ ] Проверить timing-safe сравнение и единый формат секрета. Если провайдер поддерживает только secret в URL, исключить query из access/application logs; не утверждать наличие HMAC, если YClients его не предоставляет. (Сравнение и application logging исправлены; nginx access log требует проверки владельцем.)
+- [ ] Проверить timing-safe сравнение и единый формат секрета. Если провайдер поддерживает только secret в URL, исключить query из access/application logs; не утверждать наличие HMAC, если YClients его не предоставляет. (Сравнение и application logging исправлены; dev nginx no-query завершён, production query secrets в access logs ещё не закрыты.)
 - [x] Проверить существующую дедупликацию повторной доставки и не менять финансовую логику в этой задаче.
 - [ ] Добавить startup/config validation и наблюдаемый счётчик отказов без payload/ПДн. Не оставлять env-флаг, silently включающий небезопасный legacy в production.
 - [x] Обновить комментарии `migrations.js`, `webhook.js`, `chatpush-webhook.js`, где NULL secret сейчас описан как принятый legacy mode.
@@ -318,6 +341,8 @@
 - Валидный key проходит и ACK остаётся быстрым; mocks подтверждают однократную обработку retry.
 - Rate limit не зависит от поддельного XFF; gateway behaviour не регрессирует.
 - Тестовый отчёт подтверждает отсутствие секретов/ПДн в логах.
+
+**Фактический статус 16.11.2026:** production inventory natural deliveries — YClients 52/52 `processed_ok`, 0 failed; Chatpush 182/182 `processed_ok`, 0 failed. Естественных gateway events в окне не было, поэтому это не доказательство отказа. Register CLI и Chatpush provider redaction с regression tests находятся в рабочем дереве; production patch/redaction rollout не выполнялся. Active `/srv/loyalpro/current` остаётся на security `0f8affa`; нельзя выкатывать весь main с unrelated sidebar/calendar.
 
 **Откат:** при ошибке интеграции восстанавливать корректный secret/URL и временно останавливать обработку по согласованному runbook; не возвращать приём неподписанных запросов.
 
@@ -333,9 +358,11 @@
 - [x] Для EventSource добавить `POST /api/chat/stream-ticket` под текущим staff auth/ролью. Выдавать криптографически случайный одноразовый ticket на 60 секунд, scope=`chat:stream`, server-derived user/salon.
 - [x] Хранить только hash ticket. Для корректной работы нескольких процессов использовать небольшую additive-таблицу `api_access_tickets` (`token_hash`, `user_id`, `salon_id`, `scope`, `expires_at`, `used_at`), а не process-local memory.
 - [x] Атомарно потреблять ticket через `UPDATE … WHERE used_at IS NULL AND expires_at>NOW() RETURNING …`; повторно проверять активного пользователя/роль/salon. Открытое SSE-соединение не пересоздаётся из-за истечения ticket после handshake.
-- [ ] Обновить frontend SSE на получение ticket перед `new EventSource`. Добавить `Cache-Control: no-store`, `Referrer-Policy: no-referrer` там, где применимо, и исключить ticket из логов. (Frontend/backend готовы; nginx `$request` с ticket ещё должен быть заменён на `$uri` или access log отключён владельцем.)
+- [ ] Обновить frontend SSE на получение ticket перед `new EventSource`. Добавить `Cache-Control: no-store`, `Referrer-Policy: no-referrer` там, где применимо, и исключить ticket из логов. (Frontend/backend готовы; dev nginx no-query завершён, production query secrets в access logs ещё не закрыты.)
 - [x] После обновления callers убрать общий `authOrQuery`; не оставлять generic query-token middleware для будущих routes.
 - [ ] Если нужен короткий переход для закэшированного frontend, разрешить JWT query только на явно перечисленных legacy SSE/download routes с полной session+user проверкой, ограничить срок и затем удалить. Глобальный query JWT не возвращать.
+
+**Dev no-query 16.11.2026:** `/etc/nginx/sites-available/dev-zumrudin.conf` обновлён в обоих server blocks, backup `.bak-20261116T154902Z`; `nginx -t`, reload и active = PASS. Main = 200, unauthorized SSE = 401, synthetic query marker отсутствует в новых логах, `query_string_logged=false`, новых error/crit/alert/emerg = 0.
 
 **Тесты:**
 
@@ -381,6 +408,12 @@
 - [x] Для критичных OTP/register/webhook лимитов использовать общий store при нескольких workers, иначе зафиксировать ограничение single-process и не представлять memory store как распределённую защиту. (OTP phone/register/AI counters — PostgreSQL; express-rate-limit для OTP IP, webhook и CSP report остаётся per-process и не является распределённым лимитом.)
 - [x] CORS untrusted origin должен получать управляемый отказ, а не HTML 500; не превращать эту задачу в CORS bypass fix — доступ к API всё равно определяется auth.
 
+**Proxy/network 16.11.2026:** production read-only inventory `/etc/nginx/sites-enabled/loyalpro.conf`: XFF уже `$remote_addr`, upstream `127.0.0.1:3001`; no-query не применён. Dev chain sslh external `:443` → loopback `:4443` nginx → loopback `:3001` Node на внешнем synthetic probe дал `source_class=loopback`, `source_global=false` (6 access records, 404): sslh теряет client IP. Не заменять XFF на `$remote_addr` как решение. Node external bind остаётся на dev и production; `BIND_HOST` только в рабочем дереве, dev deploy/restart не выполнялся, UFW не менялся.
+
+**Read-only sslh review 16.11.2026 (agent-0; ничего не применено):** установлен sslh 1.20; исходящего `proxyprotocol` в локальных binary/help/man/README нет. `CapEff=0`, file capabilities отсутствуют. Transparent требует capabilities + policy routing/firewall и глобально включается для маршрутов, поэтому не рекомендован как dev-only. `:4443` разделяют dev, claude/peri/peri-cms и catch-all, поэтому socket-wide PROXY на нём включать нельзя; `:4444` свободен. Рабочий sslh запущен `-F /etc/sslh.cfg`, этот файл отсутствует, существует `/etc/sslh/sslh.cfg`; parity running/file config не доказан, restart до reconcile запрещён.
+
+**Рекомендуемый следующий gate после отдельного package/security review (ещё не применён):** sslh `>=2.2.4`, targeted PROXY v1 только для dev SNI на новый nginx `listen 127.0.0.1:4444 ssl http2 proxy_protocol;` + `set_real_ip_from 127.0.0.1;` + `real_ip_header proxy_protocol;`. Старый `:4443`, generic TLS/anyprot/OpenVPN сохранить, XFF/`TRUST_PROXY` не менять. Подготовить package/config backup и rollback; сначала `nginx -t`, reload и local PROXY handshake, затем отдельно разрешённый controlled sslh restart (есть окно недоступности public `:443`), smoke всех соседних маршрутов и внешний synthetic probe.
+
 **Тесты:**
 
 - Поддельный XFF не меняет ключ лимита при прямом подключении; через доверенный nginx реальный клиентский IP определяется корректно.
@@ -423,12 +456,12 @@
 **Приоритет:** обязательный финальный gate.
 **Исполнитель:** координатор + независимый reviewer по необходимости.
 
-- [ ] Провести code review tenant isolation, authorization, race conditions, повторных внешних эффектов, secrets/logs и rollback.
+- [x] Провести code review tenant isolation, authorization, race conditions, повторных внешних эффектов, secrets/logs и rollback. (Scoped diff review выполнен; operational gates остаются открытыми.)
 - [x] Запустить focused Jest-сьюты всех изменённых модулей. Имена новых suites должны соответствовать задачам выше; не добавлять файлы результатов/отчётов в репозиторий.
 - [x] Выполнить `cd backend && npm test`, затем `npx jest --runInBand` для полного regression либо явно перечислить невыполненные suites и причину. (Команды выполнены; полный набор сохраняет исходные красные проверки, перечисленные ниже.)
-- [ ] Если изменялся `mobile/`, выполнить `cd mobile && npm run lint`. (`mobile/` не изменялся.)
+- [x] Если изменялся `mobile/`, выполнить `cd mobile && npm run lint`. (Неприменимо: `mobile/` не изменялся, lint не запускался.)
 - [ ] Для staff UI выполнить browser MCP-проверку, не bash-запуск Playwright: XSS, settings без секретов, SSE/downloads, CSP. Использовать только синтетические API/тестовый стенд.
-- [ ] В изолированном E2E доказать: чужой Telegram phone не даёт session; tenant B не виден через photo cases; deactivated staff немедленно теряет доступ; unsigned webhook не имеет side effects; ticket одноразовый. (Есть mocked regression-тесты, изолированный двухсалонный E2E не выполнялся.)
+- [ ] В изолированном E2E доказать: чужой Telegram phone не даёт session; tenant B не виден через photo cases; deactivated staff немедленно теряет доступ; unsigned webhook не имеет side effects; ticket одноразовый. (Photo-case DB E2E на dev завершён: 27/27 write и 6/6 delete/cascade с полным rollback; остальные сквозные сценарии не закрыты этим проверением.)
 - [x] Проверить `git diff --check`, `git status --short`, отсутствие логов, screenshots, reports, `.env` и других созданных артефактов в diff. Не удалять чужие файлы.
 - [x] Обновить `CLAUDE.md`, если изменились auth/query-token/mobile/webhook правила, и устаревшие комментарии к коду. `AGENTS.md` менять только если изменилось документированное там поведение.
 - [x] Подготовить handoff: изменённые файлы, запущенные команды и результаты, невыполненные проверки, миграции/locks/rollback, необходимые человеку production-операции.
@@ -440,10 +473,17 @@
 - Полный `cd backend && npx jest --runInBand`: 308 suites passed, 12 failed, 1 skipped; 6863 tests passed, 3 failed, 9 skipped. Сбои совпадают с исходным SEC-00 baseline: `edocs-board-routes`, `agent-booking`, `agent-tool-memory`; восемь `node:test` suites несовместимы с Jest, а `primary-clients` является отдельным DB-dependent script. Они не исправлялись как несвязанные с security diff; полный набор не считается зелёным.
 - Dev deploy 15.11.2026: активен `/srv/loyalpro-dev/releases/security-20261115-201235`; на точном релизе 38 suites / 425 tests PASS. В `loyalpro_test` транзакционно применены MOBILE_AUTH_DDL, API_ACCESS_TICKETS_DDL, RESOURCE_LIMITS_DDL, CASE_TENANT_INTEGRITY_DDL (1/19/19/20 мс, lock/statement timeout 5/30 с). Все 7 аудитов до/после = 0; 2 indexes, 4 NOT VALID FK, 2 triggers, 5 security tables подтверждены. PM2 `loyalpro` online, HTTPS/static byte match и 401 без auth PASS, Report-Only CSP present, новых error markers в логах нет. Откат приложения — `inline-goods-20261115-1852` + `ecosystem.before-security.json`, additive DDL сохранить.
 - Production deploy 16.11.2026: `/srv/loyalpro/current` → `/srv/loyalpro/releases/security-0f8affa`, архив создан строго из commit `0f8affadeab93e12602f9d550c094a974542b83d`; production БД подтверждена как `loyalpro`. Перед DDL создан custom-format backup `/srv/loyalpro-backups/pre-security-0f8affa/loyalpro.dump` (13 101 674 bytes), `pg_restore --list` успешно прочитал 1029 catalog entries; restore не запускался. Те же четыре DDL применены в одной транзакции с lock/statement timeout 5/30 с за 18/3/4/16 мс. Подтверждены 2 composite indexes, 4 NOT VALID FK, 2 triggers, 5 security tables; все 7 tenant-аудитов до/после = 0. Backfill/drop/VALIDATE не выполнялись.
-- Production webhook inventory: один активный салон с YClients; секрет сгенерирован криптографически стойким генератором, записан в tenant-scoped строку и передан пользователю в отдельном файле mode 600 без вывода в чат; пользователь подтвердил обновление provider URL. Chatpush/gateway webhook secrets присутствуют. Значения секретов и live payload не выводились; валидная live delivery после выката не проверялась.
+- Production webhook inventory: один активный салон с YClients; секрет сгенерирован криптографически стойким генератором, записан в tenant-scoped строку и передан пользователю в отдельном файле mode 600 без вывода в чат; пользователь подтвердил обновление provider URL. Chatpush/gateway webhook secrets присутствуют. Значения секретов и live payload не выводились; на момент первичного inventory валидная live delivery после выката не проверялась; последующий natural inventory описан в SEC-08.
 - Первый production switch откачен из-за `MODULE_NOT_FOUND: winston`: archive содержал неполный tracked `backend/node_modules`, поэтому ссылка на старый каталог оказалась вложенной и не использовалась для resolution. Старый релиз восстановлен и отвечал HTTP 200. В новом release выполнен штатный `npm ci --omit=dev --no-audit --no-fund` (548 packages), исходный неполный каталог сохранён как `backend/node_modules.from-git`; повторный switch успешен. Код и lockfile не менялись.
 - Production smoke после повторного switch: PM2 `loyalpro` online; HTTPS `/` = 200; `/`, `/js/pages/chat.js`, `/js/pages/clients.js`, `/js/pages/segments.js` побайтно совпали с release; неавторизованные `GET /api/clients` и `POST /api/chat/stream-ticket` = 401; enforce и Report-Only CSP присутствуют, Report-Only без `unsafe-inline`; новых `ERROR|PostgreSQL error|WITHOUT DB|Error:` в PM2 logs после второго switch нет. Откат приложения — `main-e64de81-visits-resched-hcprice`, additive DDL сохранить.
-- Не выполнялись browser MCP, синтетический двухсалонный staging E2E с INSERT/UPDATE/delete/cascade, `VALIDATE CONSTRAINT`, настройка nginx/proxy и запрет query secrets в access logs, реальные OTP/messages/booking/AI-вызовы и валидные live webhook deliveries. `MOBILE_SALON_ID` и `MOBILE_OTP_HASH_KEY` на production отсутствуют, поэтому новый mobile login fail-closed до явной настройки. Общий DoD и production gate остаются открытыми.
+- На 15.11 не выполнялись browser MCP, синтетический двухсалонный staging E2E с INSERT/UPDATE/delete/cascade, `VALIDATE CONSTRAINT`, настройка nginx/proxy и запрет query secrets в access logs, реальные OTP/messages/booking/AI-вызовы и валидные live webhook deliveries. `MOBILE_SALON_ID` и `MOBILE_OTP_HASH_KEY` на production отсутствуют, поэтому новый mobile login fail-closed до явной настройки. Общий DoD и production gate остаются открытыми.
+
+**Актуальная приёмка 16.11.2026:**
+
+- Объединённый focused Jest `npx jest --runInBand case-tenant-integrity chatpush-webhook-provider chatpush-webhook-route access-tickets proxy-security query-token-ui yclients-webhook-security`: 7 suites, 68/68 PASS. Исходные baseline failures выше сохранены и не объявляются зелёными.
+- Координаторский `cd backend && npm test` на итоговом дереве: 1 suite, 43/43 PASS (`clients-api`; это не полный regression). Исходные красные full-suite проверки выше сохранены.
+- Dev SEC-05: 27/27 write и 6/6 delete/cascade, все 7 audits = 0, `rolledBack=true`, `residueCount=0`; четыре FK `convalidated=true` после VALIDATE с durations 6/3/8/2 ms, повторный аудит = 0. Production read-only audit = 0, четыре FK остаются `convalidated=false`; production VALIDATE не выполнялся и не разрешён.
+- Browser MCP, enforce-CSP без `unsafe-inline`, CAPTCHA/invite/email verification, per-attempt LLM accounting и прочие пункты вне выполненных проверок остаются открытыми. Production no-query, BIND_HOST deploy/restart и webhook redaction rollout не выполнялись; dev sslh read-only review завершён, а targeted PROXY v1 на `:4444` и controlled rollout остаются следующим gate после package/security review и не выполнялись.
 
 ## 4. Общий порядок выката после зелёных тестов
 
@@ -451,7 +491,7 @@
 
 1. Зафиксировать backup/recovery и текущие версии приложений; убедиться, что в release не попали journal-изменения других задач.
 2. Выкатить кодовые отказоустойчивые проверки SEC-01/02/03/04/06/07 до или вместе с additive migrations согласно совместимости. Старый `/start <phone>` не включать ни на один переходный период.
-3. Выполнить additive migrations на staging, измерить locks, затем согласованно на production. Не запускать destructive backfill/drop columns.
+3. Выполнить additive migrations на staging, измерить locks, затем согласованно на production. Не запускать destructive backfill/drop columns. Оставшийся production VALIDATE — только после отдельного явного разрешения: reviewed runner в `backend/scripts` active release без restart, повторный aggregate audit, четыре последовательные транзакции с `lock_timeout=5s` и `statement_timeout=30s`, stop-on-first-error, без backfill/drop. На момент документации такого разрешения нет.
 4. Проверить метрики ошибок без чтения patient content: отказы OTP, отзывы sessions, 401/403/409 tenant guards, DB constraint violations.
 5. Для webhook сначала завершить настройку секретов/URL у всех активных интеграций, затем включить fail-closed код. Не принимать unsigned traffic ради восстановления доставки.
 6. Выпустить SSE/download tickets совместимым с frontend порядком; после истечения browser cache удалить ограниченный legacy query JWT, если он временно сохранялся.
