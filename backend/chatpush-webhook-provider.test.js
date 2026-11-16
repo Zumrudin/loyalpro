@@ -31,10 +31,12 @@ test('у шлюза нет legacy-режима: пустой секрет шлю
   finally { config.MESSAGING_GATEWAY.webhookSecret = prev; }
 });
 
-test('у Chatpush пустой секрет → legacy (принимаем без проверки), как раньше', () => {
+test('у Chatpush пустой секрет → 503, legacy-приёма нет', () => {
   const config = require('./config');
   const prev = config.CHATPUSH.webhookSecret;
   config.CHATPUSH.webhookSecret = '';
-  try { expect(verifySecret(req('/chatpush'))).toEqual({ ok: true, mode: 'legacy' }); }
-  finally { config.CHATPUSH.webhookSecret = prev; }
+  try {
+    expect(verifySecret(req('/chatpush'))).toEqual({ ok: false, status: 503, reason: 'chatpush secret not configured' });
+    expect(verifySecret(req('/chatpush', 'anything'))).toEqual({ ok: false, status: 503, reason: 'chatpush secret not configured' });
+  } finally { config.CHATPUSH.webhookSecret = prev; }
 });

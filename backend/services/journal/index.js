@@ -218,6 +218,11 @@ function editable(r) {
   if (r.deleted || Number(r.attendance) === -1) m.fail('Запись уже отменена или удалена.', 409);
   if (Number(r.attendance) === 1 || r.paid_full || Number(r.paid_amount) > 0) m.fail('Сначала удалите оплаты визита; пришедший визит не переносится и не отменяется.', 409);
 }
+function verifyClient(record, expectedClientId) {
+  if (expectedClientId != null && (!record?.client || Number(record.client.id) !== Number(expectedClientId))) {
+    m.fail('Запись не найдена.', 404);
+  }
+}
 async function prepare(salon, draft, opts = {}) {
   if (draft.action === 'delete') {
     let rec;
@@ -232,6 +237,7 @@ async function prepare(salon, draft, opts = {}) {
   let record;
   if (draft.action !== 'create') {
     record = await yc.getRecord(salon, draft.recordId);
+    verifyClient(record, opts.expectedClientId);
     if (m.revision(record) !== draft.version) m.fail('Запись изменилась. Откройте карточку заново.', 409, 'stale');
     if (draft.action !== 'edit') editable(record);
   }
@@ -318,7 +324,10 @@ async function mutate(salonId, userId, draft, opts = {}) {
     }
     const body = await prepare(salon, draft, { ...opts, paid: ledgerPaid });
     let beforeRecord = null;
-    if (draft.recordId && !body?.alreadyDeleted) beforeRecord = await yc.getRecord(salon, draft.recordId);
+    if (draft.recordId && !body?.alreadyDeleted) {
+      beforeRecord = await yc.getRecord(salon, draft.recordId);
+      verifyClient(beforeRecord, opts.expectedClientId);
+    }
     if (beforeRecord && m.revision(beforeRecord) !== draft.version) {
       m.fail('Запись изменилась. Откройте карточку заново.', 409, 'stale');
     }
@@ -390,4 +399,4 @@ async function review(salonId, userId, operationId) {
     conn.release(broken);
   }
 }
-module.exports = { day, week, weekStart, detail, slots, mutate, prepare, availability, pending, review };
+module.exports = { day, week, weekStart, detail, slots, mutate, prepare, availability, pending, review, salonFor };

@@ -24,7 +24,7 @@ router.get('/', auth, async (req, res) => {
       [...params, limit, offset]
     );
     res.json({ clients, total: parseInt(total), page });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(500).json({ error: 'Внутренняя ошибка сервера' }); }
 });
 
 router.get('/:id', auth, async (req, res) => {
@@ -38,19 +38,19 @@ router.get('/:id', auth, async (req, res) => {
       `SELECT id,
               COALESCE(txn_date, created_at) as created_at,
               amount, title as description, type, balance_after, 'card' as source
-       FROM loyalty_card_transactions WHERE client_id=$1
+       FROM loyalty_card_transactions WHERE client_id=$1 AND salon_id=$2
        UNION ALL
        SELECT id, created_at, amount, description, type, balance_after, 'manual' as source
-       FROM bonus_transactions WHERE client_id=$1 AND description NOT LIKE '%импорт%'
+       FROM bonus_transactions WHERE client_id=$1 AND salon_id=$2 AND description NOT LIKE '%импорт%'
        ORDER BY created_at DESC LIMIT 50`,
-      [req.params.id]
+      [req.params.id, req.user.salonId]
     );
     const records = await db.any(
-      'SELECT * FROM records WHERE client_id=$1 ORDER BY visit_date DESC LIMIT 20',
-      [req.params.id]
+      'SELECT * FROM records WHERE client_id=$1 AND salon_id=$2 ORDER BY visit_date DESC LIMIT 20',
+      [req.params.id, req.user.salonId]
     );
     res.json({ client, history, records });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(500).json({ error: 'Внутренняя ошибка сервера' }); }
 });
 
 router.post('/:id/bonus', auth, async (req, res) => {
@@ -65,7 +65,7 @@ router.post('/:id/bonus', auth, async (req, res) => {
     )).rows[0];
     if (!client) { await pg.query('ROLLBACK'); return res.status(404).json({ error: 'Клиент не найден' }); }
     const newBal = Math.max(0, client.bonus_balance + amount);
-    await pg.query('UPDATE clients SET bonus_balance=$1,updated_at=NOW() WHERE id=$2', [newBal, client.id]);
+    await pg.query('UPDATE clients SET bonus_balance=$1,updated_at=NOW() WHERE id=$2 AND salon_id=$3', [newBal, client.id, req.user.salonId]);
     const lctRes = await pg.query(
       `INSERT INTO loyalty_card_transactions
          (salon_id,client_id,yclients_card_id,type,amount,balance_after,title,txn_date,created_at)
@@ -82,7 +82,7 @@ router.post('/:id/bonus', auth, async (req, res) => {
     res.json({ ok: true, newBalance: newBal });
   } catch (e) {
     await pg.query('ROLLBACK');
-    res.status(500).json({ error: e.message });
+    res.status(500).json({ error: 'Внутренняя ошибка сервера' });
   } finally { pg.release(); }
 });
 
@@ -95,15 +95,15 @@ router.get('/:id/card-transactions', auth, async (req, res) => {
     if (!client) return res.status(404).json({ error: 'Клиент не найден' });
     const lct = await db.any(
       `SELECT id, txn_date as created_at, amount, title, balance_after, type
-       FROM loyalty_card_transactions WHERE client_id=$1
+       FROM loyalty_card_transactions WHERE client_id=$1 AND salon_id=$2
        ORDER BY txn_date DESC NULLS LAST LIMIT 500`,
-      [client.id]
+      [client.id, req.user.salonId]
     );
     const bonus = await db.any(
       `SELECT id, created_at, amount, description as title, balance_after, type
-       FROM bonus_transactions WHERE client_id=$1
+       FROM bonus_transactions WHERE client_id=$1 AND salon_id=$2
        ORDER BY created_at DESC LIMIT 200`,
-      [client.id]
+      [client.id, req.user.salonId]
     );
     res.json({
       local: lct, bonus, transactions: lct,
@@ -114,7 +114,7 @@ router.get('/:id/card-transactions', auth, async (req, res) => {
         totalRedeemed: [...lct,...bonus].filter(t=>parseFloat(t.amount)<0).reduce((s,t)=>s+Math.abs(parseFloat(t.amount)),0),
       }
     });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(500).json({ error: 'Внутренняя ошибка сервера' }); }
 });
 
 router.post('/:id/sync-card', auth, async (req, res) => {
@@ -122,7 +122,7 @@ router.post('/:id/sync-card', auth, async (req, res) => {
     const client = await db.oneOrNone('SELECT * FROM clients WHERE id=$1 AND salon_id=$2', [req.params.id, req.user.salonId]);
     if (!client) return res.status(404).json({ error: 'Клиент не найден' });
     if (!client.yclients_client_id) return res.status(400).json({ error: 'Нет yclients_client_id' });
-    const salon = await db.one('SELECT * FROM salons WHERE id=$1', [req.user.salonId]);
+    const salon = await db.one('SELECT * FROM salons WHERE id=$1 AND is_active=TRUE', [req.user.salonId]);
     if (!salon.yclients_card_type_id) return res.status(400).json({ error: 'Карта лояльности не выбрана в Настройках' });
 
     // Одно правило привязки на кнопку и на событийную привязку в начислении
@@ -133,9 +133,9 @@ router.post('/:id/sync-card', auth, async (req, res) => {
     if (!updated) return res.json({ ok: false, message: `Карта типа ${salon.yclients_card_type_id} не найдена` });
 
     const cardBalance = parseFloat(updated.yclients_card_balance || 0);
-    const txnsCount = await db.one('SELECT COUNT(*) FROM loyalty_card_transactions WHERE client_id=$1', [client.id]);
+    const txnsCount = await db.one('SELECT COUNT(*) FROM loyalty_card_transactions WHERE client_id=$1 AND salon_id=$2', [client.id, req.user.salonId]);
     res.json({ ok: true, cardId: updated.yclients_card_id, cardNumber: updated.yclients_card_number, balance: cardBalance, paidAmount: parseFloat(updated.total_spent || 0), visitsCount: parseInt(updated.visits_count || 0), level: updated.loyalty_level, transactionsInDb: parseInt(txnsCount.count), message: `Карта синхронизирована. Баланс: ${cardBalance.toLocaleString('ru')} ₽` });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(500).json({ error: 'Внутренняя ошибка сервера' }); }
 });
 
 

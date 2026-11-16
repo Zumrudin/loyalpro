@@ -1,5 +1,7 @@
 const router = require('express').Router();
 const crypto = require('crypto');
+const rateLimit = require('express-rate-limit');
+const config = require('../config');
 const { db } = require('../db');
 const { getLoyaltySettings, processRecordEvent, processFinancesOperation } = require('../services/loyalty');
 const { handleRecordEvent } = require('../services/notifications');
@@ -11,6 +13,7 @@ const followupQueue = require('../services/agent/followup-queue');
 const { normalizePhoneKey } = require('../services/agent-gate');
 const { createLogger } = require('../logger');
 const logger = createLogger('Webhook');
+const { safeErrorCode } = require('../utils/safe-error');
 
 /**
  * Authenticate a webhook delivery by a shared secret carried in the URL.
@@ -21,23 +24,41 @@ const logger = createLogger('Webhook');
  *   https://<host>/yclients/webhook.v2/<companyId>?key=<secret>
  * and we compare `?key=` against the per-salon secret (timing-safe).
  *
- * If `secret` is null/empty the salon is not-yet-configured and we accept
- * (legacy mode) so delivery never breaks before the URL is updated. Generate a
- * secret + update the YClients URL together to switch a salon into enforcement.
+ * An empty per-salon secret is a configuration error: the endpoint returns 503
+ * and accepts nothing until the secret and the provider URL are configured.
  */
 function verifyWebhookSecret(req, secret) {
-  if (!secret) return { ok: true, mode: 'legacy' };
+  if (typeof secret !== 'string' || !secret.trim()) {
+    return { ok: false, status: 503, reason: 'not_configured' };
+  }
 
-  const provided = typeof req.query.key === 'string' ? req.query.key : '';
-  if (!provided) return { ok: false, reason: 'missing key' };
+  const provided = typeof req.query?.key === 'string' ? req.query.key : '';
+  if (!provided) return { ok: false, status: 401, reason: 'missing_key' };
 
   const a = Buffer.from(provided);
   const b = Buffer.from(secret);
-  if (a.length !== b.length) return { ok: false, reason: 'key mismatch' };
+  if (a.length !== b.length) return { ok: false, status: 401, reason: 'invalid_key' };
   return crypto.timingSafeEqual(a, b)
-    ? { ok: true, mode: 'verified' }
-    : { ok: false, reason: 'key mismatch' };
+    ? { ok: true }
+    : { ok: false, status: 401, reason: 'invalid_key' };
 }
+
+const rateLimitConfig = config.WEBHOOK_RATE_LIMIT || {};
+const limiterOptions = {
+  windowMs: rateLimitConfig.windowMs || 60_000,
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: (req, res) => res.status(429).json({ error: 'too many requests' }),
+};
+const webhookIpLimiter = rateLimit({ ...limiterOptions, limit: rateLimitConfig.ipLimit || 240 });
+const webhookCompanyLimiter = rateLimit({
+  ...limiterOptions,
+  limit: rateLimitConfig.accountLimit || 120,
+  keyGenerator: req => `company:${req.params.companyId}`,
+});
+const authFailures = { not_configured: 0, missing_key: 0, invalid_key: 0 };
+
+router.use('/webhook.v2/:companyId', webhookIpLimiter, webhookCompanyLimiter);
 
 router.post('/webhook.v2/:companyId', async (req, res) => {
   const t0 = Date.now();
@@ -48,17 +69,15 @@ router.post('/webhook.v2/:companyId', async (req, res) => {
       [req.params.companyId]
     );
     if (!salon) {
-      logger.warn(`salon not found companyId=${req.params.companyId}`);
+      logger.warn('webhook salon not found');
       return res.status(404).json({ error: 'company not found' });
     }
 
     const sig = verifyWebhookSecret(req, salon.yclients_webhook_secret);
     if (!sig.ok) {
-      logger.warn(`webhook key check failed companyId=${req.params.companyId} salon=${salon.id}: ${sig.reason}`);
-      return res.status(401).json({ error: 'invalid key' });
-    }
-    if (sig.mode === 'legacy') {
-      logger.warn(`legacy unauthenticated webhook accepted companyId=${req.params.companyId} salon=${salon.id} — set yclients_webhook_secret and add ?key=<secret> to the YClients notification URL to enable enforcement`);
+      authFailures[sig.reason] += 1;
+      logger.warn(`webhook authentication rejected salon=${salon.id} reason=${sig.reason} total=${authFailures[sig.reason]}`);
+      return res.status(sig.status).json({ error: sig.status === 503 ? 'webhook not configured' : 'invalid key' });
     }
 
     // ACK immediately AFTER auth check — YClients retries on timeout, but we
@@ -67,7 +86,7 @@ router.post('/webhook.v2/:companyId', async (req, res) => {
 
     const payload = req.body;
     const resourceType = payload.resource || payload.resource_type;
-    logger.info(`hit companyId=${req.params.companyId} salon=${salon.id} resource=${resourceType} data_id=${payload.data?.id}`);
+    logger.info(`authenticated webhook salon=${salon.id}`);
 
     wlog = await db.one(
       `INSERT INTO webhook_logs (salon_id,event_type,resource_id,payload) VALUES ($1,$2,$3,$4) RETURNING id`,
@@ -82,17 +101,17 @@ router.post('/webhook.v2/:companyId', async (req, res) => {
       // пришёл → напоминание, опрос, рекомендации). Свой catch — сбой не должен
       // ломать начисления.
       await handleRecordEvent(salon, payload).catch(e =>
-        logger.error(`notifications: ${e.message}`));
+        logger.error(`notifications: ${safeErrorCode(e)}`));
       // «Отдел заботы»: визит состоялся → зачисление в программы.
       // Свой catch — сбой заботы не должен ломать начисления.
       await care.handleRecordEvent(salon, payload).catch(e =>
-        logger.error(`care enroll: ${e.message}`));
+        logger.error(`care enroll: ${safeErrorCode(e)}`));
       // Напоминания о повторном визите — в СВОЁМ catch: их падение не должно
       // ронять «Заботу» и начисление кэшбэка.
       await reminders.handleRecordEvent(salon, payload).catch(e =>
-        logger.error(`reminders enroll: ${e.message}`));
+        logger.error(`reminders enroll: ${safeErrorCode(e)}`));
       await reminders.handleAttribution(salon, payload).catch(e =>
-        logger.error(`reminders attribution: ${e.message}`));
+        logger.error(`reminders attribution: ${safeErrorCode(e)}`));
       // Ожидание ответа Милы гасится ЗАПИСЬЮ в CRM: клиента записал
       // администратор (по телефону/в приложении) — напоминать «удалось ли
       // посмотреть?» уже не о чем. Только живое создание: отмена/удаление
@@ -104,7 +123,7 @@ router.post('/webhook.v2/:companyId', async (req, res) => {
         if (fuPhone) {
           await followupQueue.closeByPhone(salon.id, fuPhone, 'booked_in_crm')
             .then(n => { if (n) logger.info(`followup: ${n} ожидани(е/я) погашено записью в CRM`); })
-            .catch(e => logger.warn(`followup close by booking: ${e.message}`));
+            .catch(e => logger.warn(`followup close by booking: ${safeErrorCode(e)}`));
         }
       }
     }
@@ -127,20 +146,20 @@ router.post('/webhook.v2/:companyId', async (req, res) => {
     // потерянное добирает ночная сверка (services/economics/sync.js).
     if (typeof resourceType === 'string' && resourceType.startsWith('goods_operations_')) {
       await economics.handleGoodsEvent(salon, payload).catch(e =>
-        logger.error(`economics goods event: ${e.message}`));
+        logger.error(`economics goods event: ${safeErrorCode(e)}`));
     }
 
     // Карточка товара YClients (resource=good): расширенные поля каталога, delete → stock_active=false.
     if (resourceType === 'good') {
       await require('../services/stock').handleGoodEvent(salon, payload).catch(e =>
-        logger.error(`stock good event: ${e.message}`));
+        logger.error(`stock good event: ${safeErrorCode(e)}`));
     }
 
     if (wlog) {
       await db.query('UPDATE webhook_logs SET processed=TRUE,processing_ms=$1 WHERE id=$2', [Date.now() - t0, wlog.id]);
     }
   } catch (e) {
-    logger.error(`ERROR: ${e.message}`);
+    logger.error(`ERROR: ${safeErrorCode(e)}`);
     try {
       if (wlog?.id) await db.query('UPDATE webhook_logs SET error_message=$1,processing_ms=$2 WHERE id=$3', [e.message, Date.now() - t0, wlog.id]);
     } catch {}

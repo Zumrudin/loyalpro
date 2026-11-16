@@ -16,10 +16,6 @@ const logger = createLogger('CertRequestPublic');
 const rateLimit = svc.makeRateLimiter({ max: 5, windowMs: 60 * 60 * 1000 });
 const appTokens = svc.makeTokenStore({ ttlMs: 30 * 60 * 1000 });
 
-function clientIp(req) {
-  return (req.headers['x-forwarded-for'] || '').split(',')[0].trim() || req.socket.remoteAddress || 'unknown';
-}
-
 // Дата 'YYYY-MM-DD' или '' → null; иначе строка (для DATE-колонок).
 function dateOrNull(s) { return /^\d{4}-\d{2}-\d{2}$/.test(s || '') ? s : null; }
 
@@ -85,7 +81,7 @@ router.post('/api/public/cert-requests/:slug', async (req, res) => {
     const salon = await svc.resolveSalonBySlug({ db, slug: req.params.slug });
     if (!salon) return res.status(404).json({ error: 'not_found' });
 
-    const ip = clientIp(req);
+    const ip = req.ip || 'unknown';
     if (!rateLimit(ip)) return res.status(429).json({ error: 'too_many_requests' });
 
     // Валидация. Все поля формы (кроме email) обязательны.

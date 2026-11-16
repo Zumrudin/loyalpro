@@ -114,6 +114,17 @@ test('move preserves price/client, cancellation follows existing convention', as
   await service.mutate(3, 4, { ...draft(), action: 'cancel' });
   expect(yc.write.mock.calls[1][2]).toMatchObject({ attendance: -1, seance_length: 300 });
 });
+test('mobile owner check rejects a foreign live record before a write', async () => {
+  const d = { ...draft(), action: 'move', date: '2030-04-01', time: '11:00', staffId: 1 };
+  await expect(service.mutate(3, 4, d, { expectedClientId: 999 })).rejects.toMatchObject({ status: 404 });
+  expect(yc.write).not.toHaveBeenCalled();
+});
+test('mobile owner check is repeated immediately before write', async () => {
+  yc.getRecord.mockResolvedValueOnce(record).mockResolvedValueOnce({ ...record, client: { id: 999 } });
+  const d = { ...draft(), action: 'move', date: '2030-04-01', time: '11:00', staffId: 1 };
+  await expect(service.mutate(3, 4, d, { expectedClientId: 5 })).rejects.toMatchObject({ status: 404 });
+  expect(yc.write).not.toHaveBeenCalled();
+});
 test('revision rechecked immediately before write', async () => {
   yc.getRecord.mockResolvedValueOnce(record).mockResolvedValueOnce({ ...record, attendance: 2 });
   await expect(service.mutate(3, 4, draft())).rejects.toMatchObject({ code: 'stale' });

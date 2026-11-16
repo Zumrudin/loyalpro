@@ -3,9 +3,10 @@ const router    = require('express').Router();
 const bcrypt    = require('bcryptjs');
 const jwt       = require('jsonwebtoken');
 const rateLimit = require('express-rate-limit');
-const { pool, db } = require('../db');
+const { pool, db, withTransaction } = require('../db');
 const { auth } = require('../middleware/auth');
 const config  = require('../config');
+const resourceLimits = require('../services/resource-limits');
 const JWT_SECRET = config.JWT_SECRET;
 
 const loginLimiter = rateLimit({
@@ -16,19 +17,33 @@ const loginLimiter = rateLimit({
   message: { error: 'Слишком много попыток входа. Повторите через 15 минут.' },
 });
 
-router.post('/register', async (req, res) => {
+async function registerLimiter(req, res, next) {
+  try {
+    const email = typeof req.body?.email === 'string' ? req.body.email : '';
+    await resourceLimits.register(req.ip, email);
+    next();
+  } catch (e) {
+    res.status(e.status || 503).json({ error: e.status === 429 ? e.message : 'Регистрация временно недоступна' });
+  }
+}
+
+router.post('/register', registerLimiter, async (req, res) => {
   const pg = await pool.connect();
   try {
-    const { salonName, city, email, password } = req.body;
-    if (!salonName || !email || !password)
+    const { salonName, city, email, password } = req.body || {};
+    if (typeof salonName !== 'string' || typeof email !== 'string' || typeof password !== 'string'
+        || !salonName.trim() || !email.trim() || !password)
       return res.status(400).json({ error: 'Заполните все поля' });
     if (password.length < 8)
       return res.status(400).json({ error: 'Пароль минимум 8 символов' });
+    if (salonName.length > 200 || email.length > 254 || (city && (typeof city !== 'string' || city.length > 200))
+        || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))
+      return res.status(400).json({ error: 'Проверьте поля регистрации' });
 
     await pg.query('BEGIN');
     const salon = (await pg.query(
       'INSERT INTO salons (name,city) VALUES ($1,$2) RETURNING id',
-      [salonName, city || null]
+      [salonName.trim(), city || null]
     )).rows[0];
     await pg.query('INSERT INTO loyalty_settings (salon_id) VALUES ($1)', [salon.id]);
     const hash = await bcrypt.hash(password, 12);
@@ -52,8 +67,8 @@ router.post('/register', async (req, res) => {
   } catch (e) {
     await pg.query('ROLLBACK');
     if (e.code === '23505')
-      return res.status(409).json({ error: 'Пользователь с таким email уже существует' });
-    console.error('[auth/register]', e.message);
+      return res.status(409).json({ error: 'Не удалось завершить регистрацию' });
+    console.error('[auth/register] failed');
     res.status(500).json({ error: 'Внутренняя ошибка сервера' });
   } finally { pg.release(); }
 });
@@ -66,7 +81,7 @@ router.post('/login', loginLimiter, async (req, res) => {
     const user = await db.one(
       `SELECT u.*,s.name as salon_name FROM users u
        JOIN salons s ON s.id=u.salon_id
-       WHERE u.email=$1 AND u.is_active=TRUE`,
+       WHERE u.email=$1 AND u.is_active=TRUE AND s.is_active=TRUE`,
       [email.toLowerCase().trim()]
     );
     if (!user) return res.status(401).json({ error: 'Неверный email или пароль' });
@@ -96,7 +111,10 @@ router.post('/change-password', auth, async (req, res) => {
     const { current_password, new_password } = req.body;
     if (!new_password || new_password.length < 8)
       return res.status(400).json({ error: 'Новый пароль минимум 8 символов' });
-    const user = await db.one('SELECT * FROM users WHERE id=$1', [req.user.userId]);
+    const user = await db.one(
+      'SELECT * FROM users WHERE id=$1 AND salon_id=$2',
+      [req.user.userId, req.user.salonId]
+    );
     if (!user) return res.status(404).json({ error: 'Пользователь не найден' });
     // Always require the current password, even on first activation.
     // The user just logged in with the temp password — they know it.
@@ -104,18 +122,35 @@ router.post('/change-password', auth, async (req, res) => {
     const ok = await bcrypt.compare(current_password, user.password_hash);
     if (!ok) return res.status(401).json({ error: 'Текущий пароль неверный' });
     const hash = await bcrypt.hash(new_password, 12);
-    await db.query(
-      'UPDATE users SET password_hash=$1, must_change_password=FALSE WHERE id=$2',
-      [hash, req.user.userId]
-    );
+    const updated = await withTransaction(async client => {
+      const result = await client.query(
+        'UPDATE users SET password_hash=$1, must_change_password=FALSE WHERE id=$2 AND salon_id=$3 RETURNING id',
+        [hash, req.user.userId, req.user.salonId]
+      );
+      if (!result.rows[0]) return false;
+      // Own password change keeps only the server-derived current session.
+      await client.query(
+        'DELETE FROM sessions WHERE user_id=$1 AND token<>$2',
+        [req.user.userId, req.token]
+      );
+      return true;
+    });
+    if (!updated) return res.status(404).json({ error: 'Пользователь не найден' });
     res.json({ ok: true });
   } catch (e) { console.error('[auth]', e.message); res.status(500).json({ error: 'Внутренняя ошибка сервера' }); }
 });
 
 router.post('/logout', auth, async (req, res) => {
-  const token = req.headers.authorization?.slice(7);
-  await db.query('DELETE FROM sessions WHERE token=$1', [token]).catch(() => {});
-  res.json({ ok: true });
+  try {
+    await db.query(
+      'DELETE FROM sessions WHERE token=$1 AND user_id=$2',
+      [req.token, req.user.userId]
+    );
+    res.json({ ok: true });
+  } catch (e) {
+    console.error('[auth/logout]', e.message);
+    res.status(500).json({ error: 'Внутренняя ошибка сервера' });
+  }
 });
 
 router.get('/me', auth, async (req, res) => {

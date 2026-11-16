@@ -2,11 +2,17 @@
 const express = require('express');
 const jwt = require('jsonwebtoken');
 jest.mock('./config', () => ({ JWT_SECRET: 'synthetic-test-signing-secret' }));
+jest.mock('./db', () => ({ db: { oneOrNone: jest.fn() } }));
 jest.mock('./services/agent/model-routing', () => ({ getStore: jest.fn() }));
+const { db } = require('./db');
 const { getStore } = require('./services/agent/model-routing');
 const router = require('./routes/agent-model');
 let server, url, store;
 beforeEach(async () => {
+  db.oneOrNone.mockImplementation(async (_sql, [token]) => {
+    const claims = jwt.decode(token);
+    return { userId: claims.userId, salonId: claims.salonId, role: claims.role };
+  });
   store = { status: jest.fn(async () => ({ active: 'gpt' })), manual: jest.fn(), acknowledge: jest.fn() };
   getStore.mockReturnValue(store);
   const app = express(); app.use(express.json()); app.use('/api/agent/model', router);

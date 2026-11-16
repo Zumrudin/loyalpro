@@ -87,7 +87,7 @@ async function processAndUpload({ salonId, clientId, visitId, photoId, buffer, m
     meta = await sharp(buffer, { failOn: 'truncated' }).metadata();
     if (!meta || !meta.width || !meta.height) throw new Error('not an image');
   } catch (e) {
-    const err = new Error(`Invalid image: ${e.message}`);
+    const err = new Error('Invalid image');
     err.statusCode = 400;
     throw err;
   }
@@ -116,7 +116,7 @@ async function processAndUpload({ salonId, clientId, visitId, photoId, buffer, m
     ]);
   } catch (e) {
     try { await s3.deleteObjects(uploaded); } catch (_) { /* swallowed: cron подберёт orphans */ }
-    const err = new Error(`S3 upload failed: ${e.message}`);
+    const err = new Error('S3 upload failed');
     err.statusCode = 502;
     throw err;
   }

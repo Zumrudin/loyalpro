@@ -324,11 +324,10 @@ async function runMigrations(client) {
     ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS max TEXT
   `).catch(() => {});
 
-  // ── Salons: HMAC secret for YClients webhooks ──────────────────────
-  // Per-salon secret used to verify the signature attached by YClients on
-  // every webhook call. NULL means HMAC is not yet configured for this salon
-  // (legacy mode — webhook accepted without signature). Once set, all
-  // webhooks for that salon MUST carry a matching signature.
+  // ── Salons: shared URL secret for YClients webhooks ──────────────
+  // YClients does not provide body HMAC. NULL/empty means not configured;
+  // the endpoint rejects delivery with 503 until a secret and provider URL
+  // are configured. Legacy unsigned acceptance is not supported.
   await client.query(`
     ALTER TABLE salons ADD COLUMN IF NOT EXISTS yclients_webhook_secret VARCHAR(128)
   `).catch(() => {});
@@ -542,6 +541,10 @@ async function runMigrations(client) {
   await client.query(`
     ALTER TABLE mobile_otp_sessions ADD COLUMN IF NOT EXISTS attempts INTEGER NOT NULL DEFAULT 0
   `).catch(() => {});
+  // Verified mobile identity and hashed OTP are additive; legacy rows stay unverified.
+  await client.query(MOBILE_AUTH_DDL);
+  await client.query(API_ACCESS_TICKETS_DDL);
+  await client.query(RESOURCE_LIMITS_DDL);
 
   // ── Patient Photo Cases (внутренний клинический модуль) ─────────
   // Спека:  docs/superpowers/specs/2026-05-30-patient-photo-cases-design.md
@@ -621,6 +624,9 @@ async function runMigrations(client) {
     )
   `).catch(() => {});
   await client.query(`CREATE INDEX IF NOT EXISTS idx_case_comments_visit ON case_comments (case_visit_id, created_at)`).catch(() => {});
+  // New rows are checked immediately. NOT VALID leaves legacy rows untouched;
+  // nullable record/course/specialist links retain their original SET NULL FKs.
+  await client.query(CASE_TENANT_INTEGRITY_DDL);
 
   await client.query(`
     CREATE TABLE IF NOT EXISTS s3_orphans (
@@ -2332,7 +2338,8 @@ async function runMigrations(client) {
   // Локальные товары не имеют id YClients: ослабление ограничения, не разрушение.
   await client.query(`ALTER TABLE yclients_goods_catalog ALTER COLUMN yclients_good_id DROP NOT NULL`).catch(() => {});
   for (const ddl of STOCK_DDL) await client.query(ddl).catch(() => {});
-  // Inline goods codes are globally unique; reads and writes remain tenant scoped.
+  // Inline journal goods: additive tables only. Codes are globally unique by
+  // normalized_code, while every read/write remains tenant scoped by salon_id.
   for (const ddl of APPOINTMENT_GOODS_DDL) await client.query(ddl);
   // Один simple-query PostgreSQL выполняет весь блок в общей неявной
   // транзакции: таблица, функции и оба триггера появляются вместе. Ошибки не
@@ -3215,6 +3222,74 @@ CREATE INDEX IF NOT EXISTS finance_ops_yc_op ON finance_operations(salon_id,ycli
 CREATE UNIQUE INDEX IF NOT EXISTS finance_ops_opening_uq ON finance_operations(salon_id,client_id) WHERE kind='bonus_opening';
 CREATE INDEX IF NOT EXISTS finance_ops_bonus_client ON finance_operations(client_id,status) WHERE method='bonus';
 `;
+const API_ACCESS_TICKETS_DDL = `
+CREATE TABLE IF NOT EXISTS api_access_tickets (
+ token_hash CHAR(64) PRIMARY KEY,
+ user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+ salon_id INTEGER NOT NULL REFERENCES salons(id) ON DELETE CASCADE,
+ scope VARCHAR(64) NOT NULL,
+ expires_at TIMESTAMPTZ NOT NULL,
+ used_at TIMESTAMPTZ,
+ created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_api_access_tickets_expiry ON api_access_tickets(expires_at);
+`;
+
+const RESOURCE_LIMITS_DDL = `
+CREATE TABLE IF NOT EXISTS api_rate_counters (
+ scope VARCHAR(80) NOT NULL,
+ key_hash CHAR(64) NOT NULL,
+ window_started_at TIMESTAMPTZ NOT NULL,
+ count INTEGER NOT NULL,
+ updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+ PRIMARY KEY(scope,key_hash,window_started_at)
+);
+CREATE TABLE IF NOT EXISTS llm_usage_counters (
+ salon_id INTEGER NOT NULL,
+ period VARCHAR(24) NOT NULL,
+ period_started_at DATE NOT NULL,
+ calls INTEGER NOT NULL,
+ updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+ PRIMARY KEY(salon_id,period,period_started_at)
+);
+CREATE TABLE IF NOT EXISTS llm_concurrency_leases (
+ id UUID PRIMARY KEY,
+ salon_id INTEGER NOT NULL,
+ user_id INTEGER NOT NULL,
+ expires_at TIMESTAMPTZ NOT NULL,
+ created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_llm_leases_salon_expiry ON llm_concurrency_leases(salon_id,expires_at);
+`;
+
+// Additive mobile-auth schema. No historical link/OTP is backfilled or trusted.
+// Deploy with the legacy OTP listener/login stopped; rollback keeps this schema
+// and disables mobile login rather than restoring plaintext OTP or phone deep-links.
+const MOBILE_AUTH_DDL = `
+ALTER TABLE mobile_telegram_links ADD COLUMN IF NOT EXISTS salon_id INTEGER REFERENCES salons(id) ON DELETE CASCADE;
+ALTER TABLE mobile_telegram_links ADD COLUMN IF NOT EXISTS client_id INTEGER REFERENCES clients(id) ON DELETE CASCADE;
+ALTER TABLE mobile_telegram_links ADD COLUMN IF NOT EXISTS telegram_user_id BIGINT;
+ALTER TABLE mobile_telegram_links ADD COLUMN IF NOT EXISTS verified_at TIMESTAMPTZ;
+CREATE INDEX IF NOT EXISTS idx_mobile_telegram_links_salon_phone ON mobile_telegram_links(salon_id,phone);
+CREATE INDEX IF NOT EXISTS idx_mobile_telegram_links_verified_user ON mobile_telegram_links(salon_id,telegram_user_id) WHERE verified_at IS NOT NULL;
+ALTER TABLE mobile_otp_sessions ADD COLUMN IF NOT EXISTS salon_id INTEGER REFERENCES salons(id) ON DELETE CASCADE;
+ALTER TABLE mobile_otp_sessions ADD COLUMN IF NOT EXISTS client_id INTEGER REFERENCES clients(id) ON DELETE CASCADE;
+ALTER TABLE mobile_otp_sessions ADD COLUMN IF NOT EXISTS otp_hash VARCHAR(64);
+ALTER TABLE mobile_otp_sessions ADD COLUMN IF NOT EXISTS consumed_at TIMESTAMPTZ;
+ALTER TABLE mobile_otp_sessions ALTER COLUMN otp DROP NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_mobile_otp_sessions_salon_phone ON mobile_otp_sessions(salon_id,phone);
+ALTER TABLE mobile_sessions ADD COLUMN IF NOT EXISTS salon_id INTEGER REFERENCES salons(id) ON DELETE CASCADE;
+CREATE INDEX IF NOT EXISTS idx_mobile_sessions_salon_client ON mobile_sessions(salon_id,client_id);
+CREATE TABLE IF NOT EXISTS mobile_otp_request_limits (
+  salon_id INTEGER NOT NULL REFERENCES salons(id) ON DELETE CASCADE,
+  phone VARCHAR(32) NOT NULL,
+  window_started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  request_count INTEGER NOT NULL DEFAULT 0,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (salon_id,phone)
+);
+`;
+
 // Additive only. Disabled bot never reads these tables. Rollback: disable the
 // bot, retain the effect journal (dropping it could permit duplicate bonuses).
 const MAX_LOYALTY_DDL = `
@@ -3251,4 +3326,74 @@ CREATE TABLE IF NOT EXISTS max_loyalty_registrations (
  PRIMARY KEY(salon_id,phone)
 );
 `;
-module.exports = { runMigrations, MAX_LOYALTY_DDL, FINANCE_OPS_DDL, EDOCS_BOARD_DDL, JOURNAL_DDL, SERVICE_CATALOG_DDL, JOURNAL_FINANCE_DDL, JOURNAL_LOCAL_DDL, JOURNAL_PREFS_DDL, JOURNAL_HISTORY_INDEX_DDL, STOCK_HISTORY_DDL, APPOINTMENT_GOODS_DDL };
+// The two unique indexes can block writes while being built. Measure them on
+// staging before enabling this startup migration on a populated installation.
+// No legacy rows are validated, reassigned, or deleted by this change.
+const CASE_TENANT_INTEGRITY_DDL = `
+CREATE UNIQUE INDEX IF NOT EXISTS uq_clients_salon_id_id ON clients (salon_id, id);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_case_visits_salon_id_id ON case_visits (salon_id, id);
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='case_courses'::regclass AND conname='fk_case_courses_salon_client') THEN
+    ALTER TABLE case_courses ADD CONSTRAINT fk_case_courses_salon_client
+      FOREIGN KEY (salon_id, client_id) REFERENCES clients (salon_id, id) ON DELETE CASCADE NOT VALID;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='case_visits'::regclass AND conname='fk_case_visits_salon_client') THEN
+    ALTER TABLE case_visits ADD CONSTRAINT fk_case_visits_salon_client
+      FOREIGN KEY (salon_id, client_id) REFERENCES clients (salon_id, id) ON DELETE CASCADE NOT VALID;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='case_photos'::regclass AND conname='fk_case_photos_salon_visit') THEN
+    ALTER TABLE case_photos ADD CONSTRAINT fk_case_photos_salon_visit
+      FOREIGN KEY (salon_id, case_visit_id) REFERENCES case_visits (salon_id, id) ON DELETE CASCADE NOT VALID;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='case_comments'::regclass AND conname='fk_case_comments_salon_visit') THEN
+    ALTER TABLE case_comments ADD CONSTRAINT fk_case_comments_salon_visit
+      FOREIGN KEY (salon_id, case_visit_id) REFERENCES case_visits (salon_id, id) ON DELETE CASCADE NOT VALID;
+  END IF;
+END $$;
+
+CREATE OR REPLACE FUNCTION validate_case_visit_tenant() RETURNS TRIGGER
+LANGUAGE plpgsql SET search_path = pg_catalog, public AS $$
+BEGIN
+  IF NEW.course_id IS NOT NULL AND NOT EXISTS (
+    SELECT 1 FROM case_courses c
+    WHERE c.id=NEW.course_id AND c.salon_id=NEW.salon_id AND c.client_id=NEW.client_id
+  ) THEN
+    RAISE EXCEPTION 'case visit course tenant/client mismatch' USING ERRCODE='foreign_key_violation';
+  END IF;
+  IF NEW.record_id IS NOT NULL AND NOT EXISTS (
+    SELECT 1 FROM records r
+    WHERE r.id=NEW.record_id AND r.salon_id=NEW.salon_id
+      AND (r.client_id IS NULL OR r.client_id=NEW.client_id)
+  ) THEN
+    RAISE EXCEPTION 'case visit record tenant/client mismatch' USING ERRCODE='foreign_key_violation';
+  END IF;
+  IF NEW.specialist_user_id IS NOT NULL AND NOT EXISTS (
+    SELECT 1 FROM users u WHERE u.id=NEW.specialist_user_id AND u.salon_id=NEW.salon_id
+  ) THEN
+    RAISE EXCEPTION 'case visit specialist tenant mismatch' USING ERRCODE='foreign_key_violation';
+  END IF;
+  RETURN NEW;
+END $$;
+DROP TRIGGER IF EXISTS case_visit_tenant_check ON case_visits;
+CREATE TRIGGER case_visit_tenant_check
+  BEFORE INSERT OR UPDATE OF salon_id, client_id, course_id, record_id, specialist_user_id ON case_visits
+  FOR EACH ROW EXECUTE FUNCTION validate_case_visit_tenant();
+
+CREATE OR REPLACE FUNCTION validate_case_comment_tenant() RETURNS TRIGGER
+LANGUAGE plpgsql SET search_path = pg_catalog, public AS $$
+BEGIN
+  IF NEW.author_user_id IS NOT NULL AND NOT EXISTS (
+    SELECT 1 FROM users u WHERE u.id=NEW.author_user_id AND u.salon_id=NEW.salon_id
+  ) THEN
+    RAISE EXCEPTION 'case comment author tenant mismatch' USING ERRCODE='foreign_key_violation';
+  END IF;
+  RETURN NEW;
+END $$;
+DROP TRIGGER IF EXISTS case_comment_tenant_check ON case_comments;
+CREATE TRIGGER case_comment_tenant_check
+  BEFORE INSERT OR UPDATE OF salon_id, author_user_id ON case_comments
+  FOR EACH ROW EXECUTE FUNCTION validate_case_comment_tenant();
+`;
+
+module.exports = { runMigrations, MOBILE_AUTH_DDL, API_ACCESS_TICKETS_DDL, RESOURCE_LIMITS_DDL, CASE_TENANT_INTEGRITY_DDL, MAX_LOYALTY_DDL, FINANCE_OPS_DDL, EDOCS_BOARD_DDL, JOURNAL_DDL, SERVICE_CATALOG_DDL, JOURNAL_FINANCE_DDL, JOURNAL_LOCAL_DDL, JOURNAL_PREFS_DDL, JOURNAL_HISTORY_INDEX_DDL, STOCK_HISTORY_DDL, APPOINTMENT_GOODS_DDL };

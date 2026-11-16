@@ -4,7 +4,7 @@
 // (req.user.salonId), параметры запроса его не задают. Таблица только читается:
 // пишет в неё один модуль services/finance-ops.js.
 const router = require('express').Router();
-const { authOrQuery, requireRole } = require('../middleware/auth');
+const { auth, requireRole } = require('../middleware/auth');
 const { db } = require('../db');
 const { isCalendarDate } = require('../utils/period');
 const { KINDS, METHODS, STATUSES } = require('../services/finance-ops');
@@ -181,7 +181,7 @@ function toCsv(rows) {
 
 // ── роуты ──────────────────────────────────────────────────────────────
 
-router.use(authOrQuery, requireRole('owner', 'admin'));
+router.use(auth, requireRole('owner', 'admin'));
 router.use((req, res, next) => { res.set('Cache-Control', 'no-store'); next(); });
 
 const handle = fn => async (req, res) => {

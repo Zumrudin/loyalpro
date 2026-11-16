@@ -1,154 +1,141 @@
-// ============================================================
-// OTP Bot Listener — Telegram long-polling for mobile app OTP
-// ============================================================
-//
-// Listens for /start <phone> commands on the @sms_activator_peri_clinic_bot
-// bot, validates the phone exists in `clients`, persists the
-// (phone ↔ chat_id) link in `mobile_telegram_links`, and immediately
-// delivers a still-valid OTP from `mobile_otp_sessions` if one exists.
-//
-// Subsequent /login requests (see routes/mobile-auth.js) will then push
-// codes directly into the chat without the user opening the bot again.
-// ============================================================
-
-const config = require('./config'); // ensures dotenv is loaded
+const config = require('./config');
 const axios = require('axios');
-const { db } = require('./db');
 const { createLogger } = require('./logger');
 const {
-  linkPhoneToChat,
+  normalizePhone,
+  configuredSalonId,
+  findClientByPhone,
+  issueOtp,
+} = require('./services/mobile-otp');
+const {
+  linkVerifiedContact,
   sendMessage,
   sendOtpToChat,
 } = require('./services/telegram-otp');
 
 const log = createLogger('OtpBot');
-
 const TOKEN = process.env.TELEGRAM_BOT_TOKEN;
-if (!TOKEN) {
-  log.error('TELEGRAM_BOT_TOKEN is not set — exiting');
-  process.exit(1);
-}
-
-const API = `${config.TELEGRAM_API_BASE}/bot${TOKEN}`;
+const API = TOKEN ? `${config.TELEGRAM_API_BASE}/bot${TOKEN}` : null;
 const POLL_TIMEOUT_S = 25;
 const ERROR_BACKOFF_MS = 5000;
 
 let offset = 0;
 let stopping = false;
 
-function normalizePhone(raw) {
-  const digits = String(raw).replace(/\D/g, '');
-  if (digits.length < 10) return null;
-  return digits.length === 11 ? digits : '7' + digits.slice(-10);
+function contactKeyboard() {
+  return {
+    reply_markup: {
+      keyboard: [[{ text: 'Подтвердить мой номер', request_contact: true }]],
+      resize_keyboard: true,
+      one_time_keyboard: true,
+    },
+  };
 }
 
-async function findClientByPhone(phone) {
-  return db.oneOrNone(
-    'SELECT id, name FROM clients WHERE phone=$1 OR phone LIKE $2 LIMIT 1',
-    [phone, '%' + phone.slice(-10)]
+function isPrivateMessage(msg) {
+  return msg.chat?.type === 'private' && msg.from && !msg.from.is_bot &&
+    String(msg.chat.id) === String(msg.from.id) && !msg.sender_chat;
+}
+
+async function requestContact(chatId) {
+  await sendMessage(
+    chatId,
+    'Подтвердите собственный номер кнопкой ниже. Номер из команды или чужой контакт не принимается.',
+    contactKeyboard()
   );
 }
 
-async function getActiveOtp(phone) {
-  return db.oneOrNone(
-    'SELECT otp FROM mobile_otp_sessions WHERE phone=$1 AND expires_at > NOW()',
-    [phone]
-  );
+async function handleStart(msg) {
+  if (!isPrivateMessage(msg)) return;
+  await requestContact(msg.chat.id);
 }
 
-async function handleStart(chatId, arg) {
-  if (!arg) {
-    await sendMessage(
-      chatId,
-      'Чтобы получить код входа, откройте приложение PERI CLINIC и нажмите «Получить код». Код придёт сюда автоматически.'
-    );
-    return;
-  }
+async function handleContact(msg) {
+  if (!isPrivateMessage(msg) || msg.forward_date || msg.forward_origin) return;
+  const contact = msg.contact;
+  if (!contact || String(contact.user_id) !== String(msg.from.id)) return;
 
-  const phone = normalizePhone(arg);
+  const phone = normalizePhone(contact.phone_number);
   if (!phone) {
-    await sendMessage(chatId, 'Неверный формат телефона.');
+    await sendMessage(msg.chat.id, 'Не удалось подтвердить формат номера. Обратитесь к администратору клиники.');
     return;
   }
 
-  const client = await findClientByPhone(phone);
-  if (!client) {
-    await sendMessage(
-      chatId,
-      'Клиент с таким телефоном не найден в системе клиники. Обратитесь к администратору.'
-    );
+  const salonId = configuredSalonId();
+  const match = await findClientByPhone(phone, salonId);
+  if (match.status !== 'ok') {
+    await sendMessage(msg.chat.id, 'Номер не удалось привязать. Обратитесь к администратору клиники.');
     return;
   }
 
-  await linkPhoneToChat(phone, chatId);
-  log.info(`Linked phone=${phone} → chat_id=${chatId} (client_id=${client.id})`);
-
-  const active = await getActiveOtp(phone);
-  if (active) {
-    await sendOtpToChat(chatId, active.otp);
-    log.info(`Delivered active OTP to chat_id=${chatId} for phone=${phone}`);
-  } else {
-    await sendMessage(
-      chatId,
-      'Привязка выполнена. Запросите код в приложении PERI CLINIC — он придёт сюда автоматически.'
-    );
+  const link = await linkVerifiedContact({
+    salonId,
+    clientId: match.client.id,
+    phone,
+    chatId: msg.chat.id,
+    telegramUserId: msg.from.id,
+  });
+  if (link.status === 'unchanged') {
+    await sendMessage(msg.chat.id, 'Номер уже подтверждён. Запросите новый код в приложении PERI CLINIC.');
+    return;
   }
+
+  const issued = await issueOtp({ phone, salonId });
+  if (issued.issued) {
+    await sendOtpToChat(msg.chat.id, issued.otp);
+    return;
+  }
+  await sendMessage(
+    msg.chat.id,
+    issued.reason === 'rate_limited'
+      ? 'Слишком много запросов кода. Повторите позже.'
+      : 'Код не удалось выпустить. Обратитесь к администратору клиники.'
+  );
 }
 
 async function handleUpdate(update) {
   const msg = update.message;
-  if (!msg || !msg.chat) return;
-  const chatId = msg.chat.id;
+  if (!msg || !isPrivateMessage(msg)) return;
+  if (msg.contact) return handleContact(msg);
   const text = (msg.text || '').trim();
-
-  if (text.startsWith('/start')) {
-    const arg = text.slice('/start'.length).trim();
-    return handleStart(chatId, arg);
-  }
-
-  // Any other input — gentle hint
+  if (text === '/start' || text.startsWith('/start ')) return handleStart(msg);
   await sendMessage(
-    chatId,
-    'Я отправляю коды для входа в приложение PERI CLINIC. Откройте приложение и нажмите «Получить код».'
+    msg.chat.id,
+    'Откройте приложение PERI CLINIC и нажмите «Получить код».',
+    contactKeyboard()
   );
+}
+
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
 }
 
 async function poll() {
   while (!stopping) {
     try {
       const { data } = await axios.get(`${API}/getUpdates`, {
-        params: {
-          offset,
-          timeout: POLL_TIMEOUT_S,
-          allowed_updates: ['message'],
-        },
+        params: { offset, timeout: POLL_TIMEOUT_S, allowed_updates: ['message'] },
         timeout: (POLL_TIMEOUT_S + 5) * 1000,
       });
-
       if (!data.ok) {
-        log.error(`Telegram getUpdates error: ${data.description}`);
+        log.error('Telegram getUpdates rejected');
         await sleep(ERROR_BACKOFF_MS);
         continue;
       }
-
       for (const update of data.result) {
         offset = update.update_id + 1;
         try {
           await handleUpdate(update);
         } catch (e) {
-          log.error(`handleUpdate failed for update_id=${update.update_id}: ${e.message}`);
+          log.error(`handleUpdate failed for update_id=${update.update_id}`);
         }
       }
     } catch (e) {
       if (stopping) break;
-      log.error(`Polling loop error: ${e.message}`);
+      log.error('Telegram polling loop failed');
       await sleep(ERROR_BACKOFF_MS);
     }
   }
-}
-
-function sleep(ms) {
-  return new Promise((r) => setTimeout(r, ms));
 }
 
 function shutdown(signal) {
@@ -157,11 +144,28 @@ function shutdown(signal) {
   setTimeout(() => process.exit(0), 1000);
 }
 
-process.on('SIGTERM', () => shutdown('SIGTERM'));
-process.on('SIGINT', () => shutdown('SIGINT'));
+function start() {
+  if (!TOKEN) {
+    log.error('TELEGRAM_BOT_TOKEN is not set — exiting');
+    process.exitCode = 1;
+    return;
+  }
+  try {
+    configuredSalonId();
+  } catch {
+    log.error('Mobile OTP configuration is missing or invalid — exiting');
+    process.exitCode = 1;
+    return;
+  }
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
+  process.on('SIGINT', () => shutdown('SIGINT'));
+  log.info('OTP bot starting long-polling…');
+  poll().catch(() => {
+    log.error('Fatal poll() error');
+    process.exitCode = 1;
+  });
+}
 
-log.info('OTP bot starting long-polling…');
-poll().catch((e) => {
-  log.error(`Fatal poll() error: ${e.message}`);
-  process.exit(1);
-});
+if (require.main === module) start();
+
+module.exports = { handleUpdate, handleStart, handleContact, requestContact, start };

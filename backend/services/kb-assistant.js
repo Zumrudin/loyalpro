@@ -3,6 +3,7 @@
 const { db } = require('../db');
 const config = require('../config');
 const aitunnel = require('./aitunnel');
+const resourceLimits = require('./resource-limits');
 const { createLogger } = require('../logger');
 
 const log = createLogger('kb-assistant');
@@ -352,10 +353,11 @@ async function ask(salonId, userId, question) {
 
   let answer;
   try {
-    answer = await callGemini(prompt, { free, paid, model });
+    answer = await resourceLimits.runLlm(salonId, userId, () => callGemini(prompt, { free, paid, model }));
   } catch (e) {
+    if (e.status === 429) throw e;
     // LLM недоступен/лимит → деградация: отдаём источники, помечаем degraded.
-    await logChat(salonId, userId, question, '[LLM error] ' + e.message, sourceIds);
+    await logChat(salonId, userId, question, '[LLM error]', sourceIds);
     const err = new Error('LLM недоступен'); err.code = 'LLM_UNAVAILABLE'; err.sources = sources;
     throw err;
   }

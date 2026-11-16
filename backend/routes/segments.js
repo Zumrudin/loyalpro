@@ -1,6 +1,6 @@
 const router = require('express').Router();
 const { db } = require('../db');
-const { auth, authOrQuery } = require('../middleware/auth');
+const { auth } = require('../middleware/auth');
 const { SEGMENT_DEFS, SEG_MAP, SEG_CLIENTS_SQL, refreshSegments } = require('../services/segments');
 const { createLogger } = require('../logger');
 const logger = createLogger('Segments');
@@ -77,7 +77,7 @@ router.get('/:key/clients', auth, async (req, res) => {
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
-router.get('/:key/export', authOrQuery, async (req, res) => {
+router.get('/:key/export', auth, async (req, res) => {
   try {
     const { key } = req.params;
     const { search = '' } = req.query;

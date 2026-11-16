@@ -62,9 +62,22 @@ Jest идёт в `TZ=Europe/Moscow` — как боевой процесс (`eco
 - `services/portfolio.js` — pure helpers (filename templating, reorder validation, URL absolutize) shared by admin route + mobile API. No DB/HTTP — unit-tested in `portfolio.test.js`
 
 ### Auth & roles
-JWT in `Authorization: Bearer <token>` header (or `?token=` for downloads). Roles: `owner > admin > specialist`. Specialists can only access `/api/home-care`, `/api/auth`, `/api/template-settings`. Public routes (no JWT): `/api/auth/login`, `/api/auth/register`, `/api/app-settings`.
+JWT принимается только в `Authorization: Bearer <token>`; `?token=` не работает. Staff-доступ на каждый запрос проверяется по активной session и текущим `users.role/salon_id/is_active`. Роли: `owner > admin > specialist`; у `admin_cashier` отдельный allowlist. Specialists могут обращаться только к префиксам `SPECIALIST_ALLOWED_PREFIXES` в `backend/config.js`. Публичные API перечислены в `API_PUBLIC` и отдельных public routes.
 
-Mobile clients use a separate auth path: `routes/mobile-auth.js` + `routes/mobile-client.js` under `/api/mobile/`.
+SSE чата использует одноразовый ticket из `POST /api/chat/stream-ticket` (TTL 60 с, в БД только hash); `GET /api/chat/stream?ticket=` не принимает JWT. Downloads используют `fetch` с Bearer и Blob/object URL. При настройке nginx нельзя писать query этих и webhook-запросов через `$request`: использовать `$uri` без args либо отключать access log для exact secret-bearing locations.
+
+Mobile clients use a separate auth path: `routes/mobile-auth.js` + `routes/mobile-client.js` under `/api/mobile/`. Вход требует подтверждённый Telegram contact самого пользователя и HMAC-хешированный одноразовый OTP; `/start <phone>` и plaintext OTP не поддерживаются. Серверный `MOBILE_SALON_ID` и `MOBILE_OTP_HASH_KEY` обязательны.
+
+### Security changes (15.11.2026, установлено на dev; production не развёрнут)
+- План и остаточные операции: `docs/superpowers/plans/2026-11-15-security-remediation.md`. YClients/Chatpush/gateway webhook fail-closed при отсутствии секрета; перед выкатом нужна настройка секретов и проверка proxy-логов.
+- `GET /api/salon` отдаёт whitelist, а ручки clients/mobile/patient-portfolio/chat не возвращают и не пишут в лог сырые provider/SQL errors, recipient keys или текст сообщений.
+- AI/registration counters живут в PostgreSQL (`services/resource-limits.js`). Бюджет списывается на top-level assistant/relay operation ДО вызова провайдера; внутренние fallback-звенья пока не учитываются как отдельные фактические LLM calls. CAPTCHA/invite/email verification ещё не выбраны и не реализованы.
+- `TRUST_PROXY` по умолчанию `loopback`; публичные лимиты используют `req.ip`. Нужна инфраструктурная проверка, что backend-порт закрыт снаружи.
+- CSP: enforce пока содержит `script-src 'unsafe-inline'` из-за существующих inline scripts/handlers. Дополнительный Report-Only запрещает inline script и шлёт отчёты в rate-limited `POST /api/csp-report`; в лог идут только allowlisted directive и категория inline/eval/other, не body/URL/sample.
+- `CASE_TENANT_INTEGRITY_DDL` добавляет composite NOT VALID FK и tenant/client triggers для photo cases. На dev `loyalpro_test` применены 2 composite indexes, 4 NOT VALID FK и 2 tenant triggers; агрегатный аудит до/после = 0 несогласованных строк. Locks/duration и порядок VALIDATE — в плане; production DDL, автоматический backfill/drop не выполнялись.
+- Dev: активен `/srv/loyalpro-dev/releases/security-20261115-201235`, PM2 `loyalpro` online на Node 20, прежний релиз для отката — `inline-goods-20261115-1852`, ecosystem backup — `/srv/loyalpro-dev/ecosystem.before-security.json`. На точном релизе 38 suites / 425 tests PASS; HTTPS index и изменённые chat/clients/segments JS побайтно совпали, API без auth = 401, Report-Only CSP присутствует, новых error markers в логах нет. Browser MCP не запускался.
+- На dev отсутствуют `MOBILE_SALON_ID` и `MOBILE_OTP_HASH_KEY`: новый mobile login будет fail-closed до явной серверной настройки. Secret-файл не читался напрямую и не изменялся. Также нужно настроить/проверить webhook secrets у всех активных интеграций и запретить query secrets в nginx access logs.
+- До завершения плана остаются: двухсалонный staging E2E и DDL VALIDATE после чистого аудита; browser MCP для XSS/SSE/downloads/CSP; перенос inline handlers и enforce без `unsafe-inline`; CAPTCHA/invite/email verification; per-attempt LLM accounting и глобальный circuit breaker платных ключей. Точные тестовые счётчики и известные исходные красные suites — в плане SEC-00/SEC-14.
 
 ### CORS
 Managed in `server.js`. The whitelist is set via `ALLOWED_ORIGINS` env var (comma-separated) or falls back to hardcoded defaults. To add an origin, set `ALLOWED_ORIGINS` in the environment — do not edit the hardcoded list unless adding a permanent default.

@@ -19,11 +19,12 @@ const { db } = require('./db');
 const followupQueue = require('./services/agent/followup-queue');
 const router = require('./routes/webhook');
 
-const SALON = { id: 1, yclients_company_id: '668791', yclients_webhook_secret: null, is_active: true };
+const WEBHOOK_SECRET = 's'.repeat(32);
+const SALON = { id: 1, yclients_company_id: '668791', yclients_webhook_secret: WEBHOOK_SECRET, is_active: true };
 
 async function post(payload) {
   const layer = router.stack.find(l => l.route && l.route.path === '/webhook.v2/:companyId');
-  const req = { params: { companyId: '668791' }, query: {}, body: payload };
+  const req = { params: { companyId: '668791' }, query: { key: WEBHOOK_SECRET }, body: payload };
   const res = { json: jest.fn(), status: jest.fn(() => res) };
   await layer.route.stack[0].handle(req, res);
   return res;

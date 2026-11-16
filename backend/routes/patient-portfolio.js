@@ -7,6 +7,7 @@ const svc = require('../services/patient-portfolio');
 const s3 = require('../services/s3');
 const { createLogger } = require('../logger');
 const logger = createLogger('PatientPortfolio');
+const { safeErrorCode } = require('../utils/safe-error');
 
 const router = express.Router();
 const upload = multer({
@@ -22,28 +23,68 @@ const wrap = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).cat
 const sid = (req) => req.user.salonId;
 const uid = (req) => req.user.userId;
 
+async function loadClient(clientId, salonId) {
+  const row = await db.oneOrNone('SELECT id FROM clients WHERE id=$1 AND salon_id=$2', [clientId, salonId]);
+  if (!row) { const e = new Error('Not found'); e.statusCode = 404; throw e; }
+  return row;
+}
+async function loadCourse(courseId, salonId, clientId) {
+  const row = await db.oneOrNone(
+    'SELECT id, client_id FROM case_courses WHERE id=$1 AND salon_id=$2 AND client_id=$3',
+    [courseId, salonId, clientId]);
+  if (!row) { const e = new Error('Not found'); e.statusCode = 404; throw e; }
+  return row;
+}
+async function loadRecord(recordId, salonId, clientId) {
+  const row = await db.oneOrNone(
+    `SELECT id, client_id, COALESCE((visit_datetime AT TIME ZONE 'Europe/Moscow')::date, visit_date::date) AS visit_date
+     FROM records WHERE id=$1 AND salon_id=$2`,
+    [recordId, salonId]);
+  if (!row) { const e = new Error('Not found'); e.statusCode = 404; throw e; }
+  if (row.client_id != null && String(row.client_id) !== String(clientId)) {
+    const e = new Error('Record does not belong to client'); e.statusCode = 409; throw e;
+  }
+  return row;
+}
+async function loadSpecialist(userId, salonId) {
+  const row = await db.oneOrNone('SELECT id FROM users WHERE id=$1 AND salon_id=$2 AND is_active=TRUE', [userId, salonId]);
+  if (!row) { const e = new Error('Not found'); e.statusCode = 404; throw e; }
+  return row;
+}
 async function loadVisit(visitId, salonId) {
   const v = await db.oneOrNone(
-    `SELECT * FROM case_visits WHERE id=$1 AND salon_id=$2`, [visitId, salonId]);
+    `SELECT v.* FROM case_visits v
+     JOIN clients cl ON cl.id=v.client_id AND cl.salon_id=v.salon_id
+     LEFT JOIN case_courses c ON c.id=v.course_id AND c.salon_id=v.salon_id AND c.client_id=v.client_id
+     LEFT JOIN records r ON r.id=v.record_id AND r.salon_id=v.salon_id
+     LEFT JOIN users u ON u.id=v.specialist_user_id AND u.salon_id=v.salon_id
+     WHERE v.id=$1 AND v.salon_id=$2
+       AND (v.course_id IS NULL OR c.id IS NOT NULL)
+       AND (v.record_id IS NULL OR (r.id IS NOT NULL AND (r.client_id IS NULL OR r.client_id=v.client_id)))
+       AND (v.specialist_user_id IS NULL OR u.id IS NOT NULL)`,
+    [visitId, salonId]);
   if (!v) { const e = new Error('Not found'); e.statusCode = 404; throw e; }
   return v;
 }
 async function loadPhoto(photoId, salonId) {
   const p = await db.oneOrNone(
-    `SELECT * FROM case_photos WHERE id=$1 AND salon_id=$2`, [photoId, salonId]);
+    `SELECT p.* FROM case_photos p
+     JOIN case_visits v ON v.id=p.case_visit_id AND v.salon_id=p.salon_id
+     JOIN clients c ON c.id=v.client_id AND c.salon_id=v.salon_id
+     WHERE p.id=$1 AND p.salon_id=$2`, [photoId, salonId]);
   if (!p) { const e = new Error('Not found'); e.statusCode = 404; throw e; }
   return p;
 }
 
 // Батч-загрузка превью-фото для списка визитов одним запросом (вместо N+1).
 // Возвращает Map<visitId, photos[]>, фото упорядочены stage, sort_order, id.
-async function loadPhotosByVisit(visitIds) {
+async function loadPhotosByVisit(visitIds, salonId) {
   const map = new Map();
   if (!visitIds.length) return map;
   const photos = await db.any(
     `SELECT case_visit_id, id, stage, s3_key_thumb FROM case_photos
-     WHERE case_visit_id = ANY($1::int[])
-     ORDER BY case_visit_id, stage, sort_order, id`, [visitIds]);
+     WHERE case_visit_id = ANY($1::int[]) AND salon_id=$2
+     ORDER BY case_visit_id, stage, sort_order, id`, [visitIds, salonId]);
   for (const p of photos) {
     if (!map.has(p.case_visit_id)) map.set(p.case_visit_id, []);
     map.get(p.case_visit_id).push(p);
@@ -53,6 +94,7 @@ async function loadPhotosByVisit(visitIds) {
 
 // ─── COURSES ──────────────────────────────────────────────────────
 router.get('/clients/:clientId/courses', wrap(async (req, res) => {
+  await loadClient(req.params.clientId, sid(req));
   const rows = await db.any(`
     SELECT c.*,
            COALESCE(json_agg(
@@ -60,7 +102,7 @@ router.get('/clients/:clientId/courses', wrap(async (req, res) => {
              ORDER BY v.visit_date DESC
            ) FILTER (WHERE v.id IS NOT NULL), '[]'::json) AS visits
     FROM case_courses c
-    LEFT JOIN case_visits v ON v.course_id = c.id
+    LEFT JOIN case_visits v ON v.course_id = c.id AND v.salon_id=c.salon_id AND v.client_id=c.client_id
     WHERE c.salon_id=$1 AND c.client_id=$2
     GROUP BY c.id
     ORDER BY c.created_at DESC
@@ -71,6 +113,7 @@ router.get('/clients/:clientId/courses', wrap(async (req, res) => {
 router.post('/courses', wrap(async (req, res) => {
   const { client_id, title, description } = req.body;
   if (!client_id || !title) { res.status(400).json({ error: 'client_id and title required' }); return; }
+  await loadClient(client_id, sid(req));
   const row = await db.one(`
     INSERT INTO case_courses (salon_id, client_id, title, description, created_by)
     VALUES ($1,$2,$3,$4,$5) RETURNING *
@@ -85,8 +128,8 @@ router.put('/courses/:id', wrap(async (req, res) => {
   const { title, description } = req.body;
   const row = await db.one(`
     UPDATE case_courses SET title=COALESCE($1,title), description=COALESCE($2,description), updated_at=NOW()
-    WHERE id=$3 RETURNING *
-  `, [title, description, req.params.id]);
+    WHERE id=$3 AND salon_id=$4 RETURNING *
+  `, [title, description, req.params.id, sid(req)]);
   res.json(row);
 }));
 
@@ -94,12 +137,13 @@ router.delete('/courses/:id', wrap(async (req, res) => {
   const c = await db.oneOrNone(`SELECT * FROM case_courses WHERE id=$1 AND salon_id=$2`, [req.params.id, sid(req)]);
   if (!c) { res.status(404).end(); return; }
   svc.assertCanMutate(req.user, c.created_by);
-  await db.query(`DELETE FROM case_courses WHERE id=$1`, [req.params.id]);
+  await db.query(`DELETE FROM case_courses WHERE id=$1 AND salon_id=$2`, [req.params.id, sid(req)]);
   res.status(204).end();
 }));
 
 // ─── VISITS (cases) ───────────────────────────────────────────────
 router.get('/clients/:clientId/cases', wrap(async (req, res) => {
+  await loadClient(req.params.clientId, sid(req));
   const limit = Math.min(parseInt(req.query.limit, 10) || 50, 100);
   const before = req.query.before;
   const params = [sid(req), req.params.clientId];
@@ -113,19 +157,19 @@ router.get('/clients/:clientId/cases', wrap(async (req, res) => {
     SELECT v.*, u.name AS specialist_name,
            c.title AS course_title,
            cl.name AS client_name, cl.phone AS client_phone,
-           (SELECT COUNT(*)::int FROM case_photos p WHERE p.case_visit_id = v.id) AS photos_count,
-           (SELECT COUNT(*)::int FROM case_comments cm WHERE cm.case_visit_id = v.id) AS comments_count
+           (SELECT COUNT(*)::int FROM case_photos p WHERE p.case_visit_id = v.id AND p.salon_id=v.salon_id) AS photos_count,
+           (SELECT COUNT(*)::int FROM case_comments cm WHERE cm.case_visit_id = v.id AND cm.salon_id=v.salon_id) AS comments_count
     FROM case_visits v
-    LEFT JOIN users u ON u.id = v.specialist_user_id
-    LEFT JOIN case_courses c ON c.id = v.course_id
-    JOIN clients cl ON cl.id = v.client_id
+    LEFT JOIN users u ON u.id = v.specialist_user_id AND u.salon_id=v.salon_id
+    LEFT JOIN case_courses c ON c.id = v.course_id AND c.salon_id=v.salon_id AND c.client_id=v.client_id
+    JOIN clients cl ON cl.id = v.client_id AND cl.salon_id=v.salon_id
     WHERE ${where}
     ORDER BY v.visit_date DESC, v.id DESC
     LIMIT $${params.length}
   `, params);
 
   // Батч вместо N+1 (см. loadPhotosByVisit)
-  const photosByVisit = await loadPhotosByVisit(rows.map(v => v.id));
+  const photosByVisit = await loadPhotosByVisit(rows.map(v => v.id), sid(req));
   await Promise.all(rows.map(async (v) => {
     const photos = photosByVisit.get(v.id) || [];
     const pick = svc.pickThumbForCard(photos);
@@ -145,12 +189,12 @@ router.get('/visits/recent', wrap(async (req, res) => {
            cl.name AS client_name, cl.phone AS client_phone,
            u.name AS specialist_name,
            crs.title AS course_title,
-           (SELECT COUNT(*)::int FROM case_photos p WHERE p.case_visit_id = v.id) AS photos_count,
-           (SELECT COUNT(*)::int FROM case_comments cm WHERE cm.case_visit_id = v.id) AS comments_count
+           (SELECT COUNT(*)::int FROM case_photos p WHERE p.case_visit_id = v.id AND p.salon_id=v.salon_id) AS photos_count,
+           (SELECT COUNT(*)::int FROM case_comments cm WHERE cm.case_visit_id = v.id AND cm.salon_id=v.salon_id) AS comments_count
     FROM case_visits v
-    JOIN clients cl ON cl.id = v.client_id
-    LEFT JOIN users u ON u.id = v.specialist_user_id
-    LEFT JOIN case_courses crs ON crs.id = v.course_id
+    JOIN clients cl ON cl.id = v.client_id AND cl.salon_id=v.salon_id
+    LEFT JOIN users u ON u.id = v.specialist_user_id AND u.salon_id=v.salon_id
+    LEFT JOIN case_courses crs ON crs.id = v.course_id AND crs.salon_id=v.salon_id AND crs.client_id=v.client_id
     WHERE v.salon_id = $1
     ORDER BY v.created_at DESC, v.id DESC
     LIMIT $2 OFFSET $3
@@ -158,7 +202,7 @@ router.get('/visits/recent', wrap(async (req, res) => {
   // Один батч-запрос вместо N+1: при limit=60 и удалённой БД (~40мс RTT)
   // цикл по визитам давал бы ~2.5с только на сетевые задержки.
   // ORDER BY stage,sort_order,id — pickPreviewSet берёт первое в каждой стадии
-  const photosByVisit = await loadPhotosByVisit(rows.map(v => v.id));
+  const photosByVisit = await loadPhotosByVisit(rows.map(v => v.id), sid(req));
   await Promise.all(rows.map(async (v) => {
     const photos = photosByVisit.get(v.id) || [];
     const picks = svc.pickPreviewSet(photos, 3);
@@ -174,41 +218,40 @@ router.get('/visits/:id', wrap(async (req, res) => {
   const v = await loadVisit(req.params.id, sid(req));
   const photos = await db.any(`
     SELECT id, stage, s3_key_thumb, s3_key_medium, width, height, sort_order, uploaded_by, uploaded_at
-    FROM case_photos WHERE case_visit_id=$1
+    FROM case_photos WHERE case_visit_id=$1 AND salon_id=$2
     ORDER BY stage, sort_order, id
-  `, [v.id]);
+  `, [v.id, sid(req)]);
   for (const p of photos) {
     p.url_thumb  = await s3.presignGet(p.s3_key_thumb);
     p.url_medium = await s3.presignGet(p.s3_key_medium);
   }
   const comments = await db.any(`
     SELECT cm.*, u.name AS author_name
-    FROM case_comments cm LEFT JOIN users u ON u.id = cm.author_user_id
-    WHERE cm.case_visit_id=$1 ORDER BY cm.created_at
-  `, [v.id]);
+    FROM case_comments cm LEFT JOIN users u ON u.id = cm.author_user_id AND u.salon_id=cm.salon_id
+    WHERE cm.case_visit_id=$1 AND cm.salon_id=$2 ORDER BY cm.created_at
+  `, [v.id, sid(req)]);
   res.json({ ...v, photos, comments });
 }));
 
 router.post('/visits', wrap(async (req, res) => {
   const { client_id, record_id, course_id, notes } = req.body;
   if (!client_id) { res.status(400).json({ error: 'client_id required' }); return; }
-  // Идемпотентность: если record_id уже занят этим салоном — вернуть существующий
+  await loadClient(client_id, sid(req));
+  const record = record_id ? await loadRecord(record_id, sid(req), client_id) : null;
+  if (course_id) await loadCourse(course_id, sid(req), client_id);
+  await loadSpecialist(uid(req), sid(req));
   if (record_id) {
     const ex = await db.oneOrNone(
       `SELECT * FROM case_visits WHERE salon_id=$1 AND record_id=$2`, [sid(req), record_id]);
-    if (ex) { res.json(ex); return; }
+    if (ex) {
+      if (String(ex.client_id) !== String(client_id)) {
+        res.status(409).json({ error: 'Record is already linked to another client' }); return;
+      }
+      res.json(ex); return;
+    }
   }
-  // Дата визита: из records (с салон-скоупом, чтобы не утянуть чужой record) либо сегодня
-  let visitDate;
-  if (record_id) {
-    const r = await db.oneOrNone(
-      `SELECT COALESCE((visit_datetime AT TIME ZONE 'Europe/Moscow')::date, visit_date::date) AS d
-       FROM records WHERE id=$1 AND salon_id=$2`,
-      [record_id, sid(req)]);
-    visitDate = r?.d || new Date().toISOString().slice(0, 10);
-  } else {
-    visitDate = new Date().toISOString().slice(0, 10);
-  }
+  const visitDate = record ? record.visit_date : new Date().toISOString().slice(0, 10);
+  if (!visitDate) { res.status(422).json({ error: 'Visit date is unavailable' }); return; }
   const row = await db.one(`
     INSERT INTO case_visits (salon_id, client_id, record_id, course_id, specialist_user_id, visit_date, notes)
     VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *
@@ -220,10 +263,11 @@ router.put('/visits/:id', wrap(async (req, res) => {
   const v = await loadVisit(req.params.id, sid(req));
   svc.assertCanMutate(req.user, v.specialist_user_id);
   const { notes, course_id } = req.body;
+  if (course_id) await loadCourse(course_id, sid(req), v.client_id);
   const row = await db.one(`
     UPDATE case_visits SET notes=COALESCE($1,notes), course_id=$2, updated_at=NOW()
-    WHERE id=$3 RETURNING *
-  `, [notes, course_id || null, v.id]);
+    WHERE id=$3 AND salon_id=$4 RETURNING *
+  `, [notes, course_id || null, v.id, sid(req)]);
   res.json(row);
 }));
 
@@ -231,16 +275,16 @@ router.delete('/visits/:id', wrap(async (req, res) => {
   const v = await loadVisit(req.params.id, sid(req));
   svc.assertCanMutate(req.user, v.specialist_user_id);
   const keys = await db.any(`
-    SELECT s3_key_original, s3_key_medium, s3_key_thumb FROM case_photos WHERE case_visit_id=$1
-  `, [v.id]);
-  await db.query(`DELETE FROM case_visits WHERE id=$1`, [v.id]);
+    SELECT s3_key_original, s3_key_medium, s3_key_thumb FROM case_photos WHERE case_visit_id=$1 AND salon_id=$2
+  `, [v.id, sid(req)]);
+  await db.query(`DELETE FROM case_visits WHERE id=$1 AND salon_id=$2`, [v.id, sid(req)]);
   const allKeys = keys.flatMap(k => [k.s3_key_original, k.s3_key_medium, k.s3_key_thumb]);
   if (allKeys.length) {
     try { await s3.deleteObjects(allKeys); }
     catch (e) {
       for (const k of allKeys) {
         await db.query(`INSERT INTO s3_orphans (bucket, s3_key, reason, last_error) VALUES ($1,$2,$3,$4)`,
-          [config.S3_BUCKET, k, 'visit_delete', e.message]);
+          [config.S3_BUCKET, k, 'visit_delete', safeErrorCode(e)]);
       }
     }
   }
@@ -263,7 +307,7 @@ router.post('/visits/:id/photos', upload.array('files', 20), wrap(async (req, re
         buffer: f.buffer, mimeType: f.mimetype,
       });
     } catch (e) {
-      results.push({ ok: false, error: e.message });
+      results.push({ ok: false, error: 'delete_failed' });
       continue;
     }
     const row = await db.one(`
@@ -295,21 +339,21 @@ router.put('/photos/:id', wrap(async (req, res) => {
   const stage = req.body.stage !== undefined ? svc.parseStage(req.body.stage) : p.stage;
   const sort = req.body.sort_order !== undefined ? parseInt(req.body.sort_order, 10) : p.sort_order;
   const row = await db.one(`
-    UPDATE case_photos SET stage=$1, sort_order=$2 WHERE id=$3 RETURNING *
-  `, [stage, sort, p.id]);
+    UPDATE case_photos SET stage=$1, sort_order=$2 WHERE id=$3 AND salon_id=$4 RETURNING *
+  `, [stage, sort, p.id, sid(req)]);
   res.json(row);
 }));
 
 router.delete('/photos/:id', wrap(async (req, res) => {
   const p = await loadPhoto(req.params.id, sid(req));
   svc.assertCanMutate(req.user, p.uploaded_by);
-  await db.query(`DELETE FROM case_photos WHERE id=$1`, [p.id]);
+  await db.query(`DELETE FROM case_photos WHERE id=$1 AND salon_id=$2`, [p.id, sid(req)]);
   const keys = [p.s3_key_original, p.s3_key_medium, p.s3_key_thumb];
   try { await s3.deleteObjects(keys); }
   catch (e) {
     for (const k of keys) {
       await db.query(`INSERT INTO s3_orphans (bucket, s3_key, reason, last_error) VALUES ($1,$2,$3,$4)`,
-        [config.S3_BUCKET, k, 'photo_delete', e.message]);
+        [config.S3_BUCKET, k, 'photo_delete', safeErrorCode(e)]);
     }
   }
   res.status(204).end();
@@ -342,7 +386,7 @@ router.delete('/comments/:id', wrap(async (req, res) => {
   const c = await db.oneOrNone(`SELECT * FROM case_comments WHERE id=$1 AND salon_id=$2`, [req.params.id, sid(req)]);
   if (!c) { res.status(404).end(); return; }
   svc.assertCanMutate(req.user, c.author_user_id);
-  await db.query(`DELETE FROM case_comments WHERE id=$1`, [c.id]);
+  await db.query(`DELETE FROM case_comments WHERE id=$1 AND salon_id=$2`, [c.id, sid(req)]);
   res.status(204).end();
 }));
 
@@ -371,8 +415,8 @@ router.get('/search', wrap(async (req, res) => {
 // ─── ERROR HANDLER ───────────────────────────────────────────────
 router.use((err, _req, res, _next) => {
   const status = err.statusCode || 500;
-  logger.error(`error: ${err.message}`);
-  res.status(status).json({ error: err.message });
+  logger.error(`request failed: ${safeErrorCode(err)}`);
+  res.status(status).json({ error: status >= 500 ? 'Internal server error' : err.message });
 });
 
 module.exports = router;

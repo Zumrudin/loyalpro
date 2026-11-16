@@ -20,7 +20,8 @@ const { getLoyaltySettings } = require('./services/loyalty');
 const { upsertClientFromYc } = require('./services/client-upsert');
 const router = require('./routes/webhook');
 
-const SALON = { id: 1, yclients_company_id: '668791', yclients_webhook_secret: null, is_active: true };
+const WEBHOOK_SECRET = 's'.repeat(32);
+const SALON = { id: 1, yclients_company_id: '668791', yclients_webhook_secret: WEBHOOK_SECRET, is_active: true };
 const SETTINGS = { levels: [{ key: 'bronze', minSpent: 0, cashback: 5 }] };
 const CLIENT = { id: 352092609, name: 'Андрюшова Елена Валерьевна', phone: '+79160000000', spent: 1373824, visits: 55 };
 
@@ -30,7 +31,7 @@ function handler() {
 }
 
 async function post(payload) {
-  const req = { params: { companyId: '668791' }, query: {}, body: payload };
+  const req = { params: { companyId: '668791' }, query: { key: WEBHOOK_SECRET }, body: payload };
   const res = { json: jest.fn(), status: jest.fn(() => res) };
   await handler()(req, res);
   return res;

@@ -1,10 +1,12 @@
 'use strict';
+jest.mock('./db', () => ({ db: { oneOrNone: jest.fn() } }));
 jest.mock('./services/dialog-verdicts/store', () => ({ listVerdicts: jest.fn(), listUnanalyzed: jest.fn(), listRuns: jest.fn() }));
 jest.mock('./services/dialog-verdicts/run', () => ({ runVerdicts: jest.fn() }));
 jest.mock('./logger', () => ({ createLogger: () => ({ info() {}, warn() {} }) }));
 const express = require('express');
 const jwt = require('jsonwebtoken');
 const config = require('./config');
+const { db } = require('./db');
 const store = require('./services/dialog-verdicts/store');
 const { runVerdicts } = require('./services/dialog-verdicts/run');
 const router = require('./routes/dialog-verdicts');
@@ -15,7 +17,13 @@ beforeAll(async () => {
   base = `http://127.0.0.1:${server.address().port}/verdicts`;
 });
 afterAll(() => new Promise(resolve => server.close(resolve)));
-beforeEach(() => jest.clearAllMocks());
+beforeEach(() => {
+  jest.clearAllMocks();
+  db.oneOrNone.mockImplementation(async (_sql, [token]) => {
+    const claims = jwt.decode(token);
+    return { userId: claims.userId, salonId: claims.salonId, role: claims.role };
+  });
+});
 async function request(path = '', { role = 'owner', body, noToken = false } = {}) {
   const headers = { 'Content-Type': 'application/json' };
   if (!noToken) headers.Authorization = 'Bearer ' + jwt.sign({ salonId: 42, userId: 7, role }, config.JWT_SECRET);

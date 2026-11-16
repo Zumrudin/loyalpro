@@ -1,20 +1,22 @@
 'use strict';
 // ============================================================
-// Chat (read-only) — просмотр переписок chatpush.
+// Chat — просмотр переписок chatpush и ручные ответы оператора.
 // ------------------------------------------------------------
 // Диалоги неявно группируются по (salon_id, phone|chat_id) поверх таблицы
-// chatpush_messages (её наполняет routes/chatpush-webhook.js). Только чтение:
-// ни отправки, ни записи в БД. Доступ — owner/admin.
+// chatpush_messages (её наполняет routes/chatpush-webhook.js).
+// Доступ — owner/admin/admin_cashier.
 // ============================================================
 const router = require('express').Router();
 const { db } = require('../db');
 const multer = require('multer');
 const config = require('../config');
-const { auth, requireRole, authOrQuery } = require('../middleware/auth');
+const { auth, requireRole } = require('../middleware/auth');
 const transport = require('../services/messaging/transport');
+const accessTickets = require('../services/access-tickets');
 const { messagePreview, isGroupKey, recipientParams, DIALOG_KEY_SQL } = require('../services/chat');
 const { createLogger } = require('../logger');
 const logger = createLogger('Chat');
+const { safeErrorCode } = require('../utils/safe-error');
 
 const chatEvents = require('../services/chat-events');
 const { persistWhatsappOutgoing } = require('../services/chat-persist');
@@ -26,18 +28,37 @@ const CHAT_DIALOGS_LIMIT = 500;
 
 // admin_cashier — «Администратор-кассир»: полный доступ к чату наравне с owner/admin.
 const adminOnly = [auth, requireRole('owner', 'admin', 'admin_cashier')];
-// Для SSE: EventSource не умеет заголовки, токен едет в ?token= —
-// route-уровневый auth должен принимать query (authOrQuery), не только Bearer.
-const adminOnlyQuery = [authOrQuery, requireRole('owner', 'admin', 'admin_cashier')];
 
-// GET /api/chat/stream — SSE-поток событий чата салона. JWT через ?token=.
-// Соединение держим открытым, heartbeat — в chat-events.
-router.get('/stream', adminOnlyQuery, (req, res) => {
+async function streamAuth(req, res, next) {
+  res.set({ 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer' });
+  try {
+    const staff = await accessTickets.consume(req.query.ticket, accessTickets.CHAT_STREAM_SCOPE);
+    if (!staff) return res.status(401).json({ error: 'Stream ticket expired or invalid' });
+    req.user = staff;
+    next();
+  } catch (_) {
+    logger.error('stream ticket validation failed');
+    res.status(503).json({ error: 'Chat stream is temporarily unavailable' });
+  }
+}
+
+router.post('/stream-ticket', adminOnly, async (req, res) => {
+  try {
+    const grant = await accessTickets.issue(req.user, accessTickets.CHAT_STREAM_SCOPE);
+    res.set({ 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer' });
+    res.json(grant);
+  } catch (_) {
+    logger.error('stream ticket issuance failed');
+    res.status(503).json({ error: 'Chat stream is temporarily unavailable' });
+  }
+});
+
+router.get('/stream', streamAuth, requireRole('owner', 'admin', 'admin_cashier'), (req, res) => {
   res.set({
     'Content-Type': 'text/event-stream',
-    'Cache-Control': 'no-cache, no-transform',
+    'Cache-Control': 'no-store, no-transform',
     'Connection': 'keep-alive',
-    'X-Accel-Buffering': 'no',   // nginx: не буферизовать SSE
+    'X-Accel-Buffering': 'no',
   });
   res.flushHeaders();
   res.write('retry: 3000\n\n');
@@ -138,7 +159,7 @@ router.get('/dialogs', adminOnly, async (req, res) => {
     });
     res.json({ dialogs, limit: CHAT_DIALOGS_LIMIT });
   } catch (e) {
-    logger.error(`dialogs failed: ${e.message}`);
+    logger.error(`dialogs failed: ${safeErrorCode(e)}`);
     res.status(500).json({ error: 'Не удалось загрузить диалоги' });
   }
 });
@@ -161,7 +182,7 @@ router.get('/dialogs/:key/messages', adminOnly, async (req, res) => {
     `, [salonId, key, Number.isFinite(after) && after > 0 ? after : null]);
     res.json({ messages: rows });
   } catch (e) {
-    logger.error(`messages failed: ${e.message}`);
+    logger.error(`messages failed: ${safeErrorCode(e)}`);
     res.status(500).json({ error: 'Не удалось загрузить сообщения' });
   }
 });
@@ -179,7 +200,7 @@ router.get('/dialogs/:key/agent', adminOnly, async (req, res) => {
     // Нет строки → агент этим диалогом ещё не занимался: считаем 'bot'.
     res.json({ status: row ? row.status : 'bot', escalatedReason: row ? row.escalated_reason : null });
   } catch (e) {
-    logger.error(`agent status failed: ${e.message}`);
+    logger.error(`agent status failed: ${safeErrorCode(e)}`);
     res.status(500).json({ error: 'Не удалось загрузить статус агента' });
   }
 });
@@ -211,11 +232,11 @@ router.post('/dialogs/:key/agent', adminOnly, async (req, res) => {
     chatEvents.emitAgentStatus(salonId, key, status, status === 'escalated' ? 'operator_takeover' : null);
     if (status === 'escalated') {
       await followupQueue.close(salonId, key, 'cancelled', 'operator')
-        .catch(e => logger.warn(`followup close failed: ${e.message}`));
+        .catch(e => logger.warn(`followup close failed: ${safeErrorCode(e)}`));
     }
     res.json({ status });
   } catch (e) {
-    logger.error(`agent toggle failed: ${e.message}`);
+    logger.error(`agent toggle failed: ${safeErrorCode(e)}`);
     res.status(500).json({ error: 'Не удалось переключить режим' });
   }
 });
@@ -283,17 +304,19 @@ function scheduleDeliveryCheck(deliveryId, { key, channel, kind = 'message', sal
       const failed = Number(st.status_id) === DELIVERY_STATUS_UNDELIVERABLE
         || DELIVERY_FAILED_RE.test(String(st.description || ''));
       if (failed) {
-        logger.warn(`operator ${kind} ${channel} to ${key}: delivery=${deliveryId} НЕ ДОСТАВЛЕНО (${st.status_id} ${st.description}) — эха не будет, клиент сообщение не получил`);
+        logger.warn(`operator ${kind} ${channel}: delivery=${deliveryId} status=${Number(st.status_id) || 0} НЕ ДОСТАВЛЕНО`);
       } else {
-        logger.info(`operator ${kind} ${channel} to ${key}: delivery=${deliveryId} status=${st.status_id} ${st.description}`);
+        logger.info(`operator ${kind} ${channel}: delivery=${deliveryId} status=${Number(st.status_id) || 0}`);
       }
-    } catch (e) {
-      logger.warn(`operator ${kind} ${channel} to ${key}: delivery=${deliveryId} статус не получен (${e.message})`);
+    } catch (_) {
+      logger.warn(`operator ${kind} ${channel}: delivery=${deliveryId} статус не получен`);
     }
   }, delay);
   if (t && typeof t.unref === 'function') t.unref();
   return t;
 }
+
+// Delivery diagnostics use numeric provider statuses, never recipient/message text.
 
 // POST /api/chat/dialogs/:key/send — ручной ответ оператора. body: {text, channel}.
 // Сообщение НЕ пишем в chatpush_messages сами: Chatpush пришлёт эхо в вебхук
@@ -322,7 +345,7 @@ router.post('/dialogs/:key/send', adminOnly, async (req, res) => {
       text, ...params, replyToMessageId: rcp.reply_to || undefined,
     });
     await pauseAgent(salonId, key);
-    logger.info(`operator sent ${channel} to ${key}: delivery=${delivery && delivery.id} reply_to=${rcp.reply_to || '-'} ${text.slice(0, 60)}`);
+    logger.info(`operator sent ${channel}: delivery=${delivery && delivery.id}`);
     scheduleDeliveryCheck(delivery && delivery.id, { key, channel, salonId, accountId: delivery && delivery.accountId });
     if (channel === 'whatsapp') {
       try {
@@ -330,12 +353,12 @@ router.post('/dialogs/:key/send', adminOnly, async (req, res) => {
           delivery, phone: params.phone, chatId: rcp.chat_id || null,
           text, msgType: 'text', fileUrl: null, mimeType: null, authoredBy: 'operator',
         });
-      } catch (e) { logger.error(`persist whatsapp outgoing failed: ${e.message}`); }
+      } catch (e) { logger.error(`persist whatsapp outgoing failed: ${safeErrorCode(e)}`); }
     }
     res.json({ ok: true, deliveryId: delivery.id, status: delivery.status_description });
   } catch (e) {
-    logger.error(`send failed: ${e.message}`);
-    res.status(502).json({ error: 'Не удалось отправить: ' + e.message });
+    logger.error('send failed');
+    res.status(502).json({ error: 'Не удалось отправить сообщение' });
   }
 });
 
@@ -391,7 +414,7 @@ router.post('/dialogs/:key/send-file', adminOnly, chatUpload.single('file'), asy
     }, req.file.buffer, req.file.mimetype);
     await pauseAgent(salonId, key);
     // reply_to сюда не идёт: у send_file в доке Chatpush параметра reply_to_message_id нет.
-    logger.info(`operator sent file ${channel} to ${key}: delivery=${delivery && delivery.id} ${req.file.originalname} (${req.file.size} b)`);
+    logger.info(`operator sent file ${channel}: delivery=${delivery && delivery.id} bytes=${req.file.size}`);
     scheduleDeliveryCheck(delivery && delivery.id, { key, channel, kind: 'file', salonId, accountId: delivery && delivery.accountId });
     if (channel === 'whatsapp') {
       try {
@@ -402,12 +425,12 @@ router.post('/dialogs/:key/send-file', adminOnly, chatUpload.single('file'), asy
           text: caption || ('📎 ' + req.file.originalname),
           msgType: isImage ? 'image' : 'document', fileUrl: null, mimeType: req.file.mimetype, authoredBy: 'operator',
         });
-      } catch (e) { logger.error(`persist whatsapp outgoing file failed: ${e.message}`); }
+      } catch (e) { logger.error(`persist whatsapp outgoing file failed: ${safeErrorCode(e)}`); }
     }
     res.json({ ok: true, deliveryId: delivery.id, status: delivery.status_description });
   } catch (e) {
-    logger.error(`send-file failed: ${e.message}`);
-    res.status(502).json({ error: 'Не удалось отправить файл: ' + e.message });
+    logger.error('send-file failed');
+    res.status(502).json({ error: 'Не удалось отправить файл' });
   }
 });
 

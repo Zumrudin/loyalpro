@@ -15,9 +15,11 @@ const { startBroadcastWorker } = require('./services/broadcast');
 const { startNotificationWorker } = require('./services/notifications');
 const s3                    = require('./services/s3');
 const mountRoutes = require('./routes/index');
+const { REPORT_ONLY_CSP } = require('./routes/csp-report');
 const { createLogger } = require('./logger');
 const logger = createLogger('Server');
 const cronLogger = createLogger('Cron');
+const { safeErrorCode } = require('./utils/safe-error');
 
 const express  = require('express');
 const cors     = require('cors');
@@ -27,11 +29,9 @@ const helmet   = require('helmet');
 
 const app = express();
 
-// Behind a single nginx reverse proxy — trust exactly one X-Forwarded-For hop
-// so req.ip is the real client IP. Required for correct rate-limiting and for
-// the IP recorded in the sessions table; without it express-rate-limit raises
-// ERR_ERL_UNEXPECTED_X_FORWARDED_FOR and keys every client to the proxy IP.
-app.set('trust proxy', 1);
+// Trust only the configured reverse proxy. The default accepts XFF from local
+// nginx, while a direct remote connection cannot choose the rate-limit key.
+app.set('trust proxy', config.TRUST_PROXY);
 
 // Security headers
 // Patient photo cases отдают thumbnails из S3 через presigned URL — добавляем
@@ -44,6 +44,11 @@ const imgSrc = ["'self'", "data:", "blob:"];
 if (s3ImgOrigin) imgSrc.push(s3ImgOrigin);
 // Аватары мастеров на дашборде специалиста отдаются напрямую с CDN YClients.
 imgSrc.push('https://assets.yclients.com');
+
+app.use((req, res, next) => {
+  res.setHeader('Content-Security-Policy-Report-Only', REPORT_ONLY_CSP);
+  next();
+});
 
 app.use(helmet({
   contentSecurityPolicy: {
@@ -86,12 +91,16 @@ app.use(cors({
     if (!origin || allowedOrigins.includes(origin)) {
       callback(null, true);
     } else {
-      callback(new Error('Not allowed by CORS'));
+      const error = new Error('Origin not allowed');
+      error.code = 'CORS_FORBIDDEN';
+      callback(error);
     }
   },
   credentials: true,
 }));
 // NOTE: No manual app.options('*', ...) handler — cors() middleware handles OPTIONS preflight correctly.
+// This public endpoint has its own small parser, before the general 2 MB JSON parser.
+app.use(require('./routes/csp-report'));
 app.use(express.json({ limit: '2mb' }));
 // Статика фронтенда. ETag и Last-Modified ВКЛЮЧЕНЫ намеренно: на проде nginx
 // накрывает .js/.css своим `expires`, и без валидаторов закэшированный файл
@@ -121,6 +130,11 @@ app.get('/', (req, res) => {
 
 // Mount all routes (webhook + API)
 mountRoutes(app);
+
+app.use((err, _req, res, next) => {
+  if (err?.code === 'CORS_FORBIDDEN') return res.status(403).json({ error: 'Origin not allowed' });
+  next(err);
+});
 
 // ============================================================
 // CRON JOBS
@@ -160,7 +174,7 @@ cron.schedule('0 10 * * *', async () => {
         cronLogger.info(`Birthday: ${c.name} +${bonus}`);
       }
     }
-  } catch (e) { cronLogger.error(`Birthday cron: ${e.message}`); }
+  } catch (e) { cronLogger.error(`Birthday cron: ${safeErrorCode(e)}`); }
 }, { timezone: 'Europe/Moscow' });
 
 // Полный runSync из крона УБРАН 25.09.2026 (спека docs/superpowers/specs/
@@ -176,9 +190,9 @@ cron.schedule('10 */3 * * *', async () => {
       `SELECT * FROM salons WHERE is_active=TRUE AND yclients_company_id IS NOT NULL AND yclients_user_token IS NOT NULL`
     );
     for (const salon of salons) {
-      syncGoodsCategories(salon).catch(e => cronLogger.error(`GoodsCatSync salon=${salon.id}: ${e.message}`));
+      syncGoodsCategories(salon).catch(e => cronLogger.error(`GoodsCatSync salon=${salon.id}: ${safeErrorCode(e)}`));
     }
-  } catch (e) { cronLogger.error(`GoodsCatSync cron: ${e.message}`); }
+  } catch (e) { cronLogger.error(`GoodsCatSync cron: ${safeErrorCode(e)}`); }
 });
 
 // Ночная сверка с YClients (services/yclients-reconcile.js): записи за 2 дня по
@@ -194,9 +208,9 @@ cron.schedule('35 4 * * *', async () => {
       try {
         const r = await reconcileDaily(salon);
         cronLogger.info(`reconcile salon=${salon.id}: records=${r.records} clients=${r.clients} errors=${r.clientErrors} lost_webhooks=${r.lost.length}`);
-      } catch (e) { cronLogger.error(`reconcile salon=${salon.id}: ${e.message}`); }
+      } catch (e) { cronLogger.error(`reconcile salon=${salon.id}: ${safeErrorCode(e)}`); }
     }
-  } catch (e) { cronLogger.error(`reconcile cron: ${e.message}`); }
+  } catch (e) { cronLogger.error(`reconcile cron: ${safeErrorCode(e)}`); }
 }, { timezone: 'Europe/Moscow' });
 
 // Экономика процедур: ночной проход YClients (каталог, техкарты, транзакции,
@@ -204,7 +218,7 @@ cron.schedule('35 4 * * *', async () => {
 if (config.ECONOMICS_SYNC) {
   cron.schedule('5 5 * * *', async () => {
     try { await require('./services/economics').runNightlyAll(); }
-    catch (e) { cronLogger.error(`economics nightly: ${e.message}`); }
+    catch (e) { cronLogger.error(`economics nightly: ${safeErrorCode(e)}`); }
   }, { timezone: 'Europe/Moscow' });
 } else {
   cronLogger.warn('ECONOMICS_SYNC=false — ночной синк экономики выключен');
@@ -248,9 +262,9 @@ cron.schedule('25 */3 * * *', async () => {
       `SELECT * FROM salons WHERE is_active=TRUE AND yclients_company_id IS NOT NULL AND yclients_user_token IS NOT NULL`
     );
     for (const salon of salons) {
-      syncGoodsCatalog(salon).catch(e => cronLogger.error(`GoodsCatalogSync salon=${salon.id}: ${e.message}`));
+      syncGoodsCatalog(salon).catch(e => cronLogger.error(`GoodsCatalogSync salon=${salon.id}: ${safeErrorCode(e)}`));
     }
-  } catch (e) { cronLogger.error(`GoodsCatalogSync cron: ${e.message}`); }
+  } catch (e) { cronLogger.error(`GoodsCatalogSync cron: ${safeErrorCode(e)}`); }
 }, { timezone: 'Europe/Moscow' });
 
 cron.schedule('0 * * * *', async () => {
@@ -259,19 +273,19 @@ cron.schedule('0 * * * *', async () => {
       `SELECT * FROM salons WHERE is_active=TRUE AND yclients_company_id IS NOT NULL AND yclients_user_token IS NOT NULL`
     );
     for (const salon of salons) {
-      syncStaffData(salon).catch(e => cronLogger.error(`StaffSync salon=${salon.id}: ${e.message}`));
-      syncGoodsSales(salon.id).catch(e => cronLogger.error(`GoodsSalesSync salon=${salon.id}: ${e.message}`));
+      syncStaffData(salon).catch(e => cronLogger.error(`StaffSync salon=${salon.id}: ${safeErrorCode(e)}`));
+      syncGoodsSales(salon.id).catch(e => cronLogger.error(`GoodsSalesSync salon=${salon.id}: ${safeErrorCode(e)}`));
     }
-  } catch (e) { cronLogger.error(`StaffSync cron: ${e.message}`); }
+  } catch (e) { cronLogger.error(`StaffSync cron: ${safeErrorCode(e)}`); }
 });
 
 cron.schedule('30 * * * *', async () => {
   try {
     const salons = await db.many(`SELECT id FROM salons WHERE is_active=TRUE`);
     for (const s of salons) {
-      refreshSegments(s.id).catch(e => cronLogger.error(`Segments cron salon=${s.id}: ${e.message}`));
+      refreshSegments(s.id).catch(e => cronLogger.error(`Segments cron salon=${s.id}: ${safeErrorCode(e)}`));
     }
-  } catch (e) { cronLogger.error(`Segments cron: ${e.message}`); }
+  } catch (e) { cronLogger.error(`Segments cron: ${safeErrorCode(e)}`); }
 });
 
 // Журнал авторства исходящих (по нему вебхук отличает эхо наших отправок от
@@ -290,7 +304,7 @@ cron.schedule('17 3 * * *', async () => {
   try {
     const r = await processS3Orphans(db, s3);
     if (r.processed > 0) cronLogger.info(`s3 orphans: ${JSON.stringify(r)}`);
-  } catch (e) { cronLogger.error(`s3 orphans cron: ${e.message}`); }
+  } catch (e) { cronLogger.error(`s3 orphans cron: ${safeErrorCode(e)}`); }
 }, { timezone: 'Europe/Moscow' });
 
 // Сверка revenue_operations с YClients за последние 7 дней: удаляем операции,
@@ -302,7 +316,7 @@ cron.schedule('40 4 * * *', async () => {
     const { reconcileRecentAllSalons } = require('./services/revenue-reconcile');
     const r = await reconcileRecentAllSalons(7);
     if (r.stale > 0 || r.missing > 0) cronLogger.info(`revenue reconcile ${r.from}..${r.to}: удалено зависших=${r.deleted}, добавлено потерянных=${r.added} из ${r.missing}`);
-  } catch (e) { cronLogger.error(`revenue reconcile cron: ${e.message}`); }
+  } catch (e) { cronLogger.error(`revenue reconcile cron: ${safeErrorCode(e)}`); }
 }, { timezone: 'Europe/Moscow' });
 
 // Журнал финансовых операций (finance_operations): ночной догон за 7 дней — пакеты журнала,
@@ -313,7 +327,7 @@ cron.schedule('50 4 * * *', async () => {
   try {
     const r = await finOps.reconcile({ days: 7 });
     cronLogger.info(`finance ops reconcile: journal=${r.journal} revenue=${r.revenue} loyalty=${r.loyalty} cancelled=${r.cancelled} errors=${r.errors}`);
-  } catch (e) { cronLogger.error(`finance ops reconcile cron: ${e.message}`); }
+  } catch (e) { cronLogger.error(`finance ops reconcile cron: ${safeErrorCode(e)}`); }
 }, { timezone: 'Europe/Moscow' });
 
 // Вечерний автосброс пауз «отвечал администратор»: на открытии окна расписания
@@ -324,7 +338,7 @@ cron.schedule('50 4 * * *', async () => {
 cron.schedule('*/5 * * * *', async () => {
   try {
     await require('./services/agent/operator-pause-sweep').sweepAll();
-  } catch (e) { cronLogger.error(`operator pause sweep: ${e.message}`); }
+  } catch (e) { cronLogger.error(`operator pause sweep: ${safeErrorCode(e)}`); }
 }, { timezone: 'Europe/Moscow' });
 
 // Сторож доставки реплик Милы: Chatpush отвечает success в момент постановки в
@@ -338,7 +352,7 @@ cron.schedule('*/2 * * * *', async () => {
     if (r && (r.retried || r.escalated)) {
       cronLogger.warn(`delivery watchdog: повторов=${r.retried}, переводов на человека=${r.escalated}`);
     }
-  } catch (e) { cronLogger.error(`delivery watchdog: ${e.message}`); }
+  } catch (e) { cronLogger.error(`delivery watchdog: ${safeErrorCode(e)}`); }
 }, { timezone: 'Europe/Moscow' });
 
 // «Документы» (F.Doc): опрос статусов комплектов — страховка к вебхуку SetStatus и
@@ -351,7 +365,7 @@ if (process.env.EDOCS_POLL !== 'false') {
     try {
       const r = await require('./services/edocs/packages').refreshDue();
       if (r && r.changed) cronLogger.info(`edocs: проверено комплектов=${r.checked}, изменился статус=${r.changed}`);
-    } catch (e) { cronLogger.error(`edocs poll: ${e.message}`); }
+    } catch (e) { cronLogger.error(`edocs poll: ${safeErrorCode(e)}`); }
   }, { timezone: 'Europe/Moscow' });
 }
 
@@ -369,7 +383,7 @@ if (process.env.EDOCS_AUTOMATION !== 'false') {
       if (r && (r.previsit || r.act || r.remind || r.errors)) {
         cronLogger.info(`edocs auto: перед визитом=${r.previsit}, акты=${r.act}, повторы=${r.remind}, ошибки салонов=${r.errors}`);
       }
-    } catch (e) { cronLogger.error(`edocs auto: ${e.message}`); }
+    } catch (e) { cronLogger.error(`edocs auto: ${safeErrorCode(e)}`); }
   }, { timezone: 'Europe/Moscow' });
 }
 
@@ -426,7 +440,7 @@ pool.connect()
         .catch(() => logger.warn('dialog_verdict_runs: stale run cleanup failed'));
     }
     await closeStaleSyncRuns().then(n => { if (n) logger.warn(`sync_logs: закрыто зависших running=${n}`); })
-      .catch(e => logger.warn(`sync_logs: не удалось закрыть зависшие running: ${e.message}`));
+      .catch(e => logger.warn(`sync_logs: не удалось закрыть зависшие running: ${safeErrorCode(e)}`));
     app.listen(PORT, () => {
       logger.info(`Server running on port ${PORT}`);
       logger.info('Webhook: POST /yclients/webhook.v2/:companyId');
@@ -442,6 +456,6 @@ pool.connect()
     });
   })
   .catch(e => {
-    logger.error(`PostgreSQL error: ${e.message}`);
+    logger.error(`PostgreSQL error: ${safeErrorCode(e)}`);
     app.listen(PORT, () => logger.warn(`Server started WITHOUT DB on port ${PORT}`));
   });

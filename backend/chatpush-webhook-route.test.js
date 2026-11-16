@@ -52,6 +52,43 @@ beforeEach(() => {
     ? { rowCount: 1, rows: [{ id: 555 }] } : { rowCount: 1, rows: [] }));
 });
 
+test.each([{}, { key: 'wrong' }])('Chatpush без валидного ключа: никаких side effects', async query => {
+  const res = fakeRes();
+  await handle({ baseUrl: '/chatpush', query, body: flatBody(46594) }, res);
+  expect(res.status).toHaveBeenCalledWith(401);
+  expect(eventInserts()).toHaveLength(0);
+  expect(messageInserts()).toHaveLength(0);
+  expect(accounts.resolveSalon).not.toHaveBeenCalled();
+  expect(dispatcher.enqueue).not.toHaveBeenCalled();
+});
+
+test('Chatpush с пустым secret: 503 и никаких side effects', async () => {
+  const config = require('./config');
+  const previous = config.CHATPUSH.webhookSecret;
+  config.CHATPUSH.webhookSecret = '';
+  try {
+    const res = fakeRes();
+    await handle({ baseUrl: '/chatpush', query: {}, body: flatBody(46594) }, res);
+    expect(res.status).toHaveBeenCalledWith(503);
+    expect(eventInserts()).toHaveLength(0);
+    expect(messageInserts()).toHaveLength(0);
+    expect(accounts.resolveSalon).not.toHaveBeenCalled();
+    expect(dispatcher.enqueue).not.toHaveBeenCalled();
+  } finally {
+    config.CHATPUSH.webhookSecret = previous;
+  }
+});
+
+test('логи валидного события не содержат телефон и текст сообщения', async () => {
+  accounts.resolveSalon.mockResolvedValue(1);
+  const body = flatBody(46594);
+  body.payload.message.text = 'synthetic-private-message-marker';
+  await handle({ baseUrl: '/chatpush', query: { key: 'cpsecret' }, body }, fakeRes());
+  const output = JSON.stringify(Object.values(log).flatMap(fn => fn.mock.calls));
+  expect(output).not.toContain('synthetic-private-message-marker');
+  expect(output).not.toContain('79001112233');
+});
+
 test('/gateway: салон резолвится strict ДО ответа, provider и салон уходят в INSERT, агент ставится', async () => {
   accounts.resolveSalon.mockResolvedValue(3);
   const res = fakeRes();
@@ -264,7 +301,8 @@ describe('перехват ответов на уведомления клини
     notifyReplies.handleIncoming.mockRejectedValue(new Error('boom'));
     await viaGateway();
     expect(dispatcher.enqueue).toHaveBeenCalledWith(3, '79001112233', expect.any(Object));
-    expect(log.error).toHaveBeenCalledWith(expect.stringMatching(/notify reply.*boom/));
+    expect(log.error).toHaveBeenCalledWith('notify reply failed: error — ход уходит Миле');
+    expect(JSON.stringify(log.error.mock.calls)).not.toContain('boom');
     expect(db.query.mock.calls.some(c => /UPDATE chatpush_events SET error/.test(c[0]))).toBe(false);
   });
 

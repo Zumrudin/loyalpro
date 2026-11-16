@@ -5,6 +5,11 @@
 let cPage_ = 1, cSortCol = 'last_visit_at', cSortDir = 'desc';
 let bonusTarget = null;
 
+function cId(value) {
+  const id = Number(value);
+  return Number.isSafeInteger(id) && id > 0 ? id : 0;
+}
+
 // ── Синхронизация карты (старая версия, вызывается из других мест) ──
 async function syncClientCard(clientId) {
   try {
@@ -82,15 +87,15 @@ async function loadClients() {
     const tb = document.getElementById('cBody');
     if (!d.clients?.length) { tb.innerHTML = '<tr><td colspan="8" class="empty">Клиенты не найдены</td></tr>'; return; }
     tb.innerHTML = d.clients.map(c => `
-      <tr onclick="openCD(${c.id})">
-        <td class="c-card-title"><div style="display:flex;align-items:center;gap:9px"><div class="av" style="background:${avc(c.name)};color:#fff;font-size:10px">${avi(c.name)}</div><div style="font-weight:600">${esc(c.name)}</div></div></td>
+      <tr onclick="openCD(${cId(c.id)})">
+        <td class="c-card-title"><div style="display:flex;align-items:center;gap:9px"><div class="av" style="background:${avc(c.name)};color:#fff;font-size:10px">${esc(avi(c.name))}</div><div style="font-weight:600">${esc(c.name)}</div></div></td>
         <td data-label="Телефон" style="color:var(--t2)">${esc(c.phone || '—')}</td>
         <td data-label="Уровень"><span class="badge ${LVL_B[c.loyalty_level] || 'bgr'}">${LVL_L[c.loyalty_level] || '—'}</span></td>
-        <td data-label="Бонусы" style="font-weight:700;color:var(--a)">${(c.bonus_balance || 0).toLocaleString('ru')}</td>
+        <td data-label="Бонусы" style="font-weight:700;color:var(--a)">${Number(c.bonus_balance || 0).toLocaleString('ru')}</td>
         <td data-label="Потрачено">${parseFloat(c.total_spent || 0).toLocaleString('ru')} ₽</td>
-        <td data-label="Визитов">${c.visits_count || 0}</td>
+        <td data-label="Визитов">${Number(c.visits_count) || 0}</td>
         <td data-label="Последний визит" style="color:var(--t3)">${c.last_visit_at ? new Date(c.last_visit_at).toLocaleDateString('ru', {day:'numeric',month:'short',year:'numeric'}) : '—'}</td>
-        <td class="c-card-arrow"><button class="btn btn-sec btn-sm" onclick="event.stopPropagation();openCD(${c.id})">→</button></td>
+        <td class="c-card-arrow"><button class="btn btn-sec btn-sm" onclick="event.stopPropagation();openCD(${cId(c.id)})">→</button></td>
       </tr>`).join('');
     const shown = Math.min(cPage_ * 50, d.total);
     const from  = d.total === 0 ? 0 : (cPage_ - 1) * 50 + 1;
@@ -136,7 +141,7 @@ async function openCD(id) {
       <tr>
         <td style="color:var(--t3)">${t.created_at ? new Date(t.created_at).toLocaleDateString('ru', {day:'numeric',month:'short',year:'2-digit'}) : '—'}</td>
         <td style="color:${t.amount > 0 ? 'var(--a)' : 'var(--danger)'};font-weight:600">${t.amount > 0 ? '+' : ''}${parseFloat(t.amount).toLocaleString('ru')}</td>
-        <td style="color:var(--t2);font-size:12px">${t.description || '—'}</td>
+        <td style="color:var(--t2);font-size:12px">${esc(t.description || '—')}</td>
         <td style="font-weight:600">${t.balance_after ? parseFloat(t.balance_after).toLocaleString('ru') : '—'}</td>
       </tr>`).join('');
 
@@ -144,20 +149,20 @@ async function openCD(id) {
       ? `<div style="display:flex;align-items:center;justify-content:space-between;padding:10px 12px;background:var(--as);border-radius:8px;margin-bottom:14px">
            <div>
              <div style="font-size:12px;color:var(--t3)">Карта YClients</div>
-             <div style="font-size:13px;font-weight:600">№${c.yclients_card_number || c.yclients_card_id} · Баланс: <span style="color:var(--a)">${parseFloat(c.yclients_card_balance || 0).toLocaleString('ru')} бонусов</span></div>
+             <div style="font-size:13px;font-weight:600">№${esc(String(c.yclients_card_number || c.yclients_card_id))} · Баланс: <span style="color:var(--a)">${parseFloat(c.yclients_card_balance || 0).toLocaleString('ru')} бонусов</span></div>
            </div>
-           <button class="btn btn-sec btn-sm" id="syncCardBtn_${c.id}" onclick="doSyncCard(${c.id})">
+           <button class="btn btn-sec btn-sm" id="syncCardBtn_${cId(c.id)}" onclick="doSyncCard(${cId(c.id)})">
              🔄 Синхронизировать карту
            </button>
          </div>`
       : `<div style="padding:10px 12px;background:var(--bg);border-radius:8px;margin-bottom:14px;font-size:12.5px;color:var(--t3)">
            Карта лояльности YClients не привязана.
-           <button class="btn btn-sec btn-sm" style="margin-left:8px" onclick="doSyncCard(${c.id})">Найти и привязать</button>
+           <button class="btn btn-sec btn-sm" style="margin-left:8px" onclick="doSyncCard(${cId(c.id)})">Найти и привязать</button>
          </div>`;
 
     document.getElementById('cmBody').innerHTML = `
       <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px">
-        <div class="av" style="width:48px;height:48px;font-size:15px;background:${avc(c.name)};color:#fff">${avi(c.name)}</div>
+        <div class="av" style="width:48px;height:48px;font-size:15px;background:${avc(c.name)};color:#fff">${esc(avi(c.name))}</div>
         <div>
           <div style="font-size:17px;font-weight:700">${esc(c.name)}</div>
           <div style="color:var(--t2);font-size:13px">${esc(c.phone || '—')}${c.email ? ' · ' + esc(c.email) : ''}</div>
@@ -165,9 +170,9 @@ async function openCD(id) {
         <span class="badge ${LVL_B[c.loyalty_level] || 'bgr'}" style="margin-left:auto">${LVL_L[c.loyalty_level] || '—'}</span>
       </div>
       <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:14px">
-        <div class="sc"><div class="sl">Бонусы (наша БД)</div><div class="sv" style="font-size:20px;color:var(--a)">${(c.bonus_balance || 0).toLocaleString('ru')}</div></div>
+        <div class="sc"><div class="sl">Бонусы (наша БД)</div><div class="sv" style="font-size:20px;color:var(--a)">${Number(c.bonus_balance || 0).toLocaleString('ru')}</div></div>
         <div class="sc"><div class="sl">Потрачено</div><div class="sv" style="font-size:20px">${parseFloat(c.total_spent || 0).toLocaleString('ru')} ₽</div></div>
-        <div class="sc"><div class="sl">Визитов</div><div class="sv" style="font-size:20px">${c.visits_count || 0}</div></div>
+        <div class="sc"><div class="sl">Визитов</div><div class="sv" style="font-size:20px">${Number(c.visits_count) || 0}</div></div>
       </div>
       ${cardBlock}
       <div class="div"></div>
@@ -175,8 +180,8 @@ async function openCD(id) {
         <div style="display:flex;gap:7px">
           <input type="number" id="qAmt" placeholder="Бонусы" style="flex:1">
           <input type="text" id="qCmt" placeholder="Причина" style="flex:1">
-          <button class="btn btn-pri btn-sm" onclick="quickB(${c.id},1)">+ Начислить</button>
-          <button class="btn btn-sec btn-sm btn-dng" onclick="quickB(${c.id},-1)">− Списать</button>
+          <button class="btn btn-pri btn-sm" onclick="quickB(${cId(c.id)},1)">+ Начислить</button>
+          <button class="btn btn-sec btn-sm btn-dng" onclick="quickB(${cId(c.id)},-1)">− Списать</button>
         </div>
       </div>
       <div class="div"></div>
@@ -185,8 +190,8 @@ async function openCD(id) {
         <span style="font-size:11px;color:var(--t3)">${allTxns.length} операций</span>
       </div>
       ${rows ? `<div style="max-height:280px;overflow-y:auto"><table><thead><tr><th>Дата</th><th>Сумма</th><th>Описание</th><th>Баланс</th></tr></thead><tbody>${rows}</tbody></table></div>` : '<div class="empty">Нет операций</div>'}
-      <div id="cardTxnsBlock_${c.id}"></div>
-      <div id="cdPurchases_${c.id}"></div><div id="edClientBlock_${c.id}"></div>`;
+      <div id="cardTxnsBlock_${cId(c.id)}"></div>
+      <div id="cdPurchases_${cId(c.id)}"></div><div id="edClientBlock_${cId(c.id)}"></div>`;
 
     openModal('clientModal');
     cdLoadPurchases(c.id);
@@ -273,8 +278,8 @@ async function searchBonusC(q) {
     // attribute decoding bypasses esc()/escAttr() and produces XSS.
     // Use data-* + event delegation instead.
     el.innerHTML = d.clients.map(c => `
-      <div data-bonus-pick="${c.id}" data-bonus-balance="${c.bonus_balance || 0}" style="padding:7px 10px;border:1px solid var(--bd);border-radius:7px;cursor:pointer;margin-bottom:4px;font-size:12.5px">
-        <strong>${esc(c.name)}</strong> · ${esc(c.phone || '—')} · <span style="color:var(--a)">${c.bonus_balance || 0} бонусов</span>
+      <div data-bonus-pick="${cId(c.id)}" data-bonus-balance="${Number(c.bonus_balance) || 0}" style="padding:7px 10px;border:1px solid var(--bd);border-radius:7px;cursor:pointer;margin-bottom:4px;font-size:12.5px">
+        <strong>${esc(c.name)}</strong> · ${esc(c.phone || '—')} · <span style="color:var(--a)">${Number(c.bonus_balance) || 0} бонусов</span>
       </div>`).join('');
     if (!el._bonusDelegated) {
       el.addEventListener('click', (e) => {

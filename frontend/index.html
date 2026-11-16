@@ -2862,7 +2862,7 @@ async function loadSettings() {
     const salon=await api('GET','/api/salon');
     const s=(id,v)=>{const e=document.getElementById(id);if(e)e.value=v||'';};
     s('st-name',salon.name); s('st-city',salon.city); s('st-yid',salon.yclients_company_id);
-    s('st-pt',salon.yclients_partner_token);
+    s('st-pt','');
     const tz=document.getElementById('st-tz'); if(tz)tz.value=salon.timezone||'Europe/Moscow';
     const wh=`${window.location.origin}/api/webhook/yclients/${salon.yclients_company_id||'YOUR_ID'}`;
     const we=document.getElementById('whUrl'); if(we)we.value=wh;
@@ -2888,8 +2888,8 @@ async function loadSettings() {
     renderSalonLogo(salon.logo_url);
     // Показать статус куки
     const cookieSt = document.getElementById('cookieSt');
-    if (cookieSt && salon.yclients_web_cookie) {
-      cookieSt.innerHTML = '<span style="color:var(--a)">✓ Куки сохранены (' + String(salon.yclients_web_cookie).slice(0,30) + '...)</span>';
+    if (cookieSt && salon.yclients_web_session_configured) {
+      cookieSt.textContent = '✓ Куки сохранены';
     }
     loadLs();
     loadSyncLogs();
@@ -2936,14 +2936,12 @@ async function connectYC() {
       chainId: document.getElementById('st-chain-id')?.value || null,
     });
 
-    console.log('✅ Ответ сервера:', res);
-
     el.innerHTML=`
       <div style="background:#ecfdf5;border:1px solid #86efac;border-radius:6px;padding:12px;color:#15803d">
         <div style="font-weight:600;margin-bottom:6px">✅ YClients успешно подключен!</div>
         <div style="font-size:12px;line-height:1.5">
           • Partner Token: сохранён<br>
-          • User Token: ${res.userToken ? res.userToken.slice(0,20)+'...' : 'получен'}<br>
+          • User Token: получен и сохранён<br>
           • Теперь вы можете запустить синхронизацию
         </div>
       </div>
@@ -2953,8 +2951,6 @@ async function connectYC() {
     // Автоматически загрузить типы карт
     setTimeout(() => { loadCardTypes(); }, 500);
   } catch(e){
-    console.error('❌ Ошибка подключения:', e);
-
     let errorMsg = e.message;
     let helpText = '';
 
@@ -2973,7 +2969,7 @@ async function connectYC() {
       <div style="background:#fef2f2;border:1px solid #fca5a5;border-radius:6px;padding:12px;color:#991b1b">
         <div style="font-weight:600;margin-bottom:6px">❌ Ошибка подключения</div>
         <div style="font-size:12px;line-height:1.5;margin-bottom:8px">
-          ${errorMsg}${helpText}
+          ${esc(errorMsg)}${helpText}
         </div>
         <div style="font-size:11px;color:#7f1d1d;margin-top:8px">
           Если проблема не решена, используйте скрипт восстановления (см. RECOVERY_GUIDE.md)

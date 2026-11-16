@@ -11,6 +11,31 @@ const { imageFileFilter, validateImageBuffer } = require('../utils/upload-valida
 const { createLogger } = require('../logger');
 const logger = createLogger('Salon');
 
+const SALON_SETTINGS_FIELDS = Object.freeze([
+  'id', 'name', 'city', 'timezone', 'logo_url',
+  'yclients_company_id', 'yclients_card_type_id', 'yclients_card_type_name', 'yclients_chain_id',
+  'yclients_partner_configured', 'yclients_user_configured',
+  'yclients_web_session_configured', 'yclients_webhook_configured',
+  'plan', 'max_users',
+]);
+const SALON_SETTINGS_SELECT = `
+  SELECT id,name,city,timezone,logo_url,
+    yclients_company_id,yclients_card_type_id,yclients_card_type_name,yclients_chain_id,
+    (yclients_partner_token IS NOT NULL AND yclients_partner_token<>'') AS yclients_partner_configured,
+    (yclients_user_token IS NOT NULL AND yclients_user_token<>'') AS yclients_user_configured,
+    (yclients_web_cookie IS NOT NULL AND yclients_web_cookie<>'') AS yclients_web_session_configured,
+    (yclients_webhook_secret IS NOT NULL AND yclients_webhook_secret<>'') AS yclients_webhook_configured,
+    plan,max_users
+  FROM salons WHERE id=$1`;
+const OWNER_INTEGRATION_FIELDS = [
+  'yclients_company_id', 'yclients_card_type_id', 'yclients_card_type_name', 'yclients_web_cookie',
+];
+
+function salonSettingsDto(row) {
+  if (!row) return null;
+  return Object.fromEntries(SALON_SETTINGS_FIELDS.map(field => [field, row[field]]));
+}
+
 const uploadsDir = path.join(__dirname, '../../frontend/uploads');
 if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
 
@@ -22,12 +47,20 @@ const upload = multer({
 });
 
 router.get('/', auth, async (req, res) => {
-  try { res.json(await db.one('SELECT * FROM salons WHERE id=$1', [req.user.salonId])); }
-  catch (e) { res.status(500).json({ error: e.message }); }
+  try {
+    const salon = await db.one(SALON_SETTINGS_SELECT, [req.user.salonId]);
+    if (!salon) return res.status(404).json({ error: 'Салон не найден' });
+    return res.json(salonSettingsDto(salon));
+  } catch (e) {
+    return res.status(500).json({ error: 'Внутренняя ошибка сервера' });
+  }
 });
 
-router.put('/', auth, async (req, res) => {
+router.put('/', auth, requireRole('owner', 'admin'), async (req, res) => {
   try {
+    if (req.user.role !== 'owner' && OWNER_INTEGRATION_FIELDS.some(field => Object.hasOwn(req.body, field))) {
+      return res.status(403).json({ error: 'Настройки интеграции изменяет только владелец' });
+    }
     const { name, city, timezone, yclients_company_id,
             yclients_card_type_id, yclients_card_type_name, yclients_web_cookie } = req.body;
     await db.query(
@@ -44,7 +77,7 @@ router.put('/', auth, async (req, res) => {
   } catch (e) {
     if (e.code === '23505' && e.constraint === 'salons_yclients_company_id_key')
       return res.status(409).json({ error: 'Салон с таким ID филиала YClients уже зарегистрирован в системе. Обратитесь в поддержку.' });
-    res.status(500).json({ error: e.message });
+    res.status(500).json({ error: 'Внутренняя ошибка сервера' });
   }
 });
 
@@ -62,12 +95,12 @@ router.get('/logo', async (req, res) => {
     if (!salonId) return res.json({ logoUrl: null });
     const row = await db.oneOrNone('SELECT logo_url FROM salons WHERE id=$1', [salonId]);
     res.json({ logoUrl: row?.logo_url || null });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(500).json({ error: 'Внутренняя ошибка сервера' }); }
 });
 
 router.post('/logo', auth, requireRole('owner', 'admin'), (req, res) => {
   upload.single('file')(req, res, async (err) => {
-    if (err) return res.status(400).json({ error: err.message });
+    if (err) return res.status(400).json({ error: 'Не удалось загрузить файл' });
     if (!req.file) return res.status(400).json({ error: 'Файл не загружен' });
 
     const v = validateImageBuffer(req.file.buffer, req.file.originalname);
@@ -92,7 +125,7 @@ router.post('/logo', auth, requireRole('owner', 'admin'), (req, res) => {
       res.json({ ok: true, logoUrl });
     } catch (e) {
       if (absPath) { try { fs.unlinkSync(absPath); } catch (_) {} }
-      res.status(500).json({ error: e.message });
+      res.status(500).json({ error: 'Внутренняя ошибка сервера' });
     }
   });
 });
@@ -106,14 +139,12 @@ router.delete('/logo', auth, requireRole('owner', 'admin'), async (req, res) => 
       fs.unlink(path.join(uploadsDir, path.basename(old.logo_url)), () => {});
     }
     res.json({ ok: true });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(500).json({ error: 'Внутренняя ошибка сервера' }); }
 });
 
-// ── Webhook HMAC secret management ──────────────────────────────
-// GET returns whether a secret is configured (never the secret itself);
-// POST generates and returns a NEW secret (replacing any prior one).
-// The secret must then be entered in the YClients partner dashboard
-// against the webhook URL — YClients signs each delivery with sha256-HMAC.
+// ── Webhook shared-secret management ────────────────────────────
+// GET returns only configuration state. POST rotates the URL secret once;
+// YClients does not provide body HMAC signatures.
 router.get('/webhook-secret', auth, requireRole('owner', 'admin'), async (req, res) => {
   try {
     const row = await db.oneOrNone(
@@ -121,10 +152,10 @@ router.get('/webhook-secret', auth, requireRole('owner', 'admin'), async (req, r
       [req.user.salonId]
     );
     res.json({ configured: !!row?.yclients_webhook_secret });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(500).json({ error: 'Внутренняя ошибка сервера' }); }
 });
 
-router.post('/webhook-secret', auth, requireRole('owner', 'admin'), async (req, res) => {
+router.post('/webhook-secret', auth, requireRole('owner'), async (req, res) => {
   try {
     const secret = crypto.randomBytes(32).toString('hex'); // 64 hex chars
     await db.query(
@@ -134,26 +165,30 @@ router.post('/webhook-secret', auth, requireRole('owner', 'admin'), async (req, 
     logger.info(`webhook secret rotated salon=${req.user.salonId} by user=${req.user.userId}`);
     // Returned once. After this admin acknowledges the value we don't expose it again.
     res.json({ secret });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(500).json({ error: 'Внутренняя ошибка сервера' }); }
 });
 
-router.post('/yclients-auth', auth, async (req, res) => {
+router.post('/yclients-auth', auth, requireRole('owner'), async (req, res) => {
   try {
-    const { partnerToken, login, password, chainId } = req.body;
+    const { partnerToken, login, password, chainId, yclients_company_id } = req.body;
     const d = await ycAuth(partnerToken, login, password);
-    await db.query(
+    const result = await db.query(
       `UPDATE salons SET
          yclients_partner_token=$1, yclients_user_token=$2,
          yclients_login=$3, yclients_password=$4,
-         yclients_chain_id=$5, updated_at=NOW()
-       WHERE id=$6`,
-      [partnerToken, d.user_token, login, password, chainId || null, req.user.salonId]
+         yclients_company_id=COALESCE($5,yclients_company_id),
+         yclients_chain_id=$6, updated_at=NOW()
+       WHERE id=$7
+       RETURNING yclients_company_id`,
+      [partnerToken, d.user_token, login, password, yclients_company_id || null,
+       chainId || null, req.user.salonId]
     );
+    if (!result.rows[0]) return res.status(404).json({ error: 'Салон не найден' });
     delete ycWebSessions[req.user.salonId];
-    res.json({ ok: true, userToken: d.user_token });
+    return res.json({ ok: true, configured: true, companyId: result.rows[0].yclients_company_id });
   } catch (e) {
-    logger.error(`YC Auth error: ${e.message}`);
-    res.status(400).json({ error: e.message });
+    logger.error('YClients credential authentication failed');
+    return res.status(400).json({ error: 'Не удалось подтвердить учётные данные YClients' });
   }
 });
 

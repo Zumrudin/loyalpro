@@ -4,8 +4,11 @@ const { mobileAuth } = require('../middleware/mobile-auth');
 const { absolutizeUrl } = require('../services/portfolio');
 const { ycGet, ycGetClientCards, ycGetCardTransactions } = require('../services/yclients');
 const { updateAttendance } = require('../services/yclients-records');
+const mobileBooking = require('../services/mobile-booking');
+const { JournalError } = require('../services/journal/model');
 const { createLogger } = require('../logger');
 const logger = createLogger('Mobile');
+const { safeErrorCode } = require('../utils/safe-error');
 
 // Get client profile
 router.get('/profile', mobileAuth, async (req, res) => {
@@ -16,8 +19,8 @@ router.get('/profile', mobileAuth, async (req, res) => {
         bonus_balance, yclients_card_balance, loyalty_level,
         visits_count, total_spent, created_at,
         yclients_client_id
-       FROM clients WHERE id=$1`,
-      [req.client.clientId]
+       FROM clients WHERE id=$1 AND salon_id=$2`,
+      [req.client.clientId, req.client.salonId]
     );
 
     if (!client) {
@@ -27,8 +30,8 @@ router.get('/profile', mobileAuth, async (req, res) => {
     // Get clinic info
     const clinic = await db.one(
       `SELECT id, name, city, template_contact_phone, template_contact_web
-       FROM salons WHERE id=(SELECT salon_id FROM clients WHERE id=$1)`,
-      [client.id]
+       FROM salons WHERE id=$1 AND is_active=TRUE`,
+      [req.client.salonId]
     );
 
     res.json({
@@ -45,8 +48,8 @@ router.get('/profile', mobileAuth, async (req, res) => {
     });
 
   } catch (e) {
-    logger.error(`Get profile error: ${e.message}`);
-    res.status(500).json({ error: e.message });
+    logger.error(`Get profile error: ${safeErrorCode(e)}`);
+    res.status(500).json({ error: 'Внутренняя ошибка сервера' });
   }
 });
 
@@ -55,7 +58,7 @@ router.get('/bookings', mobileAuth, async (req, res) => {
   try {
     const { type = 'all' } = req.query; // 'upcoming' | 'past' | 'all'
 
-    let whereSql = "r.client_id=$1 AND r.status != 'deleted'";
+    let whereSql = "r.client_id=$1 AND r.salon_id=$2 AND r.status != 'deleted'";
 
     if (type === 'upcoming') {
       whereSql += ' AND r.visit_datetime > NOW()';
@@ -81,7 +84,7 @@ router.get('/bookings', mobileAuth, async (req, res) => {
        FROM records r
        LEFT JOIN LATERAL (
          SELECT id FROM home_care_prescriptions
-         WHERE client_id = $1
+         WHERE client_id = $1 AND salon_id = $2
            AND (record_id = r.id
                 OR (record_id IS NULL
                     AND DATE(created_at) = DATE(r.visit_datetime)))
@@ -91,7 +94,7 @@ router.get('/bookings', mobileAuth, async (req, res) => {
        WHERE ${whereSql}
        ORDER BY r.visit_datetime ${type === 'upcoming' ? 'ASC' : 'DESC'}
        LIMIT 50`,
-      [req.client.clientId]
+      [req.client.clientId, req.client.salonId]
     );
 
     res.json({
@@ -100,8 +103,8 @@ router.get('/bookings', mobileAuth, async (req, res) => {
     });
 
   } catch (e) {
-    logger.error(`Get bookings error: ${e.message}`);
-    res.status(500).json({ error: e.message });
+    logger.error(`Get bookings error: ${safeErrorCode(e)}`);
+    res.status(500).json({ error: 'Внутренняя ошибка сервера' });
   }
 });
 
@@ -129,15 +132,15 @@ router.get('/bookings/:bookingId', mobileAuth, async (req, res) => {
        FROM records r
        LEFT JOIN LATERAL (
          SELECT id FROM home_care_prescriptions
-         WHERE client_id = $2
+         WHERE client_id = $2 AND salon_id = $3
            AND (record_id = r.id
                 OR (record_id IS NULL
                     AND DATE(created_at) = DATE(r.visit_datetime)))
          ORDER BY record_id DESC NULLS LAST, created_at DESC
          LIMIT 1
        ) p ON true
-       WHERE r.id=$1 AND r.client_id=$2`,
-      [req.params.bookingId, req.client.clientId]
+       WHERE r.id=$1 AND r.client_id=$2 AND r.salon_id=$3`,
+      [req.params.bookingId, req.client.clientId, req.client.salonId]
     );
 
     if (!booking) {
@@ -150,14 +153,13 @@ router.get('/bookings/:bookingId', mobileAuth, async (req, res) => {
     });
 
   } catch (e) {
-    logger.error(`Get booking error: ${e.message}`);
-    res.status(500).json({ error: e.message });
+    logger.error(`Get booking error: ${safeErrorCode(e)}`);
+    res.status(500).json({ error: 'Внутренняя ошибка сервера' });
   }
 });
 
 // Cancel booking → marks attendance as "no_show" in YClients
 router.post('/bookings/:bookingId/cancel', mobileAuth, async (req, res) => {
-  const { reason = '' } = req.body;
   const bookingId = req.params.bookingId;
   const clientId  = req.client.clientId;
 
@@ -168,8 +170,8 @@ router.post('/bookings/:bookingId/cancel', mobileAuth, async (req, res) => {
               s.yclients_company_id, s.yclients_partner_token, s.yclients_user_token
          FROM records r
          JOIN salons  s ON s.id = r.salon_id
-        WHERE r.id = $1 AND r.client_id = $2`,
-      [bookingId, clientId],
+        WHERE r.id = $1 AND r.client_id = $2 AND r.salon_id = $3 AND s.id = $3 AND s.is_active=TRUE`,
+      [bookingId, clientId, req.client.salonId],
     );
 
     if (!booking) {
@@ -203,7 +205,7 @@ router.post('/bookings/:bookingId/cancel', mobileAuth, async (req, res) => {
     } catch (e) {
       logger.error(
         `cancel bookingId=${bookingId} clientId=${clientId} ` +
-        `ycRecordId=${booking.yclients_record_id} → YC ERR: ${e.message}`,
+        `ycRecordId=${booking.yclients_record_id} → YC ERR: ${safeErrorCode(e)}`,
       );
       return res.status(502).json({
         error: 'Не удалось обновить статус в YClients',
@@ -211,20 +213,17 @@ router.post('/bookings/:bookingId/cancel', mobileAuth, async (req, res) => {
     }
 
     await db.query(
-      `UPDATE records SET status='no_show', updated_at=NOW() WHERE id=$1`,
-      [booking.id],
+      `UPDATE records SET status='no_show', updated_at=NOW() WHERE id=$1 AND client_id=$2 AND salon_id=$3`,
+      [booking.id, clientId, req.client.salonId],
     );
 
-    logger.info(
-      `cancel bookingId=${bookingId} clientId=${clientId} ` +
-      `ycRecordId=${booking.yclients_record_id} reason="${reason}" → ok`,
-    );
+    logger.info(`cancel bookingId=${bookingId} salonId=${req.client.salonId} ok`);
 
     res.json({ success: true, status: 'no_show' });
 
   } catch (e) {
-    logger.error(`Cancel booking error: ${e.message}`);
-    res.status(500).json({ error: e.message });
+    logger.error(`Cancel booking error: ${safeErrorCode(e)}`);
+    res.status(500).json({ error: 'Внутренняя ошибка сервера' });
   }
 });
 
@@ -240,8 +239,8 @@ router.post('/bookings/:bookingId/confirm', mobileAuth, async (req, res) => {
               s.yclients_company_id, s.yclients_partner_token, s.yclients_user_token
          FROM records r
          JOIN salons  s ON s.id = r.salon_id
-        WHERE r.id = $1 AND r.client_id = $2`,
-      [bookingId, clientId],
+        WHERE r.id = $1 AND r.client_id = $2 AND r.salon_id = $3 AND s.id = $3 AND s.is_active=TRUE`,
+      [bookingId, clientId, req.client.salonId],
     );
 
     if (!booking) {
@@ -282,7 +281,7 @@ router.post('/bookings/:bookingId/confirm', mobileAuth, async (req, res) => {
     } catch (e) {
       logger.error(
         `confirm bookingId=${bookingId} clientId=${clientId} ` +
-        `ycRecordId=${booking.yclients_record_id} → YC ERR: ${e.message}`,
+        `ycRecordId=${booking.yclients_record_id} → YC ERR: ${safeErrorCode(e)}`,
       );
       return res.status(502).json({
         error: 'Не удалось обновить статус в YClients',
@@ -290,55 +289,36 @@ router.post('/bookings/:bookingId/confirm', mobileAuth, async (req, res) => {
     }
 
     await db.query(
-      `UPDATE records SET status='confirmed', updated_at=NOW() WHERE id=$1`,
-      [booking.id],
+      `UPDATE records SET status='confirmed', updated_at=NOW() WHERE id=$1 AND client_id=$2 AND salon_id=$3`,
+      [booking.id, clientId, req.client.salonId],
     );
 
-    logger.info(
-      `confirm bookingId=${bookingId} clientId=${clientId} ` +
-      `ycRecordId=${booking.yclients_record_id} → ok`,
-    );
+    logger.info(`confirm bookingId=${bookingId} salonId=${req.client.salonId} ok`);
 
     res.json({ success: true, status: 'confirmed' });
 
   } catch (e) {
-    logger.error(`Confirm booking error: ${e.message}`);
-    res.status(500).json({ error: e.message });
+    logger.error(`Confirm booking error: ${safeErrorCode(e)}`);
+    res.status(500).json({ error: 'Внутренняя ошибка сервера' });
   }
 });
 
-// Reschedule booking
 router.post('/bookings/:bookingId/reschedule', mobileAuth, async (req, res) => {
   try {
-    const { newDateTime } = req.body;
-
-    if (!newDateTime) {
-      return res.status(400).json({ error: 'Укажите новую дату и время' });
-    }
-
-    const booking = await db.one(
-      'SELECT * FROM records WHERE id=$1 AND client_id=$2',
-      [req.params.bookingId, req.client.clientId]
+    const result = await mobileBooking.reschedule(
+      { ...req.client, sessionToken: req.token },
+      req.params.bookingId,
+      req.body?.newDateTime,
+      req.get('Idempotency-Key'),
     );
-
-    if (!booking) {
-      return res.status(404).json({ error: 'Запись не найдена' });
-    }
-
-    // Update booking date
-    await db.query(
-      'UPDATE records SET visit_date=$1, updated_at=NOW() WHERE id=$2',
-      [newDateTime, booking.id]
-    );
-
-    res.json({
-      success: true,
-      message: 'Запись перенесена'
-    });
-
+    res.json({ success: true, message: 'Запись перенесена', ...result });
   } catch (e) {
-    logger.error(`Reschedule booking error: ${e.message}`);
-    res.status(500).json({ error: e.message });
+    logger.error(`Reschedule booking rejected code=${typeof e.code === 'string' ? e.code : 'failed'}`);
+    const status = e instanceof JournalError ? e.status : 502;
+    res.status(status).json({
+      error: e instanceof JournalError ? e.message : 'Не удалось перенести запись',
+      ...(e.code === 'uncertain' ? { code: 'uncertain' } : {}),
+    });
   }
 });
 
@@ -346,8 +326,8 @@ router.post('/bookings/:bookingId/reschedule', mobileAuth, async (req, res) => {
 router.get('/bonuses', mobileAuth, async (req, res) => {
   try {
     const client = await db.one(
-      'SELECT bonus_balance, loyalty_level, total_spent, salon_id FROM clients WHERE id=$1',
-      [req.client.clientId]
+      'SELECT bonus_balance, loyalty_level, total_spent, salon_id FROM clients WHERE id=$1 AND salon_id=$2',
+      [req.client.clientId, req.client.salonId]
     );
 
     if (!client) {
@@ -399,8 +379,8 @@ router.get('/bonuses', mobileAuth, async (req, res) => {
     });
 
   } catch (e) {
-    logger.error(`Get bonuses error: ${e.message}`);
-    res.status(500).json({ error: e.message });
+    logger.error(`Get bonuses error: ${safeErrorCode(e)}`);
+    res.status(500).json({ error: 'Внутренняя ошибка сервера' });
   }
 });
 
@@ -408,10 +388,10 @@ router.get('/bonuses', mobileAuth, async (req, res) => {
 router.get('/bonus-history', mobileAuth, async (req, res) => {
   try {
     const client = await db.one(
-      'SELECT yclients_client_id, phone, salon_id FROM clients WHERE id=$1',
-      [req.client.clientId]
+      'SELECT yclients_client_id, phone, salon_id FROM clients WHERE id=$1 AND salon_id=$2',
+      [req.client.clientId, req.client.salonId]
     );
-    const salon = await db.one('SELECT * FROM salons WHERE id=$1', [client.salon_id]);
+    const salon = await db.one('SELECT * FROM salons WHERE id=$1 AND is_active=TRUE', [req.client.salonId]);
 
     const txns = await ycGetCardTransactions(salon, client.yclients_client_id, client.phone);
 
@@ -426,8 +406,8 @@ router.get('/bonus-history', mobileAuth, async (req, res) => {
     res.json({ success: true, transactions });
 
   } catch (e) {
-    logger.error(`Get bonus history error: ${e.message}`);
-    res.status(500).json({ error: e.message });
+    logger.error(`Get bonus history error: ${safeErrorCode(e)}`);
+    res.status(500).json({ error: 'Внутренняя ошибка сервера' });
   }
 });
 
@@ -438,17 +418,18 @@ router.get('/notifications', mobileAuth, async (req, res) => {
 
     const notifications = await db.many(
       `SELECT
-        id,
-        title,
-        message,
-        type,
-        read,
-        created_at as createdAt
-       FROM mobile_notifications
-       WHERE client_id=$1
-       ORDER BY created_at DESC
-       LIMIT $2 OFFSET $3`,
-      [req.client.clientId, parseInt(limit), parseInt(offset)]
+        n.id,
+        n.title,
+        n.message,
+        n.type,
+        n.read,
+        n.created_at as createdAt
+       FROM mobile_notifications n
+       JOIN clients c ON c.id=n.client_id AND c.salon_id=$2
+       WHERE n.client_id=$1
+       ORDER BY n.created_at DESC
+       LIMIT $3 OFFSET $4`,
+      [req.client.clientId, req.client.salonId, Math.min(Math.max(parseInt(limit, 10) || 20, 1), 100), Math.max(parseInt(offset, 10) || 0, 0)]
     );
 
     res.json({
@@ -457,8 +438,8 @@ router.get('/notifications', mobileAuth, async (req, res) => {
     });
 
   } catch (e) {
-    logger.error(`Get notifications error: ${e.message}`);
-    res.status(500).json({ error: e.message });
+    logger.error(`Get notifications error: ${safeErrorCode(e)}`);
+    res.status(500).json({ error: 'Внутренняя ошибка сервера' });
   }
 });
 
@@ -466,8 +447,10 @@ router.get('/notifications', mobileAuth, async (req, res) => {
 router.post('/notifications/:notificationId/read', mobileAuth, async (req, res) => {
   try {
     const notification = await db.one(
-      'SELECT * FROM mobile_notifications WHERE id=$1 AND client_id=$2',
-      [req.params.notificationId, req.client.clientId]
+      `SELECT n.id FROM mobile_notifications n
+       JOIN clients c ON c.id=n.client_id AND c.salon_id=$3
+       WHERE n.id=$1 AND n.client_id=$2`,
+      [req.params.notificationId, req.client.clientId, req.client.salonId]
     );
 
     if (!notification) {
@@ -475,15 +458,16 @@ router.post('/notifications/:notificationId/read', mobileAuth, async (req, res) 
     }
 
     await db.query(
-      'UPDATE mobile_notifications SET read=TRUE WHERE id=$1',
-      [req.params.notificationId]
+      `UPDATE mobile_notifications SET read=TRUE WHERE id=$1 AND client_id=$2
+       AND EXISTS (SELECT 1 FROM clients c WHERE c.id=client_id AND c.salon_id=$3)`,
+      [req.params.notificationId, req.client.clientId, req.client.salonId]
     );
 
     res.json({ success: true });
 
   } catch (e) {
-    logger.error(`Mark notification read error: ${e.message}`);
-    res.status(500).json({ error: e.message });
+    logger.error(`Mark notification read error: ${safeErrorCode(e)}`);
+    res.status(500).json({ error: 'Внутренняя ошибка сервера' });
   }
 });
 
@@ -506,8 +490,8 @@ router.post('/fcm-token', mobileAuth, async (req, res) => {
     res.json({ success: true });
 
   } catch (e) {
-    logger.error(`Register FCM token error: ${e.message}`);
-    res.status(500).json({ error: e.message });
+    logger.error(`Register FCM token error: ${safeErrorCode(e)}`);
+    res.status(500).json({ error: 'Внутренняя ошибка сервера' });
   }
 });
 
@@ -523,18 +507,18 @@ router.get('/prescriptions', mobileAuth, async (req, res) => {
         u.position as "specialistPosition",
         COUNT(i.id)::int as "itemsCount"
        FROM home_care_prescriptions p
-       LEFT JOIN users u ON u.id = p.specialist_id
+       LEFT JOIN users u ON u.id = p.specialist_id AND u.salon_id=p.salon_id
        LEFT JOIN home_care_items i ON i.prescription_id = p.id
        WHERE p.client_id = $1
-         AND p.salon_id = (SELECT salon_id FROM clients WHERE id = $1)
+         AND p.salon_id = $2
        GROUP BY p.id, u.name, u.position
        ORDER BY p.created_at DESC`,
-      [req.client.clientId]
+      [req.client.clientId, req.client.salonId]
     );
     res.json({ success: true, prescriptions: rows });
   } catch (e) {
-    logger.error(`Get prescriptions error: ${e.message}`);
-    res.status(500).json({ error: e.message });
+    logger.error(`Get prescriptions error: ${safeErrorCode(e)}`);
+    res.status(500).json({ error: 'Внутренняя ошибка сервера' });
   }
 });
 
@@ -554,10 +538,9 @@ router.get('/prescriptions/:id', mobileAuth, async (req, res) => {
         u.name as "specialistName",
         u.position as "specialistPosition"
        FROM home_care_prescriptions p
-       LEFT JOIN users u ON u.id = p.specialist_id
-       WHERE p.id = $1 AND p.client_id = $2
-         AND p.salon_id = (SELECT salon_id FROM clients WHERE id = $2)`,
-      [prescriptionId, req.client.clientId]
+       LEFT JOIN users u ON u.id = p.specialist_id AND u.salon_id=p.salon_id
+       WHERE p.id = $1 AND p.client_id = $2 AND p.salon_id = $3`,
+      [prescriptionId, req.client.clientId, req.client.salonId]
     );
     if (!p) return res.status(404).json({ error: 'Назначение не найдено' });
 
@@ -581,14 +564,15 @@ router.get('/prescriptions/:id', mobileAuth, async (req, res) => {
            THEN true ELSE false
          END AS "completedToday"
        FROM home_care_items i
+       JOIN home_care_prescriptions cp ON cp.id=i.prescription_id AND cp.salon_id=$3 AND cp.client_id=$2
        WHERE i.prescription_id = $1
        ORDER BY i.sort_order`,
-      [prescriptionId, req.client.clientId]
+      [prescriptionId, req.client.clientId, req.client.salonId]
     );
     res.json({ success: true, prescription: { ...p, items } });
   } catch (e) {
-    logger.error(`Get prescription detail error: ${e.message}`);
-    res.status(500).json({ error: e.message });
+    logger.error(`Get prescription detail error: ${safeErrorCode(e)}`);
+    res.status(500).json({ error: 'Внутренняя ошибка сервера' });
   }
 });
 
@@ -614,7 +598,7 @@ router.get('/price-list', mobileAuth, async (req, res) => {
 
     res.json({ success: true, ...data });
   } catch (e) {
-    logger.error(`Get price list error: ${e.message}`);
+    logger.error(`Get price list error: ${safeErrorCode(e)}`);
     if (priceListCache) return res.json({ success: true, ...priceListCache });
     res.status(500).json({ error: 'Не удалось загрузить прайс-лист' });
   }
@@ -629,11 +613,11 @@ router.get('/specialists', mobileAuth, async (req, res) => {
       `SELECT id, name, specialization, bio,
               custom_photo_url, avatar_url, display_order
        FROM staff_members
-       WHERE salon_id = (SELECT salon_id FROM clients WHERE id=$1)
+       WHERE salon_id = $1
          AND show_in_app = TRUE
          AND is_active   = TRUE
        ORDER BY display_order ASC NULLS LAST, name ASC`,
-      [req.client.clientId]
+      [req.client.salonId]
     );
 
     const specialists = rows.map((r) => {
@@ -658,8 +642,8 @@ router.get('/specialists', mobileAuth, async (req, res) => {
     res.json({ success: true, specialists });
 
   } catch (e) {
-    logger.error(`Get specialists error: ${e.message}`);
-    res.status(500).json({ error: e.message });
+    logger.error(`Get specialists error: ${safeErrorCode(e)}`);
+    res.status(500).json({ error: 'Внутренняя ошибка сервера' });
   }
 });
 
@@ -673,11 +657,11 @@ router.get('/portfolio/categories', mobileAuth, async (req, res) => {
               (SELECT COUNT(*)::int FROM portfolio_items i
                WHERE i.salon_id=c.salon_id AND i.category_id=c.id) AS items_count
        FROM portfolio_categories c
-       WHERE c.salon_id = (SELECT salon_id FROM clients WHERE id=$1)
+       WHERE c.salon_id = $1
          AND c.is_published = TRUE
          AND c.cover_photo_url <> ''
        ORDER BY c.display_order ASC, c.id ASC`,
-      [req.client.clientId]
+      [req.client.salonId]
     );
     const categories = rows
       .filter(r => r.items_count > 0)
@@ -689,8 +673,8 @@ router.get('/portfolio/categories', mobileAuth, async (req, res) => {
       }));
     res.json({ success: true, categories });
   } catch (e) {
-    logger.error(`Get portfolio categories error: ${e.message}`);
-    res.status(500).json({ error: e.message });
+    logger.error(`Get portfolio categories error: ${safeErrorCode(e)}`);
+    res.status(500).json({ error: 'Внутренняя ошибка сервера' });
   }
 });
 
@@ -703,10 +687,8 @@ router.get('/portfolio/categories/:id', mobileAuth, async (req, res) => {
 
     const cat = await db.oneOrNone(
       `SELECT id, title FROM portfolio_categories
-       WHERE id=$1
-         AND salon_id = (SELECT salon_id FROM clients WHERE id=$2)
-         AND is_published = TRUE`,
-      [id, req.client.clientId]
+       WHERE id=$1 AND salon_id=$2 AND is_published = TRUE`,
+      [id, req.client.salonId]
     );
     if (!cat) return res.status(404).json({ error: 'Категория не найдена' });
 
@@ -716,11 +698,10 @@ router.get('/portfolio/categories/:id', mobileAuth, async (req, res) => {
               s.id AS staff_id, s.name AS staff_name,
               s.custom_photo_url, s.avatar_url
        FROM portfolio_items i
-       LEFT JOIN staff_members s ON s.id=i.staff_id
-       WHERE i.salon_id = (SELECT salon_id FROM clients WHERE id=$1)
-         AND i.category_id = $2
+       LEFT JOIN staff_members s ON s.id=i.staff_id AND s.salon_id=i.salon_id
+       WHERE i.salon_id = $1 AND i.category_id = $2
        ORDER BY i.display_order ASC, i.id ASC`,
-      [req.client.clientId, id]
+      [req.client.salonId, id]
     );
 
     const items = rows.map(r => {
@@ -743,8 +724,8 @@ router.get('/portfolio/categories/:id', mobileAuth, async (req, res) => {
 
     res.json({ success: true, category: { id: cat.id, title: cat.title }, items });
   } catch (e) {
-    logger.error(`Get portfolio category error: ${e.message}`);
-    res.status(500).json({ error: e.message });
+    logger.error(`Get portfolio category error: ${safeErrorCode(e)}`);
+    res.status(500).json({ error: 'Внутренняя ошибка сервера' });
   }
 });
 
@@ -757,9 +738,8 @@ router.get('/portfolio/by-staff/:staffId', mobileAuth, async (req, res) => {
 
     // verify staff belongs to client's salon
     const staff = await db.oneOrNone(
-      `SELECT id FROM staff_members
-       WHERE id=$1 AND salon_id = (SELECT salon_id FROM clients WHERE id=$2)`,
-      [staffId, req.client.clientId]
+      `SELECT id FROM staff_members WHERE id=$1 AND salon_id=$2 AND is_active=TRUE`,
+      [staffId, req.client.salonId]
     );
     if (!staff) return res.status(404).json({ error: 'Сотрудник не найден' });
 
@@ -770,11 +750,9 @@ router.get('/portfolio/by-staff/:staffId', mobileAuth, async (req, res) => {
        FROM portfolio_items i
        JOIN portfolio_categories c
          ON c.id = i.category_id AND c.salon_id = i.salon_id
-       WHERE i.staff_id = $1
-         AND i.salon_id = (SELECT salon_id FROM clients WHERE id=$2)
-         AND c.is_published = TRUE
+       WHERE i.staff_id = $1 AND i.salon_id = $2 AND c.is_published = TRUE
        ORDER BY i.created_at DESC, i.id DESC`,
-      [staffId, req.client.clientId]
+      [staffId, req.client.salonId]
     );
 
     const items = rows.map(r => ({
@@ -787,8 +765,8 @@ router.get('/portfolio/by-staff/:staffId', mobileAuth, async (req, res) => {
     }));
     res.json({ success: true, items });
   } catch (e) {
-    logger.error(`Get portfolio by-staff error: ${e.message}`);
-    res.status(500).json({ error: e.message });
+    logger.error(`Get portfolio by-staff error: ${safeErrorCode(e)}`);
+    res.status(500).json({ error: 'Внутренняя ошибка сервера' });
   }
 });
 
@@ -813,7 +791,7 @@ router.get('/today-checklist', mobileAuth, async (req, res) => {
          )                                   AS completed
        FROM home_care_items i
        JOIN home_care_prescriptions p ON p.id = i.prescription_id
-       WHERE p.client_id = $1
+       WHERE p.client_id = $1 AND p.salon_id = $2
          AND i.time_of_day IN ('morning','evening','additional')
          AND CURRENT_DATE BETWEEN p.start_date
                               AND COALESCE(p.end_date, '9999-12-31'::date)
@@ -829,7 +807,7 @@ router.get('/today-checklist', mobileAuth, async (req, res) => {
            WHEN 'additional' THEN 3
          END,
          i.sort_order`,
-      [req.client.clientId]
+      [req.client.clientId, req.client.salonId]
     );
 
     const sections = { morning: [], evening: [], additional: [] };
@@ -854,8 +832,8 @@ router.get('/today-checklist', mobileAuth, async (req, res) => {
       summary: { total: rows.length, completed: completedCount },
     });
   } catch (e) {
-    logger.error(`Today checklist error: ${e.message}`);
-    res.status(500).json({ error: e.message });
+    logger.error(`Today checklist error: ${safeErrorCode(e)}`);
+    res.status(500).json({ error: 'Внутренняя ошибка сервера' });
   }
 });
 
@@ -874,8 +852,8 @@ router.post('/today-checklist/items/:itemId/complete', mobileAuth, async (req, r
               p.client_id, p.start_date, p.end_date
          FROM home_care_items i
          JOIN home_care_prescriptions p ON p.id = i.prescription_id
-        WHERE i.id = $1`,
-      [itemId]
+        WHERE i.id = $1 AND p.salon_id=$2`,
+      [itemId, req.client.salonId]
     );
     if (!row) return res.status(404).json({ error: 'Item not found' });
     if (row.client_id !== req.client.clientId) {
@@ -905,15 +883,18 @@ router.post('/today-checklist/items/:itemId/complete', mobileAuth, async (req, r
 
     await db.query(
       `INSERT INTO home_care_completions (item_id, client_id, completion_date)
-       VALUES ($1, $2, CURRENT_DATE)
+       SELECT $1, $2, CURRENT_DATE
+       WHERE EXISTS (SELECT 1 FROM home_care_items i
+                     JOIN home_care_prescriptions p ON p.id=i.prescription_id
+                     WHERE i.id=$1 AND p.client_id=$2 AND p.salon_id=$3)
        ON CONFLICT (item_id, client_id, completion_date) DO NOTHING`,
-      [itemId, req.client.clientId]
+      [itemId, req.client.clientId, req.client.salonId]
     );
 
     res.json({ success: true, completed: true });
   } catch (e) {
-    logger.error(`Mark complete error: ${e.message}`);
-    res.status(500).json({ error: e.message });
+    logger.error(`Mark complete error: ${safeErrorCode(e)}`);
+    res.status(500).json({ error: 'Внутренняя ошибка сервера' });
   }
 });
 
@@ -929,21 +910,23 @@ router.delete('/today-checklist/items/:itemId/complete', mobileAuth, async (req,
     const owns = await db.oneOrNone(
       `SELECT 1 FROM home_care_items i
          JOIN home_care_prescriptions p ON p.id = i.prescription_id
-        WHERE i.id = $1 AND p.client_id = $2`,
-      [itemId, req.client.clientId]
+        WHERE i.id = $1 AND p.client_id = $2 AND p.salon_id=$3`,
+      [itemId, req.client.clientId, req.client.salonId]
     );
     if (!owns) return res.status(403).json({ error: 'Forbidden' });
 
     await db.query(
-      `DELETE FROM home_care_completions
-        WHERE item_id = $1 AND client_id = $2 AND completion_date = CURRENT_DATE`,
-      [itemId, req.client.clientId]
+      `DELETE FROM home_care_completions c
+        USING home_care_items i, home_care_prescriptions p
+        WHERE c.item_id = $1 AND c.client_id = $2 AND c.completion_date = CURRENT_DATE
+          AND i.id=c.item_id AND p.id=i.prescription_id AND p.client_id=$2 AND p.salon_id=$3`,
+      [itemId, req.client.clientId, req.client.salonId]
     );
 
     res.json({ success: true, completed: false });
   } catch (e) {
-    logger.error(`Unmark complete error: ${e.message}`);
-    res.status(500).json({ error: e.message });
+    logger.error(`Unmark complete error: ${safeErrorCode(e)}`);
+    res.status(500).json({ error: 'Внутренняя ошибка сервера' });
   }
 });
 
@@ -954,8 +937,8 @@ router.get('/prescriptions/:id/adherence', mobileAuth, async (req, res) => {
     const presc = await db.oneOrNone(
       `SELECT id, start_date, end_date
          FROM home_care_prescriptions
-        WHERE id = $1 AND client_id = $2`,
-      [req.params.id, req.client.clientId]
+        WHERE id = $1 AND client_id = $2 AND salon_id=$3`,
+      [req.params.id, req.client.clientId, req.client.salonId]
     );
     if (!presc) return res.status(404).json({ error: 'Назначение не найдено' });
 
@@ -1011,8 +994,8 @@ router.get('/prescriptions/:id/adherence', mobileAuth, async (req, res) => {
       days,
     });
   } catch (e) {
-    logger.error(`Patient adherence error: ${e.message}`);
-    res.status(500).json({ error: e.message });
+    logger.error(`Patient adherence error: ${safeErrorCode(e)}`);
+    res.status(500).json({ error: 'Внутренняя ошибка сервера' });
   }
 });
 

@@ -10,6 +10,7 @@ jest.mock('./services/broadcast-messengers/service');
 jest.mock('./services/notifications/settings');
 const jwt = require('jsonwebtoken');
 const config = require('./config');
+const { db } = require('./db');
 const store = require('./services/economics/store');
 const broadcasts = require('./services/broadcast');
 const settings = require('./services/notifications/settings');
@@ -27,6 +28,10 @@ function call(router, method, url, role, body) {
 }
 beforeEach(() => {
   jest.clearAllMocks();
+  db.oneOrNone.mockImplementation(async (_sql, [token]) => {
+    const claims = jwt.decode(token);
+    return { userId: claims.userId, salonId: claims.salonId, role: claims.role };
+  });
   store.getSettings.mockResolvedValue({}); store.listAccounts.mockResolvedValue([]);
   store.insertPayScheme.mockResolvedValue(42);
   broadcasts.listBroadcasts.mockResolvedValue([]);

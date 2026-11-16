@@ -1,6 +1,6 @@
 const router  = require('express').Router();
 const bcrypt  = require('bcryptjs');
-const { db }  = require('../db');
+const { db, withTransaction } = require('../db');
 const { auth, requireRole } = require('../middleware/auth');
 
 router.get('/', auth, requireRole('owner', 'admin'), async (req, res) => {
@@ -17,7 +17,7 @@ router.get('/', auth, requireRole('owner', 'admin'), async (req, res) => {
     const salon = await db.one('SELECT plan,max_users FROM salons WHERE id=$1', [req.user.salonId]);
     const activeCount = users.filter(u => u.is_active).length;
     res.json({ users, plan: salon.plan, max_users: salon.max_users, active_count: activeCount });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(500).json({ error: 'Внутренняя ошибка сервера' }); }
 });
 
 // Валидация привязки: для роли specialist можно указать staff_member_id (или null),
@@ -63,7 +63,7 @@ router.post('/', auth, requireRole('owner'), async (req, res) => {
   } catch (e) {
     if (e.code === '23505') return res.status(409).json({ error: 'Пользователь с таким email уже существует' });
     if (e.statusCode === 400) return res.status(400).json({ error: e.message });
-    res.status(500).json({ error: e.message });
+    res.status(500).json({ error: 'Внутренняя ошибка сервера' });
   }
 });
 
@@ -106,16 +106,24 @@ router.patch('/:id', auth, requireRole('owner'), async (req, res) => {
     if (!updates.length) return res.status(400).json({ error: 'Нечего обновлять' });
 
     vals.push(id, req.user.salonId);
-    const user = await db.oneOrNone(
-      `UPDATE users SET ${updates.join(',')} WHERE id=$${i++} AND salon_id=$${i}
-       RETURNING id,name,email,role,position,staff_member_id,is_active,must_change_password`,
-      vals
-    );
+    const revokeSessions = is_active === false || role !== undefined || Boolean(password);
+    const user = await withTransaction(async client => {
+      const result = await client.query(
+        `UPDATE users SET ${updates.join(',')} WHERE id=$${i++} AND salon_id=$${i}
+         RETURNING id,name,email,role,position,staff_member_id,is_active,must_change_password`,
+        vals
+      );
+      const updated = result.rows[0] || null;
+      if (updated && revokeSessions) {
+        await client.query('DELETE FROM sessions WHERE user_id=$1', [updated.id]);
+      }
+      return updated;
+    });
     if (!user) return res.status(404).json({ error: 'Пользователь не найден' });
     res.json(user);
   } catch (e) {
     if (e.statusCode === 400) return res.status(400).json({ error: e.message });
-    res.status(500).json({ error: e.message });
+    res.status(500).json({ error: 'Внутренняя ошибка сервера' });
   }
 });
 
@@ -124,12 +132,17 @@ router.delete('/:id', auth, requireRole('owner'), async (req, res) => {
     const { id } = req.params;
     if (parseInt(id) === req.user.userId)
       return res.status(400).json({ error: 'Нельзя удалить свой аккаунт' });
-    await db.query(
-      'UPDATE users SET is_active=FALSE WHERE id=$1 AND salon_id=$2',
-      [id, req.user.salonId]
-    );
+    await withTransaction(async client => {
+      const result = await client.query(
+        'UPDATE users SET is_active=FALSE WHERE id=$1 AND salon_id=$2 RETURNING id',
+        [id, req.user.salonId]
+      );
+      if (result.rows[0]) {
+        await client.query('DELETE FROM sessions WHERE user_id=$1', [id]);
+      }
+    });
     res.json({ ok: true });
-  } catch (e) { res.status(500).json({ error: e.message }); }
+  } catch (e) { res.status(500).json({ error: 'Внутренняя ошибка сервера' }); }
 });
 
 module.exports = router;

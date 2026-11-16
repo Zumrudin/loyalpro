@@ -178,11 +178,25 @@ async function loadSegDrawer() {
 
 function segDrawerGo(p) { segDrawerPage = p; loadSegDrawer(); }
 
-function segExport() {
+async function segExport() {
   if (!segDrawerKey) return;
-  const search = segDrawerQ ? `&search=${encodeURIComponent(segDrawerQ)}` : '';
-  const tok = localStorage.getItem('lp_tk');
-  const url = `/api/segments/${segDrawerKey}/export?token=${encodeURIComponent(tok)}${search}`;
-  const a = document.createElement('a');
-  a.href = url; a.download = ''; a.click();
+  try {
+    const query = new URLSearchParams();
+    if (segDrawerQ) query.set('search', segDrawerQ);
+    const suffix = query.size ? `?${query}` : '';
+    const response = await fetch(`/api/segments/${segDrawerKey}/export${suffix}`, {
+      headers: { Authorization: 'Bearer ' + TOKEN },
+    });
+    if (!response.ok) throw new Error('Export failed');
+    const url = URL.createObjectURL(await response.blob());
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `segment_${segDrawerKey}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  } catch (_) {
+    alert('Не удалось экспортировать сегмент');
+  }
 }

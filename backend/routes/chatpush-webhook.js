@@ -22,6 +22,7 @@
 // ============================================================
 const router = require('express').Router();
 const crypto = require('crypto');
+const rateLimit = require('express-rate-limit');
 const config = require('../config');
 const { db } = require('../db');
 const chatpush = require('../services/chatpush');
@@ -41,6 +42,25 @@ const notifyReplies = require('../services/notifications/replies');
 const AGENT_TEXT_TYPES = new Set(['text', 'formattedText']);
 const { createLogger } = require('../logger');
 const logger = createLogger('ChatpushWebhook');
+const { safeErrorCode } = require('../utils/safe-error');
+const rateLimitConfig = config.WEBHOOK_RATE_LIMIT || {};
+const limiterOptions = {
+  windowMs: rateLimitConfig.windowMs || 60_000,
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: (req, res) => res.status(429).json({ error: 'too many requests' }),
+};
+const webhookIpLimiter = rateLimit({ ...limiterOptions, limit: rateLimitConfig.ipLimit || 240 });
+const webhookAccountLimiter = rateLimit({
+  ...limiterOptions,
+  limit: rateLimitConfig.accountLimit || 120,
+  keyGenerator: req => {
+    const provider = providerOf(req);
+    const body = req.body || {};
+    const customerId = body.payload?.instance?.customer_id ?? body.payload?.customer_id ?? 'unknown';
+    return `${provider}:${customerId}`;
+  },
+});
 
 /**
  * Провайдер — из точки монтирования: тот же роутер стоит на /chatpush и /gateway
@@ -52,20 +72,17 @@ function providerOf(req) {
 }
 
 /**
- * Сверить общий секрет СВОЕГО провайдера из `?key=` (timing-safe). У Chatpush
- * пустой секрет → legacy-режим (принимаем без проверки), чтобы доставка не
- * ломалась до настройки. У шлюза legacy-режима нет: это наш собственный
- * процесс, секрет задаётся при установке.
+ * Сверить общий секрет СВОЕГО провайдера из `?key=` (timing-safe).
+ * Пустой секрет — ошибка конфигурации для обоих провайдеров; неподписанные
+ * события не принимаются и не создают побочных эффектов.
  */
 function verifySecret(req) {
   const provider = providerOf(req);
   const secret = provider === 'gateway'
     ? config.MESSAGING_GATEWAY.webhookSecret
     : config.CHATPUSH.webhookSecret;
-  if (!secret) {
-    return provider === 'gateway'
-      ? { ok: false, reason: 'gateway secret not configured' }
-      : { ok: true, mode: 'legacy' };
+  if (typeof secret !== 'string' || !secret.trim()) {
+    return { ok: false, status: 503, reason: `${provider} secret not configured` };
   }
 
   const provided = typeof req.query.key === 'string' ? req.query.key : '';
@@ -95,10 +112,13 @@ async function matchClientId(salonId, phone) {
     );
     return row?.id || null;
   } catch (e) {
-    logger.warn(`client match failed for ${phone}: ${e.message}`);
+    logger.warn(`client match failed: ${safeErrorCode(e)}`);
     return null;
   }
 }
+
+router.use(webhookIpLimiter);
+router.use(webhookAccountLimiter);
 
 router.post('/webhook', async (req, res) => {
   const t0 = Date.now();
@@ -106,10 +126,7 @@ router.post('/webhook', async (req, res) => {
   const sig = verifySecret(req);
   if (!sig.ok) {
     logger.warn(`webhook key check failed (${providerOf(req)}): ${sig.reason}`);
-    return res.status(401).json({ error: 'invalid key' });
-  }
-  if (sig.mode === 'legacy') {
-    logger.warn('legacy unauthenticated webhook accepted — set CHATPUSH_WEBHOOK_SECRET and register the URL with ?key=<secret> to enable enforcement');
+    return res.status(sig.status || 401).json({ error: sig.status === 503 ? 'webhook not configured' : 'invalid key' });
   }
 
   const provider = providerOf(req);
@@ -125,7 +142,7 @@ router.post('/webhook', async (req, res) => {
     // Свой шлюз повторяет вебхук при не-2xx: салон резолвим ДО ответа, сбой БД →
     // 503 (повтор), неизвестный аккаунт → 200 + WARN (повтор не поможет).
     try { salonId = await accounts.resolveSalon('gateway', customerId, { strict: true }); }
-    catch (e) { logger.error(`gateway webhook: salon lookup failed (${e.message}) — 503`); return res.status(503).json({ error: 'retry' }); }
+    catch (e) { logger.error(`gateway webhook: salon lookup failed (${safeErrorCode(e)}) — 503`); return res.status(503).json({ error: 'retry' }); }
   }
 
   // ACK немедленно — Chatpush (как и YClients) ретраит при таймауте.
@@ -144,7 +161,7 @@ router.post('/webhook', async (req, res) => {
     );
     eventId = row?.id || null;
   } catch (e) {
-    logger.error(`event log failed: ${e.message}`);
+    logger.error(`event log failed: ${safeErrorCode(e)}`);
   }
 
   // Салон не определён — событие осталось в сыром логе, но сообщение не
@@ -243,7 +260,7 @@ router.post('/webhook', async (req, res) => {
         pendingReplies.acknowledge(salonId, chatDialogKey({ phone: msg.phone, chat_id: msg.chatId }),
           [{ text: msg.text, msg_ts: msg.timestamp }]);
       }
-      logger.info(`stored ${msg.direction} ${msg.channel} ${msg.phone || ''}${clientId ? ` (client #${clientId})` : ''}: ${(msg.text || '').slice(0, 60)}`);
+      logger.info(`stored ${msg.direction} ${msg.channel} message salon=${salonId} client=${clientId ? 'linked' : 'unlinked'}`);
 
       // Номер клиента стал известен посреди переписки (Telegram/MAX скрывают его,
       // пока клиент не пришлёт сам) — подтягиваем его к прежним строкам этого
@@ -251,8 +268,8 @@ router.post('/webhook', async (req, res) => {
       // chat_id, продолжение под номером.
       if (storedNew && salonId && msg.phone && msg.chatId) {
         await chatPersist.adoptPhoneForChat(salonId, msg.chatId, msg.phone)
-          .then(n => { if (n) logger.info(`dialog ${msg.chatId}: номер ${msg.phone} проставлен ${n} прежним сообщениям`); })
-          .catch(e => logger.warn(`adopt phone for chat ${msg.chatId} failed: ${e.message}`));
+          .then(n => { if (n) logger.info(`adopted client phone for ${n} previous messages salon=${salonId}`); })
+          .catch(e => logger.warn(`adopt phone for chat failed salon=${salonId}: ${safeErrorCode(e)}`));
       }
 
       // Клиент ответил — ожидание закрыто. Гасим ЗДЕСЬ, а не только в воркере:
@@ -265,7 +282,7 @@ router.post('/webhook', async (req, res) => {
         if (waitKey) {
           await followupQueue.close(salonId, waitKey, 'answered', 'client_replied')
             .then(closed => { if (closed) chatEvents.emitFollowupStatus(salonId, waitKey, 'answered', 0); })
-            .catch(e => logger.warn(`followup close failed: ${e.message}`));
+            .catch(e => logger.warn(`followup close failed: ${safeErrorCode(e)}`));
         }
       }
 
@@ -277,8 +294,8 @@ router.post('/webhook', async (req, res) => {
         const pauseKey = (msg.phone && msg.phone.trim()) || msg.chatId;
         if (pauseKey && !groupChat.isGroupMessage(msg)) {
           await dialogState.pauseForOperator(salonId, pauseKey)
-            .then(() => logger.info(`agent paused ${pauseKey}: ответил оператор (сообщение из приложения)`))
-            .catch(e => logger.error(`pause on operator reply failed: ${e.message}`));
+            .then(() => logger.info(`agent paused salon=${salonId}: ответил оператор (сообщение из приложения)`))
+            .catch(e => logger.error(`pause on operator reply failed: ${safeErrorCode(e)}`));
         }
       }
 
@@ -322,7 +339,7 @@ router.post('/webhook', async (req, res) => {
         notifyHandled = !!(r && r.handled);
         if (notifyHandled) logger.info(`notify reply: ${r.kind}${r.rating ? ' ' + r.rating : ''} — Мила не вызывается`);
       } catch (e) {
-        logger.error(`notify reply failed: ${e.message} — ход уходит Миле`);
+        logger.error(`notify reply failed: ${safeErrorCode(e)} — ход уходит Миле`);
       }
     }
 
@@ -342,7 +359,7 @@ router.post('/webhook', async (req, res) => {
       AGENT_TEXT_TYPES.has(msg.type) && (msg.text || '').trim()
     ) {
       if (groupChat.isGroupMessage(msg)) {
-        logger.info(`skip agent: групповой чат ${msg.chatId} (${msg.channel}) — Мила отвечает только в личной переписке`);
+        logger.info(`skip agent: групповой чат (${msg.channel}) salon=${salonId} — Мила отвечает только в личной переписке`);
       } else {
         const dialogKey = (msg.phone && msg.phone.trim()) || msg.chatId;
         if (dialogKey) {
@@ -360,7 +377,7 @@ router.post('/webhook', async (req, res) => {
       }
     }
   } catch (e) {
-    logger.error(`ERROR: ${e.message}`);
+    logger.error(`ERROR: ${safeErrorCode(e)}`);
     if (eventId) {
       try { await db.query('UPDATE chatpush_events SET error=$1 WHERE id=$2', [e.message, eventId]); } catch {}
     }

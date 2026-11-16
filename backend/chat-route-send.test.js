@@ -15,7 +15,8 @@ jest.mock('./db', () => ({ db: mockDb, pool: {} }));
 const mockTransport = { getDeliveryStatus: jest.fn(async () => ({ status: { status_id: 2, description: 'Отправлено' } })), sendMessage: jest.fn(), sendFile: jest.fn() };
 jest.mock('./services/messaging/transport', () => mockTransport);
 
-const { _internals } = require('./routes/chat');
+const router = require('./routes/chat');
+const { _internals } = router;
 const { resolveRecipient, scheduleDeliveryCheck, DELIVERY_STATUS_UNDELIVERABLE } = _internals;
 
 beforeEach(() => {
@@ -54,8 +55,9 @@ describe('scheduleDeliveryCheck', () => {
     expect(get).toHaveBeenCalledWith(390862258);
     const line = mockLogger.warn.mock.calls.map(c => String(c[0])).find(s => /390862258/.test(s));
     expect(line).toBeDefined();
-    expect(line).toMatch(/5245186003/);
     expect(line).toMatch(/НЕ ДОСТАВЛЕНО/);
+    expect(line).not.toContain('5245186003');
+    expect(line).not.toContain('Невозможно доставить');
   });
 
   test('«Доставлено» → только INFO, без WARN', async () => {
@@ -76,6 +78,27 @@ describe('scheduleDeliveryCheck', () => {
     const get = jest.fn(async () => { throw new Error('timeout'); });
     scheduleDeliveryCheck(2, { key: 'k', channel: 'whatsapp' }, { getDeliveryStatus: get, delayMs: 1000 });
     await jest.advanceTimersByTimeAsync(1000);
-    expect(mockLogger.warn.mock.calls.map(c => String(c[0])).some(s => /delivery=2\b/.test(s) && /timeout/.test(s))).toBe(true);
+    const line = mockLogger.warn.mock.calls.map(c => String(c[0])).find(s => /delivery=2\b/.test(s));
+    expect(line).toContain('статус не получен');
+    expect(line).not.toContain('timeout');
   });
+});
+
+test('manual send failures do not expose provider errors, recipient or message text', async () => {
+  mockDb.oneOrNone.mockResolvedValue({ phone: 'synthetic-recipient', chat_id: 'synthetic-chat', reply_to: 'synthetic-reply' });
+  mockTransport.sendMessage.mockRejectedValue(new Error('synthetic-upstream-private-marker'));
+  const layer = router.stack.find(l => l.route?.path === '/dialogs/:key/send');
+  const req = {
+    user: { salonId: 1, userId: 7, role: 'owner' },
+    params: { key: 'synthetic-dialog' },
+    body: { text: 'synthetic-message-content', channel: 'whatsapp' },
+  };
+  const res = { status: jest.fn(), json: jest.fn() };
+  res.status.mockReturnValue(res);
+  await layer.route.stack.at(-1).handle(req, res);
+  expect(res.status).toHaveBeenCalledWith(502);
+  expect(res.json).toHaveBeenCalledWith({ error: 'Не удалось отправить сообщение' });
+  expect(JSON.stringify(mockLogger)).not.toContain('synthetic-upstream-private-marker');
+  expect(JSON.stringify(mockLogger)).not.toContain('synthetic-recipient');
+  expect(JSON.stringify(mockLogger)).not.toContain('synthetic-message-content');
 });

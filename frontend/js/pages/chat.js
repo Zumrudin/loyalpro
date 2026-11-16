@@ -534,21 +534,31 @@ async function toggleAgent(key, nextStatus) {
 // ── Живое обновление: SSE-push + страховочный опрос раз в 30 сек ──
 let _chatES = null;
 
-function startChatLive() {
+async function startChatLive() {
   stopChatLive();
-  const tok = localStorage.getItem('lp_tk');
+  const loadSeq = _chatLoadSeq;
+  // Страховка на случай упавшего SSE: редкий инкрементальный доопрос.
+  _chatPollTimer = setInterval(pollChat, 30000);
   try {
-    // EventSource не умеет заголовки — токен в query (роут authOrQuery).
-    _chatES = new EventSource('/api/chat/stream?token=' + encodeURIComponent(tok || ''));
-    _chatES.onmessage = (ev) => {
+    const grant = await api('POST', '/api/chat/stream-ticket');
+    if (loadSeq !== _chatLoadSeq) return;
+    const stream = new EventSource('/api/chat/stream?ticket=' + encodeURIComponent(grant.ticket));
+    _chatES = stream;
+    stream.onmessage = (ev) => {
       let data; try { data = JSON.parse(ev.data); } catch { return; }
       if (data.type === 'message') onChatLiveMessage(data);
       else if (data.type === 'agent_status') onChatAgentStatus(data);
       else if (data.type === 'followup_status') onChatFollowupStatus(data);
     };
+    stream.onerror = () => {
+      if (_chatES !== stream) return;
+      stream.close();
+      _chatES = null;
+      setTimeout(() => {
+        if (loadSeq === _chatLoadSeq && !_chatES) startChatLive();
+      }, 3000);
+    };
   } catch (e) { console.error('chat SSE:', e); }
-  // Страховка на случай упавшего SSE: редкий инкрементальный доопрос.
-  _chatPollTimer = setInterval(pollChat, 30000);
 }
 
 function stopChatLive() {

@@ -3,6 +3,7 @@
 const router = require('express').Router();
 const path   = require('path');
 const fs     = require('fs');
+const crypto = require('crypto');
 const multer = require('multer');
 const { db } = require('../db');
 const { auth, requireRole } = require('../middleware/auth');
@@ -12,10 +13,12 @@ const {
   STARTER_CATEGORIES, validateArticleInput, normalizeTags, buildPrefixTsQuery,
 } = require('../services/knowledge-base');
 const kbAssistant = require('../services/kb-assistant');
+const resourceLimits = require('../services/resource-limits');
 const config = require('../config');
 const agentRag = require('../services/agent-rag');
 const { createLogger } = require('../logger');
 const logger = createLogger('KnowledgeBase');
+const { safeErrorCode } = require('../utils/safe-error');
 
 const readAny   = [auth];                              // читают все роли
 const adminOnly = [auth, requireRole('owner', 'admin')];
@@ -63,7 +66,7 @@ router.get('/categories', readAny, async (req, res) => {
       [req.user.salonId]);
     res.json({ categories: rows });
   } catch (e) {
-    logger.error(`GET /categories: ${e.message}`);
+    logger.error(`GET /categories: ${safeErrorCode(e)}`);
     res.status(500).json({ error: 'Ошибка загрузки категорий' });
   }
 });
@@ -82,7 +85,7 @@ router.put('/categories/reorder', adminOnly, async (req, res) => {
     }
     res.json({ ok: true });
   } catch (e) {
-    logger.error(`PUT /categories/reorder: ${e.message}`);
+    logger.error(`PUT /categories/reorder: ${safeErrorCode(e)}`);
     res.status(500).json({ error: 'Ошибка сортировки' });
   }
 });
@@ -102,7 +105,7 @@ router.post('/categories', adminOnly, async (req, res) => {
       [req.user.salonId, title, icon, next.next]);
     res.json({ category: row });
   } catch (e) {
-    logger.error(`POST /categories: ${e.message}`);
+    logger.error(`POST /categories: ${safeErrorCode(e)}`);
     res.status(500).json({ error: 'Ошибка создания папки' });
   }
 });
@@ -121,7 +124,7 @@ router.put('/categories/:id', adminOnly, async (req, res) => {
     if (!row) return res.status(404).json({ error: 'Папка не найдена' });
     res.json({ category: row });
   } catch (e) {
-    logger.error(`PUT /categories/:id: ${e.message}`);
+    logger.error(`PUT /categories/:id: ${safeErrorCode(e)}`);
     res.status(500).json({ error: 'Ошибка обновления папки' });
   }
 });
@@ -135,7 +138,7 @@ router.delete('/categories/:id', adminOnly, async (req, res) => {
     if (!row) return res.status(404).json({ error: 'Папка не найдена' });
     res.json({ ok: true });
   } catch (e) {
-    logger.error(`DELETE /categories/:id: ${e.message}`);
+    logger.error(`DELETE /categories/:id: ${safeErrorCode(e)}`);
     res.status(500).json({ error: 'Ошибка удаления папки' });
   }
 });
@@ -195,7 +198,7 @@ router.get('/articles', readAny, async (req, res) => {
       params);
     res.json({ articles: rows });
   } catch (e) {
-    logger.error(`GET /articles: ${e.message}`);
+    logger.error(`GET /articles: ${safeErrorCode(e)}`);
     res.status(500).json({ error: 'Ошибка поиска' });
   }
 });
@@ -210,7 +213,7 @@ router.get('/articles/:id', readAny, async (req, res) => {
     if (!row) return res.status(404).json({ error: 'Статья не найдена' });
     res.json({ article: row });
   } catch (e) {
-    logger.error(`GET /articles/:id: ${e.message}`);
+    logger.error(`GET /articles/:id: ${safeErrorCode(e)}`);
     res.status(500).json({ error: 'Ошибка загрузки статьи' });
   }
 });
@@ -221,9 +224,11 @@ router.post('/ask', readAny, async (req, res) => {
   if (!question)              return res.status(400).json({ error: 'Пустой вопрос' });
   if (question.length > 500)  return res.status(400).json({ error: 'Слишком длинный вопрос (макс. 500 символов)' });
   try {
+    await resourceLimits.askRate(req.user.salonId, req.user.userId);
     const out = await kbAssistant.ask(req.user.salonId, req.user.userId, question);
     res.json(out);
   } catch (e) {
+    if (e.status === 429) return res.status(429).json({ error: 'Лимит запросов ИИ исчерпан или превышена частота. Повторите позже.' });
     if (e.code === 'NOT_CONFIGURED') {
       return res.status(503).json({ error: 'ИИ-ассистент не настроен' });
     }
@@ -235,24 +240,52 @@ router.post('/ask', readAny, async (req, res) => {
         degraded: true,
       });
     }
-    logger.error(`POST /ask: ${e.message}`);
+    logger.error('POST /ask failed');
     res.status(500).json({ error: 'Ошибка ассистента' });
   }
 });
 
+function relayAuthorized(req) {
+  const expected = config.KB_GEMINI_RELAY_SECRET || '';
+  const supplied = req.get('X-Relay-Secret') || '';
+  if (!expected || !supplied) return false;
+  const a = Buffer.from(expected);
+  const b = Buffer.from(supplied);
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
+async function relayRate(req, res, next) {
+  try {
+    const allowed = await resourceLimits.consumeRate(
+      'kb_relay', req.ip || 'unknown', config.RESOURCE_LIMITS.relayPerMinute, 60);
+    if (!allowed) return res.status(429).json({ error: 'rate_limited' });
+    next();
+  } catch (_) {
+    logger.error('relay rate limit unavailable');
+    res.status(503).json({ error: 'temporarily_unavailable' });
+  }
+}
+
+function relayFailure(res, e, path) {
+  if (e.status === 429) return res.status(429).json({ error: 'rate_limited' });
+  logger.error(`${path} failed`);
+  res.status(502).json({ error: 'upstream_unavailable' });
+}
+
 // POST /api/kb/relay — server-to-server: прод-сервер (гео-блок Gemini) шлёт сюда промпт,
 // dev вызывает Gemini своим ключом в поддерживаемом регионе. БЕЗ JWT (в API_PUBLIC),
 // защищён общим секретом X-Relay-Secret. Обрабатывает только dev (где relay-URL пуст).
-router.post('/relay', async (req, res) => {
-  if (!config.KB_GEMINI_RELAY_SECRET ||
-      req.get('X-Relay-Secret') !== config.KB_GEMINI_RELAY_SECRET) {
+router.post('/relay', relayRate, async (req, res) => {
+  if (!relayAuthorized(req)) {
     return res.status(403).json({ error: 'forbidden' });
   }
   const prompt = req.body?.prompt;
-  if (!prompt || !prompt.system || !prompt.user) {
+  if (!prompt || typeof prompt.system !== 'string' || typeof prompt.user !== 'string'
+      || !prompt.system || !prompt.user || prompt.system.length > 16000 || prompt.user.length > 20000) {
     return res.status(400).json({ error: 'bad prompt' });
   }
   try {
+    await resourceLimits.claimGlobal();
     // callGeminiDirect минует relay-ветку → без риска рекурсии, даже если URL задан.
     const answer = await kbAssistant.callGeminiDirect(prompt, {
       free:  config.KB_GEMINI_KEY_FREE,
@@ -260,34 +293,28 @@ router.post('/relay', async (req, res) => {
       model: config.KB_LLM_MODEL,
     });
     res.json({ answer });
-  } catch (e) {
-    logger.error(`POST /relay: ${e.message}`);
-    res.status(502).json({ error: 'gemini', message: e.message });
-  }
+  } catch (e) { relayFailure(res, e, 'POST /relay'); }
 });
 
 // POST /api/kb/relay/embed — dev-приёмник эмбеддингов для прода (гео-блок Gemini).
 // Тело: { text }; ответ: { embedding }. БЕЗ JWT, защищён X-Relay-Secret.
-router.post('/relay/embed', async (req, res) => {
-  if (!config.KB_GEMINI_RELAY_SECRET ||
-      req.get('X-Relay-Secret') !== config.KB_GEMINI_RELAY_SECRET) {
+router.post('/relay/embed', relayRate, async (req, res) => {
+  if (!relayAuthorized(req)) {
     return res.status(403).json({ error: 'forbidden' });
   }
   const text = req.body && req.body.text;
-  if (typeof text !== 'string' || !text.trim()) {
+  if (typeof text !== 'string' || !text.trim() || text.length > 10000) {
     return res.status(400).json({ error: 'bad text' });
   }
   try {
+    await resourceLimits.claimGlobal();
     const embedding = await kbAssistant.embedTextDirect(text, {
       free:  config.KB_GEMINI_KEY_FREE,
       paid:  config.KB_GEMINI_KEY_PAID,
       model: config.KB_EMBED_MODEL,
     });
     res.json({ embedding });
-  } catch (e) {
-    logger.error(`POST /relay/embed: ${e.message}`);
-    res.status(502).json({ error: 'gemini', message: e.message });
-  }
+  } catch (e) { relayFailure(res, e, 'POST /relay/embed'); }
 });
 
 // PUT /api/kb/articles/reorder — батч display_order в пределах папки (ДО /:id!)
@@ -304,7 +331,7 @@ router.put('/articles/reorder', adminOnly, async (req, res) => {
     }
     res.json({ ok: true });
   } catch (e) {
-    logger.error(`PUT /articles/reorder: ${e.message}`);
+    logger.error(`PUT /articles/reorder: ${safeErrorCode(e)}`);
     res.status(500).json({ error: 'Ошибка сортировки' });
   }
 });
@@ -337,10 +364,10 @@ router.post('/articles', adminOnly, async (req, res) => {
        body.internal_only === true, next.next]);
     // Переэмбеддинг — асинхронно, не блокируем ответ. Ошибку глотаем (не критично).
     agentRag.reembedArticle(req.user.salonId, row.id)
-      .catch(e => logger.error(`reembed(create ${row.id}): ${e.message}`));
+      .catch(e => logger.error(`reembed(create ${row.id}): ${safeErrorCode(e)}`));
     res.json({ article: row });
   } catch (e) {
-    logger.error(`POST /articles: ${e.message}`);
+    logger.error(`POST /articles: ${safeErrorCode(e)}`);
     res.status(500).json({ error: 'Ошибка создания статьи' });
   }
 });
@@ -370,10 +397,10 @@ router.put('/articles/:id', adminOnly, async (req, res) => {
        req.params.id, req.user.salonId]);
     if (!row) return res.status(404).json({ error: 'Статья не найдена' });
     agentRag.reembedArticle(req.user.salonId, row.id)
-      .catch(e => logger.error(`reembed(update ${row.id}): ${e.message}`));
+      .catch(e => logger.error(`reembed(update ${row.id}): ${safeErrorCode(e)}`));
     res.json({ article: row });
   } catch (e) {
-    logger.error(`PUT /articles/:id: ${e.message}`);
+    logger.error(`PUT /articles/:id: ${safeErrorCode(e)}`);
     res.status(500).json({ error: 'Ошибка обновления статьи' });
   }
 });
@@ -383,7 +410,7 @@ router.put('/articles/:id', adminOnly, async (req, res) => {
 // подмены расширения). Имя файла содержит salon_id и ts, чтобы не пересекаться.
 router.post('/upload', adminOnly, (req, res) => {
   upload.single('image')(req, res, (err) => {
-    if (err) return res.status(400).json({ error: err.message });
+    if (err) return res.status(400).json({ error: 'Не удалось загрузить файл' });
     if (!req.file) return res.status(400).json({ error: 'Файл не получен' });
 
     const v = validateImageBuffer(req.file.buffer, req.file.originalname);
@@ -394,7 +421,7 @@ router.post('/upload', adminOnly, (req, res) => {
     try {
       fs.writeFileSync(path.join(uploadsDir, filename), req.file.buffer);
     } catch (e) {
-      logger.error(`POST /upload write: ${e.message}`);
+      logger.error(`POST /upload write: ${safeErrorCode(e)}`);
       return res.status(500).json({ error: 'Не удалось сохранить файл' });
     }
     res.json({ url: `/uploads/${filename}` });
@@ -410,7 +437,7 @@ router.delete('/articles/:id', adminOnly, async (req, res) => {
     if (!row) return res.status(404).json({ error: 'Статья не найдена' });
     res.json({ ok: true });
   } catch (e) {
-    logger.error(`DELETE /articles/:id: ${e.message}`);
+    logger.error(`DELETE /articles/:id: ${safeErrorCode(e)}`);
     res.status(500).json({ error: 'Ошибка удаления статьи' });
   }
 });

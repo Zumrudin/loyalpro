@@ -2,10 +2,25 @@
 // Routes — mount all routers onto Express app
 // ============================================================
 const config = require('../config');
-const jwt    = require('jsonwebtoken');
-const { db } = require('../db');
+const { auth } = require('../middleware/auth');
 
-module.exports = function mountRoutes(app) {
+function apiAuthGuard(req, res, next) {
+  const fullPath = '/api' + req.path;
+  if (config.API_PUBLIC.includes(fullPath) || fullPath === '/api/chat/stream') return next();
+
+  return auth(req, res, () => {
+    if (req.user.role === 'specialist' || req.user.role === 'admin_cashier') {
+      const prefixes = req.user.role === 'admin_cashier'
+        ? config.CASHIER_ALLOWED_PREFIXES
+        : config.SPECIALIST_ALLOWED_PREFIXES;
+      const allowed = prefixes.some(p => fullPath.startsWith(p));
+      if (!allowed) return res.status(403).json({ error: 'Нет доступа' });
+    }
+    next();
+  });
+}
+
+function mountRoutes(app) {
   // ── Webhook (no JWT required) ───────────────────────────────
   app.use('/yclients', require('./webhook'));
 
@@ -28,35 +43,7 @@ module.exports = function mountRoutes(app) {
   app.use('/api/mobile/client', require('./mobile-client'));
 
   // ── Global API auth + role middleware ──────────────────────
-  app.use('/api', async (req, res, next) => {
-    const fullPath = '/api' + req.path;
-    if (config.API_PUBLIC.includes(fullPath)) return next();
-
-    const h = req.headers.authorization;
-    const token = h?.startsWith('Bearer ') ? h.slice(7) : (req.query.token || '');
-    if (!token) return res.status(401).json({ error: 'Unauthorized' });
-    try { req.user = jwt.verify(token, config.JWT_SECRET); }
-    catch { return res.status(401).json({ error: 'Token expired or invalid' }); }
-
-    // Token must still map to a live session — lets logout / forced sign-out
-    // actually revoke a JWT before its 7-day expiry.
-    try {
-      const sess = await db.oneOrNone(
-        'SELECT 1 FROM sessions WHERE token=$1 AND expires_at > NOW()',
-        [token]
-      );
-      if (!sess) return res.status(401).json({ error: 'Session expired or revoked' });
-    } catch { return res.status(401).json({ error: 'Session check failed' }); }
-
-    if (req.user.role === 'specialist' || req.user.role === 'admin_cashier') {
-      const prefixes = req.user.role === 'admin_cashier'
-        ? config.CASHIER_ALLOWED_PREFIXES
-        : config.SPECIALIST_ALLOWED_PREFIXES;
-      const allowed = prefixes.some(p => fullPath.startsWith(p));
-      if (!allowed) return res.status(403).json({ error: 'Нет доступа' });
-    }
-    next();
-  });
+  app.use('/api', apiAuthGuard);
 
   // ── Specific prefix routes (must come before wildcard routers) ──
   app.use('/api/auth',              require('./auth'));
@@ -98,4 +85,7 @@ module.exports = function mountRoutes(app) {
 
   // ── All other API routes: records, analytics, sync, loyalty-settings, bulk-import etc ──
   app.use('/api',                   require('./api'));
-};
+}
+
+module.exports = mountRoutes;
+module.exports.apiAuthGuard = apiAuthGuard;

@@ -43,6 +43,8 @@ module.exports = {
   // (только у клиентов с входящим остатком). По умолчанию выключено.
   BONUS_LEDGER_PRIMARY: process.env.BONUS_LEDGER_PRIMARY === 'true',
   FRONTEND_URL: process.env.FRONTEND_URL || '*',
+  TRUST_PROXY: /^\d+$/.test(process.env.TRUST_PROXY || '')
+    ? Number(process.env.TRUST_PROXY) : (process.env.TRUST_PROXY || 'loopback'),
 
   // Knowledge-base AI assistant (Gemini). Dual-key: free первым, paid по fallback на 429.
   // Внимание: как только на Google-проекте включён биллинг, бесплатный тариф на нём
@@ -58,6 +60,24 @@ module.exports = {
   // и возвращает ответ. Пусто на dev → прямой вызов Google. Секрет защищает /api/kb/relay.
   KB_GEMINI_RELAY_URL:    process.env.KB_GEMINI_RELAY_URL    || '',
   KB_GEMINI_RELAY_SECRET: process.env.KB_GEMINI_RELAY_SECRET || '',
+
+  RESOURCE_LIMITS: {
+    registerIp: Number(process.env.REGISTER_IP_HOURLY_LIMIT || 5),
+    registerEmail: Number(process.env.REGISTER_EMAIL_HOURLY_LIMIT || 3),
+    relayPerMinute: Number(process.env.KB_RELAY_MINUTE_LIMIT || 120),
+    askUserPerMinute: Number(process.env.KB_ASK_USER_MINUTE_LIMIT || 10),
+    askSalonPerMinute: Number(process.env.KB_ASK_SALON_MINUTE_LIMIT || 30),
+    llmConcurrency: Number(process.env.KB_LLM_CONCURRENCY || 2),
+    salonDailyCalls: Number(process.env.KB_SALON_DAILY_CALLS || 100),
+    salonMonthlyCalls: Number(process.env.KB_SALON_MONTHLY_CALLS || 2000),
+    globalDailyCalls: Number(process.env.KB_GLOBAL_DAILY_CALLS || 5000),
+  },
+
+  WEBHOOK_RATE_LIMIT: {
+    windowMs: Number(process.env.WEBHOOK_RATE_WINDOW_MS || 60000),
+    ipLimit: Number(process.env.WEBHOOK_RATE_IP_LIMIT || 240),
+    accountLimit: Number(process.env.WEBHOOK_RATE_ACCOUNT_LIMIT || 120),
+  },
 
   // Chatpush — мессенджер-платформа (WhatsApp/Telegram/MAX/SMS) для двустороннего
   // диалогового агента. instanceToken — Bearer token инстанса: отправка, приём И
@@ -99,6 +119,13 @@ module.exports = {
   // (Финляндия): канал прод (РФ) → api.telegram.org теряет пакеты (18.10.2026), там
   // http://127.0.0.1:8095 — обратный SSH-туннель tg-relay-tunnel с дева. Пусто → напрямую.
   TELEGRAM_API_BASE: (process.env.TELEGRAM_API_BASE || 'https://api.telegram.org').replace(/\/+$/, ''),
+  // Mobile OTP: один серверно выбранный салон и отдельный ключ HMAC на процесс/бота.
+  MOBILE_AUTH: {
+    salonId: Number(process.env.MOBILE_SALON_ID || 0),
+    otpHashKey: process.env.MOBILE_OTP_HASH_KEY || '',
+    requestLimit: Number(process.env.MOBILE_OTP_REQUEST_LIMIT || 5),
+    requestWindowMinutes: Number(process.env.MOBILE_OTP_REQUEST_WINDOW_MINUTES || 15),
+  },
   // Служебные алерты (services/ops-alert.js). Пусто → только лог ERROR.
   OPS_ALERT_TELEGRAM_TOKEN: process.env.OPS_ALERT_TELEGRAM_TOKEN || '',
   OPS_ALERT_TELEGRAM_CHAT_ID: process.env.OPS_ALERT_TELEGRAM_CHAT_ID || '',
